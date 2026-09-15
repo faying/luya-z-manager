@@ -1,0 +1,34 @@
+ZTE U60 Pro (MU5250) Manager
+
+Copyright (c) 2025-present Jesther Silvestre
+Copyright (c) 2026 Wei REN
+
+Licensed under the MIT License (see LICENSE).
+
+Sources
+-------
+- jesther-ai/open-u60-pro (MIT): https://github.com/jesther-ai/open-u60-pro
+- Later changes by Wei REN (install kit, eSIM, Tailscale, Home Mode, admin web
+  redesign), snapshot 420a6d9 (2026-09-15).
+
+This repository starts from a cleaned snapshot of that work, not from its git
+history. Removed before publishing:
+- device_report.json, ubus_probe_report.json (runtime dumps of a real device)
+- mobile/ios/screenshots/, web/public/images/ (real-device screenshots and
+  vendor marketing photos)
+- scripts/topflow/, PROFILE_MANAGER_PLAN.md, web/_backup/, web/vercel.json
+  (private infrastructure and internal notes)
+- .github/workflows/release.yml (binary releases are not published yet)
+Maintainer-specific addresses and host names were replaced with device defaults.
+
+Third-party components
+----------------------
+- Rust crates: see Cargo.lock; each crate keeps its own license.
+- npm packages: see web/package-lock.json; each package keeps its own license.
+- Prebuilt binaries used by onboard/build-kit.sh (dropbear, lpac and its Alpine
+  libraries, zwrt-datad) are NOT included in this repository.
+
+Trademarks
+----------
+Not affiliated with, endorsed or sponsored by ZTE Corporation. "ZTE",
+"U60 Pro" and "MU5250" are used only to describe hardware compatibility.

@@ -1,0 +1,11 @@
+/target/
+.claude/
+.agents/
+skills-lock.json
+logs/
+.DS_Store
+scripts/.deploy.env
+scripts/esim/alpine-pkgs/
+onboard/cache/
+onboard/dist/
+onboard/u60.env

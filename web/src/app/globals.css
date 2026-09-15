@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------
+ * Token registry
+ *
+ * Tailwind v4 `@theme` (without `inline`) generates utilities that
+ * resolve their values via `var(...)` at runtime. The actual values
+ * are declared inside `.admin-theme` (see `app/admin/admin.css`),
+ * which the admin layout wraps around all admin content.
+ *
+ * The root `/` route is just a redirect into `/`, so it
+ * doesn't need a fully-themed body — only utility classes resolved
+ * via these vars.
+ * ------------------------------------------------------------- */
+
+@theme {
+  /* Each maps to the runtime `--ds-*` token but carries a literal fallback, so
+   * utilities still render the intended color if anything paints outside the
+   * `.admin-theme` scope (root redirect, portals, cache/hydration edges). Without
+   * the fallback, an unscoped element gets an empty value — e.g. a primary button
+   * with no background + white text = invisible. Keep these in sync with admin.css. */
+  --color-bg: var(--ds-bg, #f6f8fb);
+  --color-bg-card: var(--ds-bg-card, #ffffff);
+  --color-bg-input: var(--ds-bg-input, #f1f5f9);
+  --color-bg-elevated: var(--ds-bg-elevated, #f8fafc);
+  --color-border: var(--ds-border, #e2e8f0);
+  --color-border-focus: var(--ds-border-focus, #0e7490);
+  --color-text: var(--ds-text, #0f172a);
+  --color-text-dim: var(--ds-text-dim, #526077);
+  --color-accent: var(--ds-accent, #0e7490);
+  --color-accent-hover: var(--ds-accent-hover, #155e75);
+  --color-glow: var(--admin-glow, #22d3ee);
+  --color-success: var(--ds-success, #047857);
+  --color-error: var(--ds-error, #be123c);
+  --color-warning: var(--ds-warning, #b45309);
+
+  --font-display: var(--ds-font-display);
+  --font-body: var(--ds-font-body);
+  --font-mono: var(--ds-font-mono);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    line-height: 1.6;
+    min-height: 100dvh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
