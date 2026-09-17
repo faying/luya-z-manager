@@ -1,0 +1,4 @@
+# 只保留基线日志，二进制与规则集不入库（mihomo 57MB，仓库不放二进制）
+.cache/*
+!.cache/
+!.cache/*.log

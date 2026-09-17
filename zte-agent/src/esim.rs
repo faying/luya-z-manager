@@ -21,7 +21,7 @@
 
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -45,6 +45,10 @@ const LPAC_TIMEOUT_NET: Duration = Duration::from_secs(240);
 const MAX_CODE_LEN: usize = 512;
 const MAX_NICKNAME_LEN: usize = 64;
 
+/// Cooldown enforced between ES10c EnableProfile/DisableProfile *attempts*
+/// (success or failure — see `switch`'s doc comment for why).
+const SWITCH_COOLDOWN_SECS: u64 = 600;
+
 /* -------------------------------------------------------------- *
  *  State
  * -------------------------------------------------------------- */
@@ -65,6 +69,9 @@ pub struct JobState {
 pub struct EsimAdmin {
     job: Arc<Mutex<JobState>>,
     running: Arc<AtomicBool>,
+    /// unix seconds of the last EnableProfile/DisableProfile *attempt* (0 = none
+    /// yet this boot). Drives the `switch` cooldown — see its doc comment.
+    last_switch_attempt: Arc<AtomicU64>,
 }
 
 impl EsimAdmin {
@@ -81,6 +88,7 @@ impl EsimAdmin {
                 rebooting: false,
             })),
             running: Arc::new(AtomicBool::new(false)),
+            last_switch_attempt: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -334,6 +342,16 @@ pub fn nickname(state: &AppState, body: &[u8]) -> (u16, Value) {
 /// POST /api/esim/switch — { iccid }. Enables the profile on the card, then
 /// reboots the device (the only way to get the ZTE stack onto the new profile —
 /// see module docs). The UI warns about the ~2 min outage before calling.
+///
+/// Some eUICC cards (verified on-device: eSTK.me — 5ber is unaffected) reject
+/// ES10c EnableProfile/DisableProfile with SGP.22 catBusy unless several
+/// minutes have passed since the *previous* enable/disable attempt (success or
+/// failure alike) — read-only lpac calls (`profile list`, `chip info`) don't
+/// count against this. Four independent on-device trials all fit this model;
+/// a same-session "stop zte_topsw_mdm first" theory was tried and falsified
+/// (see git history for `esim.rs` around 2026-09-17). Rather than let a
+/// too-soon attempt burn a confusing "unknown" lpac error, refuse it up front
+/// with a clear wait time.
 pub fn switch(state: &AppState, body: &[u8]) -> (u16, Value) {
     let v: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
@@ -343,10 +361,22 @@ pub fn switch(state: &AppState, body: &[u8]) -> (u16, Value) {
         Some(i) if valid_iccid(i) => i.to_string(),
         _ => return (400, json!({"ok": false, "error": "invalid iccid"})),
     };
+    let now = now_unix();
+    let last = state.esim.last_switch_attempt.load(Ordering::Relaxed);
+    if last != 0 && now.saturating_sub(last) < SWITCH_COOLDOWN_SECS {
+        let wait = SWITCH_COOLDOWN_SECS - (now - last);
+        return (
+            429,
+            json!({"ok": false, "error": format!(
+                "card needs a cooldown after the last switch attempt — wait {wait}s and retry"
+            )}),
+        );
+    }
     let job_id = match try_start_job(state, "switch", &iccid) {
         Some(j) => j,
         None => return (409, json!({"ok": false, "error": "operation in progress"})),
     };
+    state.esim.last_switch_attempt.store(now, Ordering::Relaxed);
     let job = Arc::clone(&state.esim.job);
     let running = Arc::clone(&state.esim.running);
     std::thread::spawn(move || {

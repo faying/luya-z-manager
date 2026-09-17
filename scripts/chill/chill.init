@@ -1,0 +1,59 @@
+#!/bin/sh /etc/rc.common
+# ─────────────────────────────────────────────────────────────────────────────
+# CHILL 的 procd 服务（T6）。安装到 /etc/init.d/chill。
+#
+# ⚠ **不要执行 `/etc/init.d/chill enable`。**
+#   本机的 zte_topsw_daemon 会等 /etc/config/zte_topsw_daemon.conf 里列的守护进程
+#   全部注册才放行开机流程；而 `enable`/`disable` 会在
+#   /zteoverlay/etc-upper_a/rc.d/ 留下 whiteout 字符设备，是排查起来很痛的坑。
+#   自启统一只走 /etc/rc.local 里的一行：
+#       [ -f /data/chill/disabled ] || /etc/init.d/chill start
+#
+# 结构照搬 source/touch-ui/scripts/u60pro-devui.init（本仓库既有的 procd 模板）。
+# SPDX-License-Identifier: MIT
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 即便不 enable 也给出合理值：手动 enable 时要排在网络之后。
+START=99
+STOP=10
+
+USE_PROCD=1
+
+DIR=/data/chill
+PROG=$DIR/chill.sh
+
+start_service() {
+    [ -x "$PROG" ] || return 1
+    [ -x "$DIR/bin/mihomo" ] || return 1
+
+    procd_open_instance
+    procd_set_param command "$PROG" run
+
+    # chill.sh run 是常驻监督进程：它自己看着 mihomo 子进程，崩溃计数与退避也在它里面。
+    # 这里的 respawn 是第二层保险，兜住「包装进程本身被 SIGKILL」的情况
+    # （失败模式表里那一行）。参数用 procd 默认。
+    procd_set_param respawn
+
+    # 给 chill.sh 的 TERM handler 留出时间：它要先 restore_dns 回滚 dnsmasq，
+    # 再 flush 掉 nft 表、8990–9099 段 ip rule 和 table 2022。
+    # 15 秒是留了余量的——回滚 dnsmasq 要 reload，flush 要逐条删规则。
+    # 太短会导致 procd 提前 SIGKILL，规则残留、甚至 dnsmasq 仍指着已死的上游。
+    procd_set_param term_timeout 15
+
+    procd_set_param stdout 0
+    procd_set_param stderr 1
+    procd_close_instance
+}
+
+stop_service() {
+    # 再跑一次 flush（幂等）。procd 停掉实例后，如果包装进程是被 SIGKILL 的，
+    # 它的 trap 不会执行，规则就会残留——尤其 dnsmasq 上游还指向已死的 mihomo，
+    # 那是全屋断网而不是降级直连。所以这一步不能省。
+    [ -x "$PROG" ] && "$PROG" flush
+}
+
+reload_service() {
+    # 热重载：重新渲染并让核心重读配置，不重启进程。
+    # 渲染不通过时 chill.sh 会保留旧配置，不会把正在用的配置换坏。
+    [ -x "$PROG" ] && "$PROG" reload
+}
