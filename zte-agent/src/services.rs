@@ -3,8 +3,10 @@
 //!
 //!   • Tailscale  — daemon at /data/tailscale/tailscaled, socket
 //!                  /tmp/tailscaled.sock, log /data/tailscaled.log.
-//!   • ShellClash — mihomo runtime renamed `CrashCore`, REST API on
-//!                  127.0.0.1:9999, log /tmp/ShellCrash/ShellCrash.log.
+//!
+//! CHILL (the native-mihomo proxy service) has its own module, chill.rs — it
+//! mutates state (region/provider/bypass switches) so it doesn't fit this
+//! read-only-only file.
 //!
 //! Endpoints never mutate state — purely observability.
 
@@ -12,7 +14,6 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -22,12 +23,6 @@ const TS_BIN: &str = "/data/tailscale/tailscale";
 const TS_SOCKET: &str = "/tmp/tailscaled.sock";
 const TS_LOG: &str = "/data/tailscaled.log";
 
-const SC_API: &str = "http://127.0.0.1:9999";
-const SC_PID_FILE: &str = "/tmp/ShellCrash/shellcrash.pid";
-const SC_LOG: &str = "/tmp/ShellCrash/ShellCrash.log";
-const SC_CONFIG: &str = "/tmp/ShellCrash/config.yaml";
-
-const HTTP_TIMEOUT: Duration = Duration::from_secs(3);
 const LOG_TAIL_DEFAULT: usize = 200;
 const LOG_TAIL_MAX: usize = 2000;
 
@@ -201,123 +196,6 @@ pub fn tailscale_log(query: &str) -> (u16, Value) {
 }
 
 /* -------------------------------------------------------------- *
- *  ShellClash (mihomo)
- * -------------------------------------------------------------- */
-
-/// GET /api/services/shellcrash
-pub fn shellcrash_status(_state: &AppState) -> (u16, Value) {
-    let pid = read_pid_file(SC_PID_FILE);
-    let alive_from_pid = pid
-        .map(|p| Path::new(&format!("/proc/{p}")).exists())
-        .unwrap_or(false);
-    let running = alive_from_pid || pgrep("CrashCore");
-
-    if !running {
-        return (
-            200,
-            json!({"ok": true, "data": {
-                "installed": Path::new(SC_CONFIG).exists() || Path::new("/etc/ShellCrash").exists(),
-                "running": false,
-                "pid": pid,
-            }}),
-        );
-    }
-
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(HTTP_TIMEOUT))
-        .build()
-        .into();
-
-    let version = http_get_json(&agent, &format!("{SC_API}/version"));
-    let memory = http_get_json(&agent, &format!("{SC_API}/memory"));
-    let configs = http_get_json(&agent, &format!("{SC_API}/configs"));
-    let connections = http_get_json(&agent, &format!("{SC_API}/connections"));
-    let proxies_raw = http_get_json(&agent, &format!("{SC_API}/proxies"));
-
-    // Boil the proxies map down to per-group summaries; full payload can
-    // be very large with hundreds of nodes.
-    let groups = summarize_proxies(&proxies_raw);
-
-    let conn_count = connections
-        .as_ref()
-        .and_then(|v| v.get("connections"))
-        .and_then(Value::as_array)
-        .map(|a| a.len())
-        .unwrap_or(0);
-    let conn_total_up = connections
-        .as_ref()
-        .and_then(|v| v.get("uploadTotal"))
-        .and_then(Value::as_i64);
-    let conn_total_down = connections
-        .as_ref()
-        .and_then(|v| v.get("downloadTotal"))
-        .and_then(Value::as_i64);
-
-    let mode = configs.as_ref().and_then(|v| v.get("mode")).cloned();
-    let log_level = configs.as_ref().and_then(|v| v.get("log-level")).cloned();
-    let port = configs.as_ref().and_then(|v| v.get("port")).cloned();
-    let socks_port = configs
-        .as_ref()
-        .and_then(|v| v.get("socks-port"))
-        .cloned();
-    let mixed_port = configs
-        .as_ref()
-        .and_then(|v| v.get("mixed-port"))
-        .cloned();
-    let tun_enable = configs
-        .as_ref()
-        .and_then(|v| v.get("tun"))
-        .and_then(|t| t.get("enable"))
-        .and_then(Value::as_bool);
-
-    let started = read_first_line("/tmp/ShellCrash/crash_start_time");
-
-    (
-        200,
-        json!({"ok": true, "data": {
-            "installed": true,
-            "running": true,
-            "pid": pid,
-            "version": version.as_ref().and_then(|v| v.get("version")).and_then(Value::as_str),
-            "premium": version.as_ref().and_then(|v| v.get("premium")).and_then(Value::as_bool),
-            "meta": version.as_ref().and_then(|v| v.get("meta")).and_then(Value::as_bool),
-            "started_at_unix": started.and_then(|s| s.trim().parse::<i64>().ok()),
-            "memory": memory.as_ref().and_then(|v| v.get("inuse")).and_then(Value::as_i64),
-            "memory_oslimit": memory.as_ref().and_then(|v| v.get("oslimit")).and_then(Value::as_i64),
-            "config": {
-                "mode": mode,
-                "log_level": log_level,
-                "http_port": port,
-                "socks_port": socks_port,
-                "mixed_port": mixed_port,
-                "tun_enable": tun_enable,
-                "external_controller": SC_API.trim_start_matches("http://"),
-            },
-            "connections": {
-                "active": conn_count,
-                "upload_total": conn_total_up,
-                "download_total": conn_total_down,
-            },
-            "groups": groups,
-        }}),
-    )
-}
-
-/// GET /api/services/shellcrash/log?lines=N
-pub fn shellcrash_log(query: &str) -> (u16, Value) {
-    let n = parse_lines(query);
-    let lines = tail_file(SC_LOG, n).unwrap_or_default();
-    (
-        200,
-        json!({"ok": true, "data": {
-            "path": SC_LOG,
-            "lines": lines,
-            "limit": n,
-        }}),
-    )
-}
-
-/* -------------------------------------------------------------- *
  *  Helpers
  * -------------------------------------------------------------- */
 
@@ -327,15 +205,6 @@ fn pgrep(name: &str) -> bool {
         .output()
         .map(|o| o.status.success() && !o.stdout.is_empty())
         .unwrap_or(false)
-}
-
-fn read_pid_file(path: &str) -> Option<i64> {
-    let s = std::fs::read_to_string(path).ok()?;
-    s.trim().parse::<i64>().ok()
-}
-
-fn read_first_line(path: &str) -> Option<String> {
-    std::fs::read_to_string(path).ok()
 }
 
 fn parse_lines(query: &str) -> usize {
@@ -368,54 +237,4 @@ fn tail_file(path: &str, n: usize) -> std::io::Result<Vec<String>> {
         buf.push_back(line);
     }
     Ok(buf.into_iter().collect())
-}
-
-fn http_get_json(agent: &ureq::Agent, url: &str) -> Option<Value> {
-    let mut resp = agent.get(url).call().ok()?;
-    if resp.status().as_u16() >= 400 {
-        return None;
-    }
-    resp.body_mut().read_json::<Value>().ok()
-}
-
-/// Reduce mihomo's `/proxies` response (which can list every individual
-/// proxy node) into a small per-group summary the UI can render.
-fn summarize_proxies(raw: &Option<Value>) -> Vec<Value> {
-    let Some(proxies) = raw.as_ref().and_then(|v| v.get("proxies")).and_then(Value::as_object)
-    else {
-        return Vec::new();
-    };
-
-    let mut groups = Vec::new();
-    for (name, info) in proxies.iter() {
-        let kind = info.get("type").and_then(Value::as_str).unwrap_or("");
-        // Only return "selectable" group types — skip raw nodes.
-        if !matches!(
-            kind,
-            "Selector" | "URLTest" | "Fallback" | "LoadBalance" | "Relay"
-        ) {
-            continue;
-        }
-        let now = info.get("now").and_then(Value::as_str);
-        let all_count = info
-            .get("all")
-            .and_then(Value::as_array)
-            .map(|a| a.len())
-            .unwrap_or(0);
-        groups.push(json!({
-            "name": name,
-            "type": kind,
-            "now": now,
-            "size": all_count,
-            "udp": info.get("udp").and_then(Value::as_bool).unwrap_or(false),
-        }));
-    }
-
-    // Stable order by name so the UI doesn't jump.
-    groups.sort_by(|a, b| {
-        let an = a.get("name").and_then(Value::as_str).unwrap_or("");
-        let bn = b.get("name").and_then(Value::as_str).unwrap_or("");
-        an.cmp(bn)
-    });
-    groups
 }

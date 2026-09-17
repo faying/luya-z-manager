@@ -6,7 +6,6 @@ use crate::at_cmd::AtPort;
 use crate::auth::AuthState;
 use crate::charge_policy::ChargeLimitEnforcer;
 use crate::scheduler::Scheduler;
-use crate::shellcrash_admin::ScAdmin;
 use crate::sms_forward::SmsForwarder;
 use crate::system::{self, CpuTracker, ProcessTracker, SpeedTracker};
 use crate::ubus;
@@ -19,7 +18,7 @@ pub struct AppState {
     pub at_port: AtPort,
     pub doh: std::sync::Arc<crate::doh::DohProxy>,
     pub scheduler: Arc<Scheduler>,
-    pub sc_admin: ScAdmin,
+    pub chill: crate::chill::ChillAdmin,
     pub esim: crate::esim::EsimAdmin,
     pub speedtest: crate::speedtest::SpeedTest,
     pub charge_limit: Arc<ChargeLimitEnforcer>,
@@ -36,7 +35,7 @@ impl AppState {
             at_port: AtPort::new(),
             doh: std::sync::Arc::new(crate::doh::DohProxy::new()),
             scheduler: Arc::new(Scheduler::new()),
-            sc_admin: ScAdmin::new(),
+            chill: crate::chill::ChillAdmin::new(),
             esim: crate::esim::EsimAdmin::new(),
             speedtest: crate::speedtest::SpeedTest::new(),
             charge_limit: Arc::new(ChargeLimitEnforcer::new()),

@@ -18,7 +18,7 @@ mod scheduler;
 mod server;
 mod services;
 mod esim;
-mod shellcrash_admin;
+mod chill;
 mod static_files;
 mod sim;
 mod sms;

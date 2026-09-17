@@ -104,6 +104,19 @@ core_rss_kb() {
   awk '/^VmRSS/{print $2}' "/proc/$p/status" 2>/dev/null || echo 0
 }
 
+# GET /version 是否 2xx，供监督循环判活。带 Authorization 头是安全的：
+# CHILL_SECRET 为空时 mihomo 根本不检查这个头，不会因为发了个空 token 出错。
+# 2026-09-17 真机事故：这里原来完全不带头，CHILL_SECRET 一旦真的被设置，
+# 这条健康检查自己就被 mihomo 拒成 401，连续两次 401 被当成"核心崩溃"，
+# 陷入反复重启直到撞上 CRASH_MAX 才 gaveup——不是核心真的崩了，是判活探针
+# 自己没跟上鉴权。用的是 curl 不是 wget：这台设备的 busybox wget 不支持
+# --header/-H。
+api_alive() {
+  curl -s -m 3 -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer ${CHILL_SECRET:-}" \
+    http://127.0.0.1:9999/version 2>/dev/null | grep -q '^2'
+}
+
 # ── 状态文件（对外契约，见 §9）────────────────────────────────────────────────
 # 原子写入：先写临时文件再 mv。字段名不能随便改，触屏和后台都按这个读。
 write_state() {
@@ -317,7 +330,9 @@ render() {
 
   # oix/nexi 已改为 type:file 静态快照（2026-09-16 核对实际数据后的修正，见
   # template.yaml 里的注释），不再需要 URL；SUB_SHOUHOU 仍是唯一的 type:http。
-  for v in SUB_SHOUHOU; do
+  # CHILL_SECRET 同样会落进单引号 YAML 标量（template.yaml 的 secret: 字段），
+  # 校验规则跟 SUB_SHOUHOU 一样。
+  for v in SUB_SHOUHOU CHILL_SECRET; do
     eval "val=\${$v:-}"
     case "$val" in
       *"'"*|*"
@@ -330,6 +345,7 @@ render() {
   # 自动出现在子进程的 ENVIRON 里；先前这里漏了这一项，导致 template.yaml 里
   # 的 ${SUB_SHOUHOU} 永远不会被替换，会原样留在渲染结果里传给 mihomo。
   CONTROLLER="$CONTROLLER" SUB_SHOUHOU="${SUB_SHOUHOU:-}" \
+  CHILL_SECRET="${CHILL_SECRET:-}" \
   FILTER_UNION="${FILTER_UNION:-}" EXCLUDE_FILTER="${EXCLUDE_FILTER:-}" \
   FILTER_TW="${FILTER_TW:-}" FILTER_JP="${FILTER_JP:-}" \
   FILTER_SG="${FILTER_SG:-}" FILTER_US="${FILTER_US:-}" \
@@ -503,9 +519,9 @@ run() {
 
       # API 连续 2 次失败按崩溃处理。**必须计数**：此前这条路径只 flush 后
       # break，crash_n 不增，于是核心卡死时永远不会 gaveup，会无限重启。
-      if ! wget -q -O- -T 3 http://127.0.0.1:9999/version >/dev/null 2>&1; then
+      if ! api_alive; then
         sleep 3
-        if ! wget -q -O- -T 3 http://127.0.0.1:9999/version >/dev/null 2>&1; then
+        if ! api_alive; then
           log "API 连续 2 次无响应，按崩溃处理"
           flush
           note_crash || { : > "$GAVEUP"; enter_direct gaveup; }
@@ -586,8 +602,14 @@ case "${1:-}" in
   reload)
     # 要返回正确的退出码：先前写成 `… && echo 成功 || echo 失败`，失败时也返回 0，
     # 调用方（脚本、agent）无法凭退出码判断 reload 到底成没成。
-    if render && wget -q -O- -T 5 --post-data='' \
-         "http://127.0.0.1:9999/configs?force=true" >/dev/null 2>&1; then
+    # mihomo 的 /configs 只认 PUT 且必须带 {"path": ...}——用 wget --post-data
+    # 发的是 POST 且空 body，两条都不对，这条 reload 路径从写出来就没真正成功过，
+    # 2026-09-17 靠 chill.rs 的订阅改 URL 功能第一次真正调用到才暴露（真机验证：
+    # 空 body 的 PUT 返回 400，带 path 的 PUT 返回 204）。
+    if render && curl -s -m 5 -o /dev/null -w '%{http_code}' -X PUT \
+         -H "Authorization: Bearer ${CHILL_SECRET:-}" \
+         --data "{\"path\":\"$CONFIG\"}" "http://127.0.0.1:9999/configs?force=true" \
+         | grep -q '^2'; then
       echo "reloaded"
     else
       echo "reload 失败（配置未通过校验时会保留旧配置）" >&2

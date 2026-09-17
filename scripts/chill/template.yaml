@@ -32,9 +32,12 @@ keep-alive-idle: 600
 profile: {store-selected: true, store-fake-ip: false}
 
 external-controller: '${CONTROLLER}'
-# 阶段一必须留空：设备上的旧触屏程序不带 token，设了 secret 就全部 401。
-# 访问控制改用来源白名单（inet chill 表，见 §7），不是密码。
-secret: ''
+# 来自 chill.env 的 CHILL_SECRET，留空（默认）就是阶段一行为：不带 token，
+# 靠来源白名单（inet chill 表，见 §7）挡。设了值就要求所有调用方带
+# Authorization: Bearer <secret> —— touch-ui（chill.conf 的 secret=）和
+# zte-agent（chill.rs）都已支持，两边先用新配置重启过一遍再打开这个值，
+# 否则它们会在还没换上新配置前就先收到 401。
+secret: '${CHILL_SECRET}'
 external-ui: ui
 
 # 不设 routing-mark：没有需要它的场景，加进来只会多一个与 TUN 路由交互的变量。

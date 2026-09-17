@@ -19,7 +19,7 @@ use crate::qos;
 use crate::router;
 use crate::services;
 use crate::esim;
-use crate::shellcrash_admin;
+use crate::chill;
 use crate::sim;
 use crate::sms;
 use crate::sms_forward;
@@ -118,9 +118,9 @@ fn handle_request(mut request: Request, state: &AppState) {
             respond(request, status, body_json);
             return;
         }
-        (&Method::Get, "/api/services/shellcrash/log") => {
+        (&Method::Get, "/api/services/chill/log") => {
             let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
-            let (status, body_json) = services::shellcrash_log(query);
+            let (status, body_json) = chill::log(query);
             respond(request, status, body_json);
             return;
         }
@@ -334,17 +334,17 @@ pub fn route(method: &Method, path: &str, state: &AppState, body: &[u8]) -> (u16
         // Services — read-only status. Log endpoints handled before route()
         // because they need the query string.
         (&Method::Get, "/api/services/tailscale") => services::tailscale_status(state),
-        (&Method::Get, "/api/services/shellcrash") => services::shellcrash_status(state),
-        // ShellCrash profile manager (mutating)
-        (&Method::Get, "/api/services/shellcrash/profiles") => shellcrash_admin::profiles_list(state),
-        (&Method::Get, "/api/services/shellcrash/profiles/job") => shellcrash_admin::profile_job(state),
-        (&Method::Post, "/api/services/shellcrash/profiles/url") => shellcrash_admin::profile_add_url(state, body),
-        (&Method::Post, "/api/services/shellcrash/profiles/upload") => shellcrash_admin::profile_upload(state, body),
-        (&Method::Post, "/api/services/shellcrash/profiles/refresh") => shellcrash_admin::profile_refresh(state, body),
-        (&Method::Post, "/api/services/shellcrash/profiles/apply") => shellcrash_admin::profile_apply(state, body),
-        (&Method::Put, "/api/services/shellcrash/profiles/dns") => shellcrash_admin::profile_dns_set(state, body),
-        (&Method::Put, "/api/services/shellcrash/profiles/rename") => shellcrash_admin::profile_rename(state, body),
-        (&Method::Delete, "/api/services/shellcrash/profiles") => shellcrash_admin::profile_delete(state, body),
+        // CHILL (native mihomo) — log handled above route() (needs the query string).
+        (&Method::Get, "/api/services/chill") => chill::status(state),
+        (&Method::Get, "/api/services/chill/providers") => chill::providers_list(state),
+        (&Method::Put, "/api/services/chill/providers") => chill::providers_set_url(state, body),
+        (&Method::Post, "/api/services/chill/providers/refresh") => chill::providers_refresh(state, body),
+        (&Method::Put, "/api/services/chill/regions") => chill::regions_set(state, body),
+        (&Method::Get, "/api/services/chill/bypass") => chill::bypass_get(state),
+        (&Method::Put, "/api/services/chill/bypass") => chill::bypass_set(state, body),
+        (&Method::Post, "/api/services/chill/enable") => chill::enable(state),
+        (&Method::Post, "/api/services/chill/disable") => chill::disable(state),
+        (&Method::Get, "/api/services/chill/job") => chill::job(state),
         // eSIM (removable eUICC via lpac)
         (&Method::Get, "/api/esim/status") => esim::status(state),
         (&Method::Get, "/api/esim/profiles") => esim::profiles(state),

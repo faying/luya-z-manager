@@ -4,14 +4,14 @@ import Link from "next/link";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/lib/hooks/useApi";
 import { cn } from "@/lib/utils";
-import { Wifi, Signal, Cloud, Layers, MessageSquare } from "lucide-react";
+import { Wifi, Signal, Cloud, Waves, MessageSquare } from "lucide-react";
 
 interface PublicStatus {
   network?: { connected?: boolean; type?: string; rsrp?: number };
   wifi?: { on?: boolean };
   services?: {
     tailscale?: { running?: boolean; installed?: boolean };
-    shellcrash?: { running?: boolean; installed?: boolean };
+    chill?: { state?: string; reason?: string | null };
   };
   sms?: { unread?: number };
 }
@@ -50,7 +50,14 @@ export function StatusStrip() {
         : t("status.svcNotInstalled", { name });
 
   const ts = data?.services?.tailscale;
-  const sc = data?.services?.shellcrash;
+  const chill = data?.services?.chill;
+  const chillTone: Tone = chill?.state === "running" ? "success" : chill?.state === "direct" ? "warning" : "neutral";
+  const chillLabel =
+    chill?.state === "running"
+      ? t("status.svcRunning", { name: "CHILL" })
+      : chill?.state === "direct"
+        ? t("status.svcStopped", { name: "CHILL" })
+        : t("status.svcNotInstalled", { name: "CHILL" });
   const unread = data?.sms?.unread ?? 0;
 
   return (
@@ -68,12 +75,7 @@ export function StatusStrip() {
         tone={svcTone(ts?.installed, ts?.running)}
         label={svcLabel("Tailscale", ts?.installed, ts?.running)}
       />
-      <StatusIcon
-        href="/services/shellcrash"
-        icon={Layers}
-        tone={svcTone(sc?.installed, sc?.running)}
-        label={svcLabel("ShellCrash", sc?.installed, sc?.running)}
-      />
+      <StatusIcon href="/services/chill" icon={Waves} tone={chillTone} label={chillLabel} />
       <StatusIcon
         href="/sms"
         icon={MessageSquare}

@@ -2,7 +2,7 @@
 // public.rs — UNAUTHENTICATED, read-only status summary for the login screen.
 //
 // Mirrors the kind of pre-login info the stock ZTE web UI shows (network / Wi-Fi
-// / battery) and adds our service health (Tailscale / ShellCrash / Home Mode).
+// / battery) and adds our service health (Tailscale / CHILL / Home Mode).
 // LAN-only, no secrets — never include keys, IMEI, client lists, etc.
 //
 //   GET /api/public/status   (allow-listed past auth in server.rs)
@@ -82,9 +82,22 @@ pub fn public_status(_state: &AppState) -> (u16, Value) {
         String::new()
     };
     let ts_installed = std::path::Path::new("/data/tailscale/tailscale").exists();
-    let crash_running = !sh("ps w | grep -E 'CrashCore|mihomo|sing-box' | grep -qv grep && echo 1").is_empty();
-    let crash_installed = std::path::Path::new("/tmp/ShellCrash/config.yaml").exists()
-        || std::path::Path::new("/etc/ShellCrash").exists();
+    // CHILL publishes its own state as JSON (state/reason/...) — see chill.rs and
+    // chill.sh's write_state().
+    let chill_state = fs::read_to_string("/tmp/chill.state")
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok());
+    let chill_state_str = chill_state
+        .as_ref()
+        .and_then(|v| v.get("state"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let chill_reason = chill_state
+        .as_ref()
+        .and_then(|v| v.get("reason"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let hm_state = fs::read_to_string("/data/homemode/state").unwrap_or_default();
     let hm_mode = hm_state.split_whitespace().next().unwrap_or("normal").to_string();
     let hm_present = std::path::Path::new("/data/homemode.sh").exists();
@@ -116,7 +129,7 @@ pub fn public_status(_state: &AppState) -> (u16, Value) {
                 "sms": { "unread": sms_unread },
                 "services": {
                     "tailscale": { "running": ts_running, "installed": ts_installed, "node": ts_node },
-                    "shellcrash": { "running": crash_running, "installed": crash_installed },
+                    "chill": { "state": chill_state_str, "reason": chill_reason },
                     "home_mode": { "present": hm_present, "enabled": hm_enabled, "mode": hm_mode },
                 }
             }

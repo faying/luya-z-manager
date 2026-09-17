@@ -57,7 +57,7 @@ interface WiFiStatus {
 interface PublicStatus {
   services: {
     tailscale: { running: boolean; installed?: boolean; node: string };
-    shellcrash: { running: boolean; installed?: boolean };
+    chill: { state: string; reason?: string | null };
     home_mode: { present: boolean; enabled: boolean; mode: string };
   };
   sms?: { unread?: number };
@@ -148,13 +148,13 @@ export default function DashboardPage() {
               <Status tone="neutral">{t("common.notInstalled", "Not installed")}</Status>
             )}
           </SvcRow>
-          <SvcRow label="ShellCrash">
-            {pub.services.shellcrash.running ? (
+          <SvcRow label="CHILL">
+            {pub.services.chill.state === "running" ? (
               <Status tone="success">{t("common.running", "Running")}</Status>
-            ) : pub.services.shellcrash.installed ? (
-              <Status tone="warning">{t("common.stopped", "Stopped")}</Status>
+            ) : pub.services.chill.state === "direct" ? (
+              <Status tone="warning">{t("chill.stDirect", "Direct")}</Status>
             ) : (
-              <Status tone="neutral">{t("common.notInstalled", "Not installed")}</Status>
+              <Status tone="neutral">{t("chill.stUnknown", "Not started")}</Status>
             )}
           </SvcRow>
           <SvcRow label={t("nav.homeMode", "Home Mode")}>

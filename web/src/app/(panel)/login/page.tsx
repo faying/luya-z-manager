@@ -119,7 +119,7 @@ interface PublicData {
   battery: { percent: number; charging: boolean };
   services: {
     tailscale: { running: boolean; installed?: boolean; node: string };
-    shellcrash: { running: boolean; installed?: boolean };
+    chill: { state: string; reason?: string | null };
     home_mode: { present: boolean; enabled: boolean; mode: string };
   };
   sms?: { unread?: number };
@@ -204,13 +204,13 @@ function PublicStatus() {
             <Status tone="neutral">{t("common.notInstalled", "Not installed")}</Status>
           )}
         </Row>
-        <Row label="ShellCrash">
-          {svc.shellcrash.running ? (
+        <Row label="CHILL">
+          {svc.chill.state === "running" ? (
             <Status tone="success">{t("common.running", "Running")}</Status>
-          ) : svc.shellcrash.installed ? (
-            <Status tone="warning">{t("common.stopped", "Stopped")}</Status>
+          ) : svc.chill.state === "direct" ? (
+            <Status tone="warning">{t("chill.stDirect", "Direct")}</Status>
           ) : (
-            <Status tone="neutral">{t("common.notInstalled", "Not installed")}</Status>
+            <Status tone="neutral">{t("chill.stUnknown", "Not started")}</Status>
           )}
         </Row>
         <Row label={t("nav.homeMode", "Home Mode")}>
