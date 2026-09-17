@@ -33,6 +33,10 @@ use crate::handlers::AppState;
 const LPAC_BIN: &str = "/data/esim/lpac";
 const LIB_DIR: &str = "/data/esim/lib";
 const COMPAT_SHIM: &str = "/data/esim/lib/libmusl-compat.so";
+/// Persists `last_switch_attempt` across agent restarts — otherwise a restart
+/// (e.g. deploying a new build) resets the cooldown while the card's own real
+/// state doesn't, letting a too-soon switch through to hit catBusy again.
+const LAST_ATTEMPT_FILE: &str = "/data/esim/last_switch_attempt";
 const WAKE_LOCK: &str = "/sys/power/wake_lock";
 const WAKE_UNLOCK: &str = "/sys/power/wake_unlock";
 const WAKE_TAG: &str = "esim_op";
@@ -46,8 +50,12 @@ const MAX_CODE_LEN: usize = 512;
 const MAX_NICKNAME_LEN: usize = 64;
 
 /// Cooldown enforced between ES10c EnableProfile/DisableProfile *attempts*
-/// (success or failure — see `switch`'s doc comment for why).
-const SWITCH_COOLDOWN_SECS: u64 = 600;
+/// (success or failure — see `switch`'s doc comment for why). Chosen from
+/// on-device evidence bracketing the real threshold between 3 min (confirmed
+/// too short) and ~10 min (confirmed enough); shortened from the original
+/// 10 min without a fresh trial at this exact value — if catBusy reappears,
+/// re-widen this before suspecting anything else.
+const SWITCH_COOLDOWN_SECS: u64 = 300;
 
 /* -------------------------------------------------------------- *
  *  State
@@ -70,8 +78,16 @@ pub struct EsimAdmin {
     job: Arc<Mutex<JobState>>,
     running: Arc<AtomicBool>,
     /// unix seconds of the last EnableProfile/DisableProfile *attempt* (0 = none
-    /// yet this boot). Drives the `switch` cooldown — see its doc comment.
+    /// on record). Drives the `switch` cooldown — see its doc comment. Loaded
+    /// from `LAST_ATTEMPT_FILE` at startup so an agent restart doesn't reset it.
     last_switch_attempt: Arc<AtomicU64>,
+}
+
+fn load_last_switch_attempt() -> u64 {
+    std::fs::read_to_string(LAST_ATTEMPT_FILE)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
 }
 
 impl EsimAdmin {
@@ -88,7 +104,7 @@ impl EsimAdmin {
                 rebooting: false,
             })),
             running: Arc::new(AtomicBool::new(false)),
-            last_switch_attempt: Arc::new(AtomicU64::new(0)),
+            last_switch_attempt: Arc::new(AtomicU64::new(load_last_switch_attempt())),
         }
     }
 }
@@ -377,6 +393,7 @@ pub fn switch(state: &AppState, body: &[u8]) -> (u16, Value) {
         None => return (409, json!({"ok": false, "error": "operation in progress"})),
     };
     state.esim.last_switch_attempt.store(now, Ordering::Relaxed);
+    let _ = std::fs::write(LAST_ATTEMPT_FILE, now.to_string());
     let job = Arc::clone(&state.esim.job);
     let running = Arc::clone(&state.esim.running);
     std::thread::spawn(move || {
