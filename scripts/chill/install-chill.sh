@@ -185,7 +185,23 @@ if [ "$APPLY" = 1 ] && [ -f "$Z" ]; then
   ZTMP="$(mktemp -d)"
   unzip -q "$Z" -d "$ZTMP" || die "解压 zashboard 失败"
   [ -f "$ZTMP/dist/index.html" ] || die "解压结果里没有 dist/index.html，官方包结构可能变了，先手动核实"
-  # 2026-09-17 真机踩过的坑：/data/chill/ui 里混进过来源不明的文件（疑似别的
+  # 2026-09-22 真机踩过的坑：zashboard 第一次打开会跳到"面板配置"设置页，
+  # 默认预填 127.0.0.1:9090——这是 zashboard 自己的默认猜测（跟本项目无关，
+  # 只是碰巧和 zte-agent 端口一样），这台设备的 mihomo controller 实际在
+  # 9999，填错的默认值连不上，卡在设置页，看起来就像"白屏/打不开"。每个
+  # 没访问过的浏览器都会撞一次。
+  # 注入一段引导脚本：首次没有 setup/api-list 时，用当前页面自己的 hostname
+  # （不写死 IP，换设备/换网段也对）+ 9999 自动填好，不用手动过一遍表单。
+  # 两个 key 名（setup/api-list、setup/active-uuid）是真机填完表单后读
+  # localStorage 核对出来的，不是官方文档——zashboard 升级后这两个 key 可能
+  # 改名，届时这段会静默失效，退回"要手填一次"，不影响页面本身能不能打开。
+  ZB_BOOTSTRAP='<script>;(function(){try{if(localStorage.getItem("setup/api-list"))return;var u="xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,function(c){var r=Math.random()*16|0,v=c=="x"?r:r&3|8;return v.toString(16)});var p={type:"clash",protocol:location.protocol=="https:"?"https":"http",host:location.hostname,port:"9999",secondaryPath:"",password:"",label:"CHILL",uuid:u};localStorage.setItem("setup/api-list",JSON.stringify([p]));localStorage.setItem("setup/active-uuid",u)}catch(e){}})()</script>'
+  awk -v bs="$ZB_BOOTSTRAP" \
+    '!done && /<script type="module"/ { print bs; done=1 } { print }' \
+    "$ZTMP/dist/index.html" > "$ZTMP/dist/index.html.tmp" \
+    && mv "$ZTMP/dist/index.html.tmp" "$ZTMP/dist/index.html"
+  grep -q 'setup/api-list' "$ZTMP/dist/index.html" || die "zashboard index.html 注入自动配置脚本失败（<script type=\"module\"> 没找到，官方包结构可能变了）"
+  # 2026-09-16 真机踩过的坑：/data/chill/ui 里混进过来源不明的文件（疑似别的
   # 面板遗留，Nuxt.js/GitHub Pages 结构，跟 zashboard 官方包对不上），干净
   # 覆盖比增量合并可靠——每次推送前先整个清空重建。
   ssh -o BatchMode=yes "$HOST" 'rm -rf /data/chill/ui && mkdir -p /data/chill/ui' \

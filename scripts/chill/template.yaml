@@ -145,6 +145,13 @@ proxy-providers:
     filter: '${FILTER_UNION}'
     exclude-filter: '${EXCLUDE_FILTER}'
     health-check: {enable: true, url: "https://www.gstatic.com/generate_204", interval: 1800, timeout: 3000, lazy: true}
+    # 快照里台湾节点被源头标成了🇨🇳（"🇨🇳 台湾 Edge 01"/"🇨🇳 台湾 HINET 01"），
+    # 按名字文本（filter 已经这样做，不看 flag）判断是台湾就改回🇹🇼，不影响真正的
+    # 大陆节点（它们名字里没有"台湾"字样）。
+    override:
+      proxy-name:
+        - pattern: '^🇨🇳(\s*台湾.*)$'
+          target: '🇹🇼${1}'
   # 守候网络：目前唯一真正可重新拉取的活订阅（Surge #!MANAGED-CONFIG 的 URL，
   # flag=surge，未验证 mihomo 能否直接解析——响应 content-type 是 text/html
   # 而不是预期的 text/plain，疑似格式不兼容或返回了提示页。是否可用交给
@@ -167,6 +174,12 @@ proxy-providers:
     filter: '${FILTER_UNION}'
     exclude-filter: '${EXCLUDE_FILTER}'
     health-check: {enable: true, url: "https://www.gstatic.com/generate_204", interval: 1800, timeout: 3000, lazy: true}
+    # 同 oix：快照里台湾节点被标成了🇨🇳（"🇨🇳 Taiwan 01"…"🇨🇳 Taiwan 10"），
+    # 按名字文本改回🇹🇼。
+    override:
+      proxy-name:
+        - pattern: '^🇨🇳(\s*Taiwan.*)$'
+          target: '🇹🇼${1}'
   # 快照，非 http：该订阅 401 未解决。修好后把 type 改回 http 并补 url。
   # 不用 YAML 锚点，避免不小心继承到 url。
   tag:
@@ -186,9 +199,14 @@ proxy-groups:
   - {name: 🇸🇬 新加坡, type: url-test, use: [oix, shouhou, nexi, tag], filter: '${FILTER_SG}', tolerance: 50, lazy: true, empty-fallback: REJECT}
   - {name: 🇺🇸 美国, type: url-test, use: [oix, shouhou, nexi, tag], filter: '${FILTER_US}', tolerance: 50, lazy: true, empty-fallback: REJECT}
 
+  # 手动节点：四个地区组是 url-test，内核自动选，不支持手选具体节点（家宽/星链
+  # 这类同地区但线路不同的节点，自动测速不一定选中你想用的那条）。这个组把
+  # 四个 provider 里地区并集范围内的节点原样摆出来，type:select 允许手选。
+  - {name: 🎯 手动节点, type: select, use: [oix, shouhou, nexi, tag], filter: '${FILTER_UNION}'}
+
   # 组名固定为「🚀 节点选择」：设备上的旧触屏程序在没有 conf 文件时默认读这个组名，
   # 保持一致就不需要在设备上放任何配置文件。改名会让触屏页空白。
-  - {name: 🚀 节点选择, type: select, proxies: [🇯🇵 日本, 🇹🇼 台湾, 🇸🇬 新加坡, 🇺🇸 美国, DIRECT]}
+  - {name: 🚀 节点选择, type: select, proxies: [🇯🇵 日本, 🇹🇼 台湾, 🇸🇬 新加坡, 🇺🇸 美国, 🎯 手动节点, DIRECT]}
   - {name: 🤖 AI, type: select, proxies: [🇹🇼 台湾, 🇯🇵 日本, 🇸🇬 新加坡, 🇺🇸 美国]}
   - {name: 📺 流媒体, type: select, proxies: [🚀 节点选择, 🇹🇼 台湾, 🇯🇵 日本, 🇸🇬 新加坡, 🇺🇸 美国]}
   - {name: 🍎 Apple, type: select, proxies: [DIRECT, 🚀 节点选择]}

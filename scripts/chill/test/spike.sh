@@ -6,7 +6,7 @@
 #   spike.sh run       # 挂死人开关，起核心，逐项验证，结束后自动清理
 #   spike.sh clean     # 手动清理（run 异常中断时用）
 #
-# 设计依据：~/.gstack/projects/zte-u60-pro/samuye-unknown-design-20260916-001500.md
+# 设计依据：`/plan-design-review` 2026-09-16
 # 决定 1A（临时 FORWARD 放行）、1B（unreachable 路由）、2F（按段清理）、
 # O2/O3（开销与基线）、O9（IPv6）、O10（reload 项挪到安装后）。
 #
