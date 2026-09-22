@@ -1,6 +1,6 @@
 # Contributing to open-u60-pro
 
-Thanks for your interest in contributing! This guide will help you get started.
+Thanks for your interest in contributing!
 
 ## Prerequisites
 
@@ -21,8 +21,8 @@ Thanks for your interest in contributing! This guide will help you get started.
 
 ```bash
 # Clone the repo
-git clone https://github.com/jesther-ai/open-u60-pro.git
-cd open-u60-pro
+git clone https://github.com/faying/zte-u60-pro-mu5250-manager.git
+cd zte-u60-pro-mu5250-manager
 
 # Build the agent
 cd zte-agent
@@ -42,17 +42,16 @@ adb shell chmod +x /data/local/tmp/zte-agent
 ## Submitting Issues
 
 - Use the provided issue templates (bug report or feature request)
-- Include device firmware version and zte-agent version when reporting bugs
+- Include device firmware version and zte-agent version
 - Attach relevant logs from the agent or companion app
 
 ## Submitting Pull Requests
 
-1. Fork the repository and create a feature branch from `main`
-2. Make your changes with clear, focused commits
+1. Fork the repository and branch from `main`
+2. Make focused, clearly-committed changes
 3. Ensure `cargo fmt` and `cargo clippy` pass
 4. Test on a real device if possible
-5. Open a PR using the pull request template
-6. Describe what changed and how you tested it
+5. Open a PR using the template, describing what changed and how you tested it
 
 ## Code of Conduct
 

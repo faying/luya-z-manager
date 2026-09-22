@@ -4,39 +4,39 @@ Native companion apps for the ZTE U60 Pro 5G mobile router. Connect to the `zte-
 
 ## Features
 
-| Feature | Status | Details |
-|---|---|---|
-| Signal Monitoring | Full | Live NR 5G / LTE / WCDMA metrics with color-coded thresholds |
-| RSRP History Chart | Full | Scrollable chart tracking signal strength over time |
-| Battery & Thermal | Full | Battery %, temperature, CPU thermal, charge policy |
-| Traffic Stats | Full | Real-time DL/UL speed (Mbps), total bytes transferred |
-| Connected Devices | Full | MAC, hostname, IPv4/IPv6 via host hints + DHCP enrichment |
-| Device Info | Full | SIM (ICCID, IMSI, MSISDN), IMEI, WAN/LAN IPs |
-| Band Lock/Unlock | Full | Lock NR5G NSA/SA and LTE bands, unlock all |
-| Cell Lock | Full | Lock to specific NR/LTE cells by PCI/EARFCN |
-| STC Cell Lock | Full | Smart traffic control cell locking |
-| Signal Detection | Full | Signal quality measurement with progress tracking |
-| WiFi Settings | Full | SSID, password, channel, bandwidth, tx power, WiFi 6 |
-| Guest WiFi | Full | Guest network enable/disable, SSID, timer |
-| SMS | Full | Read, send, delete SMS; mark as read |
-| SIM Management | Full | PIN verify/change/enable/disable, PUK unlock, SIM unlock |
-| Mobile Network | Full | Data toggle, airplane mode, network scan, manual register |
-| Network Mode | Full | Auto/manual network selection |
-| APN Settings | Full | Auto/manual APN mode, add/edit/delete/activate profiles |
-| DNS Settings | Full | Custom DNS configuration |
-| LAN Settings | Full | LAN IP/DHCP configuration |
-| Firewall | Full | Switch, level, NAT, DMZ, UPnP, port forwarding, filter rules |
-| VPN Passthrough | Full | VPN passthrough toggle |
-| QoS | Full | Quality of service toggle |
-| Telemetry Blocker | Full | Domain filter rules for blocking telemetry |
-| Schedule Reboot | Full | Automatic reboot scheduling |
-| Device Control | Full | Reboot, factory reset, power supply mode, power save, fast boot |
-| USB Mode | Full | USB mode switching, powerbank mode |
-| Voice Calls | Full | Dial, answer, hangup, DTMF, mute via AT commands |
-| USSD | Full | Send/respond/cancel USSD sessions |
-| STK Menu | Full | SIM Toolkit menu browsing |
-| Enable ADB | Full | One-tap USB debug mode via WiFi |
-| Config Decrypt/Encrypt | Full | Import .bin, auto-detect key, browse XML, re-encrypt, export |
+| Feature | Details |
+|---|---|
+| Signal Monitoring | Live NR 5G / LTE / WCDMA metrics with color-coded thresholds |
+| RSRP History Chart | Scrollable chart tracking signal strength over time |
+| Battery & Thermal | Battery %, temperature, CPU thermal, charge policy |
+| Traffic Stats | Real-time DL/UL speed (Mbps), total bytes transferred |
+| Connected Devices | MAC, hostname, IPv4/IPv6 via host hints + DHCP enrichment |
+| Device Info | SIM (ICCID, IMSI, MSISDN), IMEI, WAN/LAN IPs |
+| Band Lock/Unlock | Lock NR5G NSA/SA and LTE bands, unlock all |
+| Cell Lock | Lock to specific NR/LTE cells by PCI/EARFCN |
+| STC Cell Lock | Smart traffic control cell locking |
+| Signal Detection | Signal quality measurement with progress tracking |
+| WiFi Settings | SSID, password, channel, bandwidth, tx power, WiFi 6 |
+| Guest WiFi | Guest network enable/disable, SSID, timer |
+| SMS | Read, send, delete SMS; mark as read |
+| SIM Management | PIN verify/change/enable/disable, PUK unlock, SIM unlock |
+| Mobile Network | Data toggle, airplane mode, network scan, manual register |
+| Network Mode | Auto/manual network selection |
+| APN Settings | Auto/manual APN mode, add/edit/delete/activate profiles |
+| DNS Settings | Custom DNS configuration |
+| LAN Settings | LAN IP/DHCP configuration |
+| Firewall | Switch, level, NAT, DMZ, UPnP, port forwarding, filter rules |
+| VPN Passthrough | VPN passthrough toggle |
+| QoS | Quality of service toggle |
+| Telemetry Blocker | Domain filter rules for blocking telemetry |
+| Schedule Reboot | Automatic reboot scheduling |
+| Device Control | Reboot, factory reset, power supply mode, power save, fast boot |
+| USB Mode | USB mode switching, powerbank mode |
+| Voice Calls | Dial, answer, hangup, DTMF, mute via AT commands |
+| USSD | Send/respond/cancel USSD sessions |
+| STK Menu | SIM Toolkit menu browsing |
+| Enable ADB | One-tap USB debug mode via WiFi |
+| Config Decrypt/Encrypt | Import .bin, auto-detect key, browse XML, re-encrypt, export |
 
 ## Architecture
 
@@ -44,7 +44,7 @@ Native companion apps for the ZTE U60 Pro 5G mobile router. Connect to the `zte-
 - **Transport**: HTTP to `zte-agent` REST API (`http://<router>:9090/api/...`)
 - **Auth**: Token-based (password → bearer token)
 
-The iOS app communicates with `zte-agent`, a lightweight Rust HTTP server deployed on the router. The agent exposes dedicated typed REST endpoints that internally call the router's ubus subsystem and return JSON responses.
+The app talks to `zte-agent`, a lightweight Rust HTTP server on the router that exposes typed REST endpoints, internally calling the router's ubus subsystem and returning JSON. The mobile app is a pure front-end with no direct ubus/AT/sysfs access.
 
 ## iOS App
 
@@ -179,10 +179,6 @@ The app can decrypt and re-encrypt ZTE router configuration backup files (`.bin`
 - **Encryption**: AES-128-ECB (16-byte key) or AES-256-CBC (32-byte key, first 16 bytes of payload = IV)
 - **Compression**: ZLIB — plain, chunked (4-byte BE length prefix per chunk), or raw deflate
 - **Key resolution**: Tries 14 known static keys + MD5(serial)[:16] + MD5(signature)[:16]
-
-## Relation to zte-agent
-
-The mobile app connects to `zte-agent`, a lightweight Rust HTTP server deployed on the router. The agent runs directly on the device and exposes all router functionality through typed REST endpoints — the mobile app is a pure front-end with no direct ubus/AT/sysfs access.
 
 ## License
 

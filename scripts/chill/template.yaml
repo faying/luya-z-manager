@@ -209,8 +209,15 @@ proxy-groups:
   - {name: 🚀 节点选择, type: select, proxies: [🇯🇵 日本, 🇹🇼 台湾, 🇸🇬 新加坡, 🇺🇸 美国, 🎯 手动节点, DIRECT]}
   - {name: 🤖 AI, type: select, proxies: [🇹🇼 台湾, 🇯🇵 日本, 🇸🇬 新加坡, 🇺🇸 美国]}
   - {name: 📺 流媒体, type: select, proxies: [🚀 节点选择, 🇹🇼 台湾, 🇯🇵 日本, 🇸🇬 新加坡, 🇺🇸 美国]}
-  - {name: 🍎 Apple, type: select, proxies: [DIRECT, 🚀 节点选择]}
-  - {name: 🐟 漏网之鱼, type: select, proxies: [🚀 节点选择, DIRECT]}
+  # 2026-09-22 反馈：跟 🤖AI/📺流媒体 比，这两个组原来只能选 🚀 节点选择
+  # 或 DIRECT，想指定地区（比如只想让 Apple 走台湾）得先跳到 🚀 节点选择
+  # 改它的当前选择——一个组的选择会连带影响其它引用同一个组的规则，等于
+  # 没法单独为 Apple/漏网之鱼指定地区。补上四个地区组，直接选，不用绕。
+  # 追加在末尾，不放前面：select 第一项是默认值，不能改变现有默认行为
+  # （Apple 默认 DIRECT，漏网之鱼默认 🚀 节点选择，原样保留）。
+  - {name: 🍎 Apple, type: select, proxies: [DIRECT, 🚀 节点选择, 🇹🇼 台湾, 🇯🇵 日本, 🇸🇬 新加坡, 🇺🇸 美国]}
+  - {name: 🐟 漏网之鱼, type: select, proxies: [🚀 节点选择, DIRECT, 🇹🇼 台湾, 🇯🇵 日本, 🇸🇬 新加坡, 🇺🇸 美国]}
+  - {name: 📞 VoWiFi, type: select, use: [oix, tag], filter: "(?i)(HINET|台湾家宽)"}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 规则集（§6）。统一 http + mrs + 三天更新，经 🚀 节点选择 下载。
@@ -241,6 +248,14 @@ rule-providers:
 # 规则（§6）。顺序即优先级。
 # ─────────────────────────────────────────────────────────────────────────────
 rules:
+
+  # VoWiFi/ePDG（3GPP IMS 核心网域名）——geoip:private 类规则会把它判成直连，
+  # 但运营商 ePDG 对大陆/机房 IP 有风控，必须走代理才能注册成功（U60/CHILL
+  # 端已验证，2026-09-21 用户确认；同一条规则镜像自用户自己的 Surge 配置，
+  # IP-CIDR 两段是中国电信 ePDG 服务器段）。
+  - DOMAIN-SUFFIX,3gppnetwork.org,📞 VoWiFi
+  - IP-CIDR,211.77.54.0/24,📞 VoWiFi,no-resolve
+  - IP-CIDR,211.77.241.0/24,📞 VoWiFi,no-resolve
   - RULE-SET,private_domain,DIRECT
 
   # 门户认证探测必须直连且不给 fake-ip，否则连 Wi-Fi 时弹不出认证页。

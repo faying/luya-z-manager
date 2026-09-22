@@ -2,19 +2,19 @@
 
 ## Scope
 
-This policy applies to the open-u60-pro toolkit code (zte-agent, iOS app, Android app). It does **not** cover ZTE firmware or hardware vulnerabilities — please report those directly to ZTE.
+This policy covers the open-u60-pro toolkit code (zte-agent, iOS app, Android app), not ZTE firmware or hardware — report those directly to ZTE.
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in this project, please report it responsibly:
+Report responsibly:
 
 1. **Do not** open a public GitHub issue.
 2. Open a private report via GitHub → Security → "Report a vulnerability", with:
    - A description of the vulnerability
    - Steps to reproduce
    - Potential impact
-3. You will receive an acknowledgement within 72 hours.
-4. A fix will be developed privately and disclosed once a patch is available.
+3. You'll get an acknowledgement within 72 hours.
+4. A fix is developed privately and disclosed once a patch is available.
 
 ## Supported Versions
 
