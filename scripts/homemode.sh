@@ -24,7 +24,7 @@
 # Home SSIDs are read from $SSID_FILE (one per line; blank lines and #comments
 # ignored), maintained via the admin UI / zte-agent. If the file is missing or
 # empty we fall back to DEFAULT_SSIDS so the device is never left unguarded.
-DEFAULT_SSIDS="MINWEI.CO SH.MINWEI.CO IOT.MINWEI.CO"  # any one present ⇒ "at home"
+DEFAULT_SSIDS="EXAMPLE-HOME EXAMPLE-HOME-5G EXAMPLE-HOME-IOT"  # any one present ⇒ "at home"
 SCAN_IFACE="wlan0"          # 2.4G AP iface used for scanning
 # 2.4G channels 1-11 ONLY. wlan0 and wlan2 share one phy (wcn7851), so a bare
 # `iw scan` sweeps 2.4G+5G (~35 ch incl. DFS, ~5s) and takes BOTH radios
