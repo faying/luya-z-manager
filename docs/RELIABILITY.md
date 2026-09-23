@@ -60,7 +60,7 @@ zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`�
 - **墙钟不可信**：设备 RTC 在网络对时之前是 1971 年左右。墙钟秒 < `1704067200`（2024-01-01）的一律当作「时间未校准」，
   网页显示「开机后 N 秒」。
 - 类别：`[a-z0-9-]`，现有：`agent-crash`、`datad-crash`（supervise.sh）；`devui-crash`、`devui-gave-up`（u60-uid）；`agent-silent`、`agent-hung`、`wifi-takeover`、`wifi-restore-failed`、`sms-failed`（u60-guard）。
-- 说明：只能是可打印 ASCII，去掉 tab 和换行，最多 120 个字符。它会原样进短信，不能带任何配置内容（号码、密码、SSID）。
+- 说明：只能是可打印 ASCII，去掉 tab 和换行，最多 120 个字符。给网页告警列表看（短信正文按类别另写），不能带任何配置内容（号码、密码、SSID）。
 - 写入方统一用 touch-ui `scripts/alert-lib.sh` 里的写入函数（supervise.sh 和 u60-guard 共用），它负责清洗、截断和裁剪：
   超过 300 行时保留最后 200 行。
 - agent 只读。遇到格式不对的行跳过，不报错。
@@ -80,7 +80,8 @@ zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`�
     （`number`、`message_body` 为 UCS-2 十六进制大写、`encode_type` 为 `UNICODE`、`sms_time` 为 `YY;MM;DD;HH;MM;SS;+TZ`、`id` 为 `-1`）。
     返回体里 `result` 是 3 或没有 `result` 才算成功。失败记 `failed`，不计入额度，并追加一条 `sms-failed` 事件；不重试。
   - 号码在拼 JSON 之前再校验一次：`+` 可有可无，后面只能是数字，总长不超过 20。
-- 短信正文：`U60 alert: <类别> <说明>`，只有 ASCII。
+- 短信正文：按类别写好的一句中文大白话（发生了什么、影不影响上网、要不要动手），`【U60】…（MM-DD HH:MM）`，
+  一条短信以内（≤70 字）；不认识的类别提示去网页看。事件的 ASCII 说明只留在网页告警列表里。u60-guard 自己把 UTF-8 解成 UCS-2（busybox 没有 iconv）。
 
 ### 短信记录 `sms-log`
 
