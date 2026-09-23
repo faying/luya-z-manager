@@ -12,6 +12,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { useApi } from "@/lib/hooks/useApi";
+import { deviceIso, deviceNow, useDeviceOffset } from "@/lib/deviceClock";
 import { apiFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/types";
 import {
@@ -122,6 +123,7 @@ const REASON_LABELS: Record<string, string> = {
 
 export default function ChillPage() {
   const { t } = useTranslation();
+  const offset = useDeviceOffset();
   const { data: status, error, mutate, isLoading } = useApi<ChillState>(
     "/api/services/chill",
     { refreshInterval: REFRESH_INTERVAL }
@@ -240,7 +242,7 @@ export default function ChillPage() {
           <div className="grid grid-cols-2 gap-px bg-border md:grid-cols-4">
             <Vital label={t("chill.temp", "Temperature")} value={status.cpuss_c != null ? `${status.cpuss_c}°C` : "—"} />
             <Vital label={t("chill.memAvail", "Memory available")} value={status.mem_avail_mb != null ? `${status.mem_avail_mb} MB` : "—"} hint={status.mem_pressure ? t("chill.memPressure", "Under pressure") : undefined} />
-            <Vital label={t("chill.uptime", "Uptime")} value={fmtUptimeIso(status.started_at)} hint={status.version} />
+            <Vital label={t("chill.uptime", "Uptime")} value={fmtUptimeIso(status.started_at, offset)} hint={status.version} />
             <Vital label="PID" value={status.core_pid ?? "—"} />
           </div>
         </div>
@@ -405,6 +407,7 @@ function ProvidersCard({
   onMessage: (msg: string, err?: boolean) => void;
 }) {
   const { t } = useTranslation();
+  const offset = useDeviceOffset();
   const { data, mutate, error } = useApi<ProvidersResp>("/api/services/chill/providers", {
     refreshInterval: 15000,
   });
@@ -479,7 +482,7 @@ function ProvidersCard({
                     items={[
                       p.vehicle_type,
                       t("chill.nodes", "{{count}} nodes", { count: p.node_count }),
-                      p.updated_at ? fmtUpdatedAt(p.updated_at) : null,
+                      p.updated_at ? fmtUpdatedAt(p.updated_at, offset) : null,
                     ]}
                   />
                 </div>
@@ -778,21 +781,23 @@ function fmtBytes(n?: number | null): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)}GB`;
 }
 
-function fmtUpdatedAt(iso: string): string {
-  const t = Date.parse(iso);
+// Both ISO times below come from the device clock ("Z" but local digits):
+// compare them with device-now, not the browser's (lib/deviceClock.ts).
+function fmtUpdatedAt(iso: string, offset: number): string {
+  const t = deviceIso(iso);
   if (Number.isNaN(t) || t <= 0) return "—";
-  const diff = Math.floor((Date.now() - t) / 1000);
+  const diff = deviceNow(offset) - t;
   if (diff < 60) return "just now";
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-function fmtUptimeIso(iso?: string): string {
+function fmtUptimeIso(iso: string | undefined, offset: number): string {
   if (!iso) return "—";
-  const t = Date.parse(iso);
+  const t = deviceIso(iso);
   if (Number.isNaN(t)) return "—";
-  const diff = Math.floor((Date.now() - t) / 1000);
+  const diff = deviceNow(offset) - t;
   if (diff < 0) return "—";
   const d = Math.floor(diff / 86400);
   const h = Math.floor((diff % 86400) / 3600);

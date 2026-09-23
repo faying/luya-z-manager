@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import {
   Activity,
   Antenna,
+  BellRing,
   Bug,
   Cable,
   CalendarClock,
@@ -15,6 +16,7 @@ import {
   CreditCard,
   EyeOff,
   FileCog,
+  HeartPulse,
   Forward,
   Gauge,
   Globe,
@@ -54,6 +56,7 @@ import { useAuth } from "@/lib/hooks/useAuth";
 import { getApiBase } from "@/lib/api/client";
 import { StatusStrip } from "@/components/admin/StatusStrip";
 import { LangToggle } from "@/components/admin/LangToggle";
+import { AlertBanner } from "@/components/admin/AlertBanner";
 
 interface NavItem {
   href: string;
@@ -147,6 +150,8 @@ const NAV: NavGroup[] = [
     label: "System",
     tKey: "navGroup.system",
     items: [
+      { href: "/health", label: "Health", tKey: "nav.health", icon: HeartPulse },
+      { href: "/alerts", label: "Alerts", tKey: "nav.alerts", icon: BellRing },
       { href: "/router/device", label: "Device Control", tKey: "nav.deviceControl", icon: Power },
       { href: "/router/schedule", label: "Schedule Reboot", tKey: "nav.scheduleReboot", icon: Timer },
       { href: "/scheduler", label: "Scheduler", tKey: "nav.scheduler", icon: CalendarClock },
@@ -290,6 +295,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
         <main className="mx-auto w-full max-w-[1152px] flex-1 px-4 pb-24 pt-6 sm:px-5 lg:px-10 lg:py-10">
+          <AlertBanner />
           {children}
         </main>
       </div>

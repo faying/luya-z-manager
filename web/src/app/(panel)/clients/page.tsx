@@ -1,6 +1,7 @@
 "use client";
 
 import { useApi } from "@/lib/hooks/useApi";
+import { deviceNow, useDeviceOffset } from "@/lib/deviceClock";
 import { PageHeader, SectionCard, ErrorBanner, Status } from "@/components/admin/StatCard";
 import { Button } from "@/components/admin/Button";
 import { useSWRConfig } from "swr";
@@ -39,9 +40,10 @@ function Freshness({ healthy, hasData }: { healthy: boolean; hasData: boolean })
   );
 }
 
-function fmtLease(expires?: number): string {
+// Lease expiry comes from dnsmasq, on the device clock (lib/deviceClock.ts).
+function fmtLease(expires: number | undefined, now: number): string {
   if (!expires) return "—";
-  const secs = expires - Math.floor(Date.now() / 1000);
+  const secs = expires - now;
   if (secs <= 0) return "Expired";
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
@@ -59,7 +61,7 @@ export default function ClientsPage() {
 
   const leases = data?.dhcp_leases ?? [];
   const hosts = data?.hosts ?? {};
-  const now = Math.floor(Date.now() / 1000);
+  const now = deviceNow(useDeviceOffset());
   const activeLeases = leases.filter((l) => (l.expires ?? 0) > now);
   const expiredLeases = leases.filter((l) => (l.expires ?? 0) <= now);
   const active = activeLeases.length;
@@ -144,7 +146,7 @@ export default function ClientsPage() {
                   </div>
                   <div className="shrink-0 text-right">
                     {isActive ? (
-                      <Status tone="success">{fmtLease(lease.expires)}</Status>
+                      <Status tone="success">{fmtLease(lease.expires, now)}</Status>
                     ) : (
                       <span className="text-xs text-text-dim">{t("clients.expired", "Expired")}</span>
                     )}

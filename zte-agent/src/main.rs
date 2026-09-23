@@ -1,4 +1,5 @@
 mod action;
+mod alerts;
 mod at_cmd;
 mod at_terminal;
 mod auth;
@@ -8,6 +9,7 @@ mod device_ext;
 pub mod doh;
 mod event_bus;
 mod handlers;
+mod health;
 mod homemode;
 mod lan_test;
 mod modem_ext;
@@ -21,6 +23,7 @@ mod server;
 mod services;
 mod esim;
 mod chill;
+mod clock;
 mod static_files;
 mod sim;
 mod sms;
@@ -51,9 +54,21 @@ fn main() {
 
     let state = Arc::new(AppState::new());
 
-    // Set password from environment if provided
+    // Password: ZTE_AGENT_PASSWORD (the old start_zte_agent.sh launcher), or
+    // the file named by ZTE_AGENT_PASSWORD_FILE (the procd service). The
+    // service passes a path, not the secret: procd shows every instance's env
+    // in `ubus call service list`.
     if let Ok(pw) = std::env::var("ZTE_AGENT_PASSWORD") {
         state.auth.set_password(&pw);
+    } else if let Ok(path) = std::env::var("ZTE_AGENT_PASSWORD_FILE") {
+        match std::fs::read_to_string(&path).ok().as_deref().and_then(password_from_env_file) {
+            Some(pw) => state.auth.set_password(pw),
+            None => {
+                // Refuse to run open: with no password every request is allowed.
+                eprintln!("[main] no password in {path}; refusing to start without one");
+                std::process::exit(78);
+            }
+        }
     }
 
     // Sidecar mode (`ZTE_AGENT_SIDECAR=1`): serve the HTTP API but start none
@@ -95,5 +110,34 @@ fn main() {
         state.scenario.start(Arc::clone(&state));
     }
 
+    // Read-only device check (doctor.sh) on a timer, for the health page and
+    // the touch screen's summary. Harmless in sidecar mode too.
+    health::start();
+
     server::start(&bind, threads, state);
+}
+
+/// `ZTE_AGENT_PASSWORD=<value>` from the env file written by agent-auth.sh:
+/// the value is taken literally to the end of the line (no shell quoting).
+/// Empty counts as missing — "" would be accepted as a real password.
+fn password_from_env_file(text: &str) -> Option<&str> {
+    text.lines()
+        .find_map(|l| l.strip_prefix("ZTE_AGENT_PASSWORD="))
+        .map(|v| v.trim_end_matches('\r'))
+        .filter(|v| !v.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::password_from_env_file;
+
+    #[test]
+    fn password_file_parsing() {
+        assert_eq!(password_from_env_file("ZTE_AGENT_PASSWORD=s3cr3t!#\n"), Some("s3cr3t!#"));
+        assert_eq!(password_from_env_file("# c\nZTE_AGENT_PASSWORD=a=b\n"), Some("a=b"));
+        assert_eq!(password_from_env_file("ZTE_AGENT_PASSWORD=x\r\n"), Some("x"));
+        assert_eq!(password_from_env_file("ZTE_AGENT_PASSWORD=\n"), None);
+        assert_eq!(password_from_env_file("OTHER=1\n"), None);
+        assert_eq!(password_from_env_file(""), None);
+    }
 }

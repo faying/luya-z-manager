@@ -78,6 +78,8 @@ export const en = {
     usb: "USB Mode",
     config: "Config Tool",
     settings: "Settings",
+    alerts: "Alerts",
+    health: "Health",
   },
   bottomTab: {
     home: "Home",

@@ -230,7 +230,9 @@ fn format_sms_time() -> String {
         libc::time(&mut t);
         libc::localtime_r(&t, &mut tm);
     }
-    let tz_offset = tm.tm_gmtoff / 3600;
+    // tm_gmtoff is 0 on this firmware (TZ=UTC over a local-time clock); the
+    // real zone comes from ZTE's SNTP settings. See clock.rs.
+    let tz_offset = crate::clock::sms_zone_hours();
     let tz_sign = if tz_offset >= 0 { "+" } else { "" };
     format!(
         "{:02};{:02};{:02};{:02};{:02};{:02};{}{}",

@@ -225,16 +225,10 @@ fn scan_until_results(attempts: u32, delay: Duration) -> Option<String> {
     last
 }
 
-/// Apply wifi0's disabled flag at runtime (commit + daemon reload).
-fn set_radio_2g(disabled: bool) {
-    // Fourth writer of the `wireless` package — same lock as wifi_set and the
-    // scenario applier, so a scan wake can't interleave with either.
-    let _wifi_guard = crate::wifi_radio::WIFI_APPLY_LOCK.lock();
+/// Write wifi0's disabled flag and commit. The caller reloads.
+fn set_radio_2g(_lk: &crate::wifi_radio::WifiLock, disabled: bool) {
     let _ = ubus::uci_set_no_commit(RADIO_2G, if disabled { "1" } else { "0" });
     let _ = ubus::uci_commit("wireless");
-    let _ = Command::new("ubus")
-        .args(["call", "zwrt_wlan", "reload"])
-        .output();
 }
 
 // GET /api/homemode/scan — nearby SSIDs to pick from, strongest signal first.
@@ -242,13 +236,26 @@ pub fn homemode_scan(_state: &AppState) -> (u16, Value) {
     // Normally radios are up and we scan directly. But when home mode has turned
     // Wi-Fi off (you're home), wlan0 is gone — so briefly wake ONLY 2.4G (no 5G
     // DFS delay), scan, then put it back, exactly like the cron worker does.
+    //
+    // The whole wake → scan → put back runs under one hold of the Wi-Fi lock, so
+    // nothing (u60-guard in particular) can turn the radio on in between and
+    // then have us turn it straight back off. That hold is what sets
+    // wifi_radio::MAX_HOLD.
     let mut woke = false;
     let mut text = run_iw_scan();
+    let mut lk = None;
     if text.is_none() && ubus::uci_get(RADIO_2G).unwrap_or_default() == "1" {
-        set_radio_2g(false); // wake 2.4G
+        let l = match crate::wifi_radio::lock(crate::wifi_radio::HTTP_WAIT) {
+            Ok(l) => l,
+            Err(e) => return (503, json!({"ok": false, "error": e})),
+        };
+        set_radio_2g(&l, false); // wake 2.4G
+        // Not verified: the scans below are the check, and retry until it is up.
+        let _ = crate::wifi_radio::reload(&l);
         woke = true;
         std::thread::sleep(Duration::from_secs(WAKE_SETTLE_SECS));
         text = scan_until_results(5, Duration::from_millis(1500));
+        lk = Some(l);
     }
 
     let text = text.unwrap_or_default();
@@ -284,8 +291,9 @@ pub fn homemode_scan(_state: &AppState) -> (u16, Value) {
         .collect();
 
     // If we woke 2.4G just to scan, put it back off (home mode 5G is already off).
-    if woke {
-        set_radio_2g(true);
+    if let Some(l) = lk {
+        set_radio_2g(&l, true);
+        let _ = crate::wifi_radio::reload_and_verify(&l);
     }
 
     (

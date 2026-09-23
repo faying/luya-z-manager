@@ -153,13 +153,6 @@ pub fn wifi_status(_state: &AppState) -> (u16, Value) {
 // ---------------------------------------------------------------------------
 
 pub fn wifi_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
-    // Serialise against the other writers of the `wireless` package (the
-    // scenario applier and homemode's scan wake). Without this an admin-UI save
-    // can land between two steps of a scenario apply and leave it half-applied.
-    let _wifi_guard = match crate::wifi_radio::WIFI_APPLY_LOCK.lock() {
-        Ok(g) => g,
-        Err(_) => return (503, json!({"ok": false, "error": "wifi lock poisoned"})),
-    };
     let parsed: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
@@ -167,6 +160,13 @@ pub fn wifi_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
     let obj = match parsed.as_object() {
         Some(o) => o,
         None => return (400, json!({"ok": false, "error": "expected JSON object"})),
+    };
+    // Serialise against every other writer of the `wireless` package (the
+    // scenario engine, u60-guard, homemode). Held until the reload has been
+    // verified, not just until commit — see wifi_radio's lock notes.
+    let lk = match crate::wifi_radio::lock(crate::wifi_radio::HTTP_WAIT) {
+        Ok(l) => l,
+        Err(e) => return (503, json!({"ok": false, "error": e})),
     };
 
     let uci_map: &[(&str, &str)] = &[
@@ -291,11 +291,10 @@ pub fn wifi_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
         return (200, json!({"ok": true, "data": {"status": "ok", "hot": true}}));
     }
 
-    // Full reload needed
+    // Full reload needed. It runs on its own thread, which keeps the lock until
+    // the reload is verified; the response does not wait for it.
     if wireless_changed {
-        let _ = Command::new("sh")
-            .args(["-c", "ubus call zwrt_wlan reload >/dev/null 2>&1 &"])
-            .output();
+        crate::wifi_radio::finish_in_background(lk, "settings");
     }
 
     (200, json!({"ok": true, "data": {"status": "ok"}}))
@@ -353,6 +352,11 @@ pub fn guest_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
         ("guest_active_time", &["wireless.guest_2g.guest_active_time", "wireless.guest_5g.guest_active_time"]),
     ];
 
+    let lk = match crate::wifi_radio::lock(crate::wifi_radio::HTTP_WAIT) {
+        Ok(l) => l,
+        Err(e) => return (503, json!({"ok": false, "error": e})),
+    };
+
     let mut changed = false;
     for (key, value) in obj {
         let val_str = match value {
@@ -382,9 +386,7 @@ pub fn guest_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
         return (500, json!({"ok": false, "error": e}));
     }
 
-    let _ = Command::new("sh")
-        .args(["-c", "ubus call zwrt_wlan reload >/dev/null 2>&1 &"])
-        .output();
+    crate::wifi_radio::finish_in_background(lk, "guest");
 
     (200, json!({"ok": true, "data": {"status": "ok"}}))
 }

@@ -51,6 +51,22 @@ Next.js app served by the agent at the device root (`http://<device>:9090/`), re
 ZTE management page. Mobile-first (bottom tab bar on phones), design system in
 [docs/DESIGN.md](docs/DESIGN.md).
 
+### Reliability — supervision, Wi-Fi safety net, alerts
+
+The device is often its owner's only uplink, so the agent, the data service and the touch UI run
+under procd with crash capture, and a small watchdog (`u60-guard`) forces Wi-Fi back on if the
+agent stops heartbeating while the access points are down. Failures show up as an alert banner and
+a **Health** page in the web UI, on the touch screen, and — optionally — as a rate-limited SMS from
+the device's own SIM. The install kit adds `./install.sh doctor` (read-only check) and
+`./install.sh backup` / `restore` (configuration only, stored on your computer). The file-level
+contract between the agent and the shell side is in [docs/RELIABILITY.md](docs/RELIABILITY.md); the
+scripts themselves live in the
+[touch-ui repo](https://github.com/faying/zte-u60-pro-mu5250-touch-ui) under `scripts/`.
+
+Note: ZTE's firmware keeps the system clock on *local* wall time with the time zone set to UTC.
+The agent reports the gap as `clock.utc_offset` in `/api/public/status`; the web UI shows device
+times as device-local time (`web/src/lib/deviceClock.ts`).
+
 ### `mobile/` — native companion apps
 
 SwiftUI (iOS 16+) and Jetpack Compose (Android 8+) apps that talk to `zte-agent` directly over

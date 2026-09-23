@@ -25,15 +25,16 @@
 //    actions therefore go through `wifi_radio::apply`, which polls until the
 //    change is observable, instead of through the route table.
 //  * **Never call `server::route` while holding a lock a handler could want.**
-//    `wifi_radio::apply` takes `WIFI_APPLY_LOCK` itself, so the engine must not
-//    already hold it — hence the direct call rather than a routed one.
+//    `wifi_radio::apply` takes the Wi-Fi lock itself, so the engine must not
+//    already hold it — hence the direct call rather than a routed one. Code
+//    that does hold it (rollback) calls `apply_locked`.
 // ─────────────────────────────────────────────────────────────────────────────
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -54,6 +55,34 @@ const LOG_FILE: &str = "/data/scenario/log";
 /// before the trip" into "what it is now".
 const RESTORE_FILE: &str = "/data/scenario/restore.json";
 const LOG_MAX_BYTES: u64 = 1_048_576;
+
+// ── Contract with u60-guard (touch-ui scripts/u60-guard.sh) ─────────────────
+//
+// u60-guard is the watchdog that forces Wi-Fi on when this agent stops
+// working while the APs are down. It knows the agent only through these two
+// files, both on tmpfs so a reboot starts clean:
+//
+//  * HEARTBEAT_FILE — written by the engine thread before bootsafe and then on
+//    every loop, whether or not the engine is enabled or configured: it proves
+//    the agent is alive, not that it is switching. Content is whole seconds of
+//    /proc/uptime (monotonic, immune to the clock jump when the network sets
+//    the time). u60-guard only starts judging once it has seen it at least once.
+//  * TAKEOVER_FILE — written by u60-guard when it steps in. While it exists the
+//    engine does no detection and ignores the pin, and goes back to (and stays
+//    in) away: a persistent pin of "home" would otherwise take the APs straight
+//    back down. The engine removes it after TAKEOVER_HOLD of its own continuous
+//    running, which is how control is handed back. If u60-guard rewrites it
+//    (a second takeover), the clock starts again.
+const HEARTBEAT_FILE: &str = "/tmp/scenario.heartbeat";
+const TAKEOVER_FILE: &str = "/tmp/u60-wifiguard.took-over";
+const TAKEOVER_HOLD: Duration = Duration::from_secs(600);
+// Which is why u60-guard must write the marker ONCE per takeover, with content
+// unique to that takeover (its uptime at the time) — rewriting it every check
+// would restart the hold forever and control would never come back.
+
+/// Set by the procd service script. Tells the agent a supervisor will restart
+/// it, so exiting is the right response to a dead engine thread.
+const SUPERVISED_ENV: &str = "ZTE_AGENT_SUPERVISED";
 const LOG_TAIL_LINES: usize = 300;
 
 /// The scenario every failure and every boot falls back to.
@@ -612,6 +641,62 @@ fn clear_wakealarm() {
     let _ = fs::write(RTC_WAKEALARM, "0");
 }
 
+// ── heartbeat and takeover ──────────────────────────────────────────────────
+
+/// Whole seconds from the text of /proc/uptime ("12345.67 54321.00").
+fn uptime_secs(text: &str) -> Option<u64> {
+    text.split_whitespace().next()?.split('.').next()?.parse().ok()
+}
+
+fn write_heartbeat() {
+    let Some(secs) = fs::read_to_string("/proc/uptime").ok().as_deref().and_then(uptime_secs) else {
+        return; // no uptime, no heartbeat: u60-guard reads that as "not alive", the safe side
+    };
+    // Rename so u60-guard never reads a half-written number.
+    let tmp = format!("{HEARTBEAT_FILE}.tmp");
+    if fs::write(&tmp, format!("{secs}\n")).is_ok() {
+        let _ = fs::rename(&tmp, HEARTBEAT_FILE);
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Takeover {
+    /// No marker: u60-guard is not involved.
+    None,
+    /// Marker present and not yet held long enough: stay in away, ignore pin.
+    Active,
+    /// Held for TAKEOVER_HOLD: remove the marker and resume.
+    Release,
+}
+
+/// `seen` is this process's record of which marker it has been watching (by
+/// content — u60-guard writes its uptime into it) and since when.
+fn takeover_state(
+    marker: Option<&str>,
+    seen: &mut Option<(String, Instant)>,
+    now: Instant,
+    hold: Duration,
+) -> Takeover {
+    let Some(content) = marker else {
+        *seen = None;
+        return Takeover::None;
+    };
+    match seen {
+        Some((c, since)) if c == content => {
+            if now.duration_since(*since) >= hold {
+                *seen = None;
+                Takeover::Release
+            } else {
+                Takeover::Active
+            }
+        }
+        _ => {
+            *seen = Some((content.to_string(), now));
+            Takeover::Active
+        }
+    }
+}
+
 // ── engine ──────────────────────────────────────────────────────────────────
 
 pub struct Engine {
@@ -620,6 +705,8 @@ pub struct Engine {
     /// A scan plus an apply can take tens of seconds. Without this, a slow tick
     /// would overlap the next one and two appliers would fight.
     busy: AtomicBool,
+    /// Which u60-guard takeover marker this process is honouring, and since when.
+    takeover: Mutex<Option<(String, Instant)>>,
 }
 
 impl Engine {
@@ -628,7 +715,37 @@ impl Engine {
             cfg: Mutex::new(read_json::<Config>(CONFIG_FILE)),
             state: Mutex::new(read_json::<RunState>(STATE_FILE)),
             busy: AtomicBool::new(false),
+            takeover: Mutex::new(None),
         }
+    }
+
+    /// Is u60-guard in charge of Wi-Fi? True while its marker exists; once this
+    /// process has run for TAKEOVER_HOLD with the same marker, removes it and
+    /// hands control back to detection and the pin.
+    fn guard_takeover(&self) -> bool {
+        let marker = fs::read_to_string(TAKEOVER_FILE).ok().map(|s| s.trim().to_string());
+        let mut seen = self.takeover.lock().unwrap_or_else(|e| e.into_inner());
+        // A marker we are not already honouring: none before, or a new takeover.
+        let fresh = seen.as_ref().map_or(true, |(c, _)| Some(c.as_str()) != marker.as_deref());
+        match takeover_state(marker.as_deref(), &mut seen, Instant::now(), TAKEOVER_HOLD) {
+            Takeover::None => false,
+            Takeover::Active => {
+                if fresh {
+                    log_line("u60-guard took over Wi-Fi: staying in away, pin paused");
+                }
+                true
+            }
+            Takeover::Release => {
+                let _ = fs::remove_file(TAKEOVER_FILE);
+                log_line("u60-guard takeover released after 10 min of steady running; pin and detection resume");
+                false
+            }
+        }
+    }
+
+    /// For the status endpoints; no side effects.
+    fn takeover_marked(&self) -> bool {
+        std::path::Path::new(TAKEOVER_FILE).exists()
     }
 
     pub fn enabled(&self) -> bool {
@@ -650,10 +767,30 @@ impl Engine {
     pub fn start(self: &Arc<Self>, app: Arc<AppState>) {
         let engine = Arc::clone(self);
         std::thread::spawn(move || {
-            engine.bootsafe(&app);
-            loop {
-                std::thread::sleep(Duration::from_secs(TICK_SECS));
-                engine.tick(&app);
+            // A panic here ends only this thread: HTTP keeps answering, so the
+            // process looks healthy to procd while the heartbeat has stopped and
+            // nothing is left to release a u60-guard takeover. (A poisoned
+            // state lock from a panicking handler is enough to cause it.)
+            let died = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                // Before bootsafe, which can block for tens of seconds repairing
+                // Wi-Fi: u60-guard should see us alive as early as possible.
+                write_heartbeat();
+                engine.bootsafe(&app);
+                loop {
+                    write_heartbeat();
+                    std::thread::sleep(Duration::from_secs(TICK_SECS));
+                    engine.tick(&app);
+                }
+            }));
+            if died.is_err() {
+                log_line("engine thread panicked; heartbeat stopped");
+                // Under procd, exit so it restarts us whole. Started the old
+                // way nothing would restart us, and a live admin UI beats a
+                // dead one — u60-guard covers Wi-Fi either way.
+                if std::env::var_os(SUPERVISED_ENV).is_some() {
+                    eprintln!("[scenario] engine thread panicked; exiting for the supervisor");
+                    std::process::exit(70);
+                }
             }
         });
     }
@@ -741,7 +878,7 @@ impl Engine {
     }
 
     /// Run one action. Wireless goes through `wifi_radio::apply` directly —
-    /// routing it would re-enter `WIFI_APPLY_LOCK` and deadlock, and the routed
+    /// routing it would wait on the Wi-Fi lock with the short HTTP timeout, and the routed
     /// handler's 200 would not prove anything anyway.
     fn run_action(&self, app: &AppState, a: &ScenarioAction) -> Result<(), String> {
         if a.action.path == "/api/wifi/radio" {
@@ -898,16 +1035,31 @@ impl Engine {
 
     /// Put snapshotted keys back, newest first, then make them take effect.
     fn rollback(&self, undo: &[(String, String)]) {
+        if undo.is_empty() {
+            return;
+        }
+        // Wi-Fi is the only thing snapshotted today, and it must end up on.
+        let lk = match crate::wifi_radio::lock(crate::wifi_radio::ENGINE_WAIT) {
+            Ok(l) => l,
+            Err(e) => {
+                // The snapshot is only the two AP flags, which `apply(true,
+                // true)` overwrites anyway — so skip the restore and go
+                // straight for "on", which retries the lock itself.
+                log_line(&format!("rollback: {e}; forcing Wi-Fi on instead"));
+                match crate::wifi_radio::apply(true, true) {
+                    Ok(_) => log_line("rollback complete; Wi-Fi forced on"),
+                    Err(e) => log_line(&format!("rollback: could not restore Wi-Fi: {e}")),
+                }
+                return;
+            }
+        };
         for (key, value) in undo.iter().rev() {
             let _ = ubus::uci_set_no_commit(key, value);
         }
-        if !undo.is_empty() {
-            let _ = ubus::uci_commit("wireless");
-            // Wi-Fi is the only thing snapshotted today, and it must end up on.
-            match crate::wifi_radio::apply(true, true) {
-                Ok(_) => log_line("rollback complete; Wi-Fi forced on"),
-                Err(e) => log_line(&format!("rollback: could not restore Wi-Fi: {e}")),
-            }
+        let _ = ubus::uci_commit("wireless");
+        match crate::wifi_radio::apply_locked(&lk, true, true) {
+            Ok(_) => log_line("rollback complete; Wi-Fi forced on"),
+            Err(e) => log_line(&format!("rollback: could not restore Wi-Fi: {e}")),
         }
     }
 
@@ -933,6 +1085,8 @@ impl Engine {
             Ok(()) => {
                 st.current = scen.id.clone();
                 st.last_switch = Some(now());
+                // u60-guard holds SMS alerts while abroad (roaming charges).
+                crate::alerts::set_abroad(matches!(scen.detect, Detect::Mcc { .. } | Detect::Abroad));
                 st.last_error = None;
                 if !scen.inhibit_sleep {
                     set_auto_sleep(true);
@@ -961,6 +1115,18 @@ impl Engine {
             return; // previous tick still working
         }
         let _guard = BusyGuard(&self.busy);
+
+        // u60-guard stepped in while we were dead or stuck. Its Wi-Fi-on wins
+        // over detection and over the pin until the takeover is released.
+        if self.guard_takeover() {
+            let current = { self.state.lock().unwrap().current.clone() };
+            let cfg = { self.cfg.lock().unwrap().clone() };
+            if self.enabled() && !cfg.scenarios.is_empty() && current != AWAY_ID {
+                log_line("u60-guard takeover: returning to away");
+                self.switch_to(app, &cfg, AWAY_ID);
+            }
+            return;
+        }
 
         if !self.enabled() {
             // Not just "stop working": if the engine is switched off while a
@@ -1221,6 +1387,7 @@ fn state_json(engine: &Engine) -> Value {
     json!({
         "enabled": engine.enabled(),
         "pin": engine.pin(),
+        "guard_takeover": engine.takeover_marked(),
         "current": st.current,
         "candidate": st.candidate,
         "hits": st.hits,
@@ -1254,6 +1421,7 @@ pub fn public_summary(engine: &Engine) -> Value {
         // inhibit_sleep marks the scenarios that take the APs down.
         "wifi_off": scen.is_some_and(|s| s.inhibit_sleep),
         "pin": engine.pin(),
+        "guard_takeover": engine.takeover_marked(),
         "last_switch": st.last_switch,
     })
 }
@@ -1679,6 +1847,56 @@ mod tests {
         assert!(!cfg.scenarios[0].actions[0].best_effort);
         // And a SIM from abroad on an old config simply means away.
         assert_eq!(detect(&cfg, &[], Some("440")).as_deref(), Some(AWAY_ID));
+    }
+
+    #[test]
+    fn uptime_is_whole_seconds_of_the_first_field() {
+        assert_eq!(uptime_secs("12345.67 54321.00\n"), Some(12345));
+        assert_eq!(uptime_secs("7 1"), Some(7));
+        assert_eq!(uptime_secs(""), None);
+        assert_eq!(uptime_secs("garbage"), None);
+    }
+
+    #[test]
+    fn takeover_holds_for_the_full_period_then_releases_once() {
+        let hold = Duration::from_secs(600);
+        let t0 = Instant::now();
+        let mut seen = None;
+
+        assert_eq!(takeover_state(None, &mut seen, t0, hold), Takeover::None);
+        assert!(seen.is_none());
+
+        assert_eq!(takeover_state(Some("100"), &mut seen, t0, hold), Takeover::Active);
+        let later = t0 + Duration::from_secs(599);
+        assert_eq!(takeover_state(Some("100"), &mut seen, later, hold), Takeover::Active);
+        let done = t0 + hold;
+        assert_eq!(takeover_state(Some("100"), &mut seen, done, hold), Takeover::Release);
+        // The caller deletes the file; had that failed, the same marker starts a
+        // fresh hold rather than releasing every tick.
+        assert_eq!(takeover_state(Some("100"), &mut seen, done, hold), Takeover::Active);
+    }
+
+    #[test]
+    fn a_new_takeover_restarts_the_clock() {
+        let hold = Duration::from_secs(600);
+        let t0 = Instant::now();
+        let mut seen = None;
+        takeover_state(Some("100"), &mut seen, t0, hold);
+        let t1 = t0 + Duration::from_secs(500);
+        // u60-guard stepped in again (we hung again) and rewrote the marker.
+        assert_eq!(takeover_state(Some("900"), &mut seen, t1, hold), Takeover::Active);
+        assert_eq!(takeover_state(Some("900"), &mut seen, t0 + hold, hold), Takeover::Active);
+        assert_eq!(takeover_state(Some("900"), &mut seen, t1 + hold, hold), Takeover::Release);
+    }
+
+    #[test]
+    fn marker_removed_by_hand_ends_the_takeover() {
+        let hold = Duration::from_secs(600);
+        let t0 = Instant::now();
+        let mut seen = None;
+        takeover_state(Some("100"), &mut seen, t0, hold);
+        assert_eq!(takeover_state(None, &mut seen, t0, hold), Takeover::None);
+        assert!(seen.is_none());
     }
 
     #[test]

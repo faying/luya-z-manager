@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { fmtDevice, fromWallInput, toWallInput } from "@/lib/deviceClock";
 import { useApi } from "@/lib/hooks/useApi";
 import { apiFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/types";
@@ -34,7 +35,7 @@ interface SchedulerJob {
   schedule: SchedulerSchedule;
   action: SchedulerAction;
   restore?: unknown;
-  last_run?: string;
+  last_run?: number; // device epoch seconds (was typed string and shown as ms → 1970)
   last_error?: string;
 }
 
@@ -62,7 +63,7 @@ function dayLabel(t: TFunction, i: number): string {
 function fmtSchedule(t: TFunction, s: SchedulerSchedule): string {
   if (s.type === "once") {
     return s.at
-      ? t("scheduler.onceAtTime", "Once at {{time}}", { time: new Date(s.at * 1000).toLocaleString() })
+      ? t("scheduler.onceAtTime", "Once at {{time}}", { time: fmtDevice(s.at) })
       : t("scheduler.once", "Once");
   }
   const dayStr = s.days?.length
@@ -80,7 +81,9 @@ function buildBody(form: FormState, editId?: number): Record<string, unknown> {
 
   const schedule: SchedulerSchedule =
     form.schedType === "once"
-      ? { type: "once", at: form.onceAt ? Math.floor(new Date(form.onceAt).getTime() / 1000) : undefined }
+      // The picker shows device wall time; the device compares against its own
+      // clock, which is not the browser's (lib/deviceClock.ts).
+      ? { type: "once", at: form.onceAt ? fromWallInput(form.onceAt) : undefined }
       : { type: "recurring", time: form.time, days: form.days };
 
   const result: Record<string, unknown> = {
@@ -260,7 +263,7 @@ export default function SchedulerPage() {
       schedType: job.schedule.type,
       time: job.schedule.time ?? "03:00",
       days: job.schedule.days ?? [0, 1, 2, 3, 4, 5, 6],
-      onceAt: job.schedule.at ? new Date(job.schedule.at * 1000).toISOString().slice(0, 16) : "",
+      onceAt: job.schedule.at ? toWallInput(job.schedule.at) : "",
       restoreEnabled: false,
       restoreTime: "06:00",
     };
@@ -322,7 +325,7 @@ export default function SchedulerPage() {
                     <div className="mt-0.5 text-xs text-error">{job.last_error}</div>
                   )}
                   {job.last_run && !job.last_error && (
-                    <div className="mt-0.5 text-xs text-text-dim">{t("scheduler.last", "Last: {{time}}", { time: new Date(job.last_run).toLocaleString() })}</div>
+                    <div className="mt-0.5 text-xs text-text-dim">{t("scheduler.last", "Last: {{time}}", { time: fmtDevice(job.last_run) })}</div>
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">

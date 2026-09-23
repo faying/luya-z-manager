@@ -80,6 +80,8 @@ export const zh = {
     usb: "USB 模式",
     config: "配置工具",
     settings: "设置",
+    alerts: "告警",
+    health: "健康",
   },
   bottomTab: {
     home: "主页",

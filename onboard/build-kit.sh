@@ -10,6 +10,9 @@
 #   admin.tgz         本仓库 web/ 现编（静态导出）
 #   devui/            ../zte-u60-pro-mu5250-touch-ui 里已构建的 u60pro-devui.stripped + ui/ + 启动/自启脚本
 #                     （不带 CHILL 页：朋友没有 ShellCrash）
+#   guard/            ../zte-u60-pro-mu5250-touch-ui/scripts 的进程监督与 Wi-Fi 兜底：supervise.sh、u60-guard.sh、
+#                     alert-lib.sh、agent-auth.sh、chaos.sh + zte-agent/zwrt-datad/u60-guard 的
+#                     procd init 脚本（装到 /data/u60-guard 和 /etc/init.d，见 docs/RELIABILITY.md）
 #   devui/zwrt-datad  } 从正在使用的设备上拉（FLEET_HOST，默认 ssh 别名 u60），
 #   esim.tgz          } 缓存在 onboard/cache/。上游 datad 新版体积和接口都变了、lpac 依赖
 #                       Alpine edge 会漂，所以用设备上验证过的那份
@@ -17,6 +20,7 @@
 # 环境变量：DEVUI_REPO（默认 ../zte-u60-pro-mu5250-touch-ui）、FLEET_HOST（默认 u60）、
 #           REFRESH_FLEET=1（重新从设备拉 datad/eSIM，不用缓存）、
 #           DEVUI_BIN=路径（用这个触屏二进制，不用 $DEVUI_REPO/u60pro-devui.stripped）、
+#           UID_BIN=路径（u60-uid，默认 $DEVUI_REPO/u60-uid）、
 #           DATAD_BIN=路径（用这个 zwrt-datad，不用 onboard/cache 里缓存的；eSIM 仍取缓存）
 # zte-agent：本机有 cargo-zigbuild 就用，没有就走 Docker（messense/cargo-zigbuild），
 #           不要求在 Mac 上装 Rust 工具链。
@@ -84,7 +88,21 @@ DEVUI_BIN="${DEVUI_BIN:-$DEVUI_REPO/u60pro-devui.stripped}"
 [ -f "$DEVUI_BIN" ] || die "没有触屏二进制 ${DEVUI_BIN}（先构建，或用 DEVUI_BIN=… 指定）"
 cp "$DEVUI_BIN" "$PL/devui/u60pro-devui"
 cp "$DEVUI_REPO/scripts/start.sh" "$DEVUI_REPO/scripts/install-autostart.sh" "$PL/devui/"
+# u60-uid：屏幕主人守护进程（make u60-uid），和它的 procd init
+UID_BIN="${UID_BIN:-$DEVUI_REPO/u60-uid}"
+[ -f "$UID_BIN" ] || die "没有 u60-uid 二进制 ${UID_BIN}（在 touch-ui 里 make u60-uid，或用 UID_BIN=… 指定）"
+cp "$UID_BIN" "$PL/devui/u60-uid"
+cp "$DEVUI_REPO/scripts/u60-uid.init" "$PL/devui/u60-uid.init"
 ( cd "$DEVUI_REPO/ui" && tar czf "$PL/devui/ui.tgz" --exclude 'functions/chill.html' -- * )
+
+# ── 进程监督与 Wi-Fi 兜底 ─────────────────────────────────────────────────────
+step "guard（${DEVUI_REPO}/scripts）"
+mkdir -p "$PL/guard"
+for f in alert-lib.sh u60-guard.sh supervise.sh agent-auth.sh chaos.sh doctor.sh config-backup.sh power-sample.sh \
+         zte-agent.init zwrt-datad.init u60-guard.init; do
+  [ -f "$DEVUI_REPO/scripts/$f" ] || die "缺 $DEVUI_REPO/scripts/$f"
+  cp "$DEVUI_REPO/scripts/$f" "$PL/guard/"
+done
 
 # ── 设备上拉的 zwrt-datad + eSIM ───────────────────────────────────────────────
 FLEET="$CACHE/fleet.tgz"
@@ -118,8 +136,9 @@ chmod 755 "$KIT/install.sh"
   echo
   echo "来源："
   echo "  u60p          $(rev "$ROOT")$(dirty "$ROOT" zte-agent web onboard)"
-  echo "  u60pro-devui  $(rev "$DEVUI_REPO")$(dirty "$DEVUI_REPO" src ui scripts)"
+  echo "  u60pro-devui  $(rev "$DEVUI_REPO")$(dirty "$DEVUI_REPO" src ui scripts)（guard/ 脚本同源）"
   echo "  u60pro-devui  二进制 $(basename "$DEVUI_BIN") $(sha256 "$DEVUI_BIN" | cut -c1-12)"
+  echo "  u60-uid       二进制 $(basename "$UID_BIN") $(sha256 "$UID_BIN" | cut -c1-12)"
   if [ -n "${DATAD_BIN:-}" ]; then
     echo "  zwrt-datad    $(basename "$DATAD_BIN") $(sha256 "$DATAD_BIN" | cut -c1-12)"
     echo "  eSIM          $FLEET_HOST 上 /data（缓存于 $(date -r "$FLEET" '+%Y-%m-%d %H:%M')）"

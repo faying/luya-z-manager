@@ -109,13 +109,17 @@ adb shell '<命令>'        # 只有 ADB 通的时候（ADB 重启后就没了�
 | 路径 | 用途 |
 |---|---|
 | `/data/ssh/` | dropbear、host key、`authorized_keys` 正本（开机同步到 `/etc/dropbear/`） |
-| `/data/local/tmp/start_dropbear.sh`、`start_zte_agent.sh` | 开机启动脚本（后者含后台密码） |
+| `/data/local/tmp/start_dropbear.sh` | SSH 的开机启动脚本 |
+| `/data/zte-agent.env` | 后台密码（`ZTE_AGENT_PASSWORD=…`，600；agent 自己读，不进 procd 的 env） |
+| `/data/plugins/u60pro-devui/u60-uid`、`/etc/init.d/u60-uid` | 屏幕守护进程：触屏界面唯一的主人（拉起/接管、连续 2 次没稳住就交还原厂界面并告警、长按右下角 3 秒回来）。状态在 `/data/u60-uid/`，控制：`echo vendor` / `echo devui > /tmp/u60-uid.ctl`（只在它运行时用）。**屏幕上几分钟没有任何界面，固件会整机重启**：永远不要只停一个界面而不起另一个 |
+| `/data/u60-guard/`、`/etc/init.d/{zte-agent,zwrt-datad,u60-guard}` | procd 监督（`supervise.sh` 包着，崩溃拉起 + 记告警）和 Wi-Fi 兜底看门狗；**不要 `enable`/`disable`**（overlay whiteout），开机靠 rc.local 里的 `start` 行 |
+| `/data/alerts/`、`/data/crashlog/` | 告警事件与短信记录、崩溃日志 |
 | `/data/zte-agent`、`/data/admin/` | 高级后台 |
 | `/data/plugins/u60pro-devui/`、`/data/plugins/zwrt-datad/` | 触屏界面、数据后端 |
 | `/data/esim/` | lpac（`/data/esim/lpac.sh chip info` / `profile list`） |
-| `/etc/rc.local` | 只加了 3 行自启；原厂版本备份在 `/data/u60-kit/rc.local.orig` |
+| `/etc/rc.local` | 只加了几行自启；原厂版本备份在 `/data/u60-kit/rc.local.orig` |
 
-日志：`/tmp/zte-agent.log`、`/tmp/u60pro-devui.log`、`/tmp/zwrt-datad.log`、`/tmp/u60-kit-devui.log`（devui 安装）、
+日志：`/tmp/zte-agent.log`、`/tmp/u60pro-devui.log`、`/tmp/zwrt-datad.log`、`/tmp/u60-guard.log`、`/tmp/u60-uid.log`、`logread`（procd）、`/tmp/u60-kit-devui.log`（devui 安装）、
 `/data/plugins/u60pro-devui/boot-trace.log`。
 
 ## 四、常见失败
@@ -153,24 +157,32 @@ adb shell '<命令>'        # 只有 ADB 通的时候（ADB 重启后就没了�
 **先问用户再做**：重启、切换/启用/删除 eSIM profile（切到没流量的 profile，远程连着的话就断了）、
 改 APN/网络模式/锁频、改 Wi-Fi、恢复原厂、改 `~/.ssh/config`、给电脑装软件。
 
-**可以直接做**：`./install.sh status`、读日志和配置、`lpac.sh chip info` / `profile list` 这类只读查询。
+**可以直接做**：`./install.sh status`、`./install.sh doctor`（只读体检）、`./install.sh backup`（配置备份到电脑）、读日志和配置、`lpac.sh chip info` / `profile list` 这类只读查询。
+`./install.sh restore <备份>` 会改设备配置：先问用户，它自己也会先列出改动、要输入 yes。
 
 ## 六、恢复
 
-**只退回原厂屏幕界面**（保留其它组件）：
+**只是这次开机换成原厂界面**：`echo vendor > /tmp/u60-uid.ctl`（u60-uid 停掉触屏、起原厂界面；长按右下角 3 秒或
+`echo devui > /tmp/u60-uid.ctl` 回来，重启后也会回来）。
+
+**永久退回原厂屏幕界面**（保留其它组件）：
 
 ```sh
 mkdir -p /data/u60-kit && cp /etc/rc.local /data/u60-kit/rc.local.before-revert
-grep -v 'u60pro_devui' /data/u60-kit/rc.local.before-revert > /tmp/rc.new && sh -n /tmp/rc.new && cat /tmp/rc.new > /etc/rc.local
-killall -9 u60pro-devui zwrt-datad
-/etc/init.d/zte_topsw_devui start      # 原厂界面服务一直是 enable 的，启动就行
+grep -v 'u60pro_devui' /data/u60-kit/rc.local.before-revert | grep -v '/etc/init.d/u60-uid start' > /tmp/rc.new \
+  && sh -n /tmp/rc.new && cat /tmp/rc.new > /etc/rc.local
+echo vendor > /tmp/u60-uid.ctl   # 由 u60-uid 换界面：它在同一步里起原厂界面，屏幕不会空着
+sleep 8; /etc/init.d/u60-uid stop  # 之后不再管屏幕（原厂界面服务一直是 enable 的，开机自己起）
 ```
 
 **全部恢复原厂**（先确认用户要这么做）：
 
 ```sh
+echo vendor > /tmp/u60-uid.ctl; sleep 8     # 先把屏幕交给原厂界面
+for s in u60-uid u60-guard zte-agent zwrt-datad; do /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
 cp /data/u60-kit/rc.local.orig /etc/rc.local
-rm -rf /data/zte-agent /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim /data/local/tmp/start_zte_agent.sh
+rm -rf /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim \
+       /data/u60-guard /data/u60-uid /data/alerts /data/crashlog /data/power /data/local/tmp/start_zte_agent.sh
 # 连 SSH 也不要：rm -rf /data/ssh /data/local/tmp/start_dropbear.sh
 reboot
 ```

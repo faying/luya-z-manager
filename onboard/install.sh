@@ -6,7 +6,10 @@
 #   ./install.sh ssh                 # 只开 ADB + 持久化 SSH
 #   ./install.sh admin devui         # 只装指定组件（SSH 或 ADB 通着就行）
 #   ./install.sh status              # 看设备上各组件状态
+#   ./install.sh doctor              # 只读体检（开机同步、自动升级、各服务、心跳、Wi-Fi、告警…）
 #   ./install.sh reboot              # 重启设备并确认各组件开机自己起来（要 SSH 已通）
+#   ./install.sh backup [--with-tailscale]   # 把配置备份到这台电脑（BACKUP_DIR，默认 ./backups）
+#   ./install.sh restore <备份.tgz>          # 先列出会改哪些文件，输入 yes 才写（没终端时要 RESTORE_YES=1）
 #
 # 在终端里跑会逐项提示输入；没有终端（比如由 Claude Code 代跑）时从环境变量读：
 #   ROUTER_PASSWORD   路由器管理密码（开 ADB 时才需要）
@@ -49,16 +52,29 @@ STAGE=/data/local/tmp/u60-kit
 ALL="ssh admin devui esim"
 TTY=false; [ -t 0 ] && TTY=true
 
+# backup / restore 带自己的参数，先拿出来，剩下的按组件解析
+WITH_TS=
+RESTORE_FILE=
+case "${1:-}" in
+  backup)
+    [ "${2:-}" = --with-tailscale ] && WITH_TS=--with-tailscale
+    set -- backup ;;
+  restore)
+    RESTORE_FILE="${2:-}"
+    [ -f "$RESTORE_FILE" ] || { echo "用法: ./install.sh restore <备份.tgz>" >&2; exit 1; }
+    set -- restore ;;
+esac
+
 COMPONENTS="${*:-$ALL}"
 case " $COMPONENTS " in
-  " status "|" reboot ") ;;
-  *" status "*|*" reboot "*) fail "status / reboot 要单独跑，不能和组件混在一起" ;;
+  " status "|" reboot "|" doctor "|" backup "|" restore ") ;;
+  *" status "*|*" reboot "*|*" doctor "*) fail "status / doctor / reboot 要单独跑，不能和组件混在一起" ;;
   *) for c in $COMPONENTS; do
-       case "$c" in ssh|admin|devui|esim) ;; *) fail "不认识的组件: ${c}（可选 ssh admin devui esim，或 status / reboot）" ;; esac
+       case "$c" in ssh|admin|devui|esim) ;; *) fail "不认识的组件: ${c}（可选 ssh admin devui esim，或 status / doctor / reboot）" ;; esac
      done ;;
 esac
 INSTALLING=true
-case "$COMPONENTS" in status|reboot) INSTALLING=false ;; esac
+case "$COMPONENTS" in status|reboot|doctor|backup|restore) INSTALLING=false ;; esac
 
 # ── 0. 检查工具和包完整性 ────────────────────────────────────────────────────
 need() { command -v "$1" >/dev/null 2>&1 || fail "缺少 $1 —— $2"; }
@@ -164,14 +180,14 @@ if ssh_ok; then
 elif [ "$COMPONENTS" = reboot ]; then
   fail "SSH 不通，没法做重启验证（先跑 ./install.sh，或确认电脑连着 U60 的 Wi-Fi）"
 else
-  if [ "$COMPONENTS" = status ] && ! command -v adb >/dev/null 2>&1; then
+  if [ "$INSTALLING" = false ] && [ "$COMPONENTS" != reboot ] && ! command -v adb >/dev/null 2>&1; then
     fail "SSH 不通（电脑连着 U60 的 Wi-Fi 吗？），这台电脑也没装 adb"
   fi
   need_adb
   if adb_ok; then
     CH=adb; ok "检测到 ADB 设备，走 ADB。"
   else
-    [ "$COMPONENTS" = status ] && fail "SSH 和 ADB 都不通，先跑一次 ./install.sh"
+    [ "$INSTALLING" = false ] && fail "SSH 和 ADB 都不通，先跑一次 ./install.sh"
     enable_adb; CH=adb
   fi
   if [ "$(adb_all)" -gt 1 ] && [ -z "${ANDROID_SERIAL:-}" ]; then
@@ -196,6 +212,67 @@ show_status() { # 状态不需要推整个包，只推设备端脚本
     || fail "读状态失败：设备上执行状态脚本没成功"
 }
 
+show_doctor() { # 体检脚本是独立的：推包里那份到 /tmp 直接跑，没装过 guard 的设备也能查
+  local src="$KIT/payload/guard/doctor.sh"
+  [ -f "$src" ] || fail "包里没有 payload/guard/doctor.sh"
+  if [ "$CH" = ssh ]; then
+    ssh "${SSH_OPTS[@]}" "root@$GATEWAY" "cat > /tmp/u60-kit-doctor.sh" < "$src" || fail "体检失败：推送脚本没成功"
+  else
+    adb push "$(localpath "$src")" /tmp/u60-kit-doctor.sh >/dev/null || fail "体检失败：adb push 没成功"
+  fi
+  dev_run "sh /tmp/u60-kit-doctor.sh; r=\$?; rm -f /tmp/u60-kit-doctor.sh; exit \$r" | tr -d '\r'
+}
+
+push_file() { # <local> <device path>
+  if [ "$CH" = ssh ]; then
+    ssh "${SSH_OPTS[@]}" "root@$GATEWAY" "cat > '$2'" < "$1"
+  else
+    adb push "$(localpath "$1")" "$2" >/dev/null
+  fi
+}
+
+# 配置备份只存在这台电脑上。设备端脚本是包里的 payload/guard/config-backup.sh。
+do_backup() {
+  local dir="${BACKUP_DIR:-$KIT/backups}" out
+  mkdir -p "$dir" && chmod 700 "$dir"
+  out="$dir/config-$(date +%Y%m%d-%H%M%S).tgz"
+  push_file "$KIT/payload/guard/config-backup.sh" /tmp/u60-cb.sh || fail "推送备份脚本失败"
+  if [ "$CH" = ssh ]; then
+    ssh "${SSH_OPTS[@]}" "root@$GATEWAY" "sh /tmp/u60-cb.sh export $WITH_TS" < /dev/null > "$out"
+  else
+    adb exec-out "sh /tmp/u60-cb.sh export $WITH_TS" > "$out"
+  fi
+  chmod 600 "$out"
+  [ -s "$out" ] || { rm -f "$out"; fail "备份是空的"; }
+  # 取回之后再送回去校验：证明电脑上这份能完整解开、每个文件都能解析
+  push_file "$out" /tmp/u60-cb-check.tgz || fail "送回校验失败"
+  dev_run "sh /tmp/u60-cb.sh verify /tmp/u60-cb-check.tgz; r=\$?; rm -f /tmp/u60-cb-check.tgz /tmp/u60-cb.sh; exit \$r" | tr -d '\r' \
+    || fail "备份校验没过：$out"
+  ok "配置已备份到 $out"
+  [ -n "$WITH_TS" ] && warn "这份备份含 Tailscale 身份：恢复到另一台设备前，先让这台下线，否则两台会抢同一个节点。"
+  info "含后台密码、短信号码、订阅地址等：只放在这台电脑上，别发给别人。"
+}
+
+do_restore() {
+  local ans
+  push_file "$KIT/payload/guard/config-backup.sh" /tmp/u60-cb.sh || fail "推送脚本失败"
+  push_file "$RESTORE_FILE" /tmp/u60-cb-restore.tgz || fail "推送备份失败"
+  dev_run "sh /tmp/u60-cb.sh verify /tmp/u60-cb-restore.tgz" | tr -d '\r' || fail "这份备份校验没过，不恢复"
+  echo; info "恢复会做这些（same = 一样不动；overwrite 会先把原文件留成 .pre-restore）："
+  dev_run "sh /tmp/u60-cb.sh plan /tmp/u60-cb-restore.tgz /" | tr -d '\r'
+  if $TTY; then
+    printf "${CYAN}确认恢复请输入 yes:${NC} "; read -r ans
+  else
+    ans=$([ "${RESTORE_YES:-}" = 1 ] && echo yes)
+  fi
+  if [ "$ans" != yes ]; then
+    dev_run "rm -f /tmp/u60-cb.sh /tmp/u60-cb-restore.tgz" >/dev/null
+    info "没有恢复。"; return 0
+  fi
+  dev_run "sh /tmp/u60-cb.sh restore /tmp/u60-cb-restore.tgz /; rm -f /tmp/u60-cb.sh /tmp/u60-cb-restore.tgz" | tr -d '\r'
+  ok "已写回。Wi-Fi 设置不会自动生效；各服务要重启才读新配置——最简单是 ./install.sh reboot。"
+}
+
 reboot_verify() {
   local deadline
   dev_run "reboot" >/dev/null 2>&1 || true
@@ -210,10 +287,16 @@ reboot_verify() {
   sleep 15   # devui/后台在 rc.local 里是最后起的
   CH=ssh
   show_status
+  echo
+  info "体检："
+  show_doctor || true
 }
 
 case "$COMPONENTS" in
   status) show_status; exit 0 ;;
+  doctor) show_doctor; exit $? ;;
+  backup) do_backup; exit 0 ;;
+  restore) do_restore; exit 0 ;;
   reboot) reboot_verify; exit 0 ;;
 esac
 
@@ -243,15 +326,15 @@ case " $COMPONENTS " in *" admin "*)
   fi
   if [ -z "$AGENT_PW" ]; then
     # 设备上没装过后台时，现在就停，别等推送完在设备端才失败（那样 devui/esim 也跟着没装）
-    dev_run '[ -f /data/local/tmp/start_zte_agent.sh ] && echo AGENT_INSTALLED' 2>/dev/null | grep -q AGENT_INSTALLED \
+    dev_run '{ [ -s /data/zte-agent.env ] || [ -f /data/local/tmp/start_zte_agent.sh ]; } && echo AGENT_INSTALLED' 2>/dev/null | grep -q AGENT_INSTALLED \
       || fail "需要高级后台密码：设备上还没装过后台。设置 AGENT_PASSWORD（或 ROUTER_PASSWORD，两者相同时）再跑"
     warn "没有后台密码：沿用设备上已有的。"
   else
     case "$AGENT_PW" in
-      *[\'\"\\\ ]*) fail "后台密码不能含引号、反斜杠或空格（屏幕上的 eSIM 页要从启动脚本里读它）" ;;
+      *[\'\"\\\ ]*) fail "后台密码不能含引号、反斜杠或空格（设备上的 /data/zte-agent.env 和屏幕 eSIM 页都按原样读它）" ;;
     esac
+    # 设备端 agent-auth.sh migrate 把它写成 /data/zte-agent.env（600）
     printf "export ZTE_AGENT_PASSWORD='%s'\n" "$AGENT_PW" > "$TMP/u60-kit/payload/agent.env"
-    printf '{"password":"%s"}' "$AGENT_PW" > "$TMP/u60-kit/payload/login.json"
   fi
 ;; esac
 
@@ -262,8 +345,8 @@ S="$TMP/u60-kit/payload"
 for c in $COMPONENTS; do
   case "$c" in
     ssh)   cp "$KIT/payload/dropbear" "$S/"; cp "$SSH_KEY.pub" "$S/authorized_keys" ;;
-    admin) cp "$KIT/payload/zte-agent" "$KIT/payload/admin.tgz" "$S/" ;;
-    devui) cp -R "$KIT/payload/devui" "$S/" ;;
+    admin) cp "$KIT/payload/zte-agent" "$KIT/payload/admin.tgz" "$S/"; cp -R "$KIT/payload/guard" "$S/" ;;
+    devui) cp -R "$KIT/payload/devui" "$S/"; cp -R "$KIT/payload/guard" "$S/" ;;
     esim)  cp "$KIT/payload/esim.tgz" "$S/" ;;
   esac
 done

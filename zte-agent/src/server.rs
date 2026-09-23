@@ -4,6 +4,8 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use tiny_http::{Header, Method, Request, Response, Server};
 
+use crate::alerts;
+use crate::health;
 use crate::at_terminal;
 use crate::cell;
 use crate::static_files;
@@ -120,6 +122,19 @@ fn handle_request(mut request: Request, state: &AppState) {
             respond(request, status, body_json);
             return;
         }
+        // Health (needs the query string: refresh=1, program=&file=)
+        (&Method::Get, "/api/health") => {
+            let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
+            let (status, body_json) = health::health_get(state, query);
+            respond(request, status, body_json);
+            return;
+        }
+        (&Method::Get, "/api/health/crashlog") => {
+            let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
+            let (status, body_json) = health::crashlog_get(state, query);
+            respond(request, status, body_json);
+            return;
+        }
         (&Method::Get, "/api/services/chill/log") => {
             let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
             let (status, body_json) = chill::log(query);
@@ -193,6 +208,10 @@ pub fn route(method: &Method, path: &str, state: &AppState, body: &[u8]) -> (u16
         // System — process monitor
         (&Method::Get, "/api/system/top") => handlers::system_top(state),
         (&Method::Post, "/api/system/kill-bloat") => handlers::system_kill_bloat(state, body),
+        // Alerts (events written by supervise.sh / u60-guard; docs/RELIABILITY.md)
+        (&Method::Get, "/api/alerts") => alerts::alerts_get(state),
+        (&Method::Post, "/api/alerts/read") => alerts::alerts_read(state, body),
+        (&Method::Put, "/api/alerts/sms") => alerts::alerts_sms_set(state, body),
         // WiFi
         (&Method::Get, "/api/wifi/status") => wifi::wifi_status(state),
         (&Method::Put, "/api/wifi/settings") => wifi::wifi_set(state, body),

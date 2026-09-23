@@ -133,6 +133,13 @@ pub fn public_status(state: &AppState) -> (u16, Value) {
                     "home_mode": { "present": hm_present, "enabled": hm_enabled, "mode": hm_mode },
                 },
                 "scenario": crate::scenario::public_summary(&state.scenario),
+                // Count only — the events themselves need a login.
+                "alerts": { "unread": crate::alerts::public_unread() },
+                // Seconds the device clock runs ahead of UTC (clock.rs). The web
+                // needs it to compare device times with the browser's clock.
+                "clock": { "utc_offset": crate::clock::utc_offset() },
+                // Counts only; the checks themselves need a login (/api/health).
+                "health": crate::health::public_summary(),
             }
         }),
     )

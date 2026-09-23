@@ -19,6 +19,8 @@ not by a script, not by a UI toggle, not "just to test".
   be, in `scenario.rs`'s `ALLOWED_PATHS`).
 - `zte_dm` itself keeps running — it is in the boot sync barrier below. Off
   means the mode, not the daemon.
+- Applies to the install kit too: nothing in `onboard/` may ever turn it on.
+  `fota_off()` turning it OFF is exactly what the owner wants and stays.
 - If you ever find it on, tell the owner. Do not "fix" it silently either way.
 - Not the same thing as the data service's own updater (zwrt-datad OTA): that
   one is removed from our fork for a separate reason (no external dependencies).
@@ -140,6 +142,7 @@ wrong again:
 
 ## Other Device Notes
 
+- **The clock is local time labelled UTC.** ZTE's SNTP (`zwrt_zte_sntp`, `time_from_utc='8.00'`) sets the system clock to local wall time and leaves TZ=UTC, so `date` says "14:34 UTC" at 14:34 Beijing time and every device epoch/ISO-"Z" string is 8 h ahead of real UTC. Don't "fix" the firmware. On the device, format with localtime (right digits). Across to a browser/phone, use `clock.utc_offset` from `/api/public/status` (`zte-agent/src/clock.rs`, `web/src/lib/deviceClock.ts`): show device times with UTC formatting, compare with browser time via the offset.
 - **Airplane mode bug**: `nwinfo_set_mode ONLINE` does NOT recover modem from LPM. Only fix: reboot.
 - **Charge policy bug**: Wall mode `enable` STOPS charging, `disable` STARTS charging (inverted).
 - **procd respawn**: `kill -9` may trigger procd respawn. Use `/etc/init.d/<name> stop` instead.

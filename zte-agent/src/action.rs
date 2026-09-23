@@ -17,8 +17,8 @@
 //     phase1/2/3 shape).
 //  2. An HTTP 200 from `exec()` does NOT mean the device changed. CHILL and eSIM
 //     return `{"status":"running"}` immediately and finish on a worker thread;
-//     `wifi::wifi_set` fires `ubus call zwrt_wlan reload` into the background and
-//     discards its result. Anything that must actually have taken effect needs
+//     so does `wifi::wifi_set`'s reload, whose result only reaches the log.
+//     Anything that must actually have taken effect needs
 //     its own verification step after `exec()` returns.
 // ─────────────────────────────────────────────────────────────────────────────
 

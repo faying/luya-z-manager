@@ -46,11 +46,12 @@ if [ "$1" = "uninstall" ]; then
         sed -i "\#/data/homemode.sh#d" /etc/crontabs/root 2>/dev/null
         sed -i "\#homemode-bootsafe#d" /etc/rc.local 2>/dev/null
         /etc/init.d/cron restart 2>/dev/null
-        # restore Wi-Fi to a known-good ON state
+        # restore Wi-Fi to a known-good ON state, under the shared Wi-Fi lock
+        flock /tmp/u60-wifi.lock -c "
         uci set wireless.wifi0.disabled=0; uci set wireless.wifi1.disabled=0
         uci set wireless.main_2g.macfilter=deny; uci set wireless.main_5g.macfilter=deny
         uci -q delete wireless.main_2g.maclist; uci -q delete wireless.main_5g.maclist
-        uci commit wireless; ubus call zwrt_wlan reload >/dev/null 2>&1
+        uci commit wireless; ubus call zwrt_wlan reload >/dev/null 2>&1"
         rm -f /data/homemode.sh /data/homemode-bootsafe.sh
         rm -rf /data/homemode
         echo "  removed scripts, cron entry, rc.local hook; Wi-Fi restored ON"

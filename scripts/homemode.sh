@@ -33,6 +33,7 @@ SCAN_IFACE="wlan0"          # 2.4G AP iface used for scanning
 SCAN_FREQS="2412 2417 2422 2427 2432 2437 2442 2447 2452 2457 2462"
 RADIO_2G="wireless.wifi0.disabled"
 RADIO_5G="wireless.wifi1.disabled"
+WIFI_LOCK="/tmp/u60-wifi.lock"
 CHECK_EVERY_DEFAULT=2       # while in home mode, scan every N cron ticks (~N min)
 EXIT_MISSES_DEFAULT=2       # consecutive missed scans before declaring "left home"
 WAKE_SETTLE=8               # seconds to let 2.4G come up before scanning
@@ -110,11 +111,17 @@ radios_off() { [ "$(uci_get "$RADIO_2G")" = "1" ]; }
 both_off() { [ "$(uci_get "$RADIO_2G")" = "1" ] && [ "$(uci_get "$RADIO_5G")" = "1" ]; }
 
 apply_wifi() {
-    # $1/$2 = desired disabled value for 2.4G / 5G ; commit + daemon reload
-    uci set "$RADIO_2G=$1"
-    uci set "$RADIO_5G=$2"
-    uci commit wireless
-    ubus call zwrt_wlan reload >/dev/null 2>&1
+    # $1/$2 = desired disabled value for 2.4G / 5G ; commit + daemon reload.
+    # Same lock as zte-agent and u60-guard (wifi_radio.rs LOCK_FILE); opened for
+    # append so the holder's pid in it is not wiped while we wait.
+    (
+        flock 9
+        echo $$ > "$WIFI_LOCK"
+        uci set "$RADIO_2G=$1"
+        uci set "$RADIO_5G=$2"
+        uci commit wireless
+        ubus call zwrt_wlan reload >/dev/null 2>&1
+    ) 9>>"$WIFI_LOCK"
 }
 
 home_ssids() {

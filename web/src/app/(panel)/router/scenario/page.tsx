@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/lib/hooks/useApi";
+import { fmtDevice } from "@/lib/deviceClock";
 import { apiFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/types";
 import { PageHeader, SectionCard, ErrorBanner, Status } from "@/components/admin/StatCard";
@@ -69,6 +70,7 @@ interface Config {
 interface ScenarioData {
   enabled: boolean;
   pin: string | null;
+  guard_takeover?: boolean;
   current: string;
   candidate: string;
   hits: number;
@@ -167,7 +169,7 @@ function sameEntry(a: SsidEntry, b: SsidEntry) {
 
 function when(ts: number | null | undefined) {
   if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleString();
+  return fmtDevice(ts);
 }
 
 export default function ScenarioPage() {
@@ -476,6 +478,14 @@ export default function ScenarioPage() {
                   hits: data.hits,
                   need: cfg?.params.enter_hits ?? 2,
                 })}
+              </p>
+            )}
+            {data?.guard_takeover && (
+              <p className="mt-3 text-xs text-warning">
+                {t(
+                  "scenario.guardTakeover",
+                  "The Wi-Fi watchdog took over while the agent was not responding. Staying in away; the pin is paused until 10 minutes of steady running.",
+                )}
               </p>
             )}
             {data?.last_error && (

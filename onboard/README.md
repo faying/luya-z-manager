@@ -59,6 +59,9 @@ claude
 ./install.sh ssh               # 只开 ADB + 持久化 SSH
 ./install.sh ssh admin devui   # 不要 eSIM
 ./install.sh status            # 看各组件状态
+./install.sh doctor            # 只读体检：开机同步、自动升级、各服务、心跳、Wi-Fi、告警……逐项 ●▲■
+./install.sh backup            # 把设备配置备份到这台电脑（./backups/，含密码，别外传）
+./install.sh restore 备份.tgz  # 先列出会改哪些文件，输入 yes 才写
 ./install.sh reboot            # 重启一次，确认各组件开机自己起来
 ```
 
@@ -68,14 +71,18 @@ U60 地址不是 `192.168.0.1` 时：`GATEWAY=192.168.x.1 ./install.sh`。
 
 ## 装了什么、在哪
 
-程序和数据都在 `/data`（固件升级也不会清）。开机自启只加了 `/etc/rc.local` 里的三行，没有改任何原厂服务。
+程序和数据都在 `/data`（固件升级也不会清）。开机自启只在 `/etc/rc.local` 里加了几行，没有改任何原厂服务。
+高级后台、屏幕的数据后端和 Wi-Fi 兜底看门狗由系统的 procd 监督：崩溃会被自动拉起，并记一条告警（后台「系统 → 告警」可以设短信通知）。
 
 | 路径 | 用途 |
 |---|---|
 | `/data/ssh/` | dropbear、host key、`authorized_keys`（**公钥正本**） |
 | `/data/local/tmp/start_dropbear.sh` | 开机把公钥同步到 `/etc/dropbear/` 再起 dropbear（:2222） |
 | `/data/zte-agent`、`/data/admin/` | 高级后台程序和网页 |
-| `/data/local/tmp/start_zte_agent.sh` | 后台启动脚本，**后台密码写在这里** |
+| `/data/zte-agent.env` | **后台密码**（一行 `ZTE_AGENT_PASSWORD=…`，只有 root 可读） |
+| `/data/plugins/u60pro-devui/u60-uid` | 屏幕守护进程：触屏界面崩了自动拉起，连续两次起不来就换回原厂界面（长按屏幕右下角 3 秒回来） |
+| `/data/u60-guard/`、`/etc/init.d/{zte-agent,zwrt-datad,u60-guard}` | 进程监督、Wi-Fi 兜底看门狗、告警短信（开机由 `rc.local` 里的 `/etc/init.d/… start` 拉起，不做 `enable`） |
+| `/data/alerts/`、`/data/crashlog/` | 告警记录、程序崩溃时的日志 |
 | `/data/plugins/u60pro-devui/`、`/data/plugins/zwrt-datad/` | 触屏界面和它的数据后端 |
 | `/data/esim/` | lpac（eSIM 读写卡工具） |
 | `/data/u60-kit/rc.local.orig` | 第一次安装前的原厂 `rc.local` 备份 |
@@ -83,7 +90,7 @@ U60 地址不是 `192.168.0.1` 时：`GATEWAY=192.168.x.1 ./install.sh`。
 ## 日常用法
 
 - **加一台电脑的 SSH 公钥**：把公钥追加到 `/data/ssh/authorized_keys`，然后 `sh /data/local/tmp/start_dropbear.sh`（改 `/etc/dropbear/` 里那份没用，开机会被覆盖）。
-- **改后台密码**：改 `/data/local/tmp/start_zte_agent.sh` 里那一行，然后 `killall zte-agent; sh /data/local/tmp/start_zte_agent.sh`。或者重跑 `./install.sh admin`。
+- **改后台密码**：重跑 `./install.sh admin`（会问新密码）。或者 SSH 里改 `/data/zte-agent.env` 那一行（不能含引号、反斜杠、空格），然后 `/etc/init.d/zte-agent restart`，再 `sh /data/u60-guard/agent-auth.sh verify` 确认。
 - **eSIM**：后台「移动网络 → eSIM」管理 profile；屏幕「更多功能 → eSIM」点两下切换，大约 10 秒生效，一般不用重启。
 - **临时要 ADB**：SSH 进去跑 `ubus call zwrt_bsp.usb set '{"mode":"debug"}'`；`./install.sh status` 里的「USB 模式」显示 `user` 就是普通模式。
 
@@ -99,9 +106,11 @@ U60 地址不是 `192.168.0.1` 时：`GATEWAY=192.168.x.1 ./install.sh`。
 SSH 登录后：
 
 ```sh
+echo vendor > /tmp/u60-uid.ctl; sleep 8     # 先把屏幕交给原厂界面
+for s in u60-uid u60-guard zte-agent zwrt-datad; do /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
 cp /data/u60-kit/rc.local.orig /etc/rc.local
-rm -rf /data/zte-agent /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim \
-       /data/local/tmp/start_zte_agent.sh
+rm -rf /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim \
+       /data/u60-guard /data/u60-uid /data/alerts /data/crashlog /data/power /data/local/tmp/start_zte_agent.sh
 # 连 SSH 也不要的话再加：rm -rf /data/ssh /data/local/tmp/start_dropbear.sh
 reboot
 ```

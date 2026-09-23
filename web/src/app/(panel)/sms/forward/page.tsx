@@ -10,6 +10,7 @@ import { PageHeader, SectionCard, ErrorBanner } from "@/components/admin/StatCar
 import { Button, Input, Toggle } from "@/components/admin/Button";
 import { decodeSms } from "@/lib/sms";
 import { useSWRConfig } from "swr";
+import { fmtDevice } from "@/lib/deviceClock";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -69,7 +70,7 @@ type Tab = "config" | "rules" | "log";
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function fmtTs(ts: number) {
-  return new Date(ts * 1000).toLocaleString();
+  return fmtDevice(ts);
 }
 
 function emptyDest(type: DestType): Destination {
