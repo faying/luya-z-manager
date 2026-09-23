@@ -54,6 +54,8 @@ interface ChillState {
   groups?: ProxyGroup[];
   region?: GroupChoice | null;
   ai_exit?: GroupChoice | null;
+  mode?: string | null;
+  exit?: "proxy" | "direct_keep_ai" | "direct_all" | "global";
 }
 
 interface Subscription {
@@ -260,6 +262,12 @@ export default function ChillPage() {
 
       {running && (
         <>
+          <ExitCard
+            exit={status.exit}
+            busy={busy}
+            onSwitched={() => mutate()}
+            onError={(m) => flash(m, true)}
+          />
           <div className="mt-6 grid gap-6 lg:grid-cols-2">
             <RegionCard
               title={t("chill.region", "Region")}
@@ -325,6 +333,83 @@ export default function ChillPage() {
  *  Region / AI-exit switch — a plain PUT to mihomo's own group select,
  *  no reload involved (see chill.rs::regions_set).
  * ------------------------------------------------------------------ */
+
+/* The owner's real choices, in their terms. "Direct, AI stays" = rule mode with
+ * the main group on DIRECT: everything that follows the main group goes direct,
+ * while 🤖 AI and 📞 VoWiFi are separate groups and keep their nodes. */
+const EXIT_OPTIONS: { key: NonNullable<ChillState["exit"]>; label: string; hint: string }[] = [
+  { key: "proxy", label: "Proxy", hint: "Normal, as at home." },
+  { key: "direct_keep_ai", label: "Direct · AI stays", hint: "Abroad on a local SIM: everything direct except AI and VoWiFi." },
+  { key: "direct_all", label: "All direct", hint: "AI and VoWiFi go direct too." },
+  { key: "global", label: "Global", hint: "mihomo's global mode, same as before." },
+];
+
+function ExitCard({
+  exit,
+  busy,
+  onSwitched,
+  onError,
+}: {
+  exit?: ChillState["exit"];
+  busy: boolean;
+  onSwitched: () => void;
+  onError: (msg: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [switching, setSwitching] = useState(false);
+
+  async function pick(state: string) {
+    if (busy || switching || state === exit) return;
+    setSwitching(true);
+    try {
+      await apiFetch("/api/services/chill/exit", { method: "PUT", body: { state } });
+      onSwitched();
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : t("chill.opFailed", "Operation failed"));
+    } finally {
+      setSwitching(false);
+    }
+  }
+
+  const current = EXIT_OPTIONS.find((o) => o.key === exit);
+  return (
+    <SectionCard
+      title={t("chill.exitTitle", "Exit")}
+      description={t(
+        "chill.exitDesc",
+        "How traffic leaves. Abroad on a local SIM the device switches to “Direct · AI stays” by itself, and back to Proxy once a home SIM is in again.",
+      )}
+      className="mt-6"
+    >
+      <div role="radiogroup" aria-label={t("chill.exitTitle", "Exit")} className="flex flex-wrap gap-2">
+        {EXIT_OPTIONS.map((o) => {
+          const active = o.key === exit;
+          return (
+            <button
+              key={o.key}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              disabled={busy || switching}
+              onClick={() => pick(o.key)}
+              className={`inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12.5px] font-medium transition-colors disabled:opacity-50 ${
+                active
+                  ? "border-accent bg-accent-soft text-accent"
+                  : "border-border bg-bg-card text-text hover:border-accent/50"
+              }`}
+            >
+              {active && <Check size={11} />}
+              {t(`chill.exit.${o.key}`, o.label)}
+            </button>
+          );
+        })}
+      </div>
+      {current && (
+        <p className="mt-3 text-xs text-text-dim">{t(`chill.exitHint.${current.key}`, current.hint)}</p>
+      )}
+    </SectionCard>
+  );
+}
 
 function RegionCard({
   title,

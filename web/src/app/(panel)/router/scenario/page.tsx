@@ -664,12 +664,21 @@ export default function ScenarioPage() {
                 "Only the “🚀 节点选择” group is set to DIRECT, once, on arrival; groups that do not offer DIRECT (such as AI) keep their node. Changing it by hand afterwards sticks. When you are back on a home SIM the node from before the trip is restored. If CHILL is off, both steps are skipped and retried later.",
               )}
             </p>
-            {(data?.pending_restore ?? []).map((p) => (
-              <p key={p.key} className="mt-2 text-xs">
-                <span className="text-text-dim">{t("scenario.willRestore", "Restores on return:")}</span>{" "}
-                <span className="font-medium">{p.body?.member ?? "—"}</span>
-              </p>
-            ))}
+            {(data?.pending_restore ?? []).map((p) =>
+              // Written by the agent when CHILL is switched off while abroad.
+              p.key === "chill-on-after-abroad" ? (
+                <p key={p.key} className="mt-2 text-xs">
+                  <span className="font-medium">
+                    {t("scenario.chillOnWhenHome", "CHILL was switched off abroad; it is switched back on when you return.")}
+                  </span>
+                </p>
+              ) : (
+                <p key={p.key} className="mt-2 text-xs">
+                  <span className="text-text-dim">{t("scenario.willRestore", "Restores on return:")}</span>{" "}
+                  <span className="font-medium">{p.body?.member ?? "—"}</span>
+                </p>
+              ),
+            )}
           </SectionCard>
 
           {/* What each scenario does */}

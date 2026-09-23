@@ -129,7 +129,7 @@ pub fn public_status(state: &AppState) -> (u16, Value) {
                 "sms": { "unread": sms_unread },
                 "services": {
                     "tailscale": { "running": ts_running, "installed": ts_installed, "node": ts_node },
-                    "chill": { "state": chill_state_str, "reason": chill_reason },
+                    "chill": { "state": chill_state_str, "reason": chill_reason, "on": crate::chill::switched_on() },
                     "home_mode": { "present": hm_present, "enabled": hm_enabled, "mode": hm_mode },
                 },
                 "scenario": crate::scenario::public_summary(&state.scenario),

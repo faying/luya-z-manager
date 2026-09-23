@@ -117,6 +117,7 @@ const ALLOWED_PATHS: &[&str] = &[
     "/api/services/chill/disable",
     "/api/services/chill/regions",
     "/api/services/chill/bypass",
+    "/api/services/chill/exit",
     "/api/device/power-save",
     "/api/device/thermal",
     "/api/router/apn/profiles/activate",
@@ -463,6 +464,33 @@ struct PendingRestore {
     /// The original action with the saved value in its body.
     action: ScenarioAction,
     saved_at: i64,
+    /// Not due while the next scenario is itself an abroad one — only once the
+    /// device is home again. For values the *owner* changed abroad (CHILL
+    /// switched off by hand), which no scenario action manages, so the
+    /// ownership rule in `due_restores` alone would put them back at once.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    while_abroad: bool,
+}
+
+/// Scenarios that mean "outside the home country".
+fn is_abroad(s: &Scenario) -> bool {
+    matches!(s.detect, Detect::Mcc { .. } | Detect::Abroad)
+}
+
+/// Key of the "switch CHILL back on when home" entry (see `chill_toggled`).
+const CHILL_ON_KEY: &str = "chill-on-after-abroad";
+/// Key of the "exit back to proxy when home" entry (see `chill_exit_changed`).
+const CHILL_EXIT_KEY: &str = "chill-exit-after-abroad";
+
+/// Serialises read-modify-write of RESTORE_FILE between the engine thread and
+/// HTTP handlers (`chill_toggled`). Never held while running an action: the
+/// action may route to a handler that takes it.
+static RESTORE_LOCK: Mutex<()> = Mutex::new(());
+
+thread_local! {
+    /// Set while `run_restores` runs an action, so the CHILL-enable hook can
+    /// tell "the restore turning CHILL back on" from "the owner doing it".
+    static IN_RESTORE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// What an action manages, independent of the value it sets: its path plus its
@@ -496,11 +524,20 @@ fn due_restores(pending: &[PendingRestore], next: Option<&Scenario>) -> Vec<Stri
     let owned: Vec<String> = next
         .map(|s| s.actions.iter().filter_map(restore_key).collect())
         .unwrap_or_default();
-    pending
+    let abroad_next = next.is_some_and(is_abroad);
+    let mut due: Vec<String> = pending
         .iter()
-        .filter(|p| !owned.contains(&p.key))
+        .filter(|p| !owned.contains(&p.key) && !(p.while_abroad && abroad_next))
         .map(|p| p.key.clone())
-        .collect()
+        .collect();
+    // CHILL back on before anything that talks to it; the exit (mode) last,
+    // after the main group has its pre-trip node back.
+    due.sort_by_key(|k| match k.as_str() {
+        CHILL_ON_KEY => 0,
+        CHILL_EXIT_KEY => 2,
+        _ => 1,
+    });
+    due
 }
 
 // ── runtime state ───────────────────────────────────────────────────────────
@@ -852,7 +889,7 @@ impl Engine {
         }
     }
 
-    fn scan_interval(&self, cfg: &Config, current: &str) -> u64 {
+    fn scan_interval(&self, cfg: &Config, current: &str, candidate: &str) -> u64 {
         // The cheap interval is for when the APs are down and nobody is
         // connected — which is what `inhibit_sleep` marks. An abroad scenario
         // keeps the APs up with clients on them, so it scans like away.
@@ -862,7 +899,13 @@ impl Engine {
         // Nothing decided yet (just booted or restarted): the screen says
         // "判定中" until two scans agree, and on battery that would take ten
         // minutes. Two quick scans are a small price for knowing where we are.
-        if current.is_empty() {
+        //
+        // Same for a switch already in the making: one scan saw somewhere else,
+        // so confirm it quickly instead of waiting a full battery interval.
+        // Walking in the door on battery otherwise took 5–10 minutes to turn
+        // Wi-Fi off. A stray reading costs one extra scan, not a switch — the
+        // hysteresis still needs the second one to agree.
+        if current.is_empty() || !candidate.is_empty() {
             return cfg.params.scan_interval_away_charging_secs;
         }
         let charging = ubus::call("zwrt_bsp.charger", "list", Some("{}"))
@@ -977,8 +1020,7 @@ impl Engine {
         let (Some(r), Some(key)) = (a.restore_on_exit.as_ref(), restore_key(a)) else {
             return;
         };
-        let mut pending: Vec<PendingRestore> = read_json(RESTORE_FILE);
-        if pending.iter().any(|p| p.key == key) {
+        if read_json::<Vec<PendingRestore>>(RESTORE_FILE).iter().any(|p| p.key == key) {
             return;
         }
         let (status, resp) =
@@ -995,10 +1037,16 @@ impl Engine {
             return;
         };
         log_line(&format!("saved {current} to restore on leaving"));
+        let _lk = RESTORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pending: Vec<PendingRestore> = read_json(RESTORE_FILE);
+        if pending.iter().any(|p| p.key == key) {
+            return;
+        }
         pending.push(PendingRestore {
             key,
             action: back,
             saved_at: now(),
+            while_abroad: false,
         });
         write_json(RESTORE_FILE, &pending);
     }
@@ -1007,30 +1055,40 @@ impl Engine {
     /// (CHILL stopped, say) keeps the entry so a later tick can try again.
     /// `quiet` skips logging failures, for the periodic retry.
     fn run_restores(&self, app: &AppState, next: Option<&Scenario>, quiet: bool) {
-        let mut pending: Vec<PendingRestore> = read_json(RESTORE_FILE);
+        let pending: Vec<PendingRestore> = read_json(RESTORE_FILE);
         let due = due_restores(&pending, next);
         if due.is_empty() {
             return;
         }
-        pending.retain(|p| {
-            if !due.contains(&p.key) {
-                return true;
-            }
-            match self.run_action(app, &p.action) {
+        // Run without RESTORE_LOCK (an action can reach a handler that takes
+        // it), then drop what succeeded from a fresh read, so an entry an HTTP
+        // handler added meanwhile is not lost.
+        let mut done: Vec<String> = Vec::new();
+        for key in &due {
+            let Some(p) = pending.iter().find(|p| &p.key == key) else { continue };
+            IN_RESTORE.with(|f| f.set(true));
+            let result = self.run_action(app, &p.action);
+            IN_RESTORE.with(|f| f.set(false));
+            match result {
                 Ok(()) => {
                     let body = p.action.action.body.clone().unwrap_or(Value::Null);
                     log_line(&format!("restored {} {body}", p.action.action.path));
-                    false
+                    done.push(key.clone());
                 }
                 Err(e) => {
                     if !quiet {
                         log_line(&format!("restore failed, will retry: {e}"));
                     }
-                    true
                 }
             }
-        });
-        write_json(RESTORE_FILE, &pending);
+        }
+        if done.is_empty() {
+            return;
+        }
+        let _lk = RESTORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut now_pending: Vec<PendingRestore> = read_json(RESTORE_FILE);
+        now_pending.retain(|p| !done.contains(&p.key));
+        write_json(RESTORE_FILE, &now_pending);
     }
 
     /// Put snapshotted keys back, newest first, then make them take effect.
@@ -1151,9 +1209,9 @@ impl Engine {
             return; // unconfigured engines do nothing
         }
 
-        let (current, last_scan) = {
+        let (current, candidate, last_scan) = {
             let st = self.state.lock().unwrap();
-            (st.current.clone(), st.last_scan)
+            (st.current.clone(), st.candidate.clone(), st.last_scan)
         };
 
         // A pin overrides detection entirely, but still goes through the whole
@@ -1168,7 +1226,7 @@ impl Engine {
         // Wall clock, not tick counting: the home scenario lets the device
         // suspend, and a monotonic sleep does not advance while suspended.
         let due = now() - last_scan;
-        if due < self.scan_interval(&cfg, &current) as i64 {
+        if due < self.scan_interval(&cfg, &current, &candidate) as i64 {
             // Keep the sleep defences fresh even when not scanning.
             if cfg
                 .scenarios
@@ -1406,6 +1464,118 @@ fn state_json(engine: &Engine) -> Value {
     })
 }
 
+/// CHILL was switched on or off through the agent (admin web, touch screen, or
+/// a scenario action). Switched off while the device is in an abroad scenario:
+/// remember to switch it back on once home — abroad the owner often has no use
+/// for it, but at home it is expected to be running. Switched on by anyone but
+/// that restore: nothing is left to put back.
+///
+/// `was_on` is whether CHILL was on before an "off": turning off something
+/// already off must not arrange for it to come on later.
+pub fn chill_toggled(engine: &Engine, on: bool, was_on: bool) {
+    if on {
+        if IN_RESTORE.with(|f| f.get()) {
+            return; // the restore itself; run_restores removes the entry on success
+        }
+        let _lk = RESTORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pending: Vec<PendingRestore> = read_json(RESTORE_FILE);
+        let before = pending.len();
+        pending.retain(|p| p.key != CHILL_ON_KEY);
+        if pending.len() != before {
+            write_json(RESTORE_FILE, &pending);
+            log_line("CHILL switched on by hand; no longer switching it on when home");
+        }
+        return;
+    }
+    if !was_on {
+        return;
+    }
+    if add_abroad_restore(engine, chill_on_restore(now())) {
+        log_line("CHILL switched off abroad; will switch it back on when home");
+    }
+}
+
+/// The owner changed CHILL's exit (proxy / direct except AI / all direct) by
+/// hand. Abroad, whatever they pick, home means proxy again.
+pub fn chill_exit_changed(engine: &Engine) {
+    if IN_RESTORE.with(|f| f.get()) {
+        return;
+    }
+    if add_abroad_restore(engine, chill_exit_restore(now())) {
+        log_line("CHILL exit changed abroad; will go back to proxy when home");
+    }
+}
+
+fn in_abroad_scenario(engine: &Engine) -> bool {
+    if !engine.enabled() {
+        return false;
+    }
+    let cfg = engine.cfg.lock().unwrap_or_else(|e| e.into_inner());
+    let st = engine.state.lock().unwrap_or_else(|e| e.into_inner());
+    cfg.scenarios.iter().any(|s| s.id == st.current && is_abroad(s))
+}
+
+/// Add `entry` unless the device is not abroad or one with its key is already
+/// waiting. True when added.
+fn add_abroad_restore(engine: &Engine, entry: PendingRestore) -> bool {
+    if !in_abroad_scenario(engine) {
+        return false;
+    }
+    let _lk = RESTORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut pending: Vec<PendingRestore> = read_json(RESTORE_FILE);
+    if pending.iter().any(|p| p.key == entry.key) {
+        return false;
+    }
+    pending.push(entry);
+    write_json(RESTORE_FILE, &pending);
+    true
+}
+
+fn chill_exit_restore(saved_at: i64) -> PendingRestore {
+    PendingRestore {
+        key: CHILL_EXIT_KEY.into(),
+        action: ScenarioAction {
+            action: Action {
+                method: "PUT".into(),
+                path: "/api/services/chill/exit".into(),
+                body: Some(json!({"state": "proxy"})),
+            },
+            snapshot: Vec::new(),
+            verify_job: None,
+            verify_field: Some(FieldCheck {
+                path: CHILL_STATUS.into(),
+                pointer: "/data/exit".into(),
+                equals: json!("proxy"),
+            }),
+            best_effort: true,
+            restore_on_exit: None,
+        },
+        saved_at,
+        while_abroad: true,
+    }
+}
+
+fn chill_on_restore(saved_at: i64) -> PendingRestore {
+    PendingRestore {
+        key: CHILL_ON_KEY.into(),
+        action: ScenarioAction {
+            action: Action {
+                method: "POST".into(),
+                path: "/api/services/chill/enable".into(),
+                body: None,
+            },
+            snapshot: Vec::new(),
+            // Enable answers at once and starts chill.sh on a worker thread.
+            verify_job: Some("/api/services/chill/job".into()),
+            verify_field: None,
+            best_effort: true,
+            restore_on_exit: None,
+        },
+        saved_at,
+        while_abroad: true,
+    }
+}
+
 /// The slice of engine state the touch screen shows, for the unauthenticated
 /// `/api/public/status`. Scenario names and times only — never the network
 /// list, the SIM, or anything a LAN client could use to spoof "home".
@@ -1420,6 +1590,20 @@ pub fn public_summary(engine: &Engine) -> Value {
         "name": scen.map(|s| s.name.as_str()).unwrap_or(""),
         // inhibit_sleep marks the scenarios that take the APs down.
         "wifi_off": scen.is_some_and(|s| s.inhibit_sleep),
+        // The touch screen offers to switch CHILL off while this is true.
+        "abroad": engine.enabled() && scen.is_some_and(is_abroad),
+        "chill_on_when_home": read_json::<Vec<PendingRestore>>(RESTORE_FILE)
+            .iter()
+            .any(|p| p.key == CHILL_ON_KEY),
+        // Abroad, the main group goes DIRECT by itself (see abroad_scenarios).
+        "auto_direct": scen.is_some_and(|s| {
+            is_abroad(s)
+                && s.actions.iter().any(|a| {
+                    a.action.path == "/api/services/chill/regions"
+                        && a.action.body.as_ref().and_then(|b| b.get("member")).and_then(|m| m.as_str())
+                            == Some("DIRECT")
+                })
+        }),
         "pin": engine.pin(),
         "guard_takeover": engine.takeover_marked(),
         "last_switch": st.last_switch,
@@ -1788,12 +1972,121 @@ mod tests {
             key: restore_key(&a).unwrap(),
             action: restore_action(&a, json!("🇹🇼 台湾")).unwrap(),
             saved_at: 0,
+            while_abroad: false,
         }];
         let by = |id: &str| cfg.scenarios.iter().find(|s| s.id == id);
         assert!(due_restores(&pending, by("abroad")).is_empty());
         assert_eq!(due_restores(&pending, by("away")).len(), 1);
         assert_eq!(due_restores(&pending, by("home")).len(), 1);
         assert_eq!(due_restores(&pending, None).len(), 1, "engine off restores too");
+    }
+
+    #[test]
+    fn chill_switched_off_abroad_comes_back_only_when_home_and_first() {
+        let cfg = template();
+        let by = |id: &str| cfg.scenarios.iter().find(|s| s.id == id);
+        let a = chill_main_group_action("DIRECT");
+        let pending = vec![
+            PendingRestore {
+                key: restore_key(&a).unwrap(),
+                action: restore_action(&a, json!("🇹🇼 台湾")).unwrap(),
+                saved_at: 0,
+                while_abroad: false,
+            },
+            chill_on_restore(0),
+        ];
+        assert!(due_restores(&pending, by("abroad")).is_empty(), "still abroad: CHILL stays off");
+        let due = due_restores(&pending, by("away"));
+        assert_eq!(due.len(), 2);
+        assert_eq!(due[0], CHILL_ON_KEY, "CHILL on before its group is set");
+        assert_eq!(due_restores(&pending, by("home"))[0], CHILL_ON_KEY);
+        assert_eq!(due_restores(&pending, None)[0], CHILL_ON_KEY, "engine off restores too");
+        let mut with_exit = pending.clone();
+        with_exit.insert(0, chill_exit_restore(0));
+        let due = due_restores(&with_exit, by("away"));
+        assert_eq!(due.first().map(String::as_str), Some(CHILL_ON_KEY));
+        assert_eq!(due.last().map(String::as_str), Some(CHILL_EXIT_KEY), "mode last, after the node");
+        assert!(due_restores(&with_exit, by("abroad")).is_empty());
+        // A per-country scenario is abroad too.
+        let mcc = Scenario {
+            id: "jp".into(),
+            name: "日本".into(),
+            detect: Detect::Mcc { mccs: vec!["440".into()] },
+            actions: Vec::new(),
+            inhibit_sleep: false,
+        };
+        assert_eq!(due_restores(&pending, Some(&mcc)), vec![restore_key(&a).unwrap()]);
+    }
+
+    /// A whole trip, as the engine and the handlers would record it, checked at
+    /// every stage: what is waiting, and what comes back in which order.
+    #[test]
+    fn simulated_trip_abroad_and_back() {
+        let cfg = template();
+        let by = |id: &str| cfg.scenarios.iter().find(|s| s.id == id);
+        let engine_in = |current: &str| Engine {
+            cfg: Mutex::new(template()),
+            state: Mutex::new(RunState { current: current.into(), ..Default::default() }),
+            busy: AtomicBool::new(false),
+            takeover: Mutex::new(None),
+        };
+
+        // At home / away: turning CHILL off or changing its exit records nothing.
+        assert!(!in_abroad_scenario(&engine_in("away")));
+        assert!(!in_abroad_scenario(&engine_in("home")));
+        assert!(!in_abroad_scenario(&engine_in("")), "just booted, nothing decided yet");
+
+        // Arrive on a local SIM: the abroad scenario sets the main group to
+        // DIRECT and saves the node it replaces.
+        assert!(in_abroad_scenario(&engine_in("abroad")));
+        let abroad = by("abroad").unwrap();
+        let group = abroad.actions.iter().find(|a| a.restore_on_exit.is_some()).unwrap();
+        assert_eq!(group.action.body.as_ref().unwrap()["member"], "DIRECT");
+        let mut pending = vec![PendingRestore {
+            key: restore_key(group).unwrap(),
+            action: restore_action(group, json!("🇹🇼 台湾")).unwrap(),
+            saved_at: 1,
+            while_abroad: false,
+        }];
+
+        // Abroad the owner picks "all direct", then switches CHILL off.
+        pending.push(chill_exit_restore(2));
+        pending.push(chill_on_restore(3));
+
+        // Still abroad (also after a reboot there, once the engine decides
+        // "abroad" again): nothing comes back.
+        assert!(due_restores(&pending, Some(abroad)).is_empty());
+
+        // Home SIM again: CHILL on, then the pre-trip node, then proxy mode.
+        for back in ["away", "home"] {
+            let due = due_restores(&pending, by(back));
+            assert_eq!(due.len(), 3, "{back}");
+            assert_eq!(due[0], CHILL_ON_KEY);
+            let node = pending.iter().find(|p| p.key == due[1]).unwrap();
+            assert_eq!(node.action.action.body.as_ref().unwrap()["member"], "🇹🇼 台湾");
+            let exit = pending.iter().find(|p| p.key == due[2]).unwrap();
+            assert_eq!(exit.action.action.path, "/api/services/chill/exit");
+            assert_eq!(exit.action.action.body.as_ref().unwrap()["state"], "proxy");
+            assert!(pending.iter().all(|p| p.action.best_effort), "a failed restore is retried, never rolls back Wi-Fi");
+        }
+    }
+
+    #[test]
+    fn chill_on_restore_waits_for_the_job_and_survives_a_round_trip() {
+        let r = chill_on_restore(5);
+        assert_eq!(r.action.action.path, "/api/services/chill/enable");
+        assert!(ALLOWED_PATHS.contains(&r.action.action.path.as_str()));
+        assert_eq!(r.action.verify_job.as_deref(), Some("/api/services/chill/job"));
+        assert!(r.action.best_effort);
+        let text = serde_json::to_string(&vec![r]).unwrap();
+        let back: Vec<PendingRestore> = serde_json::from_str(&text).unwrap();
+        assert!(back[0].while_abroad);
+        // Entries written before this field existed still parse, as not-abroad.
+        let old: Vec<PendingRestore> = serde_json::from_str(
+            &text.replace(",\"while_abroad\":true", ""),
+        )
+        .unwrap();
+        assert!(!old[0].while_abroad);
     }
 
     #[test]

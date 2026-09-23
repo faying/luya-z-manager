@@ -241,6 +241,10 @@ do_devui() {
     # zwrt-datad 归 procd（supervise.sh 包着，崩了拉起并告警）；start.sh 看到这一行就不再起第二份
     rc_add "/etc/init.d/zwrt-datad start" "/etc/init.d/zwrt-datad start"
     /etc/init.d/zwrt-datad start
+    # 这是一次有人主动做的安装，不是崩溃：清掉 u60-uid 的启动计数。否则 10 分钟内装两三次，
+    # 每次重启 u60-uid 都算一次失败的启动，第三次它就放弃、交还原厂界面（2026-09-23 实际遇到）。
+    # 新程序真崩的话，从 0 开始照样两次就放弃。
+    rm -f /data/u60-uid/attempts /data/u60-uid/gave-up
     /etc/init.d/u60-uid restart >/dev/null 2>&1 || /etc/init.d/u60-uid start
 
     i=0

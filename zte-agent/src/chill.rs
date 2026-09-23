@@ -43,6 +43,9 @@ const LOG_TAIL_MAX: usize = 2000;
 // an arbitrary mihomo group name.
 const REGION_GROUPS: [&str; 5] = ["🚀 节点选择", "🤖 AI", "📺 流媒体", "🍎 Apple", "🐟 漏网之鱼"];
 const MAIN_GROUP: &str = "🚀 节点选择";
+/// The main group's last member that was not DIRECT, so "back to proxy" knows
+/// where to go after the group was switched to DIRECT (by hand or abroad).
+const LAST_MAIN: &str = "/data/chill/last-main";
 const AI_GROUP: &str = "🤖 AI";
 
 // Must match chill.sh's own $BYPASS_PRIO — the `ip rule` priority its
@@ -123,6 +126,14 @@ pub fn status(_state: &AppState) -> (u16, Value) {
         data["groups"] = json!(summarize_groups(&proxies_raw));
         data["region"] = json!(group_now(&proxies_raw, MAIN_GROUP));
         data["ai_exit"] = json!(group_now(&proxies_raw, AI_GROUP));
+        let mode = http_get_json(&agent, &format!("{MIHOMO_API}/configs"), &secret)
+            .and_then(|c| c.get("mode").and_then(Value::as_str).map(str::to_string));
+        let main_now = group_now(&proxies_raw, MAIN_GROUP)
+            .and_then(|g| g.get("active").and_then(Value::as_str).map(str::to_string));
+        if let (Some(m), Some(n)) = (&mode, &main_now) {
+            data["exit"] = json!(exit_state(m, n));
+        }
+        data["mode"] = json!(mode);
     }
     (200, json!({"ok": true, "data": data}))
 }
@@ -281,6 +292,11 @@ pub fn regions_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
         return (400, json!({"ok": false, "error": "member not in group"}));
     }
 
+    if group == MAIN_GROUP && member == "DIRECT" {
+        if let Some(now) = info.get("now").and_then(Value::as_str) {
+            remember_main(now);
+        }
+    }
     match mihomo_put_json(&agent, &group_url, &secret, json!({"name": member})) {
         Ok(code) if code < 400 => (200, json!({"ok": true, "data": {"group": group, "active": member}})),
         Ok(code) => (
@@ -288,6 +304,101 @@ pub fn regions_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
             json!({"ok": false, "error": format!("mihomo rejected switch (HTTP {code})")}),
         ),
         Err(e) => (502, json!({"ok": false, "error": format!("switch request failed: {e}")})),
+    }
+}
+
+/* -------------------------------------------------------------- *
+ *  Exit state — the one control the owner actually uses
+ * -------------------------------------------------------------- */
+
+/// What the traffic does, in the owner's terms rather than mihomo's:
+///   proxy           rule mode, main group on a node (normal, at home)
+///   direct_keep_ai  rule mode, main group DIRECT: everything that follows the
+///                   main group goes direct; 🤖 AI and 📞 VoWiFi are separate
+///                   groups and keep their nodes (abroad on a local SIM)
+///   direct_all      direct mode: everything direct, AI included
+///   global          global mode (only set from mihomo's own dashboard)
+pub fn exit_state(mode: &str, main_now: &str) -> &'static str {
+    match mode {
+        "direct" => "direct_all",
+        "global" => "global",
+        _ if main_now == "DIRECT" => "direct_keep_ai",
+        _ => "proxy",
+    }
+}
+
+fn remember_main(now: &str) {
+    if !now.is_empty() && now != "DIRECT" {
+        let _ = fs::write(LAST_MAIN, now);
+    }
+}
+
+/// Where "proxy" puts the main group back: the remembered member if the group
+/// still offers it, else the first member that is not DIRECT.
+fn proxy_member(remembered: Option<&str>, options: &[&str]) -> Option<String> {
+    remembered
+        .filter(|m| *m != "DIRECT" && options.contains(m))
+        .or_else(|| options.iter().copied().find(|m| *m != "DIRECT"))
+        .map(str::to_string)
+}
+
+/// PUT /api/services/chill/exit — body {"state": "proxy"|"direct_keep_ai"|"direct_all"|"global"}
+/// (all four are on both the touch screen and the admin web)
+///
+/// Group first, then mode, both straight to mihomo (no reload). CHILL must be
+/// running: when it is off there is no exit to choose.
+pub fn exit_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
+    let parsed: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let want = parsed["state"].as_str().unwrap_or("");
+    if !matches!(want, "proxy" | "direct_keep_ai" | "direct_all" | "global") {
+        return (400, json!({"ok": false, "error": "state must be proxy, direct_keep_ai, direct_all or global"}));
+    }
+    let agent = mihomo_agent(HTTP_TIMEOUT);
+    let secret = mihomo_secret();
+    let group_url = format!("{MIHOMO_API}/proxies/{}", urlencode(MAIN_GROUP));
+    let Some(info) = http_get_json(&agent, &group_url, &secret) else {
+        return (409, json!({"ok": false, "error": "CHILL is not running"}));
+    };
+    let now = info.get("now").and_then(Value::as_str).unwrap_or("").to_string();
+    let options: Vec<&str> = info
+        .get("all")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+
+    let member = match want {
+        "direct_keep_ai" if now != "DIRECT" => {
+            if !options.contains(&"DIRECT") {
+                return (409, json!({"ok": false, "error": "the main group has no DIRECT option"}));
+            }
+            remember_main(&now);
+            Some("DIRECT".to_string())
+        }
+        "proxy" if now == "DIRECT" || now.is_empty() => {
+            let remembered = fs::read_to_string(LAST_MAIN).ok();
+            match proxy_member(remembered.as_deref().map(str::trim), &options) {
+                Some(m) => Some(m),
+                None => return (409, json!({"ok": false, "error": "the main group has no node to go back to"})),
+            }
+        }
+        _ => None,
+    };
+    if let Some(m) = &member {
+        match mihomo_put_json(&agent, &group_url, &secret, json!({"name": m})) {
+            Ok(code) if code < 400 => {}
+            Ok(code) => return (502, json!({"ok": false, "error": format!("mihomo rejected switch (HTTP {code})")})),
+            Err(e) => return (502, json!({"ok": false, "error": format!("switch request failed: {e}")})),
+        }
+    }
+    let mode = match want {
+        "direct_all" => "direct",
+        "global" => "global",
+        _ => "rule",
+    };
+    match mihomo_patch_json(&agent, &format!("{MIHOMO_API}/configs"), &secret, json!({"mode": mode})) {
+        Ok(code) if code < 400 => (200, json!({"ok": true, "data": {"exit": want}})),
+        Ok(code) => (502, json!({"ok": false, "error": format!("mihomo rejected mode (HTTP {code})")})),
+        Err(e) => (502, json!({"ok": false, "error": format!("mode request failed: {e}")})),
     }
 }
 
@@ -368,6 +479,12 @@ fn remove_bypass_rules() {
 /* -------------------------------------------------------------- *
  *  Enable / disable (total on/off)
  * -------------------------------------------------------------- */
+
+/// The owner's on/off switch (`chill.sh start` removes the flag, `stop`
+/// writes it). Not whether mihomo is up right now: that is `/tmp/chill.state`.
+pub fn switched_on() -> bool {
+    !std::path::Path::new("/data/chill/disabled").exists()
+}
 
 /// POST /api/services/chill/enable
 pub fn enable(state: &AppState) -> (u16, Value) {
@@ -612,6 +729,17 @@ fn mihomo_put_json(agent: &ureq::Agent, url: &str, secret: &str, body: Value) ->
     }
 }
 
+fn mihomo_patch_json(agent: &ureq::Agent, url: &str, secret: &str, body: Value) -> Result<u16, String> {
+    let mut req = agent.patch(url);
+    if let Some(h) = bearer(secret) {
+        req = req.header("Authorization", h);
+    }
+    match req.send_json(body) {
+        Ok(resp) => Ok(resp.status().as_u16()),
+        Err(e) => Err(format!("{e}")),
+    }
+}
+
 /// Percent-encode a URL path segment (mihomo group/provider names are emoji +
 /// CJK + spaces — `ureq` doesn't encode these for us).
 fn urlencode(s: &str) -> String {
@@ -700,4 +828,28 @@ fn tail_file(path: &str, n: usize) -> std::io::Result<Vec<String>> {
         buf.push_back(line);
     }
     Ok(buf.into_iter().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exit_state_reads_mode_first_then_the_main_group() {
+        assert_eq!(exit_state("rule", "🇹🇼 台湾"), "proxy");
+        assert_eq!(exit_state("rule", "DIRECT"), "direct_keep_ai");
+        assert_eq!(exit_state("direct", "🇹🇼 台湾"), "direct_all");
+        assert_eq!(exit_state("direct", "DIRECT"), "direct_all");
+        assert_eq!(exit_state("global", "DIRECT"), "global");
+    }
+
+    #[test]
+    fn back_to_proxy_prefers_the_remembered_node_if_still_offered() {
+        let opts = ["🇯🇵 日本", "🇹🇼 台湾", "DIRECT"];
+        assert_eq!(proxy_member(Some("🇹🇼 台湾"), &opts).as_deref(), Some("🇹🇼 台湾"));
+        assert_eq!(proxy_member(Some("🇰🇷 韩国"), &opts).as_deref(), Some("🇯🇵 日本"), "gone → first node");
+        assert_eq!(proxy_member(Some("DIRECT"), &opts).as_deref(), Some("🇯🇵 日本"), "never DIRECT");
+        assert_eq!(proxy_member(None, &opts).as_deref(), Some("🇯🇵 日本"));
+        assert_eq!(proxy_member(None, &["DIRECT"]), None);
+    }
 }

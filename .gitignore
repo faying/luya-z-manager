@@ -9,3 +9,4 @@ scripts/esim/alpine-pkgs/
 onboard/cache/
 onboard/dist/
 onboard/u60.env
+onboard/kit.local.env

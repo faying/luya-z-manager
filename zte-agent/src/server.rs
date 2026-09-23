@@ -372,10 +372,30 @@ pub fn route(method: &Method, path: &str, state: &AppState, body: &[u8]) -> (u16
         (&Method::Put, "/api/services/chill/providers") => chill::providers_set_url(state, body),
         (&Method::Post, "/api/services/chill/providers/refresh") => chill::providers_refresh(state, body),
         (&Method::Put, "/api/services/chill/regions") => chill::regions_set(state, body),
+        (&Method::Put, "/api/services/chill/exit") => {
+            let r = chill::exit_set(state, body);
+            if r.0 < 400 {
+                crate::scenario::chill_exit_changed(&state.scenario);
+            }
+            r
+        }
         (&Method::Get, "/api/services/chill/bypass") => chill::bypass_get(state),
         (&Method::Put, "/api/services/chill/bypass") => chill::bypass_set(state, body),
-        (&Method::Post, "/api/services/chill/enable") => chill::enable(state),
-        (&Method::Post, "/api/services/chill/disable") => chill::disable(state),
+        (&Method::Post, "/api/services/chill/enable") => {
+            let r = chill::enable(state);
+            if r.0 < 400 {
+                crate::scenario::chill_toggled(&state.scenario, true, false);
+            }
+            r
+        }
+        (&Method::Post, "/api/services/chill/disable") => {
+            let was_on = chill::switched_on();
+            let r = chill::disable(state);
+            if r.0 < 400 {
+                crate::scenario::chill_toggled(&state.scenario, false, was_on);
+            }
+            r
+        }
         (&Method::Get, "/api/services/chill/job") => chill::job(state),
         // eSIM (removable eUICC via lpac)
         (&Method::Get, "/api/esim/status") => esim::status(state),

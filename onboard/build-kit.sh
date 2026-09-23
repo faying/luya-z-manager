@@ -22,13 +22,28 @@
 #           DEVUI_BIN=路径（用这个触屏二进制，不用 $DEVUI_REPO/u60pro-devui.stripped）、
 #           UID_BIN=路径（u60-uid，默认 $DEVUI_REPO/u60-uid）、
 #           DATAD_BIN=路径（用这个 zwrt-datad，不用 onboard/cache 里缓存的；eSIM 仍取缓存）
+#           这些也可以写进 onboard/kit.local.env（不进 git），每次打包自动读取，
+#           免得每次手敲——尤其 DEVUI_BIN / DATAD_BIN，默认值多半不是你要的（见下）。
 # zte-agent：本机有 cargo-zigbuild 就用，没有就走 Docker（messense/cargo-zigbuild），
 #           不要求在 Mac 上装 Rust 工具链。
+#
+# 打包前会检查两样最容易装错、装错了又看不出来的东西，不对就停：
+#   触屏二进制必须是 LVGL 版（make 编的）。touch-ui 的 scripts/build.sh 编的是旧 litehtml 版，
+#     而且会写到同一个 u60pro-devui.stripped，默认路径下一不留神就打进旧界面。
+#   zwrt-datad 必须是 Rust 版，且没有写死的外部更新源（releases/latest/download）。
+#     onboard/cache 里缓存的可能是更早的 C 版或带上游更新源的版本。
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ONB="$ROOT/onboard"
+# 本机的默认值（不进 git）：KEY=值 一行一个，命令行上给的环境变量优先
+if [ -f "$ONB/kit.local.env" ]; then
+  while IFS='=' read -r k v; do
+    case "$k" in ''|\#*) continue ;; esac
+    [ -n "${!k:-}" ] || export "$k=$v"
+  done < "$ONB/kit.local.env"
+fi
 DEVUI_REPO="${DEVUI_REPO:-$ROOT/../zte-u60-pro-mu5250-touch-ui}"
 FLEET_HOST="${FLEET_HOST:-u60}"
 CACHE="$ONB/cache"
@@ -86,6 +101,9 @@ tar czf "$PL/admin.tgz" -C "$ROOT/web/out" .
 step "devui（${DEVUI_REPO}）"
 DEVUI_BIN="${DEVUI_BIN:-$DEVUI_REPO/u60pro-devui.stripped}"
 [ -f "$DEVUI_BIN" ] || die "没有触屏二进制 ${DEVUI_BIN}（先构建，或用 DEVUI_BIN=… 指定）"
+# LVGL 版启动时打印这一句，litehtml 版没有
+grep -a -q 'pages+chrome built' "$DEVUI_BIN" || die "$(basename "$DEVUI_BIN") 不是 LVGL 版触屏（多半是 scripts/build.sh 编的旧 litehtml 版）。
+  LVGL 版：在 touch-ui 里 make CROSS_COMPILE=… 编出来再 strip，然后用 DEVUI_BIN=… 指定（或写进 onboard/kit.local.env）"
 cp "$DEVUI_BIN" "$PL/devui/u60pro-devui"
 cp "$DEVUI_REPO/scripts/start.sh" "$DEVUI_REPO/scripts/install-autostart.sh" "$PL/devui/"
 # u60-uid：屏幕主人守护进程（make u60-uid），和它的 procd init
@@ -121,6 +139,13 @@ if [ -n "${DATAD_BIN:-}" ]; then
   cp "$DATAD_BIN" "$PL/devui/zwrt-datad"
 else
   cp "$WORK/fleet/plugins/zwrt-datad/zwrt-datad" "$PL/devui/zwrt-datad"
+fi
+# Rust 版认 ZWRT_DATAD_OTA_DISABLE_AUTO（start.sh 用它关自动 OTA）；C 版没有
+grep -a -q 'ZWRT_DATAD_OTA_DISABLE_AUTO' "$PL/devui/zwrt-datad" || die "包里的 zwrt-datad 不是 Rust 版（${DATAD_BIN:-onboard/cache 里缓存的}）。
+  用 DATAD_BIN=… 指定 Rust 版（或写进 onboard/kit.local.env）"
+# 装机包要完全自主：不能带上游写死的更新源
+if grep -a -q 'releases/latest/download' "$PL/devui/zwrt-datad"; then
+  die "包里的 zwrt-datad 还带着写死的外部更新源（releases/latest/download）。用去掉了更新源的 fork 版（DATAD_BIN=…）"
 fi
 tar czf "$PL/esim.tgz" -C "$WORK/fleet/esim" .
 

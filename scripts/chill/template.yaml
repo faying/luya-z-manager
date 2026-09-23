@@ -114,6 +114,13 @@ dns:
   default-nameserver: [223.5.5.5, 119.29.29.29]
   nameserver: [223.5.5.5, 119.29.29.29]
   proxy-server-nameserver: [223.5.5.5, 119.29.29.29]
+  # 走 DIRECT 出去的连接，真实 IP 用运营商的 DNS 解析，不用上面的国内公共 DNS。
+  # 在国外换了当地卡、把「🚀 节点选择」切到直连时，国内公共 DNS 给的是离中国近的
+  # CDN 地址（甚至是错的），直连反而慢；当地运营商的 DNS 给的是当地最近的。在国内
+  # 也一样更准。system:// = 设备自己的 /etc/resolv.conf，即运营商下发的 DNS
+  # （CHILL 只改 dnsmasq，不改它，所以不会绕回 mihomo 自己）。注意别写成不带
+  # scheme 的 "system"：那会被当成主机名 system 的 UDP DNS，校验能过、运行时全失败。
+  direct-nameserver: ["system://"]
 
   nameserver-policy:
     # ✗ 不要写 "+.lan"：实测 Mac.lan 在 mihomo 与 dnsmasq 下均为 NXDOMAIN，
