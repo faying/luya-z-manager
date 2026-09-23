@@ -22,6 +22,14 @@ pub struct Job {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
     pub last_restore: Option<i64>,
+    // Restore used to record only its timestamp — status and error were read
+    // from the ExecResult and then dropped, so a restore that failed looked
+    // exactly like one that succeeded. Both are Option so jobs persisted by
+    // older builds still deserialise.
+    #[serde(default)]
+    pub last_restore_status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_restore_error: Option<String>,
     pub created_at: i64,
 }
 
@@ -34,13 +42,10 @@ pub enum Schedule {
     Recurring { time: String, days: Vec<u8> },
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct Action {
-    pub method: String,
-    pub path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub body: Option<Value>,
-}
+// Action moved to crate::action so the scenario engine can share the same
+// execution primitive. Re-exported here because the serialised shape in
+// scheduler.json is unchanged and callers still refer to scheduler::Action.
+pub use crate::action::Action;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Restore {
@@ -65,7 +70,9 @@ struct PendingAction {
 struct ExecResult {
     job_id: u32,
     is_restore: bool,
-    status: u16,
+    /// `None` = the action never ran (unparseable method). Distinct from
+    /// `Some(4xx)` = it ran and failed.
+    status: Option<u16>,
     error: Option<String>,
 }
 
@@ -80,16 +87,6 @@ fn now_local() -> (i64, u8, u8, u8) {
         libc::localtime_r(&t, &mut tm);
         let dow = ((tm.tm_wday + 6) % 7) as u8;
         (t as i64, tm.tm_hour as u8, tm.tm_min as u8, dow)
-    }
-}
-
-fn parse_method(s: &str) -> Option<tiny_http::Method> {
-    match s {
-        "GET" => Some(tiny_http::Method::Get),
-        "POST" => Some(tiny_http::Method::Post),
-        "PUT" => Some(tiny_http::Method::Put),
-        "DELETE" => Some(tiny_http::Method::Delete),
-        _ => None,
     }
 }
 
@@ -127,7 +124,7 @@ fn validate_job(
     if action.path.starts_with("/api/auth/") {
         return Err("cannot schedule auth endpoints".into());
     }
-    if parse_method(&action.method).is_none() {
+    if crate::action::parse_method(&action.method).is_none() {
         return Err("action.method must be GET, POST, PUT, or DELETE".into());
     }
     match schedule {
@@ -203,7 +200,7 @@ impl Scheduler {
                                 .map(|lr| now_ts - lr > 60)
                                 .unwrap_or(true);
                             if guard {
-                                let body = action_body(&job.action.body);
+                                let body = crate::action::body_bytes(&job.action.body);
                                 pending.push(PendingAction {
                                     job_id: job.id,
                                     method: job.action.method.clone(),
@@ -216,7 +213,7 @@ impl Scheduler {
                     }
                     Schedule::Once { at } => {
                         if now_ts >= *at && job.last_run.is_none() {
-                            let body = action_body(&job.action.body);
+                            let body = crate::action::body_bytes(&job.action.body);
                             pending.push(PendingAction {
                                 job_id: job.id,
                                 method: job.action.method.clone(),
@@ -241,7 +238,7 @@ impl Scheduler {
                             .map(|lr| now_ts - lr > 60)
                             .unwrap_or(true);
                         if should_restore && guard {
-                            let body = action_body(&restore.body);
+                            let body = crate::action::body_bytes(&restore.body);
                             pending.push(PendingAction {
                                 job_id: job.id,
                                 method: job.action.method.clone(),
@@ -261,25 +258,21 @@ impl Scheduler {
             return;
         }
 
-        // Phase 2: execute actions (no lock held)
+        // Phase 2: execute actions (no lock held — see action.rs rule 1).
+        // `map`, not `filter_map`: an action with an unparseable method used to
+        // be dropped silently, leaving last_run untouched so it was
+        // indistinguishable from a job that had never come due. Now it produces
+        // a result with status = None and an error string.
         let results: Vec<ExecResult> = pending
             .into_iter()
-            .filter_map(|pa| {
-                let method = parse_method(&pa.method)?;
-                let (status, resp) = crate::server::route(&method, &pa.path, state, &pa.body);
-                let error = if status >= 400 {
-                    resp.get("error")
-                        .and_then(|e| e.as_str())
-                        .map(|s| s.to_string())
-                } else {
-                    None
-                };
-                Some(ExecResult {
+            .map(|pa| {
+                let outcome = crate::action::exec(state, &pa.method, &pa.path, &pa.body);
+                ExecResult {
                     job_id: pa.job_id,
                     is_restore: pa.is_restore,
-                    status,
-                    error,
-                })
+                    status: outcome.status,
+                    error: outcome.error,
+                }
             })
             .collect();
 
@@ -289,13 +282,17 @@ impl Scheduler {
             if let Some(job) = data.jobs.iter_mut().find(|j| j.id == result.job_id) {
                 if result.is_restore {
                     job.last_restore = Some(now_ts);
+                    // Record how the restore went. This used to drop status and
+                    // error entirely, so a restore that 500'd left no trace.
+                    job.last_restore_status = result.status;
+                    job.last_restore_error = result.error;
                     // Disable once jobs after restore completes
                     if matches!(job.schedule, Schedule::Once { .. }) {
                         job.enabled = false;
                     }
                 } else {
                     job.last_run = Some(now_ts);
-                    job.last_status = Some(result.status);
+                    job.last_status = result.status;
                     job.last_error = result.error;
 
                     // Auto-disable once jobs only if no restore pending
@@ -306,13 +303,6 @@ impl Scheduler {
             }
         }
         save(&data);
-    }
-}
-
-fn action_body(body: &Option<Value>) -> Vec<u8> {
-    match body {
-        Some(v) => serde_json::to_vec(v).unwrap_or_default(),
-        None => Vec::new(),
     }
 }
 
@@ -355,6 +345,8 @@ pub fn jobs_create(state: &AppState, body: &[u8]) -> (u16, Value) {
         restore: req.restore,
         last_run: None,
         last_status: None,
+        last_restore_status: None,
+        last_restore_error: None,
         last_error: None,
         last_restore: None,
         created_at: now_ts,

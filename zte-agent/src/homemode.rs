@@ -227,6 +227,9 @@ fn scan_until_results(attempts: u32, delay: Duration) -> Option<String> {
 
 /// Apply wifi0's disabled flag at runtime (commit + daemon reload).
 fn set_radio_2g(disabled: bool) {
+    // Fourth writer of the `wireless` package — same lock as wifi_set and the
+    // scenario applier, so a scan wake can't interleave with either.
+    let _wifi_guard = crate::wifi_radio::WIFI_APPLY_LOCK.lock();
     let _ = ubus::uci_set_no_commit(RADIO_2G, if disabled { "1" } else { "0" });
     let _ = ubus::uci_commit("wireless");
     let _ = Command::new("ubus")

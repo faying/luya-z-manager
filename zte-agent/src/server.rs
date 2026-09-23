@@ -9,6 +9,7 @@ use crate::cell;
 use crate::static_files;
 use crate::device_ext;
 use crate::lan_test;
+use crate::scenario;
 use crate::scheduler;
 use crate::handlers::{self, AppState};
 use crate::homemode;
@@ -27,6 +28,7 @@ use crate::speedtest;
 use crate::telephony;
 use crate::usb;
 use crate::wifi;
+use crate::wifi_radio;
 
 pub fn start(bind: &str, threads: usize, state: Arc<AppState>) {
     let server = match Server::http(bind) {
@@ -194,6 +196,8 @@ pub fn route(method: &Method, path: &str, state: &AppState, body: &[u8]) -> (u16
         // WiFi
         (&Method::Get, "/api/wifi/status") => wifi::wifi_status(state),
         (&Method::Put, "/api/wifi/settings") => wifi::wifi_set(state, body),
+        (&Method::Get, "/api/wifi/radio") => wifi_radio::radio_get(state),
+        (&Method::Put, "/api/wifi/radio") => wifi_radio::radio_set(state, body),
         (&Method::Get, "/api/wifi/guest") => wifi::guest_status(state),
         (&Method::Put, "/api/wifi/guest") => wifi::guest_set(state, body),
         (&Method::Get, "/api/homemode") => homemode::homemode_get(state),
@@ -328,6 +332,15 @@ pub fn route(method: &Method, path: &str, state: &AppState, body: &[u8]) -> (u16
         (&Method::Put, "/api/scheduler/jobs") => scheduler::jobs_update(state, body),
         (&Method::Delete, "/api/scheduler/jobs") => scheduler::jobs_delete(state, body),
         (&Method::Put, "/api/scheduler/jobs/toggle") => scheduler::jobs_toggle(state, body),
+        // Scenario engine
+        (&Method::Get, "/api/scenario") => scenario::scenario_get(state),
+        (&Method::Put, "/api/scenario") => scenario::scenario_put(state, body),
+        (&Method::Get, "/api/scenario/template") => scenario::scenario_template(state),
+        (&Method::Post, "/api/scenario/pin") => scenario::scenario_pin(state, body),
+        (&Method::Put, "/api/scenario/enabled") => scenario::scenario_enabled(state, body),
+        (&Method::Post, "/api/scenario/apply") => scenario::scenario_apply(state, body),
+        (&Method::Get, "/api/scenario/scan") => scenario::scenario_scan(state),
+        (&Method::Get, "/api/scenario/log") => scenario::scenario_log(state),
         // AT terminal
         (&Method::Post, "/api/at/send") => at_terminal::at_send(state, body),
         (&Method::Get, "/api/at/port") => at_terminal::at_port(state),

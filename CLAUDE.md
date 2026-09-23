@@ -1,5 +1,28 @@
 # CLAUDE.md — ZTE U60 Pro Project Guidelines
 
+## Global requirement — ZTE firmware auto-update stays OFF, always
+
+**The owner's hard rule, and a design requirement for everything in this
+project: ZTE's firmware auto-update (FOTA) is never turned on.** Not by code,
+not by a script, not by a UI toggle, not "just to test".
+
+- Why: a firmware upgrade overwrites `/etc/rc.local` (every autostart in this
+  project is gone), and from B28 on ZTE closed the interface used to enable
+  ADB — upgrade once and there is no way back in.
+- The kit already enforces it: `onboard/device/install.sh` → `fota_off()` sets
+  `dm_update_mode=0`; `install.sh status` reports it as 「自动升级: 已关闭」.
+- "Off" looks like: `uci get zwrt_zte_dm.dm_update.dm_update_mode` = `0` and
+  `zwrt_zte_dm.dm_update.TURNOFFPOLLING` = `1`.
+- Never add anything that can flip it back: no `set_update_mode` with a
+  non-zero mode, no `confirm_download`/`confirm_install`, no admin-web or app
+  control for it, no scenario action that reaches it (it is not, and must not
+  be, in `scenario.rs`'s `ALLOWED_PATHS`).
+- `zte_dm` itself keeps running — it is in the boot sync barrier below. Off
+  means the mode, not the daemon.
+- If you ever find it on, tell the owner. Do not "fix" it silently either way.
+- Not the same thing as the data service's own updater (zwrt-datad OTA): that
+  one is removed from our fork for a separate reason (no external dependencies).
+
 ## Device Overview
 - **Model**: ZTE U60 Pro 5G CPE router
 - **OS**: OpenWrt 23.05.4 on Qualcomm SDX75 (aarch64, musl libc)
@@ -82,6 +105,38 @@ ubus call zwrt_data get_wwaniface '{"source_module":"zte_topsw_data","cid":1}'
 ```
 
 ---
+
+## Scenario Engine — standing authorisation, and its limits
+
+`zte-agent/src/scenario.rs` changes Wi-Fi by itself when the surroundings
+change. The device owner authorised that specific behaviour on 2026-09-22.
+Treat it as a narrow exception to the "ask before changing Wi-Fi" rule below,
+not as a general licence:
+
+- **Authorised, no prompt:** the engine enabling/disabling the AP interfaces
+  (`wireless.main_2g/main_5g.disabled`) via `wifi_radio::apply`, and the CHILL
+  region/on-off actions, when driven by a scenario the owner configured.
+- **Still requires asking, every time:** eSIM profile switches, APN changes,
+  network-mode/band locking, reboots, and edits to `/etc/rc.local`. The engine's
+  `ALLOWED_PATHS` allow-list enforces most of this in code — eSIM is absent from
+  it on purpose, because `esim.rs` reboots the device when a profile switch does
+  not converge and this device is someone's only uplink.
+- **Never:** widening `ALLOWED_PATHS` to reach `/api/device/reboot`,
+  `/api/device/factory-reset`, `/api/system/kill-bloat` or the eSIM endpoints.
+  A human typing a scheduler job is a different risk class from something that
+  fires on its own when you walk into a room.
+
+Two device facts the engine is built around, both measured, both easy to get
+wrong again:
+
+- **`ubus call zwrt_wlan reload` is not reliable.** The same uci write took
+  effect in 8 seconds once and did nothing at all for a full 60 seconds another
+  time. Any code that writes uci, reloads and assumes success is wrong —
+  `scripts/homemode.sh`'s `apply_wifi()` is written that way. Poll until the
+  change is observable.
+- **`iw list`'s interface-combination table is advisory on this chip**, and the
+  phy index changes on every reload. Discover the phy each time; never cache it,
+  and never reason from that table.
 
 ## Other Device Notes
 

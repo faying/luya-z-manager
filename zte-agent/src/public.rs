@@ -26,7 +26,7 @@ fn sh(cmd: &str) -> String {
         .unwrap_or_default()
 }
 
-pub fn public_status(_state: &AppState) -> (u16, Value) {
+pub fn public_status(state: &AppState) -> (u16, Value) {
     // ── Network (signal / type / operator / connection) ──
     let net = ubus::call("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}")).unwrap_or(json!({}));
     let nettype = s(&net, "network_type"); // "SA" | "NSA" | "LTE" | ""
@@ -131,7 +131,8 @@ pub fn public_status(_state: &AppState) -> (u16, Value) {
                     "tailscale": { "running": ts_running, "installed": ts_installed, "node": ts_node },
                     "chill": { "state": chill_state_str, "reason": chill_reason },
                     "home_mode": { "present": hm_present, "enabled": hm_enabled, "mode": hm_mode },
-                }
+                },
+                "scenario": crate::scenario::public_summary(&state.scenario),
             }
         }),
     )

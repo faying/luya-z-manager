@@ -9,6 +9,14 @@
 # re-run after editing the scripts.
 #
 # Uninstall:  ./scripts/install-homemode.sh uninstall
+#
+# SUPERSEDED by the scenario engine (zte-agent/src/scenario.rs), which does the
+# same job with real verification instead of assuming `ubus call zwrt_wlan
+# reload` worked — it does not, reliably. The two MUST NOT run together: this
+# worker writes wireless.wifiN.disabled from cron every minute while the engine
+# writes wireless.main_Ng.disabled from its own tick, and each would see the
+# other's edits as the user taking over. The guard below refuses to install
+# while a configured engine is present.
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 
@@ -18,6 +26,19 @@ SSH="ssh -p $SSH_PORT -o StrictHostKeyChecking=no root@$DEVICE"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 CRON_LINE="* * * * * /data/homemode.sh"
 RC_LINE="sh /data/homemode-bootsafe.sh &"
+
+# Refuse to add a second writer of the wireless config. Checked on the device
+# rather than locally, because that is where the conflict would actually happen.
+if [ "$1" != "uninstall" ]; then
+    if $SSH 'test -s /data/scenario/scenarios.json && grep -q "\"scenarios\"[[:space:]]*:[[:space:]]*\[[[:space:]]*{" /data/scenario/scenarios.json' 2>/dev/null; then
+        echo "REFUSING: the scenario engine is configured on $DEVICE." >&2
+        echo "  It already manages Wi-Fi per scenario, and running this cron worker" >&2
+        echo "  alongside it means two processes fighting over the same uci keys." >&2
+        echo "  Turn the engine off first (PUT /api/scenario/enabled {\"enabled\":false})" >&2
+        echo "  or clear its config, then re-run this." >&2
+        exit 1
+    fi
+fi
 
 if [ "$1" = "uninstall" ]; then
     echo "Uninstalling home mode from $DEVICE ..."

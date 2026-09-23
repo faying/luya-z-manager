@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/lib/hooks/useApi";
@@ -180,6 +181,13 @@ export default function HomeModePage() {
           ) : undefined
         }
       />
+
+      <p className="mb-4 rounded-md border border-border px-3 py-2 text-sm text-text-dim">
+        {t("homemode.superseded", "Home Mode has been replaced by Scenarios; the two can't run together.")}{" "}
+        <Link href="/router/scenario" className="text-accent underline underline-offset-2 hover:text-accent-hover">
+          {t("homemode.supersededLink", "Open Scenarios →")}
+        </Link>
+      </p>
 
       {error && <ErrorBanner message={error.message} />}
 

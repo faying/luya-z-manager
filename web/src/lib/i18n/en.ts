@@ -52,6 +52,7 @@ export const en = {
     wifi: "Wi-Fi",
     wifiGuest: "Guest Wi-Fi",
     homeMode: "Home Mode",
+    scenario: "Scenarios",
     lan: "LAN / DHCP",
     dns: "DNS / DoH",
     firewall: "Firewall",

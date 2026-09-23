@@ -54,6 +54,7 @@ export const zh = {
     wifi: "Wi-Fi",
     wifiGuest: "访客 Wi-Fi",
     homeMode: "回家模式",
+    scenario: "情景模式",
     lan: "局域网 / DHCP",
     dns: "DNS / DoH",
     firewall: "防火墙",

@@ -153,6 +153,13 @@ pub fn wifi_status(_state: &AppState) -> (u16, Value) {
 // ---------------------------------------------------------------------------
 
 pub fn wifi_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
+    // Serialise against the other writers of the `wireless` package (the
+    // scenario applier and homemode's scan wake). Without this an admin-UI save
+    // can land between two steps of a scenario apply and leave it half-applied.
+    let _wifi_guard = match crate::wifi_radio::WIFI_APPLY_LOCK.lock() {
+        Ok(g) => g,
+        Err(_) => return (503, json!({"ok": false, "error": "wifi lock poisoned"})),
+    };
     let parsed: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),

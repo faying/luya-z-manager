@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use crate::at_cmd::AtPort;
 use crate::auth::AuthState;
 use crate::charge_policy::ChargeLimitEnforcer;
+use crate::scenario::Engine as ScenarioEngine;
 use crate::scheduler::Scheduler;
 use crate::sms_forward::SmsForwarder;
 use crate::system::{self, CpuTracker, ProcessTracker, SpeedTracker};
@@ -18,6 +19,7 @@ pub struct AppState {
     pub at_port: AtPort,
     pub doh: std::sync::Arc<crate::doh::DohProxy>,
     pub scheduler: Arc<Scheduler>,
+    pub scenario: Arc<ScenarioEngine>,
     pub chill: crate::chill::ChillAdmin,
     pub esim: crate::esim::EsimAdmin,
     pub speedtest: crate::speedtest::SpeedTest,
@@ -35,6 +37,7 @@ impl AppState {
             at_port: AtPort::new(),
             doh: std::sync::Arc::new(crate::doh::DohProxy::new()),
             scheduler: Arc::new(Scheduler::new()),
+            scenario: Arc::new(ScenarioEngine::new()),
             chill: crate::chill::ChillAdmin::new(),
             esim: crate::esim::EsimAdmin::new(),
             speedtest: crate::speedtest::SpeedTest::new(),
