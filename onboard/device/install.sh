@@ -212,6 +212,9 @@ do_devui() {
     DD=/data/plugins/zwrt-datad
     mkdir -p "$D/ui" "$DD"
     install_guard
+    # u60-uid would read the kill below as a crash (alert, relaunch race).
+    # Stopping it leaves the UI running; it is started again at the end.
+    [ -x /etc/init.d/u60-uid ] && /etc/init.d/u60-uid stop >/dev/null 2>&1
     [ -x /etc/init.d/zwrt-datad ] && /etc/init.d/zwrt-datad stop >/dev/null 2>&1
     killall -9 u60pro-devui zwrt-datad 2>/dev/null
     sleep 1

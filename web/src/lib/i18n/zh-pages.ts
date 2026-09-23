@@ -733,6 +733,7 @@ export const zhPages: Record<string, Record<string, string>> = {
     "kindDatadCrash": "数据服务（zwrt-datad）异常退出",
     "kindWifiTakeover": "Wi-Fi 看门狗重新打开了 Wi-Fi",
     "kindWifiRestoreFailed": "Wi-Fi 看门狗没能打开 Wi-Fi",
+    "kindSmsTest": "测试短信",
     "kindSmsFailed": "告警短信发送失败",
     "smsOn": "已开启：用本机 SIM 发到 {{n}}。",
     "smsOff": "未配置。填号码之前，告警只显示在这里和触屏上。",

@@ -59,6 +59,8 @@ export function kindLabel(t: TFunction, kind: string): string {
       return t("alerts.kindWifiTakeover", "Wi-Fi watchdog turned Wi-Fi back on");
     case "wifi-restore-failed":
       return t("alerts.kindWifiRestoreFailed", "Wi-Fi watchdog could not turn Wi-Fi on");
+    case "sms-test":
+      return t("alerts.kindSmsTest", "Test SMS");
     case "sms-failed":
       return t("alerts.kindSmsFailed", "Alert SMS could not be sent");
     default:
