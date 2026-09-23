@@ -15,7 +15,11 @@
 #                       Alpine edge 会漂，所以用设备上验证过的那份
 #
 # 环境变量：DEVUI_REPO（默认 ../zte-u60-pro-mu5250-touch-ui）、FLEET_HOST（默认 u60）、
-#           REFRESH_FLEET=1（重新从设备拉 datad/eSIM，不用缓存）
+#           REFRESH_FLEET=1（重新从设备拉 datad/eSIM，不用缓存）、
+#           DEVUI_BIN=路径（用这个触屏二进制，不用 $DEVUI_REPO/u60pro-devui.stripped）、
+#           DATAD_BIN=路径（用这个 zwrt-datad，不用 onboard/cache 里缓存的；eSIM 仍取缓存）
+# zte-agent：本机有 cargo-zigbuild 就用，没有就走 Docker（messense/cargo-zigbuild），
+#           不要求在 Mac 上装 Rust 工具链。
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -60,7 +64,12 @@ cp "$WORK/usr/sbin/dropbear" "$PL/dropbear"
 
 # ── 高级后台 ────────────────────────────────────────────────────────────────
 step "zte-agent（cargo zigbuild）"
-( cd "$ROOT" && cargo zigbuild --release --target aarch64-unknown-linux-musl -p zte-agent 2>&1 | tail -1 )
+if command -v cargo-zigbuild >/dev/null 2>&1; then
+  ( cd "$ROOT" && cargo zigbuild --release --target aarch64-unknown-linux-musl -p zte-agent 2>&1 | tail -1 )
+else
+  docker run --rm -v "$ROOT":/src -w /src -e CARGO_TARGET_DIR=/src/target messense/cargo-zigbuild:latest \
+    cargo zigbuild --release --target aarch64-unknown-linux-musl -p zte-agent 2>&1 | tail -1
+fi
 cp "$ROOT/target/aarch64-unknown-linux-musl/release/zte-agent" "$PL/zte-agent"
 
 step "管理网页（next build）"
@@ -71,8 +80,9 @@ tar czf "$PL/admin.tgz" -C "$ROOT/web/out" .
 
 # ── devui ───────────────────────────────────────────────────────────────────
 step "devui（${DEVUI_REPO}）"
-[ -f "$DEVUI_REPO/u60pro-devui.stripped" ] || die "没有 u60pro-devui.stripped，先在触屏界面仓库构建（见其 README）"
-cp "$DEVUI_REPO/u60pro-devui.stripped" "$PL/devui/u60pro-devui"
+DEVUI_BIN="${DEVUI_BIN:-$DEVUI_REPO/u60pro-devui.stripped}"
+[ -f "$DEVUI_BIN" ] || die "没有触屏二进制 ${DEVUI_BIN}（先构建，或用 DEVUI_BIN=… 指定）"
+cp "$DEVUI_BIN" "$PL/devui/u60pro-devui"
 cp "$DEVUI_REPO/scripts/start.sh" "$DEVUI_REPO/scripts/install-autostart.sh" "$PL/devui/"
 ( cd "$DEVUI_REPO/ui" && tar czf "$PL/devui/ui.tgz" --exclude 'functions/chill.html' -- * )
 
@@ -88,7 +98,12 @@ fi
 mkdir -p "$WORK/fleet"
 tar xzf "$FLEET" -C "$WORK/fleet"
 [ -x "$WORK/fleet/esim/lpac" ] && [ -f "$WORK/fleet/esim/lpac.sh" ] || die "缓存里没有完整的 esim/"
-cp "$WORK/fleet/plugins/zwrt-datad/zwrt-datad" "$PL/devui/zwrt-datad"
+if [ -n "${DATAD_BIN:-}" ]; then
+  [ -f "$DATAD_BIN" ] || die "DATAD_BIN 不存在: $DATAD_BIN"
+  cp "$DATAD_BIN" "$PL/devui/zwrt-datad"
+else
+  cp "$WORK/fleet/plugins/zwrt-datad/zwrt-datad" "$PL/devui/zwrt-datad"
+fi
 tar czf "$PL/esim.tgz" -C "$WORK/fleet/esim" .
 
 # ── 脚本 + 文档 + 清单 ────────────────────────────────────────────────────────
@@ -104,7 +119,13 @@ chmod 755 "$KIT/install.sh"
   echo "来源："
   echo "  u60p          $(rev "$ROOT")$(dirty "$ROOT" zte-agent web onboard)"
   echo "  u60pro-devui  $(rev "$DEVUI_REPO")$(dirty "$DEVUI_REPO" src ui scripts)"
-  echo "  datad/eSIM    $FLEET_HOST 上 /data（缓存于 $(date -r "$FLEET" '+%Y-%m-%d %H:%M')）"
+  echo "  u60pro-devui  二进制 $(basename "$DEVUI_BIN") $(sha256 "$DEVUI_BIN" | cut -c1-12)"
+  if [ -n "${DATAD_BIN:-}" ]; then
+    echo "  zwrt-datad    $(basename "$DATAD_BIN") $(sha256 "$DATAD_BIN" | cut -c1-12)"
+    echo "  eSIM          $FLEET_HOST 上 /data（缓存于 $(date -r "$FLEET" '+%Y-%m-%d %H:%M')）"
+  else
+    echo "  datad/eSIM    $FLEET_HOST 上 /data（缓存于 $(date -r "$FLEET" '+%Y-%m-%d %H:%M')）"
+  fi
   echo "  dropbear      $(basename "$DROPBEAR_URL")"
   echo
   echo "sha256（install.sh 开头会逐个校验）："
