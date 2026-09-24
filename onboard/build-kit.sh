@@ -24,7 +24,8 @@
 #           DEVUI_BIN=路径（用这个触屏二进制，不用 $DEVUI_REPO/u60pro-devui.stripped）、
 #           UID_BIN=路径（u60-uid，默认 $DEVUI_REPO/u60-uid）、
 #           DATAD_BIN=路径（用这个 zwrt-datad，不用 onboard/cache 里缓存的；eSIM 仍取缓存）
-#           DEVUI_FONTS_DIR=目录（触屏的 Nunito-600/700/800.ttf 和 OFL-Nunito.txt，不进任何 git；
+#           DEVUI_FONTS_DIR=目录（触屏的 Nunito-600/700/800.ttf、OFL-Nunito.txt 和中文兜底字体
+#           u60-cjk-fallback.ttf、OFL-ResourceHanRounded.txt，不进任何 git；
 #           没有就不打字体，触屏退回设备自带的 Roboto，能用只是数字不是圆体）
 #           这些也可以写进 onboard/kit.local.env（不进 git），每次打包自动读取，
 #           免得每次手敲——尤其 DEVUI_BIN / DATAD_BIN，默认值多半不是你要的（见下）。
@@ -121,6 +122,12 @@ if [ -n "${DEVUI_FONTS_DIR:-}" ]; then
   mkdir -p "$PL/devui/fonts"
   for f in Nunito-600.ttf Nunito-700.ttf Nunito-800.ttf OFL-Nunito.txt; do
     [ -f "$DEVUI_FONTS_DIR/$f" ] || die "DEVUI_FONTS_DIR=${DEVUI_FONTS_DIR} 里缺 $f"
+    cp "$DEVUI_FONTS_DIR/$f" "$PL/devui/fonts/"
+  done
+  # 中文兜底字体（Resource Han Rounded 子集，OFL）：设备自带字体找不到时用，
+  # 生成：touch-ui 的 scripts/fonts/build-cjk-fallback.sh <DEVUI_FONTS_DIR>
+  for f in u60-cjk-fallback.ttf OFL-ResourceHanRounded.txt; do
+    [ -f "$DEVUI_FONTS_DIR/$f" ] || die "DEVUI_FONTS_DIR=${DEVUI_FONTS_DIR} 里缺 ${f}（先跑 touch-ui 的 scripts/fonts/build-cjk-fallback.sh）"
     cp "$DEVUI_FONTS_DIR/$f" "$PL/devui/fonts/"
   done
 else
