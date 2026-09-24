@@ -17,13 +17,12 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 mode: rule
-# v6 走 TUN（2026-09-24 起）。局域网设备有运营商下发的公网 v6，原来这里是 false，TUN 只接 v4，
-# 客户端直接用 v6 地址（写死的 v6、自带 DoH 拿到的 AAAA）的连接就绕过代理直连出去了。
-# 打开后 TUN 多一个 v6 地址、auto-route 给 br-lan 进来的 v6 也建规则；国内 v6 段已在下面
-# ${CN_CIDR} 里（cn.list 带 3400 多条 v6），照样在内核层直连。
-# dns.ipv6 仍是 false：AAAA 回 NODATA，有域名的连接还是走 v4 fake-ip，v6 只兜住没域名的那部分。
-# 不设 fake-ip-range6。做法对照过 OpenClash（默认全关 v6）、ShellCrash（全开）、nikki（代理 v6）。
-ipv6: true
+# v6 不进 TUN（2026-09-24 实测后关掉）。当天上午曾打开（ipv6: true），用来兜住局域网设备
+# 直接用 v6 地址绕过代理的连接；但实测它在**一个包都没有**时也让 mihomo 多吃约单核 12%、
+# 唤醒翻倍，odhcpd 再多约 2.7%。改为从源头关掉局域网 v6：u60-guard 在
+# /data/u60-guard/lan-ipv6-off 存在时保持 br-lan 的 disable_ipv6=1，设备拿不到 v6，
+# 也就没有 v6 连接可绕过。要重新打开，两处都要改回来。
+ipv6: false
 log-level: warning
 allow-lan: false
 find-process-mode: 'off'
@@ -106,7 +105,7 @@ dns:
   # 与三个 v6 地址）。⚠ 停止 mihomo 时必须同步回滚 dnsmasq，否则是全屋断网而非直连。
   listen: 127.0.0.1:53
 
-  ipv6: false                 # AAAA 回 NODATA，有域名的连接走 v4 fake-ip；没域名的 v6 由上面顶层 ipv6: true 接进 TUN
+  ipv6: false                 # AAAA 回 NODATA：客户端只用 v4 fake-ip（局域网 v6 已关）
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
 

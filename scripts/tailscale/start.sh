@@ -24,6 +24,9 @@ D=${TS_DIR:-/data/tailscale}
 LOG=${TS_LOG:-/data/tailscaled.log}
 SOCK=/tmp/tailscaled.sock
 
+mkdir -p "$D/state"
+# the tun device node is not always there this early in boot
+[ -c /dev/net/tun ] || { mkdir -p /dev/net; mknod /dev/net/tun c 10 200; }
 pidof tailscaled >/dev/null && exit 0
 
 TS_HOSTNAME=u60pro
@@ -43,6 +46,7 @@ fi
 # shellcheck disable=SC2086 # the extra flags/env are deliberately word-split
 env $TS_TAILSCALED_ENV nohup "$D/tailscaled" --state="$D/state/tailscaled.state" --statedir="$D/state" \
     --socket="$SOCK" --port=41641 --tun=tailscale0 $TS_TAILSCALED_FLAGS >>"$LOG" 2>&1 &
+sleep 4   # let tailscaled open its socket before "up"
 
 "$D/tailscale" --socket="$SOCK" up ${TS_ROUTES:+--advertise-routes=$TS_ROUTES} --accept-routes \
     --accept-dns=false --hostname="$TS_HOSTNAME" --timeout=30s >/tmp/tailscale-up.log 2>&1 &
