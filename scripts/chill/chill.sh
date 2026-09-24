@@ -10,6 +10,7 @@
 #   chill.sh pause <分钟>        临时直连，到点自动恢复
 #   chill.sh safe-start          首装用：挂 5 分钟死人开关，没 confirm 就自动 stop
 #   chill.sh confirm             撤销 safe-start 的死人开关
+#   chill.sh profile [eco|standard|perf]   看/改档位（见下方「档位」）
 #
 # 目标环境是设备上的 busybox ash，**不是 bash**。以下写法一律不要用：
 #   pgrep -c（busybox 不支持 -c）、setsid、timeout、数组、[[ ]]、local -n、进程替换。
@@ -34,11 +35,15 @@ EVENTS="$CHILL_DIR/events.log"
 DISABLED="$CHILL_DIR/disabled"
 GAVEUP="$CHILL_DIR/gaveup"
 PAUSE_UNTIL="$CHILL_DIR/pause_until"
+PROFILE_FILE="$CHILL_DIR/profile"     # 档位：eco / standard / perf，没有 = standard
+MODE_FILE="$CHILL_DIR/mode"           # 最近一次的出口模式（rule/global/direct），重启核心后恢复
 
 STATE=/tmp/chill.state
 CORE_PID=/tmp/chill.core.pid
 LOG=/tmp/chill.log
 RULES_BEFORE=/tmp/chill.rules.before
+RESTART_FLAG=/tmp/chill.restart       # 有它 = 监督循环下一拍平稳重启核心（不算崩溃）
+THERMAL_ECO=/tmp/chill.thermal-eco    # 有它 = 因温度暂时按 eco 跑（重启设备自然清掉）
 
 FAKE_IP_NET=198.18.0.0/16
 TABLE=2022
@@ -63,6 +68,10 @@ CHILL_API_LAN="${CHILL_API_LAN:-0}"
 CHILL_BYPASS_IP="${CHILL_BYPASS_IP:-}"
 CHILL_API_ALLOW_IP="${CHILL_API_ALLOW_IP:-}"
 CHILL_TEMP_HOT="${CHILL_TEMP_HOT:-$TEMP_HOT_DEFAULT}"
+# 温度到这里先降到 eco，再高到 CHILL_TEMP_HOT 才停核直连。**默认不设 = 不自动降档**：
+# 降档要重启核心（断一下连接），而且阈值要等实测（TODOS.md「稳定性与耗电专场」）。
+CHILL_TEMP_WARM="${CHILL_TEMP_WARM:-}"
+COOL_HOLD=600               # 降到 WARM-10°C 以下持续这么久才回到原档位
 CHILL_CORE_RSS_MAX="${CHILL_CORE_RSS_MAX:-$CORE_RSS_MAX_DEFAULT}"
 
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*" >> "$LOG" 2>/dev/null || true; }
@@ -127,7 +136,8 @@ write_state() {
 {"state":"$_state","reason":$( [ -n "$_reason" ] && echo "\"$_reason\"" || echo null ),
 "cpuss_c":$(( $(max_temp) / 1000 )),"mem_avail_mb":$(mem_avail_mb),
 "core_pid":$_pid,"started_at":"${started_at:-}","updated_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-"bypass_stale":$_bypass,"rules_drift":${rules_drift:-false},"mem_pressure":${mem_pressure:-false}}
+"bypass_stale":$_bypass,"rules_drift":${rules_drift:-false},"mem_pressure":${mem_pressure:-false},
+"profile":"$(profile_read)","profile_effective":"$(profile_effective)","thermal_eco":$([ -f "$THERMAL_ECO" ] && echo true || echo false)}
 EOF
   mv "$STATE.tmp" "$STATE" 2>/dev/null
 }
@@ -314,6 +324,65 @@ build_filters() {
 # ── 渲染 ────────────────────────────────────────────────────────────────────
 # 用 awk 按 ENVIRON 做字面量替换（index/substr），不用 gsub——值里含 / 和 & 无碍。
 # 值含单引号或换行则拒绝渲染：模板把占位符写在 YAML 单引号内，含引号会破坏结构。
+# ── 档位 ─────────────────────────────────────────────────────────────────────
+# 只动三类开关，都是省电/发热和切换速度之间的取舍，不碰分流规则和节点：
+#                       eco       standard（= 以前唯一的一套）  perf
+#   节点探测间隔 (s)     3600      1800                          600
+#   TCP keep-alive (s)   900       600                           120
+#   tcp-concurrent       false     false                         true（多个 IP 并发握手，连得快、多耗一点）
+#   GOMAXPROCS           2         不设（4 核）                  不设
+# GOMAXPROCS 只在核心启动时生效，所以进出 eco 要重启核心（断几秒）；standard↔perf 热重载。
+# 数值是按取舍方向定的初值，没有实测；实测放在「稳定性与耗电专场」。
+profile_read() {
+  _p=$(cat "$PROFILE_FILE" 2>/dev/null)
+  case "$_p" in eco|standard|perf) echo "$_p" ;; *) echo standard ;; esac
+}
+profile_effective() {
+  if [ -f "$THERMAL_ECO" ]; then echo eco; else profile_read; fi
+}
+profile_vars() { # <profile> → HC_INTERVAL KEEPALIVE TCP_CONCURRENT GMP
+  case "$1" in
+    eco)  HC_INTERVAL=3600; KEEPALIVE=900; TCP_CONCURRENT=false; GMP=2 ;;
+    perf) HC_INTERVAL=600;  KEEPALIVE=120; TCP_CONCURRENT=true;  GMP= ;;
+    *)    HC_INTERVAL=1800; KEEPALIVE=600; TCP_CONCURRENT=false; GMP= ;;
+  esac
+}
+
+# ── 出口模式的保存与恢复 ───────────────────────────────────────────────────────
+# 分组的选择有 store-selected 记着，模式（rule/global/direct）没有：热重载和重启核心
+# 都会回到模板里的 mode: rule，「全部直连」「全局」就被悄悄换掉了。每分钟和每次
+# 重载/重启之前记一次，核心起来后按记下的恢复。
+api_mode() {
+  curl -s -m 3 -H "Authorization: Bearer ${CHILL_SECRET:-}" http://127.0.0.1:9999/configs 2>/dev/null \
+    | sed -n 's/.*"mode":"\([a-z]*\)".*/\1/p'
+}
+save_mode() {
+  _m=$(api_mode)
+  case "$_m" in
+    rule|global|direct) [ "$(cat "$MODE_FILE" 2>/dev/null)" = "$_m" ] || echo "$_m" > "$MODE_FILE" ;;
+  esac
+}
+restore_mode() {
+  _m=$(cat "$MODE_FILE" 2>/dev/null)
+  case "$_m" in global|direct) ;; *) return 0 ;; esac
+  [ "$(api_mode)" = "$_m" ] && return 0
+  curl -s -m 3 -o /dev/null -X PATCH -H "Authorization: Bearer ${CHILL_SECRET:-}" \
+    --data "{\"mode\":\"$_m\"}" http://127.0.0.1:9999/configs 2>/dev/null
+  log "出口模式恢复为 $_m"
+}
+
+# 热重载：渲染 → PUT /configs。渲染不过就保留旧配置。模式先记后恢复。
+do_reload() {
+  save_mode
+  render || return 1
+  curl -s -m 5 -o /dev/null -w '%{http_code}' -X PUT \
+    -H "Authorization: Bearer ${CHILL_SECRET:-}" \
+    --data "{\"path\":\"$CONFIG\"}" "http://127.0.0.1:9999/configs?force=true" \
+    | grep -q '^2' || return 1
+  restore_mode
+  return 0
+}
+
 render() {
   mkdir -p "$RUN_DIR"
   [ -f "$TEMPLATE" ] || { log "render: 缺 template.yaml"; return 1; }
@@ -347,6 +416,8 @@ render() {
   # 以为完了。chill.env 是普通变量赋值（不带 export），source 进来的变量不会
   # 自动出现在子进程的 ENVIRON 里；先前这里漏了这一项，导致 template.yaml 里
   # 的 ${SUB_SHOUHOU} 永远不会被替换，会原样留在渲染结果里传给 mihomo。
+  profile_vars "$(profile_effective)"
+  HC_INTERVAL="$HC_INTERVAL" KEEPALIVE="$KEEPALIVE" TCP_CONCURRENT="$TCP_CONCURRENT" \
   CONTROLLER="$CONTROLLER" SUB_SHOUHOU="${SUB_SHOUHOU:-}" \
   CHILL_SECRET="${CHILL_SECRET:-}" \
   FILTER_UNION="${FILTER_UNION:-}" EXCLUDE_FILTER="${EXCLUDE_FILTER:-}" \
@@ -444,6 +515,39 @@ next_backoff() {
   log "降级第 ${degrade_n} 次，退避 ${_w} 秒"
 }
 
+# 平稳重启核心：记下模式、停核、清理，回到外层循环按新档位重新起（不计崩溃、不退避）。
+restart_core() {
+  save_mode
+  event "restart -> $1"
+  log "按档位 $1 重启核心"
+  kill_core
+  flush
+}
+
+# 温度降档（CHILL_TEMP_WARM 设了才有）。返回 0 = 已经重启核心，调用方要 break。
+thermal_step() {
+  [ -n "$CHILL_TEMP_WARM" ] || return 1
+  if [ ! -f "$THERMAL_ECO" ]; then
+    cool_since=0
+    [ "$(profile_read)" = eco ] && return 1
+    [ "$1" -ge "$CHILL_TEMP_WARM" ] || return 1
+    : > "$THERMAL_ECO"
+    event "warm cpuss=$(( $1 / 1000 )) -> eco"
+    restart_core eco
+    return 0
+  fi
+  if [ "$1" -ge $((CHILL_TEMP_WARM - TEMP_RECOVER_DELTA)) ]; then
+    cool_since=0; return 1
+  fi
+  now=$(date +%s)
+  [ "${cool_since:-0}" -gt 0 ] || { cool_since=$now; return 1; }
+  [ $((now - cool_since)) -ge "$COOL_HOLD" ] || return 1
+  rm -f "$THERMAL_ECO"; cool_since=0
+  event "cool cpuss=$(( $1 / 1000 )) -> $(profile_read)"
+  restart_core "$(profile_read)"
+  return 0
+}
+
 # §2 要求每 60 秒截断日志。不截断的话 /tmp 是内存盘，长期运行会把内存吃掉。
 truncate_log() {
   [ -f "$LOG" ] || return 0
@@ -485,7 +589,12 @@ run() {
     [ "$CHILL_API_LAN" = "1" ] && rebuild_api_guard
     ip route del unreachable "$FAKE_IP_NET" 2>/dev/null || true
 
-    "$BIN" -d "$CHILL_DIR" -f "$CONFIG" >> "$LOG" 2>&1 &
+    # render() 刚按当前档位设过 GMP（eco = 2 核）
+    if [ -n "$GMP" ]; then
+      GOMAXPROCS="$GMP" "$BIN" -d "$CHILL_DIR" -f "$CONFIG" >> "$LOG" 2>&1 &
+    else
+      "$BIN" -d "$CHILL_DIR" -f "$CONFIG" >> "$LOG" 2>&1 &
+    fi
     echo $! > "$CORE_PID"
     sleep 5
 
@@ -498,6 +607,7 @@ run() {
     # DNS 与绕行都要在核心确认可用之后才施加
     if dns_answers; then apply_dns; else log "dns.listen 无应答，跳过 apply_dns"; fi
     apply_bypass
+    restore_mode
 
     event "started -> running"
     write_state running ""
@@ -505,8 +615,19 @@ run() {
 
     # ---- 监督循环 ----
     while :; do
-      i=0; while [ $i -lt 5 ]; do sleep 1; i=$((i+1)); done
+      # One process per tick instead of five: a background sleep plus wait,
+      # which a signal interrupts at once, so the TERM trap still fires
+      # immediately (a foreground sleep would hold it for up to 5 s).
+      sleep 5 & wait $!
       tick=$((tick+5))
+
+      # 要换档位（进出 eco）：平稳重启核心。必须在下面「子进程消失」之前处理，
+      # 否则自己杀掉的核心会被记成一次崩溃，攒三次就 gaveup。
+      if [ -f "$RESTART_FLAG" ]; then
+        rm -f "$RESTART_FLAG"
+        restart_core "$(profile_effective)"
+        break
+      fi
 
       if ! kill -0 "$(cat "$CORE_PID" 2>/dev/null)" 2>/dev/null; then
         log "子进程消失"
@@ -539,6 +660,8 @@ run() {
         next_backoff
         break
       fi
+      thermal_step "$t" && break
+      save_mode
 
       # 低内存先归因：只有核心自己 RSS 超标才停，否则只标 mem_pressure。
       # 停核这条同样要走 next_backoff，否则外层立刻重启核心、陷入快速起停循环。
@@ -603,19 +726,38 @@ case "${1:-}" in
     ;;
   restart) /etc/init.d/chill restart ;;
   reload)
-    # 要返回正确的退出码：先前写成 `… && echo 成功 || echo 失败`，失败时也返回 0，
-    # 调用方（脚本、agent）无法凭退出码判断 reload 到底成没成。
-    # mihomo 的 /configs 只认 PUT 且必须带 {"path": ...}——用 wget --post-data
-    # 发的是 POST 且空 body，两条都不对，这条 reload 路径从写出来就没真正成功过，
-    # 2026-09-17 靠 chill.rs 的订阅改 URL 功能第一次真正调用到才暴露（真机验证：
-    # 空 body 的 PUT 返回 400，带 path 的 PUT 返回 204）。
-    if render && curl -s -m 5 -o /dev/null -w '%{http_code}' -X PUT \
-         -H "Authorization: Bearer ${CHILL_SECRET:-}" \
-         --data "{\"path\":\"$CONFIG\"}" "http://127.0.0.1:9999/configs?force=true" \
-         | grep -q '^2'; then
+    # 要返回正确的退出码：调用方（脚本、agent）凭它判断 reload 成没成。
+    # mihomo 的 /configs 只认 PUT 且必须带 {"path": ...}（真机验证：空 body 400，带 path 204）。
+    if do_reload; then
       echo "reloaded"
     else
       echo "reload 失败（配置未通过校验时会保留旧配置）" >&2
+      exit 1
+    fi
+    ;;
+  profile)
+    if [ -z "${2:-}" ]; then
+      echo "$(profile_read) $(profile_effective)"
+      exit 0
+    fi
+    case "$2" in eco|standard|perf) ;; *) echo "档位只能是 eco / standard / perf" >&2; exit 2 ;; esac
+    old=$(profile_effective)
+    if [ "$2" = standard ]; then rm -f "$PROFILE_FILE"; else echo "$2" > "$PROFILE_FILE"; fi
+    new=$(profile_effective)
+    if [ "$old" = "$new" ]; then echo "档位 $2（实际 ${new}，不用动核心）"; exit 0; fi
+    if ! grep -q '"state":"running"' "$STATE" 2>/dev/null; then
+      echo "档位 $2（核心没在跑，下次启动生效）"; exit 0
+    fi
+    profile_vars "$old"; g_old=$GMP
+    profile_vars "$new"; g_new=$GMP
+    if [ "$g_old" != "$g_new" ]; then
+      : > "$RESTART_FLAG"
+      echo "档位 ${2}：重启核心（约 10 秒）"
+    elif do_reload; then
+      event "reload -> $new"
+      echo "档位 ${2}：已热重载"
+    else
+      echo "档位 ${2}：热重载失败，核心仍按原配置运行" >&2
       exit 1
     fi
     ;;
@@ -651,5 +793,5 @@ case "${1:-}" in
     [ -f "$CHILL_DIR/deadman.pid" ] && kill "$(cat "$CHILL_DIR/deadman.pid")" 2>/dev/null
     echo "已确认"
     ;;
-  *) echo "usage: $0 {run|start|stop|restart|reload|status|flush|pause <min>|safe-start|confirm}"; exit 1 ;;
+  *) echo "usage: $0 {run|start|stop|restart|reload|status|flush|pause <min>|safe-start|confirm|profile [eco|standard|perf]}"; exit 1 ;;
 esac

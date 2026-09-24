@@ -46,6 +46,10 @@ const MAIN_GROUP: &str = "🚀 节点选择";
 /// The main group's last member that was not DIRECT, so "back to proxy" knows
 /// where to go after the group was switched to DIRECT (by hand or abroad).
 const LAST_MAIN: &str = "/data/chill/last-main";
+// chill.sh restores this mode after a reload or core restart (mihomo keeps
+// group choices in cache.db, but not the mode). Written here right away;
+// chill.sh also records it once a minute for changes made elsewhere.
+const MODE_FILE: &str = "/data/chill/mode";
 const AI_GROUP: &str = "🤖 AI";
 
 // Must match chill.sh's own $BYPASS_PRIO — the `ip rule` priority its
@@ -396,7 +400,10 @@ pub fn exit_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
         _ => "rule",
     };
     match mihomo_patch_json(&agent, &format!("{MIHOMO_API}/configs"), &secret, json!({"mode": mode})) {
-        Ok(code) if code < 400 => (200, json!({"ok": true, "data": {"exit": want}})),
+        Ok(code) if code < 400 => {
+            let _ = atomic_write(MODE_FILE, format!("{mode}\n").as_bytes());
+            (200, json!({"ok": true, "data": {"exit": want}}))
+        }
         Ok(code) => (502, json!({"ok": false, "error": format!("mihomo rejected mode (HTTP {code})")})),
         Err(e) => (502, json!({"ok": false, "error": format!("mode request failed: {e}")})),
     }
@@ -506,6 +513,29 @@ fn run_chill_sh(verb: &str) -> Result<String, String> {
     } else {
         Err(format!("chill.sh {verb} failed: {}", tail(&out, 6)))
     }
+}
+
+/// PUT /api/services/chill/profile — body {"profile": "eco"|"standard"|"perf"}
+///
+/// `chill.sh profile` stores it and applies it: standard↔perf by hot reload,
+/// into or out of eco by a core restart (GOMAXPROCS only applies at start;
+/// connections drop for a few seconds). Run as a job, the reload validates
+/// the config with `mihomo -t` first. The result shows up in chill.state
+/// (`profile`, `profile_effective`, `thermal_eco`).
+pub fn profile_set(state: &AppState, body: &[u8]) -> (u16, Value) {
+    let parsed: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let want = parsed["profile"].as_str().unwrap_or("").to_string();
+    if !matches!(want.as_str(), "eco" | "standard" | "perf") {
+        return (400, json!({"ok": false, "error": "profile must be eco, standard or perf"}));
+    }
+    start_job(state, "profile", move || {
+        let (ok, out) = run_cmd(&format!("{CHILL_SH} profile {want}"));
+        if ok {
+            Ok(tail(&out, 2))
+        } else {
+            Err(format!("chill.sh profile {want} failed: {}", tail(&out, 6)))
+        }
+    })
 }
 
 /// GET /api/services/chill/job

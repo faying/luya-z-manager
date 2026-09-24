@@ -11,23 +11,30 @@
 #   ${FILTER_UNION}    四地区并集正则
 #   ${EXCLUDE_FILTER}  高倍率/到期信息节点的排除正则
 #   ${FILTER_TW} ${FILTER_JP} ${FILTER_SG} ${FILTER_US}   各地区正则
+#   ${HC_INTERVAL} ${KEEPALIVE} ${TCP_CONCURRENT}   档位（chill.sh profile_vars；standard = 1800 / 600 / false）
 #
 # 本文件的每一处「与直觉不符」的写法都来自 2026-09-16 的真机实测，改之前先看注释。
 # ─────────────────────────────────────────────────────────────────────────────
 
 mode: rule
-ipv6: false
+# v6 走 TUN（2026-09-24 起）。局域网设备有运营商下发的公网 v6，原来这里是 false，TUN 只接 v4，
+# 客户端直接用 v6 地址（写死的 v6、自带 DoH 拿到的 AAAA）的连接就绕过代理直连出去了。
+# 打开后 TUN 多一个 v6 地址、auto-route 给 br-lan 进来的 v6 也建规则；国内 v6 段已在下面
+# ${CN_CIDR} 里（cn.list 带 3400 多条 v6），照样在内核层直连。
+# dns.ipv6 仍是 false：AAAA 回 NODATA，有域名的连接还是走 v4 fake-ip，v6 只兜住没域名的那部分。
+# 不设 fake-ip-range6。做法对照过 OpenClash（默认全关 v6）、ShellCrash（全开）、nikki（代理 v6）。
+ipv6: true
 log-level: warning
 allow-lan: false
 find-process-mode: 'off'
 geodata-mode: false
 geo-auto-update: false
-tcp-concurrent: false
+tcp-concurrent: ${TCP_CONCURRENT}
 unified-delay: true
 
 # 原值 30 会把 5G 模块钉在连接态、显著增加耗电；代价是空闲长连接可能被 NAT 提前断开。
-keep-alive-interval: 600
-keep-alive-idle: 600
+keep-alive-interval: ${KEEPALIVE}
+keep-alive-idle: ${KEEPALIVE}
 
 profile: {store-selected: true, store-fake-ip: false}
 
@@ -73,7 +80,7 @@ tun:
     [${CN_CIDR},
      0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16,
      172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4,
-     fd7a:115c:a1e0::/48, fc00::/7, fe80::/10]
+     fd7a:115c:a1e0::/48, fc00::/7, fe80::/10, ff00::/8]
 
   # ✗ 这里原本有 exclude-mac-address（按设备绕行）。2026-09-16 实测确认它在本机
   #   **静默失效**：配置被接受、TUN 正常、日志无错，但内核里查不到任何一条按 MAC
@@ -99,7 +106,7 @@ dns:
   # 与三个 v6 地址）。⚠ 停止 mihomo 时必须同步回滚 dnsmasq，否则是全屋断网而非直连。
   listen: 127.0.0.1:53
 
-  ipv6: false                 # AAAA 因此返回 NODATA，客户端回落 v4 走 TUN，v6 泄漏一并缓解
+  ipv6: false                 # AAAA 回 NODATA，有域名的连接走 v4 fake-ip；没域名的 v6 由上面顶层 ipv6: true 接进 TUN
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
 
@@ -151,7 +158,7 @@ proxy-providers:
     path: ./providers/oix.yaml
     filter: '${FILTER_UNION}'
     exclude-filter: '${EXCLUDE_FILTER}'
-    health-check: {enable: true, url: "https://www.gstatic.com/generate_204", interval: 1800, timeout: 3000, lazy: true}
+    health-check: {enable: true, url: "https://www.gstatic.com/generate_204", interval: ${HC_INTERVAL}, timeout: 3000, lazy: true}
     # 快照里台湾节点被源头标成了🇨🇳（"🇨🇳 台湾 Edge 01"/"🇨🇳 台湾 HINET 01"），
     # 按名字文本（filter 已经这样做，不看 flag）判断是台湾就改回🇹🇼，不影响真正的
     # 大陆节点（它们名字里没有"台湾"字样）。
@@ -174,13 +181,13 @@ proxy-providers:
     proxy: DIRECT
     filter: '${FILTER_UNION}'
     exclude-filter: '${EXCLUDE_FILTER}'
-    health-check: {enable: true, url: "https://www.gstatic.com/generate_204", interval: 1800, timeout: 3000, lazy: true}
+    health-check: {enable: true, url: "https://www.gstatic.com/generate_204", interval: ${HC_INTERVAL}, timeout: 3000, lazy: true}
   nexi:
     type: file
     path: ./providers/nexi.yaml
     filter: '${FILTER_UNION}'
     exclude-filter: '${EXCLUDE_FILTER}'
-    health-check: {enable: true, url: "https://www.gstatic.com/generate_204", interval: 1800, timeout: 3000, lazy: true}
+    health-check: {enable: true, url: "https://www.gstatic.com/generate_204", interval: ${HC_INTERVAL}, timeout: 3000, lazy: true}
     # 同 oix：快照里台湾节点被标成了🇨🇳（"🇨🇳 Taiwan 01"…"🇨🇳 Taiwan 10"），
     # 按名字文本改回🇹🇼。
     override:
@@ -194,7 +201,7 @@ proxy-providers:
     path: ./providers/tag.yaml
     filter: '${FILTER_UNION}'
     exclude-filter: '${EXCLUDE_FILTER}'
-    health-check: {enable: true, url: "https://www.gstatic.com/generate_204", interval: 1800, timeout: 3000, lazy: true}
+    health-check: {enable: true, url: "https://www.gstatic.com/generate_204", interval: ${HC_INTERVAL}, timeout: 3000, lazy: true}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 策略组（§5，28 → 9）。每个 select 的第一项即默认值，store-selected 记住用户改动。

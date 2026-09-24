@@ -53,6 +53,8 @@ export function kindLabel(t: TFunction, kind: string): string {
       return t("alerts.kindDevuiCrash", "Touch screen UI exited unexpectedly");
     case "devui-gave-up":
       return t("alerts.kindDevuiGaveUp", "Touch screen UI kept failing; stock UI is on screen (long-press the bottom-right corner to retry)");
+    case "devui-theme-paused":
+      return t("alerts.kindDevuiThemePaused", "Automatic light/dark switching on the touch screen paused until reboot");
     case "datad-crash":
       return t("alerts.kindDatadCrash", "Data service (zwrt-datad) exited unexpectedly");
     case "wifi-takeover":

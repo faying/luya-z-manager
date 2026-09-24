@@ -13,15 +13,19 @@
 #   guard/            ../zte-u60-pro-mu5250-touch-ui/scripts 的进程监督与 Wi-Fi 兜底：supervise.sh、u60-guard.sh、
 #                     alert-lib.sh、agent-auth.sh、chaos.sh + zte-agent/zwrt-datad/u60-guard 的
 #                     procd init 脚本（装到 /data/u60-guard 和 /etc/init.d，见 docs/RELIABILITY.md）
+#   chill/            CHILL：scripts/chill/stage.sh 摆好的 mihomo（sha256 固定）、规则集、脚本、
+#                     zashboard（sha256 固定），下载缓存在 onboard/cache/chill。CHILL=0 不打
 #   devui/zwrt-datad  } 从正在使用的设备上拉（FLEET_HOST，默认 ssh 别名 u60），
 #   esim.tgz          } 缓存在 onboard/cache/。上游 datad 新版体积和接口都变了、lpac 依赖
 #                       Alpine edge 会漂，所以用设备上验证过的那份
 #
-# 环境变量：DEVUI_REPO（默认 ../zte-u60-pro-mu5250-touch-ui）、FLEET_HOST（默认 u60）、
+# 环境变量：DEVUI_REPO（默认 ../zte-u60-pro-mu5250-touch-ui）、FLEET_HOST（默认 u60）、CHILL=0（不打 CHILL）、
 #           REFRESH_FLEET=1（重新从设备拉 datad/eSIM，不用缓存）、
 #           DEVUI_BIN=路径（用这个触屏二进制，不用 $DEVUI_REPO/u60pro-devui.stripped）、
 #           UID_BIN=路径（u60-uid，默认 $DEVUI_REPO/u60-uid）、
 #           DATAD_BIN=路径（用这个 zwrt-datad，不用 onboard/cache 里缓存的；eSIM 仍取缓存）
+#           DEVUI_FONTS_DIR=目录（触屏的 Nunito-600/700/800.ttf 和 OFL-Nunito.txt，不进任何 git；
+#           没有就不打字体，触屏退回设备自带的 Roboto，能用只是数字不是圆体）
 #           这些也可以写进 onboard/kit.local.env（不进 git），每次打包自动读取，
 #           免得每次手敲——尤其 DEVUI_BIN / DATAD_BIN，默认值多半不是你要的（见下）。
 # zte-agent：本机有 cargo-zigbuild 就用，没有就走 Docker（messense/cargo-zigbuild），
@@ -112,11 +116,21 @@ UID_BIN="${UID_BIN:-$DEVUI_REPO/u60-uid}"
 cp "$UID_BIN" "$PL/devui/u60-uid"
 cp "$DEVUI_REPO/scripts/u60-uid.init" "$PL/devui/u60-uid.init"
 ( cd "$DEVUI_REPO/ui" && tar czf "$PL/devui/ui.tgz" --exclude 'functions/chill.html' -- * )
+# 触屏数字字体（Nunito，OFL）：字体文件是二进制，不进公开仓库，只随装机包走
+if [ -n "${DEVUI_FONTS_DIR:-}" ]; then
+  mkdir -p "$PL/devui/fonts"
+  for f in Nunito-600.ttf Nunito-700.ttf Nunito-800.ttf OFL-Nunito.txt; do
+    [ -f "$DEVUI_FONTS_DIR/$f" ] || die "DEVUI_FONTS_DIR=${DEVUI_FONTS_DIR} 里缺 $f"
+    cp "$DEVUI_FONTS_DIR/$f" "$PL/devui/fonts/"
+  done
+else
+  printf '\033[0;33m!\033[0m %s\n' "没设 DEVUI_FONTS_DIR：不打 Nunito 字体，触屏会用设备自带的 Roboto 显示数字"
+fi
 
 # ── 进程监督与 Wi-Fi 兜底 ─────────────────────────────────────────────────────
 step "guard（${DEVUI_REPO}/scripts）"
 mkdir -p "$PL/guard"
-for f in alert-lib.sh u60-guard.sh supervise.sh agent-auth.sh chaos.sh doctor.sh config-backup.sh power-sample.sh \
+for f in alert-lib.sh u60-guard.sh supervise.sh agent-auth.sh chaos.sh doctor.sh config-backup.sh power-sample.sh wan-sources.sh \
          zte-agent.init zwrt-datad.init u60-guard.init; do
   [ -f "$DEVUI_REPO/scripts/$f" ] || die "缺 $DEVUI_REPO/scripts/$f"
   cp "$DEVUI_REPO/scripts/$f" "$PL/guard/"
@@ -149,6 +163,15 @@ if grep -a -q 'releases/latest/download' "$PL/devui/zwrt-datad"; then
 fi
 tar czf "$PL/esim.tgz" -C "$WORK/fleet/esim" .
 
+# ── CHILL ───────────────────────────────────────────────────────────────────
+if [ "${CHILL:-1}" != 0 ]; then
+  step "CHILL（mihomo + 规则集 + zashboard，缓存 onboard/cache/chill）"
+  "$ROOT/scripts/chill/stage.sh" "$CACHE/chill" "$WORK/chill" >/dev/null
+  mkdir -p "$PL/chill"
+  cp -R "$WORK/chill/bin" "$WORK/chill/ruleset" "$WORK/chill/chill.sh" "$WORK/chill/chill.init" "$WORK/chill/template.yaml" "$WORK/chill/chill.env.example" "$PL/chill/"
+  tar czf "$PL/chill/ui.tgz" -C "$WORK/chill/ui" .
+fi
+
 # ── 脚本 + 文档 + 清单 ────────────────────────────────────────────────────────
 step "装机脚本、说明、清单"
 cp "$ONB/install.sh" "$ONB/README.md" "$ONB/u60.env.example" "$KIT/"
@@ -171,6 +194,7 @@ chmod 755 "$KIT/install.sh"
     echo "  datad/eSIM    $FLEET_HOST 上 /data（缓存于 $(date -r "$FLEET" '+%Y-%m-%d %H:%M')）"
   fi
   echo "  dropbear      $(basename "$DROPBEAR_URL")"
+  [ -d "$PL/chill" ] && echo "  CHILL         mihomo ${MIHOMO_VER:-v1.19.31}、zashboard ${ZASHBOARD_VER:-v3.27.0}（规则集下载于 $(date -r "$CACHE/chill/ruleset/cn.list" '+%Y-%m-%d')）"
   echo
   echo "sha256（install.sh 开头会逐个校验）："
   ( cd "$KIT" && find install.sh device payload -type f | LC_ALL=C sort | while read -r f; do

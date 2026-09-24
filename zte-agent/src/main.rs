@@ -23,6 +23,7 @@ mod server;
 mod services;
 mod esim;
 mod chill;
+mod chill_proxy;
 mod clock;
 mod static_files;
 mod sim;

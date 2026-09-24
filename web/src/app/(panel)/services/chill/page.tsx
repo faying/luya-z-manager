@@ -56,7 +56,12 @@ interface ChillState {
   ai_exit?: GroupChoice | null;
   mode?: string | null;
   exit?: "proxy" | "direct_keep_ai" | "direct_all" | "global";
+  profile?: Profile;
+  profile_effective?: Profile;
+  thermal_eco?: boolean;
 }
+
+type Profile = "eco" | "standard" | "perf";
 
 interface Subscription {
   Upload: number;
@@ -260,6 +265,21 @@ export default function ChillPage() {
         />
       )}
 
+      {known && (
+        <ProfileCard
+          profile={status.profile ?? "standard"}
+          effective={status.profile_effective ?? status.profile ?? "standard"}
+          thermal={!!status.thermal_eco}
+          running={running}
+          busy={busy}
+          onJob={(id) => {
+            setOpLabel(t("chill.profileSwitching", "Switching…"));
+            setPendingJob(id);
+          }}
+          onError={(m) => flash(m, true)}
+        />
+      )}
+
       {running && (
         <>
           <ExitCard
@@ -406,6 +426,96 @@ function ExitCard({
       </div>
       {current && (
         <p className="mt-3 text-xs text-text-dim">{t(`chill.exitHint.${current.key}`, current.hint)}</p>
+      )}
+    </SectionCard>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ *  Profile — chill.sh's three settings sets (probe interval, keep-alive,
+ *  tcp-concurrent, GOMAXPROCS). standard is what CHILL always ran with.
+ *  Into or out of eco restarts the core (GOMAXPROCS only applies at start),
+ *  standard↔perf is a hot reload. Runs as a job like enable/disable.
+ * ------------------------------------------------------------------ */
+
+const PROFILE_OPTIONS: { key: Profile; label: string; hint: string }[] = [
+  { key: "eco", label: "Eco", hint: "Probes nodes hourly, fewer keep-alives, core limited to 2 cores. Cooler and lighter on battery; a dead node takes longer to be noticed." },
+  { key: "standard", label: "Standard", hint: "The settings CHILL has always used." },
+  { key: "perf", label: "Performance", hint: "Probes nodes every 10 minutes and dials several addresses at once. Faster failover and connects, a little more power." },
+];
+
+function ProfileCard({
+  profile,
+  effective,
+  thermal,
+  running,
+  busy,
+  onJob,
+  onError,
+}: {
+  profile: Profile;
+  effective: Profile;
+  thermal: boolean;
+  running: boolean;
+  busy: boolean;
+  onJob: (jobId: number) => void;
+  onError: (msg: string) => void;
+}) {
+  const { t } = useTranslation();
+
+  async function pick(p: Profile) {
+    if (busy || p === profile) return;
+    try {
+      const res = await apiFetch<{ job_id: number }>("/api/services/chill/profile", { method: "PUT", body: { profile: p } });
+      onJob(res.job_id);
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : t("chill.opFailed", "Operation failed"));
+    }
+  }
+
+  const current = PROFILE_OPTIONS.find((o) => o.key === profile);
+  return (
+    <SectionCard
+      title={t("chill.profileTitle", "Profile")}
+      description={t(
+        "chill.profileDesc",
+        "Trade battery and heat against failover speed. Switching into or out of Eco restarts the proxy core: connections drop for about 10 seconds.",
+      )}
+      className="mt-6"
+    >
+      <div role="radiogroup" aria-label={t("chill.profileTitle", "Profile")} className="flex flex-wrap gap-2">
+        {PROFILE_OPTIONS.map((o) => {
+          const active = o.key === profile;
+          return (
+            <button
+              key={o.key}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              disabled={busy}
+              onClick={() => pick(o.key)}
+              className={`inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12.5px] font-medium transition-colors disabled:opacity-50 ${
+                active
+                  ? "border-accent bg-accent-soft text-accent"
+                  : "border-border bg-bg-card text-text hover:border-accent/50"
+              }`}
+            >
+              {active && <Check size={11} />}
+              {t(`chill.profile.${o.key}`, o.label)}
+            </button>
+          );
+        })}
+      </div>
+      {current && (
+        <p className="mt-3 text-xs text-text-dim">{t(`chill.profileHint.${current.key}`, current.hint)}</p>
+      )}
+      {thermal && effective !== profile && (
+        <p className="mt-2 text-xs text-warning">
+          {t("chill.profileThermal", "Running as Eco for now because the device is hot; back to your choice once it has cooled down.")}
+        </p>
+      )}
+      {!running && (
+        <p className="mt-2 text-xs text-text-dim">{t("chill.profileNotRunning", "Applies the next time CHILL starts.")}</p>
       )}
     </SectionCard>
   );
@@ -789,10 +899,12 @@ function LogSection({ path, title, description }: { path: string; title: string;
 }
 
 /**
- * Embedded zashboard. CHILL's controller is a fixed port (9999) and, per
- * chill.env, already LAN-bound with an IP allowlist (CHILL_API_LAN=1 +
- * CHILL_API_ALLOW_IP) — no agent-side reverse proxy needed for this to work
- * from the user's own devices.
+ * Embedded zashboard, served by the agent itself (`/chill-ui/`) and talking to
+ * mihomo through the agent (`/chill-api/`). The controller stays on loopback;
+ * the dashboard authenticates with a per-device secret that only a logged-in
+ * session can read (`GET /api/services/chill/dashboard`). The URL carries the
+ * connection settings, so zashboard opens already connected — also over
+ * Tailscale, since it is all on :9090.
  */
 function DashboardEmbed({ url }: { url?: string }) {
   const { t } = useTranslation();
@@ -839,15 +951,32 @@ function DashboardEmbed({ url }: { url?: string }) {
   );
 }
 
+interface DashboardInfo {
+  secret: string;
+  ui: string;
+  api: string;
+}
+
 function useDashboardUrl(): string | undefined {
+  const { data } = useApi<DashboardInfo>("/api/services/chill/dashboard", { revalidateOnFocus: false });
   const [url, setUrl] = useState<string | undefined>(undefined);
   useEffect(() => {
-    // Deliberately deferred to an effect (not computed inline) so SSR and the
-    // first client render both produce the "resolving" placeholder — reading
-    // window.location during render would mismatch the server-rendered HTML.
+    // Built in an effect (not inline) so SSR and the first client render both
+    // show the "resolving" placeholder — window.location differs per client.
+    if (!data) return;
+    const { protocol, hostname, port } = window.location;
+    const p = port || (protocol === "https:" ? "443" : "80");
+    const q = new URLSearchParams({
+      hostname,
+      port: p,
+      secondaryPath: data.api,
+      secret: data.secret,
+      label: "CHILL",
+      ...(protocol === "https:" ? { https: "1" } : {}),
+    });
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setUrl(`${window.location.protocol}//${window.location.hostname}:9999/ui/`);
-  }, []);
+    setUrl(`${protocol}//${window.location.host}${data.ui}#/setup?${q.toString()}`);
+  }, [data]);
   return url;
 }
 

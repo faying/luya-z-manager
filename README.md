@@ -41,6 +41,18 @@ locking, SIM/SMS, router settings (DNS/DHCP/firewall/NAT/QoS/APN), WiFi, USB mod
 scheduler, and **CHILL** — control for a native `mihomo` transparent proxy (TUN mode, no
 ShellCrash). See [zte-agent/src/](zte-agent/src/) for the full endpoint list, one module per area.
 
+CHILL details worth knowing:
+
+- **Dashboard through the agent.** The agent serves [zashboard](https://github.com/Zephyruso/zashboard)
+  at `/chill-ui/` and forwards `/chill-api/` (REST, streams, WebSocket) to mihomo on loopback,
+  behind a per-device secret that only a logged-in admin session can read. mihomo's controller
+  (`:9999`) can stay closed to the LAN (`CHILL_API_LAN=0`); the dashboard also works over Tailscale.
+- **Profiles** — Eco / Standard / Performance (`chill.sh profile`, admin web and touch screen):
+  node probe interval, TCP keep-alive, concurrent dialing and, for Eco, the core limited to two
+  CPU cores. Standard is the original configuration. Optional heat step-down to Eco
+  (`CHILL_TEMP_WARM`, off by default).
+- The exit mode (rule / global / direct) now survives config reloads and core restarts.
+
 ```sh
 cargo build --release --target aarch64-unknown-linux-musl -p zte-agent
 ```
@@ -121,8 +133,12 @@ persistence goes through `/etc/rc.local` and cron, never `init.d` — see CLAUDE
   7) Uninstall a component
 ```
 
-CHILL (the transparent-proxy panel) installs separately — `scripts/chill/install-chill.sh` — since
-it needs your own outbound proxy subscription.
+CHILL (the transparent-proxy panel) installs separately, since it needs your own outbound proxy
+subscription: `./install.sh chill` from the install kit, or `scripts/chill/install-chill.sh` by
+hand (dry run by default). Both download mihomo and zashboard at pinned sha256 sums
+(`scripts/chill/fetch-assets.sh`). A first install does not start anything: copy
+`chill.env.example` to `chill.env`, add your subscription, then `chill.sh safe-start` and
+`chill.sh confirm` within five minutes.
 
 ### Deploy agent + web (subsequent updates)
 
@@ -147,7 +163,7 @@ install.sh         Interactive all-in-one installer
 setup.sh           First-time agent + UI + SSH setup
 scripts/
 ├── deploy.sh       Rebuild & redeploy agent/web
-├── chill/          CHILL (mihomo) install + init script
+├── chill/          CHILL (mihomo): chill.sh, template, installer, asset fetch/stage
 ├── esim/           lpac bundle for removable eUICC cards
 ├── homemode.sh      Wi-Fi auto-off near a home network
 ├── monitor.sh       Temp/signal logger + crash forensics

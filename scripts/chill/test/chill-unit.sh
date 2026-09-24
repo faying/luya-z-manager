@@ -45,6 +45,10 @@ LOG=/tmp/chill-unit.log
 EVENTS="$CHILL_DIR/events.log"
 STATE="$CHILL_DIR/chill.state"
 CORE_PID="$CHILL_DIR/core.pid"
+PROFILE_FILE="$CHILL_DIR/profile"
+MODE_FILE="$CHILL_DIR/mode"
+RESTART_FLAG="$CHILL_DIR/restart"
+THERMAL_ECO="$CHILL_DIR/thermal-eco"
 
 # ─────────────────────────────────────────────────────────────────────────────
 sec "build_filters：结构与裁剪"
@@ -278,6 +282,85 @@ if [ "$after" -lt "$before" ]; then ok "超限后被截断（${before} -> ${afte
 if [ "$after" -le "$LOG_MAX_BYTES" ]; then ok "截断后不超过上限"; else ng "截断后仍超上限"; fi
 if [ -f "$LOG.tmp" ]; then ng "遗留了 .tmp 临时文件"; else ok "未遗留 .tmp"; fi
 LOG=/tmp/chill-unit.log
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "档位：读取、生效值、渲染"
+
+rm -f "$PROFILE_FILE" "$THERMAL_ECO"
+eq "没有档位文件 = standard" "$(profile_read)" "standard"
+echo turbo > "$PROFILE_FILE"; eq "不认识的值当 standard" "$(profile_read)" "standard"
+echo eco > "$PROFILE_FILE";   eq "eco 读出来是 eco" "$(profile_read)" "eco"
+echo perf > "$PROFILE_FILE";  : > "$THERMAL_ECO"
+eq "温度降档时生效值是 eco" "$(profile_effective)" "eco"
+eq "温度降档不改用户选的档位" "$(profile_read)" "perf"
+rm -f "$THERMAL_ECO" "$PROFILE_FILE"
+
+cat > "$CHILL_DIR/template.yaml" <<'YAML'
+tcp-concurrent: ${TCP_CONCURRENT}
+keep-alive-interval: ${KEEPALIVE}
+hc: {interval: ${HC_INTERVAL}, timeout: 3000}
+YAML
+render; eq "standard 渲染出以前那套值" "$(cat "$CONFIG")" "$(printf 'tcp-concurrent: false\nkeep-alive-interval: 600\nhc: {interval: 1800, timeout: 3000}')"
+eq "standard 不限核" "$GMP" ""
+echo eco > "$PROFILE_FILE"; render
+eq "eco 渲染" "$(cat "$CONFIG")" "$(printf 'tcp-concurrent: false\nkeep-alive-interval: 900\nhc: {interval: 3600, timeout: 3000}')"
+eq "eco 限 2 核" "$GMP" "2"
+echo perf > "$PROFILE_FILE"; render
+eq "perf 渲染" "$(cat "$CONFIG")" "$(printf 'tcp-concurrent: true\nkeep-alive-interval: 120\nhc: {interval: 600, timeout: 3000}')"
+rm -f "$PROFILE_FILE"
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "出口模式：记下与恢复"
+
+API_MODE_OUT='{"mode":"direct","port":0}'; PATCHED=""
+curl() {
+  case "$*" in
+    *PATCH*) PATCHED="$*" ;;
+    *) printf '%s' "$API_MODE_OUT" ;;
+  esac
+}
+rm -f "$MODE_FILE"
+save_mode; eq "记下 direct" "$(cat "$MODE_FILE")" "direct"
+API_MODE_OUT='{"mode":"rule"}'
+restore_mode; has "核心回到 rule 时恢复 direct" "$PATCHED" '{"mode":"direct"}'
+PATCHED=""; echo rule > "$MODE_FILE"
+restore_mode; eq "记下的是 rule 时不用恢复" "$PATCHED" ""
+API_MODE_OUT=''; save_mode; eq "读不到模式时不覆盖记录" "$(cat "$MODE_FILE")" "rule"
+unset -f curl
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "thermal_step：默认关闭、降档、回温"
+
+# 打桩：只记录调用，不真的停核/清规则
+CALLS=""
+kill_core() { CALLS="$CALLS kill"; }
+flush() { CALLS="$CALLS flush"; }
+save_mode() { CALLS="$CALLS save"; }
+crash_n=0
+
+CHILL_TEMP_WARM=""
+if thermal_step 90000; then ng "没设 CHILL_TEMP_WARM 时不该降档"; else ok "没设 CHILL_TEMP_WARM 时不降档"; fi
+[ -f "$THERMAL_ECO" ] && ng "不该留下降档标记" || ok "没有降档标记"
+
+CHILL_TEMP_WARM=67000
+if thermal_step 60000; then ng "低于 WARM 不该降档"; else ok "低于 WARM 不降档"; fi
+if thermal_step 68000; then ok "到 WARM 降档并要求 break"; else ng "到 WARM 没降档"; fi
+[ -f "$THERMAL_ECO" ] && ok "留下降档标记" || ng "没有降档标记"
+has "降档时平稳重启核心（先记模式再停核清理）" "$CALLS" "save kill flush"
+eq "平稳重启不算崩溃" "$crash_n" "0"
+eq "降档后生效值 eco" "$(profile_effective)" "eco"
+
+CALLS=""
+if thermal_step 62000; then ng "只降到 WARM-5°C 不该回档"; else ok "没降够 10°C 不回档"; fi
+if thermal_step 50000; then ng "刚凉下来不该马上回档"; else ok "凉下来先开始计时"; fi
+cool_since=$(( $(date +%s) - COOL_HOLD - 1 ))
+if thermal_step 50000; then ok "凉够 ${COOL_HOLD} 秒回到原档位"; else ng "凉够了没回档"; fi
+[ -f "$THERMAL_ECO" ] && ng "回档后降档标记还在" || ok "回档后降档标记清掉"
+has "回档也平稳重启" "$CALLS" "kill flush"
+
+echo eco > "$PROFILE_FILE"; CALLS=""
+if thermal_step 90000; then ng "本来就是 eco 不该再重启"; else ok "本来就是 eco 不动"; fi
+rm -f "$PROFILE_FILE"; CHILL_TEMP_WARM=""
 
 # ─────────────────────────────────────────────────────────────────────────────
 printf '\n=== 结果：%d 通过 / %d 失败\n' "$PASS" "$FAIL"

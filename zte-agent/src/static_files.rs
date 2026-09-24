@@ -9,7 +9,7 @@ fn ui_dir() -> PathBuf {
     )
 }
 
-fn mime_for(ext: &str) -> &'static str {
+pub fn mime_for(ext: &str) -> &'static str {
     match ext {
         "html" => "text/html; charset=utf-8",
         "js" => "application/javascript",

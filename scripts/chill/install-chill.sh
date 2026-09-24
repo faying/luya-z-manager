@@ -10,8 +10,9 @@
 # 设备开不了机，而这台设备没有公开的救砖工具。先干跑、看清楚、再 --apply。
 #
 # 会做的事：
-#   Mac 端  下载 mihomo（校验 sha256）与 16 个 .mrs、CN CIDR 列表
-#   推送    bin/mihomo、ruleset/*、chill.sh、chill.init、template.yaml
+#   Mac 端  fetch-assets.sh 下载校验 mihomo、.mrs、CN CIDR 列表、zashboard；
+#           stage.sh 摆成 /data/chill 的样子（装机包 install.sh chill 用的是同一套）
+#   推送    bin/mihomo、ruleset/*、chill.sh、chill.init、template.yaml、ui/
 #   设备端  备份 dhcp / firewall / rc.local 到 /data/u60-kit 与 /data/chill
 #           建 uci 防火墙区 chill（chill0 放行、与 lan 互转）
 #           装 /etc/init.d/chill（**不 enable**）
@@ -29,21 +30,9 @@ APPLY=0
 [ "${1:-}" = "--apply" ] && APPLY=1
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CACHE="$HERE/test/.cache"
-TEMPLATE="$HERE/template.yaml"
-
+CACHE="${CHILL_CACHE:-$HERE/test/.cache}"
 MIHOMO_VER="${MIHOMO_VER:-v1.19.31}"
-# 校验的是下载下来的 .gz（不是解压后的二进制）。2026-09-16 实测值，与 spike.sh 同源。
-MIHOMO_SHA256="${MIHOMO_SHA256:-9e0f11afbf38426b8bd88fdc594678f8161c57eccb4e1b77acb12b493904f1d4}"
-MRS_BASE="https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo"
-# 2026-09-17 真机验证过的版本与下载地址（Zephyruso/zashboard 官方发布）。
-# 默认自动下载，不需要预先手动准备文件。
 ZASHBOARD_VER="${ZASHBOARD_VER:-v3.27.0}"
-# 留空则按上面的版本自动下载官方 dist.zip；也可指向本地已有的 .zip 文件（离线
-# 安装或试用未发布的构建）。⚠ 官方包是 **.zip**，不是 .tgz——这个变量原名
-# ZASHBOARD_TGZ 且假设 tar 格式，从一开始就没对过，2026-09-17 手动部署时才
-# 发现，已改名并修正处理逻辑，不存在需要兼容的旧行为。
-ZASHBOARD_ZIP="${ZASHBOARD_ZIP:-}"
 
 say()  { printf '[*] %s\n' "$*"; }
 good() { printf '[+] %s\n' "$*"; }
@@ -55,12 +44,12 @@ run_local() { if [ "$APPLY" = 1 ]; then eval "$@"; else would "$*"; fi; }
 
 # ── 0. 前置检查 ──────────────────────────────────────────────────────────────
 say "前置检查"
-for c in curl shasum ssh awk sed; do
+for c in curl shasum ssh awk sed unzip; do
   command -v "$c" >/dev/null 2>&1 || die "缺少命令：$c"
 done
 [ -f "$HERE/chill.sh" ]     || die "缺 chill.sh"
 [ -f "$HERE/chill.init" ]   || die "缺 chill.init"
-[ -f "$TEMPLATE" ]          || die "缺 template.yaml"
+[ -f "$HERE/template.yaml" ] || die "缺 template.yaml"
 sh -n "$HERE/chill.sh"      || die "chill.sh 语法不过，先修"
 sh -n "$HERE/chill.init"    || die "chill.init 语法不过，先修"
 
@@ -75,146 +64,30 @@ if [ "$APPLY" != 1 ]; then
 fi
 
 # ── 1. Mac 端准备 ───────────────────────────────────────────────────────────
-mkdir -p "$CACHE/ruleset"
-
-BIN="$CACHE/mihomo-$MIHOMO_VER"
-if [ ! -f "$BIN" ]; then
-  say "下载 mihomo $MIHOMO_VER"
-  if [ "$APPLY" = 1 ]; then
-    gz="$CACHE/mihomo-$MIHOMO_VER.gz"
-    curl -fsSL -o "$gz" \
-      "https://github.com/MetaCubeX/mihomo/releases/download/$MIHOMO_VER/mihomo-linux-arm64-$MIHOMO_VER.gz"
-    got="$(shasum -a 256 "$gz" | awk '{print $1}')"
-    [ "$got" = "$MIHOMO_SHA256" ] || die "sha256 不符：期望 $MIHOMO_SHA256 实际 $got"
-    gunzip -c "$gz" > "$BIN"; chmod +x "$BIN"
-    good "mihomo 已下载并通过 sha256 校验"
-  else
-    would "下载 mihomo 并校验 sha256=$MIHOMO_SHA256"
-  fi
+# 下载校验（fetch-assets.sh）和摆成 /data/chill 的样子（stage.sh）与装机包共用。
+STAGE="$CACHE/stage"
+if [ "$APPLY" = 1 ]; then
+  "$HERE/stage.sh" "$CACHE" "$STAGE"
 else
-  good "mihomo 已在缓存中（${BIN}）"
-fi
-
-# 规则集清单**从 template.yaml 解析**，不另立一份。
-# 两份清单迟早会不同步，而不同步的后果是规则集缺失 —— chill.sh 会直接拒绝启动。
-say "从 template.yaml 解析规则集清单"
-MRS_LIST="$(awk '
-  /^ *[a-z_]+: *\{type: http/ {
-    name = $1; sub(/:$/, "", name)
-    if (match($0, /geo\/[a-z]+\/[^.]+\.mrs/)) {
-      print name "=" substr($0, RSTART + 4, RLENGTH - 4)
-    }
-  }' "$TEMPLATE")"
-n_mrs=$(printf '%s\n' "$MRS_LIST" | grep -c . || true)
-[ "$n_mrs" -gt 0 ] || die "没能从 template.yaml 解析出规则集，检查解析逻辑"
-good "解析到 $n_mrs 个规则集"
-
-for item in $MRS_LIST; do
-  name="${item%%=*}"; path="${item#*=}"
-  out="$CACHE/ruleset/${name}.mrs"
-  if [ -f "$out" ]; then continue; fi
-  if [ "$APPLY" = 1 ]; then
-    curl -fsSL -o "$out" "$MRS_BASE/${path}" || die "下载 $path 失败"
-  else
-    would "下载 $MRS_BASE/${path} -> ruleset/${name}.mrs"
-  fi
-done
-[ "$APPLY" = 1 ] && good "规则集就绪"
-
-CN_LIST="$CACHE/geoip_cn_cn.list"
-if [ ! -f "$CN_LIST" ]; then
-  if [ "$APPLY" = 1 ]; then
-    curl -fsSL -o "$CN_LIST" "$MRS_BASE/geoip/cn.list" || die "下载 cn.list 失败"
-  else
-    would "下载 CN CIDR 列表（route-exclude-address 用，约 9646 条）"
-  fi
+  would "下载并校验 mihomo ${MIHOMO_VER}、template.yaml 里的规则集 + cn.list、zashboard ${ZASHBOARD_VER}（fetch-assets.sh）"
+  would "解压并注入 zashboard 的 :9999 自动配置（stage.sh）"
 fi
 
 # ── 2. 推送 ─────────────────────────────────────────────────────────────────
-# 设备上没有 scp，用 `ssh 'cat > 路径' < 文件`。
-push() { # push <本地文件> <设备路径>
-  if [ "$APPLY" = 1 ]; then
-    ssh -o BatchMode=yes "$HOST" "cat > '$2'" < "$1"
-  else
-    would "推送 $(basename "$1") -> $2"
-  fi
-}
-
+# 设备上没有 scp，用 tar 管道。chill.env、providers/、cache 不在包里，不会被碰。
 say "推送到设备"
 if [ "$APPLY" = 1 ]; then
-  ssh -o BatchMode=yes "$HOST" 'mkdir -p /data/chill/bin /data/chill/ruleset /data/chill/run /data/chill/providers /data/u60-kit'
-else
-  would "mkdir -p /data/chill/{bin,ruleset,run,providers} /data/u60-kit"
-fi
-
-push "$BIN"               /data/chill/bin/mihomo
-push "$HERE/chill.sh"     /data/chill/chill.sh
-push "$HERE/chill.init"   /data/chill/chill.init
-push "$TEMPLATE"          /data/chill/template.yaml
-# 不要写成 `[ -f ... ] && push ... || would ...`：set -e 下 push 真的失败时会滑到
-# || 分支，把推送失败伪装成一条干跑提示，属于静默失败。
-if [ -f "$CN_LIST" ]; then
-  push "$CN_LIST" /data/chill/ruleset/cn.list
-else
-  would "推送 cn.list（当前缓存中没有，--apply 时会先下载）"
-fi
-
-for item in $MRS_LIST; do
-  name="${item%%=*}"
-  [ -f "$CACHE/ruleset/${name}.mrs" ] && push "$CACHE/ruleset/${name}.mrs" "/data/chill/ruleset/${name}.mrs"
-done
-
-say "准备 zashboard"
-Z="${ZASHBOARD_ZIP:-$CACHE/zashboard-${ZASHBOARD_VER}.zip}"
-if [ -n "$ZASHBOARD_ZIP" ]; then
-  [ -f "$ZASHBOARD_ZIP" ] || die "ZASHBOARD_ZIP 指向的文件不存在：$ZASHBOARD_ZIP"
-elif [ ! -f "$Z" ]; then
-  if [ "$APPLY" = 1 ]; then
-    curl -fsSL -o "$Z" \
-      "https://github.com/Zephyruso/zashboard/releases/download/${ZASHBOARD_VER}/dist.zip" \
-      || die "下载 zashboard ${ZASHBOARD_VER} 失败"
-    good "zashboard ${ZASHBOARD_VER} 已下载"
-  else
-    would "下载 zashboard ${ZASHBOARD_VER} 的 dist.zip"
-  fi
-fi
-
-if [ "$APPLY" = 1 ] && [ -f "$Z" ]; then
-  say "推送 zashboard"
-  command -v unzip >/dev/null 2>&1 || die "本机缺 unzip：官方包是 .zip，设备上没有 unzip，只能在本机先解开再转格式推送"
-  ZTMP="$(mktemp -d)"
-  unzip -q "$Z" -d "$ZTMP" || die "解压 zashboard 失败"
-  [ -f "$ZTMP/dist/index.html" ] || die "解压结果里没有 dist/index.html，官方包结构可能变了，先手动核实"
-  # 2026-09-22 真机踩过的坑：zashboard 第一次打开会跳到"面板配置"设置页，
-  # 默认预填 127.0.0.1:9090——这是 zashboard 自己的默认猜测（跟本项目无关，
-  # 只是碰巧和 zte-agent 端口一样），这台设备的 mihomo controller 实际在
-  # 9999，填错的默认值连不上，卡在设置页，看起来就像"白屏/打不开"。每个
-  # 没访问过的浏览器都会撞一次。
-  # 注入一段引导脚本：首次没有 setup/api-list 时，用当前页面自己的 hostname
-  # （不写死 IP，换设备/换网段也对）+ 9999 自动填好，不用手动过一遍表单。
-  # 两个 key 名（setup/api-list、setup/active-uuid）是真机填完表单后读
-  # localStorage 核对出来的，不是官方文档——zashboard 升级后这两个 key 可能
-  # 改名，届时这段会静默失效，退回"要手填一次"，不影响页面本身能不能打开。
-  ZB_BOOTSTRAP='<script>;(function(){try{if(localStorage.getItem("setup/api-list"))return;var u="xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,function(c){var r=Math.random()*16|0,v=c=="x"?r:r&3|8;return v.toString(16)});var p={type:"clash",protocol:location.protocol=="https:"?"https":"http",host:location.hostname,port:"9999",secondaryPath:"",password:"",label:"CHILL",uuid:u};localStorage.setItem("setup/api-list",JSON.stringify([p]));localStorage.setItem("setup/active-uuid",u)}catch(e){}})()</script>'
-  awk -v bs="$ZB_BOOTSTRAP" \
-    '!done && /<script type="module"/ { print bs; done=1 } { print }' \
-    "$ZTMP/dist/index.html" > "$ZTMP/dist/index.html.tmp" \
-    && mv "$ZTMP/dist/index.html.tmp" "$ZTMP/dist/index.html"
-  grep -q 'setup/api-list' "$ZTMP/dist/index.html" || die "zashboard index.html 注入自动配置脚本失败（<script type=\"module\"> 没找到，官方包结构可能变了）"
-  # 2026-09-16 真机踩过的坑：/data/chill/ui 里混进过来源不明的文件（疑似别的
-  # 面板遗留，Nuxt.js/GitHub Pages 结构，跟 zashboard 官方包对不上），干净
-  # 覆盖比增量合并可靠——每次推送前先整个清空重建。
-  ssh -o BatchMode=yes "$HOST" 'rm -rf /data/chill/ui && mkdir -p /data/chill/ui' \
-    || die "清空设备端 /data/chill/ui 失败"
-  COPYFILE_DISABLE=1 tar czf - -C "$ZTMP/dist" . \
-    | ssh -o BatchMode=yes "$HOST" 'cd /data/chill/ui && tar xzf -' \
+  ssh -o BatchMode=yes "$HOST" 'mkdir -p /data/chill/run /data/chill/providers /data/u60-kit'
+  COPYFILE_DISABLE=1 tar czf - -C "$STAGE" bin ruleset chill.sh chill.init template.yaml chill.env.example \
+    | ssh -o BatchMode=yes "$HOST" 'cd /data/chill && tar xzf -' || die "推送 CHILL 文件失败"
+  # 2026-09-16 真机踩过的坑：/data/chill/ui 里混进过来源不明的文件，干净覆盖比增量合并可靠。
+  COPYFILE_DISABLE=1 tar czf - -C "$STAGE/ui" . \
+    | ssh -o BatchMode=yes "$HOST" 'rm -rf /data/chill/ui.new && mkdir -p /data/chill/ui.new && cd /data/chill/ui.new && tar xzf - && rm -rf /data/chill/ui && mv /data/chill/ui.new /data/chill/ui' \
     || die "推送 zashboard 失败"
-  rm -rf "$ZTMP"
-  good "zashboard 已推送到 /data/chill/ui"
-elif [ "$APPLY" != 1 ]; then
-  would "清空 /data/chill/ui 并重新推送 zashboard（干净覆盖，不做增量合并）"
+  good "mihomo、规则集、脚本、zashboard 已推送到 /data/chill"
 else
-  warn "zashboard 包不存在，跳过（:9999/ui 将不可用，不影响代理本身）"
+  would "推送 bin/mihomo、ruleset/*、chill.sh、chill.init、template.yaml -> /data/chill"
+  would "整个替换 /data/chill/ui（zashboard，干净覆盖，不做增量合并）"
 fi
 
 # ── 3. 设备端配置 ───────────────────────────────────────────────────────────
@@ -303,6 +176,8 @@ echo "       ssh $HOST '/data/chill/chill.sh safe-start'"
 echo "       # 网络正常就在 5 分钟内确认，否则会自动停掉："
 echo "       ssh $HOST '/data/chill/chill.sh confirm'"
 echo
+good "面板：后台「服务 → CHILL」的按钮，经 http://<设备>:9090/chill-ui/ 打开（zte-agent 反代，"
+good "带登录后拿到的密钥，:9999 可以只留在本机：CHILL_API_LAN=0）。"
 warn "关于 CHILL_API_LAN=1 的风险：开了之后局域网内能访问 :9999 的设备，"
 warn "可以切节点、关代理、并从 /connections 看到全屋实时访问的域名。"
 warn "不设 CHILL_SECRET 就只能靠来源白名单挡，所以把自己的设备绑静态租约"

@@ -59,7 +59,7 @@ zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`�
   所以裁剪文件不影响游标。不用行号、字节偏移或墙钟做编号。
 - **墙钟不可信**：设备 RTC 在网络对时之前是 1971 年左右。墙钟秒 < `1704067200`（2024-01-01）的一律当作「时间未校准」，
   网页显示「开机后 N 秒」。
-- 类别：`[a-z0-9-]`，现有：`agent-crash`、`datad-crash`（supervise.sh）；`devui-crash`、`devui-gave-up`（u60-uid）；`agent-silent`、`agent-hung`、`wifi-takeover`、`wifi-restore-failed`、`sms-failed`（u60-guard）。
+- 类别：`[a-z0-9-]`，现有：`agent-crash`、`datad-crash`（supervise.sh）；`devui-crash`、`devui-gave-up`（u60-uid）；`devui-theme-paused`（触屏自己：自动深浅色 1 小时内切了 3 次——正常一天只切 2 次——停到下次开机；不发短信）；`agent-silent`、`agent-hung`、`wifi-takeover`、`wifi-restore-failed`、`sms-failed`（u60-guard）。
 - 说明：只能是可打印 ASCII，去掉 tab 和换行，最多 120 个字符。给网页告警列表看（短信正文按类别另写），不能带任何配置内容（号码、密码、SSID）。
 - 写入方统一用 touch-ui `scripts/alert-lib.sh` 里的写入函数（supervise.sh 和 u60-guard 共用），它负责清洗、截断和裁剪：
   超过 300 行时保留最后 200 行。
@@ -71,6 +71,7 @@ zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`�
   这样游标、限流、国外抑制、编码、结果判定只有一份实现。
 - 每轮按序号处理 `sms-done` 之后的事件。`sms-log`、`sms-done` 只有 u60-guard 写，`queue` 裁剪时整文件替换，所以这一步不拿 `lock`：
   - `sms-failed` 类别不发（否则失败会引出新的失败短信）。
+  - `devui-theme-paused` 类别不发（只是触屏外观的事，不值一条短信）。
   - 没有 `sms-to`（或号码不合法）：不发，记 `no-number`。
   - 有 `abroad` 且没有 `sms-abroad`：跳过，记 `suppressed-abroad`。
   - 限流：同一类别 1 小时内最多 1 条，24 小时内总共最多 5 条，按 `sms-log` 里的 `sent` 记录算。
@@ -120,3 +121,10 @@ zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`�
   和 `/api/public/status.health`（只有计数）；装机包 `./install.sh doctor` 推到 `/tmp` 直接跑，agent 挂了也能用。
 - `config-backup.sh`：只备份配置（清单在脚本开头），不含运行状态；Tailscale 身份要 `--with-tailscale`。
   备份只存电脑（装机包 `./install.sh backup`），`restore` 先 `plan` 再写、写前留 `.pre-restore`、不重载 Wi-Fi。
+
+## 8. 待机哨兵（u60-guard 记录，doctor.sh 判定）
+
+- 屏幕熄灭时，u60-guard 每轮（60 秒）往 `/tmp/standby.stat` 写一行：`<uptime> <蜂窝包/分> <Tailscale 隧道包/分> <tailscaled mihomo u60pro-devui zwrt-datad zte-agent 的唤醒/秒>`。程序中途重启（pid 变化）的那一格写 `-`；亮屏、两轮间隔过长（设备休眠过）或计数器回退时不写。只保留 60 行，在内存盘。
+- 隧道流量单独记，不从蜂窝包数里扣掉：其他 tailnet 设备一直访问本机（比如开着网页后台），正是哨兵要发现的浪费。
+- `doctor.sh --calibrate-standby` 用这些记录（至少 30 行）算出每列的中位数和 MAD，写入 `/data/u60-guard/standby.baseline`。要在省电改动都上线之后、息屏 30~60 分钟再校准。
+- 体检的「待机」一项：没有基线时显示「未校准」（算正常）；最近 15 分钟不足 8 行不判定；某列中位数超过「基线 + 3×MAD」且超过基线 1.5 倍（并且至少多 1）时报 ▲，说明是哪一列、现在多少、基线多少。只显示，不发短信。
