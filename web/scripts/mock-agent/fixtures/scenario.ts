@@ -1,5 +1,5 @@
 // Scenario engine — mirrors zte-agent/src/scenario.rs (HTTP surface + the
-// parts of switch_to / run_restores / chill hooks the pages can observe).
+// parts of switch_to / run_restores / service hooks the pages can observe).
 //
 // Persona: travelling in Taiwan. The engine is on, the config is the shipped
 // template with two home networks filled in, and the device is in the
@@ -8,17 +8,11 @@
 // profile reporting MCC 466; a Chinese SIM roaming on 中華電信 would report
 // 460 and stay in "away". The mock uses sim_mcc "466".
 //
-// On arrival the abroad scenario put CHILL's main group on DIRECT and saved
-// the pre-trip member (🇯🇵 日本) as a pending restore; the owner then put the
-// main group back on 🇹🇼 台湾 by hand (regions_set has no scenario hook, so
-// nothing else was recorded). Coming home would restore 🇯🇵 日本.
-//
 // Unix times are device-clock seconds (real epoch + 8 h, see services.ts).
 
 import type { Route, Ctx, Reply } from "../lib.ts";
 import { ok, fail, clone, unixNow } from "../lib.ts";
 import { shared } from "../shared.ts";
-import { chillSetGroup, chillMainGroupNow, chillSetExit, chillEnableJob } from "./services.ts";
 import type {
   ScenarioState,
   ScenarioConfig,
@@ -38,21 +32,11 @@ const BOOT = deviceNow();
 
 // ── template (scenario.rs:354 template()) ───────────────────────────────────
 
-const CHILL_MAIN_GROUP = "🚀 节点选择";
-const CHILL_STATUS = "/api/services/chill";
-const CHILL_ACTIVE = "/data/region/active";
 const WIFI_KEYS = ["wireless.main_2g.disabled", "wireless.main_5g.disabled"];
-const CHILL_ON_KEY = "chill-on-after-abroad";
-const CHILL_EXIT_KEY = "chill-exit-after-abroad";
 
 const ALLOWED_PATHS = [
   "/api/wifi/radio",
   "/api/wifi/guest",
-  "/api/services/chill/enable",
-  "/api/services/chill/disable",
-  "/api/services/chill/regions",
-  "/api/services/chill/bypass",
-  "/api/services/chill/exit",
   "/api/device/power-save",
   "/api/device/thermal",
   "/api/router/apn/profiles/activate",
@@ -60,17 +44,6 @@ const ALLOWED_PATHS = [
 
 function wifiAction(on: boolean): ScenarioAction {
   return { method: "PUT", path: "/api/wifi/radio", body: { ap_2g: on, ap_5g: on }, snapshot: [...WIFI_KEYS] };
-}
-
-function mainGroupAction(member: string): ScenarioAction {
-  return {
-    method: "PUT",
-    path: "/api/services/chill/regions",
-    body: { group: CHILL_MAIN_GROUP, member },
-    verify_field: { path: CHILL_STATUS, pointer: CHILL_ACTIVE, equals: member },
-    best_effort: true,
-    restore_on_exit: { read_path: CHILL_STATUS, read_pointer: CHILL_ACTIVE, field: "member" },
-  };
 }
 
 function template(): ScenarioConfig {
@@ -92,7 +65,7 @@ function template(): ScenarioConfig {
         id: "abroad",
         name: "国外",
         detect: { type: "abroad" },
-        actions: [wifiAction(true), mainGroupAction("DIRECT")],
+        actions: [wifiAction(true)],
         inhibit_sleep: false,
       },
     ],
@@ -152,10 +125,7 @@ function restoreAction(a: ScenarioAction, saved: unknown): ScenarioAction {
   return back;
 }
 
-let pending: PendingRestore[] = (() => {
-  const a = mainGroupAction("DIRECT");
-  return [{ key: restoreKey(a)!, action: restoreAction(a, "🇯🇵 日本"), saved_at: ARRIVED + 12 }];
-})();
+let pending: PendingRestore[] = [];
 
 const log: string[] = (() => {
   const t = (s: number, m: string) => `${stamp(s)} ${m}`;
@@ -167,7 +137,6 @@ const log: string[] = (() => {
     t(a - 7190, 'scenario "away" applied'),
     t(a - 900, "scan failed (1 in a row): no wiphy present — the radios are fully torn down, nothing can scan until they return"),
     t(a, 'entering scenario "国外" (abroad)'),
-    t(a + 12, 'saved "🇯🇵 日本" to restore on leaving'),
     t(a + 14, 'scenario "abroad" applied'),
     t(BOOT - 6 * 3600, "[bootsafe] Wi-Fi already up; nothing to repair"),
   ];
@@ -186,10 +155,6 @@ function findScenario(id: string): ScenarioDef | undefined {
 
 function isAbroad(s: ScenarioDef | undefined): boolean {
   return !!s && (s.detect.type === "mcc" || s.detect.type === "abroad");
-}
-
-function inAbroadScenario(): boolean {
-  return enabled && isAbroad(findScenario(run.current));
 }
 
 function stateJson(ctx?: Ctx): ScenarioState {
@@ -241,23 +206,6 @@ function runAction(a: ScenarioAction): void {
       for (const k of WIFI_KEYS) run.applied[k] = on ? "0" : "1";
       return;
     }
-    case "/api/services/chill/regions": {
-      const err = chillSetGroup(String(body.group ?? ""), String(body.member ?? ""));
-      if (err) throw new Error(`${a.method} ${a.path} → ${err[0]}: ${err[1]}`);
-      return;
-    }
-    case "/api/services/chill/exit": {
-      const err = chillSetExit(String(body.state ?? ""));
-      if (err) throw new Error(`${a.method} ${a.path} → ${err[0]}: ${err[1]}`);
-      return;
-    }
-    case "/api/services/chill/enable": {
-      const r = chillEnableJob();
-      if (r.error) throw new Error(`${a.method} ${a.path} → ${r.status}: ${r.error}`);
-      // verify_job: the real engine polls /job for up to 40 s; the mock job
-      // settles in ~3 s on its own, so treat a started job as success.
-      return;
-    }
     default:
       // Other allowed paths belong to other areas; the mock treats them as applied.
       return;
@@ -267,10 +215,8 @@ function runAction(a: ScenarioAction): void {
 function dueRestores(next: ScenarioDef | undefined): PendingRestore[] {
   const owned = (next?.actions ?? []).map(restoreKey).filter((k): k is string => !!k);
   const abroadNext = isAbroad(next);
-  const order = (k: string) => (k === CHILL_ON_KEY ? 0 : k === CHILL_EXIT_KEY ? 2 : 1);
   return pending
-    .filter((p) => !owned.includes(p.key) && !(p.while_abroad && abroadNext))
-    .sort((a, b) => order(a.key) - order(b.key));
+    .filter((p) => !owned.includes(p.key) && !(p.while_abroad && abroadNext));
 }
 
 function runRestores(next: ScenarioDef | undefined): void {
@@ -291,7 +237,7 @@ function rememberForRestore(a: ScenarioAction): void {
   const key = restoreKey(a);
   if (!key || pending.some((p) => p.key === key)) return;
   const r = a.restore_on_exit!;
-  const current = r.read_pointer === CHILL_ACTIVE ? chillMainGroupNow() : null;
+  const current: string | null = null;
   if (current == null) {
     logLine(`cannot read ${r.read_path}${r.read_pointer} before changing it; nothing to restore later`);
     return;
@@ -336,44 +282,6 @@ function switchTo(id: string): void {
   run.candidate = "";
   run.hits = 0;
   run.misses = 0;
-}
-
-// ── hooks called from fixtures/services.ts (server.rs:389-412) ───────────────
-
-/** scenario.rs:1475 chill_toggled. */
-export function scenarioChillToggled(on: boolean, wasOn: boolean): void {
-  if (on) {
-    const before = pending.length;
-    pending = pending.filter((p) => p.key !== CHILL_ON_KEY);
-    if (pending.length !== before) logLine("CHILL switched on by hand; no longer switching it on when home");
-    return;
-  }
-  if (!wasOn || !inAbroadScenario() || pending.some((p) => p.key === CHILL_ON_KEY)) return;
-  pending.push({
-    key: CHILL_ON_KEY,
-    action: { method: "POST", path: "/api/services/chill/enable", verify_job: "/api/services/chill/job", best_effort: true },
-    saved_at: deviceNow(),
-    while_abroad: true,
-  });
-  logLine("CHILL switched off abroad; will switch it back on when home");
-}
-
-/** scenario.rs:1500 chill_exit_changed. */
-export function scenarioChillExitChanged(): void {
-  if (!inAbroadScenario() || pending.some((p) => p.key === CHILL_EXIT_KEY)) return;
-  pending.push({
-    key: CHILL_EXIT_KEY,
-    action: {
-      method: "PUT",
-      path: "/api/services/chill/exit",
-      body: { state: "proxy" },
-      verify_field: { path: CHILL_STATUS, pointer: "/data/exit", equals: "proxy" },
-      best_effort: true,
-    },
-    saved_at: deviceNow(),
-    while_abroad: true,
-  });
-  logLine("CHILL exit changed abroad; will go back to proxy when home");
 }
 
 // ── validation (scenario.rs:374 validate) ───────────────────────────────────

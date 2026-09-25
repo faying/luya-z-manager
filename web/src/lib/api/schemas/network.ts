@@ -208,7 +208,7 @@ export interface DhcpLease {
  * builds `{hosts, dhcp_leases?}` from two luci-rpc calls: `hosts` =
  * getHostHints (null when the call fails); `dhcp_leases` = getDHCPLeases
  * `.dhcp_leases`, key omitted when that call fails. Always 200.
- * // page expects hosts: Record<string, string> (clients, services/chill
+ * // page expects hosts: Record<string, string> (clients, bypass lists)
  * // bypass) — luci-rpc returns Record<MAC, HostHint>; rendering hosts[mac]
  * // as a name would render an object.
  */
@@ -295,7 +295,7 @@ export interface NetInfoExit {
   ip: string | null;
   geo: string | null;
   isp: string | null;
-  /** CHILL exit only: the node the main group resolves to. */
+  /** Proxy exit only: the node it resolves to. */
   node: string | null;
   source: string | null;
   fetched_at: number;
@@ -318,9 +318,8 @@ export interface NetInfoOperator {
 export interface NetInfo {
   now: number;
   direct: NetInfoExit | null;
-  /** null when CHILL is not running. */
+  /** null when no proxy is running. */
   proxy: NetInfoExit | null;
-  chill_running: boolean;
   home_operator: NetInfoOperator | null;
   serving_operator: NetInfoOperator | null;
   roaming: boolean | null;

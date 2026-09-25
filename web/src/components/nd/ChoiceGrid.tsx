@@ -1,5 +1,5 @@
 "use client";
-// Single choice among cards that are themselves buttons (CHILL regions,
+// Single choice among cards that are themselves buttons (regions,
 // AI exit): the one legal "card grid" on a page (design doc §6, 15A).
 // Phones 2 columns, ≥1024 4 columns. Selected = accS wash + accT + ✓.
 import { ToggleButton, ToggleButtonGroup, type Key } from "react-aria-components";

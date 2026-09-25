@@ -47,14 +47,6 @@ export interface PublicStatus {
        */
       node: string;
     };
-    chill: {
-      /** /tmp/chill.state `state`; "unknown" when the file is missing/unparseable. */
-      state: string;
-      /** /tmp/chill.state `reason`, null when absent (e.g. "overheat", "lowmem"). */
-      reason: string | null; // page types this as optional
-      /** Owner's on/off switch: /data/chill/disabled absent (chill.rs:492). Pages don't read it. */
-      on: boolean;
-    };
     home_mode: {
       /** /data/homemode.sh exists. */
       present: boolean;
@@ -73,7 +65,6 @@ export interface PublicStatus {
     name: string;
     wifi_off: boolean;
     abroad: boolean;
-    chill_on_when_home: boolean;
     auto_direct: boolean;
     /** Pinned scenario id, null when not pinned. */
     pin: string | null;

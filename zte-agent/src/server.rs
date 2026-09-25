@@ -23,8 +23,6 @@ use crate::qos;
 use crate::router;
 use crate::services;
 use crate::esim;
-use crate::chill;
-use crate::chill_proxy;
 use crate::sim;
 use crate::sms;
 use crate::sms_forward;
@@ -75,17 +73,6 @@ fn handle_request(mut request: Request, state: &AppState) {
     // Strip query string for routing
     let path = url.split('?').next().unwrap_or(&url);
 
-    // CHILL dashboard (zashboard) and its controller API, proxied to mihomo on
-    // loopback. Own auth (dashboard secret or session token), so before both
-    // the static branch and the Bearer check below.
-    if path == chill_proxy::API_PREFIX || path.starts_with("/chill-api/") {
-        chill_proxy::proxy(request, &url, state);
-        return;
-    }
-    if matches!(method, Method::Get | Method::Head) && (path == chill_proxy::UI_PREFIX || path.starts_with("/chill-ui/")) {
-        chill_proxy::ui(request, path, method == Method::Head);
-        return;
-    }
 
     // Static file serving — the admin UI is served at the site root now. Any GET
     // (or HEAD, which Next.js <Link> prefetch uses) that isn't an API call is a
@@ -152,12 +139,6 @@ fn handle_request(mut request: Request, state: &AppState) {
         (&Method::Get, "/api/health/crashlog") => {
             let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
             let (status, body_json) = health::crashlog_get(state, query);
-            respond(request, status, body_json);
-            return;
-        }
-        (&Method::Get, "/api/services/chill/log") => {
-            let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
-            let (status, body_json) = chill::log(query);
             respond(request, status, body_json);
             return;
         }
@@ -396,39 +377,6 @@ pub fn route(method: &Method, path: &str, state: &AppState, body: &[u8]) -> (u16
         // Services — read-only status. Log endpoints handled before route()
         // because they need the query string.
         (&Method::Get, "/api/services/tailscale") => services::tailscale_status(state),
-        // CHILL (native mihomo) — log handled above route() (needs the query string).
-        (&Method::Get, "/api/services/chill") => chill::status(state),
-        (&Method::Get, "/api/services/chill/dashboard") => chill_proxy::dashboard_info(state),
-        (&Method::Get, "/api/services/chill/providers") => chill::providers_list(state),
-        (&Method::Put, "/api/services/chill/providers") => chill::providers_set_url(state, body),
-        (&Method::Post, "/api/services/chill/providers/refresh") => chill::providers_refresh(state, body),
-        (&Method::Put, "/api/services/chill/regions") => chill::regions_set(state, body),
-        (&Method::Put, "/api/services/chill/exit") => {
-            let r = chill::exit_set(state, body);
-            if r.0 < 400 {
-                crate::scenario::chill_exit_changed(&state.scenario);
-            }
-            r
-        }
-        (&Method::Get, "/api/services/chill/bypass") => chill::bypass_get(state),
-        (&Method::Put, "/api/services/chill/bypass") => chill::bypass_set(state, body),
-        (&Method::Post, "/api/services/chill/enable") => {
-            let r = chill::enable(state);
-            if r.0 < 400 {
-                crate::scenario::chill_toggled(&state.scenario, true, false);
-            }
-            r
-        }
-        (&Method::Post, "/api/services/chill/disable") => {
-            let was_on = chill::switched_on();
-            let r = chill::disable(state);
-            if r.0 < 400 {
-                crate::scenario::chill_toggled(&state.scenario, false, was_on);
-            }
-            r
-        }
-        (&Method::Put, "/api/services/chill/profile") => chill::profile_set(state, body),
-        (&Method::Get, "/api/services/chill/job") => chill::job(state),
         // eSIM (removable eUICC via lpac)
         (&Method::Get, "/api/esim/status") => esim::status(state),
         (&Method::Get, "/api/esim/profiles") => esim::profiles(state),

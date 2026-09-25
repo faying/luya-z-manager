@@ -289,18 +289,6 @@ function PublicStatusPanel() {
             }
           />
           <Row
-            label="CHILL"
-            value={
-              svc.chill.state === "running" ? (
-                <StatusMark tone="ok">{t("common.running", "Running")}</StatusMark>
-              ) : svc.chill.state === "direct" ? (
-                <StatusMark tone="warn">{t("chill.stDirect", "Direct")}</StatusMark>
-              ) : (
-                <StatusMark tone="neutral">{t("chill.stUnknown", "Not started")}</StatusMark>
-              )
-            }
-          />
-          <Row
             label={t("nav.homeMode", "Home Mode")}
             value={
               !svc.home_mode.present ? (

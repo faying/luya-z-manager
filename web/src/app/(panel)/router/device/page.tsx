@@ -588,7 +588,7 @@ export default function DevicePage() {
         title={t("devctl.confirmResetTitle", "Erase everything and restore factory settings?")}
         what={t(
           "devctl.confirmResetWhat",
-          "Every setting is erased — Wi-Fi, APN, locks, SMS forwarding — and so is this project's software: this manager, the touchscreen interface, CHILL and Tailscale. This cannot be undone."
+          "Every setting is erased — Wi-Fi, APN, locks, SMS forwarding — and so is this project's software: this manager, the touchscreen interface and Tailscale. This cannot be undone."
         )}
         downtime={t("devctl.resetDowntime", "The device restarts; this page does not come back.")}
         recovery={resetRecovery}

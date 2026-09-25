@@ -137,7 +137,6 @@ export const en = {
     smsForward: "SMS Forward",
     stk: "STK / USSD",
     tailscale: "Tailscale",
-    chill: "CHILL",
     bandlock: "Band Lock",
     celllock: "Cell Lock",
     signalDetect: "Signal Detect",

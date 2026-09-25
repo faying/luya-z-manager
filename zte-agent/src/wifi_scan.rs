@@ -226,7 +226,7 @@ mod tests {
 BSS 02:00:00:00:00:01(on scen-scan0)
 	TSF: 1 usec
 	signal: -29.00 dBm
-	SSID: Chill?
+	SSID: Cafe?
 BSS 02:00:00:00:00:02(on scen-scan0)
 	signal: -85.00 dBm
 	SSID:
@@ -244,7 +244,7 @@ BSS 02:00:00:00:00:04(on scen-scan0)
         // The hidden network (empty SSID) is dropped; the other three remain.
         assert_eq!(nets.len(), 3);
         // Sorted strongest first.
-        assert_eq!(nets[0].ssid, "Chill?");
+        assert_eq!(nets[0].ssid, "Cafe?");
         assert_eq!(nets[0].bssid, "02:00:00:00:00:01");
         assert_eq!(nets[0].signal, -29.0);
         assert_eq!(nets[1].ssid, "Neighbour-5G");

@@ -11,7 +11,6 @@
 #   admin.tgz         本仓库 web/ 现编（静态导出）
 #   devui/            触屏界面 LVGL 版 + u60-uid：DEVUI_BIN/UID_BIN 没给、且 ../zte-u60-pro-mu5250-touch-ui/out/ 里没有时，
 #                     自动跑 ../zte-u60-pro-mu5250-touch-ui/scripts/build-docker.sh 现编；ui/ + 启动/自启脚本
-#                     （不带 CHILL 页 chill.html：那个要 ShellCrash）
 #   devui/fonts/      Nunito 600/700/800 + 中文兜底字体（都是 OFL，按 sha256 钉死的公开下载，Docker 里生成，
 #                     缓存 onboard/cache/fonts）。设备自带的 ZTE 字体（/usr/ui/fonts）不打包，触屏直接读设备上的
 #   devui/zwrt-datad  Rust 版数据服务：DATAD_BIN 没给时，自动跑 ../zte-u60-pro-mu5250-data-service/scripts/build-docker.sh 现编
@@ -20,10 +19,8 @@
 #   guard/            ../zte-u60-pro-mu5250-touch-ui/scripts 的进程监督与 Wi-Fi 兜底：supervise.sh、u60-guard.sh、
 #                     alert-lib.sh、agent-auth.sh、chaos.sh、doctor.sh… + zte-agent/zwrt-datad/u60-guard 的
 #                     procd init 脚本（装到 /data/u60-guard 和 /etc/init.d，见 docs/RELIABILITY.md）
-#   chill/            CHILL：scripts/chill/stage.sh 摆好的 mihomo（sha256 固定）、规则集（下载时的最新版）、脚本、
-#                     zashboard（sha256 固定），下载缓存在 onboard/cache/chill。CHILL=0 不打
 #
-# 环境变量：DEVUI_REPO（默认 ../zte-u60-pro-mu5250-touch-ui）、DATAD_REPO（默认 ../zte-u60-pro-mu5250-data-service）、CHILL=0（不打 CHILL）、
+# 环境变量：DEVUI_REPO（默认 ../zte-u60-pro-mu5250-touch-ui）、DATAD_REPO（默认 ../zte-u60-pro-mu5250-data-service）、
 #           DEVUI_BIN=路径（触屏二进制，默认 $DEVUI_REPO/out/u60pro-devui-lvgl.stripped，没有就现编）、
 #           UID_BIN=路径（u60-uid，默认 $DEVUI_REPO/out/u60-uid，没有就现编）、
 #           DATAD_BIN=路径（用这个 zwrt-datad，不现编）、
@@ -129,7 +126,7 @@ cp "$DEVUI_REPO/scripts/start.sh" "$DEVUI_REPO/scripts/install-autostart.sh" "$P
 # u60-uid：屏幕主人守护进程，和它的 procd init
 cp "$UID_BIN" "$PL/devui/u60-uid"
 cp "$DEVUI_REPO/scripts/u60-uid.init" "$PL/devui/u60-uid.init"
-( cd "$DEVUI_REPO/ui" && tar czf "$PL/devui/ui.tgz" --exclude 'functions/chill.html' -- * )
+( cd "$DEVUI_REPO/ui" && tar czf "$PL/devui/ui.tgz" -- * )
 # 触屏字体：Nunito（数字）+ 中文兜底（设备自带 ZTE 字体缺失时用），都是 OFL。
 # 字体文件是二进制，不进任何 git，只随装机包走；设备自带的 /usr/ui/fonts 不打包。
 FONT_FILES="Nunito-600.ttf Nunito-700.ttf Nunito-800.ttf OFL-Nunito.txt u60-cjk-fallback.ttf OFL-ResourceHanRounded.txt"
@@ -197,14 +194,6 @@ else
 fi
 tar tzf "$PL/esim.tgz" | grep -q '^\./lpac\.sh$' || die "eSIM 包里没有 lpac.sh"
 
-# ── CHILL ───────────────────────────────────────────────────────────────────
-if [ "${CHILL:-1}" != 0 ]; then
-  step "CHILL（mihomo + 规则集 + zashboard，缓存 onboard/cache/chill）"
-  "$ROOT/scripts/chill/stage.sh" "$CACHE/chill" "$WORK/chill" >/dev/null
-  mkdir -p "$PL/chill"
-  cp -R "$WORK/chill/bin" "$WORK/chill/ruleset" "$WORK/chill/chill.sh" "$WORK/chill/chill.init" "$WORK/chill/template.yaml" "$WORK/chill/chill.env.example" "$PL/chill/"
-  tar czf "$PL/chill/ui.tgz" -C "$WORK/chill/ui" .
-fi
 
 # ── 脚本 + 文档 + 清单 ────────────────────────────────────────────────────────
 step "装机脚本、说明、清单"
@@ -224,7 +213,6 @@ chmod 755 "$KIT/install.sh"
   echo "  zwrt-datad    ${DATAD_SRC} $(sha256 "$DATAD_BIN" | cut -c1-12)"
   echo "  eSIM          ${ESIM_SRC}"
   echo "  dropbear      $(basename "$DROPBEAR_URL")"
-  [ -d "$PL/chill" ] && echo "  CHILL         mihomo ${MIHOMO_VER:-v1.19.31}、zashboard ${ZASHBOARD_VER:-v3.27.0}（规则集下载于 $(date -r "$CACHE/chill/ruleset/cn.list" '+%Y-%m-%d')）"
   echo
   echo "sha256（install.sh 开头会逐个校验）："
   ( cd "$KIT" && find install.sh device payload -type f | LC_ALL=C sort | while read -r f; do

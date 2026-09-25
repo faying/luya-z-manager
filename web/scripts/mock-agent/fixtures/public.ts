@@ -22,7 +22,6 @@ function publicStatus(ctx: Ctx): PublicStatus {
   const operator = net.network_provider_fullname || net.network_provider || "";
   const barN = parseInt(net.signalbar ?? "", 10);
   const rsrp = (nettype === "LTE" ? net.lte_rsrp : net.nr5g_rsrp) ?? 0;
-  const chillState = shared.chill.state;
 
   return {
     network: {
@@ -41,12 +40,6 @@ function publicStatus(ctx: Ctx): PublicStatus {
         installed: true,
         node: shared.tailscale.running ? `${TS_IP} ${shared.tailscale.node}` : "",
       },
-      chill: {
-        state: chillState,
-        reason: null,
-        // Owner's switch (/data/chill/disabled absent): off only when stopped on purpose.
-        on: chillState !== "stopped",
-      },
       home_mode: {
         present: shared.homeMode.present,
         enabled: shared.homeMode.present && shared.homeMode.enabled,
@@ -60,8 +53,7 @@ function publicStatus(ctx: Ctx): PublicStatus {
       name: "国外",
       wifi_off: false,
       abroad: true,
-      chill_on_when_home: false,
-      auto_direct: shared.chill.exit === "direct",
+      auto_direct: false,
       pin: null,
       guard_takeover: false,
       // firmware-b27 exercises a scenario that has never switched (null).

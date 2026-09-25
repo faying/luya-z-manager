@@ -8,8 +8,7 @@
 // method/path/body builder here would turn "walking into a room" into a trigger
 // for any API on the box. This page edits a fixed set of things only: which
 // networks count as home, how eagerly the device reacts, whether the shipped
-// abroad scenario is present, and per scenario two fixed switches — Wi-Fi on
-// or off, and which node CHILL's main group uses.
+// abroad scenario is present, and per scenario a fixed Wi-Fi on/off switch.
 //
 // Writes (controls-inventory §/router/scenario, design §3.1):
 //   engine on/off, pin/unpin, every config edit, scan  → tier 2 (ConfirmInline)
@@ -21,7 +20,6 @@
 // confirmed press — never on load or on a timer.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import type { TFunction } from "i18next";
 import { ArrowClockwise, Plus, PushPin, Trash } from "@phosphor-icons/react";
 import { useApi } from "@/lib/hooks/useApi";
 import { fmtDevice } from "@/lib/deviceClock";
@@ -39,7 +37,6 @@ import type {
   ScenarioSsidEntry,
   ScenarioState,
 } from "@/lib/api/schemas/scenario";
-import type { ChillStatus } from "@/lib/api/schemas/services";
 import {
   Button,
   ConfirmDialog,
@@ -60,13 +57,6 @@ import {
 
 const HOME_ID = "home";
 const WIFI_PATH = "/api/wifi/radio";
-const REGION_PATH = "/api/services/chill/regions";
-// Must match CHILL_MAIN_GROUP in scenario.rs and scripts/chill/template.yaml.
-const CHILL_GROUP = "🚀 节点选择";
-// Used when CHILL is not running and cannot list its own members.
-const CHILL_FALLBACK_OPTIONS = ["DIRECT", "🇹🇼 台湾", "🇯🇵 日本", "🇸🇬 新加坡", "🇺🇸 美国"];
-// `abroad_scenarios()` in zte-agent/src/scenario.rs ships exactly one.
-const SHIPPED_ABROAD = 1;
 const AUTO = "__auto";
 
 type Section = "engine" | "pin" | "setup" | "home" | "nearby" | "abroad" | "does" | "timing";
@@ -91,15 +81,6 @@ function wifiOf(s: ScenarioDef): boolean | null {
   return a ? a.body?.ap_2g !== false : null;
 }
 
-function isMainGroup(a: ScenarioAction) {
-  return a.path === REGION_PATH && a.body?.group === CHILL_GROUP;
-}
-
-function nodeOf(s: ScenarioDef): string {
-  const a = s.actions.find(isMainGroup);
-  return typeof a?.body?.member === "string" ? a.body.member : "";
-}
-
 // Wi-Fi goes first: arriving from home means the APs are down, and anything
 // after it may need the network.
 function withWifi(s: ScenarioDef, on: boolean): ScenarioDef {
@@ -113,32 +94,7 @@ function withWifi(s: ScenarioDef, on: boolean): ScenarioDef {
   return { ...s, actions: [wifi, ...rest] };
 }
 
-// Same shape as chill_main_group_action() in scenario.rs: best-effort (CHILL
-// may be off), verified by reading the group back, restored on leaving.
-function withNode(s: ScenarioDef, member: string): ScenarioDef {
-  const rest = s.actions.filter((a) => !isMainGroup(a));
-  if (!member) return { ...s, actions: rest };
-  const status = "/api/services/chill";
-  const active = "/data/region/active";
-  return {
-    ...s,
-    actions: [
-      ...rest,
-      {
-        method: "PUT",
-        path: REGION_PATH,
-        body: { group: CHILL_GROUP, member },
-        verify_field: { path: status, pointer: active, equals: member },
-        best_effort: true,
-        restore_on_exit: { read_path: status, read_pointer: active, field: "member" },
-      },
-    ],
-  };
-}
 
-function isAbroad(s: ScenarioDef) {
-  return s.detect.type === "mcc" || s.detect.type === "abroad";
-}
 
 function entriesOf(s: ScenarioDef | undefined): ScenarioSsidEntry[] {
   return s && s.detect.type === "ssid" ? s.detect.entries : [];
@@ -170,8 +126,6 @@ const PARAM_KEYS: (keyof ScenarioParams)[] = [
 export default function ScenarioPage() {
   const { t } = useTranslation();
   const sc = useApi<ScenarioState>("/api/scenario", { refreshInterval: 10000 });
-  // Read only for the node list; no polling (it changes rarely).
-  const chill = useApi<ChillStatus>("/api/services/chill");
   const log = useApi<ScenarioLog>("/api/scenario/log", { refreshInterval: 15000 });
 
   const data = sc.data;
@@ -248,7 +202,7 @@ export default function ScenarioPage() {
       action: on ? t("scenario.engineTurnOn", "turn the engine on") : t("scenario.engineTurnOff", "turn the engine off"),
       consequence: on
         ? t("scenario.engineOnConsequence", "The device starts switching scenarios by itself. When it recognises home it switches its own Wi-Fi off.")
-        : t("scenario.engineOffConsequence", "The device stops switching scenarios and goes back to the away settings: Wi-Fi on, a changed CHILL node put back. This can take up to a minute."),
+        : t("scenario.engineOffConsequence", "The device stops switching scenarios and goes back to the away settings: Wi-Fi on. This can take up to a minute."),
       steps: [
         {
           label: t("scenario.engineOn", "Engine on"),
@@ -337,30 +291,6 @@ export default function ScenarioPage() {
       check: (s) => s.config.scenarios.length > 0,
     });
   }
-  // Append whichever shipped abroad scenarios are missing. Never rewrites what
-  // is already there — the home networks in particular took effort to pick.
-  function askAddAbroad() {
-    if (!cfg) return;
-    const base = cfg;
-    ask({
-      section: "abroad",
-      tier: 2,
-      action: t("scenario.addAbroad", "Add abroad scenario"),
-      consequence: t("scenario.addAbroadConsequence", "With a foreign SIM in the slot, CHILL's main group goes direct on arrival and comes back when you are home. Your home networks are kept."),
-      steps: [
-        readTemplate,
-        {
-          label: t("scenario.stepSave", "Save scenarios"),
-          run: () => {
-            const have = new Set(base.scenarios.map((s) => s.id));
-            const missing = (tplRef.current?.scenarios ?? []).filter((s) => isAbroad(s) && !have.has(s.id));
-            return apiFetch("/api/scenario", { method: "PUT", body: { ...base, scenarios: [...base.scenarios, ...missing] } });
-          },
-        },
-      ],
-      check: (s) => s.config.scenarios.some(isAbroad),
-    });
-  }
 
   // ── what each scenario does ──
   function editStep(next: ScenarioDef): WriteStep | null {
@@ -395,25 +325,6 @@ export default function ScenarioPage() {
       },
     });
   }
-  function askNode(s: ScenarioDef, member: string) {
-    const step = editStep(withNode(s, member));
-    if (!step) return;
-    const label = member ? nodeLabel(member) : t("scenario.nodeUnchanged", "leave as is");
-    ask({
-      section: "does",
-      tier: 2,
-      action: t("scenario.nodeAction", "CHILL node in “{{name}}”: {{node}}", { name: s.name, node: label }),
-      consequence: member
-        ? t("scenario.nodeConsequence", "On entering “{{name}}” CHILL's main group switches to {{node}}, and back on leaving. Nothing changes right now.", { name: s.name, node: label })
-        : t("scenario.nodeClearConsequence", "Entering “{{name}}” no longer touches CHILL's node.", { name: s.name }),
-      steps: [step],
-      check: (st) => {
-        const x = st.config.scenarios.find((y) => y.id === s.id);
-        return !!x && nodeOf(x) === member;
-      },
-    });
-  }
-  const nodeLabel = (o: string) => (o === "DIRECT" ? t("scenario.direct", "Direct") : o);
 
   // ── timing ──
   // Seeded from the device, then edited locally (the draft) so a background
@@ -471,8 +382,6 @@ export default function ScenarioPage() {
   );
 
   const nameless = entries.filter((e) => !e.bssid);
-  const abroad = cfg?.scenarios.filter(isAbroad) ?? [];
-  const nodeOptions = chill.data?.region?.options?.length ? chill.data.region.options : CHILL_FALLBACK_OPTIONS;
 
   // ── status ──
   let tone: Tone = "neutral";
@@ -790,71 +699,19 @@ export default function ScenarioPage() {
               {confirmHere("nearby")}
             </section>
 
-            {/* ── abroad ── */}
-            <section>
-              <GroupTitle>{t("scenario.abroadTitle", "Abroad")}</GroupTitle>
-              <p className="nd-aux -mt-1 mb-3 px-1">
-                {t(
-                  "scenario.abroadDesc",
-                  "Decided by the SIM in the slot, not by where the signal comes from: with a foreign SIM or eSIM profile, CHILL's main group goes direct. A home SIM roaming abroad changes nothing.",
-                )}
-              </p>
-              <div className={`nd-group${sc.stale ? " nd-stale" : ""}`}>
-                {abroad.length === 0 ? (
-                  <div className="nd-row text-nd-t2">{t("scenario.noAbroad", "Not set up — a foreign SIM is treated as away.")}</div>
-                ) : (
-                  abroad.map((s) => (
-                    <Row
-                      key={s.id}
-                      label={s.name}
-                      value={s.detect.type === "mcc" ? s.detect.mccs.join(" ") : t("scenario.otherMcc", "any foreign SIM")}
-                      mono={s.detect.type === "mcc"}
-                    />
-                  ))
-                )}
-                {(data.pending_restore ?? []).map((p) => (
-                  <Row key={p.key} label={t("scenario.willRestore", "Restores on return:")} value={restoreText(t, p.key, p.body)} />
-                ))}
-              </div>
-              {abroad.length < SHIPPED_ABROAD && (
-                <div className="mt-3">
-                  <span {...trig("abroad")}>
-                    <Button variant="secondary" isDisabled={locked} onPress={askAddAbroad}>
-                      <Plus size={20} weight="bold" aria-hidden />
-                      {t("scenario.addAbroad", "Add abroad scenario")}
-                    </Button>
-                  </span>
-                </div>
-              )}
-              <p className="nd-aux mt-3 px-1">
-                {t(
-                  "scenario.abroadNote",
-                  "Only the “🚀 节点选择” group is set to DIRECT, once, on arrival; groups that do not offer DIRECT (such as AI) keep their node. Changing it by hand afterwards sticks. When you are back on a home SIM the node from before the trip is restored. If CHILL is off, both steps are skipped and retried later.",
-                )}
-              </p>
-              {confirmHere("abroad")}
-            </section>
-
             {/* ── what each scenario does ── */}
             <section>
               <GroupTitle>{t("scenario.doesTitle", "What each scenario does")}</GroupTitle>
               <p className="nd-aux -mt-1 mb-3 px-1">
                 {t(
                   "scenario.doesDesc",
-                  "Applied once on entering. A changed CHILL node is put back on leaving. Away is where every failure ends up, so its Wi-Fi always stays on.",
+                  "Applied once on entering. Away is where every failure ends up, so its Wi-Fi always stays on.",
                 )}
               </p>
-              {!chill.data?.region?.options?.length && (
-                <p className="nd-aux mb-3 px-1">
-                  {t("scenario.nodeFallback", "CHILL is not listing its nodes right now, so the choices below are the built-in regions.")}
-                </p>
-              )}
               <div className={`nd-group nd-list${sc.stale ? " nd-stale" : ""}`}>
                 {cfg?.scenarios.map((s) => {
                   const wifi = wifiOf(s);
                   const fallback = s.detect.type === "fallback";
-                  const node = nodeOf(s);
-                  const opts = [...new Set([...nodeOptions, ...(node ? [node] : [])])];
                   return (
                     <div key={s.id} className="nd-list">
                       <div className="nd-row">
@@ -878,25 +735,6 @@ export default function ScenarioPage() {
                           )
                         }
                       />
-                      <label className="nd-row">
-                        <span className="nd-row__text">
-                          <span className="nd-row__label">{t("scenario.chillNode", "CHILL node")}</span>
-                        </span>
-                        <select
-                          className="nd-field w-auto max-w-[60%]"
-                          aria-label={t("scenario.nodeFor", "CHILL node in {{name}}", { name: s.name })}
-                          value={node}
-                          disabled={locked}
-                          onChange={(e) => askNode(s, e.target.value)}
-                        >
-                          <option value="">{t("scenario.nodeUnchanged", "leave as is")}</option>
-                          {opts.map((o) => (
-                            <option key={o} value={o}>
-                              {nodeLabel(o)}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
                     </div>
                   );
                 })}
@@ -1025,18 +863,3 @@ export default function ScenarioPage() {
   );
 }
 
-/** One `pending_restore[]` entry in words. Keys: scenario.rs CHILL_ON_KEY,
- *  CHILL_EXIT_KEY, and main-group region restores (`body.member`). */
-function restoreText(t: TFunction, key: string, body: Record<string, unknown> | null) {
-  if (key === "chill-on-after-abroad") {
-    return t("scenario.chillOnWhenHome", "CHILL was switched off abroad; it is switched back on when you return.");
-  }
-  if (key === "chill-exit-after-abroad") {
-    return body?.state === "proxy"
-      ? t("scenario.exitWhenHome", "Exit back to “Proxy”")
-      : t("scenario.exitWhenHomeOther", "Exit back to {{x}}", { x: String(body?.state ?? "—") });
-  }
-  const m = body?.member;
-  if (typeof m === "string") return m === "DIRECT" ? t("scenario.direct", "Direct") : m;
-  return "—";
-}

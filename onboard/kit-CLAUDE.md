@@ -11,7 +11,6 @@
 | `admin` | 高级后台 zte-agent + 管理网页，`http://<设备>:9090/` |
 | `devui` | 前面板触屏界面 + 数据后端 zwrt-datad |
 | `esim` | lpac，配合可插拔 eUICC 卡管理/切换 profile |
-| `chill`（可选，不在全套里） | CHILL 透明代理：mihomo + 规则集 + zashboard 面板（`/data/chill`）。第一次装**不启动**：要用户自己写订阅地址（`/data/chill/chill.env`，别替用户填、别读出来），再 `chill.sh safe-start` + 5 分钟内 `confirm` |
 
 装 `ssh` 组件时还会关闭固件自动升级（升级会覆盖开机自启，新固件又开不了 ADB）。
 **全局要求：固件自动升级永远保持关闭**，任何脚本、页面、自动化都不能把它打开（`zwrt_zte_dm.dm_update.dm_update_mode` 必须是 `0`）。
@@ -118,7 +117,6 @@ adb shell '<命令>'        # 只有 ADB 通的时候（ADB 重启后就没了�
 | `/data/zte-agent`、`/data/admin/` | 高级后台 |
 | `/data/plugins/u60pro-devui/`、`/data/plugins/zwrt-datad/` | 触屏界面、数据后端 |
 | `/data/esim/` | lpac（`/data/esim/lpac.sh chip info` / `profile list`） |
-| `/data/chill/`、`/etc/init.d/chill` | CHILL（`sh /data/chill/chill.sh status`）。改全屋网络：启动、停止、`CHILL_API_LAN`、防火墙区 `chill` 都**先问用户**。停它用 `chill.sh stop`（会把 dnsmasq 换回原样），别 kill mihomo |
 | `/etc/rc.local` | 只加了几行自启；原厂版本备份在 `/data/u60-kit/rc.local.orig` |
 
 日志：`/tmp/zte-agent.log`、`/tmp/u60pro-devui.log`、`/tmp/zwrt-datad.log`、`/tmp/u60-guard.log`、`/tmp/u60-uid.log`、`logread`（procd）、`/tmp/u60-kit-devui.log`（devui 安装）、
@@ -181,10 +179,9 @@ sleep 8; /etc/init.d/u60-uid stop  # 之后不再管屏幕（原厂界面服务�
 
 ```sh
 echo vendor > /tmp/u60-uid.ctl; sleep 8     # 先把屏幕交给原厂界面
-[ -x /data/chill/chill.sh ] && /data/chill/chill.sh stop; rm -f /etc/init.d/chill   # CHILL：先停，它会把 DNS 设置换回原样
 for s in u60-uid u60-guard zte-agent zwrt-datad; do /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
 cp /data/u60-kit/rc.local.orig /etc/rc.local
-rm -rf /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim /data/chill \
+rm -rf /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim \
        /data/u60-guard /data/u60-uid /data/alerts /data/crashlog /data/power /data/local/tmp/start_zte_agent.sh
 # 连 SSH 也不要：rm -rf /data/ssh /data/local/tmp/start_dropbear.sh
 reboot

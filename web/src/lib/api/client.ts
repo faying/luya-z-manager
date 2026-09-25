@@ -36,7 +36,7 @@ export const WRITE_TIMEOUT_MS = 15000;
  *    wifi_radio.rs:57-59,101)
  *  - scenario/scan: `iw` scan with retries (scenario.rs:1731, wifi_scan.rs)
  *  - scenario/apply, scenario/enabled (disable): run the scenario's Wi-Fi /
- *    CHILL actions inline (scenario.rs:1679-1726; wifi_radio::apply ≤ ~50 s)
+ *    service actions inline (scenario.rs:1679-1726; wifi_radio::apply ≤ ~50 s)
  *  - wifi radio/settings/guest: Wi-Fi lock wait 5 s + reload verified up to
  *    45 s (wifi_radio.rs:57-59,101,339; wifi.rs:167) */
 export const TIMEOUT_OVERRIDES: Readonly<Record<string, number>> = {

@@ -82,9 +82,9 @@ export interface ScenarioConfig {
 
 /** One `pending_restore[]` entry, reduced in state_json (scenario.rs:1459-1462). */
 export interface ScenarioPendingRestore {
-  /** e.g. `/api/services/chill/regions {"group":"🚀 节点选择"}`, "chill-on-after-abroad", "chill-exit-after-abroad". */
+  /** e.g. an API path plus JSON body, or a named restore marker. */
   key: string;
-  /** Body of the action that puts the value back (null for chill-on). */
+  /** Body of the action that puts the value back (null for markers). */
   body: Record<string, unknown> | null; // page expects `{ member?: string } | null`
   saved_at: number;
 }

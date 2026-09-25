@@ -11,7 +11,7 @@ const THEMES = ["light", "dark"] as const;
  *  (the green status word would need another colour on the family blocks).
  *  Matched on rule + exact colour pair, so any other contrast failure still
  *  fails. Remove an entry once the tokens are changed.
- *  - okT #146c34 on blkServices #cdb9f6 (home CHILL card "CHILL · 运行中"): 3.68
+ *  - okT #146c34 on blkServices #cdb9f6 (home services card status): 3.68
  *  - okT #146c34 on blkCharts #bcd4ff (charts-family status meta "实时"): 4.34 */
 const KNOWN_CONTRAST: { fg: string; bg: string }[] = [
   { fg: "#146c34", bg: "#cdb9f6" },

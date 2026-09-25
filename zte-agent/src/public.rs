@@ -2,7 +2,7 @@
 // public.rs — UNAUTHENTICATED, read-only status summary for the login screen.
 //
 // Mirrors the kind of pre-login info the stock ZTE web UI shows (network / Wi-Fi
-// / battery) and adds our service health (Tailscale / CHILL / Home Mode).
+// / battery) and adds our service health (Tailscale / Home Mode / …).
 // LAN-only, no secrets — never include keys, IMEI, client lists, etc.
 //
 //   GET /api/public/status   (allow-listed past auth in server.rs)
@@ -161,22 +161,6 @@ pub fn public_status(state: &AppState) -> (u16, Value) {
         String::new()
     };
     let ts_installed = std::path::Path::new("/data/tailscale/tailscale").exists();
-    // CHILL publishes its own state as JSON (state/reason/...) — see chill.rs and
-    // chill.sh's write_state().
-    let chill_state = fs::read_to_string("/tmp/chill.state")
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok());
-    let chill_state_str = chill_state
-        .as_ref()
-        .and_then(|v| v.get("state"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    let chill_reason = chill_state
-        .as_ref()
-        .and_then(|v| v.get("reason"))
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
     let hm_state = fs::read_to_string("/data/homemode/state").unwrap_or_default();
     let hm_mode = hm_state.split_whitespace().next().unwrap_or("normal").to_string();
     let hm_present = std::path::Path::new("/data/homemode.sh").exists();
@@ -234,11 +218,6 @@ pub fn public_status(state: &AppState) -> (u16, Value) {
                 "device": { "model": dev_model, "name": dev_name },
                 "services": {
                     "tailscale": { "running": ts_running, "installed": ts_installed, "node": ts_node },
-                    "chill": {
-                        "state": chill_state_str, "reason": chill_reason, "on": crate::chill::switched_on(),
-                        // One line for the home screen, e.g. "手选的 JP 03 不通，已临时换到 🇯🇵 日本（自动）".
-                        "notice": crate::manual_first::summary()["notice"],
-                    },
                     "home_mode": { "present": hm_present, "enabled": hm_enabled, "mode": hm_mode },
                 },
                 "scenario": crate::scenario::public_summary(&state.scenario),

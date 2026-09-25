@@ -1,31 +1,28 @@
 "use client";
 // Home: the readout wall (design doc §5). Reading order is the same on
-// every width — title → status → CHILL → readouts → detail → carriers →
-// scenario, Tailscale — and on ≥1024 it splits 60/40 with CHILL, scenario
-// and Tailscale in the right column. Polling stays within 2.10 req/s:
+// every width — title → status → services → readouts → detail → carriers →
+// scenario, Tailscale — and on ≥1024 it splits 60/40 with the service
+// modules, scenario and Tailscale in the right column. Polling stays within 2.10 req/s:
 //
-//   speed 1 s · signal 2 s · battery, wifi, public status, chill 10 s ·
+//   speed 1 s · signal 2 s · battery, wifi, public status, proxy 10 s ·
 //   thermal, tailscale 15 s · system, data usage 30 s
 import Link from "next/link";
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { mutate as globalMutate } from "swr";
 import { Bell, ChatCircleText, type Icon } from "@phosphor-icons/react";
 import { useApi, type UseApiResponse } from "@/lib/hooks/useApi";
-import { apiFetch } from "@/lib/api/client";
-import { chillValid, tailscaleValid } from "@/lib/api/freshness";
-import { useWriteOp } from "@/lib/api/writeOp";
+import { tailscaleValid } from "@/lib/api/freshness";
 import type { NetworkSignal, NetworkSpeed, DataUsage, NetInfo, NetInfoExit, NetInfoOperator } from "@/lib/api/schemas/network";
 import type { BatteryInfo, DeviceSystem } from "@/lib/api/schemas/device";
-import type { ChillExit, ChillStatus, TailscaleStatus } from "@/lib/api/schemas/services";
+import type { TailscaleStatus } from "@/lib/api/schemas/services";
 import type { PublicStatus } from "@/lib/api/schemas/public";
-import { Group, Help, ModuleCard, Readout, ReadoutWall, Row, Segmented, StatusMark, useToast } from "@/components/nd";
+import { Group, Help, ModuleCard, Readout, ReadoutWall, Row, StatusMark } from "@/components/nd";
 import { selectionWord, bytes, carrierCounts, carriers, cpuTempC, mbps, servingCellId, sigState, totalBandwidth, uptimeParts, type Carrier } from "@/lib/home";
 import { fmtDevice } from "@/lib/deviceClock";
 import { useMedia } from "@/lib/useMedia";
 import { carrierSummary, rsrpWord, sinrWord, type T } from "@/lib/signalWords";
 import { SignalStatus } from "@/components/signal/SignalStatus";
-import { CHILL_REASON_KEYS } from "@/lib/chill";
 import { useDeviceLabel } from "@/lib/publicStatus";
 
 interface WifiStatus {
@@ -48,7 +45,6 @@ export default function HomePage() {
   const bat = useApi<BatteryInfo>("/api/device/battery-info", { refreshInterval: 10000 });
   const wifi = useApi<WifiStatus>("/api/wifi/status", { refreshInterval: 10000 });
   const pub = useApi<PublicStatus>("/api/public/status", { refreshInterval: 10000 });
-  const chill = useApi<ChillStatus>("/api/services/chill", { refreshInterval: 10000, isValid: chillValid });
   const thermal = useApi<Record<string, unknown>>("/api/device/thermal", { refreshInterval: 15000 });
   const ts = useApi<TailscaleStatus>("/api/services/tailscale", { refreshInterval: 15000, isValid: tailscaleValid });
   const sys = useApi<DeviceSystem>("/api/device/system", { refreshInterval: 30000 });
@@ -74,7 +70,6 @@ export default function HomePage() {
   // Each module is mounted once (it owns a write op and toasts); only its
   // column changes with the width.
   const wide = useMedia("(min-width: 1024px)");
-  const chillModule = <ChillModule chill={chill} />;
   const side = (
     <>
       <ScenarioModule pub={pub.data} stale={pub.stale} />
@@ -101,7 +96,6 @@ export default function HomePage() {
           speedStale={spd.stale}
           onRetry={retry}
         />
-        {!wide && chillModule}
         <ReadoutWall label={t("home.readouts", "Readings")}>
           <Readout
             wide
@@ -163,7 +157,6 @@ export default function HomePage() {
       {/* Right column, ≥1024 only. */}
       {wide && (
         <div className="grid content-start gap-4">
-          {chillModule}
           {side}
         </div>
       )}
@@ -204,99 +197,6 @@ function CountButton({ href, icon: I, n, label }: { href: string; icon: Icon; n:
   );
 }
 
-// ── CHILL ─────────────────────────────────────────────────────────────
-
-const EXIT_OPTIONS: ChillExit[] = ["proxy", "global", "direct_keep_ai"];
-
-function ChillModule({ chill }: { chill: UseApiResponse<ChillStatus> }) {
-  const { t } = useTranslation();
-  const toast = useToast();
-  const c = chill.data;
-  const running = c?.state === "running";
-  const pending = useRef<ChillExit | null>(null);
-
-  const op = useWriteOp({
-    tier: 1,
-    steps: [
-      {
-        label: t("home.exit", "Exit"),
-        run: () => apiFetch("/api/services/chill/exit", { method: "PUT", body: { state: pending.current } }),
-      },
-    ],
-    verify: async () => {
-      const st = await apiFetch<ChillStatus>("/api/services/chill");
-      await chill.mutate(st, { revalidate: false });
-      return st.exit === pending.current;
-    },
-  });
-
-  // One result bar per finished attempt (tier 1: no confirm, but always a result).
-  const { phase, error } = op;
-  useEffect(() => {
-    if (phase === "applied") toast.show("ok", t("home.exitApplied", "Exit is now {{x}}", { x: exitLabel(t, pending.current) }));
-    if (phase === "failed") toast.show("bad", t("home.exitFailed", "Exit not changed: {{e}} · try again", { e: error ?? "" }));
-    if (phase === "unknown") toast.show("bad", t("home.exitUnknown", "Connection dropped; not yet confirmed whether the exit changed"));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
-
-  const title =
-    c?.state === "running" ? (
-      <StatusMark tone="ok">CHILL · {t("nd.running", "Running")}</StatusMark>
-    ) : c?.state === "direct" ? (
-      <StatusMark tone="warn">CHILL · {t("nd.direct", "Direct")}</StatusMark>
-    ) : c?.state === "unknown" ? (
-      <StatusMark tone="neutral">CHILL · {t("home.chillNotStarted", "Not started")}</StatusMark>
-    ) : (
-      "CHILL"
-    );
-
-  const node = c?.region?.active;
-  const current = c?.exit && EXIT_OPTIONS.includes(c.exit) ? c.exit : null;
-
-  return (
-    <ModuleCard className="nd-module--lilac" headerHref="/services/chill" title={title} stale={chill.stale}>
-      {!c && !chill.error && <span className="nd-skel" style={{ width: "12ch" }} />}
-      {chill.error && !c && <p className="nd-body text-nd-t2">{t("home.chillUnreadable", "Can't read CHILL status")}</p>}
-      {chill.invalidReason && <p className="nd-aux">{t("home.chillCoreDown", "The proxy core is not answering")}</p>}
-      {c?.state === "direct" && c.reason && <p className="nd-body text-nd-t2">{CHILL_REASON_KEYS[c.reason] ? t(CHILL_REASON_KEYS[c.reason]) : c.reason}</p>}
-      {c?.state === "unknown" && (
-        <p className="nd-body text-nd-t2">{t("home.chillStartHint", "Start it on the CHILL page.")}</p>
-      )}
-      {running && (
-        <>
-          <p className="nd-body">{node ?? "—"}</p>
-          <div className="mt-3">
-            <Segmented<ChillExit>
-              label={t("home.exit", "Exit")}
-              block
-              value={op.busy ? pending.current : current}
-              isDisabled={op.busy}
-              onChange={(v) => {
-                pending.current = v;
-                op.start();
-              }}
-              options={EXIT_OPTIONS.map((id) => ({ id, label: exitLabel(t, id) }))}
-            />
-            {c?.exit === "direct_all" && (
-              <p className="nd-aux mt-2">{t("home.exitAllDirect", "Everything is going direct (AI and VoWiFi too). Change it on the CHILL page.")}</p>
-            )}
-            {chill.stale && current && <p className="nd-aux mt-2">{t("home.exitMaybeChanged", "The selection may have changed since.")}</p>}
-          </div>
-        </>
-      )}
-    </ModuleCard>
-  );
-}
-
-function exitLabel(t: (k: string, d: string) => string, x: ChillExit | null) {
-  switch (x) {
-    case "proxy": return t("home.exitProxy", "Proxy");
-    case "global": return t("home.exitGlobal", "Global");
-    case "direct_keep_ai": return t("home.exitDirectAi", "Direct · AI stays");
-    case "direct_all": return t("home.exitDirectAll", "All direct");
-    default: return "—";
-  }
-}
 
 // ── scenario, Tailscale ───────────────────────────────────────────────
 
@@ -367,13 +267,12 @@ function TailscaleModule({ ts }: { ts: UseApiResponse<TailscaleStatus> }) {
 
 // ── network identity ──────────────────────────────────────────────────
 
-// Two exits when CHILL runs and they differ, one otherwise (design D1).
+// Two exits when the proxy runs and they differ, one otherwise (design D1).
 function NetIdentityGroup({ ni, stale }: { ni: NetInfo | undefined; stale: boolean }) {
   const { t } = useTranslation();
   const d = ni?.direct ?? null;
   const p = ni?.proxy ?? null;
   const two = !!p && p.ip !== d?.ip;
-  const same = !!p && !two;
   const exitSub = (e: NetInfoExit | null, extra: (string | null | undefined)[]) => {
     if (!e) return ni ? t("home.lookingUp", "Looking up…") : undefined;
     if (!e.ip && e.error) return t("home.lookupFailed", "Lookup failed: {{e}}", { e: e.error });
@@ -392,9 +291,8 @@ function NetIdentityGroup({ ni, stale }: { ni: NetInfo | undefined; stale: boole
         label={two ? t("home.exitCell", "Cellular exit") : t("home.exitIp", "Public IP")}
         value={d?.ip ?? "—"}
         mono
-        sub={exitSub(d, [d?.isp, same ? t("home.chillDirect", "CHILL direct") : null])}
+        sub={exitSub(d, [d?.isp])}
       />
-      {two && <Row label={t("home.exitChill", "CHILL exit")} value={p?.ip ?? "—"} mono sub={exitSub(p, [p?.node])} href="/services/chill" />}
       <Row label={t("home.simOperator", "SIM operator")} value={op(ni?.home_operator)} />
       <Row label={t("home.servingOperator", "Registered on")} value={op(ni?.serving_operator)} href="/router/mobile-network" />
       <Row

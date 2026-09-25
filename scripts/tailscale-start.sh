@@ -273,7 +273,7 @@ if [ -f /etc/init.d/shellcrash ]; then
     echo "" >> $LOG
     echo "$(date) === checking ShellCrash ===" >> $LOG
     chmod +x /etc/ShellCrash/starts/*.sh /etc/ShellCrash/start.sh /etc/ShellCrash/init.sh 2>/dev/null
-    if ps w | grep -E "CrashCore|mihomo|sing-box" | grep -v grep > /dev/null; then
+    if ps w | grep -E "CrashCore|sing-box" | grep -v grep > /dev/null; then
         echo "$(date) ShellCrash already running" >> $LOG
     else
         echo "$(date) ShellCrash not running, starting…" >> $LOG
@@ -281,13 +281,13 @@ if [ -f /etc/init.d/shellcrash ]; then
         rm -rf /tmp/ShellCrash/start_shellcrash.lock
         /etc/init.d/shellcrash start >> $LOG 2>&1
         for i in $(seq 1 30); do
-            if ps w | grep -E "CrashCore|mihomo|sing-box" | grep -v grep > /dev/null; then
+            if ps w | grep -E "CrashCore|sing-box" | grep -v grep > /dev/null; then
                 echo "$(date) ShellCrash started after ${i}s" >> $LOG
                 break
             fi
             sleep 1
         done
-        if ! ps w | grep -E "CrashCore|mihomo|sing-box" | grep -v grep > /dev/null; then
+        if ! ps w | grep -E "CrashCore|sing-box" | grep -v grep > /dev/null; then
             echo "$(date) ERROR: ShellCrash failed to start" >> $LOG
             echo "--- ShellCrash log ---" >> $LOG
             cat /tmp/ShellCrash/ShellCrash.log 2>/dev/null >> $LOG

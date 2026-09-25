@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 /**
  * Whole-card target (scenario, Tailscale, function tiles): the second
  * legal use of a card. Cards that contain their own controls (the home
- * CHILL module) must not use href — put the link on the header instead.
+ * service module) must not use href — put the link on the header instead.
  */
 export function ModuleCard({
   href,

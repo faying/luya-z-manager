@@ -10,7 +10,7 @@ import { ROUTES, searchRoutes } from "@/lib/routes";
 import { usePublicStatus } from "@/lib/publicStatus";
 
 // The six most used functions, as touch-style tiles (design doc §4, 5A).
-const TILES = ["/router/wifi", "/services/chill", "/services/tailscale", "/router/esim", "/sms", "/bandlock"];
+const TILES = ["/router/wifi", "/services/tailscale", "/router/esim", "/sms", "/bandlock"];
 
 export default function FunctionsHub() {
   const { t } = useTranslation();
@@ -22,13 +22,6 @@ export default function FunctionsHub() {
     const s: Record<string, { tone: Tone; text: ReactNode } | undefined> = {};
     if (!data) return s;
     s["/router/wifi"] = data.wifi?.on ? { tone: "ok", text: t("nd.on", "On") } : { tone: "neutral", text: t("nd.off", "Off") };
-    const c = data.services?.chill;
-    s["/services/chill"] =
-      c?.state === "running"
-        ? { tone: "ok", text: t("nd.running", "Running") }
-        : c?.state === "direct"
-          ? { tone: "warn", text: t("nd.direct", "Direct") }
-          : { tone: "neutral", text: t("nd.off", "Off") };
     const ts = data.services?.tailscale;
     s["/services/tailscale"] = ts?.running
       ? { tone: "ok", text: t("nd.online", "Online") }

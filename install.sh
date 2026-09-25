@@ -243,7 +243,7 @@ module_status() {
     p "  ts node" "$(/data/tailscale/tailscale --socket=/tmp/tailscaled.sock status 2>/dev/null | awk "NR==1{print \$1, \$2}")"
     p "home mode" "$(grep -q /data/homemode.sh /etc/crontabs/root 2>/dev/null && echo "cron on (state: $(cat /data/homemode/state 2>/dev/null))" || echo absent)"
     p "monitor" "$(pidof -x monitor.sh >/dev/null 2>&1 || pgrep -f monitor.sh >/dev/null 2>&1 && echo running || ([ -f /tmp/monitor.pid ] && echo running || echo stopped))"
-    p "shellcrash" "$(ps w | grep -E "CrashCore|mihomo|sing-box" | grep -qv grep && echo running || echo stopped/absent)"
+    p "shellcrash" "$(ps w | grep -E "CrashCore|sing-box" | grep -qv grep && echo running || echo stopped/absent)"
     echo "  --- rc.local autostarts ---"
     grep -E "start_zte_agent|start_dropbear|start_monitor|tailscale-start|homemode-bootsafe|recovery_setup" /etc/rc.local 2>/dev/null | sed "s/^/    /"
   '

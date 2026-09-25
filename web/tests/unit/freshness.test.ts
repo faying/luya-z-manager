@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FreshState,
   INITIAL_FRESH,
-  chillValid,
   checkValid,
   freshNow,
   getFresh,
@@ -83,14 +82,6 @@ describe("validators", () => {
     });
   });
 
-  it("chillValid", () => {
-    expect(chillValid({ state: "running", groups: [{ name: "a" }] })).toBe(true);
-    expect(chillValid({ state: "direct", groups: [] })).toBe(true);
-    expect(chillValid({ state: "unknown" })).toBe(true);
-    expect(chillValid({ state: "running", groups: [] })).toMatchObject({ ok: false });
-    expect(chillValid({ state: "running", groups: null })).toMatchObject({ ok: false });
-    expect(chillValid({ state: "running" })).toMatchObject({ ok: false });
-  });
 
   it("checkValid normalises results", () => {
     expect(checkValid(undefined, 1)).toBeNull();
@@ -124,21 +115,21 @@ describe("validatingFetcher (invalid data does not overwrite)", () => {
     await expect(f()).rejects.toBe(boom);
     expect(rec).toEqual([{ kind: "error" }]);
   });
-
-  it("with the shared store, last valid state survives an invalid reply", async () => {
+  it("with the shared store, last valid state survives an invalid reply (tailscale)", async () => {
     resetFreshStore();
-    let reply: { state: string; groups: unknown[] } = { state: "running", groups: [1] };
-    const f = validatingFetcher("/api/services/chill", async () => reply, chillValid);
+    let reply: { error: string } = { error: "" };
+    const f = validatingFetcher("/api/services/tailscale", async () => reply, tailscaleValid);
     await f();
-    const okAt = getFresh("/api/services/chill").lastOkAt;
+    const okAt = getFresh("/api/services/tailscale").lastOkAt;
     expect(okAt).not.toBeNull();
-    reply = { state: "running", groups: [] };
+    reply = { error: "down" };
     await expect(f()).rejects.toBeInstanceOf(InvalidDataError);
-    const s: FreshState = getFresh("/api/services/chill");
+    const s: FreshState = getFresh("/api/services/tailscale");
     expect(s.lastOkAt).toBe(okAt);
     expect(s.failures).toBe(1);
-    expect(s.invalidReason).toMatch(/no proxy groups/);
+    expect(s.invalidReason).toBe("down");
   });
+
 });
 
 describe("shared ticker", () => {

@@ -6,9 +6,8 @@
 |---|---|
 | **SSH** | `ssh -p 2222 root@192.168.0.1` 用你电脑上的密钥直接登录（只认密钥、不接受密码），重启后自动恢复 |
 | **高级后台** | 浏览器打开 `http://192.168.0.1:9090/`，锁频/锁小区、短信、APN、防火墙、Wi-Fi 等全在里面 |
-| **devui 触屏界面** | 前面板换成新界面：按任务分 5 个标签（首页 · 蜂窝 · Wi-Fi · 出口 · 系统）：信号结论与载波、Wi-Fi 与设备、CHILL/Tailscale 出口、eSIM 切换 |
+| **devui 触屏界面** | 前面板换成新界面：按任务分 5 个标签（首页 · 蜂窝 · Wi-Fi · 出口 · 系统）：信号结论与载波、Wi-Fi 与设备、Tailscale 与出口、eSIM 切换 |
 | **eSIM** | 配合可插拔 eUICC 卡（5ber、eSTK.me 这类），在后台下载/切换/删除 profile，屏幕上也能切 |
-| **CHILL**（可选，要单独点名） | 设备上的透明代理（mihomo）+ zashboard 面板，按规则分流；要你自己的订阅地址 |
 
 装 SSH 时会顺手**关掉固件自动升级**（原因见「注意事项」）。
 
@@ -59,7 +58,6 @@ claude
 ```sh
 ./install.sh ssh               # 只开 ADB + 持久化 SSH
 ./install.sh ssh admin devui   # 不要 eSIM
-./install.sh chill             # 加装 CHILL 代理（不在全套里；第一次装不会启动，见下面「CHILL」）
 ./install.sh status            # 看各组件状态
 ./install.sh doctor            # 只读体检：开机同步、自动升级、各服务、心跳、Wi-Fi、告警……逐项 ●▲■
 ./install.sh backup            # 把设备配置备份到这台电脑（./backups/，含密码，别外传）
@@ -87,7 +85,6 @@ U60 地址不是 `192.168.0.1` 时：`GATEWAY=192.168.x.1 ./install.sh`。
 | `/data/alerts/`、`/data/crashlog/` | 告警记录、程序崩溃时的日志 |
 | `/data/plugins/u60pro-devui/`、`/data/plugins/zwrt-datad/` | 触屏界面和它的数据后端 |
 | `/data/esim/` | lpac（eSIM 读写卡工具） |
-| `/data/chill/`、`/etc/init.d/chill` | CHILL：mihomo、规则集、zashboard、`chill.sh`；订阅地址在 `/data/chill/chill.env`（你自己写，只有 root 可读） |
 | `/data/u60-kit/rc.local.orig` | 第一次安装前的原厂 `rc.local` 备份 |
 
 ## 日常用法
@@ -95,10 +92,7 @@ U60 地址不是 `192.168.0.1` 时：`GATEWAY=192.168.x.1 ./install.sh`。
 - **加一台电脑的 SSH 公钥**：把公钥追加到 `/data/ssh/authorized_keys`，然后 `sh /data/local/tmp/start_dropbear.sh`（改 `/etc/dropbear/` 里那份没用，开机会被覆盖）。
 - **改后台密码**：重跑 `./install.sh admin`（会问新密码）。或者 SSH 里改 `/data/zte-agent.env` 那一行（不能含引号、反斜杠、空格），然后 `/etc/init.d/zte-agent restart`，再 `sh /data/u60-guard/agent-auth.sh verify` 确认。
 - **eSIM**：后台「移动网络 → eSIM」管理 profile；屏幕「更多功能 → eSIM」点两下切换，大约 10 秒生效，一般不用重启。
-- **CHILL**：第一次 `./install.sh chill` 只装不启动。SSH 进去把订阅地址写进 `/data/chill/chill.env`（从同目录的 `chill.env.example` 复制改，`chmod 600`；静态节点快照放 `/data/chill/providers/`），
-  然后 `sh /data/chill/chill.sh safe-start`，确认全屋网络正常后 5 分钟内 `sh /data/chill/chill.sh confirm`（不确认会自动停掉，免得把自己锁在外面）。
-  之后在后台「服务 → CHILL」开关、换出口；面板 zashboard 从那一页的按钮进（经由后台 `:9090/chill-ui/`，带登录后的密钥，Tailscale 下也能用）。
-  以后再跑 `./install.sh chill` 是更新：订阅地址和缓存不动，原来在跑就重启核心，起不来自动换回旧版。
+- **代理**：装机包不带代理功能；要的话照 manager 仓库的 `docs/PROXY.md` 从官方来源自己搭。
 - **临时要 ADB**：SSH 进去跑 `ubus call zwrt_bsp.usb set '{"mode":"debug"}'`；`./install.sh status` 里的「USB 模式」显示 `user` 就是普通模式。
 
 ## 注意事项
@@ -114,10 +108,9 @@ SSH 登录后：
 
 ```sh
 echo vendor > /tmp/u60-uid.ctl; sleep 8     # 先把屏幕交给原厂界面
-[ -x /data/chill/chill.sh ] && /data/chill/chill.sh stop; rm -f /etc/init.d/chill   # CHILL：先停，它会把 DNS 设置换回原样
 for s in u60-uid u60-guard zte-agent zwrt-datad; do /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
 cp /data/u60-kit/rc.local.orig /etc/rc.local
-rm -rf /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim /data/chill \
+rm -rf /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim \
        /data/u60-guard /data/u60-uid /data/alerts /data/crashlog /data/power /data/local/tmp/start_zte_agent.sh
 # 连 SSH 也不要的话再加：rm -rf /data/ssh /data/local/tmp/start_dropbear.sh
 reboot

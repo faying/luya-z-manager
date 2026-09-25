@@ -35,7 +35,7 @@ export class TimeoutError extends ApiError {
 }
 
 /** HTTP and envelope said ok, but the payload fails the endpoint's `isValid`
- *  check (e.g. Tailscale `error` set, CHILL running with no groups) — R9. */
+ *  check (e.g. Tailscale `error` set, a service running with no data) — R9. */
 export class InvalidDataError extends Error {
   reason: string;
   constructor(reason: string) {

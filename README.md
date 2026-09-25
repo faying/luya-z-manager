@@ -1,6 +1,6 @@
 # ZTE U60 Pro（MU5250）管理后台
 
-给中兴 U60 Pro（MU5250）5G 随身 Wi-Fi 用的设备端 REST API（`zte-agent`）、浏览器高级后台、CHILL 代理控制和**一键装机包**。
+给中兴 U60 Pro（MU5250）5G 随身 Wi-Fi 用的设备端 REST API（`zte-agent`）、浏览器高级后台和**一键装机包**。
 
 > 社区项目，和中兴（ZTE）没有关系，风险自负。
 
@@ -29,7 +29,7 @@ zwrt-datad :9460 ──▶ 触屏界面 ──(eSIM 页)──▶ zte-agent :909
   设备/电池/温度、信号与载波、锁频锁小区、SIM/短信、APN、DNS/DHCP/防火墙、Wi-Fi、USB 模式、测速、定时任务等。
 - **管理网页**（`web/`，Next.js 静态导出）：替代原厂网页，手机和电脑都能用，浅色/深色，中英文。
 - **eSIM**：配合可插拔 eUICC 卡（5ber、eSTK.me 这类）下载、切换、删除 profile。
-- **CHILL**：设备上的透明代理（原生 mihomo，TUN 模式）和 zashboard 面板，面板经后台 `/chill-ui/` 反代；省电/标准/性能三档。
+- **代理**：不带。想在设备上跑透明代理，按 [docs/PROXY.md](docs/PROXY.md) 从官方来源自己编内核、配面板。
 - **可靠性**：zte-agent、数据服务、看门狗由 procd 监督；Wi-Fi 兜底看门狗；告警横幅、「健康」页、可选告警短信；
   `./install.sh doctor` 只读体检，`backup` / `restore` 备份配置。约定见 [docs/RELIABILITY.md](docs/RELIABILITY.md)。
 - **装机包**（`onboard/`）：新设备一条 `./install.sh` 装好 SSH、后台、触屏、eSIM，并关掉固件自动升级。
@@ -65,7 +65,7 @@ node scripts/mock-agent/server.ts & npm run dev
 zte-agent/     设备端 REST API（Rust）
 web/           管理网页（Next.js），由 agent 在 :9090 提供
 onboard/       装机包：build-kit.sh（打包）、install.sh（装机）、device/（设备端脚本）、test/（沙盒测试）
-scripts/       chill/（CHILL）、esim/（lpac 工具包）、tailscale/、homemode.sh、monitor.sh 等
+scripts/       esim/（lpac 工具包）、tailscale/、homemode.sh、monitor.sh 等
 docs/          GETTING-STARTED.md、DESIGN.md（界面设计规范）、RELIABILITY.md（可靠性约定）
 ```
 
@@ -84,7 +84,7 @@ docs/          GETTING-STARTED.md、DESIGN.md（界面设计规范）、RELIABIL
 ## 致谢
 
 - [Jesther Silvestre](https://github.com/jesther-ai)：原始项目 [open-u60-pro](https://github.com/jesther-ai/open-u60-pro)（agent、第一版网页）。
-- Wei REN：装机包、eSIM、Tailscale、CHILL、回家模式、网页改版。
+- Wei REN：装机包、eSIM、Tailscale、回家模式、网页改版。
 - [33333s](https://github.com/33333s)：感谢 [u60pro-devui](https://github.com/33333s/u60pro-devui)（触屏界面的起点）和 [zwrt-datad](https://github.com/33333s/zwrt-datad)（本机数据服务）这两个参考仓库。
 
 ## 许可证与免责声明

@@ -9,8 +9,7 @@
 //           progress endpoint is the result. 409 "already running" just
 //           shows the running test.
 //   Stop  = tier 2 (inventory). Readback: progress reaches cancelled /
-//           complete / error (polled, bounded — the runJob idea from the
-//           CHILL page).
+//           complete / error (polled, bounded — the runJob idea).
 //
 // Progress is read once on entry (so a running test or the last result
 // shows when you come back) and every second while a test runs, also when

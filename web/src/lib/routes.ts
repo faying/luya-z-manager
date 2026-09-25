@@ -14,7 +14,7 @@ import {
   ClockCountdown, Cloud, Cpu, Crosshair, DeviceMobile, EyeSlash, FadersHorizontal, FileText, Gauge, Gear,
   Globe, HardDrive, HardDrives, Heartbeat, House, HouseLine, LockSimple, MapPin, Network, NotePencil,
   Path, Plugs, Power, Shield, ShieldCheck, SimCard, SlidersHorizontal, Speedometer, TerminalWindow,
-  UserPlus, Users, Usb, Waves, WifiHigh, type Icon,
+  UserPlus, Users, Usb, WifiHigh, type Icon,
 } from "@phosphor-icons/react";
 
 export type Anchor = "home" | "charts" | "functions" | "system";
@@ -68,7 +68,6 @@ export const ROUTES: RouteDef[] = [
   { href: "/router/vpn", tKey: "nav.vpn", fallback: "VPN Passthrough", icon: ShieldCheck, anchor: "functions", group: "wifiLan", aliases: ["vpn", "穿透", "直通"] },
   { href: "/router/telemetry", tKey: "nav.telemetry", fallback: "Telemetry Block", icon: EyeSlash, anchor: "functions", group: "wifiLan", aliases: ["遥测", "yaoce", "telemetry", "拦截"] },
 
-  { href: "/services/chill", tKey: "nav.chill", fallback: "CHILL", icon: Waves, anchor: "functions", group: "services", aliases: ["chill", "代理", "daili", "节点", "jiedian", "梯子", "出口", "mihomo", "proxy", "node"] },
   { href: "/services/tailscale", tKey: "nav.tailscale", fallback: "Tailscale", icon: Cloud, anchor: "functions", group: "services", aliases: ["tailscale", "远程", "yuancheng", "ts"] },
   { href: "/router/scenario", tKey: "nav.scenario", fallback: "Scenarios", icon: MapPin, anchor: "functions", group: "services", aliases: ["情景", "qingjing", "scenario", "场景"] },
   { href: "/router/home-mode", tKey: "nav.homeMode", fallback: "Home Mode", icon: HouseLine, anchor: "functions", group: "services", aliases: ["在家", "回家", "zaijia", "home mode"] },

@@ -124,7 +124,7 @@ zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`�
 
 ## 8. 待机哨兵（u60-guard 记录，doctor.sh 判定）
 
-- 屏幕熄灭时，u60-guard 每轮（60 秒）往 `/tmp/standby.stat` 写一行：`<uptime> <蜂窝包/分> <Tailscale 隧道包/分> <tailscaled mihomo u60pro-devui zwrt-datad zte-agent 的唤醒/秒>`。程序中途重启（pid 变化）的那一格写 `-`；亮屏、两轮间隔过长（设备休眠过）或计数器回退时不写。只保留 60 行，在内存盘。
+- 屏幕熄灭时，u60-guard 每轮（60 秒）往 `/tmp/standby.stat` 写一行：`<uptime> <蜂窝包/分> <Tailscale 隧道包/分> <tailscaled 代理核心 u60pro-devui zwrt-datad zte-agent 的唤醒/秒>`。程序中途重启（pid 变化）的那一格写 `-`；亮屏、两轮间隔过长（设备休眠过）或计数器回退时不写。只保留 60 行，在内存盘。
 - 隧道流量单独记，不从蜂窝包数里扣掉：其他 tailnet 设备一直访问本机（比如开着网页后台），正是哨兵要发现的浪费。
 - `doctor.sh --calibrate-standby` 用这些记录（至少 30 行）算出每列的中位数和 MAD，写入 `/data/u60-guard/standby.baseline`。要在省电改动都上线之后、息屏 30~60 分钟再校准。
 - 体检的「待机」一项：没有基线时显示「未校准」（算正常）；最近 15 分钟不足 8 行不判定；某列中位数超过「基线 + 3×MAD」且超过基线 1.5 倍（并且至少多 1）时报 ▲，说明是哪一列、现在多少、基线多少。只显示，不发短信。

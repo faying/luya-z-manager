@@ -43,7 +43,7 @@ export const zh = {
     rebootDowntime: "约 90 秒。页面会等设备回来并自动重连；可能需要重新登录。",
     confirmResetTitle: "清除全部内容，恢复出厂设置？",
     confirmResetWhat:
-      "所有设置都会被清除（Wi-Fi、APN、锁频锁小区、短信转发等），本项目的软件也会一起删掉：这个管理后台、触屏界面、CHILL 和 Tailscale。此操作无法撤销。",
+      "所有设置都会被清除（Wi-Fi、APN、锁频锁小区、短信转发等），本项目的软件也会一起删掉：这个管理后台、触屏界面和 Tailscale。此操作无法撤销。",
     resetDowntime: "设备会重启；这个页面不会再回来。",
     resetWord: "恢复出厂",
   },

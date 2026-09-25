@@ -4,10 +4,6 @@
 //!   • Tailscale  — daemon at /data/tailscale/tailscaled, socket
 //!                  /tmp/tailscaled.sock, log /data/tailscaled.log.
 //!
-//! CHILL (the native-mihomo proxy service) has its own module, chill.rs — it
-//! mutates state (region/provider/bypass switches) so it doesn't fit this
-//! read-only-only file.
-//!
 //! Endpoints never mutate state — purely observability.
 
 use std::fs::File;

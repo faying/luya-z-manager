@@ -85,13 +85,6 @@ export function tailscaleValid(data: { error?: unknown } | null | undefined): Va
   return true;
 }
 
-/** /api/services/chill answers 200 with no groups when mihomo is stuck. */
-export function chillValid(data: { state?: unknown; groups?: unknown[] | null } | null | undefined): ValidResult {
-  if (data?.state === "running" && (!data.groups || data.groups.length === 0)) {
-    return { ok: false, reason: "CHILL is running but reports no proxy groups" };
-  }
-  return true;
-}
 
 // ── shared store + 1 s ticker ────────────────────────────────────────────────
 

@@ -114,8 +114,8 @@ Treat it as a narrow exception to the "ask before changing Wi-Fi" rule below,
 not as a general licence:
 
 - **Authorised, no prompt:** the engine enabling/disabling the AP interfaces
-  (`wireless.main_2g/main_5g.disabled`) via `wifi_radio::apply`, and the CHILL
-  region/on-off actions, when driven by a scenario the owner configured.
+  (`wireless.main_2g/main_5g.disabled`) via `wifi_radio::apply`
+  when driven by a scenario the owner configured.
 - **Still requires asking, every time:** eSIM profile switches, APN changes,
   network-mode/band locking, reboots, and edits to `/etc/rc.local`. The engine's
   `ALLOWED_PATHS` allow-list enforces most of this in code — eSIM is absent from

@@ -15,8 +15,8 @@
 //     the deadlock also wedges an HTTP worker thread. Collect the work, drop the
 //     lock, execute, then re-acquire to record results (the scheduler's
 //     phase1/2/3 shape).
-//  2. An HTTP 200 from `exec()` does NOT mean the device changed. CHILL and eSIM
-//     return `{"status":"running"}` immediately and finish on a worker thread;
+//  2. An HTTP 200 from `exec()` does NOT mean the device changed. eSIM (and other
+//     long jobs) return `{"status":"running"}` immediately and finish on a worker thread;
 //     so does `wifi::wifi_set`'s reload, whose result only reaches the log.
 //     Anything that must actually have taken effect needs
 //     its own verification step after `exec()` returns.

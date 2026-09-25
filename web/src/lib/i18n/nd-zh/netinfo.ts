@@ -4,8 +4,6 @@ export const zh = {
     netId: "网络身份",
     exitIp: "出口 IP",
     exitCell: "蜂窝直连",
-    exitChill: "CHILL 出口",
-    chillDirect: "CHILL 直连",
     lookupFailed: "查不到：{{e}}",
     lookupStale: "刷新失败",
     lookingUp: "查询中…",

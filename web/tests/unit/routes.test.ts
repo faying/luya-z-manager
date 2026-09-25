@@ -38,7 +38,6 @@ describe("search", () => {
     ["锁小区", "/router/celllock"], ["celllock", "/router/celllock"],
     ["eSIM", "/router/esim"],
     ["短信", "/sms"], ["sms", "/sms"],
-    ["CHILL", "/services/chill"], ["代理", "/services/chill"], ["节点", "/services/chill"],
   ];
   it.each(must)("%s → %s first", (q, href) => {
     expect(searchRoutes(q, title)[0]?.href).toBe(href);

@@ -14,7 +14,7 @@ export const SCENARIOS = [
   "stale", // signal + speed endpoints hang past the client's 9 s timeout
   "missing", // GET payloads with fields absent or null
   "cmdfail", // every write returns 500 {ok:false,error:"mock failure"}
-  "fakesuccess", // 200 ok:true but downstream failed (tailscale data.error, chill groups null)
+  "fakesuccess", // 200 ok:true but downstream failed (e.g. tailscale data.error)
   "reboot-token", // POST /api/device/reboot -> 20 s of dropped sockets, then all tokens invalid
   "step2-timeout", // second write of a multi-step op hangs 20 s
   "down", // every socket destroyed (except /__mock/*)

@@ -13,6 +13,8 @@
 //! Device-local packets take the default route out of `rmnet_data0` and the
 //! DNS is not hijacked (checked 2026-09-25), so that query is a direct one.
 
+// Nothing in this build reads the conclusions yet; the sampler runs anyway.
+#![allow(dead_code)]
 use std::fs;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::Mutex;
@@ -57,7 +59,7 @@ pub fn start() {
                 .timeout_global(Some(Duration::from_secs(3)))
                 .build()
                 .into();
-            // Overridable for the local fake run, like ZTE_AGENT_MIHOMO_API.
+            // Overridable for the local fake run.
             let datad = std::env::var("ZTE_AGENT_DATAD_STATE").unwrap_or_else(|_| DATAD_STATE.to_string());
             loop {
                 let state = agent

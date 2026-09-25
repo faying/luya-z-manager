@@ -5,8 +5,6 @@
 #   ./install.sh                     # 全套：开 ADB → SSH → 高级后台 → devui → eSIM
 #   ./install.sh ssh                 # 只开 ADB + 持久化 SSH
 #   ./install.sh admin devui         # 只装指定组件（SSH 或 ADB 通着就行）
-#   ./install.sh chill               # CHILL 代理（mihomo + 面板）；不在全套里，要单独点名。
-#                                    #   第一次装不会启动，装完照提示写订阅地址再 safe-start
 #   ./install.sh status              # 看设备上各组件状态
 #   ./install.sh doctor              # 只读体检（开机同步、自动升级、各服务、心跳、Wi-Fi、告警…）
 #   ./install.sh reboot              # 重启设备并确认各组件开机自己起来（要 SSH 已通）
@@ -72,7 +70,7 @@ case " $COMPONENTS " in
   " status "|" reboot "|" doctor "|" backup "|" restore ") ;;
   *" status "*|*" reboot "*|*" doctor "*) fail "status / doctor / reboot 要单独跑，不能和组件混在一起" ;;
   *) for c in $COMPONENTS; do
-       case "$c" in ssh|admin|devui|esim|chill) ;; *) fail "不认识的组件: ${c}（可选 ssh admin devui esim chill，或 status / doctor / reboot）" ;; esac
+              case "$c" in ssh|admin|devui|esim) ;; *) fail "不认识的组件: ${c}（可选 ssh admin devui esim，或 status / doctor / reboot）" ;; esac
      done ;;
 esac
 INSTALLING=true
@@ -350,8 +348,6 @@ for c in $COMPONENTS; do
     admin) cp "$KIT/payload/zte-agent" "$KIT/payload/admin.tgz" "$S/"; cp -R "$KIT/payload/guard" "$S/" ;;
     devui) cp -R "$KIT/payload/devui" "$S/"; cp -R "$KIT/payload/guard" "$S/" ;;
     esim)  cp "$KIT/payload/esim.tgz" "$S/" ;;
-    chill) [ -d "$KIT/payload/chill" ] || fail "这个装机包没带 CHILL（打包时 CHILL=0？）"
-           cp -R "$KIT/payload/chill" "$S/" ;;
   esac
 done
 
@@ -424,6 +420,5 @@ if [[ "$CHOSEN" == *" ssh "* ]]; then cat <<EOF
 EOF
 fi
 [[ "$CHOSEN" == *" admin "* ]] && printf "\n  高级后台:   http://%s:9090/\n" "$GATEWAY"
-[[ "$CHOSEN" == *" chill "* ]] && printf "  CHILL:      高级后台 → 服务 → CHILL（面板在 http://%s:9090/chill-ui/，从后台的按钮进）\n" "$GATEWAY"
 [[ "$CHOSEN" == *" esim "* ]] && printf "  eSIM:       高级后台 → 移动网络 → eSIM；屏幕上「更多功能 → eSIM」可切换\n"
 echo

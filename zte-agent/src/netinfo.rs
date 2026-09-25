@@ -23,13 +23,8 @@
 //!   and at most every `PASS_MIN_GAP` s. With the screen off nobody asks, so
 //!   nothing runs — no timer, no idle thread.
 //! - **Lookups are rare.** Each exit is looked up again only when it changes
-//!   (default-route address for the direct one, the selected node for CHILL's)
+//!   (the default-route address for the direct one)
 //!   or after `LOOKUP_MAX_AGE`; a failure waits `LOOKUP_RETRY` before the next.
-//! - **Direct needs no binding.** CHILL's TUN only takes `br-lan`
-//!   (`include-interface`), so the agent's own connections never enter mihomo.
-//!   CHILL's exit is looked up through the loopback-only mixed listener in
-//!   scripts/chill/template.yaml, which hands everything to 🚀 节点选择; a
-//!   device still on an older template has no listener and the row reads "—".
 //! - **"Automatic selection" is `AT+COPS=0`.** Not `nwinfo_set_netselect`:
 //!   that takes `net_select` and is the radio-mode preference (Only_5G, …).
 //!   The ubus API has no call for automatic operator selection.
@@ -53,27 +48,18 @@ fn ubus_call(object: &str, method: &str, params: Option<&str>) -> Result<Value, 
 
 const CONF_PATH: &str = "/data/netinfo.conf";
 
-/// Loopback mixed listener in the CHILL template (`listeners:` → netinfo).
-const DEFAULT_PROXY_PORT: u16 = 7894;
 /// Tried in order until one answers with something parse_geo understands, so
 /// one service being down or blocked does not blank the screen (2026-09-25:
 /// the user asked for several). Mainland services first for the cellular
-/// exit, international ones first for CHILL's. ip.skk.moe and ip.net.coffee
-/// were asked for too, but they are browser pages that query from JavaScript;
-/// they have no endpoint a program can read.
+/// exit. ip.skk.moe and ip.net.coffee were asked for too, but they are
+/// browser pages that query from JavaScript; they have no endpoint a
+/// program can read.
 const DEFAULT_DIRECT_URLS: &[&str] = &[
     "https://myip.ipip.net/json",
     "https://cip.cc/",
     "https://ping0.cc/geo",
     "https://api.myip.la/cn?json",
     "http://ip-api.com/json/?lang=zh-CN&fields=status,query,country,regionName,city,isp,org",
-];
-const DEFAULT_PROXY_URLS: &[&str] = &[
-    "http://ip-api.com/json/?lang=zh-CN&fields=status,query,country,regionName,city,isp,org",
-    "https://ping0.cc/geo",
-    "https://ipinfo.io/json",
-    "https://api-ipv4.ip.sb/geoip",
-    "https://ipapi.co/json/",
 ];
 
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -116,13 +102,9 @@ fn clip(s: String) -> String {
 
 /// `/data/netinfo.conf`, optional, `key=value` lines:
 ///   direct=<url>[,<url>…]   lookups for the cellular exit, tried in order
-///   proxy=<url>[,<url>…]    lookups through CHILL
-///   proxy_port=7894
 ///   lookups=0               no external lookups at all
 struct Config {
     direct: Vec<String>,
-    proxy: Vec<String>,
-    proxy_port: u16,
     enabled: bool,
 }
 
@@ -134,8 +116,6 @@ impl Config {
     fn parse(text: &str) -> Self {
         let mut c = Config {
             direct: DEFAULT_DIRECT_URLS.iter().map(|s| s.to_string()).collect(),
-            proxy: DEFAULT_PROXY_URLS.iter().map(|s| s.to_string()).collect(),
-            proxy_port: DEFAULT_PROXY_PORT,
             enabled: true,
         };
         let urls = |v: &str| -> Vec<String> {
@@ -149,8 +129,6 @@ impl Config {
             let Some((k, v)) = line.trim().split_once('=') else { continue };
             match k.trim() {
                 "direct" => c.direct = urls(v),
-                "proxy" => c.proxy = urls(v),
-                "proxy_port" => c.proxy_port = v.trim().parse().unwrap_or(c.proxy_port),
                 "lookups" => c.enabled = v.trim() != "0",
                 _ => {}
             }
@@ -1299,7 +1277,6 @@ impl Slot {
 #[derive(Default)]
 struct Cache {
     direct: Slot,
-    proxy: Slot,
     selection: Option<&'static str>,
     selection_at: i64,
     /// The netinfo call reports it: no AT reads needed.
@@ -1410,19 +1387,6 @@ fn refresh_pass(inner: Arc<Inner>) {
             inner.cache.lock().unwrap().direct.store(&dkey, t, res, None);
         }
 
-        if crate::chill::running() {
-            let chain = crate::chill::main_exit_chain();
-            let node = chain.as_ref().and_then(|c| c.last().cloned());
-            let pkey = node.clone().unwrap_or_else(|| "?".into());
-            let due = inner.cache.lock().unwrap().proxy.due(&pkey, t);
-            if due {
-                let res = lookup(&cfg.proxy, Some(cfg.proxy_port));
-                inner.cache.lock().unwrap().proxy.store(&pkey, t, res, node);
-            }
-        } else {
-            let mut c = inner.cache.lock().unwrap();
-            c.proxy = Slot::default();
-        }
     }
 
     // Per-client traffic only while a page that shows it is open (it spawns iw).
@@ -1490,7 +1454,6 @@ pub fn get(state: &AppState, query: &str) -> (u16, Value) {
     }
     let scenes = crate::scenario::picker_try(&state.scenario)
         .unwrap_or_else(|| inner.scenes.lock().unwrap().clone());
-    let chill_on = crate::chill::running();
     // Four quick ubus reads; the lite (home card) poll does not need them.
     let apn = if lite && !has("apn=1") { Value::Null } else { apn_read() };
     let (guard, scan) = {
@@ -1506,8 +1469,6 @@ pub fn get(state: &AppState, query: &str) -> (u16, Value) {
     let mut data = json!({
         "now": t,
         "direct": c.direct.value.as_ref().map(Lookup::json),
-        "proxy": if chill_on { c.proxy.value.as_ref().map(Lookup::json) } else { None },
-        "chill_running": chill_on,
         "selection": {"mode": c.selection, "checked_at": c.selection_at},
         "guard": guard,
         "neighbors": {
@@ -2162,11 +2123,9 @@ mod tests {
     #[test]
     fn config_parsing() {
         let c = Config::parse("");
-        assert_eq!(c.proxy_port, DEFAULT_PROXY_PORT);
         assert!(c.enabled);
         let c = Config::parse("direct=https://a.example/x, ftp://no\nproxy_port=7000\nlookups=0\n");
         assert_eq!(c.direct, vec!["https://a.example/x".to_string()]);
-        assert_eq!(c.proxy_port, 7000);
         assert!(!c.enabled);
     }
 
@@ -2274,7 +2233,7 @@ mod tests {
     #[test]
     fn band_and_link() {
         // Recorded on the owner's device 2026-09-25 (MACs made up).
-        let ap5 = parse_ap_info("\tssid U-Chill\n\ttype AP\n\tchannel 44 (5220 MHz), width: 160 MHz, center1: 5250 MHz\n");
+        let ap5 = parse_ap_info("\tssid U-Cafe\n\ttype AP\n\tchannel 44 (5220 MHz), width: 160 MHz, center1: 5250 MHz\n");
         assert_eq!(ap5, ApInfo { band: "5 GHz", channel: Some(44), width_mhz: Some(160) });
         let ap2 = parse_ap_info("\tchannel 11 (2462 MHz), width: 40 MHz, center1: 2452 MHz\n");
         assert_eq!((ap2.band, ap2.channel, ap2.width_mhz), ("2.4 GHz", Some(11), Some(40)));

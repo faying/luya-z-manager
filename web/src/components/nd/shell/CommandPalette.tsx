@@ -10,7 +10,7 @@ import { useTranslation } from "react-i18next";
 import { MagnifyingGlass } from "@phosphor-icons/react";
 import { ROUTES, searchRoutes, type RouteDef } from "@/lib/routes";
 
-const SUGGESTED = ["/services/chill", "/bandlock", "/router/wifi", "/router/esim", "/sms", "/router/apn"];
+const SUGGESTED = ["/bandlock", "/router/wifi", "/router/esim", "/sms", "/router/apn", "/services/tailscale"];
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const { t } = useTranslation();

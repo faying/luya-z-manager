@@ -7,7 +7,7 @@
 **怎么来的**：2026-09-24 从代码逐页读出来，没有连设备，也没有跑页面。
 - 页面：`web/src/app/(panel)/**/page.tsx` 共 43 个（`find web/src/app -name page.tsx | wc -l` = 43），外加它们用到的 `web/src/components/admin/*`（AdminShell、AlertBanner、StatusStrip、LangToggle、Button/Toggle/Input、Help）。
 - 中文文案：`web/src/lib/i18n/zh.ts` + `zh-pages.ts`。表里写中文；没有中文翻译的写英文默认值并标「(无中文)」。
-- 接口行为：`zte-agent/src/server.rs` 的路由表，以及各 handler（`handlers.rs`、`router.rs`、`cell.rs`、`modem_ext.rs`、`wifi.rs`、`wifi_radio.rs`、`homemode.rs`、`chill.rs`、`chill_proxy.rs`、`esim.rs`、`scenario.rs`、`sms.rs`、`sms_forward.rs`、`alerts.rs`、`scheduler.rs`、`services.rs`、`public.rs`、`device_ext.rs`、`usb.rs`、`sim.rs`、`telephony.rs`、`speedtest.rs`、`health.rs`、`at_terminal.rs`、`qos.rs`、`network_ext.rs`、`system.rs`）。
+- 接口行为：`zte-agent/src/server.rs` 的路由表，以及各 handler（`handlers.rs`、`router.rs`、`cell.rs`、`modem_ext.rs`、`wifi.rs`、`wifi_radio.rs`、`homemode.rs`、`esim.rs`、`scenario.rs`、`sms.rs`、`sms_forward.rs`、`alerts.rs`、`scheduler.rs`、`services.rs`、`public.rs`、`device_ext.rs`、`usb.rs`、`sim.rs`、`telephony.rs`、`speedtest.rs`、`health.rs`、`at_terminal.rs`、`qos.rs`、`network_ext.rs`、`system.rs`）。
 - 路径里的 `(panel)` 是 Next.js 路由组，不出现在网址里；下文 URL 一律不带它。
 
 ### 表格各列怎么读
@@ -24,11 +24,11 @@
 - **未查**：没追到 handler 的具体行为。
 
 **档位规则**（本次改版定的）：
-- **第一档**（封闭清单，只有这些）：切 CHILL 节点、切地区组、出口「代理 / 全局 / 直连·AI 不动」、CHILL 档位、DNS/DoH 上游、QoS 参数、短信标为已读、告警标为已读、界面设置（深浅色、语言）。
+- **第一档**（封闭清单，只有这些）：DNS/DoH 上游、QoS 参数、短信标为已读、告警标为已读、界面设置（深浅色、语言）。
 - 其余一切**至少第二档**。
 - 现在每个 `window.confirm()` 的地方都是**第三档**。另外这些也是第三档：选网方式、锁频/锁小区（含恢复默认）、飞行模式、重启、定时重启开启、恢复出厂、eSIM 切换/启用/删除、APN 修改/切换/删除、USB 模式、STC 白名单重置、结束进程/一键结束、开 ADB、AT 危险命令、删除短信、删除短信转发规则、清空转发日志。
 - **二·远程三**（本地第二档，远程访问时第三档）：Wi-Fi 开关、Wi-Fi 名称/密码、LAN/DHCP 地址、关 Tailscale、防火墙规则增删改、VPN 直通开关。
-- **始终第二档**：出口「全部直连」、关 CHILL、情景固定/取消固定。
+- **始终第二档**：情景固定/取消固定。
 - 纯页面内的操作（展开/收起、筛选、切标签、只改表单草稿、复制到剪贴板、跳转链接）不写设备，档位写「—（本地）」。
 
 **改版后的标记（2026-09-24，E9 自动核对）**：`tests/e2e/inventory.spec.ts` 逐页按「可访问名称」一列去页面上找控件（`getByRole` 按角色 + 名称精确匹配，表单控件也认 `<label>`；1440 和 390 两种宽度任一处找到就算）。改版后名字变了、控件还在的行，**原文不删**，在可访问名称一格末尾加标记：
@@ -52,7 +52,6 @@
 | 顶栏状态条·移动网络图标（已连接/制式/信号弱/WAN 断开） | `/api/public/status` | `network.connected`、`network.type`、`network.rsrp`（≤ −110 算信号弱） | 10000 | 是：public.rs:31、43 各 ubus 调用失败时 `unwrap_or(json!({}))`，照样回 ok，连接状态会显示成「断开」而不是「读不到」 |
 | 顶栏状态条·Wi-Fi 图标 | `/api/public/status` | `wifi.on` | 10000 | 是：public.rs:53 `zwrt_wlan report` 失败时当作关 |
 | 顶栏状态条·Tailscale 图标 | `/api/public/status` | `services.tailscale.installed`、`services.tailscale.running` | 10000 | 否（本地 `pidof`/文件存在判断） |
-| 顶栏状态条·CHILL 图标 | `/api/public/status` | `services.chill.state`（running/direct/其他） | 10000 | 否（读 `/tmp/chill.state`，读不到为 unknown） |
 | 顶栏状态条·短信图标 + 未读角标 | `/api/public/status` | `sms.unread` | 10000 | 是：public.rs:107 容量查询失败时未读数为 0 |
 | 顶栏页面标题 | 无（按当前路由查 NAV 的 `tKey`） | — | — | — |
 | 顶栏 agent 地址（`host:port`，小屏隐藏） | 无（`getApiBase()`，localStorage `u60.agent_url` 或同源） | — | — | — |
@@ -67,7 +66,6 @@
 | 底部标签栏「更多」（小屏，打开侧栏抽屉） | button「更多」 〔现名：link「功能」（原 button「更多」打开侧栏抽屉；现在底部标签栏是 首页 / 图表 / 功能 / 系统，「功能」「系统」枢纽页列出全部页面）〕 | 无 | — | — | 无 | —（本地） |
 | 语言切换「中 / EN」 | group「Language」内 button「中」、button「EN」（`aria-pressed`；建议 group 名改「语言」） 〔现名：radiogroup「语言」内 radio「中」「EN」（按了就切换的单选组；设置页里也有同名的一组）〕 | 无（`setLang`，写 localStorage `u60_lang`） | — | `<html lang>` / localStorage `u60_lang` | 无 | 一（界面设置·语言） |
 | 退出登录 | button「退出登录」（小屏只剩图标，`title`=「退出登录」） | 无（清 localStorage `u60.token`，不调接口） | — | 跳到 `/login` | 无 | —（本地） |
-| 状态条 5 个图标（跳到 信号 / Wi-Fi / Tailscale / CHILL / 短信 页） | link，名称=当前状态文字，如「移动数据已连接 · SA」「Wi-Fi 已开启」「Tailscale 运行中」「CHILL 已停止」「无未读短信」 | 无（导航） | — | — | 无 | —（本地） |
 | 告警横幅「知道了」 | button「知道了」 | POST `/api/alerts/read` `{seq: events[0].seq}` | 1 个写请求；之后重拉 `/api/alerts`，并让 `/api/public/status` 失效重拉 | `/api/alerts` `unread` = 0 | 无 | 一（告警标为已读） |
 | 告警横幅「查看」 | link「查看」→ `/alerts` | 无（导航） | — | — | 无 | —（本地） |
 
@@ -91,7 +89,6 @@
 | 设备·Wi-Fi（SSID 或「关」） | `/api/public/status` | `wifi.on`、`wifi.ssid` | `setInterval` 10000 | 是：public.rs:53 |
 | 设备·电池（% + 充电中） | `/api/public/status` | `battery.percent`（<0 显示「—」）、`battery.charging` | `setInterval` 10000 | 否（sysfs，读不到为 −1） |
 | 服务·Tailscale（节点名/已停止/未安装） | `/api/public/status` | `services.tailscale.running/installed/node` | `setInterval` 10000 | 否 |
-| 服务·CHILL（运行中/直连/未启动） | `/api/public/status` | `services.chill.state` | `setInterval` 10000 | 否 |
 | 服务·回家模式（未安装/已暂停/已启用 · Wi-Fi 关/已启用 · Wi-Fi 开） | `/api/public/status` | `services.home_mode.present/enabled/mode` | `setInterval` 10000 | 否（读本地文件） |
 | 服务·短信（N 条未读 / 无未读） | `/api/public/status` | `sms.unread` | `setInterval` 10000 | 是：public.rs:107 |
 | 登录失败提示 | `/api/auth/login` 的错误 | `error`（如 `invalid password`） | — | — |
@@ -131,7 +128,6 @@
 | Wi-Fi 开/关 + 5G 加密方式 | `/api/wifi/status` | `wifi_onoff`（"1" 为开）、`encryption_5g` | 10000 | 是：wifi.rs:84-103 读不到时 `wifi_onoff` 兜底为 "1"（显示为开） |
 | 运行时间 | `/api/device/system` | `uptime` | 5000 | 否·透传（device_ext.rs:22） |
 | 服务·Tailscale（节点名/已停止/未安装） | `/api/public/status` | `services.tailscale.running/node/installed` | 10000 | 否 |
-| 服务·CHILL（运行中/直连/未启动） | `/api/public/status` | `services.chill.state` | 10000 | 否 |
 | 服务·回家模式 | `/api/public/status` | `services.home_mode.present/enabled/mode` | 10000 | 否 |
 | 服务·短信（N 条未读/无，可点） | `/api/public/status` | `sms.unread` | 10000 | 是：public.rs:107 |
 | 小区卡：Cell ID / PCI / EARFCN / Band / Bandwidth / Net Select | `/api/network/signal` | `nr5g_cell_id`、`nr5g_pci`、`nr5g_action_channel`、`nr5g_action_band`、`nr5g_bandwidth`（加 MHz）、`net_select_mode` | 2000 | 否·透传 |
@@ -751,7 +747,7 @@
 文件：`app/(panel)/router/scenario/page.tsx`。
 
 > **重要（从代码推断，未在设备上验证）：本页所有写请求都是双重 JSON 编码。** 页面写的是 `apiFetch(path, { body: JSON.stringify(x) })`，而 `apiFetch` 自己又会 `JSON.stringify(opts.body)`（`lib/api/client.ts:66`），所以发出去的请求体是一个 **JSON 字符串字面量**（如 `"{\"id\":\"home\"}"`），不是对象。agent 端的后果：
-> - PUT `/api/scenario`：`serde_json::from_slice::<Config>` 解析字符串失败 → 回 400 `invalid config: …`。**保存 SSID、参数、每个情景的 Wi-Fi/CHILL、创建默认情景、添加国外情景都会报错，改不进去。**
+> - PUT `/api/scenario`：`serde_json::from_slice::<Config>` 解析字符串失败 → 回 400 `invalid config: …`。**保存 SSID、参数、每个情景的 Wi-Fi/节点、创建默认情景、添加国外情景都会报错，改不进去。**
 > - POST `/api/scenario/pin`：解析成 `Value::String`，`.get("id")` 为 None → 走「取消固定」分支（scenario.rs:1666）。**点任何「固定」按钮实际效果都是取消固定**，回 ok，页面还提示「已固定」。
 > - PUT `/api/scenario/enabled`：`.get("enabled")` 为 None → `unwrap_or(true)` → **永远是打开引擎**（scenario.rs:1684）。关引擎时页面提示「引擎已关闭 — Wi-Fi 已恢复」，实际引擎仍开着。这是典型假成功。
 > 改版时要修掉（去掉页面里的 `JSON.stringify`），并在 e2e 里用读回验证。
@@ -773,9 +769,7 @@
 | 只按名称匹配的警告（N 条） | `/api/scenario` | 上述 entries 中没有 `bssid` 的条数 | 10000 | 否 |
 | 附近的网络：SSID / BSSID / 信号 dBm（已在列表里的隐藏） | `/api/scenario/scan`（GET，会临时建虚拟网卡，见汇总） | `networks[].ssid/bssid/signal` | 无（点「扫描」时） | 否（失败回 503，scenario.rs:1731-1740） |
 | 国外情景列表：名称 + MCC 列表 / 「所有外国 SIM」 | `/api/scenario` | `config.scenarios[]` 中 `detect.type` 为 `mcc`/`abroad` 的；`detect.mccs` | 10000 | 否 |
-| 「CHILL 是在国外关掉的，回国后会自动打开。」/「回国后恢复为：X」 | `/api/scenario` | `pending_restore[].key`（`chill-on-after-abroad`）、`pending_restore[].body.member` | 10000 | 否 |
-| 每个情景做什么：名称 / Wi-Fi 开关状态（外出=「始终开」）/ CHILL 节点下拉当前值 | `/api/scenario` | `config.scenarios[].actions[]` 中 `path=/api/wifi/radio` 的 `body.ap_2g`；`path=/api/services/chill/regions` 且 `body.group="🚀 节点选择"` 的 `body.member`；`detect.type=fallback` | 10000 | 否 |
-| CHILL 节点下拉的选项 | `/api/services/chill` | `region.options`（CHILL 没运行时用页面内置的 `DIRECT / 🇹🇼 台湾 / 🇯🇵 日本 / 🇸🇬 新加坡 / 🇺🇸 美国`） | 无 | 是：chill.rs:122-124 mihomo 不通时 `region` 为 null，照样 ok |
+| 每个情景做什么：名称 / Wi-Fi 开关状态（外出=「始终开」） | `/api/scenario` | `config.scenarios[].actions[]` 中 `path=/api/wifi/radio` 的 `body.ap_2g`；`detect.type=fallback` | 10000 | 否 |
 | 反应快慢 6 个输入框初值 | `/api/scenario` | `config.params.scan_interval_away_charging_secs/scan_interval_away_battery_secs/scan_interval_home_secs/enter_hits/exit_misses/min_rssi_dbm`（只填一次） | 10000 | 否 |
 | 运行记录 | `/api/scenario/log` | `log`（末若干行） | 15000 | 否 |
 | 「还没设置」卡（没有任何情景时整页只显示这张） | `/api/scenario` | `config.scenarios.length === 0` | 10000 | 否 |
@@ -794,7 +788,6 @@
 | 附近网络行「+」 | button「添加 {SSID}」 〔交互后：扫描之后的结果行；点 button「扫描」，点 button「确认：{x}」〕 | PUT `/api/scenario` 整份 config（加 `{ssid, bssid}`；双重编码 → 400） | 1 | `/api/scenario` 在家 entries | 无 | 二 |
 | 「添加国外情景」（缺国外情景时） | button「添加国外情景」 〔交互后：只在缺国外情景时出现（模拟数据里已有，未自动验证）〕 | 见步骤 | **2 请求**：① GET `/api/scenario/template` ② PUT `/api/scenario`（原 config + 模板里缺的国外情景；双重编码 → 400） | `/api/scenario` 出现 `detect.type=mcc/abroad` 的情景 | 无 | 二 |
 | 每个情景的「Wi-Fi」开关（外出情景没有，显示「始终开」） | switch「开」/「关」（随状态变，且每行同名）；建议 switch「{情景名} 的 Wi-Fi」 〔现名：switch「{前}的 Wi-Fi」（如「「在家」的 Wi-Fi」）〕 | PUT `/api/scenario` 整份 config，把该情景的 `/api/wifi/radio` 动作改成 `{ap_2g:on, ap_5g:on}` 并放到第一位（双重编码 → 400） | 1 | `/api/scenario` 该情景 actions | 无 | 二·远程三（改的是「进入该情景时开/关 Wi-Fi」，不是立即开关；但会导致之后自动关 Wi-Fi） |
-| 每个情景的「CHILL」节点下拉（不动 / 直连 / 各地区组） | combobox「CHILL」（`<label>` 包住，每行同名）；建议 combobox「{情景名} 的 CHILL 节点」 〔现名：combobox「{情景}的 CHILL 节点」（如「「在家」的 CHILL 节点」）〕 | PUT `/api/scenario` 整份 config，改该情景的 regions 动作 `{group:"🚀 节点选择", member}`（选「不动」则删掉该动作；双重编码 → 400） | 1 | `/api/scenario` 该情景 actions | 无 | 二（改的是情景规则，不是立即切节点） |
 | 反应快慢 6 个输入框：充电时扫描间隔（秒）/ 用电池时扫描间隔（秒）/ 在家时扫描间隔（秒）/ 进入需确认次数 / 离开需确认次数 / 无硬件地址时的信号下限（dBm） | textbox，名称即各自标签（`<label>` 包住） 〔现名：textbox「充电时扫描间隔（秒）」「用电池时扫描间隔（秒）」「在家时扫描间隔（秒）」「进入需确认次数」「离开需确认次数」「无硬件地址时的信号下限（dBm）」〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 反应快慢「保存」 | button「保存」 | PUT `/api/scenario` 整份 config 换 `params`（页面先校验都是数字、确认次数 ≥1；双重编码 → 400） | 1 | `/api/scenario` `config.params` | 无 | 二 |
 | 运行记录刷新图标 | 无（只有图标）；建议 button「刷新记录」 | GET `/api/scenario/log` | — | — | 无 | —（本地，只读） |
@@ -1138,80 +1131,6 @@
 | 任务行垃圾桶图标 | 无（只有图标）；建议 button「删除 {任务名}」 | DELETE `/api/scheduler/jobs` `{id}` | 1（**无任何确认**） | `/api/scheduler/jobs` 该任务消失 | 无 | 二 |
 
 写接口假成功风险：创建 / 更新 / 删除 / 启停 **是**——scheduler.rs:154-158 `save()` 写 `/data/…` 失败被 `let _ =` 丢掉，内存已改、回 ok，重启后丢失。
-
----
-
-## /services/chill CHILL
-
-文件：`app/(panel)/services/chill/page.tsx`（`ExitCard`、`ProfileCard`、`RegionCard`×2、`ProvidersCard`、`BypassCard`、`LogSection`、`DashboardEmbed`）。
-
-**缺陷（代码确认）**：页头「启动」按钮在 `state === "unknown"`（开机后从没启动过）时是**禁用**的（`disabled={busy || !known}`），而同一状态下页面中间的卡片却写着「…按上方的启动来启动它」。改版时要修。
-
-#### 数据项
-
-| 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
-|---|---|---|---|---|
-| 页头状态（运行中 / 直连 / 未启动 / 加载中） | `/api/services/chill` | `state`（读 `/tmp/chill.state`） | 4000 | 否（chill.rs:114） |
-| 「尚未启动」卡 | `/api/services/chill` | `state === "unknown"` | 4000 | 否 |
-| 温度 | `/api/services/chill` | `cpuss_c` | 4000 | 否 |
-| 可用内存 +「内存紧张」 | `/api/services/chill` | `mem_avail_mb`、`mem_pressure` | 4000 | 否 |
-| 运行时间 + mihomo 版本 | `/api/services/chill` | `started_at`（设备时钟 ISO，按设备当前时间算差）、`version` | 4000 | 是：chill.rs:124-128 mihomo `/version` 不通时 `version` 为 null，照样 ok |
-| PID | `/api/services/chill` | `core_pid` | 4000 | 否 |
-| 「当前直连,原因:X」（过热/内存不足/放弃/规则集缺失/门户网络/暂停/已关闭） | `/api/services/chill` | `state === "direct"` 时的 `reason` | 4000 | 否 |
-| 档位三选一当前值 + 说明 | `/api/services/chill` | `profile`（缺省按 standard） | 4000 | 否 |
-| 「设备太热，暂时按「省电」运行…」 | `/api/services/chill` | `thermal_eco && profile_effective !== profile` | 4000 | 否 |
-| 「下次启动 CHILL 时生效。」 | `/api/services/chill` | `state !== "running"` | 4000 | 否 |
-| 出口四选一当前值 + 说明（运行中才显示） | `/api/services/chill` | `exit`（agent 由 mihomo `configs.mode` + 主组 `now` 推出：direct→全部直连、global→全局、主组=DIRECT→直连·AI 不动、否则代理） | 4000 | 是：chill.rs:133-139 mihomo 读不到时 `exit` 缺失，四个都不亮，照样 ok |
-| 地区（主组「🚀 节点选择」）成员列表 + 当前成员 | `/api/services/chill` | `region.options[]`、`region.active` | 4000 | 是：chill.rs:122-130 mihomo `/proxies` 不通时 `region` 为 null，显示「没有配置任何成员。」 |
-| AI 出口（「🤖 AI」组）成员列表 + 当前成员 | `/api/services/chill` | `ai_exit.options[]`、`ai_exit.active` | 4000 | 是：同上 |
-| 代理组列表：组名 · N 个节点 · 当前选择 | `/api/services/chill` | `groups[].name/size/now` | 4000 | 是：同上（为空时整卡隐藏） |
-| 订阅列表：名称 · 类型 · N 个节点 · 更新于（xm ago，英文写死） | `/api/services/chill/providers` | `providers[].name/vehicle_type/node_count/updated_at` | 15000 | 是：chill.rs:160-169 mihomo 不通时回空列表 ok，显示「没有找到订阅。」 |
-| 订阅用量条 + 「已用 / 总量」+「到期 日期」 | `/api/services/chill/providers` | `providers[].subscription.Upload/Download/Total/Expire` | 15000 | 同上 |
-| 订阅是否可改链接（铅笔图标出现） | `/api/services/chill/providers` | `providers[].editable`（只有 `shouhou` 为 true） | 15000 | 同上 |
-| 设备绕行列表：设备名（租约主机名 → hosts → IP）+ IP +「已失效」 | `/api/services/chill/bypass` + `/api/network/clients` | `ips[]`、`stale[]`；`dhcp_leases[].ipaddr/hostname/macaddr`、`hosts` | bypass 8000；clients 15000 | bypass 否；clients 是（见 /clients） |
-| 失效绕行警告（N 台…正在悄悄地重新经过 CHILL） | `/api/services/chill/bypass` | `stale[]`（来自 chill.state 的 `bypass_stale`） | 8000 | 否 |
-| 「局域网里还没见到任何设备。」 | 同上 | 两者都为空 | — | — |
-| 服务日志（末 200 行） | `/api/services/chill/log?lines=200` | `lines[]` | 4000（可暂停） | 否 |
-| 面板 iframe（zashboard） | `/api/services/chill/dashboard`（取地址，**首次调用会在设备上生成 secret 文件**） | `secret`、`ui`（`/chill-ui/`）、`api`（`/chill-api`），拼成 `…/chill-ui/#/setup?hostname=&port=&secondaryPath=&secret=&label=CHILL` | 无（`revalidateOnFocus:false`） | 否 |
-| 各类加载错误（加载失败 / 订阅加载失败 / 绕行列表加载失败） | 各接口 | SWR `error` | — | — |
-| 任务结果提示（完成 / 失败原因） | `/api/services/chill/job` | `id`、`status`（done/error）、`message` | 1500（仅有任务时） | 否（chill.rs:553-613） |
-
-接口里有、页面没显示：`/api/services/chill` 的 `updated_at`、`rules_drift`、`mode`、`bypass_stale`（绕行卡从 bypass 接口拿）。
-
-#### 控件
-
-| 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
-|---|---|---|---|---|---|---|
-| 页头「启动」（未运行时；state=unknown 时被禁用，见上） | button「启动」 〔交互后：只在 CHILL 没运行时出现（模拟数据里在运行，未自动验证）〕 | POST `/api/services/chill/enable`（先查资源，409 拒绝；后台 `chill.sh start`）→ `job_id` | 1，之后每 1.5 秒轮询 `/api/services/chill/job` | `/api/services/chill/job` `status=done`；`/api/services/chill` `state="running"` | 无 | 二 |
-| 页头「停止」（运行中） | button「停止」 | POST `/api/services/chill/disable`（后台 `chill.sh stop`）→ `job_id`；在国外情景下关掉会被记下，回国自动再开 | 1，之后轮询 job | `/api/services/chill/job` `status=done`；`/api/services/chill` `state` 不再是 running；`/api/public/status` `services.chill.on=false` | 无 | 二（关 CHILL，始终第二档） |
-| 页头「刷新」 | button「刷新」（与日志卡、订阅行的「刷新」同名；建议加作用域） | 重拉 `/api/services/chill` | — | — | 无 | —（本地，只读） |
-| 错误横幅「Retry」 | button「Retry」 〔现名：button「重试」〕〔交互后：读取失败时（错误状态）；场景 down〕 | 重拉对应接口 | — | — | 无 | —（本地，只读） |
-| 档位「省电」「标准」「性能」 | radiogroup「档位」内 radio「省电」「标准」「性能」（`aria-checked`） | PUT `/api/services/chill/profile` `{profile:"eco"/"standard"/"perf"}` → `job_id`（后台 `chill.sh profile X`；进出省电会重启内核约 10 秒断连） | 1，之后轮询 job | `/api/services/chill/job`；`/api/services/chill` `profile`、`profile_effective` | 无 | 一（CHILL 档位） |
-| 出口「代理」 | radiogroup「出口」内 radio「代理」 | PUT `/api/services/chill/exit` `{state:"proxy"}` | 1 个 HTTP 请求；agent 内部 2 步：主组若在 DIRECT 先 PUT mihomo `/proxies/🚀 节点选择` 回到记住的节点 → PATCH mihomo `/configs` `{mode:"rule"}`；第一步成功第二步失败时回 502 但主组已改 | `/api/services/chill` `exit="proxy"` | 无 | 一 |
-| 出口「直连 · AI 不动」 | radio「直连 · AI 不动」 | PUT `/api/services/chill/exit` `{state:"direct_keep_ai"}` | agent 内部 2 步：记下当前节点 → 主组 PUT `DIRECT` → PATCH mode=rule | `/api/services/chill` `exit="direct_keep_ai"` | 无 | 一 |
-| 出口「全部直连」 | radio「全部直连」 | PUT `/api/services/chill/exit` `{state:"direct_all"}` | agent 内部 1 步：PATCH mode=direct | `/api/services/chill` `exit="direct_all"` | 无 | 二（出口「全部直连」，始终第二档） |
-| 出口「全局」 | radio「全局」 | PUT `/api/services/chill/exit` `{state:"global"}` | agent 内部 1 步：PATCH mode=global | `/api/services/chill` `exit="global"` | 无 | 一 |
-| 地区卡成员按钮（每个成员一个，如 🇯🇵 日本、DIRECT…） | radiogroup「地区」内 radio「{成员名}」 | PUT `/api/services/chill/regions` `{group:"🚀 节点选择", member}`（agent 先校验成员在组里；选 DIRECT 时记下原节点） | 1 | `/api/services/chill` `region.active` | 无 | 一（切地区组） |
-| AI 出口卡成员按钮 | radiogroup「AI 出口」内 radio「{成员名}」 | PUT `/api/services/chill/regions` `{group:"🤖 AI", member}` | 1 | `/api/services/chill` `ai_exit.active` | 无 | 一（切 CHILL 节点） |
-| 订阅行「刷新」 | button「刷新」（每行同名；建议 `aria-label`「刷新订阅 {名称}」） | POST `/api/services/chill/providers/refresh` `{name}`（同步调 mihomo `PUT /providers/proxies/{name}`） | 1 | `/api/services/chill/providers` 该行 `updated_at` | 无 | 二 |
-| 订阅行铅笔图标（只有可编辑的订阅有） | button「编辑订阅链接」 | 无（展开编辑框） | — | — | 无 | —（本地） |
-| 订阅链接输入框（回车保存） | textbox「编辑订阅链接」（与铅笔按钮同名） | 无（草稿；页面校验 http(s)://） | — | — | 无 | —（本地） |
-| 订阅编辑「保存」 | button「保存」 〔交互后：点 button「编辑订阅链接」〕 | PUT `/api/services/chill/providers` `{name, url}`（改 chill.env 的 `SUB_SHOUHOU`，再后台 `chill.sh reload`）→ `job_id` | 1，之后轮询 job | `/api/services/chill/job` `status=done`（链接本身没有读回接口） | 无 | 二 |
-| 订阅编辑「取消」 | button「取消」 〔交互后：点 button「编辑订阅链接」〕 | 无 | — | — | 无 | —（本地） |
-| 失效绕行 IP 小按钮（× + IP，点了移除） | button「{IP}」（只有 × 图标 + IP；建议 `aria-label`「移除绕行 {IP}」） | PUT `/api/services/chill/bypass` `{ips: 去掉该 IP}`（整表覆盖；agent 删光再逐条 `ip rule add`，再写 chill.env） | 1 | `/api/services/chill/bypass` `ips` | 无 | 二 |
-| 设备行「绕行」开关（每台设备一个） | switch「绕行」（每行同名；建议 switch「{设备名} 绕行」） 〔现名：switch「{设备名} 绕过 CHILL」〕 | PUT `/api/services/chill/bypass` `{ips: 加上/去掉该 IP}` | 1 | `/api/services/chill/bypass` `ips` | 无 | 二 |
-| 服务日志「暂停」/「继续」 | button「暂停」/「继续」 | 无（停/恢复 4 秒轮询） | — | — | 无 | —（本地） |
-| 服务日志「刷新」 | button「刷新」 | GET `/api/services/chill/log?lines=200` | — | — | 无 | —（本地，只读） |
-| 面板「展开」/「收起」 | button「展开」/「收起」 〔现名：button「在这里展开」/「收起」〕 | 无（改 iframe 高度） | — | — | 无 | —（本地） |
-| 面板「打开」（新窗口） | link「打开」 | 无（导航到 zashboard） | — | — | 无 | —（本地） |
-| 面板 iframe 内部（zashboard 全部控件） | iframe「CHILL dashboard」 〔交互后：展开后的 iframe 里是 zashboard 自己的页面，不在本页 DOM 里（未自动验证）〕 | 经 agent `/chill-api/*` **任意方法**原样转发给 mihomo（chill_proxy.rs），包括切节点、改模式、测延迟、关连接等 | — | — | 无 | 不在本清单范围（第三方面板）；安全白名单要单独考虑 `/chill-api/*` |
-
-写接口假成功风险：
-- enable / disable / profile / providers PUT：否（结果在 job 里，失败为 `error`）。
-- regions：否（mihomo 拒绝回 502，chill.rs:305-311）。
-- exit：**是（部分）**——chill.rs:404 mode 写进 `MODE_FILE` 的结果被丢掉，mihomo 已切换但重启后可能恢复旧模式；另外两步之间失败会留下「主组已改、模式没改」的中间态。
-- providers/refresh：否。
-- bypass：否（`ip rule add` 失败回 500，chill.rs:455-466）；但删旧规则的结果被忽略（chill.rs:473-484）。
 
 ---
 
@@ -1614,8 +1533,6 @@
 | /router/esim | 切换 | POST `/api/esim/switch` → 每 1.5 秒 GET `/api/esim/job`；agent 内部：lpac enable → qmi simreset → 重启 `zte_topsw_mdm` → 最多 30 秒等收敛 → 否则重启整机；重启后每 4 秒 GET `/api/public/status` 直到回来 |
 | /router/esim | 删除 / 下载 | POST → 轮询 `/api/esim/job`；agent 内部删/下载后再补发通知 |
 | /router/esim | 全部发送（通知） | POST `/api/esim/notifications/process` → 每 2 秒 GET `/api/esim/job`（≤60 次） |
-| /services/chill | 出口「代理」「直连 · AI 不动」 | 1 个请求；agent 内部：PUT mihomo 主组 → PATCH mihomo mode（两步间失败会留下中间态） |
-| /services/chill | 启动 / 停止 / 档位 / 保存订阅链接 | POST/PUT → 每 1.5 秒 GET `/api/services/chill/job` |
 | /tools/speedtest | 开始 | POST `/api/speedtest/start` → 每秒 GET `/api/speedtest/progress` |
 | 全局 / /alerts | 知道了 / 全部标为已读 | POST `/api/alerts/read` → 重拉 `/api/alerts` + `/api/public/status`（读） |
 
@@ -1633,7 +1550,6 @@
 | POST `/api/doh/enable` | server.rs:449-454、doh/mod.rs:119 | 写 dnsmasq drop-in、重启 dnsmasq、保存 enabled 的结果都被丢掉 |
 | POST `/api/doh/disable` | server.rs:458-471 | 恢复 dnsmasq 的 shell 命令结果被丢掉 |
 | POST `/api/sms/delete` | sms.rs:86 | sqlite 核对失败时直接信任 ubus（而 ubus 对 SIM 短信会「返回 result:3 却不删」） |
-| PUT `/api/services/chill/exit` | chill.rs:404 | mode 持久化文件写失败被丢掉；两步之间失败留下中间态 |
 | POST/PUT/DELETE `/api/scheduler/jobs`、PUT `/api/scheduler/jobs/toggle` | scheduler.rs:154-158 | `save()` 写盘失败被丢掉，重启后丢任务 |
 | PUT `/api/sms/forward/config`、POST/PUT/DELETE `/api/sms/forward/rules`、PUT `/api/sms/forward/rules/toggle`、POST `/api/sms/forward/log/clear` | sms_forward.rs:1064-1074 | `save_config`/`save_state` 写盘失败被丢掉 |
 | PUT `/api/scenario` | scenario.rs:586-593（调用处 1631） | `write_json` 写盘失败静默 |
@@ -1653,8 +1569,6 @@
 | GET `/api/router/lan` | router.rs:55-60 | 每项 `uci get` 失败为空串 |
 | GET `/api/router/wan-ipv6` | router.rs:338-345 | `wan_has_ipv6` 读不到当 false |
 | GET `/api/device/charge-control` | device_ext.rs:45-60 | 充电器读不到当「未停充」、电量 0 |
-| GET `/api/services/chill` | chill.rs:122-139 | mihomo 不通时 `version/groups/region/ai_exit/exit` 为空 |
-| GET `/api/services/chill/providers` | chill.rs:160-169 | mihomo 不通时回空列表 |
 | GET `/api/services/tailscale` | services.rs:52-86 | 执行/解析失败时 ok + `error` 字段（页面会显示） |
 
 **页面层面的假成功（agent 正常报错或没问题，但页面没反映出来）**
@@ -1674,10 +1588,8 @@
 |---|---|---|
 | GET `/api/homemode/scan` | **有** | homemode.rs:235-303：Wi-Fi 被在家模式关着时，`uci set wireless.wifi0.disabled=0` + commit + `zwrt_wlan reload` 叫醒 2.4G，扫完再 `disabled=1` + commit + reload + 验证；期间持有 Wi-Fi 锁，最长十几秒 |
 | GET `/api/scenario/scan` | **有** | wifi_scan.rs:187-214：没有可用接口时 `iw phy … interface add scen-scan0` + `ip link set … up`，扫完删除；扫描本身占用射频 |
-| GET `/api/services/chill/dashboard` | **有**（轻微） | chill_proxy.rs:44-64：首次调用在设备上生成 dashboard secret 文件（mode 600） |
 | GET `/api/health?refresh=1` | **可能有** | health.rs:184-188：同步执行 `/data/u60-guard/doctor.sh --tsv`（最长 20 秒，占用 agent 工作线程）；grep 该脚本未见 uci set/commit/restart，但它是外部脚本，不保证 |
 | GET `/api/stk/menu` | **可能有** | telephony.rs:256-278、457-521：发 `AT+CUAD`、`AT+STIN?`、`AT+CUSATD=1`、`AT+STGI=…`；`AT+CUSATD=1` 是 USAT 激活类命令，可能改变调制解调器 STK 状态 |
-| GET `/chill-api/*`（非 `/api/`，经 chill_proxy 转发给 mihomo） | **可能有** | chill_proxy.rs：任意方法原样转发；mihomo 的 GET `/proxies/{name}/delay`、`/group/{name}/delay` 会触发对外测速连接；zashboard 面板会调用 |
 | GET `/api/network/qos` | 可能有（占用 AT 口） | qos.rs:18-70：每次发 `AT+CGCONTRDP` + 每 cid 一条 `AT+CGEQOSRDP`，命令本身只读；/router/qci 每 5 秒轮询 |
 | GET `/api/speedtest/servers` | 可能有（外网请求） | speedtest.rs:131-143：缓存过期时从设备访问外网拉服务器列表，不改设备状态 |
 | GET `/api/esim/status`、`/api/esim/profiles`、`/api/esim/notifications` | 可能有（卡片 APDU） | esim.rs:265-315：跑 lpac 读卡，代码注释称只读、不计入 eSTK.me 的 catBusy 冷却 |
@@ -1693,7 +1605,7 @@
 - 锁频、锁小区、STC 白名单：agent **没有**读取当前锁定配置的 GET，只能间接看 `/api/network/signal` 的驻留小区/频段。
 - Wi-Fi：`/api/wifi/status` 只是 uci 配置；「是否真的在广播」要看 `/api/wifi/radio` 的 `beaconing`（目前没有页面读它）。
 - 修改 PIN、订阅链接、USSD/STK、AT、短信发送、测速、结束进程、开 ADB、重启、恢复出厂：无读回。
-- eSIM 切换、CHILL 启停/档位/订阅：读回是 job 的 `status` + 最终状态字段。
+- eSIM 切换：读回是 job 的 `status` + 最终状态字段。
 
 ### 7. 代码里发现、改版时要一并处理的缺陷
 
@@ -1701,7 +1613,6 @@
 2. /router/dns DoH 上游字段名 `upstreams` ≠ `upstream_url`；DoH 缓存表读 `name`，agent 给的是 `domain`。
 3. /scheduler 星期编号错一天（页面 0=周日，agent 0=周一）。
 4. /sms/forward「测试规则」「重试失败项」请求体与 agent 不符，必回 400；轮询间隔下限页面 5、agent 10。
-5. /services/chill state=unknown 时「启动」按钮被禁用。
 6. /settings「测试连通性」会把自己登出；「轮询间隔」没人读。
 7. /router/wifi-guest「隐藏 SSID」读的键名不对（agent 给 `hidden`）。
 8. /tools/processes 成功提示显示「[object Object]」；冗余名单含开机同步名单里的守护进程。
@@ -1739,6 +1650,5 @@
 | `2c612db` | `/sms/forward` | 测试规则发 `destination`；重试失败项逐条发 `{ index }` |
 | `8d84645` | `/settings` | 测试连通性改用 `/api/public/status`，不再用空密码登录 |
 | `8bbc946` | `/router/wifi-guest` | 隐藏 SSID 读 `hidden` |
-| `2df6935` | `/services/chill` | 状态 unknown 时「启动」可用 |
 
 **没改、等上机再定：** `/router/wifi` 总开关写 `zte_mbb.wifi.wifi_onoff`，只改这一项时 agent 不重载，也不确认生效（`wifi.rs:264-300`）。要先在设备上确认这个 uci 键单独改是否起作用，再决定改用 `/api/wifi/radio`，还是让 agent 在这种情况下重载并读回。

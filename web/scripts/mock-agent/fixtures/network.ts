@@ -322,7 +322,6 @@ function traffic(ctx: Ctx): NetworkTraffic {
     list.push(iface("wlan0", tx * 0.2, rx * 0.19), iface("wlan1", tx * 0.76, rx * 0.78));
   }
   if (shared.tailscale.running) list.push(iface("tailscale0", 212_553_004, 96_410_225, 1280));
-  if (shared.chill.state === "running") list.push(iface("chill0", rx * 0.61, tx * 0.58, 1500));
   return list;
 }
 
@@ -385,7 +384,7 @@ function wan(ctx: Ctx): NetifdStatus {
 }
 
 function wan6(ctx: Ctx): NetifdStatus {
-  // Cellular IPv6 stays on (only LAN / CHILL IPv6 are off on this device).
+  // Cellular IPv6 stays on (only LAN / proxy IPv6 are off on this device).
   if (!wwanConnected(ctx)) return downIface("dhcpv6");
   return {
     ...downIface("dhcpv6"),
@@ -541,8 +540,7 @@ function dataUsage(ctx: Ctx): DataUsage {
 function cpu(ctx: Ctx): CpuUsage {
   const t = ctx.now / 1000;
   const load = wwanConnected(ctx) ? 1 : 0.6;
-  const chill = shared.chill.state === "running" ? 6 : 0;
-  const cores = [16 + chill, 9, 12 + chill / 2, 7].map((b, i) => {
+  const cores = [16, 9, 12, 7].map((b, i) => {
     const v = (b + 6 * Math.sin(t / (3 + i) + i) + 3 * Math.sin(t / 1.7 + i * 2)) * load;
     return Math.round(Math.max(0.5, Math.min(100, v)) * 10) / 10;
   });
@@ -550,14 +548,13 @@ function cpu(ctx: Ctx): CpuUsage {
   return { cores, overall };
 }
 
-/** netinfo.rs `get`: a mainland SIM roaming in Taiwan, CHILL exit in Japan. Documentation-range IPs. */
+/** netinfo.rs `get`: a mainland SIM roaming in Taiwan, proxy exit in Japan. Documentation-range IPs. */
 function netinfo(ctx: Ctx) {
   const now = Math.floor(ctx.now / 1000);
   return {
     now,
     direct: { ip: "203.0.113.24", geo: "中国台湾 台北市", isp: "中华电信", node: null, source: "ip-api.com", fetched_at: now - 240, error: null },
-    proxy: { ip: "198.51.100.7", geo: "日本 东京都", isp: "IIJ", node: "JP 03", source: "ip-api.com", fetched_at: now - 240, error: null },
-    chill_running: true,
+    proxy: null,
     home_operator: { mcc: "460", mnc: "01", name: "中国联通", country: "中国" },
     serving_operator: { mcc: "466", mnc: "92", name: "中华电信", country: "中国台湾" },
     roaming: true,

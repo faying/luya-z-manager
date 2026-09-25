@@ -4,7 +4,7 @@
 // area says there is no result yet.
 //
 //   Start = tier 2: POST start, then readback = progress starts moving
-//           (polled like the CHILL page's runJob, bounded).
+//           (polled like a bounded runJob).
 //   Stop  = tier 2, two steps (R10): ① POST stop ② GET results.
 //
 // While a detection runs, progress is polled every 2 s and keeps polling

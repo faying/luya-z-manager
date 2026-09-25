@@ -210,19 +210,6 @@ test("(e) SMS delete opens a dialog; cancel deletes nothing, confirm deletes", a
   await expect(list.getByRole("checkbox", { name: "选择来自 +886912000451 的短信" })).toHaveCount(0, { timeout: 10_000 });
 });
 
-test("(f) tier 1: CHILL exit on home sends at once, no confirm", async ({ ready, page }) => {
-  await ready.goto("/");
-  const exit = page.getByRole("radiogroup", { name: "出口" });
-  await expect(exit.getByRole("radio", { name: "代理" })).toBeChecked();
-  const since = ready.requests.length;
-  await exit.getByRole("radio", { name: "全局" }).click();
-  await expect
-    .poll(() => writesSince(ready, since).map((w) => `${w.method} ${w.path} ${w.body}`))
-    .toEqual(['PUT /api/services/chill/exit {"state":"global"}']);
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(exit.getByRole("radio", { name: "全局" })).toBeChecked();
-});
-
 test("(f2) tier 1: alerts 知道了 marks read at once", async ({ ready, page }) => {
   await ready.goto("/");
   const since = ready.requests.length;

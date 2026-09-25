@@ -6,7 +6,7 @@ import { ChatCircleText as MessageSquare, HardDrive as Gauge, WifiHigh as Wifi }
 import { I18nProvider } from "@/components/nd/shell/I18nProvider";
 import {
   Button, ConfirmDialog, ConfirmInline, ConsoleBand, Freshness, Group, GroupTitle, ModuleCard,
-  Readout, ReadoutWall, Row, Segmented, StatusBlock, StatusMark, Switch, ToastProvider, useToast,
+  Readout, ReadoutWall, Row, Segmented, StatusBlock, Switch, ToastProvider, useToast,
   useConfirmInline,
 } from "@/components/nd";
 import { applyTheme, readThemeChoice, type ThemeChoice } from "@/lib/theme";
@@ -14,7 +14,6 @@ import { applyTheme, readThemeChoice, type ThemeChoice } from "@/lib/theme";
 function Sheet() {
   const toast = useToast();
   const [theme, setTheme] = useState<ThemeChoice>(() => readThemeChoice());
-  const [exit, setExit] = useState<"proxy" | "global" | "direct-ai">("proxy");
   const [wifi, setWifi] = useState(true);
   const [ci, setCi] = useState(false);
   const inline = useConfirmInline(ci);
@@ -66,18 +65,6 @@ function Sheet() {
             </Group>
           </div>
           <div className="grid gap-3">
-            <ModuleCard headerHref="/services/chill" title={<StatusMark tone="ok">CHILL · 运行中</StatusMark>}>
-              <p className="nd-body">TW 台湾 01 · 42 ms</p>
-              <div className="mt-3">
-                <Segmented
-                  label="出口"
-                  value={exit}
-                  onChange={(v) => { setExit(v); toast.show("ok", "出口已改为" + v); }}
-                  options={[{ id: "proxy", label: "代理" }, { id: "global", label: "全局" }, { id: "direct-ai", label: "直连·AI 不动" }]}
-                  block
-                />
-              </div>
-            </ModuleCard>
             <ModuleCard href="/router/scenario" title="情景">
               <p className="nd-body">在家 · 14:05 切换</p>
             </ModuleCard>
@@ -89,7 +76,7 @@ function Sheet() {
           <div className="flex flex-wrap gap-2">
             <Button>主按钮</Button>
             <Button variant="secondary">次按钮</Button>
-            <Button variant="confirm">确认：关闭 CHILL</Button>
+            <Button variant="confirm">确认：关闭 Wi-Fi</Button>
             <Button variant="danger">恢复出厂</Button>
             <Button variant="ghost">文字按钮</Button>
             <Button pending>提交中</Button>

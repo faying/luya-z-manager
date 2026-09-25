@@ -111,12 +111,6 @@ const ALLOWLIST: Entry[] = [
   // --- services / scenario
   { path: "/api/services/tailscale", checked: "services.rs:34 — pidof + `tailscale status --json` (read; no agent timeout)" },
   { path: "/api/services/tailscale/log", checked: "services.rs:182 — tails /data/tailscaled.log" },
-  // chill: 3 HTTP GETs to mihomo on loopback (/version, /proxies, /configs), 3 s timeout each — read-only.
-  { path: "/api/services/chill", checked: "chill.rs:114 — /tmp/chill.state, chill.env, mihomo GETs" },
-  { path: "/api/services/chill/providers", checked: "chill.rs:160 — mihomo GET /providers/proxies" },
-  { path: "/api/services/chill/bypass", checked: "chill.rs:417 — reads chill.env + chill.state" },
-  { path: "/api/services/chill/job", checked: "chill.rs:542 — in-memory" },
-  { path: "/api/services/chill/log", checked: "chill.rs:146 — tails /tmp/chill.log" },
   // scenario config holds real home SSIDs/BSSIDs: recorded/ is git-ignored, don't share it.
   { path: "/api/scenario", checked: "scenario.rs:1614 — ubus get_sim_info (read) + /data/scenario files" },
   { path: "/api/scenario/template", checked: "scenario.rs:1638 — pure" },
@@ -129,10 +123,8 @@ const ALLOWLIST: Entry[] = [
 //                              uci-sets wifi0 on, commits, reloads Wi-Fi, scans,
 //                              turns it back off and reloads again (≈60 s, holds the Wi-Fi lock).
 // - /api/scenario/scan        scenario.rs — adds/deletes a scan interface on the phy (wifi_scan.rs).
-// - /api/services/chill/dashboard  chill_proxy.rs — dashboard info incl. the proxy secret; not needed.
 // - /api/health?refresh=1     health.rs — forces a fresh run of every health check.
 // - /api/stk/menu             telephony.rs — talks to the SIM toolkit (AT/STK session).
-// - /chill-api/*              chill_proxy.rs — reverse proxy into mihomo's controller.
 // - /api/at/port              at_terminal.rs — AT port probe.
 // - /api/network/qos          qos.rs:18 — sends AT+CGCONTRDP / AT+CGEQOSRDP on the serial AT port.
 // - /api/speedtest/servers    speedtest.rs — fetches the server list from the internet (cellular traffic).
@@ -152,17 +144,13 @@ const ALLOWLIST: Entry[] = [
 // - /api/at/port (detail)     at_terminal.rs:63 → at_cmd.rs:23 — uncached: writes AT\r to up to 5 serial ports (~1.3 s each).
 // - /api/speedtest/servers    speedtest.rs:355 — cold cache: HTTPS to www.speedtest.net over cellular (roaming data,
 //                              leaks public IP/location, primes the /start cache).
-// - /api/services/chill/dashboard (detail) chill_proxy.rs:44/68 — first call CREATES /data/chill/dashboard.secret
-//                              and the reply is a live /chill-api credential.
 // - /api/scenario/scan (detail) scenario.rs:1731 → wifi_scan.rs:187 — off-channel `iw scan` on a live AP, or adds/deletes
 //                              a scen-scan0 vdev; output holds nearby SSIDs/BSSIDs.
 const DENY = [
   /^\/api\/homemode\/scan$/,
   /^\/api\/scenario\/scan$/,
-  /^\/api\/services\/chill\/dashboard$/,
   /^\/api\/health\b.*refresh/,
   /^\/api\/stk\//,
-  /^\/chill-api/,
   /^\/api\/at\//,
   /^\/api\/network\/qos$/,
   /^\/api\/speedtest\/servers$/,

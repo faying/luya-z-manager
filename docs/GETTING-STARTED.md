@@ -12,7 +12,7 @@
 
 | 仓库 | 在设备上是什么 | 作用 |
 |---|---|---|
-| [zte-u60-pro-mu5250-manager](https://github.com/faying/zte-u60-pro-mu5250-manager)（本仓库） | `zte-agent`（:9090）+ `/data/admin/` 管理网页 | 设备的 REST API、浏览器里的高级后台、eSIM、CHILL 代理控制，**以及装机包（`onboard/`）** |
+| [zte-u60-pro-mu5250-manager](https://github.com/faying/zte-u60-pro-mu5250-manager)（本仓库） | `zte-agent`（:9090）+ `/data/admin/` 管理网页 | 设备的 REST API、浏览器里的高级后台、eSIM，**以及装机包（`onboard/`）** |
 | [zte-u60-pro-mu5250-touch-ui](https://github.com/faying/zte-u60-pro-mu5250-touch-ui) | `/data/plugins/u60pro-devui/` | 前面板触屏界面（LVGL）、屏幕守护进程 `u60-uid`、进程监督和 Wi-Fi 兜底脚本 |
 | [zte-u60-pro-mu5250-data-service](https://github.com/faying/zte-u60-pro-mu5250-data-service) | `/data/plugins/zwrt-datad/` | `zwrt-datad`：把 ubus/uci/sysfs 整理成 JSON，本机 `127.0.0.1:9460` 提供 `/state` 和 SSE |
 
@@ -83,7 +83,6 @@ cd zte-u60-pro-mu5250-manager
 | 触屏字体 | Nunito（google/fonts 固定提交）和中文兜底字体（Resource Han Rounded 子集），都是 OFL，sha256 固定，Docker 里生成。设备自带的中兴字体不打包，触屏直接读设备上的 `/usr/ui/fonts/` |
 | zwrt-datad | data-service 的 `scripts/build-docker.sh`（Docker 里 cargo-zigbuild，镜像按 digest 固定，`Cargo.lock` 锁依赖） |
 | eSIM 工具（lpac） | `scripts/esim/build-esim-bundle.sh --out`：Alpine 3.24 的 lpac 和依赖库（`scripts/esim/alpine.lock` 钉版本和 sha256）+ statx 兼容垫片 + `qmi_uim_probe` |
-| CHILL（可选） | mihomo、zashboard 官方发布包（sha256 固定）+ 规则集（下载当时的最新版）。不要就加 `CHILL=0` |
 | 进程监督、体检脚本 | touch-ui 的 `scripts/` |
 
 打包前会检查：触屏程序必须是 LVGL 版（不是 `scripts/build.sh` 编的旧 litehtml 版）；`zwrt-datad` 必须是 Rust 版、没有写死的外部更新源。不对就停。
@@ -101,7 +100,6 @@ DATAD_BIN=../zte-u60-pro-mu5250-data-service/zwrt-datad-aarch64 ./onboard/build-
 
 > **eSIM 包打不出来？** Alpine 3.24 出安全更新时会替换钉住的包，旧文件从镜像上消失。这时跑
 > `python3 scripts/esim/alpine_closure.py --relock` 重新解析，重打后先在一台设备上确认 `/data/esim/lpac.sh chip info` 能读卡，再用。
-> 规则集（CHILL）不钉版本，每次打包取当时的最新版。
 
 ## 4. 安装
 
@@ -124,7 +122,6 @@ cd u60-kit
 ```sh
 ./install.sh ssh               # 只开 ADB + 装持久化 SSH
 ./install.sh ssh admin devui   # 不要 eSIM
-./install.sh chill             # CHILL 代理，不在全套里，要单独点名（见第 7 节）
 ```
 
 装 SSH 时会顺便**关掉固件自动升级**。U60 的地址不是 `192.168.0.1` 时，在命令前加 `GATEWAY=你的地址`。
@@ -167,29 +164,16 @@ cd u60-kit
 ./install.sh restore backups/xxx.tgz  # 先列出会改哪些文件，输入 yes 才写
 ```
 
-**退回旧版本**：除 CHILL 外，装机脚本不会自动保留上一版程序。要退回，就用旧的装机包再装一次对应组件。
-CHILL 更新失败时会自己换回上一版（`.prev`）。触屏程序连续两次起不来时，`u60-uid` 会把屏幕交还原厂界面，
+**退回旧版本**：装机脚本不会自动保留上一版程序。要退回，就用旧的装机包再装一次对应组件。
+触屏程序连续两次起不来时，`u60-uid` 会把屏幕交还原厂界面，
 长按屏幕右下角 3 秒可以再切回来。
 
 **卸载**：没有卸载命令，步骤见装机包 README 的「恢复原厂」一节：停掉并删掉 `/etc/init.d/` 下装的几个服务、
 用 `/data/u60-kit/rc.local.orig` 换回原来的 `rc.local`、删掉 `/data` 下装的目录、重启。
 
-## 7. CHILL 代理（可选）
+## 7. 代理（可选）
 
-CHILL 是设备上的透明代理（原生 mihomo，TUN 模式）加 zashboard 面板，需要你自己的订阅地址。
-
-```sh
-./install.sh chill                     # 第一次只装不启动
-ssh -p 2222 root@192.168.0.1
-cp /data/chill/chill.env.example /data/chill/chill.env && chmod 600 /data/chill/chill.env
-vi /data/chill/chill.env               # 写订阅地址
-sh /data/chill/chill.sh safe-start     # 启动；确认全屋网络正常后，5 分钟内：
-sh /data/chill/chill.sh confirm        # 不确认会自动停掉，免得把自己锁在外面
-```
-
-之后在后台「CHILL」页开关、换出口、换档位。
-
-<img src="images/web-chill-phone.png" width="240" alt="CHILL 页">
+公开版不带代理功能。想在设备上跑透明代理，按 [docs/PROXY.md](PROXY.md) 自己从官方来源编内核、配面板。
 
 ## 8. 新手一定要守的规矩
 

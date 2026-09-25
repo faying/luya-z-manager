@@ -8,7 +8,6 @@ export interface PublicStatus {
   wifi?: { on?: boolean };
   services?: {
     tailscale?: { running?: boolean; installed?: boolean; node?: string | null };
-    chill?: { state?: string; reason?: string | null; on?: boolean };
   };
   sms?: { unread?: number };
   clock?: { utc_offset?: number };
