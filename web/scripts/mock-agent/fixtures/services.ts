@@ -186,7 +186,7 @@ function tailscaleLogLines(): string[] {
     at(5, "control: RegisterReq: got response; nodeKeyExpired=false, machineAuthorized=true; authURL=false"),
     at(5, "health(warnable=login-state): ok"),
     at(6, "magicsock: home is now derp-9 (tok)"),
-    at(6, "magicsock: endpoints changed: 1.34.201.17:41641 (stun), 10.0.66.1:41641 (local)"),
+    at(6, "magicsock: endpoints changed: 1.34.201.17:41641 (stun), 192.168.0.1:41641 (local)"),
     at(7, "Switching ipn state Starting -> Running (WantRunning=true, nm=true)"),
     at(12, "magicsock: derp-9 connected; connGen=1"),
     at(40, "wgengine: Reconfig: configuring userspace WireGuard config (with 3/5 peers)"),

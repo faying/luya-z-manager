@@ -253,11 +253,11 @@ function dohCacheClear(): Reply {
 // LAN (router.rs:54 / :82) — agent-built from uci
 
 const lan = {
-  ipaddr: "10.0.66.1",
+  ipaddr: "192.168.0.1",
   netmask: "255.255.255.0",
   ignore: "0",
   start: "100",
-  limit: "101", // 10.0.66.100 - 10.0.66.200
+  limit: "101", // 192.168.0.100 - 192.168.0.200
   leasetime: "43200", // unconfirmed: OpenWrt often stores "12h"
 };
 
@@ -321,12 +321,12 @@ const firewall: RouterFirewall = {
 const upnp: RouterUpnp = { enabled: "0", enable_upnp: "0", notify_interval: "60", ttl: "", enable_natpmp: "0" } satisfies RouterUpnp;
 
 const portForward: RouterPortForwardRule[] = [
-  { id: "1", name: "NAS HTTPS", protocol: "TCP", wan_port: "8443", lan_ip: "10.0.66.120", lan_port: "443", enabled: "1" },
+  { id: "1", name: "NAS HTTPS", protocol: "TCP", wan_port: "8443", lan_ip: "192.168.0.120", lan_port: "443", enabled: "1" },
 ] satisfies RouterPortForwardRule[];
 let nextPfId = 2;
 
 const filterRules: RouterFilterRule[] = [
-  { id: "1", name: "Block Telnet", protocol: "TCP", src_ip: "10.0.66.150", dst_ip: "", dst_port: "23", action: "DROP" },
+  { id: "1", name: "Block Telnet", protocol: "TCP", src_ip: "192.168.0.150", dst_ip: "", dst_port: "23", action: "DROP" },
 ] satisfies RouterFilterRule[];
 
 // firmware-b27: the lists answer `{}` when empty (recorded). Only rules added

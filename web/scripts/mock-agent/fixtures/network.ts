@@ -412,7 +412,7 @@ const LAN = {
   metric: 0,
   dns_metric: 0,
   delegation: true,
-  "ipv4-address": [{ address: "10.0.66.1", mask: 24 }],
+  "ipv4-address": [{ address: "192.168.0.1", mask: 24 }],
   // LAN IPv6 is off (u60-guard keeps br-lan disable_ipv6=1).
   "ipv6-address": [],
   "ipv6-prefix": [],
@@ -444,11 +444,11 @@ interface MockClient {
  * macaddr and the hint keys (unconfirmed against the firmware).
  */
 const CLIENTS: MockClient[] = [
-  { mac: "02:00:00:00:00:11", ip: "10.0.66.101", hostname: "iPhone", left: 38_210 },
-  { mac: "02:00:00:00:00:12", ip: "10.0.66.117", hostname: "MacBook-Air", left: 21_455 },
-  { mac: "02:00:00:00:00:13", ip: "10.0.66.123", hostname: "iPad", left: 9_140 },
-  { mac: "02:00:00:00:00:14", ip: "10.0.66.142", hostname: "Xiaomi-14", left: 41_030 },
-  { mac: "02:00:00:00:00:15", ip: "10.0.66.155", hostname: "Nintendo-Switch", left: -3_600 },
+  { mac: "02:00:00:00:00:11", ip: "192.168.0.101", hostname: "iPhone", left: 38_210 },
+  { mac: "02:00:00:00:00:12", ip: "192.168.0.117", hostname: "MacBook-Air", left: 21_455 },
+  { mac: "02:00:00:00:00:13", ip: "192.168.0.123", hostname: "iPad", left: 9_140 },
+  { mac: "02:00:00:00:00:14", ip: "192.168.0.142", hostname: "Xiaomi-14", left: 41_030 },
+  { mac: "02:00:00:00:00:15", ip: "192.168.0.155", hostname: "Nintendo-Switch", left: -3_600 },
 ];
 const CLIENTS_T0 = Date.now() / 1000;
 

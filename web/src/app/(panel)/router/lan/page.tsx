@@ -59,7 +59,7 @@ function isNetmask(s: string): boolean {
   return (inv & (inv + 1)) === 0; // contiguous ones
 }
 
-/** Host part of "100" or "10.0.66.100". */
+/** Host part of "100" or "192.168.0.100". */
 function hostOf(s: string): string {
   const v = s.trim();
   if (/^\d{1,3}$/.test(v)) return String(Number(v));

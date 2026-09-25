@@ -550,8 +550,8 @@
 | 「UPnP」开关 | 无；建议 switch「UPnP」 | PUT `/api/router/firewall/upnp` `{upnp_switch:"1"/"0"}` | 1 | `/api/router/firewall/upnp` `upnp_switch` | 无 | 二·远程三 |
 | 「端口转发」总开关 | 无；建议 switch「端口转发」 | PUT `/api/router/firewall/port-forward/switch` `{port_forward_switch:"1"/"0"}` | 1 | `/api/router/firewall` `portforward_enable` | 无 | 二·远程三 |
 | DMZ 开关（打开时弹出页内确认） | switch「已启用」/「已禁用」（随状态变）；建议 switch「DMZ」 | 无（打开只进入确认态；关闭只改草稿，要再点「应用」） | — | — | 无 | —（本地） |
-| DMZ 页内确认「启用 DMZ」 | button「启用 DMZ」 〔现名：button「确认：{动作}」（DMZ 改为开关 +「应用」，页内确认是统一的「确认：…」）〕〔交互后：点 switch「DMZ」，填 textbox「DMZ 主机 IP」=10.0.66.120，点 button「应用」〕 | PUT `/api/router/firewall/dmz` `{dmz_enabled:"1", dmz_ip}` | 1 | `/api/router/firewall` `dmz_enable`、`dmz_ip` | 自定义确认（非 window.confirm）：「通过 DMZ 暴露主机将绕过防火墙保护。是否继续？」 | 二·远程三 |
-| DMZ 页内确认「取消」 | button「取消」 〔交互后：DMZ 页内确认里；点 switch「DMZ」，填 textbox「DMZ 主机 IP」=10.0.66.120，点 button「应用」〕 | 无（开关退回关） | — | — | 无 | —（本地） |
+| DMZ 页内确认「启用 DMZ」 | button「启用 DMZ」 〔现名：button「确认：{动作}」（DMZ 改为开关 +「应用」，页内确认是统一的「确认：…」）〕〔交互后：点 switch「DMZ」，填 textbox「DMZ 主机 IP」=192.168.0.120，点 button「应用」〕 | PUT `/api/router/firewall/dmz` `{dmz_enabled:"1", dmz_ip}` | 1 | `/api/router/firewall` `dmz_enable`、`dmz_ip` | 自定义确认（非 window.confirm）：「通过 DMZ 暴露主机将绕过防火墙保护。是否继续？」 | 二·远程三 |
+| DMZ 页内确认「取消」 | button「取消」 〔交互后：DMZ 页内确认里；点 switch「DMZ」，填 textbox「DMZ 主机 IP」=192.168.0.120，点 button「应用」〕 | 无（开关退回关） | — | — | 无 | —（本地） |
 | DMZ 主机 IP 输入框（DMZ 关时禁用） | 无（label 未关联）；建议 textbox「DMZ 主机 IP」 | 无（草稿） | — | — | 无 | —（本地） |
 | DMZ「应用」 | button「应用」 | PUT `/api/router/firewall/dmz` `{dmz_enabled:"1"/"0", dmz_ip}`（开着时页面校验 IPv4） | 1 | `/api/router/firewall` `dmz_enable`、`dmz_ip` | 无 | 二·远程三 |
 | 「添加规则」/「取消」（切换表单） | button「添加规则」/「取消」 | 无 | — | — | 无 | —（本地） |

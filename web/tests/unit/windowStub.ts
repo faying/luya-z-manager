@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 
 /** Minimal browser globals for lib/api in the node environment. */
-export function stubWindow(hostname = "10.0.66.1", origin = "http://10.0.66.1:9090") {
+export function stubWindow(hostname = "192.168.0.1", origin = "http://192.168.0.1:9090") {
   const store = new Map<string, string>();
   const localStorage = {
     getItem: (k: string) => (store.has(k) ? store.get(k)! : null),

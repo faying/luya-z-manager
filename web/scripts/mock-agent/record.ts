@@ -3,7 +3,7 @@
 // fixtures. For later use on the device, with the owner's OK (Decision
 // ledger R5 / D11). Do not run it during the power test.
 //
-//   RECORD_CONFIRM=yes AGENT_URL=http://10.0.66.1:9090 TOKEN=<bearer> \
+//   RECORD_CONFIRM=yes AGENT_URL=http://192.168.0.1:9090 TOKEN=<bearer> \
 //     node scripts/mock-agent/record.ts
 //
 // Output: scripts/mock-agent/recorded/<path>.json (git-ignored; contains real
@@ -176,7 +176,7 @@ if (process.env.RECORD_CONFIRM !== "yes") {
 }
 const AGENT_URL = (process.env.AGENT_URL ?? "").replace(/\/$/, "");
 if (!/^https?:\/\/[^/]+$/.test(AGENT_URL)) {
-  die("set AGENT_URL explicitly, e.g. AGENT_URL=http://10.0.66.1:9090 (no default on purpose).");
+  die("set AGENT_URL explicitly, e.g. AGENT_URL=http://192.168.0.1:9090 (no default on purpose).");
 }
 const TOKEN = process.env.TOKEN ?? "";
 if (!TOKEN) die("set TOKEN to a bearer token from POST /api/auth/login.");

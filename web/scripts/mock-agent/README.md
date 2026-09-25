@@ -112,7 +112,7 @@ writes uci, reloads, spawns state-changing processes, sends AT commands or
 talks to the eUICC is excluded, with the reason in the file.
 
 ```sh
-RECORD_CONFIRM=yes AGENT_URL=http://10.0.66.1:9090 TOKEN=<bearer> node scripts/mock-agent/record.ts
+RECORD_CONFIRM=yes AGENT_URL=http://192.168.0.1:9090 TOKEN=<bearer> node scripts/mock-agent/record.ts
 ```
 
 Output goes to `scripts/mock-agent/recorded/<path>.json` (not meant to be

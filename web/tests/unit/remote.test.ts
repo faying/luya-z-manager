@@ -21,7 +21,7 @@ describe("isRemoteHost", () => {
     ["u60", true],
     ["U60", true],
     ["localhost", false],
-    ["10.0.66.1", false],
+    ["10.0.0.1", false],
     ["192.168.0.1", false],
     ["example.com", false],
     ["", false],
@@ -41,7 +41,7 @@ describe("isRemoteAccess uses the API host (C2)", () => {
 
   it("page on a Tailscale name, API on the LAN address → not remote", () => {
     stubWindow("u60", "http://u60:9090");
-    setApiBase("http://10.0.66.1:9090");
+    setApiBase("http://192.168.0.1:9090");
     expect(isRemoteAccess()).toBe(false);
   });
 
