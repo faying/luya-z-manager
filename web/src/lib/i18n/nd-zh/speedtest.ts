@@ -1,0 +1,28 @@
+// New zh strings for /tools/speedtest (merged into zh by the coordinator).
+export const zh = {
+  speedtest: {
+    statusLabel: "测速状态",
+    reading: "正在读取…",
+    unreadable: "读不到测速状态",
+    starting: "正在开始…",
+    liveNow: "实时：{{v}} Mbps",
+    lastRunOn: "上次测速，服务器：{{server}}",
+    failed: "测速没成功",
+    failedReason: "{{e}} · 确认移动数据开着，再按「开始」。",
+    noReason: "设备没有给出原因",
+    cancelledReason: "测速在完成前被停止了。",
+    noResultYet: "还没有结果",
+    idleReason: "在下面选好服务器，按「开始」。",
+    costNote: "会用掉移动数据：下载和上传各测约 10 秒，网速快时一次要几十到几百 MB。",
+    stopConsequence: "马上结束测速，已经测到的结果会保留。随时可以再开始。",
+    results: "测速结果",
+    pingHelp: "到测速服务器来回一趟的时间，越低越好。",
+    jitterHelp: "延迟的波动，越低越稳，影响通话和游戏。",
+    loadingServers: "正在获取服务器列表…",
+    serversErr: "没拿到服务器列表：{{e}}。设备能上网时，「自动」仍然可以用。",
+    details: "详情",
+    serverUsed: "所用服务器",
+    dataUsed: "用掉的移动数据",
+    dataUsedSplit: "下载 {{d}} MB · 上传 {{u}} MB",
+  },
+} as const;

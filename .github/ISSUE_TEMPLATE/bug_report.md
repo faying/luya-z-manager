@@ -26,7 +26,7 @@ What actually happened.
 
 - **Device firmware version**:
 - **zte-agent version/commit**:
-- **Companion app**: iOS / Android (version)
+- **Browser** (for web admin issues): name and version
 - **Connection method**: ADB / SSH / LAN
 
 ## Logs

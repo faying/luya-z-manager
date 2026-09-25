@@ -110,6 +110,12 @@ const RTC_SINCE_EPOCH: &str = "/sys/class/rtc/rtc0/since_epoch";
 ///
 /// eSIM is deliberately absent: `esim.rs` reboots the device when a profile
 /// switch does not converge, and this is the phone's only uplink.
+///
+/// So is everything about the cellular network itself (APN, network mode,
+/// band lock, operator): the owner's rule of 2026-09-25 is that a scenario is
+/// about where you are and how you use the device (Wi-Fi, CHILL, Tailscale),
+/// never about the network. The APN activate path was here until then; no
+/// scenario on the device used it.
 const ALLOWED_PATHS: &[&str] = &[
     "/api/wifi/radio",
     "/api/wifi/guest",
@@ -120,7 +126,6 @@ const ALLOWED_PATHS: &[&str] = &[
     "/api/services/chill/exit",
     "/api/device/power-save",
     "/api/device/thermal",
-    "/api/router/apn/profiles/activate",
 ];
 
 // ── configuration ───────────────────────────────────────────────────────────
@@ -1610,6 +1615,106 @@ pub fn public_summary(engine: &Engine) -> Value {
     })
 }
 
+/// What the touch screen's 情景 picker needs: every scenario, the current one,
+/// the pin, and whether pinning would be honoured right now (a u60-guard
+/// takeover pauses it). netinfo.rs puts this into /api/netinfo.
+///
+/// Never waits: the engine holds its state lock across uci calls
+/// while it switches, and an HTTP worker must not sit behind that. `None`
+/// means busy; the caller uses its last copy.
+pub fn picker_try(engine: &Engine) -> Option<Value> {
+    let cfg = engine.cfg.try_lock().ok()?;
+    let st = engine.state.try_lock().ok()?;
+    Some(picker_json(engine, &cfg, &st))
+}
+
+fn picker_json(engine: &Engine, cfg: &Config, st: &RunState) -> Value {
+    json!({
+        "enabled": engine.enabled(),
+        "current": st.current,
+        "pin": engine.pin(),
+        "guard_takeover": engine.takeover_marked(),
+        "list": cfg.scenarios.iter().map(|s| json!({
+            "id": s.id,
+            "name": s.name,
+            "wifi_off": s.inhibit_sleep,
+            "abroad": is_abroad(s),
+            "when": describe_detect(&s.detect, &cfg.home_mcc),
+            "does": describe_actions(s),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// One line for the touch screen: when this scenario is entered. Written
+/// from the configuration, so a scenario the owner edits in the admin web
+/// is explained correctly too (2026-09-25: the bare list was unreadable).
+fn describe_detect(d: &Detect, home_mcc: &str) -> String {
+    let mcc_name = |m: &str| {
+        m.parse::<u16>().ok().and_then(crate::netinfo::country).map(str::to_string).unwrap_or_else(|| format!("MCC {m}"))
+    };
+    match d {
+        Detect::Ssid { entries } if entries.is_empty() => "还没设家里的 Wi-Fi，不会自动进入".into(),
+        Detect::Ssid { entries } => {
+            let names: Vec<String> = entries.iter().take(2).map(|e| format!("「{}」", e.ssid)).collect();
+            let more = if entries.len() > 2 { format!("等 {} 个", entries.len()) } else { String::new() };
+            format!("附近有 Wi-Fi{}{}时", names.join(""), more)
+        }
+        Detect::Mcc { mccs } => {
+            let names: Vec<String> = mccs.iter().take(3).map(|m| mcc_name(m)).collect();
+            format!("插的是{}的卡时", names.join("、"))
+        }
+        Detect::Abroad => format!("插的不是{}的卡时（当地卡、境外 eSIM）", mcc_name(home_mcc)),
+        Detect::Fallback => "其他情景都不符合时（默认）".into(),
+    }
+}
+
+/// One line: what entering it changes. Never the cellular side: scenarios
+/// may only touch Wi-Fi, CHILL, power and thermal (ALLOWED_PATHS).
+fn describe_actions(s: &Scenario) -> String {
+    let flag = |b: &Option<Value>, k: &str| b.as_ref().and_then(|v| v.get(k)).and_then(Value::as_bool);
+    let mut out: Vec<String> = Vec::new();
+    for a in &s.actions {
+        let b = &a.action.body;
+        let line = match a.action.path.as_str() {
+            "/api/wifi/radio" => match (flag(b, "ap_2g"), flag(b, "ap_5g")) {
+                (Some(false), Some(false)) => "关 Wi-Fi".to_string(),
+                (Some(true), Some(true)) => "开 Wi-Fi".to_string(),
+                (x, y) => format!(
+                    "2.4G {} · 5G {}",
+                    if x == Some(false) { "关" } else { "开" },
+                    if y == Some(false) { "关" } else { "开" }
+                ),
+            },
+            "/api/wifi/guest" => if flag(b, "enabled") == Some(false) { "关访客 Wi-Fi" } else { "开访客 Wi-Fi" }.to_string(),
+            "/api/services/chill/enable" => "开 CHILL".to_string(),
+            "/api/services/chill/disable" => "关 CHILL".to_string(),
+            "/api/services/chill/regions" | "/api/services/chill/exit" => {
+                let m = b.as_ref().and_then(|v| v.get("member")).and_then(Value::as_str).unwrap_or("");
+                match m {
+                    "DIRECT" => "CHILL 改成直连".to_string(),
+                    "" => "改 CHILL 出口".to_string(),
+                    m => format!("CHILL 走 {m}"),
+                }
+            }
+            "/api/services/chill/bypass" => "改 CHILL 分流".to_string(),
+            "/api/device/power-save" => "改省电设置".to_string(),
+            "/api/device/thermal" => "改温控".to_string(),
+            p => p.to_string(),
+        };
+        if !out.contains(&line) {
+            out.push(line);
+        }
+    }
+    if s.inhibit_sleep {
+        out.push("不休眠，Tailscale 一直连得上".into());
+    }
+    if out.is_empty() {
+        "什么都不改".into()
+    } else {
+        out.join(" · ")
+    }
+}
+
 /// GET /api/scenario
 pub fn scenario_get(state: &AppState) -> (u16, Value) {
     (200, json!({"ok": true, "data": state_json(&state.scenario)}))
@@ -1894,6 +1999,25 @@ mod tests {
         let cfg = template();
         assert_eq!(detect(&cfg, &[], Some("440")).as_deref(), Some("abroad"));
         assert_eq!(detect(&cfg, &[], Some("520")).as_deref(), Some("abroad"));
+    }
+
+    #[test]
+    fn picker_explains_every_template_scenario() {
+        let cfg = template();
+        let home = &cfg.scenarios[0];
+        assert_eq!(describe_detect(&home.detect, "460"), "还没设家里的 Wi-Fi，不会自动进入");
+        assert_eq!(describe_actions(home), "关 Wi-Fi · 不休眠，Tailscale 一直连得上");
+        let away = cfg.scenarios.iter().find(|s| s.id == AWAY_ID).unwrap();
+        assert_eq!(describe_detect(&away.detect, "460"), "其他情景都不符合时（默认）");
+        assert_eq!(describe_actions(away), "开 Wi-Fi");
+        let abroad = cfg.scenarios.iter().find(|s| s.id == "abroad").unwrap();
+        assert_eq!(describe_detect(&abroad.detect, "460"), "插的不是中国的卡时（当地卡、境外 eSIM）");
+        assert_eq!(describe_actions(abroad), "开 Wi-Fi · CHILL 改成直连");
+        let ssid = Detect::Ssid {
+            entries: ["A", "B", "C"].iter().map(|n| SsidEntry { ssid: n.to_string(), bssid: None }).collect(),
+        };
+        assert_eq!(describe_detect(&ssid, "460"), "附近有 Wi-Fi「A」「B」等 3 个时");
+        assert_eq!(describe_detect(&Detect::Mcc { mccs: vec!["440".into()] }, "460"), "插的是日本的卡时");
     }
 
     #[test]

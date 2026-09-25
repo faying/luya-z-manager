@@ -385,22 +385,38 @@ fn read_sysfs_u64(path: &str) -> Option<u64> {
 
 // -- Process monitor --
 
-/// Known bloat daemons (from daemon-cleanup.md).
+/// Daemons listed in /etc/config/zte_topsw_daemon.conf. zte_topsw_daemon waits
+/// for every one of them to register before it releases boot, and several are
+/// live services (zte_topsw_wms is SMS, zte_topsw_mc the modem controller).
+/// Never kill or stop these — see CLAUDE.md "ZTE Daemon Sync Barrier".
+const SYNC_BARRIER_DAEMONS: &[&str] = &[
+    "zte_topsw_mc",
+    "zte_router",
+    "zte_topsw_data",
+    "zte_topsw_nwinfo",
+    "zte_topsw_mdm",
+    "zte_topsw_sleep_faw",
+    "zte_topsw_apn",
+    "zte_topsw_wms",
+    "zte_topsw_key",
+    "zte_topsw_led",
+    "zte_topsw_tr098db",
+    "zte_dm",
+    "zte_topsw_fota_result",
+    "zte_topsw_devui",
+    "zte_topsw_wlan",
+    "zte_smart_manage",
+];
+
+/// Daemons that are safe to kill: none of them is in daemon.conf.
 const BLOAT_DAEMONS: &[&str] = &[
     "zte_topsw_tr069",
     "zte_topsw_tr069_sub",
-    "zte_topsw_tr098db",
-    "zte_topsw_fota_result",
     "zte_mqtt_sdk_st",
     "zte_topsw_diag",
     "zte_topsw_samba",
     "zte_topsw_nfc",
-    "zte_smart_manage",
     "zte_topsw_get_brand",
-    "zte_topsw_mc",
-    "zte_dm",
-    "zte_topsw_wms",
-    "zte_topsw_sleep_faw",
     "zte_topsw_jwxk_query",
     "zte-topsw-tunnel",
     "zte_dua",
@@ -663,4 +679,19 @@ fn read_proc_name_rss(pid: u32) -> Option<(String, u64)> {
         });
 
     Some((name, rss_pages * 4))
+}
+
+#[cfg(test)]
+mod bloat_tests {
+    use super::{BLOAT_DAEMONS, SYNC_BARRIER_DAEMONS};
+
+    #[test]
+    fn bloat_list_never_contains_a_sync_barrier_daemon() {
+        for d in BLOAT_DAEMONS {
+            assert!(
+                !SYNC_BARRIER_DAEMONS.contains(d),
+                "{d} is in daemon.conf and must not be killable"
+            );
+        }
+    }
 }

@@ -2,7 +2,7 @@
 
 ## Scope
 
-This policy covers the open-u60-pro toolkit code (zte-agent, iOS app, Android app), not ZTE firmware or hardware — report those directly to ZTE.
+This policy covers the open-u60-pro toolkit code (zte-agent, web admin, install kit), not ZTE firmware or hardware — report those directly to ZTE.
 
 ## Reporting a Vulnerability
 

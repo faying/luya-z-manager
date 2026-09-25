@@ -1,0 +1,28 @@
+// New zh strings for /tools/at (merged into zh by the coordinator).
+export const zh = {
+  atterm: {
+    recoverCfun0: "发送 AT+CFUN=1 重新打开射频，或者重启设备。",
+    recoverCreset: "调制解调器大约一分钟后会自己恢复；没恢复就重启设备。",
+    recoverFactory: "用 AT 命令改过的调制解调器设置会丢失，在这个页面上改不回来。",
+    recoverNvwr: "原来的值在这个页面上恢复不了。写错的值可能让调制解调器无法工作，直到把它写回去。",
+    recoverQpowd: "重启设备才能让调制解调器重新上电。",
+    recoverCops: "发送 AT+COPS=0 恢复自动选择运营商。",
+    recoverGeneric: "调制解调器没有响应时，重启设备。",
+    sendStep: "发送 {{cmd}}",
+    errorEmptyAfterFilter: "去掉 ' ` $ ; | & 之后什么都不剩了。",
+    portReading: "正在查找 AT 端口…",
+    portAvailable: "AT 端口可用",
+    portNone: "没有 AT 端口应答",
+    portNoneReason: "调制解调器的 AT 端口都没有回 OK，在有端口应答之前，命令都会失败。稍等一下再按「重新检查」。",
+    portUnread: "没能检查 AT 端口",
+    checkPort: "重新检查",
+    noReply: "（没有回复）",
+    inputLabel: "AT 命令",
+    recallHintNd: "按回车发送，按 ↑ / ↓ 调出之前的命令。",
+    historyEmpty: "这次打开页面后发过的命令会列在这里，点一条可以放回输入框。",
+    reuse: "把 {{cmd}} 放回输入框",
+    confirmTitle: "发送有风险的 AT 命令？",
+    confirmDowntime: "看命令而定：调制解调器恢复之前，移动网络可能断开。",
+    confirmSend: "发送",
+  },
+} as const;

@@ -2,10 +2,10 @@
 
 import { usePathname } from "next/navigation";
 import { AuthProvider } from "@/lib/hooks/useAuth";
-import { AuthGate } from "@/components/admin/AuthGate";
-import { AdminShell } from "@/components/admin/AdminShell";
-import { I18nProvider } from "@/components/admin/I18nProvider";
-import "./admin.css";
+import { AuthGate } from "@/components/nd/shell/AuthGate";
+import { I18nProvider } from "@/components/nd/shell/I18nProvider";
+import { Shell } from "@/components/nd/shell/Shell";
+import { ToastProvider } from "@/components/nd";
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -14,17 +14,17 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   return (
     <I18nProvider>
-      <div className="admin-theme min-h-screen">
+      <ToastProvider>
         <AuthProvider>
           {isLogin ? (
             children
           ) : (
             <AuthGate>
-              <AdminShell>{children}</AdminShell>
+              <Shell>{children}</Shell>
             </AuthGate>
           )}
         </AuthProvider>
-      </div>
+      </ToastProvider>
     </I18nProvider>
   );
 }

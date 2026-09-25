@@ -35,6 +35,10 @@ pub fn network_clients(_state: &AppState) -> (u16, Value) {
     if let Some(leases) = dhcp {
         result.insert("dhcp_leases".into(), leases);
     }
+    // Which band / Wi-Fi generation / link rate each wireless client is on
+    // (iw station dump per AP interface; wired clients are not in it).
+    let wifi: Vec<Value> = crate::netinfo::wifi_stations().iter().map(crate::netinfo::station_wifi_json).collect();
+    result.insert("wifi".into(), Value::Array(wifi));
     (200, json!({"ok": true, "data": result}))
 }
 

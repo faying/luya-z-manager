@@ -16,6 +16,7 @@ use crate::scheduler;
 use crate::handlers::{self, AppState};
 use crate::homemode;
 use crate::modem_ext;
+use crate::netinfo;
 use crate::public;
 use crate::network_ext;
 use crate::qos;
@@ -136,6 +137,12 @@ fn handle_request(mut request: Request, state: &AppState) {
             return;
         }
         // Health (needs the query string: refresh=1, program=&file=)
+        (&Method::Get, "/api/netinfo") => {
+            let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
+            let (status, body_json) = netinfo::get(state, query);
+            respond(request, status, body_json);
+            return;
+        }
         (&Method::Get, "/api/health") => {
             let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
             let (status, body_json) = health::health_get(state, query);
@@ -244,10 +251,15 @@ pub fn route(method: &Method, path: &str, state: &AppState, body: &[u8]) -> (u16
         (&Method::Put, "/api/modem/data") => modem_ext::modem_data_set(state, body),
         (&Method::Post, "/api/modem/airplane") => modem_ext::modem_airplane(state, body),
         (&Method::Put, "/api/modem/network-mode") => modem_ext::modem_network_mode_set(state, body),
-        (&Method::Post, "/api/modem/scan") => modem_ext::modem_scan(state),
+        // Same job as /api/netinfo/scan: one modem operation at a time.
+        (&Method::Post, "/api/modem/scan") => netinfo::operator_scan(state),
         (&Method::Get, "/api/modem/scan/status") => modem_ext::modem_scan_status(state),
         (&Method::Get, "/api/modem/scan/results") => modem_ext::modem_scan_results(state),
-        (&Method::Post, "/api/modem/register") => modem_ext::modem_register(state, body),
+        // Manual register goes through the guard: back to automatic selection
+        // if it does not take (netinfo.rs).
+        (&Method::Post, "/api/modem/register") => netinfo::register(state, body),
+        (&Method::Get, "/api/modem/register/guard") => netinfo::guard_status(state),
+        (&Method::Post, "/api/modem/netselect/auto") => netinfo::select_auto(state),
         (&Method::Get, "/api/modem/register/result") => modem_ext::modem_register_result(state),
         // SMS
         (&Method::Post, "/api/sms/list") => sms::sms_list(state, body),
@@ -278,7 +290,12 @@ pub fn route(method: &Method, path: &str, state: &AppState, body: &[u8]) -> (u16
         (&Method::Post, "/api/cell/lock/nr") => cell::cell_lock_nr(state, body),
         (&Method::Post, "/api/cell/lock/lte") => cell::cell_lock_lte(state, body),
         (&Method::Post, "/api/cell/lock/reset") => cell::cell_lock_reset(state),
-        (&Method::Post, "/api/cell/neighbors/scan") => cell::cell_neighbors_scan(state),
+        // The vendor neighbour scan drops the data call for nothing (netinfo.rs).
+        (&Method::Post, "/api/cell/neighbors/scan") => netinfo::neighbors_scan(state),
+        (&Method::Post, "/api/netinfo/neighbors/scan") => netinfo::neighbors_scan(state),
+        (&Method::Post, "/api/netinfo/scan") => netinfo::operator_scan(state),
+        // Touch screen: switch to auto or to a saved manual APN (netinfo.rs).
+        (&Method::Post, "/api/netinfo/apn") => netinfo::apn_use(body),
         (&Method::Get, "/api/cell/neighbors/nr") => cell::cell_neighbors_nr(state),
         (&Method::Get, "/api/cell/neighbors/lte") => cell::cell_neighbors_lte(state),
         (&Method::Post, "/api/cell/band/nr") => cell::cell_band_nr(state, body),

@@ -1,1022 +1,822 @@
 "use client";
-
-import { useEffect, useRef, useState } from "react";
+// CHILL (design doc §6, 11A/15A/16A). Reading order:
+//
+//   status (running / direct + reason / not started; node; start·stop)
+//   exit ×4 ─ region cards ─┬─ AI exit · profile · device bypass
+//                           └─ subscriptions · proxy groups        (≥1024: two columns)
+//   advanced: temperature · memory · uptime · PID, dashboard, service log
+//
+// Tiers (controls-inventory): exit proxy/global/direct_keep_ai, region, AI
+// exit, profile = 1; start, stop, all-direct, bypass changes, subscription
+// refresh / URL save = 2 (inline confirm). Start / stop / profile / URL save
+// run as agent jobs; the step polls the job to its end (keeps going when the
+// tab is hidden) so the write op reports the real outcome.
+import { useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  ExternalLink,
-  RefreshCw,
-  Power,
-  Pencil,
-  Check,
-  X,
-  AlertTriangle,
-} from "lucide-react";
+import { ArrowClockwise, ArrowSquareOut, PencilSimple, Play, Power } from "@phosphor-icons/react";
 import { useApi } from "@/lib/hooks/useApi";
-import { deviceIso, deviceNow, useDeviceOffset } from "@/lib/deviceClock";
 import { apiFetch } from "@/lib/api/client";
-import { ApiError } from "@/lib/api/types";
+import { TimeoutError } from "@/lib/api/types";
+import { chillValid } from "@/lib/api/freshness";
+import { useWriteOp, type Tier, type UseWriteOp } from "@/lib/api/writeOp";
+import { CHILL_REASON_KEYS } from "@/lib/chill";
+import { deviceIso, deviceNow, fmtDevice, useDeviceOffset } from "@/lib/deviceClock";
+import { useMedia } from "@/lib/useMedia";
+import { bytes } from "@/lib/home";
+import type {
+  ChillBypass, ChillDashboard, ChillExit, ChillJob, ChillJobStarted, ChillLog, ChillProfile, ChillProvider,
+  ChillProviders, ChillStatus,
+} from "@/lib/api/schemas/services";
+import type { NetworkClients } from "@/lib/api/schemas/network";
 import {
-  PageHeader,
-  SectionCard,
-  Status,
-  MetaRow,
-  ErrorBanner,
-} from "@/components/admin/StatCard";
-import { Button, Input, Toggle } from "@/components/admin/Button";
+  Button, ChoiceGrid, ConfirmInline, ConsoleBand, Group, GroupTitle, OpResult, Readout, ReadoutWall, Row,
+  Segmented, StatusBlock, StatusMark, Switch, useConfirmInline, useToast, type Tone,
+} from "@/components/nd";
 
-// Must match the whitelist in zte-agent/src/chill.rs (REGION_GROUPS/MAIN_GROUP/AI_GROUP).
+// Must match the whitelist in zte-agent/src/chill.rs (MAIN_GROUP / AI_GROUP).
 const MAIN_GROUP = "🚀 节点选择";
 const AI_GROUP = "🤖 AI";
-
-interface ProxyGroup {
-  name: string;
-  now?: string;
-  size: number;
-}
-
-interface GroupChoice {
-  active?: string;
-  options: string[];
-}
-
-interface ChillState {
-  state: "running" | "direct" | "unknown" | string;
-  reason?: string | null;
-  cpuss_c?: number;
-  mem_avail_mb?: number;
-  core_pid?: number | null;
-  started_at?: string;
-  updated_at?: string;
-  bypass_stale?: string[];
-  rules_drift?: boolean;
-  mem_pressure?: boolean;
-  version?: string;
-  groups?: ProxyGroup[];
-  region?: GroupChoice | null;
-  ai_exit?: GroupChoice | null;
-  mode?: string | null;
-  exit?: "proxy" | "direct_keep_ai" | "direct_all" | "global";
-  profile?: Profile;
-  profile_effective?: Profile;
-  thermal_eco?: boolean;
-}
-
-type Profile = "eco" | "standard" | "perf";
-
-interface Subscription {
-  Upload: number;
-  Download: number;
-  Total: number;
-  Expire: number;
-}
-
-interface ChillProvider {
-  name: string;
-  vehicle_type?: string;
-  updated_at?: string;
-  node_count: number;
-  subscription?: Subscription | null;
-  editable: boolean;
-}
-
-interface ProvidersResp {
-  providers: ChillProvider[];
-}
-
-interface BypassResp {
-  ips: string[];
-  stale: string[];
-}
-
-interface DhcpLease {
-  ipaddr?: string;
-  macaddr?: string;
-  hostname?: string;
-  expires?: number;
-}
-
-interface ClientsResp {
-  hosts?: Record<string, string>;
-  dhcp_leases?: DhcpLease[];
-}
-
-interface JobResp {
-  id: number;
-  kind: string;
-  status: "idle" | "running" | "done" | "error";
-  message: string;
-  started_unix: number;
-  finished_unix: number;
-}
-
-interface LogResp {
-  path: string;
-  lines: string[];
-  limit: number;
-}
-
-const REFRESH_INTERVAL = 4000;
 const LOG_LINES = 200;
+const JOB_LIMIT_MS = 180_000;
 
-const REASON_LABELS: Record<string, string> = {
-  overheat: "chill.reasonOverheat",
-  lowmem: "chill.reasonLowmem",
-  gaveup: "chill.reasonGaveup",
-  ruleset_missing: "chill.reasonRulesetMissing",
-  captive_wan: "chill.reasonCaptiveWan",
-  paused: "chill.reasonPaused",
-  disabled: "chill.reasonDisabled",
-};
+/** POST/PUT that starts an agent job, then poll /job until it ends. */
+async function runJob(path: string, method: "POST" | "PUT", body?: unknown): Promise<ChillJob> {
+  const started = await apiFetch<ChillJobStarted>(path, { method, body });
+  const until = Date.now() + JOB_LIMIT_MS;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const j = await apiFetch<ChillJob>("/api/services/chill/job");
+    if (j.id === started.job_id && j.status === "done") return j;
+    if (j.id === started.job_id && j.status === "error") throw new Error(j.message || "job failed");
+    if (Date.now() > until) throw new TimeoutError(JOB_LIMIT_MS);
+  }
+}
+
+type T = (k: string, d: string, o?: Record<string, unknown>) => string;
 
 export default function ChillPage() {
   const { t } = useTranslation();
-  const offset = useDeviceOffset();
-  const { data: status, error, mutate, isLoading } = useApi<ChillState>(
-    "/api/services/chill",
-    { refreshInterval: REFRESH_INTERVAL }
-  );
-
-  const [msg, setMsg] = useState<{ text: string; err: boolean } | null>(null);
-  const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function flash(text: string, err = false) {
-    if (msgTimer.current) clearTimeout(msgTimer.current);
-    setMsg({ text, err });
-    if (!err) msgTimer.current = setTimeout(() => setMsg(null), 4000);
-  }
-
-  // Single shared job slot on the agent — enable/disable and a provider URL
-  // change (which triggers chill.sh reload) all go through it, same job-poll
-  // idiom as the old page's ProfilesSection.
-  const [pendingJob, setPendingJob] = useState<number | null>(null);
-  const [opLabel, setOpLabel] = useState("");
-  const { data: job } = useApi<JobResp>(
-    pendingJob != null ? "/api/services/chill/job" : null,
-    { refreshInterval: pendingJob != null ? 1500 : 0 }
-  );
-  useEffect(() => {
-    if (pendingJob == null || !job || job.id !== pendingJob) return;
-    if (job.status === "done") {
-      flash(job.message || t("chill.opDone", "Done"));
-      setPendingJob(null);
-      mutate();
-    } else if (job.status === "error") {
-      flash(job.message || t("chill.opFailed", "Operation failed"), true);
-      setPendingJob(null);
-      mutate();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job, pendingJob]);
-
-  const busy = pendingJob != null;
-
-  async function toggleEnabled() {
-    if (busy) return;
-    const enabling = status?.state !== "running" && status?.state !== "direct";
-    setOpLabel(enabling ? t("chill.enabling", "Starting…") : t("chill.disabling", "Stopping…"));
-    try {
-      const path = enabling ? "/api/services/chill/enable" : "/api/services/chill/disable";
-      const res = await apiFetch<{ job_id: number }>(path, { method: "POST" });
-      setPendingJob(res.job_id);
-    } catch (e) {
-      flash(e instanceof ApiError ? e.message : t("chill.opFailed", "Operation failed"), true);
-    }
-  }
-
-  const tone = stateTone(status);
-  const running = status?.state === "running";
-  const known = !!status && status.state !== "unknown";
-  const dashboardUrl = useDashboardUrl();
+  const chill = useApi<ChillStatus>("/api/services/chill", { refreshInterval: 4000, isValid: chillValid });
+  const s = chill.data;
+  const running = s?.state === "running";
+  const on = s?.state === "running" || s?.state === "direct";
 
   return (
     <>
-      <PageHeader
-        title="CHILL"
-        description={t("chill.desc", "Native mihomo proxy — regions, AI exit, per-device bypass.")}
-        actions={
-          <div className="flex items-center gap-3">
-            <Status tone={tone.tone}>{t(tone.labelKey, tone.label)}</Status>
-            <Button
-              variant={running ? "outline" : "primary"}
-              size="sm"
-              disabled={busy || !known}
-              onClick={toggleEnabled}
-            >
-              <Power size={12} />
-              {busy ? opLabel : running ? t("chill.stop", "Stop") : t("chill.start", "Start")}
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => mutate()} disabled={isLoading}>
-              <RefreshCw size={12} />
-              {t("common.refresh", "Refresh")}
-            </Button>
+      <div className="mb-4 mt-2 flex items-center gap-2">
+        <h1 className="nd-title flex-1">CHILL</h1>
+        <Button variant="ghost" iconOnly onPress={() => chill.mutate()} aria-label={t("common.refresh", "Refresh")}>
+          <ArrowClockwise size={20} weight="bold" aria-hidden />
+        </Button>
+      </div>
+
+      <div className="grid gap-6">
+        {running && s?.manual_first?.notice && (
+          <p role="status" className="px-1">
+            <StatusMark tone={s.manual_first.on_backup ? "warn" : "ok"}>{s.manual_first.notice}</StatusMark>
+          </p>
+        )}
+        <PowerBlock chill={s} stale={chill.stale} error={!!chill.error && !s} invalid={chill.invalidReason} on={on} onDone={() => chill.mutate()} />
+
+        {running && <ExitSection exit={s?.exit} onDone={() => chill.mutate()} />}
+
+        {running && (
+          <section>
+            <GroupTitle>{t("chill.region", "Main exit region")}</GroupTitle>
+            <p className="nd-aux -mt-1 mb-3 px-1">{t("chill.regionDesc", "Main exit for everything on the router.")}</p>
+            <GroupPicker group={MAIN_GROUP} label={t("chill.region", "Main exit region")} choice={s?.region} onDone={() => chill.mutate()} />
+          </section>
+        )}
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid content-start gap-6">
+            {running && (
+              <section>
+                <GroupTitle>{t("chill.aiExit", "AI exit")}</GroupTitle>
+                <p className="nd-aux -mt-1 mb-3 px-1">{t("chill.aiExitDesc", "Exit used for AI-service traffic specifically.")}</p>
+                <GroupPicker group={AI_GROUP} label={t("chill.aiExit", "AI exit")} choice={s?.ai_exit} onDone={() => chill.mutate()} />
+              </section>
+            )}
+            {s && s.state !== "unknown" && <ProfileSection chill={s} onDone={() => chill.mutate()} />}
+            <BypassSection />
           </div>
-        }
-      />
-
-      {error && (
-        <ErrorBanner
-          message={t("services.failedToLoad", "Failed to load: {{msg}}", { msg: error.message ?? "unknown" })}
-          onRetry={() => mutate()}
-        />
-      )}
-
-      {msg && (
-        <div
-          role={msg.err ? "alert" : "status"}
-          aria-live="polite"
-          className={`mb-4 rounded-md border px-3 py-2 text-[13px] ${
-            msg.err ? "border-error/40 bg-error/10 text-error" : "border-success/40 bg-success/10 text-success"
-          }`}
-        >
-          {msg.text}
-        </div>
-      )}
-
-      {status?.state === "unknown" && (
-        <SectionCard title={t("chill.stUnknownTitle", "Not started yet")}>
-          <div className="flex flex-col items-center gap-3 py-8 text-center">
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-bg-input text-text-dim">
-              <Power size={22} />
-            </span>
-            <p className="mx-auto max-w-[44ch] text-[13px] leading-relaxed text-text-dim">
-              {t("chill.stUnknownDesc", "CHILL hasn't run since the device last booted. Press Start above to bring it up.")}
-            </p>
-          </div>
-        </SectionCard>
-      )}
-
-      {known && (
-        <div className="admin-card overflow-hidden">
-          <div className="grid grid-cols-2 gap-px bg-border md:grid-cols-4">
-            <Vital label={t("chill.temp", "Temperature")} value={status.cpuss_c != null ? `${status.cpuss_c}°C` : "—"} />
-            <Vital label={t("chill.memAvail", "Memory available")} value={status.mem_avail_mb != null ? `${status.mem_avail_mb} MB` : "—"} hint={status.mem_pressure ? t("chill.memPressure", "Under pressure") : undefined} />
-            <Vital label={t("chill.uptime", "Uptime")} value={fmtUptimeIso(status.started_at, offset)} hint={status.version} />
-            <Vital label="PID" value={status.core_pid ?? "—"} />
-          </div>
-        </div>
-      )}
-
-      {status?.state === "direct" && status.reason && (
-        <ErrorBanner
-          message={t(
-            "chill.directReason",
-            "Traffic is going direct: {{reason}}",
-            { reason: t(REASON_LABELS[status.reason] ?? status.reason, status.reason) }
-          )}
-        />
-      )}
-
-      {known && (
-        <ProfileCard
-          profile={status.profile ?? "standard"}
-          effective={status.profile_effective ?? status.profile ?? "standard"}
-          thermal={!!status.thermal_eco}
-          running={running}
-          busy={busy}
-          onJob={(id) => {
-            setOpLabel(t("chill.profileSwitching", "Switching…"));
-            setPendingJob(id);
-          }}
-          onError={(m) => flash(m, true)}
-        />
-      )}
-
-      {running && (
-        <>
-          <ExitCard
-            exit={status.exit}
-            busy={busy}
-            onSwitched={() => mutate()}
-            onError={(m) => flash(m, true)}
-          />
-          <div className="mt-6 grid gap-6 lg:grid-cols-2">
-            <RegionCard
-              title={t("chill.region", "Region")}
-              description={t("chill.regionDesc", "Main exit for everything on the router.")}
-              group={MAIN_GROUP}
-              choice={status.region}
-              busy={busy}
-              onSwitched={() => mutate()}
-              onError={(m) => flash(m, true)}
-            />
-            <RegionCard
-              title={t("chill.aiExit", "AI exit")}
-              description={t("chill.aiExitDesc", "Exit used for AI-service traffic specifically.")}
-              group={AI_GROUP}
-              choice={status.ai_exit}
-              busy={busy}
-              onSwitched={() => mutate()}
-              onError={(m) => flash(m, true)}
-            />
-          </div>
-
-          <ProvidersCard onBusyChange={setPendingJob} onOpLabel={setOpLabel} onMessage={flash} />
-
-          {status.groups && status.groups.length > 0 && (
-            <SectionCard
-              title={t("chill.proxyGroups", "Proxy groups")}
-              description={t("chill.proxyGroupsDesc", "{{count}} groups", { count: status.groups.length })}
-              className="mt-6"
-            >
-              <div className="-my-1">
-                {status.groups.map((g) => (
-                  <div
-                    key={g.name}
-                    className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border/50 py-3 last:border-0"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <span className="truncate font-medium text-text">{g.name}</span>
-                      <MetaRow className="mt-1" items={[t("chill.nodes", "{{count}} nodes", { count: g.size })]} />
-                    </div>
-                    <span className="shrink-0 font-mono text-[12px] text-text">{g.now || "—"}</span>
-                  </div>
+          <div className="grid content-start gap-6">
+            {running && <ProvidersSection onDone={() => chill.mutate()} />}
+            {running && s?.groups && s.groups.length > 0 && (
+              <Group title={t("chill.proxyGroups", "Proxy groups")}>
+                {s.groups.map((g) => (
+                  <Row key={g.name} label={g.name} sub={t("chill.nodes", "{{count}} nodes", { count: g.size })} value={g.now || "—"} />
                 ))}
-              </div>
-            </SectionCard>
-          )}
+              </Group>
+            )}
+          </div>
+        </div>
 
-          <DashboardEmbed url={dashboardUrl} />
-        </>
-      )}
-
-      <BypassCard />
-
-      <LogSection
-        path="/api/services/chill/log"
-        title={t("chill.serviceLog", "Service log")}
-        description={t("chill.serviceLogDesc", "Tailing /tmp/chill.log")}
-      />
+        <Advanced chill={s} stale={chill.stale} running={running} />
+      </div>
     </>
   );
 }
 
-/* ------------------------------------------------------------------ *
- *  Region / AI-exit switch — a plain PUT to mihomo's own group select,
- *  no reload involved (see chill.rs::regions_set).
- * ------------------------------------------------------------------ */
+// ── status + start/stop ───────────────────────────────────────────────
 
-/* The owner's real choices, in their terms. "Direct, AI stays" = rule mode with
- * the main group on DIRECT: everything that follows the main group goes direct,
- * while 🤖 AI and 📞 VoWiFi are separate groups and keep their nodes. */
-const EXIT_OPTIONS: { key: NonNullable<ChillState["exit"]>; label: string; hint: string }[] = [
-  { key: "proxy", label: "Proxy", hint: "Normal, as at home." },
-  { key: "direct_keep_ai", label: "Direct · AI stays", hint: "Abroad on a local SIM: everything direct except AI and VoWiFi." },
-  { key: "direct_all", label: "All direct", hint: "AI and VoWiFi go direct too." },
-  { key: "global", label: "Global", hint: "mihomo's global mode, same as before." },
-];
-
-function ExitCard({
-  exit,
-  busy,
-  onSwitched,
-  onError,
-}: {
-  exit?: ChillState["exit"];
-  busy: boolean;
-  onSwitched: () => void;
-  onError: (msg: string) => void;
-}) {
+function PowerBlock({
+  chill, stale, error, invalid, on, onDone,
+}: { chill: ChillStatus | undefined; stale: boolean; error: boolean; invalid?: string; on: boolean; onDone: () => void }) {
   const { t } = useTranslation();
-  const [switching, setSwitching] = useState(false);
-
-  async function pick(state: string) {
-    if (busy || switching || state === exit) return;
-    setSwitching(true);
-    try {
-      await apiFetch("/api/services/chill/exit", { method: "PUT", body: { state } });
-      onSwitched();
-    } catch (e) {
-      onError(e instanceof ApiError ? e.message : t("chill.opFailed", "Operation failed"));
-    } finally {
-      setSwitching(false);
-    }
-  }
-
-  const current = EXIT_OPTIONS.find((o) => o.key === exit);
-  return (
-    <SectionCard
-      title={t("chill.exitTitle", "Exit")}
-      description={t(
-        "chill.exitDesc",
-        "How traffic leaves. Abroad on a local SIM the device switches to “Direct · AI stays” by itself, and back to Proxy once a home SIM is in again.",
-      )}
-      className="mt-6"
-    >
-      <div role="radiogroup" aria-label={t("chill.exitTitle", "Exit")} className="flex flex-wrap gap-2">
-        {EXIT_OPTIONS.map((o) => {
-          const active = o.key === exit;
-          return (
-            <button
-              key={o.key}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              disabled={busy || switching}
-              onClick={() => pick(o.key)}
-              className={`inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12.5px] font-medium transition-colors disabled:opacity-50 ${
-                active
-                  ? "border-accent bg-accent-soft text-accent"
-                  : "border-border bg-bg-card text-text hover:border-accent/50"
-              }`}
-            >
-              {active && <Check size={11} />}
-              {t(`chill.exit.${o.key}`, o.label)}
-            </button>
-          );
-        })}
-      </div>
-      {current && (
-        <p className="mt-3 text-xs text-text-dim">{t(`chill.exitHint.${current.key}`, current.hint)}</p>
-      )}
-    </SectionCard>
-  );
-}
-
-/* ------------------------------------------------------------------ *
- *  Profile — chill.sh's three settings sets (probe interval, keep-alive,
- *  tcp-concurrent, GOMAXPROCS). standard is what CHILL always ran with.
- *  Into or out of eco restarts the core (GOMAXPROCS only applies at start),
- *  standard↔perf is a hot reload. Runs as a job like enable/disable.
- * ------------------------------------------------------------------ */
-
-const PROFILE_OPTIONS: { key: Profile; label: string; hint: string }[] = [
-  { key: "eco", label: "Eco", hint: "Probes nodes hourly, fewer keep-alives, core limited to 2 cores. Cooler and lighter on battery; a dead node takes longer to be noticed." },
-  { key: "standard", label: "Standard", hint: "The settings CHILL has always used." },
-  { key: "perf", label: "Performance", hint: "Probes nodes every 10 minutes and dials several addresses at once. Faster failover and connects, a little more power." },
-];
-
-function ProfileCard({
-  profile,
-  effective,
-  thermal,
-  running,
-  busy,
-  onJob,
-  onError,
-}: {
-  profile: Profile;
-  effective: Profile;
-  thermal: boolean;
-  running: boolean;
-  busy: boolean;
-  onJob: (jobId: number) => void;
-  onError: (msg: string) => void;
-}) {
-  const { t } = useTranslation();
-
-  async function pick(p: Profile) {
-    if (busy || p === profile) return;
-    try {
-      const res = await apiFetch<{ job_id: number }>("/api/services/chill/profile", { method: "PUT", body: { profile: p } });
-      onJob(res.job_id);
-    } catch (e) {
-      onError(e instanceof ApiError ? e.message : t("chill.opFailed", "Operation failed"));
-    }
-  }
-
-  const current = PROFILE_OPTIONS.find((o) => o.key === profile);
-  return (
-    <SectionCard
-      title={t("chill.profileTitle", "Profile")}
-      description={t(
-        "chill.profileDesc",
-        "Trade battery and heat against failover speed. Switching into or out of Eco restarts the proxy core: connections drop for about 10 seconds.",
-      )}
-      className="mt-6"
-    >
-      <div role="radiogroup" aria-label={t("chill.profileTitle", "Profile")} className="flex flex-wrap gap-2">
-        {PROFILE_OPTIONS.map((o) => {
-          const active = o.key === profile;
-          return (
-            <button
-              key={o.key}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              disabled={busy}
-              onClick={() => pick(o.key)}
-              className={`inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12.5px] font-medium transition-colors disabled:opacity-50 ${
-                active
-                  ? "border-accent bg-accent-soft text-accent"
-                  : "border-border bg-bg-card text-text hover:border-accent/50"
-              }`}
-            >
-              {active && <Check size={11} />}
-              {t(`chill.profile.${o.key}`, o.label)}
-            </button>
-          );
-        })}
-      </div>
-      {current && (
-        <p className="mt-3 text-xs text-text-dim">{t(`chill.profileHint.${current.key}`, current.hint)}</p>
-      )}
-      {thermal && effective !== profile && (
-        <p className="mt-2 text-xs text-warning">
-          {t("chill.profileThermal", "Running as Eco for now because the device is hot; back to your choice once it has cooled down.")}
-        </p>
-      )}
-      {!running && (
-        <p className="mt-2 text-xs text-text-dim">{t("chill.profileNotRunning", "Applies the next time CHILL starts.")}</p>
-      )}
-    </SectionCard>
-  );
-}
-
-function RegionCard({
-  title,
-  description,
-  group,
-  choice,
-  busy,
-  onSwitched,
-  onError,
-}: {
-  title: string;
-  description: string;
-  group: string;
-  choice?: GroupChoice | null;
-  busy: boolean;
-  onSwitched: () => void;
-  onError: (msg: string) => void;
-}) {
-  const { t } = useTranslation();
-  const [switching, setSwitching] = useState(false);
-  const options = choice?.options ?? [];
-
-  async function pick(member: string) {
-    if (busy || switching || member === choice?.active) return;
-    setSwitching(true);
-    try {
-      await apiFetch("/api/services/chill/regions", { method: "PUT", body: { group, member } });
-      onSwitched();
-    } catch (e) {
-      onError(e instanceof ApiError ? e.message : t("chill.opFailed", "Operation failed"));
-    } finally {
-      setSwitching(false);
-    }
-  }
-
-  return (
-    <SectionCard title={title} description={description}>
-      {options.length === 0 ? (
-        <p className="py-4 text-center text-[13px] text-text-dim">{t("chill.noOptions", "No members configured.")}</p>
-      ) : (
-        <div role="radiogroup" aria-label={title} className="flex flex-wrap gap-2">
-          {options.map((opt) => {
-            const active = opt === choice?.active;
-            return (
-              <button
-                key={opt}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                disabled={busy || switching}
-                onClick={() => pick(opt)}
-                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12.5px] font-medium transition-colors disabled:opacity-50 ${
-                  active
-                    ? "border-accent bg-accent-soft text-accent"
-                    : "border-border bg-bg-card text-text hover:border-accent/50"
-                }`}
-              >
-                {active && <Check size={11} />}
-                {opt}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </SectionCard>
-  );
-}
-
-/* ------------------------------------------------------------------ *
- *  Subscriptions (proxy-providers)
- * ------------------------------------------------------------------ */
-
-function ProvidersCard({
-  onBusyChange,
-  onOpLabel,
-  onMessage,
-}: {
-  onBusyChange: (jobId: number | null) => void;
-  onOpLabel: (label: string) => void;
-  onMessage: (msg: string, err?: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  const offset = useDeviceOffset();
-  const { data, mutate, error } = useApi<ProvidersResp>("/api/services/chill/providers", {
-    refreshInterval: 15000,
+  const [open, setOpen] = useState(false);
+  const inline = useConfirmInline(open);
+  const toast = useToast();
+  const op = useWriteOp({
+    tier: 2,
+    steps: [
+      {
+        label: on ? t("chill.stop", "Stop") : t("chill.start", "Start"),
+        run: () => runJob(on ? "/api/services/chill/disable" : "/api/services/chill/enable", "POST"),
+      },
+    ],
+    verify: async () => {
+      const st = await apiFetch<ChillStatus>("/api/services/chill");
+      onDone();
+      return on ? st.state !== "running" : st.state === "running" || st.state === "direct";
+    },
   });
-  const [refreshing, setRefreshing] = useState<string | null>(null);
-  const [editing, setEditing] = useState<string | null>(null);
-  const [url, setUrl] = useState("");
-  const [saving, setSaving] = useState(false);
 
-  async function refresh(name: string) {
-    if (refreshing) return;
-    setRefreshing(name);
-    try {
-      await apiFetch("/api/services/chill/providers/refresh", { method: "POST", body: { name } });
-      onMessage(t("chill.providerRefreshed", "Refreshed"));
-      mutate();
-    } catch (e) {
-      onMessage(e instanceof ApiError ? e.message : t("chill.opFailed", "Operation failed"), true);
-    } finally {
-      setRefreshing(null);
-    }
+  let tone: Tone = "neutral";
+  let word: string = t("chill.stLoading", "Loading");
+  let reason: ReactNode = null;
+  if (error) {
+    tone = "bad";
+    word = t("home.chillUnreadable", "Can't read CHILL status");
+  } else if (chill?.state === "running") {
+    tone = stale ? "stale" : "ok";
+    word = t("chill.stRunning", "Running");
+    reason = invalid ? t("home.chillCoreDown", "The proxy core is not answering") : chill.region?.active ?? null;
+  } else if (chill?.state === "direct") {
+    tone = "warn";
+    word = t("chill.stDirect", "Direct");
+    reason = chill.reason
+      ? t("chill.directReason", "Traffic is going direct: {{reason}}", { reason: t(CHILL_REASON_KEYS[chill.reason] ?? chill.reason, chill.reason) })
+      : null;
+  } else if (chill?.state === "unknown") {
+    word = t("chill.stUnknown", "Not started");
+    reason = t("chill.stUnknownDesc", "CHILL hasn't run since the device last booted. Press Start to bring it up.");
   }
+  const meta = chill?.state === "running" ? [chill.version && `mihomo ${chill.version}`, chill.mode && `mode ${chill.mode}`].filter(Boolean).join(" · ") : undefined;
 
-  async function saveUrl(name: string) {
-    const u = url.trim();
-    if (!/^https?:\/\//.test(u)) {
-      onMessage(t("chill.badUrl", "Enter a valid http(s) URL"), true);
-      return;
-    }
-    setSaving(true);
-    try {
-      onOpLabel(t("chill.reloading", "Reloading…"));
-      const res = await apiFetch<{ job_id: number }>("/api/services/chill/providers", {
-        method: "PUT",
-        body: { name, url: u },
-      });
-      onBusyChange(res.job_id);
-      setEditing(null);
-    } catch (e) {
-      onMessage(e instanceof ApiError ? e.message : t("chill.opFailed", "Operation failed"), true);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const providers = data?.providers ?? [];
-
+  const actionLabel = on ? t("chill.stop", "Stop") : t("chill.start", "Start");
   return (
-    <SectionCard
-      title={t("chill.providers", "Subscriptions")}
-      description={t("chill.providersDesc", "Node providers feeding the region groups above.")}
-      className="mt-6"
-    >
-      {error && !data && (
-        <div className="mb-4">
-          <ErrorBanner message={t("chill.providersLoadFailed", "Couldn't load subscriptions: {{msg}}", { msg: error.message ?? "unknown" })} onRetry={() => mutate()} />
-        </div>
-      )}
-      {providers.length === 0 && !error && (
-        <p className="py-6 text-center text-[13px] text-text-dim">{t("chill.noProviders", "No subscriptions found.")}</p>
-      )}
-      <div className="-my-1">
-        {providers.map((p) => {
-          const sub = p.subscription;
-          const usedPct = sub && sub.Total > 0 ? Math.min(100, (sub.Download + sub.Upload) / sub.Total * 100) : null;
-          return (
-            <div key={p.name} className="border-b border-border/50 py-3 last:border-0">
-              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-                <div className="min-w-0 flex-1">
-                  <span className="truncate font-medium text-text">{p.name}</span>
-                  <MetaRow
-                    className="mt-1"
-                    items={[
-                      p.vehicle_type,
-                      t("chill.nodes", "{{count}} nodes", { count: p.node_count }),
-                      p.updated_at ? fmtUpdatedAt(p.updated_at, offset) : null,
-                    ]}
-                  />
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <Button variant="outline" size="sm" disabled={refreshing === p.name} onClick={() => refresh(p.name)}>
-                    <RefreshCw size={12} />
-                    {t("chill.refreshProvider", "Refresh")}
-                  </Button>
-                  {p.editable && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setEditing(editing === p.name ? null : p.name);
-                        setUrl("");
-                      }}
-                      aria-label={t("chill.editUrl", "Edit subscription URL")}
-                    >
-                      <Pencil size={13} />
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              {sub && (
-                <div className="mt-2 space-y-1">
-                  {usedPct != null && (
-                    <div className="h-1.5 overflow-hidden rounded-full bg-bg-input">
-                      <div className="h-full rounded-full bg-accent" style={{ width: `${usedPct}%` }} />
-                    </div>
-                  )}
-                  <MetaRow
-                    items={[
-                      t("chill.subUsage", "{{used}} / {{total}}", { used: fmtBytes(sub.Download + sub.Upload), total: fmtBytes(sub.Total) }),
-                      sub.Expire ? t("chill.subExpires", "Expires {{date}}", { date: new Date(sub.Expire * 1000).toLocaleDateString() }) : null,
-                    ]}
-                  />
-                </div>
-              )}
-
-              {editing === p.name && (
-                <div className="mt-2 flex flex-col gap-2 rounded-md border border-border/70 bg-bg p-2.5 sm:flex-row">
-                  <Input
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    placeholder={t("chill.urlPlaceholder", "https://… subscription URL")}
-                    aria-label={t("chill.editUrl", "Edit subscription URL")}
-                    onKeyDown={(e) => e.key === "Enter" && saveUrl(p.name)}
-                    disabled={saving}
-                  />
-                  <div className="flex shrink-0 gap-1.5">
-                    <Button size="sm" disabled={saving || !url.trim()} onClick={() => saveUrl(p.name)}>
-                      <Check size={13} />
-                      {t("common.save", "Save")}
-                    </Button>
-                    <Button variant="ghost" size="sm" disabled={saving} onClick={() => setEditing(null)}>
-                      <X size={13} />
-                      {t("common.cancel", "Cancel")}
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
+    <div>
+      <StatusBlock
+        tone={tone}
+        state={word}
+        reason={reason}
+        meta={meta || undefined}
+        actions={
+          chill && (
+            <Button
+              variant={on ? "secondary" : "primary"}
+              onPress={() => setOpen((o) => !o)}
+              isDisabled={op.busy}
+              pending={op.busy}
+              {...inline.triggerProps}
+            >
+              {on ? <Power size={18} weight="bold" aria-hidden /> : <Play size={18} weight="fill" aria-hidden />}
+              {actionLabel}
+            </Button>
+          )
+        }
+      />
+      <ConfirmInline
+        id={inline.id}
+        open={open}
+        actionLabel={actionLabel}
+        consequence={
+          on
+            ? t("chill.stopConsequence", "All traffic goes direct, AI and VoWiFi too. You can start it again at any time.")
+            : t("chill.startConsequence", "Traffic starts going through CHILL; it takes about 10 seconds.")
+        }
+        onCancel={() => setOpen(false)}
+        onConfirm={() => {
+          setOpen(false);
+          op.start();
+          op.confirm();
+          toast.show("ok", on ? t("chill.disabling", "Stopping…") : t("chill.enabling", "Starting…"));
+        }}
+      />
+      <div className="mt-2 px-1">
+        <OpResult op={op} />
       </div>
-    </SectionCard>
-  );
-}
-
-/* ------------------------------------------------------------------ *
- *  Per-device bypass — source-IP `ip rule`, works regardless of whether
- *  CHILL is currently running.
- * ------------------------------------------------------------------ */
-
-function BypassCard() {
-  const { t } = useTranslation();
-  const { data, mutate, error } = useApi<BypassResp>("/api/services/chill/bypass", {
-    refreshInterval: 8000,
-  });
-  const { data: clients } = useApi<ClientsResp>("/api/network/clients", { refreshInterval: 15000 });
-  const [saving, setSaving] = useState<string | null>(null);
-
-  const ips = data?.ips ?? [];
-  const stale = data?.stale ?? [];
-  const hosts = clients?.hosts ?? {};
-  const leases = (clients?.dhcp_leases ?? []).filter((l) => l.ipaddr);
-
-  async function setIps(next: string[]) {
-    const dedup = Array.from(new Set(next));
-    setSaving(dedup.join(","));
-    try {
-      await apiFetch("/api/services/chill/bypass", { method: "PUT", body: { ips: dedup } });
-      mutate();
-    } finally {
-      setSaving(null);
-    }
-  }
-
-  function deviceName(ip: string): string {
-    const lease = leases.find((l) => l.ipaddr === ip);
-    if (lease?.hostname) return lease.hostname;
-    if (lease?.macaddr && hosts[lease.macaddr]) return hosts[lease.macaddr];
-    return ip;
-  }
-
-  // Union of known LAN clients and any bypassed IP that's no longer a known
-  // lease (so a stale entry still shows up with something to act on).
-  const rows: Array<{ ip: string; name: string }> = [
-    ...leases.map((l) => ({ ip: l.ipaddr as string, name: l.hostname || hosts[l.macaddr ?? ""] || (l.ipaddr as string) })),
-    ...ips.filter((ip) => !leases.some((l) => l.ipaddr === ip)).map((ip) => ({ ip, name: ip })),
-  ];
-
-  return (
-    <SectionCard
-      title={t("chill.bypass", "Device bypass")}
-      description={t("chill.bypassDesc", "Devices listed here skip CHILL entirely and go straight out to the internet.")}
-      className="mt-6"
-    >
-      {error && (
-        <div className="mb-4">
-          <ErrorBanner message={t("chill.bypassLoadFailed", "Couldn't load bypass list: {{msg}}", { msg: error.message ?? "unknown" })} onRetry={() => mutate()} />
-        </div>
-      )}
-      {stale.length > 0 && (
-        <div className="mb-4 flex items-start gap-2.5 rounded-md border border-warning/30 bg-warning/[0.06] px-3.5 py-2.5 text-[13px] text-warning">
-          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-          <div className="flex-1">
-            {t("chill.bypassStale", "{{count}} bypassed device(s) no longer match a known lease — their traffic is silently going through CHILL again.", { count: stale.length })}
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {stale.map((ip) => (
-                <button
-                  key={ip}
-                  type="button"
-                  onClick={() => setIps(ips.filter((x) => x !== ip))}
-                  disabled={saving != null}
-                  className="inline-flex items-center gap-1 rounded-full border border-warning/40 px-2 py-0.5 font-mono text-[11px] text-warning hover:bg-warning/10 disabled:opacity-50"
-                >
-                  <X size={10} />
-                  {ip}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-      {rows.length === 0 ? (
-        <p className="py-6 text-center text-[13px] text-text-dim">{t("chill.noClients", "No devices seen on the LAN yet.")}</p>
-      ) : (
-        <div className="-my-1">
-          {rows.map((r) => {
-            const checked = ips.includes(r.ip);
-            const isStale = stale.includes(r.ip);
-            return (
-              <div key={r.ip} className="flex items-center justify-between gap-3 border-b border-border/50 py-2.5 last:border-0">
-                <div className="min-w-0">
-                  <div className="truncate text-[13px] font-medium text-text">{deviceName(r.ip)}</div>
-                  <MetaRow className="mt-0.5" items={[<span key="ip" className="font-mono">{r.ip}</span>, isStale && t("chill.stale", "stale")]} />
-                </div>
-                <Toggle
-                  checked={checked}
-                  disabled={saving != null}
-                  onChange={(next) => setIps(next ? [...ips, r.ip] : ips.filter((x) => x !== r.ip))}
-                  label={t("chill.bypassToggle", "Bypass")}
-                />
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </SectionCard>
-  );
-}
-
-/* ------------------------------------------------------------------ *
- *  Shared bits (vitals / log / dashboard embed)
- * ------------------------------------------------------------------ */
-
-function Vital({ label, value, hint }: { label: string; value: string | number; hint?: string }) {
-  return (
-    <div className="bg-bg-card px-4 py-3.5">
-      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-text-dim">{label}</div>
-      <div className="mt-1 font-display text-[19px] font-semibold leading-none tracking-tight text-text">
-        <span data-numeric>{value}</span>
-      </div>
-      {hint && <div className="mt-1 truncate text-[11px] text-text-dim">{hint}</div>}
     </div>
   );
 }
 
-function LogSection({ path, title, description }: { path: string; title: string; description?: string }) {
+// ── exit ──────────────────────────────────────────────────────────────
+
+const EXITS: ChillExit[] = ["proxy", "direct_keep_ai", "direct_all", "global"];
+
+function exitLabel(t: T, x: ChillExit) {
+  return {
+    proxy: t("chill.exit.proxy", "Proxy"),
+    direct_keep_ai: t("chill.exit.direct_keep_ai", "Direct · AI stays"),
+    direct_all: t("chill.exit.direct_all", "All direct"),
+    global: t("chill.exit.global", "Global"),
+  }[x];
+}
+function exitHint(t: T, x: ChillExit) {
+  return {
+    proxy: t("chill.exitHint.proxy", "Normal, as at home."),
+    direct_keep_ai: t("chill.exitHint.direct_keep_ai", "Abroad on a local SIM: everything direct except AI and VoWiFi."),
+    direct_all: t("chill.exitHint.direct_all", "AI and VoWiFi go direct too."),
+    global: t("chill.exitHint.global", "mihomo's global mode, same as before."),
+  }[x];
+}
+
+function ExitSection({ exit, onDone }: { exit?: ChillExit; onDone: () => void }) {
   const { t } = useTranslation();
-  const [paused, setPaused] = useState(false);
-  const { data, mutate, isLoading } = useApi<LogResp>(`${path}?lines=${LOG_LINES}`, {
-    refreshInterval: paused ? 0 : 4000,
-  });
+  // The write op snapshots its config at start(), before a state update
+  // would land: the chosen value travels in a ref.
+  const wantRef = useRef<ChillExit | null>(null);
+  const [want, setWant] = useState<ChillExit | null>(null);
+  const [confirmAll, setConfirmAll] = useState(false);
+  const inline = useConfirmInline(confirmAll);
+  const op = useSimpleWrite(1, t("chill.exitTitle", "Exit"), () =>
+    apiFetch("/api/services/chill/exit", { method: "PUT", body: { state: wantRef.current } }),
+    async () => {
+      const st = await apiFetch<ChillStatus>("/api/services/chill");
+      onDone();
+      return st.exit === wantRef.current;
+    },
+  );
+  const allOp = useSimpleWrite(2, t("chill.exit.direct_all", "All direct"), () =>
+    apiFetch("/api/services/chill/exit", { method: "PUT", body: { state: "direct_all" } }),
+    async () => {
+      const st = await apiFetch<ChillStatus>("/api/services/chill");
+      onDone();
+      return st.exit === "direct_all";
+    },
+  );
+  const busy = op.busy || allOp.busy;
+  const shown = busy ? (allOp.busy ? "direct_all" : want) : exit ?? null;
+
   return (
-    <SectionCard
-      title={title}
-      description={description}
-      className="mt-6"
-      actions={
-        <>
-          <Button variant="ghost" size="sm" onClick={() => setPaused((v) => !v)}>
-            {paused ? t("services.resume", "Resume") : t("services.pause", "Pause")}
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => mutate()} disabled={isLoading}>
-            <RefreshCw size={12} />
-            {t("common.refresh", "Refresh")}
-          </Button>
-        </>
-      }
-    >
-      <pre className="max-h-[420px] overflow-auto rounded-md border border-border/60 bg-bg-input/40 p-3 font-mono text-[11.5px] leading-[1.55] text-text">
-        {data?.lines?.length ? data.lines.join("\n") : <span className="text-text-dim">{t("services.noLogs", "No log lines yet.")}</span>}
-      </pre>
-    </SectionCard>
+    <section>
+      <GroupTitle>{t("chill.exitTitle", "Exit")}</GroupTitle>
+      <div className="nd-group grid gap-3 p-4 lg:p-5">
+        <Segmented<ChillExit>
+          label={t("chill.exitTitle", "Exit")}
+          block
+          value={shown}
+          isDisabled={busy}
+          onChange={(v) => {
+            if (v === "direct_all") {
+              setConfirmAll(true);
+              return;
+            }
+            wantRef.current = v;
+            setWant(v);
+            op.start();
+          }}
+          options={EXITS.map((id) => ({ id, label: exitLabel(t, id) }))}
+        />
+        {shown && <p className="nd-aux">{exitHint(t, shown)}</p>}
+        <p className="nd-aux">
+          {t("chill.exitDesc", "Abroad on a local SIM the device switches to “Direct · AI stays” by itself, and back to Proxy once a home SIM is in again.")}
+        </p>
+        <span {...inline.triggerProps} hidden />
+        <ConfirmInline
+          id={inline.id}
+          open={confirmAll}
+          actionLabel={exitLabel(t, "direct_all")}
+          consequence={t("chill.allDirectConsequence", "All traffic goes direct, AI and VoWiFi too. You can switch back at any time.")}
+          onCancel={() => setConfirmAll(false)}
+          onConfirm={() => {
+            setConfirmAll(false);
+            allOp.start();
+            allOp.confirm();
+          }}
+        />
+        <OpResult op={op.phase !== "idle" ? op : allOp} />
+      </div>
+    </section>
   );
 }
 
-/**
- * Embedded zashboard, served by the agent itself (`/chill-ui/`) and talking to
- * mihomo through the agent (`/chill-api/`). The controller stays on loopback;
- * the dashboard authenticates with a per-device secret that only a logged-in
- * session can read (`GET /api/services/chill/dashboard`). The URL carries the
- * connection settings, so zashboard opens already connected — also over
- * Tailscale, since it is all on :9090.
- */
-function DashboardEmbed({ url }: { url?: string }) {
+// ── region / AI group ─────────────────────────────────────────────────
+
+function GroupPicker({
+  group, label, choice, onDone,
+}: { group: string; label: string; choice?: { active: string | null; options: string[] } | null; onDone: () => void }) {
   const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(false);
+  const wantRef = useRef<string | null>(null);
+  const [want, setWant] = useState<string | null>(null);
+  const op = useSimpleWrite(1, label, () =>
+    apiFetch("/api/services/chill/regions", { method: "PUT", body: { group, member: wantRef.current } }),
+    async () => {
+      const st = await apiFetch<ChillStatus>("/api/services/chill");
+      onDone();
+      const c = group === MAIN_GROUP ? st.region : st.ai_exit;
+      return c?.active === wantRef.current;
+    },
+  );
+  const options = choice?.options ?? [];
+  if (options.length === 0) return <p className="nd-aux px-1">{t("chill.noOptions", "No members configured.")}</p>;
   return (
-    <SectionCard
-      title={t("chill.dashboard", "Dashboard")}
-      description={t("chill.dashboardDesc", "zashboard — mihomo's own panel, not restyled for CHILL")}
-      className="mt-6"
-      actions={
-        <>
-          <Button variant="ghost" size="sm" onClick={() => setExpanded((v) => !v)}>
-            {expanded ? t("chill.collapse", "Collapse") : t("chill.expand", "Expand")}
+    <div className="grid gap-2">
+      <ChoiceGrid
+        label={label}
+        options={options}
+        value={op.busy ? want : choice?.active}
+        isDisabled={op.busy}
+        onChange={(v) => {
+          wantRef.current = v;
+          setWant(v);
+          op.start();
+        }}
+      />
+      <div className="px-1">
+        <OpResult op={op} />
+      </div>
+    </div>
+  );
+}
+
+// ── profile ───────────────────────────────────────────────────────────
+
+const PROFILES: ChillProfile[] = ["eco", "standard", "perf"];
+
+function ProfileSection({ chill, onDone }: { chill: ChillStatus; onDone: () => void }) {
+  const { t } = useTranslation();
+  const profile = chill.profile ?? "standard";
+  const effective = chill.profile_effective ?? profile;
+  const wantRef = useRef<ChillProfile | null>(null);
+  const [want, setWant] = useState<ChillProfile | null>(null);
+  const op = useSimpleWrite(1, t("chill.profileTitle", "Profile"), () =>
+    runJob("/api/services/chill/profile", "PUT", { profile: wantRef.current }),
+    async () => {
+      const st = await apiFetch<ChillStatus>("/api/services/chill");
+      onDone();
+      return st.profile === wantRef.current;
+    },
+  );
+  const shown = op.busy ? want : profile;
+  const hint: Record<ChillProfile, string> = {
+    eco: t("chill.profileHint.eco", "Probes nodes hourly, fewer keep-alives, core limited to 2 cores. Cooler and lighter on battery; a dead node takes longer to be noticed."),
+    standard: t("chill.profileHint.standard", "The settings CHILL has always used."),
+    perf: t("chill.profileHint.perf", "Probes nodes every 10 minutes and dials several addresses at once. Faster failover and connects, a little more power."),
+  };
+  return (
+    <section>
+      <GroupTitle>{t("chill.profileTitle", "Profile")}</GroupTitle>
+      <div className="nd-group grid gap-3 p-4 lg:p-5">
+        <Segmented<ChillProfile>
+          label={t("chill.profileTitle", "Profile")}
+          block
+          value={shown}
+          isDisabled={op.busy}
+          onChange={(v) => {
+            wantRef.current = v;
+            setWant(v);
+            op.start();
+          }}
+          options={PROFILES.map((id) => ({
+            id,
+            label: { eco: t("chill.profile.eco", "Eco"), standard: t("chill.profile.standard", "Standard"), perf: t("chill.profile.perf", "Performance") }[id],
+          }))}
+        />
+        {shown && <p className="nd-aux">{hint[shown]}</p>}
+        <p className="nd-aux">
+          {t("chill.profileDesc", "Trade battery and heat against failover speed. Switching into or out of Eco restarts the proxy core: connections drop for about 10 seconds.")}
+        </p>
+        {chill.thermal_eco && effective !== profile && (
+          <p className="text-[14px] font-semibold text-nd-warnT">
+            <StatusMark tone="warn">
+              {t("chill.profileThermal", "Running as Eco for now because the device is hot; back to your choice once it has cooled down.")}
+            </StatusMark>
+          </p>
+        )}
+        {chill.state !== "running" && <p className="nd-aux">{t("chill.profileNotRunning", "Applies the next time CHILL starts.")}</p>}
+        <OpResult op={op} />
+      </div>
+    </section>
+  );
+}
+
+// ── subscriptions ─────────────────────────────────────────────────────
+
+function ProvidersSection({ onDone }: { onDone: () => void }) {
+  const { t } = useTranslation();
+  const prov = useApi<ChillProviders>("/api/services/chill/providers", {
+    refreshInterval: 15000,
+    // mihomo unreachable → {providers: []} with ok:true (fake success)
+    isValid: (d) => (d.providers.length > 0 ? true : { ok: false, reason: t("chill.noProviders", "No subscriptions found.") }),
+  });
+  const list = prov.data?.providers ?? [];
+  return (
+    <section>
+      <GroupTitle>{t("chill.providers", "Subscriptions")}</GroupTitle>
+      <div className={`nd-group${prov.stale ? " nd-stale" : ""}`}>
+        {!prov.data && !prov.error && <div className="nd-row nd-aux">{t("common.loading", "Loading…")}</div>}
+        {prov.error && !prov.data && (
+          <div className="nd-row flex-wrap">
+            <span className="flex-1 text-nd-t2">
+              {prov.invalidReason ?? t("chill.providersLoadFailed", "Couldn't load subscriptions: {{msg}}", { msg: prov.error.message ?? "" })}
+            </span>
+            <Button variant="secondary" size="sm" onPress={() => prov.mutate()}>{t("common.retry", "Retry")}</Button>
+          </div>
+        )}
+        {list.map((p) => (
+          <Provider key={p.name} p={p} onDone={() => { prov.mutate(); onDone(); }} />
+        ))}
+      </div>
+      <p className="nd-aux mt-2 px-1">{t("chill.providersDesc", "Node providers feeding the region groups above.")}</p>
+    </section>
+  );
+}
+
+function Provider({ p, onDone }: { p: ChillProvider; onDone: () => void }) {
+  const { t } = useTranslation();
+  const offset = useDeviceOffset();
+  const [confirm, setConfirm] = useState<null | "refresh" | "save">(null);
+  const inline = useConfirmInline(confirm !== null);
+  const [editing, setEditing] = useState(false);
+  const [url, setUrl] = useState("");
+  const [urlErr, setUrlErr] = useState<string | null>(null);
+  const refreshOp = useSimpleWrite(2, t("chill.refreshProvider", "Refresh"), () =>
+    apiFetch("/api/services/chill/providers/refresh", { method: "POST", body: { name: p.name } }),
+  );
+  const saveOp = useSimpleWrite(2, t("common.save", "Save"), () =>
+    runJob("/api/services/chill/providers", "PUT", { name: p.name, url: url.trim() }),
+  );
+  const sub = p.subscription;
+  const used = sub ? sub.Download + sub.Upload : null;
+  const pct = sub && sub.Total > 0 && used != null ? Math.min(100, (used / sub.Total) * 100) : null;
+  const shownOp = saveOp.phase !== "idle" ? saveOp : refreshOp;
+
+  return (
+    <div className="nd-row flex-col items-stretch gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="nd-row__label truncate">{p.name}</div>
+          <div className="nd-row__sub">
+            {[p.vehicle_type, t("chill.nodes", "{{count}} nodes", { count: p.node_count }), p.updated_at ? fmtAgo(t, p.updated_at, offset) : null]
+              .filter(Boolean)
+              .join(" · ")}
+          </div>
+        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          onPress={() => setConfirm(confirm === "refresh" ? null : "refresh")}
+          isDisabled={refreshOp.busy}
+          pending={refreshOp.busy}
+          {...(confirm === "refresh" ? inline.triggerProps : {})}
+        >
+          {t("chill.refreshProvider", "Refresh")}
+        </Button>
+        {p.editable && (
+          <Button
+            variant="ghost"
+            size="sm"
+            iconOnly
+            aria-label={t("chill.editUrl", "Edit subscription URL")}
+            aria-expanded={editing}
+            onPress={() => {
+              setEditing((e) => !e);
+              setUrl("");
+              setUrlErr(null);
+            }}
+          >
+            <PencilSimple size={18} weight="bold" aria-hidden />
           </Button>
-          {url && (
-            <a
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-bg px-3 text-[12px] font-medium text-text transition-colors hover:border-accent hover:text-accent"
-            >
-              <ExternalLink size={12} />
-              {t("chill.open", "Open")}
-            </a>
+        )}
+      </div>
+      {sub && (
+        <div className="grid gap-1">
+          {pct != null && (
+            <div className="h-1.5 overflow-hidden rounded-full bg-nd-track" role="img" aria-label={`${pct.toFixed(0)}%`}>
+              <div className="h-full rounded-full bg-nd-t1" style={{ width: `${pct}%` }} />
+            </div>
           )}
-        </>
-      }
-    >
-      <div className="overflow-hidden rounded-md border border-border bg-bg" style={{ height: expanded ? "85vh" : "70vh" }}>
-        {url ? (
+          <span className="nd-aux">
+            {t("chill.subUsage", "{{used}} / {{total}}", { used: bytes(used) ?? "—", total: bytes(sub.Total) ?? "—" })}
+            {sub.Expire ? ` · ${t("chill.subExpires", "Expires {{date}}", { date: new Date(sub.Expire * 1000).toLocaleDateString() })}` : ""}
+          </span>
+        </div>
+      )}
+      {editing && (
+        <form
+          className="grid gap-2 sm:flex"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!/^https?:\/\//.test(url.trim())) {
+              setUrlErr(t("chill.badUrl", "Enter a valid http(s) URL"));
+              return;
+            }
+            setUrlErr(null);
+            setConfirm("save");
+          }}
+        >
+          <input
+            className="nd-field flex-1"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder={t("chill.urlPlaceholder", "https://… subscription URL")}
+            aria-label={t("chill.editUrl", "Edit subscription URL")}
+            inputMode="url"
+            autoCapitalize="off"
+            spellCheck={false}
+          />
+          <div className="flex gap-2">
+            <Button type="submit" isDisabled={!url.trim() || saveOp.busy} {...(confirm === "save" ? inline.triggerProps : {})}>
+              {t("common.save", "Save")}
+            </Button>
+            <Button variant="secondary" onPress={() => { setEditing(false); setConfirm(null); }}>
+              {t("common.cancel", "Cancel")}
+            </Button>
+          </div>
+        </form>
+      )}
+      {urlErr && <p className="nd-error" role="alert">{urlErr}</p>}
+      <ConfirmInline
+        id={inline.id}
+        open={confirm !== null}
+        actionLabel={confirm === "save" ? t("chill.saveUrl", "save the subscription URL") : t("chill.refreshProvider", "Refresh")}
+        consequence={
+          confirm === "save"
+            ? t("chill.saveUrlConsequence", "CHILL reloads with the new subscription; connections may drop for a few seconds.")
+            : t("chill.refreshConsequence", "Downloads the node list again now; nodes that disappeared stop being used.")
+        }
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => {
+          const which = confirm;
+          setConfirm(null);
+          if (which === "save") {
+            saveOp.start();
+            saveOp.confirm();
+            setEditing(false);
+          } else {
+            refreshOp.start();
+            refreshOp.confirm();
+          }
+          setTimeout(onDone, 500);
+        }}
+      />
+      <OpResult op={shownOp} />
+    </div>
+  );
+}
+
+// ── device bypass ─────────────────────────────────────────────────────
+
+function BypassSection() {
+  const { t } = useTranslation();
+  const bp = useApi<ChillBypass>("/api/services/chill/bypass", { refreshInterval: 8000 });
+  const clients = useApi<NetworkClients>("/api/network/clients", { refreshInterval: 15000 });
+  const [pending, setPending] = useState<null | { ip: string; on: boolean; name: string }>(null);
+  const inline = useConfirmInline(pending !== null);
+  const ips = bp.data?.ips ?? [];
+  const stale = bp.data?.stale ?? [];
+  const nextIps = pending ? Array.from(new Set(pending.on ? [...ips, pending.ip] : ips.filter((x) => x !== pending.ip))) : ips;
+  const op = useSimpleWrite(2, t("chill.bypass", "Device bypass"), () =>
+    apiFetch("/api/services/chill/bypass", { method: "PUT", body: { ips: nextIps } }),
+    async () => {
+      const d = await apiFetch<ChillBypass>("/api/services/chill/bypass");
+      await bp.mutate(d, { revalidate: false });
+      return nextIps.every((ip) => d.ips.includes(ip)) && d.ips.every((ip) => nextIps.includes(ip));
+    },
+  );
+
+  const hosts = clients.data?.hosts ?? {};
+  const leases = (clients.data?.dhcp_leases ?? []).filter((l) => l.ipaddr);
+  const nameOf = (ip: string) => {
+    const l = leases.find((x) => x.ipaddr === ip);
+    if (l?.hostname) return l.hostname;
+    const mac = l?.macaddr;
+    const hint = mac ? hosts[mac] ?? hosts[mac.toUpperCase()] ?? hosts[mac.toLowerCase()] : undefined;
+    return hint?.name || ip;
+  };
+  const rows = [
+    ...leases.map((l) => l.ipaddr as string),
+    ...ips.filter((ip) => !leases.some((l) => l.ipaddr === ip)),
+  ];
+
+  return (
+    <section>
+      <GroupTitle>{t("chill.bypass", "Device bypass")}</GroupTitle>
+      <p className="nd-aux -mt-1 mb-3 px-1">{t("chill.bypassDesc", "Devices listed here skip CHILL entirely and go straight out to the internet.")}</p>
+      {stale.length > 0 && (
+        <div className="mb-3 grid gap-2 rounded-nd-card bg-nd-washW px-4 py-3">
+          <StatusMark tone="warn">
+            {t("chill.bypassStale", "{{count}} bypassed device(s) no longer match a known lease — their traffic is silently going through CHILL again.", { count: stale.length })}
+          </StatusMark>
+          <div className="flex flex-wrap gap-2">
+            {stale.map((ip) => (
+              <Button
+                key={ip}
+                variant="secondary"
+                size="sm"
+                isDisabled={op.busy}
+                aria-label={t("chill.removeStale", "Remove {{ip}} from the bypass list", { ip })}
+                onPress={() => setPending({ ip, on: false, name: ip })}
+              >
+                <span className="nd-mono">{ip}</span> ×
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className={`nd-group${bp.stale ? " nd-stale" : ""}`}>
+        {bp.error && !bp.data && (
+          <div className="nd-row flex-wrap">
+            <span className="flex-1 text-nd-t2">{t("chill.bypassLoadFailed", "Couldn't load bypass list: {{msg}}", { msg: bp.error.message ?? "" })}</span>
+            <Button variant="secondary" size="sm" onPress={() => bp.mutate()}>{t("common.retry", "Retry")}</Button>
+          </div>
+        )}
+        {rows.length === 0 && bp.data && <div className="nd-row text-nd-t2">{t("chill.noClients", "No devices seen on the LAN yet.")}</div>}
+        {rows.map((ip) => {
+          const checked = pending?.ip === ip ? pending.on : ips.includes(ip);
+          return (
+            <Row
+              key={ip}
+              label={nameOf(ip)}
+              sub={<span className="nd-mono">{ip}{stale.includes(ip) ? ` · ${t("chill.stale", "stale")}` : ""}</span>}
+              control={
+                <span {...(pending?.ip === ip ? inline.triggerProps : {})}>
+                  <Switch
+                    label={t("chill.bypassToggleFor", "Bypass CHILL for {{name}}", { name: nameOf(ip) })}
+                    isSelected={checked}
+                    isDisabled={op.busy || (pending !== null && pending.ip !== ip)}
+                    onChange={(v) => setPending({ ip, on: v, name: nameOf(ip) })}
+                  />
+                </span>
+              }
+            />
+          );
+        })}
+      </div>
+      <ConfirmInline
+        id={inline.id}
+        open={pending !== null}
+        actionLabel={pending?.on ? t("chill.bypassOn", "bypass {{name}}", { name: pending?.name ?? "" }) : t("chill.bypassOff", "stop bypassing {{name}}", { name: pending?.name ?? "" })}
+        consequence={
+          pending?.on
+            ? t("chill.bypassOnConsequence", "{{name}} goes straight to the internet without CHILL, AI and VoWiFi included.", { name: pending?.name ?? "" })
+            : t("chill.bypassOffConsequence", "{{name}} goes through CHILL again.", { name: pending?.name ?? "" })
+        }
+        onCancel={() => setPending(null)}
+        onConfirm={() => {
+          op.start();
+          op.confirm();
+          setTimeout(() => setPending(null), 0);
+        }}
+      />
+      <div className="mt-2 px-1">
+        <OpResult op={op} />
+      </div>
+    </section>
+  );
+}
+
+// ── advanced: vitals, dashboard, log ──────────────────────────────────
+
+function Advanced({ chill, stale, running }: { chill: ChillStatus | undefined; stale: boolean; running: boolean }) {
+  const { t } = useTranslation();
+  const offset = useDeviceOffset();
+  const known = !!chill && chill.state !== "unknown";
+  return (
+    <section className="grid gap-4">
+      <h2 className="nd-group-title">{t("chill.advanced", "Advanced")}</h2>
+      {known && (
+        <ReadoutWall label={t("chill.vitals", "CHILL vitals")}>
+          <Readout label={t("chill.temp", "Temperature")} value={chill.cpuss_c ?? null} unit="°C" stale={stale} />
+          <Readout
+            label={t("chill.memAvail", "Memory available")}
+            value={chill.mem_avail_mb ?? null}
+            unit="MB"
+            sub={chill.mem_pressure ? t("chill.memPressure", "Under pressure") : undefined}
+            stale={stale}
+          />
+          <Readout label={t("chill.uptime", "Uptime")} value={uptime(chill.started_at, offset)} sub={chill.version ?? undefined} stale={stale} />
+          <Readout label="PID" value={chill.core_pid || null} stale={stale} />
+        </ReadoutWall>
+      )}
+      {running && <Dashboard />}
+      <LogBand />
+    </section>
+  );
+}
+
+function Dashboard() {
+  const { t } = useTranslation();
+  const wide = useMedia("(min-width: 1024px)");
+  const [open, setOpen] = useState(false);
+  const info = useApi<ChillDashboard>("/api/services/chill/dashboard", { revalidateOnFocus: false });
+  const url = dashboardUrl(info.data);
+  return (
+    <Group>
+      <Row
+        label={t("chill.dashboard", "Dashboard")}
+        sub={t("chill.dashboardDesc", "zashboard — mihomo's own panel, not restyled for CHILL")}
+        control={
+          <div className="flex flex-wrap justify-end gap-2">
+            {url ? (
+              <a href={url} target="_blank" rel="noreferrer" className="nd-btn nd-btn--secondary nd-btn--sm">
+                <ArrowSquareOut size={18} weight="bold" aria-hidden />
+                {t("chill.open", "Open")}
+              </a>
+            ) : (
+              <span className="nd-aux">{t("chill.resolvingUrl", "Resolving dashboard URL…")}</span>
+            )}
+            {wide && url && (
+              <Button variant="ghost" size="sm" aria-expanded={open} onPress={() => setOpen((o) => !o)}>
+                {open ? t("chill.collapse", "Collapse") : t("chill.expandHere", "Show here")}
+              </Button>
+            )}
+          </div>
+        }
+      />
+      {wide && open && url && (
+        <div className="px-4 pb-4 lg:px-5">
           <iframe
             src={url}
             title="CHILL dashboard"
-            className="block h-full w-full"
+            className="block h-[75vh] w-full rounded-nd-field bg-nd-bg"
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
           />
-        ) : (
-          <div className="flex h-full items-center justify-center text-[12px] text-text-dim">
-            {t("chill.resolvingUrl", "Resolving dashboard URL…")}
-          </div>
-        )}
-      </div>
-    </SectionCard>
+        </div>
+      )}
+    </Group>
   );
 }
 
-interface DashboardInfo {
-  secret: string;
-  ui: string;
-  api: string;
+/** zashboard opens already connected: the agent serves it (/chill-ui/) and
+ *  proxies mihomo (/chill-api), all on :9090 (also over Tailscale). */
+function dashboardUrl(d: ChillDashboard | undefined): string | undefined {
+  if (!d || typeof window === "undefined") return undefined;
+  const { protocol, hostname, port, host } = window.location;
+  const q = new URLSearchParams({
+    hostname,
+    port: port || (protocol === "https:" ? "443" : "80"),
+    secondaryPath: d.api,
+    secret: d.secret,
+    label: "CHILL",
+    ...(protocol === "https:" ? { https: "1" } : {}),
+  });
+  return `${protocol}//${host}${d.ui}#/setup?${q.toString()}`;
 }
 
-function useDashboardUrl(): string | undefined {
-  const { data } = useApi<DashboardInfo>("/api/services/chill/dashboard", { revalidateOnFocus: false });
-  const [url, setUrl] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    // Built in an effect (not inline) so SSR and the first client render both
-    // show the "resolving" placeholder — window.location differs per client.
-    if (!data) return;
-    const { protocol, hostname, port } = window.location;
-    const p = port || (protocol === "https:" ? "443" : "80");
-    const q = new URLSearchParams({
-      hostname,
-      port: p,
-      secondaryPath: data.api,
-      secret: data.secret,
-      label: "CHILL",
-      ...(protocol === "https:" ? { https: "1" } : {}),
-    });
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setUrl(`${protocol}//${window.location.host}${data.ui}#/setup?${q.toString()}`);
-  }, [data]);
-  return url;
+function LogBand() {
+  const { t } = useTranslation();
+  const [paused, setPaused] = useState(false);
+  const log = useApi<ChillLog>(`/api/services/chill/log?lines=${LOG_LINES}`, { refreshInterval: paused ? 0 : 4000 });
+  const lines = log.data?.lines ?? [];
+  return (
+    <ConsoleBand label={t("chill.serviceLog", "Service log")}>
+      <div className="mb-3 flex flex-wrap items-center gap-2 font-[family-name:var(--nd-font)]">
+        <span className="nd-console__title flex-1">
+          {t("chill.serviceLog", "Service log")} <span className="nd-console__muted text-[13px] font-semibold">/tmp/chill.log</span>
+        </span>
+        <button type="button" className="nd-btn nd-btn--sm bg-nd-console-card text-nd-console-t1" onClick={() => setPaused((p) => !p)}>
+          {paused ? t("services.resume", "Resume") : t("services.pause", "Pause")}
+        </button>
+        <button type="button" className="nd-btn nd-btn--sm bg-nd-console-card text-nd-console-t1" onClick={() => log.mutate()}>
+          {t("common.refresh", "Refresh")}
+        </button>
+      </div>
+      <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words">
+        {lines.length ? lines.join("\n") : <span className="nd-console__muted">{t("services.noLogs", "No log lines yet.")}</span>}
+      </pre>
+    </ConsoleBand>
+  );
 }
 
-function stateTone(s?: ChillState): { tone: "neutral" | "success" | "warning" | "danger"; labelKey: string; label: string } {
-  if (!s) return { tone: "neutral", labelKey: "chill.stLoading", label: "Loading" };
-  if (s.state === "running") return { tone: "success", labelKey: "chill.stRunning", label: "Running" };
-  if (s.state === "direct") return { tone: "warning", labelKey: "chill.stDirect", label: "Direct" };
-  return { tone: "neutral", labelKey: "chill.stUnknown", label: "Not started" };
+// ── helpers ───────────────────────────────────────────────────────────
+
+/** One-step write op with the current run function captured at start(). */
+function useSimpleWrite(tier: Tier, label: string, run: () => Promise<unknown>, verify?: () => Promise<boolean>): UseWriteOp {
+  return useWriteOp({ tier, steps: [{ label, run }], verify });
 }
 
-function fmtBytes(n?: number | null): string {
-  if (n == null) return "0";
-  if (n < 1024) return `${n}B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)}GB`;
+function uptime(iso: string | undefined, offset: number): string | null {
+  if (!iso) return null;
+  const at = deviceIso(iso);
+  if (Number.isNaN(at)) return null;
+  const s = deviceNow(offset) - at;
+  if (s < 0) return null;
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
 }
 
-// Both ISO times below come from the device clock ("Z" but local digits):
-// compare them with device-now, not the browser's (lib/deviceClock.ts).
-function fmtUpdatedAt(iso: string, offset: number): string {
-  const t = deviceIso(iso);
-  if (Number.isNaN(t) || t <= 0) return "—";
-  const diff = deviceNow(offset) - t;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
-
-function fmtUptimeIso(iso: string | undefined, offset: number): string {
-  if (!iso) return "—";
-  const t = deviceIso(iso);
-  if (Number.isNaN(t)) return "—";
-  const diff = deviceNow(offset) - t;
-  if (diff < 0) return "—";
-  const d = Math.floor(diff / 86400);
-  const h = Math.floor((diff % 86400) / 3600);
-  const m = Math.floor((diff % 3600) / 60);
-  if (d) return `${d}d ${h}h`;
-  if (h) return `${h}h ${m}m`;
-  return `${m}m`;
+function fmtAgo(t: T, iso: string, offset: number): string {
+  const at = deviceIso(iso);
+  if (Number.isNaN(at) || at <= 0) return "—";
+  const s = deviceNow(offset) - at;
+  if (s < 60) return t("chill.justNow", "just now");
+  if (s < 3600) return t("chill.minAgo", "{{n}} min ago", { n: Math.floor(s / 60) });
+  if (s < 86400) return t("chill.hAgo", "{{n}} h ago", { n: Math.floor(s / 3600) });
+  if (s < 7 * 86400) return t("chill.dAgo", "{{n}} d ago", { n: Math.floor(s / 86400) });
+  return fmtDevice(at, "date");
 }

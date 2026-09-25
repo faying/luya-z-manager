@@ -1,144 +1,220 @@
 "use client";
-
-import { useState, useEffect } from "react";
-import { apiFetch, getApiBase, setApiBase } from "@/lib/api/client";
-import { logout } from "@/lib/api/auth";
-import { PageHeader, SectionCard } from "@/components/admin/StatCard";
-import { Button, Input } from "@/components/admin/Button";
-import { useRouter } from "next/navigation";
-import { CheckCircle, XCircle, LogOut, Trash2 } from "lucide-react";
+// Settings (new design) — settings of this browser only: appearance and
+// language (tier 1, design §3.1 「界面设置」, same controls as the System hub),
+// the admin-backend address, the polling-interval preference and the
+// session. Nothing here writes to the device; "Test connectivity" is a read
+// of /api/public/status (no login needed, so it can't sign you out).
+//
+// Log out / Clear stored token go through useAuth().logout: clearing the
+// token and pushing /login left the auth context "signed in", and the gate
+// sent the page straight back to /.
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { SignOut, Trash } from "@phosphor-icons/react";
+import { apiFetch, getApiBase, setApiBase } from "@/lib/api/client";
+import { useAuth } from "@/lib/hooks/useAuth";
+import { applyTheme, readThemeChoice, type ThemeChoice } from "@/lib/theme";
+import { LangSwitch } from "@/components/nd/shell/LangSwitch";
+import { Button, Group, Row, Segmented, StatusMark } from "@/components/nd";
 
 const POLL_KEY = "u60.poll_interval";
 const DEFAULT_POLL = 2;
 
-function FieldRow({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function readPoll(): number {
+  if (typeof window === "undefined") return DEFAULT_POLL;
+  return parseInt(window.localStorage.getItem(POLL_KEY) ?? "", 10) || DEFAULT_POLL;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+/** Labelled form row: label (+ hint) above the control. */
+function FieldRow({ id, label, hint, children }: { id: string; label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1.5 border-b border-border/60 py-3 last:border-0 sm:flex-row sm:items-center sm:justify-between">
-      <div>
-        <div className="text-sm">{label}</div>
-        {hint && <div className="text-xs text-text-dim">{hint}</div>}
-      </div>
-      <div className="sm:w-64">{children}</div>
+    <div className="nd-row flex-col items-stretch gap-2">
+      <span className="nd-row__text">
+        <label htmlFor={id} className="nd-row__label">
+          {label}
+        </label>
+        {hint && (
+          <span id={`${id}-hint`} className="nd-row__sub block">
+            {hint}
+          </span>
+        )}
+      </span>
+      {children}
     </div>
   );
 }
 
 export default function SettingsPage() {
   const { t } = useTranslation();
-  const router = useRouter();
-  const [agentUrl, setAgentUrl] = useState("");
-  const [pollInterval, setPollInterval] = useState(DEFAULT_POLL);
-  const [connectivity, setConnectivity] = useState<"idle" | "ok" | "error" | "checking">("idle");
-  const [saved, setSaved] = useState(false);
+  const { logout } = useAuth();
 
-  useEffect(() => {
-    setAgentUrl(getApiBase());
-    const stored = typeof window !== "undefined" ? window.localStorage.getItem(POLL_KEY) : null;
-    if (stored) setPollInterval(parseInt(stored) || DEFAULT_POLL);
+  // Pages mount on the client only (after AuthGate), so these read storage directly.
+  const [theme, setTheme] = useState<ThemeChoice>(() => readThemeChoice());
+  const [agentUrl, setAgentUrl] = useState(() => getApiBase());
+  const [pollInterval, setPollInterval] = useState(() => readPoll());
+  const [saved, setSaved] = useState<"agent" | "prefs" | null>(null);
+  const [connectivity, setConnectivity] = useState<
+    { state: "idle" } | { state: "checking" } | { state: "ok" | "error"; host: string }
+  >({ state: "idle" });
+
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (savedTimer.current) clearTimeout(savedTimer.current);
   }, []);
 
-  function saveSettings() {
+  function saveSettings(which: "agent" | "prefs") {
     setApiBase(agentUrl);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(POLL_KEY, String(pollInterval));
-    }
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    window.localStorage.setItem(POLL_KEY, String(pollInterval));
+    setSaved(which);
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setSaved(null), 2000);
   }
 
   async function testConnectivity() {
-    setConnectivity("checking");
+    // Tests the saved address (apiFetch uses it), not an unsaved draft.
+    const host = hostOf(getApiBase());
+    setConnectivity({ state: "checking" });
     try {
-      const result = await apiFetch("/api/auth/login", {
-        method: "POST",
-        body: { password: "" },
-        raw: true,
-        noAuth: true,
-      });
-      // Any JSON response (incl. 401) means agent is reachable
-      void result;
-      setConnectivity("ok");
+      await apiFetch("/api/public/status", { noAuth: true });
+      setConnectivity({ state: "ok", host });
     } catch {
-      setConnectivity("error");
+      setConnectivity({ state: "error", host });
     }
   }
 
-  function clearToken() {
-    if (typeof window !== "undefined") window.localStorage.removeItem("u60.token");
-    router.push("/login");
-  }
-
   function clearAgentUrl() {
-    if (typeof window !== "undefined") window.localStorage.removeItem("u60.agent_url");
+    window.localStorage.removeItem("u60.agent_url");
     setAgentUrl(getApiBase());
-  }
-
-  function handleLogout() {
-    logout();
-    router.push("/login");
   }
 
   return (
     <>
-      <PageHeader title={t("settings.title", "Settings")} description={t("settings.desc", "Agent connection and dashboard preferences.")} />
+      <h1 className="nd-title mb-4 mt-2">{t("settings.title", "Settings")}</h1>
+      <p className="nd-body mb-4 max-w-[720px] text-nd-t2">
+        {t("settings.descBrowser", "Settings for this browser: appearance, language, the admin backend address and the session.")}
+      </p>
 
-      <div className="grid gap-4">
-        <SectionCard title={t("settings.agentConnection", "Agent Connection")}>
-          <FieldRow label={t("settings.agentUrl", "Agent URL")} hint={t("settings.agentUrlHint", "URL where the zte-agent HTTP server is reachable")}>
-            <Input
-              type="url"
-              value={agentUrl}
-              onChange={(e) => setAgentUrl(e.target.value)}
-              placeholder="http://192.168.0.1:9090"
-            />
-          </FieldRow>
-          <div className="flex items-center gap-3 pt-3">
-            <Button onClick={saveSettings}>{saved ? t("settings.saved", "Saved!") : t("settings.save", "Save")}</Button>
-            <Button variant="outline" onClick={testConnectivity} loading={connectivity === "checking"}>
-              {t("settings.testConnectivity", "Test Connectivity")}
-            </Button>
-            {connectivity === "ok" && (
-              <span className="flex items-center gap-1 text-sm text-success">
-                <CheckCircle size={15} /> {t("settings.reachable", "Reachable")}
-              </span>
+      <span className="sr-only" role="status">
+        {saved ? t("settings.saved", "Saved!") : ""}
+      </span>
+
+      <div className="grid max-w-[720px] gap-6">
+        {/* Interface settings apply to this browser only (tier 1, no confirm). */}
+        <Group title={t("nd.interface", "Interface")}>
+          <Row
+            label={t("nd.appearance", "Appearance")}
+            control={
+              <Segmented<ThemeChoice>
+                label={t("nd.appearance", "Appearance")}
+                value={theme}
+                onChange={(v) => {
+                  setTheme(v);
+                  applyTheme(v);
+                }}
+                options={[
+                  { id: "system", label: t("nd.themeSystem", "System") },
+                  { id: "light", label: t("nd.themeLight", "Light") },
+                  { id: "dark", label: t("nd.themeDark", "Dark") },
+                ]}
+              />
+            }
+          />
+          <Row label={t("nd.language", "Language")} control={<LangSwitch />} />
+        </Group>
+
+        <section>
+          <Group title={t("settings.agentConnection", "Agent Connection")}>
+            <FieldRow
+              id="settings-agent-url"
+              label={t("settings.agentUrl", "Agent URL")}
+              hint={t("settings.agentUrlHint", "URL where the zte-agent HTTP server is reachable")}
+            >
+              <input
+                id="settings-agent-url"
+                type="url"
+                className="nd-field nd-mono"
+                value={agentUrl}
+                onChange={(e) => setAgentUrl(e.target.value)}
+                placeholder="http://192.168.0.1:9090"
+                aria-describedby="settings-agent-url-hint"
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </FieldRow>
+            <div className="nd-row flex-wrap gap-2">
+              <Button onPress={() => saveSettings("agent")}>
+                {saved === "agent" ? t("settings.saved", "Saved!") : t("settings.save", "Save")}
+              </Button>
+              <Button variant="secondary" onPress={testConnectivity} pending={connectivity.state === "checking"}>
+                {t("settings.testConnectivity", "Test Connectivity")}
+              </Button>
+              <Button variant="secondary" onPress={clearAgentUrl}>
+                <Trash size={20} weight="bold" aria-hidden />
+                {t("settings.clearStoredAgentUrl", "Clear Stored Agent URL")}
+              </Button>
+            </div>
+          </Group>
+          <div className="mt-2 px-1" role="status">
+            {connectivity.state === "ok" && (
+              <StatusMark tone="ok">
+                {t("settings.reachable", "Reachable")} · <span className="nd-mono">{connectivity.host}</span>
+              </StatusMark>
             )}
-            {connectivity === "error" && (
-              <span className="flex items-center gap-1 text-sm text-error">
-                <XCircle size={15} /> {t("settings.unreachable", "Unreachable")}
-              </span>
+            {connectivity.state === "error" && (
+              <StatusMark tone="bad">
+                {t("settings.unreachable", "Unreachable")} · <span className="nd-mono">{connectivity.host}</span>
+              </StatusMark>
             )}
           </div>
-        </SectionCard>
+        </section>
 
-        <SectionCard title={t("settings.dashboard", "Dashboard")}>
-          <FieldRow label={t("settings.pollingInterval", "Polling interval (seconds)")} hint={t("settings.pollingIntervalHint", "How often live data refreshes")}>
-            <Input
+        <Group title={t("settings.dashboard", "Dashboard")}>
+          <FieldRow
+            id="settings-poll"
+            label={t("settings.pollingInterval", "Polling interval (seconds)")}
+            hint={t("settings.pollingIntervalHint", "How often live data refreshes")}
+          >
+            <input
+              id="settings-poll"
               type="number"
+              inputMode="numeric"
               min={1}
               max={60}
+              className="nd-field nd-mono sm:max-w-[160px]"
               value={pollInterval}
-              onChange={(e) => setPollInterval(parseInt(e.target.value) || DEFAULT_POLL)}
+              aria-describedby="settings-poll-hint"
+              onChange={(e) => setPollInterval(parseInt(e.target.value, 10) || DEFAULT_POLL)}
             />
           </FieldRow>
-          <div className="pt-3">
-            <Button onClick={saveSettings}>{saved ? t("settings.saved", "Saved!") : t("settings.savePreferences", "Save Preferences")}</Button>
+          <div className="nd-row">
+            <Button onPress={() => saveSettings("prefs")}>
+              {saved === "prefs" ? t("settings.saved", "Saved!") : t("settings.savePreferences", "Save Preferences")}
+            </Button>
           </div>
-        </SectionCard>
+        </Group>
 
-        <SectionCard title={t("settings.session", "Session")}>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="danger" onClick={handleLogout}>
-              <LogOut size={14} /> {t("settings.logOut", "Log Out")}
+        <Group title={t("settings.session", "Session")}>
+          <div className="nd-row flex-wrap gap-2">
+            <Button variant="secondary" onPress={logout}>
+              <SignOut size={20} weight="bold" aria-hidden />
+              {t("settings.logOut", "Log Out")}
             </Button>
-            <Button variant="outline" onClick={clearToken}>
-              <Trash2 size={14} /> {t("settings.clearStoredToken", "Clear Stored Token")}
-            </Button>
-            <Button variant="outline" onClick={clearAgentUrl}>
-              <Trash2 size={14} /> {t("settings.clearStoredAgentUrl", "Clear Stored Agent URL")}
+            <Button variant="secondary" onPress={logout}>
+              <Trash size={20} weight="bold" aria-hidden />
+              {t("settings.clearStoredToken", "Clear Stored Token")}
             </Button>
           </div>
-        </SectionCard>
+        </Group>
       </div>
     </>
   );

@@ -1,222 +1,357 @@
 "use client";
-
-import { useState, useEffect, useRef } from "react";
-import { apiFetch } from "@/lib/api/client";
-import { ApiError } from "@/lib/api/types";
-import { PageHeader, SectionCard, StatCard, ErrorBanner } from "@/components/admin/StatCard";
-import { Button } from "@/components/admin/Button";
-import { Wifi, StopCircle, Play } from "lucide-react";
+// Speed test (tool page, design doc §5.1 tool row; §2: the result is this
+// page's one hero number). Order: status (phase · reason, start/stop) →
+// readings (download as hero, upload, ping, jitter) → server choice →
+// details (server used, data used).
+//
+//   Start = tier 2 (inventory; not in the closed tier-1 list): the inline
+//           confirm states the mobile-data cost. No readback (R6): the
+//           progress endpoint is the result. 409 "already running" just
+//           shows the running test.
+//   Stop  = tier 2 (inventory). Readback: progress reaches cancelled /
+//           complete / error (polled, bounded — the runJob idea from the
+//           CHILL page).
+//
+// Progress is read once on entry (so a running test or the last result
+// shows when you come back) and every second while a test runs, also when
+// the tab is hidden (long job).
+import { useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
+import { Play, Stop, ArrowClockwise } from "@phosphor-icons/react";
+import { apiFetch } from "@/lib/api/client";
+import { useApi } from "@/lib/hooks/useApi";
+import { useWriteOp } from "@/lib/api/writeOp";
+import type { SpeedProgress, SpeedServers, SpeedStartBody } from "@/lib/api/schemas/tools";
+import {
+  Button,
+  ConfirmInline,
+  Freshness,
+  Group,
+  GroupTitle,
+  Help,
+  OpResult,
+  Readout,
+  ReadoutWall,
+  Row,
+  StatusBlock,
+  useConfirmInline,
+  type Tone,
+} from "@/components/nd";
 
-interface SpeedServer {
-  id: number;
-  name: string;
-  sponsor: string;
-  country: string;
-  host: string;
-  url: string;
+const PROGRESS = "/api/speedtest/progress";
+const SERVERS = "/api/speedtest/servers";
+const DONE = new Set<SpeedProgress["phase"]>(["complete", "cancelled", "error"]);
+const ACTIVE = new Set<SpeedProgress["phase"]>(["latency", "download", "upload"]);
+const STOP_WAIT_MS = 15_000;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function phaseLabel(t: TFunction, p: SpeedProgress["phase"]): string {
+  return {
+    idle: t("speedtest.phaseIdle", "Idle"),
+    latency: t("speedtest.phaseLatency", "Measuring latency…"),
+    download: t("speedtest.phaseDownload", "Testing download…"),
+    upload: t("speedtest.phaseUpload", "Testing upload…"),
+    complete: t("speedtest.phaseComplete", "Complete"),
+    cancelled: t("speedtest.phaseCancelled", "Cancelled"),
+    error: t("speedtest.phaseError", "Error"),
+  }[p];
 }
 
-interface SpeedProgress {
-  phase: "idle" | "latency" | "download" | "upload" | "complete" | "cancelled" | "error";
-  progress: number;
-  ping_ms?: number;
-  jitter_ms?: number;
-  download_mbps?: number;
-  upload_mbps?: number;
-  error?: string;
-  live_speed_mbps?: number;
+const f1 = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? null : v.toFixed(1));
+
+function mb(bytes: number): string {
+  return (bytes / 1e6).toFixed(bytes >= 1e8 ? 0 : 1);
 }
-
-const phaseLabels = (t: TFunction): Record<string, string> => ({
-  idle: t("speedtest.phaseIdle", "Idle"),
-  latency: t("speedtest.phaseLatency", "Measuring latency…"),
-  download: t("speedtest.phaseDownload", "Testing download…"),
-  upload: t("speedtest.phaseUpload", "Testing upload…"),
-  complete: t("speedtest.phaseComplete", "Complete"),
-  cancelled: t("speedtest.phaseCancelled", "Cancelled"),
-  error: t("speedtest.phaseError", "Error"),
-});
-
-const DONE_PHASES = new Set(["complete", "cancelled", "error"]);
 
 export default function SpeedTestPage() {
   const { t } = useTranslation();
-  const [servers, setServers] = useState<SpeedServer[]>([]);
-  const [selectedServerId, setSelectedServerId] = useState<number | "auto">("auto");
-  const [loadingServers, setLoadingServers] = useState(true);
-  const [serverError, setServerError] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
-  const [stopping, setStopping] = useState(false);
-  const [progress, setProgress] = useState<SpeedProgress | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    apiFetch<SpeedServer[]>("/api/speedtest/servers")
-      .then((data) => setServers(data ?? []))
-      .catch((e) => setServerError(e instanceof ApiError ? e.message : String(e)))
-      .finally(() => setLoadingServers(false));
-  }, []);
+  // Set between a successful start and the first finished phase: right after
+  // start the agent reports "idle" until its worker thread begins.
+  const [expectRun, setExpectRun] = useState(false);
+  const expectRef = useRef(expectRun);
+  expectRef.current = expectRun;
 
-  const stopPolling = () => {
-    if (pollRef.current) {
-      clearTimeout(pollRef.current);
-      pollRef.current = null;
-    }
-  };
+  const progress = useApi<SpeedProgress>(PROGRESS, {
+    refreshInterval: (d) => (expectRef.current || (d && ACTIVE.has(d.phase)) ? 1000 : 0),
+    refreshWhenHidden: true,
+    onSuccess: (d) => {
+      if (expectRef.current && DONE.has(d.phase)) setExpectRun(false);
+    },
+  });
+  const p = progress.data;
+  const phase = p?.phase;
+  const running = expectRun || (phase != null && ACTIVE.has(phase));
 
-  const poll = async () => {
-    try {
-      const p = await apiFetch<SpeedProgress>("/api/speedtest/progress");
-      setProgress(p);
-      if (DONE_PHASES.has(p.phase)) {
-        setRunning(false);
-        setStopping(false);
-        stopPolling();
-      } else {
-        pollRef.current = setTimeout(poll, 1000);
+  // Server list: the device fetches it from speedtest.net (a little cellular
+  // data, cached 5 min on the device). Once on entry, as before.
+  const servers = useApi<SpeedServers>(SERVERS, {
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    shouldRetryOnError: false,
+  });
+  const [serverId, setServerId] = useState<number | "auto">("auto");
+
+  // ── writes ──
+  const [confirmStart, setConfirmStart] = useState(false);
+  const startInline = useConfirmInline(confirmStart);
+  const startOp = useWriteOp({
+    tier: 2,
+    steps: [
+      {
+        label: t("speedtest.start", "Start"),
+        run: async () => {
+          const body: SpeedStartBody = serverId === "auto" ? {} : { server_id: serverId };
+          try {
+            await apiFetch(`/api/speedtest/start`, { method: "POST", body });
+            setExpectRun(true);
+          } finally {
+            void progress.mutate();
+          }
+        },
+      },
+    ],
+  });
+
+  const [confirmStop, setConfirmStop] = useState(false);
+  const stopInline = useConfirmInline(confirmStop);
+  const stopOp = useWriteOp({
+    tier: 2,
+    steps: [{ label: t("speedtest.stop", "Stop"), run: () => apiFetch("/api/speedtest/stop", { method: "POST", body: {} }) }],
+    verify: async () => {
+      const until = Date.now() + STOP_WAIT_MS;
+      for (;;) {
+        const d = await apiFetch<SpeedProgress>(PROGRESS);
+        void progress.mutate(d, { revalidate: false });
+        if (!ACTIVE.has(d.phase) && (d.phase !== "idle" || !expectRef.current)) {
+          setExpectRun(false);
+          return true;
+        }
+        if (Date.now() > until) return false;
+        await sleep(1000);
       }
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
-      setRunning(false);
-      setStopping(false);
-      stopPolling();
-    }
-  };
+    },
+  });
 
-  useEffect(() => {
-    return () => stopPolling();
-  }, []);
+  // ── status ──
+  const pct = p ? Math.max(0, Math.min(100, Math.round(p.progress))) : 0;
+  const live = p && ACTIVE.has(p.phase) ? f1(p.live_speed_mbps) : null;
+  let tone: Tone = "neutral";
+  let word: string;
+  let reason: ReactNode = null;
+  if (!p && progress.error) {
+    tone = "bad";
+    word = t("speedtest.unreadable", "Can't read the speed test");
+    reason = String(progress.error.message ?? progress.error);
+  } else if (!p) {
+    word = t("speedtest.reading", "Reading…");
+  } else if (running) {
+    tone = progress.stale ? "stale" : "neutral";
+    word = `${ACTIVE.has(p.phase) ? phaseLabel(t, p.phase) : t("speedtest.starting", "Starting…")} · ${pct}%`;
+    reason = live != null ? t("speedtest.liveNow", "Live: {{v}} Mbps", { v: live }) : null;
+  } else if (p.phase === "complete") {
+    tone = "ok";
+    word = t("speedtest.phaseComplete", "Complete");
+    reason = p.server ? t("speedtest.lastRunOn", "Last test, on {{server}}", { server: p.server }) : null;
+  } else if (p.phase === "error") {
+    tone = "bad";
+    word = t("speedtest.failed", "Speed test failed");
+    reason = t("speedtest.failedReason", "{{e}} · Check that mobile data is on, then start again.", {
+      e: p.error || t("speedtest.noReason", "The device gave no reason"),
+    });
+  } else if (p.phase === "cancelled") {
+    word = t("speedtest.phaseCancelled", "Cancelled");
+    reason = t("speedtest.cancelledReason", "The test was stopped before it finished.");
+  } else {
+    word = t("speedtest.noResultYet", "No result yet");
+    reason = t("speedtest.idleReason", "Pick a server below and press “Start”.");
+  }
 
-  const handleStart = async () => {
-    setError(null);
-    setProgress(null);
-    setRunning(true);
-    try {
-      await apiFetch("/api/speedtest/start", {
-        method: "POST",
-        body: selectedServerId === "auto" ? {} : { server_id: selectedServerId },
-      });
-      pollRef.current = setTimeout(poll, 500);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
-      setRunning(false);
-    }
-  };
+  // Readings: a finished phase shows its result; the phase under way shows
+  // its live rate (marked "live").
+  const haveResult = p && p.phase !== "idle";
+  const loadingVals = !p && !progress.error;
+  const dlLive = p?.phase === "download";
+  const ulLive = p?.phase === "upload";
+  const dl = loadingVals ? undefined : dlLive ? live : haveResult ? f1(p?.download_mbps) : null;
+  const ul = loadingVals ? undefined : ulLive ? live : haveResult ? f1(p?.upload_mbps) : null;
+  const ping = loadingVals ? undefined : haveResult ? f1(p?.ping_ms) : null;
+  const jitter = loadingVals ? undefined : haveResult ? f1(p?.jitter_ms) : null;
+  const liveWord = t("speedtest.live", "Live");
+  const usedBytes = p ? p.download_bytes + p.upload_bytes : 0;
 
-  const handleStop = async () => {
-    setStopping(true);
-    try {
-      await apiFetch("/api/speedtest/stop", { method: "POST", body: {} });
-    } catch {
-      // ignore
-    }
-  };
-
-  const phase = progress?.phase ?? "idle";
-  const isComplete = phase === "complete";
-  const isError = phase === "error";
-  // Agent reports progress as an integer percent (0–100), not a 0–1 fraction.
-  const pct = Math.max(0, Math.min(100, Math.round(progress?.progress ?? 0)));
+  const actionStop = t("speedtest.stop", "Stop");
 
   return (
-    <>
-      <PageHeader
-        title={t("speedtest.title", "Speed Test")}
-        description={t("speedtest.desc", "Measure your WAN connection speed.")}
-      />
+    <div className="max-w-[720px]">
+      <h1 className="nd-title mb-4 mt-2">{t("speedtest.title", "Speed Test")}</h1>
 
-      {error && <ErrorBanner message={error} />}
+      <div className="grid gap-6">
+        <section aria-label={t("speedtest.statusLabel", "Speed test status")}>
+          <StatusBlock
+            tone={tone}
+            state={word}
+            reason={reason}
+            meta={
+              running ? (
+                <div className="grid gap-2">
+                  <div
+                    role="progressbar"
+                    aria-label={t("speedtest.progress", "Progress")}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={pct}
+                    className="h-2 w-full overflow-hidden rounded-full bg-nd-track"
+                  >
+                    <div
+                      className="h-full rounded-full transition-[width] duration-500"
+                      style={{ width: `${pct}%`, background: "var(--nd-t1)" }}
+                    />
+                  </div>
+                  <Freshness stale={progress.stale} lastOkAt={progress.lastOkAt} what={t("speedtest.progress", "Progress")} />
+                </div>
+              ) : !p && progress.error ? (
+                <Button variant="secondary" size="sm" onPress={() => void progress.mutate()}>
+                  <ArrowClockwise size={18} weight="bold" aria-hidden />
+                  {t("common.retry", "Retry")}
+                </Button>
+              ) : undefined
+            }
+            actions={
+              running ? (
+                <Button
+                  variant="secondary"
+                  onPress={() => setConfirmStop((o) => !o)}
+                  isDisabled={stopOp.busy}
+                  pending={stopOp.busy}
+                  {...stopInline.triggerProps}
+                >
+                  <Stop size={18} weight="bold" aria-hidden />
+                  {actionStop}
+                </Button>
+              ) : (
+                <Button
+                  onPress={() => setConfirmStart((o) => !o)}
+                  isDisabled={startOp.busy || servers.isLoading || (!p && !progress.error)}
+                  pending={startOp.busy}
+                  aria-describedby="st-cost"
+                  {...startInline.triggerProps}
+                >
+                  <Play size={18} weight="fill" aria-hidden />
+                  {t("speedtest.start", "Start")}
+                </Button>
+              )
+            }
+          />
+          <ConfirmInline
+            id={startInline.id}
+            open={confirmStart && !running}
+            actionLabel={t("speedtest.start", "Start")}
+            consequence={t("speedtest.costNote", "Uses mobile data: one test downloads and uploads for about 10 seconds each — tens to hundreds of MB on a fast connection.")}
+            onCancel={() => setConfirmStart(false)}
+            onConfirm={() => {
+              setConfirmStart(false);
+              startOp.start();
+              startOp.confirm();
+            }}
+          />
+          <ConfirmInline
+            id={stopInline.id}
+            open={confirmStop && running}
+            actionLabel={actionStop}
+            consequence={t("speedtest.stopConsequence", "The test ends now; results so far are kept. You can start it again at any time.")}
+            onCancel={() => setConfirmStop(false)}
+            onConfirm={() => {
+              setConfirmStop(false);
+              stopOp.start();
+              stopOp.confirm();
+            }}
+          />
+          <div className="mt-2 grid gap-1 px-1">
+            {!running && (
+              <p id="st-cost" className="nd-aux">
+                {t("speedtest.costNote", "Uses mobile data: one test downloads and uploads for about 10 seconds each — tens to hundreds of MB on a fast connection.")}
+              </p>
+            )}
+            <OpResult op={startOp} />
+            <OpResult op={stopOp} />
+          </div>
+        </section>
 
-      <SectionCard title={t("speedtest.configuration", "Configuration")} className="mb-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="flex-1">
-            <label className="mb-1 block text-xs font-medium text-text-dim">{t("speedtest.server", "Server")}</label>
+        <ReadoutWall cols={3} label={t("speedtest.results", "Results")}>
+          <Readout
+            full
+            hero
+            label={t("speedtest.download", "Download")}
+            value={dl}
+            unit="Mbps"
+            sub={dlLive ? liveWord : undefined}
+            stale={running && progress.stale}
+          />
+          <Readout label={t("speedtest.upload", "Upload")} value={ul} unit="Mbps" sub={ulLive ? liveWord : undefined} stale={running && progress.stale} />
+          <Readout
+            label={<>{t("speedtest.ping", "Ping")} <Help label={t("speedtest.ping", "Ping")} text={t("speedtest.pingHelp", "Round-trip time to the test server. Lower is better.")} /></>}
+            value={ping}
+            unit="ms"
+            stale={running && progress.stale}
+          />
+          <Readout
+            label={<>{t("speedtest.jitter", "Jitter")} <Help label={t("speedtest.jitter", "Jitter")} text={t("speedtest.jitterHelp", "How much the ping varies. Lower is steadier; matters for calls and games.")} /></>}
+            value={jitter}
+            unit="ms"
+            stale={running && progress.stale}
+          />
+        </ReadoutWall>
+
+        <section aria-labelledby="st-server">
+          <GroupTitle id="st-server">{t("speedtest.server", "Server")}</GroupTitle>
+          <div className="nd-group grid gap-2 p-4 lg:p-5">
+            <label htmlFor="st-server-select" className="sr-only">
+              {t("speedtest.server", "Server")}
+            </label>
             <select
-              className="h-9 w-full rounded-md border border-border bg-bg-input px-3 text-sm outline-none transition focus:border-accent"
-              value={selectedServerId}
-              onChange={(e) =>
-                setSelectedServerId(e.target.value === "auto" ? "auto" : Number(e.target.value))
-              }
-              disabled={running || loadingServers}
+              id="st-server-select"
+              className="nd-field"
+              value={serverId}
+              onChange={(e) => setServerId(e.target.value === "auto" ? "auto" : Number(e.target.value))}
+              disabled={running || servers.isLoading}
             >
               <option value="auto">{t("speedtest.autoBestServer", "Auto (best server)")}</option>
-              {servers.map((s) => (
+              {(servers.data ?? []).map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.sponsor} — {s.name}, {s.country}
                 </option>
               ))}
             </select>
-            {serverError && <p className="mt-1 text-xs text-error">{serverError}</p>}
+            {servers.isLoading && <p className="nd-aux" role="status">{t("speedtest.loadingServers", "Getting the server list…")}</p>}
+            {servers.error && (
+              <div role="alert" className="flex flex-wrap items-center gap-3">
+                <span className="nd-body text-nd-badT">
+                  {t("speedtest.serversErr", "Couldn't get the server list: {{e}}. “Auto” still works if the device can reach the internet.", {
+                    e: String(servers.error.message ?? servers.error),
+                  })}
+                </span>
+                <Button variant="secondary" size="sm" onPress={() => void servers.mutate()} pending={servers.isValidating}>
+                  {t("common.retry", "Retry")}
+                </Button>
+              </div>
+            )}
           </div>
-          {running ? (
-            <Button variant="danger" onClick={handleStop} loading={stopping} disabled={stopping}>
-              <StopCircle className="h-4 w-4" />
-              {t("speedtest.stop", "Stop")}
-            </Button>
-          ) : (
-            <Button onClick={handleStart} disabled={loadingServers}>
-              <Play className="h-4 w-4" />
-              {t("speedtest.start", "Start")}
-            </Button>
-          )}
-        </div>
-      </SectionCard>
+        </section>
 
-      {progress && (
-        <SectionCard title={t("speedtest.progress", "Progress")} className="mb-4">
-          <div className="mb-2 flex items-center justify-between text-sm">
-            <span className="flex items-center gap-2 font-medium">
-              <Wifi className="h-4 w-4 text-accent" />
-              {phaseLabels(t)[phase] ?? phase}
-            </span>
-            <span className="text-text-dim">{pct}%</span>
-          </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-bg-elevated">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${
-                isError ? "bg-error" : isComplete ? "bg-success" : "bg-accent"
-              }`}
-              style={{ width: `${pct}%` }}
+        {haveResult && (
+          <Group title={t("speedtest.details", "Details")} stale={running && progress.stale}>
+            <Row label={t("speedtest.serverUsed", "Server used")} value={p?.server || "—"} />
+            <Row
+              label={t("speedtest.dataUsed", "Mobile data used")}
+              sub={t("speedtest.dataUsedSplit", "Download {{d}} MB · upload {{u}} MB", { d: mb(p?.download_bytes ?? 0), u: mb(p?.upload_bytes ?? 0) })}
+              value={`${mb(usedBytes)} MB`}
             />
-          </div>
-          {progress.live_speed_mbps != null && !DONE_PHASES.has(phase) && (
-            <p className="mt-2 text-sm text-text-dim">
-              {t("speedtest.live", "Live")}: <span className="font-mono text-text">{progress.live_speed_mbps.toFixed(1)} Mbps</span>
-            </p>
-          )}
-          {isError && progress.error && (
-            <p className="mt-2 text-sm text-error">{progress.error}</p>
-          )}
-        </SectionCard>
-      )}
-
-      {isComplete && progress && (
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <StatCard
-            label={t("speedtest.ping", "Ping")}
-            value={progress.ping_ms?.toFixed(1) ?? "—"}
-            unit="ms"
-          />
-          <StatCard
-            label={t("speedtest.jitter", "Jitter")}
-            value={progress.jitter_ms?.toFixed(1) ?? "—"}
-            unit="ms"
-          />
-          <StatCard
-            label={t("speedtest.download", "Download")}
-            value={progress.download_mbps?.toFixed(2) ?? "—"}
-            unit="Mbps"
-          />
-          <StatCard
-            label={t("speedtest.upload", "Upload")}
-            value={progress.upload_mbps?.toFixed(2) ?? "—"}
-            unit="Mbps"
-          />
-        </div>
-      )}
-    </>
+          </Group>
+        )}
+      </div>
+    </div>
   );
 }

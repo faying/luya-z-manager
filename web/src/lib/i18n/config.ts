@@ -2,6 +2,7 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import { en } from "./en";
 import { zh } from "./zh";
+import { deepMerge, ND_ZH } from "./nd-zh";
 
 export const SUPPORTED = ["en", "zh"] as const;
 export type Lang = (typeof SUPPORTED)[number];
@@ -15,7 +16,7 @@ if (!i18n.isInitialized) {
   i18n.use(initReactI18next).init({
     resources: {
       en: { translation: en },
-      zh: { translation: zh },
+      zh: { translation: deepMerge(zh as never, ...ND_ZH) },
     },
     lng: "en",
     fallbackLng: "en",

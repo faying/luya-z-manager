@@ -1,111 +1,171 @@
 "use client";
-
-import { useState, useRef, useEffect, useCallback } from "react";
+// AT terminal (tool page, new design). Order: port status → command →
+// response (ConsoleBand, dark in both themes) → history.
+//
+//   Send, normal command     tier 1 (caller's rule: runs directly)   POST /api/at/send
+//   Send, dangerous command  tier 3 ConfirmDialog with the command   POST /api/at/send
+// No readback (R6): the modem's reply is the result, shown in the band.
+//
+// Dangerous = the old page's six patterns. at_terminal.rs strips ' ` $ ; | &
+// before sending, so the check runs on the command as it will actually be
+// sent (the old page only checked the raw text: `AT+CF;UN=0` slipped past).
+//
+// GET /api/at/port makes the agent send AT probes to the candidate ports,
+// so it is read once on entry and when the user presses "Check again" —
+// never polled, not on focus/reconnect. Each /api/at/send reply carries the
+// port too and refreshes the cached value without another probe.
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
+import { ArrowClockwise, PaperPlaneRight } from "@phosphor-icons/react";
 import { useApi } from "@/lib/hooks/useApi";
 import { apiFetch } from "@/lib/api/client";
-import { ApiError } from "@/lib/api/types";
-import { PageHeader, SectionCard, ErrorBanner } from "@/components/admin/StatCard";
-import { Button } from "@/components/admin/Button";
-import { Terminal, Send, ChevronUp, ChevronDown } from "lucide-react";
-import { useTranslation } from "react-i18next";
-
-type TFunc = (key: string, defaultValue: string, options?: Record<string, unknown>) => string;
-
-interface PortInfo {
-  port: string;
-  available: boolean;
-}
-
-interface ATResponse {
-  command: string;
-  response: string;
-  port: string;
-  elapsed_ms: number;
-}
+import { useWriteOp, type Tier } from "@/lib/api/writeOp";
+import type { AtPort, AtSendBody, AtSendResult } from "@/lib/api/schemas/tools";
+import { Button, ConfirmDialog, ConsoleBand, OpResult, StatusBlock, type Tone } from "@/components/nd";
 
 interface HistoryEntry {
+  id: number;
   command: string;
   response: string;
   elapsed_ms: number;
-  ts: Date;
+}
+
+/** Same filter as at_terminal.rs:36-39. */
+function sanitize(cmd: string): string {
+  return cmd.replace(/['`$;|&]/g, "");
 }
 
 const DANGEROUS_PATTERN = /CFUN=0|\+CRESET|&F|\+NVWR|\+QPOWD|\+COPS=/i;
 
-function getDangerReason(cmd: string, t: TFunc): string {
-  if (/CFUN=0/i.test(cmd)) return t("atterm.dangerCfun0", "CFUN=0 will shut down the modem radio");
-  if (/\+CRESET/i.test(cmd)) return t("atterm.dangerCreset", "+CRESET will reset the modem");
-  if (/&F/i.test(cmd)) return t("atterm.dangerFactory", "&F will factory-reset modem settings");
-  if (/\+NVWR/i.test(cmd)) return t("atterm.dangerNvwr", "+NVWR writes to non-volatile memory");
-  if (/\+QPOWD/i.test(cmd)) return t("atterm.dangerQpowd", "+QPOWD will power down the modem");
-  if (/\+COPS=/i.test(cmd)) return t("atterm.dangerCops", "+COPS= will change network operator registration");
-  return t("atterm.dangerGeneric", "This command may be dangerous");
+interface Danger {
+  reason: string;
+  recovery: string;
+  /** Filled in by send(): the command as it will be sent. */
+  command?: string;
+}
+
+/** Old page's list, checked against the raw input and the sent form. */
+function dangerOf(raw: string, sent: string, t: TFunction): Danger | null {
+  const hit = (re: RegExp) => re.test(raw) || re.test(sent);
+  if (!DANGEROUS_PATTERN.test(raw) && !DANGEROUS_PATTERN.test(sent)) return null;
+  if (hit(/CFUN=0/i))
+    return {
+      reason: t("atterm.dangerCfun0", "CFUN=0 will shut down the modem radio"),
+      recovery: t("atterm.recoverCfun0", "Send AT+CFUN=1 to turn the radio back on, or restart the device."),
+    };
+  if (hit(/\+CRESET/i))
+    return {
+      reason: t("atterm.dangerCreset", "+CRESET will reset the modem"),
+      recovery: t("atterm.recoverCreset", "The modem comes back by itself after about a minute. If it doesn't, restart the device."),
+    };
+  if (hit(/&F/i))
+    return {
+      reason: t("atterm.dangerFactory", "&F will factory-reset modem settings"),
+      recovery: t("atterm.recoverFactory", "Modem settings changed with AT commands are lost and can't be restored from this page."),
+    };
+  if (hit(/\+NVWR/i))
+    return {
+      reason: t("atterm.dangerNvwr", "+NVWR writes to non-volatile memory"),
+      recovery: t("atterm.recoverNvwr", "The old value can't be restored from this page. A wrong value can stop the modem from working until it is written back."),
+    };
+  if (hit(/\+QPOWD/i))
+    return {
+      reason: t("atterm.dangerQpowd", "+QPOWD will power down the modem"),
+      recovery: t("atterm.recoverQpowd", "Restart the device to power the modem back up."),
+    };
+  if (hit(/\+COPS=/i))
+    return {
+      reason: t("atterm.dangerCops", "+COPS= will change network operator registration"),
+      recovery: t("atterm.recoverCops", "Send AT+COPS=0 to go back to automatic operator selection."),
+    };
+  return {
+    reason: t("atterm.dangerGeneric", "This command may be dangerous"),
+    recovery: t("atterm.recoverGeneric", "Restart the device if the modem stops responding."),
+  };
 }
 
 export default function ATTerminalPage() {
   const { t } = useTranslation();
-  const { data: portInfo } = useApi<PortInfo>("/api/at/port");
+  const port = useApi<AtPort>("/api/at/port", {
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    revalidateIfStale: false,
+  });
+
   const [command, setCommand] = useState("");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historyIdx, setHistoryIdx] = useState(-1);
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [lastElapsed, setLastElapsed] = useState<number | null>(null);
   const [inlineError, setInlineError] = useState<string | null>(null);
+  const [lastElapsed, setLastElapsed] = useState<number | null>(null);
+  const [danger, setDanger] = useState<Danger | null>(null);
+  const nextId = useRef(1);
   const responseRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Scroll response area to bottom on new history
+  // What start() sends; set right before start() (the op snapshots its config then).
+  const sendRef = useRef<{ command: string; tier: Tier }>({ command: "", tier: 1 });
+
+  // Getters: start() snapshots the config synchronously after send() set the
+  // ref, before any re-render, so tier and label must be read lazily.
+  const op = useWriteOp({
+    get tier() {
+      return sendRef.current.tier;
+    },
+    get steps() {
+      return [
+      {
+        label: t("atterm.sendStep", "Send {{cmd}}", { cmd: sendRef.current.command }),
+        run: async () => {
+          const body: AtSendBody = { command: sendRef.current.command, timeout: 3 };
+          const r = await apiFetch<AtSendResult>("/api/at/send", { method: "POST", body });
+          setLastElapsed(r.elapsed_ms);
+          setHistory((prev) => [
+            ...prev,
+            { id: nextId.current++, command: r.command, response: r.response, elapsed_ms: r.elapsed_ms },
+          ]);
+          setCommand((cur) => (cur.trim() === sendRef.current.command || sanitize(cur.trim()) === r.command ? "" : cur));
+          setHistoryIdx(-1);
+          if (r.port) void port.mutate({ port: r.port, available: true }, { revalidate: false });
+          return r;
+        },
+      },
+      ];
+    },
+  });
+
+  // Scroll the response band to the newest reply.
   useEffect(() => {
-    if (responseRef.current) {
-      responseRef.current.scrollTop = responseRef.current.scrollHeight;
-    }
+    const el = responseRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [history]);
 
-  const sendCommand = useCallback(async () => {
-    const cmd = command.trim();
-    if (!cmd) return;
-
-    // Validate starts with AT
-    if (!/^at/i.test(cmd)) {
+  const send = useCallback(() => {
+    const raw = command.trim();
+    if (!raw || op.busy) return;
+    if (!/^at/i.test(raw)) {
       setInlineError(t("atterm.errorMustStartWithAt", "Command must start with AT"));
       return;
     }
+    const sent = sanitize(raw);
+    if (!sent) {
+      setInlineError(t("atterm.errorEmptyAfterFilter", "Nothing is left after removing ' ` $ ; | &."));
+      return;
+    }
     setInlineError(null);
-
-    // Confirm dangerous
-    if (DANGEROUS_PATTERN.test(cmd)) {
-      const reason = getDangerReason(cmd, t);
-      if (!window.confirm(t("atterm.confirmDangerous", "Warning: {{reason}}\n\nAre you sure you want to send: {{cmd}}", { reason, cmd }))) {
-        return;
-      }
+    const d = dangerOf(raw, sent, t);
+    sendRef.current = { command: sent, tier: d ? 3 : 1 };
+    if (d) {
+      setDanger({ ...d, command: sent });
+      return;
     }
+    op.start();
+  }, [command, op, t]);
 
-    setSending(true);
-    setError(null);
-    try {
-      const result = await apiFetch<ATResponse>("/api/at/send", {
-        method: "POST",
-        body: { command: cmd, timeout: 3 },
-      });
-      setLastElapsed(result.elapsed_ms);
-      setHistory((prev) => [
-        ...prev,
-        { command: result.command, response: result.response, elapsed_ms: result.elapsed_ms, ts: new Date() },
-      ]);
-      setCommand("");
-      setHistoryIdx(-1);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
-    } finally {
-      setSending(false);
-    }
-  }, [command, t]);
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      sendCommand();
+      send();
       return;
     }
     const cmds = history.map((h) => h.command);
@@ -113,51 +173,84 @@ export default function ATTerminalPage() {
       e.preventDefault();
       const nextIdx = historyIdx < cmds.length - 1 ? historyIdx + 1 : historyIdx;
       setHistoryIdx(nextIdx);
-      if (cmds.length > 0) {
-        setCommand(cmds[cmds.length - 1 - nextIdx] ?? "");
-      }
+      if (cmds.length > 0) setCommand(cmds[cmds.length - 1 - nextIdx] ?? "");
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
       const nextIdx = historyIdx > 0 ? historyIdx - 1 : -1;
       setHistoryIdx(nextIdx);
-      if (nextIdx === -1) {
-        setCommand("");
-      } else if (cmds.length > 0) {
-        setCommand(cmds[cmds.length - 1 - nextIdx] ?? "");
-      }
+      setCommand(nextIdx === -1 ? "" : cmds[cmds.length - 1 - nextIdx] ?? "");
     }
   };
 
+  // ── port status ──
+  let tone: Tone = "neutral";
+  let state: ReactNode = t("atterm.portReading", "Looking for the AT port…");
+  let reason: ReactNode = null;
+  if (port.data) {
+    if (port.data.available && port.data.port) {
+      tone = "ok";
+      state = t("atterm.portAvailable", "AT port available");
+      reason = <span className="nd-mono">{port.data.port}</span>;
+    } else {
+      tone = "bad";
+      state = t("atterm.portNone", "No AT port answered");
+      reason = t("atterm.portNoneReason", "None of the modem's AT ports replied OK. Commands will fail until one does. Check again in a moment.");
+    }
+  } else if (port.error) {
+    tone = "warn";
+    state = t("atterm.portUnread", "Couldn't check the AT port");
+    reason = port.error instanceof Error ? port.error.message : String(port.error);
+  }
+
   return (
     <>
-      <PageHeader
-        title={t("atterm.title", "AT Terminal")}
-        description={t("atterm.desc", "Send AT commands directly to the modem.")}
-        actions={
-          portInfo ? (
-            <span
-              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
-                portInfo.available
-                  ? "bg-success/15 text-success"
-                  : "bg-error/15 text-error"
-              }`}
+      <h1 className="nd-title mb-4 mt-2">{t("atterm.title", "AT Terminal")}</h1>
+
+      <div className="grid max-w-[960px] gap-6">
+        <p className="nd-body -mt-2 text-nd-t2">{t("atterm.desc", "Send AT commands directly to the modem.")}</p>
+
+        <StatusBlock
+          tone={tone}
+          state={state}
+          reason={reason}
+          actions={
+            <Button variant="secondary" onPress={() => void port.mutate()} pending={port.isValidating}>
+              <ArrowClockwise size={20} weight="bold" aria-hidden />
+              {t("atterm.checkPort", "Check again")}
+            </Button>
+          }
+        />
+
+        {/* ── command + response ── */}
+        <section aria-labelledby="at-cmd" className="grid gap-3">
+          <h2 id="at-cmd" className="nd-group-title">
+            {t("atterm.commandCard", "Command")}
+          </h2>
+          <ConsoleBand label={t("atterm.responseCard", "Response")}>
+            <div
+              ref={responseRef}
+              className="max-h-[420px] min-h-[200px] overflow-y-auto"
+              role="log"
+              aria-live="polite"
+              aria-label={t("atterm.responseCard", "Response")}
             >
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${portInfo.available ? "bg-success" : "bg-error"}`}
-              />
-              {portInfo.port} — {portInfo.available ? t("atterm.available", "available") : t("atterm.unavailable", "unavailable")}
-            </span>
-          ) : null
-        }
-      />
-
-      {error && <ErrorBanner message={error} />}
-
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        {/* Left: input + history */}
-        <SectionCard title={t("atterm.commandCard", "Command")}>
-          <div className="flex flex-col gap-2">
-            <div className="flex gap-2">
+              {history.length === 0 ? (
+                <p className="nd-console__muted">{t("atterm.emptyResponse", "No commands sent yet")}</p>
+              ) : (
+                history.map((h) => (
+                  <div key={h.id} className="mb-3 last:mb-0">
+                    <div>&gt; {h.command}</div>
+                    <div className="whitespace-pre-wrap break-all">{h.response.trim() || t("atterm.noReply", "(no reply)")}</div>
+                    <div className="nd-console__muted text-[12px]">{h.elapsed_ms} ms</div>
+                  </div>
+                ))
+              )}
+            </div>
+            <label className="mt-3 flex items-center gap-2 border-t border-nd-console-t2 pt-3">
+              <span className="nd-console__muted" aria-hidden>
+                &gt;
+              </span>
+              <span className="sr-only">{t("atterm.inputLabel", "AT command")}</span>
               <input
                 ref={inputRef}
                 value={command}
@@ -165,74 +258,90 @@ export default function ATTerminalPage() {
                   setCommand(e.target.value);
                   setInlineError(null);
                 }}
-                onKeyDown={handleKeyDown}
+                onKeyDown={onKeyDown}
                 placeholder="AT+CGMR"
-                className="h-9 w-full rounded-md border border-border bg-bg-input px-3 font-mono text-sm outline-none transition focus:border-accent"
-                disabled={sending}
+                aria-describedby="at-hint"
+                aria-invalid={inlineError ? true : undefined}
+                autoComplete="off"
+                autoCapitalize="characters"
+                spellCheck={false}
+                disabled={op.busy}
+                className="min-h-[44px] w-full rounded-nd-field bg-transparent px-2 text-[16px] outline-hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-nd-accT text-inherit"
               />
-              <Button onClick={sendCommand} loading={sending} disabled={sending || !command.trim()}>
-                <Send className="h-4 w-4" />
-                {t("atterm.send", "Send")}
-              </Button>
-            </div>
-            {inlineError && <p className="text-xs text-error">{inlineError}</p>}
-            <p className="text-xs text-text-dim">
-              {t("atterm.recallHintPrefix", "Use")} <ChevronUp className="inline h-3 w-3" />/<ChevronDown className="inline h-3 w-3" /> {t("atterm.recallHintSuffix", "arrows to recall history.")}
-            </p>
+            </label>
+          </ConsoleBand>
 
-            {history.length > 0 && (
-              <div className="mt-2">
-                <p className="mb-1 text-xs font-medium text-text-dim uppercase tracking-wider">{t("atterm.history", "History")}</p>
-                <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
-                  {[...history].reverse().map((h, i) => (
-                    <button
-                      key={i}
-                      onClick={() => {
-                        setCommand(h.command);
-                        setInlineError(null);
-                        inputRef.current?.focus();
-                      }}
-                      className="rounded px-2 py-1 text-left text-xs font-mono text-text-dim hover:bg-bg-elevated transition"
-                    >
-                      {h.command}
-                    </button>
-                  ))}
-                </div>
-              </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button onPress={send} pending={op.busy} isDisabled={op.busy || !command.trim()}>
+              <PaperPlaneRight size={20} weight="bold" aria-hidden />
+              {t("atterm.send", "Send")}
+            </Button>
+            {lastElapsed !== null && history.length > 0 && (
+              <span className="nd-aux">{t("atterm.lastResponse", "Last response in {{ms}}ms", { ms: lastElapsed })}</span>
             )}
           </div>
-        </SectionCard>
-
-        {/* Right: response */}
-        <SectionCard title={t("atterm.responseCard", "Response")}>
-          <div
-            ref={responseRef}
-            className="min-h-[200px] max-h-[400px] overflow-y-auto rounded-md bg-bg-elevated p-3 font-mono text-xs"
-          >
-            {history.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-text-dim">
-                <Terminal className="mr-2 h-4 w-4" />
-                {t("atterm.emptyResponse", "No commands sent yet")}
-              </div>
-            ) : (
-              history.map((h, i) => (
-                <div key={i} className="mb-3 last:mb-0">
-                  <div className="text-accent">
-                    &gt; {h.command}
-                  </div>
-                  <div className="whitespace-pre-wrap text-text">{h.response}</div>
-                  <div className="mt-0.5 text-text-dim text-[10px]">{h.elapsed_ms}ms</div>
-                </div>
-              ))
-            )}
-          </div>
-          {lastElapsed !== null && history.length > 0 && (
-            <p className="mt-2 text-xs text-text-dim">
-              {t("atterm.lastResponse", "Last response in {{ms}}ms", { ms: lastElapsed })}
+          <p id="at-hint" className="nd-aux">
+            {t("atterm.recallHintNd", "Enter sends. ↑ / ↓ recall earlier commands.")}
+          </p>
+          {inlineError && (
+            <p role="alert" className="text-nd-badT">
+              {inlineError}
             </p>
           )}
-        </SectionCard>
+          {op.phase !== "accepted" && op.phase !== "applied" && <OpResult op={op} />}
+        </section>
+
+        {/* ── history ── */}
+        <section aria-labelledby="at-history">
+          <h2 id="at-history" className="nd-group-title">
+            {t("atterm.history", "History")}
+          </h2>
+          {history.length === 0 ? (
+            <p className="nd-aux">{t("atterm.historyEmpty", "Commands you send here are listed for this visit; press one to put it back in the box.")}</p>
+          ) : (
+            <ul className="flex flex-wrap gap-2">
+              {[...history].reverse().map((h) => (
+                <li key={h.id}>
+                  <Button
+                    variant="secondary"
+                    className="nd-mono"
+                    aria-label={t("atterm.reuse", "Put {{cmd}} back in the box", { cmd: h.command })}
+                    onPress={() => {
+                      setCommand(h.command);
+                      setInlineError(null);
+                      inputRef.current?.focus();
+                    }}
+                  >
+                    {h.command}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       </div>
+
+      <ConfirmDialog
+        open={danger !== null}
+        onOpenChange={(o) => !o && setDanger(null)}
+        title={t("atterm.confirmTitle", "Send a risky AT command?")}
+        what={
+          <>
+            <span className="block">{danger?.reason}</span>
+            <span className="nd-mono mt-2 block break-all">{danger?.command}</span>
+          </>
+        }
+        downtime={t("atterm.confirmDowntime", "Depends on the command: the mobile connection may drop until the modem is back.")}
+        recovery={danger?.recovery}
+        actionLabel={t("atterm.confirmSend", "Send it")}
+        cutsUplink
+        danger
+        onConfirm={() => {
+          setDanger(null);
+          op.start();
+          op.confirm();
+        }}
+      />
     </>
   );
 }

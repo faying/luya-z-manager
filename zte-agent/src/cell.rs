@@ -32,13 +32,6 @@ pub fn cell_lock_reset(_state: &AppState) -> (u16, Value) {
     }
 }
 
-pub fn cell_neighbors_scan(_state: &AppState) -> (u16, Value) {
-    match ubus::call("zte_nwinfo_api", "nwinfo_scan_nbr", Some("{}")) {
-        Ok(data) => (200, json!({"ok": true, "data": data})),
-        Err(e) => (503, json!({"ok": false, "error": e})),
-    }
-}
-
 pub fn cell_neighbors_nr(_state: &AppState) -> (u16, Value) {
     match ubus::call("zte_nwinfo_api", "nwinfo_get_nr5g_nbr_contents", Some("{}")) {
         Ok(data) => (200, json!({"ok": true, "data": data})),

@@ -14,8 +14,6 @@ Thanks for your interest in contributing!
 | Component | Path | Description |
 |---|---|---|
 | zte-agent | `zte-agent/` | Rust HTTP agent (Axum) running on the device, exposes REST API on port 9090 |
-| iOS app | `mobile/ios/` | SwiftUI companion app |
-| Android app | `mobile/android/` | Jetpack Compose companion app |
 
 ## Development Setup
 
@@ -43,7 +41,7 @@ adb shell chmod +x /data/local/tmp/zte-agent
 
 - Use the provided issue templates (bug report or feature request)
 - Include device firmware version and zte-agent version
-- Attach relevant logs from the agent or companion app
+- Attach relevant logs from the agent or the web admin (browser console)
 
 ## Submitting Pull Requests
 

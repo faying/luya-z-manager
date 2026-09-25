@@ -141,13 +141,18 @@ pub fn router_firewall_dmz_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
     }
 }
 
+/// GET /api/router/firewall/upnp. The getter is `router_get_upnp` (B27
+/// answers {enabled, enable_upnp, notify_interval, ttl, enable_natpmp});
+/// `router_get_upnp_switch` does not exist on the firmware.
 pub fn router_firewall_upnp_get(_state: &AppState) -> (u16, Value) {
-    match ubus::call("zwrt_router.api", "router_get_upnp_switch", Some("{}")) {
+    match ubus::call("zwrt_router.api", "router_get_upnp", Some("{}")) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
 }
 
+/// PUT /api/router/firewall/upnp → `router_set_upnp_switch`, which takes
+/// integers: {enable_upnp, notify_interval, ttl, natpmp}.
 pub fn router_firewall_upnp_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
     let parsed: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
@@ -213,13 +218,31 @@ pub fn router_vpn_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
     }
 }
 
+/// GET /api/router/qos. The getter is `router_get_qos` (B27 answers {}
+/// while nothing is configured); `router_get_qos_switch` does not exist.
 pub fn router_qos_get(_state: &AppState) -> (u16, Value) {
-    match ubus::call("zwrt_router.api", "router_get_qos_switch", Some("{}")) {
-        Ok(data) => (200, json!({"ok": true, "data": data})),
+    match ubus::call("zwrt_router.api", "router_get_qos", Some("{}")) {
+        Ok(mut data) => {
+            // The vendor "带宽分配" mode (zte_smart_manage). Every mode but
+            // Nomal_mode (极速) sorts traffic by app, which needs xdpi, and
+            // xdpi is off on purpose (≈25 % CPU, 2026-09-23). Read-only: the
+            // owner decided on 2026-09-25 not to offer switching it.
+            if let Some(o) = data.as_object_mut() {
+                o.insert("smart_qos_mode".into(), json!(ubus::uci_get("zwrt_smart_mng.smart_qos.mode").ok()));
+                o.insert("xdpi_support".into(), json!(ubus::uci_get("zwrt_smart_mng.smart_mng.xdpi_support").ok()));
+            }
+            (200, json!({"ok": true, "data": data}))
+        }
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
 }
 
+/// PUT /api/router/qos. The firmware setter is `router_set_qos` and it takes
+/// rate limits, not a switch: {upload_total_limit_rate, upload_total_limit_unit,
+/// download_total_limit_rate, download_total_limit_unit, qos_smart_switch,
+/// qos_smart_pri_type} (all integers). The old `router_set_qos_switch` does not
+/// exist, so this still answers 503 until the web page is redesigned around
+/// those fields (owner to decide); kept as-is on purpose.
 pub fn router_qos_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
     let parsed: Value = match serde_json::from_slice(body) {
         Ok(v) => v,

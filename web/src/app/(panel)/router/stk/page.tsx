@@ -1,347 +1,543 @@
 "use client";
-
-import { useState } from "react";
+// USSD & SIM Toolkit (new design). Tool page with two tabs. Nothing is read
+// on entry; every request talks AT commands to the modem.
+//
+// Writes (controls-inventory §/router/stk, design §3.1) — all tier 2 inline
+// confirms; none has a readback (the reply is the result):
+//   发送 USSD      POST /api/ussd/send {code}      carrier services may be charged
+//   回复           POST /api/ussd/respond {reply}
+//   结束会话        POST /api/ussd/cancel {}
+//   加载 / 重新加载  GET  /api/stk/menu             AT+CUSATD=1 etc. change the modem's STK state
+//   菜单项          POST /api/stk/select {item_id}  may trigger a service on the SIM
+// Time limits: /api/stk/menu runs up to ~18 s of AT waits (telephony.rs:
+// 258-496), select ~13 s, USSD send/respond 8 s + setup — all get 30 s
+// instead of the 8 s / 15 s defaults.
+//
+// Fixed vs the old page:
+// - /api/ussd/respond answers 200 even when the modem replied ERROR (status
+//   -1, response "…ERROR…", telephony.rs:430-441); that is now a failure.
+// - USSD `status` is a number (0 done, 1 waiting for a reply, 2 ended by the
+//   network, -1 no USSD reply); the page typed it as a string and printed
+//   it raw. Shown as words now.
+// - STK `reason`, `diagnostics` and `source` (sent, never shown) are shown.
+// - A sub-menu with no items used to leave the page unchanged; it opens and
+//   says it is empty, with Back.
+// - The agent silently drops everything but digits and * # +; input with
+//   other characters is refused with a message instead.
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, Send, MessageSquare, LayoutList, XCircle, RotateCcw } from "lucide-react";
+import { ArrowClockwise, ArrowCounterClockwise, CaretLeft, ChatText, ListBullets, PaperPlaneRight, X } from "@phosphor-icons/react";
 import { apiFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/types";
-import { PageHeader, SectionCard, ErrorBanner } from "@/components/admin/StatCard";
-import { Button, Input } from "@/components/admin/Button";
+import { useWriteOp, type WriteStep } from "@/lib/api/writeOp";
+import type { StkItem, StkMenu, StkSelectResult, UssdResponse } from "@/lib/api/schemas/telephony";
+import { Button, ConfirmInline, ConsoleBand, Group, OpResult, Row, StatusMark, useConfirmInline, type Tone } from "@/components/nd";
+import { NdTabs } from "@/components/nd";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+type TabId = "ussd" | "stk";
+type T = (k: string, d: string, o?: Record<string, unknown>) => string;
+const AT_TIMEOUT = 30000;
+const USSD_CHARS = /^[0-9*#+]+$/;
 
-interface USSDResponse {
-  response: string;
-  status: string;
-  session_active: boolean;
+interface Pending {
+  key: string;
+  action: string;
+  consequence: ReactNode;
+  step: WriteStep;
 }
 
-interface STKMenuItem {
-  id: string | number;
-  label: string;
+/** One op per panel; the pending request is captured when start() runs. */
+function usePendingOp() {
+  const [pending, setPending] = useState<Pending | null>(null);
+  const inline = useConfirmInline(pending !== null);
+  const op = useWriteOp({ tier: 2, steps: pending ? [pending.step] : [] });
+  function go() {
+    if (!pending) return;
+    op.start();
+    op.confirm();
+    setPending(null);
+  }
+  const trig = (key: string) => (pending?.key === key ? inline.triggerProps : {});
+  const confirm = (
+    <ConfirmInline
+      id={inline.id}
+      open={pending !== null}
+      actionLabel={pending?.action ?? ""}
+      consequence={pending?.consequence}
+      onCancel={() => setPending(null)}
+      onConfirm={go}
+    />
+  );
+  // "Accepted" adds nothing next to the reply itself; show every other phase.
+  const result = op.phase !== "idle" && op.phase !== "accepted" ? <OpResult op={op} /> : null;
+  return { op, pending, ask: (p: Pending) => !op.busy && setPending(p), cancel: () => setPending(null), trig, confirm, result };
 }
 
-interface STKMenu {
-  title: string;
-  items: STKMenuItem[];
+function ussdStatus(t: T, s: number): { tone: Tone; text: string } {
+  switch (s) {
+    case 0:
+      return { tone: "ok", text: t("stk.ussdDone", "Done") };
+    case 1:
+      return { tone: "ok", text: t("stk.ussdWaiting", "Waiting for your reply") };
+    case 2:
+      return { tone: "neutral", text: t("stk.ussdEnded", "Ended by the network") };
+    case -1:
+      return { tone: "warn", text: t("stk.ussdNoReply", "No USSD reply from the network") };
+    default:
+      return { tone: "neutral", text: t("stk.ussdStatusN", "Status {{s}}", { s }) };
+  }
 }
 
-type Tab = "ussd" | "stk";
+// ─── USSD ──────────────────────────────────────────────────────────────────
 
-// ─── USSD Section ─────────────────────────────────────────────────────────────
-
-function USSDSection() {
+function USSDPanel() {
   const { t } = useTranslation();
+  const codeId = useId();
+  const replyId = useId();
   const [code, setCode] = useState("");
   const [reply, setReply] = useState("");
-  const [response, setResponse] = useState<USSDResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [response, setResponse] = useState<UssdResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const p = usePendingOp();
+  const busy = p.op.busy;
 
-  async function sendUSSD() {
-    const trimmed = code.trim();
-    if (!trimmed) { setErr(t("stk.errEnterCode", "Enter a USSD code.")); return; }
-    setLoading(true);
+  function askSend() {
+    const c = code.trim();
+    if (!c) return setErr(t("stk.errEnterCode", "Enter a USSD code."));
+    if (!USSD_CHARS.test(c)) return setErr(t("stk.errUssdChars", "Only digits and * # + can be sent."));
     setErr(null);
-    try {
-      const data = await apiFetch<USSDResponse>("/api/ussd/send", {
-        method: "POST",
-        body: { code: trimmed },
-      });
-      setResponse(data);
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function respondUSSD() {
-    const trimmed = reply.trim();
-    if (!trimmed) return;
-    setLoading(true);
-    setErr(null);
-    try {
-      const data = await apiFetch<USSDResponse>("/api/ussd/respond", {
-        method: "POST",
-        body: { reply: trimmed },
-      });
-      setResponse(data);
-      setReply("");
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function cancelUSSD() {
-    setLoading(true);
-    setErr(null);
-    try {
-      await apiFetch("/api/ussd/cancel", { method: "POST", body: {} });
-      setResponse(null);
-      setReply("");
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <SectionCard title="USSD" className="max-w-lg">
-      {err && <div className="mb-3"><ErrorBanner message={err} /></div>}
-
-      <div className="space-y-3">
-        <div className="flex gap-2">
-          <Input
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder="*#100#"
-            className="font-mono"
-            onKeyDown={(e) => { if (e.key === "Enter") sendUSSD(); }}
-          />
-          <Button onClick={sendUSSD} loading={loading} disabled={!code.trim()}>
-            <Send size={14} /> {t("stk.send", "Send")}
-          </Button>
-        </div>
-
-        {response && (
-          <div className="rounded-lg border border-border bg-bg-elevated p-4 space-y-2">
-            <pre className="whitespace-pre-wrap text-sm font-mono">{response.response}</pre>
-            <div className="flex items-center gap-2 text-xs text-text-dim">
-              <span>{t("stk.status", "Status")}: <span className="font-mono">{response.status}</span></span>
-              {response.session_active && (
-                <span className="rounded-full bg-success/20 px-2 py-0.5 text-success text-xs">
-                  {t("stk.sessionActive", "Session active")}
-                </span>
-              )}
-            </div>
-          </div>
-        )}
-
-        {response?.session_active && (
-          <div className="flex gap-2">
-            <Input
-              value={reply}
-              onChange={(e) => setReply(e.target.value)}
-              placeholder={t("stk.enterReply", "Enter reply…")}
-              className="font-mono"
-              onKeyDown={(e) => { if (e.key === "Enter") respondUSSD(); }}
-            />
-            <Button onClick={respondUSSD} loading={loading} disabled={!reply.trim()}>
-              {t("stk.reply", "Reply")}
-            </Button>
-            <Button variant="danger" size="md" onClick={cancelUSSD} disabled={loading}>
-              <XCircle size={14} />
-            </Button>
-          </div>
-        )}
-
-        {response && !response.session_active && (
-          <Button variant="outline" size="sm" onClick={() => { setResponse(null); setCode(""); }}>
-            <RotateCcw size={13} /> {t("stk.newQuery", "New Query")}
-          </Button>
-        )}
-      </div>
-    </SectionCard>
-  );
-}
-
-// ─── STK Section ──────────────────────────────────────────────────────────────
-
-function STKSection() {
-  const { t } = useTranslation();
-  const [menu, setMenu] = useState<STKMenu | null>(null);
-  const [menuStack, setMenuStack] = useState<STKMenu[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<{ text: string; isErr: boolean } | null>(null);
-  const [notSupported, setNotSupported] = useState(false);
-
-  async function loadMenu() {
-    setLoading(true);
-    setMessage(null);
-    setNotSupported(false);
-    try {
-      const data = await apiFetch<Record<string, unknown>>("/api/stk/menu");
-      if (data["supported"] === false) {
-        setNotSupported(true);
-      } else {
-        const parsed = parseSTKMenu(data);
-        setMenu(parsed);
-        setMenuStack([]);
-      }
-    } catch (e) {
-      setMessage({ text: e instanceof ApiError ? e.message : String(e), isErr: true });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function selectItem(item: STKMenuItem) {
-    setLoading(true);
-    setMessage(null);
-    try {
-      const data = await apiFetch<Record<string, unknown>>("/api/stk/select", {
-        method: "POST",
-        body: { item_id: item.id },
-      });
-      if (data["supported"] === false) {
-        setNotSupported(true);
-      } else {
-        const responseType = (data["type"] as string) ?? "";
-        if (responseType === "menu") {
-          const subMenu = parseSTKMenu(data);
-          if (subMenu.items.length > 0 && menu) {
-            setMenuStack((s) => [...s, menu]);
-            setMenu(subMenu);
-          }
-        } else {
-          const rawData = (data["data"] as string) ?? t("stk.noResponse", "No response");
-          setMessage({ text: rawData, isErr: false });
-        }
-      }
-    } catch (e) {
-      setMessage({ text: e instanceof ApiError ? e.message : String(e), isErr: true });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function goBack() {
-    setMenuStack((stack) => {
-      const prev = [...stack];
-      const parent = prev.pop();
-      if (parent) setMenu(parent);
-      return prev;
+    p.ask({
+      key: "send",
+      action: t("stk.sendAction", "send {{code}}", { code: c }),
+      consequence: t("stk.sendC", "The device sends {{code}} to your carrier. Some codes subscribe to or cancel services, and the carrier may charge for them.", { code: c }),
+      step: {
+        label: t("stk.send", "Send"),
+        run: async () => {
+          const d = await apiFetch<UssdResponse>("/api/ussd/send", { method: "POST", body: { code: c }, timeoutMs: AT_TIMEOUT });
+          setResponse(d);
+          return d;
+        },
+      },
     });
   }
 
-  function parseSTKMenu(data: Record<string, unknown>): STKMenu {
-    const title = (data["title"] as string) ?? t("stk.menu", "Menu");
-    const rawItems = (data["items"] as Array<Record<string, unknown>>) ?? [];
-    const items: STKMenuItem[] = rawItems.map((item) => ({
-      id: (item["id"] as string | number) ?? 0,
-      label: (item["label"] as string) ?? String(item["id"]),
-    }));
-    return { title, items };
+  function askRespond() {
+    const r = reply.trim();
+    if (!r) return;
+    if (!USSD_CHARS.test(r)) return setErr(t("stk.errUssdChars", "Only digits and * # + can be sent."));
+    setErr(null);
+    p.ask({
+      key: "respond",
+      action: t("stk.replyAction", "reply {{r}}", { r }),
+      consequence: t("stk.replyC", "The device answers the carrier's menu with {{r}}. The carrier may charge for what it selects.", { r }),
+      step: {
+        label: t("stk.reply", "Reply"),
+        run: async () => {
+          const d = await apiFetch<UssdResponse>("/api/ussd/respond", { method: "POST", body: { reply: r }, timeoutMs: AT_TIMEOUT });
+          // The agent passes an ERROR from the modem through as a reply.
+          if (d.status === -1 && /ERROR/i.test(d.response)) {
+            throw new ApiError(t("stk.respondError", "the modem answered ERROR; the session has probably ended"), 502);
+          }
+          setResponse(d);
+          setReply("");
+          return d;
+        },
+      },
+    });
   }
 
-  const breadcrumbs = [...menuStack.map((m) => m.title), menu?.title].filter(Boolean);
+  function askCancel() {
+    p.ask({
+      key: "cancel",
+      action: t("stk.endSession", "End USSD session"),
+      consequence: t("stk.cancelC", "The device ends this USSD session. To continue later, send the code again."),
+      step: {
+        label: t("stk.endSession", "End USSD session"),
+        run: async () => {
+          const d = await apiFetch("/api/ussd/cancel", { method: "POST", body: {} });
+          setResponse(null);
+          setReply("");
+          return d;
+        },
+      },
+    });
+  }
+
+  const st = response ? ussdStatus(t, response.status) : null;
 
   return (
-    <SectionCard title={t("stk.stkTitle", "SIM Toolkit (STK)")}>
-      {!menu && !notSupported && (
-        <div className="py-4 text-center space-y-3">
-          <p className="text-sm text-text-dim">{t("stk.loadHint", "Load the SIM Toolkit menu to navigate carrier services.")}</p>
-          <Button onClick={loadMenu} loading={loading}>
-            <LayoutList size={14} /> {t("stk.loadMenu", "Load STK Menu")}
-          </Button>
-        </div>
-      )}
-
-      {notSupported && (
-        <div className="py-4 text-center text-sm text-text-dim">{t("stk.notSupported", "STK is not supported by this SIM.")}</div>
-      )}
-
-      {message && (
-        <div className="mb-3">
-          {message.isErr ? (
-            <ErrorBanner message={message.text} />
-          ) : (
-            <div className="rounded-lg border border-border bg-bg-elevated p-4">
-              <pre className="whitespace-pre-wrap text-sm font-mono">{message.text}</pre>
-            </div>
-          )}
-        </div>
-      )}
-
-      {menu && (
-        <div className="space-y-3">
-          {/* Breadcrumb */}
-          {breadcrumbs.length > 1 && (
-            <div className="flex items-center gap-1 text-xs text-text-dim overflow-x-auto">
-              {breadcrumbs.map((crumb, i) => (
-                <span key={i} className="flex items-center gap-1 shrink-0">
-                  {i > 0 && <span>/</span>}
-                  <span className={i === breadcrumbs.length - 1 ? "text-text font-medium" : ""}>{crumb}</span>
-                </span>
-              ))}
-            </div>
-          )}
-
-          <div className="flex items-center justify-between">
-            <h4 className="font-semibold">{menu.title}</h4>
-            <div className="flex items-center gap-2">
-              {menuStack.length > 0 && (
-                <Button variant="outline" size="sm" onClick={goBack} disabled={loading}>
-                  <ChevronLeft size={13} /> {t("stk.back", "Back")}
-                </Button>
-              )}
-              <Button variant="ghost" size="sm" onClick={loadMenu} disabled={loading}>
-                <RotateCcw size={13} />
+    <section aria-labelledby="ussd-title" className="grid max-w-[720px] gap-4">
+      <h2 id="ussd-title" className="sr-only">
+        USSD
+      </h2>
+      <Group>
+        <div className="nd-row flex-col items-stretch gap-2 py-3">
+          <label htmlFor={codeId} className="nd-row__label">
+            {t("stk.ussdCode", "USSD code")}
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <input
+              id={codeId}
+              className="nd-field nd-mono min-w-0 flex-1"
+              inputMode="tel"
+              autoComplete="off"
+              placeholder="*#100#"
+              value={code}
+              disabled={busy}
+              aria-invalid={err && !response?.session_active ? true : undefined}
+              onChange={(e) => {
+                setCode(e.target.value);
+                setErr(null);
+                if (p.pending?.key === "send") p.cancel();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") askSend();
+              }}
+            />
+            <span {...p.trig("send")}>
+              <Button onPress={askSend} isDisabled={busy || !code.trim()} pending={busy}>
+                <PaperPlaneRight size={20} weight="bold" aria-hidden />
+                {t("stk.send", "Send")}
               </Button>
-            </div>
+            </span>
           </div>
-
-          <div className="divide-y divide-border/50 rounded-lg border border-border">
-            {menu.items.length === 0 ? (
-              <div className="py-4 text-center text-sm text-text-dim">{t("stk.noItems", "No items.")}</div>
-            ) : (
-              menu.items.map((item) => (
-                <button
-                  key={String(item.id)}
-                  onClick={() => selectItem(item)}
-                  disabled={loading}
-                  className="flex w-full items-center justify-between px-4 py-3 text-left text-sm transition hover:bg-bg-elevated disabled:opacity-50 first:rounded-t-lg last:rounded-b-lg"
-                >
-                  <span>{item.label}</span>
-                  <span className="text-text-dim">›</span>
-                </button>
-              ))
-            )}
-          </div>
+          <span className="nd-aux">{t("stk.ussdHint", "Digits and * # + only. The reply from your carrier appears below.")}</span>
         </div>
+      </Group>
+
+      {err && (
+        <p role="alert" className="px-1 nd-error">
+          {err}
+        </p>
       )}
-    </SectionCard>
+      {p.confirm}
+      {p.result && <div className="px-1">{p.result}</div>}
+
+      <section aria-labelledby="ussd-reply-title" aria-live="polite">
+        <h3 id="ussd-reply-title" className="nd-group-title">
+          {t("stk.replyTitle", "Reply")}
+        </h3>
+        <Group>
+          {!response ? (
+            <div className="nd-row text-nd-t2">{t("stk.noResultYet", "No result yet. Send a code to see the carrier's reply.")}</div>
+          ) : (
+            <>
+              <div className="nd-row flex-col items-stretch gap-2 py-3">
+                <p className="nd-body whitespace-pre-wrap break-words">{response.response || "—"}</p>
+                <p className="nd-aux flex flex-wrap gap-x-3">
+                  {st && <StatusMark tone={st.tone}>{st.text}</StatusMark>}
+                  {response.session_active && <span>{t("stk.sessionActive", "Session active")}</span>}
+                </p>
+              </div>
+              {response.session_active ? (
+                <div className="nd-row flex-col items-stretch gap-2 py-3">
+                  <label htmlFor={replyId} className="nd-row__label">
+                    {t("stk.ussdReply", "USSD reply")}
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <input
+                      id={replyId}
+                      className="nd-field nd-mono min-w-0 flex-1"
+                      inputMode="tel"
+                      autoComplete="off"
+                      placeholder={t("stk.enterReply", "Enter reply…")}
+                      value={reply}
+                      disabled={busy}
+                      onChange={(e) => {
+                        setReply(e.target.value);
+                        setErr(null);
+                        if (p.pending?.key === "respond") p.cancel();
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") askRespond();
+                      }}
+                    />
+                    <span {...p.trig("respond")}>
+                      <Button onPress={askRespond} isDisabled={busy || !reply.trim()}>
+                        {t("stk.reply", "Reply")}
+                      </Button>
+                    </span>
+                    <span {...p.trig("cancel")}>
+                      <Button variant="secondary" onPress={askCancel} isDisabled={busy} aria-label={t("stk.endSession", "End USSD session")}>
+                        <X size={20} weight="bold" aria-hidden />
+                        {t("stk.endShort", "End")}
+                      </Button>
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="nd-row">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    isDisabled={busy}
+                    onPress={() => {
+                      setResponse(null);
+                      setCode("");
+                      p.op.reset();
+                    }}
+                  >
+                    <ArrowCounterClockwise size={18} weight="bold" aria-hidden />
+                    {t("stk.newQuery", "New Query")}
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+        </Group>
+      </section>
+    </section>
   );
 }
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
+// ─── STK ───────────────────────────────────────────────────────────────────
+
+interface Menu {
+  title: string;
+  items: StkItem[];
+}
+
+/** "+CUSATE: 0\"text\"OK" → "text"; null when there is no quoted text. */
+function quoted(s: string): string | null {
+  const m = s.match(/"([^"]+)"/);
+  return m ? m[1] : null;
+}
+
+function STKPanel() {
+  const { t } = useTranslation();
+  const [menu, setMenu] = useState<Menu | null>(null);
+  const [stack, setStack] = useState<Menu[]>([]);
+  const [info, setInfo] = useState<StkMenu | null>(null);
+  const [notSupported, setNotSupported] = useState<string | null>(null);
+  const [display, setDisplay] = useState<string | null>(null);
+  const p = usePendingOp();
+  const busy = p.op.busy;
+  // Read inside run(): the menu at the moment the item was chosen.
+  const menuRef = useRef<Menu | null>(null);
+  useEffect(() => {
+    menuRef.current = menu;
+  }, [menu]);
+
+  function askLoad(key: "load" | "reload") {
+    p.ask({
+      key,
+      action: key === "load" ? t("stk.loadMenu", "Load STK Menu") : t("stk.reloadMenu", "Reload menu"),
+      consequence: t("stk.loadC", "The device asks the SIM card for its menu (AT+CUSATD, AT+STGI; up to about 20 s). This switches the modem's SIM Toolkit handling on; it does not order anything."),
+      step: {
+        label: t("stk.loadMenu", "Load STK Menu"),
+        run: async () => {
+          const d = await apiFetch<StkMenu>("/api/stk/menu", { timeoutMs: AT_TIMEOUT });
+          setInfo(d);
+          setDisplay(null);
+          if (d.supported === false) {
+            setNotSupported(d.reason ?? "");
+            setMenu(null);
+          } else {
+            setNotSupported(null);
+            setMenu({ title: d.title || t("stk.menu", "Menu"), items: d.items ?? [] });
+          }
+          setStack([]);
+          return d;
+        },
+      },
+    });
+  }
+
+  function askSelect(item: StkItem) {
+    p.ask({
+      key: `item-${item.id}`,
+      action: t("stk.selectAction", "open {{label}}", { label: item.label }),
+      consequence: t("stk.selectC", "The device selects “{{label}}” on the SIM card. Some entries send an SMS or subscribe to a service, and the carrier may charge for it.", {
+        label: item.label,
+      }),
+      step: {
+        label: item.label,
+        run: async () => {
+          const d = await apiFetch<StkSelectResult>("/api/stk/select", { method: "POST", body: { item_id: Number(item.id) }, timeoutMs: AT_TIMEOUT });
+          if ("supported" in d && d.supported === false) {
+            setNotSupported(d.reason ?? "");
+            setMenu(null);
+            setStack([]);
+          } else if ("type" in d && d.type === "menu") {
+            const parent = menuRef.current;
+            if (parent) setStack((s) => [...s, parent]);
+            setMenu({ title: d.title || t("stk.menu", "Menu"), items: d.items ?? [] });
+            setDisplay(null);
+          } else if ("type" in d && d.type === "display") {
+            setDisplay(d.data || "");
+          }
+          return d;
+        },
+      },
+    });
+  }
+
+  function goBack() {
+    const prev = [...stack];
+    const parent = prev.pop();
+    if (parent) setMenu(parent);
+    setStack(prev);
+    setDisplay(null);
+    p.cancel();
+  }
+
+  const crumbs = [...stack.map((m) => m.title), menu?.title].filter(Boolean) as string[];
+  const shown = display !== null ? quoted(display) : null;
+
+  const diag = info && (info.reason || info.source || (info.diagnostics?.length ?? 0) > 0) && (
+    <ConsoleBand label={t("stk.diagnostics", "STK diagnostics")}>
+      <pre className="max-h-[260px] overflow-auto whitespace-pre-wrap break-words">
+        {[
+          info.source ? `source: ${info.source}` : null,
+          info.reason ? `reason: ${info.reason}` : null,
+          ...(info.diagnostics ?? []),
+        ]
+          .filter(Boolean)
+          .join("\n")}
+      </pre>
+    </ConsoleBand>
+  );
+
+  return (
+    <section aria-labelledby="stk-title" className="grid max-w-[720px] gap-4">
+      <h2 id="stk-title" className="sr-only">
+        {t("stk.stkTitle", "SIM Toolkit (STK)")}
+      </h2>
+
+      {!menu && notSupported === null && (
+        <Group>
+          <div className="nd-row flex-col items-stretch gap-3 py-4">
+            <p className="nd-body text-nd-t2">{t("stk.loadHint", "Load the SIM Toolkit menu to navigate carrier services.")}</p>
+            <div>
+              <span {...p.trig("load")}>
+                <Button onPress={() => askLoad("load")} isDisabled={busy} pending={busy}>
+                  <ListBullets size={20} weight="bold" aria-hidden />
+                  {t("stk.loadMenu", "Load STK Menu")}
+                </Button>
+              </span>
+            </div>
+          </div>
+        </Group>
+      )}
+
+      {notSupported !== null && (
+        <Group>
+          <div className="nd-row flex-wrap gap-3">
+            <span className="flex-1">
+              <StatusMark tone="neutral">{t("stk.notSupported", "STK is not supported by this SIM.")}</StatusMark>
+            </span>
+            <span {...p.trig("load")}>
+              <Button variant="secondary" size="sm" onPress={() => askLoad("load")} isDisabled={busy}>
+                {t("stk.tryAgain", "Try again")}
+              </Button>
+            </span>
+          </div>
+        </Group>
+      )}
+
+      {menu && (
+        <div className="grid gap-2">
+          {crumbs.length > 1 && (
+            <nav aria-label={t("stk.breadcrumb", "Menu path")} className="nd-aux flex flex-wrap items-center gap-1 px-1">
+              {crumbs.map((c, i) => (
+                <span key={i} className="flex items-center gap-1">
+                  {i > 0 && <span aria-hidden>/</span>}
+                  <span className={i === crumbs.length - 1 ? "font-semibold text-nd-t1" : ""} aria-current={i === crumbs.length - 1 ? "page" : undefined}>
+                    {c}
+                  </span>
+                </span>
+              ))}
+            </nav>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="nd-body flex-1 font-semibold">{menu.title}</h3>
+            {stack.length > 0 && (
+              <Button variant="secondary" size="sm" onPress={goBack} isDisabled={busy}>
+                <CaretLeft size={18} weight="bold" aria-hidden />
+                {t("stk.back", "Back")}
+              </Button>
+            )}
+            <span {...p.trig("reload")}>
+              <Button variant="ghost" iconOnly onPress={() => askLoad("reload")} isDisabled={busy} aria-label={t("stk.reloadMenu", "Reload menu")}>
+                <ArrowClockwise size={20} weight="bold" aria-hidden />
+              </Button>
+            </span>
+          </div>
+          <Group>
+            {menu.items.length === 0 ? (
+              <div className="nd-row text-nd-t2">
+                {t("stk.noItems", "No items.")}
+                {info?.reason && stack.length === 0 ? ` ${t("stk.noItemsReason", "The SIM has no menu waiting; try Reload in a moment.")}` : ""}
+              </div>
+            ) : (
+              menu.items.map((item) => (
+                <Row key={String(item.id)} label={item.label} onPress={busy ? undefined : () => askSelect(item)} />
+              ))
+            )}
+          </Group>
+        </div>
+      )}
+
+      {p.confirm}
+      {p.result && <div className="px-1">{p.result}</div>}
+
+      {display !== null && (
+        <section aria-labelledby="stk-display-title" aria-live="polite" className="grid gap-2">
+          <h3 id="stk-display-title" className="nd-group-title">
+            {t("stk.simReply", "SIM reply")}
+          </h3>
+          <Group>
+            <div className="nd-row">
+              <p className="nd-body whitespace-pre-wrap break-words">{shown ?? (display ? display : t("stk.noResponse", "No response"))}</p>
+            </div>
+          </Group>
+          {shown !== null && (
+            <ConsoleBand label={t("stk.rawReply", "Raw modem reply")}>
+              <pre className="whitespace-pre-wrap break-words">{display}</pre>
+            </ConsoleBand>
+          )}
+        </section>
+      )}
+
+      {diag}
+    </section>
+  );
+}
+
+// ─── page ──────────────────────────────────────────────────────────────────
 
 export default function STKPage() {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<Tab>("ussd");
-
+  const [tab, setTab] = useState<TabId>("ussd");
   return (
     <>
-      <PageHeader
-        title={t("stk.title", "USSD & SIM Toolkit")}
-        description={t("stk.desc", "Send USSD codes and navigate your SIM's STK menu.")}
+      <h1 className="nd-title mb-4 mt-2">{t("stk.title", "USSD & SIM Toolkit")}</h1>
+      <p className="nd-body mb-4 max-w-[720px] text-nd-t2">{t("stk.desc", "Send USSD codes and navigate your SIM's STK menu.")}</p>
+      <NdTabs<TabId>
+        label={t("stk.tabsLabel", "USSD or STK")}
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          {
+            id: "ussd",
+            label: (
+              <>
+                <ChatText size={18} weight={tab === "ussd" ? "fill" : "bold"} aria-hidden /> USSD
+              </>
+            ),
+            content: <USSDPanel />,
+          },
+          {
+            id: "stk",
+            label: (
+              <>
+                <ListBullets size={18} weight={tab === "stk" ? "fill" : "bold"} aria-hidden /> {t("stk.stkMenuTab", "STK Menu")}
+              </>
+            ),
+            content: <STKPanel />,
+          },
+        ]}
       />
-
-      <div className="mb-5 flex gap-1 rounded-lg border border-border bg-bg-card p-1 w-fit">
-        <button
-          onClick={() => setTab("ussd")}
-          className={`flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium transition ${
-            tab === "ussd" ? "bg-accent text-white" : "text-text-dim hover:text-text"
-          }`}
-        >
-          <MessageSquare size={14} /> USSD
-        </button>
-        <button
-          onClick={() => setTab("stk")}
-          className={`flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium transition ${
-            tab === "stk" ? "bg-accent text-white" : "text-text-dim hover:text-text"
-          }`}
-        >
-          <LayoutList size={14} /> {t("stk.stkMenuTab", "STK Menu")}
-        </button>
-      </div>
-
-      {tab === "ussd" && <USSDSection />}
-      {tab === "stk" && <STKSection />}
     </>
   );
 }

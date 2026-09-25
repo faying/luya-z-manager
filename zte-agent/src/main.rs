@@ -12,7 +12,10 @@ mod handlers;
 mod health;
 mod homemode;
 mod lan_test;
+mod manual_first;
 mod modem_ext;
+mod netinfo;
+mod netwatch;
 mod network_ext;
 mod public;
 mod qos;
@@ -109,6 +112,18 @@ fn main() {
         // exists to provide. Runs on the engine's own thread, so a repair that
         // takes half a minute does not hold up the admin UI.
         state.scenario.start(Arc::clone(&state));
+
+        // A manual register the agent was guarding when it last stopped.
+        netinfo::resume_guard(&state);
+    }
+
+    // Cellular watcher + CHILL manual-first (docs/designs/slow-diagnosis.md
+    // §5). Manual-first switches 🚀 in mihomo, so a sidecar only runs it when
+    // asked (`ZTE_AGENT_MANUAL_FIRST=1`) and the live instance doesn't.
+    let sidecar_manual_first = std::env::var("ZTE_AGENT_MANUAL_FIRST").is_ok_and(|v| v != "0");
+    if !sidecar || sidecar_manual_first {
+        netwatch::start();
+        manual_first::start();
     }
 
     // Read-only device check (doctor.sh) on a timer, for the health page and

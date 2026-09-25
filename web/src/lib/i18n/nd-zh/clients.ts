@@ -1,0 +1,25 @@
+// New keys for /clients (new design). Merged into zh.ts by the coordinator.
+export const zh = {
+  clients: {
+    loading: "正在读取设备列表…",
+    loadFailed: "读取失败",
+    emptyNow: "现在没有设备连着",
+    noLeaseTable: "设备没有返回 DHCP 租约表。",
+    listWhat: "列表",
+    retryHint: "检查网络后，点上面的「重试」。",
+    wifiOn: "Wi-Fi 开着吗？",
+    noActive: "没有有效租约",
+    noActiveNext: "只剩已过期的租约，可以在下面显示出来。",
+    leaseLeft: "租约剩余",
+    leaseHM: "{{h}} 小时 {{m}} 分",
+    leaseM: "{{m}} 分",
+    link: "{{n}} Mbps",
+    onWifi: "连着 Wi-Fi",
+    notOnWifi: "没连 Wi-Fi（网线、USB，或已经离开）",
+    channel: "信道 {{c}}",
+    sigGreat: "信号很好",
+    sigGood: "信号好",
+    sigFair: "信号一般",
+    sigWeak: "信号弱",
+  },
+} as const;

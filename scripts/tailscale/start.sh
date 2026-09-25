@@ -17,6 +17,9 @@
 #   TS_TAILSCALED_FLAGS=...    extra tailscaled flags, e.g. --no-logs-no-support
 #   TS_TAILSCALED_ENV=...      extra environment for tailscaled, e.g.
 #                              TS_DISABLE_PORTMAPPER=1
+#   TS_TAILSCALED_BIN=...      another tailscaled build to run (keep the file
+#                              name "tailscaled": pidof finds it by name), e.g.
+#                              /data/tailscale/nofight/tailscaled
 # SPDX-License-Identifier: MIT
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -33,6 +36,7 @@ TS_HOSTNAME=u60pro
 TS_ROUTES=
 TS_TAILSCALED_FLAGS=
 TS_TAILSCALED_ENV=
+TS_TAILSCALED_BIN=
 [ -f "$D/tuning.env" ] && . "$D/tuning.env"
 
 # The LAN subnet, e.g. 192.168.0.1/24 on br-lan → 192.168.0.0/24
@@ -44,7 +48,7 @@ fi
 # Append (>>), never truncate-on-open: u60-guard caps the file by copying it
 # to .old and truncating, which is only safe for an O_APPEND writer.
 # shellcheck disable=SC2086 # the extra flags/env are deliberately word-split
-env $TS_TAILSCALED_ENV nohup "$D/tailscaled" --state="$D/state/tailscaled.state" --statedir="$D/state" \
+env $TS_TAILSCALED_ENV nohup "${TS_TAILSCALED_BIN:-$D/tailscaled}" --state="$D/state/tailscaled.state" --statedir="$D/state" \
     --socket="$SOCK" --port=41641 --tun=tailscale0 $TS_TAILSCALED_FLAGS >>"$LOG" 2>&1 &
 sleep 4   # let tailscaled open its socket before "up"
 

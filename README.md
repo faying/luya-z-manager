@@ -79,17 +79,12 @@ Note: ZTE's firmware keeps the system clock on *local* wall time with the time z
 The agent reports the gap as `clock.utc_offset` in `/api/public/status`; the web UI shows device
 times as device-local time (`web/src/lib/deviceClock.ts`).
 
-### `mobile/` — native companion apps
-
-SwiftUI (iOS 16+) and Jetpack Compose (Android 8+) apps that talk to `zte-agent` directly over
-WiFi. See [mobile/README.md](mobile/README.md).
-
 ## Why Use This Instead of the Official ZTE App?
 
 The stock firmware runs ~44 proprietary daemons (TR-069 remote management, MQTT telemetry, Samba,
 NFC, diagnostics — several phoning home to ZTE servers) for ~225 MB RAM. `zte-agent` replaces the
-management surface with one binary using well under 1 MB RSS, and ships an open-source,
-non-Chinese-only mobile app.
+management surface with one binary using well under 1 MB RSS, and ships an open-source web admin
+(English and Chinese).
 
 ## Quick Start
 
@@ -148,17 +143,16 @@ hand (dry run by default). Both download mihomo and zashboard at pinned sha256 s
 
 See [DEPLOY.md](DEPLOY.md) for what each target does and manual fallback commands.
 
-### Connect the mobile app
+### Open the web admin
 
-Connect to the router's WiFi, open the app, set the agent URL to `http://192.168.0.1:9090` and
-enter the agent password from setup.
+Connect to the router's WiFi, open `http://192.168.0.1:9090` in a browser and enter the agent
+password from setup.
 
 ## Project Structure
 
 ```
 zte-agent/        On-device REST API server (Rust)
 web/               Next.js admin UI, served by the agent
-mobile/            iOS (SwiftUI) + Android (Jetpack Compose) companion apps
 install.sh         Interactive all-in-one installer
 setup.sh           First-time agent + UI + SSH setup
 scripts/

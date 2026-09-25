@@ -14,8 +14,9 @@ Sources
 This repository starts from a cleaned snapshot of that work, not from its git
 history. Removed before publishing:
 - device_report.json, ubus_probe_report.json (runtime dumps of a real device)
-- mobile/ios/screenshots/, web/public/images/ (real-device screenshots and
-  vendor marketing photos)
+- web/public/images/ (vendor marketing photos)
+- mobile/ (upstream's iOS/Android companion apps: never used here and out of
+  date with this agent; they remain in the upstream repository)
 - scripts/topflow/, PROFILE_MANAGER_PLAN.md, web/_backup/, web/vercel.json
   (private infrastructure and internal notes)
 - .github/workflows/release.yml (binary releases are not published yet)

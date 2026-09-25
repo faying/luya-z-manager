@@ -1,369 +1,492 @@
 "use client";
-
+// Home: the readout wall (design doc §5). Reading order is the same on
+// every width — title → status → CHILL → readouts → detail → carriers →
+// scenario, Tailscale — and on ≥1024 it splits 60/40 with CHILL, scenario
+// and Tailscale in the right column. Polling stays within 2.10 req/s:
+//
+//   speed 1 s · signal 2 s · battery, wifi, public status, chill 10 s ·
+//   thermal, tailscale 15 s · system, data usage 30 s
 import Link from "next/link";
+import { useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { useApi } from "@/lib/hooks/useApi";
-import { PageHeader, SectionCard, Status, MetaRow } from "@/components/admin/StatCard";
-import { Help } from "@/components/admin/Help";
-import { cn } from "@/lib/utils";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { mutate as globalMutate } from "swr";
+import { Bell, ChatCircleText, type Icon } from "@phosphor-icons/react";
+import { useApi, type UseApiResponse } from "@/lib/hooks/useApi";
+import { apiFetch } from "@/lib/api/client";
+import { chillValid, tailscaleValid } from "@/lib/api/freshness";
+import { useWriteOp } from "@/lib/api/writeOp";
+import type { NetworkSignal, NetworkSpeed, DataUsage, NetInfo, NetInfoExit, NetInfoOperator } from "@/lib/api/schemas/network";
+import type { BatteryInfo, DeviceSystem } from "@/lib/api/schemas/device";
+import type { ChillExit, ChillStatus, TailscaleStatus } from "@/lib/api/schemas/services";
+import type { PublicStatus } from "@/lib/api/schemas/public";
+import { Group, Help, ModuleCard, Readout, ReadoutWall, Row, Segmented, StatusMark, useToast } from "@/components/nd";
+import { selectionWord, bytes, carrierCounts, carriers, cpuTempC, mbps, servingCellId, sigState, totalBandwidth, uptimeParts, type Carrier } from "@/lib/home";
+import { fmtDevice } from "@/lib/deviceClock";
+import { useMedia } from "@/lib/useMedia";
+import { carrierSummary, rsrpWord, sinrWord, type T } from "@/lib/signalWords";
+import { SignalStatus } from "@/components/signal/SignalStatus";
+import { CHILL_REASON_KEYS } from "@/lib/chill";
+import { useDeviceLabel } from "@/lib/publicStatus";
 
-interface NetworkSignal {
-  network_type?: string;
-  network_provider?: string;
-  network_provider_fullname?: string;
-  net_select_mode?: string;
-  nr5g_rsrp?: number;
-  nr5g_rsrq?: number;
-  nr5g_snr?: string;
-  nr5g_action_band?: string;
-  nr5g_action_channel?: number;
-  nr5g_cell_id?: number;
-  nr5g_pci?: number;
-  nr5g_bandwidth?: string;
-  lte_rsrp?: number;
-  lte_rsrq?: number;
-  lte_snr?: string;
-  signalbar?: string;
-}
-
-interface BatteryInfo {
-  battery_capacity?: number;
-  battery_online?: number;
-  battery_time_to_full?: number;
-}
-
-interface Speed {
-  rx_speed?: number; // bytes/sec
-  tx_speed?: number;
-}
-
-interface DeviceSystem {
-  uptime?: number;
-}
-
-interface WiFiStatus {
+interface WifiStatus {
+  wifi_onoff?: string;
+  clients_total?: number;
   ssid_2g?: string;
   ssid_5g?: string;
   actual_channel_2g?: string;
   actual_channel_5g?: string;
   actual_bw_2g?: string;
   actual_bw_5g?: string;
-  wifi_onoff?: string;
-  clients_total?: number;
+  encryption_2g?: string;
   encryption_5g?: string;
 }
 
-interface PublicStatus {
-  services: {
-    tailscale: { running: boolean; installed?: boolean; node: string };
-    chill: { state: string; reason?: string | null };
-    home_mode: { present: boolean; enabled: boolean; mode: string };
-  };
-  sms?: { unread?: number };
-}
-
-export default function DashboardPage() {
+export default function HomePage() {
   const { t } = useTranslation();
-  const { data: sys } = useApi<DeviceSystem>("/api/device/system", { refreshInterval: 5000 });
-  const { data: sig, error: sigErr } = useApi<NetworkSignal>("/api/network/signal", { refreshInterval: 2000 });
-  const { data: bat } = useApi<BatteryInfo>("/api/device/battery-info", { refreshInterval: 5000 });
-  const { data: spd } = useApi<Speed>("/api/network/speed", { refreshInterval: 1000 });
-  const { data: wifi } = useApi<WiFiStatus>("/api/wifi/status", { refreshInterval: 10000 });
-  const { data: pub } = useApi<PublicStatus>("/api/public/status", { refreshInterval: 10000 });
+  const spd = useApi<NetworkSpeed>("/api/network/speed", { refreshInterval: 1000 });
+  const sig = useApi<NetworkSignal>("/api/network/signal", { refreshInterval: 2000 });
+  const bat = useApi<BatteryInfo>("/api/device/battery-info", { refreshInterval: 10000 });
+  const wifi = useApi<WifiStatus>("/api/wifi/status", { refreshInterval: 10000 });
+  const pub = useApi<PublicStatus>("/api/public/status", { refreshInterval: 10000 });
+  const chill = useApi<ChillStatus>("/api/services/chill", { refreshInterval: 10000, isValid: chillValid });
+  const thermal = useApi<Record<string, unknown>>("/api/device/thermal", { refreshInterval: 15000 });
+  const ts = useApi<TailscaleStatus>("/api/services/tailscale", { refreshInterval: 15000, isValid: tailscaleValid });
+  const sys = useApi<DeviceSystem>("/api/device/system", { refreshInterval: 30000 });
+  const usage = useApi<DataUsage>("/api/data-usage", { refreshInterval: 30000 });
+  // lite: the agent does not keep reading the selection mode (an AT command) for this card.
+  const ni = useApi<NetInfo>("/api/netinfo?lite=1", { refreshInterval: 30000 });
 
-  const isNR =
-    (sig?.network_type || "").toUpperCase().includes("SA") || (sig?.nr5g_rsrp ?? 0) !== 0;
-  const rsrp = isNR ? sig?.nr5g_rsrp : sig?.lte_rsrp;
-  const rsrq = isNR ? sig?.nr5g_rsrq : sig?.lte_rsrq;
-  const sinr = isNR ? sig?.nr5g_snr : sig?.lte_snr;
+  const s = sig.data;
+  const cs = useMemo(() => carriers(s), [s]);
+  const bw = totalBandwidth(cs);
+  const cc = carrierCounts(cs);
+  const serving = cs[0];
+  const bars = s?.signalbar != null && s.signalbar !== "" ? Number(s.signalbar) : null;
+  const state = sigState({
+    everValid: sig.lastOkAt != null,
+    valid: !sig.stale,
+    bars,
+    sinr: serving?.sinr ?? null,
+  });
+  const allDown = sig.stale && spd.stale && pub.stale;
 
-  const batPct = bat?.battery_capacity;
-  const charging = bat?.battery_online === 1 && (bat?.battery_time_to_full ?? -1) >= 0;
-  const link = rsrpTone(rsrp);
-  const carrier = sig?.network_provider_fullname || sig?.network_provider;
-  const wifiOn = wifi?.wifi_onoff === "1";
-
-  return (
+  const retry = () => globalMutate(() => true);
+  // Each module is mounted once (it owns a write op and toasts); only its
+  // column changes with the width.
+  const wide = useMedia("(min-width: 1024px)");
+  const chillModule = <ChillModule chill={chill} />;
+  const side = (
     <>
-      <PageHeader title={t("dashboard.title", "Dashboard")} description={t("dashboard.desc", "Live status of your U60 Pro router.")} />
-
-      {/* ── Hero: leads with plain language; raw figures stay for the owner ── */}
-      <section className="admin-card p-5 sm:p-6">
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-4">
-            <SignalBars rsrp={rsrp} tone={link.tone} />
-            <div className="min-w-0">
-              <div className="flex items-center gap-3">
-                <Status tone={link.tone}>{t(link.labelKey, link.label)}</Status>
-                <Freshness healthy={!sigErr} hasData={!!sig} />
-              </div>
-              <h3 className="mt-1.5 font-display text-xl font-semibold leading-tight tracking-tight text-text">
-                {t(link.plainKey, link.plain)}
-              </h3>
-              <MetaRow
-                className="mt-1.5"
-                items={[
-                  rsrp ? <span className="tabular-nums">{rsrp} dBm</span> : null,
-                  carrier,
-                  sig?.network_type,
-                  sig?.nr5g_action_band && `Band ${sig.nr5g_action_band}`,
-                ]}
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-3 gap-5 border-t border-border/60 pt-4 sm:border-t-0 sm:pt-0 sm:text-right">
-            <Metric label="SINR" value={sinr || "—"} unit="dB" help={t("help.sinr", "Signal-to-noise — higher is cleaner. Above 13 dB is good.")} />
-            <Metric label="RSRQ" value={fmtNum(rsrq)} unit="dB" help={t("help.rsrq", "Signal quality. Closer to 0 is better; below −15 is poor.")} />
-            <Metric label="Bars" value={sig?.signalbar ?? "—"} unit="/5" help={t("help.bars", "The carrier's own 0–5 strength estimate.")} />
-          </div>
-        </div>
-      </section>
-
-      {/* ── Vitals: one flat strip, hairline-divided cells — no card-per-metric ── */}
-      <div className="admin-card mt-4 overflow-hidden">
-        <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-3 lg:grid-cols-6">
-          <Vital label={t("dashboard.download", "Download")} value={fmtBps(spd?.rx_speed)} icon={ArrowDown} accent />
-          <Vital label={t("dashboard.upload", "Upload")} value={fmtBps(spd?.tx_speed)} icon={ArrowUp} />
-          <Vital
-            label={t("dashboard.battery", "Battery")}
-            value={batPct != null ? `${batPct}%` : "—"}
-            hint={charging ? t("dashboard.charging", "Charging") : bat?.battery_online === 1 ? t("dashboard.pluggedIn", "Plugged in") : t("dashboard.onBattery", "On battery")}
-          />
-          <Vital label={t("dashboard.clients", "Clients")} value={wifi?.clients_total ?? "—"} hint={t("dashboard.connected", "Connected")} />
-          <Vital label="Wi-Fi" value={wifiOn ? t("common.on", "On") : t("common.off", "Off")} hint={wifiOn ? wifi?.encryption_5g : t("common.disabled", "Disabled")} />
-          <Vital label={t("dashboard.uptime", "Uptime")} value={fmtUptime(sys?.uptime)} hint={t("dashboard.sinceBoot", "Since boot")} />
-        </div>
-      </div>
-
-      {/* ── Services (mirrors the pre-login overview) ── */}
-      {pub?.services && (
-        <SectionCard title={t("dashboard.servicesTitle", "Services")} description={t("dashboard.servicesDesc", "Background features running on the router.")} className="mt-4">
-          <SvcRow label="Tailscale">
-            {pub.services.tailscale.running ? (
-              <Status tone="success"><span className="font-mono">{pub.services.tailscale.node || "up"}</span></Status>
-            ) : pub.services.tailscale.installed ? (
-              <Status tone="warning">{t("common.stopped", "Stopped")}</Status>
-            ) : (
-              <Status tone="neutral">{t("common.notInstalled", "Not installed")}</Status>
-            )}
-          </SvcRow>
-          <SvcRow label="CHILL">
-            {pub.services.chill.state === "running" ? (
-              <Status tone="success">{t("common.running", "Running")}</Status>
-            ) : pub.services.chill.state === "direct" ? (
-              <Status tone="warning">{t("chill.stDirect", "Direct")}</Status>
-            ) : (
-              <Status tone="neutral">{t("chill.stUnknown", "Not started")}</Status>
-            )}
-          </SvcRow>
-          <SvcRow label={t("nav.homeMode", "Home Mode")}>
-            {!pub.services.home_mode.present ? (
-              <Status tone="neutral">{t("common.notInstalled", "Not installed")}</Status>
-            ) : !pub.services.home_mode.enabled ? (
-              <Status tone="neutral">{t("dashboard.paused", "Paused")}</Status>
-            ) : pub.services.home_mode.mode === "home" ? (
-              <Status tone="warning">{t("dashboard.activeWifiOff", "Active · Wi-Fi off")}</Status>
-            ) : (
-              <Status tone="success">{t("dashboard.activeWifiOn", "Active · Wi-Fi on")}</Status>
-            )}
-          </SvcRow>
-          <SvcRow label={t("dashboard.messages", "Messages")}>
-            <Link href="/sms" className="underline-offset-2 hover:underline">
-              {(pub.sms?.unread ?? 0) > 0 ? (
-                <Status tone="warning">{t("dashboard.unread", "{{count}} unread", { count: pub.sms?.unread })}</Status>
-              ) : (
-                <Status tone="neutral">{t("common.none", "None")}</Status>
-              )}
-            </Link>
-          </SvcRow>
-        </SectionCard>
-      )}
-
-      {/* ── Detail — dual-layer: friendly framing + raw figures with inline help ── */}
-      <div className="mt-6 grid gap-4 lg:grid-cols-2">
-        <SectionCard title={t("dashboard.cellTitle", "Cell")} description={t("dashboard.cellDesc", "The mobile tower you're connected to.")}>
-          <DescList
-            items={[
-              ["Cell ID", sig?.nr5g_cell_id, t("help.cellId", "Unique ID of the tower sector serving you.")],
-              ["PCI", sig?.nr5g_pci, t("help.pci", "Physical Cell ID — tells nearby towers apart.")],
-              ["EARFCN", sig?.nr5g_action_channel, t("help.earfcn", "The radio channel number your device is tuned to.")],
-              ["Band", sig?.nr5g_action_band, t("help.band", "The frequency band currently in use.")],
-              ["Bandwidth", sig?.nr5g_bandwidth ? `${sig.nr5g_bandwidth} MHz` : undefined, t("help.bandwidth", "Channel width — wider generally means faster.")],
-              ["Net Select", sig?.net_select_mode, t("help.netSelect", "Whether the network is chosen automatically or manually.")],
-            ]}
-          />
-        </SectionCard>
-
-        <SectionCard title="Wi-Fi" description={t("dashboard.wifiDesc", "Your local wireless network.")}>
-          <DescList
-            items={[
-              [t("dashboard.descState", "State"), wifiOn ? t("common.on", "On") : t("common.off", "Off")],
-              ["2.4G SSID", wifi?.ssid_2g],
-              ["2.4G Channel", wifi?.actual_channel_2g],
-              ["5G SSID", wifi?.ssid_5g],
-              ["5G Channel", wifi?.actual_channel_5g],
-              ["5G Width", wifi?.actual_bw_5g, t("help.wifiWidth", "Wider channels (e.g. 80/160 MHz) are faster but shorter-range.")],
-              [t("dashboard.descClients", "Clients"), wifi?.clients_total],
-            ]}
-          />
-        </SectionCard>
-      </div>
+      <ScenarioModule pub={pub.data} stale={pub.stale} />
+      <TailscaleModule ts={ts} />
     </>
   );
-}
 
-function SignalBars({ rsrp, tone }: { rsrp?: number; tone: ToneKey }) {
-  const lvl =
-    rsrp == null || rsrp === 0
-      ? 0
-      : rsrp >= -85 ? 5 : rsrp >= -95 ? 4 : rsrp >= -105 ? 3 : rsrp >= -115 ? 2 : 1;
-  const fill = {
-    success: "bg-success",
-    warning: "bg-warning",
-    danger: "bg-error",
-    neutral: "bg-text-dim",
-    accent: "bg-accent",
-  }[tone];
   return (
-    <div className="flex h-12 items-end gap-1" aria-label={`Signal ${lvl} of 5`}>
-      {[1, 2, 3, 4, 5].map((i) => (
-        <span
-          key={i}
-          className={cn("w-2 rounded-[3px] transition-colors", i <= lvl ? fill : "bg-border")}
-          style={{ height: `${i * 16 + 16}%` }}
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:gap-6">
+      <div className="grid content-start gap-4 lg:col-span-2">
+        <HomeHeader pub={pub.data} />
+      </div>
+
+      {/* Left column (and the whole page on phones, in reading order). */}
+      <div className="grid content-start gap-4">
+        <SignalStatus
+          state={state}
+          allDown={allDown}
+          sig={s}
+          serving={serving}
+          counts={cc}
+          bars={bars}
+          lastOkAt={sig.lastOkAt}
+          speedStale={spd.stale}
+          onRetry={retry}
         />
-      ))}
-    </div>
-  );
-}
+        {!wide && chillModule}
+        <ReadoutWall label={t("home.readouts", "Readings")}>
+          <Readout
+            wide
+            hero
+            label={t("home.aggBw", "Aggregate bandwidth · MHz")}
+            value={state === "loading" ? undefined : bw}
+            unit="MHz"
+            sub={bw != null ? carrierSummary(t, cc) : t("home.noCarriers", "No active carriers")}
+            stale={sig.stale}
+          />
+          <Readout
+            label={<>RSRP <Help label="RSRP" text={t("help.rsrp", "Received signal power. Closer to 0 is stronger; above −100 dBm is good.")} /></>}
+            value={state === "loading" ? undefined : serving?.rsrp ?? null}
+            unit="dBm"
+            sub={serving?.rsrq != null ? `RSRQ ${serving.rsrq} · ${rsrpWord(t, serving.rsrp)}` : rsrpWord(t, serving?.rsrp ?? null)}
+            stale={sig.stale}
+          />
+          <Readout
+            label={<>SINR <Help label="SINR" text={t("help.sinr", "Signal-to-noise — higher is cleaner. Above 13 dB is good.")} /></>}
+            value={state === "loading" ? undefined : serving?.sinr ?? null}
+            unit="dB"
+            sub={sinrWord(t, serving?.sinr ?? null)}
+            stale={sig.stale}
+          />
+          <Readout label={t("home.down", "Download")} value={spd.data ? mbps(spd.data.rx_speed) : undefined} unit="Mbps" sub="↓" stale={spd.stale} />
+          <Readout label={t("home.up", "Upload")} value={spd.data ? mbps(spd.data.tx_speed) : undefined} unit="Mbps" sub="↑" stale={spd.stale} />
+          <Readout
+            label={t("home.temp", "Temperature")}
+            value={thermal.data ? cpuTempC(thermal.data) : thermal.error ? null : undefined}
+            unit="°C"
+            sub={tempWord(t, thermal.data ? cpuTempC(thermal.data) : null)}
+            stale={thermal.stale}
+          />
+          <Readout
+            label={t("home.battery", "Battery")}
+            value={bat.data ? bat.data.battery_capacity ?? null : bat.error ? null : undefined}
+            unit="%"
+            sub={batteryWord(t, bat.data)}
+            stale={bat.stale}
+          />
+        </ReadoutWall>
 
-/** Live/Reconnecting indicator — surfaces silent polling failure. */
-function Freshness({ healthy, hasData }: { healthy: boolean; hasData: boolean }) {
-  const { t } = useTranslation();
-  if (!hasData) return null;
-  return (
-    <span className="inline-flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.1em] text-text-dim">
-      <span
-        className={cn(
-          "inline-block h-1.5 w-1.5 rounded-full",
-          healthy ? "animate-pulse bg-success" : "bg-warning"
-        )}
-      />
-      {healthy ? t("dashboard.live", "Live") : t("dashboard.reconnecting", "Reconnecting")}
-    </span>
-  );
-}
+        <Group title={t("home.detail", "Detail")} stale={wifi.stale || usage.stale || sys.stale}>
+          <Row label={t("home.clients", "Connected devices")} value={wifi.data?.clients_total ?? "—"} href="/clients" />
+          <Row label={t("home.today", "Today")} value={usageText(usage.data?.day)} />
+          <Row label={t("home.month", "This month")} value={usageText(usage.data?.month)} />
+          <Row label={t("home.uptime", "Uptime")} value={uptimeText(t, sys.data?.uptime)} />
+        </Group>
 
-function Metric({ label, value, unit, help }: { label: string; value: string | number; unit?: string; help?: string }) {
-  return (
-    <div>
-      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-text-dim">
-        {label}
-        {help && <Help text={help} />}
-      </div>
-      <div className="mt-1 font-display text-lg font-semibold tabular-nums text-text">
-        {value}
-        {unit && <span className="ml-0.5 text-xs font-medium text-text-dim">{unit}</span>}
-      </div>
-    </div>
-  );
-}
+        <NetIdentityGroup ni={ni.data} stale={ni.stale} />
 
-function Vital({
-  label,
-  value,
-  unit,
-  hint,
-  icon: Icon,
-  accent,
-}: {
-  label: string;
-  value: string | number;
-  unit?: string;
-  hint?: string;
-  icon?: React.ComponentType<{ size?: number; className?: string }>;
-  accent?: boolean;
-}) {
-  return (
-    <div className="bg-bg-card px-4 py-3.5">
-      <div className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-[0.12em] text-text-dim">
-        {Icon && <Icon size={11} className={accent ? "text-accent" : undefined} />}
-        {label}
-      </div>
-      <div className="mt-1 flex items-baseline gap-1">
-        <span data-numeric className="font-display text-[19px] font-semibold leading-none tracking-tight text-text">
-          {value}
-        </span>
-        {unit && <span className="text-[12px] font-medium text-text-dim">{unit}</span>}
-      </div>
-      {hint && <div className="mt-1 truncate text-[11px] text-text-dim">{hint}</div>}
-    </div>
-  );
-}
+        <WifiGroup wifi={wifi.data} stale={wifi.stale} />
 
-function DescList({ items }: { items: Array<[string, string | number | null | undefined, string?]> }) {
-  return (
-    <dl className="divide-y divide-border/60">
-      {items.map(([k, v, help]) => (
-        <div key={k} className="flex items-center justify-between gap-3 py-2 text-[13px]">
-          <dt className="flex items-center text-text-dim">
-            {k}
-            {help && <Help text={help} />}
-          </dt>
-          <dd data-numeric className="text-right font-mono text-[12.5px] text-text">
-            {v == null || v === "" ? <span className="text-text-dim">—</span> : String(v)}
-          </dd>
+        <CarrierTable cs={cs} stale={sig.stale} netSelect={selectionWord(s?.net_select_mode, t)} cellId={servingCellId(s, cs[0])} />
+
+        {!wide && side}
+      </div>
+
+      {/* Right column, ≥1024 only. */}
+      {wide && (
+        <div className="grid content-start gap-4">
+          {chillModule}
+          {side}
         </div>
-      ))}
-    </dl>
-  );
-}
-
-function SvcRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b border-border/50 py-2 text-sm last:border-0">
-      <span className="text-text-dim">{label}</span>
-      <span className="text-right font-medium text-text">{children}</span>
+      )}
     </div>
   );
 }
 
-function fmtNum(n?: number, fallback = "—"): string | number {
-  if (n == null || n === 0) return fallback;
-  return n;
+// ── header ────────────────────────────────────────────────────────────
+
+function HomeHeader({ pub }: { pub: PublicStatus | undefined }) {
+  const { t } = useTranslation();
+  const sms = pub?.sms?.unread ?? 0;
+  const alerts = pub?.alerts?.unread ?? 0;
+  const sub = pub?.network?.operator || pub?.wifi?.ssid || "";
+  const deviceLabel = useDeviceLabel();
+  return (
+    <header className="flex items-start gap-3 pt-2">
+      <div className="min-w-0 flex-1">
+        <h1 className="nd-product">{deviceLabel}</h1>
+        {sub && <p className="nd-aux mt-0.5">{sub}</p>}
+      </div>
+      <CountButton href="/sms" icon={ChatCircleText} n={sms} label={sms > 0 ? t("home.smsUnread", "{{n}} unread SMS", { n: sms }) : t("home.sms", "SMS")} />
+      <CountButton href="/alerts" icon={Bell} n={alerts} label={alerts > 0 ? t("home.alertsUnread", "{{n}} new alerts", { n: alerts }) : t("home.alerts", "Alerts")} />
+    </header>
+  );
 }
 
-type ToneKey = "neutral" | "success" | "warning" | "danger" | "accent";
-
-function rsrpTone(rsrp?: number): { tone: ToneKey; labelKey: string; label: string; plainKey: string; plain: string } {
-  if (rsrp == null || rsrp === 0)
-    return { tone: "neutral", labelKey: "dashboard.linkNoLink", label: "No link", plainKey: "dashboard.plainNone", plain: "No signal — check the SIM or coverage" };
-  if (rsrp >= -85)
-    return { tone: "success", labelKey: "dashboard.linkExcellent", label: "Excellent", plainKey: "dashboard.plainExcellent", plain: "Strong, stable connection" };
-  if (rsrp >= -100)
-    return { tone: "success", labelKey: "dashboard.linkGood", label: "Good", plainKey: "dashboard.plainGood", plain: "Solid connection" };
-  if (rsrp >= -110)
-    return { tone: "warning", labelKey: "dashboard.linkFair", label: "Fair", plainKey: "dashboard.plainFair", plain: "Usable, but the signal is weak" };
-  return { tone: "danger", labelKey: "dashboard.linkPoor", label: "Poor", plainKey: "dashboard.plainPoor", plain: "Weak signal — try repositioning the router" };
+function CountButton({ href, icon: I, n, label }: { href: string; icon: Icon; n: number; label: string }) {
+  return (
+    <Link href={href} aria-label={label} title={label} className="relative inline-flex h-11 w-11 items-center justify-center rounded-full bg-nd-card shadow-[inset_0_0_0_1px_var(--nd-hair)] text-nd-t2 hover:text-nd-t1">
+      <I size={20} weight={n > 0 ? "fill" : "bold"} aria-hidden />
+      {n > 0 && (
+        <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-nd-primary px-1 text-[11px] font-semibold leading-none text-nd-onPrimary">
+          {n > 99 ? "99+" : n}
+        </span>
+      )}
+    </Link>
+  );
 }
 
-/** rx_speed/tx_speed are bytes/sec from zte-agent; convert to bits/sec. */
-function fmtBps(bytesPerSec?: number): string {
-  if (bytesPerSec == null || bytesPerSec < 0) return "0 b/s";
-  const bps = bytesPerSec * 8;
-  if (bps < 1000) return `${bps.toFixed(0)} b/s`;
-  if (bps < 1_000_000) return `${(bps / 1000).toFixed(1)} kb/s`;
-  if (bps < 1_000_000_000) return `${(bps / 1_000_000).toFixed(2)} Mb/s`;
-  return `${(bps / 1_000_000_000).toFixed(2)} Gb/s`;
+// ── CHILL ─────────────────────────────────────────────────────────────
+
+const EXIT_OPTIONS: ChillExit[] = ["proxy", "global", "direct_keep_ai"];
+
+function ChillModule({ chill }: { chill: UseApiResponse<ChillStatus> }) {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const c = chill.data;
+  const running = c?.state === "running";
+  const pending = useRef<ChillExit | null>(null);
+
+  const op = useWriteOp({
+    tier: 1,
+    steps: [
+      {
+        label: t("home.exit", "Exit"),
+        run: () => apiFetch("/api/services/chill/exit", { method: "PUT", body: { state: pending.current } }),
+      },
+    ],
+    verify: async () => {
+      const st = await apiFetch<ChillStatus>("/api/services/chill");
+      await chill.mutate(st, { revalidate: false });
+      return st.exit === pending.current;
+    },
+  });
+
+  // One result bar per finished attempt (tier 1: no confirm, but always a result).
+  const { phase, error } = op;
+  useEffect(() => {
+    if (phase === "applied") toast.show("ok", t("home.exitApplied", "Exit is now {{x}}", { x: exitLabel(t, pending.current) }));
+    if (phase === "failed") toast.show("bad", t("home.exitFailed", "Exit not changed: {{e}} · try again", { e: error ?? "" }));
+    if (phase === "unknown") toast.show("bad", t("home.exitUnknown", "Connection dropped; not yet confirmed whether the exit changed"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  const title =
+    c?.state === "running" ? (
+      <StatusMark tone="ok">CHILL · {t("nd.running", "Running")}</StatusMark>
+    ) : c?.state === "direct" ? (
+      <StatusMark tone="warn">CHILL · {t("nd.direct", "Direct")}</StatusMark>
+    ) : c?.state === "unknown" ? (
+      <StatusMark tone="neutral">CHILL · {t("home.chillNotStarted", "Not started")}</StatusMark>
+    ) : (
+      "CHILL"
+    );
+
+  const node = c?.region?.active;
+  const current = c?.exit && EXIT_OPTIONS.includes(c.exit) ? c.exit : null;
+
+  return (
+    <ModuleCard className="nd-module--lilac" headerHref="/services/chill" title={title} stale={chill.stale}>
+      {!c && !chill.error && <span className="nd-skel" style={{ width: "12ch" }} />}
+      {chill.error && !c && <p className="nd-body text-nd-t2">{t("home.chillUnreadable", "Can't read CHILL status")}</p>}
+      {chill.invalidReason && <p className="nd-aux">{t("home.chillCoreDown", "The proxy core is not answering")}</p>}
+      {c?.state === "direct" && c.reason && <p className="nd-body text-nd-t2">{CHILL_REASON_KEYS[c.reason] ? t(CHILL_REASON_KEYS[c.reason]) : c.reason}</p>}
+      {c?.state === "unknown" && (
+        <p className="nd-body text-nd-t2">{t("home.chillStartHint", "Start it on the CHILL page.")}</p>
+      )}
+      {running && (
+        <>
+          <p className="nd-body">{node ?? "—"}</p>
+          <div className="mt-3">
+            <Segmented<ChillExit>
+              label={t("home.exit", "Exit")}
+              block
+              value={op.busy ? pending.current : current}
+              isDisabled={op.busy}
+              onChange={(v) => {
+                pending.current = v;
+                op.start();
+              }}
+              options={EXIT_OPTIONS.map((id) => ({ id, label: exitLabel(t, id) }))}
+            />
+            {c?.exit === "direct_all" && (
+              <p className="nd-aux mt-2">{t("home.exitAllDirect", "Everything is going direct (AI and VoWiFi too). Change it on the CHILL page.")}</p>
+            )}
+            {chill.stale && current && <p className="nd-aux mt-2">{t("home.exitMaybeChanged", "The selection may have changed since.")}</p>}
+          </div>
+        </>
+      )}
+    </ModuleCard>
+  );
 }
 
-function fmtUptime(secs?: number): string {
-  if (!secs) return "—";
-  const d = Math.floor(secs / 86400);
-  const h = Math.floor((secs % 86400) / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  if (d) return `${d}d ${h}h`;
-  if (h) return `${h}h ${m}m`;
-  return `${m}m`;
+function exitLabel(t: (k: string, d: string) => string, x: ChillExit | null) {
+  switch (x) {
+    case "proxy": return t("home.exitProxy", "Proxy");
+    case "global": return t("home.exitGlobal", "Global");
+    case "direct_keep_ai": return t("home.exitDirectAi", "Direct · AI stays");
+    case "direct_all": return t("home.exitDirectAll", "All direct");
+    default: return "—";
+  }
+}
+
+// ── scenario, Tailscale ───────────────────────────────────────────────
+
+function ScenarioModule({ pub, stale }: { pub: PublicStatus | undefined; stale: boolean }) {
+  const { t } = useTranslation();
+  const sc = pub?.scenario;
+  const hm = pub?.services?.home_mode;
+  return (
+    <ModuleCard className="nd-module--cream" href="/router/scenario" title={t("nav.scenario", "Scenarios")} stale={stale}>
+      {!pub ? (
+        <span className="nd-skel" style={{ width: "10ch" }} />
+      ) : !sc?.configured ? (
+        <p className="nd-body text-nd-t2">{t("home.noScenario", "No scenarios yet · set up ›")}</p>
+      ) : (
+        <>
+          <p className="nd-body">
+            {sc.name || sc.current || "—"}
+            {sc.pin && <span className="nd-aux"> · {t("home.pinned", "pinned")}</span>}
+            {!sc.enabled && <span className="nd-aux"> · {t("home.engineOff", "engine off")}</span>}
+          </p>
+          {sc.last_switch != null && (
+            <p className="nd-aux">{t("home.lastSwitch", "Switched {{time}}", { time: fmtDevice(sc.last_switch, "time") })}</p>
+          )}
+        </>
+      )}
+      {hm?.present && (
+        <p className="nd-aux mt-1">
+          {t("nav.homeMode", "Home Mode")} ·{" "}
+          {!hm.enabled
+            ? t("dashboard.paused", "Paused")
+            : hm.mode === "home"
+              ? t("dashboard.activeWifiOff", "Active · Wi-Fi off")
+              : t("dashboard.activeWifiOn", "Active · Wi-Fi on")}
+        </p>
+      )}
+    </ModuleCard>
+  );
+}
+
+function TailscaleModule({ ts }: { ts: UseApiResponse<TailscaleStatus> }) {
+  const { t } = useTranslation();
+  const d = ts.data;
+  let body: React.ReactNode;
+  if (!d && !ts.error) body = <span className="nd-skel" style={{ width: "10ch" }} />;
+  else if (!d) body = <p className="nd-body text-nd-t2">{t("home.tsUnreadable", "Can't read Tailscale status")}</p>;
+  else if (!d.installed) body = <p className="nd-body text-nd-t2">{t("nd.notInstalled", "Not installed")}</p>;
+  else if (!d.running) body = <StatusMark tone="warn">{t("home.tsStopped", "Not running · open ›")}</StatusMark>;
+  else {
+    const online = d.peer_online ?? d.peers?.filter((p) => p.online).length ?? 0;
+    const capped = (d.peers?.length ?? 0) >= 32 && (d.peer_count ?? 0) > 32;
+    body = (
+      <>
+        <StatusMark tone={d.self?.online ? "ok" : "warn"}>{d.self?.online ? t("nd.online", "Online") : t("home.tsOffline", "Offline")}</StatusMark>
+        <p className="nd-aux mt-1">
+          {t("home.tsPeers", "{{n}} devices online", { n: capped ? "32+" : online })}
+          {d.self?.relay && <> · {t("home.tsRelay", "relay {{r}}", { r: d.self.relay })}</>}
+        </p>
+      </>
+    );
+  }
+  return (
+    <ModuleCard className="nd-module--navy" href="/services/tailscale" title="Tailscale" stale={ts.stale}>
+      {body}
+      {ts.invalidReason && <p className="nd-aux mt-1">{ts.invalidReason}</p>}
+    </ModuleCard>
+  );
+}
+
+// ── network identity ──────────────────────────────────────────────────
+
+// Two exits when CHILL runs and they differ, one otherwise (design D1).
+function NetIdentityGroup({ ni, stale }: { ni: NetInfo | undefined; stale: boolean }) {
+  const { t } = useTranslation();
+  const d = ni?.direct ?? null;
+  const p = ni?.proxy ?? null;
+  const two = !!p && p.ip !== d?.ip;
+  const same = !!p && !two;
+  const exitSub = (e: NetInfoExit | null, extra: (string | null | undefined)[]) => {
+    if (!e) return ni ? t("home.lookingUp", "Looking up…") : undefined;
+    if (!e.ip && e.error) return t("home.lookupFailed", "Lookup failed: {{e}}", { e: e.error });
+    const parts = [e.geo, ...extra].filter(Boolean).join(" · ");
+    return e.error ? `${parts}${parts ? " · " : ""}${t("home.lookupStale", "refresh failed")}` : parts || undefined;
+  };
+  const op = (o: NetInfoOperator | null | undefined) => {
+    if (!o || (!o.name && !o.mcc)) return "—";
+    const plmn = o.mcc && o.mnc ? `${o.mcc}${o.mnc}` : "";
+    const where = o.country && o.country !== "中国" ? `（${o.country}）` : " ";
+    return `${o.name ?? "?"}${where}${plmn}`.trim();
+  };
+  return (
+    <Group title={t("home.netId", "Network identity")} stale={stale}>
+      <Row
+        label={two ? t("home.exitCell", "Cellular exit") : t("home.exitIp", "Public IP")}
+        value={d?.ip ?? "—"}
+        mono
+        sub={exitSub(d, [d?.isp, same ? t("home.chillDirect", "CHILL direct") : null])}
+      />
+      {two && <Row label={t("home.exitChill", "CHILL exit")} value={p?.ip ?? "—"} mono sub={exitSub(p, [p?.node])} href="/services/chill" />}
+      <Row label={t("home.simOperator", "SIM operator")} value={op(ni?.home_operator)} />
+      <Row label={t("home.servingOperator", "Registered on")} value={op(ni?.serving_operator)} href="/router/mobile-network" />
+      <Row
+        label={t("home.roaming", "Roaming")}
+        value={ni?.roaming == null ? "—" : ni.roaming ? <StatusMark tone="warn">{t("home.roamingYes", "Roaming")}</StatusMark> : t("home.roamingNo", "Home")}
+      />
+    </Group>
+  );
+}
+
+// ── Wi-Fi and carriers ────────────────────────────────────────────────
+
+function WifiGroup({ wifi, stale }: { wifi: WifiStatus | undefined; stale: boolean }) {
+  const { t } = useTranslation();
+  const on = wifi?.wifi_onoff === "1";
+  const mhz = (bw?: string) => (bw ? (/mhz/i.test(bw) ? bw : `${bw} MHz`) : null);
+  const line = (ssid?: string, ch?: string, bw?: string, enc?: string) =>
+    [ssid, ch && t("home.channel", "ch {{c}}", { c: ch }), mhz(bw), enc].filter(Boolean).join(" · ") || "—";
+  return (
+    <Group title="Wi-Fi" stale={stale}>
+      <Row label={t("home.wifiState", "Wi-Fi")} value={wifi ? (on ? t("nd.on", "On") : t("nd.off", "Off")) : "—"} href="/router/wifi" />
+      <Row label="2.4 GHz" sub={line(wifi?.ssid_2g, wifi?.actual_channel_2g, wifi?.actual_bw_2g, wifi?.encryption_2g)} />
+      <Row label="5 GHz" sub={line(wifi?.ssid_5g, wifi?.actual_channel_5g, wifi?.actual_bw_5g, wifi?.encryption_5g)} />
+    </Group>
+  );
+}
+
+function CarrierTable({ cs, stale, netSelect, cellId }: { cs: Carrier[]; stale: boolean; netSelect?: string; cellId?: number }) {
+  const { t } = useTranslation();
+  const active = cs.filter((c) => c.active);
+  const inactive = cs.filter((c) => !c.active);
+  return (
+    <section aria-labelledby="carriers-title">
+      <h2 id="carriers-title" className="nd-group-title">{t("home.carriers", "Carriers")}</h2>
+      <div className={`nd-group${stale ? " nd-stale" : ""}`}>
+        {active.length === 0 ? (
+          <Row label={t("home.noCarriers", "No active carriers")} href="/signal" />
+        ) : (
+          active.map((c, i) => (
+            <div key={i} className="nd-row flex-wrap gap-y-1">
+              <span className="nd-row__label w-16 shrink-0">{c.kind === "nr" ? `n${c.band}` : `B${c.band}`}</span>
+              <span className="nd-row__value flex-1 whitespace-nowrap text-start">
+                {[c.bw != null && `${c.bw} MHz`, c.rsrp != null && `${c.rsrp} dBm`, c.sinr != null && `SINR ${c.sinr}`].filter(Boolean).join(" · ")}
+              </span>
+              <span className="nd-mono nd-aux w-full min-w-0 xl:w-auto">
+                PCI {c.pci ?? "—"} · ARFCN {c.arfcn ?? "—"}
+                {c.serving && cellId ? ` · Cell ${cellId}` : ""}
+                {c.serving && <> · {t("home.serving", "serving")}</>}
+              </span>
+            </div>
+          ))
+        )}
+        {inactive.length > 0 && (
+          <div className="nd-row nd-aux">
+            {t("home.inactive", "Not scheduled")}: {inactive.map((c) => (c.kind === "nr" ? `n${c.band}` : `B${c.band}`)).join(" · ")}
+          </div>
+        )}
+        {netSelect && <Row label={t("home.netSelect", "Network selection")} value={netSelect} />}
+      </div>
+    </section>
+  );
+}
+
+// ── words ─────────────────────────────────────────────────────────────
+
+function tempWord(t: T, c: number | null) {
+  if (c == null) return "";
+  if (c >= 80) return t("home.hot", "Hot");
+  if (c >= 65) return t("home.warm", "Warm");
+  return t("home.normal", "Normal");
+}
+
+function batteryWord(t: T, b: BatteryInfo | undefined) {
+  if (!b) return "";
+  const charging = b.battery_online === 1 && (b.battery_time_to_full ?? -1) >= 0;
+  if (charging) return t("dashboard.charging", "Charging");
+  if (b.battery_online === 1) return t("dashboard.pluggedIn", "Plugged in");
+  return t("dashboard.onBattery", "On battery");
+}
+
+function usageText(p: { rx_bytes: number | string | null; tx_bytes: number | string | null } | undefined) {
+  if (!p) return "—";
+  const rx = bytes(p.rx_bytes);
+  const tx = bytes(p.tx_bytes);
+  if (!rx && !tx) return "—";
+  return `↓ ${rx ?? "—"} · ↑ ${tx ?? "—"}`;
+}
+
+function uptimeText(t: T, secs?: number) {
+  const u = uptimeParts(secs);
+  if (!u) return "—";
+  if (u.d) return t("home.uptimeDH", "{{d}} d {{h}} h", { d: u.d, h: u.h });
+  if (u.h) return t("home.uptimeHM", "{{h}} h {{m}} min", { h: u.h, m: u.m });
+  return t("home.uptimeM", "{{m}} min", { m: u.m });
 }

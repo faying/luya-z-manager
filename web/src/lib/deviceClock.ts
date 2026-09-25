@@ -19,11 +19,27 @@ interface PublicClock {
   clock?: { utc_offset?: number };
 }
 
+const OFFSET_KEY = "u60.utc_offset";
+
+/** Last device offset this browser has seen, or null if never. */
+export function cachedDeviceOffset(): number | null {
+  if (typeof window === "undefined") return null;
+  const v = window.localStorage.getItem(OFFSET_KEY);
+  const n = v == null ? NaN : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 /** Seconds the device clock runs ahead of real UTC (0 until known). */
 export function useDeviceOffset(): number {
   // Same key as the header status strip, so SWR shares one request.
   const { data } = useApi<PublicClock>("/api/public/status", { refreshInterval: 10000 });
-  return data?.clock?.utc_offset ?? 0;
+  const off = data?.clock?.utc_offset;
+  // Keep it for pages opened while the device is unreachable (stale
+  // timestamps still need device-local digits).
+  if (typeof off === "number" && typeof window !== "undefined") {
+    window.localStorage.setItem(OFFSET_KEY, String(off));
+  }
+  return off ?? cachedDeviceOffset() ?? 0;
 }
 
 const FMT: Record<"datetime" | "date" | "time", Intl.DateTimeFormatOptions> = {

@@ -1,393 +1,319 @@
 "use client";
-
-import { useState } from "react";
+// Tailscale (read-only: the agent only has GETs here, and there is no
+// "turn off" control today — don't add one without the tier-2/remote-3 rule).
+//
+//   status block (state · reason · freshness · retry)
+//   login link when tailscaled asks for authentication
+//   ≥1024: this node + peers | mesh + exit node
+//   daemon log (ConsoleBand)
+//
+// /api/services/tailscale answers 200 with `error` when `tailscale status`
+// fails; tailscaleValid turns that into a failure (R9) so the last good data
+// stays on screen, greyed, with the reason.
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { RefreshCw, Network } from "lucide-react";
+import { ArrowClockwise } from "@phosphor-icons/react";
 import { useApi } from "@/lib/hooks/useApi";
-import {
-  PageHeader,
-  SectionCard,
-  Status,
-  MetaRow,
-  ErrorBanner,
-} from "@/components/admin/StatCard";
-import { Button } from "@/components/admin/Button";
-import { Help } from "@/components/admin/Help";
-
-interface TailscalePeer {
-  id?: string;
-  hostname?: string;
-  dns_name?: string;
-  os?: string;
-  ips?: string[];
-  online?: boolean;
-  exit_node?: boolean;
-  rx_bytes?: number | null;
-  tx_bytes?: number | null;
-  last_seen?: string | null;
-  last_handshake?: string | null;
-}
-
-interface TailscaleStatus {
-  installed: boolean;
-  running: boolean;
-  backend_state?: string;
-  version?: string;
-  auth_url?: string | null;
-  error?: string;
-  self?: {
-    hostname?: string;
-    dns_name?: string;
-    ips?: string[];
-    online?: boolean;
-    relay?: string;
-    exit_node_option?: boolean;
-  };
-  exit_node?: {
-    hostname?: string;
-    ips?: string[];
-    online?: boolean;
-  } | null;
-  peer_count?: number;
-  peer_online?: number;
-  peers?: TailscalePeer[];
-}
-
-interface LogResp {
-  path: string;
-  lines: string[];
-  limit: number;
-}
+import { tailscaleValid } from "@/lib/api/freshness";
+import type { TailscalePeer, TailscaleLog, TailscaleStatus } from "@/lib/api/schemas/services";
+import { Button, ConsoleBand, Freshness, Group, GroupTitle, Help, Row, StatusBlock, StatusMark, type Tone } from "@/components/nd";
 
 const REFRESH_INTERVAL = 5000;
 const LOG_LINES = 200;
+const PEER_CAP = 32; // services.rs sends at most 32 peers
+
+type TFn = (key: string, def: string, opts?: Record<string, unknown>) => string;
 
 export default function TailscalePage() {
   const { t } = useTranslation();
-  const { data: status, error, mutate, isLoading } = useApi<TailscaleStatus>(
-    "/api/services/tailscale",
-    { refreshInterval: REFRESH_INTERVAL }
-  );
-
-  const tone = backendStateTone(status);
+  const ts = useApi<TailscaleStatus>("/api/services/tailscale", {
+    refreshInterval: REFRESH_INTERVAL,
+    isValid: tailscaleValid,
+  });
+  const s = ts.data;
+  const st = stateOf(s, !!ts.error, ts.stale, t);
 
   return (
     <>
-      <PageHeader
-        title="Tailscale"
-        description={t("ts.desc", "Mesh VPN running on the router. Read-only — manage peers from the Tailscale admin console.")}
-        actions={
-          <div className="flex items-center gap-3">
-            <Status tone={tone.tone}>{tone.labelKey ? t(tone.labelKey, tone.label) : tone.label}</Status>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => mutate()}
-              disabled={isLoading}
-            >
-              <RefreshCw size={12} />
-              {t("common.refresh", "Refresh")}
-            </Button>
-          </div>
-        }
-      />
+      <div className="mb-4 mt-2 flex items-center gap-2">
+        <h1 className="nd-title flex-1">Tailscale</h1>
+        <Button variant="ghost" iconOnly onPress={() => ts.mutate()} aria-label={t("common.refresh", "Refresh")}>
+          <ArrowClockwise size={20} weight="bold" aria-hidden />
+        </Button>
+      </div>
+      <p className="nd-aux -mt-2 mb-4 px-1">
+        {t("ts.desc", "Mesh VPN running on the router. Read-only — manage peers from the Tailscale admin console.")}
+      </p>
 
-      {error && (
-        <ErrorBanner message={t("services.failedToLoad", "Failed to load: {{msg}}", { msg: error.message ?? "unknown" })} onRetry={() => mutate()} />
-      )}
-
-      {status && !status.installed && (
-        <SectionCard title={t("ts.stNotInstalled", "Not installed")}>
-          <div className="flex flex-col items-center gap-3 py-8 text-center">
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-accent-soft text-accent">
-              <Network size={22} />
-            </span>
-            <div className="space-y-1">
-              <p className="text-sm font-medium text-text">{t("ts.notInstalledTitle", "Tailscale isn't installed")}</p>
-              <p className="mx-auto max-w-[42ch] text-[13px] leading-relaxed text-text-dim">
-                {t("ts.notInstalledDesc", "No tailscaled binary was found in /data/tailscale/. Run the toolkit installer's Tailscale module on the device, then refresh this page.")}
-              </p>
-            </div>
-          </div>
-        </SectionCard>
-      )}
-
-      {status?.error && (
-        <ErrorBanner message={`Tailscale: ${status.error}`} />
-      )}
-
-      {status?.auth_url && (
-        <SectionCard title={t("ts.loginRequired", "Login required")} className="border-warning/40">
-          <p className="text-[13px] text-text">
-            {t("ts.loginDesc", "Tailscale needs authentication. Open this URL on a logged-in device:")}
-          </p>
-          <a
-            href={status.auth_url}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-2 block break-all font-mono text-[12px] text-accent underline-offset-2 hover:underline"
-          >
-            {status.auth_url}
-          </a>
-        </SectionCard>
-      )}
-
-      {status?.installed && (
-        <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
-          <SectionCard title={t("ts.thisNode", "This node")} description={t("ts.thisNodeDesc", "How the router appears on your Tailscale network.")}>
-            <DescList
-              items={[
-                [t("ts.hostname", "Hostname"), status.self?.hostname],
-                [t("ts.tsName", "Tailscale name"), status.self?.dns_name],
-                [t("ts.state", "State"), status.backend_state, t("ts.helpState", "Connection state of the Tailscale daemon.")],
-                [
-                  "IP (v4)",
-                  status.self?.ips?.find((ip) => !ip.includes(":")) ?? "—",
-                ],
-                [
-                  "IP (v6)",
-                  status.self?.ips?.find((ip) => ip.includes(":")) ?? "—",
-                ],
-                [t("ts.derp", "DERP relay"), status.self?.relay || "—", t("ts.helpDerp", "The Tailscale relay region used when a direct peer-to-peer link isn't possible.")],
-                [t("ts.version", "Version"), status.version],
-                [t("ts.exitAvail", "Exit-node available"), status.self?.exit_node_option ? t("common.yes", "Yes") : t("common.no", "No"), t("ts.helpExit", "Whether other devices can route their internet through this router.")],
-              ]}
-            />
-          </SectionCard>
-
-          <SectionCard title={t("ts.mesh", "Mesh")}>
-            <div className="grid grid-cols-2 gap-4">
-              <Metric label={t("ts.peers", "Peers")} value={status.peer_count ?? 0} />
-              <Metric
-                label={t("ts.online", "Online")}
-                value={status.peer_online ?? 0}
-                tone={(status.peer_online ?? 0) > 0 ? "success" : "neutral"}
-              />
-            </div>
-            {status.exit_node ? (
-              <div className="mt-5 border-t border-border/60 pt-4">
-                <div className="text-[11px] font-medium uppercase tracking-[0.1em] text-text-dim">
-                  {t("ts.exitInUse", "Exit node in use")}
-                </div>
-                <div className="mt-1.5 font-display text-[15px] font-semibold text-text">
-                  {status.exit_node.hostname || "—"}
-                </div>
-                <MetaRow
-                  className="mt-1"
-                  items={[
-                    status.exit_node.ips?.[0],
-                    status.exit_node.online ? t("services.online", "Online") : t("services.offline", "Offline"),
-                  ]}
-                />
-              </div>
+      <div className="grid gap-6">
+        <StatusBlock
+          tone={st.tone}
+          state={st.state}
+          reason={
+            ts.invalidReason ? (
+              <span role="alert">{t("ts.errorReason", "Tailscale: {{e}}", { e: ts.invalidReason })}</span>
+            ) : ts.error && !s ? (
+              t("ts.loadFailed", "Couldn't read the status: {{msg}} · retry", { msg: ts.error.message ?? "" })
             ) : (
-              <div className="mt-5 border-t border-border/60 pt-4 text-[12px] text-text-dim">
-                {t("ts.noExit", "No exit node selected.")}
-              </div>
-            )}
-          </SectionCard>
-        </div>
-      )}
+              st.reason
+            )
+          }
+          meta={
+            <>
+              {s?.installed && s.self?.dns_name && !ts.stale && <span className="nd-mono">{s.self.dns_name}</span>}
+              <Freshness stale={ts.stale} lastOkAt={ts.lastOkAt} />
+            </>
+          }
+          actions={
+            (ts.error || ts.stale) && (
+              <Button variant="secondary" size="sm" onPress={() => ts.mutate()}>
+                {t("common.retry", "Retry")}
+              </Button>
+            )
+          }
+        />
 
-      {status?.peers && status.peers.length > 0 && (
-        <SectionCard
-          title={t("ts.peersTitle", "Peers")}
-          description={t("ts.peersSummary", "{{total}} total · {{online}} online", { total: status.peer_count, online: status.peer_online })}
-          className="mt-6"
-        >
-          <PeerTable peers={status.peers} />
-        </SectionCard>
-      )}
+        {s?.auth_url && (
+          <section aria-labelledby="ts-login">
+            <GroupTitle id="ts-login">{t("ts.loginRequired", "Login required")}</GroupTitle>
+            <div className="nd-group p-4 lg:p-5">
+              <p className="nd-body">{t("ts.loginDesc", "Tailscale needs authentication. Open this URL on a logged-in device:")}</p>
+              <a
+                href={s.auth_url}
+                target="_blank"
+                rel="noreferrer"
+                className="nd-mono mt-2 inline-flex min-h-11 items-center break-all text-nd-accT underline underline-offset-4"
+              >
+                {s.auth_url}
+              </a>
+            </div>
+          </section>
+        )}
 
-      <LogSection
-        path="/api/services/tailscale/log"
-        title={t("ts.daemonLog", "Daemon log")}
-        description={t("ts.daemonLogDesc", "Tailing /data/tailscaled.log")}
-      />
+        {s?.installed && (
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+            <div className="grid content-start gap-6">
+              <NodeGroup s={s} stale={ts.stale} />
+              <PeersGroup s={s} stale={ts.stale} />
+            </div>
+            <div className="grid content-start gap-6">
+              <MeshGroup s={s} stale={ts.stale} />
+            </div>
+          </div>
+        )}
+
+        <LogBand />
+      </div>
     </>
   );
 }
 
-function PeerTable({ peers }: { peers: TailscalePeer[] }) {
+function stateOf(
+  s: TailscaleStatus | undefined,
+  error: boolean,
+  stale: boolean,
+  t: TFn,
+): { tone: Tone; state: string; reason?: string } {
+  if (!s) {
+    if (error) return { tone: "bad", state: t("home.tsUnreadable", "Can't read Tailscale status") };
+    return { tone: "neutral", state: t("ts.stLoading", "Loading") };
+  }
+  let r: { tone: Tone; state: string; reason?: string };
+  if (!s.installed)
+    r = {
+      tone: "neutral",
+      state: t("ts.notInstalledTitle", "Tailscale isn't installed"),
+      reason: t("ts.notInstalledDesc", "No tailscaled binary was found in /data/tailscale/. Run the toolkit installer's Tailscale module on the device, then refresh this page."),
+    };
+  else if (!s.running) r = { tone: "bad", state: t("ts.stStopped", "Stopped"), reason: t("ts.stoppedReason", "tailscaled isn't running on the device.") };
+  else if (s.auth_url) r = { tone: "warn", state: t("ts.stAuthRequired", "Auth required"), reason: t("ts.authReason", "Open the login link below to connect this router.") };
+  else if (s.backend_state === "Running")
+    r = {
+      tone: "ok",
+      state: t("ts.stRunning", "Running"),
+      reason: t("ts.peersSummary", "{{total}} total · {{online}} online", { total: s.peer_count ?? "—", online: s.peer_online ?? "—" }),
+    };
+  else if (s.backend_state === "NeedsLogin") r = { tone: "warn", state: t("ts.stNeedsLogin", "Needs login") };
+  else if (s.backend_state === "Stopped") r = { tone: "bad", state: t("ts.stStopped", "Stopped") };
+  else r = { tone: "neutral", state: s.backend_state ?? t("ts.stUnknown", "Unknown") };
+  return stale ? { ...r, tone: "stale" } : r;
+}
+
+function NodeGroup({ s, stale }: { s: TailscaleStatus; stale: boolean }) {
   const { t } = useTranslation();
+  const ips = s.self?.ips ?? [];
+  const v4 = ips.find((ip) => !ip.includes(":"));
+  const v6 = ips.find((ip) => ip.includes(":"));
+  const text = (v: string | null | undefined) => (v == null || v === "" ? "—" : v);
   return (
-    <div className="-my-1">
-      {peers.map((p) => (
-        <div
-          key={p.id}
-          className="flex items-start justify-between gap-3 border-b border-border/50 py-3 last:border-0"
-        >
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="truncate font-medium text-text">{p.hostname || "—"}</span>
-              {p.exit_node && (
-                <span className="shrink-0 rounded-full bg-accent-soft px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-accent">
-                  {t("ts.exitNodeChip", "exit node")}
-                </span>
-              )}
-            </div>
-            <MetaRow
-              className="mt-1"
-              items={[
-                p.ips?.[0] && <span className="font-mono">{p.ips[0]}</span>,
-                p.os,
-                <span className="tabular-nums">↑{fmtBytes(p.tx_bytes)} ↓{fmtBytes(p.rx_bytes)}</span>,
-                fmtRelative(p.last_handshake, t),
-              ]}
-            />
-          </div>
-          <div className="shrink-0">
-            <Status tone={p.online ? "success" : "neutral"}>{p.online ? t("services.online", "Online") : t("services.offline", "Offline")}</Status>
-          </div>
-        </div>
-      ))}
-    </div>
+    <section>
+      <GroupTitle>{t("ts.thisNode", "This node")}</GroupTitle>
+      <p className="nd-aux -mt-1 mb-3 px-1">{t("ts.thisNodeDesc", "How the router appears on your Tailscale network.")}</p>
+      <Group stale={stale}>
+        <Row label={t("ts.hostname", "Hostname")} value={text(s.self?.hostname)} mono />
+        <Row label={t("ts.tsName", "Tailscale name")} value={text(s.self?.dns_name)} mono />
+        <Row
+          label={<>{t("ts.state", "State")} <Help label={t("ts.state", "State")} text={t("ts.helpState", "Connection state of the Tailscale daemon.")} /></>}
+          value={text(s.backend_state)}
+        />
+        <Row label="IP (v4)" value={text(v4)} mono />
+        <Row label="IP (v6)" value={text(v6)} mono />
+        <Row
+          label={<>{t("ts.derp", "DERP relay")} <Help label={t("ts.derp", "DERP relay")} text={t("ts.helpDerp", "The Tailscale relay region used when a direct peer-to-peer link isn't possible.")} /></>}
+          value={text(s.self?.relay)}
+          mono
+        />
+        <Row label={t("ts.version", "Version")} value={text(s.version)} mono />
+        <Row
+          label={<>{t("ts.exitAvail", "Exit-node available")} <Help label={t("ts.exitAvail", "Exit-node available")} text={t("ts.helpExit", "Whether other devices can route their internet through this router.")} /></>}
+          value={s.self ? (s.self.exit_node_option ? t("common.yes", "Yes") : t("common.no", "No")) : "—"}
+        />
+      </Group>
+    </section>
   );
 }
 
-function Metric({
-  label,
-  value,
-  tone = "neutral",
-}: {
-  label: string;
-  value: string | number;
-  tone?: "neutral" | "success" | "warning" | "danger";
-}) {
-  const color = {
-    neutral: "text-text",
-    success: "text-success",
-    warning: "text-warning",
-    danger: "text-error",
-  }[tone];
-  return (
-    <div>
-      <div className="text-[11px] font-medium uppercase tracking-[0.1em] text-text-dim">
-        {label}
-      </div>
-      <div
-        data-numeric
-        className={`mt-1 font-display text-[26px] font-semibold leading-none tracking-tight ${color}`}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function DescList({
-  items,
-}: {
-  items: Array<[string, string | number | null | undefined, string?]>;
-}) {
-  return (
-    <dl className="divide-y divide-border/60">
-      {items.map(([k, v, help]) => (
-        <div
-          key={k}
-          className="flex items-center justify-between gap-4 py-2 text-[13px]"
-        >
-          <dt className="flex items-center text-text-dim">
-            {k}
-            {help && <Help text={help} />}
-          </dt>
-          <dd
-            data-numeric
-            className="break-all text-right font-mono text-[12.5px] text-text"
-          >
-            {v == null || v === "" ? <span className="text-text-dim">—</span> : String(v)}
-          </dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
-function LogSection({
-  path,
-  title,
-  description,
-}: {
-  path: string;
-  title: string;
-  description?: string;
-}) {
+function MeshGroup({ s, stale }: { s: TailscaleStatus; stale: boolean }) {
   const { t } = useTranslation();
-  const [paused, setPaused] = useState(false);
-  const { data, mutate, isLoading } = useApi<LogResp>(
-    `${path}?lines=${LOG_LINES}`,
-    { refreshInterval: paused ? 0 : 4000 }
-  );
+  const ex = s.exit_node;
   return (
-    <SectionCard
-      title={title}
-      description={description}
-      className="mt-6"
-      actions={
+    <>
+      <Group title={t("ts.mesh", "Mesh")} stale={stale}>
+        <Row label={t("ts.peers", "Peers")} value={s.peer_count ?? "—"} />
+        <Row label={t("ts.online", "Online")} value={s.peer_online ?? "—"} />
+      </Group>
+      <Group title={t("ts.exitInUse", "Exit node in use")} stale={stale}>
+        {ex ? (
+          <Row
+            label={ex.hostname || "—"}
+            sub={ex.ips?.[0] ? <span className="nd-mono">{ex.ips[0]}</span> : undefined}
+            value={
+              <StatusMark tone={ex.online ? "ok" : "neutral"}>
+                {ex.online ? t("services.online", "Online") : t("services.offline", "Offline")}
+              </StatusMark>
+            }
+          />
+        ) : (
+          <Row label={t("ts.noExit", "No exit node selected.")} />
+        )}
+      </Group>
+    </>
+  );
+}
+
+function PeersGroup({ s, stale }: { s: TailscaleStatus; stale: boolean }) {
+  const { t } = useTranslation();
+  const peers = s.peers ?? [];
+  const capped = peers.length >= PEER_CAP && (s.peer_count ?? 0) > PEER_CAP;
+  return (
+    <section>
+      <GroupTitle>{t("ts.peersTitle", "Peers")}</GroupTitle>
+      <p className="nd-aux -mt-1 mb-3 px-1">
+        {t("ts.peersSummary", "{{total}} total · {{online}} online", { total: s.peer_count ?? "—", online: s.peer_online ?? "—" })}
+        {capped && <> · {t("ts.peersCapped", "showing the first {{n}}", { n: PEER_CAP })}</>}
+      </p>
+      <Group stale={stale}>
+        {peers.length === 0 ? (
+          <Row label={t("ts.noPeers", "No other devices on this tailnet yet")} sub={t("ts.noPeersNext", "Sign in to Tailscale on another device and it will show up here.")} />
+        ) : (
+          peers.map((p, i) => <PeerRow key={p.id ?? `${p.hostname}-${i}`} p={p} />)
+        )}
+      </Group>
+    </section>
+  );
+}
+
+function PeerRow({ p }: { p: TailscalePeer }) {
+  const { t } = useTranslation();
+  const when = fmtRelative(p.last_handshake, t);
+  const parts: ReactNode[] = [];
+  if (p.ips?.[0]) parts.push(<span key="ip" className="nd-mono">{p.ips[0]}</span>);
+  if (p.os) parts.push(<span key="os">{p.os}</span>);
+  parts.push(
+    <span key="bytes" className="tabular-nums">
+      ↑{fmtBytes(p.tx_bytes)} ↓{fmtBytes(p.rx_bytes)}
+    </span>,
+  );
+  if (when) parts.push(<span key="hs">{t("ts.handshake", "handshake {{when}}", { when })}</span>);
+  return (
+    <Row
+      label={
         <>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setPaused((v) => !v)}
-          >
-            {paused ? t("services.resume", "Resume") : t("services.pause", "Pause")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => mutate()}
-            disabled={isLoading}
-          >
-            <RefreshCw size={12} />
-            {t("common.refresh", "Refresh")}
-          </Button>
+          {p.hostname || "—"}
+          {p.exit_node && <span className="nd-aux ms-2 font-medium text-nd-t2">{t("ts.exitNodeChip", "exit node")}</span>}
         </>
       }
-    >
-      <pre className="max-h-[420px] overflow-auto rounded-md border border-border/60 bg-bg-input/40 p-3 font-mono text-[11.5px] leading-[1.55] text-text">
-        {data?.lines?.length ? (
-          data.lines.join("\n")
-        ) : (
-          <span className="text-text-dim">{t("services.noLogs", "No log lines yet.")}</span>
-        )}
-      </pre>
-    </SectionCard>
+      sub={parts.map((x, i) => (
+        <span key={i}>
+          {i > 0 && " · "}
+          {x}
+        </span>
+      ))}
+      value={
+        <StatusMark tone={p.online ? "ok" : "neutral"}>
+          {p.online ? t("services.online", "Online") : t("services.offline", "Offline")}
+        </StatusMark>
+      }
+    />
   );
 }
 
-function backendStateTone(s?: TailscaleStatus): {
-  tone: "neutral" | "success" | "warning" | "danger";
-  labelKey: string;
-  label: string;
-} {
-  if (!s) return { tone: "neutral", labelKey: "ts.stLoading", label: "Loading" };
-  if (!s.installed) return { tone: "neutral", labelKey: "ts.stNotInstalled", label: "Not installed" };
-  if (!s.running) return { tone: "danger", labelKey: "ts.stStopped", label: "Stopped" };
-  if (s.auth_url) return { tone: "warning", labelKey: "ts.stAuthRequired", label: "Auth required" };
-  if (s.backend_state === "Running") return { tone: "success", labelKey: "ts.stRunning", label: "Running" };
-  if (s.backend_state === "NeedsLogin") return { tone: "warning", labelKey: "ts.stNeedsLogin", label: "Needs login" };
-  if (s.backend_state === "Stopped") return { tone: "danger", labelKey: "ts.stStopped", label: "Stopped" };
-  return { tone: "neutral", labelKey: "", label: s.backend_state ?? "Unknown" };
+function LogBand() {
+  const { t } = useTranslation();
+  const [paused, setPaused] = useState(false);
+  const log = useApi<TailscaleLog>(`/api/services/tailscale/log?lines=${LOG_LINES}`, { refreshInterval: paused ? 0 : 4000 });
+  const lines = log.data?.lines ?? [];
+  return (
+    <ConsoleBand label={t("ts.daemonLog", "Daemon log")}>
+      <div className="mb-3 flex flex-wrap items-center gap-2 font-[family-name:var(--nd-font)]">
+        <span className="nd-console__title flex-1">
+          {t("ts.daemonLog", "Daemon log")} <span className="nd-console__muted text-[13px] font-semibold">/data/tailscaled.log</span>
+        </span>
+        <button
+          type="button"
+          className="nd-btn nd-btn--sm bg-nd-console-card text-nd-console-t1"
+          aria-pressed={paused}
+          onClick={() => setPaused((p) => !p)}
+        >
+          {paused ? t("services.resume", "Resume") : t("services.pause", "Pause")}
+        </button>
+        <button
+          type="button"
+          className="nd-btn nd-btn--sm bg-nd-console-card text-nd-console-t1"
+          aria-label={t("ts.refreshLog", "Refresh log")}
+          onClick={() => log.mutate()}
+        >
+          {t("common.refresh", "Refresh")}
+        </button>
+      </div>
+      {log.error && !log.data && (
+        <p className="nd-console__muted mb-2" role="alert">
+          {t("ts.logFailed", "Couldn't read the log: {{msg}}", { msg: log.error.message ?? "" })}
+        </p>
+      )}
+      <pre tabIndex={0} className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words">
+        {lines.length ? lines.join("\n") : <span className="nd-console__muted">{t("services.noLogs", "No log lines yet.")}</span>}
+      </pre>
+    </ConsoleBand>
+  );
 }
 
+/** Unknown counters show "—", never 0. */
 function fmtBytes(n?: number | null): string {
-  if (n == null) return "0";
-  if (n < 1024) return `${n}B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)}GB`;
+  if (n == null) return "—";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
-
-type TFn = (key: string, def: string, opts?: Record<string, unknown>) => string;
 
 function fmtRelative(iso: string | null | undefined, t: TFn): string | null {
   if (!iso || iso.startsWith("0001-01-01")) return null;
   const parsed = Date.parse(iso);
   if (Number.isNaN(parsed)) return iso;
-  // Tailscaled on this OpenWrt build sometimes stamps timestamps with
-  // a "Z" suffix while writing local time, producing a small skew vs.
-  // the browser's UTC clock. Treat anything within ~12h of "the future"
-  // as effectively "just now" rather than printing a negative duration.
+  // tailscaled here sometimes stamps local time with a "Z" suffix (the
+  // device clock is local time labelled UTC), so a timestamp can look up to
+  // a zone's worth in the future: treat that as "just now".
   const diff = (Date.now() - parsed) / 1000;
   if (diff < 0) {
     if (diff > -12 * 3600) return t("services.justNow", "just now");
@@ -398,4 +324,3 @@ function fmtRelative(iso: string | null | undefined, t: TFn): string | null {
   if (diff < 86400) return t("services.agoHour", "{{n}}h ago", { n: Math.floor(diff / 3600) });
   return t("services.agoDay", "{{n}}d ago", { n: Math.floor(diff / 86400) });
 }
-

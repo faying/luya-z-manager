@@ -274,7 +274,10 @@ pub fn alerts_read(_state: &AppState, body: &[u8]) -> (u16, Value) {
     let newest = a.events().last().map(|e| e.seq).unwrap_or(0);
     let read = seq.min(newest).max(a.read_u64("read"));
     match a.write_whole("read", &format!("{read}\n")) {
-        Ok(()) => (200, json!({"ok": true, "data": {"read": read}})),
+        Ok(()) => {
+            crate::health::refresh_soon();
+            (200, json!({"ok": true, "data": {"read": read}}))
+        }
         Err(e) => (500, json!({"ok": false, "error": format!("write read cursor: {e}")})),
     }
 }
@@ -313,6 +316,7 @@ pub fn alerts_sms_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
             return (500, json!({"ok": false, "error": format!("save abroad switch: {e}")}));
         }
     }
+    crate::health::refresh_soon();
     (200, json!({"ok": true, "data": a.summary(now(), uptime_now())["sms"].clone()}))
 }
 

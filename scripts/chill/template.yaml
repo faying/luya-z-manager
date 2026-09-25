@@ -46,6 +46,13 @@ external-controller: '${CONTROLLER}'
 secret: '${CHILL_SECRET}'
 external-ui: ui
 
+# 本机专用入口：zte-agent 的「网络」页经它查 CHILL 出口 IP 的归属地（netinfo.rs，
+# 端口要和那边的 DEFAULT_PROXY_PORT 一致）。写死只听 127.0.0.1，不跟 allow-lan 走；
+# 进来的连接不过规则，直接交给「🚀 节点选择」，查到的就是主出口。
+# 本机自己的连接不进 TUN（include-interface 只有 br-lan），所以没有这个入口就查不到。
+listeners:
+  - {name: netinfo, type: mixed, port: 7894, listen: 127.0.0.1, udp: false, proxy: 🚀 节点选择}
+
 # 不设 routing-mark：没有需要它的场景，加进来只会多一个与 TUN 路由交互的变量。
 
 tun:

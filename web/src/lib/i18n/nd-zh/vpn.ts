@@ -1,0 +1,27 @@
+// New keys for /router/vpn (new design). Merged into zh.ts by the coordinator.
+export const zh = {
+  vpn: {
+    statusNotReported: "这个固件不报告 VPN 穿透状态",
+    statusOnlySip: "它只报告 SIP ALG（{{sip}}，见下方）。L2TP / PPTP / IPSec 开关仍会发送修改，但页面读不回来，无法确认是否生效。",
+    notReportedNoConfirm: "设备没有报告状态，修改无法确认",
+    sipLabel: "SIP ALG",
+    sipDesc: "让 SIP（网络电话）信令穿过 NAT · 这里只读",
+    loading: "正在读取 VPN 穿透…",
+    unreadable: "读不到 VPN 穿透设置",
+    statusUnknown: "穿透状态不明",
+    statusUnknownReason: "设备的回复里没有任何穿透字段。",
+    statusAllOff: "穿透全部关着",
+    statusAllOffReason: "U60 后面的 VPN 客户端可能连不上。",
+    statusOn: "已开：{{list}}",
+    statusSomeUnknown: "没有返回：{{list}}",
+    notReported: "设备没有返回状态",
+    stepSwitch: "穿透开关",
+    turnOn: "打开 {{proto}} 穿透",
+    turnOff: "关闭 {{proto}} 穿透",
+    cOn: "连着 U60 的设备可以向外部服务器建立 {{proto}} VPN 连接。",
+    cOff: "连着 U60 的设备的 {{proto}} VPN 连接将无法建立，已有的会断开。",
+    confirmTitle: "更改 {{proto}} 穿透？",
+    downtime: "通常不断网，防火墙规则会很快重载。",
+    recovery: "在这里把开关拨回去。如果经 Tailscale 打不开这个页面，请设备旁边的人用连着它 Wi-Fi 的设备改回。",
+  },
+} as const;

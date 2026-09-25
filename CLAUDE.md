@@ -33,8 +33,6 @@ not by a script, not by a UI toggle, not "just to test".
 
 ## Architecture
 - `zte-agent/` — Rust HTTP agent on device (Axum, port 9090, LAN-only)
-- `mobile/ios/` — SwiftUI companion app
-- `mobile/android/` — Jetpack Compose companion app
 - `web/` — Next.js web dashboard
 
 ---
@@ -155,9 +153,10 @@ wrong again:
 
 ## Design Context (Admin Web)
 
-Full version in `.impeccable.md`. Summary for `web/` (Next.js admin served by the agent on `:9090`, LAN-only):
+Single source of truth: `docs/DESIGN.md` §5 (implementation notes in `.impeccable.md`). Summary for `web/` (Next.js static export served by the agent on `:9090`, LAN-only):
 
-- **Users**: device owner (technical, dense data OK) **and shared with other U60 owners** — stay approachable. Often used on **phone/tablet on the LAN**, not just desktop.
-- **Aesthetic**: **"Cool Tech"** system in `web/src/app/(panel)/admin.css` — **light**, clean minimalist-tech. Cool near-white canvas `#f6f8fb`, white cards, cool-slate neutrals, hairline borders, Outfit (display) + DM Sans (body), tabular numerals. **Electric-cyan accent**: deep `#0e7490` for contrast-bearing UI (buttons/links/active text, AA on white); bright `#22d3ee` (`--admin-glow`) for tints/rings/active dots ONLY (never text/fills on white). No gradients/glassmorphism/shimmer.
-- **Mobile-first**: desktop sidebar; mobile = fixed **bottom tab bar** (Home/Signal/Wi-Fi/Services/More) + drawer. UI served at site **root** (`http://<ip>:9090/`).
-- **Principles**: (1) tokens never hard-codes — use `.admin-theme` vars / Tailwind utilities (`bg-bg-card`, `text-accent`, `text-text-dim`); a raw hex is a defect. (2) density with rhythm, not walls of identical cards. (3) mobile is a real target — no h-scroll, ≥44px touch targets, bottom-tab reachable. (4) **WCAG AA floor** (≥4.5:1, labelled controls, visible focus, keyboard). (5) quiet confidence — deep cyan as the single sparing accent.
+- **Users**: device owner (technical, dense data OK) **and other U60 owners** — stay approachable. Often used on **phone/tablet on the LAN**.
+- **Aesthetic**: new design in the **Cohere + Figma** language — warm paper canvas, hairline-ruled white cards, ink text, one near-black primary surface, flat colour blocks per route family, Cohere deep-green band on home/login. Geist + Geist Mono, platform CJK face. Light + dark. Tokens: `web/src/app/newdesign.css`; components: `web/src/components/nd/`.
+- **Navigation**: <640 bottom tabs (Home / Charts / Functions / System), 640–1023 icon rail, ≥1024 sidebar; ⌘K search. Route table: `web/src/lib/routes.ts`.
+- **Writes**: three confirm tiers via `useWriteOp` (direct / inline / dialog), readback after every write, multi-step writes tracked per step. Inventory: `web/docs/controls-inventory.md`.
+- **Principles**: tokens never hard-codes; mobile is a real target (no h-scroll, ≥44px targets, inputs ≥16px); WCAG AA floor (`web/docs/contrast.md` must pass); never remove an existing control without asking.

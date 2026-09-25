@@ -109,6 +109,27 @@ fn refresh() {
     s.at_device = now_device();
 }
 
+/// Re-run the check now, in the background, after something that changes its
+/// answer (alerts marked read, SMS number set). Without this the touch
+/// screen's 健康 row kept saying 注意 for up to a minute after 全部已读.
+/// One extra run at a time; a second request while one is running is dropped.
+pub fn refresh_soon() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static BUSY: AtomicBool = AtomicBool::new(false);
+    if BUSY.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("health-now".into())
+        .spawn(|| {
+            refresh();
+            BUSY.store(false, Ordering::Release);
+        });
+    if spawned.is_err() {
+        BUSY.store(false, Ordering::Release);
+    }
+}
+
 /// Background refresher. The first run waits a little so boot is not slowed.
 pub fn start() {
     std::thread::Builder::new()

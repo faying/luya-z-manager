@@ -1,13 +1,14 @@
 "use client";
-
-import { useState, useRef, useCallback } from "react";
+// Config tool (new design). Runs entirely in the browser: reads a file the
+// user picks, parses the ZXHN header and shows a hex preview. It calls no
+// device endpoint and uploads nothing, so there are no write tiers here
+// (controls-inventory §/config: every control is 「—（本地）」).
+//
+// Order: pick a file → error / header → hex preview + download → known keys.
+import { useRef, useState, type DragEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { PageHeader, SectionCard, ErrorBanner } from "@/components/admin/StatCard";
-import { Button } from "@/components/admin/Button";
-import { Upload, FileText, Download } from "lucide-react";
-
-// Known ZXHN config encryption magic
-const ZXHN_MAGIC = "ZXHN";
+import { DownloadSimple, FileArrowUp } from "@phosphor-icons/react";
+import { Button, Group, GroupTitle, Row, StatusMark } from "@/components/nd";
 
 // Known ZTE config keys (reproduced from iOS ConfigToolViewModel / ConfigConstants)
 const KNOWN_KEYS: { descKey: string; description: string; hex: string }[] = [
@@ -41,8 +42,7 @@ function parseHeader(data: Uint8Array): ConfigHeader | null {
   const nullIdx = sigBytes.indexOf(0);
   const signature = decoder.decode(nullIdx >= 0 ? sigBytes.subarray(0, nullIdx) : sigBytes).trim();
 
-  // Payload offset: 4-byte LE at byte 4 or hardcoded header size
-  // Heuristic: header is commonly 32 or 64 bytes
+  // Payload offset: 4-byte LE at byte 28, or the common 64-byte header size.
   const payloadOffset = (data[28] | (data[29] << 8) | (data[30] << 16) | (data[31] << 24)) || 64;
 
   return { magic, payloadType, signature, payloadOffset, fileSize: data.length };
@@ -67,6 +67,7 @@ export default function ConfigPage() {
   const [fileData, setFileData] = useState<Uint8Array | null>(null);
   const [header, setHeader] = useState<ConfigHeader | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [reading, setReading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -75,124 +76,146 @@ export default function ConfigPage() {
     setHeader(null);
     setParseError(null);
     setFileData(null);
+    setReading(true);
     const reader = new FileReader();
     reader.onload = (e) => {
-      const buf = e.target?.result as ArrayBuffer;
-      const bytes = new Uint8Array(buf);
+      setReading(false);
+      const bytes = new Uint8Array(e.target?.result as ArrayBuffer);
       setFileData(bytes);
       const parsed = parseHeader(bytes);
-      if (!parsed) {
-        setParseError(t("config.errNotRecognized", "Not a recognized ZXHN config file (magic header not found)."));
-      } else {
-        setHeader(parsed);
-      }
+      if (!parsed) setParseError(t("config.errNotRecognized", "Not a recognized ZXHN config file (magic header not found)."));
+      else setHeader(parsed);
+    };
+    reader.onerror = () => {
+      setReading(false);
+      setParseError(t("config.errRead", "The browser couldn't read this file. Pick it again."));
     };
     reader.readAsArrayBuffer(file);
   }
 
-  const onDrop = useCallback((e: React.DragEvent) => {
+  const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragging(false);
     const file = e.dataTransfer.files[0];
     if (file) loadFile(file);
-  }, []);
+  };
 
   function downloadHex() {
     if (!fileData || !fileName) return;
     const text = toHex(fileData, fileData.length);
     const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    a.href = url;
     a.download = fileName + ".hex.txt";
     a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+
+  const bytes = (n: number) => t("config.bytes", "{{n}} bytes", { n });
 
   return (
     <>
-      <PageHeader title={t("config.title", "Config Tool")} description={t("config.desc", "Inspect ZTE ZXHN router config files (.zxhn).")} />
+      <h1 className="nd-title mb-4 mt-2">{t("config.title", "Config Tool")}</h1>
 
-      <div className="grid gap-4">
-        {/* Drop zone */}
-        <SectionCard>
+      <div className="grid max-w-[720px] gap-6">
+        <p className="nd-body -mt-2 text-nd-t2">
+          {t("config.desc", "Inspect ZTE ZXHN router config files (.zxhn).")} {t("config.localOnly", "The file stays in your browser; nothing is sent to the device.")}
+        </p>
+
+        {/* ── pick a file ── */}
+        <section aria-labelledby="config-file">
+          <GroupTitle id="config-file">{t("config.fileTitle", "Config file")}</GroupTitle>
           <div
-            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragging(true);
+            }}
             onDragLeave={() => setDragging(false)}
             onDrop={onDrop}
-            onClick={() => inputRef.current?.click()}
-            className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed py-10 transition ${dragging ? "border-accent bg-accent/5" : "border-border hover:border-accent/60"}`}
+            className={`nd-group grid justify-items-center gap-3 border-2 border-dashed p-6 text-center ${dragging ? "border-nd-accT" : "border-transparent"}`}
           >
-            <Upload size={28} className="text-text-dim" />
-            <p className="text-sm text-text-dim">{t("config.dropBefore", "Drag & drop a")} <code className="text-text">.zxhn</code> {t("config.dropAfter", "file, or click to browse")}</p>
-            {fileName && <p className="text-xs text-accent">{fileName}</p>}
+            <FileArrowUp size={24} weight="bold" className="text-nd-t3" aria-hidden />
+            <p className="nd-body text-nd-t2">
+              {t("config.dropBefore", "Drag & drop a")} <code className="nd-mono">.zxhn</code> {t("config.dropAfterNd", "file here, or")}
+            </p>
+            <Button onPress={() => inputRef.current?.click()}>{t("config.chooseFile", "Choose config file")}</Button>
+            {fileName && (
+              <p className="nd-mono break-all" aria-live="polite">
+                {fileName}
+              </p>
+            )}
+            {reading && <p className="nd-aux" role="status">{t("config.reading", "Reading the file…")}</p>}
           </div>
           <input
             ref={inputRef}
             type="file"
             className="hidden"
+            tabIndex={-1}
+            aria-hidden
             accept=".zxhn,.bin,.cfg,.conf"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) loadFile(f); }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) loadFile(f);
+              e.target.value = "";
+            }}
           />
-        </SectionCard>
+        </section>
 
-        {parseError && <ErrorBanner message={parseError} />}
+        {parseError && (
+          <p role="alert">
+            <StatusMark tone="bad">{parseError}</StatusMark>
+          </p>
+        )}
 
-        {/* File header info */}
+        {/* ── header ── */}
         {header && (
-          <SectionCard title={t("config.fileHeader", "File Header")}>
-            <div className="space-y-1 font-mono text-sm">
-              <div className="flex gap-3"><span className="w-32 text-text-dim">{t("config.magic", "Magic")}</span><span>{header.magic}</span></div>
-              <div className="flex gap-3"><span className="w-32 text-text-dim">{t("config.payloadType", "Payload type")}</span><span>{header.payloadType}</span></div>
-              <div className="flex gap-3"><span className="w-32 text-text-dim">{t("config.signature", "Signature")}</span><span>{header.signature || "—"}</span></div>
-              <div className="flex gap-3"><span className="w-32 text-text-dim">{t("config.payloadOffset", "Payload offset")}</span><span>{t("config.bytes", "{{n}} bytes", { n: header.payloadOffset })}</span></div>
-              <div className="flex gap-3"><span className="w-32 text-text-dim">{t("config.fileSize", "File size")}</span><span>{t("config.bytes", "{{n}} bytes", { n: header.fileSize })}</span></div>
-            </div>
-          </SectionCard>
+          <Group title={t("config.fileHeader", "File Header")}>
+            <Row label={t("config.magic", "Magic")} value={header.magic} mono />
+            <Row label={t("config.payloadType", "Payload type")} value={header.payloadType} mono />
+            <Row label={t("config.signature", "Signature")} value={header.signature || "—"} mono />
+            <Row label={t("config.payloadOffset", "Payload offset")} value={bytes(header.payloadOffset)} mono />
+            <Row label={t("config.fileSize", "File size")} value={bytes(header.fileSize)} mono />
+          </Group>
         )}
 
-        {/* Hex preview */}
+        {/* ── hex preview ── */}
         {fileData && (
-          <SectionCard title={t("config.hexPreview", "Hex Preview (first 256 bytes)")}>
-            <pre className="overflow-x-auto rounded-md bg-bg-elevated p-3 font-mono text-[11px] leading-relaxed text-text-dim">
-              {toHex(fileData)}
-            </pre>
-            <div className="mt-3 flex gap-2">
-              <Button size="sm" variant="outline" onClick={downloadHex}>
-                <Download size={13} /> {t("config.downloadHexDump", "Download hex dump")}
-              </Button>
+          <section aria-labelledby="config-hex">
+            <GroupTitle id="config-hex">{t("config.hexPreview", "Hex Preview (first 256 bytes)")}</GroupTitle>
+            <div className="nd-group grid gap-3 p-4">
+              <pre className="nd-mono overflow-x-auto text-[12px] leading-5 text-nd-t2">{toHex(fileData)}</pre>
+              <div>
+                <Button variant="secondary" onPress={downloadHex}>
+                  <DownloadSimple size={20} weight="bold" aria-hidden />
+                  {t("config.downloadHexDump", "Download hex dump")}
+                </Button>
+              </div>
             </div>
-          </SectionCard>
+          </section>
         )}
 
-        {/* Known keys */}
-        <SectionCard title={t("config.knownKeys", "***REMOVED***")}>
-          <p className="mb-3 text-sm text-text-dim">
+        {/* ── known keys ── */}
+        <section aria-labelledby="config-keys">
+          <GroupTitle id="config-keys">{t("config.knownKeys", "***REMOVED***")}</GroupTitle>
+          <p className="nd-aux mb-2">
             {t("config.knownKeysDesc", "***REMOVED***. Full decrypt/re-encrypt is available in the iOS companion app.")}
           </p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border/60 text-left text-xs text-text-dim">
-                  <th className="pb-2 pr-4">{t("config.colDescription", "Description")}</th>
-                  <th className="pb-2">{t("config.colKeyHex", "Key (hex)")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {KNOWN_KEYS.map((k) => (
-                  <tr key={k.hex} className="border-b border-border/40 last:border-0">
-                    <td className="py-2 pr-4 text-text-dim">{t(`config.${k.descKey}`, k.description)}</td>
-                    <td className="py-2 font-mono text-xs">{k.hex}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="nd-group">
+            {KNOWN_KEYS.map((k) => (
+              <Row
+                key={k.hex}
+                label={t(`config.${k.descKey}`, k.description)}
+                sub={<span className="nd-mono break-all">{k.hex}</span>}
+              />
+            ))}
           </div>
-          <div className="mt-4 flex items-start gap-2 rounded-md border border-accent/20 bg-accent/5 px-3 py-2 text-xs text-text-dim">
-            <FileText size={14} className="mt-0.5 shrink-0 text-accent" />
-            <span>
-              {t("config.cryptoNoteBefore", "Full AES-ECB/CBC decrypt, zlib decompress, XML view, and re-encryption are implemented in the iOS app (")}<code>***REMOVED***</code>{t("config.cryptoNoteAfter", "). Web-side decryption requires SubtleCrypto integration — planned for a future update.")}
-            </span>
-          </div>
-        </SectionCard>
+          <p className="nd-aux mt-2">
+            {t("config.cryptoNoteBefore", "Full AES-ECB/CBC decrypt, zlib decompress, XML view, and re-encryption are implemented in the iOS app (")}
+            <code className="nd-mono">***REMOVED***</code>
+            {t("config.cryptoNoteAfter", "). Web-side decryption requires SubtleCrypto integration — planned for a future update.")}
+          </p>
+        </section>
       </div>
     </>
   );

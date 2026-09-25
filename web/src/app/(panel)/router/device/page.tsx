@@ -1,287 +1,603 @@
 "use client";
-
-import { useState, useEffect } from "react";
+// Device control (new design). Settings page: battery state first, then
+// charge limit, power modes, then reboot / factory reset.
+//
+// Writes (controls-inventory §/router/device, design §3.1):
+//   charge limit 「应用」  tier 2, PUT charge-control, readback GET charge-control
+//   power-save switch     tier 2, PUT power-save (body kept exactly as the old
+//                          page sent it: deviceInfoList as an array — which
+//                          form the firmware accepts is unconfirmed), readback
+//                          POST power-save (a read served over POST)
+//   fast-boot switch      tier 2, PUT fast-boot, readback GET fast-boot
+//   reboot                tier 3, POST reboot, wait for the device (≈90 s,
+//                          must go down first); no readback → 「设备已接受」
+//   factory reset         tier 3, type-to-confirm, POST factory-reset. The
+//                          reset wipes zte-agent itself, so the device never
+//                          answers this page again: the wait ends in its
+//                          timeout, whose recovery text is what the user reads.
+// Switches no longer flip optimistically: they show the device value until
+// the readback confirms the change.
+//
+// Deliberately absent: any ZTE firmware update (FOTA) control.
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useApi } from "@/lib/hooks/useApi";
+import { ArrowClockwise, BatteryCharging, Lightning, Warning } from "@phosphor-icons/react";
 import { apiFetch } from "@/lib/api/client";
-import { ApiError } from "@/lib/api/types";
-import { PageHeader, SectionCard, ErrorBanner } from "@/components/admin/StatCard";
-import { Button, Toggle } from "@/components/admin/Button";
-import { AlertTriangle, BatteryCharging, Zap, RotateCcw } from "lucide-react";
+import { useApi } from "@/lib/hooks/useApi";
+import { useWriteOp } from "@/lib/api/writeOp";
+import type { ChargeControl, FastBoot, PowerSave } from "@/lib/api/schemas/device";
+import {
+  Button,
+  ConfirmDialog,
+  ConfirmInline,
+  Freshness,
+  GroupTitle,
+  OpResult,
+  Row,
+  StatusBlock,
+  Switch,
+  useConfirmInline,
+  type Tone,
+} from "@/components/nd";
 
-interface ChargeControl {
-  charge_limit_enabled?: boolean;
-  charge_limit?: number;
-  hysteresis?: number;
-  charging_stopped?: boolean;
-  battery_status?: string;
-  capacity?: number;
+interface Draft {
+  enabled: boolean;
+  limit: number;
+  hyst: number;
 }
 
-interface FastBoot {
-  fast_boot?: string;
+const PS_READ = { deviceInfoList: ["power_saver_mode"] };
+
+type Inline = null | { k: "charge" } | { k: "ps"; on: boolean } | { k: "fb"; on: boolean };
+
+/** "1"/"0" → boolean; anything else (missing key, odd shape) → null. */
+function flag(v: unknown): boolean | null {
+  const s = v === undefined || v === null ? "" : String(v);
+  if (s === "1") return true;
+  if (s === "0") return false;
+  return null;
 }
 
-interface PowerSaveResp {
-  power_saver_mode?: string;
-}
-
-function FieldRow({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Slider({
+  id,
+  label,
+  value,
+  min,
+  max,
+  onChange,
+  disabled,
+}: {
+  id: string;
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (v: number) => void;
+  disabled?: boolean;
+}) {
   return (
-    <div className="flex flex-col gap-1.5 border-b border-border/60 py-3 last:border-0 sm:flex-row sm:items-center sm:justify-between">
-      <div>
-        <div className="text-sm">{label}</div>
-        {hint && <div className="text-xs text-text-dim">{hint}</div>}
-      </div>
-      <div className="sm:w-52">{children}</div>
-    </div>
-  );
-}
-
-function SliderField({ label, value, onChange, min, max }: { label: string; value: number; onChange: (v: number) => void; min: number; max: number }) {
-  return (
-    <div className="space-y-1">
-      <div className="flex justify-between text-xs text-text-dim">
-        <span>{label}</span>
-        <span>{value}</span>
-      </div>
+    <div className="nd-row flex-col items-stretch gap-2">
+      <span className="flex items-baseline justify-between">
+        <label htmlFor={id} className="nd-row__label">
+          {label}
+        </label>
+        <span className="nd-mono nd-body" aria-hidden>
+          {value}%
+        </span>
+      </span>
       <input
+        id={id}
         type="range"
         min={min}
         max={max}
         value={value}
-        onChange={(e) => onChange(parseInt(e.target.value))}
-        className="w-full accent-[var(--color-accent)]"
+        disabled={disabled}
+        aria-valuetext={`${value}%`}
+        onChange={(e) => onChange(parseInt(e.target.value, 10))}
+        className="h-11 w-full"
       />
-      <div className="flex justify-between text-xs text-text-dim">
-        <span>{min}</span>
-        <span>{max}</span>
-      </div>
+      <span className="nd-aux flex justify-between" aria-hidden>
+        <span>{min}%</span>
+        <span>{max}%</span>
+      </span>
     </div>
   );
 }
 
 export default function DevicePage() {
   const { t } = useTranslation();
-  const { data: chargeData, error: chargeErr } = useApi<ChargeControl>("/api/device/charge-control");
-  const { data: fastBootData, error: fastBootErr } = useApi<FastBoot>("/api/device/fast-boot");
+  const charge = useApi<ChargeControl>("/api/device/charge-control");
+  const fast = useApi<FastBoot>("/api/device/fast-boot");
+  const ps = useApi<PowerSave>("/api/device/power-save", { method: "POST", body: PS_READ });
 
-  const [chargeLimitEnabled, setChargeLimitEnabled] = useState(false);
-  const [chargeLimit, setChargeLimit] = useState(80);
-  const [hysteresis, setHysteresis] = useState(5);
-  const [fastBoot, setFastBoot] = useState(false);
-  const [powerSave, setPowerSave] = useState(false);
-  const [psLoaded, setPsLoaded] = useState(false);
-  const [chargeLoaded, setChargeLoaded] = useState(false);
-  const [fastBootLoaded, setFastBootLoaded] = useState(false);
+  const cd = charge.data;
+  const psOn = ps.data ? flag(ps.data.power_saver_mode) : null;
+  const fbOn = fast.data ? flag(fast.data.fast_boot) : null;
 
-  const [saving, setSaving] = useState<string | null>(null);
-  const [msg, setMsg] = useState<{ text: string; err: boolean } | null>(null);
-  const [confirmReboot, setConfirmReboot] = useState(false);
-  const [confirmReset, setConfirmReset] = useState<"first" | "second" | null>(null);
+  // ── charge-limit draft (null = follow the device) ──
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const fromDevice: Draft | null = cd
+    ? { enabled: !!cd.charge_limit_enabled, limit: cd.charge_limit ?? 80, hyst: cd.hysteresis ?? 5 }
+    : null;
+  const cur = draft ?? fromDevice;
+  const dirty =
+    !!draft && !!fromDevice && (draft.enabled !== fromDevice.enabled || draft.limit !== fromDevice.limit || draft.hyst !== fromDevice.hyst);
+  const edit = (p: Partial<Draft>) => cur && setDraft({ ...cur, ...p });
 
-  // Load charge control
-  useEffect(() => {
-    if (!chargeData) return;
-    if (chargeData.charge_limit_enabled !== undefined) setChargeLimitEnabled(chargeData.charge_limit_enabled);
-    if (chargeData.charge_limit !== undefined) setChargeLimit(chargeData.charge_limit);
-    if (chargeData.hysteresis !== undefined) setHysteresis(chargeData.hysteresis);
-    setChargeLoaded(true);
-  }, [chargeData]);
+  const sentRef = useRef<Draft | null>(null);
+  const chargeOp = useWriteOp({
+    tier: 2,
+    steps: [
+      {
+        label: t("devctl.chargeLimitTitle", "Charge Limit"),
+        run: () => {
+          const d = sentRef.current!;
+          return apiFetch("/api/device/charge-control", {
+            method: "PUT",
+            body: { charge_limit_enabled: d.enabled, charge_limit: d.limit, hysteresis: d.hyst },
+          });
+        },
+      },
+    ],
+    verify: async () => {
+      const d = await apiFetch<ChargeControl>("/api/device/charge-control");
+      await charge.mutate(d, { revalidate: false });
+      const want = sentRef.current;
+      if (!want) return false;
+      const ok =
+        d.charge_limit_enabled === want.enabled &&
+        (!want.enabled || (d.charge_limit === want.limit && d.hysteresis === want.hyst));
+      if (ok) setDraft(null);
+      return ok;
+    },
+  });
 
-  // Load fast boot
-  useEffect(() => {
-    if (!fastBootData) return;
-    setFastBoot(fastBootData.fast_boot === "1");
-    setFastBootLoaded(true);
-  }, [fastBootData]);
+  // ── power-save / fast-boot switches ──
+  const psWant = useRef(false);
+  const psOp = useWriteOp({
+    tier: 2,
+    steps: [
+      {
+        label: t("devctl.powerSaveMode", "Power-save mode"),
+        run: () =>
+          apiFetch("/api/device/power-save", {
+            method: "PUT",
+            // Unchanged from the old page (array form); unconfirmed on the device.
+            body: { deviceInfoList: [{ power_saver_mode: psWant.current ? "1" : "0" }] },
+          }),
+      },
+    ],
+    verify: async () => {
+      const d = await apiFetch<PowerSave>("/api/device/power-save", { method: "POST", body: PS_READ });
+      await ps.mutate(d, { revalidate: false });
+      return flag(d?.power_saver_mode) === psWant.current;
+    },
+  });
+  const fbWant = useRef(false);
+  const fbOp = useWriteOp({
+    tier: 2,
+    steps: [
+      {
+        label: t("devctl.fastBoot", "Fast boot"),
+        run: () => apiFetch("/api/device/fast-boot", { method: "PUT", body: { fast_boot: fbWant.current ? "1" : "0" } }),
+      },
+    ],
+    verify: async () => {
+      const d = await apiFetch<FastBoot>("/api/device/fast-boot");
+      await fast.mutate(d, { revalidate: false });
+      return flag(d?.fast_boot) === fbWant.current;
+    },
+  });
 
-  // Load power save
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch<PowerSaveResp>("/api/device/power-save", {
-      method: "POST",
-      body: { deviceInfoList: ["power_saver_mode"] },
-    }).then((d) => {
-      if (!cancelled && d?.power_saver_mode !== undefined) {
-        setPowerSave(d.power_saver_mode === "1");
-        setPsLoaded(true);
-      }
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
+  // ── reboot / factory reset ──
+  const rebootRecovery = t(
+    "devctl.rebootRecovery",
+    "Wait a little longer, then reload this page. If it still doesn't load, check on the touchscreen that the device has started, and join its Wi-Fi again."
+  );
+  const rebootOp = useWriteOp({
+    tier: 3,
+    steps: [{ label: t("devctl.rebootTitle", "Reboot"), run: () => apiFetch("/api/device/reboot", { method: "POST" }) }],
+    waitDevice: { expectedSec: 90, expectDown: true, recovery: rebootRecovery },
+  });
+  const resetRecovery = t(
+    "devctl.resetRecovery",
+    "This page will not come back: the reset removes this manager. The device returns with its factory Wi-Fi name, password and address (printed on its label). Join that Wi-Fi and run the install kit again to get this project's software back."
+  );
+  const resetOp = useWriteOp({
+    tier: 3,
+    steps: [{ label: t("devctl.factoryResetTitle", "Factory Reset"), run: () => apiFetch("/api/device/factory-reset", { method: "POST" }) }],
+    waitDevice: { expectedSec: 90, timeoutSec: 300, expectDown: true, recovery: resetRecovery },
+  });
 
-  function showMsg(text: string, err = false) {
-    setMsg({ text, err });
-    setTimeout(() => setMsg(null), 4000);
+  const [inline, setInline] = useState<Inline>(null);
+  const inlineCtl = useConfirmInline(inline !== null);
+  const inlineK = inline?.k ?? null;
+  const [dialog, setDialog] = useState<null | "reboot" | "reset">(null);
+  const anyBusy = chargeOp.busy || psOp.busy || fbOp.busy || rebootOp.busy || resetOp.busy;
+
+  function askCharge() {
+    if (!cur || anyBusy) return;
+    setInline({ k: "charge" });
   }
-
-  async function applyChargeLimit() {
-    if (!chargeLoaded) return;
-    setSaving("charge");
-    try {
-      await apiFetch("/api/device/charge-control", {
-        method: "PUT",
-        body: { charge_limit_enabled: chargeLimitEnabled, charge_limit: chargeLimit, hysteresis },
-      });
-      showMsg(chargeLimitEnabled ? t("devctl.chargeLimitSet", "Charge limit set to {{limit}}%", { limit: chargeLimit }) : t("devctl.chargeLimitDisabled", "Charge limit disabled"));
-    } catch (e) {
-      showMsg(e instanceof ApiError ? e.message : t("devctl.failed", "Failed"), true);
-    } finally { setSaving(null); }
+  function goCharge() {
+    sentRef.current = cur;
+    chargeOp.start();
+    chargeOp.confirm();
+    setInline(null);
   }
+  function askPs(on: boolean) {
+    if (anyBusy) return;
+    setInline({ k: "ps", on });
+  }
+  function goPs() {
+    if (inline?.k !== "ps") return;
+    psWant.current = inline.on;
+    psOp.start();
+    psOp.confirm();
+    setInline(null);
+  }
+  function askFb(on: boolean) {
+    if (anyBusy) return;
+    setInline({ k: "fb", on });
+  }
+  function goFb() {
+    if (inline?.k !== "fb") return;
+    fbWant.current = inline.on;
+    fbOp.start();
+    fbOp.confirm();
+    setInline(null);
+  }
+  function goDialog() {
+    const which = dialog;
+    setDialog(null);
+    const op = which === "reboot" ? rebootOp : resetOp;
+    op.start();
+    op.confirm();
+  }
+  const trig = (k: "charge" | "ps" | "fb") => (inlineK === k ? inlineCtl.triggerProps : {});
 
-  async function togglePowerSave(enabled: boolean) {
-    if (!psLoaded) return;
-    setPowerSave(enabled);
-    try {
-      await apiFetch("/api/device/power-save", {
-        method: "PUT",
-        body: { deviceInfoList: [{ power_saver_mode: enabled ? "1" : "0" }] },
-      });
-      showMsg(enabled ? t("devctl.powerSaveEnabled", "Power-save mode enabled") : t("devctl.powerSaveDisabled", "Power-save mode disabled"));
-    } catch (e) {
-      setPowerSave(!enabled);
-      showMsg(e instanceof ApiError ? e.message : t("devctl.failed", "Failed"), true);
+  // ── status ──
+  const capKnown = !!cd && !(cd.capacity === 0 && !cd.battery_status);
+  // sysfs power_supply status words, shown in the page language.
+  const statusWord = (s: string) =>
+    ({
+      Charging: t("devctl.bsCharging", "Charging"),
+      Discharging: t("devctl.bsDischarging", "Discharging"),
+      "Not charging": t("devctl.bsNotCharging", "Not charging"),
+      Full: t("devctl.bsFull", "Full"),
+    })[s] ?? s;
+  const capText = capKnown ? `${cd!.capacity}%` : "—";
+  let tone: Tone = "neutral";
+  let state: string = t("devctl.loading", "Reading battery…");
+  let reason: string | null = null;
+  if (!cd && charge.error) {
+    tone = "bad";
+    state = t("devctl.unreadable", "Can't read the battery state");
+    reason = charge.error.message;
+  } else if (cd) {
+    if (cd.charging_stopped) {
+      tone = "warn";
+      state = t("devctl.stStopped", "Battery {{cap}} · charging stopped", { cap: capText });
+      reason = cd.charge_limit_enabled
+        ? t("devctl.stStoppedLimit", "Charging is currently stopped (hardware-enforced). The limit resumes charging below {{low}}%.", {
+            low: Math.max(0, (cd.charge_limit ?? 0) - (cd.hysteresis ?? 0)),
+          })
+        : t("devctl.chargingStopped", "Charging is currently stopped (hardware-enforced).");
+    } else {
+      tone = capKnown ? "ok" : "warn";
+      state = capKnown
+        ? t("devctl.stBattery", "Battery {{cap}}", { cap: capText })
+        : t("devctl.stNoBattery", "Battery level not readable");
+      reason = [
+        cd.battery_status ? t("devctl.stStatus", "Status: {{s}}", { s: statusWord(cd.battery_status) }) : null,
+        cd.charge_limit_enabled
+          ? t("devctl.stLimitOn", "Charge limit {{limit}}%", { limit: cd.charge_limit })
+          : t("devctl.stLimitOff", "No charge limit"),
+      ]
+        .filter(Boolean)
+        .join(" · ");
     }
+    if (charge.stale) tone = "stale";
   }
 
-  async function toggleFastBoot(enabled: boolean) {
-    if (!fastBootLoaded) return;
-    setFastBoot(enabled);
-    try {
-      await apiFetch("/api/device/fast-boot", {
-        method: "PUT",
-        body: { fast_boot: enabled ? "1" : "0" },
-      });
-      showMsg(enabled ? t("devctl.fastBootEnabled", "Fast boot enabled") : t("devctl.fastBootDisabled", "Fast boot disabled"));
-    } catch (e) {
-      setFastBoot(!enabled);
-      showMsg(e instanceof ApiError ? e.message : t("devctl.failed", "Failed"), true);
-    }
-  }
+  const chargeLocked = !cur || charge.stale || anyBusy;
 
-  async function doReboot() {
-    setSaving("reboot");
-    try {
-      await apiFetch("/api/device/reboot", { method: "POST" });
-      showMsg(t("devctl.rebooting", "Router is rebooting…"));
-    } catch (e) {
-      showMsg(e instanceof ApiError ? e.message : t("devctl.failed", "Failed"), true);
-    } finally { setSaving(null); setConfirmReboot(false); }
-  }
-
-  async function doFactoryReset() {
-    setSaving("reset");
-    try {
-      await apiFetch("/api/device/factory-reset", { method: "POST" });
-      showMsg(t("devctl.factoryResetInitiated", "Factory reset initiated…"));
-    } catch (e) {
-      showMsg(e instanceof ApiError ? e.message : t("devctl.failed", "Failed"), true);
-    } finally { setSaving(null); setConfirmReset(null); }
-  }
-
-  const anyErr = chargeErr || fastBootErr;
+  const skeletonRow = (w: string) => (
+    <div className="nd-row">
+      <span className="nd-skel" style={{ width: w }} />
+    </div>
+  );
 
   return (
     <>
-      <PageHeader title={t("devctl.title", "Device Control")} description={t("devctl.desc", "Charge limit, power modes, and reboot.")} />
+      <h1 className="nd-title mb-4 mt-2">{t("devctl.title", "Device Control")}</h1>
+      <p className="nd-body mb-4 max-w-[720px] text-nd-t2">{t("devctl.desc", "Charge limit, power modes, and reboot.")}</p>
 
-      {anyErr && <ErrorBanner message={anyErr.message} />}
-      {msg && (
-        <div className={`mb-4 rounded-md border px-3 py-2 text-sm ${msg.err ? "border-error/40 bg-error/10 text-error" : "border-success/40 bg-success/10 text-success"}`}>
-          {msg.text}
-        </div>
-      )}
+      <div className="grid max-w-[720px] gap-6">
+        <StatusBlock
+          tone={tone}
+          state={state}
+          reason={reason}
+          meta={cd && charge.stale ? <Freshness stale lastOkAt={charge.lastOkAt} /> : undefined}
+          actions={
+            charge.error ? (
+              <Button variant="secondary" size="sm" onPress={() => charge.mutate()}>
+                {t("common.retry", "Retry")}
+              </Button>
+            ) : undefined
+          }
+        />
 
-      <div className="grid gap-4 md:grid-cols-2">
-        {/* Charge Limit */}
-        <SectionCard title={t("devctl.chargeLimitTitle", "Charge Limit")}>
-          {chargeData?.charging_stopped && (
-            <div className="mb-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-              {t("devctl.chargingStopped", "Charging is currently stopped (hardware-enforced).")}
-            </div>
-          )}
-          <FieldRow label={t("devctl.enableChargeLimit", "Enable charge limit")}>
-            <Toggle checked={chargeLimitEnabled} onChange={setChargeLimitEnabled} label={chargeLimitEnabled ? t("devctl.enabled", "Enabled") : t("devctl.disabled", "Disabled")} />
-          </FieldRow>
-          {chargeLimitEnabled && (
-            <>
-              <div className="py-3">
-                <SliderField label={t("devctl.chargeLimitPct", "Charge limit %")} value={chargeLimit} onChange={setChargeLimit} min={50} max={100} />
-              </div>
-              <div className="py-3">
-                <SliderField label={t("devctl.hysteresisPct", "Hysteresis %")} value={hysteresis} onChange={setHysteresis} min={1} max={10} />
-              </div>
-            </>
-          )}
-          <div className="mt-2 flex justify-end">
-            <Button onClick={applyChargeLimit} loading={saving === "charge"} disabled={!chargeLoaded}>
-              <BatteryCharging size={14} /> {t("devctl.apply", "Apply")}
-            </Button>
+        {/* ── charge limit ── */}
+        <section aria-labelledby="dc-charge">
+          <GroupTitle id="dc-charge">{t("devctl.chargeLimitTitle", "Charge Limit")}</GroupTitle>
+          <div className={`nd-group${charge.stale ? " nd-stale" : ""}`}>
+            {!cur ? (
+              <>
+                {skeletonRow("14ch")}
+                {skeletonRow("10ch")}
+              </>
+            ) : (
+              <>
+                <Row
+                  icon={BatteryCharging}
+                  label={t("devctl.enableChargeLimit", "Enable charge limit")}
+                  sub={t("devctl.limitSub", "Stops charging at the limit; resumes when the battery drops by the hysteresis.")}
+                  control={
+                    <Switch
+                      label={t("devctl.enableChargeLimit", "Enable charge limit")}
+                      isSelected={cur.enabled}
+                      isDisabled={chargeLocked}
+                      onChange={(on) => edit({ enabled: on })}
+                    />
+                  }
+                />
+                {cur.enabled && (
+                  <>
+                    <Slider
+                      id="dc-limit"
+                      label={t("devctl.chargeLimitPct", "Charge limit %")}
+                      value={cur.limit}
+                      min={50}
+                      max={100}
+                      disabled={chargeLocked}
+                      onChange={(v) => edit({ limit: v })}
+                    />
+                    {/* The agent accepts 1–20 (the old slider stopped at 10). */}
+                    <Slider
+                      id="dc-hyst"
+                      label={t("devctl.hysteresisPct", "Hysteresis %")}
+                      value={cur.hyst}
+                      min={1}
+                      max={20}
+                      disabled={chargeLocked}
+                      onChange={(v) => edit({ hyst: v })}
+                    />
+                  </>
+                )}
+                <Row
+                  label={t("devctl.currentCapacityLabel", "Current capacity")}
+                  value={cd?.battery_status ? `${capText} · ${statusWord(cd.battery_status)}` : capText}
+                />
+              </>
+            )}
           </div>
-          {chargeData?.capacity !== undefined && (
-            <p className="mt-2 text-xs text-text-dim">{t("devctl.currentCapacity", "Current capacity:")} {chargeData.capacity}%{chargeData.battery_status ? ` — ${chargeData.battery_status}` : ""}</p>
+          <div className="mt-3 flex flex-wrap items-center gap-3 px-1">
+            <span {...trig("charge")}>
+              <Button onPress={askCharge} isDisabled={chargeLocked} pending={chargeOp.busy}>
+                {t("devctl.apply", "Apply")}
+              </Button>
+            </span>
+            {dirty && <span className="nd-aux">{t("devctl.unsaved", "Not applied yet")}</span>}
+          </div>
+          {inlineK === "charge" && cur && (
+            <ConfirmInline
+              id={inlineCtl.id}
+              open
+              actionLabel={t("devctl.applyAction", "apply the charge limit")}
+              consequence={
+                cur.enabled
+                  ? t("devctl.cChargeOn", "Charging stops at {{limit}}% and starts again below {{low}}%.", {
+                      limit: cur.limit,
+                      low: cur.limit - cur.hyst,
+                    })
+                  : t("devctl.cChargeOff", "The limit is removed; the battery charges to 100%.")
+              }
+              onCancel={() => setInline(null)}
+              onConfirm={goCharge}
+            />
           )}
-        </SectionCard>
+          <div className="mt-2 px-1">
+            <OpResult op={chargeOp} />
+          </div>
+          {charge.stale && cd && (
+            <p className="nd-aux mt-2 px-1">
+              <Freshness stale lastOkAt={charge.lastOkAt} what={t("wifi.settingsWord", "Settings")} />
+              {t("wifi.refreshToEdit", " — refresh before changing anything.")}{" "}
+              <Button variant="secondary" size="sm" onPress={() => charge.mutate()}>
+                {t("wifi.refresh", "Refresh")}
+              </Button>
+            </p>
+          )}
+        </section>
 
-        {/* Power Modes */}
-        <SectionCard title={t("devctl.powerModesTitle", "Power Modes")}>
-          <FieldRow label={t("devctl.powerSaveMode", "Power-save mode")}>
-            <Toggle checked={powerSave} onChange={togglePowerSave} label={powerSave ? t("devctl.on", "On") : t("devctl.off", "Off")} disabled={!psLoaded} />
-          </FieldRow>
-          <FieldRow label={t("devctl.fastBoot", "Fast boot")} hint={t("devctl.fastBootHint", "Skips some init steps on reboot")}>
-            <Toggle checked={fastBoot} onChange={toggleFastBoot} label={fastBoot ? t("devctl.on", "On") : t("devctl.off", "Off")} disabled={!fastBootLoaded} />
-          </FieldRow>
-        </SectionCard>
+        {/* ── power modes ── */}
+        <section aria-labelledby="dc-power">
+          <GroupTitle id="dc-power">{t("devctl.powerModesTitle", "Power Modes")}</GroupTitle>
+          <div className="nd-group">
+            <Row
+              icon={Lightning}
+              label={t("devctl.powerSaveMode", "Power-save mode")}
+              sub={
+                !ps.data && !ps.error
+                  ? t("devctl.reading", "Reading…")
+                  : psOn === null
+                    ? t("devctl.psUnknown", "The device didn't report this setting.")
+                    : undefined
+              }
+              value={psOn === null ? "—" : undefined}
+              control={
+                <span {...trig("ps")}>
+                  <Switch
+                    label={t("devctl.powerSaveMode", "Power-save mode")}
+                    isSelected={psOn === true}
+                    isDisabled={psOn === null || ps.stale || anyBusy}
+                    onChange={askPs}
+                  />
+                </span>
+              }
+            />
+            <Row
+              icon={ArrowClockwise}
+              label={t("devctl.fastBoot", "Fast boot")}
+              sub={
+                !fast.data && !fast.error
+                  ? t("devctl.reading", "Reading…")
+                  : fbOn === null
+                    ? t("devctl.fbUnknown", "The device didn't report this setting.")
+                    : t("devctl.fastBootHint", "Skips some init steps on reboot")
+              }
+              value={fbOn === null ? "—" : undefined}
+              control={
+                <span {...trig("fb")}>
+                  <Switch
+                    label={t("devctl.fastBoot", "Fast boot")}
+                    isSelected={fbOn === true}
+                    isDisabled={fbOn === null || fast.stale || anyBusy}
+                    onChange={askFb}
+                  />
+                </span>
+              }
+            />
+          </div>
+          {(ps.error || fast.error) && (
+            <div className="mt-2 flex flex-wrap items-center gap-3 px-1" role="alert">
+              <span className="nd-aux">
+                {ps.error
+                  ? t("devctl.psReadFailed", "Couldn't read power-save mode: {{e}}", { e: ps.error.message })
+                  : t("devctl.fbReadFailed", "Couldn't read fast boot: {{e}}", { e: fast.error!.message })}
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                onPress={() => {
+                  if (ps.error) void ps.mutate();
+                  if (fast.error) void fast.mutate();
+                }}
+              >
+                {t("common.retry", "Retry")}
+              </Button>
+            </div>
+          )}
+          {inline?.k === "ps" && (
+            <ConfirmInline
+              id={inlineCtl.id}
+              open
+              actionLabel={
+                inline.on ? t("devctl.psOnAction", "turn power-save on") : t("devctl.psOffAction", "turn power-save off")
+              }
+              consequence={
+                inline.on
+                  ? t("devctl.cPsOn", "The device switches to the firmware's power-save mode.")
+                  : t("devctl.cPsOff", "The device leaves power-save mode.")
+              }
+              onCancel={() => setInline(null)}
+              onConfirm={goPs}
+            />
+          )}
+          {inline?.k === "fb" && (
+            <ConfirmInline
+              id={inlineCtl.id}
+              open
+              actionLabel={
+                inline.on ? t("devctl.fbOnAction", "turn fast boot on") : t("devctl.fbOffAction", "turn fast boot off")
+              }
+              consequence={
+                inline.on
+                  ? t("devctl.cFbOn", "The next start skips some init steps. Takes effect at the next reboot.")
+                  : t("devctl.cFbOff", "The next start runs the full init. Takes effect at the next reboot.")
+              }
+              onCancel={() => setInline(null)}
+              onConfirm={goFb}
+            />
+          )}
+          <div className="mt-2 grid gap-1 px-1">
+            {psOp.phase !== "idle" && psOp.phase !== "confirming" && (
+              <>
+                <span className="nd-aux">{t("devctl.powerSaveMode", "Power-save mode")}</span>
+                <OpResult op={psOp} />
+              </>
+            )}
+            {fbOp.phase !== "idle" && fbOp.phase !== "confirming" && (
+              <>
+                <span className="nd-aux">{t("devctl.fastBoot", "Fast boot")}</span>
+                <OpResult op={fbOp} />
+              </>
+            )}
+          </div>
+        </section>
 
-        {/* Reboot */}
-        <SectionCard title={t("devctl.rebootTitle", "Reboot")}>
-          {confirmReboot ? (
-            <div className="space-y-3">
-              <p className="text-sm text-warning">{t("devctl.rebootWarning", "Router will reboot and be temporarily unreachable.")}</p>
-              <div className="flex gap-2">
-                <Button onClick={doReboot} loading={saving === "reboot"}>
-                  <RotateCcw size={14} /> {t("devctl.confirmReboot", "Confirm Reboot")}
-                </Button>
-                <Button variant="ghost" onClick={() => setConfirmReboot(false)}>{t("devctl.cancel", "Cancel")}</Button>
-              </div>
+        {/* ── reboot / factory reset ── */}
+        <section aria-labelledby="dc-restart">
+          <GroupTitle id="dc-restart">{t("devctl.restartTitle", "Restart and reset")}</GroupTitle>
+          <div className="nd-group">
+            <div className="nd-row nd-row--two flex-wrap">
+              <ArrowClockwise size={20} weight="bold" className="nd-row__icon" aria-hidden />
+              <span className="nd-row__text">
+                <span className="nd-row__label">{t("devctl.rebootTitle", "Reboot")}</span>
+                <span className="nd-row__sub block">{t("devctl.rebootWarning", "Router will reboot and be temporarily unreachable.")}</span>
+              </span>
+              <Button variant="secondary" onPress={() => setDialog("reboot")} isDisabled={anyBusy}>
+                {t("devctl.rebootDevice", "Reboot Device")}
+              </Button>
             </div>
-          ) : (
-            <Button variant="outline" onClick={() => setConfirmReboot(true)}>
-              <RotateCcw size={14} /> {t("devctl.rebootDevice", "Reboot Device")}
-            </Button>
-          )}
-        </SectionCard>
-
-        {/* Factory Reset */}
-        <SectionCard title={t("devctl.factoryResetTitle", "Factory Reset")}>
-          {confirmReset === null && (
-            <Button variant="danger" onClick={() => setConfirmReset("first")}>
-              <AlertTriangle size={14} /> {t("devctl.factoryReset", "Factory Reset")}
-            </Button>
-          )}
-          {confirmReset === "first" && (
-            <div className="space-y-3">
-              <p className="text-sm text-error">{t("devctl.resetConfirm1", "This will erase all settings. Are you sure?")}</p>
-              <div className="flex gap-2">
-                <Button variant="danger" onClick={() => setConfirmReset("second")}>{t("devctl.yesImSure", "Yes, I'm sure")}</Button>
-                <Button variant="ghost" onClick={() => setConfirmReset(null)}>{t("devctl.cancel", "Cancel")}</Button>
-              </div>
+            <div className="nd-row nd-row--two flex-wrap">
+              <Warning size={20} weight="bold" className="nd-row__icon" aria-hidden />
+              <span className="nd-row__text">
+                <span className="nd-row__label">{t("devctl.factoryResetTitle", "Factory Reset")}</span>
+                <span className="nd-row__sub block">
+                  {t("devctl.resetSub", "Erases every setting and this project's software. Needs the install kit again.")}
+                </span>
+              </span>
+              <Button variant="danger" onPress={() => setDialog("reset")} isDisabled={anyBusy}>
+                {t("devctl.factoryReset", "Factory Reset")}
+              </Button>
             </div>
-          )}
-          {confirmReset === "second" && (
-            <div className="space-y-3">
-              <p className="text-sm text-error font-medium">{t("devctl.resetConfirm2", "Final confirmation — this cannot be undone.")}</p>
-              <div className="flex gap-2">
-                <Button variant="danger" onClick={doFactoryReset} loading={saving === "reset"}>
-                  {t("devctl.resetNow", "Reset Now")}
-                </Button>
-                <Button variant="ghost" onClick={() => setConfirmReset(null)}>{t("devctl.cancel", "Cancel")}</Button>
-              </div>
-            </div>
-          )}
-        </SectionCard>
+          </div>
+          <div className="mt-2 grid gap-1 px-1">
+            {rebootOp.phase !== "idle" && rebootOp.phase !== "confirming" && <OpResult op={rebootOp} />}
+            {resetOp.phase !== "idle" && resetOp.phase !== "confirming" && <OpResult op={resetOp} />}
+          </div>
+        </section>
       </div>
+
+      <ConfirmDialog
+        open={dialog === "reboot"}
+        onOpenChange={(o) => !o && setDialog(null)}
+        title={t("devctl.confirmRebootTitle", "Reboot the device?")}
+        what={t("devctl.confirmRebootWhat", "The U60 restarts. Wi-Fi, the mobile connection and this page drop until it is back.")}
+        downtime={t("devctl.rebootDowntime", "About 90 seconds. This page waits and reconnects by itself; you may need to sign in again.")}
+        recovery={rebootRecovery}
+        actionLabel={t("devctl.confirmReboot", "Confirm Reboot")}
+        cutsUplink
+        onConfirm={goDialog}
+      />
+      <ConfirmDialog
+        open={dialog === "reset"}
+        onOpenChange={(o) => !o && setDialog(null)}
+        title={t("devctl.confirmResetTitle", "Erase everything and restore factory settings?")}
+        what={t(
+          "devctl.confirmResetWhat",
+          "Every setting is erased — Wi-Fi, APN, locks, SMS forwarding — and so is this project's software: this manager, the touchscreen interface, CHILL and Tailscale. This cannot be undone."
+        )}
+        downtime={t("devctl.resetDowntime", "The device restarts; this page does not come back.")}
+        recovery={resetRecovery}
+        actionLabel={t("devctl.resetNow", "Reset Now")}
+        typeToConfirm={t("devctl.resetWord", "factory reset")}
+        danger
+        cutsUplink
+        onConfirm={goDialog}
+      />
     </>
   );
 }

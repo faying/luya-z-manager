@@ -139,6 +139,7 @@ pub fn status(_state: &AppState) -> (u16, Value) {
         }
         data["mode"] = json!(mode);
     }
+    data["manual_first"] = crate::manual_first::summary();
     (200, json!({"ok": true, "data": data}))
 }
 
@@ -332,6 +333,8 @@ pub fn exit_state(mode: &str, main_now: &str) -> &'static str {
 }
 
 fn remember_main(now: &str) {
+    // While manual-first holds a backup region, the owner's choice is still 🎯.
+    let now = crate::manual_first::main_to_remember(now);
     if !now.is_empty() && now != "DIRECT" {
         let _ = fs::write(LAST_MAIN, now);
     }
@@ -681,6 +684,37 @@ fn set_env_var(name: &str, value: &str) -> Result<(), String> {
 fn read_chill_state() -> Option<Value> {
     let s = fs::read_to_string(STATE_PATH).ok()?;
     serde_json::from_str::<Value>(&s).ok()
+}
+
+/// mihomo is up right now (not merely switched on). For netinfo.rs.
+pub(crate) fn running() -> bool {
+    read_chill_state().and_then(|v| v.get("state").and_then(Value::as_str).map(|s| s == "running")) == Some(true)
+}
+
+/// The main group's selection followed down to a real node:
+/// `["🚀 节点选择", "🇯🇵 日本", "JP 03"]`. One small `/proxies/<name>` call per
+/// hop instead of the whole `/proxies` dump. For netinfo.rs, which re-looks-up
+/// the CHILL exit IP when the last element changes.
+pub(crate) fn main_exit_chain() -> Option<Vec<String>> {
+    let agent = mihomo_agent(HTTP_TIMEOUT);
+    let secret = mihomo_secret();
+    let mut chain = vec![MAIN_GROUP.to_string()];
+    for hop in 0..4 {
+        let url = format!("{MIHOMO_API}/proxies/{}", urlencode(chain.last()?));
+        // A hop that fails keeps what is known so far; only the first one
+        // failing means mihomo cannot be asked at all.
+        let Some(info) = http_get_json(&agent, &url, &secret) else {
+            if hop == 0 {
+                return None;
+            }
+            break;
+        };
+        match info.get("now").and_then(Value::as_str) {
+            Some(next) if !next.is_empty() && !chain.iter().any(|c| c == next) => chain.push(next.to_string()),
+            _ => break,
+        }
+    }
+    Some(chain)
 }
 
 /// Reduce mihomo's `/proxies` response to the 5 known select-groups (skips the

@@ -621,7 +621,7 @@ echo "  Agent API:  http://$GATEWAY:$AGENT_PORT"
 echo "  Password:   $AGENT_PASSWORD"
 echo "  Deploy:     ./deploy.sh $AGENT_PASSWORD"
 echo ""
-echo "  Point the iOS/Android companion app at http://$GATEWAY:$AGENT_PORT"
+echo "  Open the web admin at http://$GATEWAY:$AGENT_PORT"
 if [ "$DEPLOY_UI" = true ]; then
     echo "  Web admin:  http://$GATEWAY:$AGENT_PORT/"
 fi

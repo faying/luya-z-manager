@@ -2,12 +2,14 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { getToken, setToken, UNAUTHORIZED_EVENT } from "@/lib/api/client";
+import { getToken, LOGIN_EVENT, setToken, UNAUTHORIZED_EVENT } from "@/lib/api/client";
 import { login as apiLogin, logout as apiLogout } from "@/lib/api/auth";
 
 type AuthCtx = {
   authed: boolean;
   ready: boolean;
+  /** The session expired mid-use: show the in-place login dialog, keep the page. */
+  expired: boolean;
   login: (password: string) => Promise<void>;
   logout: () => void;
 };
@@ -17,16 +19,26 @@ const Ctx = createContext<AuthCtx | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [authed, setAuthed] = useState(false);
   const [ready, setReady] = useState(false);
+  const [expired, setExpired] = useState(false);
 
   useEffect(() => {
+    // The token lives in localStorage, which the static export can't read at
+    // build time, so it is picked up once after mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAuthed(!!getToken());
     setReady(true);
-    // A 401 anywhere (expired/invalid token) clears the session and fires this
-    // event — flip to unauthed so <AuthGate> redirects to login automatically,
-    // instead of leaving the page stuck showing "unauthorized" until a refresh.
-    const onUnauthorized = () => setAuthed(false);
+    // A 401 on the current token (see apiFetch) clears it and fires this.
+    // Keep the page mounted — forms and pending writes survive — and ask for
+    // the password in place (design doc §5.1). A fresh token fires
+    // LOGIN_EVENT, which closes the dialog and lets waiting requests resend.
+    const onUnauthorized = () => setExpired(true);
+    const onLogin = () => setExpired(false);
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
-    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    window.addEventListener(LOGIN_EVENT, onLogin);
+    return () => {
+      window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+      window.removeEventListener(LOGIN_EVENT, onLogin);
+    };
   }, []);
 
   const login = useCallback(async (password: string) => {
@@ -36,10 +48,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     apiLogout();
+    setExpired(false);
     setAuthed(false);
   }, []);
 
-  return <Ctx.Provider value={{ authed, ready, login, logout }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ authed, ready, expired, login, logout }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth(): AuthCtx {

@@ -20,7 +20,18 @@ impl AtPort {
         }
     }
 
+    /// Probe (or return the cached) AT port. Takes the port lock: the probe
+    /// itself writes "AT" and reads the port, like any other command.
     pub fn detect(&self) -> Option<String> {
+        // Known port: answer without queueing behind a running command.
+        if let Some(p) = self.cached.lock().unwrap().clone() {
+            return Some(p);
+        }
+        let _serial = PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        self.detect_locked()
+    }
+
+    fn detect_locked(&self) -> Option<String> {
         {
             let cached = self.cached.lock().unwrap();
             if let Some(ref port) = *cached {
@@ -53,9 +64,14 @@ impl AtPort {
     }
 }
 
+/// One command on the port at a time, process-wide: two `cat` readers on the
+/// same tty take each other's replies (several AtPort instances exist).
+static PORT_LOCK: Mutex<()> = Mutex::new(());
+
 /// Send an AT command and return the raw response text.
 pub fn send(at_port: &AtPort, command: &str, timeout_secs: u64) -> Result<String, String> {
-    let port = at_port.detect().ok_or("no serial port found")?;
+    let _serial = PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let port = at_port.detect_locked().ok_or("no serial port found")?;
     let script = format!(
         "cat {p} & PID=$! ; sleep 0.3 ; echo -e '{cmd}\\r' > {p} ; sleep {t} ; kill $PID 2>/dev/null",
         p = port,
