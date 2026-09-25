@@ -171,6 +171,7 @@ docs/DESIGN.md     Admin web design system
 
 - [Jesther Silvestre](https://github.com/jesther-ai) — original [open-u60-pro](https://github.com/jesther-ai/open-u60-pro): agent, mobile apps, first web dashboard.
 - Wei REN — install kit, eSIM, Tailscale, CHILL proxy, Home Mode, admin web redesign.
+- [33333s](https://github.com/33333s) — thanks for the reference repos this project builds on: [u60pro-devui](https://github.com/33333s/u60pro-devui) (touchscreen UI) and [zwrt-datad](https://github.com/33333s/zwrt-datad) (on-device data service).
 - Touchscreen UI: [zte-u60-pro-mu5250-touch-ui](https://github.com/faying/zte-u60-pro-mu5250-touch-ui) (fork of [33333s/u60pro-devui](https://github.com/33333s/u60pro-devui)); its data backend is [33333s/zwrt-datad](https://github.com/33333s/zwrt-datad).
 
 ## License & Disclaimers

@@ -78,9 +78,14 @@ deploy_agent() {
   echo "▶ Uploading + restarting agent on root@$HOST…"
   cat "$BIN" | _ssh '
     cat > /data/zte-agent.new && chmod +x /data/zte-agent.new
-    kill $(cat /tmp/zte-agent.pid 2>/dev/null) 2>/dev/null; sleep 1
-    mv /data/zte-agent.new /data/zte-agent
-    sh /data/local/tmp/start_zte_agent.sh && sleep 1
+    if [ -x /etc/init.d/zte-agent ]; then
+      mv /data/zte-agent.new /data/zte-agent
+      /etc/init.d/zte-agent restart && sleep 1
+    else
+      kill $(cat /tmp/zte-agent.pid 2>/dev/null) 2>/dev/null; sleep 1
+      mv /data/zte-agent.new /data/zte-agent
+      sh /data/local/tmp/start_zte_agent.sh && sleep 1
+    fi
     pidof zte-agent >/dev/null && echo "  agent restarted (pid $(pidof zte-agent))" || echo "  ✗ agent not running after restart"
   ' | _quiet
 }
