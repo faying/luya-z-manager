@@ -5,6 +5,7 @@ mod at_terminal;
 mod auth;
 mod cell;
 mod charge_policy;
+mod datad_feed;
 mod device_ext;
 pub mod doh;
 mod event_bus;

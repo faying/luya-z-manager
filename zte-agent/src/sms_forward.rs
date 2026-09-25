@@ -121,6 +121,13 @@ pub struct HttpHeader {
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct ForwardState {
     pub last_forwarded_id: u64,
+    /// Time of the newest SMS the forwarder has handled, as parsed from the
+    /// SMS's own `date` field by `sms_time_key` (seconds, UTC-normalised with
+    /// the SMS's zone). Both sides of every comparison come from that same
+    /// field and parser — never from the device clock. Missing in state files
+    /// written before this field existed; see `plan_forward`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_forwarded_time: Option<i64>,
     #[serde(default)]
     pub log: Vec<ForwardLogEntry>,
 }
@@ -151,6 +158,97 @@ struct DecodedSms {
     sender: String,
     content: String,
     date: String,
+}
+
+/// What one complete (both stores OK) read of the device's SMS list gave us.
+#[derive(Debug, Clone, Default)]
+struct DeviceSnapshot {
+    /// Highest id seen in any row (received or not).
+    max_id: u64,
+    /// Received messages (tag 0/1): (id, `sms_time_key` of its date).
+    received: Vec<(u64, Option<i64>)>,
+}
+
+#[derive(Debug, PartialEq)]
+struct ForwardPlan {
+    /// Ids to forward, ascending.
+    forward_ids: Vec<u64>,
+    new_watermark: u64,
+    new_last_time: Option<i64>,
+    /// Device ids went below the watermark (counter reset / storage wiped).
+    rollback: bool,
+}
+
+/// Decide what to forward. Pure; see R4/R15 in the datad plan.
+///
+/// * Read failed (either store errored) → nothing forwarded, nothing moves.
+/// * Normal: forward received ids > watermark; watermark = max of those.
+/// * Rollback (device max id < watermark, device not empty): forward received
+///   messages whose time is newer than `last_time`, then watermark = device
+///   max id. Without a `last_time` (old state file) nothing is forwarded — we
+///   would rather miss a message than re-send old ones — and the baseline is
+///   re-established from what is on the device.
+/// * An empty device is not treated as a rollback (can't tell; keep state).
+/// * `last_time` missing with no rollback: backfilled from messages the
+///   watermark already covers, so old state files gain a time baseline.
+fn plan_forward(watermark: u64, last_time: Option<i64>, snapshot: Result<&DeviceSnapshot, &str>) -> ForwardPlan {
+    let unchanged = ForwardPlan {
+        forward_ids: Vec::new(),
+        new_watermark: watermark,
+        new_last_time: last_time,
+        rollback: false,
+    };
+    let snap = match snapshot {
+        Ok(s) => s,
+        Err(_) => return unchanged,
+    };
+    let max_opt = |a: Option<i64>, b: Option<i64>| match (a, b) {
+        (Some(x), Some(y)) => Some(x.max(y)),
+        (x, None) => x,
+        (None, y) => y,
+    };
+
+    if snap.max_id > 0 && snap.max_id < watermark {
+        let mut forward: Vec<(u64, Option<i64>)> = match last_time {
+            Some(lt) => snap
+                .received
+                .iter()
+                .copied()
+                .filter(|&(_, t)| matches!(t, Some(t) if t > lt))
+                .collect(),
+            None => Vec::new(),
+        };
+        forward.sort_by_key(|&(id, _)| id);
+        let new_last_time = match last_time {
+            Some(_) => forward.iter().fold(last_time, |acc, &(_, t)| max_opt(acc, t)),
+            None => snap.received.iter().fold(None, |acc, &(_, t)| max_opt(acc, t)),
+        };
+        return ForwardPlan {
+            forward_ids: forward.into_iter().map(|(id, _)| id).collect(),
+            new_watermark: snap.max_id,
+            new_last_time,
+            rollback: true,
+        };
+    }
+
+    let mut forward: Vec<(u64, Option<i64>)> =
+        snap.received.iter().copied().filter(|&(id, _)| id > watermark).collect();
+    forward.sort_by_key(|&(id, _)| id);
+    let mut new_last_time = last_time;
+    if new_last_time.is_none() {
+        new_last_time = snap
+            .received
+            .iter()
+            .filter(|&&(id, _)| id <= watermark)
+            .fold(None, |acc, &(_, t)| max_opt(acc, t));
+    }
+    let new_last_time = forward.iter().fold(new_last_time, |acc, &(_, t)| max_opt(acc, t));
+    ForwardPlan {
+        new_watermark: forward.last().map(|&(id, _)| id).unwrap_or(watermark),
+        forward_ids: forward.into_iter().map(|(id, _)| id).collect(),
+        new_last_time,
+        rollback: false,
+    }
 }
 
 // ── UCS-2 hex decoding ──────────────────────────────────────────────
@@ -213,6 +311,41 @@ fn humanize_zte_date(raw: &str) -> String {
         ))
     }();
     ok.unwrap_or_else(|| raw.to_string())
+}
+
+/// Parse the ZTE SMS `date` field (`YY,MM,DD,HH,MM,SS,+TZ`, `;` also
+/// accepted) into seconds since 2000-01-01 UTC, using the zone the SMS
+/// carries (hours; values beyond ±14 are read as GSM quarter-hours). Only ever
+/// compared with other values from this same function.
+fn sms_time_key(raw: &str) -> Option<i64> {
+    let parts: Vec<&str> = raw.split(|c| c == ',' || c == ';').collect();
+    if parts.len() < 6 {
+        return None;
+    }
+    let n = |i: usize| -> Option<i64> { parts[i].trim().parse::<i64>().ok() };
+    let (yy, mo, dd, hh, mi, ss) = (n(0)?, n(1)?, n(2)?, n(3)?, n(4)?, n(5)?);
+    if !(0..=99).contains(&yy)
+        || !(1..=12).contains(&mo)
+        || !(1..=31).contains(&dd)
+        || !(0..=23).contains(&hh)
+        || !(0..=59).contains(&mi)
+        || !(0..=60).contains(&ss)
+    {
+        return None;
+    }
+    // Days since 2000-01-01 (civil calendar, all years 2000..2099).
+    let y = 2000 + yy;
+    let (y2, m2) = if mo <= 2 { (y - 1, mo + 9) } else { (y, mo - 3) };
+    let era_days = |y: i64, m: i64, d: i64| 365 * y + y / 4 - y / 100 + y / 400 + (153 * m + 2) / 5 + d;
+    let days = era_days(y2, m2, dd) - era_days(1999, 10, 1); // 2000-01-01 == Mar-based (1999, 10, 1)
+    let tz_secs = match parts.get(6).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(tz) => {
+            let v: i64 = tz.trim_start_matches('+').parse().ok()?;
+            if v.abs() > 14 { v * 15 * 60 } else { v * 3600 }
+        }
+        None => 0,
+    };
+    Some(days * 86_400 + hh * 3600 + mi * 60 + ss - tz_secs)
 }
 
 /// Encode text as UTF-16BE hex (UCS-2), matching the apps' `encodeUCS2Hex`.
@@ -490,7 +623,13 @@ fn cleanup_forwarded_sms(forward_number: &str) {
     std::thread::sleep(Duration::from_millis(200));
 
     // Fetch latest sent messages (tag=2)
-    let messages = fetch_sms_both_stores(2, 0, 5, "order by id desc");
+    let messages = match fetch_sms_both_stores(2, 0, 5, "order by id desc") {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("[sms_forward] cleanup: failed to list sent SMS: {e}");
+            return;
+        }
+    };
 
     // Find the most recent sent SMS to the forward number
     let normalized_dest = normalize_phone(forward_number);
@@ -693,7 +832,7 @@ impl SmsForwarder {
                     std::thread::sleep(Duration::from_millis(500));
                     let last_id = self.state.lock().unwrap().last_forwarded_id;
                     eprintln!("[sms_forward] SMS event received, processing after id {last_id}");
-                    self.process_new_messages(last_id);
+                    self.process_new_messages();
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     // Fallback poll for any missed events
@@ -717,10 +856,9 @@ impl SmsForwarder {
 
         self.init_watermark();
 
-        let last_id = self.state.lock().unwrap().last_forwarded_id;
         match fetch_sms_capacity() {
             Ok(cap) if cap > 0 => {
-                self.process_new_messages(last_id);
+                self.process_new_messages();
             }
             Ok(_) => {}
             Err(e) => eprintln!("[sms_forward] poll: failed to fetch SMS capacity: {e}"),
@@ -736,23 +874,20 @@ impl SmsForwarder {
         }
     }
 
-    fn process_new_messages(&self, after_id: u64) {
-        let messages = match fetch_new_messages(after_id) {
-            Ok(msgs) => msgs,
+    fn process_new_messages(&self) {
+        let (last_time, watermark) = {
+            let st = self.state.lock().unwrap();
+            (st.last_forwarded_time, st.last_forwarded_id)
+        };
+
+        let (snapshot, messages) = match fetch_device_sms() {
+            Ok(v) => v,
             Err(e) => {
-                eprintln!("[sms_forward] failed to fetch messages after id {after_id}: {e}");
+                // Incomplete read: never judge rollback or move the watermark.
+                eprintln!("[sms_forward] failed to read SMS after id {watermark}: {e}");
                 return;
             }
         };
-
-        if messages.is_empty() {
-            return;
-        }
-
-        eprintln!(
-            "[sms_forward] found {} new message(s) after id {after_id}",
-            messages.len()
-        );
 
         let config = self.config.lock().unwrap().clone();
         let enabled_rules: Vec<&ForwardRule> =
@@ -762,14 +897,44 @@ impl SmsForwarder {
             return;
         }
 
+        let plan = plan_forward(watermark, last_time, Ok(&snapshot));
+        if plan.rollback {
+            eprintln!(
+                "[sms_forward] SMS ids rolled back: device max id {} < watermark {watermark}; \
+                 forwarding {} message(s) newer than last forwarded time {:?}, watermark -> {}",
+                snapshot.max_id,
+                plan.forward_ids.len(),
+                last_time,
+                plan.new_watermark,
+            );
+            if last_time.is_none() {
+                eprintln!("[sms_forward] no last forwarded time on record; not re-sending anything on rollback");
+            }
+        }
+
+        let messages: Vec<DecodedSms> = messages
+            .into_iter()
+            .filter(|m| plan.forward_ids.contains(&m.id))
+            .collect();
+
+        if messages.is_empty() {
+            if plan.new_watermark != watermark || plan.new_last_time != last_time {
+                let mut state = self.state.lock().unwrap();
+                state.last_forwarded_id = plan.new_watermark;
+                state.last_forwarded_time = plan.new_last_time;
+                save_state(&state);
+            }
+            return;
+        }
+
+        eprintln!(
+            "[sms_forward] found {} new message(s) after id {watermark}",
+            messages.len()
+        );
+
         let agent = http_agent();
-        let mut max_processed_id = after_id;
 
         for sms in &messages {
-            if sms.id <= after_id {
-                continue;
-            }
-
             let mut all_succeeded = true;
 
             for (i, rule) in enabled_rules.iter().enumerate() {
@@ -863,10 +1028,6 @@ impl SmsForwarder {
                 }
             }
 
-            if sms.id > max_processed_id {
-                max_processed_id = sms.id;
-            }
-
             // Post-forward actions — only when ALL rules succeeded
             if all_succeeded && config.mark_read_after_forward {
                 if let Err(e) = ubus::call(
@@ -891,9 +1052,10 @@ impl SmsForwarder {
             std::thread::sleep(Duration::from_millis(INTER_SMS_DELAY_MS));
         }
 
-        // Update watermark
+        // Update watermark + last forwarded time (both decided by plan_forward)
         let mut state = self.state.lock().unwrap();
-        state.last_forwarded_id = max_processed_id;
+        state.last_forwarded_id = plan.new_watermark;
+        state.last_forwarded_time = plan.new_last_time;
         save_state(&state);
     }
 }
@@ -941,34 +1103,48 @@ fn forward_with_retry(
 
 /// Query SMS from both NV and SIM storage, merged and deduplicated by ID.
 /// ZTE firmware bug: mem_store=2 ("all") silently omits SIM messages.
-fn fetch_sms_both_stores(tags: u64, page: u64, count: u64, order: &str) -> Vec<Value> {
+/// Either store failing fails the whole read — a half list must never be
+/// mistaken for "the device's ids went backwards" (R15).
+fn fetch_sms_both_stores(tags: u64, page: u64, count: u64, order: &str) -> Result<Vec<Value>, String> {
+    // NV (1) first — more common, then SIM (0)
+    let results: Vec<(u64, Result<Value, String>)> = [1u64, 0]
+        .into_iter()
+        .map(|store| {
+            let params = json!({
+                "tags": tags,
+                "page": page,
+                "data_per_page": count,
+                "mem_store": store,
+                "order_by": order,
+            });
+            (store, ubus::call("zwrt_wms", "zte_libwms_get_sms_data", Some(&params.to_string())))
+        })
+        .collect();
+    merge_store_results(results)
+}
+
+fn item_id(item: &Value) -> u64 {
+    item["id"]
+        .as_u64()
+        .or_else(|| item["id"].as_str().and_then(|s| s.parse().ok()))
+        .unwrap_or(0)
+}
+
+/// Pure half of `fetch_sms_both_stores`.
+fn merge_store_results(results: Vec<(u64, Result<Value, String>)>) -> Result<Vec<Value>, String> {
     let mut all: Vec<Value> = Vec::new();
     let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
-
-    for store in [1u64, 0] {
-        // NV (1) first — more common, then SIM (0)
-        let params = json!({
-            "tags": tags,
-            "page": page,
-            "data_per_page": count,
-            "mem_store": store,
-            "order_by": order,
-        });
-        if let Ok(data) = ubus::call("zwrt_wms", "zte_libwms_get_sms_data", Some(&params.to_string())) {
-            if let Some(arr) = data["messages"].as_array() {
-                for item in arr {
-                    let id = item["id"]
-                        .as_u64()
-                        .or_else(|| item["id"].as_str().and_then(|s| s.parse().ok()))
-                        .unwrap_or(0);
-                    if seen.insert(id) {
-                        all.push(item.clone());
-                    }
+    for (store, res) in results {
+        let data = res.map_err(|e| format!("mem_store {store}: {e}"))?;
+        if let Some(arr) = data["messages"].as_array() {
+            for item in arr {
+                if seen.insert(item_id(item)) {
+                    all.push(item.clone());
                 }
             }
         }
     }
-    all
+    Ok(all)
 }
 
 /// Returns the unread SMS count.
@@ -984,9 +1160,11 @@ fn fetch_sms_capacity() -> Result<u64, String> {
         .unwrap_or(0))
 }
 
-/// Fetch SMS list and return messages with id > after_id, sorted ascending.
-fn fetch_new_messages(after_id: u64) -> Result<Vec<DecodedSms>, String> {
-    let sms_list = fetch_sms_both_stores(1, 0, 50, "order by id desc");
+/// Read the latest SMS list (both stores) once: a snapshot for `plan_forward`
+/// plus the decoded received messages, sorted ascending by id.
+fn fetch_device_sms() -> Result<(DeviceSnapshot, Vec<DecodedSms>), String> {
+    let sms_list = fetch_sms_both_stores(1, 0, 50, "order by id desc")?;
+    let mut snapshot = DeviceSnapshot::default();
 
     let mut messages: Vec<DecodedSms> = Vec::new();
 
@@ -996,9 +1174,7 @@ fn fetch_new_messages(after_id: u64) -> Result<Vec<DecodedSms>, String> {
             .or_else(|| item["id"].as_str().and_then(|s| s.parse().ok()))
             .unwrap_or(0);
 
-        if id <= after_id {
-            continue;
-        }
+        snapshot.max_id = snapshot.max_id.max(id);
 
         // tag: 0=unread, 1=read, 2=sent, 3=draft — only forward received (0/1)
         let tag_num = item["tag"]
@@ -1030,6 +1206,7 @@ fn fetch_new_messages(after_id: u64) -> Result<Vec<DecodedSms>, String> {
             content_raw.to_string()
         };
 
+        snapshot.received.push((id, sms_time_key(&date)));
         messages.push(DecodedSms {
             id,
             sender,
@@ -1039,12 +1216,12 @@ fn fetch_new_messages(after_id: u64) -> Result<Vec<DecodedSms>, String> {
     }
 
     messages.sort_by_key(|m| m.id);
-    Ok(messages)
+    Ok((snapshot, messages))
 }
 
 /// Get the maximum SMS id currently on the device.
 fn fetch_max_sms_id() -> Result<u64, String> {
-    let all = fetch_sms_both_stores(10, 0, 5, "order by id desc");
+    let all = fetch_sms_both_stores(10, 0, 5, "order by id desc")?;
 
     let max_id = all
         .iter()
@@ -1365,5 +1542,160 @@ pub fn retry_forward(state: &AppState, body: &[u8]) -> (u16, Value) {
     match result {
         Ok(()) => (200, json!({"ok": true, "data": {"status": "sent"}})),
         Err(e) => (502, json!({"ok": false, "error": e})),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snap(max_id: u64, received: &[(u64, Option<i64>)]) -> DeviceSnapshot {
+        DeviceSnapshot { max_id, received: received.to_vec() }
+    }
+
+    const T0: i64 = 1_000_000;
+
+    #[test]
+    fn normal_increasing_ids_forward_only_new() {
+        let s = snap(103, &[(99, Some(T0 - 20)), (100, Some(T0)), (101, Some(T0 + 10)), (103, Some(T0 + 30))]);
+        let p = plan_forward(100, Some(T0), Ok(&s));
+        assert!(!p.rollback);
+        assert_eq!(p.forward_ids, vec![101, 103]);
+        assert_eq!(p.new_watermark, 103);
+        assert_eq!(p.new_last_time, Some(T0 + 30));
+    }
+
+    #[test]
+    fn nothing_new_changes_nothing() {
+        let s = snap(100, &[(99, Some(T0 - 20)), (100, Some(T0))]);
+        let p = plan_forward(100, Some(T0), Ok(&s));
+        assert_eq!(p, ForwardPlan { forward_ids: vec![], new_watermark: 100, new_last_time: Some(T0), rollback: false });
+    }
+
+    #[test]
+    fn rollback_forwards_ids_1_and_2() {
+        // watermark 100, device numbering reset, new SMS 1 and 2 arrive
+        let s = snap(2, &[(2, Some(T0 + 60)), (1, Some(T0 + 30))]);
+        let p = plan_forward(100, Some(T0), Ok(&s));
+        assert!(p.rollback);
+        assert_eq!(p.forward_ids, vec![1, 2]);
+        assert_eq!(p.new_watermark, 2);
+        assert_eq!(p.new_last_time, Some(T0 + 60));
+        // next round: nothing is re-sent
+        let p2 = plan_forward(p.new_watermark, p.new_last_time, Ok(&s));
+        assert!(!p2.rollback);
+        assert!(p2.forward_ids.is_empty());
+        // and SMS 3 goes through the normal path
+        let s3 = snap(3, &[(1, Some(T0 + 30)), (2, Some(T0 + 60)), (3, Some(T0 + 90))]);
+        let p3 = plan_forward(p.new_watermark, p.new_last_time, Ok(&s3));
+        assert_eq!(p3.forward_ids, vec![3]);
+        assert_eq!(p3.new_watermark, 3);
+    }
+
+    #[test]
+    fn rollback_does_not_resend_old_sms() {
+        // after the reset the device still holds older messages (time <= last forwarded)
+        let s = snap(4, &[(1, Some(T0 - 500)), (2, Some(T0)), (3, None), (4, Some(T0 + 5))]);
+        let p = plan_forward(100, Some(T0), Ok(&s));
+        assert!(p.rollback);
+        assert_eq!(p.forward_ids, vec![4]);
+        assert_eq!(p.new_watermark, 4);
+        assert_eq!(p.new_last_time, Some(T0 + 5));
+
+        let only_old = snap(2, &[(1, Some(T0 - 500)), (2, Some(T0 - 1))]);
+        let p = plan_forward(100, Some(T0), Ok(&only_old));
+        assert!(p.rollback);
+        assert!(p.forward_ids.is_empty());
+        assert_eq!(p.new_watermark, 2);
+        assert_eq!(p.new_last_time, Some(T0));
+    }
+
+    #[test]
+    fn one_store_error_no_rollback_no_advance_no_forward() {
+        // NV store answers with only low ids, SIM store fails
+        let res = merge_store_results(vec![
+            (1, Ok(json!({"messages": [{"id": "1", "tag": "0"}, {"id": 2, "tag": 1}]}))),
+            (0, Err("ubus timeout".to_string())),
+        ]);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.contains("mem_store 0"), "{err}");
+        let p = plan_forward(100, Some(T0), Err(&err));
+        assert_eq!(p, ForwardPlan { forward_ids: vec![], new_watermark: 100, new_last_time: Some(T0), rollback: false });
+
+        let res = merge_store_results(vec![(1, Err("boom".into())), (0, Ok(json!({"messages": []})))]);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn both_stores_ok_merges_and_dedups() {
+        let res = merge_store_results(vec![
+            (1, Ok(json!({"messages": [{"id": "5"}, {"id": 3}]}))),
+            (0, Ok(json!({"messages": [{"id": 5}, {"id": "4"}]}))),
+            (0, Ok(json!({}))),
+        ])
+        .unwrap();
+        let ids: Vec<u64> = res.iter().map(item_id).collect();
+        assert_eq!(ids, vec![5, 3, 4]);
+    }
+
+    #[test]
+    fn rollback_without_last_time_is_conservative() {
+        // old state file: no time recorded -> forward nothing, rebase on device
+        let s = snap(2, &[(1, Some(T0 + 30)), (2, Some(T0 + 60))]);
+        let p = plan_forward(100, None, Ok(&s));
+        assert!(p.rollback);
+        assert!(p.forward_ids.is_empty());
+        assert_eq!(p.new_watermark, 2);
+        assert_eq!(p.new_last_time, Some(T0 + 60));
+    }
+
+    #[test]
+    fn missing_last_time_backfilled_from_covered_messages() {
+        let s = snap(102, &[(99, Some(T0 - 10)), (100, Some(T0)), (102, Some(T0 + 20))]);
+        let p = plan_forward(100, None, Ok(&s));
+        assert!(!p.rollback);
+        assert_eq!(p.forward_ids, vec![102]);
+        assert_eq!(p.new_last_time, Some(T0 + 20));
+        let s = snap(100, &[(99, Some(T0 - 10)), (100, Some(T0))]);
+        assert_eq!(plan_forward(100, None, Ok(&s)).new_last_time, Some(T0));
+    }
+
+    #[test]
+    fn empty_device_is_not_a_rollback() {
+        let p = plan_forward(100, Some(T0), Ok(&snap(0, &[])));
+        assert!(!p.rollback);
+        assert_eq!(p.new_watermark, 100);
+        assert!(p.forward_ids.is_empty());
+    }
+
+    #[test]
+    fn old_state_file_without_time_still_loads() {
+        let st: ForwardState = serde_json::from_str(r#"{"last_forwarded_id":42,"log":[]}"#).unwrap();
+        assert_eq!(st.last_forwarded_id, 42);
+        assert_eq!(st.last_forwarded_time, None);
+        let st: ForwardState = serde_json::from_str(r#"{"last_forwarded_id":42}"#).unwrap();
+        assert_eq!(st.last_forwarded_time, None);
+        let back = serde_json::to_string(&ForwardState { last_forwarded_id: 7, last_forwarded_time: Some(5), log: vec![] }).unwrap();
+        let st: ForwardState = serde_json::from_str(&back).unwrap();
+        assert_eq!((st.last_forwarded_id, st.last_forwarded_time), (7, Some(5)));
+    }
+
+    #[test]
+    fn sms_time_key_orders_and_uses_zone() {
+        let a = sms_time_key("26,09,25,13,20,00,+8").unwrap();
+        let b = sms_time_key("26;09;25;13;20;01;+8").unwrap();
+        assert_eq!(b - a, 1);
+        // same instant in another zone
+        assert_eq!(sms_time_key("26,09,25,05,20,00,+0").unwrap(), a);
+        // quarter-hour zone form (+32 = +8h)
+        assert_eq!(sms_time_key("26,09,25,13,20,00,+32").unwrap(), a);
+        // day / month / year boundaries keep ordering
+        assert!(sms_time_key("26,10,01,00,00,00,+8").unwrap() > sms_time_key("26,09,30,23,59,59,+8").unwrap());
+        assert!(sms_time_key("27,01,01,00,00,00,+8").unwrap() > sms_time_key("26,12,31,23,59,59,+8").unwrap());
+        assert_eq!(sms_time_key("00,01,01,00,00,00"), Some(0));
+        assert_eq!(sms_time_key("00,03,01,00,00,00"), Some((31 + 29) * 86_400));
+        assert_eq!(sms_time_key("garbage"), None);
+        assert_eq!(sms_time_key("26,13,01,00,00,00"), None);
     }
 }
