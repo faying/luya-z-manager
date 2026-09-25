@@ -1,57 +1,32 @@
-# Contributing to open-u60-pro
+# 参与贡献
 
-Thanks for your interest in contributing!
+欢迎提 issue 和 PR。先读 [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) 了解三个仓库怎么配合，再读 [CLAUDE.md](CLAUDE.md) 里设备上「不能做的事」。
 
-## Prerequisites
+## 开发环境
 
-- **Rust toolchain** (stable, latest) — install via [rustup](https://rustup.rs/)
-- **Cross-compilation target**: `aarch64-unknown-linux-musl`
-- **ADB** (Android Debug Bridge) for deploying to the device
-- **A ZTE U60 Pro** (MU5250) with ADB access enabled
+- Rust stable + `cargo-zigbuild`（或 Docker），目标 `aarch64-unknown-linux-musl`
+- Node.js + npm（管理网页）
+- 一台 ZTE U60 Pro（MU5250），固件 B27 或更早，用装机包装好 SSH
 
-## Architecture
-
-| Component | Path | Description |
-|---|---|---|
-| zte-agent | `zte-agent/` | Rust HTTP agent (tiny_http) running on the device, exposes REST API on port 9090 |
-| web | `web/` | Next.js admin web (static export, served by the agent) |
-
-## Development Setup
-
-```bash
-# Clone the repo
-git clone https://github.com/faying/zte-u60-pro-mu5250-manager.git
-cd zte-u60-pro-mu5250-manager
-
-# Build the agent
-cd zte-agent
-cargo build --release --target aarch64-unknown-linux-musl
-
-# Deploy to device via ADB
-adb push target/aarch64-unknown-linux-musl/release/zte-agent /data/local/tmp/
-adb shell chmod +x /data/local/tmp/zte-agent
+```sh
+cargo zigbuild --release --target aarch64-unknown-linux-musl -p zte-agent
+cd web && npm ci && npm run build          # 或 npm run dev + mock agent，见 web/README.md
 ```
 
-## Code Style
+更新到设备见 [DEPLOY.md](DEPLOY.md)。
 
-- Run `cargo fmt` before committing
-- Run `cargo clippy` and fix all warnings
-- Follow standard Rust naming conventions
+## 提交前
 
-## Submitting Issues
+- Rust：`cargo fmt`、`cargo clippy` 没有警告
+- 网页：`npm run lint`、`npm test`（涉及页面行为时再跑 e2e）
+- 改了装机脚本：在真机沙盒里跑 `onboard/test/sandbox.sh run`（见 DEPLOY.md）
+- 尽量在真机上验证；PR 里写清改了什么、怎么测的
 
-- Use the provided issue templates (bug report or feature request)
-- Include device firmware version and zte-agent version
-- Attach relevant logs from the agent or the web admin (browser console)
+## 提 issue
 
-## Submitting Pull Requests
+用 issue 模板，写上固件版本（如 `B27`）、zte-agent 版本，附上相关日志或 `./install.sh doctor` 的输出。
+**贴日志前去掉 IMEI、ICCID、手机号、公网 IP 等个人信息。**
 
-1. Fork the repository and branch from `main`
-2. Make focused, clearly-committed changes
-3. Ensure `cargo fmt` and `cargo clippy` pass
-4. Test on a real device if possible
-5. Open a PR using the template, describing what changed and how you tested it
+## 行为准则
 
-## Code of Conduct
-
-This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). Please read it before participating.
+遵守 [Contributor Covenant](CODE_OF_CONDUCT.md)。

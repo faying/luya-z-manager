@@ -1,59 +1,55 @@
-# Deploy — ZTE U60 Pro (MU5250) Manager
+# 更新已装好的设备
 
-## TL;DR
+第一次装机见 [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md)。这里讲装好以后怎么更新。
 
-```sh
-./scripts/deploy.sh web      # build web/ → push to /data/admin (the :9090 LAN UI)
-./scripts/deploy.sh agent    # cross-compile + push + restart zte-agent
-./scripts/deploy.sh all      # both
-./scripts/deploy.sh verify   # just re-check pages respond
-```
-
-One-time setup on a new machine:
+## 推荐：用新的装机包
 
 ```sh
-cp scripts/.deploy.env.example scripts/.deploy.env   # then put the SSH password in it
-brew install sshpass zig ; cargo install cargo-zigbuild   # agent build only
+./onboard/build-kit.sh                       # → onboard/dist/u60-kit-YYYYMMDD.tar.gz
+tar xzf onboard/dist/u60-kit-*.tar.gz -C /tmp && cd /tmp/u60-kit
+./install.sh admin                           # zte-agent + 管理网页（走 SSH，不用插线）
+./install.sh devui                           # 触屏界面 + zwrt-datad + 看门狗脚本
+./install.sh esim                            # eSIM 工具
+./install.sh status                          # 看状态
+./install.sh doctor                          # 只读体检
 ```
 
-`scripts/.deploy.env` holds the device IP + SSH password and is **git-ignored** — the password is never committed.
+设备地址不是 `192.168.0.1` 时加 `GATEWAY=…`；SSH 密钥不是 `~/.ssh/id_ed25519` 时加 `SSH_KEY=…`。
 
-## What each target does
+## 打包相关
 
-- **web** — `cd web && npm run build` (static export → `web/out/`), tar it, and unpack into `/data/admin` on the device. That's the whole admin UI served at `http://<device>:9090/`.
-- **agent** — cross-compile `zte-agent` for aarch64-musl with zig (`cargo zigbuild --release --target aarch64-unknown-linux-musl -p zte-agent`), upload to `/data/zte-agent`, restart it via procd (`/etc/init.d/zte-agent restart`; falls back to `/data/local/tmp/start_zte_agent.sh` on devices without the init script). Only needed when Rust code changed.
+- `build-kit.sh` 的变量（`DATAD_BIN`、`DEVUI_BIN`、`UID_BIN`、`DEVUI_FONTS_DIR`、`DEVUI_REPO`、`CHILL=0` 等）写在脚本开头，也可以写进 `onboard/kit.local.env`（不进 git）。
+- 触屏程序必须是 LVGL 版，`zwrt-datad` 必须是不带外部更新源的 Rust 版，否则 `build-kit.sh` 会停下。
+- `FLEET_HOST=<ssh 别名> REFRESH_FLEET=1 ./onboard/build-kit.sh`：从一台已装好的设备重新拉 eSIM 工具（和 `zwrt-datad`）到 `onboard/cache/`。
+- 打包的二进制（dropbear、lpac 及其库、zwrt-datad）不在本仓库里；把装机包给别人时，要附上它们各自的许可证。
+- 改了 `onboard/install.sh` 或 `onboard/device/install.sh` 以后，重新打包，再用
+  `HOST=<ssh 别名> GATEWAY=<设备地址> SSH_KEY=<密钥> onboard/test/sandbox.sh run` 在真机沙盒里跑一遍完整装机流程
+  （设备端改写到 `/data/local/tmp/kit-sb`，结束后核对设备文件和进程没变；触屏组件不在沙盒里跑）。
 
-The script auto-detects the device IP (tries `192.168.0.1`, `192.168.1.1`, plus `DEVICE_HOST`) by probing SSH.
+## 手动更新单个程序（开发时）
 
-## Gotchas (why the script does what it does)
-
-- **Verify happens ON the device.** If your computer runs a proxy in TUN / enhanced mode, `curl <device>:9090` from the computer often fails while SSH still works, so the script checks pages with on-device `wget http://127.0.0.1:9090/...`. Add a direct-route rule for `192.168.0.0/16` in the proxy if you want to reach it from a browser.
-- **SSH rate-limits** rapid reconnects (dropbear). The script uses one connection per phase; if you see "Permission denied", wait a few seconds and retry.
-- **Agent build needs zig** (`cargo zigbuild`); Homebrew's musl-cross linker is unreliable on macOS.
-- **Never disable daemons in `/etc/config/zte_topsw_daemon.conf` via init.d** — see CLAUDE.md. Deploys here don't touch daemons, but keep it in mind.
-- The device is read-only rootfs; `/data` is writable. The UI lives in `/data/admin`, the agent binary in `/data/zte-agent`.
-
-## 装机包（onboard/）
+用装机包装过的设备只认 SSH 密钥。设备上没有 scp/sftp，用管道传：
 
 ```sh
-./onboard/build-kit.sh                   # → onboard/dist/u60-kit-YYYYMMDD.tar.gz（约 15 MB）
-FLEET_HOST=<ssh 别名> REFRESH_FLEET=1 ./onboard/build-kit.sh   # 重新从你的设备拉 zwrt-datad + /data/esim
+# 管理网页
+cd web && npm run build && tar czf /tmp/admin.tgz -C out . && cd ..
+ssh -p 2222 root@192.168.0.1 'rm -rf /data/admin.new && mkdir /data/admin.new && tar xzf - -C /data/admin.new \
+  && rm -rf /data/admin.old && mv /data/admin /data/admin.old && mv /data/admin.new /data/admin' < /tmp/admin.tgz
+
+# zte-agent：先传到临时名，再原子替换，最后由 procd 重启
+cargo zigbuild --release --target aarch64-unknown-linux-musl -p zte-agent
+ssh -p 2222 root@192.168.0.1 'cat > /data/zte-agent.new && chmod 755 /data/zte-agent.new \
+  && cp -p /data/zte-agent /data/zte-agent.prev && mv /data/zte-agent.new /data/zte-agent \
+  && /etc/init.d/zte-agent restart' < target/aarch64-unknown-linux-musl/release/zte-agent
+
+# 在设备上验证（电脑开着代理 TUN 时，从电脑直接访问 :9090 常常不通）
+ssh -p 2222 root@192.168.0.1 'wget -q -O- http://127.0.0.1:9090/ | head -c 200'
 ```
 
-- 包里：dropbear（OpenWrt 官方 ipk，sha256 钉死）、HEAD 现编的 zte-agent + web、`../zte-u60-pro-mu5250-touch-ui`（`DEVUI_REPO` 可改）里的 LVGL 版触屏二进制（`DEVUI_BIN`，默认 `u60pro-devui.stripped`，脚本会拦下 litehtml 版）+ `u60-uid` + `ui/`（去掉 `functions/chill.html`）、可靠性脚本（supervise/u60-guard/doctor 等）、CHILL（`CHILL=0` 不打）、从 `FLEET_HOST` 设备上拉的 zwrt-datad 和 `/data/esim`（缓存在 `onboard/cache/`，已 gitignore）。
-- datad/eSIM 默认用设备上验证过的二进制，不重编：上游 datad 新版体积和接口都变了；lpac 依赖 Alpine edge，重编会漂。**这些二进制不在本仓库里，分发前要自己附上各自的许可证。**
-- 对方只要 `adb` + `ssh`，跑 `./install.sh`。只适用 CN 固件 **B27 及以下**（B28+ 删了 `zwrt_bsp.usb set`）。
-- 对方也可以在包目录里开 Claude Code 让它装：`onboard/kit-CLAUDE.md` 打包时改名成 `CLAUDE.md`。`install.sh` 支持无终端运行：密码走 `ROUTER_PASSWORD` / `AGENT_PASSWORD` 或包目录里的 `u60.env`（环境变量优先），无终端时不自动重启，重启验证单独 `./install.sh reboot`。改了 install.sh 的参数或提示文字，记得同步 kit-CLAUDE.md 和 README.md。
-- 装机包的设备布局：dropbear 在 `/data/ssh/`（公钥和 host key 正本也在那，开机同步到 `/etc/dropbear/`）。
-- 改了 `onboard/install.sh` 或 `onboard/device/install.sh` 以后，重打包再跑 `HOST=<ssh 别名> GATEWAY=<设备IP> SSH_KEY=<密钥> onboard/test/sandbox.sh run`：假 adb 转 ssh 到设备，设备端脚本改写到 `/data/local/tmp/kit-sb`（dropbear 2223、agent 127.0.0.1:19090、FOTA/`killall` 打桩、devui 禁用），跑 ADB 全新安装 → SSH 重跑 → status，最后自动清理并核对设备文件和进程没变。改写没覆盖到新代码时它会拒绝运行。devui 组件没法沙盒跑（会抢屏幕）。
+注意：
 
-## Manual fallback (if the script can't run)
+- 重启服务一律 `/etc/init.d/<名字> restart`，不要再手动 `nohup` 起第二份。
+- 触屏程序**不要**这样直接覆盖：一启动就崩的版本会让设备进入重启循环。用 `./install.sh devui`，或按 touch-ui 仓库的开发说明先用别的文件名试跑。
+- dropbear 对太快的重连会拒绝，多条命令合并到一次 `ssh` 里。
 
-```sh
-# web
-cd web && npm run build && tar czf /tmp/admin.tgz -C out .
-sshpass -p '<pass>' ssh -o StrictHostKeyChecking=no -p 2222 root@192.168.0.1 \
-  'rm -rf /data/admin && mkdir -p /data/admin && cd /data/admin && tar xzf -' < /tmp/admin.tgz
-# verify (on device)
-sshpass -p '<pass>' ssh -p 2222 root@192.168.0.1 'wget -q -O- http://127.0.0.1:9090/ | head -c 200'
-```
+`scripts/deploy.sh` 是上游留下的脚本，用 `sshpass` 和密码登录，只适用于用上游 `setup.sh` 装、开着密码登录的设备。

@@ -1,183 +1,94 @@
-<div align="center">
+# ZTE U60 Pro（MU5250）管理后台
 
-# ZTE U60 Pro (MU5250) Manager
+给中兴 U60 Pro（MU5250）5G 随身 Wi-Fi 用的设备端 REST API（`zte-agent`）、浏览器高级后台、CHILL 代理控制和**一键装机包**。
 
-**On-device REST agent, admin web UI, transparent-proxy (CHILL) control and install kit for the ZTE U60 Pro (MU5250) 5G mobile router.**
+> 社区项目，和中兴（ZTE）没有关系，风险自负。
 
-[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
-[![Platform](https://img.shields.io/badge/device-ZTE%20U60%20Pro%20(MU5250)-orange.svg)]()
-
-</div>
-
-> **Community project, not affiliated with ZTE.** Based on
-> [jesther-ai/open-u60-pro](https://github.com/jesther-ai/open-u60-pro) (MIT) plus later changes
-> by Wei REN (install kit, eSIM, Tailscale, CHILL proxy, admin web redesign). This repository
-> starts from a cleaned snapshot instead of the original git history; see [NOTICE](NOTICE) for
-> sources and what was removed. The front-panel touchscreen UI lives in the companion repository
-> [zte-u60-pro-mu5250-touch-ui](https://github.com/faying/zte-u60-pro-mu5250-touch-ui).
-
-## Device
-
-| | |
+| 管理网页 | 触屏界面（配套仓库） |
 |---|---|
-| **Model** | ZTE U60 Pro (MU5250), `MU5250_HW1.0` |
-| **Chipset** | Qualcomm Snapdragon X75 (SDX75), 4x Cortex-A55 @ 2.2 GHz, 1.6 GB RAM |
-| **Modem** | 5G-A Sub-6 + mmWave, Cat 22 LTE |
-| **WiFi** | WiFi 7 (802.11be), 2x2 MIMO, EHT160 (Qualcomm WCN7851) |
-| **Display** | 3.5" IPS LCD, 320x480, DRM/KMS |
-| **OS** | ZWRT (OpenWrt 23.05.4), Linux 5.15, aarch64, read-only rootfs + writable `/data` |
-| **SIM** | Single nano-SIM; no embedded eSIM, but removable eUICC cards work via lpac |
+| <img src="docs/images/web-home-desktop.png" width="560" alt="管理网页首页"> | <img src="docs/images/touch-home.png" width="200" alt="触屏首页"> |
 
-Full hardware inventory (bands, PMICs, I2C addresses, battery/charging) is in the touchscreen
-repo's [docs/HARDWARE.md](https://github.com/faying/zte-u60-pro-mu5250-touch-ui/blob/main/docs/HARDWARE.md).
+## 三个仓库一起用
 
-## What's Included
+| 仓库 | 设备上的角色 |
+|---|---|
+| **[manager](https://github.com/faying/zte-u60-pro-mu5250-manager)**（本仓库） | `zte-agent`（:9090）+ 管理网页 + 装机包 |
+| [touch-ui](https://github.com/faying/zte-u60-pro-mu5250-touch-ui) | 前面板触屏界面、屏幕守护进程、进程监督与 Wi-Fi 兜底脚本 |
+| [data-service](https://github.com/faying/zte-u60-pro-mu5250-data-service) | `zwrt-datad`：本机数据服务（`127.0.0.1:9460` 的 `/state` + SSE） |
 
-### `zte-agent` — on-device REST API
+```
+zwrt-datad :9460 ──▶ 触屏界面 ──(eSIM 页)──▶ zte-agent :9090 ──▶ lpac ──▶ eUICC 卡
+浏览器 ──▶ zte-agent :9090（API + 管理网页）
+```
 
-A single Rust binary (~2.3 MB, port 9090, LAN-only) that turns ubus calls, AT commands, and sysfs
-reads into a typed REST API: device/battery/thermal, network and signal, modem and cell/band
-locking, SIM/SMS, router settings (DNS/DHCP/firewall/NAT/QoS/APN), WiFi, USB mode, speed test,
-scheduler, and **CHILL** — control for a native `mihomo` transparent proxy (TUN mode, no
-ShellCrash). See [zte-agent/src/](zte-agent/src/) for the full endpoint list, one module per area.
+装机包在本仓库的 `onboard/` 里打，打包时从另外两个仓库取触屏程序和数据服务。
 
-CHILL details worth knowing:
+## 功能
 
-- **Dashboard through the agent.** The agent serves [zashboard](https://github.com/Zephyruso/zashboard)
-  at `/chill-ui/` and forwards `/chill-api/` (REST, streams, WebSocket) to mihomo on loopback,
-  behind a per-device secret that only a logged-in admin session can read. mihomo's controller
-  (`:9999`) can stay closed to the LAN (`CHILL_API_LAN=0`); the dashboard also works over Tailscale.
-- **Profiles** — Eco / Standard / Performance (`chill.sh profile`, admin web and touch screen):
-  node probe interval, TCP keep-alive, concurrent dialing and, for Eco, the core limited to two
-  CPU cores. Standard is the original configuration. Optional heat step-down to Eco
-  (`CHILL_TEMP_WARM`, off by default).
-- The exit mode (rule / global / direct) now survives config reloads and core restarts.
+- **zte-agent**：一个 Rust 程序（端口 9090，只对局域网），把 ubus、AT 命令、sysfs 整理成 REST API：
+  设备/电池/温度、信号与载波、锁频锁小区、SIM/短信、APN、DNS/DHCP/防火墙、Wi-Fi、USB 模式、测速、定时任务等。
+- **管理网页**（`web/`，Next.js 静态导出）：替代原厂网页，手机和电脑都能用，浅色/深色，中英文。
+- **eSIM**：配合可插拔 eUICC 卡（5ber、eSTK.me 这类）下载、切换、删除 profile。
+- **CHILL**：设备上的透明代理（原生 mihomo，TUN 模式）和 zashboard 面板，面板经后台 `/chill-ui/` 反代；省电/标准/性能三档。
+- **可靠性**：zte-agent、数据服务、看门狗由 procd 监督；Wi-Fi 兜底看门狗；告警横幅、「健康」页、可选告警短信；
+  `./install.sh doctor` 只读体检，`backup` / `restore` 备份配置。约定见 [docs/RELIABILITY.md](docs/RELIABILITY.md)。
+- **装机包**（`onboard/`）：新设备一条 `./install.sh` 装好 SSH、后台、触屏、eSIM，并关掉固件自动升级。
+
+## 快速开始
+
+**从零开始请看 [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md)**：准备什么、怎么编出装机包、怎么装、怎么检查和退回。
+
+只适用于固件 **B27 及更早**（B28 起中兴删了开 ADB 的接口）。**装之前别升级固件。**
+目前不发布编译好的二进制，需要自己编，指南里有完整步骤。
+
+## 开发与构建
 
 ```sh
-cargo build --release --target aarch64-unknown-linux-musl -p zte-agent
+# zte-agent（aarch64 musl；没有 cargo-zigbuild 时 onboard/build-kit.sh 会改用 Docker）
+cargo zigbuild --release --target aarch64-unknown-linux-musl -p zte-agent
+
+# 管理网页 → web/out/
+cd web && npm ci && npm run build
+
+# 不连设备开发网页：假数据 agent + 开发服务器，见 web/README.md
+node scripts/mock-agent/server.ts & npm run dev
+
+# 装机包 → onboard/dist/u60-kit-YYYYMMDD.tar.gz
+./onboard/build-kit.sh
 ```
 
-### `web/` — admin UI
+已经装好的设备更新单个组件，见 [DEPLOY.md](DEPLOY.md)。
 
-Next.js app served by the agent at the device root (`http://<device>:9090/`), replacing the stock
-ZTE management page. Mobile-first (bottom tab bar on phones), design system in
-[docs/DESIGN.md](docs/DESIGN.md).
-
-### Reliability — supervision, Wi-Fi safety net, alerts
-
-The device is often its owner's only uplink, so the agent, the data service and the touch UI run
-under procd with crash capture, and a small watchdog (`u60-guard`) forces Wi-Fi back on if the
-agent stops heartbeating while the access points are down. Failures show up as an alert banner and
-a **Health** page in the web UI, on the touch screen, and — optionally — as a rate-limited SMS from
-the device's own SIM. The install kit adds `./install.sh doctor` (read-only check) and
-`./install.sh backup` / `restore` (configuration only, stored on your computer). The file-level
-contract between the agent and the shell side is in [docs/RELIABILITY.md](docs/RELIABILITY.md); the
-scripts themselves live in the
-[touch-ui repo](https://github.com/faying/zte-u60-pro-mu5250-touch-ui) under `scripts/`.
-
-Note: ZTE's firmware keeps the system clock on *local* wall time with the time zone set to UTC.
-The agent reports the gap as `clock.utc_offset` in `/api/public/status`; the web UI shows device
-times as device-local time (`web/src/lib/deviceClock.ts`).
-
-## Why Use This Instead of the Official ZTE App?
-
-The stock firmware runs ~44 proprietary daemons (TR-069 remote management, MQTT telemetry, Samba,
-NFC, diagnostics — several phoning home to ZTE servers) for ~225 MB RAM. `zte-agent` replaces the
-management surface with one binary using well under 1 MB RSS, and ships an open-source web admin
-(English and Chinese).
-
-## Quick Start
-
-### Prerequisites
-
-```sh
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-rustup target add aarch64-unknown-linux-musl
-brew install filosottile/musl-cross/musl-cross android-platform-tools   # macOS
-# or: sudo apt install musl-tools gcc-aarch64-linux-gnu android-tools-adb
-```
-
-### First-time setup (factory-fresh device)
-
-```sh
-./setup.sh <router-password> <agent-password>
-```
-
-Enables ADB, builds and pushes the agent, creates boot scripts, optionally sets up key-only SSH.
-
-For setting up **someone else's** device, use the prebuilt kit instead — see
-[onboard/README.md](onboard/README.md) (Chinese) and `./onboard/build-kit.sh`.
-
-### All-in-one installer
-
-```sh
-GATEWAY=192.168.0.1 ./install.sh
-```
-
-Interactive menu over SSH (falls back to password + `sshpass` if you have no key yet). All boot
-persistence goes through `/etc/rc.local` and cron, never `init.d` — see CLAUDE.md for why.
+## 目录
 
 ```
-╔══ Open U60 Pro installer ══╗
-  1) Agent + Admin Web + SSH
-  2) Tailscale
-  3) Home Mode           (Wi-Fi auto-off at home)
-  4) System monitor       (temp/signal log + forensics)
-  5) Crash recovery (SSR)
-  6) Status
-  7) Uninstall a component
+zte-agent/     设备端 REST API（Rust）
+web/           管理网页（Next.js），由 agent 在 :9090 提供
+onboard/       装机包：build-kit.sh（打包）、install.sh（装机）、device/（设备端脚本）、test/（沙盒测试）
+scripts/       chill/（CHILL）、esim/（lpac 工具包）、tailscale/、homemode.sh、monitor.sh 等
+docs/          GETTING-STARTED.md、DESIGN.md（界面设计规范）、RELIABILITY.md（可靠性约定）
 ```
 
-CHILL (the transparent-proxy panel) installs separately, since it needs your own outbound proxy
-subscription: `./install.sh chill` from the install kit, or `scripts/chill/install-chill.sh` by
-hand (dry run by default). Both download mihomo and zashboard at pinned sha256 sums
-(`scripts/chill/fetch-assets.sh`). A first install does not start anything: copy
-`chill.env.example` to `chill.env`, add your subscription, then `chill.sh safe-start` and
-`chill.sh confirm` within five minutes.
+根目录的 `setup.sh`、`install.sh`、`deploy.sh` 来自上游 open-u60-pro，用密码 SSH 和旧的启动方式；新设备请用 `onboard/` 的装机包。
 
-### Deploy agent + web (subsequent updates)
+## 文档
 
-```sh
-./scripts/deploy.sh all      # or: web / agent / verify
-```
+- [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md)：快速上手（新手从这里开始）
+- [onboard/README.md](onboard/README.md)：装机包说明（装到哪里、日常用法、恢复原厂、常见问题）
+- [DEPLOY.md](DEPLOY.md)：更新已装好的设备
+- [docs/RELIABILITY.md](docs/RELIABILITY.md)：zte-agent 与看门狗之间的文件约定
+- [docs/DESIGN.md](docs/DESIGN.md)：管理网页和触屏的设计规范
+- [web/README.md](web/README.md)：网页开发
+- [CLAUDE.md](CLAUDE.md)：给 AI 编程助手看的设备规则（人也值得读一遍「不能做的事」）
 
-See [DEPLOY.md](DEPLOY.md) for what each target does and manual fallback commands.
+## 致谢
 
-### Open the web admin
+- [Jesther Silvestre](https://github.com/jesther-ai)：原始项目 [open-u60-pro](https://github.com/jesther-ai/open-u60-pro)（agent、第一版网页）。
+- Wei REN：装机包、eSIM、Tailscale、CHILL、回家模式、网页改版。
+- [33333s](https://github.com/33333s)：感谢 [u60pro-devui](https://github.com/33333s/u60pro-devui)（触屏界面的起点）和 [zwrt-datad](https://github.com/33333s/zwrt-datad)（本机数据服务）这两个参考仓库。
 
-Connect to the router's WiFi, open `http://192.168.0.1:9090` in a browser and enter the agent
-password from setup.
+## 许可证与免责声明
 
-## Project Structure
+[MIT](LICENSE)。来源、删减内容和第三方组件见 [NOTICE](NOTICE)。
 
-```
-zte-agent/        On-device REST API server (Rust)
-web/               Next.js admin UI, served by the agent
-install.sh         Interactive all-in-one installer
-setup.sh           First-time agent + UI + SSH setup
-scripts/
-├── deploy.sh       Rebuild & redeploy agent/web
-├── chill/          CHILL (mihomo): chill.sh, template, installer, asset fetch/stage
-├── esim/           lpac bundle for removable eUICC cards
-├── homemode.sh      Wi-Fi auto-off near a home network
-├── monitor.sh       Temp/signal logger + crash forensics
-├── recovery_setup.sh   Per-subsystem (SSR) recovery
-└── tailscale-start.sh  Tailscale boot bring-up
-onboard/           Prebuilt install kit for other people's devices — see its own README
-docs/DESIGN.md     Admin web design system
-```
-
-## Credits
-
-- [Jesther Silvestre](https://github.com/jesther-ai) — original [open-u60-pro](https://github.com/jesther-ai/open-u60-pro): agent, mobile apps, first web dashboard.
-- Wei REN — install kit, eSIM, Tailscale, CHILL proxy, Home Mode, admin web redesign.
-- [33333s](https://github.com/33333s) — thanks for the reference repos this project builds on: [u60pro-devui](https://github.com/33333s/u60pro-devui) (touchscreen UI) and [zwrt-datad](https://github.com/33333s/zwrt-datad) (on-device data service).
-- Touchscreen UI: [zte-u60-pro-mu5250-touch-ui](https://github.com/faying/zte-u60-pro-mu5250-touch-ui) (fork of [33333s/u60pro-devui](https://github.com/33333s/u60pro-devui)); its data backend is [33333s/zwrt-datad](https://github.com/33333s/zwrt-datad).
-
-## License & Disclaimers
-
-[MIT License](LICENSE). See [NOTICE](NOTICE) for attribution and third-party components.
-
-**Use at your own risk.** Not affiliated with ZTE Corporation. Intended for devices you personally
-own. Reverse engineering was performed solely for interoperability and educational purposes; no
-proprietary ZTE source code is included.
+和中兴通讯没有关系，也没有得到其认可。只在你自己的设备上使用。逆向只为互通和学习，仓库里没有中兴的专有源码。

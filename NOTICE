@@ -20,10 +20,14 @@ history. Removed before publishing:
 - scripts/topflow/, PROFILE_MANAGER_PLAN.md, web/_backup/, web/vercel.json
   (private infrastructure and internal notes)
 - .github/workflows/release.yml (binary releases are not published yet)
+- docs/designs/, .impeccable.md, web/PRODUCT.md, SCENARIO_ENGINE_PLAN.md
+  (design reviews, work-in-progress plans and internal notes)
 Maintainer-specific addresses and host names were replaced with device defaults.
 
 Third-party components
 ----------------------
+- docs/images/ are screenshots rendered from made-up test data (mock agent
+  and the touch UI's offscreen render test), not from a real device.
 - Rust crates: see Cargo.lock; each crate keeps its own license.
 - npm packages: see web/package-lock.json; each package keeps its own license.
 - Prebuilt binaries used by onboard/build-kit.sh (dropbear, lpac and its Alpine

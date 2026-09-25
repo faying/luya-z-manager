@@ -153,7 +153,7 @@ wrong again:
 
 ## Design Context (Admin Web)
 
-Single source of truth: `docs/DESIGN.md` §5 (implementation notes in `.impeccable.md`). Summary for `web/` (Next.js static export served by the agent on `:9090`, LAN-only):
+Single source of truth: `docs/DESIGN.md` §5. Summary for `web/` (Next.js static export served by the agent on `:9090`, LAN-only):
 
 - **Users**: device owner (technical, dense data OK) **and other U60 owners** — stay approachable. Often used on **phone/tablet on the LAN**.
 - **Aesthetic**: new design in the **Cohere + Figma** language — warm paper canvas, hairline-ruled white cards, ink text, one near-black primary surface, flat colour blocks per route family, Cohere deep-green band on home/login. Geist + Geist Mono, platform CJK face. Light + dark. Tokens: `web/src/app/newdesign.css`; components: `web/src/components/nd/`.
