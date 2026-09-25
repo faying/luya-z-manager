@@ -70,12 +70,38 @@ pub fn cell_band_nr(_state: &AppState, body: &[u8]) -> (u16, Value) {
     }
 }
 
+/// LTE 锁频按原厂网页（developer_options.js 的 saveLte）走 `nwinfo_set_lte_ext_band`，
+/// 参数是逗号分隔的频段号 `{"lte_band":"1,3,7"}`；触屏和 datad 的 band.set_lte 也是这条。
+/// 以前这里调 `nwinfo_set_gwl_bandlock`（要位掩码），网页却传逗号列表。旧的请求体
+/// `{"lte_band_mask":"1,3,7",...}` 仍然认。
+fn lte_band_list(v: &Value) -> Result<String, &'static str> {
+    let list = v
+        .get("lte_band")
+        .or_else(|| v.get("lte_band_mask"))
+        .and_then(Value::as_str)
+        .ok_or("missing lte_band")?;
+    if list.is_empty()
+        || list.starts_with(',')
+        || list.ends_with(',')
+        || list.contains(",,")
+        || !list.bytes().all(|b| b.is_ascii_digit() || b == b',')
+    {
+        return Err("lte_band must be band numbers separated by commas");
+    }
+    Ok(list.to_string())
+}
+
 pub fn cell_band_lte(_state: &AppState, body: &[u8]) -> (u16, Value) {
     let parsed: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
     };
-    match ubus::call("zte_nwinfo_api", "nwinfo_set_gwl_bandlock", Some(&parsed.to_string())) {
+    let list = match lte_band_list(&parsed) {
+        Ok(l) => l,
+        Err(e) => return (400, json!({"ok": false, "error": e})),
+    };
+    let args = json!({ "lte_band": list }).to_string();
+    match ubus::call("zte_nwinfo_api", "nwinfo_set_lte_ext_band", Some(&args)) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
@@ -177,5 +203,18 @@ mod tests {
         let mut v = json!({"nr5g_band": "78"});
         normalize_nr5g_type(&mut v);
         assert_eq!(v, json!({"nr5g_band": "78"}));
+    }
+
+    #[test]
+    fn lte_band_list_takes_vendor_list_and_old_body() {
+        assert_eq!(lte_band_list(&json!({"lte_band": "1,3,7"})).as_deref(), Ok("1,3,7"));
+        assert_eq!(
+            lte_band_list(&json!({"is_lte_band": "1", "lte_band_mask": "3", "is_gw_band": "0", "gw_band_mask": ""})).as_deref(),
+            Ok("3")
+        );
+        for bad in [json!({}), json!({"lte_band": ""}), json!({"lte_band": "1;reboot"}), json!({"lte_band": "B3"}),
+                    json!({"lte_band": ",3"}), json!({"lte_band": "3,"}), json!({"lte_band": "1,,3"}), json!({"lte_band": 3})] {
+            assert!(lte_band_list(&bad).is_err(), "{bad}");
+        }
     }
 }

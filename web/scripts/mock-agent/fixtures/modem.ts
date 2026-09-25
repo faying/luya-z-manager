@@ -479,11 +479,10 @@ export const routes: Route[] = [
     handler: (ctx) => {
       const bad = needJson(ctx);
       if (bad) return bad;
-      const isLte = str(bodyField(ctx.body, "is_lte_band"));
-      const mask = str(bodyField(ctx.body, "lte_band_mask")) ?? "";
-      if (isLte === "1" && !mask) return ubusFail(NW, "nwinfo_set_gwl_bandlock", "Invalid argument");
+      const list = str(bodyField(ctx.body, "lte_band")) ?? "";
+      if (!/^\d+(,\d+)*$/.test(list)) return fail("lte_band must be band numbers separated by commas", 400);
       if (ctx.has("fakesuccess")) return ok(UBUS_EMPTY);
-      shared.bandLock.lte = isLte === "1" ? mask : null;
+      shared.bandLock.lte = list;
       return ok(UBUS_EMPTY);
     },
   },

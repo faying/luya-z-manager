@@ -63,7 +63,7 @@ export default function BandLockPage() {
         run: () =>
           apiFetch("/api/cell/band/lte", {
             method: "POST",
-            body: { is_lte_band: "1", lte_band_mask: lteStr, is_gw_band: "0", gw_band_mask: "" },
+            body: { lte_band: lteStr },
           }),
       },
     ],

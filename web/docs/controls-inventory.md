@@ -200,7 +200,7 @@
 | NR 频段勾选框 n1 n3 n5 n7 n8 n28 n38 n40 n41 n66 n71 n77 n78 n79（14 个） | checkbox「n1」…「n79」 〔现名：button「n1」「n79」（toolbar「NR (5G) 频段」里的开关按钮，aria-pressed）〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 「应用 NR 锁定」（未选时禁用） | button「应用 NR 锁定」 | POST `/api/cell/band/nr` `{nr5g_type, nr5g_band:"78,41"}`（去掉 n 前缀逗号拼接；ubus `nwinfo_set_nrbandlock`） | **2 步**：① `{nr5g_type:"nsa", nr5g_band}` ② `{nr5g_type:"sa", nr5g_band}`；第 ① 步成功第 ② 步失败时 NSA 已锁、SA 没锁，页面只报错不回滚 | 无读回 | 无 | 三（锁频） |
 | LTE 频段勾选框 B1 B2 B3 B4 B5 B7 B8 B12 B17 B20 B28 B38 B40 B41（14 个） | checkbox「B1」…「B41」 〔现名：button「B1」「B41」（toolbar「LTE 频段」里的开关按钮，aria-pressed）〕 | 无（草稿） | — | — | 无 | —（本地） |
-| 「应用 LTE 锁定」（未选时禁用） | button「应用 LTE 锁定」 | POST `/api/cell/band/lte` `{is_lte_band:"1", lte_band_mask:"1,3", is_gw_band:"0", gw_band_mask:""}`（ubus `nwinfo_set_gwl_bandlock`） | 1 | 无读回 | 无 | 三（锁频） |
+| 「应用 LTE 锁定」（未选时禁用） | button「应用 LTE 锁定」 | POST `/api/cell/band/lte` `{lte_band:"1,3"}`（ubus `nwinfo_set_lte_ext_band`） | 1 | 无读回 | 无 | 三（锁频） |
 
 写接口假成功风险：三个都是「否·透传」（cell.rs:56-83），页面不看 `data.result`。
 

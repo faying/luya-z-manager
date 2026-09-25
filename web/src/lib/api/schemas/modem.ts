@@ -146,13 +146,10 @@ export interface CellBandNrBody {
   nr5g_band: string;
 }
 
-/** POST /api/cell/band/lte body (cell.rs:67, ubus `nwinfo_set_gwl_bandlock`). */
+/** POST /api/cell/band/lte body (cell.rs, ubus `nwinfo_set_lte_ext_band`, same as the vendor web page). */
 export interface CellBandLteBody {
-  is_lte_band: string;
   /** Comma list without "B", e.g. "1,3,7". */
-  lte_band_mask: string;
-  is_gw_band: string;
-  gw_band_mask: string;
+  lte_band: string;
 }
 
 /**
