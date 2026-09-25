@@ -46,11 +46,24 @@ pub fn cell_neighbors_lte(_state: &AppState) -> (u16, Value) {
     }
 }
 
+/// 原厂网页（developer_options.js）锁 NR 频段时 `nr5g_type` 传 SA "0"、NSA "1"。
+/// 管理网页一直传的是 "sa"/"nsa"，固件不认；这里统一换成原厂的值。
+fn normalize_nr5g_type(v: &mut Value) {
+    let Some(t) = v.get("nr5g_type").and_then(Value::as_str) else { return };
+    let fixed = match t.to_ascii_lowercase().as_str() {
+        "sa" => "0",
+        "nsa" => "1",
+        _ => return,
+    };
+    v["nr5g_type"] = json!(fixed);
+}
+
 pub fn cell_band_nr(_state: &AppState, body: &[u8]) -> (u16, Value) {
-    let parsed: Value = match serde_json::from_slice(body) {
+    let mut parsed: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
     };
+    normalize_nr5g_type(&mut parsed);
     match ubus::call("zte_nwinfo_api", "nwinfo_set_nrbandlock", Some(&parsed.to_string())) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
@@ -146,5 +159,23 @@ pub fn cell_signal_detect_progress(_state: &AppState) -> (u16, Value) {
     match ubus::call("zte_nwinfo_api", "nwinfo_get_progress_and_quality", Some("{}")) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nr5g_type_uses_vendor_values() {
+        for (input, want) in [("sa", "0"), ("nsa", "1"), ("SA", "0"), ("0", "0"), ("1", "1")] {
+            let mut v = json!({"nr5g_type": input, "nr5g_band": "78"});
+            normalize_nr5g_type(&mut v);
+            assert_eq!(v["nr5g_type"], want, "{input}");
+            assert_eq!(v["nr5g_band"], "78");
+        }
+        let mut v = json!({"nr5g_band": "78"});
+        normalize_nr5g_type(&mut v);
+        assert_eq!(v, json!({"nr5g_band": "78"}));
     }
 }
