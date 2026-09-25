@@ -40,7 +40,7 @@ The script auto-detects the device IP (tries `192.168.0.1`, `192.168.1.1`, plus 
 FLEET_HOST=<ssh 别名> REFRESH_FLEET=1 ./onboard/build-kit.sh   # 重新从你的设备拉 zwrt-datad + /data/esim
 ```
 
-- 包里：dropbear（OpenWrt 官方 ipk，sha256 钉死）、HEAD 现编的 zte-agent + web、`../zte-u60-pro-mu5250-touch-ui`（`DEVUI_REPO` 可改）里已构建的 `u60pro-devui.stripped` + `ui/`（去掉 CHILL 页）、从 `FLEET_HOST` 设备上拉的 zwrt-datad 和 `/data/esim`（缓存在 `onboard/cache/`，已 gitignore）。
+- 包里：dropbear（OpenWrt 官方 ipk，sha256 钉死）、HEAD 现编的 zte-agent + web、`../zte-u60-pro-mu5250-touch-ui`（`DEVUI_REPO` 可改）里的 LVGL 版触屏二进制（`DEVUI_BIN`，默认 `u60pro-devui.stripped`，脚本会拦下 litehtml 版）+ `u60-uid` + `ui/`（去掉 `functions/chill.html`）、可靠性脚本（supervise/u60-guard/doctor 等）、CHILL（`CHILL=0` 不打）、从 `FLEET_HOST` 设备上拉的 zwrt-datad 和 `/data/esim`（缓存在 `onboard/cache/`，已 gitignore）。
 - datad/eSIM 默认用设备上验证过的二进制，不重编：上游 datad 新版体积和接口都变了；lpac 依赖 Alpine edge，重编会漂。**这些二进制不在本仓库里，分发前要自己附上各自的许可证。**
 - 对方只要 `adb` + `ssh`，跑 `./install.sh`。只适用 CN 固件 **B27 及以下**（B28+ 删了 `zwrt_bsp.usb set`）。
 - 对方也可以在包目录里开 Claude Code 让它装：`onboard/kit-CLAUDE.md` 打包时改名成 `CLAUDE.md`。`install.sh` 支持无终端运行：密码走 `ROUTER_PASSWORD` / `AGENT_PASSWORD` 或包目录里的 `u60.env`（环境变量优先），无终端时不自动重启，重启验证单独 `./install.sh reboot`。改了 install.sh 的参数或提示文字，记得同步 kit-CLAUDE.md 和 README.md。

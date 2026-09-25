@@ -14,7 +14,7 @@ not by a script, not by a UI toggle, not "just to test".
 - "Off" looks like: `uci get zwrt_zte_dm.dm_update.dm_update_mode` = `0` and
   `zwrt_zte_dm.dm_update.TURNOFFPOLLING` = `1`.
 - Never add anything that can flip it back: no `set_update_mode` with a
-  non-zero mode, no `confirm_download`/`confirm_install`, no admin-web or app
+  non-zero mode, no `confirm_download`/`confirm_install`, no admin-web
   control for it, no scenario action that reaches it (it is not, and must not
   be, in `scenario.rs`'s `ALLOWED_PATHS`).
 - `zte_dm` itself keeps running — it is in the boot sync barrier below. Off
@@ -32,7 +32,7 @@ not by a script, not by a UI toggle, not "just to test".
 - **Filesystem**: Read-only rootfs, writable overlay at `/zteoverlay/`, writable `/data`
 
 ## Architecture
-- `zte-agent/` — Rust HTTP agent on device (Axum, port 9090, LAN-only)
+- `zte-agent/` — Rust HTTP agent on device (tiny_http, port 9090, LAN-only)
 - `web/` — Next.js web dashboard
 
 ---

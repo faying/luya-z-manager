@@ -13,7 +13,8 @@ Thanks for your interest in contributing!
 
 | Component | Path | Description |
 |---|---|---|
-| zte-agent | `zte-agent/` | Rust HTTP agent (Axum) running on the device, exposes REST API on port 9090 |
+| zte-agent | `zte-agent/` | Rust HTTP agent (tiny_http) running on the device, exposes REST API on port 9090 |
+| web | `web/` | Next.js admin web (static export, served by the agent) |
 
 ## Development Setup
 

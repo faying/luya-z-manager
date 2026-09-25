@@ -1,6 +1,6 @@
 # 设计：触屏菜单按「我想做什么」重排（5 个标签）
 
-2026-09-25 · /office-hours · Status: 已实现（本地提交，未上机）
+2026-09-25 · /office-hours · Status: 已实现并上机（2026-09-25）
 仓库：source/touch-ui（触屏）+ source/manager（agent / 网页）
 
 ## 问题
