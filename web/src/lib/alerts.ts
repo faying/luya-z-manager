@@ -57,6 +57,8 @@ export function kindLabel(t: TFunction, kind: string): string {
       return t("alerts.kindDevuiThemePaused", "Automatic light/dark switching on the touch screen paused until reboot");
     case "datad-crash":
       return t("alerts.kindDatadCrash", "Data service (zwrt-datad) exited unexpectedly");
+    case "datad-degraded":
+      return t("alerts.kindDatadDegraded", "Data service (zwrt-datad) not answering; admin backend reads the modem directly");
     case "wifi-takeover":
       return t("alerts.kindWifiTakeover", "Wi-Fi watchdog turned Wi-Fi back on");
     case "wifi-restore-failed":

@@ -77,7 +77,8 @@ function modemData(ctx: Ctx): ModemData {
   return {
     ...wwan,
     enable: shared.mobileData ? 1 : 0,
-    connect_status: connected ? "connected" : "disconnected",
+    // B27 names the families (owner's device 2026-09-25): "ipv4_ipv6_connected".
+    connect_status: connected ? (ctx.has("firmware-b27") ? "ipv4_ipv6_connected" : "connected") : "disconnected",
     roll_connect_status: connected ? "connected" : "disconnected",
   };
 }

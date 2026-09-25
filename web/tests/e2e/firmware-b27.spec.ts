@@ -129,3 +129,10 @@ test("APN: in Auto, the manual pick is not shown as in use (only the dialled one
   await expect(page.getByText("使用中", { exact: true })).toHaveCount(1);
   expect(realErrors(ready)).toEqual([]);
 });
+
+test("B27 connect_status ipv4_ipv6_connected reads as connected", async ({ ready, page, mock }) => {
+  await mock.scenario("firmware-b27");
+  await ready.goto("/router/mobile-network/");
+  await expect(page.getByText("已连接 · IPv4 + IPv6").first()).toBeVisible();
+  await expect(page.getByText("没有连接")).toHaveCount(0);
+});

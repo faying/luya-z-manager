@@ -862,10 +862,10 @@ impl Engine {
         if current.is_empty() || !candidate.is_empty() {
             return cfg.params.scan_interval_away_charging_secs;
         }
-        let charging = ubus::call("zwrt_bsp.charger", "list", Some("{}"))
-            .ok()
-            .and_then(|v| v.get("charger_connect").and_then(|c| c.as_i64()))
-            .map(|c| c == 1)
+        // From datad's battery block while subscribed; in fallback (or a
+        // sidecar without a feed) a direct read, cached for 60 s so this 15 s
+        // tick does not become a 15 s ubus poll (D2).
+        let charging = crate::datad_feed::charger_connected_cached(crate::charge_policy::direct_charger_connected)
             .unwrap_or(false);
         if charging {
             cfg.params.scan_interval_away_charging_secs

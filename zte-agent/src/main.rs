@@ -92,18 +92,23 @@ fn main() {
     }
 
     if !sidecar {
-        // Event bus: single `ubus listen` process dispatches to subscribers
+        // datad /v2 feed (订阅中 / 退路). Before the workers that read it, and
+        // never in sidecar mode: its startup removes the degraded marker.
+        datad_feed::start();
+
+        // Event bus: single `ubus listen` process dispatches to subscribers.
+        // The charger no longer comes from here (datad's battery/charger
+        // blocks do), nor SMS (datad's sms block + sms.list_after, T10);
+        // service and WAN events have no /v2 block yet.
         let event_bus = EventBus::new();
-        let sms_rx = event_bus.subscribe("zwrt_wms_status_event");
-        let charger_rx = event_bus.subscribe("BSP_CHARGER_EVENT");
         let service_rx = event_bus.subscribe("zwrt_servicestatus");
         let wan_status_rx = event_bus.subscribe("router_event_wan_connect_status");
         event_bus.start();
 
         state.doh.auto_start();
         state.scheduler.start(Arc::clone(&state));
-        state.charge_limit.start(charger_rx);
-        state.sms_forward.start(sms_rx, service_rx, wan_status_rx);
+        state.charge_limit.start();
+        state.sms_forward.start(service_rx, wan_status_rx);
 
         // Boot resets the engine and repairs Wi-Fi if it is down — a reboot
         // must never be able to leave you without the network this device

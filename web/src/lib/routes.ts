@@ -89,6 +89,7 @@ export const ROUTES: RouteDef[] = [
   { href: "/settings", tKey: "nav.settings", fallback: "Settings", icon: Gear, anchor: "system", group: "maintenance", aliases: ["设置", "shezhi", "settings", "深色", "浅色", "语言", "theme"] },
 
   { href: "/tools/at", tKey: "nav.at", fallback: "AT Terminal", icon: TerminalWindow, anchor: "system", group: "tools", aliases: ["at", "终端", "zhongduan", "terminal"] },
+  { href: "/tools/cpu", tKey: "nav.cpu", fallback: "CPU & Memory", icon: Cpu, anchor: "system", group: "tools", aliases: ["cpu", "内存", "neicun", "频率", "memory", "占用"] },
   { href: "/tools/processes", tKey: "nav.processes", fallback: "Processes", icon: Cpu, anchor: "system", group: "tools", aliases: ["进程", "jincheng", "processes", "top"] },
   { href: "/tools/enable-adb", tKey: "nav.enableAdb", fallback: "Enable ADB", icon: Bug, anchor: "system", group: "tools", aliases: ["adb", "调试"] },
 ];

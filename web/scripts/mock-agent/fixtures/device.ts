@@ -16,6 +16,7 @@ import type {
   ChargerInfo,
   DeviceSystem,
   ChargeControl,
+  SysfsBattery,
   FastBoot,
   PowerSave,
   UsbStatus,
@@ -134,6 +135,32 @@ function chargeControl(): ChargeControl {
   } satisfies ChargeControl;
 }
 
+/** system.rs read_battery_at: sysfs battery + usb. Charging stops cut the USB input to 0. */
+function sysfsBattery(): SysfsBattery {
+  const status = batteryStatus();
+  const charging = status === "Charging";
+  const inputOn = chargerConnected() && !chargingStopped();
+  return {
+    status,
+    capacity: battery.battery_capacity ?? 0,
+    voltage_uv: 4_120_000,
+    current_ua: charging ? 1_200_000 : status === "Full" ? 40_000 : -350_000,
+    temperature: 315,
+    charge_full_uah: 11_011_000,
+    charge_full_design_uah: 10_214_000,
+    charge_counter_uah: Math.round(11_011_000 * (battery.battery_capacity ?? 0) / 100),
+    cycle_count: 66,
+    health: "Good",
+    voltage_max_uv: 4_500_000,
+    charger: {
+      online: inputOn,
+      voltage_uv: inputOn ? 9_000_000 : 31_000,
+      current_ua: inputOn ? 800_000 : 0,
+      input_current_limit_ua: inputOn ? 2_000_000 : 0,
+    },
+  };
+}
+
 function isObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
@@ -214,6 +241,13 @@ export const routes: Route[] = [
     method: "GET",
     path: "/api/device/system",
     handler: () => ok(systemInfo()),
+  },
+  {
+    // handlers.rs battery → system.rs read_battery_at; "missing" = no battery directory (503).
+    method: "GET",
+    path: "/api/battery",
+    handler: (ctx) => (ctx.has("missing") ? fail("battery info not available", 503) : ok(sysfsBattery())),
+    ownMissing: true,
   },
   {
     method: "GET",

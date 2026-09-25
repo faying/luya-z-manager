@@ -29,7 +29,16 @@ export function parseCa(s: string | undefined | null, kind: "nr" | "lte"): Carri
   const out: Carrier[] = [];
   for (const rec of s.split(";")) {
     const f = rec.split(",").map((x) => Number(x.trim()));
-    if (f.length !== 11 || f.some((n) => !Number.isFinite(n))) continue;
+    if (f.some((n) => !Number.isFinite(n))) continue;
+    // 5 fields: PCI,Band,Index,ARFCN,BW with no per-carrier signal. Firmware
+    // B27 sends this for a lone LTE carrier (owner's device 2026-09-25:
+    // "254,3,0,1750,20;"); that record is the serving cell itself.
+    if (f.length === 5) {
+      const [pci, band, , arfcn, bw] = f;
+      out.push({ kind, band: String(band), pci, arfcn, bw, rsrp: null, rsrq: null, sinr: null, active: true, serving: false });
+      continue;
+    }
+    if (f.length !== 11) continue;
     const [, pci, , band, arfcn, bw, , rsrp, rsrq, sinr] = f;
     out.push({
       kind,
@@ -88,7 +97,16 @@ export function carriers(sig: NetworkSignal | undefined): Carrier[] {
       serving: true,
     });
   }
-  out.push(...parseCa(sig.nrca, "nr"), ...parseCa(sig.lteca, "lte"));
+  for (const c of [...parseCa(sig.nrca, "nr"), ...parseCa(sig.lteca, "lte")]) {
+    // A record for the serving cell (same kind, PCI and ARFCN) only fills in
+    // what the serving row lacks; it is not a second carrier.
+    const s = out.find((o) => o.serving && o.kind === c.kind && o.pci === c.pci && o.arfcn === c.arfcn);
+    if (s) {
+      if (s.bw == null) s.bw = c.bw;
+      continue;
+    }
+    out.push(c);
+  }
   return out;
 }
 
@@ -106,7 +124,8 @@ export function servingCellId(sig: NetworkSignal | undefined, serving: Carrier |
 
 /** Sum of every reported carrier's bandwidth, active or not (touch total_bw). */
 export function totalBandwidth(cs: Carrier[]): number | null {
-  if (cs.length === 0) return null;
+  // Unknown widths count as unknown, not 0 MHz.
+  if (cs.length === 0 || cs.every((c) => c.bw == null)) return null;
   return cs.reduce((a, c) => a + (c.bw ?? 0), 0);
 }
 

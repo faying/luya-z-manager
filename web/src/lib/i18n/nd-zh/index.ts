@@ -42,10 +42,12 @@ import { zh as processes } from "./processes";
 import { zh as enableAdb } from "./enable-adb";
 import { zh as config } from "./config";
 import { zh as netinfo } from "./netinfo";
+import { zh as battery } from "./battery";
+import { zh as cpu } from "./cpu";
 
 type Dict = { [k: string]: string | Dict };
 
-export const ND_ZH: Dict[] = [clients, homeMode, login, scenario, signalDetect, speedtest, tailscale, mobileNetwork, networkMode, qci, celllock, dns, firewall, qos, apn, sim, esim, stc, wifi, wifiGuest, lan, vpn, smsList, smsCompose, smsForward, stk, deviceInfo, health, alerts, settings, device, schedule, scheduler, usb, telemetry, at, processes, enableAdb, config, netinfo] as unknown as Dict[];
+export const ND_ZH: Dict[] = [clients, homeMode, login, scenario, signalDetect, speedtest, tailscale, mobileNetwork, networkMode, qci, celllock, dns, firewall, qos, apn, sim, esim, stc, wifi, wifiGuest, lan, vpn, smsList, smsCompose, smsForward, stk, deviceInfo, health, alerts, settings, device, schedule, scheduler, usb, telemetry, at, processes, enableAdb, config, netinfo, battery, cpu] as unknown as Dict[];
 
 export function deepMerge(base: Dict, ...layers: Dict[]): Dict {
   const out: Dict = { ...base };

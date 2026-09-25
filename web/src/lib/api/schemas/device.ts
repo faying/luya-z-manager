@@ -29,6 +29,35 @@ export interface BatteryInfo {
 }
 
 /**
+ * GET /api/battery — system.rs `read_battery_at` (sysfs power_supply).
+ * The first five fields are the original contract (0 when a node is missing);
+ * the rest are null when the node is missing. 503 = no battery directory.
+ * Current sign: + = into the battery.
+ */
+export interface SysfsBattery {
+  status: string;
+  capacity: number;
+  voltage_uv: number;
+  current_ua: number;
+  /** Tenths of °C. */
+  temperature: number;
+  charge_full_uah: number | null;
+  charge_full_design_uah: number | null;
+  charge_counter_uah: number | null;
+  cycle_count: number | null;
+  health: string | null;
+  voltage_max_uv: number | null;
+  /** sysfs usb supply; null when that directory is missing. Reads 0 while
+   *  charging is stopped (the firmware cuts the input). */
+  charger: {
+    online: boolean | null;
+    voltage_uv: number | null;
+    current_ua: number | null;
+    input_current_limit_ua: number | null;
+  } | null;
+}
+
+/**
  * GET /api/device/charger — device_ext.rs:15 `device_charger`.
  * ubus passthrough: `zwrt_bsp.charger list`, shape from page (usb) + mobile
  * DeviceParser.parseCharger + charge_policy.rs:43-66.

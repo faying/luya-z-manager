@@ -732,6 +732,7 @@ export const zhPages: Record<string, Record<string, string>> = {
     "kindDevuiGaveUp": "触屏界面反复启动失败，已换回原厂界面（长按屏幕右下角 3 秒重试）",
     "kindDevuiThemePaused": "触屏自动切换深浅色已暂停，重启后恢复",
     "kindDatadCrash": "数据服务（zwrt-datad）异常退出",
+    "kindDatadDegraded": "数据服务（zwrt-datad）持续无响应，后台改为直接读取",
     "kindWifiTakeover": "Wi-Fi 看门狗重新打开了 Wi-Fi",
     "kindWifiRestoreFailed": "Wi-Fi 看门狗没能打开 Wi-Fi",
     "kindSmsTest": "测试短信",

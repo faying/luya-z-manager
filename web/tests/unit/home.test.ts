@@ -8,8 +8,11 @@ describe("parseCa", () => {
     expect(cs[0]).toMatchObject({ band: "78", pci: 671, arfcn: 627264, bw: 100, active: true });
     expect(cs[1].active).toBe(false);
   });
-  it("skips legacy 5-field records and empty strings", () => {
-    expect(parseCa("12,3,1,1300,20", "lte")).toEqual([]);
+  it("reads 5-field records, skips short ones and empty strings", () => {
+    expect(parseCa("12,3,1,1300,20", "lte")).toEqual([
+      { kind: "lte", band: "3", pci: 12, arfcn: 1300, bw: 20, rsrp: null, rsrq: null, sinr: null, active: true, serving: false },
+    ]);
+    expect(parseCa("12,3,1,1300", "lte")).toEqual([]);
     expect(parseCa("", "lte")).toEqual([]);
     expect(parseCa(undefined, "nr")).toEqual([]);
   });
@@ -74,5 +77,27 @@ describe("formatting", () => {
     expect(cpuTempC({ cpuss_temp: 47000 })).toBe(47);
     expect(cpuTempC({ cpuss_temp: 52 })).toBe(52);
     expect(cpuTempC({})).toBeNull();
+  });
+});
+
+describe("lone LTE carrier on B27 (5-field lteca)", () => {
+  const sig = {
+    network_type: "LTE-NSA",
+    lte_rsrp: -83,
+    lte_pci: 254,
+    lte_snr: "13.0",
+    wan_active_band: "LTE BAND 3",
+    wan_active_channel: 1750,
+    lteca: "254,3,0,1750,20;",
+  };
+  it("fills the serving cell's width instead of adding a second carrier", () => {
+    const cs = carriers(sig as never);
+    expect(cs).toHaveLength(1);
+    expect(cs[0].bw).toBe(20);
+    expect(totalBandwidth(cs)).toBe(20);
+  });
+  it("is unknown, not 0 MHz, when no width is reported", () => {
+    const { lteca: _drop, ...noCa } = sig;
+    expect(totalBandwidth(carriers(noCa as never))).toBeNull();
   });
 });

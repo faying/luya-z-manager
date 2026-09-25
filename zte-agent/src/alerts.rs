@@ -33,6 +33,9 @@ const DIR: &str = "/data/alerts";
 const CLOCK_SANE_AFTER: i64 = 1_704_067_200; // 2024-01-01
 
 const EVENTS_SHOWN: usize = 50;
+/// Queue trimming, as touch-ui `scripts/alert-lib.sh` (ALERT_TRIM_AT / ALERT_KEEP).
+const QUEUE_TRIM_AT: usize = 300;
+const QUEUE_KEEP: usize = 200;
 const SMS_LOG_SHOWN: usize = 10;
 
 #[derive(Debug, PartialEq)]
@@ -156,6 +159,37 @@ impl Alerts {
         }
     }
 
+    /// Append one event the way touch-ui `scripts/alert-lib.sh` does
+    /// (RELIABILITY.md §4): under `lock`, bump `seq`, append, trim past
+    /// 300 lines to the last 200. `text` is cleaned to printable ASCII, 120
+    /// chars. u60-guard picks it up for the SMS like any other kind.
+    fn add(&self, kind: &str, text: &str, wall: i64, uptime: u64) -> std::io::Result<u64> {
+        use std::io::Write;
+        use std::os::unix::io::AsRawFd;
+        if !valid_kind(kind) {
+            return Err(std::io::Error::other("bad kind"));
+        }
+        self.ensure_dir()?;
+        let lock = fs::OpenOptions::new().create(true).append(true).open(self.path("lock"))?;
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let text: String = text.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()).take(120).collect();
+        let seq = self.read_u64("seq") + 1;
+        self.write_whole("seq", &format!("{seq}\n"))?;
+        let mut q = fs::OpenOptions::new().create(true).append(true).open(self.path("queue"))?;
+        writeln!(q, "{seq}\t{wall}\t{uptime}\t{kind}\t{text}")?;
+        drop(q);
+        let all = fs::read_to_string(self.path("queue")).unwrap_or_default();
+        let lines: Vec<&str> = all.lines().collect();
+        if lines.len() > QUEUE_TRIM_AT {
+            let mut kept = lines[lines.len() - QUEUE_KEEP..].join("\n");
+            kept.push('\n');
+            self.write_whole("queue", &kept)?;
+        }
+        Ok(seq) // lock released on drop
+    }
+
     fn events(&self) -> Vec<Event> {
         parse_queue(&fs::read_to_string(self.path("queue")).unwrap_or_default())
     }
@@ -253,6 +287,15 @@ pub fn set_abroad(abroad: bool) {
     }
 }
 
+/// Raise an alert event (web list + u60-guard's SMS). Best effort: logged
+/// on failure.
+pub fn raise(kind: &str, text: &str) {
+    match alerts().add(kind, text, now(), uptime_now().unwrap_or(0)) {
+        Ok(seq) => eprintln!("[alerts] raised {kind} (seq {seq})"),
+        Err(e) => eprintln!("[alerts] could not raise {kind}: {e}"),
+    }
+}
+
 /// Unread count only, for the unauthenticated `/api/public/status`.
 pub fn public_unread() -> usize {
     alerts().unread()
@@ -323,6 +366,27 @@ pub fn alerts_sms_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn add_appends_with_seq_and_trims() {
+        let d = std::env::temp_dir().join(format!("u60-alerts-add-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        let a = Alerts::at(&d);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("seq"), "41\n").unwrap();
+        assert_eq!(a.add("sms-forward-stuck", "SMS 7\theld\u{4e2d}", 1_758_600_000, 5).unwrap(), 42);
+        let ev = a.events();
+        assert_eq!(ev.len(), 1);
+        assert_eq!((ev[0].seq, ev[0].kind.as_str(), ev[0].text.as_str()), (42, "sms-forward-stuck", "SMS 7held"));
+        assert!(a.add("Bad Kind", "x", 0, 0).is_err());
+        for _ in 0..300 {
+            a.add("sms-forward-stuck", "x", 0, 0).unwrap();
+        }
+        let ev = a.events();
+        assert!(ev.len() <= QUEUE_TRIM_AT && ev.len() >= QUEUE_KEEP);
+        assert_eq!(ev.last().unwrap().seq, 342);
+        let _ = fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn queue_parser_keeps_good_lines_and_skips_the_rest() {

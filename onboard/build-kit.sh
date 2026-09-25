@@ -70,6 +70,15 @@ die()  { printf '\033[0;31m✗\033[0m %s\n' "$1" >&2; exit 1; }
 sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
 rev() { git -C "$1" log -1 --format='%h %ad %s' --date=short 2>/dev/null || echo unknown; }
 dirty() { [ -z "$(git -C "$1" status --porcelain -- "${@:2}" 2>/dev/null)" ] || echo " (有未提交改动)"; }
+# 判断 zwrt-datad 二进制能不能进装机包：0 = 能；1 = 不是 Rust 版（C 版没有下面两个标记）；
+# 2 = 带着上游写死的外部更新源。Rust 版的标记二选一：
+#   ZWRT_DATAD_FORK_RUST_SELF_CONTAINED —— 新版 fork（OTA 整个删了）嵌的
+#   ZWRT_DATAD_OTA_DISABLE_AUTO        —— 旧版（如 device-backups/zwrt-datad.rust-b5e8786），start.sh 用它关自动 OTA
+datad_bin_check() {
+  grep -a -q -e 'ZWRT_DATAD_FORK_RUST_SELF_CONTAINED' -e 'ZWRT_DATAD_OTA_DISABLE_AUTO' "$1" || return 1
+  ! grep -a -q 'releases/latest/download' "$1" || return 2
+  return 0
+}
 
 [ -d "$DEVUI_REPO" ] || die "找不到 devui 仓库: ${DEVUI_REPO}（用 DEVUI_REPO=… 指定）"
 mkdir -p "$CACHE" "$DIST"
@@ -172,13 +181,15 @@ else
   DATAD_SRC="$(basename "$DATAD_BIN")"
 fi
 cp "$DATAD_BIN" "$PL/devui/zwrt-datad"
-# Rust 版认 ZWRT_DATAD_OTA_DISABLE_AUTO（start.sh 用它关自动 OTA）；C 版没有
-grep -a -q 'ZWRT_DATAD_OTA_DISABLE_AUTO' "$PL/devui/zwrt-datad" || die "包里的 zwrt-datad 不是 Rust 版（${DATAD_BIN}）。
-  用 DATAD_BIN=… 指定 Rust 版，或去掉 DATAD_BIN 让脚本从 data-service 仓库现编"
-# 装机包要完全自主：不能带上游写死的更新源
-if grep -a -q 'releases/latest/download' "$PL/devui/zwrt-datad"; then
-  die "包里的 zwrt-datad 还带着写死的外部更新源（releases/latest/download）。用去掉了更新源的 fork 版（DATAD_BIN=…）"
-fi
+# Rust 版（新标记 ZWRT_DATAD_FORK_RUST_SELF_CONTAINED 或旧标记 ZWRT_DATAD_OTA_DISABLE_AUTO，有其一即可）；
+# 装机包要完全自主：不能带上游写死的更新源。规则见上面 datad_bin_check。
+datad_rc=0; datad_bin_check "$PL/devui/zwrt-datad" || datad_rc=$?
+case $datad_rc in
+  0) ;;
+  1) die "包里的 zwrt-datad 不是 Rust 版（${DATAD_BIN}；二进制里既没有 ZWRT_DATAD_FORK_RUST_SELF_CONTAINED 也没有 ZWRT_DATAD_OTA_DISABLE_AUTO）。
+  用 DATAD_BIN=… 指定 Rust 版，或去掉 DATAD_BIN 让脚本从 data-service 仓库现编" ;;
+  *) die "包里的 zwrt-datad 还带着写死的外部更新源（releases/latest/download）。用去掉了更新源的 fork 版（DATAD_BIN=…）" ;;
+esac
 
 # ── eSIM（lpac 包，本机现打）────────────────────────────────────────────────
 if [ -n "${ESIM_TGZ:-}" ]; then

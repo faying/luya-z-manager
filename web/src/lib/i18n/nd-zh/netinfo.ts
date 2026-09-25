@@ -9,6 +9,7 @@ export const zh = {
     lookingUp: "查询中…",
     simOperator: "原始运营商",
     servingOperator: "注册运营商",
+    simIs: "卡：{{name}}",
     roaming: "漫游",
     roamingYes: "漫游中",
     roamingNo: "本地",

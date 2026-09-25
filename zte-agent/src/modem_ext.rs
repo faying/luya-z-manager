@@ -17,8 +17,24 @@ pub fn modem_data_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
     };
     match ubus::call("zwrt_data", "set_wwaniface", Some(&parsed.to_string())) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
-        Err(e) => (503, json!({"ok": false, "error": e})),
+        Err(e) => {
+            // B27 answers "Unknown error" while it re-dials (seen 2026-09-25
+            // turning roaming on after an eSIM switch) yet keeps the setting.
+            // Read back before calling it a failure.
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            match ubus::call("zwrt_data", "get_wwaniface", Some(r#"{"cid":1}"#)) {
+                Ok(now) if applied(&parsed, &now) => (200, json!({"ok": true, "data": now})),
+                _ => (503, json!({"ok": false, "error": e})),
+            }
+        }
     }
+}
+
+/// Every switch the request set (enable / roam_enable / connect_mode) now reads back the same.
+fn applied(want: &Value, now: &Value) -> bool {
+    let keys = ["enable", "roam_enable", "connect_mode"];
+    let asked: Vec<_> = keys.iter().filter(|k| want.get(**k).is_some()).collect();
+    !asked.is_empty() && asked.iter().all(|k| want[**k].as_i64().is_some() && want[**k].as_i64() == now[**k].as_i64())
 }
 
 pub fn modem_airplane(state: &AppState, body: &[u8]) -> (u16, Value) {
@@ -83,3 +99,16 @@ pub fn modem_register_result(_state: &AppState) -> (u16, Value) {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn applied_compares_only_requested_switches() {
+        let now = json!({"enable": 1, "roam_enable": 1, "connect_mode": 1, "cid": 1});
+        assert!(applied(&json!({"cid": 1, "roam_enable": 1}), &now));
+        assert!(!applied(&json!({"cid": 1, "roam_enable": 0}), &now));
+        assert!(!applied(&json!({"cid": 1}), &now));
+    }
+}

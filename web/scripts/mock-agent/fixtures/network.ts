@@ -32,6 +32,7 @@ import type {
   QosContext,
   DataUsage,
   CpuUsage,
+  MemInfo,
   WifiStation,
 } from "../../../src/lib/api/schemas/network.ts";
 
@@ -545,7 +546,21 @@ function cpu(ctx: Ctx): CpuUsage {
     return Math.round(Math.max(0.5, Math.min(100, v)) * 10) / 10;
   });
   const overall = Math.round((cores.reduce((a, b) => a + b, 0) / cores.length) * 10) / 10;
-  return { cores, overall };
+  // Core 3 offline under "missing": /proc/stat drops it, sysfs still lists it.
+  const offline = ctx.has("missing") ? 3 : -1;
+  const per_core = cores.map((u, id) => ({
+    id,
+    online: id !== offline,
+    usage: id === offline ? null : u,
+    freq_mhz: id === offline ? null : id === 2 ? 825 : 1516,
+    max_mhz: 2208,
+  }));
+  return { cores: cores.filter((_, i) => i !== offline), overall, per_core };
+}
+
+/** system.rs read_meminfo (/proc/meminfo). */
+function memory(): MemInfo {
+  return { total_kb: 1_852_000, free_kb: 402_000, available_kb: 1_010_000, buffers_kb: 12_000, cached_kb: 560_000, used_kb: 842_000, usage_pct: 45.5 };
 }
 
 /** netinfo.rs `get`: a mainland SIM roaming in Taiwan, proxy exit in Japan. Documentation-range IPs. */
@@ -604,6 +619,8 @@ export const routes: Route[] = [
   // A short delay keeps the loading state visible without tripping the 9 s timeout.
   { method: "GET", path: "/api/network/qos", handler: (ctx) => ({ data: qos(ctx), delayMs: 1200 }) },
   { method: "GET", path: "/api/data-usage", handler: (ctx) => ok(dataUsage(ctx)) },
-  { method: "GET", path: "/api/cpu", handler: (ctx) => ok(cpu(ctx)) },
+  // "missing" = core 3 offline (cpu() handles it), not stripped fields.
+  { method: "GET", path: "/api/cpu", handler: (ctx) => ok(cpu(ctx)), ownMissing: true },
+  { method: "GET", path: "/api/memory", handler: () => ok(memory()) },
   { method: "GET", path: "/api/netinfo", handler: (ctx) => ok(netinfo(ctx)) },
 ];

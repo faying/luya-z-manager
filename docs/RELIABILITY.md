@@ -59,7 +59,11 @@ zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`�
   所以裁剪文件不影响游标。不用行号、字节偏移或墙钟做编号。
 - **墙钟不可信**：设备 RTC 在网络对时之前是 1971 年左右。墙钟秒 < `1704067200`（2024-01-01）的一律当作「时间未校准」，
   网页显示「开机后 N 秒」。
-- 类别：`[a-z0-9-]`，现有：`agent-crash`、`datad-crash`（supervise.sh）；`devui-crash`、`devui-gave-up`（u60-uid）；`devui-theme-paused`（触屏自己：自动深浅色 1 小时内切了 3 次——正常一天只切 2 次——停到下次开机；不发短信）；`agent-silent`、`agent-hung`、`wifi-takeover`、`wifi-restore-failed`、`sms-failed`（u60-guard）。
+- 类别：`[a-z0-9-]`，现有：`agent-crash`、`datad-crash`（supervise.sh）；`devui-crash`、`devui-gave-up`（u60-uid）；`devui-theme-paused`（触屏自己：自动深浅色 1 小时内切了 3 次——正常一天只切 2 次——停到下次开机；不发短信）；`agent-silent`、`agent-hung`、`wifi-takeover`、`wifi-restore-failed`、`sms-failed`、`datad-degraded`（u60-guard）。
+- `datad-degraded` 看标记文件 `/data/u60-guard/datad-degraded`：第一行 = 退路开始的 epoch 秒，第二行 = 原因（一行可打印 ASCII，≤120 字符）。
+  zte-agent（`zte-agent/src/datad_feed.rs`）是唯一的写入和删除者：datad `/v2` 不应、改为自己读 ubus 时写入，退路期间每 60 秒重写一次（开始时间不变、刷新 mtime），
+  恢复时删掉；agent 启动时删掉旧标记再重新判断。u60-guard 只读：mtime 不到 3 分钟且开始时间早于 5 分钟前，才按开始时间 `alert_once` 发一次；
+  mtime 过期（agent 不再刷新）不发，那是心跳告警的事；开机宽限期内不看。
 - 说明：只能是可打印 ASCII，去掉 tab 和换行，最多 120 个字符。给网页告警列表看（短信正文按类别另写），不能带任何配置内容（号码、密码、SSID）。
 - 写入方统一用 touch-ui `scripts/alert-lib.sh` 里的写入函数（supervise.sh 和 u60-guard 共用），它负责清洗、截断和裁剪：
   超过 300 行时保留最后 200 行。

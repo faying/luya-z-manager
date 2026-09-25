@@ -64,7 +64,7 @@ const DEFAULT_DIRECT_URLS: &[&str] = &[
 
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 const LOOKUP_MAX_AGE: i64 = 600;
-const LOOKUP_RETRY: i64 = 120;
+const LOOKUP_RETRY: i64 = 30;
 const PASS_MIN_GAP: i64 = 10;
 const SELECTION_MAX_AGE: i64 = 120;
 

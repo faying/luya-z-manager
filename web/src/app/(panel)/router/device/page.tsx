@@ -26,6 +26,7 @@ import { apiFetch } from "@/lib/api/client";
 import { useApi } from "@/lib/hooks/useApi";
 import { useWriteOp } from "@/lib/api/writeOp";
 import type { ChargeControl, FastBoot, PowerSave } from "@/lib/api/schemas/device";
+import { BatteryDetails } from "./BatteryDetails";
 import {
   Button,
   ConfirmDialog,
@@ -106,7 +107,7 @@ function Slider({
 
 export default function DevicePage() {
   const { t } = useTranslation();
-  const charge = useApi<ChargeControl>("/api/device/charge-control");
+  const charge = useApi<ChargeControl>("/api/device/charge-control", { refreshInterval: 30000 });
   const fast = useApi<FastBoot>("/api/device/fast-boot");
   const ps = useApi<PowerSave>("/api/device/power-save", { method: "POST", body: PS_READ });
 
@@ -327,6 +328,8 @@ export default function DevicePage() {
             ) : undefined
           }
         />
+
+        <BatteryDetails />
 
         {/* ── charge limit ── */}
         <section aria-labelledby="dc-charge">

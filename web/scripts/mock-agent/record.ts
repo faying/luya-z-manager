@@ -46,7 +46,10 @@ const ALLOWLIST: Entry[] = [
   // handlers.rs:137 — uci get zwrt_data_commit.wwancid1dst.* only.
   { path: "/api/data-usage", checked: "handlers.rs:137" },
   // handlers.rs:92 — /proc/stat delta in memory.
-  { path: "/api/cpu", checked: "handlers.rs:92 → system.rs:46" },
+  { path: "/api/cpu", checked: "handlers.rs:92 → system.rs:46 (+ sysfs cpufreq)" },
+  // handlers.rs battery / memory — sysfs power_supply, /proc/meminfo.
+  { path: "/api/battery", checked: "handlers.rs battery → system.rs read_battery_at" },
+  { path: "/api/memory", checked: "handlers.rs memory → system.rs read_meminfo" },
   // wifi.rs:80 — ~25 uci get, zwrt_wlan report (fallback), iw info / station dump.
   { path: "/api/wifi/status", checked: "wifi.rs:80" },
   // wifi_radio.rs:329 → observe :268 — uci get ×2, ps w, hostapd_cli status.

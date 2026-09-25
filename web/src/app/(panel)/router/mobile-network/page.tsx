@@ -24,6 +24,7 @@
 //   reboot                 tier 3, waitDevice 90 s (expect the agent to go away)
 // Long jobs run inside the write op, so they keep polling while the tab is
 // hidden; they stop when the page is left.
+import { connectFamilies, connectKind } from "@/lib/connectState";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Airplane, ArrowClockwise, CellSignalFull, Globe, MagnifyingGlass, Power } from "@phosphor-icons/react";
@@ -94,6 +95,8 @@ export default function MobileNetworkPage() {
   const dataOn = flag(data?.enable);
   const roamOn = flag(data?.roam_enable);
   const connectStatus = data?.connect_status ?? "";
+  const ck = connectKind(connectStatus);
+  const fams = connectFamilies(connectStatus);
 
   // Loops started by a write op stop when the page is left.
   const alive = useRef(true);
@@ -361,11 +364,11 @@ export default function MobileNetworkPage() {
     tone = "bad";
     state = t("mobilenet.stDataOff", "Mobile data off");
     reason = t("mobilenet.stDataOffReason", "Devices on the U60 have no internet. Turn mobile data on below.");
-  } else if (data && connectStatus === "connected") {
+  } else if (data && ck === "connected") {
     tone = "ok";
     state = t("mobilenet.stConnected", "Connected");
-    reason = roamOn ? t("mobilenet.stRoamingAllowed", "Data roaming is allowed.") : null;
-  } else if (data && connectStatus === "connecting") {
+    reason = [fams, roamOn ? t("mobilenet.stRoamingAllowed", "Data roaming is allowed.") : null].filter(Boolean).join(" · ") || null;
+  } else if (data && ck === "connecting") {
     tone = "neutral";
     state = t("mobilenet.stConnecting", "Connecting…");
   } else if (data) {
@@ -377,7 +380,13 @@ export default function MobileNetworkPage() {
   }
   if ((data && md.stale) || (status && ms.stale)) tone = "stale";
 
-  const connTone: Tone = connectStatus === "connected" ? "ok" : connectStatus === "connecting" || !connectStatus ? "neutral" : "bad";
+  const connTone: Tone = ck === "connected" ? "ok" : ck === "connecting" || ck === "unknown" ? "neutral" : "bad";
+  const connWord =
+    ck === "connected"
+      ? [t("mobilenet.stConnected", "Connected"), fams].filter(Boolean).join(" · ")
+      : ck === "connecting"
+        ? t("mobilenet.stConnecting", "Connecting…")
+        : connectStatus;
   const remote = isRemoteAccess();
   const dataTier = (): 2 | 3 => (remote ? 3 : 2);
 
@@ -455,7 +464,7 @@ export default function MobileNetworkPage() {
             <Row
               icon={CellSignalFull}
               label={t("mobilenet.status", "Status")}
-              value={data ? <StatusMark tone={connTone}>{connectStatus || "—"}</StatusMark> : <span className="nd-skel inline-block w-20" />}
+              value={data ? <StatusMark tone={connTone}>{connWord || "—"}</StatusMark> : <span className="nd-skel inline-block w-20" />}
             />
             <Row
               icon={Globe}

@@ -12,11 +12,20 @@
 //! plain DNS query straight to the operator's resolver gets an answer.
 //! Device-local packets take the default route out of `rmnet_data0` and the
 //! DNS is not hijacked (checked 2026-09-25), so that query is a direct one.
+//!
+//! Every sample that cannot read datad — request failed, body not JSON, or
+//! no `net.wan_status` in it — adds one to an in-process error count. Each
+//! change is written as one decimal line to [`ERRORS_FILE`] (temp file +
+//! rename; `0` at startup). The count only grows; an agent restart starts it
+//! at 0 again, so readers (touch-ui `datad-trial.sh`) treat a smaller number
+//! as a restart. Logged on the first error and every [`LOG_EVERY`] after.
 
 // Nothing in this build reads the conclusions yet; the sampler runs anyway.
 #![allow(dead_code)]
 use std::fs;
+use std::io::{self, Write};
 use std::net::{SocketAddr, UdpSocket};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -29,6 +38,95 @@ const SAMPLE_EVERY: Duration = Duration::from_secs(5);
 /// Received something this recently ⇒ the link is alive, no probe needed.
 pub const RX_FRESH_SECS: u64 = 30;
 const DNS_TIMEOUT: Duration = Duration::from_secs(2);
+/// Error count for readers outside the agent; format is fixed (see module comment).
+pub const ERRORS_FILE: &str = "/tmp/netwatch.errors";
+/// After the first error, log one line per this many (5 s samples ⇒ ~5 min).
+pub const LOG_EVERY: u64 = 60;
+
+/// Why one sample could not read datad.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadError {
+    /// Connect/timeout/HTTP error status.
+    Request,
+    /// Body was not JSON.
+    Json,
+    /// JSON without a string `net.wan_status`.
+    NoWanStatus,
+}
+
+impl ReadError {
+    fn as_str(self) -> &'static str {
+        match self {
+            ReadError::Request => "request failed",
+            ReadError::Json => "bad JSON",
+            ReadError::NoWanStatus => "no net.wan_status",
+        }
+    }
+}
+
+/// The error (if any) of one fetch of datad's `/state`. The `wan_status`
+/// lookup is the same one [`sample`] uses.
+pub fn classify(fetched: &Result<Value, ReadError>) -> Option<ReadError> {
+    match fetched {
+        Err(e) => Some(*e),
+        Ok(v) => {
+            let net = v.get("net").unwrap_or(v);
+            match net.get("wan_status").and_then(Value::as_str) {
+                Some(_) => None,
+                None => Some(ReadError::NoWanStatus),
+            }
+        }
+    }
+}
+
+/// In-process count of failed datad reads, mirrored to a file.
+pub struct ErrorCounter {
+    path: PathBuf,
+    count: u64,
+}
+
+impl ErrorCounter {
+    /// Starts at 0 and writes that out, replacing whatever the last run left.
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        let c = ErrorCounter { path: path.into(), count: 0 };
+        if let Err(e) = write_count(&c.path, 0) {
+            eprintln!("netwatch: cannot write {}: {e}", c.path.display());
+        }
+        c
+    }
+
+    #[cfg(test)]
+    pub fn count(&self) -> u64 {
+        self.count
+    }
+
+    /// Account for one sample. Returns true when the count changed.
+    pub fn record(&mut self, err: Option<ReadError>) -> bool {
+        let Some(e) = err else { return false };
+        self.count += 1;
+        let written = write_count(&self.path, self.count);
+        if self.count == 1 || self.count % LOG_EVERY == 0 {
+            eprintln!("netwatch: datad /state unreadable ({}), {} error(s) so far", e.as_str(), self.count);
+            if let Err(w) = written {
+                eprintln!("netwatch: cannot write {}: {w}", self.path.display());
+            }
+        }
+        true
+    }
+}
+
+/// `"<n>\n"` via a temp file in the same directory + rename, so a reader never
+/// sees a half-written number.
+fn write_count(path: &Path, n: u64) -> io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    {
+        let mut f = fs::File::create(&tmp)?;
+        writeln!(f, "{n}")?;
+    }
+    fs::rename(&tmp, path)
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Snapshot {
@@ -61,12 +159,16 @@ pub fn start() {
                 .into();
             // Overridable for the local fake run.
             let datad = std::env::var("ZTE_AGENT_DATAD_STATE").unwrap_or_else(|_| DATAD_STATE.to_string());
+            let errors_file =
+                std::env::var("ZTE_AGENT_NETWATCH_ERRORS").unwrap_or_else(|_| ERRORS_FILE.to_string());
+            let mut errors = ErrorCounter::new(errors_file);
             loop {
-                let state = agent
-                    .get(&datad)
-                    .call()
-                    .ok()
-                    .and_then(|mut r| r.body_mut().read_json::<Value>().ok());
+                let fetched: Result<Value, ReadError> = match agent.get(&datad).call() {
+                    Err(_) => Err(ReadError::Request),
+                    Ok(mut r) => r.body_mut().read_json::<Value>().map_err(|_| ReadError::Json),
+                };
+                errors.record(classify(&fetched));
+                let state = fetched.ok();
                 let rx = fs::read_to_string("/proc/net/dev").ok().and_then(|t| rx_bytes(&t, CELL_IF));
                 let now = now_unix();
                 let mut s = SNAP.lock().unwrap_or_else(|e| e.into_inner());
@@ -259,6 +361,79 @@ mod tests {
         let s5 = sample(&s4, 150, None, None);
         assert_eq!(s5.connected, None);
         assert_eq!(alive_without_probe(&s5, 150), Some(true), "datad down: not our call");
+    }
+
+    fn tmpdir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("u60-netwatch-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn classify_state_reads() {
+        assert_eq!(classify(&Ok(json!({"net": {"wan_status": "disconnected"}}))), None);
+        assert_eq!(classify(&Ok(json!({"wan_status": "ipv4_connected"}))), None);
+        assert_eq!(classify(&Err(ReadError::Request)), Some(ReadError::Request));
+        assert_eq!(classify(&Err(ReadError::Json)), Some(ReadError::Json));
+        assert_eq!(classify(&Ok(json!({"net": {"wan_dns": "1.1.1.1"}}))), Some(ReadError::NoWanStatus));
+        assert_eq!(classify(&Ok(json!({"net": {"wan_status": null}}))), Some(ReadError::NoWanStatus));
+    }
+
+    #[test]
+    fn error_counter_success_does_not_count() {
+        let d = tmpdir("ok");
+        let p = d.join("netwatch.errors");
+        let mut c = ErrorCounter::new(&p);
+        assert_eq!(fs::read_to_string(&p).unwrap(), "0\n");
+        let ok = Ok(json!({"net": {"wan_status": "ipv4_ipv6_connected"}}));
+        for _ in 0..3 {
+            assert!(!c.record(classify(&ok)));
+        }
+        assert_eq!(c.count(), 0);
+        assert_eq!(fs::read_to_string(&p).unwrap(), "0\n");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn error_counter_counts_each_kind_once() {
+        let d = tmpdir("kinds");
+        let p = d.join("netwatch.errors");
+        fs::write(&p, "41\n").unwrap(); // left by an earlier run: reset to 0
+        let mut c = ErrorCounter::new(&p);
+        assert_eq!(fs::read_to_string(&p).unwrap(), "0\n");
+        let cases = [
+            Err(ReadError::Request),
+            Err(ReadError::Json),
+            Ok(json!({"net": {"wan_dns": "1.1.1.1"}})),
+        ];
+        for (i, f) in cases.iter().enumerate() {
+            assert!(c.record(classify(f)));
+            assert_eq!(c.count(), i as u64 + 1);
+            assert_eq!(fs::read_to_string(&p).unwrap(), format!("{}\n", i + 1));
+        }
+        assert!(!c.record(None));
+        assert_eq!(fs::read_to_string(&p).unwrap(), "3\n");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn error_counter_file_is_replaced_atomically() {
+        use std::io::Read;
+        let d = tmpdir("atomic");
+        let p = d.join("netwatch.errors");
+        let mut c = ErrorCounter::new(&p);
+        c.record(Some(ReadError::Request));
+        // A reader holding the old file keeps seeing a whole old number: the
+        // new one arrives as a different file (rename), not an in-place rewrite.
+        let mut old = fs::File::open(&p).unwrap();
+        c.record(Some(ReadError::Request));
+        let mut seen = String::new();
+        old.read_to_string(&mut seen).unwrap();
+        assert_eq!(seen, "1\n");
+        assert_eq!(fs::read_to_string(&p).unwrap(), "2\n");
+        assert!(!d.join("netwatch.errors.tmp").exists());
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

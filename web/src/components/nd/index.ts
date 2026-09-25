@@ -17,3 +17,4 @@ export { Chips } from "./Chips";
 export { OpResult } from "./OpResult";
 export { ChoiceGrid } from "./ChoiceGrid";
 export { NdTabs, type TabDef } from "./Tabs";
+export { OperatorLogo } from "./OperatorLogo";

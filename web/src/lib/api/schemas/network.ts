@@ -284,10 +284,33 @@ export interface DataUsage {
   total: DataUsagePeriod;
 }
 
-/** GET /api/cpu — handlers.rs:92 → system.rs:34 `CpuUsage` (percent since the previous call). No page reads it. */
+/** GET /api/cpu — handlers.rs → system.rs `CpuUsage` (percent since the previous call; the
+ *  baseline is shared by every caller). Read by /tools/cpu. */
 export interface CpuUsage {
+  /** Online cores only, /proc/stat order. */
   cores: number[];
   overall: number;
+  /** Every core sysfs knows, offline ones included (usage/freq null then). */
+  per_core?: CoreInfo[];
+}
+
+export interface CoreInfo {
+  id: number;
+  online: boolean;
+  usage: number | null;
+  freq_mhz: number | null;
+  max_mhz: number | null;
+}
+
+/** GET /api/memory — system.rs `MemInfo`. */
+export interface MemInfo {
+  total_kb: number;
+  free_kb: number;
+  available_kb: number;
+  buffers_kb: number;
+  cached_kb: number;
+  used_kb: number;
+  usage_pct: number;
 }
 
 /** One exit's public IP, from netinfo.rs's lookups (null fields = not known). */

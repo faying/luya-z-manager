@@ -4,7 +4,7 @@
 // scenario, Tailscale — and on ≥1024 it splits 60/40 with the service
 // modules, scenario and Tailscale in the right column. Polling stays within 2.10 req/s:
 //
-//   speed 1 s · signal 2 s · battery, wifi, public status, proxy 10 s ·
+//   speed 1 s · signal 2 s · battery (+ estimate: /api/battery), wifi, public status, proxy 10 s ·
 //   thermal, tailscale 15 s · system, data usage 30 s
 import Link from "next/link";
 import { useMemo } from "react";
@@ -12,12 +12,15 @@ import { useTranslation } from "react-i18next";
 import { mutate as globalMutate } from "swr";
 import { Bell, ChatCircleText, type Icon } from "@phosphor-icons/react";
 import { useApi, type UseApiResponse } from "@/lib/hooks/useApi";
+import { useBatteryEstimate } from "@/lib/hooks/useBatteryEstimate";
+import { estimateText } from "@/lib/batteryEstimate";
+import { differsFromHome } from "@/lib/operatorLogo";
 import { tailscaleValid } from "@/lib/api/freshness";
 import type { NetworkSignal, NetworkSpeed, DataUsage, NetInfo, NetInfoExit, NetInfoOperator } from "@/lib/api/schemas/network";
 import type { BatteryInfo, DeviceSystem } from "@/lib/api/schemas/device";
 import type { TailscaleStatus } from "@/lib/api/schemas/services";
 import type { PublicStatus } from "@/lib/api/schemas/public";
-import { Group, Help, ModuleCard, Readout, ReadoutWall, Row, StatusMark } from "@/components/nd";
+import { Group, Help, ModuleCard, OperatorLogo, Readout, ReadoutWall, Row, StatusMark } from "@/components/nd";
 import { selectionWord, bytes, carrierCounts, carriers, cpuTempC, mbps, servingCellId, sigState, totalBandwidth, uptimeParts, type Carrier } from "@/lib/home";
 import { fmtDevice } from "@/lib/deviceClock";
 import { useMedia } from "@/lib/useMedia";
@@ -43,6 +46,7 @@ export default function HomePage() {
   const spd = useApi<NetworkSpeed>("/api/network/speed", { refreshInterval: 1000 });
   const sig = useApi<NetworkSignal>("/api/network/signal", { refreshInterval: 2000 });
   const bat = useApi<BatteryInfo>("/api/device/battery-info", { refreshInterval: 10000 });
+  const be = useBatteryEstimate(10000);
   const wifi = useApi<WifiStatus>("/api/wifi/status", { refreshInterval: 10000 });
   const pub = useApi<PublicStatus>("/api/public/status", { refreshInterval: 10000 });
   const thermal = useApi<Record<string, unknown>>("/api/device/thermal", { refreshInterval: 15000 });
@@ -80,7 +84,7 @@ export default function HomePage() {
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:gap-6">
       <div className="grid content-start gap-4 lg:col-span-2">
-        <HomeHeader pub={pub.data} />
+        <HomeHeader pub={pub.data} serving={ni.data?.serving_operator} />
       </div>
 
       {/* Left column (and the whole page on phones, in reading order). */}
@@ -103,7 +107,7 @@ export default function HomePage() {
             label={t("home.aggBw", "Aggregate bandwidth · MHz")}
             value={state === "loading" ? undefined : bw}
             unit="MHz"
-            sub={bw != null ? carrierSummary(t, cc) : t("home.noCarriers", "No active carriers")}
+            sub={cs.length ? carrierSummary(t, cc) : t("home.noCarriers", "No active carriers")}
             stale={sig.stale}
           />
           <Readout
@@ -133,7 +137,7 @@ export default function HomePage() {
             label={t("home.battery", "Battery")}
             value={bat.data ? bat.data.battery_capacity ?? null : bat.error ? null : undefined}
             unit="%"
-            sub={batteryWord(t, bat.data)}
+            sub={withEstimate(batteryWord(t, bat.data), be.est && be.est.kind !== "unknown" ? estimateText(be.est, be.targetPct, (k, d, v) => t(k, d, v)) : null)}
             stale={bat.stale}
           />
         </ReadoutWall>
@@ -166,7 +170,7 @@ export default function HomePage() {
 
 // ── header ────────────────────────────────────────────────────────────
 
-function HomeHeader({ pub }: { pub: PublicStatus | undefined }) {
+function HomeHeader({ pub, serving }: { pub: PublicStatus | undefined; serving: NetInfoOperator | null | undefined }) {
   const { t } = useTranslation();
   const sms = pub?.sms?.unread ?? 0;
   const alerts = pub?.alerts?.unread ?? 0;
@@ -176,7 +180,15 @@ function HomeHeader({ pub }: { pub: PublicStatus | undefined }) {
     <header className="flex items-start gap-3 pt-2">
       <div className="min-w-0 flex-1">
         <h1 className="nd-product">{deviceLabel}</h1>
-        {sub && <p className="nd-aux mt-0.5">{sub}</p>}
+        {sub && (
+          <p className="nd-aux mt-0.5 flex items-center gap-1.5">
+            {/* The network we are on right now (roaming: the local one), same as 注册运营商. */}
+            {pub?.network?.operator && serving && (serving.mcc || serving.name) && (
+              <OperatorLogo mcc={serving.mcc} mnc={serving.mnc} name={serving.name} size={18} />
+            )}
+            <span className="min-w-0 truncate">{sub}</span>
+          </p>
+        )}
       </div>
       <CountButton href="/sms" icon={ChatCircleText} n={sms} label={sms > 0 ? t("home.smsUnread", "{{n}} unread SMS", { n: sms }) : t("home.sms", "SMS")} />
       <CountButton href="/alerts" icon={Bell} n={alerts} label={alerts > 0 ? t("home.alertsUnread", "{{n}} new alerts", { n: alerts }) : t("home.alerts", "Alerts")} />
@@ -294,7 +306,23 @@ function NetIdentityGroup({ ni, stale }: { ni: NetInfo | undefined; stale: boole
         sub={exitSub(d, [d?.isp])}
       />
       <Row label={t("home.simOperator", "SIM operator")} value={op(ni?.home_operator)} />
-      <Row label={t("home.servingOperator", "Registered on")} value={op(ni?.serving_operator)} href="/router/mobile-network" />
+      <Row
+        label={t("home.servingOperator", "Registered on")}
+        value={
+          <span className="inline-flex items-center gap-2">
+            {ni?.serving_operator && (ni.serving_operator.name || ni.serving_operator.mcc) && (
+              <OperatorLogo mcc={ni.serving_operator.mcc} mnc={ni.serving_operator.mnc} name={ni.serving_operator.name} />
+            )}
+            {op(ni?.serving_operator)}
+          </span>
+        }
+        sub={
+          differsFromHome(ni?.serving_operator, ni?.home_operator)
+            ? t("home.simIs", "SIM: {{name}}", { name: ni?.home_operator?.name ?? op(ni?.home_operator) })
+            : undefined
+        }
+        href="/router/mobile-network"
+      />
       <Row
         label={t("home.roaming", "Roaming")}
         value={ni?.roaming == null ? "—" : ni.roaming ? <StatusMark tone="warn">{t("home.roamingYes", "Roaming")}</StatusMark> : t("home.roamingNo", "Home")}
@@ -363,6 +391,11 @@ function tempWord(t: T, c: number | null) {
   if (c >= 80) return t("home.hot", "Hot");
   if (c >= 65) return t("home.warm", "Warm");
   return t("home.normal", "Normal");
+}
+
+function withEstimate(word: string | null | undefined, est: string | null) {
+  if (!est) return word;
+  return word ? `${word} · ${est}` : est;
 }
 
 function batteryWord(t: T, b: BatteryInfo | undefined) {
