@@ -166,7 +166,6 @@ if ls "$LOGO_SVG_DIR"/*.svg >/dev/null 2>&1; then
   "$DEVUI_REPO/scripts/logos/build-operator-logos.sh" "$LOGO_SVG_DIR" "$CACHE/operator-logos" >/dev/null || die "运营商 logo 生成失败"
   mkdir -p "$PL/devui/operator-logos"
   cp "$CACHE"/operator-logos/*.png "$PL/devui/operator-logos/"
-  rm -f "$PL"/devui/operator-logos/three-hk*.png   # 14 像素下认不出，触屏不用
 fi
 
 # ── 进程监督与 Wi-Fi 兜底 ─────────────────────────────────────────────────────

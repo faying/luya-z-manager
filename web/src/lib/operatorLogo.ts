@@ -15,6 +15,8 @@ const PLMN_SLUG: Record<string, string> = {
   "454-000": "csl", "454-002": "csl", "454-010": "csl", "454-018": "csl",
   "454-003": "three-hk", "454-004": "three-hk",
   "454-006": "smartone", "454-015": "smartone",
+  "454-007": "china-unicom", "454-016": "csl", "454-019": "csl", "454-020": "csl", "454-031": "china-telecom",
+  "455-001": "ctm", "455-004": "ctm", "455-005": "three-hk", "455-007": "china-telecom",
   "454-012": "cmhk", "454-013": "cmhk",
   "466-092": "chunghwa", "466-001": "fetnet", "466-097": "taiwan-mobile",
   "440-010": "docomo", "440-020": "softbank", "440-011": "rakuten",
