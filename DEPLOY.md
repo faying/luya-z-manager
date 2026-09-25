@@ -18,9 +18,10 @@ tar xzf onboard/dist/u60-kit-*.tar.gz -C /tmp && cd /tmp/u60-kit
 
 ## 打包相关
 
-- `build-kit.sh` 的变量（`DATAD_BIN`、`DEVUI_BIN`、`UID_BIN`、`DEVUI_FONTS_DIR`、`DEVUI_REPO`、`CHILL=0` 等）写在脚本开头，也可以写进 `onboard/kit.local.env`（不进 git）。
+- `build-kit.sh` 只要三个公开仓库并排放 + Docker 就能打出完整的包（触屏、zwrt-datad、eSIM、字体都现编或现生成，不从任何设备上拉），见 [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) 第 3 节。
+- `build-kit.sh` 的变量（`DATAD_BIN`、`DATAD_REPO`、`DEVUI_BIN`、`UID_BIN`、`ESIM_TGZ`、`DEVUI_FONTS_DIR`、`FONTS=0`、`DEVUI_REPO`、`CHILL=0` 等）写在脚本开头，也可以写进 `onboard/kit.local.env`（不进 git）。
 - 触屏程序必须是 LVGL 版，`zwrt-datad` 必须是不带外部更新源的 Rust 版，否则 `build-kit.sh` 会停下。
-- `FLEET_HOST=<ssh 别名> REFRESH_FLEET=1 ./onboard/build-kit.sh`：从一台已装好的设备重新拉 eSIM 工具（和 `zwrt-datad`）到 `onboard/cache/`。
+- eSIM 工具由 `scripts/esim/build-esim-bundle.sh --out` 现打，Alpine 包的版本和 sha256 钉在 `scripts/esim/alpine.lock`；Alpine 出安全更新替换了钉住的包时，跑 `python3 scripts/esim/alpine_closure.py --relock`，重打后先真机验证 `lpac.sh chip info`。
 - 打包的二进制（dropbear、lpac 及其库、zwrt-datad）不在本仓库里；把装机包给别人时，要附上它们各自的许可证。
 - 改了 `onboard/install.sh` 或 `onboard/device/install.sh` 以后，重新打包，再用
   `HOST=<ssh 别名> GATEWAY=<设备地址> SSH_KEY=<密钥> onboard/test/sandbox.sh run` 在真机沙盒里跑一遍完整装机流程

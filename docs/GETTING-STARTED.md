@@ -5,7 +5,7 @@
 
 > **先说清楚两件事**
 > 1. 这是非官方改装，和中兴（ZTE）无关，风险自负。只在你自己的设备上用。
-> 2. **目前不发布编译好的二进制**（许可证清单和可复现构建还没做完），装机包需要你自己编。下面第 3 节一步步讲。
+> 2. **目前不发布编译好的二进制**（许可证清单还没做完），装机包需要你自己编：一条命令，下面第 3 节讲。
 >    如果身边有人已经打好了装机包，直接跳到[第 4 节](#4-安装)。
 
 ## 1. 三个仓库各管什么
@@ -51,78 +51,57 @@ zwrt-datad :9460 ──▶ 触屏界面 u60pro-devui ──(eSIM 页)──▶ z
 
 | 要编的东西 | 需要 |
 |---|---|
-| zte-agent | `cargo-zigbuild`；没有的话 `build-kit.sh` 自动改用 Docker 镜像 `messense/cargo-zigbuild` |
+| 全部 | **Docker**（Docker Desktop 即可）、`git`、`curl`、`python3`、`unzip`、能上网 |
 | 管理网页 | Node.js + npm |
-| 触屏程序 | Docker（镜像里自带 Bootlin 交叉工具链；Apple 芯片的 Mac 会走 amd64 模拟，慢但能用） |
-| zwrt-datad | x86_64 Linux + Bootlin aarch64 musl 工具链 + rustup（见第 3.3 节） |
-| 其他 | `git`、`curl`、`python3`、能上网（要下载 dropbear、mihomo、zashboard，都按 sha256 校验） |
+| zte-agent | 有 `cargo-zigbuild` 就用，没有自动走 Docker |
+
+不用装任何交叉工具链：触屏程序、`zwrt-datad`、eSIM 工具、字体都在 Docker 里编或生成。
+macOS（Apple 芯片或 Intel）、x86_64 Linux 都验证过能用；触屏程序的工具链是 x86_64 程序，Apple 芯片上走 amd64 模拟，慢一些。
 
 ## 3. 编出装机包
 
-三个仓库并排放在同一个目录下（`build-kit.sh` 默认在 `../zte-u60-pro-mu5250-touch-ui` 找触屏仓库）：
+三个仓库并排放在同一个目录下，**只要这三个公开仓库就能打出完整的装机包，不需要从任何已经装好的设备上拉东西**：
 
 ```sh
 mkdir u60 && cd u60
 git clone https://github.com/faying/zte-u60-pro-mu5250-manager.git
 git clone https://github.com/faying/zte-u60-pro-mu5250-touch-ui.git
 git clone https://github.com/faying/zte-u60-pro-mu5250-data-service.git
-```
-
-### 3.1 触屏程序（touch-ui，Docker）
-
-```sh
-cd zte-u60-pro-mu5250-touch-ui
-docker build --platform linux/amd64 -t u60-devui-build -f Dockerfile.build .
-docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src u60-devui-build bash -c '
-  set -e
-  [ -f third_party/lvgl/lvgl.h ] || git clone --depth 1 --branch v9.5.0 https://github.com/lvgl/lvgl.git third_party/lvgl
-  HOME=/opt bash scripts/_build_freetype.sh          # 静态 FreeType → /opt/freetype-musl
-  make -j4 CROSS_COMPILE=aarch64-linux-              # → u60pro-devui（LVGL 版）
-  make CROSS_COMPILE=aarch64-linux- u60-uid          # → u60-uid（屏幕守护进程）
-  aarch64-linux-strip -o u60pro-devui.stripped u60pro-devui'
-cd ..
-```
-
-得到 `u60pro-devui.stripped` 和 `u60-uid`，`build-kit.sh` 默认就读这两个文件。
-
-> 不要用 `scripts/build.sh`：它编的是旧的 litehtml 版界面，而且也写到 `u60pro-devui.stripped`。`build-kit.sh` 发现是旧版会停下。
-
-触屏的圆体数字（Nunito）和中文兜底字体不在任何仓库里。不给的话界面退回设备自带的字体，能用。要带上，把
-`Nunito-600/700/800.ttf`、`OFL-Nunito.txt` 等放进一个目录，打包时用 `DEVUI_FONTS_DIR=目录` 指定（见 `build-kit.sh` 开头的说明）。
-
-### 3.2 zwrt-datad（data-service）
-
-装机包要求 **Rust 版**、而且**不带任何外部更新源**的 `zwrt-datad`，所以要用这个 fork 的 `main` 分支自己编：
-
-```sh
-cd zte-u60-pro-mu5250-data-service
-# 在 x86_64 Linux 上；工具链默认在 ~/aarch64--musl--stable-2025.08-1/bin，
-# 放在别处用 DATAD_MUSL_TOOLCHAIN_DIR=… 指定。脚本会自己装 rustup 的 1.89.0 工具链。
-bash scripts/build.sh            # → zwrt-datad-aarch64
-cd ..
-```
-
-打包时用 `DATAD_BIN=…/zwrt-datad-aarch64` 指定。`build-kit.sh` 会检查它是 Rust 版、没有写死的更新地址，不对就停。
-
-### 3.3 eSIM 工具（lpac）——目前的缺口
-
-`build-kit.sh` 从 `onboard/cache/fleet.tgz` 取 eSIM 工具，这个包里要有 `esim/lpac`、`esim/lpac.sh`（以及 `plugins/zwrt-datad/zwrt-datad`，用 `DATAD_BIN` 时它会被替换）。
-这个缓存默认是从一台**已经装好的设备**上拉的（`FLEET_HOST=<ssh 别名> REFRESH_FLEET=1`）。
-
-eSIM 工具的来源脚本是 `scripts/esim/build-esim-bundle.sh`（Alpine 的 lpac + 依赖库 + 一个兼容垫片，要 zig、python3），
-但它目前直接推到设备的 `/data/esim`，**还没有只在本地产出文件的模式**。所以第一次装一台全新设备、手边又没有别的装好的设备时，
-暂时没有现成的办法打出完整的装机包。这是已知问题，欢迎提 issue 或 PR。
-
-### 3.4 打包
-
-```sh
 cd zte-u60-pro-mu5250-manager
-DATAD_BIN=../zte-u60-pro-mu5250-data-service/zwrt-datad-aarch64 ./onboard/build-kit.sh
+./onboard/build-kit.sh
 # → onboard/dist/u60-kit-YYYYMMDD.tar.gz
 ```
 
-`build-kit.sh` 自己会编 zte-agent 和管理网页，下载 dropbear（OpenWrt 官方包，sha256 固定）、打包 CHILL（mihomo + zashboard，sha256 固定；不要就加 `CHILL=0`）。
-常用的变量可以写进 `onboard/kit.local.env`（一行一个 `KEY=值`，不进 git），比如 `DATAD_BIN`、`DEVUI_BIN`、`DEVUI_FONTS_DIR`。
+第一次跑要下载 Docker 镜像和依赖，大约二三十分钟；之后有缓存（`onboard/cache/`、各仓库的 `out/`、`rust/target-zig/`），快很多。
+`build-kit.sh` 按顺序做这些事（每样东西从哪来、怎么校验）：
+
+| 包里的东西 | 从哪来 |
+|---|---|
+| dropbear（SSH） | OpenWrt 23.05.4 官方 ipk，sha256 固定 |
+| zte-agent、管理网页 | 本仓库现编 |
+| 触屏程序 + u60-uid | touch-ui 的 `scripts/build-docker.sh`（Docker；LVGL v9.5.0、FreeType 2.13.3），产物在 touch-ui 的 `out/` |
+| 触屏字体 | Nunito（google/fonts 固定提交）和中文兜底字体（Resource Han Rounded 子集），都是 OFL，sha256 固定，Docker 里生成。设备自带的中兴字体不打包，触屏直接读设备上的 `/usr/ui/fonts/` |
+| zwrt-datad | data-service 的 `scripts/build-docker.sh`（Docker 里 cargo-zigbuild，镜像按 digest 固定，`Cargo.lock` 锁依赖） |
+| eSIM 工具（lpac） | `scripts/esim/build-esim-bundle.sh --out`：Alpine 3.24 的 lpac 和依赖库（`scripts/esim/alpine.lock` 钉版本和 sha256）+ statx 兼容垫片 + `qmi_uim_probe` |
+| CHILL（可选） | mihomo、zashboard 官方发布包（sha256 固定）+ 规则集（下载当时的最新版）。不要就加 `CHILL=0` |
+| 进程监督、体检脚本 | touch-ui 的 `scripts/` |
+
+打包前会检查：触屏程序必须是 LVGL 版（不是 `scripts/build.sh` 编的旧 litehtml 版）；`zwrt-datad` 必须是 Rust 版、没有写死的外部更新源。不对就停。
+
+也可以分开编，再告诉 `build-kit.sh` 用现成的文件：
+
+```sh
+(cd ../zte-u60-pro-mu5250-touch-ui && scripts/build-docker.sh)        # → out/u60pro-devui-lvgl.stripped、out/u60-uid（默认就读这里）
+(cd ../zte-u60-pro-mu5250-data-service && scripts/build-docker.sh)    # → zwrt-datad-aarch64
+DATAD_BIN=../zte-u60-pro-mu5250-data-service/zwrt-datad-aarch64 ./onboard/build-kit.sh
+```
+
+其他变量：`DEVUI_BIN` / `UID_BIN`（触屏二进制）、`ESIM_TGZ`（现成的 eSIM 包）、`DEVUI_FONTS_DIR`（现成的字体目录）、`FONTS=0`（不带字体）、
+`DEVUI_REPO` / `DATAD_REPO`（仓库不在旁边时）。常用的可以写进 `onboard/kit.local.env`（一行一个 `KEY=值`，不进 git）。
+
+> **eSIM 包打不出来？** Alpine 3.24 出安全更新时会替换钉住的包，旧文件从镜像上消失。这时跑
+> `python3 scripts/esim/alpine_closure.py --relock` 重新解析，重打后先在一台设备上确认 `/data/esim/lpac.sh chip info` 能读卡，再用。
+> 规则集（CHILL）不钉版本，每次打包取当时的最新版。
 
 ## 4. 安装
 
