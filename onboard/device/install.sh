@@ -229,6 +229,11 @@ do_devui() {
         mkdir -p "$D/fonts"
         for f in "$P"/devui/fonts/*; do put "$f" "$D/fonts/$(basename "$f")" 644; done
     fi
+    # 首页运营商 logo：装机包里有才装；没有时首页不显示 logo
+    if [ -d "$P/devui/operator-logos" ]; then
+        mkdir -p "$D/operator-logos"
+        for f in "$P"/devui/operator-logos/*.png; do put "$f" "$D/operator-logos/$(basename "$f")" 644; done
+    fi
     # eSIM 页要靠 eSIM 组件：这次不装、设备上也没装过，就不放入口
     case " $COMPONENTS " in *" esim "*) ;; *) [ -x /data/esim/lpac ] || rm -f "$D/ui/functions/esim.html" ;; esac
 

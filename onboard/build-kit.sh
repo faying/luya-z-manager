@@ -158,6 +158,17 @@ else
   printf '\033[0;33m!\033[0m %s\n' "FONTS=0：不打字体，触屏数字用设备自带的 Roboto，设备字体缺失时中文不显示"
 fi
 
+# 首页运营商 logo（透明底 PNG，由 web 首页同一批 SVG 在 Docker 里生成）。logo 是商标，
+# 开源版没有 SVG（sync-public 删掉），这里就跳过，触屏首页不显示 logo。
+LOGO_SVG_DIR="$ROOT/web/public/operator-logos"
+if ls "$LOGO_SVG_DIR"/*.svg >/dev/null 2>&1; then
+  step "运营商 logo（Docker 里生成）"
+  "$DEVUI_REPO/scripts/logos/build-operator-logos.sh" "$LOGO_SVG_DIR" "$CACHE/operator-logos" >/dev/null || die "运营商 logo 生成失败"
+  mkdir -p "$PL/devui/operator-logos"
+  cp "$CACHE"/operator-logos/*.png "$PL/devui/operator-logos/"
+  rm -f "$PL"/devui/operator-logos/three-hk*.png   # 14 像素下认不出，触屏不用
+fi
+
 # ── 进程监督与 Wi-Fi 兜底 ─────────────────────────────────────────────────────
 step "guard（${DEVUI_REPO}/scripts）"
 mkdir -p "$PL/guard"
