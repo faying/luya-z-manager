@@ -21,7 +21,7 @@ brew install sshpass zig ; cargo install cargo-zigbuild   # agent build only
 ## What each target does
 
 - **web** — `cd web && npm run build` (static export → `web/out/`), tar it, and unpack into `/data/admin` on the device. That's the whole admin UI served at `http://<device>:9090/`.
-- **agent** — cross-compile `zte-agent` for aarch64-musl with zig (`cargo zigbuild --release --target aarch64-unknown-linux-musl -p zte-agent`), upload to `/data/zte-agent`, kill the old pid, relaunch via `/data/local/tmp/start_zte_agent.sh`. Only needed when Rust code changed.
+- **agent** — cross-compile `zte-agent` for aarch64-musl with zig (`cargo zigbuild --release --target aarch64-unknown-linux-musl -p zte-agent`), upload to `/data/zte-agent`, restart it via procd (`/etc/init.d/zte-agent restart`; falls back to `/data/local/tmp/start_zte_agent.sh` on devices without the init script). Only needed when Rust code changed.
 
 The script auto-detects the device IP (tries `192.168.0.1`, `192.168.1.1`, plus `DEVICE_HOST`) by probing SSH.
 
