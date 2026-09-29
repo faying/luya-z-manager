@@ -1,39 +1,38 @@
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  estimate,
-  estimateText,
-  formatDuration,
-  type EstimateInput,
-  type Tr,
-} from "@/lib/batteryEstimate";
+import { estimateText, formatDuration, fromReport, type EstimateReport, type Tr } from "@/lib/batteryEstimate";
 import { zh as batteryZh } from "@/lib/i18n/nd-zh/battery";
+
+// The estimate itself is computed by zte-agent (battery_eta.rs) and tested
+// there against docs/battery-estimate/fixtures.json; this side only names it.
 
 const zhT: Tr = (key, _def, vars) => {
   const s = (batteryZh.battery as Record<string, string>)[key.replace("battery.", "")];
   return s.replace(/\{\{(\w+)\}\}/g, (_, k) => String(vars?.[k]));
 };
 
-const docsDir = resolve(__dirname, "../../../docs");
-const raw = readFileSync(resolve(docsDir, "battery-estimate/fixtures.json"));
-const fixtures = JSON.parse(raw.toString()) as {
-  cases: { name: string; input: EstimateInput; expect: { kind: string; minutes: number | null } }[];
-};
+const report = (o: Partial<EstimateReport>): EstimateReport => ({
+  state: "ok",
+  kind: "discharging_eta",
+  minutes: 300,
+  target_pct: 100,
+  observed_at: 1,
+  samples: 10,
+  ...o,
+});
 
-describe("battery estimate fixtures", () => {
-  it("sha256 matches docs/battery-estimate.md", () => {
-    const doc = readFileSync(resolve(docsDir, "battery-estimate.md"), "utf8");
-    const recorded = /fixtures sha256: `([0-9a-f]{64})`/.exec(doc)?.[1];
-    expect(createHash("sha256").update(raw).digest("hex")).toBe(recorded);
+describe("agent report", () => {
+  it("shows only a fresh report", () => {
+    expect(fromReport(report({}))).toEqual({ est: { kind: "discharging_eta", minutes: 300 }, targetPct: 100 });
+    expect(fromReport(report({ state: "stale" })).est).toBeNull();
+    expect(fromReport(report({ state: "estimating" })).est).toBeNull();
+    expect(fromReport(report({ state: "unavailable" })).est).toBeNull();
   });
-
-  for (const c of fixtures.cases) {
-    it(c.name, () => {
-      expect(estimate(c.input)).toEqual(c.expect);
-    });
-  }
+  it("keeps the limit even when the estimate is not shown", () => {
+    expect(fromReport(report({ state: "stale", target_pct: 80 })).targetPct).toBe(80);
+  });
+  it("older agents without an estimate read as none", () => {
+    expect(fromReport(undefined)).toEqual({ est: null, targetPct: 100 });
+  });
 });
 
 describe("estimate text", () => {

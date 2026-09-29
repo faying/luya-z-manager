@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ChargeControl, SysfsBattery } from "@/lib/api/schemas/device";
-import { estimateInput, healthPct, isPluggedIn, powerView, pushSample } from "@/lib/batteryDetail";
+import type { SysfsBattery } from "@/lib/api/schemas/device";
+import { healthPct, isPluggedIn, powerView } from "@/lib/batteryDetail";
 
 const bat = (o: Partial<SysfsBattery> = {}): SysfsBattery => ({
   status: "Charging",
@@ -18,8 +18,6 @@ const bat = (o: Partial<SysfsBattery> = {}): SysfsBattery => ({
   ...o,
 });
 
-const cc = (o: Partial<ChargeControl>): ChargeControl =>
-  ({ charging_stopped: false, charge_limit_enabled: true, charge_limit: 80, hysteresis: 5, manual_override: false, ...o }) as ChargeControl;
 
 describe("power view", () => {
   it("splits input, battery and the rest", () => {
@@ -45,28 +43,10 @@ describe("health", () => {
   });
 });
 
-describe("paused at limit", () => {
-  it("counts only a limit stop, not a manual one", () => {
-    expect(estimateInput([], bat(), cc({ charging_stopped: true }), true).paused_at_limit).toBe(true);
-    expect(estimateInput([], bat(), cc({ charging_stopped: true, manual_override: true }), true).paused_at_limit).toBe(false);
-    expect(estimateInput([], bat(), cc({ charging_stopped: true }), false).paused_at_limit).toBe(false);
-  });
-  it("targets the limit only when it is on", () => {
-    expect(estimateInput([], bat(), cc({}), true).target_pct).toBe(80);
-    expect(estimateInput([], bat(), cc({ charge_limit_enabled: false }), true).target_pct).toBe(100);
-  });
+describe("charger", () => {
   it("reads charger_connect as number or string", () => {
     expect(isPluggedIn({ charger_connect: 1 })).toBe(true);
     expect(isPluggedIn({ charger_connect: "0" })).toBe(false);
     expect(isPluggedIn(null)).toBeNull();
-  });
-});
-
-describe("samples", () => {
-  it("keeps only the window", () => {
-    let l = pushSample([], [0, 1, true]);
-    l = pushSample(l, [100, 1, true]);
-    l = pushSample(l, [300, 1, true]);
-    expect(l.map((s) => s[0])).toEqual([300]);
   });
 });

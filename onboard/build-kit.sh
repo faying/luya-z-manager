@@ -218,7 +218,7 @@ tar tzf "$PL/esim.tgz" | grep -q '^\./lpac\.sh$' || die "eSIM 包里没有 lpac.
 
 # ── 脚本 + 文档 + 清单 ────────────────────────────────────────────────────────
 step "装机脚本、说明、清单"
-cp "$ONB/install.sh" "$ONB/README.md" "$ONB/u60.env.example" "$KIT/"
+cp "$ONB/install.sh" "$ONB/README.md" "$ONB/README.zh-CN.md" "$ONB/u60.env.example" "$KIT/"
 cp "$ONB/kit-CLAUDE.md" "$KIT/CLAUDE.md"   # 对方在包目录里开 Claude Code 会自动读到
 mkdir -p "$KIT/device" && cp "$ONB/device/install.sh" "$KIT/device/"
 chmod 755 "$KIT/install.sh"

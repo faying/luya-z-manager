@@ -145,12 +145,15 @@ export default function ClientsPage() {
   );
 }
 
-/** Wi-Fi signal in words (RSSI at the AP). */
-function wifiSignalWord(dbm: number, t: (k: string, d: string) => string): string {
-  if (dbm >= -55) return t("clients.sigGreat", "Strong signal");
-  if (dbm >= -67) return t("clients.sigGood", "Good signal");
-  if (dbm >= -75) return t("clients.sigFair", "Fair signal");
-  return t("clients.sigWeak", "Weak signal");
+/** Wi-Fi signal in words; the agent grades it (netinfo.rs signal_tier). */
+function wifiSignalWord(tier: string, t: (k: string, d: string) => string): string | null {
+  switch (tier) {
+    case "great": return t("clients.sigGreat", "Strong signal");
+    case "good": return t("clients.sigGood", "Good signal");
+    case "fair": return t("clients.sigFair", "Fair signal");
+    case "weak": return t("clients.sigWeak", "Weak signal");
+    default: return null;
+  }
 }
 
 /** "5 GHz · Wi-Fi 6 · 2402 Mbps · Strong signal"; null when the device isn't on Wi-Fi. */
@@ -160,7 +163,8 @@ function wifiLine(st: WifiStation | undefined, t: (k: string, d: string, o?: Rec
   if (st.band) parts.push(st.band);
   if (st.wifi_gen) parts.push(`Wi-Fi ${st.wifi_gen}`);
   if (st.link_down_mbps) parts.push(t("clients.link", "{{n}} Mbps", { n: st.link_down_mbps }));
-  if (st.signal != null) parts.push(wifiSignalWord(st.signal, t));
+  const sig = st.signal_tier ? wifiSignalWord(st.signal_tier, t) : null;
+  if (sig) parts.push(sig);
   return parts.join(" · ") || t("clients.onWifi", "On Wi-Fi");
 }
 

@@ -3,6 +3,7 @@ mod alerts;
 mod at_cmd;
 mod at_terminal;
 mod auth;
+mod battery_eta;
 mod cell;
 mod charge_policy;
 mod datad_feed;
@@ -108,6 +109,7 @@ fn main() {
         state.doh.auto_start();
         state.scheduler.start(Arc::clone(&state));
         state.charge_limit.start();
+        state.battery_eta.start(Arc::clone(&state.charge_limit));
         state.sms_forward.start(service_rx, wan_status_rx);
 
         // Boot resets the engine and repairs Wi-Fi if it is down — a reboot

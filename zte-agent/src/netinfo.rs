@@ -71,9 +71,11 @@ const SELECTION_MAX_AGE: i64 = 120;
 const UBUS_TIMEOUT: u32 = 3;
 
 const GUARD_POLL: Duration = Duration::from_secs(3);
-/// Give up and go back to automatic this long after the register call. Worst
-/// case to automatic: 45 + one poll (3) + `AT+COPS=0` (8) + read-back (2) = 58 s.
-const GUARD_TIMEOUT: i64 = 45;
+/// Give up and go back to automatic this long after the register call. The
+/// modem says `manual_fail` when it is refused, so this only catches a
+/// register that hangs; the stock page waits for the answer with no limit.
+/// Worst case to automatic: 90 + one poll (3) + `AT+COPS=0` (8) + read-back (2) ≈ 103 s.
+const GUARD_TIMEOUT: i64 = 90;
 /// Written before a manual register, removed when the guard finishes. If the
 /// agent restarts in between, `resume_guard` picks the job up again, so a
 /// restart cannot leave the modem on a manual network with no data.
@@ -660,8 +662,12 @@ fn parse_cops_mode(resp: &str) -> Option<&'static str> {
 // ── register guard ─────────────────────────────────────────────────────────
 
 struct Obs<'a> {
-    /// `nwinfo_m_netselect_result`'s answer; its values are unconfirmed.
+    /// `nwinfo_m_netselect_result`'s answer. The stock page reads
+    /// "manual_success" / "manual_fail" and keeps waiting on anything else.
     result: &'a str,
+    /// Its value just before our register call: the same value again is the
+    /// previous attempt's answer, not this one's.
+    before: &'a str,
     serving: &'a str,
     connected: bool,
 }
@@ -682,7 +688,9 @@ fn decide(target: &str, o: &Obs, elapsed: i64) -> Verdict {
         return Verdict::Ok;
     }
     let r = o.result.trim().to_ascii_lowercase();
-    if elapsed >= GUARD_FAIL_GRACE && matches!(r.as_str(), "fail" | "failed" | "failure" | "0" | "error") {
+    let fresh = o.result != o.before || elapsed >= GUARD_TIMEOUT / 2;
+    let failed = r.contains("fail") || r == "error";
+    if fresh && elapsed >= GUARD_FAIL_GRACE && failed {
         return Verdict::Revert("注册失败");
     }
     if elapsed >= GUARD_TIMEOUT {
@@ -966,8 +974,24 @@ pub fn station_wifi_json(st: &Station) -> Value {
         "link_down_mbps": st.link_down_mbps,
         "link_up_mbps": st.link_up_mbps,
         "signal": st.signal,
+        "signal_tier": st.signal.map(signal_tier),
         "connected_secs": st.connected_secs,
     })
+}
+
+/// How good a client's Wi-Fi signal is at the AP (RSSI, dBm): the one rule
+/// the admin web and the touch screen both word ("great" 很好 / "good" 好 /
+/// "fair" 一般 / "weak" 弱). Moved here from both of them 2026-09-26.
+pub fn signal_tier(dbm: i32) -> &'static str {
+    if dbm >= -55 {
+        "great"
+    } else if dbm >= -67 {
+        "good"
+    } else if dbm >= -75 {
+        "fair"
+    } else {
+        "weak"
+    }
 }
 
 fn clients_snapshot(prev: &std::collections::HashMap<String, (u64, u64, i64)>, t: i64)
@@ -1540,9 +1564,15 @@ pub fn apn_view(mode: &Value, dialled: &Value, auto: &Value, manual: &Value) -> 
     })
 }
 
+/// The APN switch running in the background (`apn_use`), and why the last
+/// one failed. Cleared when a switch starts, so an error seen after a 202 is
+/// that switch's own.
+static APN_SWITCHING: AtomicBool = AtomicBool::new(false);
+static APN_SWITCH_ERR: Mutex<String> = Mutex::new(String::new());
+
 fn apn_read() -> Value {
     let call = |m: &str, a: &str| ubus::call("zwrt_apn_object", m, Some(a));
-    match call("get_apn_mode", "{}") {
+    let mut v = match call("get_apn_mode", "{}") {
         Err(e) => json!({"error": e}),
         Ok(mode) => apn_view(
             &mode,
@@ -1550,13 +1580,24 @@ fn apn_read() -> Value {
             &call("get_auto_apn_list", "{}").unwrap_or(Value::Null),
             &call("get_manu_apn_list", "{}").unwrap_or(Value::Null),
         ),
+    };
+    if let Value::Object(o) = &mut v {
+        o.insert("switching".into(), json!(APN_SWITCHING.load(Ordering::SeqCst)));
+        o.insert("switch_error".into(), json!(APN_SWITCH_ERR.lock().unwrap_or_else(|e| e.into_inner()).clone()));
     }
+    v
 }
 
 /// POST /api/netinfo/apn — {"id":"auto"} or {"id":"<manual profileId>"}.
 /// Manual: select the profile first, then switch the mode, so the re-dial
 /// uses it. The data call drops for a moment either way (the caller says so
 /// before the second tap).
+///
+/// Checks the id, then answers 202 and switches on its own thread: the two
+/// ubus calls can take longer than the touch screen's 1.5 s request timeout,
+/// which used to show "cannot reach the agent" for a switch that worked. The
+/// caller reads the result back from /api/netinfo (`apn.in_use`, and
+/// `apn.switch_error` if it failed).
 pub fn apn_use(body: &[u8]) -> (u16, Value) {
     let parsed: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
@@ -1575,15 +1616,24 @@ pub fn apn_use(body: &[u8]) -> (u16, Value) {
         if !known {
             return (404, json!({"ok": false, "error": "没有这个手动 APN"}));
         }
-        if let Err(e) = call("enable_manu_apn_id", json!({"profileId": id}).to_string()) {
-            return (503, json!({"ok": false, "error": e}));
+    }
+    if APN_SWITCHING.swap(true, Ordering::SeqCst) {
+        return (409, json!({"ok": false, "error": "上一次 APN 切换还没做完"}));
+    }
+    APN_SWITCH_ERR.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    let id = id.to_string();
+    std::thread::spawn(move || {
+        let call = |m: &str, a: String| ubus::call("zwrt_apn_object", m, Some(&a));
+        let mode = if id == "auto" { 0 } else { 1 };
+        let res = if id == "auto" { Ok(Value::Null) } else { call("enable_manu_apn_id", json!({"profileId": id}).to_string()) }
+            .and_then(|_| call("set_apn_mode", json!({"apn_mode": mode}).to_string()));
+        if let Err(e) = res {
+            eprintln!("[netinfo] APN switch to {id}: {e}");
+            *APN_SWITCH_ERR.lock().unwrap_or_else(|e| e.into_inner()) = clip(e);
         }
-    }
-    let mode = if id == "auto" { 0 } else { 1 };
-    match call("set_apn_mode", json!({"apn_mode": mode}).to_string()) {
-        Ok(_) => (200, json!({"ok": true, "data": apn_read()})),
-        Err(e) => (503, json!({"ok": false, "error": e})),
-    }
+        APN_SWITCHING.store(false, Ordering::SeqCst);
+    });
+    (202, json!({"ok": true, "data": {"switching": true}}))
 }
 
 /// POST /api/modem/register — body {"m_mcc_mnc":"46001","m_rat":"…"}
@@ -1623,12 +1673,13 @@ pub fn register(state: &AppState, body: &[u8]) -> (u16, Value) {
     };
     let i = Arc::clone(&inner);
     std::thread::spawn(move || {
+        let before = register_result_str(&ubus_call("zte_nwinfo_api", "nwinfo_m_netselect_result", Some("{}")).unwrap_or(Value::Null));
         let arg = json!({"m_mcc_mnc": target, "m_rat": rat}).to_string();
         if let Err(e) = ubus_call("zte_nwinfo_api", "nwinfo_manual_register", Some(&arg)) {
             eprintln!("[netinfo] manual register call: {e} (guarding anyway)");
             i.ops.lock().unwrap().guard.last_result = clip(format!("调用出错：{e}"));
         }
-        guard_run(i, target, started);
+        guard_run(i, target, started, before);
     });
     (202, json!({"ok": true, "guard": snapshot}))
 }
@@ -1636,7 +1687,7 @@ pub fn register(state: &AppState, body: &[u8]) -> (u16, Value) {
 /// Watch a manual register until the modem is on the target with data (keep
 /// it), or it clearly is not going to be (back to automatic). A "back to
 /// automatic" request is honoured at every step, including the last.
-fn guard_run(inner: Arc<Inner>, target: String, started: i64) {
+fn guard_run(inner: Arc<Inner>, target: String, started: i64, before: String) {
     loop {
         std::thread::sleep(GUARD_POLL);
         if std::mem::take(&mut inner.ops.lock().unwrap().cancel) {
@@ -1650,7 +1701,7 @@ fn guard_run(inner: Arc<Inner>, target: String, started: i64) {
         if !result.is_empty() {
             inner.ops.lock().unwrap().guard.last_result = result.clone();
         }
-        match decide(&target, &Obs { result: &result, serving: &serving, connected }, now() - started) {
+        match decide(&target, &Obs { result: &result, before: &before, serving: &serving, connected }, now() - started) {
             Verdict::Wait => {}
             Verdict::Revert(why) => return revert_until_auto(&inner, why),
             Verdict::Ok => {
@@ -1667,6 +1718,9 @@ fn guard_run(inner: Arc<Inner>, target: String, started: i64) {
                 o.guard.phase = "ok";
                 o.guard.finished_at = now();
                 o.kind = OpKind::Idle;
+                // Its "current" marks are out of date now; the stock page
+                // empties the list after a register too.
+                o.scan = Scan::default();
                 drop(o);
                 let mut c = inner.cache.lock().unwrap();
                 c.selection = Some("manual");
@@ -1782,7 +1836,9 @@ pub fn resume_guard(state: &AppState) {
                 o.kind = OpKind::Registering;
                 o.guard = Guard { phase: "registering", target: target.clone(), started_at: started, ..Guard::default() };
             }
-            std::thread::spawn(move || guard_run(inner, target, started));
+            // The answer before the call is lost with the restart; the
+            // elapsed-time rule in `decide` still keeps a stale one out early.
+            std::thread::spawn(move || guard_run(inner, target, started, String::new()));
         }
         Some(Marker::Redial) => {
             eprintln!("[netinfo] resuming the redial after back-to-automatic");
@@ -2068,7 +2124,7 @@ mod tests {
     }
 
     fn o<'a>(result: &'a str, serving: &'a str, connected: bool) -> Obs<'a> {
-        Obs { result, serving, connected }
+        Obs { result, before: "", serving, connected }
     }
 
     #[test]
@@ -2080,7 +2136,17 @@ mod tests {
         assert_eq!(decide("46001", &o("fail", "46000", true), 3), Verdict::Wait);
         // …a later one reverts.
         assert_eq!(decide("46001", &o("fail", "46000", true), 9), Verdict::Revert("注册失败"));
-        assert_eq!(decide("46001", &o("0", "46000", false), 9), Verdict::Revert("注册失败"));
+        // The modem's own words (stock web): manual_fail reverts…
+        assert_eq!(decide("46001", &o("manual_fail", "46000", false), 9), Verdict::Revert("注册失败"));
+        // …"0" is not an answer yet, and manual_success still needs data.
+        assert_eq!(decide("46001", &o("0", "46000", false), 9), Verdict::Wait);
+        assert_eq!(decide("46001", &o("manual_success", "46001", false), 9), Verdict::Wait);
+        assert_eq!(decide("46001", &o("manual_success", "46001", true), 9), Verdict::Ok);
+        // The previous attempt's manual_fail, still there, is not this one's…
+        let stale = Obs { result: "manual_fail", before: "manual_fail", serving: "46000", connected: false };
+        assert_eq!(decide("46001", &stale, 20), Verdict::Wait);
+        // …until half the deadline has passed with no new answer.
+        assert_eq!(decide("46001", &stale, GUARD_TIMEOUT / 2), Verdict::Revert("注册失败"));
         // Registered but no data at the deadline is still a revert.
         assert_eq!(decide("46001", &o("1", "46001", false), GUARD_TIMEOUT), Verdict::Revert("已注册但数据没通"));
         assert_eq!(decide("46001", &o("", "46000", true), GUARD_TIMEOUT), Verdict::Revert("超时没注册上"));
@@ -2221,6 +2287,9 @@ mod tests {
         assert_eq!(st[0].mac, "02:00:00:00:00:0a");
         assert_eq!((st[0].down, st[0].up), (50000, 1000));
         assert_eq!(st[0].signal, Some(-47));
+        assert_eq!(station_wifi_json(&st[0])["signal_tier"], "great");
+        assert!(station_wifi_json(&st[1])["signal_tier"].is_null());
+        assert_eq!([-55, -56, -67, -68, -75, -76].map(signal_tier), ["great", "good", "good", "fair", "fair", "weak"]);
         assert_eq!(st[0].connected_secs, 360);
         let leases = parse_leases("1790300000 02:00:00:00:00:0a 192.168.0.109 laptop 01:aa\n1790300000 02:00:00:00:00:0b 192.168.0.110 * *\n");
         assert_eq!(leases[0], ("02:00:00:00:00:0a".into(), "192.168.0.109".into(), "laptop".into()));

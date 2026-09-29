@@ -19,7 +19,7 @@ test("battery details poll while open and stop after leaving", async ({ ready, p
   await expect(group).toContainText("66");
 
   await expect.poll(() => gets(ready, "/api/battery"), { timeout: 12_000 }).toBeGreaterThanOrEqual(2);
-  // Two samples 5 s apart are enough for an estimate (76% → 100%).
+  // The agent sends the estimate with every reply (76% → 100%).
   await expect(group).toContainText(/约 .*充满/, { timeout: 12_000 });
 
   await ready.goto("/settings/");

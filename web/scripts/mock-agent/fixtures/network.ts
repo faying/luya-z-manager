@@ -467,9 +467,9 @@ function clients(): NetworkClients {
   // Band / generation as the owner's B27 reports them (iw, 2026-09-25): the
   // first two on 5 GHz, one on 2.4 GHz, the Switch not on Wi-Fi.
   const wifi: WifiStation[] = [
-    { mac: CLIENTS[0].mac, iface: "wlan2", band: "5 GHz", channel: 44, width_mhz: 160, wifi_gen: 6, link_down_mbps: 2402, link_up_mbps: 1201, signal: -39, connected_secs: 1260 },
-    { mac: CLIENTS[1].mac, iface: "wlan2", band: "5 GHz", channel: 44, width_mhz: 160, wifi_gen: 6, link_down_mbps: 1201, link_up_mbps: 864, signal: -58, connected_secs: 3400 },
-    { mac: CLIENTS[3].mac, iface: "wlan0", band: "2.4 GHz", channel: 11, width_mhz: 40, wifi_gen: 4, link_down_mbps: 144, link_up_mbps: 72, signal: -71, connected_secs: 800 },
+    { mac: CLIENTS[0].mac, iface: "wlan2", band: "5 GHz", channel: 44, width_mhz: 160, wifi_gen: 6, link_down_mbps: 2402, link_up_mbps: 1201, signal: -39, signal_tier: "great", connected_secs: 1260 },
+    { mac: CLIENTS[1].mac, iface: "wlan2", band: "5 GHz", channel: 44, width_mhz: 160, wifi_gen: 6, link_down_mbps: 1201, link_up_mbps: 864, signal: -58, signal_tier: "good", connected_secs: 3400 },
+    { mac: CLIENTS[3].mac, iface: "wlan0", band: "2.4 GHz", channel: 11, width_mhz: 40, wifi_gen: 4, link_down_mbps: 144, link_up_mbps: 72, signal: -71, signal_tier: "fair", connected_secs: 800 },
   ];
   return { hosts, dhcp_leases: leases, wifi };
 }

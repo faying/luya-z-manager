@@ -23,6 +23,7 @@ pub struct AppState {
     pub esim: crate::esim::EsimAdmin,
     pub speedtest: crate::speedtest::SpeedTest,
     pub charge_limit: Arc<ChargeLimitEnforcer>,
+    pub battery_eta: Arc<crate::battery_eta::BatteryEta>,
     pub sms_forward: Arc<SmsForwarder>,
     pub netinfo: crate::netinfo::NetInfo,
 }
@@ -41,6 +42,7 @@ impl AppState {
             esim: crate::esim::EsimAdmin::new(),
             speedtest: crate::speedtest::SpeedTest::new(),
             charge_limit: Arc::new(ChargeLimitEnforcer::new()),
+            battery_eta: Arc::new(crate::battery_eta::BatteryEta::new()),
             sms_forward: Arc::new(SmsForwarder::new()),
             netinfo: crate::netinfo::NetInfo::new(),
         }
@@ -78,14 +80,29 @@ pub fn device(_state: &AppState) -> (u16, Value) {
 }
 
 /// GET /api/battery
-pub fn battery(_state: &AppState) -> (u16, Value) {
+pub fn battery(state: &AppState) -> (u16, Value) {
     match system::read_battery() {
-        Some(b) => (200, json!({"ok": true, "data": b})),
+        Some(b) => {
+            let mut data = json!(b);
+            data["estimate"] = json!(state.battery_eta.report(std::time::Instant::now()));
+            (200, json!({"ok": true, "data": data}))
+        }
         None => (
             503,
             json!({"ok": false, "error": "battery info not available"}),
         ),
     }
+}
+
+/// GET /api/screen — what the touch screen shows, computed here so the screen
+/// and the admin web say the same thing (docs/screen-logic-move.md). Compact
+/// on purpose: the screen polls it. Each block carries its own `state`.
+pub fn screen(state: &AppState) -> (u16, Value) {
+    let now = std::time::Instant::now();
+    (200, json!({"ok": true, "data": {
+        "v": 1,
+        "battery": state.battery_eta.report(now),
+    }}))
 }
 
 /// GET /api/cpu

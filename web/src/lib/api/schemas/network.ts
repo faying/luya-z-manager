@@ -230,6 +230,8 @@ export interface WifiStation {
   link_down_mbps: number | null;
   link_up_mbps: number | null;
   signal: number | null;
+  /** The agent's grade of `signal` (netinfo.rs signal_tier); null without a reading. */
+  signal_tier?: "great" | "good" | "fair" | "weak" | null;
   connected_secs: number;
 }
 
@@ -361,6 +363,8 @@ export interface NetInfo {
   scan?: {
     state: "idle" | "scanning" | "done" | "error";
     error: string | null;
+    started_at?: number;
+    finished_at?: number;
     operators: { plmn: string; name: string; rat: string; status: string; country: string | null }[];
   };
 }

@@ -1,8 +1,6 @@
 // Pure helpers for the battery details on /router/device.
 import type { ValidResult } from "@/lib/api/freshness";
-import type { ChargeControl, ChargerInfo, SysfsBattery } from "@/lib/api/schemas/device";
-import type { EstimateInput, EstimateSample } from "@/lib/batteryEstimate";
-import { WINDOW_SECS } from "@/lib/batteryEstimate";
+import type { ChargerInfo, SysfsBattery } from "@/lib/api/schemas/device";
 
 export function sysfsBatteryValid(d: SysfsBattery | null | undefined): ValidResult {
   if (!d || typeof d.status !== "string" || typeof d.current_ua !== "number") {
@@ -47,27 +45,3 @@ export function isPluggedIn(ch: ChargerInfo | null | undefined): boolean | null 
   return String(ch.charger_connect) !== "0";
 }
 
-/** Appends a sample and drops the ones the estimate can no longer use. */
-export function pushSample(list: EstimateSample[], s: EstimateSample): EstimateSample[] {
-  const out = [...list, s];
-  const cut = s[0] - WINDOW_SECS;
-  while (out.length > 1 && out[0][0] < cut) out.shift();
-  return out;
-}
-
-export function estimateInput(
-  samples: EstimateSample[],
-  b: SysfsBattery,
-  cc: ChargeControl | null | undefined,
-  plugged: boolean | null,
-): EstimateInput {
-  const limitOn = !!cc?.charge_limit_enabled;
-  return {
-    samples,
-    soc: b.capacity,
-    charge_full_uah: b.charge_full_uah,
-    charge_counter_uah: b.charge_counter_uah,
-    target_pct: limitOn ? cc!.charge_limit ?? 100 : 100,
-    paused_at_limit: limitOn && !!cc?.charging_stopped && !cc?.manual_override && plugged !== false,
-  };
-}

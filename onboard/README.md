@@ -1,30 +1,32 @@
-# U60 Pro 装机包
+# U60 Pro (MU5250) install kit
 
-给**刚到手的 ZTE U60 Pro（MU5250）**一键装上：
+**English** · [中文](README.zh-CN.md)
 
-| 组件 | 装完是什么样 |
+One-step setup for a **freshly unboxed ZTE U60 Pro (MU5250)**:
+
+| Component | What you get after install |
 |---|---|
-| **SSH** | `ssh -p 2222 root@192.168.0.1` 用你电脑上的密钥直接登录（只认密钥、不接受密码），重启后自动恢复 |
-| **高级后台** | 浏览器打开 `http://192.168.0.1:9090/`，锁频/锁小区、短信、APN、防火墙、Wi-Fi 等全在里面 |
-| **devui 触屏界面** | 前面板换成新界面：按任务分 5 个标签（首页 · 蜂窝 · Wi-Fi · 出口 · 系统）：信号结论与载波、Wi-Fi 与设备、Tailscale 与出口、eSIM 切换 |
-| **eSIM** | 配合可插拔 eUICC 卡（5ber、eSTK.me 这类），在后台下载/切换/删除 profile，屏幕上也能切 |
+| **SSH** | `ssh -p 2222 root@192.168.0.1` logs you in with the key on your computer (key only, no passwords); comes back by itself after a reboot |
+| **Advanced admin web** | Open `http://192.168.0.1:9090/` in a browser: band/cell locking, SMS, APN, firewall, Wi-Fi and more |
+| **devui touch UI** | The front panel gets a new interface, organized by task into 5 tabs (Home · Cellular · Wi-Fi · Exit · System): signal verdict and carriers, Wi-Fi and clients, Tailscale and exit, eSIM switching |
+| **eSIM** | With a removable eUICC card (5ber, eSTK.me and similar), download/switch/delete profiles in the admin web; switching also works from the screen |
 
-装 SSH 时会顺手**关掉固件自动升级**（原因见「注意事项」）。
+Installing SSH also **turns off firmware auto-update** (see [Caveats](#caveats) for why).
 
-## 装之前确认
+## Before you start
 
-1. **固件版本 B27 或更早**（网页后台首页或「设备信息」里，形如 `…MU5250V1.0.0B27`）。
-   B28 起中兴删掉了开 ADB 的接口，这个包就用不了了，**千万别先升级**。
-2. 知道**路由器管理密码**（登录 `http://192.168.0.1` 用的那个）。
-3. 一根**能传数据的 USB-C 线**（有些充电线只能充电）。
-4. 电脑装好 **adb**：
-   - macOS：`brew install android-platform-tools`
-   - Linux：`sudo apt install adb`
-   - Windows：下载 Google 的 [SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools)，解压后把目录加进 PATH；
-     再装 [Git for Windows](https://git-scm.com/download/win)，下面的命令在 **Git Bash** 里跑
-5. 要用 eSIM 的话，准备一张可插拔 eUICC 卡。插普通 SIM 也能装，只是 eSIM 功能读不到卡。
+1. **Firmware B27 or earlier** (shown on the web admin home page or under 「设备信息」 (Device information), looks like `…MU5250V1.0.0B27`).
+   From B28 on, ZTE removed the interface used to enable ADB, so this kit no longer works. **Do not upgrade first.**
+2. You know the **router admin password** (the one you use to log in at `http://192.168.0.1`).
+3. A **USB-C cable that carries data** (some charging cables only charge).
+4. **adb** installed on your computer:
+   - macOS: `brew install android-platform-tools`
+   - Linux: `sudo apt install adb`
+   - Windows: download Google's [SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools), unzip it and add the folder to PATH;
+     then install [Git for Windows](https://git-scm.com/download/win) and run the commands below in **Git Bash**
+5. For eSIM, have a removable eUICC card ready. A regular SIM also works for the install; the eSIM features just won't find a card.
 
-## 安装
+## Install
 
 ```sh
 tar xzf u60-kit-*.tar.gz
@@ -32,100 +34,100 @@ cd u60-kit
 ./install.sh
 ```
 
-照提示做就行：
+Follow the prompts:
 
-1. 电脑连上 U60 的 **Wi-Fi**（别只靠 USB 网络共享，开调试后那条网会断），输入路由器管理密码 → 脚本通过网页接口打开 USB 调试
-2. 提示「等 ADB 设备出现」时，用 USB-C 线把 U60 接到电脑
-3. 设一个**高级后台登录密码**（直接回车就和路由器管理密码一样；不能含引号、反斜杠、空格）
-4. 自动推送、安装、验证，全程 1～2 分钟，屏幕会闪一下换成新界面
-5. 问要不要**重启验证**时建议选是：重启后脚本会确认 SSH、后台、屏幕都自己起来了
+1. Connect your computer to the U60's **Wi-Fi** (don't rely on USB tethering alone; that link drops once debugging is turned on) and enter the router admin password → the script turns on USB debugging through the web interface
+2. When it says it is waiting for the ADB device, connect the U60 to your computer with the USB-C cable
+3. Set an **advanced admin web login password** (press Enter to reuse the router admin password; no quotes, backslashes or spaces)
+4. Push, install and verify run automatically and take 1–2 minutes; the screen flickers once and switches to the new interface
+5. When asked whether to **reboot and verify**, say yes: after the reboot the script confirms that SSH, the admin web and the screen all come up on their own
 
-装完会打印一段 `~/.ssh/config`，加进去以后 `ssh u60` 就能登录。
+At the end it prints a `~/.ssh/config` snippet; add it and `ssh u60` will log you in.
 
-### 让 Claude Code 帮你装
+### Let Claude Code install it for you
 
-包里带了一份 `CLAUDE.md`，写着部署步骤、报错怎么处理和设备上不能碰的东西。在包目录里打开 Claude Code 就会自动读到：
+The kit includes a `CLAUDE.md` with the deployment steps, how to handle errors, and what must not be touched on the device. Open Claude Code in the kit directory and it reads the file automatically:
 
 ```sh
 cd u60-kit
 claude
 ```
 
-然后说「帮我把 U60 装好」。它会先检查 adb、网络和固件，再问你要密码——不想告诉它的话，自己 `cp u60.env.example u60.env` 填好，跟它说「密码在 u60.env 里」就行。插 USB 线、确认要不要重启这类事它会停下来问你。
+Then say "set up my U60". It checks adb, the network and the firmware first, then asks for passwords. If you'd rather not give them to it, run `cp u60.env.example u60.env`, fill it in yourself and tell it "the passwords are in u60.env". It stops and asks you for things like plugging in the USB cable and whether to reboot.
 
-只想要其中几样也可以：
+You can also install only some of the pieces:
 
 ```sh
-./install.sh ssh               # 只开 ADB + 持久化 SSH
-./install.sh ssh admin devui   # 不要 eSIM
-./install.sh status            # 看各组件状态
-./install.sh doctor            # 只读体检：开机同步、自动升级、各服务、心跳、Wi-Fi、告警……逐项 ●▲■
-./install.sh backup            # 把设备配置备份到这台电脑（./backups/，含密码，别外传）
-./install.sh restore 备份.tgz  # 先列出会改哪些文件，输入 yes 才写
-./install.sh reboot            # 重启一次，确认各组件开机自己起来
+./install.sh ssh               # ADB + persistent SSH only
+./install.sh ssh admin devui   # no eSIM
+./install.sh status            # show component status
+./install.sh doctor            # read-only health check: boot sync, auto-update, services, heartbeat, Wi-Fi, alerts... each item ●▲■
+./install.sh backup            # back up the device config to this computer (./backups/, contains passwords, don't share)
+./install.sh restore 备份.tgz  # lists the files it would change first, writes only after you type yes
+./install.sh reboot            # reboot once and confirm every component starts on its own
 ```
 
-以后重装或更新某个组件，拿到新的装机包后直接 `./install.sh admin`（或 `devui` / `esim`），会走 SSH，不用再插线。
+Later, to reinstall or update a component, get the new kit and run `./install.sh admin` (or `devui` / `esim`). It goes over SSH, no cable needed.
 
-U60 地址不是 `192.168.0.1` 时：`GATEWAY=192.168.x.1 ./install.sh`。
+If the U60 is not at `192.168.0.1`: `GATEWAY=192.168.x.1 ./install.sh`.
 
-## 装了什么、在哪
+## What gets installed, and where
 
-程序和数据都在 `/data`（固件升级也不会清）。开机自启只在 `/etc/rc.local` 里加了几行，没有改任何原厂服务。
-高级后台、屏幕的数据后端和 Wi-Fi 兜底看门狗由系统的 procd 监督：崩溃会被自动拉起，并记一条告警（后台「系统 → 告警」可以设短信通知）。
+Programs and data all live in `/data` (firmware upgrades don't wipe it). Autostart is only a few lines added to `/etc/rc.local`; no stock service is changed.
+The advanced admin web, the screen's data backend and the Wi-Fi fallback watchdog are supervised by the system's procd: if one crashes it is restarted automatically and an alert is logged (SMS notification can be set up in the admin web under 「系统 → 告警」 (System → Alerts)).
 
-| 路径 | 用途 |
+| Path | Purpose |
 |---|---|
-| `/data/ssh/` | dropbear、host key、`authorized_keys`（**公钥正本**） |
-| `/data/local/tmp/start_dropbear.sh` | 开机把公钥同步到 `/etc/dropbear/` 再起 dropbear（:2222） |
-| `/data/zte-agent`、`/data/admin/` | 高级后台程序和网页 |
-| `/data/zte-agent.env` | **后台密码**（一行 `ZTE_AGENT_PASSWORD=…`，只有 root 可读） |
-| `/data/plugins/u60pro-devui/u60-uid` | 屏幕守护进程：触屏界面崩了自动拉起，连续两次起不来就换回原厂界面（长按屏幕右下角 3 秒回来） |
-| `/data/u60-guard/`、`/etc/init.d/{zte-agent,zwrt-datad,u60-guard}` | 进程监督、Wi-Fi 兜底看门狗、告警短信（开机由 `rc.local` 里的 `/etc/init.d/… start` 拉起，不做 `enable`） |
-| `/data/alerts/`、`/data/crashlog/` | 告警记录、程序崩溃时的日志 |
-| `/data/plugins/u60pro-devui/`、`/data/plugins/zwrt-datad/` | 触屏界面和它的数据后端 |
-| `/data/esim/` | lpac（eSIM 读写卡工具） |
-| `/data/u60-kit/rc.local.orig` | 第一次安装前的原厂 `rc.local` 备份 |
+| `/data/ssh/` | dropbear, host key, `authorized_keys` (**the master copy of your public keys**) |
+| `/data/local/tmp/start_dropbear.sh` | At boot, syncs the public keys to `/etc/dropbear/` and starts dropbear (:2222) |
+| `/data/zte-agent`, `/data/admin/` | Advanced admin web program and pages |
+| `/data/zte-agent.env` | **Admin web password** (one line `ZTE_AGENT_PASSWORD=…`, readable by root only) |
+| `/data/plugins/u60pro-devui/u60-uid` | Screen supervisor: restarts the touch UI if it crashes; after two failed starts in a row it switches back to the stock interface (long-press the bottom-right corner of the screen for 3 seconds to come back) |
+| `/data/u60-guard/`, `/etc/init.d/{zte-agent,zwrt-datad,u60-guard}` | Process supervision, Wi-Fi fallback watchdog, alert SMS (started at boot by `/etc/init.d/… start` lines in `rc.local`, not via `enable`) |
+| `/data/alerts/`, `/data/crashlog/` | Alert records, logs from program crashes |
+| `/data/plugins/u60pro-devui/`, `/data/plugins/zwrt-datad/` | Touch UI and its data backend |
+| `/data/esim/` | lpac (eSIM card read/write tool) |
+| `/data/u60-kit/rc.local.orig` | Backup of the stock `rc.local` from before the first install |
 
-## 日常用法
+## Everyday use
 
-- **加一台电脑的 SSH 公钥**：把公钥追加到 `/data/ssh/authorized_keys`，然后 `sh /data/local/tmp/start_dropbear.sh`（改 `/etc/dropbear/` 里那份没用，开机会被覆盖）。
-- **改后台密码**：重跑 `./install.sh admin`（会问新密码）。或者 SSH 里改 `/data/zte-agent.env` 那一行（不能含引号、反斜杠、空格），然后 `/etc/init.d/zte-agent restart`，再 `sh /data/u60-guard/agent-auth.sh verify` 确认。
-- **eSIM**：后台「移动网络 → eSIM」管理 profile；屏幕「更多功能 → eSIM」点两下切换，大约 10 秒生效，一般不用重启。
-- **代理**：装机包不带代理功能；要的话照 manager 仓库的 `docs/PROXY.md` 从官方来源自己搭。
-- **临时要 ADB**：SSH 进去跑 `ubus call zwrt_bsp.usb set '{"mode":"debug"}'`；`./install.sh status` 里的「USB 模式」显示 `user` 就是普通模式。
+- **Add another computer's SSH public key**: append it to `/data/ssh/authorized_keys`, then run `sh /data/local/tmp/start_dropbear.sh` (editing the copy in `/etc/dropbear/` does nothing; it is overwritten at boot).
+- **Change the admin web password**: rerun `./install.sh admin` (it asks for a new password). Or over SSH edit the line in `/data/zte-agent.env` (no quotes, backslashes or spaces), then `/etc/init.d/zte-agent restart`, then `sh /data/u60-guard/agent-auth.sh verify` to confirm.
+- **eSIM**: manage profiles in the admin web under 「移动网络 → eSIM」 (Mobile network → eSIM); on the screen, 「更多功能 → eSIM」 (More → eSIM), tap twice to switch. Takes effect in about 10 seconds, usually no reboot needed.
+- **Proxy**: the install kit does not include a proxy; if you want one, set it up yourself from official sources following `docs/PROXY.md` in the manager repo.
+- **Need ADB temporarily**: SSH in and run `ubus call zwrt_bsp.usb set '{"mode":"debug"}'`; when 「USB 模式」 (USB mode) in `./install.sh status` shows `user`, it is back in normal mode.
 
-## 注意事项
+## Caveats
 
-- **别升级固件**。升级会覆盖 `rc.local`（SSH、后台、屏幕全部不再自启），而新固件又开不了 ADB，回不去了。装 SSH 时已经关了自动升级；手机 App 或网页提示升级也别点。
-- **别用 `/etc/init.d/<服务> disable` 关原厂服务**。U60 的主守护进程要等一串服务全部就绪才放行开机，关掉其中一个会导致屏幕卡在 ZTE logo、不拨号。想精简服务先问清楚。
-- **eSIM 别切到没流量的 profile 再远程操作**。如果你是通过这台 U60 自己的网络远程连进来的，切过去就断了，只能到设备跟前在屏幕上切回来。
-- 这是非官方改装，风险自负。
+- **Don't upgrade the firmware.** An upgrade overwrites `rc.local` (SSH, admin web and screen all stop autostarting), and the new firmware can't enable ADB, so there is no way back. Installing SSH already turned off auto-update; don't tap upgrade prompts in the phone app or web page either.
+- **Don't turn off stock services with `/etc/init.d/<service> disable`.** The U60's main daemon waits for a whole set of services to be ready before letting boot continue; disabling one leaves the screen stuck on the ZTE logo and the modem never dials. Ask first if you want to trim services.
+- **Don't switch eSIM to a profile with no data and then keep working remotely.** If you are connected remotely through this U60's own network, switching cuts you off, and the only way back is to switch on the screen in front of the device.
+- This is an unofficial modification. Use at your own risk.
 
-## 恢复原厂
+## Restore stock
 
-SSH 登录后：
+After logging in over SSH:
 
 ```sh
-echo vendor > /tmp/u60-uid.ctl; sleep 8     # 先把屏幕交给原厂界面
+echo vendor > /tmp/u60-uid.ctl; sleep 8     # hand the screen back to the stock interface first
 for s in u60-uid u60-guard zte-agent zwrt-datad; do /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
 cp /data/u60-kit/rc.local.orig /etc/rc.local
 rm -rf /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim \
        /data/u60-guard /data/u60-uid /data/alerts /data/crashlog /data/power /data/local/tmp/start_zte_agent.sh
-# 连 SSH 也不要的话再加：rm -rf /data/ssh /data/local/tmp/start_dropbear.sh
+# If you don't want SSH either, also run: rm -rf /data/ssh /data/local/tmp/start_dropbear.sh
 reboot
 ```
 
-重启后屏幕回到原厂界面。自动升级需要的话到网页后台重新打开。
+After the reboot the screen is back to the stock interface. Turn auto-update back on in the web admin if you need it.
 
-## 常见问题
+## FAQ
 
-**登录失败 / 被锁**：网页后台连续输错 5 次会锁一段时间，脚本会显示剩余次数和解锁倒计时，别连着乱试。
+**Login fails / locked out**: the web admin locks you out for a while after 5 wrong attempts in a row. The script shows the remaining attempts and the unlock countdown; don't keep guessing.
 
-**一直等不到 ADB 设备**：换根线、换个 USB 口（别用扩展坞）。Windows 上打开设备管理器，如果有带黄色感叹号的设备，右键更新驱动 → 浏览我的电脑 → 从列表选「Android ADB Interface」（需要先装 Google USB Driver）。`adb devices` 能看到一行 `device` 就说明通了，重跑 `./install.sh` 会从这里接着装。
+**The ADB device never shows up**: try another cable or another USB port (not a hub/dock). On Windows, open Device Manager; if a device has a yellow exclamation mark, right-click → Update driver → Browse my computer → pick "Android ADB Interface" from the list (install the Google USB Driver first). If `adb devices` shows a line ending in `device`, the connection works; rerunning `./install.sh` continues from there.
 
-**提示 SSH 连不上**：设备上已经装好了，多半是电脑没连 U60 的 Wi-Fi，或者代理软件的 TUN/增强模式把 `192.168.0.1` 劫走了（在代理里把 `192.168.0.0/16` 设成直连，不用整个关掉）。再试：`ssh -p 2222 -i ~/.ssh/id_ed25519 root@192.168.0.1`。
+**It says SSH can't connect**: the device side is already installed. Usually the computer isn't on the U60's Wi-Fi, or a proxy app's TUN/enhanced mode is hijacking `192.168.0.1` (set `192.168.0.0/16` to direct in the proxy; no need to turn it off entirely). Then try again: `ssh -p 2222 -i ~/.ssh/id_ed25519 root@192.168.0.1`.
 
-**屏幕界面没数据**：SSH 进去看 `cat /tmp/zwrt-datad.log`；重启一次通常就好。
+**The screen shows no data**: SSH in and look at `cat /tmp/zwrt-datad.log`; a reboot usually fixes it.
 
-**装到一半失败**：脚本可以反复跑，已经装好的部分会跳过或覆盖。把终端输出整段发给你装机包的人。
+**Install fails halfway**: the script can be run again and again; parts already installed are skipped or overwritten. Send the whole terminal output to whoever gave you the kit.

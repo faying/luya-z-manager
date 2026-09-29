@@ -1,16 +1,5 @@
-// Battery time estimate. Rules: docs/battery-estimate.md (shared with touch-ui).
-
-/** [t seconds, battery current µA (+ = charging), charger online] */
-export type EstimateSample = [number, number, boolean];
-
-export interface EstimateInput {
-  samples: EstimateSample[];
-  soc: number;
-  charge_full_uah: number | null;
-  charge_counter_uah: number | null;
-  target_pct: number;
-  paused_at_limit: boolean;
-}
+// Battery time estimate: computed by zte-agent (battery_eta.rs, rules in
+// docs/battery-estimate.md); this file only names and formats it.
 
 export type EstimateKind =
   | "charging_eta"
@@ -24,50 +13,24 @@ export interface Estimate {
   minutes: number | null;
 }
 
-export const WINDOW_SECS = 180;
-export const MIN_CURRENT_UA = 50_000;
-
-/** Time-weighted average over the current window; null when there are no samples. */
-export function averageCurrent(samples: EstimateSample[]): number | null {
-  if (samples.length === 0) return null;
-  const [tLast, iLast, onLast] = samples[samples.length - 1];
-  const positive = iLast >= 0;
-  let start = samples.length - 1;
-  while (start > 0) {
-    const [t, i, on] = samples[start - 1];
-    if (t < tLast - WINDOW_SECS || i >= 0 !== positive || on !== onLast) break;
-    start--;
-  }
-  let sum = 0;
-  let weight = 0;
-  for (let k = start; k < samples.length - 1; k++) {
-    const w = samples[k + 1][0] - samples[k][0];
-    sum += samples[k][1] * w;
-    weight += w;
-  }
-  return weight > 0 ? sum / weight : iLast;
+/** `/api/battery`'s `estimate` and `/api/screen`'s `battery` (zte-agent battery_eta.rs). */
+export interface EstimateReport {
+  /** ok · estimating (agent just started) · stale (its sampler stopped) · unavailable (no battery) */
+  state: "ok" | "estimating" | "stale" | "unavailable";
+  kind: EstimateKind;
+  minutes: number | null;
+  /** 100, or the charge limit while it is on. */
+  target_pct: number;
+  observed_at: number;
+  samples: number;
 }
 
-export function estimate(input: EstimateInput): Estimate {
-  const unknown: Estimate = { kind: "unknown", minutes: null };
-  const avg = averageCurrent(input.samples);
-  if (avg === null) return unknown;
-  const online = input.samples[input.samples.length - 1][2];
-  if (input.paused_at_limit) return { kind: "paused_at_limit", minutes: null };
-  if (online && input.soc >= input.target_pct && (avg >= 0 || Math.abs(avg) < MIN_CURRENT_UA)) {
-    return { kind: "reached_target", minutes: null };
-  }
-  if (Math.abs(avg) < MIN_CURRENT_UA) return unknown;
-  if (avg > 0) {
-    if (input.charge_full_uah == null) return unknown;
-    const need = (input.charge_full_uah * (input.target_pct - input.soc)) / 100;
-    return { kind: "charging_eta", minutes: Math.round((need / avg) * 60) };
-  }
-  const left =
-    input.charge_counter_uah ??
-    (input.charge_full_uah == null ? null : (input.charge_full_uah * input.soc) / 100);
-  if (left == null) return unknown;
-  return { kind: "discharging_eta", minutes: Math.round((left / -avg) * 60) };
+/** Only a fresh report is shown; anything else reads as "—". */
+export function fromReport(r: EstimateReport | null | undefined): { est: Estimate | null; targetPct: number } {
+  if (!r) return { est: null, targetPct: 100 };
+  const targetPct = typeof r.target_pct === "number" ? r.target_pct : 100;
+  if (r.state !== "ok") return { est: null, targetPct };
+  return { est: { kind: r.kind, minutes: r.minutes }, targetPct };
 }
 
 /** i18next-style translate: key, English default, interpolation values. */

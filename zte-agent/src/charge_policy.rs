@@ -41,7 +41,7 @@ pub struct ChargeLimitEnforcer {
 
 /// Check if charging is currently stopped via ubus (ground truth).
 /// `direct_power_supply_mode: "enable"` = charging STOPPED (inverted naming).
-fn is_charging_stopped() -> bool {
+pub(crate) fn is_charging_stopped() -> bool {
     ubus::call("zwrt_bsp.charger", "list", Some("{}"))
         .ok()
         .and_then(|v| {

@@ -31,7 +31,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -90,6 +90,9 @@ const AWAY_ID: &str = "away";
 /// How often the engine wakes to *consider* working. The decision to actually
 /// scan is made against the wall clock, so this only bounds responsiveness.
 const TICK_SECS: u64 = 15;
+
+/// While pinned there are no scans; failed restores are retried this often.
+const PIN_RETRY_SECS: i64 = 60;
 
 /// Vendor sleep daemon. Writing `/sys/power/wake_lock` does NOT hold this
 /// device awake — the daemon forces suspend with an explicit `echo mem >
@@ -696,6 +699,8 @@ pub struct Engine {
     /// A scan plus an apply can take tens of seconds. Without this, a slow tick
     /// would overlap the next one and two appliers would fight.
     busy: AtomicBool,
+    /// Last restore retry while pinned (unix secs).
+    pin_retry_at: AtomicI64,
     /// Which u60-guard takeover marker this process is honouring, and since when.
     takeover: Mutex<Option<(String, Instant)>>,
 }
@@ -706,6 +711,7 @@ impl Engine {
             cfg: Mutex::new(read_json::<Config>(CONFIG_FILE)),
             state: Mutex::new(read_json::<RunState>(STATE_FILE)),
             busy: AtomicBool::new(false),
+            pin_retry_at: AtomicI64::new(0),
             takeover: Mutex::new(None),
         }
     }
@@ -1173,6 +1179,12 @@ impl Engine {
         if let Some(pinned) = self.pin() {
             if pinned != current {
                 self.switch_to(app, &cfg, &pinned);
+            } else if now() - self.pin_retry_at.load(Ordering::Relaxed) >= PIN_RETRY_SECS {
+                // No scans while pinned, so failed restores get their retry
+                // here instead (same rule as the scan path below).
+                self.pin_retry_at.store(now(), Ordering::Relaxed);
+                let current_scen = cfg.scenarios.iter().find(|s| s.id == current);
+                self.run_restores(app, current_scen, true);
             }
             return;
         }

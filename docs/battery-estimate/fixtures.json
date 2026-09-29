@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "Shared by web (src/lib/batteryEstimate.ts) and touch-ui (tests/estimate_test.c). Edit here, copy to touch-ui tests/fixtures/, update the sha256 in docs/battery-estimate.md.",
+  "note": "Examples of docs/battery-estimate.md, run by zte-agent/src/battery_eta.rs (the only implementation).",
   "cases": [
     { "name": "charging steady to 100",
       "input": { "samples": [[0, 1000000, true], [60, 1000000, true], [120, 1000000, true], [180, 1000000, true]],

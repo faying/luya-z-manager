@@ -21,6 +21,7 @@ import type {
   PowerSave,
   UsbStatus,
 } from "../../../src/lib/api/schemas/device.ts";
+import type { EstimateReport } from "../../../src/lib/batteryEstimate.ts";
 
 // ── Device clock ────────────────────────────────────────────────────────────
 
@@ -136,19 +137,38 @@ function chargeControl(): ChargeControl {
 }
 
 /** system.rs read_battery_at: sysfs battery + usb. Charging stops cut the USB input to 0. */
+// zte-agent battery_eta.rs for a steady current (every sample the same), so
+// the mock shows what the agent would.
+function mockEstimate(soc: number, ua: number, full: number, counter: number): EstimateReport {
+  const target = limit.enabled ? limit.limit : 100;
+  const plugged = chargerConnected();
+  const base = { state: "ok" as const, target_pct: target, observed_at: Math.floor(Date.now() / 1000), samples: 36 };
+  if (limit.enabled && chargingStopped() && !limit.manual_override && plugged) {
+    return { ...base, kind: "paused_at_limit", minutes: null };
+  }
+  if (plugged && soc >= target && (ua >= 0 || Math.abs(ua) < 50_000)) return { ...base, kind: "reached_target", minutes: null };
+  if (Math.abs(ua) < 50_000) return { ...base, kind: "unknown", minutes: null };
+  if (ua > 0) return { ...base, kind: "charging_eta", minutes: Math.round(((full * (target - soc)) / 100 / ua) * 60) };
+  return { ...base, kind: "discharging_eta", minutes: Math.round((counter / -ua) * 60) };
+}
+
 function sysfsBattery(): SysfsBattery {
   const status = batteryStatus();
   const charging = status === "Charging";
   const inputOn = chargerConnected() && !chargingStopped();
+  const capacity = battery.battery_capacity ?? 0;
+  const current = charging ? 1_200_000 : status === "Full" ? 40_000 : -350_000;
+  const counter = Math.round(11_011_000 * capacity / 100);
   return {
     status,
-    capacity: battery.battery_capacity ?? 0,
+    capacity,
     voltage_uv: 4_120_000,
-    current_ua: charging ? 1_200_000 : status === "Full" ? 40_000 : -350_000,
+    current_ua: current,
     temperature: 315,
     charge_full_uah: 11_011_000,
     charge_full_design_uah: 10_214_000,
-    charge_counter_uah: Math.round(11_011_000 * (battery.battery_capacity ?? 0) / 100),
+    charge_counter_uah: counter,
+    estimate: mockEstimate(capacity, current, 11_011_000, counter),
     cycle_count: 66,
     health: "Good",
     voltage_max_uv: 4_500_000,

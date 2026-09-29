@@ -26,16 +26,26 @@ pub fn device_system(_state: &AppState) -> (u16, Value) {
     }
 }
 
+// Reboot and factory reset go through zte_topsw_mc exactly as the stock web
+// UI does (service_rpc.js: moduleName "web"): it tells data/nwinfo/wlan/mdm
+// to wind down first. Plain `ubus call system reboot` skipped that.
 pub fn device_reboot(_state: &AppState) -> (u16, Value) {
-    match ubus::call("system", "reboot", Some("{}")) {
+    let _ = std::process::Command::new("sync").status();
+    match ubus::call("zwrt_mc.device.manager", "device_reboot", Some(r#"{"moduleName":"web"}"#)) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
-        Err(e) => (503, json!({"ok": false, "error": e})),
+        Err(_) => match ubus::call("system", "reboot", Some("{}")) {
+            Ok(data) => (200, json!({"ok": true, "data": data})),
+            Err(e) => (503, json!({"ok": false, "error": e})),
+        },
     }
 }
 
-// factory_reset is ZTE-specific (zwrt_bsp.power) — may require re-enabling that daemon
+// There is no zwrt_bsp.power on the MU5250 (checked 2026-09-26), so the old
+// call always failed. The stock web UI's factory reset is device_reset with
+// resetFlag 0. Never exercised on the owner's device: it wipes the setup.
 pub fn device_factory_reset(_state: &AppState) -> (u16, Value) {
-    match ubus::call("zwrt_bsp.power", "factory_reset", Some("{}")) {
+    let params = r#"{"moduleName":"web","resetFlag":0}"#;
+    match ubus::call("zwrt_mc.device.manager", "device_reset", Some(params)) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }

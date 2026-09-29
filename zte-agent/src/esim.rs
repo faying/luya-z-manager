@@ -33,10 +33,11 @@ use crate::handlers::AppState;
 const LPAC_BIN: &str = "/data/esim/lpac";
 const LIB_DIR: &str = "/data/esim/lib";
 const COMPAT_SHIM: &str = "/data/esim/lib/libmusl-compat.so";
-/// Persists `last_switch_attempt` across agent restarts — otherwise a restart
-/// (e.g. deploying a new build) resets the cooldown while the card's own real
-/// state doesn't, letting a too-soon switch through to hit catBusy again.
-const LAST_ATTEMPT_FILE: &str = "/data/esim/last_switch_attempt";
+/// When the card last answered EnableProfile with catBusy (unix seconds).
+/// Persisted so an agent restart doesn't forget a busy card. (The older
+/// `last_switch_attempt` file counted every attempt, busy or not; it is no
+/// longer read.)
+const LAST_BUSY_FILE: &str = "/data/esim/last_card_busy";
 const WAKE_LOCK: &str = "/sys/power/wake_lock";
 const WAKE_UNLOCK: &str = "/sys/power/wake_unlock";
 const WAKE_TAG: &str = "esim_op";
@@ -49,13 +50,15 @@ const LPAC_TIMEOUT_NET: Duration = Duration::from_secs(240);
 const MAX_CODE_LEN: usize = 512;
 const MAX_NICKNAME_LEN: usize = 64;
 
-/// Cooldown enforced between ES10c EnableProfile/DisableProfile *attempts*
-/// (success or failure — see `switch`'s doc comment for why). Chosen from
-/// on-device evidence bracketing the real threshold between 3 min (confirmed
-/// too short) and ~10 min (confirmed enough); shortened from the original
-/// 10 min without a fresh trial at this exact value — if catBusy reappears,
-/// re-widen this before suspecting anything else.
+/// After the card really answered catBusy (and the short retries below did not
+/// clear it), refuse further switches for this long: on the eSTK.me card a busy
+/// state lasted 3–10 min in 9-17 trials, and hammering it did not help.
+/// Nothing is enforced after a successful switch, or on cards that never
+/// report busy (5ber): 9-26, the owner hit this wait on a 5ber card.
 const SWITCH_COOLDOWN_SECS: u64 = 300;
+/// catBusy can be transient (openvohive treats it so: 3 tries, 800 ms apart).
+const BUSY_RETRIES: usize = 3;
+const BUSY_RETRY_GAP: Duration = Duration::from_millis(1000);
 
 /* -------------------------------------------------------------- *
  *  State
@@ -77,14 +80,13 @@ pub struct JobState {
 pub struct EsimAdmin {
     job: Arc<Mutex<JobState>>,
     running: Arc<AtomicBool>,
-    /// unix seconds of the last EnableProfile/DisableProfile *attempt* (0 = none
-    /// on record). Drives the `switch` cooldown — see its doc comment. Loaded
-    /// from `LAST_ATTEMPT_FILE` at startup so an agent restart doesn't reset it.
-    last_switch_attempt: Arc<AtomicU64>,
+    /// unix seconds the card last reported catBusy (0 = never). Drives the
+    /// `switch` cooldown. Loaded from `LAST_BUSY_FILE` at startup.
+    last_card_busy: Arc<AtomicU64>,
 }
 
-fn load_last_switch_attempt() -> u64 {
-    std::fs::read_to_string(LAST_ATTEMPT_FILE)
+fn load_last_card_busy() -> u64 {
+    std::fs::read_to_string(LAST_BUSY_FILE)
         .ok()
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0)
@@ -104,7 +106,7 @@ impl EsimAdmin {
                 rebooting: false,
             })),
             running: Arc::new(AtomicBool::new(false)),
-            last_switch_attempt: Arc::new(AtomicU64::new(load_last_switch_attempt())),
+            last_card_busy: Arc::new(AtomicU64::new(load_last_card_busy())),
         }
     }
 }
@@ -355,19 +357,23 @@ pub fn nickname(state: &AppState, body: &[u8]) -> (u16, Value) {
     }
 }
 
+/// lpac 2.3.0 maps enableResult 1–4 to names and everything else (5 = catBusy,
+/// 127 = undefinedError) to "unknown"; newer builds may spell it out.
+fn is_card_busy(err: &str) -> bool {
+    err.contains("es10c_enable_profile") && (err.contains(": unknown") || err.contains("catBusy"))
+}
+
 /// POST /api/esim/switch — { iccid }. Enables the profile on the card, then
 /// reboots the device (the only way to get the ZTE stack onto the new profile —
 /// see module docs). The UI warns about the ~2 min outage before calling.
 ///
-/// Some eUICC cards (verified on-device: eSTK.me — 5ber is unaffected) reject
-/// ES10c EnableProfile/DisableProfile with SGP.22 catBusy unless several
-/// minutes have passed since the *previous* enable/disable attempt (success or
-/// failure alike) — read-only lpac calls (`profile list`, `chip info`) don't
-/// count against this. Four independent on-device trials all fit this model;
-/// a same-session "stop zte_topsw_mdm first" theory was tried and falsified
-/// (see git history for `esim.rs` around 2026-09-17). Rather than let a
-/// too-soon attempt burn a confusing "unknown" lpac error, refuse it up front
-/// with a clear wait time.
+/// Some eUICC cards (eSTK.me; 5ber is unaffected) can answer EnableProfile
+/// with SGP.22 catBusy (enableResult 5; lpac 2.3.0 prints it as "unknown").
+/// The 9-17 model "every attempt, success or failure, starts a 5–10 min
+/// window" put a wait in front of every switch on every card. 9-26 (research
+/// in docs/audit-2026-09-26-power-network.md §A6): switch at once; on catBusy
+/// retry a few times a second apart, and only if the card is still busy
+/// remember it and refuse switches for SWITCH_COOLDOWN_SECS with a clear wait.
 pub fn switch(state: &AppState, body: &[u8]) -> (u16, Value) {
     let v: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
@@ -378,13 +384,14 @@ pub fn switch(state: &AppState, body: &[u8]) -> (u16, Value) {
         _ => return (400, json!({"ok": false, "error": "invalid iccid"})),
     };
     let now = now_unix();
-    let last = state.esim.last_switch_attempt.load(Ordering::Relaxed);
+    let last = state.esim.last_card_busy.load(Ordering::Relaxed);
     if last != 0 && now.saturating_sub(last) < SWITCH_COOLDOWN_SECS {
         let wait = SWITCH_COOLDOWN_SECS - (now - last);
+        // Wording is parsed by touch-ui esim.c (strstr "wait ").
         return (
             429,
             json!({"ok": false, "error": format!(
-                "card needs a cooldown after the last switch attempt — wait {wait}s and retry"
+                "card reported busy on the last switch — wait {wait}s and retry"
             )}),
         );
     }
@@ -392,8 +399,7 @@ pub fn switch(state: &AppState, body: &[u8]) -> (u16, Value) {
         Some(j) => j,
         None => return (409, json!({"ok": false, "error": "operation in progress"})),
     };
-    state.esim.last_switch_attempt.store(now, Ordering::Relaxed);
-    let _ = std::fs::write(LAST_ATTEMPT_FILE, now.to_string());
+    let busy_mark = Arc::clone(&state.esim.last_card_busy);
     let job = Arc::clone(&state.esim.job);
     let running = Arc::clone(&state.esim.running);
     std::thread::spawn(move || {
@@ -401,11 +407,29 @@ pub fn switch(state: &AppState, body: &[u8]) -> (u16, Value) {
         // Record the pre-switch identity so we can detect when the ZTE stack has
         // actually moved off it (the robust convergence signal).
         let (old_imsi, _) = ubus_sim_identity();
-        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_lpac(&["profile", "enable", &iccid], LPAC_TIMEOUT_FAST).map(|_| ())
-        }))
-        .unwrap_or_else(|_| Err("internal panic".into()));
+        let mut res: Result<(), String> = Err("not run".into());
+        for attempt in 0..BUSY_RETRIES {
+            if attempt > 0 {
+                std::thread::sleep(BUSY_RETRY_GAP);
+            }
+            res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_lpac(&["profile", "enable", &iccid], LPAC_TIMEOUT_FAST).map(|_| ())
+            }))
+            .unwrap_or_else(|_| Err("internal panic".into()));
+            match &res {
+                Err(e) if is_card_busy(e) => continue,
+                _ => break,
+            }
+        }
         if let Err(e) = res {
+            let e = if is_card_busy(&e) {
+                let t = now_unix();
+                busy_mark.store(t, Ordering::Relaxed);
+                let _ = std::fs::write(LAST_BUSY_FILE, t.to_string());
+                format!("card is busy (catBusy) — wait {SWITCH_COOLDOWN_SECS}s and retry ({e})")
+            } else {
+                e
+            };
             release_wake_lock();
             finish_job(&job, &running, Err(e), false);
             return;
@@ -624,4 +648,20 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_card_busy;
+
+    #[test]
+    fn busy_only_for_enable_unknown_or_catbusy() {
+        // lpac 2.3.0: enableResult 5 falls through to "unknown"
+        assert!(is_card_busy("lpac: es10c_enable_profile: unknown (code -1)"));
+        assert!(is_card_busy("lpac: es10c_enable_profile: catBusy (code -1)"));
+        assert!(!is_card_busy("lpac: es10c_enable_profile: profileNotInDisabledState (code -1)"));
+        assert!(!is_card_busy("lpac: es10c_enable_profile: iccidOrAidNotFound (code -1)"));
+        assert!(!is_card_busy("lpac exited with exit status: 1 and no result (killed after timeout?)"));
+        assert!(!is_card_busy("lpac: es10b_list_notification: unknown (code -1)"));
+    }
 }

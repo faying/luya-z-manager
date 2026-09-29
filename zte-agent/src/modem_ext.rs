@@ -15,7 +15,23 @@ pub fn modem_data_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
         Ok(v) => v,
         Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
     };
-    match ubus::call("zwrt_data", "set_wwaniface", Some(&parsed.to_string())) {
+    let Value::Object(asked) = &parsed else {
+        return (400, json!({"ok": false, "error": "body must be an object"}));
+    };
+    // Change only what the request names: the rest comes from the modem now,
+    // not from a page's copy that may be seconds old (the touch screen may
+    // have switched roaming meanwhile). Same merge as datad's cellular.set,
+    // which also keeps the PDP settings the firmware stores in this object.
+    let body = match ubus::call("zwrt_data", "get_wwaniface", Some(r#"{"source_module":"web","cid":1,"connect_status":""}"#)) {
+        Ok(Value::Object(mut now)) => {
+            now.extend(asked.clone());
+            now.insert("source_module".into(), json!("WEBUI"));
+            now.insert("cid".into(), json!(1));
+            Value::Object(now)
+        }
+        _ => parsed.clone(),
+    };
+    match ubus::call("zwrt_data", "set_wwaniface", Some(&body.to_string())) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => {
             // B27 answers "Unknown error" while it re-dials (seen 2026-09-25

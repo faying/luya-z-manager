@@ -1,17 +1,28 @@
 # 电池预估时间
 
-网页（`web/src/lib/batteryEstimate.ts`）和触屏（touch-ui `src/estimate.c`）各实现一次，按这里的规则算。两边的测试都跑同一份 `battery-estimate/fixtures.json`，并校验它的 sha256 等于下面这行。改规则时三处一起改：本文、fixtures、两边实现；fixtures 复制到 touch-ui `tests/fixtures/battery-estimate.json`。
+只有一份实现：zte-agent `zte-agent/src/battery_eta.rs`。它自己每 5 秒采一次样（不管有没有人在看），
+结果放在 `GET /api/battery` 的 `estimate` 和 `GET /api/screen` 的 `battery` 里；管理网页和触屏都只负责把它写成文字。
+（2026-09-26 之前网页和触屏各算一份，两边已经出现差异，见 `docs/screen-logic-move.md` #21。）
 
-fixtures sha256: `c4f7c854162e3e88cb0fff6d3b36a4721a5610214f9d3dd67371fe2843f887b0`
+`battery-estimate/fixtures.json` 是这些规则的例子，由 `battery_eta.rs` 的测试跑；改规则时本文、fixtures、`battery_eta.rs` 一起改。
+
+## 结果里的 state
+
+| state | 意思 | 界面 |
+|---|---|---|
+| `ok` | 正常 | 按 kind 显示 |
+| `estimating` | agent 刚启动，还没采到样 | 「—」 |
+| `stale` | 采样线程停了超过 20 秒（数值是最后一次的） | 「—」 |
+| `unavailable` | 读不到电池 | 「—」 |
 
 ## 输入
 
-- 采样序列，按时间升序：`[t 秒, 电池电流 µA, 充电器是否接着]`。电流正数 = 进电池（充电），负数 = 放电（sysfs `battery/current_now` 的符号）。
+- 采样序列，按时间升序：`[t 秒, 电池电流 µA, 充电器是否接着]`。电流正数 = 进电池（充电），负数 = 放电（sysfs `battery/current_now` 的符号）。充电器状态取 datad 的 `charger_connect`，不知道时沿用上一条。
 - `soc`：`battery/capacity`，0–100。
 - `charge_full_uah`：`battery/charge_full`；可缺。
 - `charge_counter_uah`：`battery/charge_counter`（剩余电量）；可缺。
-- `target_pct`：充电保护开着时是它的上限，否则 100。
-- `paused_at_limit`：由调用方算好 = 充电保护开着 且 `charging_stopped` 且不是手动停充（`manual_override` 为假）且充电器插着（ubus `zwrt_bsp.charger` 的 `charger_connect`）。手动停充不算到上限。
+- `target_pct`：充电保护开着且上限在 50–100 之间时是它的上限，否则 100。
+- `paused_at_limit` = 充电保护开着 且 `charging_stopped` 且不是手动停充（`manual_override` 为假）且充电器不是确定拔掉（`charger_connect` 不知道时算插着）。手动停充不算到上限。
   停充时固件把 USB 输入切掉（`usb/online`、`usb/current_now` 会变 0，电池放电约 0.35 A），所以这里不看采样里的充电器状态。
 
 内核的 `power_now`、`time_to_full_now` 不用（实测互相矛盾）。
@@ -40,3 +51,4 @@ fixtures sha256: `c4f7c854162e3e88cb0fff6d3b36a4721a5610214f9d3dd67371fe2843f887
 - `paused_at_limit`：「已到上限，暂停充电」。
 - `unknown`：「—」。
 - X：不到 60 分钟写「N 分钟」，否则「H 小时 M 分」（M 为 0 时只写「H 小时」）。触屏里不能用 `%f`。
+- `state` 不是 `ok` 时一律「—」。

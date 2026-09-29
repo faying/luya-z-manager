@@ -223,6 +223,8 @@ impl Alerts {
                     "time": if clock_ok { Some(e.wall) } else { None },
                     "uptime": e.uptime,
                     "kind": e.kind,
+                    // the touch screen's wording (it no longer keeps its own table)
+                    "label": kind_label(&e.kind),
                     "text": e.text,
                     "unread": e.seq > read,
                 })
@@ -260,6 +262,29 @@ impl Alerts {
             },
         })
     }
+}
+
+/// What each kind means, as the touch screen words it (moved from touch-ui
+/// alerts.c, 2026-09-26). The admin web has its own translated labels
+/// (web/src/lib/alerts.ts kindLabel), longer and in two languages.
+pub fn kind_label(kind: &str) -> String {
+    const T: &[(&str, &str)] = &[
+        ("agent-crash", "管理后台意外退出，已自动重启"),
+        ("agent-silent", "管理后台失去响应"),
+        ("agent-hung", "管理后台卡死，已被强制重启"),
+        ("datad-crash", "数据服务意外退出，已自动重启"),
+        ("devui-crash", "触屏界面闪退，已自动重新打开"),
+        ("devui-gave-up", "触屏界面反复打不开，已换回原厂界面"),
+        ("devui-theme-paused", "自动切换深浅色已暂停，重启后恢复"),
+        ("wifi-takeover", "Wi-Fi 看门狗重新打开了 Wi-Fi"),
+        ("wifi-restore-failed", "Wi-Fi 看门狗没能打开 Wi-Fi"),
+        ("sms-failed", "告警短信发送失败"),
+        ("sms-test", "测试短信"),
+        ("datad-degraded", "数据服务持续没响应，后台改为直接读取"),
+    ];
+    T.iter()
+        .find(|t| t.0 == kind)
+        .map_or_else(|| format!("其他告警（{kind}）"), |t| t.1.to_string())
 }
 
 fn alerts() -> Alerts {
@@ -365,6 +390,18 @@ pub fn alerts_sms_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn kind_labels_as_the_screen_had_them() {
+        use super::kind_label;
+        assert_eq!(kind_label("agent-crash"), "管理后台意外退出，已自动重启");
+        assert_eq!(kind_label("devui-gave-up"), "触屏界面反复打不开，已换回原厂界面");
+        assert_eq!(kind_label("sms-test"), "测试短信");
+        // the screen used to fall back to the raw kind for this one
+        assert_eq!(kind_label("datad-degraded"), "数据服务持续没响应，后台改为直接读取");
+        assert_eq!(kind_label("something-new"), "其他告警（something-new）");
+        assert_eq!(kind_label(""), "其他告警（）");
+    }
+
     use super::*;
 
     #[test]

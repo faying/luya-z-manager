@@ -97,7 +97,7 @@ export const zh = {
     engineOff: "引擎已关",
     exit: "出口",
     exitApplied: "出口已改为{{x}}",
-    exitDirectAi: "直连·AI 不动",
+    exitDirectAi: "直连 · AI 不动",
     exitDirectAll: "全部直连",
     exitFailed: "出口没改成：{{e}} · 再试一次",
     exitGlobal: "全局",

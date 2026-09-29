@@ -15,6 +15,8 @@ zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`�
   所以里面的 pid 可能过期或已被复用：`kill` 之前必须确认 `/proc/<pid>/comm` 以 `zte-agent` 开头。
 - agent 单次合法持锁最长 `MAX_HOLD` = **120 秒**。u60-guard 判定「agent 持锁卡死」的等待必须更长（建议 150 秒）。
 - 文件永不删除。
+- 常驻的子进程绝不能继承这把锁的文件描述符：flock 锁挂在打开的文件上，只要还有一个进程开着它锁就不放。
+  u60-guard 起崩溃观察循环时关掉 fd 7、8、9（第 9 节）；以后谁起常驻子进程都照此办理。
 
 ## 2. 心跳 `/tmp/scenario.heartbeat`
 
@@ -123,6 +125,11 @@ zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`�
 
 - `doctor.sh`：只读，每项一行 `<ok|warn|bad>\t<id>\t<名称>\t<说明>`（`--tsv`）。agent 每 60 秒跑一次给 `/api/health`
   和 `/api/public/status.health`（只有计数）；装机包 `./install.sh doctor` 推到 `/tmp` 直接跑，agent 挂了也能用。
+  `--tsv` 不读账本，行的 id 和顺序不变；只有「待机」「时钟」两行为修错改过判法（第 8、9 节）。
+- `doctor.sh --report 24h|7d`：设备成绩单，读 `/data/ledger` 按稳 / 好用 / 省逐项给出数值和档位（没测 / 不达标 / 注意 / 达标），
+  不改任何东西。给人看的默认输出末尾照抄 `/data/ledger/summary` 的 3 行（u60-guard 每小时重写）。
+- `doctor.sh --ledger-selftest`：账本在这台设备上能不能工作，逐项 PASS/FAIL（目录可写、key.log 原因码、自恢复开关、
+  kmsg 落盘，以及 u60-guard 依赖的设备工具）。只写一个测完就删的测试文件和一行 kmsg。
 - `config-backup.sh`：只备份配置（清单在脚本开头），不含运行状态；Tailscale 身份要 `--with-tailscale`。
   备份只存电脑（装机包 `./install.sh backup`），`restore` 先 `plan` 再写、写前留 `.pre-restore`、不重载 Wi-Fi。
 
@@ -131,4 +138,27 @@ zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`�
 - 屏幕熄灭时，u60-guard 每轮（60 秒）往 `/tmp/standby.stat` 写一行：`<uptime> <蜂窝包/分> <Tailscale 隧道包/分> <tailscaled 代理核心 u60pro-devui zwrt-datad zte-agent 的唤醒/秒>`。程序中途重启（pid 变化）的那一格写 `-`；亮屏、两轮间隔过长（设备休眠过）或计数器回退时不写。只保留 60 行，在内存盘。
 - 隧道流量单独记，不从蜂窝包数里扣掉：其他 tailnet 设备一直访问本机（比如开着网页后台），正是哨兵要发现的浪费。
 - `doctor.sh --calibrate-standby` 用这些记录（至少 30 行）算出每列的中位数和 MAD，写入 `/data/u60-guard/standby.baseline`。要在省电改动都上线之后、息屏 30~60 分钟再校准。
-- 体检的「待机」一项：没有基线时显示「未校准」（算正常）；最近 15 分钟不足 8 行不判定；某列中位数超过「基线 + 3×MAD」且超过基线 1.5 倍（并且至少多 1）时报 ▲，说明是哪一列、现在多少、基线多少。只显示，不发短信。
+- 体检的「待机」一项：没有基线时显示「未校准」（算正常）；**只判空闲的分钟**：蜂窝包数超过「基线中位数 + 3×MAD」的那一行是有人在用网，
+  不拿来判，最近 15 分钟多数行有流量时写「有流量在用，不判待机」；空闲的行不足 8 行不判定；某列中位数超过「基线 + 3×MAD」且超过基线 1.5 倍
+  （并且至少多 1）时报 ▲，说明是哪一列、现在多少、基线多少。只显示，不发短信。
+- **基线第 2 版带指纹**（2026-09-28 起）：第一行 `v2`，每列另记 `fp <列> <依赖的 md5>`——被测程序实际运行文件的 md5（u60-guard 在 pid 变化时算好，
+  放 `/tmp/u60-guard/ledger/fp`）和相关配置文件（Tailscale 的 `tuning.env` 等）的 md5。某列依赖变了就写「基线过期，不判」；
+  没有 `v2` 的旧基线整行写「基线格式旧，请在家自然空闲时重新校准」。程序换版本（`fp-changed`）之前的记录不用。
+  记录的列数 = 3 + 被测程序个数，校准和判定都按这个算。
+
+## 9. 设备账本（u60-guard 写，doctor.sh 读；完整契约见 touch-ui `docs/LEDGER.md`）
+
+- **只有一个写的**：u60-guard 的账本任务（后台子 shell，每轮一次，拿 `/tmp/u60-guard/ledger/writer.lock` 的 `flock -n`，
+  拿不到就这一轮不写）。账本在 `/data/ledger/boot-<序号>-<boot>-<段>.jsonl`，每行一个扁平 JSON 事件，只追加。
+  主循环从不等它：账本出任何问题都碰不到 Wi-Fi 兜底和短信。
+- **别的程序要记事件，写暂存文件**：`/data/ledger/spool/<编号>.ev`（要挺过重启的）或 `/tmp/ledger-spool/<编号>.ev`，
+  两行：`<编号>\t<完整 boot_id>\t<开机秒数>\t<种类>` 和以 `,` 开头的字段片段；先写临时名、fsync、改名。账本任务按编号去重收取。
+  现在的写方：u60-guard 的崩溃观察循环、`doctor.sh --calibrate-standby`；第二步起 agent、触屏、网页也按这个格式写
+  （比如每条重启路径发出前的 `reboot_request`）。
+- **崩溃观察循环** `u60-guard.sh watcher`：u60-guard 每轮看它在不在、是不是当前版本，不在就起、版本不对就换；起的时候关掉
+  fd 7/8/9（第 1 节）。它每 2 秒读 kmsg 落盘文件的新内容，认基带崩溃、跟到蜂窝口恢复，只写暂存。磁盘上的 `u60-guard.sh` 变了，
+  它自己在一分钟内退出。
+- **人为重启 u60-guard 前**（上机、手动 restart）先写 `/tmp/u60-guard/stop-requested`，一行 `<谁> <为什么>`；下一次启动把它记成
+  人为的（`guard_start requested=1`）并删掉。没有这个标记的第二次启动按意外退出算。
+- **时钟结论** `/tmp/u60-guard/clock-ok`：`<0|1> <偏移> <开机秒数> <依据>`，u60-guard 每轮写，doctor 和账本都用它。
+  对时前设备时钟是 2025-01-04，年份 ≥ 2026 且有对时证据（向前跳变一天以上，或不早于上次可信墙钟减一天）才算可信。

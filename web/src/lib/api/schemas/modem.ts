@@ -58,12 +58,13 @@ export interface ModemData {
   roll_connect_status?: string; // unconfirmed
 }
 
-/** PUT /api/modem/data body (modem_ext.rs:13, ubus `zwrt_data set_wwaniface`, body forwarded as-is). */
+/** PUT /api/modem/data body (modem_ext.rs, ubus `zwrt_data set_wwaniface`). Send only the
+ *  switches being changed: the agent fills the rest from the modem's current values. */
 export interface ModemDataSetBody {
   cid: number;
-  connect_mode: number;
-  roam_enable: number;
-  enable: number;
+  connect_mode?: number;
+  roam_enable?: number;
+  enable?: number;
   /** Page adds "disconnected" when turning data off. */
   connect_status?: string;
 }

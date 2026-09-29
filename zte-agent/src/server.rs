@@ -180,6 +180,7 @@ pub fn route(method: &Method, path: &str, state: &AppState, body: &[u8]) -> (u16
         // Device info (sysfs)
         (&Method::Get, "/api/device") => handlers::device(state),
         (&Method::Get, "/api/battery") => handlers::battery(state),
+        (&Method::Get, "/api/screen") => handlers::screen(state),
         (&Method::Get, "/api/cpu") => handlers::cpu(state),
         (&Method::Get, "/api/memory") => handlers::memory(state),
         // Network

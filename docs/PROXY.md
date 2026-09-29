@@ -1,19 +1,21 @@
-# 代理（自己动手）
+# Proxy (do it yourself)
 
-这个仓库和装机包**不带**任何代理功能：没有代理内核、没有面板、没有规则集，后台和触屏上也没有代理页面。
-想在 U60 Pro（MU5250）上跑透明代理，请直接按官方来源自己搭：
+**English** · [中文](PROXY.zh-CN.md)
 
-- 内核：mihomo（Clash.Meta）
-  - 源码与发布包：<https://github.com/MetaCubeX/mihomo>（releases 里选 `linux-arm64`）
-  - 文档：<https://wiki.metacubex.one/>
-- 面板（任选一个官方风格的网页面板，接 mihomo 的 `external-controller`）：
-  - metacubexd：<https://github.com/MetaCubeX/metacubexd>
-  - zashboard：<https://github.com/Zephyruso/zashboard>
+This repository and the install kit **do not include** any proxy functionality: no proxy core, no panel, no rule sets, and no proxy pages in the admin web or touch UI.
+To run a transparent proxy on the U60 Pro (MU5250), set it up yourself directly from the official sources:
 
-在这台设备上自己搭时要守的规矩（和 [GETTING-STARTED.md](GETTING-STARTED.md) 第 8 节一致）：
+- Core: mihomo (Clash.Meta)
+  - Source and release packages: <https://github.com/MetaCubeX/mihomo> (pick `linux-arm64` under releases)
+  - Documentation: <https://wiki.metacubex.one/>
+- Panel (pick any official-style web panel that talks to mihomo's `external-controller`):
+  - metacubexd: <https://github.com/MetaCubeX/metacubexd>
+  - zashboard: <https://github.com/Zephyruso/zashboard>
 
-- 设备是 aarch64、musl libc 的 OpenWrt 23.05；程序和配置放 `/data`，`/tmp` 是内存盘。
-- 开机自启只走 `/etc/rc.local`，改之前备份，改完 `sh -n` 检查；**不要** `/etc/init.d/<原厂服务> disable`。
-- 透明代理会接管全屋网络。第一次启动前准备好退路（能通过 SSH 停掉它、把 DNS / 防火墙改回原样），
-  控制接口（`external-controller`）只监听本机或局域网，不要暴露到蜂窝网。
-- 订阅地址和密钥只放设备上、只给 root 读，不要提交进任何仓库。
+Rules to follow when setting it up on this device (same as section 8 of [GETTING-STARTED.md](GETTING-STARTED.md)):
+
+- The device runs OpenWrt 23.05 on aarch64 with musl libc; put programs and configuration in `/data`; `/tmp` is a RAM disk.
+- Autostart goes only through `/etc/rc.local`; back it up before changing it and check it with `sh -n` afterwards; **do not** run `/etc/init.d/<stock service> disable`.
+- A transparent proxy takes over the whole home network. Before the first start, have a way back (be able to stop it over SSH and restore DNS / firewall to their original state),
+  and have the control interface (`external-controller`) listen only on localhost or the LAN, never exposed to the cellular network.
+- Keep subscription URLs and secrets only on the device, readable only by root, and never commit them to any repository.

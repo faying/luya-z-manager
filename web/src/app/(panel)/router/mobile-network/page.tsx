@@ -32,6 +32,7 @@ import { apiFetch } from "@/lib/api/client";
 import { useApi } from "@/lib/hooks/useApi";
 import { isRemoteAccess } from "@/lib/api/remote";
 import { useWriteOp } from "@/lib/api/writeOp";
+import { rebootWrite } from "@/lib/api/reboot";
 import type { ModemData, ModemDataSetBody, ModemScanOperator, ModemStatus } from "@/lib/api/schemas/modem";
 import type { NetInfo, NetInfoGuard } from "@/lib/api/schemas/network";
 import {
@@ -52,18 +53,21 @@ import {
 
 const DATA = "/api/modem/data";
 const STATUS = "/api/modem/status";
-const SCAN_TRIES = 80;
-const REGISTER_TRIES = 40;
+// Cover the agent's worst cases: a scan may hold the modem 2 × 180 s; a
+// register waits up to 90 s, checks data, then may go back to automatic.
+const SCAN_TRIES = 125;
+const REGISTER_TRIES = 100;
 const POLL_MS = 2000;
 const JOB_POLL_MS = 3000;
 
-/** AT+COPS access technology → generation (measured: 2, 7, 11). */
+/** Scan result m_rat → generation, as the stock web maps it (mobile_network.js):
+ *  ZTE's own codes, not 27.007 — 13 is 4G, 9 is 5G. Other codes show as-is. */
 function ratName(rat?: string): string {
   switch (rat) {
-    case "11": case "12": case "13": case "10": return "5G";
-    case "7": case "8": case "9": return "4G";
-    case "2": case "3": case "4": case "5": case "6": return "3G";
-    case "0": case "1": return "2G";
+    case "9": case "11": case "12": return "5G";
+    case "7": case "13": return "4G";
+    case "2": return "3G";
+    case "0": return "2G";
     default: return rat ?? "—";
   }
 }
@@ -88,6 +92,9 @@ export default function MobileNetworkPage() {
   const { t } = useTranslation();
   const md = useApi<ModemData>(DATA, { refreshInterval: 5000 });
   const ms = useApi<ModemStatus>(STATUS, { refreshInterval: 5000 });
+  // The agent's scan / register jobs: they outlive this page (a reload, or a
+  // job started on the touch screen), so the page reads them from here too.
+  const ni = useApi<NetInfo>("/api/netinfo?lite=1", { refreshInterval: 5000 });
   const data = md.data;
   const status = ms.data;
 
@@ -114,13 +121,11 @@ export default function MobileNetworkPage() {
   const askRef = useRef<Ask | null>(null);
   const inline = useConfirmInline(ask?.kind === "scan" || ask?.kind === "auto" || ((ask?.kind === "data" || ask?.kind === "roam") && ask.tier === 2));
 
-  // ── mobile data / roaming (PUT /api/modem/data carries both) ──
-  const baseBody = (): ModemDataSetBody => ({
-    cid: 1,
-    connect_mode: typeof data?.connect_mode === "number" ? data.connect_mode : Number(data?.connect_mode ?? 1) || 1,
-    roam_enable: roamOn ? 1 : 0,
-    enable: dataOn ? 1 : 0,
-  });
+  // ── mobile data / roaming (PUT /api/modem/data) ──
+  // Only the switch being changed goes out; the agent takes the other one
+  // from the modem at that moment, so a value this page read seconds ago
+  // (maybe before the touch screen changed it) cannot undo it.
+  const baseBody = (): ModemDataSetBody => ({ cid: 1 });
   const readBack = async (check: (d: ModemData) => boolean) => {
     for (let i = 0; i < 3; i++) {
       if (i > 0) await sleep(POLL_MS);
@@ -221,6 +226,10 @@ export default function MobileNetworkPage() {
 
   // ── carrier scan ──
   const [operators, setOperators] = useState<ModemScanOperator[] | null>(null);
+  // With no list of its own (after a reload, or a scan started on the touch
+  // screen) the page shows the agent's finished scan, unless it is the one
+  // this page already cleared after a register.
+  const [clearedScanAt, setClearedScanAt] = useState(0);
   const scanOp = useWriteOp({
     tier: 2,
     steps: [
@@ -262,7 +271,7 @@ export default function MobileNetworkPage() {
   const [regSent, setRegSent] = useState<ModemScanOperator | null>(null);
   const regRecovery = t(
     "mobilenet.regRecovery",
-    "If it does not take, the device goes back to automatic selection by itself within a minute. You can also press Back to Automatic below."
+    "If it does not take, the device goes back to automatic selection by itself within about two minutes. You can also press Back to Automatic below."
   );
   const regOp = useWriteOp({
     tier: 3,
@@ -281,6 +290,9 @@ export default function MobileNetworkPage() {
       const name = a?.kind === "register" ? a.op.m_oper_name ?? a.op.m_mcc_mnc ?? "" : "";
       const g = await waitGuard((g) => g.phase === "ok" || g.phase === "reverted");
       if (g?.phase === "ok") {
+        // The list's "current" marks are stale now; the stock page clears it too.
+        setOperators(null);
+        setClearedScanAt(ni.data?.scan?.finished_at ?? 0);
         setRegMsg({ tone: "ok", text: t("mobilenet.registeredTo", "Registered to {{name}}", { name }) });
         return true;
       }
@@ -314,7 +326,7 @@ export default function MobileNetworkPage() {
   // ── reboot ──
   const rebootOp = useWriteOp({
     tier: 3,
-    steps: [{ label: t("mobilenet.reboot", "Reboot"), run: () => apiFetch(`/api/device/reboot`, { method: "POST" }) }],
+    ...rebootWrite(t("mobilenet.reboot", "Reboot")),
     waitDevice: {
       expectedSec: 90,
       expectDown: true,
@@ -322,7 +334,21 @@ export default function MobileNetworkPage() {
     },
   });
 
-  const radioBusy = dataOp.busy || roamOp.busy || airOp.busy || regOp.busy;
+  // A job running in the agent that this page did not start (or started
+  // before a reload): scanning, registering, or going back to automatic.
+  const agentScanning = ni.data?.scan?.state === "scanning" && !scanOp.busy;
+  const agentPhase = ni.data?.guard?.phase ?? "";
+  const agentGuard = (agentPhase === "registering" || agentPhase === "reverting") && !regOp.busy && !autoOp.busy;
+  const selBusy = scanOp.busy || regOp.busy || autoOp.busy || agentScanning || agentGuard;
+  // Switching data, roaming or airplane mode mid-search or mid-register
+  // spoils it; the touch screen locks these too.
+  const radioBusy = dataOp.busy || roamOp.busy || airOp.busy || selBusy;
+  const agentScan = ni.data?.scan;
+  const shownOps: ModemScanOperator[] | null =
+    operators ??
+    (agentScan?.state === "done" && !scanOp.busy && (agentScan.finished_at ?? 0) !== clearedScanAt
+      ? agentScan.operators.map((o) => ({ m_mcc_mnc: o.plmn, m_oper_name: o.name, m_rat: o.rat, m_status: o.status }))
+      : null);
   const locked = !data || md.stale || radioBusy;
   const airLocked = !status || ms.stale || radioBusy;
 
@@ -419,7 +445,7 @@ export default function MobileNetworkPage() {
         : t("mobilenet.roamOffConsequence", "If the U60 is roaming right now, it loses its mobile connection.");
     if (a.kind === "auto")
       return t("mobilenet.autoConsequence", "The modem picks the network by itself again. Mobile data may drop for about half a minute while it re-registers.");
-    return t("mobilenet.scanConsequence", "The modem searches every carrier nearby. It takes about two minutes, and mobile data is off while it searches.");
+    return t("mobilenet.scanConsequence", "The modem searches every carrier nearby. It takes one to three minutes, and mobile data is off while it searches.");
   }
 
   const regTarget = ask?.kind === "register" ? ask.op : null;
@@ -562,29 +588,37 @@ export default function MobileNetworkPage() {
               <Button
                 variant="secondary"
                 onPress={() => (ask?.kind === "scan" ? close() : open({ kind: "scan" }))}
-                isDisabled={scanOp.busy || regOp.busy}
-                pending={scanOp.busy}
+                isDisabled={selBusy}
+                pending={scanOp.busy || agentScanning}
               >
                 <MagnifyingGlass size={20} weight="bold" aria-hidden />
-                {scanOp.busy ? t("mobilenet.scanning", "Scanning…") : t("mobilenet.scanForCarriers", "Scan for Carriers")}
+                {scanOp.busy || agentScanning ? t("mobilenet.scanning", "Scanning…") : t("mobilenet.scanForCarriers", "Scan for Carriers")}
               </Button>
             </span>
             {airplaneOn && <span className="nd-aux">{t("mobilenet.scanNeedsRadio", "Airplane mode is on: the scan will find nothing until it is turned off.")}</span>}
           </div>
           {confirmInlineFor(["scan"])}
           <div className="mt-2 grid gap-1 px-1">
-            {scanOp.busy ? (
+            {scanOp.busy || agentScanning ? (
               <p className="nd-aux" role="status">
-                {t("mobilenet.scanTakesTime", "About two minutes; mobile data is off while it searches…")}
+                {t("mobilenet.scanTakesTime", "One to three minutes; mobile data is off while it searches…")}
+              </p>
+            ) : agentGuard ? (
+              <p className="nd-aux" role="status">
+                {agentPhase === "registering"
+                  ? t("mobilenet.agentRegistering", "Registering to {{name}}… If it does not take, the device goes back to automatic selection.", {
+                      name: ni.data?.guard?.target ?? "",
+                    })
+                  : t("mobilenet.agentReverting", "Going back to automatic selection…")}
               </p>
             ) : scanOp.phase === "accepted" ? null : (
               <OpResult op={scanOp} />
             )}
           </div>
 
-          {operators !== null && (
+          {shownOps !== null && (
             <div className="mt-3">
-              {operators.length === 0 ? (
+              {shownOps.length === 0 ? (
                 <div className="nd-group">
                   <p className="nd-body p-4 text-nd-t2 lg:p-5" role="status">
                     {t("mobilenet.noCarriers", "No carriers found · check the antenna position and scan again.")}
@@ -593,9 +627,9 @@ export default function MobileNetworkPage() {
               ) : (
                 <div className="nd-group">
                   <p className="sr-only" role="status">
-                    {t("mobilenet.nFound", "{{n}} carriers found", { n: operators.length })}
+                    {t("mobilenet.nFound", "{{n}} carriers found", { n: shownOps.length })}
                   </p>
-                  {operators.map((op, i) => {
+                  {shownOps.map((op, i) => {
                     const name = op.m_oper_name ?? op.m_mcc_mnc ?? "—";
                     return (
                       <Row
@@ -615,7 +649,7 @@ export default function MobileNetworkPage() {
                             size="sm"
                             variant="secondary"
                             onPress={() => open({ kind: "register", op })}
-                            isDisabled={regOp.busy || airOp.busy}
+                            isDisabled={selBusy || airOp.busy}
                             pending={regOp.busy && regSent === op}
                             aria-label={t("mobilenet.registerTo", "Register to {{name}}", { name })}
                           >
@@ -639,7 +673,7 @@ export default function MobileNetworkPage() {
                     size="sm"
                     variant="secondary"
                     onPress={() => (ask?.kind === "auto" ? close() : open({ kind: "auto" }))}
-                    isDisabled={regOp.busy || autoOp.busy || scanOp.busy}
+                    isDisabled={selBusy}
                     pending={autoOp.busy}
                   >
                     {t("mobilenet.backToAutoBtn", "Back to Auto")}
@@ -747,7 +781,7 @@ export default function MobileNetworkPage() {
           name: regName,
           plmn: regTarget?.m_mcc_mnc ?? "—",
         })}
-        downtime={t("mobilenet.regDowntime", "The mobile connection drops for about 30 seconds while the modem registers. If it is refused, it stays off.")}
+        downtime={t("mobilenet.regDowntime", "The mobile connection drops for about 30 seconds while the modem registers. If it is refused, the device goes back to automatic selection.")}
         recovery={regRecovery}
         actionLabel={t("mobilenet.regAction", "Register")}
         cutsUplink

@@ -1,3 +1,4 @@
+import type { EstimateReport } from "@/lib/batteryEstimate";
 // Response shapes for the device / battery / charger / USB endpoints of
 // zte-agent (zte-agent/src/device_ext.rs, network_ext.rs, charge_policy.rs,
 // usb.rs).
@@ -55,6 +56,8 @@ export interface SysfsBattery {
     current_ua: number | null;
     input_current_limit_ua: number | null;
   } | null;
+  /** Agent-side estimate; missing on agents older than 2026-09-26. */
+  estimate?: EstimateReport;
 }
 
 /**

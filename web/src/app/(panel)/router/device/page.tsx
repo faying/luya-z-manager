@@ -4,13 +4,14 @@
 //
 // Writes (controls-inventory §/router/device, design §3.1):
 //   charge limit 「应用」  tier 2, PUT charge-control, readback GET charge-control
-//   power-save switch     tier 2, PUT power-save (body kept exactly as the old
-//                          page sent it: deviceInfoList as an array — which
-//                          form the firmware accepts is unconfirmed), readback
+//   power-save switch     tier 2, PUT power-save with deviceInfoList as an
+//                          object, the form the stock web UI sends (9-26: the
+//                          array form never took, so readback failed), readback
 //                          POST power-save (a read served over POST)
 //   fast-boot switch      tier 2, PUT fast-boot, readback GET fast-boot
 //   reboot                tier 3, POST reboot, wait for the device (≈90 s,
-//                          must go down first); no readback → 「设备已接受」
+//                          must go down first); readback = uptime went down
+//                          (lib/api/reboot.ts)
 //   factory reset         tier 3, type-to-confirm, POST factory-reset. The
 //                          reset wipes zte-agent itself, so the device never
 //                          answers this page again: the wait ends in its
@@ -25,6 +26,7 @@ import { ArrowClockwise, BatteryCharging, Lightning, Warning } from "@phosphor-i
 import { apiFetch } from "@/lib/api/client";
 import { useApi } from "@/lib/hooks/useApi";
 import { useWriteOp } from "@/lib/api/writeOp";
+import { rebootWrite } from "@/lib/api/reboot";
 import type { ChargeControl, FastBoot, PowerSave } from "@/lib/api/schemas/device";
 import { BatteryDetails } from "./BatteryDetails";
 import {
@@ -164,7 +166,7 @@ export default function DevicePage() {
           apiFetch("/api/device/power-save", {
             method: "PUT",
             // Unchanged from the old page (array form); unconfirmed on the device.
-            body: { deviceInfoList: [{ power_saver_mode: psWant.current ? "1" : "0" }] },
+            body: { deviceInfoList: { power_saver_mode: psWant.current ? "1" : "0" } },
           }),
       },
     ],
@@ -197,7 +199,7 @@ export default function DevicePage() {
   );
   const rebootOp = useWriteOp({
     tier: 3,
-    steps: [{ label: t("devctl.rebootTitle", "Reboot"), run: () => apiFetch("/api/device/reboot", { method: "POST" }) }],
+    ...rebootWrite(t("devctl.rebootTitle", "Reboot")),
     waitDevice: { expectedSec: 90, expectDown: true, recovery: rebootRecovery },
   });
   const resetRecovery = t(
