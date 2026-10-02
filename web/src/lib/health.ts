@@ -6,6 +6,8 @@
 // it first — doctor's own output prints it on top — so it moves to the top
 // here; every other row stays in doctor's order.
 import type { HealthCheck } from "@/lib/api/schemas/system";
+import type { Lang } from "@/lib/i18n/config";
+import { pickLang } from "@/lib/i18n/pick";
 
 export type CheckTone = "ok" | "warn" | "bad";
 
@@ -20,8 +22,13 @@ export interface HealthRow {
 
 export const MANIFEST_ID = "manifest";
 
-export function healthRows(checks: HealthCheck[]): HealthRow[] {
-  const rows = checks.map((c) => ({ id: c.id, label: c.label, detail: c.detail, tone: LEVEL_TONE[c.level] }));
+export function healthRows(checks: HealthCheck[], lang: Lang = "zh"): HealthRow[] {
+  const rows = checks.map((c) => ({
+    id: c.id,
+    label: pickLang(c, "label", lang),
+    detail: pickLang(c, "detail", lang),
+    tone: LEVEL_TONE[c.level],
+  }));
   const m = rows.findIndex((r) => r.id === MANIFEST_ID);
   if (m <= 0) return rows;
   return [rows[m], ...rows.slice(0, m), ...rows.slice(m + 1)];

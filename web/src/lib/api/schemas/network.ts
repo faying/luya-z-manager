@@ -321,19 +321,28 @@ export interface NetInfoExit {
   ip: string | null;
   geo: string | null;
   isp: string | null;
+  /** English for geo/isp (netinfo.rs geo_en/isp_en); null when there is none — show geo/isp. */
+  geo_en?: string | null;
+  isp_en?: string | null;
   /** Proxy exit only: the node it resolves to. */
   node: string | null;
   source: string | null;
   fetched_at: number;
   /** Last lookup failed; ip/geo may still be the previous good answer. */
   error: string | null;
+  error_en?: string | null;
 }
 
 export interface NetInfoOperator {
   mcc: string | null;
   mnc: string | null;
   name: string | null;
+  /** English short name; equals `name` for a broadcast name outside the table. */
+  operator_en?: string | null;
   country: string | null;
+  country_en?: string | null;
+  /** ISO 3166 code ("CN"): compare this, never the Chinese name. Missing on an older agent. */
+  country_iso?: string | null;
 }
 
 /**
@@ -359,14 +368,23 @@ export interface NetInfo {
    * mobile data without redialling and returns no cells, so the agent
    * refuses it (POST /api/cell/neighbors/scan → 410) and `error` says why.
    */
-  neighbors?: { state: string; error: string | null };
+  neighbors?: { state: string; error: string | null; error_en?: string | null };
   /** The operator search job (netinfo.rs operator_scan). */
   scan?: {
     state: "idle" | "scanning" | "done" | "error";
     error: string | null;
     started_at?: number;
     finished_at?: number;
-    operators: { plmn: string; name: string; rat: string; status: string; country: string | null }[];
+    error_en?: string | null;
+    operators: {
+      plmn: string;
+      name: string;
+      operator_en?: string | null;
+      rat: string;
+      status: string;
+      country: string | null;
+      country_en?: string | null;
+    }[];
   };
 }
 
@@ -377,6 +395,9 @@ export interface NetInfoGuard {
   target: string;
   rat: string;
   reason: string;
+  /** What `reason` says, as a code ("manual_auto" = back to automatic on request); compare this, not the text. */
+  reason_code?: string | null;
+  reason_en?: string | null;
   started_at: number;
   finished_at: number;
   last_result: string;

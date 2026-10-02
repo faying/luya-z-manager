@@ -27,6 +27,9 @@
 import { connectFamilies, connectKind } from "@/lib/connectState";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { errorText } from "@/lib/api/types";
+import { pick, useLang } from "@/lib/i18n/pick";
+import { guardReason } from "@/lib/guardReason";
 import { Airplane, ArrowClockwise, CellSignalFull, Globe, MagnifyingGlass, Power } from "@phosphor-icons/react";
 import { apiFetch } from "@/lib/api/client";
 import { useApi } from "@/lib/hooks/useApi";
@@ -90,6 +93,7 @@ type Ask =
 
 export default function MobileNetworkPage() {
   const { t } = useTranslation();
+  const lang = useLang();
   const md = useApi<ModemData>(DATA, { refreshInterval: 5000 });
   const ms = useApi<ModemStatus>(STATUS, { refreshInterval: 5000 });
   // The agent's scan / register jobs: they outlive this page (a reload, or a
@@ -243,11 +247,11 @@ export default function MobileNetworkPage() {
             const scan = (await apiFetch<NetInfo>(`/api/netinfo`)).scan;
             if (scan?.state === "done") {
               setOperators(
-                scan.operators.map((o) => ({ m_mcc_mnc: o.plmn, m_oper_name: o.name, m_rat: o.rat, m_status: o.status }))
+                scan.operators.map((o) => ({ m_mcc_mnc: o.plmn, m_oper_name: pick(o.name, o.operator_en, lang), m_rat: o.rat, m_status: o.status }))
               );
               return;
             }
-            if (scan?.state === "error") throw new Error(scan.error ?? t("mobilenet.scanFailed", "The scan failed"));
+            if (scan?.state === "error") throw new Error(pick(scan.error, scan.error_en, lang) || t("mobilenet.scanFailed", "The scan failed"));
           }
           throw new Error(t("mobilenet.scanTimedOut", "Carrier scan timed out"));
         },
@@ -299,7 +303,7 @@ export default function MobileNetworkPage() {
       if (g?.phase === "reverted") {
         setRegMsg({
           tone: "bad",
-          text: t("mobilenet.regReverted", "Could not register ({{why}}); back to automatic selection", { why: g.reason || "—" }),
+          text: t("mobilenet.regReverted", "Could not register ({{why}}); back to automatic selection", { why: pick(g.reason, g.reason_en, lang) || "—" }),
         });
         return false;
       }
@@ -316,7 +320,7 @@ export default function MobileNetworkPage() {
     verify: async () => {
       const g = await waitGuard((g) => g.phase === "reverted" || g.phase === "ok");
       if (g?.phase === "reverted") {
-        setRegMsg({ tone: "ok", text: g.reason && g.reason !== "手动恢复自动" ? g.reason : t("mobilenet.autoDone", "Back to automatic selection") });
+        setRegMsg({ tone: "ok", text: guardReason(g, lang) ?? t("mobilenet.autoDone", "Back to automatic selection") });
         return true;
       }
       return false;
@@ -347,7 +351,7 @@ export default function MobileNetworkPage() {
   const shownOps: ModemScanOperator[] | null =
     operators ??
     (agentScan?.state === "done" && !scanOp.busy && (agentScan.finished_at ?? 0) !== clearedScanAt
-      ? agentScan.operators.map((o) => ({ m_mcc_mnc: o.plmn, m_oper_name: o.name, m_rat: o.rat, m_status: o.status }))
+      ? agentScan.operators.map((o) => ({ m_mcc_mnc: o.plmn, m_oper_name: pick(o.name, o.operator_en, lang), m_rat: o.rat, m_status: o.status }))
       : null);
   const locked = !data || md.stale || radioBusy;
   const airLocked = !status || ms.stale || radioBusy;
@@ -381,7 +385,7 @@ export default function MobileNetworkPage() {
   if (!data && !status && (md.error || ms.error)) {
     tone = "bad";
     state = t("mobilenet.unreadable", "Can't read the mobile connection");
-    reason = (md.error ?? ms.error)?.message;
+    reason = errorText(md.error ?? ms.error, lang);
   } else if (airplaneOn) {
     tone = "bad";
     state = t("mobilenet.stAirplane", "Airplane mode on");
@@ -540,7 +544,7 @@ export default function MobileNetworkPage() {
           )}
           {!data && md.error && (
             <p role="alert" className="nd-aux mt-1 px-1 text-nd-badT">
-              {t("mobilenet.dataErr", "Couldn't read mobile data settings: {{e}}", { e: md.error.message ?? "" })}
+              {t("mobilenet.dataErr", "Couldn't read mobile data settings: {{e}}", { e: errorText(md.error, lang) })}
             </p>
           )}
           <div className="mt-2 grid gap-1 px-1">
@@ -572,7 +576,7 @@ export default function MobileNetworkPage() {
           </Group>
           {!status && ms.error && (
             <p role="alert" className="nd-aux mt-1 px-1 text-nd-badT">
-              {t("mobilenet.statusErr", "Couldn't read the radio state: {{e}}", { e: ms.error.message ?? "" })}
+              {t("mobilenet.statusErr", "Couldn't read the radio state: {{e}}", { e: errorText(ms.error, lang) })}
             </p>
           )}
           <div className="mt-2 grid gap-1 px-1">

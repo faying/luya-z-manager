@@ -1,12 +1,14 @@
 "use client";
 import { useTranslation } from "react-i18next";
 import type { UseWriteOp } from "@/lib/api/writeOp";
+import { pick, useLang } from "@/lib/i18n/pick";
 import { Button } from "./Button";
 import { StatusMark } from "./StatusMark";
 
 /** Inline result of one write op (the design's write lifecycle, §5.1). */
 export function OpResult({ op }: { op: UseWriteOp }) {
   const { t } = useTranslation();
+  const lang = useLang();
   switch (op.phase) {
     case "submitting":
     case "verifying":
@@ -51,7 +53,7 @@ export function OpResult({ op }: { op: UseWriteOp }) {
           <StatusMark tone="bad">
             {op.errorKind === "mismatch"
               ? t("nd.mismatch", "Not applied: the device still shows the old value")
-              : t("nd.failed", "Not applied: {{e}}", { e: op.error ?? "" })}
+              : t("nd.failed", "Not applied: {{e}}", { e: pick(op.error, op.errorEn, lang) })}
           </StatusMark>
         </p>
       );

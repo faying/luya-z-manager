@@ -111,6 +111,8 @@ export interface ScenarioState {
   last_scan: number;
   last_error: string | null;
   config: ScenarioConfig;
+  /** id → English name of each built-in scenario the user has not renamed (show `name` for the rest). */
+  names_en?: Record<string, string>;
   /** Home MCC from the SIM IMSI (ubus zwrt_zte_mdm.api get_sim_info); null when not ready. */
   sim_mcc: string | null;
   pending_restore: ScenarioPendingRestore[]; // page expects optional

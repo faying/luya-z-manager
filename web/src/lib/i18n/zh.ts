@@ -357,6 +357,7 @@ export const zh = {
   },
 
   wifi: {
+    regionCN: "中国 (CN)",
     title: "Wi-Fi 设置",
     desc: "配置 2.4 GHz 和 5 GHz 无线电。",
     applied: "Wi-Fi 设置已应用 —— Wi-Fi 将短暂重启。",

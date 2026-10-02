@@ -510,6 +510,91 @@ const GEO_CODES: [&str; 23] = [
     "NZ", "IN", "AE", "RU",
 ];
 
+/// Every code in [`iso_names`], for going from a Chinese name back to English.
+const ISO_ALL: &[&str] = &[
+    "GR", "NL", "BE", "FR", "ES", "IT", "CH", "AT", "GB", "DK", "SE", "NO", "FI", "RU", "DE", "PT", "IE", "TR", "CA",
+    "US", "MX", "IN", "SA", "AE", "IL", "QA", "JP", "KR", "VN", "HK", "MO", "KH", "LA", "CN", "TW", "MY", "AU", "ID",
+    "PH", "TH", "SG", "NZ", "ZA", "AR", "BR", "CL", "CO",
+];
+
+/// English for one Chinese place word a lookup service sent: country names
+/// (and the short 台湾/香港/澳门 the mainland services write after 中国).
+/// Provinces and cities have no table: None, and the English drops them.
+fn place_en(w: &str) -> Option<&'static str> {
+    match w {
+        "台湾" => return Some("Taiwan"),
+        "香港" => return Some("Hong Kong"),
+        "澳门" => return Some("Macau"),
+        _ => {}
+    }
+    ISO_ALL.iter().filter_map(|c| iso_names(c)).find(|(zh, _)| *zh == w).map(|(_, en)| en)
+}
+
+/// `geo_en`: the place in English, from the joined `geo`. Runs of ASCII words
+/// (what an English-speaking service sent: "Taipei City") stay together;
+/// Chinese words become a country name or are dropped. "日本 东京都" → "Japan",
+/// "中国台湾 Taipei City" → "Taiwan, Taipei City". Empty when nothing is left.
+fn geo_en(geo: &str) -> String {
+    let mut segs: Vec<String> = Vec::new();
+    let mut cur: Vec<&str> = Vec::new();
+    let flush = |cur: &mut Vec<&str>, segs: &mut Vec<String>| {
+        if !cur.is_empty() {
+            segs.push(cur.join(" "));
+            cur.clear();
+        }
+    };
+    for w in geo.split_whitespace() {
+        if w.is_ascii() {
+            cur.push(w);
+        } else {
+            flush(&mut cur, &mut segs);
+            if let Some(en) = place_en(w) {
+                segs.push(en.to_string());
+            }
+        }
+    }
+    flush(&mut cur, &mut segs);
+    // "中国 台湾 台北" says Taiwan; China in front of it adds nothing
+    if segs.iter().any(|s| matches!(s.as_str(), "Taiwan" | "Hong Kong" | "Macau")) {
+        segs.retain(|s| s != "China");
+    }
+    let mut out: Vec<String> = Vec::new();
+    for s in segs {
+        // "Taiwan" then "Taiwan Taipei" (region + city from an English service)
+        let s = match out.last() {
+            Some(l) if s.len() > l.len() && s.starts_with(l.as_str()) && s.as_bytes()[l.len()] == b' ' => {
+                s[l.len() + 1..].to_string()
+            }
+            _ => s,
+        };
+        if out.last().is_some_and(|l| l.eq_ignore_ascii_case(&s) || l.contains(s.as_str())) {
+            continue;
+        }
+        out.push(s);
+    }
+    out.join(", ")
+}
+
+/// `isp_en`: an ASCII name as it is; the mainland carriers' short names in
+/// English (glossary §8); anything else empty, so clients show `isp`.
+fn isp_en(isp: &str) -> String {
+    if isp.is_ascii() {
+        return isp.to_string();
+    }
+    let short = isp.strip_prefix("中国").unwrap_or(isp);
+    match short {
+        "电信" => "China Telecom",
+        "联通" => "China Unicom",
+        "移动" => "China Mobile",
+        "广电" => "China Broadnet",
+        _ => match operator_en(isp) {
+            en if en.is_ascii() => en,
+            _ => "",
+        },
+    }
+    .to_string()
+}
+
 /// ISO code → name, for lookup services that only give the code.
 fn country_by_code(code: &str) -> Option<&'static str> {
     GEO_CODES.contains(&code).then(|| iso_names(code)).flatten().map(|c| c.0)
@@ -1497,7 +1582,9 @@ impl Lookup {
         json!({
             "ip": s(&self.geo.ip),
             "geo": s(&self.geo.geo),
+            "geo_en": s(&geo_en(&self.geo.geo)),
             "isp": s(&self.geo.isp),
+            "isp_en": s(&isp_en(&self.geo.isp)),
             "node": self.node,
             "source": s(&self.source),
             "fetched_at": self.fetched_at,
@@ -2342,6 +2429,37 @@ mod tests {
         let g = parse_geo(r#"{"ip":"1.1.1.1","city":"Tokyo","region":"Tokyo","country":"JP","country_name":"Japan","org":"AS13335 CLOUDFLARENET"}"#).unwrap();
         assert!(g.geo.starts_with("日本"), "{}", g.geo);
         assert_eq!(g.isp, "CLOUDFLARENET");
+    }
+
+    #[test]
+    fn geo_and_isp_in_english() {
+        for (zh, en) in [
+            ("日本 东京都", "Japan"),
+            ("中国 台湾 台北", "Taiwan"),
+            ("中国台湾 Taipei City", "Taiwan, Taipei City"),
+            ("中国台湾 Taiwan Taipei", "Taiwan, Taipei"),
+            ("中国 广东 深圳", "China"),
+            ("中国香港", "Hong Kong"),
+            ("美国 加利福尼亚州 洛杉矶", "United States"),
+            ("广东 深圳", ""),
+            ("", ""),
+        ] {
+            assert_eq!(geo_en(zh), en, "{zh}");
+        }
+        for (zh, en) in [("电信", "China Telecom"), ("中国联通", "China Unicom"), ("移动", "China Mobile"), ("KDDI", "KDDI"), ("台湾大哥大", "Taiwan Mobile"), ("某某宽带", "")] {
+            assert_eq!(isp_en(zh), en, "{zh}");
+        }
+        // every country the MCC table knows can be named back in English
+        for mcc in 200..=999u16 {
+            if let Some(iso) = mcc_iso(mcc) {
+                let (zh, en) = iso_names(iso).unwrap();
+                assert_eq!(place_en(zh), Some(en), "{iso}");
+            }
+        }
+        let j = Lookup { geo: Geo { ip: "1.2.3.4".into(), geo: "日本 东京都".into(), isp: "电信".into() }, ..Lookup::default() }.json();
+        assert_eq!((j["geo_en"].as_str(), j["isp_en"].as_str()), (Some("Japan"), Some("China Telecom")));
+        let j = Lookup { geo: Geo { ip: "1.2.3.4".into(), geo: "广东 深圳".into(), isp: "某某宽带".into() }, ..Lookup::default() }.json();
+        assert!(j["geo_en"].is_null() && j["isp_en"].is_null());
     }
 
     #[test]

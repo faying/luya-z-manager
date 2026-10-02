@@ -17,6 +17,8 @@ import { useWriteOp } from "@/lib/api/writeOp";
 import { fmtDevice } from "@/lib/deviceClock";
 import type { Health, HealthCheck, HealthCrashLog, HealthCrashLogText } from "@/lib/api/schemas/system";
 import { healthRows } from "@/lib/health";
+import { errorText } from "@/lib/api/types";
+import { useLang } from "@/lib/i18n/pick";
 import {
   Button,
   ConfirmInline,
@@ -34,6 +36,7 @@ type LogText = { state: "loading" } | { state: "error" } | { state: "ok"; text: 
 
 export default function HealthPage() {
   const { t } = useTranslation();
+  const lang = useLang();
   const health = useApi<Health>("/api/health", { refreshInterval: 60000 });
   const data = health.data;
 
@@ -100,7 +103,7 @@ export default function HealthPage() {
   if (!data && health.error) {
     tone = "bad";
     state = t("health.unreadable", "Can't read the device check");
-    reason = health.error.message;
+    reason = errorText(health.error, lang);
   } else if (data) {
     if (data.error) {
       tone = "warn";
@@ -219,7 +222,7 @@ export default function HealthPage() {
                 </span>
               </div>
             ) : (
-              healthRows(data.checks).map((c) => (
+              healthRows(data.checks, lang).map((c) => (
                 <div key={c.id} className="nd-row nd-row--two items-start">
                   <span className="nd-row__text">
                     <span className="nd-row__label">{c.label}</span>

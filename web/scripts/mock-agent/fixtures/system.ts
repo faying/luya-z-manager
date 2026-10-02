@@ -223,8 +223,29 @@ function smsBlock(): AlertsSms {
     abroad_now: smsCfg.abroadNow,
     processed: smsCfg.processed,
     sent_24h: SMS_LOG.filter((r) => r.result === "sent" && (!clockOk || r.time > now - 86_400)).length,
-    recent: clone(SMS_LOG.slice(-10).reverse()),
+    recent: clone(SMS_LOG.slice(-10).reverse()).map((r) => ({ ...r, ...kindLabels(r.kind) })),
   } satisfies AlertsSms;
+}
+
+/** alerts.rs kind_label / kind_label_en: the agent words every kind, in both languages. */
+const KIND_LABELS: Record<string, [string, string]> = {
+  "agent-crash": ["管理后台意外退出，已自动重启", "Admin backend (zte-agent) exited unexpectedly"],
+  "agent-silent": ["管理后台失去响应", "Admin backend (zte-agent) stopped responding"],
+  "agent-hung": ["管理后台卡死，已被强制重启", "Admin backend was stuck and was restarted"],
+  "datad-crash": ["数据服务意外退出，已自动重启", "Data service (zwrt-datad) exited unexpectedly"],
+  "devui-crash": ["触屏界面闪退，已自动重新打开", "Screen UI exited unexpectedly"],
+  "devui-gave-up": ["触屏界面反复打不开，已换回原厂界面（长按屏幕右下角 3 秒重试）", "Screen UI kept failing; stock UI is on screen (hold the bottom-right corner 3 s to retry)"],
+  "devui-theme-paused": ["自动切换深浅色已暂停，重启后恢复", "Automatic light/dark switching on the screen paused until reboot"],
+  "wifi-takeover": ["Wi-Fi 看门狗重新打开了 Wi-Fi", "Wi-Fi watchdog turned Wi-Fi back on"],
+  "wifi-restore-failed": ["Wi-Fi 看门狗没能打开 Wi-Fi", "Wi-Fi watchdog could not turn Wi-Fi on"],
+  "sms-failed": ["告警短信发送失败", "Alert SMS could not be sent"],
+  "sms-test": ["测试短信", "Test SMS"],
+  "datad-degraded": ["数据服务持续没响应，后台改为直接读取", "Data service (zwrt-datad) not answering; admin backend reads the modem directly"],
+};
+
+function kindLabels(kind: string): { label: string; label_en: string } {
+  const [label, label_en] = KIND_LABELS[kind] ?? [`其他告警（${kind}）`, `Other alert (${kind})`];
+  return { label, label_en };
 }
 
 function alertsSummary(): AlertsData {
@@ -236,6 +257,7 @@ function alertsSummary(): AlertsData {
       time: e.time !== null && e.time >= CLOCK_SANE_AFTER ? e.time : null,
       uptime: e.uptime,
       kind: e.kind,
+      ...kindLabels(e.kind),
       text: e.text,
       unread: e.seq > read,
     }));
@@ -295,28 +317,37 @@ function doctorChecks(now: number): HealthCheck[] {
   const clock = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
   const unread = alertsSummary().unread;
   const recentCrashes = CRASH_FILES.filter((c) => c.time > now - 86_400).length;
-  const c = (level: HealthCheck["level"], id: string, label: string, detail: string): HealthCheck => ({ level, id, label, detail });
+  // doctor.sh --tsv2: Chinese and English of each row (touch-ui scripts/doctor.sh `report`).
+  const c = (level: HealthCheck["level"], id: string, label: string, detail: string, label_en: string, detail_en: string): HealthCheck => ({
+    level, id, label, detail, label_en, detail_en,
+  });
   return [
-    c("ok", "boot-sync", "开机同步", "sync success"),
-    c("ok", "fota", "ZTE 自动升级", "已关闭"),
-    c("ok", "whiteout", "开机链接", "开机同步名单里的服务没有被屏蔽"),
-    c("ok", "clock", "时钟", `已对时（${clock} 设备当地时间）`),
-    c("ok", "svc-zte-agent", "高级后台", "procd 监督中"),
-    c("ok", "svc-zwrt-datad", "数据服务", "procd 监督中"),
-    c("ok", "svc-u60-guard", "Wi-Fi 兜底看门狗", "procd 监督中"),
-    c("ok", "svc-u60-uid", "屏幕守护进程", "procd 监督中"),
-    c("ok", "agent-http", "管理网页 :9090", "能访问"),
-    c("ok", "datad-http", "数据服务 :9460", "能访问"),
-    c("ok", "heartbeat", "后台心跳", "4 秒前"),
-    shared.wifiOn ? c("ok", "wifi", "Wi-Fi", "在广播") : c("warn", "wifi", "Wi-Fi", "没有在广播（在家情景下正常）"),
-    c("ok", "screen", "触屏界面", "运行中"),
-    unread > 0 ? c("warn", "alerts", "告警", `${unread} 条未读（管理网页「系统 → 告警」）`) : c("ok", "alerts", "告警", "没有未读"),
-    smsBlock().configured ? c("ok", "sms", "短信告警", "已配置") : c("warn", "sms", "短信告警", "没配置号码：后台挂了你不会知道"),
+    c("ok", "boot-sync", "开机同步", "sync success", "Boot sync", "All stock services registered (sync success)"),
+    c("ok", "fota", "ZTE 自动升级", "已关闭", "ZTE auto-update", "Off"),
+    c("ok", "whiteout", "开机链接", "开机同步名单里的服务没有被屏蔽", "Boot links", "No boot-sync service is masked"),
+    c("ok", "clock", "时钟", `已对时（${clock} 设备当地时间）`, "Clock", `Synced (${clock} device local time)`),
+    c("ok", "svc-zte-agent", "高级后台", "procd 监督中", "Admin backend", "Supervised by procd"),
+    c("ok", "svc-zwrt-datad", "数据服务", "procd 监督中", "Data service", "Supervised by procd"),
+    c("ok", "svc-u60-guard", "Wi-Fi 兜底看门狗", "procd 监督中", "Wi-Fi watchdog", "Supervised by procd"),
+    c("ok", "svc-u60-uid", "屏幕守护进程", "procd 监督中", "Screen supervisor", "Supervised by procd"),
+    c("ok", "agent-http", "管理网页 :9090", "能访问", "Web admin :9090", "Reachable"),
+    c("ok", "datad-http", "数据服务 :9460", "能访问", "Data service :9460", "Reachable"),
+    c("ok", "heartbeat", "后台心跳", "4 秒前", "Admin heartbeat", "4 s ago"),
+    shared.wifiOn
+      ? c("ok", "wifi", "Wi-Fi", "在广播", "Wi-Fi", "Broadcasting")
+      : c("warn", "wifi", "Wi-Fi", "没有在广播，当前情景也没要求关", "Wi-Fi", "Not broadcasting, and the current scenario doesn't turn it off"),
+    c("ok", "screen", "触屏界面", "运行中", "Screen UI", "Running"),
+    unread > 0
+      ? c("warn", "alerts", "告警", `${unread} 条未读（管理网页「系统 → 告警」）`, "Alerts", `${unread} unread (Alerts in web admin)`)
+      : c("ok", "alerts", "告警", "没有未读", "Alerts", "None unread"),
+    smsBlock().configured
+      ? c("ok", "sms", "短信告警", "已配置", "Alert SMS", "Set up")
+      : c("warn", "sms", "短信告警", "没配置号码：后台挂了你不会知道", "Alert SMS", "No number set: you won't hear if the admin backend dies"),
     recentCrashes > 0
-      ? c("warn", "crashes", "崩溃记录", `最近 24 小时 ${recentCrashes} 份（/data/crashlog）`)
-      : c("ok", "crashes", "崩溃记录", "最近 24 小时没有"),
-    c("ok", "disk", "/data 空间", "剩 1843 MB"),
-    c("ok", "standby", "待机", "正常（蜂窝每分钟 3 个包）"),
+      ? c("warn", "crashes", "崩溃记录", `最近 24 小时 ${recentCrashes} 份（/data/crashlog）`, "Crash logs", `${recentCrashes} in the last 24h (/data/crashlog)`)
+      : c("ok", "crashes", "崩溃记录", "最近 24 小时没有", "Crash logs", "None in the last 24h"),
+    c("ok", "disk", "/data 空间", "剩 1843 MB", "/data space", "1843 MB free"),
+    c("ok", "standby", "待机", "正常（蜂窝每分钟 3 个包）", "Standby", "Normal (3 cellular packets a minute)"),
   ];
 }
 

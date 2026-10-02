@@ -20,7 +20,9 @@ import { mutate as globalMutate } from "swr";
 import { useApi } from "@/lib/hooks/useApi";
 import { apiFetch } from "@/lib/api/client";
 import { useWriteOp } from "@/lib/api/writeOp";
-import { ALERTS_PATH, eventTime, kindLabel, smsResultLabel } from "@/lib/alerts";
+import { ALERTS_PATH, alertLabel, eventTime, smsResultLabel } from "@/lib/alerts";
+import { errorText } from "@/lib/api/types";
+import { useLang } from "@/lib/i18n/pick";
 import type { AlertsData } from "@/lib/api/schemas/system";
 import {
   Button,
@@ -65,6 +67,7 @@ function Skeleton({ rows = 3, width = "18ch" }: { rows?: number; width?: string 
 
 export default function AlertsPage() {
   const { t } = useTranslation();
+  const lang = useLang();
   const alerts = useApi<AlertsData>(ALERTS_PATH, { refreshInterval: 30000 });
   const data = alerts.data;
   const sms = data?.sms;
@@ -165,12 +168,12 @@ export default function AlertsPage() {
   if (!data && alerts.error) {
     tone = "bad";
     state = t("alerts.unreadable", "Can't read alerts");
-    reason = alerts.error.message;
+    reason = errorText(alerts.error, lang);
   } else if (data) {
     if (data.unread > 0) {
       tone = "warn";
       state = t("alerts.bannerCount", "{{n}} new alert(s)", { n: data.unread });
-      reason = data.events[0] ? kindLabel(t, data.events[0].kind) : null;
+      reason = data.events[0] ? alertLabel(data.events[0], lang) : null;
     } else if (data.events.length === 0) {
       tone = "ok";
       state = t("alerts.noneState", "No alerts");
@@ -251,7 +254,7 @@ export default function AlertsPage() {
                           <span className="sr-only">{t("alerts.unread", "unread")}: </span>
                         </span>
                       )}
-                      {kindLabel(t, e.kind)}
+                      {alertLabel(e, lang)}
                     </span>
                     {e.text && <span className="nd-row__sub block break-words">{e.text}</span>}
                   </span>
@@ -403,7 +406,7 @@ export default function AlertsPage() {
                 {sms.recent.map((r) => (
                   <li key={`${r.seq}-${r.time}-${r.result}`} className="nd-row nd-row--two items-start">
                     <span className="nd-row__text">
-                      <span className="block">{kindLabel(t, r.kind)}</span>
+                      <span className="block">{alertLabel(r, lang, data?.events)}</span>
                       <span className="nd-row__sub block nd-mono">
                         {/* Before 2024-01-01 the clock was not set; this log has no uptime to fall back on. */}
                         {r.time >= 1704067200 ? eventTime(t, { time: r.time, uptime: 0 }) : "—"}

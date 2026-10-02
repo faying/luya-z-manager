@@ -27,6 +27,7 @@ import { useMedia } from "@/lib/useMedia";
 import { carrierSummary, rsrpWord, sinrWord, type T } from "@/lib/signalWords";
 import { SignalStatus } from "@/components/signal/SignalStatus";
 import { useDeviceLabel } from "@/lib/publicStatus";
+import { pick, useLang } from "@/lib/i18n/pick";
 
 interface WifiStatus {
   wifi_onoff?: string;
@@ -214,6 +215,7 @@ function CountButton({ href, icon: I, n, label }: { href: string; icon: Icon; n:
 
 function ScenarioModule({ pub, stale }: { pub: PublicStatus | undefined; stale: boolean }) {
   const { t } = useTranslation();
+  const lang = useLang();
   const sc = pub?.scenario;
   const hm = pub?.services?.home_mode;
   return (
@@ -225,7 +227,7 @@ function ScenarioModule({ pub, stale }: { pub: PublicStatus | undefined; stale: 
       ) : (
         <>
           <p className="nd-body">
-            {sc.name || sc.current || "—"}
+            {pick(sc.name, sc.name_en, lang) || sc.current || "—"}
             {sc.pin && <span className="nd-aux"> · {t("home.pinned", "pinned")}</span>}
             {!sc.enabled && <span className="nd-aux"> · {t("home.engineOff", "engine off")}</span>}
           </p>
@@ -282,20 +284,25 @@ function TailscaleModule({ ts }: { ts: UseApiResponse<TailscaleStatus> }) {
 // Two exits when the proxy runs and they differ, one otherwise (design D1).
 function NetIdentityGroup({ ni, stale }: { ni: NetInfo | undefined; stale: boolean }) {
   const { t } = useTranslation();
+  const lang = useLang();
   const d = ni?.direct ?? null;
   const p = ni?.proxy ?? null;
   const two = !!p && p.ip !== d?.ip;
   const exitSub = (e: NetInfoExit | null, extra: (string | null | undefined)[]) => {
     if (!e) return ni ? t("home.lookingUp", "Looking up…") : undefined;
-    if (!e.ip && e.error) return t("home.lookupFailed", "Lookup failed: {{e}}", { e: e.error });
-    const parts = [e.geo, ...extra].filter(Boolean).join(" · ");
+    if (!e.ip && e.error) return t("home.lookupFailed", "Lookup failed: {{e}}", { e: pick(e.error, e.error_en, lang) });
+    const parts = [pick(e.geo, e.geo_en, lang), ...extra].filter(Boolean).join(" · ");
     return e.error ? `${parts}${parts ? " · " : ""}${t("home.lookupStale", "refresh failed")}` : parts || undefined;
   };
+  const opName = (o: NetInfoOperator | null | undefined) => pick(o?.name, o?.operator_en, lang);
   const op = (o: NetInfoOperator | null | undefined) => {
     if (!o || (!o.name && !o.mcc)) return "—";
     const plmn = o.mcc && o.mnc ? `${o.mcc}${o.mnc}` : "";
-    const where = o.country && o.country !== "中国" ? `（${o.country}）` : " ";
-    return `${o.name ?? "?"}${where}${plmn}`.trim();
+    // An agent from before 2026-10-01 sends no country_iso: then the Chinese name says it.
+    const abroad = o.country_iso ? o.country_iso !== "CN" : !!o.country && o.country !== "中国";
+    const country = pick(o.country, o.country_en, lang);
+    const where = abroad && country ? (lang === "en" ? ` (${country}) ` : `（${country}）`) : " ";
+    return `${opName(o) || "?"}${where}${plmn}`.trim();
   };
   return (
     <Group title={t("home.netId", "Network identity")} stale={stale}>
@@ -303,7 +310,7 @@ function NetIdentityGroup({ ni, stale }: { ni: NetInfo | undefined; stale: boole
         label={two ? t("home.exitCell", "Cellular exit") : t("home.exitIp", "Public IP")}
         value={d?.ip ?? "—"}
         mono
-        sub={exitSub(d, [d?.isp])}
+        sub={exitSub(d, [d && pick(d.isp, d.isp_en, lang)])}
       />
       <Row label={t("home.simOperator", "SIM operator")} value={op(ni?.home_operator)} />
       <Row
@@ -318,7 +325,7 @@ function NetIdentityGroup({ ni, stale }: { ni: NetInfo | undefined; stale: boole
         }
         sub={
           differsFromHome(ni?.serving_operator, ni?.home_operator)
-            ? t("home.simIs", "SIM: {{name}}", { name: ni?.home_operator?.name ?? op(ni?.home_operator) })
+            ? t("home.simIs", "SIM: {{name}}", { name: opName(ni?.home_operator) || op(ni?.home_operator) })
             : undefined
         }
         href="/router/mobile-network"

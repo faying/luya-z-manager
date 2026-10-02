@@ -83,6 +83,17 @@ interface PendingRestore {
 
 const ARRIVED = BOOT - (1 * 86400 + 6 * 3600 + 23 * 60); // arrived in Taipei ~30 h ago
 
+/** scenario.rs names_en: English only for a built-in scenario still under its factory name. */
+const BUILTIN_EN: Record<string, [string, string]> = { home: ["在家", "Home"], away: ["外出", "Away"], abroad: ["国外", "Abroad"] };
+function namesEn(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const s of config.scenarios) {
+    const b = BUILTIN_EN[s.id];
+    if (b && s.name === b[0]) out[s.id] = b[1];
+  }
+  return out;
+}
+
 let config: ScenarioConfig = (() => {
   const c = template();
   const home = c.scenarios.find((s) => s.id === "home");
@@ -175,6 +186,7 @@ function stateJson(ctx?: Ctx): ScenarioState {
     last_scan: run.last_scan,
     last_error: run.last_error,
     config: clone(config),
+    names_en: namesEn(),
     sim_mcc: SIM_MCC,
     pending_restore: pending.map((p) => ({
       key: p.key,

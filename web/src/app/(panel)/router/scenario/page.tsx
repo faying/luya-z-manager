@@ -37,6 +37,7 @@ import type {
   ScenarioSsidEntry,
   ScenarioState,
 } from "@/lib/api/schemas/scenario";
+import { pick, useLang } from "@/lib/i18n/pick";
 import {
   Button,
   ConfirmDialog,
@@ -125,6 +126,7 @@ const PARAM_KEYS: (keyof ScenarioParams)[] = [
 
 export default function ScenarioPage() {
   const { t } = useTranslation();
+  const lang = useLang();
   const sc = useApi<ScenarioState>("/api/scenario", { refreshInterval: 10000 });
   const log = useApi<ScenarioLog>("/api/scenario/log", { refreshInterval: 15000 });
 
@@ -133,7 +135,13 @@ export default function ScenarioPage() {
   const configured = (cfg?.scenarios.length ?? 0) > 0;
   const home = cfg?.scenarios.find((s) => s.id === HOME_ID);
   const entries = useMemo(() => entriesOf(home), [home]);
-  const nameOf = (id: string) => cfg?.scenarios.find((s) => s.id === id)?.name ?? id;
+  // Shown names only: the config sent back keeps `name` as the agent gave it,
+  // or saving in English would rename the built-in scenarios (L2 review R6).
+  const nm = (s: { id: string; name: string }) => pick(s.name, data?.names_en?.[s.id], lang);
+  const nameOf = (id: string) => {
+    const s = cfg?.scenarios.find((x) => x.id === id);
+    return s ? nm(s) : id;
+  };
 
   // ── one write op for every change on this page (they never overlap) ──
   const [pending, setPending] = useState<Pending | null>(null);
@@ -304,14 +312,14 @@ export default function ScenarioPage() {
     // itself later: a Wi-Fi switch in effect (§3.1: tier 2, tier 3 remote).
     const tier = !on && isRemoteAccess() ? 3 : 2;
     const consequence = on
-      ? t("scenario.wifiOnConsequence", "On entering “{{name}}” the device switches its Wi-Fi on. Nothing changes right now.", { name: s.name })
-      : t("scenario.wifiOffConsequence", "On entering “{{name}}” the device switches its own Wi-Fi off; everything connected to it drops off. Nothing changes right now.", { name: s.name });
+      ? t("scenario.wifiOnConsequence", "On entering “{{name}}” the device switches its Wi-Fi on. Nothing changes right now.", { name: nm(s) })
+      : t("scenario.wifiOffConsequence", "On entering “{{name}}” the device switches its own Wi-Fi off; everything connected to it drops off. Nothing changes right now.", { name: nm(s) });
     ask({
       section: "does",
       tier,
       action: on
-        ? t("scenario.wifiOnAction", "Wi-Fi on in “{{name}}”", { name: s.name })
-        : t("scenario.wifiOffAction", "Wi-Fi off in “{{name}}”", { name: s.name }),
+        ? t("scenario.wifiOnAction", "Wi-Fi on in “{{name}}”", { name: nm(s) })
+        : t("scenario.wifiOffAction", "Wi-Fi off in “{{name}}”", { name: nm(s) }),
       consequence,
       steps: [step],
       check: (st) => {
@@ -319,8 +327,8 @@ export default function ScenarioPage() {
         return !!x && (wifiOf(x) !== false) === on;
       },
       dialog: {
-        title: t("scenario.wifiOffTitle", "Switch Wi-Fi off in “{{name}}”?", { name: s.name }),
-        downtime: t("scenario.wifiOffDowntime", "From the moment the device enters “{{name}}” until it leaves it.", { name: s.name }),
+        title: t("scenario.wifiOffTitle", "Switch Wi-Fi off in “{{name}}”?", { name: nm(s) }),
+        downtime: t("scenario.wifiOffDowntime", "From the moment the device enters “{{name}}” until it leaves it.", { name: nm(s) }),
         recovery: t("scenario.wifiOffRecovery", "Turn this switch back on, or turn the engine off (it puts Wi-Fi back on). Over Tailscale the page stays reachable through the mobile connection."),
       },
     });
@@ -545,7 +553,7 @@ export default function ScenarioPage() {
                       onChange={(v) => askPin(v === AUTO ? null : v)}
                       options={[
                         { id: AUTO, label: t("scenario.autoOption", "Auto") },
-                        ...(cfg?.scenarios ?? []).map((s) => ({ id: s.id, label: s.name })),
+                        ...(cfg?.scenarios ?? []).map((s) => ({ id: s.id, label: nm(s) })),
                       ]}
                     />
                   </div>
@@ -716,7 +724,7 @@ export default function ScenarioPage() {
                     <div key={s.id} className="nd-list">
                       <div className="nd-row">
                         <span className="nd-row__text">
-                          <span className="nd-row__label">{s.name}</span>
+                          <span className="nd-row__label">{nm(s)}</span>
                         </span>
                       </div>
                       <Row
@@ -726,7 +734,7 @@ export default function ScenarioPage() {
                           fallback ? undefined : (
                             <span {...trig("does")}>
                               <Switch
-                                label={t("scenario.wifiFor", "Wi-Fi in {{name}}", { name: s.name })}
+                                label={t("scenario.wifiFor", "Wi-Fi in {{name}}", { name: nm(s) })}
                                 isSelected={wifi !== false}
                                 isDisabled={locked}
                                 onChange={(on) => askWifi(s, on)}

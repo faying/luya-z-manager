@@ -116,6 +116,9 @@ export interface HealthCheck {
   id: string;
   label: string;
   detail: string;
+  /** doctor.sh --tsv2's English; null from an older doctor (show the Chinese). */
+  label_en?: string | null;
+  detail_en?: string | null;
 }
 
 /** One crash log — health.rs:173-176. Newest first. */

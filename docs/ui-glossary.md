@@ -70,7 +70,7 @@
 | only2g / only3g | 只有 2G / 只有 3G | 2G only / 3G only | 90 | warn |
 | nosim | 无 SIM | No SIM | 82 | bad |
 | airplane | 移动网络已关 | Airplane | 99 | 中性 |
-| （读取中） | 读取中 | Loading | 91 | 中性 |
+| （读取中） | 读取中… | Loading… | 91 + … | 中性 |
 | （datad 掉线，触屏自己写） | 读不到数据 | No update | 119 | 中性 |
 
 ## 5. 首页提示行（13 号，≤2 行，按 ≤540px 算）

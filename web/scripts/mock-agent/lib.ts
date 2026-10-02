@@ -49,6 +49,8 @@ export interface Reply {
   data?: unknown;
   /** When set, envelope is {ok:false,error}. */
   error?: string;
+  /** The agent's English for `error` (sent as error_en; netinfo.rs words its errors in both). */
+  errorEn?: string;
   /** Send this value as the whole JSON body, no envelope (rare). */
   raw?: unknown;
   /** Delay the reply this many ms before sending. */
@@ -76,8 +78,8 @@ export function ok(data?: unknown): Reply {
   return { data };
 }
 
-export function fail(error: string, status = 500): Reply {
-  return { status, error };
+export function fail(error: string, status = 500, errorEn?: string): Reply {
+  return errorEn ? { status, error, errorEn } : { status, error };
 }
 
 /**

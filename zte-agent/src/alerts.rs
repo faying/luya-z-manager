@@ -242,7 +242,12 @@ impl Alerts {
             .iter()
             .rev()
             .take(SMS_LOG_SHOWN)
-            .map(|r| json!({"time": r.wall, "seq": r.seq, "kind": r.kind, "result": r.result}))
+            .map(|r| {
+                json!({
+                    "time": r.wall, "seq": r.seq, "kind": r.kind, "result": r.result,
+                    "label": kind_label(&r.kind), "label_en": kind_label_en(&r.kind),
+                })
+            })
             .collect();
 
         json!({
@@ -266,8 +271,8 @@ impl Alerts {
 }
 
 /// What each kind means, as the touch screen words it (moved from touch-ui
-/// alerts.c, 2026-09-26). The admin web has its own translated labels
-/// (web/src/lib/alerts.ts kindLabel), longer and in two languages.
+/// alerts.c, 2026-09-26). The admin web shows these too (with
+/// [`kind_label_en`]); it no longer keeps its own copy (L2 review R8).
 pub fn kind_label(kind: &str) -> String {
     const T: &[(&str, &str)] = &[
         ("agent-crash", "管理后台意外退出，已自动重启"),
@@ -275,7 +280,7 @@ pub fn kind_label(kind: &str) -> String {
         ("agent-hung", "管理后台卡死，已被强制重启"),
         ("datad-crash", "数据服务意外退出，已自动重启"),
         ("devui-crash", "触屏界面闪退，已自动重新打开"),
-        ("devui-gave-up", "触屏界面反复打不开，已换回原厂界面"),
+        ("devui-gave-up", "触屏界面反复打不开，已换回原厂界面（长按屏幕右下角 3 秒重试）"),
         ("devui-theme-paused", "自动切换深浅色已暂停，重启后恢复"),
         ("wifi-takeover", "Wi-Fi 看门狗重新打开了 Wi-Fi"),
         ("wifi-restore-failed", "Wi-Fi 看门狗没能打开 Wi-Fi"),
@@ -301,7 +306,7 @@ pub fn kind_label_en(kind: &str) -> String {
         ("devui-crash", "Screen UI exited unexpectedly"),
         (
             "devui-gave-up",
-            "Screen UI kept failing; stock UI is on screen (long-press the bottom-right corner to retry)",
+            "Screen UI kept failing; stock UI is on screen (hold the bottom-right corner 3 s to retry)",
         ),
         ("devui-theme-paused", "Automatic light/dark switching on the screen paused until reboot"),
         ("wifi-takeover", "Wi-Fi watchdog turned Wi-Fi back on"),
@@ -422,7 +427,7 @@ mod tests {
     fn kind_labels_as_the_screen_had_them() {
         use super::kind_label;
         assert_eq!(kind_label("agent-crash"), "管理后台意外退出，已自动重启");
-        assert_eq!(kind_label("devui-gave-up"), "触屏界面反复打不开，已换回原厂界面");
+        assert_eq!(kind_label("devui-gave-up"), "触屏界面反复打不开，已换回原厂界面（长按屏幕右下角 3 秒重试）");
         assert_eq!(kind_label("sms-test"), "测试短信");
         // the screen used to fall back to the raw kind for this one
         assert_eq!(kind_label("datad-degraded"), "数据服务持续没响应，后台改为直接读取");
@@ -464,6 +469,8 @@ mod tests {
         }
         fs::write(a.path("queue"), q).unwrap();
         a.write_whole("sms-to", "+12345678901234567890\n").unwrap();
+        let sms: String = (1..=20u64).map(|i| format!("1758600000\t{i}\tdevui-gave-up\tsuppressed-abroad\n")).collect();
+        fs::write(a.path("sms-log"), sms).unwrap();
         let body = json!({"ok": true, "data": a.summary(1_758_700_000, Some(1))}).to_string();
         assert_eq!(a.summary(1_758_700_000, Some(1))["events"].as_array().unwrap().len(), EVENTS_SHOWN);
         let before = body.matches(r#","label_en":""#).count();
@@ -577,6 +584,9 @@ mod tests {
         assert_eq!(s["sms"]["sent_24h"], 1);
         assert_eq!(s["sms"]["configured"], true);
         assert_eq!(s["sms"]["recent"][0]["result"], "suppressed-rate");
+        // the web shows the record by these, not by a table of its own
+        assert_eq!(s["sms"]["recent"][0]["label"], kind_label("d"));
+        assert_eq!(s["sms"]["recent"][0]["label_en"], "Other alert (d)");
         let _ = fs::remove_dir_all(&a.dir);
     }
 

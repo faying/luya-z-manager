@@ -13,7 +13,8 @@ export function LangSwitch() {
       value={cur}
       onChange={(l) => setLang(l)}
       options={[
-        { id: "zh", label: "中" },
+        // Each language under its own name, in its own language (lang="zh" for screen readers and the English-page check).
+        { id: "zh", label: <span lang="zh">中</span> },
         { id: "en", label: "EN" },
       ]}
     />

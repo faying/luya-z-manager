@@ -8,11 +8,13 @@ import { useTranslation } from "react-i18next";
 import { mutate as globalMutate } from "swr";
 import { useApi } from "@/lib/hooks/useApi";
 import { apiFetch } from "@/lib/api/client";
-import { ALERTS_PATH, type AlertsData, kindLabel } from "@/lib/alerts";
+import { ALERTS_PATH, type AlertsData, alertLabel } from "@/lib/alerts";
+import { useLang } from "@/lib/i18n/pick";
 import { Button } from "../Button";
 
 export function AlertBanner() {
   const { t } = useTranslation();
+  const lang = useLang();
   const pathname = usePathname() ?? "";
   const { data, mutate } = useApi<AlertsData>(ALERTS_PATH, { refreshInterval: 30000 });
   const [busy, setBusy] = useState(false);
@@ -47,7 +49,7 @@ export function AlertBanner() {
         <span aria-hidden="true" className="nd-announce__sym">▲</span>
         <span className="font-semibold">
           {t("alerts.bannerCount", "{{n}} new alert(s)", { n: data.unread })}
-          {latest && <> · {kindLabel(t, latest.kind)}</>}
+          {latest && <> · {alertLabel(latest, lang)}</>}
         </span>
         {(latest?.text || smsNote) && (
           <span className="nd-announce__detail">

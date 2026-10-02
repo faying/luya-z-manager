@@ -18,7 +18,7 @@
 import type { Ctx, Route } from "../lib.ts";
 import { ok, clone } from "../lib.ts";
 import { shared } from "../shared.ts";
-import { modemPrivate, NBR_UNSUPPORTED } from "./modem.ts";
+import { modemPrivate, NBR_UNSUPPORTED, NBR_UNSUPPORTED_EN } from "./modem.ts";
 import type {
   NetworkSignal,
   NetworkTraffic,
@@ -568,17 +568,20 @@ function netinfo(ctx: Ctx) {
   const now = Math.floor(ctx.now / 1000);
   return {
     now,
-    direct: { ip: "203.0.113.24", geo: "中国台湾 台北市", isp: "中华电信", node: null, source: "ip-api.com", fetched_at: now - 240, error: null },
+    direct: {
+      ip: "203.0.113.24", geo: "中国台湾 台北市", geo_en: "Taiwan", isp: "中华电信", isp_en: "Chunghwa Telecom",
+      node: null, source: "ip-api.com", fetched_at: now - 240, error: null, error_en: null,
+    },
     proxy: null,
-    home_operator: { mcc: "460", mnc: "01", name: "中国联通", country: "中国" },
-    serving_operator: { mcc: "466", mnc: "92", name: "中华电信", country: "中国台湾" },
+    home_operator: { mcc: "460", mnc: "01", name: "中国联通", operator_en: "China Unicom", country: "中国", country_en: "China", country_iso: "CN" },
+    serving_operator: { mcc: "466", mnc: "92", name: "中华电信", operator_en: "Chunghwa Telecom", country: "中国台湾", country_en: "Taiwan", country_iso: "TW" },
     roaming: true,
     roaming_raw: "Roaming",
     network_type: "SA",
     data_connected: true,
     selection: { mode: "auto", checked_at: now - 60 },
     guard: modemPrivate.guardNow(ctx.now),
-    neighbors: { state: "unsupported", scanned_at: 0, error: NBR_UNSUPPORTED, cells: [] },
+    neighbors: { state: "unsupported", scanned_at: 0, error: NBR_UNSUPPORTED, error_en: NBR_UNSUPPORTED_EN, cells: [] },
     scan: modemPrivate.netinfoScanNow(ctx),
     clients: null,
   };

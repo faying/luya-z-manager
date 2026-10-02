@@ -315,7 +315,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     out = reply.raw;
   } else if (reply.error !== undefined) {
     status = reply.status ?? 500;
-    out = { ok: false, error: reply.error };
+    out = reply.errorEn ? { ok: false, error: reply.error, error_en: reply.errorEn } : { ok: false, error: reply.error };
   } else {
     status = reply.status ?? 200;
     let data = reply.data;

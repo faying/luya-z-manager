@@ -1,14 +1,26 @@
 export type ApiOk<T> = { ok: true; data?: T };
-export type ApiErr = { ok: false; error: string };
+export type ApiErr = { ok: false; error: string; error_en?: string | null };
 export type ApiResp<T> = ApiOk<T> | ApiErr;
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /** The agent's `error_en`, when it gave one. `message` stays the agent's
+   *  own `error`, so code that tests it keeps working in either language;
+   *  pages show `errorText(e, lang)` instead. */
+  messageEn?: string;
+  constructor(message: string, status: number, messageEn?: string | null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    if (messageEn) this.messageEn = messageEn;
   }
+}
+
+/** What to show for a failure: the English the agent gave in English mode,
+ *  else the message. */
+export function errorText(e: unknown, lang: "zh" | "en"): string {
+  if (lang === "en" && e instanceof ApiError && e.messageEn) return e.messageEn;
+  return e instanceof Error ? e.message : String(e);
 }
 
 export class UnauthorizedError extends ApiError {

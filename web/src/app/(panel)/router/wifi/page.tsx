@@ -58,7 +58,8 @@ const BANDWIDTHS = ["auto", "HT20", "HT40", "VHT80", "VHT160"];
 // firmware regdb governs allowed channels & power per region. Curated subset of
 // the regions the firmware supports (CN/US are the common ones for this device).
 const REGIONS: Opt[] = [
-  { value: "CN", label: "中国 (CN)" },
+  // Shown as t("wifi.regionCN") (中国 in Chinese); the others are English in both.
+  { value: "CN", label: "China (CN)" },
   { value: "US", label: "United States (US)" },
   { value: "HK", label: "Hong Kong (HK)" },
   { value: "TW", label: "Taiwan (TW)" },
@@ -616,7 +617,7 @@ export default function WifiPage() {
                 label={t("wifi.region", "Region")}
                 help={t("wifi.helpRegion", "Regulatory domain — sets which channels and TX power are allowed. Match your country. US enables more 5 GHz power and upper channels but drops 2.4 GHz ch 12–13. Changing it restarts WiFi.")}
               >
-                <SelectField id="region" value={form.country} options={REGIONS} disabled={locked} onChange={setRegion} />
+                <SelectField id="region" value={form.country} options={REGIONS.map((r) => (r.value === "CN" ? { ...r, label: t("wifi.regionCN", "China (CN)") } : r))} disabled={locked} onChange={setRegion} />
               </FieldRow>
             </div>
           )}

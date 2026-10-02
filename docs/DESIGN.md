@@ -106,7 +106,7 @@ C + LVGL 9.5，320×480，FreeType 渲染 CJK。继承第 2 节状态语义（�
 
 | 优先级 | story.state | 大字（中文） | 大字（英文，≤150px） | 色调 |
 |---|---|---|---|---|
-| 1 | （触屏：还没收到数据） | 读取中 | Loading | 中性 |
+| 1 | （触屏：还没收到数据） | 读取中… | Loading… | 中性 |
 | 2 | （触屏：datad 掉线） | 读不到数据 | No update | 中性，数值调灰保留 |
 | 3 | nosim | 无 SIM | No SIM | bad |
 | 4 | airplane | 移动网络已关 | Airplane | 中性 |

@@ -36,7 +36,12 @@ export default defineConfig({
     trace: "retain-on-failure",
     launchOptions: existsSync(CHROME) ? { executablePath: CHROME } : {},
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: /english\.spec\.ts$/ },
+    // English mode (docs/designs/ui-english.md T7/DT9): every page without
+    // stray Chinese, and narrow phones without sideways scroll or wrapped controls.
+    { name: "en", use: { ...devices["Desktop Chrome"], locale: "en-US" }, testMatch: /english\.spec\.ts$/ },
+  ],
   webServer: {
     command: `node tests/e2e/support/serve-out.mjs ${WEB_PORT}`,
     url: `http://127.0.0.1:${WEB_PORT}/`,

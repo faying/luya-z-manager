@@ -116,14 +116,15 @@ const AUTO_MS = 2000;
 
 /** netinfo.rs `Guard::json` as GET /api/modem/register/guard and /api/netinfo `guard` return it. */
 function guardNow(now: number) {
-  const idle = { phase: "idle", target: "", rat: "", reason: "", started_at: 0, finished_at: 0, last_result: "" };
+  const idle = { phase: "idle", target: "", rat: "", reason: "", reason_code: null as string | null, reason_en: null as string | null, started_at: 0, finished_at: 0, last_result: "" };
+  const auto = { reason: "手动恢复自动", reason_code: "manual_auto", reason_en: "Back to automatic on request" };
   if (!guardJob) return idle;
   const j = guardJob;
   const started_at = Math.floor(j.at / 1000);
   if (j.kind === "auto") {
-    if (now - j.at < AUTO_MS) return { ...idle, phase: "reverting", reason: "手动恢复自动", started_at };
+    if (now - j.at < AUTO_MS) return { ...idle, phase: "reverting", ...auto, started_at };
     registeredPlmn = "46692";
-    return { ...idle, phase: "reverted", reason: "手动恢复自动", started_at, finished_at: started_at + AUTO_MS / 1000 };
+    return { ...idle, phase: "reverted", ...auto, started_at, finished_at: started_at + AUTO_MS / 1000 };
   }
   const base = { ...idle, target: j.mccMnc, rat: j.rat, started_at };
   if (now - j.at < REGISTER_MS) return { ...base, phase: "registering" };
@@ -132,25 +133,31 @@ function guardNow(now: number) {
     registeredPlmn = j.mccMnc;
     return { ...base, phase: "ok", last_result: "1", finished_at };
   }
-  return { ...base, phase: "reverted", reason: "注册不上（LIMITED_SERVICE_SA），已回到自动选网", last_result: "0", finished_at };
+  return { ...base, phase: "reverted", reason: "注册失败", reason_code: "register_failed", reason_en: "Registration failed", last_result: "0", finished_at };
 }
 
 /** netinfo.rs `Scan::json`: rat 11 = NR, 7 = LTE (ubus m_rat as the device reports it). */
 function netinfoScanNow(ctx: Ctx) {
-  const idle = { state: "idle", started_at: 0, finished_at: 0, error: null, last_status: "", operators: [] as { status: string; name: string; plmn: string; rat: string; country: string | null }[] };
+  const idle = {
+    state: "idle", started_at: 0, finished_at: 0, error: null, error_en: null, last_status: "",
+    operators: [] as { status: string; name: string; operator_en: string; plmn: string; rat: string; country: string | null; country_en: string | null; country_iso: string | null }[],
+  };
   if (scanStartedAt === null) return idle;
   const started_at = Math.floor(scanStartedAt / 1000);
   if (ctx.now - scanStartedAt < SCAN_MS) return { ...idle, state: "scanning", started_at, last_status: "manual_selecting" };
   const operators = ctx.has("nosignal")
     ? []
-    : scanOperators().map((o) => ({ status: o.m_status ?? "1", name: o.m_oper_name ?? "", plmn: o.m_mcc_mnc ?? "", rat: o.m_rat === "12" ? "11" : o.m_rat ?? "", country: "中国台湾" }));
+    : scanOperators().map((o) => ({
+        status: o.m_status ?? "1", name: o.m_oper_name ?? "", operator_en: o.m_oper_name ?? "", plmn: o.m_mcc_mnc ?? "",
+        rat: o.m_rat === "12" ? "11" : o.m_rat ?? "", country: "中国台湾", country_en: "Taiwan", country_iso: "TW",
+      }));
   return { ...idle, state: "done", started_at, finished_at: started_at + SCAN_MS / 1000, last_status: "manual_selected", operators };
 }
 
 /** netinfo.rs operator_scan: 202, one modem job at a time. */
 function startScan(ctx: Ctx): Reply {
   if (shared.airplane) return ubusFail(NW, "nwinfo_manual_scan", "Operation not permitted");
-  if (guardJob && guardNow(ctx.now).phase.endsWith("ing")) return fail("正在选网，完成后再搜", 409);
+  if (guardJob && guardNow(ctx.now).phase.endsWith("ing")) return fail("正在选网，等它结束", 409, "Registering on a network; wait for it to finish");
   if (scanStartedAt === null || ctx.now - scanStartedAt >= SCAN_MS) scanStartedAt = ctx.now;
   return { status: 202, data: { state: "scanning" } };
 }
@@ -174,6 +181,7 @@ const nrBandLock: { nsa: string | null; sa: string | null } = { nsa: null, sa: n
 
 const NEIGHBOR_MS = 2500;
 export const NBR_UNSUPPORTED = "原厂扫描会断网且拿不到数据，已停用";
+export const NBR_UNSUPPORTED_EN = "Off: the stock scan drops data, finds nothing";
 let neighborScanAt: number | null = null;
 
 const NR_NEIGHBORS: CellNeighbor[] = [
@@ -353,7 +361,7 @@ export const routes: Route[] = [
       const mccMnc = str(bodyField(ctx.body, "m_mcc_mnc")) ?? "";
       const rat = str(bodyField(ctx.body, "m_rat")) ?? "";
       if (!/^\d{5,6}$/.test(mccMnc)) return fail("m_mcc_mnc must be 5–6 digits", 400);
-      if (scanStartedAt !== null && ctx.now - scanStartedAt < SCAN_MS) return fail("正在搜索网络，搜完再操作", 409);
+      if (scanStartedAt !== null && ctx.now - scanStartedAt < SCAN_MS) return fail("正在搜索网络，搜完再操作", 409, "Searching for networks; try again when it finishes");
       registerJob = { at: ctx.now, mccMnc, rat };
       const known = TW_OPERATORS.some((o) => o.m_mcc_mnc === mccMnc && (o.m_rat === rat || (rat === "11" && o.m_rat === "12")));
       guardJob = { kind: "register", at: ctx.now, mccMnc, rat, success: known && !ctx.has("nosignal") && !ctx.has("fakesuccess") };
@@ -369,7 +377,7 @@ export const routes: Route[] = [
     method: "POST",
     path: "/api/modem/netselect/auto",
     handler: (ctx) => {
-      if (scanStartedAt !== null && ctx.now - scanStartedAt < SCAN_MS) return fail("正在搜索网络，搜完再操作", 409);
+      if (scanStartedAt !== null && ctx.now - scanStartedAt < SCAN_MS) return fail("正在搜索网络，搜完再操作", 409, "Searching for networks; try again when it finishes");
       guardJob = { kind: "auto", at: ctx.now, mccMnc: "", rat: "", success: true };
       return { status: 202, data: guardNow(ctx.now) };
     },
@@ -440,7 +448,7 @@ export const routes: Route[] = [
       // netinfo.rs neighbors_scan: 410 on the real device — the stock scan
       // drops mobile data and returns no cells. Scenario "nbrscan" keeps the
       // old simulated scan for the cell-lock page's own tests.
-      if (!ctx.has("nbrscan")) return fail(NBR_UNSUPPORTED, 410);
+      if (!ctx.has("nbrscan")) return fail(NBR_UNSUPPORTED, 410, NBR_UNSUPPORTED_EN);
       if (shared.airplane) return ubusFail(NW, "nwinfo_scan_nbr", "Operation not permitted");
       neighborScanAt = ctx.now;
       return ok(UBUS_EMPTY);

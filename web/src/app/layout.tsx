@@ -33,7 +33,8 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="zh-CN"
+      // The prerender language (lib/i18n/config.ts); I18nProvider sets the chosen one on mount.
+      lang="en"
       className={`${geist.variable} ${geistMono.variable}`}
       suppressHydrationWarning
     >

@@ -63,6 +63,8 @@ export interface PublicStatus {
     /** Current scenario id, e.g. "abroad", "home", or "" before the first decision. */
     current: string;
     name: string;
+    /** English for a built-in scenario the user has not renamed; null otherwise (show `name`). */
+    name_en?: string | null;
     wifi_off: boolean;
     abroad: boolean;
     auto_direct: boolean;

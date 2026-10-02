@@ -92,6 +92,8 @@ export interface WriteOpState {
   /** Index of the running step while submitting. */
   current: number | null;
   error?: string;
+  /** The agent's `error_en` for `error`, when it gave one (OpResult picks). */
+  errorEn?: string;
   errorKind?: ErrorKind;
   reloginFor?: "submit" | "verify";
   wait?: WaitInfo;
@@ -109,12 +111,12 @@ export type WriteOpEvent =
   | { type: "cancel" }
   | { type: "stepStart"; index: number }
   | { type: "stepOk"; index: number }
-  | { type: "stepError"; index: number; kind: ErrorKind; message: string; now: number; wait?: { expectedSec: number; timeoutSec: number } }
+  | { type: "stepError"; index: number; kind: ErrorKind; message: string; messageEn?: string; now: number; wait?: { expectedSec: number; timeoutSec: number } }
   | { type: "stepsDone"; now: number; hasVerify: boolean; wait?: { expectedSec: number; timeoutSec: number } }
   | { type: "probe"; ok: boolean }
   | { type: "back"; hasVerify: boolean }
   | { type: "verifyResult"; ok: boolean }
-  | { type: "verifyError"; kind: ErrorKind; message: string; during: "verify" | "wait" | "reconfirm" }
+  | { type: "verifyError"; kind: ErrorKind; message: string; messageEn?: string; during: "verify" | "wait" | "reconfirm" }
   | { type: "waitTimeout"; recovery?: string }
   | { type: "login" }
   | { type: "resubmit" }
@@ -136,6 +138,7 @@ function startRun(s: WriteOpState): WriteOpState {
     steps: s.steps.map((st) => (st.status === "done" ? st : { label: st.label, status: "pending" })),
     current: null,
     error: undefined,
+    errorEn: undefined,
     errorKind: undefined,
     reloginFor: undefined,
     wait: undefined,
@@ -169,7 +172,7 @@ export function writeOpReducer(s: WriteOpState, e: WriteOpEvent): WriteOpState {
     case "stepError": {
       if (s.phase !== "submitting") return s;
       const anyDone = s.steps.some((st, j) => j !== e.index && st.status === "done");
-      const base = { ...s, current: null, error: e.message, errorKind: e.kind };
+      const base = { ...s, current: null, error: e.message, errorEn: e.messageEn, errorKind: e.kind };
       switch (e.kind) {
         case "unauthorized":
           // Rejected before it ran: the step is simply not done yet.
@@ -226,6 +229,7 @@ export function writeOpReducer(s: WriteOpState, e: WriteOpEvent): WriteOpState {
           ...s,
           phase: "applied",
           error: undefined,
+          errorEn: undefined,
           errorKind: undefined,
           steps: s.steps.map((st) => (st.status === "unconfirmed" ? { label: st.label, status: "done" } : st)),
         };
@@ -237,18 +241,19 @@ export function writeOpReducer(s: WriteOpState, e: WriteOpEvent): WriteOpState {
         phase: "failed",
         errorKind: "mismatch",
         error: "readback does not show the change",
+        errorEn: undefined,
         steps: s.steps.map((st) => (st.status === "done" ? { label: st.label, status: "unconfirmed" } : st)),
       };
     }
     case "verifyError": {
       if (s.phase !== "verifying" && s.phase !== "waitDevice" && s.phase !== "unknown") return s;
       if (e.kind === "unauthorized") {
-        return { ...s, phase: "relogin", reloginFor: "verify", error: e.message, errorKind: e.kind };
+        return { ...s, phase: "relogin", reloginFor: "verify", error: e.message, errorEn: e.messageEn, errorKind: e.kind };
       }
       // Waiting/reconfirming: keep going, the loop tries again.
       if (e.during !== "verify") return s;
       if (e.kind === "staleUnauthorized") return s; // controller retries once with the new token
-      return { ...s, phase: "unknown", error: e.message, errorKind: e.kind };
+      return { ...s, phase: "unknown", error: e.message, errorEn: e.messageEn, errorKind: e.kind };
     }
     case "waitTimeout":
       if (s.phase !== "waitDevice") return s;
@@ -256,7 +261,7 @@ export function writeOpReducer(s: WriteOpState, e: WriteOpEvent): WriteOpState {
     case "login":
       if (s.phase !== "relogin") return s;
       if (s.reloginFor === "verify") {
-        return { ...s, phase: "verifying", reloginFor: undefined, error: undefined, errorKind: undefined, runId: s.runId + 1 };
+        return { ...s, phase: "verifying", reloginFor: undefined, error: undefined, errorEn: undefined, errorKind: undefined, runId: s.runId + 1 };
       }
       // R2: tier 1 is re-sent automatically; tier 2/3 need one explicit click.
       if (s.tier === 1) return startRun(s);
@@ -288,6 +293,10 @@ export function classifyError(e: unknown): ErrorKind {
 
 function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+function messageEnOf(e: unknown): string | undefined {
+  return e instanceof ApiError ? e.messageEn : undefined;
 }
 
 // ── controller: runs the async side of the machine ─────────────────────────
@@ -461,6 +470,7 @@ export class WriteOpController {
           index: i,
           kind: classifyError(e),
           message: messageOf(e),
+          messageEn: messageEnOf(e),
           now: this.deps.now(),
           wait: this.waitArg(),
         });
@@ -496,7 +506,7 @@ export class WriteOpController {
         if (!this.alive(runId)) return;
         const kind = classifyError(e);
         if (kind === "staleUnauthorized" && attempt === 0) continue; // newer token: try once more
-        this.dispatch({ type: "verifyError", kind, message: messageOf(e), during: "verify" });
+        this.dispatch({ type: "verifyError", kind, message: messageOf(e), messageEn: messageEnOf(e), during: "verify" });
         if (this.state.phase === "unknown") return this.probeLoop("reconfirm");
         return;
       }
@@ -541,7 +551,7 @@ export class WriteOpController {
         return;
       } catch (e) {
         if (!this.alive(runId)) return;
-        this.dispatch({ type: "verifyError", kind: classifyError(e), message: messageOf(e), during: mode });
+        this.dispatch({ type: "verifyError", kind: classifyError(e), message: messageOf(e), messageEn: messageEnOf(e), during: mode });
         if (this.state.phase !== inPhase) return; // relogin(verify)
         // network / stale token / device error: try again next round
       }

@@ -51,6 +51,7 @@ function publicStatus(ctx: Ctx): PublicStatus {
       enabled: true,
       current: "abroad",
       name: "国外",
+      name_en: "Abroad",
       wifi_off: false,
       abroad: true,
       auto_direct: false,
