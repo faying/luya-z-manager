@@ -16,6 +16,16 @@ const TS_IP = "100.101.7.23";
 /** Last scenario switch: 2026-09-22 18:40 on the device clock (local time labelled UTC). */
 const LAST_SWITCH = Date.UTC(2026, 8, 22, 18, 40, 12) / 1000;
 
+
+/** datad's home verdict as netwatch.rs passes it on (story.state). */
+function verdict(ctx: Ctx): string {
+  if (ctx.has("verdict-stall")) return "stall";
+  if (ctx.has("verdict-crowd")) return "crowd";
+  if (ctx.has("nosignal") || shared.airplane) return shared.airplane ? "airplane" : "nosvc";
+  if (ctx.has("weak")) return "weak";
+  return "ok";
+}
+
 function publicStatus(ctx: Ctx): PublicStatus {
   const net = buildNetinfo(ctx);
   const nettype = net.network_type ?? "";
@@ -30,6 +40,7 @@ function publicStatus(ctx: Ctx): PublicStatus {
       operator,
       bar: Number.isFinite(barN) ? barN : -1,
       rsrp: Number.isInteger(rsrp) ? rsrp : Math.trunc(rsrp),
+      verdict: verdict(ctx),
     },
     wifi: { on: shared.wifiOn, ssid: SSID },
     battery: { percent: 76, charging: true },

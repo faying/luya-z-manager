@@ -36,6 +36,8 @@
 | 情景 | Scenarios | Scenarios |
 | APN | APN | APN |
 | 详情 | Details | — |
+| 网络诊断 | Diagnose | Diagnose |
+| 摆放模式 | Placement | — |
 | 管理网页 | web admin（句中小写） | — |
 
 ## 3. 通用名词
@@ -67,6 +69,7 @@
 | nosvc | 无服务 | No service | 118 | bad |
 | sos | 只能紧急呼叫 | SOS only | 106 | bad |
 | nodata | 没连上网 | Offline | 81 | bad |
+| stall | 连上了但不通 | No traffic | 约 110 | bad |
 | only2g / only3g | 只有 2G / 只有 3G | 2G only / 3G only | 90 | warn |
 | nosim | 无 SIM | No SIM | 82 | bad |
 | airplane | 移动网络已关 | Airplane | 99 | 中性 |
@@ -90,6 +93,7 @@
 | nodata，刚换网在拨号 | 正在拨号，换网后要半分钟左右；一直不通多半是卡在这家网络没开漫游 | Connecting, ~30 s after a network change; if stuck, your plan may not roam here | 478 |
 | nodata，漫游中 | 数据没拨上：看「蜂窝」里数据漫游开没开，卡也要开通 | Check data roaming in Cellular; your plan must allow it too | 约 350 |
 | nodata，本地 | 数据没拨上：查流量开关、APN 或欠费 | Check mobile data, APN, or your balance | 245 |
+| stall | 有信号、已拨号，但 30 秒没收到任何数据 | Signal and data are up, but nothing came back for 30 s | 约 370 |
 | limit | 运营商限到 {} Mbps，换位置没用 | Carrier caps speed at {} Mbps; moving won't help | 311 |
 | weak（有 RSRP） | RSRP {}：离基站远，靠窗通常好些 | Weak signal, RSRP {} dBm; try near a window | ≤349 |
 | weak | 离基站远，靠窗通常好些 | Weak signal; try near a window | |
@@ -180,6 +184,65 @@ agent 表里其余的（csl、SmarTone、CTM、NTT docomo、SoftBank、au (KDDI)
 | 其他 | 有一条新告警（kind），请到管理网页「系统→告警」查看。 | [U60] New alert <kind>; see Alerts on web (01 Oct 14:32) | 最长 kind（devui-theme-paused）68 |
 
 为了压进 70 字，英文比中文少说了的：agent-silent 没写「Wi-Fi 关着会自动打开」（真打开时另有 wifi-takeover 短信）；devui-gave-up 没写「上网不受影响」，「屏幕界面打不开」由 Stock UI on 带出。
+
+## 10. 网络诊断（agent `deep_diag.rs`，10-02 ER4；触屏 T4 10-02 已做，网页 T5 用同一套词）
+
+主句（状态块大字）和一个动作，按层序取第一个「差」，没有就取第一个「疑点」；推断类写「疑似」。
+
+| 层 | 主句 | English | 动作 | English |
+|---|---|---|---|---|
+| wifi | Wi-Fi 信号差 | Poor Wi-Fi | 靠近一点，或换个频段 | Move closer, or switch Wi-Fi band |
+| signal | 信号弱 / 干扰大 / 信号一般 | Weak signal / Noisy signal / Fair signal | 固定位置时用摆放模式；在路上只能等 | Use Placement if you're staying put; on the move, wait |
+| signal（载波窄） | 这里只给了窄载波 | Narrow carrier here | 换个地方试试 | Try another spot |
+| signal（无服务等） | datad 大字原文 | datad headline_en | — | — |
+| limit | 运营商限速 | Carrier speed cap | 找运营商 | Ask your carrier |
+| link | 蜂窝链路不稳 | Cellular link unstable | 过几分钟再试，或换个地方 | Try again in a few minutes, or move |
+| crowd | 疑似基站拥挤 | Cell likely busy | 过几分钟再试，或换个地方 | Try again in a few minutes, or move |
+| proxy | 代理节点慢或不通 | Proxy node slow or down | 换节点 | Switch node |
+| （全部正常） | 没查到问题 | No problem found | 可能是对方网站慢；也可以加测速度 | The site itself may be slow; you can also add a speed test |
+| （等了 120 s） | 测不了：正在搜网 / 正在选网 / 正在测速 | Can't check: Searching for networks / Registering on a network / Speed test running | — | — |
+
+「测不了 · 原因」：超时 Timed out · 不是经 Wi-Fi 连的 Not on Wi-Fi · 没有设备连着 No devices on Wi-Fi · 读不到 Unreadable · 数据服务没回应 Data service not answering · 读不到信号 No signal reading · QoS 读不到 QoS unavailable · 没有运营商 DNS No carrier DNS · 发不出去 Couldn't send · 没有小区编号 No cell ID · 历史不够 Not enough history · 代理没回应 Proxy not answering · 直连也不通 Direct also failing · 出错 Error。
+
+忙的时候测速、搜网、手动注册回：正在诊断，约 N 秒后再试 / Diagnosing; try again in about N s。
+
+「加测速度」那一行（只写路线和数字，不下结论，D9）：直连 ↓ {} Mbps / Direct ↓ {} Mbps；没测完：被停下 Stopped · 没测成 Didn't finish。
+
+### 10.1 界面上的词（触屏 10-02；网页 `/tools/diagnose` 照用）
+
+入口：首页提示行右端「查原因 › / Diagnose ›」；蜂窝标签一组「排查 / Troubleshoot」：网络诊断 › / Diagnose ›、测速 › / Speed Test ›、摆放模式 › / Placement ›。
+
+| 位置 | 中文 | English |
+|---|---|---|
+| 层名 | Wi-Fi · 信号 · 限速 · 蜂窝链路 · 基站负载 · 速度 | Wi-Fi · Signal · Speed cap · Cellular link · Cell load · Speed |
+| 层的结论词 | ● 正常 · ▲ 疑点 · ■ 差 · 灰 ● 测不了 · 原因 | ● OK · ▲ Suspect · ■ Poor · grey ● Can't check · reason |
+| 层的进度 | 等待 · 测试中… · 测试中… 3 秒（速度行） | Waiting · Testing… · Testing… 3 s |
+| 状态块：进行中 | 正在检查… 3/6 · 约 10 秒，会发少量探测包 | Checking… 3/6 · About 10 s; sends a few probe packets |
+| 状态块：排队 | 等另一个操作做完… · 做完自动开始 | Waiting… · Starts when it's done |
+| 状态块：后台没回应 | 后台没回应 · 管理后台没响应，点下面重试（登录失败：登录管理后台失败，点下面重试） | Agent not responding · Admin backend not responding; tap Retry below (Admin login failed; tap Retry below) |
+| 副行另有疑点 | 另有 N 处疑点 | +N more |
+| 信号层的动作 | 固定位置时用摆放模式 › | Use Placement if staying put › |
+| 标题栏右侧 | 再查一次 | Run again |
+| 进行中再点 | 正在查，稍等 | Checking; one moment |
+| 按钮 | 加测速度 · 约 5 秒、最多 30 MB；漫游第一下：走漫游流量，再按一次；测着：测速中… | Add speed test · ~5 s, ≤30 MB; roaming: Uses roaming data; tap again; running: Testing speed… |
+| 按钮（后台没回应） | 重试 | Retry |
+| 已发出 | 已发送，测速约 5 秒 | Sent; about 5 s |
+| 反馈 | 14:32 测 · 结论对吗？ 对 / 不对 → 14:32 测 · 已记下，谢谢 | Checked 14:32 · right? Right / Wrong → Checked 14:32 · noted, thanks |
+| 反馈没发出去 | 没记上：后台没回应，可再点一次 | Not saved: agent not responding; tap again |
+
+## 11. 摆放模式（触屏，slow-diagnosis §12.5 决定 9A）
+
+| 位置 | 中文 | English |
+|---|---|---|
+| 数字上方 | 5G SINR · 越大越好 / 4G SINR · 越大越好 | 5G SINR · higher is better |
+| 信号词（按 SINR：≥20 / ≥13 / ≥0 / <0） | ● 信号很好 · ● 信号良好 · ▲ 信号一般 · ■ 信号较差 | Great signal · Good signal · Fair signal · Poor signal |
+| 没信号 / 3G、2G | 没有信号 / 这个制式没有 SINR | No signal / No SINR on this network |
+| datad 停更 | 数字停在 14:32 | Last update 14:32 |
+| 行 | 这次最好 · 对比 · 在用 | Best so far · Compared · In use |
+| 对比（只写事实） | ▲ 比最好低 3.5 dB；差 ≤1 dB：● 接近最好 | ▲ 3.5 dB below best; ● Near the best |
+| 换了小区 / 按了重新开始 | 换了小区，重新计 / 已清零，重新计 | New cell; counting again / Reset; counting again |
+| 按钮、脚注 | 重新开始 · 换了小区会重新计；这页开着不息屏 | Start over · Resets on a new cell; the screen stays on here |
+
 
 ## 外部评审（10-01，独立子代理；Codex 卡死没跑成）
 

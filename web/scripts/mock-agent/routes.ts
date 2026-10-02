@@ -16,6 +16,7 @@ import { routes as servicesRoutes } from "./fixtures/services.ts";
 import { routes as scenarioRoutes } from "./fixtures/scenario.ts";
 import { routes as smsRoutes } from "./fixtures/sms.ts";
 import { routes as esimRoutes } from "./fixtures/esim.ts";
+import { routes as diagnoseRoutes } from "./fixtures/diagnose.ts";
 
 export const ALL_ROUTES: Route[] = [
   ...publicRoutes,
@@ -32,4 +33,5 @@ export const ALL_ROUTES: Route[] = [
   ...scenarioRoutes,
   ...smsRoutes,
   ...esimRoutes,
+  ...diagnoseRoutes,
 ];

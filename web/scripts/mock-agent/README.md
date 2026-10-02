@@ -68,8 +68,22 @@ curl  http://127.0.0.1:9199/__mock/state                  # shared state + route
 | `firmware-b27` | Shapes recorded from a real U60 Pro (MU5250) on firmware B27 (2026-09-25; values are fake): UPnP as `router_get_upnp` answers it (`enable_upnp`…), QoS `{}` (unconfigured; the QoS PUT still 503s — its setter is `router_set_qos` with rate limits), `/api/cell/stc/params`, `/api/cell/stc/status` → 503 `… (Method not found)`; port-forward / filter-rules / domain-filter → `{}` when empty (rules or domains added while the scenario is on come back as `{rule_list}` / `{blocked_domains}` — the real non-empty shape is unconfirmed); `/api/router/vpn` → `{alg_sip_enable}` only; APN profiles with integer `pdpType` / `pppAuthMode` / `roamingPdpType` + `extraInt1`; SMS capacity with per-box `sms_{sim,nv}_{rev,send,draftbox}_total`, no `sms_simused_total` and `sms_nvused_total: 0`; signal-detect progress as strings (`""` idle) and results `{}` when none; SA signal without `lte_pci` / `cell_id` / `wan_active_channel`, numeric `rmcc` / `rmnc`; public status `scenario.last_switch: null`. The default persona keeps the richer shapes. |
 | `old-agent-names` | The agent before 2026-09-25 called `router_get_upnp_switch` / `router_get_qos_switch`, which B27 doesn't have: those GETs answer 503 `… (Method not found)`. Combine with `firmware-b27`. |
 | `nbrscan` | `POST /api/cell/neighbors/scan` runs the old simulated neighbour scan instead of the real device's 410 (the stock scan drops mobile data and returns no cells). Used by the cell-lock page tests. |
+| `diag-waiting` | `POST /api/diagnose` first waits 3 s (`state: "waiting"`, `waiting_for: "speedtest"`), then runs. |
+| `diag-slow` | `POST /api/diagnose` takes 4 s per layer instead of 0.8 s, so a run stays going long enough to see the busy 409 elsewhere. |
+| `verdict-stall` / `verdict-crowd` | `/api/public/status` `network.verdict` is `stall` / `crowd` (datad's home verdict) while the signal itself stays good. Otherwise the verdict follows the persona: `weak`, `nosvc` (nosignal), `airplane`, else `ok`. |
 
 Scenarios combine, e.g. `weak,missing` or `carriers8,stale`.
+
+## Diagnosis
+
+`fixtures/diagnose.ts` plays deep_diag.rs: a run fills one layer every
+0.8 s (Wi-Fi, signal, speed cap, cellular link, cell load, plus proxy while
+the proxy service runs). With `weak` active when the run starts, signal comes out bad and
+the link suspect (main cause "Weak signal", +1 more); otherwise nothing is
+found. `/api/diagnose/speed` measures for 3 s, then gives a "Direct ↓ … Mbps"
+row; feedback is taken once per run. While a run is going, the speed test,
+network search and manual register answer the agent's busy 409
+(`busy: "diagnose"`, 正在诊断，约 N 秒后再试).
 
 ## Writes
 

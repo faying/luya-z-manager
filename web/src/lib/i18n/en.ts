@@ -143,6 +143,7 @@ export const en = {
     stc: "STC",
     at: "AT Terminal",
     speedtest: "Speed Test",
+    diagnose: "Diagnose",
     processes: "Processes",
     enableAdb: "Enable ADB",
     deviceControl: "Device Control",

@@ -12,7 +12,7 @@
 import {
   ArrowBendUpRight, Bell, Broadcast, Bug, CalendarBlank, CellSignalFull, CellTower, ChatCircleText,
   ClockCountdown, Cloud, Cpu, Crosshair, DeviceMobile, EyeSlash, FadersHorizontal, FileText, Gauge, Gear,
-  Globe, HardDrive, HardDrives, Heartbeat, House, HouseLine, LockSimple, MapPin, Network, NotePencil,
+  Globe, HardDrive, HardDrives, Heartbeat, House, HouseLine, LockSimple, MapPin, Network, NotePencil, Stethoscope,
   Path, Plugs, Power, Shield, ShieldCheck, SimCard, SlidersHorizontal, Speedometer, TerminalWindow,
   UserPlus, Users, Usb, WifiHigh, type Icon,
 } from "@phosphor-icons/react";
@@ -47,6 +47,7 @@ export const ROUTES: RouteDef[] = [
   { href: "/signal", tKey: "nav.signal", fallback: "Signal", icon: CellSignalFull, anchor: "charts", group: "charts", aliases: ["信号", "xinhao", "xh", "rsrp", "sinr", "趋势"] },
   { href: "/router/signal-detect", tKey: "nav.signalDetect", fallback: "Signal Detect", icon: Broadcast, anchor: "charts", group: "charts", aliases: ["信号检测", "信号探测", "xinhaojiance", "detect"] },
   { href: "/tools/speedtest", tKey: "nav.speedtest", fallback: "Speed Test", icon: Gauge, anchor: "charts", group: "charts", aliases: ["测速", "cesu", "cs", "speed"] },
+  { href: "/tools/diagnose", tKey: "nav.diagnose", fallback: "Diagnose", icon: Stethoscope, anchor: "charts", group: "charts", aliases: ["网络诊断", "诊断", "为什么慢", "查原因", "慢", "卡顿", "zhenduan", "zd", "diagnose", "diagnosis", "slow", "why slow"] },
   { href: "/clients", tKey: "nav.clients", fallback: "Clients", icon: Users, anchor: "charts", group: "charts", aliases: ["在线设备", "已连设备", "zaixianshebei", "终端", "clients", "devices"] },
 
   { href: "/router/mobile-network", tKey: "nav.mobileNetwork", fallback: "Mobile Network", icon: Network, anchor: "functions", group: "network", aliases: ["移动网络", "yidongwangluo", "运营商", "飞行模式", "mobile", "carrier", "airplane"] },

@@ -38,6 +38,10 @@ describe("search", () => {
     ["锁小区", "/router/celllock"], ["celllock", "/router/celllock"],
     ["eSIM", "/router/esim"],
     ["短信", "/sms"], ["sms", "/sms"],
+    ["诊断", "/tools/diagnose"], ["网络诊断", "/tools/diagnose"], ["diagnose", "/tools/diagnose"], ["慢", "/tools/diagnose"],
+    ["卡顿", "/tools/diagnose"], ["slow", "/tools/diagnose"], ["为什么慢", "/tools/diagnose"],
+    // 「卡」 alone stays the SIM page (diagnose has 卡顿, not 卡).
+    ["卡", "/router/sim"],
   ];
   it.each(must)("%s → %s first", (q, href) => {
     expect(searchRoutes(q, title)[0]?.href).toBe(href);

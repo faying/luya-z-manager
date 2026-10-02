@@ -7,10 +7,11 @@ import type { ReactNode } from "react";
 import type { NetworkSignal } from "@/lib/api/schemas/network";
 import { Button, Freshness, StatusBlock, type Tone } from "@/components/nd";
 import type { Carrier, SigState } from "@/lib/home";
+import { wantsDiagnose } from "@/lib/diagnose";
 import { carrierSummary, radioName } from "@/lib/signalWords";
 
 export function SignalStatus({
-  state, allDown, sig, serving, counts, bars, lastOkAt, speedStale, onRetry,
+  state, allDown, sig, serving, counts, bars, lastOkAt, speedStale, onRetry, diagnose = false, verdict,
 }: {
   state: SigState;
   allDown: boolean;
@@ -21,6 +22,10 @@ export function SignalStatus({
   lastOkAt: number | null;
   speedStale: boolean;
   onRetry: () => void;
+  /** Home: add 「查原因 →」 (→ /tools/diagnose?start=1) when the verdict is abnormal (slow-diagnosis.md §12.8). */
+  diagnose?: boolean;
+  /** datad's verdict (`/api/public/status` network.verdict); null/undefined = unknown (older agent). */
+  verdict?: string | null;
 }) {
   const { t } = useTranslation();
   const summary = [
@@ -88,6 +93,26 @@ export function SignalStatus({
         reason = <Freshness stale lastOkAt={null} what={t("home.speed", "Speed")} />;
         actions = retry;
       }
+  }
+
+  // Home only: datad's verdict decides (slow-diagnosis.md §12.8); without
+  // one (older agent) the web's own weak / no-service states do. The
+  // existing next step stays, the link goes after it.
+  if (diagnose && wantsDiagnose(verdict, state)) {
+    const link = (
+      <Link href="/tools/diagnose?start=1" className="font-medium text-nd-accT hover:underline underline-offset-4">
+        {t("home.diagnose", "Diagnose →")}
+      </Link>
+    );
+    reason = reason ? (
+      <>
+        {reason}
+        {" · "}
+        {link}
+      </>
+    ) : (
+      link
+    );
   }
 
   return (

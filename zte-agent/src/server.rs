@@ -8,6 +8,7 @@ use crate::alerts;
 use crate::health;
 use crate::at_terminal;
 use crate::cell;
+use crate::deep_diag;
 use crate::static_files;
 use crate::device_ext;
 use crate::lan_test;
@@ -124,6 +125,13 @@ fn handle_request(mut request: Request, state: &AppState) {
             return;
         }
         // Health (needs the query string: refresh=1, program=&file=)
+        // Deep diagnosis: who asked (front screen or which LAN client) picks the Wi-Fi rule.
+        (&Method::Post, "/api/diagnose") => {
+            let remote = request.remote_addr().map(|a| a.ip());
+            let (status, body_json) = deep_diag::start(remote);
+            respond(request, status, body_json);
+            return;
+        }
         (&Method::Get, "/api/netinfo") => {
             let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
             let (status, body_json) = netinfo::get(state, query);
@@ -177,6 +185,9 @@ pub fn route(method: &Method, path: &str, state: &AppState, body: &[u8]) -> (u16
         // Auth
         (&Method::Post, "/api/auth/login") => handlers::login(state, body),
         (&Method::Get, "/api/public/status") => public::public_status(state),
+        (&Method::Get, "/api/diagnose") => deep_diag::get(),
+        (&Method::Post, "/api/diagnose/feedback") => deep_diag::feedback(body),
+        (&Method::Post, "/api/diagnose/speed") => deep_diag::speed(state, body),
         // Device info (sysfs)
         (&Method::Get, "/api/device") => handlers::device(state),
         (&Method::Get, "/api/battery") => handlers::battery(state),

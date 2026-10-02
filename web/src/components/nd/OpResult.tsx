@@ -48,6 +48,15 @@ export function OpResult({ op }: { op: UseWriteOp }) {
         </p>
       );
     case "failed":
+      // Another job holds the device (a diagnosis running): the agent's own
+      // sentence says what and when to retry, so it is shown as it is.
+      if (op.errorKind === "busy") {
+        return (
+          <p role="alert">
+            <StatusMark tone="warn">{pick(op.error, op.errorEn, lang)}</StatusMark>
+          </p>
+        );
+      }
       return (
         <p role="alert">
           <StatusMark tone="bad">

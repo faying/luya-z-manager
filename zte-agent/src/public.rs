@@ -16,6 +16,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
+
 fn s<'a>(v: &'a Value, k: &str) -> &'a str {
     v.get(k).and_then(|x| x.as_str()).unwrap_or("")
 }
@@ -211,6 +212,9 @@ pub fn public_status(state: &AppState) -> (u16, Value) {
                     "bar": bar,
                     "rsrp": rsrp,
                     "links_online": online_links,
+                    // datad's home verdict code (ok / weak / stall …; null when datad is
+                    // silent), so the web can offer "Diagnose →" for the same states
+                    "verdict": crate::netwatch::verdict(),
                 },
                 "wifi": { "on": wifi_on, "ssid": ssid },
                 "battery": { "percent": bpct, "charging": charging },
@@ -232,3 +236,4 @@ pub fn public_status(state: &AppState) -> (u16, Value) {
         }),
     )
 }
+

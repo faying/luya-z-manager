@@ -11,6 +11,7 @@
 import type { Ctx, Reply, Route } from "../lib.ts";
 import { ok, fail, clone, bodyField, mergeKnown, methodNotFound } from "../lib.ts";
 import { shared } from "../shared.ts";
+import { diagRefusal } from "./diagnose.ts";
 import type {
   ModemStatus,
   ModemOnlineResult,
@@ -326,12 +327,12 @@ export const routes: Route[] = [
   {
     method: "POST",
     path: "/api/modem/scan",
-    handler: (ctx) => startScan(ctx),
+    handler: (ctx) => diagRefusal(ctx.now) ?? startScan(ctx),
   },
   {
     method: "POST",
     path: "/api/netinfo/scan",
-    handler: (ctx) => startScan(ctx),
+    handler: (ctx) => diagRefusal(ctx.now) ?? startScan(ctx),
   },
   {
     method: "GET",
@@ -362,6 +363,8 @@ export const routes: Route[] = [
       const rat = str(bodyField(ctx.body, "m_rat")) ?? "";
       if (!/^\d{5,6}$/.test(mccMnc)) return fail("m_mcc_mnc must be 5–6 digits", 400);
       if (scanStartedAt !== null && ctx.now - scanStartedAt < SCAN_MS) return fail("正在搜索网络，搜完再操作", 409, "Searching for networks; try again when it finishes");
+      const busy = diagRefusal(ctx.now);
+      if (busy) return busy;
       registerJob = { at: ctx.now, mccMnc, rat };
       const known = TW_OPERATORS.some((o) => o.m_mcc_mnc === mccMnc && (o.m_rat === rat || (rat === "11" && o.m_rat === "12")));
       guardJob = { kind: "register", at: ctx.now, mccMnc, rat, success: known && !ctx.has("nosignal") && !ctx.has("fakesuccess") };

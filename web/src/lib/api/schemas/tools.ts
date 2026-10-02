@@ -108,3 +108,64 @@ export interface ToolsGetMap {
   "/api/at/port": AtPort;
   "/api/lan/ping": LanPing;
 }
+
+/* ------------------------------------------------------------------ *
+ *  Deep diagnosis (deep_diag.rs, docs/designs/slow-diagnosis.md §4.2)
+ * ------------------------------------------------------------------ */
+
+/** deep_diag.rs `Level`: pending / running while it checks; ok ● warn ▲ bad ■; na = can't tell; info = a value, no judgement (speed row). */
+export type DiagLevel = "pending" | "running" | "ok" | "warn" | "bad" | "na" | "info";
+
+/** One row: wifi / signal / limit / link / crowd / proxy, or the speed row ("speed"). */
+export interface DiagLayer {
+  id: string;
+  level: DiagLevel;
+  /** The value side of the row (numbers, or why it can't tell for na). */
+  detail: string;
+  detail_en: string;
+  /** false = shown grey, not counted in "3/6". */
+  counted: boolean;
+}
+
+/** deep_diag.rs `Main`: the headline and its one action. `layer` "" = nothing found. */
+export interface DiagMain {
+  layer: string;
+  level: DiagLevel | null;
+  text: string;
+  text_en: string;
+  action: string;
+  action_en: string;
+  /** "placement" (a touch-screen page) / "proxy" (the proxy page) / "". */
+  action_to: "placement" | "proxy" | "";
+  /** Other layers at warn or bad ("+N more"). */
+  more: number;
+}
+
+/**
+ * GET /api/diagnose, POST /api/diagnose (202, `joined: true` when one was
+ * already going), POST /api/diagnose/speed (202). Times are device-clock
+ * seconds. A run is kept 10 minutes after it finished; then GET says idle.
+ */
+export interface DiagRun {
+  id: number;
+  state: "waiting" | "running" | "done";
+  /** What a waiting run waits for. */
+  waiting_for?: "scan" | "register" | "speedtest";
+  asked_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+  /** Layers finished / layers counted. */
+  step: number;
+  steps: number;
+  layers: DiagLayer[];
+  main: DiagMain | null;
+  key?: unknown;
+  /** "touch" / "client" / "other". */
+  from: string;
+  feedback: boolean | null;
+  speed: DiagLayer | null;
+  /** Seconds since it finished; null while it runs. */
+  age_s: number | null;
+}
+
+export type DiagGet = DiagRun | { state: "idle" };

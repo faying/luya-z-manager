@@ -100,6 +100,8 @@ export default function HomePage() {
           lastOkAt={sig.lastOkAt}
           speedStale={spd.stale}
           onRetry={retry}
+          diagnose
+          verdict={pub.data?.network?.verdict}
         />
         <ReadoutWall label={t("home.readouts", "Readings")}>
           <Readout

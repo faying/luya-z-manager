@@ -3,12 +3,18 @@
 //!
 //! A background thread samples every 5 s: datad's `/state` (already refreshed
 //! by datad whether anyone looks or not, so this adds no modem reads) for the
-//! data-call status and the operator DNS, and `/proc/net/dev` for the
-//! `rmnet_data0` receive counter. It sends nothing outward.
+//! data-call status, the operator DNS and the cellular receive counter. It
+//! sends nothing outward.
+//!
+//! The counter is the modem's own `traffic.rx_bytes` (datad's copy of
+//! `real_rx_bytes`), not `rmnet_data0` in `/proc/net/dev`: checked on the
+//! device 2026-10-02 (ER1), client traffic goes through IPA hardware offload
+//! and mostly never shows on `rmnet_data0` — over 6 minutes the modem counted
+//! 37062 packets received, `rmnet_data0` 8805.
 //!
 //! [`cell_alive`] is the one conclusion other modules use ("is the cellular
-//! link itself working?"): connected, and either something arrived on
-//! `rmnet_data0` in the last 30 s or — only when asked, and only then — one
+//! link itself working?"): connected, and either something arrived on the
+//! cellular link in the last 30 s or — only when asked, and only then — one
 //! plain DNS query straight to the operator's resolver gets an answer.
 //! Device-local packets take the default route out of `rmnet_data0` and the
 //! DNS is not hijacked (checked 2026-09-25), so that query is a direct one.
@@ -19,6 +25,12 @@
 //! rename; `0` at startup). The count only grows; an agent restart starts it
 //! at 0 again, so readers (touch-ui `datad-trial.sh`) treat a smaller number
 //! as a restart. Logged on the first error and every [`LOG_EVERY`] after.
+//!
+//! The same round also reads datad's `/v2/screen` (the home-screen verdict,
+//! `story.state`) and feeds both into the signal history ([`record`]: one
+//! record per minute, events written the moment they happen). A failed
+//! `/v2/screen` read only leaves that minute's verdict as "-"; it does not
+//! count as a datad error above.
 
 // Nothing in this build reads the conclusions yet; the sampler runs anyway.
 #![allow(dead_code)]
@@ -32,8 +44,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
+pub mod record;
+
 const DATAD_STATE: &str = "http://127.0.0.1:9460/state";
-const CELL_IF: &str = "rmnet_data0";
+const DATAD_SCREEN: &str = "http://127.0.0.1:9460/v2/screen";
 const SAMPLE_EVERY: Duration = Duration::from_secs(5);
 /// Received something this recently ⇒ the link is alive, no probe needed.
 pub const RX_FRESH_SECS: u64 = 30;
@@ -141,6 +155,24 @@ pub struct Snapshot {
     pub dns: Vec<String>,
 }
 
+static LOG: Mutex<Option<record::Log>> = Mutex::new(None);
+/// datad's last home verdict (`story.state`) and when it was read.
+static VERDICT: Mutex<Option<(String, u64)>> = Mutex::new(None);
+/// Older than this = datad stopped answering; say nothing rather than a stale code.
+const VERDICT_FRESH: u64 = 30;
+
+/// datad's current home-screen verdict code (ok, weak, stall, …), read with
+/// the 5 s sample; None when datad hasn't answered for 30 s. For clients that
+/// only see the agent (the web's "Diagnose →" link).
+pub fn verdict() -> Option<String> {
+    let v = VERDICT.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+    (now_unix().saturating_sub(v.1) <= VERDICT_FRESH).then_some(v.0)
+}
+
+fn log() -> std::sync::MutexGuard<'static, Option<record::Log>> {
+    LOG.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 static SNAP: Mutex<Snapshot> = Mutex::new(Snapshot {
     at: 0,
     connected: None,
@@ -161,6 +193,9 @@ pub fn start() {
             let datad = std::env::var("ZTE_AGENT_DATAD_STATE").unwrap_or_else(|_| DATAD_STATE.to_string());
             let errors_file =
                 std::env::var("ZTE_AGENT_NETWATCH_ERRORS").unwrap_or_else(|_| ERRORS_FILE.to_string());
+            let screen_url = std::env::var("ZTE_AGENT_DATAD_SCREEN").unwrap_or_else(|_| DATAD_SCREEN.to_string());
+            let log_dir = std::env::var("ZTE_AGENT_SIGNAL_LOG").unwrap_or_else(|_| record::DIR.to_string());
+            *log() = Some(record::Log::new(log_dir));
             let mut errors = ErrorCounter::new(errors_file);
             loop {
                 let fetched: Result<Value, ReadError> = match agent.get(&datad).call() {
@@ -169,16 +204,42 @@ pub fn start() {
                 };
                 errors.record(classify(&fetched));
                 let state = fetched.ok();
-                let rx = fs::read_to_string("/proc/net/dev").ok().and_then(|t| rx_bytes(&t, CELL_IF));
+                let screen = agent.get(&screen_url).call().ok().and_then(|mut r| r.body_mut().read_json::<Value>().ok());
+                let rx = cell_rx_bytes(state.as_ref());
                 let now = now_unix();
                 let mut s = SNAP.lock().unwrap_or_else(|e| e.into_inner());
                 let next = sample(&s, now, state.as_ref(), rx);
                 *s = next;
                 drop(s);
+                let reading = record::Reading::parse(now, state.as_ref(), screen.as_ref(), rx);
+                if let Some(v) = &reading.verdict {
+                    *VERDICT.lock().unwrap_or_else(|e| e.into_inner()) = Some((v.clone(), now));
+                }
+                if let Some(l) = log().as_mut() {
+                    l.feed(&reading);
+                }
                 thread::sleep(SAMPLE_EVERY);
             }
         })
         .ok();
+}
+
+/// Record an event from another module (deep diagnosis, proxy fallback …):
+/// kept in the history and appended to today's event file at once.
+#[allow(dead_code)] // first caller: deep_diag (ER4)
+pub fn push_event(kind: &str, data: Value) {
+    let e = record::Event::new(now_unix(), kind, data);
+    match log().as_mut() {
+        Some(l) => l.push_event(e),
+        None => eprintln!("netwatch: event {kind} before the sampler started, dropped"),
+    }
+}
+
+/// Minute records and events with `from <= t < to` (device clock seconds),
+/// from memory or, beyond 24 h, from disk (7 days).
+#[allow(dead_code)] // first caller: deep_diag (ER4)
+pub fn history(from: u64, to: u64) -> (Vec<record::Minute>, Vec<record::Event>) {
+    log().as_ref().map(|l| l.range(from, to)).unwrap_or_default()
 }
 
 pub fn snapshot() -> Snapshot {
@@ -221,12 +282,7 @@ pub fn alive_without_probe(s: &Snapshot, now: u64) -> Option<bool> {
 pub fn sample(prev: &Snapshot, now: u64, state: Option<&Value>, rx: Option<u64>) -> Snapshot {
     let net = state.map(|v| v.get("net").unwrap_or(v));
     let connected = net.and_then(|n| n.get("wan_status")).and_then(Value::as_str).map(wan_connected);
-    let dns = net
-        .and_then(|n| n.get("wan_dns"))
-        .and_then(Value::as_str)
-        .map(parse_dns)
-        .filter(|d| !d.is_empty())
-        .unwrap_or_else(|| prev.dns.clone());
+    let dns = state.map(operator_dns).filter(|d| !d.is_empty()).unwrap_or_else(|| prev.dns.clone());
     let moved = match (prev.rx_bytes, rx) {
         (Some(a), Some(b)) => b != a,
         // First reading: we cannot tell yet.
@@ -246,21 +302,36 @@ pub fn wan_connected(s: &str) -> bool {
     s.ends_with("connected") && !s.contains("disconnect")
 }
 
+/// The operator's IPv4 resolvers from datad's `/state`. On the device (checked
+/// 2026-10-02) `wan_dns` is under `uci_device_info`, not `net` — reading only
+/// `net.wan_dns` found nothing, so the DNS probe never ran and manual-first saw
+/// "direct is slow too" every time. Tried in order: `net.wan_dns`,
+/// `uci_device_info.wan_dns`, `interfaces.wan4.dns` (a list).
+pub(crate) fn operator_dns(state: &Value) -> Vec<String> {
+    let quoted = |v: Option<&Value>| v.and_then(Value::as_str).map(parse_dns).unwrap_or_default();
+    let net = state.get("net").unwrap_or(state);
+    for d in [quoted(net.get("wan_dns")), quoted(state.get("uci_device_info").and_then(|u| u.get("wan_dns")))] {
+        if !d.is_empty() {
+            return d;
+        }
+    }
+    let list = state.get("interfaces").and_then(|i| i.get("wan4")).and_then(|w| w.get("dns")).and_then(Value::as_array);
+    list.map(|a| a.iter().filter_map(Value::as_str).flat_map(parse_dns).collect()).unwrap_or_default()
+}
+
 /// datad's `wan_dns` looks like `222.66.251.8' '116.236.159.8` (shell-quoted
 /// list): keep the IPv4 addresses.
-fn parse_dns(s: &str) -> Vec<String> {
+pub(crate) fn parse_dns(s: &str) -> Vec<String> {
     s.split(|c: char| !(c.is_ascii_digit() || c == '.'))
         .filter(|p| p.split('.').count() == 4 && p.split('.').all(|o| o.parse::<u8>().is_ok()))
         .map(str::to_string)
         .collect()
 }
 
-/// Receive-bytes column of `iface` in `/proc/net/dev`.
-fn rx_bytes(text: &str, iface: &str) -> Option<u64> {
-    text.lines().find_map(|l| {
-        let (name, rest) = l.split_once(':')?;
-        (name.trim() == iface).then(|| rest.split_whitespace().next()?.parse().ok())?
-    })
+/// Bytes the modem has received this data session (`traffic.rx_bytes` in
+/// datad's `/state`; see the module comment for why not `rmnet_data0`).
+fn cell_rx_bytes(state: Option<&Value>) -> Option<u64> {
+    state?.get("traffic")?.get("rx_bytes")?.as_u64()
 }
 
 fn dns_rtt_ms(servers: &[String]) -> Option<u32> {
@@ -288,7 +359,7 @@ fn dns_query_ms(ip: &str) -> Option<u32> {
     None
 }
 
-fn dns_query(id: u16, name: &str) -> Vec<u8> {
+pub(crate) fn dns_query(id: u16, name: &str) -> Vec<u8> {
     let mut q = Vec::with_capacity(32);
     q.extend_from_slice(&id.to_be_bytes());
     q.extend_from_slice(&[0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0]); // RD, 1 question
@@ -309,13 +380,27 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    const DEV: &str = "Inter-|   Receive\n face |bytes packets\n  rmnet_data0: 181760867   35107    0 0\n    lo: 5 1 0 0\n";
+    #[test]
+    fn operator_dns_wherever_datad_puts_it() {
+        // the device's shape: wan_dns under uci_device_info, a list under interfaces.wan4
+        let dev = json!({"net": {"wan_status": "ipv4_ipv6_connected"},
+            "uci_device_info": {"wan_dns": "222.66.251.8' '116.236.159.8"},
+            "interfaces": {"wan4": {"dns": ["222.66.251.8", "116.236.159.8"]}}});
+        assert_eq!(operator_dns(&dev), ["222.66.251.8", "116.236.159.8"]);
+        let only_iface = json!({"interfaces": {"wan4": {"dns": ["192.0.2.53", "2001:db8::1"]}}});
+        assert_eq!(operator_dns(&only_iface), ["192.0.2.53"]);
+        assert_eq!(operator_dns(&json!({"net": {"wan_dns": "1.1.1.1"}})), ["1.1.1.1"]);
+        assert!(operator_dns(&json!({"net": {}})).is_empty());
+        let s = sample(&Snapshot::default(), 10, Some(&dev), None);
+        assert_eq!(s.dns, ["222.66.251.8", "116.236.159.8"]);
+    }
 
     #[test]
-    fn parses_proc_net_dev() {
-        assert_eq!(rx_bytes(DEV, "rmnet_data0"), Some(181760867));
-        assert_eq!(rx_bytes(DEV, "lo"), Some(5));
-        assert_eq!(rx_bytes(DEV, "rmnet_data1"), None);
+    fn receive_counter_from_datad() {
+        assert_eq!(cell_rx_bytes(Some(&json!({"traffic": {"rx_bytes": 317798120u64}}))), Some(317798120));
+        assert_eq!(cell_rx_bytes(Some(&json!({"traffic": {}}))), None);
+        assert_eq!(cell_rx_bytes(Some(&json!({"net": {}}))), None);
+        assert_eq!(cell_rx_bytes(None), None);
     }
 
     #[test]

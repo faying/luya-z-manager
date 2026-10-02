@@ -220,7 +220,7 @@ export async function apiFetch<T = unknown>(path: string, opts: FetchOptions = {
     if (opts.raw) return json as unknown as T;
 
     if (!json.ok) {
-      throw new ApiError(json.error || `HTTP ${res.status}`, res.status, json.error_en);
+      throw new ApiError(json.error || `HTTP ${res.status}`, res.status, json.error_en, json.busy, json.retry_after_s);
     }
     return (json.data ?? (undefined as unknown)) as T;
   } finally {

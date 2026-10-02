@@ -140,6 +140,7 @@
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
 | 服务卡「短信」行（整行链接到 `/sms`） | link「N 条未读」/「无」 〔现名：link「N 条未读短信」（首页头部的短信角标链接；原服务卡「短信」行）〕 | 无（导航） | — | — | 无 | —（本地） |
+| 状态块「查原因 →」（2026-10-02 加：datad 结论 `network.verdict` 是 limit/weak/noise/crowd/narrow/nodata/stall 时；没有结论的旧后台按网页自己的信号弱/无服务） | link「查原因 →」 〔交互后：结论异常时；场景 weak〕 | 无（导航到 `/tools/diagnose?start=1`，那里开始检查） | — | — | 无 | —（本地） |
 
 首页没有任何写操作。
 
@@ -1445,6 +1446,35 @@
 | 服务器下拉（自动（最佳服务器）+ 列表） | 无（label 未关联）；建议 combobox「服务器」 | 无（草稿） | — | — | 无 | —（本地） |
 | 「开始」 | button「开始」 | POST `/api/speedtest/start` `{}` 或 `{server_id}` | 1，之后每秒 GET progress 直到 complete/cancelled/error | 无读回（结果即进度接口的数值） | 无 | 二（消耗蜂窝流量） |
 | 「停止」（运行中） | button「停止」 〔交互后：测速进行中才有；点 button「开始」，点 button「确认：{x}」〕 | POST `/api/speedtest/stop` `{}`（错误被页面忽略） | 1 | `/api/speedtest/progress` `phase=cancelled` | 无 | 二 |
+
+---
+
+## /tools/diagnose 网络诊断
+
+文件：`app/(panel)/tools/diagnose/page.tsx`（2026-10-02 新页，设计 `docs/designs/slow-diagnosis.md` §12.3/§12.5/§12.8）。agent `deep_diag.rs` 分层检查（Wi-Fi、信号、限速、蜂窝链路、基站负载，开着代理时另有代理层），主因、动作、各层数值它都给中英两份。从应用里点进来（菜单、⌘K、首页「查原因 →」）且没有 10 分钟内的结果时自动开始；直接打开网址、刷新不自动开始。
+
+#### 数据项
+
+| 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
+|---|---|---|---|---|
+| 状态块：主因 + 一个动作 + 「另有 N 处疑点」/ 正在检查… N/M / 等另一个操作做完… / 后台没回应 | `/api/diagnose` | `state`、`waiting_for`、`step`/`steps`、`main.text(_en)`/`action(_en)`/`action_to`/`more` | 1000（等待、检查中、测速中），否则无 | 否（agent 内存状态，结果留 10 分钟，之后回 `{state:"idle"}`） |
+| 「HH:MM 测」 | 同上 | `finished_at`（设备时钟） | 同上 | 否 |
+| 各层一行（符号 + 正常/疑点/差/测不了 · 原因 + 数值；等待、测试中…） | 同上 | `layers[].id/level/detail(_en)/counted` | 同上 | 否 |
+| 速度行（测试中… / 直连 ↓ N Mbps / 测不了） | 同上 | `speed` | 同上 | 否 |
+| 已记下，谢谢 | 同上 | `feedback` | 同上 | 否 |
+| 是否漫游（决定加测速度要不要按两下） | `/api/netinfo?lite=1` | `roaming` | 30000 | 否 |
+
+#### 控件
+
+| 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
+|---|---|---|---|---|---|---|
+| 「开始」（还没有结果时） | button「开始」 | POST `/api/diagnose` `{}`（进行中再发只会加入那一次：`joined:true`） | 1，之后每秒 GET `/api/diagnose` 到 done | `/api/diagnose` `state` | 无 | 一（只发少量探测包，不改设置） |
+| 「再查一次」（标题栏右侧；进行中再点只说「正在查，稍等」） | button「再查一次」 〔交互后：有结果或进行中才有；点 button「开始」〕 | 同上 | 1 | 同上 | 无 | 一 |
+| 「重试」（后台没回应时） | button「重试」 〔交互后：后台没回应时（错误状态）〕 | 重发开始，或重拉 GET | 1 | 同上 | 无 | 一 |
+| 「加测速度 · 约 5 秒、最多 30 MB」（漫游时第一下变「走漫游流量，再按一次」，5 秒不按还原） | button「加测速度 · 约 5 秒、最多 30 MB」 〔交互后：检查完成后才有〕 | POST `/api/diagnose/speed` `{id}`（只测下载，≤30 MB；正在测速等情况回 409 + `error`/`error_en`） | 1（漫游时按两下） | `/api/diagnose` `speed` | 漫游时两段（同一按钮第二下） | 二（消耗蜂窝流量） |
+| 「对」「不对」（这次判断对不对，每次只问一回） | button「对」/「不对」 〔交互后：检查完成后才有〕 | POST `/api/diagnose/feedback` `{id, right}` | 1 | `/api/diagnose` `feedback` | 无 | 一 |
+
+写接口假成功风险：否（三个写都只动 agent 内存里的这一次检查，结果就是 GET 读回的那一份）。
 
 ---
 

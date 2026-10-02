@@ -65,6 +65,9 @@ export type ErrorKind =
   | "unauthorized"
   | "staleUnauthorized"
   | "mismatch"
+  /** The agent refused because another job holds the device (409 `busy`,
+   *  e.g. a diagnosis running): not applied, and the message says when to retry. */
+  | "busy"
   | "other";
 
 export interface StepState {
@@ -286,6 +289,7 @@ export function classifyError(e: unknown): ErrorKind {
   if (e instanceof TimeoutError) return "timeout";
   if (e instanceof ApiError) {
     if (e.status === 0) return "network";
+    if (e.busy) return "busy";
     if (e.status >= 400) return "device";
   }
   return "other";

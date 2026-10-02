@@ -1150,6 +1150,24 @@ pub struct Station {
     /// Negotiated link rates in Mbit/s (AP tx = client download).
     link_down_mbps: Option<u32>,
     link_up_mbps: Option<u32>,
+    /// AP → station frames and their retries (deep diagnosis' retry rate).
+    tx_packets: Option<u64>,
+    tx_retries: Option<u64>,
+}
+
+impl Station {
+    pub fn signal(&self) -> Option<i32> {
+        self.signal
+    }
+    pub fn link_down_mbps(&self) -> Option<u32> {
+        self.link_down_mbps
+    }
+    pub fn tx_packets(&self) -> Option<u64> {
+        self.tx_packets
+    }
+    pub fn tx_retries(&self) -> Option<u64> {
+        self.tx_retries
+    }
 }
 
 /// `iw dev <ap> info`: "channel 44 (5220 MHz), width: 160 MHz, center1: …".
@@ -1225,6 +1243,8 @@ fn parse_station_dump(text: &str, iface: &str) -> Vec<Station> {
             "tx bytes" => st.down = first.parse().unwrap_or(0),
             "signal" => st.signal = first.parse().ok(),
             "connected time" => st.connected_secs = first.parse().unwrap_or(0),
+            "tx packets" => st.tx_packets = first.parse().ok(),
+            "tx retries" => st.tx_retries = first.parse().ok(),
             "tx bitrate" => {
                 let (m, g) = parse_bitrate(v.trim());
                 st.link_down_mbps = m;
@@ -1252,6 +1272,16 @@ fn parse_leases(text: &str) -> Vec<(String, String, String)> {
             })
         })
         .collect()
+}
+
+/// (mac, name) for every lease that has a name.
+pub fn lease_names() -> Vec<(String, String)> {
+    parse_leases(&fs::read_to_string(LEASES).unwrap_or_default()).into_iter().filter(|(_, _, n)| !n.is_empty()).map(|(m, _, n)| (m, n)).collect()
+}
+
+/// The lease MAC for a LAN address, if it has one.
+pub fn lease_mac(ip: &str) -> Option<String> {
+    parse_leases(&fs::read_to_string(LEASES).unwrap_or_default()).into_iter().find(|(_, i, _)| i == ip).map(|(m, _, _)| m)
 }
 
 fn sh_out(cmd: &str) -> String {
@@ -1383,6 +1413,20 @@ struct Ops {
     /// "Back to automatic" asked for while a register is being guarded. Read
     /// and cleared under this same lock, so an accepted request is never lost.
     cancel: bool,
+}
+
+/// The live `Inner` (the first `NetInfo::new`), for [`modem_busy`].
+static LIVE: std::sync::OnceLock<Arc<Inner>> = std::sync::OnceLock::new();
+
+/// What the modem is busy with for deep diagnosis' wait (D4): "scan" while
+/// searching, "register" while registering or going back to automatic.
+pub fn modem_busy() -> Option<&'static str> {
+    let inner = LIVE.get()?;
+    match inner.ops.lock().unwrap_or_else(|e| e.into_inner()).kind {
+        OpKind::Idle => None,
+        OpKind::Scanning => Some("scan"),
+        OpKind::Registering | OpKind::Reverting => Some("register"),
+    }
 }
 
 /// Claim the modem for `want`, or say what is in the way.
@@ -1672,7 +1716,7 @@ pub struct NetInfo {
 
 impl NetInfo {
     pub fn new() -> Self {
-        Self {
+        let n = Self {
             inner: Arc::new(Inner {
                 cache: Mutex::new(Cache::default()),
                 refreshing: AtomicBool::new(false),
@@ -1685,7 +1729,9 @@ impl NetInfo {
                 scenes: Mutex::new(Value::Null),
                 scenario: Mutex::new(None),
             }),
-        }
+        };
+        let _ = LIVE.set(Arc::clone(&n.inner));
+        n
     }
 }
 
@@ -2002,6 +2048,11 @@ pub fn register(state: &AppState, body: &[u8]) -> (u16, Value) {
     let inner = Arc::clone(&state.netinfo.inner);
     let started = now();
     let snapshot = {
+        // checked and claimed under deep diagnosis' gate (D10)
+        let gate = crate::deep_diag::gate();
+        if let Some(busy) = crate::deep_diag::refusal(&gate) {
+            return busy;
+        }
         let mut o = inner.ops.lock().unwrap();
         if let Err(why) = claim(&mut o, OpKind::Registering) {
             return (409, json!({"ok": false, "error": why, "error_en": error_en(why), "guard": o.guard.json()}));
@@ -2256,9 +2307,13 @@ pub fn select_auto(state: &AppState) -> (u16, Value) {
 pub fn operator_scan(state: &AppState) -> (u16, Value) {
     let inner = Arc::clone(&state.netinfo.inner);
     {
+        let gate = crate::deep_diag::gate();
         let mut o = inner.ops.lock().unwrap();
         if o.kind == OpKind::Scanning {
             return (202, json!({"ok": true, "data": {"state": "scanning"}}));
+        }
+        if let Some(busy) = crate::deep_diag::refusal(&gate) {
+            return busy;
         }
         if let Err(why) = claim(&mut o, OpKind::Scanning) {
             return (409, json!({"ok": false, "error": why, "error_en": error_en(why)}));

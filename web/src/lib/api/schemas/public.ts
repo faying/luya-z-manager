@@ -1,6 +1,7 @@
 // Response shapes for the unauthenticated public status endpoint.
 // Types only — no runtime code (see web/scripts/mock-agent).
 
+
 /**
  * GET /api/public/status — no login needed (server.rs:98 allow-list).
  * Handler: zte-agent/src/public.rs:29 `public_status`. The agent builds this
@@ -19,6 +20,12 @@ export interface PublicStatus {
     bar: number;
     /** `lte_rsrp` when type == "LTE", otherwise `nr5g_rsrp`; 0 when missing. */
     rsrp: number;
+    /**
+     * datad's home verdict, `story.state` as-is (netwatch.rs `verdict`): ok, nosim, airplane,
+     * sos, nosvc, nodata, limit, weak, noise, crowd, only2g, only3g, narrow, stall. null when
+     * datad is silent; absent from an older agent. The home page's 「查原因 →」 reads it.
+     */
+    verdict?: string | null;
   };
   wifi: {
     /** `zwrt_wlan report` wifi_onoff == "1"; false when the ubus call fails. */

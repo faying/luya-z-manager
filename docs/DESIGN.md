@@ -113,12 +113,13 @@ C + LVGL 9.5，320×480，FreeType 渲染 CJK。继承第 2 节状态语义（�
 | 5 | sos | 只能紧急呼叫 | SOS only | bad |
 | 6 | nosvc | 无服务 | No service | bad |
 | 7 | nodata | 没连上网 | Offline | bad |
-| 8 | limit / weak / noise / crowd | 慢：限速 / 信号弱 / 干扰大 / 疑似拥挤 | Slow | warn |
-| 9 | only2g / only3g | 只有 2G / 只有 3G | 2G only / 3G only | warn |
-| 10 | narrow | 慢：载波窄 | Slow | warn |
-| 11 | ok | 顺畅 | All good | ok |
+| 8 | stall | 连上了但不通 | No traffic | bad |
+| 9 | limit / weak / noise / crowd | 慢：限速 / 信号弱 / 干扰大 / 疑似拥挤 | Slow | warn |
+| 10 | only2g / only3g | 只有 2G / 只有 3G | 2G only / 3G only | warn |
+| 11 | narrow | 慢：载波窄 | Slow | warn |
+| 12 | ok | 顺畅 | All good | ok |
 
-英文「慢」只写 Slow，原因交给右栏（信号、Noise、Load）和提示行。漫游不单独当结论，提示行末尾加「；漫游中 / ; roaming」。
+英文「慢」只写 Slow，原因交给右栏（信号、Noise、Load）和提示行。stall = 已拨号、30 秒里 `rmnet_data0` 发了 ≥ 20 个包却一个没收到（datad 采样循环记窗口，`docs/designs/slow-diagnosis.md` §4.1）。漫游不单独当结论，提示行末尾加「；漫游中 / ; roaming」。
 
 **英文长度预算**（Nunito 实际字号；datad、agent 测试按字符近似卡，触屏 render 查文字不出父容器和屏幕、兄弟控件不重叠）：
 

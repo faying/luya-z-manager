@@ -7,6 +7,7 @@ mod battery_eta;
 mod cell;
 mod charge_policy;
 mod datad_feed;
+mod deep_diag;
 mod device_ext;
 pub mod doh;
 mod event_bus;

@@ -37,6 +37,40 @@ pub struct SpeedTestProgress {
     error: Option<String>,
 }
 
+impl SpeedTestProgress {
+    pub fn download_mbps(&self) -> Option<f64> {
+        self.download_mbps.filter(|_| self.phase == Phase::Complete)
+    }
+    pub fn download_bytes(&self) -> u64 {
+        self.download_bytes
+    }
+    #[cfg(test)]
+    pub fn ended(phase: Phase, download_mbps: Option<f64>) -> Self {
+        SpeedTestProgress {
+            phase,
+            progress: 100,
+            live_speed_mbps: 0.0,
+            ping_ms: None,
+            jitter_ms: None,
+            download_mbps,
+            upload_mbps: None,
+            download_bytes: 0,
+            upload_bytes: 0,
+            server: String::new(),
+            error: None,
+        }
+    }
+
+    /// Why it didn't finish ("cancelled" when stopped).
+    pub fn failure(&self) -> Option<String> {
+        match self.phase {
+            Phase::Complete => None,
+            Phase::Cancelled => Some("cancelled".into()),
+            _ => Some(self.error.clone().unwrap_or_else(|| "failed".into())),
+        }
+    }
+}
+
 #[derive(Serialize, Clone)]
 pub struct TestServer {
     pub id: u64,
@@ -63,8 +97,48 @@ const UPLOAD_ROUNDS: usize = 10;
 const PING_COUNT: usize = 10;
 const BUF_SIZE: usize = 16384; // 16 KB
 
+/// How much one run does. [`FULL`] is the speed-test page, unchanged;
+/// [`CAPPED`] is deep diagnosis' "add speed test" (`slow-diagnosis.md` §4.2):
+/// download only, about 5 s and at most 30 MB, so it is cheap on a metered SIM.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Limits {
+    pub ping: bool,
+    pub dl_time: Duration,
+    pub dl_max_bytes: Option<u64>,
+    pub upload: bool,
+}
+
+pub const FULL: Limits = Limits { ping: true, dl_time: DOWNLOAD_DURATION, dl_max_bytes: None, upload: true };
+pub const CAPPED: Limits = Limits { ping: false, dl_time: Duration::from_secs(5), dl_max_bytes: Some(30_000_000), upload: false };
+
+/// Called with the final progress when a run ends (any way it ends).
+pub type OnDone = Box<dyn FnOnce(&SpeedTestProgress) + Send>;
+
+/// The live `running` flag (the first `SpeedTest::new`), for [`running`].
+static LIVE: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+
+/// A speed test is going (deep diagnosis waits for it, D4).
+pub fn running() -> bool {
+    LIVE.get().is_some_and(|r| r.load(Ordering::SeqCst))
+}
+
+/// Check and claim `running` under deep diagnosis' gate (D10): refused while
+/// a diagnosis runs or another test is going.
+fn admit(running: &AtomicBool) -> Result<(), (u16, Value)> {
+    let gate = crate::deep_diag::gate();
+    if let Some(busy) = crate::deep_diag::refusal(&gate) {
+        return Err(busy);
+    }
+    if running.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed).is_err() {
+        return Err((409, json!({"ok": false, "error": "test already running"})));
+    }
+    Ok(())
+}
+
 impl SpeedTest {
     pub fn new() -> Self {
+        let running = Arc::new(AtomicBool::new(false));
+        let _ = LIVE.set(Arc::clone(&running));
         Self {
             progress: Arc::new(Mutex::new(SpeedTestProgress {
                 phase: Phase::Idle,
@@ -80,7 +154,7 @@ impl SpeedTest {
                 error: None,
             })),
             cancel: Arc::new(AtomicBool::new(false)),
-            running: Arc::new(AtomicBool::new(false)),
+            running,
             servers_cache: Arc::new(Mutex::new((Vec::new(), Instant::now() - CACHE_TTL))),
         }
     }
@@ -148,6 +222,7 @@ fn run_test(
     server: &TestServer,
     progress: &Arc<Mutex<SpeedTestProgress>>,
     cancel: &Arc<AtomicBool>,
+    lim: &Limits,
 ) {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(30)))
@@ -160,6 +235,7 @@ fn run_test(
         .into();
 
     // --- Latency phase ---
+    if lim.ping {
     {
         let mut guard = progress.lock().unwrap();
         guard.phase = Phase::Latency;
@@ -208,12 +284,18 @@ fn run_test(
         guard.ping_ms = Some(round2(median_ping));
         guard.jitter_ms = Some(round2(jitter));
     }
+    }
+    // progress range of the download: 20–60 % with the other phases, else 0–100 %
+    let (dl_from, dl_span) = match (lim.ping, lim.upload) {
+        (false, false) => (0u8, 100.0),
+        _ => (20u8, 40.0),
+    };
 
     // --- Download phase ---
     {
         let mut guard = progress.lock().unwrap();
         guard.phase = Phase::Download;
-        guard.progress = 20;
+        guard.progress = dl_from;
     }
 
     let download_url = format!("{}random4000x4000.jpg", server.base_url);
@@ -221,8 +303,8 @@ fn run_test(
     let mut dl_bytes: u64 = 0;
     let mut buf = [0u8; BUF_SIZE];
 
-    // Download for DOWNLOAD_DURATION, re-fetching the file if it finishes early
-    'dl_outer: while dl_start.elapsed() < DOWNLOAD_DURATION {
+    // Download for lim.dl_time (or up to lim.dl_max_bytes), re-fetching the file if it finishes early
+    'dl_outer: while dl_start.elapsed() < lim.dl_time {
         if cancel.load(Ordering::Relaxed) {
             set_cancelled(progress);
             return;
@@ -240,7 +322,7 @@ fn run_test(
                 set_cancelled(progress);
                 return;
             }
-            if dl_start.elapsed() >= DOWNLOAD_DURATION {
+            if dl_start.elapsed() >= lim.dl_time {
                 break 'dl_outer;
             }
 
@@ -254,11 +336,16 @@ fn run_test(
                     } else {
                         0.0
                     };
-                    let pct = 20 + ((dl_start.elapsed().as_secs_f64() / DOWNLOAD_DURATION.as_secs_f64()) * 40.0).min(40.0) as u8;
-                    let mut guard = progress.lock().unwrap();
-                    guard.live_speed_mbps = round2(speed);
-                    guard.download_bytes = dl_bytes;
-                    guard.progress = pct;
+                    let pct = dl_from + ((dl_start.elapsed().as_secs_f64() / lim.dl_time.as_secs_f64()) * dl_span).min(dl_span) as u8;
+                    {
+                        let mut guard = progress.lock().unwrap();
+                        guard.live_speed_mbps = round2(speed);
+                        guard.download_bytes = dl_bytes;
+                        guard.progress = pct;
+                    }
+                    if lim.dl_max_bytes.is_some_and(|m| dl_bytes >= m) {
+                        break 'dl_outer;
+                    }
                 }
                 Err(_) => break,
             }
@@ -277,6 +364,14 @@ fn run_test(
         guard.download_mbps = Some(round2(dl_speed));
         guard.download_bytes = dl_bytes;
         guard.progress = 60;
+        if !lim.upload {
+            guard.phase = Phase::Complete;
+            guard.progress = 100;
+            guard.live_speed_mbps = 0.0;
+        }
+    }
+    if !lim.upload {
+        return;
     }
 
     // --- Upload phase ---
@@ -309,7 +404,8 @@ fn run_test(
         } else {
             0.0
         };
-        let pct = 60 + ((i + 1) as u8 * 40) / UPLOAD_ROUNDS as u8;
+        // u32: (i + 1) * 40 passes 255 at round 7
+        let pct = 60 + ((i as u32 + 1) * 40 / UPLOAD_ROUNDS as u32) as u8;
         let mut guard = progress.lock().unwrap();
         guard.live_speed_mbps = round2(speed);
         guard.upload_bytes = ul_bytes;
@@ -384,10 +480,33 @@ pub fn start(state: &AppState, body: &[u8]) -> (u16, Value) {
         }
     };
 
+    launch(&state.speedtest, server, FULL, None)
+}
+
+/// Deep diagnosis' "add speed test": [`CAPPED`] on the first (nearest)
+/// server; `on_done` gets the final progress. Same gate and "already running"
+/// rules as the page's test, and its progress shows on the page too.
+pub fn start_capped(state: &AppState, on_done: OnDone) -> (u16, Value) {
+    let server = match get_servers(&state.speedtest.servers_cache) {
+        Ok(list) => match list.into_iter().next() {
+            Some(s) => s,
+            None => return (503, json!({"ok": false, "error": "no servers available"})),
+        },
+        Err(e) => return (503, json!({"ok": false, "error": e})),
+    };
+    launch(&state.speedtest, server, CAPPED, Some(on_done))
+}
+
+fn launch(st: &SpeedTest, server: TestServer, lim: Limits, on_done: Option<OnDone>) -> (u16, Value) {
+    // Claim first, so a refused start leaves the running test's progress alone
+    if let Err(refused) = admit(&st.running) {
+        return refused;
+    }
+
     // Reset state
-    state.speedtest.cancel.store(false, Ordering::Relaxed);
+    st.cancel.store(false, Ordering::Relaxed);
     {
-        let mut guard = state.speedtest.progress.lock().unwrap();
+        let mut guard = st.progress.lock().unwrap();
         *guard = SpeedTestProgress {
             phase: Phase::Idle,
             progress: 0,
@@ -403,20 +522,19 @@ pub fn start(state: &AppState, body: &[u8]) -> (u16, Value) {
         };
     }
 
-    // Atomically set running=true; if already true, another test is in progress
-    if state.speedtest.running.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed).is_err() {
-        return (409, json!({"ok": false, "error": "test already running"}));
-    }
-
-    let progress = Arc::clone(&state.speedtest.progress);
-    let cancel = Arc::clone(&state.speedtest.cancel);
-    let running = Arc::clone(&state.speedtest.running);
+    let progress = Arc::clone(&st.progress);
+    let cancel = Arc::clone(&st.cancel);
+    let running = Arc::clone(&st.running);
 
     std::thread::spawn(move || {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_test(&server, &progress, &cancel);
+            run_test(&server, &progress, &cancel, &lim);
         }));
         running.store(false, Ordering::Relaxed);
+        if let Some(f) = on_done {
+            let last = progress.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            f(&last);
+        }
     });
 
     (200, json!({"ok": true, "data": {"status": "started"}}))
@@ -433,4 +551,112 @@ pub fn stop(state: &AppState, _body: &[u8]) -> (u16, Value) {
     }
     state.speedtest.cancel.store(true, Ordering::Relaxed);
     (200, json!({"ok": true, "data": {"status": "stopping"}}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// `left` bytes at about `bps` bytes per second (sleeps only when ahead).
+    struct Slow {
+        left: u64,
+        bps: u64,
+        sent: u64,
+        start: Option<Instant>,
+    }
+
+    impl std::io::Read for Slow {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.left == 0 {
+                return Ok(0);
+            }
+            let start = *self.start.get_or_insert_with(Instant::now);
+            let due = Duration::from_secs_f64(self.sent as f64 / self.bps as f64);
+            if let Some(ahead) = due.checked_sub(start.elapsed()) {
+                std::thread::sleep(ahead);
+            }
+            let n = buf.len().min(self.left as usize).min(64 * 1024);
+            buf[..n].fill(0x5a);
+            self.left -= n as u64;
+            self.sent += n as u64;
+            Ok(n)
+        }
+    }
+
+    /// latency.txt, random4000x4000.jpg (8 MB at ~20 MB/s), upload.php.
+    fn server() -> TestServer {
+        let srv = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = srv.server_addr().to_ip().unwrap().port();
+        std::thread::spawn(move || {
+            for mut rq in srv.incoming_requests() {
+                std::thread::spawn(move || {
+                    let url = rq.url().to_string();
+                    if url.ends_with("random4000x4000.jpg") {
+                        let len = 8_000_000;
+                        let body = Slow { left: len, bps: 20_000_000, sent: 0, start: None };
+                        let _ = rq.respond(tiny_http::Response::new(tiny_http::StatusCode(200), vec![], body, Some(len as usize), None));
+                    } else {
+                        let mut sink = Vec::new();
+                        let _ = rq.as_reader().read_to_end(&mut sink);
+                        let _ = rq.respond(tiny_http::Response::from_string("size=1"));
+                    }
+                });
+            }
+        });
+        let base = format!("http://127.0.0.1:{port}/");
+        TestServer {
+            id: 1,
+            name: "local".into(),
+            sponsor: "test".into(),
+            country: "".into(),
+            host: format!("127.0.0.1:{port}"),
+            url: format!("{base}upload.php"),
+            base_url: base,
+        }
+    }
+
+    fn run(lim: Limits) -> (SpeedTestProgress, Duration) {
+        let st = SpeedTest::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let t = Instant::now();
+        let (code, _) = launch(&st, server(), lim, Some(Box::new(move |p: &SpeedTestProgress| tx.send(p.clone()).unwrap())));
+        assert_eq!(code, 200);
+        let p = rx.recv_timeout(Duration::from_secs(60)).unwrap();
+        assert!(!st.running.load(Ordering::SeqCst));
+        (p, t.elapsed())
+    }
+
+    /// The page's test is unchanged: ping, 15 s of download, then upload.
+    #[test]
+    fn full_run_does_all_three_phases() {
+        let (p, took) = run(FULL);
+        assert!(p.phase == Phase::Complete && p.progress == 100, "{:?}", p.error);
+        assert!(p.ping_ms.is_some() && p.upload_mbps.is_some() && p.download_mbps.is_some());
+        assert_eq!(p.upload_bytes, (UPLOAD_SIZE * UPLOAD_ROUNDS) as u64);
+        assert!(took >= DOWNLOAD_DURATION, "{took:?}");
+        // ~20 MB/s for 15 s: well past the capped run's 30 MB
+        assert!(p.download_bytes > 60_000_000, "{}", p.download_bytes);
+        assert_eq!(FULL, Limits { ping: true, dl_time: Duration::from_secs(15), dl_max_bytes: None, upload: true });
+    }
+
+    /// "Add speed test": download only, stops at 30 MB (here ~1.5 s) or 5 s.
+    #[test]
+    fn capped_run_stops_early_and_skips_ping_and_upload() {
+        let (p, took) = run(CAPPED);
+        assert!(p.phase == Phase::Complete && p.progress == 100, "{:?}", p.error);
+        assert!(p.ping_ms.is_none() && p.upload_mbps.is_none() && p.upload_bytes == 0);
+        assert!(p.download_bytes >= 30_000_000 && p.download_bytes < 30_000_000 + BUF_SIZE as u64, "{}", p.download_bytes);
+        assert!(took < Duration::from_secs(6), "{took:?}");
+        assert!(p.download_mbps().is_some_and(|m| m > 10.0));
+        assert_eq!(p.failure(), None);
+    }
+
+    #[test]
+    fn second_start_is_refused_and_leaves_progress_alone() {
+        let st = SpeedTest::new();
+        st.running.store(true, Ordering::SeqCst);
+        st.progress.lock().unwrap().download_bytes = 1234;
+        let (code, body) = launch(&st, server(), FULL, None);
+        assert_eq!((code, body["error"].as_str()), (409, Some("test already running")));
+        assert_eq!(st.progress.lock().unwrap().download_bytes, 1234);
+    }
 }

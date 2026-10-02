@@ -1,5 +1,13 @@
 export type ApiOk<T> = { ok: true; data?: T };
-export type ApiErr = { ok: false; error: string; error_en?: string | null };
+export type ApiErr = {
+  ok: false;
+  error: string;
+  error_en?: string | null;
+  /** Set when another job holds the device (deep_diag.rs `refusal`: "diagnose"). */
+  busy?: string | null;
+  /** About how long until it is free (with `busy`). */
+  retry_after_s?: number | null;
+};
 export type ApiResp<T> = ApiOk<T> | ApiErr;
 
 export class ApiError extends Error {
@@ -8,11 +16,18 @@ export class ApiError extends Error {
    *  own `error`, so code that tests it keeps working in either language;
    *  pages show `errorText(e, lang)` instead. */
   messageEn?: string;
-  constructor(message: string, status: number, messageEn?: string | null) {
+  /** What holds the device when the agent refused because it is busy
+   *  (409 `busy`, e.g. "diagnose": 「正在诊断，约 N 秒后再试」). The message
+   *  already says it all, so pages show it as it is. */
+  busy?: string;
+  retryAfterS?: number;
+  constructor(message: string, status: number, messageEn?: string | null, busy?: string | null, retryAfterS?: number | null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     if (messageEn) this.messageEn = messageEn;
+    if (busy) this.busy = busy;
+    if (typeof retryAfterS === "number") this.retryAfterS = retryAfterS;
   }
 }
 

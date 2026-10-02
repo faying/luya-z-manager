@@ -236,6 +236,7 @@ export const zh = {
     stc: "STC",
     at: "AT 终端",
     speedtest: "测速",
+    diagnose: "网络诊断",
     processes: "进程",
     enableAdb: "启用 ADB",
     deviceControl: "设备控制",

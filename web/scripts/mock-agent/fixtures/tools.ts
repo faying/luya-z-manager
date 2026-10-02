@@ -18,6 +18,7 @@
 import type { Route, Ctx } from "../lib.ts";
 import { ok, fail, bodyField } from "../lib.ts";
 import { shared } from "../shared.ts";
+import { diagRefusal } from "./diagnose.ts";
 import type {
   SpeedServer,
   SpeedProgress,
@@ -238,6 +239,8 @@ export const routes: Route[] = [
         if (!server) return fail("no servers available", 503);
       }
       if (isRunning(ctx.now)) return fail("test already running", 409);
+      const busy = diagRefusal(ctx.now);
+      if (busy) return busy;
       const weak = ctx.has("weak");
       run = {
         startedAt: ctx.now,
