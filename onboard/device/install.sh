@@ -20,8 +20,10 @@ set -u
 
 KIT=$(cd "$(dirname "$0")/.." && pwd)
 P=$KIT/payload
-RC=/etc/rc.local
-STATE=/data/u60-kit          # 原厂 rc.local 备份 + 已装版本记录
+# 测试（onboard/test/device-recover.sh）用 KIT_* 把路径挪进临时目录
+RC=${KIT_RC:-/etc/rc.local}
+STATE=${KIT_STATE:-/data/u60-kit}          # 原厂 rc.local 备份 + 已装版本记录
+SHIPD=${KIT_SHIP_DIR:-/data/u60-ship}      # u60 ship：事务、开机收尾脚本 u60-recover.sh（touch-ui docs/SHIP.md）
 
 log()  { echo "[device] $*"; }
 warn() { echo "[device] 注意: $*"; }
@@ -85,15 +87,125 @@ rc_replace() { # <line> <old-marker> <new-marker>
 
 # ── 进程监督与 Wi-Fi 兜底：/data/u60-guard + /etc/init.d/{zte-agent,zwrt-datad,u60-guard}
 # 契约见 docs/RELIABILITY.md。admin 和 devui 都要用到（datad 也由 supervise.sh 包着）。
-G=/data/u60-guard
+G=${KIT_GUARD:-/data/u60-guard}
 install_guard() {
     [ -d "$P/guard" ] || die "包里没有 guard/（装机包太旧？）"
     mkdir -p "$G"
-    for f in alert-lib.sh u60-guard.sh supervise.sh agent-auth.sh chaos.sh doctor.sh config-backup.sh power-sample.sh wan-sources.sh; do put "$P/guard/$f" "$G/$f" 755; done
+    for f in alert-lib.sh u60-guard.sh supervise.sh agent-auth.sh chaos.sh doctor.sh config-backup.sh power-sample.sh wan-sources.sh \
+             wifi-ab.sh u60-ship.sh datad-trial.sh; do
+        # 旧装机包里没有的几个跳过（u60-ship.sh、datad-trial.sh 是 E1 加的，wifi-ab.sh 是第二期加进清单的）
+        [ -f "$P/guard/$f" ] || { [ "$f" = u60-ship.sh ] || [ "$f" = datad-trial.sh ] || [ "$f" = wifi-ab.sh ] && continue; }
+        put "$P/guard/$f" "$G/$f" 755
+    done
+    place_recover
     for s in zte-agent zwrt-datad u60-guard; do
         put "$P/guard/$s.init" "/etc/init.d/$s" 755
         cp "$P/guard/$s.init" "$G/$s.init"
     done
+}
+
+# ── u60 ship 的开机收尾脚本 /data/u60-ship/u60-recover.sh（touch-ui docs/SHIP.md）──
+# 它不随 u60 ship 更新，换它要单独一步（sh -n + 设备上自检 + 用户同意）。所以 admin/devui
+# 只在设备上还没有时放一份（先 sh -n、selftest）；已有且不同就不换，提示用 recover 组件。
+# rc.local 里调用它的那一行只由 recover 组件加（不在全套里，要单独点名，算用户同意）。
+recover_check() { # <file>：sh -n + selftest 都过 = 0
+    sh -n "$1" 2>/dev/null && sh "$1" selftest 2>/dev/null | grep -q 'selftest: PASS'
+}
+recover_put() { # 自检过了才放：临时名 → sync → mv → sync
+    recover_check "$P/guard/u60-recover.sh" || die "包里的 u60-recover.sh 在这台设备上 sh -n 或 selftest 不过，没装"
+    mkdir -p "$SHIPD" && cp "$P/guard/u60-recover.sh" "$SHIPD/u60-recover.sh.new" && chmod 755 "$SHIPD/u60-recover.sh.new" \
+        && sync && mv -f "$SHIPD/u60-recover.sh.new" "$SHIPD/u60-recover.sh" && sync || die "写入 $SHIPD/u60-recover.sh 失败"
+}
+place_recover() {
+    [ -f "$P/guard/u60-recover.sh" ] || return 0
+    if [ ! -f "$SHIPD/u60-recover.sh" ]; then
+        recover_put
+        log "u60 ship 开机收尾脚本: 已放到 $SHIPD/u60-recover.sh（自检通过）；rc.local 那一行要 ./install.sh recover 才加"
+    elif ! cmp -s "$P/guard/u60-recover.sh" "$SHIPD/u60-recover.sh"; then
+        warn "设备上的 $SHIPD/u60-recover.sh 和包里的不一样，没换（换它要单独一步：./install.sh recover，先问用户）"
+    fi
+}
+
+# recover 组件：换上包里的 u60-recover.sh（自检过才换），并在 rc.local 里各服务启动行之前加一行调用它
+do_recover() {
+    [ -f "$P/guard/u60-recover.sh" ] || die "包里没有 guard/u60-recover.sh（装机包太旧？）"
+    if [ -f "$SHIPD/u60-recover.sh" ] && cmp -s "$P/guard/u60-recover.sh" "$SHIPD/u60-recover.sh"; then
+        log "u60-recover.sh: 已是包里的版本"
+    else
+        [ -f "$SHIPD/u60-recover.sh" ] && cp "$SHIPD/u60-recover.sh" "$SHIPD/u60-recover.sh.prev-kit"
+        recover_put
+        log "u60-recover.sh: 已换上（自检通过）"
+    fi
+    line="sh $SHIPD/u60-recover.sh   # u60_recover：开机先收尾上次没做完的 u60 ship"
+    grep -v '^[[:space:]]*#' "$RC" 2>/dev/null | grep -qF "$SHIPD/u60-recover.sh" && { log "rc.local: 已有调用 u60-recover.sh 的一行"; return 0; }
+    backup_rc
+    # 插在第一条服务启动行（zte-agent / zwrt-datad / u60-guard / u60-uid）之前；都没有就放 exit 0 之前
+    awk -v ins="$line" '
+        !d && !/^[[:space:]]*#/ && (/\/etc\/init\.d\/(zte-agent|zwrt-datad|u60-guard|u60-uid)[[:space:]]+start/ || /^exit 0/) { print ins; d = 1 }
+        { print }
+        END { if (!d) print ins }' "$RC" > /tmp/rc.local.new
+    sh -n /tmp/rc.local.new || { rm -f /tmp/rc.local.new; die "rc.local 语法检查没过，已放弃修改"; }
+    cat /tmp/rc.local.new > "$RC" && rm -f /tmp/rc.local.new
+    log "rc.local 加入（在服务启动行之前）: $line"
+}
+
+# 设备上有没结束的 u60 ship 事务时，不装会停/换我们组件的东西（admin、devui、recover）：
+# 执行器、guard 的兜底和开机收尾都按事务日志里的旧版 md5 干活，装机包插进来会把它们搞乱。
+# 读事务日志判断；读不懂（v 不是 1 或 2、没有 end=1、阶段不认识）也算有事务。
+# v=2 是 web、guard 的事务日志（目录、/etc 下的文件；touch-ui docs/SHIP.md），阶段的规则和 v=1 一样。
+ship_busy() { # 有事务就打印一句原因
+    [ -f "$SHIPD/txn" ] || return 0
+    _v= _e= _ph= _cp= _tx=
+    while IFS= read -r _l; do
+        case "$_l" in
+            v=*) _v=${_l#v=} ;; end=1) _e=1 ;; phase=*) _ph=${_l#phase=} ;;
+            comp=*) _cp=${_l#comp=} ;; txn=*) _tx=${_l#txn=} ;;
+        esac
+    done < "$SHIPD/txn"
+    case "$_v" in 1 | 2) ;; *) _e= ;; esac
+    if [ "$_e" != 1 ]; then
+        echo "设备上的上机事务日志 $SHIPD/txn 读不懂"
+        return 0
+    fi
+    case "$_ph" in
+        done | rolledback | aborted | manifest_pending) ;;
+        staged | trial | promote | check | manifest | rollback) echo "设备上有没结束的上机事务 $_tx（$_cp，$_ph）" ;;
+        failed) echo "设备上的上机事务 $_tx（$_cp）停在 failed，要人处理" ;;
+        *) echo "设备上的上机事务日志阶段看不懂（${_ph:-空}）" ;;
+    esac
+}
+
+# 装完一个组件，在设备清单里记一条 kind=kit（u60-ship.sh record-kit）。来源在 guard/kit-source
+# （build-kit.sh 写的：装机包日期、提交号、格式版本、有没有未提交改动）。记不上只提醒。
+kit_record() { # <组件>
+    [ -f "$G/u60-ship.sh" ] && [ -f "$P/guard/kit-source" ] || { warn "没记进设备清单（包里缺 u60-ship.sh 或 kit-source，装机包太旧？）"; return 0; }
+    stamp=$(sed -n 's/^stamp=//p' "$P/guard/kit-source")
+    commit=$(sed -n "s/^$1_commit=//p" "$P/guard/kit-source")
+    format=$(sed -n "s/^$1_format=//p" "$P/guard/kit-source")
+    dirty=$(sed -n "s/^$1_dirty=//p" "$P/guard/kit-source")
+    [ "$dirty" = 1 ] && dirty=dirty || dirty=
+    case "${KIT_MAC_TIME:-}" in '' | *[!0-9]*) KIT_MAC_TIME=$(date +%s) ;; esac
+    if sh "$G/u60-ship.sh" record-kit "$1" "$stamp" "${commit:-0000000}" "${format:-1}" "$KIT_MAC_TIME" $dirty >/dev/null 2>&1; then
+        log "设备清单: 记下装机包 $stamp 装的 $1（${commit:-0000000}${dirty:+，有未提交改动}）"
+    else
+        warn "设备清单没记上 $1（有 u60 ship 事务在进行？看 /data/u60-ship/ship.log）"
+    fi
+}
+
+# 装完触屏，把屏幕交给新程序。新的装法（R8，和 u60 ship 的 touch、uid 同一份）：
+# u60-ship.sh uid-restart <界面 md5> <u60-uid md5> = u60-uid 在跑就先停（界面留在屏上）→ 清启动计数 →
+# 起 u60-uid → 等界面和 u60-uid 两个进程都在、且 /proc/<pid>/exe 的 md5 就是刚装的 → 不对再起一次 → 还不对退出 1。
+# 包里的 u60-ship.sh 太旧（没有 uid-restart）时退回老写法：restart，不行就 start。
+# uid-restart 没确认只提醒，之后 do_devui 照旧检查界面进程在不在。
+uid_restart() { # <界面程序> <u60-uid 程序>
+    if [ -f "$G/u60-ship.sh" ] && grep -q 'uid-restart)' "$G/u60-ship.sh"; then
+        _um=$(md5sum <"$1" | cut -d' ' -f1)
+        _uu=$(md5sum <"$2" | cut -d' ' -f1)
+        sh "$G/u60-ship.sh" uid-restart "$_um" "$_uu" >/tmp/u60-kit-uid.log 2>&1 \
+            || warn "uid-restart 没确认新界面和新 u60-uid 都在跑（看 /tmp/u60-kit-uid.log、/tmp/u60-uid.log）"
+    else
+        /etc/init.d/u60-uid restart >/dev/null 2>&1 || /etc/init.d/u60-uid start
+    fi
 }
 
 svc_running() { # <name>
@@ -204,6 +316,7 @@ do_admin() {
     /etc/init.d/u60-guard restart >/dev/null 2>&1 || /etc/init.d/u60-guard start
     sleep 2
     svc_running u60-guard && log "Wi-Fi 兜底看门狗: 已启动" || warn "u60-guard 没起来，看 logread"
+    kit_record agent
 }
 
 # ── devui 触屏界面 + 数据后端 zwrt-datad ─────────────────────────────────────
@@ -255,7 +368,7 @@ do_devui() {
     # 每次重启 u60-uid 都算一次失败的启动，第三次它就放弃、交还原厂界面（2026-09-23 实际遇到）。
     # 新程序真崩的话，从 0 开始照样两次就放弃。
     rm -f /data/u60-uid/attempts /data/u60-uid/gave-up
-    /etc/init.d/u60-uid restart >/dev/null 2>&1 || /etc/init.d/u60-uid start
+    uid_restart "$D/u60pro-devui" "$D/u60-uid"
 
     i=0
     while [ $i -lt 10 ]; do
@@ -268,6 +381,8 @@ do_devui() {
     pidof zwrt-datad >/dev/null || warn "zwrt-datad 没起来，屏幕会没有数据，看 /tmp/zwrt-datad.log 和 logread"
     [ "$(pidof zwrt-datad | wc -w)" -le 1 ] || warn "有不止一个 zwrt-datad 在跑（start.sh 没认出 procd 装法？）"
     log "devui: 屏幕界面已接管"
+    kit_record touch
+    kit_record uid
 }
 
 # ── eSIM：lpac（qmi_qrtr）装到 /data/esim，后台和屏幕都靠它读写卡 ───────────────
@@ -294,20 +409,28 @@ do_status() {
     p "zwrt-datad" "$(pidof zwrt-datad >/dev/null && echo 运行中 || echo 未运行)$(svc zwrt-datad)"
     p "Wi-Fi 兜底" "$(svc_running u60-guard && echo 运行中 || echo 未运行)"
     p "eSIM 组件" "$([ -x /data/esim/lpac ] && echo 已装 || echo 未装)"
+    p "上机收尾" "$([ -f "$SHIPD/u60-recover.sh" ] && echo 'u60-recover.sh 已放' || echo 'u60-recover.sh 没放')$(grep -v '^[[:space:]]*#' "$RC" 2>/dev/null | grep -qF u60-recover.sh && echo '，rc.local 有那一行' || echo '，rc.local 没有那一行（./install.sh recover）')"
     p "自动升级" "$([ "$(uci -q get zwrt_zte_dm.dm_update.dm_update_mode)" = 0 ] && echo 已关闭 || echo 开着)"
     p "USB 模式" "$(ubus call zwrt_bsp.usb list '{}' 2>/dev/null | sed -n 's/.*"mode": *"\([^"]*\)".*/\1/p')"
     echo "  rc.local 自启:"
     grep -E "start_dropbear|start_zte_agent|u60pro_devui|/etc/init.d/(zte-agent|zwrt-datad|u60-guard|u60-uid) start" "$RC" 2>/dev/null | sed 's/^/    /'
 }
 
-[ $# -gt 0 ] || die "用法: sh device/install.sh {ssh|admin|devui|esim|status}..."
+[ $# -gt 0 ] || die "用法: sh device/install.sh {ssh|admin|devui|esim|recover|status}..."
 COMPONENTS="$*"
+case " $COMPONENTS " in
+    *" admin "* | *" devui "* | *" recover "*)
+        busy=$(ship_busy)
+        [ -n "$busy" ] && die "$busy：先等它结束（电脑上 tools/u60 status 看；sh $G/u60-ship.sh status），这次什么都没装"
+        ;;
+esac
 for c in "$@"; do
     case "$c" in
         ssh)    do_ssh ;;
         admin)  do_admin ;;
         devui)  do_devui ;;
         esim)   do_esim ;;
+        recover) do_recover ;;
         status) do_status ;;
         *) die "不认识的组件: $c" ;;
     esac

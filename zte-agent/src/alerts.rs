@@ -225,6 +225,7 @@ impl Alerts {
                     "kind": e.kind,
                     // the touch screen's wording (it no longer keeps its own table)
                     "label": kind_label(&e.kind),
+                    "label_en": kind_label_en(&e.kind),
                     "text": e.text,
                     "unread": e.seq > read,
                 })
@@ -285,6 +286,33 @@ pub fn kind_label(kind: &str) -> String {
     T.iter()
         .find(|t| t.0 == kind)
         .map_or_else(|| format!("其他告警（{kind}）"), |t| t.1.to_string())
+}
+
+/// English for [`kind_label`]. Taken from the admin web's labels
+/// (web/src/lib/alerts.ts kindLabel), with the glossary's name for the touch
+/// screen (docs/ui-glossary.md §3: Screen UI): the web is to read these
+/// instead of keeping its own copy (L2 review R8).
+pub fn kind_label_en(kind: &str) -> String {
+    const T: &[(&str, &str)] = &[
+        ("agent-crash", "Admin backend (zte-agent) exited unexpectedly"),
+        ("agent-silent", "Admin backend (zte-agent) stopped responding"),
+        ("agent-hung", "Admin backend was stuck and was restarted"),
+        ("datad-crash", "Data service (zwrt-datad) exited unexpectedly"),
+        ("devui-crash", "Screen UI exited unexpectedly"),
+        (
+            "devui-gave-up",
+            "Screen UI kept failing; stock UI is on screen (long-press the bottom-right corner to retry)",
+        ),
+        ("devui-theme-paused", "Automatic light/dark switching on the screen paused until reboot"),
+        ("wifi-takeover", "Wi-Fi watchdog turned Wi-Fi back on"),
+        ("wifi-restore-failed", "Wi-Fi watchdog could not turn Wi-Fi on"),
+        ("sms-failed", "Alert SMS could not be sent"),
+        ("sms-test", "Test SMS"),
+        ("datad-degraded", "Data service (zwrt-datad) not answering; admin backend reads the modem directly"),
+    ];
+    T.iter()
+        .find(|t| t.0 == kind)
+        .map_or_else(|| format!("Other alert ({kind})"), |t| t.1.to_string())
 }
 
 fn alerts() -> Alerts {
@@ -403,6 +431,47 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn every_kind_has_english_without_cjk() {
+        use super::{kind_label, kind_label_en};
+        use crate::health::has_cjk;
+        let kinds = [
+            "agent-crash", "agent-silent", "agent-hung", "datad-crash", "devui-crash", "devui-gave-up",
+            "devui-theme-paused", "wifi-takeover", "wifi-restore-failed", "sms-failed", "sms-test",
+            "datad-degraded",
+        ];
+        for k in kinds {
+            let en = kind_label_en(k);
+            assert!(!kind_label(k).starts_with("其他告警"), "{k} has no Chinese label");
+            assert!(!en.starts_with("Other alert"), "{k} has no English label");
+            assert!(!has_cjk(&en) && !en.ends_with('.') && !en.contains("Please"), "{k}: {en}");
+        }
+        assert_eq!(kind_label_en("agent-crash"), "Admin backend (zte-agent) exited unexpectedly");
+        assert_eq!(kind_label_en("something-new"), "Other alert (something-new)");
+    }
+
+    /// The touch screen reads /api/alerts into a 32 KB buffer (touch-ui
+    /// alerts.c AL_RESP_MAX) and truncates silently; 50 events of the longest
+    /// label with a full 120-character text must still fit with room to spare.
+    #[test]
+    fn fifty_longest_events_fit_the_screen_buffer() {
+        let a = scratch("size");
+        let text = "x".repeat(120);
+        let mut q = String::new();
+        for i in 1..=60u64 {
+            q.push_str(&format!("{i}\t1758600000\t4294967295\tdevui-gave-up\t{text}\n"));
+        }
+        fs::write(a.path("queue"), q).unwrap();
+        a.write_whole("sms-to", "+12345678901234567890\n").unwrap();
+        let body = json!({"ok": true, "data": a.summary(1_758_700_000, Some(1))}).to_string();
+        assert_eq!(a.summary(1_758_700_000, Some(1))["events"].as_array().unwrap().len(), EVENTS_SHOWN);
+        let before = body.matches(r#","label_en":""#).count();
+        let en_bytes: usize = body.split(r#""label_en":""#).skip(1).map(|r| r.find('"').unwrap() + 14).sum();
+        eprintln!("alerts: {} bytes before L2, {} after ({before} events)", body.len() - en_bytes, body.len());
+        assert!(body.len() < 24 * 1024, "{} bytes", body.len());
+        let _ = fs::remove_dir_all(&a.dir);
+    }
 
     #[test]
     fn add_appends_with_seq_and_trims() {

@@ -16,6 +16,7 @@ import { apiFetch } from "@/lib/api/client";
 import { useWriteOp } from "@/lib/api/writeOp";
 import { fmtDevice } from "@/lib/deviceClock";
 import type { Health, HealthCheck, HealthCrashLog, HealthCrashLogText } from "@/lib/api/schemas/system";
+import { healthRows } from "@/lib/health";
 import {
   Button,
   ConfirmInline,
@@ -28,8 +29,6 @@ import {
   useConfirmInline,
   type Tone,
 } from "@/components/nd";
-
-const LEVEL_TONE: Record<HealthCheck["level"], Tone> = { ok: "ok", warn: "warn", bad: "bad" };
 
 type LogText = { state: "loading" } | { state: "error" } | { state: "ok"; text: string };
 
@@ -220,14 +219,14 @@ export default function HealthPage() {
                 </span>
               </div>
             ) : (
-              data.checks.map((c) => (
+              healthRows(data.checks).map((c) => (
                 <div key={c.id} className="nd-row nd-row--two items-start">
                   <span className="nd-row__text">
                     <span className="nd-row__label">{c.label}</span>
                     <span className="nd-row__sub block break-words">{c.detail}</span>
                   </span>
                   <span className="shrink-0 text-[14px]">
-                    <StatusMark tone={LEVEL_TONE[c.level]}>{levelWord(t, c.level)}</StatusMark>
+                    <StatusMark tone={c.tone}>{levelWord(t, c.tone)}</StatusMark>
                   </span>
                 </div>
               ))

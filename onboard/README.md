@@ -60,6 +60,9 @@ You can also install only some of the pieces:
 ```sh
 ./install.sh ssh               # ADB + persistent SSH only
 ./install.sh ssh admin devui   # no eSIM
+./install.sh recover           # boot-time clean-up for `u60 ship`: puts /data/u60-ship/u60-recover.sh in place (after its
+                               #   selftest on the device) and adds one line calling it to rc.local, before the service lines.
+                               #   Not part of the full set: run it only when you mean to change rc.local
 ./install.sh status            # show component status
 ./install.sh doctor            # read-only health check: boot sync, auto-update, services, heartbeat, Wi-Fi, alerts... each item ●▲■
 ./install.sh backup            # back up the device config to this computer (./backups/, contains passwords, don't share)
@@ -75,6 +78,8 @@ If the U60 is not at `192.168.0.1`: `GATEWAY=192.168.x.1 ./install.sh`.
 
 Programs and data all live in `/data` (firmware upgrades don't wipe it). Autostart is only a few lines added to `/etc/rc.local`; no stock service is changed.
 The advanced admin web, the screen's data backend and the Wi-Fi fallback watchdog are supervised by the system's procd: if one crashes it is restarted automatically and an alert is logged (SMS notification can be set up in the admin web under 「系统 → 告警」 (System → Alerts)).
+After `admin` and `devui`, the kit writes what it installed (kit date, commit) into the device manifest `/data/u60-manifest.jsonl`, one line per component (agent; touch, uid), which `doctor` compares with the files.
+`devui` hands the screen to the new programs with `u60-ship.sh uid-restart`: it restarts `u60-uid` and checks that the running touch UI and `u60-uid` are the ones just installed.
 
 | Path | Purpose |
 |---|---|

@@ -60,6 +60,8 @@ claude
 ```sh
 ./install.sh ssh               # 只开 ADB + 持久化 SSH
 ./install.sh ssh admin devui   # 不要 eSIM
+./install.sh recover           # u60 ship 的开机收尾：放好 /data/u60-ship/u60-recover.sh（先在设备上自检），并在 rc.local
+                               #   各服务启动行之前加一行调用它。不在全套里：确定要改 rc.local 时才单独跑
 ./install.sh status            # 看各组件状态
 ./install.sh doctor            # 只读体检：开机同步、自动升级、各服务、心跳、Wi-Fi、告警……逐项 ●▲■
 ./install.sh backup            # 把设备配置备份到这台电脑（./backups/，含密码，别外传）
@@ -75,6 +77,8 @@ U60 地址不是 `192.168.0.1` 时：`GATEWAY=192.168.x.1 ./install.sh`。
 
 程序和数据都在 `/data`（固件升级也不会清）。开机自启只在 `/etc/rc.local` 里加了几行，没有改任何原厂服务。
 高级后台、屏幕的数据后端和 Wi-Fi 兜底看门狗由系统的 procd 监督：崩溃会被自动拉起，并记一条告警（后台「系统 → 告警」可以设短信通知）。
+`admin`、`devui` 装完会把装了什么（装机包日期、提交号）写进设备清单 `/data/u60-manifest.jsonl`，每个组件一行（agent；touch、uid），`doctor` 拿它和文件比对。
+`devui` 用 `u60-ship.sh uid-restart` 把屏幕交给新程序：重启 `u60-uid`，并核对正在跑的触屏界面和 `u60-uid` 就是刚装的那两个。
 
 | 路径 | 用途 |
 |---|---|

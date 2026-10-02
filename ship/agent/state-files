@@ -1,0 +1,9 @@
+# u60 ship：agent 的状态文件（设备上的绝对路径，一行一个）。试跑、转正前拷一份，退回时一起换回。
+# 只写会被程序改写的设置和状态；只追加的日志、账本不写。必须在 u60-ship.sh 里这个组件的清单之内。
+/data/scenario/state.json
+/data/scenario/scenarios.json
+/data/scenario/restore.json
+/data/scenario/pin
+/data/scenario/disabled
+/data/homemode/state
+/data/homemode/disabled

@@ -34,6 +34,10 @@ struct Check {
     id: String,
     label: String,
     detail: String,
+    /// English twins from doctor `--tsv2`; empty when the doctor is too old
+    /// to give them (sent as null, so clients fall back to the Chinese).
+    label_en: String,
+    detail_en: String,
 }
 
 struct Snapshot {
@@ -52,19 +56,74 @@ fn parse(tsv: &str) -> Vec<Check> {
             if f.len() != 4 || !matches!(f[0], "ok" | "warn" | "bad") {
                 return None;
             }
-            Some(Check { level: f[0].into(), id: f[1].into(), label: f[2].into(), detail: f[3].into() })
+            Some(Check {
+                level: f[0].into(),
+                id: f[1].into(),
+                label: f[2].into(),
+                detail: f[3].into(),
+                label_en: String::new(),
+                detail_en: String::new(),
+            })
         })
         .collect()
 }
 
+/// First line of `doctor.sh --tsv2`. An older doctor does not know the flag
+/// and prints its human-readable report instead (L2 review R2), so without
+/// this line the output is not ours to parse.
+const TSV2_MARKER: &str = "#tsv2";
+
+/// True when the output starts with the `--tsv2` marker line.
+fn has_tsv2_marker(out: &str) -> bool {
+    out.lines().next().map(|l| l.trim_end_matches('\r')) == Some(TSV2_MARKER)
+}
+
+/// `doctor.sh --tsv2`: after the marker line, six tab-separated columns
+/// `level id label detail label_en detail_en`. A Chinese detail may itself
+/// contain a tab (see the 4-column test), so the first three and the last two
+/// fields are fixed and whatever lies between is the detail.
+fn parse_tsv2(tsv: &str) -> Vec<Check> {
+    tsv.lines()
+        .skip(1)
+        .filter_map(|l| {
+            let l = l.trim_end_matches('\r');
+            let f: Vec<&str> = l.split('\t').collect();
+            if f.len() < 6 || !matches!(f[0], "ok" | "warn" | "bad") {
+                return None;
+            }
+            let n = f.len();
+            Some(Check {
+                level: f[0].into(),
+                id: f[1].into(),
+                label: f[2].into(),
+                detail: f[3..n - 2].join("\t"),
+                label_en: f[n - 2].into(),
+                detail_en: f[n - 1].into(),
+            })
+        })
+        .collect()
+}
+
+/// Run the doctor the new way, falling back to the old one: `--tsv2` first;
+/// if its first line is not the marker (an older doctor.sh), run `--tsv` and
+/// leave the English empty. A timeout or a missing script is an error either
+/// way — never read as "old doctor", so it cannot cost a second 20 s run.
+fn run_checks(doctor: &str) -> Result<Vec<Check>, String> {
+    let out = run_doctor(doctor, "--tsv2")?;
+    if has_tsv2_marker(&out) {
+        return Ok(parse_tsv2(&out));
+    }
+    Ok(parse(&run_doctor(doctor, "--tsv")?))
+}
+
 /// Run doctor.sh with a deadline. Its exit status is "no bad checks", not
 /// success/failure of the run itself, so only the output matters.
-fn run_doctor() -> Result<String, String> {
-    if !std::path::Path::new(DOCTOR).exists() {
-        return Err(format!("{DOCTOR} is not installed"));
+fn run_doctor(doctor: &str, flag: &str) -> Result<String, String> {
+    if !std::path::Path::new(doctor).exists() {
+        return Err(format!("{doctor} is not installed"));
     }
     let mut child = Command::new("sh")
-        .args([DOCTOR, "--tsv"])
+        .args([doctor, flag])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -96,11 +155,11 @@ fn now_device() -> i64 {
 }
 
 fn refresh() {
-    let result = run_doctor();
+    let result = run_checks(DOCTOR);
     let mut s = LAST.lock().unwrap_or_else(|e| e.into_inner());
     match result {
-        Ok(out) => {
-            s.checks = parse(&out);
+        Ok(checks) => {
+            s.checks = checks;
             s.error = None;
         }
         Err(e) => s.error = Some(e),
@@ -201,6 +260,16 @@ fn crash_logs() -> Vec<Value> {
     out
 }
 
+/// One check for `/api/health`. The English twins are null, not "", when the
+/// doctor did not give them: clients write `label_en ?? label`.
+fn check_json(c: &Check) -> Value {
+    let en = |s: &str| (!s.is_empty()).then(|| s.to_string());
+    json!({
+        "level": c.level, "id": c.id, "label": c.label, "detail": c.detail,
+        "label_en": en(&c.label_en), "detail_en": en(&c.detail_en),
+    })
+}
+
 /// GET /api/health[?refresh=1]
 pub fn health_get(_state: &AppState, query: &str) -> (u16, Value) {
     if query.split('&').any(|kv| kv == "refresh=1") {
@@ -211,7 +280,7 @@ pub fn health_get(_state: &AppState, query: &str) -> (u16, Value) {
     let checks: Vec<Value> = s
         .checks
         .iter()
-        .map(|c| json!({"level": c.level, "id": c.id, "label": c.label, "detail": c.detail}))
+        .map(check_json)
         .collect();
     (
         200,
@@ -246,6 +315,16 @@ pub fn crashlog_get(_state: &AppState, query: &str) -> (u16, Value) {
     (200, json!({"ok": true, "data": {"program": prog, "file": file, "text": text}}))
 }
 
+/// Any CJK ideograph, kana, CJK punctuation or fullwidth form: what an
+/// `*_en` field must not contain (netinfo checks its errors with it; tests
+/// across the crate use it).
+pub(crate) fn has_cjk(s: &str) -> bool {
+    s.chars().any(|c| {
+        matches!(c as u32,
+            0x2E80..=0x2FFF | 0x3000..=0x303F | 0x3040..=0x30FF | 0x3100..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,6 +336,149 @@ mod tests {
         assert_eq!(c[1].level, "bad");
         assert_eq!(c[2].detail, "detail\twith tab");
         assert_eq!(counts(&c), (1, 1));
+    }
+
+    #[test]
+    fn the_manifest_row_is_an_ordinary_row() {
+        // doctor.sh --tsv ends with the device manifest's verdict (touch-ui docs/SHIP.md)
+        let tsv = "ok\tstandby\t待机\t正常\n\
+                   warn\tmanifest\t清单\t不一致的是 zwrt-datad（清单 6bbf6ea6，实际 af3c8ad8）\n";
+        let c = parse(tsv);
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[1].id, "manifest");
+        assert_eq!(c[1].label, "清单");
+        assert_eq!(c[1].detail, "不一致的是 zwrt-datad（清单 6bbf6ea6，实际 af3c8ad8）");
+        assert_eq!(counts(&c), (0, 1));
+        let ok = parse("ok\tmanifest\t清单\t观察中（还剩 42 分钟）：datad 刚上机；一致（12 项）\n");
+        assert_eq!(counts(&ok), (0, 0));
+    }
+
+    // Built from the R2 spec (docs/designs/ui-english.md): marker line, then
+    // `level id label detail label_en detail_en`.
+    const TSV2: &str = "#tsv2\n\
+        ok\tfota\tZTE 自动升级\t已关闭\tZTE auto-update\tOff\n\
+        bad\tscreen\t触屏界面\t没在运行\tScreen UI\tNot running\n\
+        nonsense\n\
+        warn\tx\ty\tdetail\twith tab\tY\tDetail\n\
+        ok\tshort\ta\tb\tc\n";
+
+    #[test]
+    fn parses_doctor_tsv2_with_english() {
+        assert!(has_tsv2_marker(TSV2));
+        let c = parse_tsv2(TSV2);
+        assert_eq!(c.len(), 3, "5-column and junk rows are skipped");
+        assert_eq!((c[0].label.as_str(), c[0].detail.as_str()), ("ZTE 自动升级", "已关闭"));
+        assert_eq!((c[0].label_en.as_str(), c[0].detail_en.as_str()), ("ZTE auto-update", "Off"));
+        assert_eq!(c[2].detail, "detail\twith tab");
+        assert_eq!((c[2].label_en.as_str(), c[2].detail_en.as_str()), ("Y", "Detail"));
+        assert_eq!(counts(&c), (1, 1));
+        for x in &c {
+            assert!(!has_cjk(&x.label_en) && !has_cjk(&x.detail_en), "{x:?}");
+        }
+        let j = check_json(&c[1]);
+        assert_eq!(j["label_en"], "Screen UI");
+        assert_eq!(j["label"], "触屏界面");
+    }
+
+    /// touch-ui's sample of real `doctor.sh --tsv2` output, when that checkout
+    /// sits next to this one (it does in the workspace, not in the public repo).
+    #[test]
+    fn parses_touch_ui_tsv2_sample() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../touch-ui/scripts/test/doctor/tsv2-sample.tsv");
+        let Ok(text) = fs::read_to_string(path) else {
+            eprintln!("skipped: no {path}");
+            return;
+        };
+        assert!(has_tsv2_marker(&text));
+        let rows = text.lines().skip(1).filter(|l| !l.trim().is_empty()).count();
+        let c = parse_tsv2(&text);
+        assert_eq!(c.len(), rows, "every row of the sample parses");
+        for x in &c {
+            assert!(!x.label_en.is_empty() && !x.detail_en.is_empty(), "{x:?}");
+            assert!(!has_cjk(&x.label_en) && !has_cjk(&x.detail_en), "{x:?}");
+        }
+        let (bad, warn) = counts(&c);
+        assert_eq!(bad + warn + c.iter().filter(|x| x.level == "ok").count(), rows);
+    }
+
+    #[test]
+    fn marker_must_be_the_exact_first_line() {
+        assert!(has_tsv2_marker("#tsv2\r\nok\ta\tb\tc\td\te\n"));
+        assert!(!has_tsv2_marker("ok\tfota\tZTE 自动升级\t已关闭\n#tsv2\n"));
+        assert!(!has_tsv2_marker("#tsv2x\n"));
+        assert!(!has_tsv2_marker(" #tsv2\n"));
+        assert!(!has_tsv2_marker(""));
+    }
+
+    #[test]
+    fn old_doctor_rows_have_no_english_and_send_null() {
+        let c = parse("ok\tfota\tZTE 自动升级\t已关闭\n");
+        let j = check_json(&c[0]);
+        assert!(j["label_en"].is_null() && j["detail_en"].is_null());
+        assert_eq!(j["detail"], "已关闭");
+    }
+
+    fn script(name: &str, body: &str) -> String {
+        let p = std::env::temp_dir().join(format!("u60-doctor-{name}-{}.sh", std::process::id()));
+        fs::write(&p, body).unwrap();
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn old_doctor_falls_back_to_tsv_in_chinese() {
+        // What doctor.sh did before --tsv2: only `--tsv` is special, any other
+        // argument gets the human-readable report (R2).
+        let d = script(
+            "old",
+            "if [ \"$1\" = \"--tsv\" ]; then printf 'ok\\tfota\\tZTE 自动升级\\t已关闭\\nwarn\\tsms\\t告警短信\\t没设号码\\n'; \
+             else echo '== U60 体检 =='; echo '  [正常] ZTE 自动升级：已关闭'; fi\n",
+        );
+        let c = run_checks(&d).unwrap();
+        assert_eq!(c.len(), 2, "health page must not go empty with an old doctor");
+        assert_eq!(c[1].label, "告警短信");
+        assert!(c.iter().all(|x| x.label_en.is_empty() && x.detail_en.is_empty()));
+        assert_eq!(counts(&c), (0, 1));
+        let _ = fs::remove_file(&d);
+    }
+
+    #[test]
+    fn new_doctor_is_read_once_with_english() {
+        let d = script(
+            "new",
+            "if [ \"$1\" = \"--tsv2\" ]; then printf '#tsv2\\nok\\tfota\\tZTE 自动升级\\t已关闭\\tZTE auto-update\\tOff\\n'; \
+             else printf 'bad\\twrong\\tread --tsv\\tx\\n'; fi\n",
+        );
+        let c = run_checks(&d).unwrap();
+        assert_eq!(c.len(), 1);
+        assert_eq!((c[0].id.as_str(), c[0].label_en.as_str()), ("fota", "ZTE auto-update"));
+        let _ = fs::remove_file(&d);
+    }
+
+    /// The touch screen reads /api/health into 32 KB (touch-ui alerts.c
+    /// AL_RESP_MAX). Doctor has ~38 report rows; 40 long ones in both
+    /// languages must leave a quarter for the crash-log list after them.
+    #[test]
+    fn forty_long_rows_fit_the_screen_buffer() {
+        let mut tsv = String::from("#tsv2\n");
+        for i in 0..40 {
+            tsv.push_str(&format!(
+                "warn\tid{i}\t{}\t{}\t{}\t{}\n",
+                "标".repeat(10),
+                "详".repeat(60),
+                "L".repeat(24),
+                "D".repeat(120)
+            ));
+        }
+        let checks: Vec<Value> = parse_tsv2(&tsv).iter().map(check_json).collect();
+        let size = serde_json::to_string(&checks).unwrap().len();
+        eprintln!("health checks: {size} bytes");
+        assert_eq!(checks.len(), 40);
+        assert!(size < 24 * 1024, "{size} bytes");
+    }
+
+    #[test]
+    fn missing_doctor_is_an_error_not_an_empty_list() {
+        assert!(run_checks("/nonexistent/doctor.sh").is_err());
     }
 
     #[test]

@@ -347,6 +347,26 @@ pub fn template() -> Config {
     }
 }
 
+/// The built-in scenarios' factory names and their English. A scenario gets
+/// `name_en` only while it still has its factory id *and* factory name: once
+/// the owner renames it, their name is shown in both languages. Worked out on
+/// every read and never saved, so the config file and older agents are
+/// unaffected (L2 review R6).
+const FACTORY_NAMES: [(&str, &str, &str); 3] =
+    [("home", "在家", "Home"), (AWAY_ID, "外出", "Away"), ("abroad", "国外", "Abroad")];
+
+fn name_en(s: &Scenario) -> Option<&'static str> {
+    FACTORY_NAMES.iter().find(|f| f.0 == s.id && f.1 == s.name).map(|f| f.2)
+}
+
+/// id → English name for the scenarios that have one, for `/api/scenario`
+/// (its `config` is the saved configuration itself and stays untouched).
+fn names_en(cfg: &Config) -> Value {
+    Value::Object(
+        cfg.scenarios.iter().filter_map(|s| name_en(s).map(|n| (s.id.clone(), json!(n)))).collect(),
+    )
+}
+
 fn is_mcc(v: &str) -> bool {
     v.len() == 3 && v.bytes().all(|b| b.is_ascii_digit())
 }
@@ -1421,6 +1441,7 @@ fn state_json(engine: &Engine) -> Value {
         "last_scan": st.last_scan,
         "last_error": st.last_error,
         "config": &*cfg,
+        "names_en": names_en(&cfg),
         "sim_mcc": sim_mcc,
         "pending_restore": read_json::<Vec<PendingRestore>>(RESTORE_FILE)
             .iter()
@@ -1443,6 +1464,7 @@ pub fn public_summary(engine: &Engine) -> Value {
         "enabled": engine.enabled(),
         "current": st.current,
         "name": scen.map(|s| s.name.as_str()).unwrap_or(""),
+        "name_en": scen.and_then(name_en),
         // inhibit_sleep marks the scenarios that take the APs down.
         "wifi_off": scen.is_some_and(|s| s.inhibit_sleep),
         "abroad": engine.enabled() && scen.is_some_and(is_abroad),
@@ -1466,79 +1488,147 @@ pub fn picker_try(engine: &Engine) -> Option<Value> {
 }
 
 fn picker_json(engine: &Engine, cfg: &Config, st: &RunState) -> Value {
+    scenes_json(engine.enabled(), &st.current, engine.pin(), engine.takeover_marked(), cfg)
+}
+
+fn scenes_json(enabled: bool, current: &str, pin: Option<String>, guard_takeover: bool, cfg: &Config) -> Value {
     json!({
-        "enabled": engine.enabled(),
-        "current": st.current,
-        "pin": engine.pin(),
-        "guard_takeover": engine.takeover_marked(),
-        "list": cfg.scenarios.iter().map(|s| json!({
-            "id": s.id,
-            "name": s.name,
-            "wifi_off": s.inhibit_sleep,
-            "abroad": is_abroad(s),
-            "when": describe_detect(&s.detect, &cfg.home_mcc),
-            "does": describe_actions(s),
-        })).collect::<Vec<_>>(),
+        "enabled": enabled,
+        "current": current,
+        "pin": pin,
+        "guard_takeover": guard_takeover,
+        "list": picker_list(cfg),
+        // English apart from `list`, and after it (keys come out sorted): the
+        // old touch screen reads `list` into a 2 KB buffer that the English
+        // would overflow, while the whole `scenes` object gets 8 KB.
+        "list_en": picker_list_en(cfg),
     })
+}
+
+/// The picker's scenario list, as the touch screen has always read it.
+fn picker_list(cfg: &Config) -> Vec<Value> {
+    cfg.scenarios
+        .iter()
+        .map(|s| {
+            json!({
+                "id": s.id,
+                "name": s.name,
+                "wifi_off": s.inhibit_sleep,
+                "abroad": is_abroad(s),
+                "when": describe_detect_both(&s.detect, &cfg.home_mcc).0,
+                "does": describe_actions_both(s).0,
+            })
+        })
+        .collect()
+}
+
+/// The English for [`picker_list`], matched by `id`. `name_en` is null for a
+/// renamed scenario: the owner's name is shown in both languages.
+fn picker_list_en(cfg: &Config) -> Vec<Value> {
+    cfg.scenarios
+        .iter()
+        .map(|s| {
+            json!({
+                "id": s.id,
+                "name_en": name_en(s),
+                "when_en": describe_detect_both(&s.detect, &cfg.home_mcc).1,
+                "does_en": describe_actions_both(s).1,
+            })
+        })
+        .collect()
 }
 
 /// One line for the touch screen: when this scenario is entered. Written
 /// from the configuration, so a scenario the owner edits in the admin web
 /// is explained correctly too (2026-09-25: the bare list was unreadable).
+#[cfg(test)]
 fn describe_detect(d: &Detect, home_mcc: &str) -> String {
+    describe_detect_both(d, home_mcc).0
+}
+
+/// [`describe_detect`] in Chinese and English, written side by side so a
+/// change to one is made to the other.
+fn describe_detect_both(d: &Detect, home_mcc: &str) -> (String, String) {
     let mcc_name = |m: &str| {
         m.parse::<u16>().ok().and_then(crate::netinfo::country).map(str::to_string).unwrap_or_else(|| format!("MCC {m}"))
     };
+    let mcc_name_en = |m: &str| {
+        m.parse::<u16>().ok().and_then(crate::netinfo::country_en).map(str::to_string).unwrap_or_else(|| format!("MCC {m}"))
+    };
     match d {
-        Detect::Ssid { entries } if entries.is_empty() => "还没设家里的 Wi-Fi，不会自动进入".into(),
+        Detect::Ssid { entries } if entries.is_empty() => (
+            "还没设家里的 Wi-Fi，不会自动进入".into(),
+            "Home Wi-Fi not set yet; never entered automatically".into(),
+        ),
         Detect::Ssid { entries } => {
             let names: Vec<String> = entries.iter().take(2).map(|e| format!("「{}」", e.ssid)).collect();
+            let names_en: Vec<String> = entries.iter().take(2).map(|e| format!("\"{}\"", e.ssid)).collect();
             let more = if entries.len() > 2 { format!("等 {} 个", entries.len()) } else { String::new() };
-            format!("附近有 Wi-Fi{}{}时", names.join(""), more)
+            let more_en = if entries.len() > 2 { format!(" ({} in all)", entries.len()) } else { String::new() };
+            (
+                format!("附近有 Wi-Fi{}{}时", names.join(""), more),
+                format!("When Wi-Fi {}{} is nearby", names_en.join(", "), more_en),
+            )
         }
         Detect::Mcc { mccs } => {
             let names: Vec<String> = mccs.iter().take(3).map(|m| mcc_name(m)).collect();
-            format!("插的是{}的卡时", names.join("、"))
+            let names_en: Vec<String> = mccs.iter().take(3).map(|m| mcc_name_en(m)).collect();
+            (format!("插的是{}的卡时", names.join("、")), format!("When the SIM is from {}", names_en.join(", ")))
         }
-        Detect::Abroad => format!("插的不是{}的卡时（当地卡、境外 eSIM）", mcc_name(home_mcc)),
-        Detect::Fallback => "其他情景都不符合时（默认）".into(),
+        Detect::Abroad => (
+            format!("插的不是{}的卡时（当地卡、境外 eSIM）", mcc_name(home_mcc)),
+            format!("SIM not from {} (local or foreign eSIM)", mcc_name_en(home_mcc)),
+        ),
+        Detect::Fallback => ("其他情景都不符合时（默认）".into(), "When no other scenario matches (default)".into()),
     }
 }
 
 /// One line: what entering it changes. Never the cellular side: scenarios
 /// may only touch Wi-Fi, services, power and thermal (ALLOWED_PATHS).
+#[cfg(test)]
 fn describe_actions(s: &Scenario) -> String {
+    describe_actions_both(s).0
+}
+
+/// [`describe_actions`] in Chinese and English, side by side.
+fn describe_actions_both(s: &Scenario) -> (String, String) {
     let flag = |b: &Option<Value>, k: &str| b.as_ref().and_then(|v| v.get(k)).and_then(Value::as_bool);
-    let mut out: Vec<String> = Vec::new();
+    let pair = |zh: &str, en: &str| (zh.to_string(), en.to_string());
+    let mut out: Vec<(String, String)> = Vec::new();
     for a in &s.actions {
         let b = &a.action.body;
         let line = match a.action.path.as_str() {
             "/api/wifi/radio" => match (flag(b, "ap_2g"), flag(b, "ap_5g")) {
-                (Some(false), Some(false)) => "关 Wi-Fi".to_string(),
-                (Some(true), Some(true)) => "开 Wi-Fi".to_string(),
-                (x, y) => format!(
-                    "2.4G {} · 5G {}",
-                    if x == Some(false) { "关" } else { "开" },
-                    if y == Some(false) { "关" } else { "开" }
-                ),
+                (Some(false), Some(false)) => pair("关 Wi-Fi", "Wi-Fi off"),
+                (Some(true), Some(true)) => pair("开 Wi-Fi", "Wi-Fi on"),
+                (x, y) => {
+                    let w = |v: Option<bool>| if v == Some(false) { ("关", "off") } else { ("开", "on") };
+                    (format!("2.4G {} · 5G {}", w(x).0, w(y).0), format!("2.4G {} · 5G {}", w(x).1, w(y).1))
+                }
             },
-            "/api/wifi/guest" => if flag(b, "enabled") == Some(false) { "关访客 Wi-Fi" } else { "开访客 Wi-Fi" }.to_string(),
-            "/api/device/power-save" => "改省电设置".to_string(),
-            "/api/device/thermal" => "改温控".to_string(),
-            p => p.to_string(),
+            "/api/wifi/guest" => {
+                if flag(b, "enabled") == Some(false) {
+                    pair("关访客 Wi-Fi", "Guest Wi-Fi off")
+                } else {
+                    pair("开访客 Wi-Fi", "Guest Wi-Fi on")
+                }
+            }
+            "/api/device/power-save" => pair("改省电设置", "Change power saving"),
+            "/api/device/thermal" => pair("改温控", "Change thermal control"),
+            p => pair(p, p),
         };
         if !out.contains(&line) {
             out.push(line);
         }
     }
     if s.inhibit_sleep {
-        out.push("不休眠，Tailscale 一直连得上".into());
+        out.push(pair("不休眠，Tailscale 一直连得上", "No sleep; Tailscale stays reachable"));
     }
     if out.is_empty() {
-        "什么都不改".into()
-    } else {
-        out.join(" · ")
+        return pair("什么都不改", "Changes nothing");
     }
+    let (zh, en): (Vec<String>, Vec<String>) = out.into_iter().unzip();
+    (zh.join(" · "), en.join(" · "))
 }
 
 /// GET /api/scenario
@@ -1847,6 +1937,172 @@ mod tests {
     }
 
     #[test]
+    fn picker_explains_every_template_scenario_in_english() {
+        let cfg = template();
+        let home = &cfg.scenarios[0];
+        assert_eq!(describe_detect_both(&home.detect, "460").1, "Home Wi-Fi not set yet; never entered automatically");
+        assert_eq!(describe_actions_both(home).1, "Wi-Fi off · No sleep; Tailscale stays reachable");
+        let away = cfg.scenarios.iter().find(|s| s.id == AWAY_ID).unwrap();
+        assert_eq!(describe_detect_both(&away.detect, "460").1, "When no other scenario matches (default)");
+        assert_eq!(describe_actions_both(away).1, "Wi-Fi on");
+        let abroad = cfg.scenarios.iter().find(|s| s.id == "abroad").unwrap();
+        assert_eq!(
+            describe_detect_both(&abroad.detect, "460").1,
+            "SIM not from China (local or foreign eSIM)"
+        );
+        assert_eq!(describe_actions_both(abroad).1, "Wi-Fi on");
+        let ssid = Detect::Ssid {
+            entries: ["A", "B", "C"].iter().map(|n| SsidEntry { ssid: n.to_string(), bssid: None }).collect(),
+        };
+        assert_eq!(describe_detect_both(&ssid, "460").1, "When Wi-Fi \"A\", \"B\" (3 in all) is nearby");
+        let two = Detect::Mcc { mccs: vec!["440".into(), "450".into(), "999".into()] };
+        assert_eq!(describe_detect_both(&two, "460").1, "When the SIM is from Japan, South Korea, MCC 999");
+        let empty = Scenario { actions: Vec::new(), inhibit_sleep: false, ..mcc_scenario("x", &["440"]) };
+        assert_eq!(describe_actions_both(&empty), ("什么都不改".to_string(), "Changes nothing".to_string()));
+    }
+
+    /// Every action and detect kind, so every English arm is checked.
+    fn every_kind_scenarios() -> Vec<Scenario> {
+        let act = |path: &str, body: Value| ScenarioAction {
+            action: Action { method: "PUT".into(), path: path.into(), body: Some(body) },
+            ..wifi_action(true)
+        };
+        let mut all = template().scenarios;
+        let mut a = mcc_scenario("japan", &["440", "441"]);
+        a.actions = vec![
+            act("/api/wifi/radio", json!({"ap_2g": true, "ap_5g": false})),
+            act("/api/wifi/guest", json!({"enabled": false})),
+            act("/api/wifi/guest", json!({"enabled": true})),
+            act("/api/device/power-save", json!({})),
+            act("/api/device/thermal", json!({})),
+        ];
+        a.inhibit_sleep = true;
+        all.push(a);
+        all[0].detect = Detect::Ssid {
+            entries: ["Home", "Home-5G", "Attic"].iter().map(|n| SsidEntry { ssid: n.to_string(), bssid: None }).collect(),
+        };
+        all
+    }
+
+    #[test]
+    fn every_english_field_is_free_of_cjk() {
+        use crate::health::has_cjk;
+        let cfg = Config { scenarios: every_kind_scenarios(), ..template() };
+        for item in picker_list_en(&cfg) {
+            for k in ["when_en", "does_en"] {
+                let v = item[k].as_str().unwrap();
+                assert!(!v.is_empty() && !has_cjk(v) && !v.ends_with('.') && !v.contains("Please"), "{k}: {v}");
+            }
+            if let Some(n) = item["name_en"].as_str() {
+                assert!(!has_cjk(n), "{n}");
+            }
+        }
+    }
+
+    #[test]
+    fn factory_names_get_english_and_renamed_ones_do_not() {
+        // 1. Still the factory name: English is added.
+        let cfg = template();
+        let list = picker_list_en(&cfg);
+        let en: Vec<(&str, &str)> =
+            list.iter().map(|s| (s["id"].as_str().unwrap(), s["name_en"].as_str().unwrap_or("-"))).collect();
+        assert_eq!(en, vec![("home", "Home"), (AWAY_ID, "Away"), ("abroad", "Abroad")]);
+        assert_eq!(picker_list(&cfg)[0]["name"], "在家", "the Chinese name is unchanged");
+        assert_eq!(names_en(&cfg), json!({"home": "Home", "away": "Away", "abroad": "Abroad"}));
+
+        // 2. Renamed by the owner: their name in both languages, no name_en.
+        let mut renamed = template();
+        renamed.scenarios[0].name = "我家".into();
+        renamed.scenarios[1].name = "Out".into();
+        let list = picker_list_en(&renamed);
+        assert!(list[0]["name_en"].is_null() && list[1]["name_en"].is_null());
+        assert_eq!(list[2]["name_en"], "Abroad");
+        assert_eq!(names_en(&renamed), json!({"abroad": "Abroad"}));
+
+        // 3. A scenario of the owner's that happens to be called 在家 is not
+        //    the built-in one.
+        let mut own = template();
+        own.scenarios.push(Scenario { name: "在家".into(), ..mcc_scenario("office", &["440"]) });
+        assert!(picker_list_en(&own)[3]["name_en"].is_null());
+
+        // Never saved: the stored configuration carries no English.
+        let saved = serde_json::to_string(&template()).unwrap();
+        assert!(!saved.contains("name_en") && !saved.contains("Home"), "{saved}");
+    }
+
+    /// `scenes.list` exactly as the agent wrote it before L2 (copied from
+    /// picker_json at HEAD 2026-10-01), to prove the list did not change.
+    fn list_before_l2(cfg: &Config) -> Vec<Value> {
+        cfg.scenarios
+            .iter()
+            .map(|s| {
+                json!({
+                    "id": s.id,
+                    "name": s.name,
+                    "wifi_off": s.inhibit_sleep,
+                    "abroad": is_abroad(s),
+                    "when": describe_detect(&s.detect, &cfg.home_mcc),
+                    "does": describe_actions(s),
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scene_list_is_byte_for_byte_what_it_was() {
+        let t = template();
+        let abroad_does = "开 Wi-Fi";
+        let want = format!(
+            r#"[{{"abroad":false,"does":"关 Wi-Fi · 不休眠，Tailscale 一直连得上","id":"home","name":"在家","when":"还没设家里的 Wi-Fi，不会自动进入","wifi_off":true}},{{"abroad":false,"does":"开 Wi-Fi","id":"away","name":"外出","when":"其他情景都不符合时（默认）","wifi_off":false}},{{"abroad":true,"does":"{abroad_does}","id":"abroad","name":"国外","when":"插的不是中国的卡时（当地卡、境外 eSIM）","wifi_off":false}}]"#
+        );
+        assert_eq!(serde_json::to_string(&picker_list(&t)).unwrap(), want);
+        let cfg = Config { scenarios: every_kind_scenarios(), ..template() };
+        assert_eq!(serde_json::to_string(&picker_list(&cfg)).unwrap(), serde_json::to_string(&list_before_l2(&cfg)).unwrap());
+        for item in picker_list(&cfg) {
+            assert!(item.as_object().unwrap().keys().all(|k| !k.ends_with("_en")), "{item}");
+        }
+    }
+
+    /// The old touch screen (touch-ui netinfo.c) reads `scenes` into
+    /// `static char sub[8192]`, then `list` into `char arr[2048]` and each
+    /// scene into `char obj[768]`, truncating silently (L2 review O1). The
+    /// English is a separate `list_en`, after `list`, so it only uses what
+    /// `sub` has spare.
+    #[test]
+    fn scenes_fit_the_old_touch_screen() {
+        let long = |c: char| SsidEntry { ssid: std::iter::repeat_n(c, 32).collect(), bssid: None };
+        // Worst case: six scenes, three full-length (32-byte) network names
+        // each, every kind of action.
+        let mut worst = every_kind_scenarios();
+        for s in worst.iter_mut() {
+            s.detect = Detect::Ssid { entries: vec![long('a'), long('b'), long('c')] };
+        }
+        worst.truncate(4);
+        while worst.len() < 6 {
+            worst.push(Scenario { id: format!("s{}", worst.len()), ..worst[0].clone() });
+        }
+        let cfg = Config { scenarios: worst, ..template() };
+        let scenes = scenes_json(true, "japan", Some("japan".into()), true, &cfg);
+        let text = scenes.to_string();
+        let list = serde_json::to_string(&scenes["list"]).unwrap();
+        let list_en = serde_json::to_string(&scenes["list_en"]).unwrap();
+        eprintln!("worst case: list {} bytes, list_en {}, scenes {}", list.len(), list_en.len(), text.len());
+        assert_eq!(list, serde_json::to_string(&list_before_l2(&cfg)).unwrap(), "list unchanged");
+        assert!(list.len() <= 2047, "list {} bytes", list.len());
+        assert!(text.len() < 8191, "scenes {} bytes", text.len());
+        assert!(text.find(r#""list":"#).unwrap() < text.find(r#""list_en":"#).unwrap(), "list_en after list");
+        for (i, e) in scenes["list_en"].as_array().unwrap().iter().enumerate() {
+            assert!(e.to_string().len() < 767, "{e}");
+            assert_eq!(e["id"], scenes["list"][i]["id"]);
+            let keys: Vec<&str> = e.as_object().unwrap().keys().map(String::as_str).collect();
+            assert_eq!(keys, ["does_en", "id", "name_en", "when_en"]);
+        }
+        for e in scenes["list"].as_array().unwrap() {
+            assert!(e.to_string().len() < 767, "{e}");
+        }
+    }
+
+    #[test]
     fn a_hand_added_mcc_scenario_beats_the_catch_all() {
         // Not shipped, but the config allows per-country scenarios, and the
         // catch-all must not shadow them whatever the order.
@@ -1930,6 +2186,10 @@ mod tests {
         assert!(!cfg.scenarios[0].actions[0].best_effort);
         // And a SIM from abroad on an old config simply means away.
         assert_eq!(detect(&cfg, &[], Some("440")).as_deref(), Some(AWAY_ID));
+        // Its built-in scenarios still have the factory names: English is added.
+        let list = picker_list_en(&cfg);
+        assert_eq!((list[0]["name_en"].as_str(), list[1]["name_en"].as_str()), (Some("Home"), Some("Away")));
+        assert_eq!(list[0]["when_en"], "When Wi-Fi \"MyHome\" is nearby");
     }
 
     #[test]

@@ -94,7 +94,17 @@ fn now() -> i64 {
 }
 
 fn clip(s: String) -> String {
-    match s.char_indices().nth(ERR_MAX_CHARS) {
+    clip_to(s, ERR_MAX_CHARS)
+}
+
+/// English says in about twice the characters what Chinese says, so the
+/// English twin of a clipped message gets twice the room.
+fn clip_en(s: String) -> String {
+    clip_to(s, 2 * ERR_MAX_CHARS)
+}
+
+fn clip_to(s: String, max: usize) -> String {
+    match s.char_indices().nth(max) {
         Some((i, _)) => format!("{}…", &s[..i]),
         None => s,
     }
@@ -364,88 +374,178 @@ fn mnc_len(mcc: u16) -> usize {
     }
 }
 
-pub(crate) fn country(mcc: u16) -> Option<&'static str> {
+/// ISO 3166 code of the country an MCC belongs to. 901 (international
+/// networks) has none and is handled by [`country_info`].
+fn mcc_iso(mcc: u16) -> Option<&'static str> {
     Some(match mcc {
-        202 => "希腊",
-        204 => "荷兰",
-        206 => "比利时",
-        208 => "法国",
-        214 => "西班牙",
-        222 => "意大利",
-        228 => "瑞士",
-        232 => "奥地利",
-        234 | 235 => "英国",
-        238 => "丹麦",
-        240 => "瑞典",
-        242 => "挪威",
-        244 => "芬兰",
-        250 => "俄罗斯",
-        262 => "德国",
-        268 => "葡萄牙",
-        272 => "爱尔兰",
-        286 => "土耳其",
-        302 => "加拿大",
-        310..=316 => "美国",
-        334 => "墨西哥",
-        404 | 405 => "印度",
-        420 => "沙特",
-        424 => "阿联酋",
-        425 => "以色列",
-        427 => "卡塔尔",
-        440 | 441 => "日本",
-        450 => "韩国",
-        452 => "越南",
-        454 => "中国香港",
-        455 => "中国澳门",
-        456 => "柬埔寨",
-        457 => "老挝",
-        460 | 461 => "中国",
-        466 => "中国台湾",
-        502 => "马来西亚",
-        505 => "澳大利亚",
-        510 => "印度尼西亚",
-        515 => "菲律宾",
-        520 => "泰国",
-        525 => "新加坡",
-        530 => "新西兰",
-        655 => "南非",
-        722 => "阿根廷",
-        724 => "巴西",
-        730 => "智利",
-        732 => "哥伦比亚",
-        901 => "国际",
+        202 => "GR",
+        204 => "NL",
+        206 => "BE",
+        208 => "FR",
+        214 => "ES",
+        222 => "IT",
+        228 => "CH",
+        232 => "AT",
+        234 | 235 => "GB",
+        238 => "DK",
+        240 => "SE",
+        242 => "NO",
+        244 => "FI",
+        250 => "RU",
+        262 => "DE",
+        268 => "PT",
+        272 => "IE",
+        286 => "TR",
+        302 => "CA",
+        310..=316 => "US",
+        334 => "MX",
+        404 | 405 => "IN",
+        420 => "SA",
+        424 => "AE",
+        425 => "IL",
+        427 => "QA",
+        440 | 441 => "JP",
+        450 => "KR",
+        452 => "VN",
+        454 => "HK",
+        455 => "MO",
+        456 => "KH",
+        457 => "LA",
+        460 | 461 => "CN",
+        466 => "TW",
+        502 => "MY",
+        505 => "AU",
+        510 => "ID",
+        515 => "PH",
+        520 => "TH",
+        525 => "SG",
+        530 => "NZ",
+        655 => "ZA",
+        722 => "AR",
+        724 => "BR",
+        730 => "CL",
+        732 => "CO",
         _ => return None,
     })
 }
 
-/// ISO code → name, for lookup services that only give the code.
-fn country_by_code(code: &str) -> Option<&'static str> {
+/// ISO code → (Chinese, English). Every code [`mcc_iso`] gives is here, and
+/// so is every code the IP lookup services are known to send.
+fn iso_names(code: &str) -> Option<(&'static str, &'static str)> {
     Some(match code {
-        "CN" => "中国",
-        "HK" => "中国香港",
-        "MO" => "中国澳门",
-        "TW" => "中国台湾",
-        "JP" => "日本",
-        "KR" => "韩国",
-        "SG" => "新加坡",
-        "US" => "美国",
-        "CA" => "加拿大",
-        "GB" => "英国",
-        "DE" => "德国",
-        "FR" => "法国",
-        "NL" => "荷兰",
-        "TH" => "泰国",
-        "MY" => "马来西亚",
-        "VN" => "越南",
-        "PH" => "菲律宾",
-        "ID" => "印度尼西亚",
-        "AU" => "澳大利亚",
-        "NZ" => "新西兰",
-        "IN" => "印度",
-        "AE" => "阿联酋",
-        "RU" => "俄罗斯",
+        "GR" => ("希腊", "Greece"),
+        "NL" => ("荷兰", "Netherlands"),
+        "BE" => ("比利时", "Belgium"),
+        "FR" => ("法国", "France"),
+        "ES" => ("西班牙", "Spain"),
+        "IT" => ("意大利", "Italy"),
+        "CH" => ("瑞士", "Switzerland"),
+        "AT" => ("奥地利", "Austria"),
+        "GB" => ("英国", "United Kingdom"),
+        "DK" => ("丹麦", "Denmark"),
+        "SE" => ("瑞典", "Sweden"),
+        "NO" => ("挪威", "Norway"),
+        "FI" => ("芬兰", "Finland"),
+        "RU" => ("俄罗斯", "Russia"),
+        "DE" => ("德国", "Germany"),
+        "PT" => ("葡萄牙", "Portugal"),
+        "IE" => ("爱尔兰", "Ireland"),
+        "TR" => ("土耳其", "Turkey"),
+        "CA" => ("加拿大", "Canada"),
+        "US" => ("美国", "United States"),
+        "MX" => ("墨西哥", "Mexico"),
+        "IN" => ("印度", "India"),
+        "SA" => ("沙特", "Saudi Arabia"),
+        "AE" => ("阿联酋", "United Arab Emirates"),
+        "IL" => ("以色列", "Israel"),
+        "QA" => ("卡塔尔", "Qatar"),
+        "JP" => ("日本", "Japan"),
+        "KR" => ("韩国", "South Korea"),
+        "VN" => ("越南", "Vietnam"),
+        "HK" => ("中国香港", "Hong Kong"),
+        "MO" => ("中国澳门", "Macau"),
+        "KH" => ("柬埔寨", "Cambodia"),
+        "LA" => ("老挝", "Laos"),
+        "CN" => ("中国", "China"),
+        "TW" => ("中国台湾", "Taiwan"),
+        "MY" => ("马来西亚", "Malaysia"),
+        "AU" => ("澳大利亚", "Australia"),
+        "ID" => ("印度尼西亚", "Indonesia"),
+        "PH" => ("菲律宾", "Philippines"),
+        "TH" => ("泰国", "Thailand"),
+        "SG" => ("新加坡", "Singapore"),
+        "NZ" => ("新西兰", "New Zealand"),
+        "ZA" => ("南非", "South Africa"),
+        "AR" => ("阿根廷", "Argentina"),
+        "BR" => ("巴西", "Brazil"),
+        "CL" => ("智利", "Chile"),
+        "CO" => ("哥伦比亚", "Colombia"),
         _ => return None,
     })
+}
+
+/// A country by MCC: Chinese name, English name, ISO code (None for 901).
+pub(crate) fn country_info(mcc: u16) -> Option<(&'static str, &'static str, Option<&'static str>)> {
+    if mcc == 901 {
+        return Some(("国际", "International", None));
+    }
+    let iso = mcc_iso(mcc)?;
+    iso_names(iso).map(|(zh, en)| (zh, en, Some(iso)))
+}
+
+pub(crate) fn country(mcc: u16) -> Option<&'static str> {
+    country_info(mcc).map(|c| c.0)
+}
+
+/// English country name by MCC, for wording written next to [`country`].
+pub(crate) fn country_en(mcc: u16) -> Option<&'static str> {
+    country_info(mcc).map(|c| c.1)
+}
+
+/// The codes the IP-lookup path has always translated. The table above
+/// knows more, but a lookup answering "IT" kept showing "Italy …", and only
+/// fields are being added here, not changed.
+const GEO_CODES: [&str; 23] = [
+    "CN", "HK", "MO", "TW", "JP", "KR", "SG", "US", "CA", "GB", "DE", "FR", "NL", "TH", "MY", "VN", "PH", "ID", "AU",
+    "NZ", "IN", "AE", "RU",
+];
+
+/// ISO code → name, for lookup services that only give the code.
+fn country_by_code(code: &str) -> Option<&'static str> {
+    GEO_CODES.contains(&code).then(|| iso_names(code)).flatten().map(|c| c.0)
+}
+
+/// The `country`, `country_en`, `country_iso` fields of an operator object.
+/// `country_iso` is what clients compare ("CN"), never the Chinese name.
+fn country_fields(mcc: Option<u16>) -> (Value, Value, Value) {
+    match mcc.and_then(country_info) {
+        Some((zh, en, iso)) => (json!(zh), json!(en), json!(iso)),
+        None => (Value::Null, Value::Null, Value::Null),
+    }
+}
+
+/// English for an operator name from [`operator`], per docs/ui-glossary.md §8:
+/// the short common name, no "Co., Ltd.". Names in the table that are already
+/// English stay as they are, and so does a network's broadcast name (used when
+/// the PLMN is not in the table) — `operator_en` then equals `name`.
+fn operator_en(name: &str) -> &str {
+    match name {
+        "中国移动" => "China Mobile",
+        "中国联通" => "China Unicom",
+        "中国电信" => "China Telecom",
+        "中国广电" => "China Broadnet",
+        "3 香港" => "3 HK",
+        "中国移动香港" => "China Mobile HK",
+        "中国联通香港" => "China Unicom HK",
+        "SmarTone 澳门" => "SmarTone Macau",
+        "中国电信澳门" => "China Telecom Macau",
+        "3 澳门" => "3 Macau",
+        "远传电信" => "FarEasTone",
+        "中华电信" => "Chunghwa Telecom",
+        "台湾大哥大" => "Taiwan Mobile",
+        "楽天モバイル" => "Rakuten Mobile",
+        other => other,
+    }
 }
 
 fn operator(mcc: u16, mnc: u16) -> Option<&'static str> {
@@ -539,11 +639,15 @@ fn plmn_from_str(s: &str) -> Option<Plmn> {
 
 fn plmn_json(p: &Plmn, name_hint: &str) -> Value {
     let name = operator(p.mcc, p.mnc).map(str::to_string).or_else(|| (!name_hint.is_empty()).then(|| name_hint.to_string()));
+    let (country, country_en, country_iso) = country_fields(Some(p.mcc));
     json!({
         "mcc": format!("{:03}", p.mcc),
         "mnc": format!("{:0w$}", p.mnc, w = p.mnc_digits),
+        "operator_en": name.as_deref().map(operator_en),
         "name": name,
-        "country": country(p.mcc),
+        "country": country,
+        "country_en": country_en,
+        "country_iso": country_iso,
     })
 }
 
@@ -717,6 +821,9 @@ struct Guard {
     target: String,
     rat: String,
     reason: String,
+    /// Which message `reason` is (see [`Reason`]); what clients compare.
+    reason_code: &'static str,
+    reason_en: String,
     started_at: i64,
     finished_at: i64,
     /// Last raw register result, kept for the device probe.
@@ -724,18 +831,149 @@ struct Guard {
 }
 
 impl Guard {
+    fn set_reason(&mut self, r: Reason) {
+        self.reason = r.zh;
+        self.reason_code = r.code;
+        self.reason_en = r.en;
+    }
+
     fn json(&self) -> Value {
         json!({
             "phase": if self.phase.is_empty() { "idle" } else { self.phase },
             "target": self.target,
             "rat": self.rat,
             "reason": self.reason,
+            "reason_code": (!self.reason_code.is_empty()).then_some(self.reason_code),
+            "reason_en": (!self.reason_en.is_empty()).then(|| self.reason_en.clone()),
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "last_result": self.last_result,
         })
     }
 
+}
+
+/// One `guard.reason`, in both languages, with a code naming the exact
+/// message. `reason_code == "manual_auto"` means the reason is exactly
+/// 手动恢复自动 and nothing else: the admin web shows its own "back to
+/// automatic" line then, and the reason text otherwise (it used to compare the
+/// Chinese string).
+#[derive(Debug, PartialEq)]
+struct Reason {
+    code: &'static str,
+    zh: String,
+    en: String,
+}
+
+/// Code and English for the base reasons (`Verdict::Revert`, the resume
+/// paths, the button). Kept apart from the Chinese, which existing callers
+/// and tests pass around as `&'static str`.
+fn why_info(why: &str) -> (&'static str, &'static str) {
+    match why {
+        "注册失败" => ("register_failed", "Registration failed"),
+        "已注册但数据没通" => ("registered_no_data", "Registered but no data"),
+        "超时没注册上" => ("register_timeout", "Timed out before registering"),
+        "手动恢复自动" => ("manual_auto", "Back to automatic on request"),
+        "重启前没做完" => ("resume_revert", "Unfinished before a restart"),
+        "重启前还没拨上" => ("resume_redial", "No data yet before a restart"),
+        _ => ("other", "Back to automatic"),
+    }
+}
+
+impl Reason {
+    fn why(why: &str) -> Self {
+        let (code, en) = why_info(why);
+        Reason { code, zh: why.to_string(), en: en.to_string() }
+    }
+
+    /// A back-to-automatic attempt failed; trying again later.
+    fn auto_retry(why: &str, attempt: u32, err: &str, backoff: u64) -> Self {
+        let err_en = if err == AUTO_NOT_YET { AUTO_NOT_YET_EN } else { err };
+        Reason {
+            code: "auto_retry",
+            zh: clip(format!("{why}；第 {attempt} 次恢复自动没成功（{err}），{backoff} 秒后再试")),
+            en: clip_en(format!(
+                "{}; back-to-automatic attempt {attempt} failed ({err_en}); retrying in {backoff} s",
+                why_info(why).1
+            )),
+        }
+    }
+
+    /// Automatic again, but the data call did not come back. `why` empty: said
+    /// on its own (after a restart).
+    fn auto_no_data(why: &str) -> Self {
+        if why.is_empty() {
+            return Reason {
+                code: "auto_no_data",
+                zh: "已回到自动选网，但数据还没拨上".into(),
+                en: "Automatic again, but no data yet".into(),
+            };
+        }
+        Reason {
+            code: "auto_no_data",
+            zh: clip(format!("{why}；已回到自动选网，但数据还没拨上")),
+            en: clip_en(format!("{}; automatic again, but no data yet", why_info(why).1)),
+        }
+    }
+
+    /// Automatic again; data attempt `n` failed, next one after `pause`.
+    fn redial_retry(n: usize, pause: u64) -> Self {
+        Reason {
+            code: "redial_retry",
+            zh: clip(format!("已回到自动选网，数据第 {n} 次没拨上，{pause} 秒后再试")),
+            en: clip_en(format!("Automatic again; data attempt {n} failed; retrying in {pause} s")),
+        }
+    }
+}
+
+const AUTO_NOT_YET: &str = "模组还没回到自动";
+const AUTO_NOT_YET_EN: &str = "modem not automatic yet";
+
+/// English for the user-facing errors this module words in Chinese
+/// ([`claim`], the APN and marker refusals, scan and lookup failures). Errors
+/// passed through from ubus, the AT port or HTTP are English already and come
+/// back unchanged. None when there is no English for it (a message clipped
+/// mid-pattern, a firmware string in Chinese): sent as null, so clients show
+/// the Chinese `error` rather than a half-translated line.
+fn error_en(zh: &str) -> Option<String> {
+    Some(error_en_raw(zh)).filter(|e| !crate::health::has_cjk(e))
+}
+
+fn error_en_raw(zh: &str) -> String {
+    let fixed = match zh {
+        "正在搜索网络，等搜完再操作" | "正在搜索网络，搜完再操作" => {
+            Some("Searching for networks; try again when it finishes")
+        }
+        "正在选网，等它结束" => Some("Registering on a network; wait for it to finish"),
+        "正在回到自动选网，等它结束" => Some("Going back to automatic; wait for it to finish"),
+        "没有这个手动 APN" => Some("No such manual APN"),
+        "上一次 APN 切换还没做完" => Some("The last APN switch hasn't finished"),
+        "没搜到网络" => Some("No networks found"),
+        "没有可用的查询地址" => Some("No lookup address available"),
+        NBR_UNSUPPORTED => Some(NBR_UNSUPPORTED_EN),
+        _ => None,
+    };
+    if let Some(f) = fixed {
+        return f.to_string();
+    }
+    if let Some(e) = zh.strip_prefix("写不了保护标记，没有注册：") {
+        return format!("Couldn't write the guard marker; not registered: {e}");
+    }
+    if let Some(e) = zh.strip_prefix("写不了保护标记：") {
+        return format!("Couldn't write the guard marker: {e}");
+    }
+    if let Some(st) = zh.strip_prefix("模组报告搜索失败（").and_then(|r| r.strip_suffix('）')) {
+        return format!("Modem reported the search failed ({st})");
+    }
+    if let Some(host) = zh.strip_suffix(": 看不懂返回") {
+        return format!("{host}: unreadable reply");
+    }
+    zh.to_string()
+}
+
+/// `error_en` for an optional error, null when there is none.
+fn error_en_opt(e: &Option<String>) -> Option<String> {
+    e.as_deref().and_then(error_en)
 }
 
 // ── neighbours ─────────────────────────────────────────────────────────────
@@ -1116,6 +1354,7 @@ impl Scan {
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "error": (!self.error.is_empty()).then(|| self.error.clone()),
+            "error_en": (!self.error.is_empty()).then(|| error_en(&self.error)).flatten(),
             "last_status": self.last_status,
             "operators": self.operators,
         })
@@ -1165,11 +1404,16 @@ fn collect_operators(v: &Value, out: &mut Vec<Value>) {
                 let plmn = loose_str(v, &["m_mcc_mnc"]);
                 let raw_name = loose_str(v, &["oper_name", "long", "name"]);
                 let p = plmn_from_str(&plmn);
+                let name = p.as_ref().and_then(|p| operator(p.mcc, p.mnc)).map(str::to_string).unwrap_or(raw_name.clone());
+                let (country, country_en, country_iso) = country_fields(p.as_ref().map(|p| p.mcc));
                 out.push(json!({
                     "plmn": plmn,
-                    "name": p.as_ref().and_then(|p| operator(p.mcc, p.mnc)).map(str::to_string).unwrap_or(raw_name.clone()),
+                    "operator_en": operator_en(&name),
+                    "name": name,
                     "raw_name": raw_name,
-                    "country": p.as_ref().and_then(|p| country(p.mcc)),
+                    "country": country,
+                    "country_en": country_en,
+                    "country_iso": country_iso,
                     "rat": loose_str(v, &["m_rat"]),
                     "status": loose_str(v, &["m_status", "stat"]),
                 }));
@@ -1198,11 +1442,16 @@ fn operator_from_record(r: &str) -> Option<Value> {
     let status = f[..pi].iter().rev().find(|x| is_small_int(x)).copied().unwrap_or("");
     let rat = f[pi + 1..].iter().find(|x| is_small_int(x)).copied().unwrap_or("");
     let p = plmn_from_str(plmn)?;
+    let name = operator(p.mcc, p.mnc).unwrap_or(raw_name);
+    let (country, country_en, country_iso) = country_fields(Some(p.mcc));
     Some(json!({
         "plmn": plmn,
-        "name": operator(p.mcc, p.mnc).map(str::to_string).unwrap_or_else(|| raw_name.to_string()),
+        "name": name,
+        "operator_en": operator_en(name),
         "raw_name": raw_name,
-        "country": country(p.mcc),
+        "country": country,
+        "country_en": country_en,
+        "country_iso": country_iso,
         "rat": rat,
         "status": status,
         "raw": r,
@@ -1253,6 +1502,7 @@ impl Lookup {
             "source": s(&self.source),
             "fetched_at": self.fetched_at,
             "error": self.error,
+            "error_en": error_en_opt(&self.error),
         })
     }
 }
@@ -1370,7 +1620,10 @@ fn local_snapshot(inner: &Inner) {
     };
     let serving = match plmn_from_str(&serving_str) {
         Some(p) => plmn_json(&p, provider),
-        None if !provider.is_empty() => json!({"name": provider, "mcc": null, "mnc": null, "country": null}),
+        None if !provider.is_empty() => json!({
+            "name": provider, "operator_en": provider, "mcc": null, "mnc": null,
+            "country": null, "country_en": null, "country_iso": null,
+        }),
         None => Value::Null,
     };
     let roam_raw = js(&net, "simcard_roam");
@@ -1499,6 +1752,7 @@ pub fn get(state: &AppState, query: &str) -> (u16, Value) {
             "state": "unsupported",
             "scanned_at": nbr_at,
             "error": NBR_UNSUPPORTED,
+            "error_en": NBR_UNSUPPORTED_EN,
             "cells": nbr_cells,
         },
         "scan": scan,
@@ -1614,11 +1868,13 @@ pub fn apn_use(body: &[u8]) -> (u16, Value) {
             .and_then(|v| v["apnListArray"].as_array().map(|a| a.iter().any(|p| p["profileId"] == id)))
             .unwrap_or(false);
         if !known {
-            return (404, json!({"ok": false, "error": "没有这个手动 APN"}));
+            let msg = "没有这个手动 APN";
+            return (404, json!({"ok": false, "error": msg, "error_en": error_en(msg)}));
         }
     }
     if APN_SWITCHING.swap(true, Ordering::SeqCst) {
-        return (409, json!({"ok": false, "error": "上一次 APN 切换还没做完"}));
+        let msg = "上一次 APN 切换还没做完";
+        return (409, json!({"ok": false, "error": msg, "error_en": error_en(msg)}));
     }
     APN_SWITCH_ERR.lock().unwrap_or_else(|e| e.into_inner()).clear();
     let id = id.to_string();
@@ -1661,11 +1917,12 @@ pub fn register(state: &AppState, body: &[u8]) -> (u16, Value) {
     let snapshot = {
         let mut o = inner.ops.lock().unwrap();
         if let Err(why) = claim(&mut o, OpKind::Registering) {
-            return (409, json!({"ok": false, "error": why, "guard": o.guard.json()}));
+            return (409, json!({"ok": false, "error": why, "error_en": error_en(why), "guard": o.guard.json()}));
         }
         if let Err(e) = write_marker(&Marker::Register { target: target.clone(), started }) {
             o.kind = OpKind::Idle;
-            return (500, json!({"ok": false, "error": format!("写不了保护标记，没有注册：{e}")}));
+            let msg = format!("写不了保护标记，没有注册：{e}");
+            return (500, json!({"ok": false, "error_en": error_en(&msg), "error": msg}));
         }
         o.cancel = false;
         o.guard = Guard { phase: "registering", target: target.clone(), rat: rat.clone(), started_at: started, ..Guard::default() };
@@ -1748,7 +2005,7 @@ fn revert_until_auto(inner: &Inner, why: &'static str) {
         o.kind = OpKind::Reverting;
         o.cancel = false;
         o.guard.phase = "reverting";
-        o.guard.reason = why.to_string();
+        o.guard.set_reason(Reason::why(why));
     }
     if let Err(e) = write_marker(&Marker::Revert) {
         eprintln!("[netinfo] revert marker: {e}");
@@ -1773,9 +2030,9 @@ fn revert_until_auto(inner: &Inner, why: &'static str) {
         if auto {
             break;
         }
-        let err = sent.err().unwrap_or_else(|| "模组还没回到自动".into());
+        let err = sent.err().unwrap_or_else(|| AUTO_NOT_YET.into());
         eprintln!("[netinfo] back-to-automatic attempt {attempt} failed: {err}");
-        inner.ops.lock().unwrap().guard.reason = clip(format!("{why}；第 {attempt} 次恢复自动没成功（{err}），{backoff} 秒后再试"));
+        inner.ops.lock().unwrap().guard.set_reason(Reason::auto_retry(why, attempt, &err, backoff));
         std::thread::sleep(Duration::from_secs(backoff));
         backoff = (backoff * 2).min(300);
     }
@@ -1788,7 +2045,7 @@ fn revert_until_auto(inner: &Inner, why: &'static str) {
     inner.last_pass.store(0, Ordering::SeqCst);
     let mut o = inner.ops.lock().unwrap();
     o.guard.phase = "reverted";
-    o.guard.reason = if data_up { why.to_string() } else { clip(format!("{why}；已回到自动选网，但数据还没拨上")) };
+    o.guard.set_reason(if data_up { Reason::why(why) } else { Reason::auto_no_data(why) });
     o.guard.finished_at = now();
     o.kind = OpKind::Idle;
 }
@@ -1802,7 +2059,7 @@ fn redial_until_up(inner: &Inner) -> bool {
     let mut up = false;
     for (n, pause) in [0u64, 30, 120].into_iter().enumerate() {
         if pause > 0 {
-            inner.ops.lock().unwrap().guard.reason = clip(format!("已回到自动选网，数据第 {n} 次没拨上，{pause} 秒后再试"));
+            inner.ops.lock().unwrap().guard.set_reason(Reason::redial_retry(n, pause));
             std::thread::sleep(Duration::from_secs(pause));
         }
         if ensure_data_up() {
@@ -1845,14 +2102,15 @@ pub fn resume_guard(state: &AppState) {
             {
                 let mut o = inner.ops.lock().unwrap();
                 o.kind = OpKind::Reverting;
-                o.guard = Guard { phase: "reverting", reason: "重启前还没拨上".into(), started_at: now(), ..Guard::default() };
+                o.guard = Guard { phase: "reverting", started_at: now(), ..Guard::default() };
+                o.guard.set_reason(Reason::why("重启前还没拨上"));
             }
             std::thread::spawn(move || {
                 let up = redial_until_up(&inner);
                 let mut o = inner.ops.lock().unwrap();
                 o.guard.phase = "reverted";
                 if !up {
-                    o.guard.reason = "已回到自动选网，但数据还没拨上".into();
+                    o.guard.set_reason(Reason::auto_no_data(""));
                 }
                 o.guard.finished_at = now();
                 o.kind = OpKind::Idle;
@@ -1878,13 +2136,17 @@ pub fn select_auto(state: &AppState) -> (u16, Value) {
     match o.kind {
         OpKind::Reverting => return (202, json!({"ok": true, "data": o.guard.json()})),
         // a search does not change the selection mode
-        OpKind::Scanning => return (409, json!({"ok": false, "error": "正在搜索网络，搜完再操作"})),
+        OpKind::Scanning => {
+            let msg = "正在搜索网络，搜完再操作";
+            return (409, json!({"ok": false, "error": msg, "error_en": error_en(msg)}));
+        }
         OpKind::Registering | OpKind::Idle => {}
     }
     // Accepted means it survives a restart: the marker says "revert" before
     // the 202 goes out, or the request is refused.
     if let Err(e) = write_marker(&Marker::Revert) {
-        return (500, json!({"ok": false, "error": format!("写不了保护标记：{e}")}));
+        let msg = format!("写不了保护标记：{e}");
+        return (500, json!({"ok": false, "error_en": error_en(&msg), "error": msg}));
     }
     if o.kind == OpKind::Registering {
         // the guard reads this under the same lock at every step
@@ -1892,7 +2154,8 @@ pub fn select_auto(state: &AppState) -> (u16, Value) {
         return (202, json!({"ok": true, "data": o.guard.json()}));
     }
     o.kind = OpKind::Reverting;
-    o.guard = Guard { phase: "reverting", reason: "手动恢复自动".into(), started_at: now(), ..Guard::default() };
+    o.guard = Guard { phase: "reverting", started_at: now(), ..Guard::default() };
+    o.guard.set_reason(Reason::why("手动恢复自动"));
     let snapshot = o.guard.json();
     drop(o);
     let i = Arc::clone(&inner);
@@ -1911,7 +2174,7 @@ pub fn operator_scan(state: &AppState) -> (u16, Value) {
             return (202, json!({"ok": true, "data": {"state": "scanning"}}));
         }
         if let Err(why) = claim(&mut o, OpKind::Scanning) {
-            return (409, json!({"ok": false, "error": why}));
+            return (409, json!({"ok": false, "error": why, "error_en": error_en(why)}));
         }
         o.scan = Scan { state: "scanning", started_at: now(), ..Scan::default() };
     }
@@ -1988,10 +2251,11 @@ pub fn neighbors_scan(state: &AppState) -> (u16, Value) {
     let mut n = state.netinfo.inner.nbr.lock().unwrap();
     n.state = "unsupported";
     n.error = NBR_UNSUPPORTED.into();
-    (410, json!({"ok": false, "error": NBR_UNSUPPORTED}))
+    (410, json!({"ok": false, "error": NBR_UNSUPPORTED, "error_en": NBR_UNSUPPORTED_EN}))
 }
 
 const NBR_UNSUPPORTED: &str = "原厂扫描会断网且拿不到数据，已停用";
+const NBR_UNSUPPORTED_EN: &str = "Off: the stock scan drops data, finds nothing";
 
 #[cfg(test)]
 mod tests {
@@ -2333,5 +2597,227 @@ mod tests {
         assert_eq!(join_place(&["中国", "北京", "北京"]), "中国 北京");
         assert_eq!(join_place(&["日本", "东京都", "东京"]), "日本 东京都");
         assert_eq!(join_place(&["", "", ""]), "");
+    }
+
+    // ── L2: English and codes next to the Chinese ──────────────────────────
+
+    #[test]
+    fn operators_in_the_table_get_the_glossary_english() {
+        // docs/ui-glossary.md §8, copied exactly; datad's four must match.
+        let table: &[(&str, &str)] = &[
+            ("46000", "China Mobile"), ("46002", "China Mobile"), ("46004", "China Mobile"),
+            ("46007", "China Mobile"), ("46008", "China Mobile"),
+            ("46001", "China Unicom"), ("46006", "China Unicom"), ("46009", "China Unicom"),
+            ("46003", "China Telecom"), ("46005", "China Telecom"), ("46011", "China Telecom"),
+            ("46015", "China Broadnet"),
+            ("45403", "3 HK"), ("45404", "3 HK"),
+            ("45412", "China Mobile HK"), ("45413", "China Mobile HK"),
+            ("45407", "China Unicom HK"),
+            ("45500", "SmarTone Macau"),
+            ("45502", "China Telecom Macau"), ("45507", "China Telecom Macau"),
+            ("45503", "3 Macau"), ("45505", "3 Macau"),
+            ("46601", "FarEasTone"), ("46605", "FarEasTone"),
+            ("46611", "Chunghwa Telecom"), ("46692", "Chunghwa Telecom"),
+            ("46689", "Taiwan Mobile"), ("46693", "Taiwan Mobile"), ("46697", "Taiwan Mobile"),
+            ("44011", "Rakuten Mobile"),
+            // already English: as it is
+            ("44020", "SoftBank"), ("310260", "T-Mobile"), ("45501", "CTM"),
+        ];
+        for (plmn, en) in table {
+            let j = plmn_json(&plmn_from_str(plmn).unwrap(), "broadcast");
+            assert_eq!(j["operator_en"], *en, "{plmn}");
+            assert_ne!(j["name"], "broadcast", "{plmn} is in the table");
+        }
+        let j = plmn_json(&plmn_from_str("46001").unwrap(), "");
+        assert_eq!((j["name"].as_str(), j["country"].as_str()), (Some("中国联通"), Some("中国")));
+        assert_eq!((j["country_en"].as_str(), j["country_iso"].as_str()), (Some("China"), Some("CN")));
+    }
+
+    #[test]
+    fn operators_outside_the_table_use_the_broadcast_name_in_both() {
+        let p = plmn_from_str("26207").unwrap();
+        let j = plmn_json(&p, "o2 - de");
+        assert_eq!((j["name"].as_str(), j["operator_en"].as_str()), (Some("o2 - de"), Some("o2 - de")));
+        assert_eq!((j["country_en"].as_str(), j["country_iso"].as_str()), (Some("Germany"), Some("DE")));
+        // no name at all: both null
+        let j = plmn_json(&plmn_from_str("99999").unwrap(), "");
+        assert!(j["name"].is_null() && j["operator_en"].is_null());
+        assert!(j["country"].is_null() && j["country_en"].is_null() && j["country_iso"].is_null());
+        // a search result: table name, else the network's own
+        let mut ops = Vec::new();
+        collect_operators(&json!([{"m_mcc_mnc":"46692","m_oper_name":"Chunghwa"}, {"m_mcc_mnc":"52098","m_oper_name":"X"}]), &mut ops);
+        assert_eq!((ops[0]["name"].as_str(), ops[0]["operator_en"].as_str()), (Some("中华电信"), Some("Chunghwa Telecom")));
+        assert_eq!(ops[0]["country_iso"], "TW");
+        assert_eq!((ops[1]["name"].as_str(), ops[1]["operator_en"].as_str()), (Some("X"), Some("X")));
+        let op = operator_from_record("2,CMHK,45412,7").unwrap();
+        assert_eq!((op["operator_en"].as_str(), op["country_en"].as_str()), (Some("China Mobile HK"), Some("Hong Kong")));
+    }
+
+    #[test]
+    fn every_table_entry_has_english_without_cjk() {
+        use crate::health::has_cjk;
+        for mcc in 0..1000u16 {
+            if let Some((zh, en, iso)) = country_info(mcc) {
+                assert!(!zh.is_empty() && !en.is_empty() && !has_cjk(en), "{mcc}: {en}");
+                assert_eq!(country(mcc), Some(zh), "{mcc}: the Chinese name is unchanged");
+                match iso {
+                    Some(c) => assert!(c.len() == 2 && c.bytes().all(|b| b.is_ascii_uppercase()), "{mcc}: {c}"),
+                    None => assert_eq!(mcc, 901),
+                }
+            }
+            for mnc in 0..1000u16 {
+                if let Some(zh) = operator(mcc, mnc) {
+                    let en = operator_en(zh);
+                    assert!(!has_cjk(en), "{mcc}-{mnc}: {en}");
+                }
+            }
+        }
+        for (mcc, iso, en) in [(454, "HK", "Hong Kong"), (455, "MO", "Macau"), (466, "TW", "Taiwan"), (440, "JP", "Japan"),
+            (450, "KR", "South Korea"), (310, "US", "United States"), (234, "GB", "United Kingdom"), (460, "CN", "China")]
+        {
+            assert_eq!(country_info(mcc).map(|c| (c.1, c.2)), Some((en, Some(iso))), "{mcc}");
+        }
+        assert_eq!(country_info(901), Some(("国际", "International", None)));
+        // every MCC with an ISO code has its names (none silently dropped)
+        for mcc in 0..1000u16 {
+            if mcc_iso(mcc).is_some() {
+                assert!(country_info(mcc).is_some(), "{mcc}");
+            }
+        }
+        // the IP-lookup path translates the same 23 codes as before, no more
+        assert_eq!(country_by_code("HK"), Some("中国香港"));
+        assert_eq!(country_by_code("IT"), None);
+        assert_eq!(country_by_code("XX"), None);
+        assert!(GEO_CODES.iter().all(|c| iso_names(c).is_some()));
+    }
+
+    #[test]
+    fn guard_reasons_have_a_code_and_english() {
+        use crate::health::has_cjk;
+        let whys = ["注册失败", "已注册但数据没通", "超时没注册上", "手动恢复自动", "重启前没做完", "重启前还没拨上"];
+        let mut all = Vec::new();
+        for w in whys {
+            assert_ne!(why_info(w).0, "other", "{w} has no code");
+            all.push(Reason::why(w));
+            all.push(Reason::auto_retry(w, 3, AUTO_NOT_YET, 120));
+            all.push(Reason::auto_retry(w, 1, "AT port busy", 30));
+            all.push(Reason::auto_no_data(w));
+        }
+        all.push(Reason::auto_no_data(""));
+        all.push(Reason::redial_retry(2, 120));
+        for r in &all {
+            assert!(!r.en.is_empty() && !has_cjk(&r.en) && !r.en.ends_with('.'), "{r:?}");
+            // the code says exactly which message: the web shows its own line
+            // for manual_auto and the reason text for anything else
+            assert_eq!(r.code == "manual_auto", r.zh == "手动恢复自动", "{r:?}");
+        }
+        assert_eq!(Reason::why("手动恢复自动").en, "Back to automatic on request");
+        assert_eq!(Reason::auto_no_data("手动恢复自动").zh, "手动恢复自动；已回到自动选网，但数据还没拨上");
+        assert_eq!(Reason::auto_no_data("手动恢复自动").en, "Back to automatic on request; automatic again, but no data yet");
+        assert_eq!(Reason::auto_retry("注册失败", 2, AUTO_NOT_YET, 60).zh, "注册失败；第 2 次恢复自动没成功（模组还没回到自动），60 秒后再试");
+        // what decide() hands over maps too
+        for v in [decide("46001", &Obs { result: "fail", before: "", serving: "46000", connected: true }, 99), decide("46001", &Obs { result: "", before: "", serving: "46000", connected: true }, GUARD_TIMEOUT)] {
+            let Verdict::Revert(w) = v else { panic!("{v:?}") };
+            assert_ne!(why_info(w).0, "other");
+        }
+    }
+
+    #[test]
+    fn guard_json_sends_null_until_there_is_a_reason() {
+        let mut g = Guard::default();
+        let j = g.json();
+        assert!(j["reason_code"].is_null() && j["reason_en"].is_null());
+        assert_eq!(j["reason"], "");
+        g.set_reason(Reason::why("手动恢复自动"));
+        let j = g.json();
+        assert_eq!((j["reason"].as_str(), j["reason_code"].as_str()), (Some("手动恢复自动"), Some("manual_auto")));
+    }
+
+    #[test]
+    fn user_facing_errors_have_english() {
+        use crate::health::has_cjk;
+        let mut zh: Vec<String> = [OpKind::Scanning, OpKind::Registering, OpKind::Reverting]
+            .iter()
+            .map(|k| claim(&mut Ops { kind: *k, ..Ops::default() }, OpKind::Registering).unwrap_err().to_string())
+            .collect();
+        zh.extend(
+            [
+                "正在搜索网络，搜完再操作", "没有这个手动 APN", "上一次 APN 切换还没做完", "没搜到网络",
+                "没有可用的查询地址", NBR_UNSUPPORTED, "写不了保护标记，没有注册：No space left on device (os error 28)",
+                "写不了保护标记：Read-only file system", "模组报告搜索失败（manual_fail）", "ip.sb: 看不懂返回",
+            ]
+            .map(String::from),
+        );
+        for z in &zh {
+            let en = error_en(z).unwrap_or_else(|| panic!("{z} has no English"));
+            assert!(!has_cjk(&en) && !en.ends_with('.') && !en.contains("Please"), "{z} -> {en}");
+        }
+        assert_eq!(error_en("模组报告搜索失败（3）").as_deref(), Some("Modem reported the search failed (3)"));
+        assert_eq!(error_en("ubus call failed: timeout").as_deref(), Some("ubus call failed: timeout"), "English passes through");
+        // clipped mid-pattern, or Chinese we have no English for: null, never Chinese
+        let clipped = clip(format!("模组报告搜索失败（{}）", "s".repeat(80)));
+        assert!(clipped.ends_with('…'));
+        assert_eq!(error_en(&clipped), None);
+        assert_eq!(error_en("某个新的中文错误"), None);
+        let s = Scan { error: "没搜到网络".into(), ..Scan::default() };
+        assert_eq!(s.json()["error_en"], "No networks found");
+        assert!(Scan::default().json()["error_en"].is_null());
+        let l = Lookup { error: Some("ip.sb: 看不懂返回".into()), ..Lookup::default() };
+        assert_eq!(l.json()["error_en"], "ip.sb: unreadable reply");
+        assert!(Lookup::default().json()["error_en"].is_null());
+    }
+
+    /// Old touch screens read these with fixed buffers that truncate silently
+    /// (touch-ui netinfo.c: operator `o[256]`, guard `obj[768]`, scan list
+    /// `arr[6144]`; L2 review O1). Worst cases must leave a quarter spare.
+    #[test]
+    fn new_fields_fit_the_old_touch_screen() {
+        let strip = |v: &Value| {
+            let mut v = v.clone();
+            v.as_object_mut().unwrap().retain(|k, _| !k.ends_with("_en") && !k.ends_with("_iso") && k != "reason_code");
+            v.to_string().len()
+        };
+        // A long broadcast name (the table's longest is shorter) on the
+        // longest-named country.
+        // Keys come out sorted, so everything after "name" is new (operator_en):
+        // truncation there costs the old screen nothing. What it reads must end
+        // well inside the buffer, and the whole object should fit.
+        let op = plmn_json(&plmn_from_str("42402").unwrap(), &"N".repeat(32));
+        let text = op.to_string();
+        eprintln!("operator: {} bytes before L2, {} after", strip(&op), text.len());
+        let name_end = text.find(r#","operator_en""#).unwrap();
+        assert!(name_end < 256 * 3 / 4 && text.len() < 256, "{text}");
+        let op = plmn_json(&plmn_from_str("45500").unwrap(), "");
+        assert!(op.to_string().len() < 256 * 3 / 4, "{op}");
+
+        let mut g = Guard {
+            phase: "revert_failed",
+            target: "460011".into(),
+            rat: "11".into(),
+            started_at: 1_758_600_000,
+            finished_at: 1_758_600_000,
+            // what register() stores when the ubus call errors
+            last_result: clip(format!("调用出错：{}", "e".repeat(100))),
+            ..Guard::default()
+        };
+        // The longest reason: errors in it come from the AT port (English) or
+        // are AUTO_NOT_YET; try both.
+        g.set_reason(Reason::auto_retry("已注册但数据没通", 99, &"e".repeat(100), 300));
+        let j = g.json();
+        eprintln!("guard: {} bytes before L2, {} after", strip(&j), j.to_string().len());
+        assert!(j.to_string().len() < 768 * 9 / 10, "{} bytes", j.to_string().len());
+        g.set_reason(Reason::auto_retry("已注册但数据没通", 99, AUTO_NOT_YET, 300));
+        let j = g.json();
+        eprintln!("guard: {} bytes before L2, {} after", strip(&j), j.to_string().len());
+        assert!(j.to_string().len() < 768 * 9 / 10, "{} bytes", j.to_string().len());
+
+        let rec = format!("2,{},52098,11", "N".repeat(32));
+        let ops: Vec<Value> = (0..SCAN_MAX_OPS).map(|_| operator_from_record(&rec).unwrap()).collect();
+        let size = serde_json::to_string(&ops).unwrap().len();
+        eprintln!("scan list: {size} bytes");
+        assert!(size < 6144 * 3 / 4, "{size} bytes");
+        for o in &ops {
+            assert!(o.to_string().len() < 768 * 3 / 4);
+        }
     }
 }

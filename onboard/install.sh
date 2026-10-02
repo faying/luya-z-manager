@@ -5,6 +5,8 @@
 #   ./install.sh                     # 全套：开 ADB → SSH → 高级后台 → devui → eSIM
 #   ./install.sh ssh                 # 只开 ADB + 持久化 SSH
 #   ./install.sh admin devui         # 只装指定组件（SSH 或 ADB 通着就行）
+#   ./install.sh recover             # u60 ship 的开机收尾：换上 /data/u60-ship/u60-recover.sh（设备上自检过才换），
+#                                    #   并在 rc.local 各服务启动行之前加一行调用它。不在全套里，要单独点名
 #   ./install.sh status              # 看设备上各组件状态
 #   ./install.sh doctor              # 只读体检（开机同步、自动升级、各服务、心跳、Wi-Fi、告警…）
 #   ./install.sh reboot              # 重启设备并确认各组件开机自己起来（要 SSH 已通）
@@ -70,7 +72,7 @@ case " $COMPONENTS " in
   " status "|" reboot "|" doctor "|" backup "|" restore ") ;;
   *" status "*|*" reboot "*|*" doctor "*) fail "status / doctor / reboot 要单独跑，不能和组件混在一起" ;;
   *) for c in $COMPONENTS; do
-              case "$c" in ssh|admin|devui|esim) ;; *) fail "不认识的组件: ${c}（可选 ssh admin devui esim，或 status / doctor / reboot）" ;; esac
+              case "$c" in ssh|admin|devui|esim|recover) ;; *) fail "不认识的组件: ${c}（可选 ssh admin devui esim recover，或 status / doctor / reboot）" ;; esac
      done ;;
 esac
 INSTALLING=true
@@ -348,6 +350,8 @@ for c in $COMPONENTS; do
     admin) cp "$KIT/payload/zte-agent" "$KIT/payload/admin.tgz" "$S/"; cp -R "$KIT/payload/guard" "$S/" ;;
     devui) cp -R "$KIT/payload/devui" "$S/"; cp -R "$KIT/payload/guard" "$S/" ;;
     esim)  cp "$KIT/payload/esim.tgz" "$S/" ;;
+    recover) [ -f "$KIT/payload/guard/u60-recover.sh" ] || fail "这个装机包没带 u60-recover.sh（装机包太旧？）"
+             [ -d "$S/guard" ] || cp -R "$KIT/payload/guard" "$S/" ;;
   esac
 done
 
@@ -366,7 +370,8 @@ echo
 printf "${BOLD}── 设备端安装：%s ──${NC}\n" "$COMPONENTS"
 # adb shell 不可靠地传退出码，所以用最后一行的哨兵判断成功；装完删掉临时包（含密码）
 LOG="$TMP/device.log"
-dev_run "sh $STAGE/device/install.sh $COMPONENTS; rc=\$?; rm -rf $STAGE; [ \$rc = 0 ] && echo __U60_KIT_OK__" \
+# KIT_MAC_TIME：设备清单里的时间用电脑的（设备时钟刚开机时可能没对上）
+dev_run "KIT_MAC_TIME=$(date +%s) sh $STAGE/device/install.sh $COMPONENTS; rc=\$?; rm -rf $STAGE; [ \$rc = 0 ] && echo __U60_KIT_OK__" \
   2>&1 | tr -d '\r' | tee "$LOG" | grep -v '^__U60_KIT_OK__$' || true
 grep -q '^__U60_KIT_OK__$' "$LOG" || fail "设备端安装没有完成，看上面的报错"
 echo

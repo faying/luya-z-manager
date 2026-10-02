@@ -9,8 +9,9 @@
 |---|---|
 | `ssh` | dropbear，端口 2222，只认密钥，开机自启 |
 | `admin` | 高级后台 zte-agent + 管理网页，`http://<设备>:9090/` |
-| `devui` | 前面板触屏界面 + 数据后端 zwrt-datad |
+| `devui` | 前面板触屏界面 + 数据后端 zwrt-datad。装完用 `u60-ship.sh uid-restart <界面 md5> <u60-uid md5>` 把屏幕交给新程序（核对两个进程的 exe md5；包里的 u60-ship.sh 太旧时退回 `/etc/init.d/u60-uid restart`），并在设备清单记 touch、uid 两条（`admin` 记 agent 一条） |
 | `esim` | lpac，配合可插拔 eUICC 卡管理/切换 profile |
+| `recover`（可选，不在全套里） | u60 ship 的开机收尾：换上 `/data/u60-ship/u60-recover.sh`（设备上自检过才换），并在 `/etc/rc.local` 各服务启动行之前加一行调用它。**改 rc.local，先问用户**。`admin`/`devui` 只在设备上还没有这个脚本时放一份，不碰 rc.local |
 
 装 `ssh` 组件时还会关闭固件自动升级（升级会覆盖开机自启，新固件又开不了 ADB）。
 **全局要求：固件自动升级永远保持关闭**，任何脚本、页面、自动化都不能把它打开（`zwrt_zte_dm.dm_update.dm_update_mode` 必须是 `0`）。

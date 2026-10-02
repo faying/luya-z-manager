@@ -78,7 +78,8 @@ export interface NetworkSignal {
   nrcasig?: string; // unconfirmed
   /**
    * Radio-mode preference, written by nwinfo_set_netselect. B27 has reported
-   * "WL_AND_5G" and, after a manual register, "TCHGWL_5G" (both automatic).
+   * "WL_AND_5G", "TCHGWL_5G" after a manual register and "NETWORK_auto" after a
+   * band reset (nwinfo_reset_band_cell_setting); all three are automatic.
    * The firmware's full list is in zte-agent modem_ext.rs NET_SELECT_VALUES.
    * Router/network-mode reads and writes this.
    */

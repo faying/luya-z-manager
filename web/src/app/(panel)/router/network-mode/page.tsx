@@ -12,7 +12,13 @@
 // model (/usr/zte_web/web/js/config/ufi/U60Pro/config.js AUTO_MODES:
 // 5G/4G/3G, 5G NSA = LTE_AND_5G, 5G SA = Only_5G, 4G/3G, 4G Only, 3G Only);
 // the firmware knows 14 (zte_topsw_nwinfo strings, see OTHER). "TCHGWL_5G"
-// (every RAT + 5G) was read on B27 after a manual register and counts as Auto.
+// (every RAT + 5G) was read on B27 after a manual register and counts as Auto,
+// and so does "NETWORK_auto", read after the touchscreen's 恢复默认 (band reset).
+//
+// A switch that doesn't read back is usually not "still switching": after the
+// modem has crashed and restarted itself a few times, the firmware's switcher
+// logs the request and does nothing (seen 2026-09-27 and 09-29), until a reboot.
+// The mismatch text says so.
 import { useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { apiFetch } from "@/lib/api/client";
@@ -36,7 +42,7 @@ const OPTIONS: { value: string; label: string; desc: string; lk: string; dk: str
   { value: "Only_WCDMA", label: "3G only", desc: "WCDMA only. Many countries have switched 3G off: there this means no signal.", lk: "netmode.wcdmaLabel", dk: "netmode.wcdmaDesc" },
 ];
 const AUTO = "WL_AND_5G";
-const isAuto = (v: string | undefined | null) => v === AUTO || v === "TCHGWL_5G";
+const isAuto = (v: string | undefined | null) => v === AUTO || v === "TCHGWL_5G" || v === "NETWORK_auto";
 /** Modes that leave the device with no signal in much of the world (it has no 2G to fall back on). */
 const RISKY: Record<string, { text: string; k: string }> = {
   Only_5G: {
@@ -51,6 +57,7 @@ const RISKY: Record<string, { text: string; k: string }> = {
 /** Firmware values that are not among the six choices, in words. */
 const OTHER: Record<string, { label: string; k: string }> = {
   TCHGWL_5G: { label: "Auto (every network type)", k: "netmode.allLabel" },
+  NETWORK_auto: { label: "Auto (firmware default)", k: "netmode.defaultAutoLabel" },
   WL_AND_NSA: { label: "5G NSA + 4G + 3G", k: "netmode.wlNsaLabel" },
   "4G_AND_5G": { label: "4G + 5G", k: "netmode.lte5gLabel" },
   GSM_AND_LTE: { label: "4G + 2G", k: "netmode.gsmLteLabel" },
@@ -206,7 +213,7 @@ export default function NetworkModePage() {
             <OpResult op={op} />
             {op.phase === "failed" && op.errorKind === "mismatch" && (
               <p className="nd-aux">
-                {t("netmode.stillReports", "The device still reports {{mode}}. It may still be switching; check again in a minute.", {
+                {t("netmode.stillReports", "The device still reports {{mode}}. It may still be switching; check again in a minute. If it hasn't changed, apply once more. If that doesn't take either, restart the device and switch again right after it starts: once the modem has restarted itself a few times, the firmware stops carrying out mode changes until a reboot.", {
                   mode: labelOf(lastSeen),
                 })}
               </p>

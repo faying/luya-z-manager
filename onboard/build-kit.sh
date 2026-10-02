@@ -120,7 +120,9 @@ DEVUI_BIN="${DEVUI_BIN:-$DEVUI_REPO/out/u60pro-devui-lvgl.stripped}"
 UID_BIN="${UID_BIN:-$DEVUI_REPO/out/u60-uid}"
 # 旧做法在仓库根目录 make u60-uid：out/ 里没有时也认那一份
 [ -f "$UID_BIN" ] || [ "$UID_BIN" != "$DEVUI_REPO/out/u60-uid" ] || [ ! -f "$DEVUI_REPO/u60-uid" ] || UID_BIN="$DEVUI_REPO/u60-uid"
+DEVUI_PREBUILT=1
 if [ ! -f "$DEVUI_BIN" ] || [ ! -f "$UID_BIN" ]; then
+  DEVUI_PREBUILT=0
   for f in "$DEVUI_BIN" "$UID_BIN"; do
     [ -f "$f" ] || case "$f" in "$DEVUI_REPO"/out/*) ;; *) die "没有 $f" ;; esac
   done
@@ -171,11 +173,29 @@ fi
 # ── 进程监督与 Wi-Fi 兜底 ─────────────────────────────────────────────────────
 step "guard（${DEVUI_REPO}/scripts）"
 mkdir -p "$PL/guard"
-for f in alert-lib.sh u60-guard.sh supervise.sh agent-auth.sh chaos.sh doctor.sh config-backup.sh power-sample.sh wan-sources.sh \
+# u60-ship.sh、datad-trial.sh（它的壳，要和它放一起）进 /data/u60-guard；u60-recover.sh 由设备端
+# 放到 /data/u60-ship/（自检过才放，已有就不换；rc.local 那一行只由 recover 组件加）
+# 去掉 u60-ship.sh、datad-trial.sh、u60-recover.sh 以后，这张表要和 u60-ship.sh 的 GUARD_FILES 一致（touch-ui docs/SHIP.md）
+for f in alert-lib.sh u60-guard.sh supervise.sh agent-auth.sh chaos.sh doctor.sh config-backup.sh power-sample.sh wan-sources.sh wifi-ab.sh \
+         u60-ship.sh datad-trial.sh u60-recover.sh \
          zte-agent.init zwrt-datad.init u60-guard.init; do
   [ -f "$DEVUI_REPO/scripts/$f" ] || die "缺 $DEVUI_REPO/scripts/$f"
   cp "$DEVUI_REPO/scripts/$f" "$PL/guard/"
 done
+# 设备清单（kind=kit）的来源：装机包日期、各组件编的提交、数据格式版本、有没有未提交改动。
+# touch、uid 记 touch-ui 当前的提交；用 DEVUI_BIN / UID_BIN 指定现成程序时，程序未必是这个提交编的，记成有改动。
+kit_format() { sed 's/#.*//' "$1" 2>/dev/null | awk 'NF { print $1; exit }'; }
+{
+  echo "stamp=$STAMP"
+  echo "agent_commit=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo 0000000)"
+  echo "agent_format=$(kit_format "$ROOT/ship/agent/format")"
+  echo "agent_dirty=$([ -n "$(dirty "$ROOT" zte-agent)" ] && echo 1 || echo 0)"
+  for c in touch uid; do
+    echo "${c}_commit=$(git -C "$DEVUI_REPO" rev-parse HEAD 2>/dev/null || echo 0000000)"
+    echo "${c}_format=$(kit_format "$DEVUI_REPO/ship/$c/format")"
+    echo "${c}_dirty=$([ -n "$(dirty "$DEVUI_REPO" src scripts)" ] || [ "$DEVUI_PREBUILT" = 1 ] && echo 1 || echo 0)"
+  done
+} > "$PL/guard/kit-source"
 
 # ── zwrt-datad（Rust 版，data-service 仓库现编）──────────────────────────────
 if [ -z "${DATAD_BIN:-}" ]; then
