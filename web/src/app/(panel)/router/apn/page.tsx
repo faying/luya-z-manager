@@ -11,6 +11,10 @@
 //   save edit              PUT  /api/router/apn/profiles  [+ POST …/activate when「设为使用中」]
 //                          two steps (R10): the edit can be saved while the switch is not
 //   delete                 POST /api/router/apn/profiles/delete  readback: entry gone
+//   use a candidate for    POST /api/netinfo/apn {id:"auto…"}  readback /api/netinfo apn: manual,
+//     this SIM (10-03)          dialling that APN. The agent copies the carrier candidate into
+//                              the manual list and remembers it per ICCID (apn_pick.rs): another
+//                              SIM goes back to Auto, this SIM gets it again.
 // The passthrough writes never check the firmware's result (router.rs:259-326),
 // so every write is read back; readbacks retry a few times because the
 // firmware can lag.
@@ -32,6 +36,7 @@ import { useId, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowClockwise, PencilSimple, Plus, Trash } from "@phosphor-icons/react";
 import { useApi } from "@/lib/hooks/useApi";
+import { pickLang, useLang } from "@/lib/i18n/pick";
 import { apiFetch } from "@/lib/api/client";
 import { useWriteOp, type WriteStep } from "@/lib/api/writeOp";
 import type { RouterApnList, RouterApnMode, RouterApnProfile, RouterApnProfileBody, RouterWanIpv6 } from "@/lib/api/schemas/router";
@@ -136,7 +141,21 @@ async function settle<T>(read: () => Promise<T>, ok: (d: T) => boolean, tries = 
   return false;
 }
 
-type Dialog = null | "mode" | "ipv6" | "activate" | "delete" | "save";
+type Dialog = null | "mode" | "ipv6" | "activate" | "delete" | "save" | "pick";
+
+/** The `apn` block of /api/netinfo (netinfo.rs apn_view + apn_pick). */
+interface NetinfoApn {
+  apn?: {
+    mode?: string;
+    switching?: boolean;
+    switch_error?: string;
+    picked_id?: string | null;
+    notice?: { text?: string; text_en?: string } | null;
+    in_use?: { apn?: string } | null;
+    auto?: { id?: string; iot?: boolean }[];
+  } | null;
+}
+const NETINFO_APN = "/api/netinfo?lite=1&apn=1";
 
 export default function APNPage() {
   const { t } = useTranslation();
@@ -144,6 +163,10 @@ export default function APNPage() {
   const manual = useApi<RouterApnList>("/api/router/apn/profiles");
   const auto = useApi<RouterApnList>("/api/router/apn/auto-profiles");
   const wan = useApi<RouterWanIpv6>("/api/router/wan-ipv6");
+  const lang = useLang();
+  const ni = useApi<NetinfoApn>(NETINFO_APN);
+  const iotIds = new Set((ni.data?.apn?.auto ?? []).filter((a) => a.iot).map((a) => a.id));
+  const pickedId = ni.data?.apn?.picked_id ?? null;
 
   const profiles = normalize(manual.data?.apnListArray);
   const autoProfiles = normalize(auto.data?.apnListArray);
@@ -220,6 +243,31 @@ export default function APNPage() {
     ],
     waitDevice: { expectedSec: NET_WAIT_SEC, recovery },
     verify: () => settle(readManual, (list) => !!list.find((p) => p.id === target?.id)?.active),
+  });
+  // ── use a carrier candidate for this SIM only (D39) ──
+  const [cand, setCand] = useState<Apn | null>(null);
+  const pickOp = useWriteOp({
+    tier: 3,
+    steps: [
+      {
+        label: t("apn.useForSim", "Use for this SIM"),
+        run: () => apiFetch("/api/netinfo/apn", { method: "POST", body: { id: cand?.id } }),
+      },
+    ],
+    waitDevice: { expectedSec: NET_WAIT_SEC, recovery },
+    verify: () =>
+      settle(
+        async () => {
+          const d = await apiFetch<NetinfoApn>(NETINFO_APN);
+          await ni.mutate(d, { revalidate: false });
+          void manual.mutate();
+          void mode.mutate();
+          return d.apn;
+        },
+        (a) => !!a && !a.switching && a.mode === "manual" && a.in_use?.apn === cand?.apn,
+        6,
+        3000
+      ),
   });
   const deleteOp = useWriteOp({
     tier: 3,
@@ -302,7 +350,7 @@ export default function APNPage() {
     setEditing(null);
   }
 
-  const busy = modeOp.busy || ipv6Op.busy || activateOp.busy || deleteOp.busy || saveOp.busy;
+  const busy = modeOp.busy || ipv6Op.busy || activateOp.busy || deleteOp.busy || saveOp.busy || pickOp.busy;
   const listLocked = !manual.data || manual.stale || busy;
 
   function startAdd() {
@@ -343,7 +391,7 @@ export default function APNPage() {
 
   function go(which: Exclude<Dialog, null>) {
     setDialog(null);
-    const op = { mode: modeOp, ipv6: ipv6Op, activate: activateOp, delete: deleteOp, save: saveOp }[which];
+    const op = { mode: modeOp, ipv6: ipv6Op, activate: activateOp, delete: deleteOp, save: saveOp, pick: pickOp }[which];
     op.start();
     op.confirm();
   }
@@ -552,6 +600,7 @@ export default function APNPage() {
                       {p.active && isManual === false && (
                         <StatusMark tone="neutral">{t("apn.manualPick", "Used in Manual mode")}</StatusMark>
                       )}
+                      {pickedId === p.id && <StatusMark tone="neutral">{t("apn.thisSim", "This SIM")}</StatusMark>}
                     </span>
                   }
                   sub={
@@ -632,33 +681,81 @@ export default function APNPage() {
           )}
         </section>
 
-        {/* ── auto-detected (read-only) ── */}
+        {/* ── auto-detected: with two or more, one can be used for this SIM only (D39) ── */}
         {autoProfiles.length > 0 && (
           <section>
             <Group title={t("apn.autoTitle", "Auto-detected Profiles")} stale={auto.stale}>
-              {autoProfiles.map((p) => (
-                <Row
-                  key={p.id || p.name}
-                  label={
-                    <span className="inline-flex flex-wrap items-center gap-x-3">
-                      <span>{p.name || "—"}</span>
-                      {p.active && isManual === false && <StatusMark tone="ok">{t("apn.active", "Active")}</StatusMark>}
-                    </span>
-                  }
-                  sub={
-                    <>
-                      {p.apn && <span className="nd-mono">{p.apn}</span>}
-                      {p.pdp && ` · ${p.pdp}`}
-                    </>
-                  }
-                />
-              ))}
+              {autoProfiles.map((p) => {
+                const iot = iotIds.has(p.id);
+                // From the agent's own view (netinfo apn): manual, this SIM's pick, dialling this APN.
+                const nia = ni.data?.apn;
+                const pickedHere = nia?.mode === "manual" && !!pickedId && nia.in_use?.apn === p.apn;
+                return (
+                  <Row
+                    key={p.id || p.name}
+                    label={
+                      <span className="inline-flex flex-wrap items-center gap-x-3">
+                        <span>{p.name || "—"}</span>
+                        {p.active && isManual === false && <StatusMark tone="ok">{t("apn.active", "Active")}</StatusMark>}
+                        {pickedHere && <StatusMark tone="ok">{t("apn.activeThisSim", "Active for this SIM")}</StatusMark>}
+                        {iot && <StatusMark tone="warn">{t("apn.iot", "IoT")}</StatusMark>}
+                      </span>
+                    }
+                    sub={
+                      <>
+                        {p.apn && <span className="nd-mono">{p.apn}</span>}
+                        {p.pdp && ` · ${p.pdp}`}
+                      </>
+                    }
+                    control={
+                      autoProfiles.length >= 2 && !pickedHere ? (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          isDisabled={busy || !ni.data}
+                          aria-label={t("apn.useForSimAria", "Use {{apn}} for this SIM", { apn: p.apn })}
+                          onPress={() => {
+                            setCand(p);
+                            setDialog("pick");
+                          }}
+                        >
+                          {t("apn.useForSim", "Use for this SIM")}
+                        </Button>
+                      ) : undefined
+                    }
+                  />
+                );
+              })}
             </Group>
-            <p className="nd-aux mt-2 px-1">{t("apn.autoDesc", "Supplied by your carrier — read-only.")}</p>
+            <p className="nd-aux mt-2 px-1">
+              {autoProfiles.length >= 2
+                ? t("apn.autoPickDesc", "Your carrier's list has several APNs for this SIM. Use one for this SIM only: another SIM goes back to Auto, and this SIM gets it again when it's back.")
+                : t("apn.autoDesc", "Supplied by your carrier — read-only.")}
+            </p>
+            {ni.data?.apn?.notice?.text && (
+              <p className="nd-aux mt-1 px-1">{t("apn.noticeAuto", "Changed automatically: {{text}}", { text: pickLang(ni.data.apn.notice, "text", lang) })}</p>
+            )}
+            <div className="mt-2 grid gap-2 px-1">
+              <OpResult op={pickOp} />
+            </div>
           </section>
         )}
       </div>
 
+      <ConfirmDialog
+        open={dialog === "pick"}
+        onOpenChange={(o) => !o && setDialog(null)}
+        title={t("apn.confirmPickTitle", "Use {{apn}} for this SIM?", { apn: cand?.apn ?? "" })}
+        what={t(
+          "apn.confirmPickWhat",
+          "It is saved as a manual profile and the data connection re-dials with it. Only this SIM uses it: when another SIM goes in, APN goes back to Auto; when this SIM is back, it is used again."
+        )}
+        downtime={downtime}
+        recovery={recovery}
+        actionLabel={t("apn.useForSim", "Use for this SIM")}
+        cutsUplink
+        onConfirm={() => go("pick")}
+      />
       <ConfirmDialog
         open={dialog === "mode"}
         onOpenChange={(o) => !o && setDialog(null)}

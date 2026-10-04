@@ -10,7 +10,7 @@
 // Icons: Phosphor (MIT). Rendered bold in lists and filled where they
 // mark a selection or a tile (design choice 2026-09-24, option C).
 import {
-  ArrowBendUpRight, Bell, Broadcast, Bug, CalendarBlank, CellSignalFull, CellTower, ChatCircleText,
+  ArrowBendUpRight, Bell, ChartLine, ClockCounterClockwise, Broadcast, Bug, CalendarBlank, CellSignalFull, CellTower, ChatCircleText,
   ClockCountdown, Cloud, Cpu, Crosshair, DeviceMobile, EyeSlash, FadersHorizontal, FileText, Gauge, Gear,
   Globe, HardDrive, HardDrives, Heartbeat, House, HouseLine, LockSimple, MapPin, Network, NotePencil, Stethoscope,
   Path, Plugs, Power, Shield, ShieldCheck, SimCard, SlidersHorizontal, Speedometer, TerminalWindow,
@@ -48,6 +48,7 @@ export const ROUTES: RouteDef[] = [
   { href: "/router/signal-detect", tKey: "nav.signalDetect", fallback: "Signal Detect", icon: Broadcast, anchor: "charts", group: "charts", aliases: ["信号检测", "信号探测", "xinhaojiance", "detect"] },
   { href: "/tools/speedtest", tKey: "nav.speedtest", fallback: "Speed Test", icon: Gauge, anchor: "charts", group: "charts", aliases: ["测速", "cesu", "cs", "speed"] },
   { href: "/tools/diagnose", tKey: "nav.diagnose", fallback: "Diagnose", icon: Stethoscope, anchor: "charts", group: "charts", aliases: ["网络诊断", "诊断", "为什么慢", "查原因", "慢", "卡顿", "zhenduan", "zd", "diagnose", "diagnosis", "slow", "why slow"] },
+  { href: "/trends", tKey: "nav.trends", fallback: "Last 5 Minutes", icon: ChartLine, anchor: "charts", group: "charts", aliases: ["近 5 分钟", "曲线", "网速", "内存", "电池曲线", "jin5fenzhong", "trend", "trends", "graph", "cpu"] },
   { href: "/clients", tKey: "nav.clients", fallback: "Clients", icon: Users, anchor: "charts", group: "charts", aliases: ["在线设备", "已连设备", "zaixianshebei", "终端", "clients", "devices"] },
 
   { href: "/router/mobile-network", tKey: "nav.mobileNetwork", fallback: "Mobile Network", icon: Network, anchor: "functions", group: "network", aliases: ["移动网络", "yidongwangluo", "运营商", "飞行模式", "mobile", "carrier", "airplane"] },
@@ -81,6 +82,7 @@ export const ROUTES: RouteDef[] = [
   { href: "/device-info", tKey: "nav.deviceInfo", fallback: "Device Info", icon: HardDrive, anchor: "system", group: "device", aliases: ["设备信息", "shebeixinxi", "imei", "iccid", "版本", "固件"] },
   { href: "/health", tKey: "nav.health", fallback: "Health", icon: Heartbeat, anchor: "system", group: "device", aliases: ["健康", "jiankang", "health", "体检", "doctor"] },
   { href: "/alerts", tKey: "nav.alerts", fallback: "Alerts", icon: Bell, anchor: "system", group: "device", aliases: ["告警", "gaojing", "alerts", "警告"] },
+  { href: "/changes", tKey: "nav.changes", fallback: "Change log", icon: ClockCounterClockwise, anchor: "system", group: "device", aliases: ["改动记录", "改动", "gaidong", "撤销", "流水账", "changes", "change log", "undo", "history"] },
 
   { href: "/router/device", tKey: "nav.deviceControl", fallback: "Device Control", icon: Power, anchor: "system", group: "maintenance", aliases: ["设备控制", "重启", "chongqi", "reboot", "恢复出厂", "关机"] },
   { href: "/router/schedule", tKey: "nav.scheduleReboot", fallback: "Schedule Reboot", icon: ClockCountdown, anchor: "system", group: "maintenance", aliases: ["定时重启", "dingshi"] },

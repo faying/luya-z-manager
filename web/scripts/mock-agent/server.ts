@@ -8,6 +8,7 @@
 //
 // Nothing in src/ imports this, so it never ends up in `npm run build`.
 
+import { mockOps } from "./fixtures/ops.ts";
 import http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Ctx, Method, Reply, Route, Scenario } from "./lib.ts";
@@ -162,6 +163,11 @@ function handleControl(req: IncomingMessage, res: ServerResponse, url: URL): voi
       console.log(`[mock] scenario → ${scenarioList(runtimeScenarios)}`);
     }
     sendJson(req, res, 200, { ok: true, data: { scenario: scenarioList(runtimeScenarios), known: SCENARIOS } });
+    return;
+  }
+  if (url.pathname === "/__mock/ops") {
+    const r = mockOps(url.searchParams.get("set"));
+    sendJson(req, res, r.ok ? 200 : 400, r);
     return;
   }
   if (url.pathname === "/__mock/state") {

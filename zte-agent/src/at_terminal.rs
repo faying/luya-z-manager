@@ -40,6 +40,12 @@ pub fn at_send(state: &AppState, body: &[u8]) -> (u16, Value) {
         return (400, json!({"ok": false, "error": "command is empty after sanitization"}));
     }
 
+    // Any AT command may change the network (AT+COPS, AT+CFUN…) behind
+    // datad's back: tell it first, so a network-mode change still confirming
+    // is cancelled instead of rolled back over this one (D40). Best effort;
+    // the command goes out either way.
+    crate::datad_write::interrupt("at");
+
     let start = Instant::now();
     match at_cmd::send(&state.at_port, &sanitized, timeout) {
         Ok(response) => {

@@ -110,6 +110,34 @@ fn validate_time(s: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Paths a scheduled job may never call (D20, write-op-layer.md E-A9): eSIM
+/// (a switch that does not converge reboots the device), factory reset,
+/// kill-bloat, power off (10-04: only a hand at the device turns it back on),
+/// and the AT terminal (10-04, D40: any AT command can change the network
+/// behind datad, and only the user's own may cancel a confirming change). Matched on the path as the router sees it (query and trailing
+/// slashes dropped, case folded), so spelling variants do not slip through.
+pub fn forbidden(path: &str) -> Option<&'static str> {
+    let p = path.split(['?', '#']).next().unwrap_or("").trim_end_matches('/').to_ascii_lowercase();
+    let p = p.replace("//", "/");
+    if p == "/api/esim" || p.starts_with("/api/esim/") {
+        Some("eSIM")
+    } else if p == "/api/device/factory-reset" {
+        Some("factory reset")
+    } else if p == "/api/system/kill-bloat" {
+        Some("kill-bloat")
+    } else if p == "/api/device/poweroff" {
+        Some("power off")
+    } else if p == "/api/at/send" {
+        Some("AT terminal")
+    } else {
+        None
+    }
+}
+
+fn forbidden_msg(what: &str) -> (String, String) {
+    (format!("定时任务不能调{what}（会改到这台设备唯一的上网方式或清掉设置）"), format!("A scheduled job may not call {what}"))
+}
+
 fn validate_job(
     action: &Action,
     schedule: &Schedule,
@@ -123,6 +151,9 @@ fn validate_job(
     }
     if action.path.starts_with("/api/auth/") {
         return Err("cannot schedule auth endpoints".into());
+    }
+    if let Some(what) = forbidden(&action.path) {
+        return Err(forbidden_msg(what).0);
     }
     if crate::action::parse_method(&action.method).is_none() {
         return Err("action.method must be GET, POST, PUT, or DELETE".into());
@@ -151,18 +182,58 @@ fn validate_job(
     Ok(())
 }
 
+/// Jobs saved before D20 that call a forbidden path: switched off, with the
+/// reason in `last_error` (the web page shows it). Returns (id, name, path).
+fn disable_forbidden(jobs: &mut [Job]) -> Vec<(u32, String, String)> {
+    let mut out = Vec::new();
+    for j in jobs.iter_mut() {
+        if let Some(what) = forbidden(&j.action.path) {
+            let (zh, _) = forbidden_msg(what);
+            let msg = format!("已停用：{zh}");
+            if j.enabled || j.last_error.as_deref() != Some(msg.as_str()) {
+                if j.enabled {
+                    out.push((j.id, j.name.clone(), j.action.path.clone()));
+                }
+                j.enabled = false;
+                j.last_error = Some(msg);
+            }
+        }
+    }
+    out
+}
+
+/// One journal line per job switched off (datad may still be starting: a few tries).
+fn journal_disabled(stopped: Vec<(u32, String, String)>) {
+    let _ = std::thread::Builder::new().name("sched-journal".into()).spawn(move || {
+        for (id, name, path) in stopped {
+            let line = json!({"item": "scheduler.job", "result": "disabled", "reason": "forbidden_path", "detail": {"id": id, "name": name, "path": path}});
+            for _ in 0..10 {
+                match crate::datad_write::send_as(crate::datad_write::Source::Scheduler, "journal.append", &line) {
+                    r if r.ok() => break,
+                    _ => std::thread::sleep(std::time::Duration::from_secs(30)),
+                }
+            }
+        }
+    });
+}
+
 fn save(data: &SchedulerData) {
     if let Ok(json) = serde_json::to_string_pretty(data) {
-        let _ = std::fs::write(STORAGE_PATH, json);
+        let _ = crate::fsutil::atomic_write(STORAGE_PATH, json.as_bytes());
     }
 }
 
 impl Scheduler {
     pub fn new() -> Self {
-        let data = std::fs::read_to_string(STORAGE_PATH)
+        let mut data = std::fs::read_to_string(STORAGE_PATH)
             .ok()
             .and_then(|s| serde_json::from_str::<SchedulerData>(&s).ok())
             .unwrap_or(SchedulerData { jobs: Vec::new() });
+        let stopped = disable_forbidden(&mut data.jobs);
+        if !stopped.is_empty() {
+            save(&data);
+            journal_disabled(stopped);
+        }
         Scheduler {
             data: Mutex::new(data),
         }
@@ -266,7 +337,11 @@ impl Scheduler {
         let results: Vec<ExecResult> = pending
             .into_iter()
             .map(|pa| {
-                let outcome = crate::action::exec(state, &pa.method, &pa.path, &pa.body);
+                // a job saved by hand into the file still cannot reach these
+                let outcome = match forbidden(&pa.path) {
+                    Some(what) => crate::action::Outcome { status: Some(403), error: Some(forbidden_msg(what).0) },
+                    None => crate::action::exec(state, crate::datad_write::Source::Scheduler, &pa.method, &pa.path, &pa.body),
+                };
                 ExecResult {
                     job_id: pa.job_id,
                     is_restore: pa.is_restore,
@@ -436,9 +511,90 @@ pub fn jobs_toggle(state: &AppState, body: &[u8]) -> (u16, Value) {
         Some(j) => j,
         None => return (404, json!({"ok": false, "error": "job not found"})),
     };
+    if enabled {
+        if let Some(what) = forbidden(&job.action.path) {
+            let (zh, en) = forbidden_msg(what);
+            return (400, json!({"ok": false, "error": zh, "error_en": en}));
+        }
+    }
 
     job.enabled = enabled;
     let result = json!({"ok": true, "data": job.clone()});
     save(&data);
     (200, result)
+}
+
+#[cfg(test)]
+mod forbidden_tests {
+    use super::*;
+
+    #[test]
+    fn forbidden_paths() {
+        for (p, want) in [
+            ("/api/esim/switch", Some("eSIM")),
+            ("/api/esim/download", Some("eSIM")),
+            ("/api/ESIM/switch", Some("eSIM")),
+            ("/api/esim/switch/", Some("eSIM")),
+            ("/api/esim/switch?x=1", Some("eSIM")),
+            ("/api//esim/switch", Some("eSIM")),
+            ("/api/esim", Some("eSIM")),
+            ("/api/device/factory-reset", Some("factory reset")),
+            ("/api/device/factory-reset/", Some("factory reset")),
+            ("/api/system/kill-bloat", Some("kill-bloat")),
+            ("/api/device/reboot", None),
+            ("/api/device/poweroff", Some("power off")),
+            ("/api/device/poweroff/", Some("power off")),
+            ("/api/modem/network-mode", None),
+            ("/api/wifi/radio", None),
+            ("/api/esimx", None),
+            ("/api/at/send", Some("AT terminal")),
+            ("/api/AT/Send/", Some("AT terminal")),
+            ("/api//at/send?x=1", Some("AT terminal")),
+            ("/api/at/port", None),
+        ] {
+            assert_eq!(forbidden(p), want, "{p}");
+        }
+    }
+
+    fn job(id: u32, path: &str, enabled: bool) -> Job {
+        Job {
+            id,
+            name: format!("j{id}"),
+            enabled,
+            schedule: Schedule::Once { at: 2_000_000_000 },
+            action: Action { method: "POST".into(), path: path.into(), body: None },
+            restore: None,
+            last_run: None,
+            last_status: None,
+            last_error: None,
+            last_restore: None,
+            last_restore_status: None,
+            last_restore_error: None,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn old_jobs_are_switched_off_with_the_reason() {
+        let mut jobs = vec![job(1, "/api/esim/switch", true), job(2, "/api/device/reboot", true), job(3, "/api/system/kill-bloat", false), job(4, "/api/at/send", true)];
+        let stopped = disable_forbidden(&mut jobs);
+        assert_eq!(stopped.iter().map(|s| s.0).collect::<Vec<_>>(), vec![1, 4]);
+        assert!(!jobs[3].enabled && jobs[3].last_error.as_deref().unwrap().contains("AT terminal"));
+        assert!(!jobs[0].enabled && jobs[0].last_error.as_deref().unwrap().starts_with("已停用"));
+        assert!(jobs[1].enabled && jobs[1].last_error.is_none());
+        assert!(!jobs[2].enabled && jobs[2].last_error.is_some());
+        // a second start changes nothing more
+        assert!(disable_forbidden(&mut jobs).is_empty());
+    }
+
+    #[test]
+    fn creating_one_is_refused() {
+        let s = Schedule::Once { at: 2_000_000_000 };
+        for p in ["/api/esim/switch", "/api/device/factory-reset", "/api/system/kill-bloat", "/api/at/send"] {
+            let a = Action { method: "POST".into(), path: p.into(), body: None };
+            assert!(validate_job(&a, &s, &None).is_err(), "{p}");
+        }
+        let a = Action { method: "POST".into(), path: "/api/device/reboot".into(), body: None };
+        assert!(validate_job(&a, &s, &None).is_ok());
+    }
 }

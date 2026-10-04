@@ -6,10 +6,11 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/lib/hooks/useApi";
 import type { NetworkSignal } from "@/lib/api/schemas/network";
+import type { CellExtra } from "@/lib/api/schemas/modem";
 import { Group, Help, Readout, ReadoutWall, Row } from "@/components/nd";
 import { SignalStatus } from "@/components/signal/SignalStatus";
 import { TrendChart } from "@/components/signal/TrendChart";
-import { carrierCounts, carriers, selectionWord, servingCellId, sigState } from "@/lib/home";
+import { carrierCounts, carriers, lteAnchor, plmn, selectionWord, servingCellId, servingRssi, sigState } from "@/lib/home";
 import { rsrpWord, rsrqWord, sinrWord } from "@/lib/signalWords";
 import { Broadcast, CellTower } from "@phosphor-icons/react";
 
@@ -27,6 +28,9 @@ export default function SignalPage() {
     },
   });
   const s = sig.data;
+  // QCI / AMBR from datad (audit C); 404 on older agents → the rows stay away
+  const extra = useApi<CellExtra>("/api/cell/extra", { refreshInterval: 30000 });
+  const x = extra.data;
   const cs = useMemo(() => carriers(s), [s]);
   const serving = cs[0];
   const bars = s?.signalbar != null && s.signalbar !== "" ? Number(s.signalbar) : null;
@@ -37,6 +41,10 @@ export default function SignalPage() {
   const loading = state === "loading";
   const cellId = servingCellId(s, serving);
   const band = serving ? (serving.kind === "nr" ? `n${serving.band}` : `B${serving.band}`) : null;
+  const rssi = servingRssi(s, serving?.kind);
+  const anchor = lteAnchor(s);
+  const net = plmn(s);
+  const ambr = x && x.ambr_dl_mbps != null ? `↓ ${fmtMbps(x.ambr_dl_mbps)} ↑ ${x.ambr_ul_mbps != null ? fmtMbps(x.ambr_ul_mbps) : "—"} Mbps` : null;
 
   return (
     <>
@@ -99,8 +107,34 @@ export default function SignalPage() {
             <Row label={<>ARFCN <Help label="ARFCN" text={t("help.earfcn", "The radio channel number your device is tuned to.")} /></>} value={serving?.arfcn ?? "—"} mono />
             <Row label={<>{t("signal.band", "Band")} <Help label={t("signal.band", "Band")} text={t("help.band", "The frequency band currently in use.")} /></>} value={band ?? "—"} mono />
             <Row label={<>{t("signal.bandwidth", "Bandwidth")} <Help label={t("signal.bandwidth", "Bandwidth")} text={t("help.bandwidth", "Channel width — wider generally means faster.")} /></>} value={serving?.bw != null ? `${serving.bw} MHz` : "—"} />
+            <Row label={<>RSSI <Help label="RSSI" text={t("help.rssi", "Total power received on the channel, including noise and other users.")} /></>} value={rssi != null ? `${rssi} dBm` : "—"} />
+            <Row label={<>PLMN <Help label="PLMN" text={t("help.plmn", "The network's country code and operator code (MCC-MNC).")} /></>} value={net ?? "—"} mono />
+            {x && (
+              <Row
+                label={<>QCI · AMBR <Help label="QCI · AMBR" text={t("help.ambr", "QCI is the traffic class the carrier gives your data; AMBR is the speed cap the network set for this connection.")} /></>}
+                value={x.qci != null || ambr ? [x.qci != null ? `QCI ${x.qci}` : null, ambr].filter(Boolean).join(" · ") : "—"}
+              />
+            )}
             <Row label={<>{t("home.netSelect", "Network selection")} <Help label={t("home.netSelect", "Network selection")} text={t("help.netSelect", "Whether the network is chosen automatically or manually.")} /></>} value={selectionWord(s?.net_select_mode, t) ?? "—"} />
           </Group>
+          {anchor && (
+            <Group title={t("signal.anchorTitle", "4G anchor (5G NSA)")} stale={sig.stale}>
+              <Row label="PCI" value={anchor.pci ?? "—"} mono />
+              <Row label="EARFCN" value={anchor.earfcn ?? "—"} mono />
+              <Row label={t("signal.band", "Band")} value={anchor.band ? `B${anchor.band}` : "—"} mono />
+              <Row
+                label={t("signal.anchorSignal", "Signal")}
+                value={[
+                  anchor.rsrp != null ? `RSRP ${anchor.rsrp}` : null,
+                  anchor.rsrq != null ? `RSRQ ${anchor.rsrq}` : null,
+                  anchor.sinr != null ? `SINR ${anchor.sinr}` : null,
+                  anchor.rssi != null ? `RSSI ${anchor.rssi}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "—"}
+              />
+            </Group>
+          )}
           <Group>
             <Row icon={CellTower} label={t("signal.toBandlock", "Band lock")} href="/bandlock" />
             <Row icon={Broadcast} label={t("nav.signalDetect", "Signal Detect")} href="/router/signal-detect" />
@@ -109,4 +143,9 @@ export default function SignalPage() {
       </div>
     </>
   );
+}
+
+/** 150 → "150", 12.5 → "12.5". */
+function fmtMbps(v: number): string {
+  return v >= 100 ? v.toFixed(0) : String(Math.round(v * 10) / 10);
 }

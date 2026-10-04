@@ -42,7 +42,7 @@ pub struct ChargeLimitEnforcer {
 /// Check if charging is currently stopped via ubus (ground truth).
 /// `direct_power_supply_mode: "enable"` = charging STOPPED (inverted naming).
 pub(crate) fn is_charging_stopped() -> bool {
-    ubus::call("zwrt_bsp.charger", "list", Some("{}"))
+    ubus::read("zwrt_bsp.charger", "list", Some("{}"))
         .ok()
         .and_then(|v| {
             v["direct_power_supply_mode"]
@@ -52,16 +52,18 @@ pub(crate) fn is_charging_stopped() -> bool {
         .unwrap_or(false)
 }
 
-/// Set charging state via ubus (inverted: "enable" = stop, "disable" = start)
+/// Set charging state through datad (direct supply on = charging stopped;
+/// datad reads it back). Callers write only when it changes (enforce reads
+/// first), so the journal gets one line per change.
 fn set_charging(allow: bool) {
-    let mode = if allow { "disable" } else { "enable" };
-    let params = format!(r#"{{"direct_power_supply_mode":"{mode}"}}"#);
-    let _ = ubus::call("zwrt_bsp.charger", "set", Some(&params));
+    if let Err(e) = crate::datad_write::send("power.direct_supply.set", &serde_json::json!({"enabled": !allow})).into_result() {
+        eprintln!("[charge_policy] set charging {allow}: {e}");
+    }
 }
 
 /// Direct read of `charger_connect` (fallback path and first look).
 pub fn direct_charger_connected() -> Option<bool> {
-    let v = ubus::call("zwrt_bsp.charger", "list", Some("{}")).ok()?;
+    let v = ubus::read("zwrt_bsp.charger", "list", Some("{}")).ok()?;
     match &v["charger_connect"] {
         Value::Number(n) => Some(n.as_u64() != Some(0)),
         Value::String(s) => Some(s != "0"),
@@ -190,7 +192,8 @@ impl ChargeLimitEnforcer {
     /// the thread wakes on every feed change and at least every 60 s.
     pub fn start(self: &Arc<Self>) {
         let enforcer = Arc::clone(self);
-        std::thread::spawn(move || enforcer.event_loop());
+        // the policy's own writes are an automatic source
+        std::thread::spawn(move || crate::datad_write::with_source(crate::datad_write::Source::Auto, || enforcer.event_loop()));
     }
 
     fn event_loop(&self) {

@@ -70,6 +70,7 @@
 | sos | 只能紧急呼叫 | SOS only | 106 | bad |
 | nodata | 没连上网 | Offline | 81 | bad |
 | stall | 连上了但不通 | No traffic | 约 110 | bad |
+| hot | 慢：过热限速 | Slow | 58 | warn |
 | only2g / only3g | 只有 2G / 只有 3G | 2G only / 3G only | 90 | warn |
 | nosim | 无 SIM | No SIM | 82 | bad |
 | airplane | 移动网络已关 | Airplane | 99 | 中性 |
@@ -94,6 +95,7 @@
 | nodata，漫游中 | 数据没拨上：看「蜂窝」里数据漫游开没开，卡也要开通 | Check data roaming in Cellular; your plan must allow it too | 约 350 |
 | nodata，本地 | 数据没拨上：查流量开关、APN 或欠费 | Check mobile data, APN, or your balance | 245 |
 | stall | 有信号、已拨号，但 30 秒没收到任何数据 | Signal and data are up, but nothing came back for 30 s | 约 370 |
+| hot | 机身太热，固件在限速，凉下来自动恢复 | Too hot; speed limited until it cools | 约 240 |
 | limit | 运营商限到 {} Mbps，换位置没用 | Carrier caps speed at {} Mbps; moving won't help | 311 |
 | weak（有 RSRP） | RSRP {}：离基站远，靠窗通常好些 | Weak signal, RSRP {} dBm; try near a window | ≤349 |
 | weak | 离基站远，靠窗通常好些 | Weak signal; try near a window | |
@@ -243,6 +245,89 @@ agent 表里其余的（csl、SmarTone、CTM、NTT docomo、SoftBank、au (KDDI)
 | 换了小区 / 按了重新开始 | 换了小区，重新计 / 已清零，重新计 | New cell; counting again / Reset; counting again |
 | 按钮、脚注 | 重新开始 · 换了小区会重新计；这页开着不息屏 | Start over · Resets on a new cell; the screen stays on here |
 
+
+## 13. 写操作（事务，E4；datad `ops/ui.rs`，设计 `docs/designs/write-op-layer.md` 状态文案表）
+
+句子由 datad 写（op 块和改动记录的 `*_zh/_en`），触屏和网页照着显示；下面只是对照。触屏和网页自己写的几句英文两边相同（触屏 `lang_test.c`、网页 `tests/unit/opsWords.test.ts` 查：不含中文、不写 Please、状态短句不带句号）。中文拼接：中文挨中文不空格、挨数字和英文空一格（「已退回自动」「退回到 4G + 5G」）。X = 退回目标，Y = 目标，「旧」= 写之前的值。
+
+**来源**（DD14）
+
+| source | 中文 | English |
+|---|---|---|
+| screen / legacy | 触屏 | Screen |
+| web | 网页 | Web |
+| scenario | 情景 | Scene |
+| scheduler | 定时任务 | Schedule |
+| auto | 自动 | Auto |
+| guard | 自动恢复 | Auto-recovery |
+
+**项目名**：制式 / Network mode；搜网 / Network search；其他 设置 / Setting。
+
+**进行中**（首页大字 ≤10 字符；英文不带省略号）
+
+| 阶段 | 中文 | English | 下一行（`{t}` = m:ss） |
+|---|---|---|---|
+| accepted、applying | 正在换制式（搜网会话：正在搜网） | Switching | — |
+| verifying，自动退回开 | 正在确认 | Checking | {t} 后没通就退回到 X / Back to X in {t} if no data |
+| verifying，自动退回关 | 正在确认 | Checking | 还剩 {t} · 自动退回没开 / {t} left · auto revert off |
+| rolling_back | 正在退回 | Reverting | 退回到 X · 还剩 {t} / To X · {t} left |
+| 重启过 | 重启过 · 重新确认 | Rebooted · checking again | |
+| 进度三行 | 设置已生效 / 已注册 / 数据 | Setting applied / Registered / Data | |
+
+**结果**（符号 ● ▲ ■ 由 `mark` 配；停留：3 秒 / 常驻到「知道了」/ 退回失败占状态块）
+
+| 终态 / 原因 | 中文 | English | 停留 |
+|---|---|---|---|
+| confirmed / verified | 已切到 Y | Now Y | 3 秒 |
+| confirmed / user_keep | 保留 Y · 没确认通 | Kept Y · unconfirmed | 常驻 |
+| confirmed / no_verify | 已改 · 没有可确认的读数 | Saved · not checked | 3 秒 |
+| unverified / apn_no_data | APN 已存 · 数据关着没法试 | APN saved · untested | 常驻 |
+| unverified / no_rollback | 没通 · 还是 Y | No data · still Y | 常驻 |
+| rolled_back / timeout | 没通 · 已退回 X | No data · back to X | 常驻 |
+| rolled_back / user_revert | 已退回 X | Back to X | 3 秒 |
+| rolled_back / reboot_loop | 重启了两次 · 已退回 X | 2 reboots · back to X | 常驻 |
+| not_applied | 没切成 · 还是旧 | Didn't apply · still old | 常驻 |
+| rollback_failed | 退回也没通 | Revert failed（首页大字 Failed） | 占状态块 |
+| cancelled / superseded | 被新的改动接替（不单独提示） | Replaced by a newer change | — |
+| cancelled / preempted | 已关数据 · 不再自动退回 | Data off · no auto revert | 常驻 |
+| cancelled / manual_change | 别处改过 · 不再自动退回 | Changed elsewhere | 常驻 |
+| cancelled / takeover | 手动接管 · 不再自动退回 | Manual override | 常驻 |
+| cancelled / sim_changed | 换过卡 · 不再自动退回 | SIM changed | 常驻 |
+| cancelled / other_change（D40：确认中你又改了别的，含 eSIM 切换、AT 终端） | 改了别的设置，不再自动退回 | Other change; no auto revert | 常驻 |
+
+「保留」「不需要确认」都不写「已确认」：不能让人以为验证过能通。
+
+**按钮和确认**（datad 给按钮名；后果句触屏、网页各自写，两边一致）
+
+| 位置 | 中文 | English |
+|---|---|---|
+| 退回 / 保留 | 退回 X / 保留 Y | Revert to X / Keep Y |
+| 退回的后果 | 马上改回「X」，会重新注册，断网几十秒 | Back to X now; offline ~30 s while it re-registers |
+| 保留的后果 | 不再自动退回；还没确认通，没网要你自己改回去 | No auto revert; unconfirmed, change it back yourself if no data |
+| 退回失败（DD9） | 再试一次退回到 X / 重启设备 | Retry revert to X / Restart device |
+| 退回失败的现状 | 现在：Z · 上次确认：X（读不到写「当前设置未知」） | Now Z · last good X（Current setting unknown） |
+| 没切成（DD17） | 基带崩过以后常见，重启后再切一次 | Common after a modem crash; restart, then try again |
+| 收起结果 | 知道了 | Got it |
+| 下发前（自动退回关） | 自动退回没开：没通也会保持 | Auto revert off: it stays even with no data |
+| 下发前（自动退回开） | 自动退回已开：没通会退回 X | Auto revert on: back to X if no data |
+| 自动退回打开后的一次性提示（DD18，点「知道了」两边一起收起） | 自动退回已开：切模式没通会退回 | Auto revert on: reverts a mode change that can't connect |
+| 下发前（网页远程） | 你是远程连的，网页会掉线；重新连上后这里会显示结果，不会重发 | You're connected remotely: this page will drop. The result shows here when it reconnects; nothing is resent. |
+
+**撤销**（DD10）：撤销 / Undo，撤销过的再点叫 重做 / Redo。不能撤的原因：之后又改过 / Changed since；换过卡 / SIM changed；设置没变 · 不用撤销 / Nothing to undo；先再试一次退回 / Retry the revert instead；这类操作不能撤销 / Can't be undone。
+
+**不在 datad 的几句**（DD8、DD11、DD12）
+
+| 情况 | 中文 | English |
+|---|---|---|
+| 数据服务卡住 | 数据服务没响应 · 暂时不能改设置 | Data service not responding |
+| 忙（datad 回的） | 正在换制式（触屏发起，32 秒），稍等 | Busy: network mode (Screen) |
+| 推送停了 | 停在 1:42 · 等设备响应 | Stopped at 1:42 · waiting for the device |
+| 网页断线（只网页） | 和设备断开了 · 操作结果未知 | Disconnected · result unknown |
+| 改动记录 | 改动记录 | Change log |
+| 改动记录空 | 还没有改动 · 触屏、网页、情景、定时任务改的设置都会记在这里 | No changes yet · settings changed from the screen, web, scenes and schedules show here |
+| 改动记录读不到 | 读不到改动记录 · 数据服务没响应 | Can't read change log · data service not responding |
+| 底部 | 只显示最近 N 条 | Latest N only |
+| 设置页入口 | 上次改动 14:32 · 触屏 › | Last changed 14:32 · Screen › |
 
 ## 外部评审（10-01，独立子代理；Codex 卡死没跑成）
 

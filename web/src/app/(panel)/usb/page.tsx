@@ -9,7 +9,9 @@
 //   USB mode           tier 3 (was a window.confirm; DEBUG = opening ADB),
 //                      PUT /api/usb/mode {mode}, readback GET /api/usb/status
 //                      mode. A computer on USB (RNDIS) loses its link, so
-//                      wait for the agent before reading back.
+//                      wait for the agent before reading back. B31 has no
+//                      setter: `mode_settable: false` disables the control
+//                      and says why.
 // Unknown is not "off": fields the device doesn't send show "—".
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -58,6 +60,7 @@ export default function UsbPage() {
   const cable = tri(usb?.connect) ?? (noCc ? false : null);
   const mode = typeof usb?.mode === "string" && usb.mode ? usb.mode : null;
   const knownMode = mode && (USB_MODES as readonly string[]).includes(mode) ? (mode as UsbMode) : null;
+  const modeFixed = usb?.mode_settable === false;
   const powerbank = tri(chg?.otg_powerbank_state);
   const rj45 = tri(usb?.usb2rj45);
   const chgConnect = tri(chg?.charger_connect);
@@ -196,10 +199,13 @@ export default function UsbPage() {
               <Segmented<UsbMode>
                 label={t("usb.usbMode", "USB Mode")}
                 value={knownMode}
-                isDisabled={!usb || usbApi.stale || busy}
+                isDisabled={!usb || usbApi.stale || busy || modeFixed}
                 onChange={(m) => setModeAsk(m)}
                 options={USB_MODES.map((m) => ({ id: m, label: modeLabel(m) }))}
               />
+              {modeFixed && (
+                <span className="nd-aux">{t("usb.modeUnsupported", "This firmware can't change the USB mode")}</span>
+              )}
               {mode && !knownMode && (
                 <span className="nd-aux">
                   {t("usb.otherMode", "Current mode: ")}

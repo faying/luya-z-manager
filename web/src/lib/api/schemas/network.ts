@@ -350,6 +350,19 @@ export interface NetInfoOperator {
  * keeps the lookups going (at most one pass per 20 s, each exit re-looked-up
  * when it changes or every 10 min).
  */
+/**
+ * One Wi-Fi client's traffic in /api/netinfo `clients.list` (netinfo.rs
+ * clients_snapshot): iw station dump counters since it joined; the rates are
+ * bytes/s between the agent's last two passes (null on the first).
+ */
+export interface ClientTraffic {
+  mac: string;
+  down_bytes?: number | null;
+  up_bytes?: number | null;
+  down_rate?: number | null;
+  up_rate?: number | null;
+}
+
 export interface NetInfo {
   now: number;
   direct: NetInfoExit | null;
@@ -363,6 +376,8 @@ export interface NetInfo {
   data_connected: boolean;
   selection: { mode: "auto" | "manual" | null; checked_at: number };
   guard: NetInfoGuard;
+  /** Wi-Fi clients' traffic, kept fresh while someone asks with clients=1. */
+  clients?: { at: number; list: ClientTraffic[] } | null;
   /**
    * Neighbour cells. "unsupported" since 2026-09-25: the stock scan drops
    * mobile data without redialling and returns no cells, so the agent

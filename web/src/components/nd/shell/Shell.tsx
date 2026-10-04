@@ -21,6 +21,7 @@ import { CommandPalette } from "./CommandPalette";
 import { StatusIcons } from "./StatusIcons";
 import { LangSwitch } from "./LangSwitch";
 import { AlertBanner } from "./AlertBanner";
+import { OpBanner } from "./OpBanner";
 import { LoginDialog } from "./LoginDialog";
 
 const ANCHORS: { id: Anchor; href: string; tKey: string; fallback: string; icon: Icon }[] = [
@@ -155,6 +156,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </header>
 
         <main id="main" ref={mainRef} tabIndex={-1} className="nd-main">
+          <OpBanner />
           <AlertBanner />
           {children}
         </main>

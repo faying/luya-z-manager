@@ -613,7 +613,7 @@ fn log_line(msg: &str) {
 /// is also "not 460". Hysteresis would usually absorb that, but it should not
 /// have to.
 fn sim_mcc() -> Option<String> {
-    let info = ubus::call("zwrt_zte_mdm.api", "get_sim_info", Some("{}")).ok()?;
+    let info = ubus::read("zwrt_zte_mdm.api", "get_sim_info", Some("{}")).ok()?;
     mcc_from_sim_info(&info)
 }
 
@@ -633,7 +633,7 @@ fn mcc_from_sim_info(info: &Value) -> Option<String> {
 
 fn set_auto_sleep(enabled: bool) {
     let arg = format!(r#"{{"switch":{}}}"#, enabled);
-    let _ = ubus::call(SLEEP_UBUS_OBJ, "enableAutoSleep", Some(&arg));
+    let _ = crate::datad_write::vendor(SLEEP_UBUS_OBJ, "enableAutoSleep", Some(&arg));
 }
 
 /// Belt to the wakelock's braces: if the device suspends anyway, the RTC brings
@@ -783,7 +783,7 @@ impl Engine {
     /// unreachable while it does.
     pub fn start(self: &Arc<Self>, app: Arc<AppState>) {
         let engine = Arc::clone(self);
-        std::thread::spawn(move || {
+        std::thread::spawn(move || crate::datad_write::with_source(crate::datad_write::Source::Scenario, || {
             // A panic here ends only this thread: HTTP keeps answering, so the
             // process looks healthy to procd while the heartbeat has stopped and
             // nothing is left to release a u60-guard takeover. (A poisoned
@@ -809,7 +809,7 @@ impl Engine {
                     std::process::exit(70);
                 }
             }
-        });
+        }));
     }
 
     /// Put the device back to the away scenario and clear runtime state.
@@ -919,7 +919,7 @@ impl Engine {
             crate::wifi_radio::apply(ap_2g, ap_5g).map(|_| ())
         } else {
             let body = crate::action::body_bytes(&a.action.body);
-            let outcome = crate::action::exec(app, &a.action.method, &a.action.path, &body);
+            let outcome = crate::action::exec(app, crate::datad_write::Source::Scenario, &a.action.method, &a.action.path, &body);
             if !outcome.ok() {
                 return Err(outcome
                     .error
@@ -1091,10 +1091,11 @@ impl Engine {
                 return;
             }
         };
-        for (key, value) in undo.iter().rev() {
-            let _ = ubus::uci_set_no_commit(key, value);
-        }
-        let _ = ubus::uci_commit("wireless");
+        // the snapshot back through datad (best effort: apply_locked below
+        // forces both APs on anyway)
+        let set: serde_json::Map<String, serde_json::Value> =
+            undo.iter().rev().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
+        let _ = crate::datad_write::send("wifi.apply", &serde_json::json!({"set": set, "reload": false, "best_effort": true}));
         match crate::wifi_radio::apply_locked(&lk, true, true) {
             Ok(_) => log_line("rollback complete; Wi-Fi forced on"),
             Err(e) => log_line(&format!("rollback: could not restore Wi-Fi: {e}")),

@@ -767,13 +767,13 @@ fn within<T: Send + 'static>(max: Duration, f: impl FnOnce() -> T + Send + 'stat
     rx.recv_timeout(max).ok()
 }
 
-fn datad_get(path: &str) -> Option<Value> {
+pub(crate) fn datad_get(path: &str) -> Option<Value> {
     let base = std::env::var("ZTE_AGENT_DATAD").unwrap_or_else(|_| DATAD.to_string());
     let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(3))).build().into();
     agent.get(&format!("{base}{path}")).call().ok()?.body_mut().read_json::<Value>().ok()
 }
 
-fn num(v: Option<&Value>) -> Option<f64> {
+pub(crate) fn num(v: Option<&Value>) -> Option<f64> {
     match v? {
         Value::Number(n) => n.as_f64(),
         Value::String(s) => s.trim().parse().ok(),

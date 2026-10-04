@@ -288,13 +288,25 @@ pub fn apply(ap_2g: bool, ap_5g: bool) -> Result<Value, String> {
 /// `apply` for a caller that already holds the lock.
 pub fn apply_locked(_lk: &WifiLock, ap_2g: bool, ap_5g: bool) -> Result<Value, String> {
     let flag = |on: bool| if on { "0" } else { "1" };
-    ubus::uci_set_no_commit(AP_2G, flag(ap_2g))?;
-    ubus::uci_set_no_commit(AP_5G, flag(ap_5g))?;
-    ubus::uci_commit("wireless")?;
-
-    // Synchronous, unlike wifi_set's backgrounded fire-and-forget. A failure
-    // here is still not fatal on its own — the verify below is the authority.
-    let reload = ubus::call("zwrt_wlan", "reload", None);
+    // Through datad: it writes and reloads even when uci already says so (a
+    // retry repairs that way). Synchronous, unlike wifi_set's backgrounded
+    // fire-and-forget. A reload failure is not fatal on its own — the verify
+    // below is the authority. datad gone: the emergency script (D19, Wi-Fi
+    // on/off is one of the writes a person would otherwise have to fix).
+    let reply = crate::datad_write::send("wifi.apply", &json!({"set": {AP_2G: flag(ap_2g), AP_5G: flag(ap_5g)}, "reload": true}));
+    let reload: Result<(), String> = match reply {
+        crate::datad_write::Reply::Done { result, .. } => match result["reload_error"].as_str() {
+            Some(e) => Err(e.to_string()),
+            None => Ok(()),
+        },
+        crate::datad_write::Reply::Unreachable { maybe_done: false, .. } if !crate::datad_feed::executor_stalled() => {
+            match crate::fallback_write::run(crate::datad_write::current(), "wifi.radio", &json!({"ap_2g": ap_2g as u8, "ap_5g": ap_5g as u8})) {
+                r if r.ok() => Ok(()),
+                r => return Err(r.into_result().err().unwrap_or_default()),
+            }
+        }
+        r => return Err(r.into_result().err().unwrap_or_default()),
+    };
 
     let want_any_on = ap_2g || ap_5g;
     let verified = if want_any_on {
@@ -403,7 +415,7 @@ fn current_expectation() -> Expect {
 /// Reload synchronously, without waiting for the result to show. Only for
 /// callers that verify some other way (homemode's wake is followed by scans).
 pub fn reload(_lk: &WifiLock) -> Result<Value, String> {
-    ubus::call("zwrt_wlan", "reload", None)
+    crate::datad_write::send("wifi.reload", &json!({})).into_result()
 }
 
 /// Reload and wait until the radios match what uci now says. Never fails: the
@@ -433,10 +445,11 @@ pub fn reload_and_verify(lk: &WifiLock) -> Value {
 /// releases it — so the lock covers the reload, but the HTTP worker that did the
 /// `uci set`s returns immediately (the agent only has two of them).
 pub fn finish_in_background(lk: WifiLock, what: &'static str) {
+    let source = crate::datad_write::current();
     let spawned = std::thread::Builder::new()
         .name(format!("wifi-{what}"))
         .spawn(move || {
-            let data = reload_and_verify(&lk);
+            let data = crate::datad_write::with_source(source, || reload_and_verify(&lk));
             eprintln!("[wifi] {what}: reload finished {data}");
             drop(lk);
         });

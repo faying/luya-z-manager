@@ -137,6 +137,11 @@ function tailscaleStatus(ctx: Ctx): Reply {
   const peers = clone(TS_PEERS).map((p, i) => {
     if (p.online) p.last_handshake = devIso(now - 20 - i * 37);
     else p.last_seen = devIso(now - (i === 3 ? 3 * 3600 + 540 : 2 * 86400 + 4200));
+    // the first online peer hole-punched, the next through the Tokyo relay
+    p.active = p.online && i < 2;
+    p.cur_addr = p.active && i === 0 ? "203.0.113.60:41641" : null;
+    p.relay = p.online ? "tok" : null;
+    p.primary_routes = [];
     return p;
   });
   if (ctx.has("missing")) {
@@ -163,10 +168,15 @@ function tailscaleStatus(ctx: Ctx): Reply {
       online: true,
       relay: ctx.has("missing") ? null : "tok",
       exit_node_option: false,
+      // ts-keysoon: 5 days left (the status block warns); otherwise half a year
+      key_expiry: new Date(Date.now() + ((ctx.has("ts-keysoon") ? 5 : 180) * 86400_000 + 3600_000)).toISOString().replace(/\.\d+Z$/, "Z"),
+      primary_routes: ["192.168.0.0/24"],
     },
     exit_node: null,
     peer_count: peers.length,
     peer_online: peers.filter((p) => p.online).length,
+    peer_active: peers.filter((p) => p.active).length,
+    peer_direct: peers.filter((p) => p.active && p.cur_addr).length,
     peers,
   };
   return ok(data);

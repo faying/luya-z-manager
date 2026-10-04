@@ -199,6 +199,18 @@ fn write_marker(path: &Path, start: u64, reason: &str) -> io::Result<()> {
 pub const V2_ADDR: &str = "127.0.0.1:9460";
 /// M (V2-23): no event at all for this long = the connection is dead.
 pub const SILENCE: Duration = Duration::from_secs(20);
+/// datad's heartbeat keeps coming while its executor is stuck (its own timer,
+/// V2-22), so silence no longer shows it: an `exec_age_ms` this old does
+/// (D12: 20 s, under datad's 30 s watchdog).
+pub const EXEC_STALL: Duration = Duration::from_secs(20);
+
+static EXEC_STALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// datad is up but its executor has not moved for [`EXEC_STALL`]: writes
+/// would only wait out their timeout. False whenever not connected.
+pub fn executor_stalled() -> bool {
+    EXEC_STALLED.load(std::sync::atomic::Ordering::Relaxed)
+}
 /// N: battery or charger stale (or missing) this long = fall back.
 pub const STALE_LIMIT: Duration = Duration::from_secs(30);
 /// How often a consumer reads ubus itself while in fallback. 30 s, not 60:
@@ -210,8 +222,10 @@ pub const MAX_WAIT: Duration = Duration::from_secs(60);
 const KEY_BLOCKS: [&str; 2] = ["battery", "charger"];
 /// The blocks whose changes wake consumers ([`fingerprint`] picks the
 /// fields). `sms` is not a key block: a datad without it (older build) must
-/// still count as healthy — sms_forward then just reads ubus itself.
-const WAKE_BLOCKS: [&str; 3] = ["battery", "charger", "sms"];
+/// still count as healthy — sms_forward then just reads ubus itself. `sim`
+/// (2026-10-03) wakes the APN-pick watcher when the card changes; also not a
+/// key block, for the same reason.
+const WAKE_BLOCKS: [&str; 4] = ["battery", "charger", "sms", "sim"];
 
 /// One SSE event: `event:` name and the joined `data:` lines.
 #[derive(Debug, Clone, PartialEq)]
@@ -387,6 +401,9 @@ pub struct Stream {
     epoch: Option<String>,
     next_seq: Option<u64>,
     pub blocks: HashMap<String, Block>,
+    /// The last heartbeat's `exec_age_ms`: how long datad's executor has not
+    /// moved (V2-32). None until a heartbeat carries it (older datad).
+    pub exec_age_ms: Option<u64>,
 }
 
 /// What applying an event changed.
@@ -402,6 +419,7 @@ impl Stream {
     pub fn new_connection(&mut self) {
         self.epoch = None;
         self.next_seq = None;
+        self.exec_age_ms = None;
     }
 
     /// Apply one event. `Err` = must drop the connection and reconnect
@@ -450,6 +468,7 @@ impl Stream {
                 Ok(Applied { changed, snapshot: false })
             }
             "heartbeat" => {
+                self.exec_age_ms = v.get("exec_age_ms").and_then(Value::as_u64);
                 // observed_at only moves through heartbeats: update in place,
                 // not a data change.
                 if let Some(obs) = v.get("blocks").and_then(Value::as_object) {
@@ -480,6 +499,8 @@ pub enum Mode {
 pub struct Health {
     pub mode: Mode,
     last_event: Duration,
+    /// The executor age from the last heartbeat, when past [`EXEC_STALL`].
+    stalled: Option<u64>,
     stale_since: HashMap<&'static str, Duration>,
     silence: Duration,
     stale_limit: Duration,
@@ -504,6 +525,7 @@ impl Health {
         Health {
             mode: Mode::Starting,
             last_event: now,
+            stalled: None,
             stale_since: KEY_BLOCKS.iter().map(|k| (*k, now)).collect(),
             silence,
             stale_limit,
@@ -513,6 +535,7 @@ impl Health {
     /// Any event arrived.
     pub fn on_event(&mut self, now: Duration, stream: &Stream) {
         self.last_event = now;
+        self.stalled = stream.exec_age_ms.filter(|ms| *ms >= EXEC_STALL.as_millis() as u64);
         for k in KEY_BLOCKS {
             let fresh = stream.blocks.get(k).is_some_and(Block::fresh);
             if fresh {
@@ -528,7 +551,20 @@ impl Health {
         now.saturating_sub(self.last_event) >= self.silence
     }
 
+    /// The connection ended: a stall can no longer be seen (and must not keep
+    /// writes from the emergency path while datad is gone).
+    pub fn on_disconnect(&mut self) {
+        self.stalled = None;
+    }
+
+    pub fn stalled(&self) -> bool {
+        self.stalled.is_some()
+    }
+
     fn bad_reason(&self, now: Duration) -> Option<String> {
+        if let Some(ms) = self.stalled {
+            return Some(format!("datad executor stuck for {}s", ms / 1000));
+        }
         if self.silent(now) {
             return Some(format!("no v2 event for {}s", now.saturating_sub(self.last_event).as_secs()));
         }
@@ -543,7 +579,7 @@ impl Health {
     }
 
     fn healthy(&self, now: Duration) -> bool {
-        !self.silent(now) && self.stale_since.is_empty()
+        !self.silent(now) && self.stale_since.is_empty() && self.stalled.is_none()
     }
 
     /// Judge the mode at `now`. Returns the transition to act on, if any.
@@ -580,6 +616,9 @@ pub struct View {
     /// consumers act on ([`fingerprint`]).
     pub version: u64,
     pub blocks: HashMap<String, Block>,
+    /// When the `op` block's data last changed here: its `remaining_ms` is
+    /// as of then (the web counts down from it, E4 T9).
+    pub op_at: Option<Instant>,
 }
 
 impl View {
@@ -589,6 +628,15 @@ impl View {
 
     fn fresh_block(&self, name: &str) -> Option<&Value> {
         self.blocks.get(name).filter(|b| b.fresh()).map(|b| &b.data)
+    }
+
+    /// A fresh block as datad sent it (`qos`, `sim`, …); `None` when not
+    /// subscribed or the block is stale/missing.
+    pub fn block(&self, name: &str) -> Option<Value> {
+        if !self.subscribed() {
+            return None;
+        }
+        self.fresh_block(name).cloned()
     }
 
     /// Charger plugged in, per the battery block (`charger_connect`). `None`
@@ -613,6 +661,17 @@ impl View {
         Some((b.get("max_id")?.as_u64()?, b.get("count").and_then(Value::as_u64).unwrap_or(0)))
     }
 
+    /// The SIM's ICCID (pad nibble trimmed) from the `sim` block. `None` when
+    /// not subscribed or the block is stale/missing (older datad) — then the
+    /// caller reads ubus itself, rarely. `Some("")` = no card / mid re-read.
+    pub fn sim_iccid(&self) -> Option<String> {
+        if !self.subscribed() {
+            return None;
+        }
+        let v = self.fresh_block("sim")?.get("iccid")?.as_str()?;
+        Some(v.trim().trim_end_matches(['F', 'f']).to_string())
+    }
+
     /// Charging stopped by direct supply (charger block
     /// `direct_supply.enabled`, true = stopped). `None` = don't know.
     pub fn charging_stopped(&self) -> Option<bool> {
@@ -633,7 +692,7 @@ pub struct Feed {
 impl Default for Feed {
     fn default() -> Self {
         Feed {
-            view: Mutex::new(View { mode: Mode::Starting, version: 0, blocks: HashMap::new() }),
+            view: Mutex::new(View { mode: Mode::Starting, version: 0, blocks: HashMap::new(), op_at: None }),
             cv: Condvar::new(),
         }
     }
@@ -666,6 +725,9 @@ impl Feed {
     /// back the background polling D2 removed.
     fn set_blocks(&self, stream: &Stream, changed: &[String]) {
         let mut v = self.view.lock().unwrap();
+        if changed.iter().any(|c| c == "op") {
+            v.op_at = Some(Instant::now());
+        }
         if !changed.iter().any(|c| WAKE_BLOCKS.contains(&c.as_str())) {
             v.blocks = stream.blocks.clone();
             return;
@@ -680,8 +742,9 @@ impl Feed {
 }
 
 /// The fields consumers act on: plug state, percent, charging, direct
-/// supply, the SMS summary (max id, count), and those blocks' health.
-fn fingerprint(blocks: &HashMap<String, Block>) -> [Value; 9] {
+/// supply, the SMS summary (max id, count), the SIM's ICCID, and those
+/// blocks' health.
+fn fingerprint(blocks: &HashMap<String, Block>) -> [Value; 11] {
     let field = |b: &str, path: &[&str]| {
         let mut v = blocks.get(b).map(|b| &b.data);
         for k in path {
@@ -700,6 +763,8 @@ fn fingerprint(blocks: &HashMap<String, Block>) -> [Value; 9] {
         field("sms", &["max_id"]),
         field("sms", &["count"]),
         fresh("sms"),
+        field("sim", &["iccid"]),
+        fresh("sim"),
     ]
 }
 
@@ -718,7 +783,7 @@ pub fn wait(seen: u64, timeout: Duration) -> View {
         Some(f) => f.wait_change(seen, timeout),
         None => {
             std::thread::sleep(timeout);
-            View { mode: Mode::Starting, version: seen, blocks: HashMap::new() }
+            View { mode: Mode::Starting, version: seen, blocks: HashMap::new(), op_at: None }
         }
     }
 }
@@ -773,25 +838,8 @@ pub fn datad_addr() -> SocketAddr {
 /// (datad drops requests whose client closed early).
 pub fn control(addr: SocketAddr, action: &str, params: &Value, timeout: Duration) -> Result<Value, ControlError> {
     let other = |e: String| ControlError::Other(format!("datad {action}: {e}"));
-    let mut sock = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).map_err(|e| other(format!("connect: {e}")))?;
-    let _ = sock.set_read_timeout(Some(timeout));
-    let _ = sock.set_write_timeout(Some(timeout));
-    let body = serde_json::json!({"action": action, "params": params}).to_string();
-    let req = format!(
-        "POST /control HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    sock.write_all(req.as_bytes()).map_err(|e| other(format!("write: {e}")))?;
-    let mut raw = Vec::new();
-    sock.read_to_end(&mut raw).map_err(|e| other(format!("read: {e}")))?;
-    let pos = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| other("no HTTP header".into()))?;
-    let head = String::from_utf8_lossy(&raw[..pos]).to_ascii_lowercase();
-    let status: u16 = head.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let mut payload = raw[pos + 4..].to_vec();
-    if head.lines().any(|l| l.starts_with("transfer-encoding:") && l.contains("chunked")) {
-        payload = Chunked::default().feed(&payload).map_err(other)?;
-    }
-    let reply: Value = serde_json::from_slice(&payload).map_err(|e| other(format!("status {status}, bad JSON: {e}")))?;
+    let (status, reply) = post_control(addr, &serde_json::json!({"action": action, "params": params}), timeout)
+        .map_err(|e| other(e.to_string()))?;
     if status == 503 && reply["error"]["code"] == "busy" {
         return Err(ControlError::Busy);
     }
@@ -800,6 +848,52 @@ pub fn control(addr: SocketAddr, action: &str, params: &Value, timeout: Duration
         return Err(other(format!("status {status}: {msg}")));
     }
     Ok(reply.get("result").cloned().unwrap_or(Value::Null))
+}
+
+/// Why a `/control` request got no usable HTTP reply.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PostError {
+    /// Nothing reached datad: it is not listening (gone, restarting).
+    Connect(String),
+    /// Sent, but no complete reply (timed out, connection dropped, garbage):
+    /// datad may or may not have done it.
+    NoReply(String),
+}
+
+impl std::fmt::Display for PostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PostError::Connect(e) => write!(f, "connect: {e}"),
+            PostError::NoReply(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// One `POST /control` with `body` as it is; the HTTP status and the JSON
+/// reply. The connection is kept until the reply (datad drops requests whose
+/// client closed early).
+pub fn post_control(addr: SocketAddr, body: &Value, timeout: Duration) -> Result<(u16, Value), PostError> {
+    let no_reply = PostError::NoReply;
+    let mut sock = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).map_err(|e| PostError::Connect(e.to_string()))?;
+    let _ = sock.set_read_timeout(Some(timeout));
+    let _ = sock.set_write_timeout(Some(timeout));
+    let body = body.to_string();
+    let req = format!(
+        "POST /control HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    sock.write_all(req.as_bytes()).map_err(|e| no_reply(format!("write: {e}")))?;
+    let mut raw = Vec::new();
+    sock.read_to_end(&mut raw).map_err(|e| no_reply(format!("read: {e}")))?;
+    let pos = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| no_reply("no HTTP header".into()))?;
+    let head = String::from_utf8_lossy(&raw[..pos]).to_ascii_lowercase();
+    let status: u16 = head.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let mut payload = raw[pos + 4..].to_vec();
+    if head.lines().any(|l| l.starts_with("transfer-encoding:") && l.contains("chunked")) {
+        payload = Chunked::default().feed(&payload).map_err(no_reply)?;
+    }
+    let reply: Value = serde_json::from_slice(&payload).map_err(|e| no_reply(format!("status {status}, bad JSON: {e}")))?;
+    Ok((status, reply))
 }
 
 /// Delays between retries of a busy `/control` (V2-25): a bounded number of
@@ -921,6 +1015,8 @@ pub fn run(feed: &Feed, addr: SocketAddr, mut marker: DegradedMarker, t: Timing,
     while !stop() {
         let mut snapshot_at = None;
         let end = session(feed, addr, &mut health, &mut stream, &mut marker, &t, &mono, stop, &mut snapshot_at);
+        health.on_disconnect();
+        EXEC_STALLED.store(false, std::sync::atomic::Ordering::Relaxed);
         let quick = matches!(end, End::Resync(_) | End::Closed);
         if !matches!(end, End::Closed) {
             eprintln!("[datad_feed] /v2 connection ended: {end:?}");
@@ -1070,6 +1166,7 @@ fn session(
                         *snapshot_at = Some(mono());
                     }
                     health.on_event(mono(), stream);
+                    EXEC_STALLED.store(health.stalled(), std::sync::atomic::Ordering::Relaxed);
                     feed.set_blocks(stream, &applied.changed);
                 }
                 Err(e) => return End::Resync(e),
@@ -1233,6 +1330,41 @@ mod feed_tests {
             "charger": block(1, false, json!({"direct_supply": {"supported": true, "enabled": false, "mode": "disable"}})),
             "live": block(1, false, json!({"system": {}})),
         }}))
+    }
+
+    #[test]
+    fn stuck_executor_is_fallback_while_heartbeats_continue() {
+        let mut st = Stream::default();
+        let mut h = Health::new(secs(0.0));
+        st.apply(&healthy_snapshot("e1", 0, 1)).unwrap();
+        h.on_event(secs(0.0), &st);
+        assert_eq!(h.evaluate(secs(0.0)), Some(Transition::Recover));
+        let hb = |seq: u64, age: u64| ev("heartbeat", json!({"epoch": "e1", "seq": seq, "blocks": {"battery": 200, "charger": 200}, "exec_age_ms": age}));
+        st.apply(&hb(1, 19_000)).unwrap();
+        h.on_event(secs(5.0), &st);
+        assert_eq!(h.evaluate(secs(5.0)), None, "19 s is not stuck yet");
+        st.apply(&hb(2, 21_000)).unwrap();
+        h.on_event(secs(10.0), &st);
+        assert!(h.stalled());
+        assert!(matches!(h.evaluate(secs(10.0)), Some(Transition::Enter(r)) if r.contains("stuck for 21s")));
+        // heartbeats keep coming: not silent, still fallback
+        st.apply(&hb(3, 26_000)).unwrap();
+        h.on_event(secs(15.0), &st);
+        assert!(!h.silent(secs(15.0)));
+        assert_eq!(h.evaluate(secs(15.0)), None);
+        // the executor moves again
+        st.apply(&hb(4, 0)).unwrap();
+        h.on_event(secs(20.0), &st);
+        assert_eq!(h.evaluate(secs(20.0)), Some(Transition::Recover));
+        // an older datad without the field never counts as stuck
+        st.apply(&ev("heartbeat", json!({"epoch": "e1", "seq": 5, "blocks": {}}))).unwrap();
+        h.on_event(secs(25.0), &st);
+        assert!(!h.stalled());
+        // a dropped connection forgets it
+        st.apply(&hb(6, 30_000)).unwrap();
+        h.on_event(secs(26.0), &st);
+        h.on_disconnect();
+        assert!(!h.stalled());
     }
 
     fn heartbeat(epoch: &str, seq: u64) -> SseEvent {
@@ -1476,7 +1608,7 @@ mod feed_tests {
     fn view_unknown_is_none_never_unplugged() {
         let mut st = Stream::default();
         st.apply(&healthy_snapshot("e1", 0, 1)).unwrap();
-        let mut v = View { mode: Mode::Subscribed, version: 1, blocks: st.blocks.clone() };
+        let mut v = View { mode: Mode::Subscribed, version: 1, blocks: st.blocks.clone(), op_at: None };
         assert_eq!(v.charger_connected(), Some(true));
         assert_eq!(v.charging_stopped(), Some(false));
         v.blocks.get_mut("charger").unwrap().stale = true;
@@ -1538,6 +1670,34 @@ mod feed_tests {
         let a = st.apply(&sms(5, 5, 41, 13, 1, false)).unwrap();
         feed.set_blocks(&st, &a.changed);
         assert_eq!(feed.view().sms_summary(), None, "fallback: never from datad");
+    }
+
+    #[test]
+    fn sim_block_wakes_on_iccid_only() {
+        let feed = Feed::default();
+        let mut st = Stream::default();
+        let a = st.apply(&healthy_snapshot("e1", 0, 1)).unwrap();
+        feed.set_blocks(&st, &a.changed);
+        feed.set_mode(Mode::Subscribed);
+        assert_eq!(feed.view().sim_iccid(), None, "older datad: no sim block");
+        // Fake ICCIDs (public mirror); the ZTE stack's trailing pad nibble.
+        let sim = |seq: u64, rev: u64, iccid: &str, imsi: &str| {
+            ev("block", json!({"epoch": "e1", "seq": seq, "name": "sim", "revision": rev,
+                "observed_at": 100, "stale": false, "data": {"iccid": iccid, "imsi": imsi, "state": "ready"}}))
+        };
+        let v0 = feed.view().version;
+        let a = st.apply(&sim(1, 1, "8900000000000000001F", "001010000000001")).unwrap();
+        feed.set_blocks(&st, &a.changed);
+        assert_eq!(feed.view().version, v0 + 1);
+        assert_eq!(feed.view().sim_iccid().as_deref(), Some("8900000000000000001"));
+        let a = st.apply(&sim(2, 2, "8900000000000000001F", "001010000000009")).unwrap();
+        feed.set_blocks(&st, &a.changed);
+        assert_eq!(feed.view().version, v0 + 1, "only another field moved: no wake");
+        let a = st.apply(&sim(3, 3, "8900000000000000002F", "001010000000009")).unwrap();
+        feed.set_blocks(&st, &a.changed);
+        assert_eq!(feed.view().version, v0 + 2, "card changed: wake");
+        feed.set_mode(Mode::Fallback);
+        assert_eq!(feed.view().sim_iccid(), None, "fallback: the caller reads ubus");
     }
 
     #[test]

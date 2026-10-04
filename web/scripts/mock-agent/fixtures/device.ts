@@ -367,6 +367,13 @@ export const routes: Route[] = [
     },
   },
   {
+    // device_ext.rs device_poweroff — datad device.poweroff. The mock stays up
+    // (a real device is gone until someone presses its power button).
+    method: "POST",
+    path: "/api/device/poweroff",
+    handler: () => ok({}),
+  },
+  {
     // device_ext.rs:37 — ubus `zwrt_bsp.power factory_reset` (wipes settings, reboots).
     method: "POST",
     path: "/api/device/factory-reset",

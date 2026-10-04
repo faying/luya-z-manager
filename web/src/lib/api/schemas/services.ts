@@ -27,6 +27,14 @@ export interface TailscalePeer {
   /** tailscale's own RFC 3339 time; clock basis (device clock vs real UTC) unconfirmed. "0001-01-01T00:00:00Z" = never. */
   last_seen: string | null;
   last_handshake: string | null;
+  /** Talking to it right now (audit C, like the touch screen). Older agents leave these out. */
+  active?: boolean;
+  /** ip:port when hole-punched (direct); null = through a DERP relay. */
+  cur_addr?: string | null;
+  /** DERP region it uses, e.g. "tok". */
+  relay?: string | null;
+  /** Subnet routes this peer serves. */
+  primary_routes?: string[];
 }
 
 export interface TailscaleSelf {
@@ -37,6 +45,10 @@ export interface TailscaleSelf {
   /** DERP region code, e.g. "tok". */
   relay: string | null;
   exit_node_option: boolean;
+  /** RFC 3339 (real UTC); null = key expiry disabled. Older agents leave it out. */
+  key_expiry?: string | null;
+  /** Subnet routes this router is the primary for. */
+  primary_routes?: string[];
 }
 
 export interface TailscaleExitNode {
@@ -69,6 +81,9 @@ export interface TailscaleStatus {
   exit_node?: TailscaleExitNode | null;
   peer_count?: number;
   peer_online?: number;
+  /** Peers talking right now, and how many of those go direct (not via DERP). */
+  peer_active?: number;
+  peer_direct?: number;
   peers?: TailscalePeer[];
 }
 

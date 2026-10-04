@@ -124,6 +124,13 @@
 @media (min-width: 640px) { .nd-announce__detail { display: inline; } }
 .nd-announce .nd-announce__btn { color: var(--nd-onPrimary); text-decoration-color: color-mix(in srgb, var(--nd-onPrimary) 40%, transparent); min-height: 36px; }
 .nd-announce .nd-announce__view { background: var(--nd-onPrimary); color: var(--nd-primary); text-decoration: none; }
+/* The change in progress (OpBanner): the symbol takes the result's colour. */
+.nd-announce__sym--ok { color: var(--nd-green, var(--nd-okT)); }
+.nd-announce__sym--neutral { color: color-mix(in srgb, var(--nd-onPrimary) 70%, transparent); }
+.nd-announce__sym--bad { color: var(--nd-red, var(--nd-badT)); }
+.nd-announce__frozen { opacity: .55; }
+/* a one-time sentence (the auto-revert notice): wraps instead of being cut */
+.nd-announce__text > span.nd-announce__wrap { white-space: normal; }
 /* Dark: stay an ink strip (raised console tone), not a white slab. */
 [data-theme="dark"] .nd-announce { background: var(--nd-console-card); color: var(--nd-t1); box-shadow: inset 0 0 0 1px var(--nd-hair); }
 [data-theme="dark"] .nd-announce .nd-announce__btn { color: var(--nd-t1); }

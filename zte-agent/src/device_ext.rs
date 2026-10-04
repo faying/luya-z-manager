@@ -6,21 +6,21 @@ use crate::handlers::AppState;
 use crate::ubus;
 
 pub fn device_thermal(_state: &AppState) -> (u16, Value) {
-    match ubus::call("zwrt_bsp.thermal", "get_cpu_temp", Some("{}")) {
+    match ubus::read("zwrt_bsp.thermal", "get_cpu_temp", Some("{}")) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
 }
 
 pub fn device_charger(_state: &AppState) -> (u16, Value) {
-    match ubus::call("zwrt_bsp.charger", "list", Some("{}")) {
+    match ubus::read("zwrt_bsp.charger", "list", Some("{}")) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
 }
 
 pub fn device_system(_state: &AppState) -> (u16, Value) {
-    match ubus::call("system", "info", Some("{}")) {
+    match ubus::read("system", "info", Some("{}")) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
@@ -31,13 +31,25 @@ pub fn device_system(_state: &AppState) -> (u16, Value) {
 // to wind down first. Plain `ubus call system reboot` skipped that.
 pub fn device_reboot(_state: &AppState) -> (u16, Value) {
     let _ = std::process::Command::new("sync").status();
-    match ubus::call("zwrt_mc.device.manager", "device_reboot", Some(r#"{"moduleName":"web"}"#)) {
-        Ok(data) => (200, json!({"ok": true, "data": data})),
-        Err(_) => match ubus::call("system", "reboot", Some("{}")) {
+    // datad journals "requested" and flushes it before the vendor call
+    match crate::datad_write::send("device.reboot", &json!({})) {
+        // the vendor reboot failed: the plain one (datad has logged the request)
+        crate::datad_write::Reply::Failed { error, .. } => match crate::datad_write::vendor("system", "reboot", Some("{}")) {
             Ok(data) => (200, json!({"ok": true, "data": data})),
-            Err(e) => (503, json!({"ok": false, "error": e})),
+            Err(e) => (503, json!({"ok": false, "error": format!("{error}; system reboot: {e}")})),
         },
+        r => r.into_http(),
     }
+}
+
+// Power off (audit C, 10-04): the touch screen's 关机, through datad like
+// reboot (datad journals "requested" and calls zwrt_mc.device.manager
+// device_poweroff). No plain fallback: a power-off that half-happens is
+// worse than one that says it failed. The web asks with its strongest
+// confirm: it can only be turned back on at the device.
+pub fn device_poweroff(_state: &AppState) -> (u16, Value) {
+    let _ = std::process::Command::new("sync").status();
+    crate::datad_write::send("device.poweroff", &json!({})).into_http()
 }
 
 // There is no zwrt_bsp.power on the MU5250 (checked 2026-09-26), so the old
@@ -45,7 +57,7 @@ pub fn device_reboot(_state: &AppState) -> (u16, Value) {
 // resetFlag 0. Never exercised on the owner's device: it wipes the setup.
 pub fn device_factory_reset(_state: &AppState) -> (u16, Value) {
     let params = r#"{"moduleName":"web","resetFlag":0}"#;
-    match ubus::call("zwrt_mc.device.manager", "device_reset", Some(params)) {
+    match crate::datad_write::vendor("zwrt_mc.device.manager", "device_reset", Some(params)) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
@@ -64,7 +76,7 @@ pub fn charge_control_get(state: &AppState) -> (u16, Value) {
         .parse()
         .unwrap_or(0);
 
-    let charging_stopped = ubus::call("zwrt_bsp.charger", "list", Some("{}"))
+    let charging_stopped = ubus::read("zwrt_bsp.charger", "list", Some("{}"))
         .ok()
         .and_then(|v| v["direct_power_supply_mode"].as_str().map(|s| s == "enable"))
         .unwrap_or(false);
@@ -96,13 +108,10 @@ pub fn charge_control_set(state: &AppState, body: &[u8]) -> (u16, Value) {
 
     // Manual charge stop/resume via ubus (inverted: "enable" = stop, "disable" = start)
     if let Some(stopped) = parsed["charging_stopped"].as_bool() {
-        let mode = if stopped { "enable" } else { "disable" };
-        let params = format!(r#"{{"direct_power_supply_mode":"{mode}"}}"#);
-        if let Err(e) = ubus::call("zwrt_bsp.charger", "set", Some(&params)) {
-            return (
-                500,
-                json!({"ok": false, "error": format!("charger ubus: {e}")}),
-            );
+        // direct supply on = charging stopped ("enable" stops, "disable" starts)
+        let r = crate::datad_write::send("power.direct_supply.set", &json!({"enabled": stopped}));
+        if !r.ok() {
+            return r.into_http();
         }
         // Set manual override so enforcer doesn't fight the user
         state.charge_limit.set_manual_override(stopped);
@@ -138,9 +147,7 @@ pub fn device_power_save_get(_state: &AppState, body: &[u8]) -> (u16, Value) {
         Ok(v) => v,
         Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
     };
-    match ubus::call(
-        "zwrt_mc.device.manager",
-        "get_device_info",
+    match ubus::read("zwrt_mc.device.manager", "get_device_info",
         Some(&parsed.to_string()),
     ) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
@@ -153,9 +160,7 @@ pub fn device_power_save_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
         Ok(v) => v,
         Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
     };
-    match ubus::call(
-        "zwrt_mc.device.manager",
-        "set_device_info",
+    match crate::datad_write::vendor("zwrt_mc.device.manager", "set_device_info",
         Some(&parsed.to_string()),
     ) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
@@ -165,7 +170,7 @@ pub fn device_power_save_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
 
 pub fn device_fast_boot_get(_state: &AppState) -> (u16, Value) {
     let params = r#"{"deviceInfoList":["quicken_power_on"]}"#;
-    match ubus::call("zwrt_mc.device.manager", "get_device_info", Some(params)) {
+    match ubus::read("zwrt_mc.device.manager", "get_device_info", Some(params)) {
         Ok(data) => {
             let val = data["quicken_power_on"].as_str().unwrap_or("0");
             (200, json!({"ok": true, "data": {"fast_boot": val}}))
@@ -184,7 +189,7 @@ pub fn device_fast_boot_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
         _ => return (400, json!({"ok": false, "error": "fast_boot must be \"0\" or \"1\""})),
     };
     let params = format!(r#"{{"deviceInfoList":{{"quicken_power_on":"{val}"}}}}"#);
-    match ubus::call("zwrt_mc.device.manager", "set_device_info", Some(&params)) {
+    match crate::datad_write::vendor("zwrt_mc.device.manager", "set_device_info", Some(&params)) {
         Ok(_) => (200, json!({"ok": true, "data": {"fast_boot": val}})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }

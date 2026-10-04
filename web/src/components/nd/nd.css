@@ -430,3 +430,17 @@ html[lang^="zh"] .nd-dialog__facts dt {
 .nd-console__title { font-family: var(--nd-font); font-size: 15px; line-height: 22px; font-weight: 500; }
 .nd-error { font-size: 14px; line-height: 20px; font-weight: 500; color: var(--nd-badT); }
 }
+
+/* --- the change in progress on its page (OpStatus, E4 DD12/DD13/DD15) --- */
+.nd-opsteps { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 2px 14px; }
+.nd-opsteps li { color: var(--nd-t2); }
+.nd-opsteps li.is-done { color: var(--nd-t1); }
+.nd-opnext { margin: 4px 0 0; font-variant-numeric: tabular-nums; color: var(--nd-t1); }
+.nd-opbtns { display: flex; flex-wrap: wrap; gap: 8px; }
+.nd-opbtns:empty { display: none; }
+/* phones: stacked, full width, finger-sized */
+@media (max-width: 639px) {
+  .nd-opbtns { flex-direction: column; }
+  .nd-opbtns > span, .nd-opbtns .nd-btn { width: 100%; }
+  .nd-opbtns .nd-btn { min-height: 44px; }
+}

@@ -12,14 +12,17 @@
 // status block once the reload is done. Changes that reload Wi-Fi wait for
 // the device (30 s) and name the network to reconnect to.
 //
-// Wi-Fi master switch: sent exactly as before — `wifi_onoff` inside the
-// same full-body PUT /api/wifi/settings, with the same 19 keys and the same
-// seeding. Whether writing zte_mbb.wifi.wifi_onoff really switches Wi-Fi on
-// this firmware is unconfirmed (wifi.rs:264-300: when only zte_mbb keys
-// change the agent doesn't reload; with the full body an ""→"0" write to a
-// wireless key can trigger a reload as a side effect). It will be checked
-// on the device; until then do not switch it to /api/wifi/radio and do not
-// trim the body to changed keys — both would change what gets tested.
+// Wi-Fi master switch: `wifi_onoff` inside the same full-body PUT
+// /api/wifi/settings. Checked on the device (10-04, B31): the
+// `zte_mbb.wifi.wifi_onoff` it used to write does not exist, so the switch did
+// nothing. The agent now turns it into the two main APs' `disabled` (on also
+// enables both radios), the writes /api/wifi/radio, the scenario engine and
+// u60-guard's restore use; status `wifi_onoff` reads "0" when both APs are off
+// or the vendor switch `wireless.zte_mbb.wifi_onoff` is.
+//
+// Wi-Fi 6: the vendor page changes it together with each radio's hwmode, so
+// the agent refuses a change (501) rather than writing the flag alone. The
+// row stays; a pending change says so before Apply.
 import { useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -44,6 +47,7 @@ import {
   useConfirmInline,
   type Tone,
 } from "@/components/nd";
+import { WifiExtras } from "./Extras";
 import { FieldRow, PasswordField, SelectField, TextField, flag, hasStripped, keyProblem, ssidProblem, type Opt } from "./fields";
 
 type WifiForm = Required<Pick<WifiSettingsBody, keyof WifiSettingsBody>>;
@@ -602,7 +606,13 @@ export default function WifiPage() {
                     />
                   </span>
                 }
-                sub={form.wifi6_switch === "1" ? t("common.enabled", "Enabled") : t("common.disabled", "Disabled")}
+                sub={
+                  base && form.wifi6_switch !== base.wifi6_switch
+                    ? t("wifi.wifi6NotHere", "This firmware can't switch Wi-Fi 6 on its own; Apply will be refused")
+                    : form.wifi6_switch === "1"
+                      ? t("common.enabled", "Enabled")
+                      : t("common.disabled", "Disabled")
+                }
                 control={
                   <Switch
                     label={t("wifi.wifi6", "WiFi 6 (802.11ax)")}
@@ -625,6 +635,8 @@ export default function WifiPage() {
 
         {bandGroup("2g")}
         {bandGroup("5g")}
+
+        <WifiExtras />
 
         {/* ── apply ── */}
         <section aria-labelledby="wifi-apply-title">

@@ -19,14 +19,26 @@
 // modem has crashed and restarted itself a few times, the firmware's switcher
 // logs the request and does nothing (seen 2026-09-27 and 09-29), until a reboot.
 // The mismatch text says so.
+//
+// With datad's write-op layer (E4 T9) the device itself confirms the switch
+// and may revert it: no readback here, the transaction's status block (in
+// place of the normal one) shows the progress and the buttons, and the
+// confirm dialog says when automatic revert is off (DD6). datad stuck: Apply
+// is off with the reason (DD8).
 import { useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { apiFetch } from "@/lib/api/client";
+import { ApiError } from "@/lib/api/types";
+import { useOps } from "@/lib/hooks/useOps";
+import { noteMine } from "@/lib/ops";
+import { isRemoteAccess } from "@/lib/api/remote";
 import { useApi } from "@/lib/hooks/useApi";
 import { useWriteOp } from "@/lib/api/writeOp";
 import type { NetworkSignal } from "@/lib/api/schemas/network";
 import type { ModemNetworkModeBody } from "@/lib/api/schemas/modem";
 import { Button, ConfirmDialog, Freshness, GroupTitle, OpResult, StatusBlock, type Tone } from "@/components/nd";
+import { OpStatus } from "@/components/nd/OpStatus";
+import { LastChange } from "@/components/nd/LastChange";
 import { ModeList, type ModeOption } from "./ModeList";
 
 const SIGNAL = "/api/network/signal";
@@ -94,20 +106,35 @@ export default function NetworkModePage() {
 
   const recovery = t("netmode.recovery", "Come back to this page and choose “Auto”. If the page can't be reached, set the network mode back on the device's touchscreen.");
 
+  const ops = useOps();
+  // datad confirms (and may revert) the switch itself: nothing to read back here
+  const viaOps = ops.supported;
+
   const op = useWriteOp({
     tier: 3,
     steps: [
       {
         label: t("netmode.stepSet", "Set network mode"),
-        run: () =>
-          apiFetch(`/api/modem/network-mode`, {
+        run: async () => {
+          // raw: the reply's `op` names the transaction, so this page shows its result
+          type Reply = { ok: boolean; error?: string; error_en?: string; busy?: string; retry_after_s?: number; op?: { op_id?: string } };
+          const r = await apiFetch<Reply>(`/api/modem/network-mode`, {
             method: "PUT",
             body: { net_select: wantRef.current ?? "" } satisfies ModemNetworkModeBody,
-          }),
+            raw: true,
+          });
+          noteMine(r?.op?.op_id);
+          ops.refresh();
+          // failed but the transaction started (vendor call errored, 503 + op):
+          // datad judges by readback, the status block shows it — not 「没有生效」
+          if (!r?.ok && r?.op?.op_id) return r;
+          if (!r?.ok) throw new ApiError(r?.error || "failed", r?.busy ? 409 : 503, r?.error_en, r?.busy, r?.retry_after_s);
+          return r;
+        },
       },
     ],
     // Snapshotted at start(): without the field there is nothing to compare.
-    verify: current !== undefined
+    verify: current !== undefined && !viaOps
       ? async () => {
           for (let i = 0; i < VERIFY_TRIES; i++) {
             if (i > 0) await sleep(VERIFY_EVERY_MS);
@@ -125,7 +152,8 @@ export default function NetworkModePage() {
     waitDevice: { expectedSec: 30, recovery },
   });
 
-  const locked = !data || sig.stale || op.busy;
+  const opOn = ops.show?.v.item === "network.mode";
+  const locked = !data || sig.stale || op.busy || ops.stuck;
   const dirty = selected !== null && selected !== current;
 
   function apply() {
@@ -161,6 +189,9 @@ export default function NetworkModePage() {
       <h1 className="nd-title mb-4 mt-2">{t("netmode.title", "Network Mode")}</h1>
 
       <div className="grid max-w-[720px] gap-6">
+        {opOn ? (
+          <OpStatus item="network.mode" />
+        ) : (
         <StatusBlock
           tone={tone}
           state={state}
@@ -180,6 +211,7 @@ export default function NetworkModePage() {
             ) : undefined
           }
         />
+        )}
 
         <section aria-labelledby="nm-select">
           <GroupTitle id="nm-select">{t("netmode.selectMode", "Select Mode")}</GroupTitle>
@@ -209,8 +241,9 @@ export default function NetworkModePage() {
               {t("common.apply", "Apply")}
             </Button>
           </div>
+          {ops.stuck && <p className="nd-aux mt-2 px-1">{t("ops.stuckReason", "Data service not responding · settings can't be changed for now")}</p>}
           <div className="mt-2 grid gap-1 px-1">
-            <OpResult op={op} />
+            {!(viaOps && op.phase === "accepted") && <OpResult op={op} />}
             {op.phase === "failed" && op.errorKind === "mismatch" && (
               <p className="nd-aux">
                 {t("netmode.stillReports", "The device still reports {{mode}}. It may still be switching; check again in a minute. If it hasn't changed, apply once more. If that doesn't take either, restart the device and switch again right after it starts: once the modem has restarted itself a few times, the firmware stops carrying out mode changes until a reboot.", {
@@ -220,6 +253,7 @@ export default function NetworkModePage() {
             )}
           </div>
         </section>
+        <LastChange item="network.mode" />
       </div>
 
       <ConfirmDialog
@@ -232,6 +266,15 @@ export default function NetworkModePage() {
               ? t("netmode.confirmWhatAuto", "The modem picks the best available network again.")
               : t("netmode.confirmWhat", "The modem only uses {{mode}}. If that network isn't available here, there is no mobile connection.", { mode: labelOf(want) })}
             {want && RISKY[want] && <strong className="mt-2 block">{t(RISKY[want].k, RISKY[want].text)}</strong>}
+            {viaOps && isRemoteAccess() && (
+              <span className="mt-2 block">{t("ops.remoteDrop", "You're connected remotely: this page will drop. The result shows here when it reconnects; nothing is resent.")}</span>
+            )}
+            {viaOps && ops.data?.op && !ops.data.op.rollback_enabled && (
+              <span className="mt-2 block">{t("ops.rollbackOff", "Auto revert off: it stays even with no data")}</span>
+            )}
+            {viaOps && ops.data?.op?.rollback_enabled && current !== undefined && (
+              <span className="mt-2 block">{t("ops.rollbackOn", "Auto revert on: back to {{x}} if no data", { x: labelOf(current) })}</span>
+            )}
           </>
         }
         downtime={t("netmode.downtime", "The mobile connection drops for about 30 seconds while the modem re-attaches.")}

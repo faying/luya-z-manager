@@ -8,6 +8,7 @@
 // signal detection) are modelled with a start timestamp; status is computed
 // from elapsed time at read time (no timers).
 
+import { opsApplyFails, opsStartNetworkMode } from "./ops.ts";
 import type { Ctx, Reply, Route } from "../lib.ts";
 import { ok, fail, clone, bodyField, mergeKnown, methodNotFound } from "../lib.ts";
 import { shared } from "../shared.ts";
@@ -83,6 +84,9 @@ function modemData(ctx: Ctx): ModemData {
     roll_connect_status: connected ? "connected" : "disconnected",
   };
 }
+
+/** What zwrt_zte_nwinfo.default_band_lock holds on B27 (shape; a reset goes back to these). */
+const BAND_DEFAULTS = { nr_sa: "1,3,5,8,28,41,77,78,79", nr_nsa: "1,3,5,8,28,41,77,78,79", lte: "1,3,5,8,34,38,39,40,41" };
 
 /** Private: last network-mode write. Readback lives in /api/network/signal net_select (other area). */
 let netSelect = "WL_AND_5G";
@@ -321,7 +325,10 @@ export const routes: Route[] = [
       const v = str(bodyField(ctx.body, "net_select"));
       if (!v || !NET_SELECT_VALUES.includes(v)) return fail(`net_select must be one of ${NET_SELECT_VALUES.join(", ")}`, 400);
       if (!ctx.has("fakesuccess")) netSelect = v;
-      return ok(UBUS_EMPTY);
+      // with datad's write-op layer on, the reply names the transaction (agent datad_write.rs)
+      const op = opsStartNetworkMode(v);
+      if (op && opsApplyFails()) return { status: 503, raw: { ok: false, error: "ubus call zte_nwinfo_api nwinfo_set_netselect failed", op } };
+      return op ? { raw: { ok: true, data: UBUS_EMPTY, op } } : ok(UBUS_EMPTY);
     },
   },
   {
@@ -502,12 +509,37 @@ export const routes: Route[] = [
     path: "/api/cell/band/reset",
     handler: (ctx) => {
       if (ctx.has("fakesuccess")) return ok(UBUS_EMPTY);
+      // datad band.reset = nwinfo_reset_band_cell_setting: cell locks go too (D22)
+      cellLock.nr = null;
+      cellLock.lte = null;
       nrBandLock.nsa = null;
       nrBandLock.sa = null;
       shared.bandLock.nr = null;
       shared.bandLock.lte = null;
       return ok(UBUS_EMPTY);
     },
+  },
+
+  {
+    method: "GET",
+    path: "/api/cell/extra",
+    // cell.rs cell_extra_get: datad qos (AMBR in Mbps) and sim.msisdn; missing: a SIM without its number, no AMBR
+    handler: (ctx) =>
+      ctx.has("missing")
+        ? ok({ qci: null, ambr_dl_mbps: null, ambr_ul_mbps: null, msisdn: null, source: "feed" })
+        : ok({ qci: 9, ambr_dl_mbps: 150, ambr_ul_mbps: 75, msisdn: "+886900000000", source: "feed" }),
+  },
+  {
+    method: "GET",
+    path: "/api/cell/band/lock",
+    // uci zte_nwinfo.band_lock.* (current set) and the defaults a reset goes back to
+    handler: () =>
+      ok({
+        nr_sa: nrBandLock.sa ?? BAND_DEFAULTS.nr_sa,
+        nr_nsa: nrBandLock.nsa ?? BAND_DEFAULTS.nr_nsa,
+        lte: shared.bandLock.lte ?? BAND_DEFAULTS.lte,
+        default: BAND_DEFAULTS,
+      }),
   },
 
   // STC (whitelist cell lock). B27 answers 503 Method not found for both

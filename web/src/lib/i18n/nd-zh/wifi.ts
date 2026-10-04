@@ -3,6 +3,13 @@
 // Merged into zh.ts by the coordinator.
 export const zh = {
   wifi: {
+    extrasTitle: "节能与碰一碰",
+    psm: "Wi-Fi 节能",
+    helpPsm: "让无线在两个包之间打盹。省一点电；有些设备回应会慢一点（游戏、通话）。马上生效，重启后还在。",
+    psmUnknown: "还没读到（Wi-Fi 关着，这里也没设过）",
+    psmSaved: "已保存；Wi-Fi 打开时生效",
+    nfc: "NFC 碰一碰",
+    helpNfc: "手机碰一下设备就能连上这个 Wi-Fi，不用输密码。",
     statusLoading: "正在读取 Wi-Fi…",
     unreadable: "读不到 Wi-Fi 设置",
     statusOff: "Wi-Fi 已关",

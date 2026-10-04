@@ -22,6 +22,9 @@ export type Mock = {
   login(): Promise<string>;
   /** Set runtime scenarios, e.g. "weak,missing"; "normal" resets. */
   scenario(set: string): Promise<void>;
+  /** Write-op layer state (scripts/mock-agent/fixtures/ops.ts presets); null only reads.
+   *  Returns what the page sent: `acts` (revert/keep/ack) and `writes`. */
+  ops(set?: string | null): Promise<{ acts: { act: string; op_id: string }[]; writes: Record<string, unknown>[] }>;
 };
 
 async function startMock(port: number): Promise<{ mock: Mock; proc: ChildProcess }> {
@@ -63,6 +66,12 @@ async function startMock(port: number): Promise<{ mock: Mock; proc: ChildProcess
     async scenario(set: string) {
       const r = await fetch(`${url}/__mock/scenario?set=${encodeURIComponent(set)}`);
       if (!r.ok) throw new Error(`scenario ${set}: ${r.status}`);
+    },
+    async ops(set?: string | null) {
+      const q = set ? `?set=${encodeURIComponent(set)}` : "";
+      const r = await fetch(`${url}/__mock/ops${q}`);
+      if (!r.ok) throw new Error(`ops ${set}: ${r.status}`);
+      return ((await r.json()) as { data: { acts: { act: string; op_id: string }[]; writes: Record<string, unknown>[] } }).data;
     },
   };
   return { mock, proc };

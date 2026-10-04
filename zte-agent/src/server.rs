@@ -9,6 +9,7 @@ use crate::health;
 use crate::at_terminal;
 use crate::cell;
 use crate::deep_diag;
+use crate::ops;
 use crate::static_files;
 use crate::device_ext;
 use crate::lan_test;
@@ -144,6 +145,12 @@ fn handle_request(mut request: Request, state: &AppState) {
             respond(request, status, body_json);
             return;
         }
+        (&Method::Get, "/api/ops/journal") => {
+            let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
+            let (status, body_json) = ops::journal(query);
+            respond(request, status, body_json);
+            return;
+        }
         (&Method::Get, "/api/health/crashlog") => {
             let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
             let (status, body_json) = health::crashlog_get(state, query);
@@ -186,6 +193,10 @@ pub fn route(method: &Method, path: &str, state: &AppState, body: &[u8]) -> (u16
         (&Method::Post, "/api/auth/login") => handlers::login(state, body),
         (&Method::Get, "/api/public/status") => public::public_status(state),
         (&Method::Get, "/api/diagnose") => deep_diag::get(),
+        // Write-op layer (E4 T9): datad's transaction state, its buttons, undo
+        (&Method::Get, "/api/ops") => ops::state(),
+        (&Method::Post, "/api/ops/act") => ops::act(body),
+        (&Method::Post, "/api/ops/write") => ops::write(body),
         (&Method::Post, "/api/diagnose/feedback") => deep_diag::feedback(body),
         (&Method::Post, "/api/diagnose/speed") => deep_diag::speed(state, body),
         // Device info (sysfs)
@@ -211,6 +222,7 @@ pub fn route(method: &Method, path: &str, state: &AppState, body: &[u8]) -> (u16
         (&Method::Get, "/api/device/charger") => device_ext::device_charger(state),
         (&Method::Get, "/api/device/system") => device_ext::device_system(state),
         (&Method::Post, "/api/device/reboot") => device_ext::device_reboot(state),
+        (&Method::Post, "/api/device/poweroff") => device_ext::device_poweroff(state),
         (&Method::Post, "/api/device/factory-reset") => device_ext::device_factory_reset(state),
         (&Method::Get, "/api/device/charge-control") => device_ext::charge_control_get(state),
         (&Method::Put, "/api/device/charge-control") => device_ext::charge_control_set(state, body),
@@ -230,6 +242,10 @@ pub fn route(method: &Method, path: &str, state: &AppState, body: &[u8]) -> (u16
         (&Method::Put, "/api/wifi/settings") => wifi::wifi_set(state, body),
         (&Method::Get, "/api/wifi/radio") => wifi_radio::radio_get(state),
         (&Method::Put, "/api/wifi/radio") => wifi_radio::radio_set(state, body),
+        (&Method::Get, "/api/wifi/power-save") => wifi::power_save_get(state),
+        (&Method::Put, "/api/wifi/power-save") => wifi::power_save_set(state, body),
+        (&Method::Get, "/api/nfc") => wifi::nfc_get(state),
+        (&Method::Put, "/api/nfc") => wifi::nfc_set(state, body),
         (&Method::Get, "/api/wifi/guest") => wifi::guest_status(state),
         (&Method::Put, "/api/wifi/guest") => wifi::guest_set(state, body),
         (&Method::Get, "/api/homemode") => homemode::homemode_get(state),
@@ -294,6 +310,8 @@ pub fn route(method: &Method, path: &str, state: &AppState, body: &[u8]) -> (u16
         (&Method::Post, "/api/cell/band/nr") => cell::cell_band_nr(state, body),
         (&Method::Post, "/api/cell/band/lte") => cell::cell_band_lte(state, body),
         (&Method::Post, "/api/cell/band/reset") => cell::cell_band_reset(state),
+        (&Method::Get, "/api/cell/band/lock") => cell::cell_band_lock_get(state),
+        (&Method::Get, "/api/cell/extra") => cell::cell_extra_get(state),
         (&Method::Get, "/api/cell/stc/params") => cell::cell_stc_params_get(state),
         (&Method::Put, "/api/cell/stc/params") => cell::cell_stc_params_set(state, body),
         (&Method::Get, "/api/cell/stc/status") => cell::cell_stc_status(state),
@@ -421,12 +439,9 @@ fn doh_enable(state: &AppState) -> (u16, Value) {
     if let Err(e) = state.doh.start() {
         return (500, json!({"ok": false, "error": e}));
     }
-    // Write DoH forwarding config to dnsmasq.d drop-in
+    // dnsmasq forwards to the DoH proxy: a dnsmasq.d drop-in written by datad
     // (UCI `set` creates a plain option, but dnsmasq init only reads `server` as a list — drop-in is reliable)
-    let _ = std::fs::write("/tmp/dnsmasq.d/doh.conf", "server=127.0.0.1#5353\nno-resolv\n");
-    let _ = std::process::Command::new("sh")
-        .args(["-c", "/etc/init.d/dnsmasq restart"])
-        .output();
+    doh_apply(true);
     // Save config
     state.doh.set_enabled(true);
     (200, json!({"ok": true, "data": {"status": "enabled"}}))
@@ -442,9 +457,29 @@ fn doh_disable(state: &AppState) -> (u16, Value) {
 /// Restore dnsmasq to default DNS resolution (remove DoH forwarding).
 /// Safe to call even if dnsmasq isn't forwarding to DoH.
 pub fn dnsmasq_restore_defaults() {
-    let _ = std::process::Command::new("sh")
-        .args(["-c", "rm -f /tmp/dnsmasq.d/doh.conf; uci delete dhcp.lan_dns.server 2>/dev/null; uci delete dhcp.lan_dns.noresolv 2>/dev/null; uci commit dhcp; /etc/init.d/dnsmasq restart"])
-        .output();
+    doh_apply(false);
+}
+
+/// dnsmasq ↔ DoH through datad (`dns.doh`). At agent startup datad may not be
+/// up yet: then a few more tries in the background.
+pub fn doh_apply(enabled: bool) {
+    let p = json!({"enabled": enabled});
+    match crate::datad_write::send("dns.doh", &p) {
+        crate::datad_write::Reply::Unreachable { maybe_done: false, .. } => {
+            let source = crate::datad_write::current();
+            let _ = std::thread::Builder::new().name("doh-apply".into()).spawn(move || {
+                for _ in 0..10 {
+                    std::thread::sleep(std::time::Duration::from_secs(30));
+                    if crate::datad_write::send_as(source, "dns.doh", &p).ok() {
+                        return;
+                    }
+                }
+                eprintln!("[doh] dnsmasq {}: datad never answered", if enabled { "on" } else { "off" });
+            });
+        }
+        r if !r.ok() => eprintln!("[doh] dnsmasq {}: {:?}", if enabled { "on" } else { "off" }, r),
+        _ => {}
+    }
 }
 
 fn doh_cache_list(state: &AppState) -> (u16, Value) {

@@ -18,3 +18,4 @@ export { OpResult } from "./OpResult";
 export { ChoiceGrid } from "./ChoiceGrid";
 export { NdTabs, type TabDef } from "./Tabs";
 export { OperatorLogo } from "./OperatorLogo";
+export { MiniChart, type MiniSeries } from "./MiniChart";

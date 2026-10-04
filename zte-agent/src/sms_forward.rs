@@ -676,9 +676,7 @@ fn forward_to(
                 "sms_time": format_sms_time(),
                 "id": "-1",
             });
-            let resp = ubus::call(
-                "zwrt_wms",
-                "zte_libwms_send_sms",
+            let resp = crate::datad_write::vendor("zwrt_wms", "zte_libwms_send_sms",
                 Some(&params.to_string()),
             )
             .map_err(|e| format!("sms forward: {e}"))?;
@@ -783,11 +781,7 @@ fn cleanup_forwarded_sms(forward_number: &str) {
                 .or_else(|| item["id"].as_str().and_then(|s| s.parse().ok()))
                 .unwrap_or(0);
             if id > 0 {
-                match ubus::call(
-                    "zwrt_wms",
-                    "zwrt_wms_delete_sms",
-                    Some(&json!({"id": id.to_string()}).to_string()),
-                ) {
+                match crate::datad_write::send_as(crate::datad_write::Source::Auto, "sms.delete", &json!({"ids": id.to_string()})).into_result() {
                     Ok(_) => eprintln!("[sms_forward] cleanup: deleted forwarded outgoing SMS id={id}"),
                     Err(e) => eprintln!("[sms_forward] cleanup: failed to delete SMS id={id}: {e}"),
                 }
@@ -856,7 +850,7 @@ impl SmsForwarder {
         // Seed initial connectivity state (retry if services aren't registered yet)
         for attempt in 1..=5 {
             let got_service = if !self.has_service.load(Ordering::Relaxed) {
-                if let Ok(data) = ubus::call("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}")) {
+                if let Ok(data) = ubus::read("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}")) {
                     let network_type = data["network_type"].as_str().unwrap_or("");
                     let has = !network_type.is_empty() && network_type != "NO_SERVICE" && !network_type.starts_with("LIMITED_SERVICE");
                     self.has_service.store(has, Ordering::Relaxed);
@@ -870,7 +864,7 @@ impl SmsForwarder {
             };
 
             let got_wan = if !self.wan_connected.load(Ordering::Relaxed) {
-                if let Ok(data) = ubus::call("zwrt_data", "get_wwaniface", Some(r#"{"source_module":"zte_topsw_data","cid":1}"#)) {
+                if let Ok(data) = ubus::read("zwrt_data", "get_wwaniface", Some(r#"{"source_module":"zte_topsw_data","cid":1}"#)) {
                     let connected = data["connect_status"].as_str().map(|s| s.starts_with("ipv4")).unwrap_or(false);
                     self.wan_connected.store(connected, Ordering::Relaxed);
                     eprintln!("[sms_forward] initial WAN state: connected={connected}");
@@ -927,7 +921,8 @@ impl SmsForwarder {
         let forwarder = Arc::clone(self);
         std::thread::spawn(move || {
             let _keep_tx = keep_tx;
-            forwarder.event_loop(rx);
+            // forwarding writes (send, delete, mark read) are an automatic source
+            crate::datad_write::with_source(crate::datad_write::Source::Auto, || forwarder.event_loop(rx));
         });
     }
 
@@ -1234,20 +1229,12 @@ impl SmsForwarder {
 
         // Post-forward actions — only when ALL rules succeeded
         if all_succeeded && config.mark_read_after_forward {
-            if let Err(e) = ubus::call(
-                "zwrt_wms",
-                "zwrt_wms_modify_tag",
-                Some(&json!({"id": sms.id.to_string(), "tag": 0}).to_string()),
-            ) {
+            if let Err(e) = crate::datad_write::send_as(crate::datad_write::Source::Auto, "sms.mark_read", &json!({"ids": sms.id.to_string(), "tag": 0})).into_result() {
                 eprintln!("[sms_forward] mark-read failed for SMS {}: {e}", sms.id);
             }
         }
         if all_succeeded && config.delete_after_forward {
-            if let Err(e) = ubus::call(
-                "zwrt_wms",
-                "zwrt_wms_delete_sms",
-                Some(&json!({"id": sms.id.to_string()}).to_string()),
-            ) {
+            if let Err(e) = crate::datad_write::send_as(crate::datad_write::Source::Auto, "sms.delete", &json!({"ids": sms.id.to_string()})).into_result() {
                 eprintln!("[sms_forward] delete failed for SMS {}: {e}", sms.id);
             }
         }
@@ -1500,7 +1487,7 @@ fn ubus_sms_page(store: u64, page: u64) -> Result<Value, String> {
         "mem_store": store,
         "order_by": "order by id desc",
     });
-    ubus::call("zwrt_wms", "zte_libwms_get_sms_data", Some(&params.to_string()))
+    ubus::read("zwrt_wms", "zte_libwms_get_sms_data", Some(&params.to_string()))
 }
 
 /// One `sms.list_after` page from datad; `503 busy` retried after `delays`.
@@ -1570,7 +1557,7 @@ fn fetch_sms_both_stores(tags: u64, page: u64, count: u64, order: &str) -> Resul
                 "mem_store": store,
                 "order_by": order,
             });
-            (store, ubus::call("zwrt_wms", "zte_libwms_get_sms_data", Some(&params.to_string())))
+            (store, ubus::read("zwrt_wms", "zte_libwms_get_sms_data", Some(&params.to_string())))
         })
         .collect();
     merge_store_results(results)
@@ -1621,13 +1608,13 @@ fn fetch_max_sms_id() -> Result<u64, String> {
 
 fn save_config(config: &SmsForwardConfig) {
     if let Ok(json) = serde_json::to_string_pretty(config) {
-        let _ = fs::write(CONFIG_PATH, json);
+        let _ = crate::fsutil::atomic_write(CONFIG_PATH, json.as_bytes());
     }
 }
 
 fn save_state(state: &ForwardState) {
     if let Ok(json) = serde_json::to_string(state) {
-        let _ = fs::write(STATE_PATH, json);
+        let _ = crate::fsutil::atomic_write(STATE_PATH, json.as_bytes());
     }
 }
 

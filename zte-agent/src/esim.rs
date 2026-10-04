@@ -315,6 +315,11 @@ pub fn notifications(state: &AppState) -> (u16, Value) {
     }
 }
 
+/// An eSIM job (switch, download, …) is running: the ICCID may flip mid-way.
+pub fn busy(state: &AppState) -> bool {
+    state.esim.running.load(Ordering::Relaxed)
+}
+
 /// GET /api/esim/job
 pub fn job(state: &AppState) -> (u16, Value) {
     let j = state.esim.job.lock().unwrap().clone();
@@ -402,8 +407,13 @@ pub fn switch(state: &AppState, body: &[u8]) -> (u16, Value) {
     let busy_mark = Arc::clone(&state.esim.last_card_busy);
     let job = Arc::clone(&state.esim.job);
     let running = Arc::clone(&state.esim.running);
+    let source = crate::datad_write::current();
     std::thread::spawn(move || {
         hold_wake_lock();
+        // The switch (and the simreset / zte_topsw_mdm restart after it) does
+        // not go through datad: tell it first, so a network-mode change still
+        // confirming is not rolled back over the new card (D40). Best effort.
+        crate::datad_write::interrupt_as(source, "esim");
         // Record the pre-switch identity so we can detect when the ZTE stack has
         // actually moved off it (the robust convergence signal).
         let (old_imsi, _) = ubus_sim_identity();

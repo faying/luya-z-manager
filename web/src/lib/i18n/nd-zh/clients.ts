@@ -17,6 +17,8 @@ export const zh = {
     onWifi: "连着 Wi-Fi",
     notOnWifi: "没连 Wi-Fi（网线、USB，或已经离开）",
     channel: "信道 {{c}}",
+    rate: "↓ {{down}} ↑ {{up}} Mbps",
+    total: "连上后共 {{total}}",
     sigGreat: "信号很好",
     sigGood: "信号好",
     sigFair: "信号一般",

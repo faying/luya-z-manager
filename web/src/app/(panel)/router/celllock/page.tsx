@@ -18,6 +18,7 @@ import { useTranslation } from "react-i18next";
 import { CellTower, LockSimple, MagnifyingGlass } from "@phosphor-icons/react";
 import { apiFetch } from "@/lib/api/client";
 import { useApi } from "@/lib/hooks/useApi";
+import { useOps } from "@/lib/hooks/useOps";
 import { useWriteOp } from "@/lib/api/writeOp";
 import type { NetInfo, NetworkSignal } from "@/lib/api/schemas/network";
 import type { CellLockLteBody, CellLockNrBody, CellNeighborsLte, CellNeighborsNr } from "@/lib/api/schemas/modem";
@@ -73,6 +74,7 @@ const pick = (row: Record<string, string>, ...keys: string[]) => {
 };
 
 export default function CellLockPage() {
+  const ops = useOps();
   const { t } = useTranslation();
   const sig = useApi<NetworkSignal>("/api/network/signal", { refreshInterval: 5000 });
   const s = sig.data;
@@ -166,7 +168,8 @@ export default function CellLockPage() {
     ],
   });
 
-  const busy = nrOp.busy || lteOp.busy || resetOp.busy;
+  // datad stuck: its writes would only time out (DD8); the bar above says why
+  const busy = nrOp.busy || lteOp.busy || resetOp.busy || ops.stuck;
 
   function confirm(which: Exclude<Pending, null>) {
     setDialog(null);
@@ -294,7 +297,7 @@ export default function CellLockPage() {
           <section aria-labelledby="cl-reset">
             <GroupTitle id="cl-reset">{t("celllock.resetTitle", "Automatic cell selection")}</GroupTitle>
             <div className="nd-group grid gap-3 p-4 lg:p-5">
-              <p className="nd-body text-nd-t2">{t("celllock.resetDesc", "Remove every NR and LTE cell lock and let the modem choose cells again.")}</p>
+              <p className="nd-body text-nd-t2">{t("celllock.resetDesc", "Remove every NR and LTE cell lock; band locks reset too, and the modem chooses again.")}</p>
               <div>
                 <Button variant="secondary" onPress={() => setDialog("reset")} isDisabled={busy} pending={resetOp.busy}>
                   {t("celllock.unlockAll", "Unlock All")}
@@ -403,7 +406,7 @@ export default function CellLockPage() {
         open={dialog === "reset"}
         onOpenChange={(o) => !o && setDialog(null)}
         title={t("celllock.confirmReset", "Reset all cell locks?")}
-        what={t("celllock.confirmResetWhat", "Every NR and LTE cell lock is removed. Judging by the firmware call's name it may also reset band locks (not confirmed).")}
+        what={t("celllock.confirmResetWhat", "Bands and cell locks reset together: every cell lock and every band lock is removed.")}
         downtime={t("bandlock.downtime", "The mobile connection drops for about 30 seconds while the modem re-attaches.")}
         actionLabel={t("celllock.unlockAll", "Unlock All")}
         cutsUplink

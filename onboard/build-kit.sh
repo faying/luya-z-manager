@@ -176,7 +176,7 @@ mkdir -p "$PL/guard"
 # u60-ship.sh、datad-trial.sh（它的壳，要和它放一起）进 /data/u60-guard；u60-recover.sh 由设备端
 # 放到 /data/u60-ship/（自检过才放，已有就不换；rc.local 那一行只由 recover 组件加）
 # 去掉 u60-ship.sh、datad-trial.sh、u60-recover.sh 以后，这张表要和 u60-ship.sh 的 GUARD_FILES 一致（touch-ui docs/SHIP.md）
-for f in alert-lib.sh u60-guard.sh supervise.sh agent-auth.sh chaos.sh doctor.sh config-backup.sh power-sample.sh wan-sources.sh wifi-ab.sh \
+for f in alert-lib.sh u60-guard.sh supervise.sh agent-auth.sh chaos.sh doctor.sh config-backup.sh power-sample.sh wan-sources.sh wifi-ab.sh u60-fallback.sh \
          u60-ship.sh datad-trial.sh u60-recover.sh \
          zte-agent.init zwrt-datad.init u60-guard.init; do
   [ -f "$DEVUI_REPO/scripts/$f" ] || die "缺 $DEVUI_REPO/scripts/$f"

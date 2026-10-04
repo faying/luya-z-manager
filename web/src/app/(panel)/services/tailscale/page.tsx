@@ -108,6 +108,16 @@ export default function TailscalePage() {
   );
 }
 
+const KEY_WARN_DAYS = 14;
+
+/** Days until the node key expires (real time; tailscale's stamp is UTC). null = no expiry / unknown. */
+function keyDaysLeft(iso: string | null | undefined, now = Date.now()): number | null {
+  if (!iso) return null;
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return null;
+  return Math.floor((at - now) / 86400_000);
+}
+
 function stateOf(
   s: TailscaleStatus | undefined,
   error: boolean,
@@ -127,12 +137,15 @@ function stateOf(
     };
   else if (!s.running) r = { tone: "bad", state: t("ts.stStopped", "Stopped"), reason: t("ts.stoppedReason", "tailscaled isn't running on the device.") };
   else if (s.auth_url) r = { tone: "warn", state: t("ts.stAuthRequired", "Auth required"), reason: t("ts.authReason", "Open the login link below to connect this router.") };
-  else if (s.backend_state === "Running")
-    r = {
-      tone: "ok",
-      state: t("ts.stRunning", "Running"),
-      reason: t("ts.peersSummary", "{{total}} total · {{online}} online", { total: s.peer_count ?? "—", online: s.peer_online ?? "—" }),
-    };
+  else if (s.backend_state === "Running") {
+    const days = keyDaysLeft(s.self?.key_expiry);
+    const peers = t("ts.peersSummary", "{{total}} total · {{online}} online", { total: s.peer_count ?? "—", online: s.peer_online ?? "—" });
+    if (days != null && days < 0)
+      r = { tone: "bad", state: t("ts.keyExpired", "Key expired"), reason: t("ts.keyExpiredWhy", "Re-authenticate this router in the Tailscale admin console, or it stays off the tailnet.") };
+    else if (days != null && days < KEY_WARN_DAYS)
+      r = { tone: "warn", state: t("ts.keySoon", "Key expires in {{n}} days", { n: days }), reason: t("ts.keySoonWhy", "Renew it (or turn off key expiry for this node) in the Tailscale admin console before it lapses. {{peers}}", { peers }) };
+    else r = { tone: "ok", state: t("ts.stRunning", "Running"), reason: peers };
+  }
   else if (s.backend_state === "NeedsLogin") r = { tone: "warn", state: t("ts.stNeedsLogin", "Needs login") };
   else if (s.backend_state === "Stopped") r = { tone: "bad", state: t("ts.stStopped", "Stopped") };
   else r = { tone: "neutral", state: s.backend_state ?? t("ts.stUnknown", "Unknown") };
@@ -164,6 +177,27 @@ function NodeGroup({ s, stale }: { s: TailscaleStatus; stale: boolean }) {
           mono
         />
         <Row label={t("ts.version", "Version")} value={text(s.version)} mono />
+        {s.self?.primary_routes && (
+          <Row
+            label={t("ts.subnets", "Subnet routes")}
+            value={s.self.primary_routes.length ? s.self.primary_routes.join(", ") : t("ts.noSubnets", "None")}
+            mono={s.self.primary_routes.length > 0}
+          />
+        )}
+        {s.self && "key_expiry" in s.self && (
+          <Row
+            label={t("ts.keyExpiry", "Key expires")}
+            value={
+              s.self.key_expiry ? (
+                <StatusMark tone={keyTone(keyDaysLeft(s.self.key_expiry))}>
+                  {t("ts.keyOn", "{{date}} · {{n}} days left", { date: s.self.key_expiry.slice(0, 10), n: Math.max(0, keyDaysLeft(s.self.key_expiry) ?? 0) })}
+                </StatusMark>
+              ) : (
+                t("ts.keyNever", "Never (expiry off)")
+              )
+            }
+          />
+        )}
         <Row
           label={<>{t("ts.exitAvail", "Exit-node available")} <Help label={t("ts.exitAvail", "Exit-node available")} text={t("ts.helpExit", "Whether other devices can route their internet through this router.")} /></>}
           value={s.self ? (s.self.exit_node_option ? t("common.yes", "Yes") : t("common.no", "No")) : "—"}
@@ -171,6 +205,12 @@ function NodeGroup({ s, stale }: { s: TailscaleStatus; stale: boolean }) {
       </Group>
     </section>
   );
+}
+
+function keyTone(days: number | null): Tone {
+  if (days == null) return "neutral";
+  if (days < 0) return "bad";
+  return days < KEY_WARN_DAYS ? "warn" : "ok";
 }
 
 function MeshGroup({ s, stale }: { s: TailscaleStatus; stale: boolean }) {
@@ -181,6 +221,12 @@ function MeshGroup({ s, stale }: { s: TailscaleStatus; stale: boolean }) {
       <Group title={t("ts.mesh", "Mesh")} stale={stale}>
         <Row label={t("ts.peers", "Peers")} value={s.peer_count ?? "—"} />
         <Row label={t("ts.online", "Online")} value={s.peer_online ?? "—"} />
+        {s.peer_active != null && (
+          <Row
+            label={<>{t("ts.talking", "Talking now")} <Help label={t("ts.talking", "Talking now")} text={t("ts.helpDirect", "Direct = a peer-to-peer path; relay = through a Tailscale DERP server, slower. Behind strict NAT (some carriers abroad) relay is normal.")} /></>}
+            value={t("ts.directRelay", "{{n}} · {{direct}} direct · {{relay}} relay", { n: s.peer_active, direct: s.peer_direct ?? 0, relay: s.peer_active - (s.peer_direct ?? 0) })}
+          />
+        )}
       </Group>
       <Group title={t("ts.exitInUse", "Exit node in use")} stale={stale}>
         {ex ? (
@@ -235,6 +281,13 @@ function PeerRow({ p }: { p: TailscalePeer }) {
     </span>,
   );
   if (when) parts.push(<span key="hs">{t("ts.handshake", "handshake {{when}}", { when })}</span>);
+  if (p.active)
+    parts.push(
+      <span key="path" data-testid="ts-path">
+        {p.cur_addr ? t("ts.direct", "direct") : p.relay ? t("ts.viaRelay", "relay {{r}}", { r: p.relay }) : t("ts.relay", "relay")}
+      </span>,
+    );
+  if (p.primary_routes?.length) parts.push(<span key="routes" className="nd-mono">{p.primary_routes.join(", ")}</span>);
   return (
     <Row
       label={

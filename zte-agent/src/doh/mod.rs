@@ -128,14 +128,11 @@ impl DohProxy {
                 return;
             }
             // Re-create dnsmasq drop-in (lost on reboot since /tmp is tmpfs)
-            let _ = std::fs::write("/tmp/dnsmasq.d/doh.conf", "server=127.0.0.1#5353\nno-resolv\n");
-            let _ = std::process::Command::new("sh")
-                .args(["-c", "/etc/init.d/dnsmasq restart"])
-                .output();
+            crate::datad_write::with_source(crate::datad_write::Source::Auto, || crate::server::doh_apply(true));
         } else {
             // Only clean up if DoH was previously configured
             if std::path::Path::new("/data/local/tmp/doh_config.json").exists() {
-                crate::server::dnsmasq_restore_defaults();
+                crate::datad_write::with_source(crate::datad_write::Source::Auto, crate::server::dnsmasq_restore_defaults);
             }
         }
     }

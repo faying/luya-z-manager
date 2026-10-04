@@ -24,7 +24,7 @@
 //   reboot                 tier 3, waitDevice 90 s (expect the agent to go away)
 // Long jobs run inside the write op, so they keep polling while the tab is
 // hidden; they stop when the page is left.
-import { connectFamilies, connectKind } from "@/lib/connectState";
+import { connectFamilies, connectKind, dataSwitchOn } from "@/lib/connectState";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { errorText } from "@/lib/api/types";
@@ -103,7 +103,8 @@ export default function MobileNetworkPage() {
   const status = ms.data;
 
   const airplaneOn = status?.operate_mode !== undefined && status.operate_mode !== "ONLINE";
-  const dataOn = flag(data?.enable);
+  // enable reads 0 after boot while the data is up (T12): connect_status decides then
+  const dataOn = dataSwitchOn(data?.enable, data?.connect_status) === true;
   const roamOn = flag(data?.roam_enable);
   const connectStatus = data?.connect_status ?? "";
   const ck = connectKind(connectStatus);

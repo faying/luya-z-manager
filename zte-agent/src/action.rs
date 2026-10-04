@@ -78,7 +78,8 @@ pub fn body_bytes(body: &Option<Value>) -> Vec<u8> {
 
 /// Execute one action in-process. See the module comment for the locking and
 /// "200 != done" rules before calling this.
-pub fn exec(state: &AppState, method: &str, path: &str, body: &[u8]) -> Outcome {
+/// Device writes inside are attributed to `source` (datad_write).
+pub fn exec(state: &AppState, source: crate::datad_write::Source, method: &str, path: &str, body: &[u8]) -> Outcome {
     let parsed = match parse_method(method) {
         Some(m) => m,
         None => {
@@ -88,7 +89,7 @@ pub fn exec(state: &AppState, method: &str, path: &str, body: &[u8]) -> Outcome 
             }
         }
     };
-    let (status, resp) = crate::server::route(&parsed, path, state, body);
+    let (status, resp) = crate::datad_write::with_source(source, || crate::server::route(&parsed, path, state, body));
     let error = if status >= 400 {
         Some(
             resp.get("error")

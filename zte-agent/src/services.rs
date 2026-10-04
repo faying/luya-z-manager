@@ -105,12 +105,24 @@ pub fn tailscale_status(_state: &AppState) -> (u16, Value) {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let relay = self_node.get("Relay").and_then(Value::as_str);
+    // The node key's expiry (audit C, like the touch screen): "0001-…" or
+    // missing means expiry is disabled for this node.
+    let key_expiry = self_node
+        .get("KeyExpiry")
+        .and_then(Value::as_str)
+        .filter(|k| k.len() >= 10 && !k.starts_with("0001"));
+    // Subnet routes this node is the primary router for.
+    let primary_routes = self_node.get("PrimaryRoutes").cloned().unwrap_or_else(|| json!([]));
 
     // Peers — summarize counts and a small list (limit so payload stays small)
     let mut peer_count = 0usize;
     let mut peer_online = 0usize;
     let mut peers_summary: Vec<Value> = Vec::new();
     let mut exit_node: Option<Value> = None;
+    // Peers we're talking to right now, and how many of those go direct
+    // (CurAddr set = hole-punched; empty = through a DERP relay).
+    let mut peer_active = 0usize;
+    let mut peer_direct = 0usize;
 
     if let Some(peers) = parsed.get("Peer").and_then(Value::as_object) {
         for (_, peer) in peers.iter() {
@@ -121,6 +133,14 @@ pub fn tailscale_status(_state: &AppState) -> (u16, Value) {
                 .unwrap_or(false);
             if is_online {
                 peer_online += 1;
+            }
+            let active = peer.get("Active").and_then(Value::as_bool).unwrap_or(false);
+            let cur_addr = peer.get("CurAddr").and_then(Value::as_str).filter(|a| !a.is_empty());
+            if active {
+                peer_active += 1;
+                if cur_addr.is_some() {
+                    peer_direct += 1;
+                }
             }
 
             if peer
@@ -148,6 +168,10 @@ pub fn tailscale_status(_state: &AppState) -> (u16, Value) {
                     "tx_bytes": peer.get("TxBytes").and_then(Value::as_i64),
                     "last_seen": peer.get("LastSeen").and_then(Value::as_str),
                     "last_handshake": peer.get("LastHandshake").and_then(Value::as_str),
+                    "active": active,
+                    "cur_addr": cur_addr,
+                    "relay": peer.get("Relay").and_then(Value::as_str).filter(|r| !r.is_empty()),
+                    "primary_routes": peer.get("PrimaryRoutes").cloned().unwrap_or_else(|| json!([])),
                 }));
             }
         }
@@ -168,7 +192,11 @@ pub fn tailscale_status(_state: &AppState) -> (u16, Value) {
                 "online": online,
                 "relay": relay,
                 "exit_node_option": exit_node_option,
+                "key_expiry": key_expiry,
+                "primary_routes": primary_routes,
             },
+            "peer_active": peer_active,
+            "peer_direct": peer_direct,
             "exit_node": exit_node,
             "peer_count": peer_count,
             "peer_online": peer_online,

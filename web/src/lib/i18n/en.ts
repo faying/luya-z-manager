@@ -140,6 +140,7 @@ export const en = {
     bandlock: "Band Lock",
     celllock: "Cell Lock",
     signalDetect: "Signal Detect",
+    trends: "Last 5 Minutes",
     stc: "STC",
     at: "AT Terminal",
     speedtest: "Speed Test",
@@ -153,6 +154,7 @@ export const en = {
     config: "Config Tool",
     settings: "Settings",
     alerts: "Alerts",
+    changes: "Change log",
     health: "Health",
   },
   bottomTab: {

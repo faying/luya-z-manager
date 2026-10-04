@@ -62,6 +62,45 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** The LTE anchor of a 5G NSA connection (audit C: NR and LTE serving cells side by side). null outside NSA. */
+export interface LteAnchor {
+  band: string | null;
+  pci: number | null;
+  earfcn: number | null;
+  rsrp: number | null;
+  rsrq: number | null;
+  sinr: number | null;
+  rssi: number | null;
+}
+
+export function lteAnchor(sig: NetworkSignal | undefined): LteAnchor | null {
+  if (!sig || sig.network_type !== "NSA" || num(sig.lte_rsrp) == null) return null;
+  const band = String(sig.wan_active_band ?? "").replace(/^b/i, "");
+  return {
+    band: band && !/^n/i.test(band) ? band : null,
+    pci: num(sig.lte_pci),
+    earfcn: num(sig.wan_active_channel),
+    rsrp: num(sig.lte_rsrp),
+    rsrq: num(sig.lte_rsrq),
+    sinr: num(sig.lte_snr),
+    rssi: num(sig.lte_rssi),
+  };
+}
+
+/** RSSI of the serving cell: nr5g_rssi in 5G, lte_rssi in 4G, else the summary `rssi`. */
+export function servingRssi(sig: NetworkSignal | undefined, kind: "nr" | "lte" | undefined): number | null {
+  if (!sig) return null;
+  return (kind === "nr" ? num(sig.nr5g_rssi) : kind === "lte" ? num(sig.lte_rssi) : null) ?? num(sig.rssi);
+}
+
+/** "466-92" from rmcc / rmnc (numbers on B27, so the MNC's leading zero is put back). */
+export function plmn(sig: NetworkSignal | undefined): string | null {
+  const mcc = sig?.rmcc != null ? String(sig.rmcc).trim() : "";
+  const mnc = sig?.rmnc != null ? String(sig.rmnc).trim() : "";
+  if (!/^\d{3}$/.test(mcc) || !/^\d{1,3}$/.test(mnc) || mcc === "000") return null;
+  return `${mcc}-${mnc.padStart(2, "0")}`;
+}
+
 /**
  * Serving cell first (its live signal is only in nr5g_*), then every nrca
  * and lteca entry as-is — the serving band may appear again as an inactive

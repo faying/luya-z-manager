@@ -89,7 +89,7 @@ pub fn public_status(state: &AppState) -> (u16, Value) {
     let msim = if NO_MSIM.load(Ordering::Relaxed) {
         json!({})
     } else {
-        ubus::call("zte_nwinfo_api", "nwinfo_get_msim_netinfo", Some("{}")).unwrap_or_else(|e| {
+        ubus::read("zte_nwinfo_api", "nwinfo_get_msim_netinfo", Some("{}")).unwrap_or_else(|e| {
             if e.contains("Method not found") {
                 NO_MSIM.store(true, Ordering::Relaxed);
             }
@@ -101,7 +101,7 @@ pub fn public_status(state: &AppState) -> (u16, Value) {
     // 取信号最好的一路展示；bar 相同时比 rsrp（负值，越大越好）。
     let best = links.iter().filter(|l| l.bar > 0).max_by_key(|l| (l.bar, l.rsrp));
 
-    let net = ubus::call("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}")).unwrap_or(json!({}));
+    let net = ubus::read("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}")).unwrap_or(json!({}));
     let (nettype, operator, bar, rsrp) = match best {
         Some(l) => (l.nettype.clone(), l.operator.clone(), l.bar, l.rsrp),
         None => {
@@ -120,9 +120,7 @@ pub fn public_status(state: &AppState) -> (u16, Value) {
             (t, o, b, r)
         }
     };
-    let wwan = ubus::call(
-        "zwrt_data",
-        "get_wwaniface",
+    let wwan = ubus::read("zwrt_data", "get_wwaniface",
         Some(r#"{"source_module":"zte_topsw_data","cid":1}"#),
     )
     .unwrap_or(json!({}));
@@ -130,7 +128,7 @@ pub fn public_status(state: &AppState) -> (u16, Value) {
     let connected = connect_status.contains("connected") || online_links > 0;
 
     // ── Wi-Fi ──
-    let wlan = ubus::call("zwrt_wlan", "report", Some("{}")).unwrap_or(json!({}));
+    let wlan = ubus::read("zwrt_wlan", "report", Some("{}")).unwrap_or(json!({}));
     let wifi_on = s(&wlan, "wifi_onoff") == "1";
     let ssid = {
         let a = s(&wlan, "main2g_ssid");
@@ -192,7 +190,7 @@ pub fn public_status(state: &AppState) -> (u16, Value) {
     };
 
     // ── SMS (unread count, device + SIM storage) ──
-    let cap = ubus::call("zwrt_wms", "zwrt_wms_get_wms_capacity", Some("{}")).unwrap_or(json!({}));
+    let cap = ubus::read("zwrt_wms", "zwrt_wms_get_wms_capacity", Some("{}")).unwrap_or(json!({}));
     let unread_i = |k: &str| -> i64 {
         cap.get(k)
             .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))

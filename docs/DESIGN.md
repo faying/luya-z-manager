@@ -110,16 +110,21 @@ C + LVGL 9.5，320×480，FreeType 渲染 CJK。继承第 2 节状态语义（�
 | 2 | （触屏：datad 掉线） | 读不到数据 | No update | 中性，数值调灰保留 |
 | 3 | nosim | 无 SIM | No SIM | bad |
 | 4 | airplane | 移动网络已关 | Airplane | 中性 |
-| 5 | sos | 只能紧急呼叫 | SOS only | bad |
-| 6 | nosvc | 无服务 | No service | bad |
-| 7 | nodata | 没连上网 | Offline | bad |
-| 8 | stall | 连上了但不通 | No traffic | bad |
-| 9 | limit / weak / noise / crowd | 慢：限速 / 信号弱 / 干扰大 / 疑似拥挤 | Slow | warn |
-| 10 | only2g / only3g | 只有 2G / 只有 3G | 2G only / 3G only | warn |
-| 11 | narrow | 慢：载波窄 | Slow | warn |
-| 12 | ok | 顺畅 | All good | ok |
+| 5 | changing | 正在换制式 / 正在确认 / 正在退回 | Switching / Checking / Reverting | 中性 |
+| 6 | revert_fail | 退回也没通 | Failed | bad |
+| 7 | sos | 只能紧急呼叫 | SOS only | bad |
+| 8 | nosvc | 无服务 | No service | bad |
+| 9 | nodata | 没连上网 | Offline | bad |
+| 10 | stall | 连上了但不通 | No traffic | bad |
+| 11 | hot | 慢：过热限速 | Slow | warn |
+| 12 | limit / weak / noise / crowd | 慢：限速 / 信号弱 / 干扰大 / 疑似拥挤 | Slow | warn |
+| 13 | only2g / only3g | 只有 2G / 只有 3G | 2G only / 3G only | warn |
+| 14 | narrow | 慢：载波窄 | Slow | warn |
+| 15 | ok | 顺畅 | All good | ok |
 
-英文「慢」只写 Slow，原因交给右栏（信号、Noise、Load）和提示行。stall = 已拨号、30 秒里 `rmnet_data0` 发了 ≥ 20 个包却一个没收到（datad 采样循环记窗口，`docs/designs/slow-diagnosis.md` §4.1）。漫游不单独当结论，提示行末尾加「；漫游中 / ; roaming」。
+changing、revert_fail 是写操作叠上去的（E4，datad `screen.rs` `with_op()`，只在 `/v2/screen` 的 `net.home` 里出现；`net.story` 永远只是网络结论）：换制式时常先经过无服务，所以排在无服务前，免得一路红色；无 SIM、移动网络已关时不叠。提示行写倒计时那句（「1:42 后没通就退回到自动」）或退回失败的现值与上次确认值。其他常驻结果不占大字，只在提示行末尾加一句。
+
+英文「慢」只写 Slow，原因交给右栏（信号、Noise、Load）和提示行。hot = 固件自己标了过热限速（uci `zwrt_zte_mc_tmp.cpe.hightemp_datalimit_status` 非 0，datad `/state` 的 `thermal.hightemp_limit`），是事实不是推断，所以排在限速和信号判断前；读不到当没有。stall = 已拨号、30 秒里 `rmnet_data0` 发了 ≥ 20 个包却一个没收到（datad 采样循环记窗口，`docs/designs/slow-diagnosis.md` §4.1）。漫游不单独当结论，提示行末尾加「；漫游中 / ; roaming」。
 
 **英文长度预算**（Nunito 实际字号；datad、agent 测试按字符近似卡，触屏 render 查文字不出父容器和屏幕、兄弟控件不重叠）：
 
@@ -167,6 +172,14 @@ C + LVGL 9.5，320×480，FreeType 渲染 CJK。继承第 2 节状态语义（�
 - **被拒**的原因写在这张卡片里，不只写在页顶。
 
 **没有数据源的功能写明缺什么**：邻小区 / MIMO / BLER 本机拿不到（没有 `/modem/latest-signals`），页面写原因，不画空壳。
+
+**事务（写操作层，E4，设计 `docs/designs/write-op-layer.md` DD3、DD5、DD9、DD12、DD13、DD16）**：凡经 datad 的写（现在是网络模式），文字全部由 datad 随 `op` 块发（`say/next/note/what/source/old/target`，各带 `_zh/_en`），触屏只排版；词表在 `docs/ui-glossary.md` §13。
+- 首页和对应设置页（蜂窝 › 网络模式）用现有状态块显示，不另叠进度卡；其他标签和二级页在标题栏下放一行**事务行**「正在换制式 · 1:42 ›」（整行 ≥40 高），点了开**事务页**。
+- 事务页五层：结论 → 「旧 → 新 · 来源 时间」→ 三行进度（设置已生效 / 已注册 / 数据，✓ 或 …）→ 倒计时（「1:42 后没通就退回到 X」；自动退回没开时「还剩 0:48 · 自动退回没开」）→ 按钮。datad 推送 20 秒没更新：倒计时调灰写「停在 1:42 · 等设备响应」，不再跳。
+- 按钮写具体值：「退回 X」主按钮在左，「保留 Y」次按钮在右；都两段确认，同一时刻只有一个待确认，待确认是 fillOrange 加一句后果。到点以设备为准，待确认作废；退回进行中只显示进度、没有按钮。
+- 结束后事务行变成结果行（「▲ 没通 · 已退回自动 ›」），3 秒类（已切到、已退回、不需要确认）只在亲眼看到它结束时显示；常驻类留到点「知道了」（经 datad 只记账，触屏和网页一起收起）。退回也没通（DD9）红色占状态块，写现值和上次确认值，按钮「再试一次退回到 X」「重启设备」。
+- 系统 › 改动记录：一条两行（「制式 · 自动 → 只用 4G」/「10-03 14:32 · 网页 · 已切到只用 4G」），点开详情，撤销/重做在详情里；不能撤的变灰写原因。
+- 数据服务卡住（20 秒不动）：经 datad 的写控件提前变灰并写「数据服务没响应 · 暂时不能改设置」。忙（别的写在跑）不提前变灰，点了写 datad 回的那句。
 
 **回归测试**：`make render-test`（touch-ui）在容器里按 11 种场景 × 深浅离屏渲染每一页，和黄金图逐字节比对，并断言 `tests/render/expect.txt` 里的每个文字都还在（控件清单）。改页面必须跑它；故意改样式时 `make render-golden` 重录，改文案时同一个提交里改 expect.txt。
 
@@ -219,6 +232,11 @@ C + LVGL 9.5，320×480，FreeType 渲染 CJK。继承第 2 节状态语义（�
 - 导航：<640 底部四个标签（首页 / 图表 / 功能 / 系统），640–1023 左侧图标栏，≥1024 240px 侧栏带分组；⌘K 搜索全部页面（中文、拼音、别名）。路由表是 `web/src/lib/routes.ts` 唯一一处。
 - 每页顺序：标题 → 状态块（状态 · 原因 · 下一步 · 新鲜度）→ 可改的东西 → 明细。设置页限宽 720，看数页可两栏。
 - 写操作三档（`useWriteOp`）：第一档直接发；第二档页面内确认（写明后果）；第三档弹窗（发生什么 / 断开多久 / 怎么恢复，远程访问时加 Tailscale 警告，恢复出厂要输入「恢复出厂」）。每个写操作之后读回验证，读不回就写「设备已接受」而不是「成功」；多步写逐步显示，失败只重发没完成的步骤。档位清单见 `web/docs/controls-inventory.md`。
+- **事务**（E4，设计 `docs/designs/write-op-layer.md` DD4、DD5、DD8、DD15）：经 datad 的写（现在是网络模式）不再自己读回，交给设备确认；文字照 datad 的 `op` 块显示，词表在 `docs/ui-glossary.md` §13。
+  - Shell 横条（`OpBanner`，沿用告警条样式，`role=status`，退回失败 `role=alert`）：每页都有，进行中「正在确认 · 1:42」，≥640 加「制式 · 旧 → 新 · 来源」；点「详情 ›」去对应页，在对应页上不显示。倒计时 `aria-hidden`，只在阶段变化时念。
+  - 对应页的状态块换成 `OpStatus`：同触屏五层，按钮「退回 X」「保留 Y」是第二档页内确认；手机上竖排、占满宽、≥44px。
+  - 系统 › 设备 › 改动记录（`/changes`）：同触屏的两行；详情里撤销，会断蜂窝的（网络模式）第三档，其他第二档；每次发新的 `op_id`，绝不重发。设置页底部「上次改动 14:32 · 触屏 ›」链到那条（`LastChange`，现在只有网络模式）。
+  - 数据服务卡住：横条写「数据服务没响应」，经 datad 的写变灰；改动进行中网页断线：横条写「和设备断开了 · 操作结果未知」，不自动重发，连回来照常显示结果。旧 datad（`/api/ops` 的 `supported:false`）：没有横条和改动记录，写操作照旧读回。
 - 数据停更时保留旧值、变灰、写「N 分钟前」，不清空成 0。
 - 图标用 Phosphor：选中和磁贴实心，其余粗线。
 

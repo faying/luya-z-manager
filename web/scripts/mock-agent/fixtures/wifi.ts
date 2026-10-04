@@ -535,7 +535,22 @@ function homeModeLog(): HomeModeLog {
 
 // ── routes ──────────────────────────────────────────────────────────────────
 
+// wifi.rs power_save_* / nfc_* (audit C, 10-04): both start off.
+let psmOn = false;
+let nfcOn = false;
+function onOff(ctx: Ctx, set: (on: boolean) => void): Reply {
+  if (ctx.has("cmdfail")) return fail("mock failure", 500);
+  const v = bodyField(ctx.body, "enabled");
+  if (typeof v !== "boolean") return fail("enabled must be true or false", 400);
+  set(v);
+  return ok({});
+}
+
 export const routes: Route[] = [
+  { method: "GET", path: "/api/wifi/power-save", handler: () => ok({ enabled: psmOn, live: psmOn, saved: psmOn }) },
+  { method: "PUT", path: "/api/wifi/power-save", handler: (ctx) => onOff(ctx, (on) => (psmOn = on)) },
+  { method: "GET", path: "/api/nfc", handler: () => ok({ supported: true, enabled: nfcOn }) },
+  { method: "PUT", path: "/api/nfc", handler: (ctx) => onOff(ctx, (on) => (nfcOn = on)) },
   { method: "GET", path: "/api/wifi/status", handler: () => ok(wifiStatus()) },
   { method: "PUT", path: "/api/wifi/settings", handler: wifiSet },
   { method: "GET", path: "/api/wifi/radio", handler: () => ok(observe()) },

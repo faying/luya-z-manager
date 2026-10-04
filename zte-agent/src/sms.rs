@@ -33,14 +33,14 @@ pub fn sms_list(_state: &AppState, body: &[u8]) -> (u16, Value) {
     obj.entry("order_by").or_insert(json!("order by id desc"));
     obj.remove("store"); // legacy/no-op key some callers send
 
-    match ubus::call("zwrt_wms", "zte_libwms_get_sms_data", Some(&Value::Object(obj).to_string())) {
+    match ubus::read("zwrt_wms", "zte_libwms_get_sms_data", Some(&Value::Object(obj).to_string())) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
 }
 
 pub fn sms_capacity(_state: &AppState) -> (u16, Value) {
-    match ubus::call("zwrt_wms", "zwrt_wms_get_wms_capacity", Some("{}")) {
+    match ubus::read("zwrt_wms", "zwrt_wms_get_wms_capacity", Some("{}")) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
@@ -51,7 +51,7 @@ pub fn sms_send(_state: &AppState, body: &[u8]) -> (u16, Value) {
         Ok(v) => v,
         Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
     };
-    match ubus::call("zwrt_wms", "zte_libwms_send_sms", Some(&parsed.to_string())) {
+    match crate::datad_write::vendor("zwrt_wms", "zte_libwms_send_sms", Some(&parsed.to_string())) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
@@ -77,7 +77,8 @@ pub fn sms_delete(_state: &AppState, body: &[u8]) -> (u16, Value) {
         Err(e) => return (400, json!({"ok": false, "error": e})),
     };
 
-    let ubus_result = ubus::call("zwrt_wms", "zwrt_wms_delete_sms", Some(&parsed.to_string()));
+    let joined: String = ids.iter().map(|i| format!("{i};")).collect();
+    let ubus_result = crate::datad_write::send("sms.delete", &json!({"ids": joined})).into_result();
 
     let survivors = match db_filter_existing(&ids) {
         Ok(v) => v,
@@ -154,25 +155,14 @@ fn db_filter_existing(ids: &[i64]) -> Result<Vec<i64>, String> {
     Ok(out)
 }
 
-/// Direct DELETE bypassing the broken ubus path.
+/// Direct DELETE bypassing the broken ubus path: datad runs it on the vendor
+/// DB (`sms.db_delete`, fixed SQL; write-op-layer.md T7c).
 fn db_delete_ids(ids: &[i64]) -> Result<(), String> {
     if ids.is_empty() {
         return Ok(());
     }
-    let in_clause = ids
-        .iter()
-        .map(|n| n.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-    let sql = format!("DELETE FROM sms WHERE id IN ({in_clause});");
-    let output = Command::new("/usr/bin/sqlite3")
-        .args(["-cmd", ".timeout 2000", SMS_DB_PATH, &sql])
-        .output()
-        .map_err(|e| format!("spawn sqlite3: {e}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    Ok(())
+    let joined: String = ids.iter().map(|i| format!("{i};")).collect();
+    crate::datad_write::send("sms.db_delete", &json!({"ids": joined})).into_result().map(|_| ())
 }
 
 pub fn sms_mark_read(_state: &AppState, body: &[u8]) -> (u16, Value) {
@@ -180,8 +170,17 @@ pub fn sms_mark_read(_state: &AppState, body: &[u8]) -> (u16, Value) {
         Ok(v) => v,
         Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
     };
-    match ubus::call("zwrt_wms", "zwrt_wms_modify_tag", Some(&parsed.to_string())) {
-        Ok(data) => (200, json!({"ok": true, "data": data})),
-        Err(e) => (503, json!({"ok": false, "error": e})),
+    let ids = match &parsed["id"] {
+        Value::String(s) if !s.is_empty() => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => return (400, json!({"ok": false, "error": "missing 'id'"})),
+    };
+    let mut p = json!({"ids": ids});
+    match &parsed["tag"] {
+        Value::Null => {}
+        Value::Number(n) if n.as_i64().is_some() => p["tag"] = json!(n.as_i64()),
+        Value::String(s) if s.parse::<i64>().is_ok() => p["tag"] = json!(s.parse::<i64>().unwrap()),
+        _ => return (400, json!({"ok": false, "error": "tag must be a number"})),
     }
+    crate::datad_write::send("sms.mark_read", &p).into_http()
 }

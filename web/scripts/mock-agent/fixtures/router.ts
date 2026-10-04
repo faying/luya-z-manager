@@ -14,7 +14,7 @@
 // the agent never inspects the ubus result, inventory marks these 否·透传).
 
 import type { Ctx, Reply, Route } from "../lib.ts";
-import { clone, fail, methodNotFound, ok } from "../lib.ts";
+import { bodyField, clone, fail, methodNotFound, ok } from "../lib.ts";
 import { shared } from "../shared.ts";
 import type {
   DohCacheEntry,
@@ -413,6 +413,36 @@ const manualApns: ApnRec[] = [
 let nextCid = 3;
 let nextProfileId = 102;
 
+/**
+ * Scenario apn-candidates (owner's device 2026-10-03): the carrier list has
+ * ctiot (IoT, dialled first) and ctnet. Picking one for this SIM (POST
+ * /api/netinfo/apn, apn_pick.rs) switches to manual, dialling that APN.
+ */
+const candApns: ApnRec[] = [
+  { cid: 0, profileId: "auto109590", profilename: "China Telecom", wanapn: "ctiot", username: "", password: "", pdp: 3, roamingPdp: 2, auth: 0, isEnable: true, isValid: 0 },
+  { cid: 0, profileId: "auto109600", profilename: "China Telecom 4G", wanapn: "ctnet", username: "", password: "", pdp: 3, roamingPdp: 2, auth: 0, isEnable: false, isValid: 0 },
+];
+let candPicked: ApnRec | null = null;
+
+/** The `apn` block of /api/netinfo for scenario apn-candidates (null otherwise). */
+export function candidateApnBlock(ctx: Ctx): unknown {
+  if (!ctx.has("apn-candidates")) {
+    candPicked = null;
+    return null;
+  }
+  const dial = candPicked ?? candApns[0];
+  return {
+    mode: candPicked ? "manual" : "auto",
+    switching: false,
+    switch_error: "",
+    picked_id: candPicked ? "manu9" : null,
+    notice: null,
+    in_use: { id: candPicked ? "manu9" : dial.profileId, name: dial.profilename, apn: dial.wanapn, pdp: 3, iot: dial.wanapn === "ctiot" },
+    auto: candApns.map((p) => ({ id: p.profileId, name: p.profilename, apn: p.wanapn, pdp: 3, iot: p.wanapn === "ctiot", in_use: !candPicked && p === dial })),
+    manual: [],
+  };
+}
+
 /** The profile the data call dials with (what `get_apn_at_cid {cid:1}` reports). */
 function dialingApn(): ApnRec {
   if (apnMode.apn_mode === 1) {
@@ -688,9 +718,22 @@ export const routes: Route[] = [
   {
     method: "GET", path: "/api/router/apn/auto-profiles",
     handler: (ctx) => {
+      if (ctx.has("apn-candidates")) return ok({ apnListArray: candApns.map((p) => renderApn(p, !candPicked && p === candApns[0], true)) });
       const dial = dialingApn();
       const list: RouterApnList = { apnListArray: autoApns.map((p) => renderApn(p, p === dial, ctx.has("firmware-b27"))) };
       return ok(list);
+    },
+  },
+  {
+    // netinfo.rs apn_use: 202 and switch in the background. Only the
+    // apn-candidates scenario models the candidate pick.
+    method: "POST", path: "/api/netinfo/apn",
+    handler: (ctx) => {
+      const id = String(bodyField(ctx.body, "id") ?? "");
+      const c = candApns.find((p) => p.profileId === id);
+      if (ctx.has("apn-candidates") && c) candPicked = c;
+      else if (ctx.has("apn-candidates") && id === "auto") candPicked = null;
+      return { status: 202, data: { switching: true } };
     },
   },
   {

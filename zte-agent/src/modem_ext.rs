@@ -4,7 +4,7 @@ use crate::handlers::AppState;
 use crate::ubus;
 
 pub fn modem_data_get(_state: &AppState) -> (u16, Value) {
-    match ubus::call("zwrt_data", "get_wwaniface", Some(r#"{"cid":1}"#)) {
+    match ubus::read("zwrt_data", "get_wwaniface", Some(r#"{"cid":1}"#)) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
@@ -18,32 +18,62 @@ pub fn modem_data_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
     let Value::Object(asked) = &parsed else {
         return (400, json!({"ok": false, "error": "body must be an object"}));
     };
-    // Change only what the request names: the rest comes from the modem now,
-    // not from a page's copy that may be seconds old (the touch screen may
-    // have switched roaming meanwhile). Same merge as datad's cellular.set,
-    // which also keeps the PDP settings the firmware stores in this object.
-    let body = match ubus::call("zwrt_data", "get_wwaniface", Some(r#"{"source_module":"web","cid":1,"connect_status":""}"#)) {
-        Ok(Value::Object(mut now)) => {
-            now.extend(asked.clone());
-            now.insert("source_module".into(), json!("WEBUI"));
-            now.insert("cid".into(), json!(1));
-            Value::Object(now)
-        }
-        _ => parsed.clone(),
+    // datad's cellular.set changes only what is named (it reads the rest from
+    // the modem first, which also keeps the PDP settings stored in this
+    // object). `cid` must be 1; `connect_status` (the page sends
+    // "disconnected" with data off) is left to the modem.
+    let params = match cellular_params(asked) {
+        Ok(p) => p,
+        Err(e) => return (400, json!({"ok": false, "error": e})),
     };
-    match ubus::call("zwrt_data", "set_wwaniface", Some(&body.to_string())) {
-        Ok(data) => (200, json!({"ok": true, "data": data})),
-        Err(e) => {
+    match crate::datad_write::send("cellular.set", &params) {
+        crate::datad_write::Reply::Failed { error, op } => {
             // B27 answers "Unknown error" while it re-dials (seen 2026-09-25
             // turning roaming on after an eSIM switch) yet keeps the setting.
             // Read back before calling it a failure.
             std::thread::sleep(std::time::Duration::from_millis(800));
-            match ubus::call("zwrt_data", "get_wwaniface", Some(r#"{"cid":1}"#)) {
+            match ubus::read("zwrt_data", "get_wwaniface", Some(r#"{"cid":1}"#)) {
                 Ok(now) if applied(&parsed, &now) => (200, json!({"ok": true, "data": now})),
-                _ => (503, json!({"ok": false, "error": e})),
+                _ => crate::datad_write::Reply::Failed { error, op }.into_http(),
             }
         }
+        r => r.into_http(),
     }
+}
+
+/// The web body (`enable` / `roam_enable` / `connect_mode`, `cid` 1,
+/// `connect_status`) → datad `cellular.set` params.
+fn cellular_params(asked: &serde_json::Map<String, Value>) -> Result<Value, String> {
+    let mut p = serde_json::Map::new();
+    for (k, v) in asked {
+        match k.as_str() {
+            "enable" | "roam_enable" => {
+                let on = match v {
+                    Value::Bool(b) => *b,
+                    Value::Number(n) if n.as_i64() == Some(0) || n.as_i64() == Some(1) => n.as_i64() == Some(1),
+                    _ => return Err(format!("{k} must be 0 or 1")),
+                };
+                // datad maps these as integers (control.rs `mapped`)
+                p.insert(if k == "enable" { "enabled" } else { "roaming" }.into(), json!(on as u8));
+            }
+            "connect_mode" => {
+                let m = match v {
+                    Value::Number(n) if n.as_u64().is_some() => n.to_string(),
+                    Value::String(s) if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) => s.clone(),
+                    _ => return Err("connect_mode must be a number".into()),
+                };
+                p.insert("connect_mode".into(), json!(m));
+            }
+            "cid" if v.as_i64() == Some(1) => {}
+            "cid" => return Err("only cid 1".into()),
+            "connect_status" => {}
+            _ => return Err(format!("unknown field {k}")),
+        }
+    }
+    if p.is_empty() {
+        return Err("nothing to change: enable, roam_enable or connect_mode".into());
+    }
+    Ok(Value::Object(p))
 }
 
 /// Every switch the request set (enable / roam_enable / connect_mode) now reads back the same.
@@ -62,10 +92,10 @@ pub fn modem_airplane(state: &AppState, body: &[u8]) -> (u16, Value) {
     if parsed["operate_mode"].as_str() == Some("ONLINE") {
         return crate::handlers::modem_online(state);
     }
-    match ubus::call("zte_nwinfo_api", "nwinfo_set_mode", Some(&parsed.to_string())) {
-        Ok(data) => (200, json!({"ok": true, "data": data})),
-        Err(e) => (503, json!({"ok": false, "error": e})),
-    }
+    let Some(mode) = parsed["operate_mode"].as_str() else {
+        return (400, json!({"ok": false, "error": "missing operate_mode"}));
+    };
+    crate::datad_write::send("modem.airplane", &json!({"operate_mode": mode})).into_http()
 }
 
 /// `net_select` values the firmware knows (strings of B27's
@@ -87,29 +117,25 @@ pub fn modem_network_mode_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
     if !NET_SELECT_VALUES.contains(&v) {
         return (400, json!({"ok": false, "error": format!("net_select must be one of {}", NET_SELECT_VALUES.join(", "))}));
     }
-    let parsed = json!({ "net_select": v });
-    match ubus::call("zte_nwinfo_api", "nwinfo_set_netselect", Some(&parsed.to_string())) {
-        Ok(data) => (200, json!({"ok": true, "data": data})),
-        Err(e) => (503, json!({"ok": false, "error": e})),
-    }
+    crate::datad_write::send("network.set_mode", &json!({ "mode": v })).into_http()
 }
 
 pub fn modem_scan_status(_state: &AppState) -> (u16, Value) {
-    match ubus::call("zte_nwinfo_api", "nwinfo_m_netselect_status", Some("{}")) {
+    match ubus::read("zte_nwinfo_api", "nwinfo_m_netselect_status", Some("{}")) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
 }
 
 pub fn modem_scan_results(_state: &AppState) -> (u16, Value) {
-    match ubus::call("zte_nwinfo_api", "nwinfo_m_netselect_contents", Some("{}")) {
+    match ubus::read("zte_nwinfo_api", "nwinfo_m_netselect_contents", Some("{}")) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
 }
 
 pub fn modem_register_result(_state: &AppState) -> (u16, Value) {
-    match ubus::call("zte_nwinfo_api", "nwinfo_m_netselect_result", Some("{}")) {
+    match ubus::read("zte_nwinfo_api", "nwinfo_m_netselect_result", Some("{}")) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
@@ -126,5 +152,25 @@ mod tests {
         assert!(applied(&json!({"cid": 1, "roam_enable": 1}), &now));
         assert!(!applied(&json!({"cid": 1, "roam_enable": 0}), &now));
         assert!(!applied(&json!({"cid": 1}), &now));
+    }
+}
+
+#[cfg(test)]
+mod cellular_tests {
+    use super::*;
+
+    fn p(v: Value) -> Result<Value, String> {
+        cellular_params(v.as_object().unwrap())
+    }
+
+    #[test]
+    fn web_body_to_datad() {
+        assert_eq!(p(json!({"cid":1,"enable":0,"connect_status":"disconnected"})), Ok(json!({"enabled":0})));
+        assert_eq!(p(json!({"cid":1,"roam_enable":1})), Ok(json!({"roaming":1})));
+        assert_eq!(p(json!({"connect_mode":1})), Ok(json!({"connect_mode":"1"})));
+        assert_eq!(p(json!({"enable":true,"roam_enable":false})), Ok(json!({"enabled":1,"roaming":0})));
+        for bad in [json!({"cid":1}), json!({"enable":2}), json!({"cid":2,"enable":1}), json!({"apn":"x"}), json!({"connect_mode":"a"})] {
+            assert!(p(bad.clone()).is_err(), "{bad}");
+        }
     }
 }

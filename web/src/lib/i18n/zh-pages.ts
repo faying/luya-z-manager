@@ -7,6 +7,7 @@ export const zhPages: Record<string, Record<string, string>> = {
     "confirmEnable": "启用 ADB 调试 USB 模式？\n\n这将通过 USB 暴露 ADB，允许对设备进行完整的 shell 访问。仅在你拥有物理访问权限并信任所处环境时才执行此操作。",
     "cardTitle": "启用 ADB 调试 USB 模式",
     "cardDesc": "将 USB 端口切换到 ADB 调试模式，通过 USB 暴露完整的 shell。",
+    "unsupported": "这版固件不能开 ADB 调试模式",
     "warning": "这会通过 USB 暴露 ADB。任何能够物理接触 USB 端口的人都将获得 root shell 访问权限。不使用时请禁用。",
     "successPrefix": "ADB 调试模式已启用。通过 USB 连接并运行",
     "reEnable": "重新启用 ADB"
@@ -624,6 +625,7 @@ export const zhPages: Record<string, Record<string, string>> = {
     "powerbankOff": "充电宝已关闭",
     "usbMode": "USB 模式",
     "usbModeHint": "选择 USB 连接模式。更改模式将重新连接 USB 接口。",
+    "modeUnsupported": "这版固件不能改 USB 模式",
     "powerbankEnabled": "充电宝模式已启用",
     "powerbankDisabled": "充电宝模式已禁用",
     "confirmChangeMode": "将 USB 模式更改为“{{mode}}”？这将断开当前会话。",

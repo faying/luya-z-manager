@@ -9,6 +9,7 @@
 // `ubus call system info` and never carries them (schemas/device.ts). They now
 // come from GET /api/device (handlers.rs `device`: /proc/sys/kernel/hostname
 // and /proc/version), which the agent builds itself.
+import type { CellExtra } from "@/lib/api/schemas/modem";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/lib/hooks/useApi";
@@ -77,6 +78,8 @@ export default function DeviceInfoPage() {
   const lan = useApi<NetifdStatus>("/api/network/lan-status", once);
   const sys = useApi<DeviceSystem>("/api/device/system", once);
   const dev = useApi<AgentDevice>("/api/device", once);
+  // the SIM's own number (audit C), from datad; 404 on older agents → no row
+  const extra = useApi<CellExtra>("/api/cell/extra", once);
 
   // Firmware SIM state words (value set unconfirmed); unknown ones show as-is.
   function simWord(v?: string): string | undefined {
@@ -115,6 +118,13 @@ export default function DeviceInfoPage() {
               <Row label="IMEI" value={cell(imei, imei.data?.imei)} mono />
               <Row label="IMSI" value={cell(sim, sim.data?.sim_imsi)} mono />
               <Row label="ICCID" value={cell(sim, sim.data?.sim_iccid)} mono />
+              {extra.data && (
+                <Row
+                  label={t("devinfo.msisdn", "Phone number")}
+                  value={extra.data.msisdn ?? t("devinfo.msisdnNone", "Not on the SIM")}
+                  mono={!!extra.data.msisdn}
+                />
+              )}
               <Row label={t("devinfo.simState", "SIM State")} value={cell(sim, simWord(sim.data?.sim_states))} />
               <Row
                 label={t("devinfo.operator", "Operator")}

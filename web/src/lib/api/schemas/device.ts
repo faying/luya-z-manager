@@ -194,6 +194,8 @@ export interface UsbStatus {
   typec_cc?: string;
   /** USB-to-RJ45 adapter present. */ // unconfirmed
   usb2rj45?: number;
+  /** false: the firmware has no USB mode setter (B31 dropped `zwrt_bsp.usb set`); absent: not checked. */
+  mode_settable?: boolean;
   [key: string]: unknown;
 }
 

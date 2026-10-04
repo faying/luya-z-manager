@@ -227,8 +227,7 @@ fn scan_until_results(attempts: u32, delay: Duration) -> Option<String> {
 
 /// Write wifi0's disabled flag and commit. The caller reloads.
 fn set_radio_2g(_lk: &crate::wifi_radio::WifiLock, disabled: bool) {
-    let _ = ubus::uci_set_no_commit(RADIO_2G, if disabled { "1" } else { "0" });
-    let _ = ubus::uci_commit("wireless");
+    let _ = crate::datad_write::send("wifi.apply", &serde_json::json!({"set": {RADIO_2G: if disabled { "1" } else { "0" }}, "reload": false}));
 }
 
 // GET /api/homemode/scan — nearby SSIDs to pick from, strongest signal first.

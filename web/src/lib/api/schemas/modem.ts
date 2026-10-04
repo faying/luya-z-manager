@@ -21,6 +21,19 @@
  * mobile-network page: airplane mode is "on" when operate_mode !== "ONLINE"
  * (and not undefined) — so `null` would read as airplane ON.
  */
+/**
+ * GET /api/cell/extra — cell.rs cell_extra_get (audit C, 10-04): from datad's
+ * `qos` and `sim` blocks. AMBR is the session AMBR in Mbps; msisdn is null
+ * when the SIM doesn't carry its number (common). 404 on older agents.
+ */
+export interface CellExtra {
+  qci: number | null;
+  ambr_dl_mbps: number | null;
+  ambr_ul_mbps: number | null;
+  msisdn: string | null;
+  source: "feed" | "state";
+}
+
 export interface ModemStatus {
   /** "ONLINE" | "LPM" (low-power / airplane) | other firmware modes (e.g. "OFFLINE"). */
   operate_mode: string;
@@ -246,6 +259,7 @@ export interface ModemGetMap {
   "/api/modem/scan/status": ModemScanStatus;
   "/api/modem/scan/results": ModemScanResults;
   "/api/modem/register/result": ModemRegisterResult;
+  "/api/cell/extra": CellExtra;
   "/api/cell/neighbors/nr": CellNeighborsNr;
   "/api/cell/neighbors/lte": CellNeighborsLte;
   "/api/cell/stc/params": CellStcParams;

@@ -124,7 +124,7 @@ pub fn memory(_state: &AppState) -> (u16, Value) {
 
 /// GET /api/network/signal
 pub fn network_signal(_state: &AppState) -> (u16, Value) {
-    match ubus::call("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}")) {
+    match ubus::read("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}")) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }
@@ -185,12 +185,11 @@ pub fn data_usage(_state: &AppState) -> (u16, Value) {
 }
 
 /// POST /api/modem/online
-pub fn modem_online(state: &AppState) -> (u16, Value) {
-    use crate::at_cmd;
-    match at_cmd::send(&state.at_port, "AT+CFUN=1", 8) {
-        Ok(resp) if resp.contains("OK") => (200, json!({"ok": true, "data": {"status": "ok"}})),
-        Ok(resp) => (500, json!({"ok": false, "error": "AT+CFUN=1 failed", "raw": resp})),
-        Err(e) => (503, json!({"ok": false, "error": e})),
+/// AT+CFUN=1 through datad (the vendor's ONLINE does not leave LPM).
+pub fn modem_online(_state: &AppState) -> (u16, Value) {
+    match crate::datad_write::send("modem.online", &json!({})) {
+        r if r.ok() => (200, json!({"ok": true, "data": {"status": "ok"}})),
+        r => r.into_http(),
     }
 }
 

@@ -1,4 +1,5 @@
 mod action;
+mod apn_pick;
 mod alerts;
 mod at_cmd;
 mod at_terminal;
@@ -7,6 +8,7 @@ mod battery_eta;
 mod cell;
 mod charge_policy;
 mod datad_feed;
+mod datad_write;
 mod deep_diag;
 mod device_ext;
 pub mod doh;
@@ -18,6 +20,7 @@ mod lan_test;
 mod modem_ext;
 mod netinfo;
 mod netwatch;
+mod ops;
 mod network_ext;
 mod public;
 mod qos;
@@ -27,6 +30,8 @@ mod scheduler;
 mod server;
 mod services;
 mod esim;
+mod fallback_write;
+mod fsutil;
 mod clock;
 mod static_files;
 mod sim;
@@ -121,6 +126,10 @@ fn main() {
 
         // A manual register the agent was guarding when it last stopped.
         netinfo::resume_guard(&state);
+
+        // Auto-APN candidate picks follow their SIM (D39): another card goes
+        // back to auto, the picking card gets its pick again.
+        apn_pick::start(Arc::clone(&state));
     }
 
     // Cellular watcher (docs/designs/slow-diagnosis.md §5). A sidecar only

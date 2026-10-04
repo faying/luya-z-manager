@@ -22,11 +22,13 @@ export const SCENARIOS = [
   "firmware-b27", // shapes recorded from a real U60 Pro on firmware B27 (2026-09-25): STC Method-not-found 503s, {} lists, numeric APN, SMS per-box counts…
   "old-agent-names", // agent before 2026-09-25: calls router_get_upnp_switch / router_get_qos_switch, which B27 lacks → 503 Method not found
   "apn-manual-pick", // auto APN mode, first manual profile still isEnable (owner's device 2026-09-25: isEnable = manual mode's pick, not in use)
+  "apn-candidates", // auto APN with two carrier candidates (ctiot = IoT, dialled; ctnet), as on the owner's device 2026-10-03; POST /api/netinfo/apn picks one for this SIM
   "nbrscan", // POST /api/cell/neighbors/scan keeps the old simulated scan (the real device answers 410; cell-lock tests use this)
   "diag-waiting", // POST /api/diagnose: the run waits 3 s for "another operation" (waiting_for speedtest) before it starts
   "diag-slow", // POST /api/diagnose: 4 s per layer instead of 0.8 s (keeps a run going for busy-409 tests)
   "verdict-stall", // /api/public/status network.verdict = "stall" (connected, nothing comes back), signal itself good
   "verdict-crowd", // /api/public/status network.verdict = "crowd" (cell likely busy), signal itself good
+  "ts-keysoon", // /api/services/tailscale: this node's key expires in 5 days (the status block warns)
 ] as const;
 
 export type Scenario = (typeof SCENARIOS)[number];

@@ -1,6 +1,21 @@
 // New keys for /router/device (new design). Merged into zh.ts by the coordinator.
 export const zh = {
   devctl: {
+    dps: "停止充电",
+    dpsHint: "切断充电输入，改用电池供电；插着电也会掉电",
+    dpsOnAction: "停止充电",
+    dpsOffAction: "恢复充电",
+    cDpsOn: "切断充电输入，设备改用电池供电，插着电电量也会往下掉。改充电上限之前，上限不会来接管。",
+    cDpsOff: "恢复充电输入，电池接着充电。",
+    cDpsOffLimit: "恢复充电输入。充电上限开着：电量在 {{limit}}% 以上时它会自己再停充。",
+    powerOff: "关机",
+    powerOffSub: "只能在设备上按电源键开机。",
+    powerOffDevice: "关机",
+    confirmOffTitle: "要关机吗？",
+    confirmOffWhat: "U60 会关掉。Wi-Fi、蜂窝网络和这个页面都没了，直到有人把它打开。",
+    offDowntime: "一直到有人在设备上长按电源键。这里和远程都开不了机。",
+    offRecovery: "在设备上长按电源键约 3 秒。",
+    confirmOff: "关机",
     bsCharging: "充电中",
     bsDischarging: "放电中",
     bsNotCharging: "未充电",

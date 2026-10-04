@@ -19,6 +19,7 @@ import type { Ctx, Route } from "../lib.ts";
 import { ok, clone } from "../lib.ts";
 import { shared } from "../shared.ts";
 import { modemPrivate, NBR_UNSUPPORTED, NBR_UNSUPPORTED_EN } from "./modem.ts";
+import { candidateApnBlock } from "./router.ts";
 import type {
   NetworkSignal,
   NetworkTraffic,
@@ -568,6 +569,7 @@ function netinfo(ctx: Ctx) {
   const now = Math.floor(ctx.now / 1000);
   return {
     now,
+    apn: candidateApnBlock(ctx),
     direct: {
       ip: "203.0.113.24", geo: "中国台湾 台北市", geo_en: "Taiwan", isp: "中华电信", isp_en: "Chunghwa Telecom",
       node: null, source: "ip-api.com", fetched_at: now - 240, error: null, error_en: null,
@@ -583,7 +585,15 @@ function netinfo(ctx: Ctx) {
     guard: modemPrivate.guardNow(ctx.now),
     neighbors: { state: "unsupported", scanned_at: 0, error: NBR_UNSUPPORTED, error_en: NBR_UNSUPPORTED_EN, cells: [] },
     scan: modemPrivate.netinfoScanNow(ctx),
-    clients: null,
+    // the three Wi-Fi clients of clients(); rates wobble so the page visibly updates
+    clients: {
+      at: now,
+      list: [
+        { mac: CLIENTS[0].mac, down_bytes: 1_840_000_000, up_bytes: 96_000_000, down_rate: 1_450_000 + (now % 5) * 20_000, up_rate: 42_000 },
+        { mac: CLIENTS[1].mac, down_bytes: 312_000_000, up_bytes: 18_500_000, down_rate: 3_200, up_rate: 900 },
+        { mac: CLIENTS[3].mac, down_bytes: 5_600_000, up_bytes: 1_200_000, down_rate: null, up_rate: null },
+      ],
+    },
   };
 }
 

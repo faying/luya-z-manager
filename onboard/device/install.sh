@@ -92,9 +92,10 @@ install_guard() {
     [ -d "$P/guard" ] || die "包里没有 guard/（装机包太旧？）"
     mkdir -p "$G"
     for f in alert-lib.sh u60-guard.sh supervise.sh agent-auth.sh chaos.sh doctor.sh config-backup.sh power-sample.sh wan-sources.sh \
-             wifi-ab.sh u60-ship.sh datad-trial.sh; do
-        # 旧装机包里没有的几个跳过（u60-ship.sh、datad-trial.sh 是 E1 加的，wifi-ab.sh 是第二期加进清单的）
-        [ -f "$P/guard/$f" ] || { [ "$f" = u60-ship.sh ] || [ "$f" = datad-trial.sh ] || [ "$f" = wifi-ab.sh ] && continue; }
+             wifi-ab.sh u60-fallback.sh u60-ship.sh datad-trial.sh; do
+        # 旧装机包里没有的几个跳过（u60-ship.sh、datad-trial.sh 是 E1 加的，wifi-ab.sh 是第二期加进清单的，
+        # u60-fallback.sh 是 E4 的应急直写脚本）
+        [ -f "$P/guard/$f" ] || { [ "$f" = u60-ship.sh ] || [ "$f" = datad-trial.sh ] || [ "$f" = wifi-ab.sh ] || [ "$f" = u60-fallback.sh ] && continue; }
         put "$P/guard/$f" "$G/$f" 755
     done
     place_recover

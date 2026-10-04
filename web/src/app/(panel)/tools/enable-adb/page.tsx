@@ -10,6 +10,9 @@
 // only when the status read before the change actually carried a `mode`;
 // otherwise the result is "accepted by the device" (R6).
 //
+// B31 has no `zwrt_bsp.usb set`: /api/usb/status says `mode_settable: false`
+// and the button stays disabled with the reason under it.
+//
 // New here: the old page never read the USB mode. It is read once on entry
 // (and on Refresh / after the change) — not polled.
 import { useRef, useState, type ReactNode } from "react";
@@ -30,6 +33,7 @@ export default function EnableADBPage() {
   const { t } = useTranslation();
   const usb = useApi<UsbStatus>("/api/usb/status", { revalidateOnFocus: false });
   const mode = typeof usb.data?.mode === "string" && usb.data.mode ? usb.data.mode : null;
+  const modeFixed = usb.data?.mode_settable === false;
 
   const [open, setOpen] = useState(false);
   // Whether a readback is possible, fixed on confirm (before start()).
@@ -132,11 +136,14 @@ export default function EnableADBPage() {
             </span>
           </p>
           <div>
-            <Button variant={isOn ? "secondary" : "primary"} onPress={() => setOpen(true)} isDisabled={op.busy} pending={op.busy}>
+            <Button variant={isOn ? "secondary" : "primary"} onPress={() => setOpen(true)} isDisabled={op.busy || modeFixed} pending={op.busy}>
               <Terminal size={20} weight="bold" aria-hidden />
               {isOn ? t("adb.reEnable", "Re-enable ADB") : t("adb.cardTitle", "Enable ADB Debug USB Mode")}
             </Button>
           </div>
+          {modeFixed && (
+            <p className="nd-aux">{t("adb.unsupported", "This firmware can't turn on ADB mode")}</p>
+          )}
           {done ? (
             <p role="status">
               <StatusMark tone="ok">

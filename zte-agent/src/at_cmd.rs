@@ -28,6 +28,7 @@ impl AtPort {
             return Some(p);
         }
         let _serial = PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _flock = port_flock();
         self.detect_locked()
     }
 
@@ -68,9 +69,49 @@ impl AtPort {
 /// same tty take each other's replies (several AtPort instances exist).
 static PORT_LOCK: Mutex<()> = Mutex::new(());
 
+/// …and across processes: datad sends AT+COPS=0 / AT+CFUN=1 on the same port
+/// (write-op-layer.md T7b) and holds the same flock. `ZTE_AGENT_AT_LOCK`,
+/// default `/var/run/u60-at.lock`; empty = none. Waits up to 15 s (datad's
+/// longest command is 6 s), then goes ahead and says so.
+struct PortFlock(Option<std::fs::File>);
+
+impl Drop for PortFlock {
+    fn drop(&mut self) {
+        if let Some(f) = &self.0 {
+            use std::os::fd::AsRawFd;
+            // SAFETY: fd is the open lock file
+            unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_UN) };
+        }
+    }
+}
+
+fn port_flock() -> PortFlock {
+    use std::os::fd::AsRawFd;
+    let path = std::env::var("ZTE_AGENT_AT_LOCK").unwrap_or_else(|_| "/var/run/u60-at.lock".into());
+    if path.is_empty() {
+        return PortFlock(None);
+    }
+    let Ok(f) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path) else {
+        return PortFlock(None);
+    };
+    let start = std::time::Instant::now();
+    loop {
+        // SAFETY: fd is the open lock file
+        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return PortFlock(Some(f));
+        }
+        if start.elapsed() >= std::time::Duration::from_secs(15) {
+            eprintln!("[at_cmd] {path} still held after 15 s, using the port anyway");
+            return PortFlock(None);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 /// Send an AT command and return the raw response text.
 pub fn send(at_port: &AtPort, command: &str, timeout_secs: u64) -> Result<String, String> {
     let _serial = PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _flock = port_flock();
     let port = at_port.detect_locked().ok_or("no serial port found")?;
     let script = format!(
         "cat {p} & PID=$! ; sleep 0.3 ; echo -e '{cmd}\\r' > {p} ; sleep {t} ; kill $PID 2>/dev/null",

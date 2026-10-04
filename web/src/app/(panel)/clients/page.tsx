@@ -12,11 +12,13 @@ import { useTranslation } from "react-i18next";
 import { ArrowClockwise, DeviceMobile, WifiHigh } from "@phosphor-icons/react";
 import { useApi } from "@/lib/hooks/useApi";
 import type { ValidResult } from "@/lib/api/freshness";
-import type { DhcpLease, HostHint, NetworkClients, WifiStation } from "@/lib/api/schemas/network";
+import type { ClientTraffic, DhcpLease, HostHint, NetInfo, NetworkClients, WifiStation } from "@/lib/api/schemas/network";
+import { bytes, mbps } from "@/lib/home";
 import { deviceNow, useDeviceOffset } from "@/lib/deviceClock";
 import { Button, Freshness, Group, Row, StatusBlock, StatusMark, type Tone } from "@/components/nd";
 
 const PATH = "/api/network/clients";
+const TRAFFIC_PATH = "/api/netinfo?lite=1&clients=1";
 
 function clientsValid(d: NetworkClients | null | undefined): ValidResult {
   if (!d || !Array.isArray(d.dhcp_leases)) return { ok: false, reason: "no DHCP lease table" };
@@ -33,6 +35,10 @@ export default function ClientsPage() {
   const { t } = useTranslation();
   const [showExpired, setShowExpired] = useState(false);
   const cl = useApi<NetworkClients>(PATH, { refreshInterval: 5000, isValid: clientsValid });
+  // per-client rate and total (audit C): the agent keeps them fresh only while
+  // someone asks with clients=1, like the touch screen's Wi-Fi tab
+  const tr = useApi<NetInfo>(TRAFFIC_PATH, { refreshInterval: 5000 });
+  const traffic = tr.data?.clients?.list;
   const now = deviceNow(useDeviceOffset());
   const refresh = () => void cl.mutate();
 
@@ -124,7 +130,7 @@ export default function ClientsPage() {
                   <Row label={t("clients.noActive", "No active leases")} sub={t("clients.noActiveNext", "Only expired leases are left; show them below.")} />
                 ) : (
                   shown.map((l, i) => (
-                    <LeaseRow key={l.ipaddr || l.macaddr || i} lease={l} hosts={d?.hosts} wifi={d?.wifi} now={now} />
+                    <LeaseRow key={l.ipaddr || l.macaddr || i} lease={l} hosts={d?.hosts} wifi={d?.wifi} traffic={traffic} now={now} />
                   ))
                 )}
               </Group>
@@ -168,15 +174,29 @@ function wifiLine(st: WifiStation | undefined, t: (k: string, d: string, o?: Rec
   return parts.join(" · ") || t("clients.onWifi", "On Wi-Fi");
 }
 
+/** "↓ 11.6 ↑ 0.3 Mbps · 1.94 GB since joined"; the rate needs two passes, the total doesn't. */
+function trafficLine(tr: ClientTraffic | undefined, t: (k: string, d: string, o?: Record<string, unknown>) => string): string | null {
+  if (!tr) return null;
+  const total = bytes((tr.down_bytes ?? 0) + (tr.up_bytes ?? 0));
+  const down = mbps(tr.down_rate);
+  const up = mbps(tr.up_rate);
+  const parts: string[] = [];
+  if (down != null && up != null) parts.push(t("clients.rate", "↓ {{down}} ↑ {{up}} Mbps", { down, up }));
+  if (total && (tr.down_bytes != null || tr.up_bytes != null)) parts.push(t("clients.total", "{{total}} since joined", { total }));
+  return parts.join(" · ") || null;
+}
+
 function LeaseRow({
   lease,
   hosts,
   wifi,
+  traffic,
   now,
 }: {
   lease: DhcpLease;
   hosts: Record<string, HostHint> | null | undefined;
   wifi: WifiStation[] | undefined;
+  traffic: ClientTraffic[] | undefined;
   now: number;
 }) {
   const { t } = useTranslation();
@@ -185,6 +205,8 @@ function LeaseRow({
   const isActive = (lease.expires ?? 0) > now;
   const st = mac ? wifi?.find((w) => w.mac.toLowerCase() === mac.toLowerCase()) : undefined;
   const line = wifiLine(st, t);
+  const tr = mac ? traffic?.find((x) => x.mac.toLowerCase() === mac.toLowerCase()) : undefined;
+  const use = trafficLine(tr, t);
   return (
     <Row
       icon={DeviceMobile}
@@ -198,6 +220,11 @@ function LeaseRow({
           ) : (
             isActive &&
             wifi && <span className="block">{t("clients.notOnWifi", "Not on Wi-Fi (cable, USB, or left)")}</span>
+          )}
+          {use && (
+            <span className="block" data-testid="client-traffic">
+              {use}
+            </span>
           )}
           <span className="nd-mono">
             {lease.ipaddr ?? "—"}

@@ -42,8 +42,8 @@ use crate::ubus;
 
 /// Every ubus call here: the modem daemon can stall while it searches, and a
 /// stalled call must not hold a thread for the CLI's default 30 s.
-fn ubus_call(object: &str, method: &str, params: Option<&str>) -> Result<Value, String> {
-    ubus::call_with_timeout(object, method, params, Some(UBUS_TIMEOUT))
+fn ubus_read(object: &str, method: &str, params: Option<&str>) -> Result<Value, String> {
+    ubus::read_with_timeout(object, method, params, Some(UBUS_TIMEOUT))
 }
 
 const CONF_PATH: &str = "/data/netinfo.conf";
@@ -71,6 +71,10 @@ const SELECTION_MAX_AGE: i64 = 120;
 const UBUS_TIMEOUT: u32 = 3;
 
 const GUARD_POLL: Duration = Duration::from_secs(3);
+/// How long a redial waits out datad's `op_busy` (D40) before it counts as
+/// not dialled: a network-mode change confirms for up to 120 s, a revert
+/// after it takes about as long again.
+const OP_BUSY_MAX: Duration = Duration::from_secs(300);
 /// Give up and go back to automatic this long after the register call. The
 /// modem says `manual_fail` when it is refused, so this only catches a
 /// register that hangs; the stock page waits for the answer with no limit.
@@ -794,7 +798,7 @@ fn data_connected(wwan: &Value) -> bool {
 }
 
 fn read_wwan() -> Value {
-    ubus_call("zwrt_data", "get_wwaniface", Some(r#"{"source_module":"zte_topsw_data","cid":1}"#)).unwrap_or(Value::Null)
+    ubus_read("zwrt_data", "get_wwaniface", Some(r#"{"source_module":"zte_topsw_data","cid":1}"#)).unwrap_or(Value::Null)
 }
 
 /// After anything that can drop the data call (operator search, manual
@@ -830,9 +834,26 @@ pub(crate) fn ensure_data_up() -> bool {
         return true;
     }
     eprintln!("[netinfo] data call still down, dialling it again");
-    for ty in [1, 2] {
-        let arg = format!(r#"{{"source_module":"zte_topsw_data","type":{ty},"enable":1,"sub_id":1}}"#);
-        let _ = ubus::call_with_timeout("zwrt_qcmap_cli", "set_qcliiface", Some(&arg), Some(5));
+    // both legs (IPv4, IPv6), through datad
+    let mut sent = crate::datad_write::send("cellular.redial", &json!({})).into_result();
+    // datad holds an automatic redial while a network-mode change is being
+    // confirmed (D40): wait it out (a few looks, bounded), the call may come
+    // back with it; not a failed redial.
+    let mut held = Duration::ZERO;
+    while let Some(pause) = crate::datad_write::retry_after(&sent) {
+        if held >= OP_BUSY_MAX {
+            break;
+        }
+        eprintln!("[netinfo] redial held off while a network-mode change is confirming, again in {}s", pause.as_secs());
+        std::thread::sleep(pause);
+        held += pause;
+        if data_connected(&read_wwan()) {
+            return true;
+        }
+        sent = crate::datad_write::send("cellular.redial", &json!({})).into_result();
+    }
+    if let Err(e) = sent {
+        eprintln!("[netinfo] redial: {e}");
     }
     wait(30)
 }
@@ -1001,6 +1022,16 @@ impl Reason {
         }
     }
 
+    /// datad holds back-to-automatic while a network-mode change is being
+    /// confirmed (D40 `op_busy`): not a failed attempt, waiting it out.
+    fn auto_held(why: &str) -> Self {
+        Reason {
+            code: "auto_held",
+            zh: clip(format!("{why}；等网络模式确认完再回自动")),
+            en: clip_en(format!("{}; waiting for the mode check", why_info(why).1)),
+        }
+    }
+
     /// Automatic again; data attempt `n` failed, next one after `pause`.
     fn redial_retry(n: usize, pause: u64) -> Self {
         Reason {
@@ -1032,6 +1063,9 @@ fn error_en_raw(zh: &str) -> String {
         "正在选网，等它结束" => Some("Registering on a network; wait for it to finish"),
         "正在回到自动选网，等它结束" => Some("Going back to automatic; wait for it to finish"),
         "没有这个手动 APN" => Some("No such manual APN"),
+        "没有这个候选 APN" => Some("No such candidate APN"),
+        "复制成手动 APN 后没读到它" => Some("Copied the APN to the manual list but couldn't read it back"),
+        "读不到 SIM 卡号，没法只给这张卡记住" => Some("Can't read the SIM number, so the pick can't be kept for this SIM"),
         "上一次 APN 切换还没做完" => Some("The last APN switch hasn't finished"),
         "没搜到网络" => Some("No networks found"),
         "没有可用的查询地址" => Some("No lookup address available"),
@@ -1738,8 +1772,8 @@ impl NetInfo {
 /// Serving network, SIM and data state: three local ubus calls. Runs in the
 /// refresh pass, never on an HTTP worker.
 fn local_snapshot(inner: &Inner) {
-    let net = ubus_call("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}")).unwrap_or(Value::Null);
-    let sim = ubus_call("zwrt_zte_mdm.api", "get_sim_info", Some("{}")).unwrap_or(Value::Null);
+    let net = ubus_read("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}")).unwrap_or(Value::Null);
+    let sim = ubus_read("zwrt_zte_mdm.api", "get_sim_info", Some("{}")).unwrap_or(Value::Null);
     let wwan = read_wwan();
 
     let imsi = js(&sim, "sim_imsi");
@@ -1912,7 +1946,7 @@ pub fn get(state: &AppState, query: &str) -> (u16, Value) {
 // marks the profile manual mode would use, so it is not "in use" while
 // `apn_mode` is 0.
 
-fn truthy(v: &Value) -> bool {
+pub(crate) fn truthy(v: &Value) -> bool {
     match v {
         Value::Bool(b) => *b,
         Value::Number(n) => n.as_i64() == Some(1),
@@ -1930,6 +1964,7 @@ fn apn_entry(p: &Value, in_use: &str) -> Value {
         "pdp": p["pdpType"].as_i64().unwrap_or(0),
         "selected": truthy(&p["isEnable"]),
         "in_use": !id.is_empty() && id == in_use,
+        "iot": crate::apn_pick::is_iot(p["wanapn"].as_str().unwrap_or("")),
     })
 }
 
@@ -1957,8 +1992,30 @@ pub fn apn_view(mode: &Value, dialled: &Value, auto: &Value, manual: &Value) -> 
 static APN_SWITCHING: AtomicBool = AtomicBool::new(false);
 static APN_SWITCH_ERR: Mutex<String> = Mutex::new(String::new());
 
+/// An APN switch is running (ours or apn_pick's watcher).
+pub(crate) fn apn_switching() -> bool {
+    APN_SWITCHING.load(Ordering::SeqCst)
+}
+
+/// Take the switch slot; false if another switch holds it. Clears the error.
+pub(crate) fn apn_switching_claim() -> bool {
+    if APN_SWITCHING.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    APN_SWITCH_ERR.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    true
+}
+
+/// Give the slot back, with the error if the switch failed.
+pub(crate) fn apn_switching_release(err: Option<String>) {
+    if let Some(e) = err {
+        *APN_SWITCH_ERR.lock().unwrap_or_else(|e| e.into_inner()) = clip(e);
+    }
+    APN_SWITCHING.store(false, Ordering::SeqCst);
+}
+
 fn apn_read() -> Value {
-    let call = |m: &str, a: &str| ubus::call("zwrt_apn_object", m, Some(a));
+    let call = |m: &str, a: &str| ubus::read("zwrt_apn_object", m, Some(a));
     let mut v = match call("get_apn_mode", "{}") {
         Err(e) => json!({"error": e}),
         Ok(mode) => apn_view(
@@ -1969,21 +2026,28 @@ fn apn_read() -> Value {
         ),
     };
     if let Value::Object(o) = &mut v {
+        // This card's pick from the auto candidates (D39) and the watcher's
+        // last automatic change, for the UIs.
+        let (picked, notice) = crate::apn_pick::view(&crate::apn_pick::current_iccid());
+        o.insert("picked_id".into(), json!(picked));
+        o.insert("notice".into(), notice);
         o.insert("switching".into(), json!(APN_SWITCHING.load(Ordering::SeqCst)));
         o.insert("switch_error".into(), json!(APN_SWITCH_ERR.lock().unwrap_or_else(|e| e.into_inner()).clone()));
     }
     v
 }
 
-/// POST /api/netinfo/apn — {"id":"auto"} or {"id":"<manual profileId>"}.
-/// Manual: select the profile first, then switch the mode, so the re-dial
-/// uses it. The data call drops for a moment either way (the caller says so
-/// before the second tap).
+/// POST /api/netinfo/apn — {"id":"auto"}, {"id":"<manual profileId>"} or
+/// {"id":"<auto candidate profileId>"} ("auto109600": one of the carrier's
+/// candidates, D39 — copied into the manual list and remembered for this SIM,
+/// see apn_pick). Manual: select the profile first, then switch the mode, so
+/// the re-dial uses it. The data call drops for a moment either way (the
+/// caller says so before the second tap).
 ///
-/// Checks the id, then answers 202 and switches on its own thread: the two
-/// ubus calls can take longer than the touch screen's 1.5 s request timeout,
-/// which used to show "cannot reach the agent" for a switch that worked. The
-/// caller reads the result back from /api/netinfo (`apn.in_use`, and
+/// Checks the id, then answers 202 and switches on its own thread: the ubus
+/// calls can take longer than the touch screen's 1.5 s request timeout, which
+/// used to show "cannot reach the agent" for a switch that worked. The caller
+/// reads the result back from /api/netinfo (`apn.in_use`, and
 /// `apn.switch_error` if it failed).
 pub fn apn_use(body: &[u8]) -> (u16, Value) {
     let parsed: Value = match serde_json::from_slice(body) {
@@ -1994,34 +2058,52 @@ pub fn apn_use(body: &[u8]) -> (u16, Value) {
     if id.is_empty() {
         return (400, json!({"ok": false, "error": "missing 'id'"}));
     }
-    let call = |m: &str, a: String| ubus::call("zwrt_apn_object", m, Some(&a));
-    if id != "auto" {
-        let known = call("get_manu_apn_list", "{}".into())
+    let call = |m: &str, a: String| ubus::read("zwrt_apn_object", m, Some(&a));
+    let list_has = |m: &str| {
+        call(m, "{}".into())
             .ok()
             .and_then(|v| v["apnListArray"].as_array().map(|a| a.iter().any(|p| p["profileId"] == id)))
-            .unwrap_or(false);
-        if !known {
-            let msg = "没有这个手动 APN";
-            return (404, json!({"ok": false, "error": msg, "error_en": error_en(msg)}));
-        }
+            .unwrap_or(false)
+    };
+    let candidate = id != "auto" && id.starts_with("auto");
+    if candidate && !list_has("get_auto_apn_list") {
+        let msg = "没有这个候选 APN";
+        return (404, json!({"ok": false, "error": msg, "error_en": error_en(msg)}));
     }
-    if APN_SWITCHING.swap(true, Ordering::SeqCst) {
+    if !candidate && id != "auto" && !list_has("get_manu_apn_list") {
+        let msg = "没有这个手动 APN";
+        return (404, json!({"ok": false, "error": msg, "error_en": error_en(msg)}));
+    }
+    // A candidate is remembered per card: without the card number it would
+    // become a manual APN nothing ever switches back (refuse instead).
+    let iccid = if candidate { crate::apn_pick::iccid_for_pick() } else { String::new() };
+    if candidate && iccid.is_empty() {
+        let msg = "读不到 SIM 卡号，没法只给这张卡记住";
+        return (409, json!({"ok": false, "error": msg, "error_en": error_en(msg)}));
+    }
+    if !apn_switching_claim() {
         let msg = "上一次 APN 切换还没做完";
         return (409, json!({"ok": false, "error": msg, "error_en": error_en(msg)}));
     }
-    APN_SWITCH_ERR.lock().unwrap_or_else(|e| e.into_inner()).clear();
     let id = id.to_string();
-    std::thread::spawn(move || {
-        let call = |m: &str, a: String| ubus::call("zwrt_apn_object", m, Some(&a));
-        let mode = if id == "auto" { 0 } else { 1 };
-        let res = if id == "auto" { Ok(Value::Null) } else { call("enable_manu_apn_id", json!({"profileId": id}).to_string()) }
-            .and_then(|_| call("set_apn_mode", json!({"apn_mode": mode}).to_string()));
-        if let Err(e) = res {
-            eprintln!("[netinfo] APN switch to {id}: {e}");
-            *APN_SWITCH_ERR.lock().unwrap_or_else(|e| e.into_inner()) = clip(e);
+    let source = crate::datad_write::current();
+    std::thread::spawn(move || crate::datad_write::with_source(source, || {
+        let iccid = if iccid.is_empty() { crate::apn_pick::current_iccid() } else { iccid };
+        let res = if id == "auto" {
+            crate::apn_pick::dial_auto().map(|_| crate::apn_pick::forget(&iccid))
+        } else if candidate {
+            crate::apn_pick::manual_for_candidate(&id).and_then(|(manual, apn)| {
+                crate::apn_pick::dial_manual(&manual).map(|_| crate::apn_pick::remember(&iccid, &manual, &apn))
+            })
+        } else {
+            crate::apn_pick::dial_manual(&id).map(|_| crate::apn_pick::forget(&iccid))
+        };
+        match &res {
+            Err(e) => eprintln!("[netinfo] APN switch to {id}: {e}"),
+            Ok(()) => crate::apn_pick::clear_sticky(),
         }
-        APN_SWITCHING.store(false, Ordering::SeqCst);
-    });
+        apn_switching_release(res.err());
+    }));
     (202, json!({"ok": true, "data": {"switching": true}}))
 }
 
@@ -2047,7 +2129,14 @@ pub fn register(state: &AppState, body: &[u8]) -> (u16, Value) {
     }
     let inner = Arc::clone(&state.netinfo.inner);
     let started = now();
-    let snapshot = {
+    // datad's search session first (D17), before any lock is taken (opening it
+    // is a request to datad): refused or unreachable → nothing touched. An
+    // early return below drops it, which closes it.
+    let sess = match crate::datad_write::Session::open(crate::datad_write::current()) {
+        Ok(s) => Some(s),
+        Err(r) => return r.into_http(),
+    };
+    let (snapshot, sess) = {
         // checked and claimed under deep diagnosis' gate (D10)
         let gate = crate::deep_diag::gate();
         if let Some(busy) = crate::deep_diag::refusal(&gate) {
@@ -2057,6 +2146,10 @@ pub fn register(state: &AppState, body: &[u8]) -> (u16, Value) {
         if let Err(why) = claim(&mut o, OpKind::Registering) {
             return (409, json!({"ok": false, "error": why, "error_en": error_en(why), "guard": o.guard.json()}));
         }
+        let Some(sess) = sess else {
+            o.kind = OpKind::Idle;
+            return (500, json!({"ok": false, "error": "no session"}));
+        };
         if let Err(e) = write_marker(&Marker::Register { target: target.clone(), started }) {
             o.kind = OpKind::Idle;
             let msg = format!("写不了保护标记，没有注册：{e}");
@@ -2064,17 +2157,21 @@ pub fn register(state: &AppState, body: &[u8]) -> (u16, Value) {
         }
         o.cancel = false;
         o.guard = Guard { phase: "registering", target: target.clone(), rat: rat.clone(), started_at: started, ..Guard::default() };
-        o.guard.json()
+        (o.guard.json(), sess)
     };
     let i = Arc::clone(&inner);
+    let source = crate::datad_write::current();
     std::thread::spawn(move || {
-        let before = register_result_str(&ubus_call("zte_nwinfo_api", "nwinfo_m_netselect_result", Some("{}")).unwrap_or(Value::Null));
-        let arg = json!({"m_mcc_mnc": target, "m_rat": rat}).to_string();
-        if let Err(e) = ubus_call("zte_nwinfo_api", "nwinfo_manual_register", Some(&arg)) {
-            eprintln!("[netinfo] manual register call: {e} (guarding anyway)");
-            i.ops.lock().unwrap().guard.last_result = clip(format!("调用出错：{e}"));
-        }
-        guard_run(i, target, started, before);
+        let sess = Some(sess);
+        in_session(&sess, source, || {
+            let before = register_result_str(&ubus_read("zte_nwinfo_api", "nwinfo_m_netselect_result", Some("{}")).unwrap_or(Value::Null));
+            let p = json!({"mcc_mnc": target, "rat": rat});
+            if let Err(e) = crate::datad_write::send("netselect.register", &p).into_result() {
+                eprintln!("[netinfo] manual register call: {e} (guarding anyway)");
+                i.ops.lock().unwrap().guard.last_result = clip(format!("调用出错：{e}"));
+            }
+            guard_run(i, target, started, before);
+        });
     });
     (202, json!({"ok": true, "guard": snapshot}))
 }
@@ -2088,9 +2185,9 @@ fn guard_run(inner: Arc<Inner>, target: String, started: i64, before: String) {
         if std::mem::take(&mut inner.ops.lock().unwrap().cancel) {
             return revert_until_auto(&inner, "手动恢复自动");
         }
-        let res = ubus_call("zte_nwinfo_api", "nwinfo_m_netselect_result", Some("{}")).unwrap_or(Value::Null);
+        let res = ubus_read("zte_nwinfo_api", "nwinfo_m_netselect_result", Some("{}")).unwrap_or(Value::Null);
         let result = register_result_str(&res);
-        let net = ubus_call("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}")).unwrap_or(Value::Null);
+        let net = ubus_read("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}")).unwrap_or(Value::Null);
         let serving = serving_plmn(&net);
         let connected = data_connected(&read_wwan());
         if !result.is_empty() {
@@ -2127,9 +2224,37 @@ fn guard_run(inner: Arc<Inner>, target: String, started: i64, before: String) {
     }
 }
 
+/// Run `f` inside the datad search session when there is one (D17); without
+/// one (datad down, or the session could not be had for a revert) the steps
+/// go out on their own, and back-to-automatic / redial fall back to the
+/// emergency script when datad is gone.
+///
+/// Without one the steps still go out as `source` (not the spawned thread's
+/// default `web`): an automatic revert must reach datad as automatic, which
+/// waits for a confirming change instead of cancelling it (D40).
+fn in_session<T>(sess: &Option<crate::datad_write::Session>, source: crate::datad_write::Source, f: impl FnOnce() -> T) -> T {
+    match sess {
+        Some(s) => s.run(f),
+        None => crate::datad_write::with_source(source, f),
+    }
+}
+
+/// A session for a revert: best effort. A revert goes ahead without one
+/// (another change may hold datad, or datad may be gone): `netselect.auto`
+/// and `cellular.redial` are allowed outside a session.
+fn revert_session(source: crate::datad_write::Source) -> Option<crate::datad_write::Session> {
+    match crate::datad_write::Session::open(source) {
+        Ok(s) => Some(s),
+        Err(r) => {
+            eprintln!("[netinfo] no datad session for back-to-automatic ({r:?}), going ahead");
+            None
+        }
+    }
+}
+
 /// Selection mode as the netinfo call reports it (no AT port needed).
 fn selection_now() -> Option<&'static str> {
-    selection_from_netinfo(&ubus_call("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}")).unwrap_or(Value::Null))
+    selection_from_netinfo(&ubus_read("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}")).unwrap_or(Value::Null))
 }
 
 /// `AT+COPS=0` until the modem reports automatic selection, then get the
@@ -2152,11 +2277,30 @@ fn revert_until_auto(inner: &Inner, why: &'static str) {
     // Already automatic (the manual register never took, or someone pressed
     // the button twice): no command, which would only make it re-register.
     let already = selection_now() == Some("auto");
-    for attempt in 1u32.. {
+    let mut attempt = 0u32;
+    let mut held = false;
+    loop {
         if already {
             break;
         }
-        let sent = at_cmd::send(&inner.at, "AT+COPS=0", 8);
+        // AT+COPS=0 through datad (D17; the emergency script when datad is gone)
+        let sent = crate::datad_write::send("netselect.auto", &json!({})).into_result();
+        if let Some(pause) = crate::datad_write::retry_after(&sent) {
+            // a network-mode change is being confirmed (D40): datad sends this
+            // once it ends; not an attempt, no backoff
+            if !held {
+                inner.ops.lock().unwrap().guard.set_reason(Reason::auto_held(why));
+                held = true;
+            }
+            eprintln!("[netinfo] back-to-automatic held off while a network-mode change is confirming, again in {}s", pause.as_secs());
+            std::thread::sleep(pause);
+            if selection_now() == Some("auto") {
+                break;
+            }
+            continue;
+        }
+        held = false;
+        attempt += 1;
         let mut auto = false;
         for _ in 0..20 {
             if selection_now() == Some("auto") {
@@ -2233,7 +2377,10 @@ pub fn resume_guard(state: &AppState) {
             }
             // The answer before the call is lost with the restart; the
             // elapsed-time rule in `decide` still keeps a stale one out early.
-            std::thread::spawn(move || guard_run(inner, target, started, String::new()));
+            std::thread::spawn(move || {
+                let sess = revert_session(crate::datad_write::Source::Guard);
+                in_session(&sess, crate::datad_write::Source::Guard, || guard_run(inner, target, started, String::new()));
+            });
         }
         Some(Marker::Redial) => {
             eprintln!("[netinfo] resuming the redial after back-to-automatic");
@@ -2244,7 +2391,8 @@ pub fn resume_guard(state: &AppState) {
                 o.guard.set_reason(Reason::why("重启前还没拨上"));
             }
             std::thread::spawn(move || {
-                let up = redial_until_up(&inner);
+                let sess = revert_session(crate::datad_write::Source::Guard);
+                let up = in_session(&sess, crate::datad_write::Source::Guard, || redial_until_up(&inner));
                 let mut o = inner.ops.lock().unwrap();
                 o.guard.phase = "reverted";
                 if !up {
@@ -2257,7 +2405,10 @@ pub fn resume_guard(state: &AppState) {
         _ => {
             eprintln!("[netinfo] resuming back-to-automatic");
             inner.ops.lock().unwrap().kind = OpKind::Reverting;
-            std::thread::spawn(move || revert_until_auto(&inner, "重启前没做完"));
+            std::thread::spawn(move || {
+                let sess = revert_session(crate::datad_write::Source::Guard);
+                in_session(&sess, crate::datad_write::Source::Guard, || revert_until_auto(&inner, "重启前没做完"));
+            });
         }
     }
 }
@@ -2297,7 +2448,11 @@ pub fn select_auto(state: &AppState) -> (u16, Value) {
     let snapshot = o.guard.json();
     drop(o);
     let i = Arc::clone(&inner);
-    std::thread::spawn(move || revert_until_auto(&i, "手动恢复自动"));
+    let source = crate::datad_write::current();
+    std::thread::spawn(move || {
+        let sess = revert_session(source);
+        in_session(&sess, source, || revert_until_auto(&i, "手动恢复自动"));
+    });
     (202, json!({"ok": true, "data": snapshot}))
 }
 
@@ -2320,9 +2475,24 @@ pub fn operator_scan(state: &AppState) -> (u16, Value) {
         }
         o.scan = Scan { state: "scanning", started_at: now(), ..Scan::default() };
     }
+    // datad's search session holds other connectivity writes off meanwhile (D17)
+    let sess = match crate::datad_write::Session::open(crate::datad_write::current()) {
+        Ok(s) => s,
+        Err(r) => {
+            let mut o = inner.ops.lock().unwrap();
+            o.kind = OpKind::Idle;
+            o.scan = Scan::default();
+            return r.into_http();
+        }
+    };
     std::thread::spawn(move || {
-        let outcome = run_scan(&inner);
-        ensure_data_up();
+        let outcome = sess.run(|| {
+            let outcome = run_scan(&inner);
+            ensure_data_up();
+            outcome
+        });
+        sess.set_result(if outcome.is_ok() { "scanned" } else { "scan_failed" });
+        drop(sess);
         let mut o = inner.ops.lock().unwrap();
         match outcome {
             Ok(ops) if !ops.is_empty() => {
@@ -2348,12 +2518,12 @@ fn run_scan(inner: &Inner) -> Result<Vec<Value>, String> {
     // A call that errors (a 3 s timeout, say) may still have started the
     // search: watch the status either way, and only a status that never
     // shows a search counts as "did not start".
-    let call = ubus_call("zte_nwinfo_api", "nwinfo_manual_scan", Some("{}"));
+    let call = crate::datad_write::send("netselect.scan", &json!({})).into_result();
     let started = now();
     let mut seen_search = false;
     loop {
         std::thread::sleep(SCAN_POLL);
-        let st = ubus_call("zte_nwinfo_api", "nwinfo_m_netselect_status", Some("{}")).unwrap_or(Value::Null);
+        let st = ubus_read("zte_nwinfo_api", "nwinfo_m_netselect_status", Some("{}")).unwrap_or(Value::Null);
         let status = loose_str(&st, &["status"]);
         inner.ops.lock().unwrap().scan.last_status = status.clone();
         let searching = status.to_ascii_lowercase().contains("selecting");
@@ -2375,7 +2545,7 @@ fn run_scan(inner: &Inner) -> Result<Vec<Value>, String> {
             break;
         }
     }
-    let v = ubus_call("zte_nwinfo_api", "nwinfo_m_netselect_contents", Some("{}"))?;
+    let v = ubus_read("zte_nwinfo_api", "nwinfo_m_netselect_contents", Some("{}"))?;
     let mut ops = Vec::new();
     collect_operators(&v, &mut ops);
     ops.truncate(SCAN_MAX_OPS);
@@ -2416,6 +2586,7 @@ mod tests {
         assert_eq!(v["in_use"]["name"], "China Telecom");
         assert_eq!(v["in_use"]["apn"], "ctiot");
         assert_eq!(v["auto"][0]["in_use"], true);
+        assert_eq!((v["auto"][0]["iot"].as_bool(), v["auto"][1]["iot"].as_bool()), (Some(true), Some(false)));
         assert_eq!(v["manual"][0]["selected"], true);
         assert_eq!(v["manual"][0]["in_use"], false);
         let v = apn_view(&json!({"apn_mode":"1"}), &json!({"profileId":"manu1","profilename":"CTNET"}), &auto, &manual);
@@ -2875,6 +3046,7 @@ mod tests {
             all.push(Reason::auto_retry(w, 3, AUTO_NOT_YET, 120));
             all.push(Reason::auto_retry(w, 1, "AT port busy", 30));
             all.push(Reason::auto_no_data(w));
+            all.push(Reason::auto_held(w));
         }
         all.push(Reason::auto_no_data(""));
         all.push(Reason::redial_retry(2, 120));

@@ -22,7 +22,7 @@ export interface PublicStatus {
     rsrp: number;
     /**
      * datad's home verdict, `story.state` as-is (netwatch.rs `verdict`): ok, nosim, airplane,
-     * sos, nosvc, nodata, limit, weak, noise, crowd, only2g, only3g, narrow, stall. null when
+     * sos, nosvc, nodata, stall, hot, limit, weak, noise, crowd, only2g, only3g, narrow. null when
      * datad is silent; absent from an older agent. The home page's 「查原因 →」 reads it.
      */
     verdict?: string | null;

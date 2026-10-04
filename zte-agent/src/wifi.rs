@@ -13,8 +13,50 @@ fn uci_get_wireless(key: &str) -> String {
     ubus::uci_get(&format!("wireless.{key}")).unwrap_or_default()
 }
 
+/// The firmware's own switches live in `wireless.zte_mbb` (B31: `wifi_onoff`,
+/// `lbd`, …; `wifi6_switch` only once the vendor page has written it). There is
+/// no `zte_mbb` uci package: the `zte_mbb.wifi.*` this file used to read and
+/// write never existed on this device.
 fn uci_get_mbb(key: &str) -> String {
-    ubus::uci_get(&format!("zte_mbb.{key}")).unwrap_or_default()
+    uci_get_wireless(&format!("zte_mbb.{key}"))
+}
+
+/// Pure part of [`master_on`]: the vendor switch is not off, and not both main
+/// APs are disabled (how the master switch turns Wi-Fi off, see `wifi_set`).
+fn master_on_from(vendor_onoff: &str, ap_2g_disabled: &str, ap_5g_disabled: &str) -> bool {
+    vendor_onoff != "0" && !(ap_2g_disabled == "1" && ap_5g_disabled == "1")
+}
+
+/// The master switch as the page shows it.
+fn master_on() -> bool {
+    master_on_from(&uci_get_mbb("wifi_onoff"), &uci_get_wireless("main_2g.disabled"), &uci_get_wireless("main_5g.disabled"))
+}
+
+/// The vendor page treats a missing `wifi6_switch` as on, and only `"0"` as off.
+fn wifi6_from(raw: &str) -> &'static str {
+    if raw == "0" { "0" } else { "1" }
+}
+
+/// What the master switch writes when the page asks for `want` ("0"/"1") and
+/// the switch currently reads `current_on`. Off: both main APs disabled. On:
+/// both APs and both radios enabled, as u60-guard's restore does (APs under a
+/// disabled radio never come up). Nothing when it already reads as wanted, so
+/// the full body the page always sends doesn't touch the radios.
+fn master_writes(want: &str, current_on: bool) -> Vec<(&'static str, &'static str)> {
+    let want_on = want != "0";
+    if want_on == current_on {
+        return Vec::new();
+    }
+    if want_on {
+        vec![
+            ("wireless.wifi0.disabled", "0"),
+            ("wireless.wifi1.disabled", "0"),
+            ("wireless.main_2g.disabled", "0"),
+            ("wireless.main_5g.disabled", "0"),
+        ]
+    } else {
+        vec![("wireless.main_2g.disabled", "1"), ("wireless.main_5g.disabled", "1")]
+    }
 }
 
 fn iw_info(iface: &str) -> (String, String) {
@@ -80,29 +122,10 @@ fn sanitize_uci_value(v: &str) -> String {
 pub fn wifi_status(_state: &AppState) -> (u16, Value) {
     let mut result = serde_json::Map::new();
 
-    // Global switches from zte_mbb
-    let mut wifi_onoff = uci_get_mbb("wifi.wifi_onoff");
-    let mut wifi6_switch = uci_get_mbb("wifi.wifi6_switch");
-
-    // Fallback: if mbb UCI keys are missing, read from zwrt_wlan report
-    if wifi_onoff.is_empty() || wifi6_switch.is_empty() {
-        if let Ok(report) = ubus::call("zwrt_wlan", "report", Some("{}")) {
-            if wifi_onoff.is_empty() {
-                wifi_onoff = report["wifi_onoff"]
-                    .as_str()
-                    .unwrap_or("1")
-                    .to_string();
-            }
-            if wifi6_switch.is_empty() {
-                wifi6_switch = report["wifi6_switch"]
-                    .as_str()
-                    .unwrap_or("0")
-                    .to_string();
-            }
-        }
-    }
-    result.insert("wifi_onoff".into(), json!(wifi_onoff));
-    result.insert("wifi6_switch".into(), json!(wifi6_switch));
+    // Global switches: master = vendor switch and the two main APs; Wi-Fi 6
+    // as the vendor page reads it
+    result.insert("wifi_onoff".into(), json!(if master_on() { "1" } else { "0" }));
+    result.insert("wifi6_switch".into(), json!(wifi6_from(&uci_get_mbb("wifi6_switch"))));
 
     // Radio config
     result.insert("radio2_disabled".into(), json!(uci_get_wireless("wifi0.disabled")));
@@ -161,6 +184,14 @@ pub fn wifi_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
         Some(o) => o,
         None => return (400, json!({"ok": false, "error": "expected JSON object"})),
     };
+    // Wi-Fi 6: the vendor page changes it together with each radio's hwmode
+    // (Wi-Fi 5 mode forces 5 GHz to 11ac), in one `zwrt_wlan set`. Writing the
+    // flag alone is not that, so say so instead of answering "no changes".
+    if let Some(v) = obj.get("wifi6_switch").and_then(|v| v.as_str()) {
+        if wifi6_from(v) != wifi6_from(&uci_get_mbb("wifi6_switch")) {
+            return (501, json!({"ok": false, "error": "this firmware changes Wi-Fi 6 together with the radio mode; switching it here is not supported yet"}));
+        }
+    }
     // Serialise against every other writer of the `wireless` package (the
     // scenario engine, u60-guard, homemode). Held until the reload has been
     // verified, not just until commit — see wifi_radio's lock notes.
@@ -187,15 +218,11 @@ pub fn wifi_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
         ("radio2_disabled", "wireless.wifi0.disabled"),
         ("radio5_disabled", "wireless.wifi1.disabled"),
     ];
-    let mbb_map: &[(&str, &str)] = &[
-        ("wifi_onoff", "zte_mbb.wifi.wifi_onoff"),
-        ("wifi6_switch", "zte_mbb.wifi.wifi6_switch"),
-    ];
-
     let txpower_keys: &[&str] = &["txpower_2g", "txpower_5g"];
 
     let mut wireless_changed = false;
-    let mut mbb_changed = false;
+    // what changed, written through datad in one go (E4 T7b)
+    let mut wireless_set = serde_json::Map::new();
     let mut only_txpower = true;
     let mut txpower_2g_val: Option<u32> = None;
     let mut txpower_5g_val: Option<u32> = None;
@@ -209,9 +236,7 @@ pub fn wifi_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
             for path in ["wireless.wifi0.country", "wireless.wifi1.country"] {
                 let current = ubus::uci_get(path).unwrap_or_default();
                 if current != cc {
-                    if let Err(e) = ubus::uci_set_no_commit(path, &cc) {
-                        return (500, json!({"ok": false, "error": e}));
-                    }
+                    wireless_set.insert(path.into(), json!(cc));
                     wireless_changed = true;
                     only_txpower = false;
                 }
@@ -232,9 +257,7 @@ pub fn wifi_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
         if let Some(&(_, path)) = uci_map.iter().find(|&&(k, _)| k == key) {
             let current = ubus::uci_get(path).unwrap_or_default();
             if current != val_str {
-                if let Err(e) = ubus::uci_set_no_commit(path, &val_str) {
-                    return (500, json!({"ok": false, "error": e}));
-                }
+                wireless_set.insert(path.into(), json!(val_str));
                 wireless_changed = true;
                 if !txpower_keys.contains(&key.as_str()) {
                     only_txpower = false;
@@ -246,33 +269,32 @@ pub fn wifi_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
             }
             continue;
         }
+    }
 
-        // Check mbb map
-        if let Some(&(_, path)) = mbb_map.iter().find(|&&(k, _)| k == key) {
-            let current = ubus::uci_get(path).unwrap_or_default();
-            if current != val_str {
-                // mbb keys are firmware-dependent; skip silently if missing
-                if ubus::uci_set_no_commit(path, &val_str).is_ok() {
-                    mbb_changed = true;
-                    only_txpower = false;
-                }
+    // Master switch: the two main APs, the same writes as /api/wifi/radio, the
+    // scenario engine and u60-guard's restore (which only knows `disabled`).
+    // Applied after the per-key writes so it wins over the radio keys the body
+    // always carries.
+    if let Some(want) = obj.get("wifi_onoff").and_then(|v| v.as_str()) {
+        for (path, val) in master_writes(want, master_on()) {
+            if ubus::uci_get(path).unwrap_or_default() != val {
+                wireless_set.insert(path.into(), json!(val));
+                wireless_changed = true;
+                only_txpower = false;
             }
         }
     }
 
-    // Commit batched changes
+    // Write and commit through datad; the reload comes after (hot txpower, or
+    // the background reload + verify below)
     if wireless_changed {
-        if let Err(e) = ubus::uci_commit("wireless") {
-            return (500, json!({"ok": false, "error": e}));
-        }
-    }
-    if mbb_changed {
-        if let Err(e) = ubus::uci_commit("zte_mbb") {
-            return (500, json!({"ok": false, "error": e}));
+        let r = crate::datad_write::send("wifi.apply", &json!({"set": wireless_set, "reload": false}));
+        if !r.ok() {
+            return r.into_http();
         }
     }
 
-    if !wireless_changed && !mbb_changed {
+    if !wireless_changed {
         return (200, json!({"ok": true, "data": {"status": "ok", "note": "no changes"}}));
     }
 
@@ -317,7 +339,7 @@ pub fn guest_status(_state: &AppState) -> (u16, Value) {
     result.insert("guest_active_time".into(), json!(uci_get_wireless("guest_2g.guest_active_time")));
 
     // Runtime remaining time
-    let remaining = ubus::call("zwrt_wlan", "wlan_get_guest_access_left_time", Some("{}"))
+    let remaining = ubus::read("zwrt_wlan", "wlan_get_guest_access_left_time", Some("{}"))
         .ok()
         .and_then(|v| v["guest_left_time"].as_str().and_then(|s| s.parse::<i64>().ok()))
         .unwrap_or(-1);
@@ -357,7 +379,7 @@ pub fn guest_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
         Err(e) => return (503, json!({"ok": false, "error": e})),
     };
 
-    let mut changed = false;
+    let mut set = serde_json::Map::new();
     for (key, value) in obj {
         let val_str = match value {
             Value::String(s) => s.clone(),
@@ -369,24 +391,174 @@ pub fn guest_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
 
         if let Some(&(_, paths)) = guest_map.iter().find(|&&(k, _)| k == key) {
             for &path in paths {
-                // Guest interfaces may not exist; skip silently if missing
-                if ubus::uci_set_no_commit(path, &val_str).is_ok() {
-                    changed = true;
-                }
+                set.insert(path.into(), json!(val_str));
             }
         }
     }
 
-    if !changed {
+    if set.is_empty() {
         return (200, json!({"ok": true, "data": {"status": "ok", "note": "no changes"}}));
     }
-
-    // Commit batched changes
-    if let Err(e) = ubus::uci_commit("wireless") {
-        return (500, json!({"ok": false, "error": e}));
+    // Guest interfaces may not exist: best effort, skipped ones listed by datad
+    let changed = match crate::datad_write::send("wifi.apply", &json!({"set": set, "reload": false, "best_effort": true})) {
+        crate::datad_write::Reply::Done { result, .. } => result["committed"].as_array().is_some_and(|c| !c.is_empty()),
+        r => return r.into_http(),
+    };
+    if !changed {
+        return (200, json!({"ok": true, "data": {"status": "ok", "note": "no changes"}}));
     }
 
     crate::wifi_radio::finish_in_background(lk, "guest");
 
     (200, json!({"ok": true, "data": {"status": "ok"}}))
+}
+
+// ---------------------------------------------------------------------------
+// Wi-Fi power save (E4, 10-04): the same switch as the touch screen. The write
+// goes through datad (`wifi.power_save`: hotplug script + iw on wlan0-3 +
+// readback, recorded in the change log); here we only read.
+// ---------------------------------------------------------------------------
+
+const PSM_HOTPLUG: &str = "/etc/hotplug.d/iface/99-disable-powersave";
+
+/// `iw dev X get power_save` → on/off; anything else (Wi-Fi off) → None.
+fn psm_from_iw(out: &str) -> Option<bool> {
+    if out.contains("Power save: on") {
+        Some(true)
+    } else if out.contains("Power save: off") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// The saved choice in the hotplug script (missing: never set, driver default).
+fn psm_from_script(text: &str) -> Option<bool> {
+    let line = text.lines().find(|l| l.contains("set power_save"))?;
+    psm_from_iw(&line.replace("set power_save", "Power save:"))
+}
+
+fn psm_live() -> Option<bool> {
+    ["wlan0", "wlan2"].iter().find_map(|w| {
+        let out = Command::new("iw").args(["dev", w, "get", "power_save"]).output().ok()?;
+        psm_from_iw(&String::from_utf8_lossy(&out.stdout))
+    })
+}
+
+pub fn power_save_get(_state: &AppState) -> (u16, Value) {
+    let live = psm_live();
+    let saved = std::fs::read_to_string(PSM_HOTPLUG).ok().and_then(|t| psm_from_script(&t));
+    (
+        200,
+        json!({"ok": true, "data": {"enabled": live.or(saved), "live": live, "saved": saved}}),
+    )
+}
+
+pub fn power_save_set(state: &AppState, body: &[u8]) -> (u16, Value) {
+    let parsed: Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
+    };
+    let Some(enabled) = parsed["enabled"].as_bool() else {
+        return (400, json!({"ok": false, "error": "enabled must be true or false"}));
+    };
+    let r = crate::datad_write::send("wifi.power_save", &json!({"enabled": enabled}));
+    if !r.ok() {
+        return r.into_http();
+    }
+    power_save_get(state)
+}
+
+// ---------------------------------------------------------------------------
+// NFC tap-to-join (audit C, 10-04): the touch screen's 「NFC 碰一碰」 on the
+// Wi-Fi page. Read: the vendor read itself (the web reads back once right
+// after a write, and the feed can still hold the value from before it), then
+// datad's `nfc.switch`; write: datad nfc.set with the touch screen's flag.
+// ---------------------------------------------------------------------------
+
+fn nfc_switch(v: &Value) -> Option<bool> {
+    match v.get("switch")? {
+        Value::Number(n) => n.as_i64().map(|n| n == 1),
+        Value::String(s) => s.trim().parse::<i64>().ok().map(|n| n == 1),
+        _ => None,
+    }
+}
+
+pub fn nfc_get(_state: &AppState) -> (u16, Value) {
+    let on = ubus::read("zwrt_nfc", "zwrt_nfc_wifi_get", Some("{}"))
+        .ok()
+        .as_ref()
+        .and_then(nfc_switch)
+        .or_else(|| crate::datad_feed::global().and_then(|f| f.view().block("nfc")).as_ref().and_then(nfc_switch));
+    (200, json!({"ok": true, "data": {"supported": on.is_some(), "enabled": on}}))
+}
+
+pub fn nfc_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
+    let parsed: Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
+    };
+    let Some(enabled) = parsed["enabled"].as_bool() else {
+        return (400, json!({"ok": false, "error": "enabled must be true or false"}));
+    };
+    let r = crate::datad_write::send("nfc.set", &json!({"enabled": enabled as i64, "flag": 2}));
+    if !r.ok() {
+        return r.into_http();
+    }
+    (200, json!({"ok": true, "data": {"supported": true, "enabled": enabled}}))
+}
+
+#[cfg(test)]
+mod power_save_tests {
+    use super::*;
+
+    #[test]
+    fn reads_iw_and_the_saved_script() {
+        assert_eq!(psm_from_iw("wlan0\tPower save: on\n"), Some(true));
+        assert_eq!(psm_from_iw("Power save: off"), Some(false));
+        assert_eq!(psm_from_iw("command failed: No such device (-19)"), None);
+        let script = "#!/bin/sh\n[ \"$ACTION\" = ifup ] && {\n  iw dev wlan0 set power_save off 2>/dev/null\n}\n";
+        assert_eq!(psm_from_script(script), Some(false));
+        assert_eq!(psm_from_script(&script.replace("off", "on")), Some(true));
+        assert_eq!(psm_from_script(""), None);
+    }
+
+    #[test]
+    fn nfc_switch_reads_numbers_and_strings() {
+        assert_eq!(nfc_switch(&json!({"switch": 1})), Some(true));
+        assert_eq!(nfc_switch(&json!({"switch": "0"})), Some(false));
+        assert_eq!(nfc_switch(&json!({})), None);
+    }
+}
+
+#[cfg(test)]
+mod switch_tests {
+    use super::*;
+
+    #[test]
+    fn master_reads_vendor_switch_and_both_aps() {
+        assert!(master_on_from("1", "0", "0"));
+        assert!(master_on_from("", "", ""));
+        assert!(master_on_from("1", "1", "0"), "one band off is not the master switch");
+        assert!(!master_on_from("1", "1", "1"));
+        assert!(!master_on_from("0", "0", "0"));
+    }
+
+    #[test]
+    fn master_writes_only_on_change() {
+        assert!(master_writes("1", true).is_empty());
+        assert!(master_writes("0", false).is_empty());
+        assert_eq!(master_writes("0", true), vec![("wireless.main_2g.disabled", "1"), ("wireless.main_5g.disabled", "1")]);
+        let on = master_writes("1", false);
+        assert_eq!(on.len(), 4);
+        assert!(on.iter().all(|&(_, v)| v == "0"));
+        assert!(on.contains(&("wireless.wifi0.disabled", "0")) && on.contains(&("wireless.wifi1.disabled", "0")));
+    }
+
+    #[test]
+    fn wifi6_missing_reads_as_on() {
+        assert_eq!(wifi6_from(""), "1");
+        assert_eq!(wifi6_from("1"), "1");
+        assert_eq!(wifi6_from("0"), "0");
+    }
 }

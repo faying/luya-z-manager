@@ -18,3 +18,17 @@ export function connectFamilies(s: string | null | undefined): string | null {
   const fam = [v.includes("ipv4") && "IPv4", v.includes("ipv6") && "IPv6"].filter(Boolean);
   return fam.length ? fam.join(" + ") : null;
 }
+
+/**
+ * Mobile data switch from get_wwaniface. `enable` is the last value written:
+ * 0 after boot while the auto dial is connected (E4 T12, B31, 2026-10-04), so
+ * 0 counts as off only when the call is down. Same rule as datad's
+ * data_switch() and the touch screen. null = cannot tell.
+ */
+export function dataSwitchOn(enable: unknown, status: string | null | undefined): boolean | null {
+  if (enable === true || enable === 1 || enable === "1") return true;
+  if (!(enable === false || enable === 0 || enable === "0")) return null;
+  const k = connectKind(status);
+  if (k === "unknown") return null;
+  return k === "connected" || k === "connecting";
+}

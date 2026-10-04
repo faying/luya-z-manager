@@ -22,7 +22,7 @@
 // Deliberately absent: any ZTE firmware update (FOTA) control.
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowClockwise, BatteryCharging, Lightning, Warning } from "@phosphor-icons/react";
+import { ArrowClockwise, BatteryCharging, Lightning, Plug, Power, Warning } from "@phosphor-icons/react";
 import { apiFetch } from "@/lib/api/client";
 import { useApi } from "@/lib/hooks/useApi";
 import { useWriteOp } from "@/lib/api/writeOp";
@@ -51,7 +51,7 @@ interface Draft {
 
 const PS_READ = { deviceInfoList: ["power_saver_mode"] };
 
-type Inline = null | { k: "charge" } | { k: "ps"; on: boolean } | { k: "fb"; on: boolean };
+type Inline = null | { k: "charge" } | { k: "ps"; on: boolean } | { k: "fb"; on: boolean } | { k: "dps"; on: boolean };
 
 /** "1"/"0" → boolean; anything else (missing key, odd shape) → null. */
 function flag(v: unknown): boolean | null {
@@ -192,6 +192,24 @@ export default function DevicePage() {
     },
   });
 
+  // ── stop charging (audit C): the firmware's "direct power supply" cuts the
+  // charger input, so the battery runs the device (measured 9-25) ──
+  const dpsWant = useRef(false);
+  const dpsOp = useWriteOp({
+    tier: 2,
+    steps: [
+      {
+        label: t("devctl.dps", "Stop charging"),
+        run: () => apiFetch("/api/device/charge-control", { method: "PUT", body: { charging_stopped: dpsWant.current } }),
+      },
+    ],
+    verify: async () => {
+      const d = await apiFetch<ChargeControl>("/api/device/charge-control");
+      await charge.mutate(d, { revalidate: false });
+      return d.charging_stopped === dpsWant.current;
+    },
+  });
+
   // ── reboot / factory reset ──
   const rebootRecovery = t(
     "devctl.rebootRecovery",
@@ -215,8 +233,13 @@ export default function DevicePage() {
   const [inline, setInline] = useState<Inline>(null);
   const inlineCtl = useConfirmInline(inline !== null);
   const inlineK = inline?.k ?? null;
-  const [dialog, setDialog] = useState<null | "reboot" | "reset">(null);
-  const anyBusy = chargeOp.busy || psOp.busy || fbOp.busy || rebootOp.busy || resetOp.busy;
+  // power off (audit C): nothing comes back by itself, so no waiting for the device
+  const offOp = useWriteOp({
+    tier: 3,
+    steps: [{ label: t("devctl.powerOff", "Power off"), run: () => apiFetch("/api/device/poweroff", { method: "POST" }) }],
+  });
+  const [dialog, setDialog] = useState<null | "reboot" | "reset" | "off">(null);
+  const anyBusy = chargeOp.busy || psOp.busy || fbOp.busy || dpsOp.busy || rebootOp.busy || resetOp.busy || offOp.busy;
 
   function askCharge() {
     if (!cur || anyBusy) return;
@@ -250,14 +273,25 @@ export default function DevicePage() {
     fbOp.confirm();
     setInline(null);
   }
+  function askDps(on: boolean) {
+    if (anyBusy) return;
+    setInline({ k: "dps", on });
+  }
+  function goDps() {
+    if (inline?.k !== "dps") return;
+    dpsWant.current = inline.on;
+    dpsOp.start();
+    dpsOp.confirm();
+    setInline(null);
+  }
   function goDialog() {
     const which = dialog;
     setDialog(null);
-    const op = which === "reboot" ? rebootOp : resetOp;
+    const op = which === "reboot" ? rebootOp : which === "off" ? offOp : resetOp;
     op.start();
     op.confirm();
   }
-  const trig = (k: "charge" | "ps" | "fb") => (inlineK === k ? inlineCtl.triggerProps : {});
+  const trig = (k: "charge" | "ps" | "fb" | "dps") => (inlineK === k ? inlineCtl.triggerProps : {});
 
   // ── status ──
   const capKnown = !!cd && !(cd.capacity === 0 && !cd.battery_status);
@@ -431,6 +465,21 @@ export default function DevicePage() {
           <GroupTitle id="dc-power">{t("devctl.powerModesTitle", "Power Modes")}</GroupTitle>
           <div className="nd-group">
             <Row
+              icon={Plug}
+              label={t("devctl.dps", "Stop charging")}
+              sub={!cd ? t("devctl.reading", "Reading…") : t("devctl.dpsHint", "Cuts the charger input: the battery runs the device, even when plugged in")}
+              control={
+                <span {...trig("dps")}>
+                  <Switch
+                    label={t("devctl.dps", "Stop charging")}
+                    isSelected={!!cd?.charging_stopped}
+                    isDisabled={!cd || charge.stale || anyBusy}
+                    onChange={askDps}
+                  />
+                </span>
+              }
+            />
+            <Row
               icon={Lightning}
               label={t("devctl.powerSaveMode", "Power-save mode")}
               sub={
@@ -494,6 +543,22 @@ export default function DevicePage() {
               </Button>
             </div>
           )}
+          {inline?.k === "dps" && (
+            <ConfirmInline
+              id={inlineCtl.id}
+              open
+              actionLabel={inline.on ? t("devctl.dpsOnAction", "stop charging") : t("devctl.dpsOffAction", "charge again")}
+              consequence={
+                inline.on
+                  ? t("devctl.cDpsOn", "The charger input is cut and the battery runs the device, so the level drops even when plugged in. The charge limit stays out of it until you change the limit.")
+                  : cd?.charge_limit_enabled
+                    ? t("devctl.cDpsOffLimit", "The charger input comes back. The charge limit is on: above {{limit}}% it stops charging again by itself.", { limit: cd.charge_limit })
+                    : t("devctl.cDpsOff", "The charger input comes back and the battery charges again.")
+              }
+              onCancel={() => setInline(null)}
+              onConfirm={goDps}
+            />
+          )}
           {inline?.k === "ps" && (
             <ConfirmInline
               id={inlineCtl.id}
@@ -527,6 +592,12 @@ export default function DevicePage() {
             />
           )}
           <div className="mt-2 grid gap-1 px-1">
+            {dpsOp.phase !== "idle" && dpsOp.phase !== "confirming" && (
+              <>
+                <span className="nd-aux">{t("devctl.dps", "Stop charging")}</span>
+                <OpResult op={dpsOp} />
+              </>
+            )}
             {psOp.phase !== "idle" && psOp.phase !== "confirming" && (
               <>
                 <span className="nd-aux">{t("devctl.powerSaveMode", "Power-save mode")}</span>
@@ -557,6 +628,16 @@ export default function DevicePage() {
               </Button>
             </div>
             <div className="nd-row nd-row--two flex-wrap">
+              <Power size={20} weight="bold" className="nd-row__icon" aria-hidden />
+              <span className="nd-row__text">
+                <span className="nd-row__label">{t("devctl.powerOff", "Power off")}</span>
+                <span className="nd-row__sub block">{t("devctl.powerOffSub", "Only the power button on the device turns it back on.")}</span>
+              </span>
+              <Button variant="secondary" onPress={() => setDialog("off")} isDisabled={anyBusy}>
+                {t("devctl.powerOffDevice", "Power Off")}
+              </Button>
+            </div>
+            <div className="nd-row nd-row--two flex-wrap">
               <Warning size={20} weight="bold" className="nd-row__icon" aria-hidden />
               <span className="nd-row__text">
                 <span className="nd-row__label">{t("devctl.factoryResetTitle", "Factory Reset")}</span>
@@ -571,6 +652,7 @@ export default function DevicePage() {
           </div>
           <div className="mt-2 grid gap-1 px-1">
             {rebootOp.phase !== "idle" && rebootOp.phase !== "confirming" && <OpResult op={rebootOp} />}
+            {offOp.phase !== "idle" && offOp.phase !== "confirming" && <OpResult op={offOp} />}
             {resetOp.phase !== "idle" && resetOp.phase !== "confirming" && <OpResult op={resetOp} />}
           </div>
         </section>
@@ -584,6 +666,17 @@ export default function DevicePage() {
         downtime={t("devctl.rebootDowntime", "About 90 seconds. This page waits and reconnects by itself; you may need to sign in again.")}
         recovery={rebootRecovery}
         actionLabel={t("devctl.confirmReboot", "Confirm Reboot")}
+        cutsUplink
+        onConfirm={goDialog}
+      />
+      <ConfirmDialog
+        open={dialog === "off"}
+        onOpenChange={(o) => !o && setDialog(null)}
+        title={t("devctl.confirmOffTitle", "Power off the device?")}
+        what={t("devctl.confirmOffWhat", "The U60 shuts down. Wi-Fi, the mobile connection and this page are gone until someone turns it on.")}
+        downtime={t("devctl.offDowntime", "Until someone presses and holds the power button on the device. It can't be turned on from here or remotely.")}
+        recovery={t("devctl.offRecovery", "Press and hold the power button on the device for about 3 seconds.")}
+        actionLabel={t("devctl.confirmOff", "Power Off")}
         cutsUplink
         onConfirm={goDialog}
       />

@@ -55,6 +55,7 @@
 | 顶栏状态条·短信图标 + 未读角标 | `/api/public/status` | `sms.unread` | 10000 | 是：public.rs:107 容量查询失败时未读数为 0 |
 | 顶栏页面标题 | 无（按当前路由查 NAV 的 `tKey`） | — | — | — |
 | 顶栏 agent 地址（`host:port`，小屏隐藏） | 无（`getApiBase()`，localStorage `u60.agent_url` 或同源） | — | — | — |
+| 事务横条（E4 T9，2026-10-03 加）：进行中「正在确认 · 1:42」（倒计时 aria-hidden），≥640 带「制式 · 自动 → 只用 4G · 触屏」；结束后结果常驻到「知道了」（3 秒类只在本页亲眼看到结束时显示）；退回也没通 role=alert；datad 卡住「数据服务没响应」；进行中掉线「和设备断开了 · 操作结果未知」。在该项自己的页不显示 | `/api/ops` | `op.active/last`（文字全是 datad 的 `say/what/old/target/source_zh/_en`）、`datad`、`supported` | 进行中 2000，否则 5000；断线时每 3 秒重试 | 否（agent 透传 datad 的 op 块） |
 | 告警横幅：「N 条新告警」+ 最新一条种类 + 正文 + 短信状态提示（「短信告警未配置。」/「上一条告警短信发送失败。」） | `/api/alerts` | `unread`、`events[].unread/kind/text`、`sms.configured`、`sms.recent[0].result`；在 `/alerts` 页不显示 | 30000 | 否（alerts.rs:262 读本地文件） |
 
 #### 控件
@@ -66,6 +67,7 @@
 | 底部标签栏「更多」（小屏，打开侧栏抽屉） | button「更多」 〔现名：link「功能」（原 button「更多」打开侧栏抽屉；现在底部标签栏是 首页 / 图表 / 功能 / 系统，「功能」「系统」枢纽页列出全部页面）〕 | 无 | — | — | 无 | —（本地） |
 | 语言切换「中 / EN」 | group「Language」内 button「中」、button「EN」（`aria-pressed`；建议 group 名改「语言」） 〔现名：radiogroup「语言」内 radio「中」「EN」（按了就切换的单选组；设置页里也有同名的一组）〕 | 无（`setLang`，写 localStorage `u60_lang`） | — | `<html lang>` / localStorage `u60_lang` | 无 | 一（界面设置·语言） |
 | 退出登录 | button「退出登录」（小屏只剩图标，`title`=「退出登录」） | 无（清 localStorage `u60.token`，不调接口） | — | 跳到 `/login` | 无 | —（本地） |
+| 事务横条「详情 ›」 | link「详情 ›」 〔交互后：有进行中的改动或没点「知道了」的结果时〕 | 无（导航到该项的页，如 `/router/network-mode`） | — | — | 无 | —（本地） |
 | 告警横幅「知道了」 | button「知道了」 | POST `/api/alerts/read` `{seq: events[0].seq}` | 1 个写请求；之后重拉 `/api/alerts`，并让 `/api/public/status` 失效重拉 | `/api/alerts` `unread` = 0 | 无 | 一（告警标为已读） |
 | 告警横幅「查看」 | link「查看」→ `/alerts` | 无（导航） | — | — | 无 | —（本地） |
 
@@ -190,18 +192,20 @@
 | 「LTE 频段：」 | `/api/network/signal` | `lte_band`（**未确认**，同上） | 无 | 否·透传 |
 | 操作结果提示（成功绿条/错误横幅） | 各写接口的返回 | — | — | — |
 
-页面**不读取当前锁频配置**：NR/LTE 勾选框初始全不选，与设备上实际锁定的频段无关。agent 也没有锁频状态的 GET 接口。
+页面**不读取当前锁频配置**：NR/LTE 勾选框初始全不选，与设备上实际锁定的频段无关。
+
+2026-10-03（E4 T9c）起：agent 加了 GET `/api/cell/band/lock`（uci `zte_nwinfo.band_lock.*` 当前锁定 + `zwrt_zte_nwinfo.default_band_lock.*` 恢复默认后的全集，都是逗号分隔的频段号，没有就是 null）。页面多一行「锁定的频段」（`SA n… · NSA n… · LTE B…`，等于默认时写「没锁（全部频段）」），三个写之后都按它读回（每 2 秒一次、最多 5 次，按集合比）；固件没有这些项时照旧「设备已接受」。固件是不是马上更新这些 uci 项，T12 上机时看。datad 卡住时三个写都不能点。
 
 #### 控件
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| 「重置 / 全部解锁」（页头，红色） | button「重置 / 全部解锁」 | POST `/api/cell/band/reset`（无请求体；ubus `nwinfo_rest_band_rat`） | 1 | 无读回（agent 无锁频状态 GET） | 「重置所有频段锁定？设备将切换为自动选择频段。」 | 三 |
+| 「重置 / 全部解锁」（页头，红色） | button「重置 / 全部解锁」 | POST `/api/cell/band/reset`（无请求体；T7a 起经 datad `band.reset` = `nwinfo_reset_band_cell_setting`，小区锁定也一起去掉，D22） | 1 | `/api/cell/band/lock` 每项等于默认（T9c） | 「频段和小区锁一起恢复：所有频段锁定和小区锁定都会去掉，设备改回自动选择。」 | 三 |
 | NR 模式单选「NSA」/「SA」 | radio「NSA」、radio「SA」 | 无——**选了也不影响提交**：`applyNR` 固定先发 nsa 再发 sa，`nrMode` 没被用到 | — | — | 无 | —（本地） |
 | NR 频段勾选框 n1 n3 n5 n7 n8 n28 n38 n40 n41 n66 n71 n77 n78 n79（14 个） | checkbox「n1」…「n79」 〔现名：button「n1」「n79」（toolbar「NR (5G) 频段」里的开关按钮，aria-pressed）〕 | 无（草稿） | — | — | 无 | —（本地） |
-| 「应用 NR 锁定」（未选时禁用） | button「应用 NR 锁定」 | POST `/api/cell/band/nr` `{nr5g_type, nr5g_band:"78,41"}`（去掉 n 前缀逗号拼接；ubus `nwinfo_set_nrbandlock`） | **2 步**：① `{nr5g_type:"nsa", nr5g_band}` ② `{nr5g_type:"sa", nr5g_band}`；第 ① 步成功第 ② 步失败时 NSA 已锁、SA 没锁，页面只报错不回滚 | 无读回 | 无 | 三（锁频） |
+| 「应用 NR 锁定」（未选时禁用） | button「应用 NR 锁定」 | POST `/api/cell/band/nr` `{nr5g_type, nr5g_band:"78,41"}`（去掉 n 前缀逗号拼接；ubus `nwinfo_set_nrbandlock`） | **2 步**：① `{nr5g_type:"nsa", nr5g_band}` ② `{nr5g_type:"sa", nr5g_band}`；第 ① 步成功第 ② 步失败时 NSA 已锁、SA 没锁，页面只报错不回滚 | `/api/cell/band/lock` 的 `nr_sa`/`nr_nsa` = 所选（按范围，T9c） | 无 | 三（锁频） |
 | LTE 频段勾选框 B1 B2 B3 B4 B5 B7 B8 B12 B17 B20 B28 B38 B40 B41（14 个） | checkbox「B1」…「B41」 〔现名：button「B1」「B41」（toolbar「LTE 频段」里的开关按钮，aria-pressed）〕 | 无（草稿） | — | — | 无 | —（本地） |
-| 「应用 LTE 锁定」（未选时禁用） | button「应用 LTE 锁定」 | POST `/api/cell/band/lte` `{lte_band:"1,3"}`（ubus `nwinfo_set_lte_ext_band`） | 1 | 无读回 | 无 | 三（锁频） |
+| 「应用 LTE 锁定」（未选时禁用） | button「应用 LTE 锁定」 | POST `/api/cell/band/lte` `{lte_band:"1,3"}`（ubus `nwinfo_set_lte_ext_band`） | 1 | `/api/cell/band/lock` 的 `lte` = 所选（T9c） | 无 | 三（锁频） |
 
 写接口假成功风险：三个都是「否·透传」（cell.rs:56-83），页面不看 `data.result`。
 
@@ -329,7 +333,8 @@
 | 手动配置列表：APN · PDP 类型 · 认证方式（none 不显示） | `/api/router/apn/profiles` | `apnListArray[].wanapn`、`.pdpType`、`.pppAuthMode` | 无 | 否·透传 |
 | 手动配置 id（编辑/删除/启用时用） | `/api/router/apn/profiles` | `apnListArray[].cid`（转字符串当 `profileId`；**未确认** `cid` 是否就是固件要的 `profileId`） | 无 | 否·透传 |
 | 「暂无手动配置」空状态 | `/api/router/apn/profiles` | 列表为空 | 无 | 否·透传 |
-| 自动检测的配置列表（只读）：名称 +「使用中」（只在自动模式）+ APN · PDP | `/api/router/apn/auto-profiles` | `apnListArray[].profilename/isEnable/wanapn/pdpType` | 无 | 否·透传（router.rs:299） |
+| 自动检测的配置列表：名称 +「使用中」（只在自动模式）+ APN · PDP；2 条以上时每行可「只给这张卡用」（2026-10-03） | `/api/router/apn/auto-profiles` | `apnListArray[].profilename/isEnable/wanapn/pdpType` | 无 | 否·透传（router.rs:299） |
+| 自动候选的「物联网」标记、手动列表里的「本卡」、候选行「本卡在用」、换卡自动调整的提示（10 分钟内） | `/api/netinfo?lite=1&apn=1` | `apn.auto[].iot`、`apn.picked_id`、`apn.notice.text/text_en` | 无 | 否（agent 自己判定，apn_pick.rs） |
 | 编辑表单预填：名称/APN/用户名/密码/PDP/认证/设为使用中 | `/api/router/apn/profiles` | 对应条目的 `profilename/wanapn/username/password/pdpType/pppAuthMode/isEnable` | 无 | 否·透传 |
 | 运营商 IPv6(WAN)：向运营商请求 IPv6 / 仅 IPv4 | `/api/router/wan-ipv6` | `ipv6_enabled` | 无 | 否（读 APN 失败回 503，router.rs:333-336） |
 | 运营商 IPv6：PDP 类型 · 当前有/无 IPv6 | `/api/router/wan-ipv6` | `pdp_type`（3=IPv4v6、2=IPv6、其他=IPv4）、`wan_has_ipv6` | 无 | 是：router.rs:338-345 `get_wwaniface` 失败时 `wan_has_ipv6` 为 false，显示「当前无 IPv6」 |
@@ -343,6 +348,7 @@
 | 运营商 IPv6(WAN) 开关 | switch「运营商 IPv6(WAN)」 | PUT `/api/router/wan-ipv6` `{enabled: bool}` | 1 个 HTTP 请求；agent 内部 3 步：读 cid1 APN → `set_apn_at_cid` 改 `pdpType/roamingPdpType`（开=3，关=1）→ `set_qcliiface` 开/关 IPv6 支路（这一步失败被忽略，router.rs:400） | `/api/router/wan-ipv6` `pdp_type`（配置）；`wan_has_ipv6`（实际是否有 IPv6，可能滞后） | 无 | 三（APN 修改） |
 | 「添加配置」（卡片右上） | button「添加配置」 | 无（打开表单弹层） | — | — | 无 | —（本地） |
 | 条目「启用」（非使用中才有） | button「启用」（每行同名；建议 `aria-label`「启用 {名称}」） | POST `/api/router/apn/profiles/activate` `{profileId}`（ubus `enable_manu_apn_id`） | 1 | `/api/router/apn/profiles` 对应条目 `isEnable` | 无 | 三（APN 切换） |
+| 自动候选「只给这张卡用」（候选 ≥2 条、且不是本卡正在用的那条才有） | button「只给这张卡用 {APN}」 〔交互后：场景 apn-candidates〕 | POST `/api/netinfo/apn` `{id: "auto…"}`（agent 复制成手动 APN 或复用同样的那条 → `enable_manu_apn_id` + `set_apn_mode 1`，按 ICCID 记住） | 1 个 HTTP 请求（202，后台做） | `/api/netinfo?lite=1&apn=1` `apn.mode == "manual"` 且 `apn.in_use.apn` = 该候选 | 「只给这张卡用 {APN}？」 | 三（APN 切换） |
 | 条目铅笔图标 | button「编辑 {名称}」 | 无（打开编辑表单） | — | — | 无 | —（本地） |
 | 条目垃圾桶图标（使用中的禁用） | button「删除 {名称}」 | POST `/api/router/apn/profiles/delete` `{profileId}`（ubus `delete_manu_apn`） | 1 | `/api/router/apn/profiles` 条目消失 | 「删除 APN "{名称}"?」 | 三 |
 | 表单·配置名称 * | 无（`Field` 的 `<label>` 未关联）；建议 textbox「配置名称」 〔现名：textbox「配置名称 *」〕〔交互后：点 button「添加配置」〕 | 无（草稿） | — | — | 无 | —（本地） |
@@ -386,7 +392,7 @@
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| 「全部解锁」（页头，红色） | button「全部解锁」 | POST `/api/cell/lock/reset`（ubus `nwinfo_reset_band_cell_setting`；从名字看会同时重置频段和小区设置，**未确认**） | 1 | 无读回（agent 无锁小区状态 GET）；间接看 `/api/network/signal` 的驻留小区 | 「重置所有小区锁定？」 | 三 |
+| 「全部解锁」（页头，红色） | button「全部解锁」 | POST `/api/cell/lock/reset`（经 datad `band.reset` = `nwinfo_reset_band_cell_setting`，频段锁定也一起恢复，D22） | 1 | 无读回（固件没有可读的小区锁定状态；驻留小区的 PCI 取决于覆盖，不能当读回，T9c 定）；间接看 `/api/network/signal` 的驻留小区 | 「频段和小区锁一起恢复：所有小区锁定和频段锁定都会去掉。」 | 三 |
 | NR·PCI * 输入框 | 无（label 未关联）；建议 textbox「NR PCI」 | 无（草稿） | — | — | 无 | —（本地） |
 | NR·EARFCN * 输入框 | 无；建议 textbox「NR EARFCN」 | 无（草稿） | — | — | 无 | —（本地） |
 | NR·频段（可选）输入框 | 无；建议 textbox「NR 频段」 〔现名：textbox「NR 频段（可选）」〕 | 无（草稿） | — | — | 无 | —（本地） |
@@ -428,9 +434,11 @@
 | 「应用」 | button「应用」 | PUT `/api/device/charge-control` `{charge_limit_enabled, charge_limit, hysteresis}` | 1 | 返回体就是重读的状态；GET `/api/device/charge-control` `charge_limit_enabled/charge_limit/hysteresis` | 无 | 二 |
 | 省电模式开关 | switch「开」/「关」（随状态变）；建议 switch「省电模式」 | PUT `/api/device/power-save` `{deviceInfoList:[{power_saver_mode:"1"/"0"}]}`（ubus `set_device_info`） | 1（先乐观翻转，失败再翻回） | POST `/api/device/power-save` 读 `power_saver_mode` | 无 | 二 |
 | 快速启动开关 | switch「开」/「关」（随状态变）；建议 switch「快速启动」 | PUT `/api/device/fast-boot` `{fast_boot:"1"/"0"}` | 1（乐观翻转） | `/api/device/fast-boot` `fast_boot` | 无 | 二 |
+| 「停止充电」开关（10-04 审计 C） | switch「停止充电」 | PUT `/api/device/charge-control` `{charging_stopped}` → datad `power.direct_supply.set`（切断充电输入、改用电池供电） | 1 | GET `/api/device/charge-control` `charging_stopped` | 页内确认，写明「插着电电量也会往下掉」 | 二 |
 | 「重启设备」 | button「重启设备」 | 无（进入确认态） | — | — | 无 | —（本地） |
 | 「确认重启」 | button「确认重启」 〔交互后：确认改为对话框；点 button「重启设备」〕 | POST `/api/device/reboot`（ubus `system reboot`） | 1 | 无读回（设备断线；可观察 `/api/device/system` `uptime` 变小） | 自定义确认（非 window.confirm）：「路由器将重启并暂时无法连接。」 | 三（重启） |
 | 重启确认态「取消」 | button「取消」 〔交互后：确认对话框里；点 button「重启设备」〕 | 无 | — | — | 无 | —（本地） |
+| 「关机」（10-04 审计 C） | button「关机」 → 对话框 button「关机」 | POST `/api/device/poweroff` → datad `device.poweroff`（没有退路直调） | 1 | 无读回（设备关了，不等它回来） | 对话框写「只能在设备上长按电源键开机，这里和远程都开不了」 | 三；定时任务禁止调用 |
 | 「恢复出厂设置」 | button「恢复出厂设置」 | 无（进入第一段确认） | — | — | 无 | —（本地） |
 | 「确定」（第一段） | button「确定」 〔现名：textbox「{前}恢复出厂{后}」（两段确认合成一个对话框：第一段「确定」换成输入确认词「恢复出厂」）〕〔交互后：点 button「恢复出厂设置」〕 | 无（进入第二段确认） | — | — | 自定义确认：「这将清除所有设置。确定吗？」 | —（本地） |
 | 「立即重置」（第二段） | button「立即重置」 〔交互后：确认对话框里，输入确认词前是禁用的；点 button「恢复出厂设置」〕 | POST `/api/device/factory-reset`（ubus `zwrt_bsp.power factory_reset`） | 1 | 无读回 | 自定义两段确认：「这将清除所有设置。确定吗？」→「最终确认——此操作无法撤销。」 | 三（恢复出厂） |
@@ -693,7 +701,14 @@
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
 | 模式单选 6 项，顺序和名字照原厂网页（`/usr/zte_web/web/js/config/ufi/U60Pro/config.js` 的 `AUTO_MODES`）：「5G/4G/3G（自动）」「只用 5G NSA」「只用 5G SA」「4G/3G」「只用 4G」「只用 3G」（值 `WL_AND_5G` / `LTE_AND_5G` / `Only_5G` / `WCDMA_AND_LTE` / `Only_LTE` / `Only_WCDMA`，与原厂相同；原来的 `auto_select`、`5G_only` 这类值模组不认） | radio，名称=标签 〔现名：radio「5G/4G/3G（自动）」「只用 5G NSA」「只用 5G SA」「4G/3G」「只用 4G」「只用 3G」（名称只用标签）〕 | 无（草稿） | — | — | 无 | —（本地） |
-| 「应用」（未改动时禁用） | button「应用」 | PUT `/api/modem/network-mode` `{net_select}`（agent 只收固件的 14 个值，其他回 400；ubus `nwinfo_set_netselect`。确认弹窗里「只用 5G SA」「只用 3G」另有一段加粗的国外提醒：很多国家没有 SA / 已关 3G，设备又没有 2G） | 1 个写请求，之后每 2 秒 GET `/api/network/signal` 最多 5 次确认 | `/api/network/signal` `net_select` = 所选值（页面自带读回；超时提示「已下发 —— 路由器可能仍在切换」） | 无 | 三（选网方式） |
+| 「应用」（未改动时禁用；datad 卡住时选项也不能点） | button「应用」 | PUT `/api/modem/network-mode` `{net_select}`（agent 只收固件的 14 个值，其他回 400；经 datad `network.set_mode`。确认弹窗里「只用 5G SA」「只用 3G」另有一段加粗的国外提醒：很多国家没有 SA / 已关 3G，设备又没有 2G；新 datad 自动退回没开时加「自动退回没开：没通也会保持。」） | 1 个写请求；旧 datad：之后每 2 秒 GET `/api/network/signal` 最多 5 次确认；新 datad（`/api/ops` `supported`）：不自己读回，交给事务 | 旧 datad：`/api/network/signal` `net_select` = 所选值；新 datad：事务状态块（datad 按读数确认，可能自动退回） | 无 | 三（选网方式） |
+| 事务状态块「退回 X」（E4 T9，进行中、datad 说能退回时；第一下展开后果「马上改回「X」，会重新注册，断网几十秒」，第二下才发） | button「退回自动」 〔交互后：有进行中的改动时〕 | POST `/api/ops/act` `{act:"revert", op_id}` → datad `op.revert`（来源 web） | 1 | `/api/ops` 的 `op.last` | 页内两段（ConfirmInline） | 二 |
+| 事务状态块「保留 Y」（同上；后果「不再自动退回；还没确认通，没网要你自己改回去」；同一时刻只开一个确认，设备先到点就作废） | button「保留只用 …」 〔交互后：有进行中的改动时〕 | POST `/api/ops/act` `{act:"keep", op_id}` | 1 | 同上 | 页内两段 | 二 |
+| 事务结果「知道了」（常驻类结果；触屏和网页一起收起） | button「知道了」 〔交互后：有没点「知道了」的结果时〕 | POST `/api/ops/act` `{act:"ack", op_id}` → datad `op.ack`（只记账） | 1 | `op.last.acked` | 无 | 一 |
+| 「自动退回已打开」一次性提示的「知道了」（顶部横条，DD18；没有进行中的改动和要显示的结果时才出；触屏和网页点一次都算） | button「知道了」 〔交互后：`op.notice` 是 `rollback_on` 时〕 | POST `/api/ops/act` `{act:"notice_ack"}` → datad `op.notice_ack`（来源 web，只记账） | 1 | `op.notice` 消失 | 无 | 一 |
+| 「再试一次退回到 X」（退回也没通时，DD9） | button「再试一次退回到自动」 〔交互后：退回也没通时〕 | POST `/api/ops/write` `{op_id, request:{action:"network.set_mode", params:{mode: rollback_to}}}`（直接发给 datad，用 datad 自己的取值，`NETWORK_auto` 也行） | 1 | 新事务 | 页内两段 | 二 |
+| 「重启设备」（退回也没通 / 没切成时，DD9/DD17） | button「重启设备」 〔交互后：退回也没通或没切成时〕 | POST `/api/device/reboot`（同设备控制页） | 1 | uptime 变小 | 页内两段 | 二 |
+| 「上次改动 10-03 14:32 · 触屏 ›」（DD5） | link「上次改动 …」 〔交互后：新 datad 且这一项被改过〕 | 无（导航到 `/changes/?op=<op_id>`；数据 `/api/ops/journal` 的 `owners["network.mode"]`） | — | — | 无 | —（本地） |
 
 写接口假成功风险：否·透传（modem_ext.rs `modem_network_mode_set`，先校验取值），但页面有自己的读回轮询。
 
@@ -1052,6 +1067,17 @@
 1. wifi.rs:251-259：`wifi_onoff` / `wifi6_switch` 属于 `zte_mbb` 包，`uci set` 失败被「skip silently」，照样回 ok。
 2. wifi.rs:264-300：如果这次只改了 `wifi_onoff`（或 `wifi6_switch`），`wireless_changed` 为 false，**根本不会 reload**，只 commit 了 `zte_mbb` 就回 ok——Wi-Fi 开关在页面上显示已切换，实际无线电不一定动（**未确认**固件是否另有进程监听 `zte_mbb.wifi.wifi_onoff`）。
 3. wifi.rs:294-298：需要重载时放到后台线程 `finish_in_background`，HTTP 先回 ok；重载失败只写 agent 日志，页面看不到。另外只改发射功率时 `iw … set txpower` 的结果被丢掉（wifi.rs:280-291）。
+
+---
+
+#### 节能与碰一碰（10-04 审计 C，`router/wifi/Extras.tsx`）
+
+| 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
+|---|---|---|---|---|---|---|
+| Wi-Fi 节能开关 | switch「Wi-Fi 节能」 | PUT `/api/wifi/power-save` `{enabled}` → datad `wifi.power_save`（hotplug 脚本 + wlan0–3 iw，读回） | 1 | GET `/api/wifi/power-save` `enabled`（Wi-Fi 开着读 iw，关着读存的选择） | 无（不断网） | 一 |
+| NFC 碰一碰开关 | switch「NFC 碰一碰」 | PUT `/api/nfc` `{enabled}` → datad `nfc.set {enabled, flag:2}` | 1 | GET `/api/nfc` `enabled` | 无 | 一 |
+
+旧 agent 两个接口都是 404：这一组不出现。
 
 ---
 
@@ -1505,11 +1531,35 @@
 
 ---
 
+## /changes 改动记录
+
+文件：`app/(panel)/changes/page.tsx`（E4 T9b，2026-10-03 加；设计 docs/designs/write-op-layer.md DD5、DD10、DD11）。文字全是 datad 的（`journal.list`，STATE_V2.md V2-41）。旧 datad（`/api/ops` 没有 `supported`）写「这版数据服务还没有改动记录」，不去读。
+
+#### 数据项
+
+| 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
+|---|---|---|---|---|
+| 每条两行：「制式 · 自动 → 只用 4G」/「10-03 14:32 · 网页 · 已切到只用 4G」，左边 ●▲■；`hide` 的行不列 | `/api/ops/journal?limit=50` | `entries[].what/change/result/source_zh/_en`、`t`（设备当地时间，原样截取）、`mark`、`hide` | 15000 | 否（agent 透传） |
+| 空「还没有改动」+「触屏、网页、情景、定时任务改的设置都会记在这里。」 | 同上 | `entries` 去掉 `hide` 后为空 | 15000 | 否 |
+| 读不到「读不到改动记录 · 数据服务没响应」（有旧的就调灰保留） | 同上 | 请求失败 | — | — |
+| 底部「只显示最近 50 条」 | — | — | — | — |
+| 详情：结果、「改了什么 · 旧 → 新」、时间 · 来源；不能撤销时写原因 | 同上 | `undo_view.ok/label/why_zh/_en` | — | 否 |
+
+#### 控件
+
+| 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
+|---|---|---|---|---|---|---|
+| 列表行（点开详情） | button，名称=两行文字 〔交互后：新 datad 有记录时〕 | 无（本页内切到详情，网址加 `?op=`） | — | — | 无 | —（本地） |
+| 详情「‹ 改动记录」 | button「‹ 改动记录」 〔交互后：打开一条详情〕 | 无 | — | — | 无 | —（本地） |
+| 详情「撤销」/「重做」（datad 说能撤才可点；会断蜂窝的网络模式用第三档弹窗，其他第二档；发出后回到列表，结果由事务横条接着显示） | button「撤销」 〔交互后：打开一条事务的详情〕 | POST `/api/ops/write` `{op_id, request: undo_view.request}`（`undo:true`，agent 加来源 web，只认描述表的动作） | 1 | 新事务（`/api/ops`） | 三（网络模式）/ 二 | 三 / 二 |
+
+---
+
 ## 汇总
 
 ### 1. 路由数
 
-`find web/src/app -name page.tsx | wc -l` = **43**，本文 43 个路由各有一节（另加一节「全局」）。已用脚本核对：本文 `## /…` 标题与 `app/(panel)` 下的 `page.tsx` 一一对应，没有遗漏或多出。
+`find web/src/app -name page.tsx | wc -l` = **43**，本文 43 个路由各有一节（清单整理时的数；之后新加的页各自补了一节，如 2026-10-03 的 `/changes`）（另加一节「全局」）。已用脚本核对：本文 `## /…` 标题与 `app/(panel)` 下的 `page.tsx` 一一对应，没有遗漏或多出。
 
 不在侧栏 NAV 里的路由：`/login`（登录页）、`/sms/compose`（从 `/sms` 的「写短信」进）、`/router/home-mode`（已被情景模式取代，只能输网址进入）。
 
