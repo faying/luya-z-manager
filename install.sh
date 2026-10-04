@@ -10,8 +10,8 @@
 #   GATEWAY=192.168.0.1 ./install.sh
 #
 # Requires SSH access to the device (run ./setup.sh once if SSH isn't set up).
-# Tailscale auth keys are entered interactively and stored ONLY on the device
-# (/data/tailscale/tsconfig, chmod 600) — never written to the repo.
+# A Tailscale auth key is entered interactively, used once to log in and not
+# stored anywhere; settings go to /data/tailscale/tuning.env on the device.
 # ─────────────────────────────────────────────────────────────────────────────
 set -u
 
@@ -84,20 +84,24 @@ connect_setup() {
 }
 
 # Idempotent insert of a line into /etc/rc.local (before `exit 0`), keyed by marker.
+# The previous file is kept as /data/rc.local.bak-installer and put back when
+# the result fails `sh -n`.
 rc_add() { # <line> <unique-marker>
   local line="$1" mark="$2"
   rcmd "
     grep -qF '$mark' /etc/rc.local 2>/dev/null && exit 0
     touch /etc/rc.local
+    cp /etc/rc.local /data/rc.local.bak-installer
     if grep -q '^exit 0' /etc/rc.local; then
       awk -v ins='$line' '/^exit 0/ && !d {print ins; d=1} {print}' /etc/rc.local > /tmp/rc.\$\$ \
         && cat /tmp/rc.\$\$ > /etc/rc.local && rm -f /tmp/rc.\$\$
     else
       echo '$line' >> /etc/rc.local
     fi
+    sh -n /etc/rc.local || { cat /data/rc.local.bak-installer > /etc/rc.local; echo 'rc.local failed sh -n; previous file restored' >&2; exit 1; }
   "
 }
-rc_del() { rcmd "sed -i '\\#$1#d' /etc/rc.local 2>/dev/null; true"; }
+rc_del() { rcmd "cp /etc/rc.local /data/rc.local.bak-installer 2>/dev/null; sed -i '\\#$1#d' /etc/rc.local 2>/dev/null; true"; }
 
 require_conn() {
   rcmd "echo ok" >/dev/null 2>&1 && return 0
@@ -141,50 +145,75 @@ module_tailscale() {
     ok "tailscale $ver installed to /data/tailscale/."
   fi
 
-  # 2) interactive config
+  # 2) interactive config (scripts/tailscale/README.md lists the settings)
   local def_route
   def_route=$(rcmd "ip -o -f inet addr show br-lan 2>/dev/null | awk '{print \$4}'" 2>/dev/null | head -1 \
               | awk -F'[./]' 'NF>=4{printf "%s.%s.%s.0/24",$1,$2,$3}')
   echo
-  printf "${CYAN}Auth key (tskey-… ; use a REUSABLE key; blank = rely on saved state):${NC} "
+  printf "${CYAN}Auth key (tskey-…; used once to log in, never stored; blank = log in by URL or keep the saved login):${NC} "
   read -rs authkey; echo
-  printf "${CYAN}Advertise LAN subnet [%s] (blank to skip):${NC} " "${def_route:-none}"; read -r routes
-  routes="${routes:-$def_route}"
+  printf "${CYAN}Advertise LAN subnet [%s] (blank to keep, - to skip):${NC} " "${def_route:-none}"; read -r routes
+  routes="${routes:-$def_route}"; [ "$routes" = - ] && routes=
   printf "${CYAN}Exit node (IP or name, blank = none):${NC} "; read -r exit_node
   local def_host
   def_host=$(rcmd "/data/tailscale/tailscale --socket=/tmp/tailscaled.sock debug prefs 2>/dev/null | grep Hostname | head -1 | cut -d: -f2- | tr -d ' \",'" 2>/dev/null | tr -d '\r')
-  printf "${CYAN}Node name in the tailnet [%s] (blank = device default):${NC} " "${def_host:-device default}"; read -r ts_hostname
-  ts_hostname="${ts_hostname:-$def_host}"
+  printf "${CYAN}Node name in the tailnet [%s]:${NC} " "${def_host:-u60pro}"; read -r ts_hostname
+  ts_hostname="${ts_hostname:-${def_host:-u60pro}}"
   printf "${CYAN}Accept routes from your tailnet? [Y/n]:${NC} "; read -r a
   case "$a" in [Nn]*) accept_routes=false;; *) accept_routes=true;; esac
   printf "${CYAN}Let Tailscale manage DNS? [y/N]:${NC} "; read -r a
   case "$a" in [Yy]*) accept_dns=true;; *) accept_dns=false;; esac
+  # values go into a shell file on the device: only plain characters
+  case "$routes$exit_node$ts_hostname" in *[!A-Za-z0-9._:/,-]*)
+    err "Only letters, digits and . _ : / , - are allowed in routes, exit node and name."; return 1 ;; esac
+  case "$authkey" in *[!A-Za-z0-9_-]*) err "That does not look like an auth key."; return 1 ;; esac
 
-  # 3) write device-only config (600) + start script + rc.local
+  # 3) scripts + settings. Other lines of an existing tuning.env are kept.
+  rcmd "mkdir -p /data/tailscale"
+  rpush "$DIR/scripts/tailscale/start.sh" /data/tailscale/start.sh 644
+  rpush "$DIR/scripts/tailscale/apply.sh" /data/tailscale/apply.sh 755
   local cfg; cfg=$(mktemp)
   {
-    printf "TS_AUTHKEY='%s'\n" "$authkey"
+    printf "TS_HOSTNAME='%s'\n" "$ts_hostname"
     printf "TS_ROUTES='%s'\n" "$routes"
     printf "TS_EXIT_NODE='%s'\n" "$exit_node"
     printf "TS_ACCEPT_ROUTES='%s'\n" "$accept_routes"
     printf "TS_ACCEPT_DNS='%s'\n" "$accept_dns"
-    printf "TS_HOSTNAME='%s'\n" "$ts_hostname"
   } > "$cfg"
-  rcmd "mkdir -p /data/tailscale"
-  rpush "$cfg" /data/tailscale/tsconfig 600
+  rpush "$cfg" /tmp/ts-prefs 600
   rm -f "$cfg"
-  rpush "$DIR/scripts/tailscale-start.sh" /data/tailscale-start.sh
-  rc_add 'sh /data/tailscale-start.sh > /dev/null 2>&1 &' 'tailscale-start.sh'
-  ok "Config saved on device only (/data/tailscale/tsconfig, chmod 600). Not in the repo."
+  rcmd "cd /data/tailscale && { grep -v -E '^(TS_HOSTNAME|TS_ROUTES|TS_EXIT_NODE|TS_ACCEPT_ROUTES|TS_ACCEPT_DNS|TS_AUTHKEY)=' tuning.env 2>/dev/null; cat /tmp/ts-prefs; } > tuning.env.tmp && mv -f tuning.env.tmp tuning.env; rm -f /tmp/ts-prefs"
 
+  # 4) the old tailscale-start.sh (deprecated): its rc.local line and its
+  #    tsconfig, which held the auth key. start.sh moves an old state file.
+  if rcmd "grep -qF tailscale-start.sh /etc/rc.local" 2>/dev/null; then
+    rc_del 'tailscale-start.sh'; ok "Removed the old tailscale-start.sh line from rc.local."
+  fi
+  rcmd "rm -f /data/tailscale/tsconfig /data/tailscale-start.sh"
+
+  # 5) check before anything starts at boot
+  if ! rcmd "sh /data/tailscale/start.sh check"; then
+    err "Check failed (above). Nothing was added to rc.local; fix it and run this again."; return 1
+  fi
+
+  # 6) start (a running tailscaled is restarted so the settings apply), log in once
   printf "${CYAN}Start Tailscale now? [Y/n]:${NC} "; read -r a
   case "$a" in
-    [Nn]*) info "Will start on next boot.";;
-    *) info "Starting (allow ~15s for network + time sync)…"
-       rcmd "sh /data/tailscale-start.sh >/dev/null 2>&1 &"
-       sleep 12
+    [Nn]*) info "Not started.";;
+    *) info "Starting…"
+       rcmd "sh /data/tailscale/start.sh stop >/dev/null 2>&1; sh /data/tailscale/start.sh"
+       rcmd "i=0; while [ ! -S /tmp/tailscaled.sock ] && [ \$i -lt 60 ]; do sleep 2; i=\$((i+2)); done"
+       if [ -n "$authkey" ]; then
+         local kf; kf=$(mktemp); printf '%s' "$authkey" > "$kf"
+         rpush "$kf" /tmp/ts-authkey 600; rm -f "$kf"
+         rcmd "/data/tailscale/tailscale --socket=/tmp/tailscaled.sock login --auth-key=file:/tmp/ts-authkey --timeout=60s; rm -f /tmp/ts-authkey"
+       elif rcmd "/data/tailscale/tailscale --socket=/tmp/tailscaled.sock status --json 2>/dev/null | grep -q '\"BackendState\": *\"NeedsLogin\"'"; then
+         info "Open the link below to log this device in (waits up to 3 minutes)."
+         rcmd "/data/tailscale/tailscale --socket=/tmp/tailscaled.sock login --timeout=180s"
+       fi
        rcmd "/data/tailscale/tailscale --socket=/tmp/tailscaled.sock status 2>&1 | head -8" ;;
   esac
+  rc_add 'sh /data/tailscale/start.sh' '/data/tailscale/start.sh' && ok "Starts at boot (rc.local). Off switch: sh /data/tailscale/start.sh disable"
 }
 
 # ── Module: Home Mode ────────────────────────────────────────────────────────
@@ -245,7 +274,7 @@ module_status() {
     p "monitor" "$(pidof -x monitor.sh >/dev/null 2>&1 || pgrep -f monitor.sh >/dev/null 2>&1 && echo running || ([ -f /tmp/monitor.pid ] && echo running || echo stopped))"
     p "shellcrash" "$(ps w | grep -E "CrashCore|sing-box" | grep -qv grep && echo running || echo stopped/absent)"
     echo "  --- rc.local autostarts ---"
-    grep -E "start_zte_agent|start_dropbear|start_monitor|tailscale-start|homemode-bootsafe|recovery_setup" /etc/rc.local 2>/dev/null | sed "s/^/    /"
+    grep -E "start_zte_agent|start_dropbear|start_monitor|tailscale-start|tailscale/start.sh|homemode-bootsafe|recovery_setup" /etc/rc.local 2>/dev/null | sed "s/^/    /"
   '
 }
 
@@ -264,8 +293,9 @@ module_uninstall() {
        rc_del 'homemode-bootsafe'; ok "Home Mode removed; Wi-Fi restored ON." ;;
     2) rc_del 'start_monitor.sh'; rcmd "[ -f /tmp/monitor.pid ] && kill \$(cat /tmp/monitor.pid) 2>/dev/null; rm -f /data/local/tmp/monitor.sh /data/local/tmp/start_monitor.sh"; ok "Monitor removed." ;;
     3) rc_del 'recovery_setup.sh'; rcmd "rm -f /data/local/tmp/recovery_setup.sh"; ok "Recovery removed (takes effect next boot)." ;;
-    4) rc_del 'tailscale-start.sh'; rcmd "killall tailscaled 2>/dev/null; rm -f /data/tailscale/tsconfig"
-       warn "Stopped Tailscale and removed the auth config. Binary kept at /data/tailscale/." ;;
+    4) rcmd "if [ -f /data/tailscale/start.sh ]; then sh /data/tailscale/start.sh stop; else killall tailscaled 2>/dev/null; fi; rm -f /data/tailscale/tsconfig /data/tailscale-start.sh"
+       rc_del '/data/tailscale/start.sh'; rc_del 'tailscale-start.sh'
+       warn "Stopped Tailscale and removed it from rc.local. Binaries and the node identity are kept in /data/tailscale/." ;;
     *) ;;
   esac
 }

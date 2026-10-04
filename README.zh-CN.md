@@ -67,7 +67,7 @@ node scripts/mock-agent/server.ts & npm run dev
 zte-agent/     设备端 REST API（Rust）
 web/           管理网页（Next.js），由 agent 在 :9090 提供
 onboard/       装机包：build-kit.sh（打包）、install.sh（装机）、device/（设备端脚本）、test/（沙盒测试）
-scripts/       esim/（lpac 工具包）、tailscale/、homemode.sh、monitor.sh 等
+scripts/       esim/（lpac 工具包）、tailscale/（Tailscale 开机启动，用法见其 README）、homemode.sh、monitor.sh 等
 docs/          GETTING-STARTED.md、DESIGN.md（界面设计规范）、RELIABILITY.md（可靠性约定）
 ```
 

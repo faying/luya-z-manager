@@ -26,6 +26,9 @@ D=${TSA_DIR:-/data/tailscale}
 CLI=${TSA_CLI:-$D/tailscale}
 SOCK=--socket=/tmp/tailscaled.sock
 START=${TSA_START:-$D/start.sh}
+# the start script the rollback uses: set it when the start script itself is
+# what is on trial (TSA_START=start.sh.new), so a bad one is not run twice
+ROLLBACK_START=${TSA_ROLLBACK_START:-$START}
 LOG=${TSA_LOG:-/data/power/tailscale-apply.log}
 TIMEOUT=${TSA_TIMEOUT:-300}
 POLL=${TSA_POLL:-10}
@@ -44,12 +47,12 @@ if [ "$VARIANT" != --none ] && [ ! -f "$VARIANT" ]; then echo "no such variant: 
 status_json() { "$CLI" $SOCK status --json 2>/dev/null; }
 field() { status_json | $JF -e "$1" 2>/dev/null; }
 
-restart() {
+restart() { # [start script]
     p=$($PIDOF tailscaled)
     [ -n "$p" ] && $KILL $p 2>/dev/null
     i=0; while [ -n "$($PIDOF tailscaled)" ] && [ $i -lt 15 ]; do $SLEEP 1; i=$((i + 1)); done
     [ -n "$($PIDOF tailscaled)" ] && $KILL -9 $($PIDOF tailscaled) 2>/dev/null
-    sh "$START"
+    sh "${1:-$START}"
 }
 
 healthy() { # $1 = route that must stay primary ("" = none required)
@@ -88,6 +91,7 @@ if wait_healthy "$ROUTE"; then
 fi
 log "FAILED $VARIANT: $WHY — rolling back"
 if [ -f "$D/tuning.env.rollback" ]; then mv -f "$D/tuning.env.rollback" "$D/tuning.env"; else rm -f "$D/tuning.env"; fi
-restart
+[ "$ROLLBACK_START" != "$START" ] && log "rollback starts with $ROLLBACK_START"
+restart "$ROLLBACK_START"
 if wait_healthy "$ROUTE"; then log "rolled back, healthy"; else log "rolled back, STILL UNHEALTHY: $WHY"; fi
 exit 1

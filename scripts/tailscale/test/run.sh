@@ -69,6 +69,10 @@ check "--none: tuning.env removed" '[ $RC = 0 ] && [ ! -f "$T/d/tuning.env" ]'
 setup; rm -f "$T/d/tuning.env"; echo 'X=BAD' > "$T/bad.env"; run "$T/bad.env"
 check "no previous tuning: rollback leaves none" '[ $RC = 1 ] && [ ! -f "$T/d/tuning.env" ]'
 
+setup; echo 'X=BAD' > "$T/bad.env"; printf '#!/bin/sh\necho old >> %s/starts; touch %s/running\n' "$T" "$T" > "$T/old-start.sh"
+export TSA_ROLLBACK_START=$T/old-start.sh; run "$T/bad.env"; unset TSA_ROLLBACK_START
+check "rollback uses TSA_ROLLBACK_START when the start script is on trial" '[ $RC = 1 ] && [ "$(tail -n 1 "$T/starts")" = old ] && grep -q "rollback starts with" "$T/log"'
+
 run /nonexistent
 check "missing variant file: usage error" '[ $RC = 2 ]'
 run "$T/good.env" sideways

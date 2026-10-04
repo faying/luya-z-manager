@@ -67,7 +67,7 @@ To update a single component on a device that is already set up, see [DEPLOY.md]
 zte-agent/     on-device REST API (Rust)
 web/           admin web (Next.js), served by the agent on :9090
 onboard/       install kit: build-kit.sh (build), install.sh (install), device/ (on-device scripts), test/ (sandbox tests)
-scripts/       esim/ (lpac toolkit), tailscale/, homemode.sh, monitor.sh, etc.
+scripts/       esim/ (lpac toolkit), tailscale/ (boot start for Tailscale, see its README), homemode.sh, monitor.sh, etc.
 docs/          GETTING-STARTED.md, DESIGN.md (UI design spec), RELIABILITY.md (reliability contract)
 ```
 
