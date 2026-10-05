@@ -55,13 +55,18 @@ What it looks like once installed (screenshots use fake data):
 | Your situation | Result |
 |---|---|
 | New device, B27 or earlier | Install from scratch with this guide |
-| New device, B28 or later (including B31) | **Cannot install**: ADB cannot be enabled, so the install kit fails at the first step, and this project has no other way to do a first install |
+| New device, B28 or later (including B31) | **Cannot install**: ADB cannot be enabled, so the install kit fails at the first step, and this project has no verified way to do a first install (an untested idea follows below) |
 | Already installed, then upgraded to B31 | The programs themselves run on B31 (the maintainer's device has been on B31 since 10-03). But the upgrade resets `/etc/rc.local` to the stock version and removes the services installed under `/etc/init.d/`, so after the reboot SSH, the admin web, the touch UI and zwrt-datad no longer start, and the screen shows the stock UI |
 
 What survives the upgrade: every program and all data under `/data`, the SSH program and keys (`/data/ssh`), the network address, the web password and your settings; firmware auto-update stays off.
 To recover, the key step is adding the line that starts SSH back to `rc.local` without ADB. The maintainer did this ***REMOVED***,
 ***REMOVED***, so the steps are not documented here. Once SSH is back, run `./install.sh admin devui` from a freshly built install kit; it puts the services back and fixes `rc.local`.
 Note: `/data/u60-kit/rc.local.orig` holds the stock `rc.local` of the firmware **before** the upgrade. To uninstall after an upgrade, do not copy it over the new one; just remove the lines this project added.
+
+**New device already on B28 or later: an untested idea for people who want to try it themselves.** When the stock web UI restores a configuration backup, it unpacks the files in it as root with `tar -C /` and then reboots.
+So in theory you could: take a backup in the web UI → ***REMOVED*** to `rc.local`, and put an SSH server (for example the dropbear from the install kit) and your public key into the archive → ***REMOVED*** → restore it in the web UI.
+Once SSH works, you continue the way an already installed, upgraded device does, with `./install.sh admin devui` and so on.
+This project **has not made this work** and provides no tooling for it: ***REMOVED***; whether the firmware rejects paths outside `/etc` on restore is unverified; and a restore that breaks `/etc` can leave the device unable to boot. At your own risk, and only if you know how to bring the device back with the stock tools.
 
 **Install computer** (macOS / Linux / Git Bash on Windows): `adb`, `ssh`, `curl`.
 
