@@ -21,9 +21,15 @@ It is written for people new to this project. Every command comes from scripts a
 How they connect on the device:
 
 ```
-zwrt-datad :9460 ──▶ touch UI u60pro-devui ──(eSIM page)──▶ zte-agent :9090 ──▶ lpac (/data/esim) ──▶ eUICC card
+ubus / uci / sysfs ──▶ zwrt-datad :9460 ──(/state, /v2/screen)──▶ touch UI u60pro-devui
+                             │                                         │ (battery estimate, alerts, eSIM, settings)
+                             └──(/v2 push)──▶ zte-agent :9090 ◀────────┘
+                                                  └──▶ lpac (/data/esim) ──▶ eUICC card
 browser ──▶ zte-agent :9090 (API + admin web)
 ```
+
+`zwrt-datad` is the only service that polls the stock ubus interfaces in the background; `zte-agent` and the touch UI read from it instead of each polling on their own.
+The touch UI's home verdict comes from datad (`/v2/screen`); battery estimates, alert categories, eSIM and settings changes go through `zte-agent`.
 
 The three repositories are **used together**: the install kit is built in manager, which pulls the touch program and scripts from touch-ui and `zwrt-datad` from data-service.
 
@@ -87,7 +93,7 @@ The first run downloads Docker images and dependencies and takes about 20–30 m
 | eSIM tools (lpac) | `scripts/esim/build-esim-bundle.sh --out`: lpac and its libraries from Alpine 3.24 (`scripts/esim/alpine.lock` pins versions and sha256) + a statx compatibility shim + `qmi_uim_probe` |
 | Process supervision, health check scripts | touch-ui's `scripts/` |
 
-Before packaging, the script checks: the touch program must be the LVGL build (not the old litehtml build from `scripts/build.sh`); `zwrt-datad` must be the Rust version with no hard-coded external update source. If either check fails, it stops.
+Before packaging, the script checks: the touch program must be the LVGL build (not the old litehtml build, which was removed from touch-ui and only survives in the `legacy-litehtml` tag); `zwrt-datad` must be the Rust version with no hard-coded external update source. If either check fails, it stops.
 
 You can also build the pieces separately and point `build-kit.sh` at the existing files:
 
@@ -142,7 +148,7 @@ Then:
 
 - Open `http://192.168.0.1:9090/` in a browser and log in with the admin web password.
 - SSH: `ssh -p 2222 root@192.168.0.1` (key only; after installing, the script prints a snippet you can add to `~/.ssh/config`).
-- The admin web's 「健康」 (Health) page runs the same checks as `doctor`. If the admin web will not open, run `sh /data/u60-guard/doctor.sh` over SSH.
+- The admin web's Health page runs the same checks as `doctor`. If the admin web will not open, run `sh /data/u60-guard/doctor.sh` over SSH.
 
 | Login page (phone) | Health page |
 |---|---|
@@ -157,7 +163,11 @@ Then:
 ./install.sh devui      # touch UI + zwrt-datad
 ./install.sh esim       # eSIM tools
 ./install.sh reboot     # optional: reboot once to confirm everything comes up on boot
+./install.sh recover    # optional, not part of the full set: boot-time clean-up used by u60-ship.sh
+                        #   (adds one line to rc.local; run it only if you use u60-ship.sh)
 ```
+
+If the device has an unfinished `u60-ship.sh` transaction (see touch-ui [docs/SHIP.md](https://github.com/faying/zte-u60-pro-mu5250-touch-ui/blob/main/docs/SHIP.md)), `admin`, `devui` and `recover` refuse to install until it is finished or rolled back.
 
 **Back up and restore configuration** (configuration only, no programs; backups contain passwords, do not share them):
 
@@ -179,7 +189,8 @@ The public version does not include a proxy. To run a transparent proxy on the d
 
 ## 8. Rules every newcomer must follow
 
-- **Do not upgrade the firmware, and do not turn on firmware auto-update.** An upgrade overwrites `/etc/rc.local` (every autostart stops working), and from B28 on ADB cannot be enabled, so there is no way back.
+- **Do not upgrade the firmware, and do not turn on firmware auto-update.** An upgrade resets `/etc/rc.local` and removes the services installed under `/etc/init.d/`, so SSH and every autostart stop working
+  (`/data` and your settings survive). From B28 on, ADB cannot be enabled, so the install kit cannot bring them back; recovering takes manual work that this project does not document.
 - **Do not run `/etc/init.d/<stock service> disable`.** The stock master daemon waits for a list of services in its configuration to all be ready before it lets boot continue; if one is missing, the device sticks on the logo, does not dial, and the touchscreen stops responding.
 - Autostart goes only through `/etc/rc.local`. Back it up before changing it, and check the syntax with `sh -n /etc/rc.local` afterwards.
 - Programs and data go in `/data`. `/tmp` is a RAM disk and is cleared on reboot. Do not write partitions, do not `dd`.
@@ -197,5 +208,6 @@ The public version does not include a proxy. To run a transparent proxy on the d
 - **SSH occasionally refuses connections**: dropbear refuses reconnects that come too quickly; wait a few seconds and try again. Combine multiple commands into one `ssh` where possible.
 - **No data on the screen**: `/etc/init.d/zwrt-datad restart`, then check `/tmp/zwrt-datad.log`.
 - **Web login locked**: the stock web UI locks for a while after 5 wrong passwords in a row. The script shows the remaining attempts and a countdown; do not keep retrying.
+- **`admin` / `devui` refuse to install, saying there is an unfinished transaction**: a `u60-ship.sh` update did not finish. Finish it or roll it back first (touch-ui `docs/SHIP.md`); do not delete the transaction log by hand.
 - **Install failed halfway**: `install.sh` can be rerun; parts already installed are skipped or overwritten.
 - **Device time looks off by several hours**: the firmware stores local time as UTC, and both the admin web and the touch UI display local time. This is expected.

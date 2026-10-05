@@ -21,9 +21,15 @@
 它们在设备上这样连起来：
 
 ```
-zwrt-datad :9460 ──▶ 触屏界面 u60pro-devui ──(eSIM 页)──▶ zte-agent :9090 ──▶ lpac（/data/esim）──▶ eUICC 卡
+ubus / uci / sysfs ──▶ zwrt-datad :9460 ──（/state、/v2/screen）──▶ 触屏界面 u60pro-devui
+                             │                                         │（电池预估、告警、eSIM、改设置）
+                             └──（/v2 推送）──▶ zte-agent :9090 ◀──────┘
+                                                  └──▶ lpac（/data/esim）──▶ eUICC 卡
 浏览器 ──▶ zte-agent :9090（API + 管理网页）
 ```
+
+后台轮询原厂 ubus 接口的只有 `zwrt-datad`；`zte-agent` 和触屏都从它拿数据，不再各自去读。
+触屏首页的结论由 datad 算好（`/v2/screen`）；电池预估、告警类别、eSIM 和改设置走 `zte-agent`。
 
 三个仓库**一起用**：装机包在 manager 里打，打包时从 touch-ui 取触屏程序和脚本，从 data-service 取 `zwrt-datad`。
 
@@ -87,7 +93,7 @@ cd zte-u60-pro-mu5250-manager
 | eSIM 工具（lpac） | `scripts/esim/build-esim-bundle.sh --out`：Alpine 3.24 的 lpac 和依赖库（`scripts/esim/alpine.lock` 钉版本和 sha256）+ statx 兼容垫片 + `qmi_uim_probe` |
 | 进程监督、体检脚本 | touch-ui 的 `scripts/` |
 
-打包前会检查：触屏程序必须是 LVGL 版（不是 `scripts/build.sh` 编的旧 litehtml 版）；`zwrt-datad` 必须是 Rust 版、没有写死的外部更新源。不对就停。
+打包前会检查：触屏程序必须是 LVGL 版（不是旧的 litehtml 版；它已从 touch-ui 删掉，只留在 tag `legacy-litehtml`）；`zwrt-datad` 必须是 Rust 版、没有写死的外部更新源。不对就停。
 
 也可以分开编，再告诉 `build-kit.sh` 用现成的文件：
 
@@ -157,7 +163,11 @@ cd u60-kit
 ./install.sh devui      # 触屏界面 + zwrt-datad
 ./install.sh esim       # eSIM 工具
 ./install.sh reboot     # 可选：重启一次，确认开机都能自己起来
+./install.sh recover    # 可选，不在全套里：u60-ship.sh 用的开机收尾
+                        #   （会在 rc.local 加一行；只在用 u60-ship.sh 时才装）
 ```
+
+设备上有没结束的 `u60-ship.sh` 事务时（见 touch-ui [docs/SHIP.md](https://github.com/faying/zte-u60-pro-mu5250-touch-ui/blob/main/docs/SHIP.md)），`admin`、`devui`、`recover` 会拒绝安装，要先把事务做完或退回。
 
 **备份和恢复配置**（只有配置，不含程序；备份里有密码，别外传）：
 
@@ -179,7 +189,8 @@ cd u60-kit
 
 ## 8. 新手一定要守的规矩
 
-- **不要升级固件，不要打开固件自动升级。** 升级会覆盖 `/etc/rc.local`（所有自启失效），B28 起又开不了 ADB，回不去。
+- **不要升级固件，不要打开固件自动升级。** 升级会把 `/etc/rc.local` 还原、删掉装在 `/etc/init.d/` 下的服务，SSH 和所有自启都会失效
+  （`/data` 和设置还在）。B28 起开不了 ADB，装机包没法再装回去；要恢复得手工处理，本项目不提供步骤。
 - **不要 `/etc/init.d/<原厂服务> disable`。** 原厂主守护进程要等配置里的一串服务全部就绪才放行开机，少一个就卡 logo、不拨号、触屏失灵。
 - 开机自启只走 `/etc/rc.local`。改之前先备份，改完 `sh -n /etc/rc.local` 检查语法。
 - 程序和数据放 `/data`。`/tmp` 是内存盘，重启就没了。不写分区、不 `dd`。
@@ -197,5 +208,6 @@ cd u60-kit
 - **SSH 偶尔拒绝连接**：dropbear 对太快的重连会拒绝，等几秒再连；多条命令尽量合并到一次 `ssh` 里。
 - **屏幕没数据**：`/etc/init.d/zwrt-datad restart`，看 `/tmp/zwrt-datad.log`。
 - **网页登录被锁**：原厂网页连续输错 5 次会锁一段时间，脚本会显示剩余次数和倒计时，别连着试。
+- **`admin` / `devui` 拒绝安装，说有没结束的事务**：之前一次 `u60-ship.sh` 更新没做完。先把它做完或退回（touch-ui `docs/SHIP.md`），别手工删事务日志。
 - **装到一半失败**：`install.sh` 可以反复跑，装好的部分会跳过或覆盖。
 - **设备时间看着差几个小时**：固件把当地时间当 UTC 存，后台和触屏都按当地时间显示，这是正常的。
