@@ -45,9 +45,23 @@ What it looks like once installed (screenshots use fake data):
 
 - ZTE U60 Pro (MU5250), **firmware B27 or earlier** (in the stock web UI under 「设备信息」 (Device Information), it looks like `…MU5250V1.0.0B27`).
   From B28 on, ZTE removed the interface for enabling USB debugging (ADB), and the install kit no longer works. **Do not upgrade the firmware before installing.**
+  See "Firmware versions" below for what each version means.
 - The router admin password (the one you use to log in at `http://192.168.0.1`). The install script uses it to enable ADB through the web interface, then installs key-only SSH (port 2222).
 - A USB-C cable that carries data.
 - For eSIM, a removable eUICC card (5ber, eSTK.me and the like).
+
+**Firmware versions** (B31 is the version the maintainer actually upgraded to on 2026-10-03; B28–B30 were not tried)
+
+| Your situation | Result |
+|---|---|
+| New device, B27 or earlier | Install from scratch with this guide |
+| New device, B28 or later (including B31) | **Cannot install**: ADB cannot be enabled, so the install kit fails at the first step, and this project has no other way to do a first install |
+| Already installed, then upgraded to B31 | The programs themselves run on B31 (the maintainer's device has been on B31 since 10-03). But the upgrade resets `/etc/rc.local` to the stock version and removes the services installed under `/etc/init.d/`, so after the reboot SSH, the admin web, the touch UI and zwrt-datad no longer start, and the screen shows the stock UI |
+
+What survives the upgrade: every program and all data under `/data`, the SSH program and keys (`/data/ssh`), the network address, the web password and your settings; firmware auto-update stays off.
+To recover, the key step is adding the line that starts SSH back to `rc.local` without ADB. The maintainer did this ***REMOVED***,
+***REMOVED***, so the steps are not documented here. Once SSH is back, run `./install.sh admin devui` from a freshly built install kit; it puts the services back and fixes `rc.local`.
+Note: `/data/u60-kit/rc.local.orig` holds the stock `rc.local` of the firmware **before** the upgrade. To uninstall after an upgrade, do not copy it over the new one; just remove the lines this project added.
 
 **Install computer** (macOS / Linux / Git Bash on Windows): `adb`, `ssh`, `curl`.
 
@@ -181,7 +195,7 @@ If the touch program fails to start twice in a row, `u60-uid` hands the screen b
 long-press the bottom-right corner of the screen for 3 seconds to switch back.
 
 **Uninstall**: there is no uninstall command; the steps are in the install kit README's 「恢复原厂」 (Restore stock) section: stop and delete the services installed under `/etc/init.d/`,
-restore the original `rc.local` from `/data/u60-kit/rc.local.orig`, delete the directories installed under `/data`, and reboot.
+restore the original `rc.local` from `/data/u60-kit/rc.local.orig`, delete the directories installed under `/data`, and reboot (if you upgraded the firmware, see the last note under "Firmware versions" in section 2).
 
 ## 7. Proxy (optional)
 
@@ -190,7 +204,7 @@ The public version does not include a proxy. To run a transparent proxy on the d
 ## 8. Rules every newcomer must follow
 
 - **Do not upgrade the firmware, and do not turn on firmware auto-update.** An upgrade resets `/etc/rc.local` and removes the services installed under `/etc/init.d/`, so SSH and every autostart stop working
-  (`/data` and your settings survive). From B28 on, ADB cannot be enabled, so the install kit cannot bring them back; recovering takes manual work that this project does not document.
+  (`/data` and your settings survive), and new devices on B28 or later cannot be installed at all. See "Firmware versions" in section 2.
 - **Do not run `/etc/init.d/<stock service> disable`.** The stock master daemon waits for a list of services in its configuration to all be ready before it lets boot continue; if one is missing, the device sticks on the logo, does not dial, and the touchscreen stops responding.
 - Autostart goes only through `/etc/rc.local`. Back it up before changing it, and check the syntax with `sh -n /etc/rc.local` afterwards.
 - Programs and data go in `/data`. `/tmp` is a RAM disk and is cleared on reboot. Do not write partitions, do not `dd`.
