@@ -195,6 +195,15 @@ kit_format() { sed 's/#.*//' "$1" 2>/dev/null | awk 'NF { print $1; exit }'; }
     echo "${c}_format=$(kit_format "$DEVUI_REPO/ship/$c/format")"
     echo "${c}_dirty=$([ -n "$(dirty "$DEVUI_REPO" src scripts)" ] || [ "$DEVUI_PREBUILT" = 1 ] && echo 1 || echo 0)"
   done
+  # datad：data-service 当前的提交；用 DATAD_BIN 指定现成程序（下面不现编）时同样记成有改动
+  if [ -n "${DATAD_REPO:-}" ]; then
+    echo "datad_commit=$(git -C "$DATAD_REPO" rev-parse HEAD 2>/dev/null || echo 0000000)"
+    echo "datad_format=$(kit_format "$DATAD_REPO/ship/datad/format")"
+  else
+    echo "datad_commit=0000000"
+    echo "datad_format="
+  fi
+  echo "datad_dirty=$([ -n "${DATAD_BIN:-}" ] || { [ -n "${DATAD_REPO:-}" ] && [ -n "$(dirty "$DATAD_REPO" rust)" ]; } && echo 1 || echo 0)"
 } > "$PL/guard/kit-source"
 
 # ── zwrt-datad（Rust 版，data-service 仓库现编）──────────────────────────────

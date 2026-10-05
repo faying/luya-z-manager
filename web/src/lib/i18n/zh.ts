@@ -269,6 +269,9 @@ export const zh = {
     smsUnread_one: "{{count}} 条未读短信",
     smsUnread_other: "{{count}} 条未读短信",
     smsNone: "无未读短信",
+    viaTailscale: "经 Tailscale 远程访问",
+    viaTailscaleShort: "远程",
+    viaTailscaleHint: "你正经 Tailscale 连到设备；关 Wi-Fi、改网络可能让你断开",
   },
 
   // 跨页面复用的术语帮助提示(Dashboard / Signal 等)

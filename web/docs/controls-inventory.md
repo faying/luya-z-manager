@@ -26,7 +26,7 @@
 **档位规则**（本次改版定的）：
 - **第一档**（封闭清单，只有这些）：DNS/DoH 上游、QoS 参数、短信标为已读、告警标为已读、界面设置（深浅色、语言）。
 - 其余一切**至少第二档**。
-- 现在每个 `window.confirm()` 的地方都是**第三档**。另外这些也是第三档：选网方式、锁频/锁小区（含恢复默认）、飞行模式、重启、定时重启开启、恢复出厂、eSIM 切换/启用/删除、APN 修改/切换/删除、USB 模式、STC 白名单重置、结束进程/一键结束、开 ADB、AT 危险命令、删除短信、删除短信转发规则、清空转发日志。
+- 现在每个 `window.confirm()` 的地方都是**第三档**。另外这些也是第三档：选网方式、锁频/锁小区（含恢复默认）、重启、定时重启开启、恢复出厂、eSIM 切换/启用/删除、APN 修改/切换/删除、USB 模式、STC 白名单重置、结束进程/一键结束、开 ADB、AT 危险命令、删除短信、删除短信转发规则、清空转发日志。
 - **二·远程三**（本地第二档，远程访问时第三档）：Wi-Fi 开关、Wi-Fi 名称/密码、LAN/DHCP 地址、关 Tailscale、防火墙规则增删改、VPN 直通开关。
 - **始终第二档**：情景固定/取消固定。
 - 纯页面内的操作（展开/收起、筛选、切标签、只改表单草稿、复制到剪贴板、跳转链接）不写设备，档位写「—（本地）」。
@@ -662,8 +662,8 @@
 | 移动数据开关状态 | `/api/modem/data` | `enable` | 5000 | 否·透传 |
 | 漫游开关状态 | `/api/modem/data` | `roam_enable` | 5000 | 否·透传 |
 | （写入时回填用）连接方式 | `/api/modem/data` | `connect_mode` | 5000 | 否·透传 |
-| 飞行模式开关状态 | `/api/modem/status` | `operate_mode`（不是 `"ONLINE"` 即视为飞行模式开；`uci zte_nwinfo.sys_info.operate_mode`） | 5000 | 否（uci 失败回 503，handlers.rs:129） |
-| 「注意：关闭飞行模式后如果调制解调器无法恢复…」 | — | 飞行模式关时显示 | — | — |
+| 飞行模式状态（只读） | `/api/modem/status` | `operate_mode`（不是 `"ONLINE"` 即视为飞行模式开；`uci zte_nwinfo.sys_info.operate_mode`） | 5000 | 否（uci 失败回 503，handlers.rs:129） |
+| 「蜂窝无线电已关闭，重启设备才能恢复。」 | — | operate_mode 不是 "ONLINE" 时显示 | — | — |
 | 运营商扫描结果表：运营商 / MCC/MNC / 制式 / 当前·禁止 | `/api/netinfo` | `scan.operators[].name/plmn/rat/status`（agent 解析模组字符串 `状态,名字,PLMN,制式;`，2026-09-25 实测：状态 1 可用 2 当前 3 禁止，制式 2/7/11 = 3G/4G/5G） | 扫描进行中每 3000 | 否·agent 任务（netinfo.rs operator_scan） |
 | 扫描进度判断 | `/api/netinfo` | `scan.state`（scanning / done / error；模组状态 `manual_selecting` → `manual_selected`，实测约 110 秒） | 页面循环 3000，最多 80 次 | 否·agent 任务 |
 | 注册结果（已注册到 X / 没注册上已回到自动 / 注册超时） | `/api/modem/register/guard` | `phase`（registering → ok / reverting → reverted）、`reason`；失败时模组 `m_netselect_result` 为 "0"（实测） | 页面循环 3000，最多 40 次 | 否·agent 保护任务 |
@@ -675,8 +675,7 @@
 |---|---|---|---|---|---|---|
 | 「移动数据」开关 | 无（`Toggle` 没传 label）；建议 switch「移动数据」 | PUT `/api/modem/data` `{cid:1, connect_mode, roam_enable, enable:1/0}`，关闭时多带 `connect_status:"disconnected"`（ubus `zwrt_data set_wwaniface`） | 1 | `/api/modem/data` `enable`、`connect_status` | 无 | 二（远程访问时关掉会断开远程连接，建议评审是否按「二·远程三」处理） |
 | 「漫游」开关 | 无；建议 switch「漫游」 | PUT `/api/modem/data` `{cid:1, connect_mode, roam_enable:1/0, enable}` | 1 | `/api/modem/data` `roam_enable` | 无 | 二 |
-| 「飞行模式」开关——打开 | 无；建议 switch「飞行模式」 | POST `/api/modem/airplane` `{operate_mode:"LPM"}`（ubus `nwinfo_set_mode`） | 1 | `/api/modem/status` `operate_mode` ≠ "ONLINE" | 「启用飞行模式？这将关闭蜂窝无线电。」 | 三（飞行模式） |
-| 「飞行模式」开关——关闭 | 同上 〔现名：switch「飞行模式」（开、关是同一个开关）〕 | POST `/api/modem/online`（agent 发 `AT+CFUN=1`，回复不含 OK 回 500） | **最多 2 步**：① POST `/api/modem/online` ② ① 失败时等 3 秒再发一次 | `/api/modem/status` `operate_mode` = "ONLINE" | 无（关闭方向不确认） | 三（飞行模式） |
+| ~~「飞行模式」开关~~ | 10-05 已去掉 | — | — | — | — | B31 上原厂 ONLINE 和 `AT+CFUN=1` 都拉不回 LPM，只能重启（10-05 真机）；原厂界面也没有这个开关。agent 的 `/api/modem/airplane`、`/api/modem/online` 接口保留 |
 | 「扫描运营商」/「扫描中…」 | button「扫描运营商」 | POST `/api/netinfo/scan`（旧 `/api/modem/scan` 也走同一任务；ubus `nwinfo_manual_scan`） | **多请求**：① POST 扫描 → 每 3 秒 GET `/api/netinfo` 看 `scan` 最多 80 次 | 结果表有行 | 无 | 二（搜索期间移动数据断开约 110 秒，实测） |
 | 结果行「选择」（注册到该运营商） | button「选择」（每行同名；`aria-label`「注册到 {运营商}」） 〔现名：button「注册到 {运营商}」〕〔交互后：扫描运营商之后的结果行；点 button「扫描运营商」，点 button「确认：{x}」〕 | POST `/api/modem/register` `{m_mcc_mnc, m_rat}`（202；agent 先写保护标记，再调 ubus `nwinfo_manual_register`） | **多请求**：① POST 注册 → 每 3 秒 GET `/api/modem/register/guard` 最多 40 次 | 保护的 `phase`；注册不上时 agent 用 `AT+COPS=0` 回到自动（实测 44 秒） | 无 | 三（选网方式：手动选网） |
 | 「重启」（设备控制卡） | button「重启」 | POST `/api/device/reboot` | 1 | 无读回 | 「现在重启路由器？」 | 三（重启） |
@@ -1572,7 +1571,7 @@
 | 3 | /router/celllock | `router/celllock/page.tsx:119` | 「全部解锁」 | 重置所有小区锁定？ |
 | 4 | /router/esim | `router/esim/page.tsx:233` | 条目「切换」 | 切换到“{名称}”?…预计短暂断网(通常约 40 秒,无需重启)。 |
 | 5 | /router/esim | `router/esim/page.tsx:264` | 条目删除 | 从卡上永久删除配置“{名称}”?此操作不可撤销。 |
-| 6 | /router/mobile-network | `router/mobile-network/page.tsx:129` | 飞行模式开关（仅打开时） | 启用飞行模式？这将关闭蜂窝无线电。 |
+| 6 | /router/mobile-network | `router/mobile-network/page.tsx:129` | ~~飞行模式开关（仅打开时）~~（10-05 已去掉） | — |
 | 7 | /router/mobile-network | `router/mobile-network/page.tsx:217` | 「重启」 | 现在重启路由器？ |
 | 8 | /router/stc | `router/stc/page.tsx:98` | 「重置白名单」 | 重置 STC 白名单？此操作无法撤销。 |
 | 9 | /sms | `sms/page.tsx:190` | 「删除 (N)」 | 删除 {N} 条短信? |
@@ -1598,7 +1597,7 @@
 | /router/dns | 应用（自动 / 手动） | ① PUT `/api/router/dns` → ② POST `/api/doh/disable` |
 | /router/dns | 应用（DoH） | ① PUT `/api/doh/config`（字段名错，实际不改上游）→ ② POST `/api/doh/enable` |
 | /router/celllock | 扫描邻区 | ① POST `/api/cell/neighbors/scan` → 等 3 秒 → ② GET `/api/cell/neighbors/nr` → ③ GET `/api/cell/neighbors/lte` |
-| /router/mobile-network | 关闭飞行模式 | ① POST `/api/modem/online` → 失败时等 3 秒 ② 再 POST 一次 |
+| /router/mobile-network | ~~关闭飞行模式~~（10-05 开关已去掉） | — |
 | /router/mobile-network | 扫描运营商 | ① POST `/api/netinfo/scan` → 每 3 秒 GET `/api/netinfo` 看 `scan`（≤80 次） |
 | /router/mobile-network | 选择（注册运营商） | ① POST `/api/modem/register` → 每 3 秒 GET `/api/modem/register/guard`（≤40 次） |
 | /router/mobile-network | 回到自动选网 | ① POST `/api/modem/netselect/auto` → 每 3 秒 GET `/api/modem/register/guard`（≤40 次） |

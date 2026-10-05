@@ -30,9 +30,10 @@ case "\$2" in status) echo '{}' ;; ping) exit \$(cat $T/pingrc) ;; esac
 X
     printf '#!/bin/sh\n[ -f %s/running ] && echo 4242\n' "$T" > "$T/bin/pidof"
     printf '#!/bin/sh\nrm -f %s/running\n' "$T" > "$T/bin/kill"
-    printf '#!/bin/sh\n(cat %s/d/tuning.env 2>/dev/null || echo none) | tr "\\n" " " >> %s/starts; echo >> %s/starts; touch %s/running\n' "$T" "$T" "$T" "$T" > "$T/start.sh"
+    printf '#!/bin/sh\n(cat %s/d/tuning.env 2>/dev/null || echo none) | tr "\\n" " " >> %s/starts; echo >> %s/starts; touch %s/running\n[ -f %s/run/tailscale-apply.pid ] && echo applying >> %s/marker\n' "$T" "$T" "$T" "$T" "$T" "$T" > "$T/start.sh"
+    mkdir -p "$T/run"
     chmod +x "$T"/bin/*
-    export TSA_DIR=$T/d TSA_CLI=$T/bin/ts TSA_START=$T/start.sh TSA_LOG=$T/log TSA_TIMEOUT=30 TSA_POLL=10 \
+    export TSA_RUN=$T/run TSA_DIR=$T/d TSA_CLI=$T/bin/ts TSA_START=$T/start.sh TSA_LOG=$T/log TSA_TIMEOUT=30 TSA_POLL=10 \
         TSA_JSONFILTER=$T/bin/jf TSA_PIDOF=$T/bin/pidof TSA_KILL=$T/bin/kill TSA_SLEEP=true
     echo 'TS_TAILSCALED_FLAGS=' > "$T/d/tuning.env"
 }
@@ -45,6 +46,7 @@ check "healthy variant: kept as tuning.env" 'grep -q no-logs "$T/d/tuning.env"'
 check "healthy variant: restarted once" '[ $(wc -l < "$T/starts") = 1 ]'
 check "healthy variant: logged kept" 'grep -q "kept" "$T/log"'
 check "no rollback copy left behind" '[ ! -f "$T/d/tuning.env.rollback" ]'
+check "marker present while it restarts, gone after" '[ "$(cat "$T/marker")" = applying ] && [ ! -f "$T/run/tailscale-apply.pid" ]'
 
 setup; echo 'X=BAD' > "$T/bad.env"
 run "$T/bad.env"
@@ -52,6 +54,7 @@ check "backend never Running: exit 1" '[ $RC = 1 ]'
 check "backend never Running: previous tuning restored" '[ "$(cat "$T/d/tuning.env")" = "TS_TAILSCALED_FLAGS=" ]'
 check "backend never Running: restarted twice (variant, then rollback)" '[ $(wc -l < "$T/starts") = 2 ]'
 check "backend never Running: reason logged" 'grep -q "backend not Running" "$T/log"'
+check "marker held through the rollback too, gone after" '[ "$(wc -l < "$T/marker")" = 2 ] && [ ! -f "$T/run/tailscale-apply.pid" ]'
 
 setup; echo 'X=LOSTROUTE' > "$T/lost.env"
 run "$T/lost.env"

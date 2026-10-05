@@ -33,7 +33,8 @@ pub fn sms_list(_state: &AppState, body: &[u8]) -> (u16, Value) {
     obj.entry("order_by").or_insert(json!("order by id desc"));
     obj.remove("store"); // legacy/no-op key some callers send
 
-    match ubus::read("zwrt_wms", "zte_libwms_get_sms_data", Some(&Value::Object(obj).to_string())) {
+    let params = Value::Object(obj).to_string();
+    match ubus::read_with_timeout("zwrt_wms", "zte_libwms_get_sms_data", Some(&params), Some(ubus::LONG_READ_TIMEOUT)) {
         Ok(data) => (200, json!({"ok": true, "data": data})),
         Err(e) => (503, json!({"ok": false, "error": e})),
     }

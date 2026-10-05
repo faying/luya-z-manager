@@ -792,12 +792,12 @@ fn selection_from_netinfo(net: &Value) -> Option<&'static str> {
 
 /// `connect_status` is e.g. "ipv4_ipv6_connected"; "disconnected" also
 /// contains "connected".
-fn data_connected(wwan: &Value) -> bool {
+pub(crate) fn data_connected(wwan: &Value) -> bool {
     let s = js(wwan, "connect_status");
     s.ends_with("connected") && !s.contains("disconnect")
 }
 
-fn read_wwan() -> Value {
+pub(crate) fn read_wwan() -> Value {
     ubus_read("zwrt_data", "get_wwaniface", Some(r#"{"source_module":"zte_topsw_data","cid":1}"#)).unwrap_or(Value::Null)
 }
 
@@ -1505,9 +1505,7 @@ fn write_marker(m: &Marker) -> std::io::Result<()> {
         Marker::Revert => format!("revert {}\n", now()),
         Marker::Redial => format!("redial {}\n", now()),
     };
-    let tmp = format!("{GUARD_MARKER}.tmp");
-    fs::write(&tmp, text)?;
-    fs::rename(&tmp, GUARD_MARKER)
+    crate::fsutil::atomic_write(GUARD_MARKER, text.as_bytes())
 }
 
 impl Scan {
@@ -1769,16 +1767,17 @@ impl NetInfo {
     }
 }
 
-/// Serving network, SIM and data state: three local ubus calls. Runs in the
-/// refresh pass, never on an HTTP worker.
+/// Serving network, SIM and data state: two local ubus calls, plus a third for
+/// the SIM only when datad's `sim` block is not fresh. Runs in the refresh
+/// pass, never on an HTTP worker.
 fn local_snapshot(inner: &Inner) {
     let net = ubus_read("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}")).unwrap_or(Value::Null);
-    let sim = ubus_read("zwrt_zte_mdm.api", "get_sim_info", Some("{}")).unwrap_or(Value::Null);
+    let block = crate::datad_feed::global().and_then(|f| f.view().block("sim"));
+    let (sim_state, imsi) =
+        sim_state_imsi(block, || ubus_read("zwrt_zte_mdm.api", "get_sim_info", Some("{}")).ok());
     let wwan = read_wwan();
 
-    let imsi = js(&sim, "sim_imsi");
-    let sim_ready = js(&sim, "sim_states").contains("ready");
-    let home = sim_ready.then(|| plmn_from_imsi(imsi)).flatten().map(|p| plmn_json(&p, ""));
+    let home = sim_state.contains("ready").then(|| plmn_from_imsi(&imsi)).flatten().map(|p| plmn_json(&p, ""));
 
     let serving_str = serving_plmn(&net);
     let provider = {
@@ -1814,6 +1813,21 @@ fn local_snapshot(inner: &Inner) {
         c.selection_from_netinfo = true;
     }
     inner.cache.lock().unwrap().local = snap;
+}
+
+/// The SIM's `(state, imsi)`: datad's `/v2` `sim` block when it is fresh
+/// (datad already reads `get_sim_info`; audit 2026-10-04 P1-4, as the
+/// scenario engine's `sim_mcc`), else one direct read (datad down, or an
+/// older datad without the block). A fresh block is final, empty included.
+/// datad fills `imsi` from the uci copy when the live one is invalid, so mid
+/// profile-switch the home operator can briefly be the old profile's.
+fn sim_state_imsi(block: Option<Value>, direct: impl FnOnce() -> Option<Value>) -> (String, String) {
+    let (sim, state, imsi) = match block {
+        Some(b) => (b, "state", "imsi"),
+        // ubus names them `sim_states`, `sim_imsi`
+        None => (direct().unwrap_or(Value::Null), "sim_states", "sim_imsi"),
+    };
+    (js(&sim, state).to_string(), js(&sim, imsi).to_string())
 }
 
 /// One refresh pass on its own thread: IP lookups that are due, and the
@@ -2686,6 +2700,19 @@ mod tests {
         assert_eq!((j["geo_en"].as_str(), j["isp_en"].as_str()), (Some("Japan"), Some("China Telecom")));
         let j = Lookup { geo: Geo { ip: "1.2.3.4".into(), geo: "广东 深圳".into(), isp: "某某宽带".into() }, ..Lookup::default() }.json();
         assert!(j["geo_en"].is_null() && j["isp_en"].is_null());
+    }
+
+    #[test]
+    fn sim_from_fresh_datad_block_else_one_direct_read() {
+        let no_read = || -> Option<Value> { panic!("no ubus read with a fresh block") };
+        let block = json!({"state": "sim ready", "imsi": "440101234567890", "iccid": "8981"});
+        assert_eq!(sim_state_imsi(Some(block), no_read), ("sim ready".into(), "440101234567890".into()));
+        // A fresh block saying "unknown" is final too.
+        assert_eq!(sim_state_imsi(Some(json!({"state": "", "imsi": ""})), no_read), (String::new(), String::new()));
+        // Not fresh: the ubus reply, under its own field names.
+        let direct = json!({"sim_states": "sim ready", "sim_imsi": "460001234567890", "state": "x", "imsi": "y"});
+        assert_eq!(sim_state_imsi(None, || Some(direct)), ("sim ready".into(), "460001234567890".into()));
+        assert_eq!(sim_state_imsi(None, || None), (String::new(), String::new()));
     }
 
     #[test]

@@ -211,9 +211,7 @@ fn hostapd_count() -> usize {
 /// indistinguishable from a wrong `-p` path or a hostapd that has not come up
 /// yet. Proving presence is safe; proving absence is not.
 fn hostapd_enabled(iface: &str) -> bool {
-    Command::new("hostapd_cli")
-        .args(["-i", iface, "-p", HOSTAPD_CTRL, "status"])
-        .output()
+    ubus::output_within(Command::new("hostapd_cli").args(["-i", iface, "-p", HOSTAPD_CTRL, "status"]), ubus::CMD_TIMEOUT)
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).contains("state=ENABLED"))
@@ -286,8 +284,11 @@ pub fn apply(ap_2g: bool, ap_5g: bool) -> Result<Value, String> {
 }
 
 /// `apply` for a caller that already holds the lock.
-pub fn apply_locked(_lk: &WifiLock, ap_2g: bool, ap_5g: bool) -> Result<Value, String> {
+pub fn apply_locked(lk: &WifiLock, ap_2g: bool, ap_5g: bool) -> Result<Value, String> {
     let flag = |on: bool| if on { "0" } else { "1" };
+    // The stock UI's "Wi-Fi off" is its own master switch, not these flags:
+    // under it, enabling the APs does nothing. Turning on means that one too.
+    let vendor_on = vendor_on_if_off(lk, ap_2g || ap_5g);
     // Through datad: it writes and reloads even when uci already says so (a
     // retry repairs that way). Synchronous, unlike wifi_set's backgrounded
     // fire-and-forget. A reload failure is not fatal on its own — the verify
@@ -326,6 +327,16 @@ pub fn apply_locked(_lk: &WifiLock, ap_2g: bool, ap_5g: bool) -> Result<Value, S
         if let Err(e) = &reload {
             obj.insert("reload_error".into(), json!(e));
         }
+        match &vendor_on {
+            Some(Ok(())) => {
+                obj.insert("vendor_switch".into(), json!("turned_on"));
+            }
+            Some(Err(e)) => {
+                obj.insert("vendor_switch".into(), json!("failed"));
+                obj.insert("vendor_switch_error".into(), json!(e));
+            }
+            None => {}
+        }
     }
 
     if verified {
@@ -335,6 +346,47 @@ pub fn apply_locked(_lk: &WifiLock, ap_2g: bool, ap_5g: bool) -> Result<Value, S
             "AP state not observable within deadline; target ap_2g={ap_2g} ap_5g={ap_5g}, observed {data}"
         ))
     }
+}
+
+// ── The vendor master switch ────────────────────────────────────────────────
+//
+// The stock web UI and screen turn Wi-Fi off with `wireless.zte_mbb.wifi_onoff
+// = 0` (vendor `zwrt_wlan set {zte_mbb:{wifi_onoff}}`), not with the AP flags.
+// While it reads "0", writing `main_*.disabled=0` and reloading leaves the APs
+// down. datad's `wifi.set_module` makes the stock call (with the current `lbd`),
+// the same thing u60-guard's `vendor_wifi_on` does.
+
+/// The vendor switch's uci key. A missing key means on.
+pub const VENDOR_ONOFF: &str = "wireless.zte_mbb.wifi_onoff";
+
+/// Whether turning Wi-Fi on must first turn the vendor switch on: only when
+/// something is wanted on and the switch reads exactly "0". Missing, unreadable
+/// (`None`) or any other value: leave it alone.
+fn vendor_switch_needs_on(want_on: bool, onoff: Option<&str>) -> bool {
+    want_on && onoff == Some("0")
+}
+
+/// Turn the vendor master switch on if it is off and `want_on` (turning Wi-Fi
+/// off — the home scenario — never touches it). Under the Wi-Fi lock, before
+/// the AP flags are written. `None` when nothing needed doing; otherwise how
+/// the datad write went. Callers go on with the AP write either way, and their
+/// verify is the authority (as in u60-guard). datad gone: an error here — the
+/// agent has no vendor write of its own, and the emergency script's
+/// `wifi.radio` does not know this switch.
+pub fn vendor_on_if_off(_lk: &WifiLock, want_on: bool) -> Option<Result<(), String>> {
+    if !want_on {
+        return None;
+    }
+    let onoff = ubus::uci_get(VENDOR_ONOFF).ok();
+    if !vendor_switch_needs_on(want_on, onoff.as_deref()) {
+        return None;
+    }
+    eprintln!("[wifi] vendor Wi-Fi switch ({VENDOR_ONOFF}) is off; turning it on through datad");
+    let r = crate::datad_write::send("wifi.set_module", &json!({"enabled": 1})).into_result().map(|_| ());
+    if let Err(e) = &r {
+        eprintln!("[wifi] vendor Wi-Fi switch: {e}; writing the APs anyway");
+    }
+    Some(r)
 }
 
 /// GET /api/wifi/radio — what the APs are doing right now.
@@ -470,6 +522,19 @@ mod tests {
     fn guard_is_send() {
         // wifi_set moves its lock into the reload thread.
         assert_send::<WifiLock>();
+    }
+
+    #[test]
+    fn vendor_switch_only_when_exactly_off_and_turning_on() {
+        assert!(vendor_switch_needs_on(true, Some("0")));
+        // On, missing (= on), unreadable, or anything else: leave it.
+        assert!(!vendor_switch_needs_on(true, Some("1")));
+        assert!(!vendor_switch_needs_on(true, Some("")));
+        assert!(!vendor_switch_needs_on(true, None));
+        assert!(!vendor_switch_needs_on(true, Some(" 0")));
+        // Turning off (home) never touches it.
+        assert!(!vendor_switch_needs_on(false, Some("0")));
+        assert!(!vendor_switch_needs_on(false, Some("1")));
     }
 
     #[test]

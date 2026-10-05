@@ -4,10 +4,16 @@
 // Every icon carries its state in the accessible name and tooltip, so the
 // colour is never the only cue. Filled when on, bold when off; the signal
 // icon stays bold (filled it is a plain wedge, not bars).
+// In front of them, quiet text when this page reaches the device over
+// Tailscale (agent `via_tailscale`, or the API host): a step that drops Wi-Fi
+// or the network may cut the viewer off. Every answer also feeds
+// isRemoteAccess, which the confirm dialogs read.
+import { useEffect } from "react";
 import Link from "next/link";
 import { ChatCircleText, CellSignalFull, Cloud, WifiHigh, type Icon as PhIcon } from "@phosphor-icons/react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/lib/hooks/useApi";
+import { isRemoteAccess, noteAgentViaTailscale } from "@/lib/api/remote";
 
 interface PublicStatus {
   network?: { connected?: boolean; type?: string; rsrp?: number };
@@ -16,6 +22,7 @@ interface PublicStatus {
     tailscale?: { running?: boolean; installed?: boolean };
   };
   sms?: { unread?: number };
+  via_tailscale?: boolean;
 }
 
 type IconTone = "ok" | "warn" | "bad" | "acc" | "off";
@@ -44,10 +51,21 @@ export function StatusIcons() {
   const svc = (name: string, installed?: boolean, running?: boolean) =>
     running ? t("status.svcRunning", { name }) : installed ? t("status.svcStopped", { name }) : t("status.svcNotInstalled", { name });
   const unread = data?.sms?.unread ?? 0;
+  const agentRemote = data?.via_tailscale;
+  useEffect(() => noteAgentViaTailscale(agentRemote), [agentRemote]);
 
   if (!data) return null;
+  // This render's answer first; the store catches up in the effect above.
+  const remote = agentRemote === true || isRemoteAccess();
   return (
-    <div className="flex items-center">
+    <div className="flex min-w-0 items-center">
+      {remote && (
+        <span className="me-1 min-w-0 truncate text-[13px] text-nd-t2" title={t("status.viaTailscaleHint")}>
+          <span className="sm:hidden">{t("status.viaTailscaleShort")}</span>
+          <span className="hidden sm:inline">{t("status.viaTailscale")}</span>
+          <span className="sr-only">{` — ${t("status.viaTailscaleHint")}`}</span>
+        </span>
+      )}
       <StatusIcon href="/signal" icon={CellSignalFull} tone={connected ? (weak ? "warn" : "ok") : "bad"} label={netLabel} />
       <StatusIcon href="/router/wifi" icon={WifiHigh} tone={wifiOn ? "ok" : "off"} label={wifiOn ? t("status.wifiOn") : t("status.wifiOff")} />
       <StatusIcon
@@ -73,7 +91,7 @@ function StatusIcon({ href, icon: Icon, tone, badge, label }: { href: string; ic
       href={href}
       title={label}
       aria-label={label}
-      className={`relative flex h-11 w-11 items-center justify-center rounded-full hover:bg-nd-track ${TONE_CLASS[tone]}`}
+      className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full hover:bg-nd-track ${TONE_CLASS[tone]}`}
     >
       <Icon size={20} weight={tone === "off" || Icon === CellSignalFull ? "bold" : "fill"} aria-hidden />
       {!!badge && badge > 0 && (

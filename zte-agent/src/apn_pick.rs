@@ -76,11 +76,8 @@ fn load() -> Store {
 }
 
 fn save(s: &Store) {
-    let tmp = format!("{STORE}.tmp");
     if let Ok(text) = serde_json::to_string(s) {
-        if fs::write(&tmp, text).is_ok() {
-            let _ = fs::rename(&tmp, STORE);
-        }
+        let _ = crate::fsutil::atomic_write(STORE, text.as_bytes());
     }
 }
 

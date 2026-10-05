@@ -131,6 +131,32 @@ rec
 check "kit_record: an old kit without kit-source: warned, install goes on" '[ $RC = 0 ] && grep -q "没记进设备清单" "$T/out" && [ "$(wc -l <"$T/root/data/u60-manifest.jsonl")" = 1 ]'
 rm -rf "$T"
 
+# kit_record datad (after devui) through the real u60-ship.sh: its own keys in
+# kit-source; a kit-source without datad_* keys (a kit from before them) still
+# records it, as commit 0000000 and dirty
+setup
+mkdir -p "$T/root/data/plugins/zwrt-datad" "$T/data/u60-guard"
+cp "$SCRIPTS/u60-ship.sh" "$T/data/u60-guard/"
+echo 'datad build' >"$T/root/data/plugins/zwrt-datad/zwrt-datad"
+sed -n '/^kit_record() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
+recd() { (
+    P=$K/payload G=$T/data/u60-guard
+    export U60S_ROOT=$T/root U60S_TMP=$T/tmp KIT_MAC_TIME=1790000000
+    log() { echo "[device] $*"; }
+    warn() { echo "[device] 注意: $*"; }
+    . "$T/fns.sh"
+    kit_record datad
+) >"$T/out" 2>&1; RC=$?; }
+printf 'stamp=20261004\nagent_commit=abc1234\nagent_format=1\nagent_dirty=0\n' >"$K/payload/guard/kit-source"
+recd
+check "kit_record datad, kit-source without datad_* keys: recorded as 0000000, dirty" "[ \$RC = 0 ] && grep -q '\"kind\":\"kit\",\"comp\":\"datad\",\"kit\":\"20261004\",\"commit\":\"0000000\",\"format\":1,' '$T/root/data/u60-manifest.jsonl' && grep -q '\"path\":\"$T/root/data/plugins/zwrt-datad/zwrt-datad\",\"md5\":\"$(md5 "$T/root/data/plugins/zwrt-datad/zwrt-datad")\"' '$T/root/data/u60-manifest.jsonl' && grep -q 'kit-dirty' '$T/root/data/u60-manifest.jsonl'"
+: >"$T/root/data/u60-manifest.jsonl"
+printf 'stamp=20261004\nagent_commit=abc1234\nagent_format=1\nagent_dirty=0\ndatad_commit=fed9876\ndatad_format=1\ndatad_dirty=0\n' >"$K/payload/guard/kit-source"
+recd
+check "kit_record datad with its keys: its commit, not dirty" "[ \$RC = 0 ] && grep -q '\"comp\":\"datad\",\"kit\":\"20261004\",\"commit\":\"fed9876\",\"format\":1,' '$T/root/data/u60-manifest.jsonl' && ! grep -q 'kit-dirty' '$T/root/data/u60-manifest.jsonl'"
+check "do_devui records datad" "sed -n '/^do_devui() {/,/^}/p' '$K/device/install.sh' | grep -q '^ *kit_record datad\$'"
+rm -rf "$T"
+
 # an unfinished ship transaction on the device: admin / devui / recover refuse
 for case_ in "check:有没结束的上机事务" "trial:有没结束的上机事务" "staged:有没结束的上机事务" "failed:停在 failed" "weird:阶段看不懂"; do
     for comp in admin devui recover; do
@@ -216,6 +242,53 @@ printf '#!/bin/sh\necho "$*" >>%s/ship.calls\n' "$T" >"$T/data/u60-guard/u60-shi
 : >"$T/ship.calls"
 ur
 check "uid_restart: an older u60-ship.sh (no uid-restart): not called" '[ ! -s "$T/ship.calls" ]'
+rm -rf "$T"
+
+# rc.local writers (rc_add, both rc_replace branches, do_recover): a candidate,
+# sh -n, a temp file next to rc.local, sync, mv, sync. A rename, not a rewrite
+# in place, so a power cut mid-write leaves the old or the new file, never half.
+echo "== kit: rc.local written atomically =="
+ino() { ls -i "$1" | awk '{ print $1 }'; }
+perm() { ls -ln "$1" | awk '{ print $1 }'; }
+tmps() { ls -a "$(dirname "$T/rc.local")" | grep -c 'u60kit' ; }
+setup
+sed -n '/^RC=/,/^# ── 进程监督/p' "$K/device/install.sh" | sed '$d' >"$T/rcfns.sh"
+rcf() { ( . "$T/rcfns.sh"; "$@" ) >"$T/out" 2>&1; RC=$?; }
+chmod 750 "$T/rc.local"; i0=$(ino "$T/rc.local"); p0=$(perm "$T/rc.local")
+rcf rc_add "/etc/init.d/example-svc start" "/etc/init.d/example-svc start"
+check "rc_add: line in before exit 0" '[ $RC = 0 ] && [ "$(tail -n 2 "$T/rc.local" | head -n 1)" = "/etc/init.d/example-svc start" ] && sh -n "$T/rc.local"'
+check "rc_add: replaced by rename (new inode), mode kept, no temp file left" '[ "$(ino "$T/rc.local")" != "$i0" ] && [ "$(perm "$T/rc.local")" = "$p0" ] && [ "$(tmps)" = 0 ] && [ ! -e /tmp/rc.local.new ]'
+check "rc_add: original backed up once" '[ -f "$T/data/u60-kit/rc.local.orig" ] && ! grep -q example-svc "$T/data/u60-kit/rc.local.orig"'
+cp "$T/rc.local" "$T/rc.0"; i0=$(ino "$T/rc.local")
+rcf rc_add "/etc/init.d/example-svc start" "/etc/init.d/example-svc start"
+check "rc_add again: nothing written" '[ $RC = 0 ] && cmp -s "$T/rc.local" "$T/rc.0" && [ "$(ino "$T/rc.local")" = "$i0" ]'
+rcf rc_replace "/etc/init.d/u60-uid start # new" "/etc/init.d/u60-uid start" "# new"
+check "rc_replace: swapped in place, by rename" '[ $RC = 0 ] && grep -qx "/etc/init.d/u60-uid start # new" "$T/rc.local" && ! grep -qx "/etc/init.d/u60-uid start" "$T/rc.local" && [ "$(ino "$T/rc.local")" != "$i0" ] && [ "$(perm "$T/rc.local")" = "$p0" ]'
+echo "sh /x/start.sh # u60pro_devui" >>"$T/rc.local"; i0=$(ino "$T/rc.local")
+rcf rc_replace "/etc/init.d/u60-uid start # new" "u60pro_devui" "# new"
+check "rc_replace (already migrated): old line dropped, by rename" '[ $RC = 0 ] && ! grep -q u60pro_devui "$T/rc.local" && [ "$(ino "$T/rc.local")" != "$i0" ] && [ "$(tmps)" = 0 ]'
+cp "$T/rc.local" "$T/rc.0"; i0=$(ino "$T/rc.local")
+rcf rc_add "if true; then" "if true; then"
+check "rc_add of a line that breaks sh -n: refused, rc.local byte for byte the same, same inode" '[ $RC != 0 ] && grep -q "语法检查没过" "$T/out" && cmp -s "$T/rc.local" "$T/rc.0" && [ "$(ino "$T/rc.local")" = "$i0" ] && [ "$(tmps)" = 0 ] && [ ! -e /tmp/rc.local.new ]'
+mkdir "$T/rc.local.u60kit.tmp"
+rcf rc_add "/etc/init.d/x start" "/etc/init.d/x start"
+check "the temp file cannot be written: refused, rc.local untouched" '[ $RC != 0 ] && grep -q "写 rc.local 失败" "$T/out" && cmp -s "$T/rc.local" "$T/rc.0" && ! grep -q /etc/init.d/x "$T/rc.local"'
+rm -rf "$T"
+
+setup
+printf '#!/bin/sh
+if true; then
+/etc/init.d/zte-agent start
+exit 0
+' >"$T/rc.local"
+chmod 755 "$T/rc.local"; cp "$T/rc.local" "$T/rc.0"; i0=$(ino "$T/rc.local")
+inst recover
+check "recover on an rc.local that already fails sh -n: refused, untouched, no temp file" '[ $RC != 0 ] && grep -q "语法检查没过" "$T/out" && cmp -s "$T/rc.local" "$T/rc.0" && [ "$(ino "$T/rc.local")" = "$i0" ] && [ "$(tmps)" = 0 ]'
+rm -rf "$T"
+setup
+chmod 755 "$T/rc.local"; i0=$(ino "$T/rc.local")
+inst recover
+check "recover: rc.local replaced by rename, still 755, no temp file" '[ $RC = 0 ] && [ "$(ino "$T/rc.local")" != "$i0" ] && [ "$(perm "$T/rc.local")" = "-rwxr-xr-x" ] && [ "$(tmps)" = 0 ]'
 rm -rf "$T"
 
 echo "kit u60-recover: $PASS passed, $FAIL failed"

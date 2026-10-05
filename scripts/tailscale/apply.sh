@@ -19,6 +19,11 @@
 # If any check fails the previous tuning.env is restored and tailscaled is
 # restarted again. Every run is logged to /data/power/tailscale-apply.log;
 # exit 0 = variant kept, 1 = rolled back, 2 = usage.
+# While it runs, /tmp/tailscale-apply.pid holds its pid: start.sh's watcher
+# does not restart tailscaled then. Before each of its restarts it ends that
+# watcher too, so the one left afterwards is the one the start script that
+# was actually used brings up (a start script on trial is never run again by
+# a watcher after the rollback).
 # SPDX-License-Identifier: MIT
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -36,6 +41,9 @@ JF=${TSA_JSONFILTER:-jsonfilter}
 PIDOF=${TSA_PIDOF:-pidof}
 SLEEP=${TSA_SLEEP:-sleep}
 KILL=${TSA_KILL:-kill}
+RUN=${TSA_RUN:-/tmp}
+APPLYING=$RUN/tailscale-apply.pid
+WATCH_PID=$RUN/tailscale-watch.pid
 
 log() { mkdir -p "$(dirname "$LOG")"; echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 
@@ -48,6 +56,9 @@ status_json() { "$CLI" $SOCK status --json 2>/dev/null; }
 field() { status_json | $JF -e "$1" 2>/dev/null; }
 
 restart() { # [start script]
+    w=$(cat "$WATCH_PID" 2>/dev/null)
+    case "$w" in '' | *[!0-9]*) ;; *) [ "$w" != $$ ] && kill "$w" 2>/dev/null ;; esac
+    rm -f "$WATCH_PID"
     p=$($PIDOF tailscaled)
     [ -n "$p" ] && $KILL $p 2>/dev/null
     i=0; while [ -n "$($PIDOF tailscaled)" ] && [ $i -lt 15 ]; do $SLEEP 1; i=$((i + 1)); done
@@ -79,6 +90,9 @@ wait_healthy() {
     return 1
 }
 
+echo $$ >"$APPLYING"
+trap 'rm -f "$APPLYING"' EXIT
+trap 'exit 1' INT TERM
 ROUTE=$(field '@.Self.PrimaryRoutes[0]')
 [ -f "$D/tuning.env" ] && cp "$D/tuning.env" "$D/tuning.env.rollback" || rm -f "$D/tuning.env.rollback"
 if [ "$VARIANT" = --none ]; then rm -f "$D/tuning.env"; else cp "$VARIANT" "$D/tuning.env"; fi

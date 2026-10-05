@@ -79,7 +79,9 @@ export interface EsimJob {
   kind: "" | "switch" | "download" | "delete" | "notifications";
   status: "idle" | "running" | "done" | "error";
   /** Result text: "switched — no reboot needed", "switched — rebooting to finish",
-   *  "profile downloaded", "profile deleted", "notifications processed", or the lpac error. */
+   *  "profile downloaded", "profile deleted", "notifications processed",
+   *  "sent N notification(s) for the switch" (the agent's own follow-up after a
+   *  switch, kind "notifications"), or the error. */
   message: string;
   /** Target ICCID for switch/delete; "" otherwise. */
   iccid: string;
@@ -88,6 +90,11 @@ export interface EsimJob {
   finished_unix: number;
   /** A finished switch that didn't converge and is about to reboot the device. */
   rebooting: boolean;
+  /** Why an error job failed (agent 10-04+; absent on older agents):
+   *  "card_busy" = the card answered catBusy and kept the old profile — only a
+   *  device restart or reinserting the card clears it; "not_switched" = lpac or
+   *  the card refused and the card still has the old profile. "" otherwise. */
+  reason?: "" | "card_busy" | "not_switched";
 }
 
 /** `data` of POST /api/esim/switch, /download, /delete, /notifications/process. */

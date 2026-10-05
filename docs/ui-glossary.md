@@ -329,6 +329,7 @@ agent 表里其余的（csl、SmarTone、CTM、NTT docomo、SoftBank、au (KDDI)
 | 底部 | 只显示最近 N 条 | Latest N only |
 | 设置页入口 | 上次改动 14:32 · 触屏 › | Last changed 14:32 · Screen › |
 
+
 ## 外部评审（10-01，独立子代理；Codex 卡死没跑成）
 
 15 条采纳 14 条：漫游写成找运营商/套餐而非 SIM；RSRP/SINR/RSRQ 带单位；no action needed 代替 nothing to do；devui-gave-up 说清长按是换回；on backup 易被当成电池，改 using fallback；Airplane 代替 Cell off（和提示一致）；datad 掉线照实写 Data service offline；web admin；干扰统一叫 Noise；提示行一句话用 `;`；带宽 Wide、No cell、Cell busy、Restricted 等小改。

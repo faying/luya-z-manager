@@ -5,8 +5,11 @@
 //   - IPv6 in fd7a:115c:a1e0::/48 (Tailscale ULA range)
 //   - a name ending in .ts.net (MagicDNS full name)
 //   - a single-label name (MagicDNS short name), except "localhost"
-// Known blind spot: through a Tailscale subnet route the browser sees the
-// device's LAN address and this can't tell (TODO-1: agent `via_tailscale`).
+// …or when the agent says so: /api/public/status `via_tailscale` (it sees the
+// peer address and the route back to it, so it also catches a Tailscale
+// subnet route, where the browser only sees the device's LAN address).
+// The shell feeds every answer in (noteAgentViaTailscale); an older agent
+// without the field leaves host detection alone.
 
 import { getApiBase } from "./client";
 
@@ -77,9 +80,19 @@ export function isRemoteHost(hostname: string): boolean {
   return false;
 }
 
-/** Whether this page talks to the agent over Tailscale. Uses the API host
- *  (getApiBase), not location.hostname — in dev they differ (C2). */
+let agentViaTailscale = false;
+
+/** The agent's `via_tailscale` from /api/public/status. `undefined` (older
+ *  agent, or no answer yet) keeps the last known value. */
+export function noteAgentViaTailscale(v: boolean | undefined): void {
+  if (typeof v === "boolean") agentViaTailscale = v;
+}
+
+/** Whether this page talks to the agent over Tailscale: the API host
+ *  (getApiBase, not location.hostname — in dev they differ, C2), or the
+ *  agent's own answer. */
 export function isRemoteAccess(): boolean {
+  if (agentViaTailscale) return true;
   try {
     return isRemoteHost(new URL(getApiBase()).hostname);
   } catch {

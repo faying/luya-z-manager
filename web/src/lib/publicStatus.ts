@@ -12,6 +12,8 @@ export interface PublicStatus {
   sms?: { unread?: number };
   clock?: { utc_offset?: number };
   device?: { model?: string; name?: string };
+  /** This request came in over Tailscale (agent sees the peer). Absent on older agents. */
+  via_tailscale?: boolean;
 }
 
 export function usePublicStatus() {

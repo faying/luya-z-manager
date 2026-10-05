@@ -309,7 +309,7 @@ impl ChargeLimitEnforcer {
             hysteresis: state.hysteresis,
         };
         if let Ok(json) = serde_json::to_string(&p) {
-            let _ = fs::write(STORAGE_PATH, json);
+            let _ = crate::fsutil::atomic_write(STORAGE_PATH, json.as_bytes());
         }
     }
 }

@@ -60,10 +60,7 @@ fn master_writes(want: &str, current_on: bool) -> Vec<(&'static str, &'static st
 }
 
 fn iw_info(iface: &str) -> (String, String) {
-    let output = Command::new("iw")
-        .args([iface, "info"])
-        .output()
-        .ok();
+    let output = ubus::output_within(Command::new("iw").args([iface, "info"]), ubus::CMD_TIMEOUT).ok();
     let out = output
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
@@ -95,10 +92,13 @@ fn iw_info(iface: &str) -> (String, String) {
 }
 
 fn station_count(iface: &str) -> u64 {
-    let output = Command::new("sh")
-        .args(["-c", &format!("iw {iface} station dump 2>/dev/null | grep -c Station")])
-        .output()
-        .ok();
+    // Bounded, and a timeout kills the pipeline too. `grep -c` exits 1 on a
+    // count of 0, so stdout is read whatever the status.
+    let output = ubus::output_within_group(
+        Command::new("sh").args(["-c", &format!("iw {iface} station dump 2>/dev/null | grep -c Station")]),
+        ubus::CMD_TIMEOUT,
+    )
+    .ok();
     output
         .and_then(|o| {
             String::from_utf8_lossy(&o.stdout)
@@ -275,7 +275,12 @@ pub fn wifi_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
     // scenario engine and u60-guard's restore (which only knows `disabled`).
     // Applied after the per-key writes so it wins over the radio keys the body
     // always carries.
+    // Turning on also turns the vendor switch on when the stock UI left it
+    // off (`wifi_onoff=0`): `master_on` reads that as off, but the AP flags
+    // may already be "0", and writing them alone would change nothing.
+    let mut vendor_on: Option<Result<(), String>> = None;
     if let Some(want) = obj.get("wifi_onoff").and_then(|v| v.as_str()) {
+        vendor_on = crate::wifi_radio::vendor_on_if_off(&lk, want != "0");
         for (path, val) in master_writes(want, master_on()) {
             if ubus::uci_get(path).unwrap_or_default() != val {
                 wireless_set.insert(path.into(), json!(val));
@@ -287,11 +292,21 @@ pub fn wifi_set(_state: &AppState, body: &[u8]) -> (u16, Value) {
 
     // Write and commit through datad; the reload comes after (hot txpower, or
     // the background reload + verify below)
-    if wireless_changed {
+    if !wireless_set.is_empty() {
         let r = crate::datad_write::send("wifi.apply", &json!({"set": wireless_set, "reload": false}));
         if !r.ok() {
             return r.into_http();
         }
+    }
+    match vendor_on {
+        // Nothing else to write: say why it did not turn on
+        Some(Err(e)) if !wireless_changed => return (503, json!({"ok": false, "error": e})),
+        // Turned on: reload and verify below like any other change
+        Some(Ok(())) => {
+            wireless_changed = true;
+            only_txpower = false;
+        }
+        _ => {}
     }
 
     if !wireless_changed {
@@ -440,7 +455,7 @@ fn psm_from_script(text: &str) -> Option<bool> {
 
 fn psm_live() -> Option<bool> {
     ["wlan0", "wlan2"].iter().find_map(|w| {
-        let out = Command::new("iw").args(["dev", w, "get", "power_save"]).output().ok()?;
+        let out = ubus::output_within(Command::new("iw").args(["dev", w, "get", "power_save"]), ubus::CMD_TIMEOUT).ok()?;
         psm_from_iw(&String::from_utf8_lossy(&out.stdout))
     })
 }

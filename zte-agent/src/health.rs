@@ -14,7 +14,7 @@
 
 use std::fs;
 use std::io::Read;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -118,33 +118,24 @@ fn run_checks(doctor: &str) -> Result<Vec<Check>, String> {
 
 /// Run doctor.sh with a deadline. Its exit status is "no bad checks", not
 /// success/failure of the run itself, so only the output matters.
+///
+/// The doctor is a script that starts its own children (ubus, wget, …): on a
+/// timeout the whole process group goes, not just the `sh` (a hung grandchild
+/// used to stay behind). stdout is read while it runs, so a long report can't
+/// fill the pipe and stall the doctor until the timeout.
 fn run_doctor(doctor: &str, flag: &str) -> Result<String, String> {
+    run_doctor_within(doctor, flag, DOCTOR_TIMEOUT)
+}
+
+fn run_doctor_within(doctor: &str, flag: &str, limit: Duration) -> Result<String, String> {
     if !std::path::Path::new(doctor).exists() {
         return Err(format!("{doctor} is not installed"));
     }
-    let mut child = Command::new("sh")
-        .args([doctor, flag])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("run doctor: {e}"))?;
-    let t0 = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if t0.elapsed() < DOCTOR_TIMEOUT => std::thread::sleep(Duration::from_millis(100)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("doctor timed out".into());
-            }
-        }
+    match crate::ubus::output_within_group(Command::new("sh").args([doctor, flag]), limit) {
+        Ok(out) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err("doctor timed out".into()),
+        Err(e) => Err(format!("run doctor: {e}")),
     }
-    let mut out = String::new();
-    if let Some(mut s) = child.stdout.take() {
-        let _ = s.read_to_string(&mut out);
-    }
-    Ok(out)
 }
 
 fn now_device() -> i64 {
@@ -474,6 +465,45 @@ mod tests {
         eprintln!("health checks: {size} bytes");
         assert_eq!(checks.len(), 40);
         assert!(size < 24 * 1024, "{size} bytes");
+    }
+
+    /// Well past a 64 KB pipe buffer, then exit at once: the old code only
+    /// read stdout after the exit, so this doctor sat blocked until the
+    /// timeout and the run failed.
+    #[test]
+    fn a_long_report_does_not_stall_the_doctor() {
+        let d = script("flood", "i=0; while [ $i -lt 4000 ]; do printf 'ok\\tid%s\\t%080d\\tx\\n' $i 0; i=$((i+1)); done\n");
+        let t0 = Instant::now();
+        let out = run_doctor_within(&d, "--tsv", Duration::from_secs(20)).unwrap();
+        assert!(out.len() > 300_000, "{} bytes", out.len());
+        assert_eq!(parse(&out).len(), 4000);
+        assert!(t0.elapsed() < Duration::from_secs(10), "{:?}", t0.elapsed());
+        let _ = fs::remove_file(&d);
+    }
+
+    /// A doctor stuck on a child of its own: the timeout takes the child too.
+    #[test]
+    fn a_timeout_kills_the_doctors_children() {
+        let pidfile = std::env::temp_dir().join(format!("u60-doctor-child-{}.pid", std::process::id()));
+        let _ = fs::remove_file(&pidfile);
+        let d = script("hang", &format!("sleep 30 & echo $! > {}\nwait\n", pidfile.display()));
+        let t0 = Instant::now();
+        assert_eq!(run_doctor_within(&d, "--tsv2", Duration::from_millis(500)).unwrap_err(), "doctor timed out");
+        assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
+        let pid = fs::read_to_string(&pidfile).unwrap().trim().to_string();
+        // Gone, or a zombie nobody reaps (a container's PID 1 may not):
+        // either way no longer running.
+        let dead = || match fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Err(_) => true,
+            Ok(st) => st.rsplit(')').next().map(|r| r.trim_start().starts_with('Z')).unwrap_or(false),
+        };
+        let t1 = Instant::now();
+        while !dead() && t1.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(dead(), "sleep {pid} outlived the doctor");
+        let _ = fs::remove_file(&d);
+        let _ = fs::remove_file(&pidfile);
     }
 
     #[test]

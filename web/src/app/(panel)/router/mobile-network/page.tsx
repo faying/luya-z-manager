@@ -7,10 +7,8 @@
 //   mobile data, roaming   tier 2 locally, tier 3 over Tailscale (turning
 //                          either off can cut the uplink the page is using);
 //                          readback /api/modem/data enable / roam_enable
-//   airplane on / off      tier 3, cutsUplink, waitDevice 30 s; readback
-//                          /api/modem/status operate_mode. "Off" is
-//                          POST /api/modem/online (AT+CFUN=1), retried once
-//                          after 3 s as before.
+//   (no airplane switch: on B31 nothing but a reboot brings the modem back
+//   from LPM, and the stock UI has none; operate_mode is still shown)
 //   carrier scan           tier 2; POST /api/netinfo/scan, then poll
 //                          /api/netinfo `scan` (3 s × 80). The agent runs the
 //                          search (≈110 s measured, mobile data down) and
@@ -30,7 +28,7 @@ import { useTranslation } from "react-i18next";
 import { errorText } from "@/lib/api/types";
 import { pick, useLang } from "@/lib/i18n/pick";
 import { guardReason } from "@/lib/guardReason";
-import { Airplane, ArrowClockwise, CellSignalFull, Globe, MagnifyingGlass, Power } from "@phosphor-icons/react";
+import { ArrowClockwise, CellSignalFull, Globe, MagnifyingGlass, Power } from "@phosphor-icons/react";
 import { apiFetch } from "@/lib/api/client";
 import { useApi } from "@/lib/hooks/useApi";
 import { isRemoteAccess } from "@/lib/api/remote";
@@ -85,7 +83,6 @@ function flag(v: unknown): boolean {
 type Ask =
   | { kind: "data"; next: boolean; tier: 2 | 3 }
   | { kind: "roam"; next: boolean; tier: 2 | 3 }
-  | { kind: "air"; next: boolean }
   | { kind: "scan" }
   | { kind: "register"; op: ModemScanOperator }
   | { kind: "auto" }
@@ -183,50 +180,6 @@ export default function MobileNetworkPage() {
       const on = a?.kind === "roam" && a.next;
       return readBack((d) => flag(d.roam_enable) === on);
     },
-  });
-
-  // ── airplane ──
-  const airRecovery = t(
-    "mobilenet.airRecovery",
-    "Turn airplane mode off on this page. If the modem doesn't come back, reboot the device (Device control below, or hold the power button)."
-  );
-  const airOp = useWriteOp({
-    tier: 3,
-    steps: [
-      {
-        label: t("mobilenet.airplaneMode", "Airplane Mode"),
-        run: async () => {
-          const a = askRef.current;
-          if (a?.kind === "air" && a.next) {
-            return apiFetch(`/api/modem/airplane`, { method: "POST", body: { operate_mode: "LPM" } });
-          }
-          // AT+CFUN=1 waits 8 s on the device; retry once after 3 s (as before).
-          try {
-            return await apiFetch(`/api/modem/online`, { method: "POST", timeoutMs: 20000 });
-          } catch {
-            await sleep(3000);
-            checkAlive();
-            return apiFetch(`/api/modem/online`, { method: "POST", timeoutMs: 20000 });
-          }
-        },
-      },
-    ],
-    verify: async () => {
-      const a = askRef.current;
-      const wantOn = a?.kind === "air" && a.next;
-      for (let i = 0; i < 5; i++) {
-        if (i > 0) await sleep(POLL_MS);
-        checkAlive();
-        const s = await apiFetch<ModemStatus>(STATUS);
-        const on = s.operate_mode !== undefined && s.operate_mode !== "ONLINE";
-        if (on === wantOn) {
-          await ms.mutate(s, { revalidate: false });
-          return true;
-        }
-      }
-      return false;
-    },
-    waitDevice: { expectedSec: 30, recovery: airRecovery },
   });
 
   // ── carrier scan ──
@@ -345,9 +298,9 @@ export default function MobileNetworkPage() {
   const agentPhase = ni.data?.guard?.phase ?? "";
   const agentGuard = (agentPhase === "registering" || agentPhase === "reverting") && !regOp.busy && !autoOp.busy;
   const selBusy = scanOp.busy || regOp.busy || autoOp.busy || agentScanning || agentGuard;
-  // Switching data, roaming or airplane mode mid-search or mid-register
-  // spoils it; the touch screen locks these too.
-  const radioBusy = dataOp.busy || roamOp.busy || airOp.busy || selBusy;
+  // Switching data or roaming mid-search or mid-register spoils it; the
+  // touch screen locks these too.
+  const radioBusy = dataOp.busy || roamOp.busy || selBusy;
   const agentScan = ni.data?.scan;
   const shownOps: ModemScanOperator[] | null =
     operators ??
@@ -355,7 +308,6 @@ export default function MobileNetworkPage() {
       ? agentScan.operators.map((o) => ({ m_mcc_mnc: o.plmn, m_oper_name: pick(o.name, o.operator_en, lang), m_rat: o.rat, m_status: o.status }))
       : null);
   const locked = !data || md.stale || radioBusy;
-  const airLocked = !status || ms.stale || radioBusy;
 
   function open(a: Ask) {
     askRef.current = a;
@@ -368,7 +320,7 @@ export default function MobileNetworkPage() {
     const a = askRef.current;
     if (!a) return;
     const op =
-      a.kind === "data" ? dataOp : a.kind === "roam" ? roamOp : a.kind === "air" ? airOp : a.kind === "scan" ? scanOp : a.kind === "register" ? regOp : a.kind === "auto" ? autoOp : rebootOp;
+      a.kind === "data" ? dataOp : a.kind === "roam" ? roamOp : a.kind === "scan" ? scanOp : a.kind === "register" ? regOp : a.kind === "auto" ? autoOp : rebootOp;
     if (a.kind === "scan") setOperators(null);
     if (a.kind === "register") {
       setRegMsg(null);
@@ -390,7 +342,7 @@ export default function MobileNetworkPage() {
   } else if (airplaneOn) {
     tone = "bad";
     state = t("mobilenet.stAirplane", "Airplane mode on");
-    reason = t("mobilenet.stAirplaneReason", "The cellular radio is off. Turn airplane mode off below.");
+    reason = t("mobilenet.stAirplaneReason", "The cellular radio is off. Reboot the device to bring it back.");
   } else if (data && !dataOn) {
     tone = "bad";
     state = t("mobilenet.stDataOff", "Mobile data off");
@@ -455,7 +407,6 @@ export default function MobileNetworkPage() {
 
   const regTarget = ask?.kind === "register" ? ask.op : null;
   const regName = regTarget ? regTarget.m_oper_name ?? regTarget.m_mcc_mnc ?? "—" : "";
-  const airNext = ask?.kind === "air" ? ask.next : !airplaneOn;
   const dlgData = ask && (ask.kind === "data" || ask.kind === "roam") && ask.tier === 3 ? ask : null;
 
   return (
@@ -548,40 +499,14 @@ export default function MobileNetworkPage() {
               {t("mobilenet.dataErr", "Couldn't read mobile data settings: {{e}}", { e: errorText(md.error, lang) })}
             </p>
           )}
-          <div className="mt-2 grid gap-1 px-1">
-            <OpResult op={dataOp} />
-            <OpResult op={roamOp} />
-          </div>
-        </section>
-
-        {/* ── airplane ── */}
-        <section>
-          <Group title={t("mobilenet.airplaneMode", "Airplane Mode")} stale={ms.stale}>
-            <Row
-              icon={Airplane}
-              label={t("mobilenet.airplaneMode", "Airplane Mode")}
-              sub={t("mobilenet.airplaneHint", "Note: If modem doesn't recover after disabling airplane mode, reboot via Device Control.")}
-              control={
-                status ? (
-                  <Switch
-                    label={t("mobilenet.airplaneMode", "Airplane Mode")}
-                    isSelected={airplaneOn}
-                    isDisabled={airLocked}
-                    onChange={(next) => open({ kind: "air", next })}
-                  />
-                ) : (
-                  <span className="nd-skel inline-block w-11" />
-                )
-              }
-            />
-          </Group>
           {!status && ms.error && (
             <p role="alert" className="nd-aux mt-1 px-1 text-nd-badT">
               {t("mobilenet.statusErr", "Couldn't read the radio state: {{e}}", { e: errorText(ms.error, lang) })}
             </p>
           )}
           <div className="mt-2 grid gap-1 px-1">
-            <OpResult op={airOp} />
+            <OpResult op={dataOp} />
+            <OpResult op={roamOp} />
           </div>
         </section>
 
@@ -600,7 +525,7 @@ export default function MobileNetworkPage() {
                 {scanOp.busy || agentScanning ? t("mobilenet.scanning", "Scanning…") : t("mobilenet.scanForCarriers", "Scan for Carriers")}
               </Button>
             </span>
-            {airplaneOn && <span className="nd-aux">{t("mobilenet.scanNeedsRadio", "Airplane mode is on: the scan will find nothing until it is turned off.")}</span>}
+            {airplaneOn && <span className="nd-aux">{t("mobilenet.scanNeedsRadio", "The cellular radio is off: the scan will find nothing until the device is rebooted.")}</span>}
           </div>
           {confirmInlineFor(["scan"])}
           <div className="mt-2 grid gap-1 px-1">
@@ -654,7 +579,7 @@ export default function MobileNetworkPage() {
                             size="sm"
                             variant="secondary"
                             onPress={() => open({ kind: "register", op })}
-                            isDisabled={selBusy || airOp.busy}
+                            isDisabled={selBusy}
                             pending={regOp.busy && regSent === op}
                             aria-label={t("mobilenet.registerTo", "Register to {{name}}", { name })}
                           >
@@ -705,7 +630,7 @@ export default function MobileNetworkPage() {
             <Row
               icon={Power}
               label={t("mobilenet.rebootRouter", "Reboot Router")}
-              sub={t("mobilenet.rebootHint", "Use this if modem fails to recover from airplane mode.")}
+              sub={t("mobilenet.rebootHint", "Use this if the modem stops responding.")}
               control={
                 <Button variant="secondary" size="sm" onPress={() => open({ kind: "reboot" })} isDisabled={rebootOp.busy} pending={rebootOp.busy}>
                   {t("mobilenet.reboot", "Reboot")}
@@ -757,25 +682,6 @@ export default function MobileNetworkPage() {
                 : t("mobilenet.roamOffBtn", "Turn roaming off")
         }
         cutsUplink={!!dlgData && !dlgData.next}
-        onConfirm={go}
-      />
-      <ConfirmDialog
-        open={ask?.kind === "air"}
-        onOpenChange={(o) => !o && close()}
-        title={airNext ? t("mobilenet.airOnTitle", "Turn airplane mode on?") : t("mobilenet.airOffTitle", "Turn airplane mode off?")}
-        what={
-          airNext
-            ? t("mobilenet.confirmAirplane", "Enable airplane mode? This will turn off the cellular radio.")
-            : t("mobilenet.airOffWhat", "The cellular radio comes back on and the modem registers to the network again.")
-        }
-        downtime={
-          airNext
-            ? t("mobilenet.airOnDowntime", "No mobile connection until airplane mode is turned off.")
-            : t("mobilenet.airOffDowntime", "About 30 seconds until the modem is back on the network.")
-        }
-        recovery={airRecovery}
-        actionLabel={airNext ? t("mobilenet.airOnAction", "Turn airplane mode on") : t("mobilenet.airOffAction", "Turn airplane mode off")}
-        cutsUplink
         onConfirm={go}
       />
       <ConfirmDialog

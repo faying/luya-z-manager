@@ -39,7 +39,8 @@ const PRIMS: &[&str] = &[
 
 /// (file under src/, primitive, count, class, what it is)
 const LEDGER: &[(&str, &str, usize, Class, &str)] = &[
-    ("ubus.rs", "Command::new(", 3, Def, "ubus (reads), ubus -v list and uci get"),
+    ("ubus.rs", "Command::new(", 6, Def, "ubus (reads), ubus -v list and uci get; 3 in the output_within tests (sh, sleep)"),
+    ("ubus.rs", "libc::kill(", 1, Def, "output_within_group: a timed-out command's own process group (doctor.sh, sh -c pipes)"),
     ("at_cmd.rs", "Command::new(", 2, Def, "AT port I/O"),
     ("at_terminal.rs", "at_cmd::send(", 1, Exempt, "AT terminal"),
     ("device_ext.rs", "Command::new(", 2, Read, "sync before reboot / power off"),
@@ -50,7 +51,7 @@ const LEDGER: &[(&str, &str, usize, Class, &str)] = &[
     ("homemode.rs", "Command::new(", 1, Read, "iw scan"),
     ("netinfo.rs", "Command::new(", 1, Read, "sh_out"),
     ("netinfo.rs", "at_cmd::send(", 1, Read, "AT+COPS? (selection mode)"),
-    ("public.rs", "Command::new(", 1, Read, "sh"),
+    ("public.rs", "Command::new(", 2, Read, "sh; ip route get (did this request come over Tailscale)"),
     ("qos.rs", "at_cmd::send(", 2, Read, "AT+CGCONTRDP, AT+CGEQOSRDP"),
     ("services.rs", "Command::new(", 2, Read, "tailscale status, pidof"),
     ("sms.rs", "Command::new(", 1, Read, "sqlite3 -readonly: which deleted ids are still there"),

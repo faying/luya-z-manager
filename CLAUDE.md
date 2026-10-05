@@ -141,7 +141,7 @@ wrong again:
 ## Other Device Notes
 
 - **The clock is local time labelled UTC.** ZTE's SNTP (`zwrt_zte_sntp`, `time_from_utc='8.00'`) sets the system clock to local wall time and leaves TZ=UTC, so `date` says "14:34 UTC" at 14:34 Beijing time and every device epoch/ISO-"Z" string is 8 h ahead of real UTC. Don't "fix" the firmware. On the device, format with localtime (right digits). Across to a browser/phone, use `clock.utc_offset` from `/api/public/status` (`zte-agent/src/clock.rs`, `web/src/lib/deviceClock.ts`): show device times with UTC formatting, compare with browser time via the offset.
-- **Airplane mode bug**: `nwinfo_set_mode ONLINE` does NOT recover modem from LPM. Only fix: reboot.
+- **Airplane mode bug**: `nwinfo_set_mode ONLINE` does NOT recover modem from LPM. Only fix: reboot. Re-checked on B31 (2026-10-05): vendor ONLINE flips to OFFLINE and falls back to LOW_POWER; `AT+CFUN=1` blocks on the AT port (no answer). Never put the device in LPM to test anything. The stock UI has no airplane switch at all.
 - **Charge policy bug**: Wall mode `enable` STOPS charging, `disable` STARTS charging (inverted).
 - **procd respawn**: `kill -9` may trigger procd respawn. Use `/etc/init.d/<name> stop` instead.
 - **Touchscreen**: Sitronix at I2C `1-0055`, kernel module `sitronix-ts.ko` loaded by `/usr/bin/mtdev2tuio.sh`.

@@ -65,7 +65,7 @@ fn write_ssids(ssids: &[String]) -> std::io::Result<()> {
             seen.push(t.to_string());
         }
     }
-    fs::write(SSID_FILE, format!("{}\n", seen.join("\n")))
+    crate::fsutil::atomic_write(SSID_FILE, format!("{}\n", seen.join("\n")).as_bytes())
 }
 
 /// Current worker mode: "home" (Wi-Fi off) or "normal".
@@ -93,9 +93,9 @@ fn read_cfg_int(key: &str, default: u32) -> u32 {
 /// Persist both tunables (the file holds the full set).
 fn write_cfg(check_every: u32, exit_misses: u32) -> std::io::Result<()> {
     let _ = fs::create_dir_all(STATE_DIR);
-    fs::write(
+    crate::fsutil::atomic_write(
         CONFIG_FILE,
-        format!("check_every={check_every}\nexit_misses={exit_misses}\n"),
+        format!("check_every={check_every}\nexit_misses={exit_misses}\n").as_bytes(),
     )
 }
 

@@ -563,10 +563,7 @@ fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &str) -> T {
 fn write_json<T: Serialize>(path: &str, value: &T) {
     let _ = fs::create_dir_all(DIR);
     if let Ok(text) = serde_json::to_string_pretty(value) {
-        let tmp = format!("{path}.tmp");
-        if fs::write(&tmp, text).is_ok() {
-            let _ = fs::rename(&tmp, path);
-        }
+        let _ = crate::fsutil::atomic_write(path, text.as_bytes());
     }
 }
 
@@ -612,18 +609,44 @@ fn log_line(msg: &str) {
 /// mid-way through a profile switch, reports an empty IMSI, and an empty string
 /// is also "not 460". Hysteresis would usually absorb that, but it should not
 /// have to.
+///
+/// From datad's `/v2` `sim` block when it is fresh (datad already reads
+/// `get_sim_info`; audit 2026-10-04 P1-4), else one direct ubus read (datad
+/// down, or an older datad without the block).
 fn sim_mcc() -> Option<String> {
-    let info = ubus::read("zwrt_zte_mdm.api", "get_sim_info", Some("{}")).ok()?;
-    mcc_from_sim_info(&info)
+    let block = crate::datad_feed::global().and_then(|f| f.view().block("sim"));
+    sim_mcc_from(block, || ubus::read("zwrt_zte_mdm.api", "get_sim_info", Some("{}")).ok())
 }
 
+/// A fresh datad block is the answer, "unknown" included: no second read.
+/// One difference from the ubus shape: datad fills `imsi` from the uci copy
+/// when the live one is invalid, so mid profile-switch with `state` still
+/// "ready" this can briefly be the old profile's MCC rather than `None`. The
+/// detection hysteresis absorbs that.
+fn sim_mcc_from(block: Option<Value>, direct: impl FnOnce() -> Option<Value>) -> Option<String> {
+    match block {
+        Some(sim) => mcc_from_datad_sim(&sim),
+        None => mcc_from_sim_info(&direct()?),
+    }
+}
+
+/// `zwrt_zte_mdm.api get_sim_info` as ubus returns it (`sim_states`, `sim_imsi`).
 fn mcc_from_sim_info(info: &Value) -> Option<String> {
-    let ready = info
-        .get("sim_states")
-        .and_then(|v| v.as_str())
-        .is_some_and(|s| s.contains("ready"));
-    let imsi = info.get("sim_imsi").and_then(|v| v.as_str()).unwrap_or("");
-    if !ready || imsi.len() < 5 || !imsi.bytes().all(|b| b.is_ascii_digit()) {
+    mcc_from(str_field(info, "sim_states"), str_field(info, "sim_imsi"))
+}
+
+/// datad's `sim` block: the same two values, renamed (`state`, `imsi`).
+fn mcc_from_datad_sim(sim: &Value) -> Option<String> {
+    mcc_from(str_field(sim, "state"), str_field(sim, "imsi"))
+}
+
+fn str_field<'a>(v: &'a Value, k: &str) -> &'a str {
+    v.get(k).and_then(|v| v.as_str()).unwrap_or("")
+}
+
+/// The one rule: a ready SIM with a plausible all-digit IMSI, else `None`.
+fn mcc_from(state: &str, imsi: &str) -> Option<String> {
+    if !state.contains("ready") || imsi.len() < 5 || !imsi.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     Some(imsi[..3].to_string())
@@ -667,10 +690,7 @@ fn write_heartbeat() {
         return; // no uptime, no heartbeat: u60-guard reads that as "not alive", the safe side
     };
     // Rename so u60-guard never reads a half-written number.
-    let tmp = format!("{HEARTBEAT_FILE}.tmp");
-    if fs::write(&tmp, format!("{secs}\n")).is_ok() {
-        let _ = fs::rename(&tmp, HEARTBEAT_FILE);
-    }
+    let _ = crate::fsutil::atomic_write(HEARTBEAT_FILE, format!("{secs}\n").as_bytes());
 }
 
 #[derive(Debug, PartialEq)]
@@ -1425,7 +1445,8 @@ fn wait_for_field(app: &AppState, check: &FieldCheck) -> Result<(), String> {
 // ── HTTP ────────────────────────────────────────────────────────────────────
 
 fn state_json(engine: &Engine) -> Value {
-    // A ubus round-trip; take it before the locks, not while holding them.
+    // Maybe a ubus round-trip (when datad's sim block is not fresh); take it
+    // before the locks, not while holding them.
     let sim_mcc = sim_mcc();
     let cfg = engine.cfg.lock().unwrap();
     let st = engine.state.lock().unwrap();
@@ -1681,7 +1702,7 @@ pub fn scenario_pin(state: &AppState, body: &[u8]) -> (u16, Value) {
             if !known {
                 return (400, json!({"ok": false, "error": format!("unknown scenario {id:?}")}));
             }
-            let _ = fs::write(PIN_FILE, id);
+            let _ = crate::fsutil::atomic_write(PIN_FILE, id.as_bytes());
             log_line(&format!("pinned to {id:?}"));
         }
         None => {
@@ -1771,6 +1792,7 @@ pub fn scenario_log(_state: &AppState) -> (u16, Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
 
     fn net(ssid: &str, bssid: &str, signal: f64) -> wifi_scan::Network {
         wifi_scan::Network {
@@ -2134,6 +2156,36 @@ mod tests {
         assert_eq!(mcc_from_sim_info(&not_ready), None);
         let junk = json!({"sim_states": "sim ready", "sim_imsi": "44x10"});
         assert_eq!(mcc_from_sim_info(&junk), None);
+    }
+
+    #[test]
+    fn datad_sim_block_maps_like_the_ubus_reply() {
+        let ok = json!({"state": "sim ready", "imsi": "440101234567890", "iccid": "8981"});
+        assert_eq!(mcc_from_datad_sim(&ok).as_deref(), Some("440"));
+        for bad in [
+            json!({"state": "sim ready", "imsi": ""}),
+            json!({"state": "sim absent", "imsi": "440101234567890"}),
+            json!({"state": "", "imsi": "440101234567890"}),
+            json!({"state": "sim ready", "imsi": "44x10"}),
+            json!({"state": "sim ready", "imsi": "4401"}),
+            json!({"state": "sim ready"}),
+            json!({}),
+        ] {
+            assert_eq!(mcc_from_datad_sim(&bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn fresh_block_wins_and_stale_falls_back_to_ubus() {
+        let ready = json!({"state": "sim ready", "imsi": "460001234567890"});
+        assert_eq!(sim_mcc_from(Some(ready), || panic!("no ubus read with a fresh block")).as_deref(), Some("460"));
+        // A fresh block saying "unknown" is final too: no second read.
+        let switching = json!({"state": "sim ready", "imsi": ""});
+        assert_eq!(sim_mcc_from(Some(switching), || panic!("no ubus read with a fresh block")), None);
+        // Not fresh (datad down / older datad): the direct read decides.
+        let direct = json!({"sim_states": "sim ready", "sim_imsi": "440101234567890"});
+        assert_eq!(sim_mcc_from(None, || Some(direct)).as_deref(), Some("440"));
+        assert_eq!(sim_mcc_from(None, || None), None, "read failed: unknown, never abroad");
     }
 
     #[test]

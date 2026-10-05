@@ -11,6 +11,9 @@
 #   sh start.sh disable      stop, and do not start again until "enable"
 #   sh start.sh enable       undo disable, then start
 #   sh start.sh clear-safe   leave safe mode now (next start uses TS_MODE again)
+#   sh start.sh revive       one supervision step (what the watcher does each
+#                            poll); exit 0 nothing to do, 1 restarted, 2 gave
+#                            up for now, 3 apply.sh is switching
 #
 #   binaries  /data/tailscale/{tailscaled,tailscale}
 #   state     /data/tailscale/state
@@ -36,6 +39,25 @@
 #     seconds up in safe mode, the next boot tries TUN once more (one more
 #     strike puts it back). Counted once per boot_id, so apply.sh restarts do
 #     not count. Modem-crash reboots count too: that is why this only degrades.
+#   - Watcher: after a start, a detached "__watch" loop (one per device,
+#     $RUN/tailscale-watch.pid) checks every TS_WATCH_POLL seconds whether
+#     tailscaled is still running, and if it died, starts it again through
+#     the same worker (so disabled, safe mode, the CGNAT check, the tuning.env
+#     and TS_TAILSCALED_BIN fallbacks all apply again), after --cleanup.
+#     Liveness only: a tailscaled that runs but is not healthy is apply.sh's
+#     and u60-guard's business, not this. Waits TS_REVIVE_DELAYS seconds
+#     before the 1st, 2nd, 3rd... restart (the last value repeats), starts the
+#     backoff over once tailscaled stayed up TS_STABLE seconds, and at most
+#     TS_REVIVE_MAX restarts per TS_REVIVE_WINDOW seconds of uptime; past that
+#     it gives up until the window ends (boot log + one alert in /data/alerts).
+#     Never restarts while /data/tailscale/disabled exists, after "stop"
+#     (until the next start; $RUN/tailscale.stopped), or while apply.sh runs
+#     ($RUN/tailscale-apply.pid; apply.sh also ends the watcher before each of
+#     its restarts, and the start it runs brings up a new one). Restarts in a
+#     boot do not count as staying up: a TUN tailscaled that had to be
+#     revived is not marked stable, so the boot still counts as a strike.
+#     tailscaled is not under procd and nothing else restarts it; u60-guard
+#     only records its health. TS_WATCH=0 turns the watcher off.
 #
 # Nothing here is specific to one owner's network: the advertised subnet is
 # read from br-lan at start, the hostname defaults to u60pro. Per-device
@@ -57,6 +79,9 @@
 #                                 name; default none; LAN access stays allowed)
 #   TS_STABLE / TS_MAX_STRIKES / TS_SAFE_RETRY / TS_WAN_WAIT   seconds/count
 #                              (defaults 600 / 3 / 3600 / 180)
+#   TS_WATCH=1|0 / TS_WATCH_POLL / TS_REVIVE_DELAYS / TS_REVIVE_MAX / TS_REVIVE_WINDOW
+#                              the watcher (defaults 1 / 60 / "300 900 3600" /
+#                              6 / 86400)
 # The node logs in once (scripts/tailscale/README.md); no auth key is kept here.
 # Older installs kept the identity in $D/tailscaled.state or in a file named
 # $D/state; it is moved to $D/state/tailscaled.state before the first start,
@@ -75,6 +100,10 @@ SAFE=$D/safe-mode
 DISABLED=$D/disabled
 LOCK=$RUN/tailscale-start.lock
 MODE_FILE=$RUN/tailscale.mode
+WATCH_PID=$RUN/tailscale-watch.pid   # the watcher
+REVIVE=$RUN/tailscale-revive         # its backoff state (this boot only)
+STOPPED=$RUN/tailscale.stopped       # "stop" ran: the watcher leaves it down
+APPLYING=$RUN/tailscale-apply.pid    # apply.sh is switching (it writes this)
 # test hooks (scripts/tailscale/test/start.sh); defaults are the device's own
 BOOT_ID_FILE=${TSS_BOOT_ID:-/proc/sys/kernel/random/boot_id}
 RESOLV=${TSS_RESOLV:-/tmp/resolv.conf.d/resolv.conf.auto}
@@ -84,6 +113,9 @@ PIDOF=${TSS_PIDOF:-pidof}
 KILL=${TSS_KILL:-kill}
 SLEEP=${TSS_SLEEP:-sleep}
 DF=${TSS_DF:-df}
+UPTIME=${TSS_UPTIME:-/proc/uptime}
+ALERT_LIB=${TSS_ALERT_LIB:-/data/u60-guard/alert-lib.sh}
+WATCH_TICKS=${TSS_WATCH_TICKS:-0}    # >0: the watcher ends after that many polls
 FG=${TSS_FG:-0}                      # 1: run the worker in the foreground
 TIMER=${TSS_TIMER:-1}                # 0: do not arm the stable timer
 BLOG_MAX=65536
@@ -104,6 +136,14 @@ num() { # <value> <default>: a small non-negative integer, else the default
 
 boot_id() { tr -dc '0-9a-f-' <"$BOOT_ID_FILE" 2>/dev/null; }
 
+uptime_s() { _u=$(cut -d. -f1 "$UPTIME" 2>/dev/null); num "$_u" 0; }
+
+live_pid() { # <pid file>: prints the pid when it is a live process
+    _lp=$(cat "$1" 2>/dev/null)
+    case "$_lp" in '' | *[!0-9]*) return 1 ;; esac
+    [ ${#_lp} -le 9 ] && kill -0 "$_lp" 2>/dev/null && echo "$_lp"
+}
+
 # ── configuration ───────────────────────────────────────────────────────────
 load_config() {
     TS_HOSTNAME=u60pro
@@ -119,6 +159,11 @@ load_config() {
     TS_MAX_STRIKES=${TS_MAX_STRIKES:-3}
     TS_SAFE_RETRY=${TS_SAFE_RETRY:-3600}
     TS_WAN_WAIT=${TS_WAN_WAIT:-180}
+    TS_WATCH=${TS_WATCH:-1}
+    TS_WATCH_POLL=${TS_WATCH_POLL:-60}
+    TS_REVIVE_DELAYS=${TS_REVIVE_DELAYS:-300 900 3600}
+    TS_REVIVE_MAX=${TS_REVIVE_MAX:-6}
+    TS_REVIVE_WINDOW=${TS_REVIVE_WINDOW:-86400}
     TUNING_BAD=
     _t=$D/tuning.env
     if [ -f "$_t" ]; then
@@ -134,6 +179,11 @@ load_config() {
     [ "$TS_MAX_STRIKES" -ge 1 ] || TS_MAX_STRIKES=1
     TS_SAFE_RETRY=$(num "$TS_SAFE_RETRY" 3600)
     TS_WAN_WAIT=$(num "$TS_WAN_WAIT" 180)
+    case "$TS_WATCH" in 0) ;; *) TS_WATCH=1 ;; esac
+    TS_WATCH_POLL=$(num "$TS_WATCH_POLL" 60)
+    [ "$TS_WATCH_POLL" -ge 1 ] || TS_WATCH_POLL=1
+    TS_REVIVE_MAX=$(num "$TS_REVIVE_MAX" 6)
+    TS_REVIVE_WINDOW=$(num "$TS_REVIVE_WINDOW" 86400)
     case "$TS_MODE" in tun | userspace) ;; *) TS_MODE=tun ;; esac
     case "$TS_ACCEPT_ROUTES" in false) ;; *) TS_ACCEPT_ROUTES=true ;; esac
     case "$TS_ACCEPT_DNS" in true) ;; *) TS_ACCEPT_DNS=false ;; esac
@@ -234,6 +284,137 @@ run_bounded() {
     wait "$_p"
 }
 
+# ── watcher: restart a tailscaled that died, with a bounded backoff ─────────
+# State, one line in $REVIVE (memory: a reboot starts it over):
+#   n=<restarts since it last stayed up> wn=<restarts in this window>
+#   win=<uptime the window began> dead=<uptime first seen down, 0 = up>
+#   last=<uptime of the last restart> total=<restarts this boot> gaveup=<0|1>
+rv_read() {
+    RV_N=0 RV_WN=0 RV_WIN=0 RV_DEAD=0 RV_LAST=0 RV_TOTAL=0 RV_GAVEUP=0
+    _l=
+    [ -f "$REVIVE" ] && read -r _l <"$REVIVE" 2>/dev/null
+    set -f
+    for _kv in $_l; do
+        case "$_kv" in
+            n=*) RV_N=$(num "${_kv#n=}" 0) ;;
+            wn=*) RV_WN=$(num "${_kv#wn=}" 0) ;;
+            win=*) RV_WIN=$(num "${_kv#win=}" 0) ;;
+            dead=*) RV_DEAD=$(num "${_kv#dead=}" 0) ;;
+            last=*) RV_LAST=$(num "${_kv#last=}" 0) ;;
+            total=*) RV_TOTAL=$(num "${_kv#total=}" 0) ;;
+            gaveup=1) RV_GAVEUP=1 ;;
+        esac
+    done
+    set +f
+}
+rv_write() {
+    echo "n=$RV_N wn=$RV_WN win=$RV_WIN dead=$RV_DEAD last=$RV_LAST total=$RV_TOTAL gaveup=$RV_GAVEUP" \
+        >"$REVIVE.tmp" 2>/dev/null && mv -f "$REVIVE.tmp" "$REVIVE"
+}
+rv_delay() { # <restarts so far>: seconds to wait before the next one
+    _d=
+    _k=0
+    set -f
+    for _x in $TS_REVIVE_DELAYS; do
+        _x=$(num "$_x" "")
+        [ -n "$_x" ] || continue
+        _d=$_x
+        [ "$_k" -ge "$1" ] && break
+        _k=$((_k + 1))
+    done
+    set +f
+    echo "${_d:-300}"
+}
+alert() { # <kind> <text>: into /data/alerts when u60-guard's library is there
+    [ -f "$ALERT_LIB" ] || return 0
+    (. "$ALERT_LIB" && alert_add "$1" "$2") >/dev/null 2>&1
+    return 0
+}
+
+# One step. 0 nothing to do (or waiting out the backoff), 1 restarted,
+# 2 gave up until the window ends, 3 apply.sh is switching. load_config first.
+revive_tick() {
+    _now=$(uptime_s)
+    rv_read
+    if [ -f "$DISABLED" ] || [ -f "$STOPPED" ]; then
+        RV_DEAD=0
+        rv_write
+        return 0
+    fi
+    if live_pid "$APPLYING" >/dev/null; then # its kill and its start are one switch
+        RV_DEAD=0
+        rv_write
+        return 3
+    fi
+    if $PIDOF tailscaled >/dev/null 2>&1 || live_pid "$LOCK/pid" >/dev/null; then
+        _chg=0
+        [ "$RV_DEAD" = 0 ] || { RV_DEAD=0; _chg=1; }
+        if [ "$RV_N" -gt 0 ] && [ $((_now - RV_LAST)) -ge "$TS_STABLE" ]; then
+            log "watch: tailscaled stayed up ${TS_STABLE}s since the last restart: backoff starts over"
+            RV_N=0 _chg=1
+        fi
+        [ "$_chg" = 0 ] || rv_write # the usual tick: nothing written
+        return 0
+    fi
+    if [ "$RV_WIN" = 0 ] || [ $((_now - RV_WIN)) -ge "$TS_REVIVE_WINDOW" ]; then
+        RV_WIN=$_now RV_WN=0 RV_GAVEUP=0
+    fi
+    _d=$(rv_delay "$RV_N")
+    if [ "$RV_DEAD" = 0 ]; then
+        RV_DEAD=$_now
+        [ "$RV_WN" -ge "$TS_REVIVE_MAX" ] || log "watch: tailscaled is not running; restart in ${_d}s"
+    fi
+    if [ "$RV_WN" -ge "$TS_REVIVE_MAX" ]; then
+        if [ "$RV_GAVEUP" != 1 ]; then
+            RV_GAVEUP=1
+            log "watch: GAVE UP: $RV_WN restarts within ${TS_REVIVE_WINDOW}s; next try when that window ends"
+            alert tailscale-gave-up "tailscaled died $RV_WN times; restarts paused for up to ${TS_REVIVE_WINDOW}s"
+        fi
+        rv_write
+        return 2
+    fi
+    if [ $((_now - RV_DEAD)) -lt "$_d" ]; then
+        rv_write
+        return 0
+    fi
+    RV_N=$((RV_N + 1)) RV_WN=$((RV_WN + 1)) RV_TOTAL=$((RV_TOTAL + 1)) RV_LAST=$_now RV_DEAD=0
+    rv_write
+    log "watch: restarting tailscaled (down ${_d}s+; restart $RV_WN of $TS_REVIVE_MAX in this window)"
+    # a TUN tailscaled that died leaves ip rules, table 52 and ts-* chains behind
+    run_bounded 30 "$BIN" --cleanup >/dev/null 2>&1
+    rm -f "$MODE_FILE"
+    live_pid "$LOCK/pid" >/dev/null || rm -rf "$LOCK"
+    if mkdir "$LOCK" 2>/dev/null; then
+        echo $$ >"$LOCK/pid"
+        worker
+        rm -rf "$LOCK"
+    fi
+    return 1
+}
+
+watch_spawn() { # after a start: one watcher per device
+    [ "$TS_WATCH" = 1 ] || return 0
+    live_pid "$WATCH_PID" >/dev/null && return 0
+    nohup sh "$SELF" __watch </dev/null >/dev/null 2>&1 &
+    echo $! >"$WATCH_PID"
+}
+
+watch() {
+    load_config
+    echo $$ >"$WATCH_PID"
+    _ticks=0
+    _max=$(num "$WATCH_TICKS" 0)
+    while [ "$TS_WATCH" = 1 ]; do
+        $SLEEP "$TS_WATCH_POLL"
+        [ "$(cat "$WATCH_PID" 2>/dev/null)" = "$$" ] || return 0 # stop, apply.sh or a newer watcher
+        revive_tick
+        _ticks=$((_ticks + 1))
+        [ "$_max" -gt 0 ] && [ "$_ticks" -ge "$_max" ] && break
+    done
+    [ "$(cat "$WATCH_PID" 2>/dev/null)" = "$$" ] && rm -f "$WATCH_PID"
+    return 0
+}
+
 # ── worker: everything rc.local must not wait for ───────────────────────────
 worker() {
     load_config
@@ -294,6 +475,7 @@ worker() {
     fi
     if $PIDOF tailscaled >/dev/null 2>&1; then
         log "tailscaled already running; nothing started"
+        watch_spawn
         return 0
     fi
     migrate_state
@@ -322,6 +504,7 @@ worker() {
         if [ "$WHY" = safe-mode ]; then _t=$TS_SAFE_RETRY; else _t=$TS_STABLE; fi
         ($SLEEP "$_t"; sh "$SELF" __stable "$NOW") </dev/null >/dev/null 2>&1 &
     fi
+    watch_spawn
     return 0
 }
 
@@ -334,6 +517,9 @@ stable() {
         rm -f "$SAFE"
         rec_write "$R_BOOT" $((TS_MAX_STRIKES - 1)) 1 "$R_MODE"
         log "safe mode stayed up ${TS_SAFE_RETRY}s: next boot tries TUN once more"
+    elif [ "$R_MODE" = tun ] && rv_read && [ "$RV_TOTAL" -gt 0 ]; then
+        # it was up at the timer, but only because the watcher restarted it
+        log "TUN up ${TS_STABLE}s but restarted $RV_TOTAL time(s) this boot: not counted as stable"
     elif [ "$R_MODE" = tun ]; then
         rec_write "$R_BOOT" 0 1 "$R_MODE"
         [ "$R_STRIKES" = 0 ] || log "TUN stayed up ${TS_STABLE}s: strikes cleared"
@@ -349,6 +535,7 @@ start() {
         log "disabled ($DISABLED): not started"
         return 0
     fi
+    rm -f "$STOPPED"
     $PIDOF tailscaled >/dev/null 2>&1 && return 0
     if ! mkdir "$LOCK" 2>/dev/null; then
         _o=$(cat "$LOCK/pid" 2>/dev/null)
@@ -370,6 +557,10 @@ start() {
 
 stop() {
     load_config
+    # the watcher first, or it starts tailscaled again after the backoff
+    : >"$STOPPED" 2>/dev/null
+    _w=$(live_pid "$WATCH_PID") && [ "$_w" != $$ ] && kill "$_w" 2>/dev/null
+    rm -f "$WATCH_PID"
     # a worker still waiting for the WAN would start tailscaled after us
     _w=$(cat "$LOCK/pid" 2>/dev/null)
     case "$_w" in '' | *[!0-9]*) ;; *) [ "$_w" != $$ ] && kill "$_w" 2>/dev/null ;; esac
@@ -395,6 +586,9 @@ status() {
     echo "mode now:  $(cat "$MODE_FILE" 2>/dev/null || echo -)"
     echo "strikes:   $R_STRIKES of $TS_MAX_STRIKES (this boot stable: $([ "$R_BOOT" = "$(boot_id)" ] && echo "$R_STABLE" || echo -))"
     echo "running:   $($PIDOF tailscaled || echo no)"
+    rv_read
+    echo "watcher:   $(live_pid "$WATCH_PID" || echo no)$([ -f "$STOPPED" ] && echo ' (stopped by hand: no restarts)')"
+    echo "restarts:  $RV_TOTAL this boot, $RV_WN of $TS_REVIVE_MAX in this window$([ "$RV_GAVEUP" = 1 ] && echo ', GAVE UP until the window ends')"
     echo "binary:    $BIN${BIN_NOTE:+ ($BIN_NOTE)}"
     [ -n "$TUNING_BAD" ] && echo "tuning.env: IGNORED (failed sh -n or a trial load)"
     return 0
@@ -443,11 +637,23 @@ check() {
 
 case "${1:-start}" in
     start) start ;;
+    # The long-lived arms exit here: ash reads a script as it goes, so a
+    # start.sh rewritten in place under a running watcher must not be read on.
+    # Replace it only by rename (cp to a temp name, mv).
     __run)
         worker
         rm -rf "$LOCK"
+        exit 0
         ;;
     __stable) stable "$2" ;;
+    __watch)
+        watch
+        exit 0
+        ;;
+    revive)
+        load_config
+        revive_tick
+        ;;
     check) check ;;
     status) status ;;
     stop) stop stop ;;
@@ -468,7 +674,7 @@ case "${1:-start}" in
         log "safe mode cleared by hand"
         ;;
     *)
-        sed -n '7,13p' "$SELF"
+        sed -n '7,16p' "$SELF"
         exit 2
         ;;
 esac

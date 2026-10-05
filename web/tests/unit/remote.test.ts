@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isRemoteAccess, isRemoteHost } from "@/lib/api/remote";
+import { isRemoteAccess, isRemoteHost, noteAgentViaTailscale } from "@/lib/api/remote";
 import { setApiBase } from "@/lib/api/client";
 import { stubWindow } from "./windowStub";
 
@@ -53,6 +53,36 @@ describe("isRemoteAccess uses the API host (C2)", () => {
   it("IPv6 API base → remote", () => {
     stubWindow("localhost", "http://localhost:3000");
     setApiBase("http://[fd7a:115c:a1e0::5]:9090");
+    expect(isRemoteAccess()).toBe(true);
+  });
+});
+
+describe("isRemoteAccess also takes the agent's via_tailscale", () => {
+  afterEach(() => {
+    noteAgentViaTailscale(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("LAN address through a Tailscale subnet route → remote once the agent says so", () => {
+    stubWindow("192.168.0.1", "http://192.168.0.1:9090");
+    expect(isRemoteAccess()).toBe(false);
+    noteAgentViaTailscale(true);
+    expect(isRemoteAccess()).toBe(true);
+    noteAgentViaTailscale(false);
+    expect(isRemoteAccess()).toBe(false);
+  });
+
+  it("an older agent without the field keeps the last answer", () => {
+    stubWindow("192.168.0.1", "http://192.168.0.1:9090");
+    noteAgentViaTailscale(true);
+    noteAgentViaTailscale(undefined);
+    expect(isRemoteAccess()).toBe(true);
+  });
+
+  it("agent false does not hide a Tailscale API host", () => {
+    stubWindow("localhost", "http://localhost:3000");
+    setApiBase("http://100.101.102.103:9090");
+    noteAgentViaTailscale(false);
     expect(isRemoteAccess()).toBe(true);
   });
 });

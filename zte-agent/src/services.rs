@@ -10,6 +10,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -26,6 +27,7 @@ const LOG_TAIL_MAX: usize = 2000;
  *  Tailscale
  * -------------------------------------------------------------- */
 
+
 /// GET /api/services/tailscale
 pub fn tailscale_status(_state: &AppState) -> (u16, Value) {
     if !Path::new(TS_BIN).exists() {
@@ -40,10 +42,11 @@ pub fn tailscale_status(_state: &AppState) -> (u16, Value) {
 
     let running = Path::new(TS_SOCKET).exists() && pgrep("tailscaled");
 
-    let raw = match Command::new(TS_BIN)
-        .args(["--socket", TS_SOCKET, "status", "--json"])
-        .output()
-    {
+    // Bounded: a wedged tailscaled must not hold an HTTP worker.
+    let raw = match crate::ubus::output_within(
+        Command::new(TS_BIN).args(["--socket", TS_SOCKET, "status", "--json"]),
+        Duration::from_secs(5),
+    ) {
         Ok(o) if o.status.success() => o.stdout,
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr).into_owned();

@@ -176,6 +176,9 @@ export const en = {
     smsUnread_one: "{{count}} unread SMS",
     smsUnread_other: "{{count}} unread SMS",
     smsNone: "No unread SMS",
+    viaTailscale: "Remote via Tailscale",
+    viaTailscaleShort: "Remote",
+    viaTailscaleHint: "Connected over Tailscale, so turning off Wi-Fi or changing the network can cut you off",
   },
 };
 

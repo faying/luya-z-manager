@@ -14,6 +14,11 @@
 //! This keeps the daemon sync barrier healthy and reattaches data in under a
 //! minute. If identity doesn't converge or the barrier breaks, it falls back to
 //! a reboot, which is always safe. APN auto-selects by the new profile's PLMN.
+//! Whether the card switched at all is read back from its own profile list,
+//! not taken from lpac's exit; a card that answers catBusy is reported as
+//! needing a device restart (or reinsert), with no retries and no cooldown.
+//! On success, superseded enable/disable notifications are removed and the
+//! switch's own are sent once data is back (rules above `plan_notifications`).
 //!
 //! Slow / network-touching operations (download, delete, notification
 //! processing, switch) run on a detached thread guarded by a single-slot job,
@@ -21,7 +26,7 @@
 
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -33,11 +38,6 @@ use crate::handlers::AppState;
 const LPAC_BIN: &str = "/data/esim/lpac";
 const LIB_DIR: &str = "/data/esim/lib";
 const COMPAT_SHIM: &str = "/data/esim/lib/libmusl-compat.so";
-/// When the card last answered EnableProfile with catBusy (unix seconds).
-/// Persisted so an agent restart doesn't forget a busy card. (The older
-/// `last_switch_attempt` file counted every attempt, busy or not; it is no
-/// longer read.)
-const LAST_BUSY_FILE: &str = "/data/esim/last_card_busy";
 const WAKE_LOCK: &str = "/sys/power/wake_lock";
 const WAKE_UNLOCK: &str = "/sys/power/wake_unlock";
 const WAKE_TAG: &str = "esim_op";
@@ -50,15 +50,19 @@ const LPAC_TIMEOUT_NET: Duration = Duration::from_secs(240);
 const MAX_CODE_LEN: usize = 512;
 const MAX_NICKNAME_LEN: usize = 64;
 
-/// After the card really answered catBusy (and the short retries below did not
-/// clear it), refuse further switches for this long: on the eSTK.me card a busy
-/// state lasted 3–10 min in 9-17 trials, and hammering it did not help.
-/// Nothing is enforced after a successful switch, or on cards that never
-/// report busy (5ber): 9-26, the owner hit this wait on a 5ber card.
-const SWITCH_COOLDOWN_SECS: u64 = 300;
-/// catBusy can be transient (openvohive treats it so: 3 tries, 800 ms apart).
-const BUSY_RETRIES: usize = 3;
-const BUSY_RETRY_GAP: Duration = Duration::from_millis(1000);
+/// Reading the profile list back after `profile enable` (the card is the judge
+/// of whether the switch happened, not lpac's exit): a few tries, because a
+/// timed-out enable can leave the card answering slowly for a moment.
+const READBACK_TRIES: usize = 3;
+const READBACK_GAP: Duration = Duration::from_millis(1500);
+/// Sending this switch's enable/disable notifications waits for the data call
+/// to come back (checked every `NOTIF_DATA_POLL`, at most `NOTIF_DATA_WAIT`)
+/// and then gives lpac `LPAC_TIMEOUT_NOTIF`: while it runs it holds the job
+/// slot, and the user may want to switch straight back if the new profile has
+/// no service — so it is kept short, and skipped when data is not up.
+const NOTIF_DATA_POLL: Duration = Duration::from_secs(5);
+const NOTIF_DATA_WAIT: Duration = Duration::from_secs(60);
+const LPAC_TIMEOUT_NOTIF: Duration = Duration::from_secs(45);
 
 /* -------------------------------------------------------------- *
  *  State
@@ -75,21 +79,17 @@ pub struct JobState {
     finished_unix: u64,
     /// Set when the finished job scheduled a device reboot (switch).
     rebooting: bool,
+    /// Machine-readable cause of an error, so the UIs need not parse
+    /// `message`: "card_busy" (the card answered catBusy and the profile did
+    /// not change — only a device restart or reinserting the card clears it),
+    /// "not_switched" (lpac or the card refused; the card still has the old
+    /// profile), "" otherwise.
+    reason: String,
 }
 
 pub struct EsimAdmin {
     job: Arc<Mutex<JobState>>,
     running: Arc<AtomicBool>,
-    /// unix seconds the card last reported catBusy (0 = never). Drives the
-    /// `switch` cooldown. Loaded from `LAST_BUSY_FILE` at startup.
-    last_card_busy: Arc<AtomicU64>,
-}
-
-fn load_last_card_busy() -> u64 {
-    std::fs::read_to_string(LAST_BUSY_FILE)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0)
 }
 
 impl EsimAdmin {
@@ -104,9 +104,9 @@ impl EsimAdmin {
                 started_unix: 0,
                 finished_unix: 0,
                 rebooting: false,
+                reason: String::new(),
             })),
             running: Arc::new(AtomicBool::new(false)),
-            last_card_busy: Arc::new(AtomicU64::new(load_last_card_busy())),
         }
     }
 }
@@ -163,7 +163,18 @@ fn run_lpac(args: &[&str], timeout: Duration) -> Result<Value, String> {
     done.store(true, Ordering::Relaxed);
     let out = out?;
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    parse_lpac_output(&String::from_utf8_lossy(&out.stdout), out.status.success())
+        .map_err(|e| if e.is_empty() {
+            format!("lpac exited with {} and no result (killed after timeout?)", out.status)
+        } else {
+            e
+        })
+}
+
+/// lpac's stdout → the `data` of its final `{"type":"lpa"}` line, or the error
+/// text. `Err("")` = no result line and lpac did not exit cleanly (the caller
+/// words that, it knows the exit status).
+fn parse_lpac_output(stdout: &str, exited_ok: bool) -> Result<Value, String> {
     for line in stdout.lines() {
         let v: Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -185,11 +196,8 @@ fn run_lpac(args: &[&str], timeout: Duration) -> Result<Value, String> {
             format!("lpac: {msg}: {detail} (code {code})")
         });
     }
-    if !out.status.success() {
-        return Err(format!(
-            "lpac exited with {} and no result (killed after timeout?)",
-            out.status
-        ));
+    if !exited_ok {
+        return Err(String::new());
     }
     Err("lpac produced no result line".into())
 }
@@ -244,8 +252,10 @@ fn switch_converged(target_iccid: &str, old_imsi: &str) -> bool {
         return false;
     }
     let (imsi, iccid) = ubus_sim_identity();
-    let imsi_changed = !imsi.is_empty() && imsi != old_imsi;
-    let iccid_matches = !iccid.is_empty() && iccid.trim_end_matches(['F', 'f']) == target_iccid;
+    // An empty pre-switch IMSI read would make any IMSI look "changed": then
+    // only the ICCID counts.
+    let imsi_changed = !imsi.is_empty() && !old_imsi.is_empty() && imsi != old_imsi;
+    let iccid_matches = iccid_eq(&iccid, target_iccid);
     imsi_changed || iccid_matches
 }
 
@@ -368,17 +378,258 @@ fn is_card_busy(err: &str) -> bool {
     err.contains("es10c_enable_profile") && (err.contains(": unknown") || err.contains("catBusy"))
 }
 
+/// ICCIDs compared the way the card and the ZTE stack spell them: lpac and
+/// `sim_iccid` can carry the BCD pad nibble ("…072F").
+fn iccid_eq(a: &str, b: &str) -> bool {
+    let a = a.trim().trim_end_matches(['F', 'f']);
+    !a.is_empty() && a == b.trim().trim_end_matches(['F', 'f'])
+}
+
+/// What the card's own profile list says about the switch target.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CardSays {
+    /// The target is the enabled profile.
+    Enabled,
+    /// The list was read and the target is not enabled (or not on the card).
+    NotEnabled,
+    /// The list could not be read.
+    Unknown,
+}
+
+/// `lpac profile list` data → is `iccid` the enabled profile?
+fn target_state(list: &Value, iccid: &str) -> CardSays {
+    match list.as_array() {
+        None => CardSays::Unknown,
+        Some(a) => {
+            let on = a.iter().any(|p| {
+                iccid_eq(p["iccid"].as_str().unwrap_or(""), iccid)
+                    && p["profileState"].as_str() == Some("enabled")
+            });
+            if on { CardSays::Enabled } else { CardSays::NotEnabled }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum EnableOutcome {
+    /// The card is on the target: resync the ZTE stack (simreset + mdm restart,
+    /// convergence wait, reboot fallback).
+    Resync,
+    /// The card did not switch. `busy` = it answered catBusy.
+    Failed { busy: bool, msg: String },
+}
+
+/// Did the switch happen? The card decides, not lpac's exit: a killed
+/// (timed-out) or erroring enable may still have switched the card, and "not
+/// in disabled state" means the target was already on. Only when the list
+/// can't be read does lpac's own answer stand.
+fn decide_enable(lpac: &Result<(), String>, card: CardSays) -> EnableOutcome {
+    match (card, lpac) {
+        (CardSays::Enabled, _) => EnableOutcome::Resync,
+        (CardSays::Unknown, Ok(())) => EnableOutcome::Resync,
+        (CardSays::NotEnabled, Ok(())) => EnableOutcome::Failed {
+            busy: false,
+            msg: "lpac reported success but the card still has the old profile enabled".into(),
+        },
+        (_, Err(e)) if is_card_busy(e) => EnableOutcome::Failed {
+            busy: true,
+            // "card is busy" is matched by touch-ui builds before `reason`.
+            msg: format!(
+                "card is busy (catBusy) — restart the device (or take the card out and put it back), then switch again ({e})"
+            ),
+        },
+        (_, Err(e)) => EnableOutcome::Failed { busy: false, msg: e.clone() },
+    }
+}
+
+/// Read the profile list a few times until it answers.
+fn read_profiles_retry() -> Option<Value> {
+    for i in 0..READBACK_TRIES {
+        if i > 0 {
+            std::thread::sleep(READBACK_GAP);
+        }
+        if let Ok(v) = run_lpac(&["profile", "list"], LPAC_TIMEOUT_FAST) {
+            if v.is_array() {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+/* ---- pending notifications after a switch ----
+ *
+ * Every enable on the card queues two notifications for the SM-DP+ servers:
+ * "enable" for the profile switched in and "disable" for the one switched out.
+ * Until 10-04 the switch never touched them (only download/delete sent theirs),
+ * so every back-and-forth piled up more on the card. Rules, conservative:
+ *
+ * - Superseded = an enable/disable notification for a profile that has a newer
+ *   (higher seqNumber) enable/disable notification for the same ICCID. Its
+ *   state change was overtaken by a later one; the server only cares about the
+ *   latest, and sending it late would report an old state. These are REMOVED
+ *   (card-local, no network) on every successful switch, on both the converged
+ *   and the reboot path. lpac's `notification remove` loses them for good —
+ *   that is the point, and the newer one for the same profile stays.
+ * - This switch's own (seqNumber above the highest seen just before enabling,
+ *   enable/disable only) are SENT with `process -r`, which removes each one
+ *   only after the server accepted it (lpac stops at the first failure and
+ *   keeps the rest). Only on the converged path, only once the data call is
+ *   back, and with a short timeout; otherwise they stay pending for the eSIM
+ *   page's "send notifications".
+ * - The latest enable/disable of a profile this switch didn't touch, and every
+ *   install/delete notification, are never removed or sent here.
+ */
+
+/// seqNumber of one `notification list` entry (lpac prints a number).
+fn notif_seq(n: &Value) -> Option<i64> {
+    n["seqNumber"].as_i64().or_else(|| n["seqNumber"].as_str().and_then(|s| s.parse().ok()))
+}
+
+fn notif_is_state_change(n: &Value) -> bool {
+    matches!(n["profileManagementOperation"].as_str(), Some("enable") | Some("disable"))
+}
+
+#[derive(Debug, Default, PartialEq)]
+struct NotifPlan {
+    /// superseded enable/disable — remove without sending
+    remove: Vec<i64>,
+    /// this switch's enable/disable — send (and remove once delivered)
+    send: Vec<i64>,
+}
+
+/// `notification list` data (+ the highest seqNumber seen before the enable,
+/// None = unknown, then nothing is sent) → what to remove and what to send.
+fn plan_notifications(list: &Value, seq_before: Option<i64>) -> NotifPlan {
+    let items: Vec<(i64, String)> = list
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|n| notif_is_state_change(n))
+                .filter_map(|n| {
+                    let iccid = n["iccid"].as_str()?.trim().trim_end_matches(['F', 'f']).to_string();
+                    if iccid.is_empty() {
+                        return None;
+                    }
+                    Some((notif_seq(n)?, iccid))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut plan = NotifPlan::default();
+    for (seq, iccid) in &items {
+        let newest = items.iter().filter(|(_, i)| i == iccid).map(|(s, _)| *s).max().unwrap_or(*seq);
+        if *seq < newest {
+            plan.remove.push(*seq);
+        } else if seq_before.is_some_and(|b| *seq > b) {
+            plan.send.push(*seq);
+        }
+    }
+    plan.remove.sort_unstable();
+    plan.send.sort_unstable();
+    plan
+}
+
+/// Highest seqNumber of any pending notification (None = list unreadable;
+/// Some(-1) = none pending).
+fn max_notif_seq(list: &Value) -> Option<i64> {
+    list.as_array().map(|a| a.iter().filter_map(notif_seq).max().unwrap_or(-1))
+}
+
+/// Remove the superseded notifications now (card-local). Returns the ones to
+/// send later. Best effort: any lpac failure just leaves them pending.
+fn prune_notifications(seq_before: Option<i64>) -> Vec<i64> {
+    let list = match run_lpac(&["notification", "list"], LPAC_TIMEOUT_FAST) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("esim: notification list after switch failed: {e}");
+            return Vec::new();
+        }
+    };
+    let plan = plan_notifications(&list, seq_before);
+    if !plan.remove.is_empty() {
+        let seqs: Vec<String> = plan.remove.iter().map(i64::to_string).collect();
+        let mut args = vec!["notification", "remove"];
+        args.extend(seqs.iter().map(String::as_str));
+        match run_lpac(&args, LPAC_TIMEOUT_FAST) {
+            Ok(_) => eprintln!("esim: removed superseded notifications {seqs:?}"),
+            Err(e) => eprintln!("esim: removing superseded notifications {seqs:?} failed: {e}"),
+        }
+    }
+    plan.send
+}
+
+/// Data call up? (zwrt_data cid 1, the same read netinfo uses.)
+fn data_up() -> bool {
+    crate::netinfo::data_connected(&crate::netinfo::read_wwan())
+}
+
+/// After a converged switch: once data is back, send this switch's
+/// notifications as a short "notifications" job. Skipped (left pending) when
+/// data doesn't come back in time or another eSIM job holds the slot.
+fn send_switch_notifications(job: &Arc<Mutex<JobState>>, running: &Arc<AtomicBool>, seqs: Vec<i64>) {
+    if seqs.is_empty() {
+        return;
+    }
+    let mut waited = Duration::ZERO;
+    loop {
+        // The first sleep also lets the UIs (1–1.5 s polls) see the switch
+        // job's own result before this job takes the slot.
+        std::thread::sleep(NOTIF_DATA_POLL);
+        waited += NOTIF_DATA_POLL;
+        if data_up() {
+            break;
+        }
+        if waited >= NOTIF_DATA_WAIT {
+            eprintln!("esim: data not back after the switch; notifications {seqs:?} left pending");
+            return;
+        }
+    }
+    if running.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed).is_err() {
+        return;
+    }
+    {
+        let mut j = job.lock().unwrap();
+        let next = j.id.wrapping_add(1);
+        *j = JobState {
+            id: next,
+            kind: "notifications".into(),
+            status: "running".into(),
+            message: String::new(),
+            iccid: String::new(),
+            started_unix: now_unix(),
+            finished_unix: 0,
+            rebooting: false,
+            reason: String::new(),
+        };
+    }
+    let strs: Vec<String> = seqs.iter().map(i64::to_string).collect();
+    let mut args = vec!["notification", "process", "-r"];
+    args.extend(strs.iter().map(String::as_str));
+    let n = seqs.len();
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_lpac(&args, LPAC_TIMEOUT_NOTIF).map(|_| format!("sent {n} notification(s) for the switch"))
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    if let Err(e) = &res {
+        eprintln!("esim: sending switch notifications {strs:?} failed: {e}");
+    }
+    finish_job(job, running, res, false);
+}
+
 /// POST /api/esim/switch — { iccid }. Enables the profile on the card, then
-/// reboots the device (the only way to get the ZTE stack onto the new profile —
-/// see module docs). The UI warns about the ~2 min outage before calling.
+/// moves the ZTE stack onto it (see module docs), rebooting only if that
+/// doesn't converge. The UI warns about the outage before calling.
 ///
-/// Some eUICC cards (eSTK.me; 5ber is unaffected) can answer EnableProfile
-/// with SGP.22 catBusy (enableResult 5; lpac 2.3.0 prints it as "unknown").
-/// The 9-17 model "every attempt, success or failure, starts a 5–10 min
-/// window" put a wait in front of every switch on every card. 9-26 (research
-/// in docs/audit-2026-09-26-power-network.md §A6): switch at once; on catBusy
-/// retry a few times a second apart, and only if the card is still busy
-/// remember it and refuse switches for SWITCH_COOLDOWN_SECS with a clear wait.
+/// History: 9-17 every attempt started a 5–10 min cooldown; 9-26 only a real
+/// catBusy did, after 3 retries a second apart. 10-04: no retries and no
+/// cooldown. Retrying a busy card didn't help in the trials and the wait
+/// guessed at a timeout nobody measured; what clears catBusy is a power cycle
+/// of the card (device restart, or taking the card out and back), so the job
+/// fails with `reason: "card_busy"` and both UIs say exactly that. Whether
+/// the switch happened is read back from the card's profile list — see
+/// `decide_enable` — and on success superseded enable/disable notifications
+/// are removed and this switch's own are sent (see the notifications block).
 pub fn switch(state: &AppState, body: &[u8]) -> (u16, Value) {
     let v: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
@@ -388,23 +639,10 @@ pub fn switch(state: &AppState, body: &[u8]) -> (u16, Value) {
         Some(i) if valid_iccid(i) => i.to_string(),
         _ => return (400, json!({"ok": false, "error": "invalid iccid"})),
     };
-    let now = now_unix();
-    let last = state.esim.last_card_busy.load(Ordering::Relaxed);
-    if last != 0 && now.saturating_sub(last) < SWITCH_COOLDOWN_SECS {
-        let wait = SWITCH_COOLDOWN_SECS - (now - last);
-        // Wording is parsed by touch-ui esim.c (strstr "wait ").
-        return (
-            429,
-            json!({"ok": false, "error": format!(
-                "card reported busy on the last switch — wait {wait}s and retry"
-            )}),
-        );
-    }
     let job_id = match try_start_job(state, "switch", &iccid) {
         Some(j) => j,
         None => return (409, json!({"ok": false, "error": "operation in progress"})),
     };
-    let busy_mark = Arc::clone(&state.esim.last_card_busy);
     let job = Arc::clone(&state.esim.job);
     let running = Arc::clone(&state.esim.running);
     let source = crate::datad_write::current();
@@ -417,33 +655,30 @@ pub fn switch(state: &AppState, body: &[u8]) -> (u16, Value) {
         // Record the pre-switch identity so we can detect when the ZTE stack has
         // actually moved off it (the robust convergence signal).
         let (old_imsi, _) = ubus_sim_identity();
-        let mut res: Result<(), String> = Err("not run".into());
-        for attempt in 0..BUSY_RETRIES {
-            if attempt > 0 {
-                std::thread::sleep(BUSY_RETRY_GAP);
-            }
-            res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_lpac(&["profile", "enable", &iccid], LPAC_TIMEOUT_FAST).map(|_| ())
-            }))
-            .unwrap_or_else(|_| Err("internal panic".into()));
-            match &res {
-                Err(e) if is_card_busy(e) => continue,
-                _ => break,
-            }
+        // Highest pending notification before the enable: anything above it
+        // afterwards is this switch's own.
+        let seq_before = run_lpac(&["notification", "list"], LPAC_TIMEOUT_FAST)
+            .ok()
+            .and_then(|l| max_notif_seq(&l));
+
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_lpac(&["profile", "enable", &iccid], LPAC_TIMEOUT_FAST).map(|_| ())
+        }))
+        .unwrap_or_else(|_| Err("internal panic".into()));
+        let card = read_profiles_retry().map_or(CardSays::Unknown, |l| target_state(&l, &iccid));
+        if let Err(e) = &res {
+            eprintln!("esim: profile enable {iccid}: {e}; card says {card:?}");
         }
-        if let Err(e) = res {
-            let e = if is_card_busy(&e) {
-                let t = now_unix();
-                busy_mark.store(t, Ordering::Relaxed);
-                let _ = std::fs::write(LAST_BUSY_FILE, t.to_string());
-                format!("card is busy (catBusy) — wait {SWITCH_COOLDOWN_SECS}s and retry ({e})")
-            } else {
-                e
-            };
+        if let EnableOutcome::Failed { busy, msg } = decide_enable(&res, card) {
             release_wake_lock();
-            finish_job(&job, &running, Err(e), false);
+            let reason = if busy { "card_busy" } else { "not_switched" };
+            finish_job_with(&job, &running, Err(msg), false, reason);
             return;
         }
+
+        // Card-local and quick, so done on both paths below (the reboot one
+        // can't come back to it).
+        let to_send = prune_notifications(seq_before);
 
         // The card is now on the new profile, but the ZTE userspace still holds
         // the old identity — it only re-reads the SIM at daemon init, not on any
@@ -469,8 +704,9 @@ pub fn switch(state: &AppState, body: &[u8]) -> (u16, Value) {
         }
 
         if converged {
-            release_wake_lock();
             finish_job(&job, &running, Ok("switched — no reboot needed".into()), false);
+            send_switch_notifications(&job, &running, to_send);
+            release_wake_lock();
         } else {
             // Fast path didn't take; reboot recovers cleanly. Keep the wake lock
             // held so the device can't doze before it reboots.
@@ -522,6 +758,9 @@ pub fn download(state: &AppState, body: &[u8]) -> (u16, Value) {
             run_lpac(&args, LPAC_TIMEOUT_NET)?;
             // Deliver the install notification (spec-required). Best effort:
             // the profile is already on the card even if this leg fails.
+            // Superseded enable/disable ones go first, so `-a` doesn't send
+            // stale state changes late.
+            let _ = prune_notifications(None);
             let _ = run_lpac(&["notification", "process", "-a", "-r"], LPAC_TIMEOUT_NET);
             Ok("profile downloaded".to_string())
         }))
@@ -571,6 +810,7 @@ pub fn delete(state: &AppState, body: &[u8]) -> (u16, Value) {
         hold_wake_lock();
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_lpac(&["profile", "delete", &iccid], LPAC_TIMEOUT_FAST)?;
+            let _ = prune_notifications(None);
             let _ = run_lpac(&["notification", "process", "-a", "-r"], LPAC_TIMEOUT_NET);
             Ok("profile deleted".to_string())
         }))
@@ -625,6 +865,7 @@ fn try_start_job(state: &AppState, kind: &str, iccid: &str) -> Option<u64> {
         started_unix: now_unix(),
         finished_unix: 0,
         rebooting: false,
+        reason: String::new(),
     };
     Some(next)
 }
@@ -634,6 +875,16 @@ fn finish_job(
     running: &Arc<AtomicBool>,
     res: Result<String, String>,
     rebooting: bool,
+) {
+    finish_job_with(job, running, res, rebooting, "");
+}
+
+fn finish_job_with(
+    job: &Arc<Mutex<JobState>>,
+    running: &Arc<AtomicBool>,
+    res: Result<String, String>,
+    rebooting: bool,
+    reason: &str,
 ) {
     {
         let mut j = job.lock().unwrap();
@@ -648,6 +899,7 @@ fn finish_job(
             }
         }
         j.rebooting = rebooting;
+        j.reason = reason.to_string();
         j.finished_unix = now_unix();
     }
     running.store(false, Ordering::Relaxed);
@@ -662,16 +914,148 @@ fn now_unix() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::is_card_busy;
+    use super::*;
+
+    /// One lpac 2.3.0 run as it prints it: progress lines, then the lpa line.
+    fn lpa(code: i64, message: &str, data: Value) -> String {
+        format!(
+            "{}\n{}\n",
+            json!({"type": "progress", "payload": {"code": 0, "message": "es10c_enable_profile", "data": null}}),
+            json!({"type": "lpa", "payload": {"code": code, "message": message, "data": data}})
+        )
+    }
+
+    fn enable_err(stdout: &str) -> Result<(), String> {
+        parse_lpac_output(stdout, false).map(|_| ())
+    }
+
+    fn profile(iccid: &str, state: &str) -> Value {
+        json!({"iccid": iccid, "isdpAid": "A0000005591010FFFFFFFF8900001000", "profileState": state,
+               "profileNickname": null, "serviceProviderName": "X", "profileName": "X",
+               "iconType": null, "icon": null, "profileClass": "operational"})
+    }
+
+    const A: &str = "89852000000000000011";
+    const B: &str = "8985200000000000002";
+
+    #[test]
+    fn parses_lpac_lines() {
+        assert_eq!(parse_lpac_output(&lpa(0, "success", json!([profile(A, "enabled")])), true).unwrap()[0]["iccid"], A);
+        assert_eq!(
+            enable_err(&lpa(-1, "es10c_enable_profile", json!("unknown"))).unwrap_err(),
+            "lpac: es10c_enable_profile: unknown (code -1)"
+        );
+        // killed by the watchdog: no lpa line
+        assert_eq!(parse_lpac_output("{\"type\":\"progress\"}\n", false), Err(String::new()));
+        assert!(parse_lpac_output("", true).unwrap_err().contains("no result line"));
+    }
 
     #[test]
     fn busy_only_for_enable_unknown_or_catbusy() {
         // lpac 2.3.0: enableResult 5 falls through to "unknown"
-        assert!(is_card_busy("lpac: es10c_enable_profile: unknown (code -1)"));
+        assert!(is_card_busy(&enable_err(&lpa(-1, "es10c_enable_profile", json!("unknown"))).unwrap_err()));
         assert!(is_card_busy("lpac: es10c_enable_profile: catBusy (code -1)"));
-        assert!(!is_card_busy("lpac: es10c_enable_profile: profileNotInDisabledState (code -1)"));
-        assert!(!is_card_busy("lpac: es10c_enable_profile: iccidOrAidNotFound (code -1)"));
-        assert!(!is_card_busy("lpac exited with exit status: 1 and no result (killed after timeout?)"));
+        // the reasons lpac 2.3.0 does name (strings in the binary)
+        for r in ["profile not in disabled state", "iccid or aid not found", "disallowed by policy"] {
+            assert!(!is_card_busy(&enable_err(&lpa(-1, "es10c_enable_profile", json!(r))).unwrap_err()), "{r}");
+        }
+        assert!(!is_card_busy("lpac exited with exit status: 9 and no result (killed after timeout?)"));
         assert!(!is_card_busy("lpac: es10b_list_notification: unknown (code -1)"));
+    }
+
+    #[test]
+    fn card_state_from_profile_list() {
+        let list = json!([profile(A, "disabled"), profile(B, "enabled")]);
+        assert_eq!(target_state(&list, B), CardSays::Enabled);
+        assert_eq!(target_state(&list, A), CardSays::NotEnabled);
+        assert_eq!(target_state(&list, "89852000000000000099"), CardSays::NotEnabled);
+        // BCD pad nibble on either side
+        assert_eq!(target_state(&json!([profile("8985200000000000002F", "enabled")]), B), CardSays::Enabled);
+        assert_eq!(target_state(&Value::Null, B), CardSays::Unknown);
+    }
+
+    #[test]
+    fn the_card_decides_whether_the_switch_happened() {
+        let busy = enable_err(&lpa(-1, "es10c_enable_profile", json!("unknown")));
+        let timeout: Result<(), String> = Err("lpac exited with signal: 9 and no result (killed after timeout?)".into());
+        let already = enable_err(&lpa(-1, "es10c_enable_profile", json!("profile not in disabled state")));
+        // an error, but the card is on the target: carry on with the resync
+        assert_eq!(decide_enable(&timeout, CardSays::Enabled), EnableOutcome::Resync);
+        assert_eq!(decide_enable(&busy, CardSays::Enabled), EnableOutcome::Resync);
+        assert_eq!(decide_enable(&already, CardSays::Enabled), EnableOutcome::Resync);
+        // lpac said ok but the card still has the old profile
+        assert!(matches!(decide_enable(&Ok(()), CardSays::NotEnabled), EnableOutcome::Failed { busy: false, .. }));
+        // catBusy and the card did not move: say restart, no retry
+        match decide_enable(&busy, CardSays::NotEnabled) {
+            EnableOutcome::Failed { busy: true, msg } => {
+                assert!(msg.starts_with("card is busy"), "old touch-ui matches this: {msg}");
+                assert!(msg.contains("restart"));
+            }
+            o => panic!("{o:?}"),
+        }
+        // the list can't be read: lpac's own answer stands
+        assert_eq!(decide_enable(&Ok(()), CardSays::Unknown), EnableOutcome::Resync);
+        assert!(matches!(decide_enable(&busy, CardSays::Unknown), EnableOutcome::Failed { busy: true, .. }));
+        assert!(matches!(decide_enable(&timeout, CardSays::Unknown), EnableOutcome::Failed { busy: false, .. }));
+    }
+
+    fn notif(seq: i64, op: &str, iccid: &str) -> Value {
+        json!({"seqNumber": seq, "profileManagementOperation": op,
+               "notificationAddress": "rsp.example.com", "iccid": iccid})
+    }
+
+    #[test]
+    fn notifications_superseded_are_removed_this_switch_sent() {
+        const C: &str = "89860000000000000033";
+        // A→B, B→A earlier (never sent), install of C, delete of a gone one;
+        // then this switch A→B queued 9 (enable B) and 10 (disable A).
+        let list = json!([
+            notif(3, "install", C),
+            notif(4, "enable", B), notif(5, "disable", A),
+            notif(6, "enable", A), notif(7, "disable", B),
+            notif(8, "delete", "89860000000000000044"),
+            notif(9, "enable", B), notif(10, "disable", A),
+        ]);
+        let p = plan_notifications(&list, Some(8));
+        assert_eq!(p.remove, vec![4, 5, 6, 7]);
+        assert_eq!(p.send, vec![9, 10]);
+        // seq before unknown: still prune, send nothing
+        let p = plan_notifications(&list, None);
+        assert_eq!(p.remove, vec![4, 5, 6, 7]);
+        assert!(p.send.is_empty());
+    }
+
+    #[test]
+    fn notifications_left_alone_when_not_superseded() {
+        const C: &str = "89860000000000000033";
+        // latest state change of a profile this switch didn't touch (C) stays;
+        // install/delete never count; padded ICCIDs match.
+        let list = json!([
+            notif(1, "disable", C),
+            notif(2, "install", B),
+            notif(3, "enable", "8985200000000000002F"),
+            notif(4, "enable", B),
+            notif(5, "delete", A),
+        ]);
+        let p = plan_notifications(&list, Some(3));
+        assert_eq!(p.remove, vec![3]);
+        assert_eq!(p.send, vec![4]);
+        assert_eq!(plan_notifications(&json!([]), Some(-1)), NotifPlan::default());
+        assert_eq!(plan_notifications(&Value::Null, Some(0)), NotifPlan::default());
+        assert_eq!(max_notif_seq(&list), Some(5));
+        assert_eq!(max_notif_seq(&json!([])), Some(-1));
+        assert_eq!(max_notif_seq(&Value::Null), None);
+    }
+
+    #[test]
+    fn job_reports_reason() {
+        let job = Arc::new(Mutex::new(EsimAdmin::new().job.lock().unwrap().clone()));
+        let running = Arc::new(AtomicBool::new(true));
+        finish_job_with(&job, &running, Err("card is busy".into()), false, "card_busy");
+        let v = serde_json::to_value(job.lock().unwrap().clone()).unwrap();
+        assert_eq!(v["reason"], "card_busy");
+        assert_eq!(v["status"], "error");
+        finish_job(&job, &running, Ok("x".into()), false);
+        assert_eq!(job.lock().unwrap().reason, "");
     }
 }

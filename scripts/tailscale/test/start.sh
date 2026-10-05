@@ -49,11 +49,15 @@ echo "\$*" >> $T/kills
 X
     printf '#!/bin/sh\necho "Filesystem 1024-blocks Used Available Capacity Mounted"\necho "/dev/x 1800000 700000 $(cat %s/free) 37%% /data"\n' "$T" >"$T/bin/df"
     echo 1100000 >"$T/free"
+    echo 1000 >"$T/uptime"
+    printf 'alert_add() { echo "$1 $2" >>%s/alerts; }\n' "$T" >"$T/alert-lib.sh"
+    # sleep that only moves the fake uptime on (a poll of 7 s also really waits 1 s)
+    printf '#!/bin/sh\n[ "$1" = 7 ] && sleep 1\nu=$(cat %s/uptime); echo $((u + ${1:-0})) >%s/uptime\n' "$T" "$T" >"$T/bin/tick"
     chmod +x "$D/tailscaled" "$D/tailscale" "$T"/bin/*
     export TS_DIR=$D TS_LOG=$T/tailscaled.log TSS_SOCK=$T/sock TSS_RUN=$T/run TSS_BOOT_ID=$T/boot \
         TSS_RESOLV=$T/resolv TSS_TUN=$T/tun TSS_IP=$T/bin/ip TSS_PIDOF=$T/bin/pidof TSS_KILL=$T/bin/kill \
-        TSS_DF=$T/bin/df TSS_SLEEP=true TSS_FG=1 TSS_TIMER=0
-    unset TS_STABLE TS_MAX_STRIKES TS_SAFE_RETRY TS_WAN_WAIT
+        TSS_DF=$T/bin/df TSS_SLEEP=true TSS_FG=1 TSS_TIMER=0 TSS_UPTIME=$T/uptime TSS_ALERT_LIB=$T/alert-lib.sh TS_WATCH=0
+    unset TS_STABLE TS_MAX_STRIKES TS_SAFE_RETRY TS_WAN_WAIT TS_WATCH_POLL TS_REVIVE_DELAYS TS_REVIVE_MAX TS_REVIVE_WINDOW TSS_WATCH_TICKS
     mknod "$T/tun" c 1 3 2>/dev/null || mkfifo "$T/tun"
 }
 run() { sh "$S" "$@" >"$T/out" 2>&1; RC=$?; }
@@ -62,6 +66,10 @@ reboot() { # <new boot id>: processes and /tmp are gone
 }
 last_args() { tail -n 1 "$T/daemon.args" 2>/dev/null; }
 strikes() { sed -n 's/.*strikes=\([0-9]*\).*/\1/p' "$D/boot-strikes"; }
+up() { echo "$1" >"$T/uptime"; }
+alive() { [ -f "/proc/$1/stat" ] && ! grep -q ') Z ' "/proc/$1/stat" 2>/dev/null; } # zombies count as gone (pid 1 here may not reap)
+starts() { cat "$T/daemon.args" 2>/dev/null | wc -l | tr -d ' '; }
+die_at() { rm -f "$T/running"; up "$1"; run revive; } # tailscaled dies; the watcher's next poll
 
 echo "- normal boot"
 setup; run
@@ -188,11 +196,14 @@ echo "- apply.sh driving the real start.sh"
 setup; echo 'TS_TAILSCALED_FLAGS=--no-logs-no-support' >"$D/tuning.env"; run
 printf '#!/bin/sh\ncat >/dev/null\ncase "$2" in @.BackendState) echo Running ;; @.Self.Online) echo true ;; esac\n' >"$T/bin/jf"; chmod +x "$T/bin/jf"
 rm -f "$T/daemon.args"
-TSA_DIR=$D TSA_CLI=$D/tailscale TSA_START=$S TSA_LOG=$T/apply.log TSA_TIMEOUT=30 TSA_POLL=10 TSA_JSONFILTER=$T/bin/jf \
+sleep 100 & wp=$!; echo $wp >"$T/run/tailscale-watch.pid"
+TSA_RUN=$T/run TSA_DIR=$D TSA_CLI=$D/tailscale TSA_START=$S TSA_LOG=$T/apply.log TSA_TIMEOUT=30 TSA_POLL=10 TSA_JSONFILTER=$T/bin/jf \
     TSA_PIDOF=$T/bin/pidof TSA_KILL=$T/bin/kill TSA_SLEEP=true sh "$HERE/apply.sh" "$D/tuning.env" relay >/dev/null 2>&1
 ARC=$?
 check "apply.sh same tuning: kept, restarted with the same flags, no strike" \
     '[ $ARC = 0 ] && last_args | grep -q -- "--tun=tailscale0 --no-logs-no-support" && [ "$(strikes)" = 0 ] && grep -q kept "$T/apply.log"'
+check "apply.sh ended the old watcher before its restart, and removed its marker" 'sleep 1; ! alive $wp && [ ! -f "$T/run/tailscale-apply.pid" ]'
+kill $wp 2>/dev/null
 setup; mkdir -p "$T/run/tailscale-start.lock"; echo 999999 >"$T/run/tailscale-start.lock/pid"; run
 check "stale lock (dead pid) is taken over" '[ -f "$T/daemon.args" ]'
 setup; mkdir -p "$T/run/tailscale-start.lock"; echo $$ >"$T/run/tailscale-start.lock/pid"; run
@@ -201,6 +212,77 @@ check "live lock: a second start does nothing" '[ ! -f "$T/daemon.args" ]'
 echo "- stop"
 setup; touch "$T/running" "$T/stubborn"; run stop
 check "stop: TERM, then KILL, then --cleanup" 'head -n 1 "$T/kills" | grep -q "^4242" && grep -q "^-9 4242" "$T/kills" && [ -f "$T/cleaned" ]'
+
+echo "- watcher: restarts a tailscaled that died, with a bounded backoff"
+setup; run; rm -f "$T/cleaned"
+die_at 1000
+check "died: not restarted at once, said when" '[ $RC = 0 ] && [ "$(starts)" = 1 ] && grep -q "restart in 300s" "$D/boot.log"'
+up 1299; run revive
+check "299 s later: still waiting" '[ $RC = 0 ] && [ "$(starts)" = 1 ]'
+up 1300; run revive
+check "300 s: restarted (rc 1) after --cleanup, same flags" '[ $RC = 1 ] && [ "$(starts)" = 2 ] && [ -f "$T/cleaned" ] && [ -f "$T/running" ] && last_args | grep -q -- "--port=41641 --tun=tailscale0"'
+check "a restart in the same boot is no strike" '[ "$(strikes)" = 0 ]'
+up 1360; run revive
+check "running: nothing to do" '[ $RC = 0 ] && [ "$(starts)" = 2 ]'
+die_at 1400; up 2299; run revive
+check "2nd death: waits 900 s" '[ "$(starts)" = 2 ]'
+up 2300; run revive
+check "... then restarts" '[ $RC = 1 ] && [ "$(starts)" = 3 ]'
+die_at 2400; up 5999; run revive; c1=$(starts); up 6000; run revive
+check "3rd: 3600 s" '[ "$c1" = 3 ] && [ "$(starts)" = 4 ]'
+die_at 6100; up 9699; run revive; c1=$(starts); up 9700; run revive
+check "4th: the cap repeats (3600 s)" '[ "$c1" = 4 ] && [ "$(starts)" = 5 ]'
+
+setup; run; die_at 1000; up 1300; run revive
+up 1900; run revive
+die_at 2000; up 2300; run revive
+check "stayed up TS_STABLE after a restart: backoff starts over (300 s)" '[ "$(starts)" = 3 ] && grep -q "backoff starts over" "$D/boot.log"'
+
+setup; export TS_REVIVE_DELAYS=10 TS_REVIVE_MAX=3; run
+t=1000; i=0
+while [ $i -lt 5 ]; do t=$((t + 1)); die_at $t; t=$((t + 10)); up $t; run revive; i=$((i + 1)); done
+check "gives up after TS_REVIVE_MAX restarts (rc 2)" '[ $RC = 2 ] && [ "$(starts)" = 4 ]'
+check "gave up: logged once, one alert" '[ "$(grep -c "GAVE UP" "$D/boot.log")" = 1 ] && [ "$(wc -l <"$T/alerts")" = 1 ] && grep -q "^tailscale-gave-up tailscaled died 3 times" "$T/alerts"'
+run status
+check "status shows it" 'grep -q "GAVE UP" "$T/out"'
+up $((t + 86400)); run revive
+check "once the window is over: tries again" '[ $RC = 1 ] && [ "$(starts)" = 5 ]'
+rm -f "$T/alert-lib.sh"; t=$((t + 86400)); i=0
+while [ $i -lt 4 ]; do t=$((t + 1)); die_at $t; t=$((t + 10)); up $t; run revive; i=$((i + 1)); done
+check "no alert library: gives up all the same, no shell error" '[ $RC = 2 ] && ! grep -qi -e "not found" -e "syntax" "$T/out"'
+unset TS_REVIVE_DELAYS TS_REVIVE_MAX
+
+setup; run; touch "$D/disabled"; die_at 1000; up 99000; run revive
+check "disabled: never restarted" '[ $RC = 0 ] && [ "$(starts)" = 1 ]'
+setup; run; run stop; up 99000; run revive
+check "after stop: not restarted" '[ $RC = 0 ] && [ "$(starts)" = 1 ] && [ -f "$T/run/tailscale.stopped" ]'
+run
+check "the next start clears that" '[ "$(starts)" = 2 ] && [ ! -f "$T/run/tailscale.stopped" ]'
+setup; run; echo $$ >"$T/run/tailscale-apply.pid"; die_at 1000; up 9000; run revive
+check "apply.sh switching (live marker): no restart, rc 3" '[ $RC = 3 ] && [ "$(starts)" = 1 ]'
+echo 999999 >"$T/run/tailscale-apply.pid"; run revive; up 9300; run revive
+check "marker of a dead apply.sh: ignored, restarts after the backoff" '[ $RC = 1 ] && [ "$(starts)" = 2 ]'
+setup; run; mkdir -p "$T/run/tailscale-start.lock"; echo $$ >"$T/run/tailscale-start.lock/pid"; die_at 1000; up 9000; run revive
+check "a start under way (live lock) is not a death" '[ $RC = 0 ] && [ "$(starts)" = 1 ]'
+
+setup; run; die_at 1000; up 1300; run revive; run __stable aaaa-0001
+check "TUN that had to be restarted is not marked stable" 'grep -q "stable=0" "$D/boot-strikes" && grep -q "not counted as stable" "$D/boot.log"'
+reboot b2; run
+check "... so the next boot counts a strike" '[ "$(strikes)" = 1 ]'
+
+setup; run; rm -f "$T/running"
+export TS_WATCH=1 TSS_SLEEP=$T/bin/tick TSS_WATCH_TICKS=12; run __watch
+check "watch loop: polls every 60 s, restarts after 300 s, ends, pid file gone" '[ $RC = 0 ] && [ "$(starts)" = 2 ] && [ "$(cat "$T/uptime")" -ge 1720 ] && [ ! -f "$T/run/tailscale-watch.pid" ]'
+setup; export TS_WATCH=1 TS_WATCH_POLL=7 TSS_SLEEP=$T/bin/tick TSS_WATCH_TICKS=4; run
+wp=$(cat "$T/run/tailscale-watch.pid" 2>/dev/null)
+check "a start brings up one watcher" '[ -n "$wp" ] && alive "$wp"'
+rm -f "$T/running"; run
+check "a second start does not add another" '[ "$(cat "$T/run/tailscale-watch.pid")" = "$wp" ]'
+run stop
+check "stop ends the watcher" '[ ! -f "$T/run/tailscale-watch.pid" ] && sleep 2 && ! alive "$wp"'
+setup; echo 'TS_WATCH=0' >"$D/tuning.env"; export TS_WATCH=1; run
+check "TS_WATCH=0 in tuning.env: no watcher" '[ ! -f "$T/run/tailscale-watch.pid" ]'
+export TS_WATCH=0 TSS_SLEEP=true; unset TS_WATCH_POLL TSS_WATCH_TICKS
 
 echo "- check"
 setup; run check

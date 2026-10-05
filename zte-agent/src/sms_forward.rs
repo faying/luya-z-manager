@@ -1487,7 +1487,7 @@ fn ubus_sms_page(store: u64, page: u64) -> Result<Value, String> {
         "mem_store": store,
         "order_by": "order by id desc",
     });
-    ubus::read("zwrt_wms", "zte_libwms_get_sms_data", Some(&params.to_string()))
+    ubus::read_with_timeout("zwrt_wms", "zte_libwms_get_sms_data", Some(&params.to_string()), Some(ubus::LONG_READ_TIMEOUT))
 }
 
 /// One `sms.list_after` page from datad; `503 busy` retried after `delays`.
@@ -1557,7 +1557,7 @@ fn fetch_sms_both_stores(tags: u64, page: u64, count: u64, order: &str) -> Resul
                 "mem_store": store,
                 "order_by": order,
             });
-            (store, ubus::read("zwrt_wms", "zte_libwms_get_sms_data", Some(&params.to_string())))
+            (store, ubus::read_with_timeout("zwrt_wms", "zte_libwms_get_sms_data", Some(&params.to_string()), Some(ubus::LONG_READ_TIMEOUT)))
         })
         .collect();
     merge_store_results(results)

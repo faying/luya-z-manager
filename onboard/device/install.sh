@@ -46,6 +46,25 @@ backup_rc() {
     mkdir -p "$STATE" && cp "$RC" "$STATE/rc.local.orig" && log "原厂 rc.local 已备份到 $STATE/rc.local.orig"
 }
 
+# 把改好的候选文件换成 rc.local：sh -n → 同目录临时文件 → sync → mv → sync（照 tools/u60 after-upgrade）。
+# 写到一半掉电，rc.local 要么是旧的、要么是新的，不会半截（半截 = 开机什么都不起）。
+# 临时文件必须和 rc.local 在同一个目录：/tmp 是内存盘，从那里 mv 到 /etc 是复制，不是改名。
+# cp -p 先复制原文件，权限和属主跟原来一样。sh -n 不过或写不成：原文件不动，退出。
+rc_write() { # <candidate>
+    _rt="$RC.u60kit.tmp"
+    if ! sh -n "$1"; then
+        rm -f "$1"
+        die "rc.local 语法检查没过，已放弃修改"
+    fi
+    rm -f "$_rt"
+    if [ -e "$RC" ]; then cp -p "$RC" "$_rt"; else : > "$_rt" && chmod 755 "$_rt"; fi &&
+        cat "$1" > "$_rt" && sync && mv -f "$_rt" "$RC" && sync || {
+        rm -f "$_rt" "$1"
+        die "写 rc.local 失败，原文件没动"
+    }
+    rm -f "$1"
+}
+
 # 幂等地在 exit 0 之前插一行；<marker> 已存在就跳过
 rc_add() { # <line> <marker>
     grep -qF "$2" "$RC" 2>/dev/null && return 0
@@ -55,8 +74,7 @@ rc_add() { # <line> <marker>
     else
         { cat "$RC"; echo "$1"; } > /tmp/rc.local.new
     fi
-    sh -n /tmp/rc.local.new || { rm -f /tmp/rc.local.new; die "rc.local 语法检查没过，已放弃修改"; }
-    cat /tmp/rc.local.new > "$RC" && rm -f /tmp/rc.local.new
+    rc_write /tmp/rc.local.new
     log "rc.local 加入: $1"
 }
 
@@ -69,16 +87,14 @@ rc_replace() { # <line> <old-marker> <new-marker>
         grep -qF "$2" "$RC" 2>/dev/null || return 0
         backup_rc
         awk -v old="$2" '!index($0, old)' "$RC" > /tmp/rc.local.new
-        sh -n /tmp/rc.local.new || { rm -f /tmp/rc.local.new; die "rc.local 语法检查没过，已放弃修改"; }
-        cat /tmp/rc.local.new > "$RC" && rm -f /tmp/rc.local.new
+        rc_write /tmp/rc.local.new
         log "rc.local 去掉旧行: $2"
         return 0
     fi
     if grep -qF "$2" "$RC" 2>/dev/null; then
         backup_rc
         awk -v old="$2" -v ins="$1" 'index($0, old) && !d { print ins; d=1; next } { print }' "$RC" > /tmp/rc.local.new
-        sh -n /tmp/rc.local.new || { rm -f /tmp/rc.local.new; die "rc.local 语法检查没过，已放弃修改"; }
-        cat /tmp/rc.local.new > "$RC" && rm -f /tmp/rc.local.new
+        rc_write /tmp/rc.local.new
         log "rc.local 替换: $2 → $1"
     else
         rc_add "$1" "$3"
@@ -145,8 +161,7 @@ do_recover() {
         !d && !/^[[:space:]]*#/ && (/\/etc\/init\.d\/(zte-agent|zwrt-datad|u60-guard|u60-uid)[[:space:]]+start/ || /^exit 0/) { print ins; d = 1 }
         { print }
         END { if (!d) print ins }' "$RC" > /tmp/rc.local.new
-    sh -n /tmp/rc.local.new || { rm -f /tmp/rc.local.new; die "rc.local 语法检查没过，已放弃修改"; }
-    cat /tmp/rc.local.new > "$RC" && rm -f /tmp/rc.local.new
+    rc_write /tmp/rc.local.new
     log "rc.local 加入（在服务启动行之前）: $line"
 }
 
@@ -178,12 +193,15 @@ ship_busy() { # 有事务就打印一句原因
 
 # 装完一个组件，在设备清单里记一条 kind=kit（u60-ship.sh record-kit）。来源在 guard/kit-source
 # （build-kit.sh 写的：装机包日期、提交号、格式版本、有没有未提交改动）。记不上只提醒。
+# kit-source 里没有这个组件的提交号（datad：build-kit.sh 还不写 datad_*）：记 0000000 并标成有改动，
+# 不冒充某个干净提交编的。
 kit_record() { # <组件>
     [ -f "$G/u60-ship.sh" ] && [ -f "$P/guard/kit-source" ] || { warn "没记进设备清单（包里缺 u60-ship.sh 或 kit-source，装机包太旧？）"; return 0; }
     stamp=$(sed -n 's/^stamp=//p' "$P/guard/kit-source")
     commit=$(sed -n "s/^$1_commit=//p" "$P/guard/kit-source")
     format=$(sed -n "s/^$1_format=//p" "$P/guard/kit-source")
     dirty=$(sed -n "s/^$1_dirty=//p" "$P/guard/kit-source")
+    [ -n "$commit" ] || dirty=1
     [ "$dirty" = 1 ] && dirty=dirty || dirty=
     case "${KIT_MAC_TIME:-}" in '' | *[!0-9]*) KIT_MAC_TIME=$(date +%s) ;; esac
     if sh "$G/u60-ship.sh" record-kit "$1" "$stamp" "${commit:-0000000}" "${format:-1}" "$KIT_MAC_TIME" $dirty >/dev/null 2>&1; then
@@ -355,7 +373,7 @@ do_devui() {
     # devui 仓库自带的安装脚本：清理旧版残留、保留原厂 zte_topsw_devui 做开机早期的
     # 屏幕/触摸初始化，并在 rc.local 里放一行 start.sh（带 # u60pro_devui 标记）。
     # 它认得本包的 /etc/init.d/zwrt-datad（supervise.sh 版），不会去停它。
-    sh "$P/devui/install-autostart.sh" >/tmp/u60-kit-devui.log 2>&1
+    AUTOSTART_RC="$RC" sh "$P/devui/install-autostart.sh" >/tmp/u60-kit-devui.log 2>&1
     sh -n "$RC" || die "rc.local 语法检查没过（devui 安装脚本改坏了？原厂备份在 $STATE/rc.local.orig）"
 
     # 屏幕归 u60-uid（procd 监督）：它是拉起/停止触屏界面、放弃后交还原厂界面、长按右下角
@@ -384,6 +402,7 @@ do_devui() {
     log "devui: 屏幕界面已接管"
     kit_record touch
     kit_record uid
+    kit_record datad
 }
 
 # ── eSIM：lpac（qmi_qrtr）装到 /data/esim，后台和屏幕都靠它读写卡 ───────────────

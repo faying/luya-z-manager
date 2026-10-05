@@ -11,9 +11,14 @@
 //                       "rebooting" and the device reboots 2 s later
 //                       (esim.rs:436-449). Only then does the op wait ~90 s for
 //                       the device (expectDown). Readback: the profile reads
-//                       "enabled" — the job saying "done" is not proof.
-//                       429 = the card's cooldown after the last switch attempt
-//                       (eSTK.me answers catBusy otherwise); its message stays.
+//                       "enabled" — the job saying "done" is not proof (the
+//                       agent also reads the card back before calling it done).
+//                       A job error with reason "card_busy" = the card answered
+//                       catBusy and kept the old profile: only a device restart
+//                       (or reinserting the card) clears it, and the page says so.
+//                       After a switch the agent may run a short "notifications"
+//                       job of its own (sends that switch's enable/disable
+//                       notifications once data is back).
 //   delete     tier 3   POST /api/esim/delete → job; type-to-confirm. Readback: gone.
 //   download   tier 2   POST /api/esim/download → job. Readback: one more profile.
 //   nickname   tier 2   POST /api/esim/nickname. Readback: profileNickname.
@@ -53,6 +58,16 @@ import {
 const PROFILE_POLL = 10000;
 const NOTIF_POLL = 30000;
 
+/** A job that ended in error, with the agent's machine-readable reason. */
+class EsimJobError extends Error {
+  constructor(
+    message: string,
+    readonly reason: string
+  ) {
+    super(message);
+  }
+}
+
 /** Start a job and poll /api/esim/job (no card access) until it ends. */
 async function runJob(path: string, body: unknown, everyMs: number, limitMs: number): Promise<EsimJob> {
   const started = await apiFetch<EsimJobStarted>(path, { method: "POST", body });
@@ -61,7 +76,10 @@ async function runJob(path: string, body: unknown, everyMs: number, limitMs: num
     await new Promise((r) => setTimeout(r, everyMs));
     const j = await apiFetch<EsimJob>("/api/esim/job");
     if (j.id === started.job_id && j.status === "done") return j;
-    if (j.id === started.job_id && j.status === "error") throw new Error(j.message || "job failed");
+    if (j.id === started.job_id && j.status === "error") throw new EsimJobError(j.message || "job failed", j.reason ?? "");
+    // The slot already holds a newer job (e.g. the agent's own notifications
+    // job after a switch): ours ended unseen; the caller's readback decides.
+    if (j.id > started.job_id) return { ...j, rebooting: false };
     if (Date.now() > until) throw new TimeoutError(limitMs);
   }
 }
@@ -109,6 +127,8 @@ export default function EsimPage() {
   // after the step resolves (it reads `waitDevice` lazily): a reboot only
   // becomes known once the job ends.
   const rebootRef = useRef(false);
+  // The failed switch's job reason ("card_busy" → tell the user to restart).
+  const [switchReason, setSwitchReason] = useState("");
   const switchRecovery = t(
     "esim.switchRecovery",
     "Give the device a few minutes to finish restarting. If the new profile has no service, switch back to “{{name}}” here or on the touchscreen's eSIM page.",
@@ -122,8 +142,14 @@ export default function EsimPage() {
       {
         label: t("esim.switch", "Switch"),
         run: async () => {
-          const j = await runJob("/api/esim/switch", { iccid: target?.iccid }, 1500, 120000);
-          rebootRef.current = j.rebooting;
+          setSwitchReason("");
+          try {
+            const j = await runJob("/api/esim/switch", { iccid: target?.iccid }, 1500, 120000);
+            rebootRef.current = j.rebooting;
+          } catch (e) {
+            if (e instanceof EsimJobError) setSwitchReason(e.reason);
+            throw e;
+          }
         },
       },
     ],
@@ -347,9 +373,9 @@ export default function EsimPage() {
     if (installed) void prof.mutate();
   };
 
-  // 429 cooldown (eSTK.me catBusy) and 409 (another job) get a plain explanation.
+  // catBusy (the card kept the old profile) and 409 (another job) get a plain explanation.
   const switchErr = switchOp.phase === "failed" ? switchOp.error ?? "" : "";
-  const cooldown = /cooldown/i.test(switchErr) ? switchErr.match(/wait (\d+)s/) : null;
+  const cardBusyFail = switchOp.phase === "failed" && switchReason === "card_busy";
   const jobClash = (e?: string) => /in progress/i.test(e ?? "");
 
   const tgtName = target ? nameOf(target) : "";
@@ -387,12 +413,11 @@ export default function EsimPage() {
         {switchOp.phase !== "idle" && switchOp.phase !== "confirming" && (
           <div className="grid gap-2 px-1">
             <OpResult op={switchOp} />
-            {cooldown && (
+            {cardBusyFail && (
               <p className="nd-aux" role="note">
                 {t(
-                  "esim.cooldownNd",
-                  "The card needs a pause after each switch attempt (eSTK.me cards answer “catBusy” otherwise). Try again in {{s}} s.",
-                  { s: cooldown[1] }
+                  "esim.cardBusyRestart",
+                  "The card answered “busy” (catBusy) and kept the old profile. Waiting or retrying won't clear it: restart the device (or take the card out and put it back), then switch again."
                 )}
               </p>
             )}
@@ -671,7 +696,7 @@ export default function EsimPage() {
         )}
         downtime={t(
           "esim.switchDowntime",
-          "Usually about 40 s without a reboot. If the new profile doesn't take within about 30 s, the device reboots to finish (about 90 s more). The card then needs a 5-minute pause before the next switch."
+          "Usually about 40 s without a reboot. If the new profile doesn't take within about 30 s, the device reboots to finish (about 90 s more)."
         )}
         recovery={switchRecovery}
         actionLabel={t("esim.switch", "Switch")}

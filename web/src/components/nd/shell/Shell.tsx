@@ -140,12 +140,12 @@ export function Shell({ children }: { children: ReactNode }) {
               <CaretLeft size={22} weight="bold" aria-hidden />
             </Link>
           )}
-          <div className="ms-auto flex items-center gap-1">
+          <div className="ms-auto flex min-w-0 items-center gap-1">
             <StatusIcons />
             <button type="button" className="nd-iconbtn lg:hidden" onClick={() => setSearch(true)} aria-label={t("nd.search", "Search")}>
               <MagnifyingGlass size={20} weight="bold" aria-hidden />
             </button>
-            <span className="hidden md:inline-flex">
+            <span className="hidden shrink-0 md:inline-flex">
               <LangSwitch />
             </span>
             {apiHost && <span className="nd-mono hidden px-2 text-[13px] text-nd-t3 xl:inline">{apiHost}</span>}

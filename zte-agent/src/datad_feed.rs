@@ -183,14 +183,7 @@ fn write_marker(path: &Path, start: u64, reason: &str) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    {
-        let mut f = fs::File::create(&tmp)?;
-        write!(f, "{start}\n{reason}\n")?;
-    }
-    fs::rename(&tmp, path)
+    crate::fsutil::atomic_write(path, format!("{start}\n{reason}\n").as_bytes())
 }
 
 // ── /v2 subscriber ─────────────────────────────────────────────────────────

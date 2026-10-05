@@ -77,7 +77,7 @@ sh /data/tailscale/apply.sh /data/tailscale/my-variant.env relay
 sh /data/tailscale/start.sh            # 启动（rc.local 跑的就是这个）
 sh /data/tailscale/start.sh status     # 当前模式、安全模式、开机失败计数、是否关掉
 sh /data/tailscale/start.sh check      # 启动前检查
-sh /data/tailscale/start.sh stop       # 停止，并撤掉它加的路由和防火墙规则
+sh /data/tailscale/start.sh stop       # 停止，并撤掉它加的路由和防火墙规则（下次启动之前不会被拉起）
 sh /data/tailscale/start.sh disable    # 停止，以后开机也不启动（不用改 rc.local）
 sh /data/tailscale/start.sh enable     # 取消 disable 并启动
 sh /data/tailscale/start.sh clear-safe # 立即退出安全模式
@@ -90,7 +90,7 @@ sh /data/tailscale/start.sh clear-safe # 立即退出安全模式
 - **内核网络不安全时改用 userspace 模式。** `tun` 模式下，tailscaled 会丢掉从其他接口进来、来源是 `100.64.0.0/10` 的包。有些运营商的 WAN 地址、网关或 DNS 就在这个网段里，路由器自己的 DNS 就会断。只要其中任何一个落在这个网段，或者没有 TUN 设备，这次开机就用 userspace 模式。userspace 模式不加路由和防火墙规则；tailnet 仍然能访问路由器上监听所有地址的服务（SSH、管理网页），但局域网设备不能再经路由器访问 tailnet。
 - **开机失败计数 → 安全模式。** 连续 3 次开机都用 `tun` 模式启动、设备却没撑过 10 分钟，就进入安全模式（`/data/tailscale/safe-mode`），改用 userspace 模式。安全模式下撑过 1 小时，下次开机再试一次 `tun`。别的原因引起的重启（比如基带崩溃）也会算进去，所以这里只降级、绝不关掉 Tailscale。同一次开机里 `apply.sh` 引起的重启不计数。
 - **设置坏了也照样起。** `tuning.env` 写坏了会被忽略；`TS_TAILSCALED_BIN` 指的程序不在，就退回默认那份。
-- **不会反复重启。** 没有任何东西会自动拉起 tailscaled；它退出了就一直停着，直到下次启动或重启设备。
+- **挂了会拉起，但有上限。** 启动之后有一个很小的后台看守，每分钟看一次 tailscaled 还在不在。不在了，就先撤掉它留下的路由和防火墙规则，再按开机时的同一套规则重新启动（关断开关、安全模式、userspace 检查都照样生效）。第一次拉起前等 5 分钟，第二次等 15 分钟，之后每次等 1 小时；tailscaled 撑过 10 分钟就从头算。24 小时内拉起 6 次还不行，就暂停到这 24 小时过完，记进 `boot.log`，设备上装了告警队列的话再加一条 `tailscale-gave-up` 告警。它只看进程在不在，不看 Tailscale 健不健康。关断开关开着、`stop` 之后（到下次启动为止）、`apply.sh` 正在切换时，都不会拉起。`tuning.env` 里写 `TS_WATCH=0` 可以关掉它；`TS_WATCH_POLL`、`TS_REVIVE_DELAYS`、`TS_REVIVE_MAX`、`TS_REVIVE_WINDOW` 改这些数。
 
 ## 从 `scripts/tailscale-start.sh` 迁移过来
 

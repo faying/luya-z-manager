@@ -133,6 +133,13 @@ fn handle_request(mut request: Request, state: &AppState) {
             respond(request, status, body_json);
             return;
         }
+        // Says whether this request came over Tailscale (needs the peer address)
+        (&Method::Get, "/api/public/status") => {
+            let remote = request.remote_addr().map(|a| a.ip());
+            let (status, body_json) = public::public_status_for(state, remote);
+            respond(request, status, body_json);
+            return;
+        }
         (&Method::Get, "/api/netinfo") => {
             let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
             let (status, body_json) = netinfo::get(state, query);

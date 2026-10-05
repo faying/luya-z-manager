@@ -34,8 +34,7 @@
 
 // Nothing in this build reads the conclusions yet; the sampler runs anyway.
 #![allow(dead_code)]
-use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -132,14 +131,7 @@ impl ErrorCounter {
 /// `"<n>\n"` via a temp file in the same directory + rename, so a reader never
 /// sees a half-written number.
 fn write_count(path: &Path, n: u64) -> io::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    {
-        let mut f = fs::File::create(&tmp)?;
-        writeln!(f, "{n}")?;
-    }
-    fs::rename(&tmp, path)
+    crate::fsutil::atomic_write(path, format!("{n}\n").as_bytes())
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -379,6 +371,7 @@ fn now_unix() -> u64 {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::fs;
 
     #[test]
     fn operator_dns_wherever_datad_puts_it() {
