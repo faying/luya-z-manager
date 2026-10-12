@@ -1,4 +1,4 @@
-# Updating an installed U60 Pro (MU5250)
+# Updating an installed device
 
 **English** · [中文](DEPLOY.zh-CN.md)
 

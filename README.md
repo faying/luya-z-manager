@@ -1,10 +1,10 @@
-# ZTE U60 Pro (MU5250) Manager
+# Luya-Z Manager
 
 **English** · [中文](README.zh-CN.md)
 
-An on-device REST API (`zte-agent`), a browser admin UI and a **one-command install kit** for the ZTE U60 Pro (MU5250) 5G portable hotspot.
+Part of **Luya-Z**: an on-device REST API (`zte-agent`), a browser admin UI and a **one-command install kit** for a 5G portable hotspot.
 
-> Community project. Not affiliated with ZTE. Use at your own risk.
+> **Hardware:** runs on the ZTE U60 Pro (MU5250). Community project, not affiliated with ZTE. Use at your own risk.
 
 | Admin web | Touch UI (companion repo) |
 |---|---|
@@ -14,9 +14,9 @@ An on-device REST API (`zte-agent`), a browser admin UI and a **one-command inst
 
 | Repo | Role on the device |
 |---|---|
-| **[manager](https://github.com/faying/zte-u60-pro-mu5250-manager)** (this repo) | `zte-agent` (:9090), admin web, install kit |
-| [touch-ui](https://github.com/faying/zte-u60-pro-mu5250-touch-ui) | Front-panel touch UI, screen owner daemon, supervision and Wi-Fi fallback scripts |
-| [data-service](https://github.com/faying/zte-u60-pro-mu5250-data-service) | `zwrt-datad`: local data service (`/state` + SSE on `127.0.0.1:9460`) |
+| **[manager](https://github.com/faying/luya-z-manager)** (this repo) | `zte-agent` (:9090), admin web, install kit |
+| [touch-ui](https://github.com/faying/luya-z-touch-ui) | Front-panel touch UI, screen owner daemon, supervision and Wi-Fi fallback scripts |
+| [data-service](https://github.com/faying/luya-z-data-service) | `zwrt-datad`: local data service (`/state` + SSE on `127.0.0.1:9460`) |
 
 ```
 zwrt-datad :9460 ──▶ touch UI ──(eSIM page)──▶ zte-agent :9090 ──▶ lpac ──▶ eUICC card

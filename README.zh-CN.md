@@ -1,10 +1,10 @@
-# ZTE U60 Pro（MU5250）管理后台
+# Luya-Z 管理后台
 
 [English](README.md) · **中文**
 
-给中兴 U60 Pro（MU5250）5G 随身 Wi-Fi 用的设备端 REST API（`zte-agent`）、浏览器高级后台和**一键装机包**。
+**Luya-Z** 的一部分：给 5G 随身 Wi-Fi 用的设备端 REST API（`zte-agent`）、浏览器高级后台和**一键装机包**。
 
-> 社区项目，和中兴（ZTE）没有关系，风险自负。
+> **适用硬件：** 中兴 U60 Pro（MU5250）。社区项目，和中兴（ZTE）没有关系，风险自负。
 
 | 管理网页 | 触屏界面（配套仓库） |
 |---|---|
@@ -14,9 +14,9 @@
 
 | 仓库 | 设备上的角色 |
 |---|---|
-| **[manager](https://github.com/faying/zte-u60-pro-mu5250-manager)**（本仓库） | `zte-agent`（:9090）+ 管理网页 + 装机包 |
-| [touch-ui](https://github.com/faying/zte-u60-pro-mu5250-touch-ui) | 前面板触屏界面、屏幕守护进程、进程监督与 Wi-Fi 兜底脚本 |
-| [data-service](https://github.com/faying/zte-u60-pro-mu5250-data-service) | `zwrt-datad`：本机数据服务（`127.0.0.1:9460` 的 `/state` + SSE） |
+| **[manager](https://github.com/faying/luya-z-manager)**（本仓库） | `zte-agent`（:9090）+ 管理网页 + 装机包 |
+| [touch-ui](https://github.com/faying/luya-z-touch-ui) | 前面板触屏界面、屏幕守护进程、进程监督与 Wi-Fi 兜底脚本 |
+| [data-service](https://github.com/faying/luya-z-data-service) | `zwrt-datad`：本机数据服务（`127.0.0.1:9460` 的 `/state` + SSE） |
 
 ```
 zwrt-datad :9460 ──▶ 触屏界面 ──(eSIM 页)──▶ zte-agent :9090 ──▶ lpac ──▶ eUICC 卡
