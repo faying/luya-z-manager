@@ -1229,6 +1229,8 @@ pub fn start(dir: PathBuf) -> std::sync::mpsc::Sender<Msg> {
                 let due = fold.check_due(&c);
                 let mut after = Vec::new();
                 if due {
+                    // a planned-reboot marker whose reboot never came goes (boot.rs `planned`)
+                    let _ = boot::planned_now();
                     let lk = fold.look(&c, &paths, &mut out);
                     after = lk.after;
                     // G10, G11 once the guard handed them over (u60-sentinel.md §20)

@@ -298,6 +298,13 @@ async fn control_job(
         j.line(&app, "requested", None);
         app.inner.ops.record().flush().await;
     }
+    // 账本：下次开机记成「有人要的」（B31 上手动重启和基带崩溃同一个原因码 1134）
+    if ends {
+        let why = body["source"].as_str().unwrap_or("control");
+        if let Err(e) = crate::longterm::boot::plan(why) {
+            eprintln!("[control] planned-reboot marker: {e}");
+        }
+    }
     let response = control_task(app.clone(), &action, body).await;
     if let Some(j) = &journal
         && !ends

@@ -14,6 +14,12 @@
 //!   anchor moves (and `init-done` is written) only after the lines are written, so a rerun
 //!   writes the same ids again at worst, and readers count an id once.
 //!
+//! - `planned`: the reboot was asked for (web, touch screen, scheduler, `<core> plan-reboot`
+//!   before a shell `reboot`). On CN B31 a deliberate reboot logs the same code 1134 as a modem
+//!   crash, so the code alone cannot tell them apart. The marker [`PLANNED`] holds the boot it was
+//!   written in; the next boot's line takes its reason, and it goes after the line is written.
+//!   A marker still in its own boot after [`PLANNED_TTL_S`] means the reboot never came: dropped.
+//!
 //! The core's anchor is its own (`long/keylog.anchor`), not the guard's: the two ledgers run
 //! side by side in 5e.
 
@@ -27,6 +33,95 @@ pub const ANCHOR: &str = "keylog.anchor";
 pub const INIT_DONE: &str = "init-done";
 /// Boot seconds before the facts are read (this boot's reason code is in key.log by then).
 pub const AFTER_S: u64 = 60;
+
+/// Someone asked for the coming reboot: `<boot_id> <uptime s> <why>`.
+pub const PLANNED: &str = "/data/luyaz/core/planned-reboot";
+/// A marker older than this in the boot that wrote it is stale (the reboot did not happen).
+pub const PLANNED_TTL_S: f64 = 600.0;
+
+fn proc_boot_id() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn proc_uptime() -> f64 {
+    std::fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|s| s.split_whitespace().next()?.parse().ok())
+        .unwrap_or(0.0)
+}
+
+/// The reason as the ledger keeps it: letters, digits and `._:-`, at most 32.
+fn why_clean(why: &str) -> String {
+    let w: String = why
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || "._:-".contains(*c))
+        .take(32)
+        .collect();
+    if w.is_empty() { "unknown".into() } else { w }
+}
+
+/// What a marker means for the boot `boot` at uptime `up`.
+#[derive(Debug, PartialEq)]
+pub enum Planned {
+    /// Written in this boot, the reboot is still coming.
+    Pending,
+    /// Written in an earlier boot: this boot is the planned one.
+    Ours(String),
+    /// Unreadable, or its reboot never came.
+    Stale,
+}
+
+pub fn planned_of(text: &str, boot: &str, up: f64) -> Planned {
+    let mut it = text.split_whitespace();
+    let (Some(b), Some(u), w) = (
+        it.next(),
+        it.next().and_then(|u| u.parse::<f64>().ok()),
+        it.next(),
+    ) else {
+        return Planned::Stale;
+    };
+    if b != boot {
+        Planned::Ours(why_clean(w.unwrap_or("")))
+    } else if up - u > PLANNED_TTL_S || up < u {
+        Planned::Stale
+    } else {
+        Planned::Pending
+    }
+}
+
+/// Mark the coming reboot as asked for (written before the reboot is sent).
+pub fn plan(why: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let p = std::path::PathBuf::from(crate::state::host_path(PLANNED));
+    let tmp = p.with_extension("tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        let line = format!(
+            "{} {:.0} {}\n",
+            proc_boot_id(),
+            proc_uptime(),
+            why_clean(why)
+        );
+        f.write_all(line.as_bytes())?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, &p)
+}
+
+/// This boot's view of the marker; a stale one is removed.
+pub fn planned_now() -> Planned {
+    let p = crate::state::host_path(PLANNED);
+    let Ok(t) = std::fs::read_to_string(&p) else {
+        return Planned::Pending;
+    };
+    let r = planned_of(&t, &proc_boot_id(), proc_uptime());
+    if r == Planned::Stale {
+        let _ = std::fs::remove_file(&p);
+    }
+    r
+}
 
 /// One key.log file as the backfill needs it: its inode and its reason-code lines, each with
 /// the hash of it and the 20 lines before (the guard's md5 of `sed -n` of them). Read line by
@@ -273,6 +368,10 @@ pub async fn gather(long: &Path) -> (Value, Backfill) {
         ),
         "pon": pon,
     });
+    let mut fields = fields;
+    if let Planned::Ours(w) = planned_now() {
+        fields["planned"] = json!(w);
+    }
     let anchor = std::fs::read_to_string(long.join(ANCHOR)).ok();
     let bf = backfill(
         cur.as_ref(),
@@ -296,6 +395,10 @@ pub fn commit(long: &Path, bf: &Backfill) -> std::io::Result<()> {
         }
         std::fs::rename(&tmp, &p)?;
     }
+    // the boot line has its `planned` now: an earlier boot's marker goes
+    if matches!(planned_now(), Planned::Ours(_)) {
+        let _ = std::fs::remove_file(crate::state::host_path(PLANNED));
+    }
     let i = long.join(INIT_DONE);
     if !i.exists() {
         std::fs::File::create(&i)?.sync_all()?;
@@ -306,6 +409,30 @@ pub fn commit(long: &Path, bf: &Backfill) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn planned_marker() {
+        assert_eq!(
+            planned_of("a 100 web", "b", 50.0),
+            Planned::Ours("web".into())
+        );
+        assert_eq!(
+            planned_of("a 100 \"x,y\"", "b", 50.0),
+            Planned::Ours("xy".into())
+        );
+        assert_eq!(
+            planned_of("a 100", "b", 50.0),
+            Planned::Ours("unknown".into())
+        );
+        assert_eq!(planned_of("a 100 web", "a", 300.0), Planned::Pending);
+        assert_eq!(
+            planned_of("a 100 web", "a", 100.0 + PLANNED_TTL_S + 1.0),
+            Planned::Stale
+        );
+        assert_eq!(planned_of("a 100 web", "a", 50.0), Planned::Stale);
+        assert_eq!(planned_of("", "a", 50.0), Planned::Stale);
+        assert_eq!(planned_of("a x web", "b", 50.0), Planned::Stale);
+    }
 
     fn kl(lines: &[&str]) -> String {
         lines.join("\n") + "\n"

@@ -295,6 +295,7 @@ function place(net, home) { # MCC-MNC text; home when the countries agree
     if (net == "" || net == "null" || home == "" || home == "null") return "不明"
     return ((substr(net, 1, 3) == substr(home, 1, 3)) ? "在家" : "国外")
 }
+function planned(s) { return (B_PLAN[s] != "" && B_PLAN[s] != "null") }
 function klass(code) {
     if (code == 1150 || code == 1152) return "manual"
     if (code == 1112) return "scheduled"
@@ -377,7 +378,7 @@ BEGIN {
     k = fld($0, "k"); s = fld($0, "seq") + 0; up = fld($0, "up") + 0; t = fld($0, "t")
     if (!(s in SEQS)) { SEQS[s] = 1; NS++; SQ[NS] = s }
     if (t != "null") OFF[s] = t - int(up)
-    if (k == "boot") { B_CODE[s] = fld($0, "code"); B_ID[s] = fld($0, "boot"); B_MODE[s] = fld($0, "mode") }
+    if (k == "boot") { B_CODE[s] = fld($0, "code"); B_ID[s] = fld($0, "boot"); B_MODE[s] = fld($0, "mode"); B_PLAN[s] = fld($0, "planned") }
     else if (k == "boot_backfill") { NBF++; BF_SEQ[NBF] = s; BF_CODE[NBF] = fld($0, "code"); BF_AT[NBF] = fld($0, "at"); if (fld($0, "gap") == "1") BF_GAP[s] = 1 }
     else if (k == "guard_start") { GS_N[s]++; if (!(s in GS_UP)) GS_UP[s] = up; if (fld($0, "requested") != "1" && GS_N[s] > 1) { NGX++; GX_S[NGX] = s; GX_UP[NGX] = up } }
     else if (k == "ver") { p = fld($0, "prog"); m = fld($0, "md5"); if (m != "null" && (p in VER_M) && VER_M[p] != m) { VER_CS[p] = s; VER_CU[p] = up } if (m != "null") VER_M[p] = m; if (p == "zwrt-datad") DATAD_X = fld($0, "extra") }
@@ -428,7 +429,7 @@ END {
         if (hs == "" || he == "" || he - hs <= 300) continue
         # (s in B_CODE) first: a lookup creates the element, and a boot with no boot line
         # would then count as a reboot of unknown cause
-        if (((s in B_CODE) && klass(B_CODE[s]) == "manual") || B_MODE[s] ~ /charg/) continue
+        if (((s in B_CODE) && (klass(B_CODE[s]) == "manual" || planned(s))) || B_MODE[s] ~ /charg/) continue
         NHOLE++; HOLE_S[NHOLE] = hs; HOLE_E[NHOLE] = he
     }
     for (i = 1; i <= NGAPR; i++) { s = GR_S[i]; NGAP++; GAP_SRC[NGAP] = GR_SRC[i]; GAP_S[NGAP] = wall(s, GR_F[i]); GAP_E[NGAP] = wall(s, GR_T[i]) }
@@ -444,6 +445,8 @@ END {
     }
     for (i = 1; i <= NR_; i++) {
         c = klass(R_CODE[i]); pl = "不明"; ps = ((i > 1) ? R_LEDGER[i - 1] : 0)
+        # asked for (web, touch screen, plan-reboot): CN B31 logs a deliberate reboot as 1134 too
+        if (R_LEDGER[i] != 0 && planned(R_LEDGER[i])) c = "manual"
         if (ps && (ps in BLAST)) pl = ((H_ab[BLAST[ps]] * 2 > H_awake[BLAST[ps]]) ? "国外" : "在家")
         if (c == "1182") {
             c = "unknown"
@@ -468,14 +471,15 @@ END {
     }
     D7 = 604800; D1 = 86400
     # S1 unexpected reboots (key.log reason codes)
-    ws = wstart(D7, RECOV); n = 0; sch = 0; det = ""
+    ws = wstart(D7, RECOV); n = 0; sch = 0; man = 0; det = ""
     for (i = 1; i <= NR_; i++) if (R_W[i] != "" && R_W[i] > ws && R_W[i] <= WEND) {
         if (R_CLASS[i] == "scheduled") sch++
-        else if (R_CLASS[i] != "manual") { n++; det = det sprintf("%s %s（%s，%s）；", when(R_W[i]), R_CODE[i], R_CLASS[i], R_PLACE[i]) }
+        else if (R_CLASS[i] == "manual") man++
+        else { n++; det = det sprintf("%s %s（%s，%s）；", when(R_W[i]), R_CODE[i], R_CLASS[i], R_PLACE[i]) }
     }
     cv = "完整"; for (x = 1; x <= NS; x++) if (BF_GAP[SQ[x]]) cv = "不完整（key.log 补记的锚点丢过一次）"
     S1N = n; S1T = tier(n > 0, cv, ws, D7)
-    row("S1", "意外整机重启", n " 次" (sch ? sprintf("（另有原厂定时 %d 次）", sch) : ""), S1T, ws, D7, cv, "自动")
+    row("S1", "意外整机重启", n " 次" ((sch || man) ? "（另有" (sch ? sprintf("原厂定时 %d 次", sch) : "") ((sch && man) ? "、" : "") (man ? sprintf("人为 %d 次", man) : "") "）" : ""), S1T, ws, D7, cv, "自动")
     if (det != "") sub_(det)
     # S2a modem crash -> whole reboot, from guard up; the boot-gap column apart
     ws = wstart(D7, RECOV); n = 0; ng = 0

@@ -119,6 +119,13 @@ pub fn band(b: Option<&str>) -> Option<String> {
         .then(|| b.to_string())
 }
 
+/// A boot line's reason code; 0 when the reboot was asked for (`planned`, boot.rs): on CN B31
+/// a deliberate reboot logs 1134 too, and it is no crash.
+fn boot_code(e: &Value) -> Option<i64> {
+    let code = e["code"].as_i64()?;
+    Some(if e["planned"].is_string() { 0 } else { code })
+}
+
 impl Places {
     pub fn load(dir: &Path) -> Places {
         std::fs::read_to_string(dir.join(FILE))
@@ -196,7 +203,7 @@ impl Places {
                 Some("boot") => {
                     let b = super::boot8(e["boot_id"].as_str().unwrap_or_default());
                     if b == boot
-                        && let Some(code) = e["code"].as_i64()
+                        && let Some(code) = boot_code(e)
                     {
                         let prev = self.prev.clone();
                         self.reason(boot, code, prev.as_ref());
@@ -299,7 +306,7 @@ impl Places {
                         if let Some(s) = e["net_select"].as_str().filter(|s| !s.is_empty()) {
                             pref = bucket(Some(s));
                         }
-                        if let Some(code) = e["code"].as_i64() {
+                        if let Some(code) = boot_code(&e) {
                             b.reason(&boot8, code, prev.as_ref());
                         }
                     }

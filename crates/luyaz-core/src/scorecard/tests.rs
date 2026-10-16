@@ -336,3 +336,28 @@ fn the_stitch_takes_each_side_of_the_cut() {
     assert!(all.contains("账本：2 次开机，5 小时的记录"), "{all}");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// A reboot someone asked for (`planned` on the boot line it starts, boot.rs) is no unexpected
+/// reboot whatever its code: CN B31 logs a shell reboot as 1134, the modem-crash code.
+#[test]
+fn a_planned_reboot_is_manual_whatever_its_code() {
+    let card = |planned: &str| {
+        let mut c = Card::new();
+        c.line(r#"{"v":1,"seq":1,"n":1,"up":5,"t":1790000005,"k":"boot","boot":"aaaaaaaa","code":1150}"#);
+        c.line(r#"{"v":1,"seq":1,"n":2,"up":3600,"t":1790003600,"k":"hour","id":"h1","from":5,"to":3600,"ft":1790000005,"tt":1790003600,"awake":3600}"#);
+        c.line(&format!(
+            r#"{{"v":1,"seq":2,"n":1,"up":60,"t":1790003700,"k":"boot","boot":"bbbbbbbb","code":1134{planned}}}"#
+        ));
+        c.line(r#"{"v":1,"seq":2,"n":2,"up":3600,"t":1790007240,"k":"hour","id":"h2","from":60,"to":3600,"ft":1790003700,"tt":1790007240,"awake":3540}"#);
+        let (text, _) = c.finish(&Inputs {
+            w: 86_400.0,
+            label: "24 小时".into(),
+            ..Default::default()
+        });
+        text.lines().find(|l| l.contains("S1 ")).unwrap().to_string()
+    };
+    let crash = card("");
+    assert!(crash.contains("S1 意外整机重启：1 次"), "{crash}");
+    let asked = card(r#","planned":"ssh:test""#);
+    assert!(asked.contains("S1 意外整机重启：0 次（另有人为 1 次）"), "{asked}");
+}

@@ -68,6 +68,13 @@ struct Boot {
     code: String,
     id: String,
     mode: String,
+    /// `planned`: someone asked for the reboot that started this boot (boot.rs).
+    planned: String,
+}
+impl Boot {
+    fn planned(&self) -> bool {
+        !self.planned.is_empty() && self.planned != "null"
+    }
 }
 struct Ssr {
     id: String,
@@ -328,6 +335,7 @@ impl Card {
                         code: f("code"),
                         id: f("boot"),
                         mode: f("mode"),
+                        planned: f("planned"),
                     },
                 );
             }
@@ -529,7 +537,9 @@ impl Card {
                 continue;
             }
             let b = self.boots.get(&s);
-            if b.is_some_and(|b| klass(&b.code) == "manual" || b.mode.contains("charg")) {
+            if b.is_some_and(|b| {
+                klass(&b.code) == "manual" || b.planned() || b.mode.contains("charg")
+            }) {
                 continue;
             }
             holes.push((hs, he));
@@ -596,6 +606,11 @@ impl Card {
             .collect();
         for i in 0..rb.len() {
             let mut cl = klass(&rb[i].code);
+            // asked for (web, touch screen, `plan-reboot`): manual whatever the code says;
+            // CN B31 logs a deliberate reboot as 1134, the modem-crash code
+            if rb[i].ledger != 0 && self.boots.get(&rb[i].ledger).is_some_and(Boot::planned) {
+                cl = "manual";
+            }
             let ps = if i > 0 { rb[i - 1].ledger } else { 0 };
             let mut pl = "不明";
             if ps != 0
@@ -725,12 +740,14 @@ impl Card {
         }
         // S1 unexpected reboots (key.log reason codes)
         let ws = wstart(D7, inp.recov);
-        let (mut n, mut sch, mut det) = (0, 0, String::new());
+        let (mut n, mut sch, mut man, mut det) = (0, 0, 0, String::new());
         for r in &rb {
             if inw(r.w, ws) {
                 if r.class == "scheduled" {
                     sch += 1;
-                } else if r.class != "manual" {
+                } else if r.class == "manual" {
+                    man += 1;
+                } else {
                     n += 1;
                     let _ = write!(
                         det,
@@ -749,12 +766,19 @@ impl Card {
         }
         let s1n = n;
         let s1t = tier(n > 0, &cv, ws, D7);
+        let mut also = Vec::new();
+        if sch > 0 {
+            also.push(format!("原厂定时 {sch} 次"));
+        }
+        if man > 0 {
+            also.push(format!("人为 {man} 次"));
+        }
         let v = format!(
             "{n} 次{}",
-            if sch > 0 {
-                format!("（另有原厂定时 {sch} 次）")
-            } else {
+            if also.is_empty() {
                 String::new()
+            } else {
+                format!("（另有{}）", also.join("、"))
             }
         );
         row(&mut out, "S1", "意外整机重启", &v, s1t, ws, D7, &cv, "自动");

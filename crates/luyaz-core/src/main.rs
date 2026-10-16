@@ -295,6 +295,17 @@ fn main() {
     if raw.get(1).map(String::as_str) == Some("doctor") {
         std::process::exit(doctor::main(&raw[2..]));
     }
+    // `<core> plan-reboot [why]`: mark the coming shell `reboot` as asked for (ledger S1)
+    if raw.get(1).map(String::as_str) == Some("plan-reboot") {
+        let why = raw.get(2).map_or("shell", String::as_str);
+        match longterm::boot::plan(why) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("plan-reboot: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
