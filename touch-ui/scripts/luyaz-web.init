@@ -30,7 +30,7 @@ start_service() {
     procd_open_instance
     # X9 (manager docs/designs/u60-phase10.md): the program itself under procd, no wrapper; output
     # appended to /tmp/luyaz-web.log (the sentinel caps it), crash records and alerts by the core (u60d svcwatch)
-    procd_set_param command /bin/sh -c 'exec >>/tmp/luyaz-web.log 2>&1 </dev/null; echo "=== $(date +%Y-%m-%dT%H:%M:%S) start $0"; exec "$0" "$@"' "$BIN" serve --bind 0.0.0.0:9090 --upstream http://127.0.0.1:9460 --password-file /data/zte-agent.env
+    procd_set_param command /bin/sh -c 'exec >>/tmp/luyaz-web.log 2>&1 </dev/null; echo "=== $(date +%Y-%m-%dT%H:%M:%S) start $0"; exec "$0" "$@"' "$BIN" serve --bind 0.0.0.0:9090 --upstream http://127.0.0.1:9460 --password-file /data/luyaz/web.env
     procd_set_param respawn 300 5 5
     procd_set_param term_timeout 10
     procd_close_instance

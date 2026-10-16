@@ -102,7 +102,7 @@ The first run downloads Docker images and dependencies and takes about 20–30 m
 |---|---|
 | dropbear (SSH) | Official OpenWrt 23.05.4 ipk, pinned sha256 |
 | luyaz-web (admin web), operator logos | Built from this repository (`crates/luyaz-web`, profile `release`) |
-| Touch program | touch-ui's `rs/build.sh device` (Rust, Docker); output `touch-ui/out/u60pro-devui-rs`, installed as `/data/luyaz/ui/luyaz-ui` |
+| Touch program | touch-ui's `rs/build.sh device` (Rust, Docker); output `touch-ui/out/luyaz-ui`, installed as `/data/luyaz/ui/luyaz-ui` |
 | luyaz-sentinel (screen owner + watchdog) | Built from this repository (`crates/luyaz-sentinel`, profile `release-device`) |
 | Touch UI fonts | Nunito (pinned google/fonts commit) and a Chinese fallback font (Resource Han Rounded subset), both OFL, pinned sha256, generated in Docker. The ZTE fonts that ship on the device are not packaged; the touch UI reads them directly from `/usr/ui/fonts/` on the device |
 | Core (`luyaz-core`) | luyaz-core from this repository (`cargo zigbuild --profile release-device -p luyaz-core` in `onboard/build.Dockerfile`, image pinned by digest, dependencies locked by `Cargo.lock`) |
@@ -114,7 +114,7 @@ Before packaging, the script checks: the touch program must be the Rust build (t
 You can also build the pieces separately and point `build-kit.sh` at the existing files:
 
 ```sh
-(cd touch-ui && rs/setup-src.sh && rs/build.sh device out/u60pro-devui-rs)   # read from here by default
+(cd touch-ui && rs/setup-src.sh && rs/build.sh device out/luyaz-ui)   # read from here by default
 DATAD_BIN=/path/to/luyaz-core ./onboard/build-kit.sh       # a core built elsewhere instead of building luyaz-core
 ```
 

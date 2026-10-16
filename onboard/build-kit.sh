@@ -26,7 +26,7 @@
 #                     procd init 脚本（装到 /data/luyaz/scripts 和 /etc/init.d；u60-ship.sh 在设备上叫 luyaz-ship.sh）。u60-guard.sh 不再打包（Phase 10 10b）
 #
 # 环境变量：DEVUI_REPO（默认本仓库的 touch-ui/）、
-#           DEVUI_BIN=路径（触屏二进制，默认 $DEVUI_REPO/out/u60pro-devui-rs，没有就现编）、
+#           DEVUI_BIN=路径（触屏二进制，默认 $DEVUI_REPO/out/luyaz-ui，没有就现编）、
 #           SENTINEL_BIN=路径（用这个 luyaz-sentinel，不现编）、
 #           DATAD_BIN=路径（用这个核心，不现编 luyaz-core）、
 #           SHIP_RECORDS=目录（u60 ship 存在本机的上机记录：每次事务一个子目录，放着上机的文件和清单副本。
@@ -176,7 +176,7 @@ fi
 if [ -z "${DATAD_BIN:-}" ] && shipped /data/luyaz/luyaz-core zwrt-datad; then
   DATAD_BIN=$SHIP_FILE SHIP_datad=${SHIP_COMMIT:-0000000}
 fi
-DEVUI_BIN="${DEVUI_BIN:-$DEVUI_REPO/out/u60pro-devui-rs}"
+DEVUI_BIN="${DEVUI_BIN:-$DEVUI_REPO/out/luyaz-ui}"
 DEVUI_PREBUILT=1
 if [ ! -f "$DEVUI_BIN" ]; then
   DEVUI_PREBUILT=0

@@ -32,7 +32,7 @@ See [README](../README.md#build). Key points:
 
 - `rs/setup-src.sh` once: puts the patched LVGL v9.5.0 and FreeType sources into a docker volume.
 - `rs/build.sh device [FILE]` builds the static aarch64-musl `luyaz-ui` (cargo zigbuild in the shared build image; the crates are members of the manager Cargo workspace).
-- On the device: `tools/luyaz ship touch` (it builds only `rs/`).
+- On the device: `luyaz ship touch` (it builds only `rs/`). Note: the Mac-side ship command (`luyaz ship <comp>`, `luyaz rollback`, `luyaz status`) is the maintainer's workspace tool and is not part of this repo; the device side it drives is `touch-ui/scripts/u60-ship.sh` (installed as `/data/luyaz/scripts/luyaz-ship.sh`), whose format is [SHIP.md](SHIP.md). Without the tool, use the install kit (`onboard/`).
 
 ## Fonts
 
@@ -80,7 +80,7 @@ the counters are in `/data/luyaz/screen/attempts` and `/data/luyaz/screen/gave-u
 Two hard constraints: **a UI that crashes on startup gets escalated by the firmware into a whole-device reboot loop**; **if the screen has no UI at all for a few minutes, the firmware also reboots the whole device**.
 So try a new build under a different file name first and only move it to the live slot once it is stable; two UIs also must not fight over `/dev/dri/card0`.
 
-Use `tools/luyaz ship touch` (see [SHIP.md](SHIP.md)): it does exactly this (sentinel `hold`, side-by-side `luyaz-ui.test`, checks, atomic replace, `release`, rollback). Regular users use the install kit's `./install.sh devui`.
+Use `luyaz ship touch` (see [SHIP.md](SHIP.md)): it does exactly this (sentinel `hold`, side-by-side `luyaz-ui.test`, checks, atomic replace, `release`, rollback). Regular users use the install kit's `./install.sh devui`.
 
 Notes:
 

@@ -63,6 +63,8 @@ setup() {
     mkdir -p "$T/bin" "$T/pids" "$T/tmp" "$T/proc" "$DV" "$UD" "$GD" "$R/data/luyaz/ship/stage" "$R/etc/init.d" "$R/data/u60-uid" "$R/data/luyaz/screen"
     # the screen state already moved (R4; E3 refuses a device where it did not)
     : >"$R/data/luyaz/screen/.migrated"
+    # …and the core (the zwrt-datad layout is refused since E3)
+    mkdir -p "$R/data/luyaz/core" && : >"$R/data/luyaz/core/.migrated"
     echo 1000 >"$T/uptime"
     echo aaaa-1111 >"$T/boot_id"
     : >"$T/uidlog"
@@ -375,7 +377,7 @@ teardown
 
 setup
 CASE="D1 floor: core rollback"
-CB=$R/data/plugins/zwrt-datad/zwrt-datad
+CB=$R/data/luyaz/luyaz-core
 mkdir -p "${CB%/*}"
 echo "NEW-CORE /data/luyaz/scripts" >"$CB"
 echo "OLD-CORE /data/u60-guard" >"$CB.prev-20261015-111557-datad"
@@ -815,7 +817,7 @@ RC_LEGACY='#!/bin/sh
 [ -x /data/ssh/dropbear ] && sh /data/local/tmp/start_dropbear.sh
 sh /data/u60-ship/u60-recover.sh   # u60_recover：开机先收尾
 /etc/init.d/zte-agent start
-/etc/init.d/zwrt-datad start
+/etc/init.d/luyaz-core start
 /etc/init.d/u60-uid start
 /etc/init.d/u60-guard start
 sh /data/tailscale/start.sh
@@ -1365,7 +1367,7 @@ stage $TW
 check "$CASE: staged as v=2 (a program that did not exist)" '[ "$RC" = 0 ] && [ "$(txnv)" = 2 ]'
 run $TW
 check "$CASE: done, the new program runs at 8800" '[ "$(phase)" = done ] && [ "$(md5 "$LWB")" = "$LW_NEW" ] && [ "$(cat "$T/pids/luyaz-web")" = 8800 ] && [ ! -e "$LWB.test" ]'
-check "$CASE: the trial started like the init script, without supervise" "grep -qx 'nohup $LWB.test serve --bind 0.0.0.0:9090 --upstream http://127.0.0.1:9460 --password-file /data/zte-agent.env' '$T/setsid.log'"
+check "$CASE: the trial started like the init script, without supervise" "grep -qx 'nohup $LWB.test serve --bind 0.0.0.0:9090 --upstream http://127.0.0.1:9460 --password-file /data/luyaz/web.env' '$T/setsid.log'"
 check "$CASE: init stop (nothing to stop) for the trial, one start after promotion, test build gone" '[ "$(tr "\n" " " <"$T/lweb-initd.log")" = "stop start " ] && [ ! -s "$T/pids/luyaz-web.test" ]'
 check "$CASE: manifest line" "grep -q '\"comp\":\"lweb\",\"txn\":\"$TW\"' '$U60S_MANIFEST'"
 recover_newboot
@@ -1511,7 +1513,7 @@ d4_ready() { # the old layout as on the device before the move, everything that 
     rm -rf "$R/data/luyaz/ship"
     mkdir -p "$R/data/u60-ship/stage"
     cp "$RECOVER" "$R/data/u60-ship/u60-recover.sh"
-    CB=$R/data/plugins/zwrt-datad/zwrt-datad
+    CB=$R/data/luyaz/luyaz-core
     mkdir -p "${CB%/*}" "$R/data/luyaz/scripts" "$R/data/u60-ship/prev"
     echo "CORE /data/luyaz/ship/manifest.jsonl /tmp/luyaz-screen.log" >"$CB"
     echo "SENT /tmp/luyaz-screen.ctl /data/luyaz/scripts/luyaz-ship.sh /tmp/luyaz-screen.log" >"$R/data/luyaz/luyaz-sentinel"
@@ -1608,7 +1610,7 @@ mkdir -p "$R/data/luyaz/ship/stage/$TE"
 printf 'NEW-CORE /data/luyaz/scripts /data/luyaz/core/ops LUYAZ_CORE_BUILD_SELF_CONTAINED /data/luyaz/ship/manifest.jsonl\n' >"$R/data/luyaz/ship/stage/$TE/zwrt-datad"
 meta $TE datad "file=zwrt-datad $(md5 "$R/data/luyaz/ship/stage/$TE/zwrt-datad")"
 stage $TE
-check "$CASE: a core from before E2: refused" '[ "$RC" = 1 ] && grep -q "zwrt-datad 是 Luya-Z 改名 E2 之前的" "$T/out" && [ ! -s "$R/data/luyaz/ship/txn" ]'
+check "$CASE: a core from before E2: refused" '[ "$RC" = 1 ] && grep -q "luyaz-core 是 Luya-Z 改名 E2 之前的" "$T/out" && [ ! -s "$R/data/luyaz/ship/txn" ]'
 TE=20261016-110000-scripts
 mkdir -p "$R/data/luyaz/ship/stage/$TE"
 _ml=
@@ -1676,9 +1678,10 @@ stage $TE
 check "$CASE: the screen state not moved: refused" '[ "$RC" = 1 ] && grep -q "旧布局" "$T/out" && [ ! -s "$R/data/luyaz/ship/txn" ]'
 : >"$R/data/luyaz/screen/.migrated"
 mkdir -p "$R/data/u60d"
+rm -f "$R/data/luyaz/core/.migrated"
 stage $TE
 check "$CASE: /data/u60d without the core's .migrated: refused" '[ "$RC" = 1 ] && grep -q "旧布局" "$T/out" && [ ! -s "$R/data/luyaz/ship/txn" ]'
-rm -rf "$R/data/u60d"
+rm -rf "$R/data/u60d"; : >"$R/data/luyaz/core/.migrated"
 stage $TE
 check "$CASE: new layout: not refused for it" '! grep -q "旧布局" "$T/out"'
 teardown

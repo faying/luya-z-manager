@@ -59,13 +59,15 @@ MARKS='/data/luyaz/scripts /data/luyaz/ship/manifest.jsonl /tmp/luyaz-screen.log
 setup() {
     T=$(mktemp -d)
     R=$T/root
-    D=$R/data/plugins/zwrt-datad
-    LIVE=$D/zwrt-datad
-    mkdir -p "$T/bin" "$T/pids" "$T/tmp" "$D" "$R/data/zwrt-datad" "$R/data/luyaz/ship/stage" "$R/etc/init.d"
+    D=$R/data/luyaz
+    LIVE=$D/luyaz-core
+    mkdir -p "$T/bin" "$T/pids" "$T/tmp" "$D/core" "$R/data/luyaz/ship/stage" "$R/etc/init.d"
     : >"$R/data/luyaz/ship/.migrated"
+    # the new layout (the zwrt-datad one is refused since E3)
+    : >"$D/core/.migrated"
     echo 1000 >"$T/uptime"
     echo aaaa-1111 >"$T/boot_id"
-    echo 5555 >"$T/pids/zwrt-datad"
+    echo 5555 >"$T/pids/luyaz-core"
     echo 3131 >"$T/pids/luyaz-ui"
     : >"$T/logread"
     : >"$T/kill.log"
@@ -76,10 +78,8 @@ setup() {
     printf 'OLD-DATAD\n%s\n' "$MARKS" >"$LIVE"
     chmod 755 "$LIVE"
     OLD=$(md5 "$LIVE")
-    printf 'cool-old\n' >"$R/data/zwrt-datad/cooling.conf"
-    COOL_OLD=$(md5 "$R/data/zwrt-datad/cooling.conf")
     # hand-made neighbours that ship must never touch
-    for f in "$D/zwrt-datad.prev-cache-20260923" "$D/zwrt-datad.orig-backup" "$R/data/zte-agent" \
+    for f in "$D/luyaz-core.prev-cache-20260923" "$D/luyaz-core.orig-backup" "$R/data/zte-agent" \
         "$R/data/zte-agent.env" "$R/data/zte-agent.prev-esim-20260926" "$R/data/admin.prev-reset-20260926.tgz"; do
         echo "keep $f" >"$f"
     done
@@ -112,7 +112,7 @@ EOF
 echo "\$*" >>$T/kill.log
 [ "\$1" = -9 ] && shift
 for p in "\$@"; do
-    [ "\$p" = "\$(cat $T/pids/zwrt-datad.test 2>/dev/null)" ] && [ ! -f $T/unkillable ] && rm -f $T/pids/zwrt-datad.test
+    [ "\$p" = "\$(cat $T/pids/luyaz-core.test 2>/dev/null)" ] && [ ! -f $T/unkillable ] && rm -f $T/pids/luyaz-core.test
 done
 exit 0
 EOF
@@ -130,9 +130,9 @@ if [ -f $T/hang-initd-\$1 ]; then
 fi
 if [ "\$1" = start ]; then
     if [ -f $T/new-broken ] && grep -q NEW $LIVE; then exit 1; fi
-    echo 5555 >$T/pids/zwrt-datad
+    echo 5555 >$T/pids/luyaz-core
 fi
-[ "\$1" = stop ] && rm -f $T/pids/zwrt-datad
+[ "\$1" = stop ] && rm -f $T/pids/luyaz-core
 exit 0
 EOF
     cat >"$T/bin/date" <<'EOF'
@@ -142,7 +142,7 @@ EOF
     cat >"$T/bin/setsid" <<EOF
 #!/bin/sh
 echo "\$*" >>$T/setsid.log
-case "\$*" in *zwrt-datad.test\ *) [ -f $T/test-broken ] || echo 4242 >$T/pids/zwrt-datad.test ;; esac
+case "\$*" in *luyaz-core.test\ *) [ -f $T/test-broken ] || echo 4242 >$T/pids/luyaz-core.test ;; esac
 case "\$*" in *u60-ship.sh\ run\ *) [ -f $T/exec-broken ] || "\$@" ;; esac
 exit 0
 EOF
@@ -288,8 +288,10 @@ teardown
 setup
 upload
 rm "$R/data/luyaz/ship/stage/$TXN/zwrt-datad"
+# (the meta already in the live name: else it is "no file=luyaz-core")
+sed -i 's/^file=zwrt-datad /file=luyaz-core /' "$R/data/luyaz/ship/stage/$TXN/meta"
 stage
-refused "product missing" "暂存目录里没有 zwrt-datad"
+refused "product missing" "暂存目录里没有 luyaz-core"
 nolog
 teardown
 
@@ -297,7 +299,7 @@ setup
 upload
 sed -i '/^file=/d' "$R/data/luyaz/ship/stage/$TXN/meta"
 stage
-refused "file= missing" "没有 file=zwrt-datad"
+refused "file= missing" "没有 file=luyaz-core"
 nolog
 teardown
 
@@ -359,14 +361,6 @@ for sp in /etc/passwd "$R/data/zwrt-datad/../luyaz/ship/txn" "$R/data/scenario/l
     teardown
 done
 
-setup
-rm "$R/data/zwrt-datad/cooling.conf"
-mkdir "$R/data/zwrt-datad/cooling.conf"
-upload
-stage
-refused "state file is a directory" "不是普通文件"
-nolog
-teardown
 
 setup
 echo 100000 >"$T/free-kb"
@@ -386,7 +380,7 @@ nolog
 teardown
 
 setup
-echo 4242 >"$T/pids/zwrt-datad.test"
+echo 4242 >"$T/pids/luyaz-core.test"
 upload
 stage
 refused "test build still running" "还在跑"
@@ -482,23 +476,20 @@ check "$CASE: staged" '[ "$RC" = 0 ] && [ "$(phase)" = staged ] && grep -q "已�
 check "$CASE: side file in place, upload copy gone" '[ "$(md5 "$LIVE.test")" = "$NEW" ] && [ -x "$LIVE.test" ] && [ ! -e "$R/data/luyaz/ship/stage/$TXN/zwrt-datad" ]'
 check "$CASE: staging touches nothing live" '[ "$(md5 "$LIVE")" = "$OLD" ] && [ ! -s "$T/initd.log" ]'
 check "$CASE: boot id and md5s logged" "grep -qx 'boot_id=aaaa-1111' '$R/data/luyaz/ship/txn' && grep -qx 'file=$LIVE|$OLD|$NEW' '$R/data/luyaz/ship/txn'"
-# the test build writes its state during the trial
-hook_at 1020 "echo cool-by-test >$R/data/zwrt-datad/cooling.conf"
 run
 check "$CASE: run exit 0, done" '[ "$RC" = 0 ] && [ "$(phase)" = done ]'
 check "$CASE: live is the new build" '[ "$(md5 "$LIVE")" = "$NEW" ] && [ -x "$LIVE" ]'
 check "$CASE: previous version kept" '[ "$(md5 "$LIVE.prev-$TXN")" = "$OLD" ]'
 check "$CASE: side file gone" '[ ! -e "$LIVE.test" ]'
-check "$CASE: state snapshot kept" '[ "$(md5 "$R/data/zwrt-datad/cooling.conf.prev-$TXN")" = "$COOL_OLD" ]'
-check "$CASE: state lines (present + absent)" "grep -qx 'state=$R/data/zwrt-datad/cooling.conf|$COOL_OLD' '$R/data/luyaz/ship/txn' && grep -qx 'state=$R/data/zwrt-datad/neighbor.json|-' '$R/data/luyaz/ship/txn'"
+check "$CASE: no state lines (the core has none since 10-06)" "! grep -q '^state' '$R/data/luyaz/ship/txn'"
 check "$CASE: stop for the trial, start after promotion" '[ "$(tr "\n" " " <"$T/initd.log")" = "stop start " ]'
-check "$CASE: test build started without supervise, then killed" "grep -q 'zwrt-datad.test -i 1000' '$T/setsid.log' && ! grep -q supervise '$T/setsid.log' && grep -q 4242 '$T/kill.log'"
+check "$CASE: test build started without supervise, then killed" "grep -q 'luyaz-core.test -i 1000' '$T/setsid.log' && ! grep -q supervise '$T/setsid.log' && grep -q 4242 '$T/kill.log'"
 check "$CASE: trial ran the whole window" "logged '试跑通过（60s）'"
 check "$CASE: manifest one line" '[ "$(mlines)" = 1 ]'
 check "$CASE: manifest fields" "grep -q '\"kind\":\"ship\",\"comp\":\"datad\",\"txn\":\"$TXN\",\"commit\":\"7e8d223\",\"format\":1,\"mac_time\":1790000000,\"boot_id\":\"aaaa-1111\"' '$U60S_MANIFEST' && grep -q '\"path\":\"$LIVE\",\"md5\":\"$NEW\",\"prev\":\"$LIVE.prev-$TXN\"' '$U60S_MANIFEST'"
 check "$CASE: stage dir removed" '[ ! -e "$R/data/luyaz/ship/stage/$TXN" ]'
 check "$CASE: heartbeat names the transaction" "grep -q ' $TXN done\$' '$T/tmp/heartbeat'"
-check "$CASE: hand-made neighbours untouched" '[ "$(cat "$D/zwrt-datad.prev-cache-20260923")" = "keep $D/zwrt-datad.prev-cache-20260923" ] && [ -f "$D/zwrt-datad.orig-backup" ] && [ -f "$R/data/zte-agent.prev-esim-20260926" ]'
+check "$CASE: hand-made neighbours untouched" '[ "$(cat "$D/luyaz-core.prev-cache-20260923")" = "keep $D/luyaz-core.prev-cache-20260923" ] && [ -f "$D/luyaz-core.orig-backup" ] && [ -f "$R/data/zte-agent.prev-esim-20260926" ]'
 sh "$SHIP" status >"$T/st"
 check "$CASE: status: done, observing" "grep -qx 'phase=done' '$T/st' && grep -q '^observe_left=[1-9][0-9][0-9]\$' '$T/st'"
 echo bbbb-2222 >"$T/boot_id"
@@ -529,13 +520,12 @@ setup
 CASE="trial crash"
 upload
 stage
-hook_at 1030 "echo cool-by-test >$R/data/zwrt-datad/cooling.conf; echo n >$R/data/zwrt-datad/neighbor.json; rm -f $T/pids/zwrt-datad.test"
+hook_at 1030 "rm -f $T/pids/luyaz-core.test"
 run
 check "$CASE: exit 1, aborted" '[ "$RC" = 1 ] && [ "$(phase)" = aborted ]'
 check "$CASE: reason" "grep -q '^reason=试跑不过：测试版崩溃' '$R/data/luyaz/ship/txn'"
 check "$CASE: live is the old build, no .prev" '[ "$(md5 "$LIVE")" = "$OLD" ] && [ ! -e "$LIVE.prev-$TXN" ]'
-check "$CASE: state restored, new file removed" '[ "$(md5 "$R/data/zwrt-datad/cooling.conf")" = "$COOL_OLD" ] && [ ! -e "$R/data/zwrt-datad/neighbor.json" ]'
-check "$CASE: production back" '[ "$(tr "\n" " " <"$T/initd.log")" = "stop start " ] && [ -f "$T/pids/zwrt-datad" ]'
+check "$CASE: production back" '[ "$(tr "\n" " " <"$T/initd.log")" = "stop start " ] && [ -f "$T/pids/luyaz-core" ]'
 check "$CASE: manifest untouched" '[ "$(mlines)" = 0 ]'
 check "$CASE: side file removed" '[ ! -e "$LIVE.test" ]'
 teardown
@@ -578,16 +568,11 @@ setup
 CASE="check fails"
 upload
 stage
-hook_at 1020 "echo cool-by-test >$R/data/zwrt-datad/cooling.conf"
-cat >>"$T/hook" <<EOF
-[ \$(cut -d. -f1 $T/uptime) -ge 1100 ] && [ ! -f $T/frozen ] && { touch $T/frozen; echo cool-by-new >$R/data/zwrt-datad/cooling.conf; }
-:
-EOF
+hook_at 1100 "[ ! -f $T/frozen ] && touch $T/frozen"
 run
 check "$CASE: exit 1, rolled back" '[ "$RC" = 1 ] && [ "$(phase)" = rolledback ]'
 check "$CASE: reason" "grep -q '^reason=转正后检查不过：屏幕数据停了' '$R/data/luyaz/ship/txn'"
 check "$CASE: live is the old build again" '[ "$(md5 "$LIVE")" = "$OLD" ]'
-check "$CASE: state restored" '[ "$(md5 "$R/data/zwrt-datad/cooling.conf")" = "$COOL_OLD" ]'
 check "$CASE: stop, start new, stop, start old" '[ "$(tr "\n" " " <"$T/initd.log")" = "stop start stop start " ]'
 check "$CASE: manifest untouched" '[ "$(mlines)" = 0 ]'
 teardown
@@ -599,7 +584,7 @@ upload
 stage
 run
 check "$CASE: rolled back" '[ "$RC" = 1 ] && [ "$(phase)" = rolledback ] && grep -q "^reason=新版起不来" "$R/data/luyaz/ship/txn"'
-check "$CASE: live old and running" '[ "$(md5 "$LIVE")" = "$OLD" ] && [ -f "$T/pids/zwrt-datad" ]'
+check "$CASE: live old and running" '[ "$(md5 "$LIVE")" = "$OLD" ] && [ -f "$T/pids/luyaz-core" ]'
 teardown
 
 # a script error in the executor (bad arithmetic) still rolls back
@@ -652,27 +637,25 @@ setup
 CASE="keep 3 ship .prev"
 for d in 01 02 03 04; do
     echo "old $d" >"$LIVE.prev-202609${d}-000000-datad"
-    echo "cool $d" >"$R/data/zwrt-datad/cooling.conf.prev-202609${d}-000000-datad"
 done
 upload
 stage
 run
 check "$CASE: done" '[ "$(phase)" = done ]'
-check "$CASE: three newest program .prev left" '[ "$(ls "$D" | grep -c "^zwrt-datad\.prev-2026")" = 3 ] && [ -f "$LIVE.prev-20260903-000000-datad" ] && [ -f "$LIVE.prev-20260904-000000-datad" ] && [ -f "$LIVE.prev-$TXN" ]'
-check "$CASE: three newest state .prev left" '[ "$(ls "$R/data/zwrt-datad" | grep -c "^cooling\.conf\.prev-")" = 3 ] && [ ! -e "$R/data/zwrt-datad/cooling.conf.prev-20260902-000000-datad" ]'
-check "$CASE: hand-made backups untouched" '[ -f "$D/zwrt-datad.prev-cache-20260923" ] && [ -f "$D/zwrt-datad.orig-backup" ] && [ -f "$R/data/zte-agent.prev-esim-20260926" ] && [ -f "$R/data/admin.prev-reset-20260926.tgz" ] && [ -f "$R/data/zte-agent.env" ]'
-check "$CASE: pruning logged" "logged '删掉较早的上一版 .*zwrt-datad.prev-20260901-000000-datad'"
+check "$CASE: three newest program .prev left" '[ "$(ls "$D" | grep -c "^luyaz-core\.prev-2026")" = 3 ] && [ -f "$LIVE.prev-20260903-000000-datad" ] && [ -f "$LIVE.prev-20260904-000000-datad" ] && [ -f "$LIVE.prev-$TXN" ]'
+check "$CASE: hand-made backups untouched" '[ -f "$D/luyaz-core.prev-cache-20260923" ] && [ -f "$D/luyaz-core.orig-backup" ] && [ -f "$R/data/zte-agent.prev-esim-20260926" ] && [ -f "$R/data/admin.prev-reset-20260926.tgz" ] && [ -f "$R/data/zte-agent.env" ]'
+check "$CASE: pruning logged" "logged '删掉较早的上一版 .*luyaz-core.prev-20260901-000000-datad'"
 teardown
 
 # ── power cuts at every point, then the next boot ───────────────────────────
-# crash <point>: stage, run with U60S_CRASH_AT; the test build rewrites the
-# state during the trial; a check failure is arranged for rollback:* points.
+# crash <point>: stage, run with U60S_CRASH_AT; a check failure is arranged for
+# rollback:* points. (No state files: the core has none since 10-06; the state
+# snapshot/restore is covered by `selftest` below and scripts/test/u60-recover.)
 crash() {
     setup
     CASE="power cut at $1"
     upload
     stage
-    hook_at 1020 "[ -f $R/data/zwrt-datad/cooling.conf.prev-$TXN ] && echo cool-by-test >$R/data/zwrt-datad/cooling.conf"
     case "$1" in rollback:*)
         cat >>"$T/hook" <<EOF
 [ \$(cut -d. -f1 $T/uptime) -ge 1100 ] && touch $T/frozen
@@ -682,8 +665,6 @@ EOF
     esac
     U60S_CRASH_AT=$1 run
     check "$CASE: executor died there" '[ "$RC" = 137 ]'
-    # the test build had written its state before the power went
-    case "$1" in trial:*) [ -f "$R/data/zwrt-datad/cooling.conf.prev-$TXN" ] && echo cool-by-test >"$R/data/zwrt-datad/cooling.conf" ;; esac
     check "$CASE: live is whole (old or new)" '[ "$(md5 "$LIVE")" = "$OLD" ] || [ "$(md5 "$LIVE")" = "$NEW" ]'
     recover_newboot
     check "$CASE: recover exit 0" '[ "$RRC" = 0 ]'
@@ -706,13 +687,11 @@ for p in trial:begin trial:state trial:running; do
     crash $p
     after_boot aborted old
     check "$CASE: reason" "grep -q '^reason=开机时已中止' '$R/data/luyaz/ship/txn'"
-    check "$CASE: state back to the one before the trial" '[ "$(md5 "$R/data/zwrt-datad/cooling.conf")" = "$COOL_OLD" ]'
     teardown
 done
-for p in promote:begin promote:prev-copied:zwrt-datad promote:prev-synced:zwrt-datad promote:moved:zwrt-datad check:begin rollback:begin rollback:files:zwrt-datad rollback:states:cooling.conf; do
+for p in promote:begin promote:prev-copied:luyaz-core promote:prev-synced:luyaz-core promote:moved:luyaz-core check:begin rollback:begin rollback:files:luyaz-core; do
     crash $p
     after_boot rolledback old
-    check "$CASE: state back to the old one" '[ "$(md5 "$R/data/zwrt-datad/cooling.conf")" = "$COOL_OLD" ]'
     check "$CASE: reason" "grep -q '^reason=开机时已退回' '$R/data/luyaz/ship/txn'"
     check "$CASE: manifest untouched" '[ "$(mlines)" = 0 ]'
     teardown
@@ -732,7 +711,7 @@ _txn0=$TXN TXN=20261016-120000-core
 crash trial:running
 after_boot aborted old
 teardown
-crash promote:moved:zwrt-datad
+crash promote:moved:luyaz-core
 after_boot rolledback old
 check "$CASE (core): reason" "grep -q '^reason=开机时已退回' '$R/data/luyaz/ship/txn' && grep -qx 'comp=core' '$R/data/luyaz/ship/txn'"
 teardown
@@ -774,11 +753,10 @@ setup
 CASE="recover-live after kill -9 in check"
 upload
 stage
-hook_at 1020 "[ -f $R/data/zwrt-datad/cooling.conf.prev-$TXN ] && echo cool-by-test >$R/data/zwrt-datad/cooling.conf"
 U60S_CRASH_AT=check:begin run
 : >"$T/initd.log"
 sh "$SHIP" recover-live >"$T/out" 2>&1
-check "$CASE: rolled back" '[ "$(phase)" = rolledback ] && [ "$(md5 "$LIVE")" = "$OLD" ] && [ "$(md5 "$R/data/zwrt-datad/cooling.conf")" = "$COOL_OLD" ]'
+check "$CASE: rolled back" '[ "$(phase)" = rolledback ] && [ "$(md5 "$LIVE")" = "$OLD" ]'
 check "$CASE: service restarted on the old build" '[ "$(tr "\n" " " <"$T/initd.log")" = "stop start " ]'
 teardown
 
@@ -786,11 +764,10 @@ setup
 CASE="recover-live after kill -9 in trial"
 upload
 stage
-hook_at 1020 "[ -f $R/data/zwrt-datad/cooling.conf.prev-$TXN ] && echo cool-by-test >$R/data/zwrt-datad/cooling.conf"
 U60S_CRASH_AT=trial:running run
 sh "$SHIP" recover-live >"$T/out" 2>&1
 check "$CASE: aborted" '[ "$(phase)" = aborted ] && [ "$(md5 "$LIVE")" = "$OLD" ]'
-check "$CASE: test build killed, state restored, production up" "grep -q 4242 '$T/kill.log' && [ ! -f '$T/pids/zwrt-datad.test' ] && [ \"\$(md5 '$R/data/zwrt-datad/cooling.conf')\" = '$COOL_OLD' ] && [ -f '$T/pids/zwrt-datad' ]"
+check "$CASE: test build killed, production up" "grep -q 4242 '$T/kill.log' && [ ! -f '$T/pids/luyaz-core.test' ] && [ -f '$T/pids/luyaz-core' ]"
 teardown
 
 setup
@@ -841,12 +818,12 @@ printf '#!/bin/sh\n/bin/sleep 0.05\n' >"$T/bin/sleep"
 sh "$SHIP" run "$TXN" >"$T/out" 2>&1 &
 W=$!
 _i=0
-while [ ! -s "$T/pids/zwrt-datad.test" ] && [ $_i -lt 50 ]; do "$_real_sleep" 0.1; _i=$((_i + 1)); done
+while [ ! -s "$T/pids/luyaz-core.test" ] && [ $_i -lt 50 ]; do "$_real_sleep" 0.1; _i=$((_i + 1)); done
 "$_real_sleep" 0.3
 sh "$SHIP" abort >"$T/aout" 2>&1
 wait $W
 check "$CASE: executor finished the trial by itself" '[ "$(phase)" = aborted ] && grep -q "^reason=执行器被停止" "$R/data/luyaz/ship/txn"'
-check "$CASE: live old, production back" '[ "$(md5 "$LIVE")" = "$OLD" ] && [ -f "$T/pids/zwrt-datad" ] && [ ! -f "$T/pids/zwrt-datad.test" ]'
+check "$CASE: live old, production back" '[ "$(md5 "$LIVE")" = "$OLD" ] && [ -f "$T/pids/luyaz-core" ] && [ ! -f "$T/pids/luyaz-core.test" ]'
 teardown
 
 setup
@@ -861,10 +838,10 @@ teardown
 setup
 CASE="datad-trial during a transaction"
 printf 'v=1\ntxn=%s\ncomp=datad\nphase=trial\nend=1\n' "$TXN" >"$R/data/luyaz/ship/txn"
-printf '#!/bin/sh\n' >"$T/zwrt-datad.test"
-chmod +x "$T/zwrt-datad.test"
+printf '#!/bin/sh\n' >"$T/luyaz-core.test"
+chmod +x "$T/luyaz-core.test"
 printf '#!/bin/sh /etc/rc.common\n' >"$T/zwrt-datad.init"
-DT_TEST_BIN=$T/zwrt-datad.test DT_LOG=$T/trial.log sh "$SCRIPTS/datad-trial.sh" launch >"$T/out" 2>&1
+DT_TEST_BIN=$T/luyaz-core.test DT_LOG=$T/trial.log sh "$SCRIPTS/datad-trial.sh" launch >"$T/out" 2>&1
 RC=$?
 check "$CASE: launch refused" '[ $RC = 1 ] && grep -q "拒绝启动" "$T/out" && grep -q "u60-ship 事务 $TXN（datad）还在进行" "$T/out"'
 check "$CASE: production untouched" '[ ! -s "$T/initd.log" ] && [ ! -s "$T/setsid.log" ]'
@@ -906,7 +883,7 @@ dcheck() {
     hook_at 1030 "[ -f $T/once ] || { touch $T/once; $_a; }"
     run
     check "$CASE: aborted" '[ "$RC" = 1 ] && [ "$(phase)" = aborted ] && grep -q "^reason=试跑不过：$_r4" "$R/data/luyaz/ship/txn"'
-    check "$CASE: live old, production back" '[ "$(md5 "$LIVE")" = "$OLD" ] && [ -f "$T/pids/zwrt-datad" ] && [ "$(mlines)" = 0 ]'
+    check "$CASE: live old, production back" '[ "$(md5 "$LIVE")" = "$OLD" ] && [ -f "$T/pids/luyaz-core" ] && [ "$(mlines)" = 0 ]'
     teardown
 
     setup
@@ -920,11 +897,11 @@ grep -qx phase=check $R/data/luyaz/ship/txn && [ ! -f $T/once ] && { touch $T/on
 EOF
     run
     check "$CASE: rolled back" '[ "$RC" = 1 ] && [ "$(phase)" = rolledback ] && grep -q "^reason=转正后检查不过：$_r5" "$R/data/luyaz/ship/txn"'
-    check "$CASE: live old, production back" '[ "$(md5 "$LIVE")" = "$OLD" ] && [ -f "$T/pids/zwrt-datad" ] && [ "$(mlines)" = 0 ]'
+    check "$CASE: live old, production back" '[ "$(md5 "$LIVE")" = "$OLD" ] && [ -f "$T/pids/luyaz-core" ] && [ "$(mlines)" = 0 ]'
     teardown
 }
 dcheck "ts stops" 'touch $T/frozen' 'touch $T/frozen' "屏幕数据停了" "屏幕数据停了"
-dcheck "process gone" 'rm -f $T/pids/zwrt-datad.test' 'rm -f $T/pids/zwrt-datad' "测试版崩溃" "正式版消失"
+dcheck "process gone" 'rm -f $T/pids/luyaz-core.test' 'rm -f $T/pids/luyaz-core' "测试版崩溃" "正式版消失"
 dcheck "u60-uid gives up" 'echo u60-uid: giving up: 2 launches >>$T/logread' 'echo u60-uid: giving up: 2 launches >>$T/logread' "界面异常（u60-uid" "界面异常（u60-uid"
 dcheck "screen UI gone" 'rm -f $T/pids/luyaz-ui' 'rm -f $T/pids/luyaz-ui' "界面异常（luyaz-ui 进程消失）" "界面异常（luyaz-ui 进程消失）"
 
@@ -940,13 +917,13 @@ teardown
 
 # ── record: files the manifest only records (T6), and doctor agreeing ─────
 undocenv() {
-    unset DOC_MANIFEST DOC_SHIP_TXN DOC_SHIP_HB DOC_MD5_CACHE DOC_TS_DIR DOC_TS_TUNING DOC_INITD DOC_RC DOC_BOOT_ID_FILE DOC_UPTIME DOC_DEVUI_DIR
+    unset DOC_MANIFEST DOC_SHIP_TXN DOC_SHIP_HB DOC_MD5_CACHE DOC_TS_DIR DOC_TS_TUNING DOC_INITD DOC_RC DOC_BOOT_ID_FILE DOC_UPTIME DOC_DEVUI_DIR DOC_ROOT
 }
 docenv() { # doctor.sh reading this sandbox
     export DOC_MANIFEST=$U60S_MANIFEST DOC_SHIP_TXN=$R/data/luyaz/ship/txn DOC_SHIP_HB=$T/tmp/heartbeat \
         DOC_MD5_CACHE=$T/md5cache DOC_TS_DIR=$R/data/tailscale DOC_TS_TUNING=$R/data/tailscale/tuning.env \
         DOC_INITD=$R/etc/init.d DOC_RC=$R/etc/rc.local DOC_BOOT_ID_FILE=$T/boot_id DOC_UPTIME=$T/uptime \
-        DOC_DEVUI_DIR=$R/data/plugins/u60pro-devui
+        DOC_DEVUI_DIR=$R/data/plugins/u60pro-devui DOC_ROOT=$R
 }
 setup
 CASE="record"
@@ -1003,12 +980,9 @@ setup
 CASE="retire after the 10e move"
 printf '%s\n' '{"v":1,"kind":"record","name":"init.d/zwrt-datad","path":"'"$R"'/etc/init.d/zwrt-datad","md5":"4ea6f56a4ea6f56a4ea6f56a4ea6f56a"}' >>"$U60S_MANIFEST"
 docenv
-sh "$SHIP" retire 1790000000 >"$T/out" 2>&1
-check "$CASE: old layout keeps the zwrt-datad record" 'tail -n 1 "$U60S_MANIFEST" | grep -q "\"kind\":\"retire\"" && ! tail -n 1 "$U60S_MANIFEST" | grep -q "init.d/zwrt-datad"'
-mkdir -p "$R/data/luyaz/core" && : >"$R/data/luyaz/core/.migrated"
 sh "$SHIP" retire 1790000001 >"$T/out" 2>&1
 RC=$?
-check "$CASE: new layout retires it" '[ $RC = 0 ] && tail -n 1 "$U60S_MANIFEST" | grep -q "init.d/zwrt-datad"'
+check "$CASE: retires it" '[ $RC = 0 ] && tail -n 1 "$U60S_MANIFEST" | grep -q "init.d/zwrt-datad"'
 undocenv
 teardown
 
@@ -1033,7 +1007,7 @@ upload $T2 "note=requires-ignored"; sed -i 's/^commit=.*/commit=abcdef1/' "$R/da
 check "$CASE: two ships done, the second noted" '[ "$(phase)" = done ] && [ "$(md5 "$LIVE")" = "$B" ] && tail -n 1 "$U60S_MANIFEST" | grep -q "\"state\":\[.*\],\"note\":\"requires-ignored\"}$"'
 sh "$SHIP" prepare-rollback datad $T3 1790000100 >"$T/out" 2>&1
 RC=$?
-check "$CASE: prepared from the last ship's .prev" "[ \$RC = 0 ] && [ \"\$(md5 '$R/data/luyaz/ship/stage/$T3/zwrt-datad')\" = '$A' ] && grep -qx 'commit=7e8d223' '$R/data/luyaz/ship/stage/$T3/meta' && grep -qx 'note=rollback' '$R/data/luyaz/ship/stage/$T3/meta'"
+check "$CASE: prepared from the last ship's .prev" "[ \$RC = 0 ] && [ \"\$(md5 '$R/data/luyaz/ship/stage/$T3/luyaz-core')\" = '$A' ] && grep -qx 'commit=7e8d223' '$R/data/luyaz/ship/stage/$T3/meta' && grep -qx 'note=rollback' '$R/data/luyaz/ship/stage/$T3/meta'"
 stage $T3
 run $T3
 check "$CASE: an ordinary transaction back to the first build" '[ "$(phase)" = done ] && [ "$(md5 "$LIVE")" = "$A" ] && tail -n 1 "$U60S_MANIFEST" | grep -q "\"commit\":\"7e8d223\".*\"note\":\"rollback\"}$"'
@@ -1043,7 +1017,7 @@ setup
 CASE="rollback after one ship"
 upload; stage; run
 sh "$SHIP" prepare-rollback datad 20260930-140000-datad 1790000100 >"$T/out" 2>&1
-check "$CASE: the hand-installed version, commit unknown" "[ \"\$(md5 '$R/data/luyaz/ship/stage/20260930-140000-datad/zwrt-datad')\" = '$OLD' ] && grep -qx 'commit=0000000' '$R/data/luyaz/ship/stage/20260930-140000-datad/meta'"
+check "$CASE: the hand-installed version, commit unknown" "[ \"\$(md5 '$R/data/luyaz/ship/stage/20260930-140000-datad/luyaz-core')\" = '$OLD' ] && grep -qx 'commit=0000000' '$R/data/luyaz/ship/stage/20260930-140000-datad/meta'"
 rm -f "$LIVE.prev-$TXN"
 sh "$SHIP" prepare-rollback datad 20260930-150000-datad 1790000100 >"$T/out" 2>&1
 RC=$?
@@ -1066,57 +1040,32 @@ stage
 refused "bad note" "note “please” 看不懂"
 teardown
 
-# ── 10e: the core's new layout (/data/luyaz/core/.migrated) ────────────────
-# newlayout: the move done (as the retired luyaz-migrate.sh run left it); the stand-ins
-# now play luyaz-core at /data/luyaz/luyaz-core
-newlayout() {
-    mkdir -p "$R/data/luyaz/core"
-    : >"$R/data/luyaz/core/.migrated"
-    _nl=$R/data/luyaz/luyaz-core
-    cp -p "$LIVE" "$_nl"
-    for f in initd kill setsid; do
-        sed -i "s|$LIVE|$_nl|g; s|pids/zwrt-datad|pids/luyaz-core|g; s|zwrt-datad\.test|luyaz-core.test|g" "$T/bin/$f"
-    done
-    mv "$T/pids/zwrt-datad" "$T/pids/luyaz-core"
-    LIVE=$_nl
-    OLD=$(md5 "$LIVE")
-}
+# ── 10e: the core's layout (/data/luyaz/core/.migrated, set up by setup) ─────
 setup
 CASE="new layout: ship core"
-newlayout
 TC=20261014-120000-core
 upload $TC
 stage $TC
 check "$CASE: staged as core (D4c), the artifact taken as luyaz-core" '[ "$RC" = 0 ] && grep -q "已暂存 $TC（core" "$T/out" && grep -q "^file=luyaz-core " "$R/data/luyaz/ship/stage/$TC/meta"'
 run $TC
-check "$CASE: done, /data/luyaz/luyaz-core is the new build, the old path untouched" '[ "$(phase)" = done ] && [ "$(md5 "$LIVE")" = "$NEW" ] && [ "$(head -n 1 "$R/data/plugins/zwrt-datad/zwrt-datad")" = OLD-DATAD ]'
+check "$CASE: done, /data/luyaz/luyaz-core is the new build" '[ "$(phase)" = done ] && [ "$(md5 "$LIVE")" = "$NEW" ]'
 check "$CASE: the trial ran as luyaz-core.test from /data/luyaz" 'grep -q "/data/luyaz/luyaz-core.test" "$T/setsid.log"'
 check "$CASE: manifest says comp core, path /data/luyaz/luyaz-core" "tail -n 1 '$U60S_MANIFEST' | grep -q '\"comp\":\"core\".*\"path\":\"$LIVE\"'"
-teardown
-
-setup
-newlayout
-echo 6666 >"$T/pids/zwrt-datad"
-upload 20261014-121000-datad
-stage 20261014-121000-datad
-refused "new layout, a stray zwrt-datad running" "另一个名字的核心 zwrt-datad 在跑"
 teardown
 
 setup
 echo 6666 >"$T/pids/luyaz-core.test"
 upload
 stage
-refused "old layout, a luyaz-core.test running" "测试版 luyaz-core.test 还在跑"
+refused "a luyaz-core.test running" "测试版 luyaz-core.test 还在跑"
 teardown
 
 setup
 CASE="new layout: rollback floor"
-T1=20260930-120000-datad
-upload $T1; stage $T1; run $T1
-newlayout
+printf '%s\n' '{"v":1,"kind":"ship","comp":"datad","txn":"20260930-120000-datad","commit":"7e8d223","format":1,"files":[{"path":"'"$R"'/data/plugins/zwrt-datad/zwrt-datad","md5":"'"$OLD"'","prev":"'"$R"'/data/plugins/zwrt-datad/zwrt-datad.prev-20260930-120000-datad"}],"state":[]}' >>"$U60S_MANIFEST"
 sh "$SHIP" prepare-rollback datad 20261014-130000-datad 1790000100 >"$T/out" 2>&1
 RC=$?
-check "$CASE: the last ship was before the move: refused, says no way back" '[ $RC = 1 ] && grep -q "不能退回旧布局" "$T/out" && [ ! -e "$R/data/luyaz/ship/stage/20261014-130000-datad" ]'
+check "$CASE: the last ship was to the old path: refused, says no way back" '[ $RC = 1 ] && grep -q "不能退回旧布局" "$T/out" && [ ! -e "$R/data/luyaz/ship/stage/20261014-130000-datad" ]'
 T2=20261014-140000-datad
 upload $T2; stage $T2; run $T2; B=$NEW
 T3=20261014-150000-datad
@@ -1141,11 +1090,11 @@ check "$CASE: done; the manifest says core" '[ "$(phase)" = done ] && [ "$(md5 "
 check "$CASE: the previous version kept as .prev-<txn>-core" '[ "$(md5 "$LIVE.prev-$T2")" = "$A" ]'
 sh "$SHIP" prepare-rollback core 20261016-130000-core 1790000100 >"$T/out" 2>&1
 RC=$?
-check "$CASE: rollback as core finds the core line, back to the datad-era build" "[ \$RC = 0 ] && [ \"\$(md5 '$R/data/luyaz/ship/stage/20261016-130000-core/zwrt-datad')\" = '$A' ]"
+check "$CASE: rollback as core finds the core line, back to the datad-era build" "[ \$RC = 0 ] && [ \"\$(md5 '$R/data/luyaz/ship/stage/20261016-130000-core/luyaz-core')\" = '$A' ]"
 rm -rf "$R/data/luyaz/ship/stage/20261016-130000-core"
 sh "$SHIP" prepare-rollback datad 20261016-140000-datad 1790000100 >"$T/out" 2>&1
 RC=$?
-check "$CASE: as datad (an older tools/u60) the same target" "[ \$RC = 0 ] && [ \"\$(md5 '$R/data/luyaz/ship/stage/20261016-140000-datad/zwrt-datad')\" = '$A' ]"
+check "$CASE: as datad (an older tools/u60) the same target" "[ \$RC = 0 ] && [ \"\$(md5 '$R/data/luyaz/ship/stage/20261016-140000-datad/luyaz-core')\" = '$A' ]"
 check "$CASE: the executor carries its D4c line (tools/u60 probes it)" "grep -qx CORE_COMP=core '$SHIP'"
 teardown
 

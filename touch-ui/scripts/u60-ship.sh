@@ -16,13 +16,13 @@
 # Every 10 s it checks; the first failure aborts the trial:
 #   1. screen data stopped: /v2/state's live block (observed_at) has not moved for 30 s
 #      (a failed or timed-out fetch counts as "not changed")
-#   2. test build crashed: `pidof zwrt-datad.test` is empty
+#   2. test build crashed: `pidof luyaz-core.test` is empty
 #   3. screen trouble: u60-uid logged a give-up / vendor-UI hand-over / an
 #      unrequested u60pro-devui exit (/tmp/luyaz-screen.log; the device has no
 #      logd, so logread is empty), or u60pro-devui is gone
 #   (zte-agent's netwatch counter was a fourth check; gone with the agent,
 #   8d-2c: u60d writes no such counter.)
-# Abort: kill the test build, `/etc/init.d/zwrt-datad start`, reason into the
+# Abort: kill the test build, `/etc/init.d/luyaz-core start`, reason into the
 # log. Production counts as back only when its /v2/state has a live block. If
 # the test build survives kill -9, production is NOT started (both would want
 # 9460): loud log line, exit non-0. An unexpected watcher exit (script error,
@@ -45,7 +45,7 @@
 
 ENTRY=${U60S_ENTRY:-u60-ship}
 
-INITD_DATAD=${DT_INITD:-/etc/init.d/zwrt-datad}
+INITD_DATAD=${DT_INITD:-/etc/init.d/luyaz-core}
 RC=${DT_RC:-/etc/rc.local}
 LOG=${DT_LOG:-/data/luyaz/scripts/datad-trial.log}
 PIDFILE=${DT_PIDFILE:-/tmp/datad-trial.pid}
@@ -65,11 +65,11 @@ DATE=${DT_DATE:-date}
 SETSID=${DT_SETSID:-setsid}
 SSD=${DT_SSD:-start-stop-daemon}
 SH=${DT_SH:-/bin/sh}
-TEST_BIN=${DT_TEST_BIN:-/data/plugins/zwrt-datad/zwrt-datad.test}
+TEST_BIN=${DT_TEST_BIN:-/data/luyaz/luyaz-core.test}
 TEST_LOG=${DT_TEST_LOG:-/data/luyaz/scripts/datad-trial.test.log}
 
-TEST_NAME=${DT_TEST_NAME:-zwrt-datad.test}
-PROD_NAME=${DT_PROD_NAME:-zwrt-datad}
+TEST_NAME=${DT_TEST_NAME:-luyaz-core.test}
+PROD_NAME=${DT_PROD_NAME:-luyaz-core}
 UI_NAME=${DT_UI_NAME:-luyaz-ui}
 # Old manual flow (start.sh copied to start.test.sh): still killed on
 # restore so a leftover wrapper cannot relaunch the test build. launch does
@@ -78,16 +78,14 @@ WRAPPER=${DT_WRAPPER:-start.test.sh}
 
 # What /etc/init.d/luyaz-core's start_service runs.
 # scripts/test/datad-trial checks these against scripts/luyaz-core.init.
-# (the token: luyaz-core.init's choice, Luya-Z rename D2; the same two lines since E3)
+# (the token: luyaz-core.init's, Luya-Z rename D2; the old /data/plugins/zwrt-datad one is gone)
 _tok=/data/luyaz/core/auth.token
-[ ! -s "$_tok" ] && [ -s /data/plugins/zwrt-datad/auth.token ] && _tok=/data/plugins/zwrt-datad/auth.token
 LAUNCH_ARGS="-i 1000 --lan-bind 0.0.0.0 --lan-port 9461 --auth-token-file $_tok"
 # (LUYAZ_ names only since the Luya-Z rename D3 clean-up, see luyaz-core.init)
 LAUNCH_ENV="LUYAZ_UBUS=auto"
 # Auto revert (E4 D30): the init script turns it on while this file exists;
 # looked at when launching (the file may come later), not when sourced.
-if [ -d /data/luyaz/core/ops ]; then ROLLBACK_FLAG=${DT_ROLLBACK_FLAG:-/data/luyaz/core/ops/rollback-on}
-else ROLLBACK_FLAG=${DT_ROLLBACK_FLAG:-/data/u60-ops/rollback-on}; fi
+ROLLBACK_FLAG=${DT_ROLLBACK_FLAG:-/data/luyaz/core/ops/rollback-on}
 launch_env() {
     if [ -f "$ROLLBACK_FLAG" ]; then echo "$LAUNCH_ENV LUYAZ_ROLLBACK=1"
     else echo "$LAUNCH_ENV LUYAZ_ROLLBACK=0"; fi
@@ -137,7 +135,7 @@ if [ "$ENTRY" != datad-trial ]; then
     PIDFILE=$SHIP_TMP/executor.pid
     LOG=${U60S_LOG:-$SHIP_DIR/ship.log}
     TEST_LOG=${U60S_TEST_LOG:-$SHIP_DIR/test.log}
-    INITD_DATAD=${DT_INITD:-$ROOT/etc/init.d/zwrt-datad}
+    INITD_DATAD=${DT_INITD:-$ROOT/etc/init.d/luyaz-core}
     REAL_SLEEP=$SLEEP
     SLEEP=hb_sleep                        # every sleep of the executor beats
 fi
@@ -180,21 +178,12 @@ GUARD_INITD=${U60S_GUARD_INITD:-$ROOT/etc/init.d/u60-guard}
 # luyaz_new ROOT: the core's layout switch (Phase 10 10e, manager docs/designs/u60-phase10.md
 # R1/R2): /data/luyaz/core/.migrated (the retired luyaz-migrate.sh wrote it last) = the new names
 # (/data/luyaz/luyaz-core, /etc/init.d/luyaz-core, procd luyaz-core, trial luyaz-core.test,
-# /data/luyaz/web.env); else the old zwrt-datad ones. Same line in doctor.sh, u60-recover.sh,
-# chaos.sh, agent-auth.sh, luyaz-fallback.sh (scripts/test/luyaz-dir).
+# /data/luyaz/web.env). Same line in doctor.sh, u60-recover.sh, chaos.sh, agent-auth.sh,
+# luyaz-fallback.sh (scripts/test/luyaz-dir). Only e3_old_layout asks it now: since E3 an
+# old-layout device (the zwrt-datad names) is refused, so the names below are the new ones.
 luyaz_new() { [ -f "$1/data/luyaz/core/.migrated" ]; }
-if luyaz_new "$ROOT"; then
-    CORE_NAME=luyaz-core
-    CORE_BIN=$ROOT/data/luyaz/luyaz-core
-    WEB_ENV=/data/luyaz/web.env
-else
-    CORE_NAME=zwrt-datad
-    CORE_BIN=$ROOT/data/plugins/zwrt-datad/zwrt-datad
-    WEB_ENV=/data/zte-agent.env
-fi
-# the other layout's core name: never expected to run (exact names: a prefix
-# would take the trial luyaz-core.test for production)
-if [ "$CORE_NAME" = luyaz-core ]; then CORE_OTHER=zwrt-datad; else CORE_OTHER=luyaz-core; fi
+CORE_NAME=luyaz-core
+CORE_BIN=$ROOT/data/luyaz/luyaz-core
 # the init, the process and the trial follow the switch (DT_* still win: tests, datad-trial)
 INITD_DATAD=${DT_INITD:-$ROOT/etc/init.d/$CORE_NAME}
 TEST_BIN=${DT_TEST_BIN:-$CORE_BIN.test}
@@ -498,9 +487,6 @@ preflight() {
     preflight_common
     if [ -n "$($PIDOF "$PROD_NAME" 2>/dev/null)" ]; then
         echo "正式版 $PROD_NAME 还在跑：先 $INITD_DATAD stop（两个 datad 会抢 9460），或者用 launch"
-    fi
-    if [ -n "$($PIDOF "$CORE_OTHER" 2>/dev/null)" ]; then
-        echo "另一个名字的核心 $CORE_OTHER 在跑（布局不对？见 docs/designs/u60-phase10.md）：两个核心会抢 9460"
     fi
     if [ -z "$($PIDOF "$TEST_NAME" 2>/dev/null)" ]; then
         echo "测试版 $TEST_NAME 没在跑：用 launch 起它"
@@ -1250,7 +1236,9 @@ comp_load() {
             C_NAME=$1
             C_KIND=trial
             C_FILES="$CORE_BIN"
-            C_STATE_ALLOW="$ROOT/data/zwrt-datad/cooling.conf $ROOT/data/zwrt-datad/neighbor.json"
+            # no state files since 10-06 (cooling.conf, neighbor.json went with the fan control and
+            # the neighbour scan; crates/luyaz-core/ship/datad/state-files is empty). Only stage
+            # checks this list: a rollback restores what its own txn log names (state= lines)
             TEST_BIN=$CORE_BIN.test
             ;;
         touch)
@@ -1358,9 +1346,7 @@ c_datad_check() { watch_datad "$PROD_NAME" "$X_CHECK" 正式版 正式版消失;
 LW_BIN=$ROOT/data/luyaz/luyaz-web
 LW_INITF=$ROOT/etc/init.d/luyaz-web           # the file (scripts component, v=4)
 LW_INITD=${U60S_LWEB_INITD:-$LW_INITF}        # what is run
-LW_ARGS="serve --bind 0.0.0.0:9090 --upstream http://127.0.0.1:9460 --password-file /data/zte-agent.env"
-# 10e R6: luyaz-web reads /data/luyaz/web.env first anyway; the trial names the live one
-[ "$WEB_ENV" = /data/zte-agent.env ] || LW_ARGS="serve --bind 0.0.0.0:9090 --upstream http://127.0.0.1:9460 --password-file $WEB_ENV"
+LW_ARGS="serve --bind 0.0.0.0:9090 --upstream http://127.0.0.1:9460 --password-file /data/luyaz/web.env"
 LW_PROD=luyaz-web
 LW_URL=${U60S_LWEB_URL:-http://127.0.0.1:9090}
 LW_TCP=$PROCDIR/net/tcp
@@ -2480,11 +2466,9 @@ EOF
 # zte-agent and /data/admin went in 8d-2c, u60-uid and u60-guard in 10c, and
 # 10c deleted their files). A later ship or kit line of the name counts again.
 RETIRED_COMPS="agent web uid guard"
-RETIRED_RECORDS="init.d/zte-agent init.d/u60-guard init.d/u60-uid"
-# 10e: after the move the core's init record is init.d/luyaz-core; the old
-# one (u60 record no longer knows it) goes too. ship scripts still places the
-# file itself, and comp:scripts checks it.
-luyaz_new "$ROOT" && RETIRED_RECORDS="$RETIRED_RECORDS init.d/zwrt-datad"
+# 10e: the core's init record is init.d/luyaz-core; the old one (u60 record no
+# longer knows it) goes too.
+RETIRED_RECORDS="init.d/zte-agent init.d/u60-guard init.d/u60-uid init.d/zwrt-datad"
 ship_retire() {
     matches "$1" '^[0-9]{9,11}$' || ship_refuse 退役 "时间 “$1” 不是 Unix 秒"
     P=$(txn_busy)
@@ -2866,11 +2850,6 @@ ship_stage() {
     if [ "$C_KIND" = trial ] && [ -n "$($PIDOF "${TEST_BIN##*/}" 2>/dev/null)" ]; then
         P="$P${NL}测试版 ${TEST_BIN##*/} 还在跑"
     fi
-    # the core under the other layout's names (10e): its trial, or a stray production copy
-    if is_core "$X_COMP"; then
-        [ -n "$($PIDOF "$CORE_OTHER.test" 2>/dev/null)" ] && P="$P${NL}测试版 $CORE_OTHER.test 还在跑"
-        [ -n "$($PIDOF "$CORE_OTHER" 2>/dev/null)" ] && P="$P${NL}另一个名字的核心 $CORE_OTHER 在跑（布局不对？见 docs/designs/u60-phase10.md）：两个核心会抢 9460"
-    fi
 
     _free=$(num "$($DF -Pk "$ROOT/data" 2>/dev/null | awk 'NR == 2 { print $4 }')")
     [ "$_free" -lt "$(num "$MIN_FREE_KB")" ] && P="$P${NL}/data 可用只有 $((_free / 1024)) MB（< $((MIN_FREE_KB / 1024)) MB）"
@@ -3232,7 +3211,7 @@ ship_prepare_rollback() {
     [ -n "$_l1" ] || ship_refuse 准备退回 "清单里没有 $_c 上机的记录，不知道上一版在哪"
     # 10e rollback floor (D4/D7): after the move only a core shipped into the new
     # layout can come back; one from before it would go to the old path
-    if is_core "$_c" && luyaz_new "$ROOT"; then
+    if is_core "$_c"; then
         case "$_l1" in *"\"path\":\"$ROOT/data/luyaz/"*) ;; *)
             ship_refuse 准备退回 "核心已经搬到新布局（/data/luyaz/core/.migrated），最后一次 datad 上机是搬家之前的，退回会放回旧路径：不能退回旧布局（见 docs/designs/u60-phase10.md）" ;;
         esac

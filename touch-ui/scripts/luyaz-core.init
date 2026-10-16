@@ -8,7 +8,7 @@
 # only in the old one, so there is never a second core. Unchanged on purpose: the log /tmp/zwrt-datad.log and the
 # crash records under the name zwrt-datad (the core's svcwatch keeps it: the sentinel
 # and the ledger read them by it), /var/run/zwrt-datad.pid, the data dir
-# /data/zwrt-datad and the LAN token /data/plugins/zwrt-datad/auth.token.
+# /data/zwrt-datad (the LAN token moved to /data/luyaz/core/auth.token in D2).
 #
 # Launch semantics are the old start.sh start_datad_legacy's, moved here unchanged:
 # normal boots only, token seeding, LAN listener arguments, modem stream
@@ -20,17 +20,13 @@
 START=96
 USE_PROCD=1
 
-DIR=/data/plugins/zwrt-datad
 BIN=/data/luyaz/luyaz-core
 # Luya-Z rename D2 (manager docs/designs/luyaz-rename.md): the token, the ops dir and the log move
-# under the luyaz names; the token and the ops dir are the new ones once they are there (copied /
-# moved by hand while the core is stopped), the log is the new one from this script on.
+# under the luyaz names (the old token and /data/u60-ops are gone since D2's clean-up).
 TOKEN_FILE=/data/luyaz/core/auth.token
-[ ! -s "$TOKEN_FILE" ] && [ -s "$DIR/auth.token" ] && TOKEN_FILE=$DIR/auth.token
 LAN_BIND=0.0.0.0
 LAN_PORT=9461
-if [ -d /data/luyaz/core/ops ]; then ROLLBACK_FLAG=/data/luyaz/core/ops/rollback-on
-else ROLLBACK_FLAG=/data/u60-ops/rollback-on; fi
+ROLLBACK_FLAG=/data/luyaz/core/ops/rollback-on
 # u60d taking over from the agent (manager docs/designs/u60-platform.md, Phase 4 step 9): extra
 # settings from /data/luyaz/core/datad.env, one VAR=value per line; only plain values are taken, and only the
 # core's switches (core_switches below).

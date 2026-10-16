@@ -32,7 +32,7 @@
 
 - 先跑一次 `rs/setup-src.sh`：把打过补丁的 LVGL v9.5.0 和 FreeType 源码放进 docker 卷。
 - `rs/build.sh device [FILE]` 编静态 aarch64-musl 的 `luyaz-ui`（共用构建镜像里 cargo zigbuild；这些 crate 是 manager Cargo workspace 的成员）。
-- 上机：`tools/luyaz ship touch`（只编 `rs/`）。
+- 上机：`luyaz ship touch`（只编 `rs/`）。注：Mac 端的上机命令（`luyaz ship <组件>`、`luyaz rollback`、`luyaz status`）是维护者自己工作区的工具，不在本仓库里；它驱动的设备端是 `touch-ui/scripts/u60-ship.sh`（装到 `/data/luyaz/scripts/luyaz-ship.sh`），格式见 [SHIP.md](SHIP.md)。没有这个工具就用装机包（`onboard/`）。
 
 ## 字体
 
@@ -80,7 +80,7 @@ rs/parity.sh MODEL_DIR REF_DIR OUT_DIR # 和 C 版渲染测试逐像素对拍（
 两条硬约束：**一启动就崩的界面会被固件升级成整机重启循环**；**屏幕上几分钟没有任何界面，固件也会整机重启**。
 所以新版本先用别的文件名试跑，确认稳定后再换正式位置；两个界面也不能同时抢 `/dev/dri/card0`。
 
-用 `tools/luyaz ship touch`（见 [SHIP.md](SHIP.md)）：它做的就是这些（哨兵 `hold`、旁路 `luyaz-ui.test`、检查、原子替换、`release`、退回）。普通用户用装机包 `./install.sh devui`。
+用 `luyaz ship touch`（见 [SHIP.md](SHIP.md)）：它做的就是这些（哨兵 `hold`、旁路 `luyaz-ui.test`、检查、原子替换、`release`、退回）。普通用户用装机包 `./install.sh devui`。
 
 注意：
 

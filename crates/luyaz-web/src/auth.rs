@@ -1,5 +1,5 @@
 //! Login (u60-web.md W2/W10, 8d-1a, 8d-2): the same admin password as today. With `--password-file`
-//! (the device: `/data/zte-agent.env`, read at every login so a changed password needs no restart)
+//! (the device: `/data/luyaz/web.env`, read at every login so a changed password needs no restart)
 //! luyaz-web checks it itself (`u60-api::auth`) and nothing else: the agent is retired (8d-2), so a
 //! session carries no agent token and everything it reads or does goes to u60d (agent.rs). Without
 //! a password file (development against a fake agent) the agent's own login decides and its token

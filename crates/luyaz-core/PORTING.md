@@ -35,7 +35,7 @@ HTTP and write path (Phase 3 step 1, base `68416eb`): `server.rs` + `server/writ
 `ops/` (all of it, with the `tests.rs` subdirectories), `at.rs`, `watchdog.rs`. Entry point:
 `serve.rs` (datad's `main.rs`). All 345 of datad's unit tests run in u60d.
 Not moved: `rust/tests/legacy_golden.rs` (it needs `CARGO_BIN_EXE_zwrt-datad` and data-service's
-`tests/`); `tools/u60d-parity.sh` runs those harnesses instead.
+`tests/`); a local parity script (workspace tooling, not in this repo) runs those harnesses instead.
 
 Changes against the base, all deliberate:
 
@@ -111,7 +111,7 @@ Changes against the base, all deliberate:
 `u60d serve <datad arguments>`, or any argv[0] whose file name starts with `zwrt-datad` or
 `luyaz-core` (since Phase 10 the device runs it as `/data/luyaz/luyaz-core`, init
 `/etc/init.d/luyaz-core`, state `/data/luyaz/core/`; before that `/data/plugins/zwrt-datad/zwrt-datad`;
-the side-by-side `.test` names that `tools/u60 ship` and `luyaz-fallback.sh` recognise by prefix): the whole command line is datad's, parsed by
+the side-by-side `.test` names that `luyaz ship` (the maintainer's Mac-side workspace tool, not part of this repo; it drives `touch-ui/scripts/u60-ship.sh`, installed as `/data/luyaz/scripts/luyaz-ship.sh`, format in `touch-ui/docs/SHIP.md`; without it, use the install kit `onboard/`) and `luyaz-fallback.sh` recognise by prefix): the whole command line is datad's, parsed by
 datad's `Args` (clap; `-i`, `-b/--bind`, `-p/--port`, `--lan-bind`, `--lan-port`,
 `--auth-token-file`, `--data-dir`/`LUYAZ_DATA_DIR` default `/data/zwrt-datad`, `--once`, hidden
 `--webshell`/`--neighbor`, raw `--ubus-compare` and `--compare-state-shape`). Same ports, pid file
@@ -180,7 +180,7 @@ Shadow only while the agent runs: computed and shown on `GET /debug/policy`, nev
 - The 19 std `Mutex`/`OnceLock` statics (E2 item 6) and the `Send` bounds (item 7) are as in datad.
 - `ops/pending.rs` sync writes (above): the task said to move them; left, needs a decision.
 - `state::SMS_SESSION` is one more static (an `AtomicBool`), outside the 19.
-- Nothing deploys serve mode yet: build-kit.sh / `tools/u60 ship datad` still take datad's
+- Nothing deploys serve mode yet: build-kit.sh / `luyaz ship datad` still take datad's
   binary, and they would need the `release-device` output path.
 
 ## datad commits after the base still to carry over
@@ -190,7 +190,7 @@ None (2026-10-08; `5fb965c` only fixes `tests/rust_control_integration.sh`, whic
 ## Check
 
 Removed in Phase 10 (X2, 2026-10-14) with the shadow mode: datad no longer runs on the device,
-so there is nothing left to compare with. What it did: `tools/u60d-parity.sh` (workspace tools, local): builds datad at the base and
+so there is nothing left to compare with. What it did: a local parity script (workspace tooling, not in this repo): builds datad at the base and
 u60d, runs every mock case (80 at 68416eb) through both `--once`, and requires byte-identical
 snapshots and line-identical ubus/uci call logs. Then the contract check, the shadow cases, and
 serve mode: the base commit's own harnesses (`golden.sh check`, `control_golden.sh check` with

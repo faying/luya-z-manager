@@ -1,6 +1,6 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
-# Tests for datad-trial.sh (side-by-side zwrt-datad trial watcher), every
+# Tests for datad-trial.sh (side-by-side core trial watcher), every
 # device command stubbed. Runs in a plain busybox container:
 #
 #   scripts/test/docker.sh        (runs every suite under scripts/test/)
@@ -47,7 +47,7 @@ setup() {
     T=$(mktemp -d)
     mkdir -p "$T/bin" "$T/pids"
     echo 1000 >"$T/uptime"
-    echo 4242 >"$T/pids/zwrt-datad.test"
+    echo 4242 >"$T/pids/luyaz-core.test"
     echo 3131 >"$T/pids/luyaz-ui"
     : >"$T/logread"
     : >"$T/kill.log"
@@ -88,9 +88,9 @@ EOF
 echo "\$*" >>$T/kill.log
 sig=TERM; [ "\$1" = -9 ] && { sig=KILL; shift; }
 for p in "\$@"; do
-    if [ "\$p" = "\$(cat $T/pids/zwrt-datad.test 2>/dev/null)" ]; then
+    if [ "\$p" = "\$(cat $T/pids/luyaz-core.test 2>/dev/null)" ]; then
         [ -f $T/unkillable ] && continue
-        [ -f $T/stubborn ] && [ \$sig = TERM ] || rm -f $T/pids/zwrt-datad.test
+        [ -f $T/stubborn ] && [ \$sig = TERM ] || rm -f $T/pids/luyaz-core.test
     fi
 done
 EOF
@@ -98,8 +98,8 @@ EOF
 #!/bin/sh
 echo "\$*" >>$T/initd.log
 # a started production datad answers /v2/state (clears curl-fail)
-[ "\$1" = start ] && [ ! -f $T/prod-broken ] && echo 5555 >$T/pids/zwrt-datad && rm -f $T/curl-fail
-[ "\$1" = stop ] && [ ! -f $T/prod-stuck ] && rm -f $T/pids/zwrt-datad
+[ "\$1" = start ] && [ ! -f $T/prod-broken ] && echo 5555 >$T/pids/luyaz-core && rm -f $T/curl-fail
+[ "\$1" = stop ] && [ ! -f $T/prod-stuck ] && rm -f $T/pids/luyaz-core
 exit 0
 EOF
     cat >"$T/bin/date" <<'EOF'
@@ -111,7 +111,7 @@ EOF
     cat >"$T/bin/setsid" <<EOF
 #!/bin/sh
 echo "\$*" >>$T/setsid.log
-case "\$*" in *zwrt-datad.test\ *) [ -f $T/test-broken ] || echo 4242 >$T/pids/zwrt-datad.test ;; esac
+case "\$*" in *luyaz-core.test\ *) [ -f $T/test-broken ] || echo 4242 >$T/pids/luyaz-core.test ;; esac
 # the watcher: a real process whose cmdline names datad-trial.sh writes the
 # pidfile, unless $T/watcher-broken exists
 case "\$*" in *datad-trial.sh\ run*) [ -f $T/watcher-broken ] || { sh $T/fake/datad-trial.sh </dev/null >/dev/null 2>&1 & echo \$! >$T/trial.pid; } ;; esac
@@ -121,14 +121,14 @@ EOF
     mkdir -p "$T/fake"
     printf '/bin/sleep 30\n' >"$T/fake/datad-trial.sh"
     # A real-looking init script and rc.local for the preflight.
-    cat >"$T/zwrt-datad.init" <<'EOF'
+    cat >"$T/luyaz-core.init" <<'EOF'
 #!/bin/sh /etc/rc.common
-DIR=/data/plugins/zwrt-datad
-BIN=$DIR/zwrt-datad
+DIR=/data/luyaz
+BIN=$DIR/luyaz-core
 EOF
     cat >"$T/rc.local" <<'EOF'
-# /etc/init.d/zwrt-datad.test start   (old note, commented out)
-/etc/init.d/zwrt-datad start
+# /etc/init.d/luyaz-core.test start   (old note, commented out)
+/etc/init.d/luyaz-core start
 exit 0
 EOF
 
@@ -138,9 +138,9 @@ EOF
     export DT_LOGREAD=$T/bin/logread DT_KILL=$T/bin/kill DT_SLEEP=$T/bin/sleep
     export DT_DATE=$T/bin/date DT_SETSID=$T/bin/setsid
     export DT_WINDOW=3600 DT_INTERVAL=10 DT_STALE=30
-    export DT_TEST_BIN=$T/zwrt-datad.test DT_TEST_LOG=$T/data/test.log
-    printf '#!/bin/sh\n' >"$T/zwrt-datad.test"
-    chmod +x "$T/zwrt-datad.test"
+    export DT_TEST_BIN=$T/luyaz-core.test DT_TEST_LOG=$T/data/test.log
+    printf '#!/bin/sh\n' >"$T/luyaz-core.test"
+    chmod +x "$T/luyaz-core.test"
 }
 
 # hook_at <uptime> <shell command>: do it once the fake clock reaches <uptime>
@@ -165,7 +165,7 @@ up() { cut -d. -f1 "$T/uptime"; }
 aborted() { # aborted <case> <reason text>
     check "$1: exit 1" '[ "$RC" = 1 ]'
     check "$1: reason logged" "logged '中止：$2'"
-    check "$1: test build killed" "grep -q 4242 '$T/kill.log' && [ ! -f '$T/pids/zwrt-datad.test' ]"
+    check "$1: test build killed" "grep -q 4242 '$T/kill.log' && [ ! -f '$T/pids/luyaz-core.test' ]"
     check "$1: production started once" '[ "$(starts)" = 1 ]'
     check "$1: production confirmed" "logged '正式版已恢复（pid 5555，'"
     check "$1: one outcome only" '[ "$(grep -c "中止：\|通过：" "$T/data/trial.log")" = 1 ]'
@@ -191,7 +191,7 @@ rm -rf "$T"
 
 # ── 2. test build crashes ───────────────────────────────────────────────────
 setup
-hook_at 1030 "rm -f $T/pids/zwrt-datad.test"
+hook_at 1030 "rm -f $T/pids/luyaz-core.test"
 trial
 check "crash: exit 1" '[ "$RC" = 1 ]'
 check "crash: reason logged" "logged '中止：测试版崩溃'"
@@ -243,7 +243,7 @@ trial
 check "window: exit 0" '[ "$RC" = 0 ]'
 check "window: PASS logged" "logged '通过：120s'"
 check "window: no abort" "! logged '中止'"
-check "window: test build killed" "[ ! -f '$T/pids/zwrt-datad.test' ]"
+check "window: test build killed" "[ ! -f '$T/pids/luyaz-core.test' ]"
 check "window: production started once" '[ "$(starts)" = 1 ]'
 check "window: production confirmed" "logged '正式版已恢复'"
 check "window: ran the whole window" '[ "$(up)" -ge 1120 ] && [ "$(up)" -le 1135 ]'
@@ -264,7 +264,7 @@ rm -rf "$T"
 
 setup
 touch "$T/prod-broken"
-hook_at 1030 "rm -f $T/pids/zwrt-datad.test"
+hook_at 1030 "rm -f $T/pids/luyaz-core.test"
 trial
 check "prod fails: retried once" '[ "$(starts)" = 2 ]'
 check "prod fails: loud log line" "logged '正式版没起来'"
@@ -288,7 +288,7 @@ hook_at 1040 "echo 1040x >$T/uptime"
 trial
 check "script error: exit non-0" '[ "$RC" != 0 ]'
 check "script error: reason logged" "logged '中止：守护意外退出'"
-check "script error: test build killed" "[ ! -f '$T/pids/zwrt-datad.test' ]"
+check "script error: test build killed" "[ ! -f '$T/pids/luyaz-core.test' ]"
 check "script error: production started once, confirmed" '[ "$(starts)" = 1 ] && logged "正式版已恢复（pid 5555，"'
 check "script error: one outcome" '[ "$(grep -c "中止：\|通过：" "$T/data/trial.log")" = 1 ]'
 rm -rf "$T"
@@ -326,24 +326,24 @@ refused() { # refused <case> <text in the message>
 }
 
 setup
-echo 'BIN=$DIR/zwrt-datad.test' >>"$T/zwrt-datad.init"
-export DT_INITD=$T/zwrt-datad.init
+echo 'BIN=$DIR/luyaz-core.test' >>"$T/luyaz-core.init"
+export DT_INITD=$T/luyaz-core.init
 refused "init.d points at .test" "里有 .test"
 rm -rf "$T"
 
 setup
-echo '/data/plugins/zwrt-datad/zwrt-datad.test &' >>"$T/rc.local"
-refused "rc.local points at .test" "rc.local 里 zwrt-datad"
+echo '/data/luyaz/luyaz-core.test &' >>"$T/rc.local"
+refused "rc.local points at .test" "rc.local 里 zwrt-datad（或 luyaz-core）"
 rm -rf "$T"
 
 setup
-echo 5555 >"$T/pids/zwrt-datad"
-refused "production still running" "正式版 zwrt-datad 还在跑"
+echo 5555 >"$T/pids/luyaz-core"
+refused "production still running" "正式版 luyaz-core 还在跑"
 rm -rf "$T"
 
 setup
-rm -f "$T/pids/zwrt-datad.test"
-refused "test build not running" "测试版 zwrt-datad.test 没在跑"
+rm -f "$T/pids/luyaz-core.test"
+refused "test build not running" "测试版 luyaz-core.test 没在跑"
 rm -rf "$T"
 
 setup
@@ -363,8 +363,8 @@ rm -rf "$T"
 # production running, test build pushed but not running: the normal start.
 launch_setup() {
     setup
-    echo 5555 >"$T/pids/zwrt-datad"
-    rm -f "$T/pids/zwrt-datad.test"
+    echo 5555 >"$T/pids/luyaz-core"
+    rm -f "$T/pids/luyaz-core.test"
 }
 launch() { timeout 20 sh "$TRIAL" launch "$@" >"$T/out" 2>&1; RC=$?; }
 
@@ -374,10 +374,10 @@ EXPECT="env $(sh "$TRIAL" print-launch LUYAZ_UBUS=cli | sed 's/^env //')"
 check "launch: exit 0" '[ "$RC" = 0 ]'
 check "launch: production stopped, not restarted" '[ "$(cat "$T/initd.log")" = stop ]'
 check "launch: test build started as print-launch says" '[ "$(sed -n 1p "$T/setsid.log")" = "$EXPECT" ]'
-check "launch: extra env passed" "sed -n 1p '$T/setsid.log' | grep -q 'LUYAZ_UBUS=auto LUYAZ_ROLLBACK=0 LUYAZ_UBUS=cli nohup $T/zwrt-datad.test -i 1000'"
+check "launch: extra env passed" "sed -n 1p '$T/setsid.log' | grep -q 'LUYAZ_UBUS=auto LUYAZ_ROLLBACK=0 LUYAZ_UBUS=cli nohup $T/luyaz-core.test -i 1000'"
 check "launch: no supervise.sh" "! grep -q supervise '$T/setsid.log'"
 check "launch: then the watcher, detached" "sed -n 2p '$T/setsid.log' | grep -q '^nohup sh .*datad-trial.sh run'"
-check "launch: test output header" "grep -q '^=== .*zwrt-datad.test -i 1000' '$T/data/test.log'"
+check "launch: test output header" "grep -q '^=== .*luyaz-core.test -i 1000' '$T/data/test.log'"
 check "launch: says so" 'grep -q "测试版已起来" "$T/out" && grep -q "已开始守护" "$T/out"'
 check "launch: logged" "logged 'launch：测试版已起来（pid 4242'"
 rm -rf "$T"
@@ -399,7 +399,7 @@ launch_setup
 touch "$T/curl-fail"
 launch
 check "launch no /v2/state: exit 1, production back" '[ "$RC" = 1 ] && logged "正式版已恢复" && logged "（/v2/state 没有 live 块）"'
-check "launch no /v2/state: test build killed" "grep -q 4242 '$T/kill.log' && [ ! -f '$T/pids/zwrt-datad.test' ]"
+check "launch no /v2/state: test build killed" "grep -q 4242 '$T/kill.log' && [ ! -f '$T/pids/luyaz-core.test' ]"
 check "launch no /v2/state: no watcher" "! grep -q 'datad-trial.sh run' '$T/setsid.log'"
 rm -rf "$T"
 
@@ -417,7 +417,7 @@ touch "$T/watcher-broken"
 launch
 check "launch no watcher: exit 1" '[ "$RC" = 1 ]'
 check "launch no watcher: stop then start" '[ "$(tr "\n" " " <"$T/initd.log")" = "stop start " ]'
-check "launch no watcher: test build killed" "[ ! -f '$T/pids/zwrt-datad.test' ]"
+check "launch no watcher: test build killed" "[ ! -f '$T/pids/luyaz-core.test' ]"
 check "launch no watcher: reason logged" "logged '启动失败：守护 5s 内没起来'"
 check "launch no watcher: absolute script path" "grep -q '^nohup sh /.*/datad-trial.sh run' '$T/setsid.log'"
 rm -rf "$T"
@@ -451,29 +451,29 @@ launch_refused() { # launch_refused <case> <text in the message> [args…]
     launch "$@"
     check "$_c: refused" '[ "$RC" = 1 ] && grep -q "拒绝启动" "$T/out"'
     check "$_c: says why" "grep -q '$_w' '$T/out'"
-    check "$_c: production untouched" '[ ! -s "$T/initd.log" ] && [ ! -s "$T/setsid.log" ] && [ ! -s "$T/kill.log" ] && [ -f "$T/pids/zwrt-datad" ]'
+    check "$_c: production untouched" '[ ! -s "$T/initd.log" ] && [ ! -s "$T/setsid.log" ] && [ ! -s "$T/kill.log" ] && [ -f "$T/pids/luyaz-core" ]'
 }
 
 launch_setup
-echo 'BIN=$DIR/zwrt-datad.test' >>"$T/zwrt-datad.init"
-printf '#!/bin/sh\necho "$*" >>%s/initd.log\n' "$T" >>"$T/zwrt-datad.init"
-cp "$T/zwrt-datad.init" "$T/bin/initd-test"
+echo 'BIN=$DIR/luyaz-core.test' >>"$T/luyaz-core.init"
+printf '#!/bin/sh\necho "$*" >>%s/initd.log\n' "$T" >>"$T/luyaz-core.init"
+cp "$T/luyaz-core.init" "$T/bin/initd-test"
 export DT_INITD=$T/bin/initd-test
 launch_refused "launch: init.d points at .test" "里有 .test"
 rm -rf "$T"
 
 launch_setup
-echo '/data/plugins/zwrt-datad/zwrt-datad.test &' >>"$T/rc.local"
-launch_refused "launch: rc.local points at .test" "rc.local 里 zwrt-datad"
+echo '/data/luyaz/luyaz-core.test &' >>"$T/rc.local"
+launch_refused "launch: rc.local points at .test" "rc.local 里 zwrt-datad（或 luyaz-core）"
 rm -rf "$T"
 
 launch_setup
-rm -f "$T/zwrt-datad.test"
+rm -f "$T/luyaz-core.test"
 launch_refused "launch: no test build" "不存在或不可执行"
 rm -rf "$T"
 
 launch_setup
-echo 4242 >"$T/pids/zwrt-datad.test"
+echo 4242 >"$T/pids/luyaz-core.test"
 launch_refused "launch: test build already running" "已经在跑"
 rm -rf "$T"
 
@@ -497,8 +497,8 @@ detach_mode() { # detach_mode ssd|none
     cat >"$T/bin/nohup" <<EOF
 #!/bin/sh
 echo "\$*" >>$T/nohup.log
-case "\$*" in *zwrt-datad.test\ *)
-    [ -f $T/test-broken ] || echo 4242 >$T/pids/zwrt-datad.test
+case "\$*" in *luyaz-core.test\ *)
+    [ -f $T/test-broken ] || echo 4242 >$T/pids/luyaz-core.test
     echo "out: \$* UBUS=\$LUYAZ_UBUS ROLLBACK=\$LUYAZ_ROLLBACK"
     echo "err: stderr" >&2 ;;
 esac
@@ -557,13 +557,13 @@ for _m in ssd none; do
     launch LUYAZ_UBUS=cli
     EXPECT=$(sh "$TRIAL" print-launch LUYAZ_UBUS=cli | sed 's/^env //; s/ nohup .*//')
     check "$_m launch: exit 0" '[ "$RC" = 0 ]'
-    check "$_m launch: test build args" "sed -n 1p '$T/nohup.log' | grep -qx '$T/zwrt-datad.test -i 1000 --lan-bind 0.0.0.0 --lan-port 9461 --auth-token-file /data/luyaz/core/auth.token'"
+    check "$_m launch: test build args" "sed -n 1p '$T/nohup.log' | grep -qx '$T/luyaz-core.test -i 1000 --lan-bind 0.0.0.0 --lan-port 9461 --auth-token-file /data/luyaz/core/auth.token'"
     check "$_m launch: env reached the test build" "grep -q 'UBUS=cli ROLLBACK=[01]' '$T/data/test.log'"
     check "$_m launch: stdout and stderr in test log" "grep -q '^out: ' '$T/data/test.log' && grep -q '^err: stderr' '$T/data/test.log'"
     check "$_m launch: header kept" "sed -n 1p '$T/data/test.log' | grep -q '^=== '"
     check "$_m launch: then the watcher" "sed -n 2p '$T/nohup.log' | grep -q '^sh .*datad-trial.sh run'"
     if [ $_m = ssd ]; then
-        check "ssd launch: command after the log file, as words" "sed -n 1p '$T/ssd.log' | grep -qF -- '$T/data/test.log env $EXPECT nohup $T/zwrt-datad.test -i 1000'"
+        check "ssd launch: command after the log file, as words" "sed -n 1p '$T/ssd.log' | grep -qF -- '$T/data/test.log env $EXPECT nohup $T/luyaz-core.test -i 1000'"
     fi
     rm -rf "$T"
     PATH=$_p

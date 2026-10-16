@@ -102,7 +102,7 @@ cd luya-z-manager
 |---|---|
 | dropbear（SSH） | OpenWrt 23.05.4 官方 ipk，sha256 固定 |
 | luyaz-web（管理网页）、运营商 logo | 本仓库现编（`crates/luyaz-web`，profile `release`） |
-| 触屏程序 | touch-ui 的 `rs/build.sh device`（Rust，Docker），产物 `touch-ui/out/u60pro-devui-rs`，装成 `/data/luyaz/ui/luyaz-ui` |
+| 触屏程序 | touch-ui 的 `rs/build.sh device`（Rust，Docker），产物 `touch-ui/out/luyaz-ui`，装成 `/data/luyaz/ui/luyaz-ui` |
 | luyaz-sentinel（屏幕主人 + 看门狗） | 本仓库现编（`crates/luyaz-sentinel`，profile `release-device`） |
 | 触屏字体 | Nunito（google/fonts 固定提交）和中文兜底字体（Resource Han Rounded 子集），都是 OFL，sha256 固定，Docker 里生成。设备自带的中兴字体不打包，触屏直接读设备上的 `/usr/ui/fonts/` |
 | 核心（`luyaz-core`） | 本仓库的 luyaz-core（`onboard/build.Dockerfile` 里 `cargo zigbuild --profile release-device -p luyaz-core`，镜像按 digest 固定，`Cargo.lock` 锁依赖） |
@@ -114,7 +114,7 @@ cd luya-z-manager
 也可以分开编，再告诉 `build-kit.sh` 用现成的文件：
 
 ```sh
-(cd touch-ui && rs/setup-src.sh && rs/build.sh device out/u60pro-devui-rs)   # 默认就读这里
+(cd touch-ui && rs/setup-src.sh && rs/build.sh device out/luyaz-ui)   # 默认就读这里
 DATAD_BIN=/path/to/luyaz-core ./onboard/build-kit.sh       # 用别处编好的核心，不现编 luyaz-core
 ```
 
