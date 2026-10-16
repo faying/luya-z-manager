@@ -36,7 +36,7 @@ Everything is installed with **one command** from a kit you build yourself, and 
 
 ## Screenshots
 
-All screenshots use the English UI with made-up data. Full gallery: **[docs/SCREENSHOTS.md](docs/SCREENSHOTS.md)**.
+All screenshots use the English UI with made-up data. **[Feature tour](docs/SCREENSHOTS.md)**: what every page does, with screenshots.
 
 ### Admin web
 
@@ -63,7 +63,7 @@ All screenshots use the English UI with made-up data. Full gallery: **[docs/SCRE
 | **Touch UI** | Five task-based tabs (Home, Cellular, Wi-Fi, Route, System) on the front panel; see [touch-ui/README.md](touch-ui/README.md) |
 | **SIM, eSIM, SMS** | SIM/PIN, SMS inbox and sending, SMS forwarding; download, switch and delete profiles on a removable eUICC card (5ber, eSTK.me and similar) |
 | **LAN and Wi-Fi** | Wi-Fi and guest Wi-Fi, LAN/DHCP, DNS, firewall, QoS, USB mode, clients |
-| **Reliability** | procd supervision for the core, the admin web and the sentinel; Wi-Fi fallback watchdog; alert banners, a Health page and optional alert SMS; a change log where risky changes revert themselves if the connection is lost |
+| **Reliability** | procd supervision for the core, the admin web and the sentinel; Wi-Fi fallback watchdog; alert banners, a Health page and optional alert SMS; a change log of every setting change; a network-mode change that cannot connect is reverted automatically |
 | **Operations** | `./install.sh doctor` read-only health check, `backup` / `restore` for configuration, per-component updates with rollback ([DEPLOY.md](DEPLOY.md)) |
 | **Install kit** | One `./install.sh` on a new device sets up SSH, the admin web, the touch UI and eSIM, and turns off automatic firmware updates |
 
@@ -148,7 +148,7 @@ Each doc links to its Chinese copy (`*.zh-CN.md`). RELIABILITY.md and DESIGN.md 
 | Doc | For |
 |---|---|
 | [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) | Quick start (begin here) |
-| [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) | Every page of the admin web and the touch UI |
+| [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) | Feature tour: every page of the admin web and the touch UI |
 | [onboard/README.md](onboard/README.md) | The install kit: what goes where, daily use, restoring stock, FAQ |
 | [DEPLOY.md](DEPLOY.md) | Updating a device that is already set up |
 | [docs/RELIABILITY.md](docs/RELIABILITY.md) | File contract between the core, the sentinel and the scripts (Chinese) |

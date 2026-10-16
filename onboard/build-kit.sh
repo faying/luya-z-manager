@@ -229,7 +229,7 @@ mkdir -p "$PL/guard"
 # u60-recover.sh 由设备端放成 /data/luyaz/ship/luyaz-recover.sh（自检过才放，已有就不换；rc.local 那一行只由 recover 组件加）
 # 去掉 u60-ship.sh、datad-trial.sh、u60-recover.sh 以后，这张表要和 u60-ship.sh 的 SCRIPTS_FILES + SCRIPTS_INITS
 # 一致（u60 ship scripts，touch-ui docs/SHIP.md）。zwrt-datad.init 在 Luya-Z 改名 E3 从两边一起去掉了（只有旧布局用它，装机包拒装旧布局）
-for f in alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh luyaz-fallback.sh \
+for f in alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh \
          u60-ship.sh datad-trial.sh u60-recover.sh \
          luyaz-core.init luyaz-sentinel.init luyaz-web.init; do
   [ -f "$DEVUI_REPO/scripts/$f" ] || die "缺 $DEVUI_REPO/scripts/$f"

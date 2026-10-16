@@ -128,7 +128,7 @@ install_guard() {
         die "这台的 ship 目录还是 D4 之前的 /data/u60-ship：先用旧执行器搬家（sh /data/u60-guard/u60-ship.sh move-d4 <电脑上的 unix 时间>），再装"
     layout_new
     mkdir -p "$S"
-    for f in alert-lib.sh supervise.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh \
+    for f in alert-lib.sh supervise.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh \
              luyaz-fallback.sh; do
         put "$P/guard/$f" "$S/$f" 755
     done

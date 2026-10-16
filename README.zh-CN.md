@@ -36,7 +36,7 @@
 
 ## 截图
 
-截图都是英文界面、假数据。完整图库：**[docs/SCREENSHOTS.zh-CN.md](docs/SCREENSHOTS.zh-CN.md)**。
+截图都是英文界面、假数据。**[功能导览](docs/SCREENSHOTS.zh-CN.md)**：每一页做什么，配截图。
 
 ### 管理网页
 
@@ -63,7 +63,7 @@
 | **触屏界面** | 前面板上按任务分的 5 个标签（首页、蜂窝、Wi-Fi、线路、系统），见 [touch-ui/README.zh-CN.md](touch-ui/README.zh-CN.md) |
 | **SIM、eSIM、短信** | SIM/PIN、收发短信、短信转发；配合可插拔 eUICC 卡（5ber、eSTK.me 这类）下载、切换、删除 profile |
 | **局域网与 Wi-Fi** | Wi-Fi 和访客 Wi-Fi、LAN/DHCP、DNS、防火墙、QoS、USB 模式、已连设备 |
-| **可靠性** | 核心、管理网页、哨兵由 procd 监督；Wi-Fi 兜底看门狗；告警横幅、「健康」页、可选告警短信；有风险的改动连不上会自动退回，并记进变更记录 |
+| **可靠性** | 核心、管理网页、哨兵由 procd 监督；Wi-Fi 兜底看门狗；告警横幅、「健康」页、可选告警短信；每次改设置都记进变更记录；改网络模式后连不上会自动退回 |
 | **运维** | `./install.sh doctor` 只读体检，`backup` / `restore` 备份配置，单个组件更新和回退（[DEPLOY.zh-CN.md](DEPLOY.zh-CN.md)） |
 | **装机包** | 新设备一条 `./install.sh` 装好 SSH、管理网页、触屏、eSIM，并关掉固件自动升级 |
 
@@ -146,7 +146,7 @@ docs/          GETTING-STARTED、SCREENSHOTS、DESIGN.md（界面设计规范）
 | 文档 | 内容 |
 |---|---|
 | [docs/GETTING-STARTED.zh-CN.md](docs/GETTING-STARTED.zh-CN.md) | 快速上手（新手从这里开始） |
-| [docs/SCREENSHOTS.zh-CN.md](docs/SCREENSHOTS.zh-CN.md) | 管理网页和触屏的各页截图 |
+| [docs/SCREENSHOTS.zh-CN.md](docs/SCREENSHOTS.zh-CN.md) | 功能导览：管理网页和触屏的每一页 |
 | [onboard/README.zh-CN.md](onboard/README.zh-CN.md) | 装机包说明：装到哪里、日常用法、恢复原厂、常见问题 |
 | [DEPLOY.zh-CN.md](DEPLOY.zh-CN.md) | 更新已装好的设备 |
 | [docs/RELIABILITY.md](docs/RELIABILITY.md) | 核心、哨兵和脚本之间的文件约定 |
