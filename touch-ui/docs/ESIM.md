@@ -11,7 +11,7 @@ On the touch screen, 「蜂窝 → SIM 与 eSIM」 (Cellular → SIM & eSIM) lis
 lpac (qmi_qrtr) ◀── luyaz-core (crates/luyaz-esim) ──HTTP 127.0.0.1:9460/v2/api──▶ rs/devui/src/data/esim.rs ──▶ UI
 ```
 
-Endpoints used (under `/v2` on the core's loopback port): `GET /api/esim/profiles`, `POST /api/esim/switch`, `GET /api/esim/job` (switch progress). (Before 10-15 the UI called zte-agent on :9090.)
+Endpoints used (under `/v2` on the core's loopback port): `GET /api/esim/profiles`, `POST /api/esim/switch`, `GET /api/esim/job` (switch progress).
 
 The switch itself is a single `lpac profile enable`; the hard part is getting ZTE's stack to recognize the new card: it reads the SIM only once when its daemon starts,
 so the core power-cycles the UIM, restarts `zte_topsw_mdm` and waits for the IMSI to change, usually within 10 seconds. All of this happens in the core; the UI only shows progress and the result.
@@ -20,7 +20,7 @@ Prerequisite: the eSIM component is installed on the device (lpac in `/data/esim
 
 ## Login
 
-None: the core's loopback listener needs no token, so the UI does not log in. (The old `esim.conf` / `/data/zte-agent.env` password is no longer read by the UI.)
+None: the core's loopback listener needs no token, so the UI does not log in.
 
 ## Notes
 

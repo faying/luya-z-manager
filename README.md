@@ -89,9 +89,9 @@ Each doc links to its Chinese copy (`*.zh-CN.md`). RELIABILITY.md and DESIGN.md 
 
 ## Credits
 
-- [Jesther Silvestre](https://github.com/jesther-ai): the original project [open-u60-pro](https://github.com/jesther-ai/open-u60-pro) (first agent and web UI).
-- Wei REN: core, admin web, touch UI rewrite, install kit, eSIM, Tailscale.
-- [33333s](https://github.com/33333s): thanks for the reference repos that were the starting points of the touch UI and the local data service.
+- Wei REN: core (luyaz-core), admin web (luyaz-web), sentinel, Rust touch UI, install kit, eSIM, Tailscale.
+- [33333s](https://github.com/33333s): the core's device read and write layer comes from [zwrt-datad](https://github.com/33333s/zwrt-datad) (MIT); [u60pro-devui](https://github.com/33333s/u60pro-devui) was the starting point of the touch UI.
+- [Jesther Silvestre](https://github.com/jesther-ai): this project started from [open-u60-pro](https://github.com/jesther-ai/open-u60-pro). Its agent and web UI have since been replaced.
 
 ## License and disclaimer
 

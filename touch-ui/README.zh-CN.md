@@ -2,79 +2,96 @@
 
 [English](README.md) · **中文**
 
-**Luya-Z** 的一部分：给 5G 随身 Wi-Fi 前面板 3.5 寸触摸屏用的开源替代界面：Rust + LVGL + FreeType 直接画到 DRM/KMS，编成一个静态 aarch64 程序（`luyaz-ui`），另带设备端脚本。
-它在 [Luya-Z 管理后台](../README.zh-CN.md) 仓库的 `touch-ui/` 目录里，和那边一起编、一起装。
+**Luya-Z** 的一部分：5G 随身 Wi-Fi 前面板 3.5 寸触屏的开源替代界面。用 Rust + LVGL + FreeType 写成，直接画到 DRM/KMS，经 evdev 读触摸，编成一个静态 aarch64 程序（设备上叫 `luyaz-ui`），独立于原厂界面运行。
 
 > **适用硬件：** 中兴 U60 Pro（MU5250）。社区项目，和中兴（ZTE）没有关系，风险自负。
 
 | 首页 | 蜂窝 | 出口（深色） | 系统 |
 |---|---|---|---|
-| <img src="docs/images/touch-home.png" width="180" alt="首页"> | <img src="docs/images/touch-cellular.png" width="180" alt="蜂窝页"> | <img src="docs/images/touch-exit-dark.png" width="180" alt="出口页，深色"> | <img src="docs/images/touch-system.png" width="180" alt="系统页"> |
+| <img src="docs/images/touch-home.png" width="180" alt="首页"> | <img src="docs/images/touch-cellular.png" width="180" alt="蜂窝"> | <img src="docs/images/touch-exit-dark.png" width="180" alt="出口"> | <img src="docs/images/touch-system.png" width="180" alt="系统"> |
 
 （截图由离屏渲染测试用假数据生成。）
 
-屏幕文字目前只有中文，计划加英文选项。
+屏幕文字默认中文，可在系统设置里切换英文。
 
-## 怎么配合
+## 在哪里
+
+触屏界面是 [luya-z-manager](https://github.com/faying/luya-z-manager) 仓库的 `touch-ui/` 目录，它的 Rust crate 是 manager Cargo workspace 的成员。原来单独的 `luya-z-touch-ui` 仓库已被取代，不再更新。
+
+| 组件 | 源码 | 设备上的角色 |
+|---|---|---|
+| **luyaz-ui**（本目录） | `touch-ui/rs/` | 前面板触屏界面 |
+| luyaz-core | `crates/luyaz-core` | 本机后端 `127.0.0.1:9460`：`/v2/state`、SSE `/v2/events`、`/v2/screen`，写操作走 `/v2/api/...` |
+| luyaz-web | `crates/luyaz-web` | 管理网页 `:9090` |
+| luyaz-sentinel | `crates/luyaz-sentinel` | 屏幕主人兼看门狗（控制 FIFO `/tmp/luyaz-screen.ctl`） |
 
 ```
-luyaz-core :9460 ──▶ luyaz-ui（触屏）
-       ▲  └──▶ lpac（/data/esim）──▶ eUICC 卡
-浏览器 ──▶ luyaz-web :9090（管理网页）──▶ luyaz-core
+luyaz-core :9460 ──▶ luyaz-ui（触屏，DRM/KMS）
+       ▲   └──▶ lpac ──▶ eUICC 卡
+浏览器 ──▶ luyaz-web :9090 ──▶ luyaz-core
 luyaz-sentinel：屏幕主人 + 看门狗
 ```
 
-触屏界面从核心 `luyaz-core` 读实时数据（`127.0.0.1:9460` 的 `/v2/state` + `/v2/events`；首页卡片和状态栏的结论由 `/v2/screen` 直接给出），eSIM、APN 等操作交给核心的控制接口。
-屏幕主人是 `luyaz-sentinel`（manager 的 `crates/luyaz-sentinel`）。manager 的装机包把它们一起装到设备上。
+界面只通过这个本机 HTTP 接口和 luyaz-core 打交道，自己从不碰 ubus。luyaz-core 读系统状态、提供 JSON，eSIM、APN 等操作也由它执行。
 
 ## 功能
 
-- 底部 5 个标签，按「我想做什么」分：**首页 · 蜂窝 · Wi-Fi · 出口 · 系统**。首页大字是一句结论（网络正常 / 信号偏弱 / 漫游中）。
-- 蜂窝：载波、信号、网络模式、APN、SIM 与 eSIM 切换（经核心调 lpac）。
-- 出口：出口 IP 与归属地；Tailscale。不带代理功能，要的话见 manager 的 [docs/PROXY.zh-CN.md](../docs/PROXY.zh-CN.md)。
-- 系统：亮度、息屏、浅色 / 深色 / 自动，电池与负载、告警详情。
+- 底部 5 个标签，按「我想做什么」分：**首页 · 蜂窝 · Wi-Fi · 出口 · 系统**。首页大字是一句结论（网络正常 / 信号偏弱 等）。
+- 蜂窝：载波、信号、网络模式、APN、SIM 与 eSIM 切换（经 luyaz-core 调 lpac）。
+- 出口：出口 IP 与归属地；Tailscale。不带代理功能，要的话见 [docs/PROXY.zh-CN.md](../docs/PROXY.zh-CN.md)。
+- 系统：亮度、息屏、浅色 / 深色 / 自动，语言，电池与负载、告警详情。
 - USB-C 口插上手机：和原厂屏幕一样问用来做什么——充电 + 上网（手机得到 USB 网卡）、18W 快速充电宝、网口配件——可以记住选择（系统 › 插入手机等设备时）。
 - 每次点击都有即时反馈；要确认的操作按两次。
-- 屏幕主人（`luyaz-sentinel`）：拉起或接管界面，崩了自动拉起并记告警；连续两次起不来就交还原厂界面（避免被固件升级成整机重启），长按屏幕右下角 3 秒回来。
-- `scripts/`：procd 启动脚本（`luyaz-core.init`、`luyaz-web.init`、`luyaz-sentinel.init`）、只读体检（`doctor.sh`，转给 `luyaz-core doctor` 的薄壳）、告警工具、配置备份（`config-backup.sh`）、ship 执行器和开机恢复（见 [docs/SHIP.md](docs/SHIP.md)）等，约定见 manager 的 [docs/RELIABILITY.md](../docs/RELIABILITY.md)。
+- **luyaz-sentinel** 是屏幕唯一的主人：拉起或接管界面，崩了自动拉起并记告警；连续两次没稳住就交还原厂界面（避免被固件升级成整机重启），长按屏幕右下角回来。
 
 ## 快速开始
 
-装到设备上请看 manager 的 **[快速上手](../docs/GETTING-STARTED.zh-CN.md)**：触屏界面由那边的装机包带上设备，已装好的设备用 `./install.sh devui` 更新。
+装到设备上请看 manager 仓库的 **[快速上手](../docs/GETTING-STARTED.zh-CN.md)**：装机包（`onboard/`）会编出这个界面，和 luyaz-core、luyaz-web、luyaz-sentinel 一起装到设备上。已装好的设备单独更新某个组件，见 [docs/SHIP.md](docs/SHIP.md)（旁路试跑、原子替换、可回滚）。
 
 ## 构建
 
-用 Docker（共用的 Rust 构建镜像，本机不用装工具链）：
+用 Docker：
 
 ```sh
-rs/setup-src.sh              # 一次：把打过补丁的 LVGL v9.5.0 和 FreeType 2.13.3 源码放进 docker 卷
-rs/build.sh device out/luyaz-ui   # 静态 aarch64-musl 的 luyaz-ui（cargo zigbuild）
+rs/setup-src.sh              # 一次：把打过补丁的 LVGL + FreeType 源码放进 Docker 卷
+rs/build.sh device [FILE]    # → target/aarch64-unknown-linux-musl/release-device/luyaz-ui
+rs/build.sh test             # cargo test
 ```
 
-`rs/` 里的 crate 是 manager Cargo workspace 的成员。manager 的 `onboard/build-kit.sh` 没给现成程序时会自己编触屏。
+在共用构建镜像（`onboard/build.Dockerfile`）里用 cargo zigbuild 编，LVGL 固定 v9.5。装机包 `onboard/build-kit.sh` 自己会调 `rs/build.sh device`。
 触屏字体（Nunito、中文兜底）用 `scripts/fonts/build-nunito.sh`、`scripts/fonts/build-cjk-fallback.sh` 生成（公开下载按 sha256 固定），装机包会自动调。
 
-测试：`scripts/test/docker.sh`（设备端脚本，busybox 容器里全部打桩）、`rs/build.sh test`（Rust 单元测试）、
-`rs/smoke.sh`（对着假核心离屏跑完整程序）。开发细节见 [docs/DEVELOPMENT.zh-CN.md](docs/DEVELOPMENT.zh-CN.md)。
+代码结构：入口 `rs/devui/src/main.rs`，各页 `rs/devui/src/ui/`，组件 `kit.rs`，色板 `theme.rs`，显示和触摸在 `rs/plat`。离屏渲染测试在 `rs/devui/src/render/`（`rs/smoke.sh`、`rs/parity.sh`）；`scripts/test/docker.sh` 在 busybox 容器里跑设备端脚本测试。设计规则见 [docs/DESIGN.md](../docs/DESIGN.md) §4。更多见 [docs/DEVELOPMENT.zh-CN.md](docs/DEVELOPMENT.zh-CN.md)。
+
+之前的 C 版已删除，留在 git tag `legacy-c-touch-ui`；更早的 litehtml 渲染器在 tag `legacy-litehtml`。
+
+## 在设备上
 
 > **新构建不要直接覆盖设备上的正式程序。** 一启动就崩的版本会被固件升级成整机重启循环；屏幕上几分钟没有界面，固件也会整机重启。
-> 先用别的文件名试跑，步骤见 [docs/DEVELOPMENT.zh-CN.md](docs/DEVELOPMENT.zh-CN.md#在真机上试新版本)。
+> 先用别的文件名试跑，步骤见 [docs/DEVELOPMENT.zh-CN.md](docs/DEVELOPMENT.zh-CN.md#在真机上试新版本) 和 [docs/SHIP.md](docs/SHIP.md)。
+
+布局：界面是 `/data/luyaz/ui/luyaz-ui`（进程名 `luyaz-ui`），设置 `devui.conf`、`operator-logos/` 目录和字体也在 `/data/luyaz/ui/`。界面由 luyaz-sentinel（`/etc/init.d/luyaz-sentinel`）拉起，自己不起。
+
+## 可靠性脚本
+
+`scripts/` 里是配合 manager 仓库使用的设备端脚本（约定见 [docs/RELIABILITY.md](../docs/RELIABILITY.md)）：procd 启动脚本（`luyaz-core.init`、`luyaz-web.init`、`luyaz-sentinel.init`）、更新执行器和开机恢复（`u60-ship.sh`、`u60-recover.sh`）、只读体检（`doctor.sh`）、配置备份（`config-backup.sh`）等。
 
 ## 文档
 
 - [docs/DEVELOPMENT.zh-CN.md](docs/DEVELOPMENT.zh-CN.md)：代码结构、构建、测试、真机试跑
 - [docs/HARDWARE.zh-CN.md](docs/HARDWARE.zh-CN.md)：屏幕、触摸、按键、背光等硬件接口
-- [docs/ESIM.zh-CN.md](docs/ESIM.zh-CN.md)：eSIM 切换页与核心接口
-- [docs/SPEEDTEST.zh-CN.md](docs/SPEEDTEST.zh-CN.md)：可选测速后端
-- 设计规范：manager 的 [docs/DESIGN.md](../docs/DESIGN.md) §4
+- [docs/ESIM.zh-CN.md](docs/ESIM.zh-CN.md)：eSIM 切换页
+- [docs/SPEEDTEST.zh-CN.md](docs/SPEEDTEST.zh-CN.md)：测速页
+- [docs/SHIP.md](docs/SHIP.md)：组件更新的设备端格式
+- 设计规范：[docs/DESIGN.md](../docs/DESIGN.md) §4
 
 ## 致谢
 
-- [33333s](https://github.com/33333s)：感谢作为本触屏界面和本机数据服务起点的两个参考仓库。
-- Wei REN：LVGL 与 Rust 重写、屏幕主人、eSIM、Tailscale、可靠性脚本。
-- [Jesther Silvestre](https://github.com/jesther-ai)：[open-u60-pro](https://github.com/jesther-ai/open-u60-pro)，manager 的起点。
+- Wei REN：Rust + LVGL 触屏界面（luyaz-ui）、eSIM 页、Tailscale 卡片。
+- [33333s](https://github.com/33333s)：[u60pro-devui](https://github.com/33333s/u60pro-devui) 是本触屏界面的起点（其 C 代码现已全部换掉）；界面读取的 luyaz-core，其设备读写层来自 [zwrt-datad](https://github.com/33333s/zwrt-datad)。
+- [Jesther Silvestre](https://github.com/jesther-ai)：[open-u60-pro](https://github.com/jesther-ai/open-u60-pro)，manager 仓库的起点。
 
 ## 许可证与免责声明
 
-[MIT](LICENSE)。LVGL（MIT）、FreeType（FTL / GPLv2）按各自许可证使用，详见 [NOTICE](NOTICE)。
+[MIT](LICENSE)。LVGL（MIT）、FreeType（FTL / GPLv2）、stb（public domain）按各自许可证使用，详见 [NOTICE](NOTICE)。
 仓库不含任何中兴字体或厂商二进制。和中兴通讯没有关系，只在你自己的设备上使用。

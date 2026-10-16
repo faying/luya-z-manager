@@ -11,7 +11,7 @@
 lpac（qmi_qrtr）◀── luyaz-core（crates/luyaz-esim）──HTTP 127.0.0.1:9460/v2/api──▶ rs/devui/src/data/esim.rs ──▶ 界面
 ```
 
-用到的接口（core 本机端口上，前缀 `/v2`）：`GET /api/esim/profiles`、`POST /api/esim/switch`、`GET /api/esim/job`（查切换进度）。（10-15 之前界面调的是 :9090 的 zte-agent。）
+用到的接口（core 本机端口上，前缀 `/v2`）：`GET /api/esim/profiles`、`POST /api/esim/switch`、`GET /api/esim/job`（查切换进度）。
 
 切换本身只是一条 `lpac profile enable`，难的是让中兴的协议栈认到新卡：它只在守护进程启动时读一次 SIM，
 所以 core 会给 UIM 重新上电、重启 `zte_topsw_mdm`、等 IMSI 变化，一般 10 秒内完成。这些都在 core 里做，界面只显示进度和结果。
@@ -20,7 +20,7 @@ lpac（qmi_qrtr）◀── luyaz-core（crates/luyaz-esim）──HTTP 127.0.0.
 
 ## 登录
 
-不用登录：core 的本机端口不要 token。（旧的 `esim.conf`、`/data/zte-agent.env` 密码界面已不再读。）
+不用登录：core 的本机端口不要 token。
 
 ## 注意
 

@@ -1,6 +1,6 @@
 # 设备账本（ledger）：格式与约定
 
-**现状（2026-10-15）**：u60-guard 已退役（10c 删）。下文「u60-guard / guard」的账本任务、待机记录现在由核心 luyaz-core（manager `crates/luyaz-core/src/longterm/`）承担，读的一方是 `<核心> doctor`（`/data/u60-guard/doctor.sh` 是薄壳）；u60-uid 的屏幕事由哨兵 luyaz-sentinel 承担（日志 10-16 E2c 起叫 `/tmp/luyaz-screen.log`，哨兵启动时把旧名改过来）；迁移后的设备上 `/tmp/u60-guard/…` 是 `/tmp/luyaz/…`。账本仍在 `/data/ledger/`；下文保留当时的写法作记录，按这里换主语读。
+**现状（2026-10-15）**：u60-guard 已退役（10c 删）。下文「u60-guard / guard」的账本任务、待机记录现在由核心 luyaz-core（manager `crates/luyaz-core/src/longterm/`）承担，读的一方是 `<核心> doctor`（`/data/luyaz/scripts/doctor.sh` 是薄壳）；u60-uid 的屏幕事由哨兵 luyaz-sentinel 承担（日志 10-16 E2c 起叫 `/tmp/luyaz-screen.log`，哨兵启动时把旧名改过来）；迁移后的设备上 `/tmp/u60-guard/…` 是 `/tmp/luyaz/…`。账本仍在 `/data/ledger/`；下文保留当时的写法作记录，按这里换主语读。
 
 u60-guard 在设备上记一本跨重启的事件账：整机重启、基带崩溃和恢复、我们自己的程序退出、datad 降级、
 每小时的耗电和资源。`doctor.sh --report 24h|7d` 读它，按「稳 / 好用 / 省」三类给出成绩单。

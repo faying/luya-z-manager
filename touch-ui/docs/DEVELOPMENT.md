@@ -12,15 +12,15 @@ was deleted on 2026-10-15 and is kept at git tag `legacy-c-touch-ui`; the older 
 | `rs/devui/src/main.rs`, `lib.rs` | Entry point: DRM, touch, keys and backlight; main loop |
 | `rs/devui/src/ui/*.rs`, `kit.rs`, `theme.rs` | Layout of the 5 tabs and their subpages (one file per page), shared widgets, light/dark themes and font loading |
 | `rs/devui/src/logic.rs`, `exec.rs` | Decision logic with no LVGL dependency (testable on its own); `exec.rs` re-execs the UI for a theme or language switch |
-| `rs/devui/src/data/datad.rs`, `json.rs` | Read data from the core (`luyaz-core`, `/v2/state` + `/v2/events` on `127.0.0.1:9460`); writes go through its `/control`, and the emergency script `/data/u60-guard/u60-fallback.sh` runs only when the core cannot be reached |
+| `rs/devui/src/data/datad.rs`, `json.rs` | Read data from the core (`luyaz-core`, `/v2/state` + `/v2/events` on `127.0.0.1:9460`); writes go through its `/control`, and the emergency script `/data/luyaz/scripts/luyaz-fallback.sh` runs only when the core cannot be reached |
 | `rs/devui/src/data/screen_feed.rs`, `net_view.rs`, `op_view.rs` | The home card / status bar conclusions and the write-transaction row come ready-made from the core's `GET /v2/screen` (rules in manager `crates/luyaz-core`); this code only parses them |
 | `rs/devui/src/data/core_api.rs` | Requests to the core's loopback API `127.0.0.1:9460/v2/api/...` (no token, no login); used by every feature module |
 | `rs/devui/src/data/{esim,tailscale,speedtest,netinfo,scenario,alerts}.rs` | Feature backends: eSIM / APN and other writes go through the core |
 | `rs/plat/` | Hardware interfaces (DRM, touch, keys, backlight), see [HARDWARE.md](HARDWARE.md) |
 | `rs/lvgl-sys/`, `rs/devui-model/` | LVGL/FreeType bindings and build; the model types the pages draw |
-| `rs/devui/src/conf.rs` | `devui.conf` (`/data/plugins/u60pro-devui/devui.conf`) |
+| `rs/devui/src/conf.rs` | `devui.conf` (`/data/luyaz/ui/devui.conf`) |
 | `patches/` | Small patch for LVGL v9.5.0 (synthetic bold in FreeType bitmap mode), applied by `rs/setup-src.sh` |
-| `scripts/` | Device-side scripts: `*.init` (procd), `u60-ship.sh`, `u60-recover.sh`, `alert-lib.sh`, `doctor.sh` (a thin shim over `<core> doctor`, `doctor-legacy.sh` as fallback), `config-backup.sh`, `chaos.sh`, etc. |
+| `scripts/` | Device-side scripts: `*.init` (procd), `u60-ship.sh` (installed as `luyaz-ship.sh`), `u60-recover.sh` (installed as `luyaz-recover.sh`), `luyaz-fallback.sh`, `alert-lib.sh`, `doctor.sh` (a thin shim over `<core> doctor`, `doctor-legacy.sh` as fallback), `config-backup.sh`, `chaos.sh`, etc. |
 
 The screen owner is not here: it is manager's `crates/luyaz-sentinel` (before 10-15: `u60-uid`, `src/uid.c`).
 
@@ -32,7 +32,7 @@ See [README](../README.md#build). Key points:
 
 - `rs/setup-src.sh` once: puts the patched LVGL v9.5.0 and FreeType sources into a docker volume.
 - `rs/build.sh device [FILE]` builds the static aarch64-musl `luyaz-ui` (cargo zigbuild in the shared build image; the crates are members of the manager Cargo workspace).
-- On the device: `tools/u60 ship touch` (it builds only `rs/`).
+- On the device: `tools/luyaz ship touch` (it builds only `rs/`).
 
 ## Fonts
 
@@ -64,15 +64,15 @@ Copy the device fonts from `/usr/ui/fonts/` on the device yourself; they don't g
 |---|---|
 | `/data/luyaz/ui/luyaz-ui` | UI binary (live slot; process name `luyaz-ui`) |
 | `/data/luyaz/ui/fonts/`, `/data/luyaz/ui/touchsim` | Nunito and the Chinese fallback font; the touch simulator |
-| `/data/plugins/u60pro-devui/` | Only `start.sh`, `devui.conf`, `esim.conf`, `operator-logos/` and `*.orig-backup` |
+| `/data/plugins/u60pro-devui/` | Only `start.sh`, `*.orig-backup` and `boot-trace.log` (`devui.conf`, `operator-logos/` and `fonts/` are in `/data/luyaz/ui/`) |
 | `/data/luyaz/luyaz-sentinel`, `/etc/init.d/luyaz-sentinel` | Screen owner and watchdog; screen state in `/data/luyaz/screen/` |
 | `/data/luyaz/luyaz-core`, `/etc/init.d/luyaz-core` | The core (data service; state in `/data/luyaz/core/`) |
-| `/data/u60-guard/` | Device scripts (`doctor.sh`, `u60-ship.sh`, …) |
+| `/data/luyaz/scripts/` | Device scripts (`doctor.sh`, `luyaz-ship.sh`, `datad-trial.sh`, `luyaz-fallback.sh`, …) |
 
 Autostart goes only through `/etc/init.d/<name> start` lines in `/etc/rc.local`; `enable` is not used.
 
-Controlling the screen: `echo vendor > /tmp/luyaz-screen.ctl` hands it to the stock UI, `echo devui > /tmp/luyaz-screen.ctl` takes it back
-(the old `/tmp/u60-uid.ctl` is gone). If the sentinel fails to start the UI twice in a row, it gives up and hands the screen back to the stock UI;
+Controlling the screen: `echo vendor > /tmp/luyaz-screen.ctl` hands it to the stock UI, `echo devui > /tmp/luyaz-screen.ctl` takes it back.
+If the sentinel fails to start the UI twice in a row, it gives up and hands the screen back to the stock UI;
 the counters are in `/data/luyaz/screen/attempts` and `/data/luyaz/screen/gave-up`.
 
 ## Trying a new build on a real device
@@ -80,7 +80,7 @@ the counters are in `/data/luyaz/screen/attempts` and `/data/luyaz/screen/gave-u
 Two hard constraints: **a UI that crashes on startup gets escalated by the firmware into a whole-device reboot loop**; **if the screen has no UI at all for a few minutes, the firmware also reboots the whole device**.
 So try a new build under a different file name first and only move it to the live slot once it is stable; two UIs also must not fight over `/dev/dri/card0`.
 
-Use `tools/u60 ship touch` (see [SHIP.md](SHIP.md)): it does exactly this (sentinel `hold`, side-by-side `luyaz-ui.test`, checks, atomic replace, `release`, rollback). Regular users use the install kit's `./install.sh devui`.
+Use `tools/luyaz ship touch` (see [SHIP.md](SHIP.md)): it does exactly this (sentinel `hold`, side-by-side `luyaz-ui.test`, checks, atomic replace, `release`, rollback). Regular users use the install kit's `./install.sh devui`.
 
 Notes:
 

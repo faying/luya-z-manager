@@ -67,13 +67,18 @@ async function own(p) {
   await p.waitForFunction(() => !/^—$/.test(document.querySelector("#hi-ip")?.textContent.trim() ?? "—"), null, { timeout: 8000 }).catch(() => {});
   ok(/\d+\.\d+\.\d+\.\d+/.test(await txt(p, "#hi-ip")), `cellular exit IP: ${await txt(p, "#hi-ip")}`);
   ok(/46692|漫游/.test(await txt(p, "#hi-reg") + await txt(p, "#hi-roam")), `registered / roaming: ${await txt(p, "#hi-reg")} | ${await txt(p, "#hi-roam")}`);
-  // operator logo (oplogo.rs): the file from --logo-dir, only in the pushed leaves
-  const imgOk = (sel) => p.waitForFunction((q) => { const i = document.querySelector(q); return i && i.complete && i.naturalWidth > 0; }, sel, { timeout: 8000 }).then(() => true, () => false);
-  ok(await imgOk("#hi-reg img[src='/oplogo/chunghwa']"), "Registered on: logo image loads");
-  ok(await imgOk("#hm-sub img[src='/oplogo/chunghwa']"), "header subtitle: logo image loads");
-  ok(await p.locator("#hi-reg img").getAttribute("alt") === "" && await p.locator("#hi-reg img").getAttribute("loading") === "lazy" && await p.locator("#hi-reg img").getAttribute("height") === "18", "img has alt='', loading=lazy, explicit height");
+  // operator logo (oplogo.rs): the file from --logo-dir, only in the pushed leaves. The logos are
+  // with no chunghwa file in --logo-dir the page shows the letter badge instead.
   const lg = await fetch(`${WEB}/oplogo/chunghwa`, { headers: { cookie: `lw_sid=${sid}` } });
-  ok(lg.status === 200 && /image\/svg\+xml/.test(lg.headers.get("content-type") ?? "") && /max-age=\d{6,}/.test(lg.headers.get("cache-control") ?? ""), `/oplogo/chunghwa: ${lg.status} ${lg.headers.get("content-type")} ${lg.headers.get("cache-control")}`);
+  if (lg.status === 404) {
+    ok(await p.locator("#hi-reg .op-badge").count() === 1 && await p.locator("#hm-sub .op-badge").count() === 1 && await p.locator("#hi-reg img, #hm-sub img").count() === 0, "no logo file: Registered on + header subtitle show the letter badge");
+  } else {
+    const imgOk = (sel) => p.waitForFunction((q) => { const i = document.querySelector(q); return i && i.complete && i.naturalWidth > 0; }, sel, { timeout: 8000 }).then(() => true, () => false);
+    ok(await imgOk("#hi-reg img[src='/oplogo/chunghwa']"), "Registered on: logo image loads");
+    ok(await imgOk("#hm-sub img[src='/oplogo/chunghwa']"), "header subtitle: logo image loads");
+    ok(await p.locator("#hi-reg img").getAttribute("alt") === "" && await p.locator("#hi-reg img").getAttribute("loading") === "lazy" && await p.locator("#hi-reg img").getAttribute("height") === "18", "img has alt='', loading=lazy, explicit height");
+    ok(lg.status === 200 && /image\/svg\+xml/.test(lg.headers.get("content-type") ?? "") && /max-age=\d{6,}/.test(lg.headers.get("cache-control") ?? ""), `/oplogo/chunghwa: ${lg.status} ${lg.headers.get("content-type")} ${lg.headers.get("cache-control")}`);
+  }
   for (const bad of ["nope", "cmlink", "..%2f..%2fetc%2fpasswd", "china-broadnet"]) {
     ok((await fetch(`${WEB}/oplogo/${bad}`, { headers: { cookie: `lw_sid=${sid}` } })).status === 404, `/oplogo/${bad}: 404`);
   }

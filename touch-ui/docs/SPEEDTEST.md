@@ -2,7 +2,7 @@
 
 **English** · [中文](SPEEDTEST.zh-CN.md)
 
-The touch UI's speed test page drives the core's speed test engine (manager repo, `crates/luyaz-speedtest`, the same one the admin web page uses; before 10-15 it was zte-agent's); the screen side is `rs/devui/src/data/speedtest.rs` and `rs/devui/src/ui/speed.rs`. Nothing extra is installed on the device.
+The touch UI's speed test page drives the core's speed test engine (manager repo, `crates/luyaz-speedtest`, the same one the admin web page uses); the screen side is `rs/devui/src/data/speedtest.rs` and `rs/devui/src/ui/speed.rs`. Nothing extra is installed on the device.
 
 - Start / stop: `POST /api/speedtest/start`, `POST /api/speedtest/stop` (the core runs the test in a background thread).
 - Progress: `GET /api/speedtest/progress`, polled about once a second while the page is open.

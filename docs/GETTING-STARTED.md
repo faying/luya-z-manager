@@ -15,7 +15,7 @@ It is written for people new to this project. Every command comes from scripts a
 | Repository | What it is on the device | Purpose |
 |---|---|---|
 | [luya-z-manager](https://github.com/faying/luya-z-manager) (this repository) | `luyaz-core` (:9460) + `luyaz-web` (:9090) + `luyaz-sentinel` | The device REST API, the advanced admin web in the browser, eSIM, **and the install kit (`onboard/`)** |
-| [luya-z-touch-ui](https://github.com/faying/luya-z-touch-ui) | `/data/luyaz/ui/` (`luyaz-ui`) | Front-panel touch UI (Rust, `touch-ui/rs/`; its source now lives in this repository under `touch-ui/`), plus the health check and Wi-Fi fallback scripts in `/data/u60-guard/` |
+| [luya-z-touch-ui](https://github.com/faying/luya-z-touch-ui) | `/data/luyaz/ui/` (`luyaz-ui`) | Front-panel touch UI (Rust, `touch-ui/rs/`; its source now lives in this repository under `touch-ui/`), plus the health check and fallback scripts in `/data/luyaz/scripts/` |
 | [luya-z-data-service](https://github.com/faying/luya-z-data-service) | (no longer installed) | The original Rust `zwrt-datad`; luyaz-core in this repository replaced it and the kit no longer uses it |
 
 How they connect on the device:
@@ -59,7 +59,7 @@ What it looks like once installed (screenshots use fake data):
 What survives the upgrade: every program and all data under `/data`, the SSH program and keys (`/data/ssh`), the network address, the web password and your settings; firmware auto-update stays off.
 To recover, the key step is adding the line that starts SSH back to `rc.local` without ADB. The maintainer did this ***REMOVED***,
 ***REMOVED***, so the steps are not documented here. Once SSH is back, run `./install.sh admin devui` from a freshly built install kit; it puts the services back and fixes `rc.local`.
-Note: `/data/u60-kit/rc.local.orig` holds the stock `rc.local` of the firmware **before** the upgrade. To uninstall after an upgrade, do not copy it over the new one; just remove the lines this project added.
+Note: `/data/luyaz/kit/rc.local.orig` holds the stock `rc.local` of the firmware **before** the upgrade. To uninstall after an upgrade, do not copy it over the new one; just remove the lines this project added.
 
 **New device already on B28 or later: an untested idea for people who want to try it themselves.** When the stock web UI restores a configuration backup, it unpacks the files in it as root with `tar -C /` and then reboots.
 So in theory you could: take a backup in the web UI → ***REMOVED*** to `rc.local`, and put an SSH server (for example the dropbear from the install kit) and your public key into the archive → ***REMOVED*** → restore it in the web UI.
@@ -105,17 +105,17 @@ The first run downloads Docker images and dependencies and takes about 20–30 m
 | Touch program | touch-ui's `rs/build.sh device` (Rust, Docker); output `touch-ui/out/u60pro-devui-rs`, installed as `/data/luyaz/ui/luyaz-ui` |
 | luyaz-sentinel (screen owner + watchdog) | Built from this repository (`crates/luyaz-sentinel`, profile `release-device`) |
 | Touch UI fonts | Nunito (pinned google/fonts commit) and a Chinese fallback font (Resource Han Rounded subset), both OFL, pinned sha256, generated in Docker. The ZTE fonts that ship on the device are not packaged; the touch UI reads them directly from `/usr/ui/fonts/` on the device |
-| Core (`zwrt-datad` in the kit) | luyaz-core from this repository (`cargo zigbuild --profile release-device -p luyaz-core` in `onboard/build.Dockerfile`, image pinned by digest, dependencies locked by `Cargo.lock`) |
+| Core (`luyaz-core`) | luyaz-core from this repository (`cargo zigbuild --profile release-device -p luyaz-core` in `onboard/build.Dockerfile`, image pinned by digest, dependencies locked by `Cargo.lock`) |
 | eSIM tools (lpac) | `scripts/esim/build-esim-bundle.sh --out`: lpac and its libraries from Alpine 3.24 (`scripts/esim/alpine.lock` pins versions and sha256) + a statx compatibility shim + `qmi_uim_probe` |
 | Process supervision, health check scripts | touch-ui's `scripts/` |
 
-Before packaging, the script checks: the touch program must be the Rust build (the C/LVGL touch UI was deleted and only survives in the `legacy-c-touch-ui` tag); the core (`zwrt-datad`) must be the Rust version with no hard-coded external update source. If either check fails, it stops.
+Before packaging, the script checks: the touch program must be the Rust build (the C/LVGL touch UI was deleted and only survives in the `legacy-c-touch-ui` tag); the core must be the Rust version with no hard-coded external update source. If either check fails, it stops.
 
 You can also build the pieces separately and point `build-kit.sh` at the existing files:
 
 ```sh
 (cd touch-ui && rs/setup-src.sh && rs/build.sh device out/u60pro-devui-rs)   # read from here by default
-DATAD_BIN=/path/to/zwrt-datad ./onboard/build-kit.sh       # a core built elsewhere instead of building luyaz-core
+DATAD_BIN=/path/to/luyaz-core ./onboard/build-kit.sh       # a core built elsewhere instead of building luyaz-core
 ```
 
 Other variables: `DEVUI_BIN` (touch binary), `SENTINEL_BIN` (luyaz-sentinel), `ESIM_TGZ` (a prebuilt eSIM bundle), `DEVUI_FONTS_DIR` (a prebuilt font directory), `FONTS=0` (no fonts),
@@ -163,7 +163,7 @@ Then:
 
 - Open `http://192.168.0.1:9090/` in a browser and log in with the admin web password.
 - SSH: `ssh -p 2222 root@192.168.0.1` (key only; after installing, the script prints a snippet you can add to `~/.ssh/config`).
-- The admin web's Health page runs the same checks as `doctor`. If the admin web will not open, run `sh /data/u60-guard/doctor.sh` over SSH.
+- The admin web's Health page runs the same checks as `doctor`. If the admin web will not open, run `sh /data/luyaz/scripts/doctor.sh` over SSH.
 
 | Login page (phone) | Health page |
 |---|---|
@@ -178,11 +178,11 @@ Then:
 ./install.sh devui      # touch UI + core (luyaz-core)
 ./install.sh esim       # eSIM tools
 ./install.sh reboot     # optional: reboot once to confirm everything comes up on boot
-./install.sh recover    # optional, not part of the full set: boot-time clean-up used by u60-ship.sh
-                        #   (adds one line to rc.local; run it only if you use u60-ship.sh)
+./install.sh recover    # optional, not part of the full set: boot-time clean-up used by luyaz-ship.sh
+                        #   (adds one line to rc.local; run it only if you use luyaz-ship.sh)
 ```
 
-If the device has an unfinished `u60-ship.sh` transaction (see touch-ui [docs/SHIP.md](https://github.com/faying/luya-z-touch-ui/blob/main/docs/SHIP.md)), `admin`, `devui` and `recover` refuse to install until it is finished or rolled back.
+If the device has an unfinished `luyaz-ship.sh` transaction (see touch-ui [docs/SHIP.md](https://github.com/faying/luya-z-touch-ui/blob/main/docs/SHIP.md)), `admin`, `devui` and `recover` refuse to install until it is finished or rolled back.
 
 **Back up and restore configuration** (configuration only, no programs; backups contain passwords, do not share them):
 
@@ -196,7 +196,7 @@ If the touch program fails to start twice in a row, `luyaz-sentinel` hands the s
 long-press the bottom-right corner of the screen for 3 seconds to switch back.
 
 **Uninstall**: there is no uninstall command; the steps are in the install kit README's 「恢复原厂」 (Restore stock) section: stop and delete the services installed under `/etc/init.d/`,
-restore the original `rc.local` from `/data/u60-kit/rc.local.orig`, delete the directories installed under `/data`, and reboot (if you upgraded the firmware, see the last note under "Firmware versions" in section 2).
+restore the original `rc.local` from `/data/luyaz/kit/rc.local.orig`, delete the directories installed under `/data`, and reboot (if you upgraded the firmware, see the last note under "Firmware versions" in section 2).
 
 ## 7. Proxy (optional)
 
@@ -221,8 +221,8 @@ The public version does not include a proxy. To run a transparent proxy on the d
   and add `--noproxy '*'` when testing with `curl`.
 - **Admin web will not open but SSH works**: most likely the proxy as well. Verify on the device: `wget -q -O- http://127.0.0.1:9090/ | head -c 200`.
 - **SSH occasionally refuses connections**: dropbear refuses reconnects that come too quickly; wait a few seconds and try again. Combine multiple commands into one `ssh` where possible.
-- **No data on the screen**: `/etc/init.d/luyaz-core restart` (`/etc/init.d/zwrt-datad` on a device not yet moved to the `/data/luyaz/` layout), then check `/tmp/zwrt-datad.log` (the log keeps its old name).
+- **No data on the screen**: `/etc/init.d/luyaz-core restart`, then check `/tmp/luyaz-core.log`.
 - **Web login locked**: the stock web UI locks for a while after 5 wrong passwords in a row. The script shows the remaining attempts and a countdown; do not keep retrying.
-- **`admin` / `devui` refuse to install, saying there is an unfinished transaction**: a `u60-ship.sh` update did not finish. Finish it or roll it back first (touch-ui `docs/SHIP.md`); do not delete the transaction log by hand.
+- **`admin` / `devui` refuse to install, saying there is an unfinished transaction**: a `luyaz-ship.sh` update did not finish. Finish it or roll it back first (touch-ui `docs/SHIP.md`); do not delete the transaction log by hand.
 - **Install failed halfway**: `install.sh` can be rerun; parts already installed are skipped or overwritten.
 - **Device time looks off by several hours**: the firmware stores local time as UTC, and both the admin web and the touch UI display local time. This is expected.

@@ -15,7 +15,7 @@
 | 仓库 | 在设备上是什么 | 作用 |
 |---|---|---|
 | [luya-z-manager](https://github.com/faying/luya-z-manager)（本仓库） | `luyaz-core`（:9460）+ `luyaz-web`（:9090）+ `luyaz-sentinel` | 设备的 REST API、浏览器里的高级后台、eSIM，**以及装机包（`onboard/`）** |
-| [luya-z-touch-ui](https://github.com/faying/luya-z-touch-ui) | `/data/luyaz/ui/`（`luyaz-ui`） | 前面板触屏界面（Rust，`touch-ui/rs/`；源码现在在本仓库的 `touch-ui/` 里），以及 `/data/u60-guard/` 下的体检和 Wi-Fi 兜底脚本 |
+| [luya-z-touch-ui](https://github.com/faying/luya-z-touch-ui) | `/data/luyaz/ui/`（`luyaz-ui`） | 前面板触屏界面（Rust，`touch-ui/rs/`；源码现在在本仓库的 `touch-ui/` 里），以及 `/data/luyaz/scripts/` 下的体检和兜底脚本 |
 | [luya-z-data-service](https://github.com/faying/luya-z-data-service) | （不再安装） | 原来的 Rust 版 `zwrt-datad`；已由本仓库的 luyaz-core 取代，装机包不再用它 |
 
 它们在设备上这样连起来：
@@ -59,7 +59,7 @@ ubus / uci / sysfs ──▶ luyaz-core 127.0.0.1:9460 ◀──（/v2/screen、
 升级后还在的：`/data` 下的全部程序和数据、SSH 的程序和密钥（`/data/ssh`）、网络地址、网页密码、各项设置；固件自动升级仍是关的。
 要恢复，关键是在没有 ADB 的情况下把启动 SSH 的那一行加回 `rc.local`。维护者用的是***REMOVED***，
 但这要一把***REMOVED***，所以这里不写步骤。SSH 回来以后，用新编的装机包 `./install.sh admin devui` 再装一次，就会放回服务、改好 `rc.local`。
-注意：`/data/u60-kit/rc.local.orig` 存的是**升级前**固件的原厂 `rc.local`，升级后要卸载时别拿它去覆盖，只删掉我们加的那几行。
+注意：`/data/luyaz/kit/rc.local.orig` 存的是**升级前**固件的原厂 `rc.local`，升级后要卸载时别拿它去覆盖，只删掉我们加的那几行。
 
 **新设备已经是 B28 以后：一个没验证过的思路，供有能力的人自己尝试。** ***REMOVED***在还原时会以 root 身份把备份里的文件 `tar -C /` 解开，然后重启。
 所以理论上可以：先在设备网页上***REMOVED*** `rc.local` 里加一行启动 SSH，并把 SSH 程序（比如装机包里的 dropbear）、公钥一起放进包里 → ***REMOVED*** → 在网页上还原。
@@ -105,17 +105,17 @@ cd luya-z-manager
 | 触屏程序 | touch-ui 的 `rs/build.sh device`（Rust，Docker），产物 `touch-ui/out/u60pro-devui-rs`，装成 `/data/luyaz/ui/luyaz-ui` |
 | luyaz-sentinel（屏幕主人 + 看门狗） | 本仓库现编（`crates/luyaz-sentinel`，profile `release-device`） |
 | 触屏字体 | Nunito（google/fonts 固定提交）和中文兜底字体（Resource Han Rounded 子集），都是 OFL，sha256 固定，Docker 里生成。设备自带的中兴字体不打包，触屏直接读设备上的 `/usr/ui/fonts/` |
-| 核心（装机包里叫 `zwrt-datad`） | 本仓库的 luyaz-core（`onboard/build.Dockerfile` 里 `cargo zigbuild --profile release-device -p luyaz-core`，镜像按 digest 固定，`Cargo.lock` 锁依赖） |
+| 核心（`luyaz-core`） | 本仓库的 luyaz-core（`onboard/build.Dockerfile` 里 `cargo zigbuild --profile release-device -p luyaz-core`，镜像按 digest 固定，`Cargo.lock` 锁依赖） |
 | eSIM 工具（lpac） | `scripts/esim/build-esim-bundle.sh --out`：Alpine 3.24 的 lpac 和依赖库（`scripts/esim/alpine.lock` 钉版本和 sha256）+ statx 兼容垫片 + `qmi_uim_probe` |
 | 进程监督、体检脚本 | touch-ui 的 `scripts/` |
 
-打包前会检查：触屏程序必须是 Rust 版（C/LVGL 版触屏已删，只留在 tag `legacy-c-touch-ui`）；核心（`zwrt-datad`）必须是 Rust 版、没有写死的外部更新源。不对就停。
+打包前会检查：触屏程序必须是 Rust 版（C/LVGL 版触屏已删，只留在 tag `legacy-c-touch-ui`）；核心必须是 Rust 版、没有写死的外部更新源。不对就停。
 
 也可以分开编，再告诉 `build-kit.sh` 用现成的文件：
 
 ```sh
 (cd touch-ui && rs/setup-src.sh && rs/build.sh device out/u60pro-devui-rs)   # 默认就读这里
-DATAD_BIN=/path/to/zwrt-datad ./onboard/build-kit.sh       # 用别处编好的核心，不现编 luyaz-core
+DATAD_BIN=/path/to/luyaz-core ./onboard/build-kit.sh       # 用别处编好的核心，不现编 luyaz-core
 ```
 
 其他变量：`DEVUI_BIN`（触屏二进制）、`SENTINEL_BIN`（luyaz-sentinel）、`ESIM_TGZ`（现成的 eSIM 包）、`DEVUI_FONTS_DIR`（现成的字体目录）、`FONTS=0`（不带字体）、
@@ -163,7 +163,7 @@ cd luyaz-kit
 
 - 浏览器打开 `http://192.168.0.1:9090/`，用高级后台密码登录。
 - SSH：`ssh -p 2222 root@192.168.0.1`（只认密钥；装完脚本会打印一段可以加进 `~/.ssh/config` 的配置）。
-- 后台「健康」页和 `doctor` 是同一套检查，后台打不开时在 SSH 里跑 `sh /data/u60-guard/doctor.sh`。
+- 后台「健康」页和 `doctor` 是同一套检查，后台打不开时在 SSH 里跑 `sh /data/luyaz/scripts/doctor.sh`。
 
 | 登录页（手机） | 健康页 |
 |---|---|
@@ -178,11 +178,11 @@ cd luyaz-kit
 ./install.sh devui      # 触屏界面 + 核心（luyaz-core）
 ./install.sh esim       # eSIM 工具
 ./install.sh reboot     # 可选：重启一次，确认开机都能自己起来
-./install.sh recover    # 可选，不在全套里：u60-ship.sh 用的开机收尾
-                        #   （会在 rc.local 加一行；只在用 u60-ship.sh 时才装）
+./install.sh recover    # 可选，不在全套里：luyaz-ship.sh 用的开机收尾
+                        #   （会在 rc.local 加一行；只在用 luyaz-ship.sh 时才装）
 ```
 
-设备上有没结束的 `u60-ship.sh` 事务时（见 touch-ui [docs/SHIP.md](https://github.com/faying/luya-z-touch-ui/blob/main/docs/SHIP.md)），`admin`、`devui`、`recover` 会拒绝安装，要先把事务做完或退回。
+设备上有没结束的 `luyaz-ship.sh` 事务时（见 touch-ui [docs/SHIP.md](https://github.com/faying/luya-z-touch-ui/blob/main/docs/SHIP.md)），`admin`、`devui`、`recover` 会拒绝安装，要先把事务做完或退回。
 
 **备份和恢复配置**（只有配置，不含程序；备份里有密码，别外传）：
 
@@ -196,7 +196,7 @@ cd luyaz-kit
 长按屏幕右下角 3 秒可以再切回来。
 
 **卸载**：没有卸载命令，步骤见装机包 README 的「恢复原厂」一节：停掉并删掉 `/etc/init.d/` 下装的几个服务、
-用 `/data/u60-kit/rc.local.orig` 换回原来的 `rc.local`、删掉 `/data` 下装的目录、重启（升级过固件的，见第 2 节「固件版本」最后一句）。
+用 `/data/luyaz/kit/rc.local.orig` 换回原来的 `rc.local`、删掉 `/data` 下装的目录、重启（升级过固件的，见第 2 节「固件版本」最后一句）。
 
 ## 7. 代理（可选）
 
@@ -221,8 +221,8 @@ cd luyaz-kit
   用 `curl` 测时加 `--noproxy '*'`。
 - **后台网页打不开但 SSH 通**：多半也是代理。在设备上验证：`wget -q -O- http://127.0.0.1:9090/ | head -c 200`。
 - **SSH 偶尔拒绝连接**：dropbear 对太快的重连会拒绝，等几秒再连；多条命令尽量合并到一次 `ssh` 里。
-- **屏幕没数据**：`/etc/init.d/luyaz-core restart`（还没换到 `/data/luyaz/` 布局的设备是 `/etc/init.d/zwrt-datad`），看 `/tmp/zwrt-datad.log`（日志名没改）。
+- **屏幕没数据**：`/etc/init.d/luyaz-core restart`，看 `/tmp/luyaz-core.log`。
 - **网页登录被锁**：原厂网页连续输错 5 次会锁一段时间，脚本会显示剩余次数和倒计时，别连着试。
-- **`admin` / `devui` 拒绝安装，说有没结束的事务**：之前一次 `u60-ship.sh` 更新没做完。先把它做完或退回（touch-ui `docs/SHIP.md`），别手工删事务日志。
+- **`admin` / `devui` 拒绝安装，说有没结束的事务**：之前一次 `luyaz-ship.sh` 更新没做完。先把它做完或退回（touch-ui `docs/SHIP.md`），别手工删事务日志。
 - **装到一半失败**：`install.sh` 可以反复跑，装好的部分会跳过或覆盖。
 - **设备时间看着差几个小时**：固件把当地时间当 UTC 存，后台和触屏都按当地时间显示，这是正常的。

@@ -12,15 +12,15 @@
 | `rs/devui/src/main.rs`、`lib.rs` | 入口：DRM、触摸、按键、背光，主循环 |
 | `rs/devui/src/ui/*.rs`、`kit.rs`、`theme.rs` | 5 个标签和各子页面的布局（一页一个文件）、通用控件、浅色/深色主题和字体加载 |
 | `rs/devui/src/logic.rs`、`exec.rs` | 不依赖 LVGL 的判断逻辑（可单独测试）；`exec.rs` 在换主题或语言时重新 exec 界面 |
-| `rs/devui/src/data/datad.rs`、`json.rs` | 从核心（`luyaz-core`，`127.0.0.1:9460` 的 `/v2/state` + `/v2/events`）读数据；写操作走它的 `/control`，只有核心连不上时才跑应急脚本 `/data/u60-guard/u60-fallback.sh` |
+| `rs/devui/src/data/datad.rs`、`json.rs` | 从核心（`luyaz-core`，`127.0.0.1:9460` 的 `/v2/state` + `/v2/events`）读数据；写操作走它的 `/control`，只有核心连不上时才跑应急脚本 `/data/luyaz/scripts/luyaz-fallback.sh` |
 | `rs/devui/src/data/screen_feed.rs`、`net_view.rs`、`op_view.rs` | 首页卡片/状态栏的结论和写操作事务行由核心的 `GET /v2/screen` 算好（规则在 manager `crates/luyaz-core`），这里只解析 |
 | `rs/devui/src/data/core_api.rs` | 核心本机接口 `127.0.0.1:9460/v2/api/...` 的请求（不要 token、不登录）；各功能模块都走它 |
 | `rs/devui/src/data/{esim,tailscale,speedtest,netinfo,scenario,alerts}.rs` | 各功能的后端：eSIM / APN 等写操作走核心 |
 | `rs/plat/` | 硬件接口（DRM、触摸、按键、背光），见 [HARDWARE.zh-CN.md](HARDWARE.zh-CN.md) |
 | `rs/lvgl-sys/`、`rs/devui-model/` | LVGL/FreeType 绑定和编译；页面要画的数据模型 |
-| `rs/devui/src/conf.rs` | `devui.conf`（`/data/plugins/u60pro-devui/devui.conf`） |
+| `rs/devui/src/conf.rs` | `devui.conf`（`/data/luyaz/ui/devui.conf`） |
 | `patches/` | 给 LVGL v9.5.0 的小补丁（FreeType 位图模式的合成粗体），由 `rs/setup-src.sh` 打 |
-| `scripts/` | 设备端脚本：`*.init`（procd）、`u60-ship.sh`、`u60-recover.sh`、`alert-lib.sh`、`doctor.sh`（`<核心> doctor` 的薄壳，`doctor-legacy.sh` 兜底）、`config-backup.sh`、`chaos.sh` 等 |
+| `scripts/` | 设备端脚本：`*.init`（procd）、`u60-ship.sh`（装成 `luyaz-ship.sh`）、`u60-recover.sh`（装成 `luyaz-recover.sh`）、`luyaz-fallback.sh`、`alert-lib.sh`、`doctor.sh`（`<核心> doctor` 的薄壳，`doctor-legacy.sh` 兜底）、`config-backup.sh`、`chaos.sh` 等 |
 
 屏幕的主人不在这里：是 manager 的 `crates/luyaz-sentinel`（10-15 之前是 `u60-uid`，`src/uid.c`）。
 
@@ -32,7 +32,7 @@
 
 - 先跑一次 `rs/setup-src.sh`：把打过补丁的 LVGL v9.5.0 和 FreeType 源码放进 docker 卷。
 - `rs/build.sh device [FILE]` 编静态 aarch64-musl 的 `luyaz-ui`（共用构建镜像里 cargo zigbuild；这些 crate 是 manager Cargo workspace 的成员）。
-- 上机：`tools/u60 ship touch`（只编 `rs/`）。
+- 上机：`tools/luyaz ship touch`（只编 `rs/`）。
 
 ## 字体
 
@@ -64,15 +64,15 @@ rs/parity.sh MODEL_DIR REF_DIR OUT_DIR # 和 C 版渲染测试逐像素对拍（
 |---|---|
 | `/data/luyaz/ui/luyaz-ui` | 界面程序（正式位置；进程名 `luyaz-ui`） |
 | `/data/luyaz/ui/fonts/`、`/data/luyaz/ui/touchsim` | Nunito 和中文兜底字体；模拟触摸工具 |
-| `/data/plugins/u60pro-devui/` | 只剩 `start.sh`、`devui.conf`、`esim.conf`、`operator-logos/` 和 `*.orig-backup` |
+| `/data/plugins/u60pro-devui/` | 只剩 `start.sh`、`*.orig-backup` 和 `boot-trace.log`（`devui.conf`、`operator-logos/`、`fonts/` 在 `/data/luyaz/ui/`） |
 | `/data/luyaz/luyaz-sentinel`、`/etc/init.d/luyaz-sentinel` | 屏幕主人兼看门狗；屏幕状态在 `/data/luyaz/screen/` |
 | `/data/luyaz/luyaz-core`、`/etc/init.d/luyaz-core` | 核心（数据服务；状态在 `/data/luyaz/core/`） |
-| `/data/u60-guard/` | 设备脚本（`doctor.sh`、`u60-ship.sh` 等） |
+| `/data/luyaz/scripts/` | 设备脚本（`doctor.sh`、`luyaz-ship.sh`、`datad-trial.sh`、`luyaz-fallback.sh` 等） |
 
 开机自启只走 `/etc/rc.local` 里的 `/etc/init.d/<名字> start`，不用 `enable`。
 
-屏幕的控制：`echo vendor > /tmp/luyaz-screen.ctl` 把屏幕交给原厂界面，`echo devui > /tmp/luyaz-screen.ctl` 换回来
-（旧的 `/tmp/u60-uid.ctl` 已没有）。哨兵连续两次拉不起界面会放弃并交还原厂界面，
+屏幕的控制：`echo vendor > /tmp/luyaz-screen.ctl` 把屏幕交给原厂界面，`echo devui > /tmp/luyaz-screen.ctl` 换回来。
+哨兵连续两次拉不起界面会放弃并交还原厂界面，
 计数在 `/data/luyaz/screen/attempts`、`/data/luyaz/screen/gave-up`。
 
 ## 在真机上试新版本
@@ -80,7 +80,7 @@ rs/parity.sh MODEL_DIR REF_DIR OUT_DIR # 和 C 版渲染测试逐像素对拍（
 两条硬约束：**一启动就崩的界面会被固件升级成整机重启循环**；**屏幕上几分钟没有任何界面，固件也会整机重启**。
 所以新版本先用别的文件名试跑，确认稳定后再换正式位置；两个界面也不能同时抢 `/dev/dri/card0`。
 
-用 `tools/u60 ship touch`（见 [SHIP.md](SHIP.md)）：它做的就是这些（哨兵 `hold`、旁路 `luyaz-ui.test`、检查、原子替换、`release`、退回）。普通用户用装机包 `./install.sh devui`。
+用 `tools/luyaz ship touch`（见 [SHIP.md](SHIP.md)）：它做的就是这些（哨兵 `hold`、旁路 `luyaz-ui.test`、检查、原子替换、`release`、退回）。普通用户用装机包 `./install.sh devui`。
 
 注意：
 

@@ -42,9 +42,9 @@
 
 | 组件 | 期 | 状态 | 正式文件 | 状态文件（精确清单，不按目录） | 试跑 / 转正后检查 |
 |---|---|---|---|---|---|
-| `datad`（别名 `core`，10e R10；事务号和清单仍写 `datad`） | 一 | 可用 | 核心：迁移后（有 `/data/luyaz/core/.migrated`，用户设备 10-15 起）`/data/luyaz/luyaz-core`，旧布局 `/data/plugins/zwrt-datad/zwrt-datad` | `/data/zwrt-datad/cooling.conf`、`/data/zwrt-datad/neighbor.json` | 旁路顶替 180 s / 120 s（datad-trial 的全部检查） |
+| `core`（别名 `datad`；Luya-Z D4c 起事务号和清单写 `core`，旧的 `datad` 行照样算同一个） | 一 | 可用 | 核心 `/data/luyaz/luyaz-core` | `/data/zwrt-datad/cooling.conf`、`/data/zwrt-datad/neighbor.json` | 旁路顶替 180 s / 120 s（datad-trial 的全部检查） |
 | `agent` | 一 | **8d-2c 删除**：zte-agent 退役，接口归核心 luyaz-core；stage / record-kit / prepare-rollback 按名字拒绝（「已删除（8d-2c）」），`tools/u60` 构建前就拒 | （原 `/data/zte-agent`，留在设备上不动） | — | — |
-| `touch` | 二 | 可用（10-15 起只编 `rs/`） | `/data/luyaz/ui/luyaz-ui`、`/data/plugins/u60pro-devui/start.sh` | `/data/plugins/u60pro-devui/devui.conf`、`…/esim.conf` | 旁路顶替 60 s / 120 s（下面「第二期」的 touch 检查） |
+| `touch` | 二 | 可用（10-15 起只编 `rs/`） | `/data/luyaz/ui/luyaz-ui`、`/data/plugins/u60pro-devui/start.sh` | `/data/luyaz/ui/devui.conf` | 旁路顶替 60 s / 120 s（下面「第二期」的 touch 检查） |
 | `uid` | 二 | 5f 后退役：rc.local 起哨兵时 stage 拒绝（`tools/u60` 构建前也拒），`u60 rollback sentinel` 回旧 rc.local 后才又能用；10-15 设备上的 u60-uid 程序和 `/data/u60-uid/` 已删 | `/data/plugins/u60pro-devui/u60-uid` | — | direct，— / 120 s（同 touch 的转正后检查） |
 | `web` | 二 | **8d-2c 删除**，同 agent；管理网页归 luyaz-web（`u60 ship lweb`） | （原目录 `/data/admin`，留在设备上不动） | — | — |
 | `guard` | 二 | 5f 后退役，同 uid；`u60-guard.sh` 冻结在 c2b5ee8、只作退回目标，它的容器测试已删（场景归哨兵和核心的 Rust 测试，manager u60-sentinel.md §21），别再改它 | `/data/u60-guard/` 下 `GUARD_FILES` + `/etc/init.d/` 下我们的 4 个 init 脚本 `GUARD_INITS`（txn v=2） | — | direct，— / 300 s（下面「第二期」的 guard 检查） |
@@ -70,7 +70,7 @@
 
 ## 暂存目录和 meta（Mac → 设备）
 
-Mac 把产物和 `meta` 放进 `/data/luyaz/ship/stage/<事务号>/`，产物的文件名 = 正式文件的文件名（datad 是 `luyaz-core`，旧布局 `zwrt-datad`）。
+Mac 把产物和 `meta` 放进 `/data/luyaz/ship/stage/<事务号>/`，产物的文件名 = 正式文件的文件名（核心是 `luyaz-core`）。
 `meta` 是 `key=value`，一行一个，不 eval、不 `.`：
 
 ```
@@ -82,7 +82,7 @@ mac_time=1790000000            Mac 的 Unix 时间（设备时钟开机后可能
 format=1                       这个版本的数据格式版本（仓库里声明，T8）
 trial=180                      可选，试跑秒数 60–86400（--trial）
 note=requires-ignored          可选：requires-ignored（--ignore-requires）、rollback（u60 rollback）、rollback+requires-ignored；照抄进清单行
-file=zwrt-datad 0123…cdef      产物文件名 + md5，组件的每个正式文件一行
+file=luyaz-core 0123…cdef      产物文件名 + md5，组件的每个正式文件一行
 state=/data/zwrt-datad/cooling.conf   可选，可重复；必须在组件的状态文件清单里；一行都没有 = 用组件的整张清单
 ```
 
@@ -122,7 +122,7 @@ check=120
 exec_pid=1234
 t_stage=5321                    stage 时的 uptime（秒）
 t_phase=5530                    这次改 phase 时的 uptime
-file=/data/plugins/zwrt-datad/zwrt-datad|<旧 md5>|<新 md5>
+file=/data/luyaz/luyaz-core|<旧 md5>|<新 md5>
 statelist=/data/zwrt-datad/cooling.conf
 statelist=/data/zwrt-datad/neighbor.json
 state=/data/zwrt-datad/cooling.conf|<旧 md5>
@@ -220,13 +220,13 @@ init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来
 一行一个 JSON 对象，只有受控字段（十六进制、数字、已检查过的路径），不含密钥：
 
 ```json
-{"v":1,"kind":"ship","comp":"datad","txn":"20260930-143000-datad","commit":"7e8d223","format":1,"mac_time":1790000000,"boot_id":"0b7c…","uptime":5600,"files":[{"path":"/data/plugins/zwrt-datad/zwrt-datad","md5":"…","prev":"/data/plugins/zwrt-datad/zwrt-datad.prev-20260930-143000-datad"}],"state":["/data/zwrt-datad/cooling.conf"]}
+{"v":1,"kind":"ship","comp":"core","txn":"20260930-143000-core","commit":"7e8d223","format":1,"mac_time":1790000000,"boot_id":"0b7c…","uptime":5600,"files":[{"path":"/data/luyaz/luyaz-core","md5":"…","prev":"/data/luyaz/luyaz-core.prev-20260930-143000-core"}],"state":["/data/zwrt-datad/cooling.conf"]}
 ```
 
 - 同一组件以最后一条 `kind=ship` 或 `kind=kit` 为设备上的现状（格式版本、doctor 的比对、tools/u60 的依赖检查都这样算）。
 - **装机包**（T9）：`onboard/device/install.sh` 装完 admin 后调 `u60-ship.sh record-kit <组件> <装机包日期> <提交号> <格式版本> <Mac 时间> [dirty]`：
   ```json
-  {"v":1,"kind":"kit","comp":"datad","kit":"20261001","commit":"abc1234","format":1,"mac_time":1790000000,"boot_id":"…","uptime":80,"files":[{"path":"/data/plugins/zwrt-datad/zwrt-datad","md5":"…"}],"state":[],"note":"kit-dirty"}
+  {"v":1,"kind":"kit","comp":"core","kit":"20261001","commit":"abc1234","format":1,"mac_time":1790000000,"boot_id":"…","uptime":80,"files":[{"path":"/data/luyaz/luyaz-core","md5":"…"}],"state":[],"note":"kit-dirty"}
   ```
   没有 `prev`：装机包不留上一版，所以最后一条是 kit 时 `prepare-rollback` 拒绝。`note:"kit-dirty"` = 打包时那个仓库有未提交改动。
 - **只记录的文件**（R1/D10）：`u60-ship.sh record <名|all> <Mac 时间> [原因]` 写 `kind=record` 行，同一名字以最后一条为准：
@@ -394,7 +394,7 @@ v=3 的所有规则不变，另外只有 v=4 的日志可以写 `/etc/init.d/luy
 ### 清单
 
 目录条目：`{"path":"/data/admin","tree":"<指纹>","prev":"/data/admin.prev-<事务号>"}`（没有 `md5`）。doctor `--manifest` 对它算指纹比较（不走 md5 缓存，
-每次现算）。只记录的目录：`{"v":1,"kind":"record","name":"devui-fonts","path":"/data/luyaz/ui/fonts","tree":"…",…}`。
+每次现算）。只记录的目录：`{"v":1,"kind":"record","name":"ui-fonts","path":"/data/luyaz/ui/fonts","tree":"…",…}`。
 
 ### u60-recover.sh（新版）
 
@@ -402,7 +402,7 @@ v=3 的所有规则不变，另外只有 v=4 的日志可以写 `/etc/init.d/luy
 - 开机时它在所有服务之前跑，所以只换文件、不重启任何服务（和现在一样）。
 - 换它：`u60-ship.sh install-recover <事务号>`（事务号以 `-recover` 结尾；暂存目录 `stage/<事务号>/` 里放 `u60-recover.sh` 和 `meta`：
   `v=1`、`txn=`、`comp=recover`、`commit=`、`mac_time=`、`file=u60-recover.sh <md5>`，别的键都拒绝）：`sh -n` → 用暂存的那份跑 `selftest` → 临时名 → sync → mv → sync →
-  写 `kind=record` 名 `u60-recover.sh`。有事务在进行时拒绝。Mac 端 `tools/u60 install-recover [--commit X]`，每次都先问用户。
+  写 `kind=record` 名 `luyaz-recover.sh`（D4c 前叫 `u60-recover.sh`）。有事务在进行时拒绝。Mac 端 `tools/luyaz install-recover [--commit X]`，每次都先问用户。
 
 ### 各组件的钩子要点
 
