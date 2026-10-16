@@ -46,7 +46,7 @@ backup_rc() {
     mkdir -p "$STATE" && cp "$RC" "$STATE/rc.local.orig" && log "原厂 rc.local 已备份到 $STATE/rc.local.orig"
 }
 
-# 把改好的候选文件换成 rc.local：sh -n → 同目录临时文件 → sync → mv → sync（照 tools/u60 after-upgrade）。
+# 把改好的候选文件换成 rc.local：sh -n → 同目录临时文件 → sync → mv → sync（照 tools/luyaz after-upgrade）。
 # 写到一半掉电，rc.local 要么是旧的、要么是新的，不会半截（半截 = 开机什么都不起）。
 # 临时文件必须和 rc.local 在同一个目录：/tmp 是内存盘，从那里 mv 到 /etc 是复制，不是改名。
 # cp -p 先复制原文件，权限和属主跟原来一样。sh -n 不过或写不成：原文件不动，退出。
@@ -196,7 +196,7 @@ do_recover() {
         log "luyaz-recover.sh: 已换上（自检通过）"
     fi
     # 「; [ $? = 10 ] && exec」：luyaz-recover.sh 换回了旧 rc.local（退出 10）时重读它，不接着起已经不在的哨兵
-    # （同 u60-ship.sh rc_derive、tools/u60 after-upgrade）
+    # （同 u60-ship.sh rc_derive、tools/luyaz after-upgrade）
     line="sh $SHIPD/luyaz-recover.sh; [ \$? = 10 ] && exec /bin/sh $RC   # luyaz recover：开机先收尾上次没做完的 u60 ship"
     # 已有一行就不加：新的 luyaz-recover.sh，或 D4 前的 u60-recover.sh（执行器 move-d4 会把它调成新的）
     grep -v '^[[:space:]]*#' "$RC" 2>/dev/null | grep -qE '(luyaz|u60)-recover\.sh' && { log "rc.local: 已有调用 luyaz-recover.sh 的一行"; return 0; }
@@ -263,7 +263,7 @@ SENT_LINE='/etc/init.d/luyaz-sentinel start   # u60 ship sentinel: the screen ow
 # rc.local 里的屏幕主人收成一行哨兵：旧的 start.sh 钩子（# u60pro_devui，devui 自己的安装脚本每次都会放回来）、
 # u60-uid、u60-guard、已有的哨兵行都去掉，哨兵行放在核心那一行（luyaz-core，旧设备上 zwrt-datad）之后（第一个在它之后的旧行的位置，
 # 没有就 exit 0 之前）。结果要过 u60-ship.sh 的 rc_mode（sentinel）：datad、luyaz-recover.sh 都在哨兵之前。
-# 写法和 u60-ship.sh rc_derive、tools/u60 after-upgrade 的一样。已经是这样就不写。
+# 写法和 u60-ship.sh rc_derive、tools/luyaz after-upgrade 的一样。已经是这样就不写。
 rc_owner() {
     awk -v ins="$SENT_LINE" '
         { l = $0; sub(/[ \t]+$/, "", l); c = l; sub(/[ \t]+#.*$/, "", c) }
@@ -574,7 +574,7 @@ esac
 case " $COMPONENTS " in
     *" admin "* | *" devui "* | *" recover "*)
         busy=$(ship_busy)
-        [ -n "$busy" ] && die "$busy：先等它结束（电脑上 tools/u60 status 看；sh $S/luyaz-ship.sh status），这次什么都没装"
+        [ -n "$busy" ] && die "$busy：先等它结束（电脑上 tools/luyaz status 看；sh $S/luyaz-ship.sh status），这次什么都没装"
         ;;
 esac
 for c in "$@"; do

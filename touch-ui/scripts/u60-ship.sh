@@ -258,7 +258,7 @@ e3_old_layout() {
         { [ -d "$ROOT/data/u60-uid" ] && [ ! -f "$ROOT/data/luyaz/screen/.migrated" ]; }
 }
 # D4c: the core component is written "core" (txn ids, the txn file, the manifest);
-# before it, "datad". Both name it, in every lookup. tools/u60 sends "core" only
+# before it, "datad". Both name it, in every lookup. tools/luyaz sends "core" only
 # to an executor that has this line.
 CORE_COMP=core
 is_core() { [ "$1" = core ] || [ "$1" = datad ]; }
@@ -1232,7 +1232,7 @@ comp_load() {
     C_NOTREADY=
     case "$1" in
         datad | core)
-            # core = datad (10e R10); written as given (D4c: tools/u60 sends core)
+            # core = datad (10e R10); written as given (D4c: tools/luyaz sends core)
             C_NAME=$1
             C_KIND=trial
             C_FILES="$CORE_BIN"

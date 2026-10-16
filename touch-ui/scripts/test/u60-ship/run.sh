@@ -182,7 +182,7 @@ hook_at() { # hook_at <uptime> <shell command>
 EOF
 }
 
-# upload [txn] [extra meta lines]: what tools/u60 puts into stage/<txn>/
+# upload [txn] [extra meta lines]: what tools/luyaz puts into stage/<txn>/
 upload() {
     _t=${1:-$TXN}
     _c=${_t##*-}
@@ -1095,7 +1095,7 @@ rm -rf "$R/data/luyaz/ship/stage/20261016-130000-core"
 sh "$SHIP" prepare-rollback datad 20261016-140000-datad 1790000100 >"$T/out" 2>&1
 RC=$?
 check "$CASE: as datad (an older tools/u60) the same target" "[ \$RC = 0 ] && [ \"\$(md5 '$R/data/luyaz/ship/stage/20261016-140000-datad/luyaz-core')\" = '$A' ]"
-check "$CASE: the executor carries its D4c line (tools/u60 probes it)" "grep -qx CORE_COMP=core '$SHIP'"
+check "$CASE: the executor carries its D4c line (tools/luyaz probes it)" "grep -qx CORE_COMP=core '$SHIP'"
 teardown
 
 # ── record-kit: the install kit's own line (T9) ────────────────────────────

@@ -3,7 +3,7 @@
 # The directory fingerprint (docs/SHIP.md) is one algorithm in three device
 # scripts: u60-ship.sh tree-fp, u60-recover.sh tree-fp, doctor.sh --tree-fp.
 # All three must give scripts/test/fixtures/tree.expected for fixtures/tree/
-# (the Mac side, tools/u60, checks the same fixture with md5 -q), agree on
+# (the Mac side, tools/luyaz, checks the same fixture with md5 -q), agree on
 # runtime trees, and refuse the same broken ones. Runs in a busybox container
 # (scripts/test/docker.sh); writes only under mktemp -d.
 # SPDX-License-Identifier: MIT

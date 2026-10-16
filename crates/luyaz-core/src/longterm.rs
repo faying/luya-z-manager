@@ -1170,7 +1170,7 @@ pub fn start(dir: PathBuf) -> std::sync::mpsc::Sender<Msg> {
             let boot = crate::evlog::boot_id();
             let store = Store::at(&dir);
             let state = PathBuf::from(crate::state::host_path(STATE));
-            // the commit it was built from (tools/u60 ship passes it), else the crate version
+            // the commit it was built from (tools/luyaz ship passes it), else the crate version
             let version = option_env!("LUYAZ_COMMIT")
                 .filter(|c| !c.is_empty())
                 .unwrap_or(env!("CARGO_PKG_VERSION"));

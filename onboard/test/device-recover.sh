@@ -44,7 +44,7 @@ EOF
     export KIT_RC=$T/rc.local KIT_STATE=$T/data/u60-kit KIT_SHIP_DIR=$T/data/luyaz/ship KIT_SCRIPTS=$T/data/luyaz/scripts
 }
 inst() { sh "$K/device/install.sh" "$@" >"$T/out" 2>&1; RC=$?; }
-# the same rule tools/u60 checks before a first ship
+# the same rule tools/luyaz checks before a first ship
 order() {
     awk '/^[[:space:]]*#/ { next } /luyaz-recover\.sh/ && !r { r = NR } /\/etc\/init\.d\/(zte-agent|zwrt-datad|u60-guard|u60-uid)[[:space:]]+start/ && !s { s = NR } END { if (!r) print "missing"; else if (s && s < r) print "late"; else print "ok" }' "$T/rc.local"
 }
@@ -56,7 +56,7 @@ inst recover
 check "recover: done" '[ $RC = 0 ]'
 check "recover: the script in /data/luyaz/ship as luyaz-recover.sh, same as the kit's, executable" '[ "$(md5 "$T/data/luyaz/ship/luyaz-recover.sh")" = "$(md5 "$K/payload/guard/u60-recover.sh")" ] && [ -x "$T/data/luyaz/ship/luyaz-recover.sh" ]'
 check "recover: rc.local line right before the first service start" '[ "$(sed -n 3p "$T/rc.local" | cut -d" " -f1-2)" = "sh $T/data/luyaz/ship/luyaz-recover.sh" ] && [ "$(sed -n 4p "$T/rc.local")" = "/etc/init.d/zte-agent start" ]'
-check "recover: the order tools/u60 wants" '[ "$(order)" = ok ]'
+check "recover: the order tools/luyaz wants" '[ "$(order)" = ok ]'
 check "recover: rc.local still parses, the rest as it was" 'sh -n "$T/rc.local" && [ "$(grep -v luyaz-recover "$T/rc.local" | md5sum)" = "$(md5sum <"$T/data/u60-kit/rc.local.orig")" ]'
 check "recover: the original rc.local backed up" '[ -f "$T/data/u60-kit/rc.local.orig" ]'
 check "recover: the D4 mark in /data/luyaz/ship" '[ -f "$T/data/luyaz/ship/.migrated" ]'

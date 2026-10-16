@@ -899,7 +899,7 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
     unsafe { sys::lv_timer_create(Some(refresh_timer_cb), 1000, std::ptr::null_mut()) };
     with(|u| u.refresh());
     eprintln!("ui: first refresh done");
-    // a startup breadcrumb (and the mark tools/u60 checks a touch build for)
+    // a startup breadcrumb (and the mark tools/luyaz checks a touch build for)
     eprintln!("ui: pages+chrome built");
     with(|u| {
         u.build_power_menu();

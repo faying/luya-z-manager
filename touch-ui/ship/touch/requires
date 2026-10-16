@@ -1,4 +1,4 @@
 # u60 ship：touch 依赖的其它组件，一行一条「<组件> <提交>」= 设备上那个组件要包含这个提交。
-# tools/u60 在拿到设备锁以后按设备清单检查，两个方向都查（touch-ui docs/SHIP.md）。
+# tools/luyaz 在拿到设备锁以后按设备清单检查，两个方向都查（touch-ui docs/SHIP.md）。
 # e35e6e9：触屏读 /v2，短信列表要 sms_list 块（V2-47），qos 等要 V2-46 的块。
 datad e35e6e9

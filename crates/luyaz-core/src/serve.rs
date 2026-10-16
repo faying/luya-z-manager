@@ -51,8 +51,8 @@ struct Args {
 }
 
 /// 构建标记：给打包脚本认「这是 Luya-Z 核心、不带外部更新源」用
-/// （onboard/build-kit.sh、tools/u60、u60-ship.sh 用 `grep -a` 查；D3 前叫 `ZWRT_DATAD_FORK_RUST_SELF_CONTAINED`：
-/// tools/u60 按提交编老版本时新旧都认，装机包和设备上的 u60-ship.sh 只认新的）。
+/// （onboard/build-kit.sh、tools/luyaz、u60-ship.sh 用 `grep -a` 查；D3 前叫 `ZWRT_DATAD_FORK_RUST_SELF_CONTAINED`：
+/// tools/luyaz 按提交编老版本时新旧都认，装机包和设备上的 u60-ship.sh 只认新的）。
 /// 不参与任何 HTTP 输出；`#[used]` + main 里的 black_box 保证 LTO/strip 后仍在二进制里。
 #[used]
 static BUILD_MARKER: [u8; 31] = *b"LUYAZ_CORE_BUILD_SELF_CONTAINED";
@@ -163,7 +163,7 @@ pub async fn main(raw: Vec<String>) -> Result<()> {
 }
 
 /// argv[0] says zwrt-datad: the binary sits where datad sat (`/data/plugins/zwrt-datad/zwrt-datad`)
-/// or is a side-by-side copy (`zwrt-datad.test`, which `tools/u60 ship` and `luyaz-fallback.sh`
+/// or is a side-by-side copy (`zwrt-datad.test`, which `tools/luyaz ship` and `luyaz-fallback.sh`
 /// recognise by the `zwrt-datad*` prefix), or the Phase 10 name `luyaz-core*` (R1: recognised
 /// before 10e renames the binary). Only the file name counts, not the directory.
 pub fn invoked_as_datad(argv0: &str) -> bool {

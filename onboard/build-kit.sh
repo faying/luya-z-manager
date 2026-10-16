@@ -11,14 +11,14 @@
 #                     没装就走 Docker，镜像按 digest 固定）。zte-agent 和 web/ 的静态导出 2026-10-14 起不再打包
 #   operator-logos/   网页首页的运营商 logo（assets/operator-logos 原样；开源版没有，就不带）
 #   luyaz-sentinel    哨兵（屏幕主人 + 看门狗，取代 u60-uid 和 u60-guard），本仓库 HEAD 的 crates/luyaz-sentinel
-#                     现编（profile release-device，同 tools/u60 ship sentinel）；SENTINEL_BIN 给了就用那个
+#                     现编（profile release-device，同 tools/luyaz ship sentinel）；SENTINEL_BIN 给了就用那个
 #   devui/            触屏界面：DEVUI_BIN 没给、且 touch-ui/out/ 里没有时，
 #                     自动跑 touch-ui/rs/build.sh device 现编（Rust 版）；启动/自启脚本
 #                     （界面文字编进二进制，不再带 ui/ 目录）
 #   devui/fonts/      Nunito 600/700/800 + 中文兜底字体（都是 OFL，按 sha256 钉死的公开下载，Docker 里生成，
 #                     缓存 onboard/cache/fonts）。设备自带的 ZTE 字体（/usr/ui/fonts）不打包，触屏直接读设备上的
 #   devui/luyaz-core  核心 = 本仓库 HEAD 的 crates/luyaz-core（cargo zigbuild --profile release-device，同
-#                     tools/u60 ship core），装成 /data/luyaz/luyaz-core；DATAD_BIN 给了就用那个
+#                     tools/luyaz ship core），装成 /data/luyaz/luyaz-core；DATAD_BIN 给了就用那个
 #   esim.tgz          scripts/esim/build-esim-bundle.sh --out 现打：Alpine 的 lpac + 依赖库（alpine.lock 钉版本和
 #                     sha256）+ statx 兼容垫片 + qmi_uim_probe
 #   guard/            touch-ui/scripts 里还在用的设备脚本（= u60 ship scripts 那一套：supervise.sh、
@@ -129,7 +129,7 @@ tar xzf "$WORK/data.tar.gz" -C "$WORK" ./usr/sbin/dropbear
 cp "$WORK/usr/sbin/dropbear" "$PL/dropbear"
 
 # zigbuild <profile> <包>：本仓库现编一个 aarch64-musl 程序，打印产物路径。有 cargo-zigbuild 就本机编，
-# 没有走 Docker（同 tools/u60 ship）。LUYAZ_COMMIT：核心把它当版本号写进长期记录（u60-sentinel.md §17）
+# 没有走 Docker（同 tools/luyaz ship）。LUYAZ_COMMIT：核心把它当版本号写进长期记录（u60-sentinel.md §17）
 zigbuild() {
   local head; head=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo 0000000)
   local out="$ROOT/target/aarch64-unknown-linux-musl/$1/$2" log="$WORK/build-$2.log"
@@ -145,7 +145,7 @@ zigbuild() {
 }
 
 # ── 高级后台：luyaz-web（:9090）────────────────────────────────────────────────
-# profile release（unwind，同 tools/u60 ship lweb：一个请求 panic 只结束它自己）。
+# profile release（unwind，同 tools/luyaz ship lweb：一个请求 panic 只结束它自己）。
 # 密码文件仍是 /data/zte-agent.env（文件名留到 Phase 10），设备端 agent-auth.sh migrate 写。
 step "luyaz-web（cargo zigbuild）"
 LW_OUT=$(zigbuild release luyaz-web) || exit 1
@@ -277,7 +277,7 @@ kit_format() { sed 's/#.*//' "$1" 2>/dev/null | awk 'NF { print $1; exit }'; }
   fi
 } > "$PL/guard/kit-source"
 
-# ── 哨兵 luyaz-sentinel（本仓库现编，profile release-device，同 tools/u60 ship sentinel）──────────
+# ── 哨兵 luyaz-sentinel（本仓库现编，profile release-device，同 tools/luyaz ship sentinel）──────────
 if [ -z "${SENTINEL_BIN:-}" ]; then
   step "luyaz-sentinel（cargo zigbuild --profile release-device）"
   SENTINEL_BIN=$(zigbuild release-device luyaz-sentinel) || exit 1
@@ -289,7 +289,7 @@ else
 fi
 cp "$SENTINEL_BIN" "$PL/luyaz-sentinel"
 
-# ── 核心 luyaz-core（本仓库现编，profile release-device，同 tools/u60 ship core）──────
+# ── 核心 luyaz-core（本仓库现编，profile release-device，同 tools/luyaz ship core）──────
 if [ -z "${DATAD_BIN:-}" ]; then
   step "核心 luyaz-core（cargo zigbuild --profile release-device）"
   DATAD_BIN=$(zigbuild release-device luyaz-core) || exit 1
