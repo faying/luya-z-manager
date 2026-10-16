@@ -2,6 +2,7 @@ Luya-Z Manager
 
 Copyright (c) 2025-present Jesther Silvestre
 Copyright (c) 2026 Wei REN
+Copyright (c) 2026 faying
 Copyright (c) 2026 zwrt-datad contributors (parts of crates/luyaz-core)
 
 Licensed under the MIT License (see LICENSE).
@@ -14,8 +15,10 @@ Sources
 - 33333s/zwrt-datad (MIT): https://github.com/33333s/zwrt-datad
   crates/luyaz-core's device read and write layer (ubus, state, SMS, the
   HTTP API) was moved in from a fork of it; see crates/luyaz-core/PORTING.md.
-- Later changes by Wei REN (core, admin web, sentinel, Rust touch UI,
-  install kit, eSIM, Tailscale), snapshot 420a6d9 (2026-09-15) and later syncs.
+- Changes by Wei REN up to 2026-09-15 (snapshot 420a6d9): install kit,
+  eSIM probe and scripts; parts of them remain in onboard/ and scripts/.
+- Later changes by faying (2026-09-16 on): core, admin web, sentinel,
+  Rust touch UI, install kit, eSIM, Tailscale.
 - touch-ui/ has its own sources and notices: see touch-ui/NOTICE.
 
 This repository starts from a cleaned snapshot of that work, not from its git

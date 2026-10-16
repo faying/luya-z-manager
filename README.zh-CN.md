@@ -87,7 +87,8 @@ docs/          GETTING-STARTED.md、DESIGN.md（界面设计规范）、RELIABIL
 
 ## 致谢
 
-- Wei REN：核心（luyaz-core）、管理网页（luyaz-web）、哨兵、Rust 触屏、装机包、eSIM、Tailscale。
+- [faying](https://github.com/faying)：核心（luyaz-core）、管理网页（luyaz-web）、哨兵、Rust 触屏、装机包、eSIM、Tailscale。
+- Wei REN：本项目接手的上一版分支；装机包和 eSIM 探测程序的一部分来自它。
 - [33333s](https://github.com/33333s)：核心读写设备的那一层来自 [zwrt-datad](https://github.com/33333s/zwrt-datad)（MIT）；[u60pro-devui](https://github.com/33333s/u60pro-devui) 是触屏界面的起点。
 - [Jesther Silvestre](https://github.com/jesther-ai)：本项目从 [open-u60-pro](https://github.com/jesther-ai/open-u60-pro) 起步，其中的 agent 和网页现已全部换掉。
 
