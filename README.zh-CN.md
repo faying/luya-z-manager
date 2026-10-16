@@ -20,10 +20,14 @@
 > [!NOTE]
 > **适用硬件：** 中兴 U60 Pro（MU5250）。社区项目，和中兴（ZTE）没有关系，风险自负。
 
+> [!IMPORTANT]
+> **我的设备能装吗？** 从零安装需要固件 **B27 及更早**。B28 起中兴删了安装程序进设备用的接口，目前没有验证过的办法。先查自己的版本（[怎么查](docs/GETTING-STARTED.zh-CN.md#2-准备)），**装之前别升级固件**。
+
 ## 目录
 
 - [为什么做](#为什么做) · [截图](#截图) · [功能](#功能) · [前提条件](#前提条件) · [快速开始](#快速开始)
-- [架构](#架构) · [开发与构建](#开发与构建) · [文档](#文档) · [致谢](#致谢) · [许可证](#许可证与免责声明)
+- [会改动设备哪些地方、怎么退回](#会改动设备哪些地方怎么退回) · [架构](#架构) · [开发与构建](#开发与构建)
+- [项目状态](#项目状态) · [文档](#文档) · [致谢](#致谢) · [许可证](#许可证与免责声明)
 
 ## 为什么做
 
@@ -60,7 +64,7 @@
 |---|---|
 | **信号与网络** | RSRP/RSRQ/SINR 加白话结论、载波聚合、服务小区、趋势、锁频锁小区、网络模式、APN |
 | **管理网页** | 替代原厂网页。Rust 服务端渲染 + Datastar；手机和电脑、浅色和深色、中文和英文 |
-| **触屏界面** | 前面板上按任务分的 5 个标签（首页、蜂窝、Wi-Fi、线路、系统），见 [touch-ui/README.zh-CN.md](touch-ui/README.zh-CN.md) |
+| **触屏界面** | 前面板上按任务分的 5 个标签（首页、蜂窝、Wi-Fi、出口、系统），见 [touch-ui/README.zh-CN.md](touch-ui/README.zh-CN.md) |
 | **SIM、eSIM、短信** | SIM/PIN、收发短信、短信转发；配合可插拔 eUICC 卡（5ber、eSTK.me 这类）下载、切换、删除 profile |
 | **局域网与 Wi-Fi** | Wi-Fi 和访客 Wi-Fi、LAN/DHCP、DNS、防火墙、QoS、USB 模式、已连设备 |
 | **可靠性** | 核心、管理网页、哨兵由 procd 监督；Wi-Fi 兜底看门狗；告警横幅、「健康」页、可选告警短信；每次改设置都记进变更记录；改网络模式后连不上会自动退回 |
@@ -74,8 +78,9 @@
 | | |
 |---|---|
 | 设备 | 中兴 U60 Pro（MU5250） |
-| 从零安装的固件 | **B27 及更早**（B28 起中兴删了开 ADB 的接口）。**装之前别升级固件。** |
-| 编译用的电脑 | 装好 Docker（macOS 或 Linux）；装机包在容器里编全部程序 |
+| 从零安装的固件 | **B27 及更早**（见顶部说明） |
+| 编译用的电脑 | 装好 Docker（macOS 或 Linux）；装机包在容器里编全部程序，本机不用装工具链 |
+| 安装 | 一台连着设备 Wi-Fi 的电脑、一根能传数据的 USB-C 线、路由器管理密码 |
 | 二进制 | 目前不发布，需要自己编，指南里有完整步骤 |
 
 ## 快速开始
@@ -84,12 +89,19 @@
 
 ```sh
 ./onboard/build-kit.sh                 # → onboard/dist/luyaz-kit-YYYYMMDD.tar.gz
-# 解开装机包，在连着设备的电脑上：
-./install.sh                           # 首次安装
+# 解开装机包，电脑连上设备的 Wi-Fi，然后：
+./install.sh                           # 首次安装；提示时插上 USB-C 线
 ./install.sh doctor                    # 只读体检
 ```
 
-装好后在设备的网络里用浏览器打开 `http://<设备地址>:9090`。
+默认设备地址是 `192.168.0.1`；不是的话用 `GATEWAY=192.168.x.1 ./install.sh`。装好后在设备的网络里用浏览器打开 `http://192.168.0.1:9090`。
+
+## 会改动设备哪些地方、怎么退回
+
+- 程序和数据都放在 `/data`，固件升级不会清掉。开机自启只是在 `/etc/rc.local` 里加几行，改之前先备份原文件。
+- 不停用、不改任何原厂服务；原厂屏幕界面也还在设备上，作为兜底。
+- 安装时会**关掉**中兴的固件自动升级，免得一次升级把装好的东西冲掉。
+- 每个组件都能单独回退（[DEPLOY.zh-CN.md](DEPLOY.zh-CN.md)）；全部删掉、恢复原厂的步骤见 [onboard/README.zh-CN.md](onboard/README.zh-CN.md#恢复原厂)。
 
 ## 架构
 
@@ -100,31 +112,37 @@ luyaz-core :9460 ──▶ luyaz-ui（触屏）
 luyaz-sentinel：屏幕主人 + 看门狗
 ```
 
-| 组件 | 在设备上 |
-|---|---|
-| `crates/luyaz-core` | 核心：`/data/luyaz/luyaz-core`，API 在 `127.0.0.1:9460`（`/v2/state`、`/v2/events`、`/v2/screen`、控制接口），由 procd 监督（`/etc/init.d/luyaz-core`）；把 ubus、AT 命令、sysfs 整理成一套本机 API；`luyaz-core doctor` 是体检 |
-| `crates/luyaz-web` | 管理网页，端口 `:9090`（只对局域网，Rust），密码文件 `/data/luyaz/web.env` |
-| `crates/luyaz-sentinel` | `/data/luyaz/luyaz-sentinel`：屏幕主人 + 看门狗（Wi-Fi 兜底、告警） |
-| `touch-ui/` | 触屏界面（Rust + LVGL，`touch-ui/rs/`），设备上的程序 `/data/luyaz/ui/luyaz-ui`；设备脚本在 `touch-ui/scripts/` |
-| `crates/luyaz-*`（其他） | 核心用到的库：策略、情景、Wi-Fi、告警、eSIM、测速等 |
-| `onboard/` | 装机包 |
+- **luyaz-core**：唯一和调制解调器打交道的程序，把 ubus、AT 命令、sysfs 整理成一套本机 API。
+- **luyaz-web**：管理网页，只对局域网。
+- **luyaz-ui**：前面板上的触屏界面（Rust + LVGL）。
+- **luyaz-sentinel**：让触屏一直在跑，起不来就把屏幕交还原厂界面。
+
+设备上的路径、启动和监督方式见 [docs/ARCHITECTURE.zh-CN.md](docs/ARCHITECTURE.zh-CN.md)。
 
 ## 开发与构建
 
+全部在 Docker 里编。最简单的是直接编整个装机包：
+
 ```sh
-# 核心和管理网页（aarch64 musl；onboard/build-kit.sh 会在 Docker 里编）
+./onboard/build-kit.sh                 # → onboard/dist/luyaz-kit-YYYYMMDD.tar.gz
+```
+
+<details>
+<summary>单独编某个组件</summary>
+
+```sh
+# 核心和管理网页（aarch64 musl；不在 Docker 里编要装 cargo-zigbuild）
 cargo zigbuild --profile release-device --target aarch64-unknown-linux-musl -p luyaz-core
 cargo zigbuild --release --target aarch64-unknown-linux-musl -p luyaz-web
 
 # 触屏（Docker）
 (cd touch-ui && rs/setup-src.sh && rs/build.sh device)
 
-# 管理网页浏览器检查（容器里跑模拟核心）：见 crates/luyaz-web/e2e/run.sh
+# 管理网页浏览器检查（容器里跑模拟核心）
 (cd crates/luyaz-web && npm ci && e2e/run.sh)
-
-# 装机包 → onboard/dist/luyaz-kit-YYYYMMDD.tar.gz
-./onboard/build-kit.sh
 ```
+
+</details>
 
 更新已装好设备上的单个组件，见 [DEPLOY.zh-CN.md](DEPLOY.zh-CN.md)。
 
@@ -136,10 +154,14 @@ crates/        luyaz-core（核心）、luyaz-web（管理网页）、luyaz-sent
 touch-ui/      触屏：rs/（Rust + LVGL）、scripts/（设备脚本）、docs/
 onboard/       装机包：build-kit.sh（编）、install.sh（装）、device/（设备端脚本）、test/（沙盒测试）
 scripts/       esim/（lpac 工具）、tailscale/（Tailscale 开机启动，见其 README）
-docs/          GETTING-STARTED、SCREENSHOTS、DESIGN.md（界面设计规范）、RELIABILITY.md（可靠性约定）
+docs/          GETTING-STARTED、SCREENSHOTS、ARCHITECTURE、DESIGN.md（界面设计规范）、RELIABILITY.md（可靠性约定）
 ```
 
 </details>
+
+## 项目状态
+
+一个人维护，只在一台设备（国内版固件）上测过。每天在用，但换了固件版本或地区难免有毛病。报问题时附上 `./install.sh doctor` 的输出最好。
 
 ## 文档
 
@@ -147,6 +169,7 @@ docs/          GETTING-STARTED、SCREENSHOTS、DESIGN.md（界面设计规范）
 |---|---|
 | [docs/GETTING-STARTED.zh-CN.md](docs/GETTING-STARTED.zh-CN.md) | 快速上手（新手从这里开始） |
 | [docs/SCREENSHOTS.zh-CN.md](docs/SCREENSHOTS.zh-CN.md) | 功能导览：管理网页和触屏的每一页 |
+| [docs/ARCHITECTURE.zh-CN.md](docs/ARCHITECTURE.zh-CN.md) | 各个程序怎么配合、在设备上放在哪 |
 | [onboard/README.zh-CN.md](onboard/README.zh-CN.md) | 装机包说明：装到哪里、日常用法、恢复原厂、常见问题 |
 | [DEPLOY.zh-CN.md](DEPLOY.zh-CN.md) | 更新已装好的设备 |
 | [docs/RELIABILITY.md](docs/RELIABILITY.md) | 核心、哨兵和脚本之间的文件约定 |

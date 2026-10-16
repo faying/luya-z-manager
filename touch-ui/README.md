@@ -36,7 +36,7 @@ The UI only talks to luyaz-core over this local HTTP interface; it never calls u
 
 ## Features
 
-- Five bottom tabs, organised by what you want to do: **Home · Cellular · Wi-Fi · Exit · System**. The big line on Home is a one-sentence verdict, e.g. 「网络正常」 (network OK), 「信号偏弱」 (weak signal).
+- Five bottom tabs, organised by what you want to do: **Home · Cellular · Wi-Fi · Route · System**. The big line on Home is a one-sentence verdict, e.g. 「网络正常」 (network OK), 「信号偏弱」 (weak signal).
 - Cellular: carriers, signal, network mode, APN, SIM and eSIM switching (through luyaz-core, which drives lpac).
 - Exit: public exit IP and its location; Tailscale. No proxy features; if you want one, see [docs/PROXY.md](../docs/PROXY.md).
 - System: brightness, screen timeout, light / dark / auto theme, language, battery and load, alert details.

@@ -20,10 +20,14 @@ Clear signal readouts, band and cell locking, eSIM, SMS, health checks and a wat
 > [!NOTE]
 > **Hardware:** runs on the ZTE U60 Pro (MU5250). Community project, not affiliated with ZTE. Use at your own risk.
 
+> [!IMPORTANT]
+> **Can I install it?** A fresh install needs firmware **B27 or earlier**. From B28 on, ZTE removed the interface the installer uses to get in, and there is no verified way around it yet. Check your version first ([how](docs/GETTING-STARTED.md#2-prerequisites)) and **do not update the firmware before installing**.
+
 ## Contents
 
 - [Why](#why) · [Screenshots](#screenshots) · [Features](#features) · [Requirements](#requirements) · [Quick start](#quick-start)
-- [Architecture](#architecture) · [Development](#development) · [Documentation](#documentation) · [Credits](#credits) · [License](#license-and-disclaimer)
+- [What it changes, and how to undo it](#what-it-changes-and-how-to-undo-it) · [Architecture](#architecture) · [Development](#development)
+- [Project status](#project-status) · [Documentation](#documentation) · [Credits](#credits) · [License](#license-and-disclaimer)
 
 ## Why
 
@@ -74,8 +78,9 @@ A proxy is **not** included; [docs/PROXY.md](docs/PROXY.md) explains how to set 
 | | |
 |---|---|
 | Device | ZTE U60 Pro (MU5250) |
-| Firmware for a fresh install | **B27 or earlier** (from B28 ZTE removed the interface used to enable ADB). **Do not update the firmware before installing.** |
-| Build machine | Docker (macOS or Linux); the kit builds everything inside containers |
+| Firmware for a fresh install | **B27 or earlier** (see the note at the top) |
+| Build machine | Docker (macOS or Linux); the kit builds everything inside containers, no local toolchain needed |
+| Install | A computer on the device's Wi-Fi, a USB-C data cable and the router admin password |
 | Binaries | None published yet: you build them yourself, the guide has every step |
 
 ## Quick start
@@ -84,12 +89,19 @@ A proxy is **not** included; [docs/PROXY.md](docs/PROXY.md) explains how to set 
 
 ```sh
 ./onboard/build-kit.sh                 # → onboard/dist/luyaz-kit-YYYYMMDD.tar.gz
-# unpack the kit, then on the computer connected to the device:
-./install.sh                           # first install
+# unpack the kit; connect the computer to the device's Wi-Fi, then:
+./install.sh                           # first install; plug in USB-C when it asks
 ./install.sh doctor                    # read-only health check
 ```
 
-Then open `http://<device>:9090` in a browser on the device's network.
+The device is expected at `192.168.0.1`; if yours uses another address, run `GATEWAY=192.168.x.1 ./install.sh`. When it is done, open `http://192.168.0.1:9090` in a browser on the device's network.
+
+## What it changes, and how to undo it
+
+- Programs and data go to `/data`, which firmware upgrades leave alone. Autostart is a few lines added to `/etc/rc.local`; the original is saved first.
+- No stock service is disabled or modified, and the stock screen interface stays on the device as a fallback.
+- The installer turns **off** ZTE's automatic firmware updates, so an update cannot wipe the install.
+- Every component can be rolled back on its own ([DEPLOY.md](DEPLOY.md)), and [onboard/README.md](onboard/README.md#restore-stock) has the steps to remove everything and return to stock.
 
 ## Architecture
 
@@ -100,31 +112,37 @@ browser ──▶ luyaz-web :9090 (admin web) ──▶ luyaz-core
 luyaz-sentinel: screen owner + watchdog
 ```
 
-| Component | On the device |
-|---|---|
-| `crates/luyaz-core` | The core: `/data/luyaz/luyaz-core`, API on `127.0.0.1:9460` (`/v2/state`, `/v2/events`, `/v2/screen`, control API), supervised by procd (`/etc/init.d/luyaz-core`); turns ubus, AT commands and sysfs into one local API; `luyaz-core doctor` is the health check |
-| `crates/luyaz-web` | Admin web on `:9090` (LAN only, Rust), password file `/data/luyaz/web.env` |
-| `crates/luyaz-sentinel` | `/data/luyaz/luyaz-sentinel`: owns the screen and is the watchdog (Wi-Fi fallback, alerts) |
-| `touch-ui/` | Touch UI (Rust + LVGL, `touch-ui/rs/`), device program `/data/luyaz/ui/luyaz-ui`; device scripts in `touch-ui/scripts/` |
-| `crates/luyaz-*` (others) | Libraries used by the core: policy, scenarios, Wi-Fi, alerts, eSIM, speed test, … |
-| `onboard/` | The install kit |
+- **luyaz-core**: the only program that talks to the modem; turns ubus, AT commands and sysfs into one local API.
+- **luyaz-web**: the admin web, LAN only.
+- **luyaz-ui**: the touch UI (Rust + LVGL) on the front panel.
+- **luyaz-sentinel**: keeps the touch UI running and hands the screen back to the stock interface if it cannot.
+
+Paths on the device, startup and supervision: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Development
 
+Everything builds in Docker. The simplest path is the whole install kit:
+
 ```sh
-# Core and admin web (aarch64 musl; onboard/build-kit.sh builds them in Docker)
+./onboard/build-kit.sh                 # → onboard/dist/luyaz-kit-YYYYMMDD.tar.gz
+```
+
+<details>
+<summary>Building single components</summary>
+
+```sh
+# Core and admin web (aarch64 musl, needs cargo-zigbuild if built outside Docker)
 cargo zigbuild --profile release-device --target aarch64-unknown-linux-musl -p luyaz-core
 cargo zigbuild --release --target aarch64-unknown-linux-musl -p luyaz-web
 
 # Touch UI (Docker)
 (cd touch-ui && rs/setup-src.sh && rs/build.sh device)
 
-# Admin web browser checks (mock core in a container): see crates/luyaz-web/e2e/run.sh
+# Admin web browser checks (mock core in a container)
 (cd crates/luyaz-web && npm ci && e2e/run.sh)
-
-# Install kit → onboard/dist/luyaz-kit-YYYYMMDD.tar.gz
-./onboard/build-kit.sh
 ```
+
+</details>
 
 To update a single component on a device that is already set up, see [DEPLOY.md](DEPLOY.md).
 
@@ -136,10 +154,14 @@ crates/        luyaz-core (core), luyaz-web (admin web), luyaz-sentinel (screen 
 touch-ui/      touch UI: rs/ (Rust + LVGL), scripts/ (device scripts), docs/
 onboard/       install kit: build-kit.sh (build), install.sh (install), device/ (on-device scripts), test/ (sandbox tests)
 scripts/       esim/ (lpac toolkit), tailscale/ (boot start for Tailscale, see its README)
-docs/          GETTING-STARTED.md, SCREENSHOTS.md, DESIGN.md (UI design spec), RELIABILITY.md (reliability contract)
+docs/          GETTING-STARTED.md, SCREENSHOTS.md, ARCHITECTURE.md, DESIGN.md (UI design spec), RELIABILITY.md (reliability contract)
 ```
 
 </details>
+
+## Project status
+
+Maintained by one person and tested on one device (CN firmware). It is used daily, but expect rough edges on other firmware variants and regions. Bug reports with `./install.sh doctor` output are welcome.
 
 ## Documentation
 
@@ -149,6 +171,7 @@ Each doc links to its Chinese copy (`*.zh-CN.md`). RELIABILITY.md and DESIGN.md 
 |---|---|
 | [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) | Quick start (begin here) |
 | [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) | Feature tour: every page of the admin web and the touch UI |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the programs fit together and where they live on the device |
 | [onboard/README.md](onboard/README.md) | The install kit: what goes where, daily use, restoring stock, FAQ |
 | [DEPLOY.md](DEPLOY.md) | Updating a device that is already set up |
 | [docs/RELIABILITY.md](docs/RELIABILITY.md) | File contract between the core, the sentinel and the scripts (Chinese) |
