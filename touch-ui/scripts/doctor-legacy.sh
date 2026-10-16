@@ -1239,6 +1239,22 @@ case "$ddn" in '' | *[!0-9]*) ddn=0 ;; esac
 report ok phonehome "原厂外联上报" "$mqz；$trz；打点开关 $ddn 个开着；应用库更新（smart_manage）$(_run $psm)" \
     "Stock phone-home" "$mqe; $tren; $ddn analytics switches on; app catalog updates (smart_manage) $(_run_en $psm)"
 
+# Anonymous RPC (read only): the stock rpcd ACL lets the not-logged-in session
+# reach the factory/ADB methods (B31, 2026-10-16). Asked with `session access`,
+# never by calling them. A warning, not an error: tightening it is the user's call.
+acl=; acn=0
+for _f in fac_open fac_close fac_reset fac_reboot fac_query_key adb_switch; do
+    _a=$($UBUS call session access "{\"ubus_rpc_session\":\"00000000000000000000000000000000\",\"scope\":\"ubus\",\"object\":\"zwrt_mc.device.manager\",\"function\":\"$_f\"}" 2>/dev/null)
+    case "$_a" in *'"access": true'* | *'"access":true'*) acl="$acl $_f" ;; *'"access"'*) acn=$((acn + 1)) ;; esac
+done
+if [ -n "$acl" ]; then
+    report warn rpc-acl "匿名权限" "不登录也能调原厂出厂/ADB 方法:$acl（原厂 ACL，没收紧）" "Anonymous RPC" "Stock factory/ADB methods callable without login:$acl (stock ACL, not tightened)"
+elif [ "$acn" = 6 ]; then
+    report ok rpc-acl "匿名权限" "出厂/ADB 方法要登录才能调" "Anonymous RPC" "Factory/ADB methods need a login"
+else
+    report ok rpc-acl "匿名权限" "读不到" "Anonymous RPC" "Unreadable"
+fi
+
 # Clock trust: u60-guard's verdict when it is fresh, else the same rule here
 # (docs/LEDGER.md §7). Before NTP the device clock reads 2025-01-04.
 up=$(uptime_s)

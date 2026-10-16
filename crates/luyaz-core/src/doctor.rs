@@ -280,6 +280,7 @@ pub fn run(c: &Cfg, mode: Mode) -> Vec<Row> {
     rows.push(fota(c));
     rows.extend(whiteout(c));
     rows.push(phonehome(c));
+    rows.push(rpc_acl(c));
     rows.push(clock(c));
     rows.extend(core_move(c));
     rows.extend(tmp_move(c));
@@ -592,6 +593,47 @@ fn boot_sync(c: &Cfg) -> Row {
             ),
         )
     }
+}
+
+/// The stock rpcd ACL lets the anonymous session reach the factory/ADB methods (B31,
+/// 2026-10-16). Asked with `session access`, never by calling them; a warning, not an error.
+fn rpc_acl(c: &Cfg) -> Row {
+    let (mut hit, mut no) = (Vec::new(), 0);
+    for f in [
+        "fac_open",
+        "fac_close",
+        "fac_reset",
+        "fac_reboot",
+        "fac_query_key",
+        "adb_switch",
+    ] {
+        let q = format!(
+            r#"{{"ubus_rpc_session":"00000000000000000000000000000000","scope":"ubus","object":"zwrt_mc.device.manager","function":"{f}"}}"#
+        );
+        let a = sh_out(&c.ubus, &["call", "session", "access", &q], true);
+        if a.contains(r#""access": true"#) || a.contains(r#""access":true"#) {
+            hit.push(f);
+        } else if a.contains(r#""access""#) {
+            no += 1;
+        }
+    }
+    if !hit.is_empty() {
+        let l = format!(" {}", hit.join(" "));
+        return row(
+            "warn",
+            "rpc-acl",
+            "匿名权限",
+            format!("不登录也能调原厂出厂/ADB 方法:{l}（原厂 ACL，没收紧）"),
+            "Anonymous RPC",
+            format!("Stock factory/ADB methods callable without login:{l} (stock ACL, not tightened)"),
+        );
+    }
+    let (z, e) = if no == 6 {
+        ("出厂/ADB 方法要登录才能调", "Factory/ADB methods need a login")
+    } else {
+        ("读不到", "Unreadable")
+    };
+    row("ok", "rpc-acl", "匿名权限", z.into(), "Anonymous RPC", e.into())
 }
 
 fn fota(c: &Cfg) -> Row {

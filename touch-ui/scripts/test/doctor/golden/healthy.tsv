@@ -2,6 +2,7 @@ ok	boot-sync	开机同步	sync success
 ok	fota	ZTE 自动升级	已关闭
 ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
 ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
 ok	clock	时钟	已对时（2026-09-27 10:00 设备当地时间）
 ok	svc-zte-agent	高级后台	已退役（核心和新管理网页接替）
 ok	svc-zwrt-datad	数据服务	procd 监督中

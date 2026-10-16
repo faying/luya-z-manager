@@ -18,10 +18,13 @@ setup() {
     { echo "#!/bin/sh"; for s in zwrt-datad u60-guard u60-uid; do echo "$T/initd/$s start"; done; echo "exit 0"; } >"$T/rc"
     printf 'sync    ALL        zte_topsw_devui\nsync    ALL        zte_topsw_wlan\n' >"$T/daemon.conf"
     echo "+8612300000000" >"$T/alerts/sms-to"
+    # anonymous RPC tightened: session access says false for every factory/ADB method
+    for f in fac_open fac_close fac_reset fac_reboot fac_query_key adb_switch; do printf '{\n\t"access": false\n}\n' >"$T/acl-$f"; done
     cat >"$T/bin/ubus" <<X
 #!/bin/sh
 case "\$2 \$3" in
   "zwrt_topsw_daemon.sync get_sync_info") echo "{ \"noSyncModuleName\": \"\$(cat $T/sync)\" }" ;;
+  "session access") cat $T/acl-\$(echo "\$4" | sed 's/.*"function":"\([^"]*\)".*/\1/') 2>/dev/null ;;
   "service list") [ -f $T/down-\$(echo "\$4" | sed 's/.*"name":"\([^"]*\)".*/\1/') ] && echo '{}' || echo '{ "x": { "instances": { "i": { "running": true } } } }' ;;
 esac
 X
@@ -768,6 +771,20 @@ check "phone-home: MQTT off, TR-069 with a server (the address not shown), nothi
 rm -f "$T/mqtt" "$T/tr069"
 run
 check "phone-home: unreadable says so" 'detail phonehome | grep -q "^MQTT 读不到；TR-069 读不到；"'
+rm -rf "$T"
+
+echo "anonymous RPC (session access only)"
+setup
+run
+check "rpc-acl: all false is ok" '[ "$(level rpc-acl)" = ok ] && [ "$(detail rpc-acl)" = "出厂/ADB 方法要登录才能调" ]'
+for f in fac_reset adb_switch; do printf '{\n\t"access": true\n}\n' >"$T/acl-$f"; done
+run
+check "rpc-acl: stock ACL is a warning naming the methods" '[ "$(level rpc-acl)" = warn ] &&
+    [ "$(detail rpc-acl)" = "不登录也能调原厂出厂/ADB 方法: fac_reset adb_switch（原厂 ACL，没收紧）" ] &&
+    [ "$(awk -F"\t" "\$2 == \"rpc-acl\" {print \$6}" "$T/out2")" = "Stock factory/ADB methods callable without login: fac_reset adb_switch (stock ACL, not tightened)" ]'
+rm -f "$T"/acl-*
+run
+check "rpc-acl: unreadable is ok, says so" '[ "$(level rpc-acl)" = ok ] && [ "$(detail rpc-acl)" = "读不到" ]'
 rm -rf "$T"
 
 echo "snapshots"

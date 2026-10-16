@@ -1,0 +1,58 @@
+{
+	"unauthenticated": {
+		"description": "",
+		"read": {
+			"ubus": {
+				"zwrt_web": [
+					"web_login",
+					"web_login_info",
+					"web_language_get",
+					"web_language_set",
+					"web_quick_settings_init_flag_get",  
+					"web_privacy_read_flag_get",
+					"web_crt_get"
+				],
+				"zwrt_router.api": [
+					"router_get_status_no_auth"
+				],
+				"zwrt_mc.device.manager": ["fac_query_key", "fac_open", "adb_switch" , "get_device_info"],
+				"zwrt_wlan": ["report","get_wifi_moving_info", "wlan_uci_get_section"],
+				"zwrt_zte_mdm.api": ["get_sim_info_before"],
+				"zte_nwinfo_api": ["nwinfo_get_netinfo"],
+				"uci": [ "get" ],
+				"zwrt_nfc" : ["zwrt_nfc_wifi_get"],
+				"zwrt_data": ["get_wwandst","get_wwaniface"],
+				"zwrt_deviceui": ["zwrt_deviceui_touch_status_get", "zwrt_deviceui_direct_power_mode_get"],
+				"zwrt_fota_res.api": ["get_update_status"]
+			},
+			"uci": ["zwrt_common_info", "zwrt_sleep"]
+		},
+		"write": {
+			"ubus": {
+				"zwrt_router.api": ["router_mbblog_open","router_after_sales_save_log"],
+				"zwrt_mc.device.manager": ["fac_open", "fac_close", "fac_reset", "fac_reboot"],
+				"zwrt_web" : ["web_privacy_read_flag_set","web_quick_settings_init_flag_set" ,"web_http_enstr_set"],
+				"zwrt_nfc" : ["zwrt_nfc_wifi_set_for_web"],
+				"zwrt_wlan" : ["no_login_set"],
+				"zwrt_zte_sleep_faw.wakelock": ["set_ufi_sleep_for_web_no_login"]
+			}
+		}
+	},
+
+	"web": {
+		"description": "",
+		"read": {
+			"ubus": {
+				"zte_*": ["*"],
+				"zwrt_*": ["*"]
+			},
+			"uci": ["zte_*", "zwrt_*", "firewall", "dhcp", "network", "wireless", "upnpd"]
+		},
+		"write": {
+			"ubus": {
+				"zte_*": ["*"],
+				"zwrt_*": ["*"]
+			}
+		}
+	}
+}
