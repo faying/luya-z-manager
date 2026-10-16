@@ -2,7 +2,7 @@
 
 **English** · [中文](ARCHITECTURE.zh-CN.md)
 
-How the programs on the device fit together, and where each one lives. For the file contract between them (locks, state files, FIFOs), see [RELIABILITY.md](RELIABILITY.md) (Chinese).
+How the programs on the device fit together, and where each one lives. For the file contract between them (locks, state files, FIFOs), see [RELIABILITY.md](RELIABILITY.md).
 
 ## Overview
 

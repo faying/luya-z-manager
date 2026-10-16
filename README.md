@@ -165,7 +165,7 @@ Maintained by one person and tested on one device (CN firmware). It is used dail
 
 ## Documentation
 
-Each doc links to its Chinese copy (`*.zh-CN.md`). RELIABILITY.md and DESIGN.md are Chinese only for now.
+Each doc links to its Chinese copy (`*.zh-CN.md`).
 
 | Doc | For |
 |---|---|
@@ -174,8 +174,8 @@ Each doc links to its Chinese copy (`*.zh-CN.md`). RELIABILITY.md and DESIGN.md 
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the programs fit together and where they live on the device |
 | [onboard/README.md](onboard/README.md) | The install kit: what goes where, daily use, restoring stock, FAQ |
 | [DEPLOY.md](DEPLOY.md) | Updating a device that is already set up |
-| [docs/RELIABILITY.md](docs/RELIABILITY.md) | File contract between the core, the sentinel and the scripts (Chinese) |
-| [docs/DESIGN.md](docs/DESIGN.md) | Design spec for the admin web and the touch UI (Chinese) |
+| [docs/RELIABILITY.md](docs/RELIABILITY.md) | File contract between the core, the sentinel and the scripts |
+| [docs/DESIGN.md](docs/DESIGN.md) | Design spec for the admin web and the touch UI |
 | [touch-ui/README.md](touch-ui/README.md), [touch-ui/docs/](touch-ui/docs/) | Touch UI build, hardware, eSIM, speed test |
 | [CLAUDE.md](CLAUDE.md) | Device rules for AI coding assistants (humans should read the "don'ts" too) |
 

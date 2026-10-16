@@ -24,7 +24,7 @@
 
 屏幕的主人不在这里：是 manager 的 `crates/luyaz-sentinel`（10-15 之前是 `u60-uid`，`src/uid.c`）。
 
-界面的设计规则（层级、颜色、点击反馈、确认方式）在 manager 仓库 `docs/DESIGN.md` §4。
+界面的设计规则（层级、颜色、点击反馈、确认方式）在 manager 仓库 `docs/DESIGN.zh-CN.md` §4。
 
 ## 构建
 

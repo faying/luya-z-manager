@@ -2,7 +2,7 @@
 
 [English](ARCHITECTURE.md) · **中文**
 
-设备上的各个程序怎么配合、各自放在哪里。程序之间的文件约定（锁、状态文件、FIFO）见 [RELIABILITY.md](RELIABILITY.md)。
+设备上的各个程序怎么配合、各自放在哪里。程序之间的文件约定（锁、状态文件、FIFO）见 [RELIABILITY.zh-CN.md](RELIABILITY.zh-CN.md)。
 
 ## 总览
 

@@ -1,116 +1,118 @@
-# DESIGN.md — Luya-Z 界面设计单一事实来源（设备 ZTE U60 Pro / MU5250）
+# DESIGN.md — Luya-Z UI design single source of truth (device ZTE U60 Pro / MU5250)
 
-这份文件是管理网页和触屏界面**唯一**的设计基准，其他文档与本文件冲突时以本文件为准。
+**English** · [中文](DESIGN.zh-CN.md)
 
-来源：`/plan-design-review` 2026-09-16（决定 1A / 2A / 3A / 4A / 5A / 6A / 7A / 7B / 7C）。
+This file is the **only** design baseline for the admin web and the touch UI. Where another document disagrees with it, this file wins.
 
----
-
-## 1. 通用原则（两个平台都适用）
-
-1. **状态和原因永远是第一优先级**，可改的东西第二，明细（流量、连接数、日志）放最后。
-2. **状态不能只靠颜色**。任何状态都同时有符号和文字：`●` 正常、`▲` 警告、`■` 停止。
-3. **空状态是功能**。不允许只写「无数据」，必须给出原因和下一步动作。
-4. **减法优先**。元素要为自己的像素负责，装不下就砍，不靠装饰填空。
-5. **卡片只在卡片本身就是交互时使用**。纯展示的分组用标题加分隔线。
-6. **英文措辞**（2026-10-01 L2 定，触屏、网页、datad、agent、告警短信同一套；词以 `docs/ui-glossary.md` 为准）：
-   - 句首大写；页名是专名，和网页菜单一样用 Title Case（Band Lock、Speed Test）。专名原样：Wi-Fi、eSIM、Tailscale。
-   - 标签、状态词不加句号。提示行只写一句，有动作时动词开头，不写 Please，句末不加句号。
-   - 点名页面时直接写页名，不加引号，和术语表一字不差（Turn on mobile data in Cellular）。
-   - 单位大小写不变：Mbps、MHz、dBm、GB、n78、B3；数值和单位之间一个空格，顶栏这类挤的地方照中文现在的写法。网页英文眉题会转大写，眉题里不放单位。
-   - 时间 24 小时制 `14:32`；时长 `14h 51m`、`5 min`；相对时间 `3 min ago`；停更 `last update 14:32`；日期 `26 Sep`（短信定宽 `01 Oct 14:32`）。
-   - 计数优先写成不分单复数的形式（`Devices 6`、`6 online`），自然句才用 `TRN`。
-   - 英文告警短信整条 `[Luya-Z] 正文 (01 Oct 14:32)`，纯 ASCII，≤70 字符。
-   - 测试查：句末没有句号、没有 Please、单位大小写对、不含中文（SSID、运营商原名这类白名单除外）。
+Source: `/plan-design-review` 2026-09-16 (decisions 1A / 2A / 3A / 4A / 5A / 6A / 7A / 7B / 7C).
 
 ---
 
-## 2. 状态语义（跨平台，语义不可变）
+## 1. General principles (both platforms)
 
-| 语义 | 含义 | 符号 | 触屏取值 | 后台 token |
+1. **State and reason always come first**, things you can change second, detail (traffic, connection counts, logs) last.
+2. **State is never color alone.** Every state carries a symbol and text: `●` normal, `▲` warning, `■` stopped.
+3. **Empty states are a feature.** Never just "no data"; always give the reason and the next action.
+4. **Subtract first.** Every element must earn its pixels; if it doesn't fit, cut it — don't fill space with decoration.
+5. **Use a card only when the card itself is the interaction.** Display-only groups use a heading plus a divider.
+6. **English wording** (set 2026-10-01 in L2; one set for touch UI, web, datad, agent and alert SMS; words follow `docs/ui-glossary.md`):
+   - Sentence case; page names are proper nouns and use Title Case like the web menu (Band Lock, Speed Test). Proper names as-is: Wi-Fi, eSIM, Tailscale.
+   - No period on labels and state words. Hint lines are one sentence, start with a verb when there's an action, no "Please", no trailing period.
+   - Name a page by its name, unquoted, exactly as in the glossary (Turn on mobile data in Cellular).
+   - Unit case never changes: Mbps, MHz, dBm, GB, n78, B3; one space between number and unit; in tight spots like the top bar, follow what the Chinese currently does. Web English eyebrows are uppercased, so no units in eyebrows.
+   - 24-hour time `14:32`; durations `14h 51m`, `5 min`; relative `3 min ago`; stale `last update 14:32`; dates `26 Sep` (SMS fixed width `01 Oct 14:32`).
+   - Prefer counts that need no plural (`Devices 6`, `6 online`); use `TRN` only in natural sentences.
+   - English alert SMS: `[Luya-Z] body (01 Oct 14:32)`, pure ASCII, ≤70 characters.
+   - Tests check: no trailing period, no Please, correct unit case, no Chinese (except whitelisted SSIDs, raw carrier names, etc.).
+
+---
+
+## 2. State semantics (cross-platform, semantics fixed)
+
+| Meaning | Definition | Symbol | Touch value | Web token |
 |---|---|---|---|---|
-| 正常 | 代理运行中 | `●` | `.ok` `#5ec85e` | `--ds-success` |
-| 警告 | 降级但网络可用、或有需要注意的偏差 | `▲` | `.warn` `#d98a00` | `--ds-warning` |
-| 停止 | 代理未运行，需要人介入 | `■` | `.bad` `#d9534f` | `--ds-error` |
-| 中性 | 用户主动关闭、暂停、上游不适合接管 | `●` 灰 | 主题默认文字色 | `--ds-text-dim` |
+| Normal | Proxy running | `●` | `.ok` `#5ec85e` | `--ds-success` |
+| Warning | Degraded but network usable, or a deviation worth noting | `▲` | `.warn` `#d98a00` | `--ds-warning` |
+| Stopped | Proxy not running, needs a human | `■` | `.bad` `#d9534f` | `--ds-error` |
+| Neutral | User turned it off, paused, or upstream unsuitable to take over | `●` grey | theme default text color | `--ds-text-dim` |
 
-**颜色取值可以随平台变，语义映射不可变。** LVGL 版触屏若换色板，必须保持这四种语义的一一对应，否则同一台设备上两代界面会互相矛盾。
+**Color values may vary per platform; the semantic mapping may not.** If the LVGL touch UI changes palette it must keep these four meanings one-to-one, or two generations of UI on the same device will contradict each other.
 
-对比度要求：任何状态文字在所属背景上 ≥4.5:1。触屏要在 `body.dark`（`#15161a`）和 `body.light`（`#eceef1`）两套背景下分别验证。
+Contrast: any state text ≥4.5:1 on its background. The touch UI must be checked on both `body.dark` (`#15161a`) and `body.light` (`#eceef1`).
 
 
 ---
 
-## 3. 触屏 · 阶段一（litehtml，旧版，非默认构建）
+## 3. Touch UI · phase 1 (litehtml, legacy, not the default build)
 
-> 现役触屏是第 4 节的 Rust 版。本节是历史记录：litehtml 渲染器（`src/htmlmain.c` + `ui/*.html`）已从 touch-ui 删掉，只留在 tag `legacy-litehtml`。
+> The live touch UI is the Rust one in section 4. This section is history: the litehtml renderer (`src/htmlmain.c` + `ui/*.html`) has been removed from touch-ui and survives only in tag `legacy-litehtml`.
 
-**硬约束**（违反会直接画不出来或显示成豆腐块）：
+**Hard constraints** (break them and it either won't draw or shows tofu boxes):
 
-| 能用 | 不能用 |
+| Allowed | Not allowed |
 |---|---|
-| `block` / `inline-block` / `float` / `table` 布局 | CSS Grid、JavaScript、CSS 动画与过渡 |
-| 颜色、圆角、边框、padding、margin | 图片（`<img>` 与 `background-image` 都画不出） |
-| `position: absolute / relative` | `var()` 自定义属性（不可靠） |
-| 页面整体竖向滚动 | 元素内部滚动容器 |
+| `block` / `inline-block` / `float` / `table` layout | CSS Grid, JavaScript, CSS animations and transitions |
+| colors, border radius, borders, padding, margin | images (neither `<img>` nor `background-image` draws) |
+| `position: absolute / relative` | `var()` custom properties (unreliable) |
+| whole-page vertical scrolling | scroll containers inside elements |
 
-- 屏幕 320×480。页面文件放 `ui/functions/`，改完热生效，不用编译。
-- **符号白名单**（设备字体确认可显示）：`● · ↑ ↓ ▲ ▼ ℃ •`。其余符号先在设备上验证，拿不准就用中文或 CSS 画。
-- **文案长度上限 14 个汉字**（决定 2A）。320px 宽单行放得下的极限，超了会截断或换行破坏层级。状态表里每一条触屏文案都按这个写。
-- 主题用 `body.dark` / `body.light` 两套规则实现，每个新颜色类都要写两遍。
-- 页面只保留 `<body>` 内层，不写 `<style>`、不写 `{{STATUSBAR}}` 之外的壳、不自加返回栏。
+- Screen 320×480. Pages live in `ui/functions/`, hot-reloaded, no compile.
+- **Symbol whitelist** (confirmed to render in the device font): `● · ↑ ↓ ▲ ▼ ℃ •`. Verify any other symbol on the device first; when unsure, use Chinese text or draw it in CSS.
+- **Copy length cap 14 CJK characters** (decision 2A) — the limit for a single 320px line; longer truncates or wraps and breaks hierarchy. Every touch string in the state table is written to this.
+- Themes are two rule sets, `body.dark` / `body.light`; every new color class is written twice.
+- Pages contain only the inner `<body>`: no `<style>`, no shell besides `{{STATUSBAR}}`, no home-made back bar.
 
 ---
 
-## 4. 触屏 · 阶段三（LVGL，2026-09-24 起为新设计）
+## 4. Touch UI · phase 3 (LVGL, new design since 2026-09-24)
 
-Rust（`touch-ui/rs/`，经 `lvgl-sys` 用 LVGL 9.5；原 C 版已删，tag `legacy-c-touch-ui`），320×480，FreeType 渲染 CJK。继承第 2 节状态语义（颜色值换了，语义一一对应不变：正常 → okT / green，警告 → warnT / orange，停止 → badT / red，中性 → t3）和第 1 节通用原则。完整规格（色板和对比度、字号表、每个组件的尺寸、每页布局、状态表）在新设计的设计文档里，代码里的唯一实现是 touch-ui 的 `include/ui_kit.h`（组件）和 `include/ui_theme.h`（色板、字体角色）。页面只能用这两处的东西，不自己设颜色、圆角、字号。
+Rust (`touch-ui/rs/`, LVGL 9.5 via `lvgl-sys`; the old C version is deleted, tag `legacy-c-touch-ui`), 320×480, FreeType for CJK. Inherits section 2's state semantics (values changed, meanings map one-to-one: normal → okT / green, warning → warnT / orange, stopped → badT / red, neutral → t3) and section 1's principles. The full spec (palette and contrast, type scale, every component's size, every page layout, state table) is in the new design doc; the only implementation in code is touch-ui's `include/ui_kit.h` (components) and `include/ui_theme.h` (palette, font roles). Pages may only use these; they don't set their own colors, radii or font sizes.
 
-**主题**：浅色 / 深色 / 自动（`devui.conf` 的 `appearance`，自动按设备当地时间 19:00–07:00 深色，只在息屏时切换）。一个进程只用一套主题，切换 = exec 自己（进程号、进程名不变）。所有颜色已经按 565 量化并逐一算过对比度；调淡一律用 t3，不降透明度；鲜艳色（green / orange / red / blue）只放在没有文字的地方，带白字的地方用 fill 色。**开关例外**：开着的鲜艳绿轨道在白底上只有 2.2:1，开关状态靠圆钮左右区分（通行做法），颜色只是辅助。
+**Theme**: light / dark / auto (`appearance` in `devui.conf`; auto = dark 19:00–07:00 device local time, switched only while the screen is off). One process uses one theme; switching = exec itself (same pid, same name). All colors are quantized to 565 and contrast-checked one by one; dim things with t3, never with lower opacity; vivid colors (green / orange / red / blue) only where there's no text, white text sits on fill colors. **Switch exception**: an on switch's vivid green track is only 2.2:1 on white; on/off is carried by the knob position (common practice), color is only a hint.
 
-**字体**：数字 Nunito（600/700/800，挂中文字体兜底；缺失时退设备 Roboto），中文设备 ZTEZhengYuan（常规 11–15，合成粗体 15/17/20/22/24，需要 LVGL 补丁）。最大字号 36（测速结果）；首页状态卡的结论句用 cj24b。最小：电池数字 10，数值标签 11，辅助信息 12。
+**Fonts**: digits Nunito (600/700/800, with CJK fallback attached; falls back to device Roboto if missing); Chinese uses the device's ZTEZhengYuan (regular 11–15, synthetic bold 15/17/20/22/24, needs an LVGL patch). Largest size 36 (speed test result); the home status card's verdict uses cj24b. Smallest: battery digits 10, value labels 11, secondary info 12.
 
-**组件**（尺寸以 `ui_kit.h` 为准）：顶栏 26（时间 · 5 个信号点 · 制式 · 速率 · ▲ · 电池，速率放不下时依次换更短的写法）；浮动 tab 44（只在五个顶层页显示）；二级页标题栏 62（含顶栏，实底，圆形 ‹ 返回）；卡片圆角 20、外边距 10；列表行 40 / 两行 50，分隔线从 x=14 开始；分段按钮 30；开关 44×26；磁贴 145×78，一律白底，「开着」（如 WiFi 开）= 副标题前一个绿点 + 绿字，不整块填色（整块蓝看起来像一直被选中）；状态块 72（卡片顶部，圆角 20 加一块方形补底）；底部面板圆角 22。按下：一档加深（深色主题一档变亮），松手恢复；透明底的列表行按下时铺一层 `track` 底色（只加深透明底等于没反应，2026-09-25）。动画只有两处：底部面板 180 ms 升起、二级页 150 ms 推入，`UI_ANIM=0` 全关。热区不小于 40×40。
+**Components** (sizes per `ui_kit.h`): top bar 26 (time · 5 signal dots · RAT · rate · ▲ · battery; when the rate doesn't fit, step through shorter forms); floating tab bar 44 (only on the five top-level pages); sub-page title bar 62 (includes top bar, solid, round ‹ back); card radius 20, outer margin 10; list row 40 / two-line 50, divider starting at x=14; segmented button 30; switch 44×26; tile 145×78, always white, "on" (e.g. WiFi on) = a green dot before the subtitle + green text, never a full fill (a full blue tile looks permanently selected); status block 72 (top of a card, radius 20 plus a square patch underneath); bottom sheet radius 22. Press: one step darker (one step lighter in dark theme), restore on release; transparent list rows lay a `track` background while pressed (darkening a transparent background shows nothing, 2026-09-25). Only two animations: bottom sheet rises in 180 ms, sub-page pushes in 150 ms; `UI_ANIM=0` turns both off. Hit areas no smaller than 40×40.
 
-**屏幕黑着时，手指点不到任何东西**：按电源键关的屏，触摸完全无效，只有电源键能亮；自动息屏的，双击亮屏（单击、滑动、两下离得太远都不算，防口袋误触）。叫醒屏幕的那个动作（双击，或按电源键时手指正按着）不算点击，亮屏后 300 ms 内也不接收点击。规则在 touch-ui 的 `ui_logic.c` `ui_tgate_step`，有单测和渲染测试。
+**While the screen is dark, a finger hits nothing**: if the power key turned it off, touch does nothing and only the power key wakes it; if it auto-dimmed, a double tap wakes it (single taps, swipes, or two taps too far apart don't count — pocket protection). The waking gesture (the double tap, or a finger already down when the power key is pressed) is not a tap, and taps are ignored for 300 ms after wake. Rule lives in touch-ui `ui_logic.c` `ui_tgate_step`, with unit and render tests.
 
-**长文本**：数值完整显示，名字用剩下的宽度并在末尾 `…`；IP、ICCID、IMEI 不截断。注意 LVGL 9 的 `…` 模式需要固定高度（`uk_label_w` 已处理），否则会换行。
+**Long text**: values shown in full; names take the remaining width and end with `…`; IP, ICCID, IMEI are never truncated. LVGL 9's `…` mode needs a fixed height (`uk_label_w` handles it), otherwise it wraps.
 
-**状态**：每个颜色状态都另有文字线索（信号良好 / 偏弱 / 没有信号、运行中 / 已关闭、直连 / 中继 / 离线、▲）。充电只把电池变亮绿（用户选定，和设计图一致，不加闪电）。空状态和出错状态写具体文案和下一步（状态表见设计文档）。数据服务掉线 ≠ 没信号：状态块变灰，写「数字停在 hh:mm」，数值调淡但保留。
+**State**: every colored state also has a text cue (signal good / weak / none, running / off, direct / relay / offline, ▲). Charging only turns the battery bright green (user's choice, matches the mock, no bolt). Empty and error states use specific copy and a next step (state table in the design doc). Data service down ≠ no signal: the status block turns grey, says 「数字停在 hh:mm」 ("numbers frozen at hh:mm"), values dimmed but kept.
 
-**首页层级**（2026-09-24 评审定稿：结论优先 + 双磁贴）：拿起设备先要知道「能不能上网、好不好、会不会多花钱」，所以首页不再把聚合带宽当主角。从上到下依次是：
-- **状态卡**：
-  - 顶行：运营商 · 制式 · 本地/漫游。
-  - 大字：一句结论，取下面「首页结论表」之一（英文只写状态词）。
-  - 右边：SINR（按质量着色）和 RSRP。
-  - 异常时多一行下一步提示。
-  - 下面四行（2026-09-25 按任务分标签后）：蜂窝（载波解读 + 在用频段 · 聚合带宽）、Wi-Fi 名 · 设备数、出口（直连归属地），这三行点了跳到对应标签的顶部；今日/本月流量只读，没有 ›。
-- **情景磁贴**：整行，点进「情景」页。
-- **网速图**（原图表页第一张）。
-- 载波明细在「蜂窝」标签顶部；Tailscale 明细在「出口」标签，出口 IP 下面。
+**Home hierarchy** (finalized in the 2026-09-24 review: verdict first + two tiles): picking up the device you first want "can I get online, is it good, will it cost extra", so aggregate bandwidth is no longer the hero. Top to bottom:
+- **Status card**:
+  - Top line: carrier · RAT · home/roaming.
+  - Large text: one verdict, from the "Home verdict table" below (English: state word only).
+  - Right: SINR (colored by quality) and RSRP.
+  - One extra next-step hint line when something's wrong.
+  - Four rows below (after the 2026-09-25 task-based tabs): Cellular (carrier reading + active bands · aggregate bandwidth), Wi-Fi name · device count, Exit (direct-IP location) — these three jump to the top of their tab; today/month traffic is read-only, no ›.
+- **Scenario tile**: full width, opens the 「情景」 (Scenarios) page.
+- **Speed chart** (formerly the first chart on the charts page).
+- Carrier detail is at the top of the 「蜂窝」 (Cellular) tab; Tailscale detail is in the 「出口」 (Exit) tab, below the exit IP.
 
-**导航**（2026-09-25）：五个标签 首页 · 蜂窝 · Wi-Fi · 出口 · 系统，按「我想做什么」分，每个功能只有一个家。情景是独立模块，只联动 Wi-Fi / Tailscale，页面上不出现任何蜂窝网络设置。
-- 带 **›** 的行一定开一页（或跳一个标签）；没有 › 的行不可点、没有按下态。
-- **开关**立即生效；**按钮**只用于一次性动作（测速、搜索网络、全部已读、恢复默认）；会断网的选择一律上面的两段确认。
-- **返回**：点 ‹，或从屏幕左边缘（x < 24）往右滑。滑动成立时这次按下作废，手指下面的行不会被点中。
-- 每次打开二级页都从顶部开始；从首页摘要跳标签也到顶部；在当前标签上再点一次标签栏回到顶部，点别的标签保留它原来的位置。
-- 二级页标题 = 入口上的文字。
+**Navigation** (2026-09-25): five tabs 首页 · 蜂窝 · Wi-Fi · 出口 · 系统 (Home · Cellular · Wi-Fi · Exit · System), split by "what do I want to do"; every function has exactly one home. Scenarios are a separate module that only drives Wi-Fi / Tailscale; no cellular setting ever appears on its pages.
+- A row with **›** always opens a page (or jumps to a tab); rows without › aren't tappable and have no pressed state.
+- **Switches** take effect immediately; **buttons** are only for one-off actions (speed test, network search, mark all read, restore defaults); any choice that can drop the connection uses the two-step confirm below.
+- **Back**: tap ‹, or swipe right from the left edge (x < 24). Once the swipe registers, that press is void and the row under the finger isn't tapped.
+- Sub-pages always open at the top; jumping to a tab from a home summary also lands at the top; tapping the current tab again scrolls to top, tapping another tab keeps its previous position.
+- Sub-page title = the text on its entry.
 
-没信号或读不到数据时，出口 IP 调淡，别让人当成实时数据。
+With no signal or no data, the exit IP is dimmed so nobody takes it as live.
 
-**先解读，再给参数**（2026-09-24 用户要求：「不要直接暴露参数，要有让人听得懂的解读放在上面」）：
-- 状态卡的结论、提示、制式说法、载波说法、信号评价，全部由 datad `rust/src/screen.rs` 的 `story()`/`say()` 决定（2026-09-26 从触屏 `ui_net_story()` 搬过去），每个分支都有单测。触屏只照着显示。
-- 参数（SINR、RSRP、RSSI、频段、带宽）只作为小字佐证。
+**Interpret first, parameters second** (2026-09-24, user: "don't expose raw parameters; put an understandable reading on top"):
+- The status card's verdict, hint, RAT wording, carrier wording and signal rating are all decided by datad `rust/src/screen.rs` `story()`/`say()` (moved from touch `ui_net_story()` on 2026-09-26), every branch unit-tested. The touch UI only displays them.
+- Parameters (SINR, RSRP, RSSI, band, bandwidth) are small supporting text only.
 
-**首页结论表**（2026-10-01 L2 定，以 datad `say()` 为准；提示行的中英全文在 `docs/ui-glossary.md` §5）：
+**Home verdict table** (set 2026-10-01 in L2, datad `say()` is authoritative; full Chinese/English hint lines in `docs/ui-glossary.md` §5):
 
-| 优先级 | story.state | 大字（中文） | 大字（英文，≤150px） | 色调 |
+| Priority | story.state | Large text (Chinese) | Large text (English, ≤150px) | Tone |
 |---|---|---|---|---|
-| 1 | （触屏：还没收到数据） | 读取中… | Loading… | 中性 |
-| 2 | （触屏：datad 掉线） | 读不到数据 | No update | 中性，数值调灰保留 |
+| 1 | (touch: no data yet) | 读取中… | Loading… | neutral |
+| 2 | (touch: datad down) | 读不到数据 | No update | neutral, values greyed but kept |
 | 3 | nosim | 无 SIM | No SIM | bad |
-| 4 | airplane | 移动网络已关 | Airplane | 中性 |
-| 5 | changing | 正在换制式 / 正在确认 / 正在退回 | Switching / Checking / Reverting | 中性 |
+| 4 | airplane | 移动网络已关 | Airplane | neutral |
+| 5 | changing | 正在换制式 / 正在确认 / 正在退回 | Switching / Checking / Reverting | neutral |
 | 6 | revert_fail | 退回也没通 | Failed | bad |
 | 7 | sos | 只能紧急呼叫 | SOS only | bad |
 | 8 | nosvc | 无服务 | No service | bad |
@@ -122,141 +124,141 @@ Rust（`touch-ui/rs/`，经 `lvgl-sys` 用 LVGL 9.5；原 C 版已删，tag `leg
 | 14 | narrow | 慢：载波窄 | Slow | warn |
 | 15 | ok | 顺畅 | All good | ok |
 
-changing、revert_fail 是写操作叠上去的（E4，datad `screen.rs` `with_op()`，只在 `/v2/screen` 的 `net.home` 里出现；`net.story` 永远只是网络结论）：换制式时常先经过无服务，所以排在无服务前，免得一路红色；无 SIM、移动网络已关时不叠。提示行写倒计时那句（「1:42 后没通就退回到自动」）或退回失败的现值与上次确认值。其他常驻结果不占大字，只在提示行末尾加一句。
+changing and revert_fail are overlaid by write operations (E4, datad `screen.rs` `with_op()`, only in `net.home` of `/v2/screen`; `net.story` is always just the network verdict): switching RAT often passes through no-service, so it ranks above no-service to avoid a run of red; not overlaid on no SIM or mobile network off. The hint line carries the countdown sentence (「1:42 后没通就退回到自动」, "if not connected in 1:42, revert to auto") or, on revert failure, the current and last confirmed values. Other persistent results don't take the large text; they add one sentence at the end of the hint line.
 
-英文「慢」只写 Slow，原因交给右栏（信号、Noise、Load）和提示行。hot = 固件自己标了过热限速（uci `zwrt_zte_mc_tmp.cpe.hightemp_datalimit_status` 非 0，datad `/state` 的 `thermal.hightemp_limit`），是事实不是推断，所以排在限速和信号判断前；读不到当没有。stall = 已拨号、30 秒里 `rmnet_data0` 发了 ≥ 20 个包却一个没收到（datad 采样循环记窗口，`docs/designs/slow-diagnosis.md` §4.1）。漫游不单独当结论，提示行末尾加「；漫游中 / ; roaming」。
+English "slow" is just Slow; the reason goes to the right column (signal, Noise, Load) and the hint line. hot = the firmware itself flagged thermal throttling (uci `zwrt_zte_mc_tmp.cpe.hightemp_datalimit_status` non-zero, datad `/state` `thermal.hightemp_limit`) — a fact, not an inference, so it ranks above limit and signal checks; unreadable counts as absent. stall = dialed, and in 30 seconds `rmnet_data0` sent ≥ 20 packets but received none (window kept by the datad sampling loop, `docs/designs/slow-diagnosis.md` §4.1). Roaming is never a verdict by itself; the hint line gets 「；漫游中 / ; roaming」 appended.
 
-**英文长度预算**（Nunito 实际字号；datad、agent 测试按字符近似卡，触屏 render 查文字不出父容器和屏幕、兄弟控件不重叠）：
+**English length budget** (real Nunito sizes; datad and agent tests approximate by characters, the touch render checks text stays inside its parent and the screen and siblings don't overlap):
 
-| 位置 | 字号 | 上限 | 超了怎么办 |
+| Place | Size | Limit | If over |
 |---|---|---|---|
-| 首页大字结论 | 24b | 150px（约 10 字符） | 只能改词 |
-| 右栏信号词 | 17b | 120px | 改词 |
-| 右栏干扰 · 负载 | 12 | 150px | 改词 |
-| 提示行 | 13 | 2 行（宽 292） | 改词，不许第 3 行 |
-| 顶行（运营商 · 制式 · 本地/漫游） | 12 | 292px | 运营商名按本节末尾 `…` |
-| 顶栏制式词 | 13b | 不超过 5G UW（46px） | 用术语表里的短写法（无服务 = No svc） |
-| 列表行标签 | 15 | 110px | 改词 |
-| 列表行值（名字类） | 15 | 剩余宽度 | 名字 `…`，数值完整 |
-| 三段分段，每段 | 14 | 段宽减 16 | 改词 |
-| 磁贴副标题 | 12 | 117px | 改词 |
-| 底栏标签 | 14 | 60px | 改词 |
-| 告警短信整条 | — | 70 字符 | 改词 |
+| Home large verdict | 24b | 150px (~10 chars) | change the word only |
+| Right column signal word | 17b | 120px | change the word |
+| Right column noise · load | 12 | 150px | change the word |
+| Hint line | 13 | 2 lines (width 292) | change the word, no 3rd line |
+| Top line (carrier · RAT · home/roaming) | 12 | 292px | carrier name `…` per the end of this section |
+| Top bar RAT word | 13b | no wider than 5G UW (46px) | use the glossary's short form (No service = No svc) |
+| List row label | 15 | 110px | change the word |
+| List row value (names) | 15 | remaining width | names `…`, numbers in full |
+| Three-way segment, each | 14 | segment width minus 16 | change the word |
+| Tile subtitle | 12 | 117px | change the word |
+| Bottom tab label | 14 | 60px | change the word |
+| Whole alert SMS | — | 70 characters | change the word |
 
-各部分的说法：
-- **网络标签**：和手机状态栏一样简短，顶栏和状态卡顶行都用它。由 `ui_net_label()` 根据原始制式和在用载波数算出来：
-  - **2G**：GSM、GPRS、EDGE、CDMA 1X。
-  - **3G**：WCDMA、TD-SCDMA、CDMA2000（EV-DO、eHRPD）、HSPA。**3G+**：HSPA+、DC-HSPA+。
-  - **4G**：LTE、4G、FDD-LTE、TD-LTE，单载波。**4G+**：LTE-A、LTE_CA、4G+，或在用 ≥2 条 LTE 载波。
-  - **5G**：SA 或 NSA，1 条 NR 载波。**5G+**：在用 2 条 NR 载波。**5G-A**：在用 ≥3 条 NR 载波，或原始值本身写着 5G-A。模组没有 5G-Advanced 的明确标志，这里是按国内运营商常见的三载波聚合推断的。
-  - **状态卡顶行**不重复顶栏的简写，而是写更细的一层：「5G SA」「5G NSA」「4G LTE」「3G WCDMA / HSPA+ / CDMA2000 / TD-SCDMA」「2G EDGE / GPRS / GSM / CDMA 1X」（`ui_rat_long()`）。
-- **载波**：先写解读，下一行才是每个在用载波的频段和带宽。总带宽只算在用的载波。组网方式已经写在顶行，这里不再重复。解读的写法：
-  - 5G SA 和 4G：「N 条载波聚合 · 带宽很宽/充足/一般/偏窄」，只有一条时写「单载波 · …」；
-  - NSA：「4G 锚点 + 5G，N 条载波 · …」；
-  - 3G 和 2G：「这个制式没有载波聚合」。速度的影响写在提示行里，载波块不再重复。
-- **信号评价**：「信号很好 / 良好 / 一般 / 较差」，主要看 SINR，RSRP 太低时往下压一档。
-- **频段**：频段号写成 B3 / n78。「GSM 900」「DCS 1800」这类是频率，保持原样。
-- **4G 不做载波聚合时**：服务小区只在 `lte_*` 字段里，要从那里补出来，不能显示「无载波」。
+Wording of each part:
+- **Network label**: as short as a phone status bar, used in both the top bar and the status card top line. Computed by `ui_net_label()` from the raw RAT and the number of active carriers:
+  - **2G**: GSM, GPRS, EDGE, CDMA 1X.
+  - **3G**: WCDMA, TD-SCDMA, CDMA2000 (EV-DO, eHRPD), HSPA. **3G+**: HSPA+, DC-HSPA+.
+  - **4G**: LTE, 4G, FDD-LTE, TD-LTE, single carrier. **4G+**: LTE-A, LTE_CA, 4G+, or ≥2 active LTE carriers.
+  - **5G**: SA or NSA, 1 NR carrier. **5G+**: 2 active NR carriers. **5G-A**: ≥3 active NR carriers, or the raw value itself says 5G-A. The modem has no explicit 5G-Advanced flag; this is inferred from the three-carrier aggregation common with Chinese carriers.
+  - The **status card top line** doesn't repeat the top bar shorthand but goes one level finer: 「5G SA」「5G NSA」「4G LTE」「3G WCDMA / HSPA+ / CDMA2000 / TD-SCDMA」「2G EDGE / GPRS / GSM / CDMA 1X」 (`ui_rat_long()`).
+- **Carriers**: the reading first, then a line with band and bandwidth for each active carrier. Total bandwidth counts active carriers only. Network architecture is already in the top line, not repeated here. Readings:
+  - 5G SA and 4G: 「N 条载波聚合 · 带宽很宽/充足/一般/偏窄」 ("N carriers aggregated · bandwidth very wide/ample/fair/narrow"); with one carrier 「单载波 · …」 ("single carrier · …");
+  - NSA: 「4G 锚点 + 5G，N 条载波 · …」 ("4G anchor + 5G, N carriers · …");
+  - 3G and 2G: 「这个制式没有载波聚合」 ("this RAT has no carrier aggregation"). The speed impact goes in the hint line, not repeated in the carrier block.
+- **Signal rating**: 「信号很好 / 良好 / 一般 / 较差」 (very good / good / fair / poor), mainly from SINR, one step lower when RSRP is too low.
+- **Bands**: written B3 / n78. Things like 「GSM 900」「DCS 1800」 are frequencies, kept as-is.
+- **4G without carrier aggregation**: the serving cell is only in the `lte_*` fields and must be filled in from there — never show "no carrier".
 
-渲染测试的场景：good、weak、nosignal、datad-down、loading、nosim、abroad、lowbat、full-charging、long-names、empty、nsa、lte、3g、nodata、5ga、edge，每个场景都有深色和浅色两种主题。
+Render test scenes: good, weak, nosignal, datad-down, loading, nosim, abroad, lowbat, full-charging, long-names, empty, nsa, lte, 3g, nodata, 5ga, edge, each in dark and light theme.
 
-**首页载波**（载波明细卡）：先放服务小区（`nr_band/nr_bw/nr_rsrp/nr_pci/nr_channel`），再把 `nrca`/`lteca` 每一组原样追加（服务小区在里面会以 -140 地板值再出现一次，这是 modem 报的配置载波，不去重）；未激活载波压成一行 t3。
+**Home carriers** (carrier detail card): serving cell first (`nr_band/nr_bw/nr_rsrp/nr_pci/nr_channel`), then every `nrca`/`lteca` group appended as-is (the serving cell appears again inside them with a -140 floor value — that's the modem's configured carrier, not deduplicated); inactive carriers collapse to one t3 line.
 
-**会改设备状态的控件一律两段确认**：第一次点变 fillOrange「再按一次确认」，5 秒内再点才真下发（选网方式、应用锁频、恢复默认、eSIM 切换、切换原厂界面、删除短信）。WiFi 开关例外。
+**Every control that changes device state uses a two-step confirm**: the first tap turns it fillOrange 「再按一次确认」 ("tap again to confirm"); only a second tap within 5 seconds sends it (network selection, apply band lock, restore defaults, eSIM switch, switch to stock UI, delete SMS). The WiFi switch is the exception.
 
-**每一次点击都要当场看得见**（2026-09-25，用户在「情景 · 网络」页点了没反应）：
-- **第一下**在回调里当场重画，不等 1 秒的刷新。按钮变 fillOrange；列表行整行铺 `washW` 浅黄底，右侧「再点一次确认」，卡片底下一句写这次会发生什么（例：「切到「外出」：Wi-Fi 开着 / 之后一直固定，点「自动」才恢复」），分两行时主动换行，不让一个字掉到第二行。
-- **单选列表**（情景、选网之类）用单选圈：实心 = 现在真正生效的那一项，不是「刚点的那一项」。
-- **点了已经生效的选项**说一句（「现在已经是自动 · 判断为「在家」」），不静默忽略；忙的时候点也说一句（「正在切换，稍等」）。
-- **发出后**先画「切换中… / 已发送」再发请求（请求是同步的，界面会停一下），一直显示到设备真的变过去；超时（情景 45 秒）写明原因。成功后一句绿字结果，几秒后消失。
-- **被拒**的原因写在这张卡片里，不只写在页顶。
+**Every tap must be visible on the spot** (2026-09-25, user tapped on 「情景 · 网络」 and nothing happened):
+- **The first tap** redraws right in the callback, without waiting for the 1-second refresh. Buttons turn fillOrange; list rows get a full-row `washW` pale yellow background, 「再点一次确认」 ("tap again to confirm") on the right, and one sentence under the card saying what will happen (e.g. 「切到「外出」：Wi-Fi 开着 / 之后一直固定，点「自动」才恢复」, "switch to Away: Wi-Fi on / stays fixed until you tap Auto"); break the line deliberately when it spans two lines so no single character drops to line two.
+- **Single-choice lists** (scenarios, network selection, etc.) use radio circles: filled = the option actually in effect, not "the one just tapped".
+- **Tapping the option already in effect** says something (「现在已经是自动 · 判断为「在家」」, "already Auto · detected Home"), never silently ignored; tapping while busy also says something (「正在切换，稍等」, "switching, hold on").
+- **After sending**, draw 「切换中… / 已发送」 ("switching… / sent") first, then send the request (it's synchronous; the UI pauses briefly), and keep it until the device has really changed; on timeout (scenarios: 45 seconds) state the reason. Success shows one green result line that fades after a few seconds.
+- **Rejection** reasons are written in that card, not only at the top of the page.
 
-**没有数据源的功能写明缺什么**：邻小区 / MIMO / BLER 本机拿不到（没有 `/modem/latest-signals`），页面写原因，不画空壳。
+**Features without a data source say what's missing**: neighbor cells / MIMO / BLER aren't available on this device (no `/modem/latest-signals`); the page states why instead of drawing an empty shell.
 
-**事务（写操作层，E4，设计 `docs/designs/write-op-layer.md` DD3、DD5、DD9、DD12、DD13、DD16）**：凡经 datad 的写（现在是网络模式），文字全部由 datad 随 `op` 块发（`say/next/note/what/source/old/target`，各带 `_zh/_en`），触屏只排版；词表在 `docs/ui-glossary.md` §13。
-- 首页和对应设置页（蜂窝 › 网络模式）用现有状态块显示，不另叠进度卡；其他标签和二级页在标题栏下放一行**事务行**「正在换制式 · 1:42 ›」（整行 ≥40 高），点了开**事务页**。
-- 事务页五层：结论 → 「旧 → 新 · 来源 时间」→ 三行进度（设置已生效 / 已注册 / 数据，✓ 或 …）→ 倒计时（「1:42 后没通就退回到 X」；自动退回没开时「还剩 0:48 · 自动退回没开」）→ 按钮。datad 推送 20 秒没更新：倒计时调灰写「停在 1:42 · 等设备响应」，不再跳。
-- 按钮写具体值：「退回 X」主按钮在左，「保留 Y」次按钮在右；都两段确认，同一时刻只有一个待确认，待确认是 fillOrange 加一句后果。到点以设备为准，待确认作废；退回进行中只显示进度、没有按钮。
-- 结束后事务行变成结果行（「▲ 没通 · 已退回自动 ›」），3 秒类（已切到、已退回、不需要确认）只在亲眼看到它结束时显示；常驻类留到点「知道了」（经 datad 只记账，触屏和网页一起收起）。退回也没通（DD9）红色占状态块，写现值和上次确认值，按钮「再试一次退回到 X」「重启设备」。
-- 系统 › 改动记录：一条两行（「制式 · 自动 → 只用 4G」/「10-03 14:32 · 网页 · 已切到只用 4G」），点开详情，撤销/重做在详情里；不能撤的变灰写原因。
-- 数据服务卡住（20 秒不动）：经 datad 的写控件提前变灰并写「数据服务没响应 · 暂时不能改设置」。忙（别的写在跑）不提前变灰，点了写 datad 回的那句。
+**Transactions (write-op layer, E4, design `docs/designs/write-op-layer.md` DD3, DD5, DD9, DD12, DD13, DD16)**: for every write that goes through datad (currently network mode), all text is sent by datad in the `op` block (`say/next/note/what/source/old/target`, each with `_zh/_en`); the touch UI only lays it out; vocabulary in `docs/ui-glossary.md` §13.
+- Home and the matching settings page (Cellular › Network mode) show it in the existing status block, no extra progress card; other tabs and sub-pages get a **transaction row** under the title bar 「正在换制式 · 1:42 ›」 ("switching RAT · 1:42 ›", whole row ≥40 tall), which opens the **transaction page**.
+- Transaction page, five layers: verdict → 「旧 → 新 · 来源 时间」 ("old → new · source time") → three progress lines (setting applied / registered / data, ✓ or …) → countdown (「1:42 后没通就退回到 X」 "revert to X if not connected in 1:42"; with auto-revert off 「还剩 0:48 · 自动退回没开」 "0:48 left · auto-revert off") → buttons. If datad pushes nothing for 20 seconds: countdown greys out as 「停在 1:42 · 等设备响应」 ("stopped at 1:42 · waiting for device") and stops ticking.
+- Buttons name concrete values: 「退回 X」 ("revert to X") primary on the left, 「保留 Y」 ("keep Y") secondary on the right; both two-step confirm, only one pending at a time, pending = fillOrange plus one consequence sentence. At expiry the device decides and the pending confirm is void; while reverting, only progress shows, no buttons.
+- When done, the transaction row becomes a result row (「▲ 没通 · 已退回自动 ›」, "▲ not connected · reverted to auto ›"); 3-second kinds (switched, reverted, no confirm needed) only show if their end was actually witnessed; persistent kinds stay until 「知道了」 ("got it") is tapped (only recorded via datad; touch and web dismiss together). Revert also failed (DD9): red takes the status block, shows current and last confirmed values, buttons 「再试一次退回到 X」 ("try reverting to X again") and 「重启设备」 ("reboot device").
+- System › Change log: one entry per two lines (「制式 · 自动 → 只用 4G」 / 「10-03 14:32 · 网页 · 已切到只用 4G」, "RAT · auto → 4G only" / "… · web · switched to 4G only"), tap for detail; undo/redo live in the detail; un-undoable entries are greyed with a reason.
+- Data service stuck (20 s without movement): controls that write via datad grey out early with 「数据服务没响应 · 暂时不能改设置」 ("data service not responding · can't change settings right now"). Busy (another write running) doesn't grey out early; on tap, show the sentence datad returns.
 
-**回归测试**：`touch-ui/rs/build.sh test`（单测，含渲染的文字/字形/几何检查）；改页面再跑 `touch-ui/rs/parity.sh`：把 C 版渲染测试录下的场景（11 种 × 深浅，取自 tag `legacy-c-touch-ui` 的 `scripts/test/render/render.sh --model/--png`，C 版 Phase 10 X5 已删）在 Rust 触屏上重放，逐张比像素，并断言 `rs/devui/testdata/expect.txt` 里该出现的文字都在（控件清单）。改文案时同一个提交里改 expect.txt（公开版用 expect-public.txt）。
+**Regression tests**: `touch-ui/rs/build.sh test` (unit tests, including render checks on text/glyphs/geometry); after changing pages also run `touch-ui/rs/parity.sh`: replays the scenes recorded by the C render test (11 kinds × dark/light, from tag `legacy-c-touch-ui` `scripts/test/render/render.sh --model/--png`; the C version was deleted in Phase 10 X5) on the Rust touch UI, compares pixel by pixel, and asserts every string expected in `rs/devui/testdata/expect.txt` is present (widget list). Copy changes update expect.txt in the same commit (public version uses expect-public.txt).
 
-**已知踩过的坑**：
-- `LV_USE_STDLIB_MALLOC` 曾经设成 `LV_STDLIB_BUILTIN`（LVGL 自己划一块跟系统内存完全隔离的小内存池，从 128KB 一路加到 2MB 都还在崩），根因是这个隔离本身——litehtml 版（`htmlmain.c`）直接用系统 `malloc()`，面对的是整机 690MB+ 可用内存，从不出这个问题。已经改成 `LV_STDLIB_CLIB`（真正的系统 malloc/string/sprintf），跟 litehtml 版走同一条路，`LV_MEM_SIZE` 相关配置全部移除（只对 BUILTIN 模式有效）。**这条是真正修复，之前"减少不必要的 `lv_label_set_text` 调用"那版只是缓解，不是根治**——但那个优化本身仍然保留，两个问题不是互斥的。
-- `lv_label_set_text()`/`_fmt()` 无论新文字是否跟旧文字完全相同都会整个释放再重新申请一次文字缓冲区——每次 `refresh_cb` 刷新前先跟缓存对比，值没变就跳过调用，不要无条件每秒重设几十个标签的文字。
-- 验证真机稳定性只能用"真的去读一次 `/tmp/luyaz/dumpfb` → `/tmp/fb.dump`，确认字节数正确"这种功能性检查，`pidof` 查得到进程不代表进程真的还在正常跑主循环（LVGL 断言失败是死循环不是真的退出，`pidof` 会一直查到它）。
-- `lv_slider`/`lv_button`/`lv_switch` 的构造函数默认都打开 `LV_OBJ_FLAG_SCROLL_ON_FOCUS`（配合 `lv_obj.c` 里 `LV_EVENT_FOCUSED` 的处理），某个控件在页面构建期间一旦被 focus，会自动把自己滚动进可视区域——这个项目从头到尾只用触屏，没有 group/keypad 场景，focus 驱动的滚动毫无意义，但默认值就是开着的。表现是某个页面第一次构建时莫名其妙停在滚动到一半的位置（首次访问「系统」tab 看到的第一张卡是「电池与负载」而不是最上面的「屏幕」），之后再切进来又正常，容易被当成偶发问题。凡是用 `uk_scroll` 的页面，构建函数末尾都加一行 `lv_obj_scroll_to_y(t, 0, LV_ANIM_OFF)` 钉回顶部——这行只在页面构建时跑一次，不影响用户之后自己滚动的位置。
-- **字体和字形必须配对**：`LV_SYMBOL_*`（LVGL 私有区码位）只能放 montserrat 标签（改版后只剩功能图标和 ✓）；中文、`·`(U+00B7)、`↓↑`(U+2193/2191) 放 CJK 字体或挂了 CJK 兜底的 Nunito（`UF.*`）。放反了两边都是豆腐块——2026-09-21 一轮截图里同时出现了两种：Tailscale 的 IP 行用 montserrat 拼 `·`、图表网速标题用 FCN_S 拼 `LV_SYMBOL_DOWN`。数字/ASCII 放 CJK 字体没问题，所以拿不准就用 FCN_S。另外 `LV_SYMBOL_DOWN`/`LV_SYMBOL_UP` **画出来是 ∨ ∧ 折角，不是 ↓ ↑ 箭头**，看着像"展开/收起"而不是上下行速率——顶栏和图表的速率一律用 FCN_S + 真正的 `↓`(U+2193) `↑`(U+2191)，跟现役 litehtml 版状态栏保持一致。
-- **montserrat 标签里绝对不能出现中文**，会渲染成豆腐块方框。这个坑 2026-09-18/09-21 一共踩了四次（网络页 PLMN 行、Tailscale 状态"已连接"、载波子卡片的"未激活"后缀、WiFi 密码行的"密码未公开"）。判断标准不是"当前这个值是不是中文"，而是"这个标签**有没有可能**取到中文值"——包括兜底文案和状态词。数字/ASCII 放中文字体反而没问题，所以拿不准就用 `UF.cj*` 或 `UF.n*`（Nunito 挂了中文兜底）。
-- `lv_tileview_add_tile()` **不会**设置 tileview 的"当前 tile"指针，`tile_act` 一直是 NULL，直到第一次 `lv_tileview_set_tile*()` 或第一次滚动结束（`lv_tileview.c:92,181`）。所以刚启动时虽然首页明明就在眼前，`lv_tileview_get_tile_active(tv) == s_tiles[0]` 却是 false，所有靠这个判断做可见性门控的轮询（Tailscale、eSIM）一次都不会跑——表现是首页 Tailscale 卡片永远空着，要翻到别的页再翻回来才有数据。`ui_create()` 建完 tile 后必须补一次 `lv_tileview_set_tile_by_index(tv, 0, 0, LV_ANIM_OFF)`。
-- **ui_create() 里任何"把界面恢复到初始状态"的调用，都要能在控件还没建完时安全返回。** 2026-09-21 重构时 `sub_close()`（收起二级页层）顺手调了 `update_tabs()`，而 tab 栏是在它之后才建的——`lv_obj_set_style_text_color(NULL, …)` 直接段错误，进程启动即死。因为侧载测试时正式 UI 已经被 kill，厂商看门狗发现没有 UI 在画，把**整机重启**了（本项目第二次这类事故）。两条应对：受影响函数开头加 `if (!s_tabs[0]) return;` 这种建成检查；测试启动脚本改成**起不来就自动回滚**——日志写 `/data/lvgltest.log`（不是 `/tmp`，RAM 盘会被重启擦掉，正好丢掉解释崩溃的那份日志），起 8 秒后 `grep "first refresh done"`，抓不到就立刻 kill 并 `sh start.sh legacy` 拉回正式 UI。`ui_create()` 里几个 `fprintf(stderr, "ui: …")` 面包屑就是给这个检查用的。
-- 侧载测试前点亮屏幕不要无脑按电源键——那是 toggle。先读 `/sys/class/leds/led:lcd/brightness`，是 0 才按；否则会把亮着的屏幕关掉，`backlight_is_on()` 变 0，所有靠它门控的轮询（Tailscale/eSIM/WiFi 开关状态）全部读不到数据，截图看起来像布局 bug。
-- 轮询门控里的 `backlight_is_on()` 在息屏时是 0，headless 截图验证（SSH + fb-dump，不碰屏幕）会让这些卡片一律空着，看起来像布局 bug。验证前先用 `touchsim /dev/input/event0 key 116` 点亮屏幕（自动息屏设为"常亮"时，UI 自己永远不会开背光，只有电源键会）。
-
----
-
-## 5. 后台管理网页（设备 `:9090`）
-
-本节只写**行为和视觉**，跟用什么框架无关（Phase 8，T19）：现在的 luyaz-web 和以后的重写都照这一节。用词「页族」「三档写操作」见 `docs/ui-glossary.md` §15。现在这版的文件和组件名集中在本节末尾「当前实现」。
-
-2026-09-24 整体改版，视觉语言取 **Cohere + Figma**（参考文件和设计、工程评审记录放在仓库外，是维护者的工作笔记）。触屏仍用第 4 节自己的配色，网页**不再镜像** `ui_theme.c`。旧的 Cool Tech（`admin.css`、Outfit/DM Sans）已删除。
-
-**颜色只经 token**：一律用 `--nd-*` 这套 CSS 变量（名字不随框架变），页面里出现十六进制色值视为缺陷。token 只在一处定义；改了 token 必须重跑对比度检查，要求全部通过（文字 ≥4.5:1，非文字 ≥3:1）。
-
-**画面**
-
-- **纸面 + 墨色**：画布暖白 `--nd-bg` `#fafaf8`，卡片白色，外圈 1px 发丝线 `--nd-hair`，不用阴影（只有浮层：弹窗、提示、⌘K 有阴影）。正文墨色 `--nd-t1` `#17171c`，次级 `--nd-t2` / `--nd-t3`。
-- **一个主色面**：`--nd-primary` 近黑（深色模式为近白）。主按钮、分段选中、多选标签选中、开关打开、侧栏以外的"选中"都用它。每屏只放一个主按钮，其余降为次按钮（白底发丝线胶囊）或文字按钮（下划线）。
-- **色块（Figma）**：每类页面有一个自己的色块，只用在三处——页面顶部状态块（正常 / 中性时）、侧栏当前项、手机底栏当前图标的底。图表 `blkCharts` 淡蓝、网络与频段 `blkNetwork` 青柠、Wi-Fi 与局域网 `blkWifi` 薄荷、服务 `blkServices` 淡紫、短信 `blkMessages` 粉、设备与维护 `blkSystem` 米黄。每个页面属于一个**页族**，外框按页族给根元素加 `data-family`，色块由它决定；页面自己不挑颜色。
-- **出问题不用分类色**：注意 `--nd-washW` 琥珀、出错 `--nd-washB` 珊瑚，覆盖分类色。色块里的文字一律是墨色，只有状态符号带语义色。
-- **深绿色带（Cohere）**：首页状态正常时、登录页整页用 `--nd-band` `#003c33` + 白字。首页模块卡分别是米黄（情景）、深藏青 `blkNavy`（Tailscale）整块色，不加发丝线。
-- **告警条**：不是色块，是一行墨色横条（Cohere 公告条），手机上只一行，宽屏再带详情；避免和状态块叠成两块彩色。
-- **深色模式**：同一套角色，色块换成饱和的深色调（不是发灰的暗色），主色面反白；告警条在深色下是抬高的深色条，不反成白块；深色终端带（AT、日志、进程）两种模式都是深色。
-- **图表线**用独立的 vivid 色（`--nd-green/orange/red/blue`），不跟着单色化。
-
-**字**
-
-- 拉丁字母和数字用 **Geist**，数据（IP、IMEI、PCI、日志）用 **Geist Mono**，中文走系统字体（PingFang 等）。中文只有离散字重，所以只用 400 / 500 / 600，不用 700/800。
-- 手机优先，≥1024 再大一档：页面标题 22 → 28，正文 15 → 16，辅助 13 → 14，状态块标题 17 → 20，读数 28 → 40（首页主读数 44 → 64）。
-- **输入框不小于 16px**（iOS 小于 16 会在聚焦时放大页面）。
-- 分组标题是**等宽小号大写眉题**（11px、字距 0.06em、`--nd-t3`），这是 Cohere/Figma 的分节记号；中文界面改用正文字体 12px、不转大写（等宽字体配中文字距不齐，大写会把 MHz 变成 MHZ）。读数标签不转大写。
-- 标题、状态、模块标题用 500，靠字号和字距拉开层次，不靠加粗；600 只给小标题 `<h3>` 和选中项。色块里的状态词是墨色，只有符号带语义色；色块里最浅的灰自动提到 `--nd-t2`。
-
-**形**
-
-- 圆角：卡片 12、面板 16、输入框和选项 8、按钮与分段为胶囊。
-- 可点区域始终 ≥44px：缩小的是字和内边距，不是点击区。开关视觉 40×24，点击区 44×44；分段视觉 30 高，点击区 44。
-
-**结构（改版时定的，不要回退）**
-
-- 导航：<640 底部四个标签（首页 / 图表 / 功能 / 系统），640–1023 左侧图标栏，≥1024 240px 侧栏带分组；⌘K 搜索全部页面（中文、拼音、别名）。页面表（路径、页族、标题、搜索别名）只在一处定义，导航、⌘K、页族都从它来。
-- 每页顺序：标题 → 状态块（状态 · 原因 · 下一步 · 新鲜度）→ 可改的东西 → 明细。设置页限宽 720，看数页可两栏。
-- **三档写操作**：第一档直接发；第二档页面内确认（写明后果）；第三档弹窗（发生什么 / 断开多久 / 怎么恢复，远程访问时加 Tailscale 警告，恢复出厂要输入「恢复出厂」）。每个写操作之后读回验证，读不回就写「设备已接受」而不是「成功」；多步写逐步显示，失败只重发没完成的步骤。每个控件属于哪一档有一份清单；改控件先改清单。
-- **事务**（E4，设计 `docs/designs/write-op-layer.md` DD4、DD5、DD8、DD15）：经 datad 的写（现在是网络模式）不再自己读回，交给设备确认；文字照 datad 的 `op` 块显示，词表在 `docs/ui-glossary.md` §13。
-  - 外框横条（沿用告警条样式，`role=status`，退回失败 `role=alert`）：每页都有，进行中「正在确认 · 1:42」，≥640 加「制式 · 旧 → 新 · 来源」；点「详情 ›」去对应页，在对应页上不显示。倒计时 `aria-hidden`，只在阶段变化时念。
-  - 对应页的状态块换成事务状态：同触屏五层，按钮「退回 X」「保留 Y」是第二档页内确认；手机上竖排、占满宽、≥44px。
-  - 系统 › 设备 › 改动记录（`/changes`）：同触屏的两行；详情里撤销，会断蜂窝的（网络模式）第三档，其他第二档；每次发新的 `op_id`，绝不重发。设置页底部「上次改动 14:32 · 触屏 ›」链到那条（现在只有网络模式）。
-  - 数据服务卡住：横条写「数据服务没响应」，经 datad 的写变灰；改动进行中网页断线：横条写「和设备断开了 · 操作结果未知」，不自动重发，连回来照常显示结果。旧 datad（`/api/ops` 的 `supported:false`）：没有横条和改动记录，写操作照旧读回。
-- 数据停更时保留旧值、变灰、写「N 分钟前」，不清空成 0。
-- 图标用 Phosphor：选中和磁贴实心，其余粗线。
-
-
-**控件语义**：地区 `radiogroup` + `radio`；开关 `switch`；分段为单选的 toggle 组；告警条 `role="status" aria-live="polite"`；弹窗有标题和描述，关闭后焦点回到触发按钮。
-
-**实时数据**（换成推送以后也一样）：数字变了只换数字，不重排、不闪；正在输入的框、展开的详情、待确认的操作不被新数据冲掉（DR12）；读屏只念结论和告警的变化，不念每次刷新的读数（DR13）。
-
-**当前实现（luyaz-web，Next.js 旧网页 10-15 删了，Phase 10 X13）**：token `crates/luyaz-web/static/nd/newdesign.css`；组件样式同目录 `nd.css`、`shell.css`（`src/assets.rs` 拼成一份）；对比度 `node crates/luyaz-web/tools/contrast.ts > docs/web/contrast.md`；页面表 `crates/luyaz-web/src/routes.rs`；档位清单 `docs/web/controls-inventory.md`（按旧网页写的，没改）。换实现时改这一段，上面的规则不动。
+**Known pitfalls**:
+- `LV_USE_STDLIB_MALLOC` was once `LV_STDLIB_BUILTIN` (LVGL carves out its own small pool fully isolated from system memory; it kept crashing from 128KB all the way up to 2MB). The root cause was the isolation itself — the litehtml version (`htmlmain.c`) used system `malloc()` with 690MB+ free and never had this problem. Now `LV_STDLIB_CLIB` (real system malloc/string/sprintf), same path as litehtml, and all `LV_MEM_SIZE` config removed (only meaningful for BUILTIN). **This is the real fix; the earlier "fewer unnecessary `lv_label_set_text` calls" only mitigated it** — but that optimization stays; the two aren't mutually exclusive.
+- `lv_label_set_text()`/`_fmt()` free and reallocate the text buffer even when the new text is identical — compare against a cache before each `refresh_cb` and skip unchanged values; don't reset dozens of labels every second unconditionally.
+- Real-device stability can only be verified functionally, e.g. "actually read `/tmp/luyaz/dumpfb` → `/tmp/fb.dump` once and confirm the byte count". `pidof` finding the process doesn't mean the main loop is running (an LVGL assertion failure is an infinite loop, not an exit; `pidof` keeps finding it).
+- `lv_slider`/`lv_button`/`lv_switch` constructors enable `LV_OBJ_FLAG_SCROLL_ON_FOCUS` by default (with `LV_EVENT_FOCUSED` handling in `lv_obj.c`); if a control gets focus while a page is built, it scrolls itself into view. This project is touch-only, no group/keypad, so focus scrolling is meaningless, yet it's on by default. Symptom: a page's first build stops halfway scrolled (first visit to the 「系统」 (System) tab shows 「电池与负载」 ("Battery & load") instead of the top card 「屏幕」 ("Screen")), later visits are fine — easy to dismiss as flaky. Every page using `uk_scroll` ends its build function with `lv_obj_scroll_to_y(t, 0, LV_ANIM_OFF)` to pin it to the top — runs only at build time, doesn't affect later user scrolling.
+- **Fonts and glyphs must match**: `LV_SYMBOL_*` (LVGL private-use codepoints) only go in montserrat labels (after the redesign only function icons and ✓); Chinese, `·`(U+00B7), `↓↑`(U+2193/2191) go in the CJK font or in Nunito with CJK fallback (`UF.*`). Swap them and both sides render tofu — a 2026-09-21 screenshot round had both at once: Tailscale's IP row built `·` with montserrat, the chart speed title built `LV_SYMBOL_DOWN` with FCN_S. Digits/ASCII are fine in the CJK font, so when unsure use FCN_S. Also `LV_SYMBOL_DOWN`/`LV_SYMBOL_UP` **draw as ∨ ∧ chevrons, not ↓ ↑ arrows**, reading as "expand/collapse" rather than down/up rates — top bar and chart rates always use FCN_S + real `↓`(U+2193) `↑`(U+2191), consistent with the then-live litehtml status bar.
+- **Never put Chinese in a montserrat label**; it renders as tofu boxes. Hit four times on 2026-09-18/09-21 (network page PLMN row, Tailscale state 「已连接」 "connected", the 「未激活」 "inactive" suffix on carrier sub-cards, the WiFi password row 「密码未公开」 "password hidden"). The test is not "is the current value Chinese" but "**could** this label ever hold Chinese" — including fallback copy and state words. Digits/ASCII are fine in the Chinese font, so when unsure use `UF.cj*` or `UF.n*` (Nunito with CJK fallback).
+- `lv_tileview_add_tile()` **does not** set the tileview's "current tile" pointer; `tile_act` stays NULL until the first `lv_tileview_set_tile*()` or the first scroll end (`lv_tileview.c:92,181`). So at startup, with home clearly on screen, `lv_tileview_get_tile_active(tv) == s_tiles[0]` is false, and every poll gated on it (Tailscale, eSIM) never runs — symptom: the home Tailscale card stays empty until you flip away and back. `ui_create()` must call `lv_tileview_set_tile_by_index(tv, 0, 0, LV_ANIM_OFF)` after building tiles.
+- **Any "reset the UI to its initial state" call inside ui_create() must return safely when widgets aren't built yet.** In a 2026-09-21 refactor `sub_close()` (collapse the sub-page layer) also called `update_tabs()`, but the tab bar was built after it — `lv_obj_set_style_text_color(NULL, …)` segfaulted and the process died at startup. Because the official UI had been killed for the sideload test, the vendor watchdog saw no UI drawing and **rebooted the whole device** (this project's second such incident). Two responses: affected functions start with a built check like `if (!s_tabs[0]) return;`; the test start script **auto-rolls back if it doesn't come up** — log to `/data/lvgltest.log` (not `/tmp`; the RAM disk is wiped on reboot, losing exactly the log that explains the crash), `grep "first refresh done"` 8 seconds after start, and if missing kill it immediately and `sh start.sh legacy` to bring back the official UI. The `fprintf(stderr, "ui: …")` breadcrumbs in `ui_create()` exist for this check.
+- Before a sideload test, don't blindly press the power key to light the screen — it's a toggle. Read `/sys/class/leds/led:lcd/brightness` first and press only if 0; otherwise you turn the screen off, `backlight_is_on()` becomes 0, every poll gated on it (Tailscale/eSIM/WiFi switch state) reads nothing, and screenshots look like layout bugs.
+- `backlight_is_on()` in the poll gates is 0 while the screen is off, so headless screenshot checks (SSH + fb-dump, no touching) leave those cards empty, looking like layout bugs. Light the screen first with `touchsim /dev/input/event0 key 116` (with auto-dim set to "always on", the UI never turns the backlight on by itself; only the power key does).
 
 ---
 
-## 6. 反面清单（两个平台都不要）
+## 5. Admin web (device `:9090`)
 
-- 一个指标一张卡，上下堆成马赛克。卡片**只允许**两种用法：分组列表（一张卡里一组同类的行），和整块可点的模块（首页情景 / Tailscale 卡、功能磁贴）。
-- 渐变背景、霓虹发光、渐变文字、真模糊（网页顶栏和底栏的轻微背景模糊除外）。触屏的「染色玻璃」只用在浮动 tab、返回键、底部面板、标题栏右侧按钮上，而且是不透明实色。
-- 图标装在彩色圆圈里当装饰；三列等宽特性网格。
-- 彩色左边框卡片。
-- 全部居中对齐；所有元素同一个大圆角。圆角分档是有意的：触屏面板 22、卡片和磁贴 20、选项 14；网页面板 16、卡片 12、输入框和选项 8；胶囊为半高。
-- 用 emoji 当设计元素（节点名里的国旗除外，它是数据；触屏上转成国家码显示）。
-- 状态用大块彩色药丸；应当用点加文字。选中项的填色胶囊（分段、频段、出口选项）不算状态药丸。
+This section covers **behavior and visuals** only, independent of framework (Phase 8, T19): the current luyaz-web and any future rewrite follow it. The terms "route family" (页族) and "three write tiers" (三档写操作) are in `docs/ui-glossary.md` §15. The current implementation's files and component names are collected at the end under "Current implementation".
+
+Redesigned on 2026-09-24 in a **Cohere + Figma** visual language (reference files and design/eng review notes live outside the repo as maintainer working notes). The touch UI keeps its own palette from section 4; the web **no longer mirrors** `ui_theme.c`. The old Cool Tech (`admin.css`, Outfit/DM Sans) is deleted.
+
+**Color only through tokens**: always the `--nd-*` CSS variables (names don't change with the framework); a hex value in a page is a defect. Tokens are defined in one place; after changing a token, re-run the contrast check and everything must pass (text ≥4.5:1, non-text ≥3:1).
+
+**Surface**
+
+- **Paper + ink**: canvas warm white `--nd-bg` `#fafaf8`, white cards with a 1px hairline `--nd-hair`, no shadows (only overlays — dialogs, toasts, ⌘K — have shadows). Body ink `--nd-t1` `#17171c`, secondary `--nd-t2` / `--nd-t3`.
+- **One primary surface**: `--nd-primary` near-black (near-white in dark mode). Used for the primary button, selected segment, selected multi-select tag, switch on, and any "selected" outside the sidebar. One primary button per screen; the rest are secondary (white hairline pill) or text buttons (underlined).
+- **Color blocks (Figma)**: each kind of page has its own block color, used in exactly three places — the top status block (when normal / neutral), the current sidebar item, and the background of the current icon in the mobile bottom bar. Charts `blkCharts` pale blue, network & bands `blkNetwork` lime, Wi-Fi & LAN `blkWifi` mint, services `blkServices` lavender, SMS `blkMessages` pink, device & maintenance `blkSystem` beige. Every page belongs to a **route family**; the shell sets `data-family` on the root element by family and that decides the block; pages don't pick colors.
+- **Problems override category color**: attention `--nd-washW` amber, error `--nd-washB` coral. Text in blocks is always ink; only state symbols carry semantic color.
+- **Deep green band (Cohere)**: home when state is normal, and the whole login page, use `--nd-band` `#003c33` + white text. The home module cards are solid beige (Scenarios) and deep navy `blkNavy` (Tailscale), no hairline.
+- **Alert bar**: not a color block but a single ink strip (Cohere announcement bar), one line on mobile, with detail on wide screens; avoids stacking two colored blocks with the status block.
+- **Dark mode**: same roles; blocks become saturated deep tones (not greyish darks); the primary surface inverts; the alert bar is a raised dark strip in dark mode, never a white block; dark terminal bands (AT, logs, processes) are dark in both modes.
+- **Chart lines** use separate vivid colors (`--nd-green/orange/red/blue`), not monochromed.
+
+**Type**
+
+- Latin and digits in **Geist**, data (IP, IMEI, PCI, logs) in **Geist Mono**, Chinese via system fonts (PingFang etc.). Chinese has only discrete weights, so only 400 / 500 / 600, never 700/800.
+- Mobile first, one step up at ≥1024: page title 22 → 28, body 15 → 16, secondary 13 → 14, status block title 17 → 20, readout 28 → 40 (home main readout 44 → 64).
+- **Inputs no smaller than 16px** (iOS zooms the page on focus below 16).
+- Group headings are **small uppercase monospace eyebrows** (11px, tracking 0.06em, `--nd-t3`), the Cohere/Figma section mark; the Chinese UI uses the body font at 12px without uppercasing (monospace spacing is uneven with Chinese, and uppercase turns MHz into MHZ). Readout labels are not uppercased.
+- Titles, states and module titles use 500; hierarchy comes from size and tracking, not bold; 600 only for small `<h3>` headings and selected items. State words in blocks are ink, only the symbol carries semantic color; the lightest grey inside a block is lifted to `--nd-t2` automatically.
+
+**Shape**
+
+- Radius: cards 12, panels 16, inputs and options 8, buttons and segments pill.
+- Tappable areas always ≥44px: shrink text and padding, not hit areas. Switch visual 40×24, hit area 44×44; segment visual 30 tall, hit area 44.
+
+**Structure (set in the redesign, don't regress)**
+
+- Navigation: <640 four bottom tabs (Home / Charts / Functions / System), 640–1023 left icon rail, ≥1024 240px sidebar with groups; ⌘K searches all pages (Chinese, pinyin, aliases). The route table (path, family, title, search aliases) is defined in one place; navigation, ⌘K and families all derive from it.
+- Page order: title → status block (state · reason · next step · freshness) → things you can change → detail. Settings pages max width 720; data pages may use two columns.
+- **Three write tiers**: tier 1 sends directly; tier 2 confirms inline on the page (stating the consequence); tier 3 is a dialog (what happens / how long it's down / how to recover; Tailscale warning when accessed remotely; factory reset requires typing 「恢复出厂」 "factory reset"). Every write is read back afterwards; if readback fails say 「设备已接受」 ("device accepted"), not "success"; multi-step writes show each step, and on failure resend only unfinished steps. There's an inventory of which tier each control belongs to; change the inventory before changing a control.
+- **Transactions** (E4, design `docs/designs/write-op-layer.md` DD4, DD5, DD8, DD15): writes through datad (currently network mode) no longer read back themselves; the device confirms; text follows datad's `op` block, vocabulary in `docs/ui-glossary.md` §13.
+  - Shell strip (alert bar style, `role=status`, revert failure `role=alert`): on every page, in progress 「正在确认 · 1:42」 ("checking · 1:42"), ≥640 adds 「制式 · 旧 → 新 · 来源」 ("RAT · old → new · source"); 「详情 ›」 ("details ›") goes to the matching page, and it isn't shown on that page. The countdown is `aria-hidden`; only phase changes are announced.
+  - The matching page's status block becomes the transaction state: same five layers as touch, buttons 「退回 X」「保留 Y」 are tier-2 inline confirms; stacked vertically on mobile, full width, ≥44px.
+  - System › Device › Change log (`/changes`): same two lines as touch; undo in the detail, tier 3 for anything that drops cellular (network mode), tier 2 otherwise; every attempt gets a new `op_id`, never resent. Settings pages end with 「上次改动 14:32 · 触屏 ›」 ("last change 14:32 · touch ›") linking to that entry (currently network mode only).
+  - Data service stuck: the strip says 「数据服务没响应」 ("data service not responding"), writes via datad grey out; web disconnects mid-change: the strip says 「和设备断开了 · 操作结果未知」 ("disconnected from device · result unknown"), no auto-resend, the result shows normally after reconnect. Old datad (`supported:false` from `/api/ops`): no strip and no change log; writes read back as before.
+- When data goes stale keep old values, grey them, write "N min ago"; never clear to 0.
+- Icons are Phosphor: selected and tiles filled, the rest bold line.
+
+
+**Control semantics**: region `radiogroup` + `radio`; switches `switch`; segments are a single-select toggle group; alert bar `role="status" aria-live="polite"`; dialogs have a title and description, and focus returns to the trigger on close.
+
+**Live data** (same once it becomes push): when a number changes only the number changes — no reflow, no flash; inputs being typed in, expanded details and pending confirms are not overwritten by new data (DR12); screen readers announce only verdict and alert changes, not every refreshed reading (DR13).
+
+**Current implementation (luyaz-web; the old Next.js web was deleted 10-15, Phase 10 X13)**: tokens `crates/luyaz-web/static/nd/newdesign.css`; component styles in the same directory `nd.css`, `shell.css` (concatenated by `src/assets.rs`); contrast `node crates/luyaz-web/tools/contrast.ts > docs/web/contrast.md`; route table `crates/luyaz-web/src/routes.rs`; tier inventory `docs/web/controls-inventory.md` (written for the old web, not updated). When the implementation changes, edit this paragraph; the rules above stay.
+
+---
+
+## 6. Anti-patterns (neither platform)
+
+- One card per metric, stacked into a mosaic. Cards are **only** allowed two ways: grouped lists (one card holding a set of similar rows) and whole tappable modules (home Scenarios / Tailscale cards, function tiles).
+- Gradient backgrounds, neon glow, gradient text, real blur (except the slight backdrop blur of the web top and bottom bars). The touch UI's "tinted glass" is only for the floating tab bar, back button, bottom sheet and title bar right-side buttons, and it's an opaque solid color.
+- Icons in colored circles as decoration; three-column equal feature grids.
+- Colored left-border cards.
+- Everything center-aligned; one large radius on everything. Radius tiers are deliberate: touch sheet 22, cards and tiles 20, options 14; web panels 16, cards 12, inputs and options 8; pills are half-height.
+- Emoji as design elements (except flags in node names, which are data; the touch UI shows them as country codes).
+- Big colored pills for state; use a dot plus text. Filled pills for selected items (segments, bands, exit options) don't count as state pills.

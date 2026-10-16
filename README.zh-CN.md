@@ -172,8 +172,8 @@ docs/          GETTING-STARTED、SCREENSHOTS、ARCHITECTURE、DESIGN.md（界面
 | [docs/ARCHITECTURE.zh-CN.md](docs/ARCHITECTURE.zh-CN.md) | 各个程序怎么配合、在设备上放在哪 |
 | [onboard/README.zh-CN.md](onboard/README.zh-CN.md) | 装机包说明：装到哪里、日常用法、恢复原厂、常见问题 |
 | [DEPLOY.zh-CN.md](DEPLOY.zh-CN.md) | 更新已装好的设备 |
-| [docs/RELIABILITY.md](docs/RELIABILITY.md) | 核心、哨兵和脚本之间的文件约定 |
-| [docs/DESIGN.md](docs/DESIGN.md) | 管理网页和触屏的设计规范 |
+| [docs/RELIABILITY.zh-CN.md](docs/RELIABILITY.zh-CN.md) | 核心、哨兵和脚本之间的文件约定 |
+| [docs/DESIGN.zh-CN.md](docs/DESIGN.zh-CN.md) | 管理网页和触屏的设计规范 |
 | [touch-ui/README.zh-CN.md](touch-ui/README.zh-CN.md)、[touch-ui/docs/](touch-ui/docs/) | 触屏的构建、硬件、eSIM、测速 |
 | [CLAUDE.md](CLAUDE.md) | 给 AI 编程助手看的设备规则（人也值得读一遍「不能做的事」） |
 

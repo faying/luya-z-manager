@@ -61,7 +61,7 @@ rs/build.sh test             # cargo test
 在共用构建镜像（`onboard/build.Dockerfile`）里用 cargo zigbuild 编，LVGL 固定 v9.5。装机包 `onboard/build-kit.sh` 自己会调 `rs/build.sh device`。
 触屏字体（Nunito、中文兜底）用 `scripts/fonts/build-nunito.sh`、`scripts/fonts/build-cjk-fallback.sh` 生成（公开下载按 sha256 固定），装机包会自动调。
 
-代码结构：入口 `rs/devui/src/main.rs`，各页 `rs/devui/src/ui/`，组件 `kit.rs`，色板 `theme.rs`，显示和触摸在 `rs/plat`。离屏渲染测试在 `rs/devui/src/render/`（`rs/smoke.sh`、`rs/parity.sh`）；`scripts/test/docker.sh` 在 busybox 容器里跑设备端脚本测试。设计规则见 [docs/DESIGN.md](../docs/DESIGN.md) §4。更多见 [docs/DEVELOPMENT.zh-CN.md](docs/DEVELOPMENT.zh-CN.md)。
+代码结构：入口 `rs/devui/src/main.rs`，各页 `rs/devui/src/ui/`，组件 `kit.rs`，色板 `theme.rs`，显示和触摸在 `rs/plat`。离屏渲染测试在 `rs/devui/src/render/`（`rs/smoke.sh`、`rs/parity.sh`）；`scripts/test/docker.sh` 在 busybox 容器里跑设备端脚本测试。设计规则见 [docs/DESIGN.zh-CN.md](../docs/DESIGN.zh-CN.md) §4。更多见 [docs/DEVELOPMENT.zh-CN.md](docs/DEVELOPMENT.zh-CN.md)。
 
 之前的 C 版已删除，留在 git tag `legacy-c-touch-ui`；更早的 litehtml 渲染器在 tag `legacy-litehtml`。
 
@@ -74,7 +74,7 @@ rs/build.sh test             # cargo test
 
 ## 可靠性脚本
 
-`scripts/` 里是配合 manager 仓库使用的设备端脚本（约定见 [docs/RELIABILITY.md](../docs/RELIABILITY.md)）：procd 启动脚本（`luyaz-core.init`、`luyaz-web.init`、`luyaz-sentinel.init`）、更新执行器和开机恢复（`u60-ship.sh`、`u60-recover.sh`）、只读体检（`doctor.sh`）、配置备份（`config-backup.sh`）等。
+`scripts/` 里是配合 manager 仓库使用的设备端脚本（约定见 [docs/RELIABILITY.zh-CN.md](../docs/RELIABILITY.zh-CN.md)）：procd 启动脚本（`luyaz-core.init`、`luyaz-web.init`、`luyaz-sentinel.init`）、更新执行器和开机恢复（`u60-ship.sh`、`u60-recover.sh`）、只读体检（`doctor.sh`）、配置备份（`config-backup.sh`）等。
 
 ## 文档
 
@@ -83,7 +83,7 @@ rs/build.sh test             # cargo test
 - [docs/ESIM.zh-CN.md](docs/ESIM.zh-CN.md)：eSIM 切换页
 - [docs/SPEEDTEST.zh-CN.md](docs/SPEEDTEST.zh-CN.md)：测速页
 - [docs/SHIP.md](docs/SHIP.md)：组件更新的设备端格式
-- 设计规范：[docs/DESIGN.md](../docs/DESIGN.md) §4
+- 设计规范：[docs/DESIGN.zh-CN.md](../docs/DESIGN.zh-CN.md) §4
 
 ## 致谢
 
