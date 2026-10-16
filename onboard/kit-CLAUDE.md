@@ -182,10 +182,11 @@ sleep 8; /etc/init.d/luyaz-sentinel stop  # 之后不再管屏幕（原厂界面
 
 ```sh
 echo vendor > /tmp/luyaz-screen.ctl; sleep 8     # 先把屏幕交给原厂界面
-for s in luyaz-sentinel u60-uid u60-guard luyaz-web zte-agent zwrt-datad luyaz-core; do /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
-cp /data/luyaz/kit/rc.local.orig /etc/rc.local
-rm -rf /data/luyaz /data/u60d /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim \
-       /data/u60-guard /data/u60-uid /data/alerts /data/crashlog /data/power /data/local/tmp/start_zte_agent.sh
+for s in luyaz-sentinel luyaz-web luyaz-core u60-uid u60-guard zte-agent zwrt-datad; do [ -x /etc/init.d/$s ] && /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
+for f in /data/luyaz/kit/rc.local.orig /data/u60-kit/rc.local.orig; do [ -s $f ] && cp $f /etc/rc.local && break; done
+rm -rf /data/luyaz /data/plugins/u60pro-devui /data/esim /data/alerts /data/crashlog /data/power \
+       /data/u60d /data/u60-kit /data/u60-ship /data/u60-guard /data/u60-uid /data/zte-agent /data/zte-agent.env /data/admin \
+       /data/plugins/zwrt-datad /data/local/tmp/start_zte_agent.sh    # 第二行起是旧装机包的残留
 # 连 SSH 也不要：rm -rf /data/ssh /data/local/tmp/start_dropbear.sh
 reboot
 ```

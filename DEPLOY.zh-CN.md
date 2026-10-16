@@ -14,10 +14,14 @@ tar xzf onboard/dist/luyaz-kit-*.tar.gz -C /tmp && cd /tmp/luyaz-kit
 ./install.sh esim                            # eSIM 工具
 ./install.sh status                          # 看状态
 ./install.sh doctor                          # 只读体检
+./install.sh reboot                          # 重启设备并确认各组件开机自己起来
+./install.sh backup                          # 把配置备份到这台电脑（BACKUP_DIR，默认 ./backups）
+./install.sh restore <备份.tgz>              # 先列出会改哪些文件，输入 yes 才写
+./install.sh recover                         # ship 的开机收尾（/data/luyaz/ship/luyaz-recover.sh + rc.local 一行）；要单独点名
 ```
 
 设备地址不是 `192.168.0.1` 时加 `GATEWAY=…`；SSH 密钥不是 `~/.ssh/id_ed25519` 时加 `SSH_KEY=…`。
-设备上有没做完的 ship 事务（见 [touch-ui/docs/SHIP.md](touch-ui/docs/SHIP.md)）时，`admin`、`devui` 会拒绝安装，先做完或退回。
+设备上有没做完的 ship 事务（见 [touch-ui/docs/SHIP.md](touch-ui/docs/SHIP.md)）时，`admin`、`devui`、`recover` 会拒绝安装，先做完或退回。
 
 ## 打装机包
 

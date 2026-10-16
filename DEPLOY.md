@@ -14,10 +14,14 @@ tar xzf onboard/dist/luyaz-kit-*.tar.gz -C /tmp && cd /tmp/luyaz-kit
 ./install.sh esim                            # eSIM tools
 ./install.sh status                          # show status
 ./install.sh doctor                          # read-only health check
+./install.sh reboot                          # reboot and confirm every component comes back by itself
+./install.sh backup                          # back up the configuration to this computer (BACKUP_DIR, default ./backups)
+./install.sh restore <backup.tgz>            # lists what it would change, writes only after you type yes
+./install.sh recover                         # ship's boot-time cleanup (/data/luyaz/ship/luyaz-recover.sh + one rc.local line); only when named
 ```
 
 If the device is not at `192.168.0.1`, add `GATEWAY=…`; if your SSH key is not `~/.ssh/id_ed25519`, add `SSH_KEY=…`.
-If the device has an unfinished ship transaction (see [touch-ui/docs/SHIP.md](touch-ui/docs/SHIP.md)), `admin` and `devui` refuse to install until it is finished or rolled back.
+If the device has an unfinished ship transaction (see [touch-ui/docs/SHIP.md](touch-ui/docs/SHIP.md)), `admin`, `devui` and `recover` refuse to install until it is finished or rolled back.
 
 ## Building the kit
 

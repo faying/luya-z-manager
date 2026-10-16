@@ -37,6 +37,6 @@ luyaz-sentinel: screen owner + watchdog
 
 - Programs and persistent data: `/data` (survives firmware upgrades).
 - Logs, locks and runtime state: `/tmp` and `/var/run` (RAM, cleared on reboot). Core log `/tmp/luyaz-core.log`, sentinel log `/tmp/luyaz-sentinel.log`, UI log `/tmp/luyaz-ui.log`.
-- Install backup of the stock `rc.local`: `/data/u60-kit/rc.local.orig`.
+- Install backup of the stock `rc.local`: `/data/luyaz/kit/rc.local.orig` (`/data/u60-kit/` on devices installed by older kits).
 
 See [onboard/README.md](../onboard/README.md) for the full install layout and how to restore stock.

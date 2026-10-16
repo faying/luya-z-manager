@@ -1,12 +1,23 @@
 # 设备账本（ledger）：格式与约定
 
-**现状（2026-10-15）**：u60-guard 已退役（10c 删）。下文「u60-guard / guard」的账本任务、待机记录现在由核心 luyaz-core（manager `crates/luyaz-core/src/longterm/`）承担，读的一方是 `<核心> doctor`（`/data/luyaz/scripts/doctor.sh` 是薄壳）；u60-uid 的屏幕事由哨兵 luyaz-sentinel 承担（日志 10-16 E2c 起叫 `/tmp/luyaz-screen.log`，哨兵启动时把旧名改过来）；迁移后的设备上 `/tmp/u60-guard/…` 是 `/tmp/luyaz/…`。账本仍在 `/data/ledger/`；下文保留当时的写法作记录，按这里换主语读。
+**现状（2026-10-17）**：u60-guard 已退役（10c 删）。账本现在由核心 luyaz-core 的长期层写（manager `crates/luyaz-core/src/longterm.rs`、`longterm/`；
+`LUYAZ_LONGTERM=1` 才开）：
+- 持久：`/data/luyaz/core/long/hours.jsonl`（每小时一行，留 90 天）、`events.jsonl`（重要事件，留 30 天、最多 1 MB），追加 + fsync；
+  行的种类和字段名照本文第 4 节（`boot`、`ver`、`proc_restart`、`uid`、`datad_degraded`、`hour`、`hour_power`、`hour_proc` 等），
+  连旧名也照旧：`rss_agent`/`rss_datad`/`rss_devui`、`cpu_datad`、`prog` 里的 `zwrt-datad`、`u60-uid`（代码按这些键对应核心、触屏）。
+- 易失：`/tmp/luyaz/ledger`（下文 `/tmp/u60-guard/ledger/`）、时钟结论 `/tmp/luyaz/clock-ok`（下文 `/tmp/u60-guard/clock-ok`）、
+  `/tmp/luyaz/handover`；屏幕日志 `/tmp/luyaz-screen.log`（下文 u60-uid 日志）由哨兵 luyaz-sentinel 写。
+- 读的一方：`<核心> doctor --report 24h|7d`（`/data/luyaz/scripts/doctor.sh` 是薄壳；成绩单在 `crates/luyaz-core/src/scorecard*`），
+  同时读旧 guard 账本 `/data/ledger/`（不再写，只读）和核心的 `long/`。经验库 `places.json` 开头从 `/data/ledger` 回填一次。
 
-u60-guard 在设备上记一本跨重启的事件账：整机重启、基带崩溃和恢复、我们自己的程序退出、datad 降级、
+下文是 guard 时代定下的格式契约，主语「guard / 账本任务」按上面换成核心读；guard 主循环、观察循环、`u60-guard.sh watcher`、
+`stop-requested` 这类进程层面的描述只作历史记录。
+
+原文：u60-guard 在设备上记一本跨重启的事件账：整机重启、基带崩溃和恢复、我们自己的程序退出、datad 降级、
 每小时的耗电和资源。`doctor.sh --report 24h|7d` 读它，按「稳 / 好用 / 省」三类给出成绩单。
 
-这份文件是写的一方（`scripts/u60-guard.sh`）和读的一方（`scripts/doctor.sh`）之间的契约。
-两边的实现、测试都以这里为准；改格式先改这里，并升 `v`。
+这份文件当时是写的一方（`scripts/u60-guard.sh`，已删）和读的一方（`scripts/doctor.sh`）之间的契约；
+现在是核心长期层和成绩单之间的契约。改格式先改这里，并升 `v`。
 
 ## 1. 基本规矩
 

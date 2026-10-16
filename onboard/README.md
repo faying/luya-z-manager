@@ -17,7 +17,7 @@ It starts dropbear and confirms it is listening on 2222 before adding its `rc.lo
 ## Before you start
 
 1. **Firmware B27 or earlier** (shown on the web admin home page or under 「设备信息」 (Device information), looks like `…MU5250V1.0.0B27`).
-   From B28 on, ZTE removed the interface used to enable ADB, so this kit no longer works. **Do not upgrade first.**
+   Newer firmware drops the interface used to enable ADB (`zwrt_bsp.usb set`: gone on CN B31, reported gone from B28), so this kit no longer works there. **Do not upgrade first.**
 2. You know the **router admin password** (the one you use to log in at `http://192.168.0.1`).
 3. A **USB-C cable that carries data** (some charging cables only charge).
 4. **adb** installed on your computer:
@@ -80,30 +80,35 @@ If the U60 is not at `192.168.0.1`: `GATEWAY=192.168.x.1 ./install.sh`.
 ## What gets installed, and where
 
 Programs and data all live in `/data` (firmware upgrades don't wipe it). Autostart is only a few lines added to `/etc/rc.local`; no stock service is changed.
-The advanced admin web, the screen's data backend and the Wi-Fi fallback watchdog are supervised by the system's procd: if one crashes it is restarted automatically and an alert is logged (SMS notification can be set up in the admin web under 「系统 → 告警」 (System → Alerts)).
-After `admin` and `devui`, the kit writes what it installed (kit date, commit) into the device manifest `/data/luyaz/ship/manifest.jsonl`, one line per component (lweb; touch, sentinel, datad), which `doctor` compares with the files.
-`devui` installs the touch UI, `zwrt-datad` and `luyaz-sentinel`. In `rc.local` one line `/etc/init.d/luyaz-sentinel start` follows the `zwrt-datad` line; the old start.sh, `u60-uid` and `u60-guard` lines are removed, and those services are stopped (never disabled; their files stay). After starting the sentinel it waits up to 60 s until it runs under procd, its heartbeat says `ours`, and the running touch UI is the file just installed. `admin` installs only luyaz-web.
+The core luyaz-core, the advanced admin web luyaz-web and the sentinel luyaz-sentinel are supervised by the system's procd: if one crashes it is restarted automatically and an alert is logged (SMS notification can be set up in the admin web under 「系统 → 告警」 (System → Alerts)).
+After `admin` and `devui`, the kit writes what it installed (kit date, commit) into the device manifest `/data/luyaz/ship/manifest.jsonl`, one line per component (lweb; touch, sentinel, datad = the core), which `doctor` compares with the files.
+`devui` installs the touch UI, luyaz-core and luyaz-sentinel. In `rc.local` the line `/etc/init.d/luyaz-core start` is followed by `/etc/init.d/luyaz-sentinel start`; lines from older kits (`zwrt-datad`, start.sh, `u60-uid`, `u60-guard`) are replaced, and those services are stopped (never disabled). After starting the sentinel it waits up to 60 s until it runs under procd, its heartbeat says `ours`, and the running touch UI is the file just installed. `admin` installs only luyaz-web.
+The kit installs the current layout directly. A device still on the old layout (`/data/u60d`, `/data/u60-uid` or `/data/u60-ship` without the new `.migrated` markers, or `/data/u60-kit` instead of `/data/luyaz/kit`) is refused with a message saying what to move first.
 
 | Path | Purpose |
 |---|---|
 | `/data/ssh/` | dropbear, host key, `authorized_keys` (**the master copy of your public keys**) |
 | `/data/local/tmp/start_dropbear.sh` | At boot, syncs the public keys to `/etc/dropbear/` and starts dropbear (:2222) |
-| `/data/luyaz/luyaz-web`, `/data/luyaz/operator-logos/` | Advanced admin web (luyaz-web on :9090; its data and every change go through the data service luyaz-core, installed as `zwrt-datad`). zte-agent was removed on 2026-10-14: the kit stops an old one, drops its `rc.local` line and writes `/data/u60d/agent-retired`; `/data/zte-agent` and `/data/admin/` from older kits are left in place, unused |
-| `/data/zte-agent.env` | **Admin web password** (one line `ZTE_AGENT_PASSWORD=…`, readable by root only; the name is from the zte-agent days) |
-| `/data/luyaz/luyaz-sentinel`, `/etc/init.d/luyaz-sentinel` | Sentinel (replaces u60-uid and u60-guard): owns the screen, restarts the touch UI if it crashes, after two failed starts in a row switches back to the stock interface with an alert (long-press the bottom-right corner for 3 seconds to come back); also the Wi-Fi fallback watchdog and alert SMS. Log `/tmp/luyaz-sentinel.log`, heartbeat `/tmp/luyaz-sentinel.hb` |
-| `/data/luyaz/scripts/`, `/etc/init.d/{zwrt-datad,luyaz-sentinel,luyaz-web}` | Device scripts (doctor.sh, alert-lib.sh …; the ship executor luyaz-ship.sh and datad-trial.sh too) and process supervision (started at boot by `/etc/init.d/… start` lines in `rc.local`, not via `enable`) |
+| `/data/luyaz/luyaz-core`, `/data/luyaz/core/` | Core (:9460, local only): the touch UI's and admin web's data, and every change, go through it. State in `/data/luyaz/core/`, log `/tmp/luyaz-core.log` |
+| `/data/luyaz/luyaz-web`, `/data/luyaz/operator-logos/` | Advanced admin web (luyaz-web on :9090). zte-agent was removed on 2026-10-14: the kit stops an old one and drops its `rc.local` line |
+| `/data/luyaz/web.env` | **Admin web password** (readable by root only; older kits kept it in `/data/zte-agent.env`) |
+| `/data/luyaz/luyaz-sentinel`, `/data/luyaz/screen/` | Sentinel (replaces u60-uid and u60-guard): owns the screen, restarts the touch UI if it crashes, after two failed starts in a row switches back to the stock interface with an alert (long-press the bottom-right corner for 3 seconds to come back); also the Wi-Fi fallback watchdog and alert SMS. Control FIFO `/tmp/luyaz-screen.ctl`, log `/tmp/luyaz-sentinel.log`, heartbeat `/tmp/luyaz-sentinel.hb` |
+| `/data/luyaz/ui/` | Touch UI `luyaz-ui`, its fonts and operator logos. `/data/plugins/u60pro-devui/` keeps only `start.sh` and backups |
+| `/data/luyaz/scripts/`, `/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}` | Device scripts (doctor.sh, a shim over `luyaz-core doctor`; alert-lib.sh …; the ship executor luyaz-ship.sh and datad-trial.sh too) and process supervision (started at boot by `/etc/init.d/… start` lines in `rc.local`, not via `enable`) |
+| `/data/luyaz/ship/` | `u60 ship` transactions, manifest `manifest.jsonl`, boot clean-up `luyaz-recover.sh` |
 | `/data/alerts/`, `/data/crashlog/` | Alert records, logs from program crashes |
-| `/data/plugins/u60pro-devui/`, `/data/plugins/zwrt-datad/` | Touch UI and its data backend |
 | `/data/esim/` | lpac (eSIM card read/write tool) |
-| `/data/u60-kit/rc.local.orig` | Backup of the stock `rc.local` from before the first install |
+| `/data/luyaz/kit/rc.local.orig` | Backup of the stock `rc.local` from before the first install |
+
+Older kits left `/data/zte-agent*`, `/data/admin/`, `/data/plugins/zwrt-datad/`, `/data/u60-guard/`, `/data/u60-uid/` behind; nothing uses them now and they are safe to delete.
 
 ## Everyday use
 
 - **Add another computer's SSH public key**: append it to `/data/ssh/authorized_keys`, then run `sh /data/local/tmp/start_dropbear.sh` (editing the copy in `/etc/dropbear/` does nothing; it is overwritten at boot).
-- **Change the admin web password**: rerun `./install.sh admin` (it asks for a new password). Or over SSH edit the line in `/data/zte-agent.env` (no quotes, backslashes or spaces), then log in again at `:9090` (luyaz-web reads the file at every login, no restart needed).
+- **Change the admin web password**: rerun `./install.sh admin` (it asks for a new password). Or over SSH edit the line in `/data/luyaz/web.env` (no quotes, backslashes or spaces), then log in again at `:9090` (luyaz-web reads the file at every login, no restart needed).
 - **eSIM**: manage profiles in the admin web under 「移动网络 → eSIM」 (Mobile network → eSIM); on the screen, 「更多功能 → eSIM」 (More → eSIM), tap twice to switch. Takes effect in about 10 seconds, usually no reboot needed.
 - **Proxy**: the install kit does not include a proxy; if you want one, set it up yourself from official sources following `docs/PROXY.md` in the manager repo.
-- **Need ADB temporarily**: SSH in and run `ubus call zwrt_bsp.usb set '{"mode":"debug"}'`; when 「USB 模式」 (USB mode) in `./install.sh status` shows `user`, it is back in normal mode.
+- **Need ADB temporarily**: SSH in and run `ubus call zwrt_bsp.usb set '{"mode":"debug"}'`; when 「USB 模式」 (USB mode) in `./install.sh status` shows `user`, it is back in normal mode. Only on firmware whose `ubus -v list zwrt_bsp.usb` still lists `set`: CN B31 lists only `list`, and the call fails with `Method not found`.
 
 ## Caveats
 
@@ -117,11 +122,12 @@ After `admin` and `devui`, the kit writes what it installed (kit date, commit) i
 After logging in over SSH:
 
 ```sh
-echo vendor > /tmp/u60-uid.ctl; sleep 8     # hand the screen back to the stock interface first
-for s in luyaz-sentinel u60-uid u60-guard luyaz-web zte-agent zwrt-datad; do /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
-cp /data/u60-kit/rc.local.orig /etc/rc.local
-rm -rf /data/luyaz /data/u60d /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim \
-       /data/u60-guard /data/u60-uid /data/alerts /data/crashlog /data/power /data/local/tmp/start_zte_agent.sh
+echo vendor > /tmp/luyaz-screen.ctl; sleep 8     # hand the screen back to the stock interface first
+for s in luyaz-sentinel luyaz-web luyaz-core u60-uid u60-guard zte-agent zwrt-datad; do [ -x /etc/init.d/$s ] && /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
+for f in /data/luyaz/kit/rc.local.orig /data/u60-kit/rc.local.orig; do [ -s $f ] && cp $f /etc/rc.local && break; done
+rm -rf /data/luyaz /data/plugins/u60pro-devui /data/esim /data/alerts /data/crashlog /data/power \
+       /data/u60d /data/u60-kit /data/u60-ship /data/u60-guard /data/u60-uid /data/zte-agent /data/zte-agent.env /data/admin \
+       /data/plugins/zwrt-datad /data/local/tmp/start_zte_agent.sh    # second line: leftovers from older kits
 # If you don't want SSH either, also run: rm -rf /data/ssh /data/local/tmp/start_dropbear.sh
 reboot
 ```
@@ -136,6 +142,6 @@ After the reboot the screen is back to the stock interface. Turn auto-update bac
 
 **It says SSH can't connect**: the device side is already installed. The message says which: no key / connection refused / auth failed / timeout. Usually the computer isn't on the U60's Wi-Fi, or a proxy app's TUN/enhanced mode is hijacking `192.168.0.1` (set `192.168.0.0/16` to direct in the proxy; no need to turn it off entirely). Then try again: `ssh -p 2222 -i ~/.ssh/id_ed25519 root@192.168.0.1`.
 
-**The screen shows no data**: SSH in and look at `cat /tmp/zwrt-datad.log`; a reboot usually fixes it.
+**The screen shows no data**: SSH in and look at `tail -n 50 /tmp/luyaz-core.log` (and `/tmp/luyaz-sentinel.log` if the screen itself is wrong), or run `./install.sh doctor`; a reboot usually fixes it.
 
 **Install fails halfway**: the script can be run again and again; parts already installed are skipped or overwritten. Send the whole terminal output to whoever gave you the kit.

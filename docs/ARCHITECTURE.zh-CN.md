@@ -37,6 +37,6 @@ luyaz-sentinel：屏幕主人 + 看门狗
 
 - 程序和要保留的数据：`/data`（固件升级不会清掉）。
 - 日志、锁和运行时状态：`/tmp`、`/var/run`（内存盘，重启就没了）。核心日志 `/tmp/luyaz-core.log`，哨兵日志 `/tmp/luyaz-sentinel.log`，界面日志 `/tmp/luyaz-ui.log`。
-- 首次安装前的原厂 `rc.local` 备份：`/data/u60-kit/rc.local.orig`。
+- 首次安装前的原厂 `rc.local` 备份：`/data/luyaz/kit/rc.local.orig`（旧装机包装的设备在 `/data/u60-kit/`）。
 
 完整的安装位置和恢复原厂的方法见 [onboard/README.zh-CN.md](../onboard/README.zh-CN.md)。

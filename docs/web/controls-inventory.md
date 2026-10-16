@@ -1,5 +1,7 @@
 # 管理网页控件与数据清单（改版前基线）
 
+> **这是 2026-09-24 的历史快照**：描述的是已删的 Next.js 网页（`web/`）和 zte-agent（10-14 删）。文中的 `zte-agent/src/…`、`/data/u60-guard/doctor.sh` 等都是当时的样子；现在网页是 `crates/luyaz-web`，接口由 `crates/luyaz-core` 提供，体检是 `/data/luyaz/scripts/doctor.sh`（= `luyaz-core doctor`）。
+
 ## 说明
 
 **用途**：管理网页（`source/manager/web`）要整体改版。动任何页面之前，先把 43 个路由上的每个控件、每项数据列全，改版后对着这份清单逐项核对，保证一样不丢。它也是后面 e2e 测试（按可访问名称找控件）和「安全白名单」（哪些接口可以放心自动调用）的输入。
@@ -1371,7 +1373,7 @@
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| 「启用 ADB 调试 USB 模式」/「重新启用 ADB」 | button「启用 ADB 调试 USB 模式」 | PUT `/api/usb/mode` `{mode:"debug"}`（ubus `zwrt_bsp.usb set`） | 1 | 无读回（本页）；可用 `/api/usb/status` 看模式 | 「启用 ADB 调试 USB 模式？\n\n这将通过 USB 暴露 ADB，允许对设备进行完整的 shell 访问。仅在你拥有物理访问权限并信任所处环境时才执行此操作。」 | 三（开 ADB） |
+| 「启用 ADB 调试 USB 模式」/「重新启用 ADB」 | button「启用 ADB 调试 USB 模式」 | PUT `/api/usb/mode` `{mode:"debug"}`（ubus `zwrt_bsp.usb set`；固件没有 `set` 时 `/api/usb/status` 给 `mode_settable:false`，按钮禁用并说明，PUT 回 501） | 1 | 无读回（本页）；可用 `/api/usb/status` 看模式 | 「启用 ADB 调试 USB 模式？\n\n这将通过 USB 暴露 ADB，允许对设备进行完整的 shell 访问。仅在你拥有物理访问权限并信任所处环境时才执行此操作。」 | 三（开 ADB） |
 
 ---
 
@@ -1480,7 +1482,7 @@
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
 | 快速充电宝开关 | switch「快速充电宝」 | PUT `/api/usb/powerbank` `{state:1/0}`（ubus `zwrt_bsp.powerbank set`，= 原厂插线弹窗的「快速充电宝」；10-07 起没插设备（`typec_cc` = `no_cc`）时禁用并说明） | 1 | `/api/device/charger` `otg_powerbank_state` | 行内确认 | 二 |
-| 模式按钮「DEBUG」「MTP」「RNDIS」 | button「DEBUG」「MTP」「RNDIS」（当前模式只靠样式，无 `aria-pressed`） 〔现名：radio「DEBUG」「MTP」「RNDIS」〕 | PUT `/api/usb/mode` `{mode:"debug"/"mtp"/"rndis"}` | 1 | `/api/usb/status` `mode` | 「将 USB 模式更改为“{模式}”？这将断开当前会话。」 | 三（USB 模式；选 DEBUG 等同开 ADB） |
+| 模式按钮「DEBUG」「MTP」「RNDIS」 | button「DEBUG」「MTP」「RNDIS」（当前模式只靠样式，无 `aria-pressed`） 〔现名：radio「DEBUG」「MTP」「RNDIS」〕 | PUT `/api/usb/mode` `{mode:"debug"/"mtp"/"rndis"}`（`mode_settable:false` 时整组禁用并说明，PUT 回 501；国行 B31 就是这样） | 1 | `/api/usb/status` `mode` | 「将 USB 模式更改为“{模式}”？这将断开当前会话。」 | 三（USB 模式；选 DEBUG 等同开 ADB） |
 
 「充电宝开关」10-07 改名「快速充电宝」：调用就是原厂弹窗的快充，只在插着手机时有效（10-07 实测手机显示快充），拔线后固件自己回 0；关（state 0）的效果没实测过。「充电 + 上网」只在触屏上选（datad `usb.attach_mode`）。
 
