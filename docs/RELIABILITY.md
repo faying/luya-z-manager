@@ -1,7 +1,20 @@
-# 可靠性契约：zte-agent 与 u60-guard 之间的文件约定
+# 可靠性契约：设备上各程序之间的文件约定
 
-zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`，Wi-Fi 兜底看门狗兼告警发送方）
-只通过下面这些文件互相了解。两边的代码都以本文件为准；改其中任何一条，两边要同时改。
+设备上的程序只通过下面这些文件互相了解。改其中任何一条，读写两方要同时改。
+
+**现状（2026-10-15，Phase 10 做完）**：
+
+| 下文写法（当时） | 现在由谁承担 |
+|---|---|
+| agent（zte-agent，8d-2c 删） | 核心 `crates/luyaz-core`（`/data/luyaz/luyaz-core`，`/etc/init.d/luyaz-core`，状态 `/data/luyaz/core/`），引擎在共用的 `crates/luyaz-*`：Wi-Fi 锁 `luyaz-wifi`、情景心跳 `luyaz-scenario`、告警文件和短信 `luyaz-alerts` |
+| u60-guard（10-10 退役，10c 删） | 看门狗、接管、时钟结论：哨兵 `crates/luyaz-sentinel`（`/data/luyaz/luyaz-sentinel`）；告警短信、局域网 IPv6：核心 `engines/guard_duties.rs`；待机记录、账本：核心 `longterm/` |
+| u60-uid（10c 删） | 哨兵 `screen.rs`（第 6 节） |
+| supervise.sh（X9 删） | 核心 `svcwatch.rs`（`datad-crash`/`web-crash`/`sentinel-crash`） |
+| doctor.sh | `<核心> doctor`；`/data/luyaz/scripts/doctor.sh`（D1 前 `/data/u60-guard/`，读方新的在就用新的）是薄壳，退路 `doctor-legacy.sh` |
+| `/tmp/u60-guard/…` | `/tmp/luyaz/…`（`.migrated` 规则，u60-phase10.md §9 10d） |
+
+第 1–5、7–9 节保留当时的写法作记录（`zte-agent/src/…` 路径、`ZTE_AGENT_SUPERVISED`、`agent-*` 告警类别），
+文件名和格式本身没变；按上表换主语读。管理网页是 luyaz-web（:9090），后台密码文件 `/data/luyaz/web.env`。
 
 ## 1. Wi-Fi 锁 `/tmp/u60-wifi.lock`
 
@@ -27,7 +40,7 @@ zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`�
   这时误判的后果是多开一次 Wi-Fi，属于安全方向。
 - 引擎线程 panic 时心跳会停。受 procd 监督（环境变量 `ZTE_AGENT_SUPERVISED=1`）的 agent 会随之退出，交给 procd 重启。
 
-## 3. 接管标记 `/tmp/u60-wifiguard.took-over`
+## 3. 接管标记 `/tmp/luyaz/wifiguard.took-over`（Luya-Z 改名 E2 前 `/tmp/u60-wifiguard.took-over`）
 
 - u60-guard 接管 Wi-Fi 时写入，**每次接管只写一次**，内容在这次接管里唯一（写当时的 uptime）。
   每轮检查都重写会让 agent 的计时一直归零，控制权永远交不回来。
@@ -61,7 +74,7 @@ zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`�
   所以裁剪文件不影响游标。不用行号、字节偏移或墙钟做编号。
 - **墙钟不可信**：设备 RTC 在网络对时之前是 1971 年左右。墙钟秒 < `1704067200`（2024-01-01）的一律当作「时间未校准」，
   网页显示「开机后 N 秒」。
-- 类别：`[a-z0-9-]`，现有：`agent-crash`、`datad-crash`（supervise.sh）；`devui-crash`、`devui-gave-up`（u60-uid）；`devui-theme-paused`（触屏自己：自动深浅色 1 小时内切了 3 次——正常一天只切 2 次——停到下次开机；不发短信）；`agent-silent`、`agent-hung`、`wifi-takeover`、`wifi-restore-failed`、`sms-failed`、`datad-degraded`（u60-guard）；`tailscale-gave-up`（Tailscale 的 `start.sh` 看守：24 小时内拉起 tailscaled 6 次还是挂，暂停到这 24 小时过完；u60-guard 还没有专门的短信正文，走通用那句）。
+- 类别：`[a-z0-9-]`，现有：`agent-crash`（supervise.sh）、`datad-crash`、`web-crash`、`sentinel-crash`（核心 luyaz-core svcwatch，Phase 10 X9 起；之前 datad-crash 由 supervise.sh 写）；`devui-crash`、`devui-gave-up`（u60-uid）；`devui-theme-paused`（触屏自己：自动深浅色 1 小时内切了 3 次——正常一天只切 2 次——停到下次开机；不发短信）；`agent-silent`、`agent-hung`、`wifi-takeover`、`wifi-restore-failed`、`sms-failed`、`datad-degraded`（u60-guard）；`tailscale-gave-up`（Tailscale 的 `start.sh` 看守：24 小时内拉起 tailscaled 6 次还是挂，暂停到这 24 小时过完；u60-guard 还没有专门的短信正文，走通用那句）。
 - `datad-degraded` 看标记文件 `/data/u60-guard/datad-degraded`：第一行 = 退路开始的 epoch 秒，第二行 = 原因（一行可打印 ASCII，≤120 字符）。
   zte-agent（`zte-agent/src/datad_feed.rs`）是唯一的写入和删除者：datad `/v2` 不应、改为自己读 ubus 时写入，退路期间每 60 秒重写一次（开始时间不变、刷新 mtime），
   恢复时删掉；agent 启动时删掉旧标记再重新判断。u60-guard 只读：mtime 不到 3 分钟且开始时间早于 5 分钟前，才按开始时间 `alert_once` 发一次；
@@ -87,7 +100,7 @@ zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`�
     （`number`、`message_body` 为 UCS-2 十六进制大写、`encode_type` 为 `UNICODE`、`sms_time` 为 `YY;MM;DD;HH;MM;SS;+TZ`、`id` 为 `-1`）。
     返回体里 `result` 是 3 或没有 `result` 才算成功。失败记 `failed`，不计入额度，并追加一条 `sms-failed` 事件；不重试。
   - 号码在拼 JSON 之前再校验一次：`+` 可有可无，后面只能是数字，总长不超过 20。
-- 短信正文：按类别写好的一句中文大白话（发生了什么、影不影响上网、要不要动手），`【U60】…（MM-DD HH:MM）`，
+- 短信正文：按类别写好的一句中文大白话（发生了什么、影不影响上网、要不要动手），`【Luya-Z】…（MM-DD HH:MM）`，
   一条短信以内（≤70 字）；不认识的类别提示去网页看。事件的 ASCII 说明只留在网页告警列表里。u60-guard 自己把 UTF-8 解成 UCS-2（busybox 没有 iconv）。
 
 ### 短信记录 `sms-log`
@@ -105,18 +118,18 @@ zte-agent（本仓库）与 u60-guard（touch-ui 仓库 `scripts/u60-guard.sh`�
 - `PUT /api/alerts/sms`（需登录）：`{"number": "+86…" | "", "abroad": bool}`。
 - `GET /api/public/status` 的 `alerts.unread`：只有未读数，给触屏红点用。不带任何事件内容。
 
-## 6. 屏幕：u60-uid（touch-ui `src/uid.c`，procd 监督）
+## 6. 屏幕：哨兵（`crates/luyaz-sentinel/src/screen.rs`，procd 监督）
 
-- u60-uid 是 u60pro-devui 唯一的主人：拉起、按 comm 前缀 `u60pro-devui` 接管已在跑的（绝不起第二份）、
-  切原厂界面（`zte_topsw_devui`）、原厂界面在屏时识别长按右下角 3 秒回来。corner-wake 已退役，start.sh 在
-  rc.local 里有 `/etc/init.d/u60-uid start` 时只做开机杂务（`start.sh prep`），不再起界面。
-- `/data/u60-uid/attempts`：拉起前加 1 并 fsync，稳定运行 10 分钟清零；达到 2 就不再拉起，写
-  `/data/u60-uid/gave-up`、告警 `devui-gave-up`、交还原厂界面。放弃状态跨重启保留，长按或
-  `echo devui > /tmp/u60-uid.ctl` 清除。文件损坏按 2 处理。
-- 「选了原厂界面」在 `/tmp/u60-uid.want`，重启即恢复为我们的界面。
-- `/tmp/u60-uid.ctl` 是 FIFO，只在 u60-uid 运行时存在（它退出时删掉）：`vendor` / `devui`。
-  触屏的「切回原厂」按钮用非阻塞写，写不进去就回落为自己切。
-- 非预期退出（非 0、被信号杀，且不是 u60-uid 要求的停止）写 `/data/crashlog/u60pro-devui/` 并告警 `devui-crash`；
+- 哨兵是触屏界面（Rust，`/data/luyaz/ui/luyaz-ui`，comm `luyaz-ui`）唯一的主人：拉起、按 comm 接管已在跑的
+  （绝不起第二份）、切原厂界面（`zte_topsw_devui`）、原厂界面在屏时识别长按右下角 3 秒回来。
+  `/data/plugins/u60pro-devui/start.sh` 只做开机杂务（`start.sh prep`），不起界面。
+- `/data/luyaz/screen/attempts`：拉起前加 1 并 fsync，稳定运行 10 分钟清零；达到 2 就不再拉起，写
+  `/data/luyaz/screen/gave-up`、告警 `devui-gave-up`、交还原厂界面。放弃状态跨重启保留，长按或
+  `echo devui > /tmp/luyaz-screen.ctl` 清除。文件损坏按 2 处理。
+- 「选了原厂界面」在 `/tmp/luyaz/screen.want`（Luya-Z 改名 E2 前 `/tmp/u60-uid.want`），重启即恢复为我们的界面。
+- `/tmp/luyaz-screen.ctl` 是 FIFO，只在哨兵运行时存在：`vendor` / `devui` / `hold` / `release`（后两个给 ship）。
+  旧的 `/tmp/u60-uid.ctl` 10h 起没有了。触屏的「切回原厂」按钮用非阻塞写，写不进去就回落为自己切。
+- 非预期退出（非 0、被信号杀，且不是哨兵要求的停止）写 `/data/crashlog/u60pro-devui/`（名字没改）并告警 `devui-crash`；
   接管来的进程拿不到退出码，不计。
 - **屏幕上几分钟没有任何界面，固件会整机重启**（2026-09-23 实测，`reboot_reason_code` 1185）。所以任何停掉一个界面的
   路径都要在同一步里起另一个。

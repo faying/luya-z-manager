@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("router.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<div class="pg-col">
+<p class="nd-body">{{ l.pick("Configure the router's LAN IP and DHCP server.", "设置路由器的局域网 IP 和 DHCP 服务器。") }}</p>
+{{ self.leaf("lan-status")|safe }}
+<section aria-labelledby="lan-t"><div class="flex items-center gap-3"><h2 id="lan-t" class="nd-group-title flex-1">{{ l.pick("IP and DHCP", "IP 与 DHCP") }}</h2>{{ self.leaf("lan-btn")|safe }}</div>
+{{ self.leaf("lan-form")|safe }}
+{{ op|safe }}
+{{ note|safe }}
+{{ self.leaf("lan-rows")|safe }}
+<p class="nd-aux mt-2 px-1">{{ l.pick("Changing these restarts the LAN; connected devices drop for a moment.", "改这些设置会重启局域网，连着的设备会短暂断开。") }}</p></section>
+</div>
+{% endblock %}

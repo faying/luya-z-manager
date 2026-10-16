@@ -1,20 +1,20 @@
-# U60 Pro 装机包 — 给 Claude 的部署说明
+# Luya-Z 装机包 — 给 Claude 的部署说明
 
-你现在所在的目录是一个 **ZTE U60 Pro（MU5250）装机包**。用户是设备主人，他请你帮忙时按这份说明做。
+你现在所在的目录是一个 **Luya-Z 装机包**（给 ZTE U60 Pro（MU5250）用）。用户是设备主人，他请你帮忙时按这份说明做。
 给人看的说明在 `README.md`，内容一致，这份更偏操作和排错。
 
 这个包会给设备装上：
 
 | 组件 | 内容 |
 |---|---|
-| `ssh` | dropbear，端口 2222，只认密钥，开机自启 |
-| `admin` | 高级后台 zte-agent + 管理网页，`http://<设备>:9090/` |
-| `devui` | 前面板触屏界面 + 数据后端 zwrt-datad。装完用 `u60-ship.sh uid-restart <界面 md5> <u60-uid md5>` 把屏幕交给新程序（核对两个进程的 exe md5；包里的 u60-ship.sh 太旧时退回 `/etc/init.d/u60-uid restart`），并在设备清单记 touch、uid 两条（`admin` 记 agent 一条） |
+| `ssh` | dropbear，端口 2222，只认密钥，开机自启（先起 dropbear、10 秒内确认进程在且 2222 在监听，才写 rc.local 那一行；没起来 rc.local 不动）。电脑端 SSH 检查失败会说是哪种：没有密钥 / 连接被拒 / 认证失败 / 超时 |
+| `admin` | 只装高级后台 = 管理网页 luyaz-web（不再起 u60-guard），`http://<设备>:9090/`（数据和改动都经核心 luyaz-core，它随 `devui` 装在 `/data/luyaz/luyaz-core`，见下表）。zte-agent 2026-10-14 起删了：设备上有旧的会停掉、去掉它在 rc.local 的那一行，并写 `/data/luyaz/core/agent-retired`（核心见它才接管全部后台任务） |
+| `devui` | 前面板触屏界面 + 核心 luyaz-core（`/data/luyaz/luyaz-core`，procd 服务 `/etc/init.d/luyaz-core`）+ 哨兵 luyaz-sentinel（管屏幕和看门狗，取代 u60-uid、u60-guard）。rc.local 在 `/etc/init.d/luyaz-core start`（旧装法的 `/etc/init.d/zwrt-datad start` 原地换成它）后面只留一行 `/etc/init.d/luyaz-sentinel start   # u60 ship sentinel: …`，旧的 start.sh、u60-uid、u60-guard 行去掉；旧 u60-uid/u60-guard 服务 stop（绝不 disable），文件留在设备上。起哨兵后最多等 60 秒，核对：哨兵在 procd 下运行、心跳第 3 栏是 `ours`、界面进程 exe md5 = 刚装的文件。设备清单记 touch、sentinel、datad 三条（`admin` 记 lweb 一条） |
 | `esim` | lpac，配合可插拔 eUICC 卡管理/切换 profile |
-| `recover`（可选，不在全套里） | u60 ship 的开机收尾：换上 `/data/u60-ship/u60-recover.sh`（设备上自检过才换），并在 `/etc/rc.local` 各服务启动行之前加一行调用它。**改 rc.local，先问用户**。`admin`/`devui` 只在设备上还没有这个脚本时放一份，不碰 rc.local |
+| `recover`（可选，不在全套里） | u60 ship 的开机收尾：换上 `/data/luyaz/ship/luyaz-recover.sh`（设备上自检过才换），并在 `/etc/rc.local` 各服务启动行之前加一行调用它。**改 rc.local，先问用户**。`admin`/`devui` 只在设备上还没有这个脚本时放一份，不碰 rc.local |
 
-装 `ssh` 组件时还会关闭固件自动升级（升级会覆盖开机自启，新固件又开不了 ADB）。
-**全局要求：固件自动升级永远保持关闭**，任何脚本、页面、自动化都不能把它打开（`zwrt_zte_dm.dm_update.dm_update_mode` 必须是 `0`）。
+装 `ssh` 组件时还会关闭固件自动升级（升级会覆盖开机自启，新固件又开不了 ADB）：`dm_update_mode=0` 和 `TURNOFFPOLLING=1` 两项都设（只往关的方向改），并读回核对。
+**全局要求：固件自动升级永远保持关闭**，任何脚本、页面、自动化都不能把它打开（`zwrt_zte_dm.dm_update.dm_update_mode` 必须是 `0`，且 `zwrt_zte_dm.dm_update.TURNOFFPOLLING` 必须是 `1`）。
 
 ## 一、先检查，不满足就停下来告诉用户
 
@@ -111,16 +111,17 @@ adb shell '<命令>'        # 只有 ADB 通的时候（ADB 重启后就没了�
 |---|---|
 | `/data/ssh/` | dropbear、host key、`authorized_keys` 正本（开机同步到 `/etc/dropbear/`） |
 | `/data/local/tmp/start_dropbear.sh` | SSH 的开机启动脚本 |
-| `/data/zte-agent.env` | 后台密码（`ZTE_AGENT_PASSWORD=…`，600；agent 自己读，不进 procd 的 env） |
-| `/data/plugins/u60pro-devui/u60-uid`、`/etc/init.d/u60-uid` | 屏幕守护进程：触屏界面唯一的主人（拉起/接管、连续 2 次没稳住就交还原厂界面并告警、长按右下角 3 秒回来）。状态在 `/data/u60-uid/`，控制：`echo vendor` / `echo devui > /tmp/u60-uid.ctl`（只在它运行时用）。**屏幕上几分钟没有任何界面，固件会整机重启**：永远不要只停一个界面而不起另一个 |
-| `/data/u60-guard/`、`/etc/init.d/{zte-agent,zwrt-datad,u60-guard}` | procd 监督（`supervise.sh` 包着，崩溃拉起 + 记告警）和 Wi-Fi 兜底看门狗；**不要 `enable`/`disable`**（overlay whiteout），开机靠 rc.local 里的 `start` 行 |
+| `/data/luyaz/web.env` | 后台密码（`ZTE_AGENT_PASSWORD=…`，600；luyaz-web 每次登录现读，命令行里只有路径） |
+| `/data/luyaz/luyaz-sentinel`、`/etc/init.d/luyaz-sentinel` | 哨兵：触屏界面唯一的主人（拉起/接管、连续 2 次没稳住就交还原厂界面并告警、长按右下角 3 秒回来），兼 Wi-Fi 兜底看门狗 + 告警短信（原 u60-guard）。状态在 `/data/luyaz/screen/`，控制 FIFO `/tmp/luyaz-screen.ctl`（10-15 之前是 `/tmp/u60-uid.ctl`，已不再听）：`vendor` / `devui` / `hold` / `release`（只在它运行时用）；心跳 `/tmp/luyaz-sentinel.hb` 第 3 栏是屏幕上是谁（ours/vendor/none/held）。**屏幕上几分钟没有任何界面，固件会整机重启**：永远不要只停一个界面而不起另一个 |
+| `/data/luyaz/scripts/`、`/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}` | 设备脚本（`doctor.sh`（`<核心> doctor` 的薄壳，核心不可用时退到 `doctor-legacy.sh`）、`alert-lib.sh` 等；执行器 `luyaz-ship.sh`、`datad-trial.sh` 也在这里；不再有 `u60-guard.sh`、`supervise.sh`）和 procd 监督（崩溃拉起）；**不要 `enable`/`disable`**（overlay whiteout），开机靠 rc.local 里的 `start` 行 |
 | `/data/alerts/`、`/data/crashlog/` | 告警事件与短信记录、崩溃日志 |
-| `/data/zte-agent`、`/data/admin/` | 高级后台 |
-| `/data/plugins/u60pro-devui/`、`/data/plugins/zwrt-datad/` | 触屏界面、数据后端 |
+| `/data/luyaz/luyaz-web`、`/data/luyaz/operator-logos/` | 高级后台（旧装机包的 `/data/zte-agent`、`/data/admin/` 留着，不再用）；`/data/luyaz/core/` 是核心 luyaz-core 的状态（含 `.migrated`：新布局的开关），`/data/luyaz/screen/` 是哨兵的 |
+| `/data/luyaz/ui/` | 触屏界面 `luyaz-ui`（进程名同）、字体、`touchsim` |
+| `/data/plugins/u60pro-devui/` | 只有触屏的 `start.sh`（程序、`devui.conf`、`operator-logos/` 在 `/data/luyaz/ui/`） |
 | `/data/esim/` | lpac（`/data/esim/lpac.sh chip info` / `profile list`） |
-| `/etc/rc.local` | 只加了几行自启；原厂版本备份在 `/data/u60-kit/rc.local.orig` |
+| `/etc/rc.local` | 只加了几行自启；原厂版本备份在 `/data/luyaz/kit/rc.local.orig`（Luya-Z 改名 E 之前装的设备在 `/data/u60-kit/`，再装之前要先 `mv /data/u60-kit /data/luyaz/kit`） |
 
-日志：`/tmp/zte-agent.log`、`/tmp/u60pro-devui.log`、`/tmp/zwrt-datad.log`、`/tmp/u60-guard.log`、`/tmp/u60-uid.log`、`logread`（procd）、`/tmp/u60-kit-devui.log`（devui 安装）、
+日志：`/tmp/luyaz-web.log`、`/tmp/luyaz-ui.log`、`/tmp/luyaz-core.log`、`/tmp/luyaz-sentinel.log`、`logread`（procd）、`/tmp/u60-kit-devui.log`（devui 安装）、
 `/data/plugins/u60pro-devui/boot-trace.log`。
 
 ## 四、常见失败
@@ -137,7 +138,7 @@ adb shell '<命令>'        # 只有 ADB 通的时候（ADB 重启后就没了�
 | 文件损坏 / 缺文件 | 包不完整，让用户重新解压或重新要包。**不要改包里的文件**（有 sha256 校验） |
 | `[device] 失败: …` | 按提示读对应日志；原因修好后重跑同一条命令 |
 | SSH 验证失败但设备端成功 | 先别重启（ADB 还在，方便排查）。常见原因：电脑不在 U60 的 Wi-Fi 里；代理 TUN 劫持；`~/.ssh/id_ed25519` 带密码（脚本用 BatchMode，没加进 ssh-agent 就登不上，可以用 `SSH_KEY=` 指定一把无密码的密钥重跑 `./install.sh ssh`） |
-| 屏幕没数据 | 看 `/tmp/zwrt-datad.log`；重启一次通常就好 |
+| 屏幕没数据 | 看 `/tmp/luyaz-core.log`；重启一次通常就好 |
 | 屏幕卡住/黑屏 | 退回原厂界面（见第六节第一段），再把日志给用户 |
 
 脚本本身有 bug、或者这里没覆盖的情况：整理好完整输出，让用户发给给他装机包的人，不要自己改脚本硬装。
@@ -158,31 +159,32 @@ adb shell '<命令>'        # 只有 ADB 通的时候（ADB 重启后就没了�
 **先问用户再做**：重启、切换/启用/删除 eSIM profile（切到没流量的 profile，远程连着的话就断了）、
 改 APN/网络模式/锁频、改 Wi-Fi、恢复原厂、改 `~/.ssh/config`、给电脑装软件。
 
-**可以直接做**：`./install.sh status`、`./install.sh doctor`（只读体检）、`./install.sh backup`（配置备份到电脑）、读日志和配置、`lpac.sh chip info` / `profile list` 这类只读查询。
+**可以直接做**：`./install.sh status`、`./install.sh doctor`（只读体检）、`./install.sh backup`（配置备份到电脑，旁边另存 `config-…system.tgz`：rc.local、我们的 init.d 脚本、dropbear host key、authorized_keys、start_dropbear.sh，供升固件前参考，`restore` 不恢复它）、读日志和配置、`lpac.sh chip info` / `profile list` 这类只读查询。
 `./install.sh restore <备份>` 会改设备配置：先问用户，它自己也会先列出改动、要输入 yes。
 
 ## 六、恢复
 
-**只是这次开机换成原厂界面**：`echo vendor > /tmp/u60-uid.ctl`（u60-uid 停掉触屏、起原厂界面；长按右下角 3 秒或
-`echo devui > /tmp/u60-uid.ctl` 回来，重启后也会回来）。
+**只是这次开机换成原厂界面**：`echo vendor > /tmp/luyaz-screen.ctl`（哨兵停掉触屏、起原厂界面；长按右下角 3 秒或
+`echo devui > /tmp/luyaz-screen.ctl` 回来，重启后也会回来）。
 
 **永久退回原厂屏幕界面**（保留其它组件）：
 
 ```sh
-mkdir -p /data/u60-kit && cp /etc/rc.local /data/u60-kit/rc.local.before-revert
-grep -v 'u60pro_devui' /data/u60-kit/rc.local.before-revert | grep -v '/etc/init.d/u60-uid start' > /tmp/rc.new \
+mkdir -p /data/luyaz/kit && cp /etc/rc.local /data/luyaz/kit/rc.local.before-revert
+grep -v 'u60pro_devui' /data/luyaz/kit/rc.local.before-revert | grep -v -e '/etc/init.d/luyaz-sentinel start' -e '/etc/init.d/u60-uid start' -e '/etc/init.d/u60-guard start' > /tmp/rc.new \
   && sh -n /tmp/rc.new && cat /tmp/rc.new > /etc/rc.local
-echo vendor > /tmp/u60-uid.ctl   # 由 u60-uid 换界面：它在同一步里起原厂界面，屏幕不会空着
-sleep 8; /etc/init.d/u60-uid stop  # 之后不再管屏幕（原厂界面服务一直是 enable 的，开机自己起）
+echo vendor > /tmp/luyaz-screen.ctl   # 由哨兵换界面：它在同一步里起原厂界面，屏幕不会空着
+sleep 8; /etc/init.d/luyaz-sentinel stop  # 之后不再管屏幕（原厂界面服务一直是 enable 的，开机自己起）
+# 注意：哨兵也是 Wi-Fi 兜底看门狗和告警短信，停掉它这两样也一起停了
 ```
 
 **全部恢复原厂**（先确认用户要这么做）：
 
 ```sh
-echo vendor > /tmp/u60-uid.ctl; sleep 8     # 先把屏幕交给原厂界面
-for s in u60-uid u60-guard zte-agent zwrt-datad; do /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
-cp /data/u60-kit/rc.local.orig /etc/rc.local
-rm -rf /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim \
+echo vendor > /tmp/luyaz-screen.ctl; sleep 8     # 先把屏幕交给原厂界面
+for s in luyaz-sentinel u60-uid u60-guard luyaz-web zte-agent zwrt-datad luyaz-core; do /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
+cp /data/luyaz/kit/rc.local.orig /etc/rc.local
+rm -rf /data/luyaz /data/u60d /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim \
        /data/u60-guard /data/u60-uid /data/alerts /data/crashlog /data/power /data/local/tmp/start_zte_agent.sh
 # 连 SSH 也不要：rm -rf /data/ssh /data/local/tmp/start_dropbear.sh
 reboot

@@ -1,0 +1,34 @@
+// Battery time estimate (manager docs/battery-estimate.md), the policy boundary between u60d and
+// a battery-eta component. The types mirror luyaz_policy::battery_eta; the version is the host ABI
+// version in a plugin's manifest entry: change anything here and bump it.
+package luyaz:policy@0.1.0;
+
+world battery-eta {
+  record sample {
+    /// seconds, monotonic
+    t: f64,
+    /// battery current in µA, positive = into the battery
+    ua: s64,
+    /// charger plugged in
+    online: bool,
+  }
+
+  record input {
+    samples: list<sample>,
+    soc: s64,
+    charge-full-uah: option<s64>,
+    charge-counter-uah: option<s64>,
+    target-pct: s64,
+    paused-at-limit: bool,
+  }
+
+  enum kind { charging-eta, discharging-eta, reached-target, paused-at-limit, unknown }
+
+  record estimate {
+    kind: kind,
+    /// only for charging-eta / discharging-eta
+    minutes: option<s64>,
+  }
+
+  export estimate: func(input: input) -> estimate;
+}

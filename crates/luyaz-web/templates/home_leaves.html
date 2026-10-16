@@ -1,0 +1,91 @@
+{% import "macros.html" as m %}
+{%- macro ca_rows(v) -%}
+{% if v.ca_rows.is_empty() %}<a class="nd-row" href="/signal"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("No active carriers", "没有激活的载波") }}</span></span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a>{% endif %}
+{% for c in v.ca_rows %}<div id="ca-{{ loop.index0 }}" class="nd-row hm-carrier"><span class="nd-row__label">{{ c.label }}</span><span class="nd-row__value" data-data>{{ c.line }}</span><span class="nd-mono nd-aux" data-data>{{ c.ids }}</span></div>
+{% endfor %}{% if let Some(o) = v.ca_off %}<div id="hc-off" class="nd-row nd-aux">{{ v.l.pick("Not scheduled", "未调度") }}: <span data-data>{{ o }}</span></div>
+{% endif %}{% if let Some(s) = v.ca_sel %}<div id="hc-sel" class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Network selection", "选网方式") }}</span></span><span class="nd-row__value">{{ s }}</span></div>{% endif %}
+{%- endmacro -%}
+<h1 id="hm-title" class="nd-product"{% if v.title.is_some() %} data-data{% endif %}>{% if let Some(t) = v.title %}{{ t }}{% else %}{{ v.l.pick("My device", "我的设备") }}{% endif %}</h1>
+<!--leaf-->
+<p id="hm-sub" class="nd-aux mt-0.5"{% if v.sub.is_none() && !v.sub_loading %} hidden{% endif %}>{% if let Some(s) = v.sub %}{{ v.sub_logo|safe }}<span class="min-w-0 truncate" data-data>{{ s }}</span>{% else if v.sub_loading %}<span class="nd-skel" style="width:14ch"></span>{% endif %}</p>
+<!--leaf-->
+<a id="hm-sms" class="hm-count" href="/sms" aria-label="{{ v.sms_label }}">{{ crate::shell::icon("ChatCircleText", v.sms_n > 0, 20, "")|safe }}{% if v.sms_n > 0 %}<span class="hm-count__n" aria-hidden="true">{% if v.sms_n > 99 %}99+{% else %}{{ v.sms_n }}{% endif %}</span>{% endif %}</a>
+<!--leaf-->
+<a id="hm-alerts" class="hm-count" href="/alerts" aria-label="{{ v.alerts_label }}">{{ crate::shell::icon("Bell", false, 20, "")|safe }}{% if v.alerts_n > 0 %}<span class="hm-count__n" aria-hidden="true">{% if v.alerts_n > 99 %}99+{% else %}{{ v.alerts_n }}{% endif %}</span>{% endif %}</a>
+<!--leaf-->
+{{ v.status|safe }}
+<!--leaf-->
+<div id="hm-why" class="hm-o1 hm-why"{% if !v.why %} hidden{% endif %}>{% if v.why %}<a class="t-link" href="/tools/diagnose?start=1">{{ v.l.pick("Diagnose →", "查原因 →") }}</a>{% endif %}</div>
+<!--leaf-->
+<i id="hm-fl-ro" class="hm-flag" hidden{% if v.ro_stale %} data-stale{% endif %}></i>
+<!--leaf-->
+{% call m::ro_value("bw", v.bw, "MHz") %}{% endcall %}
+<!--leaf-->
+{% call m::ro_word("bw", v.bw) %}{% endcall %}
+<!--leaf-->
+{% call m::ro_value("rsrp", v.rsrp, "dBm") %}{% endcall %}
+<!--leaf-->
+{% call m::ro_word("rsrp", v.rsrp) %}{% endcall %}
+<!--leaf-->
+{% call m::ro_value("sinr", v.sinr, "dB") %}{% endcall %}
+<!--leaf-->
+{% call m::ro_word("sinr", v.sinr) %}{% endcall %}
+<!--leaf-->
+{% call m::ro_value("dl", v.dl, "Mbps") %}{% endcall %}
+<!--leaf-->
+{% call m::ro_value("ul", v.ul, "Mbps") %}{% endcall %}
+<!--leaf-->
+{% call m::ro_value("temp", v.temp, "°C") %}{% endcall %}
+<!--leaf-->
+{% call m::ro_word("temp", v.temp) %}{% endcall %}
+<!--leaf-->
+{% call m::ro_value("bat", v.bat, "%") %}{% endcall %}
+<!--leaf-->
+{% call m::ro_word("bat", v.bat) %}{% endcall %}
+<!--leaf-->
+<i id="hm-fl-d" class="hm-flag" hidden{% if v.d_stale %} data-stale{% endif %}></i>
+<!--leaf-->
+<span id="hd-cl" class="nd-row__value">{{ v.clients }}</span>
+<!--leaf-->
+<span id="hd-day" class="nd-row__value">{{ v.day }}</span>
+<!--leaf-->
+<span id="hd-mon" class="nd-row__value">{{ v.month }}</span>
+<!--leaf-->
+<span id="hd-up" class="nd-row__value">{{ v.uptime }}</span>
+<!--leaf-->
+<i id="hm-fl-id" class="hm-flag" hidden{% if v.id_stale %} data-stale{% endif %}></i>
+<!--leaf-->
+<span id="hi-ip-l" class="nd-row__label">{{ v.ip_label }}</span>
+<!--leaf-->
+<span id="hi-ip-s" class="nd-row__sub"{% if v.ip_sub.is_none() %} hidden{% endif %}>{% if let Some(s) = v.ip_sub %}<span data-data>{{ s }}</span>{% endif %}</span>
+<!--leaf-->
+<span id="hi-ip" class="nd-row__value nd-mono" data-data>{{ v.ip }}</span>
+<!--leaf-->
+<span id="hi-sim" class="nd-row__value" data-data>{{ v.sim }}</span>
+<!--leaf-->
+<span id="hi-reg-s" class="nd-row__sub"{% if v.reg_sub.is_none() %} hidden{% endif %}>{% if let Some(s) = v.reg_sub %}<span data-data>{{ s }}</span>{% endif %}</span>
+<!--leaf-->
+<span id="hi-reg" class="nd-row__value">{{ v.reg_logo|safe }}<span data-data>{{ v.reg }}</span></span>
+<!--leaf-->
+<span id="hi-roam" class="nd-row__value">{% match v.roaming %}{% when Some(true) %}<span class="nd-mark nd-mark--warn"><span class="nd-mark__sym" aria-hidden="true">▲</span><span>{{ v.l.pick("Roaming", "漫游") }}</span></span>{% when Some(false) %}{{ v.l.pick("Home", "本地") }}{% else %}—{% endmatch %}</span>
+<!--leaf-->
+<i id="hm-fl-w" class="hm-flag" hidden{% if v.w_stale %} data-stale{% endif %}></i>
+<!--leaf-->
+<span id="hw-on" class="nd-row__value">{{ v.wifi_on }}</span>
+<!--leaf-->
+<span id="hw-2" class="nd-row__sub" data-data>{{ v.wifi_2 }}</span>
+<!--leaf-->
+<span id="hw-5" class="nd-row__sub" data-data>{{ v.wifi_5 }}</span>
+{% if v.ca_full %}<!--leaf-->
+<div id="hm-ca" class="nd-group{% if v.ca_stale %} nd-stale{% endif %}">{% call ca_rows(v) %}{% endcall %}</div>
+{% endif %}{% for c in v.ca_rows %}<!--leaf-->
+<div id="ca-{{ loop.index0 }}" class="nd-row hm-carrier"><span class="nd-row__label">{{ c.label }}</span><span class="nd-row__value" data-data>{{ c.line }}</span><span class="nd-mono nd-aux" data-data>{{ c.ids }}</span></div>
+{% endfor %}{% if let Some(o) = v.ca_off %}<!--leaf-->
+<div id="hc-off" class="nd-row nd-aux">{{ v.l.pick("Not scheduled", "未调度") }}: <span data-data>{{ o }}</span></div>
+{% endif %}{% if let Some(s) = v.ca_sel %}<!--leaf-->
+<div id="hc-sel" class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Network selection", "选网方式") }}</span></span><span class="nd-row__value">{{ s }}</span></div>
+{% endif %}
+<!--leaf-->
+<a id="hm-scene" class="nd-module nd-module--cream hm-o8" href="/router/scenario"><span class="nd-module__head">{{ v.l.pick("Scenarios", "情景") }}{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</span>{% match v.scene %}{% when Scene::Loading %}<span class="nd-skel" style="width:10ch"></span>{% when Scene::None %}<p class="nd-body text-nd-t2">{{ v.l.pick("No scenarios yet · set up ›", "还没有情景 · 去设置 ›") }}</p>{% when Scene::On(s) %}<p class="nd-body"><span data-data>{{ s.name }}</span>{% if s.pinned %}<span class="nd-aux"> · {{ v.l.pick("pinned", "已固定") }}</span>{% endif %}{% if s.engine_off %}<span class="nd-aux"> · {{ v.l.pick("engine off", "引擎已关") }}</span>{% endif %}</p>{% if let Some(t) = s.last %}<p class="nd-aux">{% match v.l %}{% when Lang::En %}Switched {{ t }}{% when Lang::Zh %}{{ t }} 切换{% endmatch %}</p>{% endif %}{% endmatch %}</a>
+<!--leaf-->
+<a id="hm-ts" class="nd-module nd-module--navy hm-o9{% if v.ts_stale %} hm-dim{% endif %}" href="/services/tailscale"><span class="nd-module__head">Tailscale{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</span>{{ v.ts|safe }}</a>

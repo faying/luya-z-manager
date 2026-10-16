@@ -1,0 +1,16 @@
+<button id="lan-btn" type="button" class="nd-btn nd-btn--secondary nd-btn--sm" aria-expanded="{{ open }}" aria-controls="lan-form" data-on:click="@post('/router/lan/{% if open %}close{% else %}form{% endif %}')">{% if open %}{{ l.pick("Cancel", "取消") }}{% else %}{{ l.pick("Change", "更改") }}{% endif %}</button>
+<!--leaf-->
+<div id="lan-form" class="lan-form">{% if open %}<div class="nd-group grid gap-3 p-4 mt-2 mb-3" role="group" aria-label="{{ l.pick("Change LAN settings", "更改局域网设置") }}" data-signals="{{ sigs }}">
+<div class="grid gap-3 lan-2col">
+<label class="grid gap-1"><span class="nd-aux">{{ l.pick("LAN IP Address", "LAN IP 地址") }}</span><input class="nd-field nd-mono" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="192.168.0.1" data-bind="_nip"></label>
+<label class="grid gap-1"><span class="nd-aux">{{ l.pick("Subnet Mask", "子网掩码") }}</span><input class="nd-field nd-mono" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="255.255.255.0" data-bind="_nmask"></label>
+</div>
+<div class="flex items-center gap-3"><span class="nd-body flex-1" id="lan-on-l">{{ l.pick("DHCP Server", "DHCP 服务器") }}</span><button type="button" role="switch" class="nd-switch t-switch" aria-labelledby="lan-on-l" aria-checked="{{ on }}"{% if on %} data-selected="true"{% endif %} data-attr:aria-checked="$_non ? 'true' : 'false'" data-attr:data-selected="$_non" data-on:click="$_non = !$_non"><span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span></button></div>
+<div class="grid gap-3 lan-3col">
+<label class="grid gap-1"><span class="nd-aux">{{ l.pick("Start Address", "起始地址") }}</span><input class="nd-field nd-mono" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="100" data-bind="_nst"></label>
+<label class="grid gap-1"><span class="nd-aux">{{ l.pick("End Address", "结束地址") }}</span><input class="nd-field nd-mono" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="149" data-bind="_nend"></label>
+<label class="grid gap-1"><span class="nd-aux">{{ l.pick("Lease time", "租约时间") }}</span><input class="nd-field nd-mono" autocomplete="off" spellcheck="false" placeholder="12h" data-bind="_nlease"></label>
+</div>
+<span class="nd-aux">{{ l.pick("Range: a host number (100) or a full address. Lease: seconds, or 30m, 12h, 1d.", "范围：填主机号（100）或完整地址。租约：秒数，或 30m、12h、1d。") }}</span>
+<div><button type="button" class="nd-btn nd-btn--primary" data-on:click="@post('/router/lan/ask', {filterSignals: {include: /^_n/, exclude: /(?!)/}})">{{ l.pick("Apply", "应用") }}</button></div>
+</div>{% endif %}</div>

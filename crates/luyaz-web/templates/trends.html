@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-2 mt-2">{{ shell.title() }}</h1>
+{{ self.leaf("tr-note")|safe }}
+<div class="tr-grid">
+{% for c in v.charts %}<section class="t-card tr-card" aria-labelledby="tr-{{ c.key }}-t">
+<div class="tr-head"><h2 id="tr-{{ c.key }}-t" class="tr-title">{{ c.title }}</h2>{{ self.leaf(format!("tr-{}-now", c.key).as_str())|safe }}</div>
+<div class="tr-box">{{ self.leaf(format!("tr-{}-plot", c.key).as_str())|safe }}{{ self.leaf(format!("tr-{}-line", c.key).as_str())|safe }}</div>
+<div class="t-axis"><span>{{ v.l.pick("5 min ago", "5 分钟前") }}</span><span>{{ v.l.pick("now", "现在") }}</span></div>
+</section>
+{% endfor %}</div>
+{% endblock %}

@@ -1,0 +1,18 @@
+/* /scheduler (batch 5a): this page's own rules only. */
+.sch-anchor { scroll-margin-top: 72px; }
+.sch-muted { color: var(--nd-t2); }
+.sch-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--nd-sep); }
+.sch-row:last-child { border-bottom: 0; }
+.sch-sw { flex-shrink: 0; margin-top: 4px; }
+.sch-row__main { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.sch-name { font-weight: 500; overflow-wrap: anywhere; }
+.sch-req { word-break: break-all; }
+.sch-row__acts { display: flex; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.sch-form { display: grid; gap: 16px; padding: 16px; }
+.sch-form .nd-group-title { margin: 0; }
+.sch-2col { display: grid; gap: 16px; }
+@media (min-width: 640px) { .sch-2col { grid-template-columns: 10rem minmax(0, 1fr); } }
+.sch-body { min-height: 6rem; padding-top: 8px; padding-bottom: 8px; }
+.sch-time { width: 10rem; }
+.sch-at { max-width: 16rem; }
+@media (max-width: 479px) { .sch-row { flex-wrap: wrap; } .sch-row__acts { width: 100%; } }

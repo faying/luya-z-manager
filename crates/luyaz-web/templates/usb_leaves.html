@@ -1,0 +1,25 @@
+{%- macro row(r) -%}
+<div id="{{ r.id }}" class="nd-row{% if r.sub.is_some() %} nd-row--two{% endif %}"><span class="nd-row__text"><span class="nd-row__label">{{ r.label }}</span>{% if let Some(s) = r.sub %}<span class="nd-row__sub block">{{ s }}</span>{% endif %}</span><span class="nd-row__value{% if r.mono %} nd-mono{% endif %}"{% if r.data %} data-data{% endif %}>{{ r.value }}</span></div>
+{%- endmacro -%}
+<div id="usb-status"><section class="nd-status nd-status--{{ v.tone }}{% if v.tone == "stale" %} nd-stale{% endif %}">
+<div class="nd-status__main">
+<div class="nd-status__state" role="status"><span class="nd-mark nd-mark--{{ v.tone }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.symbol() }}</span><span>{{ v.state }}</span></span></div>
+{% if let Some(r) = v.reason %}<div class="nd-status__reason"><span{% if v.tone == "bad" %} role="alert"{% endif %}>{{ r }}</span></div>{% endif %}
+{% if let Some(m) = v.meta %}<div class="nd-status__meta"><span class="nd-fresh">{{ m }}</span></div>{% endif %}
+</div>
+{% if v.retry %}<div class="nd-status__actions"><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/usb/refresh')">{{ v.l.pick("Retry", "重试") }}</button></div>{% endif %}
+</section></div>
+<!--leaf-->
+<div id="usb-modes" class="grid gap-3{% if v.mode_stale %} nd-stale{% endif %}"><div role="radiogroup" aria-labelledby="usb-mode-t" class="nd-seg"><div class="nd-seg__track">{% for (k, label, on) in v.modes %}<button type="button" role="radio" class="nd-seg__item" aria-checked="{% if *on %}true{% else %}false{% endif %}"{% if *on %} data-selected="true"{% endif %}{% if v.mode_dis %} disabled data-disabled="true"{% else %}{% if !on %} data-on:click="@post('/usb/mode/ask?mode={{ k }}')"{% endif %}{% endif %}>{{ label }}</button>{% endfor %}</div></div>
+{% if v.fixed %}<span class="nd-aux">{{ v.l.pick("This firmware can't change the USB mode", "这版固件不能改 USB 模式") }}</span>{% endif %}
+{% if let Some(m) = v.other %}<span class="nd-aux">{{ v.l.pick("Current mode: ", "当前模式：") }}<span class="nd-mono" data-data>{{ m }}</span></span>{% endif %}</div>
+<!--leaf-->
+<div id="usb-pbrow" class="nd-group{% if v.pb_stale %} nd-stale{% endif %}"><div class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label" id="usb-pb-label">{{ v.l.pick("Fast charging", "快速充电宝") }}</span><span class="nd-row__sub block">{{ v.pb_sub }}</span></span>
+<span class="t-sw">{% if let Some(t) = v.pb_busy %}<span class="nd-row__value">{% if *t %}{{ v.l.pick("Turning on…", "正在打开…") }}{% else %}{{ v.l.pick("Turning off…", "正在关掉…") }}{% endif %}</span>{% elif v.pb.is_none() %}<span class="nd-row__value">—</span>{% endif %}<button type="button" role="switch" class="nd-switch t-switch" aria-labelledby="usb-pb-label" aria-checked="{% if v.pb == Some(true) %}true{% else %}false{% endif %}"{% if v.pb_dis %} disabled data-disabled="true"{% endif %}{% if v.pb == Some(true) %} data-selected="true"{% endif %} data-on:click="@post('/usb/pb/ask')">
+<span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span>
+</button></span></div></div>
+<!--leaf-->
+<div id="usb-port" class="nd-group{% if v.port_stale %} nd-stale{% endif %}">{% for r in v.port %}{% call row(r) %}{% endcall %}{% endfor %}</div>
+<!--leaf-->
+<div id="usb-chg"><div class="nd-group{% if v.chg_stale %} nd-stale{% endif %}">{% for r in v.chg %}{% call row(r) %}{% endcall %}{% endfor %}</div>
+{% if let Some(e) = v.chg_err %}<div class="mt-2 flex flex-wrap items-center gap-3 px-1" role="alert"><span class="nd-aux">{{ e }}</span><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/usb/refresh')">{{ v.l.pick("Retry", "重试") }}</button></div>{% endif %}</div>

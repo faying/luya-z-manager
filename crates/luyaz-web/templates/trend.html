@@ -1,0 +1,14 @@
+{% import "macros.html" as m %}<section id="sig-trend" aria-labelledby="trend-title">
+<h2 id="trend-title" class="nd-group-title">{{ v.l.pick("Signal trend", "信号趋势") }}</h2>
+{% if let Some(t) = v.trend %}<div class="t-card p-3{% if v.stale %} nd-stale{% endif %}">
+{% call m::trend_aria(t) %}{% endcall %}
+<div class="t-plotbox">
+<svg viewBox="0 0 600 160" class="t-trend" preserveAspectRatio="none" aria-hidden="true">
+{% for b in v.bands() %}<rect x="40" y="{{ b.0 }}" width="552" height="{{ b.1 }}" fill="{{ b.2 }}"/>{% endfor %}
+{% for l in v.labels() %}<text x="34" y="{{ l.1 }}" text-anchor="end" font-size="11" fill="var(--nd-t3)" style="font-variant-numeric:tabular-nums">{{ l.0 }}</text>{% endfor %}
+</svg>
+{% call m::trend_line(v, t) %}{% endcall %}
+</div>
+<div class="t-axis"><span>{{ v.l.pick("2 min ago", "2 分钟前") }}</span><span>{{ v.l.pick("now", "现在") }}</span></div>
+</div>{% else %}<div class="t-card t-collect">{{ v.l.pick("Collecting — the curve appears in about a minute", "正在收集，约 1 分钟后出现曲线") }}</div>{% endif %}
+</section>

@@ -1,0 +1,27 @@
+{%- macro sw(sig, lid, on) -%}
+<button type="button" role="switch" class="nd-switch t-switch" aria-labelledby="{{ lid }}" aria-checked="{{ on }}"{% if on %} data-selected="true"{% endif %} data-attr:aria-checked="${{ sig }} ? 'true' : 'false'" data-attr:data-selected="${{ sig }}" data-on:click="${{ sig }} = !${{ sig }}"><span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span></button>
+{%- endmacro -%}
+{%- macro sel(sig, label, os) -%}
+<label class="grid gap-1"><span class="nd-aux">{{ label }}</span><select class="nd-field" data-bind="{{ sig }}">{% for o in os.iter() %}<option value="{{ o.value }}"{% if o.sel %} selected{% endif %}>{{ o.label }}</option>{% endfor %}</select></label>
+{%- endmacro -%}
+<button id="wf-editbtn" type="button" class="nd-btn nd-btn--secondary nd-btn--sm" aria-expanded="{{ open }}" aria-controls="wf-form" data-on:click="@post('/router/wifi/{% if open %}close{% else %}form{% endif %}')">{% if open %}{{ l.pick("Cancel", "取消") }}{% else %}{{ l.pick("Change settings", "更改设置") }}{% endif %}</button>
+<!--leaf-->
+<div id="wf-form">{% if open %}<div class="grid gap-4 mt-2" role="group" aria-label="{{ l.pick("Wi-Fi settings", "Wi-Fi 设置") }}" data-signals="{{ sigs }}" data-init="$_wfo = true">
+<div class="nd-group grid gap-3 p-4">
+<div class="flex items-center gap-3"><span class="nd-body flex-1" id="wf-fon-l">{{ l.pick("Wi-Fi on/off", "Wi-Fi 开关") }}</span>{% call sw("_fon", "wf-fon-l", on) %}{% endcall %}</div>
+<div class="grid gap-1"><div class="flex items-center gap-3"><span class="nd-body flex-1" id="wf-fw6-l">Wi-Fi 6</span>{% call sw("_fw6", "wf-fw6-l", w6) %}{% endcall %}</div><span class="nd-aux" data-show="$_fw6 !== $_gw6" style="display:none">{{ l.pick("This firmware can't switch Wi-Fi 6 on its own; Apply will be refused.", "这个固件不能单独切换 Wi-Fi 6，应用时会被拒绝。") }}</span></div>
+{% call sel("_fcc", l.pick("Region", "区域"), regions) %}{% endcall %}
+<span class="nd-aux">{{ l.pick("Sets which channels and transmit power are allowed. The US drops 2.4 GHz channels 12–13.", "决定允许哪些信道和发射功率。美国不允许 2.4 GHz 的 12、13 信道。") }}</span>
+</div>
+{% for b in bands %}<section aria-labelledby="wf-f{{ b.s }}-t" class="grid gap-2"><h3 id="wf-f{{ b.s }}-t" class="nd-group-title">{{ b.title }}</h3><div class="nd-group grid gap-3 p-4 wf-2col">
+<div class="flex items-center gap-3 wf-span"><span class="nd-body flex-1" id="wf-fr{{ b.s }}-l">{{ b.title }} {{ l.pick("radio", "无线电") }}</span>{% call sw(b.sig("r"), b.lid("r"), b.radio) %}{% endcall %}</div>
+<label class="grid gap-1 wf-span"><span class="nd-aux">{{ b.title }} {{ l.pick("network name (SSID)", "网络名称（SSID）") }}</span><input class="nd-field" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="32" data-bind="_fs{{ b.s }}"></label>
+<div class="grid gap-1 wf-span"><label class="grid gap-1"><span class="nd-aux">{{ b.title }} {{ l.pick("password", "密码") }}</span><input class="nd-field" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" maxlength="64" placeholder="{% if b.has_password %}{{ l.pick("Set · leave empty to keep it", "已设密码 · 留空不改") }}{% else %}{{ l.pick("No password", "没有密码") }}{% endif %}" data-bind="_fk{{ b.s }}" data-attr:type="$_fv{{ b.s }} ? 'text' : 'password'" data-attr:disabled="$_fe{{ b.s }} === 'none'"></label><button type="button" class="nd-btn nd-btn--ghost nd-btn--sm wf-show" aria-pressed="false" data-attr:aria-pressed="$_fv{{ b.s }} ? 'true' : 'false'" data-on:click="$_fv{{ b.s }} = !$_fv{{ b.s }}">{{ l.pick("Show what I type", "显示输入的密码") }}</button><span class="nd-aux">{{ l.pick("8–63 characters (or 64 hex digits). The current password is never shown.", "8–63 个字符（或 64 位十六进制）。现在的密码不会显示出来。") }}</span></div>
+{% call sel(b.sig("e"), b.lab(l, "security", "加密方式"), b.enc) %}{% endcall %}
+{% call sel(b.sig("c"), b.lab(l, "channel", "信道"), b.ch) %}{% endcall %}
+{% call sel(b.sig("h"), b.lab(l, "bandwidth", "带宽"), b.ht) %}{% endcall %}
+{% call sel(b.sig("t"), b.lab(l, "transmit power", "发射功率"), b.tx) %}{% endcall %}
+<div class="flex items-center gap-3 wf-span"><span class="nd-body flex-1" id="wf-fx{{ b.s }}-l">{{ b.title }} {{ l.pick("hide network name", "隐藏网络名称") }}</span>{% call sw(b.sig("x"), b.lid("x"), b.hidden) %}{% endcall %}</div>
+</div></section>{% endfor %}
+<div class="flex flex-wrap gap-3"><button type="button" class="nd-btn nd-btn--primary" data-on:click="@post('/router/wifi/main/ask', {filterSignals: {include: /^_[fg]/, exclude: /(?!)/}})">{{ l.pick("Apply", "应用") }}</button><button type="button" class="nd-btn nd-btn--secondary" data-on:click="@post('/router/wifi/close')">{{ l.pick("Discard changes", "放弃改动") }}</button></div>
+</div>{% else %}<span hidden data-init="$_wfo = false"></span>{% endif %}</div>

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("tailscale.css") }}">{% endblock %}
+{% block main %}
+<div class="ts-head"><h1 class="nd-title">{{ shell.title() }}</h1><button type="button" class="nd-btn nd-btn--ghost nd-btn--icon" aria-label="{{ l.pick("Refresh", "刷新") }}" data-on:click="@post('/services/tailscale/refresh')"><svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M240,56v48a8,8,0,0,1-8,8H184a8,8,0,0,1,0-16H211.4L184.81,71.64l-.25-.24a80,80,0,1,0-1.67,114.78,8,8,0,0,1,11,11.63A95.44,95.44,0,0,1,128,224h-1.32A96,96,0,1,1,195.75,60L224,85.8V56a8,8,0,1,1,16,0Z"/></svg></button></div>
+<p class="nd-aux ts-desc">{{ l.pick("Mesh VPN running on the router. Read-only — manage peers from the Tailscale admin console.", "运行在路由器上的 Mesh VPN。只读 —— 节点管理请用 Tailscale 控制台。") }}</p>
+<div class="ts-col" data-signals__ifmissing="{_tspause: false}">
+{{ self.leaf("ts-status")|safe }}
+{{ self.leaf("ts-login")|safe }}
+<div class="ts-cols"><div class="ts-col">{{ self.leaf("ts-node")|safe }}{{ self.leaf("ts-peers")|safe }}</div><div class="ts-col">{{ self.leaf("ts-mesh")|safe }}</div></div>
+<section class="nd-console ts-log" aria-label="{{ l.pick("Daemon log", "守护进程日志") }}" data-on-interval__duration.4s="!$_tspause &amp;&amp; !document.hidden &amp;&amp; @post('/services/tailscale/log?h=' + document.getElementById('ts-log').dataset.h)">
+<div class="ts-logbar"><span class="ts-logtitle">{{ l.pick("Daemon log", "守护进程日志") }} <span class="nd-console__muted">/data/tailscaled.log</span></span>
+<button type="button" class="nd-btn nd-btn--sm ts-logbtn" aria-pressed="false" data-attr:aria-pressed="$_tspause ? 'true' : 'false'" data-on:click="$_tspause = !$_tspause" data-text="$_tspause ? '{{ l.pick("Resume", "继续") }}' : '{{ l.pick("Pause", "暂停") }}'">{{ l.pick("Pause", "暂停") }}</button>
+<button type="button" class="nd-btn nd-btn--sm ts-logbtn" aria-label="{{ l.pick("Refresh log", "刷新日志") }}" data-on:click="@post('/services/tailscale/log?force=1')">{{ l.pick("Refresh", "刷新") }}</button></div>
+{{ log|safe }}
+</section>
+</div>
+{% endblock %}

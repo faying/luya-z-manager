@@ -25,7 +25,7 @@ What actually happened.
 ## Environment
 
 - **Device firmware version**:
-- **zte-agent version/commit**:
+- **u60d / luyaz-web commit**:
 - **Browser** (for web admin issues): name and version
 - **Connection method**: ADB / SSH / LAN
 

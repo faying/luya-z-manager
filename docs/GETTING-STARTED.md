@@ -14,24 +14,22 @@ It is written for people new to this project. Every command comes from scripts a
 
 | Repository | What it is on the device | Purpose |
 |---|---|---|
-| [zte-u60-pro-mu5250-manager](https://github.com/faying/zte-u60-pro-mu5250-manager) (this repository) | `zte-agent` (:9090) + `/data/admin/` admin web | The device REST API, the advanced admin web in the browser, eSIM, **and the install kit (`onboard/`)** |
-| [zte-u60-pro-mu5250-touch-ui](https://github.com/faying/zte-u60-pro-mu5250-touch-ui) | `/data/plugins/u60pro-devui/` | Front-panel touch UI (LVGL), screen daemon `u60-uid`, process supervision and Wi-Fi fallback scripts |
-| [zte-u60-pro-mu5250-data-service](https://github.com/faying/zte-u60-pro-mu5250-data-service) | `/data/plugins/zwrt-datad/` | `zwrt-datad`: turns ubus/uci/sysfs into JSON and serves `/state` and SSE locally on `127.0.0.1:9460` |
+| [luya-z-manager](https://github.com/faying/luya-z-manager) (this repository) | `luyaz-core` (:9460) + `luyaz-web` (:9090) + `luyaz-sentinel` | The device REST API, the advanced admin web in the browser, eSIM, **and the install kit (`onboard/`)** |
+| [luya-z-touch-ui](https://github.com/faying/luya-z-touch-ui) | `/data/luyaz/ui/` (`luyaz-ui`) | Front-panel touch UI (Rust, `touch-ui/rs/`; its source now lives in this repository under `touch-ui/`), plus the health check and Wi-Fi fallback scripts in `/data/u60-guard/` |
+| [luya-z-data-service](https://github.com/faying/luya-z-data-service) | (no longer installed) | The original Rust `zwrt-datad`; luyaz-core in this repository replaced it and the kit no longer uses it |
 
 How they connect on the device:
 
 ```
-ubus / uci / sysfs ──▶ zwrt-datad :9460 ──(/state, /v2/screen)──▶ touch UI u60pro-devui
-                             │                                         │ (battery estimate, alerts, eSIM, settings)
-                             └──(/v2 push)──▶ zte-agent :9090 ◀────────┘
-                                                  └──▶ lpac (/data/esim) ──▶ eUICC card
-browser ──▶ zte-agent :9090 (API + admin web)
+ubus / uci / sysfs ──▶ luyaz-core 127.0.0.1:9460 ◀──(/v2/screen, /v2/api)── touch UI luyaz-ui
+                             ▲          └──▶ lpac (/data/esim) ──▶ eUICC card
+browser ──▶ luyaz-web :9090 ─┘ (one /v2/events stream + /control)
 ```
 
-`zwrt-datad` is the only service that polls the stock ubus interfaces in the background; `zte-agent` and the touch UI read from it instead of each polling on their own.
-The touch UI's home verdict comes from datad (`/v2/screen`); battery estimates, alert categories, eSIM and settings changes go through `zte-agent`.
+luyaz-core is the only service that polls the stock ubus interfaces and the only one that writes settings; luyaz-web and the touch UI read from it and send it their changes.
+`luyaz-sentinel` owns the screen (starts the touch UI, hands the screen back to the stock UI) and is the watchdog. zte-agent, which used to serve the API and a Next.js admin on :9090, was removed on 2026-10-14, as were the `u60-uid` and `u60-guard` daemons.
 
-The three repositories are **used together**: the install kit is built in manager, which pulls the touch program and scripts from touch-ui and `zwrt-datad` from data-service.
+The install kit is built in manager, which builds luyaz-core, luyaz-web and luyaz-sentinel itself and pulls the touch program and scripts from touch-ui.
 
 What it looks like once installed (screenshots use fake data):
 
@@ -56,7 +54,7 @@ What it looks like once installed (screenshots use fake data):
 |---|---|
 | New device, B27 or earlier | Install from scratch with this guide |
 | New device, B28 or later (including B31) | **Cannot install**: ADB cannot be enabled, so the install kit fails at the first step, and this project has no verified way to do a first install (an untested idea follows below) |
-| Already installed, then upgraded to B31 | The programs themselves run on B31 (the maintainer's device has been on B31 since 10-03). But the upgrade resets `/etc/rc.local` to the stock version and removes the services installed under `/etc/init.d/`, so after the reboot SSH, the admin web, the touch UI and zwrt-datad no longer start, and the screen shows the stock UI |
+| Already installed, then upgraded to B31 | The programs themselves run on B31 (the maintainer's device has been on B31 since 10-03). But the upgrade resets `/etc/rc.local` to the stock version and removes the services installed under `/etc/init.d/`, so after the reboot SSH, the admin web, the touch UI and luyaz-core no longer start, and the screen shows the stock UI |
 
 What survives the upgrade: every program and all data under `/data`, the SSH program and keys (`/data/ssh`), the network address, the web password and your settings; firmware auto-update stays off.
 To recover, the key step is adding the line that starts SSH back to `rc.local` without ADB. The maintainer did this ***REMOVED***,
@@ -79,24 +77,22 @@ This project **has not made this work** and provides no tooling for it: ***REMOV
 | What to build | Needs |
 |---|---|
 | Everything | **Docker** (Docker Desktop is fine), `git`, `curl`, `python3`, `unzip`, internet access |
-| Admin web | Node.js + npm |
-| zte-agent | Uses `cargo-zigbuild` if present, otherwise falls back to Docker automatically |
+| luyaz-core, luyaz-web | Use `cargo-zigbuild` if present, otherwise fall back to Docker automatically |
 
-No cross toolchain needs to be installed: the touch program, `zwrt-datad`, the eSIM tools and the fonts are all built or generated in Docker.
+No cross toolchain needs to be installed: the touch program, the core (luyaz-core), the eSIM tools and the fonts are all built or generated in Docker.
 Verified on macOS (Apple silicon or Intel) and x86_64 Linux. The touch program's toolchain is an x86_64 binary, so on Apple silicon it runs under amd64 emulation and is slower.
 
 ## 3. Build the install kit
 
-Put the three repositories side by side in one directory. **These three public repositories are all you need to build a complete install kit; nothing has to be pulled from an already installed device**:
+Put the repositories side by side in one directory. **manager and touch-ui are all you need to build a complete install kit; nothing has to be pulled from an already installed device**:
 
 ```sh
 mkdir u60 && cd u60
-git clone https://github.com/faying/zte-u60-pro-mu5250-manager.git
-git clone https://github.com/faying/zte-u60-pro-mu5250-touch-ui.git
-git clone https://github.com/faying/zte-u60-pro-mu5250-data-service.git
-cd zte-u60-pro-mu5250-manager
+git clone https://github.com/faying/luya-z-manager.git
+git clone https://github.com/faying/luya-z-touch-ui.git
+cd luya-z-manager
 ./onboard/build-kit.sh
-# → onboard/dist/u60-kit-YYYYMMDD.tar.gz
+# → onboard/dist/luyaz-kit-YYYYMMDD.tar.gz
 ```
 
 The first run downloads Docker images and dependencies and takes about 20–30 minutes; after that there are caches (`onboard/cache/`, each repository's `out/`, `rust/target-zig/`) and it is much faster.
@@ -105,25 +101,25 @@ The first run downloads Docker images and dependencies and takes about 20–30 m
 | Item in the kit | Source |
 |---|---|
 | dropbear (SSH) | Official OpenWrt 23.05.4 ipk, pinned sha256 |
-| zte-agent, admin web | Built from this repository |
-| Touch program + u60-uid | touch-ui's `scripts/build-docker.sh` (Docker; LVGL v9.5.0, FreeType 2.13.3); output in touch-ui's `out/` |
+| luyaz-web (admin web), operator logos | Built from this repository (`crates/luyaz-web`, profile `release`) |
+| Touch program | touch-ui's `rs/build.sh device` (Rust, Docker); output `touch-ui/out/u60pro-devui-rs`, installed as `/data/luyaz/ui/luyaz-ui` |
+| luyaz-sentinel (screen owner + watchdog) | Built from this repository (`crates/luyaz-sentinel`, profile `release-device`) |
 | Touch UI fonts | Nunito (pinned google/fonts commit) and a Chinese fallback font (Resource Han Rounded subset), both OFL, pinned sha256, generated in Docker. The ZTE fonts that ship on the device are not packaged; the touch UI reads them directly from `/usr/ui/fonts/` on the device |
-| zwrt-datad | data-service's `scripts/build-docker.sh` (cargo-zigbuild in Docker, image pinned by digest, dependencies locked by `Cargo.lock`) |
+| Core (`zwrt-datad` in the kit) | luyaz-core from this repository (`cargo zigbuild --profile release-device -p luyaz-core` in `onboard/build.Dockerfile`, image pinned by digest, dependencies locked by `Cargo.lock`) |
 | eSIM tools (lpac) | `scripts/esim/build-esim-bundle.sh --out`: lpac and its libraries from Alpine 3.24 (`scripts/esim/alpine.lock` pins versions and sha256) + a statx compatibility shim + `qmi_uim_probe` |
 | Process supervision, health check scripts | touch-ui's `scripts/` |
 
-Before packaging, the script checks: the touch program must be the LVGL build (not the old litehtml build, which was removed from touch-ui and only survives in the `legacy-litehtml` tag); `zwrt-datad` must be the Rust version with no hard-coded external update source. If either check fails, it stops.
+Before packaging, the script checks: the touch program must be the Rust build (the C/LVGL touch UI was deleted and only survives in the `legacy-c-touch-ui` tag); the core (`zwrt-datad`) must be the Rust version with no hard-coded external update source. If either check fails, it stops.
 
 You can also build the pieces separately and point `build-kit.sh` at the existing files:
 
 ```sh
-(cd ../zte-u60-pro-mu5250-touch-ui && scripts/build-docker.sh)        # → out/u60pro-devui-lvgl.stripped, out/u60-uid (read from here by default)
-(cd ../zte-u60-pro-mu5250-data-service && scripts/build-docker.sh)    # → zwrt-datad-aarch64
-DATAD_BIN=../zte-u60-pro-mu5250-data-service/zwrt-datad-aarch64 ./onboard/build-kit.sh
+(cd touch-ui && rs/setup-src.sh && rs/build.sh device out/u60pro-devui-rs)   # read from here by default
+DATAD_BIN=/path/to/zwrt-datad ./onboard/build-kit.sh       # a core built elsewhere instead of building luyaz-core
 ```
 
-Other variables: `DEVUI_BIN` / `UID_BIN` (touch binaries), `ESIM_TGZ` (a prebuilt eSIM bundle), `DEVUI_FONTS_DIR` (a prebuilt font directory), `FONTS=0` (no fonts),
-`DEVUI_REPO` / `DATAD_REPO` (when the repositories are not side by side). Settings you use often can go in `onboard/kit.local.env` (one `KEY=value` per line, not tracked by git).
+Other variables: `DEVUI_BIN` (touch binary), `SENTINEL_BIN` (luyaz-sentinel), `ESIM_TGZ` (a prebuilt eSIM bundle), `DEVUI_FONTS_DIR` (a prebuilt font directory), `FONTS=0` (no fonts),
+`DEVUI_REPO` (default `touch-ui/` in this repository), `SHIP_RECORDS` (the local records `u60 ship` keeps: the touch UI, sentinel and core are then taken from what the device is running, matched by md5, and only built when not found; `FRESH=1` builds anyway). Settings you use often can go in `onboard/kit.local.env` (one `KEY=value` per line, not tracked by git).
 
 > **eSIM bundle fails to build?** When Alpine 3.24 ships a security update, it replaces the pinned packages and the old files disappear from the mirrors. Run
 > `python3 scripts/esim/alpine_closure.py --relock` to re-resolve, rebuild, then confirm on one device that `/data/esim/lpac.sh chip info` can read the card before using it.
@@ -131,8 +127,8 @@ Other variables: `DEVUI_BIN` / `UID_BIN` (touch binaries), `ESIM_TGZ` (a prebuil
 ## 4. Install
 
 ```sh
-tar xzf u60-kit-*.tar.gz
-cd u60-kit
+tar xzf luyaz-kit-*.tar.gz
+cd luyaz-kit
 ./install.sh
 ```
 
@@ -178,15 +174,15 @@ Then:
 **Update**: get a new install kit, unpack it and install only the components you want to update (this goes over SSH, no cable needed):
 
 ```sh
-./install.sh admin      # zte-agent + admin web
-./install.sh devui      # touch UI + zwrt-datad
+./install.sh admin      # luyaz-web (admin web)
+./install.sh devui      # touch UI + core (luyaz-core)
 ./install.sh esim       # eSIM tools
 ./install.sh reboot     # optional: reboot once to confirm everything comes up on boot
 ./install.sh recover    # optional, not part of the full set: boot-time clean-up used by u60-ship.sh
                         #   (adds one line to rc.local; run it only if you use u60-ship.sh)
 ```
 
-If the device has an unfinished `u60-ship.sh` transaction (see touch-ui [docs/SHIP.md](https://github.com/faying/zte-u60-pro-mu5250-touch-ui/blob/main/docs/SHIP.md)), `admin`, `devui` and `recover` refuse to install until it is finished or rolled back.
+If the device has an unfinished `u60-ship.sh` transaction (see touch-ui [docs/SHIP.md](https://github.com/faying/luya-z-touch-ui/blob/main/docs/SHIP.md)), `admin`, `devui` and `recover` refuse to install until it is finished or rolled back.
 
 **Back up and restore configuration** (configuration only, no programs; backups contain passwords, do not share them):
 
@@ -196,7 +192,7 @@ If the device has an unfinished `u60-ship.sh` transaction (see touch-ui [docs/SH
 ```
 
 **Roll back to an older version**: the install script does not keep the previous program version. To roll back, install the relevant component again from the older install kit.
-If the touch program fails to start twice in a row, `u60-uid` hands the screen back to the stock UI;
+If the touch program fails to start twice in a row, `luyaz-sentinel` hands the screen back to the stock UI;
 long-press the bottom-right corner of the screen for 3 seconds to switch back.
 
 **Uninstall**: there is no uninstall command; the steps are in the install kit README's 「恢复原厂」 (Restore stock) section: stop and delete the services installed under `/etc/init.d/`,
@@ -214,7 +210,7 @@ The public version does not include a proxy. To run a transparent proxy on the d
 - Autostart goes only through `/etc/rc.local`. Back it up before changing it, and check the syntax with `sh -n /etc/rc.local` afterwards.
 - Programs and data go in `/data`. `/tmp` is a RAM disk and is cleared on reboot. Do not write partitions, do not `dd`.
 - **There must always be a UI on the screen.** If no UI is shown for a few minutes, the firmware reboots the whole device. Any step that stops one UI must start another in the same step.
-- **Test a newly built touch program under a different file name first.** If you overwrite the live location `/data/plugins/u60pro-devui/u60pro-devui` directly and it crashes on start,
+- **Test a newly built touch program under a different file name first.** If you overwrite the live location `/data/luyaz/ui/luyaz-ui` directly and it crashes on start,
   the firmware escalates that into a whole-device reboot loop. Always keep a working backup next to the live location. Regular users should just update with `./install.sh devui`.
 - If you are connected remotely through this U60's own network, do not switch to an eSIM profile without data, and do not change the APN, network mode or Wi-Fi carelessly: once switched, you cannot get back in.
 
@@ -225,7 +221,7 @@ The public version does not include a proxy. To run a transparent proxy on the d
   and add `--noproxy '*'` when testing with `curl`.
 - **Admin web will not open but SSH works**: most likely the proxy as well. Verify on the device: `wget -q -O- http://127.0.0.1:9090/ | head -c 200`.
 - **SSH occasionally refuses connections**: dropbear refuses reconnects that come too quickly; wait a few seconds and try again. Combine multiple commands into one `ssh` where possible.
-- **No data on the screen**: `/etc/init.d/zwrt-datad restart`, then check `/tmp/zwrt-datad.log`.
+- **No data on the screen**: `/etc/init.d/luyaz-core restart` (`/etc/init.d/zwrt-datad` on a device not yet moved to the `/data/luyaz/` layout), then check `/tmp/zwrt-datad.log` (the log keeps its old name).
 - **Web login locked**: the stock web UI locks for a while after 5 wrong passwords in a row. The script shows the remaining attempts and a countdown; do not keep retrying.
 - **`admin` / `devui` refuse to install, saying there is an unfinished transaction**: a `u60-ship.sh` update did not finish. Finish it or roll it back first (touch-ui `docs/SHIP.md`); do not delete the transaction log by hand.
 - **Install failed halfway**: `install.sh` can be rerun; parts already installed are skipped or overwritten.

@@ -1,0 +1,20 @@
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	clock	时钟	已对时（2026-09-27 10:00 设备当地时间）
+ok	svc-zte-agent	高级后台	已退役（核心和新管理网页接替）
+ok	svc-zwrt-datad	数据服务	procd 监督中
+ok	svc-u60-guard	Wi-Fi 兜底看门狗	procd 监督中
+ok	svc-u60-uid	屏幕守护进程	procd 监督中
+ok	agent-http	管理网页 :9090	能访问
+ok	datad-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单

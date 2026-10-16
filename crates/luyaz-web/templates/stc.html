@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("dev.css") }}">{% endblock %}
+{% block main %}
+<div class="stc-col" data-signals="{_x: ''}">
+<div class="stc-head"><h1 class="nd-title">{{ shell.title() }}</h1><button type="button" class="nd-btn nd-btn--ghost nd-btn--icon" aria-label="{{ l.pick("Refresh", "刷新") }}" data-on:click="@post('/router/stc/refresh')">{{ crate::shell::icon("ArrowClockwise", false, 20, "")|safe }}</button></div>
+<p class="nd-body stc-desc">{{ l.pick("Whitelist cell lock: the modem collects the cells it sees into a whitelist, and with STC on it only uses those cells.", "白名单锁小区：调制解调器把看到的小区收集进白名单，开启 STC 后只使用这些小区。") }}</p>
+{{ self.leaf("stc-status")|safe }}
+<section aria-label="STC">
+{{ self.leaf("stc-switch")|safe }}
+<div class="stc-op">{{ tg_op|safe }}</div>
+</section>
+<section aria-labelledby="stc-params-t"><h2 id="stc-params-t" class="nd-group-title">{{ l.pick("Parameters", "参数") }}</h2>
+{{ self.leaf("stc-params")|safe }}
+<div class="stc-op">{{ pa_op|safe }}</div>
+<span id="stc-reset" hidden></span>
+</section>
+<section aria-labelledby="stc-wl-t"><h2 id="stc-wl-t" class="nd-group-title">{{ l.pick("Whitelist", "白名单") }}</h2>
+<div class="nd-group stc-wl"><p class="nd-body stc-desc2">{{ l.pick("Clear the collected cells. The modem starts collecting again from the cells it sees now.", "清空已收集的小区。调制解调器从现在看到的小区重新开始收集。") }}</p>
+{{ self.leaf("stc-resetbtn")|safe }}
+<div class="stc-op">{{ rs_op|safe }}</div></div>
+</section>
+</div>
+{% endblock %}

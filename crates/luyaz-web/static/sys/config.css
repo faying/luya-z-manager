@@ -1,0 +1,5 @@
+/* /config (batch 5a): this page's own rules only. */
+.cf-form { display: grid; gap: 0.75rem; padding: 1rem; }
+.cf-file { height: auto; padding: 0.5rem; }
+.cf-btns { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.cf-hex { margin: 0; overflow-x: auto; font-size: 12px; line-height: 1.25rem; white-space: pre; color: var(--nd-t2); }

@@ -1,0 +1,14 @@
+/* /router/esim (batch 5a): this page's own rules only. */
+.es-w{max-width:720px}
+.es-skel{width:14ch}
+.es-skel--s{width:10ch}
+.es-row{flex-wrap:wrap;row-gap:8px}
+.es-row .nd-row__label{display:inline-flex;flex-wrap:wrap;align-items:center;column-gap:12px}
+.es-acts{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:4px;margin-inline-start:auto}
+.es-edit{display:none}
+.es-edit.es-on{display:block}
+.es-acts .es-edit.es-on{display:inline-flex}
+.es-name.es-off{display:none}
+.es-val{overflow-wrap:anywhere;text-align:end;min-width:0}
+.es-row .nd-row__text{flex:1 1 16rem;min-width:0}
+.es-row .nd-mono{white-space:nowrap}

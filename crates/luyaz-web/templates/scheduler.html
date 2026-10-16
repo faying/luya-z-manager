@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("sys.css") }}">{% endblock %}
+{% block main %}
+<div class="mb-4 mt-2 flex flex-wrap items-center justify-between gap-3"><h1 class="nd-title">{{ shell.title() }}</h1><button type="button" class="nd-btn nd-btn--primary" data-on:click="@post('/scheduler/form')">{{ l.pick("New Job", "新建任务") }}</button></div>
+<div class="pg-col">
+<p class="nd-body">{{ l.pick("Automate API calls on a schedule. Times are the device's own clock.", "按时间表自动调用接口。时间按设备自己的时钟。") }}</p>
+{{ self.leaf("sch-status")|safe }}
+<div id="sch-form"></div>
+{{ save_op|safe }}
+<section id="reboot" aria-labelledby="sch-rb-t" class="sch-anchor"><div class="flex flex-wrap items-center gap-3"><h2 id="sch-rb-t" class="nd-group-title flex-1">{{ l.pick("Scheduled Reboot", "定时重启") }}</h2><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/scheduler/form?preset=reboot')">{{ crate::shell::icon("ClockCountdown", false, 20, "")|safe }}{{ l.pick("New reboot job", "新建重启任务") }}</button></div>
+{{ self.leaf("sch-reboot")|safe }}
+<p class="nd-aux mt-2 px-1">{{ l.pick("A scheduled reboot is a job that sends POST /api/device/reboot. Creating one or switching it on asks for a confirm dialog.", "定时重启就是一个发出 POST /api/device/reboot 的任务；创建或打开它要在对话框里确认。") }}</p></section>
+<section aria-labelledby="sch-list-t"><div class="flex items-center gap-3"><h2 id="sch-list-t" class="nd-group-title flex-1">{{ l.pick("Jobs", "任务") }}</h2><button type="button" class="nd-btn nd-btn--ghost nd-btn--icon" aria-label="{{ l.pick("Refresh jobs", "刷新任务") }}" data-on:click="@post('/scheduler/refresh')">{{ crate::shell::icon("ArrowClockwise", false, 20, "")|safe }}</button></div>
+{{ row_op|safe }}
+{{ self.leaf("sch-list")|safe }}
+</section>
+</div>
+{% endblock %}

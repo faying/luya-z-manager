@@ -1,0 +1,8 @@
+<p id="tr-note" class="nd-aux mb-4 px-1">{% if v.full %}{{ v.l.pick("One point per data-service update, about every 5 s.", "每个点是数据服务的一次更新，约 5 秒一次。") }}{% else %}{{ v.l.pick("One point about every 5 s while this page or another new-style page (Signal, …) is open; nothing is kept otherwise, so the lines start when you open one.", "开着这一页或信号等新页面时约 5 秒一个点；都关着时不记录，所以从打开时开始画。") }}{% endif %}</p>
+{% for c in v.charts %}<!--leaf-->
+<span id="tr-{{ c.key }}-now" class="tr-now">{{ c.now }}</span>
+<!--leaf-->
+<div id="tr-{{ c.key }}-plot" class="tr-plot">{% if let Some(p) = c.plot %}{% for t in p.ticks %}<span class="tr-tick" style="top:calc({{ t.2 }}% - 5px)" aria-hidden="true">{{ t.1 }}</span>{% endfor %}<svg viewBox="0 0 600 120" class="tr-svg" preserveAspectRatio="none" role="img" aria-label="{{ c.aria }}">{% for t in p.ticks %}<line x1="0" x2="592" y1="{{ t.0 }}" y2="{{ t.0 }}" class="tr-grid"/>{% endfor %}</svg>{% else %}<div class="tr-empty">{{ v.l.pick("Collecting — the lines appear after a few seconds", "正在采样，几秒后出线") }}</div>{% endif %}</div>
+<!--leaf-->
+<svg id="tr-{{ c.key }}-line" viewBox="0 0 600 120" class="tr-svg tr-line{% if v.stale %} tr-line--stale{% endif %}" preserveAspectRatio="none" aria-hidden="true">{% if lines %}{% if let Some(p) = c.plot %}{% for ln in p.lines %}<polyline{% if ln.dashed %} class="tr-dash"{% endif %} points="{{ ln.points }}"/>{% endfor %}{% endif %}{% endif %}</svg>
+{% endfor %}

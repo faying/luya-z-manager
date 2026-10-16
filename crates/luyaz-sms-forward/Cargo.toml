@@ -1,0 +1,19 @@
+[package]
+name = "luyaz-sms-forward"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.99"
+description = "U60 Pro (MU5250) SMS forwarding engine run by u60d (u60-platform.md Phase 4 step 9e). Moved out of zte-agent (removed 2026-10-14)."
+license = "MIT"
+publish = false
+
+[dependencies]
+luyaz-api = { path = "../luyaz-api" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "3", features = ["json"] }
+libc = "0.2"
+
+[dev-dependencies]
+# contract tests: the agent's pass equals u60-policy's, and its shadow records replay there
+luyaz-policy = { path = "../luyaz-policy", features = ["serde"] }

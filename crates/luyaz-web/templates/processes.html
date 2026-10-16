@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("dev.css") }}">{% endblock %}
+{% block main %}
+<div class="mb-4 mt-2 pc-head"><h1 class="nd-title">{{ shell.title() }}</h1><button type="button" class="nd-btn nd-btn--ghost pc-refresh" aria-label="{{ l.pick("Refresh", "刷新") }}" data-on:click="@post('/tools/processes/refresh')">{{ shell.icon("ArrowClockwise", 20)|safe }}</button></div>
+<div class="pc-col">
+<p class="nd-body pc-muted">{{ l.pick("Live list of running processes. Refreshes every 3 seconds.", "正在运行的进程，每 3 秒刷新。") }}</p>
+{{ self.leaf("pc-status")|safe }}
+<section aria-labelledby="pc-bloat-t">
+<div class="pc-bar"><h2 id="pc-bloat-t" class="nd-group-title">{{ l.pick("Can be killed", "可以结束") }}</h2>{{ self.leaf("pc-all")|safe }}</div>
+<p class="nd-aux pc-aux">{{ l.pick("Only processes on the agent's list can be ended here. Boot-critical firmware daemons are never on it. The system may start an ended process again.", "这里只能结束后台名单里的进程；开机必需的固件守护进程不在名单里。系统可能会把结束的进程再拉起来。") }}</p>
+{{ self.leaf("pc-bloat")|safe }}
+<div class="pc-op">{{ op|safe }}</div>
+</section>
+<div class="pc-list">
+<h2 id="pc-all-t" class="nd-group-title">{{ l.pick("All processes (50 busiest)", "全部进程（最忙的 50 个）") }}</h2>
+<div class="pc-sort"><nav aria-label="{{ l.pick("Sort by", "排序") }}" class="nd-seg"><div class="nd-seg__track">{% for (label, q, on) in self.keys() %}<a class="nd-seg__item" href="/tools/processes?{{ q }}"{% if on %} aria-current="true" data-selected="true"{% endif %}>{{ label }}</a>{% endfor %}</div></nav>
+<a class="nd-btn nd-btn--ghost pc-dir" href="/tools/processes?{{ self.flip() }}">{% if sort.desc %}{{ l.pick("Descending ▼", "降序 ▼") }}{% else %}{{ l.pick("Ascending ▲", "升序 ▲") }}{% endif %}</a></div>
+<section class="nd-console" aria-label="{{ l.pick("All processes (50 busiest)", "全部进程（最忙的 50 个）") }}"><div class="pc-scroll" tabindex="0">
+<div class="pc-table" role="table" aria-label="{{ l.pick("All processes (50 busiest)", "全部进程（最忙的 50 个）") }}"><div role="rowgroup"><div role="row" class="pc-tr pc-th nd-console__muted"><span role="columnheader" aria-sort="{{ self.aria_sort(Key::Name) }}">{{ l.pick("Name", "名称") }}</span><span role="columnheader" class="pc-r" aria-sort="{{ self.aria_sort(Key::Pid) }}">PID</span><span role="columnheader" class="pc-r" aria-sort="{{ self.aria_sort(Key::Cpu) }}">CPU%</span><span role="columnheader" class="pc-r" aria-sort="{{ self.aria_sort(Key::Mem) }}">RSS</span><span role="columnheader">{{ l.pick("State", "状态") }}</span><span role="columnheader">{{ l.pick("On the list?", "名单内？") }}</span></div></div>
+<div role="rowgroup">{{ rows|safe }}</div></div>
+{{ self.leaf("pc-empty")|safe }}
+</div></section>
+{{ self.leaf("pc-hint")|safe }}
+</div>
+</div>
+{% endblock %}

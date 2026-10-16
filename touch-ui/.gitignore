@@ -1,0 +1,68 @@
+# Build artifacts (binaries are published as GitHub Releases, not committed)
+*.o
+*.a
+*.stripped
+/u60pro-devui
+/u60pro-devui.stripped
+/u60pro-devui.*
+/corner-wake
+/u60pro-devui-aarch64
+/u60pro-devui.sse
+/html-poc
+/html-poc.stripped
+/html-poc.zig
+/html-poc.zig.stripped
+/touchsim
+/.zig-build/
+/zig-build-obj/
+
+# Release packaging
+/ui.tar.gz
+
+# Debug / capture artifacts
+/fb.dump
+/*.dump
+/*.b64txt
+*.ppm
+after_swipe.png
+frame_*.png
+screenshot.png
+/label-*.png
+/lockscreen-*.png
+/screen-*.png
+/u60pro-devui.new
+/previews/
+/-S
+
+# --- Do NOT commit vendor blobs (analysis only, proprietary) ---
+# These belong to ZTE and must never enter this open-source repo.
+zte_topsw_devui
+zte_topsw_devui*.txt
+libzte_*.so
+*.strings.txt
+*.llvm-readobj.txt
+usr_ui/
+drm_text
+*.ttf
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Local-only operational notes (do not publish to github)
+/.local-notes/
+/agents.md
+/docs/LOCAL-CHANGES.md
+/docs/WORKFLOW-LOCAL.md
+/docs/WORKFLOW-LOCAL-U60.md
+/docs/WORKFLOW-PRIVATE.md
+/.review-shots/
+/scripts/test/uid/uid_core_test
+/scripts/test/ui_logic/ui_logic_test
+/u60-uid
+scripts/test/ui_exec/ui_exec_test
+scripts/test/render/render_test
+.cache/
+/out/

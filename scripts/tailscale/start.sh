@@ -4,6 +4,14 @@
 # Called from /etc/rc.local at boot, and by apply.sh when trying a tuning
 # variant. Installed from source/manager/scripts/tailscale/start.sh.
 #
+# Supervision. When /etc/init.d/tailscale (tailscale.init next to this file)
+# is installed, procd supervises tailscaled: "start" only asks procd to start
+# the service and returns, procd runs "start.sh __fg", which does the checks
+# below in the foreground and then execs tailscaled, and procd starts it
+# again when it dies. Without the init file (an older install, or after a
+# firmware upgrade wiped /etc) everything works as before: a detached worker
+# and the __watch loop. rc.local's line is the same either way.
+#
 #   sh start.sh              start (what rc.local and apply.sh run)
 #   sh start.sh check        preflight (starts nothing, no network change); exit 1 if start would fail
 #   sh start.sh status       mode, safe mode, boot strikes, disabled
@@ -13,7 +21,9 @@
 #   sh start.sh clear-safe   leave safe mode now (next start uses TS_MODE again)
 #   sh start.sh revive       one supervision step (what the watcher does each
 #                            poll); exit 0 nothing to do, 1 restarted, 2 gave
-#                            up for now, 3 apply.sh is switching
+#                            up for now, 3 apply.sh is switching; nothing to
+#                            do under procd
+#   sh start.sh __fg         procd's command (tailscale.init): checks, then exec tailscaled
 #
 #   binaries  /data/tailscale/{tailscaled,tailscale}
 #   state     /data/tailscale/state
@@ -56,8 +66,15 @@
 #     its restarts, and the start it runs brings up a new one). Restarts in a
 #     boot do not count as staying up: a TUN tailscaled that had to be
 #     revived is not marked stable, so the boot still counts as a strike.
-#     tailscaled is not under procd and nothing else restarts it; u60-guard
-#     only records its health. TS_WATCH=0 turns the watcher off.
+#     u60-guard only records its health. TS_WATCH=0 turns the watcher off.
+#   - Under procd the watcher is not started; the same backoff lives in
+#     __fg instead: procd starts it again 5 s after tailscaled dies (respawn
+#     with no retry limit), and __fg first sleeps the TS_REVIVE_DELAYS step,
+#     or until the TS_REVIVE_WINDOW ends once TS_REVIVE_MAX restarts were
+#     used (one alert). A start through the init script (boot, "start",
+#     apply.sh's restart) is not a restart and does not wait. Each __fg runs
+#     --cleanup first and stops a tailscaled it did not start (the nohup one
+#     from before the switch to procd), so procd never sees a quick exit.
 #
 # Nothing here is specific to one owner's network: the advertised subnet is
 # read from br-lan at start, the hostname defaults to u60pro. Per-device
@@ -104,6 +121,8 @@ WATCH_PID=$RUN/tailscale-watch.pid   # the watcher
 REVIVE=$RUN/tailscale-revive         # its backoff state (this boot only)
 STOPPED=$RUN/tailscale.stopped       # "stop" ran: the watcher leaves it down
 APPLYING=$RUN/tailscale-apply.pid    # apply.sh is switching (it writes this)
+INTENDED=$RUN/tailscale.intended     # the init script asked for this start (not a respawn)
+INIT=${TSS_INIT:-/etc/init.d/tailscale}
 # test hooks (scripts/tailscale/test/start.sh); defaults are the device's own
 BOOT_ID_FILE=${TSS_BOOT_ID:-/proc/sys/kernel/random/boot_id}
 RESOLV=${TSS_RESOLV:-/tmp/resolv.conf.d/resolv.conf.auto}
@@ -114,7 +133,8 @@ KILL=${TSS_KILL:-kill}
 SLEEP=${TSS_SLEEP:-sleep}
 DF=${TSS_DF:-df}
 UPTIME=${TSS_UPTIME:-/proc/uptime}
-ALERT_LIB=${TSS_ALERT_LIB:-/data/u60-guard/alert-lib.sh}
+# the device scripts' directory (Luya-Z rename D1)
+ALERT_LIB=${TSS_ALERT_LIB:-/data/luyaz/scripts/alert-lib.sh}
 WATCH_TICKS=${TSS_WATCH_TICKS:-0}    # >0: the watcher ends after that many polls
 FG=${TSS_FG:-0}                      # 1: run the worker in the foreground
 TIMER=${TSS_TIMER:-1}                # 0: do not arm the stable timer
@@ -415,12 +435,136 @@ watch() {
     return 0
 }
 
-# ── worker: everything rc.local must not wait for ───────────────────────────
-worker() {
+# ── under procd ─────────────────────────────────────────────────────────────
+procd_mode() { [ -x "$INIT" ]; }
+
+watch_kill() { # end a watcher from before the switch to procd
+    _w=$(live_pid "$WATCH_PID") && [ "$_w" != $$ ] && kill "$_w" 2>/dev/null
+    rm -f "$WATCH_PID"
+}
+
+stray_stop() { # a tailscaled procd did not start (we have not exec'd yet)
+    _p=$($PIDOF tailscaled 2>/dev/null)
+    [ -n "$_p" ] || return 0
+    log "fg: stopping a tailscaled procd did not start ($_p)"
+    $KILL $_p 2>/dev/null
+    _i=0
+    while [ -n "$($PIDOF tailscaled 2>/dev/null)" ] && [ $_i -lt 15 ]; do $SLEEP 1; _i=$((_i + 1)); done
+    _p=$($PIDOF tailscaled 2>/dev/null)
+    [ -n "$_p" ] && $KILL -9 $_p 2>/dev/null
+    return 0
+}
+
+# A respawn (no INTENDED marker) waits like the watcher did. Sets nothing;
+# returns once it may start. load_config first.
+fg_backoff() {
+    _now=$(uptime_s)
+    rv_read
+    if [ -f "$INTENDED" ]; then
+        rm -f "$INTENDED"
+        RV_DEAD=0
+        rv_write
+        return 0
+    fi
+    [ "$RV_N" -gt 0 ] && [ $((_now - RV_LAST)) -ge "$TS_STABLE" ] && RV_N=0
+    if [ "$RV_WIN" = 0 ] || [ $((_now - RV_WIN)) -ge "$TS_REVIVE_WINDOW" ]; then
+        RV_WIN=$_now RV_WN=0 RV_GAVEUP=0
+    fi
+    if [ "$RV_WN" -ge "$TS_REVIVE_MAX" ]; then
+        _left=$((TS_REVIVE_WINDOW - (_now - RV_WIN)))
+        [ "$_left" -gt 0 ] || _left=1
+        if [ "$RV_GAVEUP" != 1 ]; then
+            RV_GAVEUP=1
+            rv_write
+            log "fg: GAVE UP: $RV_WN restarts within ${TS_REVIVE_WINDOW}s; next try in ${_left}s"
+            alert tailscale-gave-up "tailscaled died $RV_WN times; restarts paused for up to ${TS_REVIVE_WINDOW}s"
+        fi
+        $SLEEP "$_left"
+        _now=$(uptime_s)
+        RV_WIN=$_now RV_WN=0 RV_GAVEUP=0
+    fi
+    _d=$(rv_delay "$RV_N")
+    log "fg: tailscaled died; restart in ${_d}s (restart $((RV_WN + 1)) of $TS_REVIVE_MAX in this window)"
+    RV_DEAD=$_now
+    rv_write
+    $SLEEP "$_d"
+    rv_read
+    RV_N=$((RV_N + 1)) RV_WN=$((RV_WN + 1)) RV_TOTAL=$((RV_TOTAL + 1)) RV_LAST=$(uptime_s) RV_DEAD=0
+    rv_write
+    return 0
+}
+
+# procd's command: everything worker() checks, then exec tailscaled in our
+# place, so procd's pid is tailscaled's. Helpers are double-forked so that
+# pid 1, not tailscaled, reaps them.
+fg() {
+    apply_recover # also here: a boot that starts the init directly never runs start()
     load_config
     [ -n "$TUNING_BAD" ] && log "tuning.env failed sh -n or a trial load: ignored, defaults used"
     [ -n "$BIN_NOTE" ] && log "$BIN_NOTE"
+    while [ -f "$DISABLED" ]; do $SLEEP 3600; done # "disable" stops the service; this only covers a race
+    fg_backoff
+    watch_kill
+    stray_stop
+    run_bounded 30 "$BIN" --cleanup >/dev/null 2>&1
+    pick_mode
+    if [ -f "$DISABLED" ]; then
+        log "disabled while waiting: not started"
+        while [ -f "$DISABLED" ]; do $SLEEP 3600; done
+    fi
+    migrate_state
+    if [ "$MODE" = tun ]; then TUNARG=--tun=tailscale0; else TUNARG=--tun=userspace-networking; fi
+    echo "$MODE" >"$MODE_FILE" 2>/dev/null
+    rec_read
+    if [ -z "$NOW" ] || [ "$R_BOOT" = "$NOW" ]; then rec_write "$NOW" "$N" "$STABLE" "$MODE"; fi
+    log "started $BIN mode=$MODE ($WHY) strikes=$N first=$FIRST wan_wait=${_w}s (procd)"
+    (TSS_FIRST=$FIRST TSS_WHY=$WHY TSS_NOW=$NOW nohup sh "$SELF" __up </dev/null >/dev/null 2>&1 &)
+    # shellcheck disable=SC2086 # the extra flags/env are deliberately word-split
+    exec env $TS_TAILSCALED_ENV "$BIN" --state="$D/state/tailscaled.state" --statedir="$D/state" \
+        --socket="$SOCK" --port=41641 $TUNARG $TS_TAILSCALED_FLAGS >>"$LOG" 2>&1 </dev/null
+}
 
+# __up: after fg's exec — wait for the socket, "up", arm the stable timer
+up_after() {
+    load_config
+    _i=0
+    while [ ! -S "$SOCK" ] && [ "$_i" -lt 30 ]; do $SLEEP 1; _i=$((_i + 1)); done
+    [ -S "$SOCK" ] || log "socket $SOCK not there after ${_i}s"
+    ts_up
+    if [ "${TSS_FIRST:-0}" = 1 ] && [ "$TIMER" = 1 ] && [ -n "$TSS_NOW" ]; then
+        if [ "$TSS_WHY" = safe-mode ]; then _t=$TS_SAFE_RETRY; else _t=$TS_STABLE; fi
+        $SLEEP "$_t"
+        stable "$TSS_NOW"
+    fi
+}
+
+# __cleanup: the init script's service_stopped. procd's kill returns before
+# tailscaled is gone, so wait for it first.
+cleanup_after_stop() {
+    load_config
+    _i=0
+    while [ -n "$($PIDOF tailscaled 2>/dev/null)" ] && [ $_i -lt 15 ]; do $SLEEP 1; _i=$((_i + 1)); done
+    run_bounded 30 "$BIN" --cleanup >/dev/null 2>&1
+    _rc=$?
+    rm -f "$MODE_FILE"
+    log "stopped (procd; cleanup rc=$_rc)"
+}
+
+# ── worker: everything rc.local must not wait for ───────────────────────────
+ts_up() { # "up" with this config, bounded
+    if [ -z "$TS_ROUTES" ]; then
+        TS_ROUTES=$($IP -o -4 addr show br-lan 2>/dev/null | awk '{print $4; exit}' |
+            awk -F'[./]' 'NF == 5 && $5 == 24 {print $1 "." $2 "." $3 ".0/24"}')
+    fi
+    run_bounded "${TSS_UP_LIMIT:-90}" "$D/tailscale" --socket="$SOCK" up ${TS_ROUTES:+--advertise-routes=$TS_ROUTES} \
+        --accept-routes="$TS_ACCEPT_ROUTES" --accept-dns="$TS_ACCEPT_DNS" \
+        ${TS_EXIT_NODE:+--exit-node=$TS_EXIT_NODE --exit-node-allow-lan-access} \
+        --hostname="$TS_HOSTNAME" --timeout=60s >"$RUN/tailscale-up.log" 2>&1
+    _rc=$?
+    log "up rc=$_rc: $(tail -n 1 "$RUN/tailscale-up.log" 2>/dev/null)"
+}
+
+pick_mode() { # sets NOW FIRST N STABLE MODE WHY TS_ROUTES _w; waits for the WAN (bounded)
     NOW=$(boot_id)
     rec_read
     FIRST=0
@@ -468,6 +612,13 @@ worker() {
     elif [ "$MODE" = tun ]; then
         _bad=$(cgnat_hit) && { MODE=userspace WHY="cgnat $_bad"; }
     fi
+}
+
+worker() {
+    load_config
+    [ -n "$TUNING_BAD" ] && log "tuning.env failed sh -n or a trial load: ignored, defaults used"
+    [ -n "$BIN_NOTE" ] && log "$BIN_NOTE"
+    pick_mode
 
     if [ -f "$DISABLED" ]; then # "disable" ran while this worker waited
         log "disabled while waiting: not started"
@@ -493,12 +644,7 @@ worker() {
     _i=0
     while [ ! -S "$SOCK" ] && [ "$_i" -lt 30 ]; do $SLEEP 1; _i=$((_i + 1)); done
     [ -S "$SOCK" ] || log "socket $SOCK not there after ${_i}s"
-    run_bounded "${TSS_UP_LIMIT:-90}" "$D/tailscale" --socket="$SOCK" up ${TS_ROUTES:+--advertise-routes=$TS_ROUTES} \
-        --accept-routes="$TS_ACCEPT_ROUTES" --accept-dns="$TS_ACCEPT_DNS" \
-        ${TS_EXIT_NODE:+--exit-node=$TS_EXIT_NODE --exit-node-allow-lan-access} \
-        --hostname="$TS_HOSTNAME" --timeout=60s >"$RUN/tailscale-up.log" 2>&1
-    _rc=$?
-    log "up rc=$_rc: $(tail -n 1 "$RUN/tailscale-up.log" 2>/dev/null)"
+    ts_up
 
     if [ "$FIRST" = 1 ] && [ "$TIMER" = 1 ] && [ -n "$NOW" ]; then
         if [ "$WHY" = safe-mode ]; then _t=$TS_SAFE_RETRY; else _t=$TS_STABLE; fi
@@ -528,14 +674,43 @@ stable() {
     fi
 }
 
+# ── apply.sh cut off: put the tuning it saved back ─────────────────────────
+# apply.sh keeps the previous tuning.env as tuning.env.rollback (or, when
+# there was none, the marker tuning.env.rollback-none) for as long as the
+# variant is on trial, and removes it once it decides. Either file without a
+# live apply.sh means it was cut off (power cut, reboot, kill) inside its
+# health window, so the variant never passed: go back to the previous tuning
+# before it is loaded. /tmp is empty after a reboot, so at boot this is
+# always the case (audit 2026-10-09 F4). Run from start() and from __fg, so it
+# holds whether the boot goes through rc.local or straight to the procd init.
+apply_recover() {
+    live_pid "$APPLYING" >/dev/null && return 0
+    if [ -f "$D/tuning.env.rollback" ]; then
+        mv -f "$D/tuning.env.rollback" "$D/tuning.env" &&
+            log "apply.sh was cut off: previous tuning.env put back"
+        rm -f "$D/tuning.env.rollback-none"
+    elif [ -f "$D/tuning.env.rollback-none" ]; then
+        rm -f "$D/tuning.env" "$D/tuning.env.rollback-none" &&
+            log "apply.sh was cut off: trial tuning.env removed (there was none before)"
+    fi
+}
+
 # ── front: what rc.local waits for ──────────────────────────────────────────
 start() {
     mkdir -p "$D" 2>/dev/null
+    apply_recover
     if [ -f "$DISABLED" ]; then
         log "disabled ($DISABLED): not started"
         return 0
     fi
     rm -f "$STOPPED"
+    if procd_mode; then
+        # procd starts __fg and returns at once; __fg replaces a running
+        # nohup tailscaled from before the switch, the watcher goes now
+        watch_kill
+        "$INIT" start >/dev/null 2>&1
+        return 0
+    fi
     $PIDOF tailscaled >/dev/null 2>&1 && return 0
     if ! mkdir "$LOCK" 2>/dev/null; then
         _o=$(cat "$LOCK/pid" 2>/dev/null)
@@ -557,6 +732,13 @@ start() {
 
 stop() {
     load_config
+    if procd_mode; then # never kill it by pid: procd would start it again
+        : >"$STOPPED" 2>/dev/null
+        watch_kill
+        "$INIT" stop >/dev/null 2>&1 # its service_stopped waits, then --cleanup
+        log "stopped (${1:-stop}; procd)"
+        return 0
+    fi
     # the watcher first, or it starts tailscaled again after the backoff
     : >"$STOPPED" 2>/dev/null
     _w=$(live_pid "$WATCH_PID") && [ "$_w" != $$ ] && kill "$_w" 2>/dev/null
@@ -587,7 +769,11 @@ status() {
     echo "strikes:   $R_STRIKES of $TS_MAX_STRIKES (this boot stable: $([ "$R_BOOT" = "$(boot_id)" ] && echo "$R_STABLE" || echo -))"
     echo "running:   $($PIDOF tailscaled || echo no)"
     rv_read
-    echo "watcher:   $(live_pid "$WATCH_PID" || echo no)$([ -f "$STOPPED" ] && echo ' (stopped by hand: no restarts)')"
+    if procd_mode; then
+        echo "watcher:   procd ($INIT)$([ -f "$STOPPED" ] && echo ', stopped by hand')"
+    else
+        echo "watcher:   $(live_pid "$WATCH_PID" || echo no)$([ -f "$STOPPED" ] && echo ' (stopped by hand: no restarts)')"
+    fi
     echo "restarts:  $RV_TOTAL this boot, $RV_WN of $TS_REVIVE_MAX in this window$([ "$RV_GAVEUP" = 1 ] && echo ', GAVE UP until the window ends')"
     echo "binary:    $BIN${BIN_NOTE:+ ($BIN_NOTE)}"
     [ -n "$TUNING_BAD" ] && echo "tuning.env: IGNORED (failed sh -n or a trial load)"
@@ -652,8 +838,18 @@ case "${1:-start}" in
         ;;
     revive)
         load_config
+        procd_mode && exit 0 # procd and __fg do this
         revive_tick
         ;;
+    __fg)
+        fg
+        exit 1 # only when exec failed
+        ;;
+    __up)
+        up_after
+        exit 0
+        ;;
+    __cleanup) cleanup_after_stop ;;
     check) check ;;
     status) status ;;
     stop) stop stop ;;

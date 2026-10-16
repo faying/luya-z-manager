@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("sys.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<div class="grid max-w-[720px] gap-6">
+<p class="nd-body -mt-2 text-nd-t2">{{ shell.t("Inspect ZTE ZXHN router config files (.zxhn).", "查看中兴 ZXHN 路由器的配置文件（.zxhn）。") }} {{ shell.t("The file is sent to this page's server, read in memory and dropped with the answer: it is not saved, not logged and never sent to the device.", "文件会传到这个页面的服务器，在内存里读完就丢，不保存、不记录，也不会发给设备。") }}</p>
+<section aria-labelledby="cf-t"><h2 id="cf-t" class="nd-group-title">{{ shell.t("Config file", "配置文件") }}</h2>
+<form method="post" action="/config" enctype="multipart/form-data" class="nd-group cf-form">
+<label class="nd-body" for="cf-file">{{ shell.t("Choose a config file", "选择配置文件") }}</label>
+<input id="cf-file" class="nd-field cf-file" type="file" name="file" accept=".zxhn,.bin,.cfg,.conf" required>
+<p class="nd-aux">{{ shell.t("Up to ", "最大 ") }}{{ max_mib }} MiB.{% if v.done.is_some() %} {{ shell.t("To get the hex dump of a file, choose it again and press Download.", "要下载十六进制转储，请再选一次文件，再点「下载」。") }}{% endif %}</p>
+<div class="cf-btns"><button type="submit" class="nd-btn nd-btn--primary">{{ shell.t("Inspect", "查看") }}</button>
+<button type="submit" class="nd-btn nd-btn--secondary" formaction="/config/hex">{{ shell.t("Download hex dump", "下载十六进制转储") }}</button></div>
+</form></section>
+{% if let Some(e) = v.err %}<p role="alert"><span class="nd-mark nd-mark--bad"><span class="nd-mark__sym" aria-hidden="true">▲</span><span>{{ e }}</span></span></p>{% endif %}
+{% if let Some(d) = v.done %}
+<section aria-labelledby="cf-name-t"><h2 id="cf-name-t" class="nd-group-title">{{ shell.t("This file", "这个文件") }}</h2>
+<p class="nd-mono pg-breakall" data-data>{{ d.name }}</p></section>
+{% if let Some(h) = d.header %}
+<section aria-labelledby="cf-h-t"><h2 id="cf-h-t" class="nd-group-title">{{ shell.t("File Header", "文件头") }}</h2>
+<div class="nd-group">
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("Magic", "标记") }}</span></span><span class="nd-row__value nd-mono" data-data>{{ h.magic }}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("Payload type", "负载类型") }}</span></span><span class="nd-row__value nd-mono" data-data>{{ h.payload_type }}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("Signature", "签名") }}</span></span><span class="nd-row__value nd-mono" data-data>{% if h.signature.is_empty() %}—{% else %}{{ h.signature }}{% endif %}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("Payload offset", "负载偏移") }}</span></span><span class="nd-row__value nd-mono">{{ h.payload_offset }} {{ shell.t("bytes", "字节") }}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("File size", "文件大小") }}</span></span><span class="nd-row__value nd-mono">{{ h.file_size }} {{ shell.t("bytes", "字节") }}</span></div>
+</div></section>
+{% endif %}
+<section aria-labelledby="cf-x-t"><h2 id="cf-x-t" class="nd-group-title">{{ shell.t("Hex Preview (first 256 bytes)", "十六进制预览（前 256 字节）") }}</h2>
+<div class="nd-group p-4"><pre class="nd-mono cf-hex" tabindex="0" aria-label="{{ shell.t("Hex preview", "十六进制预览") }}">{{ d.hex }}</pre></div></section>
+{% endif %}
+<section aria-labelledby="cf-k-t"><h2 id="cf-k-t" class="nd-group-title">{{ shell.t("***REMOVED***", "***REMOVED***") }}</h2>
+<p class="nd-aux mb-2">{{ shell.t("***REMOVED***. Full decrypt/re-encrypt is available in the iOS companion app.", "***REMOVED***。完整的解密 / 重新加密在 iOS 配套 App 里。") }}</p>
+<div class="nd-group">{% for k in keys %}<div class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label">{{ k.label }}</span><span class="nd-row__sub block nd-mono pg-breakall" data-data>{{ k.hex }}</span></span></div>
+{% endfor %}</div>
+<p class="nd-aux mt-2">{{ shell.t("Full AES-ECB/CBC decrypt, zlib decompress, XML view and re-encryption are implemented in the iOS app (***REMOVED***). They are not available on this page.", "完整的 AES-ECB/CBC 解密、zlib 解压、XML 视图和重新加密在 iOS App 里实现（***REMOVED***），这个页面没有。") }}</p>
+</section>
+</div>
+{% endblock %}

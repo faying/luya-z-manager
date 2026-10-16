@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<div class="pg-col">
+{{ main|safe }}
+{{ undo_op|safe }}
+</div>
+{% endblock %}

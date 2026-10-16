@@ -1,0 +1,460 @@
+# expect for --lang=en (scripts/test/render/render.sh): the same inventory as
+# expect-public.txt, in English. Made from it through ui/lang/en.tsv (10-01).
+
+*	home	Home
+*	home	Cellular
+*	home	Wi-Fi
+*	home	Route
+*	home	System
+*	system	Home
+*	system	Cellular
+*	system	Wi-Fi
+*	system	Route
+*	system	System
+!loading,datad-down	home	5G
+good	home	11:41
+good	home	↓12.3Mb ↑1.5Mb
+good	home	78
+good	home	China Telecom
+good	cellular	QCI 9
+good	cellular	AMBR 1668/1008
+good	home	China Telecom · 5G SA · Local
+good	home	n78 100M + n1 20M
+good	home	n78 100M
+good	cellular	ARFCN 627264
+good	cellular	PCI 603
+good	home	n1
+good	home	20M
+good	cellular	ARFCN 426030
+good	cellular	PCI 615
+good	cellular	-95
+good	home	9.5
+good	cellular	n41 100M
+good	cellular	Inactive
+good	cellular	ARFCN 504990 · PCI 120
+good	home	Scenarios
+good	home	Tailscale
+good	home	Connected
+good	home	100.64.0.7 · DERP hkg
+good	home	Online 3/5 · direct 1 · relay 1
+good	home	192.168.0.0/24
+good	exit	Tailscale
+good	exit	Connected · online 3/5
+*	system	CPU
+*	system	Memory
+*	system	Battery
+good	system	15%
+good	system	42°C
+good	system	74%
+good	system	1184M / 1590M
+good	home	↓ 1.5 MB/s
+good	home	↑ 183.6 KB/s
+good	system	78%
+good	system	Discharging · 33°C
+good	system	Last 5 min
+*	cellular	SMS
+*	cellular	Cell Info
+*	cellular	Band Lock
+*	exit	Speed Test
+*	cellular	SIM & eSIM
+*	system	Performance Test
+good	cellular	Auto
+good	exit	↓ 812 · ↑ 96 Mbps
+good	system	Debug page
+*	system	Screen
+*	system	Brightness
+*	system	Screen off
+*	system	Never
+*	system	30 s
+*	system	2 min
+*	system	Appearance
+*	system	Light
+*	system	Dark
+*	system	Auto
+*	system	Battery & load
+*	system	Battery
+*	system	Charger
+*	system	CPU
+*	system	Memory
+*	system	Uptime
+*	system	Device
+*	system	Version
+*	system	IMEI
+*	system	USB
+*	system	Health
+*	system	Switches
+*	system	Stop charging
+*	system	Status bar speed in Mbps
+*	system	Switch to stock UI
+good	system	78% · 33°C 4.05V -349mA
+good	system	Unplugged
+good	system	74% · 1184M / 1590M
+good	system	9h 00m
+good	system	BD_CNMU5250V1.0.0B27
+good	system	4901********518
+good	system	Debug off
+good	system	OpenWrt 23.05.4
+full-charging	system	4.67V 1203mA
+*	wifi	Hotspot
+*	wifi	Security
+*	wifi	Password
+*	wifi	Wi-Fi
+*	wifi	2.4 GHz band
+*	wifi	5 GHz band
+*	wifi	Power saving
+*	wifi	NFC tap
+*	wifi	Connected devices
+*	wifi	DHCP
+*	wifi	Gateway
+*	wifi	Pool
+*	wifi	Lease
+good	wifi	U60-Test
+good	wifi	sae
+good	wifi	correct-horse-battery
+good	wifi	iPhone
+good	wifi	192.168.0.20
+good	wifi	Kindle
+good	wifi	192.168.0.1
+good	wifi	192.168.0.2 - 192.168.0.253
+good	sms	Mark all read
+good	sms	10000
+good	sms	09-24 09:12
+good	sms	+8613800000000
+good	sms	106900000000
+good	sms-detail	10000
+good	sms-detail	09-24 09:12
+good	sms-detail	Delete
+good	alerts	Alert log · all read
+good	alerts	Health check
+good	alerts	exit 139 (SIGSEGV)
+!lte,jp	cell	5G serving cell
+*	cell	Band
+*	cell	ARFCN
+*	cell	PCI
+*	cell	Cell ID
+*	cell	PLMN
+*	cell	RSRP / RSRQ / SINR
+*	cell	LTE
+*	cell	EARFCN
+*	cell	RSSI
+*	cell	Network
+*	cell	Network mode
+*	cell	WAN
+*	cell	Network type
+*	cell	High-speed rail
+*	cell	Neighbor cells
+good	cell	n78  100 MHz
+good	cell	627264
+good	cell	603
+good	cell	23960174596
+good	cell	460-11 China Telecom
+good	cell	-87 / -11 / 17.7
+good	cell	LTE (not in use; measured values below)
+good	cell	-106 / -17 / -4.0
+good	cell	-71
+lte	cell	LTE serving cell
+lte	cell	B3  20 MHz
+lte	cell	1850
+lte	cell	120
+lte	cell	45678901
+lte	cell	5G (not in use; measured values below)
+lte	cell	-98 / -10 / 14.5
+nsa	cell	LTE serving cell
+nsa	cell	B3  20 MHz
+good	cell	Auto
+good	cell	ipv4_ipv6_connected
+good	cell	Off
+*	cellular	Network mode
+*	cellular	Auto
+*	cellular	5G NSA
+*	cellular	5G SA
+*	cellular	4G
+*	cellular	4G+3G
+!op-verifying,op-rollback-off	cellular	Switching cuts data briefly; tap twice to confirm
+*	lock	5G SA bands
+*	lock	5G NSA bands
+*	lock	4G bands
+*	lock	Apply band lock
+*	lock	Restore defaults
+good	lock	n78
+good	lock	n79
+good	lock	B41
+*	lock-mode-armed	Tap again · SA is often missing abroad
+*	system-vendor-armed	Tap again to switch
+good	speed	Speed Test
+good	speed	812.4
+good	speed	↓ 812.4 Mbps  ↑ 96.2 Mbps
+good	speed	China Telecom (Shanghai)
+good	speed	Test again
+good	speed	Server
+good	speed	Auto (best server)
+good	speed	China Unicom · Shanghai, China
+good	esim	Current profile
+good	esim	In use · eSIM
+good	esim	Card info
+good	esim	+8613800001234
+good	esim	460010123456789
+abroad	esim	In use · physical SIM
+abroad	esim	8986110000000000077F
+abroad	esim	No number on SIM
+abroad	esim	eSIM profiles (not in use)
+abroad	esim	Enabled
+abroad	cellular	SIM · 
+good	esim	Ready
+good	esim	eSIM profiles
+good	esim	ICCID 8986 0000 0000 0000 0001
+good	esim	In use
+good	esim	Chunghwa Telecom
+good	esim	giffgaff
+good	tailscale	This device
+good	tailscale	Hostname
+good	tailscale	u60-pro
+good	tailscale	IP
+good	tailscale	100.64.0.7
+good	tailscale	DERP
+good	tailscale	hkg
+good	tailscale	Subnet routes
+good	tailscale	192.168.0.0/24
+good	tailscale	Peers (link to this device)
+good	tailscale	fd7a:115c:a1e0::7
+good	tailscale	me@example.com
+good	tailscale	1.102.4 · linux
+good	tailscale	2027-03-01
+good	tailscale	100.64.0.2 · macOS · ↓1.2GB ↑50MB
+good	tailscale	100.64.0.4 · linux · exit node
+good	tailscale	macbook-pro
+good	tailscale	100.64.0.2
+good	tailscale	Direct
+good	tailscale	Relay
+good	tailscale	Online
+good	tailscale	Offline
+good	tailscale	old-ipad
+*	perf	Render rate
+*	perf	Touch report rate
+*	power-menu	Power
+*	power-menu	Power off
+*	power-menu	Restart
+*	power-menu	Cancel
+nosim	home	No SIM
+loading	home	Loading…
+empty	exit	Login needed
+empty	home	Log in from the web admin
+abroad	home	Exit node
+lowbat	home	Battery low; charge soon
+full-charging	system	Charging
+!loading,datad-down	charts-collecting	Collecting · chart in 1 min
+empty	wifi	No devices connected yet
+*	cellular	Network Operator
+good	exit	203.0.113.24
+good	net	China Telecom 46011
+good	net	Local
+good	net	Auto
+good	net	China Unicom
+good	net	Current
+good	net	Barred
+good	net	Search
+good	net	Back to auto
+abroad	exit	Public IP
+abroad	net	Roaming
+abroad	net	Manual
+datad-down	net	Can't reach the admin backend
+loading	exit	Looking up…
+good	scene	Choose
+good	scene	Auto
+good	scene	Switches by each scenario's conditions below
+full-charging	scene	Pinned
+good	exit	203.0.113.24
+good	home	Local
+datad-down	home	No update
+nosignal	home	Searching
+nsa	home	n78 100M + B3 20M + B1 20M
+lte	home	China Telecom · 4G LTE · Local
+lte	home	B3 20M
+3g	home	China Telecom · 3G WCDMA · Local
+3g	home	B1
+5ga	home	China Telecom · 5G SA · Local
+5ga	home	5G-A
+edge	home	China Telecom · 2G EDGE · Local
+edge	home	GSM 900
+nsa	home	5G
+good	wifi	MacBook
+good	wifi	5 GHz · ↓
+empty	wifi	No devices connected yet
+good	net-sc-armed	Tap again
+good	net-sc-pending	Switching…
+good	net-auto-already	Already on automatic selection
+good	esim-current	Already in use
+good	wifi	Great signal
+*	exit	Tailscale
+*	cellular	Cellular
+*	wifi	Wi-Fi
+*	exit	Route
+*	cellular	APN
+*	cellular	Network mode
+*	cellular	5G NSA
+*	cellular	Network Operator
+good	cellular	China Telecom · Auto
+good	cellular	Not locked
+*	apn	Current
+*	apn	Auto
+good	apn	China Telecom
+good	apn	ctiot · IPv4v6 · Chosen automatically
+good	apn	CTNET
+good	apn	ctnet · IPv4v6
+abroad	apn	ctnet · IPv4v6 · Set manually
+good	apn	Candidates for this SIM
+*	apn	Manual APNs
+good	apn	In use · IoT
+good	apn	On IoT APN "ctiot"
+abroad	apn	In use (this SIM)
+abroad	apn	This SIM stays on "ctnet"
+loading	apn	Loading…
+good	apn-already	Already automatic
+good	apn-armed	Tap again
+good	apn-pending	Switching…
+nosim	esim	No SIM
+nosim	cellular	No SIM
+*	home	Carriers
+good	home	↓ n78 100M + n1 20M   ↑ n78
+today	home	↓ n5 15M   ↑ n5
+3g	home	RSSI -75 dBm
+good	home	5G
+us	home	5G UC
+us	home	T-Mobile · 5G SA · Roaming
+jp	home	4G+
+jp	home	SoftBank · 4G LTE-A · Roaming
+nosignal	home	SOS
+good	exit	Connections & speed test
+good	exit	Public IP
+good	exit	Connections & speed test
+full-charging	system	Fully charged
+weak	system	At limit; charging paused
+datad-down	system	Estimate
+bandlock	lock	n78
+bandlock	lock	B3
+bandlock	lock	n41
+bandlock	lock	B1
+bandlock	lock	All bands (not locked)
+*	system	语言 / Language
+*	system	Alert SMS use this too
+
+# home: datad story headline_en / hint_en (tests/render/views.h)
+good	home	All good
+weak	home	Slow
+weak	home	Weak signal, RSRP -112 dBm; try ne
+nosignal	home	SOS only
+nosignal	home	Check your balance or line status;
+nosim	home	No SIM
+nosim	home	Insert a SIM, or enable an eSIM pr
+abroad	home	All good
+lowbat	home	All good
+full-charging	home	All good
+long-names	home	All good
+empty	home	All good
+nsa	home	All good
+lte	home	Slow
+lte	home	Only one 20 MHz carrier here
+3g	home	3G only
+3g	home	Online but slow; probably no 4G/5G
+nodata	home	Offline
+nodata	home	Check mobile data, APN, or your ba
+5ga	home	All good
+edge	home	2G only
+edge	home	Very slow; probably no 4G/5G nearb
+crowd	home	Slow
+crowd	home	Cell busy, RSRQ -18 dB; moving won
+today	home	Slow
+today	home	Noisy signal, SINR -1.9 dB; move o
+us	home	All good
+jp	home	All good
+nosvc	home	No service
+nosvc	home	Searching; try another spot
+bandlock	home	All good
+# 语言 row (L2)
+good	system-lang-failed	Couldn't switch
+good	lang-switching	Switching to
+# Diagnose, Placement, Diagnose › on home, stall (manager docs/designs/slow-diagnosis.md §12, 10-02)
+*	cellular	Troubleshoot
+*	cellular	Diagnose
+*	cellular	Placement
+stall	home	No traffic
+stall	home	Signal and data are up, but nothing
+weak,crowd,nodata,stall,today	home	Diagnose ›
+stall	diagnose-start	Checking…
+stall	diagnose-start	About 10 s; sends a few probe packets
+stall	diagnose-start	Waiting
+diagnose-running	diagnose	About 10 s; sends a few probe packets
+diagnose-running	diagnose	Testing…
+diagnose-running	diagnose	Waiting
+diagnose-running	diagnose	● OK
+diagnose-running	diagnose	● OK · No cap · QCI 9
+diagnose-running	diagnose	Cellular link
+diagnose-running	diagnose	Cell load
+diagnose-running	diagnose-busy	Checking; one moment
+diagnose-result	diagnose	Cellular link unstable
+diagnose-result	diagnose	Try again in a few minutes, or move · +1 more
+diagnose-result	diagnose	● Can't check
+diagnose-result	diagnose	No devices on Wi-Fi
+diagnose-result	diagnose	QoS unavailable
+diagnose-result	diagnose	▲ Suspect
+diagnose-result	diagnose	latency 3.0× usual
+diagnose-result	diagnose	Speed
+diagnose-result	diagnose	Direct ↓ 86 Mbps
+diagnose-result	diagnose	Add speed test · ~5 s, ≤30 MB
+diagnose-result	diagnose	· right?
+diagnose-result	diagnose	Wrong
+diagnose-result	diagnose-thanks	· noted, thanks
+diagnose-result	diagnose-roam-armed	Uses roaming data; tap again
+diagnose-result	diagnose-speed	Testing…
+diagnose-result	diagnose-speed	Testing speed…
+diagnose-result	diagnose-again	Checking…
+placement	placement	5G SINR · higher is better
+placement	placement	14.5
+placement	placement	● Good signal · RSRP -92
+placement	placement	Best so far
+placement	placement	18.0 · 
+placement	placement	Compared
+placement	placement	▲ 3.5 dB below best
+placement	placement	n78 · PCI 603
+placement	placement	Start over
+placement	placement	Resets on a new cell; the screen stays on here
+diagnose-running	diagnose	Checking… 3/5
+diagnose-result	diagnose-error	Agent not responding
+diagnose-result	diagnose-error	Retry
+diagnose-result	diagnose-error	Cellular link
+op-busy	home	Busy: network mode (Web)
+op-datad-stuck	home	Data service not responding
+op-verifying,op-rollback-off	home	Checking
+op-verifying	home	if no data
+op-rolled-back	home	No data · back to Auto
+op-rollback-failed	home	Failed
+op-verifying,op-rollback-off	op	Setting applied
+op-verifying,op-rollback-off	op	Auto → 5G SA only · Web
+op-verifying,op-rollback-off	op	Revert to Auto
+op-verifying,op-rollback-off	op	Keep 5G SA only
+op-rollback-off	op	Auto revert off: it stays even with no data
+op-verifying	op-armed	Tap again
+op-rolled-back,op-rollback-failed,op-not-applied	op	Got it
+op-rollback-failed	op	Retry revert to Auto
+op-rollback-failed,op-not-applied	op	Restart device
+op-not-applied	op	Common after a modem crash; restart, then try again
+op-verifying	op-armed	Back to Auto now; offline ~30 s while it re-registers
+*	system	Change log
+journal	journal	Network mode · 4G only → Auto
+journal	journal	Scene skipped ×5
+journal-empty	journal	No changes yet
+journal	journal-detail	Undo
+journal	journal-detail-old	Changed since
+journal	journal-cell	Last changed
+journal	journal-cell	10-03 14:32 · Web
+op-notice	home	Auto revert on: reverts a mode change
+op-notice	home	Got it
+# USB attach mode (usbmode.c, 10-07)
+*	system	When a phone is plugged in
+*	system	Ask every time
+*	usb-attach	Use the plugged-in device for
+*	usb-attach	Charge + internet
+*	usb-attach	Fast charging
+*	usb-attach	Ethernet adapter
+*	usb-attach	Remember, do this every time
+*	usb-attach	OK

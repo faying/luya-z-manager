@@ -34,7 +34,7 @@ X
     mkdir -p "$T/run"
     chmod +x "$T"/bin/*
     export TSA_RUN=$T/run TSA_DIR=$T/d TSA_CLI=$T/bin/ts TSA_START=$T/start.sh TSA_LOG=$T/log TSA_TIMEOUT=30 TSA_POLL=10 \
-        TSA_JSONFILTER=$T/bin/jf TSA_PIDOF=$T/bin/pidof TSA_KILL=$T/bin/kill TSA_SLEEP=true
+        TSA_JSONFILTER=$T/bin/jf TSA_PIDOF=$T/bin/pidof TSA_KILL=$T/bin/kill TSA_SLEEP=true TSA_INIT=$T/noinit
     echo 'TS_TAILSCALED_FLAGS=' > "$T/d/tuning.env"
 }
 run() { sh "$HERE/apply.sh" "$@" >/dev/null 2>&1; RC=$?; }
@@ -67,6 +67,19 @@ setup; echo 1 > "$T/pingrc"; echo 'Y=1' > "$T/y.env"
 run "$T/y.env" relay
 check "relay mode does not need a peer ping" '[ $RC = 0 ]'
 
+setup; printf '#!/bin/sh\nls %s/d >> %s/seen; touch %s/running\n' "$T" "$T" "$T" > "$T/start.sh"
+echo 'TS_TAILSCALED_FLAGS=--no-logs-no-support' > "$T/good.env"; run "$T/good.env"
+check "during the trial the previous tuning is saved for start.sh" 'grep -qx tuning.env.rollback "$T/seen" && [ ! -f "$T/d/tuning.env.rollback" ]'
+setup; rm -f "$T/d/tuning.env"; printf '#!/bin/sh\nls %s/d >> %s/seen; touch %s/running\n' "$T" "$T" "$T" > "$T/start.sh"
+echo 'TS_TAILSCALED_FLAGS=--no-logs-no-support' > "$T/good.env"; run "$T/good.env"
+check "no previous tuning: marker during the trial, gone after" 'grep -qx tuning.env.rollback-none "$T/seen" && [ ! -f "$T/d/tuning.env.rollback-none" ]'
+setup; rm -f "$T/d/tuning.env"; echo 'X=BAD' > "$T/bad.env"; run "$T/bad.env"
+check "no previous tuning, rolled back: marker gone too" '[ ! -f "$T/d/tuning.env.rollback-none" ]'
+
+setup; mkdir -p "$T/failbin"; printf '#!/bin/sh\nexit 1\n' >"$T/failbin/cp"; chmod +x "$T/failbin/cp"
+echo 'TS_TAILSCALED_FLAGS=--no-logs-no-support' > "$T/good.env"; PATH=$T/failbin:$PATH run "$T/good.env"
+check "current tuning cannot be saved: nothing switched, exit 1" '[ $RC = 1 ] && [ "$(cat "$T/d/tuning.env")" = "TS_TAILSCALED_FLAGS=" ] && [ ! -s "$T/starts" ] && grep -q "not applied" "$T/log"'
+
 setup; run --none
 check "--none: tuning.env removed" '[ $RC = 0 ] && [ ! -f "$T/d/tuning.env" ]'
 setup; rm -f "$T/d/tuning.env"; echo 'X=BAD' > "$T/bad.env"; run "$T/bad.env"
@@ -75,6 +88,11 @@ check "no previous tuning: rollback leaves none" '[ $RC = 1 ] && [ ! -f "$T/d/tu
 setup; echo 'X=BAD' > "$T/bad.env"; printf '#!/bin/sh\necho old >> %s/starts; touch %s/running\n' "$T" "$T" > "$T/old-start.sh"
 export TSA_ROLLBACK_START=$T/old-start.sh; run "$T/bad.env"; unset TSA_ROLLBACK_START
 check "rollback uses TSA_ROLLBACK_START when the start script is on trial" '[ $RC = 1 ] && [ "$(tail -n 1 "$T/starts")" = old ] && grep -q "rollback starts with" "$T/log"'
+
+setup; printf '#!/bin/sh\necho "$1" >>%s/init.calls\n' "$T" > "$T/init"; chmod +x "$T/init"
+printf '#!/bin/sh\necho killed >> %s/kills; rm -f %s/running\n' "$T" "$T" > "$T/bin/kill"
+echo 'Z=1' > "$T/z.env"; export TSA_INIT=$T/init; run "$T/z.env"; export TSA_INIT=$T/noinit
+check "under procd: init stop, then the start script; never a kill" '[ $RC = 0 ] && grep -qx stop "$T/init.calls" && [ ! -f "$T/kills" ] && [ $(wc -l < "$T/starts") = 1 ]'
 
 run /nonexistent
 check "missing variant file: usage error" '[ $RC = 2 ]'

@@ -1,0 +1,5 @@
+/* batch 4 page: /router/wifi (loaded with pages.css as router.css) */
+.wf-desc { margin: -4px 4px 12px; }
+@media (min-width: 640px) { .wf-2col { grid-template-columns: 1fr 1fr; } .wf-2col > .wf-span { grid-column: 1 / -1; } }
+.wf-note { margin: 0; padding: 0 16px 12px; }
+.wf-show { justify-self: start; }

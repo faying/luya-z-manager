@@ -2,7 +2,7 @@
 
 ## Scope
 
-This policy covers the open-u60-pro toolkit code (zte-agent, web admin, install kit), not ZTE firmware or hardware — report those directly to ZTE.
+This policy covers the Luya-Z code (luyaz-core, luyaz-web web admin, install kit; zte-agent was removed on 2026-10-14), not ZTE firmware or hardware — report those directly to ZTE.
 
 ## Reporting a Vulnerability
 
@@ -22,6 +22,6 @@ Only the latest release on the `main` branch is actively supported with security
 
 ## Security Considerations
 
-- `zte-agent` binds to `0.0.0.0:9090` on the device LAN — it is intended for local network use only and should not be exposed to the internet.
-- No authentication is implemented by default; the agent trusts all clients on the local network.
+- The web admin (luyaz-web) binds to `0.0.0.0:9090` on the device LAN — it is intended for local network use only and should not be exposed to the internet. It requires a login (the admin password in `/data/luyaz/web.env`; with no password there it refuses every login) and checks `Origin` on writes.
+- luyaz-core listens on `127.0.0.1:9460` only and does not authenticate local clients: anything running on the device can use it.
 - SSH credentials and device access tokens should never be committed to the repository.

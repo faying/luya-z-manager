@@ -1,0 +1,108 @@
+/* luyaz-web: the utilities the Next.js pages get from Tailwind, and the few page bits
+ * that were Tailwind class strings there (help button, trend card). Tokens only, no colours. */
+@layer base {
+*,
+::before,
+::after { box-sizing: border-box; border: 0 solid; margin: 0; padding: 0; }
+html { -webkit-text-size-adjust: 100%; font-family: var(--nd-font, var(--font-geist), "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif); }
+body { line-height: 1.5; }
+a { color: inherit; text-decoration: inherit; }
+button, input { font: inherit; color: inherit; background: transparent; }
+button { cursor: pointer; }
+svg { display: block; flex-shrink: 0; }
+}
+@layer utilities {
+.block { display: block; }
+.hidden { display: none; }
+.items-center { align-items: center; }
+.gap-1 { gap: 4px; }
+.gap-2 { gap: 8px; }
+.ms-auto { margin-inline-start: auto; }
+.mt-5 { margin-top: 20px; }
+.mt-6 { margin-top: 24px; }
+.shrink-0 { flex-shrink: 0; }
+.text-start { text-align: start; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flex { display: flex; }
+.grid { display: grid; }
+.flex-1 { flex: 1 1 0%; }
+.flex-col { flex-direction: column; }
+.min-w-0 { min-width: 0; }
+.min-h-dvh { min-height: 100dvh; }
+.content-start { align-content: start; }
+.gap-4 { gap: 16px; }
+.mb-4 { margin-bottom: 16px; }
+.mt-2 { margin-top: 8px; }
+.p-3 { padding: 12px; }
+.bg-nd-bg { background: var(--nd-bg); }
+.text-nd-t1 { color: var(--nd-t1); }
+@media (min-width: 640px) { .sm\:flex { display: flex; } .sm\:hidden { display: none; } }
+@media (min-width: 768px) { .md\:inline-flex { display: inline-flex; } }
+@media (min-width: 1024px) {
+  .lg\:flex { display: flex; }
+  .lg\:hidden { display: none; }
+  .t-cols { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 24px; }
+  .p-3 { padding: 16px; }
+}
+}
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Help: a 44×44 hit area around an 18px mark, the text in a native popover. */
+.nd-help { display: inline-flex; width: 44px; height: 44px; margin: -12px 0; align-items: center; justify-content: center; border-radius: 9999px; color: var(--nd-t3); vertical-align: middle; }
+.nd-help:hover { color: var(--nd-t1); }
+.nd-pop { max-width: min(300px, calc(100vw - 32px)); margin: auto; border-radius: 8px; background: var(--nd-card); color: var(--nd-t1); padding: 12px; font-size: 14px; line-height: 20px; box-shadow: var(--nd-shadow-float), 0 0 0 1px var(--nd-hair); }
+
+.t-link { font-weight: 500; color: var(--nd-accT); }
+.t-link:hover { text-decoration: underline; text-underline-offset: 4px; }
+.t-card { border-radius: 12px; background: var(--nd-card); box-shadow: inset 0 0 0 1px var(--nd-hair); }
+.t-collect { display: flex; height: 160px; align-items: center; justify-content: center; font-size: 14px; color: var(--nd-t2); }
+.t-trend { width: 100%; height: 160px; }
+.t-plotbox { position: relative; }
+.t-plot { position: absolute; inset: 0; }
+.t-axis { margin-top: 8px; display: flex; justify-content: space-between; font-size: 12px; color: var(--nd-t3); }
+.t-note { padding: 0 16px 12px; font-size: 14px; line-height: 20px; color: var(--nd-t2); }
+.t-note--ok { color: var(--nd-okT); }
+.t-note--bad { color: var(--nd-badT); }
+.t-note--warn { color: var(--nd-warnT); }
+.t-sw { display: inline-flex; align-items: center; gap: 8px; }
+
+/* Language switch: icon + the other language's name. */
+.t-lang { width: auto; gap: 6px; padding: 0 10px; font-size: 14px; }
+
+/* ⌘K page search (static/shell.js). */
+.t-palette { margin: 10vh auto auto; width: min(560px, calc(100vw - 32px)); max-height: 70vh; border-radius: 12px; background: var(--nd-card); color: var(--nd-t1); box-shadow: var(--nd-shadow-float), 0 0 0 1px var(--nd-hair); overflow: hidden; }
+.t-palette[open] { display: flex; flex-direction: column; }
+.t-palette::backdrop, .t-dialog::backdrop { background: rgb(0 0 0 / 0.4); }
+/* Tier-3 confirm and "session expired" (write.rs, proxy.rs): a native modal <dialog>. */
+.t-dialog { margin: auto; width: min(440px, calc(100vw - 32px)); padding: 20px; border-radius: 12px; background: var(--nd-card); box-shadow: var(--nd-shadow-float), 0 0 0 1px var(--nd-hair); }
+.t-dialog__title { font-size: 20px; line-height: 28px; font-weight: 500; margin-bottom: 12px; }
+.t-dialog__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.t-palette__bar { display: flex; align-items: center; gap: 8px; padding: 0 16px; color: var(--nd-t3); box-shadow: inset 0 -1px 0 var(--nd-hair); }
+.t-palette__bar input { flex: 1; min-height: 52px; font-size: 16px; color: var(--nd-t1); outline: none; }
+.t-palette__bar input::placeholder { color: var(--nd-t3); }
+.t-palette__list { list-style: none; overflow-y: auto; padding: 8px; }
+.t-palette__list a { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border-radius: 8px; font-size: 15px; }
+.t-palette__list a[aria-selected="true"], .t-palette__list a:hover { background: var(--nd-track); }
+.t-palette__group { font-size: 13px; color: var(--nd-t3); }
+.t-palette__empty { padding: 24px 16px; font-size: 14px; color: var(--nd-t2); text-align: center; }
+
+/* Login (band page, like the old /login). */
+.t-login { padding: 48px 16px 40px; }
+.t-login__main { margin: 0 auto; display: grid; width: 100%; max-width: 480px; gap: 24px; }
+.t-login__form { display: grid; gap: 16px; padding: 16px; }
+.t-login__label { display: block; margin-bottom: -8px; font-size: 14px; font-weight: 600; color: var(--nd-t2); }
+.t-login__err { border-radius: var(--nd-r-field, 8px); background: var(--nd-washB); padding: 12px 16px; font-size: 15px; font-weight: 500; color: var(--nd-badT); }
+@media (min-width: 640px) { .t-login { padding-top: 80px; } }
+/* top-bar status (StatusIcons.tsx) and the alert bar's error line */
+@layer utilities {
+.font-semibold { font-weight: 600; }
+@media (min-width: 640px) { .sm\:inline { display: inline; } }
+.t-remote { margin-inline-end: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--nd-t2); }
+.t-st { position: relative; display: flex; width: 44px; height: 44px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 9999px; color: var(--nd-t2); }
+.t-st:hover { background: var(--nd-track); }
+.t-st--warn { color: var(--nd-warnT); }
+.t-st--bad { color: var(--nd-badT); }
+.t-st--off { color: var(--nd-t3); }
+.t-st__badge { position: absolute; right: 4px; top: 4px; display: flex; height: 18px; min-width: 18px; align-items: center; justify-content: center; border-radius: 9999px; background: var(--nd-primary); padding: 0 4px; font-size: 11px; font-weight: 600; line-height: 1; color: var(--nd-onPrimary); }
+.t-announce__err { white-space: normal; }
+}

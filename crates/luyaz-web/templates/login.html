@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="{{ lang.tag() }}" data-lang="{{ lang.code() }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{ lang.pick("Sign in", "登录") }} · Luya-Z</title>
+<meta name="robots" content="noindex,nofollow">
+<link rel="icon" href="{{ crate::assets::url("favicon.svg") }}" type="image/svg+xml">
+<script>(function(){try{var c=localStorage.getItem("u60.theme");document.documentElement.dataset.theme=(c==="light"||c==="dark")?c:(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");}catch(e){document.documentElement.dataset.theme="light";}})();</script>
+<link rel="stylesheet" href="{{ crate::assets::url("app.css") }}">
+</head>
+<body>
+<div class="nd nd-bandpage min-h-dvh t-login">
+<main class="t-login__main">
+<header>
+<h1 class="nd-title">Luya-Z</h1>
+<p class="nd-body nd-bandpage__sub">{{ lang.pick("Sign in to manage your router.", "登录后管理你的设备。") }}</p>
+</header>
+<form method="post" action="/login" class="nd-group t-login__form">
+<input type="hidden" name="next" value="{{ next }}">
+<label for="pw" class="t-login__label">{{ lang.pick("Admin password", "管理密码") }}</label>
+<input id="pw" name="password" type="password" class="nd-field" autocomplete="current-password" required autofocus{% if !error.is_empty() %} aria-invalid="true" aria-describedby="pw-err"{% endif %}>
+{% if !error.is_empty() %}<p id="pw-err" role="alert" class="t-login__err">{{ error }}</p>{% endif %}
+<button type="submit" class="nd-btn nd-btn--primary">{{ lang.pick("Sign in", "登录") }}</button>
+</form>
+</main>
+</div>
+</body>
+</html>

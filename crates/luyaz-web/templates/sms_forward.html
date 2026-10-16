@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("sys.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<div class="pg-col" data-signals="{_tab: 'cfg'}">
+<p class="nd-body">{{ l.pick("Automatically forward SMS to Telegram, webhooks, and more.", "自动把短信转发到 Telegram、Webhook 等。") }}</p>
+{{ self.leaf("fwd-status")|safe }}
+<div class="sf-tabs nd-seg nd-seg--block" role="tablist" aria-label="{{ l.pick("Forwarding sections", "短信转发分区") }}"><div class="nd-seg__track">
+{% for (k, label, sel) in self.tabs() %}<button type="button" role="tab" id="fwd-tab-{{ k }}" class="nd-seg__item" aria-controls="fwd-p-{{ k }}" aria-selected="{{ sel }}"{% if sel %} data-selected="true"{% endif %} data-attr:aria-selected="$_tab === '{{ k }}' ? 'true' : 'false'" data-attr:data-selected="$_tab === '{{ k }}'" data-on:click="$_tab = '{{ k }}'">{{ label }}</button>{% endfor %}
+</div></div>
+<section id="fwd-p-cfg" role="tabpanel" aria-labelledby="fwd-tab-cfg" class="grid gap-3" data-show="$_tab === 'cfg'">
+<h2 class="nd-group-title">{{ l.pick("Forward Settings", "转发设置") }}</h2>
+{{ self.leaf("fwd-cfgform")|safe }}
+{{ cfg_op|safe }}
+</section>
+<section id="fwd-p-rules" role="tabpanel" aria-labelledby="fwd-tab-rules" class="grid gap-3" style="display: none" data-show="$_tab === 'rules'">
+<div class="flex items-center gap-3"><h2 class="nd-group-title flex-1">{{ l.pick("Rules", "规则") }}</h2>{{ self.leaf("fwd-rulen")|safe }}<button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/sms/forward/rule/form')">{{ l.pick("Add Rule", "添加规则") }}</button></div>
+<div id="fwd-form"></div>
+{{ form_op|safe }}
+{{ self.leaf("fwd-rules")|safe }}
+{{ rules_op|safe }}
+</section>
+<section id="fwd-p-log" role="tabpanel" aria-labelledby="fwd-tab-log" class="grid gap-3" style="display: none" data-show="$_tab === 'log'">
+<div class="flex items-center flex-wrap gap-2"><h2 class="nd-group-title flex-1">{{ l.pick("Log", "日志") }}</h2>{{ self.leaf("fwd-logbtns")|safe }}</div>
+{{ log_op|safe }}
+{{ self.leaf("fwd-log")|safe }}
+</section>
+</div>
+{% endblock %}

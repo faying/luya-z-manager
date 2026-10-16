@@ -1,0 +1,13 @@
+/* /health (batch 5a): this page's own rules only. */
+.hl-col { display: grid; max-width: 720px; gap: 24px; }
+.hl-desc { max-width: 720px; color: var(--nd-t2); }
+.hl-op:empty { display: none; }
+.hl-op { margin-top: 8px; padding: 0 4px; }
+.hl-note { margin: 0; padding: 0 4px; }
+.hl-item { align-items: flex-start; }
+.hl-level { flex: none; font-size: 14px; }
+.hl-wrap { display: block; overflow-wrap: anywhere; }
+.hl-crash + .hl-crash { border-top: 1px solid var(--nd-sep); }
+.hl-show { font-weight: 500; color: var(--nd-t2); }
+.hl-panel { padding: 0 12px 12px; }
+.hl-pre { margin: 0; max-height: 20rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }

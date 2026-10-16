@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("sys.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<p class="nd-body mb-4 al-desc">{{ l.pick("Crashes, restarts and Wi-Fi rescues on the device. Recorded by a watchdog that keeps running even when this admin backend is down.", "设备上的程序崩溃、重启和 Wi-Fi 兜底记录。由看门狗记录，这个管理后台挂掉时照样记。") }}</p>
+<div class="al-col">
+<section aria-label="{{ l.pick("Status", "状态") }}">
+{{ self.leaf("al-status")|safe }}
+<div class="al-op">{{ mark_op|safe }}</div>
+</section>
+<section aria-labelledby="al-events-t"><h2 id="al-events-t" class="nd-group-title">{{ l.pick("Events", "记录") }}</h2>
+{{ self.leaf("al-events")|safe }}
+</section>
+<section aria-labelledby="al-sms-t"><h2 id="al-sms-t" class="nd-group-title">{{ l.pick("SMS alerts", "短信告警") }}</h2>
+{{ self.leaf("al-smsstate")|safe }}
+<div class="nd-group">
+{{ self.leaf("al-numform")|safe }}
+{{ self.leaf("al-abroad")|safe }}
+</div>
+<div class="al-op">{{ num_op|safe }}</div>
+<div class="al-op">{{ abroad_op|safe }}</div>
+{{ self.leaf("al-recent")|safe }}
+</section>
+</div>
+{% endblock %}

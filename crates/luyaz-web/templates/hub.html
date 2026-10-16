@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<div class="mt-6 grid gap-2">
+{% for g in sections %}<section><h2 class="nd-group-title">{{ g.title }}</h2><div class="nd-group">
+{% for i in g.items %}<a class="nd-row" href="{{ i.href }}">{{ crate::shell::icon(i.icon, false, 20, "nd-row__icon")|safe }}<span class="nd-row__text"><span class="nd-row__label">{{ i.label }}</span></span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a>
+{% endfor %}</div></section>
+{% endfor %}</div>
+{% endblock %}

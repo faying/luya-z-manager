@@ -1,0 +1,16 @@
+{%- macro sw(k, id, label) -%}
+<div class="flex items-center gap-3"><span class="nd-body flex-1" id="wg-{{ id }}-l">{{ label }}</span><button type="button" role="switch" class="nd-switch t-switch" aria-labelledby="wg-{{ id }}-l" aria-checked="{{ self.on(k) }}"{% if self.on(k) %} data-selected="true"{% endif %} data-attr:aria-checked="$_wg{{ id }} ? 'true' : 'false'" data-attr:data-selected="$_wg{{ id }}" data-on:click="$_wg{{ id }} = !$_wg{{ id }}"><span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span></button></div>
+{%- endmacro -%}
+<button id="wg-btn" type="button" class="nd-btn nd-btn--secondary nd-btn--sm" aria-expanded="{{ open }}" aria-controls="wg-form" data-on:click="@post('/router/wifi-guest/{% if open %}close{% else %}form{% endif %}')">{% if open %}{{ l.pick("Cancel", "取消") }}{% else %}{{ l.pick("Change", "更改") }}{% endif %}</button>
+<!--leaf-->
+<div id="wg-form">{% if open %}<div class="nd-group grid gap-4 p-4 mt-2 mb-3" role="group" aria-label="{{ l.pick("Guest network settings", "访客网络设置") }}" data-signals="{{ sigs }}">
+{% call sw("2", "on2", l.pick("Guest 2.4 GHz", "访客 2.4 GHz")) %}{% endcall %}
+{% call sw("5", "on5", l.pick("Guest 5 GHz", "访客 5 GHz")) %}{% endcall %}
+<label class="grid gap-1"><span class="nd-aux">{{ l.pick("Guest SSID", "访客 SSID") }}</span><input class="nd-field" autocomplete="off" spellcheck="false" maxlength="32" data-bind="_wgssid"></label>
+<label class="grid gap-1"><span class="nd-aux">{{ l.pick("Guest encryption", "访客加密方式") }}</span><select class="nd-field" data-bind="_wgenc">{% for (v, t) in self.encs() %}<option value="{{ v }}">{{ t }}</option>{% endfor %}{% if let Some(o) = odd_enc %}<option value="{{ o }}">{{ o }}</option>{% endif %}</select></label>
+<label class="grid gap-1"><span class="nd-aux">{{ l.pick("Guest password", "访客密码") }}</span><input class="nd-field" type="password" autocomplete="new-password" spellcheck="false" maxlength="64" placeholder="{% if self.has_pw() %}{{ l.pick("Password set · leave empty to keep it", "已设密码 · 留空不改") }}{% else %}{{ l.pick("No password · 8–64 characters", "没有密码 · 8–64 个字符") }}{% endif %}" data-bind="_wgpw" data-attr:disabled="$_wgenc === 'none'"></label>
+{% call sw("hid", "hid", l.pick("Hide guest SSID", "隐藏访客 SSID")) %}{% endcall %}
+{% call sw("iso", "iso", l.pick("AP Isolation", "AP 隔离")) %}{% endcall %}
+<label class="grid gap-1"><span class="nd-aux">{{ l.pick("Active time (minutes) · 0 = unlimited, up to 1440", "有效时长（分钟）· 0 = 不限，最多 1440") }}</span><input class="nd-field nd-mono wg-time" type="number" min="0" max="1440" inputmode="numeric" autocomplete="off" data-bind="_wgtime"></label>
+<div><button type="button" class="nd-btn nd-btn--primary" data-on:click="@post('/router/wifi-guest/ask', {filterSignals: {include: /^_wg(?!l$)/, exclude: /(?!)/}})">{{ l.pick("Apply", "应用") }}</button></div>
+</div>{% endif %}</div>

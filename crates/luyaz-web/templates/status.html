@@ -1,0 +1,10 @@
+<div id="sig-status">
+<section class="nd-status nd-status--{{ v.tone }}{% if v.tone == "stale" %} nd-stale{% endif %}">
+<div class="nd-status__main">
+<div class="nd-status__state" role="status" aria-live="polite"><span class="nd-mark nd-mark--{{ v.tone }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.symbol }}</span><span>{{ v.word }}</span></span></div>
+{% match v.reason_ref() %}{% when Reason::Stopped { minutes, retrying } %}<div class="nd-status__reason"><span class="nd-fresh">{% if v.l == crate::i18n::Lang::En %}Numbers stopped {{ minutes }} min ago{% else %}数字停在 {{ minutes }} 分钟前{% endif %}</span>{% if *retrying %} · {{ v.l.pick("retrying", "正在重试") }}{% endif %}</div>{% when Reason::Weak { rsrp } %}<div class="nd-status__reason">{% if let Some(r) = rsrp %}RSRP {{ r }} dBm · {% endif %}<a href="/bandlock" class="t-link">{{ v.l.pick("Band lock ›", "去锁频 ›") }}</a></div>{% when Reason::NoService %}<div class="nd-status__reason"><a href="/signal" class="t-link">{{ v.l.pick("Check signal ›", "查看信号 ›") }}</a></div>{% when Reason::None %}{% endmatch %}
+{% if let Some(m) = v.meta %}<div class="nd-status__meta">{{ m }}</div>{% endif %}
+</div>
+{% if v.retry %}<div class="nd-status__actions"><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/retry')">{{ v.l.pick("Retry now", "立即重试") }}</button></div>{% endif %}
+</section>
+</div>

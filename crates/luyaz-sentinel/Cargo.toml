@@ -1,0 +1,18 @@
+[package]
+name = "luyaz-sentinel"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "Luya-Z sentinel for the U60 Pro (MU5250): the screen owner (replaces u60-uid) and the things that must go on when the core (u60d) is dead — Wi-Fi fallback, modem crash recovery, the clock verdict, log caps, ship recover-live, dropbear (u60-sentinel.md Phase 5). std only, no async runtime."
+license = "MIT"
+publish = false
+
+[dependencies]
+libc = "0.2"
+luyaz-alerts = { path = "../luyaz-alerts" }
+serde_json = "1"
+luyaz-wifi = { path = "../luyaz-wifi" }
+
+# Device build: `cargo zigbuild --profile release-device --target aarch64-unknown-linux-musl -p luyaz-sentinel`
+# (panic = abort there; main.rs also aborts from the panic hook, so a panicked worker thread can never
+# leave the screen thread writing a healthy-looking heartbeat).

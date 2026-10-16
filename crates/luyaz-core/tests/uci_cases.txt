@@ -1,0 +1,187 @@
+# uci 配置解析器（rust/src/uci.rs）的对照样例。
+# 每个样例以「=== 包名 [crlf] [nonl]」开头，到下一个「=== 」为止是 /etc/config/<包名> 的内容；
+# crlf = 换行改成 \r\n，nonl = 去掉末尾换行。第一个「=== 」之前的内容（这段说明）不是样例。
+# 期望输出 tests/uci_cases.expected 由 tests/uci_golden_gen.py 用真 uci（2023-08-10-5781664d）生成，不手改。
+# 样例都是编的，只仿照 MU5250 配置的结构，不含设备真实配置。
+=== basic
+# 注释行
+config interface 'lan'
+	option proto 'static'
+	option ipaddr '192.168.0.1'
+	option netmask "255.255.255.0"
+	option ifname br-lan   # 行尾注释
+	option mtu 1500
+
+config interface wan
+	option proto dhcp
+	option 'quoted_name' 'x'
+	option empty_later 'v'
+
+config globals "globals"
+	option ula_prefix 'fd00:1234::/48'
+=== anon
+config wifi-device 'wifi0'
+	option type 'mac80211'
+	option country 'CN'
+
+config wifi-iface 'main_2g'
+	option device 'wifi0'
+	option ssid 'Fixture 2G'
+
+config wifi-iface
+	option device 'wifi0'
+	option ssid 'guest'
+
+config wifi-iface ''
+	option device 'wifi1'
+
+config wifi-device wifi1
+	option type 'mac80211'
+
+config wifi-iface
+	option ssid 'third anon'
+
+config dnsmasq
+	option domainneeded '1'
+
+config dnsmasq
+	list server '/lan/'
+=== lists
+config interface 'zte_mwan2'
+	list track_ip '1.1.1.1'
+	list track_ip 8.8.8.8
+	list track_ip "9.9.9.9"
+	list with_space 'a b'
+	list with_space 'c'
+	list with_tab 'x	y'
+	list empty_item ''
+	list empty_item 'after'
+	option was_string 'first'
+	list was_string 'second'
+	list was_list 'one'
+	list was_list 'two'
+	option was_list 'now string'
+	option dropped 'x'
+	option dropped ''
+	option never ''
+	option kept_pos 'a'
+	option after_kept 'b'
+	option kept_pos 'longer value'
+	option same_len 'aa'
+	option same_len 'bb'
+	list quote_item "it's"
+=== escapes
+config sms 'sms'
+	option sq 'it'\''s'
+	option dq "say \"hi\""
+	option sq_backslash 'C:\path\n'
+	option dq_backslash "a\\b\nc"
+	option unq_backslash a\ b
+	option concat 'a'"b"c
+	option hash_mid abc#def
+	option hash_quoted 'abc#def'
+	option hash_dq "abc # def"
+	option equals 'k=v w=x'
+	option utf8 '中国移动 5G'
+	option multi 'line1
+line2'
+	option multi_dq "first
+second"
+	option cont foo\
+bar
+	option trailing_ws 'x '
+	o short 's'
+	l short_list 'l1'
+c abbrev 'sec2'
+	option a 1; option b 2
+	option c '3';option d 4
+=== crlf crlf
+config zte 'crlf_sec'
+	option a 'one'
+	option b two
+	list l 'x'
+	list l y
+=== nonl nonl
+config last 'sec'
+	option final 'no newline'
+=== pkgline
+package pkgline
+
+config foo 'bar'
+	option baz 'qux'
+=== merge
+config device 'Device'
+	option fan_switch_status '1'
+	option liquid_cooling_switch_status '0'
+
+config other 'other'
+	option x '1'
+
+config device 'Device'
+	option fan_switch_status '0'
+	option added 'yes'
+=== nwinfo
+config sys_info 'sys_info'
+	option network_type 'SA'
+	option simcard_roam 'Home'
+	option net_select 'TCHGWL_5G'
+	option msim_1_0_network_type 'LTE'
+
+config signal_strength 'signal_strength'
+	option signalbar '4'
+	option nr5g_rsrp '-91'
+	option nr5g_snr '17.0'
+
+config band_lock 'band_lock'
+	option nr5g_sa_band_lock '78'
+	option nr5g_nsa_band_lock ''
+	option lte_ext_band_lock '1,3'
+=== empty
+=== comments
+# only comments
+
+   # indented comment
+
+=== spaces_indent
+    config   type1    'name1'
+      option    key    'value'
+	  list   items   'a'
+=== e_typechange
+config interface 'lan'
+	option a '1'
+config device 'lan'
+	option b '2'
+=== e_toomany
+config x 'y'
+	option a b c
+=== e_badoptname
+config x 'y'
+	option a-b 'c'
+=== e_badsecname
+config x 'y-z'
+	option a 'b'
+=== e_before
+option a 'b'
+config x 'y'
+=== e_unterminated
+config x 'y'
+	option a 'abc
+=== e_badcmd
+config x 'y'
+	foo bar
+=== e_semicolon_eol
+config x 'y'
+	option a 'b';
+=== e_config_noname
+config
+=== e_config_nl_only nonl
+config
+=== e_nul_type
+config 'a b' 'y'
+=== e_hash_word
+config x 'y'
+	option#c d
+=== e_cont_space
+config x 'y'
+	option a foo\
+  bar

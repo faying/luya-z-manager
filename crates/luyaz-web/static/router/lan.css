@@ -1,0 +1,3 @@
+/* batch 4 page: lan (loaded with pages.css as router.css) */
+@media (min-width: 640px) { .lan-2col { grid-template-columns: 1fr 1fr; } .lan-3col { grid-template-columns: 1fr 1fr 1fr; } }
+.lan-link { text-decoration: underline; overflow-wrap: anywhere; }

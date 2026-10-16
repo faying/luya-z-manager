@@ -23,7 +23,8 @@
 # does not restart tailscaled then. Before each of its restarts it ends that
 # watcher too, so the one left afterwards is the one the start script that
 # was actually used brings up (a start script on trial is never run again by
-# a watcher after the rollback).
+# a watcher after the rollback). With /etc/init.d/tailscale installed, each
+# restart is "init stop" + the start script (which asks procd to start it).
 # SPDX-License-Identifier: MIT
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -44,6 +45,7 @@ KILL=${TSA_KILL:-kill}
 RUN=${TSA_RUN:-/tmp}
 APPLYING=$RUN/tailscale-apply.pid
 WATCH_PID=$RUN/tailscale-watch.pid
+INIT=${TSA_INIT:-/etc/init.d/tailscale}
 
 log() { mkdir -p "$(dirname "$LOG")"; echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 
@@ -59,6 +61,14 @@ restart() { # [start script]
     w=$(cat "$WATCH_PID" 2>/dev/null)
     case "$w" in '' | *[!0-9]*) ;; *) [ "$w" != $$ ] && kill "$w" 2>/dev/null ;; esac
     rm -f "$WATCH_PID"
+    if [ -x "$INIT" ]; then
+        # under procd a kill would only make procd start it again: stop the
+        # service (its service_stopped cleans up), then the start script
+        # asks procd to start it (or, for an old script on trial, runs it)
+        "$INIT" stop >/dev/null 2>&1
+        sh "${1:-$START}"
+        return
+    fi
     p=$($PIDOF tailscaled)
     [ -n "$p" ] && $KILL $p 2>/dev/null
     i=0; while [ -n "$($PIDOF tailscaled)" ] && [ $i -lt 15 ]; do $SLEEP 1; i=$((i + 1)); done
@@ -94,17 +104,33 @@ echo $$ >"$APPLYING"
 trap 'rm -f "$APPLYING"' EXIT
 trap 'exit 1' INT TERM
 ROUTE=$(field '@.Self.PrimaryRoutes[0]')
-[ -f "$D/tuning.env" ] && cp "$D/tuning.env" "$D/tuning.env.rollback" || rm -f "$D/tuning.env.rollback"
+# Until it decides, the previous tuning stays here; start.sh puts it back if
+# this run is cut off before that (power cut, reboot): .rollback is the old
+# file, .rollback-none says there was none. Written before the variant goes in.
+rm -f "$D/tuning.env.rollback" "$D/tuning.env.rollback-none"
+if [ -f "$D/tuning.env" ]; then
+    cp "$D/tuning.env" "$D/tuning.env.rollback.tmp" && mv -f "$D/tuning.env.rollback.tmp" "$D/tuning.env.rollback"
+else
+    : >"$D/tuning.env.rollback-none"
+fi || {
+    # no way back saved (disk full?): do not switch at all
+    rm -f "$D/tuning.env.rollback.tmp"
+    log "could not save the current tuning: $VARIANT not applied"
+    echo "could not save the current tuning; nothing changed" >&2
+    exit 1
+}
+sync
 if [ "$VARIANT" = --none ]; then rm -f "$D/tuning.env"; else cp "$VARIANT" "$D/tuning.env"; fi
 log "apply $VARIANT (mode $MODE, route ${ROUTE:-none})"
 restart
 if wait_healthy "$ROUTE"; then
     log "kept $VARIANT"
-    rm -f "$D/tuning.env.rollback"
+    rm -f "$D/tuning.env.rollback" "$D/tuning.env.rollback-none"
     exit 0
 fi
 log "FAILED $VARIANT: $WHY — rolling back"
 if [ -f "$D/tuning.env.rollback" ]; then mv -f "$D/tuning.env.rollback" "$D/tuning.env"; else rm -f "$D/tuning.env"; fi
+rm -f "$D/tuning.env.rollback-none"
 [ "$ROLLBACK_START" != "$START" ] && log "rollback starts with $ROLLBACK_START"
 restart "$ROLLBACK_START"
 if wait_healthy "$ROUTE"; then log "rolled back, healthy"; else log "rolled back, STILL UNHEALTHY: $WHY"; fi

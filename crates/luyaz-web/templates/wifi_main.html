@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("router.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<div class="pg-col" data-signals:_wfo="false">
+<p class="nd-body">{{ l.pick("The 2.4 GHz and 5 GHz networks of the U60.", "U60 的 2.4 GHz 和 5 GHz 网络。") }}</p>
+{{ self.leaf("wf-status")|safe }}
+{{ self.leaf("wf-guest")|safe }}
+<section aria-labelledby="wf-g-t"><div class="flex items-center gap-3"><h2 id="wf-g-t" class="nd-group-title flex-1">{{ l.pick("Settings", "设置") }}</h2>{{ self.leaf("wf-editbtn")|safe }}</div>
+{{ self.leaf("wf-form")|safe }}
+{{ main_op|safe }}
+<div data-show="!$_wfo">{{ self.leaf("wf-global")|safe }}</div></section>
+<div data-show="!$_wfo">{{ self.leaf("wf-bands")|safe }}</div>
+{{ self.leaf("wf-extras")|safe }}
+{{ psm_op|safe }}
+{{ nfc_op|safe }}
+</div>
+{% endblock %}

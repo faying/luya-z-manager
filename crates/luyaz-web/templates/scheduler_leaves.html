@@ -1,0 +1,22 @@
+<div id="sch-status"><section class="nd-status nd-status--{{ v.tone }}{% if v.tone == "stale" %} nd-stale{% endif %}">
+<div class="nd-status__main">
+<div class="nd-status__state" role="status"><span class="nd-mark nd-mark--{{ v.tone }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.symbol() }}</span><span>{{ v.state }}</span></span></div>
+{% if v.reason.is_some() || v.names.is_some() %}<div class="nd-status__reason"><span{% if v.tone == "bad" %} role="alert"{% endif %}>{% if let Some(r) = v.reason %}{{ r }}{% endif %}{% if let Some(n) = v.names %}<span data-data>{{ n }}</span>{% endif %}</span></div>{% endif %}
+{% if let Some(m) = v.meta %}<div class="nd-status__meta"><span class="nd-fresh">{{ m }}</span></div>{% endif %}
+</div>
+{% if v.retry %}<div class="nd-status__actions"><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/scheduler/refresh')">{{ v.l.pick("Retry", "重试") }}</button></div>{% endif %}
+</section></div>
+<!--leaf-->
+<div id="sch-reboot" class="nd-group{% if v.stale %} nd-stale{% endif %}"><div class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label"><span class="nd-mark nd-mark--{{ v.reboot.0 }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.rsym() }}</span><span>{{ v.reboot.1 }}</span></span></span>{% if !v.reboot.2.is_empty() %}<span class="nd-row__sub block">{{ v.reboot.2 }}</span>{% endif %}</span></div></div>
+<!--leaf-->
+<div id="sch-list" class="nd-group{% if v.stale %} nd-stale{% endif %}">{% match v.rows %}{% when None %}{% for _i in 0..3 %}<div class="nd-row"><span class="nd-skel" style="width:18ch"></span></div>{% endfor %}{% when Some(rows) %}{% if rows.is_empty() %}<div class="nd-row"><span class="nd-body sch-muted">{{ v.l.pick("No scheduled jobs yet. Press “New Job” above to create one.", "还没有计划任务。按上方的「新建任务」创建一个。") }}</span></div>{% endif %}{% for r in rows %}<div class="sch-row">
+<button type="button" role="switch" class="nd-switch t-switch sch-sw" aria-labelledby="sch-on-{{ r.id }} sch-n-{{ r.id }}" aria-checked="{{ r.on }}"{% if r.on %} data-selected="true"{% endif %}{% if v.locked %} disabled data-disabled="true"{% endif %} data-on:click="@post('/scheduler/toggle/ask?id={{ r.id }}&on={{ !r.on }}')"><span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span></button><span id="sch-on-{{ r.id }}" hidden>{{ v.l.pick("Enabled:", "启用：") }}</span>
+<div class="sch-row__main"><div class="nd-body sch-name" id="sch-n-{{ r.id }}" data-data>{% if r.name.is_empty() %}{{ v.l.pick("(no name)", "（无名称）") }}{% else %}{{ r.name }}{% endif %}</div>
+<div class="nd-aux">{{ r.when }}</div>
+<div class="nd-aux nd-mono sch-req" data-data>{{ r.req }}</div>
+{% if let Some(b) = r.banned %}<div class="nd-aux"><span class="nd-mark nd-mark--bad"><span class="nd-mark__sym" aria-hidden="true">{{ v.msym("bad") }}</span><span>{{ b }}</span></span></div>{% endif %}
+{% if let Some(s) = r.restore %}<div class="nd-aux">{{ s }}</div>{% endif %}
+{% if let Some(e) = r.restore_err %}<div class="nd-aux"><span class="nd-mark nd-mark--bad"><span class="nd-mark__sym" aria-hidden="true">{{ v.msym("bad") }}</span><span>{{ v.l.pick("Restore failed: ", "恢复失败：") }}<span data-data>{{ e }}</span></span></span></div>{% endif %}
+<div class="nd-aux mt-1"><span class="nd-mark nd-mark--{{ r.last.0 }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.msym(r.last.0) }}</span><span>{{ r.last.1 }}{% if !r.last.2.is_empty() %}<span data-data>{{ r.last.2 }}</span>{% endif %}</span></span></div></div>
+<div class="sch-row__acts"><button type="button" id="sch-e-{{ r.id }}" class="nd-btn nd-btn--ghost nd-btn--sm" aria-labelledby="sch-e-{{ r.id }} sch-n-{{ r.id }}"{% if v.locked %} disabled{% endif %} data-on:click="@post('/scheduler/form?id={{ r.id }}')">{{ crate::shell::icon("NotePencil", false, 20, "")|safe }}{{ v.l.pick("Edit", "编辑") }}</button><button type="button" id="sch-d-{{ r.id }}" class="nd-btn nd-btn--ghost nd-btn--sm" aria-labelledby="sch-d-{{ r.id }} sch-n-{{ r.id }}"{% if v.locked %} disabled{% endif %} data-on:click="@post('/scheduler/del/ask?id={{ r.id }}')">{{ crate::shell::icon("Trash", false, 20, "")|safe }}{{ v.l.pick("Delete", "删除") }}</button></div>
+</div>{% endfor %}{% endmatch %}</div>

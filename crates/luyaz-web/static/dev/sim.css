@@ -1,0 +1,19 @@
+/* /router/sim (batch 5c): this page's own rules only. */
+.sim-col { display: grid; max-width: 720px; gap: 24px; }
+.sim-head { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.sim-head .nd-title { flex: 1 1 auto; }
+.sim-desc { color: var(--nd-t2); margin-top: -8px; }
+.sim-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.sim-panel { display: grid; gap: 16px; padding: 16px; margin-top: 16px; }
+.sim-panel h3 { font-weight: 600; }
+.sim-field { display: grid; gap: 4px; }
+.sim-label { font-weight: 600; }
+/* 16 px or more: iOS zooms into smaller fields */
+.sim-field input { font-size: 16px; min-height: 44px; }
+.sim-tries { margin: 0; }
+.sim-tries--low { color: var(--nd-badT); font-weight: 600; }
+.sim-op:empty { display: none; }
+.sim-op { margin-top: 12px; padding: 0 4px; }
+.sim-note { margin: 0; padding: 0 4px; }
+.sim-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.sim-form { display: grid; gap: 16px; }

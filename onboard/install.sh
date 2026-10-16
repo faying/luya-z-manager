@@ -5,7 +5,7 @@
 #   ./install.sh                     # 全套：开 ADB → SSH → 高级后台 → devui → eSIM
 #   ./install.sh ssh                 # 只开 ADB + 持久化 SSH
 #   ./install.sh admin devui         # 只装指定组件（SSH 或 ADB 通着就行）
-#   ./install.sh recover             # u60 ship 的开机收尾：换上 /data/u60-ship/u60-recover.sh（设备上自检过才换），
+#   ./install.sh recover             # u60 ship 的开机收尾：换上 /data/luyaz/ship/luyaz-recover.sh（设备上自检过才换），
 #                                    #   并在 rc.local 各服务启动行之前加一行调用它。不在全套里，要单独点名
 #   ./install.sh status              # 看设备上各组件状态
 #   ./install.sh doctor              # 只读体检（开机同步、自动升级、各服务、心跳、Wi-Fi、告警…）
@@ -215,14 +215,22 @@ show_status() { # 状态不需要推整个包，只推设备端脚本
 }
 
 show_doctor() { # 体检脚本是独立的：推包里那份到 /tmp 直接跑，没装过 guard 的设备也能查
-  local src="$KIT/payload/guard/doctor.sh"
-  [ -f "$src" ] || fail "包里没有 payload/guard/doctor.sh"
+  # doctor.sh 是薄壳（转给核心的 doctor）；核心没有 doctor 或要 --report 时找同目录的
+  # doctor-legacy.sh，所以两个一起推到同一个临时目录
+  local dir="$KIT/payload/guard" d=/tmp/u60-kit-doctor f files=doctor.sh
+  [ -f "$dir/doctor.sh" ] || fail "包里没有 payload/guard/doctor.sh"
+  [ -f "$dir/doctor-legacy.sh" ] && files="doctor.sh doctor-legacy.sh"
   if [ "$CH" = ssh ]; then
-    ssh "${SSH_OPTS[@]}" "root@$GATEWAY" "cat > /tmp/u60-kit-doctor.sh" < "$src" || fail "体检失败：推送脚本没成功"
+    # shellcheck disable=SC2086
+    COPYFILE_DISABLE=1 tar -C "$dir" -cf - $files \
+      | ssh "${SSH_OPTS[@]}" "root@$GATEWAY" "rm -rf $d && mkdir -p $d && tar -xf - -C $d" || fail "体检失败：推送脚本没成功"
   else
-    adb push "$(localpath "$src")" /tmp/u60-kit-doctor.sh >/dev/null || fail "体检失败：adb push 没成功"
+    dev_run "rm -rf $d && mkdir -p $d" >/dev/null || fail "体检失败：建不了 $d"
+    for f in $files; do
+      adb push "$(localpath "$dir/$f")" "$d/$f" >/dev/null || fail "体检失败：adb push 没成功"
+    done
   fi
-  dev_run "sh /tmp/u60-kit-doctor.sh; r=\$?; rm -f /tmp/u60-kit-doctor.sh; exit \$r" | tr -d '\r'
+  dev_run "sh $d/doctor.sh; r=\$?; rm -rf $d; exit \$r" | tr -d '\r'
 }
 
 push_file() { # <local> <device path>
@@ -251,6 +259,23 @@ do_backup() {
   dev_run "sh /tmp/u60-cb.sh verify /tmp/u60-cb-check.tgz; r=\$?; rm -f /tmp/u60-cb-check.tgz /tmp/u60-cb.sh; exit \$r" | tr -d '\r' \
     || fail "备份校验没过：$out"
   ok "配置已备份到 $out"
+  # 系统文件另存一份（只给人看、升级前留底，restore 不会恢复它们）：rc.local、我们的 init 脚本、
+  # dropbear 的 host key 和启动脚本。固件升级会换掉 rc.local 和 /etc/init.d（B31 社区调研 K4）。
+  local sys="${out%.tgz}.system.tgz"
+  local tarcmd="cd / && tar czf - \$(for f in etc/rc.local etc/init.d/luyaz-core etc/init.d/zwrt-datad etc/init.d/luyaz-sentinel etc/init.d/luyaz-web \
+      etc/init.d/u60-guard etc/init.d/u60-uid data/ssh/dropbear_ed25519_host_key data/ssh/authorized_keys \
+      data/local/tmp/start_dropbear.sh; do [ -e \$f ] && echo \$f; done)"
+  if [ "$CH" = ssh ]; then
+    ssh "${SSH_OPTS[@]}" "root@$GATEWAY" "$tarcmd" < /dev/null > "$sys" 2>/dev/null
+  else
+    adb exec-out "$tarcmd" > "$sys" 2>/dev/null
+  fi
+  chmod 600 "$sys"
+  if tar tzf "$sys" 2>/dev/null | grep -qx 'etc/rc.local'; then
+    ok "系统文件（rc.local、init 脚本、SSH host key）另存到 $sys（只留底，restore 不恢复）"
+  else
+    rm -f "$sys"; warn "rc.local、init 脚本、SSH host key 没存下来"
+  fi
   [ -n "$WITH_TS" ] && warn "这份备份含 Tailscale 身份：恢复到另一台设备前，先让这台下线，否则两台会抢同一个节点。"
   info "含后台密码、短信号码、订阅地址等：只放在这台电脑上，别发给别人。"
 }
@@ -328,14 +353,14 @@ case " $COMPONENTS " in *" admin "*)
   fi
   if [ -z "$AGENT_PW" ]; then
     # 设备上没装过后台时，现在就停，别等推送完在设备端才失败（那样 devui/esim 也跟着没装）
-    dev_run '{ [ -s /data/zte-agent.env ] || [ -f /data/local/tmp/start_zte_agent.sh ]; } && echo AGENT_INSTALLED' 2>/dev/null | grep -q AGENT_INSTALLED \
+    dev_run '{ [ -s /data/luyaz/web.env ] || [ -s /data/zte-agent.env ] || [ -f /data/local/tmp/start_zte_agent.sh ]; } && echo AGENT_INSTALLED' 2>/dev/null | grep -q AGENT_INSTALLED \
       || fail "需要高级后台密码：设备上还没装过后台。设置 AGENT_PASSWORD（或 ROUTER_PASSWORD，两者相同时）再跑"
     warn "没有后台密码：沿用设备上已有的。"
   else
     case "$AGENT_PW" in
-      *[\'\"\\\ ]*) fail "后台密码不能含引号、反斜杠或空格（设备上的 /data/zte-agent.env 和屏幕 eSIM 页都按原样读它）" ;;
+      *[\'\"\\\ ]*) fail "后台密码不能含引号、反斜杠或空格（设备上的 /data/luyaz/web.env 按原样存它，管理网页 luyaz-web 按原样读）" ;;
     esac
-    # 设备端 agent-auth.sh migrate 把它写成 /data/zte-agent.env（600）
+    # 设备端 agent-auth.sh migrate 把它写成 /data/luyaz/web.env（600；Phase 10 前的布局是 /data/zte-agent.env）
     printf "export ZTE_AGENT_PASSWORD='%s'\n" "$AGENT_PW" > "$TMP/u60-kit/payload/agent.env"
   fi
 ;; esac
@@ -347,7 +372,8 @@ S="$TMP/u60-kit/payload"
 for c in $COMPONENTS; do
   case "$c" in
     ssh)   cp "$KIT/payload/dropbear" "$S/"; cp "$SSH_KEY.pub" "$S/authorized_keys" ;;
-    admin) cp "$KIT/payload/zte-agent" "$KIT/payload/admin.tgz" "$S/"; cp -R "$KIT/payload/guard" "$S/" ;;
+    admin) cp "$KIT/payload/luyaz-web" "$S/"; cp -R "$KIT/payload/guard" "$S/"
+           if [ -d "$KIT/payload/operator-logos" ]; then cp -R "$KIT/payload/operator-logos" "$S/"; fi ;;
     devui) cp -R "$KIT/payload/devui" "$S/"; cp -R "$KIT/payload/guard" "$S/" ;;
     esim)  cp "$KIT/payload/esim.tgz" "$S/" ;;
     recover) [ -f "$KIT/payload/guard/u60-recover.sh" ] || fail "这个装机包没带 u60-recover.sh（装机包太旧？）"
@@ -378,17 +404,37 @@ echo
 ok "设备端安装完成。"
 
 # ── 6. 从电脑验证 SSH ────────────────────────────────────────────────────────
+# 设备端已经确认 dropbear 进程在、端口在监听（device/install.sh do_ssh，不然走不到这里）。
+# 这里只看电脑这边连不连得上，失败按 ssh 的报错分开说：拒绝连接 / 认证失败 / 超时 / 其他。
+SSH_WHY=
 verify_ssh() {
-  local i
-  for i in 1 2 3 4 5; do ssh_ok && return 0; sleep 3; done
+  local i err
+  [ -f "$SSH_KEY" ] || { SSH_WHY=nokey; return 1; }
+  for i in 1 2 3 4 5; do
+    err=$(ssh "${SSH_OPTS[@]}" -o BatchMode=yes "root@$GATEWAY" true </dev/null 2>&1 >/dev/null) && return 0
+    case "$err" in
+      *"Connection refused"*) SSH_WHY=refused ;;
+      *"Permission denied"*) SSH_WHY=auth ;;
+      *"timed out"*|*"Operation timed out"*) SSH_WHY=timeout ;;
+      *) SSH_WHY="other:$(printf '%s' "$err" | tail -n 1)" ;;
+    esac
+    sleep 3
+  done
   return 1
 }
 case " $COMPONENTS " in *" ssh "*)
   if verify_ssh; then
     ok "SSH 公钥登录验证通过。"
   else
-    warn "设备上 SSH 已经起来了，但这台电脑连不上 $GATEWAY:${SSH_PORT}。"
-    warn "确认电脑连着 U60 的 Wi-Fi、代理没有劫持 ${GATEWAY}，再试: ssh -p $SSH_PORT -i $SSH_KEY root@$GATEWAY"
+    warn "设备上 dropbear 已经在 ${SSH_PORT} 端口监听，但这台电脑登不上 $GATEWAY:${SSH_PORT}："
+    case "$SSH_WHY" in
+      nokey)   warn "  这台电脑上没有私钥 $SSH_KEY。" ;;
+      refused) warn "  连接被拒绝：连到的不是 U60（GATEWAY 不对？），或代理把 $GATEWAY 接到了别处。" ;;
+      auth)    warn "  连上了但公钥认证失败：$SSH_KEY 不是包里那把公钥对应的私钥。" ;;
+      timeout) warn "  连接超时：电脑和 U60 之间不通（没连 U60 的 Wi-Fi？代理/防火墙挡了？）。" ;;
+      *)       warn "  ${SSH_WHY#other:}" ;;
+    esac
+    warn "手动再试: ssh -p $SSH_PORT -i $SSH_KEY root@$GATEWAY"
   fi
 ;; esac
 

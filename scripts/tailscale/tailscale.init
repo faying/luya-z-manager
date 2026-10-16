@@ -1,0 +1,35 @@
+#!/bin/sh /etc/rc.common
+# /etc/init.d/tailscale — procd supervises tailscaled (scripts/tailscale/start.sh
+# header, "Supervision"). Installed from source/manager/scripts/tailscale/tailscale.init.
+# Never "enable" it: rc.local's "sh /data/tailscale/start.sh" starts it through
+# this file, and "enable" on this firmware leaves whiteouts in the overlay.
+# SPDX-License-Identifier: MIT
+
+START=96
+USE_PROCD=1
+
+D=/data/tailscale
+SCRIPT=$D/start.sh
+
+start_service() {
+    [ -f "$D/disabled" ] && return 0
+    [ -f "$SCRIPT" ] || return 1
+    rm -f /tmp/tailscale.stopped
+    : >/tmp/tailscale.intended # a start, not a respawn: __fg does not back off
+    procd_open_instance
+    procd_set_param command /bin/sh "$SCRIPT" __fg
+    # Back again 5 s after it dies, without limit: the backoff and the daily
+    # cap are in __fg (it sleeps before exec), which procd sees as running.
+    procd_set_param respawn 3600 5 0
+    procd_set_param term_timeout 15
+    procd_close_instance
+}
+
+stop_service() {
+    : >/tmp/tailscale.stopped
+}
+
+service_stopped() {
+    # procd's kill returns before tailscaled is gone: __cleanup waits for it
+    [ -f "$SCRIPT" ] && sh "$SCRIPT" __cleanup
+}

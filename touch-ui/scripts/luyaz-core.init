@@ -1,0 +1,106 @@
+#!/bin/sh /etc/rc.common
+# procd service for luyaz-core (the core, formerly zwrt-datad; manager
+# docs/designs/u60-phase10.md 10e R1/R2). Install to /etc/init.d/luyaz-core;
+# rc.local starts it with `/etc/init.d/luyaz-core start` once the (retired)
+# luyaz-migrate.sh run moved the core. Began as a copy of zwrt-datad.init (gone since Luya-Z
+# rename E3) with the new program path: only starts in the new layout
+# (/data/luyaz/core/.migrated, written last by the move), as zwrt-datad.init
+# only in the old one, so there is never a second core. Unchanged on purpose: the log /tmp/zwrt-datad.log and the
+# crash records under the name zwrt-datad (the core's svcwatch keeps it: the sentinel
+# and the ledger read them by it), /var/run/zwrt-datad.pid, the data dir
+# /data/zwrt-datad and the LAN token /data/plugins/zwrt-datad/auth.token.
+#
+# Launch semantics are the old start.sh start_datad_legacy's, moved here unchanged:
+# normal boots only, token seeding, LAN listener arguments, modem stream
+# settings, and the data service's own auto-update kept off.
+#
+# Do NOT run `enable`/`disable` (overlay whiteouts, manager CLAUDE.md).
+# SPDX-License-Identifier: MIT
+
+START=96
+USE_PROCD=1
+
+DIR=/data/plugins/zwrt-datad
+BIN=/data/luyaz/luyaz-core
+# Luya-Z rename D2 (manager docs/designs/luyaz-rename.md): the token, the ops dir and the log move
+# under the luyaz names; the token and the ops dir are the new ones once they are there (copied /
+# moved by hand while the core is stopped), the log is the new one from this script on.
+TOKEN_FILE=/data/luyaz/core/auth.token
+[ ! -s "$TOKEN_FILE" ] && [ -s "$DIR/auth.token" ] && TOKEN_FILE=$DIR/auth.token
+LAN_BIND=0.0.0.0
+LAN_PORT=9461
+if [ -d /data/luyaz/core/ops ]; then ROLLBACK_FLAG=/data/luyaz/core/ops/rollback-on
+else ROLLBACK_FLAG=/data/u60-ops/rollback-on; fi
+# u60d taking over from the agent (manager docs/designs/u60-platform.md, Phase 4 step 9): extra
+# settings from /data/luyaz/core/datad.env, one VAR=value per line; only plain values are taken, and only the
+# core's switches (core_switches below).
+# Absent (every install by default) = none. Change it, then restart this service. Not in the
+# ship trial's launch: a trial build runs without them.
+CORE_ENV=/data/luyaz/core/datad.env
+# Luya-Z rename D3 (manager docs/designs/luyaz-rename.md): the core reads only LUYAZ_* names (the old
+# ZWRT_DATAD_*, U60D_* went with the D3 clean-up). Only the listed switches are taken from datad.env,
+# so it can never set the rollback or ubus settings.
+core_switches() {
+    grep -E '^LUYAZ_(CONTRACT_DEBUG|CRASHWATCH|HOME_EXIT|LONGTERM|PROXY_API|PLUGINS|POLICIES|SMS_SESSION)=[A-Za-z0-9_.,:/-]*$' "$1" 2>/dev/null
+}
+# the layout switch (same line in u60-ship.sh and the others; scripts/test/luyaz-dir)
+luyaz_new() { [ -f "$1/data/luyaz/core/.migrated" ]; }
+
+# Same test as start.sh: in power-off charging the UI falls back to sysfs,
+# so there is nothing for datad to do.
+boot_is_normal() {
+    _state=$(awk -F"'" '/option mode_main_state/ { print $2; exit }' /etc/config/zwrt_zte_mc_tmp 2>/dev/null)
+    case "$_state" in
+        mode_power_off_*) return 1 ;;
+        mode_power_on | mode_power_on_charger) return 0 ;;
+    esac
+    grep -q 'silent_boot.mode=nonsilent' /proc/cmdline 2>/dev/null
+}
+
+# datad refuses to start without a non-empty token file; the token protects
+# its LAN listener.
+seed_token() {
+    if [ ! -s "$TOKEN_FILE" ]; then
+        mkdir -p "${TOKEN_FILE%/*}" || return 1
+        _tmp=$(mktemp "$TOKEN_FILE.tmp.XXXXXX") || return 1
+        chmod 600 "$_tmp" || { rm -f "$_tmp"; return 1; }
+        (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' >"$_tmp")
+        [ -s "$_tmp" ] || { rm -f "$_tmp"; return 1; }
+        mv -f "$_tmp" "$TOKEN_FILE" || { rm -f "$_tmp"; return 1; }
+    fi
+    chmod 600 "$TOKEN_FILE"
+}
+
+start_service() {
+    # the old layout's core is zwrt-datad's (/etc/init.d/zwrt-datad)
+    luyaz_new "" || return 1
+    boot_is_normal || return 0
+    [ -x "$BIN" ] || return 1
+    seed_token || return 1
+    killall -9 u60-datad 2>/dev/null # the old aggregator, if a legacy install left it
+    procd_open_instance
+    # --lan-bind is what opens the LAN listener AND keeps loopback auth-free
+    # for the touch UI; --lan-port alone does neither.
+    # X9 (manager docs/designs/u60-phase10.md): the program itself under procd, no wrapper; output
+    # appended to /tmp/luyaz-core.log (D2; before: /tmp/zwrt-datad.log; the sentinel caps both), crash records and alerts by the core (u60d svcwatch)
+    procd_set_param command /bin/sh -c 'exec >>/tmp/luyaz-core.log 2>&1 </dev/null; echo "=== $(date +%Y-%m-%dT%H:%M:%S) start $0"; exec "$0" "$@"' "$BIN" -i 1000 --lan-bind "$LAN_BIND" --lan-port "$LAN_PORT" --auth-token-file "$TOKEN_FILE"
+    # LUYAZ_UBUS=auto: read ubus over ubusd's socket instead of forking
+    # `ubus call` each time; falls back to the CLI for 30 s only when a request
+    # never reached ubusd (data-service docs/PERF-AUDIT.md, 10-04 trial).
+    # Auto-revert (E4 D30): on while $ROLLBACK_FLAG exists. Turn
+    # it on or off by creating or removing the file, then restart this
+    # service; no new build needed.
+    local rollback=0
+    [ -f "$ROLLBACK_FLAG" ] && rollback=1
+    procd_set_param env LUYAZ_UBUS=auto LUYAZ_ROLLBACK="$rollback"
+    local extra
+    extra=$(core_switches "$CORE_ENV")
+    [ -n "$extra" ] && procd_append_param env $extra
+    # respawn 300 5 5: procd forgives past crashes only after one run lasts the
+    # threshold; the 6th exit inside it and procd gives up until the next
+    # `start`. 300 s (not 3600) so that a few kills in a test session, or one bad
+    # minute, do not use that up for an hour. (The other inits point here.)
+    procd_set_param respawn 300 5 5
+    procd_set_param term_timeout 10
+    procd_close_instance
+}

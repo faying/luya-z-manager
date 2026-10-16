@@ -46,6 +46,14 @@ ssh root@<device> 'cp /etc/rc.local /data/rc.local.bak && sed -i "/^exit 0/i sh 
 
 Do not use `/etc/init.d/… enable` for this. The vendor boot barrier only lets boot finish once its own daemons have registered, and anything else added there can hang the boot at the logo.
 
+Optional, recommended: let procd supervise tailscaled. Install the init file (it is never `enable`d; the rc.local line above starts it through `start.sh`):
+
+```sh
+ssh root@<device> 'cat > /etc/init.d/tailscale.new && chmod +x /etc/init.d/tailscale.new && mv /etc/init.d/tailscale.new /etc/init.d/tailscale && sh /data/tailscale/start.sh' < scripts/tailscale/tailscale.init
+```
+
+With it, `start.sh start` asks procd to start the service and returns; procd runs `start.sh __fg`, which does the same checks as a boot and then becomes tailscaled. Without it (or after a firmware upgrade wiped `/etc`) the watcher below does the job.
+
 No auth key is ever stored on the device. Once logged in, the identity in `state/` is enough.
 
 ## Settings: `/data/tailscale/tuning.env`
@@ -71,6 +79,8 @@ To change settings while staying reachable, use `apply.sh`. It restarts Tailscal
 sh /data/tailscale/apply.sh /data/tailscale/my-variant.env relay
 ```
 
+If those 5 minutes are cut short (power cut, reboot), the next start of `start.sh` puts the old file back too: until `apply.sh` decides, it keeps the old file as `tuning.env.rollback` (or the marker `tuning.env.rollback-none` when there was none).
+
 ## Commands
 
 ```sh
@@ -90,11 +100,11 @@ sh /data/tailscale/start.sh clear-safe # leave safe mode now
 - **Unsafe kernel networking → userspace mode.** In `tun` mode, tailscaled drops packets from `100.64.0.0/10` arriving on any other interface. Some carriers use that range for the WAN address, gateway or DNS, which would cut off the router's own DNS. If any of them is in that range, or there is no TUN device, this boot uses userspace mode. Userspace mode adds no routes or firewall rules. The tailnet can still reach the router's own services that listen on all addresses (SSH, admin web), but LAN devices cannot reach the tailnet through the router.
 - **Boot strikes → safe mode.** If 3 boots in a row start in `tun` mode and the device does not stay up 10 minutes, safe mode (`/data/tailscale/safe-mode`) switches to userspace mode. After 1 hour up in safe mode, the next boot tries `tun` once more. Reboots for other reasons (a modem crash, for example) also count, which is why this only degrades and never switches Tailscale off. Restarts by `apply.sh` in the same boot do not count.
 - **Bad settings don't stop it.** A broken `tuning.env` is ignored. If the `TS_TAILSCALED_BIN` build is missing, it falls back to the default binary.
-- **Restarted if it dies, with limits.** After a start, a small background watcher checks once a minute whether tailscaled is still running. If it died, the watcher starts it again the same way a boot does (off switch, safe mode and the userspace checks all apply), after cleaning up the routes and firewall rules it left. It waits 5 minutes before the first restart, 15 before the second and 1 hour before each one after that, and starts over once tailscaled stays up 10 minutes. After 6 restarts within 24 hours it gives up until those 24 hours are over, notes it in `boot.log` and, when the device's alert queue is installed, adds a `tailscale-gave-up` alert. It only looks at whether the process runs, not whether Tailscale is healthy. It never restarts while the off switch is on, after `stop` (until the next start), or while `apply.sh` is switching. `TS_WATCH=0` in `tuning.env` turns it off; `TS_WATCH_POLL`, `TS_REVIVE_DELAYS`, `TS_REVIVE_MAX` and `TS_REVIVE_WINDOW` change the numbers.
+- **Restarted if it dies, with limits.** With the init file installed, procd starts it again and `start.sh __fg` waits the same backoff below before it does; otherwise, after a start, a small background watcher checks once a minute whether tailscaled is still running. If it died, the watcher starts it again the same way a boot does (off switch, safe mode and the userspace checks all apply), after cleaning up the routes and firewall rules it left. It waits 5 minutes before the first restart, 15 before the second and 1 hour before each one after that, and starts over once tailscaled stays up 10 minutes. After 6 restarts within 24 hours it gives up until those 24 hours are over, notes it in `boot.log` and, when the device's alert queue is installed, adds a `tailscale-gave-up` alert. It only looks at whether the process runs, not whether Tailscale is healthy. It never restarts while the off switch is on, after `stop` (until the next start), or while `apply.sh` is switching. `TS_WATCH=0` in `tuning.env` turns it off; `TS_WATCH_POLL`, `TS_REVIVE_DELAYS`, `TS_REVIVE_MAX` and `TS_REVIVE_WINDOW` change the numbers.
 
-## Moving over from `scripts/tailscale-start.sh`
+## Moving over from the old `tailscale-start.sh`
 
-The old script is deprecated (it now only prints a notice). To switch:
+The old script was deprecated and has been removed from this repo. If a device still runs it, switch:
 
 1. Remove its rc.local line: `sed -i '\#tailscale-start.sh#d' /etc/rc.local && sh -n /etc/rc.local`.
 2. Install `start.sh` as above and add its rc.local line.
@@ -114,6 +124,7 @@ The old script is deprecated (it now only prints a notice). To switch:
 ```sh
 sh /data/tailscale/start.sh stop
 sed -i '\#/data/tailscale/start.sh#d' /etc/rc.local && sh -n /etc/rc.local
+rm -f /etc/init.d/tailscale
 # optional: log the node out first with /data/tailscale/tailscale --socket=/tmp/tailscaled.sock logout
 rm -rf /data/tailscale /data/tailscaled.log*
 ```

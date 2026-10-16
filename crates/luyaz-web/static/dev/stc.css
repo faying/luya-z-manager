@@ -1,0 +1,16 @@
+/* /router/stc (batch 5c): this page's own rules only. */
+.stc-col { display: grid; max-width: 720px; gap: 24px; }
+.stc-head { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.stc-head .nd-title { flex: 1 1 auto; }
+.stc-desc { color: var(--nd-t2); margin-top: -8px; }
+.stc-desc2 { color: var(--nd-t2); }
+.stc-params, .stc-wl { display: grid; gap: 16px; padding: 16px; }
+.stc-grid { display: grid; gap: 16px; }
+@media (min-width: 640px) { .stc-grid { grid-template-columns: 1fr 1fr; } }
+.stc-field { display: grid; gap: 4px; }
+.stc-label { font-weight: 600; }
+/* 16 px or more: iOS zooms into smaller fields */
+.stc-field input, .stc-skel { font-size: 16px; min-height: 44px; }
+.stc-skel { display: flex; align-items: center; }
+.stc-op:empty { display: none; }
+.stc-op { margin-top: 8px; padding: 0 4px; }

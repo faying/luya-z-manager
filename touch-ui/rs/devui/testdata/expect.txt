@@ -1,0 +1,540 @@
+# Controls inventory, made executable: every line must be a visible label
+# (substring match) on that page, or render_test fails.
+#   <scenes>\t<page>\t<text>     scenes: *  |  a,b  |  !a,b   (tests/render/fixtures.c)
+# The status bar and tab bar are collected with every page.
+# Changing a format on purpose: change it here in the same commit, and say why.
+*	home	首页
+*	home	蜂窝
+*	home	Wi-Fi
+*	home	出口
+*	home	系统
+*	system	首页
+*	system	蜂窝
+*	system	Wi-Fi
+*	system	出口
+*	system	系统
+!loading,datad-down	home	5G
+good	home	11:41
+good	home	↓12.3Mb ↑1.5Mb
+good	home	78
+good	home	中国电信
+good	cellular	QCI 9
+good	cellular	AMBR 1668/1008
+good	home	中国电信 · 5G SA · 本地
+good	home	n78 100M + n1 20M
+good	home	顺畅
+good	home	今日 2.4GB · 本月 59.5GB
+good	home	n78 100M
+good	cellular	ARFCN 627264
+good	cellular	PCI 603
+good	home	n1
+good	home	20M
+good	cellular	ARFCN 426030
+good	cellular	PCI 615
+good	cellular	-95
+good	home	9.5
+good	cellular	n41 100M
+good	cellular	未激活
+good	cellular	ARFCN 504990 · PCI 120
+good	home	情景
+good	home	在家
+good	home	Wi-Fi 已关
+good	home	Tailscale
+good	home	已连接
+good	home	100.64.0.7 · DERP hkg
+good	home	在线 3/5 · 直连 1 · 中继 1
+good	home	子网
+good	home	192.168.0.0/24
+good	exit	Tailscale
+good	exit	已连接 · 在线 3/5
+abroad	home	国外
+*	system	CPU
+*	system	内存
+*	system	网速
+*	system	电池
+good	system	15%
+good	system	42°C
+good	system	74%
+good	system	1184M / 1590M
+good	home	↓ 1.5 MB/s
+good	home	↑ 183.6 KB/s
+good	system	78%
+good	system	放电中 · 33°C
+good	system	近 5 分钟
+*	cellular	短信
+*	cellular	小区信息
+*	cellular	锁频
+*	exit	测速
+*	cellular	SIM 与 eSIM
+*	system	性能测试
+good	cellular	3 条 · 2 未读
+good	cellular	自动
+good	exit	↓ 812 · ↑ 96 Mbps
+good	cellular	eSIM · 中国联通 · 主号
+good	system	调试页
+*	system	屏幕
+*	system	亮度
+*	system	自动息屏
+*	system	常亮
+*	system	30秒
+*	system	2分钟
+*	system	外观
+*	system	浅色
+*	system	深色
+*	system	自动
+*	system	电池与负载
+*	system	电池
+*	system	充电器
+*	system	CPU
+*	system	内存
+*	system	运行
+*	system	设备
+*	system	版本
+*	system	IMEI
+*	system	USB
+*	system	健康
+*	system	开关
+*	system	停止充电
+*	system	状态栏网速用 Mbps
+*	system	切换到原厂界面
+*	system	电源键：短按 亮屏/息屏  长按 电源菜单
+good	system	78% · 33°C 4.05V -349mA
+good	system	未接入
+good	system	占用 15% · 42°C
+good	system	74% · 1184M / 1590M
+good	system	9h00m
+good	system	BD_CNMU5250V1.0.0B27
+good	system	4901********518
+good	system	调试关闭
+good	system	一切正常
+good	system	OpenWrt 23.05.4
+full-charging	system	4.67V 1203mA
+*	wifi	热点
+*	wifi	加密
+*	wifi	密码
+*	wifi	WiFi 总开关
+*	wifi	2.4G 频段
+*	wifi	5G 频段
+*	wifi	节能模式
+*	wifi	NFC 碰一碰
+*	wifi	已连接设备
+*	wifi	DHCP
+*	wifi	网关
+*	wifi	地址池
+*	wifi	租期
+good	wifi	U60-Test
+good	wifi	sae
+good	wifi	correct-horse-battery
+good	wifi	5/6 台
+good	wifi	iPhone
+good	wifi	192.168.0.20
+good	wifi	Kindle
+good	wifi	192.168.0.1
+good	wifi	192.168.0.2 - 192.168.0.253
+good	wifi	24 小时
+good	sms	2 条未读 · 共 3 条
+good	sms	全部已读
+good	sms	10000
+good	sms	09-24 09:12
+good	sms	【中国电信】您好
+good	sms	+8613800000000
+good	sms	106900000000
+good	sms-detail	10000
+good	sms-detail	09-24 09:12
+good	sms-detail	如需帮助请回复 CX。
+good	sms-detail	删除这条
+good	alerts	告警记录 · 都已读
+good	alerts	体检
+good	alerts	短信告警
+good	alerts	没配置号码：后台挂了你不会知道
+full-charging	alerts	只剩 12 MB
+full-charging	alerts	不一致的是 zwrt-datad
+empty	alerts	27 项检查都正常
+good	alerts	Wi-Fi 看门狗重新打开了 Wi-Fi
+good	alerts	触屏界面闪退，已自动重新打开
+good	alerts	exit 139 (SIGSEGV)
+good	alerts	开机后1分
+empty	alerts	没有告警记录
+!lte,jp	cell	5G 服务小区
+*	cell	频段
+*	cell	ARFCN
+*	cell	PCI
+*	cell	Cell ID
+*	cell	PLMN
+*	cell	RSRP / RSRQ / SINR
+*	cell	LTE
+*	cell	EARFCN
+*	cell	RSSI
+*	cell	网络
+*	cell	网络模式
+*	cell	WAN
+*	cell	制式
+*	cell	高铁模式
+*	cell	邻小区
+good	cell	n78  100 MHz
+good	cell	627264
+good	cell	603
+good	cell	23960174596
+good	cell	460-11 中国电信
+good	cell	-87 / -11 / 17.7
+good	cell	LTE（现在不用，下面是测量值）
+good	cell	-106 / -17 / -4.0
+good	cell	-71
+lte	cell	LTE 服务小区
+lte	cell	B3  20 MHz
+lte	cell	1850
+lte	cell	120
+lte	cell	45678901
+lte	cell	5G（现在不用，下面是测量值）
+lte	cell	-98 / -10 / 14.5
+nsa	cell	LTE 服务小区
+nsa	cell	B3  20 MHz
+good	cell	自动
+good	cell	ipv4_ipv6_connected
+good	cell	关闭
+*	cellular	网络模式
+*	cellular	自动
+*	cellular	5G NSA
+*	cellular	5G SA
+*	cellular	4G
+*	cellular	4G+3G
+!op-verifying,op-rollback-off	cellular	切换会短暂断网，需要按两次确认
+*	lock	5G SA 频段
+*	lock	5G NSA 频段
+*	lock	4G 频段
+*	lock	应用锁频
+*	lock	恢复默认配置
+good	lock	n78
+good	lock	n79
+good	lock	B41
+*	lock-mode-armed	再按一次确认 · 国外和漫游卡常没有 SA
+!op-verifying,op-rollback-off	lock-mode-failed	没切成，设备
+!op-verifying,op-rollback-off	lock-mode-failed	再试一次，不行就重启设备、开机后马上切
+*	system-vendor-armed	再按一次确认切换
+good	speed	网络测速
+good	speed	812.4
+good	speed	延迟 23ms · 抖动 4ms
+good	speed	↓ 812.4 Mbps  ↑ 96.2 Mbps
+good	speed	China Telecom (Shanghai)
+good	speed	重新测速
+good	speed	服务器
+good	speed	自动（最佳服务器）
+good	speed	China Unicom · Shanghai, China
+empty	speed	连不上测速服务
+good	esim	当前配置
+good	esim	使用中 · eSIM
+good	esim	卡信息
+good	esim	+8613800001234
+good	esim	460010123456789
+abroad	esim	使用中 · 实体 SIM 卡
+abroad	esim	8986110000000000077F
+abroad	esim	尾号 0077
+abroad	esim	号码没写在卡里
+abroad	esim	eSIM 配置（现在没在用）
+abroad	esim	已启用
+abroad	cellular	SIM 卡 · 
+good	esim	中国联通 · 主号
+good	esim	就绪
+good	esim	eSIM 配置
+good	esim	ICCID 8986 0000 0000 0000 0001
+good	esim	使用中
+good	esim	Chunghwa Telecom
+good	esim	giffgaff
+good	esim-armed	再点一次
+good	tailscale	本机
+good	tailscale	主机名
+good	tailscale	u60-pro
+good	tailscale	IP
+good	tailscale	100.64.0.7
+good	tailscale	DERP
+good	tailscale	hkg
+good	tailscale	子网路由
+good	tailscale	192.168.0.0/24
+good	tailscale	节点（和本机之间）
+good	tailscale	fd7a:115c:a1e0::7
+good	tailscale	me@example.com
+good	tailscale	1.102.4 · linux
+good	tailscale	2027-03-01
+good	tailscale	直连 203.0.113.5:41641 · 握手 42 秒前
+good	tailscale	100.64.0.2 · macOS · ↓1.2GB ↑50MB
+good	tailscale	经 DERP hkg 中继 · 握手 1 分钟前
+good	tailscale	100.64.0.4 · linux · 出口节点
+good	tailscale	macbook-pro
+good	tailscale	100.64.0.2
+good	tailscale	直连
+good	tailscale	中继
+good	tailscale	在线
+good	tailscale	离线
+good	tailscale	old-ipad
+*	perf	渲染刷新率
+*	perf	触控上报率
+*	power-menu	电源
+*	power-menu	关机
+*	power-menu	重启
+*	power-menu	取消
+weak	home	慢：信号弱
+nosim	home	没有 SIM 卡
+nosim	home	在「蜂窝 → SIM 与 eSIM」启用
+loading	home	正在读取…
+datad-down	home	数据服务掉线 · 数字停在
+empty	exit	需要登录
+empty	home	在管理网页打开登录链接
+abroad	home	出口节点
+lowbat	home	电量低，尽快充电
+full-charging	system	充电中
+!loading,datad-down	charts-collecting	正在收集 · 1 分钟后出现曲线
+empty	wifi	还没有设备连上
+empty	esim	现在插的是普通 SIM 卡
+*	cellular	运营商选择
+good	exit	203.0.113.24
+good	exit	中国 广东 深圳 · 电信
+good	net	中国电信 46011
+good	net	本地
+good	net	自动
+good	net	中国联通
+good	net	46001 · 5G · 中国
+good	net	当前
+good	net	禁止
+good	net	搜索网络
+good	net	恢复自动
+abroad	exit	出口 IP
+abroad	net	中华电信（中国台湾）46692
+abroad	net	漫游中
+abroad	net	手动
+abroad	net	已注册到 46692
+weak	net	超时没注册上，已回到自动选网
+weak	exit	刷新失败
+datad-down	net	连不上管理后台
+loading	exit	查询中…
+good	scene	选择
+good	scene	自动
+good	scene	现在：在家
+good	scene	外出
+good	scene	其他情景都不符合时（默认）
+good	scene	附近有 Wi-Fi「My-Home-5G」「My-Home」时
+good	scene	关 Wi-Fi · 不休眠，Tailscale 一直连得上
+good	scene	按下面每个情景的条件自己切换
+good	scene	不碰蜂窝网络
+full-charging	scene	已固定
+full-charging	scene	点「自动」才恢复自动判断
+good	exit	203.0.113.24
+good	home	本地
+abroad	exit	中国台湾 台北市 · 中华电信
+good	home	U60-Test · 6 台
+weak	home	RSRP -112：离基站远，靠窗通常好些
+datad-down	home	读不到数据
+nosignal	home	只能紧急呼叫
+nosignal	home	正在搜网
+nosignal	home	没注册上：欠费
+nsa	home	中国电信 · 5G NSA · 4G 锚点 · 本地
+nsa	home	n78 100M + B3 20M + B1 20M
+lte	home	中国电信 · 4G LTE · 本地
+lte	home	B3 20M
+lte	home	慢：载波窄
+3g	home	只有 3G
+3g	home	中国电信 · 3G WCDMA · 本地
+3g	home	B1
+3g	home	只有 3G
+nodata	home	没连上网
+nodata	home	数据没拨上
+5ga	home	中国电信 · 5G SA · 本地
+5ga	home	5G-A
+edge	home	只有 2G
+edge	home	上网会非常慢
+edge	home	中国电信 · 2G EDGE · 本地
+edge	home	GSM 900
+nsa	home	5G
+good	cell	原厂扫描会断网且拿不到数据，已停用
+good	wifi	MacBook
+good	wifi	连上以来 ↓5.0GB ↑300MB
+good	wifi	5 GHz · ↓
+empty	wifi	还没有设备连上
+good	net-sc-already	现在已经是自动 · 按位置和 SIM 判断为「在家」
+good	net-sc-armed	再点一次确认
+good	net-sc-armed	切到「外出」：Wi-Fi 开着
+good	net-sc-pending	切换中…
+good	net-sc-pending	正在切换到「外出」…开关 Wi-Fi 要 10–30 秒
+good	net-auto-already	现在已经是自动选网，不用恢复
+good	esim-current	这张就是正在用的
+good	wifi	信号很好
+good	wifi	2.4 GHz · 速率稍后显示 · 信号一般
+*	exit	Tailscale
+*	cellular	蜂窝
+*	wifi	Wi-Fi
+*	exit	出口
+*	cellular	APN
+*	cellular	网络模式
+*	cellular	5G NSA
+*	cellular	运营商选择
+good	cellular	China Telecom · 自动
+good	cellular	未锁定
+*	apn	正在用
+*	apn	自动
+*	apn	新建或修改 APN
+good	apn	China Telecom
+good	apn	ctiot · IPv4v6 · 自动选择
+good	apn	CTNET
+good	apn	ctnet · IPv4v6
+abroad	apn	ctnet · IPv4v6 · 手动指定
+good	apn	这张卡的候选（运营商库）
+*	apn	手动 APN
+good	apn	在用 · 物联网
+good	apn	正在用物联网 APN「ctiot」
+abroad	apn	本卡在用
+abroad	apn	这张卡固定用「ctnet」
+loading	apn	读取中…
+good	apn-already	现在已经是自动选择
+good	apn-armed	再点一次确认
+good	apn-armed	只给这张卡改用「ctnet」
+good	apn-pending	切换中…
+good	apn-pending	正在切换到「China Telecom 4G」
+nosim	esim	没插卡
+nosim	cellular	没插卡
+# 2026-09-25 首页网络卡片（docs/designs/home-net-card.md）
+*	home	载波
+good	home	顺畅
+good	home	信号强
+good	home	干扰小 · 负载正常
+good	home	激活 2/3
+good	home	↓ n78 100M + n1 20M   ↑ n78
+crowd	home	慢：疑似拥挤
+crowd	home	RSRQ -18：人多抢网，换位置帮助不大
+crowd	home	干扰中 · 负载高
+today	home	慢：干扰大
+today	home	SINR -1.9：杂波多，挪个位置或换个朝向
+today	home	信号中
+today	home	单载波
+today	home	↓ n5 15M   ↑ n5
+today	home	直连 · 中国 深圳
+5ga	home	3 载波聚合
+nsa	home	3 载波聚合
+3g	home	无聚合
+3g	home	RSSI -75 dBm
+lte	home	单载波
+# 状态栏叫法按所在网络（home-net-card.md）
+good	home	5G
+us	home	5G UC
+us	home	T-Mobile · 5G SA · 漫游
+jp	home	4G+
+jp	home	SoftBank · 4G LTE-A · 漫游
+jp	home	2 载波聚合
+abroad	home	中華電信 · 5G SA · 漫游
+nosignal	home	SOS
+nosvc	home	无服务
+nosvc	home	正在搜网，换个位置试试
+good	exit	连接与测速
+
+# public build: the 出口 row and 出口 tab show the cellular (direct) egress only
+good	home	直连 · 中国 深圳
+abroad	home	直连 · 中国台湾 台北市
+good	exit	出口 IP
+good	exit	连接与测速
+# 电池预估（estimate.c 的文案，fixtures.c battery_est_text）
+good	system	约可用 14 小时 51 分
+lowbat	system	约可用 1 小时 32 分
+full-charging	system	已充满
+weak	system	已到上限，暂停充电
+long-names	system	约 3 小时 18 分充到 80%
+datad-down	system	预估
+bandlock	lock	n78
+bandlock	lock	B3
+bandlock	lock	n41
+bandlock	lock	B1
+bandlock	lock	全部频段（未锁定）
+# 语言 row (L2): both languages in either mode
+*	system	语言 / Language
+*	system	告警短信也用这个语言
+good	system-lang-failed	没切成
+good	lang-switching	正在切换到
+# 网络诊断、摆放模式、首页「查原因 ›」、stall（manager docs/designs/slow-diagnosis.md §12，10-02）
+*	cellular	排查
+*	cellular	网络诊断
+*	cellular	摆放模式
+stall	home	连上了但不通
+stall	home	有信号、已拨号，但 30 秒没收到任何数据
+weak,crowd,nodata,stall,today	home	查原因 ›
+stall	diagnose-start	正在检查…
+stall	diagnose-start	约 10 秒，会发少量探测包
+stall	diagnose-start	等待
+diagnose-running	diagnose	约 10 秒，会发少量探测包
+diagnose-running	diagnose	测试中…
+diagnose-running	diagnose	等待
+diagnose-running	diagnose	● 正常
+diagnose-running	diagnose	● 正常 · 没有限速 · QCI 9
+diagnose-running	diagnose	蜂窝链路
+diagnose-running	diagnose	基站负载
+diagnose-running	diagnose-busy	正在查，稍等
+diagnose-result	diagnose	蜂窝链路不稳
+diagnose-result	diagnose	过几分钟再试，或换个地方 · 另有 1 处疑点
+diagnose-result	diagnose	● 测不了 · 没有设备连着
+diagnose-result	diagnose	QoS 读不到
+diagnose-result	diagnose	▲ 疑点
+diagnose-result	diagnose	延迟是平时的 3.0 倍
+diagnose-result	diagnose	速度
+diagnose-result	diagnose	直连 ↓ 86 Mbps
+diagnose-result	diagnose	加测速度 · 约 5 秒、最多 30 MB
+diagnose-result	diagnose	测 · 结论对吗？
+diagnose-result	diagnose	不对
+diagnose-result	diagnose-thanks	测 · 已记下，谢谢
+diagnose-result	diagnose-roam-armed	走漫游流量，再按一次
+diagnose-result	diagnose-speed	测试中…
+diagnose-result	diagnose-speed	测速中…
+diagnose-result	diagnose-again	正在检查…
+placement	placement	5G SINR · 越大越好
+placement	placement	14.5
+placement	placement	● 信号良好 · RSRP -92
+placement	placement	这次最好
+placement	placement	18.0 · 
+placement	placement	对比
+placement	placement	▲ 比最好低 3.5 dB
+placement	placement	n78 · PCI 603
+placement	placement	重新开始
+placement	placement	换了小区会重新计；这页开着不息屏
+diagnose-running	diagnose	正在检查… 3/5
+diagnose-result	diagnose-error	后台没回应
+diagnose-result	diagnose-error	重试
+diagnose-result	diagnose-error	蜂窝链路
+op-busy	home	正在换制式（网页发起，32 秒），稍等
+op-datad-stuck	home	数据服务没响应 · 暂时不能改设置
+op-verifying,op-rollback-off	home	正在确认
+op-verifying	home	后没通就退回到自动
+op-rolled-back	home	没通 · 已退回自动
+op-rollback-failed	home	退回也没通
+op-not-applied	home	没切成 · 还是自动
+op-verifying,op-rollback-off	op	设置已生效
+op-verifying,op-rollback-off	op	自动 → 只用 5G SA · 网页
+op-verifying	op	后没通就退回到自动
+op-verifying,op-rollback-off	op	退回自动
+op-verifying,op-rollback-off	op	保留只用 5G SA
+op-rollback-off	op	自动退回没开：没通也会保持
+op-rollback-off	op	· 自动退回没开
+op-verifying	op-armed	再按一次
+op-verifying	op-armed	马上改回「自动」，会重新注册，断网几十秒
+op-rolled-back	op	没通 · 已退回自动
+op-rolled-back,op-rollback-failed,op-not-applied	op	知道了
+op-rollback-failed	op	再试一次退回到自动
+op-rollback-failed,op-not-applied	op	重启设备
+op-rollback-failed	op	现在：只用 5G SA · 上次确认：自动
+op-not-applied	op	基带崩过以后常见，重启后再切一次
+*	system	改动记录
+journal	journal	制式 · 只用 4G → 自动
+journal	journal	10-03 14:32 · 网页 · 已切到自动
+journal	journal	情景跳过 ×5（你手动改过）
+journal	journal	只显示最近 20 条
+journal-empty	journal	还没有改动 · 触屏、网页、情景、定时任务改的设置都会记在这里
+journal	journal-detail	已切到自动
+journal	journal-detail	撤销
+journal	journal-detail-old	之后又改过
+journal	journal-cell	上次改动
+journal	journal-cell	10-03 14:32 · 网页
+op-notice	home	自动退回已开：切模式没通会退回
+op-notice	home	知道了
+# USB attach mode (usbmode.c, 10-07)
+*	system	插入手机等设备时
+*	system	每次询问
+*	usb-attach	插入的设备怎么用
+*	usb-attach	充电 + 上网
+*	usb-attach	快速充电宝
+*	usb-attach	网口配件
+*	usb-attach	记住选择，以后自动这样做
+*	usb-attach	确定

@@ -1,0 +1,20 @@
+{%- macro row(r) -%}
+<div class="nd-row{% if r.sub.is_some() %} nd-row--two{% endif %}"><span class="nd-row__text"><span class="nd-row__label">{{ r.label }}</span>{% if let Some(s) = r.sub %}<span class="nd-row__sub block">{{ s }}</span>{% endif %}</span><span class="nd-row__value{% if r.mono %} nd-mono{% endif %}">{{ r.value }}</span></div>
+{%- endmacro -%}
+<div id="dc-status"><section class="nd-status nd-status--{{ v.tone }}{% if v.tone == "stale" %} nd-stale{% endif %}">
+<div class="nd-status__main">
+<div class="nd-status__state" role="status"><span class="nd-mark nd-mark--{{ v.tone }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.symbol() }}</span><span>{{ v.state }}</span></span></div>
+{% if let Some(r) = v.reason %}<div class="nd-status__reason"><span{% if v.tone == "bad" %} role="alert"{% endif %}>{{ r }}</span></div>{% endif %}
+{% if let Some(m) = v.meta %}<div class="nd-status__meta"><span class="nd-fresh">{{ m }}</span></div>{% endif %}
+</div>
+{% if v.retry %}<div class="nd-status__actions"><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/router/device/refresh')">{{ v.l.pick("Retry", "重试") }}</button></div>{% endif %}
+</section></div>
+<!--leaf-->
+<div id="dc-battery">{% match v.bat %}{% when Some(res) %}<section aria-labelledby="dc-battery-t"><h2 id="dc-battery-t" class="nd-group-title">{{ v.l.pick("Battery details", "电池详情") }}</h2>{% match res %}{% when Ok(rows) %}<div class="nd-group{% if v.bat_stale %} nd-stale{% endif %}">{% for r in rows %}{% call row(r) %}{% endcall %}{% endfor %}</div>{% when Err(e) %}<div class="nd-group"><div class="nd-row"><span class="nd-row__label">{{ e.0 }}</span>{% if e.1 %}<button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/router/device/refresh')">{{ v.l.pick("Retry", "重试") }}</button>{% endif %}</div></div>{% endmatch %}</section>{% when None %}{% endmatch %}</div>
+<!--leaf-->
+{{ v.form|safe }}
+<!--leaf-->
+<div id="dc-cap" class="mt-3">{% if let Some(r) = v.cap %}<div class="nd-group">{% call row(r) %}{% endcall %}</div>{% endif %}</div>
+<!--leaf-->
+<div id="dc-modes"><div class="nd-group{% if v.tone == "stale" %} nd-stale{% endif %}">{% for r in v.modes %}<div class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label" id="dc-m-{{ r.key }}">{{ r.label }}</span>{% if !r.sub.is_empty() %}<span class="nd-row__sub block">{{ r.sub }}</span>{% endif %}</span><span class="t-sw">{% if r.on.is_none() %}<span class="nd-row__value">—</span>{% endif %}<button type="button" role="switch" class="nd-switch t-switch" aria-labelledby="dc-m-{{ r.key }}" aria-checked="{% if r.on == Some(true) %}true{% else %}false{% endif %}"{% if r.on == Some(true) %} data-selected="true"{% endif %}{% if r.disabled %} disabled data-disabled="true"{% else %} data-on:click="@post('/router/device/mode/ask?k={{ r.key }}&on={{ r.want() }}')"{% endif %}><span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span></button></span></div>{% endfor %}</div>
+{% if let Some(e) = v.mode_err %}<div class="mt-2 flex flex-wrap items-center gap-3 px-1" role="alert"><span class="nd-aux">{{ e }}</span><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/router/device/refresh')">{{ v.l.pick("Retry", "重试") }}</button></div>{% endif %}</div>

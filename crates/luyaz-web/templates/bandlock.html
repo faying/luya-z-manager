@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+{{ self.leaf("bl-cur")|safe }}{{ draft|safe }}
+<div class="grid gap-6 pg-cols">
+<div class="grid content-start gap-6">
+<section aria-labelledby="bl-now-t"><h2 id="bl-now-t" class="nd-group-title">{{ l.pick("In use now", "现在在用") }}</h2>
+{{ self.leaf("bl-now")|safe }}
+</section>
+<section aria-labelledby="bl-nr-t"><h2 id="bl-nr-t" class="nd-group-title">{{ l.pick("NR (5G) bands", "NR (5G) 频段") }}</h2>
+<div class="nd-group grid gap-4 p-4"><p class="nd-body">{{ l.pick("One choice for both SA and NSA.", "一次选择同时用于 SA 和 NSA。") }}</p>
+{{ self.leaf("bl-nrchips")|safe }}
+{{ nr_op|safe }}</div>
+</section>
+</div>
+<div class="grid content-start gap-6">
+<section aria-labelledby="bl-lte-t"><h2 id="bl-lte-t" class="nd-group-title">{{ l.pick("LTE bands", "LTE 频段") }}</h2>
+<div class="nd-group grid gap-4 p-4">
+{{ self.leaf("bl-ltechips")|safe }}
+{{ lte_op|safe }}</div>
+</section>
+<section aria-labelledby="bl-reset-t"><h2 id="bl-reset-t" class="nd-group-title">{{ l.pick("Automatic bands", "自动选频") }}</h2>
+<div class="nd-group grid gap-3 p-4"><p class="nd-body">{{ l.pick("Remove every NR and LTE band lock (cell locks go too) and let the modem pick again.", "清除所有 NR 和 LTE 锁定（小区锁定也一起去掉），让调制解调器重新自动选频段。") }}</p>
+<div><button type="button" class="nd-btn nd-btn--secondary" data-attr:disabled="$_dis" data-on:click="@post('/bandlock/reset/ask')">{{ l.pick("Reset / unlock all", "重置 / 全部解锁") }}</button></div>
+{{ reset_op|safe }}</div>
+</section>
+</div>
+</div>
+{% endblock %}

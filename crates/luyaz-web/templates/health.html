@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("sys.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<p class="nd-body mb-4 hl-desc">{{ l.pick("A read-only check of the device, rerun every minute. The same check runs over SSH as ./install.sh doctor, even when this admin backend is down.", "对设备做一遍只读检查，每分钟一次。SSH 里的 ./install.sh doctor 是同一套检查，管理后台挂了也能用。") }}</p>
+<div class="hl-col" data-signals__ifmissing="{_hlopen: ''}">
+<section aria-label="{{ l.pick("Status", "状态") }}">
+{{ self.leaf("hl-status")|safe }}
+<div class="hl-op">{{ chk_op|safe }}</div>
+</section>
+<section aria-labelledby="hl-checks-t"><h2 id="hl-checks-t" class="nd-group-title">{{ l.pick("Checks", "检查项") }}</h2>
+{{ self.leaf("hl-checks")|safe }}
+</section>
+<section aria-labelledby="hl-crashes-t"><h2 id="hl-crashes-t" class="nd-group-title">{{ l.pick("Crash logs", "崩溃记录") }}</h2>
+{{ self.leaf("hl-crashes")|safe }}
+</section>
+</div>
+{% endblock %}

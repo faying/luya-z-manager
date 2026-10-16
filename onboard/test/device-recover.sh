@@ -1,13 +1,13 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
 # A fake-device test of the kit's u60 ship pieces (onboard/device/install.sh):
-# the `recover` component (u60-recover.sh into /data/u60-ship after its own
+# the `recover` component (u60-recover.sh into /data/luyaz/ship as luyaz-recover.sh after its own
 # selftest, and the rc.local line before the service start lines) and
 # place_recover (what admin/devui do: put it there only when it is missing),
-# kit_record (agent; touch, uid), uid_restart (devui) and the check for an
+# kit_record (lweb; touch, uid), uid_restart (devui) and the check for an
 # unfinished u60 ship transaction (txn v=1 and v=2).
 # Every path is moved into a temp dir (KIT_RC, KIT_STATE, KIT_SHIP_DIR,
-# KIT_GUARD); nothing touches a device. In the device's busybox:
+# KIT_SCRIPTS); nothing touches a device. In the device's busybox:
 #
 #   docker run --rm -v "$PWD/onboard":/onboard:ro -v <touch-ui>/scripts:/scripts:ro \
 #       u60-device-busybox:20260928 sh /onboard/test/device-recover.sh
@@ -41,12 +41,12 @@ setup() {
 /etc/init.d/zte_topsw_get_brand stop
 exit 0
 EOF
-    export KIT_RC=$T/rc.local KIT_STATE=$T/data/u60-kit KIT_SHIP_DIR=$T/data/u60-ship KIT_GUARD=$T/data/u60-guard
+    export KIT_RC=$T/rc.local KIT_STATE=$T/data/u60-kit KIT_SHIP_DIR=$T/data/luyaz/ship KIT_SCRIPTS=$T/data/luyaz/scripts
 }
 inst() { sh "$K/device/install.sh" "$@" >"$T/out" 2>&1; RC=$?; }
 # the same rule tools/u60 checks before a first ship
 order() {
-    awk '/^[[:space:]]*#/ { next } /u60-recover\.sh/ && !r { r = NR } /\/etc\/init\.d\/(zte-agent|zwrt-datad|u60-guard|u60-uid)[[:space:]]+start/ && !s { s = NR } END { if (!r) print "missing"; else if (s && s < r) print "late"; else print "ok" }' "$T/rc.local"
+    awk '/^[[:space:]]*#/ { next } /luyaz-recover\.sh/ && !r { r = NR } /\/etc\/init\.d\/(zte-agent|zwrt-datad|u60-guard|u60-uid)[[:space:]]+start/ && !s { s = NR } END { if (!r) print "missing"; else if (s && s < r) print "late"; else print "ok" }' "$T/rc.local"
 }
 
 echo "== kit: u60-recover =="
@@ -54,14 +54,23 @@ echo "== kit: u60-recover =="
 setup
 inst recover
 check "recover: done" '[ $RC = 0 ]'
-check "recover: the script in /data/u60-ship, same as the kit's, executable" '[ "$(md5 "$T/data/u60-ship/u60-recover.sh")" = "$(md5 "$K/payload/guard/u60-recover.sh")" ] && [ -x "$T/data/u60-ship/u60-recover.sh" ]'
-check "recover: rc.local line right before the first service start" '[ "$(sed -n 3p "$T/rc.local" | cut -d" " -f1-2)" = "sh $T/data/u60-ship/u60-recover.sh" ] && [ "$(sed -n 4p "$T/rc.local")" = "/etc/init.d/zte-agent start" ]'
+check "recover: the script in /data/luyaz/ship as luyaz-recover.sh, same as the kit's, executable" '[ "$(md5 "$T/data/luyaz/ship/luyaz-recover.sh")" = "$(md5 "$K/payload/guard/u60-recover.sh")" ] && [ -x "$T/data/luyaz/ship/luyaz-recover.sh" ]'
+check "recover: rc.local line right before the first service start" '[ "$(sed -n 3p "$T/rc.local" | cut -d" " -f1-2)" = "sh $T/data/luyaz/ship/luyaz-recover.sh" ] && [ "$(sed -n 4p "$T/rc.local")" = "/etc/init.d/zte-agent start" ]'
 check "recover: the order tools/u60 wants" '[ "$(order)" = ok ]'
-check "recover: rc.local still parses, the rest as it was" 'sh -n "$T/rc.local" && [ "$(grep -v u60-recover "$T/rc.local" | md5sum)" = "$(md5sum <"$T/data/u60-kit/rc.local.orig")" ]'
+check "recover: rc.local still parses, the rest as it was" 'sh -n "$T/rc.local" && [ "$(grep -v luyaz-recover "$T/rc.local" | md5sum)" = "$(md5sum <"$T/data/u60-kit/rc.local.orig")" ]'
 check "recover: the original rc.local backed up" '[ -f "$T/data/u60-kit/rc.local.orig" ]'
+check "recover: the D4 mark in /data/luyaz/ship" '[ -f "$T/data/luyaz/ship/.migrated" ]'
+check "recover: the line written is the new one" 'grep -qF "sh $T/data/luyaz/ship/luyaz-recover.sh; [ \$? = 10 ] && exec /bin/sh $T/rc.local   # luyaz recover：" "$T/rc.local"'
 cp "$T/rc.local" "$T/rc.1"
 inst recover
 check "recover again: rc.local unchanged" '[ $RC = 0 ] && cmp -s "$T/rc.local" "$T/rc.1" && grep -q "已有调用" "$T/out"'
+rm -rf "$T"
+
+setup
+printf '#!/bin/sh\nsh /data/u60-ship/u60-recover.sh; [ $? = 10 ] && exec /bin/sh /etc/rc.local\n/etc/init.d/zwrt-datad start\nexit 0\n' >"$T/rc.local"
+cp "$T/rc.local" "$T/rc.0"
+inst recover
+check "an old (pre-D4) recover line counts as there: rc.local unchanged" '[ $RC = 0 ] && cmp -s "$T/rc.local" "$T/rc.0" && grep -q "已有调用" "$T/out"'
 rm -rf "$T"
 
 setup
@@ -80,14 +89,14 @@ setup
 printf '#!/bin/sh\necho selftest: FAIL\nexit 1\n' >"$K/payload/guard/u60-recover.sh"
 cp "$T/rc.local" "$T/rc.0"
 inst recover
-check "a kit u60-recover.sh that fails its selftest: refused, nothing changed" '[ $RC != 0 ] && grep -q "selftest 不过" "$T/out" && [ ! -e "$T/data/u60-ship/u60-recover.sh" ] && cmp -s "$T/rc.local" "$T/rc.0"'
+check "a kit u60-recover.sh that fails its selftest: refused, nothing changed" '[ $RC != 0 ] && grep -q "selftest 不过" "$T/out" && [ ! -e "$T/data/luyaz/ship/luyaz-recover.sh" ] && cmp -s "$T/rc.local" "$T/rc.0"'
 rm -rf "$T"
 
 setup
-mkdir -p "$T/data/u60-ship"
-echo 'older one' >"$T/data/u60-ship/u60-recover.sh"
+mkdir -p "$T/data/luyaz/ship"
+echo 'older one' >"$T/data/luyaz/ship/luyaz-recover.sh"
 inst recover
-check "recover replaces an older one, keeps it aside" '[ $RC = 0 ] && [ "$(md5 "$T/data/u60-ship/u60-recover.sh")" = "$(md5 "$K/payload/guard/u60-recover.sh")" ] && grep -q "older one" "$T/data/u60-ship/u60-recover.sh.prev-kit"'
+check "recover replaces an older one, keeps it aside" '[ $RC = 0 ] && [ "$(md5 "$T/data/luyaz/ship/luyaz-recover.sh")" = "$(md5 "$K/payload/guard/u60-recover.sh")" ] && grep -q "older one" "$T/data/luyaz/ship/luyaz-recover.sh.prev-kit"'
 rm -rf "$T"
 
 # place_recover (admin / devui): only when missing; never touches rc.local
@@ -103,110 +112,123 @@ place() { (
 ) >"$T/out" 2>&1; RC=$?; }
 cp "$T/rc.local" "$T/rc.0"
 place
-check "admin/devui: missing → put there, rc.local untouched" '[ $RC = 0 ] && [ -f "$T/data/u60-ship/u60-recover.sh" ] && cmp -s "$T/rc.local" "$T/rc.0" && grep -q "install.sh recover 才加" "$T/out"'
-echo 'a different one' >"$T/data/u60-ship/u60-recover.sh"
+check "admin/devui: missing → put there, rc.local untouched" '[ $RC = 0 ] && [ -f "$T/data/luyaz/ship/luyaz-recover.sh" ] && [ -f "$T/data/luyaz/ship/.migrated" ] && cmp -s "$T/rc.local" "$T/rc.0" && grep -q "install.sh recover 才加" "$T/out"'
+echo 'a different one' >"$T/data/luyaz/ship/luyaz-recover.sh"
 place
-check "admin/devui: a different one already there → not replaced, said so" '[ $RC = 0 ] && grep -q "a different one" "$T/data/u60-ship/u60-recover.sh" && grep -q "没换" "$T/out"'
+check "admin/devui: a different one already there → not replaced, said so" '[ $RC = 0 ] && grep -q "a different one" "$T/data/luyaz/ship/luyaz-recover.sh" && grep -q "没换" "$T/out"'
 rm -rf "$T"
 
-# kit_record (after admin): kit-source → one kind=kit line through u60-ship.sh
+# kit_record (after admin, which installs luyaz-web since 8d-2c): kit-source → one kind=kit line through u60-ship.sh
 setup
-mkdir -p "$T/root/data" "$T/data/u60-guard"
-cp "$SCRIPTS/u60-ship.sh" "$T/data/u60-guard/"
-echo 'agent build' >"$T/root/data/zte-agent"
-printf 'stamp=20261001\nagent_commit=abc1234def\nagent_format=1\nagent_dirty=1\n' >"$K/payload/guard/kit-source"
+mkdir -p "$T/root/data/luyaz/ship" "$T/root/etc/init.d" "$T/data/luyaz/scripts"; : >"$T/root/data/luyaz/ship/.migrated"
+cp "$SCRIPTS/u60-ship.sh" "$T/data/luyaz/scripts/luyaz-ship.sh"
+echo 'lweb build' >"$T/root/data/luyaz/luyaz-web"
+cp "$SCRIPTS/luyaz-web.init" "$T/root/etc/init.d/luyaz-web"
+printf 'stamp=20261001\nlweb_commit=abc1234def\nlweb_format=1\nlweb_dirty=1\n' >"$K/payload/guard/kit-source"
 sed -n '/^kit_record() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
 rec() { (
-    P=$K/payload G=$T/data/u60-guard
+    P=$K/payload S=$T/data/luyaz/scripts
     export U60S_ROOT=$T/root U60S_TMP=$T/tmp KIT_MAC_TIME=1790000000
     log() { echo "[device] $*"; }
     warn() { echo "[device] 注意: $*"; }
     . "$T/fns.sh"
-    kit_record agent
+    kit_record lweb
 ) >"$T/out" 2>&1; RC=$?; }
 rec
-check "kit_record: one kit line from kit-source, dirty noted" "[ \$RC = 0 ] && grep -q '\"kind\":\"kit\",\"comp\":\"agent\",\"kit\":\"20261001\",\"commit\":\"abc1234def\",\"format\":1,\"mac_time\":1790000000' '$T/root/data/u60-manifest.jsonl' && grep -q 'kit-dirty' '$T/root/data/u60-manifest.jsonl' && grep -q '设备清单: 记下装机包 20261001' '$T/out'"
+check "kit_record: one kit line from kit-source, dirty noted" "[ \$RC = 0 ] && grep -q '\"kind\":\"kit\",\"comp\":\"lweb\",\"kit\":\"20261001\",\"commit\":\"abc1234def\",\"format\":1,\"mac_time\":1790000000' '$T/root/data/luyaz/ship/manifest.jsonl' && grep -q 'kit-dirty' '$T/root/data/luyaz/ship/manifest.jsonl' && grep -q '设备清单: 记下装机包 20261001' '$T/out'"
 rm "$K/payload/guard/kit-source"
 rec
-check "kit_record: an old kit without kit-source: warned, install goes on" '[ $RC = 0 ] && grep -q "没记进设备清单" "$T/out" && [ "$(wc -l <"$T/root/data/u60-manifest.jsonl")" = 1 ]'
+check "kit_record: an old kit without kit-source: warned, install goes on" '[ $RC = 0 ] && grep -q "没记进设备清单" "$T/out" && [ "$(wc -l <"$T/root/data/luyaz/ship/manifest.jsonl")" = 1 ]'
 rm -rf "$T"
 
 # kit_record datad (after devui) through the real u60-ship.sh: its own keys in
 # kit-source; a kit-source without datad_* keys (a kit from before them) still
 # records it, as commit 0000000 and dirty
 setup
-mkdir -p "$T/root/data/plugins/zwrt-datad" "$T/data/u60-guard"
-cp "$SCRIPTS/u60-ship.sh" "$T/data/u60-guard/"
+mkdir -p "$T/root/data/plugins/zwrt-datad" "$T/root/data/luyaz/ship" "$T/data/luyaz/scripts"; : >"$T/root/data/luyaz/ship/.migrated"
+cp "$SCRIPTS/u60-ship.sh" "$T/data/luyaz/scripts/luyaz-ship.sh"
 echo 'datad build' >"$T/root/data/plugins/zwrt-datad/zwrt-datad"
 sed -n '/^kit_record() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
 recd() { (
-    P=$K/payload G=$T/data/u60-guard
+    P=$K/payload S=$T/data/luyaz/scripts
     export U60S_ROOT=$T/root U60S_TMP=$T/tmp KIT_MAC_TIME=1790000000
     log() { echo "[device] $*"; }
     warn() { echo "[device] 注意: $*"; }
     . "$T/fns.sh"
     kit_record datad
 ) >"$T/out" 2>&1; RC=$?; }
-printf 'stamp=20261004\nagent_commit=abc1234\nagent_format=1\nagent_dirty=0\n' >"$K/payload/guard/kit-source"
+printf 'stamp=20261004\nlweb_commit=abc1234\nlweb_format=1\nlweb_dirty=0\n' >"$K/payload/guard/kit-source"
 recd
-check "kit_record datad, kit-source without datad_* keys: recorded as 0000000, dirty" "[ \$RC = 0 ] && grep -q '\"kind\":\"kit\",\"comp\":\"datad\",\"kit\":\"20261004\",\"commit\":\"0000000\",\"format\":1,' '$T/root/data/u60-manifest.jsonl' && grep -q '\"path\":\"$T/root/data/plugins/zwrt-datad/zwrt-datad\",\"md5\":\"$(md5 "$T/root/data/plugins/zwrt-datad/zwrt-datad")\"' '$T/root/data/u60-manifest.jsonl' && grep -q 'kit-dirty' '$T/root/data/u60-manifest.jsonl'"
-: >"$T/root/data/u60-manifest.jsonl"
-printf 'stamp=20261004\nagent_commit=abc1234\nagent_format=1\nagent_dirty=0\ndatad_commit=fed9876\ndatad_format=1\ndatad_dirty=0\n' >"$K/payload/guard/kit-source"
+check "kit_record datad, kit-source without datad_* keys: recorded as 0000000, dirty" "[ \$RC = 0 ] && grep -q '\"kind\":\"kit\",\"comp\":\"datad\",\"kit\":\"20261004\",\"commit\":\"0000000\",\"format\":1,' '$T/root/data/luyaz/ship/manifest.jsonl' && grep -q '\"path\":\"$T/root/data/plugins/zwrt-datad/zwrt-datad\",\"md5\":\"$(md5 "$T/root/data/plugins/zwrt-datad/zwrt-datad")\"' '$T/root/data/luyaz/ship/manifest.jsonl' && grep -q 'kit-dirty' '$T/root/data/luyaz/ship/manifest.jsonl'"
+: >"$T/root/data/luyaz/ship/manifest.jsonl"
+printf 'stamp=20261004\nlweb_commit=abc1234\nlweb_format=1\nlweb_dirty=0\ndatad_commit=fed9876\ndatad_format=1\ndatad_dirty=0\n' >"$K/payload/guard/kit-source"
 recd
-check "kit_record datad with its keys: its commit, not dirty" "[ \$RC = 0 ] && grep -q '\"comp\":\"datad\",\"kit\":\"20261004\",\"commit\":\"fed9876\",\"format\":1,' '$T/root/data/u60-manifest.jsonl' && ! grep -q 'kit-dirty' '$T/root/data/u60-manifest.jsonl'"
+check "kit_record datad with its keys: its commit, not dirty" "[ \$RC = 0 ] && grep -q '\"comp\":\"datad\",\"kit\":\"20261004\",\"commit\":\"fed9876\",\"format\":1,' '$T/root/data/luyaz/ship/manifest.jsonl' && ! grep -q 'kit-dirty' '$T/root/data/luyaz/ship/manifest.jsonl'"
 check "do_devui records datad" "sed -n '/^do_devui() {/,/^}/p' '$K/device/install.sh' | grep -q '^ *kit_record datad\$'"
+rm -rf "$T"
+
+# retire_agent (install_guard, so admin and devui): the marker that hands everything to the core,
+# and the agent's rc.local lines (procd and the old launcher) gone, the rest untouched
+setup
+printf '#!/bin/sh\n/data/local/tmp/start_dropbear.sh &\nsh /data/local/tmp/start_zte_agent.sh\n/etc/init.d/zte-agent start\n/etc/init.d/zwrt-datad start\nexit 0\n' >"$T/rc.local"
+sed -n '/^backup_rc() {/,/^}/p;/^rc_write() {/,/^}/p;/^retire_agent() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
+( RC=$T/rc.local STATE=$T/state CORE_DIR=$T/data/luyaz/core
+  log() { echo "[device] $*"; }; warn() { echo "[device] 注意: $*"; }; die() { echo "[device] 失败: $*"; exit 1; }
+  . "$T/fns.sh"; retire_agent ) >"$T/out" 2>&1; RC=$?
+check "retire_agent: marker written, both agent lines gone, the rest kept" '[ $RC = 0 ] && [ -f "$T/data/luyaz/core/agent-retired" ] && ! grep -q zte_agent "$T/rc.local" && ! grep -q zte-agent "$T/rc.local" && [ "$(grep -c . "$T/rc.local")" = 4 ] && [ -f "$T/state/rc.local.orig" ]'
+check "install_guard runs retire_agent and installs the luyaz-web init, not zte-agent's" "sed -n '/^install_guard() {/,/^}/p' '$K/device/install.sh' | grep -q '^ *retire_agent\$' && sed -n '/^install_guard() {/,/^}/p' '$K/device/install.sh' | grep -q 'for s in luyaz-core luyaz-sentinel luyaz-web; do'"
 rm -rf "$T"
 
 # an unfinished ship transaction on the device: admin / devui / recover refuse
 for case_ in "check:有没结束的上机事务" "trial:有没结束的上机事务" "staged:有没结束的上机事务" "failed:停在 failed" "weird:阶段看不懂"; do
     for comp in admin devui recover; do
         setup
-        mkdir -p "$T/data/u60-ship"
-        printf 'v=1\ntxn=20261001-120000-datad\ncomp=datad\nphase=%s\nend=1\n' "${case_%%:*}" >"$T/data/u60-ship/txn"
+        mkdir -p "$T/data/luyaz/ship"
+        printf 'v=1\ntxn=20261001-120000-datad\ncomp=datad\nphase=%s\nend=1\n' "${case_%%:*}" >"$T/data/luyaz/ship/txn"
         cp "$T/rc.local" "$T/rc.0"
         inst ssh "$comp"
-        check "transaction ${case_%%:*}: $comp refused, says why, nothing done" "[ \$RC != 0 ] && grep -q '${case_#*:}' '$T/out' && grep -q '这次什么都没装' '$T/out' && cmp -s '$T/rc.local' '$T/rc.0' && [ ! -e '$T/data/u60-ship/u60-recover.sh' ] && ! grep -q 'dropbear' '$T/out'"
+        check "transaction ${case_%%:*}: $comp refused, says why, nothing done" "[ \$RC != 0 ] && grep -q '${case_#*:}' '$T/out' && grep -q '这次什么都没装' '$T/out' && cmp -s '$T/rc.local' '$T/rc.0' && [ ! -e '$T/data/luyaz/ship/luyaz-recover.sh' ] && ! grep -q 'dropbear' '$T/out'"
         rm -rf "$T"
     done
 done
 for txt in 'garbage' 'v=1\nphase=check\n' 'v=3\nphase=done\nend=1\n' 'v=2\nphase=done\n'; do
     setup
-    mkdir -p "$T/data/u60-ship"
-    printf "$txt" >"$T/data/u60-ship/txn"
+    mkdir -p "$T/data/luyaz/ship"
+    printf "$txt" >"$T/data/luyaz/ship/txn"
     inst recover
-    check "unreadable transaction log ($(printf "$txt" | head -n 1)…): refused" '[ $RC != 0 ] && grep -q "读不懂" "$T/out" && [ ! -e "$T/data/u60-ship/u60-recover.sh" ]'
+    check "unreadable transaction log ($(printf "$txt" | head -n 1)…): refused" '[ $RC != 0 ] && grep -q "读不懂" "$T/out" && [ ! -e "$T/data/luyaz/ship/luyaz-recover.sh" ]'
     rm -rf "$T"
 done
 for ph in done rolledback aborted manifest_pending; do
     setup
-    mkdir -p "$T/data/u60-ship"
-    printf 'v=1\ntxn=20261001-120000-datad\ncomp=datad\nphase=%s\nend=1\n' "$ph" >"$T/data/u60-ship/txn"
+    mkdir -p "$T/data/luyaz/ship"
+    printf 'v=1\ntxn=20261001-120000-datad\ncomp=datad\nphase=%s\nend=1\n' "$ph" >"$T/data/luyaz/ship/txn"
     inst recover
-    check "finished transaction ($ph): recover goes ahead" '[ $RC = 0 ] && [ -f "$T/data/u60-ship/u60-recover.sh" ]'
+    check "finished transaction ($ph): recover goes ahead" '[ $RC = 0 ] && [ -f "$T/data/luyaz/ship/luyaz-recover.sh" ]'
     rm -rf "$T"
 done
 # v=2 (web, guard: a directory or a file under /etc): the same phases
 for case_ in done:0 check:1; do
     setup
-    mkdir -p "$T/data/u60-ship"
-    printf 'v=2\ntxn=20261001-120000-web\ncomp=web\nphase=%s\ndir=/data/admin|a|b\nend=1\n' "${case_%%:*}" >"$T/data/u60-ship/txn"
+    mkdir -p "$T/data/luyaz/ship"
+    printf 'v=2\ntxn=20261001-120000-web\ncomp=web\nphase=%s\ndir=/data/admin|a|b\nend=1\n' "${case_%%:*}" >"$T/data/luyaz/ship/txn"
     inst recover
     if [ "${case_#*:}" = 0 ]; then
-        check "v=2 transaction done: recover goes ahead" '[ $RC = 0 ] && [ -f "$T/data/u60-ship/u60-recover.sh" ]'
+        check "v=2 transaction done: recover goes ahead" '[ $RC = 0 ] && [ -f "$T/data/luyaz/ship/luyaz-recover.sh" ]'
     else
-        check "v=2 transaction in check: refused" '[ $RC != 0 ] && grep -q "有没结束的上机事务" "$T/out" && [ ! -e "$T/data/u60-ship/u60-recover.sh" ]'
+        check "v=2 transaction in check: refused" '[ $RC != 0 ] && grep -q "有没结束的上机事务" "$T/out" && [ ! -e "$T/data/luyaz/ship/luyaz-recover.sh" ]'
     fi
     rm -rf "$T"
 done
 
 # kit_record touch / uid (after devui): their own keys in kit-source
 setup
-mkdir -p "$T/data/u60-guard"
-printf '#!/bin/sh\necho "$*" >>%s/ship.calls\n' "$T" >"$T/data/u60-guard/u60-ship.sh"
-printf 'stamp=20261001\nagent_commit=abc1234\nagent_format=1\nagent_dirty=0\ntouch_commit=def5678\ntouch_format=1\ntouch_dirty=0\nuid_commit=def5678\nuid_format=2\nuid_dirty=1\n' >"$K/payload/guard/kit-source"
+mkdir -p "$T/data/luyaz/scripts"
+printf '#!/bin/sh\necho "$*" >>%s/ship.calls\n' "$T" >"$T/data/luyaz/scripts/luyaz-ship.sh"
+printf 'stamp=20261001\nlweb_commit=abc1234\nlweb_format=1\nlweb_dirty=0\ntouch_commit=def5678\ntouch_format=1\ntouch_dirty=0\nuid_commit=def5678\nuid_format=2\nuid_dirty=1\n' >"$K/payload/guard/kit-source"
 sed -n '/^kit_record() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
 (
-    P=$K/payload G=$T/data/u60-guard KIT_MAC_TIME=1790000000
+    P=$K/payload S=$T/data/luyaz/scripts KIT_MAC_TIME=1790000000
     log() { echo "[device] $*"; }
     warn() { echo "[device] 注意: $*"; }
     . "$T/fns.sh"
@@ -221,24 +243,24 @@ rm -rf "$T"
 # uid_restart (do_devui): the kit's u60-ship.sh uid-restart with the two md5s;
 # a kit u60-ship.sh without it: not called (the old restart instead)
 setup
-mkdir -p "$T/data/u60-guard" "$T/d"
+mkdir -p "$T/data/luyaz/scripts" "$T/d"
 echo 'ui build' >"$T/d/u60pro-devui"
 echo 'uid build' >"$T/d/u60-uid"
-printf '#!/bin/sh\ncase "$1" in\n  uid-restart) echo "$*" >>%s/ship.calls; exit 0 ;;\nesac\n' "$T" >"$T/data/u60-guard/u60-ship.sh"
+printf '#!/bin/sh\ncase "$1" in\n  uid-restart) echo "$*" >>%s/ship.calls; exit 0 ;;\nesac\n' "$T" >"$T/data/luyaz/scripts/luyaz-ship.sh"
 sed -n '/^uid_restart() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
 ur() { (
-    G=$T/data/u60-guard
+    S=$T/data/luyaz/scripts
     warn() { echo "[device] 注意: $*"; }
     . "$T/fns.sh"
     uid_restart "$T/d/u60pro-devui" "$T/d/u60-uid"
 ) >"$T/out" 2>&1; RC=$?; }
 ur
 check "uid_restart: u60-ship.sh uid-restart <ui md5> <uid md5>" "[ \"\$(cat '$T/ship.calls')\" = \"uid-restart \$(md5 '$T/d/u60pro-devui') \$(md5 '$T/d/u60-uid')\" ]"
-printf '#!/bin/sh\necho "$*" >>%s/ship.calls\nexit 1\n# uid-restart)\n' "$T" >"$T/data/u60-guard/u60-ship.sh"
+printf '#!/bin/sh\necho "$*" >>%s/ship.calls\nexit 1\n# uid-restart)\n' "$T" >"$T/data/luyaz/scripts/luyaz-ship.sh"
 : >"$T/ship.calls"
 ur
 check "uid_restart: it says no: a warning, the install goes on" '[ $RC = 0 ] && grep -q "uid-restart 没确认" "$T/out"'
-printf '#!/bin/sh\necho "$*" >>%s/ship.calls\n' "$T" >"$T/data/u60-guard/u60-ship.sh"
+printf '#!/bin/sh\necho "$*" >>%s/ship.calls\n' "$T" >"$T/data/luyaz/scripts/luyaz-ship.sh"
 : >"$T/ship.calls"
 ur
 check "uid_restart: an older u60-ship.sh (no uid-restart): not called" '[ ! -s "$T/ship.calls" ]'
@@ -289,6 +311,24 @@ setup
 chmod 755 "$T/rc.local"; i0=$(ino "$T/rc.local")
 inst recover
 check "recover: rc.local replaced by rename, still 755, no temp file" '[ $RC = 0 ] && [ "$(ino "$T/rc.local")" != "$i0" ] && [ "$(perm "$T/rc.local")" = "-rwxr-xr-x" ] && [ "$(tmps)" = 0 ]'
+rm -rf "$T"
+
+echo "== kit: the old /data/u60-kit not moved yet (Luya-Z rename E1) =="
+# recover and ssh back up rc.local first: with the old state dir still there and the new one
+# missing, that backup would take the already-changed rc.local as the vendor one. Refused first.
+for c in recover ssh; do
+    setup
+    cp "$T/rc.local" "$T/rc.0"; mkdir -p "$T/data/u60-kit"; echo vendor >"$T/data/u60-kit/rc.local.orig"
+    KIT_RC=$T/rc.local KIT_STATE=$T/data/luyaz/kit KIT_OLD_STATE=$T/data/u60-kit KIT_SHIP_DIR=$T/data/luyaz/ship \
+        KIT_SCRIPTS=$T/data/luyaz/scripts sh "$K/device/install.sh" $c >"$T/out" 2>&1; RC=$?
+    check "$c with only the old state dir: refused, says mv, nothing written" '[ $RC != 0 ] && grep -q "先 mv $T/data/u60-kit $T/data/luyaz/kit" "$T/out" && [ ! -e "$T/data/luyaz/kit" ] && cmp -s "$T/rc.local" "$T/rc.0"'
+    rm -rf "$T"
+done
+setup
+mkdir -p "$T/data/u60-kit"
+KIT_RC=$T/rc.local KIT_STATE=$T/data/luyaz/kit KIT_OLD_STATE=$T/data/u60-kit KIT_SHIP_DIR=$T/data/luyaz/ship \
+    KIT_SCRIPTS=$T/data/luyaz/scripts sh "$K/device/install.sh" status >"$T/out" 2>&1
+check "status with only the old state dir: not refused" '! grep -q "先 mv" "$T/out"'
 rm -rf "$T"
 
 echo "kit u60-recover: $PASS passed, $FAIL failed"

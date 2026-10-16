@@ -1,0 +1,31 @@
+{%- macro help(l, id, label, text) -%}
+<button type="button" class="nd-help" popovertarget="h-{{ id }}" aria-label="{{ l.pick("About", "关于") }} {{ label }}"><svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M144,180a16,16,0,1,1-16-16A16,16,0,0,1,144,180Zm92-52A108,108,0,1,1,128,20,108.12,108.12,0,0,1,236,128Zm-24,0a84,84,0,1,0-84,84A84.09,84.09,0,0,0,212,128ZM128,64c-24.26,0-44,17.94-44,40v4a12,12,0,0,0,24,0v-4c0-8.82,9-16,20-16s20,7.18,20,16-9,16-20,16a12,12,0,0,0-12,12v8a12,12,0,0,0,23.73,2.56C158.31,137.88,172,122.37,172,104,172,81.94,152.26,64,128,64Z"/></svg></button><div id="h-{{ id }}" popover class="nd-pop">{{ text }}</div>
+{%- endmacro -%}
+{%- macro ro_value(id, r, unit) -%}
+<div id="ro-{{ id }}" class="nd-readout__value">{% if r.loading() %}<span class="nd-skel" aria-label="…"></span>{% elif r.empty %}<span class="nd-readout__empty">—</span>{% else %}<span>{{ r.text() }}</span><span class="nd-readout__unit">{{ unit }}</span>{% endif %}</div>
+{%- endmacro -%}
+{%- macro ro_word(id, r) -%}
+<div id="ro-{{ id }}-w" class="nd-readout__sub"{% if r.word.is_empty() %} hidden{% endif %}>{{ r.word }}</div>
+{%- endmacro -%}
+{%- macro cell_value(i, c) -%}
+<span id="cv-{{ i }}" class="nd-row__value{% if c.3 %} nd-mono{% endif %}">{{ c.2 }}</span>
+{%- endmacro -%}
+{%- macro trend_line(v, t) -%}
+<svg id="trend-plot" viewBox="0 0 600 160" class="t-trend t-plot" preserveAspectRatio="none" aria-hidden="true"><polyline points="{{ t.points }}" fill="none" stroke="{% if v.stale %}var(--nd-t3){% else %}var(--nd-accMark){% endif %}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>
+{%- endmacro -%}
+{%- macro trend_aria(t) -%}
+<span id="trend-aria" class="sr-only">{{ t.aria() }}</span>
+{%- endmacro -%}
+{%- macro readout(l, r, cls, label, id, text, unit) -%}
+<div class="nd-readout{{ cls }}">
+<div class="nd-readout__label">{{ label }} {% call help(l, id, label, text) %}{% endcall %}</div>
+{% call ro_value(id, r, unit) %}{% endcall %}
+{% call ro_word(id, r) %}{% endcall %}
+</div>
+{%- endmacro -%}
+
+{%- macro switch(l, on, expanded, busy, target) -%}
+{% if busy %}<span class="nd-row__value">{% if target %}{{ l.pick("Turning on…", "正在打开…") }}{% else %}{{ l.pick("Turning off…", "正在关掉…") }}{% endif %}</span>{% endif %}<button type="button" role="switch" class="nd-switch t-switch" aria-labelledby="roam-label" aria-checked="{% if on == Some(true) %}true{% else %}false{% endif %}"{% if expanded %} aria-expanded="true" aria-controls="roam-confirm"{% endif %}{% if busy || on.is_none() %} disabled data-disabled="true"{% endif %}{% if on == Some(true) %} data-selected="true"{% endif %} data-on:click="@post('/roam/ask')">
+<span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span>
+</button>
+{%- endmacro -%}

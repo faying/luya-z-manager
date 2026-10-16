@@ -1,0 +1,76 @@
+// SMS forwarding's bookkeeping (luyaz_policy::sms_forward), the policy boundary between u60d's SMS
+// forward shadow and an sms-forward component. The version is the host ABI version in a plugin's
+// manifest entry: change anything here and bump it.
+//
+// Ids and date time keys only: sender and body never cross. A pass is replayed against the pages
+// and outcomes the agent got (no imports); the host compares what the guest asked with what was
+// recorded.
+package luyaz:sms-forward@0.1.0;
+
+world sms-forward {
+  record item {
+    id: u64,
+    received: bool,
+    time: option<s64>,
+  }
+
+  record page {
+    items: list<item>,
+    has-more: bool,
+  }
+
+  variant page-answer {
+    ok(page),
+    err(string),
+  }
+
+  record recorded-page {
+    after: u64,
+    limit: u64,
+    answer: page-answer,
+  }
+
+  enum delivery {
+    delivered,
+    skipped,
+    deferred,
+  }
+
+  record pass-in {
+    watermark: u64,
+    last-time: option<s64>,
+    max-id: u64,
+    pages: list<recorded-page>,
+    forwards: list<tuple<u64, delivery>>,
+  }
+
+  variant pass-result {
+    ok(u64),
+    err(string),
+  }
+
+  record pass-out {
+    asked: list<tuple<u64, u64>>,
+    forwarded: list<u64>,
+    commits: list<tuple<u64, option<s64>>>,
+    ended: pass-result,
+  }
+
+  record held {
+    sms-id: u64,
+    first-deferred-at: s64,
+    online-secs: u64,
+    delivered-rules: list<u32>,
+  }
+
+  record settled {
+    outcome: delivery,
+    held: option<held>,
+    alert: bool,
+  }
+
+  /// One recorded pass (luyaz_policy::sms_forward::replay_pass).
+  export replay-pass: func(input: pass-in) -> pass-out;
+  /// One delivery's rule failures (true = transient) through the hold (luyaz_policy::sms_forward::settle).
+  export settle: func(held: option<held>, sms-id: u64, failures: list<bool>, delivered: list<u32>, wall: s64) -> settled;
+}

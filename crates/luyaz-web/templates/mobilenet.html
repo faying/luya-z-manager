@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+{{ self.leaf("mn-cur")|safe }}
+<div class="pg-col">
+{{ self.leaf("mn-status")|safe }}
+<section aria-labelledby="mn-c-t"><h2 id="mn-c-t" class="nd-group-title">{{ l.pick("Connection", "连接") }}</h2>
+{{ self.leaf("mn-conn")|safe }}
+{{ ops[0]|safe }}{{ ops[1]|safe }}
+</section>
+<section aria-labelledby="mn-s-t"><h2 id="mn-s-t" class="nd-group-title">{{ l.pick("Manual Carrier Scan", "手动选择运营商") }}</h2>
+<div><button type="button" class="nd-btn nd-btn--secondary" data-attr:disabled="$_sdis" data-on:click="@post('{{ crate::netsel::NET_PATH }}/scan/ask')">{{ l.pick("Scan for Carriers", "扫描运营商") }}</button></div>
+{{ ops[2]|safe }}
+{{ self.leaf("mn-sel")|safe }}
+{{ ops[3]|safe }}
+<div class="nd-group mt-2"><div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Back to Automatic", "回到自动选网") }}</span><span class="nd-row__sub block">{{ l.pick("Let the modem pick the network again", "让模组重新自动选择网络") }}</span></span><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-attr:disabled="$_sdis" data-on:click="@post('{{ crate::netsel::NET_PATH }}/auto/ask')">{{ l.pick("Back to Auto", "回到自动") }}</button></div></div>
+{{ ops[4]|safe }}
+</section>
+<section aria-labelledby="mn-d-t"><h2 id="mn-d-t" class="nd-group-title">{{ l.pick("Device Control", "设备控制") }}</h2>
+<div class="nd-group"><div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Reboot Router", "重启路由器") }}</span><span class="nd-row__sub block">{{ l.pick("Use this if the modem stops responding.", "调制解调器没反应时用。") }}</span></span><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('{{ crate::netsel::NET_PATH }}/reboot/ask')">{{ l.pick("Reboot", "重启") }}</button></div></div>
+{{ ops[5]|safe }}
+</section>
+</div>
+{% endblock %}

@@ -1,0 +1,37 @@
+#!/bin/sh /etc/rc.common
+# procd service for luyaz-web (manager crates/luyaz-web; manager
+# docs/designs/u60-web.md): the admin pages on :9090 (8d-2c: the agent is
+# retired, :8080 is gone; a busy bind is still retried every 10 s). Live data
+# and the API come from u60d on 127.0.0.1:9460. Logins are checked here against the admin
+# password file (path only, like the retired zte-agent.init: procd shows the
+# env and command line in `ubus call service list`). Installed by
+# `u60 ship scripts` (this file) and `u60 ship lweb` (the program); started
+# from /etc/rc.local with `/etc/init.d/luyaz-web start`, after the luyaz-recover.sh
+# line.
+#
+# No program yet (scripts shipped first, or a first lweb ship rolled back):
+# refuses, so the init can sit on devices that do not run luyaz-web.
+# LUYAZ_WEB_PAGES (the migrated pages, comma-separated) is the program's own
+# default; to send one page back to the agent without a rebuild, add
+#   procd_set_param env LUYAZ_WEB_PAGES=...
+# here (u60-ship.sh lw_launch_cmd must then say the same: scripts/test/u60-ship).
+#
+# Do NOT run `enable`/`disable` (overlay whiteouts, manager CLAUDE.md).
+# respawn 300 5 5: see luyaz-core.init.
+# SPDX-License-Identifier: MIT
+
+START=96
+USE_PROCD=1
+
+BIN=/data/luyaz/luyaz-web
+
+start_service() {
+    [ -x "$BIN" ] || return 1
+    procd_open_instance
+    # X9 (manager docs/designs/u60-phase10.md): the program itself under procd, no wrapper; output
+    # appended to /tmp/luyaz-web.log (the sentinel caps it), crash records and alerts by the core (u60d svcwatch)
+    procd_set_param command /bin/sh -c 'exec >>/tmp/luyaz-web.log 2>&1 </dev/null; echo "=== $(date +%Y-%m-%dT%H:%M:%S) start $0"; exec "$0" "$@"' "$BIN" serve --bind 0.0.0.0:9090 --upstream http://127.0.0.1:9460 --password-file /data/zte-agent.env
+    procd_set_param respawn 300 5 5
+    procd_set_param term_timeout 10
+    procd_close_instance
+}

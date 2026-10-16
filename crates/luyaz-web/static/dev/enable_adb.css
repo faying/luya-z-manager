@@ -1,0 +1,5 @@
+/* /tools/enable-adb (batch 5c) */
+.adb-card { display: grid; gap: 16px; padding: 16px; }
+@media (min-width: 1024px) { .adb-card { padding: 20px; } }
+.adb-muted { color: var(--nd-t2); }
+.adb-link { color: var(--nd-accT); text-decoration: underline; }

@@ -1,0 +1,16 @@
+<div id="{{ id }}-op" data-on:datastar-fetch="evt.detail.type === 'retries-failed' && evt.detail.el?.dataset?.write === '{{ id }}' && @post('{{ self.lost() }}')">{% match phase %}{% when Phase::Ask(c) %}{% if c.tier == Tier::Dialog %}<dialog id="{{ id }}-confirm" class="nd nd-dialog t-dialog" aria-labelledby="{{ id }}-dlg-t" data-init="el.showModal()" data-on:cancel="@post('{{ cancel }}')">
+<h2 id="{{ id }}-dlg-t" class="t-dialog__title">{{ c.title }}</h2>
+{% if remote && c.cuts_uplink %}<p class="nd-dialog__remote" role="alert">{{ l.pick("You are connected remotely over Tailscale. If this step cuts the connection, someone has to be at the device to recover it.", "你正在经 Tailscale 远程操作；如果这一步断网，要到设备旁边才能恢复。") }}</p>
+{% endif %}<dl class="nd-dialog__facts"><div><dt>{{ l.pick("What happens", "会发生什么") }}</dt><dd>{{ c.what }}</dd></div>
+{% if let Some(d) = c.downtime %}<div><dt>{{ l.pick("How long it is offline", "断开多久") }}</dt><dd>{{ d }}</dd></div>
+{% endif %}{% if let Some(r) = c.recovery %}<div><dt>{{ l.pick("How to recover", "怎么恢复") }}</dt><dd>{{ r }}</dd></div>
+{% endif %}</dl>
+{% if let Some(w) = c.word %}<label class="mt-5 grid gap-2"><span class="nd-aux">{% match l %}{% when Lang::En %}Type “{{ w }}” to confirm{% else %}输入「{{ w }}」确认{% endmatch %}</span><input class="nd-field" data-bind="{{ self.sig() }}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+{% endif %}<div class="t-dialog__actions"><button type="button" class="nd-btn nd-btn--secondary" autofocus data-on:click="el.closest('dialog').close(); @post('{{ cancel }}')">{{ l.pick("Cancel", "取消") }}</button>
+<button type="button" class="nd-btn {% if c.danger %}nd-btn--danger{% else %}nd-btn--confirm{% endif %}" data-write="{{ id }}"{% if let Some(w) = c.word %} data-attr:disabled="(${{ self.sig() }} ?? '').trim() !== '{{ w }}'"{% endif %} data-on:click="{{ self.set_js(c.word.is_some()) }}">{{ c.action }}</button></div>
+</dialog>{% else %}<div id="{{ id }}-confirm" role="group" aria-label="{{ c.title }}" class="nd-confirm" data-on:keydown__window="evt.key === 'Escape' && @post('{{ cancel }}')">
+<p class="nd-confirm__text" aria-live="polite">{{ c.what }}</p>
+{% if remote && c.cuts_uplink %}<p class="nd-confirm__text t-note--warn">{{ l.pick("You are connected remotely over Tailscale. If this step cuts the connection, someone has to be at the device to recover it.", "你正在经 Tailscale 远程操作；如果这一步断网，要到设备旁边才能恢复。") }}</p>
+{% endif %}<div class="nd-confirm__actions"><button type="button" class="nd-btn {% if c.danger %}nd-btn--danger{% else %}nd-btn--confirm{% endif %}" data-write="{{ id }}" data-on:click="{{ self.set_js(false) }}">{{ c.action }}</button>
+<button type="button" class="nd-btn nd-btn--secondary" data-init="el.focus()" data-on:click="@post('{{ cancel }}')">{{ l.pick("Cancel", "取消") }}</button></div>
+</div>{% endif %}{% when Phase::Pending(t) %}{% if !t.is_empty() %}<p class="t-note" role="status">{{ t }}</p>{% endif %}{% when Phase::Done(o) %}<p class="t-note t-note--{{ o.tone() }}" role="{{ o.role() }}">{{ self.said(o) }}</p>{% when Phase::Idle %}{% endmatch %}</div>

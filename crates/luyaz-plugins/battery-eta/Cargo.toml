@@ -1,0 +1,14 @@
+[package]
+name = "battery-eta"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "u60-policy's battery_eta as a component (wit/battery-eta.wit)."
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+luyaz-policy = { path = "../../luyaz-policy" }
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros", "realloc"] }

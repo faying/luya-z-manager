@@ -3,7 +3,7 @@
 > L2 第 0 阶段 2026-10-01 定稿（用户定 4 条 + 外部评审）。以后新加界面文字先在这里加词。
 > 设计稿：`docs/designs/ui-english.md`（不公开）。措辞规则见 `docs/DESIGN.md` §1 第 6 条，首页结论表和长度预算见 §4。
 
-触屏、管理网页、后台（datad、agent、guard）的英文都以本表为准。同一个东西只有一个英文叫法；提示里点名页面时，用的页名必须和本表一模一样。
+触屏、管理网页、后台（核心 luyaz-core、哨兵 luyaz-sentinel；文中 datad = 核心，agent、guard 已退役）的英文都以本表为准。同一个东西只有一个英文叫法；提示里点名页面时，用的页名必须和本表一模一样。
 
 宽度是用真机字体 Nunito（正文 600、粗体 700）按实际字号量的；触屏 render 测试最后按像素确认。
 
@@ -48,7 +48,7 @@
 | 数据服务 | Data service | 网页已在用 |
 | 触屏界面 | Screen UI | 网页现写 Touch screen UI，R8 合并时改齐 |
 | 原厂界面 | stock UI | |
-| 屏幕守护（u60-uid） | Screen supervisor | doctor 用 |
+| 屏幕守护（luyaz-sentinel；原 u60-uid） | Screen supervisor | doctor 用 |
 | 看门狗 | watchdog | Wi-Fi watchdog |
 | 网络模式 | Network mode | 设置值 Auto / 5G only… 见 §7 |
 | 移动数据 | Mobile data | |
@@ -60,7 +60,7 @@
 
 ## 4. 首页大字（状态词，24 粗，≤150px）
 
-以 datad `screen.rs` `say()` 为准；中文不动，英文只写状态词，原因交给右栏和提示行。
+以核心 `crates/luyaz-core/src/project/screen.rs` 为准；中文不动，英文只写状态词，原因交给右栏和提示行。
 
 | story.state | 中文 | English | 宽 | 色调 |
 |---|---|---|---|---|
@@ -129,7 +129,7 @@
 | 顶栏制式词（13 粗） | 无服务 | No svc | 43（上限：不超过 5G UW 46） |
 | 顶栏制式词 | SOS、5G、5G-A、5G UC、5G UW、5G+、4G+、LTE | 原样 | 最宽 5G UW 46 |
 
-## 7. 网络模式取值（datad `net_select_word`）
+## 7. 网络模式取值（核心 `net_select_word`）
 
 | 中文 | English |
 |---|---|
@@ -146,7 +146,7 @@
 
 ## 8. 运营商英文名
 
-规则（设计评审决定 13）：用简短通用名，去掉 Co., Ltd.；agent 表里没有的，显示网络广播名原样。datad 的 4 家必须和 agent 一字不差（跨仓库测试比对）。
+规则（设计评审决定 13）：用简短通用名，去掉 Co., Ltd.；运营商表（`crates/luyaz-api/src/netinfo.rs`）里没有的，显示网络广播名原样。datad 的 4 家必须和 agent 一字不差（跨仓库测试比对）。
 
 | MCC-MNC | 中文 | English |
 |---|---|---|
@@ -165,29 +165,29 @@
 | 466-89/93/97 | 台湾大哥大 | Taiwan Mobile |
 | 440-11 | 楽天モバイル | Rakuten Mobile |
 
-agent 表里其余的（csl、SmarTone、CTM、NTT docomo、SoftBank、au (KDDI)、SK Telecom、KT、LG U+、Singtel、M1、StarHub、SIMBA、AT&T、T-Mobile、Verizon、Telus、Bell、Rogers、O2 UK、Vodafone UK、Three UK、EE、Vodafone NL、KPN、Odido、Orange、SFR、Free、Bouygues、Telekom、Vodafone DE、O2 DE、AIS、True、dtac、Maxis、CelcomDigi、U Mobile、Telstra、Optus、Vodafone AU）本来就是英文，原样用。
+表里其余的（csl、SmarTone、CTM、NTT docomo、SoftBank、au (KDDI)、SK Telecom、KT、LG U+、Singtel、M1、StarHub、SIMBA、AT&T、T-Mobile、Verizon、Telus、Bell、Rogers、O2 UK、Vodafone UK、Three UK、EE、Vodafone NL、KPN、Odido、Orange、SFR、Free、Bouygues、Telekom、Vodafone DE、O2 DE、AIS、True、dtac、Maxis、CelcomDigi、U Mobile、Telstra、Optus、Vodafone AU）本来就是英文，原样用。
 
 ## 9. 告警短信（guard `sms_body()`，英文模式）
 
-格式 `[U60] <正文> (<日 月 时:分>)`，整条纯 ASCII、≤70 字符（评审 R7）；句末不加句号，几层意思用 `;` 连。时间写 `01 Oct 14:32`（`date '+%d %b %H:%M'`，定宽，10-01 定）。下表「长」是整条长度。
+格式 `[Luya-Z] <正文> (<日 月 时:分>)`，整条纯 ASCII、≤70 字符（评审 R7）；句末不加句号，几层意思用 `;` 连。时间写 `01 Oct 14:32`（`date '+%d %b %H:%M'`，定宽，10-01 定）。下表「长」是整条长度，含末尾 `#999` 短码（10-15 前缀改成 `[Luya-Z]` 后重算）。
 
 | kind | 中文（现有） | English 整条 | 长 |
 |---|---|---|---|
-| wifi-takeover | 管理后台没反应了。为了让你能上网，已自动打开U60的Wi-Fi。不用管。 | [U60] Admin down; Wi-Fi turned on; no action needed (01 Oct 14:32) | 66 |
-| wifi-restore-failed | 想自动打开U60的Wi-Fi没成功，还在重试。如果手机连不上U60，请重启它。 | [U60] Wi-Fi didn't start; retrying; stuck? Restart U60 (01 Oct 14:32) | 69 |
-| agent-silent | 管理后台超过5分钟没反应。上网一般不受影响；Wi-Fi要是关着，会自动打开。 | [U60] Admin silent 5+ min; internet usually fine (01 Oct 14:32) | 63 |
-| agent-hung | 管理后台卡住了，已强制重启。不用管。 | [U60] Admin hung; force-restarted; no action needed (01 Oct 14:32) | 66 |
-| agent-crash | 管理后台意外退出，已自动重启。不用管。 | [U60] Admin crashed; restarted; no action needed (01 Oct 14:32) | 63 |
-| datad-crash | 屏幕的数据服务意外退出，已自动重启。不用管。 | [U60] Data service crashed; restarted; no action needed (01 Oct 14:32) | 70 |
-| datad-degraded | 屏幕的数据服务超过5分钟不正常，管理后台已改用备用方式读数据。上网不受影响。 | [U60] Data service down 5+ min; using fallback; net OK (01 Oct 14:32) | 69 |
-| devui-crash | 屏幕界面闪退了，已自动重新打开。不用管。 | [U60] Screen UI crashed; reopened; no action needed (01 Oct 14:32) | 66 |
-| devui-gave-up | 屏幕界面连续打不开，已换成原厂界面，上网不受影响。长按屏幕右下角3秒可换回。 | [U60] Stock UI on; hold bottom-right 3s to switch back (01 Oct 14:32) | 69 |
-| sms-test | 这是测试短信。收到了，说明告警短信能正常发到你手机。 | [U60] Test SMS: alert texts reach your phone (01 Oct 14:32) | 59 |
-| 其他 | 有一条新告警（kind），请到管理网页「系统→告警」查看。 | [U60] New alert <kind>; see Alerts on web (01 Oct 14:32) | 最长 kind（devui-theme-paused）68 |
+| wifi-takeover | 管理后台没反应了。为了让你能上网，已自动打开U60的Wi-Fi。不用管。 | [Luya-Z] Admin down; Wi-Fi turned on; no action (01 Oct 14:32) | 66 |
+| wifi-restore-failed | 想自动打开U60的Wi-Fi没成功，还在重试。如果手机连不上U60，请重启它。 | [Luya-Z] Wi-Fi won't start; retrying; stuck? Reboot (01 Oct 14:32) | 70 |
+| agent-silent | 管理后台超过5分钟没反应。上网一般不受影响；Wi-Fi要是关着，会自动打开。 | [Luya-Z] Admin silent 5+ min; internet usually fine (01 Oct 14:32) | 70 |
+| agent-hung | 管理后台卡住了，已强制重启。不用管。 | [Luya-Z] Admin hung; force-restarted; no action (01 Oct 14:32) | 66 |
+| agent-crash | 管理后台意外退出，已自动重启。不用管。 | [Luya-Z] Admin crashed; restarted; no action needed (01 Oct 14:32) | 70 |
+| datad-crash | 屏幕的数据服务意外退出，已自动重启。不用管。 | [Luya-Z] Data service crashed; restarted; no action (01 Oct 14:32) | 70 |
+| datad-degraded | 屏幕的数据服务超过5分钟不正常，管理后台已改用备用方式读数据。上网不受影响。 | [Luya-Z] Data service down 5+ min; fallback; net OK (01 Oct 14:32) | 70 |
+| devui-crash | 屏幕界面闪退了，已自动重新打开。不用管。 | [Luya-Z] Screen UI crashed; reopened; no action (01 Oct 14:32) | 66 |
+| devui-gave-up | 屏幕界面连续打不开，已换成原厂界面，上网不受影响。长按屏幕右下角3秒可换回。 | [Luya-Z] Stock UI on; hold bottom-right 3s to undo (01 Oct 14:32) | 69 |
+| sms-test | 这是测试短信。收到了，说明告警短信能正常发到你手机。 | [Luya-Z] Test SMS: alert texts reach your phone (01 Oct 14:32) | 66 |
+| 其他 | 有新告警（kind），请到管理网页「系统→告警」查看。 | [Luya-Z] Alert <kind>; see Alerts on web (01 Oct 14:32) | kind 截到 17 字，最长 70（含 `#999`） |
 
 为了压进 70 字，英文比中文少说了的：agent-silent 没写「Wi-Fi 关着会自动打开」（真打开时另有 wifi-takeover 短信）；devui-gave-up 没写「上网不受影响」，「屏幕界面打不开」由 Stock UI on 带出。
 
-## 10. 网络诊断（agent `deep_diag.rs`，10-02 ER4；触屏 T4 10-02 已做，网页 T5 用同一套词）
+## 10. 网络诊断（原 agent `deep_diag.rs`，现 `crates/luyaz-netwatch` 的 `diagnose.rs`；10-02 ER4；触屏 T4 10-02 已做，网页 T5 用同一套词）
 
 主句（状态块大字）和一个动作，按层序取第一个「差」，没有就取第一个「疑点」；推断类写「疑似」。
 
@@ -246,7 +246,7 @@ agent 表里其余的（csl、SmarTone、CTM、NTT docomo、SoftBank、au (KDDI)
 | 按钮、脚注 | 重新开始 · 换了小区会重新计；这页开着不息屏 | Start over · Resets on a new cell; the screen stays on here |
 
 
-## 13. 写操作（事务，E4；datad `ops/ui.rs`，设计 `docs/designs/write-op-layer.md` 状态文案表）
+## 13. 写操作（事务，E4；核心 `ops/ui.rs`，设计 `docs/designs/write-op-layer.md` 状态文案表）
 
 句子由 datad 写（op 块和改动记录的 `*_zh/_en`），触屏和网页照着显示；下面只是对照。触屏和网页自己写的几句英文两边相同（触屏 `lang_test.c`、网页 `tests/unit/opsWords.test.ts` 查：不含中文、不写 Please、状态短句不带句号）。中文拼接：中文挨中文不空格、挨数字和英文空一格（「已退回自动」「退回到 4G + 5G」）。X = 退回目标，Y = 目标，「旧」= 写之前的值。
 
@@ -329,6 +329,16 @@ agent 表里其余的（csl、SmarTone、CTM、NTT docomo、SoftBank、au (KDDI)
 | 底部 | 只显示最近 N 条 | Latest N only |
 | 设置页入口 | 上次改动 14:32 · 触屏 › | Last changed 14:32 · Screen › |
 
+
+## 15. 设计用词（Phase 8 T19，10-11；不上界面）
+
+DESIGN.md §5 用来描述网页、跟框架无关的词。只在文档和代码里出现，界面上不显示。
+
+| 中文 | English | 意思 |
+|---|---|---|
+| 页族 | page family | 一类页面（图表、网络与频段、Wi-Fi 与局域网、服务、短信、设备与维护），决定色块；以前叫「路由组」 |
+| 三档写操作 | write tiers | 写操作按后果分三档：直接发（direct）/ 页内确认（inline）/ 弹窗确认（dialog）；以前写作 `useWriteOp` |
+| 外框 | shell | 每页都有的导航 + 横条那一层 |
 
 ## 外部评审（10-01，独立子代理；Codex 卡死没跑成）
 

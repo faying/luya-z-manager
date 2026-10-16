@@ -1,0 +1,14 @@
+{%- macro val(x) -%}{% match x %}{% when Val::Loading %}<span class="nd-skel qs-skel" aria-label="…"></span>{% when Val::Empty %}—{% when Val::Text(t) %}{{ t }}{% when Val::Raw(t) %}<span data-data>{{ t }}</span>{% endmatch %}{%- endmacro -%}
+<div id="qs-status"><section class="nd-status nd-status--{{ v.tone }}{% if v.tone == "stale" %} nd-stale{% endif %}">
+<div class="nd-status__main">
+<div class="nd-status__state" role="status" aria-live="polite"><span class="nd-mark nd-mark--{{ v.tone }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.symbol() }}</span><span>{{ v.state }}</span></span></div>
+{% if let Some(r) = v.reason %}<div class="nd-status__reason"><span{% if v.tone == "bad" %} role="alert"{% endif %}>{{ r }}</span></div>{% endif %}
+{% if let Some(m) = v.meta %}<div class="nd-status__meta"><span class="nd-fresh">{{ m }}</span></div>{% endif %}
+</div>
+{% if v.retry %}<div class="nd-status__actions"><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/router/qos/refresh')">{{ v.l.pick("Retry", "重试") }}</button></div>{% endif %}
+</section></div>
+<!--leaf-->
+<div id="qs-rows" class="nd-group{% if v.tone == "stale" %} nd-stale{% endif %}">
+<div id="qs-mode" class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Mode", "模式") }}</span><span class="nd-row__sub block">{{ v.l.pick("Only matters when several devices fill the link at once.", "只在好几台设备同时把网速占满时才起作用。") }}</span></span><span class="nd-row__value">{% call val(v.mode) %}{% endcall %}</span></div>
+<div id="qs-xdpi" class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("App recognition (xdpi)", "应用识别（xdpi）") }}</span><span class="nd-row__sub block">{{ v.l.pick("Off on purpose: it costs about 25 % CPU.", "特意关着：开着要多吃约 25% CPU。") }}</span></span><span class="nd-row__value">{% call val(v.xdpi) %}{% endcall %}</span></div>
+</div>

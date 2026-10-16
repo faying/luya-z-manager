@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("sys.css") }}">{% endblock %}
+{% block main %}
+<div class="mb-4 mt-2 flex items-center gap-2"><h1 class="nd-title flex-1">{{ shell.title() }}</h1><button type="button" class="nd-btn nd-btn--ghost nd-btn--icon" aria-label="{{ l.pick("Refresh", "刷新") }}" data-on:click="@post('/router/esim/refresh')">{{ crate::shell::icon("ArrowClockwise", false, 20, "")|safe }}</button></div>
+<div class="grid gap-6 es-w" data-signals="{_esEdit: '', _esNick: '', _esCode: '', _esConf: ''}">
+<p class="nd-body -mt-2">{{ l.pick("Manage profiles on a removable eUICC card (eSTK.me / 5ber and similar) in the SIM slot.", "管理插在 SIM 卡槽中的可插拔 eUICC 卡（eSTK.me / 5ber 等）上的配置文件。") }}</p>
+{{ self.leaf("es-status")|safe }}
+<section aria-labelledby="es-prof-t"><h2 id="es-prof-t" class="nd-group-title">{{ l.pick("Profiles", "配置文件") }}</h2>
+<p class="nd-aux -mt-1 mb-3 px-1">{{ l.pick("Switching re-attaches the modem on the new profile: usually about 40 s without a reboot. If the new profile doesn't take, the device reboots (about 90 s).", "切换时基带用新配置重新注网：通常约 40 秒，不用重启。新配置没生效时设备会重启（约 90 秒）。") }}</p>
+{{ self.leaf("es-list")|safe }}
+<div class="mt-2 px-1">{{ prof_op|safe }}<div id="es-after"></div></div>
+</section>
+<section aria-labelledby="es-add-t"><h2 id="es-add-t" class="nd-group-title">{{ l.pick("Add profile", "添加配置") }}</h2>
+<div class="nd-group grid gap-4 p-4">
+<div class="grid gap-1"><label for="es-code" class="font-semibold">{{ l.pick("Activation code", "激活码") }}</label><input id="es-code" class="nd-field nd-mono" data-bind="_esCode" placeholder="LPA:1$smdp.example.com$XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+<div class="grid gap-1"><label for="es-conf" class="font-semibold">{{ l.pick("Confirmation code (optional)", "确认码（可选）") }}</label><input id="es-conf" class="nd-field" data-bind="_esConf" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+<p class="nd-aux">{{ l.pick("Paste the activation code from your carrier (the text under the QR code). The profile is downloaded to the card but not enabled — switch to it when ready.", "粘贴运营商提供的激活码（二维码下方的文本）。配置只下载到卡上、不会自动启用——需要时再切换。") }}</p>
+{{ self.leaf("es-dlgo")|safe }}
+{{ dl_op|safe }}
+</div>
+</section>
+{{ self.leaf("es-notif")|safe }}
+<div class="-mt-4 px-1">{{ nt_op|safe }}</div>
+{{ self.leaf("es-chip")|safe }}
+</div>
+{% endblock %}

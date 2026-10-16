@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("dev.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<div class="at-col" data-signals="{cmd: ''}">
+<p class="nd-body at-t2">{{ l.pick("Send AT commands directly to the modem. What you send and what comes back stays in this tab only.", "直接给调制解调器发 AT 命令。发过的命令和回复只留在这个页面里，不会和别的会话共用。") }}</p>
+<span hidden data-init="@get('/tools/at/port')"></span>
+{{ port|safe }}
+<section aria-labelledby="at-cmd-t" class="at-pane">
+<h2 id="at-cmd-t" class="nd-group-title">{{ l.pick("Command", "命令") }}</h2>
+<div class="at-console" role="group" aria-label="{{ l.pick("Response", "响应") }}">
+<div id="at-log" class="at-log" role="log" aria-live="polite" aria-label="{{ l.pick("Response", "响应") }}" tabindex="0"><p id="at-log-empty" class="at-muted">{{ l.pick("No commands sent yet", "还没发过命令") }}</p></div>
+<label class="at-input"><span class="at-muted" aria-hidden="true">&gt;</span><span class="sr-only">{{ l.pick("AT command", "AT 命令") }}</span><input id="at-cmd" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="AT+CGMR" aria-describedby="at-hint" data-bind:cmd data-on:keydown="(evt.key === 'Enter' &amp;&amp; (evt.preventDefault(), atReset(), @post('/tools/at/send', {retryMaxCount: 0}))) || ((evt.key === 'ArrowUp' || evt.key === 'ArrowDown') &amp;&amp; (evt.preventDefault(), $cmd = atRecall(evt.key)))"></label>
+</div>
+<div class="at-actions"><button type="button" class="nd-btn nd-btn--primary" data-write="at" disabled data-attr:disabled="!$cmd.trim()" data-on:click="atReset(); @post('/tools/at/send', {retryMaxCount: 0})">{{ crate::shell::icon("PaperPlaneRight", false, 20, "")|safe }}{{ l.pick("Send", "发送") }}</button><span id="at-last" class="nd-aux"></span></div>
+<p id="at-hint" class="nd-aux">{{ l.pick("Enter sends. Up / Down recall earlier commands. Commands go straight to the modem; a wrong one can cut the mobile connection until the modem is back.", "回车发送，上 / 下方向键调出之前的命令。命令直接送给调制解调器，发错可能让移动网络断开，直到调制解调器恢复。") }}</p>
+<div id="at-err"></div>
+{{ op|safe }}
+<span id="at-clear" hidden></span>
+</section>
+<section aria-labelledby="at-hist-t"><h2 id="at-hist-t" class="nd-group-title">{{ l.pick("History", "历史") }}</h2>
+<p id="at-hist-empty" class="nd-aux">{{ l.pick("Commands you send here are listed for this visit; press one to put it back in the box.", "这次访问里发过的命令会列在这里；点一条放回输入框。") }}</p>
+<ul id="at-hist-list" class="at-hist"></ul>
+</section>
+</div>
+<script>(function(){var i=-1;window.atReset=function(){i=-1};window.atRecall=function(k){var c=[].map.call(document.querySelectorAll('#at-hist-list [data-cmd]'),function(b){return b.dataset.cmd});i=k==='ArrowUp'?Math.min(i+1,c.length-1):Math.max(i-1,-1);return i<0?'':(c[i]||'')}})()</script>
+{% endblock %}

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% import "macros.html" as m %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("home.css") }}">{% endblock %}
+{% block main %}
+<div class="hm-grid">
+<header class="hm-head"><div class="min-w-0 flex-1"><h1 id="hm-title" class="nd-product">{{ l.pick("My device", "我的设备") }}</h1><p id="hm-sub" class="nd-aux mt-0.5"><span class="nd-skel" style="width:14ch"></span></p></div>
+<a id="hm-sms" class="hm-count" href="/sms" aria-label="{{ l.pick("SMS", "短信") }}">{{ crate::shell::icon("ChatCircleText", false, 20, "")|safe }}</a>
+<a id="hm-alerts" class="hm-count" href="/alerts" aria-label="{{ l.pick("Alerts", "告警") }}">{{ crate::shell::icon("Bell", false, 20, "")|safe }}</a></header>
+<div class="hm-col">
+<div class="hm-o1">{{ status|safe }}</div>
+<div id="hm-why" class="hm-o1" hidden></div>
+<section id="hm-readouts" class="nd-wall nd-wall--3 hm-wall hm-o3" aria-label="{{ l.pick("Readings", "读数") }}">
+<i id="hm-fl-ro" class="hm-flag" hidden></i>
+<div class="nd-readout nd-readout--full nd-readout--hero"><div class="nd-readout__label">{{ l.pick("Aggregate bandwidth · MHz", "聚合带宽 · MHz") }}</div><div id="ro-bw" class="nd-readout__value"><span class="nd-skel" aria-label="…"></span></div><div id="ro-bw-w" class="nd-readout__sub" hidden></div></div>
+<div class="nd-readout"><div class="nd-readout__label">RSRP {% call m::help(l, "rsrp", "RSRP", l.pick("Received signal power. Closer to 0 is stronger; above −100 dBm is good.", "接收信号功率。越接近 0 越强；高于 −100 dBm 为良好。")) %}{% endcall %}</div><div id="ro-rsrp" class="nd-readout__value"><span class="nd-skel" aria-label="…"></span></div><div id="ro-rsrp-w" class="nd-readout__sub" hidden></div></div>
+<div class="nd-readout"><div class="nd-readout__label">SINR {% call m::help(l, "sinr", "SINR", l.pick("Signal-to-noise — higher is cleaner. Above 13 dB is good.", "信噪比 —— 越高越干净。13 dB 以上为良好。")) %}{% endcall %}</div><div id="ro-sinr" class="nd-readout__value"><span class="nd-skel" aria-label="…"></span></div><div id="ro-sinr-w" class="nd-readout__sub" hidden></div></div>
+<div class="nd-readout"><div class="nd-readout__label">{{ l.pick("Download", "下载") }}</div><div id="ro-dl" class="nd-readout__value"><span class="nd-skel" aria-label="…"></span></div><div id="ro-dl-w" class="nd-readout__sub">↓</div></div>
+<div class="nd-readout"><div class="nd-readout__label">{{ l.pick("Upload", "上传") }}</div><div id="ro-ul" class="nd-readout__value"><span class="nd-skel" aria-label="…"></span></div><div id="ro-ul-w" class="nd-readout__sub">↑</div></div>
+<div class="nd-readout"><div class="nd-readout__label">{{ l.pick("Temperature", "温度") }}</div><div id="ro-temp" class="nd-readout__value"><span class="nd-skel" aria-label="…"></span></div><div id="ro-temp-w" class="nd-readout__sub" hidden></div></div>
+<div class="nd-readout"><div class="nd-readout__label">{{ l.pick("Battery", "电池") }}</div><div id="ro-bat" class="nd-readout__value"><span class="nd-skel" aria-label="…"></span></div><div id="ro-bat-w" class="nd-readout__sub" hidden></div></div>
+</section>
+<section class="hm-o4" aria-labelledby="hm-detail-t"><h2 id="hm-detail-t" class="nd-group-title">{{ l.pick("Detail", "详情") }}</h2><div class="nd-group"><i id="hm-fl-d" class="hm-flag" hidden></i>
+<a class="nd-row" href="/clients"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Connected devices", "已连接设备") }}</span></span><span id="hd-cl" class="nd-row__value">—</span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Today", "今天") }}</span></span><span id="hd-day" class="nd-row__value">—</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("This month", "本月") }}</span></span><span id="hd-mon" class="nd-row__value">—</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Uptime", "运行时间") }}</span></span><span id="hd-up" class="nd-row__value">—</span></div>
+</div></section>
+<section class="hm-o5" aria-labelledby="hm-id-t"><h2 id="hm-id-t" class="nd-group-title">{{ l.pick("Network identity", "网络身份") }}</h2><div class="nd-group"><i id="hm-fl-id" class="hm-flag" hidden></i>
+<div class="nd-row"><span class="nd-row__text"><span id="hi-ip-l" class="nd-row__label">{{ l.pick("Public IP", "公网 IP") }}</span><span id="hi-ip-s" class="nd-row__sub">{{ l.pick("Looking up…", "正在查询…") }}</span></span><span id="hi-ip" class="nd-row__value nd-mono">—</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("SIM operator", "SIM 运营商") }}</span></span><span id="hi-sim" class="nd-row__value">—</span></div>
+<a class="nd-row" href="/router/mobile-network"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Registered on", "注册运营商") }}</span><span id="hi-reg-s" class="nd-row__sub" hidden></span></span><span id="hi-reg" class="nd-row__value">—</span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Roaming", "漫游") }}</span></span><span id="hi-roam" class="nd-row__value">—</span></div>
+</div></section>
+<section class="hm-o6" aria-labelledby="hm-wifi-t"><h2 id="hm-wifi-t" class="nd-group-title">Wi-Fi</h2><div class="nd-group"><i id="hm-fl-w" class="hm-flag" hidden></i>
+<a class="nd-row" href="/router/wifi"><span class="nd-row__text"><span class="nd-row__label">Wi-Fi</span></span><span id="hw-on" class="nd-row__value">—</span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">2.4 GHz</span><span id="hw-2" class="nd-row__sub">—</span></span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">5 GHz</span><span id="hw-5" class="nd-row__sub">—</span></span></div>
+</div></section>
+<section class="hm-o7" aria-labelledby="hm-ca-t"><h2 id="hm-ca-t" class="nd-group-title">{{ l.pick("Carriers", "载波") }}</h2><div id="hm-ca" class="nd-group">
+<a class="nd-row" href="/signal"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("No active carriers", "没有激活的载波") }}</span></span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a>
+</div></section>
+</div>
+<div class="hm-col">
+<a id="hm-scene" class="nd-module nd-module--cream hm-o8" href="/router/scenario"><span class="nd-module__head">{{ l.pick("Scenarios", "情景") }}{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</span><span class="nd-skel" style="width:10ch"></span></a>
+<a id="hm-ts" class="nd-module nd-module--navy hm-o9" href="/services/tailscale"><span class="nd-module__head">Tailscale{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</span><span class="nd-skel" style="width:10ch"></span></a>
+</div>
+</div>
+{% endblock %}

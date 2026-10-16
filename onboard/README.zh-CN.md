@@ -1,4 +1,4 @@
-# U60 Pro 装机包
+# Luya-Z 装机包（ZTE U60 Pro / MU5250）
 
 [English](README.md) · **中文**
 
@@ -11,7 +11,8 @@
 | **devui 触屏界面** | 前面板换成新界面：按任务分 5 个标签（首页 · 蜂窝 · Wi-Fi · 出口 · 系统）：信号结论与载波、Wi-Fi 与设备、Tailscale 与出口、eSIM 切换 |
 | **eSIM** | 配合可插拔 eUICC 卡（5ber、eSTK.me 这类），在后台下载/切换/删除 profile，屏幕上也能切 |
 
-装 SSH 时会顺手**关掉固件自动升级**（原因见「注意事项」）。
+装 SSH 时会顺手**关掉固件自动升级**（`zwrt_zte_dm.dm_update.dm_update_mode=0` 和 `TURNOFFPOLLING=1` 两项都设，并读回核对；原因见「注意事项」）。
+它先起 dropbear、确认 2222 在监听，才在 `rc.local` 加那一行；没起来 `rc.local` 不动。
 
 ## 装之前确认
 
@@ -29,8 +30,8 @@
 ## 安装
 
 ```sh
-tar xzf u60-kit-*.tar.gz
-cd u60-kit
+tar xzf luyaz-kit-*.tar.gz
+cd luyaz-kit
 ./install.sh
 ```
 
@@ -49,7 +50,7 @@ cd u60-kit
 包里带了一份 `CLAUDE.md`，写着部署步骤、报错怎么处理和设备上不能碰的东西。在包目录里打开 Claude Code 就会自动读到：
 
 ```sh
-cd u60-kit
+cd luyaz-kit
 claude
 ```
 
@@ -60,11 +61,13 @@ claude
 ```sh
 ./install.sh ssh               # 只开 ADB + 持久化 SSH
 ./install.sh ssh admin devui   # 不要 eSIM
-./install.sh recover           # u60 ship 的开机收尾：放好 /data/u60-ship/u60-recover.sh（先在设备上自检），并在 rc.local
+./install.sh recover           # u60 ship 的开机收尾：放好 /data/luyaz/ship/luyaz-recover.sh（先在设备上自检），并在 rc.local
                                #   各服务启动行之前加一行调用它。不在全套里：确定要改 rc.local 时才单独跑
 ./install.sh status            # 看各组件状态
 ./install.sh doctor            # 只读体检：开机同步、自动升级、各服务、心跳、Wi-Fi、告警……逐项 ●▲■
-./install.sh backup            # 把设备配置备份到这台电脑（./backups/，含密码，别外传）
+./install.sh backup            # 把设备配置备份到这台电脑（./backups/，含密码，别外传）；
+                               # 另存 config-…system.tgz（rc.local、我们的 init.d 脚本、dropbear host key、authorized_keys、
+                               # start_dropbear.sh），供升固件前参考，restore 不恢复它
 ./install.sh restore 备份.tgz  # 先列出会改哪些文件，输入 yes 才写
 ./install.sh reboot            # 重启一次，确认各组件开机自己起来
 ```
@@ -77,17 +80,17 @@ U60 地址不是 `192.168.0.1` 时：`GATEWAY=192.168.x.1 ./install.sh`。
 
 程序和数据都在 `/data`（固件升级也不会清）。开机自启只在 `/etc/rc.local` 里加了几行，没有改任何原厂服务。
 高级后台、屏幕的数据后端和 Wi-Fi 兜底看门狗由系统的 procd 监督：崩溃会被自动拉起，并记一条告警（后台「系统 → 告警」可以设短信通知）。
-`admin`、`devui` 装完会把装了什么（装机包日期、提交号）写进设备清单 `/data/u60-manifest.jsonl`，每个组件一行（agent；touch、uid），`doctor` 拿它和文件比对。
-`devui` 用 `u60-ship.sh uid-restart` 把屏幕交给新程序：重启 `u60-uid`，并核对正在跑的触屏界面和 `u60-uid` 就是刚装的那两个。
+`admin`、`devui` 装完会把装了什么（装机包日期、提交号）写进设备清单 `/data/luyaz/ship/manifest.jsonl`，每个组件一行（lweb；touch、sentinel、datad），`doctor` 拿它和文件比对。
+`devui` 装触屏界面、`zwrt-datad` 和 `luyaz-sentinel`。`rc.local` 在 `zwrt-datad` 那行后面只留一行 `/etc/init.d/luyaz-sentinel start`；旧的 start.sh、`u60-uid`、`u60-guard` 行去掉，这两个服务停掉（绝不 disable，文件留着）。起哨兵后最多等 60 秒，直到它在 procd 下运行、心跳说 `ours`、正在跑的触屏界面就是刚装的文件。`admin` 只装 luyaz-web。
 
 | 路径 | 用途 |
 |---|---|
 | `/data/ssh/` | dropbear、host key、`authorized_keys`（**公钥正本**） |
 | `/data/local/tmp/start_dropbear.sh` | 开机把公钥同步到 `/etc/dropbear/` 再起 dropbear（:2222） |
-| `/data/zte-agent`、`/data/admin/` | 高级后台程序和网页 |
-| `/data/zte-agent.env` | **后台密码**（一行 `ZTE_AGENT_PASSWORD=…`，只有 root 可读） |
-| `/data/plugins/u60pro-devui/u60-uid` | 屏幕守护进程：触屏界面崩了自动拉起，连续两次起不来就换回原厂界面（长按屏幕右下角 3 秒回来） |
-| `/data/u60-guard/`、`/etc/init.d/{zte-agent,zwrt-datad,u60-guard}` | 进程监督、Wi-Fi 兜底看门狗、告警短信（开机由 `rc.local` 里的 `/etc/init.d/… start` 拉起，不做 `enable`） |
+| `/data/luyaz/luyaz-web`、`/data/luyaz/operator-logos/` | 高级后台（luyaz-web，:9090；数据和改动都经数据服务 luyaz-core，装成 `zwrt-datad`）。zte-agent 2026-10-14 起删了：装机包会停掉旧的、去掉它在 `rc.local` 的那一行、写 `/data/u60d/agent-retired`；旧装机包留下的 `/data/zte-agent`、`/data/admin/` 不删、不再用 |
+| `/data/zte-agent.env` | **后台密码**（一行 `ZTE_AGENT_PASSWORD=…`，只有 root 可读；文件名是 zte-agent 时代留下的） |
+| `/data/luyaz/luyaz-sentinel`、`/etc/init.d/luyaz-sentinel` | 哨兵（取代 u60-uid 和 u60-guard）：管屏幕，触屏界面崩了自动拉起，连续两次起不来就换回原厂界面并告警（长按屏幕右下角 3 秒回来）；兼 Wi-Fi 兜底看门狗和告警短信。日志 `/tmp/luyaz-sentinel.log`，心跳 `/tmp/luyaz-sentinel.hb` |
+| `/data/luyaz/scripts/`、`/etc/init.d/{zwrt-datad,luyaz-sentinel,luyaz-web}` | 设备脚本（doctor.sh、alert-lib.sh 等；执行器 luyaz-ship.sh、datad-trial.sh 也在这里）和进程监督（开机由 `rc.local` 里的 `/etc/init.d/… start` 拉起，不做 `enable`） |
 | `/data/alerts/`、`/data/crashlog/` | 告警记录、程序崩溃时的日志 |
 | `/data/plugins/u60pro-devui/`、`/data/plugins/zwrt-datad/` | 触屏界面和它的数据后端 |
 | `/data/esim/` | lpac（eSIM 读写卡工具） |
@@ -96,7 +99,7 @@ U60 地址不是 `192.168.0.1` 时：`GATEWAY=192.168.x.1 ./install.sh`。
 ## 日常用法
 
 - **加一台电脑的 SSH 公钥**：把公钥追加到 `/data/ssh/authorized_keys`，然后 `sh /data/local/tmp/start_dropbear.sh`（改 `/etc/dropbear/` 里那份没用，开机会被覆盖）。
-- **改后台密码**：重跑 `./install.sh admin`（会问新密码）。或者 SSH 里改 `/data/zte-agent.env` 那一行（不能含引号、反斜杠、空格），然后 `/etc/init.d/zte-agent restart`，再 `sh /data/u60-guard/agent-auth.sh verify` 确认。
+- **改后台密码**：重跑 `./install.sh admin`（会问新密码）。或者 SSH 里改 `/data/zte-agent.env` 那一行（不能含引号、反斜杠、空格），然后在 `:9090` 重新登录（luyaz-web 每次登录都现读这个文件，不用重启）。
 - **eSIM**：后台「移动网络 → eSIM」管理 profile；屏幕「更多功能 → eSIM」点两下切换，大约 10 秒生效，一般不用重启。
 - **代理**：装机包不带代理功能；要的话照 manager 仓库的 `docs/PROXY.zh-CN.md` 从官方来源自己搭。
 - **临时要 ADB**：SSH 进去跑 `ubus call zwrt_bsp.usb set '{"mode":"debug"}'`；`./install.sh status` 里的「USB 模式」显示 `user` 就是普通模式。
@@ -114,9 +117,9 @@ SSH 登录后：
 
 ```sh
 echo vendor > /tmp/u60-uid.ctl; sleep 8     # 先把屏幕交给原厂界面
-for s in u60-uid u60-guard zte-agent zwrt-datad; do /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
+for s in luyaz-sentinel u60-uid u60-guard luyaz-web zte-agent zwrt-datad; do /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
 cp /data/u60-kit/rc.local.orig /etc/rc.local
-rm -rf /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim \
+rm -rf /data/luyaz /data/u60d /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim \
        /data/u60-guard /data/u60-uid /data/alerts /data/crashlog /data/power /data/local/tmp/start_zte_agent.sh
 # 连 SSH 也不要的话再加：rm -rf /data/ssh /data/local/tmp/start_dropbear.sh
 reboot
@@ -130,7 +133,7 @@ reboot
 
 **一直等不到 ADB 设备**：换根线、换个 USB 口（别用扩展坞）。Windows 上打开设备管理器，如果有带黄色感叹号的设备，右键更新驱动 → 浏览我的电脑 → 从列表选「Android ADB Interface」（需要先装 Google USB Driver）。`adb devices` 能看到一行 `device` 就说明通了，重跑 `./install.sh` 会从这里接着装。
 
-**提示 SSH 连不上**：设备上已经装好了，多半是电脑没连 U60 的 Wi-Fi，或者代理软件的 TUN/增强模式把 `192.168.0.1` 劫走了（在代理里把 `192.168.0.0/16` 设成直连，不用整个关掉）。再试：`ssh -p 2222 -i ~/.ssh/id_ed25519 root@192.168.0.1`。
+**提示 SSH 连不上**：设备上已经装好了。提示会说是哪种：没有密钥 / 连接被拒 / 认证失败 / 超时。多半是电脑没连 U60 的 Wi-Fi，或者代理软件的 TUN/增强模式把 `192.168.0.1` 劫走了（在代理里把 `192.168.0.0/16` 设成直连，不用整个关掉）。再试：`ssh -p 2222 -i ~/.ssh/id_ed25519 root@192.168.0.1`。
 
 **屏幕界面没数据**：SSH 进去看 `cat /tmp/zwrt-datad.log`；重启一次通常就好。
 

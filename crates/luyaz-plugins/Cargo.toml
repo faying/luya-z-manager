@@ -1,0 +1,14 @@
+# wasm32 components for u60d's host (u60-platform.md Phase 4) and the precompiler that turns them
+# into .cwasm. A workspace of its own: the guests build for wasm32-unknown-unknown and plugc pulls
+# in cranelift, neither belongs in the device workspace. Build everything: ./build.sh
+[workspace]
+# hostile-*: test only, never shipped
+members = ["battery-eta", "charge-policy", "scenario", "scheduler", "manual-first", "apn-pick", "sms-forward", "home-exit", "hostile-eta", "hostile-scenario", "hostile-scheduler", "hostile-manual-first", "hostile-apn-pick", "hostile-sms-forward", "hostile-home-exit", "plugc"]
+resolver = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,14 @@
+[package]
+name = "hostile-sms-forward"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "Test only: the sms-forward world with a policy that never returns, for u60d's fallback test (crates/luyaz-core/src/plugin/sms_forward/policy/tests.rs). Never installed on a device."
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros", "realloc"] }

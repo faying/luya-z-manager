@@ -1,0 +1,20 @@
+/* /services/tailscale (batch 5b) */
+.ts-head { display: flex; align-items: center; gap: 8px; margin: 8px 0 16px; }
+.ts-head .nd-title { flex: 1; }
+.ts-desc { margin: -8px 0 16px; padding: 0 4px; }
+.ts-col { display: grid; align-content: start; gap: 24px; min-width: 0; }
+.ts-col > :empty { display: none; }
+.ts-cols { display: grid; gap: 24px; }
+.ts-cols:not(:has(> .ts-col > :not(:empty))) { display: none; }
+@media (min-width: 1024px) { .ts-cols { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); } }
+.ts-sec > .ts-sub { margin: -4px 0 12px; padding: 0 4px; }
+.ts-login { padding: 16px; }
+.ts-link { display: inline-flex; align-items: center; min-height: 44px; margin-top: 8px; overflow-wrap: anywhere; color: var(--nd-accT); text-decoration: underline; text-underline-offset: 4px; }
+.ts-peer { align-items: flex-start; }
+.ts-chip { margin-inline-start: 8px; font-weight: 500; color: var(--nd-t2); }
+.ts-wrap { display: block; overflow-wrap: anywhere; }
+.ts-log { display: block; }
+.ts-logbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.ts-logtitle { flex: 1; font-weight: 600; }
+.ts-logbtn { background: var(--nd-console-card, rgb(255 255 255 / 0.1)); color: var(--nd-console-t1, inherit); }
+.ts-pre { margin: 0; max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

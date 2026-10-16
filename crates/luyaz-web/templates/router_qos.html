@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("router.css") }}">{% endblock %}
+{% block main %}
+<div class="qs-page grid gap-6">
+<div><h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<p class="nd-body qs-desc">{{ l.pick("Which bandwidth mode the device is in. Read-only.", "设备现在用的带宽分配模式。只显示，不能改。") }}</p></div>
+{{ self.leaf("qs-status")|safe }}
+<section aria-labelledby="qs-rows-t"><h2 id="qs-rows-t" class="nd-group-title">{{ l.pick("Bandwidth allocation", "带宽分配") }}</h2>
+{{ self.leaf("qs-rows")|safe }}
+</section>
+</div>
+{% endblock %}

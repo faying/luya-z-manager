@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
+{% block main %}
+<div class="qc-page grid gap-6" data-signals:raw="false">
+<h1 class="nd-title mt-2">{{ shell.title() }}</h1>
+{{ self.leaf("qc-status")|safe }}
+<section aria-labelledby="qc-now-t"><h2 id="qc-now-t" class="nd-group-title">{{ l.pick("Current data connection", "当前数据连接") }}</h2>
+{{ self.leaf("qc-now")|safe }}
+</section>
+<section aria-labelledby="qc-bearers-t"><h2 id="qc-bearers-t" class="nd-group-title">{{ l.pick("Active bearers", "活动承载") }}</h2>
+<p class="nd-aux mb-3 px-1">{{ l.pick("PDP contexts and (where exposed) QoS Class Identifier.", "PDP 上下文以及（在可获取时）QoS 等级标识符。") }}</p>
+{{ self.leaf("qc-bearers")|safe }}
+</section>
+<section aria-labelledby="qc-raw-t"><h2 id="qc-raw-t" class="nd-group-title">AT+CGCONTRDP</h2>
+<button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" aria-expanded="false" aria-controls="qc-raw-out" data-attr:aria-expanded="$raw ? 'true' : 'false'" data-on:click="$raw = !$raw"><span data-show="!$raw">{{ l.pick("Show raw AT+CGCONTRDP", "显示原始 AT+CGCONTRDP") }}</span><span data-show="$raw" style="display:none">{{ l.pick("Hide raw AT+CGCONTRDP", "隐藏原始 AT+CGCONTRDP") }}</span></button>
+<div id="qc-raw-out" class="mt-3" data-show="$raw" style="display:none"><section class="nd-console" aria-label="{{ l.pick("Raw AT+CGCONTRDP output", "AT+CGCONTRDP 原始输出") }}">{{ self.leaf("qc-raw")|safe }}</section></div>
+</section>
+</div>
+{% endblock %}

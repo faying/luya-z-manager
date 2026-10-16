@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("sys.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<p class="nd-body mb-4 max-w-[720px] text-nd-t2">{{ shell.t("These settings apply to this browser only; nothing here changes the device.", "这里的设置只对这个浏览器生效，不会改动设备。") }}</p>
+<div class="grid max-w-[720px] gap-6">
+<section aria-labelledby="st-ui-t"><h2 id="st-ui-t" class="nd-group-title">{{ shell.t("Interface", "界面") }}</h2>
+<div class="nd-group">
+<div class="nd-row flex-wrap gap-y-2" data-signals="{_th: 'auto'}" data-init="$_th = (localStorage.getItem('u60.theme') === 'light' || localStorage.getItem('u60.theme') === 'dark') ? localStorage.getItem('u60.theme') : 'auto'"><span class="nd-row__text"><span class="nd-row__label" id="st-th-l">{{ shell.t("Appearance", "外观") }}</span></span>
+<div role="radiogroup" aria-labelledby="st-th-l" class="nd-seg"><div class="nd-seg__track">
+<button type="button" role="radio" class="nd-seg__item" id="st-th-auto" aria-checked="true" data-attr:aria-checked="$_th === 'auto' ? 'true' : 'false'" data-attr:data-selected="$_th === 'auto'" data-on:click="$_th = 'auto'; localStorage.removeItem('u60.theme'); document.documentElement.dataset.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'">{{ shell.t("Auto", "跟随系统") }}</button>
+<button type="button" role="radio" class="nd-seg__item" id="st-th-light" aria-checked="false" data-attr:aria-checked="$_th === 'light' ? 'true' : 'false'" data-attr:data-selected="$_th === 'light'" data-on:click="$_th = 'light'; localStorage.setItem('u60.theme','light'); document.documentElement.dataset.theme = 'light'">{{ shell.t("Light", "浅色") }}</button>
+<button type="button" role="radio" class="nd-seg__item" id="st-th-dark" aria-checked="false" data-attr:aria-checked="$_th === 'dark' ? 'true' : 'false'" data-attr:data-selected="$_th === 'dark'" data-on:click="$_th = 'dark'; localStorage.setItem('u60.theme','dark'); document.documentElement.dataset.theme = 'dark'">{{ shell.t("Dark", "深色") }}</button>
+</div></div></div>
+<form method="post" action="/lang" class="nd-row flex-wrap gap-y-2"><input type="hidden" name="back" value="{{ shell.path }}"><span class="nd-row__text"><span class="nd-row__label" id="st-lg-l">{{ shell.t("Language", "语言") }}</span></span>
+<div role="radiogroup" aria-labelledby="st-lg-l" class="nd-seg"><div class="nd-seg__track">
+<button type="submit" name="lang" value="zh" role="radio" class="nd-seg__item" aria-checked="{% if shell.lang.code() == "zh" %}true{% else %}false{% endif %}"{% if shell.lang.code() == "zh" %} data-selected="true"{% endif %} lang="zh-CN" data-data>中文</button>
+<button type="submit" name="lang" value="en" role="radio" class="nd-seg__item" aria-checked="{% if shell.lang.code() == "en" %}true{% else %}false{% endif %}"{% if shell.lang.code() == "en" %} data-selected="true"{% endif %} lang="en" data-data>English</button>
+</div></div></form>
+</div></section>
+<section aria-labelledby="st-ss-t"><h2 id="st-ss-t" class="nd-group-title">{{ shell.t("Session", "登录状态") }}</h2>
+<div class="nd-group"><form method="post" action="/logout" class="nd-row flex-wrap gap-2"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("Log out of this browser", "退出这个浏览器的登录") }}</span><span class="nd-row__sub block">{{ shell.t("Ends this session; you will need the password to come back.", "结束这次登录，再进来要输入密码。") }}</span></span>
+<button type="submit" class="nd-btn nd-btn--secondary">{{ shell.icon("SignOut", 20)|safe }}{{ shell.t("Log out", "退出登录") }}</button></form></div>
+</section>
+</div>
+{% endblock %}

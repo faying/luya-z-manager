@@ -56,7 +56,7 @@ X
     chmod +x "$D/tailscaled" "$D/tailscale" "$T"/bin/*
     export TS_DIR=$D TS_LOG=$T/tailscaled.log TSS_SOCK=$T/sock TSS_RUN=$T/run TSS_BOOT_ID=$T/boot \
         TSS_RESOLV=$T/resolv TSS_TUN=$T/tun TSS_IP=$T/bin/ip TSS_PIDOF=$T/bin/pidof TSS_KILL=$T/bin/kill \
-        TSS_DF=$T/bin/df TSS_SLEEP=true TSS_FG=1 TSS_TIMER=0 TSS_UPTIME=$T/uptime TSS_ALERT_LIB=$T/alert-lib.sh TS_WATCH=0
+        TSS_DF=$T/bin/df TSS_SLEEP=true TSS_FG=1 TSS_TIMER=0 TSS_UPTIME=$T/uptime TSS_ALERT_LIB=$T/alert-lib.sh TS_WATCH=0 TSS_INIT=$T/noinit
     unset TS_STABLE TS_MAX_STRIKES TS_SAFE_RETRY TS_WAN_WAIT TS_WATCH_POLL TS_REVIVE_DELAYS TS_REVIVE_MAX TS_REVIVE_WINDOW TSS_WATCH_TICKS
     mknod "$T/tun" c 1 3 2>/dev/null || mkfifo "$T/tun"
 }
@@ -133,6 +133,14 @@ setup; echo 'exit 3' >"$D/tuning.env"; run
 check "tuning.env that exits: ignored" '[ -f "$T/daemon.args" ] && grep -q "tuning.env failed" "$D/boot.log"'
 setup; echo 'TS_TAILSCALED_FLAGS=--no-logs-no-support' >"$D/tuning.env"; run
 check "good tuning.env applied" 'last_args | grep -q -- "--no-logs-no-support"'
+echo "- apply.sh cut off inside its health window"
+setup; echo 'TS_TAILSCALED_FLAGS=--trial' >"$D/tuning.env"; echo 'TS_TAILSCALED_FLAGS=--old' >"$D/tuning.env.rollback"; run
+check "previous tuning put back before it is loaded" '[ ! -f "$D/tuning.env.rollback" ] && grep -q -- --old "$D/tuning.env" && last_args | grep -q -- "--old" && grep -q "cut off" "$D/boot.log"'
+setup; echo 'TS_TAILSCALED_FLAGS=--trial' >"$D/tuning.env"; : >"$D/tuning.env.rollback-none"; run
+check "no tuning before: trial removed, marker gone" '[ ! -f "$D/tuning.env" ] && [ ! -f "$D/tuning.env.rollback-none" ] && ! last_args | grep -q -- --trial'
+setup; echo 'TS_TAILSCALED_FLAGS=--trial' >"$D/tuning.env"; echo 'TS_TAILSCALED_FLAGS=--old' >"$D/tuning.env.rollback"
+echo $$ >"$T/run/tailscale-apply.pid"; run
+check "apply.sh still running (its own restart): left alone" '[ -f "$D/tuning.env.rollback" ] && last_args | grep -q -- --trial'
 setup; echo "TS_TAILSCALED_BIN=$D/nofight/tailscaled" >"$D/tuning.env"; run
 check "missing TS_TAILSCALED_BIN: falls back to \$D/tailscaled" 'last_args | grep -q "^$D/tailscaled " && grep -q "not executable" "$D/boot.log"'
 setup; echo 'TS_MODE=bogus' >"$D/tuning.env"; run
@@ -301,6 +309,78 @@ check "status prints" '[ $RC = 0 ] && grep -q "strikes:" "$T/out"'
 echo "- boot log caps itself"
 setup; i=0; while [ $i -lt 1200 ]; do echo "filler line $i ......................................................" >>"$D/boot.log"; i=$((i + 1)); done; run
 check "boot.log back under the cap" '[ $(wc -c <"$D/boot.log") -le 65536 ] && grep -q "mode=tun" "$D/boot.log"'
+
+# ── under procd (tailscale.init installed) ──────────────────────────────────
+procd_setup() { # an init stub that records what it was asked
+    setup
+    printf '#!/bin/sh\necho "$1" >>%s/init.calls\n' "$T" >"$T/init"
+    chmod +x "$T/init"
+    export TSS_INIT=$T/init
+}
+fg_run() { sh "$S" __fg >"$T/out" 2>&1; RC=$?; }
+wait_up() { _i=0; while [ ! -s "$T/up.args" ] && [ $_i -lt 50 ]; do sleep 0.1; _i=$((_i + 1)); done; }
+
+echo "- procd: start only asks procd, and ends an old watcher"
+procd_setup; sleep 300 & _wp=$!; echo $_wp >"$T/run/tailscale-watch.pid"; run start
+check "init start, exit 0" '[ $RC = 0 ] && [ "$(cat "$T/init.calls")" = start ]'
+check "no tailscaled started by start itself" '[ "$(starts)" = 0 ]'
+check "old watcher ended" '! alive $_wp && [ ! -f "$T/run/tailscale-watch.pid" ]'
+kill $_wp 2>/dev/null
+
+echo "- procd: stop never kills by pid"
+procd_setup; touch "$T/running"; run stop
+check "init stop" 'grep -qx stop "$T/init.calls"'
+check "no kill" '[ ! -f "$T/kills" ]'
+check "stopped marker" '[ -f "$T/run/tailscale.stopped" ]'
+procd_setup; run disable
+check "disable: flag + init stop" '[ -f "$D/disabled" ] && grep -qx stop "$T/init.calls"'
+
+echo "- procd: __fg on an intended start"
+procd_setup; touch "$T/run/tailscale.intended"; fg_run; wait_up
+check "exec'd tailscaled with the usual flags" 'last_args | grep -q -- "--port=41641 --tun=tailscale0"'
+check "cleanup ran first" '[ -f "$T/cleaned" ]'
+check "marker used up, no backoff" '[ ! -f "$T/run/tailscale.intended" ] && ! grep -q "restart in" "$D/boot.log"'
+check "boot log says procd" 'grep -q "first=1 wan_wait=0s (procd)" "$D/boot.log"'
+check "up ran from the helper" 'grep -q -- "--advertise-routes=10.9.9.0/24" "$T/up.args"'
+
+echo "- procd: __fg straight from the init after a cut-off apply.sh"
+procd_setup; touch "$T/run/tailscale.intended"
+echo 'TS_TAILSCALED_FLAGS=--trial' >"$D/tuning.env"; echo 'TS_TAILSCALED_FLAGS=--old' >"$D/tuning.env.rollback"; fg_run; wait_up
+check "previous tuning put back before exec" '[ ! -f "$D/tuning.env.rollback" ] && last_args | grep -q -- --old && ! last_args | grep -q -- --trial'
+
+echo "- procd: __fg replaces a tailscaled it did not start"
+procd_setup; touch "$T/running" "$T/run/tailscale.intended"; fg_run
+check "old one got TERM" 'grep -qx 4242 "$T/kills"'
+check "then ours started" '[ "$(starts)" = 1 ]'
+
+echo "- procd: a respawn backs off like the watcher"
+# the __up helpers also tick the fake clock while they wait for a socket: a
+# long TS_STABLE keeps that from looking like "stayed up, backoff over"
+procd_setup; export TSS_SLEEP=$T/bin/tick TS_STABLE=100000; touch "$T/run/tailscale.intended"; fg_run
+rm -f "$T/running"; up 1100; fg_run
+check "waited the first step" 'grep -q "restart in 300s (restart 1 of 6" "$D/boot.log"'
+check "counted" 'grep -q "total=1" "$T/run/tailscale-revive" && grep -q "n=1" "$T/run/tailscale-revive"'
+rm -f "$T/running"; up 1500; fg_run
+check "second step 900 s" 'grep -q "restart in 900s (restart 2 of 6" "$D/boot.log"'
+check "a respawned TUN boot is not stable" '(TSS_TIMER=1 sh "$S" __stable aaaa-0001) && ! grep -q "stable=1" "$D/boot-strikes"'
+unset TS_STABLE
+
+echo "- procd: gives up for the window, alerts once, then goes on"
+procd_setup; export TSS_SLEEP=$T/bin/tick
+echo "n=6 wn=6 win=900 dead=0 last=1000 total=6 gaveup=0" >"$T/run/tailscale-revive"; fg_run
+check "gave-up alert" 'grep -q "^tailscale-gave-up " "$T/alerts"'
+check "slept until the window ended, then started" 'grep -q "next try in" "$D/boot.log" && [ "$(starts)" = 1 ]'
+
+echo "- procd: __cleanup waits for tailscaled to go"
+procd_setup; touch "$T/running"; (sleep 1; rm -f "$T/running") & export TSS_SLEEP=sleep; run __cleanup
+check "cleanup after it was gone" '[ -f "$T/cleaned" ] && grep -q "stopped (procd; cleanup rc=0)" "$D/boot.log"'
+export TSS_SLEEP=true
+
+echo "- procd: revive is a no-op"
+procd_setup; run revive
+check "exit 0, nothing started" '[ $RC = 0 ] && [ "$(starts)" = 0 ]'
+procd_setup; run status
+check "status names procd" 'grep -q "watcher:   procd" "$T/out"'
 
 run bogus
 check "unknown command: usage, exit 2" '[ $RC = 2 ]'

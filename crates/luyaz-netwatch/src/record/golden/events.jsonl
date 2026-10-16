@@ -1,0 +1,7 @@
+{"t":1790942580,"kind":"weak_enter","rat":"SA","rsrp":-112.0}
+{"t":1790942730,"kind":"weak_exit","rat":"SA","rsrp":-98.0,"worst":-112.0}
+{"t":1790942750,"kind":"data_down","rat":"SA"}
+{"t":1790942810,"kind":"data_up","down_s":60}
+{"t":1790942850,"kind":"stall","cell":{"band":"n78","cell":5242881234,"ch":633984,"pci":312,"plmn":"460-11"},"rat":"SA"}
+{"t":1790942880,"kind":"stall_end","now":"ok","secs":30}
+{"t":1790942900,"kind":"speed","dl_mbps":87.5,"ul_mbps":12.25}

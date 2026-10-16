@@ -1,0 +1,551 @@
+# 触屏英文表（manager docs/designs/ui-english.md、docs/ui-glossary.md）。
+# <中文><TAB><English>；TRC 的 key 写 场景|中文，TRN 的英文写 one|other。
+# 措辞以 manager docs/ui-glossary.md 为准；改了这里，sh scripts/lang-gen.sh rs/devui/lang/en.tsv > rs/devui/lang/en.inc 重生成（scripts/test/lang 查它是不是最新）。
+
+ · 出口节点	 · exit node
+ · 刷新失败	 · refresh failed
+ · 握手 	 · handshake 
+ · 离线	 · offline
+%.16s · %d 台	%.16s · %d device|%.16s · %d devices
+%d 台	%d device|%d devices
+%d 条 · %d 未读	%d SMS · %d unread
+%d 条未读 · 共 %d 条	%d unread · %d total
+%d/%d 台	%d/%d devices
+%ld 分钟	%ld min
+%ld 分钟前	%ld min ago
+%ld 天前	%ld d ago
+%ld 小时	%ldh
+%ld 小时 %ld 分	%ldh %ldm
+%ld 小时前	%ld h ago
+%ld 秒	%ld s
+%ld 秒前	%ld s ago
+%s · 共 %s	%s · %s total
+%s · 在线 %d/%d	%s · online %d/%d
+%s 扫描 · %d 个	Scanned %s · %d found
+%s。重启设备也会回到自动选网。	%s; a restart also returns to auto
+%s速率稍后显示%s	%sSpeed shown shortly%s
+%s（%s）%s%s	%s (%s) %s%s
+%s，已回到自动选网。	%s; back on automatic selection
+%s，等它做完再操作	%s; wait until it finishes
+2.4G 频段	2.4 GHz band
+2分钟	2 min
+30秒	30 s
+4G 频段	4G bands
+5G NSA 频段	5G NSA bands
+5G SA 频段	5G SA bands
+5G 服务小区	5G serving cell
+5G 频段	5 GHz band
+5G（现在不用，下面是测量值）	5G (not in use; measured values below)
+DERP 中继	DERP relay
+LTE 服务小区	LTE serving cell
+LTE（现在不用，下面是测量值）	LTE (not in use; measured values below)
+NFC 碰一碰	NFC tap
+SIM 与 eSIM	SIM & eSIM
+SIM 卡	SIM
+SIM 卡 · %s	SIM · %s
+Wi-Fi 已关 · 	Wi-Fi off · 
+Wi-Fi 开着	Wi-Fi stays on
+Wi-Fi 看门狗接管中，固定暂时不生效，先按「外出」	Wi-Fi watchdog in charge; the pin is paused, acting as Away
+WiFi 总开关	Wi-Fi
+eSIM 配置	eSIM profiles
+eSIM 配置（现在没在用）	eSIM profiles (not in use)
+tailscale|出口	Exit node
+tailscale|子网	Subnets
+tailscale|本机	This device
+tailscale|节点	Peers
+■ %d 项异常	■ %d problem|■ %d problems
+■ 体检：异常	■ Health check: problem
+▲ %d 项注意	▲ %d warning|▲ %d warnings
+▲ 体检：需要注意	▲ Health check: needs attention
+● %d 项检查都正常	● All %d checks OK
+● 一切正常	● All good
+上传中…	Uploading…
+下一步	Next
+下载中…	Downloading…
+不过期	Never expires
+中国广电	China Broadnet
+中国电信	China Telecom
+中国移动	China Mobile
+中国联通	China Unicom
+中继	Relay
+主机名	Hostname
+亮度	Brightness
+今日 %s · 本月 %s	Today %s · Month %s
+会关 Wi-Fi	Wi-Fi off
+会关掉 Wi-Fi	Wi-Fi will turn off
+会断网或按漫游计费，切换要按两次确认	May cut data or add roaming fees; tap twice
+体检	Health check
+体检结果读取中…	Loading health checks…
+使用中	In use
+使用中 · eSIM	In use · eSIM
+使用中 · 实体 SIM 卡	In use · physical SIM
+信号%s	%s
+信号一般	Fair signal
+信号好	Good signal
+信号弱	Weak signal
+信号很好	Great signal
+停止	Stop
+健康	Health
+健康与告警	Health & Alerts
+充电中	Charging
+充电器	Charger
+全部已读	Mark all read
+全部频段（未锁定）	All bands (not locked)
+共 %d 条，都已读	%d total, all read
+关机	Power off
+关机没成功，再试一次…	Power off didn't work; trying again…
+关闭	Off
+其他告警（%s）	Other alert (%s)
+内存	Memory
+图表|内存	RAM
+再按一次关机	Tap again to power off
+再按一次确认	Tap again to confirm
+再按一次确认 · 国外和漫游卡常没有 SA	Tap again · SA is often missing abroad
+再按一次确认切换	Tap again to switch
+再按一次重启	Tap again to restart
+再按一次：关掉数据漫游，漫游时会断网	Tap again: roaming off, no data when roaming
+再按一次：关掉移动数据，所有设备断网	Tap again: mobile data off, all go offline
+再按一次：打开数据漫游，按漫游计费	Tap again: data roaming on, fees apply
+再按一次：打开移动数据	Tap again: mobile data on
+再点一次把选网固定在 %s（改成手动）。要回自动点「恢复自动」。	Tap again to stay on %s (manual); tap Back to auto to undo
+再点一次注册到 %s。没注册上会自动回到自动选网。	Tap again to register on %s; if it fails, it goes back to automatic
+再点一次确认	Tap again
+再点一次确认切换	Tap again to switch
+再点一次确认删除	Tap again to delete
+再点开始	Start
+再点确认	Confirm
+出口	Route
+出口 IP	Public IP
+出口节点	Exit node
+出错	Error
+切到「%s」：%s\n之后一直固定，点「自动」才恢复	Switch to \"%s\": %s\nStays pinned until you tap Auto
+切换中 · 已 %ld 秒	Switching · %ld s
+切换中…	Switching…
+切换于 	Since 
+切换会短暂断网，需要按两次确认	Switching cuts data briefly; tap twice to confirm
+切换到原厂界面	Switch to stock UI
+切换失败：%s	Switch failed: %s
+切换结果未知，请看当前配置	Switch result unknown; check the current profile
+切换超时，请看当前配置	Switch timed out; check the current profile
+刚刚	Just now
+删除这条	Delete
+判定中	Detecting
+制式	Network type
+加密	Security
+占用 %ld%% · %ld°C	Usage %ld%% · %ld°C
+卡信息	Card info
+卡刚报过忙，稍后再试	Card was busy; retry later
+卡刚报过忙，还要等 %d 秒再试	Card was busy; retry in %d s
+卡忙没切成	Card busy
+卡忙：重启设备或拔插卡后再切	Busy: restart device or reinsert card
+没切成	Didn't switch
+正在发送 eSIM 通知	Sending eSIM notices
+原始运营商	SIM operator
+取消	Cancel
+只有本机在线	Only this device online
+可能短暂影响网速	May slow data briefly
+号码	Number
+号码没写在卡里	No number on SIM
+后台数据服务不可用	Data service unavailable
+告警 · %s	Alert · %s
+告警 · 开机后 %ld 分钟	Alert · %ld min after boot
+告警记录	Alert log
+告警记录 · %d 条未读	Alert log · %d unread
+告警记录 · 都已读	Alert log · all read
+回到自动选网，可能短暂断网，再点一次确认。	Back to automatic selection, may cut data briefly; tap again to confirm
+回到自动：按 SIM 卡选 APN，会断网几秒	Back to Auto: APN picked by SIM; offline for a few seconds
+固件	Build
+在 Tailscale 后台批准这台设备	Approve this device in the Tailscale admin console
+在用	In use
+在管理网页打开登录链接	Log in from the web admin
+在线	Online
+在线 %d/%d · 直连 %d · 中继 %d	Online %d/%d · direct %d · relay %d
+在线，现在没在传数据	Online, idle
+地址池	Pool
+外观	Appearance
+子网路由	Subnet routes
+完成	Done
+密码	Password
+密码未公开	Password hidden
+密钥到期	Key expiry
+小区信息	Cell Info
+就绪	Ready
+尾号 %.4s	ICCID …%.4s
+尾号 %s	ICCID …%s
+屏幕	Screen
+已 %u 分钟	%u min
+已下发…	Sent…
+已下发，正在拨号…	Sent; connecting…
+已下发，正在断开…	Sent; disconnecting…
+已下发，等设备确认…	Sent; waiting for the device…
+已停止	Stopped
+已停用	Disabled
+已充满	Fully charged
+已关闭	Off
+已切到「%s」	Switched to %s
+已切换到 %s（%ld 秒）	Switched to %s (%ld s)
+已切换到「%s」，一直保持到你点「自动」	Switched to \"%s\"; stays until you tap Auto
+已切换，设备即将重启	Switched; the device will restart
+已切换：现在用「%s」	Switched: now using \"%s\"
+已到上限 %d%%	At limit %d%%
+已到上限，暂停充电	At limit; charging paused
+已发送，等设备回应…	Sent; waiting for the device…
+已取消	Cancelled
+已启用	Enabled
+已回到自动选网。	Back on automatic selection
+已固定	Pinned
+已固定 · 	Pinned · 
+已固定「%s」，但设备还没切过去；Wi-Fi 看门狗可能正在接管，过一会再看	Pinned \"%s\" but not switched yet; the Wi-Fi watchdog may be in charge, check back later
+已开启	On
+已恢复自动判断 · 现在是「%s」	Back to automatic · now \"%s\"
+已恢复默认	Defaults restored
+已插入	Inserted
+已注册到 %s。要回自动选网点「恢复自动」。	Registered on %s; tap Back to auto to undo
+已经固定在「%s」。要恢复自动判断，点「自动」	Already pinned to \"%s\"; tap Auto to go back to automatic
+已经在用「%s」	Already using \"%s\"
+已连接	Connected
+已连接设备	Connected devices
+已锁定	Locked
+常亮	Never
+干扰%s	Noise %s
+干扰%s · 负载%s	Noise %s · Load %s
+应用锁频	Apply band lock
+延迟 %.0fms · 抖动 %.0fms	Ping %.0f ms · jitter %.0f ms
+开关	Switches
+开关 Wi-Fi 要 10–30 秒	Wi-Fi changes take 10–30 s
+开启	On
+开始测速	Start test
+开放	Open
+开机后%ld分	%ld min after boot
+开机后要连续两次扫描确认位置	Needs two scans after boot to confirm location
+当前	Current
+当前配置	Current profile
+性能测试	Performance Test
+恢复	Reset
+恢复自动	Back to auto
+恢复自动：按位置和 SIM 重新判断\n可能会开关 Wi-Fi	Auto: decided again by place and SIM\nMay turn Wi-Fi on or off
+恢复默认配置	Restore defaults
+情景	Scenarios
+情景只管 Wi-Fi 这些，不碰蜂窝网络。点一个情景就固定在它，点「自动」恢复	Scenarios set Wi-Fi and such, not cellular; tap one to pin, Auto to undo
+情景引擎已停用，在管理网页的「情景」页打开	Scenarios are off; turn them on in Scenarios on the web admin
+手动	Manual
+手动固定后一直保持（重启也是），点「自动」才恢复自动判断	A pin stays, even after a restart, until you tap Auto
+手动指定	Set manually
+手动指定注册的网络。搜索会断网 1–3 分钟。	Choose the network to register on; searching cuts data for 1–3 min
+手动模式	Manual mode
+手动选网	Manual selection
+手动：一直用选中的这条，换卡也不变	Manual: always the selected one, even with another SIM
+手机走家里网络	phones use the home network
+扫描	Scan
+扫描中…	Scanning…
+扫描失败	Scan failed
+按 SIM 卡自动选	Picked by SIM
+按下面每个情景的条件自己切换	Switches by each scenario's conditions below
+按国外设置	abroad settings
+提示	Note
+插上 SIM 卡或 eSIM 卡后这里显示卡信息	Insert a SIM or eSIM card to see its details here
+搜索失败：%s	Search failed: %s
+搜索时会断网 1–3 分钟，再点一次开始。	Searching cuts data for 1–3 min; tap again to start
+搜索网络	Search
+改用「%s」：会断网几秒，之后换卡也一直用它，点「自动」才恢复	Use \"%s\": a few seconds offline; kept across SIMs until Auto
+放电中	Discharging
+数据服务掉线 · 数字停在 %s	Data service offline · last update %s
+数据服务版本太旧：要更新 zwrt-datad	Data service too old; update zwrt-datad
+数据漫游	Data roaming
+新建或修改 APN 请用管理网页的「APN」页	Add or edit APNs on the APN page of the web admin
+无密码	No password
+暂时查不到，稍后自动重试	Lookup failed; retrying shortly
+服务不可用	Unavailable
+服务器	Server
+未安装 eSIM 组件	eSIM tools not installed
+未拨号	Not dialed
+未接入	Unplugged
+未激活	Inactive
+未知	Unknown
+未读到 eSIM 卡	No eSIM card found
+未运行	Not running
+未选频段	No band selected
+未锁定	Not locked
+本地	Local
+本机	This device
+本机暂时读不到邻区	Can't read neighbor cells here
+条件变了，1–2 分钟内跟着换	Follows within 1–2 min when they change
+查询中…	Looking up…
+正在关机…	Powering off…
+正在切换到「%s」…%s	Switching to \"%s\"… %s
+正在切换到「%s」…数据连接会重拨，断几秒	Switching to \"%s\"… a few seconds offline
+正在切换到「%s」，稍等	Switching to \"%s\"; one moment
+正在切换，等它做完	Switch in progress
+正在切换，等设备确认…	Switching; waiting for the device…
+正在回到自动选网…	Going back to automatic selection…
+正在忙	Busy
+正在恢复自动…	Going back to auto…
+正在恢复自动判断…	Going back to automatic…
+正在恢复自动选网	Going back to automatic selection
+正在搜索网络	Searching for networks
+正在搜索，数据连接会断 1–3 分钟…	Searching; data cut for 1–3 min…
+正在搜网	Searching
+正在收集 · 1 分钟后出现曲线	Collecting · chart in 1 min
+正在收集…	Collecting…
+正在注册	Registering
+正在注册 %s…	Registering on %s…
+正在注册到 %s。没注册上会自动回到自动选网。	Registering on %s; if it fails, it goes back to automatic
+正在用	Current
+正在读取…	Loading…
+正在重启…	Restarting…
+没切成，设备没确认。\n再试一次，不行就重启设备、开机后马上切	Didn't switch; the device didn't confirm\nTry again, or restart and switch at boot
+没切成，设备还是「%s」。\n再试一次，不行就重启设备、开机后马上切	Didn't switch; still on %s\nTry again, or restart and switch at boot
+没切成：%s	Didn't switch: %s
+没执行：%s	Not done: %s
+没插卡	No SIM
+没有 SIM 卡	No SIM
+没有卡	No SIM
+没有告警记录。程序崩溃、Wi-Fi 被看门狗打开这类事会记在这里。	No alerts. Crashes, the watchdog turning Wi-Fi on and the like are logged here
+没有拨号	Not dialed
+没有短信。新短信会显示在这里，点开可看全文。	No messages; new ones show up here, tap one to read it all
+没生效，可再试一次	Didn't take effect; try again
+注册运营商	Network
+流量	Traffic
+浅色	Light
+测延迟中…	Testing latency…
+测速	Speed Test
+消息	Messages
+深色	Dark
+清掉全部锁频和锁小区设置，回到自动选网	Clears all band/cell locks; back to auto
+渲染刷新率	Render rate
+漫游	Roaming
+漫游中	Roaming
+点一个网络，再点一次确认注册。	Tap a network, then tap again to register
+点一条手动 APN 可以改用它（两下确认）	Tap a manual APN to use it (tap twice to confirm)
+点击测速	Tap to test
+热点	Hotspot
+版本	Version
+状态栏网速用 Mbps	Status bar speed in Mbps
+现在	Now
+现在就在 %s 上	Already on %s
+现在已经是自动 · 按位置和 SIM 判断为「%s」	Already automatic · decided as \"%s\" by place and SIM
+现在已经是自动选择	Already automatic
+现在已经是自动选网，不用恢复	Already on automatic selection
+现在插的是普通 SIM 卡，没有 eSIM 配置。换成 eSIM 卡后可以在这里切换。	This is a regular SIM with no eSIM profiles; insert an eSIM card to switch profiles here
+现在：%s	Now: %s
+电池	Battery
+电池与负载	Battery & load
+电池过热，拔掉充电器放到阴凉处	Battery hot; unplug the charger and move somewhere cool
+电源	Power
+停止充电	Stop charging
+电源键：短按 亮屏/息屏  长按 电源菜单\n回到这里：长按屏幕右下角 3 秒	Power key: tap for screen, hold for menu\nBack here: hold bottom-right corner 3 s
+电量低，尽快充电	Battery low; charge soon
+登录管理后台失败（密码不对？）	Admin login failed (wrong password?)
+直连	Direct
+直连 %s	Direct %s
+直连 · %s	Direct · %s
+短信	SMS
+短信|%d 条	%d SMS
+短信详情	Message
+禁止	Barred
+离线	Offline
+租期	Lease
+移动数据	Mobile data
+空闲	Idle
+等待批准	Awaiting approval
+管理后台失联 %ld 分钟	Admin backend silent for %ld min
+管理后台版本太旧，没有网络页接口	Admin backend too old; no network API
+系统	System
+约 %s充到 %d%%	~%s to %d%%
+约 %s充满	Full in ~%s
+约可用 %s	~%s left
+经 DERP %s 中继	Relayed via DERP %s
+网关	Gateway
+网络	Network
+网络模式	Network mode
+网络测速	Speed Test
+网速 · 对数刻度	Speed · log scale
+网页端正在下载	Web admin is downloading
+网页端正在切换	Web admin is switching
+网页端正在删除	Web admin is deleting
+网页端正在操作	Web admin is busy
+自动	Auto
+自动息屏	Screen off
+自动模式	Auto mode
+自动选择	Chosen automatically
+自动（最佳服务器）	Auto (best server)
+节点（和本机之间）	Peers (link to this device)
+节能模式	Power saving
+蜂窝	Cellular
+被拒绝（HTTP %d）	Refused (HTTP %d)
+触控上报率	Touch report rate
+设备	Device
+设备没确认这次切换，再试一次	The device didn't confirm; try again
+设备没确认这次切换，看一下上面「正在用」再试	The device didn't confirm; check Current above and try again
+详情	Details
+读不到 APN	Can't read the APN
+读不到体检结果（管理后台没响应）	Can't read health checks (Admin backend not responding)
+读不到情景	Can't read scenarios
+读不到数据	No update
+读取中…	Loading…
+读告警失败（HTTP %d）	Couldn't read alerts (HTTP %d)
+读网络信息失败（HTTP %d）	Couldn't read network info (HTTP %d)
+调试	Debug
+调试关闭	Debug off
+调试已开	Debug on
+调试页	Debug page
+负载%s	Load %s
+载波	Carriers
+运营商	Operator
+运营商选择	Network Operator
+运行	Uptime
+近 5 分钟	Last 5 min
+还没扫过，点「扫描」读一次	Not scanned yet; tap Scan
+还没有 eSIM 配置 · 用管理网页添加	No eSIM profiles yet · add one in the web admin
+还没有手动 APN。要用自定义 APN，先在管理网页里新建	No manual APNs yet; add one in the web admin first
+还没有设备连上	No devices connected yet
+还没测过	Not tested yet
+还没读到 APN，稍等	APN not read yet; one moment
+还没配置情景，在管理网页的「情景」页设置	No scenarios yet; set them up in Scenarios on the web admin
+这张就是正在用的	Already in use
+连上以来 ↓%s ↑%s	Since connected ↓%s ↑%s
+连不上测速服务（数据服务 127.0.0.1:9460）。\n检查数据服务有没有在跑。	Can't reach the speed test service (data service 127.0.0.1:9460).\nCheck that the data service is running
+连不上管理后台	Can't reach the admin backend
+连接与测速	Connections & speed test
+连接中	Connecting
+选择	Choose
+选网	Selection
+邻小区	Neighbor cells
+重启	Restart
+重启没成功，再试一次…	Restart didn't work; trying again…
+重新测速	Test again
+锁频	Band Lock
+需要登录	Login needed
+预估	Estimate
+频段	Band
+首页	Home
+高铁模式	High-speed rail
+（没有更多说明）	(No more details)
+测速或切卡进行中，完成后再换外观	Busy; try again when it finishes
+
+# 网络诊断、摆放模式、首页「查原因 ›」（manager docs/designs/slow-diagnosis.md §12，10-02）
+%s SINR · 越大越好	%s SINR · higher is better
+%s 测 · 已记下，谢谢	Checked %s · noted, thanks
+%s 测 · 结论对吗？	Checked %s · right?
+▲ 比最好低 %s dB	▲ %s dB below best
+● 接近最好	● Near the best
+不对	Wrong
+信号	Signal
+信号良好	Good signal
+信号较差	Poor signal
+做完自动开始	Starts when it's done
+再查一次	Run again
+加测速度 · 约 5 秒、最多 30 MB	Add speed test · ~5 s, ≤30 MB
+另有 %d 处疑点	+%d more
+后台没回应	Agent not responding
+固定位置时用摆放模式 ›	Use Placement if staying put ›
+基站负载	Cell load
+对	Right
+对比	Compared
+已发送…	Sent…
+已发送，测速约 5 秒	Sent; about 5 s
+已清零，重新计	Reset; counting again
+换了小区会重新计；这页开着不息屏	Resets on a new cell; the screen stays on here
+换了小区，重新计	New cell; counting again
+排查	Troubleshoot
+摆放模式	Placement
+数字停在 %s	Last update %s
+查原因 ›	Diagnose ›
+正在查，稍等	Checking; one moment
+正在检查…	Checking…
+正在检查… %d/%d	Checking… %d/%d
+正在测，稍等	Testing; one moment
+正常	OK
+没有信号	No signal
+没记上：后台没回应，可再点一次	Not saved: agent not responding; tap again
+测不了	Can't check
+测试中…	Testing…
+测试中… %u 秒	Testing… %u s
+测速中…	Testing speed…
+疑点	Suspect
+登录管理后台失败，点下面重试	Admin login failed; tap Retry below
+等另一个操作做完…	Waiting…
+等待	Waiting
+管理后台没响应，点下面重试	Admin backend not responding; tap Retry below
+约 10 秒，会发少量探测包	About 10 s; sends a few probe packets
+网络诊断	Diagnose
+蜂窝链路	Cellular link
+诊断|差	Poor
+走漫游流量，再按一次	Uses roaming data; tap again
+这个制式没有 SINR	No SINR on this network
+这次最好	Best so far
+速度	Speed
+重新开始	Start over
+重试	Retry
+限速	Speed cap
+
+
+# APN 自动候选可手选（2026-10-03）
+本卡在用	In use (this SIM)
+物联网	IoT
+本卡	This SIM
+只给这张卡改用「%s」：会断网几秒；换卡会自动回到「自动」	Use \"%s\" for this SIM only: a few seconds offline; another SIM goes back to Auto
+这张卡固定用「%s」，换卡会自动回到「自动」	This SIM stays on \"%s\"; another SIM goes back to Auto
+正在用物联网 APN「%s」，可能上不了网；点一条候选可以只给这张卡换掉（两下确认）	On IoT APN \"%s\", may not reach the internet; tap a candidate to replace it for this SIM (tap twice)
+这张卡有 %d 个候选 APN，点一条可以只给这张卡固定用它（两下确认）	This SIM has %d candidate APNs; tap one to use it for this SIM only (tap twice)
+在用 · 物联网	In use · IoT
+自动 APN	Automatic APN
+手动 APN	Manual APNs
+这张卡的候选（运营商库）	Candidates for this SIM (carrier list)
+数据服务没响应 · 暂时不能改设置	Data service not responding
+数据服务忙 · 没改，稍后再试	Data service busy · not changed
+没改成 · 数据服务回了错误	Not changed · data service error
+正在改别的设置，稍等	Another change in progress
+改动	Change
+详情 ›	Details ›
+没有进行中的改动	No change in progress
+重启设备	Restart device
+知道了	Got it
+当前设置未知	Current setting unknown
+停在 %s · 等设备响应	Stopped at %s · waiting for the device
+不再自动退回；还没确认通，没网要你自己改回去	No auto revert; unconfirmed, change it back yourself if no data
+马上改回「%s」，会重新注册，断网几十秒	Back to %s now; offline ~30 s while it re-registers
+再发一次改回「%s」	Send the change back to %s again
+重启设备，一两分钟没网	Restarts the device; offline 1–2 min
+自动退回没开：没通也会保持	Auto revert off: it stays even with no data
+基带崩过以后常见，重启后再切一次	Common after a modem crash; restart, then try again
+现在：%s · 上次确认：%s	Now %s · last good %s
+再试一次退回到%s	Retry revert to %s
+再按一次	Tap again
+改动记录	Change log
+上次改动	Last changed
+读不到改动记录 · 数据服务没响应	Can't read change log · data service not responding
+读不到改动记录 · 下面是上次读到的	Can't read change log · showing the last one read
+还没有改动 · 触屏、网页、情景、定时任务改的设置都会记在这里	No changes yet · settings changed from the screen, web, scenes and schedules show here
+只显示最近 %d 条	Latest %d only
+撤销	Undo
+# DD18：自动退回打开那天首页提示一次（write-op-layer.md 打开自动退回，10-04）
+自动退回已开：切模式没通会退回	Auto revert on: reverts a mode change that can't connect
+# 插线时的 USB 用法（manager docs/designs/usb-attach-mode.md，10-07）
+充电 + 上网	Charge + internet
+快速充电宝	Fast charging
+网口配件	Ethernet adapter
+手机经 U60 上网，同时充电	Internet via the U60, while charging
+18W 给手机快充，不上网	18 W fast charging, no internet
+USB 转网口等配件；手机只充电	For USB Ethernet; phones only charge
+插入的设备怎么用	Use the plugged-in device for
+记住选择，以后自动这样做	Remember, do this every time
+选一项，再点「确定」	Pick one, then tap OK
+现在就是这样 · 点「确定」也可以记住它	Already in use · tap OK to remember it
+点「确定」切换	Tap OK to switch
+确定	OK
+先选一项	Pick one first
+设备已拔掉	Unplugged
+已生效	Done
+数据服务不可用 · 没切	Data service unavailable · not switched
+已按记住的方式：%s	As remembered: %s
+数据服务不可用 · 没按记住的方式切	Data service unavailable · remembered choice not applied
+没切成 · 可以再试一次	Didn't switch · try again
+没按记住的方式切成 · 插着网口转接头？	Remembered choice not applied · Ethernet adapter attached?
+没有生效 · 可以再试一次	Didn't take effect · try again
+没插设备	Nothing plugged in
+只充电，没有网络	Charging only, no internet
+U60 在充电	U60 charging
+没插设备 · 插上后可以在这里改用法	Nothing plugged in · plug in to change how it's used
+插入手机等设备时	When a phone is plugged in
+每次询问	Ask every time

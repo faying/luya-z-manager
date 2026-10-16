@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("svc.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<p class="nd-body mb-4 sc-desc">{{ l.pick("The device watches for networks you name here and reconfigures itself when it recognises where it is.", "设备会留意你在这里列出的网络，认出自己在哪儿之后自动换一套配置。") }}</p>
+<div class="sc-col">
+{{ self.leaf("sc-status")|safe }}
+{{ self.leaf("sc-setup")|safe }}{{ self.op("sc-setup")|safe }}
+{{ self.leaf("sc-now")|safe }}{{ self.op("sc-eng")|safe }}
+{{ self.leaf("sc-pin")|safe }}{{ self.op("sc-pin")|safe }}
+{{ self.leaf("sc-home")|safe }}{{ self.op("sc-home")|safe }}
+{{ self.leaf("sc-nearby")|safe }}{{ self.op("sc-scan")|safe }}{{ self.leaf("sc-scanlist")|safe }}
+{{ self.leaf("sc-does")|safe }}{{ self.op("sc-does")|safe }}
+{{ self.leaf("sc-timing")|safe }}{{ self.op("sc-timing")|safe }}
+{{ self.leaf("sc-log")|safe }}
+</div>
+{% endblock %}

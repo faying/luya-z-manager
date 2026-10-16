@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("router.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<p class="nd-body mb-4">{{ l.pick("Block ZTE telemetry and other unwanted domains.", "拦截 ZTE 遥测和其他不想要的域名。") }}</p>
+<div class="grid gap-6 tf">
+{{ self.leaf("tf-status")|safe }}{{ self.leaf("tf-cur")|safe }}
+<section aria-labelledby="tf-q-t"><h2 id="tf-q-t" class="nd-group-title">{{ l.pick("Quick Block", "快速拦截") }}</h2>
+<div class="nd-group grid gap-3 p-4"><p class="nd-body">{{ l.pick("Known ZTE telemetry:", "已知 ZTE 遥测：") }} <span class="nd-mono">{{ self.known() }}</span></p>
+{{ self.leaf("tf-quickbtn")|safe }}</div>
+{{ quick_op|safe }}</section>
+<section aria-labelledby="tf-a-t"><h2 id="tf-a-t" class="nd-group-title">{{ l.pick("Add Domain", "添加域名") }}</h2>
+<form class="nd-group grid gap-2 p-4" novalidate data-on:submit__prevent="@post('{{ crate::router_filter::PATH }}/add/ask?d=' + encodeURIComponent($_tfdom))"><label for="tf-dom" class="nd-row__label">{{ l.pick("Domain", "域名") }}</label>
+<div class="flex flex-wrap gap-3"><input id="tf-dom" class="nd-field nd-mono min-w-0 flex-1" placeholder="example.com" autocomplete="off" autocapitalize="off" spellcheck="false" data-bind="_tfdom" disabled data-attr:disabled="$_tfdis"><button id="tf-addbtn" type="submit" class="nd-btn nd-btn--primary" disabled data-attr:disabled="$_tfdis">{{ l.pick("Add", "添加") }}</button></div></form>
+<div id="tf-clr" hidden data-signals="{_tfdom: ''}"></div>
+{{ add_op|safe }}</section>
+<section aria-labelledby="tf-l-t"><h2 id="tf-l-t" class="nd-group-title">{{ l.pick("Blocked Domains", "已拦截的域名") }}</h2>
+{{ self.leaf("tf-list")|safe }}
+{{ del_op|safe }}</section>
+</div>
+{% endblock %}

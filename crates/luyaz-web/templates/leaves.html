@@ -1,0 +1,35 @@
+{% import "macros.html" as m %}{% call m::ro_value("rsrp", v.rsrp, "dBm") %}{% endcall %}
+<!--leaf-->
+{% call m::ro_word("rsrp", v.rsrp) %}{% endcall %}
+<!--leaf-->
+{% call m::ro_value("sinr", v.sinr, "dB") %}{% endcall %}
+<!--leaf-->
+{% call m::ro_word("sinr", v.sinr) %}{% endcall %}
+<!--leaf-->
+{% call m::ro_value("rsrq", v.rsrq, "dB") %}{% endcall %}
+<!--leaf-->
+{% call m::ro_word("rsrq", v.rsrq) %}{% endcall %}
+<!--leaf-->
+{% call m::ro_value("bars", v.bars, "/5") %}{% endcall %}
+<!--leaf-->
+{% call m::ro_word("bars", v.bars) %}{% endcall %}
+{% if let Some(t) = v.trend %}
+<!--leaf-->
+{% call m::trend_line(v, t) %}{% endcall %}
+<!--leaf-->
+{% call m::trend_aria(t) %}{% endcall %}
+{% endif %}
+{% for c in v.cell %}
+<!--leaf-->
+{% call m::cell_value(loop.index, c) %}{% endcall %}
+{% endfor %}
+{% if let Some(a) = v.anchor_ref() %}
+<!--leaf-->
+<span id="av-1" class="nd-row__value nd-mono">{{ a.pci }}</span>
+<!--leaf-->
+<span id="av-2" class="nd-row__value nd-mono">{{ a.earfcn }}</span>
+<!--leaf-->
+<span id="av-3" class="nd-row__value nd-mono">{{ a.band }}</span>
+<!--leaf-->
+<span id="av-4" class="nd-row__value">{{ a.signal }}</span>
+{% endif %}

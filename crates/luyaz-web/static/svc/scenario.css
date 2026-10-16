@@ -1,0 +1,21 @@
+/* /router/scenario (batch 5b) */
+.sc-desc { max-width: 720px; }
+.sc-col { display: flex; flex-direction: column; max-width: 720px; }
+.sc-col > * + * { margin-top: 0; }
+.sc-sec { margin-top: 24px; }
+.sc-col > :first-child { margin-top: 0; }
+.sc-hint { margin: -4px 4px 12px; }
+.sc-pad { display: grid; gap: 12px; padding: 12px 16px; }
+.sc-wrap { overflow-wrap: anywhere; }
+.sc-sname .nd-row__label { font-weight: 600; }
+.sc-sel { width: auto; max-width: 60%; min-width: 0; }
+.sc-num { width: 8.5rem; flex-shrink: 0; text-align: end; }
+.sc-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 12px; }
+.sc-scanbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.sc-list { margin-top: 12px; max-height: 480px; overflow-y: auto; }
+.sc-warn { margin-top: 12px; padding: 12px 16px; border-radius: var(--nd-r-card, 16px); background: var(--nd-washW, var(--nd-track)); }
+.sc-logbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.sc-logtitle { flex: 1; }
+.sc-logbtn { background: var(--nd-console-card, rgb(255 255 255 / 0.1)); color: var(--nd-console-t1, inherit); }
+.sc-pre { margin: 0; max-height: 288px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 480px) { .sc-sel { max-width: 55%; } }

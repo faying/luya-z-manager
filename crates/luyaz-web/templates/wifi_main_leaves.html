@@ -1,0 +1,23 @@
+{%- macro rows(rs, stale) -%}
+{% for r in rs.iter() %}<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ r.label }}</span></span><span class="nd-row__value"{% if r.data %} data-data{% endif %}>{{ r.value }}</span></div>{% endfor %}
+{%- endmacro -%}
+{%- macro sw(id, label, val, url) -%}
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label" id="{{ id }}-l">{{ label }}</span></span>{% if let Some(on) = val %}<button type="button" role="switch" class="nd-switch t-switch" aria-labelledby="{{ id }}-l" aria-checked="{{ on }}"{% if *on %} data-selected="true"{% endif %} data-write="{{ id }}" data-on:click="@post('{{ url }}?on={{ !on }}', {retryMaxCount: 0})"><span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span></button>{% else %}<span class="nd-row__value">—</span>{% endif %}</div>
+{%- endmacro -%}
+<div id="wf-status"><section class="nd-status nd-status--{{ v.tone }}{% if v.tone == "stale" %} nd-stale{% endif %}">
+<div class="nd-status__main">
+<div class="nd-status__state" role="status"><span class="nd-mark nd-mark--{{ v.tone }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.symbol() }}</span><span>{{ v.state }}</span></span></div>
+{% if let Some(r) = v.reason %}<div class="nd-status__reason"><span{% if v.tone == "bad" %} role="alert"{% endif %}>{{ r }}</span></div>{% endif %}
+{% if !v.meta.is_empty() %}<div class="nd-status__meta grid">{% for m in v.meta %}<span>{{ m }}</span>{% endfor %}</div>{% endif %}
+{% if let Some((t, tone)) = v.op %}<p class="t-note t-note--{{ tone }} mt-2" role="status">{{ t }}</p>{% endif %}
+</div>
+{% if v.retry %}<div class="nd-status__actions"><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/router/wifi/refresh')">{{ v.l.pick("Retry", "重试") }}</button></div>{% endif %}
+</section></div>
+<!--leaf-->
+<div id="wf-guest">{% if let Some((ssid, on)) = v.guest %}<div class="nd-group"><a class="nd-row nd-row--two" href="/router/wifi-guest"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Guest Wi-Fi", "访客 Wi-Fi") }}</span>{% if !ssid.is_empty() %}<span class="nd-row__sub block nd-mono" data-data>{{ ssid }}</span>{% endif %}</span><span class="nd-row__value">{{ on }}</span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a></div>{% endif %}</div>
+<!--leaf-->
+<div id="wf-global" class="nd-group{% if v.stale %} nd-stale{% endif %}">{% if v.global.is_empty() %}<div class="nd-row"><span class="nd-row__value">—</span></div>{% else %}{% call rows(v.global, v.stale) %}{% endcall %}{% endif %}</div>
+<!--leaf-->
+<div id="wf-bands" class="grid gap-6">{% for b in v.bands %}<section aria-labelledby="wf-b{{ loop.index }}-t"><h2 id="wf-b{{ loop.index }}-t" class="nd-group-title">{{ b.title }}</h2><p class="nd-aux wf-desc">{{ b.desc }}</p><div class="nd-group{% if v.stale %} nd-stale{% endif %}">{% call rows(b.rows, v.stale) %}{% endcall %}</div></section>{% endfor %}</div>
+<!--leaf-->
+<div id="wf-extras">{% if v.psm.is_some() || v.nfc.is_some() %}<section aria-labelledby="wf-x-t"><h2 id="wf-x-t" class="nd-group-title">{{ v.l.pick("Power save and NFC", "节能与碰一碰") }}</h2><div class="nd-group">{% if let Some(p) = v.psm %}{% call sw("wf-psm", v.l.pick("Wi-Fi power save", "Wi-Fi 节能"), p.enabled, "/router/wifi/psm/set") %}{% endcall %}<p class="nd-aux wf-note">{{ v.l.pick("Lets the radios doze between packets. Saves a little battery; some devices see slower replies (games, calls).", "让无线电在数据包之间小睡，省一点电；有些设备回应会变慢（游戏、通话）。") }}{% if let Some(s) = v.psm_sub() %} {{ s }}{% endif %}</p>{% endif %}{% if let Some(n) = v.nfc %}{% call sw("wf-nfc", v.l.pick("NFC tap to join", "NFC 碰一碰"), n, "/router/wifi/nfc/set") %}{% endcall %}<p class="nd-aux wf-note">{{ v.l.pick("A phone touched to the device joins this Wi-Fi without typing the password.", "手机碰一下设备就能连上这个 Wi-Fi，不用输密码。") }}</p>{% endif %}</div></section>{% endif %}</div>

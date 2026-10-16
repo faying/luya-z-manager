@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("dev.css") }}">{% endblock %}
+{% block main %}
+<div class="sim-col" data-signals="{_panel: '', _x: '', pin: '', oldpin: '', newpin: '', puk: '', nck: ''}">
+<div class="sim-head"><h1 class="nd-title">{{ shell.title() }}</h1><button type="button" class="nd-btn nd-btn--ghost nd-btn--icon" aria-label="{{ l.pick("Refresh", "刷新") }}" data-on:click="@post('/router/sim/refresh')">{{ crate::shell::icon("ArrowClockwise", false, 20, "")|safe }}</button></div>
+<p class="nd-body sim-desc">{{ l.pick("SIM status and PIN management.", "SIM 状态与 PIN 管理。") }}</p>
+{{ self.leaf("sim-status")|safe }}
+<div>
+{{ self.leaf("sim-info")|safe }}
+{{ self.leaf("sim-trialserr")|safe }}
+</div>
+<section aria-labelledby="sim-act-t"><h2 id="sim-act-t" class="nd-group-title">{{ l.pick("Actions", "操作") }}</h2>
+{{ self.leaf("sim-actions")|safe }}
+{{ panels|safe }}
+<div class="sim-op">{{ op|safe }}</div>
+<span id="sim-reset" hidden></span>
+</section>
+</div>
+{% endblock %}

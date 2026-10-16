@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<p class="nd-body mb-4">{{ l.pick("USB connection status and mode control.", "USB 连接状态与模式控制。") }}</p>
+<div class="grid gap-6 pg-cols">
+<div class="grid content-start gap-6">
+{{ self.leaf("usb-status")|safe }}
+<section aria-labelledby="usb-mode-t"><h2 id="usb-mode-t" class="nd-group-title">{{ l.pick("USB Mode", "USB 模式") }}</h2>
+<div class="nd-group grid gap-3 p-4"><p class="nd-body">{{ l.pick("Select the USB connection mode. Changing mode will reconnect the USB interface.", "选择 USB 连接模式。更改模式将重新连接 USB 接口。") }}</p>
+{{ self.leaf("usb-modes")|safe }}
+{{ mode_op|safe }}</div>
+</section>
+<section aria-labelledby="usb-pb-t"><h2 id="usb-pb-t" class="nd-group-title">{{ l.pick("Fast charging", "快速充电宝") }}</h2>
+{{ self.leaf("usb-pbrow")|safe }}
+<div class="mt-2 px-1">{{ pb_op|safe }}</div>
+</section>
+</div>
+<div class="grid content-start gap-6">
+<section aria-labelledby="usb-port-t"><h2 id="usb-port-t" class="nd-group-title">{{ l.pick("USB port", "USB 口") }}</h2>
+{{ self.leaf("usb-port")|safe }}
+</section>
+<section aria-labelledby="usb-chg-t"><h2 id="usb-chg-t" class="nd-group-title">{{ l.pick("Charger", "充电器") }}</h2>
+{{ self.leaf("usb-chg")|safe }}
+</section>
+</div>
+</div>
+{% endblock %}

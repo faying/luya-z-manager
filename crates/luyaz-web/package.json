@@ -1,0 +1,11 @@
+{
+  "name": "luyaz-web-node-tools",
+  "private": true,
+  "type": "module",
+  "description": "Node side of luyaz-web: browser checks (e2e/), the typed mock agent (e2e/mock-agent), icon and contrast generators (tools/). Not part of the device build.",
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@phosphor-icons/react": "2.1.10",
+    "@playwright/test": "1.63.0"
+  }
+}

@@ -1,0 +1,4 @@
+# u60d 在 datad 位置上机（tools/u60 ship datad --from u60d）用这一份；从 data-service 68416eb 的 ship/datad 拷来，内容照旧。
+# u60 ship：datad 的状态文件（设备上的绝对路径，一行一个）。试跑、转正前拷一份，退回时一起换回。
+# 只写会被程序改写的设置和状态；只追加的日志、账本不写。必须在 u60-ship.sh 里这个组件的清单之内。
+# 2026-10-06 起没有（cooling.conf、neighbor.json 随风扇控制和邻区采集删了）。

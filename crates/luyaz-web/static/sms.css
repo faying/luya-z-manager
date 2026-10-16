@@ -1,0 +1,29 @@
+/* luyaz-web: /sms and /sms/compose (the old sms/page.tsx, sms/compose/page.tsx). Tokens only;
+ * loaded by those two pages after pages.css. */
+.sm-page { max-width: 960px; }
+.sm-bar { margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sm-acts { margin-inline-start: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.nd-seg__item[aria-checked="true"] { background: var(--nd-primary); color: var(--nd-onPrimary); }
+#sms-read-op:not(:empty), #sms-del-op:not(:empty) { margin-bottom: 12px; padding-inline: 4px; }
+.sm-allrow { gap: 8px; padding-block: 0; }
+.sm-label { display: flex; min-height: 44px; cursor: pointer; align-items: center; gap: 8px; }
+.sm-check { display: flex; height: 44px; width: 44px; flex-shrink: 0; cursor: pointer; align-items: center; justify-content: center; }
+.sm-check input { height: 20px; width: 20px; }
+.sm-row { align-items: flex-start; gap: 8px; padding-block: 8px; }
+.sm-open { display: grid; min-width: 0; flex: 1 1 0%; gap: 2px; border-radius: var(--nd-r-field, 10px); padding-block: 4px; text-align: start; }
+.sm-line { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 12px; row-gap: 2px; }
+.sm-from { color: var(--nd-t1); overflow-wrap: anywhere; }
+.sm-unread { font-weight: 500; }
+.sm-word { font-size: 14px; }
+.sm-meta { margin-inline-start: auto; }
+.sm-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; font-size: 15px; line-height: 22px; color: var(--nd-t2); }
+.sm-text--unread { font-weight: 600; color: var(--nd-t1); }
+.sm-empty { color: var(--nd-t2); }
+.sm-dhead { display: flex; align-items: flex-start; gap: 12px; }
+.sm-dmeta { margin-top: 4px; }
+.sm-body { margin-top: 16px; overflow-wrap: anywhere; }
+.sm-compose { max-width: 720px; }
+.sm-t2 { color: var(--nd-t2); }
+@media (min-width: 1024px) { .sm-form.p-4 { padding: 20px; } }
+.sm-textarea { min-height: 160px; resize: vertical; padding-block: 12px; line-height: 24px; }
+.sm-count { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }

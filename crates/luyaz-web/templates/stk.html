@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("dev.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<div class="stk-col" data-signals="{_tab: 'ussd', code: '', reply: '', stk: []}">
+<p class="nd-body stk-t2">{{ l.pick("Send USSD codes and navigate your SIM's STK menu. Nothing is read when you open this page.", "发送 USSD 代码，浏览 SIM 卡的 STK 菜单。打开这一页不会读任何东西。") }}</p>
+<div class="nd-seg nd-seg--block" role="tablist" aria-label="{{ l.pick("USSD or STK", "USSD 或 STK") }}"><div class="nd-seg__track">
+{% for (k, label, sel) in self.tabs() %}<button type="button" role="tab" id="stk-tab-{{ k }}" class="nd-seg__item" aria-controls="stk-p-{{ k }}" aria-selected="{{ sel }}"{% if sel %} data-selected="true"{% endif %} data-attr:aria-selected="$_tab === '{{ k }}' ? 'true' : 'false'" data-attr:data-selected="$_tab === '{{ k }}'" data-on:click="$_tab = '{{ k }}'">{{ label }}</button>{% endfor %}
+</div></div>
+<section id="stk-p-ussd" role="tabpanel" aria-labelledby="stk-tab-ussd" class="stk-pane" data-show="$_tab === 'ussd'">
+<h2 class="sr-only">USSD</h2>
+<div class="nd-group stk-form">
+<label class="stk-pane stk-tight" for="ussd-code"><span class="nd-row__label">{{ l.pick("USSD code", "USSD 代码") }}</span>
+<span class="stk-inline"><input id="ussd-code" class="nd-field nd-mono stk-grow" inputmode="tel" autocomplete="off" placeholder="*#100#" data-bind:code data-on:keydown="evt.key === 'Enter' && @post('/router/stk/ussd/ask')"><button type="button" class="nd-btn nd-btn--primary" disabled data-attr:disabled="!$code.trim()" data-on:click="@post('/router/stk/ussd/ask')">{{ crate::shell::icon("PaperPlaneRight", false, 20, "")|safe }}{{ l.pick("Send", "发送") }}</button></span></label>
+<span class="nd-aux">{{ l.pick("Digits and * # + only. The reply from your carrier appears below.", "只能输入数字和 * # +。运营商的回复显示在下面。") }}</span>
+</div>
+<div id="ussd-err"></div>
+{{ ussd_op|safe }}
+<section aria-labelledby="ussd-reply-t"><h3 id="ussd-reply-t" class="nd-group-title">{{ l.pick("Reply", "回复") }}</h3>
+{{ ussd_out|safe }}</section>
+<span id="ussd-clr" hidden></span>
+</section>
+<section id="stk-p-stk" role="tabpanel" aria-labelledby="stk-tab-stk" class="stk-pane" style="display: none" data-show="$_tab === 'stk'">
+<h2 class="sr-only">{{ l.pick("SIM Toolkit (STK)", "SIM 卡工具包（STK）") }}</h2>
+{{ stk_view|safe }}
+{{ stk_op|safe }}
+<section id="stk-disp" aria-live="polite"></section>
+<div id="stk-diag"></div>
+<span id="stk-sig" hidden></span>
+</section>
+</div>
+{% endblock %}

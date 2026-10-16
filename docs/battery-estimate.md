@@ -1,6 +1,6 @@
 # 电池预估时间
 
-只有一份实现：zte-agent `zte-agent/src/battery_eta.rs`。它自己每 5 秒采一次样（不管有没有人在看），
+只有一份实现：`crates/luyaz-policy/src/battery_eta.rs`（原在 zte-agent，已搬过来），由核心 luyaz-core（`crates/luyaz-core/src/plugin/battery_eta.rs`）每 5 秒读电池时喂一次样（不管有没有人在看），
 结果放在 `GET /api/battery` 的 `estimate` 和 `GET /api/screen` 的 `battery` 里；管理网页和触屏都只负责把它写成文字。
 （2026-09-26 之前网页和触屏各算一份，两边已经出现差异，见 `docs/screen-logic-move.md` #21。）
 

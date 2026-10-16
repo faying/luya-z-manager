@@ -1,0 +1,43 @@
+// Scheduled jobs (luyaz_policy::scheduler), the policy boundary between u60d's scheduler shadow and a
+// scheduler component. The version is the host ABI version in a plugin's manifest entry: change
+// anything here and bump it.
+//
+// `due` reads a job's id, enabled flag, schedule, restore time, last run and last restore; that is
+// all a `job` carries here. The action (method, path, JSON body), the restore body, the name and
+// the status fields stay in the host; the guest fills them in empty. u60d's tests run every case
+// through the full and the stripped jobs with the built-in and require the same answer, so a `due`
+// that starts reading more fails there: then it gets a type here and this version goes up.
+package luyaz:scheduler@0.1.0;
+
+world scheduler {
+  record recurring {
+    /// "HH:MM", compared as text with the zero-padded local time
+    time: string,
+    /// 0 = Monday … 6 = Sunday
+    days: list<u8>,
+  }
+
+  variant schedule {
+    once(s64),
+    recurring(recurring),
+  }
+
+  record job {
+    id: u32,
+    enabled: bool,
+    schedule: schedule,
+    /// the restore's time, when the job has a restore
+    restore-time: option<string>,
+    last-run: option<s64>,
+    last-restore: option<s64>,
+  }
+
+  record fire {
+    id: u32,
+    /// run the job's restore instead of its action
+    restore: bool,
+  }
+
+  /// Jobs that fire now, in job order (luyaz_policy::scheduler::due).
+  export due: func(jobs: list<job>, now-ts: s64, hh: u8, mm: u8, dow: u8) -> list<fire>;
+}

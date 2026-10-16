@@ -1,0 +1,16 @@
+/* /sms/forward (batch 5a): this page's own rules only. */
+.sf-tabs .nd-seg__item { min-height: 44px; }
+.sf-num { width: 7.5rem; flex-shrink: 0; }
+.sf-rule { align-items: flex-start; flex-wrap: wrap; gap: 8px 12px; padding-block: 10px; }
+.sf-rule > .nd-switch { margin-top: 2px; }
+.sf-rtext { min-width: 0; flex: 1 1 12rem; }
+.sf-rtext .nd-row__label, .sf-rtext .nd-row__sub { overflow-wrap: anywhere; }
+.sf-acts { display: flex; flex-wrap: wrap; gap: 4px; margin-inline-start: auto; }
+.sf-log { align-items: flex-start; padding-block: 12px; }
+.sf-ltext { display: grid; min-width: 0; gap: 2px; }
+.sf-line { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 12px; row-gap: 2px; }
+.sf-from { font-weight: 600; overflow-wrap: anywhere; }
+.sf-line .nd-mark { font-size: 14px; }
+.sf-time { margin-inline-start: auto; }
+.sf-prev { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; font-size: 15px; line-height: 22px; color: var(--nd-t2); }
+.sf-err { overflow-wrap: anywhere; color: var(--nd-badT); }

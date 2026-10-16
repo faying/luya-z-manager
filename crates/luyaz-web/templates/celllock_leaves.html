@@ -1,0 +1,11 @@
+<div id="cl-now" class="grid gap-2"><div class="nd-group{% if v.stale %} nd-stale{% endif %}">
+<a class="nd-row" href="/signal"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Network", "网络") }}</span></span><span class="nd-row__value">{{ v.rat }}</span></a>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">PCI</span></span><span class="nd-row__value nd-mono">{{ v.pci }}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">ARFCN</span></span><span class="nd-row__value nd-mono">{{ v.arfcn }}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Band", "频段") }}</span></span><span class="nd-row__value nd-mono">{{ v.band }}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Cell ID", "小区 ID") }}</span></span><span class="nd-row__value nd-mono">{{ v.cell_id }}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("NR lock", "NR 锁定") }}</span></span><span id="cl-nrlock" class="nd-row__value nd-mono">{{ v.nr_lock }}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("LTE lock", "LTE 锁定") }}</span></span><span id="cl-ltelock" class="nd-row__value nd-mono">{{ v.lte_lock }}</span></div>
+</div>{% if let Some((t, ok)) = v.on_cell %}<p class="t-note{% if *ok %} t-note--ok{% endif %} px-1">{{ t }}</p>{% endif %}{% if let Some(t) = v.txn %}<p class="t-note px-1" role="status">{{ t }}</p>{% endif %}{% if let Some(w) = v.why %}<p class="t-note t-note--warn px-1" role="alert">{{ w }}</p>{% endif %}</div>
+<!--leaf-->
+<div id="cl-cur" hidden data-signals="{_dis: {{ v.dis }}}"></div>

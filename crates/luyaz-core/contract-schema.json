@@ -1,0 +1,2960 @@
+{
+  "$comment": "Generated from crates/luyaz-core/src/contract.rs by the test contract_schema_file_is_current (LUYAZ_UPDATE_GOLDEN=1). Levels: normal, personal (identifiers; owner and authenticated MCP see them), secret (never in plain text outside the live state), nested.",
+  "blocks": {
+    "advice": {
+      "$defs": {
+        "AdvicePref": {
+          "properties": {
+            "crashes": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "drops": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "secs": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "secs",
+            "crashes",
+            "drops"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The experience library's word on where the device is now (u60-radio.md §7, D12):\nper preference bucket how long and how many crashes/drops, crashes per band. MCC-MNC is\n`normal`, as `signal`'s; no cell id, no PCI.",
+      "properties": {
+        "backfilled": {
+          "type": "boolean",
+          "x-u60-level": "normal"
+        },
+        "bands": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object",
+          "x-u60-level": "normal"
+        },
+        "net": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "pref": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "prefs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AdvicePref"
+          },
+          "type": "object",
+          "x-u60-level": "nested"
+        },
+        "text": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "text_en": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "unclear": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "verdict": {
+          "type": "string",
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "net",
+        "pref",
+        "verdict",
+        "text",
+        "text_en",
+        "prefs",
+        "bands",
+        "unclear",
+        "backfilled"
+      ],
+      "title": "Advice",
+      "type": "object"
+    },
+    "apn": {
+      "$defs": {
+        "ApnProfile": {
+          "description": "One APN profile (`zwrt_apn_object` list entry). The password never leaves the device:\nonly whether one is set.",
+          "properties": {
+            "apn": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "auth": {
+              "description": "`pppAuthMode`: 0 none, 1 PAP, 2 CHAP, 3 PAP/CHAP",
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "enabled": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "has_password": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "id": {
+              "description": "`profileId`: `manuN` (manual) or `autoNNN` (from the SIM's operator table)",
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "name": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "pdp": {
+              "description": "`pdpType`: 1 IPv4, 2 IPv6, 3 IPv4v6",
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "roaming_pdp": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "username": {
+              "type": "string",
+              "x-u60-level": "personal"
+            }
+          },
+          "required": [
+            "apn",
+            "auth",
+            "enabled",
+            "has_password",
+            "id",
+            "name",
+            "pdp",
+            "roaming_pdp",
+            "username"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "APN (3-3): mode, the profile on cid 1, both lists.",
+      "properties": {
+        "auto": {
+          "items": {
+            "$ref": "#/$defs/ApnProfile"
+          },
+          "type": "array",
+          "x-u60-level": "nested"
+        },
+        "current": {
+          "description": "`profileId` on cid 1 (what the data link uses)",
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "manual": {
+          "items": {
+            "$ref": "#/$defs/ApnProfile"
+          },
+          "type": "array",
+          "x-u60-level": "nested"
+        },
+        "mode": {
+          "description": "`apn_mode`: 0 auto, 1 manual",
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "auto",
+        "current",
+        "manual",
+        "mode"
+      ],
+      "title": "Apn",
+      "type": "object"
+    },
+    "battery": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "bat_ua": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "bat_uv": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "charger_connect": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "charger_type": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "charging": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "chg_ua": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "chg_uv": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "health": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "online": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "percent": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "temp": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "time_to_full": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "bat_ua",
+        "bat_uv",
+        "charger_connect",
+        "charger_type",
+        "charging",
+        "chg_ua",
+        "chg_uv",
+        "health",
+        "online",
+        "percent",
+        "temp",
+        "time_to_full"
+      ],
+      "title": "Battery",
+      "type": "object"
+    },
+    "charger": {
+      "$defs": {
+        "DirectSupply": {
+          "properties": {
+            "enabled": {
+              "description": "null when the vendor reports a mode other than enable/disable",
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "mode": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "supported": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "supported"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "direct_supply": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DirectSupply"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-u60-level": "nested"
+        }
+      },
+      "title": "Charger",
+      "type": "object"
+    },
+    "clients": {
+      "$defs": {
+        "Client": {
+          "properties": {
+            "ip": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "mac": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "name": {
+              "type": "string",
+              "x-u60-level": "personal"
+            }
+          },
+          "required": [
+            "ip",
+            "mac",
+            "name"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "lan": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "list": {
+          "items": {
+            "$ref": "#/$defs/Client"
+          },
+          "type": "array",
+          "x-u60-level": "nested"
+        },
+        "total": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "wifi": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "lan",
+        "list",
+        "total",
+        "wifi"
+      ],
+      "title": "Clients",
+      "type": "object"
+    },
+    "dhcp": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "dhcp_enabled": {
+          "default": false,
+          "description": "`dhcp.lan.ignore` is not \"1\" (batch 4)",
+          "type": "boolean",
+          "x-u60-level": "normal"
+        },
+        "ip": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "leasetime": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "limit": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "netmask": {
+          "default": "",
+          "description": "`network.lan.netmask` (batch 4)",
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "start": {
+          "type": "string",
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "ip",
+        "leasetime",
+        "limit",
+        "start"
+      ],
+      "title": "Dhcp",
+      "type": "object"
+    },
+    "interfaces": {
+      "$defs": {
+        "Addr": {
+          "properties": {
+            "address": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "class": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "mask": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "address",
+            "mask"
+          ],
+          "type": "object"
+        },
+        "Cellular": {
+          "description": "`zwrt_data get_wwaniface`, passed through.",
+          "properties": {
+            "cid": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "connect_fail_count": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "connect_mode": {
+              "description": "\"auto\" on some firmware, a number on others",
+              "x-u60-level": "normal"
+            },
+            "connect_status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "enable": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "ipv4_address": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "personal"
+            },
+            "ipv4_dev_name": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "ipv4_dns_prefer": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "ipv4_dns_standby": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "ipv4_gateway": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "personal"
+            },
+            "ipv4_netmask": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "ipv6_address": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "personal"
+            },
+            "ipv6_dev_name": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "ipv6_dns_prefer": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "ipv6_dns_standby": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "ipv6_gateway": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "personal"
+            },
+            "pdp_type": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "profile_id": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "roam_enable": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "roll_connect_status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            }
+          },
+          "type": "object"
+        },
+        "Iface": {
+          "properties": {
+            "device": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "dns": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "x-u60-level": "normal"
+            },
+            "ipv4": {
+              "items": {
+                "$ref": "#/$defs/Addr"
+              },
+              "type": "array",
+              "x-u60-level": "nested"
+            },
+            "ipv6": {
+              "items": {
+                "$ref": "#/$defs/Addr"
+              },
+              "type": "array",
+              "x-u60-level": "nested"
+            },
+            "proto": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "up": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "device",
+            "dns",
+            "ipv4",
+            "ipv6",
+            "proto",
+            "up"
+          ],
+          "type": "object"
+        },
+        "LanConfig": {
+          "properties": {
+            "lan_info": {
+              "items": {
+                "$ref": "#/$defs/LanInfo"
+              },
+              "type": [
+                "array",
+                "null"
+              ],
+              "x-u60-level": "nested"
+            },
+            "result": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            }
+          },
+          "type": "object"
+        },
+        "LanInfo": {
+          "properties": {
+            "bridge_name": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "device": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "ipv6_default_gateway": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "ipv6_dhcp_end": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "ipv6_dhcp_start": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "ipv6_dns": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "ipv6_global_addr": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "ipv6_link_local_addr": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "ipv6_ra_enable": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "ipv6_unique_local_addr": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "mac": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "rx_bytes": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "rx_dropped": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "rx_error": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "rx_packets": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "tx_bytes": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "tx_dropped": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "tx_error": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "tx_packets": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "bridge_name",
+            "device",
+            "ipv6_default_gateway",
+            "ipv6_dhcp_end",
+            "ipv6_dhcp_start",
+            "ipv6_dns",
+            "ipv6_global_addr",
+            "ipv6_link_local_addr",
+            "ipv6_ra_enable",
+            "ipv6_unique_local_addr",
+            "mac",
+            "rx_bytes",
+            "rx_dropped",
+            "rx_error",
+            "rx_packets",
+            "tx_bytes",
+            "tx_dropped",
+            "tx_error",
+            "tx_packets"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cellular": {
+          "$ref": "#/$defs/Cellular",
+          "x-u60-level": "nested"
+        },
+        "lan": {
+          "$ref": "#/$defs/Iface",
+          "x-u60-level": "nested"
+        },
+        "lan_config": {
+          "$ref": "#/$defs/LanConfig",
+          "x-u60-level": "nested"
+        },
+        "wan4": {
+          "$ref": "#/$defs/Iface",
+          "x-u60-level": "nested"
+        },
+        "wan6": {
+          "$ref": "#/$defs/Iface",
+          "x-u60-level": "nested"
+        }
+      },
+      "required": [
+        "cellular",
+        "lan",
+        "lan_config",
+        "wan4",
+        "wan6"
+      ],
+      "title": "Interfaces",
+      "type": "object"
+    },
+    "live": {
+      "$defs": {
+        "ClearDay": {
+          "description": "`zwrt_data get_data_clear_day`, passed through.",
+          "properties": {
+            "cid": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "clearday": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "enable": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "result": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            }
+          },
+          "type": "object"
+        },
+        "Connections": {
+          "properties": {
+            "tcp4": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "tcp6": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "tcp_active": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "tcp_other": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "udp4": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "udp6": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "unix": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "tcp4",
+            "tcp6",
+            "tcp_active",
+            "tcp_other",
+            "udp4",
+            "udp6",
+            "unix"
+          ],
+          "type": "object"
+        },
+        "Freq": {
+          "properties": {
+            "cur": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "max": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "cur",
+            "max"
+          ],
+          "type": "object"
+        },
+        "Limit": {
+          "description": "`zwrt_data get_data_limit`, passed through.",
+          "properties": {
+            "cid": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "enable": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "overflow": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "ratio": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "type": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "value": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            }
+          },
+          "type": "object"
+        },
+        "LinkRate": {
+          "properties": {
+            "interface": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "rx_bps": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "rx_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "source": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "tx_bps": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "tx_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "window_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "interface",
+            "rx_bytes",
+            "source",
+            "tx_bytes",
+            "window_ms"
+          ],
+          "type": "object"
+        },
+        "MemoryKb": {
+          "properties": {
+            "available": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "buffers": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "cached": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "free": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "swap_free": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "swap_total": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "total": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "available",
+            "buffers",
+            "cached",
+            "free",
+            "swap_free",
+            "swap_total",
+            "total"
+          ],
+          "type": "object"
+        },
+        "Runtime": {
+          "properties": {
+            "connections": {
+              "$ref": "#/$defs/Connections",
+              "x-u60-level": "nested"
+            },
+            "cpu_cores": {
+              "additionalProperties": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "type": "object",
+              "x-u60-level": "normal"
+            },
+            "cpu_freq_mhz": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Freq"
+              },
+              "type": "object",
+              "x-u60-level": "nested"
+            },
+            "cpu_usage_tenths": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "link_rates": {
+              "items": {
+                "$ref": "#/$defs/LinkRate"
+              },
+              "type": "array",
+              "x-u60-level": "nested"
+            },
+            "memory_kb": {
+              "$ref": "#/$defs/MemoryKb",
+              "x-u60-level": "nested"
+            },
+            "storage": {
+              "$ref": "#/$defs/Storage",
+              "x-u60-level": "nested"
+            },
+            "thermal_zones": {
+              "items": {
+                "$ref": "#/$defs/ThermalZone"
+              },
+              "type": "array",
+              "x-u60-level": "nested"
+            },
+            "throughput": {
+              "$ref": "#/$defs/Throughput",
+              "x-u60-level": "nested"
+            }
+          },
+          "required": [
+            "connections",
+            "cpu_cores",
+            "cpu_freq_mhz",
+            "cpu_usage_tenths",
+            "link_rates",
+            "memory_kb",
+            "storage",
+            "thermal_zones",
+            "throughput"
+          ],
+          "type": "object"
+        },
+        "Storage": {
+          "properties": {
+            "available": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "total": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "used": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "available",
+            "total",
+            "used"
+          ],
+          "type": "object"
+        },
+        "System": {
+          "properties": {
+            "cpu_temp": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "cpu_usage": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "fw": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "hostname": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "imei": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "mem_avail": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "mem_total": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "mem_used_pct": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "model": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "sw_version": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "uptime": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "cpu_temp",
+            "cpu_usage",
+            "fw",
+            "hostname",
+            "imei",
+            "mem_avail",
+            "mem_total",
+            "mem_used_pct",
+            "model",
+            "sw_version",
+            "uptime"
+          ],
+          "type": "object"
+        },
+        "ThermalZone": {
+          "properties": {
+            "temp_milli": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "type": {
+              "type": "string",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "temp_milli",
+            "type"
+          ],
+          "type": "object"
+        },
+        "Throughput": {
+          "properties": {
+            "rx_bps": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "tx_bps": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "window_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "rx_bps",
+            "tx_bps",
+            "window_ms"
+          ],
+          "type": "object"
+        },
+        "Traffic": {
+          "properties": {
+            "clear_day": {
+              "$ref": "#/$defs/ClearDay",
+              "x-u60-level": "nested"
+            },
+            "day_rx_bytes": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "day_tx_bytes": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "limit": {
+              "$ref": "#/$defs/Limit",
+              "x-u60-level": "nested"
+            },
+            "max_rx_speed": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "max_tx_speed": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "month_rx_bytes": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "month_tx_bytes": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "rx_bytes": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "rx_speed": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "session_time": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "total_rx_bytes": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "total_tx_bytes": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "tx_bytes": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "tx_speed": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "clear_day",
+            "day_rx_bytes",
+            "day_tx_bytes",
+            "limit",
+            "max_rx_speed",
+            "max_tx_speed",
+            "month_rx_bytes",
+            "month_tx_bytes",
+            "rx_bytes",
+            "rx_speed",
+            "session_time",
+            "total_rx_bytes",
+            "total_tx_bytes",
+            "tx_bytes",
+            "tx_speed"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "runtime": {
+          "$ref": "#/$defs/Runtime",
+          "x-u60-level": "nested"
+        },
+        "system": {
+          "$ref": "#/$defs/System",
+          "x-u60-level": "nested"
+        },
+        "traffic": {
+          "$ref": "#/$defs/Traffic",
+          "x-u60-level": "nested"
+        }
+      },
+      "required": [
+        "runtime",
+        "system",
+        "traffic"
+      ],
+      "title": "Live",
+      "type": "object"
+    },
+    "nfc": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "switch": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "switch"
+      ],
+      "title": "Nfc",
+      "type": "object"
+    },
+    "op": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "E4 operation state. Its old/new values can be anything the write path touches,\nso the details are secret until Phase 3 types them.",
+      "properties": {
+        "active": {
+          "x-u60-level": "secret"
+        },
+        "last": {
+          "x-u60-level": "secret"
+        },
+        "rollback_enabled": {
+          "type": "boolean",
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "active",
+        "last",
+        "rollback_enabled"
+      ],
+      "title": "Op",
+      "type": "object"
+    },
+    "powerbank": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`zwrt_bsp.powerbank get {\"property\":\"state\"}`, passed through.",
+      "properties": {
+        "state": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        }
+      },
+      "title": "Powerbank",
+      "type": "object"
+    },
+    "qos": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "ambr_dl": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "ambr_ul": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "bearer": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "qci": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "stale": {
+          "type": "boolean",
+          "x-u60-level": "normal"
+        },
+        "usb_mode": {
+          "type": "string",
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "ambr_dl",
+        "ambr_ul",
+        "bearer",
+        "qci",
+        "stale",
+        "usb_mode"
+      ],
+      "title": "Qos",
+      "type": "object"
+    },
+    "router": {
+      "$defs": {
+        "FilterRule": {
+          "description": "One `router_get_macipport_filter_rule` entry (non-empty shape not seen on the device yet).",
+          "properties": {
+            "action": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "dst_ip": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "dst_port": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "id": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "name": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "protocol": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "src_ip": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "src_mac": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "src_port": {
+              "type": "string",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "action",
+            "dst_ip",
+            "dst_port",
+            "id",
+            "name",
+            "protocol",
+            "src_ip",
+            "src_mac",
+            "src_port"
+          ],
+          "type": "object"
+        },
+        "PortForwardRule": {
+          "description": "One `router_get_portforward_rule` entry (non-empty shape not seen on the device yet).",
+          "properties": {
+            "enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "id": {
+              "description": "\"\" when the firmware gives none (then it cannot be deleted)",
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "lan_ip": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "lan_port": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "name": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "protocol": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "wan_port": {
+              "type": "string",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "id",
+            "lan_ip",
+            "lan_port",
+            "name",
+            "protocol",
+            "wan_port"
+          ],
+          "type": "object"
+        },
+        "RouterAlg": {
+          "description": "`router_get_alg_para` (B31 reports only SIP ALG; null = not reported).",
+          "properties": {
+            "ipsec": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "l2tp": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "pptp": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "sip": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            }
+          },
+          "type": "object"
+        },
+        "RouterFirewall": {
+          "description": "`router_get_firewall_para`. A switch is null when the firmware does not report it.",
+          "properties": {
+            "dmz": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "dmz_ip": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "enabled": {
+              "description": "`firewall_enable`",
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "level": {
+              "description": "low / medium / high; \"\" on B31",
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "nat": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "port_forward": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "remote_web": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "wan_ping": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "dmz_ip",
+            "level"
+          ],
+          "type": "object"
+        },
+        "RouterQos": {
+          "description": "The vendor 带宽分配 mode (uci `zwrt_smart_mng`), read only.",
+          "properties": {
+            "mode": {
+              "description": "`smart_qos.mode`: Nomal_mode, Ai_mode, Live_mode, … (\"\" unread)",
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "xdpi": {
+              "description": "`smart_mng.xdpi_support`",
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        "RouterUpnp": {
+          "description": "`router_get_upnp`; the numbers are what `router_set_upnp_switch` takes back (null: not reported).",
+          "properties": {
+            "enabled": {
+              "description": "`enable_upnp`",
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "natpmp": {
+              "description": "`enable_natpmp`",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "notify_interval": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "ttl": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Router settings (batch 4): one part per vendor read, null when that read failed or its\nshape is not recognised; rule lists are [] when the firmware answers `{}`.",
+      "properties": {
+        "alg": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouterAlg"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-u60-level": "nested"
+        },
+        "blocked_domains": {
+          "description": "`router_get_domainfilter_rule`",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "filter_rules": {
+          "items": {
+            "$ref": "#/$defs/FilterRule"
+          },
+          "type": [
+            "array",
+            "null"
+          ],
+          "x-u60-level": "nested"
+        },
+        "firewall": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouterFirewall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-u60-level": "nested"
+        },
+        "port_forward": {
+          "items": {
+            "$ref": "#/$defs/PortForwardRule"
+          },
+          "type": [
+            "array",
+            "null"
+          ],
+          "x-u60-level": "nested"
+        },
+        "qos": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouterQos"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-u60-level": "nested"
+        },
+        "upnp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouterUpnp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-u60-level": "nested"
+        }
+      },
+      "title": "Router",
+      "type": "object"
+    },
+    "signal": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "HSR": {
+          "type": "boolean",
+          "x-u60-level": "normal"
+        },
+        "band": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "bars": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "home_mcc": {
+          "description": "null when the IMSI's MCC is not a known country",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "lte_bands": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "lte_cell_id": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "personal"
+        },
+        "lte_cell_lock": {
+          "description": "current cell lock, raw: `pci,earfcn` (order inferred, unverified); unlocked = \"\" or zeros",
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "lte_channel": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "lte_pci": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "personal"
+        },
+        "lte_rsrp": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "lte_rsrq": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "lte_rssi": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "lte_snr": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "lte_supported_bands": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "lteca": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "ltecasig": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "mcc": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "mnc": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "net_select": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "net_select_mode": {
+          "description": "how the network is chosen: \"auto_select\" | \"manual_select\" (vendor nwinfo); not the\nradio preference, which is `net_select`",
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "nr_band": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "nr_bw": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "nr_cell_id": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "personal"
+        },
+        "nr_cell_lock": {
+          "description": "current cell lock, raw `pci,arfcn,band` (B31); unlocked = \"\" or \"0,0,0\"",
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "nr_channel": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "nr_nsa_supported_bands": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "nr_pci": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "personal"
+        },
+        "nr_rsrp": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "nr_rsrq": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "nr_rssi": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "nr_sa_supported_bands": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "nr_snr": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "nrca": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "nsa_bands": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "operator": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "roaming": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "rssi": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "sa_bands": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "serving_mcc": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "true_roaming": {
+          "description": "null when either country is unknown",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "type": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "wan_status": {
+          "type": "string",
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "HSR",
+        "band",
+        "bars",
+        "lte_bands",
+        "lte_cell_id",
+        "lte_channel",
+        "lte_pci",
+        "lte_rsrp",
+        "lte_rsrq",
+        "lte_rssi",
+        "lte_snr",
+        "lte_cell_lock",
+        "lte_supported_bands",
+        "lteca",
+        "ltecasig",
+        "mcc",
+        "mnc",
+        "net_select",
+        "net_select_mode",
+        "nr_band",
+        "nr_bw",
+        "nr_cell_lock",
+        "nr_cell_id",
+        "nr_channel",
+        "nr_nsa_supported_bands",
+        "nr_pci",
+        "nr_rsrp",
+        "nr_rsrq",
+        "nr_rssi",
+        "nr_sa_supported_bands",
+        "nr_snr",
+        "nrca",
+        "nsa_bands",
+        "operator",
+        "roaming",
+        "rssi",
+        "sa_bands",
+        "type",
+        "wan_status"
+      ],
+      "title": "Signal",
+      "type": "object"
+    },
+    "sim": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "current_slot": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "dual_sim": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "iccid": {
+          "type": "string",
+          "x-u60-level": "personal"
+        },
+        "imsi": {
+          "type": "string",
+          "x-u60-level": "personal"
+        },
+        "modem_state": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "msisdn": {
+          "type": "string",
+          "x-u60-level": "personal"
+        },
+        "pin_status": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "sim1_provision": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "sim2_provision": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "spn": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "state": {
+          "type": "string",
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "current_slot",
+        "dual_sim",
+        "iccid",
+        "imsi",
+        "modem_state",
+        "msisdn",
+        "pin_status",
+        "sim1_provision",
+        "sim2_provision",
+        "spn",
+        "state"
+      ],
+      "title": "Sim",
+      "type": "object"
+    },
+    "sms": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "count": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "max_id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "unread": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "count",
+        "max_id",
+        "unread"
+      ],
+      "title": "Sms",
+      "type": "object"
+    },
+    "sms_list": {
+      "$defs": {
+        "SmsItem": {
+          "properties": {
+            "date": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "id": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "num": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "text": {
+              "type": "string",
+              "x-u60-level": "secret"
+            },
+            "unread": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "date",
+            "id",
+            "num",
+            "text",
+            "unread"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "list": {
+          "items": {
+            "$ref": "#/$defs/SmsItem"
+          },
+          "type": "array",
+          "x-u60-level": "nested"
+        }
+      },
+      "required": [
+        "list"
+      ],
+      "title": "SmsList",
+      "type": "object"
+    },
+    "typec": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`zwrt_bsp.typec list`, passed through.",
+      "properties": {
+        "cc_attch_state": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "data_role": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "power_role": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        }
+      },
+      "title": "Typec",
+      "type": "object"
+    },
+    "uci_device_info": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "uci values, each left out when empty.",
+      "properties": {
+        "common_model_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "day_rx_bytes": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "day_time": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "day_tx_bytes": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "device_alias_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "device_manufacturer": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "device_market_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "device_model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "dhcpEnabled": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "dhcpEnd": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "dhcpLease_hour": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "dhcpStart": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "hardware_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "hardware_version_ci": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "hostname": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "iccid": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "personal"
+        },
+        "imei": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "personal"
+        },
+        "imsi": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "personal"
+        },
+        "integrate_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "lan_ipaddr": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "lan_netmask": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "login_fail_lock_timeout": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "login_fail_num": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "login_timeout": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "mac_address": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "personal"
+        },
+        "mcc": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "mnc": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "modem_main_state": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "modem_msn": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "personal"
+        },
+        "month_rx_bytes": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "month_time": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "month_tx_bytes": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "msisdn": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "personal"
+        },
+        "mss": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "mtu": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "pin_status": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_lte_band": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_lte_bands": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_lte_cell_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "personal"
+        },
+        "radio_lte_channel": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_lte_pci": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "personal"
+        },
+        "radio_lte_rsrp": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_lte_rsrq": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_lte_snr": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_lteca": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_net_select": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_network_type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_nr_band": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_nr_bandwidth": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_nr_channel": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_nr_nsa_bands": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_nr_pci": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "personal"
+        },
+        "radio_nr_rsrp": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_nr_rsrq": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_nr_sa_bands": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_nr_snr": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_operator": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "radio_signalbar": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "serial_number": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "personal"
+        },
+        "sim_states": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "software_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "total_rx_bytes": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "total_time": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "total_tx_bytes": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "wa_inner_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "wan_dns": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "web_language": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        }
+      },
+      "title": "UciDeviceInfo",
+      "type": "object"
+    },
+    "wifi": {
+      "$defs": {
+        "WifiBand": {
+          "description": "One main AP and its radio (uci `wireless`). The password never leaves the device.",
+          "properties": {
+            "ap_on": {
+              "description": "`main_*.disabled` is not \"1\"",
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "channel": {
+              "description": "uci as set (\"0\"/\"auto\" = automatic)",
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "encryption": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "has_password": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "hidden": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "htmode": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "radio_on": {
+              "description": "`wifiN.disabled` is not \"1\"",
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "ssid": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "txpower": {
+              "description": "`txpowerpercent`",
+              "type": "string",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "ap_on",
+            "channel",
+            "encryption",
+            "has_password",
+            "hidden",
+            "htmode",
+            "radio_on",
+            "ssid",
+            "txpower"
+          ],
+          "type": "object"
+        },
+        "WifiGuest": {
+          "description": "Guest Wi-Fi (`guest_2g`, the 5 GHz one shares its settings). No password, only whether one is set.",
+          "properties": {
+            "active_time": {
+              "description": "`guest_active_time` as set",
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "encryption": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "has_password": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "hidden": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "isolate": {
+              "description": "`isolate` is not \"0\"",
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "left_s": {
+              "description": "seconds left (`zwrt_wlan wlan_get_guest_access_left_time`), read only while guest is on;\nnull otherwise or unread",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "on_2g": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "on_5g": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "ssid": {
+              "type": "string",
+              "x-u60-level": "personal"
+            }
+          },
+          "required": [
+            "active_time",
+            "encryption",
+            "has_password",
+            "hidden",
+            "isolate",
+            "on_2g",
+            "on_5g",
+            "ssid"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Wi-Fi settings (batch 4) for the web pages; `wlan` stays as it is for its readers.",
+      "properties": {
+        "band_2g": {
+          "$ref": "#/$defs/WifiBand",
+          "x-u60-level": "nested"
+        },
+        "band_5g": {
+          "$ref": "#/$defs/WifiBand",
+          "x-u60-level": "nested"
+        },
+        "country": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "guest": {
+          "$ref": "#/$defs/WifiGuest",
+          "x-u60-level": "nested"
+        },
+        "on": {
+          "description": "master switch: vendor `wifi_onoff` not \"0\" and not both main APs disabled",
+          "type": "boolean",
+          "x-u60-level": "normal"
+        },
+        "wifi6": {
+          "description": "`zte_mbb.wifi6_switch` not \"0\" (missing counts as on, as the stock page does)",
+          "type": "boolean",
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "band_2g",
+        "band_5g",
+        "country",
+        "guest",
+        "on",
+        "wifi6"
+      ],
+      "title": "Wifi",
+      "type": "object"
+    },
+    "wlan": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "enabled": {
+          "format": "int64",
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
+        "enc": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "ssid": {
+          "type": "string",
+          "x-u60-level": "personal"
+        }
+      },
+      "required": [
+        "enabled",
+        "enc",
+        "ssid"
+      ],
+      "title": "Wlan",
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("router.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<div class="pg-col">
+<p class="nd-body">{{ l.pick("Manage firewall, NAT, DMZ, UPnP and port forwarding.", "管理防火墙、NAT、DMZ、UPnP 和端口转发。") }}</p>
+{{ self.leaf("fw-status")|safe }}
+<section aria-labelledby="fw-sw-t"><h2 id="fw-sw-t" class="nd-group-title">{{ l.pick("Switches", "开关") }}</h2>
+{{ self.leaf("fw-sws")|safe }}
+{{ sw_op|safe }}</section>
+<section aria-labelledby="fw-dmz-t"><div class="flex items-center gap-3"><h2 id="fw-dmz-t" class="nd-group-title flex-1">DMZ</h2>{{ self.leaf("fw-dmzbtn")|safe }}</div>
+{{ self.leaf("fw-dmz")|safe }}
+{{ self.leaf("fw-dmzform")|safe }}
+{{ dmz_op|safe }}
+<p class="nd-aux mt-2 px-1">{{ l.pick("Exposing a host via DMZ bypasses the firewall.", "通过 DMZ 暴露主机会绕过防火墙。") }}</p></section>
+<section aria-labelledby="fw-pf-t"><div class="flex items-center gap-3"><h2 id="fw-pf-t" class="nd-group-title flex-1">{{ l.pick("Port Forwarding", "端口转发") }}</h2>{{ self.leaf("fw-pfn")|safe }}{{ self.leaf("fw-pfbtn")|safe }}</div>
+{{ self.leaf("fw-pfform")|safe }}
+{{ pf_op|safe }}
+{{ self.leaf("fw-pf")|safe }}
+{{ del_op|safe }}</section>
+<section aria-labelledby="fw-fl-t"><h2 id="fw-fl-t" class="nd-group-title">{{ l.pick("Filter Rules (read-only)", "过滤规则（只读）") }}</h2>
+{{ self.leaf("fw-filter")|safe }}</section>
+</div>
+{% endblock %}

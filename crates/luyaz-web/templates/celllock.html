@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+{{ self.leaf("cl-cur")|safe }}
+<div class="grid gap-6 pg-cols" data-signals="{_npci: '', _narfcn: '', _nband: '{{ band0 }}', _lpci: '', _learfcn: ''}">
+<div class="grid content-start gap-6">
+<section aria-labelledby="cl-now-t"><h2 id="cl-now-t" class="nd-group-title">{{ l.pick("Current cell", "当前小区") }}</h2>
+{{ self.leaf("cl-now")|safe }}
+</section>
+<section aria-labelledby="cl-nr-t"><h2 id="cl-nr-t" class="nd-group-title">{{ l.pick("Lock NR cell", "锁定 NR 小区") }}</h2>
+<div class="nd-group grid gap-3 p-4">
+<label class="grid gap-1"><span class="nd-aux">NR PCI</span><input class="nd-field nd-mono" inputmode="numeric" autocomplete="off" placeholder="{{ l.pick("e.g. 123", "例如 123") }}" data-bind="_npci" data-attr:disabled="$_dis"></label>
+<label class="grid gap-1"><span class="nd-aux">NR ARFCN</span><input class="nd-field nd-mono" inputmode="numeric" autocomplete="off" placeholder="{{ l.pick("e.g. 627264", "例如 627264") }}" data-bind="_narfcn" data-attr:disabled="$_dis"></label>
+<label class="grid gap-1"><span class="nd-aux">{{ l.pick("NR band", "NR 频段") }}</span><input class="nd-field nd-mono" inputmode="numeric" autocomplete="off" placeholder="{{ l.pick("e.g. 78", "例如 78") }}" data-bind="_nband" data-attr:disabled="$_dis"></label>
+<div class="flex flex-wrap items-center gap-3"><button type="button" class="nd-btn nd-btn--primary" disabled data-attr:disabled="$_dis || !$_npci.trim() || !$_narfcn.trim() || !$_nband.trim()" data-on:click="@post('{{ crate::celllock::PATH }}/nr/ask?pci=' + encodeURIComponent($_npci) + '&amp;arfcn=' + encodeURIComponent($_narfcn) + '&amp;band=' + encodeURIComponent($_nband))">{{ l.pick("Lock NR", "锁定 NR") }}</button>
+<span class="nd-aux" data-show="!$_npci.trim() || !$_narfcn.trim() || !$_nband.trim()">{{ l.pick("PCI, ARFCN and band are required", "PCI、ARFCN 和频段都要填") }}</span></div>
+{{ nr_op|safe }}</div>
+</section>
+<section aria-labelledby="cl-lte-t"><h2 id="cl-lte-t" class="nd-group-title">{{ l.pick("Lock LTE cell", "锁定 LTE 小区") }}</h2>
+<div class="nd-group grid gap-3 p-4">
+<label class="grid gap-1"><span class="nd-aux">LTE PCI</span><input class="nd-field nd-mono" inputmode="numeric" autocomplete="off" placeholder="{{ l.pick("e.g. 456", "例如 456") }}" data-bind="_lpci" data-attr:disabled="$_dis"></label>
+<label class="grid gap-1"><span class="nd-aux">LTE EARFCN</span><input class="nd-field nd-mono" inputmode="numeric" autocomplete="off" placeholder="{{ l.pick("e.g. 1300", "例如 1300") }}" data-bind="_learfcn" data-attr:disabled="$_dis"></label>
+<div class="flex flex-wrap items-center gap-3"><button type="button" class="nd-btn nd-btn--primary" disabled data-attr:disabled="$_dis || !$_lpci.trim() || !$_learfcn.trim()" data-on:click="@post('{{ crate::celllock::PATH }}/lte/ask?pci=' + encodeURIComponent($_lpci) + '&amp;arfcn=' + encodeURIComponent($_learfcn))">{{ l.pick("Lock LTE", "锁定 LTE") }}</button>
+<span class="nd-aux" data-show="!$_lpci.trim() || !$_learfcn.trim()">{{ l.pick("PCI and EARFCN are required", "PCI 和 EARFCN 都要填") }}</span></div>
+{{ lte_op|safe }}</div>
+</section>
+</div>
+<div class="grid content-start gap-6">
+<section aria-labelledby="cl-reset-t"><h2 id="cl-reset-t" class="nd-group-title">{{ l.pick("Automatic cell selection", "自动选小区") }}</h2>
+<div class="nd-group grid gap-3 p-4"><p class="nd-body">{{ l.pick("Remove every NR and LTE cell lock; band locks reset too, and the modem chooses again.", "去掉所有 NR 和 LTE 小区锁定，频段锁定也一起恢复，让调制解调器重新自己选。") }}</p>
+<div><button type="button" class="nd-btn nd-btn--secondary" data-attr:disabled="$_dis" data-on:click="@post('{{ crate::celllock::PATH }}/reset/ask')">{{ l.pick("Unlock all", "全部解锁") }}</button></div>
+{{ reset_op|safe }}</div>
+</section>
+<section aria-labelledby="cl-nbr-t"><h2 id="cl-nbr-t" class="nd-group-title">{{ l.pick("Neighbour cells", "邻区") }}</h2>
+<div class="nd-group grid gap-3 p-4"><div><button type="button" class="nd-btn nd-btn--secondary" disabled aria-describedby="cl-nbr-off">{{ l.pick("Scan neighbours", "扫描邻区") }}</button></div>
+<p id="cl-nbr-off" class="nd-body">{{ l.pick("Neighbour scan is off: the stock scan drops mobile data for minutes and returns no cells on this firmware.", "邻区扫描已停用：这版固件的原厂扫描会让移动数据断开好几分钟，而且拿不到任何小区。") }}</p></div>
+</section>
+</div>
+</div>
+{% endblock %}

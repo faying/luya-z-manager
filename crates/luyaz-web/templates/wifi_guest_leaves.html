@@ -1,0 +1,11 @@
+<div id="wg-status"><section class="nd-status nd-status--{{ v.tone }}{% if v.tone == "stale" %} nd-stale{% endif %}">
+<div class="nd-status__main">
+<div class="nd-status__state" role="status"><span class="nd-mark nd-mark--{{ v.tone }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.symbol() }}</span><span>{{ v.state }}</span></span></div>
+{% if let Some(r) = v.reason %}<div class="nd-status__reason"><span{% if v.tone == "bad" %} role="alert"{% endif %}>{{ r }}</span></div>{% endif %}
+{% if let Some(m) = v.meta %}<div class="nd-status__meta">{% if v.left.is_some() %}<span class="nd-fresh nd-mono" data-signals="{{ v.sigs() }}" data-on-interval__duration.1s="$_wgl = Math.max(0, $_wgl - 1)" data-text="{{ v.left_js() }}">{{ m }}</span>{% else %}<span class="nd-fresh">{{ m }}</span>{% endif %}</div>{% endif %}
+{% if let Some(b) = v.busy %}<div class="nd-status__meta"><span class="nd-fresh">{{ b }}</span></div>{% endif %}
+</div>
+{% if v.retry %}<div class="nd-status__actions"><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/router/wifi-guest/refresh')">{{ v.l.pick("Retry", "重试") }}</button></div>{% endif %}
+</section></div>
+<!--leaf-->
+<div id="wg-rows" class="nd-group{% if v.stale %} nd-stale{% endif %}">{% if v.rows.is_empty() %}<div class="nd-row"><span class="nd-row__value">—</span></div>{% endif %}{% for r in v.rows %}<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ r.label }}</span></span><span class="nd-row__value{% if r.data %} nd-mono wg-ssid{% endif %}"{% if r.data %} data-data{% endif %}>{{ r.value }}</span></div>{% endfor %}</div>

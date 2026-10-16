@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
+{% block main %}
+<div class="sd-page" data-signals="{ask: false, askStop: false}">
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<div class="grid gap-6">
+<section aria-label="{{ shell.t("Detection status", "检测状态") }}">
+{{ self.leaf("sd-status")|safe }}
+<div id="sd-op" class="grid gap-1"></div>
+</section>
+<section aria-labelledby="sd-results-t"><h2 id="sd-results-t" class="nd-group-title">{{ shell.t("Detection Results", "检测结果") }}</h2>
+{{ self.leaf("sd-results")|safe }}
+</section>
+</div>
+</div>
+{% endblock %}

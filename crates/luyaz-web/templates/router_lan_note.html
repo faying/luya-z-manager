@@ -1,0 +1,1 @@
+<div id="lan-new">{% if note != Note::None %}<p class="t-note t-note--{% if note == Note::Moved %}ok{% else %}warn{% endif %} lan-new" role="status">{{ self.lead() }} <a class="nd-mono lan-link" href="{{ self.url() }}">{{ self.url() }}</a>{{ self.tail() }}</p>{% endif %}</div>

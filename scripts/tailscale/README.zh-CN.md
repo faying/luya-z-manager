@@ -46,6 +46,14 @@ ssh root@<device> 'cp /etc/rc.local /data/rc.local.bak && sed -i "/^exit 0/i sh 
 
 别用 `/etc/init.d/… enable` 做自启。原厂有一道开机关卡，要等它自己的守护进程全部注册才让开机走完，往那里加别的东西可能让开机卡在 logo。
 
+可选、推荐：让 procd 监督 tailscaled。装上 init 文件（永远不 `enable`；上面那行 rc.local 经 `start.sh` 启动它）：
+
+```sh
+ssh root@<device> 'cat > /etc/init.d/tailscale.new && chmod +x /etc/init.d/tailscale.new && mv /etc/init.d/tailscale.new /etc/init.d/tailscale && sh /data/tailscale/start.sh' < scripts/tailscale/tailscale.init
+```
+
+装了以后，`start.sh start` 只请 procd 启动服务就返回；procd 跑 `start.sh __fg`，它做完和开机时一样的检查，再把自己换成 tailscaled。没装（或固件升级把 `/etc` 清掉了）时，由下面说的后台看守来拉起。
+
 设备上从不保存 auth key。登录过一次以后，`state/` 里的身份就够用了。
 
 ## 设置：`/data/tailscale/tuning.env`
@@ -71,6 +79,8 @@ ssh root@<device> 'cp /etc/rc.local /data/rc.local.bak && sed -i "/^exit 0/i sh 
 sh /data/tailscale/apply.sh /data/tailscale/my-variant.env relay
 ```
 
+这 5 分钟里断电或重启了，下次 `start.sh` 启动时也会换回旧文件：`apply.sh` 做出决定之前，旧文件一直留在 `tuning.env.rollback`（原来没有的话留一个标记 `tuning.env.rollback-none`）。
+
 ## 命令
 
 ```sh
@@ -90,11 +100,11 @@ sh /data/tailscale/start.sh clear-safe # 立即退出安全模式
 - **内核网络不安全时改用 userspace 模式。** `tun` 模式下，tailscaled 会丢掉从其他接口进来、来源是 `100.64.0.0/10` 的包。有些运营商的 WAN 地址、网关或 DNS 就在这个网段里，路由器自己的 DNS 就会断。只要其中任何一个落在这个网段，或者没有 TUN 设备，这次开机就用 userspace 模式。userspace 模式不加路由和防火墙规则；tailnet 仍然能访问路由器上监听所有地址的服务（SSH、管理网页），但局域网设备不能再经路由器访问 tailnet。
 - **开机失败计数 → 安全模式。** 连续 3 次开机都用 `tun` 模式启动、设备却没撑过 10 分钟，就进入安全模式（`/data/tailscale/safe-mode`），改用 userspace 模式。安全模式下撑过 1 小时，下次开机再试一次 `tun`。别的原因引起的重启（比如基带崩溃）也会算进去，所以这里只降级、绝不关掉 Tailscale。同一次开机里 `apply.sh` 引起的重启不计数。
 - **设置坏了也照样起。** `tuning.env` 写坏了会被忽略；`TS_TAILSCALED_BIN` 指的程序不在，就退回默认那份。
-- **挂了会拉起，但有上限。** 启动之后有一个很小的后台看守，每分钟看一次 tailscaled 还在不在。不在了，就先撤掉它留下的路由和防火墙规则，再按开机时的同一套规则重新启动（关断开关、安全模式、userspace 检查都照样生效）。第一次拉起前等 5 分钟，第二次等 15 分钟，之后每次等 1 小时；tailscaled 撑过 10 分钟就从头算。24 小时内拉起 6 次还不行，就暂停到这 24 小时过完，记进 `boot.log`，设备上装了告警队列的话再加一条 `tailscale-gave-up` 告警。它只看进程在不在，不看 Tailscale 健不健康。关断开关开着、`stop` 之后（到下次启动为止）、`apply.sh` 正在切换时，都不会拉起。`tuning.env` 里写 `TS_WATCH=0` 可以关掉它；`TS_WATCH_POLL`、`TS_REVIVE_DELAYS`、`TS_REVIVE_MAX`、`TS_REVIVE_WINDOW` 改这些数。
+- **挂了会拉起，但有上限。** 装了 init 文件时由 procd 重新启动，`start.sh __fg` 先按下面同样的退避等够再起；没装时，启动之后有一个很小的后台看守，每分钟看一次 tailscaled 还在不在。不在了，就先撤掉它留下的路由和防火墙规则，再按开机时的同一套规则重新启动（关断开关、安全模式、userspace 检查都照样生效）。第一次拉起前等 5 分钟，第二次等 15 分钟，之后每次等 1 小时；tailscaled 撑过 10 分钟就从头算。24 小时内拉起 6 次还不行，就暂停到这 24 小时过完，记进 `boot.log`，设备上装了告警队列的话再加一条 `tailscale-gave-up` 告警。它只看进程在不在，不看 Tailscale 健不健康。关断开关开着、`stop` 之后（到下次启动为止）、`apply.sh` 正在切换时，都不会拉起。`tuning.env` 里写 `TS_WATCH=0` 可以关掉它；`TS_WATCH_POLL`、`TS_REVIVE_DELAYS`、`TS_REVIVE_MAX`、`TS_REVIVE_WINDOW` 改这些数。
 
-## 从 `scripts/tailscale-start.sh` 迁移过来
+## 从旧的 `tailscale-start.sh` 迁移过来
 
-旧脚本已废弃（现在运行它只会打印一段说明）。迁移步骤：
+旧脚本已废弃，已从仓库删掉。设备上还在用它的话，迁移步骤：
 
 1. 删掉它在 rc.local 里的那一行：`sed -i '\#tailscale-start.sh#d' /etc/rc.local && sh -n /etc/rc.local`。
 2. 按上面的步骤装好 `start.sh`，加上它的 rc.local 行。
@@ -114,6 +124,7 @@ sh /data/tailscale/start.sh clear-safe # 立即退出安全模式
 ```sh
 sh /data/tailscale/start.sh stop
 sed -i '\#/data/tailscale/start.sh#d' /etc/rc.local && sh -n /etc/rc.local
+rm -f /etc/init.d/tailscale
 # 可选：先用 /data/tailscale/tailscale --socket=/tmp/tailscaled.sock logout 让节点下线
 rm -rf /data/tailscale /data/tailscaled.log*
 ```

@@ -8,30 +8,57 @@ Licensed under the MIT License (see LICENSE).
 Sources
 -------
 - jesther-ai/open-u60-pro (MIT): https://github.com/jesther-ai/open-u60-pro
-- Later changes by Wei REN (install kit, eSIM, Tailscale, Home Mode, admin web
-  redesign), snapshot 420a6d9 (2026-09-15).
+- Later changes by Wei REN (core, admin web, sentinel, install kit, eSIM,
+  Tailscale), snapshot 420a6d9 (2026-09-15) and later syncs.
+- touch-ui/ has its own sources and notices: see touch-ui/NOTICE.
 
 This repository starts from a cleaned snapshot of that work, not from its git
 history. Removed before publishing:
 - device_report.json, ubus_probe_report.json (runtime dumps of a real device)
-- web/public/images/ (vendor marketing photos)
-- mobile/ (upstream's iOS/Android companion apps: never used here and out of
-  date with this agent; they remain in the upstream repository)
-- scripts/topflow/, PROFILE_MANAGER_PLAN.md, web/_backup/, web/vercel.json
-  (private infrastructure and internal notes)
+- vendor marketing photos used by the old admin web
+- mobile/ (upstream's iOS/Android companion apps: never used here; they
+  remain in the upstream repository)
+- scripts/topflow/, PROFILE_MANAGER_PLAN.md (private infrastructure and
+  internal notes)
 - .github/workflows/release.yml (binary releases are not published yet)
-- docs/designs/, .impeccable.md, web/PRODUCT.md, SCENARIO_ENGINE_PLAN.md
-  (design reviews, work-in-progress plans and internal notes)
+- docs/designs/, .impeccable.md, SCENARIO_ENGINE_PLAN.md (design reviews,
+  work-in-progress plans and internal notes)
 Maintainer-specific addresses and host names were replaced with device defaults.
 
 Third-party components
 ----------------------
-- docs/images/ are screenshots rendered from made-up test data (mock agent
+- docs/images/ are screenshots rendered from made-up test data (mock core
   and the touch UI's offscreen render test), not from a real device.
 - Rust crates: see Cargo.lock; each crate keeps its own license.
-- npm packages: see web/package-lock.json; each package keeps its own license.
+- crates/luyaz-web/static/datastar-1.0.4.js: Datastar v1.0.4
+  (https://github.com/starfederation/datastar), MIT License, full text below.
+- crates/luyaz-web/package.json, package-lock.json: development-only npm tools
+  (browser checks, icon and contrast generators); not part of the device build.
+  Each package keeps its own license.
 - Prebuilt binaries used by onboard/build-kit.sh (dropbear, lpac and its Alpine
-  libraries, zwrt-datad) are NOT included in this repository.
+  libraries) are NOT included in this repository.
+
+Datastar license
+----------------
+Copyright © Star Federation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 Trademarks
 ----------

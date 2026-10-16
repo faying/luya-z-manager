@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("router.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<div class="pg-col">
+<p class="nd-body">{{ l.pick("Configure the guest network for temporary access.", "配置供临时访问的访客网络。") }}</p>
+{{ self.leaf("wg-status")|safe }}
+<section aria-labelledby="wg-t"><div class="flex items-center gap-3"><h2 id="wg-t" class="nd-group-title flex-1">{{ l.pick("Guest Network", "访客网络") }}</h2>{{ self.leaf("wg-btn")|safe }}</div>
+{{ self.leaf("wg-rows")|safe }}
+{{ self.leaf("wg-form")|safe }}
+{{ op|safe }}
+<p class="nd-aux mt-2 px-1">{{ l.pick("Any change reloads all of Wi-Fi: the main network drops briefly too.", "任何改动都会重新加载整个 Wi-Fi，主网络也会短暂断开。") }}</p></section>
+</div>
+{% endblock %}

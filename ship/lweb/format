@@ -1,0 +1,3 @@
+# u60 ship：lweb（luyaz-web）的持久数据格式版本（touch-ui docs/SHIP.md）。
+# 它没有自己的状态文件；改了这一点就加 1。
+1

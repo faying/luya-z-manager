@@ -1,0 +1,66 @@
+{%- macro sw(on, label, url, off) -%}
+<button type="button" role="switch" class="nd-switch t-switch" aria-labelledby="{{ label }}" aria-checked="{{ on }}"{% if on %} data-selected="true"{% endif %}{% if off %} disabled{% endif %} data-on:click="@post('{{ url }}')"><span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span></button>
+{%- endmacro -%}
+<div id="sc-status"><section class="nd-status nd-status--{{ v.tone }}{% if v.tone == "stale" %} nd-stale{% endif %}">
+<div class="nd-status__main">
+<div class="nd-status__state" role="status"><span class="nd-mark nd-mark--{{ v.tone }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.symbol() }}</span><span{% if v.current.is_some() && v.tone != "bad" %} data-data{% endif %}>{{ v.state }}</span></span></div>
+{% if let Some(r) = v.reason %}<div class="nd-status__reason"><span class="block"{% if v.tone == "bad" || v.tone == "warn" %} role="alert"{% endif %} data-data>{{ r }}</span></div>{% endif %}
+{% if let Some(m) = v.meta %}<div class="nd-status__meta"><span class="nd-fresh" data-data>{{ m }}</span></div>{% endif %}
+</div>
+{% if v.retry %}<div class="nd-status__actions"><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/router/scenario/refresh')">{{ v.l.pick("Retry", "重试") }}</button></div>{% endif %}
+</section></div>
+<!--leaf-->
+<div id="sc-setup">{% if v.loaded && !v.configured %}<section class="sc-sec"><h2 class="nd-group-title">{{ v.l.pick("Not set up yet", "还没设置") }}</h2><div class="nd-group"><div class="sc-pad"><p class="nd-body">{{ v.l.pick("Create the two default scenarios — at home and away. Nothing happens until you add a home network, so this is safe to do now.", "创建「在家」和「外出」两个默认情景。在你添加家里的网络之前什么都不会发生，所以现在创建是安全的。") }}</p><div><button type="button" class="nd-btn nd-btn--primary"{% if v.locked %} disabled{% endif %} data-on:click="@post('/router/scenario/ask/defaults')">{{ v.l.pick("Create defaults", "创建默认情景") }}</button></div></div></div></section>{% endif %}</div>
+<!--leaf-->
+<div id="sc-now">{% if v.configured %}<section class="sc-sec"><h2 class="nd-group-title">{{ v.l.pick("Right now", "当前状态") }}</h2>
+<div class="nd-group{% if v.stale %} nd-stale{% endif %}">
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Scenario", "情景") }}</span></span><span class="nd-row__value" data-data>{% if let Some(c) = v.current %}{{ c }}{% else %}—{% endif %}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Last change", "上次切换") }}</span></span><span class="nd-row__value nd-mono">{{ v.last_switch }}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Last scan", "上次扫描") }}</span></span><span class="nd-row__value nd-mono">{{ v.last_scan }}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("SIM country code", "SIM 归属地代码") }}</span></span><span class="nd-row__value">{% if let Some(m) = v.sim_mcc %}<span class="nd-mono">{{ m }}</span>{% else %}{{ v.l.pick("unknown", "未知") }}{% endif %}</span></div>
+<div class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label" id="sc-eng-l">{{ v.l.pick("Engine on", "引擎开启") }}</span><span class="nd-row__sub block">{{ v.l.pick("Off: the device stays in away and never switches Wi-Fi off.", "关闭时设备停在「外出」，不会自己关 Wi-Fi。") }}</span></span>{% call sw(v.enabled, "sc-eng-l", v.eng_url, v.locked) %}{% endcall %}</div>
+</div></section>{% endif %}</div>
+<!--leaf-->
+<div id="sc-pin">{% if v.configured %}<section class="sc-sec"><h2 class="nd-group-title">{{ v.l.pick("Pin a scenario", "固定情景") }}</h2>
+<div class="nd-group{% if v.stale %} nd-stale{% endif %}">
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Pinned to", "固定为") }}</span></span><span class="nd-row__value" data-data>{% if let Some(p) = v.pin_name %}{{ p }}{% else %}{{ v.l.pick("auto", "自动") }}{% endif %}</span>{% if v.pin_name.is_some() %}<button type="button" class="nd-btn nd-btn--secondary nd-btn--sm"{% if v.locked %} disabled{% endif %} data-on:click="@post('/router/scenario/ask/pin')">{{ v.l.pick("Clear pin", "取消固定") }}</button>{% endif %}</div>
+<div class="sc-pad"><div class="nd-seg nd-seg--block" role="radiogroup" aria-label="{{ v.l.pick("Pin a scenario", "固定情景") }}"><div class="nd-seg__track">
+<button type="button" role="radio" class="nd-seg__item" aria-checked="{{ v.auto_on }}"{% if v.auto_on %} data-selected="true"{% else %} data-on:click="@post('/router/scenario/ask/pin')"{% endif %}{% if v.locked %} disabled{% endif %}>{{ v.l.pick("Auto", "自动") }}</button>
+{% for p in v.pin_rows %}<button type="button" role="radio" class="nd-seg__item" aria-checked="{{ p.on }}"{% if p.on %} data-selected="true"{% else %} data-on:click="@post('{{ p.url }}')"{% endif %}{% if v.locked %} disabled{% endif %}><span data-data>{{ p.name }}</span></button>
+{% endfor %}</div></div>
+<p class="nd-aux">{{ v.l.pick("Pinning holds one scenario regardless of what the device sees. It survives a reboot — use it if detection is misbehaving.", "固定后不管设备看到什么，都保持在这个情景，重启后也不变。识别出问题时用它兜底。") }}</p></div>
+</div></section>{% endif %}</div>
+<!--leaf-->
+<div id="sc-home">{% if v.configured %}<section class="sc-sec"><h2 class="nd-group-title">{{ v.l.pick("Networks that mean “at home”", "代表「在家」的网络") }}</h2>
+<p class="nd-aux sc-hint">{{ v.l.pick("Seeing any one of these turns the device's own Wi-Fi off so your phone moves to the house network.", "看到其中任意一个，设备就关掉自己的 Wi-Fi，让手机换到家里的网络。") }}</p>
+<div class="nd-group{% if v.stale %} nd-stale{% endif %}">
+{% if v.entries.is_empty() %}<div class="nd-row"><span class="nd-aux">{{ v.l.pick("Nothing listed — the device will never decide it is at home.", "列表为空 — 设备永远不会判定为在家。") }} {{ v.l.pick("Scan below and add your home network.", "在下面扫描，把家里的网络加进来。") }}</span></div>{% endif %}
+{% for e in v.entries %}<div class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label nd-mono sc-wrap" data-data>{{ e.ssid }}</span><span class="nd-row__sub block sc-wrap">{% if e.bssid.is_empty() %}{{ v.l.pick("any radio with this name", "任何使用这个名称的热点") }}{% else %}<span class="nd-mono" data-data>{{ e.bssid }}</span>{% endif %}</span></span><button type="button" class="nd-btn nd-btn--ghost nd-btn--icon" data-data aria-label="{{ v.l.pick("Remove ", "移除 ") }}{{ e.ssid }}"{% if v.locked %} disabled{% endif %} data-on:click="@post('{{ e.del }}')">{{ v.trash()|safe }}</button></div>
+{% endfor %}</div>
+{% if v.nameless > 0 %}<p class="sc-warn" role="note"><span class="nd-mark nd-mark--warn"><span class="nd-mark__sym" aria-hidden="true">▲</span><span>{% match v.l %}{% when Lang::En %}{{ v.nameless }} entr{% if v.nameless == 1 %}y matches{% else %}ies match{% endif %} on name alone. Anyone can broadcast that name and your Wi-Fi would switch off — pick the network from a scan instead, which records its hardware address too.{% else %}有 {{ v.nameless }} 条只按名称匹配。任何人都能广播同样的名称，让你的 Wi-Fi 被关掉 — 请改从扫描结果里选，那样会同时记下它的硬件地址。{% endmatch %}</span></span></p>{% endif %}
+</section>{% endif %}</div>
+<!--leaf-->
+<div id="sc-nearby">{% if v.configured %}<section class="sc-sec"><h2 class="nd-group-title">{{ v.l.pick("Nearby networks", "附近的网络") }}</h2>
+<p class="nd-aux sc-hint">{{ v.l.pick("Adding from a scan records the hardware address, so a network merely using the same name will not fool it.", "从扫描结果添加会记下硬件地址，只是名称相同的网络骗不过它。") }}</p>
+<div class="sc-scanbar"><button type="button" class="nd-btn nd-btn--secondary" data-on:click="@post('/router/scenario/ask/scan')">{{ v.refresh_icon()|safe }}{{ v.l.pick("Scan", "扫描") }}</button><span class="nd-aux">{{ v.l.pick("Uses the radios for a few seconds.", "会占用无线电几秒钟。") }}</span></div></section>{% endif %}</div>
+<!--leaf-->
+<div id="sc-scanlist">{% if v.configured %}<div class="nd-group sc-list">{% match v.scanned %}{% when None %}<div class="nd-row"><span class="nd-aux">{{ v.l.pick("Scan to list what the device can see.", "点「扫描」列出设备能看到的网络。") }}</span></div>{% when Some(rows) %}{% if rows.is_empty() %}<div class="nd-row"><span class="nd-aux">{% if v.scan_total == 0 %}{{ v.l.pick("Nothing found.", "什么都没找到。") }}{% else %}{{ v.l.pick("Everything nearby is already listed.", "附近的网络都已经在列表里了。") }}{% endif %}</span></div>{% endif %}{% for n in rows %}<div class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label nd-mono sc-wrap" data-data>{% if n.ssid.is_empty() %}{{ v.l.pick("(hidden network)", "（隐藏的网络）") }}{% else %}{{ n.ssid }}{% endif %}</span><span class="nd-row__sub block nd-mono" data-data>{{ n.bssid }}</span></span><span class="nd-row__value nd-mono">{{ v.signal_label(n.signal) }}</span>{% if !n.ssid.is_empty() %}<button type="button" class="nd-btn nd-btn--ghost nd-btn--icon" data-data aria-label="{{ v.l.pick("Add ", "添加 ") }}{{ n.ssid }}"{% if v.locked %} disabled{% endif %} data-on:click="@post('{{ n.add }}')">{{ v.plus()|safe }}</button>{% endif %}</div>{% endfor %}{% endmatch %}</div>{% endif %}</div>
+<!--leaf-->
+<div id="sc-does">{% if v.configured %}<section class="sc-sec"><h2 class="nd-group-title">{{ v.l.pick("What each scenario does", "每个情景做什么") }}</h2>
+<p class="nd-aux sc-hint">{{ v.does_desc }}</p>
+<div class="nd-group{% if v.stale %} nd-stale{% endif %}">
+{% for r in v.does %}<div class="nd-row sc-sname"><span class="nd-row__text"><span class="nd-row__label" data-data>{{ r.name }}</span></span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">Wi-Fi</span></span>{% if r.fallback %}<span class="nd-row__value">{{ v.l.pick("always on", "始终开") }}</span>{% else %}<button type="button" role="switch" class="nd-switch t-switch" data-data aria-label="{% match v.l %}{% when Lang::En %}Wi-Fi in {{ r.name }}{% else %}「{{ r.name }}」的 Wi-Fi{% endmatch %}" aria-checked="{{ r.wifi }}"{% if r.wifi %} data-selected="true"{% endif %}{% if v.locked %} disabled{% endif %} data-on:click="@post('{{ r.wifi_url }}')"><span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span></button>{% endif %}</div>
+{% endfor %}</div></section>{% endif %}</div>
+<!--leaf-->
+<div id="sc-timing">{% if v.configured %}<section class="sc-sec" data-signals__ifmissing="{{ v.sigs }}"><h2 class="nd-group-title">{{ v.l.pick("How eagerly it reacts", "反应快慢") }}</h2>
+<p class="nd-aux sc-hint">{{ v.l.pick("Each scan briefly occupies the radios, so scanning often costs a little responsiveness for anything connected.", "每次扫描都会短暂占用无线电，扫得越勤，已连接设备的响应会稍微受影响。") }}</p>
+<div class="nd-group{% if v.stale %} nd-stale{% endif %}">
+{% for p in v.params %}<label class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ p.label }}</span></span><input class="nd-field nd-mono sc-num" inputmode="{{ p.mode }}" autocomplete="off" autocapitalize="off" spellcheck="false" data-bind="{{ p.sig }}"></label>
+{% endfor %}</div>
+<div class="sc-actions"><button type="button" class="nd-btn nd-btn--primary"{% if v.locked %} disabled{% endif %} data-on:click="@post('/router/scenario/ask/timing', {filterSignals: {include: /^_t[cbhexr]$/, exclude: /(?!)/}})">{{ v.l.pick("Save", "保存") }}</button><button type="button" class="nd-btn nd-btn--secondary" style="display: none" data-show="{{ v.dirty }}" data-on:click="{{ v.reset }}">{{ v.l.pick("Discard changes", "放弃改动") }}</button></div>
+<p class="nd-aux sc-hint mt-3">{{ v.l.pick("At home the device's own Wi-Fi is already off, so scanning there is free. Away from home it is not.", "在家时设备自己的 Wi-Fi 已经关了，扫描没有代价；外出时则有。") }}</p></section>{% endif %}</div>
+<!--leaf-->
+<div id="sc-log" class="sc-sec"><section class="nd-console" aria-label="{{ v.l.pick("What it did", "运行记录") }}"><div class="sc-logbar"><h2 class="nd-console__title sc-logtitle">{{ v.l.pick("What it did", "运行记录") }}</h2><button type="button" class="nd-btn sc-logbtn" data-on:click="@post('/router/scenario/refresh')">{{ v.refresh_icon()|safe }}{{ v.l.pick("Refresh log", "刷新记录") }}</button></div>
+{% if let Some(e) = v.log_err %}<p class="nd-console__muted mb-2" data-data>{{ v.l.pick("Couldn't read the log: ", "读不到运行记录：") }}{{ e }}</p>{% endif %}
+<pre tabindex="0" class="sc-pre">{% match v.log %}{% when Some(t) %}{% if t.is_empty() %}<span class="nd-console__muted">{{ v.l.pick("Nothing yet.", "暂无记录。") }}</span>{% else %}<span data-data>{{ t }}</span>{% endif %}{% when None %}<span class="nd-console__muted">{{ v.l.pick("Reading the log…", "正在读取运行记录…") }}</span>{% endmatch %}</pre></section></div>

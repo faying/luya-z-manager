@@ -1,0 +1,9 @@
+# u60d 在 datad 位置上机（tools/u60 ship datad --from u60d）用这一份；从 data-service 68416eb 的 ship/datad 拷来，内容照旧。
+# u60 ship：datad 依赖的其它组件，一行一条「<组件> <提交>」= 设备上那个组件要包含这个提交。
+# tools/u60 在拿到设备锁以后按设备清单检查，两个方向都查（touch-ui docs/SHIP.md）。
+# 2026-10-06 删 /state、/events 和 57 个没人用的 /control 动作（manager docs/designs/legacy-api-removal.md）：
+# 触屏改读 /v2 是 7ce5684；guard 和按需脚本是 d7d175f；agent 退路改读 /v2/state 是 d2587cd，
+# 不再发 modem.airplane 是 84f3404（含 d2587cd）。
+touch 7ce5684
+guard d7d175f
+agent 84f3404

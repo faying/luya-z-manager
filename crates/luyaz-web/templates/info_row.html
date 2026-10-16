@@ -1,0 +1,3 @@
+{%- macro info_row(r) -%}
+<div id="{{ r.id }}" class="nd-row{% if r.sub.is_some() %} nd-row--two{% endif %}{% if r.stale %} nd-stale{% endif %}"><span class="nd-row__text"><span class="nd-row__label">{{ r.label }}</span>{% if let Some(s) = r.sub %}<span class="nd-row__sub block nd-mono pg-breakall"{% if r.data %} data-data{% endif %}>{{ s }}</span>{% endif %}</span><span class="nd-row__value{% if r.mono %} nd-mono{% endif %}"{% if r.data %} data-data{% endif %}>{% match r.val %}{% when Val::Loading %}<span class="nd-skel" style="width:10ch" aria-label="…"></span>{% when Val::Empty %}—{% when Val::Text(t) %}{{ t }}{% endmatch %}</span></div>
+{%- endmacro -%}

@@ -1,0 +1,19 @@
+<div id="pc-status"><section class="nd-status nd-status--{{ v.tone }}{% if v.tone == "stale" %} nd-stale{% endif %}">
+<div class="nd-status__main">
+<div class="nd-status__state" role="status"><span class="nd-mark nd-mark--{{ v.tone }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.symbol() }}</span><span>{{ v.state }}</span></span></div>
+{% if let Some(r) = v.reason %}<div class="nd-status__reason"><span{% if v.tone == "bad" %} role="alert"{% endif %} data-data>{{ r }}</span></div>{% endif %}
+{% if let Some(m) = v.meta %}<div class="nd-status__meta"><span class="nd-fresh">{{ m }}</span></div>{% endif %}
+</div>
+{% if v.retry %}<div class="nd-status__actions"><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/tools/processes/refresh')">{{ v.l.pick("Retry", "重试") }}</button></div>{% endif %}
+</section></div>
+<!--leaf-->
+<button id="pc-all" type="button" class="nd-btn nd-btn--danger"{% if v.locked || v.bloat_n == 0 %} disabled{% else %} data-on:click="@post('/tools/processes/kill/ask?all=true')"{% endif %}>{% match v.l %}{% when Lang::En %}Kill All Bloat ({{ v.bloat_n }}){% else %}结束名单内全部进程（{{ v.bloat_n }}）{% endmatch %}</button>
+<!--leaf-->
+<div id="pc-bloat">{% if let Some(n) = v.bloat_note %}<p class="nd-body pc-muted">{{ n }}</p>{% else if v.bloat_rows.is_empty() %}<div class="nd-group"><div class="nd-row"><span class="nd-row__value">—</span></div></div>{% else %}<div class="nd-group{% if v.stale %} nd-stale{% endif %}">{% for r in v.bloat_rows %}<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label nd-mono" data-data>{{ r.name }}</span><span class="nd-row__sub nd-mono" data-data>{{ r.sub }}</span></span><button type="button" class="nd-btn nd-btn--secondary" aria-label="{{ r.aria }}"{% if v.locked %} disabled{% else %} data-on:click="@post('/tools/processes/kill/ask?pid={{ r.pid }}')"{% endif %}>{{ v.l.pick("Kill", "结束") }}</button></div>{% endfor %}</div>{% endif %}</div>
+<!--leaf-->
+<p id="pc-hint" class="nd-aux"{% if !v.cpu_hint %} hidden{% endif %}>{{ v.l.pick("CPU % shows after the next refresh (it is measured between two readings).", "CPU 占用要等下一次刷新才有（它是两次读数之间算出来的）。") }}</p>
+<!--leaf-->
+<p id="pc-empty" class="nd-console__muted"{% if v.empty.is_none() %} hidden{% endif %}>{% if let Some(e) = v.empty %}{{ e }}{% endif %}</p>
+{% for i in v.slot_ids() %}<!--leaf-->
+{% match v.slots[i] %}{% when Some(r) %}<div id="pc-r{{ i }}" role="row" class="pc-tr{% if v.stale %} nd-stale{% endif %}"><span role="cell" class="pc-n" data-data>{{ r.name }}</span><span role="cell" class="pc-r">{{ r.pid }}</span><span role="cell" class="pc-r">{{ r.cpu }}</span><span role="cell" class="pc-r">{{ r.rss }}</span><span role="cell" class="nd-console__muted">{{ r.state }}</span><span role="cell">{% if r.bloat %}{{ v.l.pick("bloat", "名单内") }}{% endif %}</span></div>{% when None %}<div id="pc-r{{ i }}" role="row" class="pc-tr" hidden></div>{% endmatch %}
+{% endfor %}

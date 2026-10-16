@@ -1,0 +1,50 @@
+diff --git a/third_party/lvgl/src/libs/freetype/lv_freetype_glyph.c b/third_party/lvgl/src/libs/freetype/lv_freetype_glyph.c
+index df789b9..c9bac37 100644
+--- a/third_party/lvgl/src/libs/freetype/lv_freetype_glyph.c
++++ b/third_party/lvgl/src/libs/freetype/lv_freetype_glyph.c
+@@ -9,6 +9,7 @@
+ 
+ #include "../../lvgl.h"
+ #include "lv_freetype_private.h"
++#include FT_SYNTHESIS_H
+ 
+ #if LV_USE_FREETYPE
+ 
+@@ -188,6 +189,13 @@ static bool freetype_glyph_create_cb(lv_freetype_glyph_cache_data_t * data, void
+ 
+     FT_GlyphSlot glyph = face->glyph;
+ 
++    /* U60 patch (patches/lvgl-v9.5.0-freetype-bold.patch): synthetic bold in BITMAP mode; upstream only emboldens OUTLINE mode */
++    if(dsc->render_mode == LV_FREETYPE_FONT_RENDER_MODE_BITMAP && (dsc->style & LV_FREETYPE_FONT_STYLE_BOLD) &&
++       glyph->format == FT_GLYPH_FORMAT_OUTLINE) {
++        FT_GlyphSlot_Embolden(glyph);
++        FT_Render_Glyph(glyph, FT_RENDER_MODE_NORMAL);
++    }
++
+     if(dsc->render_mode == LV_FREETYPE_FONT_RENDER_MODE_OUTLINE) {
+ 
+         dsc_out->adv_w = FT_F26DOT6_TO_INT(glyph->metrics.horiAdvance);
+diff --git a/third_party/lvgl/src/libs/freetype/lv_freetype_image.c b/third_party/lvgl/src/libs/freetype/lv_freetype_image.c
+index b51b21f..4c8db62 100755
+--- a/third_party/lvgl/src/libs/freetype/lv_freetype_image.c
++++ b/third_party/lvgl/src/libs/freetype/lv_freetype_image.c
+@@ -9,6 +9,7 @@
+ 
+ #include "../../lvgl.h"
+ #include "lv_freetype_private.h"
++#include FT_SYNTHESIS_H
+ 
+ #if LV_USE_FREETYPE
+ 
+@@ -147,6 +148,11 @@ static bool freetype_image_create_cb(lv_freetype_image_cache_data_t * data, void
+         lv_mutex_unlock(&dsc->cache_node->face_lock);
+         return false;
+     }
++    if(dsc->style & LV_FREETYPE_FONT_STYLE_BOLD) {   /* U60 patch (patches/lvgl-v9.5.0-freetype-bold.patch): embolden before rasterizing */
++        error = FT_Load_Glyph(face, data->glyph_index, FT_LOAD_TARGET_NORMAL | FT_LOAD_NO_AUTOHINT);
++        if(!error && face->glyph->format == FT_GLYPH_FORMAT_OUTLINE) FT_GlyphSlot_Embolden(face->glyph);
++    }
++    else
+     error = FT_Load_Glyph(face, data->glyph_index,
+                           FT_LOAD_COLOR | FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL | FT_LOAD_NO_AUTOHINT);
+     if(error) {

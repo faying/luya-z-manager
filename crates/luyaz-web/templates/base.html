@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="{{ shell.lang.tag() }}" data-lang="{{ shell.lang.code() }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{ shell.title() }} · Luya-Z</title>
+<meta name="robots" content="noindex,nofollow">
+<link rel="icon" href="{{ crate::assets::url("favicon.svg") }}" type="image/svg+xml">
+<script>(function(){try{var k="u60.theme",m=window.matchMedia("(prefers-color-scheme: dark)");function set(){var c=localStorage.getItem(k);document.documentElement.dataset.theme=(c==="light"||c==="dark")?c:(m.matches?"dark":"light");}set();m.addEventListener("change",function(){var c=localStorage.getItem(k);if(c!=="light"&&c!=="dark")set();});}catch(e){document.documentElement.dataset.theme="light";}})();</script>
+<link rel="stylesheet" href="{{ crate::assets::url("app.css") }}">{% block head %}{% endblock %}
+<script type="module" src="{{ crate::assets::url("datastar.js") }}"></script>
+<script defer src="{{ crate::assets::url("shell.js") }}"></script>
+<style>:root{--font-geist:Geist;--font-geist-mono:"Geist Mono"}</style>
+</head>
+<body>
+<div class="nd min-h-dvh bg-nd-bg text-nd-t1 sm:flex" data-family="{{ shell.family() }}">
+<a class="nd-skip" href="#main">{{ shell.t("Skip to main content", "跳到正文") }}</a>
+
+<aside class="nd-sidebar hidden lg:flex">
+<a class="nd-identity" href="/">Luya-Z</a>
+<button type="button" class="nd-searchbtn" data-palette-open>{{ shell.icon("MagnifyingGlass", 18)|safe }}<span class="flex-1 text-start">{{ shell.t("Search", "搜索") }}</span><kbd class="nd-kbd">⌘K</kbd></button>
+<nav class="nd-sidebar__nav" aria-label="{{ shell.t("Main", "主导航") }}">
+{% let h = shell.home() %}<a class="nd-side__link" href="{{ h.href }}"{% if h.current %} aria-current="page"{% endif %}>{{ h.side_svg()|safe }}<span class="min-w-0 truncate">{{ h.label }}</span></a>
+{% for s in shell.sections() %}<div class="mt-5">
+<a class="nd-side__anchor" href="{{ s.anchor.href }}"{% if s.anchor.current %} aria-current="page"{% endif %}>{{ s.anchor.label }}</a>
+{% for g in s.groups %}{% if s.groups.len() > 1 %}<div class="nd-side__group">{{ g.title }}</div>{% endif %}
+{% for i in g.items %}<a class="nd-side__link" href="{{ i.href }}"{% if i.current %} aria-current="page"{% endif %}>{{ i.side_svg()|safe }}<span class="min-w-0 truncate">{{ i.label }}</span></a>
+{% endfor %}{% endfor %}</div>
+{% endfor %}</nav>
+</aside>
+
+<nav class="nd-rail hidden sm:flex lg:hidden" aria-label="{{ shell.t("Main", "主导航") }}">
+<button type="button" class="nd-rail__item" data-palette-open aria-label="{{ shell.t("Search", "搜索") }}">{{ shell.icon("MagnifyingGlass", 22)|safe }}<span>{{ shell.t("Search", "搜索") }}</span></button>
+{% for a in shell.anchors() %}<a class="nd-rail__item" href="{{ a.href }}"{% if a.current %} aria-current="page"{% endif %}>{{ a.svg(22)|safe }}<span>{{ a.label }}</span></a>
+{% endfor %}</nav>
+
+<div class="flex min-w-0 flex-1 flex-col"{% if !shell.stream.is_empty() %} data-init="@get('{{ shell.stream }}', {filterSignals: {include: /^$/}})"{% endif %}>
+<header class="nd-topbar">
+{% if !shell.is_top() %}{% let b = shell.back() %}<a class="nd-back sm:hidden" href="{{ b.href }}" aria-label="{{ shell.t("Back to ", "返回") }}{{ b.label }}">{{ b.svg(22)|safe }}</a>{% endif %}
+<div class="ms-auto flex min-w-0 items-center gap-1">
+{% block topbar %}{% endblock %}
+{{ shell.status|safe }}
+<button type="button" class="nd-iconbtn lg:hidden" data-palette-open aria-label="{{ shell.t("Search", "搜索") }}">{{ shell.icon("MagnifyingGlass", 20)|safe }}</button>
+<form method="post" action="/lang" class="hidden shrink-0 md:inline-flex"><input type="hidden" name="lang" value="{{ shell.lang.other().code() }}"><input type="hidden" name="back" value="{{ shell.path }}"><button type="submit" class="nd-iconbtn t-lang" lang="{{ shell.lang.other().tag() }}">{{ shell.icon("Translate", 20)|safe }}<span>{{ shell.other_lang() }}</span></button></form>
+<form method="post" action="/logout"><button type="submit" class="nd-iconbtn" aria-label="{{ shell.t("Log out", "退出登录") }}" title="{{ shell.t("Log out", "退出登录") }}">{{ shell.icon("SignOut", 20)|safe }}</button></form>
+</div>
+</header>
+<main id="main" tabindex="-1" class="nd-main">
+{% block banners %}{% endblock %}
+{{ shell.banner|safe }}
+{% block main %}{% endblock %}
+</main>
+</div>
+
+<nav class="nd-tabbar sm:hidden" aria-label="{{ shell.t("Main", "主导航") }}">
+{% for a in shell.anchors() %}<a class="nd-tabbar__item" href="{{ a.href }}"{% if a.current %} aria-current="page"{% endif %}>{{ a.svg(22)|safe }}<span>{{ a.label }}</span></a>
+{% endfor %}</nav>
+
+<dialog id="palette" class="t-palette" aria-label="{{ shell.t("Search pages", "搜索页面") }}">
+<div class="t-palette__bar">{{ shell.icon("MagnifyingGlass", 20)|safe }}<input type="search" id="palette-q" placeholder="{{ shell.t("Search pages", "搜索页面") }}" aria-label="{{ shell.t("Search pages", "搜索页面") }}" autocomplete="off" role="combobox" aria-controls="palette-list" aria-expanded="true"></div>
+<ul id="palette-list" class="t-palette__list" role="listbox">
+{% for i in shell.search_items() %}<li role="presentation"><a role="option" href="{{ i.href }}" data-k="{{ i.keys }}">{{ shell.icon(i.icon, 20)|safe }}<span class="flex-1">{{ i.label }}</span><span class="t-palette__group">{{ i.group }}</span></a></li>
+{% endfor %}</ul>
+<p class="t-palette__empty" hidden>{{ shell.t("No matching page", "没有找到页面") }}</p>
+</dialog>
+</div>
+<div id="lw-expired"></div>
+</body>
+</html>

@@ -1,0 +1,6 @@
+{%- import "info_row.html" as m -%}
+{% for g in v.groups %}{% for r in g.rows %}<!--leaf-->
+{% call m::info_row(r) %}{% endcall %}
+{% endfor %}<!--leaf-->
+<div id="di-{{ g.key }}-err">{% if !g.failed.is_empty() %}<div class="mt-2 flex flex-wrap items-center gap-2 px-1" role="alert"><span class="nd-aux"><span class="nd-mark nd-mark--warn"><span class="nd-mark__sym" aria-hidden="true">▲</span><span>{% if v.l == Lang::En %}Could not read: {% else %}读取失败：{% endif %}{{ g.failed.join(" · ") }}</span></span></span><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/device-info/refresh')">{{ v.l.pick("Retry", "重试") }}</button></div>{% endif %}</div>
+{% endfor %}

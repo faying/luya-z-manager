@@ -1,0 +1,14 @@
+[package]
+name = "luyaz-netwatch"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.99"
+description = "U60 Pro (MU5250) cellular link watcher: one sample's judgements, the operator DNS probe and the signal history log (/data/signal-log), run by u60d (u60-platform.md Phase 4 step 9b; zte-agent, the other user, removed 2026-10-14)."
+license = "MIT"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+luyaz-api = { path = "../luyaz-api" }
+luyaz-speedtest = { path = "../luyaz-speedtest" }

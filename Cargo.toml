@@ -1,9 +1,31 @@
 [workspace]
-members = ["zte-agent"]
+members = ["crates/luyaz-core", "crates/luyaz-policy", "crates/luyaz-api", "crates/luyaz-alerts", "crates/luyaz-sentinel", "crates/luyaz-speedtest", "crates/luyaz-esim", "crates/luyaz-netwatch", "crates/luyaz-sms-forward", "crates/luyaz-wifi", "crates/luyaz-scenario", "crates/luyaz-web", "touch-ui/rs/lvgl-sys", "touch-ui/rs/plat", "touch-ui/rs/devui-model", "touch-ui/rs/devui"]
+default-members = ["crates/luyaz-core", "crates/luyaz-policy", "crates/luyaz-api", "crates/luyaz-alerts", "crates/luyaz-sentinel", "crates/luyaz-speedtest", "crates/luyaz-esim", "crates/luyaz-netwatch", "crates/luyaz-sms-forward", "crates/luyaz-wifi", "crates/luyaz-scenario", "crates/luyaz-web"]
+# wasm32 components and their precompiler (cranelift): own workspace and lockfile, never in a device binary
+exclude = ["crates/luyaz-plugins"]
 resolver = "2"
+
+# the touch UI's crates (touch-ui/rs/*) take these with `.workspace = true`; the manager crates set
+# their own. touch-ui/rs was its own workspace with resolver 3 until 10f: 3 only adds
+# rust-version-aware resolution, moot with one locked Cargo.lock and rust 1.99 everywhere.
+[workspace.package]
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
 
 [profile.release]
 opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
+
+# u60d's device build (`cargo zigbuild --profile release-device -p luyaz-core`): the same settings as
+# zwrt-datad's release profile (data-service rust/Cargo.toml), which u60d replaces. Its own profile
+# so `release` (luyaz-web: unwind, a panicking request ends only its own task) stays as it is (cargo
+# takes profiles from the workspace root only, and panic/lto cannot be set per package).
+# luyaz-sentinel and the touch UI (touch-ui/rs/build.sh; its old release profile was exactly
+# this) use it too. Output: target/<triple>/release-device/luyaz-core.
+[profile.release-device]
+inherits = "release"
+opt-level = "s"
+panic = "abort"

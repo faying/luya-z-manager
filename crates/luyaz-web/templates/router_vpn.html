@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("router.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<p class="nd-body mb-4 vpn-w">{{ l.pick("Allow VPN clients behind NAT to initiate tunnels to external servers.", "允许 NAT 后面的 VPN 客户端向外部服务器建立隧道。") }}</p>
+<div class="grid gap-6 vpn-w">
+{{ self.leaf("vpn-status")|safe }}
+<section aria-labelledby="vpn-set-t"><h2 id="vpn-set-t" class="nd-group-title">{{ l.pick("Passthrough Settings", "穿透设置") }}</h2>
+<p class="nd-aux -mt-1 mb-3 px-1">{{ l.pick("Passthrough lets a client behind NAT initiate a VPN connection to an outside server; it does not run a VPN server on the router.", "穿透让 NAT 后面的客户端向外面的服务器发起 VPN 连接；它不会在路由器上开 VPN 服务器。") }}</p>
+{{ self.leaf("vpn-rows")|safe }}
+<div class="mt-2 px-1">{{ op|safe }}</div>
+</section>
+</div>
+{% endblock %}

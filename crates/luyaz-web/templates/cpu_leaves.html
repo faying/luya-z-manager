@@ -1,0 +1,13 @@
+<div id="cpu-status"><section class="nd-status nd-status--{{ v.tone }}{% if v.tone == "stale" %} nd-stale{% endif %}">
+<div class="nd-status__main">
+<div class="nd-status__state" role="status"><span class="nd-mark nd-mark--{{ v.tone }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.symbol() }}</span><span>{{ v.state }}</span></span></div>
+{% if let Some(r) = v.reason %}<div class="nd-status__reason"><span{% if v.tone == "bad" %} role="alert"{% endif %}>{{ r }}</span></div>{% endif %}
+</div>
+{% if v.retry %}<div class="nd-status__actions"><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/tools/cpu/refresh')">{{ v.l.pick("Retry", "重试") }}</button></div>{% endif %}
+</section></div>
+<!--leaf-->
+<svg id="cpu-line" viewBox="0 0 320 64" class="cpu-svg tr-line{% if v.stale %} tr-line--stale{% endif %}" preserveAspectRatio="none" aria-hidden="true">{% if !v.points.is_empty() %}<polyline points="{{ v.points }}"/>{% endif %}</svg>
+<!--leaf-->
+<div id="cpu-cores" class="nd-group{% if v.stale %} nd-stale{% endif %}">{% for c in v.cores %}<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ c.label }}</span></span><span class="nd-row__value nd-mono">{{ c.value }}</span></div>{% endfor %}{% if v.cores.is_empty() %}<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">—</span></span></div>{% endif %}</div>
+<!--leaf-->
+<div id="cpu-mem" class="nd-group{% if v.stale %} nd-stale{% endif %}">{% if let Some(m) = v.mem %}{% for (k, val) in m %}<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ k }}</span></span><span class="nd-row__value nd-mono">{{ val }}</span></div>{% endfor %}{% else %}<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">—</span></span></div>{% endif %}</div>

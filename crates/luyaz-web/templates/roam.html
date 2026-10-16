@@ -1,0 +1,7 @@
+{% import "macros.html" as m %}<div id="roam">
+<div class="nd-group">
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label" id="roam-label">{{ l.pick("Data roaming", "数据漫游") }}</span><span class="nd-row__sub block">{{ l.pick("Use mobile data abroad; your carrier may charge roaming fees", "在国外用移动数据；运营商可能按漫游收费") }}</span></span>
+<span id="roam-sw" class="t-sw">{% call m::switch(l, on, ask, busy, target) %}{% endcall %}</span></div>
+{{ op|safe }}
+</div>
+</div>

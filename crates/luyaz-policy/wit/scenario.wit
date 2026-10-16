@@ -1,0 +1,139 @@
+// Scenario engine decisions (luyaz_policy::scenario), the policy boundary between u60d's scenario
+// shadow and a scenario component. The version is the host ABI version in a plugin's manifest
+// entry: change anything here and bump it.
+//
+// What crosses the boundary is what the exported functions read, not the whole config:
+// - `config` keeps `version`, `home-mcc`, `params` and, per scenario, `id`, `detect` and
+//   `inhibit-sleep`, in order. `step`, `detect`, `scan-interval` and `after-switch` never read a
+//   scenario's `name` or `actions` (action bodies are JSON); the guest fills them in empty. u60d's
+//   tests run every case through the full and the stripped config with the built-in and require
+//   the same answer, so a policy that starts reading actions fails there: then the actions get a
+//   type here (bodies as JSON text) and this version goes up.
+// - `run-state.applied` (a BTreeMap) is a list of pairs in key order.
+// - `TickInput`'s borrowed slices are owned lists; `step` returns the whole `TickOutcome`.
+// The world is `scenario-policy` because a record is called `scenario`.
+package luyaz:scenario@0.1.0;
+
+world scenario-policy {
+  record params {
+    scan-interval-home-secs: u64,
+    scan-interval-away-battery-secs: u64,
+    scan-interval-away-charging-secs: u64,
+    enter-hits: u32,
+    exit-misses: u32,
+    min-rssi-dbm: f64,
+  }
+
+  record ssid-entry {
+    ssid: string,
+    bssid: option<string>,
+  }
+
+  variant detect {
+    ssid(list<ssid-entry>),
+    mcc(list<string>),
+    abroad,
+    fallback,
+  }
+
+  record scenario {
+    id: string,
+    detect: detect,
+    inhibit-sleep: bool,
+  }
+
+  record config {
+    version: u32,
+    home-mcc: string,
+    params: params,
+    scenarios: list<scenario>,
+  }
+
+  record run-state {
+    current: string,
+    candidate: string,
+    hits: u32,
+    misses: u32,
+    applied: list<tuple<string, string>>,
+    last-switch: option<s64>,
+    last-error: option<string>,
+    last-scan: s64,
+    scan-failures: u32,
+  }
+
+  record network {
+    ssid: string,
+    bssid: string,
+    /// dBm
+    signal: f64,
+  }
+
+  record scan-failed {
+    at: s64,
+    error: string,
+  }
+
+  record scanned {
+    at: s64,
+    networks: list<network>,
+  }
+
+  variant scan {
+    not-scanned,
+    failed(scan-failed),
+    networks(scanned),
+  }
+
+  record recheck {
+    at: s64,
+    networks: list<network>,
+  }
+
+  record tick-input {
+    config: config,
+    state: run-state,
+    enabled: bool,
+    takeover: bool,
+    pin: option<string>,
+    now: s64,
+    pin-retry-at: s64,
+    charging: bool,
+    scan: scan,
+    recheck: option<recheck>,
+    mcc: option<string>,
+    beaconing: bool,
+  }
+
+  enum branch { takeover, disabled, unconfigured, pinned, not-due, due, scan-failed, scanned }
+
+  variant intent {
+    none,
+    switch(string),
+    bootsafe,
+    need-scan,
+    need-recheck,
+  }
+
+  record restores {
+    /// none = all
+    next: option<string>,
+  }
+
+  record tick-outcome {
+    branch: branch,
+    state: run-state,
+    intent: intent,
+    restores: option<restores>,
+    keep-awake: bool,
+    pin-retry-at: s64,
+  }
+
+  /// One tick of the agent's engine (luyaz_policy::scenario::step).
+  export step: func(input: tick-input) -> tick-outcome;
+  /// Which scenario the surroundings say we are in.
+  export detect: func(config: config, networks: list<network>, mcc: option<string>) -> option<string>;
+  /// Seconds between scans.
+  export scan-interval: func(config: config, current: string, candidate: string, charging: bool) -> u64;
+  /// The state `switch_to` leaves once apply ran with `outcome`.
+  export after-switch: func(state: run-state, config: config, id: string, now: s64, outcome: result<_, string>) -> run-state;
+}

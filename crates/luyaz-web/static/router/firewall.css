@@ -1,0 +1,2 @@
+/* batch 4 page: firewall (loaded with pages.css as router.css) */
+@media (min-width: 640px) { .fw-2col { grid-template-columns: 1fr 1fr; } }

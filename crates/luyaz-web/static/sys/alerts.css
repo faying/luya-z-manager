@@ -1,0 +1,19 @@
+/* /alerts (batch 5a): this page's own rules only. */
+.al-col { display: grid; max-width: 720px; gap: 24px; }
+.al-desc { max-width: 720px; color: var(--nd-t2); }
+.al-op:empty { display: none; }
+.al-op { margin-top: 8px; padding: 0 4px; }
+.al-note { margin: 0 0 12px; padding: 0 4px; }
+.al-note .nd-btn { margin-inline-start: 8px; vertical-align: middle; }
+.al-list { list-style: none; margin: 0; padding: 0; }
+.al-item { align-items: flex-start; }
+.al-time { flex: none; font-size: 14px; color: var(--nd-t3); text-align: end; }
+.al-unread { color: var(--nd-warnT); }
+.al-read { color: var(--nd-t1); font-weight: 400; }
+.al-wrap { display: block; overflow-wrap: anywhere; }
+.al-form { display: grid; gap: 8px; align-items: stretch; }
+.al-in { display: flex; flex-wrap: wrap; gap: 8px; }
+.al-in .nd-field { flex: 1 1 14ch; min-width: 0; }
+.al-bad { color: var(--nd-badT); }
+.al-bad[hidden] { display: none; }
+#al-recent .nd-group-title { margin-top: 24px; }

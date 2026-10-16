@@ -1,0 +1,14 @@
+<div id="tf-status"><section class="nd-status nd-status--{{ v.tone }}{% if v.tone == "stale" %} nd-stale{% endif %}">
+<div class="nd-status__main">
+<div class="nd-status__state" role="status"><span class="nd-mark nd-mark--{{ v.tone }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.symbol() }}</span><span>{{ v.state }}</span></span></div>
+{% if let Some(r) = v.reason %}<div class="nd-status__reason"><span{% if v.tone == "bad" %} role="alert"{% endif %}>{{ r }}</span></div>{% endif %}
+{% if let Some(m) = v.meta %}<div class="nd-status__meta"><span class="nd-fresh">{{ m }}</span></div>{% endif %}
+</div>
+{% if v.retry %}<div class="nd-status__actions"><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-on:click="@post('/router/telemetry/refresh')">{{ v.l.pick("Retry", "重试") }}</button></div>{% endif %}
+</section></div>
+<!--leaf-->
+<div id="tf-cur" hidden data-signals="{_tfdis: {{ v.dis }}}"></div>
+<!--leaf-->
+<div id="tf-quickbtn" class="flex flex-wrap items-center gap-3"><button type="button" class="nd-btn nd-btn--secondary"{% if v.quick_dis %} disabled{% else %} data-on:click="@post('/router/telemetry/quick/ask')"{% endif %}>{% if v.quick_busy %}{{ v.l.pick("Blocking…", "正在拦截…") }}{% else %}{{ v.l.pick("Block Known Telemetry", "拦截已知遥测") }}{% endif %}</button>{% if v.all_blocked %}<span class="nd-aux">{{ v.l.pick("All telemetry domains already blocked", "已知遥测域名都已拦截") }}</span>{% endif %}</div>
+<!--leaf-->
+<div id="tf-list" class="nd-group{% if v.stale %} nd-stale{% endif %}">{% if v.skel %}<div class="nd-row"><span class="nd-skel tf-sk"></span></div>{% endif %}{% if let Some(n) = v.note %}<div class="nd-row"><span class="nd-body">{{ n }}</span></div>{% endif %}{% for r in v.rows %}<div class="nd-row{% if r.known %} nd-row--two{% endif %}"><span class="nd-row__text"><span class="nd-row__label nd-mono tf-d" data-data>{{ r.d }}</span>{% if r.known %}<span class="nd-row__sub block">{{ v.l.pick("Known ZTE telemetry", "已知 ZTE 遥测") }}</span>{% endif %}</span><button type="button" class="nd-btn nd-btn--ghost nd-btn--icon" aria-label="{{ v.l.pick("Remove", "移除") }} {{ r.d }}"{% if v.dis %} disabled{% else %} data-on:click="@post('/router/telemetry/del/ask?d={{ r.enc }}')"{% endif %}>{{ v.trash()|safe }}</button></div>{% endfor %}</div>

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<div class="grid gap-4 pg-cols">
+<div class="grid content-start gap-4">{% for g in v.groups %}{% if loop.index0 == 2 %}</div>
+<div class="grid content-start gap-4">{% endif %}
+<section aria-labelledby="di-{{ g.key }}-t"><h2 id="di-{{ g.key }}-t" class="nd-group-title">{{ g.title }}</h2>
+<div class="nd-group">{% for r in g.rows %}{{ self.leaf(r.id)|safe }}{% endfor %}</div>
+{{ self.leaf(format!("di-{}-err", g.key).as_str())|safe }}
+</section>{% endfor %}</div>
+</div>
+{% endblock %}

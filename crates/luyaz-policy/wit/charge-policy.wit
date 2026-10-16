@@ -1,0 +1,22 @@
+// Charge limit (manager zte-agent charge_policy), the policy boundary between u60d and a
+// charge-policy component. The types mirror luyaz_policy::charge_policy; the version is the host ABI
+// version in a plugin's manifest entry: change anything here and bump it.
+package luyaz:charge-policy@0.1.0;
+
+world charge-policy {
+  record battery {
+    /// sysfs capacity, 0 when unreadable
+    capacity: u8,
+    /// sysfs status is Discharging
+    discharging: bool,
+    /// charging stopped by direct supply
+    stopped: bool,
+    limit: u8,
+    hysteresis: u8,
+  }
+
+  /// some(false) = stop charging, some(true) = resume, none = leave it
+  export enforce: func(battery: battery) -> option<bool>;
+  /// on unplug: resume if stopped
+  export on-unplug: func(stopped: bool) -> option<bool>;
+}

@@ -1,0 +1,8 @@
+/* /router/dns (batch 5c) */
+.dns-desc { color: var(--nd-t2); max-width: 720px; }
+.dns-col { display: grid; max-width: 720px; gap: 24px; }
+.dns-form { display: grid; gap: 16px; padding: 16px; }
+@media (min-width: 1024px) { .dns-form { padding: 20px; } }
+.dns-fields { display: grid; gap: 12px; }
+.dns-fields[hidden], .dns-form [hidden] { display: none; }
+.dns-form .nd-seg__item[aria-checked="true"] { background: var(--nd-primary); color: var(--nd-onPrimary); }

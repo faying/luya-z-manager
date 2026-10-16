@@ -1,0 +1,55 @@
+// The APN candidate pick's card-change decision (luyaz_policy::apn_pick), the policy boundary between
+// u60d's APN pick shadow and an apn-pick component. The version is the host ABI version in a
+// plugin's manifest entry: change anything here and bump it.
+//
+// `busy` and the APN state come from the host (the APN state is asked only for a confirmed card
+// change; `look` reports whether it was).
+package luyaz:apn-pick@0.1.0;
+
+world apn-pick {
+  record pick {
+    manual-id: string,
+    apn: string,
+  }
+
+  /// /data/apn-pick.json without the notice
+  record store {
+    /// full ICCID → its pick, in key order
+    picks: list<tuple<string, pick>>,
+    last-iccid: string,
+  }
+
+  record watch {
+    pending: string,
+    seen: u8,
+    fails: u8,
+  }
+
+  record apn-state {
+    manual: bool,
+    selected: option<string>,
+  }
+
+  /// What the host's APN read gives if asked.
+  variant apn-read {
+    not-asked,
+    unread,
+    read(apn-state),
+  }
+
+  variant action {
+    keep,
+    auto,
+    use-manual(string),
+  }
+
+  record look {
+    action: action,
+    card: option<string>,
+    after: watch,
+    asked: bool,
+  }
+
+  /// One look (luyaz_policy::apn_pick::replay).
+  export decide: func(s: store, before: watch, iccid: string, busy: bool, apn: apn-read) -> look;
+}

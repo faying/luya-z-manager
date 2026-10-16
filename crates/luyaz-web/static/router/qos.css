@@ -1,0 +1,4 @@
+/* batch 4 page: qos (loaded with pages.css as router.css) */
+.qs-page { max-width: 720px; }
+.qs-desc { color: var(--nd-t2); }
+.qs-skel { display: inline-block; width: 80px; }

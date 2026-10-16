@@ -1,0 +1,283 @@
+#!/bin/sh
+# Minimal ubus fixture used by CI. It records calls and returns representative
+# payloads for the state collector and private control API.
+set -eu
+
+[ "$1" = "-v" ] && {
+    shift
+    [ "${1:-}" = "list" ] || exit 1
+    printf '%s\n' "'system' @fixture" '    "board":{}' "'zte_nwinfo_api' @fixture" '    "nwinfo_get_netinfo":{}' '    "nwinfo_get_msim_netinfo":{}'
+    exit 0
+}
+[ "$1" = "list" ] && {
+    printf '%s\n' system zte_nwinfo_api zwrt_data zwrt_zte_mdm.api
+    exit 0
+}
+# `ubus listen <事件>`（datad 的短信事件监听，V2-31）。默认：不出任何事件，datad 退出就跟着退出。
+# MOCK_LISTEN_LOG：每次启动追加一行；MOCK_LISTEN_EVENTS_FILE：把这个文件新追加的行原样输出（当作事件）；
+# MOCK_LISTEN_EXIT_AFTER：输出完已有的行后过这么多秒就退出（模拟监听挂掉）。
+[ "$1" = "listen" ] && {
+    [ -n "${MOCK_LISTEN_LOG:-}" ] && { shift; printf 'listen %s\n' "$*" >>"$MOCK_LISTEN_LOG"; }
+    parent=$PPID seen=0 ticks=0
+    while kill -0 "$parent" 2>/dev/null; do
+        if [ -n "${MOCK_LISTEN_EVENTS_FILE:-}" ] && [ -f "$MOCK_LISTEN_EVENTS_FILE" ]; then
+            total=$(wc -l <"$MOCK_LISTEN_EVENTS_FILE")
+            if [ "$total" -gt "$seen" ]; then
+                sed -n "$((seen + 1)),${total}p" "$MOCK_LISTEN_EVENTS_FILE"
+                seen=$total
+            fi
+        fi
+        if [ -n "${MOCK_LISTEN_EXIT_AFTER:-}" ] && [ "$ticks" -ge $((MOCK_LISTEN_EXIT_AFTER * 10)) ]; then
+            exit 1
+        fi
+        ticks=$((ticks + 1))
+        sleep 0.1
+    done
+    exit 0
+}
+[ "$1" = "-t" ] && shift 2
+[ "$1" = "call" ] && shift
+service="${1:-}"
+method="${2:-}"
+args="${3:-}"
+[ -n "$args" ] || args='{}'
+
+if [ -n "${MOCK_CALL_LOG:-}" ]; then
+    printf '%s\t%s\t%s\n' "$service" "$method" "$args" >>"$MOCK_CALL_LOG"
+fi
+
+# Regression aid for issue #26: record any socket descriptor this exec'd child
+# inherited from datad. A correctly close-on-exec'd listener must not appear.
+if [ -n "${LUYAZ_FD_DUMP:-}" ] && [ -d "/proc/$$/fd" ]; then
+    for _link in /proc/$$/fd/*; do
+        _n=${_link##*/}
+        [ "$_n" -gt 2 ] 2>/dev/null || continue
+        _t=$(readlink "$_link" 2>/dev/null) || continue
+        case "$_t" in
+            socket:*) printf '%s %s\n' "$_n" "$_t" >>"$LUYAZ_FD_DUMP" ;;
+        esac
+    done
+fi
+
+case "$service:$method" in
+    iwinfo:countrylist)
+        printf '%s\n' '{"results":[{"code":"00","country":"World","iso3166":"00","active":false},{"code":"CN","country":"China","iso3166":"CN","active":true},{"code":"HK","country":"Hong Kong","iso3166":"HK","active":false}]}'
+        ;;
+    iwinfo:freqlist)
+        extended_restricted=true
+        if [ -n "${MOCK_IWINFO_DELAY_FILE:-}" ] && [ -f "$MOCK_IWINFO_DELAY_FILE" ]; then
+            count=$(cat "$MOCK_IWINFO_DELAY_FILE" 2>/dev/null || printf '%s' 0)
+            count=$((count + 1))
+            printf '%s\n' "$count" >"$MOCK_IWINFO_DELAY_FILE"
+            [ "$count" -le "${MOCK_IWINFO_DELAY_CALLS:-0}" ] || extended_restricted=false
+        fi
+        printf '%s\n' "{\"results\":[{\"band\":2,\"channel\":1,\"mhz\":2412,\"restricted\":false},{\"band\":2,\"channel\":6,\"mhz\":2437,\"restricted\":false},{\"band\":2,\"channel\":11,\"mhz\":2462,\"restricted\":false},{\"band\":5,\"channel\":36,\"mhz\":5180,\"restricted\":false},{\"band\":5,\"channel\":40,\"mhz\":5200,\"restricted\":false},{\"band\":5,\"channel\":100,\"mhz\":5500,\"restricted\":$extended_restricted},{\"band\":5,\"channel\":149,\"mhz\":5745,\"restricted\":false}]}"
+        ;;
+    system:board)
+        printf '%s\n' '{"model":"Fixture Router","hostname":"fixture","board_name":"qcom,fixture","release":{"description":"Fixture Linux"}}'
+        ;;
+    system:info)
+        printf '%s\n' '{"uptime":123,"memory":{"total":1048576,"available":524288}}'
+        ;;
+    zwrt_zte_mdm.api:get_zwrt_common_info)
+        model="${MOCK_MODEL_NAME:-MU5250}"
+        market='U60 Pro'
+        [ "$model" = 'MC8532B' ] && market='G5 Pro'
+        [ "$model" = 'MU5252' ] && market='TopFlow'
+        [ "$model" = 'MC7523' ] && market='G5 Max WiFi'
+        printf '{"manufacturer":"ZTE","model_name":"%s","hardware_version":"%s_HW1.0","device_market_name":"%s","wa_inner_version":"TEST-BUILD"}\n' \
+            "$model" "$model" "$market"
+        ;;
+    zwrt_zte_mdm.api:get_imei)
+        printf '%s\n' '{"imei":"860000000000001"}'
+        ;;
+    zwrt_zte_mdm.api:get_sim_info)
+        if [ -n "${MOCK_SIM_SLOT_FILE:-}" ] && [ -f "$MOCK_SIM_SLOT_FILE" ]; then
+            MOCK_SIM_SLOT=$(cat "$MOCK_SIM_SLOT_FILE")
+        fi
+        if [ "${MOCK_ENCRYPTED_SIM:-0}" = '1' ]; then
+            printf '{"sim_iccid":"8986000000000000000","sim_imsi":"mfmROY/c1MUtLKr/TBqrpmuNTnYHpNc70Cgl0CWlaUVXuVyARQNas+V9SA==","msisdn":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGw==","sim_states":"ready","current_sim_slot":%s,"support_dual_sim":1}\n' \
+                "${MOCK_SIM_SLOT:-1}"
+        else
+            printf '{"sim_iccid":"8986000000000000000","sim_imsi":"460000000000001","msisdn":"%s","sim_states":"ready","current_sim_slot":%s,"support_dual_sim":1}\n' \
+                "${MOCK_SIM_MSISDN:-10086}" "${MOCK_SIM_SLOT:-1}"
+        fi
+        ;;
+    zwrt_zte_mdm.api:zwrt_mdm_change_provision_session)
+        if [ -n "${MOCK_SIM_SLOT_FILE:-}" ]; then
+            python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d.get("active_flag")==1 and open(sys.argv[2],"w").write(str(d["active_slot"]))' "$args" "$MOCK_SIM_SLOT_FILE"
+        fi
+        printf '%s\n' '{"result":"success"}'
+        ;;
+    zwrt_zte_mdm.api:get_v3t_sim_info)
+        s1="${MOCK_V3T1_SLOT:-${MOCK_V3T_SLOT:-0}}"
+        s2="${MOCK_V3T2_SLOT:-${MOCK_V3T_SLOT:-0}}"
+        printf '{"v3t_1_modem_main_state":"modem_init_complete","v3t_1_sim_imsi":"460000000000003","v3t_1_sim_iccid":"8986000000000000003","v3t_1_msisdn":"10010","v3t_1_imei":"860000000000003","v3t_1_st_slot":"%s","v3t_2_modem_main_state":"modem_init_complete","v3t_2_sim_imsi":"460000000000005","v3t_2_sim_iccid":"8986000000000000005","v3t_2_msisdn":"10011","v3t_2_imei":"860000000000005","v3t_2_st_slot":"%s"}\n' "$s1" "$s2"
+        ;;
+    zte_nwinfo_api:nwinfo_get_netinfo)
+        [ "${MOCK_NWINFO_FAIL:-0}" = '1' ] && exit 1
+        printf '%s\n' '{"network_type":"SA","signalbar":4,"simcard_roam":"Home","network_provider_fullname":"Fixture Mobile","wan_active_band":"n78","nr5g_action_band":"78","nr5g_rsrp":-90,"nr5g_rsrq":-11,"nr5g_snr":"18.0","rmcc":460,"rmnc":0,"net_select":"WL_AND_5G","nr5g_sa_band_lock":"78","nr5g_nsa_band_lock":"","lte_band":"1,3"}'
+        ;;
+    zte_nwinfo_api:nwinfo_get_msim_netinfo)
+        [ "${MOCK_MSIM_NWINFO_FAIL:-0}" = '1' ] && exit 1
+        # B20 only exposes fields for each modem's currently active local slot.
+        s1="${MOCK_MSIM1_SLOT:-${MOCK_V3T1_SLOT:-${MOCK_V3T_SLOT:-0}}}"
+        s2="${MOCK_MSIM2_SLOT:-${MOCK_V3T2_SLOT:-${MOCK_V3T_SLOT:-0}}}"
+        printf '%s\n' '{"msim_1_0_net_select":"Only_LTE","msim_1_0_network_type":"LTE","msim_1_0_rplmn_num":"46000","msim_1_0_network_provider":"Fixture LTE One","msim_1_0_wan_active_band":"LTE BAND 3","msim_1_0_signalbar":"4","msim_1_0_simcard_roam":"Home","msim_1_0_cell_id":"1001","msim_1_0_wan_active_channel":"1300","msim_1_0_lte_pci":"31","msim_1_0_lte_rsrp":"-95","msim_1_0_lte_rsrq":"-10","msim_1_0_lte_rssi":"-65","msim_1_0_lte_snr":"7.0","msim_1_0_operate_mode":"ONLINE","msim_1_0_lte_bandwidth":"2Slot:2_0","msim_2_0_net_select":"Only_LTE","msim_2_0_network_type":"LTE","msim_2_0_rplmn_num":"46001","msim_2_0_network_provider":"Fixture LTE Two","msim_2_0_wan_active_band":"LTE BAND 3","msim_2_0_signalbar":"3","msim_2_0_simcard_roam":"Roaming","msim_2_0_cell_id":"1002","msim_2_0_wan_active_channel":"1650","msim_2_0_lte_pci":"32","msim_2_0_lte_rsrp":"-101","msim_2_0_lte_rsrq":"-13","msim_2_0_lte_rssi":"-73","msim_2_0_lte_snr":"1.0","msim_2_0_operate_mode":"ONLINE","msim_2_0_lte_bandwidth":"20"}' | sed \
+            -e "s/msim_1_0_/msim_1_${s1}_/g" \
+            -e "s/msim_2_0_/msim_2_${s2}_/g"
+        ;;
+    zwrt_wms:zwrt_wms_get_wms_capacity)
+        printf '%s\n' '{"sms_dev_unread_num":1,"sms_sim_unread_num":0}'
+        ;;
+    zwrt_wms:zte_libwms_get_sms_data)
+        # 固件只接受降序（Gate 0 实测），升序回 Invalid argument。
+        case "$args" in *'order by id asc'*) echo 'Command failed: Invalid argument' >&2; exit 2 ;; esac
+        n=${MOCK_SMS_COUNT:-}
+        [ -n "${MOCK_SMS_COUNT_FILE:-}" ] && [ -s "$MOCK_SMS_COUNT_FILE" ] && n=$(cat "$MOCK_SMS_COUNT_FILE")
+        if [ -n "$n" ]; then
+            # 大量短信（T10）：编号 1..N 两库共用计数，5 的倍数在 SIM（mem_store 0），其余在 NV；
+            # 按 page / data_per_page 降序切页。N 取 MOCK_SMS_COUNT_FILE 的内容（非空时，测试中途可改）或 MOCK_SMS_COUNT。
+            python3 -c '
+import json, sys
+a = json.loads(sys.argv[1]); n = int(sys.argv[2])
+sim = a.get("mem_store") == 0
+ids = [i for i in range(n, 0, -1) if (i % 5 == 0) == sim]
+per = int(a.get("data_per_page", 8)); page = int(a.get("page", 0))
+rows = [{"id": str(i), "number": "00310030003000380036", "date": "26,08,27,04,00,00,+32", "tag": "1", "content": "0041"} for i in ids[page * per:(page + 1) * per]]
+print(json.dumps({"messages": rows}))' "$args" "$n"
+            exit 0
+        fi
+        printf '%s\n' '{"messages":[{"id":7,"number":"10086","date":"26,08,27,04,00,00,+,0","tag":"1","content":"6D4B8BD5"}]}'
+        ;;
+    zwrt_web:web_login)
+        if printf '%s' "$args" | grep -q '"username"'; then
+            case "$args" in
+                *"20BDBB3CF6843057DE843F378D0F5989CC2C3DB4F66708C85C12C90337322198"*) ;;
+                *) printf '%s\n' '{"result":1}'; exit 0 ;;
+            esac
+        fi
+        printf '%s\n' '{"result":0,"ubus_rpc_session":"fixture-session"}'
+        ;;
+    zwrt_web:web_login_info)
+        printf '%s\n' '{"zte_web_sault":"fixture-salt","login_fail_num":0}'
+        ;;
+    zwrt_web:web_crt_get)
+        python3 -c 'import json,sys; print(json.dumps({"result":open(sys.argv[1]).read()}))' "$MOCK_WEB_PUBLIC_KEY_FILE"
+        ;;
+    zwrt_web:web_http_enstr_set)
+        printf '%s\n' '{"result":0}'
+        ;;
+    zwrt_wms:zte_libwms_send_sms)
+        printf '%s\n' '{"result":"success"}'
+        ;;
+    zwrt_wms:zwrt_wms_get_cmd_status)
+        printf '%s\n' '{"sms_cmd_status_result":3}'
+        ;;
+    zwrt_router.api:router_get_wifi_isolate)
+        printf '%s\n' '{"wifimain24_wifimain5_enable":1,"other_option":7}'
+        ;;
+    zwrt_router.api:router_get_user_list_num)
+        printf '%s\n' '{"access_total_num":2,"wireless_num":1,"lan_num":1}'
+        ;;
+    zwrt_router.api:router_wireless_access_list)
+        printf '%s\n' '{"wireless_access_list_info":[{"hostname":"wifi-live","ip_address":"192.168.0.2","mac_address":"00:11:22:33:44:55"}]}'
+        ;;
+    zwrt_router.api:router_lan_access_list)
+        printf '%s\n' '{"lan_access_list_info":[{"hostname":"lan-live","ip_address":"192.168.0.3","mac_address":"00:11:22:33:44:66"}]}'
+        ;;
+    zwrt_router.api:router_set_wifi_isolate|zwrt_router.api:router_set_wan_mtu)
+        printf '%s\n' '{"result":"success"}'
+        ;;
+    zwrt_data:get_wwaniface)
+        # MOCK_DATA_OFF_FILE 存在时数据开关是关的（E4 确认：不应当有数据时不探测）。
+        if [ -n "${MOCK_DATA_OFF_FILE:-}" ] && [ -f "$MOCK_DATA_OFF_FILE" ]; then
+            printf '%s\n' '{"enable":0,"roam_enable":0,"connect_mode":"auto","connect_status":"disconnected","ipv4_dev_name":"fixture0","ipv6_dev_name":"fixture0","pdp_type":"IPV4V6","profile_id":7}'
+            exit 0
+        fi
+        printf '%s\n' '{"enable":1,"roam_enable":0,"connect_mode":"auto","connect_status":"ipv4_ipv6_connected","ipv4_dev_name":"fixture0","ipv6_dev_name":"fixture0","pdp_type":"IPV4V6","profile_id":7}'
+        ;;
+    zwrt_data:get_wwandst)
+        printf '%s\n' '{"real_time":12,"real_tx_bytes":120,"real_rx_bytes":240,"real_tx_speed":10,"real_rx_speed":20,"real_max_tx_speed":30,"real_max_rx_speed":40,"day_tx_bytes":120,"day_rx_bytes":240,"month_tx_bytes":120,"month_rx_bytes":240,"total_tx_bytes":120,"total_rx_bytes":240}'
+        ;;
+    zwrt_data:get_wwandst_monthlimit)
+        # Real firmware returns pretty-printed JSON with tab indentation and
+        # embedded newlines; keep it multi-line here so the SSE framing test
+        # exercises the passthrough path (see issue #17).
+        printf '{\n\t"cid": 1,\n\t"enable": 0,\n\t"type": 2,\n\t"value": "1610612736000"\n}\n'
+        ;;
+    zwrt_bsp.battery:list)
+        [ "${MOCK_NO_BATTERY:-0}" = '1' ] && exit 1
+        printf '%s\n' '{"battery_capacity":0,"battery_temperature":30000,"battery_online":1,"battery_health":1}'
+        ;;
+    zwrt_bsp.charger:list)
+        [ "${MOCK_NO_BATTERY:-0}" = '1' ] && exit 1
+        printf '%s\n' '{"charge_status":0,"charger_connect":1,"charger_type":4}'
+        ;;
+    zwrt_nfc:zwrt_nfc_wifi_get)
+        [ "${MOCK_NO_NFC:-0}" = '1' ] && exit 1
+        printf '%s\n' '{"switch":0,"ap":1}'
+        ;;
+    zwrt_bsp.thermal:get_cpu_temp)
+        printf '%s\n' '{"cpuss_temp":42}'
+        ;;
+    # 固件的过热限速标记（rpcd 的 uci get 带上未提交的改动）。MOCK_HIGHTEMP 改值，unset 时为 0。
+    uci:get)
+        case "$args" in
+            *'"zwrt_zte_mc_tmp"'*) printf '{"value":"%s"}\n' "${MOCK_HIGHTEMP:-0}" ;;
+            *) printf '%s\n' '{"result":"success"}' ;;
+        esac
+        ;;
+    # netifd 标准形状（OpenWrt network.interface.* status）。取值贴近 MU5250：LAN 是 br-lan
+    # 192.168.0.1/24；蜂窝 WAN 在 rmnet_data0 上，IPv4 是 /30、默认路由 proto static。
+    # 地址用文档保留段（RFC 5737 / 2001:db8::/32）。
+    network.interface.lan:status)
+        printf '%s\n' '{"up":true,"pending":false,"available":true,"autostart":true,"dynamic":false,"uptime":3600,"l3_device":"br-lan","proto":"static","device":"br-lan","metric":0,"dns_metric":0,"delegation":true,"ipv4-address":[{"address":"192.168.0.1","mask":24}],"ipv6-address":[],"ipv6-prefix":[],"ipv6-prefix-assignment":[],"route":[],"dns-server":[],"dns-search":[],"neighbors":[],"inactive":{"ipv4-address":[],"ipv6-address":[],"route":[],"dns-server":[],"dns-search":[],"neighbors":[]},"data":{}}'
+        ;;
+    network.interface.zte_wan:status)
+        printf '%s\n' '{"up":true,"pending":false,"available":true,"autostart":true,"dynamic":false,"uptime":3500,"l3_device":"rmnet_data0","proto":"static","device":"rmnet_data0","metric":0,"dns_metric":0,"delegation":true,"ipv4-address":[{"address":"198.51.100.21","mask":30}],"ipv6-address":[],"ipv6-prefix":[],"ipv6-prefix-assignment":[],"route":[{"target":"0.0.0.0","mask":0,"nexthop":"198.51.100.22","source":"0.0.0.0/0"}],"dns-server":["192.0.2.53","192.0.2.54"],"dns-search":[],"neighbors":[],"inactive":{"ipv4-address":[],"ipv6-address":[],"route":[],"dns-server":[],"dns-search":[],"neighbors":[]},"data":{}}'
+        ;;
+    network.interface.zte_wan6:status)
+        printf '%s\n' '{"up":true,"pending":false,"available":true,"autostart":true,"dynamic":false,"uptime":3500,"l3_device":"rmnet_data0","proto":"static","device":"rmnet_data0","metric":0,"dns_metric":0,"delegation":true,"ipv4-address":[],"ipv6-address":[{"address":"2001:db8:4f2a:1c07::1","mask":64}],"ipv6-prefix":[],"ipv6-prefix-assignment":[],"route":[{"target":"::","mask":0,"nexthop":"fe80::1","source":"2001:db8:4f2a:1c07::/64"}],"dns-server":["2001:db8:100::53"],"dns-search":[],"neighbors":[],"inactive":{"ipv4-address":[],"ipv6-address":[],"route":[],"dns-server":[],"dns-search":[],"neighbors":[]},"data":{}}'
+        ;;
+    # zwrt_bsp.usb list：datad 只读 mode（debug = ADB 开，user = 关，见 docs/STATE_SCHEMA.md）；
+    # 其余字段按 manager 管理网页的 UsbStatus 形状。
+    zwrt_bsp.usb:list)
+        printf '%s\n' '{"connect":0,"mode":"user","typec_cc":"no_cc","usb2rj45":0}'
+        ;;
+    # 插线时的 USB 用法（V2-48）。形状是 B31 真机的回复。MOCK_USB_STATE_DIR 里：cc = 1 表示插着手机
+    # （U60 供电、当主机：source + host），data_role、powerbank 是写进来的状态；没有这个目录 = 什么都没插。
+    # 两个 set 成功时什么都不回（按 NoData 处理的那条路）。
+    zwrt_bsp.typec:list)
+        d=${MOCK_USB_STATE_DIR:-}
+        if [ -n "$d" ] && [ "$(cat "$d/cc" 2>/dev/null)" = 1 ]; then
+            role=$(cat "$d/data_role" 2>/dev/null || printf host)
+            printf '{"power_role":"source","data_role":"%s","cc_attch_state":1}\n' "$role"
+        else
+            printf '%s\n' '{"power_role":"sink","data_role":"host","cc_attch_state":0}'
+        fi
+        ;;
+    zwrt_bsp.typec:set)
+        d=${MOCK_USB_STATE_DIR:-}
+        case "$args" in *'"DR_Swap":"device"'*) [ -z "$d" ] || printf device >"$d/data_role" ;; esac
+        ;;
+    zwrt_bsp.powerbank:get)
+        printf '{"state":%s}\n' "$(cat "${MOCK_USB_STATE_DIR:-/nonexistent}/powerbank" 2>/dev/null || printf 0)"
+        ;;
+    zwrt_bsp.powerbank:set)
+        d=${MOCK_USB_STATE_DIR:-}
+        case "$args" in *'"state":1'*) [ -z "$d" ] || printf 1 >"$d/powerbank" ;; esac
+        ;;
+    network.interface.zte_mwan2:status|network.interface.zte_mwan2_6:status|network.interface.zte_mwan3:status|network.interface.zte_mwan3_6:status|network.interface.zte_mwan4:status|network.interface.zte_mwan4_6:status)
+        printf '%s\n' '{"up":true,"pending":false,"available":true,"proto":"dhcp","l3_device":"fixture0","ipv4-address":[],"ipv6-address":[],"dns-server":[]}'
+        ;;
+    mwan3:status)
+        printf '%s\n' '{"interfaces":{"zte_mwan2":{"age":18,"uptime":7200,"status":"online","enabled":true,"running":true,"tracking":"active","up":true,"track_ip":[{"ip":"9.9.9.9","status":"skipped","latency":0,"packetloss":0},{"ip":"1.1.1.1","status":"up","latency":18.5,"packetloss":0}]},"zte_mwan3":{"age":35,"uptime":7100,"status":"online","enabled":true,"running":true,"tracking":"active","up":true,"track_ip":[{"ip":"8.8.8.8","status":"online","latency":35,"packetloss":1}]},"zte_mwan4":{"age":9,"uptime":120,"status":"offline","enabled":true,"running":true,"tracking":"active","up":false,"track_ip":[{"ip":"9.9.9.9","status":"offline","latency":90,"packetloss":100}]},"waneth":{"age":0,"uptime":0,"status":"unknown","enabled":false,"running":false,"tracking":"down","up":false,"track_ip":[]}},"connected":{"ipv4":[],"ipv6":[]},"policies":{"ipv4":{},"ipv6":{}}}'
+        ;;
+    zwrt_icg_mdc.manager:get_residual_flow)
+        printf '%s\n' '{"error_code":0,"residual_flow":"10240","count_flow_today":"512"}'
+        ;;
+    *)
+        printf '%s\n' '{"result":"success"}'
+        ;;
+esac

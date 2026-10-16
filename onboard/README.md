@@ -1,4 +1,4 @@
-# U60 Pro (MU5250) install kit
+# Luya-Z install kit (ZTE U60 Pro / MU5250)
 
 **English** · [中文](README.zh-CN.md)
 
@@ -11,7 +11,8 @@ One-step setup for a **freshly unboxed ZTE U60 Pro (MU5250)**:
 | **devui touch UI** | The front panel gets a new interface, organized by task into 5 tabs (Home · Cellular · Wi-Fi · Exit · System): signal verdict and carriers, Wi-Fi and clients, Tailscale and exit, eSIM switching |
 | **eSIM** | With a removable eUICC card (5ber, eSTK.me and similar), download/switch/delete profiles in the admin web; switching also works from the screen |
 
-Installing SSH also **turns off firmware auto-update** (see [Caveats](#caveats) for why).
+Installing SSH also **turns off firmware auto-update** (both `zwrt_zte_dm.dm_update.dm_update_mode=0` and `TURNOFFPOLLING=1`, read back afterwards; see [Caveats](#caveats) for why).
+It starts dropbear and confirms it is listening on 2222 before adding its `rc.local` line; if that fails, `rc.local` is left unchanged.
 
 ## Before you start
 
@@ -29,8 +30,8 @@ Installing SSH also **turns off firmware auto-update** (see [Caveats](#caveats) 
 ## Install
 
 ```sh
-tar xzf u60-kit-*.tar.gz
-cd u60-kit
+tar xzf luyaz-kit-*.tar.gz
+cd luyaz-kit
 ./install.sh
 ```
 
@@ -49,7 +50,7 @@ At the end it prints a `~/.ssh/config` snippet; add it and `ssh u60` will log yo
 The kit includes a `CLAUDE.md` with the deployment steps, how to handle errors, and what must not be touched on the device. Open Claude Code in the kit directory and it reads the file automatically:
 
 ```sh
-cd u60-kit
+cd luyaz-kit
 claude
 ```
 
@@ -60,12 +61,14 @@ You can also install only some of the pieces:
 ```sh
 ./install.sh ssh               # ADB + persistent SSH only
 ./install.sh ssh admin devui   # no eSIM
-./install.sh recover           # boot-time clean-up for `u60 ship`: puts /data/u60-ship/u60-recover.sh in place (after its
+./install.sh recover           # boot-time clean-up for `u60 ship`: puts /data/luyaz/ship/luyaz-recover.sh in place (after its
                                #   selftest on the device) and adds one line calling it to rc.local, before the service lines.
                                #   Not part of the full set: run it only when you mean to change rc.local
 ./install.sh status            # show component status
 ./install.sh doctor            # read-only health check: boot sync, auto-update, services, heartbeat, Wi-Fi, alerts... each item ●▲■
-./install.sh backup            # back up the device config to this computer (./backups/, contains passwords, don't share)
+./install.sh backup            # back up the device config to this computer (./backups/, contains passwords, don't share);
+                               # also saves config-…system.tgz (rc.local, our init.d scripts, dropbear host key, authorized_keys,
+                               # start_dropbear.sh) for reference before a firmware upgrade; restore does not restore it
 ./install.sh restore 备份.tgz  # lists the files it would change first, writes only after you type yes
 ./install.sh reboot            # reboot once and confirm every component starts on its own
 ```
@@ -78,17 +81,17 @@ If the U60 is not at `192.168.0.1`: `GATEWAY=192.168.x.1 ./install.sh`.
 
 Programs and data all live in `/data` (firmware upgrades don't wipe it). Autostart is only a few lines added to `/etc/rc.local`; no stock service is changed.
 The advanced admin web, the screen's data backend and the Wi-Fi fallback watchdog are supervised by the system's procd: if one crashes it is restarted automatically and an alert is logged (SMS notification can be set up in the admin web under 「系统 → 告警」 (System → Alerts)).
-After `admin` and `devui`, the kit writes what it installed (kit date, commit) into the device manifest `/data/u60-manifest.jsonl`, one line per component (agent; touch, uid), which `doctor` compares with the files.
-`devui` hands the screen to the new programs with `u60-ship.sh uid-restart`: it restarts `u60-uid` and checks that the running touch UI and `u60-uid` are the ones just installed.
+After `admin` and `devui`, the kit writes what it installed (kit date, commit) into the device manifest `/data/luyaz/ship/manifest.jsonl`, one line per component (lweb; touch, sentinel, datad), which `doctor` compares with the files.
+`devui` installs the touch UI, `zwrt-datad` and `luyaz-sentinel`. In `rc.local` one line `/etc/init.d/luyaz-sentinel start` follows the `zwrt-datad` line; the old start.sh, `u60-uid` and `u60-guard` lines are removed, and those services are stopped (never disabled; their files stay). After starting the sentinel it waits up to 60 s until it runs under procd, its heartbeat says `ours`, and the running touch UI is the file just installed. `admin` installs only luyaz-web.
 
 | Path | Purpose |
 |---|---|
 | `/data/ssh/` | dropbear, host key, `authorized_keys` (**the master copy of your public keys**) |
 | `/data/local/tmp/start_dropbear.sh` | At boot, syncs the public keys to `/etc/dropbear/` and starts dropbear (:2222) |
-| `/data/zte-agent`, `/data/admin/` | Advanced admin web program and pages |
-| `/data/zte-agent.env` | **Admin web password** (one line `ZTE_AGENT_PASSWORD=…`, readable by root only) |
-| `/data/plugins/u60pro-devui/u60-uid` | Screen supervisor: restarts the touch UI if it crashes; after two failed starts in a row it switches back to the stock interface (long-press the bottom-right corner of the screen for 3 seconds to come back) |
-| `/data/u60-guard/`, `/etc/init.d/{zte-agent,zwrt-datad,u60-guard}` | Process supervision, Wi-Fi fallback watchdog, alert SMS (started at boot by `/etc/init.d/… start` lines in `rc.local`, not via `enable`) |
+| `/data/luyaz/luyaz-web`, `/data/luyaz/operator-logos/` | Advanced admin web (luyaz-web on :9090; its data and every change go through the data service luyaz-core, installed as `zwrt-datad`). zte-agent was removed on 2026-10-14: the kit stops an old one, drops its `rc.local` line and writes `/data/u60d/agent-retired`; `/data/zte-agent` and `/data/admin/` from older kits are left in place, unused |
+| `/data/zte-agent.env` | **Admin web password** (one line `ZTE_AGENT_PASSWORD=…`, readable by root only; the name is from the zte-agent days) |
+| `/data/luyaz/luyaz-sentinel`, `/etc/init.d/luyaz-sentinel` | Sentinel (replaces u60-uid and u60-guard): owns the screen, restarts the touch UI if it crashes, after two failed starts in a row switches back to the stock interface with an alert (long-press the bottom-right corner for 3 seconds to come back); also the Wi-Fi fallback watchdog and alert SMS. Log `/tmp/luyaz-sentinel.log`, heartbeat `/tmp/luyaz-sentinel.hb` |
+| `/data/luyaz/scripts/`, `/etc/init.d/{zwrt-datad,luyaz-sentinel,luyaz-web}` | Device scripts (doctor.sh, alert-lib.sh …; the ship executor luyaz-ship.sh and datad-trial.sh too) and process supervision (started at boot by `/etc/init.d/… start` lines in `rc.local`, not via `enable`) |
 | `/data/alerts/`, `/data/crashlog/` | Alert records, logs from program crashes |
 | `/data/plugins/u60pro-devui/`, `/data/plugins/zwrt-datad/` | Touch UI and its data backend |
 | `/data/esim/` | lpac (eSIM card read/write tool) |
@@ -97,7 +100,7 @@ After `admin` and `devui`, the kit writes what it installed (kit date, commit) i
 ## Everyday use
 
 - **Add another computer's SSH public key**: append it to `/data/ssh/authorized_keys`, then run `sh /data/local/tmp/start_dropbear.sh` (editing the copy in `/etc/dropbear/` does nothing; it is overwritten at boot).
-- **Change the admin web password**: rerun `./install.sh admin` (it asks for a new password). Or over SSH edit the line in `/data/zte-agent.env` (no quotes, backslashes or spaces), then `/etc/init.d/zte-agent restart`, then `sh /data/u60-guard/agent-auth.sh verify` to confirm.
+- **Change the admin web password**: rerun `./install.sh admin` (it asks for a new password). Or over SSH edit the line in `/data/zte-agent.env` (no quotes, backslashes or spaces), then log in again at `:9090` (luyaz-web reads the file at every login, no restart needed).
 - **eSIM**: manage profiles in the admin web under 「移动网络 → eSIM」 (Mobile network → eSIM); on the screen, 「更多功能 → eSIM」 (More → eSIM), tap twice to switch. Takes effect in about 10 seconds, usually no reboot needed.
 - **Proxy**: the install kit does not include a proxy; if you want one, set it up yourself from official sources following `docs/PROXY.md` in the manager repo.
 - **Need ADB temporarily**: SSH in and run `ubus call zwrt_bsp.usb set '{"mode":"debug"}'`; when 「USB 模式」 (USB mode) in `./install.sh status` shows `user`, it is back in normal mode.
@@ -115,9 +118,9 @@ After logging in over SSH:
 
 ```sh
 echo vendor > /tmp/u60-uid.ctl; sleep 8     # hand the screen back to the stock interface first
-for s in u60-uid u60-guard zte-agent zwrt-datad; do /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
+for s in luyaz-sentinel u60-uid u60-guard luyaz-web zte-agent zwrt-datad; do /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
 cp /data/u60-kit/rc.local.orig /etc/rc.local
-rm -rf /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim \
+rm -rf /data/luyaz /data/u60d /data/zte-agent /data/zte-agent.env /data/admin /data/plugins/u60pro-devui /data/plugins/zwrt-datad /data/esim \
        /data/u60-guard /data/u60-uid /data/alerts /data/crashlog /data/power /data/local/tmp/start_zte_agent.sh
 # If you don't want SSH either, also run: rm -rf /data/ssh /data/local/tmp/start_dropbear.sh
 reboot
@@ -131,7 +134,7 @@ After the reboot the screen is back to the stock interface. Turn auto-update bac
 
 **The ADB device never shows up**: try another cable or another USB port (not a hub/dock). On Windows, open Device Manager; if a device has a yellow exclamation mark, right-click → Update driver → Browse my computer → pick "Android ADB Interface" from the list (install the Google USB Driver first). If `adb devices` shows a line ending in `device`, the connection works; rerunning `./install.sh` continues from there.
 
-**It says SSH can't connect**: the device side is already installed. Usually the computer isn't on the U60's Wi-Fi, or a proxy app's TUN/enhanced mode is hijacking `192.168.0.1` (set `192.168.0.0/16` to direct in the proxy; no need to turn it off entirely). Then try again: `ssh -p 2222 -i ~/.ssh/id_ed25519 root@192.168.0.1`.
+**It says SSH can't connect**: the device side is already installed. The message says which: no key / connection refused / auth failed / timeout. Usually the computer isn't on the U60's Wi-Fi, or a proxy app's TUN/enhanced mode is hijacking `192.168.0.1` (set `192.168.0.0/16` to direct in the proxy; no need to turn it off entirely). Then try again: `ssh -p 2222 -i ~/.ssh/id_ed25519 root@192.168.0.1`.
 
 **The screen shows no data**: SSH in and look at `cat /tmp/zwrt-datad.log`; a reboot usually fixes it.
 

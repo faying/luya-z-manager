@@ -1,0 +1,25 @@
+/* /tools/processes (batch 5c) */
+.pc-head { display: flex; align-items: center; gap: 8px; }
+.pc-head .nd-title { flex: 1; }
+.pc-refresh { min-width: 44px; min-height: 44px; padding: 0; }
+.pc-col { display: grid; grid-template-columns: minmax(0, 1fr); max-width: 960px; gap: 24px; }
+.pc-list, .pc-col > * { min-width: 0; }
+.pc-muted { color: var(--nd-t2); }
+.pc-bar { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px; }
+.pc-aux { margin-block: 4px 8px; }
+.pc-op:not(:empty) { margin-top: 8px; padding-inline: 4px; }
+.pc-list { display: grid; gap: 12px; }
+.pc-sort { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pc-sort a { text-decoration: none; }
+.pc-sort a.nd-seg__item { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; color: inherit; }
+.pc-sort a.nd-seg__item[data-selected="true"] { background: var(--nd-primary); color: var(--nd-onPrimary); }
+.pc-dir { display: inline-flex; align-items: center; min-height: 44px; }
+.pc-scroll { overflow-x: auto; }
+.pc-table { min-width: 560px; }
+.pc-tr { display: grid; grid-template-columns: minmax(160px, 3fr) 64px 64px 88px 88px 72px; gap: 0 12px; padding-block: 2px; }
+.pc-tr[hidden] { display: none; }
+.pc-th { padding-block: 4px; }
+.pc-r { text-align: right; font-variant-numeric: tabular-nums; }
+.pc-n { word-break: break-all; }
+.pc-list > *, .pc-list .nd-console { min-width: 0; max-width: 100%; }
+.pc-scroll { max-width: 100%; }

@@ -1,0 +1,18 @@
+Shared fixtures for the script tests (docs/SHIP.md).
+
+tree/                 a directory for the directory fingerprint ("tree_fp"):
+                      nested dirs, names with spaces (one leading), a dotfile,
+                      an empty file, names that sort differently by byte than
+                      by locale or by whole line (a, a b, a-b, a.b, a0.txt,
+                      a0/x, B). ASCII names only.
+tree.listing          the exact text that is hashed: "<md5> <path>" per file,
+                      paths without "./", LC_ALL=C order, one newline each
+tree.expected         md5 of tree.listing = the fingerprint of tree/
+                      (computed twice: md5 -q on macOS, md5sum in the device
+                      busybox image)
+u60-recover.v1-2bb17b1.sh   the u60-recover.sh installed on the device in
+                      phase one (git show 2bb17b1:scripts/u60-recover.sh,
+                      md5 cabc78d3…): it must leave every v=2 log alone.
+
+Cases git cannot carry (empty directory, symlink, "|" or newline in a name,
+unreadable file) are made at run time by scripts/test/tree-fp/run.sh.

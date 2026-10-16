@@ -1,0 +1,1 @@
+{% if let Some(c) = clock %}<span id="op-bar-clock" aria-hidden="true"{% if c.frozen %} class="nd-announce__frozen"{% endif %}> · {{ c.text }}</span>{% else %}<span id="op-bar-clock" hidden></span>{% endif %}

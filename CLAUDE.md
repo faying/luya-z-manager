@@ -1,4 +1,4 @@
-# CLAUDE.md — ZTE U60 Pro Project Guidelines
+# CLAUDE.md — Luya-Z (ZTE U60 Pro) Project Guidelines
 
 ## Global requirement — ZTE firmware auto-update stays OFF, always
 
@@ -22,8 +22,9 @@ not by a script, not by a UI toggle, not "just to test".
 - Applies to the install kit too: nothing in `onboard/` may ever turn it on.
   `fota_off()` turning it OFF is exactly what the owner wants and stays.
 - If you ever find it on, tell the owner. Do not "fix" it silently either way.
-- Not the same thing as the data service's own updater (zwrt-datad OTA): that
-  one is removed from our fork for a separate reason (no external dependencies).
+- Not the same thing as the old data service's own updater (zwrt-datad OTA): that
+  one was removed from our fork for a separate reason (no external dependencies);
+  the core that replaced it (`crates/luyaz-core`) has no updater.
 
 ## Device Overview
 - **Model**: ZTE U60 Pro 5G CPE router
@@ -32,8 +33,18 @@ not by a script, not by a UI toggle, not "just to test".
 - **Filesystem**: Read-only rootfs, writable overlay at `/zteoverlay/`, writable `/data`
 
 ## Architecture
-- `zte-agent/` — Rust HTTP agent on device (tiny_http, port 9090, LAN-only)
-- `web/` — Next.js web dashboard
+One Cargo workspace (Phase 10, 2026-10-15; zte-agent, u60-guard, u60-uid,
+Next.js `web/`, supervise.sh and the C touch UI are retired — C UI in tag `legacy-c-touch-ui`):
+- `crates/luyaz-core` — the core: `/data/luyaz/luyaz-core`, `/etc/init.d/luyaz-core`,
+  state `/data/luyaz/core/`, API on `:9460`; `<core> doctor` is the health check
+  (`/data/luyaz/scripts/doctor.sh` is a shim over it)
+- `crates/luyaz-web` — admin web on `:9090` (LAN-only), password file `/data/luyaz/web.env`
+- `crates/luyaz-sentinel` — `/data/luyaz/luyaz-sentinel`, owns the screen and the
+  watchdog; control FIFO `/tmp/luyaz-screen.ctl`, state `/data/luyaz/screen/`
+- `touch-ui/` — touch UI (Rust, `touch-ui/rs/`), device program `/data/luyaz/ui/luyaz-ui`
+  (comm `luyaz-ui`, fonts + touchsim beside it); device scripts in `touch-ui/scripts/`
+- `crates/luyaz-*` — libraries used by the core (policy, scenario, wifi, alerts, …)
+- `onboard/` — install kit; `scripts/` — Tailscale
 
 ---
 
@@ -108,7 +119,7 @@ ubus call zwrt_data get_wwaniface '{"source_module":"zte_topsw_data","cid":1}'
 
 ## Scenario Engine — standing authorisation, and its limits
 
-`zte-agent/src/scenario.rs` changes Wi-Fi by itself when the surroundings
+The scenario engine (`crates/luyaz-scenario`, run by the core) changes Wi-Fi by itself when the surroundings
 change. The device owner authorised that specific behaviour on 2026-09-22.
 Treat it as a narrow exception to the "ask before changing Wi-Fi" rule below,
 not as a general licence:
@@ -131,32 +142,31 @@ wrong again:
 
 - **`ubus call zwrt_wlan reload` is not reliable.** The same uci write took
   effect in 8 seconds once and did nothing at all for a full 60 seconds another
-  time. Any code that writes uci, reloads and assumes success is wrong —
-  `scripts/homemode.sh`'s `apply_wifi()` is written that way. Poll until the
-  change is observable.
+  time. Any code that writes uci, reloads and assumes success is wrong. Poll
+  until the change is observable.
 - **`iw list`'s interface-combination table is advisory on this chip**, and the
   phy index changes on every reload. Discover the phy each time; never cache it,
   and never reason from that table.
 
 ## Other Device Notes
 
-- **The clock is local time labelled UTC.** ZTE's SNTP (`zwrt_zte_sntp`, `time_from_utc='8.00'`) sets the system clock to local wall time and leaves TZ=UTC, so `date` says "14:34 UTC" at 14:34 Beijing time and every device epoch/ISO-"Z" string is 8 h ahead of real UTC. Don't "fix" the firmware. On the device, format with localtime (right digits). Across to a browser/phone, use `clock.utc_offset` from `/api/public/status` (`zte-agent/src/clock.rs`, `web/src/lib/deviceClock.ts`): show device times with UTC formatting, compare with browser time via the offset.
+- **The clock is local time labelled UTC.** ZTE's SNTP (`zwrt_zte_sntp`, `time_from_utc='8.00'`) sets the system clock to local wall time and leaves TZ=UTC, so `date` says "14:34 UTC" at 14:34 Beijing time and every device epoch/ISO-"Z" string is 8 h ahead of real UTC. Don't "fix" the firmware. On the device, format with localtime (right digits). Across to a browser/phone, use `clock.utc_offset` from `/api/public/status` (`crates/luyaz-api/src/clock.rs`): show device times with UTC formatting, compare with browser time via the offset.
 - **Airplane mode bug**: `nwinfo_set_mode ONLINE` does NOT recover modem from LPM. Only fix: reboot. Re-checked on B31 (2026-10-05): vendor ONLINE flips to OFFLINE and falls back to LOW_POWER; `AT+CFUN=1` blocks on the AT port (no answer). Never put the device in LPM to test anything. The stock UI has no airplane switch at all.
 - **Charge policy bug**: Wall mode `enable` STOPS charging, `disable` STARTS charging (inverted).
 - **procd respawn**: `kill -9` may trigger procd respawn. Use `/etc/init.d/<name> stop` instead.
 - **Touchscreen**: Sitronix at I2C `1-0055`, kernel module `sitronix-ts.ko` loaded by `/usr/bin/mtdev2tuio.sh`.
-- **eSIM**: no embedded eUICC, but a removable eUICC card (5ber / eSTK.me) in the SIM slot works via lpac under `/data/esim` (`scripts/esim/`, agent `esim.rs`).
-- **New devices**: `onboard/` is the prebuilt kit for other people's U60s (ADB → SSH → agent/web → devui → eSIM). Build with `onboard/build-kit.sh`; see DEPLOY.md.
+- **eSIM**: no embedded eUICC, but a removable eUICC card (5ber / eSTK.me) in the SIM slot works via lpac under `/data/esim` (`scripts/esim/`, `crates/luyaz-esim`, web `crates/luyaz-web/src/esim.rs`).
+- **New devices**: `onboard/` is the prebuilt kit for other people's U60s (ADB → SSH → core/web/sentinel → touch UI → eSIM). Build with `onboard/build-kit.sh`; see DEPLOY.md.
 - **IMEI**: Hardware-locked (QFPROM fused), not modifiable.
 
 ---
 
 ## Design Context (Admin Web)
 
-Single source of truth: `docs/DESIGN.md` §5. Summary for `web/` (Next.js static export served by the agent on `:9090`, LAN-only):
+Single source of truth: `docs/DESIGN.md` §5. Summary for `crates/luyaz-web` (Rust, server-rendered, `:9090`, LAN-only):
 
 - **Users**: device owner (technical, dense data OK) **and other U60 owners** — stay approachable. Often used on **phone/tablet on the LAN**.
-- **Aesthetic**: new design in the **Cohere + Figma** language — warm paper canvas, hairline-ruled white cards, ink text, one near-black primary surface, flat colour blocks per route family, Cohere deep-green band on home/login. Geist + Geist Mono, platform CJK face. Light + dark. Tokens: `web/src/app/newdesign.css`; components: `web/src/components/nd/`.
-- **Navigation**: <640 bottom tabs (Home / Charts / Functions / System), 640–1023 icon rail, ≥1024 sidebar; ⌘K search. Route table: `web/src/lib/routes.ts`.
-- **Writes**: three confirm tiers via `useWriteOp` (direct / inline / dialog), readback after every write, multi-step writes tracked per step. Inventory: `web/docs/controls-inventory.md`.
-- **Principles**: tokens never hard-codes; mobile is a real target (no h-scroll, ≥44px targets, inputs ≥16px); WCAG AA floor (`web/docs/contrast.md` must pass); never remove an existing control without asking.
+- **Aesthetic**: new design in the **Cohere + Figma** language — warm paper canvas, hairline-ruled white cards, ink text, one near-black primary surface, flat colour blocks per route family, Cohere deep-green band on home/login. Geist + Geist Mono, platform CJK face. Light + dark. Tokens/CSS: `crates/luyaz-web/static/nd/`; templates: `crates/luyaz-web/templates/`.
+- **Navigation**: <640 bottom tabs (Home / Charts / Functions / System), 640–1023 icon rail, ≥1024 sidebar; ⌘K search. Route table: `crates/luyaz-web/src/routes.rs`.
+- **Writes**: three confirm tiers (direct / inline / dialog), readback after every write, multi-step writes tracked per step. Inventory: `docs/web/controls-inventory.md`.
+- **Principles**: tokens never hard-codes; mobile is a real target (no h-scroll, ≥44px targets, inputs ≥16px); WCAG AA floor (`docs/web/contrast.md` must pass); never remove an existing control without asking.

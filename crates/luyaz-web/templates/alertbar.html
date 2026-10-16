@@ -1,0 +1,4 @@
+{% if let Some(b) = bar %}<div id="alert-bar" role="status" aria-live="polite" class="nd-announce">
+<p class="nd-announce__text"><span aria-hidden="true" class="nd-announce__sym">▲</span><span class="font-semibold">{{ b.title(*l) }}</span>{% if let Some(e) = b.error %}<span class="t-announce__err">{{ l.pick("Not marked read: ", "没标成已读：") }}{{ e }}</span>{% else if !b.detail.is_empty() %}<span class="nd-announce__detail">{{ b.detail }}</span>{% endif %}</p>
+<div class="flex shrink-0 items-center"><button type="button" class="nd-btn nd-btn--ghost nd-btn--sm nd-announce__btn" data-on:click="@post('/alerts/read?seq={{ b.seq }}&p=' + encodeURIComponent(location.pathname))">{{ l.pick("Got it", "知道了") }}</button><a href="/alerts" class="nd-btn nd-btn--sm nd-announce__btn nd-announce__view">{{ l.pick("View", "查看") }}</a></div>
+</div>{% else %}<div id="alert-bar" hidden></div>{% endif %}

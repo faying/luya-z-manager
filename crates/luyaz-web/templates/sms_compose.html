@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("sms.css") }}">{% endblock %}
+{% block main %}
+<div class="sm-compose grid gap-4" data-signals="{to: '', body: '', _x: ''}">
+<div class="mt-2 flex flex-wrap items-center gap-3"><h1 class="nd-title flex-1">{{ l.pick("Compose SMS", "写短信") }}</h1><a class="nd-btn nd-btn--ghost" href="/sms">{{ crate::shell::icon("ArrowLeft", false, 20, "")|safe }}{{ l.pick("Back", "返回") }}</a></div>
+<p class="nd-body sm-t2">{{ l.pick("Sent from the SIM in the device over the mobile network. Your carrier may charge for each part.", "用设备里的 SIM 卡经移动网络发送，运营商可能按条收费。") }}</p>
+<div class="nd-group grid gap-4 p-4 sm-form">
+<label class="grid gap-1" for="smsc-to"><span class="nd-aux">{{ l.pick("To (phone number)", "收件人（电话号码）") }}</span><input id="smsc-to" type="tel" inputmode="tel" autocomplete="off" class="nd-field nd-mono" placeholder="+886912345678" data-bind:to data-on:input="document.getElementById('smsc-confirm')?.remove()"></label>
+<label class="grid gap-1" for="smsc-body"><span class="nd-aux">{{ l.pick("Message", "内容") }}</span><textarea id="smsc-body" class="nd-field sm-textarea" placeholder="{{ l.pick("Type your message…", "输入短信内容…") }}" aria-describedby="smsc-count" data-bind:body data-on:input="document.getElementById('smsc-confirm')?.remove()"></textarea></label>
+<p id="smsc-count" class="nd-aux sm-count" aria-live="polite"><span data-text="{{ self.count_js() }}">{{ self.count0() }}</span><span>{{ l.pick("Unicode (UCS2) encoding", "Unicode (UCS2) 编码") }}</span></p>
+<div id="smsc-err"></div>
+<div class="flex flex-wrap gap-2"><button type="button" class="nd-btn nd-btn--primary" disabled data-attr:disabled="!$to.trim() || !$body.trim()" data-on:click="@post('/sms/compose/ask')">{{ crate::shell::icon("PaperPlaneRight", false, 20, "")|safe }}{{ l.pick("Send", "发送") }}</button><a class="nd-btn nd-btn--secondary" href="/sms">{{ l.pick("Cancel", "取消") }}</a></div>
+{{ op|safe }}
+<span id="smsc-reset" hidden></span>
+</div>
+</div>
+{% endblock %}

@@ -1,0 +1,82 @@
+/* luyaz-web: the 8c-A step 5 pages (trends, clients, speed test, signal detect, diagnose).
+ * Tokens only. Loaded by those pages, not on the signal page's first load. */
+.px-1 { padding-inline: 4px; }
+.mb-2 { margin-bottom: 8px; }
+
+/* /trends: MiniChart.tsx */
+.tr-grid { display: grid; max-width: 1100px; gap: 16px; }
+@media (min-width: 1024px) { .tr-grid { grid-template-columns: 1fr 1fr; } .tr-card { padding: 16px; } }
+.tr-card { padding: 12px; }
+.tr-head { margin-bottom: 8px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.tr-title { font-size: 15px; font-weight: 600; color: var(--nd-t1); }
+.tr-now { font-size: 14px; font-variant-numeric: tabular-nums; color: var(--nd-t2); }
+.tr-box { position: relative; height: 120px; }
+.tr-plot { position: absolute; inset: 0; }
+/* the line is its own small svg (the only part a push resends), drawn over the grid */
+.tr-line { pointer-events: none; }
+.tr-line polyline { fill: none; stroke: var(--nd-accMark); stroke-width: 2px; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.tr-line polyline.tr-dash { stroke: var(--nd-t2); stroke-dasharray: 4 3; }
+.tr-line--stale polyline, .tr-line--stale polyline.tr-dash { stroke: var(--nd-t3); }
+.tr-grid { stroke: var(--nd-hair); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.tr-tick { position: absolute; left: 0; width: 34px; text-align: right; font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums; color: var(--nd-t3); }
+.tr-svg { position: absolute; top: 0; bottom: 0; left: 40px; height: 100%; width: calc(100% - 40px); }
+.tr-empty { display: flex; height: 120px; align-items: center; justify-content: center; font-size: 14px; color: var(--nd-t2); }
+
+/* list and tool pages: one column, max 720 px (the old max-w-[720px] gap-6) */
+.pg-col { display: grid; max-width: 720px; gap: 24px; }
+
+/* /tools/speedtest */
+.st-page { max-width: 720px; }
+.gap-6 { gap: 24px; }
+.gap-3 { gap: 12px; }
+.p-4 { padding: 16px; }
+.flex-wrap { flex-wrap: wrap; }
+@media (min-width: 1024px) { .st-page .p-4 { padding: 20px; } }
+.st-bar { height: 8px; width: 100%; overflow: hidden; border-radius: 9999px; background: var(--nd-track); }
+.st-bar__fill { height: 100%; border-radius: 9999px; background: var(--nd-t1); transition: width 0.5s; }
+.st-bad { color: var(--nd-badT); }
+#st-op:not(:empty) { margin-top: 8px; padding-inline: 4px; }
+
+/* /router/signal-detect */
+.sd-page { max-width: 960px; }
+.mb-3 { margin-bottom: 12px; }
+.sd-fill { background: var(--nd-blue); }
+.sd-muted { color: var(--nd-t2); }
+.sd-scroll { overflow-x: auto; padding: 8px; }
+.sd-table { width: 100%; font-size: 14px; line-height: 20px; border-collapse: collapse; }
+.sd-table th { padding: 8px; text-align: left; font-weight: 600; color: var(--nd-t2); }
+.sd-table td { padding: 8px; white-space: nowrap; font-variant-numeric: tabular-nums; border-top: 1px solid var(--nd-sep); }
+@media (min-width: 1024px) { .sd-page .p-4 { padding: 20px; } .sd-scroll { padding: 12px; } }
+#sd-op:not(:empty) { margin-top: 8px; padding-inline: 4px; }
+
+/* /tools/diagnose */
+.dg-page { max-width: 1100px; }
+.dg-head { column-gap: 12px; row-gap: 8px; }
+@media (min-width: 1024px) { .dg-cols { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); } .dg-page .p-4 { padding: 16px; } }
+.dg-row { flex-wrap: wrap; row-gap: 4px; }
+.dg-name { width: 112px; flex-shrink: 0; }
+@media (min-width: 640px) { .dg-name { width: 128px; } }
+.dg-val { min-width: 0; flex: 1 1 0%; text-align: start; }
+.dg-muted { color: var(--nd-t3); }
+.dg-detail { margin-inline-start: 8px; }
+.dg-sep { border-top: 1px solid var(--nd-hair); }
+.dg-fb { min-width: 88px; }
+#dg-op:not(:empty) { margin-top: 8px; padding-inline: 4px; }
+
+/* /device-info: two columns from 1024 px (the old lg:grid-cols-[3fr_2fr]) */
+@media (min-width: 1024px) { .pg-cols { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 24px; } }
+.pg-breakall { word-break: break-all; }
+
+/* /router/qci */
+.qc-page { max-width: 960px; }
+.qc-t2 { color: var(--nd-t2); }
+.qc-bad { color: var(--nd-badT); }
+.qc-q { font-size: 16px; font-weight: 500; }
+.qc-wrap { white-space: normal !important; }
+.qc-skel { height: 20px; width: 100%; }
+.qc-pre { overflow-x: auto; white-space: pre; font-size: 13px; line-height: 20px; }
+
+/* /tools/cpu: the old 320×64 sparkline; the line is its own svg (trends.rs classes) */
+.cpu-desc { max-width: 720px; color: var(--nd-t2); }
+.cpu-box { position: relative; height: 64px; }
+.cpu-svg { position: absolute; inset: 0; width: 100%; height: 100%; }

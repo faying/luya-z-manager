@@ -1,0 +1,6 @@
+<dialog id="sms-view" class="nd nd-dialog t-dialog sm-dialog" aria-labelledby="sms-view-t" data-init="el.showModal()" data-on:click="evt.target === el && el.close()">
+<div class="sm-dhead"><div class="min-w-0 flex-1"><h2 id="sms-view-t" class="t-dialog__title pg-breakall"><span class="sr-only">{{ l.pick("From", "来自") }} </span><span class="nd-mono" data-data>{{ from }}</span></h2>
+<p class="nd-aux sm-dmeta"><span class="nd-mono">{{ date }}</span>{% if let Some(s) = store %} · {{ s }}{% endif %} · {{ mark|safe }}</p></div>
+<button type="button" class="nd-btn nd-btn--ghost nd-btn--icon" autofocus aria-label="{{ l.pick("Close", "关闭") }}" data-on:click="el.closest('dialog').close()">{{ crate::shell::icon("X", false, 20, "")|safe }}</button></div>
+<p class="nd-body sm-body" data-data>{% for line in lines %}{{ line }}{% if !loop.last %}<br>{% endif %}{% endfor %}</p>
+</dialog>

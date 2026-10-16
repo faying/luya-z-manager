@@ -1,0 +1,17 @@
+[package]
+name = "devui"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "luyaz-ui"
+path = "src/main.rs"
+
+[dependencies]
+lvgl-sys = { path = "../lvgl-sys" }
+plat = { path = "../plat" }
+devui-model = { path = "../devui-model" }
+libc = "0.2"

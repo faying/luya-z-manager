@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<p class="nd-body mb-4 cpu-desc">{{ l.pick("Updated with the data service, about every 5 seconds. The trend covers the last 5 minutes while this page or another new-style page (Signal, …) is open.", "随数据服务更新，约 5 秒一次；趋势是最近 5 分钟（开着这一页或信号等新页面时记录）。") }}</p>
+<div class="pg-col">
+{{ self.leaf("cpu-status")|safe }}
+<section aria-labelledby="cpu-trend-t"><h2 id="cpu-trend-t" class="nd-group-title">{{ l.pick("Last 5 minutes", "最近 5 分钟") }}</h2>
+<div class="nd-group p-3"><div class="cpu-box" role="img" aria-label="{{ l.pick("CPU use, last 5 minutes", "近 5 分钟 CPU 占用") }}"><svg viewBox="0 0 320 64" class="cpu-svg" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="32" x2="320" y2="32" class="tr-grid"/></svg>{{ self.leaf("cpu-line")|safe }}</div></div>
+</section>
+<section aria-labelledby="cpu-cores-t"><h2 id="cpu-cores-t" class="nd-group-title">{{ l.pick("Cores", "各核") }}</h2>
+{{ self.leaf("cpu-cores")|safe }}
+</section>
+<section aria-labelledby="cpu-mem-t"><h2 id="cpu-mem-t" class="nd-group-title">{{ l.pick("Memory", "内存") }}</h2>
+{{ self.leaf("cpu-mem")|safe }}
+</section>
+</div>
+{% endblock %}

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("sms.css") }}">{% endblock %}
+{% block main %}
+<div class="sm-page grid gap-6" data-signals="{_f: 'all', _n: 0, _u: 0, _st: false, _r: 0, _x: ''}">
+<div class="mt-2 flex flex-wrap items-center gap-3"><h1 class="nd-title flex-1">{{ l.pick("SMS Inbox", "短信收件箱") }}</h1><a class="nd-btn nd-btn--primary" href="/sms/compose">{{ crate::shell::icon("NotePencil", false, 20, "")|safe }}{{ l.pick("Compose", "写短信") }}</a></div>
+{{ self.leaf("sms-status")|safe }}
+<section aria-labelledby="sms-list-t"><h2 id="sms-list-t" class="sr-only">{{ l.pick("Messages", "短信列表") }}</h2>
+<div class="sm-bar">
+<div role="radiogroup" aria-label="{{ l.pick("Storage", "存储") }}" class="nd-seg" data-show="$_st" style="display:none"><div class="nd-seg__track">{% for (k, label) in self.filters() %}<button type="button" role="radio" class="nd-seg__item" aria-checked="{% if loop.first %}true{% else %}false{% endif %}" data-attr:aria-checked="$_f === '{{ k }}' ? 'true' : 'false'" data-on:click="$_f = '{{ k }}'; {{ self.clear() }}; {{ self.recount() }}">{{ label }}</button>{% endfor %}</div></div>
+<button type="button" class="nd-btn nd-btn--ghost nd-btn--icon" aria-label="{{ l.pick("Refresh messages", "刷新短信") }}" data-on:click="@post('/sms/refresh')">{{ crate::shell::icon("ArrowClockwise", false, 20, "")|safe }}</button>
+<div class="sm-acts" data-show="$_n > 0" style="display:none">
+<button type="button" class="nd-btn nd-btn--secondary nd-btn--sm" data-write="sms-read" data-attr:disabled="$_u === 0" data-on:click="{{ self.read_js() }}">{{ crate::shell::icon("EnvelopeOpen", false, 20, "")|safe }}<span data-text="{{ self.read_label() }}"></span></button>
+<button type="button" class="nd-btn nd-btn--danger nd-btn--sm" data-on:click="{{ self.del_js() }}">{{ crate::shell::icon("Trash", false, 20, "")|safe }}<span data-text="{{ self.del_label() }}"></span></button>
+</div>
+</div>
+{{ read_op|safe }}
+{{ del_op|safe }}
+{{ self.leaf("sms-list")|safe }}
+</section>
+</div>
+<span id="sms-reset" hidden></span>
+<div id="sms-view"></div>
+{% endblock %}
