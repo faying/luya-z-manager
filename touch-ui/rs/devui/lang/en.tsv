@@ -250,7 +250,7 @@ tailscale|节点	Peers
 改用「%s」：会断网几秒，之后换卡也一直用它，点「自动」才恢复	Use \"%s\": a few seconds offline; kept across SIMs until Auto
 放电中	Discharging
 数据服务掉线 · 数字停在 %s	Data service offline · last update %s
-数据服务版本太旧：要更新 zwrt-datad	Data service too old; update zwrt-datad
+数据服务版本太旧：要更新 luyaz-core	Data service too old; update luyaz-core
 数据漫游	Data roaming
 新建或修改 APN 请用管理网页的「APN」页	Add or edit APNs on the APN page of the web admin
 无密码	No password

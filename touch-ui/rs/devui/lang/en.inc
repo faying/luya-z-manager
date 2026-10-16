@@ -246,7 +246,7 @@
     { "改用「%s」：会断网几秒，之后换卡也一直用它，点「自动」才恢复", "Use \"%s\": a few seconds offline; kept across SIMs until Auto", NULL },
     { "放电中", "Discharging", NULL },
     { "数据服务掉线 · 数字停在 %s", "Data service offline · last update %s", NULL },
-    { "数据服务版本太旧：要更新 zwrt-datad", "Data service too old; update zwrt-datad", NULL },
+    { "数据服务版本太旧：要更新 luyaz-core", "Data service too old; update luyaz-core", NULL },
     { "数据漫游", "Data roaming", NULL },
     { "新建或修改 APN 请用管理网页的「APN」页", "Add or edit APNs on the APN page of the web admin", NULL },
     { "无密码", "No password", NULL },
