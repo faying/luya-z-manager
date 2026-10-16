@@ -1,5 +1,7 @@
 # luyaz ship 设备端：事务日志、暂存目录和清单的格式
 
+> Maintainer notes, Chinese only.
+
 `luyaz ship` 在 U60 Pro（MU5250）上的设备端是两个脚本：
 
 | 脚本 | 设备上的位置 | 谁更新它 |

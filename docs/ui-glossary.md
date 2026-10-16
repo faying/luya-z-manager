@@ -1,5 +1,7 @@
 # 界面术语表 / UI glossary
 
+> Maintainer notes, Chinese only.
+
 > L2 第 0 阶段 2026-10-01 定稿（用户定 4 条 + 外部评审）。以后新加界面文字先在这里加词。
 > 设计稿：`docs/designs/ui-english.md`（不公开）。措辞规则见 `docs/DESIGN.md` §1 第 6 条，首页结论表和长度预算见 §4。
 

@@ -1,5 +1,7 @@
 # 设备账本（ledger）：格式与约定
 
+> Maintainer notes, Chinese only.
+
 **现状（2026-10-17）**：u60-guard 已退役（10c 删）。账本现在由核心 luyaz-core 的长期层写（manager `crates/luyaz-core/src/longterm.rs`、`longterm/`；
 `LUYAZ_LONGTERM=1` 才开）：
 - 持久：`/data/luyaz/core/long/hours.jsonl`（每小时一行，留 90 天）、`events.jsonl`（重要事件，留 30 天、最多 1 MB），追加 + fsync；
@@ -105,7 +107,7 @@
 
 | k | 谁写 | 什么时候 | 编号 `id` | 字段（按顺序） | fsync |
 |---|---|---|---|---|---|
-| `boot` | 账本任务 | 每次开机一次 | — | `boot` 完整 boot_id；`code` 本次原因码（key.log 最后一个 `reboot_reason_code=`，没有写 null）；`mode` 开机模式；`fw` 固件版本（`zwrt_web device_info` 的 `wa_inner_version`，读不到用 tr069 的 SoftwareVersion）；`net_select`（uci `zte_nwinfo` 里的制式偏好）；`rb_weekly`、`rb_cutoff`、`rb_connfail` 原厂三个自动重启的配置（`选项=值` 空格分隔，不含节头和包名、节名，截到 60 字节）；`pon` 开机原因（`ubus call zwrt_bsp.pm list` 的 `power_on_reason` 原值，整数，读不到写 null；10-04 加，旧行没有这个字段，没升 `v`） | ✔ |
+| `boot` | 账本任务 | 每次开机一次 | — | `boot` 完整 boot_id；`code` 本次原因码（key.log 最后一个 `reboot_reason_code=`，没有写 null）；`mode` 开机模式；`fw` 固件版本（`zwrt_web device_info` 的 `wa_inner_version`，读不到用 tr069 的 SoftwareVersion）；`net_select`（uci `zte_nwinfo` 里的制式偏好）；`rb_weekly`、`rb_cutoff`、`rb_connfail` 原厂三个自动重启的配置（`选项=值` 空格分隔，不含节头和包名、节名，截到 60 字节）；`pon` 开机原因（`ubus call zwrt_bsp.pm list` 的 `power_on_reason` 原值，整数，读不到写 null；10-04 加，旧行没有这个字段，没升 `v`）；`planned` 这次重启是有人要的（只有核心写；网页/触屏/定时经 `/control` 的重启、关机、恢复出厂，或 shell 里先跑 `<核心> plan-reboot <原因>` 再 `reboot`；标记 `/data/luyaz/core/planned-reboot` 记着写它的 boot，下一次开机的 boot 行带上原因再删；写了 10 分钟还在同一次开机里就作废）。CN B31 上 shell `reboot` 也记 1134（和基带崩溃同码），所以成绩单有 `planned` 就算人为，不算 S1/S2a，也不算 D12 的崩溃；10-17 加，旧行没有，没升 `v` | ✔ |
 | `ver` | 账本任务 | 紧跟 `boot`，每个程序一行；之后被测程序 pid 变了且 md5 也变了再记 | — | `prog`；`md5` 前 8 位；`how`：`exe` / `file`；`pid`；`extra`（datad 写 `ubus=cli` 或 `ubus=socket`） | |
 | `boot_backfill` | 账本任务 | 写 `boot` 时 | `kl-<inode>-<行号>` | `code`；`at` key.log 里那行的时间文字；`started`（0/1/null）；`gap`（0/1） | ✔ |
 | `guard_start` | 账本任务 | guard 每次启动（按 `state/started.log` 补写） | `gs-<boot8>-<up>` | `requested`（0/1）；`by`；`why` | |

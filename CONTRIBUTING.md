@@ -1,32 +1,34 @@
-# 参与贡献
+# Contributing
 
-欢迎提 issue 和 PR。先读 [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) 了解三个仓库怎么配合，再读 [CLAUDE.md](CLAUDE.md) 里设备上「不能做的事」。
+**English** · [中文](CONTRIBUTING.zh-CN.md)
 
-## 开发环境
+Issues and PRs are welcome. Start with [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) to see how the three repositories fit together, then read the on-device "don'ts" in [CLAUDE.md](CLAUDE.md).
 
-- Rust stable + `cargo-zigbuild`（或 Docker），目标 `aarch64-unknown-linux-musl`
-- Node.js + npm（只在跑 luyaz-web 的 e2e 时要：用 `web/` 的 node_modules）
-- 一台 ZTE U60 Pro（MU5250），固件 B27 或更早，用装机包装好 SSH
+## Development environment
+
+- Rust stable + `cargo-zigbuild` (or Docker), target `aarch64-unknown-linux-musl`
+- Node.js + npm (only for the luyaz-web e2e tests: uses the `web/` node_modules)
+- A ZTE U60 Pro (MU5250), firmware B27 or earlier, with SSH set up by the install kit
 
 ```sh
-cargo zigbuild --profile release-device --target aarch64-unknown-linux-musl -p luyaz-core   # 数据服务
-cargo zigbuild --release --target aarch64-unknown-linux-musl -p luyaz-web           # 管理网页（:9090）
+cargo zigbuild --profile release-device --target aarch64-unknown-linux-musl -p luyaz-core   # data service
+cargo zigbuild --release --target aarch64-unknown-linux-musl -p luyaz-web           # admin web UI (:9090)
 ```
 
-更新到设备见 [DEPLOY.md](DEPLOY.md)。
+To update a device, see [DEPLOY.md](DEPLOY.md).
 
-## 提交前
+## Before submitting
 
-- Rust：`cargo fmt`、`cargo clippy` 没有警告
-- 网页：`cargo test -p luyaz-web`（涉及页面行为时再跑 `crates/luyaz-web/e2e`）
-- 改了装机脚本：在真机沙盒里跑 `onboard/test/sandbox.sh run`（见 DEPLOY.md）
-- 尽量在真机上验证；PR 里写清改了什么、怎么测的
+- Rust: `cargo fmt`, `cargo clippy` with no warnings
+- Web: `cargo test -p luyaz-web` (also run `crates/luyaz-web/e2e` when page behavior changes)
+- Install scripts changed: run `onboard/test/sandbox.sh run` in a sandbox on a real device (see DEPLOY.md)
+- Verify on a real device when possible; in the PR, say what changed and how you tested it
 
-## 提 issue
+## Filing issues
 
-用 issue 模板，写上固件版本（如 `B27`）、luyaz-core / luyaz-web 的提交号，附上相关日志或 `./install.sh doctor` 的输出。
-**贴日志前去掉 IMEI、ICCID、手机号、公网 IP 等个人信息。**
+Use the issue template. Include the firmware version (e.g. `B27`), the luyaz-core / luyaz-web commit, and relevant logs or the output of `./install.sh doctor`.
+**Remove IMEI, ICCID, phone numbers, public IPs and other personal data before posting logs.**
 
-## 行为准则
+## Code of conduct
 
-遵守 [Contributor Covenant](CODE_OF_CONDUCT.md)。
+Follow the [Contributor Covenant](CODE_OF_CONDUCT.md).

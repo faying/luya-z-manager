@@ -1,54 +1,58 @@
-# 电池预估时间
+# Battery time estimate
 
-只有一份实现：`crates/luyaz-policy/src/battery_eta.rs`（原在 zte-agent，已搬过来），由核心 luyaz-core（`crates/luyaz-core/src/plugin/battery_eta.rs`）每 5 秒读电池时喂一次样（不管有没有人在看），
-结果放在 `GET /api/battery` 的 `estimate` 和 `GET /api/screen` 的 `battery` 里；管理网页和触屏都只负责把它写成文字。
-（2026-09-26 之前网页和触屏各算一份，两边已经出现差异，见 `docs/screen-logic-move.md` #21。）
+**English** · [中文](battery-estimate.zh-CN.md)
 
-`battery-estimate/fixtures.json` 是这些规则的例子，由 `battery_eta.rs` 的测试跑；改规则时本文、fixtures、`battery_eta.rs` 一起改。
+There is one implementation: `crates/luyaz-policy/src/battery_eta.rs` (moved from zte-agent). The core, luyaz-core (`crates/luyaz-core/src/plugin/battery_eta.rs`), feeds it a sample every 5 seconds when it reads the battery (whether or not anyone is watching).
+The result is in `estimate` of `GET /api/battery` and `battery` of `GET /api/screen`; the admin web UI and the touch screen only turn it into text.
+(Before 2026-09-26 the web UI and touch screen each computed their own and had drifted apart; see `docs/archive/screen-logic-move.md` #21.)
 
-## 结果里的 state
+`battery-estimate/fixtures.json` holds examples of these rules and is run by the `battery_eta.rs` tests. When changing the rules, change this doc (both languages), the fixtures and `battery_eta.rs` together.
 
-| state | 意思 | 界面 |
+## `state` in the result
+
+| state | Meaning | UI |
 |---|---|---|
-| `ok` | 正常 | 按 kind 显示 |
-| `estimating` | agent 刚启动，还没采到样 | 「—」 |
-| `stale` | 采样线程停了超过 20 秒（数值是最后一次的） | 「—」 |
-| `unavailable` | 读不到电池 | 「—」 |
+| `ok` | Normal | Shown by kind |
+| `estimating` | Just started, no samples yet | "—" |
+| `stale` | Sampling thread stopped for over 20 s (values are the last ones) | "—" |
+| `unavailable` | Battery can't be read | "—" |
 
-## 输入
+## Inputs
 
-- 采样序列，按时间升序：`[t 秒, 电池电流 µA, 充电器是否接着]`。电流正数 = 进电池（充电），负数 = 放电（sysfs `battery/current_now` 的符号）。充电器状态取 datad 的 `charger_connect`，不知道时沿用上一条。
-- `soc`：`battery/capacity`，0–100。
-- `charge_full_uah`：`battery/charge_full`；可缺。
-- `charge_counter_uah`：`battery/charge_counter`（剩余电量）；可缺。
-- `target_pct`：充电保护开着且上限在 50–100 之间时是它的上限，否则 100。
-- `paused_at_limit` = 充电保护开着 且 `charging_stopped` 且不是手动停充（`manual_override` 为假）且充电器不是确定拔掉（`charger_connect` 不知道时算插着）。手动停充不算到上限。
-  停充时固件把 USB 输入切掉（`usb/online`、`usb/current_now` 会变 0，电池放电约 0.35 A），所以这里不看采样里的充电器状态。
+- Samples, ascending by time: `[t seconds, battery current µA, charger connected]`. Positive current = into the battery (charging), negative = discharging (sign of sysfs `battery/current_now`). Charger state comes from datad's `charger_connect`; when unknown, the previous value is kept.
+- `soc`: `battery/capacity`, 0–100.
+- `charge_full_uah`: `battery/charge_full`; optional.
+- `charge_counter_uah`: `battery/charge_counter` (remaining charge); optional.
+- `target_pct`: the charge-protection limit when protection is on and the limit is within 50–100, otherwise 100.
+- `paused_at_limit` = charge protection on AND `charging_stopped` AND not a manual stop (`manual_override` false) AND charger not definitely unplugged (unknown `charger_connect` counts as plugged in). A manual stop does not count as reaching the limit.
+  When charging is stopped the firmware cuts USB input (`usb/online`, `usb/current_now` go to 0 and the battery discharges at about 0.35 A), so the sample's charger state is ignored here.
 
-内核的 `power_now`、`time_to_full_now` 不用（实测互相矛盾）。
+The kernel's `power_now` and `time_to_full_now` are not used (they contradict each other in practice).
 
-## 平均电流
+## Average current
 
-1. 从最新一条往前取，遇到下面任一情况就停：时间早于「最新 t − 180 秒」；电流符号和最新一条不同（0 算正）；充电器状态和最新一条不同。
-2. 时间加权：第 i 条的权重 = 下一条的 t − 它的 t，最后一条权重为 0。总权重为 0（只剩一条）时直接用最新一条的电流。
+1. Walk back from the newest sample and stop at any of: time earlier than "newest t − 180 s"; current sign differs from the newest (0 counts as positive); charger state differs from the newest.
+2. Time-weighted: weight of sample i = next sample's t − its t; the last sample has weight 0. If the total weight is 0 (only one sample left), use the newest current directly.
 
-## 结果（按顺序判断，先中先返回）
+## Result (checked in order, first match wins)
 
-| 条件 | kind | minutes |
+| Condition | kind | minutes |
 |---|---|---|
-| 没有采样 | `unknown` | null |
+| No samples | `unknown` | null |
 | `paused_at_limit` | `paused_at_limit` | null |
-| 充电器接着且 `soc ≥ target_pct`，且平均电流 ≥ 0 或 \|平均电流\| < 50 000 µA（充满后电池会有几 mA 的小放电） | `reached_target` | null |
-| \|平均电流\| < 50 000 µA | `unknown` | null |
-| 平均电流 > 0：缺 `charge_full_uah` 则 `unknown`；否则 需要 = charge_full × (target − soc) / 100，分钟 = 需要 / 平均 × 60 | `charging_eta` | 四舍五入 |
-| 平均电流 < 0：剩余 = charge_counter，缺则 charge_full × soc / 100，都缺则 `unknown`；分钟 = 剩余 / \|平均\| × 60 | `discharging_eta` | 四舍五入 |
+| Charger connected and `soc ≥ target_pct`, and average current ≥ 0 or \|average\| < 50 000 µA (a full battery shows a few mA of discharge) | `reached_target` | null |
+| \|average\| < 50 000 µA | `unknown` | null |
+| Average > 0: `unknown` if `charge_full_uah` is missing; otherwise needed = charge_full × (target − soc) / 100, minutes = needed / average × 60 | `charging_eta` | rounded |
+| Average < 0: remaining = charge_counter, else charge_full × soc / 100, `unknown` if both missing; minutes = remaining / \|average\| × 60 | `discharging_eta` | rounded |
 
-## 显示
+## Display
 
-- `charging_eta`：目标是 100 时写「约 X 充满」，否则「约 X 充到 N%」。
-- `discharging_eta`：「约可用 X」。
-- `reached_target`：目标 100 写「已充满」，否则「已到上限 N%」。
-- `paused_at_limit`：「已到上限，暂停充电」。
-- `unknown`：「—」。
-- X：不到 60 分钟写「N 分钟」，否则「H 小时 M 分」（M 为 0 时只写「H 小时」）。触屏里不能用 `%f`。
-- `state` 不是 `ok` 时一律「—」。
+The UI is Chinese; the strings below are translations.
+
+- `charging_eta`: target 100 → "full in about X", otherwise "N% in about X".
+- `discharging_eta`: "about X left".
+- `reached_target`: target 100 → "Fully charged", otherwise "At limit N%".
+- `paused_at_limit`: "At limit, charging paused".
+- `unknown`: "—".
+- X: under 60 minutes "N min", otherwise "H h M min" (just "H h" when M is 0). The touch screen must not use `%f`.
+- Any `state` other than `ok` shows "—".
