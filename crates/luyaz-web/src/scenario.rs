@@ -27,6 +27,8 @@
 //! Drafts: the six timing numbers are Datastar signals (`data-signals__ifmissing`), so a push never
 //! wipes what is being typed. Everything else acts on a click (ask → confirm → set).
 //!
+//! CHILL-specific parts (the abroad section, a scenario's CHILL node, the restore texts) are in
+//! `scenario/chill.rs`, which the public export drops.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -48,6 +50,7 @@ use crate::i18n::Lang;
 use crate::pages::{Shared, StreamQuery, split_leaves};
 use crate::write::{self, Confirm, Outcome, Phase, Tier};
 
+mod chill;
 
 pub const PATH: &str = "/router/scenario";
 const STATE: &str = "/api/scenario";
@@ -77,6 +80,7 @@ macro_rules! t {
         }
     };
 }
+pub(crate) use t;
 
 /// This page's routes.
 pub fn routes() -> Router<Shared> {
@@ -94,6 +98,7 @@ pub fn routes() -> Router<Shared> {
         .route("/router/scenario/ask/defaults", post(ask_defaults))
         .route("/router/scenario/set", post(set))
         .route("/router/scenario/cancel", post(cancel));
+    let r = r.merge(chill::routes());
     r
 }
 
@@ -112,6 +117,9 @@ pub(crate) struct Args {
     /// A BSSID (empty = by name only).
     #[serde(default)]
     pub b: String,
+    /// A CHILL node.
+    #[serde(default)]
+    pub m: String,
     #[serde(default)]
     pub a: String,
     #[serde(default)]
@@ -533,8 +541,9 @@ pub struct Got {
     pub log_fail: Option<Fail>,
     pub scan: Option<Vec<Net>>,
     /// Bumped by every early re-read (a button kicked the page): the elements that a click may
-    /// have changed on the browser's side are replaced, not morphed.
+    /// have changed on the browser's side (a CHILL node `<select>`) are replaced, not morphed.
     pub rev: u64,
+    pub chill: chill::Got,
 }
 
 impl Got {
@@ -575,6 +584,7 @@ pub struct DoesRow {
     pub wifi: bool,
     pub fallback: bool,
     pub wifi_url: String,
+    pub node: String,
 }
 
 pub struct ParamRow {
@@ -614,6 +624,7 @@ pub struct View {
     // does
     pub does: Vec<DoesRow>,
     pub does_desc: String,
+    pub does_note: String,
     // timing
     pub params: Vec<ParamRow>,
     pub sigs: String,
@@ -783,7 +794,10 @@ pub fn view(g: &Got, l: Lang, sid: &str) -> View {
     let scan_total = g.scan.as_ref().map_or(0, Vec::len);
 
     // what each scenario does
-    let does_desc = l.pick("Applied once on entering. Away is where every failure ends up, so its Wi-Fi always stays on.", "进入情景时执行一次。「外出」是一切出错时的落脚点，所以它的 Wi-Fi 始终开着。");
+    let does_desc = l.pick(
+        "Applied once on entering. A changed CHILL node is put back on leaving. Away is where every failure ends up, so its Wi-Fi always stays on.",
+        "进入情景时执行一次；改过的 CHILL 节点在离开时恢复。「外出」是一切出错时的落脚点，所以它的 Wi-Fi 始终开着。",
+    );
     let does = scenarios(s)
         .iter()
         .enumerate()
@@ -796,6 +810,7 @@ pub fn view(g: &Got, l: Lang, sid: &str) -> View {
                 wifi,
                 fallback: d["detect"]["type"] == "fallback",
                 wifi_url: format!("{PATH}/ask/wifi?id={}&on={}", enc(id), !wifi),
+                node: chill::node_row(s, d, idx, &g.chill, locked, g.rev, l),
             }
         })
         .collect();
@@ -845,6 +860,7 @@ pub fn view(g: &Got, l: Lang, sid: &str) -> View {
         scan_total,
         does,
         does_desc: does_desc.into(),
+        does_note: chill::does_note(&g.chill, l),
         params: PARAMS
             .iter()
             .map(|(_, sig, en, zh, mode)| ParamRow {
@@ -871,6 +887,7 @@ struct Leaves<'a> {
 fn leaves(g: &Got, l: Lang, sid: &str) -> Vec<(String, String)> {
     let v = view(g, l, sid);
     let mut out = split_leaves(&Leaves { v: &v }.render().unwrap());
+    out.extend(chill::leaves(g, l));
     out
 }
 
@@ -909,6 +926,9 @@ impl Polled for Poll {
         }
         if kicked {
             self.got.rev += 1;
+        }
+        if self.got.configured() {
+            self.got.chill.fetch(app, &self.who).await;
         }
         self.got.scan = self.who.sid.as_deref().and_then(last_scan);
         self.due = Instant::now() + EVERY;
@@ -1140,7 +1160,10 @@ async fn ask_engine(
                 "设备开始按看到的网络自己切换情景；认出在家时会关掉自己的 Wi-Fi。",
             )
         } else {
-            let off = l.pick("The device stops switching scenarios and goes back to the away settings: Wi-Fi on. This can take up to a minute.", "设备不再切换情景，回到「外出」的设置：Wi-Fi 打开。最长要一分钟左右。");
+            let off = l.pick(
+                "The device stops switching scenarios and goes back to the away settings: Wi-Fi on, a changed CHILL node put back. This can take up to a minute.",
+                "设备不再切换情景，回到「外出」的设置：Wi-Fi 打开，改过的 CHILL 节点恢复。最长要一分钟左右。",
+            );
             off
         };
         let action = match (l, on) {
@@ -1653,7 +1676,7 @@ async fn set(
 }
 
 /// Cancel / Esc / a lost reply. The page also re-reads, which puts back anything the click
-/// changed on the browser's side.
+/// changed on the browser's side (a CHILL node `<select>`).
 async fn cancel(
     State(app): State<Shared>,
     Query(a): Query<Args>,
@@ -1846,7 +1869,7 @@ mod tests {
             let mut g = g;
             g.log = Some(String::new());
             let html = Leaves { v: &view(&g, Lang::En, "") }.render().unwrap();
-            // device data (a select's choices) is marked data-data and left out of the check
+            // device data (the CHILL node choices) is marked data-data and left out of the check
             let mut html = html;
             while let Some(i) = html.find("<select") {
                 let j = html[i..].find("</select>").map_or(html.len(), |j| i + j + 9);

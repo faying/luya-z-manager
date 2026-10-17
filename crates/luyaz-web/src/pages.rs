@@ -43,7 +43,7 @@ pub struct App {
     /// Asks the frame's side poller for a round now (after "Got it").
     pub side_kick: Arc<tokio::sync::Notify>,
     pub http: reqwest::Client,
-    /// Streaming client (no overall timeout, no redirects) for a proxied panel.
+    /// Streaming client (no overall timeout, no redirects) for a proxied panel (chill_proxy.rs).
     pub proxy_http: reqwest::Client,
     pub sessions: crate::auth::Sessions,
     /// The admin password file (`--password-file`); None = every login is refused (auth.rs).

@@ -10,6 +10,7 @@
 
 import type { Ctx, Reply, Route } from "../lib.ts";
 import { bodyField, fail, ok } from "../lib.ts";
+import { shared } from "../shared.ts";
 import { DEVICE_UTC_OFFSET } from "./network.ts";
 import type { DiagLayer, DiagLevel, DiagMain, DiagRun } from "../../../src/lib/api/schemas/tools.ts";
 
@@ -156,7 +157,7 @@ export const routes: Route[] = [
         waitMs: ctx.has("diag-waiting") ? WAIT_MS : 0,
         stepMs: ctx.has("diag-slow") ? SLOW_STEP_MS : STEP_MS,
         weak: ctx.has("weak"),
-        proxy: false,
+        proxy: shared.chill.state === "running",
         feedback: null,
         speedAt: null,
       };

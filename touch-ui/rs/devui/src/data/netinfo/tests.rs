@@ -28,7 +28,7 @@ fn full_body() {
     let mut n = empty();
     let longerr = "e".repeat(150);
     let mid = cells_and_ops(16, 12);
-    let clients_head = r#""clients":{"at":1790250000,"list":["#;
+    let clients_head = r#""chill_running":false,"clients":{"at":1790250000,"list":["#;
     let body = format!(
         r#"{{"apn":{{"auto":[{{"apn":"ctiot","id":"auto109590","in_use":true,"iot":true,"name":"China Telecom","pdp":3,"selected":true}},{{"apn":"ctnet","id":"auto109600","in_use":false,"iot":false,"name":"China Telecom 4G","pdp":3,"selected":false}}],"picked_id":null,"notice":{{"at":1,"text":"old","text_en":"old"}},"in_use":{{"apn":"ctiot","id":"auto109590","in_use":true,"iot":true,"name":"China Telecom","pdp":3,"selected":false}},"manual":[{{"apn":"ctnet","id":"manu1","in_use":false,"name":"CTNET","pdp":3,"selected":true}}],"mode":"auto"}},{clients_head}{{"connected_secs":360,"down_bytes":5000000000,"down_rate":250000,"iface":"wlan1","ip":"192.168.0.109","mac":"02:00:00:00:00:0a","name":"MacBook","signal":-47,"signal_tier":"great","up_bytes":1000,"up_rate":null,"band":"5 GHz","channel":44,"width_mhz":160,"wifi_gen":6,"link_down_mbps":2402,"link_up_mbps":1201}},{{"connected_secs":5,"down_bytes":20,"down_rate":null,"iface":"wlan1","ip":null,"mac":"02:00:00:00:00:0b","name":null,"signal":null,"up_bytes":10,"up_rate":null,"band":null,"wifi_gen":null,"link_down_mbps":null}}]}},"data_connected":true,"direct":{{"error":"{longerr}","fetched_at":1790250000,"geo":"\u65e5\u672c \u5927\u962a\u5e9c","ip":"198.51.100.40","isp":"SoftBank","node":null,"source":"ip-api.com"}},"guard":{{"finished_at":0,"last_result":"","phase":"registering","rat":"12","reason":"","started_at":1,"target":"44020"}},"home_operator":{{"country":"中国","mcc":"460","mnc":"01","name":"中国联通"}},{mid}"scenes":{{"current":"abroad","enabled":true,"guard_takeover":false,"list":[{{"abroad":false,"id":"home","name":"在家","wifi_off":true}},{{"abroad":false,"id":"away","name":"外出","wifi_off":false}},{{"abroad":true,"id":"abroad","name":"国外","wifi_off":false}}],"pin":null}},"selection":{{"checked_at":1,"mode":"manual"}},"serving_operator":{{"country":"日本","mcc":"440","mnc":"20","name":"SoftBank"}}}}"#
     );
@@ -38,6 +38,7 @@ fn full_body() {
     assert_eq!(n.direct.geo, "日本 大阪府", "\\u escapes decoded");
     assert_eq!(n.direct.err.len(), 79, "error cut, not overflowed");
     assert!(n.proxy.present == 0 && n.proxy.ip.is_empty());
+    assert_eq!(n.chill_running, 0);
     assert!(n.home.name == "中国联通" && n.home.mnc == "01");
     assert!(n.serving.name == "SoftBank" && n.serving.mcc == "440");
     assert_eq!(n.roaming, 1);
@@ -72,13 +73,13 @@ fn full_body() {
     let ms: Vec<String> = (0..12)
         .map(|i| format!(r#"{{"apn":"apn{i}","id":"manu{i}","in_use":false,"name":"Web {i}","pdp":1,"selected":{}}}"#, i == 7))
         .collect();
-    let tail = r#"],"mode":"manual"},"direct":null,"proxy":null}"#;
+    let tail = r#"],"mode":"manual"},"chill_running":false,"direct":null,"proxy":null}"#;
     p(&mut n, &format!(r#"{{"apn":{{"auto":[],"in_use":null,"manual":[{}{tail}"#, ms.join(",")));
     assert!(n.napns == 10 && NI_MAX_APNS == 10);
     assert!(n.apns[7].name == "Web 7" && n.apns[7].selected != 0);
 
     // an empty body: nothing known yet
-    let head = r#"{"direct":null,"guard":{"phase":"idle"},"home_operator":null,"#;
+    let head = r#"{"chill_running":false,"direct":null,"guard":{"phase":"idle"},"home_operator":null,"#;
     p(
         &mut n,
         &format!(

@@ -61,6 +61,8 @@
 <!--leaf-->
 <span id="hi-ip" class="nd-row__value nd-mono" data-data>{{ v.ip }}</span>
 <!--leaf-->
+{{ v.id_chill|safe }}
+<!--leaf-->
 <span id="hi-sim" class="nd-row__value" data-data>{{ v.sim }}</span>
 <!--leaf-->
 <span id="hi-reg-s" class="nd-row__sub"{% if v.reg_sub.is_none() %} hidden{% endif %}>{% if let Some(s) = v.reg_sub %}<span data-data>{{ s }}</span>{% endif %}</span>

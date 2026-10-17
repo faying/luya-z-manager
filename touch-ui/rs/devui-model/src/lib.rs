@@ -32,6 +32,26 @@ pub struct Model {
     /// journal.list as the 改动记录 fetch gets it (op.c op_log_fetch)
     pub journal: Option<String>,
 
+    pub chill_core: Option<String>,
+    pub chill_mode: Option<String>,
+    pub chill_exit_raw: Option<String>,
+    pub chill_mode_raw: Option<String>,
+    pub chill_group: Option<String>,
+    pub chill_node: Option<String>,
+    pub chill_traffic: Option<String>,
+    pub chill_speed: Option<String>,
+    pub chill_chain: Option<String>,
+    pub chill_conns: Option<String>,
+    pub chill_online: i32,
+    pub chill_conn_split: Option<String>,
+    pub chill_groups: Vec<chill_group_info_t>,
+    pub chill_nodes: Vec<chill_node_info_t>,
+    pub chill_pairs: Vec<chill_traffic_item_t>,
+    pub chill_profile_raw: Option<String>,
+    pub chill_profile_effective_raw: Option<String>,
+    pub chill_thermal_eco: i32,
+    pub chill_delay_pending: i32,
+    pub chill_home: Option<chill_home_t>,
     pub tailscale: tailscale_status_t,
     pub tailscale_peers: Vec<tailscale_peer_t>,
 
@@ -106,7 +126,7 @@ mod tests {
     /// C object is unknown to the Rust types and nothing is lost.
     #[test]
     fn the_render_tests_model_round_trips() {
-        // not in the public repo (it carries fixture data of a private feature): skipped there
+        // not in the public repo (it carries CHILL's fixture data): skipped there
         let Ok(s) = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/good-home.json")) else {
             return;
         };

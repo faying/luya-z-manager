@@ -15,6 +15,7 @@ use crate::net_view as nv;
 use crate::theme::{t, uf};
 use crate::trc;
 use devui_model::net_view_t;
+use devui_model::scenario_status_t;
 
 /// 5 carrier slots: 3 NR + 2 LTE covers EN-DC on this modem with headroom.
 pub const CA_SLOTS: usize = 5;
@@ -73,6 +74,10 @@ pub struct Home {
     hr_traf: HomeRow,
     hr_ca_sub: Obj,
     hr_exit_sub: Obj,
+    hr_exit_mark: Obj,
+    c_wash: Option<u32>,
+    c_subcol: Option<u32>,
+    last_exit: String,
     // 情景
     sc_card: Obj,
     sc_state: Obj,
@@ -124,6 +129,10 @@ impl Default for Home {
             hr_traf: HomeRow::default(),
             hr_ca_sub: Obj::NULL,
             hr_exit_sub: Obj::NULL,
+            hr_exit_mark: Obj::NULL,
+            c_wash: None,
+            c_subcol: None,
+            last_exit: String::new(),
             sc_card: Obj::NULL,
             sc_state: Obj::NULL,
             sc_note: Obj::NULL,
@@ -206,6 +215,92 @@ fn hold_key(v: &net_view_t) -> u32 {
     v.story.headline.bytes().fold(5381u32, |k, c| k.wrapping_mul(33).wrapping_add(c as u32))
 }
 
+/// CHILL 手动优先的提示 (src/ui_parts/exit.c mf_view): what zte-agent says, with a mark and a
+/// colour by its kind; a stale one dimmed with the time it stopped.
+pub struct MfView {
+    pub on: bool,
+    pub alldown: bool,
+    /// 家里出口 is on its fallback (shown before 手动优先, DD11)
+    pub home: bool,
+    pub mark: &'static str,
+    pub col: u32,
+    pub mark_col: u32,
+    /// 0 = no wash
+    pub wash: u32,
+    pub line: Vec<u8>,
+}
+
+pub fn mf_view(sc: &scenario_status_t) -> MfView {
+    let th = t();
+    let mut m = MfView { on: false, alldown: false, home: false, mark: "", col: 0, mark_col: 0, wash: 0, line: Vec::new() };
+    if sc.home_on != 0 && sc.home_fallback != 0 {
+        m.on = true;
+        m.home = true;
+        m.mark = "▲";
+        m.col = th.warn_t;
+        m.mark_col = th.warn_t;
+        m.wash = th.wash_w;
+        m.line = cf!(
+            "%s%s",
+            if sc.home_on == 1 { tr("家里不通，暂走直连") } else { tr("家里不通，暂走原出口") },
+            if sc.mf_notice.is_empty() { "" } else { " +1" }
+        );
+        return m;
+    }
+    if sc.mf_notice.is_empty() {
+        return m;
+    }
+    m.on = true;
+    match sc.mf_kind.as_str() {
+        "backup" | "unstable" => (m.mark, m.col, m.wash) = ("▲", th.warn_t, th.wash_w),
+        "back" | "repick" => (m.mark, m.col, m.wash) = ("●", th.ok_t, th.wash),
+        "alldown" => {
+            (m.mark, m.col, m.wash) = ("■", th.bad_t, th.wash_b);
+            m.alldown = true;
+        }
+        _ => m.col = th.t2,
+    }
+    m.mark_col = m.col;
+    m.line = sc.mf_notice.as_bytes().to_vec();
+    if sc.mf_stale != 0 {
+        let hm = if sc.mf_seen != 0 { clock::strftime("%H:%M", &clock::local(sc.mf_seen)) } else { "--:--".into() };
+        m.line.extend(cf!(tr(" · 停在 %s"), &hm));
+        m.col = th.t3;
+        m.mark_col = th.t3;
+    }
+    m
+}
+
+/// Two lines when one is not enough: break after the last 「，」/「; 」 that leaves a first
+/// line that fits, so no lone character drops to the second line. No such place: as it is.
+pub fn mf_wrap(input: &[u8], f: lv::Font, w: i32) -> Vec<u8> {
+    if lv::text_w(input, f) <= w {
+        return input.to_vec();
+    }
+    let seps: [&[u8]; 2] = ["，".as_bytes(), b"; "];
+    let mut blen = 0usize;
+    for (k, sep) in seps.iter().enumerate() {
+        let mut from = 0;
+        while let Some(p) = input[from..].windows(sep.len()).position(|x| x == *sep).map(|p| p + from) {
+            let cut = p + if k == 1 { 1 } else { sep.len() }; // "; " keeps the ";"
+            if lv::text_w(&input[..cut], f) <= w && cut > blen {
+                blen = cut;
+            }
+            from = p + 1;
+        }
+    }
+    if blen == 0 {
+        return input.to_vec();
+    }
+    let mut rest = &input[blen..];
+    while rest.first() == Some(&b' ') {
+        rest = &rest[1..];
+    }
+    let mut out = input[..blen].to_vec();
+    out.push(b'\n');
+    out.extend_from_slice(rest);
+    out
+}
 
 unsafe extern "C" fn cc_hint_cb(_e: *mut sys::lv_event_t) {
     super::with(|u| u.sub_open(u.home.cc_hint_sub));
@@ -223,6 +318,11 @@ unsafe extern "C" fn op_notice_cb(_e: *mut sys::lv_event_t) {
     });
 }
 
+/// 首页「出口」行: with a 手动优先 notice to the top of the exit tab's CHILL area; 家里不通:
+/// the CHILL page (exit.rs exit_row_go).
+unsafe extern "C" fn exit_row_cb(_e: *mut sys::lv_event_t) {
+    super::with(|u| u.exit_row_go());
+}
 
 fn visible_h(o: Obj) -> i32 {
     if o.hidden() { -1 } else { o.style_height(0) }
@@ -288,10 +388,13 @@ impl Ui {
         // summary rows: 蜂窝 / Wi-Fi / 出口 each open their tab; 流量 is read-only
         h.hr_ca = home_row(c, tr("载波"), Some(super::tab_go_cb), TAB_CELL);
         h.hr_wifi = home_row(c, "Wi-Fi", Some(super::tab_go_cb), TAB_WIFI);
-        h.hr_exit = home_row(c, tr("出口"), Some(super::tab_go_cb), super::TAB_EXIT);
+        h.hr_exit = home_row(c, tr("出口"), Some(exit_row_cb), 0); // with a 手动优先 notice: to the CHILL area
         h.hr_traf = home_row(c, tr("流量"), None, 0);
         h.hr_ca_sub = kit::label_w(h.hr_ca.bx, f.cj12, th.t3, PAD, 34, CARD_W - 2 * PAD - 16, false, "");
         h.hr_exit_sub = kit::label_w(h.hr_exit.bx, f.cj12, th.t3, PAD, 34, CARD_W - 2 * PAD - 16, false, "");
+        // 手动优先: the mark before 「出口 ›」 (coloured by kind); the notice is the small line
+        h.hr_exit_mark = kit::label(h.hr_exit.bx, f.cj14, th.warn_t, PAD, 11, "");
+        kit::show(h.hr_exit_mark, false);
         for s in [h.hr_ca_sub, h.hr_exit_sub] {
             s.set_height(18);
             s.set_long_mode(lv::LV_LABEL_LONG_MODE_DOTS);
@@ -350,6 +453,8 @@ impl Ui {
         }
         h.ca_card = cc;
 
+        // CHILL: shown on the exit tab (build_exit moves it)
+        self.build_chill_card(sc);
         let h = &mut self.home;
 
         // Tailscale: hidden entirely without tailscaled; the card opens the peer list
@@ -736,7 +841,13 @@ impl Ui {
         }
         // 出口: one row; two (the small line says the other way) when there is another way
         {
-            let eh = ROW_H;
+            // the 手动优先 notice takes the small line, folded to two when one is not enough
+            let mf = mf_view(&m.scenario);
+            let proxy = m.netinfo.as_ref().is_some_and(|n| n.proxy.present != 0);
+            let mut eh = if m.chill_online != 0 && proxy { 60 } else { ROW_H };
+            if mf.on {
+                eh = if lv::text_w(&mf.line, f.cj12) > CARD_W - 2 * PAD - 16 { 78 } else { 60 };
+            }
             let row = self.home.hr_exit;
             row.bx.set_height(eh);
             row.bx.set_y(y);
@@ -826,17 +937,91 @@ impl Ui {
         let dead = self.home.cc_tone >= 2; // no signal / no SIM: the exit is stale
         #[allow(unused_mut)]
         let mut sub: Vec<u8> = Vec::new();
-        let g: Vec<u8> = if !n.direct.ip.is_empty() {
-            cf!(tr("直连 · %s"), &if n.direct.geo.is_empty() { n.direct.ip.clone() } else { geo_short(&n.direct.geo) })
+        // 直连 and CHILL are two sides of one thing, said as CHILL routes now:
+        //   off          → 直连 · 中国 深圳
+        //   rules        → 国外走 CHILL · 日本 东京 / small: 国内直连 · 中国 深圳
+        //   global       → 全走 CHILL · 日本 东京 / small: 设备自己的流量仍直连 …
+        //   direct, AI   → 直连 · 中国 深圳 / small: AI 仍走 CHILL · 日本 东京
+        //   all direct   → 全部直连 · 中国 深圳 / small: CHILL 开着，但不经过它
+        let ex = m.chill_exit_raw.as_deref().unwrap_or("");
+        let ch_on = m.chill_online != 0 && n.proxy.present != 0;
+        let dg: String = if !n.direct.ip.is_empty() {
+            if n.direct.geo.is_empty() { n.direct.ip.clone() } else { geo_short(&n.direct.geo) }
         } else if n.err.is_empty() {
             tr("查询中…").into()
         } else {
             "—".into()
         };
+        let pg: String = if !ch_on {
+            String::new()
+        } else if !n.proxy.geo.is_empty() {
+            geo_short(&n.proxy.geo)
+        } else if !n.proxy.ip.is_empty() {
+            n.proxy.ip.clone()
+        } else {
+            tr("查询中…").into()
+        };
+        let mut g: Vec<u8> = if !ch_on {
+            cf!(tr("直连 · %s"), &dg)
+        } else if ex == "direct_all" {
+            sub = tr("CHILL 开着，但不经过它").into();
+            cf!(tr("全部直连 · %s"), &dg)
+        } else if ex == "direct_keep_ai" {
+            // not 「全部直连」: AI still goes through CHILL
+            sub = cf!(tr("AI 仍走 CHILL · %s"), &pg);
+            cf!(tr("直连 · %s"), &dg)
+        } else if ex == "global" {
+            sub = cf!(tr("设备自己的流量仍直连 · %s"), &dg);
+            cf!(tr("全走 CHILL · %s"), &pg)
+        } else {
+            sub = cf!(tr("国内直连 · %s"), &dg);
+            cf!(tr("国外走 CHILL · %s"), &pg)
+        };
+        // 家里出口 on (DD2): the strongest item at the end of the row
+        {
+            let hsc = &m.scenario;
+            if hsc.home_on & 4 != 0 {
+                let left = (hsc.home_until - self.now()).max(0);
+                g.extend(cf!(tr(" · 家里 剩 %ld:%02ld"), left / 3600, (left % 3600) / 60));
+            } else if hsc.home_on & 1 != 0 {
+                g.extend_from_slice(tr(" · 家里 版权").as_bytes());
+            } else if hsc.home_on & 2 != 0 {
+                g.extend_from_slice(tr(" · 家里 IP").as_bytes());
+            }
+        }
         let row = self.home.hr_exit;
         self.set(row.val, &g);
         kit::text_color(row.val, if dead { th.t3 } else { th.t1 });
         let exit_sub = self.home.hr_exit_sub;
+        // 手动优先: the whole row washed, 「▲ 出口 ›」, the notice itself in the small line
+        {
+            let mf = mf_view(&m.scenario);
+            let wash = if mf.on && mf.wash != 0 { mf.wash } else { 0 };
+            let subcol = if mf.on { mf.col } else { th.t3 };
+            let mut two = false;
+            if mf.on {
+                sub = mf_wrap(&mf.line, uf().cj12, CARD_W - 2 * PAD - 16);
+                two = lv::text_w(&mf.line, uf().cj12) > CARD_W - 2 * PAD - 16;
+            }
+            exit_sub.set_height(if two { 36 } else { 18 });
+            exit_sub.set_long_mode(if two { lv::LV_LABEL_LONG_MODE_WRAP } else { lv::LV_LABEL_LONG_MODE_DOTS });
+            let mark = self.home.hr_exit_mark;
+            self.set(mark, if mf.on { mf.mark } else { "" });
+            kit::show(mark, mf.on && !mf.mark.is_empty());
+            kit::text_color(mark, if mf.on { mf.mark_col } else { th.t2 });
+            row.key.set_x(if mf.on && !mf.mark.is_empty() { PAD + 18 } else { PAD });
+            if self.home.c_wash != Some(wash) {
+                self.home.c_wash = Some(wash);
+                if wash != 0 {
+                    kit::bg(row.bx, wash);
+                }
+                row.bx.set_style_bg_opa(if wash != 0 { lv::OPA_COVER } else { lv::OPA_TRANSP }, 0);
+            }
+            if self.home.c_subcol != Some(subcol) {
+                self.home.c_subcol = Some(subcol);
+                kit::text_color(exit_sub, subcol);
+            }
+        }
         self.set(exit_sub, &sub);
         kit::show(exit_sub, !sub.is_empty());
     }
@@ -852,6 +1037,7 @@ impl Ui {
         let (card, state, note) = (self.home.sc_card, self.home.sc_state, self.home.sc_note);
         if sc.available == 0 {
             card.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
+            self.chill_master_sync();
             return;
         }
         card.remove_flag(lv::LV_OBJ_FLAG_HIDDEN);
@@ -885,6 +1071,14 @@ impl Ui {
         if sc.enabled != 0 && sc.name.is_empty() {
             self.set(note, tr("开机后要连续两次扫描确认位置"));
         }
+        else if sc.abroad != 0 && sc.chill_on == 1 {
+            // abroad: how CHILL goes now; the card changes it
+            note_col = th.acc_t;
+            self.set(note, cf!("%sCHILL %s", pinned, m.chill_mode.as_deref().unwrap_or("")));
+        } else if sc.abroad != 0 && sc.chill_on == 0 {
+            note_col = th.acc_t;
+            self.set(note, cf!("%s%s", pinned, if sc.chill_back != 0 { tr("CHILL 已关，回国自动开") } else { tr("CHILL 已关") }));
+        }
         else {
             self.set(
                 note,
@@ -904,12 +1098,20 @@ impl Ui {
             );
         }
         kit::text_color(note, note_col);
+        self.chill_master_sync();
     }
 
     /// Whether 情景 should repaint: scenario_poll read something new, or the exit it shows
     /// changed.
     pub(super) fn home_scene_changed(&mut self) -> bool {
         let mut changed = self.polled.scenario;
+        let m = self.model.clone();
+        // the 情景 card shows CHILL's exit: repaint when it changes
+        let ex = m.chill_exit_raw.clone().unwrap_or_default();
+        if self.home.last_exit != ex {
+            self.home.last_exit = ex;
+            self.home.sc_force = true;
+        }
         if self.home.sc_force {
             self.home.sc_force = false;
             changed = true;

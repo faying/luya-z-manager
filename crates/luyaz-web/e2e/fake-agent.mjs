@@ -33,6 +33,8 @@ const mockUp = () => new Promise((ok) => {
 // with the Bearer luyaz-web last sent (the mock honours only its newest token; tabs may not read
 // the config raw once the page is migrated, proxy.rs secret_read).
 let lastAuth;
+let holdExit = false;
+let slowExit = 0;
 
 
 function handler(req, res) {
@@ -97,6 +99,38 @@ function handler(req, res) {
           if (v?.data && typeof v.data === "object") v.data.mode_settable = settable === "true";
           body = JSON.stringify(v);
         } catch { /* not JSON: as it is */ }
+        const h = { ...r.headers };
+        delete h["content-length"];
+        delete h["content-encoding"];
+        res.writeHead(r.statusCode, h);
+        res.end(body);
+      });
+    });
+    up.on("error", () => { res.writeHead(502); res.end(); });
+    return req.pipe(up);
+  }
+  // / (e2e/home.mjs): POST /__lw/home?hold=1 makes GET /api/services/chill keep saying exit "proxy"
+  // (the exit write is accepted but the readback never shows it); ?hold=0 undoes it.
+  if (req.url.startsWith("/__lw/home")) {
+    const q = new URL(req.url, "http://x").searchParams;
+    if (q.has("hold")) holdExit = q.get("hold") === "1";
+    // ?slow=<ms>: the exit PUT answers that much later, so the pending state is there to be seen
+    if (q.has("slow")) slowExit = Number(q.get("slow")) || 0;
+    res.writeHead(204);
+    return res.end();
+  }
+  if (slowExit && req.method === "PUT" && req.url.split("?")[0] === "/api/services/chill/exit" && !req.__slowed) {
+    req.__slowed = true;
+    req.pause();
+    return void setTimeout(() => { req.resume(); handler(req, res); }, slowExit);
+  }
+  if (holdExit && req.method === "GET" && req.url.split("?")[0] === "/api/services/chill") {
+    const up = http.request({ host: "127.0.0.1", port: MOCK, path: req.url, method: "GET", headers: req.headers }, (r) => {
+      let body = "";
+      r.setEncoding("utf8");
+      r.on("data", (c) => (body += c));
+      r.on("end", () => {
+        try { const v = JSON.parse(body); if (v?.data?.exit) v.data.exit = "proxy"; body = JSON.stringify(v); } catch { /* as it is */ }
         const h = { ...r.headers };
         delete h["content-length"];
         delete h["content-encoding"];

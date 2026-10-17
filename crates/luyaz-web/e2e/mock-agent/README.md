@@ -73,6 +73,7 @@ curl  http://127.0.0.1:9199/__mock/state                  # shared state + route
 | `diag-waiting` | `POST /api/diagnose` first waits 3 s (`state: "waiting"`, `waiting_for: "speedtest"`), then runs. |
 | `diag-slow` | `POST /api/diagnose` takes 4 s per layer instead of 0.8 s, so a run stays going long enough to see the busy 409 elsewhere. |
 | `verdict-stall` / `verdict-crowd` | `/api/public/status` `network.verdict` is `stall` / `crowd` (datad's home verdict) while the signal itself stays good. Otherwise the verdict follows the persona: `weak`, `nosvc` (nosignal), `airplane`, else `ok`. |
+| `mf-alldown` | CHILL's manual-first notice says the hand-picked node and its fallback are both down (`notice_kind: "alldown"`), in `/api/public/status` and `/api/services/chill`. |
 
 Scenarios combine, e.g. `weak,missing` or `carriers8,stale`.
 

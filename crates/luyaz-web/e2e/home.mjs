@@ -1,8 +1,8 @@
 // / (home, batch 5b): the common checks (first load ≤ 40 KiB gzip without fonts, axe light/dark 0,
 // 390 px no sideways scroll, English body without Chinese, no page errors, screenshots) and the
 // page's own: every value arrives (hub blocks + polled agent reads), the two-column layout and the
-// phone reading order, 「查原因 →」 follows the verdict, scenario states and the battery
-// estimate. Needs the typed mock agent
+// phone reading order, 「查原因 →」 follows the verdict, scenario states, the CHILL notice, the battery
+// estimate, and the CHILL exit control (ok / refused / readback not held). Needs the typed mock agent
 // behind the fake agent (AGENT) and the mock u60d (MOCK). From source/manager:
 //   WEB=http://127.0.0.1:18591 MOCK=http://127.0.0.1:19491 AGENT=http://127.0.0.1:19591 OUT=/tmp/lw-home \
 //     crates/luyaz-web/e2e/run.sh home
@@ -66,6 +66,8 @@ async function own(p) {
   // polled agent reads
   await p.waitForFunction(() => !/^—$/.test(document.querySelector("#hi-ip")?.textContent.trim() ?? "—"), null, { timeout: 8000 }).catch(() => {});
   ok(/\d+\.\d+\.\d+\.\d+/.test(await txt(p, "#hi-ip")), `cellular exit IP: ${await txt(p, "#hi-ip")}`);
+  ok(/CHILL 出口/.test(await txt(p, "#hi-chill")) && await p.locator("#hi-chill").isVisible(), `CHILL exit row: ${await txt(p, "#hi-chill")}`);
+  ok(/蜂窝出口/.test(await txt(p, "#hi-ip-l")), "label says 蜂窝出口 while two exits");
   ok(/46692|漫游/.test(await txt(p, "#hi-reg") + await txt(p, "#hi-roam")), `registered / roaming: ${await txt(p, "#hi-reg")} | ${await txt(p, "#hi-roam")}`);
   // operator logo (oplogo.rs): the file from --logo-dir, only in the pushed leaves. The logos are
   // with no chunghwa file in --logo-dir the page shows the letter badge instead.
@@ -87,6 +89,8 @@ async function own(p) {
   ok(/信道 \d+/.test(await txt(p, "#hw-2")) && /MHz/.test(await txt(p, "#hw-5")), `Wi-Fi lines (actual channel + width): ${await txt(p, "#hw-2")} | ${await txt(p, "#hw-5")}`);
   ok(/在线|离线/.test(await txt(p, "#hm-ts")) && /台设备在线/.test(await txt(p, "#hm-ts")), `Tailscale: ${await txt(p, "#hm-ts")}`);
   ok(/国外/.test(await txt(p, "#hm-scene")) && /切换/.test(await txt(p, "#hm-scene")), `scenario: ${await txt(p, "#hm-scene")}`);
+  ok(/运行中/.test(await txt(p, "#hm-chill-t")) && await p.locator("#hm-chill-seg [role=radio]").count() === 3, `CHILL card: ${await txt(p, "#hm-chill")}`);
+  ok(await p.locator("#hm-chill-seg [aria-checked=true]").count() === 1, "one exit selected");
   // the diagnose link is hidden when the verdict is ok, and follows the verdict
   ok(await p.locator("#hm-why").isHidden(), "no 查原因 link with an ok verdict");
   // the links of the old page
@@ -99,6 +103,8 @@ async function own(p) {
   await hook({ verdict: "stall", notice: "alldown", scenario: "pinned", bat: "charging" });
   await p.waitForFunction(() => document.querySelector("#hm-why") && !document.querySelector("#hm-why").hidden, null, { timeout: 15000 }).catch(() => {});
   ok(await p.locator("#hm-why a").getAttribute("href") === "/tools/diagnose?start=1" && /查原因/.test(await txt(p, "#hm-why")), `verdict stall → 「${await txt(p, "#hm-why")}」`);
+  await until(p, "#hm-chill-body", /去选节点/, 15000);
+  ok(/都不通/.test(await txt(p, "#hm-chill-body")) && await p.locator("#hm-chill-body a").getAttribute("href") === "/services/chill#chill-nodes", `CHILL notice alldown + picker link: ${await txt(p, "#hm-chill-body")}`);
   ok(/已固定/.test(await txt(p, "#hm-scene")), `scenario pinned: ${await txt(p, "#hm-scene")}`);
   await until(p, "#ro-bat-w", /充满/, 15000);
   ok(/约 1 小时 35 分充满/.test(await txt(p, "#ro-bat-w")), `charging estimate: ${await txt(p, "#ro-bat-w")}`);
@@ -110,6 +116,51 @@ async function own(p) {
   ok(await p.locator("#hm-why").isHidden(), "verdict ok again: link gone");
   await hook({ reset: true });
 
+  // the exit control: ok
+  const aria = (x) => p.locator(`#hm-chill-seg [role=radio]:has-text("${x}")`);
+  await p.evaluate(() => {
+    window.__dis = false;
+    // the pending patch and the result can land in one batch (a fast agent): look at what was added, not only the DOM now
+    const seen = (n) => n.nodeType === 1 && (n.querySelectorAll?.("[role=radio][disabled]").length === 3 || /正在把出口切到全局/.test(n.textContent ?? ""));
+    new MutationObserver((recs) => { if (recs.some((r) => [...r.addedNodes].some(seen) || (r.type === "attributes" && r.attributeName === "disabled" && r.target.matches?.("#hm-chill-seg [role=radio]") && r.target.hasAttribute("disabled")) || (r.type === "characterData" && /正在把出口切到全局/.test(r.target.data ?? ""))) || document.querySelectorAll("#hm-chill-seg [role=radio][disabled]").length === 3 || /正在把出口切到全局/.test(document.querySelector("#hm-chill-op")?.textContent ?? "")) window.__dis = true; })
+      .observe(document.body, { subtree: true, attributes: true, childList: true, characterData: true });
+  });
+  await fetch(`${AGENT}/__lw/home?slow=1500`, { method: "POST" });
+  await aria("全局").click();
+  await until(p, "#hm-chill-op", /出口已改为全局/, 20000);
+  await fetch(`${AGENT}/__lw/home?slow=0`, { method: "POST" });
+  ok(/出口已改为全局/.test(await txt(p, "#hm-chill-op")), `exit applied: ${await txt(p, "#hm-chill-op")}`);
+  ok(await p.evaluate(() => window.__dis), "while it runs: the control is off and the pending line is said");
+  ok(await aria("全局").getAttribute("aria-checked") === "true", "全局 is selected after the readback");
+  await p.screenshot({ path: `${OUT}/home-exit-ok.png`, fullPage: true });
+  // a push (here: a kick from another event) keeps the result line
+  await hook({ clients: 4 });
+  await p.waitForFunction(() => document.querySelector("#hd-cl")?.textContent.trim() === "4", null, { timeout: 8000 }).catch(() => {});
+  ok(/出口已改为全局/.test(await txt(p, "#hm-chill-op")), "a push does not wipe the result line");
+  await hook({ clients: 3 });
+  // back to proxy
+  await aria("代理").click();
+  await until(p, "#hm-chill-op", /出口已改为代理/, 20000);
+  ok(await aria("代理").getAttribute("aria-checked") === "true", "back to 代理");
+
+  // refused: the proxy core does not answer (the typed mock refuses the PUT with 409)
+  await scenario("fakesuccess");
+  await aria("全局").click();
+  await until(p, "#hm-chill-op", /没有生效/, 20000);
+  ok(/没有生效/.test(await txt(p, "#hm-chill-op")) && !/出口已改为/.test(await txt(p, "#hm-chill-op")), `refused: ${await txt(p, "#hm-chill-op")}`);
+  ok(await aria("代理").getAttribute("aria-checked") === "true", "refused: the control keeps the real exit");
+  await p.screenshot({ path: `${OUT}/home-exit-refused.png`, fullPage: true });
+  await scenario("normal");
+
+  // accepted but the readback never shows it
+  await fetch(`${AGENT}/__lw/home?hold=1`, { method: "POST" });
+  await aria("全局").click();
+  await until(p, "#hm-chill-op", /设备已接受/, 30000);
+  ok(/设备已接受，还没读回/.test(await txt(p, "#hm-chill-op")) && !/出口已改为/.test(await txt(p, "#hm-chill-op")), `readback not held: ${await txt(p, "#hm-chill-op")}`);
+  await fetch(`${AGENT}/__lw/home?hold=0`, { method: "POST" });
+  await aria("代理").click();
+  await until(p, "#hm-chill-op", /出口已改为代理/, 20000);
+  ok(await aria("代理").getAttribute("aria-checked") === "true", "restored 代理");
 }
 
 async function layout(browser) {
@@ -119,17 +170,18 @@ async function layout(browser) {
     const p = await ctx.newPage();
     await p.goto(WEB + "/", { waitUntil: "load" });
     await p.waitForFunction(() => /^-?\d/.test(document.querySelector("#ro-rsrp")?.textContent.trim() ?? ""), null, { timeout: 15000 });
+    await p.waitForSelector("#hm-chill-seg [role=radio]", { timeout: 15000 });
     return [ctx, p];
   };
   let [ctx, p] = await mk(1280, 900);
-  const [rd, sc, ts, ca] = await Promise.all(["#hm-readouts", "#hm-scene", "#hm-ts", "#hm-ca"].map((s) => box(p, s)));
-  ok(sc.x > rd.x + rd.width - 2 && ts.x > rd.x + rd.width - 2, `desk: scenario, Tailscale are in the right column (x ${Math.round(sc.x)} vs readouts ${Math.round(rd.x)}+${Math.round(rd.width)})`);
-  ok(sc.y < ts.y, "desk: right column order scenario, Tailscale");
-  ok(ca.x < sc.x, "desk: carriers on the left");
+  const [rd, ch, sc, ts, ca] = await Promise.all(["#hm-readouts", "#hm-chill", "#hm-scene", "#hm-ts", "#hm-ca"].map((s) => box(p, s)));
+  ok(ch.x > rd.x + rd.width - 2 && sc.x > rd.x + rd.width - 2 && ts.x > rd.x + rd.width - 2, `desk: CHILL, scenario, Tailscale are in the right column (x ${Math.round(ch.x)} vs readouts ${Math.round(rd.x)}+${Math.round(rd.width)})`);
+  ok(ch.y < sc.y && sc.y < ts.y, "desk: right column order CHILL, scenario, Tailscale");
+  ok(ca.x < ch.x, "desk: carriers on the left");
   await ctx.close();
   [ctx, p] = await mk(390, 844);
   const ys = [];
-  for (const s of ["#sig-status", "#hm-readouts", "#hd-cl", "#hi-ip", "#hw-on", "#ca-0", "#hm-scene", "#hm-ts"]) ys.push([s, (await box(p, s)).y]);
+  for (const s of ["#sig-status", "#hm-chill", "#hm-readouts", "#hd-cl", "#hi-ip", "#hw-on", "#ca-0", "#hm-scene", "#hm-ts"]) ys.push([s, (await box(p, s)).y]);
   ok(ys.every(([, y], i) => i === 0 || y > ys[i - 1][1]), `phone reading order: ${ys.map(([s, y]) => `${s}@${Math.round(y)}`).join(" ")}`);
   await ctx.close();
 }
@@ -149,6 +201,7 @@ for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [12
     ok(kb <= 40, `first load ${kb.toFixed(1)} KiB gzip without fonts (≤ 40)`);
   }
   await p.waitForFunction(() => /^-?\d/.test(document.querySelector("#ro-rsrp")?.textContent.trim() ?? ""), null, { timeout: 15000 }).catch(() => {});
+  await p.waitForSelector("#hm-chill-seg [role=radio]", { timeout: 15000 }).catch(() => {});
   await p.waitForFunction(() => !/^—$/.test(document.querySelector("#hi-ip")?.textContent.trim() ?? "—") && /MHz/.test(document.querySelector("#hw-5")?.textContent ?? ""), null, { timeout: 12000 }).catch(() => {});
   if (lang === "en") {
     ok(/Detail/.test(await txt(p, "#hm-detail-t")) && /Aggregate bandwidth/.test(await txt(p, "#hm-readouts")), "English labels");

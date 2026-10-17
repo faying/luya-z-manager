@@ -41,6 +41,11 @@ pub const SCAN_FAILURES_BEFORE_FAIL_OPEN: u32 = 3;
 pub const ALLOWED_PATHS: &[&str] = &[
     "/api/wifi/radio",
     "/api/wifi/guest",
+    "/api/services/chill/enable",
+    "/api/services/chill/disable",
+    "/api/services/chill/regions",
+    "/api/services/chill/bypass",
+    "/api/services/chill/exit",
     "/api/device/power-save",
 ];
 
@@ -219,6 +224,87 @@ pub fn wifi_action(on: bool) -> ScenarioAction {
     }
 }
 
+/// The CHILL group the abroad scenario switches (device data: restore keys contain it).
+pub const CHILL_MAIN_GROUP: &str = "🚀 节点选择";
+pub const CHILL_STATUS: &str = "/api/services/chill";
+pub const CHILL_ACTIVE: &str = "/data/region/active";
+/// Key of the "switch CHILL back on when home" entry.
+pub const CHILL_ON_KEY: &str = "chill-on-after-abroad";
+/// Key of the "exit back to proxy when home" entry.
+pub const CHILL_EXIT_KEY: &str = "chill-exit-after-abroad";
+
+/// Set CHILL's main group, remembering what it was so it can be put back.
+pub fn chill_main_group_action(member: &str) -> ScenarioAction {
+    ScenarioAction {
+        action: Action {
+            method: "PUT".into(),
+            path: "/api/services/chill/regions".into(),
+            body: Some(Json::obj([
+                ("group", Json::from(CHILL_MAIN_GROUP)),
+                ("member", Json::from(member)),
+            ])),
+        },
+        snapshot: Vec::new(),
+        verify_job: None,
+        verify_field: Some(FieldCheck {
+            path: CHILL_STATUS.into(),
+            pointer: CHILL_ACTIVE.into(),
+            equals: Json::from(member),
+        }),
+        best_effort: true,
+        restore_on_exit: Some(RestoreOnExit {
+            read_path: CHILL_STATUS.into(),
+            read_pointer: CHILL_ACTIVE.into(),
+            field: "member".into(),
+        }),
+    }
+}
+
+/// The owner changed CHILL's exit abroad: home means proxy again.
+pub fn chill_exit_restore(saved_at: i64) -> PendingRestore {
+    PendingRestore {
+        key: CHILL_EXIT_KEY.into(),
+        action: ScenarioAction {
+            action: Action {
+                method: "PUT".into(),
+                path: "/api/services/chill/exit".into(),
+                body: Some(Json::obj([("state", Json::from("proxy"))])),
+            },
+            snapshot: Vec::new(),
+            verify_job: None,
+            verify_field: Some(FieldCheck {
+                path: CHILL_STATUS.into(),
+                pointer: "/data/exit".into(),
+                equals: Json::from("proxy"),
+            }),
+            best_effort: true,
+            restore_on_exit: None,
+        },
+        saved_at,
+        while_abroad: true,
+    }
+}
+
+/// The owner switched CHILL off abroad: switch it back on when home.
+pub fn chill_on_restore(saved_at: i64) -> PendingRestore {
+    PendingRestore {
+        key: CHILL_ON_KEY.into(),
+        action: ScenarioAction {
+            action: Action {
+                method: "POST".into(),
+                path: "/api/services/chill/enable".into(),
+                body: None,
+            },
+            snapshot: Vec::new(),
+            verify_job: Some("/api/services/chill/job".into()),
+            verify_field: None,
+            best_effort: true,
+            restore_on_exit: None,
+        },
+        saved_at,
+        while_abroad: true,
+    }
+}
 
 /// The abroad scenario on its own, for adding to an existing configuration.
 pub fn abroad_scenarios() -> Vec<Scenario> {
@@ -227,7 +313,7 @@ pub fn abroad_scenarios() -> Vec<Scenario> {
         name: "国外".into(),
         detect: Detect::Abroad,
         inhibit_sleep: false,
-        actions: vec![wifi_action(true)],
+        actions: vec![wifi_action(true), chill_main_group_action("DIRECT")],
     }]
 }
 
@@ -422,11 +508,17 @@ pub fn due_restores(pending: &[PendingRestore], next: Option<&Scenario>) -> Vec<
         .map(|s| s.actions.iter().filter_map(restore_key).collect())
         .unwrap_or_default();
     let abroad_next = next.is_some_and(is_abroad);
-        let due: Vec<String> = pending
+    let mut due: Vec<String> = pending
         .iter()
         .filter(|p| !owned.contains(&p.key) && !(p.while_abroad && abroad_next))
         .map(|p| p.key.clone())
         .collect();
+    // CHILL back on before anything that talks to it; the exit (mode) last.
+    due.sort_by_key(|k| match k.as_str() {
+        CHILL_ON_KEY => 0,
+        CHILL_EXIT_KEY => 2,
+        _ => 1,
+    });
     due
 }
 

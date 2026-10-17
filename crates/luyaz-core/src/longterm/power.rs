@@ -8,15 +8,15 @@
 //!   request), `throttle_s` when a cpufreq policy is capped below the highest cap it had this boot.
 //! - The exits (S8): Tailscale meant on while the cellular link has the default route and
 //!   rc.local starts it, checked over its LocalAPI socket (HTTP by hand, no `tailscale` fork);
-//!   The proxy on unless switched off or paused, healthy when its supervisor said "running" within
-//!   150 s and the proxy it named is that process.
+//!   CHILL on unless switched off or paused, healthy when its supervisor said "running" within
+//!   150 s and the mihomo it named is that process.
 //! - `hour_proc`: RSS of our programs and this process's CPU (per mille, only when the same
 //!   process ran the whole hour), from the hour's last check.
 //!
 //! - Radio (u60-radio.md §4, D9/D10): screen off, not charging, per home/abroad cell — the share
 //!   of time in zero-packet runs ≥ 10 s (`cell_window`'s quiet fold, taken each check) and the
 //!   cellular packets; seconds screen off at home with clients (unknown counts as clients); the
-//!   hour's proxy profile (`off` when the proxy is off or paused, `mixed` when it changed).
+//!   hour's CHILL profile (`off` when CHILL is off or paused, `mixed` when it changed).
 //!
 //! An interval that crosses the hour goes to the hour it ends in (the guard's to the one it
 //! starts in): totals are the same, the split moves by at most one check.
@@ -33,9 +33,20 @@ const CPUFREQ: &str = "/sys/devices/system/cpu/cpufreq";
 const RC_LOCAL: &str = "/etc/rc.local";
 const TS_START: &str = "/data/tailscale/start.sh";
 const TS_SOCK: &str = "/tmp/tailscaled.sock";
+const CHILL_DIR: &str = "/data/chill";
+const CHILL_STATE: &str = "/tmp/chill.state";
+const THERMAL_ECO: &str = "/tmp/chill.thermal-eco";
+/// The core's screen-off pause lease (u60-radio.md 6e): a wall second CHILL stays stopped until.
+pub const CHILL_IDLE: &str = "/tmp/chill.idle";
 const DUMP_DIR: &str = "/data/vendor/ramdump";
 /// Programs whose RSS `hour_proc` keeps, by the card's names.
-pub const RSS: [(&str, &str); 4] = [("agent", "zte-agent"), ("datad", "zwrt-datad"), ("devui", "u60pro-devui"), ("ts", "tailscaled")];
+pub const RSS: [(&str, &str); 5] = [
+    ("agent", "zte-agent"),
+    ("datad", "zwrt-datad"),
+    ("devui", "u60pro-devui"),
+    ("mihomo", "mihomo"),
+    ("ts", "tailscaled"),
+];
 const CELLS: [&str; 4] = ["on_home", "on_abroad", "off_home", "off_abroad"];
 
 /// One check's readings (None = not readable).
@@ -54,8 +65,8 @@ pub struct Read {
     pub ts_on: bool,
     /// None = not checked (or not meant on).
     pub ts_ok: Option<bool>,
-    pub proxy_on: bool,
-    pub proxy_ok: bool,
+    pub chill_on: bool,
+    pub chill_ok: bool,
     /// This process: (pid, start time, user+system ticks).
     pub cpu: Option<(u32, u64, u64)>,
     /// The card's program name → RSS kB.
@@ -66,7 +77,7 @@ pub struct Read {
     pub wan: Option<crate::cell_window::QuietTake>,
     /// Clients connected (the `clients` block's total); None = not known.
     pub clients: Option<i64>,
-    /// the proxy's effective profile; None = no proxy here.
+    /// CHILL's effective profile; None = no CHILL here.
     pub profile: Option<String>,
 }
 
@@ -84,8 +95,8 @@ pub struct Acc {
     zone_tmax: Option<i64>,
     n_thr: u32,
     throttle_s: i64,
-    proxy_on_s: i64,
-    proxy_ok_s: i64,
+    chill_on_s: i64,
+    chill_ok_s: i64,
     ts_on_s: i64,
     ts_chk_s: i64,
     ts_ok_s: i64,
@@ -167,10 +178,10 @@ impl Acc {
                 self.throttle_s += awake;
             }
         }
-        if r.proxy_on {
-            self.proxy_on_s += awake;
-            if r.proxy_ok {
-                self.proxy_ok_s += awake;
+        if r.chill_on {
+            self.chill_on_s += awake;
+            if r.chill_ok {
+                self.chill_ok_s += awake;
             }
         }
         if r.ts_on {
@@ -263,6 +274,14 @@ impl Acc {
             );
         }
         m.insert("off_home_cli_s".into(), json!(self.off_home_cli_s));
+        m.insert(
+            "chill_profile".into(),
+            if self.profile_mixed {
+                json!("mixed")
+            } else {
+                json!(self.profile)
+            },
+        );
         o
     }
 
@@ -282,6 +301,8 @@ impl Acc {
         for (k, _) in RSS {
             m.insert(format!("rss_{k}"), json!(self.rss.get(k)));
         }
+        m.insert("chill_on_s".into(), json!(self.chill_on_s));
+        m.insert("chill_ok_s".into(), json!(self.chill_ok_s));
         m.insert("ts_on_s".into(), json!(self.ts_on_s));
         m.insert("ts_chk_s".into(), json!(self.ts_chk_s));
         m.insert("ts_ok_s".into(), json!(self.ts_ok_s));
@@ -304,6 +325,10 @@ pub struct Paths {
     pub route: PathBuf,
     pub rc_local: PathBuf,
     pub ts_sock: PathBuf,
+    pub chill_dir: PathBuf,
+    pub chill_state: PathBuf,
+    pub thermal_eco: PathBuf,
+    pub chill_idle: PathBuf,
     pub proc_: PathBuf,
     pub data: PathBuf,
     pub dumps: PathBuf,
@@ -321,6 +346,10 @@ impl Paths {
             route: h("/proc/net/route"),
             rc_local: h(RC_LOCAL),
             ts_sock: h(TS_SOCK),
+            chill_dir: h(CHILL_DIR),
+            chill_state: h(CHILL_STATE),
+            thermal_eco: h(THERMAL_ECO),
+            chill_idle: h(CHILL_IDLE),
             proc_: h("/proc"),
             data: h("/data"),
             dumps: h(DUMP_DIR),
@@ -407,6 +436,23 @@ fn ts_check(sock: &Path) -> Option<bool> {
     }
 }
 
+fn mtime_age(p: &Path, wall: i64) -> Option<i64> {
+    let m = std::fs::metadata(p).ok()?.modified().ok()?;
+    let s = m.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
+    Some(wall - s)
+}
+
+/// chill.sh's `profile_effective`: eco while too hot, else the stored profile (standard when
+/// missing or not one of the three).
+fn chill_profile(dir: &Path, thermal_eco: &Path) -> String {
+    if thermal_eco.exists() {
+        return "eco".into();
+    }
+    match rd(&dir.join("profile")).as_deref() {
+        Some(p @ ("eco" | "standard" | "perf")) => p.into(),
+        _ => "standard".into(),
+    }
+}
 
 fn rss_kb(proc_: &Path, pid: u32) -> Option<i64> {
     let s = std::fs::read_to_string(proc_.join(pid.to_string()).join("status")).ok()?;
@@ -518,6 +564,39 @@ impl ReadState {
         r.ts_on = wan && std::fs::read_to_string(&p.rc_local).is_ok_and(|t| t.contains(TS_START));
         if r.ts_on {
             r.ts_ok = ts_check(&p.ts_sock);
+        }
+        // paused by hand, or by the core while the screen is off and nobody is connected (6e):
+        // off by intent, not unhealthy
+        let paused = num(&p.chill_dir.join("pause_until")).is_some_and(|t| t > wall)
+            || num(&p.chill_idle).is_some_and(|t| t > wall);
+        r.chill_on =
+            wan && p.chill_dir.is_dir() && !p.chill_dir.join("disabled").exists() && !paused;
+        if r.chill_on
+            && mtime_age(&p.chill_state, wall).is_some_and(|a| a < 150)
+            && let Ok(st) = std::fs::read_to_string(&p.chill_state)
+            && st
+                .lines()
+                .next()
+                .is_some_and(|l| l.contains("\"state\":\"running\""))
+        {
+            let pid = st.split("\"core_pid\":").nth(1).and_then(|x| {
+                x.chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect::<String>()
+                    .parse::<u32>()
+                    .ok()
+            });
+            r.chill_ok = pid.is_some_and(|pid| {
+                std::fs::read_link(p.proc_.join(pid.to_string()).join("exe"))
+                    .is_ok_and(|x| x.to_string_lossy().ends_with("/mihomo"))
+            });
+        }
+        if p.chill_dir.is_dir() {
+            r.profile = Some(if r.chill_on {
+                chill_profile(&p.chill_dir, &p.thermal_eco)
+            } else {
+                "off".into()
+            });
         }
         let me = p.self_pid;
         if let (Some(st), Ok(s)) = (

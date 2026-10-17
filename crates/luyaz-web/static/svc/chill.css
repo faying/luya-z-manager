@@ -1,0 +1,40 @@
+/* /services/chill (batch 5b): its own asset chill.css (CHILL is not public). Tokens only. */
+.ch-page { display: grid; gap: 24px; max-width: 1100px; }
+.ch-page > :empty, .ch-cols > div > :empty { display: none; }
+.ch-page .px-1 { padding-inline: 4px; }
+.ch-page .px-4 { padding-inline: 16px; }
+.ch-page .pb-4 { padding-bottom: 16px; }
+.ch-page .p-4 { padding: 16px; }
+.ch-page .gap-3 { gap: 12px; }
+.ch-page .mb-3 { margin-bottom: 12px; }
+.ch-page .mt-1 { margin-top: 4px; }
+.ch-page .mt-2 { margin-top: 8px; }
+.ch-page .-mt-1 { margin-top: -4px; }
+.ch-page .flex-wrap { flex-wrap: wrap; }
+.ch-page .items-stretch { align-items: stretch; }
+@media (min-width: 1024px) { .ch-page .p-4 { padding: 20px; } }
+
+.ch-head { display: flex; align-items: center; gap: 8px; margin: 8px 0 16px; }
+.ch-head .nd-title { flex: 1; }
+.ch-cols { display: grid; gap: 24px; }
+.ch-cols > div { display: grid; align-content: start; gap: 24px; }
+@media (min-width: 1024px) { .ch-cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+
+/* write areas sit right under their section */
+.ch-page [id$="-op"]:not(:empty) { margin-top: -16px; padding-inline: 4px; }
+.ch-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 0 4px 12px; }
+.ch-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 8px; }
+.ch-warn { font-size: 14px; font-weight: 600; color: var(--nd-warnT); }
+.ch-t2 { color: var(--nd-t2); }
+.ch-grey { color: var(--nd-t3); }
+.ch-stale { margin-bottom: 12px; padding: 12px 16px; border-radius: var(--nd-r-card); background: var(--nd-washW, var(--nd-track)); }
+.ch-bar { height: 6px; overflow: hidden; border-radius: 9999px; background: var(--nd-track); }
+.ch-bar__fill { height: 100%; border-radius: 9999px; background: var(--nd-t1); }
+.ch-pre { max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font: inherit; }
+.ch-cbtn { background: var(--nd-console-card, rgb(255 255 255 / 0.12)); color: var(--nd-console-t1); }
+.ch-frame { display: block; width: 100%; height: 75vh; border: 0; border-radius: var(--nd-r-field); background: var(--nd-bg); }
+.ch-wide { display: none; }
+@media (min-width: 1024px) { a.ch-wide, button.ch-wide { display: inline-flex; } div.ch-wide { display: block; } }
+#ch-pv-form:not(:empty) { margin-bottom: 8px; }
+.ch-adv { display: grid; gap: 16px; }
+.ch-adv > :empty { display: none; }

@@ -2,7 +2,7 @@
 //! assembled by u60-api's `netinfo::page` as the agent assembles it.
 //!
 //! Where each piece comes from while the agent still runs everything (the shadow period):
-//! - the exits (`direct`, and `proxy` while the proxy runs): the agent's lookups, from the file it
+//! - the exits (`direct`, and `proxy` while CHILL runs): the agent's lookups, from the file it
 //!   writes after every refresh pass (`/tmp/netinfo-exits.json`); u60d never asks the outside
 //!   services itself until step 9
 //! - operators, roaming, network type, data: `nwinfo_get_netinfo`, the SIM (u60d's own `sim`
@@ -329,14 +329,18 @@ pub async fn get(State(c): State<Compat>, RawQuery(query): RawQuery) -> Response
     let c2 = c.clone();
     let files = tokio::task::spawn_blocking(move || {
         let exits = read_json(&c2, ni::EXITS_FILE).unwrap_or(Value::Null);
-        let proxy_on = false;
-        (exits, proxy_on, scenes(&c2))
+        let chill_on = read_json(&c2, luyaz_api::chill::CHILL_STATE).and_then(|v| {
+            v.get("state")
+                .and_then(Value::as_str)
+                .map(|s| s == "running")
+        }) == Some(true);
+        (exits, chill_on, scenes(&c2))
     })
     .await;
-    let Ok((exits, proxy_on, scenes)) = files else {
+    let Ok((exits, chill_on, scenes)) = files else {
         return reply(500, json!({"ok": false, "error": "internal error"}));
     };
-    let _ = proxy_on; // read only by the proxy lines (the public build has none)
+    let _ = chill_on; // read only by the CHILL lines (the public build has none)
     let (guard, scan) = {
         let o = n.ops.lock().unwrap_or_else(|e| e.into_inner());
         (o.guard.json(), o.scan.json())
@@ -345,6 +349,12 @@ pub async fn get(State(c): State<Compat>, RawQuery(query): RawQuery) -> Response
     let data = ni::page(ni::Page {
         now: t,
         direct: exits["direct"].clone(),
+        proxy: if chill_on {
+            exits["proxy"].clone()
+        } else {
+            Value::Null
+        },
+        chill_running: chill_on,
         selection: g.selection,
         selection_at: g.selection_at,
         guard,

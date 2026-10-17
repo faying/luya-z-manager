@@ -38,7 +38,13 @@ const GRACE_S: i64 = 300;
 /// The marker is fresh (the agent still vouches for it) when younger than this.
 const DATAD_FRESH_S: i64 = 180;
 
-const PROGS: [&str; 4] = ["zwrt-datad", "u60pro-devui", "u60-uid", "tailscaled"];
+const PROGS: [&str; 5] = [
+    "zwrt-datad",
+    "u60pro-devui",
+    "u60-uid",
+    "tailscaled",
+    "mihomo",
+];
 const SCRIPTS: [&str; 4] = ["u60-guard.sh", "doctor.sh", "alert-lib.sh", "supervise.sh"];
 const RESTARTS: [&str; 2] = ["zwrt-datad", "u60-uid"];
 /// Our own program name: this process.

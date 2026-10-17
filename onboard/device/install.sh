@@ -5,7 +5,7 @@
 # 不要手动跑：由电脑端 install.sh 把整个包推到 /data/local/tmp/u60-kit，
 # 再通过 adb shell 或 ssh 调用本脚本。
 #
-#   sh device/install.sh ssh admin devui esim     # 按顺序装指定组件
+#   sh device/install.sh ssh admin devui esim     # 按顺序装指定组件（chill 要单独点名）
 #   sh device/install.sh status                   # 只打印状态
 #
 # 约定（和 CLAUDE.md 一致）：
@@ -144,7 +144,7 @@ install_guard() {
 
 # zte-agent 2026-10-14 起退役：它的网页归 luyaz-web，API 和后台任务归核心。
 # 标记 /data/luyaz/core/agent-retired 在、且 zte-agent 进程不在 = 交接清单全归核心（没有它核心对 eSIM、
-# 情景、定时任务这些一律回 409）；旧 agent 看到它也拒绝启动。设备上已有的 agent 停掉，
+# 情景、CHILL、定时任务这些一律回 409）；旧 agent 看到它也拒绝启动。设备上已有的 agent 停掉，
 # rc.local 里它那一行去掉；/data/zte-agent、/data/admin 留着不删（只是不再用）。
 retire_agent() {
     mkdir -p "$CORE_DIR" && touch "$CORE_DIR/agent-retired" || die "写不了 $CORE_DIR/agent-retired"
@@ -539,6 +539,107 @@ do_esim() {
     fi
 }
 
+# ── CHILL：mihomo 透明代理 + zashboard，装到 /data/chill（设计见 docs/CHILL.md）──────
+# 两条路：
+#   • 设备上已经有 CHILL（更新）：只换程序、脚本、模板、规则集和面板；chill.env（订阅地址）、
+#     providers/、cache.db、confirmed 不碰。改动的文件先留一份 .prev；原来在跑就重启核心，
+#     60 秒内回不到 running 就换回 .prev 再起一次，然后报错。
+#   • 第一次装：再建防火墙区、装 init.d、rc.local 加一行，但**不启动**——没有订阅地址起不来，
+#     首次要 safe-start（5 分钟死人开关）由人来确认网络正常。
+C=/data/chill
+CHILL_FILES="bin/mihomo chill.sh chill.init template.yaml"
+chill_state() { sed -n 's/.*"state":"\([a-z]*\)".*/\1/p' /tmp/chill.state 2>/dev/null; }
+chill_field() { tr -d '\n' < /tmp/chill.state 2>/dev/null | sed -n "s/.*\"$1\":\"*\([^\",}]*\).*/\1/p"; }
+# 新核心真的起来了：状态 running、started_at 和停之前不同（停机时 chill.sh 不改写状态文件，
+# 旧的 "running" 会一直留着）、core_pid 就是现在唯一的 mihomo；过 70 秒（至少一次监督循环的
+# API 检查）再看一次还是同一个核心。
+chill_wait_running() { # <秒> <停之前的 started_at>
+    i=0
+    while [ $i -lt "$1" ]; do
+        p=$(pidof mihomo)
+        if [ "$(chill_state)" = running ] && [ "$(chill_field started_at)" != "$2" ] \
+           && [ -n "$p" ] && [ "$p" = "$(chill_field core_pid)" ]; then
+            sleep 70
+            [ "$(chill_state)" = running ] && [ "$(pidof mihomo)" = "$p" ] && return 0
+            return 1
+        fi
+        sleep 2; i=$((i + 2))
+    done
+    return 1
+}
+do_chill() {
+    [ -d "$P/chill" ] || die "包里没有 chill/（装机包太旧？）"
+    fresh=0; [ -x "$C/chill.sh" ] || fresh=1
+    was_running=0; svc_running chill && was_running=1
+    mkdir -p "$C/bin" "$C/ruleset" "$C/run" "$C/providers" "$STATE"
+
+    changed=
+    for f in $CHILL_FILES; do
+        if [ -f "$C/$f" ] && cmp -s "$P/chill/$f" "$C/$f"; then continue; fi
+        [ -f "$C/$f" ] && cp -p "$C/$f" "$C/$f.prev"
+        changed="$changed $f"
+    done
+    for f in $changed; do put "$P/chill/$f" "$C/$f" 755; done
+    chmod 644 "$C/template.yaml"
+    for f in "$P"/chill/ruleset/*; do put "$f" "$C/ruleset/$(basename "$f")" 644; done
+    put_tree "$P/chill/ui.tgz" "$C/ui"
+    put "$C/chill.init" /etc/init.d/chill 755
+    put "$P/chill/chill.env.example" "$C/chill.env.example" 644
+
+    if [ $fresh = 1 ]; then
+        # restore_dns 要用的原样 dhcp 配置。只在第一次拿：之后它可能已经指向 mihomo
+        [ -f "$C/dhcp.backup" ] || cp /etc/config/dhcp "$C/dhcp.backup"
+        [ -f "$STATE/firewall.orig" ] || cp /etc/config/firewall "$STATE/firewall.orig"
+        # UDP 从 br-lan 进 chill0 要过 FORWARD，默认 DROP，不放行就是全屋断网
+        if ! uci -q show firewall | grep -q "name='chill'"; then
+            z=$(uci add firewall zone)
+            uci set firewall.$z.name=chill
+            uci add_list firewall.$z.device=chill0
+            uci set firewall.$z.input=ACCEPT
+            uci set firewall.$z.output=ACCEPT
+            uci set firewall.$z.forward=ACCEPT
+            uci set firewall.$z.masq=0
+            f=$(uci add firewall forwarding); uci set firewall.$f.src=chill; uci set firewall.$f.dest=lan
+            f=$(uci add firewall forwarding); uci set firewall.$f.src=lan; uci set firewall.$f.dest=chill
+            uci commit firewall
+            /etc/init.d/firewall reload >/dev/null 2>&1
+            log "CHILL: 已建防火墙区 chill"
+        fi
+    fi
+    # 自启只走 rc.local（不 enable init.d，见 chill.init 开头）。关掉 CHILL = touch $C/disabled
+    rc_add "[ -f $C/disabled ] || /etc/init.d/chill start" "/etc/init.d/chill start"
+
+    if [ $fresh = 1 ]; then
+        log "CHILL: 已装好，没有启动。接下来："
+        log "  1. cp $C/chill.env.example $C/chill.env && chmod 600 $C/chill.env，填订阅地址；节点快照放 $C/providers/"
+        log "  2. sh $C/chill.sh safe-start，网络正常就在 5 分钟内 sh $C/chill.sh confirm"
+        return 0
+    fi
+    if [ $was_running = 0 ]; then
+        log "CHILL: 已更新（${changed:- 程序没变}）；原来没在跑，不启动"
+        return 0
+    fi
+    if [ -z "$changed" ]; then
+        log "CHILL: 程序、脚本、模板都没变，只更新了规则集和面板，核心不重启"
+        return 0
+    fi
+    # 换了 chill.sh 必须 stop+start，reload 只让 mihomo 重读配置，监督进程还是旧脚本
+    t0=$(chill_field started_at)
+    /etc/init.d/chill stop >/dev/null 2>&1
+    /etc/init.d/chill start
+    if chill_wait_running 60 "$t0"; then
+        log "CHILL: 已更新并重启（换了:$changed），新核心运行中，70 秒后复查也正常"
+        return 0
+    fi
+    warn "CHILL 更新后 60 秒没回到运行状态（$(chill_state)），换回原来的版本"
+    for f in $changed; do [ -f "$C/$f.prev" ] && mv -f "$C/$f.prev" "$C/$f"; done
+    put "$C/chill.init" /etc/init.d/chill 755
+    t0=$(chill_field started_at)
+    /etc/init.d/chill stop >/dev/null 2>&1
+    /etc/init.d/chill start
+    chill_wait_running 60 "$t0" && die "CHILL 新版起不来，已换回原来的版本并恢复运行，看 /tmp/chill.log" \
+        || die "CHILL 换回原来的版本后也没起来（$(chill_state)）。chill.sh 停机时会回滚 DNS，网络是直连；看 /tmp/chill.state 和 /tmp/chill.log"
+}
 
 do_status() {
     p() { printf '  %s：%s\n' "$1" "$2"; }   # 中文按字节算宽度，对不齐，就不对齐了
@@ -552,21 +653,22 @@ do_status() {
     p "核心" "$(pidof luyaz-core >/dev/null && echo 运行中 || echo 未运行)$(svc luyaz-core)$(pidof zwrt-datad >/dev/null && echo '，旧 zwrt-datad 还在跑')"
     p "eSIM 组件" "$([ -x /data/esim/lpac ] && echo 已装 || echo 未装)"
     p "上机收尾" "$([ -f "$SHIPD/luyaz-recover.sh" ] && echo 'luyaz-recover.sh 已放' || echo 'luyaz-recover.sh 没放')$(grep -v '^[[:space:]]*#' "$RC" 2>/dev/null | grep -qE '(luyaz|u60)-recover\.sh' && echo '，rc.local 有那一行' || echo '，rc.local 没有那一行（./install.sh recover）')"
+    p "CHILL" "$([ -x /data/chill/chill.sh ] && { s=$(chill_state); echo "已装，${s:-未运行}$(svc chill)$([ -f /data/chill/disabled ] && echo '，已关闭')"; } || echo 未装)"
     p "自动升级" "$(fota_is_off && echo 已关闭 || echo "没有完全关闭（$(fota_vals)）")"
     p "USB 模式" "$(ubus call zwrt_bsp.usb list '{}' 2>/dev/null | sed -n 's/.*"mode": *"\([^"]*\)".*/\1/p')"
     echo "  rc.local 自启:"
-    grep -E "start_dropbear|start_zte_agent|u60pro_devui|/etc/init.d/(zte-agent|zwrt-datad|luyaz-core|u60-guard|u60-uid|luyaz-web|luyaz-sentinel) start" "$RC" 2>/dev/null | sed 's/^/    /'
+    grep -E "start_dropbear|start_zte_agent|u60pro_devui|/etc/init.d/(zte-agent|zwrt-datad|luyaz-core|u60-guard|u60-uid|luyaz-web|luyaz-sentinel|chill) start" "$RC" 2>/dev/null | sed 's/^/    /'
 }
 
 # 测试（onboard/test/kit-rc.sh）只要上面的函数
 [ -n "${KIT_LIB_ONLY:-}" ] && return 0
 
-[ $# -gt 0 ] || die "用法: sh device/install.sh {ssh|admin|devui|esim|recover|status}..."
+[ $# -gt 0 ] || die "用法: sh device/install.sh {ssh|admin|devui|esim|chill|recover|status}..."
 COMPONENTS="$*"
 # 旧的 /data/u60-kit 里有原厂 rc.local 备份（Luya-Z 改名 E 前的 STATE）：不搬就会在新处把已经改过的 rc.local
-# 备份成「原厂」（ssh、recover 都会先 backup_rc）。所以除了只读的 status，一律先要求搬过去
+# 备份成「原厂」（ssh、recover、chill 都会先 backup_rc）。所以除了只读的 status，一律先要求搬过去
 case " $COMPONENTS " in
-    *" ssh "* | *" admin "* | *" devui "* | *" esim "* | *" recover "*)
+    *" ssh "* | *" admin "* | *" devui "* | *" esim "* | *" chill "* | *" recover "*)
         [ -d "${KIT_OLD_STATE:-/data/u60-kit}" ] && [ ! -d "$STATE" ] &&
             die "装机记录还在旧的 ${KIT_OLD_STATE:-/data/u60-kit}（里面有原厂 rc.local 备份）：先 mv ${KIT_OLD_STATE:-/data/u60-kit} $STATE，再装"
         ;;
@@ -584,6 +686,7 @@ for c in "$@"; do
         devui)  do_devui ;;
         esim)   do_esim ;;
         recover) do_recover ;;
+        chill)  do_chill ;;
         status) do_status ;;
         *) die "不认识的组件: $c" ;;
     esac

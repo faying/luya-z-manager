@@ -9,11 +9,12 @@ bad() { FAIL=$((FAIL + 1)); echo "  FAIL $1"; }
 check() { _d=$1; shift; if eval "$@"; then ok "$_d"; else bad "$_d  [$*]"; fi; }
 
 T=$(mktemp -d); D=$T/dev
-mkdir -p $D/data/scenario $D/data/alerts $D/data/tailscale/state $D/data/local/tmp $T/bin
+mkdir -p $D/data/scenario $D/data/alerts $D/data/chill $D/data/tailscale/state $D/data/local/tmp $T/bin
 echo 'ZTE_AGENT_PASSWORD=pw123' >$D/data/zte-agent.env
 echo '{"version":2,"scenarios":[]}' >$D/data/scenario/scenarios.json
 echo '{"k":1}' >$D/data/local/tmp/scheduler.json
 echo '+8612300000000' >$D/data/alerts/sms-to
+echo 'secret-sub-url' >$D/data/chill/chill.env
 echo 'nodekey' >$D/data/tailscale/state/tailscaled.state
 echo '{"runtime":1}' >$D/data/scenario/state.json      # runtime: must NOT be backed up
 cat >$T/bin/uci <<X
@@ -45,7 +46,7 @@ check "plan: missing file = new" 'grep -q "new        /data/zte-agent.env" $T/pl
 check "plan writes nothing" '[ "$(cat $R/data/scenario/scenarios.json)" = "{\"old\":1}" ] && [ ! -e $R/data/zte-agent.env ]'
 sh $CB restore $T/b.tgz $R >/dev/null
 check "restore writes the files" 'cmp -s $R/data/zte-agent.env $D/data/zte-agent.env && cmp -s $R/data/scenario/scenarios.json $D/data/scenario/scenarios.json'
-check "secrets restored 600" '[ "$(stat -c %a $R/data/zte-agent.env)" = 600 ] && [ "$(stat -c %a $R/data/alerts/sms-to)" = 600 ]'
+check "secrets restored 600" '[ "$(stat -c %a $R/data/zte-agent.env)" = 600 ] && [ "$(stat -c %a $R/data/chill/chill.env)" = 600 ]'
 check "plain config restored 644" '[ "$(stat -c %a $R/data/scenario/scenarios.json)" = 644 ]'
 check "previous copy kept" '[ "$(cat $R/data/scenario/scenarios.json.pre-restore)" = "{\"old\":1}" ]'
 check "wireless written to etc/config under the root" 'grep -q "main_2g" $R/etc/config/wireless'

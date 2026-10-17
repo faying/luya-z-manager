@@ -35,7 +35,8 @@ const GS: [&str; 7] = [
 ];
 /// The four power cells of `hour_power`.
 const CS: [&str; 4] = ["on_home", "on_abroad", "off_home", "off_abroad"];
-const RS: [&str; 4] = ["agent", "datad", "devui", "ts"];
+/// The programs `hour_proc` keeps the RSS of.
+const RS: [&str; 5] = ["agent", "datad", "devui", "mihomo", "ts"];
 
 /// What doctor passes its awk besides the ledger (`report_ledger`).
 #[derive(Clone, Debug, Default)]
@@ -450,6 +451,8 @@ impl Card {
                 if let Some(&i) = self.hk.get(&(s, idfrom(id).to_bits())) {
                     let mut q = HourProc {
                         cpu: f("cpu_datad"),
+                        con: f("chill_on_s"),
+                        cok: f("chill_ok_s"),
                         ton: f("ts_on_s"),
                         tck: f("ts_chk_s"),
                         tok: f("ts_ok_s"),
@@ -1178,9 +1181,27 @@ impl Card {
         };
         // under 99% even if every unchecked second was healthy
         let tbad = ton != 0.0 && tok + ton - tck < 0.99 * ton;
-        let val = format!("Tailscale {tv}");
-        let mut t = tier(tck != 0.0 && tok < 0.99 * tck, if ton != 0.0 { &cv } else { "没有记录" }, ws, D7);
-        if tbad { t = "不达标"; }
+        let cbad = con != 0.0 && cok < 0.99 * con;
+        let cvx = if con != 0.0 {
+            format!("{}%", fixed(cok * 100.0 / con, 1))
+        } else {
+            "没开过".into()
+        };
+        let val = format!("CHILL {cvx}；Tailscale {tv}");
+        let mut t = tier(
+            cbad || (tck != 0.0 && tok < 0.99 * tck),
+            if con != 0.0 || ton != 0.0 {
+                &cv
+            } else {
+                "没有记录"
+            },
+            ws,
+            D7,
+        );
+        if cbad || tbad {
+            t = "不达标";
+        }
+        let _ = (con, cok);
         row(&mut out, "S8", "出口可用", &val, t, ws, D7, &cv, "自动");
         // ── 好用 ──
         if !summary {

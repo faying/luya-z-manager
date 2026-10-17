@@ -71,6 +71,13 @@ impl Ui {
             home: self.tab_visible(TAB_HOME),
             ni_mode,
             tailscale: self.tab_visible(TAB_HOME) || self.tab_visible(EXIT) || self.sub_visible(Sub::Ts),
+            chill_page: self.sub_visible(Sub::Chill),
+            hx_sending: self.cp.hx_sending >= 0,
+            chill: self.tab_visible(TAB_HOME)
+                || self.tab_visible(EXIT)
+                || self.sub_visible(Sub::Chill)
+                || self.sub_visible(Sub::ChillNodes)
+                || self.sub_visible(Sub::ChillPairs),
             esim: self.sub_visible(Sub::Esim),
             // the list once per card while 蜂窝 is up and the finger idle (lpac stalls a moment)
             esim_prefetch: self.tab_visible(TAB_CELL) && !self.sub_visible(Sub::Esim) && lv::inactive_ms() > 1500,
@@ -101,6 +108,9 @@ impl Ui {
             self.set(l, cf!("%02d:%02d", tm.hour, tm.min));
         }
         let sc_changed = self.home_scene_changed();
+        if self.ex.xm_off_arm.expire(crate::lv::tick_get(), super::exit::XM_ARM_MS) {
+            self.exit_menu_refresh();
+        }
         self.vendor_arm_tick();
         let ah = &m.agent_health;
         self.alert_st = if ah.lost_secs != 0 {
@@ -227,6 +237,8 @@ impl Ui {
         if self.tab_visible(TAB_HOME) || self.tab_visible(super::TAB_EXIT) || self.sub_visible(super::Sub::Ts) {
             self.home_ts_paint();
         }
+        // CHILL: the card (Home's, on the exit tab) with the notice on its top, and the pages
+        self.chill_refresh();
         self.home_reflow();
         let sim_changed = self.sim_refresh();
         self.esim_refresh(sim_changed);
@@ -307,7 +319,12 @@ impl Ui {
         let m = self.model.clone();
         let d = &m.data;
         let ts = self.tile_sub.clone();
-        // unread SMS = accent (the old tile's badge)
+        // 开着 (CHILL running) = green; unread SMS = accent (the old tiles' dot and badge)
+        let chill_on = m.chill_online != 0;
+        if self.c_tile_on[0] != chill_on as i32 {
+            self.c_tile_on[0] = chill_on as i32;
+            kit::text_color(ts[Sub::Chill as usize], if chill_on { th.ok_t } else { th.t2 });
+        }
         let unread = d.sms_unread > 0;
         if self.c_tile_on[1] != unread as i32 {
             self.c_tile_on[1] = unread as i32;
@@ -318,6 +335,10 @@ impl Ui {
         } else {
             self.set(ts[Sub::Sms as usize], cf!(trc!("短信", "%d 条"), d.sms_n));
         }
+        self.set(
+            ts[Sub::Chill as usize],
+            cf!("%s · %s", m.chill_core.as_deref().unwrap_or(""), m.chill_mode.as_deref().unwrap_or("")),
+        );
         // a physical SIM says 「SIM 卡 · operator」, an eSIM 「eSIM · profile」
         let sim = self.sim.clone();
         let t6 = match sim.kind {

@@ -5,6 +5,7 @@
 pub use luyaz_alerts as alerts;
 pub mod auth;
 pub mod charge;
+pub mod chill;
 pub mod clock;
 pub mod control;
 pub mod diagnose;

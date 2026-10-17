@@ -38,7 +38,7 @@ The UI only talks to luyaz-core over this local HTTP interface; it never calls u
 
 - Five bottom tabs, organised by what you want to do: **Home · Cellular · Wi-Fi · Route · System**. The big line on Home is a one-sentence verdict, e.g. 「网络正常」 (network OK), 「信号偏弱」 (weak signal).
 - Cellular: carriers, signal, network mode, APN, SIM and eSIM switching (through luyaz-core, which drives lpac).
-- Exit: public exit IP and its location; Tailscale. No proxy features; if you want one, see [docs/PROXY.md](../docs/PROXY.md).
+- Exit: public exit IP and its location; Tailscale; with CHILL installed, the proxy exit, groups, nodes and traffic ([docs/CHILL.md](docs/CHILL.md), [docs/PROXY.md](../docs/PROXY.md)).
 - System: brightness, screen timeout, light / dark / auto theme, language, battery and load, alert details.
 - Phone plugged into the USB-C port: like the stock screen, it asks what it is for — charge + internet (the phone gets a USB network), 18 W fast charging, or an Ethernet adapter — and can remember the answer (System › When a phone is plugged in).
 - Every tap gets immediate feedback; actions that need confirming take two taps.

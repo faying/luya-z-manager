@@ -2,6 +2,7 @@
 //! agent's paths with the agent's reply shape (`{ok, data}`). On demand, off the runtime thread
 //! (spawn_blocking with a timeout), nothing cached.
 //!
+//! The log tail is shared with CHILL's log (`chill_page.rs`), as in the agent.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;

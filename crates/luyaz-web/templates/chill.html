@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("chill.css") }}">{% endblock %}
+{% block main %}
+<div class="ch-head"><h1 class="nd-title">{{ shell.title() }}</h1><button type="button" class="nd-btn nd-btn--ghost nd-btn--icon" aria-label="{{ l.pick("Refresh", "刷新") }}" data-on:click="@post('/services/chill/refresh')">{{ crate::shell::icon("ArrowClockwise", false, 20, "")|safe }}</button></div>
+<div class="ch-page" data-signals__ifmissing="{_cdo: false, _chlp: false}">
+{{ self.leaf("ch-status")|safe }}
+{{ ops[0]|safe }}
+{{ self.leaf("ch-exit")|safe }}
+{{ ops[1]|safe }}
+{{ self.leaf("ch-home")|safe }}
+{{ ops[2]|safe }}
+{{ self.leaf("ch-region")|safe }}
+{{ ops[3]|safe }}
+<div class="ch-cols"><div>
+{{ self.leaf("ch-ai")|safe }}
+{{ ops[4]|safe }}
+{{ self.leaf("ch-profile")|safe }}
+{{ ops[5]|safe }}
+{{ self.leaf("ch-byp")|safe }}
+{{ ops[7]|safe }}
+</div><div>
+{{ self.leaf("ch-prov")|safe }}
+<div id="ch-pv-form"></div>
+{{ ops[6]|safe }}
+{{ self.leaf("ch-groups")|safe }}
+</div></div>
+<section aria-labelledby="ch-adv-t" class="ch-adv"><h2 id="ch-adv-t" class="nd-group-title">{{ l.pick("Advanced", "高级") }}</h2>
+{{ self.leaf("ch-vitals")|safe }}
+{{ self.leaf("ch-dash")|safe }}
+{{ self.leaf("ch-log")|safe }}
+</section>
+</div>
+{% endblock %}

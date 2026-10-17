@@ -18,7 +18,7 @@ out=${1:-$here/out/touch}
 mkdir -p "$out"; out=$(cd "$out" && pwd)
 : "${LUYAZ_DEVICE_FONTS:?dir with ZTEZhengYuan.ttf and Roboto.ttf}" "${LUYAZ_NUNITO_DIR:?dir with Nunito-600/700/800.ttf}"
 
-# file name ← scene, page, scroll step (.0 = top); scenes without proxy lines, English
+# file name ← scene, page, scroll step (.0 = top); scenes without CHILL lines, English
 shots='touch-home us-light-en home 0
 touch-home-dark op-notice-dark-en home 0
 touch-notice op-notice-light-en home 0

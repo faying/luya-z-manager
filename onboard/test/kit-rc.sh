@@ -18,9 +18,9 @@ fail=0
 printf '%s\n' '#!/bin/sh' '# vendor' "$REC" 'exit 0' > "$T/vendor"
 printf '%s\n' '#!/bin/sh' 'sh /data/local/tmp/start_dropbear.sh' "$REC" '/etc/init.d/zwrt-datad start' \
     '/etc/init.d/u60-uid start' '/etc/init.d/u60-guard start' 'sh /data/tailscale/start.sh' \
-    '[ -f /data/example-svc/disabled ] || /etc/init.d/example-svc start' 'exit 0' > "$T/legacy"
+    '[ -f /data/chill/disabled ] || /etc/init.d/chill start' 'exit 0' > "$T/legacy"
 printf '%s\n' '#!/bin/sh' 'sh /data/local/tmp/start_dropbear.sh' "$REC" '/etc/init.d/luyaz-core start' \
-    "$SENT" 'sh /data/tailscale/start.sh' '[ -f /data/example-svc/disabled ] || /etc/init.d/example-svc start' 'exit 0' > "$T/sentinel"
+    "$SENT" 'sh /data/tailscale/start.sh' '[ -f /data/chill/disabled ] || /etc/init.d/chill start' 'exit 0' > "$T/sentinel"
 
 steps() { # 同 do_devui：install-autostart 的钩子（去旧钩子、exit 0 前加）→ 核心行 → rc_owner
     grep -v 'u60pro_devui' "$RC" | awk -v h="$HOOK" '/^exit 0/ && !d { print h; d = 1 } { print }' > "$RC.h" && mv "$RC.h" "$RC"

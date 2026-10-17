@@ -224,7 +224,7 @@ impl Ui {
     /// switch waiting for its answer.
     fn ui_busy(&self) -> bool {
         let m = &self.model;
-        if m.st_running != 0 {
+        if m.st_running != 0 || m.chill_delay_pending != 0 {
             return true;
         }
         m.esim_profiles.iter().any(|p| p.going != 0)

@@ -615,6 +615,12 @@ fn same_record(recorded: &str, listed: &str) -> bool {
 /// doctor.sh `record_list`: (name, path, tree)
 fn record_list(c: &Cfg) -> Vec<(String, String, bool)> {
     let mut v: Vec<(String, String, bool)> = Vec::new();
+    v.push((
+        "chill.sh".into(),
+        format!("{}/chill.sh", c.chill.dir),
+        false,
+    ));
+    v.push(("template.yaml".into(), c.chill.template.clone(), false));
     let ts = &c.ts_dir;
     v.push(("tailscale-start.sh".into(), format!("{ts}/start.sh"), false));
     v.push(("tuning.env".into(), c.ts_tuning.clone(), false));

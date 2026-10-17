@@ -27,6 +27,7 @@
 </div></section>
 <section class="hm-o5" aria-labelledby="hm-id-t"><h2 id="hm-id-t" class="nd-group-title">{{ l.pick("Network identity", "网络身份") }}</h2><div class="nd-group"><i id="hm-fl-id" class="hm-flag" hidden></i>
 <div class="nd-row"><span class="nd-row__text"><span id="hi-ip-l" class="nd-row__label">{{ l.pick("Public IP", "公网 IP") }}</span><span id="hi-ip-s" class="nd-row__sub">{{ l.pick("Looking up…", "正在查询…") }}</span></span><span id="hi-ip" class="nd-row__value nd-mono">—</span></div>
+<div id="hi-chill" class="nd-row" hidden></div>
 <div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("SIM operator", "SIM 运营商") }}</span></span><span id="hi-sim" class="nd-row__value">—</span></div>
 <a class="nd-row" href="/router/mobile-network"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Registered on", "注册运营商") }}</span><span id="hi-reg-s" class="nd-row__sub" hidden></span></span><span id="hi-reg" class="nd-row__value">—</span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a>
 <div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Roaming", "漫游") }}</span></span><span id="hi-roam" class="nd-row__value">—</span></div>
@@ -41,6 +42,7 @@
 </div></section>
 </div>
 <div class="hm-col">
+{{ chill|safe }}
 <a id="hm-scene" class="nd-module nd-module--cream hm-o8" href="/router/scenario"><span class="nd-module__head">{{ l.pick("Scenarios", "情景") }}{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</span><span class="nd-skel" style="width:10ch"></span></a>
 <a id="hm-ts" class="nd-module nd-module--navy hm-o9" href="/services/tailscale"><span class="nd-module__head">Tailscale{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</span><span class="nd-skel" style="width:10ch"></span></a>
 </div>

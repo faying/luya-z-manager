@@ -287,6 +287,30 @@ pub fn icons(st: &St, l: Lang) -> Vec<Icon> {
         known: ts.is_some(),
     });
 
+    let chill = st.side.public.as_ref().map(|p| &p["services"]["chill"]);
+    let chill_state = chill.and_then(|c| c["state"].as_str()).unwrap_or("");
+    let chill_tone = match chill_state {
+        "running" => Tone::Ok,
+        "direct" => Tone::Warn,
+        _ => Tone::Off,
+    };
+    out.push(Icon {
+        id: "st-chill",
+        href: "/services/chill",
+        icon: "Waves",
+        tone: chill_tone,
+        // the old bar says "stopped" for both direct and stopped
+        label: svc(
+            "CHILL",
+            if chill_state == "stopped" {
+                Tone::Warn
+            } else {
+                chill_tone
+            },
+        ),
+        badge: 0,
+        known: chill.is_some_and(|c| c.is_object()),
+    });
 
     let sms = block(st, "sms");
     let unread = sms.and_then(|s| int(&s["unread"])).unwrap_or(0).max(0) as u64;
@@ -670,10 +694,10 @@ mod tests {
         assert_eq!(net.tone, Tone::Warn, "SA reads nr_rsrp, -112 is weak");
         assert_eq!(net.label, "移动数据已连接 · SA · 信号弱");
         assert_eq!(ic[1].tone, Tone::Off);
-        assert_eq!(ic[3].badge_text(), "9+");
-        assert!(!ic[2].known, "no side data yet");
+        assert_eq!(ic[4].badge_text(), "9+");
+        assert!(!ic[2].known && !ic[3].known, "no side data yet");
         let html = hub.read(|st| topbar_html(st, &ctx("/signal")));
-        assert!(html.contains("id=\"st-ts\""));
+        assert!(html.contains("id=\"st-ts\"") && html.contains("id=\"st-chill\""));
     }
 
     #[test]

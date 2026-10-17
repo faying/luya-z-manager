@@ -1,21 +1,29 @@
-# Proxy (do it yourself)
+# Proxy (CHILL)
 
 **English** · [中文](PROXY.zh-CN.md)
 
-This repository and the install kit **do not include** any proxy functionality: no proxy core, no panel, no rule sets, and no proxy pages in the admin web or touch UI.
-To run a transparent proxy on the U60 Pro (MU5250), set it up yourself directly from the official sources:
+CHILL is this project's transparent proxy: native mihomo (Clash.Meta) on the device, a panel behind the admin web
+(`:9090/chill-ui/`), and an exit page on the touch screen. It is **not** in the full install; you install it by name.
 
-- Core: mihomo (Clash.Meta)
-  - Source and release packages: <https://github.com/MetaCubeX/mihomo> (pick `linux-arm64` under releases)
-  - Documentation: <https://wiki.metacubex.one/>
-- Panel (pick any official-style web panel that talks to mihomo's `external-controller`):
-  - metacubexd: <https://github.com/MetaCubeX/metacubexd>
-  - zashboard: <https://github.com/Zephyruso/zashboard>
+What ships is a generic setup, not anyone's personal one:
 
-Rules to follow when setting it up on this device (same as section 8 of [GETTING-STARTED.md](GETTING-STARTED.md)):
+- `scripts/chill/template.yaml`: one subscription (`SUB_URL`), region groups (TW / JP / SG / US), and a small rule set:
+  LAN and captive-portal checks direct, mainland China direct, AI, Telegram, YouTube / Netflix / Spotify, Apple, everything else through the proxy.
+  Add your own providers and rules there; rule sets come from [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat).
+- `scripts/chill/chill.env.example`: the device-side settings. Copy it to `/data/chill/chill.env` on the device, fill in `SUB_URL`, `chmod 600`.
 
-- The device runs OpenWrt 23.05 on aarch64 with musl libc; put programs and configuration in `/data`; `/tmp` is a RAM disk.
-- Autostart goes only through `/etc/rc.local`; back it up before changing it and check it with `sh -n` afterwards; **do not** run `/etc/init.d/<stock service> disable`.
-- A transparent proxy takes over the whole home network. Before the first start, have a way back (be able to stop it over SSH and restore DNS / firewall to their original state),
-  and have the control interface (`external-controller`) listen only on localhost or the LAN, never exposed to the cellular network.
-- Keep subscription URLs and secrets only on the device, readable only by root, and never commit them to any repository.
+## Install
+
+From the install kit: `GATEWAY=<device IP> ./install.sh chill`. From a checkout: `scripts/chill/install-chill.sh` (dry run by default; `--apply` to do it).
+Then on the device: `chill.sh safe-start`, check that the home network works, and `chill.sh confirm` within 5 minutes,
+otherwise it stops by itself and restores DNS and the firewall.
+
+Notes in the comments of `template.yaml` and `chill.sh` explain the device-specific choices (no `auto-redirect`, DNS through dnsmasq, CN routes).
+The touch-screen side is described in [touch-ui/docs/CHILL.md](../touch-ui/docs/CHILL.md).
+
+## Rules
+
+- Autostart goes only through `/etc/rc.local` (the installer backs it up and checks it with `sh -n`); **never** `/etc/init.d/<stock service> disable`.
+- A transparent proxy takes over the whole home network: always start with `safe-start`, and keep SSH access to stop it.
+- The control interface (`:9999`) listens on localhost only by default; the panel goes through the admin web.
+- Keep subscription URLs and secrets only in `chill.env` on the device; never commit them to any repository.

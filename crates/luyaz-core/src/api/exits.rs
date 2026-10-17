@@ -5,6 +5,8 @@
 //! are due, and writes [`ni::EXITS_FILE`] when the answer changed: the same file, so
 //! `compat/netinfo.rs` reads it as before. The direct exit is asked again when the default route
 //! (interface + address) changes or the answer is old.
+//! With CHILL running, the proxy exit too, through its loopback listener: the main group's port,
+//! or 🤖 AI's when the main group is on DIRECT (then only AI's traffic goes through CHILL).
 //! Blocking HTTP (5 s per service, several services), so never on the runtime's thread.
 
 use serde_json::json;
@@ -106,11 +108,56 @@ fn ipv4_of(iface: &str) -> Option<String> {
     out
 }
 
+fn chill_running(c: &Compat) -> bool {
+    std::fs::read_to_string(c.path(luyaz_api::chill::CHILL_STATE))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .is_some_and(|v| v["state"] == "running")
+}
+
+/// A mihomo group's selection followed down to a real node (`["🚀 节点选择", "🇯🇵 日本", "JP 03"]`),
+/// one `/proxies/<name>` per hop (the agent's `group_exit_chain`). None: mihomo did not answer.
+fn exit_chain(c: &Compat, group: &str) -> Option<Vec<String>> {
+    let env = std::fs::read_to_string(c.path(luyaz_api::chill::CHILL_ENV)).unwrap_or_default();
+    let secret = luyaz_api::chill::env_var(&env, "CHILL_SECRET");
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(3)))
+        .build()
+        .into();
+    let mut chain = vec![group.to_string()];
+    for hop in 0..4 {
+        let url = format!("{}/proxies/{}", c.src.mihomo, super::home::enc(chain.last()?));
+        let mut req = agent.get(&url);
+        if !secret.is_empty() {
+            req = req.header("Authorization", format!("Bearer {secret}"));
+        }
+        let info = req
+            .call()
+            .ok()
+            .filter(|r| r.status().as_u16() < 400)
+            .and_then(|mut r| r.body_mut().read_json::<serde_json::Value>().ok());
+        // a hop that fails keeps what is known so far; only the first one failing is "no answer"
+        let Some(info) = info else {
+            if hop == 0 {
+                return None;
+            }
+            break;
+        };
+        match info.get("now").and_then(serde_json::Value::as_str) {
+            Some(next) if !next.is_empty() && !chain.iter().any(|c| c == next) => {
+                chain.push(next.to_string())
+            }
+            _ => break,
+        }
+    }
+    Some(chain)
+}
 
 /// The thread's slots and what it last wrote.
 #[derive(Default)]
 pub(super) struct Exits {
     direct: Slot,
+    proxy: Slot,
     written: String,
 }
 
@@ -123,9 +170,30 @@ pub(super) fn pass(c: &Compat, x: &mut Exits, t: i64, route_table: &str) {
             let res = lookup(&cfg.direct, None);
             x.direct.store(&dkey, t, res, None);
         }
+        if chill_running(c) {
+            let main = exit_chain(c, luyaz_api::chill::MAIN_GROUP);
+            let main_direct = main
+                .as_ref()
+                .and_then(|ch| ch.last())
+                .is_some_and(|n| n == "DIRECT");
+            let (chain, port) = if main_direct {
+                (exit_chain(c, luyaz_api::chill::AI_GROUP), cfg.ai_port)
+            } else {
+                (main, cfg.proxy_port)
+            };
+            let node = chain.as_ref().and_then(|ch| ch.last().cloned());
+            let pkey = format!("{port} {}", node.as_deref().unwrap_or("?"));
+            if x.proxy.due(&pkey, t) {
+                let res = lookup(&cfg.proxy, Some(port));
+                x.proxy.store(&pkey, t, res, node);
+            }
+        } else {
+            x.proxy = Slot::default();
+        }
     }
     let text = json!({
         "direct": x.direct.value.as_ref().map(Lookup::json),
+        "proxy": x.proxy.value.as_ref().map(Lookup::json),
     })
     .to_string();
     if text != x.written && super::ops::atomic_write(&c.path(ni::EXITS_FILE), text.as_bytes()).is_ok() {

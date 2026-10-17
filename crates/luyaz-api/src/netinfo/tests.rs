@@ -296,9 +296,11 @@ fn slot_due_and_backoff() {
 #[test]
 fn config_parsing() {
     let c = Config::parse("");
+    assert_eq!(c.proxy_port, DEFAULT_PROXY_PORT);
     assert!(c.enabled);
     let c = Config::parse("direct=https://a.example/x, ftp://no\nproxy_port=7000\nlookups=0\n");
     assert_eq!(c.direct, vec!["https://a.example/x".to_string()]);
+    assert_eq!(c.proxy_port, 7000);
     assert!(!c.enabled);
 }
 

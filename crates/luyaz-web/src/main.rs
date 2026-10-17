@@ -49,6 +49,8 @@ mod router_qos;
 mod router_vpn;
 mod routes;
 mod scheduler;
+mod chill_page;
+mod chill_proxy;
 mod home;
 mod scenario;
 mod settings;
@@ -122,13 +124,16 @@ enum Cmd {
         #[arg(
             long,
             env = "LUYAZ_WEB_PAGES",
-            default_value = "/signal,/charts,/functions,/system,/trends,/clients,/tools/speedtest,/router/signal-detect,/tools/diagnose,/device-info,/router/qci,/tools/cpu,/sms,/sms/compose,/changes,/usb,/bandlock,/router/celllock,/router/apn,/router/network-mode,/router/mobile-network,/router/qos,/router/vpn,/router/telemetry,/router/firewall,/router/lan,/router/wifi,/router/wifi-guest,/alerts,/sms/forward,/scheduler,/router/esim,/health,/settings,/config,/,/services/tailscale,/router/scenario,/router/device,/tools/enable-adb,/router/sim,/router/stc,/router/stk,/tools/at,/tools/processes,/router/dns"
+            default_value = "/signal,/charts,/functions,/system,/trends,/clients,/tools/speedtest,/router/signal-detect,/tools/diagnose,/device-info,/router/qci,/tools/cpu,/sms,/sms/compose,/changes,/usb,/bandlock,/router/celllock,/router/apn,/router/network-mode,/router/mobile-network,/router/qos,/router/vpn,/router/telemetry,/router/firewall,/router/lan,/router/wifi,/router/wifi-guest,/alerts,/sms/forward,/scheduler,/router/esim,/health,/settings,/config,/,/services/tailscale,/services/chill,/router/scenario,/router/device,/tools/enable-adb,/router/sim,/router/stc,/router/stk,/tools/at,/tools/processes,/router/dns"
         )]
         pages: String,
         /// Operator logo files (`<slug>.svg`/`.png`). Trademarks: read from disk, never embedded.
         /// On the device they live with luyaz (8d-2; the old web's copy was /data/admin/operator-logos).
         #[arg(long, env = "LUYAZ_WEB_LOGO_DIR", default_value = "/data/luyaz/operator-logos")]
         logo_dir: std::path::PathBuf,
+        /// The CHILL dashboard (zashboard) files served at /chill-ui/ (chill_proxy.rs).
+        #[arg(long, env = "LUYAZ_WEB_CHILL_UI_DIR", default_value = "/data/chill/ui")]
+        chill_ui_dir: std::path::PathBuf,
     },
     /// Stand in for u60d: replay a recorded /v2/events capture.
     Mock {
@@ -356,6 +361,8 @@ pub fn app(
         .merge(home::routes())
         .merge(tailscale::routes())
         .merge(scenario::routes())
+        .merge(chill_page::routes())
+        .merge(chill_proxy::routes())
         .merge(device_power::routes())
         .merge(sim_page::routes())
         .merge(stc::routes())
@@ -471,7 +478,9 @@ fn main() {
                 session_file,
                 pages,
                 logo_dir,
+                chill_ui_dir,
             } => {
+                chill_proxy::set_ui_dir(chill_ui_dir);
                 (
                     bind,
                     app(

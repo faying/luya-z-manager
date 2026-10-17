@@ -1,6 +1,6 @@
 //! The touch screen's writes (Phase 4 step 8d), ported from the agent's handlers as they are:
 //! `netinfo.rs` (manual register and its guard, back to automatic, operator search, APN switch),
-//! `scenario.rs` (pin). Every device write goes to u60d's own `/control`
+//! `scenario.rs` (pin), `chill.rs` (exit). Every device write goes to u60d's own `/control`
 //! ([`super::control`]) as `screen`, a resumed guard as `guard`; the decisions are u60-api's.
 //!
 //! Only with u60d's writes on (step 9; with them off the routes answer 404 like anything not
@@ -915,3 +915,176 @@ pub async fn scenario_pin(State(c): State<Compat>, body: Bytes) -> Response {
     }
 }
 
+// ── CHILL exit ─────────────────────────────────────────────────────────────
+
+/// PUT /api/services/chill/exit `{"state"}` (the agent's `chill::exit_set`): group first, then
+/// mode, both straight to mihomo; then, abroad, the scenario engine's "back to proxy when home".
+pub async fn chill_exit(State(c): State<Compat>, headers: axum::http::HeaderMap, body: Bytes) -> Response {
+    use luyaz_api::chill as ch;
+    let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let want = match ch::exit_wanted(&parsed) {
+        Ok(w) => w.to_string(),
+        Err(r) => return http(r),
+    };
+    let env = std::fs::read_to_string(c.path(ch::CHILL_ENV)).unwrap_or_default();
+    let secret = ch::env_var(&env, "CHILL_SECRET");
+    let client = match reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(3))
+        .build()
+    {
+        Ok(cl) => cl,
+        Err(_) => return reply(500, json!({"ok": false, "error": "internal"})),
+    };
+    let auth = |r: reqwest::RequestBuilder| {
+        if secret.is_empty() {
+            r
+        } else {
+            r.header("Authorization", format!("Bearer {secret}"))
+        }
+    };
+    let group_url = format!(
+        "{}/proxies/{}",
+        c.src.mihomo,
+        super::home::enc(ch::MAIN_GROUP)
+    );
+    let info: Option<Value> = match auth(client.get(&group_url)).send().await {
+        Ok(r) if r.status().is_success() => r
+            .bytes()
+            .await
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok()),
+        _ => None,
+    };
+    let Some(info) = info else {
+        return reply(409, json!({"ok": false, "error": "CHILL is not running"}));
+    };
+    let now = info["now"].as_str().unwrap_or("").to_string();
+    let options: Vec<&str> = info["all"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let remembered = std::fs::read_to_string(c.path(ch::LAST_MAIN)).ok();
+    let backup = c
+        .manual_first
+        .live()
+        .map(|m| m.backup())
+        .or_else(|| {
+            std::fs::read_to_string(c.path(ch::MANUAL_FIRST_STATE))
+                .ok()
+                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                .and_then(|v| v["backup"].as_str().map(str::to_string))
+        })
+        .unwrap_or_default();
+    let plan = match ch::exit_plan(
+        &want,
+        &now,
+        &options,
+        remembered.as_deref().map(str::trim),
+        &backup,
+    ) {
+        Ok(p) => p,
+        Err(r) => return http(r),
+    };
+    if let Some(r) = &plan.remember {
+        let _ = std::fs::write(c.path(ch::LAST_MAIN), r);
+    }
+    if let Some(m) = &plan.member {
+        match auth(
+            client
+                .put(&group_url)
+                .header("Content-Type", "application/json")
+                .body(json!({"name": m}).to_string()),
+        )
+        .send()
+        .await
+        {
+            Ok(r) if r.status().as_u16() < 400 => {}
+            Ok(r) => {
+                let code = r.status().as_u16();
+                return reply(
+                    502,
+                    json!({"ok": false, "error": format!("mihomo rejected switch (HTTP {code})")}),
+                );
+            }
+            Err(e) => {
+                return reply(
+                    502,
+                    json!({"ok": false, "error": format!("switch request failed: {e}")}),
+                );
+            }
+        }
+    }
+    let mode = plan.mode;
+    match auth(
+        client
+            .patch(format!("{}/configs", c.src.mihomo))
+            .header("Content-Type", "application/json")
+            .body(json!({"mode": mode}).to_string()),
+    )
+    .send()
+    .await
+    {
+        Ok(r) if r.status().as_u16() < 400 => {
+            let _ = atomic_write(&c.path(ch::CHILL_MODE_FILE), format!("{mode}\n").as_bytes());
+            // a scenario restore putting the exit back is not a change by hand (the listener is
+            // loopback only, so the header comes from the agent or u60d's own engine)
+            if !headers.contains_key(luyaz_api::headers::RESTORE_HEADER) {
+                exit_changed_abroad(&c, c.clock.now());
+            }
+            reply(200, json!({"ok": true, "data": {"exit": want}}))
+        }
+        Ok(r) => {
+            let code = r.status().as_u16();
+            reply(
+                502,
+                json!({"ok": false, "error": format!("mihomo rejected mode (HTTP {code})")}),
+            )
+        }
+        Err(e) => reply(
+            502,
+            json!({"ok": false, "error": format!("mode request failed: {e}")}),
+        ),
+    }
+}
+
+/// The agent's `chill_exit_changed`: abroad (engine on, current scenario an abroad one), an exit
+/// changed by hand goes back to proxy when home. Same entry, same file.
+fn exit_changed_abroad(c: &Compat, now: i64) {
+    use super::status::{SCENARIO_CONFIG, SCENARIO_DISABLED, SCENARIO_STATE};
+    let read = |p: &str| std::fs::read_to_string(c.path(p)).ok();
+    if c.path(SCENARIO_DISABLED).exists() {
+        return;
+    }
+    let cfg: sc::Config = read(SCENARIO_CONFIG)
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let st: sc::RunState = read(SCENARIO_STATE)
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    if !cfg
+        .scenarios
+        .iter()
+        .any(|s| s.id == st.current && sc::is_abroad(s))
+    {
+        return;
+    }
+    let mut pending: Vec<sc::PendingRestore> = read(RESTORE_FILE)
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    if pending
+        .iter()
+        .any(|p| p.key == luyaz_api::chill::CHILL_EXIT_KEY)
+    {
+        return;
+    }
+    let Ok(entry) =
+        serde_json::from_value::<sc::PendingRestore>(luyaz_api::chill::chill_exit_restore(now))
+    else {
+        return;
+    };
+    pending.push(entry);
+    if let Ok(text) = serde_json::to_string_pretty(&pending) {
+        let _ = atomic_write(&c.path(RESTORE_FILE), text.as_bytes());
+    }
+}

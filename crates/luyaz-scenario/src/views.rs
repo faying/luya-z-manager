@@ -112,6 +112,25 @@ impl Engine {
         });
         #[allow(unused_mut)]
         let mut v = luyaz_api::scenario::public_summary(&e, current);
+        let members: Vec<(String, Option<String>)> = scen
+            .iter()
+            .flat_map(|s| s.actions.iter())
+            .map(|a| {
+                let member = a
+                    .action
+                    .body
+                    .as_ref()
+                    .map(Value::from)
+                    .and_then(|b| b.get("member").and_then(|m| m.as_str()).map(str::to_string));
+                (a.action.path.clone(), member)
+            })
+            .collect();
+        luyaz_api::chill::scenario_fields(
+            &mut v,
+            self.pending().iter().any(|p| p.key == sc::CHILL_ON_KEY),
+            scen.is_some_and(sc::is_abroad),
+            members.iter().map(|(p, m)| (p.as_str(), m.as_deref())),
+        );
         v
     }
 

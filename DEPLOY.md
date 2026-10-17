@@ -12,6 +12,7 @@ tar xzf onboard/dist/luyaz-kit-*.tar.gz -C /tmp && cd /tmp/luyaz-kit
 ./install.sh admin                           # luyaz-web, the admin web (over SSH, no cable needed)
 ./install.sh devui                           # touch UI + core (luyaz-core) + luyaz-sentinel
 ./install.sh esim                            # eSIM tools
+./install.sh chill                           # CHILL proxy (optional; put chill.env on the device first, see docs/PROXY.md)
 ./install.sh status                          # show status
 ./install.sh doctor                          # read-only health check
 ./install.sh reboot                          # reboot and confirm every component comes back by itself

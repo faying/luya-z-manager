@@ -4,7 +4,8 @@
 //! samples the surroundings, decides which scenario holds, and applies that
 //! scenario's actions once on entry. `home` (Wi-Fi off, the phone roams onto the
 //! house network), `away` (the catch-all), and `abroad` (a foreign SIM in the
-//! slot).
+//! slot: CHILL's main group goes DIRECT, and whatever it was before comes back
+//! when you return — see `restore_on_exit`).
 //!
 //! Moved from zte-agent `scenario.rs` (u60-platform.md Phase 4 step 9h) so the agent and u60d run
 //! the same engine; whichever owns it runs it (the handover list, the lease
@@ -330,7 +331,7 @@ static RESTORE_LOCK: Mutex<()> = Mutex::new(());
 
 thread_local! {
     // Set while run_restores puts something back, so a hook does not mistake
-    // the restore for a change made by hand (a service switched on by its restore).
+    // the restore for a change made by hand (CHILL switched on by its restore).
     static IN_RESTORE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -773,10 +774,22 @@ impl Engine {
         // it), then drop what succeeded from a fresh read, so an entry a
         // handler added meanwhile is not lost.
         let mut done: Vec<String> = Vec::new();
+        // Set when this pass switched CHILL back on: mihomo takes a few
+        // seconds to answer, and the entries after it (main group, exit) talk
+        // to it. Without the wait they failed and sat until the next scan
+        // (1–5 min; never, while pinned — 9-26 live test).
+        let mut chill_wait: Option<f64> = None;
         for key in &due {
             let Some(p) = pending.iter().find(|p| &p.key == key) else { continue };
             set_in_restore(true);
-            let result = self.run_action(&p.action);
+            let mut result = self.run_action(&p.action);
+            while result.is_err() && chill_wait.is_some_and(|t| self.io.mono() < t) {
+                self.io.sleep(Duration::from_secs(2));
+                result = self.run_action(&p.action);
+            }
+            if result.is_ok() && key == sc::CHILL_ON_KEY {
+                chill_wait = Some(self.io.mono() + 20.0);
+            }
             set_in_restore(false);
             match result {
                 Ok(()) => {
@@ -1076,6 +1089,63 @@ impl Engine {
         }
     }
 
+    // ── CHILL hooks ─────────────────────────────────────────────────────────
+
+    /// CHILL was switched on or off by hand (not by a restore). Switched on: no
+    /// more "switch it on when home". Switched off abroad (`was_on`): switch it
+    /// back on when home.
+    pub fn chill_toggled(&self, on: bool, was_on: bool) {
+        if on {
+            if in_restore() {
+                return; // the restore itself; run_restores removes the entry on success
+            }
+            let _g = lk(&RESTORE_LOCK);
+            let mut pending = self.pending();
+            let before = pending.len();
+            pending.retain(|p| p.key != sc::CHILL_ON_KEY);
+            if pending.len() != before {
+                self.write_json(RESTORE_FILE, &pending);
+                self.log("CHILL switched on by hand; no longer switching it on when home");
+            }
+            return;
+        }
+        if !was_on {
+            return;
+        }
+        if self.add_abroad_restore(sc::chill_on_restore(self.io.now())) {
+            self.log("CHILL switched off abroad; will switch it back on when home");
+        }
+    }
+
+    /// The CHILL exit was changed by hand abroad: go back to proxy when home.
+    pub fn chill_exit_changed(&self) {
+        if in_restore() {
+            return;
+        }
+        if self.add_abroad_restore(sc::chill_exit_restore(self.io.now())) {
+            self.log("CHILL exit changed abroad; will go back to proxy when home");
+        }
+    }
+
+    fn in_abroad_scenario(&self) -> bool {
+        let cfg = lk(&self.cfg);
+        let st = lk(&self.state);
+        sc::in_abroad_scenario(&cfg, self.enabled(), &st.current)
+    }
+
+    fn add_abroad_restore(&self, entry: PendingRestore) -> bool {
+        if !self.in_abroad_scenario() {
+            return false;
+        }
+        let _g = lk(&RESTORE_LOCK);
+        let mut pending = self.pending();
+        if pending.iter().any(|p| p.key == entry.key) {
+            return false;
+        }
+        pending.push(entry);
+        self.write_json(RESTORE_FILE, &pending);
+        true
+    }
 }
 
 /// Append one line to the scenario log, trimming it to its last lines once it passes 1 MiB.

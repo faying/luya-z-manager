@@ -163,6 +163,34 @@ fn device(name: &str) -> std::path::PathBuf {
         r#"{"current":"home","candidate":"","hits":0,"misses":0,"applied":{},"last_switch":1790000123,"last_error":null,"last_scan":0}"#,
     );
     put(&root, "/data/scenario/pin", "home\n");
+    put(
+        &root,
+        "/data/scenario/restore.json",
+        r#"[{"key":"chill-on-after-abroad","action":{"method":"POST","path":"/api/services/chill/enable"},"saved_at":1}]"#,
+    );
+    put(
+        &root,
+        "/tmp/chill.state",
+        r#"{"state":"running","reason":null}"#,
+    );
+    put(&root, "/data/chill/mode", "rule\n");
+    put(
+        &root,
+        "/data/chill/chill.env",
+        "CHILL_HOME_EXIT='192.0.2.88:8080'\nCHILL_HOME_IP=1\n",
+    );
+    put(
+        &root,
+        "/data/chill/home_ip.list",
+        "# sites\nip.example\nb.example\n",
+    );
+    let he = json!({"items": {"media": false, "ip": true, "rest": true}, "rest_until": now() + 300,
+        "reopened_in_china": {"media": false, "ip": false, "rest": false},
+        "notice": {"kind": "on", "item": "ip", "text": "家里 IP 已打开", "text_en": "Home IP on", "at": now() - 5, "code": "", "detail": ""}});
+    put(&root, "/data/chill/home-exit.json", &he.to_string());
+    let mf = json!({"backup": "", "manual": "JP 03", "switched_at": 0, "switches": [], "last_region": "",
+        "notice": "file notice", "notice_en": "", "notice_at": now() - 5, "notice_kind": "back"});
+    put(&root, "/data/chill/manual-first.json", &mf.to_string());
     root
 }
 
@@ -218,17 +246,41 @@ async fn public_status_has_what_the_screen_reads_without_a_login() {
         ),
         (json!(1790000123), json!(false), json!(false))
     );
-    // the screen's buffers (touch-ui scenario.c): services 4096, health 128
+    assert_eq!(
+        (s["chill_on_when_home"].clone(), s["auto_direct"].clone()),
+        (json!(true), json!(false))
+    );
+    let ch = &d["services"]["chill"];
+    assert_eq!(
+        (ch["state"].as_str(), ch["on"].clone()),
+        (Some("running"), json!(true))
+    );
+    // no replay yet: the agent's file
+    assert_eq!(
+        (
+            ch["notice"].as_str(),
+            ch["notice_kind"].as_str(),
+            ch["notice_en"].clone()
+        ),
+        (Some("file notice"), Some("back"), Value::Null)
+    );
+    assert_eq!(ch["home_exit"]["ip"], true);
+    assert_eq!(ch["home_exit"]["fallback"], false);
+    // the screen's buffers (touch-ui scenario.c): services 4096, chill 2048, home_exit 256, health 128
     for (v, cap) in [
         (&d["services"], 4096),
+        (ch, 2048),
+        (&ch["home_exit"], 256),
         (&d["health"], 128),
         (&d["alerts"], 128),
     ] {
         assert!(v.to_string().len() < cap, "{v}");
     }
-    // the scenarios off
+    // the switch off, the scenarios off
+    put(&root, "/data/chill/disabled", "");
     put(&root, "/data/scenario/disabled", "");
     let (_, body) = call(addr, "GET", "/api/public/status", None, "").await;
+    assert_eq!(body["data"]["services"]["chill"]["on"], false);
     assert_eq!(body["data"]["scenario"]["enabled"], false);
 }
 
@@ -276,6 +328,103 @@ async fn health_from_the_agents_snapshot() {
     assert_eq!(body["data"]["health"]["checked"], false);
 }
 
+/// mihomo answering `/proxies/<group>` with `now`.
+async fn mihomo(now: &'static str) -> String {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    let app = Router::new().route(
+        "/proxies/{g}",
+        get(move || async move { Json(json!({"now": now})) }),
+    );
+    tokio::spawn(async move { axum::serve(l, app).await });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn chill_home_as_the_agent_renders_it() {
+    let root = device("home");
+    let hub = Arc::new(crate::block::Hub::new(
+        vec![crate::block::BlockSpec::derived(
+            "signal",
+            Box::new(crate::block::SignalPolicy),
+        )],
+        Box::new(crate::block::tests::Recorder::default()),
+    ));
+    hub.record(
+        "signal",
+        Ok(json!({"serving_mcc": 440, "true_roaming": true, "bars": 3})),
+        tokio::time::Instant::now(),
+    );
+    let src = Sources {
+        hub: Some(hub),
+        mihomo: mihomo("🇯🇵 日本").await,
+        tailscale: Arc::new(|| {
+            Some(
+                json!({"Peer": {"x": {"Online": true, "CurAddr": "", "PrimaryRoutes": ["192.0.2.0/24"]}}}),
+            )
+        }),
+        ..Sources::none()
+    };
+    let addr = start(Compat::new(root.to_str().unwrap(), src)).await;
+    let (st, body) = call(addr, "GET", "/api/services/chill/home", None, "").await;
+    assert_eq!(st, 200, "{body}");
+    let d = &body["data"];
+    assert_eq!(
+        d["where"],
+        json!({"serving_mcc": 440, "true_roaming": true, "in_china": false})
+    );
+    assert_eq!(
+        (
+            d["configured"].clone(),
+            d["blocked"].clone(),
+            d["busy"].clone()
+        ),
+        (json!(true), Value::Null, Value::Null)
+    );
+    assert_eq!(d["items"]["ip"], json!({"on": true, "sites": 2}));
+    assert_eq!(
+        (
+            d["items"]["rest"]["on"].clone(),
+            d["items"]["rest"]["can_extend"].clone()
+        ),
+        (json!(true), json!(true))
+    );
+    // no engine, no probe (the probe and "暂走 X" are the live engine's, compat/home_exit.rs)
+    assert_eq!(d["home"], json!({"ok": null, "ms": null, "checked_at": null}));
+    assert!(d["fallback_to"].is_null());
+    assert_eq!(d["notice"]["text"], "家里 IP 已打开");
+    // Tailscale: not waited for on the first GET, there on a later one
+    assert!(d["tailscale"].is_null());
+    let mut ts = Value::Null;
+    for _ in 0..50 {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        ts = call(addr, "GET", "/api/services/chill/home", None, "")
+            .await
+            .1["data"]["tailscale"]
+            .clone();
+        if !ts.is_null() {
+            break;
+        }
+    }
+    assert_eq!(ts, "relay");
+    // touch-ui chill.c: data into 3072, the whole reply into 4096
+    let (_, body) = call(addr, "GET", "/api/services/chill/home", None, "").await;
+    assert!(body["data"].to_string().len() < 3072 && body.to_string().len() < 4096);
+    // CHILL in global mode: blocked, no fallback asked
+    put(&root, "/data/chill/mode", "global\n");
+    let (_, body) = call(addr, "GET", "/api/services/chill/home", None, "").await;
+    assert_eq!(
+        (
+            body["data"]["blocked"].as_str(),
+            body["data"]["fallback_to"].clone()
+        ),
+        (Some("mode_global"), Value::Null)
+    );
+    // not configured
+    put(&root, "/data/chill/chill.env", "CHILL_HOME_IP=1\n");
+    let (_, body) = call(addr, "GET", "/api/services/chill/home", None, "").await;
+    assert_eq!(body["data"], json!({"configured": false}));
+}
 
 /// The vendor reads as a device answers them (documentation addresses, made-up ids).
 fn fake_ubus(s: &'static str, m: &'static str, _a: Value) -> UbusReply {
@@ -392,8 +541,12 @@ async fn netinfo_as_the_agent_assembles_it() {
         "{d}"
     );
     assert_eq!(d["selection"]["mode"], "auto");
-    // exits from the agent's file
+    // exits from the agent's file; proxy only while CHILL runs
     assert_eq!(d["direct"]["ip"], "198.51.100.7");
+    assert_eq!(
+        (d["proxy"]["node"].as_str(), d["chill_running"].as_bool()),
+        (Some("JP 03"), Some(true))
+    );
     // the agent's operations: idle here
     assert_eq!(
         (
@@ -469,14 +622,181 @@ async fn netinfo_as_the_agent_assembles_it() {
         assert!(len(&d[k]) < 512, "{k}");
     }
 
-    // lite: no APN reads unless asked
+    // lite: no APN reads unless asked; CHILL off hides the proxy
     let (_, body) = call(addr, "GET", "/api/netinfo?lite=1", None, "").await;
     assert!(body["data"]["apn"].is_null());
+    put(&root, "/tmp/chill.state", r#"{"state":"stopped"}"#);
     let (_, body) = call(addr, "GET", "/api/netinfo?lite=1&apn=1", None, "").await;
     let d = &body["data"];
     assert_eq!(d["apn"]["mode"], "auto");
+    assert_eq!(
+        (d["proxy"].clone(), d["chill_running"].as_bool()),
+        (Value::Null, Some(false))
+    );
 }
 
+/// The home exit run by u60d (step 9a): the agent's engine with u60d as host. mihomo is a fake
+/// `Io` that writes chill.env and the state file through u60d's host, so what the host does is
+/// what is checked; the clock runs virtual seconds.
+mod home_exit_engine {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+    use luyaz_home_exit::{Clock, Fail, Host, Io, Items, Persist};
+
+    struct Fast(AtomicU64);
+    impl Clock for Fast {
+        fn now(&self) -> u64 {
+            self.0.load(Ordering::SeqCst)
+        }
+        fn sleep(&self, secs: u64) {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            self.0.fetch_add(secs, Ordering::SeqCst);
+        }
+    }
+
+    struct FakeMihomo {
+        host: Arc<dyn Host>,
+        log: Arc<Mutex<Vec<String>>>,
+    }
+    impl Io for FakeMihomo {
+        fn probe_home(&mut self) -> Option<Option<u32>> {
+            self.log.lock().unwrap().push("probe".into());
+            Some(Some(40))
+        }
+        fn apply(&mut self, items: Items) -> Result<(), String> {
+            self.log.lock().unwrap().push(format!("apply {}{}{}", items.media as u8, items.ip as u8, items.rest as u8));
+            let v = |b: bool| if b { "1" } else { "0" };
+            self.host.set_env_vars(&[
+                ("CHILL_HOME_MEDIA", v(items.media)),
+                ("CHILL_HOME_IP", v(items.ip)),
+                ("CHILL_HOME_REST", v(items.rest)),
+            ])
+        }
+        fn check(&mut self) -> Result<(), Fail> {
+            Ok(())
+        }
+        fn precheck(&mut self) -> Result<(), Fail> {
+            Ok(())
+        }
+        fn alert(&mut self, kind: &str, text: &str) {
+            self.host.alert(kind, text);
+        }
+        fn save(&mut self, p: &Persist) {
+            self.host
+                .write("/data/chill/home-exit.json", &serde_json::to_vec(p).unwrap())
+                .unwrap();
+        }
+    }
+
+    /// A PUT, again while a tick is running (the fast clock ticks every few ms; "busy" is the
+    /// engine's honest answer then).
+    async fn put_home(addr: std::net::SocketAddr, body: &str) -> (u16, Value) {
+        for _ in 0..200 {
+            let (st, b) = call(addr, "PUT", "/api/services/chill/home", None, body).await;
+            if !(st == 409 && b["error"] == "busy") {
+                return (st, b);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(3)).await;
+        }
+        panic!("always busy");
+    }
+
+    async fn until(addr: std::net::SocketAddr, what: impl Fn(&Value) -> bool) -> Value {
+        for _ in 0..500 {
+            let (_, body) = call(addr, "GET", "/api/services/chill/home", None, "").await;
+            if what(&body["data"]) {
+                return body["data"].clone();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("never got there");
+    }
+
+    #[tokio::test]
+    async fn switches_through_u60ds_own_engine() {
+        let root = device("home-engine");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let env = root.join("data/chill/chill.env");
+            fs::set_permissions(&env, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let host = Arc::new(crate::engines::home_exit::U60dHost {
+            root: root.to_str().unwrap().into(),
+            hub: None,
+            mihomo: "http://127.0.0.1:1".into(),
+            tailscale: Arc::new(|| None),
+        });
+        let l2 = log.clone();
+        let engine = Arc::new(
+            luyaz_home_exit::HomeExit::new(host).with_test_parts(
+                Arc::new(Fast(AtomicU64::new(now()))),
+                move |h| Box::new(FakeMihomo { host: h, log: l2.clone() }),
+            ),
+        );
+        let c = Compat::new(root.to_str().unwrap(), Sources::none())
+            .with_home_exit_engine(engine);
+        c.resume().await;
+        let addr = start(c).await;
+
+        // the start-up took the saved state (ip and rest on) and is ready
+        let d = until(addr, |d| d["updating"].is_null() && d["configured"] == true).await;
+        assert_eq!(d["items"]["ip"]["on"], true, "{d}");
+        assert_eq!(d["items"]["media"]["on"], false);
+
+        // on: 202, then the trial passes and the switch is on, in chill.env and the state file
+        let (st, body) = put_home(addr, r#"{"item":"media","on":true,"confirm":true}"#).await;
+        assert_eq!(st, 202, "{body}");
+        let d = until(addr, |d| d["items"]["media"]["on"] == true && d["busy"].is_null()).await;
+        assert_eq!(d["notice"]["kind"], "opened", "{d}");
+        let env = fs::read_to_string(root.join("data/chill/chill.env")).unwrap();
+        assert!(env.contains("CHILL_HOME_MEDIA='1'"), "{env}");
+        assert!(env.contains("CHILL_HOME_EXIT='192.0.2.88:8080'"), "{env}");
+        let saved: Value = serde_json::from_str(
+            &fs::read_to_string(root.join("data/chill/home-exit.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved["items"]["media"], true);
+        // the screen's summary comes from the same machine
+        let (_, body) = call(addr, "GET", "/api/public/status", None, "").await;
+        assert_eq!(body["data"]["services"]["chill"]["home_exit"]["media"], true);
+
+        // off: applied at once, no trial
+        let (st, _) = put_home(addr, r#"{"item":"media","on":false}"#).await;
+        assert!(st == 202 || st == 200, "{st}");
+        until(addr, |d| d["items"]["media"]["on"] == false && d["busy"].is_null()).await;
+        let env = fs::read_to_string(root.join("data/chill/chill.env")).unwrap();
+        assert!(env.contains("CHILL_HOME_MEDIA='0'"), "{env}");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let m = fs::metadata(root.join("data/chill/chill.env")).unwrap().permissions().mode();
+            assert_eq!(m & 0o777, 0o600, "chill.env keeps its mode");
+        }
+        let log = log.lock().unwrap().clone();
+        // rest was on in the file but not in chill.env: the start-up went with chill.env (A2).
+        // (The 30 s loop runs on the fast clock too: its probes fall anywhere in between.)
+        let applies: Vec<&String> = log.iter().filter(|l| l.starts_with("apply")).collect();
+        assert_eq!(applies, ["apply 110", "apply 010"]);
+    }
+
+    #[tokio::test]
+    async fn without_it_the_put_is_not_served() {
+        let root = device("home-noengine");
+        let addr = start(Compat::new(root.to_str().unwrap(), Sources::none())).await;
+        let (st, _) = call(
+            addr,
+            "PUT",
+            "/api/services/chill/home",
+            None,
+            r#"{"item":"media","on":true}"#,
+        )
+        .await;
+        assert!(st == 404 || st == 405, "{st}");
+        let (st, _) = call(addr, "GET", "/api/services/chill/home", None, "").await;
+        assert_eq!(st, 200);
+    }
+}
 
 /// On u60d's own listener the routes sit at `/v2/api/...`, need no login (the listener's auth
 /// applies), leave u60d's static `/v2/*` routes alone, and see the peer address.

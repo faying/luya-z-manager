@@ -12,7 +12,7 @@
 //! duties (`resume`) started only when that port bound. Both are gone.
 //!
 //! Step 8a/8b/8c: the reads (`/api/screen`, `/api/alerts`, `/api/public/status`, `/api/health`,
-//! `/api/netinfo`) rendered by u60-api from u60d's blocks, its
+//! GET `/api/services/chill/home`, `/api/netinfo`) rendered by u60-api from u60d's blocks, its
 //! shadow replays and the agent's files (`status.rs`, `home.rs`, `netinfo.rs`).
 //! Step 8d: the writes (`ops.rs`) through u60d's own `/control` (`control.rs`). Everything else
 //! answers 404 `not_in_compat_yet`.
@@ -35,11 +35,14 @@ use luyaz_api::alerts::Alerts;
 mod cell_detect;
 mod charge;
 mod health;
+mod chill_jobs;
+mod chill_page;
 pub(crate) mod control;
 mod device_admin;
 mod esim;
 mod exits;
 mod home;
+pub(crate) mod home_exit;
 mod net_reads;
 mod netinfo;
 pub(crate) mod ops;
@@ -62,8 +65,8 @@ pub fn start(c: Compat) {
 pub struct Sources {
     /// u60d's blocks (the signal block's roaming fields)
     pub hub: Option<Arc<crate::block::Hub>>,
-    /// the proxy API (not used by this build)
-    pub proxy_api: String,
+    /// mihomo's API (the home exit's fallback group)
+    pub mihomo: String,
     /// `tailscale status --json` (blocking; run off the async threads)
     pub tailscale: Arc<dyn Fn() -> Option<Value> + Send + Sync>,
     /// one ubus read (`state::ubus`, through the collector)
@@ -114,12 +117,12 @@ impl luyaz_esim::Host for NoCard {
 }
 
 impl Sources {
-    /// No blocks, no proxy, no Tailscale (tests).
+    /// No blocks, no mihomo, no Tailscale (tests).
     #[cfg(test)]
     pub fn none() -> Self {
         Sources {
             hub: None,
-            proxy_api: "http://127.0.0.1:1".into(),
+            mihomo: "http://127.0.0.1:1".into(),
             tailscale: Arc::new(|| None),
             ubus: Arc::new(|_, _, _| Box::pin(async { Err("no ubus".to_string()) })),
             stations: Arc::new(Vec::new),
@@ -144,7 +147,7 @@ impl Sources {
             Arc::new(|s, m, a| Box::pin(async move { crate::state::ubus(s, m, a).await }));
         Sources {
             hub,
-            proxy_api: std::env::var("LUYAZ_PROXY_API")
+            mihomo: std::env::var("LUYAZ_MIHOMO_API")
                 .unwrap_or_else(|_| "http://127.0.0.1:9999".into()),
             tailscale: Arc::new(home::tailscale_status),
             ubus: Arc::new(|s, m, a| Box::pin(async move { crate::state::ubus(s, m, a).await })),
@@ -185,6 +188,11 @@ pub struct Compat {
     scheduler_io: Option<Arc<dyn crate::engines::scheduler::Caller>>,
     /// the exit lookups run here (off in tests that do not ask)
     exits: bool,
+    chill: Arc<chill_jobs::ChillJobs>,
+    /// manual-first's engine (9g)
+    pub(crate) manual_first: Arc<crate::engines::manual_first::Running>,
+    /// the home exit, when u60d runs it (`LUYAZ_HOME_EXIT=1`, step 9)
+    home_exit: Option<Arc<luyaz_home_exit::HomeExit>>,
     /// the writes and the background duties (on the device: [`Compat::from_host`]; tests without
     /// them look at the reads alone)
     pub(crate) writes: bool,
@@ -205,7 +213,7 @@ impl Compat {
             speed.running_flag(),
             src.stations.clone(),
             gate.clone(),
-            &src.proxy_api,
+            &src.mihomo,
         ));
         let health = health::runner(&root);
         Compat {
@@ -224,6 +232,9 @@ impl Compat {
             scenario_io: None,
             scheduler_io: None,
             exits: false,
+            chill: Arc::default(),
+            manual_first: Arc::default(),
+            home_exit: None,
             writes: false,
             admin: device_admin::Host::default(),
         }
@@ -242,6 +253,25 @@ impl Compat {
         self
     }
 
+    /// u60d runs the home exit (step 9): its own machine, loop and switches.
+    pub fn with_home_exit(mut self, on: bool) -> Self {
+        self.home_exit = on.then(|| {
+            Arc::new(luyaz_home_exit::HomeExit::new(Arc::new(crate::engines::home_exit::U60dHost {
+                root: self.root.to_string(),
+                hub: self.src.hub.clone(),
+                mihomo: self.src.mihomo.clone(),
+                tailscale: self.src.tailscale.clone(),
+            })))
+        });
+        self
+    }
+
+    /// Tests: a home exit engine built by the test (fake mihomo, fast clock).
+    #[cfg(test)]
+    pub fn with_home_exit_engine(mut self, e: Arc<luyaz_home_exit::HomeExit>) -> Self {
+        self.home_exit = Some(e);
+        self
+    }
 
     /// The scenario engine reaches the device this way (step 9h).
     pub fn with_scenario_io(mut self, make: crate::engines::scenario::MakeIo) -> Self {
@@ -270,6 +300,9 @@ impl Compat {
 
     /// At start, with writes on: finish what u60d's guard marker says was in flight.
     pub async fn resume(&self) {
+        if let Some(e) = &self.home_exit {
+            e.start();
+        }
         if self.writes {
             tokio::spawn(watch::sample(self.clone()));
             tokio::spawn(watch::apn_watch(self.clone()));
@@ -289,6 +322,7 @@ impl Compat {
             if self.exits {
                 exits::spawn(self.clone());
             }
+            tokio::spawn(crate::engines::manual_first::run(self.clone()));
             ops::resume(self.clone()).await;
         }
     }
@@ -309,6 +343,7 @@ impl Compat {
         .with_scenario_io(crate::engines::scenario::device_io(v2.clone()))
         .with_scheduler_io(Arc::new(crate::engines::scheduler::Http { base: v2, token }))
         .with_exits(true)
+        .with_home_exit(crate::engines::home_exit::enabled())
     }
 
     /// A device path under [`Compat::root`].
@@ -363,6 +398,18 @@ impl Compat {
             .route("/api/services/tailscale/log", get(ts_reads::log));
         // batch 5c: the device-admin reads (its writes and the AT port with the writes, below)
         r = device_admin::reads(r);
+        // batch 5b: CHILL's page reads (the subscription list's PUT is a write, below)
+        r = r
+            .route("/api/services/chill/log", get(chill_page::log))
+            .route("/api/services/chill/providers", get(chill_page::providers_list));
+        r = r.route(
+            "/api/services/chill/home",
+            if self.home_exit.is_some() {
+                get(home_exit::get).put(home_exit::put)
+            } else {
+                get(home::get)
+            },
+        );
         if self.writes {
             // netwatch, deep diagnosis and the APN monitor (9b)
             let group = Router::new()
@@ -429,6 +476,13 @@ impl Compat {
                 .route("/api/scenario/log", get(scenario::log))
                 .route("/api/wifi/guest", axum::routing::put(scenario::guest))
                 .route("/api/device/power-save", axum::routing::put(scenario::power_save));
+            scen = scen
+                .route("/api/services/chill", get(chill_page::status))
+                .route("/api/services/chill/regions", axum::routing::put(chill_page::regions))
+                .route(
+                    "/api/services/chill/bypass",
+                    get(chill_page::bypass_get).put(chill_page::bypass_set),
+                );
             let scen = scen.route_layer(middleware::from_fn_with_state(self.clone(), scenario::owned));
             // scheduled jobs (8d-1d)
             let sched = Router::new()
@@ -454,6 +508,27 @@ impl Compat {
                 .route("/api/cell/signal-detect/start", post(cell_detect::start))
                 .route("/api/cell/signal-detect/stop", post(cell_detect::stop))
                 .route("/api/scenario/pin", post(ops::scenario_pin));
+            r = r
+                .route(
+                    "/api/services/chill/exit",
+                    axum::routing::put(ops::chill_exit),
+                )
+                .route("/api/services/chill/enable", post(chill_jobs::enable))
+                .route("/api/services/chill/disable", post(chill_jobs::disable))
+                .route(
+                    "/api/services/chill/profile",
+                    axum::routing::put(chill_jobs::profile),
+                )
+                .route("/api/services/chill/job", get(chill_jobs::job))
+                .route(
+                    "/api/services/chill/providers",
+                    axum::routing::put(chill_jobs::providers),
+                )
+                // batch 5b
+                .route(
+                    "/api/services/chill/providers/refresh",
+                    post(chill_page::providers_refresh),
+                );
         }
         r
     }
@@ -649,6 +724,8 @@ mod tests_exits;
 #[cfg(test)]
 mod tests_scenario;
 #[cfg(test)]
+mod tests_manual_first;
+#[cfg(test)]
 mod tests_ops;
 #[cfg(test)]
 mod tests_watch;
@@ -666,3 +743,5 @@ mod tests_ts_reads;
 mod tests_device_admin;
 #[cfg(test)]
 mod tests_engine_routes;
+#[cfg(test)]
+mod tests_chill_reads;

@@ -28,7 +28,7 @@ pub const SC_PEND_MS: u32 = 45000;
 pub const NI_MAX_SCENES: usize = 6;
 pub const NI_MAX_OPS: usize = 8;
 pub const NI_MAX_CELLS: usize = 8;
-/// 自动 + 各情景 + 1 行备用
+/// 自动 + 各情景 + CHILL 出口
 pub const NET_SCENE_ROWS: usize = 1 + NI_MAX_SCENES + 1;
 
 /// Which page each block hangs on.
@@ -525,6 +525,7 @@ impl Ui {
         let th = t();
         let n = self.ni();
         if i == NET_SCENE_ROWS - 1 {
+            self.exit_menu_set(true);
             return;
         }
         let nscenes = n.nscenes.max(0) as usize;
@@ -610,6 +611,14 @@ impl Ui {
         }
         net.btns.set_y(NET_STAT_H + ops * NET_OP_H);
         net.sc_note.set_y(scene_rows + 8);
+        // the exit tab: 出口 IP, then the CHILL card, then the › rows
+        for c in [self.ex.chill_card] {
+            if c.hidden() {
+                continue;
+            }
+            c.set_y(y[NH_EXIT]);
+            y[NH_EXIT] += c.style_height(0) + 10;
+        }
         let net = &self.net;
         net.exit_nav_sec.set_y(y[NH_EXIT]);
         net.exit_nav_card.set_y(y[NH_EXIT] + 20);

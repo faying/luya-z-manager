@@ -76,7 +76,7 @@ pub struct St {
 /// Replies polled by `topbar::poll`; `None` until the first answer, and again after a failed one.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Side {
-    /// u60d `/v2/api/public/status` data: `alerts.unread`.
+    /// u60d `/v2/api/public/status` data: `alerts.unread`, `services.chill`.
     pub public: Option<Value>,
     /// u60d `/v2/api/alerts` data: the alert list.
     pub alerts: Option<Value>,

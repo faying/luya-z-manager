@@ -28,6 +28,7 @@ const DG_ARM_MS: u32 = 5000;
 const DG_NOTE_MS: u32 = 4000;
 const DG_ACT_NONE: i32 = 0;
 const DG_ACT_PLACE: i32 = 1;
+const DG_ACT_PROXY: i32 = 2;
 const PL_SAMPLES: usize = 3;
 
 #[derive(Default, Clone, Copy)]
@@ -275,6 +276,15 @@ impl Ui {
         if to == DG_ACT_PLACE {
             self.sub_open_child(Sub::Place, Sub::Diag);
         }
+        else if to == DG_ACT_PROXY {
+            // the nodes are on the exit tab's CHILL card
+            self.tab_go(super::TAB_EXIT);
+            if !self.ex.chill_card.hidden() {
+                let sc = self.net.nh_scroll[super::network::NH_EXIT];
+                sc.update_layout();
+                sc.scroll_to_y(self.ex.chill_card.style_y(0) - 4);
+            }
+        }
     }
 
     /// The title bar's 再查一次 (on the subpage header, only for this page).
@@ -441,8 +451,10 @@ impl Ui {
         if self.dg.pending || r.state == DG_NONE || r.state == DG_IDLE {
             let ids: &[&str] = &[
                 "wifi", "signal", "limit", "link", "crowd",
+                "proxy",
             ];
             let nids = ids.len();
+            let nids = if self.model.chill_online == 0 { nids - 1 } else { nids }; // no proxy layer without CHILL
             let ids = &ids[..nids];
             let state = if self.dg.pending { DG_RUN } else { r.state };
             r = diag_run_t { state, feedback: -1, ..Default::default() };
@@ -513,6 +525,10 @@ impl Ui {
             {
                 act = DG_ACT_PLACE;
                 act_txt = tr("固定位置时用摆放模式 ›");
+            }
+            if r.state == DG_DONE && l.id == "proxy" && (l.level == DG_WARN || l.level == DG_BAD) {
+                act = DG_ACT_PROXY;
+                act_txt = tr("去换节点 ›");
             }
             let w = self.dg.row[k];
             kit::show(w.bx, true);

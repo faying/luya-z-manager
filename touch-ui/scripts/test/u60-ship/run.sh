@@ -918,12 +918,14 @@ teardown
 # ── record: files the manifest only records (T6), and doctor agreeing ─────
 undocenv() {
     unset DOC_MANIFEST DOC_SHIP_TXN DOC_SHIP_HB DOC_MD5_CACHE DOC_TS_DIR DOC_TS_TUNING DOC_INITD DOC_RC DOC_BOOT_ID_FILE DOC_UPTIME DOC_DEVUI_DIR DOC_ROOT
+    unset DOC_CHILL_DIR DOC_CHILL_TEMPLATE
 }
 docenv() { # doctor.sh reading this sandbox
     export DOC_MANIFEST=$U60S_MANIFEST DOC_SHIP_TXN=$R/data/luyaz/ship/txn DOC_SHIP_HB=$T/tmp/heartbeat \
         DOC_MD5_CACHE=$T/md5cache DOC_TS_DIR=$R/data/tailscale DOC_TS_TUNING=$R/data/tailscale/tuning.env \
         DOC_INITD=$R/etc/init.d DOC_RC=$R/etc/rc.local DOC_BOOT_ID_FILE=$T/boot_id DOC_UPTIME=$T/uptime \
         DOC_DEVUI_DIR=$R/data/plugins/u60pro-devui DOC_ROOT=$R
+    export DOC_CHILL_DIR=$R/data/chill DOC_CHILL_TEMPLATE=$R/data/chill/template.yaml
 }
 setup
 CASE="record"

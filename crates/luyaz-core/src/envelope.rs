@@ -499,7 +499,7 @@ mod tests {
         };
         {
             let mut s = Store::open(&dir, 400, 1 << 20).unwrap();
-            assert_eq!(ids(&mut s, "proxyd", "tailscaled"), (0, 1));
+            assert_eq!(ids(&mut s, "mihomo", "tailscaled"), (0, 1));
             assert_eq!(ids(&mut s, "tailscaled", "agent"), (1, 2));
             s.flush(false).unwrap();
         }
@@ -522,7 +522,7 @@ mod tests {
         assert_eq!(dropped, 0);
         assert!(groups.len() >= 2);
         let first = segment_names(&groups[0]);
-        assert_eq!(&first[..4], &["proxyd", "tailscaled", "agent", "datad"]);
+        assert_eq!(&first[..4], &["mihomo", "tailscaled", "agent", "datad"]);
         let last = groups.last().unwrap();
         let names = segment_names(last);
         let rec = last.iter().rev().find(|r| r.kind == 2).unwrap();

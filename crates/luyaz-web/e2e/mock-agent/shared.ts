@@ -10,6 +10,15 @@ export const shared = {
   airplane: false,
   /** Mobile data switch (modem/data). */
   mobileData: true,
+  /** CHILL state as the touch screen / public status sees it. */
+  chill: {
+    /** "running" | "direct" | "stopped" | "starting" | "unknown" */
+    state: "running" as string,
+    /** "proxy" | "global" | "direct_keep_ai" | "direct_all" (chill.rs exit_set) */
+    exit: "proxy" as string,
+    region: "TW" as string,
+    profile: "standard" as string,
+  },
   tailscale: {
     running: true,
     node: "u60-pro",

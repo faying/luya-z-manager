@@ -353,6 +353,7 @@ fn recovery_first_and_falling_back() {
 #[test]
 fn nothing_missing_no_rescan() {
     let d = Dev::new("ret1");
+    d.proc(301, "mihomo", 10, b"m");
     d.proc(302, "u60pro-devui", 10, b"ui");
     d.proc(303, "u60-uid", 10, b"uid");
     d.proc(304, "tailscaled", 10, b"ts");

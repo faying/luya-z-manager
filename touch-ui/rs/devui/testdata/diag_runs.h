@@ -11,12 +11,13 @@
 /* 3 of 6 done: Wi-Fi, signal, cap filled; the link probe going */
 static const char k_diag_running[] =
     "{\"id\":7,\"state\":\"running\",\"asked_at\":1790250100,\"started_at\":1790250101,\"finished_at\":null,"
-    "\"step\":3,\"steps\":5,\"layers\":["
+    "\"step\":3,\"steps\":6,\"layers\":["
     "{\"id\":\"wifi\",\"level\":\"ok\",\"detail\":\"最差：iPad · -52 dBm · 433 Mbps\",\"detail_en\":\"Worst: iPad · -52 dBm · 433 Mbps\",\"counted\":true},"
     "{\"id\":\"signal\",\"level\":\"ok\",\"detail\":\"信号强 · 干扰小 · RSRP -87 · SINR 17.7\",\"detail_en\":\"Signal strong · noise low · RSRP -87 · SINR 17.7\",\"counted\":true},"
     "{\"id\":\"limit\",\"level\":\"ok\",\"detail\":\"没有限速 · QCI 9\",\"detail_en\":\"No cap · QCI 9\",\"counted\":true},"
     "{\"id\":\"link\",\"level\":\"running\",\"detail\":\"\",\"detail_en\":\"\",\"counted\":true},"
     "{\"id\":\"crowd\",\"level\":\"pending\",\"detail\":\"\",\"detail_en\":\"\",\"counted\":true}"
+    ",{\"id\":\"proxy\",\"level\":\"pending\",\"detail\":\"\",\"detail_en\":\"\",\"counted\":true}"
     "],\"main\":null,\"key\":{\"plmn\":\"46011\",\"cell\":23960174596,\"ch\":627264,\"hour\":10},"
     "\"from\":\"touch\",\"feedback\":null,\"speed\":null,\"age_s\":null}";
 
@@ -24,12 +25,13 @@ static const char k_diag_running[] =
  * tell (one of them not counted), a speed row */
 static const char k_diag_result[] =
     "{\"id\":7,\"state\":\"done\",\"asked_at\":1790249500,\"started_at\":1790249501,\"finished_at\":1790249511,"
-    "\"step\":4,\"steps\":4,\"layers\":["
+    "\"step\":5,\"steps\":5,\"layers\":["
     "{\"id\":\"wifi\",\"level\":\"na\",\"detail\":\"没有设备连着\",\"detail_en\":\"No devices on Wi-Fi\",\"counted\":false},"
     "{\"id\":\"signal\",\"level\":\"ok\",\"detail\":\"信号强 · 干扰小 · RSRP -88 · SINR 8.0\",\"detail_en\":\"Signal strong · noise low · RSRP -88 · SINR 8.0\",\"counted\":true},"
     "{\"id\":\"limit\",\"level\":\"na\",\"detail\":\"QoS 读不到\",\"detail_en\":\"QoS unavailable\",\"counted\":true},"
     "{\"id\":\"link\",\"level\":\"warn\",\"detail\":\"延迟 210 ms · 丢包 0/10\",\"detail_en\":\"210 ms · lost 0/10\",\"counted\":true},"
     "{\"id\":\"crowd\",\"level\":\"warn\",\"detail\":\"疑似拥挤 · RSRQ -18 · 延迟是平时的 3.0 倍\",\"detail_en\":\"Likely busy · RSRQ -18 · latency 3.0× usual\",\"counted\":true}"
+    ",{\"id\":\"proxy\",\"level\":\"ok\",\"detail\":\"JP 03 180 ms · 直连 140 ms\",\"detail_en\":\"JP 03 180 ms · direct 140 ms\",\"counted\":true}"
     "],\"main\":{\"layer\":\"link\",\"level\":\"warn\",\"text\":\"蜂窝链路不稳\",\"text_en\":\"Cellular link unstable\","
     "\"action\":\"过几分钟再试，或换个地方\",\"action_en\":\"Try again in a few minutes, or move\",\"action_to\":\"\",\"more\":1},"
     "\"key\":{\"plmn\":\"46011\",\"cell\":23960174596,\"ch\":627264,\"hour\":10},"

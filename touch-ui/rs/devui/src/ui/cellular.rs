@@ -227,13 +227,15 @@ impl Ui {
         kit::scroll_extent(c.scroll, y + c.rest.style_height(0) - 10 + TAB_PAD);
     }
 
-        /// 出口: where the traffic goes out (Tailscale), and how fast.
-        pub(super) fn build_exit(&mut self, tile: Obj) {
-            let sc = kit::scroll(tile, 0, VIEW_H, 1000);
-            self.net.nh_scroll[NH_EXIT] = sc;
-            // 出口 IP (build_sub_net) on top, the › rows after it (net_reflow)
-            self.net.nh_base[NH_EXIT] = 4;
-            self.nav_card(sc, 4, n_("连接与测速"), &[Sub::Ts, Sub::Speed], &["Tailscale", n_("测速")]);
+    /// 出口: where the traffic goes out (CHILL, Tailscale), and how fast.
+    pub(super) fn build_exit(&mut self, tile: Obj) {
+        let sc = kit::scroll(tile, 0, VIEW_H, 1000);
+        self.net.nh_scroll[NH_EXIT] = sc;
+        // Home's CHILL card (Tailscale went back to Home 9-25)
+        self.ex.chill_card.set_parent(sc);
+        // 出口 IP (build_sub_net) on top, this card after it (net_reflow)
+        self.net.nh_base[NH_EXIT] = 4;
+        self.nav_card(sc, 4, n_("代理与测速"), &[Sub::Chill, Sub::Ts, Sub::Speed], &["CHILL", "Tailscale", n_("测速")]);
         self.net.exit_nav_sec = self.nav_sec;
         self.net.exit_nav_card = self.nav_card;
     }

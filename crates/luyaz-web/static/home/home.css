@@ -26,6 +26,9 @@
 .hm-wall:has(> .hm-flag[data-stale]) .nd-readout { background: var(--nd-track); }
 .hm-wall:has(> .hm-flag[data-stale]) .nd-readout__value,
 .nd-group:has(> .hm-flag[data-stale]) .nd-row__value { color: var(--nd-t2); }
+.hm-seg { margin-top: 12px; }
+.hm-note { margin: 0 0 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.hm-note a { display: inline-flex; align-items: center; min-height: 44px; font-weight: 500; }
 .hm-dim { opacity: 0.75; }
 .hm-grid .nd-row__text { display: flex; flex-direction: column; }
 /* operator mark (oplogo.rs): white chip so dark marks survive dark mode; round first-letter badge otherwise */

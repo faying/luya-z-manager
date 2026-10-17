@@ -136,6 +136,7 @@ pub fn layer_name(id: &str) -> &str {
         "limit" => tr("限速"),
         "link" => tr("蜂窝链路"),
         "crowd" => tr("基站负载"),
+        "proxy" => tr("代理"),
         "speed" => tr("速度"),
         _ => id,
     }

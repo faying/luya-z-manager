@@ -29,6 +29,7 @@ export const SCENARIOS = [
   "verdict-stall", // /api/public/status network.verdict = "stall" (connected, nothing comes back), signal itself good
   "verdict-crowd", // /api/public/status network.verdict = "crowd" (cell likely busy), signal itself good
   "ts-keysoon", // /api/services/tailscale: this node's key expires in 5 days (the status block warns)
+  "mf-alldown", // manual-first notice "both down" (notice_kind alldown) in /api/public/status and /api/services/chill
 ] as const;
 
 export type Scenario = (typeof SCENARIOS)[number];

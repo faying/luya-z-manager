@@ -1,0 +1,95 @@
+// CHILL home exit's tick and start-up (luyaz_policy::home_exit), the policy boundary between u60d's
+// home exit shadow and a home-exit component. The version is the host ABI version in a plugin's
+// manifest entry: change anything here and bump it.
+//
+// As manual-first: the machine calls out for every outside answer; across this boundary that is a
+// replay against the answers the step got, so the guest needs no imports.
+package luyaz:home-exit@0.2.0;
+
+world home-exit {
+  record items {
+    media: bool,
+    ip: bool,
+    rest: bool,
+  }
+
+  record notice {
+    kind: string,
+    item: string,
+    text: string,
+    text-en: string,
+    at: u64,
+    code: string,
+    detail: string,
+  }
+
+  /// /data/chill/home-exit.json
+  record persist {
+    items: items,
+    rest-until: u64,
+    reopened-in-china: items,
+    notice: notice,
+  }
+
+  record machine {
+    p: persist,
+    last-probe: u64,
+    fails: u32,
+    idle: bool,
+    home-ms: option<u32>,
+    home-ok: option<bool>,
+    probed-at: u64,
+    china-since: option<u64>,
+  }
+
+  /// 0.2.0: screen-on and cell-busy (u60-radio.md §5); none = unknown, the 0.1.0 rule.
+  record obs {
+    now: u64,
+    serving-mcc: option<s64>,
+    env: items,
+    clients: option<s64>,
+    screen-on: option<bool>,
+    cell-busy: option<bool>,
+  }
+
+  record startup {
+    had-file: bool,
+    env: items,
+    now: u64,
+  }
+
+  variant step {
+    tick(obs),
+    startup(startup),
+  }
+
+  enum fail {
+    core,
+    home,
+    tailscale,
+    direct,
+  }
+
+  record probe-answer { answered: bool, ms: option<u32> }
+  record apply-call { items: items, err: option<string> }
+
+  /// One Io call and its answer.
+  variant event {
+    probe-home(probe-answer),
+    apply(apply-call),
+    check(option<fail>),
+    precheck(option<fail>),
+    alert(string),
+    save,
+  }
+
+  record outcome {
+    after: machine,
+    calls: list<event>,
+    diverged: option<tuple<u32, string>>,
+    unused: u32,
+  }
+
+  /// One recorded step (luyaz_policy::home_exit::replay).
+  export replay: func(before: machine, s: step, recorded: list<event>) -> outcome;
+}

@@ -3,7 +3,7 @@
 <div id="dg-status"><section class="nd-status nd-status--{{ v.tone }}{% if v.tone == "stale" %} nd-stale{% endif %}">
 <div class="nd-status__main">
 <div class="nd-status__state" role="status" aria-live="polite"><span class="nd-mark nd-mark--{{ v.tone }}"><span class="nd-mark__sym" aria-hidden="true">{{ v.symbol() }}</span><span>{{ v.word }}</span></span></div>
-{% if let Some(r) = v.reason %}<div class="nd-status__reason">{{ r }}</div>{% endif %}
+{% if let Some(r) = v.reason %}<div class="nd-status__reason">{{ r }}{% if v.proxy %} <a href="/services/chill" class="t-link">{{ v.l.pick("Switch node →", "去换节点 →") }}</a>{% endif %}</div>{% endif %}
 {% if let Some(b) = v.bar %}<div class="nd-status__meta"><div role="progressbar" aria-label="{{ v.l.pick("Progress", "检查进度") }}" aria-valuemin="0" aria-valuemax="{{ b.1 }}" aria-valuenow="{{ b.0 }}" class="st-bar"><div class="st-bar__fill" style="width:{{ v.pct() }}%"></div></div></div>{% elif let Some(a) = v.at %}<div class="nd-status__meta">{{ a }}</div>{% endif %}
 </div>
 {% match v.action %}{% when Action::Retry %}<div class="nd-status__actions"><button type="button" class="nd-btn nd-btn--secondary" data-on:click="@post('/tools/diagnose/refresh')">{{ crate::shell::icon("ArrowClockwise", false, 18, "")|safe }}{{ v.l.pick("Retry", "重试") }}</button></div>{% when Action::Start %}<div class="nd-status__actions"><button type="button" class="nd-btn nd-btn--primary" aria-describedby="dg-cost" data-on:click="@post('/tools/diagnose/start', {retryMaxCount: 0})">{{ crate::shell::icon("Play", false, 18, "")|safe }}{{ v.l.pick("Start", "开始") }}</button></div>{% when Action::None %}{% endmatch %}

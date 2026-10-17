@@ -225,6 +225,20 @@ pub fn describe_does(actions: &[Does], inhibit_sleep: bool) -> (String, String) 
                     pair("开访客 Wi-Fi", "Guest Wi-Fi on")
                 }
             }
+            "/api/services/chill/enable" => pair("开 CHILL", "CHILL on"),
+            "/api/services/chill/disable" => pair("关 CHILL", "CHILL off"),
+            "/api/services/chill/regions" | "/api/services/chill/exit" => {
+                let m = b
+                    .and_then(|v| v.get("member"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                match m {
+                    "DIRECT" => pair("CHILL 改成直连", "CHILL goes direct"),
+                    "" => pair("改 CHILL 出口", "Change CHILL route"),
+                    m => (format!("CHILL 走 {m}"), format!("CHILL via {m}")),
+                }
+            }
+            "/api/services/chill/bypass" => pair("改 CHILL 分流", "Change CHILL split routing"),
             "/api/device/power-save" => pair("改省电设置", "Change power saving"),
             "/api/device/thermal" => pair("改温控", "Change thermal control"),
             p => pair(p, p),

@@ -14,7 +14,7 @@ It is written for people new to this project. Every command comes from scripts a
 
 | Repository | What it is on the device | Purpose |
 |---|---|---|
-| [luya-z-manager](https://github.com/faying/luya-z-manager) (this repository) | `luyaz-core` (:9460) + `luyaz-web` (:9090) + `luyaz-sentinel` | The device REST API, the advanced admin web in the browser, eSIM, **and the install kit (`onboard/`)** |
+| [luya-z-manager](https://github.com/faying/luya-z-manager) (this repository) | `luyaz-core` (built from `crates/luyaz-core`, `/data/luyaz/luyaz-core`, `127.0.0.1:9460`) + `luyaz-web` (:9090) + `luyaz-sentinel` | The data service and device API, the advanced admin web in the browser, eSIM, CHILL proxy control, **and the install kit (`onboard/`)** |
 | [luya-z-touch-ui](https://github.com/faying/luya-z-touch-ui) | `/data/luyaz/ui/` (`luyaz-ui`) | Front-panel touch UI (Rust, `touch-ui/rs/`; its source now lives in this repository under `touch-ui/`), plus the health check and fallback scripts in `/data/luyaz/scripts/` |
 | [luya-z-data-service](https://github.com/faying/luya-z-data-service) | (no longer installed) | The original Rust `zwrt-datad`; luyaz-core in this repository replaced it and the kit no longer uses it |
 
@@ -107,6 +107,7 @@ The first run downloads Docker images and dependencies and takes about 20–30 m
 | Touch UI fonts | Nunito (pinned google/fonts commit) and a Chinese fallback font (Resource Han Rounded subset), both OFL, pinned sha256, generated in Docker. The ZTE fonts that ship on the device are not packaged; the touch UI reads them directly from `/usr/ui/fonts/` on the device |
 | Core (`luyaz-core`) | luyaz-core from this repository (`cargo zigbuild --profile release-device -p luyaz-core` in `onboard/build.Dockerfile`, image pinned by digest, dependencies locked by `Cargo.lock`) |
 | eSIM tools (lpac) | `scripts/esim/build-esim-bundle.sh --out`: lpac and its libraries from Alpine 3.24 (`scripts/esim/alpine.lock` pins versions and sha256) + a statx compatibility shim + `qmi_uim_probe` |
+| CHILL (optional) | Official mihomo and zashboard release packages (pinned sha256) + rule sets (latest at download time). Add `CHILL=0` to leave it out |
 | Process supervision, health check scripts | touch-ui's `scripts/` |
 
 Before packaging, the script checks: the touch program must be the Rust build (the C/LVGL touch UI was deleted and only survives in the `legacy-c-touch-ui` tag); the core must be the Rust version with no hard-coded external update source. If either check fails, it stops.
@@ -123,6 +124,7 @@ Other variables: `DEVUI_BIN` (touch binary), `SENTINEL_BIN` (luyaz-sentinel), `E
 
 > **eSIM bundle fails to build?** When Alpine 3.24 ships a security update, it replaces the pinned packages and the old files disappear from the mirrors. Run
 > `python3 scripts/esim/alpine_closure.py --relock` to re-resolve, rebuild, then confirm on one device that `/data/esim/lpac.sh chip info` can read the card before using it.
+> Rule sets (CHILL) are not pinned; each build takes the latest version at that time.
 
 ## 4. Install
 
@@ -145,6 +147,7 @@ The full set is the four components `ssh admin devui esim`. You can also install
 ```sh
 ./install.sh ssh               # only enable ADB + install persistent SSH
 ./install.sh ssh admin devui   # without eSIM
+./install.sh chill             # CHILL proxy, not part of the full set, must be named explicitly (see section 7)
 ```
 
 Installing SSH also **turns off firmware auto-update**. If the U60's address is not `192.168.0.1`, prefix the command with `GATEWAY=your-address`.
@@ -191,16 +194,29 @@ If the device has an unfinished `luyaz-ship.sh` transaction (see touch-ui [docs/
 ./install.sh restore backups/xxx.tgz  # lists the files it will change first, writes only after you type yes
 ```
 
-**Roll back to an older version**: the install script does not keep the previous program version. To roll back, install the relevant component again from the older install kit.
-If the touch program fails to start twice in a row, `luyaz-sentinel` hands the screen back to the stock UI;
+**Roll back to an older version**: apart from CHILL, the install script does not keep the previous program version. To roll back, install the relevant component again from the older install kit.
+If a CHILL update fails, it switches back to the previous version (`.prev`) on its own. If the touch program fails to start twice in a row, `luyaz-sentinel` hands the screen back to the stock UI;
 long-press the bottom-right corner of the screen for 3 seconds to switch back.
 
 **Uninstall**: there is no uninstall command; the steps are in the install kit README's 「恢复原厂」 (Restore stock) section: stop and delete the services installed under `/etc/init.d/`,
 restore the original `rc.local` from `/data/luyaz/kit/rc.local.orig`, delete the directories installed under `/data`, and reboot (if you upgraded the firmware, see the last note under "Firmware versions" in section 2).
 
-## 7. Proxy (optional)
+## 7. CHILL proxy (optional)
 
-The public version does not include a proxy. To run a transparent proxy on the device, follow [docs/PROXY.md](PROXY.md) and build the core and set up a panel yourself from the official sources.
+CHILL is a transparent proxy on the device (native mihomo, TUN mode) plus the zashboard panel. It needs your own subscription URL.
+
+```sh
+./install.sh chill                     # first time: install only, do not start
+ssh -p 2222 root@192.168.0.1
+cp /data/chill/chill.env.example /data/chill/chill.env && chmod 600 /data/chill/chill.env
+vi /data/chill/chill.env               # enter the subscription URL
+sh /data/chill/chill.sh safe-start     # start; once the whole home network is confirmed working, within 5 minutes:
+sh /data/chill/chill.sh confirm        # if not confirmed it stops automatically, so you do not lock yourself out
+```
+
+After that, use the admin web's 「CHILL」 page to turn it on or off, change the exit and change the profile.
+
+<img src="images/web-chill-phone.png" width="240" alt="CHILL page">
 
 ## 8. Rules every newcomer must follow
 

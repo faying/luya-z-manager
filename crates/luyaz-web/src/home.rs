@@ -4,13 +4,14 @@
 //!  GET /  ─▶ frame: labels, skeletons, the signal status (rows come with the first push)
 //!  GET /home/events?g ─▶ agent::stream(Poll): the page's leaves by id, only the changed ones
 //!    from the hub (one SSE): signal, live (speeds, temperature, uptime, today/month), battery,
-//!        clients, wifi, uci_device_info (title), sms, side (alerts, scenario, verdict)
+//!        clients, wifi, uci_device_info (title), sms, side (alerts, scenario, verdict, CHILL)
 //!    polled with the tab's session (agent.rs, u60d first): /api/screen 10 s (battery estimate),
 //!        /api/services/tailscale 15 s, /api/netinfo?lite=1 30 s, /api/wifi/status 30 s
 //!        (only the actual channel and width are kept; the reply carries both passwords),
+//!        CHILL: home/chill.rs (private)
 //! ```
 //! Not polled here: `/api/public/status`. luyaz-web's own side poller (topbar.rs) already reads
-//! u60d's every 10 s into `hub.side.public` (scenario, verdict, alerts). u60d's has
+//! u60d's every 10 s into `hub.side.public` (scenario, verdict, CHILL notice, alerts). u60d's has
 //! no device name, no operator and no SSID, so those come from the blocks instead
 //! (`uci_device_info`, `signal.operator`, `wifi`).
 //!
@@ -33,6 +34,7 @@ use crate::i18n::Lang;
 use crate::pages::{Shared, split_leaves};
 use crate::view::{self, Readout, js_num, num};
 
+mod chill;
 
 const PATH: &str = "/";
 
@@ -40,6 +42,7 @@ pub fn routes() -> Router<Shared> {
     let r = Router::new()
         .route(PATH, get(page))
         .route("/home/events", get(events));
+    let r = chill::routes(r);
     r
 }
 
@@ -49,6 +52,7 @@ struct Page {
     shell: crate::shell::Shell,
     l: Lang,
     status: String,
+    chill: String,
 }
 
 async fn page(State(app): State<Shared>, req: Request) -> Response {
@@ -68,6 +72,7 @@ async fn page(State(app): State<Shared>, req: Request) -> Response {
         shell,
         l: ctx.lang,
         status,
+        chill: chill::frame(ctx.lang),
     }
     .render()
     .unwrap();
@@ -248,6 +253,7 @@ struct View {
     ip_label: &'static str,
     ip: String,
     ip_sub: Option<String>,
+    id_chill: String,
     sim: String,
     reg: String,
     reg_sub: Option<String>,
@@ -288,6 +294,7 @@ struct Poll {
     ca_shape: Option<(usize, bool, bool)>,
     /// Operator logo files (`--logo-dir`), copied from the app at each render.
     logo_dir: std::path::PathBuf,
+    chill: chill::Chill,
 }
 
 impl Poll {
@@ -302,6 +309,7 @@ impl Poll {
             wifi: Src::new(30),
             ca_shape: None,
             logo_dir: std::path::PathBuf::new(),
+            chill: chill::Chill::new(),
         }
     }
 
@@ -312,6 +320,7 @@ impl Poll {
             .min(self.ts.next())
             .min(self.ni.next())
             .min(self.wifi.next());
+        let e = e.min(self.chill.next());
         e
     }
 
@@ -323,6 +332,7 @@ impl Poll {
         let v = app.hub.read(|st| self.view(st, now));
         #[allow(unused_mut)]
         let mut out = split_leaves(&Leaves { v: &v }.render().unwrap());
+        out.extend(self.chill.leaves(app, self.l, now));
         out
     }
 
@@ -486,7 +496,8 @@ impl Poll {
         };
         let two;
         let same;
-        (two, same) = (false, false);
+        two = p.is_some() && s(p, "ip") != s(d, "ip");
+        same = p.is_some() && !two;
         let exit_sub = |e: Option<&Value>, extra: Vec<String>| -> Option<String> {
             let Some(e) = e else {
                 return ni.map(|_| l.pick("Looking up…", "正在查询…").to_owned());
@@ -511,6 +522,9 @@ impl Poll {
         let _ = same;
         #[allow(unused_mut)]
         let mut extra = vec![pk(d, "isp")];
+        if same {
+            extra.push(l.pick("CHILL direct", "CHILL 直连").to_owned());
+        }
         let op_name = |o: Option<&Value>| match (l, s(o, "operator_en")) {
             (Lang::En, Some(e)) => e,
             _ => s(o, "name").unwrap_or_default(),
@@ -569,6 +583,7 @@ impl Poll {
                 Lang::Zh => format!("SIM：{n}"),
             }
         });
+        let id_chill = chill::id_row(l, if two { p } else { None }, &exit_sub(p, vec![s(p, "node").unwrap_or_default()]));
 
         // ---- Wi-Fi: the wifi block + the actual channel/width from the agent ----
         let w = crate::wifi_main::wifi(st).filter(|_| seen);
@@ -766,6 +781,7 @@ impl Poll {
             },
             ip: s(d, "ip").unwrap_or_else(dash),
             ip_sub: exit_sub(d, extra),
+            id_chill,
             sim: op(home),
             reg: op(serving),
             reg_sub,
@@ -791,13 +807,15 @@ impl Poll {
 impl Polled for Poll {
     async fn step(&mut self, app: &Shared) -> (Vec<(String, String)>, Duration) {
         let now = Instant::now();
-        // a step before the earliest deadline is a kick (a write done): read again
+        // a step before the earliest deadline is a kick (CHILL write done): read CHILL again
+        let kicked = now + Duration::from_millis(300) < self.earliest();
         let (screen, ts, ni, wifi) = tokio::join!(
             fetch(app, &self.who, self.screen.due(now), "/api/screen"),
             fetch(app, &self.who, self.ts.due(now), "/api/services/tailscale"),
             fetch(app, &self.who, self.ni.due(now), "/api/netinfo?lite=1"),
             fetch(app, &self.who, self.wifi.due(now), "/api/wifi/status"),
         );
+        self.chill.poll(app, &self.who, now, kicked).await;
         let at = Instant::now();
         if let Some(r) = screen {
             self.screen.set(at, r);
@@ -1125,6 +1143,7 @@ mod tests {
             shell: crate::shell::Shell::new(&axum::http::HeaderMap::new(), PATH),
             l: Lang::En,
             status: String::new(),
+            chill: chill::frame(Lang::En),
         }
         .render()
         .unwrap();

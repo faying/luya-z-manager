@@ -69,9 +69,10 @@ All screenshots use the English UI with made-up data. **[Feature tour](docs/SCRE
 | **LAN and Wi-Fi** | Wi-Fi and guest Wi-Fi, LAN/DHCP, DNS, firewall, QoS, USB mode, clients |
 | **Reliability** | procd supervision for the core, the admin web and the sentinel; Wi-Fi fallback watchdog; alert banners, a Health page and optional alert SMS; a change log of every setting change; a network-mode change that cannot connect is reverted automatically |
 | **Operations** | `./install.sh doctor` read-only health check, `backup` / `restore` for configuration, per-component updates with rollback ([DEPLOY.md](DEPLOY.md)) |
+| **Proxy (CHILL)** | Optional transparent proxy on native mihomo: a generic template (one subscription, a small rule set), a panel behind the admin web, an exit page on the touch screen; installed separately with `./install.sh chill` ([docs/PROXY.md](docs/PROXY.md)) |
 | **Install kit** | One `./install.sh` on a new device sets up SSH, the admin web, the touch UI and eSIM, and turns off automatic firmware updates |
 
-A proxy is **not** included; [docs/PROXY.md](docs/PROXY.md) explains how to set one up yourself from official sources.
+The proxy is not part of the full install. It ships with no subscription or personal rules: you add your own subscription URL in `chill.env` on the device.
 
 ## Requirements
 

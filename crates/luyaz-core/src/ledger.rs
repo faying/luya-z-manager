@@ -156,7 +156,7 @@ fn is_tailnet(a: &IpAddr) -> bool {
     }
 }
 
-/// proxy TUN / fake-ip range 198.18.0.0/15
+/// mihomo TUN / fake-ip range 198.18.0.0/15
 fn is_tun(a: &IpAddr) -> bool {
     matches!(a, IpAddr::V4(v) if v.octets()[0] == 198 && (v.octets()[1] & 0xfe) == 18)
 }
@@ -261,7 +261,7 @@ struct Acc {
     exits: u64,
     exit_overflow: bool,
     ct_overflow: bool,
-    proxy: bool,
+    mihomo: bool,
     ifaces: BTreeMap<String, [u64; 4]>,
     procs: HashMap<String, ProcAcc>,
     flows: HashMap<FlowKey, (u64, u64)>,
@@ -372,7 +372,7 @@ impl Ledger {
             if p.pid == s.self_pid {
                 a.self_cpu += cpu;
             }
-            a.proxy |= p.key.contains("proxy");
+            a.mihomo |= p.key.contains("mihomo");
         }
         for (k, n) in instances {
             let e = a.procs.entry(k.to_string()).or_default();
@@ -642,7 +642,7 @@ impl Ledger {
             exits: a.exits,
             exit_overflow: a.exit_overflow,
             ct_overflow: a.ct_overflow,
-            proxy: a.proxy,
+            mihomo: a.mihomo,
             ifaces,
             procs,
             procs_other,
@@ -959,12 +959,12 @@ mod tests {
         let mut s2 = base(0);
         s2.peers.insert(
             (17, "203.0.113.1".parse().unwrap(), 443),
-            "/data/proxy/bin/proxy /data/proxy".into(),
+            "/data/chill/bin/mihomo /data/chill".into(),
         );
         let closed = flow(4, "10.20.30.40", "203.0.113.1", 50000, 443, 1);
         assert_eq!(
             classify(&closed, &s2).1.owner,
-            "/data/proxy/bin/proxy /data/proxy ~"
+            "/data/chill/bin/mihomo /data/chill ~"
         );
         assert_eq!(classify(&closed, &s).1.owner, "?");
         let tun = flow(3, "198.18.0.2", "198.18.0.1", 1, 2, 1);

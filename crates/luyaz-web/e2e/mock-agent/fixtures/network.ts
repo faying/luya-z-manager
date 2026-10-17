@@ -512,7 +512,8 @@ function dataUsage(ctx: Ctx): DataUsage {
 function cpu(ctx: Ctx): CpuUsage {
   const t = ctx.now / 1000;
   const load = wwanConnected(ctx) ? 1 : 0.6;
-  const cores = [16, 9, 12, 7].map((b, i) => {
+  const chill = shared.chill.state === "running" ? 6 : 0;
+  const cores = [16 + chill, 9, 12 + chill / 2, 7].map((b, i) => {
     const v = (b + 6 * Math.sin(t / (3 + i) + i) + 3 * Math.sin(t / 1.7 + i * 2)) * load;
     return Math.round(Math.max(0.5, Math.min(100, v)) * 10) / 10;
   });
@@ -546,7 +547,11 @@ function netinfo(ctx: Ctx) {
       ip: "203.0.113.24", geo: "中国台湾 台北市", geo_en: "Taiwan", isp: "中华电信", isp_en: "Chunghwa Telecom",
       node: null, source: "ip-api.com", fetched_at: now - 240, error: null, error_en: null,
     },
-    proxy: null,
+    proxy: {
+      ip: "198.51.100.7", geo: "日本 东京都", geo_en: "Japan", isp: "IIJ", isp_en: "IIJ",
+      node: "JP 03", source: "ip-api.com", fetched_at: now - 240, error: null, error_en: null,
+    },
+    chill_running: true,
     home_operator: { mcc: "460", mnc: "01", name: "中国联通", operator_en: "China Unicom", country: "中国", country_en: "China", country_iso: "CN" },
     serving_operator: { mcc: "466", mnc: "92", name: "中华电信", operator_en: "Chunghwa Telecom", country: "中国台湾", country_en: "Taiwan", country_iso: "TW" },
     roaming: true,

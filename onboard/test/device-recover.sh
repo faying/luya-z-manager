@@ -277,12 +277,12 @@ setup
 sed -n '/^RC=/,/^# ── 进程监督/p' "$K/device/install.sh" | sed '$d' >"$T/rcfns.sh"
 rcf() { ( . "$T/rcfns.sh"; "$@" ) >"$T/out" 2>&1; RC=$?; }
 chmod 750 "$T/rc.local"; i0=$(ino "$T/rc.local"); p0=$(perm "$T/rc.local")
-rcf rc_add "/etc/init.d/example-svc start" "/etc/init.d/example-svc start"
-check "rc_add: line in before exit 0" '[ $RC = 0 ] && [ "$(tail -n 2 "$T/rc.local" | head -n 1)" = "/etc/init.d/example-svc start" ] && sh -n "$T/rc.local"'
+rcf rc_add "/etc/init.d/chill start" "/etc/init.d/chill start"
+check "rc_add: line in before exit 0" '[ $RC = 0 ] && [ "$(tail -n 2 "$T/rc.local" | head -n 1)" = "/etc/init.d/chill start" ] && sh -n "$T/rc.local"'
 check "rc_add: replaced by rename (new inode), mode kept, no temp file left" '[ "$(ino "$T/rc.local")" != "$i0" ] && [ "$(perm "$T/rc.local")" = "$p0" ] && [ "$(tmps)" = 0 ] && [ ! -e /tmp/rc.local.new ]'
-check "rc_add: original backed up once" '[ -f "$T/data/u60-kit/rc.local.orig" ] && ! grep -q example-svc "$T/data/u60-kit/rc.local.orig"'
+check "rc_add: original backed up once" '[ -f "$T/data/u60-kit/rc.local.orig" ] && ! grep -q chill "$T/data/u60-kit/rc.local.orig"'
 cp "$T/rc.local" "$T/rc.0"; i0=$(ino "$T/rc.local")
-rcf rc_add "/etc/init.d/example-svc start" "/etc/init.d/example-svc start"
+rcf rc_add "/etc/init.d/chill start" "/etc/init.d/chill start"
 check "rc_add again: nothing written" '[ $RC = 0 ] && cmp -s "$T/rc.local" "$T/rc.0" && [ "$(ino "$T/rc.local")" = "$i0" ]'
 rcf rc_replace "/etc/init.d/u60-uid start # new" "/etc/init.d/u60-uid start" "# new"
 check "rc_replace: swapped in place, by rename" '[ $RC = 0 ] && grep -qx "/etc/init.d/u60-uid start # new" "$T/rc.local" && ! grep -qx "/etc/init.d/u60-uid start" "$T/rc.local" && [ "$(ino "$T/rc.local")" != "$i0" ] && [ "$(perm "$T/rc.local")" = "$p0" ]'

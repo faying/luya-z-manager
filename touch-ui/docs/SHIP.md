@@ -234,6 +234,7 @@ init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来
   名字固定：`tailscale-start.sh`、`tuning.env`、`tailscaled`、`tailscaled-nofight`；
   `init.d/luyaz-core`、`init.d/tailscale`；`rc.local`；`luyaz-recover.sh`；目录 `ui-fonts`（`/data/luyaz/ui/fonts`）、`ui-logos`、`core-plugins`（Luya-Z D4c 前叫 `u60-recover.sh`、`devui-fonts`、`devui-logos`、`u60d-plugins`：清单里的旧名照样算，`record` 也认旧名、写新名）。
   `init.d/zte-agent`、`init.d/u60-guard`、`init.d/u60-uid`、`init.d/zwrt-datad` 已由 `retire` 行退役（10c、E3）。文件不存在记 `"md5":"-"`。
+  私有版另有 CHILL 的 `chill.sh`、`template.yaml`；`chill.env` 是设置文件，不进清单。
   运行中会被正常改写的设置文件不进清单。原因去掉引号、反斜杠和控制字符，最长 120 字节。有事务在进行时拒绝。
   doctor.sh 里有同一张名字表，测试检查两边一致。
 - 只有 `done` 才写一条；试跑不过、转正后退回，清单都不变。

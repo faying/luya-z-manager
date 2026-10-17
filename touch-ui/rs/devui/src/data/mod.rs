@@ -6,6 +6,7 @@
 pub mod core_api;
 pub mod alerts;
 pub mod battery;
+pub mod chill;
 pub mod datad;
 pub mod diagnose;
 pub mod esim;

@@ -5,7 +5,7 @@
 use super::*;
 use crate::testing::*;
 
-/// The device's own three scenarios (home by BSSID, away, abroad with the proxy direct).
+/// The device's own three scenarios (home by BSSID, away, abroad with CHILL DIRECT).
 fn config() -> Config {
     let mut cfg = sc::template();
     if let Some(home) = cfg.scenarios.iter_mut().find(|s| s.id == "home") {
@@ -30,6 +30,7 @@ fn tick_after(f: &Fake, e: &Engine, secs: i64) {
 fn a_trip_home_away_abroad_and_back() {
     let f = Fake::new("trip");
     f.write_config(&config());
+    f.d().gets.insert(sc::CHILL_STATUS.into(), json!({"ok": true, "data": {"region": {"active": "JP"}}}));
     let e = Engine::new(f.clone());
 
     // boot: Wi-Fi up, nothing to repair, state cleared
@@ -80,7 +81,7 @@ fn a_trip_home_away_abroad_and_back() {
     assert!(calls.contains(&"wifi true true".to_string()), "{calls:?}");
     assert_eq!(f.d().auto_sleep, Some(true));
 
-    // a foreign SIM: abroad. Wi-Fi is already fully on (not torn down again); the proxy goes direct
+    // a foreign SIM: abroad. Wi-Fi is already fully on (not torn down again); CHILL goes DIRECT
     // best effort, verified, and what it was (JP) is saved to come back
     f.d().mcc = Some("440".into());
     tick_after(&f, &e, 300);
@@ -88,6 +89,10 @@ fn a_trip_home_away_abroad_and_back() {
     assert_eq!(e.run_state().current, "abroad");
     let calls = f.calls();
     assert!(!calls.iter().any(|c| c.starts_with("wifi ")), "{calls:?}");
+    assert!(calls.iter().any(|c| c.contains("PUT /api/services/chill/regions") && c.contains("DIRECT")), "{calls:?}");
+    let pending: Vec<PendingRestore> = read_json(&f.file(RESTORE_FILE));
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].action.action.body.as_ref().map(Value::from).unwrap()["member"], "JP");
     let flag = fs::read_to_string(f.file("/data/alerts/abroad")).ok();
     assert!(flag.is_some(), "the abroad flag for u60-guard's SMS hold");
 
@@ -97,6 +102,10 @@ fn a_trip_home_away_abroad_and_back() {
     tick_after(&f, &e, 300);
     tick_after(&f, &e, 300);
     assert_eq!(e.run_state().current, "home");
+    let calls = f.calls();
+    let restore = calls.iter().position(|c| c.contains("\"member\":\"JP\"") && c.ends_with("(restore)")).expect("restore ran");
+    let off = calls.iter().position(|c| c == "wifi false false").expect("Wi-Fi off");
+    assert!(restore < off, "{calls:?}");
     assert!(read_json::<Vec<PendingRestore>>(&f.file(RESTORE_FILE)).is_empty());
     assert!(!Path::new(&f.file("/data/alerts/abroad")).exists() || fs::read_to_string(f.file("/data/alerts/abroad")).is_err());
 }
@@ -205,6 +214,7 @@ fn a_pin_switches_and_retries_restores_without_scanning() {
 fn disabling_restores_away_and_puts_everything_back() {
     let f = Fake::new("disable");
     f.write_config(&config());
+    f.d().gets.insert(sc::CHILL_STATUS.into(), json!({"ok": true, "data": {"region": {"active": "JP"}}}));
     f.d().mcc = Some("440".into());
     let e = Engine::new(f.clone());
     tick_after(&f, &e, 60);
@@ -220,6 +230,7 @@ fn disabling_restores_away_and_puts_everything_back() {
     assert_eq!(e.run_state().current, "");
     let calls = f.calls();
     assert!(calls.contains(&"wifi true true".to_string()), "{calls:?}");
+    assert!(calls.iter().any(|c| c.contains("\"member\":\"JP\"") && c.ends_with("(restore)")), "{calls:?}");
     // disabled: ticks do nothing but retry restores
     tick_after(&f, &e, 600);
     assert!(!f.calls().contains(&"scan".to_string()));
@@ -338,3 +349,62 @@ fn uptime_is_whole_seconds_of_the_first_field() {
     assert_eq!(uptime_secs("x.5 1"), None);
 }
 
+#[test]
+fn chill_switched_off_abroad_comes_back_when_home() {
+    let f = Fake::new("chill-hooks");
+    f.write_config(&config());
+    f.d().gets.insert(sc::CHILL_STATUS.into(), json!({"ok": true, "data": {"region": {"active": "JP"}}}));
+    let e = Engine::new(f.clone());
+    // not abroad: nothing is recorded
+    e.chill_toggled(false, true);
+    assert!(read_json::<Vec<PendingRestore>>(&f.file(RESTORE_FILE)).is_empty());
+    f.d().mcc = Some("440".into());
+    tick_after(&f, &e, 60);
+    tick_after(&f, &e, 60);
+    assert_eq!(e.run_state().current, "abroad");
+    e.chill_toggled(false, true);
+    e.chill_exit_changed();
+    let keys: Vec<String> = read_json::<Vec<PendingRestore>>(&f.file(RESTORE_FILE)).into_iter().map(|p| p.key).collect();
+    assert!(keys.contains(&sc::CHILL_ON_KEY.to_string()) && keys.contains(&sc::CHILL_EXIT_KEY.to_string()), "{keys:?}");
+    // switched on by hand: no longer switched on when home
+    e.chill_toggled(true, false);
+    let keys: Vec<String> = read_json::<Vec<PendingRestore>>(&f.file(RESTORE_FILE)).into_iter().map(|p| p.key).collect();
+    assert!(!keys.contains(&sc::CHILL_ON_KEY.to_string()));
+    // a restore's own "on" does not count as by hand
+    e.chill_toggled(false, true);
+    set_in_restore(true);
+    e.chill_toggled(true, false);
+    set_in_restore(false);
+    let keys: Vec<String> = read_json::<Vec<PendingRestore>>(&f.file(RESTORE_FILE)).into_iter().map(|p| p.key).collect();
+    assert!(keys.contains(&sc::CHILL_ON_KEY.to_string()));
+}
+
+#[test]
+fn chill_back_on_is_waited_for_before_the_main_group() {
+    let f = Fake::new("chill-wait");
+    f.write_config(&config());
+    f.d().gets.insert(sc::CHILL_STATUS.into(), json!({"ok": true, "data": {"region": {"active": "JP"}}}));
+    f.d().gets.insert("/api/services/chill/job".into(), json!({"ok": true, "data": {"status": "done"}}));
+    f.d().mcc = Some("440".into());
+    let e = Engine::new(f.clone());
+    tick_after(&f, &e, 60);
+    tick_after(&f, &e, 60);
+    e.chill_toggled(false, true);
+    // mihomo answers again only some seconds after CHILL is back on
+    f.d().exec_fails.push("/api/services/chill/regions".into());
+    f.d().mcc = Some("460".into());
+    f.calls();
+    let t0 = f.d().mono;
+    // the regions restore keeps failing; it is retried for 20 s, then left for later
+    tick_after(&f, &e, 300);
+    tick_after(&f, &e, 300);
+    let calls = f.calls();
+    let on = calls.iter().position(|c| c.contains("/api/services/chill/enable")).expect("CHILL on");
+    let regions = calls.iter().filter(|c| c.contains("/api/services/chill/regions")).count();
+    assert!(on < calls.iter().position(|c| c.contains("/api/services/chill/regions")).unwrap());
+    assert!(regions > 3, "retried while waiting for mihomo: {calls:?}");
+    assert!(f.d().mono - t0 >= 20.0);
+    let keys: Vec<String> = read_json::<Vec<PendingRestore>>(&f.file(RESTORE_FILE)).into_iter().map(|p| p.key).collect();
+    assert!(!keys.contains(&sc::CHILL_ON_KEY.to_string()));
+    assert_eq!(keys.len(), 1, "the main group waits for the next scan: {keys:?}");
+}

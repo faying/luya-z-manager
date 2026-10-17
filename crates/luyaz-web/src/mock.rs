@@ -688,7 +688,7 @@ async fn alerts_to_agent(Query(q): Query<OnOff>) -> StatusCode {
 async fn screen_status(State(m): State<Arc<Mock>>) -> axum::Json<Value> {
     let mut data = json!({
         "alerts": {"unread": m.unread.load(Ordering::SeqCst)},
-        "services": {},
+        "services": {"chill": {"state": "running", "reason": null, "on": true}},
     });
     home::public_extra(&mut data);
     axum::Json(json!({"ok": true, "data": data}))

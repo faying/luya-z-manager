@@ -220,6 +220,11 @@ async fn writes_are_404_until_step_9() {
         ("POST", "/api/netinfo/scan"),
         ("POST", "/api/netinfo/apn"),
         ("POST", "/api/scenario/pin"),
+        ("PUT", "/api/services/chill/exit"),
+        ("POST", "/api/services/chill/enable"),
+        ("POST", "/api/services/chill/disable"),
+        ("PUT", "/api/services/chill/profile"),
+        ("GET", "/api/services/chill/job"),
         ("POST", "/api/alerts/read"),
         ("GET", "/api/speedtest/servers"),
         ("POST", "/api/speedtest/start"),
@@ -593,6 +598,400 @@ async fn scenario_pin() {
     assert!(!root.join("data/scenario/pin").exists());
 }
 
+/// mihomo for the exit: the main group and every request it gets.
+async fn mihomo(log: Arc<Mutex<Vec<String>>>) -> String {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    let app = axum::Router::new().fallback(move |req: Request| {
+        let log = log.clone();
+        async move {
+            let (parts, body) = req.into_parts();
+            let body = axum::body::to_bytes(body, 1 << 16)
+                .await
+                .unwrap_or_default();
+            log.lock().unwrap().push(format!(
+                "{} {} {}",
+                parts.method,
+                parts.uri.path(),
+                String::from_utf8_lossy(&body)
+            ));
+            if parts.method == axum::http::Method::GET {
+                reply(
+                    200,
+                    json!({"now": "JP 03", "all": ["JP 03", "TW 01", "DIRECT"]}),
+                )
+            } else {
+                axum::http::StatusCode::NO_CONTENT.into_response()
+            }
+        }
+    });
+    tokio::spawn(async move { axum::serve(l, app).await });
+    format!("http://{addr}")
+}
+
+/// direct_keep_ai abroad: DIRECT, the node remembered, rule mode, and "back to proxy when home".
+#[tokio::test]
+async fn chill_exit_abroad() {
+    let log: Arc<Mutex<Vec<String>>> = Arc::default();
+    let root = std::env::temp_dir().join(format!("u60d-ops-exit-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    for (p, text) in [
+        (
+            "data/scenario/scenarios.json",
+            serde_json::to_string(&luyaz_policy::scenario::template()).unwrap(),
+        ),
+        (
+            "data/scenario/state.json",
+            r#"{"current":"abroad","candidate":"","hits":0,"misses":0,"applied":{},"last_switch":1,"last_error":null,"last_scan":0}"#.to_string(),
+        ),
+        ("data/chill/chill.env", "CHILL_SECRET=''\n".to_string()),
+    ] {
+        let f = root.join(p);
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(f, text).unwrap();
+    }
+    let src = Sources {
+        mihomo: mihomo(log.clone()).await,
+        ..Sources::none()
+    };
+    let addr = start(Compat::new(root.to_str().unwrap(), src).with_writes(true)).await;
+    assert_eq!(
+        call(addr, "PUT", "/api/services/chill/exit", r#"{"state":"x"}"#)
+            .await
+            .0,
+        400
+    );
+    let (st, b) = call(
+        addr,
+        "PUT",
+        "/api/services/chill/exit",
+        r#"{"state":"direct_keep_ai"}"#,
+    )
+    .await;
+    assert_eq!(
+        (st, b["data"]["exit"].as_str()),
+        (200, Some("direct_keep_ai")),
+        "{b}"
+    );
+    let l = log.lock().unwrap().clone();
+    assert!(
+        l[1].starts_with("PUT /proxies/") && l[1].ends_with(r#"{"name":"DIRECT"}"#),
+        "{l:?}"
+    );
+    assert_eq!(l[2], r#"PATCH /configs {"mode":"rule"}"#);
+    assert_eq!(
+        fs::read_to_string(root.join("data/chill/last-main")).unwrap(),
+        "JP 03"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("data/chill/mode")).unwrap(),
+        "rule\n"
+    );
+    let r: Vec<Value> =
+        serde_json::from_str(&fs::read_to_string(root.join("data/scenario/restore.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        (
+            r.len(),
+            r[0]["key"].as_str(),
+            r[0]["action"]["body"]["state"].as_str(),
+            r[0]["while_abroad"].as_bool()
+        ),
+        (
+            1,
+            Some("chill-exit-after-abroad"),
+            Some("proxy"),
+            Some(true)
+        )
+    );
+    // a second change abroad does not add another
+    assert_eq!(
+        call(
+            addr,
+            "PUT",
+            "/api/services/chill/exit",
+            r#"{"state":"direct_all"}"#
+        )
+        .await
+        .0,
+        200
+    );
+    let r: Vec<Value> =
+        serde_json::from_str(&fs::read_to_string(root.join("data/scenario/restore.json")).unwrap())
+            .unwrap();
+    assert_eq!(r.len(), 1);
+}
+
+/// CHILL on/off/profile: chill.sh as a job, one at a time; abroad, off adds "switch it on when
+/// home", on drops it.
+#[tokio::test]
+async fn chill_switch_and_profile_as_jobs() {
+    let root = std::env::temp_dir().join(format!("u60d-ops-chill-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    for (p, text) in [
+        ("data/scenario/scenarios.json", serde_json::to_string(&luyaz_policy::scenario::template()).unwrap()),
+        ("data/scenario/state.json", r#"{"current":"abroad","candidate":"","hits":0,"misses":0,"applied":{},"last_switch":1,"last_error":null,"last_scan":0}"#.to_string()),
+        // a chill.sh that logs its arguments; "profile" takes a moment
+        ("data/chill/chill.sh", format!("#!/bin/sh\necho \"$@\" >> {}/calls\n[ \"$1\" = profile ] && sleep 0.3\necho line1\necho applied \"$2\"\n", root.display())),
+        ("tmp/chill.state", r#"{"state":"running","mem_avail_mb":300,"cpuss_c":50}"#.to_string()),
+    ] {
+        let f = root.join(p);
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(f, text).unwrap();
+    }
+    let exec = |p: &std::path::Path| {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(p, fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    exec(&root.join("data/chill/chill.sh"));
+    let addr =
+        start(Compat::new(root.to_str().unwrap(), Sources::none()).with_writes(true)).await;
+    let job =
+        || async move { call(addr, "GET", "/api/services/chill/job", "").await.1["data"].clone() };
+    let wait = || async move {
+        for _ in 0..300 {
+            let j = call(addr, "GET", "/api/services/chill/job", "").await.1["data"].clone();
+            if j["status"] != "running" {
+                return j;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("job never ended");
+    };
+    assert_eq!(job().await["status"], "idle");
+    // off abroad (it was on): the restore entry
+    let (st, b) = call(addr, "POST", "/api/services/chill/disable", "").await;
+    assert_eq!((st, b["data"]["status"].as_str()), (200, Some("running")));
+    let j = wait().await;
+    assert_eq!(
+        (
+            j["kind"].as_str(),
+            j["status"].as_str(),
+            j["message"].as_str()
+        ),
+        (Some("disable"), Some("done"), Some("chill.sh stop ok"))
+    );
+    let r: Vec<Value> =
+        serde_json::from_str(&fs::read_to_string(root.join("data/scenario/restore.json")).unwrap())
+            .unwrap();
+    assert_eq!(r[0]["key"], "chill-on-after-abroad");
+    // a profile change: one job at a time; message is the output's tail
+    assert_eq!(
+        call(
+            addr,
+            "PUT",
+            "/api/services/chill/profile",
+            r#"{"profile":"turbo"}"#
+        )
+        .await
+        .0,
+        400
+    );
+    assert_eq!(
+        call(
+            addr,
+            "PUT",
+            "/api/services/chill/profile",
+            r#"{"profile":"eco"}"#
+        )
+        .await
+        .0,
+        200
+    );
+    let (st, b) = call(addr, "POST", "/api/services/chill/enable", "").await;
+    assert_eq!(
+        (st, b["error"].as_str()),
+        (409, Some("operation in progress"))
+    );
+    let j = wait().await;
+    assert_eq!(j["message"], "line1 | applied eco");
+    // on: the entry is dropped
+    assert_eq!(
+        call(addr, "POST", "/api/services/chill/enable", "").await.0,
+        200
+    );
+    wait().await;
+    let r: Vec<Value> =
+        serde_json::from_str(&fs::read_to_string(root.join("data/scenario/restore.json")).unwrap())
+            .unwrap();
+    assert!(r.is_empty());
+    assert_eq!(
+        fs::read_to_string(root.join("calls")).unwrap(),
+        "stop\nprofile eco\nstart\n"
+    );
+    // too hot: refused before chill.sh
+    fs::write(root.join("tmp/chill.state"), r#"{"cpuss_c":80}"#).unwrap();
+    let (st, b) = call(addr, "POST", "/api/services/chill/enable", "").await;
+    assert!(
+        st == 409 && b["error"].as_str().unwrap().contains("too hot"),
+        "{b}"
+    );
+    // a failing chill.sh: error with its tail
+    fs::write(
+        root.join("data/chill/chill.sh"),
+        "#!/bin/sh\necho boom\nexit 3\n",
+    )
+    .unwrap();
+    exec(&root.join("data/chill/chill.sh"));
+    assert_eq!(
+        call(addr, "POST", "/api/services/chill/disable", "")
+            .await
+            .0,
+        200
+    );
+    let j = wait().await;
+    assert_eq!(
+        (j["status"].as_str(), j["message"].as_str()),
+        (Some("error"), Some("chill.sh stop failed: boom"))
+    );
+}
+
+/// Step 9f: a scenario restore's "on" keeps its restore entry; the subscription URL goes into
+/// chill.env (mode kept) and reloads as the job.
+#[tokio::test]
+async fn chill_restore_on_and_the_subscription() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let root = std::env::temp_dir().join(format!("u60d-ops-chill9f-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let entry = serde_json::to_string(&vec![luyaz_policy::scenario::chill_on_restore(1)]).unwrap();
+    for (p, text) in [
+        ("data/scenario/restore.json", entry),
+        (
+            "data/chill/chill.sh",
+            format!("#!/bin/sh\necho \"$@\" >> {}/calls\n", root.display()),
+        ),
+        (
+            "data/chill/chill.env",
+            "SUB_URL='https://old.example/s'\nOTHER='x'\n".to_string(),
+        ),
+        (
+            "tmp/chill.state",
+            r#"{"state":"running","mem_avail_mb":300,"cpuss_c":50}"#.to_string(),
+        ),
+    ] {
+        let f = root.join(p);
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(f, text).unwrap();
+    }
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            root.join("data/chill/chill.sh"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        fs::set_permissions(
+            root.join("data/chill/chill.env"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+    }
+    let addr =
+        start(Compat::new(root.to_str().unwrap(), Sources::none()).with_writes(true)).await;
+    let raw = |method: &'static str,
+               path: &'static str,
+               headers: &'static str,
+               body: &'static str| async move {
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let req = format!(
+            "{method} {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n{headers}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).await.unwrap();
+        let status: u16 = out[9..12].parse().unwrap();
+        let json = out.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("");
+        (
+            status,
+            serde_json::from_str::<Value>(json).unwrap_or(Value::Null),
+        )
+    };
+    let wait = || async move {
+        for _ in 0..300 {
+            let j = call(addr, "GET", "/api/services/chill/job", "").await.1["data"].clone();
+            if j["status"] != "running" {
+                return j;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("job never ended");
+    };
+    let restore = || -> Vec<Value> {
+        serde_json::from_str(&fs::read_to_string(root.join("data/scenario/restore.json")).unwrap())
+            .unwrap()
+    };
+    // the restore switching it on: the entry stays (the restore drops it once it worked)
+    let (st, _) = raw(
+        "POST",
+        "/api/services/chill/enable",
+        "X-U60-Restore: 1\r\nX-U60-Source: scenario\r\n",
+        "",
+    )
+    .await;
+    assert_eq!(st, 200);
+    wait().await;
+    assert_eq!(restore().len(), 1);
+    // the subscription: wrong provider, bad URL, then the real one
+    let (st, _) = raw(
+        "PUT",
+        "/api/services/chill/providers",
+        "",
+        r#"{"name":"snap1","url":"https://x.example/a"}"#,
+    )
+    .await;
+    assert_eq!(st, 400);
+    let (st, _) = raw(
+        "PUT",
+        "/api/services/chill/providers",
+        "",
+        r#"{"name":"sub","url":"https://x.example/a b"}"#,
+    )
+    .await;
+    assert_eq!(st, 400);
+    let (st, b) = raw(
+        "PUT",
+        "/api/services/chill/providers",
+        "",
+        r#"{"name":"sub","url":"https://new.example/s"}"#,
+    )
+    .await;
+    assert_eq!(
+        (st, b["data"]["status"].as_str()),
+        (200, Some("running")),
+        "{b}"
+    );
+    let j = wait().await;
+    assert_eq!(
+        (j["kind"].as_str(), j["status"].as_str()),
+        (Some("reload"), Some("done"))
+    );
+    let env = fs::read_to_string(root.join("data/chill/chill.env")).unwrap();
+    assert!(
+        env.contains("SUB_URL='https://new.example/s'") && env.contains("OTHER='x'"),
+        "{env}"
+    );
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(root.join("data/chill/chill.env"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    // a switch by hand drops the entry
+    assert_eq!(
+        call(addr, "POST", "/api/services/chill/enable", "").await.0,
+        200
+    );
+    wait().await;
+    assert!(restore().is_empty());
+    assert_eq!(
+        fs::read_to_string(root.join("calls")).unwrap(),
+        "start\nreload\nstart\n"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
 
 /// A speedtest.net look-alike on loopback: the server list points at itself; the download is slow
 /// and long, so a test stays running until stopped.

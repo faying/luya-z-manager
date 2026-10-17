@@ -212,8 +212,8 @@ mod tests {
             "sh /data/u60-guard/u60-guard.sh"
         );
         assert_eq!(
-            proc_key(b"/usr/bin/proxyd\0-d\0/data/proxy\0", "proxyd"),
-            "/usr/bin/proxyd /data/proxy"
+            proc_key(b"/usr/bin/mihomo\0-d\0/data/chill\0", "mihomo"),
+            "/usr/bin/mihomo /data/chill"
         );
         assert_eq!(proc_key(b"", "kworker/0:1"), "[kworker/0:1]");
         assert_eq!(

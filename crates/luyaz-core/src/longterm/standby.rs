@@ -19,7 +19,18 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// The programs measured (the guard's `STANDBY_PROGS`, in its order: doctor reads by position).
-pub const PROGS: [&str; 4] = ["tailscaled", "u60pro-devui", "zwrt-datad", "zte-agent"];
+/// These are ledger keys, not device names: [`crate::paths::prog_key`] files `luyaz-ui` under
+/// `u60pro-devui` and the core under `zwrt-datad`, so those columns measure the live programs.
+/// `zte-agent` is retired and stays `-` (doctor marks it `retired`, never judged); the slot is kept
+/// because a baseline's columns and `fp` lines are by position. Renaming a key orphans every
+/// baseline and fingerprint on the device.
+pub const PROGS: [&str; 5] = [
+    "tailscaled",
+    "mihomo",
+    "u60pro-devui",
+    "zwrt-datad",
+    "zte-agent",
+];
 /// Lines kept in the standby file.
 const KEEP: usize = 60;
 /// Checks further apart than this were across a sleep (the guard's `WAKE_GAP`, 2 rounds + 30 s).

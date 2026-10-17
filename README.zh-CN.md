@@ -69,9 +69,10 @@
 | **局域网与 Wi-Fi** | Wi-Fi 和访客 Wi-Fi、LAN/DHCP、DNS、防火墙、QoS、USB 模式、已连设备 |
 | **可靠性** | 核心、管理网页、哨兵由 procd 监督；Wi-Fi 兜底看门狗；告警横幅、「健康」页、可选告警短信；每次改设置都记进变更记录；改网络模式后连不上会自动退回 |
 | **运维** | `./install.sh doctor` 只读体检，`backup` / `restore` 备份配置，单个组件更新和回退（[DEPLOY.zh-CN.md](DEPLOY.zh-CN.md)） |
+| **代理（CHILL）** | 可选的透明代理，基于原生 mihomo：通用模板（一个订阅、精简规则）、经管理网页的面板、触屏「出口」页；用 `./install.sh chill` 单独装（[docs/PROXY.zh-CN.md](docs/PROXY.zh-CN.md)） |
 | **装机包** | 新设备一条 `./install.sh` 装好 SSH、管理网页、触屏、eSIM，并关掉固件自动升级 |
 
-**不带**代理。想自己装，按 [docs/PROXY.zh-CN.md](docs/PROXY.zh-CN.md) 从官方来源自己配。
+代理不在全套安装里，也不带任何订阅和个人规则：订阅地址由你自己写进设备上的 `chill.env`。
 
 ## 前提条件
 

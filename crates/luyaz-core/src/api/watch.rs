@@ -56,6 +56,8 @@ struct DiagHost {
     stations: Arc<dyn Fn() -> Vec<ni::Station> + Send + Sync>,
     watch: Arc<Watch>,
     screen: Arc<Mutex<Option<Value>>>,
+    mihomo: String,
+    handle: tokio::runtime::Handle,
 }
 
 impl DiagHost {
@@ -101,6 +103,60 @@ impl Host for DiagHost {
         }
     }
 
+    fn proxy_on(&self) -> bool {
+        std::fs::read_to_string(self.path(luyaz_api::chill::CHILL_STATE))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .is_some_and(|v| v["state"] == "running")
+    }
+
+    fn proxy_probe(&self) -> luyaz_api::diagnose::ProxyProbe {
+        use luyaz_api::chill::{Got, PROBE_URL, probe_exit};
+        let http = reqwest::Client::new();
+        let get = move |url: String, secs: u64| {
+            let http = http.clone();
+            async move {
+                match http
+                    .get(url)
+                    .timeout(Duration::from_secs(secs))
+                    .send()
+                    .await
+                {
+                    Ok(r) => {
+                        let code = r.status().as_u16();
+                        let body = r.bytes().await.unwrap_or_default();
+                        match serde_json::from_slice::<Value>(&body) {
+                            Ok(v) => Got::Json(code, v),
+                            Err(_) => Got::Status(code),
+                        }
+                    }
+                    Err(_) => Got::Unreachable,
+                }
+            }
+        };
+        let direct = {
+            let (h, get) = (self.handle.clone(), get.clone());
+            std::thread::spawn(move || {
+                let t = std::time::Instant::now();
+                match h.block_on(get(PROBE_URL.to_string(), 3)) {
+                    Got::Unreachable => None,
+                    _ => Some(t.elapsed().as_millis() as u32),
+                }
+            })
+        };
+        // a 3 s delay test needs more than 3 s of HTTP
+        let (node, node_probe) = probe_exit(&|path, slow| {
+            self.handle.block_on(get(
+                format!("{}{path}", self.mihomo),
+                if slow { 15 } else { 3 },
+            ))
+        });
+        luyaz_api::diagnose::ProxyProbe {
+            node,
+            node_probe,
+            direct_ms: direct.join().ok().flatten(),
+        }
+    }
 
     fn link_probe(&self, dns: &[String]) -> LinkProbe {
         luyaz_netwatch::diagnose::link_probe(dns)
@@ -125,7 +181,7 @@ impl Group {
         speed_running: Arc<AtomicBool>,
         stations: Arc<dyn Fn() -> Vec<ni::Station> + Send + Sync>,
         gate: Arc<Mutex<Gate>>,
-        #[allow(unused_variables)] proxy_api: &str,
+        #[allow(unused_variables)] mihomo: &str,
     ) -> Group {
         let watch = Arc::new(Watch::new());
         let screen: Arc<Mutex<Option<Value>>> = Arc::default();
@@ -137,6 +193,9 @@ impl Group {
             stations,
             watch: watch.clone(),
             screen: screen.clone(),
+            mihomo: mihomo.to_string(),
+            handle: tokio::runtime::Handle::try_current()
+                .unwrap_or_else(|_| fallback_runtime().handle().clone()),
         };
         Group {
             diag: Diagnosis::new(Arc::new(host), gate),
@@ -146,6 +205,16 @@ impl Group {
     }
 }
 
+/// Built outside a runtime (some tests): the proxy probe's requests get a small runtime of their own.
+fn fallback_runtime() -> &'static tokio::runtime::Runtime {
+    static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+    })
+}
 
 /// With the writes on: u60d serves, samples into the log, and watches.
 pub(super) fn owns(c: &Compat) -> bool {

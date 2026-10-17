@@ -37,7 +37,7 @@ CORE_ENV=/data/luyaz/core/datad.env
 # ZWRT_DATAD_*, U60D_* went with the D3 clean-up). Only the listed switches are taken from datad.env,
 # so it can never set the rollback or ubus settings.
 core_switches() {
-    grep -E '^LUYAZ_(CONTRACT_DEBUG|CRASHWATCH|HOME_EXIT|LONGTERM|PROXY_API|PLUGINS|POLICIES|SMS_SESSION)=[A-Za-z0-9_.,:/-]*$' "$1" 2>/dev/null
+    grep -E '^LUYAZ_(CHILL_IDLE|CONTRACT_DEBUG|CRASHWATCH|HOME_EXIT|LONGTERM|MIHOMO_API|PLUGINS|POLICIES|SMS_SESSION)=[A-Za-z0-9_.,:/-]*$' "$1" 2>/dev/null
 }
 # the layout switch (same line in u60-ship.sh and the others; scripts/test/luyaz-dir)
 luyaz_new() { [ -f "$1/data/luyaz/core/.migrated" ]; }

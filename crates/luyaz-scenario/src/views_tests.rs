@@ -68,7 +68,7 @@ fn picker_explains_every_template_scenario() {
     assert_eq!(describe_actions(away), "开 Wi-Fi");
     let abroad = cfg.scenarios.iter().find(|s| s.id == "abroad").unwrap();
     assert_eq!(describe_detect(&abroad.detect, "460"), "插的不是中国的卡时（当地卡、境外 eSIM）");
-    assert_eq!(describe_actions(abroad), "开 Wi-Fi");
+    assert_eq!(describe_actions(abroad), "开 Wi-Fi · CHILL 改成直连");
     let ssid = Detect::Ssid {
         entries: ["A", "B", "C"].iter().map(|n| SsidEntry { ssid: n.to_string(), bssid: None }).collect(),
     };
@@ -90,7 +90,7 @@ fn picker_explains_every_template_scenario_in_english() {
         describe_detect_both(&abroad.detect, "460").1,
         "SIM not from China (local or foreign eSIM)"
     );
-    assert_eq!(describe_actions_both(abroad).1, "Wi-Fi on");
+    assert_eq!(describe_actions_both(abroad).1, "Wi-Fi on · CHILL goes direct");
     let ssid = Detect::Ssid {
         entries: ["A", "B", "C"].iter().map(|n| SsidEntry { ssid: n.to_string(), bssid: None }).collect(),
     };
@@ -115,6 +115,11 @@ fn every_kind_scenarios() -> Vec<Scenario> {
         act("/api/wifi/guest", json!({"enabled": true})),
         act("/api/device/power-save", json!({})),
         act("/api/device/thermal", json!({})),
+        act("/api/services/chill/enable", json!({})),
+        act("/api/services/chill/disable", json!({})),
+        act("/api/services/chill/regions", json!({"member": "JP 01"})),
+        act("/api/services/chill/exit", json!({})),
+        act("/api/services/chill/bypass", json!({})),
     ];
     a.inhibit_sleep = true;
     all.push(a);
@@ -191,7 +196,7 @@ fn list_before_l2(cfg: &Config) -> Vec<Value> {
 #[test]
 fn scene_list_is_byte_for_byte_what_it_was() {
     let t = template();
-    let abroad_does = "开 Wi-Fi";
+    let abroad_does = "开 Wi-Fi · CHILL 改成直连";
     let want = format!(
         r#"[{{"abroad":false,"does":"关 Wi-Fi · 不休眠，Tailscale 一直连得上","id":"home","name":"在家","when":"还没设家里的 Wi-Fi，不会自动进入","wifi_off":true}},{{"abroad":false,"does":"开 Wi-Fi","id":"away","name":"外出","when":"其他情景都不符合时（默认）","wifi_off":false}},{{"abroad":true,"does":"{abroad_does}","id":"abroad","name":"国外","when":"插的不是中国的卡时（当地卡、境外 eSIM）","wifi_off":false}}]"#
     );
@@ -242,3 +247,12 @@ fn scenes_fit_the_old_touch_screen() {
     }
 }
 
+#[test]
+fn u60d_writes_the_same_restore_entries() {
+    let same = |shared: Value, ours: sc::PendingRestore| {
+        let back: sc::PendingRestore = serde_json::from_value(shared).unwrap();
+        assert_eq!(serde_json::to_value(&back).unwrap(), serde_json::to_value(&ours).unwrap());
+    };
+    same(luyaz_api::chill::chill_on_restore(5), sc::chill_on_restore(5));
+    same(luyaz_api::chill::chill_exit_restore(7), sc::chill_exit_restore(7));
+}

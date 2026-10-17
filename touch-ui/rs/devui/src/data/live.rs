@@ -6,6 +6,7 @@
 use super::core_api::CoreApi;
 use super::alerts::Alerts;
 use super::battery::BatteryEst;
+use super::chill::Chill;
 use super::datad::{Cfg, Datad};
 use super::diagnose::Diagnose;
 use super::esim::Esim;
@@ -40,6 +41,7 @@ pub struct Live {
     ts: Tailscale,
     diag: Diagnose,
     bat: BatteryEst,
+    chill: Chill,
     pub bl: Backlight,
     pub key: Key,
 }
@@ -59,6 +61,7 @@ impl Live {
             ts: Tailscale::default(),
             diag: Diagnose::default(),
             bat: BatteryEst::default(),
+            chill: Chill::default(),
             bl: Backlight::init(),
             key,
         }
@@ -95,6 +98,26 @@ impl Live {
             screen_op: Some(self.sf.op().to_string()),
             journal: None,
 
+            chill_core: Some(self.chill.core().into()),
+            chill_mode: Some(self.chill.mode().into()),
+            chill_exit_raw: Some(self.chill.exit_raw().into()),
+            chill_mode_raw: Some(self.chill.mode_raw().into()),
+            chill_group: Some(self.chill.group()),
+            chill_node: Some(self.chill.node().into()),
+            chill_traffic: Some(self.chill.traffic().into()),
+            chill_speed: Some(self.chill.speed().into()),
+            chill_chain: Some(self.chill.chain().into()),
+            chill_conns: Some(self.chill.conns().into()),
+            chill_online: self.chill.online() as i32,
+            chill_conn_split: Some(self.chill.conn_split()),
+            chill_groups: self.chill.groups(),
+            chill_nodes: self.chill.nodes(),
+            chill_pairs: self.chill.top_pairs(),
+            chill_profile_raw: Some(self.chill.profile_raw().into()),
+            chill_profile_effective_raw: Some(self.chill.profile_effective_raw().into()),
+            chill_thermal_eco: self.chill.thermal_eco() as i32,
+            chill_delay_pending: self.chill.delay_pending() as i32,
+            chill_home: Some(self.chill.home().clone()),
             tailscale: self.ts.status(),
             tailscale_peers: self.ts.peers().to_vec(),
 
@@ -201,6 +224,9 @@ impl Source for Live {
         }
         p.diagnose = self.diag.poll(ag, a.diag);
         p.tailscale = self.ts.poll(a.tailscale);
+        let fast = self.chill.home().busy != 0 || a.hx_sending;
+        p.chill_home = self.chill.home_poll(ag, a.chill_page, fast);
+        p.chill = self.chill.poll(a.chill);
         p.esim = self.esim.poll(ag, a.esim);
         if a.esim_prefetch {
             let key = self.datad.sim_key();
@@ -357,6 +383,33 @@ impl Source for Live {
     }
     fn diagnose_feedback(&mut self, right: bool) -> bool {
         self.diag.feedback(&mut self.agent, right)
+    }
+    fn scenario_chill_set(&mut self, on: bool) -> bool {
+        self.scenario.chill_set(&mut self.agent, on)
+    }
+    fn chill_set_exit(&mut self, state: &str) -> bool {
+        self.chill.set_exit(&mut self.agent, state)
+    }
+    fn chill_select_node(&mut self, i: usize) -> bool {
+        self.chill.select_node(i)
+    }
+    fn chill_select_group(&mut self, i: usize) -> bool {
+        self.chill.select_group(i)
+    }
+    fn chill_set_profile(&mut self, p: &str) -> bool {
+        self.chill.set_profile(&mut self.agent, p)
+    }
+    fn chill_test_delay(&mut self) -> i32 {
+        self.chill.test_delay()
+    }
+    fn chill_home_set(&mut self, item: usize, on: bool) -> (i32, String) {
+        self.chill.home_set(&mut self.agent, item, on)
+    }
+    fn chill_home_extend(&mut self, _m: &Model) -> Option<i64> {
+        self.chill.home_extend(&mut self.agent)
+    }
+    fn chill_home_read(&mut self) {
+        self.chill.home_poll(&mut self.agent, true, true);
     }
 
     fn exec(&mut self, l: &Launch) -> i32 {

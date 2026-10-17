@@ -1,5 +1,5 @@
 # expect for --lang=en (scripts/test/render/render.sh): the same inventory as
-# expect-public.txt, in English. Made from it through ui/lang/en.tsv (10-01).
+# expect.txt, in English. Made from it through ui/lang/en.tsv (10-01).
 
 *	home	Home
 *	home	Cellular
@@ -40,6 +40,15 @@ good	home	Online 3/5 · direct 1 · relay 1
 good	home	192.168.0.0/24
 good	exit	Tailscale
 good	exit	Connected · online 3/5
+good	home	CHILL
+good	exit	Running
+good	exit	Proxy 21 · Direct 16
+good	exit	↓12.4G ↑1.1G
+good	exit	Rules → Nodes
+good	exit	AI → 
+good	exit	↓820M ↑95M
+good	exit	↓640M ↑41M
+good	exit	↓1.2M/s ↑45K/s
 *	system	CPU
 *	system	Memory
 *	system	Battery
@@ -56,10 +65,12 @@ good	system	Last 5 min
 *	cellular	Cell Info
 *	cellular	Band Lock
 *	exit	Speed Test
+*	exit	CHILL
 *	cellular	SIM & eSIM
 *	system	Performance Test
 good	cellular	Auto
 good	exit	↓ 812 · ↑ 96 Mbps
+good	exit	Running · Proxy
 good	system	Debug page
 *	system	Screen
 *	system	Brightness
@@ -189,6 +200,29 @@ good	speed	Test again
 good	speed	Server
 good	speed	Auto (best server)
 good	speed	China Unicom · Shanghai, China
+*	chill	Connections
+*	chill	Traffic
+*	chill	Route
+*	chill	Proxy
+*	chill	Global
+*	chill	Direct · AI stays
+*	chill	All direct
+*	chill	Nodes
+*	chill	Rules → Nodes
+good	chill	Running
+good	chill	Proxy 21 · Direct 16
+good	chill	↓12.4G ↑1.1G
+good	chill-nodes	Groups
+good	chill-nodes	AI
+good	chill-nodes	Nodes
+good	chill-nodes	Test latency
+good	chill-nodes	42 ms
+good	chill-nodes	Timeout
+good	chill-nodes	201 ms
+good	chill-pairs	Traffic by rule → node
+good	chill-pairs	↓2.1G ↑12M
+good	chill-pairs	Google → 
+good	chill-pairs	↓3M ↑1M
 good	esim	Current profile
 good	esim	In use · eSIM
 good	esim	Card info
@@ -231,21 +265,34 @@ good	tailscale	Offline
 good	tailscale	old-ipad
 *	perf	Render rate
 *	perf	Touch report rate
+*	exit-menu	Abroad · CHILL route
+*	exit-menu	Proxy (same as at home)
+*	exit-menu	Global
+*	exit-menu	Direct · AI stays
+*	exit-menu	All direct (AI too)
+!empty	exit-menu	Turn off CHILL (saves most power)
+*	exit-menu	Cancel
 *	power-menu	Power
 *	power-menu	Power off
 *	power-menu	Restart
 *	power-menu	Cancel
+empty	exit-menu	Turn on CHILL
 nosim	home	No SIM
 loading	home	Loading…
 empty	exit	Login needed
 empty	home	Log in from the web admin
+empty	exit	Off
 abroad	home	Exit node
+abroad	home	Direct · AI stays
 lowbat	home	Battery low; charge soon
 full-charging	system	Charging
 !loading,datad-down	charts-collecting	Collecting · chart in 1 min
 empty	wifi	No devices connected yet
 *	cellular	Network Operator
 good	exit	203.0.113.24
+good	exit	198.51.100.7
+good	exit	Cellular direct
+good	exit	CHILL
 good	net	China Telecom 46011
 good	net	Local
 good	net	Auto
@@ -255,6 +302,7 @@ good	net	Barred
 good	net	Search
 good	net	Back to auto
 abroad	exit	Public IP
+abroad	exit	CHILL direct
 abroad	net	Roaming
 abroad	net	Manual
 datad-down	net	Can't reach the admin backend
@@ -263,8 +311,10 @@ good	scene	Choose
 good	scene	Auto
 good	scene	Switches by each scenario's conditions below
 full-charging	scene	Pinned
+abroad	scene	CHILL route
 good	exit	203.0.113.24
 good	home	Local
+abroad	home	CHILL Direct
 datad-down	home	No update
 nosignal	home	Searching
 nsa	home	n78 100M + B3 20M + B1 20M
@@ -312,6 +362,7 @@ loading	apn	Loading…
 good	apn-already	Already automatic
 good	apn-armed	Tap again
 good	apn-pending	Switching…
+good	exit	Proxy & speed test
 nosim	esim	No SIM
 nosim	cellular	No SIM
 *	home	Carriers
@@ -324,9 +375,6 @@ us	home	T-Mobile · 5G SA · Roaming
 jp	home	4G+
 jp	home	SoftBank · 4G LTE-A · Roaming
 nosignal	home	SOS
-good	exit	Connections & speed test
-good	exit	Public IP
-good	exit	Connections & speed test
 full-charging	system	Fully charged
 weak	system	At limit; charging paused
 datad-down	system	Estimate
@@ -418,7 +466,15 @@ placement	placement	▲ 3.5 dB below best
 placement	placement	n78 · PCI 603
 placement	placement	Start over
 placement	placement	Resets on a new cell; the screen stays on here
-diagnose-running	diagnose	Checking… 3/5
+diagnose-running	diagnose	Checking… 3/6
+diagnose-result	diagnose	Proxy
+diagnose-result	diagnose	JP 03 180 ms · direct 140 ms
+mf-backup	home	▲
+mf-backup	home	JP 03 is down;
+mf-backup	exit	using JP 日本 for now (auto)
+mf-alldown	home	■
+mf-alldown	exit	JP 03 and its backup JP 日本 are both down
+mf-alldown	exit	Pick a node ›
 diagnose-result	diagnose-error	Agent not responding
 diagnose-result	diagnose-error	Retry
 diagnose-result	diagnose-error	Cellular link
@@ -449,6 +505,25 @@ journal	journal-cell	Last changed
 journal	journal-cell	10-03 14:32 · Web
 op-notice	home	Auto revert on: reverts a mode change
 op-notice	home	Got it
+# Home exit (E3, manager docs/designs/home-exit.md §10)
+home-exit,home-fallback,home-blocked	chill	Home exit
+home-exit,home-fallback,home-blocked	chill	CN media via home
+home-exit,home-fallback,home-blocked	chill	Home IP sites
+home-exit,home-fallback,home-blocked	chill	Rest via home · 2h
+home-exit,home-blocked	chill	3 sites
+home-exit	chill	1:32 left
+home-exit	chill	Via Tailscale · direct 38 ms
+home-exit	home	Home 1:32 left
+home-fallback	chill	Home down · via JP 日本 for now
+home-fallback	chill	Via relay · video may stutter
+home-fallback	home	Home down · usual exit for now
+home-blocked	chill	Not used in Global mode
+home-exit	chill-home-armed	Tap again
+home-exit	chill-home-armed	Drops ~5 s · uses roaming data
+home-fallback	chill	Trial 0:17
+home-fallback	chill	Didn't turn on: home Mac silent
+home-nocountry	chill	Can't tell the country; media and rest hidden
+home-nocountry	chill	No sites yet
 # USB attach mode (usbmode.c, 10-07)
 *	system	When a phone is plugged in
 *	system	Ask every time

@@ -12,6 +12,7 @@ tar xzf onboard/dist/luyaz-kit-*.tar.gz -C /tmp && cd /tmp/luyaz-kit
 ./install.sh admin                           # luyaz-web 管理网页（走 SSH，不用插线）
 ./install.sh devui                           # 触屏界面 + 核心（luyaz-core）+ luyaz-sentinel
 ./install.sh esim                            # eSIM 工具
+./install.sh chill                           # CHILL 代理（可选；先在设备上放好 chill.env，见 docs/PROXY.zh-CN.md）
 ./install.sh status                          # 看状态
 ./install.sh doctor                          # 只读体检
 ./install.sh reboot                          # 重启设备并确认各组件开机自己起来

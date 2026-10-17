@@ -10,7 +10,7 @@
 #   • 假 adb：adb shell/push 转成 ssh $HOST，拒绝任何含 reboot 的命令
 #   • 设备端脚本路径全改写到 /data/local/tmp/kit-sb；dropbear 用 2223，agent 只听 127.0.0.1:19090
 #   • FOTA 设置打桩；admin 的 luyaz-web 改到 $SB/luyaz、只听 127.0.0.1:19090（不装 /etc/init.d、/data/luyaz/scripts，
-#     不记设备清单）；devui、recover 直接禁用（会换掉设备上正在用的哨兵、屏幕、开机收尾）
+#     不记设备清单）；devui、recover、chill 直接禁用（会换掉设备上正在用的哨兵、屏幕、开机收尾、代理）
 #   • 改写后还残留真实路径就中止
 #   • HOST、GATEWAY、SSH_KEY 必须显式给（不再有默认值：以前默认指向原作者的设备），原作者的地址直接拒绝
 # 设备上的 dropbear 仍然认 /etc/dropbear/authorized_keys，所以 SSH_KEY 要用那台设备已授权的 key。
@@ -125,6 +125,7 @@ SED
       -e "s#/data/esim/lpac.sh chip info#$SB/esim/lpac.sh chip info#" \
       -e 's#^do_devui() {#do_devui() { die "sandbox: devui disabled";#' \
       -e 's#^do_recover() {#do_recover() { die "sandbox: recover disabled";#' \
+      -e 's#^do_chill() {#do_chill() { die "sandbox: chill disabled";#' \
       "$K/device/install.sh" > "$K/device/install.sb"
   mv "$K/device/install.sb" "$K/device/install.sh"
 
@@ -133,7 +134,7 @@ SED
   fi
   # 防呆：会写设备真实位置的东西一样都不能剩（注释行、只读的 status、已禁用的 admin/devui/recover 和只有它们
   # 调用的函数除外）。被禁用的函数体整段跳过：从「名字() {」到下一个行首的「}」
-  if awk '/^(do_admin|do_devui|do_recover|install_guard|layout_new|retire_agent|place_recover|recover_put|rc_owner|owners_stop|sentinel_start|kit_record|do_status)\(\) \{/ { skip = 1 }
+  if awk '/^(do_admin|do_devui|do_recover|install_guard|layout_new|retire_agent|place_recover|recover_put|rc_owner|owners_stop|sentinel_start|kit_record|do_chill|do_status)\(\) \{/ { skip = 1 }
           !skip { print } skip && /^}/ { skip = 0 }' "$K/device/install.sh" \
      | grep -vE '^[[:space:]]*#|^[[:space:]]*p "' \
      | grep -nE '(^|[^b])/etc/rc\.local|/data/ssh|/data/zte-agent|/data/admin|/data/luyaz|/data/u60d|/etc/init\.d/|put_tree "\$P/esim.tgz" /data/esim|set_update_mode|uci -q (set|commit)|killall zte-agent| -p 2222|127\.0\.0\.1:9090' \

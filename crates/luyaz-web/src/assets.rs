@@ -30,6 +30,7 @@ const HOME_CSS: &str = include_str!("../static/home/home.css");
 const SVC_CSS: [&str; 1] = [include_str!("../static/svc/scenario.css")];
 /// Its own asset: the Tailscale page's first load had only 0.4 KiB left with the scenario CSS in.
 const TS_CSS: &str = include_str!("../static/svc/tailscale.css");
+const CHILL_CSS: &str = include_str!("../static/svc/chill.css");
 /// The batch-4 Wi-Fi and LAN pages, one source file per page so they can be written in parallel.
 const ROUTER_CSS: [&str; 7] = [
     include_str!("../static/router/qos.css"),
@@ -155,6 +156,12 @@ fn assets() -> &'static [Asset] {
                 "svc.css",
                 "text/css; charset=utf-8",
                 minify_css(&SVC_CSS.join("\n")).into_bytes(),
+                true,
+            ),
+            mk(
+                "chill.css",
+                "text/css; charset=utf-8",
+                minify_css(CHILL_CSS).into_bytes(),
                 true,
             ),
             mk(

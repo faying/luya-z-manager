@@ -47,6 +47,22 @@ good	home	子网
 good	home	192.168.0.0/24
 good	exit	Tailscale
 good	exit	已连接 · 在线 3/5
+good	home	CHILL
+good	exit	运行中
+good	exit	代理 · TW 台湾 01
+good	exit	代理 21 · 直连 16
+good	exit	↓12.4G ↑1.1G
+good	exit	规则 → 节点
+good	exit	AI → 
+good	exit	美国 01
+good	exit	↓820M ↑95M
+good	exit	节点选择 → 
+good	exit	台湾 01
+good	exit	↓640M ↑41M
+good	exit	流媒体 → 
+good	exit	苹果服务 → DIRECT
+good	exit	漏网之鱼 → 
+good	exit	↓1.2M/s ↑45K/s
 abroad	home	国外
 *	system	CPU
 *	system	内存
@@ -65,11 +81,13 @@ good	system	近 5 分钟
 *	cellular	小区信息
 *	cellular	锁频
 *	exit	测速
+*	exit	CHILL
 *	cellular	SIM 与 eSIM
 *	system	性能测试
 good	cellular	3 条 · 2 未读
 good	cellular	自动
 good	exit	↓ 812 · ↑ 96 Mbps
+good	exit	运行中 · 代理
 good	cellular	eSIM · 中国联通 · 主号
 good	system	调试页
 *	system	屏幕
@@ -221,6 +239,36 @@ good	speed	服务器
 good	speed	自动（最佳服务器）
 good	speed	China Unicom · Shanghai, China
 empty	speed	连不上测速服务
+*	chill	连接
+*	chill	流量
+*	chill	出口
+*	chill	代理
+*	chill	全局
+*	chill	直连 · AI 不动
+*	chill	全部直连
+*	chill	节点
+*	chill	规则 → 节点
+good	chill	运行中
+good	chill	代理 21 · 直连 16
+good	chill	↓12.4G ↑1.1G
+good	chill	4 组 · 10 个
+good	chill	6 条
+good	chill-nodes	策略组
+good	chill-nodes	节点选择
+good	chill-nodes	AI
+good	chill-nodes	流媒体
+good	chill-nodes	苹果服务
+good	chill-nodes	节点
+good	chill-nodes	测延迟
+good	chill-nodes	台湾 01
+good	chill-nodes	42 ms
+good	chill-nodes	超时
+good	chill-nodes	美国 02
+good	chill-nodes	201 ms
+good	chill-pairs	规则 → 节点流量
+good	chill-pairs	↓2.1G ↑12M
+good	chill-pairs	Google → 
+good	chill-pairs	↓3M ↑1M
 good	esim	当前配置
 good	esim	使用中 · eSIM
 good	esim	卡信息
@@ -268,10 +316,18 @@ good	tailscale	离线
 good	tailscale	old-ipad
 *	perf	渲染刷新率
 *	perf	触控上报率
+*	exit-menu	在国外 · CHILL 怎么走
+*	exit-menu	代理（和在国内一样）
+*	exit-menu	全局
+*	exit-menu	直连 · AI 不动
+*	exit-menu	全部直连（AI 也直连）
+!empty	exit-menu	关闭 CHILL（最省电）
+*	exit-menu	取消
 *	power-menu	电源
 *	power-menu	关机
 *	power-menu	重启
 *	power-menu	取消
+empty	exit-menu	打开 CHILL
 weak	home	慢：信号弱
 nosim	home	没有 SIM 卡
 nosim	home	在「蜂窝 → SIM 与 eSIM」启用
@@ -279,7 +335,9 @@ loading	home	正在读取…
 datad-down	home	数据服务掉线 · 数字停在
 empty	exit	需要登录
 empty	home	在管理网页打开登录链接
+empty	exit	已关闭
 abroad	home	出口节点
+abroad	home	直连 · AI 不动
 lowbat	home	电量低，尽快充电
 full-charging	system	充电中
 !loading,datad-down	charts-collecting	正在收集 · 1 分钟后出现曲线
@@ -287,7 +345,11 @@ empty	wifi	还没有设备连上
 empty	esim	现在插的是普通 SIM 卡
 *	cellular	运营商选择
 good	exit	203.0.113.24
+good	exit	198.51.100.7
+good	exit	蜂窝直连
+good	exit	CHILL
 good	exit	中国 广东 深圳 · 电信
+good	exit	日本 东京都 · JP 03
 good	net	中国电信 46011
 good	net	本地
 good	net	自动
@@ -298,6 +360,7 @@ good	net	禁止
 good	net	搜索网络
 good	net	恢复自动
 abroad	exit	出口 IP
+abroad	exit	CHILL 直连
 abroad	net	中华电信（中国台湾）46692
 abroad	net	漫游中
 abroad	net	手动
@@ -317,9 +380,11 @@ good	scene	按下面每个情景的条件自己切换
 good	scene	不碰蜂窝网络
 full-charging	scene	已固定
 full-charging	scene	点「自动」才恢复自动判断
+abroad	scene	CHILL 出口
 good	exit	203.0.113.24
 good	home	本地
 abroad	exit	中国台湾 台北市 · 中华电信
+abroad	home	CHILL 直连
 good	home	U60-Test · 6 台
 weak	home	RSRP -112：离基站远，靠窗通常好些
 datad-down	home	读不到数据
@@ -388,6 +453,7 @@ good	apn-armed	再点一次确认
 good	apn-armed	只给这张卡改用「ctnet」
 good	apn-pending	切换中…
 good	apn-pending	正在切换到「China Telecom 4G」
+good	exit	代理与测速
 nosim	esim	没插卡
 nosim	cellular	没插卡
 # 2026-09-25 首页网络卡片（docs/designs/home-net-card.md）
@@ -397,6 +463,8 @@ good	home	信号强
 good	home	干扰小 · 负载正常
 good	home	激活 2/3
 good	home	↓ n78 100M + n1 20M   ↑ n78
+good	home	国外走 CHILL · 日本 东京都
+good	home	国内直连 · 中国 深圳
 crowd	home	慢：疑似拥挤
 crowd	home	RSRQ -18：人多抢网，换位置帮助不大
 crowd	home	干扰中 · 负载高
@@ -422,13 +490,6 @@ abroad	home	中華電信 · 5G SA · 漫游
 nosignal	home	SOS
 nosvc	home	无服务
 nosvc	home	正在搜网，换个位置试试
-good	exit	连接与测速
-
-# public build: the 出口 row and 出口 tab show the cellular (direct) egress only
-good	home	直连 · 中国 深圳
-abroad	home	直连 · 中国台湾 台北市
-good	exit	出口 IP
-good	exit	连接与测速
 # 电池预估（estimate.c 的文案，fixtures.c battery_est_text）
 good	system	约可用 14 小时 51 分
 lowbat	system	约可用 1 小时 32 分
@@ -490,7 +551,15 @@ placement	placement	▲ 比最好低 3.5 dB
 placement	placement	n78 · PCI 603
 placement	placement	重新开始
 placement	placement	换了小区会重新计；这页开着不息屏
-diagnose-running	diagnose	正在检查… 3/5
+diagnose-running	diagnose	正在检查… 3/6
+diagnose-result	diagnose	代理
+diagnose-result	diagnose	JP 03 180 ms · 直连 140 ms
+mf-backup	home	▲
+mf-backup	home	手选的 JP 03 不通，
+mf-backup	exit	已临时换到 JP 日本（自动）
+mf-alldown	home	■
+mf-alldown	exit	手选的 JP 03 和同地区备用 JP 日本 都不通
+mf-alldown	exit	去选节点 ›
 diagnose-result	diagnose-error	后台没回应
 diagnose-result	diagnose-error	重试
 diagnose-result	diagnose-error	蜂窝链路
@@ -529,6 +598,26 @@ journal	journal-cell	上次改动
 journal	journal-cell	10-03 14:32 · 网页
 op-notice	home	自动退回已开：切模式没通会退回
 op-notice	home	知道了
+# 家里出口（E3，manager docs/designs/home-exit.md §10）
+home-exit,home-fallback,home-blocked	chill	家里出口
+home-exit,home-fallback,home-blocked	chill	国内版权走家里
+home-exit,home-fallback,home-blocked	chill	家里 IP 网站
+home-exit,home-fallback,home-blocked	chill	其余都走家里 · 2 小时
+home-exit,home-blocked	chill	3 个网站
+home-exit	chill	剩 1:32
+home-exit	chill	经 Tailscale · 直连 38 ms
+home-exit	home	家里 剩 1:32
+home-fallback	chill	家里不通，暂走 JP 日本
+home-fallback	chill	经中继，视频可能卡
+home-fallback	home	▲
+home-fallback	home	家里不通，暂走原出口
+home-blocked	chill	全局模式下不生效
+home-exit	chill-home-armed	再点一次确认
+home-exit	chill-home-armed	会断一下，走漫游流量
+home-fallback	chill	试运行 0:17
+home-fallback	chill	■ 没开成：家里 Mac 没回应
+home-nocountry	chill	读不到所在国家，版权和其余暂不显示
+home-nocountry	chill	表里还没有网站
 # USB attach mode (usbmode.c, 10-07)
 *	system	插入手机等设备时
 *	system	每次询问

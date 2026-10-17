@@ -27,6 +27,19 @@ pub struct Scenario {
     pin: String,
     last_switch: i64,
     abroad: bool,
+    chill_on: i32,
+    chill_back: bool,
+    auto_direct: bool,
+    mf_notice: String,
+    mf_kind: String,
+    mf_at: i64,
+    mf_seen: i64,
+    mf_stale: bool,
+    home_on: i32,
+    home_until: i64,
+    home_fallback: bool,
+    /// services.chill as last read (C keeps the buffer: a reply without it reads the old one)
+    ch: Vec<u8>,
     /// changed locally (a switch from the screen): redraw on the next round
     dirty: bool,
     was_active: bool,
@@ -44,6 +57,7 @@ pub struct Scenario {
 impl Scenario {
     pub fn new() -> Scenario {
         Scenario {
+            chill_on: -1,
             ..Default::default()
         }
     }
@@ -80,6 +94,44 @@ impl Scenario {
                 }
                 None => self.h_checked = false,
             }
+            // services.chill.on: the master switch (an old agent has no such key: -1); the
+            // manual-first notice too (notice / notice_en / notice_at / notice_kind)
+            self.chill_on = -1;
+            self.mf_notice.clear();
+            self.mf_kind.clear();
+            self.mf_at = 0;
+            self.mf_stale = false;
+            self.mf_seen = super::util::wall();
+            if let Some(svc) = json::get(&data, "services", 4096)
+                && let Some(ch) = json::get(&svc, "chill", 2048)
+            {
+                self.ch = ch;
+                let ch = &self.ch;
+                if let Some(v) = json::get(ch, "on", 8) {
+                    self.chill_on = (v == b"true") as i32;
+                }
+                let zh = jstr(ch, "notice", 256);
+                let en = jstr(ch, "notice_en", 256);
+                // a flag in a node name: the device font has none, the country code instead
+                if !zh.is_empty() {
+                    self.mf_notice = super::chill::sanitize_name(lang::pick(&zh, &en), 192);
+                }
+                self.mf_kind = jstr(ch, "notice_kind", 12);
+                self.mf_at = json::get_int(ch, "notice_at", 0);
+            }
+            self.home_on = 0;
+            self.home_fallback = false;
+            self.home_until = 0;
+            if let Some(he) = json::get(&self.ch, "home_exit", 256)
+                && he.first() == Some(&b'{')
+            {
+                self.home_on = jtrue(&he, "media") as i32 | (jtrue(&he, "ip") as i32) << 1 | (jtrue(&he, "rest") as i32) << 2;
+                self.home_until = json::get_int(&he, "rest_until", 0);
+                self.home_fallback = jtrue(&he, "fallback");
+            }
+        }
+        if data.is_empty() {
+            self.mf_stale = !self.mf_notice.is_empty(); // the notice stays, dimmed, with its time
         }
         if !data.is_empty()
             && let Some(sc) = json::get(&data, "scenario", 1024)
@@ -96,21 +148,29 @@ impl Scenario {
             self.pin = jstr(&sc, "pin", 48);
             self.last_switch = json::get_int(&sc, "last_switch", 0);
             self.abroad = jtrue(&sc, "abroad");
+            self.chill_back = jtrue(&sc, "chill_on_when_home");
+            self.auto_direct = jtrue(&sc, "auto_direct");
         }
 
         let nums = format!(
-            "{}/{}/{}/{}/{}/{}/{}",
+            "{}/{}/{}/{}/{}/{}/{}{}{}",
             self.ok as i32,
             self.configured as i32,
             self.enabled as i32,
             self.wifi_off as i32,
             self.last_switch,
             self.unread,
-            self.abroad as i32
+            self.abroad as i32,
+            self.chill_on,
+            self.chill_back as i32
         );
         let mut h = fnv(FNV0, nums.as_bytes());
         h = fnv(h, self.name.as_bytes());
         h = fnv(h, self.pin.as_bytes());
+        h = fnv(h, self.mf_notice.as_bytes());
+        h = fnv(h, self.mf_kind.as_bytes());
+        h = fnv(h, if self.mf_stale { b"stale" } else { b"live" });
+        h = fnv(h, format!("{}/{}/{}", self.home_on, self.home_until, self.home_fallback as i32).as_bytes());
         if h == self.sig {
             return false;
         }
@@ -127,10 +187,38 @@ impl Scenario {
             pin: self.pin.clone(),
             last_switch: self.last_switch,
             abroad: self.abroad as i32,
-            ..Default::default()
+            chill_on: self.chill_on,
+            chill_back: self.chill_back as i32,
+            auto_direct: self.auto_direct as i32,
+            mf_notice: self.mf_notice.clone(),
+            mf_kind: self.mf_kind.clone(),
+            mf_at: self.mf_at,
+            mf_seen: self.mf_seen,
+            mf_stale: self.mf_stale as i32,
+            home_on: self.home_on,
+            home_until: self.home_until,
+            home_fallback: self.home_fallback as i32,
         }
     }
 
+    /// CHILL's master switch through zte-agent (logged in). Shown as asked at once; read
+    /// again in 4 s (chill.sh takes a few seconds).
+    pub fn chill_set(&mut self, agent: &mut CoreApi, on: bool) -> bool {
+        let code = agent.post(if on { "/api/services/chill/enable" } else { "/api/services/chill/disable" });
+        if !(200..300).contains(&code) {
+            return false;
+        }
+        self.chill_on = on as i32;
+        if on {
+            self.chill_back = false;
+        } else if self.abroad {
+            self.chill_back = true;
+        }
+        self.dirty = true;
+        self.sig = 0;
+        self.poll_ms = mono_ms() - SC_TTL_MS + 4000;
+        true
+    }
 
     /// Read again on the next round (after pinning a scenario).
     pub fn kick(&mut self) {

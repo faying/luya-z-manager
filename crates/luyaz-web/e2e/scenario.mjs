@@ -4,7 +4,8 @@
 // the mock's stored state (GET /__lw/scene), because the old page's writes were double-encoded and
 // looked fine on screen: the engine off (enabled === false, not true), a pin (pin === "home", not
 // null), a config PUT (200 and changed): a home network removed / added from a scan (a SSID with
-// quote and angle bracket too), a scenario's Wi-Fi, the six timing numbers (and a draft that survives a push), the abroad scenario, the
+// quote and angle bracket too), a scenario's Wi-Fi, a CHILL node (and Cancel puts the select
+// back), the six timing numbers
 // defaults on an empty config. A write the agent refuses is said. Mock state is in memory: start a
 // fresh fake agent before each run. From source/manager:
 //   WEB=http://127.0.0.1:18594 AGENT=http://127.0.0.1:19594 OUT=/tmp/lw-scene \
@@ -218,6 +219,28 @@ async function own(p) {
   h = (await stored()).config.scenarios.find((s) => s.id === "home");
   ok(h.actions[0].body.ap_2g === false && /会关 Wi-Fi/.test(await op("sc-does")), `wifi off, read back: ${await op("sc-does")}`);
 
+  // ---- CHILL node: pick, cancel puts the select back, confirm reads back ----
+  const sel = p.locator("#sc-does select[aria-label='「在家」的 CHILL 节点']");
+  ok((await sel.inputValue()) === "", "home: node 不动");
+  await sel.selectOption({ label: "🇯🇵 日本" });
+  await ask("sc-does");
+  ok(/CHILL 主节点组切到 🇯🇵 日本/.test(await op("sc-does")), `node: ${await op("sc-does")}`);
+  await cancel("sc-does").click();
+  await p.waitForFunction(() => document.querySelector("#sc-does select")?.value === "", null, { timeout: 8000 }).catch(() => {});
+  ok((await p.locator("#sc-does select[aria-label='「在家」的 CHILL 节点']").inputValue()) === "", "Cancel: the select is back on 不动");
+  ok((await stored()).config.scenarios.find((s) => s.id === "home").actions.length === 1, "Cancel: nothing was sent");
+  await p.locator("#sc-does select[aria-label='「在家」的 CHILL 节点']").selectOption({ label: "🇯🇵 日本" });
+  await ask("sc-does");
+  await confirm("sc-does").click();
+  await done("sc-does", /CHILL 节点已设为|没有生效|设备已接受/);
+  h = (await stored()).config.scenarios.find((s) => s.id === "home");
+  const reg = h.actions.find((a) => a.path === "/api/services/chill/regions");
+  ok(reg?.body.member === "🇯🇵 日本" && reg.best_effort === true && reg.restore_on_exit?.field === "member" && reg.verify_field?.equals === "🇯🇵 日本" && h.actions[0].path === "/api/wifi/radio", `node saved, read back, the Wi-Fi action kept: ${await op("sc-does")}`);
+  await p.locator("#sc-does select[aria-label='「在家」的 CHILL 节点']").selectOption({ label: "不动" });
+  await ask("sc-does");
+  await confirm("sc-does").click();
+  await done("sc-does", /不再改动|没有生效|设备已接受/);
+  ok(!(await stored()).config.scenarios.find((s) => s.id === "home").actions.some((a) => a.path === "/api/services/chill/regions"), `node cleared: ${await op("sc-does")}`);
 
   // ---- abroad: gone from the config → "添加国外情景" puts back only that ----
   const base = await stored();

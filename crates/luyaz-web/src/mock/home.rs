@@ -1,9 +1,9 @@
 //! / (home, batch 5b) in the mock u60d: the `clients` block (the recording has none), the made-up
-//! parts of u60d's public status the page reads (scenario, verdict; `mock.rs`
+//! parts of u60d's public status the page reads (scenario, verdict, the CHILL notice; `mock.rs`
 //! `screen_status` calls [`public_extra`]) and `/v2/api/screen` (the battery estimate).
 //!
 //! `POST /mock/home` (JSON, all optional): `{"reset": true}`; `{"verdict": "stall"}` (network.verdict);
-//! `{"scenario": "none" | "off" | "pinned"}`;
+//! `{"scenario": "none" | "off" | "pinned"}`; `{"notice": "alldown" | "backup" | null}` (CHILL notice);
 //! `{"bat": "discharging" | "charging" | "limit" | "estimating" | "gone"}` (what /v2/api/screen says);
 //! `{"clients": n}` (republishes the `clients` block).
 
@@ -64,6 +64,19 @@ pub(crate) fn public_extra(d: &mut Value) {
                     "last_switch": 1_760_000_000_u64 + 3600 * 14 + 60 * 25}),
     };
     d["services"]["tailscale"] = json!({"installed": true, "running": true});
+    match h.notice.as_str() {
+        "alldown" => {
+            d["services"]["chill"]["notice"] = json!("日本 03 和 备用都不通");
+            d["services"]["chill"]["notice_en"] = json!("JP 03 and the fallback are both down");
+            d["services"]["chill"]["notice_kind"] = json!("alldown");
+        }
+        "backup" => {
+            d["services"]["chill"]["notice"] = json!("已切到备用节点");
+            d["services"]["chill"]["notice_en"] = json!("On the backup node");
+            d["services"]["chill"]["notice_kind"] = json!("backup");
+        }
+        _ => {}
+    }
 }
 
 async fn screen(State(_m): State<Arc<Mock>>) -> Response {

@@ -413,7 +413,7 @@ impl JournalWrite {
     }
 }
 
-/// `journal.append`（只记账，T5）：eSIM 这类不经 `/control` 的改动由 agent 补记。
+/// `journal.append`（只记账，T5）：eSIM、CHILL 这类不经 `/control` 的改动由 agent 补记。
 /// 要顶层 `source`；`params.result` 必填，`skipped` 按 D27 合并。不受事务锁、不进执行者。
 fn journal_append(app: &App, action: &str, body: &Value, params: &Value) -> Response {
     let Some(who) = who_of(body) else {

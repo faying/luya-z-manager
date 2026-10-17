@@ -1,0 +1,78 @@
+// CHILL manual-first (luyaz_policy::manual_first), the policy boundary between u60d's manual-first
+// shadow and a manual-first component. The version is the host ABI version in a plugin's manifest
+// entry: change anything here and bump it.
+//
+// The machine calls out for every outside answer (`Io` in u60-policy). Across this boundary that
+// is a replay: the host passes the answers a tick got (recorded by the agent, or later by u60d
+// itself) and the guest runs the tick against them, so the guest needs no imports. `replay`
+// returns the machine after, the calls the guest made with the answers it got, and the first call
+// that was not the next recorded one.
+package luyaz:manual-first@0.1.0;
+
+world manual-first {
+  variant probe {
+    ms(u32),
+    timeout,
+  }
+
+  record obs {
+    now: u64,
+    active: bool,
+    main-now: string,
+    manual-now: string,
+  }
+
+  /// /data/chill/manual-first.json
+  record persist {
+    backup: string,
+    manual: string,
+    switched-at: u64,
+    switches: list<u64>,
+    last-region: string,
+    notice: string,
+    notice-en: string,
+    notice-at: u64,
+    notice-kind: string,
+  }
+
+  record machine {
+    p: persist,
+    manual: string,
+    timeouts: u32,
+    bad: u32,
+    good-since: option<u64>,
+    last-probe: u64,
+  }
+
+  record probe-call { node: string, got: option<probe> }
+  record region-call { node: string, got: option<string> }
+  record retest-call { group: string, got: option<tuple<string, bool>> }
+  record select-call { member: string, ok: bool }
+
+  /// One Io call and its answer.
+  variant event {
+    in-use(bool),
+    probe(probe-call),
+    cell-alive(bool),
+    direct-ms(option<u32>),
+    region-of(region-call),
+    retest(retest-call),
+    select-main(select-call),
+    drop-manual-conns,
+    save,
+  }
+
+  record outcome {
+    after: machine,
+    calls: list<event>,
+    /// (index into the recorded events, what the guest asked there)
+    diverged: option<tuple<u32, string>>,
+    /// recorded events the guest never asked for
+    unused: u32,
+  }
+
+  /// One tick against recorded answers (luyaz_policy::manual_first::replay).
+  export replay: func(before: machine, o: obs, recorded: list<event>) -> outcome;
+  /// Whether a tick with 🚀 on `main-now` needs the mode and 🎯's pick (Machine::needs_detail).
+  export needs-detail: func(m: machine, main-now: string) -> bool;
+}

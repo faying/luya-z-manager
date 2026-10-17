@@ -188,6 +188,10 @@ impl App {
         if crate::crashwatch::io::enabled() {
             crate::crashwatch::io::spawn(app.inner.exec.hub().clone());
         }
+        // 6e (u60-radio.md §13): pause CHILL while nobody can use it; LUYAZ_CHILL_IDLE=1
+        if crate::engines::chill_idle::enabled() {
+            crate::engines::chill_idle::spawn(app.inner.exec.hub().clone());
+        }
         // T9c: the boot line's facts and the key.log backfill, a minute into the boot
         if crate::longterm::enabled() {
             tokio::spawn(crate::longterm::boot_task());

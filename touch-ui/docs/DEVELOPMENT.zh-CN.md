@@ -15,7 +15,7 @@
 | `rs/devui/src/data/datad.rs`、`json.rs` | 从核心（`luyaz-core`，`127.0.0.1:9460` 的 `/v2/state` + `/v2/events`）读数据；写操作走它的 `/control`，只有核心连不上时才跑应急脚本 `/data/luyaz/scripts/luyaz-fallback.sh` |
 | `rs/devui/src/data/screen_feed.rs`、`net_view.rs`、`op_view.rs` | 首页卡片/状态栏的结论和写操作事务行由核心的 `GET /v2/screen` 算好（规则在 manager `crates/luyaz-core`），这里只解析 |
 | `rs/devui/src/data/core_api.rs` | 核心本机接口 `127.0.0.1:9460/v2/api/...` 的请求（不要 token、不登录）；各功能模块都走它 |
-| `rs/devui/src/data/{esim,tailscale,speedtest,netinfo,scenario,alerts}.rs` | 各功能的后端：eSIM / APN 等写操作走核心 |
+| `rs/devui/src/data/{esim,chill,tailscale,speedtest,netinfo,scenario,alerts}.rs` | 各功能的后端：eSIM / APN 等写操作走核心；CHILL 读 mihomo 控制接口 |
 | `rs/plat/` | 硬件接口（DRM、触摸、按键、背光），见 [HARDWARE.zh-CN.md](HARDWARE.zh-CN.md) |
 | `rs/lvgl-sys/`、`rs/devui-model/` | LVGL/FreeType 绑定和编译；页面要画的数据模型 |
 | `rs/devui/src/conf.rs` | `devui.conf`（`/data/luyaz/ui/devui.conf`） |
@@ -64,7 +64,7 @@ rs/parity.sh MODEL_DIR REF_DIR OUT_DIR # 和 C 版渲染测试逐像素对拍（
 |---|---|
 | `/data/luyaz/ui/luyaz-ui` | 界面程序（正式位置；进程名 `luyaz-ui`） |
 | `/data/luyaz/ui/fonts/`、`/data/luyaz/ui/touchsim` | Nunito 和中文兜底字体；模拟触摸工具 |
-| `/data/plugins/u60pro-devui/` | 只剩 `start.sh`、`*.orig-backup` 和 `boot-trace.log`（`devui.conf`、`operator-logos/`、`fonts/` 在 `/data/luyaz/ui/`） |
+| `/data/plugins/u60pro-devui/` | 只剩 `start.sh`、`*.orig-backup` 和 `boot-trace.log`（`devui.conf`、`chill.conf`、`operator-logos/`、`fonts/` 在 `/data/luyaz/ui/`） |
 | `/data/luyaz/luyaz-sentinel`、`/etc/init.d/luyaz-sentinel` | 屏幕主人兼看门狗；屏幕状态在 `/data/luyaz/screen/` |
 | `/data/luyaz/luyaz-core`、`/etc/init.d/luyaz-core` | 核心（数据服务；状态在 `/data/luyaz/core/`） |
 | `/data/luyaz/scripts/` | 设备脚本（`doctor.sh`、`luyaz-ship.sh`、`datad-trial.sh`、`luyaz-fallback.sh` 等） |

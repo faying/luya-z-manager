@@ -128,8 +128,8 @@
 | `gap` | 账本任务 | 醒着时 watcher、capture、uidlog、crashlog、datad 某个数据源没在工作，恢复时写（第 8 节） | — | `src`；`from`（最后一次还在工作的那一轮）、`to` 开机秒数 | |
 | `calib` | doctor（暂存） | `--calibrate-standby` 写了新基线 | `calib-<boot8>-<开机秒数>` | `rows` | ✔ |
 | `hour` | 账本任务 | 每个整点（对时前按开机满一小时） | `h-<boot8>-<from>` | `from`、`to` 开机秒数；`ft`、`tt` 墙钟（不可信写 null）；`awake`、`asleep`（只算有证据的休眠）秒；`rounds`、`skipped`（主循环的轮数和其中跳过账本任务的）；`max_gap`；`net`、`home`（整点那一刻）、`abroad`（在国外的醒着秒数）；`free_mb`；`dump_mb`；`budget`；`g_guard`、`g_job`、`g_watcher`、`g_capture`、`g_uidlog`、`g_crashlog`、`g_datad`：各数据源这一小时没在工作的醒着秒数（第 8 节） | |
-| `hour_power` | 账本任务 | 紧跟 `hour` | `hp-<boot8>-<from>` | `src`：`counter` / `vi`（读不到写 null）；`e` 总能量 mWh；`on_home_s`、`on_home_e`、`on_abroad_s`、`on_abroad_e`、`off_home_s`、`off_home_e`、`off_abroad_s`、`off_abroad_e`；`chg_s`；`batt_from`、`batt_to` %；`batt_tmax` 0.1 °C；`zone_tmax` m°C（只取主芯片侧的温度区：`cpuss-*`、`aoss-*`、`sys-therm-*`、`xo-therm`、`pm*_tz`、`battery`；基带侧的 `sdr*`、`mmw*`、`epm*`、`mdm*` 读一次就是一个发给基带的 QMI 请求，不读）；`throttle_s`（没有 cpufreq 写 null）；`e_partial`（能量缺了一部分：V×I 下有过休眠，或有读不到的轮）；核心起（manager `docs/designs/u60-radio.md` §4、D9/D10）：`off_home_quiet_pm`、`off_abroad_quiet_pm` 息屏不充电时蜂窝安静的千分比（连续 0 包 ≥10 s 的整段，跟诊断档 quiet10 同定义，约 5 s 粒度，休眠不算）、`off_home_wan_pkts`、`off_abroad_wan_pkts` 这段时间的蜂窝包数（厂商计数，含 IPA 转发；没比到写 null）；`off_home_cli_s` 息屏在家时有客户端的秒数（客户端数未知也算有） | |
-| `hour_proc` | 账本任务 | 紧跟 `hour_power` | `hq-<boot8>-<from>` | `rss_agent`、`rss_datad`、`rss_devui`、`rss_ts` kB（整点那一刻，不在跑写 null）；`cpu_datad` 本小时平均千分比（同一个进程从头跑到尾才算，否则 null）；`idle_rows` 息屏且空闲的分钟数、`idle_wan` 这些分钟蜂窝包数的中位数（没有基线写 null）；`ts_on_s`、`ts_chk_s`、`ts_ok_s`（第 6 节「出口」） | |
+| `hour_power` | 账本任务 | 紧跟 `hour` | `hp-<boot8>-<from>` | `src`：`counter` / `vi`（读不到写 null）；`e` 总能量 mWh；`on_home_s`、`on_home_e`、`on_abroad_s`、`on_abroad_e`、`off_home_s`、`off_home_e`、`off_abroad_s`、`off_abroad_e`；`chg_s`；`batt_from`、`batt_to` %；`batt_tmax` 0.1 °C；`zone_tmax` m°C（只取主芯片侧的温度区：`cpuss-*`、`aoss-*`、`sys-therm-*`、`xo-therm`、`pm*_tz`、`battery`；基带侧的 `sdr*`、`mmw*`、`epm*`、`mdm*` 读一次就是一个发给基带的 QMI 请求，不读）；`throttle_s`（没有 cpufreq 写 null）；`e_partial`（能量缺了一部分：V×I 下有过休眠，或有读不到的轮）；核心起（manager `docs/designs/u60-radio.md` §4、D9/D10）：`off_home_quiet_pm`、`off_abroad_quiet_pm` 息屏不充电时蜂窝安静的千分比（连续 0 包 ≥10 s 的整段，跟诊断档 quiet10 同定义，约 5 s 粒度，休眠不算）、`off_home_wan_pkts`、`off_abroad_wan_pkts` 这段时间的蜂窝包数（厂商计数，含 IPA 转发；没比到写 null）；`off_home_cli_s` 息屏在家时有客户端的秒数（客户端数未知也算有）；`chill_profile` 这小时 CHILL 的实际档位（`eco`/`standard`/`perf`，CHILL 关着或暂停写 `off`，换过写 `mixed`，没有 CHILL 写 null） | |
+| `hour_proc` | 账本任务 | 紧跟 `hour_power` | `hq-<boot8>-<from>` | `rss_agent`、`rss_datad`、`rss_devui`、`rss_mihomo`、`rss_ts` kB（整点那一刻，不在跑写 null）；`cpu_datad` 本小时平均千分比（同一个进程从头跑到尾才算，否则 null）；`idle_rows` 息屏且空闲的分钟数、`idle_wan` 这些分钟蜂窝包数的中位数（没有基线写 null）；`chill_on_s`、`chill_ok_s`、`ts_on_s`、`ts_chk_s`、`ts_ok_s`（第 6 节「出口」） | |
 
 以后的种类（第二步起）：`reboot_request`（`by`、`why`，我们的每条重启路径发出前写，要挺过重启）、`session`（设备占用锁）、`deploy`（E1）。
 
@@ -174,6 +174,8 @@
   - **能量**：有电量计的累计量（`battery/charge_counter`，µAh）时，按相邻两轮的差 × 电压算，跨过休眠也对，算进后一轮所在的格子，格子的秒数也含休眠；
     没有时每轮用 V×I 只积醒着的那一段，本小时有过休眠就标 `e_partial`。充电（`status` 是 Charging/Full，或电流为正）的时间进 `chg_s`，不进格子。
   - **降频**：某个 cpufreq policy 的 `scaling_max_freq` 低于它本次开机见过的最高值，这一轮算降频（不和 `cpuinfo_max_freq` 比：原厂可能一直压着）。
+  - **出口（S8）CHILL**：算「开着」= 蜂窝口有默认路由、`/data/chill/` 下没有 `disabled`、不在 `pause_until` 之内；「正常」= 另外 `chill.sh` 的
+    `/tmp/chill.state` 150 秒内写过、第一行是 `"state":"running"`、它记的 `core_pid` 还是 mihomo。
   - **出口（S8）Tailscale**：算「开着」= 蜂窝口有默认路由且 `rc.local` 会起它。开着的每一轮，账本任务问一次 tailscaled 的 LocalAPI：
     `curl --unix-socket /tmp/tailscaled.sock http://local-tailscaled.sock/localapi/v0/status`（和触屏卡片同一个路径、同一个 Host），
     限时取这一轮剩下的读取时间、最多 2 秒，剩下不到 1 秒就不问。「正常」= `BackendState` 是 `Running` 并且 `Self.Online` 为真
@@ -340,7 +342,7 @@
 | S5b | `uid what=gave_up` 次数（再对照 `/data/u60-uid/gave-up`、告警 `devui-gave-up`） | 0 | 7 天 | uidlog |
 | S6 | `datad_degraded` 次数和总分钟数 | 每天 0 | 1 天 | guard、datad |
 | S7 | E1 前靠已知事实（版本漂移） | — | — | — |
-| S8 | Tailscale：`ts_ok_s` ÷ `ts_chk_s`，覆盖另按第 8 节「Tailscale 自己的覆盖」；把没查到的全算正常也不到 99% 就直接不达标。没开过写没测 | ≥ 99% | 7 天 | guard |
+| S8 | CHILL：`chill_ok_s` ÷ `chill_on_s`；Tailscale：`ts_ok_s` ÷ `ts_chk_s`，覆盖另按第 8 节「Tailscale 自己的覆盖」；把没查到的全算正常也不到 99% 就直接不达标。两个都没开过写没测 | ≥ 99% | 7 天 | guard |
 | U1–U5 | 第二步前没测，或靠已知事实（写明） | — | — | — |
 | U6 | 列出窗口内全部告警（排除 sms-test）和当前体检里的 ▲，人工判 | — | 7 天 | 告警队列 |
 | P1 | `hour_power.e` 折成平均功率和按当前电量的续航；先不定目标，攒够 7 天 | 待定 | 7 天 | guard |
@@ -366,8 +368,8 @@
   - guard 在开机和被测程序 pid 变化时算好程序的 md5，写 `/tmp/u60-guard/ledger/fp`（每行 `<程序> <pid> <md5>`），并在
     `/tmp/u60-guard/ledger/fp-changed` 记下最近一次变化时的开机秒数。
   - 基线文件（`standby.baseline`，第 2 版）：原来的 `<列> <中位数> <MAD>` 行之外，加 `fp <列> <依赖的 md5 串>` 行和第一行 `v2`。
-    每列的依赖：2 蜂窝包（无）；3 隧道包（tailscaled、`tuning.env`）；4 tailscaled 唤醒（tailscaled、`tuning.env`）；
-    5 触屏唤醒（u60pro-devui）；6 datad 唤醒（zwrt-datad）；7 agent 唤醒（zte-agent）。配置文件的 md5 每次现算（都很小），程序的 md5 读 `fp`。
+    每列的依赖：2 蜂窝包（无）；3 隧道包（tailscaled、`tuning.env`）；4 tailscaled 唤醒（tailscaled、`tuning.env`）；5 mihomo 唤醒（mihomo、CHILL 模板、`chill.env`）；
+    6 触屏唤醒（u60pro-devui）；7 datad 唤醒（zwrt-datad）；8 agent 唤醒（zte-agent）。配置文件的 md5 每次现算（都很小），程序的 md5 读 `fp`。
   - 某列依赖的 md5 对不上：那一列写「基线过期」、不判。基线是旧格式（没有 `v2`）：整行写「基线格式旧，请在家自然空闲时重新校准」，不判。
   - 只用 `fp-changed` 之后的待机记录来判（变化之前的记录属于旧版本）。
 - 默认（给人看的）输出末尾多 3 行，照抄 `summary`；`summary` 不存在就不写。`--tsv` 不读账本也不读 `summary`。
@@ -384,4 +386,4 @@
 
 ## 14. 公开导出
 
-公开版不含私有扩展的字段和代码；读的一方按缺字段处理。
+CHILL（mihomo）相关的字段 2026-10-17 起随 CHILL 一起公开，不再从公开版去掉；没装 CHILL 的设备上这些字段不写，读的一方按缺字段处理。

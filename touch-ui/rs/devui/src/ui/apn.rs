@@ -531,7 +531,6 @@ impl Ui {
                     cur_abroad = s.abroad != 0;
                 }
             }
-            let _ = cur_abroad;
             let usable = n.scene_known != 0 && n.scene_enabled != 0 && nscenes > 0;
             for i in 0..NET_SCENE_ROWS {
                 let mut show = false;
@@ -566,6 +565,12 @@ impl Ui {
                     } else if sc.wifi_off != 0 && does.is_empty() {
                         tag = tr("会关 Wi-Fi").into();
                     }
+                }
+                else if i == NET_SCENE_ROWS - 1 && usable && cur_abroad {
+                    show = true;
+                    name = tr("CHILL 出口").into();
+                    tag = cf!("%s ›", m.chill_mode.as_deref().unwrap_or(""));
+                    tag.truncate(47);
                 }
                 let is_exit = i == NET_SCENE_ROWS - 1;
                 let sel = usable
@@ -667,19 +672,34 @@ impl Ui {
             } else if !n.scene_pin.is_empty() {
                 tr("手动固定后一直保持（重启也是），点「自动」才恢复自动判断").into()
             } else {
-                tr("情景只管 Wi-Fi 这些，不碰蜂窝网络。点一个情景就固定在它，点「自动」恢复").into()
+                tr("情景只管 Wi-Fi、CHILL 这些，不碰蜂窝网络。点一个情景就固定在它，点「自动」恢复").into()
             };
             let note = net.sc_note;
             self.set(note, &buf);
             kit::text_color(note, note_col);
         }
 
-        // 出口: the public IP straight out of the cellular link, one row (the second unused)
-        let two = false;
-        for i in 0..1 {
-            let e = &n.direct;
-            let key: &str = tr("出口 IP");
-            let mut extra: Vec<u8> = e.isp.clone().into();
+        // 出口: CHILL off → one row; on with the same exit (direct main group) → one row, noted;
+        // different → two rows
+        let two = n.proxy.present != 0 && n.proxy.ip != n.direct.ip;
+        let same = n.proxy.present != 0 && !two;
+        for i in 0..2 {
+            let e = if i == 1 { &n.proxy } else { &n.direct };
+            // 直连 · AI 不动: the agent looked up the 🤖 AI group's exit
+            let key: &str = if i == 1 {
+                if m.chill_exit_raw.as_deref().unwrap_or("") != "direct_keep_ai" { "CHILL" } else { "CHILL · AI" }
+            } else if two {
+                tr("蜂窝直连")
+            } else {
+                tr("出口 IP")
+            };
+            let mut extra: Vec<u8> = if i == 1 {
+                e.node.clone().into()
+            } else if same {
+                cf!(tr("%s%sCHILL 直连"), &e.isp, if e.isp.is_empty() { "" } else { " · " })
+            } else {
+                e.isp.clone().into()
+            };
             extra.truncate(79);
             let buf = net_exit_sub(e, &extra);
             let net = &self.net;

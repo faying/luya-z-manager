@@ -33,7 +33,7 @@ await sigPage.goto(`${WEB}/signal`);
 // the side poll runs on the first tab; give it one round
 await hubPage.waitForSelector("a#st-ts", { timeout: 15000 }).catch(() => {});
 for (const [p, name] of [[hubPage, "/charts"], [sigPage, "/signal"]]) {
-  for (const id of ["st-net", "st-wifi", "st-sms", "st-ts"]) {
+  for (const id of ["st-net", "st-wifi", "st-sms", "st-chill", "st-ts"]) {
     const label = await p.locator(`a#${id}`).getAttribute("aria-label", { timeout: 15000 }).catch(() => null);
     ok(!!label, `${name} ${id}: ${label}`);
   }

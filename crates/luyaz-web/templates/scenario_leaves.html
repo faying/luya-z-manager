@@ -48,9 +48,11 @@
 <!--leaf-->
 <div id="sc-does">{% if v.configured %}<section class="sc-sec"><h2 class="nd-group-title">{{ v.l.pick("What each scenario does", "每个情景做什么") }}</h2>
 <p class="nd-aux sc-hint">{{ v.does_desc }}</p>
+{{ v.does_note|safe }}
 <div class="nd-group{% if v.stale %} nd-stale{% endif %}">
 {% for r in v.does %}<div class="nd-row sc-sname"><span class="nd-row__text"><span class="nd-row__label" data-data>{{ r.name }}</span></span></div>
 <div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">Wi-Fi</span></span>{% if r.fallback %}<span class="nd-row__value">{{ v.l.pick("always on", "始终开") }}</span>{% else %}<button type="button" role="switch" class="nd-switch t-switch" data-data aria-label="{% match v.l %}{% when Lang::En %}Wi-Fi in {{ r.name }}{% else %}「{{ r.name }}」的 Wi-Fi{% endmatch %}" aria-checked="{{ r.wifi }}"{% if r.wifi %} data-selected="true"{% endif %}{% if v.locked %} disabled{% endif %} data-on:click="@post('{{ r.wifi_url }}')"><span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span></button>{% endif %}</div>
+{{ r.node|safe }}
 {% endfor %}</div></section>{% endif %}</div>
 <!--leaf-->
 <div id="sc-timing">{% if v.configured %}<section class="sc-sec" data-signals__ifmissing="{{ v.sigs }}"><h2 class="nd-group-title">{{ v.l.pick("How eagerly it reacts", "反应快慢") }}</h2>

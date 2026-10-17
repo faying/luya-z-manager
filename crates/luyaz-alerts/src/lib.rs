@@ -416,6 +416,11 @@ pub fn kind_label(kind: &str) -> String {
             "dropbear-down",
             "SSH（:2222）一小时内反复掉线，已到重开上限",
         ),
+        (
+            "home-exit-down",
+            "家里出口 15 分钟没回应，「其余都走家里」已关",
+        ),
+        ("home-exit-check-failed", "家里出口打开后自检没过，已关回去"),
     ];
     T.iter()
         .find(|t| t.0 == kind)
@@ -490,6 +495,14 @@ pub fn kind_label_en(kind: &str) -> String {
         (
             "dropbear-down",
             "SSH (:2222) keeps going away; restart limit reached",
+        ),
+        (
+            "home-exit-down",
+            "Home exit silent 15 min; \"Rest via home\" turned off",
+        ),
+        (
+            "home-exit-check-failed",
+            "Home exit failed its check after turning on; turned back off",
         ),
     ];
     T.iter()

@@ -46,6 +46,12 @@ FILES="
 /data/homemode/ssids                         plain
 /data/homemode/config                        plain
 "
+FILES="$FILES
+/data/chill/chill.env                        secret
+/data/chill/template.yaml                    secret
+/data/chill/confirmed                        plain
+/data/luyaz/ui/chill.conf                    plain
+"
 TAILSCALE_DIR=/data/tailscale/state
 
 die() { echo "config-backup: $*" >&2; exit 1; }

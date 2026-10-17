@@ -71,7 +71,9 @@ fn name(key: &str) -> Words {
         }
         "vendor.call" => ("原厂设置", "Vendor setting"),
         "esim" => ("eSIM", "eSIM"),
+        "chill" => ("CHILL", "CHILL"),
         k if k.starts_with("esim.") => ("eSIM", "eSIM"),
+        k if k.starts_with("chill") => ("CHILL", "CHILL"),
         other => return (other.to_owned(), other.to_owned()),
     };
     (zh.into(), en.into())
@@ -339,7 +341,7 @@ pub fn decorate(entries: &mut [Value]) {
                 change = change_of(&action, p);
             }
             if line.get("journal_append").is_some() {
-                // eSIM 这类只记账的：旧 → 新有就写上
+                // eSIM、CHILL 这类只记账的：旧 → 新有就写上
                 let (o, n) = (s(line, "old"), s(line, "new"));
                 if !n.is_empty() {
                     change = if o.is_empty() {

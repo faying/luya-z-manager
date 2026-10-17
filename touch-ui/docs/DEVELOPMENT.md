@@ -15,7 +15,7 @@ was deleted on 2026-10-15 and is kept at git tag `legacy-c-touch-ui`; the older 
 | `rs/devui/src/data/datad.rs`, `json.rs` | Read data from the core (`luyaz-core`, `/v2/state` + `/v2/events` on `127.0.0.1:9460`); writes go through its `/control`, and the emergency script `/data/luyaz/scripts/luyaz-fallback.sh` runs only when the core cannot be reached |
 | `rs/devui/src/data/screen_feed.rs`, `net_view.rs`, `op_view.rs` | The home card / status bar conclusions and the write-transaction row come ready-made from the core's `GET /v2/screen` (rules in manager `crates/luyaz-core`); this code only parses them |
 | `rs/devui/src/data/core_api.rs` | Requests to the core's loopback API `127.0.0.1:9460/v2/api/...` (no token, no login); used by every feature module |
-| `rs/devui/src/data/{esim,tailscale,speedtest,netinfo,scenario,alerts}.rs` | Feature backends: eSIM / APN and other writes go through the core |
+| `rs/devui/src/data/{esim,chill,tailscale,speedtest,netinfo,scenario,alerts}.rs` | Feature backends: eSIM / APN and other writes go through the core; CHILL reads the mihomo controller API |
 | `rs/plat/` | Hardware interfaces (DRM, touch, keys, backlight), see [HARDWARE.md](HARDWARE.md) |
 | `rs/lvgl-sys/`, `rs/devui-model/` | LVGL/FreeType bindings and build; the model types the pages draw |
 | `rs/devui/src/conf.rs` | `devui.conf` (`/data/luyaz/ui/devui.conf`) |
@@ -64,7 +64,7 @@ Copy the device fonts from `/usr/ui/fonts/` on the device yourself; they don't g
 |---|---|
 | `/data/luyaz/ui/luyaz-ui` | UI binary (live slot; process name `luyaz-ui`) |
 | `/data/luyaz/ui/fonts/`, `/data/luyaz/ui/touchsim` | Nunito and the Chinese fallback font; the touch simulator |
-| `/data/plugins/u60pro-devui/` | Only `start.sh`, `*.orig-backup` and `boot-trace.log` (`devui.conf`, `operator-logos/` and `fonts/` are in `/data/luyaz/ui/`) |
+| `/data/plugins/u60pro-devui/` | Only `start.sh`, `*.orig-backup` and `boot-trace.log` (`devui.conf`, `chill.conf`, `operator-logos/` and `fonts/` are in `/data/luyaz/ui/`) |
 | `/data/luyaz/luyaz-sentinel`, `/etc/init.d/luyaz-sentinel` | Screen owner and watchdog; screen state in `/data/luyaz/screen/` |
 | `/data/luyaz/luyaz-core`, `/etc/init.d/luyaz-core` | The core (data service; state in `/data/luyaz/core/`) |
 | `/data/luyaz/scripts/` | Device scripts (`doctor.sh`, `luyaz-ship.sh`, `datad-trial.sh`, `luyaz-fallback.sh`, …) |

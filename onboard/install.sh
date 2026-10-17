@@ -5,6 +5,8 @@
 #   ./install.sh                     # 全套：开 ADB → SSH → 高级后台 → devui → eSIM
 #   ./install.sh ssh                 # 只开 ADB + 持久化 SSH
 #   ./install.sh admin devui         # 只装指定组件（SSH 或 ADB 通着就行）
+#   ./install.sh chill               # CHILL 代理（mihomo + 面板）；不在全套里，要单独点名。
+#                                    #   第一次装不会启动，装完照提示写订阅地址再 safe-start
 #   ./install.sh recover             # u60 ship 的开机收尾：换上 /data/luyaz/ship/luyaz-recover.sh（设备上自检过才换），
 #                                    #   并在 rc.local 各服务启动行之前加一行调用它。不在全套里，要单独点名
 #   ./install.sh status              # 看设备上各组件状态
@@ -72,7 +74,7 @@ case " $COMPONENTS " in
   " status "|" reboot "|" doctor "|" backup "|" restore ") ;;
   *" status "*|*" reboot "*|*" doctor "*) fail "status / doctor / reboot 要单独跑，不能和组件混在一起" ;;
   *) for c in $COMPONENTS; do
-              case "$c" in ssh|admin|devui|esim|recover) ;; *) fail "不认识的组件: ${c}（可选 ssh admin devui esim recover，或 status / doctor / reboot）" ;; esac
+       case "$c" in ssh|admin|devui|esim|chill|recover) ;; *) fail "不认识的组件: ${c}（可选 ssh admin devui esim chill recover，或 status / doctor / reboot）" ;; esac
      done ;;
 esac
 INSTALLING=true
@@ -263,7 +265,7 @@ do_backup() {
   # dropbear 的 host key 和启动脚本。固件升级会换掉 rc.local 和 /etc/init.d（B31 社区调研 K4）。
   local sys="${out%.tgz}.system.tgz"
   local tarcmd="cd / && tar czf - \$(for f in etc/rc.local etc/init.d/luyaz-core etc/init.d/zwrt-datad etc/init.d/luyaz-sentinel etc/init.d/luyaz-web \
-      etc/init.d/u60-guard etc/init.d/u60-uid data/ssh/dropbear_ed25519_host_key data/ssh/authorized_keys \
+      etc/init.d/chill etc/init.d/u60-guard etc/init.d/u60-uid data/ssh/dropbear_ed25519_host_key data/ssh/authorized_keys \
       data/local/tmp/start_dropbear.sh; do [ -e \$f ] && echo \$f; done)"
   if [ "$CH" = ssh ]; then
     ssh "${SSH_OPTS[@]}" "root@$GATEWAY" "$tarcmd" < /dev/null > "$sys" 2>/dev/null
@@ -378,6 +380,8 @@ for c in $COMPONENTS; do
     esim)  cp "$KIT/payload/esim.tgz" "$S/" ;;
     recover) [ -f "$KIT/payload/guard/u60-recover.sh" ] || fail "这个装机包没带 u60-recover.sh（装机包太旧？）"
              [ -d "$S/guard" ] || cp -R "$KIT/payload/guard" "$S/" ;;
+    chill) [ -d "$KIT/payload/chill" ] || fail "这个装机包没带 CHILL（打包时 CHILL=0？）"
+           cp -R "$KIT/payload/chill" "$S/" ;;
   esac
 done
 
@@ -471,5 +475,6 @@ if [[ "$CHOSEN" == *" ssh "* ]]; then cat <<EOF
 EOF
 fi
 [[ "$CHOSEN" == *" admin "* ]] && printf "\n  高级后台:   http://%s:9090/\n" "$GATEWAY"
+[[ "$CHOSEN" == *" chill "* ]] && printf "  CHILL:      高级后台 → 服务 → CHILL（面板在 http://%s:9090/chill-ui/，从后台的按钮进）\n" "$GATEWAY"
 [[ "$CHOSEN" == *" esim "* ]] && printf "  eSIM:       高级后台 → 移动网络 → eSIM；屏幕上「更多功能 → eSIM」可切换\n"
 echo

@@ -13,16 +13,16 @@
 //! Batch 1: the output layer (text, `--tsv`, `--tsv2`, exit code) and the file/uci rows boot-sync,
 //! fota, clock, core-move, tmp-move, crashes, disk. Batch 2: svc-*, dup-*, svc-zte-agent, heartbeat,
 //! takeover, wifi, screen, alerts, sms. The other rows keep their slot
-//! in [`run`]. Batch 3: whiteout, phonehome, HTTP. Batch 4: the manifest (`--manifest`,
-//! `--tree-fp`), standby, `--ledger-selftest`, text mode's scorecard lines. Left to doctor.sh:
-//! `--report` and `--calibrate-standby` (no live caller).
+//! in [`run`]. Batch 3: whiteout, phonehome, CHILL, HTTP. Batch 4: the manifest (`--manifest`,
+//! `--tree-fp`), standby, `--ledger-selftest`, text mode's scorecard lines; later
+//! `--calibrate-standby` (standby.rs `calibrate`). Left to doctor.sh: `--report` (no live caller).
 
 use std::process::{Command, Stdio};
 
 /// What the process calls itself while it runs doctor (not a core name: `paths::is_core`).
 pub const COMM: &str = "luyaz-doctor";
 /// Exit code, with nothing printed (stdout or stderr), for the modes left to doctor-legacy.sh
-/// (`--report`, `--calibrate-standby`): the doctor.sh shim then runs that instead.
+/// (`--report`): the doctor.sh shim then runs that instead.
 pub const EXIT_NOT_PORTED: i32 = 64;
 
 const CLOCK_YEAR_MIN: i64 = 1767225600; // 2026-01-01 00:00
@@ -118,6 +118,8 @@ pub struct Cfg {
     route: String,
     selftest_wait: i64,
     scorecard_url: String,
+    calib_url: String,
+    chill: chill::Cfg,
     root: String,
     luyaz_tmp: String,
 }
@@ -216,6 +218,14 @@ impl Cfg {
             route: s("DOC_ROUTE", "/proc/net/route"),
             selftest_wait: digits(&s("DOC_SELFTEST_WAIT", "6")).unwrap_or(6),
             scorecard_url: s("DOC_SCORECARD_URL", "http://127.0.0.1:9460/v2/scorecard"),
+            calib_url: s("DOC_CALIB_URL", "http://127.0.0.1:9460/v2/longterm/calib"),
+            chill: chill::Cfg {
+                env: s("DOC_CHILL_ENV", "/data/chill/chill.env"),
+                state: s("DOC_CHILL_STATE", "/tmp/chill.state"),
+                ip: w("DOC_IP", "ip"),
+                template: s("DOC_CHILL_TEMPLATE", "/data/chill/template.yaml"),
+                dir: s("DOC_CHILL_DIR", "/data/chill"),
+            },
             root: get("DOC_ROOT").unwrap_or_default(),
             luyaz_tmp: s("DOC_LUYAZ_TMP", "/tmp/luyaz"),
         }
@@ -285,6 +295,7 @@ pub fn run(c: &Cfg, mode: Mode) -> Vec<Row> {
     rows.extend(core_move(c));
     rows.extend(tmp_move(c));
     rows.extend(services(c));
+    rows.extend(chill::rows(c));
     rows.extend(http(c));
     rows.push(heartbeat(c));
     rows.extend(takeover(c));
@@ -1490,9 +1501,10 @@ pub fn main(args: &[String]) -> i32 {
             None => (String::new(), 1),
         },
         Some("--ledger-selftest") => selftest::run(&cfg),
-        // no live caller (X11 batch 4): u60-guard, which ran --report for its summary, is retired
-        // and nothing runs --calibrate-standby; doctor.sh keeps both
-        Some("--report" | "--calibrate-standby") => {
+        Some("--calibrate-standby") => standby::calibrate(&cfg),
+        // no live caller (X11 batch 4): u60-guard, which ran --report for its summary, is retired;
+        // doctor.sh keeps it
+        Some("--report") => {
             // silent: doctor.sh falls back on 64, and its output must be the old body's alone
             return EXIT_NOT_PORTED;
         }
@@ -1505,6 +1517,7 @@ pub fn main(args: &[String]) -> i32 {
     rc
 }
 
+mod chill;
 mod manifest;
 mod selftest;
 mod standby;

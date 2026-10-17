@@ -17,12 +17,21 @@ const IN_PROCESS: &[&str] = &["/api/wifi/radio"];
 fn method(path: &str) -> &'static str {
     match path {
         "/api/wifi/guest" | "/api/device/power-save" => "PUT",
+        "/api/services/chill/enable" | "/api/services/chill/disable" => "POST",
+        "/api/services/chill/regions" | "/api/services/chill/bypass" | "/api/services/chill/exit" => {
+            "PUT"
+        }
         p => panic!("{p} is in ALLOWED_PATHS: add its method here"),
     }
 }
 
 /// Readbacks and the stored scenarios' actions (method, path).
 const OTHER: &[(&str, &str)] = &[
+    // `verify_job` / `verify_field` (u60-api chill.rs templates)
+    ("GET", "/api/services/chill/job"),
+    ("GET", "/api/services/chill"),
+    // the device's /data/scenario/scenarios.json (its other actions are /api/wifi/radio)
+    ("PUT", "/api/services/chill/regions"),
 ];
 
 #[tokio::test]

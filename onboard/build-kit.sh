@@ -24,8 +24,10 @@
 #   guard/            touch-ui/scripts 里还在用的设备脚本（= u60 ship scripts 那一套：supervise.sh、
 #                     alert-lib.sh、agent-auth.sh、doctor.sh…）+ u60-ship.sh + luyaz-core/luyaz-sentinel/luyaz-web 的
 #                     procd init 脚本（装到 /data/luyaz/scripts 和 /etc/init.d；u60-ship.sh 在设备上叫 luyaz-ship.sh）。u60-guard.sh 不再打包（Phase 10 10b）
+#   chill/            CHILL：scripts/chill/stage.sh 摆好的 mihomo（sha256 固定）、规则集（下载时的最新版）、脚本、
+#                     zashboard（sha256 固定），下载缓存在 onboard/cache/chill。CHILL=0 不打
 #
-# 环境变量：DEVUI_REPO（默认本仓库的 touch-ui/）、
+# 环境变量：DEVUI_REPO（默认本仓库的 touch-ui/）、CHILL=0（不打 CHILL）、
 #           DEVUI_BIN=路径（触屏二进制，默认 $DEVUI_REPO/out/luyaz-ui，没有就现编）、
 #           SENTINEL_BIN=路径（用这个 luyaz-sentinel，不现编）、
 #           DATAD_BIN=路径（用这个核心，不现编 luyaz-core）、
@@ -325,6 +327,14 @@ else
 fi
 tar tzf "$PL/esim.tgz" | grep -q '^\./lpac\.sh$' || die "eSIM 包里没有 lpac.sh"
 
+# ── CHILL ───────────────────────────────────────────────────────────────────
+if [ "${CHILL:-1}" != 0 ]; then
+  step "CHILL（mihomo + 规则集 + zashboard，缓存 onboard/cache/chill）"
+  "$ROOT/scripts/chill/stage.sh" "$CACHE/chill" "$WORK/chill" >/dev/null
+  mkdir -p "$PL/chill"
+  cp -R "$WORK/chill/bin" "$WORK/chill/ruleset" "$WORK/chill/chill.sh" "$WORK/chill/chill.init" "$WORK/chill/template.yaml" "$WORK/chill/chill.env.example" "$PL/chill/"
+  tar czf "$PL/chill/ui.tgz" -C "$WORK/chill/ui" .
+fi
 
 # ── 脚本 + 文档 + 清单 ────────────────────────────────────────────────────────
 step "装机脚本、说明、清单"
@@ -345,6 +355,7 @@ chmod 755 "$KIT/install.sh"
   echo "  luyaz-core    ${DATAD_SRC} $(sha256 "$DATAD_BIN" | cut -c1-12)"
   echo "  eSIM          ${ESIM_SRC}"
   echo "  dropbear      $(basename "$DROPBEAR_URL")"
+  [ -d "$PL/chill" ] && echo "  CHILL         mihomo ${MIHOMO_VER:-v1.19.31}、zashboard ${ZASHBOARD_VER:-v3.27.0}（规则集下载于 $(date -r "$CACHE/chill/ruleset/cn.list" '+%Y-%m-%d')）"
   echo
   echo "sha256（install.sh 开头会逐个校验）："
   ( cd "$KIT" && find install.sh device payload -type f | LC_ALL=C sort | while read -r f; do

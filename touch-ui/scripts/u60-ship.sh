@@ -143,7 +143,7 @@ fi
 # phase-two components (docs/SHIP.md「第二期」)
 DEVUI_DIR=$ROOT/data/plugins/u60pro-devui
 # Phase 10 R5 (round ②): the touch UI is luyaz-ui in /data/luyaz/ui (program, fonts, touchsim);
-# start.sh and the *.orig-backup stay in DEVUI_DIR; devui.conf, operator-logos are in
+# start.sh and the *.orig-backup stay in DEVUI_DIR; devui.conf, chill.conf, operator-logos are in
 # UI_DIR too since Luya-Z D5 (esim.conf, read by nothing since M6b, was deleted)
 UI_DIR=${U60S_UI_DIR:-$ROOT/data/luyaz/ui}
 UI_BIN=$UI_DIR/luyaz-ui
@@ -2384,6 +2384,8 @@ manifest_write() {
 # The files the manifest only records (R1/D10): settings that change in
 # normal use are not among them. doctor.sh has the same list.
 record_list() {
+    echo "chill.sh $ROOT/data/chill/chill.sh"
+    echo "template.yaml $ROOT/data/chill/template.yaml"
     echo "tailscale-start.sh $ROOT/data/tailscale/start.sh"
     echo "tuning.env $ROOT/data/tailscale/tuning.env"
     echo "tailscaled $ROOT/data/tailscale/tailscaled"

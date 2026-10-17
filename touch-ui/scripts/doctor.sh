@@ -4,13 +4,13 @@
 #
 # Phase 10 X11 (manager docs/designs/u60-phase10.md「X11 核心接管体检」): the
 # checks now live in the core, `<core> doctor [--tsv|--tsv2|--manifest|
-# --tree-fp <dir>|--ledger-selftest]`, same rows, same output, same exit code.
+# --tree-fp <dir>|--ledger-selftest|--calibrate-standby]`, same rows, same output, same exit code.
 # This shim runs it; it falls back to the old body (doctor-legacy.sh, kept for
 # the observation period) when
 #   - the core is not there or predates X11 (no `doctor` in it: such a core
 #     would take the word for its own command line), or
-#   - the core says 64: a mode it does not have (--report,
-#     --calibrate-standby); it prints nothing to stdout then.
+#   - the core says 64: a mode it does not have (--report; --calibrate-standby
+#     before it was ported); it prints nothing to stdout then.
 # The core is picked by the layout switch, as in u60-ship.sh: /data/luyaz/core/
 # .migrated = /data/luyaz/luyaz-core, else /data/plugins/zwrt-datad/zwrt-datad.
 # DOC_CORE overrides it (tests); every DOC_* of doctor-legacy.sh works for both.

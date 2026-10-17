@@ -343,6 +343,14 @@ pub static ROUTES: &[Route] = &[
         "遥测 yaoce telemetry 拦截"
     ),
     r!(
+        "/services/chill",
+        "CHILL",
+        "CHILL",
+        "Waves",
+        Services,
+        "chill 代理 daili 节点 jiedian 梯子 出口 mihomo proxy node"
+    ),
+    r!(
         "/services/tailscale",
         "Tailscale",
         "Tailscale",

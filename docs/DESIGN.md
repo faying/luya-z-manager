@@ -40,6 +40,19 @@ Source: `/plan-design-review` 2026-09-16 (decisions 1A / 2A / 3A / 4A / 5A / 6A 
 
 Contrast: any state text ≥4.5:1 on its background. The touch UI must be checked on both `body.dark` (`#15161a`) and `body.light` (`#eceef1`).
 
+The full 15-row state copy table (including API unreachable, empty list, subscription failed, switch succeeded) is in the design doc section "UI design decisions · 2A"; implement from that table.
+
+**State history keeps 20 entries** (decision 3A), one data set shared by both platforms; past 20 the oldest is dropped. The touch UI bottom shows only the latest one; the web expands all 20 under "Advanced" (time, state, reason, key values). With empty history the row isn't rendered — no "no records yet".
+
+Data source is `/data/chill/events.log` (on `/data`, survives reboot; `chill.sh` appends a line per state transition and truncates to the last 20 on write):
+
+```
+2026-09-16T03:12:41 overheat cpuss=86 -> direct
+2026-09-16T03:29:07 recover  cpuss=63 -> running
+```
+
+The touch UI bottom line renders it as `最近：03:12 过热暂停 · 03:29 已恢复` ("Recent: 03:12 paused for heat · 03:29 recovered").
+This history is also the basis for calibrating thermal thresholds — run a few days, count real triggers, then fill in `CHILL_TEMP_HOT_*` — so don't change the format casually.
 
 ---
 
@@ -59,8 +72,12 @@ Contrast: any state text ≥4.5:1 on its background. The touch UI must be checke
 - Screen 320×480. Pages live in `ui/functions/`, hot-reloaded, no compile.
 - **Symbol whitelist** (confirmed to render in the device font): `● · ↑ ↓ ▲ ▼ ℃ •`. Verify any other symbol on the device first; when unsure, use Chinese text or draw it in CSS.
 - **Copy length cap 14 CJK characters** (decision 2A) — the limit for a single 320px line; longer truncates or wraps and breaks hierarchy. Every touch string in the state table is written to this.
+- **Tile copy** (decision 7C): `chill.html` keeps `<title>` as `CHILL`, `<meta name="description">` is `线路与出口` ("routes and exit"). It's the subtitle on the tile wall, same style as 「网络测速」 ("Speed Test") and 「eSIM」; no English slogans.
 - Themes are two rule sets, `body.dark` / `body.light`; every new color class is written twice.
 - Pages contain only the inner `<body>`: no `<style>`, no shell besides `{{STATUSBAR}}`, no home-made back bar.
+- Polling: only call the API while the CHILL page is visible and the screen is on; the home card reads only `/tmp/chill.state`, never the API; rates use cumulative fields, the full connection list isn't fetched by default; latency tests only on tap.
+
+**CHILL page hierarchy** (top to bottom): status line (state + exit region + latency, large) → mode buttons → groups → node list → bottom line with traffic and connection count → bottom line with latest event (not rendered when there are none).
 
 ---
 
@@ -72,7 +89,7 @@ Rust (`touch-ui/rs/`, LVGL 9.5 via `lvgl-sys`; the old C version is deleted, tag
 
 **Fonts**: digits Nunito (600/700/800, with CJK fallback attached; falls back to device Roboto if missing); Chinese uses the device's ZTEZhengYuan (regular 11–15, synthetic bold 15/17/20/22/24, needs an LVGL patch). Largest size 36 (speed test result); the home status card's verdict uses cj24b. Smallest: battery digits 10, value labels 11, secondary info 12.
 
-**Components** (sizes per `ui_kit.h`): top bar 26 (time · 5 signal dots · RAT · rate · ▲ · battery; when the rate doesn't fit, step through shorter forms); floating tab bar 44 (only on the five top-level pages); sub-page title bar 62 (includes top bar, solid, round ‹ back); card radius 20, outer margin 10; list row 40 / two-line 50, divider starting at x=14; segmented button 30; switch 44×26; tile 145×78, always white, "on" (e.g. WiFi on) = a green dot before the subtitle + green text, never a full fill (a full blue tile looks permanently selected); status block 72 (top of a card, radius 20 plus a square patch underneath); bottom sheet radius 22. Press: one step darker (one step lighter in dark theme), restore on release; transparent list rows lay a `track` background while pressed (darkening a transparent background shows nothing, 2026-09-25). Only two animations: bottom sheet rises in 180 ms, sub-page pushes in 150 ms; `UI_ANIM=0` turns both off. Hit areas no smaller than 40×40.
+**Components** (sizes per `ui_kit.h`): top bar 26 (time · 5 signal dots · RAT · rate · ▲ · battery; when the rate doesn't fit, step through shorter forms); floating tab bar 44 (only on the five top-level pages); sub-page title bar 62 (includes top bar, solid, round ‹ back); card radius 20, outer margin 10; list row 40 / two-line 50, divider starting at x=14; segmented button 30; switch 44×26; tile 145×78, always white, "on" (CHILL running, WiFi on) = a green dot before the subtitle + green text, never a full fill (a full blue tile looks permanently selected); status block 72 (top of a card, radius 20 plus a square patch underneath); bottom sheet radius 22. Press: one step darker (one step lighter in dark theme), restore on release; transparent list rows lay a `track` background while pressed (darkening a transparent background shows nothing, 2026-09-25). Only two animations: bottom sheet rises in 180 ms, sub-page pushes in 150 ms; `UI_ANIM=0` turns both off. Hit areas no smaller than 40×40.
 
 **While the screen is dark, a finger hits nothing**: if the power key turned it off, touch does nothing and only the power key wakes it; if it auto-dimmed, a double tap wakes it (single taps, swipes, or two taps too far apart don't count — pocket protection). The waking gesture (the double tap, or a finger already down when the power key is pressed) is not a tap, and taps are ignored for 300 ms after wake. Rule lives in touch-ui `ui_logic.c` `ui_tgate_step`, with unit and render tests.
 
@@ -86,19 +103,19 @@ Rust (`touch-ui/rs/`, LVGL 9.5 via `lvgl-sys`; the old C version is deleted, tag
   - Large text: one verdict, from the "Home verdict table" below (English: state word only).
   - Right: SINR (colored by quality) and RSRP.
   - One extra next-step hint line when something's wrong.
-  - Four rows below (after the 2026-09-25 task-based tabs): Cellular (carrier reading + active bands · aggregate bandwidth), Wi-Fi name · device count, Exit (direct-IP location) — these three jump to the top of their tab; today/month traffic is read-only, no ›.
+  - Four rows below (after the 2026-09-25 task-based tabs): Cellular (carrier reading + active bands · aggregate bandwidth), Wi-Fi name · device count, Exit (where CHILL exits when on; direct-IP location when off) — these three jump to the top of their tab; today/month traffic is read-only, no ›.
 - **Scenario tile**: full width, opens the 「情景」 (Scenarios) page.
 - **Speed chart** (formerly the first chart on the charts page).
-- Carrier detail is at the top of the 「蜂窝」 (Cellular) tab; Tailscale detail is in the 「出口」 (Exit) tab, below the exit IP.
+- Carrier detail is at the top of the 「蜂窝」 (Cellular) tab; CHILL detail (rule → node) and Tailscale detail are in the 「出口」 (Exit) tab, below the exit IP.
 
-**Navigation** (2026-09-25): five tabs 首页 · 蜂窝 · Wi-Fi · 出口 · 系统 (Home · Cellular · Wi-Fi · Exit · System), split by "what do I want to do"; every function has exactly one home. Scenarios are a separate module that only drives Wi-Fi / Tailscale; no cellular setting ever appears on its pages.
+**Navigation** (2026-09-25): five tabs 首页 · 蜂窝 · Wi-Fi · 出口 · 系统 (Home · Cellular · Wi-Fi · Exit · System), split by "what do I want to do"; every function has exactly one home. Scenarios are a separate module that only drives Wi-Fi / CHILL / Tailscale; no cellular setting ever appears on its pages.
 - A row with **›** always opens a page (or jumps to a tab); rows without › aren't tappable and have no pressed state.
 - **Switches** take effect immediately; **buttons** are only for one-off actions (speed test, network search, mark all read, restore defaults); any choice that can drop the connection uses the two-step confirm below.
 - **Back**: tap ‹, or swipe right from the left edge (x < 24). Once the swipe registers, that press is void and the row under the finger isn't tapped.
 - Sub-pages always open at the top; jumping to a tab from a home summary also lands at the top; tapping the current tab again scrolls to top, tapping another tab keeps its previous position.
 - Sub-page title = the text on its entry.
 
-With no signal or no data, the exit IP is dimmed so nobody takes it as live.
+With no signal or no data, the exit IP and CHILL rates are dimmed so nobody takes them as live.
 
 **Interpret first, parameters second** (2026-09-24, user: "don't expose raw parameters; put an understandable reading on top"):
 - The status card's verdict, hint, RAT wording, carrier wording and signal rating are all decided by datad `rust/src/screen.rs` `story()`/`say()` (moved from touch `ui_net_story()` on 2026-09-26), every branch unit-tested. The touch UI only displays them.
@@ -164,7 +181,7 @@ Render test scenes: good, weak, nosignal, datad-down, loading, nosim, abroad, lo
 
 **Home carriers** (carrier detail card): serving cell first (`nr_band/nr_bw/nr_rsrp/nr_pci/nr_channel`), then every `nrca`/`lteca` group appended as-is (the serving cell appears again inside them with a -140 floor value — that's the modem's configured carrier, not deduplicated); inactive carriers collapse to one t3 line.
 
-**Every control that changes device state uses a two-step confirm**: the first tap turns it fillOrange 「再按一次确认」 ("tap again to confirm"); only a second tap within 5 seconds sends it (network selection, apply band lock, restore defaults, eSIM switch, switch to stock UI, delete SMS). The WiFi switch is the exception.
+**Every control that changes device state uses a two-step confirm**: the first tap turns it fillOrange 「再按一次确认」 ("tap again to confirm"); only a second tap within 5 seconds sends it (network selection, apply band lock, restore defaults, eSIM switch, switch to stock UI, delete SMS, turn off CHILL). The WiFi switch is the exception.
 
 **Every tap must be visible on the spot** (2026-09-25, user tapped on 「情景 · 网络」 and nothing happened):
 - **The first tap** redraws right in the callback, without waiting for the 1-second refresh. Buttons turn fillOrange; list rows get a full-row `washW` pale yellow background, 「再点一次确认」 ("tap again to confirm") on the right, and one sentence under the card saying what will happen (e.g. 「切到「外出」：Wi-Fi 开着 / 之后一直固定，点「自动」才恢复」, "switch to Away: Wi-Fi on / stays fixed until you tap Auto"); break the line deliberately when it spans two lines so no single character drops to line two.
@@ -194,7 +211,7 @@ Render test scenes: good, weak, nosignal, datad-down, loading, nosim, abroad, lo
 - **Never put Chinese in a montserrat label**; it renders as tofu boxes. Hit four times on 2026-09-18/09-21 (network page PLMN row, Tailscale state 「已连接」 "connected", the 「未激活」 "inactive" suffix on carrier sub-cards, the WiFi password row 「密码未公开」 "password hidden"). The test is not "is the current value Chinese" but "**could** this label ever hold Chinese" — including fallback copy and state words. Digits/ASCII are fine in the Chinese font, so when unsure use `UF.cj*` or `UF.n*` (Nunito with CJK fallback).
 - `lv_tileview_add_tile()` **does not** set the tileview's "current tile" pointer; `tile_act` stays NULL until the first `lv_tileview_set_tile*()` or the first scroll end (`lv_tileview.c:92,181`). So at startup, with home clearly on screen, `lv_tileview_get_tile_active(tv) == s_tiles[0]` is false, and every poll gated on it (Tailscale, eSIM) never runs — symptom: the home Tailscale card stays empty until you flip away and back. `ui_create()` must call `lv_tileview_set_tile_by_index(tv, 0, 0, LV_ANIM_OFF)` after building tiles.
 - **Any "reset the UI to its initial state" call inside ui_create() must return safely when widgets aren't built yet.** In a 2026-09-21 refactor `sub_close()` (collapse the sub-page layer) also called `update_tabs()`, but the tab bar was built after it — `lv_obj_set_style_text_color(NULL, …)` segfaulted and the process died at startup. Because the official UI had been killed for the sideload test, the vendor watchdog saw no UI drawing and **rebooted the whole device** (this project's second such incident). Two responses: affected functions start with a built check like `if (!s_tabs[0]) return;`; the test start script **auto-rolls back if it doesn't come up** — log to `/data/lvgltest.log` (not `/tmp`; the RAM disk is wiped on reboot, losing exactly the log that explains the crash), `grep "first refresh done"` 8 seconds after start, and if missing kill it immediately and `sh start.sh legacy` to bring back the official UI. The `fprintf(stderr, "ui: …")` breadcrumbs in `ui_create()` exist for this check.
-- Before a sideload test, don't blindly press the power key to light the screen — it's a toggle. Read `/sys/class/leds/led:lcd/brightness` first and press only if 0; otherwise you turn the screen off, `backlight_is_on()` becomes 0, every poll gated on it (Tailscale/eSIM/WiFi switch state) reads nothing, and screenshots look like layout bugs.
+- Before a sideload test, don't blindly press the power key to light the screen — it's a toggle. Read `/sys/class/leds/led:lcd/brightness` first and press only if 0; otherwise you turn the screen off, `backlight_is_on()` becomes 0, every poll gated on it (Tailscale/CHILL/eSIM/WiFi switch state) reads nothing, and screenshots look like layout bugs.
 - `backlight_is_on()` in the poll gates is 0 while the screen is off, so headless screenshot checks (SSH + fb-dump, no touching) leave those cards empty, looking like layout bugs. Light the screen first with `touchsim /dev/input/event0 key 116` (with auto-dim set to "always on", the UI never turns the backlight on by itself; only the power key does).
 
 ---
@@ -213,7 +230,7 @@ Redesigned on 2026-09-24 in a **Cohere + Figma** visual language (reference file
 - **One primary surface**: `--nd-primary` near-black (near-white in dark mode). Used for the primary button, selected segment, selected multi-select tag, switch on, and any "selected" outside the sidebar. One primary button per screen; the rest are secondary (white hairline pill) or text buttons (underlined).
 - **Color blocks (Figma)**: each kind of page has its own block color, used in exactly three places — the top status block (when normal / neutral), the current sidebar item, and the background of the current icon in the mobile bottom bar. Charts `blkCharts` pale blue, network & bands `blkNetwork` lime, Wi-Fi & LAN `blkWifi` mint, services `blkServices` lavender, SMS `blkMessages` pink, device & maintenance `blkSystem` beige. Every page belongs to a **route family**; the shell sets `data-family` on the root element by family and that decides the block; pages don't pick colors.
 - **Problems override category color**: attention `--nd-washW` amber, error `--nd-washB` coral. Text in blocks is always ink; only state symbols carry semantic color.
-- **Deep green band (Cohere)**: home when state is normal, and the whole login page, use `--nd-band` `#003c33` + white text. The home module cards are solid beige (Scenarios) and deep navy `blkNavy` (Tailscale), no hairline.
+- **Deep green band (Cohere)**: home when state is normal, and the whole login page, use `--nd-band` `#003c33` + white text. The three home module cards are solid lavender (CHILL), beige (Scenarios), deep navy `blkNavy` (Tailscale), no hairline.
 - **Alert bar**: not a color block but a single ink strip (Cohere announcement bar), one line on mobile, with detail on wide screens; avoids stacking two colored blocks with the status block.
 - **Dark mode**: same roles; blocks become saturated deep tones (not greyish darks); the primary surface inverts; the alert bar is a raised dark strip in dark mode, never a white block; dark terminal bands (AT, logs, processes) are dark in both modes.
 - **Chart lines** use separate vivid colors (`--nd-green/orange/red/blue`), not monochromed.
@@ -244,6 +261,9 @@ Redesigned on 2026-09-24 in a **Cohere + Figma** visual language (reference file
 - When data goes stale keep old values, grey them, write "N min ago"; never clear to 0.
 - Icons are Phosphor: selected and tiles filled, the rest bold line.
 
+**Naming**: the product name is always **CHILL**; RELAX never appears in any UI or clash/ShellCrash config.
+
+**Two CHILL page constraints** (carried over from 2026-09-16 decisions 7A, 7B): zashboard is **not embedded in an iframe**; it opens in a new tab through the `:9090/chill-ui/` reverse proxy; device and subscription list rows don't stretch with the viewport.
 
 **Control semantics**: region `radiogroup` + `radio`; switches `switch`; segments are a single-select toggle group; alert bar `role="status" aria-live="polite"`; dialogs have a title and description, and focus returns to the trigger on close.
 
@@ -255,7 +275,7 @@ Redesigned on 2026-09-24 in a **Cohere + Figma** visual language (reference file
 
 ## 6. Anti-patterns (neither platform)
 
-- One card per metric, stacked into a mosaic. Cards are **only** allowed two ways: grouped lists (one card holding a set of similar rows) and whole tappable modules (home Scenarios / Tailscale cards, function tiles).
+- One card per metric, stacked into a mosaic. Cards are **only** allowed two ways: grouped lists (one card holding a set of similar rows) and whole tappable modules (home Scenarios / CHILL / Tailscale cards, function tiles).
 - Gradient backgrounds, neon glow, gradient text, real blur (except the slight backdrop blur of the web top and bottom bars). The touch UI's "tinted glass" is only for the floating tab bar, back button, bottom sheet and title bar right-side buttons, and it's an opaque solid color.
 - Icons in colored circles as decoration; three-column equal feature grids.
 - Colored left-border cards.

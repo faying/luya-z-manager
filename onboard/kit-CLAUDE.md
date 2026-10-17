@@ -12,6 +12,7 @@
 | `devui` | 前面板触屏界面 + 核心 luyaz-core（`/data/luyaz/luyaz-core`，procd 服务 `/etc/init.d/luyaz-core`）+ 哨兵 luyaz-sentinel（管屏幕和看门狗，取代 u60-uid、u60-guard）。rc.local 在 `/etc/init.d/luyaz-core start`（旧装法的 `/etc/init.d/zwrt-datad start` 原地换成它）后面只留一行 `/etc/init.d/luyaz-sentinel start   # u60 ship sentinel: …`，旧的 start.sh、u60-uid、u60-guard 行去掉；旧 u60-uid/u60-guard 服务 stop（绝不 disable），文件留在设备上。起哨兵后最多等 60 秒，核对：哨兵在 procd 下运行、心跳第 3 栏是 `ours`、界面进程 exe md5 = 刚装的文件。设备清单记 touch、sentinel、datad 三条（`admin` 记 lweb 一条） |
 | `esim` | lpac，配合可插拔 eUICC 卡管理/切换 profile |
 | `recover`（可选，不在全套里） | u60 ship 的开机收尾：换上 `/data/luyaz/ship/luyaz-recover.sh`（设备上自检过才换），并在 `/etc/rc.local` 各服务启动行之前加一行调用它。**改 rc.local，先问用户**。`admin`/`devui` 只在设备上还没有这个脚本时放一份，不碰 rc.local |
+| `chill`（可选，不在全套里） | CHILL 透明代理：mihomo + 规则集 + zashboard 面板（`/data/chill`）。第一次装**不启动**：要用户自己写订阅地址（`/data/chill/chill.env`，别替用户填、别读出来），再 `chill.sh safe-start` + 5 分钟内 `confirm` |
 
 装 `ssh` 组件时还会关闭固件自动升级（升级会覆盖开机自启，新固件又开不了 ADB）：`dm_update_mode=0` 和 `TURNOFFPOLLING=1` 两项都设（只往关的方向改），并读回核对。
 **全局要求：固件自动升级永远保持关闭**，任何脚本、页面、自动化都不能把它打开（`zwrt_zte_dm.dm_update.dm_update_mode` 必须是 `0`，且 `zwrt_zte_dm.dm_update.TURNOFFPOLLING` 必须是 `1`）。
@@ -119,6 +120,7 @@ adb shell '<命令>'        # 只有 ADB 通的时候（ADB 重启后就没了�
 | `/data/luyaz/ui/` | 触屏界面 `luyaz-ui`（进程名同）、字体、`touchsim` |
 | `/data/plugins/u60pro-devui/` | 只有触屏的 `start.sh`（程序、`devui.conf`、`operator-logos/` 在 `/data/luyaz/ui/`） |
 | `/data/esim/` | lpac（`/data/esim/lpac.sh chip info` / `profile list`） |
+| `/data/chill/`、`/etc/init.d/chill` | CHILL（`sh /data/chill/chill.sh status`）。改全屋网络：启动、停止、`CHILL_API_LAN`、防火墙区 `chill` 都**先问用户**。停它用 `chill.sh stop`（会把 dnsmasq 换回原样），别 kill mihomo |
 | `/etc/rc.local` | 只加了几行自启；原厂版本备份在 `/data/luyaz/kit/rc.local.orig`（Luya-Z 改名 E 之前装的设备在 `/data/u60-kit/`，再装之前要先 `mv /data/u60-kit /data/luyaz/kit`） |
 
 日志：`/tmp/luyaz-web.log`、`/tmp/luyaz-ui.log`、`/tmp/luyaz-core.log`、`/tmp/luyaz-sentinel.log`、`logread`（procd）、`/tmp/u60-kit-devui.log`（devui 安装）、
@@ -182,9 +184,10 @@ sleep 8; /etc/init.d/luyaz-sentinel stop  # 之后不再管屏幕（原厂界面
 
 ```sh
 echo vendor > /tmp/luyaz-screen.ctl; sleep 8     # 先把屏幕交给原厂界面
+[ -x /data/chill/chill.sh ] && /data/chill/chill.sh stop; rm -f /etc/init.d/chill   # CHILL：先停，它会把 DNS 设置换回原样
 for s in luyaz-sentinel luyaz-web luyaz-core u60-uid u60-guard zte-agent zwrt-datad; do [ -x /etc/init.d/$s ] && /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
 for f in /data/luyaz/kit/rc.local.orig /data/u60-kit/rc.local.orig; do [ -s $f ] && cp $f /etc/rc.local && break; done
-rm -rf /data/luyaz /data/plugins/u60pro-devui /data/esim /data/alerts /data/crashlog /data/power \
+rm -rf /data/luyaz /data/plugins/u60pro-devui /data/esim /data/chill /data/alerts /data/crashlog /data/power \
        /data/u60d /data/u60-kit /data/u60-ship /data/u60-guard /data/u60-uid /data/zte-agent /data/zte-agent.env /data/admin \
        /data/plugins/zwrt-datad /data/local/tmp/start_zte_agent.sh    # 第二行起是旧装机包的残留
 # 连 SSH 也不要：rm -rf /data/ssh /data/local/tmp/start_dropbear.sh

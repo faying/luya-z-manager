@@ -41,6 +41,9 @@
 | 网络诊断 | Diagnose | Diagnose |
 | 摆放模式 | Placement | — |
 | 管理网页 | web admin（句中小写） | — |
+| CHILL | CHILL | CHILL |
+| 节点 | Nodes | — |
+| 规则 → 节点 | Rules → Nodes | — |
 
 ## 3. 通用名词
 
@@ -219,6 +222,7 @@
 | 位置 | 中文 | English |
 |---|---|---|
 | 层名 | Wi-Fi · 信号 · 限速 · 蜂窝链路 · 基站负载 · 速度 | Wi-Fi · Signal · Speed cap · Cellular link · Cell load · Speed |
+| 层名（CHILL 开着时） | 代理 | Proxy |
 | 层的结论词 | ● 正常 · ▲ 疑点 · ■ 差 · 灰 ● 测不了 · 原因 | ● OK · ▲ Suspect · ■ Poor · grey ● Can't check · reason |
 | 层的进度 | 等待 · 测试中… · 测试中… 3 秒（速度行） | Waiting · Testing… · Testing… 3 s |
 | 状态块：进行中 | 正在检查… 3/6 · 约 10 秒，会发少量探测包 | Checking… 3/6 · About 10 s; sends a few probe packets |
@@ -226,6 +230,7 @@
 | 状态块：后台没回应 | 后台没回应 · 管理后台没响应，点下面重试（登录失败：登录管理后台失败，点下面重试） | Agent not responding · Admin backend not responding; tap Retry below (Admin login failed; tap Retry below) |
 | 副行另有疑点 | 另有 N 处疑点 | +N more |
 | 信号层的动作 | 固定位置时用摆放模式 › | Use Placement if staying put › |
+| 代理层的动作 | 去换节点 › | Switch node › |
 | 标题栏右侧 | 再查一次 | Run again |
 | 进行中再点 | 正在查，稍等 | Checking; one moment |
 | 按钮 | 加测速度 · 约 5 秒、最多 30 MB；漫游第一下：走漫游流量，再按一次；测着：测速中… | Add speed test · ~5 s, ≤30 MB; roaming: Uses roaming data; tap again; running: Testing speed… |
@@ -247,6 +252,17 @@
 | 换了小区 / 按了重新开始 | 换了小区，重新计 / 已清零，重新计 | New cell; counting again / Reset; counting again |
 | 按钮、脚注 | 重新开始 · 换了小区会重新计；这页开着不息屏 | Start over · Resets on a new cell; the screen stays on here |
 
+## 12. CHILL 手动优先提示（核心 `engines/manual_first.rs` 的 notice，§12.5 决定 8A）
+
+句子由核心写（notice / notice_en，节点和组名原样，国旗在触屏上转国家码）；屏幕只按 notice_kind 配符号和颜色：
+
+| notice_kind | 符号 · 颜色 | 首页出口行 | 何时消失（核心定） |
+|---|---|---|---|
+| backup / unstable | ▲ warnT，整行 washW | ▲ 出口 › + 提示小字 | 换回为止 |
+| back / repick | ● okT，整行 wash | ● 出口 › + 提示小字 | 10 分钟 |
+| alldown | ■ badT，整行 washB；出口标签那句后面「去选节点 › / Pick a node ›」 | ■ 出口 › + 提示小字 | 任一恢复 |
+| （旧 agent，没有 kind） | 不配符号，t2 | 出口 › + 提示小字 | — |
+| （读不到核心） | 调淡 t3，句末「 · 停在 14:32 / · last update 14:32」 | 同左 | 数据恢复 |
 
 ## 13. 写操作（事务，E4；核心 `ops/ui.rs`，设计 `docs/designs/write-op-layer.md` 状态文案表）
 
@@ -331,6 +347,32 @@
 | 底部 | 只显示最近 N 条 | Latest N only |
 | 设置页入口 | 上次改动 14:32 · 触屏 › | Last changed 14:32 · Screen › |
 
+## 14. 家里出口（E3，`docs/designs/home-exit.md` §10；触屏 CHILL 页、首页出口行，网页 CHILL 页同一套）
+
+| 中文 | English | 位置 |
+|---|---|---|
+| 家里出口 | Home exit | 节标题 |
+| 国内版权走家里 | CN media via home | 行名（两行高，开关左边约 220px） |
+| 家里 IP 网站 | Home IP sites | 行名 |
+| 其余都走家里 · 2 小时 | Rest via home · 2h | 行名 |
+| 爱奇艺、优酷、B 站等 | iQIYI, Youku, bilibili, … | 版权行常态 |
+| N 个网站 | N site / N sites | 家里 IP 行常态 |
+| 表里还没有网站 · 见 /data/chill/home_ip.list | No sites yet · see /data/chill/home_ip.list | 家里 IP 空表 |
+| AI、VoWiFi、国内直连照旧 | AI, VoWiFi, China direct unchanged | 其余行关着时 |
+| 剩 1:32 | 1:32 left | 其余行开着 |
+| 正在测家里… / 正在打开… / 正在关闭… / 试运行 0:30 | Checking home… / Turning on… / Turning off… / Trial 0:30 | 切换中 |
+| 已走家里 · 重开 App 生效 | Via home now · reopen apps | 成功（核心 notice） |
+| 没开成：家里 Mac 没回应 / Tailscale 没连上家里 / 代理没重启成功 / 直连测试不通 | Didn't turn on: home Mac silent / no Tailscale to home / proxy didn't restart / direct test failed | 失败（核心 notice，行第二行 ≈220px） |
+| 家里不通，暂走直连 / 家里不通，暂走 X | Home down · direct for now / Home down · via X for now | 走退路 |
+| 2 小时到了，已关 / 家里 15 分钟没回应，已关 / 回国了，已关家里出口 / 已过期，已关 | 2 hours up; turned off / Home silent 15 min; turned off / Back in China; home exit off / Expired; turned off | 自动关（核心 notice） |
+| 再点一次确认 | Tap again | 待确认（行右侧） |
+| 会断一下（约 5 秒） / 会断一下，走漫游流量 | Drops for ~5 s / Drops ~5 s · uses roaming data | 待确认的后果（卡下一行） |
+| CHILL 已关 / 全局模式下不生效 · 换成代理或直连 · AI 不动 / 全部直连下不生效 / 过热暂停中，降温后自动恢复 | CHILL off / Not used in Global mode · Switch to Proxy or Direct · AI kept / Not used in All direct / Paused while hot · resumes when cool | 模式冲突（DD4） |
+| 读不到所在国家，版权和其余暂不显示 | Can't tell the country; media and rest hidden | 位置不明 |
+| 经 Tailscale · 直连 38 ms / 经中继，视频可能卡 / 连不上家里 | Via Tailscale · direct 38 ms / Via relay · video may stutter / Can't reach home | Tailscale 路径（DD7） |
+| 10 分钟后关 · 再开 2 小时 › / 已延长到 17:32 | Off in 10 min · Extend 2h › / Extended to 17:32 | 延长（DD8） |
+| · 家里 剩 1:32 / · 家里 版权 / · 家里 IP | · Home 1:32 left / · Home media / · Home IP | 首页出口行末尾（DD2） |
+| 家里不通，暂走原出口（+1） | Home down · usual exit for now (+1) | 首页出口行 ▲（DD11） |
 
 ## 15. 设计用词（Phase 8 T19，10-11；不上界面）
 

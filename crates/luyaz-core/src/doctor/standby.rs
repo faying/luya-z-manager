@@ -4,9 +4,35 @@
 use super::{Cfg, cat, digits};
 use std::collections::BTreeMap;
 
-const PROGS: &[&str] = &["tailscaled", "u60pro-devui", "zwrt-datad", "zte-agent"];
-const LABELS: &[&str] = &["-", "蜂窝包/分", "Tailscale隧道包/分", "tailscaled唤醒/秒", "触屏唤醒/秒", "数据服务唤醒/秒", "后台唤醒/秒"];
-const LABELS_EN: &[&str] = &["-", "Cell pkts/min", "Tailscale tunnel pkts/min", "tailscaled wakeups/s", "Screen UI wakeups/s", "Data service wakeups/s", "Admin wakeups/s"];
+// Ledger keys, by position (longterm/standby.rs `PROGS`, which says why the old names stay):
+// u60pro-devui = the touch UI, zwrt-datad = the core, zte-agent = retired.
+const PROGS: &[&str] = &[
+    "tailscaled",
+    "mihomo",
+    "u60pro-devui",
+    "zwrt-datad",
+    "zte-agent",
+];
+const LABELS: &[&str] = &[
+    "-",
+    "蜂窝包/分",
+    "Tailscale隧道包/分",
+    "tailscaled唤醒/秒",
+    "mihomo唤醒/秒",
+    "触屏唤醒/秒",
+    "数据服务唤醒/秒",
+    "后台唤醒/秒",
+];
+const LABELS_EN: &[&str] = &[
+    "-",
+    "Cell pkts/min",
+    "Tailscale tunnel pkts/min",
+    "tailscaled wakeups/s",
+    "mihomo wakeups/s",
+    "Screen UI wakeups/s",
+    "Data service wakeups/s",
+    "Admin wakeups/s",
+];
 
 /// `standby_last`: uptime, cellular, tunnel, then one column per program
 fn last() -> usize {
@@ -41,6 +67,12 @@ fn fingerprints(c: &Cfg) -> Vec<(usize, String)> {
     for (i, p) in PROGS.iter().enumerate() {
         let f = match *p {
             "tailscaled" => format!("{tsm}+{tun}"),
+            "mihomo" => format!(
+                "{}+{}+{}",
+                prog_md5(c, "mihomo"),
+                cfg_md5(&c.chill.template),
+                cfg_md5(&c.chill.env)
+            ),
             "zte-agent" => "retired".into(),
             "zwrt-datad" => {
                 let f = prog_md5(c, c.core_name());
@@ -238,4 +270,79 @@ pub fn check(c: &Cfg, en: bool) -> (&'static str, String) {
     } else {
         ("ok", format!("正常（蜂窝每分钟 {} 个包）{tail}", f0(cell)))
     }
+}
+
+/// `calibrate_standby` (`--calibrate-standby`): a v2 baseline from the screen-off records — per
+/// column 2.. its median and MAD (`- -` when it has no value), then the columns' fingerprints —
+/// written to a temp file and renamed; then one `calib` event in the core's long-term layer.
+/// (The guard's ledger spool, the old body's fallback, is no longer read: not written.)
+pub fn calibrate(c: &Cfg) -> (String, i32) {
+    let stat = std::fs::read(&c.standby_stat)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
+    // `wc -l`: newlines
+    let n = stat.matches('\n').count();
+    if n < 30 {
+        return (
+            format!("只有 {n} 行息屏记录，至少要 30 行（屏幕熄灭约 30 分钟后再试）\n"),
+            1,
+        );
+    }
+    let mut v: BTreeMap<usize, Vec<f64>> = BTreeMap::new();
+    for l in stat.split('\n') {
+        let f: Vec<&str> = l.split([' ', '\t']).filter(|x| !x.is_empty()).collect();
+        for k in 2..=last() {
+            let x = f.get(k - 1).copied().unwrap_or("");
+            if x != "-" && !x.is_empty() {
+                v.entry(k).or_default().push(num(x));
+            }
+        }
+    }
+    let mut out = String::from("v2\n");
+    for k in 2..=last() {
+        match v.get_mut(&k) {
+            None => out.push_str(&format!("{k} - -\n")),
+            Some(x) => {
+                let m = med(x);
+                let mut d: Vec<f64> = x.iter().map(|y| (y - m).abs()).collect();
+                out.push_str(&format!("{k} {m:.1} {:.1}\n", med(&mut d)));
+            }
+        }
+    }
+    for (k, f) in fingerprints(c) {
+        out.push_str(&format!("fp {k} {f}\n"));
+    }
+    let tmp = format!("{}.tmp", c.standby_base);
+    if std::fs::write(&tmp, &out)
+        .and_then(|()| std::fs::rename(&tmp, &c.standby_base))
+        .is_err()
+    {
+        return (String::new(), 1);
+    }
+    calib_event(c, n);
+    (format!("基线已写入 {}（{n} 行记录）\n", c.standby_base), 0)
+}
+
+/// Tell the long-term layer (docs/LEDGER.md §4 calib): `calib-<boot 8>-<uptime>`; best effort.
+fn calib_event(c: &Cfg, rows: usize) {
+    let boot = cat(&c.boot_id_file).unwrap_or_default();
+    let boot = boot.trim_end_matches('\n');
+    if boot.is_empty()
+        || !boot
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || b == b'-')
+    {
+        return;
+    }
+    let id = format!(
+        "calib-{}-{}",
+        boot.get(..8).unwrap_or(boot),
+        super::uptime_s(c)
+    );
+    let url = format!("{}?id={id}&rows={rows}", c.calib_url);
+    let _ = super::sh_raw(
+        &c.wget,
+        &["-q", "-T", "5", "--post-data", "x", "-O", "-", &url],
+        true,
+    );
 }

@@ -49,10 +49,13 @@ pub enum Sub {
     Cell,
     Lock,
     Speed,
+    Chill,
     Esim,
     Perf,
     /// opened by tapping the Home Tailscale card
     Ts,
+    ChillNodes,
+    ChillPairs,
     SmsDetail,
     Alerts,
     Net,
@@ -71,9 +74,12 @@ pub const SUBS: &[Sub] = &[
     Sub::Cell,
     Sub::Lock,
     Sub::Speed,
+    Sub::Chill,
     Sub::Esim,
     Sub::Perf,
     Sub::Ts,
+    Sub::ChillNodes,
+    Sub::ChillPairs,
     Sub::SmsDetail,
     Sub::Alerts,
     Sub::Net,
@@ -94,6 +100,9 @@ fn sub_title(s: Sub) -> &'static str {
         Sub::Cell => n_("小区信息"),
         Sub::Lock => n_("锁频"),
         Sub::Speed => n_("测速"),
+        Sub::Chill => "CHILL",
+        Sub::ChillNodes => n_("节点"),
+        Sub::ChillPairs => n_("规则 → 节点"),
         Sub::Esim => n_("SIM 与 eSIM"),
         Sub::Perf => n_("性能测试"),
         Sub::Ts => "Tailscale",
@@ -180,6 +189,7 @@ pub struct Ui {
     pub lk: lock::Lock,
     pub wifi: wifi::Wifi,
     pub net: network::Net,
+    pub ex: exit::Exit,
     pub sys: system::Sys,
     pub charts: system::Charts,
     pub op: op::Op,
@@ -190,6 +200,7 @@ pub struct Ui {
     pub st: speed::Speed,
     pub ts: exit::TsPage,
     pub sg: exit::SigPage,
+    pub cp: exit::ChillPage,
     pub apn: apn::Apn,
     pub dg: diagnose::Diag,
     pub pl: diagnose::Place,
@@ -289,6 +300,24 @@ impl Ui {
         r
     }
 
+    /// zte-agent: turn CHILL on or off.
+    pub fn scenario_chill_set(&mut self, on: bool) -> bool {
+        let r = self.src.scenario_chill_set(on);
+        self.sync();
+        r
+    }
+
+    /// The exit (zte-agent PUT /api/services/chill/exit).
+    pub fn chill_set_exit(&mut self, state: &str) -> bool {
+        let r = self.src.chill_set_exit(state);
+        self.sync();
+        r
+    }
+
+    /// The 情景 card repaints on the next refresh (s_sc_force).
+    pub fn home_sc_force(&mut self) {
+        self.home.sc_force = true;
+    }
 
     /// A UI variable the render test sets directly (its `poke` steps); false = not one of them.
     pub fn poke(&mut self, name: &str, v: i64) -> bool {
@@ -311,6 +340,7 @@ impl Ui {
                     .copied()
                     .unwrap_or_default()
             }
+            "s_hx_note_at" => self.cp.hx_note_at = v as u32,
             _ => return false,
         }
         true
@@ -431,6 +461,9 @@ impl Ui {
 
     // ---- tabs ----
     fn any_sheet_open(&self) -> bool {
+        if kit::sheet_visible(&self.ex.xm) {
+            return true;
+        }
         self.power_menu_visible() || self.usbmode_visible()
     }
 
@@ -474,6 +507,7 @@ impl Ui {
     pub fn to_tab(&mut self, i: usize) {
         self.sub_close();
         self.power_menu_set(false);
+        self.exit_menu_set(false);
         self.tv.set_tile_by_index(i as u32, 0);
         self.update_tabs();
         self.bench_gate();
@@ -750,6 +784,7 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
         lk: lock::Lock::default(),
         wifi: wifi::Wifi::default(),
         net: network::Net::default(),
+        ex: exit::Exit::default(),
         sys: system::Sys::default(),
         charts: system::Charts::default(),
         op: op::Op::default(),
@@ -760,6 +795,7 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
         st: speed::Speed::default(),
         ts: exit::TsPage::default(),
         sg: exit::SigPage::default(),
+        cp: exit::ChillPage::default(),
         apn: apn::Apn::default(),
         dg: diagnose::Diag::default(),
         pl: diagnose::Place::default(),
@@ -845,6 +881,10 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
     u.build_sub_lock(p_lock);
     u.build_sub_speed(p_speed);
     u.build_sub_ts(p_ts);
+    let (p_chill, p_nodes, p_pairs) = (u.sub_page[Sub::Chill as usize], u.sub_page[Sub::ChillNodes as usize], u.sub_page[Sub::ChillPairs as usize]);
+    u.build_sub_chill(p_chill);
+    u.build_sub_chill_nodes(p_nodes);
+    u.build_sub_chill_pairs(p_pairs);
     let pg = |s: Sub| u.sub_page[s as usize];
     let (p_esim, p_perf, p_smsd, p_al, p_ald) = (pg(Sub::Esim), pg(Sub::Perf), pg(Sub::SmsDetail), pg(Sub::Alerts), pg(Sub::AlertDetail));
     let (p_apn, p_net, p_diag, p_place) = (pg(Sub::Apn), pg(Sub::Net), pg(Sub::Diag), pg(Sub::Place));
@@ -904,6 +944,7 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
     with(|u| {
         u.build_power_menu();
         u.build_usbmode();
+        u.build_exit_menu();
         u.key_timer = lv::Timer::create(power::key_poll_cb, 50);
     });
 }

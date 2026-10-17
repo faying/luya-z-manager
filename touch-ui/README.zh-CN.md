@@ -38,7 +38,7 @@ luyaz-sentinel：屏幕主人 + 看门狗
 
 - 底部 5 个标签，按「我想做什么」分：**首页 · 蜂窝 · Wi-Fi · 出口 · 系统**。首页大字是一句结论（网络正常 / 信号偏弱 等）。
 - 蜂窝：载波、信号、网络模式、APN、SIM 与 eSIM 切换（经 luyaz-core 调 lpac）。
-- 出口：出口 IP 与归属地；Tailscale。不带代理功能，要的话见 [docs/PROXY.zh-CN.md](../docs/PROXY.zh-CN.md)。
+- 出口：出口 IP 与归属地；Tailscale；装了 CHILL 时还有代理出口、分组、节点和流量（[docs/CHILL.md](docs/CHILL.md)、[docs/PROXY.zh-CN.md](../docs/PROXY.zh-CN.md)）。
 - 系统：亮度、息屏、浅色 / 深色 / 自动，语言，电池与负载、告警详情。
 - USB-C 口插上手机：和原厂屏幕一样问用来做什么——充电 + 上网（手机得到 USB 网卡）、18W 快速充电宝、网口配件——可以记住选择（系统 › 插入手机等设备时）。
 - 每次点击都有即时反馈；要确认的操作按两次。

@@ -8,8 +8,9 @@
 |---|---|
 | **SSH** | `ssh -p 2222 root@192.168.0.1` 用你电脑上的密钥直接登录（只认密钥、不接受密码），重启后自动恢复 |
 | **高级后台** | 浏览器打开 `http://192.168.0.1:9090/`，锁频/锁小区、短信、APN、防火墙、Wi-Fi 等全在里面 |
-| **devui 触屏界面** | 前面板换成新界面：按任务分 5 个标签（首页 · 蜂窝 · Wi-Fi · 出口 · 系统）：信号结论与载波、Wi-Fi 与设备、Tailscale 与出口、eSIM 切换 |
+| **devui 触屏界面** | 前面板换成新界面：按任务分 5 个标签（首页 · 蜂窝 · Wi-Fi · 出口 · 系统）：信号结论与载波、Wi-Fi 与设备、CHILL/Tailscale 出口、eSIM 切换 |
 | **eSIM** | 配合可插拔 eUICC 卡（5ber、eSTK.me 这类），在后台下载/切换/删除 profile，屏幕上也能切 |
+| **CHILL**（可选，要单独点名） | 设备上的透明代理（mihomo）+ zashboard 面板，按规则分流；要你自己的订阅地址 |
 
 装 SSH 时会顺手**关掉固件自动升级**（`zwrt_zte_dm.dm_update.dm_update_mode=0` 和 `TURNOFFPOLLING=1` 两项都设，并读回核对；原因见「注意事项」）。
 它先起 dropbear、确认 2222 在监听，才在 `rc.local` 加那一行；没起来 `rc.local` 不动。
@@ -61,6 +62,7 @@ claude
 ```sh
 ./install.sh ssh               # 只开 ADB + 持久化 SSH
 ./install.sh ssh admin devui   # 不要 eSIM
+./install.sh chill             # 加装 CHILL 代理（不在全套里；第一次装不会启动，见下面「CHILL」）
 ./install.sh recover           # u60 ship 的开机收尾：放好 /data/luyaz/ship/luyaz-recover.sh（先在设备上自检），并在 rc.local
                                #   各服务启动行之前加一行调用它。不在全套里：确定要改 rc.local 时才单独跑
 ./install.sh status            # 看各组件状态
@@ -97,6 +99,7 @@ U60 地址不是 `192.168.0.1` 时：`GATEWAY=192.168.x.1 ./install.sh`。
 | `/data/luyaz/ship/` | `u60 ship` 的事务、清单 `manifest.jsonl`、开机收尾脚本 `luyaz-recover.sh` |
 | `/data/alerts/`、`/data/crashlog/` | 告警记录、程序崩溃时的日志 |
 | `/data/esim/` | lpac（eSIM 卡读写工具） |
+| `/data/chill/`、`/etc/init.d/chill` | CHILL：mihomo、规则集、zashboard、`chill.sh`；订阅地址在 `/data/chill/chill.env`（你自己写，只有 root 可读） |
 | `/data/luyaz/kit/rc.local.orig` | 第一次安装前原厂 `rc.local` 的备份 |
 
 旧装机包留下的 `/data/zte-agent*`、`/data/admin/`、`/data/plugins/zwrt-datad/`、`/data/u60-guard/`、`/data/u60-uid/` 已经没人用，可以删。
@@ -106,7 +109,10 @@ U60 地址不是 `192.168.0.1` 时：`GATEWAY=192.168.x.1 ./install.sh`。
 - **加一台电脑的 SSH 公钥**：把公钥追加到 `/data/ssh/authorized_keys`，然后 `sh /data/local/tmp/start_dropbear.sh`（改 `/etc/dropbear/` 里那份没用，开机会被覆盖）。
 - **改后台密码**：重跑 `./install.sh admin`（会问新密码）。或者 SSH 里改 `/data/luyaz/web.env` 那一行（不能含引号、反斜杠、空格），然后在 `:9090` 重新登录（luyaz-web 每次登录都现读这个文件，不用重启）。
 - **eSIM**：后台「移动网络 → eSIM」管理 profile；屏幕「更多功能 → eSIM」点两下切换，大约 10 秒生效，一般不用重启。
-- **代理**：装机包不带代理功能；要的话照 manager 仓库的 `docs/PROXY.zh-CN.md` 从官方来源自己搭。
+- **CHILL**：第一次 `./install.sh chill` 只装不启动。SSH 进去把订阅地址写进 `/data/chill/chill.env`（从同目录的 `chill.env.example` 复制改，`chmod 600`；静态节点快照放 `/data/chill/providers/`），
+  然后 `sh /data/chill/chill.sh safe-start`，确认全屋网络正常后 5 分钟内 `sh /data/chill/chill.sh confirm`（不确认会自动停掉，免得把自己锁在外面）。
+  之后在后台「服务 → CHILL」开关、换出口；面板 zashboard 从那一页的按钮进（后台自己在 `:9090/chill-ui/` 出面板，要先登录后台，Tailscale 下也能用）。
+  以后再跑 `./install.sh chill` 是更新：订阅地址和缓存不动，原来在跑就重启核心，起不来自动换回旧版。
 - **临时要 ADB**：SSH 进去跑 `ubus call zwrt_bsp.usb set '{"mode":"debug"}'`；`./install.sh status` 里的「USB 模式」显示 `user` 就是普通模式。只在 `ubus -v list zwrt_bsp.usb` 还列着 `set` 的固件上有用：国行 B31 只剩 `list`，这条会报 `Method not found`。
 
 ## 注意事项
@@ -122,9 +128,10 @@ SSH 登录后：
 
 ```sh
 echo vendor > /tmp/luyaz-screen.ctl; sleep 8     # 先把屏幕交给原厂界面
+[ -x /data/chill/chill.sh ] && /data/chill/chill.sh stop; rm -f /etc/init.d/chill   # CHILL：先停，它会把 DNS 设置换回原样
 for s in luyaz-sentinel luyaz-web luyaz-core u60-uid u60-guard zte-agent zwrt-datad; do [ -x /etc/init.d/$s ] && /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
 for f in /data/luyaz/kit/rc.local.orig /data/u60-kit/rc.local.orig; do [ -s $f ] && cp $f /etc/rc.local && break; done
-rm -rf /data/luyaz /data/plugins/u60pro-devui /data/esim /data/alerts /data/crashlog /data/power \
+rm -rf /data/luyaz /data/plugins/u60pro-devui /data/esim /data/chill /data/alerts /data/crashlog /data/power \
        /data/u60d /data/u60-kit /data/u60-ship /data/u60-guard /data/u60-uid /data/zte-agent /data/zte-agent.env /data/admin \
        /data/plugins/zwrt-datad /data/local/tmp/start_zte_agent.sh    # 第二行起是旧装机包的残留
 # 连 SSH 也不要的话再加：rm -rf /data/ssh /data/local/tmp/start_dropbear.sh

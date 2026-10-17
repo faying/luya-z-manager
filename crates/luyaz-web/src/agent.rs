@@ -104,13 +104,15 @@ const ON_U60D: &[&str] = &[
     "/api/sms/forward/",
     "/api/scheduler/",
     "/api/esim/",
-    // 5b: u60d serves these (public status and the battery estimate always; the
-    // scenarios once handed over, else "not mine" sends them to the agent; Tailscale
-    // once u60d has it)
+    // 5b: u60d serves these (public status and the battery estimate always; CHILL and the
+    // scenarios once handed over, else "not mine" sends them to the agent; Tailscale and the
+    // CHILL extras once u60d has them)
     "/api/public/status",
     "/api/screen",
     "/api/services/tailscale",
     "/api/services/tailscale/log",
+    "/api/services/chill",
+    "/api/services/chill/",
     "/api/scenario",
     "/api/scenario/",
     // 5c: u60d serves the stateless reads always; the writes and the STK/USSD session once the

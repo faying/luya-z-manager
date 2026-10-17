@@ -14,7 +14,7 @@
 
 | 仓库 | 在设备上是什么 | 作用 |
 |---|---|---|
-| [luya-z-manager](https://github.com/faying/luya-z-manager)（本仓库） | `luyaz-core`（:9460）+ `luyaz-web`（:9090）+ `luyaz-sentinel` | 设备的 REST API、浏览器里的高级后台、eSIM，**以及装机包（`onboard/`）** |
+| [luya-z-manager](https://github.com/faying/luya-z-manager)（本仓库） | `luyaz-core`（由 `crates/luyaz-core` 编，`/data/luyaz/luyaz-core`，`127.0.0.1:9460`）+ `luyaz-web`（:9090）+ `luyaz-sentinel` | 数据服务和设备 API、浏览器里的高级后台、eSIM、CHILL 代理控制，**以及装机包（`onboard/`）** |
 | [luya-z-touch-ui](https://github.com/faying/luya-z-touch-ui) | `/data/luyaz/ui/`（`luyaz-ui`） | 前面板触屏界面（Rust，`touch-ui/rs/`；源码现在在本仓库的 `touch-ui/` 里），以及 `/data/luyaz/scripts/` 下的体检和兜底脚本 |
 | [luya-z-data-service](https://github.com/faying/luya-z-data-service) | （不再安装） | 原来的 Rust 版 `zwrt-datad`；已由本仓库的 luyaz-core 取代，装机包不再用它 |
 
@@ -107,6 +107,7 @@ cd luya-z-manager
 | 触屏字体 | Nunito（google/fonts 固定提交）和中文兜底字体（Resource Han Rounded 子集），都是 OFL，sha256 固定，Docker 里生成。设备自带的中兴字体不打包，触屏直接读设备上的 `/usr/ui/fonts/` |
 | 核心（`luyaz-core`） | 本仓库的 luyaz-core（`onboard/build.Dockerfile` 里 `cargo zigbuild --profile release-device -p luyaz-core`，镜像按 digest 固定，`Cargo.lock` 锁依赖） |
 | eSIM 工具（lpac） | `scripts/esim/build-esim-bundle.sh --out`：Alpine 3.24 的 lpac 和依赖库（`scripts/esim/alpine.lock` 钉版本和 sha256）+ statx 兼容垫片 + `qmi_uim_probe` |
+| CHILL（可选） | mihomo、zashboard 官方发布包（sha256 固定）+ 规则集（下载当时的最新版）。不要就加 `CHILL=0` |
 | 进程监督、体检脚本 | touch-ui 的 `scripts/` |
 
 打包前会检查：触屏程序必须是 Rust 版（C/LVGL 版触屏已删，只留在 tag `legacy-c-touch-ui`）；核心必须是 Rust 版、没有写死的外部更新源。不对就停。
@@ -123,6 +124,7 @@ DATAD_BIN=/path/to/luyaz-core ./onboard/build-kit.sh       # 用别处编好的�
 
 > **eSIM 包打不出来？** Alpine 3.24 出安全更新时会替换钉住的包，旧文件从镜像上消失。这时跑
 > `python3 scripts/esim/alpine_closure.py --relock` 重新解析，重打后先在一台设备上确认 `/data/esim/lpac.sh chip info` 能读卡，再用。
+> 规则集（CHILL）不钉版本，每次打包取当时的最新版。
 
 ## 4. 安装
 
@@ -145,6 +147,7 @@ cd luyaz-kit
 ```sh
 ./install.sh ssh               # 只开 ADB + 装持久化 SSH
 ./install.sh ssh admin devui   # 不要 eSIM
+./install.sh chill             # CHILL 代理，不在全套里，要单独点名（见第 7 节）
 ```
 
 装 SSH 时会顺便**关掉固件自动升级**。U60 的地址不是 `192.168.0.1` 时，在命令前加 `GATEWAY=你的地址`。
@@ -191,16 +194,29 @@ cd luyaz-kit
 ./install.sh restore backups/xxx.tgz  # 先列出会改哪些文件，输入 yes 才写
 ```
 
-**退回旧版本**：装机脚本不会自动保留上一版程序。要退回，就用旧的装机包再装一次对应组件。
-触屏程序连续两次起不来时，`luyaz-sentinel` 会把屏幕交还原厂界面，
+**退回旧版本**：除 CHILL 外，装机脚本不会自动保留上一版程序。要退回，就用旧的装机包再装一次对应组件。
+CHILL 更新失败时会自己换回上一版（`.prev`）。触屏程序连续两次起不来时，`luyaz-sentinel` 会把屏幕交还原厂界面，
 长按屏幕右下角 3 秒可以再切回来。
 
 **卸载**：没有卸载命令，步骤见装机包 README 的「恢复原厂」一节：停掉并删掉 `/etc/init.d/` 下装的几个服务、
 用 `/data/luyaz/kit/rc.local.orig` 换回原来的 `rc.local`、删掉 `/data` 下装的目录、重启（升级过固件的，见第 2 节「固件版本」最后一句）。
 
-## 7. 代理（可选）
+## 7. CHILL 代理（可选）
 
-公开版不带代理功能。想在设备上跑透明代理，按 [docs/PROXY.zh-CN.md](PROXY.zh-CN.md) 自己从官方来源编内核、配面板。
+CHILL 是设备上的透明代理（原生 mihomo，TUN 模式）加 zashboard 面板，需要你自己的订阅地址。
+
+```sh
+./install.sh chill                     # 第一次只装不启动
+ssh -p 2222 root@192.168.0.1
+cp /data/chill/chill.env.example /data/chill/chill.env && chmod 600 /data/chill/chill.env
+vi /data/chill/chill.env               # 写订阅地址
+sh /data/chill/chill.sh safe-start     # 启动；确认全屋网络正常后，5 分钟内：
+sh /data/chill/chill.sh confirm        # 不确认会自动停掉，免得把自己锁在外面
+```
+
+之后在后台「CHILL」页开关、换出口、换档位。
+
+<img src="images/web-chill-phone.png" width="240" alt="CHILL 页">
 
 ## 8. 新手一定要守的规矩
 

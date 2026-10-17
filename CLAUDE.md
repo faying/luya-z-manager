@@ -45,7 +45,7 @@ Next.js `web/`, supervise.sh and the C touch UI are retired — C UI in tag `leg
 - `touch-ui/` — touch UI (Rust, `touch-ui/rs/`), device program `/data/luyaz/ui/luyaz-ui`
   (comm `luyaz-ui`, fonts + touchsim beside it); device scripts in `touch-ui/scripts/`
 - `crates/luyaz-*` — libraries used by the core (policy, scenario, wifi, alerts, …)
-- `onboard/` — install kit; `scripts/` — Tailscale
+- `onboard/` — install kit; `scripts/` — CHILL, Tailscale
 
 ---
 
@@ -127,6 +127,7 @@ not as a general licence:
 
 - **Authorised, no prompt:** the engine enabling/disabling the AP interfaces
   (`wireless.main_2g/main_5g.disabled`) via `wifi_radio::apply`
+  and the CHILL region/on-off actions,
   when driven by a scenario the owner configured.
 - **Still requires asking, every time:** eSIM profile switches, APN changes,
   network-mode/band locking, reboots, and edits to `/etc/rc.local`. The engine's

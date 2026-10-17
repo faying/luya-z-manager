@@ -19,6 +19,6 @@ reqwest = { version = "0.12", default-features = false, features = ["stream", "j
 flate2 = "1"
 luyaz-api = { path = "../luyaz-api" }
 sha2 = "0.10"
-# WebSocket pass-through for a proxied panel (not used by the public build)
+# chill_proxy.rs: WebSocket pass-through (already in the tree through axum)
 hyper = { version = "1", default-features = false, features = ["server", "http1"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }

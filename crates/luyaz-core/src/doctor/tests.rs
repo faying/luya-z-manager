@@ -112,10 +112,17 @@ fn golden(name: &str) -> String {
     std::fs::read_to_string(scripts().unwrap().join("test/doctor").join(name)).unwrap()
 }
 
+const STANDBY: &str = r#"export DOC_STANDBY_STAT=$T/sb DOC_STANDBY_BASE=$T/sb.base DOC_LEDGER_DIR=$T/ledger DOC_BOOT_ID_FILE=$T/bootid
+echo aaaaaaaa-0000-4000-8000-000000000001 >"$T/bootid"
+i=0; while [ $i -lt 40 ]; do echo "$((100 + i * 20)) $((50 + i)) 20 30.0 5.0 2.0 1.0 0.5" >>"$T/sb"; i=$((i + 1)); done
+DOC_WGET=/bin/false sh "$(dirname "$RUN")/../../doctor.sh" --calibrate-standby >/dev/null
+: >"$T/sb"; i=0; while [ $i -lt 10 ]; do echo "$((300 + i * 60)) 200 20 30.0 5.0 2.0 1.0 0.5" >>"$T/sb"; i=$((i + 1)); done
+unset DOC_LEDGER_DIR DOC_BOOT_ID_FILE"#;
 
 #[test]
 fn the_goldens_byte_for_byte() {
     let mut cases = vec![("healthy", ""), ("problems", PROBLEMS)];
+    cases.push(("standby", STANDBY)); // the golden's records carry the private mihomo column
     for (name, scenario) in cases {
         let fx = fx_or_skip!(scenario);
         let (t, rc) = rust(&fx, Mode::Tsv);
@@ -219,8 +226,58 @@ fn scenarios_match_doctor_sh_live() {
     }
 }
 
+#[test]
+fn chill_rows_match_doctor_sh_live() {
+    if scripts().is_none() {
+        return;
+    }
+    let base = r#"mkdir -p "$T/proc/net"
+printf '#!/bin/sh\ncase "$*" in *public/status*) cat %s/public 2>/dev/null ;; *%%E9%%87%%8C) cat %s/proxy 2>/dev/null ;; esac\nexit 0\n' "$T" "$T" >"$T/bin/wget"
+printf '#!/bin/sh\ncat %s/iproute 2>/dev/null\n' "$T" >"$T/bin/ip"; chmod +x "$T/bin/wget" "$T/bin/ip"
+export DOC_IP=$T/bin/ip DOC_CHILL_STATE=$T/chill.state
+"#;
+    let run_ts = r#"printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"running","reason":null}' >"$T/chill.state"; echo "192.0.2.10 dev tailscale0 table 52" >"$T/iproute""#;
+    let hist = |t: &str, d: &str| {
+        format!(
+            r#"{run_ts}; printf '{{"alive":true,"extra":{{"http://x/204":{{"history":[{{"time":"2026-09-27T08:00:00Z","delay":1}}]}}}},"history":[{{"time":"2026-09-27T08:00:00.1Z","delay":2}},{{"time":"{t}","delay":{d}}}],"name":"x"}}' >"$T/proxy""#
+        )
+    };
+    let mut scenarios: Vec<String> = [
+        "",
+        r#": >"$T/chill.env""#,
+        r#": >"$T/chill.env"; printf '  sl  local_address rem_address   st\n   0: 0100007F:270F 00000000:0000 0A 0\n   1: 00000000:0050 00000000:0000 0A 0\n   2: 0142000A:270F 0A00000A:D431 01 0\n' >"$T/proc/net/tcp""#,
+        r#": >"$T/chill.env"; printf '  sl  local_address rem_address   st\n   0: 00000000:270F 00000000:0000 0A 0\n   1: 0142000A:270F 0:0 0A 0\n' >"$T/proc/net/tcp"; printf '  sl  local_address rem_address   st\n   0: 00000000000000000000000000000000:270F 00000000000000000000000000000000:0000 0A 0\n' >"$T/proc/net/tcp6""#,
+        r#"printf "SUB_URL='x'\nCHILL_HOME_EXIT='192.0.2.10'\n" >"$T/chill.env""#,
+        r#"printf "CHILL_HOME_EXIT=\"1.2.3.4:5:6\"\n" >"$T/chill.env""#,
+        r#"printf "CHILL_HOME_EXIT=1.2.3.4:80  \nCHILL_HOME_EXIT='x' y\n" >"$T/chill.env""#,
+        r#"printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env""#,
+        r#"printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"direct","reason":"idle"}' >"$T/chill.state""#,
+        r#"printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"running","reason":null}' >"$T/chill.state"; echo "192.0.2.10 via 10.1.2.4 dev rmnet_data0" >"$T/iproute""#,
+        run_ts,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    for (t, d) in [
+        ("2026-09-27T09:01:40.123456789Z", "52"),
+        ("2026-09-27T09:01:40.5Z", "0"),
+        ("2026-09-27T08:50:00Z", "52"),
+        ("2026-09-27T08:20:00Z", "52"),
+        ("2026-09-27T07:00:00Z", "0"),
+        ("2026-09-27T09:10:00Z", "52"),
+    ] {
+        scenarios.push(hist(t, d));
+    }
+    scenarios.push(format!(r#"{run_ts}; echo garbage >"$T/proxy""#));
+    for s in scenarios {
+        let t = same_as_shell(&format!("{base}{s}")).expect("fixture");
+        if s.contains("history") {
+            assert!(t.contains("\thome-exit\t"), "{t}");
+        }
+    }
+}
 
-const MS: &str = r#"export DOC_MANIFEST=$T/m.jsonl DOC_SHIP_TXN=$T/txn DOC_SHIP_HB=$T/hb.ship DOC_MD5_CACHE=$T/md5c/cache DOC_TS_DIR=$T/ts DOC_BOOT_ID_FILE=$T/bootid
+const MS: &str = r#"export DOC_MANIFEST=$T/m.jsonl DOC_SHIP_TXN=$T/txn DOC_SHIP_HB=$T/hb.ship DOC_MD5_CACHE=$T/md5c/cache DOC_TS_DIR=$T/ts DOC_BOOT_ID_FILE=$T/bootid DOC_CHILL_DIR=$T/chill
 echo bbbb-0000 >"$T/bootid"
 printf 'datad build A\n' >"$T/datad"; DM=$(md5sum "$T/datad" | cut -d' ' -f1); RM=$(md5sum "$T/rc" | cut -d' ' -f1)
 mship() { printf '{"v":1,"kind":"ship","comp":"%s","txn":"20260930-120000-%s","commit":"abc1234","format":1,"mac_time":1790000000,"boot_id":"x","uptime":5,"files":[{"path":"%s","md5":"%s","prev":"%s.prev-x"}],"state":[]}\n' "$1" "$1" "$2" "$3" "$2" >>"$T/m.jsonl"; }
@@ -327,8 +384,8 @@ fn md5_is_md5sum() {
 }
 
 const FPFIX: &str = r#"export DOC_STANDBY_STAT=$T/sb DOC_STANDBY_BASE=$T/sb.base
-MCOL=
-printf 'tailscaled 501 aaaaaaaa\nu60pro-devui 503 cccccccc\nzwrt-datad 504 dddddddd\nzte-agent 505 eeeeeeee\n' >"$T/fp"
+MCOL=' 5.0'
+printf 'tailscaled 501 aaaaaaaa\nmihomo 502 bbbbbbbb\nu60pro-devui 503 cccccccc\nzwrt-datad 504 dddddddd\nzte-agent 505 eeeeeeee\n' >"$T/fp"
 rows() { _i=0; while [ $_i -lt "$1" ]; do echo "$(($2 + _i * 60)) $3 20 ${4:-30.0}$MCOL 2.0 1.0 0.5"; _i=$((_i + 1)); done; }
 cal() { : >"$T/sb"; i=0; while [ $i -lt 40 ]; do echo "$((100 + i * 20)) $((50 + i)) 20 30.0$MCOL 2.0 1.0 0.5" >>"$T/sb"; i=$((i + 1)); done
   DOC_WGET=/bin/false DOC_LEDGER_DIR=$T/ledger sh "$(dirname "$RUN")/../../doctor.sh" --calibrate-standby >/dev/null; }
@@ -365,6 +422,46 @@ fn standby_matches_doctor_sh_live() {
     ] {
         let t = same_as_shell(&format!("export DOC_FP=$T/fp DOC_FP_CHANGED=$T/fp-changed DOC_TS_TUNING=$T/tuning.env\n{fpfix}{s}")).expect("fixture");
         assert!(t.contains("\tstandby\t"));
+    }
+}
+
+#[test]
+fn calibrate_standby_matches_doctor_sh_live() {
+    if scripts().is_none() {
+        return;
+    }
+    let fpfix: String = FPFIX
+        .lines()
+        .filter(|l| !l.starts_with("//"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let pre = format!(
+        "export DOC_FP=$T/fp DOC_FP_CHANGED=$T/fp-changed DOC_TS_TUNING=$T/tuning.env DOC_WGET=/bin/false\n{fpfix}"
+    );
+    for s in [
+        r#"rows 40 100 70 >"$T/sb""#,
+        r#"rows 29 100 70 >"$T/sb""#,
+        r#"rm -f "$T/sb""#,
+        r#"{ rows 20 100 70; echo "1400 - - - - - - -"; rows 15 1500 90 45.5; } >"$T/sb"; rm -f "$T/fp""#,
+        r#"rows 31 100 70 | sed 's/ 0.5$/ -/' >"$T/sb"; echo "TS_NO_LOGS_NO_SUPPORT=true" >"$T/tuning.env""#,
+    ] {
+        let (fa, fb) = (
+            fixture(&format!("{pre}{s}")).expect("fixture"),
+            fixture(&format!("{pre}{s}")).expect("fixture"),
+        );
+        let (mine, rc) = standby::calibrate(&cfg(&fa));
+        let (theirs, rc2) = shell(&fb, &["--calibrate-standby"]);
+        let (a, b) = (
+            fa.dir.to_string_lossy().into_owned(),
+            fb.dir.to_string_lossy().into_owned(),
+        );
+        assert_eq!(
+            (mine.replace(&a, "$T"), rc),
+            (theirs.replace(&b, "$T"), rc2),
+            "scenario:\n{s}"
+        );
+        let base = |d: &std::path::Path| std::fs::read_to_string(d.join("sb.base")).ok();
+        assert_eq!(base(&fa.dir), base(&fb.dir), "baseline, scenario:\n{s}");
     }
 }
 
@@ -419,9 +516,7 @@ export DOC_IP=$T/bin/ip DOC_ROUTE=$T/route
 
 #[test]
 fn modes_not_ported_say_so() {
-    for m in ["--report", "--calibrate-standby"] {
-        assert_eq!(main(&[m.to_owned()]), EXIT_NOT_PORTED);
-    }
+    assert_eq!(main(&["--report".to_owned()]), EXIT_NOT_PORTED);
 }
 
 #[test]

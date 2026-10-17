@@ -12,6 +12,11 @@ fn j(v: serde_json::Value) -> Json {
     Json::from(v)
 }
 
+/// A3: the scenario engine can't touch the home exit.
+#[test]
+fn home_exit_not_scenario_reachable() {
+    assert!(!ALLOWED_PATHS.iter().any(|p| p.contains("/chill/home")));
+}
 
 fn net(ssid: &str, bssid: &str, signal: f64) -> Network {
     Network {
@@ -278,6 +283,206 @@ fn fresh_block_wins_and_stale_falls_back_to_ubus() {
     );
 }
 
+#[test]
+fn abroad_goes_direct_best_effort_and_remembers_the_old_value() {
+    let cfg = template();
+    let abroad = cfg.scenarios.iter().find(|s| s.id == "abroad").unwrap();
+    assert_eq!(abroad.actions[0].action.path, "/api/wifi/radio");
+    assert!(!abroad.actions[0].best_effort);
+    let group = &abroad.actions[1];
+    assert_eq!(group.action.path, "/api/services/chill/regions");
+    assert_eq!(
+        group.action.body.as_ref().unwrap().get("member"),
+        Some(&Json::from("DIRECT"))
+    );
+    assert!(group.best_effort);
+    assert!(group.verify_job.is_none(), "a region switch starts no job");
+    assert_eq!(
+        group.verify_field.as_ref().unwrap().equals,
+        Json::from("DIRECT")
+    );
+    assert!(group.restore_on_exit.is_some());
+}
+
+#[test]
+fn restore_puts_the_saved_member_back_and_verifies_it() {
+    let a = chill_main_group_action("DIRECT");
+    let back = restore_action(&a, j(json!("🇹🇼 台湾"))).unwrap();
+    let body = back.action.body.as_ref().unwrap();
+    assert_eq!(body.get("member"), Some(&Json::from("🇹🇼 台湾")));
+    assert_eq!(body.get("group"), Some(&Json::from(CHILL_MAIN_GROUP)));
+    assert_eq!(
+        back.verify_field.as_ref().unwrap().equals,
+        Json::from("🇹🇼 台湾")
+    );
+    assert!(
+        back.restore_on_exit.is_none(),
+        "a restore must not save again"
+    );
+    assert!(back.best_effort);
+}
+
+#[test]
+fn same_group_different_member_shares_a_restore_key() {
+    let k1 = restore_key(&chill_main_group_action("DIRECT"));
+    let k2 = restore_key(&chill_main_group_action("🇯🇵 日本"));
+    assert!(k1.is_some());
+    assert_eq!(k1, k2);
+    assert_eq!(restore_key(&wifi_action(true)), None);
+    // Byte for byte the key the agent writes into restore.json (serde_json's text).
+    let agent = format!(
+        "/api/services/chill/regions {}",
+        json!({"group": CHILL_MAIN_GROUP})
+    );
+    assert_eq!(k1.as_deref(), Some(agent.as_str()));
+}
+
+#[test]
+fn restore_is_due_on_leaving_abroad_but_not_while_in_it() {
+    let cfg = template();
+    let a = chill_main_group_action("DIRECT");
+    let pending = vec![PendingRestore {
+        key: restore_key(&a).unwrap(),
+        action: restore_action(&a, j(json!("🇹🇼 台湾"))).unwrap(),
+        saved_at: 0,
+        while_abroad: false,
+    }];
+    let by = |id: &str| cfg.scenarios.iter().find(|s| s.id == id);
+    assert!(due_restores(&pending, by("abroad")).is_empty());
+    assert_eq!(due_restores(&pending, by("away")).len(), 1);
+    assert_eq!(due_restores(&pending, by("home")).len(), 1);
+    assert_eq!(
+        due_restores(&pending, None).len(),
+        1,
+        "engine off restores too"
+    );
+}
+
+#[test]
+fn chill_switched_off_abroad_comes_back_only_when_home_and_first() {
+    let cfg = template();
+    let by = |id: &str| cfg.scenarios.iter().find(|s| s.id == id);
+    let a = chill_main_group_action("DIRECT");
+    let pending = vec![
+        PendingRestore {
+            key: restore_key(&a).unwrap(),
+            action: restore_action(&a, j(json!("🇹🇼 台湾"))).unwrap(),
+            saved_at: 0,
+            while_abroad: false,
+        },
+        chill_on_restore(0),
+    ];
+    assert!(
+        due_restores(&pending, by("abroad")).is_empty(),
+        "still abroad: CHILL stays off"
+    );
+    let due = due_restores(&pending, by("away"));
+    assert_eq!(due.len(), 2);
+    assert_eq!(due[0], CHILL_ON_KEY, "CHILL on before its group is set");
+    assert_eq!(due_restores(&pending, by("home"))[0], CHILL_ON_KEY);
+    assert_eq!(
+        due_restores(&pending, None)[0],
+        CHILL_ON_KEY,
+        "engine off restores too"
+    );
+    let mut with_exit = pending.clone();
+    with_exit.insert(0, chill_exit_restore(0));
+    let due = due_restores(&with_exit, by("away"));
+    assert_eq!(due.first().map(String::as_str), Some(CHILL_ON_KEY));
+    assert_eq!(
+        due.last().map(String::as_str),
+        Some(CHILL_EXIT_KEY),
+        "mode last, after the node"
+    );
+    assert!(due_restores(&with_exit, by("abroad")).is_empty());
+    let mcc = Scenario {
+        id: "jp".into(),
+        name: "日本".into(),
+        detect: Detect::Mcc {
+            mccs: vec!["440".into()],
+        },
+        actions: Vec::new(),
+        inhibit_sleep: false,
+    };
+    assert_eq!(
+        due_restores(&pending, Some(&mcc)),
+        vec![restore_key(&a).unwrap()]
+    );
+}
+
+#[test]
+fn simulated_trip_abroad_and_back() {
+    let cfg = template();
+    let by = |id: &str| cfg.scenarios.iter().find(|s| s.id == id);
+    assert!(!in_abroad_scenario(&cfg, true, "away"));
+    assert!(!in_abroad_scenario(&cfg, true, "home"));
+    assert!(
+        !in_abroad_scenario(&cfg, true, ""),
+        "just booted, nothing decided yet"
+    );
+    assert!(!in_abroad_scenario(&cfg, false, "abroad"), "engine off");
+    assert!(in_abroad_scenario(&cfg, true, "abroad"));
+    let abroad = by("abroad").unwrap();
+    let group = abroad
+        .actions
+        .iter()
+        .find(|a| a.restore_on_exit.is_some())
+        .unwrap();
+    assert_eq!(
+        group.action.body.as_ref().unwrap().get("member"),
+        Some(&Json::from("DIRECT"))
+    );
+    let mut pending = vec![PendingRestore {
+        key: restore_key(group).unwrap(),
+        action: restore_action(group, j(json!("🇹🇼 台湾"))).unwrap(),
+        saved_at: 1,
+        while_abroad: false,
+    }];
+    pending.push(chill_exit_restore(2));
+    pending.push(chill_on_restore(3));
+    assert!(due_restores(&pending, Some(abroad)).is_empty());
+    for back in ["away", "home"] {
+        let due = due_restores(&pending, by(back));
+        assert_eq!(due.len(), 3, "{back}");
+        assert_eq!(due[0], CHILL_ON_KEY);
+        let node = pending.iter().find(|p| p.key == due[1]).unwrap();
+        assert_eq!(
+            node.action.action.body.as_ref().unwrap().get("member"),
+            Some(&Json::from("🇹🇼 台湾"))
+        );
+        let exit = pending.iter().find(|p| p.key == due[2]).unwrap();
+        assert_eq!(exit.action.action.path, "/api/services/chill/exit");
+        assert_eq!(
+            exit.action.action.body.as_ref().unwrap().get("state"),
+            Some(&Json::from("proxy"))
+        );
+        assert!(
+            pending.iter().all(|p| p.action.best_effort),
+            "a failed restore is retried, never rolls back Wi-Fi"
+        );
+    }
+}
+
+#[test]
+fn chill_on_restore_waits_for_the_job_and_survives_a_round_trip() {
+    let r = chill_on_restore(5);
+    assert_eq!(r.action.action.path, "/api/services/chill/enable");
+    assert!(ALLOWED_PATHS.contains(&r.action.action.path.as_str()));
+    assert_eq!(
+        r.action.verify_job.as_deref(),
+        Some("/api/services/chill/job")
+    );
+    assert!(r.action.best_effort);
+    #[cfg(feature = "serde")]
+    {
+        let text = serde_json::to_string(&vec![r]).unwrap();
+        let back: Vec<PendingRestore> = serde_json::from_str(&text).unwrap();
+        assert!(back[0].while_abroad);
+        let old: Vec<PendingRestore> =
+            serde_json::from_str(&text.replace(",\"while_abroad\":true", "")).unwrap();
+        assert!(!old[0].while_abroad);
+    }
+}
 
 #[test]
 fn rejects_best_effort_wifi() {

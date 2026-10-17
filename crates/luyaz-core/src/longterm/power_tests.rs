@@ -59,8 +59,8 @@ fn temps_throttle_exits_and_cpu() {
         thr: Some(false),
         ts_on: true,
         ts_ok: Some(true),
-        proxy_on: true,
-        proxy_ok: false,
+        chill_on: true,
+        chill_ok: false,
         cpu: Some((100, 5, 1_000)),
         cap: Some(80),
         ..Default::default()
@@ -84,6 +84,8 @@ fn temps_throttle_exits_and_cpu() {
     assert_eq!(q["ts_on_s"], 120);
     assert_eq!(q["ts_chk_s"], 60);
     assert_eq!(q["ts_ok_s"], 60);
+    assert_eq!(q["chill_on_s"], 120);
+    assert_eq!(q["chill_ok_s"], 0);
     // 360 ticks in 3600 s = 1 per mille
     assert_eq!(q["cpu_datad"], 1);
     // another process by the end: unknown
@@ -172,6 +174,10 @@ fn root(tag: &str) -> (PathBuf, Paths) {
         route: r.join("route"),
         rc_local: r.join("rc.local"),
         ts_sock: r.join("ts.sock"),
+        chill_dir: r.join("chill"),
+        chill_state: r.join("chill.state"),
+        thermal_eco: r.join("thermal-eco"),
+        chill_idle: r.join("chill.idle"),
         proc_: r.join("proc"),
         data: r.join("data"),
         dumps: r.join("dumps"),
@@ -254,6 +260,75 @@ fn ts_check_over_a_real_socket() {
     let _ = std::fs::remove_dir_all(&r);
 }
 
+#[test]
+fn chill_on_and_healthy() {
+    let (r, p) = root("chill");
+    std::fs::create_dir_all(&p.chill_dir).unwrap();
+    std::fs::create_dir_all(r.join("proc/777")).unwrap();
+    std::os::unix::fs::symlink("/data/chill/bin/mihomo", r.join("proc/777/exe")).unwrap();
+    std::fs::write(&p.chill_state, "{\"state\":\"running\",\"core_pid\":777}\n").unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let mut st = ReadState::default();
+    let x = st.read(&p, &BTreeMap::new(), now);
+    assert!(x.chill_on && x.chill_ok);
+    std::fs::write(p.chill_dir.join("pause_until"), format!("{}\n", now + 600)).unwrap();
+    assert!(!st.read(&p, &BTreeMap::new(), now).chill_on, "paused");
+    std::fs::remove_file(p.chill_dir.join("pause_until")).unwrap();
+    std::fs::write(&p.chill_idle, format!("{}\n", now + 120)).unwrap();
+    assert!(
+        !st.read(&p, &BTreeMap::new(), now).chill_on,
+        "paused by the core (6e)"
+    );
+    std::fs::write(&p.chill_idle, format!("{}\n", now - 1)).unwrap();
+    assert!(
+        st.read(&p, &BTreeMap::new(), now).chill_on,
+        "a lapsed lease is no pause"
+    );
+    std::fs::remove_file(&p.chill_idle).unwrap();
+    // its state is old: on, not healthy
+    let x = st.read(&p, &BTreeMap::new(), now + 300);
+    assert!(x.chill_on && !x.chill_ok);
+    assert_eq!(x.profile.as_deref(), Some("standard"), "no profile file");
+    std::fs::write(p.chill_dir.join("profile"), "perf\n").unwrap();
+    assert_eq!(
+        st.read(&p, &BTreeMap::new(), now).profile.as_deref(),
+        Some("perf")
+    );
+    std::fs::write(&p.thermal_eco, "").unwrap();
+    assert_eq!(
+        st.read(&p, &BTreeMap::new(), now).profile.as_deref(),
+        Some("eco"),
+        "too hot"
+    );
+    std::fs::write(p.chill_dir.join("disabled"), "").unwrap();
+    assert_eq!(
+        st.read(&p, &BTreeMap::new(), now).profile.as_deref(),
+        Some("off")
+    );
+    let _ = std::fs::remove_dir_all(&r);
+}
+
+#[test]
+fn chill_profile_per_hour() {
+    let mut a = Acc::default();
+    let r = |p: &str| Read {
+        profile: Some(p.into()),
+        ..Default::default()
+    };
+    a.add(&r("standard"), None, 60, 60, false, 60);
+    a.add(&r("standard"), None, 60, 60, false, 120);
+    assert_eq!(a.power()["chill_profile"], "standard");
+    a.add(&r("eco"), None, 60, 60, false, 180);
+    assert_eq!(a.power()["chill_profile"], "mixed");
+    assert_eq!(
+        Acc::default().power()["chill_profile"],
+        Value::Null,
+        "no CHILL"
+    );
+}
 
 #[test]
 fn radio_quiet_packets_and_clients_screen_off_only() {

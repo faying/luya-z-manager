@@ -1,6 +1,8 @@
 [workspace]
-members = ["crates/luyaz-core", "crates/luyaz-policy", "crates/luyaz-api", "crates/luyaz-alerts", "crates/luyaz-sentinel", "crates/luyaz-speedtest", "crates/luyaz-esim", "crates/luyaz-netwatch", "crates/luyaz-sms-forward", "crates/luyaz-wifi", "crates/luyaz-scenario", "crates/luyaz-web", "touch-ui/rs/lvgl-sys", "touch-ui/rs/plat", "touch-ui/rs/devui-model", "touch-ui/rs/devui"]
-default-members = ["crates/luyaz-core", "crates/luyaz-policy", "crates/luyaz-api", "crates/luyaz-alerts", "crates/luyaz-sentinel", "crates/luyaz-speedtest", "crates/luyaz-esim", "crates/luyaz-netwatch", "crates/luyaz-sms-forward", "crates/luyaz-wifi", "crates/luyaz-scenario", "crates/luyaz-web"]
+members = ["crates/luyaz-core", "crates/luyaz-policy", "crates/luyaz-api", "crates/luyaz-alerts", "crates/luyaz-sentinel", "crates/luyaz-speedtest", "crates/luyaz-esim", "crates/luyaz-home-exit", "crates/luyaz-netwatch", "crates/luyaz-sms-forward", "crates/luyaz-manual-first", "crates/luyaz-wifi", "crates/luyaz-scenario", "crates/luyaz-web", "touch-ui/rs/lvgl-sys", "touch-ui/rs/plat", "touch-ui/rs/devui-model", "touch-ui/rs/devui"]
+# `cargo build/test/clippy` without -p: the manager crates only (lvgl-sys's build script needs
+# LVGL_DIR/FT_SRC, see touch-ui/rs/build.sh)
+default-members = ["crates/luyaz-core", "crates/luyaz-policy", "crates/luyaz-api", "crates/luyaz-alerts", "crates/luyaz-sentinel", "crates/luyaz-speedtest", "crates/luyaz-esim", "crates/luyaz-home-exit", "crates/luyaz-netwatch", "crates/luyaz-sms-forward", "crates/luyaz-manual-first", "crates/luyaz-wifi", "crates/luyaz-scenario", "crates/luyaz-web"]
 # wasm32 components and their precompiler (cranelift): own workspace and lockfile, never in a device binary
 exclude = ["crates/luyaz-plugins"]
 resolver = "2"

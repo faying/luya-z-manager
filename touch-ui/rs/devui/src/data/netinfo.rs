@@ -103,7 +103,8 @@ fn parse_exit(data: &[u8], key: &str) -> ni_exit_t {
         ip: jstr(&o, "ip", 48),
         geo: jstr_pick(&o, "geo", "geo_en", 64),
         isp: jstr_pick(&o, "isp", "isp_en", 48),
-        node: jstr(&o, "node", 64),
+        // a flag in the node name: the device font has none, the country code instead
+        node: super::chill::sanitize_name(&jstr(&o, "node", 128), 64),
         err: jstr_pick(&o, "error", "error_en", 80),
     }
 }
@@ -137,6 +138,7 @@ pub fn parse(n: &mut netinfo_t, data: &[u8]) {
     n.now = json::get_int(data, "now", 0);
     n.direct = parse_exit(data, "direct");
     n.proxy = parse_exit(data, "proxy");
+    n.chill_running = (jstr(data, "chill_running", 16) == "true") as i32;
     n.home = parse_oper(data, "home_operator");
     n.serving = parse_oper(data, "serving_operator");
     n.roaming = match jstr(data, "roaming", 16).as_str() {

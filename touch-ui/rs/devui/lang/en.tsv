@@ -479,6 +479,105 @@ tailscale|节点	Peers
 重试	Retry
 限速	Speed cap
 
+# CHILL（公开版没有这部分代码）
+# 手动优先提示（slow-diagnosis §12.5）、网络诊断的代理层
+ · 停在 %s	 · last update %s
+去换节点 ›	Switch node ›
+去选节点 ›	Pick a node ›
+ · 超时	 · timeout
+%d 组 · %d 个	Groups %d · nodes %d
+%s%sCHILL 直连	%s%sCHILL direct
+AI 也直连	AI direct too
+AI 仍走 CHILL · %s	AI still via CHILL · %s
+AI、VoWiFi 也直连	AI and VoWiFi go direct too
+CHILL 出口	CHILL route
+CHILL 已关	CHILL off
+CHILL 已关，回国自动开	CHILL off; back on when home
+CHILL 开着，但不经过它	CHILL on, but bypassed
+代理	Proxy
+代理 %d · 直连 %d	Proxy %d · Direct %d
+代理与测速	Proxy & speed test
+代理（和在国内一样）	Proxy (same as at home)
+全局	Global
+全走 CHILL · %s	All via CHILL · %s
+全部直连	All direct
+全部直连 · %s	All direct · %s
+全部直连（AI 也直连）	All direct (AI too)
+全部走代理	All via proxy
+关闭 CHILL（最省电）	Turn off CHILL (saves most power)
+再点一下：关闭（AI、VoWiFi 也直连）	Tap again: off; AI, VoWiFi direct
+切换更快	Snappier
+国内直连 · %s	Domestic direct · %s
+国外卡用	For foreign SIM
+国外走 CHILL · %s	Foreign via CHILL · %s
+在国外 · CHILL 怎么走	Abroad · CHILL route
+在国外关掉了 · 回国自动打开	Turned off abroad · back on when home
+太热 · 暂按省电	Too hot · power saving for now
+性能	Fast
+情景只管 Wi-Fi、CHILL 这些，不碰蜂窝网络。点一个情景就固定在它，点「自动」恢复	Scenarios set Wi-Fi and CHILL, not cellular; tap one to pin, Auto to undo
+打开 CHILL	Turn on CHILL
+打开右上角开关启动	Turn on with the top-right switch
+换回国内卡后自动回到「代理」	Back to Proxy when a home SIM is in
+换国外卡已自动切到「直连 · AI 不动」，回国自动回到「代理」	Foreign SIM: switched to Direct · AI stays; back to Proxy at home
+暂无活跃连接	No active connections
+更凉更省	Cooler
+标准	Standard
+档位	Profile
+没成功（后台没回应或 CHILL 没在运行），稍后再试	Didn't work (Admin not responding or CHILL not running); try later
+测延迟	Test latency
+点这里打开	Tap to turn on
+直连 · AI 不动	Direct · AI stays
+省电	Eco
+策略组	Groups
+节点	Nodes
+蜂窝直连	Cellular direct
+规则 → 节点	Rules → Nodes
+规则 → 节点流量	Traffic by rule → node
+规则分流	By rules
+规则节点|%d 条	%d
+设备自己的流量仍直连 · %s	Device's own traffic direct · %s
+超时	Timeout
+运行中	Running
+进出省电断网约 10 秒	Power saving on/off drops the network ~10 s
+连接	Connections
+默认	Default
+# 家里出口（E3，manager docs/designs/home-exit.md §10）
+家里出口	Home exit
+国内版权走家里	CN media via home
+家里 IP 网站	Home IP sites
+其余都走家里 · 2 小时	Rest via home · 2h
+爱奇艺、优酷、B 站等	iQIYI, Youku, bilibili, …
+%d 个网站	%d site|%d sites
+表里还没有网站 · 见 /data/chill/home_ip.list	No sites yet · see /data/chill/home_ip.list
+AI、VoWiFi、国内直连照旧	AI, VoWiFi, China direct unchanged
+剩 %ld:%02ld	%ld:%02ld left
+试运行 0:%02ld	Trial 0:%02ld
+正在测家里…	Checking home…
+正在打开…	Turning on…
+正在关闭…	Turning off…
+家里不通，暂走直连	Home down · direct for now
+▲ 家里不通，暂走 %s	▲ Home down · via %s for now
+家里不通，暂走原出口	Home down · usual exit for now
+会断一下（约 5 秒）	Drops for ~5 s
+会断一下，走漫游流量	Drops ~5 s · uses roaming data
+正在切换，稍等	Switching, one moment
+正在读取，稍等	Loading, one moment
+过热暂停中，降温后自动恢复	Paused while hot · resumes when cool
+全局模式下不生效 · 换成代理或直连 · AI 不动	Not used in Global mode · Switch to Proxy or Direct · AI kept
+全部直连下不生效	Not used in All direct
+家里出口没配置	Home exit not set up
+没成功，稍后再试	Didn't work; try later
+读不到所在国家，版权和其余暂不显示	Can't tell the country; media and rest hidden
+连不上家里	Can't reach home
+经中继，视频可能卡	Via relay · video may stutter
+● 经 Tailscale · 直连 %d ms	● Via Tailscale · direct %d ms
+经 Tailscale · 直连	Via Tailscale · direct
+10 分钟后关 · 再开 2 小时 ›	Off in 10 min · Extend 2h ›
+已延长到 %s	Extended to %s
+没延长成，稍后再试	Couldn't extend; try later
+ · 家里 剩 %ld:%02ld	 · Home %ld:%02ld left
+ · 家里 版权	 · Home media
+ · 家里 IP	 · Home IP
 
 # APN 自动候选可手选（2026-10-03）
 本卡在用	In use (this SIM)

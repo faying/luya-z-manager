@@ -103,9 +103,12 @@ CLOCK_YEAR_MIN=1767225600 # 2026-01-01 00:00
 FP=${DOC_FP:-$GUARD_TMP/ledger/fp}
 FP_CHANGED=${DOC_FP_CHANGED:-$GUARD_TMP/ledger/fp-changed}
 TS_TUNING=${DOC_TS_TUNING:-/data/tailscale/tuning.env}
-standby_progs='tailscaled u60pro-devui zwrt-datad zte-agent'
-standby_labels='- 蜂窝包/分 Tailscale隧道包/分 tailscaled唤醒/秒 触屏唤醒/秒 数据服务唤醒/秒 后台唤醒/秒'
-standby_labels_en='-|Cell pkts/min|Tailscale tunnel pkts/min|tailscaled wakeups/s|Screen UI wakeups/s|Data service wakeups/s|Admin wakeups/s'
+CHILL_TEMPLATE=${DOC_CHILL_TEMPLATE:-/data/chill/template.yaml}
+CHILL_ENV=${DOC_CHILL_ENV:-/data/chill/chill.env}
+CHILL_STATE=${DOC_CHILL_STATE:-/tmp/chill.state}
+standby_progs='tailscaled mihomo u60pro-devui zwrt-datad zte-agent'
+standby_labels='- 蜂窝包/分 Tailscale隧道包/分 tailscaled唤醒/秒 mihomo唤醒/秒 触屏唤醒/秒 数据服务唤醒/秒 后台唤醒/秒'
+standby_labels_en='-|Cell pkts/min|Tailscale tunnel pkts/min|tailscaled wakeups/s|mihomo wakeups/s|Screen UI wakeups/s|Data service wakeups/s|Admin wakeups/s'
 
 standby_last() { # the last column of a sentinel record: uptime, cellular, tunnel, then one per program
     set -- $standby_progs
@@ -129,6 +132,7 @@ standby_fp() {
     for _p in $standby_progs; do
         case "$_p" in
             tailscaled) _f="$_tsm+$_tun" ;;
+            mihomo) _f="$(prog_md5 mihomo)+$(cfg_md5 "$CHILL_TEMPLATE")+$(cfg_md5 "$CHILL_ENV")" ;;
             # retired (8d-2c): no process, the column is not judged (awk below)
             zte-agent) _f=retired ;;
             # the column keeps its name; after the move (10e) the process is luyaz-core
@@ -366,7 +370,7 @@ BEGIN {
     while ((getline l < CAPF) > 0) { split(l, x, " "); CAPEND[x[1]] = x[2] }
     split("guard job watcher capture uidlog crashlog datad", gs, " ")
     split("on_home on_abroad off_home off_abroad", cs, " ")
-    split("agent datad devui ts", rs, " ")
+    split("agent datad devui mihomo ts", rs, " ")
 }
 {
     # each NUL ends a record: a run of them left by a power cut counts once a segment, not as lines
@@ -403,6 +407,7 @@ BEGIN {
     else if (k == "hour_power") { i = HK[s, idfrom(id)]; if (i != "") { HP[i] = 1; HP_E[i] = fld($0, "e"); HP_PART[i] = fld($0, "e_partial"); HP_THR[i] = fld($0, "throttle_s")
         for (j = 1; j <= 4; j++) { HP_CS[i, cs[j]] = fld($0, cs[j] "_s") + 0; HP_CE[i, cs[j]] = fld($0, cs[j] "_e") } } }
     else if (k == "hour_proc") { i = HK[s, idfrom(id)]; if (i != "") { HQ[i] = 1; HQ_CPU[i] = fld($0, "cpu_datad")
+        HQ_CON[i] = fld($0, "chill_on_s"); HQ_COK[i] = fld($0, "chill_ok_s")
         HQ_TON[i] = fld($0, "ts_on_s"); HQ_TCK[i] = fld($0, "ts_chk_s"); HQ_TOK[i] = fld($0, "ts_ok_s")
         for (j = 1; j <= 5; j++) HQ_RSS[i, rs[j]] = fld($0, "rss_" rs[j]) } }
 }
@@ -579,9 +584,10 @@ END {
         cv = sprintf("不完整（Tailscale 开着 %s，查到 %s%s）", dur(ton), dur(tck), (tlong ? "，有一小时里超过 10 分钟没查到" : ""))
     tv = (ton ? (tck ? sprintf("%.1f%%", tok * 100 / tck) : "没查到过") : "没开过")
     tbad = (ton && tok + ton - tck < 0.99 * ton) # under 99% even if every unchecked second was healthy
-    val = "Tailscale " tv
-    t_ = tier(tck && tok < 0.99 * tck, (ton ? cv : "没有记录"), ws, D7)
-    if (tbad) t_ = "不达标"
+    cbad = (con && cok < 0.99 * con)
+    val = "CHILL " (con ? sprintf("%.1f%%", cok * 100 / con) : "没开过") "；Tailscale " tv
+    t_ = tier(cbad || (tck && tok < 0.99 * tck), ((con || ton) ? cv : "没有记录"), ws, D7)
+    if (cbad || tbad) t_ = "不达标"
     row("S8", "出口可用", val, t_, ws, D7, cv, "自动")
     # ── 好用 ──
     if (!SUMMARY) print "\n好用"
@@ -856,6 +862,8 @@ m_uptime() { _mu=$(cut -d. -f1 "$UPTIME_FILE" 2>/dev/null); case "$_mu" in '' | 
 
 # The files we only record, "<name> <path>" (u60-ship.sh record knows the same list).
 record_list() {
+    echo "chill.sh ${DOC_CHILL_DIR:-/data/chill}/chill.sh"
+    echo "template.yaml $CHILL_TEMPLATE"
     echo "tailscale-start.sh $TS_DIR/start.sh"
     echo "tuning.env $TS_TUNING"
     echo "tailscaled $TS_DIR/tailscaled"
@@ -1360,6 +1368,76 @@ for p in zwrt-datad u60pro-devui; do
     fi
 done
 
+# CHILL's controller (:9999) is for this device only (CHILL_API_LAN=0; the
+# Bearer secret is off). chill.env is not in the manifest, so a hand edit that
+# opens it to the LAN would go unnoticed: read the listening sockets instead.
+# No row without CHILL installed.
+if [ -f "$CHILL_ENV" ]; then
+    api=$(cat "$PROC/net/tcp" "$PROC/net/tcp6" 2>/dev/null | awk '$4 == "0A" && $2 ~ /:270F$/ { sub(/:270F$/, "", $2); print $2 }' | sort -u)
+    apiw=
+    for a in $api; do
+        case "$a" in
+            0100007F | 00000000000000000000000001000000 | 0000000000000000FFFF00000100007F) ;;
+            00000000) apiw="$apiw 0.0.0.0" ;;
+            00000000000000000000000000000000) apiw="$apiw ::" ;;
+            *) apiw="$apiw $a" ;;
+        esac
+    done
+    if [ -n "$apiw" ]; then
+        report warn chill-api "CHILL 管理接口" "对局域网开放（:9999 听在$apiw）；chill.env 里 CHILL_API_LAN 应为 0" \
+            "CHILL API" "Open to the LAN (:9999 on$apiw); set CHILL_API_LAN=0 in chill.env"
+    elif [ -n "$api" ]; then
+        report ok chill-api "CHILL 管理接口" "只听本机" "CHILL API" "This device only"
+    else
+        report ok chill-api "CHILL 管理接口" "没在监听（CHILL 没开）" "CHILL API" "Not listening (CHILL off)"
+    fi
+    # Home exit (E3, manager docs/designs/home-exit.md §6): only when chill.env
+    # names one. Walks the chain and reports the first broken link: the value,
+    # CHILL running, the Tailscale route to home, home answering through
+    # 家里 (one mihomo delay test, China-side 204 like the agent's probe).
+    hx=$(sed -n "s/^CHILL_HOME_EXIT=['\"]\{0,1\}\([^'\"]*\)['\"]\{0,1\}[[:space:]]*\$/\1/p" "$CHILL_ENV" | tail -n 1)
+    if [ -n "$hx" ]; then
+        hxip=${hx%:*}
+        hxport=${hx##*:}
+        case "$hx" in *[!0-9.:]* | *:*:* | :* | *:) hxip= ;; esac
+        [ "$hxip" = "$hx" ] && hxip=
+        if [ -z "$hxip" ]; then
+            report warn home-exit "家里出口" "chill.env 的 CHILL_HOME_EXIT 不是 IPv4:端口（$hx）" \
+                "Home exit" "CHILL_HOME_EXIT in chill.env is not IPv4:port ($hx)"
+        elif grep -q '"reason":"idle"' "$CHILL_STATE" 2>/dev/null; then
+            report ok home-exit "家里出口" "CHILL 息屏暂停（没人用），用不上" "Home exit" "Not in use (CHILL paused: screen off, nobody connected)"
+        elif ! grep -q '"state":"running"' "$CHILL_STATE" 2>/dev/null; then
+            report ok home-exit "家里出口" "CHILL 没在跑，用不上" "Home exit" "Not in use (CHILL not running)"
+        elif ! $IP route get "$hxip" 2>/dev/null | grep -q 'dev tailscale0'; then
+            report warn home-exit "家里出口" "到 $hxip 不走 Tailscale（子网路由没发布，或 Tailscale 没连上）" \
+                "Home exit" "No Tailscale route to $hxip (subnet route not advertised, or Tailscale down)"
+        else
+            # The core runs this every minute. Only the home exit engine probes 家里 (every
+            # 5 min while someone can use it, none while nobody can; manager
+            # docs/designs/u60-radio.md §5, D3/D14), and mihomo keeps each result in the
+            # proxy's history: show the last entry, never probe here (a probe wakes the
+            # tailnet and the cellular link). Older than 30 min: say how old.
+            hxh=$($WGET -q -T 3 -O - "http://127.0.0.1:9999/proxies/%E5%AE%B6%E9%87%8C" 2>/dev/null |
+                grep -o '"history":\[[^]]*\]' | tail -n 1 | tr '{' '\n' | tail -n 1)
+            hxd=$(echo "$hxh" | sed -n 's/.*"delay":\([0-9][0-9]*\).*/\1/p')
+            hxa=$(echo "$hxh" | sed -n 's/.*"time":"\([0-9-]*\)T\([0-9:]*\).*/\1 \2/p' |
+                TZ=UTC awk -v now="$t" '{ gsub(/[-:]/, " "); a = now - mktime($0); print ((a >= 0) ? a : "") }')
+            hxz= hxe=
+            if [ -n "$hxa" ] && [ "$hxa" -ge 1800 ]; then
+                hxz="，$((hxa / 60)) 分钟前" hxe=", $((hxa / 60)) min ago"
+            fi
+            if [ -z "$hxd" ]; then
+                report ok home-exit "家里出口" "经 Tailscale 通；还没测过家里（没人用时不测）" \
+                    "Home exit" "Routed via Tailscale; home not probed yet (no probe while nobody uses it)"
+            elif [ "$hxd" -gt 0 ]; then
+                report ok home-exit "家里出口" "经 Tailscale 能用（${hxd} ms$hxz）" "Home exit" "Working via Tailscale (${hxd} ms$hxe)"
+            else
+                report warn home-exit "家里出口" "家里没回应（$hxip:$hxport$hxz；Mac 睡了，或代理端口变了）" \
+                    "Home exit" "Home not answering ($hxip:$hxport$hxe; Mac asleep, or proxy port changed)"
+            fi
+        fi
+    fi
+fi
 # luyaz-web holds :9090 (its /health, no login)
 if $WGET -q -T 5 -O /dev/null http://127.0.0.1:9090/health 2>/dev/null; then
     report ok agent-http "管理网页 :9090" "能访问" "Web admin :9090" "Reachable"

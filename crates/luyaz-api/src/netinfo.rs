@@ -22,18 +22,29 @@ pub const EXITS_WANTED_SECS: u64 = 60;
 
 pub const CONF_PATH: &str = "/data/netinfo.conf";
 
+/// Loopback mixed listener in the CHILL template (`listeners:` → netinfo).
+pub const DEFAULT_PROXY_PORT: u16 = 7894;
+/// CHILL listener pinned to 🤖 AI (template.yaml `netinfo-ai`).
+pub const DEFAULT_AI_PORT: u16 = 7895;
 /// Tried in order until one answers with something parse_geo understands, so
 /// one service being down or blocked does not blank the screen (2026-09-25:
 /// the user asked for several). Mainland services first for the cellular
-/// exit. ip.skk.moe and ip.net.coffee were asked for too, but they are
-/// browser pages that query from JavaScript; they have no endpoint a
-/// program can read.
+/// exit, international ones first for CHILL's. ip.skk.moe and ip.net.coffee
+/// were asked for too, but they are browser pages that query from JavaScript;
+/// they have no endpoint a program can read.
 pub const DEFAULT_DIRECT_URLS: &[&str] = &[
     "https://myip.ipip.net/json",
     "https://cip.cc/",
     "https://ping0.cc/geo",
     "https://api.myip.la/cn?json",
     "http://ip-api.com/json/?lang=zh-CN&fields=status,query,country,regionName,city,isp,org",
+];
+pub const DEFAULT_PROXY_URLS: &[&str] = &[
+    "http://ip-api.com/json/?lang=zh-CN&fields=status,query,country,regionName,city,isp,org",
+    "https://ping0.cc/geo",
+    "https://ipinfo.io/json",
+    "https://api-ipv4.ip.sb/geoip",
+    "https://ipapi.co/json/",
 ];
 
 pub const LOOKUP_MAX_AGE: i64 = 600;
@@ -63,9 +74,15 @@ pub fn clip_to(s: String, max: usize) -> String {
 
 /// `/data/netinfo.conf`, optional, `key=value` lines:
 ///   direct=<url>[,<url>…]   lookups for the cellular exit, tried in order
+///   proxy=<url>[,<url>…]    lookups through CHILL
+///   proxy_port=7894
+///   ai_port=7895           used while the main group is on DIRECT
 ///   lookups=0               no external lookups at all
 pub struct Config {
     pub direct: Vec<String>,
+    pub proxy: Vec<String>,
+    pub proxy_port: u16,
+    pub ai_port: u16,
     pub enabled: bool,
 }
 
@@ -77,6 +94,9 @@ impl Config {
     pub fn parse(text: &str) -> Self {
         let mut c = Config {
             direct: DEFAULT_DIRECT_URLS.iter().map(|s| s.to_string()).collect(),
+            proxy: DEFAULT_PROXY_URLS.iter().map(|s| s.to_string()).collect(),
+            proxy_port: DEFAULT_PROXY_PORT,
+            ai_port: DEFAULT_AI_PORT,
             enabled: true,
         };
         let urls = |v: &str| -> Vec<String> {
@@ -92,6 +112,9 @@ impl Config {
             };
             match k.trim() {
                 "direct" => c.direct = urls(v),
+                "proxy" => c.proxy = urls(v),
+                "proxy_port" => c.proxy_port = v.trim().parse().unwrap_or(c.proxy_port),
+                "ai_port" => c.ai_port = v.trim().parse().unwrap_or(c.ai_port),
                 "lookups" => c.enabled = v.trim() != "0",
                 _ => {}
             }
@@ -1882,6 +1905,9 @@ impl Query {
 pub struct Page<'a> {
     pub now: i64,
     pub direct: Value,
+    /// Already null unless CHILL is running.
+    pub proxy: Value,
+    pub chill_running: bool,
     pub selection: Option<&'a str>,
     pub selection_at: i64,
     pub guard: Value,
@@ -1901,6 +1927,8 @@ pub fn page(p: Page) -> Value {
     let mut data = json!({
         "now": p.now,
         "direct": p.direct,
+        "proxy": p.proxy,
+        "chill_running": p.chill_running,
         "selection": {"mode": p.selection, "checked_at": p.selection_at},
         "guard": p.guard,
         "neighbors": p.neighbors,

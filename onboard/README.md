@@ -8,8 +8,9 @@ One-step setup for a **freshly unboxed ZTE U60 Pro (MU5250)**:
 |---|---|
 | **SSH** | `ssh -p 2222 root@192.168.0.1` logs you in with the key on your computer (key only, no passwords); comes back by itself after a reboot |
 | **Advanced admin web** | Open `http://192.168.0.1:9090/` in a browser: band/cell locking, SMS, APN, firewall, Wi-Fi and more |
-| **devui touch UI** | The front panel gets a new interface, organized by task into 5 tabs (Home · Cellular · Wi-Fi · Exit · System): signal verdict and carriers, Wi-Fi and clients, Tailscale and exit, eSIM switching |
+| **devui touch UI** | The front panel gets a new interface, organized by task into 5 tabs (Home · Cellular · Wi-Fi · Exit · System): signal verdict and carriers, Wi-Fi and clients, CHILL/Tailscale exit, eSIM switching |
 | **eSIM** | With a removable eUICC card (5ber, eSTK.me and similar), download/switch/delete profiles in the admin web; switching also works from the screen |
+| **CHILL** (optional, must be asked for by name) | Transparent proxy on the device (mihomo) + zashboard panel, rule-based routing; needs your own subscription URL |
 
 Installing SSH also **turns off firmware auto-update** (both `zwrt_zte_dm.dm_update.dm_update_mode=0` and `TURNOFFPOLLING=1`, read back afterwards; see [Caveats](#caveats) for why).
 It starts dropbear and confirms it is listening on 2222 before adding its `rc.local` line; if that fails, `rc.local` is left unchanged.
@@ -61,6 +62,7 @@ You can also install only some of the pieces:
 ```sh
 ./install.sh ssh               # ADB + persistent SSH only
 ./install.sh ssh admin devui   # no eSIM
+./install.sh chill             # add the CHILL proxy (not part of the full set; not started on first install, see "CHILL" below)
 ./install.sh recover           # boot-time clean-up for `u60 ship`: puts /data/luyaz/ship/luyaz-recover.sh in place (after its
                                #   selftest on the device) and adds one line calling it to rc.local, before the service lines.
                                #   Not part of the full set: run it only when you mean to change rc.local
@@ -98,6 +100,7 @@ The kit installs the current layout directly. A device still on the old layout (
 | `/data/luyaz/ship/` | `u60 ship` transactions, manifest `manifest.jsonl`, boot clean-up `luyaz-recover.sh` |
 | `/data/alerts/`, `/data/crashlog/` | Alert records, logs from program crashes |
 | `/data/esim/` | lpac (eSIM card read/write tool) |
+| `/data/chill/`, `/etc/init.d/chill` | CHILL: mihomo, rule sets, zashboard, `chill.sh`; subscription URL in `/data/chill/chill.env` (you write it, readable by root only) |
 | `/data/luyaz/kit/rc.local.orig` | Backup of the stock `rc.local` from before the first install |
 
 Older kits left `/data/zte-agent*`, `/data/admin/`, `/data/plugins/zwrt-datad/`, `/data/u60-guard/`, `/data/u60-uid/` behind; nothing uses them now and they are safe to delete.
@@ -107,7 +110,10 @@ Older kits left `/data/zte-agent*`, `/data/admin/`, `/data/plugins/zwrt-datad/`,
 - **Add another computer's SSH public key**: append it to `/data/ssh/authorized_keys`, then run `sh /data/local/tmp/start_dropbear.sh` (editing the copy in `/etc/dropbear/` does nothing; it is overwritten at boot).
 - **Change the admin web password**: rerun `./install.sh admin` (it asks for a new password). Or over SSH edit the line in `/data/luyaz/web.env` (no quotes, backslashes or spaces), then log in again at `:9090` (luyaz-web reads the file at every login, no restart needed).
 - **eSIM**: manage profiles in the admin web under 「移动网络 → eSIM」 (Mobile network → eSIM); on the screen, 「更多功能 → eSIM」 (More → eSIM), tap twice to switch. Takes effect in about 10 seconds, usually no reboot needed.
-- **Proxy**: the install kit does not include a proxy; if you want one, set it up yourself from official sources following `docs/PROXY.md` in the manager repo.
+- **CHILL**: the first `./install.sh chill` installs without starting. SSH in and write your subscription URL into `/data/chill/chill.env` (copy `chill.env.example` in the same directory and edit it, `chmod 600`; static node snapshots go in `/data/chill/providers/`),
+  then run `sh /data/chill/chill.sh safe-start`, and once you've confirmed the whole network works, run `sh /data/chill/chill.sh confirm` within 5 minutes (without confirmation it stops itself, so you can't lock yourself out).
+  After that, turn it on/off and change the exit in the admin web under 「服务 → CHILL」 (Services → CHILL); the zashboard panel opens from the button on that page (served by the admin web itself at `:9090/chill-ui/` behind its login; also works over Tailscale).
+  Running `./install.sh chill` again later is an update: the subscription URL and cache are left alone; if it was running, the core restarts, and if the new one fails to start it switches back to the old version automatically.
 - **Need ADB temporarily**: SSH in and run `ubus call zwrt_bsp.usb set '{"mode":"debug"}'`; when 「USB 模式」 (USB mode) in `./install.sh status` shows `user`, it is back in normal mode. Only on firmware whose `ubus -v list zwrt_bsp.usb` still lists `set`: CN B31 lists only `list`, and the call fails with `Method not found`.
 
 ## Caveats
@@ -123,9 +129,10 @@ After logging in over SSH:
 
 ```sh
 echo vendor > /tmp/luyaz-screen.ctl; sleep 8     # hand the screen back to the stock interface first
+[ -x /data/chill/chill.sh ] && /data/chill/chill.sh stop; rm -f /etc/init.d/chill   # CHILL: stop it first; it puts the DNS settings back the way they were
 for s in luyaz-sentinel luyaz-web luyaz-core u60-uid u60-guard zte-agent zwrt-datad; do [ -x /etc/init.d/$s ] && /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
 for f in /data/luyaz/kit/rc.local.orig /data/u60-kit/rc.local.orig; do [ -s $f ] && cp $f /etc/rc.local && break; done
-rm -rf /data/luyaz /data/plugins/u60pro-devui /data/esim /data/alerts /data/crashlog /data/power \
+rm -rf /data/luyaz /data/plugins/u60pro-devui /data/esim /data/chill /data/alerts /data/crashlog /data/power \
        /data/u60d /data/u60-kit /data/u60-ship /data/u60-guard /data/u60-uid /data/zte-agent /data/zte-agent.env /data/admin \
        /data/plugins/zwrt-datad /data/local/tmp/start_zte_agent.sh    # second line: leftovers from older kits
 # If you don't want SSH either, also run: rm -rf /data/ssh /data/local/tmp/start_dropbear.sh

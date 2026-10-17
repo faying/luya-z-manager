@@ -6,7 +6,7 @@ PASS=0; FAIL=0
 ok() { PASS=$((PASS + 1)); echo "  ok   $1"; }
 bad() { FAIL=$((FAIL + 1)); echo "  FAIL $1"; }
 check() { _d=$1; shift; if eval "$@"; then ok "$_d"; else bad "$_d  [$*]"; fi; }
-MCOL=
+MCOL=' 5.0' # the private extension's column in the sentinel's records
 
 setup() {
     T=$(mktemp -d); mkdir -p "$T/bin" "$T/initd" "$T/alerts" "$T/crash" "$T/uid" "$T/rcd" "$T/proc/100" "$T/proc/101"
@@ -57,6 +57,7 @@ X
         DOC_DATE=$T/bin/date DOC_DF=$T/bin/df DOC_UID_WANT=$T/uid.want DOC_CLOCK_OK=$T/clock-ok DOC_WALL_LAST=$T/wall.last \
         DOC_FP=$T/fp DOC_FP_CHANGED=$T/fp-changed DOC_TS_TUNING=$T/tuning.env \
         DOC_ROOT=$T/root DOC_LUYAZ_TMP=$T/tmp-luyaz
+    export DOC_CHILL_TEMPLATE=$T/tpl DOC_CHILL_ENV=$T/chill.env
 }
 # Every run also checks --tsv2 against --tsv (docs/designs/ui-english.md R2):
 # first line "#tsv2", then exactly 6 columns, columns 1-4 equal to the --tsv
@@ -218,6 +219,7 @@ rm -rf "$T"
 
 fpfix() { # u60-guard's fingerprint cache: "<program> <pid> <md5>"
     printf 'tailscaled 501 aaaaaaaa\n'
+    printf 'mihomo 502 bbbbbbbb\n'
     printf 'u60pro-devui 503 cccccccc\nzwrt-datad 504 dddddddd\nzte-agent 505 eeeeeeee\n'
 }
 echo "standby sentinel"
@@ -302,7 +304,7 @@ lsetup() {
     : >"$SEG"
 }
 # hours <seq> <wall at uptime 0> <first from> <count> [<awk: per-hour overrides>]
-XF=
+XF=',"rss_mihomo":60000,"chill_on_s":3600,"chill_ok_s":3600' # the private extension's fields
 hours() {
     awk -v s="$1" -v w0="$2" -v u0="$3" -v cnt="$4" -v xf="$XF" "BEGIN {
         for (i = 0; i < cnt; i++) {
@@ -341,7 +343,7 @@ check "a clean week: runs, says how far it goes and how much ledger it read" '[ 
 check "S1: no unexpected reboot over a whole week, covered: 达标" 'line S1 | grep -q "0 次 · 达标 · 7 天 / 7 天 · 覆盖完整"'
 check "S2b, S3: no crash, covered: 达标" 'line S2b | grep -q "在家 没有崩溃；国外 没有崩溃 · 达标" && line S3 | grep -q "在家 0 次；国外 0 次 · 达标"'
 check "S6 looks at one day" 'line S6 | grep -q "0 次 · 达标 · 1 天 / 1 天"'
-check "S8: Tailscale healthy all week, checked throughout: 达标" 'line S8 | grep -q "Tailscale 100.0% · 达标 · 7 天 / 7 天 · 覆盖完整 · 自动"'
+check "S8: both exits healthy all week, Tailscale checked throughout: 达标" 'line S8 | grep -q "CHILL 100.0%；Tailscale 100.0% · 达标 · 7 天 / 7 天 · 覆盖完整 · 自动"'
 check "U1-U5 by known facts, U6 for a person" 'line U1 | grep -q "不达标 · 第二步前靠已知事实" && line U6 | grep -q "· 人工 ·"'
 check "P1: average power from the hours; target not set yet" 'line P1 | grep -q "平均 900 mW（7 天 的样本） · 没测（目标待定）"'
 check "P2: each cell over 6 h has a figure, the rest too few" 'line P2 | grep -q "亮屏在家 1800 mW；亮屏国外 样本不足；息屏在家 720 mW；息屏国外 样本不足"'
@@ -423,6 +425,14 @@ check "S3 lists abroad crashes by network, RAT and band for a person" 'line S3 |
 check "S1 is not about the watcher: still covered" 'line S1 | grep -q "覆盖完整"'
 rm -rf "$T"
 
+lsetup # the private exit below 99%: 不达标 even with Tailscale unmeasured
+boot1
+XF_SAVE=$XF; XF=',"rss_mihomo":60000,"chill_on_s":3600,"chill_ok_s":3000'
+hours 1 "$W0" 3600 168
+XF=$XF_SAVE
+rep 7d
+check "S8: CHILL at 83%: 不达标" 'line S8 | grep -q "CHILL 83.3%；Tailscale 100.0% · 不达标"'
+rm -rf "$T"
 
 # S8, the Tailscale half (docs/LEDGER.md §8 and §11): healthy over checked, its own coverage
 s8() { # s8 <awk: per-hour overrides>: a clean week, then the S8 row
@@ -441,7 +451,7 @@ check "S8: one hour with 9 minutes unchecked: still covered" 'echo "$S8" | grep 
 s8 'tck = 3000; tok = 2000'
 check "S8: under 99% even if every unchecked second was healthy: 不达标 despite the coverage" 'echo "$S8" | grep -q "Tailscale 66.7% · 不达标 · .*覆盖不完整"'
 s8 'ton = 0; tck = 0; tok = 0'
-check "S8: Tailscale never meant on: nothing to judge" 'echo "$S8" | grep -q "Tailscale 没开过 · 没测"'
+check "S8: Tailscale never meant on: CHILL alone decides" 'echo "$S8" | grep -q "CHILL 100.0%；Tailscale 没开过 · 达标"'
 
 lsetup # datad degraded, datad hungry, memory growing, throttled
 boot1
@@ -602,6 +612,7 @@ msetup() {
     setup
     export DOC_MANIFEST=$T/m.jsonl DOC_SHIP_TXN=$T/txn DOC_SHIP_HB=$T/hb.ship DOC_MD5_CACHE=$T/md5c/cache \
         DOC_TS_DIR=$T/ts DOC_BOOT_ID_FILE=$T/bootid DOC_MD5SUM=$T/bin/md5log
+    export DOC_CHILL_DIR=$T/chill
     echo bbbb-0000 >"$T/bootid"
     printf '#!/bin/sh\necho "$1" >>%s/md5.calls\nexec md5sum "$@"\n' "$T" >"$T/bin/md5log"
     chmod +x "$T/bin/md5log"
@@ -785,6 +796,79 @@ check "rpc-acl: stock ACL is a warning naming the methods" '[ "$(level rpc-acl)"
 rm -f "$T"/acl-*
 run
 check "rpc-acl: unreadable is ok, says so" '[ "$(level rpc-acl)" = ok ] && [ "$(detail rpc-acl)" = "读不到" ]'
+rm -rf "$T"
+
+echo "CHILL controller :9999 (listening sockets)"
+setup; mkdir -p "$T/proc/net"
+run
+check "no CHILL installed: no row" '[ -z "$(level chill-api)" ]'
+: >"$T/chill.env"
+run
+check "CHILL installed, nothing on :9999: ok, not listening" '[ "$(level chill-api)" = ok ] && [ "$(detail chill-api)" = "没在监听（CHILL 没开）" ]'
+printf '  sl  local_address rem_address   st\n   0: 0100007F:270F 00000000:0000 0A 0\n   1: 00000000:0050 00000000:0000 0A 0\n   2: 0142000A:270F 0A00000A:D431 01 0\n' >"$T/proc/net/tcp"
+run
+check "loopback only (a LAN connection to :9999 is not a listener): ok" '[ "$(level chill-api)" = ok ] && [ "$(detail chill-api)" = "只听本机" ]'
+printf '  sl  local_address rem_address   st\n   0: 00000000:270F 00000000:0000 0A 0\n' >"$T/proc/net/tcp"
+printf '  sl  local_address rem_address   st\n   0: 00000000000000000000000000000000:270F 00000000000000000000000000000000:0000 0A 0\n' >"$T/proc/net/tcp6"
+run
+check "every address: warn, both families named" '[ "$(level chill-api)" = warn ] && [ "$(detail chill-api)" = "对局域网开放（:9999 听在 0.0.0.0 ::）；chill.env 里 CHILL_API_LAN 应为 0" ] &&
+    [ "$(awk -F"\t" "\$2 == \"chill-api\" {print \$6}" "$T/out2")" = "Open to the LAN (:9999 on 0.0.0.0 ::); set CHILL_API_LAN=0 in chill.env" ]'
+rm -rf "$T"
+
+echo "home exit chain (only when chill.env names one)"
+setup
+printf '#!/bin/sh\ncase "$*" in *public/status*) cat %s/public 2>/dev/null ;; *delay*) echo x >>%s/probes; cat %s/delay 2>/dev/null ;; *%%E9%%87%%8C) cat %s/proxy 2>/dev/null ;; esac\nexit 0\n' "$T" "$T" "$T" "$T" >"$T/bin/wget"
+printf '#!/bin/sh\ncat %s/iproute 2>/dev/null\n' "$T" >"$T/bin/ip"
+chmod +x "$T/bin/wget" "$T/bin/ip"
+export DOC_IP=$T/bin/ip DOC_CHILL_STATE=$T/chill.state
+: >"$T/chill.env"
+run
+check "no CHILL_HOME_EXIT: no row" '[ -z "$(level home-exit)" ]'
+printf "SUB_URL='x'\nCHILL_HOME_EXIT='192.0.2.10'\n" >"$T/chill.env"
+run
+check "no port: warn, says the value" '[ "$(level home-exit)" = warn ] && detail home-exit | grep -q "不是 IPv4:端口（192.0.2.10）"'
+printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"
+run
+check "CHILL not running: ok, not in use" '[ "$(level home-exit)" = ok ] && [ "$(detail home-exit)" = "CHILL 没在跑，用不上" ]'
+echo '{"state":"direct","reason":"idle"}' >"$T/chill.state"
+run
+check "CHILL paused while nobody uses it (6e): ok, says so" '[ "$(level home-exit)" = ok ] && [ "$(detail home-exit)" = "CHILL 息屏暂停（没人用），用不上" ]'
+echo '{"state":"running","reason":null}' >"$T/chill.state"
+echo "192.0.2.10 via 10.1.2.4 dev rmnet_data0 src 10.1.2.3" >"$T/iproute"
+run
+check "no Tailscale route: warn" '[ "$(level home-exit)" = warn ] && detail home-exit | grep -q "不走 Tailscale"'
+echo "192.0.2.10 dev tailscale0 table 52 src 100.64.0.5" >"$T/iproute"
+probes() { cat "$T/probes" 2>/dev/null | wc -l | tr -d ' '; }
+hist() { # hist <time> <delay>: 家里's history, an older entry first (now = 2026-09-27T09:06:40Z)
+    printf '{"alive":true,"extra":{"http://x/204":{"alive":true,"history":[{"time":"2026-09-27T08:00:00Z","delay":1}]}},"history":[{"time":"2026-09-27T08:00:00.1Z","delay":2},{"time":"%s","delay":%s}],"name":"家里"}' "$1" "$2" >"$T/proxy"
+}
+echo '{"delay":38}' >"$T/delay"
+run
+check "no history yet: ok, not probed, no probe sent" '[ "$(level home-exit)" = ok ] && [ "$(detail home-exit)" = "经 Tailscale 通；还没测过家里（没人用时不测）" ] && [ "$(probes)" = 0 ]'
+hist 2026-09-27T09:01:40.123456789Z 52
+run
+check "fresh history (5 min): its delay, no probe sent" '[ "$(detail home-exit)" = "经 Tailscale 能用（52 ms）" ] && [ "$(probes)" = 0 ]'
+hist 2026-09-27T09:01:40.5Z 0
+run
+check "fresh failed entry: warn with address, no probe sent" '[ "$(level home-exit)" = warn ] && detail home-exit | grep -q "家里没回应（192.0.2.10:1080；" && [ "$(probes)" = 0 ]'
+hist 2026-09-27T08:50:00Z 52
+run
+check "16 min old: no age yet, no probe sent" '[ "$(detail home-exit)" = "经 Tailscale 能用（52 ms）" ] && [ "$(probes)" = 0 ]'
+hist 2026-09-27T08:20:00Z 52
+run
+check "47 min old: says how old (both languages), no probe sent" '[ "$(level home-exit)" = ok ] && [ "$(detail home-exit)" = "经 Tailscale 能用（52 ms，46 分钟前）" ] &&
+    [ "$(awk -F"\t" "\$2 == \"home-exit\" {print \$6}" "$T/out2")" = "Working via Tailscale (52 ms, 46 min ago)" ] && [ "$(probes)" = 0 ]'
+hist 2026-09-27T07:00:00Z 0
+run
+check "old failure: warn with its age" '[ "$(level home-exit)" = warn ] && detail home-exit | grep -q "家里没回应（192.0.2.10:1080，126 分钟前；"'
+hist 2026-09-27T09:10:00Z 52
+run
+check "history from the future (clock moved back): its delay, no age" '[ "$(detail home-exit)" = "经 Tailscale 能用（52 ms）" ] && [ "$(probes)" = 0 ]'
+echo 'garbage' >"$T/proxy"
+run
+check "history unreadable: not probed yet, no probe sent" '[ "$(level home-exit)" = ok ] && detail home-exit | grep -q "还没测过家里" && [ "$(probes)" = 0 ]'
+check "home-exit rows stay 4 columns" '[ "$(awk -F"\t" "\$2 == \"home-exit\" {print NF}" "$T/out")" = 4 ]'
+unset DOC_IP DOC_CHILL_STATE
 rm -rf "$T"
 
 echo "snapshots"

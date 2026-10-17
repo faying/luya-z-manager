@@ -168,7 +168,7 @@ pub struct Minute {
     pub exits: u64,
     pub exit_overflow: bool,
     pub ct_overflow: bool,
-    pub proxy: bool,
+    pub mihomo: bool,
     pub ifaces: Vec<Iface>,
     pub procs: Vec<ProcRow>,
     pub procs_other: ProcRow,
@@ -338,7 +338,7 @@ impl MinuteC {
             ex: m.exits,
             eo: m.exit_overflow,
             co: m.ct_overflow,
-            mi: m.proxy,
+            mi: m.mihomo,
             i: m.ifaces
                 .iter()
                 .map(|x| {
@@ -425,7 +425,7 @@ impl MinuteC {
             exits: self.ex,
             exit_overflow: self.eo,
             ct_overflow: self.co,
-            proxy: self.mi,
+            mihomo: self.mi,
             ifaces: self
                 .i
                 .iter()
@@ -563,7 +563,7 @@ mod tests {
             },
             span_ms: 60_000,
             procs: vec![ProcRow {
-                name: "/data/proxy/bin/proxy /data/proxy".into(),
+                name: "/data/chill/bin/mihomo /data/chill".into(),
                 n: 1,
                 wakes: 9000,
                 cpu_ms: 5000,

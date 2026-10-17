@@ -106,6 +106,7 @@ const OWN_PREFIX: &[&str] = &[
     "/config",
     // 5b
     "/services/tailscale",
+    "/services/chill",
     "/router/scenario",
     // 5c
     "/router/device",
@@ -128,6 +129,10 @@ pub async fn gate(State(app): State<Shared>, req: Request, next: Next) -> Respon
     let query = req.uri().query().unwrap_or("").to_string();
     let method = req.method().clone();
     let session = app.sessions.of(req.headers());
+    // the CHILL dashboard and its controller API: served here, own session check, before the slash redirect
+    if crate::chill_proxy::ours(&path) {
+        return next.run(req).await;
+    }
 
     // the old web links with a trailing slash (next.config trailingSlash): /signal/ → /signal
     if path.len() > 1

@@ -338,7 +338,7 @@ mod tests {
                 wanp += 3;
             }
             let mut flows = vec![flow(1, 41641, ka), flow(2, 53, dns)];
-            // inside tailscale0: the proxy to the home exit, moving with every keepalive
+            // inside tailscale0: mihomo to the home exit, moving with every keepalive
             let t = |a: &str, b: &str, sp, dp| Tuple {
                 src: a.parse().unwrap(),
                 dst: b.parse().unwrap(),

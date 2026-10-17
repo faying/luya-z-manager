@@ -202,6 +202,8 @@ impl Source for Replay {
             netinfo: true,
             screen: false,
             tailscale: true,
+            chill: true,
+            chill_home: false,
             esim: true,
             speedtest: true,
             servers: true,
@@ -345,6 +347,42 @@ impl Source for Replay {
     fn diagnose_feedback(&mut self, _right: bool) -> bool {
         self.acted();
         true
+    }
+    fn scenario_chill_set(&mut self, _on: bool) -> bool {
+        self.acted();
+        true
+    }
+    fn chill_set_exit(&mut self, _state: &str) -> bool {
+        self.acted();
+        true
+    }
+    fn chill_select_node(&mut self, _i: usize) -> bool {
+        self.acted();
+        true
+    }
+    fn chill_select_group(&mut self, _i: usize) -> bool {
+        self.acted();
+        true
+    }
+    fn chill_set_profile(&mut self, _p: &str) -> bool {
+        self.acted();
+        true
+    }
+    fn chill_test_delay(&mut self) -> i32 {
+        self.acted();
+        1
+    }
+    fn chill_home_set(&mut self, _item: usize, _on: bool) -> (i32, String) {
+        self.acted();
+        (202, String::new())
+    }
+    /// two hours from now
+    fn chill_home_extend(&mut self, m: &Model) -> Option<i64> {
+        self.acted();
+        Some(m.now + 7200)
+    }
+    fn chill_home_read(&mut self) {
+        self.acted();
     }
     /// the harness stays in this process
     fn exec(&mut self, _l: &Launch) -> i32 {
@@ -763,8 +801,16 @@ pub fn run(args: &[String]) -> i32 {
                     ui::with(|u| u.lang_note_reset());
                     true
                 }
+                (Some("ui_arm_clear(&s_hx_arm)"), _) => {
+                    ui::with(|u| u.cp.hx_arm.clear());
+                    true
+                }
                 (Some("power_menu_set"), Some(v)) => {
                     ui::with(|u| u.power_menu_set(v != 0));
+                    true
+                }
+                (Some("exit_menu_set"), Some(v)) => {
+                    ui::with(|u| u.exit_menu_set(v != 0));
                     true
                 }
                 _ => false,

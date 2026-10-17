@@ -183,7 +183,12 @@ impl Io for Fake {
         let mut d = self.d();
         d.calls.push(format!("{method} {path} {}{}", String::from_utf8_lossy(body), if in_restore() { " (restore)" } else { "" }));
         if d.exec_fails.iter().any(|p| p == path) {
-            return Err("proxy unreachable".into());
+            return Err("mihomo unreachable".into());
+        }
+        // the CHILL main group follows what was set
+        if path == "/api/services/chill/regions" {
+            let v: Value = serde_json::from_slice(body).unwrap_or_default();
+            d.gets.insert(sc::CHILL_STATUS.into(), json!({"ok": true, "data": {"region": {"active": v["member"]}}}));
         }
         Ok(())
     }

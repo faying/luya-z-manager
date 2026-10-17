@@ -1024,8 +1024,8 @@ async fn vendor_call(params: &Value) -> Outcome {
 /// DoH：agent 的 DoH 代理（127.0.0.1:5353）随 agent 一起删了（8d-2c，2026-10-14），所以只剩
 /// 「关」：删掉 dnsmasq 的附加文件 /tmp/dnsmasq.d/doh.conf 再重启 dnsmasq，给还留着旧转发的
 /// 设备收尾。「开」一律拒：转给一个不存在的 5353，全局域网就没有 DNS 了。
-/// 关的时候只删它，**不碰 uci 的 dhcp.lan_dns.server/noresolv**：那是透明代理让 dnsmasq 转给
-/// 代理的设置，以前在这里整条删掉，关一次 DoH 就让局域网 DNS 绕过代理（审计 2026-10-09
+/// 关的时候只删它，**不碰 uci 的 dhcp.lan_dns.server/noresolv**：那是 CHILL 让 dnsmasq 转给
+/// mihomo 的设置，以前在这里整条删掉，关一次 DoH 就让局域网 DNS 绕过 mihomo（审计 2026-10-09
 /// F2）。DoH 从来没往 uci 写过；万一有手工写过的 `127.0.0.1#5353` 条目，只删那一条（有才删、
 /// 才 commit，平时不写闪存）。
 const DOH_OFF_SCRIPT: &str = "rm -f /tmp/dnsmasq.d/doh.conf; uci -q get dhcp.lan_dns.server | grep -qF '127.0.0.1#5353' && uci -q del_list dhcp.lan_dns.server='127.0.0.1#5353' && uci commit dhcp; /etc/init.d/dnsmasq restart";
@@ -1301,10 +1301,10 @@ mod wifi_apply_tests {
 mod tests {
     use super::*;
     #[test]
-    fn doh_off_leaves_proxy_dns_alone() {
+    fn doh_off_leaves_chill_dns_alone() {
         let off = DOH_OFF_SCRIPT;
         assert!(off.contains("rm -f /tmp/dnsmasq.d/doh.conf"));
-        // 代理的上游 127.0.0.1 和 noresolv 不能被整条删掉
+        // CHILL 的上游 127.0.0.1 和 noresolv 不能被整条删掉
         assert!(!off.contains("uci delete"));
         assert!(!off.contains("noresolv"));
         assert!(off.contains("del_list dhcp.lan_dns.server='127.0.0.1#5353'"));

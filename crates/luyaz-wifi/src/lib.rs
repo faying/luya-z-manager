@@ -86,12 +86,11 @@ pub trait Host {
 // ── The Wi-Fi lock ──────────────────────────────────────────────────────────
 //
 // Every writer of the `wireless` uci package must hold a `WifiLock` from the
-// first `uci set` until the reload it triggers has been verified. In the agent
-// that is: `apply` (scenario engine, and PUT /api/wifi/radio), the engine's
-// rollback, `wifi::wifi_set` and `wifi::guest_set`; in u60d its scenario engine.
-// Outside them: u60-guard (touch-ui `scripts/u60-guard.sh`, the watchdog that
-// forces Wi-Fi on when the scenario heartbeat stops) and u60d's `/control` for
-// a caller that does not hold it (D3). Without it a scenario's multi-step apply
+// first `uci set` until the reload it triggers has been verified: the core's
+// scenario engine (`apply` and its rollback), the core's `/control` for a
+// caller that does not hold it (D3), and the sentinel (`luyaz-sentinel`
+// `wifi.rs`, the watchdog that forces Wi-Fi on when the scenario heartbeat
+// stops); touch-ui `scripts/chaos.sh` in tests. Without it a scenario's multi-step apply
 // can be interleaved with an admin-UI save — or with the watchdog — and land
 // half-applied.
 //
@@ -104,9 +103,9 @@ pub trait Host {
 //  * `flock(LOCK_EX)` on `LOCK_FILE`, which the shell writers take with the
 //    busybox `flock` applet. The file is opened per acquisition and closed on
 //    release, never kept open and never unlinked, and the holder's pid is
-//    written into it: the device has no `fuser`, so this is how u60-guard finds
-//    who to kill when the lock is held by a wedged agent, and how u60d's
-//    `/control` sees that its caller holds it already.
+//    written into it: the device has no `fuser`, so this is how the core's
+//    `/control` sees that its caller holds it already. Nobody kills a holder
+//    (the old guard's kill of a wedged agent went with them).
 
 /// Shared with the core's `/control` and touch-ui `scripts/chaos.sh`. Do not rename one side
 /// only. Luya-Z rename D2 (manager docs/designs/luyaz-rename.md): was `/tmp/u60-wifi.lock`; the
@@ -117,17 +116,18 @@ pub const LOCK_FILE: &str = "/tmp/luyaz-wifi.lock";
 /// reload (ubus times out at 30 s) + ON_DEADLINE (≤ 75 s); the value keeps the
 /// headroom it was sized with when a longer scan-wake path still took the lock.
 ///
-/// u60-guard's lock wait MUST be longer than this, or it will treat an agent
-/// that is merely mid-reload as wedged and kill it. (The device's busybox
-/// `flock` has no `-w`: the wait is a `flock -n` poll loop with a deadline.)
+/// Waiters that give up (the sentinel's and `/control`'s 150 s) wait longer
+/// than this, so a holder that is merely mid-reload never fails their round.
+/// (The device's busybox `flock` has no `-w`: shell waits are a `flock -n`
+/// poll loop with a deadline.)
 pub const MAX_HOLD: Duration = Duration::from_secs(120);
 
 /// HTTP handlers: fail fast with 503 rather than park a worker behind an
 /// engine apply.
 pub const HTTP_WAIT: Duration = Duration::from_secs(5);
 
-/// The engine: outwait any single legitimate holder, including u60-guard's own
-/// recovery attempt.
+/// The engine: outwait any single legitimate holder, including the sentinel's
+/// own recovery attempt.
 pub const ENGINE_WAIT: Duration = Duration::from_secs(150);
 
 const FLOCK_POLL: Duration = Duration::from_millis(200);
@@ -211,7 +211,7 @@ fn flock_file(path: &str, deadline: Instant) -> Result<File, String> {
         }
         std::thread::sleep(FLOCK_POLL);
     }
-    // Best effort: the pid is a diagnostic for u60-guard, not part of the lock.
+    // Best effort: the pid is a diagnostic (and `/control`'s own-caller check), not part of the lock.
     let _ = file.set_len(0);
     let _ = writeln!(file, "{}", std::process::id());
     Ok(file)
@@ -221,7 +221,7 @@ fn flock_file(path: &str, deadline: Instant) -> Result<File, String> {
 /// processes is positive proof that nothing is broadcasting — and unlike
 /// `hostapd_cli`, "zero" cannot be confused with "we asked the wrong socket".
 fn hostapd_count() -> usize {
-    // Bounded: this runs under the lock, and a hung `ps` would hold it until u60-guard gives up.
+    // Bounded: this runs under the lock, and a hung `ps` would hold it until the sentinel gives up.
     let out = match output_within(Command::new("ps").arg("w"), CMD_TIMEOUT) {
         Ok(o) => o,
         Err(_) => return usize::MAX, // unknown — never let this read as "off"

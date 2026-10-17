@@ -1,0 +1,642 @@
+#!/bin/sh
+# ─────────────────────────────────────────────────────────────────────────────
+# chill.sh 离线单测（T8 的单测部分）
+#
+#   ./chill-unit.sh
+#
+# 不碰设备、不需要订阅、不需要 root。做法是用同名 shell 函数覆盖 ip / uci / nft
+# 等外部命令（POSIX sh 里函数优先于 PATH 查找），把它们的调用记录下来再断言。
+#
+# 不在这里测的东西，以及原因：
+#   - 正则的**语义**（大小写、误匹配）：(?i) 是 PCRE/Go 语法，grep -E 根本不支持，
+#     硬塞进来只会得到虚假通过。那部分归 test/region-filter.sh 用 python 跑。
+#   - 真实的 TUN / nft / dnsmasq 行为：属 E2E（chill-e2e.sh），要真机。
+# ─────────────────────────────────────────────────────────────────────────────
+set -u
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+SUT="$HERE/../chill.sh"
+
+PASS=0; FAIL=0
+ok() { PASS=$((PASS+1)); printf '  ✓ %s\n' "$*"; }
+ng() { FAIL=$((FAIL+1)); printf '  ✗ %s\n' "$*"; }
+eq() { # eq <名称> <实际> <期望>
+  if [ "$2" = "$3" ]; then ok "$1"; else ng "$1"; printf '      期望 [%s]\n      实际 [%s]\n' "$3" "$2"; fi
+}
+has() { # has <名称> <字符串> <子串>
+  case "$2" in *"$3"*) ok "$1" ;; *) ng "$1（未包含 [$3]）" ;; esac
+}
+sec() { printf '\n=== %s\n' "$*"; }
+
+[ -f "$SUT" ] || { echo "找不到 $SUT"; exit 1; }
+
+# 隔离：别让被测脚本写到真实路径
+export CHILL_DIR=/tmp/chill-unit-fixture
+rm -rf "$CHILL_DIR"; mkdir -p "$CHILL_DIR/ruleset" "$CHILL_DIR/run"
+LOG=/tmp/chill-unit.log; : > "$LOG"
+
+# 只加载函数，不执行子命令
+CHILL_LIB_ONLY=1 . "$SUT"
+# 被测脚本里的路径常量是在 source 时就展开的，这里必须**逐个**重新指向 fixture。
+# 只改 CHILL_DIR 是不够的：EVENTS/STATE/CORE_PID 早已展开成 /data/chill/... 的绝对
+# 路径，漏掉它们的话相关函数会往不存在的路径写，测试看似通过、其实一行都没覆盖到。
+CHILL_DIR=/tmp/chill-unit-fixture
+LOG=/tmp/chill-unit.log
+EVENTS="$CHILL_DIR/events.log"
+STATE="$CHILL_DIR/chill.state"
+CORE_PID="$CHILL_DIR/core.pid"
+PROFILE_FILE="$CHILL_DIR/profile"
+MODE_FILE="$CHILL_DIR/mode"
+RESTART_FLAG="$CHILL_DIR/restart"
+THERMAL_ECO="$CHILL_DIR/thermal-eco"
+IDLE_LEASE="$CHILL_DIR/idle"
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "build_filters：结构与裁剪"
+
+CHILL_REGIONS=''
+build_filters
+has "TW 含中文名"            "$FILTER_TW" '台湾'
+has "TW 含字母代码与边界"     "$FILTER_TW" '(^|[^A-Za-z])TWN?([^A-Za-z]|$)'
+has "TW 前置忽略大小写 flag"  "$FILTER_TW" '(?i)'
+has "JP 正确"                "$FILTER_JP" '日本'
+has "SG 正确"                "$FILTER_SG" '新加坡'
+has "US 正确"                "$FILTER_US" '美国'
+
+# (?i) 必须只出现一次且在最前面——否则 Go 能编译但 python 测试脚本会失败，
+# 归属测试就成了盲区。
+n=$(printf '%s' "$FILTER_UNION" | grep -o '(?i)' | wc -l | tr -d ' ')
+eq "并集里 (?i) 只出现一次" "$n" "1"
+case "$FILTER_UNION" in '(?i)('*) ok "并集以 (?i)( 开头" ;; *) ng "并集未以 (?i)( 开头" ;; esac
+
+has "并集含四个地区" "$FILTER_UNION" '台湾'
+has "并集含日本"     "$FILTER_UNION" '日本'
+has "并集含新加坡"   "$FILTER_UNION" '新加坡'
+has "并集含美国"     "$FILTER_UNION" '美国'
+
+full_len=${#FILTER_UNION}
+CHILL_REGIONS='TW JP'
+build_filters
+cut_len=${#FILTER_UNION}
+# 花括号不能省：中文 locale 下 $cut_len 紧跟全角「）」会被当成变量名的一部分，
+# set -u 直接报 unbound。今天已在 spike.sh 里踩过三次，这里是第四次。
+if [ "$cut_len" -lt "$full_len" ]; then ok "CHILL_REGIONS 裁剪生效（${full_len} -> ${cut_len}）"
+else ng "CHILL_REGIONS 未生效（${full_len} -> ${cut_len}）"; fi
+case "$FILTER_UNION" in *新加坡*) ng "裁剪后仍含新加坡" ;; *) ok "裁剪后不含新加坡" ;; esac
+
+CHILL_REGIONS='XX'
+if build_filters 2>/dev/null; then ng "全是未知地区时应拒绝渲染"; else ok "全是未知地区时返回失败"; fi
+CHILL_REGIONS=''
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "strip_owned：自管区间边界"
+
+SAMPLE='0:	from all lookup local
+5210:	from all fwmark 0x80000/0xff0000 lookup main
+5270:	from all lookup 52
+8989:	from 192.168.0.7 lookup main
+8990:	from 192.168.0.8 lookup main
+8999:	from 192.168.0.9 lookup main
+9000:	from all iif br-lan goto 9002
+9099:	from all nop
+9100:	from all lookup main
+32766:	from all lookup main'
+
+out=$(printf '%s\n' "$SAMPLE" | strip_owned)
+case "$out" in *5210:*) ok "保留 Tailscale 5210" ;; *) ng "误删了 Tailscale 5210" ;; esac
+case "$out" in *5270:*) ok "保留 Tailscale 5270" ;; *) ng "误删了 Tailscale 5270" ;; esac
+case "$out" in *8989:*) ok "保留区间下界外 8989" ;; *) ng "误删了 8989（区间外）" ;; esac
+case "$out" in *9100:*) ok "保留区间上界外 9100" ;; *) ng "误删了 9100（区间外）" ;; esac
+case "$out" in *8990:*) ng "未剔除下界 8990" ;; *) ok "剔除下界 8990" ;; esac
+case "$out" in *8999:*) ng "未剔除绕行规则 8999" ;; *) ok "剔除绕行规则 8999" ;; esac
+case "$out" in *9099:*) ng "未剔除上界 9099" ;; *) ok "剔除上界 9099" ;; esac
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "render：占位符与拒绝渲染"
+
+cat > "$CHILL_DIR/template.yaml" <<'YAML'
+external-controller: '${CONTROLLER}'
+a: '${SUB_URL}'
+b: '${FILTER_TW}'
+c: [${CN_CIDR}
+   10.0.0.0/8]
+YAML
+printf '1.0.1.0/24\n1.0.2.0/23\n' > "$CHILL_DIR/ruleset/cn.list"
+TEMPLATE="$CHILL_DIR/template.yaml"; CN_LIST="$CHILL_DIR/ruleset/cn.list"
+CONFIG="$CHILL_DIR/run/config.yaml"; RUN_DIR="$CHILL_DIR/run"
+
+# 打桩：让 mihomo -t 永远通过，把渲染与校验解耦
+BIN=/tmp/chill-unit-mihomo
+printf '#!/bin/sh\nexit 0\n' > "$BIN"; chmod +x "$BIN"
+
+# 用 SUB_URL（不是 SUB_SNAP1）：2026-09-16 核对实际数据后 snap1/snap2 改为
+# type:file 静态快照，chill.sh 的 render() 现在只校验+导出 SUB_URL 这一个。
+SUB_URL='https://ok.example/a'
+if render; then
+  ok "正常值渲染成功"
+  body=$(cat "$CONFIG")
+  case "$body" in *'${'*) ng "仍有未替换占位符" ;; *) ok "占位符全部替换" ;; esac
+  # 光「没有残留 ${...}」不够：awk 对未导出进子进程环境的变量会替换成空字符串，
+  # 那样这条断言照样会通过、但值是错的（空的）。之前 render() 少导出 SUB_URL
+  # 到 awk 环境这个真实 bug 就是被这个盲区放过的，所以这里必须直接查替换后的值。
+  has "SUB_URL 已注入正确的值（不是空字符串替换）" "$body" 'https://ok.example/a'
+  has "CN_CIDR 已注入（末尾连逗号）" "$body" '1.0.2.0/23,'
+  has "filter 已注入"  "$body" '(?i)'
+else
+  ng "正常值渲染失败"
+fi
+
+SUB_URL="https://bad.example/'quote"
+if render 2>/dev/null; then ng "含单引号的订阅值应被拒绝渲染"; else ok "含单引号时拒绝渲染"; fi
+SUB_URL='https://ok.example/a'
+
+# 校验不过时必须保留旧配置，不能把正在用的配置换坏
+printf '#!/bin/sh\nexit 1\n' > "$BIN"; chmod +x "$BIN"
+cp "$CONFIG" "$CHILL_DIR/run/prev.yaml"
+render 2>/dev/null
+if cmp -s "$CONFIG" "$CHILL_DIR/run/prev.yaml"; then ok "校验失败时保留旧配置"; else ng "校验失败却覆盖了旧配置"; fi
+printf '#!/bin/sh\nexit 0\n' > "$BIN"; chmod +x "$BIN"
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "direct_dns4：直连 DNS 补上运营商的 IPv4"
+
+# 10-03 真机的样子：/etc/resolv.conf 只剩 v6，v4 只在 resolv.conf.auto 里
+RESOLV_AUTO="$CHILL_DIR/resolv.auto"; RESOLV_SYS="$CHILL_DIR/resolv.sys"
+printf '# Interface zte_wan\nnameserver 222.66.251.8\nnameserver 116.236.159.8\n# Interface zte_wan6\nnameserver 240e:58:c000:1700:222:66:251:8\n' > "$RESOLV_AUTO"
+printf 'nameserver 240e:58:c000:1700:222:66:251:8\nnameserver 116.236.159.8\n' > "$RESOLV_SYS"
+eq "只取 v4、去重、保持顺序" "$(direct_dns4)" ', "222.66.251.8", "116.236.159.8"'
+printf 'nameserver 240e::1\n' > "$RESOLV_AUTO"; printf 'nameserver fe80::1\n' > "$RESOLV_SYS"
+eq "没有 v4 时输出空" "$(direct_dns4)" ""
+rm -f "$RESOLV_AUTO" "$RESOLV_SYS"
+eq "文件都不在时输出空" "$(direct_dns4)" ""
+printf 'nameserver 1.1.1.1\nnameserver 1.1.1.2\nnameserver 1.1.1.3\nnameserver 1.1.1.4\nnameserver 1.1.1.5\n' > "$RESOLV_AUTO"
+eq "最多 4 个" "$(direct_dns4)" ', "1.1.1.1", "1.1.1.2", "1.1.1.3", "1.1.1.4"'
+
+printf 'direct-nameserver: ["system://"${DIRECT_DNS_EXTRA}]\n' > "$CHILL_DIR/template.yaml"
+printf 'nameserver 10.1.2.3\n' > "$RESOLV_AUTO"
+render; eq "渲染进 direct-nameserver" "$(cat "$CONFIG")" 'direct-nameserver: ["system://", "10.1.2.3"]'
+eq "记下渲染时用的值" "$RENDERED_DNS_EXTRA" ', "10.1.2.3"'
+: > "$RESOLV_AUTO"
+render; eq "拿不到 v4 时退回只有 system://" "$(cat "$CONFIG")" 'direct-nameserver: ["system://"]'
+rm -f "$RESOLV_AUTO"
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "restore_dns：幂等与触发条件"
+
+# 这里测的是 chill.sh 里**真实的** restore_dns。
+# 早先的写法是在单测里重新定义整个 restore_dns 再去断言，那等于测自己写的替身，
+# 永远会通过、毫无价值。改为只注入它依赖的两个外部路径（fixture 配置 + stub
+# init 脚本），函数体本身完全不动。
+DHCP_BACKUP="$CHILL_DIR/dhcp.backup"
+DHCP_CONF="$CHILL_DIR/etc-config-dhcp"
+DNSMASQ_INIT="$CHILL_DIR/stub-dnsmasq-init"
+RELOAD_LOG="$CHILL_DIR/reloads"
+
+: > "$RELOAD_LOG"
+cat > "$DNSMASQ_INIT" <<STUB
+#!/bin/sh
+echo "\$1" >> "$RELOAD_LOG"
+STUB
+chmod +x "$DNSMASQ_INIT"
+reloads() { wc -l < "$RELOAD_LOG" | tr -d ' '; }
+
+printf 'config dnsmasq\n' > "$DHCP_BACKUP"
+printf 'config dnsmasq\n' > "$DHCP_CONF"
+
+restore_dns; eq "内容一致时不 reload" "$(reloads)" "0"
+
+printf 'config dnsmasq\noption noresolv 1\n' > "$DHCP_CONF"
+restore_dns; eq "内容不同时回滚并 reload 一次" "$(reloads)" "1"
+if cmp -s "$DHCP_BACKUP" "$DHCP_CONF"; then ok "回滚后内容与备份一致"; else ng "回滚后内容仍不一致"; fi
+
+restore_dns; eq "回滚后再调不重复 reload（幂等）" "$(reloads)" "1"
+
+# 没有备份时必须安全返回，而不是把配置清掉
+rm -f "$DHCP_BACKUP"
+printf 'config dnsmasq\noption noresolv 1\n' > "$DHCP_CONF"
+if restore_dns; then ok "无备份时安全返回 0"; else ng "无备份时返回了失败"; fi
+eq "无备份时不 reload" "$(reloads)" "1"
+has "无备份时不改动现有配置" "$(cat "$DHCP_CONF")" 'noresolv'
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "event：状态迁移留痕（DT3）"
+
+rm -f "$EVENTS"; last_event=''
+event "overheat cpuss=86 -> direct"
+if [ -f "$EVENTS" ]; then ok "写出 events.log"; else ng "未写出 events.log"; fi
+has "记录含状态与原因" "$(cat "$EVENTS" 2>/dev/null)" 'overheat'
+has "记录含 UTC 时间戳" "$(cat "$EVENTS" 2>/dev/null)" 'T'
+
+# 同一状态重复上报不应反复记账，否则 20 行很快被同一条刷满
+event "overheat cpuss=86 -> direct"
+eq "同状态去重" "$(wc -l < "$EVENTS" | tr -d ' ')" "1"
+
+event "recover cpuss=63 -> running"
+eq "状态变化后追加" "$(wc -l < "$EVENTS" | tr -d ' ')" "2"
+
+# 截断到 20 行：触屏底部只渲染最近 1 条，后台展开 20 条
+i=0
+while [ $i -lt 40 ]; do i=$((i+1)); event "probe-${i} -> direct"; done
+eq "截断到 20 行" "$(wc -l < "$EVENTS" | tr -d ' ')" "20"
+has "保留的是最新一条" "$(tail -1 "$EVENTS")" 'probe-40'
+
+# 路径不可写时必须静默失败，不能把错误灌进 procd 日志
+EVENTS_SAVE="$EVENTS"
+EVENTS=/nonexistent-dir-xyz/events.log; last_event=''
+err=$(event "x -> direct" 2>&1 >/dev/null)
+eq "不可写时无 stderr 噪音" "$err" ""
+EVENTS="$EVENTS_SAVE"
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "note_crash：崩溃计数与窗口重置"
+
+# 这些只在故障时才执行，平时看不出对错，正是最需要回归保护的部分。
+crash_n=0; crash_t0=0
+note_crash; eq "第 1 次崩溃后计数为 1" "$crash_n" "1"
+note_crash; eq "第 2 次崩溃后计数为 2" "$crash_n" "2"
+if note_crash; then ng "第 3 次应返回非 0（达上限）"; else ok "第 3 次达上限返回非 0"; fi
+eq "达上限时计数为 3" "$crash_n" "3"
+
+# 距首次崩溃超过窗口应重置。此前「启动即退出」那条路径没有重置逻辑，
+# 累计 3 次就永久 gaveup，哪怕间隔几小时——这条断言就是防它回归。
+crash_t0=$(( $(date +%s) - CRASH_WINDOW - 60 ))
+if note_crash; then ok "超窗后重置并可继续重试"; else ng "超窗后仍判定为达上限"; fi
+eq "超窗重置后计数归 1" "$crash_n" "1"
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "next_backoff：2 / 5 / 15 分钟递增"
+
+degrade_n=0; backoff=0
+# 用范围断言而不是精确相等：backoff 是拿函数内外两次 date +%s 相减算出来的，
+# 只要恰好跨秒就会得到 119 或 121。精确比对会让这几条随机变红，然后被
+# 「重跑一下就好了」糊弄过去——那种用例比没有用例更糟。
+near() { # near <名称> <实际> <期望> [容差秒]
+  _tol=${4:-2}
+  _d=$(( $2 - $3 )); [ "$_d" -lt 0 ] && _d=$(( 0 - _d ))
+  if [ "$_d" -le "$_tol" ]; then ok "$1"; else ng "$1（期望 ~$3 实际 $2）"; fi
+}
+
+now=$(date +%s); next_backoff
+w1=$((backoff - now)); near "第 1 次退避约 120 秒" "$w1" 120
+now=$(date +%s); next_backoff
+w2=$((backoff - now)); near "第 2 次退避约 300 秒" "$w2" 300
+now=$(date +%s); next_backoff
+w3=$((backoff - now)); near "第 3 次退避约 900 秒" "$w3" 900
+now=$(date +%s); next_backoff
+w4=$((backoff - now)); near "第 4 次及以后保持约 900 秒" "$w4" 900
+if [ "$w1" -ge "$DWELL_SECONDS" ]; then ok "退避不低于驻留下限（${DWELL_SECONDS}s）"; else ng "退避低于驻留下限"; fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "truncate_log：超限才截断"
+
+LOG="$CHILL_DIR/trunc.log"
+: > "$LOG"; i=0
+while [ $i -lt 50 ]; do i=$((i+1)); echo "line-${i}" >> "$LOG"; done
+small=$(wc -c < "$LOG" | tr -d ' ')
+truncate_log
+eq "未超限时不动" "$(wc -c < "$LOG" | tr -d ' ')" "$small"
+
+# 撑到超过 512KB
+i=0
+while [ $i -lt 700 ]; do i=$((i+1)); head -c 1024 /dev/zero | tr '\0' 'x' >> "$LOG"; echo >> "$LOG"; done
+before=$(wc -c < "$LOG" | tr -d ' ')
+if [ "$before" -gt "$LOG_MAX_BYTES" ]; then ok "构造出超限日志（${before} 字节）"; else ng "构造失败，未超限"; fi
+truncate_log
+after=$(wc -c < "$LOG" | tr -d ' ')
+if [ "$after" -lt "$before" ]; then ok "超限后被截断（${before} -> ${after}）"; else ng "超限却未截断"; fi
+if [ "$after" -le "$LOG_MAX_BYTES" ]; then ok "截断后不超过上限"; else ng "截断后仍超上限"; fi
+if [ -f "$LOG.tmp" ]; then ng "遗留了 .tmp 临时文件"; else ok "未遗留 .tmp"; fi
+
+# 核心进程一直开着日志（>>）：截断后它的写入要落进同一个文件，不能写进删掉的旧 inode
+i=0
+while [ $i -lt 700 ]; do i=$((i+1)); head -c 1024 /dev/zero | tr '\0' 'y' >> "$LOG"; echo >> "$LOG"; done
+ino_before=$(ls -i "$LOG" | awk '{print $1}')
+exec 3>>"$LOG"
+truncate_log
+echo "core-still-writing" >&3
+exec 3>&-
+eq "截断后还是同一个文件（inode 不变）" "$(ls -i "$LOG" | awk '{print $1}')" "$ino_before"
+has "开着的 fd 写进了当前日志" "$(tail -n 1 "$LOG")" "core-still-writing"
+if [ "$(wc -c < "$LOG" | tr -d ' ')" -le "$LOG_MAX_BYTES" ]; then ok "fd 续写后仍不超上限"; else ng "fd 续写后超上限（写到了偏移处？）"; fi
+LOG=/tmp/chill-unit.log
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "档位：读取、生效值、渲染"
+
+rm -f "$PROFILE_FILE" "$THERMAL_ECO"
+eq "没有档位文件 = standard" "$(profile_read)" "standard"
+echo turbo > "$PROFILE_FILE"; eq "不认识的值当 standard" "$(profile_read)" "standard"
+echo eco > "$PROFILE_FILE";   eq "eco 读出来是 eco" "$(profile_read)" "eco"
+echo perf > "$PROFILE_FILE";  : > "$THERMAL_ECO"
+eq "温度降档时生效值是 eco" "$(profile_effective)" "eco"
+eq "温度降档不改用户选的档位" "$(profile_read)" "perf"
+rm -f "$THERMAL_ECO" "$PROFILE_FILE"
+
+cat > "$CHILL_DIR/template.yaml" <<'YAML'
+tcp-concurrent: ${TCP_CONCURRENT}
+keep-alive-interval: ${KEEPALIVE}
+hc: {interval: ${HC_INTERVAL}, timeout: 3000}
+YAML
+render; eq "standard 渲染出以前那套值" "$(cat "$CONFIG")" "$(printf 'tcp-concurrent: false\nkeep-alive-interval: 600\nhc: {interval: 1800, timeout: 3000}')"
+eq "standard 不限核" "$GMP" ""
+echo eco > "$PROFILE_FILE"; render
+eq "eco 渲染" "$(cat "$CONFIG")" "$(printf 'tcp-concurrent: false\nkeep-alive-interval: 900\nhc: {interval: 3600, timeout: 3000}')"
+eq "eco 限 2 核" "$GMP" "2"
+echo perf > "$PROFILE_FILE"; render
+eq "perf 渲染" "$(cat "$CONFIG")" "$(printf 'tcp-concurrent: true\nkeep-alive-interval: 120\nhc: {interval: 600, timeout: 3000}')"
+rm -f "$PROFILE_FILE"
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "家里出口：真实模板的标签行（E3 T2）"
+
+# 用仓库里真实的 template.yaml：小样本模板测不出标签行漏删、规则顺序这类问题。
+TEMPLATE="$HERE/../template.yaml"
+HOME_IP_LIST="$CHILL_DIR/home_ip.list"; rm -f "$HOME_IP_LIST"
+unset CHILL_HOME_EXIT CHILL_HOME_MEDIA CHILL_HOME_IP CHILL_HOME_REST CHILL_HOME_PROBE_URL
+# 行号（找不到给 0），用来比规则先后
+ln_of() { n=$(grep -nF -- "$2" "$1" | head -1 | cut -d: -f1); echo "${n:-0}"; }
+# 去掉整行注释（模板头和说明里本来就写着标签名、占位符名）
+body() { grep -v '^[[:space:]]*#' "$CONFIG"; }
+no_home() { # no_home <名称>：渲染结果里没有任何家里出口的东西
+  b=$(body)
+  case "$b" in *'家里'*|*media_*|*home_ip*|*'#@'*) ng "$1" ;; *) ok "$1" ;; esac
+}
+
+render; eq "没配家里出口：渲染成功" "$?" "0"
+no_home "没配家里出口：一行家里的都没有"
+has "fake-ip-filter 是 rule 模式" "$(cat "$CONFIG")" 'fake-ip-filter-mode: rule'
+has "fake-ip-filter 末尾 MATCH,fake-ip" "$(cat "$CONFIG")" '- MATCH,fake-ip'
+if body | grep -q '\${[A-Z_]*}'; then ng "仍有未替换占位符"; else ok "占位符全部替换"; fi
+
+CHILL_HOME_MEDIA=1; CHILL_HOME_IP=1; CHILL_HOME_REST=1
+render; no_home "只开开关、没有 CHILL_HOME_EXIT：照样一行都没有"
+
+for bad in '10.0.0.1' '10.0.0.1:' ':1080' '1.2.3.4:70000' '1.2.3.4:0' '1.2.3.256:80' '1.2.3:80' 'a.b.c.d:1' '1.2.3.4:80:1' "1.2.3.4:1080'"; do
+  CHILL_HOME_EXIT="$bad"
+  if render; then no_home "坏地址 [$bad]：不渲染、render 不失败"; else ng "坏地址 [$bad] 让 render 失败了"; fi
+done
+unset CHILL_HOME_MEDIA CHILL_HOME_IP CHILL_HOME_REST
+
+CHILL_HOME_EXIT='192.0.2.10:1080'
+render; b=$(body)
+has "配了地址：有 家里" "$b" '{name: 家里, type: socks5, server: 192.0.2.10, port: 1080, udp: false, interface-name: tailscale0}'
+has "配了地址：版权组" "$b" '{name: 家里出口, type: fallback, proxies: [家里, DIRECT], url: '"'"'http://connect.rom.miui.com/generate_204'"'"''
+has "配了地址：家里 IP 组退回 🐟" "$b" 'proxies: [家里, 🐟 漏网之鱼]'
+has "配了地址：版权规则集先下好" "$b" 'media_iqiyi:'
+case "$b" in *'#@'*) ng "标签没去掉" ;; *) ok "标签都去掉了" ;; esac
+case "$b" in *'RULE-SET,media_cn,'*|*'MATCH,家里IP'*|*home_ip*) ng "开关都关着却有家里的规则" ;; *) ok "开关都关着：没有家里的规则" ;; esac
+
+CHILL_HOME_PROBE_URL='http://example.cn/204'
+render; has "探测地址来自 env" "$(cat "$CONFIG")" "url: 'http://example.cn/204'"
+CHILL_HOME_PROBE_URL="http://x/'a"
+render; has "探测地址含单引号：用默认" "$(cat "$CONFIG")" "url: 'http://connect.rom.miui.com/generate_204'"
+unset CHILL_HOME_PROBE_URL
+
+CHILL_HOME_MEDIA=1
+render
+fm=$(ln_of "$CONFIG" '- RULE-SET,media_iqiyi,fake-ip'); fc=$(ln_of "$CONFIG" '- RULE-SET,cn_domain,real-ip')
+[ "$fm" -gt 0 ] && [ "$fm" -lt "$fc" ] && ok "版权 fake-ip 在 cn_domain real-ip 之前" || ng "版权 fake-ip 位置不对（${fm} / ${fc}）"
+rq=$(ln_of "$CONFIG" '- AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,media_cn)),REJECT')
+rm_=$(ln_of "$CONFIG" '- RULE-SET,media_cn,家里出口')
+rc=$(ln_of "$CONFIG" '- RULE-SET,cn_domain,DIRECT')
+rp=$(ln_of "$CONFIG" '- DOMAIN,detectportal.firefox.com,DIRECT')
+[ "$rp" -gt 0 ] && [ "$rp" -lt "$rq" ] && [ "$rq" -lt "$rm_" ] && [ "$rm_" -lt "$rc" ] \
+  && ok "门户检测 < 拒绝 QUIC < 版权规则 < cn_domain" || ng "版权规则位置不对（${rp} ${rq} ${rm_} ${rc}）"
+eq "VoWiFi 仍是第一条规则" "$(grep -A1 '^rules:' "$CONFIG" | tail -1; grep -m1 '^  - DOMAIN-SUFFIX,3gppnetwork.org' "$CONFIG")" "$(printf '\n  - DOMAIN-SUFFIX,3gppnetwork.org,📞 VoWiFi')"
+case "$(cat "$CONFIG")" in *home_ip*|*'MATCH,家里IP'*) ng "只开版权却带出了别的" ;; *) ok "只开版权：没有家里 IP 和其余" ;; esac
+unset CHILL_HOME_MEDIA
+
+CHILL_HOME_IP=1
+render; case "$(cat "$CONFIG")" in *home_ip*) ng "表不存在却渲染了 home_ip" ;; *) ok "表不存在：家里 IP 不渲染" ;; esac
+printf '\n  \n' > "$HOME_IP_LIST"
+render; case "$(cat "$CONFIG")" in *home_ip*) ng "表只有空白却渲染了 home_ip" ;; *) ok "表只有空白：不渲染" ;; esac
+printf '+.example-bank.cn\n' > "$HOME_IP_LIST"
+render; b=$(cat "$CONFIG")
+has "表有内容：home_ip provider" "$b" 'home_ip:        {type: file, behavior: domain, format: text, path: ./home_ip.list}'
+fi_=$(ln_of "$CONFIG" '- RULE-SET,home_ip,fake-ip')
+ri=$(ln_of "$CONFIG" '- RULE-SET,home_ip,家里IP')
+[ "$fi_" -gt 0 ] && [ "$fi_" -lt "$fc" ] && [ "$ri" -gt 0 ] && [ "$ri" -lt "$rc" ] \
+  && ok "家里 IP 的 fake-ip 和规则都在 cn_domain 之前" || ng "家里 IP 位置不对（${fi_} ${ri}）"
+unset CHILL_HOME_IP; rm -f "$HOME_IP_LIST"
+
+CHILL_HOME_REST=1
+render
+ra=$(ln_of "$CONFIG" '- RULE-SET,ai_domain,🤖 AI'); rr=$(ln_of "$CONFIG" '- MATCH,家里IP')
+eq "其余：ai_domain 后面第一条规则就是 MATCH" "$(sed -n "$((ra + 1)),\$p" "$CONFIG" | grep -v '^[[:space:]]*#' | head -1)" '  - MATCH,家里IP'
+[ "$rr" -gt "$ra" ] && ok "其余：MATCH 在 ai_domain 之后" || ng "其余：MATCH 位置不对（${ra} / ${rr}）"
+has "其余：原来的 MATCH 还在最后" "$(tail -1 "$CONFIG")" '- MATCH,🐟 漏网之鱼'
+unset CHILL_HOME_REST CHILL_HOME_EXIT
+
+# 常驻的 chill.sh run 只在启动时 source 过 env；agent 改了 env 以后，它自己再渲染也要用新值。
+ENV_FILE="$CHILL_DIR/chill.env"
+printf "SUB_URL='https://ok.example/a'\nCHILL_HOME_EXIT='192.0.2.10:1080'\nCHILL_HOME_MEDIA=1\n" > "$ENV_FILE"
+render; has "env 文件里开了版权：渲染出来" "$(body)" '- RULE-SET,media_cn,家里出口'
+printf "SUB_URL='https://ok.example/a'\nCHILL_HOME_EXIT='192.0.2.10:1080'\n" > "$ENV_FILE"
+render; case "$(body)" in *'RULE-SET,media_cn,家里出口'*) ng "env 里关了，渲染却还开着（用的是旧变量）" ;; *) ok "env 里关了：下次渲染就关" ;; esac
+eq "env 现读不改别的变量" "$SUB_URL" 'https://ok.example/a'
+: > "$ENV_FILE"
+render; no_home "env 里删掉地址：整个不出现"
+CHILL_HOME_EXIT='192.0.2.10:1080'; CHILL_HOME_MEDIA=1
+printf 'if then\n' > "$ENV_FILE"
+render; has "env 文件坏了：沿用现在的设置" "$(body)" '- RULE-SET,media_cn,家里出口'
+rm -f "$ENV_FILE"; ENV_FILE=/nonexistent/chill.env
+unset CHILL_HOME_EXIT CHILL_HOME_MEDIA
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "出口模式：记下与恢复"
+
+API_MODE_OUT='{"mode":"direct","port":0}'; PATCHED=""
+curl() {
+  case "$*" in
+    *PATCH*) PATCHED="$*" ;;
+    *) printf '%s' "$API_MODE_OUT" ;;
+  esac
+}
+rm -f "$MODE_FILE"
+save_mode; eq "记下 direct" "$(cat "$MODE_FILE")" "direct"
+API_MODE_OUT='{"mode":"rule"}'
+restore_mode; has "核心回到 rule 时恢复 direct" "$PATCHED" '{"mode":"direct"}'
+PATCHED=""; echo rule > "$MODE_FILE"
+restore_mode; eq "记下的是 rule 时不用恢复" "$PATCHED" ""
+API_MODE_OUT=''; save_mode; eq "读不到模式时不覆盖记录" "$(cat "$MODE_FILE")" "rule"
+unset -f curl
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "thermal_step：默认关闭、降档、回温"
+
+# 打桩：只记录调用，不真的停核/清规则
+CALLS=""
+kill_core() { CALLS="$CALLS kill"; }
+flush() { CALLS="$CALLS flush"; }
+save_mode() { CALLS="$CALLS save"; }
+crash_n=0
+
+CHILL_TEMP_WARM=""
+if thermal_step 90000; then ng "没设 CHILL_TEMP_WARM 时不该降档"; else ok "没设 CHILL_TEMP_WARM 时不降档"; fi
+[ -f "$THERMAL_ECO" ] && ng "不该留下降档标记" || ok "没有降档标记"
+
+CHILL_TEMP_WARM=67000
+if thermal_step 60000; then ng "低于 WARM 不该降档"; else ok "低于 WARM 不降档"; fi
+if thermal_step 68000; then ok "到 WARM 降档并要求 break"; else ng "到 WARM 没降档"; fi
+[ -f "$THERMAL_ECO" ] && ok "留下降档标记" || ng "没有降档标记"
+has "降档时平稳重启核心（先记模式再停核清理）" "$CALLS" "save kill flush"
+eq "平稳重启不算崩溃" "$crash_n" "0"
+eq "降档后生效值 eco" "$(profile_effective)" "eco"
+
+CALLS=""
+if thermal_step 62000; then ng "只降到 WARM-5°C 不该回档"; else ok "没降够 10°C 不回档"; fi
+if thermal_step 50000; then ng "刚凉下来不该马上回档"; else ok "凉下来先开始计时"; fi
+cool_since=$(( $(date +%s) - COOL_HOLD - 1 ))
+if thermal_step 50000; then ok "凉够 ${COOL_HOLD} 秒回到原档位"; else ng "凉够了没回档"; fi
+[ -f "$THERMAL_ECO" ] && ng "回档后降档标记还在" || ok "回档后降档标记清掉"
+has "回档也平稳重启" "$CALLS" "kill flush"
+
+echo eco > "$PROFILE_FILE"; CALLS=""
+if thermal_step 90000; then ng "本来就是 eco 不该再重启"; else ok "本来就是 eco 不动"; fi
+rm -f "$PROFILE_FILE"; CHILL_TEMP_WARM=""
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "wait_core_ready：起核心后等 API 和 dns.listen，代替固定 sleep 5"
+
+# curl 在管道里跑（子 shell），计数和参数只能记到文件里。sleep/date 打桩成假时钟，
+# 测试不真的等。kill 打桩：KILL_ALIVE_UNTIL 次之后核心「退出」。
+CURL_LOG="$CHILL_DIR/curl.log"
+curl() {
+  echo "$*" >> "$CURL_LOG"
+  _n=$(wc -l < "$CURL_LOG")
+  if [ "$_n" -ge "$CURL_OK_FROM" ]; then printf 200; else printf 000; fi
+}
+dns_answers() { [ "$DNS_OK" = 1 ]; }
+FAKE_NOW=1000000; SLEPT=0; KILLS=0
+sleep() { SLEPT=$((SLEPT+1)); FAKE_NOW=$((FAKE_NOW+$1)); }
+date() { if [ "${1:-}" = "+%s" ]; then echo "$FAKE_NOW"; else command date "$@"; fi; }
+kill() { KILLS=$((KILLS+1)); [ "$KILLS" -le "$KILL_ALIVE_UNTIL" ]; }
+ready_case() { # ready_case <curl 第几次起成功> <dns 能否应答> <核心活几次检查>
+  : > "$CURL_LOG"; CURL_OK_FROM=$1; DNS_OK=$2; KILL_ALIVE_UNTIL=$3; SLEPT=0; KILLS=0
+  wait_core_ready 4242; RC=$?
+}
+
+CHILL_SECRET=s3cret
+ready_case 1 1 99
+eq "第一次就就绪：返回 0" "$RC" "0"
+eq "第一次就就绪：不睡" "$SLEPT" "0"
+has "探针带鉴权头（9-17 事故）" "$(cat "$CURL_LOG")" "Authorization: Bearer s3cret"
+has "单次探测 -m 1 限时" "$(cat "$CURL_LOG")" "-m 1 "
+has "探的是 /version" "$(cat "$CURL_LOG")" "127.0.0.1:9999/version"
+
+ready_case 3 1 99
+eq "第 3 次就绪：返回 0" "$RC" "0"
+eq "第 3 次就绪：睡 2 次" "$SLEPT" "2"
+
+ready_case 1 0 99
+eq "API 通但 DNS 不应答：到时返回 1" "$RC" "1"
+eq "最多等 CORE_READY_MAX 秒" "$SLEPT" "$CORE_READY_MAX"
+[ "$CORE_READY_MAX" -ge 5 ] && ok "上限不短于原来的 5 秒" || ng "上限短于 5 秒"
+
+ready_case 99 1 3
+eq "核心中途退出：返回 2" "$RC" "2"
+eq "核心退出后不再探测（活着的 3 次各探一次）" "$(wc -l < "$CURL_LOG" | tr -d ' ')" "3"
+
+ready_case 1 1 0
+eq "核心起来就退出：返回 2、不探测" "$RC:$(wc -l < "$CURL_LOG" | tr -d ' ')" "2:0"
+
+CHILL_SECRET=''
+unset -f curl dns_answers sleep date kill
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "国内直连：nft 集合代替 route-exclude-address 的 CN 段（CHILL_CN_SET）"
+
+# 前面几节把 flush/kill_core 等换成了替身，这里重新加载真函数，再把路径和外部命令接到 fixture。
+CHILL_LIB_ONLY=1 . "$SUT"
+CHILL_DIR=/tmp/chill-unit-fixture; LOG=/tmp/chill-unit.log
+STATE="$CHILL_DIR/chill.state"; CORE_PID="$CHILL_DIR/core.pid"
+PROFILE_FILE="$CHILL_DIR/profile"; MODE_FILE="$CHILL_DIR/mode"; THERMAL_ECO="$CHILL_DIR/thermal-eco"
+TEMPLATE="$HERE/../template.yaml"; CN_LIST="$CHILL_DIR/ruleset/cn.list"   # 真实模板
+CONFIG="$CHILL_DIR/run/config.yaml"; RUN_DIR="$CHILL_DIR/run"
+CN_SET_MARK="$CHILL_DIR/cnset"; CN_NFT="$CHILL_DIR/cn.nft"
+BIN=/tmp/chill-unit-mihomo; printf '#!/bin/sh\nexit 0\n' > "$BIN"; chmod +x "$BIN"
+SUB_URL='https://ok.example/a'
+printf '1.0.1.0/24\n\n1.0.2.0/23\n2400:3200::/32\n' > "$CN_LIST"
+
+NFT_LOG="$CHILL_DIR/nft.log"; IP_LOG="$CHILL_DIR/ip.log"; NFT_FAIL=0; NFT_SEEN=""
+nft() { echo "$*" >> "$NFT_LOG"
+  if [ "${1:-}" = "-f" ]; then NFT_SEEN=$(cat "$2"); [ "$NFT_FAIL" = 0 ]; else return 0; fi; }
+ip() { echo "$*" >> "$IP_LOG"; return 0; }
+restore_dns() { :; }; kill_core() { :; }; check_rules_drift() { :; }
+
+out=$(cn_nft_file); rc=$?
+eq "nft 脚本：生成成功" "$rc" "0"
+has "nft 脚本：区间集合 + auto-merge" "$out" 'flags interval; auto-merge;'
+has "nft 脚本：只收 IPv4、跳过空行" "$out" 'elements = { 1.0.1.0/24, 1.0.2.0/23 }'
+case "$out" in *2400:*) ng "nft 脚本混进了 IPv6" ;; *) ok "nft 脚本：IPv6 段不进集合" ;; esac
+has "nft 脚本：只匹配 br-lan、用 or 打标" "$out" 'iifname "br-lan" ip daddr @cn4 counter meta mark set meta mark or 0x1000000'
+has "nft 脚本：排在 legacy mangle（-150）之后" "$out" 'priority -140;'
+eq "标记位不碰原厂的 0xff0000 / 0xC0" "$(( CN_MARK & 0xff00c0 ))" "0"
+eq "规则优先级在自管区间内、排在 mihomo 的 9000 前" "$(( CN_PRIO >= RULE_LO && CN_PRIO < 9000 && CN_PRIO != BYPASS_PRIO ))" "1"
+printf '' > "$CHILL_DIR/empty.list"
+( CN_LIST="$CHILL_DIR/empty.list"; cn_nft_file >/dev/null ); eq "cn.list 没有 IPv4 段：生成失败" "$?" "1"
+
+: > "$NFT_LOG"; : > "$IP_LOG"
+CHILL_CN_SET=0; cn_set_up
+eq "开关关：不碰 nft" "$(wc -l < "$NFT_LOG" | tr -d ' ')" "0"
+eq "开关关：cn_set=routes、没有标记文件" "$cn_set:$([ -f "$CN_SET_MARK" ] && echo y || echo n)" "routes:n"
+render >/dev/null 2>&1; has "开关关：CN 段照旧写进配置" "$(cat "$CONFIG")" '[1.0.1.0/24, 1.0.2.0/23, 2400:3200::/32,'
+
+CHILL_CN_SET=1; cn_set_up
+eq "开关开：cn_set=nft、留下标记文件" "$cn_set:$([ -f "$CN_SET_MARK" ] && echo y || echo n)" "nft:y"
+has "开关开：先删旧表再载入" "$(cat "$NFT_LOG")" 'delete table inet chillcn'
+has "开关开：载入的就是生成的脚本" "$NFT_SEEN" 'table inet chillcn {'
+has "开关开：加 fwmark 规则回 main" "$(cat "$IP_LOG")" 'rule add fwmark 0x1000000/0x1000000 priority 8998 lookup main'
+eq "开关开：临时 nft 文件已删" "$([ -f "$CN_NFT" ] && echo y || echo n)" "n"
+render >/dev/null 2>&1; body=$(cat "$CONFIG")
+case "$body" in *1.0.1.0/24*) ng "开关开：配置里还有 CN 段" ;; *) ok "开关开：CN 段不再写进配置" ;; esac
+case "$body" in *'[,'*) ng "开关开：渲染出了「[,」" ;; *) ok "开关开：没有「[,」" ;; esac
+has "开关开：私网段照旧" "$body" '10.0.0.0/8'
+write_state running ""; has "state 带 cn_set" "$(cat "$STATE")" '"cn_set":"nft"'
+
+: > "$IP_LOG"; NFT_FAIL=1; cn_set_up
+eq "nft 载入失败：cn_set=failed、没有标记文件" "$cn_set:$([ -f "$CN_SET_MARK" ] && echo y || echo n)" "failed:n"
+case "$(cat "$IP_LOG")" in *'rule add'*) ng "nft 失败后仍加了规则" ;; *) ok "nft 失败：不加规则" ;; esac
+render >/dev/null 2>&1; has "nft 失败：退回把 CN 段写进配置" "$(cat "$CONFIG")" '1.0.1.0/24'
+NFT_FAIL=0
+
+cn_set_up; : > "$NFT_LOG"; flush
+has "flush：删掉 inet chillcn" "$(cat "$NFT_LOG")" 'delete table inet chillcn'
+eq "flush：删掉标记文件" "$([ -f "$CN_SET_MARK" ] && echo y || echo n)" "n"
+unset -f nft ip restore_dns kill_core check_rules_drift
+CHILL_CN_SET=0
+
+sec "停机后写 stopped"
+rm -f "$CORE_PID"; mark_stopped
+has "mark_stopped：state=stopped" "$(cat "$STATE")" '"state":"stopped"'
+has "mark_stopped：没有核心 pid" "$(cat "$STATE")" '"core_pid":0'
+has "mark_stopped：没有启动时间" "$(cat "$STATE")" '"started_at":""'
+if command -v python3 >/dev/null 2>&1; then
+  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$STATE" && ok "mark_stopped：是合法 JSON" || ng "mark_stopped：不是合法 JSON"
+fi
+
+sec "换档位马上写进 chill.state"
+write_state running ""
+echo eco > "$PROFILE_FILE"; state_profile_now
+has "state_profile_now：profile=eco" "$(cat "$STATE")" '"profile":"eco"'
+has "state_profile_now：profile_effective=eco" "$(cat "$STATE")" '"profile_effective":"eco"'
+has "state_profile_now：别的字段不动" "$(cat "$STATE")" '"state":"running"'
+rm -f "$PROFILE_FILE"; state_profile_now
+has "state_profile_now：回到 standard" "$(cat "$STATE")" '"profile":"standard","profile_effective":"standard"'
+rm -f "$STATE"; state_profile_now; eq "state_profile_now：没有 state 文件就不建" "$([ -f "$STATE" ] && echo y || echo n)" "n"
+
+sec "息屏暂停租约（6e）"
+rm -f "$IDLE_LEASE"
+eq "没有租约：不暂停" "$(idle_paused && echo y || echo n)" "n"
+echo $(( $(date +%s) + 120 )) > "$IDLE_LEASE"
+eq "租约没到期：暂停" "$(idle_paused && echo y || echo n)" "y"
+echo $(( $(date +%s) - 1 )) > "$IDLE_LEASE"
+eq "租约过期（核心没了）：不暂停" "$(idle_paused && echo y || echo n)" "n"
+echo 'garbage' > "$IDLE_LEASE"
+eq "读不懂：不暂停" "$(idle_paused && echo y || echo n)" "n"
+rm -f "$IDLE_LEASE"
+
+# ─────────────────────────────────────────────────────────────────────────────
+printf '\n=== 结果：%d 通过 / %d 失败\n' "$PASS" "$FAIL"
+rm -rf "$CHILL_DIR" "$BIN"
+[ "$FAIL" -eq 0 ]
