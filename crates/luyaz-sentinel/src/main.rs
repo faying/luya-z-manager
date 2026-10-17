@@ -6,6 +6,10 @@
 //! A real (non-shadow) run first takes the one-sentinel lock (`sys::INSTANCE_LOCK`, env
 //! `LUYAZ_SENTINEL_LOCK` for tests); held by another copy = exit 3 before anything is touched.
 
+/// Read from the file by the core (luyaz-core versions.rs), never by running the program.
+#[used]
+static VERSION_MARK: &str = concat!("LUYAZ_VERSION=", env!("CARGO_PKG_VERSION"));
+
 /// `<name> <version> (<commit>)`: the commit from LUYAZ_COMMIT (tools/luyaz ship passes it)
 #[cfg(target_os = "linux")]
 fn version_line(name: &str) -> String {

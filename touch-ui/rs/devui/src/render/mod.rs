@@ -208,6 +208,7 @@ impl Source for Replay {
             speedtest: true,
             servers: true,
             battery: false,
+            versions: false,
             alerts: true,
             diagnose: a.diag,
         }
@@ -300,6 +301,9 @@ impl Source for Replay {
         false
     }
     fn alerts_mark_all_read(&mut self) {
+        self.acted();
+    }
+    fn versions_check(&mut self) {
         self.acted();
     }
     /// profile 0 is the one in use; another arms

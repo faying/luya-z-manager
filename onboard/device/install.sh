@@ -132,6 +132,8 @@ install_guard() {
              luyaz-fallback.sh; do
         put "$P/guard/$f" "$S/$f" 755
     done
+    # the device scripts' version (docs/designs/component-versions.md); older kits have none
+    [ ! -f "$P/guard/VERSION" ] || put "$P/guard/VERSION" "$S/VERSION" 644
     put "$P/guard/u60-ship.sh" "$S/luyaz-ship.sh" 755
     put "$P/guard/datad-trial.sh" "$S/datad-trial.sh" 755
     place_recover

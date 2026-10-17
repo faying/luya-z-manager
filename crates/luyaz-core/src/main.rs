@@ -43,6 +43,7 @@ mod serve;
 mod svcwatch;
 mod server;
 mod v2;
+mod versions;
 mod watchdog;
 mod wifi;
 
@@ -287,6 +288,10 @@ fn probe(cfg: &Cfg, secs: u64) {
     });
     println!("{}", serde_json::to_string_pretty(&out).unwrap());
 }
+
+/// Read from the file (the install kit's versions.json), never by running the program.
+#[used]
+static VERSION_MARK: &str = concat!("LUYAZ_VERSION=", env!("CARGO_PKG_VERSION"));
 
 /// `<name> <version> (<commit>)`: the commit from LUYAZ_COMMIT (tools/luyaz ship passes it)
 fn version_line(name: &str) -> String {

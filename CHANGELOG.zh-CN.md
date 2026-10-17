@@ -12,11 +12,16 @@
 | `scripts` | 设备脚本（体检、启动脚本等） | `touch-ui/scripts/VERSION` |
 
 每个程序用 `--version` 报版本，例如 `luyaz-core 1.0.0 (6e606ec)`。
-平时写在 **Unreleased** 下、每条标组件名；那个组件发版时挪进对应的版本段。`Requires:` 写需要的其他组件最低版本。
+平时写在 **Unreleased** 下，格式 `- <组件>: 内容`（例如 `- touch: …`）；`tools/luyaz bump <组件> <patch|minor|major>` 会把它们挪成新的版本段。`Requires:` 写需要的其他组件最低版本。
 
 英文版是 [CHANGELOG.md](CHANGELOG.md)。
 
 ## Unreleased
+
+- core: `GET /v2/versions` 列出每个组件装着的版本和本仓库 `versions.json` 里的最新版本；核心每天查一次（真漫游时不查；`LUYAZ_VERSION_CHECK=0` 关掉），`POST /v2/versions/check` 立刻查。不会自动安装。
+- lweb: 设备信息页加「组件版本」一组和「检查更新」按钮。
+- touch: 系统页加「组件版本」卡片；「检查更新」让核心立刻去查。
+- scripts: `VERSION` 随脚本放到 `/data/luyaz/scripts/`，设备上能读到脚本的版本。
 
 ## core 1.0.0、lweb 1.0.0、sentinel 1.0.0、touch 1.0.0、scripts 1.0.0 — 2026-10-17
 

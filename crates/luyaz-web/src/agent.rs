@@ -74,6 +74,9 @@ impl Caller {
 
 /// Paths u60d's compat layer serves with the agent's reply (exact, or a prefix ending in `/`).
 const ON_U60D: &[&str] = &[
+    // component versions, installed and newest (u60d versions.rs; /v2/versions, not under /api)
+    "/versions",
+    "/versions/check",
     "/api/netinfo",
     "/api/netinfo/scan",
     // 8d-2: "use for this SIM" on /router/apn (compat ops::apn_use)

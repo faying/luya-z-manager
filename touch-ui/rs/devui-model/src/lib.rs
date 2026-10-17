@@ -100,6 +100,13 @@ pub struct Model {
 
     pub battery_est: Option<String>,
 
+    /// component versions (luyaz-core GET /v2/versions), in its order; empty: not read yet
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub versions: Vec<ver_row_t>,
+    /// when the core last looked at the public repo, worded (「3 小时前」, 「检查失败」…)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub versions_checked: Option<String>,
+
     pub bl_panel_lit: i32,
     pub bl_is_on: i32,
     pub bl_is_lit: i32,

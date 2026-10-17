@@ -192,6 +192,10 @@ impl App {
         if crate::engines::chill_idle::enabled() {
             crate::engines::chill_idle::spawn(app.inner.exec.hub().clone());
         }
+        // component versions: the daily look at the public repo's versions.json; LUYAZ_VERSION_CHECK=0
+        if crate::versions::enabled() {
+            crate::versions::spawn(app.clone());
+        }
         // T9c: the boot line's facts and the key.log backfill, a minute into the boot
         if crate::longterm::enabled() {
             tokio::spawn(crate::longterm::boot_task());
@@ -344,7 +348,9 @@ impl App {
             .route("/control", post(control))
             .route("/v2/sentinel/event", post(sentinel_event))
             .route("/v2/scorecard", get(scorecard).post(scorecard))
-            .route("/v2/longterm/calib", post(longterm_calib));
+            .route("/v2/longterm/calib", post(longterm_calib))
+            .route("/v2/versions", get(versions))
+            .route("/v2/versions/check", post(versions_check));
         // M6b: the screen's agent-shaped API (`/v2/api/...`, compat's `/api/...` routes), loopback
         // listener only. Nested at `/v2`: the routes above are static and win over the nest's tail.
         if let Some(ui) = ui {
@@ -775,6 +781,19 @@ async fn longterm_calib(
             Json(json!({"ok": false, "error": e.to_string()})),
         )
             .into_response(),
+    }
+}
+
+/// Component versions, installed and newest (versions.rs).
+async fn versions() -> Json<Value> {
+    Json(crate::versions::report())
+}
+/// Look at the public repo now (the screen's and the web's 「检查更新」). The check runs on its own
+/// task: the screen hangs up after a second and reads the answer later.
+async fn versions_check() -> Json<Value> {
+    match tokio::spawn(crate::versions::check()).await {
+        Ok(v) => Json(v),
+        Err(_) => Json(crate::versions::report()),
     }
 }
 

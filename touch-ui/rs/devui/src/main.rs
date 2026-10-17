@@ -1,6 +1,10 @@
 //! u60pro-devui: the touch UI (see lib.rs).
 // SPDX-License-Identifier: MIT
 
+/// Read from the file by the core (luyaz-core versions.rs), never by running the program.
+#[used]
+static VERSION_MARK: &str = concat!("LUYAZ_VERSION=", env!("CARGO_PKG_VERSION"));
+
 /// `<name> <version> (<commit>)`: the commit from LUYAZ_COMMIT (tools/luyaz ship passes it)
 fn version_line(name: &str) -> String {
     match option_env!("LUYAZ_COMMIT").filter(|c| !c.is_empty()) {

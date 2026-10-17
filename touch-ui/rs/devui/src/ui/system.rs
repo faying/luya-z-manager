@@ -73,6 +73,9 @@ pub struct Sys {
     imei: Obj,
     usb: Obj,
     fw: Obj,
+    /// 组件版本: core, lweb, sentinel, touch, scripts (VER_NAMES), then 检查更新
+    vers: [Obj; 5],
+    vchk: Obj,
     pub health: Obj,
     health_col: Option<u32>,
     pub dps_sw: Obj,
@@ -85,6 +88,19 @@ pub struct Sys {
     pub vendor_arm: u32,
     /// puts the 语言 row's line back after a note
     lang_note_t: lv::Timer,
+}
+
+/// The components in the core's order, with their row names.
+const VER_NAMES: [(&str, &str); 5] = [("core", n_("核心")), ("lweb", n_("管理网页")), ("sentinel", n_("哨兵")), ("touch", n_("触屏界面")), ("scripts", n_("设备脚本"))];
+
+/// 「1.0.0」, 「1.0.0 → 1.1.0」 when there is a newer one, 「未编号」 for a build before 1.0.0.
+pub fn ver_line(r: &devui_model::ver_row_t) -> String {
+    let cur = if r.installed.is_empty() { tr("未编号") } else { r.installed.as_str() };
+    if r.update != 0 && !r.latest.is_empty() { format!("{cur} → {}", r.latest) } else { cur.to_string() }
+}
+
+unsafe extern "C" fn versions_check_cb(_e: *mut sys::lv_event_t) {
+    super::with(|u| u.src.versions_check());
 }
 
 /// Throughput on a 0..100 log scale: 0 B/s → 0, 1 KB/s → 25, 1 MB/s → 60, 100 MB/s → 100.
@@ -513,6 +529,20 @@ impl Ui {
         self.tile_sub[Sub::Log as usize] = kit::row_nav(c, 5 * ROW_H, tr("改动记录"), false, Some(super::tile_click_cb), Sub::Log as usize);
         y += 6 * ROW_H + 10;
 
+        // component versions (docs/designs/component-versions.md); the last row asks the core to
+        // look at the public repo now
+        kit::section(sc, y, tr("组件版本"));
+        y += 20;
+        let c = kit::card(sc, MARGIN, y, CARD_W, 6 * ROW_H);
+        let s = &mut self.sys;
+        for (i, (_, key)) in VER_NAMES.iter().enumerate() {
+            s.vers[i] = kit::row(c, i as i32 * ROW_H, tr(key), i == 0);
+            s.vers[i].set_style_text_font(f.cj14, 0);
+        }
+        s.vchk = kit::row_nav(c, 5 * ROW_H, tr("检查更新"), false, Some(versions_check_cb), 0);
+        s.vchk.set_style_text_font(f.cj14, 0);
+        y += 6 * ROW_H + 10;
+
         kit::section(sc, y, tr("开关"));
         y += 20;
         let c = kit::card(sc, MARGIN, y, CARD_W, 2 * ROW_H);
@@ -636,6 +666,11 @@ impl Ui {
         let m = self.model.clone();
         let d = &m.data;
         let s = self.sys.clone();
+        for (i, (name, _)) in VER_NAMES.iter().enumerate() {
+            let line = m.versions.iter().find(|r| r.name == *name).map(ver_line);
+            self.set(s.vers[i], line.as_deref().unwrap_or("—"));
+        }
+        self.set(s.vchk, m.versions_checked.as_deref().unwrap_or(""));
         self.set(s.est, m.battery_est.as_deref().unwrap_or(""));
         self.set(s.bat, cf!("%d%% · %d°C %d.%02ldV %ldmA", d.bat_percent, d.bat_temp, (d.bat_uv / 1000000) as i32, (d.bat_uv / 10000) % 100, d.bat_ua / 1000));
         // charger_connect alone reads 1 with nothing plugged in on this hardware: a real voltage

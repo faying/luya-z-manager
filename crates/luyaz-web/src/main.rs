@@ -231,6 +231,7 @@ pub fn app(
         .route("/device-info", get(device_info::page))
         .route("/device-info/events", get(device_info::events))
         .route("/device-info/refresh", post(device_info::refresh))
+        .route("/device-info/check-versions", post(device_info::check_versions))
         .route("/router/qci", get(qci::page))
         .route("/router/qci/events", get(qci::events))
         .route("/router/qci/refresh", post(qci::refresh))
@@ -461,6 +462,10 @@ async fn serve_all(binds: Vec<String>, router: Router, every: Duration) {
         let _ = t.await;
     }
 }
+
+/// Read from the file by the core (luyaz-core versions.rs), never by running the program.
+#[used]
+static VERSION_MARK: &str = concat!("LUYAZ_VERSION=", env!("CARGO_PKG_VERSION"));
 
 /// `<name> <version> (<commit>)`: the commit from LUYAZ_COMMIT (tools/luyaz ship passes it)
 fn version_line(name: &str) -> String {

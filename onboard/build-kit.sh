@@ -231,7 +231,7 @@ mkdir -p "$PL/guard"
 # u60-recover.sh 由设备端放成 /data/luyaz/ship/luyaz-recover.sh（自检过才放，已有就不换；rc.local 那一行只由 recover 组件加）
 # 去掉 u60-ship.sh、datad-trial.sh、u60-recover.sh 以后，这张表要和 u60-ship.sh 的 SCRIPTS_FILES + SCRIPTS_INITS
 # 一致（u60 ship scripts，touch-ui docs/SHIP.md）。zwrt-datad.init 在 Luya-Z 改名 E3 从两边一起去掉了（只有旧布局用它，装机包拒装旧布局）
-for f in alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh \
+for f in alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION \
          u60-ship.sh datad-trial.sh u60-recover.sh \
          luyaz-core.init luyaz-sentinel.init luyaz-web.init; do
   [ -f "$DEVUI_REPO/scripts/$f" ] || die "缺 $DEVUI_REPO/scripts/$f"
@@ -362,6 +362,14 @@ chmod 755 "$KIT/install.sh"
       printf '%s  %s\n' "$(sha256 "$f")" "$f"
     done )
 } > "$KIT/MANIFEST.txt"
+
+# each component's version (docs/designs/component-versions.md): from the LUYAZ_VERSION=
+# marker in the binary (not run), the scripts' from guard/VERSION; null: a build before 1.0.0
+kver() { v=$(grep -a -o 'LUYAZ_VERSION=[0-9]*\.[0-9]*\.[0-9]*' "$1" 2>/dev/null | head -n 1); v=${v#LUYAZ_VERSION=}; if [ -n "$v" ]; then echo "\"$v\""; else echo null; fi; }
+_sv=$(cat "$PL/guard/VERSION" 2>/dev/null)
+printf '{\n  "v": 1,\n  "kit": "%s",\n  "components": {\n    "core": %s,\n    "lweb": %s,\n    "sentinel": %s,\n    "touch": %s,\n    "scripts": %s\n  }\n}\n' \
+  "$STAMP" "$(kver "$DATAD_BIN")" "$(kver "$PL/luyaz-web")" "$(kver "$SENTINEL_BIN")" "$(kver "$DEVUI_BIN")" \
+  "$(if [ -n "$_sv" ]; then echo "\"$_sv\""; else echo null; fi)" >"$KIT/versions.json"
 
 OUT="$DIST/luyaz-kit-$STAMP.tar.gz"
 tar czf "$OUT" -C "$WORK" luyaz-kit

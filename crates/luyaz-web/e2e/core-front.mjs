@@ -24,10 +24,22 @@ async function doLogin() {
   const r = await call(AGENT, "POST", "/api/auth/login", { "content-type": "application/json", "content-length": Buffer.byteLength(b) }, b);
   token = JSON.parse((await read(r)).toString()).data.token;
 }
+let versionsChecked = Math.floor(Date.now() / 1000) - 3 * 3600;
 http.createServer(async (req, res) => {
   const body = await read(req);
   const h = { ...req.headers, host: `127.0.0.1:${MOCK}` };
   try {
+    // the core's /v2/versions (versions.rs), not in the mock core: answered here. Made up: the
+    // touch UI has a newer release, the scripts are from before 1.0.0; a check makes it "now"
+    if (req.url === "/v2/versions" || req.url === "/v2/versions/check") {
+      if (req.url.endsWith("/check")) versionsChecked = Math.floor(Date.now() / 1000);
+      const c = (name, installed, latest) => ({ name, installed, latest, update: latest !== installed });
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({
+        components: [c("core", "1.0.0", "1.0.0"), c("lweb", "1.0.0", "1.0.0"), c("sentinel", "1.0.0", "1.0.0"), c("touch", "1.0.0", "1.1.0"), c("scripts", null, "1.0.0")],
+        update_available: true, checked_at: versionsChecked, ok_at: versionsChecked, error: null,
+      }));
+    }
     if (req.url.startsWith("/v2/api/")) {
       const m = await call(MOCK, req.method, req.url, h, body);
       const mb = await read(m);

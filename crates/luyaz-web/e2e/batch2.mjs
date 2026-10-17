@@ -52,7 +52,14 @@ const PAGES = {
     path: "/device-info",
     ready: (p) => p.waitForFunction(() => /\d/.test(document.querySelector("#di-imei .nd-row__value")?.textContent ?? ""), null, { timeout: 15000 }),
     async own(p, ctx) {
-      ok(await p.locator("main .nd-group").count() === 3, "three groups (identity, network, system)");
+      ok(await p.locator("main .nd-group").count() === 4, "four groups (identity, network, system, versions)");
+      ok(await txt(p, "#di-ver-core .nd-row__value") === "1.0.0" && /已是最新/.test(await txt(p, "#di-ver-core")), "versions: core 1.0.0, up to date");
+      ok(/有新版：1\.1\.0/.test(await txt(p, "#di-ver-touch")), `versions: touch has a newer one: ${await txt(p, "#di-ver-touch")}`);
+      ok(await txt(p, "#di-ver-scripts .nd-row__value") === "未编号", "versions: scripts from before 1.0.0 say so");
+      ok(/(\d+ 小时前|刚刚)$/.test(await txt(p, "#di-ver-checked .nd-row__value")), `versions: last check: ${await txt(p, "#di-ver-checked .nd-row__value")}`);
+      await p.click("#di-versions-err button");
+      await p.waitForFunction(() => /刚刚/.test(document.querySelector("#di-ver-checked")?.textContent ?? ""), null, { timeout: 15000 }).catch(() => {});
+      ok(/刚刚/.test(await txt(p, "#di-ver-checked .nd-row__value")), "versions: 检查更新 asks u60d and the row follows");
       ok(await p.locator("main .nd-skel").count() === 0, "no skeleton left");
       for (const id of ["imei", "imsi", "iccid", "wan4", "gw", "dns", "wan6", "lan", "host", "kernel", "uptime", "memtotal", "memfree", "memavail"]) {
         const v = await txt(p, `#di-${id} .nd-row__value`);

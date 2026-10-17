@@ -385,6 +385,18 @@ pub struct alert_item_t {
     pub unread: i32,
 }
 
+/// One component's version (docs/designs/component-versions.md).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ver_row_t {
+    /// core, lweb, sentinel, touch, scripts
+    pub name: String,
+    /// empty: a build from before 1.0.0
+    pub installed: String,
+    /// empty: not known
+    pub latest: String,
+    pub update: i32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct health_item_t {
     pub bad: i32,

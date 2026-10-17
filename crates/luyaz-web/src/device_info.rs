@@ -1,5 +1,6 @@
 //! /device-info (设备信息), the old `device-info/page.tsx`: identity, network addresses and
-//! system facts in three groups, read-only. The old page read nine agent endpoints once; here
+//! system facts in three groups, read-only, and a fourth: the component versions and whether
+//! the public repo has newer ones (u60d `/v2/versions`, docs/designs/component-versions.md). The old page read nine agent endpoints once; here
 //! almost everything is a u60d block on the one upstream connection (and so live), checked field
 //! by field against the agent's sources (u60-web.md 「2-1 做法」):
 //!
@@ -59,11 +60,134 @@ pub struct Group {
 
 pub struct View {
     pub l: Lang,
-    pub groups: [Group; 3],
+    pub groups: [Group; 4],
 }
 
 /// The kernel line from the agent: `None` = not asked yet.
 pub type Kernel = Option<Result<String, Fail>>;
+
+/// u60d's `/v2/versions` as last read (None: not yet; Err: the read failed). Shared by every
+/// open tab, so 「检查更新」 in one shows in all.
+static VERSIONS: std::sync::Mutex<Option<Result<Value, String>>> = std::sync::Mutex::new(None);
+
+fn versions_now() -> Option<Result<Value, String>> {
+    VERSIONS.lock().unwrap().clone()
+}
+
+async fn read_versions(app: &Shared, who: &Caller) {
+    let r = crate::agent::get(app, who, "/versions")
+        .await
+        .map_err(|e| e.text(Lang::Zh));
+    *VERSIONS.lock().unwrap() = Some(r);
+}
+
+fn comp_name(c: &str, l: Lang) -> &'static str {
+    match c {
+        "core" => l.pick("Core", "核心"),
+        "lweb" => l.pick("Admin web", "管理网页"),
+        "sentinel" => l.pick("Sentinel", "哨兵"),
+        "touch" => l.pick("Touch screen", "触屏界面"),
+        "scripts" => l.pick("Device scripts", "设备脚本"),
+        _ => "?",
+    }
+}
+
+/// "3 h ago" from Unix seconds (u60d and this server share the device clock).
+fn ago(t: i64, l: Lang) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let d = (now - t).max(0);
+    match (l, d) {
+        (Lang::En, 0..120) => "just now".into(),
+        (Lang::Zh, 0..120) => "刚刚".into(),
+        (Lang::En, 120..7200) => format!("{} min ago", d / 60),
+        (Lang::Zh, 120..7200) => format!("{} 分钟前", d / 60),
+        (Lang::En, 7200..172_800) => format!("{} h ago", d / 3600),
+        (Lang::Zh, 7200..172_800) => format!("{} 小时前", d / 3600),
+        (Lang::En, _) => format!("{} d ago", d / 86400),
+        (Lang::Zh, _) => format!("{} 天前", d / 86400),
+    }
+}
+
+/// The versions group: one row per component (installed; the newer one under it), then when
+/// the public repo was last looked at.
+fn version_group(vers: &Option<Result<Value, String>>, l: Lang) -> Group {
+    let mut rows = Vec::new();
+    let mut failed = Vec::new();
+    match vers {
+        Some(Ok(v)) => {
+            for c in v["components"].as_array().into_iter().flatten() {
+                let name = c["name"].as_str().unwrap_or("");
+                let cur = c["installed"].as_str();
+                let new = c["latest"].as_str();
+                let sub = if c["update"] == true {
+                    new.map(|n| match l {
+                        Lang::En => format!("Update available: {n}"),
+                        Lang::Zh => format!("有新版：{n}"),
+                    })
+                } else if new.is_some() && new == cur {
+                    Some(l.pick("Up to date", "已是最新").into())
+                } else {
+                    None
+                };
+                rows.push(Row {
+                    id: match name {
+                        "core" => "di-ver-core",
+                        "lweb" => "di-ver-lweb",
+                        "sentinel" => "di-ver-sentinel",
+                        "touch" => "di-ver-touch",
+                        _ => "di-ver-scripts",
+                    },
+                    label: comp_name(name, l).into(),
+                    val: Val::Text(cur.map_or_else(|| l.pick("Unnumbered", "未编号").into(), str::to_owned)),
+                    mono: cur.is_some(),
+                    data: false,
+                    sub,
+                    stale: false,
+                });
+            }
+            let checked = v["checked_at"].as_i64().map(|t| {
+                let when = ago(t, l);
+                match v["error"].as_str() {
+                    Some(e) => match l {
+                        Lang::En => format!("{when}, failed: {e}"),
+                        Lang::Zh => format!("{when}，失败：{e}"),
+                    },
+                    None => when,
+                }
+            });
+            rows.push(Row {
+                id: "di-ver-checked",
+                label: l.pick("Last checked", "上次检查").into(),
+                val: Val::Text(checked.unwrap_or_else(|| l.pick("Not yet", "还没查过").into())),
+                mono: false,
+                data: false,
+                sub: None,
+                stale: false,
+            });
+        }
+        Some(Err(e)) => failed.push(match l {
+            Lang::En => format!("versions ({e})"),
+            Lang::Zh => format!("版本（{e}）"),
+        }),
+        None => rows.push(Row {
+            id: "di-ver-checked",
+            label: l.pick("Last checked", "上次检查").into(),
+            val: Val::Loading,
+            mono: false,
+            data: false,
+            sub: None,
+            stale: false,
+        }),
+    }
+    Group {
+        key: "versions",
+        title: l.pick("Component versions", "组件版本"),
+        rows,
+        failed,
+    }
+}
 
 fn s<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v[k].as_str().map(str::trim).filter(|x| !x.is_empty())
@@ -170,6 +294,15 @@ fn unread(b: &B) -> bool {
 }
 
 pub fn view(st: &St, kernel: &Kernel, l: Lang) -> View {
+    view_with(st, kernel, &versions_now(), l)
+}
+
+pub fn view_with(
+    st: &St,
+    kernel: &Kernel,
+    vers: &Option<Result<Value, String>>,
+    l: Lang,
+) -> View {
     let sim = block(st, "sim");
     let sig = block(st, "signal");
     let live = block(st, "live");
@@ -407,6 +540,7 @@ pub fn view(st: &St, kernel: &Kernel, l: Lang) -> View {
                 rows: sysrows,
                 failed: sys_failed,
             },
+            version_group(vers, l),
         ],
     }
 }
@@ -427,6 +561,7 @@ pub struct Poll {
 
 impl Poll {
     async fn fetch(&mut self, app: &Shared) {
+        read_versions(app, &self.who).await;
         self.kernel = Some(
             crate::agent::get(app, &self.who, "/api/device")
                 .await
@@ -454,8 +589,11 @@ impl Polled for Poll {
     async fn step(&mut self, app: &Shared) -> (Vec<(String, String)>, Duration) {
         if !matches!(self.kernel, Some(Ok(_))) {
             self.fetch(app).await;
+        } else {
+            read_versions(app, &self.who).await;
         }
-        (self.leaves(app), Duration::from_secs(24 * 3600))
+        // the versions: u60d looks once a day; read again hourly
+        (self.leaves(app), Duration::from_secs(3600))
     }
     fn watches(&self, block: &str) -> bool {
         BLOCKS.contains(&block)
@@ -524,6 +662,20 @@ pub async fn events(
         kernel: None,
     };
     crate::agent::stream(app, ctx, q.g, PATH, p)
+}
+
+/// 「检查更新」: u60d asks the public repo now (up to 20 s), then every open tab re-renders.
+pub async fn check_versions(
+    State(app): State<Shared>,
+    req: axum::extract::Request,
+) -> axum::http::StatusCode {
+    let who = Caller::of(&app, &req);
+    let r = crate::agent::post(&app, &who, "/versions/check", &Value::Null)
+        .await
+        .map_err(|e| e.text(Lang::Zh));
+    *VERSIONS.lock().unwrap() = Some(r);
+    let _ = app.kick.send(PATH);
+    axum::http::StatusCode::NO_CONTENT
 }
 
 /// Retry: reconnect to u60d now if it is down, and read the kernel line again.

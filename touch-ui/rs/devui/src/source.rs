@@ -71,6 +71,7 @@ pub struct Polled {
     pub speedtest: bool,
     pub servers: bool,
     pub battery: bool,
+    pub versions: bool,
     pub alerts: bool,
     pub diagnose: bool,
 }
@@ -156,6 +157,8 @@ pub trait Source {
 
     // ---- zte-agent ----
     fn alerts_mark_all_read(&mut self);
+    /// 「检查更新」 (component versions)
+    fn versions_check(&mut self);
     fn esim_select(&mut self, i: usize) -> i32;
     fn speedtest_start(&mut self) -> bool;
     fn speedtest_stop(&mut self) -> bool;

@@ -13,13 +13,18 @@ must be migrated or several components have to be updated together.
 | `scripts` | device scripts (doctor, init scripts, …) | `touch-ui/scripts/VERSION` |
 
 Each program prints its version with `--version`, e.g. `luyaz-core 1.0.0 (6e606ec)`.
-Entries are written under **Unreleased**, tagged with the component, and move into a
-version section when that component is released. `Requires:` lists the minimum versions
+Entries are written under **Unreleased** as `- <component>: text` (e.g. `- touch: …`);
+`tools/luyaz bump <component> <patch|minor|major>` moves them into a new version section. `Requires:` lists the minimum versions
 of other components.
 
 A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
+
+- core: `GET /v2/versions` lists each component's installed version and the newest in this repo's `versions.json`; the core looks once a day (not while roaming; `LUYAZ_VERSION_CHECK=0` turns it off), `POST /v2/versions/check` looks now. Nothing is installed automatically.
+- lweb: Device info has a "Component versions" group with a "Check for updates" button.
+- touch: System has a "Component versions" card; "Check for updates" asks the core to look now.
+- scripts: `VERSION` is shipped to `/data/luyaz/scripts/` so the scripts' version can be read on the device.
 
 ## core 1.0.0, lweb 1.0.0, sentinel 1.0.0, touch 1.0.0, scripts 1.0.0 — 2026-10-17
 

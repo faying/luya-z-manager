@@ -6,6 +6,7 @@
 use super::core_api::CoreApi;
 use super::alerts::Alerts;
 use super::battery::BatteryEst;
+use super::versions::Versions;
 use super::chill::Chill;
 use super::datad::{Cfg, Datad};
 use super::diagnose::Diagnose;
@@ -41,6 +42,7 @@ pub struct Live {
     ts: Tailscale,
     diag: Diagnose,
     bat: BatteryEst,
+    vers: Versions,
     chill: Chill,
     pub bl: Backlight,
     pub key: Key,
@@ -61,6 +63,7 @@ impl Live {
             ts: Tailscale::default(),
             diag: Diagnose::default(),
             bat: BatteryEst::default(),
+            vers: Versions::default(),
             chill: Chill::default(),
             bl: Backlight::init(),
             key,
@@ -164,6 +167,8 @@ impl Live {
             diagnose_error: Some(self.diag.error().into()),
 
             battery_est: Some(self.bat.text().into()),
+            versions: self.vers.rows().to_vec(),
+            versions_checked: Some(self.vers.checked().into()),
 
             bl_panel_lit: self.bl.panel_lit() as i32,
             bl_is_on: self.bl.is_on() as i32,
@@ -237,6 +242,7 @@ impl Source for Live {
         p.speedtest = self.speed.poll(ag, a.speed);
         p.servers = self.speed.servers_poll(ag, a.speed_page);
         p.battery = self.bat.poll(ag, a.sys);
+        p.versions = self.vers.poll(ag, a.sys);
         p.alerts = self.alerts.poll(ag, a.alerts);
         p
     }
@@ -335,6 +341,9 @@ impl Source for Live {
 
     fn alerts_mark_all_read(&mut self) {
         self.alerts.mark_all_read(&mut self.agent);
+    }
+    fn versions_check(&mut self) {
+        self.vers.check(&mut self.agent);
     }
     fn esim_select(&mut self, i: usize) -> i32 {
         self.esim.select(&mut self.agent, i)

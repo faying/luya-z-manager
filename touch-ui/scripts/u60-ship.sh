@@ -273,7 +273,7 @@ VERDICT=$SHIP_DIR/verdict                 # the trial judge's line (core, §7)
 # luyaz-web logs in with.
 # zwrt-datad.init (and its /etc/init.d copy) left in Luya-Z rename E3: no device has the old
 # layout it starts in; the copies on the device stay as they are (it refuses the new layout).
-SCRIPTS_FILES="alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh"
+SCRIPTS_FILES="alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION"
 # luyaz-web's init rides here too, as the sentinel's does (needs u60-recover.sh
 # formats 4); it refuses to start while /data/luyaz/luyaz-web is not there.
 # luyaz-core's (10e, formats 5) too; zwrt-datad's went with E3 (see SCRIPTS_FILES).

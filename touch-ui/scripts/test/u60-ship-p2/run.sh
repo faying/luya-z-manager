@@ -1234,7 +1234,7 @@ rm -rf "$R/data/luyaz/scripts"
 mkdir -p "$R/data/luyaz/scripts" && printf '#!/bin/sh\n# OLD u60-fallback.sh\n' >"$R/data/luyaz/scripts/u60-fallback.sh"
 # zte-agent's init (both copies) left the list in 8d-2c: they stay as they are
 printf '#!/bin/sh\n# OLD zte-agent.init\n' >"$GD/zte-agent.init"
-for f in alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh; do
+for f in alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION; do
     printf '#!/bin/sh\n# OLD %s\nexit 0\n' "$f" >"$GD/$f"
     printf '#!/bin/sh\n# NEW %s luyaz-write.lock\nexit 0\n' "$f" >"$R/data/luyaz/ship/stage/$TSC/$f"
     _ml="$_ml${_ml:+$NL}file=$f $(md5 "$R/data/luyaz/ship/stage/$TSC/$f")"
@@ -1250,7 +1250,7 @@ check "$CASE: staged as v=5 (it brings the sentinel's, luyaz-web's and luyaz-cor
 run $TSC
 check "$CASE: done, the sentinel's and luyaz-web's inits are new, the guard untouched" '[ "$(phase)" = done ] && grep -q "NEW luyaz-web" "$R/etc/init.d/luyaz-web" && grep -q "NEW luyaz-sentinel" "$R/etc/init.d/luyaz-sentinel" && grep -q "NEW luyaz-core" "$R/etc/init.d/luyaz-core" && grep -q "NEW doctor.sh" "$R/data/luyaz/scripts/doctor.sh" && ! grep -q "^stop\|^start" "$T/guard-initd.log"'
 # Luya-Z rename D1: the first ship into the new directory makes it and adds every file there
-check "$CASE: the scripts went to /data/luyaz/scripts, the old copies stay as they were" '[ "$(ls "$R/data/luyaz/scripts" | wc -l)" = 10 ] && grep -q "OLD doctor.sh" "$GD/doctor.sh" && grep -q "NEW luyaz-fallback.sh" "$R/data/luyaz/scripts/luyaz-fallback.sh" && grep -q "OLD u60-fallback.sh" "$R/data/luyaz/scripts/u60-fallback.sh" && grep -q "/data/luyaz/scripts/doctor.sh" "$R/data/luyaz/ship/txn"'
+check "$CASE: the scripts went to /data/luyaz/scripts, the old copies stay as they were" '[ "$(ls "$R/data/luyaz/scripts" | wc -l)" = 11 ] && grep -q "OLD doctor.sh" "$GD/doctor.sh" && grep -q "NEW luyaz-fallback.sh" "$R/data/luyaz/scripts/luyaz-fallback.sh" && grep -q "OLD u60-fallback.sh" "$R/data/luyaz/scripts/u60-fallback.sh" && grep -q "/data/luyaz/scripts/doctor.sh" "$R/data/luyaz/ship/txn"'
 check "$CASE: zte-agent's init untouched (not in the list since 8d-2c)" 'grep -q "OLD init" "$R/etc/init.d/zte-agent" && grep -q "OLD zte-agent.init" "$GD/zte-agent.init" && ! grep -q "zte-agent" "$R/data/luyaz/ship/txn"'
 recover_newboot
 check "$CASE: a quiet next boot" '[ "$RRC" = 0 ]'
@@ -1480,7 +1480,7 @@ CASE="ship scripts: a u60-recover.sh without formats 4"
 TSC=20261012-140000-scripts
 mkdir -p "$R/data/luyaz/ship/stage/$TSC"
 _ml=
-for f in alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh luyaz-core luyaz-sentinel luyaz-web; do
+for f in alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION luyaz-core luyaz-sentinel luyaz-web; do
     printf '#!/bin/sh\n# NEW %s luyaz-write.lock\n' "$f" >"$R/data/luyaz/ship/stage/$TSC/$f"
     _ml="$_ml${_ml:+$NL}file=$f $(md5 "$R/data/luyaz/ship/stage/$TSC/$f")"
 done
@@ -1496,7 +1496,7 @@ CASE="ship scripts: a u60-recover.sh without formats 5"
 TSC=20261014-140000-scripts
 mkdir -p "$R/data/luyaz/ship/stage/$TSC"
 _ml=
-for f in alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh luyaz-core luyaz-sentinel luyaz-web; do
+for f in alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION luyaz-core luyaz-sentinel luyaz-web; do
     printf '#!/bin/sh\n# NEW %s luyaz-write.lock\n' "$f" >"$R/data/luyaz/ship/stage/$TSC/$f"
     _ml="$_ml${_ml:+$NL}file=$f $(md5 "$R/data/luyaz/ship/stage/$TSC/$f")"
 done
@@ -1614,7 +1614,7 @@ check "$CASE: a core from before E2: refused" '[ "$RC" = 1 ] && grep -q "luyaz-c
 TE=20261016-110000-scripts
 mkdir -p "$R/data/luyaz/ship/stage/$TE"
 _ml=
-for f in alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh luyaz-core luyaz-sentinel luyaz-web; do
+for f in alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION luyaz-core luyaz-sentinel luyaz-web; do
     printf '#!/bin/sh\n# NEW %s luyaz-write.lock\n' "$f" >"$R/data/luyaz/ship/stage/$TE/$f"
     _ml="$_ml${_ml:+$NL}file=$f $(md5 "$R/data/luyaz/ship/stage/$TE/$f")"
 done
