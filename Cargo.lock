@@ -597,7 +597,7 @@ dependencies = [
 
 [[package]]
 name = "devui"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "devui-model",
  "libc",
@@ -1250,7 +1250,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1349,7 +1349,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-sentinel"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "libc",
  "luyaz-alerts",
@@ -1381,7 +1381,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-web"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "askama",
  "axum",

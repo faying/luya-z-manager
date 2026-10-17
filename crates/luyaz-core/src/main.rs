@@ -288,8 +288,24 @@ fn probe(cfg: &Cfg, secs: u64) {
     println!("{}", serde_json::to_string_pretty(&out).unwrap());
 }
 
+/// `<name> <version> (<commit>)`: the commit from LUYAZ_COMMIT (tools/luyaz ship passes it)
+fn version_line(name: &str) -> String {
+    match option_env!("LUYAZ_COMMIT").filter(|c| !c.is_empty()) {
+        Some(c) => format!(
+            "{name} {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            &c[..c.len().min(7)]
+        ),
+        None => format!("{name} {}", env!("CARGO_PKG_VERSION")),
+    }
+}
+
 fn main() {
     let raw: Vec<String> = std::env::args().collect();
+    if raw.get(1).map(String::as_str) == Some("--version") {
+        println!("{}", version_line("luyaz-core"));
+        return;
+    }
     // X11: `<core> doctor …` (any argv[0]) is a one-shot check: before the runtime and before
     // serve's first side effect (svcwatch, flock, pid file, crash markers, migration, core log)
     if raw.get(1).map(String::as_str) == Some("doctor") {

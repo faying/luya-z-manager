@@ -462,7 +462,23 @@ async fn serve_all(binds: Vec<String>, router: Router, every: Duration) {
     }
 }
 
+/// `<name> <version> (<commit>)`: the commit from LUYAZ_COMMIT (tools/luyaz ship passes it)
+fn version_line(name: &str) -> String {
+    match option_env!("LUYAZ_COMMIT").filter(|c| !c.is_empty()) {
+        Some(c) => format!(
+            "{name} {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            &c[..c.len().min(7)]
+        ),
+        None => format!("{name} {}", env!("CARGO_PKG_VERSION")),
+    }
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("{}", version_line("luyaz-web"));
+        return;
+    }
     let cli = Cli::parse();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

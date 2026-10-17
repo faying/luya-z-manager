@@ -6,6 +6,19 @@
 //! A real (non-shadow) run first takes the one-sentinel lock (`sys::INSTANCE_LOCK`, env
 //! `LUYAZ_SENTINEL_LOCK` for tests); held by another copy = exit 3 before anything is touched.
 
+/// `<name> <version> (<commit>)`: the commit from LUYAZ_COMMIT (tools/luyaz ship passes it)
+#[cfg(target_os = "linux")]
+fn version_line(name: &str) -> String {
+    match option_env!("LUYAZ_COMMIT").filter(|c| !c.is_empty()) {
+        Some(c) => format!(
+            "{name} {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            &c[..c.len().min(7)]
+        ),
+        None => format!("{name} {}", env!("CARGO_PKG_VERSION")),
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn main() {
     use std::sync::Arc;
@@ -16,7 +29,7 @@ fn main() {
         "" => false,
         "--shadow" => true,
         "--version" => {
-            println!("luyaz-sentinel {}", env!("CARGO_PKG_VERSION"));
+            println!("{}", version_line("luyaz-sentinel"));
             return;
         }
         _ => {
