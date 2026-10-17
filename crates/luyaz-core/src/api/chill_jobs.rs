@@ -17,7 +17,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use std::net::SocketAddr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use luyaz_api::chill as ch;
 use luyaz_policy::scenario as sc;
@@ -30,15 +30,23 @@ const RESTORE_FILE: &str = "/data/scenario/restore.json";
 /// finished_unix}`, status idle | running | done | error.
 pub struct ChillJobs {
     job: Mutex<Value>,
-    running: AtomicBool,
+    /// the job slot; u60d's CHILL transactions (the agent's, `ops::chill`) take the same one
+    running: Arc<AtomicBool>,
 }
 
 impl Default for ChillJobs {
     fn default() -> Self {
+        Self::sharing(Arc::default())
+    }
+}
+
+impl ChillJobs {
+    /// With this job slot (the device's: `ops::chill::slot()`).
+    pub fn sharing(running: Arc<AtomicBool>) -> Self {
         ChillJobs {
             job: Mutex::new(json!({"id": 0, "kind": "", "status": "idle", "message": "",
                 "started_unix": 0, "finished_unix": 0})),
-            running: AtomicBool::new(false),
+            running,
         }
     }
 }

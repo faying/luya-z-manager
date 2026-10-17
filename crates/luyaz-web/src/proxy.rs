@@ -133,6 +133,10 @@ pub async fn gate(State(app): State<Shared>, req: Request, next: Next) -> Respon
     if crate::chill_proxy::ours(&path) {
         return next.run(req).await;
     }
+    // /agent-api: a program's bearer token and source check (agent_api.rs), never a cookie session
+    if crate::agent_api::ours(&path) {
+        return next.run(req).await;
+    }
 
     // the old web links with a trailing slash (next.config trailingSlash): /signal/ → /signal
     if path.len() > 1

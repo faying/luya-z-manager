@@ -160,3 +160,85 @@ async fn a_returning_card_gets_its_apn_pick_back_as_auto() {
         "the pick is kept"
     );
 }
+
+#[tokio::test]
+async fn diagnose_carries_the_open_finding_and_keeps_its_fields() {
+    use luyaz_api::diagnose::Level;
+    use luyaz_api::finding::{Confidence, Evidence, Finding, KIND_NO_INTERNET, LayerId, Verdict};
+    let r = root("finding");
+    fs::create_dir_all(r.join("tmp")).unwrap();
+    let c = Compat::new(r.to_str().unwrap(), Sources::none()).with_writes(true);
+    let addr = start(c.clone()).await;
+    let (st, b) = call(addr, "GET", "/api/diagnose", "").await;
+    assert_eq!(st, 200, "{b}");
+    assert_eq!(b["ok"], true);
+    assert_eq!(b["data"]["state"], "idle");
+    assert!(b["data"]["finding"].is_null(), "{b}");
+
+    let iccid = "89860012345678901234";
+    let t = luyaz_netwatch::record::CLOCK_SET + 1_000_000;
+    let v = Verdict::Open(Finding {
+        kind: KIND_NO_INTERNET,
+        iccid: iccid.into(),
+        layer: LayerId::Internet,
+        confidence: Confidence::Sure,
+        symptom: "已连上，但外网不通".into(),
+        symptom_en: "Connected, but the internet is unreachable".into(),
+        evidence: vec![Evidence::new(LayerId::Internet, Level::Bad, "x", "x", t)],
+        at: t,
+    });
+    c.group.findings.observe(&v, iccid, &c.group.watch, t);
+    let (_, b) = call(addr, "GET", "/api/diagnose", "").await;
+    assert_eq!(b["data"]["state"], "idle");
+    let f = &b["data"]["finding"];
+    assert_eq!(f["symptom"], "已连上，但外网不通");
+    assert_eq!((f["layer"].as_str(), f["confidence"].as_str()), (Some("internet"), Some("sure")));
+    assert_eq!(f["iccid_tail"], "1234");
+    assert_eq!(f["evidence"][0]["layer"], "internet");
+    assert!(!b.to_string().contains("8986001234"), "{b}");
+}
+
+#[tokio::test]
+async fn ignore_closes_the_shown_finding() {
+    use luyaz_api::finding::{Confidence, Evidence, Finding, KIND_NO_INTERNET, LayerId, Verdict};
+    let r = root("dismiss");
+    let c = Compat::new(r.to_str().unwrap(), Sources::none()).with_writes(true);
+    let addr = start(c.clone()).await;
+    let now = luyaz_netwatch::now_unix();
+    let f = Finding {
+        kind: KIND_NO_INTERNET,
+        iccid: "89860000001234".into(),
+        layer: LayerId::Data,
+        confidence: Confidence::Sure,
+        symptom: "已注册，但数据连接没建立".into(),
+        symptom_en: "Registered, but the data connection is down".into(),
+        evidence: vec![Evidence::new(
+            LayerId::Data,
+            luyaz_api::diagnose::Level::Bad,
+            "x",
+            "x",
+            now,
+        )],
+        at: now,
+    };
+    c.group
+        .findings
+        .observe(&Verdict::Open(f), "89860000001234", &c.group.watch, now);
+    let (_, b) = call(addr, "GET", "/api/diagnose", "").await;
+    assert_eq!(b["data"]["finding"]["iccid_tail"], "1234");
+    let body = format!(r#"{{"kind":"{KIND_NO_INTERNET}","iccid_tail":"1234"}}"#);
+    assert_eq!(
+        call(addr, "POST", "/api/diagnose/dismiss", &body).await.0,
+        200
+    );
+    assert_eq!(
+        call(addr, "POST", "/api/diagnose/dismiss", &body).await.0,
+        404
+    );
+    assert_eq!(
+        call(addr, "POST", "/api/diagnose/dismiss", "{}").await.0,
+        400
+    );
+    let (_, b) = call(addr, "GET", "/api/diagnose", "").await;
+    assert_eq!(b["data"]["finding"], Value::Null);
+}

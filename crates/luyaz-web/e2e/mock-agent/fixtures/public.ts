@@ -7,6 +7,7 @@ import type { Ctx, Route } from "../lib.ts";
 import { ok } from "../lib.ts";
 import { shared } from "../shared.ts";
 import { buildNetinfo, wwanConnected, DEVICE_UTC_OFFSET } from "./network.ts";
+import { mockFinding } from "./diagnose.ts";
 import type { PublicStatus } from "../../../src/lib/api/schemas/public.ts";
 
 /** Wi-Fi SSID (main2g_ssid). No shared field; keep in step with fixtures/wifi.ts if it differs. */
@@ -49,6 +50,12 @@ function publicStatus(ctx: Ctx): PublicStatus {
       bar: Number.isFinite(barN) ? barN : -1,
       rsrp: Number.isInteger(rsrp) ? rsrp : Math.trunc(rsrp),
       verdict: verdict(ctx),
+      finding: (() => {
+        const f = mockFinding(ctx);
+        return f && f.confidence === "sure"
+          ? { kind: f.kind, layer: f.layer, symptom: f.symptom, symptom_en: f.symptom_en }
+          : null;
+      })(),
     },
     wifi: { on: shared.wifiOn, ssid: SSID },
     battery: { percent: 76, charging: true },

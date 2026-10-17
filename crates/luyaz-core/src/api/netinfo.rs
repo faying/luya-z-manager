@@ -61,6 +61,11 @@ pub struct NetCache {
     pub(super) ops: Mutex<ni::Ops>,
     /// the APN switch running in the background, and why the last one failed
     pub(super) apn_switching: AtomicBool,
+    /// an `apn_use` switch is in its trial (u60d's transaction): the per-card pick is written only
+    /// once it passes (second phase O4), and the card watcher keeps off meanwhile
+    pub(super) apn_trial: AtomicBool,
+    /// the op_id of the latest `apn_use` switch (an older task ending later leaves its state alone)
+    pub(super) apn_current: Mutex<String>,
     apn_err: Mutex<String>,
     /// one redial at a time
     pub(super) dial: tokio::sync::Mutex<()>,

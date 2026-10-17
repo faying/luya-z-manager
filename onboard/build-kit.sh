@@ -365,7 +365,7 @@ chmod 755 "$KIT/install.sh"
 
 # each component's version (docs/designs/component-versions.md): from the LUYAZ_VERSION=
 # marker in the binary (not run), the scripts' from guard/VERSION; null: a build before 1.0.0
-kver() { v=$(grep -a -o 'LUYAZ_VERSION=[0-9]*\.[0-9]*\.[0-9]*' "$1" 2>/dev/null | head -n 1); v=${v#LUYAZ_VERSION=}; if [ -n "$v" ]; then echo "\"$v\""; else echo null; fi; }
+kver() { v=$(grep -a -o 'LUYAZ_VERSION=[0-9]*\.[0-9]*\.[0-9]*;' "$1" 2>/dev/null | head -n 1); v=${v#LUYAZ_VERSION=}; v=${v%;}; if [ -n "$v" ]; then echo "\"$v\""; else echo null; fi; }
 _sv=$(cat "$PL/guard/VERSION" 2>/dev/null)
 printf '{\n  "v": 1,\n  "kit": "%s",\n  "components": {\n    "core": %s,\n    "lweb": %s,\n    "sentinel": %s,\n    "touch": %s,\n    "scripts": %s\n  }\n}\n' \
   "$STAMP" "$(kver "$DATAD_BIN")" "$(kver "$PL/luyaz-web")" "$(kver "$SENTINEL_BIN")" "$(kver "$DEVUI_BIN")" \

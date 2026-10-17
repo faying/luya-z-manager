@@ -1,0 +1,11 @@
+[package]
+name = "luyaz-mcp"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.99"
+description = "Read-only MCP server (stdio) for a Luya-Z device: runs on the computer, calls the device's /agent-api over HTTP with a bearer token (docs/designs/u60-mcp.md phase 1). Not part of the install kit."
+license = "MIT"
+publish = false
+
+[dependencies]
+serde_json = "1"

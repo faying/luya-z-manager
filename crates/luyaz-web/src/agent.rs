@@ -81,6 +81,7 @@ const ON_U60D: &[&str] = &[
     "/api/netinfo/scan",
     // 8d-2: "use for this SIM" on /router/apn (compat ops::apn_use)
     "/api/netinfo/apn",
+    "/api/agent/roam-cheap",
     "/api/modem/register",
     "/api/modem/netselect/auto",
     "/api/speedtest/",
@@ -243,6 +244,23 @@ pub fn refused(code: u16, v: &Value) -> Fail {
 pub async fn get(app: &Shared, who: &Caller, path: &str) -> Result<Value, Fail> {
     let (code, v) = send(app, who, reqwest::Method::GET, path, None, None).await?;
     data(code, v)
+}
+
+/// A GET for `/agent-api` (agent_api.rs, u60-mcp.md): no browser session — the caller checked
+/// the token and the source itself — but the same client and the same [`ON_U60D`] list.
+/// The status and the whole reply.
+pub async fn get_internal(app: &Shared, path: &str) -> Result<(u16, Value), Fail> {
+    if !on_u60d(path) {
+        return Err(not_here());
+    }
+    let r = app
+        .http
+        .get(format!("{}/v2{path}", app.u60d_url))
+        .send()
+        .await
+        .map_err(|_| Fail::Unreachable)?;
+    let code = r.status().as_u16();
+    Ok((code, r.json().await.unwrap_or(Value::Null)))
 }
 
 /// [`get`] with its own timeout, for the slow reads (`/api/network/qos` asks the modem's AT port

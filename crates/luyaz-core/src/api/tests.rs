@@ -74,6 +74,16 @@ async fn alerts_and_the_read_cursor() {
     assert_eq!(data["events"][0]["seq"], 8);
     assert_eq!(data["events"][1]["label"], "管理后台意外退出，已自动重启");
     assert!(data["utc_offset"].is_i64());
+    assert!(data.get("next").is_none(), "no since = the plain summary");
+    // the cursor (u60-mcp.md R4): oldest first, `next`, a gap before seq 7
+    let (_, body) = call(addr, "GET", "/api/alerts?since=0&limit=1", None, "").await;
+    let data = &body["data"];
+    assert_eq!(
+        (&data["events"][0]["seq"], &data["next"], &data["more"], &data["gap"]),
+        (&json!(7), &json!(7), &json!(true), &json!(true))
+    );
+    let (_, body) = call(addr, "GET", "/api/alerts?since=7", None, "").await;
+    assert_eq!((&body["data"]["next"], &body["data"]["gap"]), (&json!(8), &json!(false)));
     // past the newest: clamped; never backwards
     let (st, body) = call(addr, "POST", "/api/alerts/read", None, r#"{"seq":99}"#).await;
     assert_eq!((st, body["data"]["read"].clone()), (200, json!(8)));

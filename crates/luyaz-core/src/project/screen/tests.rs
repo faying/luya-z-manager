@@ -2138,3 +2138,35 @@ fn stale_qos_does_not_conclude_limit() {
     state["qos"]["stale"] = true.into();
     assert_ne!(state_name(net_view(&state).story.state), "limit");
 }
+
+#[test]
+fn a_sure_finding_goes_over_the_story_not_over_a_write() {
+    let state = worst_case_state();
+    let sym = (
+        "已注册，但数据连接没建立",
+        "Registered, but the data connection is down",
+    );
+    for layer in ["data", "internet", "dns"] {
+        let mut v = net_view_op(&state, None, None);
+        let story = v.story.clone();
+        with_finding(&mut v, layer, sym);
+        let home = v.home.clone().unwrap();
+        assert_eq!(v.story, story, "story stays the network verdict");
+        assert_eq!(home.tone, Tone::Bad);
+        assert!(home.hint.starts_with(sym.0) && home.hint_en.starts_with(sym.1));
+        check_pairs("home", &story_pairs(&home), &[]);
+        assert!(serde_json::to_string(&home).unwrap().len() < STORY_BUF);
+    }
+    let mut v = net_view_op(&state, None, None);
+    with_finding(&mut v, "later", sym);
+    assert!(v.home.is_none());
+    let so = ScreenOp {
+        kind: ScreenOpKind::Live,
+        head: ("正在确认".into(), "Confirming".into()),
+        hint: ("x".into(), "x".into()),
+    };
+    let mut v = net_view_op(&state, None, Some(&so));
+    let before = v.home.clone();
+    with_finding(&mut v, "data", sym);
+    assert_eq!(v.home, before);
+}

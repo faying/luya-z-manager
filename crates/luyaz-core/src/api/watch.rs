@@ -41,6 +41,23 @@ pub struct Group {
     pub diag: Arc<Diagnosis>,
     /// the last `/v2/screen` view the sampler read (the diagnosis' signal layer)
     screen: Arc<Mutex<Option<Value>>>,
+    /// registered but no internet (T3)
+    pub findings: Arc<super::finding::Findings>,
+    gate: Arc<Mutex<Gate>>,
+    net: Arc<super::netinfo::NetCache>,
+    speed_running: Arc<AtomicBool>,
+    stations: Arc<dyn Fn() -> Vec<ni::Station> + Send + Sync>,
+    /// a finding check is running
+    finding_busy: Arc<AtomicBool>,
+}
+
+/// A search, a manual register or a speed test going (the diagnosis and the finding check).
+fn busy(net: &super::netinfo::NetCache, speed_running: &AtomicBool) -> Option<&'static str> {
+    match lock(&net.ops).kind {
+        ni::OpKind::Idle => speed_running.load(Ordering::SeqCst).then_some("speedtest"),
+        ni::OpKind::Scanning => Some("scan"),
+        ni::OpKind::Registering | ni::OpKind::Reverting => Some("register"),
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -92,15 +109,7 @@ impl Host for DiagHost {
     }
 
     fn others_busy(&self) -> Option<&'static str> {
-        let kind = lock(&self.net.ops).kind;
-        match kind {
-            ni::OpKind::Idle => self
-                .speed_running
-                .load(Ordering::SeqCst)
-                .then_some("speedtest"),
-            ni::OpKind::Scanning => Some("scan"),
-            ni::OpKind::Registering | ni::OpKind::Reverting => Some("register"),
-        }
+        busy(&self.net, &self.speed_running)
     }
 
     fn proxy_on(&self) -> bool {
@@ -185,12 +194,15 @@ impl Group {
     ) -> Group {
         let watch = Arc::new(Watch::new());
         let screen: Arc<Mutex<Option<Value>>> = Arc::default();
+        let findings = Arc::new(super::finding::Findings::load(
+            format!("{root}{}", super::finding::FILE).into(),
+        ));
         let host = DiagHost {
             root: root.to_string(),
             hub,
-            net,
-            speed_running,
-            stations,
+            net: net.clone(),
+            speed_running: speed_running.clone(),
+            stations: stations.clone(),
             watch: watch.clone(),
             screen: screen.clone(),
             mihomo: mihomo.to_string(),
@@ -198,9 +210,15 @@ impl Group {
                 .unwrap_or_else(|_| fallback_runtime().handle().clone()),
         };
         Group {
-            diag: Diagnosis::new(Arc::new(host), gate),
+            diag: Diagnosis::new(Arc::new(host), gate.clone()),
             watch,
             screen,
+            findings,
+            gate,
+            net,
+            speed_running,
+            stations,
+            finding_busy: Arc::default(),
         }
     }
 }
@@ -233,19 +251,58 @@ pub(super) fn verdict(c: &Compat) -> Option<String> {
 pub async fn sample(c: Compat) {
     let mut tick = tokio::time::interval(c.clock.secs(SAMPLE_SECS));
     c.group.watch.open(c.path(record::DIR));
+    let mut round: u32 = 0;
     loop {
         tick.tick().await;
+        round = round.wrapping_add(1);
         let g = &c.group;
         let state = luyaz_netwatch::state_from_blocks(|n| fresh(c.src.hub.as_ref(), n));
         let screen = (c.src.screen)().await;
         *lock(&g.screen) = screen.clone();
-        let w = g.watch.clone();
         let now = luyaz_netwatch::now_unix();
+        let check = (owns(&c) && round.is_multiple_of(super::finding::EVERY_ROUNDS)).then(|| {
+            let iccid = fresh(c.src.hub.as_ref(), "sim")
+                .and_then(|v| v["iccid"].as_str().map(str::to_string))
+                .unwrap_or_default();
+            (state.clone(), screen.clone(), iccid)
+        });
+        let w = g.watch.clone();
         let _ = tokio::task::spawn_blocking(move || {
             w.tick(now, state.ok_or(ReadError::NoWanStatus), screen.as_ref())
         })
         .await;
+        // apart from the sampler: the probes can take ~12 s while the link is stalled
+        if let Some((state, screen, iccid)) = check
+            && !g.finding_busy.swap(true, Ordering::SeqCst)
+        {
+            let c2 = c.clone();
+            tokio::task::spawn_blocking(move || {
+                let g = &c2.group;
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    finding_round(g, state, screen, iccid, now)
+                }));
+                g.finding_busy.store(false, Ordering::SeqCst);
+            });
+        }
     }
+}
+
+/// One finding check after the round's sample (blocking: the probes are plain sockets).
+fn finding_round(g: &Group, state: Option<Value>, screen: Option<Value>, iccid: String, now: u64) {
+    let passive_down = luyaz_netwatch::alive_without_probe(&g.watch.snapshot(), now) != Some(true);
+    let i = super::finding::Inputs {
+        state,
+        screen,
+        iccid,
+        passive_down,
+        // the stations read only matters when it may probe
+        clients: passive_down && !(g.stations)().is_empty(),
+        probe_due: g.findings.probe_due(now),
+        held_down: g.findings.held_down(passive_down, now),
+        busy: busy(&g.net, &g.speed_running),
+        probed: AtomicBool::new(false),
+    };
+    g.findings.round(&i, &g.gate, &g.watch, now);
 }
 
 // ── deep diagnosis ─────────────────────────────────────────────────────────
@@ -277,7 +334,11 @@ fn answer(r: Result<(u16, Value), tokio::task::JoinError>) -> Response {
 
 /// GET /api/diagnose
 pub async fn diagnose_get(State(c): State<Compat>) -> Response {
-    let (s, v) = c.group.diag.get();
+    let (s, mut v) = c.group.diag.get();
+    // D6: the old fields as they are, plus the open finding (null when none)
+    if let Some(d) = v.get_mut("data").and_then(Value::as_object_mut) {
+        d.insert("finding".into(), c.group.findings.view());
+    }
     reply(s, v)
 }
 
@@ -305,6 +366,30 @@ pub async fn diagnose_speed(State(c): State<Compat>, body: Bytes) -> Response {
 pub async fn diagnose_feedback(State(c): State<Compat>, body: Bytes) -> Response {
     let (s, v) = c.group.diag.feedback(&body);
     reply(s, v)
+}
+
+/// POST /api/diagnose/dismiss `{"kind", "iccid_tail"?}`: the user's "ignore" on the finding
+/// `GET /api/diagnose` shows (T6); the same kind + card stays closed for 24 h.
+pub async fn diagnose_dismiss(State(c): State<Compat>, body: Bytes) -> Response {
+    let v: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let Some(kind) = v["kind"].as_str().filter(|k| !k.is_empty()) else {
+        return reply(400, json!({"ok": false, "error": "kind required"}));
+    };
+    let tail = v["iccid_tail"].as_str();
+    let watch = c.group.watch.clone();
+    let findings = c.group.findings.clone();
+    let kind = kind.to_string();
+    let tail = tail.map(str::to_string);
+    let done = tokio::task::spawn_blocking(move || {
+        findings.dismiss_shown(&kind, tail.as_deref(), &watch, luyaz_netwatch::now_unix())
+    })
+    .await
+    .unwrap_or(false);
+    if done {
+        reply(200, json!({"ok": true}))
+    } else {
+        reply(404, json!({"ok": false, "error": "no such finding"}))
+    }
 }
 
 // ── the APN SIM-change monitor (the agent's apn_pick thread, D39) ─────────────────
@@ -375,6 +460,7 @@ pub async fn apn_watch(c: Compat) {
         let iccid = super::ops::current_iccid(&c).await;
         let store = read_store(&c);
         let busy = c.net.apn_switching.load(Ordering::SeqCst)
+            || c.net.apn_trial.load(Ordering::SeqCst)
             || lock(&c.net.ops).kind != ni::OpKind::Idle
             || c.esim.busy();
         // decide() reads the APN state only for a confirmed change: find out on a copy first

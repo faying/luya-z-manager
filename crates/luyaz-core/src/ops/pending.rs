@@ -49,15 +49,18 @@ impl Store {
         Self { dir }
     }
 
-    pub fn save(&self, t: &Txn) {
-        let Some(dir) = &self.dir else { return };
+    /// 落盘；写失败回 false（不落盘的 Store 算成功）。Agent 的事务落不了盘就不动设备（第二期 O6）。
+    pub fn save(&self, t: &Txn) -> bool {
+        let Some(dir) = &self.dir else { return true };
         if let Err(e) = write_atomic(
             dir,
             PENDING,
             &serde_json::to_vec(t).expect("txn serializes"),
         ) {
             eprintln!("ops: cannot save {PENDING}: {e}");
+            return false;
         }
+        true
     }
 
     pub fn clear(&self) {

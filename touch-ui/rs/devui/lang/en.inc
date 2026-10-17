@@ -644,3 +644,5 @@
     { "检查更新", "Check for updates", NULL },
     { "还没查过", "Not checked yet", NULL },
     { "检查失败", "Check failed", NULL },
+    { "，暂用 %s", "; on %s for now", NULL },
+    { "首选 %s 不通，暂用 %s", "Pick %s is down; on %s for now", NULL },

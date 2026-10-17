@@ -15,7 +15,9 @@
 //! `LUYAZ_ROLLBACK`（`1` 才打开自动退回，D30）、`LUYAZ_OP_POLL_MS`、
 //! `LUYAZ_LEGACY_TTL_MS`、各动作的 `deadline_env`、`LUYAZ_WRITE_LOCK`；时钟 `LUYAZ_UPTIME_PATH`（默认 `/proc/uptime`）。
 
+pub mod agent;
 pub mod apn;
+pub mod chill;
 pub mod engine;
 pub mod journal_view;
 pub mod pending;
@@ -86,7 +88,7 @@ fn text(v: &Value, key: &str) -> String {
 }
 
 /// 已注册：`network_type` 有值，且不是无服务/受限/紧急（和首页 `screen::rat_of` 认 None 的写法一致）。
-fn registered(network_type: &str) -> bool {
+pub(crate) fn registered(network_type: &str) -> bool {
     let u = network_type.trim().to_ascii_uppercase();
     !u.is_empty()
         && ![
@@ -101,7 +103,7 @@ fn registered(network_type: &str) -> bool {
 }
 
 /// 和首页（`screen.rs`）同一个判断：空、`Home`、`home`、`0` 都不算漫游；空的另外算「不知道」。
-fn roaming(net: &Value) -> Option<bool> {
+pub(crate) fn roaming(net: &Value) -> Option<bool> {
     let r = text(net, "simcard_roam");
     (!r.is_empty()).then(|| r != "Home" && r != "home" && r != "0")
 }
@@ -532,6 +534,24 @@ impl engine::Device for UbusDevice {
         if let Some(kind) = wifi::Kind::of(spec.item) {
             return self.wifi.read(kind).await;
         }
+        if matches!(spec.item, chill::PROFILE | chill::EXIT) {
+            let value = if spec.item == chill::PROFILE {
+                chill::read_profile()
+            } else {
+                Some(chill::read_exit().await?)
+            };
+            return Ok(Reading {
+                value,
+                registered: chill::up().await,
+                // 换卡不影响 CHILL：SIM 固定为空（sim_check 当成同一张）
+                sim: SimId {
+                    iccid: String::new(),
+                    slot: 0,
+                },
+                data: None,
+                probe: None,
+            });
+        }
         if !matches!(
             spec.item,
             NETWORK_MODE | BAND_LTE | BAND_NR | BAND_ALL | CELL_LTE | CELL_NR | APN
@@ -583,6 +603,18 @@ impl engine::Device for UbusDevice {
     ) -> Result<Value, WriteError> {
         if let Some(kind) = wifi::Kind::of(spec.item) {
             return self.wifi.write(&self.exec, kind, value, params).await;
+        }
+        if matches!(spec.item, chill::PROFILE | chill::EXIT) {
+            let want = value.as_str().unwrap_or_default();
+            let r = if spec.item == chill::PROFILE {
+                chill::write_profile(want).await
+            } else {
+                chill::write_exit(want).await
+            };
+            return r.map_err(|message| WriteError {
+                message,
+                timed_out: false,
+            });
         }
         let apn = if spec.item == APN {
             let now = apn_now()
@@ -679,6 +711,12 @@ impl engine::Device for UbusDevice {
     }
 
     async fn probe(&self, target: &ProbeTarget) -> Result<(), String> {
+        if target.chill {
+            return match chill::probe().await {
+                chill::Probe::Up => Ok(()),
+                p => Err(format!("CHILL path {p:?}")),
+            };
+        }
         probe::dns(target).await
     }
 

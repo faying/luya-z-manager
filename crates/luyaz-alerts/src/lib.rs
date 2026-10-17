@@ -27,6 +27,32 @@ const EVENTS_SHOWN: usize = 50;
 const QUEUE_TRIM_AT: usize = 300;
 const QUEUE_KEEP: usize = 200;
 const SMS_LOG_SHOWN: usize = 10;
+/// The cursor read (`since`): default and largest page (u60-mcp.md R4).
+pub const CURSOR_LIMIT: usize = 20;
+pub const CURSOR_LIMIT_MAX: usize = 50;
+
+/// The clock offset new events are recorded with (u60-mcp.md R9/R10), set by whoever knows it (the
+/// core, each time it reads uci). `i64::MIN` = not known yet: events then get no `offsets` line.
+static CURRENT_OFFSET: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(i64::MIN);
+
+pub fn set_current_offset(offset: i64) {
+    CURRENT_OFFSET.store(offset, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn current_offset() -> Option<i64> {
+    Some(CURRENT_OFFSET.load(std::sync::atomic::Ordering::Relaxed)).filter(|&o| o != i64::MIN)
+}
+
+/// `offsets`: `seq\toffset` per line. A side file, so the queue keeps its 5 columns for every
+/// other reader (`alert-lib.sh`, older binaries kept for rollback).
+pub fn parse_offsets(text: &str) -> std::collections::HashMap<u64, i64> {
+    text.lines()
+        .filter_map(|line| {
+            let (s, o) = line.split_once('\t')?;
+            Some((s.parse().ok()?, o.parse().ok()?))
+        })
+        .collect()
+}
 
 #[derive(Debug, PartialEq)]
 pub struct Event {
@@ -148,12 +174,15 @@ pub fn now() -> i64 {
 
 pub struct Alerts {
     pub dir: PathBuf,
+    /// Recorded beside each event this handle adds; `at` takes the process's current one.
+    pub offset: Option<i64>,
 }
 
 impl Alerts {
     pub fn at(dir: &Path) -> Self {
         Alerts {
             dir: dir.to_path_buf(),
+            offset: current_offset(),
         }
     }
 
@@ -291,7 +320,44 @@ impl Alerts {
             kept.push('\n');
             self.write_whole("queue", &kept)?;
         }
+        if let Some(off) = self.offset {
+            self.append_offset(seq, off)?;
+        }
         Ok(seq)
+    }
+
+    /// One `offsets` line; past the queue's trim size, keep only the seqs the queue still has
+    /// (`alert-lib.sh` trims the queue without knowing about this file).
+    fn append_offset(&self, seq: u64, off: i64) -> std::io::Result<()> {
+        use std::io::Write;
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.path("offsets"))?;
+        writeln!(f, "{seq}\t{off}")?;
+        drop(f);
+        let all = fs::read_to_string(self.path("offsets")).unwrap_or_default();
+        if all.lines().count() > QUEUE_TRIM_AT {
+            let first = self.events().first().map_or(seq, |e| e.seq);
+            let mut kept: String = all
+                .lines()
+                .filter(|l| {
+                    l.split_once('\t')
+                        .and_then(|(s, _)| s.parse::<u64>().ok())
+                        .is_some_and(|s| s >= first)
+                })
+                .map(|l| format!("{l}\n"))
+                .collect();
+            if kept.is_empty() {
+                kept = format!("{seq}\t{off}\n");
+            }
+            self.write_whole("offsets", &kept)?;
+        }
+        Ok(())
+    }
+
+    pub fn offsets(&self) -> std::collections::HashMap<u64, i64> {
+        parse_offsets(&fs::read_to_string(self.path("offsets")).unwrap_or_default())
     }
 
     pub fn events(&self) -> Vec<Event> {
@@ -370,6 +436,62 @@ impl Alerts {
                 "sent_24h": sent_24h,
                 "recent": recent,
             },
+        })
+    }
+}
+
+impl Alerts {
+    /// `GET /api/alerts?since=<seq>&limit=` (u60-mcp.md R4/R7): events after `since`, oldest
+    /// first, at most `limit` (clamped to 1..=[`CURSOR_LIMIT_MAX`]); `next` is the cursor for the
+    /// next call. `gap` = events between `since` and the oldest one kept were trimmed away (or the
+    /// cursor is past the newest seq, i.e. the files were reset: read again from the start). Each
+    /// event carries the offset it was recorded with, `null` when unknown. `sms` is the last
+    /// sends as a snapshot, outside the cursor: a send finishes under its event's old seq.
+    /// The no-parameter [`Alerts::summary`] is untouched.
+    pub fn since(&self, since: u64, limit: usize, now: i64, utc_offset: i64) -> Value {
+        let limit = limit.clamp(1, CURSOR_LIMIT_MAX);
+        let read = self.read_u64("read");
+        let events = self.events();
+        let offsets = self.offsets();
+        let newest = self.read_u64("seq").max(events.last().map_or(0, |e| e.seq));
+        let reset = since > newest;
+        let from = if reset { 0 } else { since };
+        let gap = reset || events.first().is_some_and(|e| e.seq > from + 1);
+        let page: Vec<&Event> = events.iter().filter(|e| e.seq > from).take(limit).collect();
+        let next = page.last().map_or(from, |e| e.seq);
+        let more = events.iter().any(|e| e.seq > next);
+        let shown: Vec<Value> = page
+            .iter()
+            .map(|e| {
+                json!({
+                    "seq": e.seq,
+                    "time": (e.wall >= CLOCK_SANE_AFTER).then_some(e.wall),
+                    "offset": offsets.get(&e.seq),
+                    "uptime": e.uptime,
+                    "kind": e.kind,
+                    "label": kind_label(&e.kind),
+                    "label_en": kind_label_en(&e.kind),
+                    "text": e.text,
+                    "unread": e.seq > read,
+                })
+            })
+            .collect();
+        let log = parse_sms_log(&fs::read_to_string(self.path("sms-log")).unwrap_or_default());
+        let sms: Vec<Value> = log
+            .iter()
+            .rev()
+            .take(SMS_LOG_SHOWN)
+            .map(|r| json!({"time": r.wall, "seq": r.seq, "kind": r.kind, "result": r.result}))
+            .collect();
+        json!({
+            "events": shown,
+            "next": next,
+            "more": more,
+            "gap": gap,
+            "unread": events.iter().filter(|e| e.seq > read).count(),
+            "clock_set": now >= CLOCK_SANE_AFTER,
+            "utc_offset": utc_offset,
+            "sms": sms,
         })
     }
 }
@@ -782,6 +904,134 @@ mod tests {
     fn summary_carries_the_offset_it_is_given() {
         let a = scratch("offset");
         assert_eq!(a.summary(1_758_600_500, None, 19800)["utc_offset"], 19800);
+        let _ = fs::remove_dir_all(&a.dir);
+    }
+
+    fn cursor_fixture(name: &str) -> Alerts {
+        let mut a = scratch(name);
+        a.offset = None;
+        fs::write(a.path("seq"), "0\n").unwrap();
+        a.offset = Some(28800);
+        for i in 0..5 {
+            a.add("agent-crash", &format!("e{i}"), 1_758_600_000 + i, 10)
+                .unwrap();
+        }
+        a
+    }
+
+    #[test]
+    fn summary_without_since_is_unchanged() {
+        // R7: the touch screen, the web and doctor read this; it must stay byte for byte.
+        let a = scratch("snapshot");
+        fs::write(
+            a.path("queue"),
+            "1\t1758600000\t42\tagent-crash\tA\n2\t35392498\t7\twifi-takeover\tB\n",
+        )
+        .unwrap();
+        fs::write(a.path("offsets"), "1\t28800\n").unwrap();
+        fs::write(a.path("read"), "1\n").unwrap();
+        fs::write(a.path("sms-log"), "1758600001\t1\tagent-crash\tsent\n").unwrap();
+        let got = a.summary(1_758_600_500, Some(9), 28800).to_string();
+        assert_eq!(got, SNAPSHOT, "{got}");
+        let _ = fs::remove_dir_all(&a.dir);
+    }
+
+    const SNAPSHOT: &str = r#"{"clock_set":true,"events":[{"kind":"wifi-takeover","label":"Wi-Fi 看门狗重新打开了 Wi-Fi","label_en":"Wi-Fi watchdog turned Wi-Fi back on","seq":2,"text":"B","time":null,"unread":true,"uptime":7},{"kind":"agent-crash","label":"管理后台意外退出，已自动重启","label_en":"Admin backend exited unexpectedly","seq":1,"text":"A","time":1758600000,"unread":false,"uptime":42}],"read":1,"sms":{"abroad_allowed":false,"abroad_now":false,"configured":false,"number":null,"processed":0,"recent":[{"kind":"agent-crash","label":"管理后台意外退出，已自动重启","label_en":"Admin backend exited unexpectedly","result":"sent","seq":1,"time":1758600001}],"sent_24h":1},"unread":1,"uptime_now":9,"utc_offset":28800}"#;
+
+    #[test]
+    fn cursor_pages_in_order_with_next() {
+        let a = cursor_fixture("cursor");
+        let r = a.since(0, 2, 1_758_600_500, 28800);
+        let seqs: Vec<u64> = r["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["seq"].as_u64().unwrap())
+            .collect();
+        assert_eq!(seqs, vec![1, 2]);
+        assert_eq!(
+            (r["next"].as_u64(), r["more"].as_bool(), r["gap"].as_bool()),
+            (Some(2), Some(true), Some(false))
+        );
+        assert_eq!(r["events"][0]["offset"], 28800);
+        let r = a.since(4, 20, 1_758_600_500, 28800);
+        assert_eq!(r["events"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            (r["next"].as_u64(), r["more"].as_bool()),
+            (Some(5), Some(false))
+        );
+        let r = a.since(5, 20, 1_758_600_500, 28800);
+        assert!(r["events"].as_array().unwrap().is_empty());
+        assert_eq!(
+            (r["next"].as_u64(), r["gap"].as_bool()),
+            (Some(5), Some(false))
+        );
+        // limit is clamped
+        assert_eq!(a.since(0, 0, 0, 0)["events"].as_array().unwrap().len(), 1);
+        let _ = fs::remove_dir_all(&a.dir);
+    }
+
+    #[test]
+    fn cursor_reports_a_gap_and_a_reset() {
+        let a = cursor_fixture("gap");
+        let q = fs::read_to_string(a.path("queue")).unwrap();
+        fs::write(
+            a.path("queue"),
+            q.lines()
+                .skip(2)
+                .map(|l| format!("{l}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let r = a.since(1, 20, 0, 0);
+        assert_eq!(
+            (r["gap"].as_bool(), r["events"][0]["seq"].as_u64()),
+            (Some(true), Some(3))
+        );
+        assert_eq!(a.since(2, 20, 0, 0)["gap"], false);
+        let r = a.since(99, 20, 0, 0);
+        assert_eq!(
+            (r["gap"].as_bool(), r["events"][0]["seq"].as_u64()),
+            (Some(true), Some(3))
+        );
+        let _ = fs::remove_dir_all(&a.dir);
+    }
+
+    #[test]
+    fn a_late_sms_result_shows_after_the_cursor_moved() {
+        // R6: the result is logged under the old seq; the snapshot still has it.
+        let a = cursor_fixture("sms");
+        let next = a.since(0, 50, 0, 0)["next"].as_u64().unwrap();
+        fs::write(a.path("sms-log"), "1758600009\t2\tagent-crash\tsent\n").unwrap();
+        let r = a.since(next, 50, 0, 0);
+        assert!(r["events"].as_array().unwrap().is_empty());
+        assert_eq!(
+            (r["sms"][0]["seq"].as_u64(), r["sms"][0]["result"].as_str()),
+            (Some(2), Some("sent"))
+        );
+        let _ = fs::remove_dir_all(&a.dir);
+    }
+
+    #[test]
+    fn offsets_are_a_side_file_and_follow_the_trim() {
+        let a = cursor_fixture("offsets");
+        // queue keeps 5 columns: the parser every old reader uses sees all of them
+        let q = fs::read_to_string(a.path("queue")).unwrap();
+        assert_eq!(parse_queue(&q).len(), 5);
+        assert!(q.lines().all(|l| l.split('\t').count() == 5));
+        // a writer without an offset (alert-lib.sh, the sentinel's fallback): unknown
+        let mut b = Alerts::at(&a.dir);
+        b.offset = None;
+        let s = b.add("agent-crash", "x", 0, 0).unwrap();
+        assert!(a.since(s - 1, 1, 0, 0)["events"][0]["offset"].is_null());
+        for _ in 0..400 {
+            a.add("agent-crash", "x", 0, 0).unwrap();
+        }
+        let first = a.events()[0].seq;
+        let offs = a.offsets();
+        assert!(offs.len() <= QUEUE_TRIM_AT);
+        assert!(offs.keys().all(|&s| s >= first));
+        assert_eq!(offs.get(&a.events().last().unwrap().seq), Some(&28800));
         let _ = fs::remove_dir_all(&a.dir);
     }
 }

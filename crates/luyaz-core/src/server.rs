@@ -143,6 +143,9 @@ impl App {
             fields: Map::new(),
         };
         let (tx, _) = watch::channel(placeholder.clone());
+        crate::ops::engine::on_agent_end(Box::new(|t| {
+            crate::ops::agent::event(&crate::ops::agent::txn_text(t))
+        }));
         let ops = crate::ops::Engine::new(
             crate::ops::UbusDevice::new(exec.clone()),
             crate::ops::Config::from_env(),
@@ -280,11 +283,15 @@ impl App {
         let state = serde_json::to_value(&snap).unwrap_or(Value::Null);
         // E4 T13（V2-34、V2-38）：叠在首页的和 op 在同一把锁里算。
         let (screen_op, op) = self.inner.ops.screen();
-        let net = crate::project::screen::net_view_op(
+        let mut net = crate::project::screen::net_view_op(
             &state,
             crate::cell_window::current(),
             screen_op.as_ref(),
         );
+        // T6: the open "sure" finding over the network verdict (not over `story`)
+        if let Some(h) = crate::api::finding::home_now() {
+            crate::project::screen::with_finding(&mut net, &h.layer, (&h.symptom, &h.symptom_en));
+        }
         screen_json(ts, net, op, self.inner.exec.exec_age_ms())
     }
     /// 一轮里的旧采集（在执行者里跑，块已经读完）。别在持有 snapshot 锁时调 ubus：

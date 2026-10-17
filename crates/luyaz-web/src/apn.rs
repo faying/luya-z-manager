@@ -1056,6 +1056,8 @@ impl Polled for Poll {
 struct Page {
     shell: crate::shell::Shell,
     l: Lang,
+    /// The per-card roaming setting for the agent (second phase D6); None when the core has none.
+    agent: Option<AgentRoam>,
     leaves: Vec<(String, String)>,
     mode_op: String,
     v6_op: String,
@@ -1070,8 +1072,54 @@ impl Page {
     }
 }
 
+/// The card in now and whether its owner marked roaming on it as not expensive.
+pub struct AgentRoam {
+    pub iccid: String,
+    pub tail: String,
+    pub cheap: bool,
+}
+
+/// The core's per-card setting for the SIM in now; None without a card number or a core that
+/// does not have it.
+async fn agent_roam(app: &Shared, who: &Caller) -> Option<AgentRoam> {
+    let v = crate::agent::get(app, who, "/api/agent/roam-cheap").await.ok()?;
+    let iccid = v["current_iccid"].as_str().filter(|s| !s.is_empty())?.to_owned();
+    let tail = iccid[iccid.len().saturating_sub(4)..].to_owned();
+    Some(AgentRoam {
+        iccid,
+        tail,
+        cheap: v["current_cheap"] == true,
+    })
+}
+
+/// POST /router/apn/agent-roam (a form of this page, a person's session only): set the card's
+/// setting on the core, back to the page.
+pub async fn agent_roam_set(State(app): State<Shared>, req: axum::extract::Request) -> Response {
+    let who = Caller::of(&app, &req);
+    let Ok(b) = axum::body::to_bytes(req.into_body(), 4096).await else {
+        return axum::http::StatusCode::BAD_REQUEST.into_response();
+    };
+    // two plain fields (the card number is digits and letters): no decoding needed
+    let field = |k: &str| {
+        std::str::from_utf8(&b)
+            .ok()?
+            .split('&')
+            .find_map(|kv| kv.strip_prefix(k)?.strip_prefix('='))
+            .map(str::to_owned)
+    };
+    let (Some(iccid), Some(cheap)) = (field("iccid"), field("cheap")) else {
+        return axum::http::StatusCode::BAD_REQUEST.into_response();
+    };
+    let body = json!({"iccid": iccid, "cheap": cheap == "1"});
+    if let Err(e) = crate::agent::put_raw(&app, &who, "/api/agent/roam-cheap", &body).await {
+        eprintln!("[apn] roam setting not saved: {e:?}");
+    }
+    axum::response::Redirect::to(PATH).into_response()
+}
+
 pub async fn page(State(app): State<Shared>, req: axum::extract::Request) -> Response {
     let headers = req.headers().clone();
+    let agent = agent_roam(&app, &Caller::of(&app, &req)).await;
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
     let l = ctx.lang;
     let shell = app.hub.read(|st| {
@@ -1081,6 +1129,7 @@ pub async fn page(State(app): State<Shared>, req: axum::extract::Request) -> Res
     let html = Page {
         shell,
         l,
+        agent,
         leaves: render(&app, None, None, l),
         mode_op: area(&Act::Mode(false), l, ctx.remote, &idle),
         v6_op: area(&Act::V6(false), l, ctx.remote, &idle),

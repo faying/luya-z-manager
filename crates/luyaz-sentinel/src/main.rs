@@ -8,7 +8,7 @@
 
 /// Read from the file by the core (luyaz-core versions.rs), never by running the program.
 #[used]
-static VERSION_MARK: &str = concat!("LUYAZ_VERSION=", env!("CARGO_PKG_VERSION"));
+static VERSION_MARK: &str = concat!("LUYAZ_VERSION=", env!("CARGO_PKG_VERSION"), ";");
 
 /// `<name> <version> (<commit>)`: the commit from LUYAZ_COMMIT (tools/luyaz ship passes it)
 #[cfg(target_os = "linux")]

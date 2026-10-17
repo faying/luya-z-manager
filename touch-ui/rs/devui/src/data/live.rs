@@ -110,6 +110,7 @@ impl Live {
             chill_traffic: Some(self.chill.traffic().into()),
             chill_speed: Some(self.chill.speed().into()),
             chill_chain: Some(self.chill.chain().into()),
+            chill_pin: self.chill.exit_pin(),
             chill_conns: Some(self.chill.conns().into()),
             chill_online: self.chill.online() as i32,
             chill_conn_split: Some(self.chill.conn_split()),

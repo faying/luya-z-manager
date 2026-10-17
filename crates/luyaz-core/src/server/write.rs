@@ -43,7 +43,143 @@ async fn handle_inner(
     if let Err(e) = check_approved_by(&body) {
         return invalid_parameter(&action, &e);
     }
-    if let Some(response) = ops_route(&app, &action, &body).await {
+    // 第二期（D7、O1）：有效批准者是 mcp 的写先过 Agent 的关（白名单、敏感、按层限速），不论走不走事务
+    let pass = match agent_gate(&action, &body).await {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let response = gated(app, action.clone(), body, peer, pass.as_ref()).await;
+    if let Some(p) = &pass
+        && p.fresh
+    {
+        let g = crate::ops::agent::gate();
+        // 没动设备（参数错、忙、被拒绝、执行者满）：位置还回去；动了就算这一次
+        if response.status().is_client_error()
+            || response.status() == StatusCode::SERVICE_UNAVAILABLE
+        {
+            g.release(&p.ticket);
+        } else if p.single {
+            g.done(&p.ticket);
+        }
+        // 不经事务的写（apn.add/delete/set_pdp_type、改不在用的 APN；D11）没有事务结束那一行：这里记
+        if crate::ops::spec::find(&action).is_none()
+            || p.plain.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            crate::ops::agent::event(&format!(
+                "agent {action}: HTTP {} (no trial, no rollback)",
+                response.status().as_u16()
+            ));
+        }
+    }
+    response
+}
+
+/// Agent 的一次放行（[`agent_gate`]）。
+struct AgentPass {
+    ticket: crate::ops::agent::Ticket,
+    /// CHILL 切之前就确定不通（D10）：照做、不带退回。
+    rollback: Option<bool>,
+    /// 这次请求新占的位置（不是带着票来的后续一步）。
+    fresh: bool,
+    /// 一步就完（不是 `apn_use` 那样的几步）：做完票就作废。
+    single: bool,
+    /// 描述表里的动作这次不算事务（改的不是正在用的 APN）：照原来的 /control 做了。
+    plain: std::sync::atomic::AtomicBool,
+}
+
+/// 有效批准者是 mcp 时：只读动作放过；白名单外拒绝（含 `op.keep`/`op.revert`）；APN 层看敏感（读漫游和卡号）；
+/// 带着有效的票（`agent_ticket`）是同一次操作的后续一步，不再计数；否则按层占位。
+async fn agent_gate(action: &str, body: &Value) -> Result<Option<AgentPass>, Response> {
+    use crate::ops::agent::{self, Layer, Refusal};
+    let Some(who) = who_of(body) else {
+        return Ok(None);
+    };
+    if who.approved_by != Source::Mcp || agent::read_only(action) {
+        return Ok(None);
+    }
+    let now = agent::now_unix();
+    let refuse = |r: Refusal| {
+        let (status, code, message, extra) = r.reply(now);
+        let mut v = json!({"ok": false, "action": action,
+            "error": {"code": code, "message": message}});
+        if let (Some(e), Some(m)) = (v["error"].as_object_mut(), extra.as_object()) {
+            e.extend(m.clone());
+        }
+        eprintln!("ops: agent {action} refused: {code}");
+        Err((StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN), Json(v)).into_response())
+    };
+    let Some(layer) = agent::layer_of(action) else {
+        return refuse(Refusal::NotAllowed);
+    };
+    let g = agent::gate();
+    if let Some(id) = body.get("agent_ticket").and_then(Value::as_str) {
+        return match g.redeem(id, layer, now) {
+            Some(ticket) => Ok(Some(AgentPass {
+                ticket,
+                rollback: None,
+                fresh: false,
+                single: false,
+                plain: Default::default(),
+            })),
+            None => refuse(Refusal::NotAllowed),
+        };
+    }
+    let mut rollback = None;
+    let iccid = if layer == Layer::Apn {
+        match crate::ops::agent::apn_sensitivity().await {
+            Ok(iccid) => Some(iccid),
+            Err(why) => return refuse(Refusal::Sensitive(why)),
+        }
+    } else {
+        // O10：别的 CHILL 工作在跑（含核心重启前起的 chill.sh）就不动；D10：切之前先真路径测一次
+        if crate::ops::chill::busy() {
+            return refuse(Refusal::Busy("another CHILL job is running".into()));
+        }
+        if crate::ops::chill::idle_paused() {
+            // 暂停时改了 mihomo 会重启一下又停，试用必然测不通、到点退回
+            return refuse(Refusal::Off(
+                "CHILL is paused while nobody uses the device (screen off, no clients); it resumes on use".into(),
+            ));
+        }
+        match crate::ops::chill::probe().await {
+            crate::ops::chill::Probe::Up => {}
+            crate::ops::chill::Probe::Down => {
+                eprintln!("ops: agent {action}: CHILL does not get through now; no rollback");
+                rollback = Some(false);
+            }
+            crate::ops::chill::Probe::Unknown if !crate::ops::chill::up().await => {
+                return refuse(Refusal::Off(
+                    "CHILL is not running (mihomo does not answer); the owner turns it on".into(),
+                ));
+            }
+            crate::ops::chill::Probe::Unknown => {
+                return refuse(Refusal::Busy(
+                    "cannot tell whether CHILL gets through now (mihomo or 127.0.0.1:7894 not answering)".into(),
+                ));
+            }
+        }
+        None
+    };
+    match g.reserve(layer, iccid, now) {
+        Ok(ticket) => Ok(Some(AgentPass {
+            ticket,
+            rollback,
+            fresh: true,
+            single: true,
+            plain: Default::default(),
+        })),
+        Err(r) => refuse(r),
+    }
+}
+
+async fn gated(
+    app: App,
+    action: String,
+    body: Value,
+    peer: Option<std::net::SocketAddr>,
+    pass: Option<&AgentPass>,
+) -> Response {
+    if let Some(response) = ops_route(&app, &action, &body, pass).await {
         return response;
     }
     let params = body.get("params").cloned().unwrap_or_else(|| json!({}));
@@ -450,7 +586,12 @@ fn journal_append(app: &App, action: &str, body: &Value, params: &Value) -> Resp
 
 /// E4：`op.status` / `op.revert` / `op.keep`，以及带 source 的、描述表里的写（走事务）。
 /// 其他请求返回 None，照原来的处理。
-async fn ops_route(app: &App, action: &str, body: &Value) -> Option<Response> {
+async fn ops_route(
+    app: &App,
+    action: &str,
+    body: &Value,
+    pass: Option<&AgentPass>,
+) -> Option<Response> {
     let ops = &app.inner.ops;
     let empty = json!({});
     let params = body.get("params").unwrap_or(&empty);
@@ -632,6 +773,8 @@ async fn ops_route(app: &App, action: &str, body: &Value) -> Option<Response> {
         approved_by: who.approved_by,
         op_id,
         undo,
+        rollback: pass.and_then(|p| p.rollback),
+        expect_iccid: pass.and_then(|p| p.ticket.iccid.clone()),
     };
     let submitted = if crate::ops::spec::is_wifi(spec.item) {
         // Wi-Fi 设置：提交之前拿 Wi-Fi 锁（和 agent 一样最多等 5 秒），拿不到就是忙，事务还没开始。
@@ -662,6 +805,16 @@ async fn ops_route(app: &App, action: &str, body: &Value) -> Option<Response> {
     };
     // 改的不是正在用的 APN：不是事务，照原来的 /control 做
     if matches!(submitted, crate::ops::Submit::Plain) {
+        if action == "apn.use" {
+            // 已经是这样（原来的 /control 没有这个动作）
+            return Some(control_ok(
+                action,
+                json!({"status": "ok", "note": "no changes"}),
+            ));
+        }
+        if let Some(p) = pass {
+            p.plain.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         return None;
     }
     Some(match submitted {
@@ -738,8 +891,10 @@ fn ends_device(action: &str, body: &Value) -> bool {
 }
 
 /// 只读、不改设备的动作：不清慢数据缓存、不标块（`sms.list_after` 翻页时每页一次，清缓存会让下一轮全部重读）。
+/// `state.set_interval` 只改本进程执行者的采样间隔（`Executor::set_interval_ms`，一个原子数 + 唤醒），
+/// 不碰设备；触屏每次亮灭屏都调，以前每次都清全部缓存、全量重读（audit-2026-10-06 附录 A）。
 fn read_only(action: &str) -> bool {
-    action == "sms.list_after"
+    matches!(action, "sms.list_after" | "state.set_interval")
 }
 
 /// `/control` 动作 → 它会改变的块。没列出的动作算「没有映射」，成功后全部块立即读（R12）。
@@ -824,6 +979,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn set_interval_is_read_only_and_not_a_device_write() {
+        assert!(read_only("state.set_interval"));
+        assert!(read_only("sms.list_after"));
+        assert!(!read_only("device.reboot"));
+        assert!(!read_only("power.direct_supply.set"));
+        // 不在会改设备的动作表里：不拿写锁、不记流水账
+        assert!(!crate::control::ACTIONS.contains(&"state.set_interval"));
+        assert!(!crate::control::E4_ACTIONS.contains(&"state.set_interval"));
+    }
+
+    #[test]
     fn approved_by_is_checked_against_the_source() {
         let ok = |b: Value| check_approved_by(&b).is_ok();
         // 没有：和以前一样
@@ -832,7 +998,9 @@ mod tests {
         // 人确认了 MCP 的提议
         assert!(ok(json!({"source":"mcp","approved_by":"screen"})));
         assert!(ok(json!({"source":"mcp","approved_by":"web"})));
+        // Agent 自己批准（第二期 D7：放不放行看动作，见 agent_gate）；别的来源不能写 mcp 当批准者
         assert!(ok(json!({"source":"mcp","approved_by":"mcp"})));
+        assert!(!ok(json!({"source":"web","approved_by":"mcp"})));
         // 批准者只能是触屏、网页，或者就是来源
         assert!(!ok(json!({"source":"mcp","approved_by":"guard"})));
         assert!(!ok(json!({"source":"mcp","approved_by":"scenario"})));
@@ -848,5 +1016,37 @@ mod tests {
             Who::from(Source::Web)
         );
         assert!(who_of(&json!({})).is_none());
+    }
+
+    /// 第二期 D7、O1：有效批准者是 mcp（不带 approved_by 也算）时白名单外一律 403，包括对进行中事务的保留/退回；
+    /// 只读的放过；人确认过的（approved_by=screen）不过这道关。
+    #[tokio::test]
+    async fn agent_writes_outside_the_whitelist_are_refused() {
+        for (action, body) in [
+            ("esim.switch", json!({"source":"mcp"})),
+            ("sim.set_slot", json!({"source":"mcp","approved_by":"mcp"})),
+            ("network.set_mode", json!({"source":"mcp"})),
+            ("device.reboot", json!({"source":"mcp"})),
+            ("op.keep", json!({"source":"mcp"})),
+            ("op.revert", json!({"source":"mcp"})),
+            ("wifi.settings", json!({"source":"mcp"})),
+        ] {
+            match agent_gate(action, &body).await {
+                Err(r) => assert_eq!(r.status(), StatusCode::FORBIDDEN, "{action}"),
+                Ok(_) => panic!("{action} let through"),
+            }
+        }
+        // 编的票不算
+        let r = agent_gate("apn.add", &json!({"source":"mcp","agent_ticket":"0000"})).await;
+        assert!(r.is_err());
+        for (action, body) in [
+            ("op.status", json!({"source":"mcp"})),
+            ("journal.list", json!({"source":"mcp"})),
+            ("network.set_mode", json!({"source":"mcp","approved_by":"screen"})),
+            ("network.set_mode", json!({"source":"web"})),
+            ("network.set_mode", json!({})),
+        ] {
+            assert!(matches!(agent_gate(action, &body).await, Ok(None)), "{action} {body}");
+        }
     }
 }

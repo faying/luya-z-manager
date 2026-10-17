@@ -92,6 +92,7 @@ async function own(p) {
   ok(/运行中/.test(await txt(p, "#hm-chill-t")) && await p.locator("#hm-chill-seg [role=radio]").count() === 3, `CHILL card: ${await txt(p, "#hm-chill")}`);
   ok(await p.locator("#hm-chill-seg [aria-checked=true]").count() === 1, "one exit selected");
   // the diagnose link is hidden when the verdict is ok, and follows the verdict
+  await p.waitForFunction(() => document.querySelector("#hm-why")?.hidden, null, { timeout: 15000 }).catch(() => {}); // the finding line from the common checks goes with the next status read
   ok(await p.locator("#hm-why").isHidden(), "no 查原因 link with an ok verdict");
   // the links of the old page
   for (const [sel, href] of [["#hd-cl", "/clients"], ["#hi-reg", "/router/mobile-network"], ["#hw-on", "/router/wifi"], ["#hm-scene", "/router/scenario"], ["#hm-ts", "/services/tailscale"]]) {
@@ -114,6 +115,13 @@ async function own(p) {
   ok(/还没有情景/.test(await txt(p, "#hm-scene")), `no scenarios: ${await txt(p, "#hm-scene")}`);
   await p.waitForFunction(() => document.querySelector("#hm-why")?.hidden, null, { timeout: 15000 }).catch(() => {});
   ok(await p.locator("#hm-why").isHidden(), "verdict ok again: link gone");
+  // T6: the core's open "sure" finding — its sentence + a link to the evidence, over an ok verdict
+  await hook({ finding: true });
+  await until(p, "#hm-why", /数据连接没建立/, 15000);
+  ok(!(await p.locator("#hm-why").isHidden()) && await p.locator("#hm-why a").getAttribute("href") === "/tools/diagnose" && /看证据/.test(await txt(p, "#hm-why")), `finding → 「${await txt(p, "#hm-why")}」`);
+  await hook({ finding: false });
+  await p.waitForFunction(() => document.querySelector("#hm-why")?.hidden, null, { timeout: 15000 }).catch(() => {});
+  ok(await p.locator("#hm-why").isHidden(), "finding closed: line gone");
   await hook({ reset: true });
 
   // the exit control: ok
@@ -187,6 +195,8 @@ async function layout(browser) {
 }
 
 const browser = await chromium.launch({ channel: "chrome" });
+await hook({ finding: true }); // the common checks with the finding line showing (T6)
+await new Promise((r) => setTimeout(r, 11000)); // luyaz-web reads the public status every 10 s
 for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [1280, 900, "desk", "en", "dark"], [390, 844, "phone", "zh", "light"], [390, 844, "phone", "en", "dark"]]) {
   const ctx = await browser.newContext({ viewport: { width: w, height: h } });
   await ctx.addCookies([{ name: "lw_sid", value: sid, url: WEB }, { name: "u60_lang", value: lang, url: WEB }]);
@@ -216,7 +226,12 @@ for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [12
   const axe = await new AxeBuilder({ page: p }).analyze();
   ok(axe.violations.length === 0, `axe ${name} ${lang} ${theme}: ${axe.violations.map((v) => v.id + "×" + v.nodes.length).join(", ") || "0"}`);
   await p.screenshot({ path: `${OUT}/home-${name}-${lang}-${theme}.png`, fullPage: true });
-  if (name === "desk" && lang === "zh") await own(p);
+  if (name === "desk" && lang === "zh") {
+    ok(/数据连接没建立/.test(await txt(p, "#hm-why")), `common checks ran with the finding line: ${await txt(p, "#hm-why")}`);
+    await own(p);
+    await hook({ finding: true });
+    await p.waitForTimeout(11000);
+  }
   ok(errs.length === 0, `${name} ${lang}: no page errors ${errs.join("; ")}`);
   await ctx.close();
 }

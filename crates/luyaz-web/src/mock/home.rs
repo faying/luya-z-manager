@@ -5,7 +5,8 @@
 //! `POST /mock/home` (JSON, all optional): `{"reset": true}`; `{"verdict": "stall"}` (network.verdict);
 //! `{"scenario": "none" | "off" | "pinned"}`; `{"notice": "alldown" | "backup" | null}` (CHILL notice);
 //! `{"bat": "discharging" | "charging" | "limit" | "estimating" | "gone"}` (what /v2/api/screen says);
-//! `{"clients": n}` (republishes the `clients` block).
+//! `{"clients": n}` (republishes the `clients` block); `{"finding": true | false}` (network.finding,
+//! the core's open "sure" finding, T6).
 
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -24,6 +25,7 @@ struct Hooks {
     scenario: String,
     notice: String,
     bat: String,
+    finding: bool,
 }
 
 fn hooks() -> &'static Mutex<Hooks> {
@@ -57,6 +59,12 @@ pub(super) fn seed(m: &Arc<Mock>) {
 pub(crate) fn public_extra(d: &mut Value) {
     let h = hooks().lock().unwrap().clone();
     d["network"] = json!({"verdict": if h.verdict.is_empty() { "ok" } else { &h.verdict }});
+    d["network"]["finding"] = if h.finding {
+        json!({"kind": "data.no_internet", "layer": "data", "symptom": "已注册，但数据连接没建立",
+               "symptom_en": "Registered, but the data connection is down"})
+    } else {
+        Value::Null
+    };
     d["scenario"] = match h.scenario.as_str() {
         "none" => json!({"configured": false, "enabled": true, "current": null, "pin": null}),
         s => json!({"configured": true, "enabled": s != "off", "current": "abroad", "name": "国外",
@@ -81,9 +89,7 @@ pub(crate) fn public_extra(d: &mut Value) {
 
 async fn screen(State(_m): State<Arc<Mock>>) -> Response {
     let bat = hooks().lock().unwrap().bat.clone();
-    let b = |state: &str, kind: &str, minutes: Value, target: i64| {
-        json!({"state": state, "kind": kind, "minutes": minutes, "target_pct": target, "observed_at": 0, "samples": 12})
-    };
+    let b = |state: &str, kind: &str, minutes: Value, target: i64| json!({"state": state, "kind": kind, "minutes": minutes, "target_pct": target, "observed_at": 0, "samples": 12});
     let battery = match bat.as_str() {
         "charging" => b("ok", "charging_eta", json!(95), 100),
         "limit" => b("ok", "charging_eta", json!(40), 80),
@@ -111,6 +117,9 @@ async fn set(State(m): State<Arc<Mock>>, body: axum::body::Bytes) -> StatusCode 
     }
     if let Some(s) = v["bat"].as_str() {
         h.bat = s.into();
+    }
+    if let Some(b) = v["finding"].as_bool() {
+        h.finding = b;
     }
     drop(h);
     if let Some(n) = v["clients"].as_i64() {

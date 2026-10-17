@@ -33,6 +33,36 @@ interface MockRun {
 
 let current: MockRun | null = null;
 
+// The core's open finding (T6; api/finding.rs view()): only under scenario `finding`; 「忽略」
+// keeps it away for DISMISS_MS (the core's 24 h, shortened so a check can see it come back).
+const DISMISS_MS = 5000;
+let dismissedAt: number | null = null;
+
+export function mockFinding(ctx: Ctx): Record<string, unknown> | null {
+  if (!ctx.has("finding")) return null;
+  if (dismissedAt !== null && ctx.now - dismissedAt < DISMISS_MS) return null;
+  const t = devSecs(ctx.now);
+  return {
+    kind: "data.no_internet",
+    iccid_tail: "1234",
+    layer: "data",
+    confidence: "sure",
+    symptom: "已注册，但数据连接没建立",
+    symptom_en: "Registered, but the data connection is down",
+    evidence: [
+      { layer: "signal", level: "ok", detail: "已注册（本地）", detail_en: "Registered (home)", at: t },
+      { layer: "data", level: "bad", detail: "connect_status disconnected · 失败 3 次", detail_en: "connect_status disconnected · 3 failures", at: t },
+      { layer: "internet", level: "na", detail: "数据层先断了", detail_en: "the data layer is down first", at: t },
+      { layer: "dns", level: "na", detail: "数据层先断了", detail_en: "the data layer is down first", at: t },
+    ],
+    at: t,
+    first: t - 900,
+    last: t,
+    count: 30,
+    open: 1,
+  };
+}
+
 const devSecs = (ms: number) => Math.floor(ms / 1000) + DEVICE_UTC_OFFSET;
 
 type Final = Omit<DiagLayer, "counted"> & { counted?: boolean };
@@ -169,10 +199,11 @@ export const routes: Route[] = [
     path: "/api/diagnose",
     ownMissing: true,
     handler: (ctx) => {
-      if (!current) return ok({ state: "idle" });
+      const finding = mockFinding(ctx);
+      if (!current) return ok({ state: "idle", finding });
       const v = view(current, ctx.now);
-      if (v.state === "done" && (v.age_s ?? 0) > KEEP_S) return ok({ state: "idle" });
-      return ok(v);
+      if (v.state === "done" && (v.age_s ?? 0) > KEEP_S) return ok({ state: "idle", finding });
+      return ok({ ...v, finding });
     },
   },
   {
@@ -196,6 +227,16 @@ export const routes: Route[] = [
       if (r.feedback !== null) return ok({ already: true });
       r.feedback = right;
       return ok({ recorded: true });
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/diagnose/dismiss",
+    handler: (ctx) => {
+      if (typeof bodyField(ctx.body, "kind") !== "string") return fail("kind required", 400);
+      if (!mockFinding(ctx)) return fail("no such finding", 404);
+      dismissedAt = ctx.now;
+      return ok({});
     },
   },
 ];

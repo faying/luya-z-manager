@@ -41,6 +41,7 @@ pub(crate) mod control;
 mod device_admin;
 mod esim;
 mod exits;
+pub(crate) mod finding;
 mod home;
 pub(crate) mod home_exit;
 mod net_reads;
@@ -344,6 +345,13 @@ impl Compat {
         .with_scheduler_io(Arc::new(crate::engines::scheduler::Http { base: v2, token }))
         .with_exits(true)
         .with_home_exit(crate::engines::home_exit::enabled())
+        .with_chill_slot(crate::ops::chill::slot())
+    }
+
+    /// CHILL jobs on this job slot (the device's is shared with u60d's CHILL transactions, O10).
+    pub fn with_chill_slot(mut self, slot: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.chill = Arc::new(chill_jobs::ChillJobs::sharing(slot));
+        self
     }
 
     /// A device path under [`Compat::root`].
@@ -417,6 +425,10 @@ impl Compat {
                 .route("/api/modem/netselect/auto", post(ops::select_auto))
                 .route("/api/netinfo/scan", post(ops::scan))
                 .route("/api/netinfo/apn", post(ops::apn_use))
+                .route(
+                    "/api/agent/roam-cheap",
+                    get(ops::roam_cheap_get).put(ops::roam_cheap_put),
+                )
                 .route("/api/speedtest/servers", get(speed::servers))
                 .route("/api/speedtest/start", post(speed::start))
                 .route("/api/speedtest/progress", get(speed::progress))
@@ -438,7 +450,8 @@ impl Compat {
                     get(watch::diagnose_get).post(watch::diagnose_start),
                 )
                 .route("/api/diagnose/speed", post(watch::diagnose_speed))
-                .route("/api/diagnose/feedback", post(watch::diagnose_feedback));
+                .route("/api/diagnose/feedback", post(watch::diagnose_feedback))
+                .route("/api/diagnose/dismiss", post(watch::diagnose_dismiss));
             // the charge limit and the battery estimate (9c): only with the policies on
             let charge = Router::new()
                 .route(
@@ -589,12 +602,35 @@ fn uptime_now() -> Option<u64> {
         .ok()
 }
 
-/// GET /api/alerts (the agent's `alerts::alerts_get`).
-async fn alerts_get(State(c): State<Compat>) -> Response {
+/// `since` and `limit` from a query string; `since` absent = the plain summary (u60-mcp.md R7).
+fn cursor_query(q: Option<&str>) -> Option<(u64, usize)> {
+    let mut since = None;
+    let mut limit = luyaz_api::alerts::CURSOR_LIMIT;
+    for (k, v) in q?.split('&').filter_map(|p| p.split_once('=')) {
+        match k {
+            "since" => since = v.parse().ok(),
+            "limit" => limit = v.parse().unwrap_or(limit),
+            _ => {}
+        }
+    }
+    Some((since?, limit))
+}
+
+/// GET /api/alerts (the agent's `alerts::alerts_get`). With `?since=<seq>[&limit=]` the cursor
+/// read instead (u60-mcp.md R4); without it the reply stays exactly what the screen and web read.
+async fn alerts_get(
+    State(c): State<Compat>,
+    axum::extract::RawQuery(q): axum::extract::RawQuery,
+) -> Response {
     let offset = utc_offset().await;
     let dir = c.alerts_dir();
+    let cursor = cursor_query(q.as_deref());
     let data = tokio::task::spawn_blocking(move || {
-        Alerts::at(&dir).summary(luyaz_api::alerts::now(), uptime_now(), offset)
+        let a = Alerts::at(&dir);
+        match cursor {
+            Some((since, limit)) => a.since(since, limit, luyaz_api::alerts::now(), offset),
+            None => a.summary(luyaz_api::alerts::now(), uptime_now(), offset),
+        }
     })
     .await
     .unwrap_or(Value::Null);
@@ -703,6 +739,8 @@ pub async fn utc_offset() -> i64 {
     let b = crate::state::uci_value("zwrt_zte_sntp.settings.timezone").await;
     let some = |s: &str| (!s.is_empty()).then(|| s.to_string());
     let v = luyaz_api::clock::utc_offset(some(&a).as_deref(), some(&b).as_deref());
+    // what new alerts are recorded with (u60-mcp.md R10)
+    luyaz_api::alerts::set_current_offset(v);
     *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), v));
     v
 }

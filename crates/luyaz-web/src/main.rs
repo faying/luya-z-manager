@@ -17,6 +17,8 @@
 //! `luyaz-web serve` is the page server; `luyaz-web mock --replay <capture>` stands in for u60d.
 
 mod agent;
+mod agent_act;
+mod agent_api;
 mod alerts_page;
 mod apn;
 mod assets;
@@ -134,6 +136,15 @@ enum Cmd {
         /// The CHILL dashboard (zashboard) files served at /chill-ui/ (chill_proxy.rs).
         #[arg(long, env = "LUYAZ_WEB_CHILL_UI_DIR", default_value = "/data/chill/ui")]
         chill_ui_dir: std::path::PathBuf,
+        /// `/agent-api` tokens, `name token` per line (agent_api.rs); no file = the routes are off.
+        #[arg(long, env = "LUYAZ_WEB_AGENT_TOKEN_FILE", default_value = agent_api::TOKEN_FILE)]
+        agent_token_file: std::path::PathBuf,
+        /// Extra `/agent-api` source networks, one CIDR per line (beside loopback and the tailnet).
+        #[arg(long, env = "LUYAZ_WEB_AGENT_ALLOW_FILE", default_value = agent_api::ALLOW_FILE)]
+        agent_allow_file: std::path::PathBuf,
+        /// Who may use an `act` token (`/agent-api/act/*`), one CIDR per line; no file = no one.
+        #[arg(long, env = "LUYAZ_WEB_AGENT_ACT_ALLOW_FILE", default_value = agent_act::ACT_ALLOW_FILE)]
+        agent_act_allow_file: std::path::PathBuf,
     },
     /// Stand in for u60d: replay a recorded /v2/events capture.
     Mock {
@@ -227,6 +238,7 @@ pub fn app(
         .route("/tools/diagnose/start", post(diagnose::start))
         .route("/tools/diagnose/speed", post(diagnose::speed))
         .route("/tools/diagnose/feedback", post(diagnose::feedback))
+        .route("/tools/diagnose/dismiss", post(diagnose::dismiss))
         .route("/tools/diagnose/refresh", post(diagnose::refresh))
         .route("/device-info", get(device_info::page))
         .route("/device-info/events", get(device_info::events))
@@ -281,6 +293,7 @@ pub fn app(
         .route("/router/celllock/reset/cancel", post(celllock::reset_cancel))
         .route("/router/apn", get(apn::page))
         .route("/router/apn/events", get(apn::events))
+        .route("/router/apn/agent-roam", post(apn::agent_roam_set))
         .route("/router/apn/mode/ask", post(apn::mode_ask))
         .route("/router/apn/mode/set", post(apn::mode_set))
         .route("/router/apn/mode/cancel", post(apn::mode_cancel))
@@ -364,6 +377,7 @@ pub fn app(
         .merge(scenario::routes())
         .merge(chill_page::routes())
         .merge(chill_proxy::routes())
+        .merge(agent_api::routes())
         .merge(device_power::routes())
         .merge(sim_page::routes())
         .merge(stc::routes())
@@ -465,7 +479,7 @@ async fn serve_all(binds: Vec<String>, router: Router, every: Duration) {
 
 /// Read from the file by the core (luyaz-core versions.rs), never by running the program.
 #[used]
-static VERSION_MARK: &str = concat!("LUYAZ_VERSION=", env!("CARGO_PKG_VERSION"));
+static VERSION_MARK: &str = concat!("LUYAZ_VERSION=", env!("CARGO_PKG_VERSION"), ";");
 
 /// `<name> <version> (<commit>)`: the commit from LUYAZ_COMMIT (tools/luyaz ship passes it)
 fn version_line(name: &str) -> String {
@@ -500,8 +514,13 @@ fn main() {
                 pages,
                 logo_dir,
                 chill_ui_dir,
+                agent_token_file,
+                agent_allow_file,
+                agent_act_allow_file,
             } => {
                 chill_proxy::set_ui_dir(chill_ui_dir);
+                agent_api::set_files(agent_token_file, agent_allow_file);
+                agent_act::set_act_allow(agent_act_allow_file);
                 (
                     bind,
                     app(

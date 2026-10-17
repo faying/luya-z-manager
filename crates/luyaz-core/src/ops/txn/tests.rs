@@ -422,16 +422,16 @@ fn crash_during_apply_is_never_reapplied() {
 }
 
 #[test]
-fn crash_during_rollback_never_sends_a_second_one() {
+fn crash_during_rollback_keeps_the_rollback_intent() {
     let mut t = txn(true);
     t.on_tick(1_000 + D);
     assert_eq!(t.intent, Some(Intent::Rollback));
     let mut t: Txn = serde_json::from_str(&serde_json::to_string(&t).unwrap()).unwrap();
-    // 同一次开机和整机重启都一样：只接着确认
+    // 同一次开机和整机重启都一样：意图留着，驱动按读回决定发不发（O7）；一直发不出去，到点放弃
     let mut u = t.clone();
     assert_eq!(t.resume("boot-a", 2_000 + D), Next::Wait);
     assert_eq!(t.phase, Phase::RollingBack);
-    assert_eq!(t.intent, None);
+    assert_eq!(t.intent, Some(Intent::Rollback));
     assert_eq!(u.resume("boot-b", 1_000), Next::Wait);
     assert_eq!(u.phase, Phase::RollingBack);
     assert_eq!(u.on_tick(1_000 + D), Next::Done);
@@ -646,6 +646,7 @@ fn probe_only_when_everything_else_is_there() {
             iface: "rmnet_data0".into(),
             dns: vec!["192.0.2.53".into()],
             v6: false,
+            chill: false,
         })
     );
 }
@@ -661,6 +662,7 @@ fn ipv6_only_connection_probes_over_ipv6() {
             iface: "rmnet_data0".into(),
             dns: vec!["2001:db8::53".into()],
             v6: true,
+            chill: false,
         })
     );
     // 有 IPv4 时照旧走 IPv4，IPv6 地址不算进身份
@@ -877,7 +879,9 @@ fn approved_by_rules() {
     use Source::*;
     // 默认和来源相同
     assert_eq!(Who::new(Mcp, None).unwrap(), Who::from(Mcp));
-    assert_eq!(Who::new(Mcp, Some(Mcp)).unwrap().confirmed_by(), None);
+    // Agent 自己批准 = 和不写一样（第二期 D7，放不放行由 ops::agent 按动作定）；别的来源不能写 mcp
+    assert_eq!(Who::new(Mcp, Some(Mcp)).unwrap(), Who::from(Mcp));
+    assert!(Who::new(Web, Some(Mcp)).is_err());
     // 人确认：只能是触屏或网页
     assert_eq!(
         Who::new(Mcp, Some(Screen)).unwrap().confirmed_by(),
@@ -970,4 +974,87 @@ fn object_targets_confirm_cancel_and_roll_back() {
     t.rollback_sent(1_000 + D);
     assert_eq!(t.on_reading(&at(&old, true), 2_000 + D), Next::Done);
     assert_eq!(t.phase, Phase::RolledBack);
+}
+
+// ── CHILL（第二期 D2、D10）──────────────────────────────────────────
+
+fn chill_txn() -> Txn {
+    let blank = SimId {
+        iccid: String::new(),
+        slot: 0,
+    };
+    let mut t = Txn::new(
+        NewTxn {
+            op_id: "c1".into(),
+            action: "chill.exit".into(),
+            item: "chill.exit".into(),
+            source: Source::Mcp,
+            approved_by: Source::Mcp,
+            undo: false,
+            target: "direct_keep_ai".into(),
+            old: "proxy".into(),
+            rollback_to: "proxy".into(),
+            sim: blank,
+            conn: None,
+            confirm: Confirm::Chill,
+            rollback_enabled: true,
+            deadline_ms: D,
+            boot_id: "boot-a".into(),
+        },
+        1_000,
+    );
+    t.begin_apply();
+    t.applied(Applied::Done, 1_000);
+    t
+}
+
+fn chill_read(v: &str, probe: Option<bool>) -> Reading {
+    Reading {
+        value: Some(v.into()),
+        registered: true,
+        sim: SimId {
+            iccid: String::new(),
+            slot: 0,
+        },
+        data: None,
+        probe,
+    }
+}
+
+/// 真路径探测连续两次通才算过；中间失败一次重新数；两次之间隔 5 秒；不看蜂窝数据。
+#[test]
+fn chill_needs_two_passes_in_a_row() {
+    let mut t = chill_txn();
+    let r = chill_read("direct_keep_ai", None);
+    let target = t.wants_probe(&r, 2_000).expect("asks for the CHILL probe");
+    assert!(target.chill);
+    assert_eq!(t.on_reading(&chill_read("direct_keep_ai", Some(true)), 2_000), Next::Wait);
+    assert!(t.wants_probe(&r, 4_000).is_none(), "5 s between probes");
+    assert_eq!(t.on_reading(&chill_read("direct_keep_ai", Some(false)), 7_500), Next::Wait);
+    assert_eq!(t.on_reading(&chill_read("direct_keep_ai", Some(true)), 13_000), Next::Wait);
+    assert!(t.wants_probe(&r, 18_500).is_some());
+    assert_eq!(t.on_reading(&chill_read("direct_keep_ai", Some(true)), 18_500), Next::Done);
+    assert_eq!(end(&t), (Phase::Confirmed, Some(Reason::Verified)));
+}
+
+/// 到点没连续通：退回原来的出口；读回是原值就算退回完成（不等探测，也不要 mihomo 在跑：闲置暂停时它停着）。
+/// 人在中间改成第三个值：不退回。
+#[test]
+fn chill_rolls_back_and_a_person_wins() {
+    let mut t = chill_txn();
+    t.on_reading(&chill_read("direct_keep_ai", Some(false)), 2_000);
+    assert_eq!(
+        t.on_tick(1_000 + D),
+        Next::Rollback(json!("proxy"))
+    );
+    t.rollback_sent(1_000 + D);
+    let n = 1_000 + D;
+    let mut paused = chill_read("proxy", None);
+    paused.registered = false;
+    assert_eq!(t.on_reading(&paused, n + 2_000), Next::Done);
+    assert_eq!(end(&t), (Phase::RolledBack, Some(Reason::Timeout)));
+
+    let mut t = chill_txn();
+    assert_eq!(t.on_reading(&chill_read("direct_all", None), 3_000), Next::Done);
+    assert_eq!(end(&t), (Phase::Cancelled, Some(Reason::ManualChange)));
 }

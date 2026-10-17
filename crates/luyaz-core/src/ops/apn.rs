@@ -249,14 +249,21 @@ pub fn steps(
     let o = "zwrt_apn_object";
     let mut out = Vec::new();
     let mode = target.get("mode").and_then(Value::as_i64);
-    if let Some(m) = mode
-        && m != now.mode
-    {
-        out.push((o, "set_apn_mode", json!({"apn_mode": m})));
-    }
+    let set_mode = mode
+        .filter(|m| *m != now.mode)
+        .map(|m| (o, "set_apn_mode", json!({"apn_mode": m})));
     let manual = target.get("manual").and_then(Value::as_str);
-    if let Some(id) = manual.filter(|id| !id.is_empty() && *id != now.manual) {
-        out.push((o, "enable_manu_apn_id", json!({"profileId": id})));
+    let enable = manual
+        .filter(|id| !id.is_empty() && *id != now.manual)
+        .map(|id| (o, "enable_manu_apn_id", json!({"profileId": id})));
+    // 从自动切到手动：先启用、再切模式，切模式触发的重拨才用上它（agent 9-25 起的 dial_manual 顺序）
+    let to_manual = mode == Some(1) && now.mode != 1;
+    if to_manual {
+        out.extend(enable);
+        out.extend(set_mode);
+    } else {
+        out.extend(set_mode);
+        out.extend(enable);
     }
     if let Some(fp) = target
         .get("fp")

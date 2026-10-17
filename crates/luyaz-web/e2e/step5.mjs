@@ -201,6 +201,16 @@ const PAGES = {
       await p.click("#dg-again button");
       await p.waitForFunction(() => /正在检查/.test(document.querySelector("#dg-status")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
       ok(/正在检查… \d+\/\d+/.test(await state()) && await p.locator("#dg-status [role=progressbar]").count() === 1, `check again: ${await state()}`);
+      // T6: the core's open finding — evidence here, 「忽略」 closes it (the readback is it gone)
+      await scenario("finding");
+      await p.waitForSelector("#dg-finding section", { timeout: 35000 }).catch(() => {});
+      const fd = (await p.textContent("#dg-finding").catch(() => "")) ?? "";
+      ok(/数据连接没建立/.test(fd) && /确定/.test(fd) && /…1234/.test(fd) && await p.locator("#dg-finding .dg-row").count() === 4, `finding evidence: ${fd.replace(/\s+/g, " ").slice(0, 120)}`);
+      await p.click("#dg-finding .dg-dismiss");
+      await p.waitForFunction(() => !document.querySelector("#dg-finding section"), null, { timeout: 6000 }).catch(() => {});
+      ok(await p.locator("#dg-finding section").count() === 0, "ignore: the finding is gone");
+      // left on (back after the mock's 5 s) so the common checks below see the section
+      await p.waitForTimeout(5500);
     },
   },
 };

@@ -235,6 +235,8 @@ fn req(target: &str, source: Source) -> Request {
         approved_by: source,
         op_id: None,
         undo: false,
+        rollback: None,
+        expect_iccid: None,
     }
 }
 
@@ -758,6 +760,7 @@ async fn crash_mid_apply_resumes_without_reapplying() {
 }
 
 #[tokio::test(start_paused = true)]
+/// 崩在退回写已经生效、还没记下「已发」：重启后读回已经是退回目标，不再写（O7 的另一半）。
 async fn crash_mid_rollback_never_sends_a_second_rollback() {
     let dir = temp_dir();
     let dev = Dev::new();
@@ -784,6 +787,63 @@ async fn crash_mid_rollback_never_sends_a_second_rollback() {
         assert_eq!(end(&fin), pair("rolled_back", "timeout"), "{boot}");
         assert!(dev2.s().writes.is_empty(), "{boot}");
     }
+}
+
+/// O7：崩在「退回意图已落盘、还没写」：重启后读回还是目标值，照发一次退回（同一次开机和整机重启都一样）。
+#[tokio::test(start_paused = true)]
+async fn crash_before_the_rollback_write_sends_it_after_restart() {
+    let dir = temp_dir();
+    let dev = Dev::new();
+    dev.s().registered = false;
+    let e = engine(&dev, true, Some(dir.clone()));
+    let op = op_of(&e.submit(req("Only_LTE", Source::Screen)).await);
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    // 发退回之前一直核对不了 SIM：停在「退回意图已落盘」，还没写
+    dev.s().sim = SimId {
+        iccid: String::new(),
+        slot: 0,
+    };
+    tokio::time::sleep(Duration::from_secs(70)).await;
+    let saved: Txn =
+        serde_json::from_slice(&std::fs::read(dir.join("pending.json")).unwrap()).unwrap();
+    assert_eq!(saved.phase, Phase::RollingBack);
+    assert_eq!(saved.intent, Some(crate::ops::txn::Intent::Rollback));
+    assert_eq!(dev.s().writes, ["Only_LTE"]);
+
+    for boot in ["boot-a", "boot-b"] {
+        let dir = crashed(&dir);
+        let dev2 = Dev::new();
+        dev2.reboot(boot);
+        dev2.s().net_select = "Only_LTE".into();
+        let e2 = engine(&dev2, true, Some(dir.clone()));
+        e2.start().await;
+        let fin = settle(&e2, &id(&op)).await;
+        assert_eq!(end(&fin), pair("rolled_back", "timeout"), "{boot}");
+        assert_eq!(dev2.s().writes, ["WL_AND_5G"], "{boot}");
+    }
+}
+
+/// O7：重启后一直读不到设备（核对不了 SIM）：退回发不出去也不永远占着锁，到点记 rollback_failed。
+#[tokio::test(start_paused = true)]
+async fn rollback_that_cannot_be_sent_after_restart_gives_up() {
+    let dir = temp_dir();
+    let dev = Dev::new();
+    dev.s().registered = false;
+    let e = engine(&dev, true, Some(dir.clone()));
+    let op = op_of(&e.submit(req("Only_LTE", Source::Screen)).await);
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    dev.s().apply = Apply::Hang;
+    tokio::time::sleep(Duration::from_secs(70)).await;
+
+    let dir = crashed(&dir);
+    let dev2 = Dev::new();
+    dev2.s().net_select = "Only_LTE".into();
+    dev2.s().read_fail = true;
+    let e2 = engine(&dev2, true, Some(dir.clone()));
+    e2.start().await;
+    let fin = settle(&e2, &id(&op)).await;
+    assert_eq!(end(&fin), pair("rollback_failed", "rollback_timeout"));
+    assert!(dev2.s().writes.is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -1730,4 +1790,99 @@ async fn network_writes_leave_a_wifi_change_alone() {
     let fin = settle(&e, &op_id).await;
     assert_eq!(end(&fin), pair("confirmed", "verified"));
     assert!(dev.s().probes.is_empty());
+}
+
+// ── 第二期（D4、O9、人优先）──────────────────────────────────────
+
+/// D4：自动退回的全局开关关着时，Agent 自己批准的写照样到点不通就退回；人的写照旧不退。
+#[tokio::test(start_paused = true)]
+async fn agent_writes_always_roll_back_even_with_the_switch_off() {
+    let dev = Dev::new();
+    dev.s().registered = false;
+    let e = engine(&dev, false, None);
+    let a = op_of(&e.submit(mcp("Only_LTE", Source::Mcp)).await);
+    assert_eq!(a["rollback_enabled"], true);
+    let fin = settle(&e, &id(&a)).await;
+    assert_eq!(end(&fin), pair("rollback_failed", "rollback_timeout"));
+    assert_eq!(dev.s().writes, ["Only_LTE", "WL_AND_5G"]);
+
+    let dev = Dev::new();
+    dev.s().registered = false;
+    let e = engine(&dev, false, None);
+    let b = op_of(&e.submit(req("Only_LTE", Source::Screen)).await);
+    let fin = settle(&e, &id(&b)).await;
+    assert_eq!(end(&fin), pair("unverified", "no_rollback"));
+    assert_eq!(dev.s().writes, ["Only_LTE"]);
+
+    // 切前就确定不通（D10）：调用方关掉退回
+    let dev = Dev::new();
+    dev.s().registered = false;
+    let e = engine(&dev, false, None);
+    let c = op_of(
+        &e.submit(Request {
+            rollback: Some(false),
+            ..mcp("Only_LTE", Source::Mcp)
+        })
+        .await,
+    );
+    let fin = settle(&e, &id(&c)).await;
+    assert_eq!(end(&fin), pair("unverified", "no_rollback"));
+}
+
+/// O9：判定时的卡和写之前读到的不一样：拒绝，不动设备。
+#[tokio::test(start_paused = true)]
+async fn expected_sim_must_still_be_there() {
+    let dev = Dev::new();
+    let e = engine(&dev, true, None);
+    match e
+        .submit(Request {
+            expect_iccid: Some(sim(2).iccid),
+            ..mcp("Only_LTE", Source::Mcp)
+        })
+        .await
+    {
+        Submit::Refused(_) => {}
+        other => panic!("{other:?}"),
+    }
+    assert!(dev.s().writes.is_empty());
+    let a = op_of(
+        &e.submit(Request {
+            expect_iccid: Some(sim(1).iccid),
+            ..mcp("Only_LTE", Source::Mcp)
+        })
+        .await,
+    );
+    assert_eq!(a["phase"], "verifying");
+}
+
+/// 人优先（用户 10-17 定）：Agent 的试用进行中，人改别的项照做，Agent 的那个记 other_change、不退回。
+#[tokio::test(start_paused = true)]
+async fn a_person_never_waits_for_an_agent_trial() {
+    let dev = Dev::new();
+    dev.s().registered = false;
+    let e = engine(&dev, true, None);
+    let a = op_of(&e.submit(mcp("Only_LTE", Source::Mcp)).await);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    // 别的自动来源照旧 busy
+    assert!(matches!(
+        e.submit(req("Only_5G", Source::Scenario)).await,
+        Submit::Busy(_)
+    ));
+    let b = op_of(&e.submit(req("Only_5G", Source::Web)).await);
+    assert_eq!(
+        end(&e.status(Some(&id(&a)))),
+        pair("cancelled", "other_change")
+    );
+    assert_eq!(b["phase"], "verifying");
+    // 旧请求（没有 source）也算人
+    let dev = Dev::new();
+    dev.s().registered = false;
+    let e = engine(&dev, true, None);
+    let a = op_of(&e.submit(mcp("Only_LTE", Source::Mcp)).await);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(e.legacy_gate(Some("band.lte"), false), LegacyGate::Pass);
+    assert_eq!(
+        end(&e.status(Some(&id(&a)))),
+        pair("cancelled", "other_change")
+    );
 }

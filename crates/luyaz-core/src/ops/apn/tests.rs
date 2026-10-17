@@ -89,6 +89,11 @@ fn steps_mode_enable_modify() {
         m(&steps(&json!({"mode":0,"manual":"","fp":""}), &on, None, &v).unwrap()),
         ["set_apn_mode"]
     );
+    // 从自动换到一条手动的（apn.use，第二期 D3）：先启用、再切模式（切模式的重拨要用上它）
+    assert_eq!(
+        m(&steps(&json!({"mode":1,"manual":"manu3"}), &auto, None, &v).unwrap()),
+        ["enable_manu_apn_id", "set_apn_mode"]
+    );
 }
 
 #[test]

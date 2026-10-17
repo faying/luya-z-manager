@@ -5,7 +5,8 @@
 //!   安全类写（关数据/漫游，旧事务记 preempted，D14）；对进行中事务的「立即退回」「保留现状」。
 //! - 每一步对设备的读写都是执行者里的短任务（`Device` 经 `state::ubus`）；锁只在做决定时拿，
 //!   从不跨 await 持有。
-//! - 每次动设备之前先落意图、之后落结果（`pending.json`，D31）；datad 重启后接着确认，不重做。
+//! - 每次动设备之前先落意图、之后落结果（`pending.json`，D31）；datad 重启后接着确认，写不重做；
+//!   退回按读回幂等补发（O7：读回还不是退回目标就再发一次）。
 //! - 没有 source 的旧请求：锁被占或执行者队列满时先回和今天一样的成功，排进旧请求队列，
 //!   锁空出来再按原来的 `/control` 处理执行一次（每项只留最新、120 秒过期、安全类插队时清空）。
 
@@ -114,6 +115,11 @@ pub struct Request {
     pub approved_by: Source,
     pub op_id: Option<String>,
     pub undo: bool,
+    /// 覆盖「带不带自动退回」（None = 按全局开关和批准者）。Agent 的 CHILL 写切前就确定不通时为
+    /// `Some(false)`（第二期 D10：本来就不通的不退）。
+    pub rollback: Option<bool>,
+    /// 提交时要求的 SIM（第二期 O9）：敏感判定时读到的 ICCID；写之前读到的不是它就拒绝、不动设备。
+    pub expect_iccid: Option<String>,
 }
 
 impl Request {
@@ -267,7 +273,34 @@ fn overridable(t: &Txn, req: &Request) -> bool {
         && t.intent.is_none()
 }
 
+/// 进行中的是 Agent 自己批准的事务、来的是人的写（不论哪一项）：人优先，Agent 的试用让开
+/// （other_change，不再自动退回；第二期，用户 10-17 定）。
+fn yields_to(t: &Txn, who: Who) -> bool {
+    t.who().approved_by == Source::Mcp && who.approved_by.is_user() && !t.phase.is_final()
+}
+
+/// Agent 自己批准的事务结束时（第二期：结果和改动记录进 events）。只在真机上接（`server.rs`）。
+pub type AgentEnd = Box<dyn Fn(&Txn) + Send + Sync>;
+static AGENT_END: OnceLock<AgentEnd> = OnceLock::new();
+
+pub fn on_agent_end(f: AgentEnd) {
+    let _ = AGENT_END.set(f);
+}
+
 impl St {
+    /// 人的写来了、进行中的是 Agent 的试用：取消它（[`yields_to`]）。取消了回 true。
+    fn yield_to(&mut self, who: Who, rec: &Record, store: &Store) -> bool {
+        match self.active.as_mut() {
+            Some(t) if yields_to(t, who) => {
+                t.cancel(Reason::OtherChange);
+                self.retire(rec, store);
+                store.clear();
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn live(&mut self, op_id: &str) -> Option<&mut Txn> {
         match &mut self.active {
             Some(t) if t.op_id == op_id => Some(t.as_mut()),
@@ -351,6 +384,11 @@ impl St {
                 t.op_id, t.action, t.source, t.phase, t.reason
             );
             rec.append(record::txn_line(&t));
+            if t.who().approved_by == Source::Mcp
+                && let Some(f) = AGENT_END.get()
+            {
+                f(&t);
+            }
             let last = Last {
                 txn: (*t).clone(),
                 acked: false,
@@ -464,7 +502,7 @@ impl<D: Device> Engine<D> {
         if t.phase.is_final() {
             self.inner.store.clear();
         } else if force || t.seen_ms.saturating_sub(st.saved_seen_ms) >= SEEN_SAVE_MS {
-            self.inner.store.save(t);
+            let _ = self.inner.store.save(t);
             st.saved_seen_ms = t.seen_ms;
         }
     }
@@ -669,10 +707,14 @@ impl<D: Device> Engine<D> {
     pub async fn submit(&self, mut req: Request) -> Submit {
         let now = self.now();
         let op_id = req.op_id.clone().unwrap_or_else(new_op_id);
+        let who = req.who();
         {
-            let st = self.lock();
+            let mut st = self.lock();
             if let Some(v) = st.find(&op_id, now) {
                 return Submit::Existing(v);
+            }
+            if st.yield_to(req.who(), &self.inner.record, &self.inner.store) {
+                self.publish(&st);
             }
             if let Some(s) = &st.session {
                 return Submit::Busy(doing_session(s, now));
@@ -693,7 +735,10 @@ impl<D: Device> Engine<D> {
             Ok(Some(v)) => v,
             Ok(None) => {
                 // 照普通写做，但也要排在进行中的事务后面（APN 的普通写同样碰 APN）
-                let st = self.lock();
+                let mut st = self.lock();
+                if st.yield_to(who, &self.inner.record, &self.inner.store) {
+                    self.publish(&st);
+                }
                 if let Some(s) = &st.session {
                     return Submit::Busy(doing_session(s, now));
                 }
@@ -721,6 +766,11 @@ impl<D: Device> Engine<D> {
             }
             Err(e) => return Submit::NoCapture(format!("cannot read current value: {e}")),
         };
+        if let Some(want) = &req.expect_iccid
+            && *want != sim.iccid
+        {
+            return Submit::Refused("the SIM changed since the check; not changing anything".into());
+        }
         let now = self.now();
         {
             let mut st = self.lock();
@@ -730,6 +780,7 @@ impl<D: Device> Engine<D> {
             if let Some(s) = &st.session {
                 return Submit::Busy(doing_session(s, now));
             }
+            st.yield_to(req.who(), &self.inner.record, &self.inner.store);
             let mut inherit = None;
             if let Some(t) = st.active.as_mut() {
                 if !overridable(t, &req) {
@@ -754,13 +805,24 @@ impl<D: Device> Engine<D> {
                     conn,
                     confirm: req.spec.confirm,
                     // legacy 来源的写不带自动退回（按批准者判断，T22；legacy 不会有别的批准者）。
-                    rollback_enabled: self.inner.cfg.rollback && req.approved_by != Source::Legacy,
+                    // Agent 自己批准的（approved_by=mcp）一律带退回，不看全局开关（第二期 D4）；
+                    // 切之前就确定不通的由调用方关掉（`Request::rollback`，D10）。
+                    rollback_enabled: req.rollback.unwrap_or(
+                        (self.inner.cfg.rollback || req.approved_by == Source::Mcp)
+                            && req.approved_by != Source::Legacy,
+                    ),
                     deadline_ms: req.spec.deadline_ms(),
                     boot_id: self.inner.dev.boot_id(),
                 },
                 now,
             );
             t.begin_apply();
+            // O6：Agent 的事务先落盘成功（退回材料在里面）才动设备
+            if req.approved_by == Source::Mcp && !self.inner.store.save(&t) {
+                return Submit::Refused(
+                    "cannot save the change on the device; not changing anything".into(),
+                );
+            }
             st.active = Some(Box::new(t));
             self.persist(&mut st, true);
         }
@@ -908,7 +970,8 @@ impl<D: Device> Engine<D> {
     }
 
     /// 发退回（意图已经在事务里）。发之前先读一次核对 SIM（D32）：换了卡就放弃、不写；
-    /// 读不到就不发，返回 false（下一拍再试）。发出去以后只按读回判断，不发第二次。
+    /// 读不到就不发，返回 false（下一拍再试）。读回已经是退回目标（重启前发过了，O7）就不再写。
+    /// 发出去以后只按读回判断，不发第二次。
     async fn send_rollback(&self, op_id: &str, spec: Option<&'static Spec>, value: Value) -> bool {
         {
             let mut st = self.lock();
@@ -937,7 +1000,23 @@ impl<D: Device> Engine<D> {
                     self.finish(&mut st);
                     return true;
                 }
-                txn::SimCheck::Unknown => return false,
+                txn::SimCheck::Unknown => {
+                    // 一直核对不了也有时限（O7）
+                    let now = self.now();
+                    let ended = t.on_tick(now) == txn::Next::Done;
+                    if ended {
+                        self.finish(&mut st);
+                    }
+                    return ended;
+                }
+            }
+            if let Ok(Reading { value: Some(v), .. }) = &reading
+                && txn::matches(&t.rollback_to, v)
+            {
+                drop(st);
+                eprintln!("ops: {op_id} already at the rollback value, not writing again");
+                self.rollback_sent(op_id);
+                return true;
             }
         }
         if let Err(e) = self
@@ -1042,6 +1121,10 @@ impl<D: Device> Engine<D> {
         let mut st = self.lock();
         if st.session.is_some() {
             return LegacyGate::Queue;
+        }
+        if st.yield_to(Source::Legacy.into(), &self.inner.record, &self.inner.store) {
+            self.publish(&st);
+            return LegacyGate::Pass;
         }
         let Some(t) = st.active.as_mut() else {
             return LegacyGate::Pass;

@@ -9,6 +9,7 @@ pub mod chill;
 pub mod clock;
 pub mod control;
 pub mod diagnose;
+pub mod finding;
 pub mod handover;
 pub mod headers;
 pub mod health;

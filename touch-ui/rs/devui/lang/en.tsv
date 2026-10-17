@@ -658,3 +658,5 @@ U60 在充电	U60 charging
 检查更新	Check for updates
 还没查过	Not checked yet
 检查失败	Check failed
+，暂用 %s	; on %s for now
+首选 %s 不通，暂用 %s	Pick %s is down; on %s for now

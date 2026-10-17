@@ -22,6 +22,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 pub mod diagnose;
+pub mod finding;
 pub mod record;
 
 /// Received something this recently ⇒ the link is alive, no probe needed.

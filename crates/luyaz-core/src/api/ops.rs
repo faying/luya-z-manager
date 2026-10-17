@@ -719,7 +719,19 @@ pub(super) fn pick_store(c: &Compat, f: impl FnOnce(&mut serde_json::Map<String,
 }
 
 /// POST /api/netinfo/apn `{"id"}`: checks, 202, then switches in a task (the agent's `apn_use`).
-pub async fn apn_use(State(c): State<Compat>, body: Bytes) -> Response {
+///
+/// Second phase (u60-mcp.md D3, O3, O4): the switch is one u60d transaction (`apn.use`: enable and
+/// mode together, one capture, one lock, rolled back by the engine when it does not come through),
+/// written as the caller (`X-U60-Source`: the web's `web`, the agent's `mcp`; else the screen). A
+/// candidate is copied into the manual list first (a plain write: not the APN in use). The pick per
+/// card is written only once the trial passed; a rolled back switch leaves it as it was. The
+/// agent's (`mcp`) first passes its gate (sensitive → refused with the page to send the owner to;
+/// one APN change per half hour), its writes carrying the gate's ticket.
+pub async fn apn_use(State(c): State<Compat>, req: axum::extract::Request) -> Response {
+    let source = super::charge::source(&req);
+    let Ok(body) = axum::body::to_bytes(req.into_body(), 64 * 1024).await else {
+        return reply(400, json!({"ok": false, "error": "invalid JSON"}));
+    };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
         return reply(400, json!({"ok": false, "error": "invalid JSON"}));
     };
@@ -751,39 +763,177 @@ pub async fn apn_use(State(c): State<Compat>, body: Bytes) -> Response {
     if candidate && iccid.is_empty() {
         return err(409, "读不到 SIM 卡号，没法只给这张卡记住");
     }
-    if c.net.apn_switching.swap(true, Ordering::SeqCst) {
+    let ticket = if source == "mcp" {
+        match agent_ticket().await {
+            Ok(t) => Some(t),
+            Err(r) => return r,
+        }
+    } else {
+        None
+    };
+    let gate = crate::ops::agent::gate();
+    // a person may switch again during the trial (the engine supersedes it); the agent waits
+    if (source == "mcp" && c.net.apn_trial.load(Ordering::SeqCst))
+        || c.net.apn_switching.swap(true, Ordering::SeqCst)
+    {
+        if let Some(t) = &ticket {
+            gate.release(t);
+        }
         return err(409, "上一次 APN 切换还没做完");
     }
     c.net.apn_error("");
+    let op_id = format!("apn-{:016x}", rand::random::<u64>());
+    *c.net.apn_current.lock().unwrap_or_else(|e| e.into_inner()) = op_id.clone();
     let c2 = c.clone();
+    let op = op_id.clone();
     tokio::spawn(async move {
-        let w = c2.writer("screen");
+        let mut w = c2.writer(source);
+        if let Some(t) = &ticket {
+            w.extra = Some(json!({"agent_ticket": t.id}));
+        }
         let iccid = if iccid.is_empty() {
             current_iccid(&c2).await
         } else {
             iccid
         };
-        let res = if id == "auto" {
-            dial_auto(&w).await.map(|_| forget(&c2, &iccid))
+        // what to use, and for a candidate the copy it became (the pick to remember)
+        let plan = if id == "auto" {
+            Ok((json!({"auto": true}), None))
         } else if candidate {
-            match manual_for_candidate(&c2, &w, &id).await {
-                Ok((manual, apn)) => dial_manual(&w, &manual)
-                    .await
-                    .map(|_| remember(&c2, &iccid, &manual, &apn)),
-                Err(e) => Err(e),
-            }
+            manual_for_candidate(&c2, &w, &id)
+                .await
+                .map(|(manual, apn)| (json!({"profile_id": manual}), Some((manual, apn))))
         } else {
-            dial_manual(&w, &id).await.map(|_| forget(&c2, &iccid))
+            Ok((json!({"profile_id": id}), None))
         };
-        match &res {
-            Err(e) => eprintln!("[compat] APN switch to {id}: {e}"),
-            Ok(()) => clear_sticky(&c2),
+        let mut wu = w.clone();
+        let mut extra = w.extra.clone().unwrap_or_else(|| json!({}));
+        extra["op_id"] = json!(op);
+        wu.extra = Some(extra);
+        let sent = match plan {
+            Ok((params, pick)) => match wu.send("apn.use", &params).await {
+                // a transaction (op) to follow; none = it was already so
+                Reply::Done { op: txn, .. } => Ok((txn.is_some(), pick)),
+                other => other.into_result().map(|_| (false, pick)),
+            },
+            Err(e) => Err(e),
+        };
+        if let Err(e) = &sent {
+            eprintln!("[compat] APN switch to {id}: {e}");
         }
         c2.net
-            .apn_error(res.as_ref().err().map(String::as_str).unwrap_or(""));
+            .apn_error(sent.as_ref().err().map(String::as_str).unwrap_or(""));
+        let trial = sent.as_ref().is_ok_and(|(t, _)| *t);
+        c2.net.apn_trial.store(trial, Ordering::SeqCst);
         c2.net.apn_switching.store(false, Ordering::SeqCst);
+        let current = |c: &Compat| *c.net.apn_current.lock().unwrap_or_else(|e| e.into_inner()) == op;
+        if let Ok((_, pick)) = sent {
+            // O4: the pick is the card's only once the switch came through
+            let end = if trial {
+                trial_end(&w, &op).await
+            } else {
+                "confirmed".to_string()
+            };
+            if !current(&c2) {
+                // a later switch took over: its task owns the state and the pick
+                eprintln!("[compat] APN switch to {id} ended {end}, superseded by a later one");
+            } else if matches!(end.as_str(), "confirmed" | "unverified") {
+                match &pick {
+                    Some((manual, apn)) => remember(&c2, &iccid, manual, apn),
+                    None => forget(&c2, &iccid),
+                }
+                clear_sticky(&c2);
+            } else {
+                eprintln!("[compat] APN switch to {id} ended {end}: the card's pick left as it was");
+                c2.net.apn_error(match end.as_str() {
+                    "rolled_back" => "新的 APN 没通，已退回原来的",
+                    "cancelled" => "切换被别的改动打断",
+                    _ => "切换没有生效",
+                });
+            }
+        }
+        if current(&c2) {
+            c2.net.apn_trial.store(false, Ordering::SeqCst);
+        }
+        if let Some(t) = &ticket {
+            crate::ops::agent::gate().done(t);
+        }
     });
-    reply(202, json!({"ok": true, "data": {"switching": true}}))
+    reply(202, json!({"ok": true, "data": {"switching": true, "op_id": op_id}}))
+}
+
+/// The agent's gate for a switch (second phase D5, D6): not sensitive, the APN layer free. The
+/// refusal is the reply.
+async fn agent_ticket() -> Result<crate::ops::agent::Ticket, Response> {
+    use crate::ops::agent::{self, Layer, Refusal};
+    let now = agent::now_unix();
+    let r = match agent::apn_sensitivity().await {
+        Ok(iccid) => match agent::gate().reserve(Layer::Apn, Some(iccid), now) {
+            Ok(t) => return Ok(t),
+            Err(r) => r,
+        },
+        Err(why) => Refusal::Sensitive(why),
+    };
+    let (status, code, message, extra) = r.reply(now);
+    let mut v = json!({"ok": false, "error": message, "code": code});
+    if let (Some(o), Some(m)) = (v.as_object_mut(), extra.as_object()) {
+        o.extend(m.clone());
+    }
+    Err(reply(status, v))
+}
+
+/// How the switch's transaction ended (`op.status` every 2 s, at most 4 minutes); "unknown" when
+/// u60d stops answering.
+async fn trial_end(w: &Writer, op_id: &str) -> String {
+    for _ in 0..120 {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        if let Reply::Done { result, .. } = w.send("op.status", &json!({"op_id": op_id})).await {
+            let phase = result["phase"].as_str().unwrap_or("");
+            if !matches!(phase, "accepted" | "applying" | "verifying" | "rolling_back" | "") {
+                return phase.to_string();
+            }
+        }
+    }
+    "unknown".into()
+}
+
+/// GET /api/agent/roam-cheap: the cards the owner marked "roaming is not expensive" (second phase
+/// D6), the card in now and whether the agent changed each layer lately (Unix seconds).
+pub async fn roam_cheap_get(State(c): State<Compat>) -> Response {
+    let g = crate::ops::agent::gate();
+    let cheap = g.cheap();
+    let now = crate::ops::agent::norm_iccid(&current_iccid(&c).await);
+    reply(
+        200,
+        json!({"ok": true, "data": {
+            "cheap": cheap,
+            "current_iccid": now,
+            "current_cheap": !now.is_empty() && cheap.contains(&now),
+            "agent_last": {
+                "apn": g.last(crate::ops::agent::Layer::Apn),
+                "chill": g.last(crate::ops::agent::Layer::Chill),
+            },
+        }}),
+    )
+}
+
+/// PUT /api/agent/roam-cheap `{"iccid", "cheap": bool}`: the owner's setting for one card. Only a
+/// person sets it: the agent's own calls (`X-U60-Source: mcp`) are refused.
+pub async fn roam_cheap_put(req: axum::extract::Request) -> Response {
+    if super::charge::source(&req) == "mcp" {
+        return reply(403, json!({"ok": false, "error": "only the owner sets this"}));
+    }
+    let Ok(body) = axum::body::to_bytes(req.into_body(), 4096).await else {
+        return reply(400, json!({"ok": false, "error": "invalid JSON"}));
+    };
+    let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let (Some(iccid), Some(cheap)) = (parsed["iccid"].as_str(), parsed["cheap"].as_bool()) else {
+        return reply(400, json!({"ok": false, "error": "need iccid and cheap"}));
+    };
+    match crate::ops::agent::gate().set_cheap(iccid, cheap) {
+        Ok(list) => reply(200, json!({"ok": true, "data": {"cheap": list}})),
+        Err(e) => reply(400, json!({"ok": false, "error": e})),
+    }
 }
 
 /// Select the profile, then the mode, so the re-dial uses it (the agent's order since 9-25).
@@ -1051,9 +1201,16 @@ pub async fn chill_exit(State(c): State<Compat>, headers: axum::http::HeaderMap,
 /// The agent's `chill_exit_changed`: abroad (engine on, current scenario an abroad one), an exit
 /// changed by hand goes back to proxy when home. Same entry, same file.
 fn exit_changed_abroad(c: &Compat, now: i64) {
+    note_exit_abroad(&c.root, now)
+}
+
+/// [`exit_changed_abroad`] for a device root (`""` on the device): u60d's own `chill.exit`
+/// transactions (the agent's, `ops::chill`) register the same restore entry.
+pub(crate) fn note_exit_abroad(root: &str, now: i64) {
     use super::status::{SCENARIO_CONFIG, SCENARIO_DISABLED, SCENARIO_STATE};
-    let read = |p: &str| std::fs::read_to_string(c.path(p)).ok();
-    if c.path(SCENARIO_DISABLED).exists() {
+    let path = |p: &str| std::path::PathBuf::from(format!("{root}{p}"));
+    let read = |p: &str| std::fs::read_to_string(path(p)).ok();
+    if path(SCENARIO_DISABLED).exists() {
         return;
     }
     let cfg: sc::Config = read(SCENARIO_CONFIG)
@@ -1085,6 +1242,6 @@ fn exit_changed_abroad(c: &Compat, now: i64) {
     };
     pending.push(entry);
     if let Ok(text) = serde_json::to_string_pretty(&pending) {
-        let _ = atomic_write(&c.path(RESTORE_FILE), text.as_bytes());
+        let _ = atomic_write(&path(RESTORE_FILE), text.as_bytes());
     }
 }

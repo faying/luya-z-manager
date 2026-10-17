@@ -98,9 +98,26 @@ impl Client {
         action: &str,
         params: &Value,
     ) -> Reply {
+        self.send_extra(source, session, action, params, None).await
+    }
+
+    /// [`Client::send`] with more top-level fields (`op_id`, the agent's `agent_ticket`).
+    pub async fn send_extra(
+        &self,
+        source: &str,
+        session: Option<&str>,
+        action: &str,
+        params: &Value,
+        extra: Option<&Value>,
+    ) -> Reply {
         let mut body = json!({"action": action, "source": source, "params": params});
         if let Some(id) = session {
             body["session"] = json!(id);
+        }
+        if let (Some(m), Some(b)) = (extra.and_then(Value::as_object), body.as_object_mut()) {
+            for (k, v) in m {
+                b.insert(k.clone(), v.clone());
+            }
         }
         self.post(&body, TIMEOUT).await
     }
@@ -112,6 +129,8 @@ pub struct Writer {
     pub client: Arc<Client>,
     pub source: &'static str,
     pub session: Option<String>,
+    /// More top-level fields on every write (the agent's `agent_ticket`, second phase D5).
+    pub extra: Option<Value>,
 }
 
 impl Writer {
@@ -120,12 +139,19 @@ impl Writer {
             client,
             source,
             session: None,
+            extra: None,
         }
     }
 
     pub async fn send(&self, action: &str, params: &Value) -> Reply {
         self.client
-            .send(self.source, self.session.as_deref(), action, params)
+            .send_extra(
+                self.source,
+                self.session.as_deref(),
+                action,
+                params,
+                self.extra.as_ref(),
+            )
             .await
     }
 }
@@ -198,6 +224,7 @@ impl Session {
             client: self.client.clone(),
             source: self.source,
             session: Some(self.id.clone()),
+            extra: None,
         }
     }
 

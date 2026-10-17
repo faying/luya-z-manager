@@ -471,7 +471,7 @@ impl Ui {
     /// Returns its height.
     pub(super) fn mf_exit_paint(&mut self) -> i32 {
         let th = t();
-        let m = mf_view(&self.model.scenario);
+        let m = mf_view(&self.model.scenario, self.model.chill_chain.as_deref().unwrap_or(""), self.model.chill_pin.as_deref());
         let e = self.ex.clone();
         let o = [e.mf_box, e.mf_box2, e.mf_mark, e.mf_text, e.mf_go];
         for (i, &x) in o.iter().enumerate() {
@@ -526,7 +526,7 @@ impl Ui {
     /// Home's 出口 row: to the exit tab; with a 手动优先 notice stop at the CHILL card (the
     /// notice is on its top); 家里不通: the CHILL page's 家里出口.
     pub(super) fn exit_row_go(&mut self) {
-        let m = mf_view(&self.model.scenario);
+        let m = mf_view(&self.model.scenario, self.model.chill_chain.as_deref().unwrap_or(""), self.model.chill_pin.as_deref());
         if m.home {
             self.sub_open(Sub::Chill);
             return;
@@ -695,7 +695,7 @@ const EXIT_STATE: [&str; 4] = ["proxy", "global", "direct_keep_ai", "direct_all"
 const PROFILE: [&str; 3] = ["eco", "standard", "perf"];
 /// chill.c SC_MAX_NODE (a manual group can have 168 nodes)
 pub const CHILL_MAX_NODES: usize = 200;
-pub const CHILL_MAX_GROUPS: usize = 12;
+pub const CHILL_MAX_GROUPS: usize = 32;
 /// chill.c SC_TOP_SHOW
 const CHILL_TRAF_ROWS: usize = 6;
 const CHILL_NAV_ROWS: usize = 2;

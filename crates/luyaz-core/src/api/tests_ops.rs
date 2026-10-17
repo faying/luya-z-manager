@@ -21,6 +21,9 @@ pub(super) struct Dev {
     /// action → the replies it gets first (then ok)
     script: std::collections::HashMap<String, Vec<(u16, Value)>>,
     pub(super) log: Vec<Value>,
+    pub(super) apn_mode: i64,
+    /// how an `apn.use` transaction ends (None: confirmed)
+    pub(super) txn_end: Option<String>,
 }
 
 pub(super) type Shared = Arc<Mutex<Dev>>;
@@ -68,6 +71,21 @@ fn control(d: &Shared, req: &Value) -> (u16, Value) {
             d.connected = false;
             ok(json!({}))
         }
+        // the switch as one transaction (second phase D3): played as taken, then how it ends
+        "apn.use" => {
+            let p = &req["params"];
+            if p["auto"] == true {
+                d.apn_mode = 0;
+            } else {
+                d.apn_mode = 1;
+                let id = p["profile_id"].as_str().unwrap_or("").to_string();
+                for a in d.manual_apns.iter_mut() {
+                    a["isEnable"] = json!(a["profileId"] == id.as_str());
+                }
+            }
+            (200, json!({"ok": true, "result": {}, "op": {"op_id": req["op_id"], "phase": "verifying"}}))
+        }
+        "op.status" => ok(json!({"op_id": req["params"]["op_id"], "phase": d.txn_end.clone().unwrap_or_else(|| "confirmed".into())})),
         "apn.add" => {
             let mut p = req["params"].clone();
             let n = d.manual_apns.len() + 1;
@@ -103,7 +121,7 @@ pub(super) fn ubus(d: &Shared, obj: &str, m: &str) -> Result<Value, String> {
         ("zwrt_zte_mdm.api", "get_sim_info") => {
             json!({"sim_states": "modem_init_complete", "sim_iccid": "8981000000000000001F"})
         }
-        ("zwrt_apn_object", "get_apn_mode") => json!({"apn_mode": 0}),
+        ("zwrt_apn_object", "get_apn_mode") => json!({"apn_mode": d.apn_mode}),
         ("zwrt_apn_object", "get_auto_apn_list") => json!({"apnListArray": [
             {"profilename": "Docomo", "wanapn": "spmode.ne.jp", "pdpType": 3, "profileId": "auto1", "isEnable": true},
             {"profilename": "Other", "wanapn": "other.example", "pdpType": 3, "profileId": "auto2", "isEnable": false}]}),
@@ -167,6 +185,28 @@ pub(super) async fn call(
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
     let req = format!(
         "{method} {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    s.write_all(req.as_bytes()).await.unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).await.unwrap();
+    let status = out[9..12].parse().unwrap();
+    let json = out.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("");
+    (status, serde_json::from_str(json).unwrap_or(Value::Null))
+}
+
+/// [`call`] with `X-U60-Source` (luyaz-web's `web`, the agent's `mcp`).
+async fn call_as(
+    addr: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    body: &str,
+    source: &str,
+) -> (u16, Value) {
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let req = format!(
+        "{method} {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n{}: {source}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        luyaz_api::headers::SOURCE_HEADER,
         body.len()
     );
     s.write_all(req.as_bytes()).await.unwrap();
@@ -531,24 +571,27 @@ async fn a_candidate_apn_is_copied_dialled_and_remembered() {
     assert_eq!(st, 202);
     let g = until(addr, |d| d["apn"]["switching"] == false).await;
     assert_eq!(g["apn"]["switch_error"], "");
+    // the pick is written once the trial passed (O4)
+    let store = until_file(&root.join("data/apn-pick.json")).await;
     let b = brief(&d);
     assert_eq!(
-        b.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(),
-        ["apn.add", "apn.enable", "apn.set_mode"]
+        b.iter()
+            .map(|x| x.0.as_str())
+            .filter(|a| *a != "op.status")
+            .collect::<Vec<_>>(),
+        ["apn.add", "apn.use"]
     );
     assert!(b.iter().all(|x| x.1 == "screen" && x.2.is_null()));
-    assert_eq!(
-        d.lock().unwrap().log[1]["params"],
-        json!({"profile_id": "manu1"})
-    );
-    let store: Value =
-        serde_json::from_str(&fs::read_to_string(root.join("data/apn-pick.json")).unwrap())
-            .unwrap();
+    let use_req = d.lock().unwrap().log[1].clone();
+    assert_eq!(use_req["params"], json!({"profile_id": "manu1"}));
+    assert!(use_req["op_id"].as_str().unwrap().starts_with("apn-"));
+    assert!(use_req.get("agent_ticket").is_none());
     assert_eq!(
         store["picks"]["8981000000000000001"],
         json!({"manual_id": "manu1", "apn": "other.example"})
     );
-    assert_eq!(g["apn"]["picked_id"], "manu1");
+    let g = until(addr, |d| d["apn"]["picked_id"] == "manu1").await;
+    assert_eq!(g["apn"]["switch_error"], "");
     // back to automatic forgets it
     assert_eq!(
         call(addr, "POST", "/api/netinfo/apn", r#"{"id":"auto"}"#)
@@ -560,6 +603,85 @@ async fn a_candidate_apn_is_copied_dialled_and_remembered() {
         d["apn"]["switching"] == false && d["apn"]["picked_id"].is_null()
     })
     .await;
+}
+
+/// The file once it is there (a background task writes it).
+async fn until_file(p: &std::path::Path) -> Value {
+    for _ in 0..100 {
+        if let Some(v) = fs::read_to_string(p)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .filter(|v| !v["picks"].as_object().is_none_or(|m| m.is_empty()))
+        {
+            return v;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("{} never written", p.display());
+}
+
+/// O4: a switch the engine rolled back leaves the card's pick as it was, and says why.
+#[tokio::test]
+async fn a_rolled_back_switch_is_not_remembered() {
+    let (root, d, c) = setup("apn-back", Dev::default()).await;
+    d.lock().unwrap().txn_end = Some("rolled_back".into());
+    let addr = start(c).await;
+    let (st, b) = call(addr, "POST", "/api/netinfo/apn", r#"{"id":"auto2"}"#).await;
+    assert_eq!(st, 202);
+    assert!(b["data"]["op_id"].is_string());
+    let g = until(addr, |d| d["apn"]["switch_error"] != "").await;
+    assert_eq!(g["apn"]["switch_error"], "新的 APN 没通，已退回原来的");
+    assert!(
+        fs::read_to_string(root.join("data/apn-pick.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .is_none_or(|v| v["picks"].get("8981000000000000001").is_none())
+    );
+    // a second press while it is still in its trial is refused, like a running switch
+}
+
+/// A person switches again while the first switch is in its trial: taken, and the pick is the
+/// second one's (back to automatic: no pick for the card).
+#[tokio::test]
+async fn a_second_switch_during_the_trial_wins() {
+    let (root, _d, c) = setup("apn-twice", Dev::default()).await;
+    let addr = start(c).await;
+    assert_eq!(call(addr, "POST", "/api/netinfo/apn", r#"{"id":"auto2"}"#).await.0, 202);
+    until(addr, |d| d["apn"]["switching"] == false).await;
+    assert_eq!(call(addr, "POST", "/api/netinfo/apn", r#"{"id":"auto"}"#).await.0, 202);
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let store: Value = fs::read_to_string(root.join("data/apn-pick.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(Value::Null);
+    assert!(store["picks"].get("8981000000000000001").is_none(), "{store}");
+}
+
+/// The web's switch is the web's (`X-U60-Source`), the agent's is refused while roaming on a card
+/// not marked cheap (the fake netinfo roams), and its card setting is the owner's only.
+#[tokio::test]
+async fn the_switch_is_written_as_its_caller() {
+    let (_root, d, c) = setup("apn-who", Dev::default()).await;
+    let addr = start(c).await;
+    let (st, _) = call_as(addr, "POST", "/api/netinfo/apn", r#"{"id":"auto"}"#, "web").await;
+    assert_eq!(st, 202);
+    until(addr, |d| d["apn"]["switching"] == false).await;
+    let b = brief(&d);
+    assert!(b.iter().any(|x| x.0 == "apn.use" && x.1 == "web"), "{b:?}");
+    let n = d.lock().unwrap().log.len();
+    let (st, b) = call_as(addr, "POST", "/api/netinfo/apn", r#"{"id":"auto"}"#, "mcp").await;
+    assert_eq!((st, b["code"].as_str()), (403, Some("sensitive")), "{b}");
+    assert_eq!(b["page"], "apn");
+    assert_eq!(d.lock().unwrap().log.len(), n, "nothing written");
+    let (st, _) = call_as(
+        addr,
+        "PUT",
+        "/api/agent/roam-cheap",
+        r#"{"iccid":"8981000000000000001","cheap":true}"#,
+        "mcp",
+    )
+    .await;
+    assert_eq!(st, 403);
 }
 
 /// The pin file the engine reads; an unknown scenario is refused.

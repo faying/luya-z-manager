@@ -133,6 +133,36 @@ pub static SPECS: &[Spec] = &[
         confirm: Confirm::Apn,
     },
     Spec {
+        // 换正在用的 APN（第二期 D3，O3）：兼容层 `apn_use` 的一次切换（候选 APN 先复制成手动的，普通写）——
+        // 启用 + 切模式两步在一个事务里，一次占锁、一次捕获、一次落盘
+        action: "apn.use",
+        item: APN,
+        normalize: apn_use,
+        params: apn_restore,
+        deadline_ms: 90_000,
+        deadline_env: "LUYAZ_DEADLINE_APN_MS",
+        confirm: Confirm::Apn,
+    },
+    Spec {
+        // CHILL（第二期 D2，见 `ops::chill`）：只有 Agent 经 /control 走这里
+        action: "chill.profile",
+        item: super::chill::PROFILE,
+        normalize: chill_profile,
+        params: chill_profile_params,
+        deadline_ms: 120_000,
+        deadline_env: "LUYAZ_DEADLINE_CHILL_MS",
+        confirm: Confirm::Chill,
+    },
+    Spec {
+        action: "chill.exit",
+        item: super::chill::EXIT,
+        normalize: chill_exit,
+        params: chill_exit_params,
+        deadline_ms: 120_000,
+        deadline_env: "LUYAZ_DEADLINE_CHILL_MS",
+        confirm: Confirm::Chill,
+    },
+    Spec {
         action: "wifi.settings",
         item: WIFI_MAIN,
         normalize: super::wifi::check_main,
@@ -198,6 +228,37 @@ fn manual_id(params: &Value) -> Result<String, String> {
 fn apn_enable(params: &Value) -> Result<Value, String> {
     if let Some(r) = apn_restored(params) {
         return r;
+    }
+    Ok(serde_json::json!({ "mode": 1, "manual": manual_id(params)? }))
+}
+
+fn chill_profile(params: &Value) -> Result<Value, String> {
+    luyaz_api::chill::profile_wanted(params)
+        .map(|p| Value::String(p.into()))
+        .map_err(|(_, v)| v["error"].as_str().unwrap_or("bad profile").into())
+}
+
+fn chill_profile_params(v: &Value) -> Value {
+    serde_json::json!({ "profile": v })
+}
+
+fn chill_exit(params: &Value) -> Result<Value, String> {
+    luyaz_api::chill::exit_wanted(params)
+        .map(|p| Value::String(p.into()))
+        .map_err(|(_, v)| v["error"].as_str().unwrap_or("bad state").into())
+}
+
+fn chill_exit_params(v: &Value) -> Value {
+    serde_json::json!({ "state": v })
+}
+
+/// `{auto: true}` = 回自动；`{profile_id: "manuN"}` = 用这条手动 APN（启用 + 切手动）。
+fn apn_use(params: &Value) -> Result<Value, String> {
+    if let Some(r) = apn_restored(params) {
+        return r;
+    }
+    if params.get("auto") == Some(&Value::Bool(true)) {
+        return Ok(serde_json::json!({ "mode": 0 }));
     }
     Ok(serde_json::json!({ "mode": 1, "manual": manual_id(params)? }))
 }

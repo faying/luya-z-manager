@@ -230,7 +230,10 @@ pub struct MfView {
     pub line: Vec<u8>,
 }
 
-pub fn mf_view(sc: &scenario_status_t) -> MfView {
+/// `chain`: CHILL's exit chain ("🇹🇼 台湾 → 🇨🇳 TW03"); on a backup the line ends with the node it
+/// is on, so 「换到 台湾（自动）」 says which node 自动 picked.
+/// `pin`: the node hand-picked in the auto group 🚀 is on (see `chill_pin`).
+pub fn mf_view(sc: &scenario_status_t, chain: &str, pin: Option<&str>) -> MfView {
     let th = t();
     let mut m = MfView { on: false, alldown: false, home: false, mark: "", col: 0, mark_col: 0, wash: 0, line: Vec::new() };
     if sc.home_on != 0 && sc.home_fallback != 0 {
@@ -250,6 +253,21 @@ pub fn mf_view(sc: &scenario_status_t) -> MfView {
     if sc.mf_notice.is_empty() {
         return m;
     }
+    let node = chain.rsplit(" → ").next().unwrap_or("").trim();
+    // On 手动优先's backup group, a node picked there by hand is what counts: say what
+    // mihomo really does with it, not 手动优先's story about the 🎯 node.
+    if sc.mf_kind == "backup"
+        && let Some(pin) = pin.filter(|p| !p.is_empty())
+    {
+        if node.is_empty() || node == pin {
+            return m; // the hand pick is in use: nothing to warn about
+        }
+        m.on = true;
+        (m.mark, m.col, m.wash) = ("▲", th.warn_t, th.wash_w);
+        m.mark_col = m.col;
+        m.line = cf!(tr("首选 %s 不通，暂用 %s"), pin, node);
+        return m;
+    }
     m.on = true;
     match sc.mf_kind.as_str() {
         "backup" | "unstable" => (m.mark, m.col, m.wash) = ("▲", th.warn_t, th.wash_w),
@@ -262,6 +280,15 @@ pub fn mf_view(sc: &scenario_status_t) -> MfView {
     }
     m.mark_col = m.col;
     m.line = sc.mf_notice.as_bytes().to_vec();
+    // 「手选的 X 不通，已临时换到 台湾（自动）」 is three lines on the card and does not say
+    // which node 自动 picked: keep the first half, then the node it is on.
+    if sc.mf_kind == "backup" && sc.mf_stale == 0 && !node.is_empty() {
+        let head = sc.mf_notice.split(['，', ';']).next().unwrap_or("");
+        if !head.is_empty() && head.len() < sc.mf_notice.len() {
+            m.line = head.as_bytes().to_vec();
+            m.line.extend(cf!(tr("，暂用 %s"), node));
+        }
+    }
     if sc.mf_stale != 0 {
         let hm = if sc.mf_seen != 0 { clock::strftime("%H:%M", &clock::local(sc.mf_seen)) } else { "--:--".into() };
         m.line.extend(cf!(tr(" · 停在 %s"), &hm));
@@ -842,7 +869,7 @@ impl Ui {
         // 出口: one row; two (the small line says the other way) when there is another way
         {
             // the 手动优先 notice takes the small line, folded to two when one is not enough
-            let mf = mf_view(&m.scenario);
+            let mf = mf_view(&m.scenario, m.chill_chain.as_deref().unwrap_or(""), m.chill_pin.as_deref());
             let proxy = m.netinfo.as_ref().is_some_and(|n| n.proxy.present != 0);
             let mut eh = if m.chill_online != 0 && proxy { 60 } else { ROW_H };
             if mf.on {
@@ -995,7 +1022,7 @@ impl Ui {
         let exit_sub = self.home.hr_exit_sub;
         // 手动优先: the whole row washed, 「▲ 出口 ›」, the notice itself in the small line
         {
-            let mf = mf_view(&m.scenario);
+            let mf = mf_view(&m.scenario, m.chill_chain.as_deref().unwrap_or(""), m.chill_pin.as_deref());
             let wash = if mf.on && mf.wash != 0 { mf.wash } else { 0 };
             let subcol = if mf.on { mf.col } else { th.t3 };
             let mut two = false;

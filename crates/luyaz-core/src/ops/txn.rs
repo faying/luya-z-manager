@@ -100,8 +100,12 @@ impl From<Source> for Who {
 }
 
 impl Who {
-    /// `approved_by` 和 `source` 不同时只能是 screen/web；否则 Err。
+    /// `approved_by` 和 `source` 不同时只能是 screen/web；明写 mcp 只在来源也是 mcp 时可以（Agent 自己批准，
+    /// 第二期 D7：放不放行由 `ops::agent` 的白名单按动作定，取代第一期 T1 的一律拒绝）。
     pub fn new(source: Source, approved_by: Option<Source>) -> Result<Self, String> {
+        if approved_by == Some(Source::Mcp) && source != Source::Mcp {
+            return Err("approved_by mcp needs source mcp".into());
+        }
         let approved_by = approved_by.unwrap_or(source);
         if approved_by != source && !approved_by.can_confirm() {
             return Err(format!(
@@ -187,6 +191,9 @@ pub enum Confirm {
     /// Wi-Fi 设置（第四批 4-0b）：读回 = 目标 + AP 已按 uci 起来/关掉（读数的 `registered` 在这里是这个意思，
     /// 见 `ops::wifi_dev`）；不看数据、不探测。
     Wifi,
+    /// CHILL 档位、出口（第二期 D2、D10，见 `ops::chill`）：读回 = 目标 + mihomo 在跑；再经本机入口 7894 真去取
+    /// generate_204，连续两次通才算过。不看蜂窝数据。
+    Chill,
 }
 
 /// 一条数据连接的身份：地址 + 从什么时候起（BOOTTIME 毫秒，按 netifd 的 uptime 秒数推算，
@@ -249,7 +256,12 @@ pub struct ProbeTarget {
     pub iface: String,
     pub dns: Vec<String>,
     pub v6: bool,
+    /// CHILL 的真路径探测（[`Confirm::Chill`]）：不问 DNS，经 mihomo 取一次 generate_204。
+    pub chill: bool,
 }
+
+/// CHILL 要连续通几次才算过（D10）。
+pub const CHILL_PASSES: u32 = 2;
 
 /// D25：一轮最多探测失败 3 次，两次之间至少隔 5 秒。一轮都失败后，隔 30 秒再来一轮；换了连接
 /// （重新拨号）马上重新算。切换时 PDP 不断开的话连接身份不变，只靠时间重来，免得数据晚通就永远确认不了。
@@ -436,6 +448,9 @@ pub struct Txn {
     /// 数据通过了（探测成功、或不应当有数据）。只给 status 看。
     #[serde(default)]
     pub data_ok: bool,
+    /// CHILL 的真路径探测连续通了几次（[`Confirm::Chill`]）。
+    #[serde(default)]
+    pub chill_passes: u32,
     /// 最近一次读数里已注册（三行进度的第二行，T13）。
     #[serde(default)]
     pub registered: bool,
@@ -488,6 +503,7 @@ impl Txn {
             probe_fails: 0,
             probe_last_ms: None,
             data_ok: false,
+            chill_passes: 0,
             registered: false,
             rollback_enabled: n.rollback_enabled,
             deadline_ms: n.deadline_ms,
@@ -548,6 +564,8 @@ impl Txn {
         self.step(Phase::RollingBack);
         self.rollback_reason = Some(why);
         self.intent = Some(Intent::Rollback);
+        // 等发退回也有时限（O7）：发之前一直核对不了 SIM 时不能永远占着锁。`seen_ms` 是最近一拍的时钟。
+        self.wait_start_ms = self.seen_ms;
         Next::Rollback(self.rollback_to.clone())
     }
 
@@ -571,6 +589,7 @@ impl Txn {
         self.probe_fails = 0;
         self.probe_last_ms = None;
         self.data_ok = false;
+        self.chill_passes = 0;
     }
 
     /// 这条连接是不是写（或退回）之后的新连接。
@@ -600,6 +619,14 @@ impl Txn {
         if self.confirm == Confirm::Wifi {
             return Ok(DataJudge::Ok);
         }
+        if self.confirm == Confirm::Chill {
+            return Err(Some(ProbeTarget {
+                iface: "chill".into(),
+                dns: vec![],
+                v6: false,
+                chill: true,
+            }));
+        }
         let Some(d) = &r.data else {
             return Err(None);
         };
@@ -623,6 +650,7 @@ impl Txn {
             iface: d.iface.clone(),
             dns: d.dns.clone(),
             v6: d.conn.v6_only(),
+            chill: false,
         }))
     }
 
@@ -643,6 +671,16 @@ impl Txn {
             Err(Some(t)) => t,
             _ => return None,
         };
+        if self.confirm == Confirm::Chill {
+            // 两次之间至少隔 5 秒；失败了照样隔 5 秒再来（到点没通就退回）
+            if self
+                .probe_last_ms
+                .is_some_and(|t| now.saturating_sub(t) < PROBE_GAP_MS)
+            {
+                return None;
+            }
+            return Some(target);
+        }
         let conn = &r.data.as_ref()?.conn;
         let round_over = self.probe_conn.as_ref().is_some_and(|c| c.same(conn))
             && self.probe_fails >= PROBE_TRIES;
@@ -662,6 +700,18 @@ impl Txn {
 
     /// 记下探测结果；换了连接、或上一轮已经用完（这是新的一轮），就重新计数。
     fn note_probe(&mut self, r: &Reading, now: u64) {
+        if self.confirm == Confirm::Chill {
+            if let Some(ok) = r.probe {
+                self.probe_last_ms = Some(now);
+                if ok {
+                    self.chill_passes += 1;
+                } else {
+                    self.chill_passes = 0;
+                    self.probe_fails += 1;
+                }
+            }
+            return;
+        }
         let (Some(ok), Some(d)) = (r.probe, &r.data) else {
             return;
         };
@@ -681,6 +731,13 @@ impl Txn {
     fn data_judge(&mut self, r: &Reading) -> DataJudge {
         let j = match self.data_gate(r) {
             Ok(j) => j,
+            Err(Some(_)) if self.confirm == Confirm::Chill => {
+                if self.chill_passes >= CHILL_PASSES {
+                    DataJudge::Ok
+                } else {
+                    DataJudge::NotYet
+                }
+            }
             Err(Some(_)) if r.probe == Some(true) => DataJudge::Ok,
             Err(_) => DataJudge::NotYet,
         };
@@ -753,7 +810,10 @@ impl Txn {
                     return self.finish(Phase::Cancelled, Reason::ManualChange);
                 }
             } else if *v == self.rollback_to {
-                if r.registered && self.data_judge(r) != DataJudge::NotYet {
+                // CHILL：值回去了就算退回完成（mihomo 可能正被闲置暂停停着，原值本来也未必测得通）
+                if self.confirm == Confirm::Chill
+                    || (r.registered && self.data_judge(r) != DataJudge::NotYet)
+                {
                     let why = self.rollback_reason.unwrap_or(Reason::Timeout);
                     return self.finish(Phase::RolledBack, why);
                 }
@@ -768,6 +828,14 @@ impl Txn {
     pub fn on_tick(&mut self, now: u64) -> Next {
         if self.phase.is_final() {
             return Next::Done;
+        }
+        if self.phase == Phase::RollingBack && self.intent == Some(Intent::Rollback) {
+            // 退回还没发出去（发之前读不到设备、核对不了 SIM）：到点就放弃，不永远等（O7）
+            self.seen_ms = self.seen_ms.max(now);
+            if now.saturating_sub(self.wait_start_ms) >= self.deadline_ms {
+                return self.finish(Phase::RollbackFailed, Reason::RollbackTimeout);
+            }
+            return Next::Wait;
         }
         if !self.waiting() || self.intent.is_some() {
             return Next::Wait;
@@ -820,7 +888,8 @@ impl Txn {
 
     /// datad 启动时接着跑落盘的事务。`boot_id` 变了 = 整机重启（D13）：
     /// 第 2 次开机仍未确认、或几次开机累计等待已超过时限，马上退回（reboot_loop）；否则时限从现在重新计。
-    /// 意图没清的不重做（D31）：applying 当作已写、按读回判断；rolling_back 当作退回已发过，绝不发第二次。
+    /// 写的意图没清的不重做（D31）：applying 当作已写、按读回判断。退回的意图没清的留着（O7）：驱动发之前
+    /// 先读一次，读回已经是退回目标就不再写（发过了），否则照发——崩在发退回之前也不会丢掉这次退回。
     pub fn resume(&mut self, boot_id: &str, now: u64) -> Next {
         if self.phase.is_final() {
             return Next::Done;
@@ -847,7 +916,7 @@ impl Txn {
                 self.wait_start_ms = now;
             }
             (Phase::RollingBack, Some(_)) => {
-                self.intent = None;
+                // 意图留着：驱动核对读回后决定发不发
                 self.wait_start_ms = now;
             }
             _ if rebooted => self.wait_start_ms = now,

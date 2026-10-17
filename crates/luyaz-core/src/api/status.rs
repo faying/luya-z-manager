@@ -15,9 +15,9 @@
 //!   takeover flag), which the agent writes on every switch
 
 use axum::{extract::State, response::Response};
-use serde_json::{Value, json};
 use luyaz_api::{alerts::Alerts, health::Snapshot};
 use luyaz_policy::scenario as sc;
+use serde_json::{Value, json};
 
 use super::{Compat, reply};
 
@@ -53,6 +53,8 @@ pub(super) fn gather(c: &Compat) -> Value {
         // netwatch's home verdict while u60d owns it (9b; the agent shows this one then)
         "network": {"verdict": super::watch::verdict(c)},
     });
+    // T6: the open "sure" finding for the home page (null when none)
+    data["network"]["finding"] = super::finding::home_now().map_or(Value::Null, |h| h.to_value());
     data["services"] = json!({"tailscale": tailscale(c)});
     data["services"]["chill"] = chill(c);
     data

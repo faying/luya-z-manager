@@ -20,5 +20,9 @@
 {{ self.leaf("ap-auto")|safe }}
 {{ pick_op|safe }}
 </section>
+{% if let Some(a) = agent %}<section aria-labelledby="ap-ag-t"><h2 id="ap-ag-t" class="nd-group-title">{{ l.pick("Agent and roaming", "Agent 与漫游") }}</h2>
+<div class="nd-group"><form method="post" action="{{ crate::apn::PATH }}/agent-roam" class="nd-row flex-wrap gap-2"><input type="hidden" name="iccid" value="{{ a.iccid }}"><input type="hidden" name="cheap" value="{% if a.cheap %}0{% else %}1{% endif %}"><span class="nd-row__text"><span class="nd-row__label">{% if a.cheap %}{{ l.pick("Roaming on this SIM is not expensive", "这张卡漫游不算贵") }}{% else %}{{ l.pick("Roaming on this SIM counts as expensive", "这张卡漫游算贵") }}{% endif %} · …{{ a.tail }}</span><span class="nd-row__sub block">{% if a.cheap %}{{ l.pick("While roaming, the agent may change the APN on this SIM itself (with its trial and rollback).", "漫游时 Agent 可以自己改这张卡的 APN（带试用和自动退回）。") }}{% else %}{{ l.pick("While roaming, the agent only sends you a link to this page for APN changes. Default for every SIM.", "漫游时 Agent 改 APN 只给你这个页面的链接。每张卡默认如此。") }}{% endif %}</span></span>
+<button type="submit" class="nd-btn nd-btn--secondary">{% if a.cheap %}{{ l.pick("Count as expensive", "改成算贵") }}{% else %}{{ l.pick("Not expensive (roaming SIM)", "改成不算贵（出国用的卡）") }}{% endif %}</button></form></div>
+</section>{% endif %}
 </div>
 {% endblock %}

@@ -236,6 +236,8 @@ struct View {
     alerts_label: String,
     status: String,
     why: bool,
+    /// The core's open "sure" finding (T6), one sentence; links to its evidence.
+    finding: Option<String>,
     ro_stale: bool,
     bw: Readout,
     rsrp: Readout,
@@ -391,6 +393,22 @@ impl Poll {
             .public
             .as_ref()
             .and_then(|p| p["network"]["verdict"].as_str())
+            .filter(|s| !s.is_empty());
+        // T6: the core's open "sure" finding (registered but no internet)
+        let finding = st
+            .side
+            .public
+            .as_ref()
+            .map(|p| &p["network"]["finding"])
+            .filter(|f| seen && f.is_object())
+            .map(|f| {
+                let zh = f["symptom"].as_str().unwrap_or("");
+                let en = f["symptom_en"].as_str().unwrap_or("");
+                match l {
+                    Lang::En if !en.is_empty() => en.to_string(),
+                    _ => zh.to_string(),
+                }
+            })
             .filter(|s| !s.is_empty());
         let why = seen
             && !sv.stale
@@ -760,6 +778,7 @@ impl Poll {
             alerts_label: counted(alerts_n, "new alerts", "条新告警", "Alerts", "告警"),
             status: crate::pages::status_frag(&sv),
             why,
+            finding,
             ro_stale: sig_stale || (seen && !block_ok("live")),
             bw,
             rsrp,
@@ -1125,6 +1144,23 @@ mod tests {
         assert!(hub.read(|st| p.view(st, Instant::now())).why);
         hub.set_side(|s| s.public = Some(json!({"network":{"verdict":"ok"}})));
         assert!(!hub.read(|st| p.view(st, Instant::now())).why);
+    }
+
+    #[test]
+    fn a_sure_finding_shows_its_symptom() {
+        let hub = app_hub();
+        hub.set_link_for_test(Link::Live);
+        let mut p = poll();
+        hub.set_side(|s| s.public = Some(json!({"network":{"verdict":"ok","finding":null}})));
+        assert_eq!(hub.read(|st| p.view(st, Instant::now())).finding, None);
+        hub.set_side(|s| {
+            s.public = Some(json!({"network":{"verdict":"ok","finding":{
+                "kind":"no_internet","layer":"data",
+                "symptom":"已注册，但数据连接没建立",
+                "symptom_en":"Registered, but the data connection is down"}}}))
+        });
+        let f = hub.read(|st| p.view(st, Instant::now())).finding;
+        assert!(f.is_some_and(|f| f.contains("data connection") || f.contains("数据连接")));
     }
 
     #[test]

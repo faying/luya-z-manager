@@ -2,7 +2,7 @@
 //! and the newest the public repo lists in its `versions.json`.
 //!
 //! Installed: the core's own version; luyaz-web, the sentinel and the touch UI carry a
-//! `LUYAZ_VERSION=<x.y.z>` marker in their binary, found by reading the file (never by running
+//! `LUYAZ_VERSION=<x.y.z>;` marker in their binary, found by reading the file (never by running
 //! it: an old touch UI started with an argument it does not know would open the screen); the
 //! device scripts have `/data/luyaz/scripts/VERSION`. None of those (a build from before
 //! 1.0.0): no version.
@@ -80,7 +80,8 @@ pub fn parse(v: &str) -> Option<(u64, u64, u64)> {
     it.next().is_none().then_some(r)
 }
 
-/// The version after a `LUYAZ_VERSION=` marker in a binary's bytes.
+/// The version in a `LUYAZ_VERSION=<x.y.z>;` marker in a binary's bytes. The `;` is needed:
+/// Rust strings have no terminator, and the bytes after the marker can be digits (the commit).
 pub fn marker(bytes: &[u8]) -> Option<String> {
     let at = bytes.windows(MARK.len()).position(|w| w == MARK)? + MARK.len();
     let tail = &bytes[at..bytes.len().min(at + 32)];
@@ -88,6 +89,9 @@ pub fn marker(bytes: &[u8]) -> Option<String> {
         .iter()
         .position(|b| !(b.is_ascii_digit() || *b == b'.'))
         .unwrap_or(tail.len());
+    if tail.get(end) != Some(&b';') {
+        return None;
+    }
     let v = std::str::from_utf8(&tail[..end]).ok()?;
     parse(v).map(|_| v.to_string())
 }
@@ -178,6 +182,8 @@ pub fn parse_latest(body: &str) -> Result<BTreeMap<String, String>, String> {
 async fn fetch() -> Result<BTreeMap<String, String>, String> {
     let client = reqwest::Client::builder()
         .timeout(TIMEOUT)
+        // IPv4 only: on the device the IPv6 route to GitHub hangs (measured 10-17) while IPv4 works
+        .local_address(std::net::IpAddr::from(std::net::Ipv4Addr::UNSPECIFIED))
         .user_agent(concat!("luyaz-core/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| e.to_string())?;
@@ -265,8 +271,10 @@ mod tests {
 
     #[test]
     fn markers_and_versions() {
-        assert_eq!(marker(b"xx\0LUYAZ_VERSION=1.2.3\0yy").as_deref(), Some("1.2.3"));
-        assert_eq!(marker(b"LUYAZ_VERSION=1.2"), None);
+        assert_eq!(marker(b"xx\0LUYAZ_VERSION=1.2.3;yy").as_deref(), Some("1.2.3"));
+        // no terminator: the commit right after it would read as part of the version
+        assert_eq!(marker(b"LUYAZ_VERSION=1.0.03151cc1"), None);
+        assert_eq!(marker(b"LUYAZ_VERSION=1.2;"), None);
         assert_eq!(marker(b"nothing here"), None);
         assert_eq!(parse("1.10.0"), Some((1, 10, 0)));
         assert!(parse("1.10.0") > parse("1.9.9"));

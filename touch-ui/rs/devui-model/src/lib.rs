@@ -41,6 +41,9 @@ pub struct Model {
     pub chill_traffic: Option<String>,
     pub chill_speed: Option<String>,
     pub chill_chain: Option<String>,
+    /// The auto group 🚀 points at: its hand-picked node ("" = none). None = 🚀 is not on one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chill_pin: Option<String>,
     pub chill_conns: Option<String>,
     pub chill_online: i32,
     pub chill_conn_split: Option<String>,

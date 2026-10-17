@@ -28,8 +28,9 @@ const RATE_KIND_S: i64 = 3600;
 const RATE_DAY_S: i64 = 86400;
 const RATE_DAY_MAX: usize = 5;
 const SMS_LOG_KEEP: usize = 100;
-/// Kinds never sent as an SMS: a failed SMS, the screen's colours.
-const NEVER: &[&str] = &["sms-failed", "devui-theme-paused"];
+/// Kinds never sent as an SMS: a failed SMS, the screen's colours, what the agent changed (MCP
+/// second phase: the agent reads it back, the owner's alert forwarding shows it).
+const NEVER: &[&str] = &["sms-failed", "devui-theme-paused", "agent-change"];
 
 /// What a sender needs from the device. The core implements `send` through its reconciler, the
 /// sentinel straight over ubus.

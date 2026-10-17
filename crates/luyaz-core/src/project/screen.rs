@@ -739,6 +739,34 @@ fn with_op(mut o: Story, op: Option<&ScreenOp>) -> Story {
     o.finish_en()
 }
 
+/// T6: an open "sure" finding (registered but no internet) on the home card, by its first bad
+/// layer and its symptom sentence (zh, en). Only over a plain network verdict: a write
+/// transaction's `home` wins, and no SIM / airplane / no service already say why.
+pub fn with_finding(v: &mut NetView, layer: &str, symptom: (&str, &str)) {
+    if v.home.is_some()
+        || matches!(
+            v.story.state,
+            State::Nosim | State::Airplane | State::Nosvc | State::Sos
+        )
+    {
+        return;
+    }
+    let (state, head, head_en) = match layer {
+        "signal" => (State::Nosvc, "没注册上", "No service"),
+        "data" => (State::Nodata, "数据没连上", "No data"),
+        "internet" => (State::Stall, "外网不通", "No access"),
+        "dns" => (State::Stall, "域名解析不了", "DNS down"),
+        _ => return,
+    };
+    let mut o = v.story.clone();
+    (o.state, o.tone, o.cause) = (state, Tone::Bad, Cause::None);
+    o.headline = cstr(head.into(), 32);
+    o.headline_en = head_en.into();
+    o.hint = cstr(format!("{}；网页「网络诊断」有证据", symptom.0), 128);
+    o.hint_en = format!("{}; evidence on the web's Diagnose page", symptom.1);
+    v.home = Some(o.finish_en());
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Sw {
     Unknown,

@@ -29,7 +29,8 @@ const SC_MAIN_GROUP: &str = "🚀 节点选择";
 const SC_TOP_SHOW: usize = 6;
 const SC_MAX_STAT_PAIR: usize = 200;
 const SC_MAX_TRACK: usize = 256;
-const SC_MAX_GRP: usize = 16;
+const SC_MAX_GRP: usize = 32;
+const SC_MANUAL_GROUP: &str = "🎯 手动节点";
 const SC_DELAY_MAX_MS: i64 = 8000;
 const CHILL_STATE_FILE: &str = "/tmp/chill.state";
 
@@ -84,6 +85,11 @@ pub struct Chill {
     nodes: Vec<String>,
     nodes_raw: Vec<String>,
     node_delay: Vec<i32>,
+    /// url-test / fallback groups only: the hand-picked node ("" = automatic). mihomo uses it
+    /// while it is alive and the fastest one otherwise, and goes back once it is alive again.
+    fixed: Option<String>,
+    /// The same for the group 🚀 points at (sanitized), read while following the chain.
+    exit_pin: Option<String>,
 
     stat_pair: Vec<Pair>,
     track: Vec<Track>,
@@ -106,6 +112,35 @@ pub struct Chill {
 
     home: chill_home_t,
     home_ms: i64,
+}
+
+/// The first row of an auto (url-test / fallback) group's node list.
+fn auto_row_label(fixed: &str, now: &str, en: bool) -> String {
+    let now = sanitize_name(now, SC_NAME_MAX);
+    let s = match (fixed.is_empty(), en) {
+        (true, false) => format!("自动 · 在用 {now}"),
+        (true, true) => format!("Auto · on {now}"),
+        (false, _) if now == sanitize_name(fixed, SC_NAME_MAX) => (if en { "Auto" } else { "自动" }).to_string(),
+        (false, false) => format!("自动 · 首选不通，暂用 {now}"),
+        (false, true) => format!("Auto · pick down, on {now}"),
+    };
+    trunc(&s, SC_NAME_MAX)
+}
+
+/// Chip order: the main group and AI first (byte order would put 🚀/🤖 last), the per-region
+/// auto groups and GLOBAL last, the rest by name.
+fn group_rank(raw: &str) -> u8 {
+    if raw.ends_with("节点选择") {
+        0
+    } else if raw.ends_with(" AI") || raw == "AI" {
+        1
+    } else if raw.ends_with("·自动") {
+        3
+    } else if raw == "GLOBAL" {
+        4
+    } else {
+        2
+    }
 }
 
 impl Default for Chill {
@@ -136,6 +171,8 @@ impl Default for Chill {
             nodes: Vec::new(),
             nodes_raw: Vec::new(),
             node_delay: Vec::new(),
+            fixed: None,
+            exit_pin: None,
             stat_pair: Vec::new(),
             track: Vec::new(),
             top_pair: Vec::new(),
@@ -508,7 +545,7 @@ impl Chill {
             g.push((raw, disp, ty));
             p = e + 1;
         }
-        g.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        g.sort_by(|a, b| (group_rank(&a.0), a.0.as_bytes()).cmp(&(group_rank(&b.0), b.0.as_bytes())));
         self.grp_raw = g.iter().map(|x| x.0.clone()).collect();
         self.grp_disp = g.iter().map(|x| x.1.clone()).collect();
         self.grp_type = g.into_iter().map(|x| x.2).collect();
@@ -639,6 +676,14 @@ impl Chill {
             if let Some(arr) = json::get(&b, "all", 8192) {
                 self.parse_all_array(&arr);
             }
+            self.fixed = find(&b, b"\"fixed\":\"", 0).map(|_| json::get(&b, "fixed", SC_NAME_MAX).map(|v| text(&v)).unwrap_or_default());
+            if let Some(fixed) = &self.fixed {
+                let now = rawnow.clone().unwrap_or_default();
+                let label = auto_row_label(fixed, &now, lang::is_en());
+                self.nodes.insert(0, label);
+                self.nodes_raw.insert(0, String::new());
+                self.node_delay.insert(0, -1);
+            }
             if let Some(mut rawnow) = rawnow {
                 self.node = sanitize_name(&rawnow, SC_NAME_MAX);
                 // the main group often points at another group: follow "now" down 3 hops
@@ -646,11 +691,17 @@ impl Chill {
                 let mut chain = disp.clone();
                 let mut o = chain.len();
                 self.chain_raw = vec![rawnow.clone()];
+                let mut exit_pin = None;
                 for _ in 0..3 {
                     let p2 = format!("/proxies/{}", urlenc(&rawnow, 384));
                     let Some(b2) = self.get(&p2) else { break };
                     if find(&b2, b"\"all\"", 0).is_none() {
                         break; // not a group: the end
+                    }
+                    if self.chain_raw.len() == 1 {
+                        exit_pin = find(&b2, b"\"fixed\":\"", 0)
+                            .map(|_| sanitize_name(&json::get(&b2, "fixed", SC_NAME_MAX).map(|v| text(&v)).unwrap_or_default(), SC_NAME_MAX))
+                            .map(|f| if f == "-" { String::new() } else { f });
                     }
                     let Some(nxt) = json::get(&b2, "now", SC_NAME_MAX).map(|v| text(&v)).filter(|v| !v.is_empty()) else { break };
                     if nxt == rawnow {
@@ -668,6 +719,7 @@ impl Chill {
                     }
                 }
                 self.chain = trunc(&chain, 160);
+                self.exit_pin = if self.group == SC_MAIN_GROUP { exit_pin } else { self.exit_pin.take() };
             }
         }
         true
@@ -714,6 +766,9 @@ impl Chill {
     }
     pub fn speed(&self) -> &str {
         if self.speed.is_empty() { "-" } else { &self.speed }
+    }
+    pub fn exit_pin(&self) -> Option<String> {
+        self.exit_pin.clone()
     }
     pub fn chain(&self) -> &str {
         if self.chain.is_empty() { "-" } else { &self.chain }
@@ -808,7 +863,15 @@ impl Chill {
 
     pub fn nodes(&self) -> Vec<chill_node_info_t> {
         (0..self.nodes.len())
-            .map(|i| chill_node_info_t { name: trunc(&self.nodes[i], 64), delay: self.node_delay[i], selected: (self.nodes[i] == self.node) as i32 })
+            .map(|i| {
+                // auto groups: the tick marks the owner's choice (the 自动 row or the pinned node),
+                // not whichever node mihomo is on right now
+                let selected = match &self.fixed {
+                    Some(f) => self.nodes_raw[i] == *f,
+                    None => self.nodes[i] == self.node,
+                };
+                chill_node_info_t { name: trunc(&self.nodes[i], 64), delay: self.node_delay[i], selected: selected as i32 }
+            })
             .collect()
     }
 
@@ -821,8 +884,21 @@ impl Chill {
             return false;
         }
         let path = format!("/proxies/{}", urlenc(&self.group, 384));
-        let body = trunc(&format!("{{\"name\":\"{}\"}}", self.nodes_raw[i]), 256);
-        let ok = self.send_async("PUT", &path, &body);
+        // the 自动 row of an auto group: DELETE clears the pin, mihomo picks by itself again
+        let ok = if self.fixed.is_some() && self.nodes_raw[i].is_empty() {
+            self.send_async("DELETE", &path, "")
+        } else {
+            let body = trunc(&format!("{{\"name\":\"{}\"}}", self.nodes_raw[i]), 256);
+            let ok = self.send_async("PUT", &path, &body);
+            // A node picked by hand in the auto group 🚀 is on (手动优先's backup, or the owner's
+            // region): it is a hand pick, so 🎯 gets it too. On the backup, 手动优先 sees the new
+            // pick and goes back to 🎯 with it, instead of still reporting the old dead node.
+            if ok && self.fixed.is_some() && self.group == self.main_now {
+                let mpath = format!("/proxies/{}", urlenc(SC_MANUAL_GROUP, 128));
+                let _ = self.send_async("PUT", &mpath, &body);
+            }
+            ok
+        };
         self.last_ms = 0;
         ok
     }
@@ -864,6 +940,9 @@ impl Chill {
     /// {"node":ms,…}; a node missing from it timed out (the core only answers the good ones).
     fn delay_apply(&mut self, b: &[u8]) {
         for i in 0..self.nodes_raw.len() {
+            if self.nodes_raw[i].is_empty() {
+                continue; // the 自动 row
+            }
             let key = trunc(&format!("\"{}\"", self.nodes_raw[i]), SC_NAME_MAX + 4);
             self.node_delay[i] = match find(b, key.as_bytes(), 0) {
                 None => 0,

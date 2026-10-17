@@ -162,6 +162,73 @@ pub struct View {
     pub down: bool,
     pub rows: Vec<RowV>,
     pub next: Option<Next>,
+    /// The core's open finding (registered but no internet, T6), with or without a run.
+    pub finding: Option<FindingV>,
+}
+
+/// The evidence page of one open finding: what it is, how sure, since when, per layer.
+pub struct FindingV {
+    pub kind: String,
+    pub tail: String,
+    pub symptom: String,
+    pub sure: &'static str,
+    pub conf: String,
+    pub since: String,
+    pub rows: Vec<RowV>,
+}
+
+fn finding_layer(id: &str, l: Lang) -> String {
+    match id {
+        "signal" => l.pick("Signal / registration", "信号/注册"),
+        "data" => l.pick("Data connection", "数据连接"),
+        "internet" => l.pick("Internet", "外网"),
+        "dns" => l.pick("DNS", "域名解析"),
+        _ => id,
+    }
+    .to_string()
+}
+
+fn finding_view(f: &Value, l: Lang) -> Option<FindingV> {
+    let kind = f["kind"].as_str().filter(|k| !k.is_empty())?.to_string();
+    let (sure, conf) = match f["confidence"].as_str().unwrap_or("") {
+        "sure" => ("bad", l.pick("Sure", "确定")),
+        "likely" => ("warn", l.pick("Likely", "可能")),
+        _ => ("neutral", l.pick("A guess", "猜测")),
+    };
+    let hm = |k: &str| {
+        f[k].as_u64()
+            .map(|t| crate::agent::hhmm(SystemTime::UNIX_EPOCH + Duration::from_secs(t)))
+    };
+    let n = f["count"].as_u64().unwrap_or(1);
+    let since = match (hm("first"), hm("last"), l) {
+        (Some(a), Some(b), Lang::En) => format!("Since {a} · last seen {b} · {n}×"),
+        (Some(a), Some(b), Lang::Zh) => format!("{a} 起 · 最近 {b} · 第 {n} 次"),
+        _ => String::new(),
+    };
+    let rows = f["evidence"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|e| {
+                    let mut r = row_view(e, l, None);
+                    r.name = finding_layer(e["layer"].as_str().unwrap_or(""), l);
+                    if e["level"] == "bad" {
+                        r.word = l.pick("Down", "不通").into();
+                    }
+                    r
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(FindingV {
+        kind,
+        tail: f["iccid_tail"].as_str().unwrap_or("").to_string(),
+        symptom: pick(f, "symptom", l),
+        sure,
+        conf: conf.into(),
+        since,
+        rows,
+    })
 }
 
 impl View {
@@ -220,6 +287,7 @@ fn view(g: &Got, l: Lang) -> View {
         down,
         rows: Vec::new(),
         next: None,
+        finding: g.diag.as_ref().and_then(|d| finding_view(&d["finding"], l)),
     };
     if down {
         v.tone = "bad";
@@ -645,6 +713,39 @@ pub async fn feedback(
                 None => note("", ""),
             }
         }
+    };
+    let _ = app.kick.send(PATH);
+    one(html)
+}
+
+#[derive(Deserialize)]
+pub struct DismissQuery {
+    kind: String,
+    #[serde(default)]
+    tail: String,
+}
+
+/// 「忽略」 on the open finding (T6): the core keeps the same kind + card closed for 24 h; the
+/// readback is the finding gone from the next `GET /api/diagnose`.
+pub async fn dismiss(
+    State(app): State<Shared>,
+    Query(q): Query<DismissQuery>,
+    req: axum::extract::Request,
+) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let l = Lang::from_headers(req.headers());
+    let who = Caller::of(&app, &req);
+    let mut body = json!({"kind": q.kind});
+    if !q.tail.is_empty() {
+        body["iccid_tail"] = q.tail.into();
+    }
+    let r = crate::agent::post_raw(&app, &who, "/api/diagnose/dismiss", &body).await;
+    let html = match r {
+        // already closed (resolved meanwhile, or another tab): the readback says so
+        Ok((404, _)) => note("", ""),
+        _ => match refusal(&r, l) {
+            Some(e) => note("bad", &e),
+            None => note("", ""),
+        },
     };
     let _ = app.kick.send(PATH);
     one(html)

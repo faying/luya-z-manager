@@ -273,3 +273,47 @@ fn names_for_the_device_fonts() {
     assert_eq!(human(5 * 1048576 + 7), "5M");
     assert_eq!(human(3 * 1073741824 / 2), "1.5G");
 }
+
+/// Every group gets a chip: 19 groups (more than the old 12/16 caps), main and AI first.
+#[test]
+fn groups_all_kept_main_and_ai_first() {
+    let names = [
+        "GLOBAL", "家里IP", "家里出口", "🇯🇵 日本", "🇯🇵 日本·自动", "🇸🇬 新加坡", "🇸🇬 新加坡·自动", "🇹🇼 台湾",
+        "🇹🇼 台湾·自动", "🇺🇸 美国", "🇺🇸 美国·自动", "🍎 Apple", "🎯 手动节点", "🐟 漏网之鱼", "📞 VoWiFi",
+        "📺 流媒体", "🤖 AI", "🚀 节点选择", "DIRECT-X",
+    ];
+    let mut j = String::from("{\"proxies\":[");
+    for n in names {
+        j += &format!("{{\"name\":\"{n}\",\"type\":\"Selector\"}},");
+    }
+    j += "]}";
+    let mut c = Chill::default();
+    c.parse_groups(j.as_bytes());
+    assert_eq!(c.grp_raw.len(), names.len());
+    assert_eq!(c.grp_raw[0], "🚀 节点选择");
+    assert_eq!(c.grp_raw[1], "🤖 AI");
+    assert_eq!(c.grp_raw.last().map(String::as_str), Some("GLOBAL"));
+    assert!(c.grp_raw[c.grp_raw.len() - 5..c.grp_raw.len() - 1].iter().all(|g| g.ends_with("·自动")));
+    assert!(names.len() < SC_MAX_GRP);
+}
+
+/// Auto groups: a 自动 row first; the tick follows the pin, not the node in use.
+#[test]
+fn auto_group_row_and_pin() {
+    assert_eq!(auto_row_label("", "🇹🇼 台湾 01", false), format!("自动 · 在用 {}", sanitize_name("🇹🇼 台湾 01", SC_NAME_MAX)));
+    assert!(auto_row_label("TW04", "示例节点 03", false).contains("首选不通"));
+    assert_eq!(auto_row_label("TW04", "TW04", false), "自动");
+
+    let mut c = Chill::default();
+    c.parse_all_array(br#"["TW04","TW05"]"#);
+    c.fixed = Some("TW04".into());
+    c.nodes.insert(0, "自动".into());
+    c.nodes_raw.insert(0, String::new());
+    c.node_delay.insert(0, -1);
+    c.node = "TW05".into();
+    let sel: Vec<i32> = c.nodes().iter().map(|n| n.selected).collect();
+    assert_eq!(sel, vec![0, 1, 0]);
+    c.fixed = Some(String::new());
+    let sel: Vec<i32> = c.nodes().iter().map(|n| n.selected).collect();
+    assert_eq!(sel, vec![1, 0, 0]);
+}
