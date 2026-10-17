@@ -4,7 +4,7 @@
 # the `recover` component (u60-recover.sh into /data/luyaz/ship as luyaz-recover.sh after its own
 # selftest, and the rc.local line before the service start lines) and
 # place_recover (what admin/devui do: put it there only when it is missing),
-# kit_record (lweb; touch, uid), uid_restart (devui) and the check for an
+# kit_record (lweb; touch, sentinel, datad) and the check for an
 # unfinished u60 ship transaction (txn v=1 and v=2).
 # Every path is moved into a temp dir (KIT_RC, KIT_STATE, KIT_SHIP_DIR,
 # KIT_SCRIPTS); nothing touches a device. In the device's busybox:
@@ -55,7 +55,7 @@ setup
 inst recover
 check "recover: done" '[ $RC = 0 ]'
 check "recover: the script in /data/luyaz/ship as luyaz-recover.sh, same as the kit's, executable" '[ "$(md5 "$T/data/luyaz/ship/luyaz-recover.sh")" = "$(md5 "$K/payload/guard/u60-recover.sh")" ] && [ -x "$T/data/luyaz/ship/luyaz-recover.sh" ]'
-check "recover: rc.local line right before the first service start" '[ "$(sed -n 3p "$T/rc.local" | cut -d" " -f1-2)" = "sh $T/data/luyaz/ship/luyaz-recover.sh" ] && [ "$(sed -n 4p "$T/rc.local")" = "/etc/init.d/zte-agent start" ]'
+check "recover: rc.local line right before the first service start" '[ "$(sed -n 3p "$T/rc.local" | cut -d";" -f1)" = "sh $T/data/luyaz/ship/luyaz-recover.sh" ] && [ "$(sed -n 4p "$T/rc.local")" = "/etc/init.d/zte-agent start" ]'
 check "recover: the order tools/luyaz wants" '[ "$(order)" = ok ]'
 check "recover: rc.local still parses, the rest as it was" 'sh -n "$T/rc.local" && [ "$(grep -v luyaz-recover "$T/rc.local" | md5sum)" = "$(md5sum <"$T/data/u60-kit/rc.local.orig")" ]'
 check "recover: the original rc.local backed up" '[ -f "$T/data/u60-kit/rc.local.orig" ]'
@@ -145,9 +145,9 @@ rm -rf "$T"
 # kit-source; a kit-source without datad_* keys (a kit from before them) still
 # records it, as commit 0000000 and dirty
 setup
-mkdir -p "$T/root/data/plugins/zwrt-datad" "$T/root/data/luyaz/ship" "$T/data/luyaz/scripts"; : >"$T/root/data/luyaz/ship/.migrated"
+mkdir -p "$T/root/data/luyaz/ship" "$T/data/luyaz/scripts"; : >"$T/root/data/luyaz/ship/.migrated"
 cp "$SCRIPTS/u60-ship.sh" "$T/data/luyaz/scripts/luyaz-ship.sh"
-echo 'datad build' >"$T/root/data/plugins/zwrt-datad/zwrt-datad"
+echo 'datad build' >"$T/root/data/luyaz/luyaz-core"
 sed -n '/^kit_record() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
 recd() { (
     P=$K/payload S=$T/data/luyaz/scripts
@@ -159,7 +159,7 @@ recd() { (
 ) >"$T/out" 2>&1; RC=$?; }
 printf 'stamp=20261004\nlweb_commit=abc1234\nlweb_format=1\nlweb_dirty=0\n' >"$K/payload/guard/kit-source"
 recd
-check "kit_record datad, kit-source without datad_* keys: recorded as 0000000, dirty" "[ \$RC = 0 ] && grep -q '\"kind\":\"kit\",\"comp\":\"datad\",\"kit\":\"20261004\",\"commit\":\"0000000\",\"format\":1,' '$T/root/data/luyaz/ship/manifest.jsonl' && grep -q '\"path\":\"$T/root/data/plugins/zwrt-datad/zwrt-datad\",\"md5\":\"$(md5 "$T/root/data/plugins/zwrt-datad/zwrt-datad")\"' '$T/root/data/luyaz/ship/manifest.jsonl' && grep -q 'kit-dirty' '$T/root/data/luyaz/ship/manifest.jsonl'"
+check "kit_record datad, kit-source without datad_* keys: recorded as 0000000, dirty" "[ \$RC = 0 ] && grep -q '\"kind\":\"kit\",\"comp\":\"datad\",\"kit\":\"20261004\",\"commit\":\"0000000\",\"format\":1,' '$T/root/data/luyaz/ship/manifest.jsonl' && grep -q '\"path\":\"$T/root/data/luyaz/luyaz-core\",\"md5\":\"$(md5 "$T/root/data/luyaz/luyaz-core")\"' '$T/root/data/luyaz/ship/manifest.jsonl' && grep -q 'kit-dirty' '$T/root/data/luyaz/ship/manifest.jsonl'"
 : >"$T/root/data/luyaz/ship/manifest.jsonl"
 printf 'stamp=20261004\nlweb_commit=abc1234\nlweb_format=1\nlweb_dirty=0\ndatad_commit=fed9876\ndatad_format=1\ndatad_dirty=0\n' >"$K/payload/guard/kit-source"
 recd
@@ -221,11 +221,11 @@ for case_ in done:0 check:1; do
     rm -rf "$T"
 done
 
-# kit_record touch / uid (after devui): their own keys in kit-source
+# kit_record touch / sentinel (after devui): their own keys in kit-source
 setup
 mkdir -p "$T/data/luyaz/scripts"
 printf '#!/bin/sh\necho "$*" >>%s/ship.calls\n' "$T" >"$T/data/luyaz/scripts/luyaz-ship.sh"
-printf 'stamp=20261001\nlweb_commit=abc1234\nlweb_format=1\nlweb_dirty=0\ntouch_commit=def5678\ntouch_format=1\ntouch_dirty=0\nuid_commit=def5678\nuid_format=2\nuid_dirty=1\n' >"$K/payload/guard/kit-source"
+printf 'stamp=20261001\nlweb_commit=abc1234\nlweb_format=1\nlweb_dirty=0\ntouch_commit=def5678\ntouch_format=1\ntouch_dirty=0\nsentinel_commit=def5678\nsentinel_format=2\nsentinel_dirty=1\n' >"$K/payload/guard/kit-source"
 sed -n '/^kit_record() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
 (
     P=$K/payload S=$T/data/luyaz/scripts KIT_MAC_TIME=1790000000
@@ -233,37 +233,11 @@ sed -n '/^kit_record() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
     warn() { echo "[device] 注意: $*"; }
     . "$T/fns.sh"
     kit_record touch
-    kit_record uid
+    kit_record sentinel
 ) >"$T/out" 2>&1
-check "kit_record touch, uid: each with its own commit, format, dirty" "[ \"\$(cat '$T/ship.calls')\" = 'record-kit touch 20261001 def5678 1 1790000000
-record-kit uid 20261001 def5678 2 1790000000 dirty' ]"
-check "do_devui records touch and uid after the screen is up" "sed -n '/^do_devui() {/,/^}/p' '$K/device/install.sh' | tail -n 4 | tr -d ' ' | grep -qx 'kit_recordtouch' && sed -n '/^do_devui() {/,/^}/p' '$K/device/install.sh' | grep -q '^ *kit_record uid\$'"
-rm -rf "$T"
-
-# uid_restart (do_devui): the kit's u60-ship.sh uid-restart with the two md5s;
-# a kit u60-ship.sh without it: not called (the old restart instead)
-setup
-mkdir -p "$T/data/luyaz/scripts" "$T/d"
-echo 'ui build' >"$T/d/u60pro-devui"
-echo 'uid build' >"$T/d/u60-uid"
-printf '#!/bin/sh\ncase "$1" in\n  uid-restart) echo "$*" >>%s/ship.calls; exit 0 ;;\nesac\n' "$T" >"$T/data/luyaz/scripts/luyaz-ship.sh"
-sed -n '/^uid_restart() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
-ur() { (
-    S=$T/data/luyaz/scripts
-    warn() { echo "[device] 注意: $*"; }
-    . "$T/fns.sh"
-    uid_restart "$T/d/u60pro-devui" "$T/d/u60-uid"
-) >"$T/out" 2>&1; RC=$?; }
-ur
-check "uid_restart: u60-ship.sh uid-restart <ui md5> <uid md5>" "[ \"\$(cat '$T/ship.calls')\" = \"uid-restart \$(md5 '$T/d/u60pro-devui') \$(md5 '$T/d/u60-uid')\" ]"
-printf '#!/bin/sh\necho "$*" >>%s/ship.calls\nexit 1\n# uid-restart)\n' "$T" >"$T/data/luyaz/scripts/luyaz-ship.sh"
-: >"$T/ship.calls"
-ur
-check "uid_restart: it says no: a warning, the install goes on" '[ $RC = 0 ] && grep -q "uid-restart 没确认" "$T/out"'
-printf '#!/bin/sh\necho "$*" >>%s/ship.calls\n' "$T" >"$T/data/luyaz/scripts/luyaz-ship.sh"
-: >"$T/ship.calls"
-ur
-check "uid_restart: an older u60-ship.sh (no uid-restart): not called" '[ ! -s "$T/ship.calls" ]'
+check "kit_record touch, sentinel: each with its own commit, format, dirty" "[ \"\$(cat '$T/ship.calls')\" = 'record-kit touch 20261001 def5678 1 1790000000
+record-kit sentinel 20261001 def5678 2 1790000000 dirty' ]"
+check "do_devui records touch and sentinel after the screen is up" "sed -n '/^do_devui() {/,/^}/p' '$K/device/install.sh' | tail -n 4 | tr -d ' ' | grep -qx 'kit_recordtouch' && sed -n '/^do_devui() {/,/^}/p' '$K/device/install.sh' | grep -q '^ *kit_record sentinel\$'"
 rm -rf "$T"
 
 # rc.local writers (rc_add, both rc_replace branches, do_recover): a candidate,
@@ -274,7 +248,7 @@ ino() { ls -i "$1" | awk '{ print $1 }'; }
 perm() { ls -ln "$1" | awk '{ print $1 }'; }
 tmps() { ls -a "$(dirname "$T/rc.local")" | grep -c 'u60kit' ; }
 setup
-sed -n '/^RC=/,/^# ── 进程监督/p' "$K/device/install.sh" | sed '$d' >"$T/rcfns.sh"
+sed -n '/^RC=/,/^# ── 设备脚本/p' "$K/device/install.sh" | sed '$d' >"$T/rcfns.sh"
 rcf() { ( . "$T/rcfns.sh"; "$@" ) >"$T/out" 2>&1; RC=$?; }
 chmod 750 "$T/rc.local"; i0=$(ino "$T/rc.local"); p0=$(perm "$T/rc.local")
 rcf rc_add "/etc/init.d/chill start" "/etc/init.d/chill start"

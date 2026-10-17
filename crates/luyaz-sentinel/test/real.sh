@@ -23,7 +23,7 @@ esac
 S
 chmod 755 /data/luyaz/ui/luyaz-ui /usr/local/bin/zte_topsw_devui /etc/init.d/zte_topsw_devui
 chmod 1777 /tmp
-# Phase 10 R4: a state dir from before the move, with an event sequence that must carry on
+# a state dir from before the move (E3: no longer copied or read) must be left alone
 mkdir -p /data/u60-uid && chmod 700 /data/u60-uid && echo 41 >/data/u60-uid/events.seq
 ui() { pgrep -x luyaz-ui | head -1; }
 vendor() { pgrep -f /usr/local/bin/zte_topsw_devui | head -1; }
@@ -35,7 +35,6 @@ check "launched our UI" '[ -n "$U" ]'
 check "FIFO made" '[ -p /tmp/luyaz-screen.ctl ]'
 check "heartbeat has 5 fields, says ours" '[ "$(wc -w </tmp/luyaz-sentinel.hb)" = 5 ] && [ "$(cut -d" " -f3 /tmp/luyaz-sentinel.hb)" = ours ]'
 check "round ③: only the new FIFO" '[ -p /tmp/luyaz-screen.ctl ] && [ ! -e /tmp/u60-uid.ctl ]'
-check "state copied to the new dir, marked, old left" '[ -f /data/luyaz/screen/.migrated ] && [ "$(cat /data/luyaz/screen/events.seq)" = 41 ] && [ -d /data/u60-uid ]'
 check "attempts counted before the launch (new dir; old no longer mirrored)" '[ "$(cat /data/luyaz/screen/attempts)" = 1 ] && [ ! -e /data/u60-uid/attempts ]'
 check "state dir 0700" '[ "$(stat -c %a /data/luyaz/screen)" = 700 ]'
 check "UI has no blocked signals" '[ "$(awk "/^SigBlk/ {print \$2}" /proc/$U/status)" = 0000000000000000 ]'
@@ -56,7 +55,7 @@ kill -SEGV "$U"
 sleep 8
 check "crash then crash on start: gave up" '[ -f /data/luyaz/screen/gave-up ] && [ -n "$(vendor)" ] && [ -z "$(ui)" ]'
 check "two devui-crash, one devui-gave-up in the queue" '[ "$(grep -c devui-crash /data/alerts/queue)" = 2 ] && [ "$(grep -c devui-gave-up /data/alerts/queue)" = 1 ]'
-check "event sequence carried on from 41, old copy left as it was" '[ "$(cat /data/luyaz/screen/events.seq)" -ge 43 ] && [ "$(cat /data/u60-uid/events.seq)" = 41 ] && grep -q -- "-42	" /data/luyaz/screen/events'
+check "events in the new dir, the old dir left as it was" '[ -s /data/luyaz/screen/events ] && [ "$(cat /data/u60-uid/events.seq)" = 41 ] && [ ! -e /data/u60-uid/events ]'
 check "a crash record left" '[ "$(ls /data/crashlog/u60pro-devui/*.log | wc -l)" -ge 1 ]'
 rm -f /tmp/ui-crash
 echo devui >/tmp/luyaz-screen.ctl
@@ -71,7 +70,7 @@ $B >>/tmp/sentinel.stderr 2>&1 &
 SP=$!
 sleep 2
 check "restart adopts, launches nothing" 'grep -q "adopted running u60pro-devui pid $U" /tmp/luyaz-screen.log && [ "$(pgrep -x luyaz-ui | wc -l)" = 1 ]'
-check "restart: nothing copied again" '[ "$(grep -c "screen state copied" /tmp/luyaz-screen.log)" = 1 ]'
+check "restart: the old dir still not copied" '! grep -q "screen state copied" /tmp/luyaz-screen.log'
 kill -TERM $SP; wait $SP
 # R5 round ③: an old u60pro-devui is not ours any more, and its path is never started
 kill "$U"; sleep 1; rm -f /data/luyaz/screen/attempts

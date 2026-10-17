@@ -374,9 +374,11 @@ S="$TMP/u60-kit/payload"
 for c in $COMPONENTS; do
   case "$c" in
     ssh)   cp "$KIT/payload/dropbear" "$S/"; cp "$SSH_KEY.pub" "$S/authorized_keys" ;;
-    admin) cp "$KIT/payload/luyaz-web" "$S/"; cp -R "$KIT/payload/guard" "$S/"
+    admin) cp "$KIT/payload/luyaz-web" "$S/"; [ -d "$S/guard" ] || cp -R "$KIT/payload/guard" "$S/"
            if [ -d "$KIT/payload/operator-logos" ]; then cp -R "$KIT/payload/operator-logos" "$S/"; fi ;;
-    devui) cp -R "$KIT/payload/devui" "$S/"; cp -R "$KIT/payload/guard" "$S/" ;;
+    devui) [ -f "$KIT/payload/luyaz-sentinel" ] || fail "这个装机包没带 luyaz-sentinel（装机包太旧？）"
+           cp -R "$KIT/payload/devui" "$S/"; cp "$KIT/payload/luyaz-sentinel" "$S/"
+           [ -d "$S/guard" ] || cp -R "$KIT/payload/guard" "$S/" ;;
     esim)  cp "$KIT/payload/esim.tgz" "$S/" ;;
     recover) [ -f "$KIT/payload/guard/u60-recover.sh" ] || fail "这个装机包没带 u60-recover.sh（装机包太旧？）"
              [ -d "$S/guard" ] || cp -R "$KIT/payload/guard" "$S/" ;;

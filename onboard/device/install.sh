@@ -440,13 +440,19 @@ do_admin() {
     # 密码放 $WEB_ENV（600；agent-auth.sh 看到 $CORE_DIR/.migrated 就写这里）。luyaz-web 每次登录都读它，
     # 命令行里只放路径（ubus call service list 会列出命令行和 env）。没有密码它拒绝一切登录。
     #  • 电脑端带了新密码（agent.env）→ 用新的，覆盖旧的
-    #  • 没带 → 沿用 $WEB_ENV；再没有就从旧装法的启动脚本迁过来
+    #  • 没带 → 沿用 $WEB_ENV；再没有就从 Phase 10 前的 /data/zte-agent.env 迁过来，
+    #    再没有从旧装法的启动脚本迁（电脑端 install.sh 认这三处都算「装过后台」）
     if [ -s "$P/agent.env" ]; then
         rm -f "$WEB_ENV"
         AGENT_AUTH_OLD="$P/agent.env" sh "$S/agent-auth.sh" migrate || die "写入后台密码失败"
     elif [ ! -s "$WEB_ENV" ]; then
-        [ -f /data/local/tmp/start_zte_agent.sh ] || die "没有后台密码：设备上既没有 $WEB_ENV 也没有旧的启动脚本"
-        sh "$S/agent-auth.sh" migrate || die "从旧启动脚本迁移后台密码失败"
+        if [ -s /data/zte-agent.env ]; then
+            rm -f "$WEB_ENV"
+            AGENT_AUTH_OLD=/data/zte-agent.env sh "$S/agent-auth.sh" migrate || die "从 /data/zte-agent.env 迁移后台密码失败"
+        else
+            [ -f /data/local/tmp/start_zte_agent.sh ] || die "没有后台密码：设备上没有 $WEB_ENV、/data/zte-agent.env，也没有旧的启动脚本"
+            sh "$S/agent-auth.sh" migrate || die "从旧启动脚本迁移后台密码失败"
+        fi
     fi
     rc_add "/etc/init.d/luyaz-web start" "/etc/init.d/luyaz-web start"
 
