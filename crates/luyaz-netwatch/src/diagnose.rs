@@ -390,6 +390,8 @@ pub fn radio_from(state: Option<&Value>, screen: Option<&Value>) -> (Radio, Cell
         nr,
         ambr_dl: num(qos.and_then(|q| q.get("ambr_dl"))).filter(|x| *x > 0.0),
         qci: reading.qci,
+        qos_stale: qos.and_then(|q| q.get("stale")).and_then(Value::as_bool).unwrap_or(false),
+        qos_nr: qos.and_then(|q| q.get("bearer")).and_then(Value::as_str) == Some("nr_pdu"),
         connected: reading.connected,
         rx_bps: state.and_then(|s| s.get("traffic")).and_then(|t| t.get("rx_speed")).and_then(Value::as_i64).unwrap_or(0),
     };

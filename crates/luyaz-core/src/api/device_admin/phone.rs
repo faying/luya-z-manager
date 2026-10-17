@@ -38,6 +38,31 @@ pub(crate) fn radio_set(cmd: &str) -> bool {
     s.match_indices("CFUN=").any(|(i, _)| !s[i + 5..].starts_with('?'))
 }
 
+/// A call: dial (`ATD…`), answer (`ATA`) or hang up (`+CHUP`, anything but the `=?` test form):
+/// refused from the terminal (b31-community A2), a call placed or dropped there is outside every
+/// call record. Checked on the line as typed and as sanitized: the shell filter turns `AT&D2` (a
+/// DTR setting) into `ATD2`, a dial, so that one is refused too, on purpose. Basic commands chain
+/// (V.250: `ATE0D10086` dials), so every basic command before the first extended one is looked at.
+pub(crate) fn call_control(cmd: &str) -> bool {
+    let s: String = cmd
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    let basic = s.strip_prefix("AT").unwrap_or("");
+    let mut after_amp = false;
+    for c in basic.chars() {
+        if "+$^%*#!@".contains(c) {
+            break;
+        }
+        if (c == 'D' || c == 'A') && !after_amp {
+            return true;
+        }
+        after_amp = c == '&';
+    }
+    s.match_indices("+CHUP").any(|(i, _)| !s[i + 5..].starts_with("=?"))
+}
+
 /// POST /api/at/send `{"command": "AT+CSQ", "timeout": 3}`
 pub async fn at_send(State(c): State<Compat>, req: Request) -> Response {
     let source = charge::source(&req);
@@ -79,6 +104,14 @@ pub async fn at_send(State(c): State<Compat>, req: Request) -> Response {
                 "error_en": "AT+CFUN sets are refused: low-power state only comes back with a device restart"}),
         );
     }
+    if call_control(command) || call_control(&sanitized) {
+        return reply(
+            403,
+            json!({"ok": false,
+                "error": "拨号、接听、挂断不能从终端发",
+                "error_en": "ATD/ATA/AT+CHUP are refused from the terminal"}),
+        );
+    }
     // Any AT command may change the network behind u60d's back: a network-mode change still
     // confirming is cancelled, not rolled back over this one (D40). Best effort. A person's
     // command: the agent's forward says `web`, luyaz-web's direct call nothing (`screen`); the
@@ -106,7 +139,7 @@ pub async fn at_send(State(c): State<Compat>, req: Request) -> Response {
             json!({"ok": true, "data": {"command": sanitized, "response": a.text, "port": a.port,
                 "elapsed_ms": start.elapsed().as_millis() as u64}}),
         ),
-        Err(e) => reply(503, json!({"ok": false, "error": e})),
+        Err(e) => reply(503, json!({"ok": false, "error": e, "kind": at::error_kind(&e).name()})),
     }
 }
 
@@ -114,7 +147,8 @@ pub async fn at_send(State(c): State<Compat>, req: Request) -> Response {
 pub async fn at_port(State(c): State<Compat>) -> Response {
     let data = match at::probe(target(&c)).await {
         Ok(port) => json!({"port": port, "available": true}),
-        Err(_) => json!({"port": null, "available": false}),
+        Err(e) => json!({"port": null, "available": false, "error": e,
+            "kind": at::error_kind(&e).name()}),
     };
     reply(200, json!({"ok": true, "data": data}))
 }
@@ -367,7 +401,7 @@ fn ussd_reply(r: Result<String, String>, error_too: bool) -> Response {
                 }
             }
         }
-        Err(e) => reply(503, json!({"ok": false, "error": e})),
+        Err(e) => reply(503, json!({"ok": false, "error": e, "kind": at::error_kind(&e).name()})),
     }
 }
 
@@ -401,7 +435,7 @@ pub async fn ussd_respond(State(c): State<Compat>, body: Bytes) -> Response {
 pub async fn ussd_cancel(State(c): State<Compat>) -> Response {
     match at::phone(target(&c), Phone::UssdCancel).await {
         Ok(_) => reply(200, json!({"ok": true, "data": {"status": "ok"}})),
-        Err(e) => reply(503, json!({"ok": false, "error": e})),
+        Err(e) => reply(503, json!({"ok": false, "error": e, "kind": at::error_kind(&e).name()})),
     }
 }
 

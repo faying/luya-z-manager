@@ -17,7 +17,7 @@ good	home	↓12.3Mb ↑1.5Mb
 good	home	78
 good	home	China Telecom
 good	cellular	QCI 9
-good	cellular	AMBR 1668/1008
+good	cellular	max 1668/1008 Mbps
 good	home	China Telecom · 5G SA · Local
 good	home	n78 100M + n1 20M
 good	home	n78 100M

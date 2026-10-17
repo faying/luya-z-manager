@@ -456,7 +456,7 @@ impl Ui {
         let cc = kit::card(sc, MARGIN, 0, CARD_W, CA_CARD_TOP + 40);
         kit::show(cc, false);
         kit::label(cc, f.cj12, th.t3, PAD, 10, tr("载波"));
-        h.ca_qos = kit::label_r(cc, f.n12, th.t2, CARD_W - PAD, 9, "");
+        h.ca_qos = kit::label_r(cc, f.cj12, th.t2, CARD_W - PAD, 9, "");
         for i in 0..CA_SLOTS {
             let bx = kit::bx(cc, 0, CA_CARD_TOP + i as i32 * 40, CARD_W, 40, th.card, 0);
             bx.set_style_bg_opa(lv::OPA_TRANSP, 0);
@@ -851,7 +851,7 @@ impl Ui {
             row.bx.set_y(y);
             y += ch;
             let q = self.home.ca_qos;
-            self.set(q, cf!("QCI %d · AMBR %d/%d", d.qci, d.ambr_dl as i32, d.ambr_ul as i32));
+            self.set(q, qos_line(d));
         }
         // Wi-Fi · 设备数 (opens the Wi-Fi tab)
         {
@@ -1354,6 +1354,23 @@ impl Ui {
     }
 }
 
+/// 载波 card's QoS line: QCI or 5QI by the core's `bearer` (not the radio mode), AMBR as the
+/// network's ceiling in Mbps, （旧） when the core marks the values stale; empty without a value.
+pub(crate) fn qos_line(d: &devui_model::devui_data_t) -> Vec<u8> {
+    if d.qci <= 0 && d.ambr_dl <= 0.0 && d.ambr_ul <= 0.0 {
+        return Vec::new();
+    }
+    let kind = if d.qos_bearer == "nr_pdu" { "5QI" } else { "QCI" };
+    let mut s = if d.qci > 0 { format!("{kind} {}", d.qci) } else { format!("{kind} —") }.into_bytes();
+    if d.ambr_dl > 0.0 || d.ambr_ul > 0.0 {
+        s.extend(cf!(tr(" · 上限 %d/%d Mbps"), d.ambr_dl as i32, d.ambr_ul as i32));
+    }
+    if d.qos_stale != 0 {
+        s.extend_from_slice(tr("（旧）").as_bytes());
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1383,5 +1400,18 @@ mod tests {
         v.state = 0;
         v.story.headline = "a".into();
         assert_eq!(hold_key(&v), 5381u32.wrapping_mul(33) + b'a' as u32);
+    }
+
+    #[test]
+    fn qos_line_labels_by_bearer_and_marks_stale() {
+        let mut d = devui_model::devui_data_t { qci: 9, ambr_dl: 1668.64, ambr_ul: 1008.4, ..Default::default() };
+        d.qos_bearer = "eps".into();
+        assert_eq!(qos_line(&d), "QCI 9 · 上限 1668/1008 Mbps".as_bytes());
+        d.qos_bearer = "nr_pdu".into();
+        assert_eq!(qos_line(&d), "5QI 9 · 上限 1668/1008 Mbps".as_bytes());
+        d.qos_stale = 1;
+        assert_eq!(qos_line(&d), "5QI 9 · 上限 1668/1008 Mbps（旧）".as_bytes());
+        let empty = devui_model::devui_data_t::default();
+        assert!(qos_line(&empty).is_empty());
     }
 }

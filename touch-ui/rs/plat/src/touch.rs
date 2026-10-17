@@ -1,9 +1,12 @@
 //! The touchscreen (src/touch_input.c): the first /dev/input/event* with absolute X/Y (multitouch
 //! preferred), drained without blocking, one (x, y, pressed) per SYN_REPORT, turned 180° for the
-//! upside-down panel. A whole tap that came and went inside one read is latched (lost_tap) so
-//! the caller can still report it; reports are counted for the 性能测试 page.
+//! upside-down panel. Press and release edges are queued and handed out one per read, so every
+//! press is reported pressed for at least one read before its release, however short it was (a
+//! touchsim tap, a quick finger, a long LVGL frame) and however many taps landed between two reads;
+//! reports are counted for the 性能测试 page.
 // SPDX-License-Identifier: MIT
 
+use std::collections::VecDeque;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -20,8 +23,8 @@ const ABS_MT_POSITION_Y: u16 = 0x36;
 const ABS_MT_TRACKING_ID: u16 = 0x39;
 /// arm64 input_event: timeval (16 bytes), type, code, value
 const EV_SIZE: usize = 24;
-/// a press that moved at most this far is a tap
-const TAP_SLOP: i32 = 14;
+/// edges kept for the reads to come; more than this between two reads drops the oldest pair
+const MAX_EDGES: usize = 16;
 
 /// SYN_REPORT samples seen (touch_input_report_count).
 pub static REPORTS: AtomicU64 = AtomicU64::new(0);
@@ -76,13 +79,14 @@ pub struct Touch {
     pub raw_cur_y: i32,
     cur_x: i32,
     cur_y: i32,
+    /// the touch state as of the last SYN_REPORT
     pressed: bool,
-    press_x: i32,
-    press_y: i32,
-    in_tap: bool,
-    lost_tap: bool,
-    lost_x: i32,
-    lost_y: i32,
+    /// BTN_TOUCH / tracking id seen since that SYN_REPORT
+    new_press: bool,
+    /// press/release edges not yet handed to a read: (x, y, pressed)
+    edges: VecDeque<(i32, i32, bool)>,
+    /// what the last read reported
+    out_pressed: bool,
     rot180: bool,
 }
 
@@ -172,12 +176,9 @@ impl Touch {
             cur_x: 0,
             cur_y: 0,
             pressed: false,
-            press_x: 0,
-            press_y: 0,
-            in_tap: false,
-            lost_tap: false,
-            lost_x: 0,
-            lost_y: 0,
+            new_press: false,
+            edges: VecDeque::new(),
+            out_pressed: false,
             rot180: true,
         }
     }
@@ -194,69 +195,84 @@ impl Touch {
         ((v - lo) as i64 * out_max as i64 / (hi - lo) as i64) as i32
     }
 
-    /// Drain what is waiting; the latest (x, y, pressed) in display pixels.
+    /// Drain what is waiting; what to report for this read in display pixels: the oldest edge
+    /// not reported yet, else the latest position and state.
     pub fn read(&mut self) -> (i32, i32, bool) {
-        let Some(fd) = self.fd.as_ref().map(|f| f.as_raw_fd()) else { return (self.cur_x, self.cur_y, false) };
-        let mut new_press = self.pressed;
-        let mut down_here = false; // the current press began during this call
-        let mut ev = [0u8; EV_SIZE];
-        // SAFETY: reading whole events into a local buffer
-        while unsafe { libc::read(fd, ev.as_mut_ptr().cast(), EV_SIZE) } == EV_SIZE as isize {
-            let kind = u16::from_ne_bytes([ev[16], ev[17]]);
-            let code = u16::from_ne_bytes([ev[18], ev[19]]);
-            let value = i32::from_ne_bytes([ev[20], ev[21], ev[22], ev[23]]);
-            match kind {
-                EV_ABS => match code {
-                    ABS_MT_POSITION_X if self.use_mt => self.raw_cur_x = value,
-                    ABS_MT_POSITION_Y if self.use_mt => self.raw_cur_y = value,
-                    ABS_X if !self.use_mt => self.raw_cur_x = value,
-                    ABS_Y if !self.use_mt => self.raw_cur_y = value,
-                    ABS_MT_TRACKING_ID => new_press = value >= 0,
-                    _ => {}
-                },
-                EV_KEY if code == BTN_TOUCH => new_press = value != 0,
-                EV_SYN if code == SYN_REPORT => {
-                    let mut sx = Self::scale(self.raw_cur_x, self.raw_min_x, self.raw_max_x, self.w - 1);
-                    let mut sy = Self::scale(self.raw_cur_y, self.raw_min_y, self.raw_max_y, self.h - 1);
-                    if self.rot180 {
-                        sx = (self.w - 1) - sx;
-                        sy = (self.h - 1) - sy;
-                    }
-                    let was = self.pressed;
-                    self.cur_x = sx;
-                    self.cur_y = sy;
-                    self.pressed = new_press;
-                    if !was && new_press {
-                        self.press_x = sx;
-                        self.press_y = sy;
-                        self.in_tap = true;
-                        down_here = true;
-                    } else if was && !new_press && self.in_tap {
-                        let (dx, dy) = (sx - self.press_x, sy - self.press_y);
-                        if down_here && dx * dx + dy * dy <= TAP_SLOP * TAP_SLOP {
-                            // the caller never saw this press
-                            self.lost_tap = true;
-                            self.lost_x = self.press_x;
-                            self.lost_y = self.press_y;
-                        }
-                        down_here = false;
-                        self.in_tap = false;
-                    }
-                    REPORTS.fetch_add(1, Ordering::Relaxed);
-                }
-                _ => {}
+        if let Some(fd) = self.fd.as_ref().map(|f| f.as_raw_fd()) {
+            let mut ev = [0u8; EV_SIZE];
+            // SAFETY: reading whole events into a local buffer
+            while unsafe { libc::read(fd, ev.as_mut_ptr().cast(), EV_SIZE) } == EV_SIZE as isize {
+                let kind = u16::from_ne_bytes([ev[16], ev[17]]);
+                let code = u16::from_ne_bytes([ev[18], ev[19]]);
+                let value = i32::from_ne_bytes([ev[20], ev[21], ev[22], ev[23]]);
+                self.event(kind, code, value);
             }
+        } else if self.edges.is_empty() {
+            return (self.cur_x, self.cur_y, false);
         }
-        (self.cur_x, self.cur_y, self.pressed)
+        self.report()
     }
 
-    /// A whole tap inside one read: its press position, once.
-    pub fn take_lost_tap(&mut self) -> Option<(i32, i32)> {
-        if !self.lost_tap {
-            return None;
+    /// Edges not handed out yet (read again before waiting for the next period).
+    pub fn pending(&self) -> bool {
+        self.edges.iter().any(|e| e.2 != self.out_pressed)
+    }
+
+    /// One evdev event.
+    fn event(&mut self, kind: u16, code: u16, value: i32) {
+        match kind {
+            EV_ABS => match code {
+                ABS_MT_POSITION_X if self.use_mt => self.raw_cur_x = value,
+                ABS_MT_POSITION_Y if self.use_mt => self.raw_cur_y = value,
+                ABS_X if !self.use_mt => self.raw_cur_x = value,
+                ABS_Y if !self.use_mt => self.raw_cur_y = value,
+                ABS_MT_TRACKING_ID => self.new_press = value >= 0,
+                _ => {}
+            },
+            EV_KEY if code == BTN_TOUCH => self.new_press = value != 0,
+            EV_SYN if code == SYN_REPORT => self.syn(),
+            _ => {}
         }
-        self.lost_tap = false;
-        Some((self.lost_x, self.lost_y))
+    }
+
+    /// A SYN_REPORT: the frame is complete.
+    fn syn(&mut self) {
+        let mut sx = Self::scale(self.raw_cur_x, self.raw_min_x, self.raw_max_x, self.w - 1);
+        let mut sy = Self::scale(self.raw_cur_y, self.raw_min_y, self.raw_max_y, self.h - 1);
+        if self.rot180 {
+            sx = (self.w - 1) - sx;
+            sy = (self.h - 1) - sy;
+        }
+        self.cur_x = sx;
+        self.cur_y = sy;
+        if self.new_press != self.pressed {
+            self.pressed = self.new_press;
+            if self.edges.len() >= MAX_EDGES {
+                // keep the queue in press/release pairs
+                self.edges.pop_front();
+                self.edges.pop_front();
+            }
+            self.edges.push_back((sx, sy, self.pressed));
+        }
+        REPORTS.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The state for this read: one queued edge at a time (an edge equal to what was reported last,
+    /// after a dropped pair, is skipped); a press still going on reports where the finger is now.
+    fn report(&mut self) -> (i32, i32, bool) {
+        while let Some((x, y, p)) = self.edges.pop_front() {
+            if p == self.out_pressed {
+                continue;
+            }
+            self.out_pressed = p;
+            if p && self.edges.is_empty() {
+                // the press is still on: where the finger is now
+                return (self.cur_x, self.cur_y, true);
+            }
+            return (x, y, p);
+        }
+        self.out_pressed = self.pressed;
+        (self.cur_x, self.cur_y, self.pressed)
     }
 }
 
@@ -273,5 +289,153 @@ mod tests {
         let mut bits = [0u64; 2];
         bits[0] |= 1 << 0x35;
         assert!(test_bit(&bits, 0x35) && !test_bit(&bits, 0x36));
+    }
+
+    /// A 320 × 480 MT panel with raw = display range and no rotation, so raw = display pixels.
+    fn mt() -> Touch {
+        let mut t = Touch::none(320, 480);
+        t.use_mt = true;
+        t.rot180 = false;
+        t
+    }
+
+    /// touchsim's tap press frame
+    fn down(t: &mut Touch, x: i32, y: i32) {
+        t.event(EV_ABS, ABS_MT_TRACKING_ID, 0);
+        t.event(EV_ABS, ABS_MT_POSITION_X, x);
+        t.event(EV_ABS, ABS_MT_POSITION_Y, y);
+        t.event(EV_KEY, BTN_TOUCH, 1);
+        t.event(EV_SYN, SYN_REPORT, 0);
+    }
+
+    /// touchsim's tap release frame (no position)
+    fn up(t: &mut Touch) {
+        t.event(EV_KEY, BTN_TOUCH, 0);
+        t.event(EV_ABS, ABS_MT_TRACKING_ID, -1);
+        t.event(EV_SYN, SYN_REPORT, 0);
+    }
+
+    fn mv(t: &mut Touch, x: i32, y: i32) {
+        t.event(EV_ABS, ABS_MT_POSITION_X, x);
+        t.event(EV_ABS, ABS_MT_POSITION_Y, y);
+        t.event(EV_SYN, SYN_REPORT, 0);
+    }
+
+    #[test]
+    fn tap_across_two_reads() {
+        let mut t = mt();
+        assert_eq!(t.report(), (0, 0, false));
+        down(&mut t, 100, 200);
+        assert_eq!(t.report(), (100, 200, true));
+        assert_eq!(t.report(), (100, 200, true));
+        up(&mut t);
+        assert_eq!(t.report(), (100, 200, false));
+        assert_eq!(t.report(), (100, 200, false));
+    }
+
+    #[test]
+    fn whole_tap_inside_one_read_is_pressed_then_released() {
+        let mut t = mt();
+        down(&mut t, 100, 200);
+        up(&mut t);
+        assert!(t.pending());
+        assert_eq!(t.report(), (100, 200, true));
+        assert!(t.pending());
+        assert_eq!(t.report(), (100, 200, false));
+        assert!(!t.pending());
+        assert_eq!(t.report(), (100, 200, false));
+    }
+
+    #[test]
+    fn two_whole_taps_inside_one_read_are_both_reported() {
+        let mut t = mt();
+        down(&mut t, 100, 200);
+        up(&mut t);
+        down(&mut t, 30, 40);
+        up(&mut t);
+        assert_eq!(t.report(), (100, 200, true));
+        assert_eq!(t.report(), (100, 200, false));
+        assert_eq!(t.report(), (30, 40, true));
+        assert_eq!(t.report(), (30, 40, false));
+        assert_eq!(t.report(), (30, 40, false));
+    }
+
+    #[test]
+    fn a_new_press_right_after_a_whole_tap_still_releases_first() {
+        let mut t = mt();
+        down(&mut t, 100, 200);
+        up(&mut t);
+        assert_eq!(t.report(), (100, 200, true));
+        down(&mut t, 30, 40);
+        assert_eq!(t.report(), (100, 200, false));
+        assert_eq!(t.report(), (30, 40, true));
+        up(&mut t);
+        assert_eq!(t.report(), (30, 40, false));
+    }
+
+    #[test]
+    fn a_finger_that_moves_reports_where_it_is() {
+        let mut t = mt();
+        down(&mut t, 100, 200);
+        mv(&mut t, 110, 210);
+        // the press is still on: the latest position, as before
+        assert_eq!(t.report(), (110, 210, true));
+        mv(&mut t, 150, 210);
+        mv(&mut t, 200, 210);
+        assert_eq!(t.report(), (200, 210, true));
+        mv(&mut t, 220, 210);
+        up(&mut t);
+        assert_eq!(t.report(), (220, 210, false));
+    }
+
+    #[test]
+    fn a_drag_that_ends_inside_one_read_presses_where_it_began() {
+        let mut t = mt();
+        down(&mut t, 100, 200);
+        mv(&mut t, 160, 200);
+        up(&mut t);
+        assert_eq!(t.report(), (100, 200, true));
+        assert_eq!(t.report(), (160, 200, false));
+    }
+
+    #[test]
+    fn single_touch_btn_only_and_rotation() {
+        let mut t = Touch::none(320, 480);
+        t.event(EV_ABS, ABS_X, 0);
+        t.event(EV_ABS, ABS_Y, 0);
+        t.event(EV_KEY, BTN_TOUCH, 1);
+        t.event(EV_SYN, SYN_REPORT, 0);
+        t.event(EV_KEY, BTN_TOUCH, 0);
+        t.event(EV_SYN, SYN_REPORT, 0);
+        assert_eq!(t.report(), (319, 479, true));
+        assert_eq!(t.report(), (319, 479, false));
+    }
+
+    #[test]
+    fn a_flood_of_taps_keeps_pairs_and_ends_released() {
+        let mut t = mt();
+        for i in 0..20 {
+            down(&mut t, i, i);
+            up(&mut t);
+        }
+        let mut last = false;
+        let mut n = 0;
+        loop {
+            let (_, _, p) = t.report();
+            if !p && !last {
+                break;
+            }
+            assert_ne!(p, last, "edges alternate");
+            last = p;
+            n += 1;
+        }
+        assert_eq!(n, MAX_EDGES);
+        assert_eq!(t.report(), (19, 19, false));
+    }
+
+    #[test]
+    fn read_without_a_device_drains_nothing() {
+        let mut t = mt();
+        assert_eq!(t.read(), (0, 0, false));
     }
 }

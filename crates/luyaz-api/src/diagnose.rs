@@ -338,6 +338,10 @@ pub struct Radio {
     pub nr: bool,
     pub ambr_dl: Option<f64>,
     pub qci: Option<i64>,
+    /// The `qos` block's `stale`: its values are history, no cap verdict from them.
+    pub qos_stale: bool,
+    /// The `qos` block's `bearer` is `nr_pdu`: `qci` is a 5QI.
+    pub qos_nr: bool,
     pub connected: bool,
     pub rx_bps: i64,
 }
@@ -405,7 +409,11 @@ pub fn judge_signal(r: &Radio) -> Layer {
 
 pub fn judge_limit(r: &Radio) -> Layer {
     let l = Layer::new("limit");
-    let qci = r.qci.map(|q| format!(" · QCI {q}")).unwrap_or_default();
+    if r.qos_stale {
+        return l.na("QoS 是旧连接的，不下结论", "QoS is from an earlier bearer: no verdict");
+    }
+    let label = if r.qos_nr { "5QI" } else { "QCI" };
+    let qci = r.qci.map(|q| format!(" · {label} {q}")).unwrap_or_default();
     match r.ambr_dl {
         None => l.na("QoS 读不到", "QoS unavailable"),
         Some(a) if a > 0.0 && a < 10.0 => {

@@ -21,8 +21,22 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
-- touch: System has a "Component versions" card; "Check for updates" asks the core to look now.
 - scripts: `VERSION` is shipped to `/data/luyaz/scripts/` so the scripts' version can be read on the device.
+
+## touch 1.0.1 — 2026-10-17
+
+- The Carrier card's QoS line labels the value QCI or 5QI by the core's `bearer` (not the radio mode), shows AMBR as a ceiling in Mbps ("max 1668/1008 Mbps") and marks stale values "(old)".
+- System has a "Component versions" card; "Check for updates" asks the core to look now.
+
+## lweb 1.1.2 — 2026-10-17
+
+- The signal page and QCI page label the class by the `qos` block's `bearer` (5QI for an NR PDU session, QCI for an EPS bearer); the signal page marks a stale block "earlier bearer".
+
+## core 1.2.0 — 2026-10-17
+
+- The AT port pick skips a node another process holds open and never writes to it; an answer ends at a whole-line final result code (`OK`, `ERROR`, `+CME ERROR:`, `+CMS ERROR:`); AT errors carry a `kind` (`busy`, `held`, `timeout`, `error`, `no-port`). The AT terminal refuses `ATD…`, `ATA` and `AT+CHUP`.
+- QoS is matched to the current connection by the WAN IPv4 and key.log's `CONNECTED … addr=` lines: a bearer of another connection, or a current connection no longer in the part of the log read, is `stale`; with several data DNNs the current connection's wins. Session-AMBR unit codes without a name are decoded (TS 24.501). A stale `qos` block gives no "capped" verdict in diagnosis and no `qos_change` event; diagnosis labels a 5QI as 5QI.
+- The `qos` block's QCI/5QI is the vendor's value now (`zwrt_data_tmp.wwaniface1.qci`, read over ubus); key.log's value only when that can't be read.
 
 ## core 1.1.3 — 2026-10-17
 

@@ -142,7 +142,11 @@ impl Reading {
         let mnc = num(g("mnc")).map(|v| v as i64);
         let qos = state.and_then(|s| s.get("qos"));
         let qs = |k: &str| qos.and_then(|q| q.get(k)).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty() && *s != "--");
+        // a stale block is history (an earlier bearer): not this minute's QoS, so no
+        // `qos_change` is made of it either
+        let stale = qos.and_then(|q| q.get("stale")).and_then(Value::as_bool).unwrap_or(false);
         let ambr = match (qs("ambr_dl"), qs("ambr_ul")) {
+            _ if stale => None,
             (Some(d), Some(u)) => Some(format!("{d}/{u}")),
             (Some(d), None) => Some(d.to_string()),
             _ => None,
@@ -176,7 +180,7 @@ impl Reading {
             nrca: if nr { ca_count(g("nrca")) } else { None },
             lteca: if lte { ca_count(g("lteca")) } else { None },
             hsr: g("HSR").and_then(Value::as_bool).unwrap_or(false),
-            qci: int(nonzero(qos.and_then(|q| q.get("qci")))),
+            qci: if stale { None } else { int(nonzero(qos.and_then(|q| q.get("qci")))) },
             ambr,
             rx_bytes,
             verdict,

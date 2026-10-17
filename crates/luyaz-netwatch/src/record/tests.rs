@@ -267,6 +267,14 @@ fn cell_rat_ca_and_qos_changes() {
     e["qos"]["ambr_dl"] = "".into();
     let (ev, _) = rec.feed(&rd(T0 + 20, &e, "ok", 0));
     assert!(ev.is_empty());
+    // a stale block is history: no QoS read, no event to or from it
+    let mut f = d.clone();
+    f["qos"]["stale"] = true.into();
+    f["qos"]["ambr_dl"] = "1".into();
+    let r = rd(T0 + 25, &f, "ok", 0);
+    assert_eq!((r.qci, r.ambr.clone()), (None, None));
+    let (ev, _) = rec.feed(&r);
+    assert!(ev.is_empty());
 }
 
 #[test]

@@ -530,7 +530,11 @@ pub fn signal_view(st: &St, now: Instant, l: Lang) -> SignalView {
                     .unwrap_or_else(|| "—".into())
             )
         });
-        let v = [qci.map(|q| format!("QCI {q}")), ambr]
+        // a QCI for an EPS bearer, a 5QI for an NR PDU session: by `bearer`, not the radio mode
+        let label = if q["bearer"].as_str() == Some("nr_pdu") { "5QI" } else { "QCI" };
+        let old = (q["stale"].as_bool() == Some(true))
+            .then(|| l.pick("earlier bearer", "旧承载").to_string());
+        let v = [qci.map(|q| format!("{label} {q}")), ambr, old]
             .into_iter()
             .flatten()
             .collect::<Vec<_>>()

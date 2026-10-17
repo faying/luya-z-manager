@@ -1,6 +1,6 @@
 [package]
 name = "luyaz-core"
-version = "1.1.3"
+version = "1.2.0"
 edition = "2024"
 rust-version = "1.99"
 description = "U60 Pro (MU5250) core daemon. Phase 1: the wake ledger (read-only). Phase 2: the device read path moved from zwrt-datad, shadow mode. Phase 3: HTTP and the write path moved too; `u60d serve` (or argv[0] zwrt-datad*) stands in for zwrt-datad. Phase 4: the policy host (wasmtime components, built-in defaults from u60-policy)."

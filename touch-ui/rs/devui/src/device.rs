@@ -40,13 +40,10 @@ pub fn frames() -> u64 {
 thread_local! {
     static PANEL: RefCell<Option<Panel>> = const { RefCell::new(None) };
     static TOUCH: RefCell<Option<Touch>> = const { RefCell::new(None) };
-    static RD: RefCell<ReadState> = const { RefCell::new(ReadState { replay_up: false, rx: 0, ry: 0, was: false, fwd_was: false, taplog: false }) };
+    static RD: RefCell<ReadState> = const { RefCell::new(ReadState { was: false, fwd_was: false, taplog: false }) };
 }
 
 struct ReadState {
-    replay_up: bool,
-    rx: i32,
-    ry: i32,
     was: bool,
     fwd_was: bool,
     taplog: bool,
@@ -113,29 +110,20 @@ unsafe extern "C" fn taplog_cb(e: *mut sys::lv_event_t) {
     }
 }
 
-/// The pointer: the touchscreen, a whole tap that fell inside one read replayed as a press now
-/// and its release on the next read, and the screen's gate (a dark screen takes no taps; a press
-/// it cuts off is cancelled, not released, or the release would count as a click).
+/// The pointer: the touchscreen (Touch hands out one press/release edge per read, so a tap shorter
+/// than a read period is still pressed for one read, then released; edges still queued are read
+/// again in the same pass) and the screen's gate (a dark screen takes no taps; a press it cuts off
+/// is cancelled, not released, or the release would count as a click).
 unsafe extern "C" fn read_cb(ind: *mut sys::lv_indev_t, data: *mut sys::lv_indev_data_t) {
-    let (mut x, mut y, mut pressed, raw) = TOUCH.with(|t| match t.borrow_mut().as_mut() {
+    let (x, y, pressed, raw, more) = TOUCH.with(|t| match t.borrow_mut().as_mut() {
         Some(t) => {
             let (x, y, p) = t.read();
-            (x, y, p, (t.raw_cur_x, t.raw_cur_y))
+            (x, y, p, (t.raw_cur_x, t.raw_cur_y), t.pending())
         }
-        None => (0, 0, false, (0, 0)),
+        None => (0, 0, false, (0, 0), false),
     });
     RD.with(|r| {
         let mut r = r.borrow_mut();
-        if r.replay_up {
-            r.replay_up = false;
-            if !pressed {
-                (x, y) = (r.rx, r.ry);
-            }
-        } else if !pressed && let Some((lx, ly)) = TOUCH.with(|t| t.borrow_mut().as_mut().and_then(|t| t.take_lost_tap())) {
-            (r.rx, r.ry) = (lx, ly);
-            (x, y, pressed) = (lx, ly, true);
-            r.replay_up = true;
-        }
         if r.taplog && pressed != r.was {
             eprintln!("tap: indev {} at {x},{y} (raw {},{})", if pressed { "down" } else { "up" }, raw.0, raw.1);
         }
@@ -154,6 +142,7 @@ unsafe extern "C" fn read_cb(ind: *mut sys::lv_indev_t, data: *mut sys::lv_indev
             sys::lv_indev_reset(ind, std::ptr::null_mut());
         }
         (*data).point = sys::lv_point_t { x, y };
+        (*data).continue_reading = more;
         (*data).state = if fwd { sys::lv_indev_state_t::LV_INDEV_STATE_PRESSED } else { sys::lv_indev_state_t::LV_INDEV_STATE_RELEASED };
     }
 }

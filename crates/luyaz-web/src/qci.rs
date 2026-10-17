@@ -156,7 +156,8 @@ pub fn now_view(q: &Value, stale: bool, l: Lang) -> Now {
                 .unwrap_or_else(|| "—".into())
         )
     });
-    let v = [qci.map(|q| format!("QCI {q}")), ambr]
+    let label = if q["bearer"].as_str() == Some("nr_pdu") { "5QI" } else { "QCI" };
+    let v = [qci.map(|q| format!("{label} {q}")), ambr]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
@@ -598,7 +599,8 @@ mod tests {
     fn the_u60d_summary_reads_like_the_signal_page() {
         let q = json!({"qci":9,"ambr_dl":"2000.000","ambr_ul":"1000.000","bearer":"nr_pdu","stale":false});
         let n = now_view(&q, false, Lang::Zh);
-        assert_eq!(n.value, "QCI 9 · ↓ 2000 ↑ 1000 Mbps");
+        // an NR PDU session's class is a 5QI (W1)
+        assert_eq!(n.value, "5QI 9 · ↓ 2000 ↑ 1000 Mbps");
         assert_eq!(n.bearer, Some("NR PDU 会话（5G 核心网）"));
         assert!(!n.history);
         let q = json!({"qci":0,"ambr_dl":"","ambr_ul":"","bearer":"","stale":true});

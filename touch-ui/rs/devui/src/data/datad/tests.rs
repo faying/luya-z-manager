@@ -118,7 +118,7 @@ const L_SYS: &str = r#"{"uptime":1234,"cpu_temp":45,"cpu_usage":7,"model":"MU525
 const L_TRF: &str = r#"{"rx_speed":1000,"tx_speed":20,"day_rx_bytes":5000}"#;
 const L_LIST: &str = r#"[{"id":9,"num":"10086","date":"08-27 04:00","unread":1,"text":"测试 \"q\""},{"id":8,"num":"10010","date":"08-26 01:00","unread":0,"text":"{x}"}]"#;
 const L_SIM: &str = r#"{"state":"ready","iccid":"8986","imsi":"46000","spn":""}"#;
-const L_QOS: &str = r#"{"qci":9,"ambr_dl":"1000.5","ambr_ul":"200","usb_mode":"rndis"}"#;
+const L_QOS: &str = r#"{"qci":9,"ambr_dl":"1000.5","ambr_ul":"200","bearer":"nr_pdu","stale":true,"usb_mode":"rndis"}"#;
 const L_CLI: &str = r#"{"total":2,"wifi":1,"lan":1,"list":[{"name":"mac","ip":"192.168.0.2","mac":"aa"}]}"#;
 const L_WLAN: &str = r#"{"ssid":"U60","key":"k","enc":"psk2","enabled":1}"#;
 const L_DHCP: &str = r#"{"ip":"192.168.0.1","start":"100","limit":"50","leasetime":"12h"}"#;
@@ -175,6 +175,7 @@ fn v2_matches_legacy() {
     assert_eq!(want.sms[0].text, "测试 \"q\"");
     assert_eq!(want.operator_name, "中国移动");
     assert_eq!(want.ambr_dl, 1000.5);
+    assert!(want.qos_bearer == "nr_pdu" && want.qos_stale == 1);
     assert!(want.dps_mode == 0 && want.cell_data == 1 && want.cell_roam == 0);
 
     let mut d = Datad::new(cfg(1));

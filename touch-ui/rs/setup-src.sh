@@ -7,11 +7,12 @@
 #
 # Nothing else is needed: no C toolchain image, no other cache (Phase 10 X5, review D11). An
 # existing complete volume is left as it is; remove it (docker volume rm) to start over.
+# LUYAZ_RS_IMAGE: the image to run in (default u60-rust-ci:1.99.0; build-kit.sh passes its own).
 # SPDX-License-Identifier: MIT
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 VOL=${1:-${LUYAZ_RS_SRC_VOL:-${U60_RS_SRC_VOL:-u60-spike-src}}}
-exec docker run --rm -v "$VOL":/s -v "$HERE/../patches":/p:ro u60-rust-ci:1.99.0 sh -c '
+exec docker run --rm -v "$VOL":/s -v "$HERE/../patches":/p:ro "${LUYAZ_RS_IMAGE:-u60-rust-ci:1.99.0}" sh -c '
 set -eu
 cd /s
 if [ -f lvgl/.u60-ready ] && [ -f freetype/.u60-ready ]; then echo "volume already set up"; exit 0; fi

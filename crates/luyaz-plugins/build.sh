@@ -7,6 +7,8 @@
 #                                      component that never returns per policy in out/test-hostile/
 #                                      (test only; under the real names),
 #                                      then u60-policy's and u60d's tests with both required
+#   crates/luyaz-plugins/build.sh repro  device build, then again from a fresh target dir; fails
+#                                      unless out/ comes out byte for byte the same
 #
 # Run from anywhere; on the Mac it starts a one-off container (same cache volume as tools/u60-dev).
 set -eu
@@ -22,6 +24,11 @@ if [ ! -f /.dockerenv ]; then
 fi
 
 cd "$HERE"
+# The bytes depend on where the source sits: luyaz-policy is outside this workspace, so cargo's
+# -C metadata for it (and every guest using it) hashes its absolute path, which moves symbols
+# and the LTO layout (--remap-path-prefix doesn't help). /m is the path of the Mac wrapper
+# above; built anywhere else (tools/u60-dev rust has /w/manager) the .cwasm differs.
+[ "$MANAGER" = /m ] || echo "build.sh: source at $MANAGER, not /m: out/ won't match a release build" >&2
 T=${CARGO_TARGET_DIR:-$HERE/target}
 # every component; its ABI is the package line of its wit file (u60d checks the same string)
 NAMES="battery-eta charge-policy scenario scheduler manual-first apn-pick sms-forward home-exit"
@@ -46,6 +53,18 @@ for p in $PLUGINS; do
 done
 printf '{"plugins":[%s]}\n' "$entries" > out/plugins.json
 ls -l out
+
+if [ "$MODE" = repro ] && [ -z "${LUYAZ_REPRO_AGAIN:-}" ]; then
+    rm -rf "$T.repro" out.repro
+    mv out out.repro
+    LUYAZ_REPRO_AGAIN=1 CARGO_TARGET_DIR=$T.repro sh "$HERE/build.sh" repro >/dev/null
+    for f in out.repro/*; do
+        cmp "$f" "out/${f#out.repro/}" || { echo "build.sh repro: $f differs" >&2; exit 1; }
+    done
+    rm -rf "$T.repro" out.repro
+    md5sum out/*
+    echo "build.sh repro: out/ is the same from both builds"
+fi
 
 if [ "$MODE" = test ]; then
     host=$(rustc -vV | sed -n 's/^host: //p')

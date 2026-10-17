@@ -39,6 +39,8 @@ pub(crate) struct Inputs {
     pub router_status: Result<Value, String>,
     pub thermal: Result<Value, String>,
     pub hightemp: Result<Value, String>,
+    /// `uci get zwrt_data_tmp.wwaniface1.qci` over ubus: the QCI/5QI now ([`uci_qci`]).
+    pub qci_now: Result<Value, String>,
     pub usb: Result<Value, String>,
     /// 电池、充电器块最近一次读到的回复（`Hub::legacy`）。
     pub battery: Result<Value, String>,
@@ -134,6 +136,7 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
         router_status,
         thermal,
         hightemp,
+        qci_now,
         usb,
         battery,
         charger,
@@ -494,7 +497,7 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
         radio_lte_bands: u("zte_nwinfo.band_lock.lte_ext_band_lock"),
     };
     fields.insert("uci_device_info".into(), c::value(&ui));
-    let qos = crate::qos::select(&qos_logs, qos_query(&raw_net, &imsi));
+    let qos = crate::qos::select(&qos_logs, qos_query(&raw_net, &imsi, &wan4_if, uci_qci(&qci_now)));
     let qos = c::Qos {
         qci: qos.qci,
         ambr_dl: qos.ambr_dl,
@@ -722,6 +725,15 @@ pub(crate) fn hightemp_limit(v: &Result<Value, String>) -> Value {
         .and_then(Value::as_str)
         .and_then(|s| s.trim().parse::<i64>().ok())
         .map_or(Value::Null, |n| json!(i64::from(n != 0)))
+}
+
+/// The vendor's QCI/5QI now from a `uci get` reply (`{"value":"9"}`); `None` when not read or not a number.
+pub(crate) fn uci_qci(v: &Result<Value, String>) -> Option<i64> {
+    v.as_ref()
+        .ok()
+        .and_then(|v| v.get("value"))
+        .and_then(Value::as_str)
+        .and_then(|s| s.trim().parse::<i64>().ok())
 }
 
 pub(crate) fn object(v: Result<Value, String>) -> Value {
@@ -1081,13 +1093,27 @@ pub(crate) fn add_roaming_fields(net: &mut Value, imsi: &str) {
 }
 
 /// What `qos` needs to pick the live bearer: the registered PLMN, the SIM's
-/// home PLMN (a home-routed APN abroad names it) and LTE/NSA vs SA.
-pub(crate) fn qos_query(raw_net: &Value, imsi: &str) -> crate::qos::Query {
+/// home PLMN (a home-routed APN abroad names it), LTE/NSA vs SA, and the WAN's
+/// IPv4 address (`network.interface.zte_wan status`) to match the connection.
+pub(crate) fn qos_query(
+    raw_net: &Value,
+    imsi: &str,
+    wan4_if: &Value,
+    qci_now: Option<i64>,
+) -> crate::qos::Query {
     let (mcc, mnc) = (integer(raw_net, "rmcc"), integer(raw_net, "rmnc"));
     crate::qos::Query {
         serving: (mcc > 0).then_some((mcc, mnc)),
         home: crate::project::screen::imsi_plmn(imsi),
         core: crate::project::screen::data_core(&string(raw_net, "network_type")),
+        addr: wan4_if
+            .get("ipv4-address")
+            .and_then(Value::as_array)
+            .and_then(|a| a.first())
+            .and_then(|a| a.get("address"))
+            .and_then(Value::as_str)
+            .and_then(|a| a.parse().ok()),
+        qci_now,
     }
 }
 

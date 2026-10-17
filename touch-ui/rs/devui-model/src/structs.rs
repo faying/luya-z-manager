@@ -107,6 +107,10 @@ pub struct devui_data_t {
     pub qci: i32,
     pub ambr_dl: f64,
     pub ambr_ul: f64,
+    /// qos `bearer`: "eps" → qci is a QCI, "nr_pdu" → a 5QI
+    pub qos_bearer: String,
+    /// qos `stale`: the values are history, not this connection's
+    pub qos_stale: i32,
     pub usb_mode: String,
     pub usb_cc: i32,
     pub powerbank: i32,

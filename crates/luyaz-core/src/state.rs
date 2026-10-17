@@ -864,6 +864,14 @@ async fn read_inputs(hub: &crate::block::Hub) -> Inputs {
         json!({"config":"zwrt_zte_mc_tmp","section":"cpe","option":"hightemp_datalimit_status"}),
     )
     .await;
+    // QoS 的当前 QCI/5QI（qos::Query::qci_now）：厂商只在数据连接变化时写，读法同上。
+    let qci_now = ubus_ttl(
+        5,
+        "uci",
+        "get",
+        json!({"config":"zwrt_data_tmp","section":"wwaniface1","option":"qci"}),
+    )
+    .await;
     let usb = ubus_ttl(30, "zwrt_bsp.usb", "list", json!({})).await;
     let battery = hub.legacy("battery");
     let charger = hub.legacy("charger");
@@ -972,6 +980,7 @@ async fn read_inputs(hub: &crate::block::Hub) -> Inputs {
         router_status,
         thermal,
         hightemp,
+        qci_now,
         usb,
         battery,
         charger,
@@ -1035,7 +1044,7 @@ async fn mu5252_extras(ctx: Mu5252Ctx, fields: &mut Map<String, Value>) {
     } else {
         string(&raw_net, "lte_bandwidth")
     };
-    let x75_qos = crate::qos::read(qos_query(&raw_net, &imsi));
+    let x75_qos = crate::qos::read(qos_query(&raw_net, &imsi, &wan4_if, None));
     modems.push(json!({
         "id":"x75","role":"integrated_5g","transport":"rmnet","subid":active_subid,
         "ifname":"rmnet_data0","wan_interface":"zte_mwan2",
@@ -1044,7 +1053,7 @@ async fn mu5252_extras(ctx: Mu5252Ctx, fields: &mut Map<String, Value>) {
         "wwan":{"status":string(&cellular,"connect_status"),"ipv4_ifname":string(&cellular,"ipv4_dev_name"),"ipv6_ifname":string(&cellular,"ipv6_dev_name")},
         "interfaces":{"ipv4":interface(&wan4_if),"ipv6":interface(&wan6_if)},
         "traffic":realtime_traffic(&x75_traffic),
-        "qos":{"qci":x75_qos.qci,"ambr_dl":x75_qos.ambr_dl,"ambr_ul":x75_qos.ambr_ul,"sampled_at":0}
+        "qos":{"qci":x75_qos.qci,"ambr_dl":x75_qos.ambr_dl,"ambr_ul":x75_qos.ambr_ul,"bearer":x75_qos.bearer,"stale":x75_qos.stale,"sampled_at":0}
     }));
     let mut thermal_modems = vec![
         json!({"id":"x75","available":cpu_temp>0,"celsius":if cpu_temp>0 {json!(cpu_temp)} else {Value::Null}}),

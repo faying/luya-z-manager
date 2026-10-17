@@ -5,11 +5,12 @@
 //! the AT terminal's one command typed by a person ([`raw`]): the same lock, port pick and
 //! reads, with the wait and the end of the answer each needs.
 //!
-//! The AT port is shared with zte-agent (calls, USSD, its AT terminal, reads):
-//! two readers on one tty take each other's replies, so both sides hold the
-//! same cross-process lock (`LUYAZ_AT_LOCK`, default `/var/run/luyaz-at.lock`,
-//! flock; `luyaz-fallback.sh` takes it too) for the whole command. Port: `LUYAZ_AT_PORT`, else the first of
-//! the agent's list that answers "AT" with OK.
+//! This is the AT port's one executor (zte-agent is retired): two readers on one tty take each
+//! other's replies, so every command holds a cross-process lock (`LUYAZ_AT_LOCK`, default
+//! `/var/run/luyaz-at.lock`, flock; `luyaz-fallback.sh` takes it too) for the whole command.
+//! Port: `LUYAZ_AT_PORT`, else the first candidate no other process holds open that answers
+//! "AT" with OK. An answer ends at its final result code (`OK`, `ERROR`, `+CME ERROR:`,
+//! `+CMS ERROR:`, each a whole line); a failure says which [`ErrorKind`] it is.
 
 use fs2::FileExt;
 use std::{
@@ -24,9 +25,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Same order as zte-agent `at_cmd.rs`.
+/// The candidates. The order is only a preference: a node another process holds open is skipped
+/// ([`held_by`]; on B31 the stock port-bridge / port-bridge-at hold at_mdm0/1 and never let an
+/// answer through, at_mdm2 is free (b31-community §1), other firmware or USB modes may differ),
+/// and a node that does not exist is passed over.
 const PORTS: &[&str] = &[
-    // first: on B31 port-bridge holds at_mdm0/1 and they never answer; at_mdm2 is free
     "/dev/at_mdm2",
     "/dev/at_mdm0",
     "/dev/at_mdm1",
@@ -36,7 +39,86 @@ const PORTS: &[&str] = &[
     "/dev/smd7",
     "/dev/smd11",
 ];
-/// How long to wait for the agent to finish its command on the port.
+/// What a failed command ran into, from its error text ([`error_kind`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorKind {
+    /// the lock: another command is on the port
+    Busy,
+    /// every candidate that exists is held open by another process
+    Held,
+    /// no answer in time, or the port is stuck on an earlier command
+    Timeout,
+    /// the modem said ERROR / +CME ERROR / +CMS ERROR, or opening, writing or reading failed
+    Error,
+    /// no candidate exists, or none answers "AT"
+    NoPort,
+}
+
+impl ErrorKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            ErrorKind::Busy => "busy",
+            ErrorKind::Held => "held",
+            ErrorKind::Timeout => "timeout",
+            ErrorKind::Error => "error",
+            ErrorKind::NoPort => "no-port",
+        }
+    }
+}
+
+const BUSY: &str = "AT port busy";
+const HELD: &str = "every AT port is held by another process";
+const NO_PORT: &str = "no AT port found";
+
+/// The kind of an error this module returned (its texts are stable: the callers show them).
+pub fn error_kind(e: &str) -> ErrorKind {
+    if e.starts_with(BUSY) {
+        ErrorKind::Busy
+    } else if e.starts_with(HELD) {
+        ErrorKind::Held
+    } else if e.starts_with(NO_PORT) {
+        ErrorKind::NoPort
+    } else if e.contains("stuck") || e.ends_with(": no answer") {
+        ErrorKind::Timeout
+    } else {
+        ErrorKind::Error
+    }
+}
+
+/// A final result code (V.250 / TS 27.007 §9.2): the answer is over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Final {
+    Ok,
+    Error,
+}
+
+/// The final result code in `s`, if a line of it is one: `OK`, `ERROR`, `+CME ERROR: …` or
+/// `+CMS ERROR: …`. A word inside other text (a USSD message saying "ERROR") is not one; the
+/// `+CME`/`+CMS` line must have ended (its number may still be on the way).
+pub fn final_code(s: &str) -> Option<Final> {
+    codes(s).next()
+}
+
+/// Every final result code line in `s`, in order (see [`final_code`]).
+fn codes(s: &str) -> impl Iterator<Item = Final> + '_ {
+    let mut lines = s.split(['\r', '\n']).peekable();
+    std::iter::from_fn(move || {
+        while let Some(line) = lines.next() {
+            let ended = lines.peek().is_some();
+            match line.trim() {
+                "OK" => return Some(Final::Ok),
+                "ERROR" => return Some(Final::Error),
+                l if ended && (l.starts_with("+CME ERROR:") || l.starts_with("+CMS ERROR:")) => {
+                    return Some(Final::Error);
+                }
+                _ => {}
+            }
+        }
+        None
+    })
+}
+
+/// How long to wait for another command to finish on the port.
 const LOCK_WAIT: Duration = Duration::from_secs(10);
 /// An answer ends with OK or ERROR; the agent waits a fixed 8 s for COPS=0,
 /// we stop at the answer and give up a little earlier.
@@ -340,7 +422,7 @@ fn take_lock(path: Option<String>) -> Result<Option<File>, String> {
             return Ok(Some(f));
         }
         if start.elapsed() >= LOCK_WAIT {
-            return Err("AT port busy (another command is running)".into());
+            return Err(format!("{BUSY} (another command is running)"));
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -372,7 +454,7 @@ fn send_blocking(
     let answer = exchange(&port, text, job.wait);
     progress();
     answer.and_then(|a| {
-        if a.contains("OK") {
+        if final_code(&a) == Some(Final::Ok) {
             Ok(Answer { port, text: a })
         } else {
             Err(format!("{text}: {}", a.trim()))
@@ -381,17 +463,73 @@ fn send_blocking(
 }
 
 fn find_port(progress: &dyn Fn()) -> Result<String, String> {
-    for p in PORTS {
-        if !Path::new(p).exists() {
+    find_port_in(PORTS, &|p| held_by(Path::new("/proc"), p), progress)
+}
+
+/// The first of `ports` that exists, that `held` says no other process has open, and that
+/// answers "AT" with OK. Never writes to a held node: a probe there would take another
+/// program's answer (and its "AT" would reach that program's reader).
+fn find_port_in(
+    ports: &[&str],
+    held: &dyn Fn(&Path) -> Option<String>,
+    progress: &dyn Fn(),
+) -> Result<String, String> {
+    let mut holders = Vec::new();
+    let mut existing = 0;
+    for p in ports {
+        let path = Path::new(p);
+        if !path.exists() {
             continue;
         }
-        let ok = exchange(p, "AT", Duration::from_secs(1)).is_ok_and(|a| a.contains("OK"));
+        existing += 1;
+        if let Some(who) = held(path) {
+            holders.push(format!("{p} ({who})"));
+            continue;
+        }
+        let ok = exchange(p, "AT", Duration::from_secs(1))
+            .is_ok_and(|a| final_code(&a) == Some(Final::Ok));
         progress();
         if ok {
             return Ok((*p).to_string());
         }
     }
-    Err("no AT port found".into())
+    if existing > 0 && holders.len() == existing {
+        return Err(format!("{HELD}: {}", holders.join(", ")));
+    }
+    Err(NO_PORT.into())
+}
+
+/// Which other process (its comm) holds the character device `port` open, from `<proc>/*/fd`.
+/// Compares the device number (`st_rdev`), so a symlinked /dev entry still matches; skips this
+/// process, and any process or descriptor that vanishes or cannot be read meanwhile.
+fn held_by(proc_root: &Path, port: &Path) -> Option<String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let meta = std::fs::metadata(port).ok()?;
+    if !meta.file_type().is_char_device() {
+        return None;
+    }
+    let rdev = meta.rdev();
+    let me = std::process::id().to_string();
+    for pid in std::fs::read_dir(proc_root).ok()?.flatten() {
+        let name = pid.file_name();
+        let name = name.to_string_lossy();
+        if !name.bytes().all(|b| b.is_ascii_digit()) || name == me {
+            continue;
+        }
+        let Ok(fds) = std::fs::read_dir(pid.path().join("fd")) else {
+            continue;
+        };
+        for fd in fds.flatten() {
+            let Ok(m) = std::fs::metadata(fd.path()) else {
+                continue;
+            };
+            if m.file_type().is_char_device() && m.rdev() == rdev {
+                let comm = std::fs::read_to_string(pid.path().join("comm")).unwrap_or_default();
+                return Some(format!("{} pid {name}", comm.trim()));
+            }
+        }
+    }
+    None
 }
 
 fn set_nonblocking(f: &std::fs::File, on: bool) {
@@ -424,9 +562,11 @@ fn exchange(port: &str, text: &str, wait: Duration) -> Result<String, String> {
 /// Whether `s` is a whole answer by `until`.
 fn complete(s: &str, until: Until) -> bool {
     match until {
-        Until::Final => s.contains("\nOK") || s.starts_with("OK") || s.contains("ERROR"),
+        Until::Final => final_code(s).is_some(),
         Until::Line(prefix) => {
-            s.contains("ERROR") || s.find(prefix).is_some_and(|i| s[i..].contains(['\r', '\n']))
+            // an error after an OK too (`AT+CUSD` says OK, then +CME ERROR)
+            codes(s).any(|c| c == Final::Error)
+                || s.find(prefix).is_some_and(|i| s[i..].contains(['\r', '\n']))
         }
         Until::Wait => false,
     }
@@ -659,6 +799,87 @@ pub(crate) mod tests {
         let (port, _) = fake_modem("");
         let e = exchange(&port, "AT+COPS=0", Duration::from_millis(300)).unwrap_err();
         assert!(e.contains("no answer"), "{e}");
+    }
+
+    #[test]
+    fn final_result_codes_are_whole_lines() {
+        assert_eq!(final_code("\r\n+CSQ: 20,99\r\n\r\nOK\r\n"), Some(Final::Ok));
+        assert_eq!(final_code("OK"), Some(Final::Ok));
+        assert_eq!(final_code("\r\nERROR\r\n"), Some(Final::Error));
+        assert_eq!(final_code("\r\n+CME ERROR: 10\r\n"), Some(Final::Error));
+        assert_eq!(final_code("\r\n+CMS ERROR: 500\r\n"), Some(Final::Error));
+        // the number may still be on the way
+        assert_eq!(final_code("\r\n+CME ERROR: 1"), None);
+        // a word inside other text is not a result code
+        assert_eq!(final_code("\r\n+CUSD: 0,\"NO ERROR, OK\",15\r\n"), None);
+        assert_eq!(final_code("\r\n+COPS: 0,0,\"OKTEL\"\r\n"), None);
+        assert_eq!(final_code("AT\r"), None);
+        assert!(!complete("\r\n+CUSD: 0,\"ERROR in text", Until::Line("+CUSD:")));
+        assert!(complete("\r\n+CME ERROR: 4\r\n", Until::Line("+CUSD:")));
+        assert!(!complete("\r\nOK\r\n", Until::Line("+CUSD:")));
+        assert!(complete("\r\nOK\r\n\r\n+CME ERROR: 30\r\n", Until::Line("+CUSD:")));
+    }
+
+    #[test]
+    fn errors_say_their_kind() {
+        let k = |e: &str| error_kind(e).name();
+        assert_eq!(k("AT port busy (another command is running)"), "busy");
+        assert_eq!(k("every AT port is held by another process: /dev/at_mdm0 (port-bridge pid 9)"), "held");
+        assert_eq!(k("no AT port found"), "no-port");
+        assert_eq!(k("AT+COPS=0: no answer"), "timeout");
+        assert_eq!(k("AT+COPS=0: no answer within 25 s (the AT port is stuck)"), "timeout");
+        assert_eq!(k("AT+COPS=0: the AT port is still stuck on an earlier command"), "timeout");
+        assert_eq!(k("AT+COPS=0: +CME ERROR: 3"), "error");
+        assert_eq!(k("open /dev/at_mdm2: Permission denied (os error 13)"), "error");
+    }
+
+    #[test]
+    fn held_and_missing_nodes_are_skipped_in_any_order() {
+        let (free, sent) = fake_modem("\r\nOK\r\n");
+        let (held, held_sent) = fake_modem("\r\nOK\r\n");
+        let held_p = held.clone();
+        let is_held = move |p: &Path| (p == Path::new(&held_p)).then(|| "port-bridge pid 1".to_string());
+        let gone = "/dev/at_mdm2-not-here";
+        // at_mdm2 missing, the next held: the free one is found, the held one never written to
+        let got = find_port_in(&[gone, &held, &free], &is_held, &|| ()).unwrap();
+        assert_eq!(got, free);
+        assert_eq!(sent.recv_timeout(Duration::from_secs(1)).unwrap(), "AT");
+        assert!(held_sent.recv_timeout(Duration::from_millis(200)).is_err());
+        let got = find_port_in(&[&free, &held], &is_held, &|| ()).unwrap();
+        assert_eq!(got, free);
+        // every existing one held: said so, with who holds it
+        let e = find_port_in(&[gone, &held], &is_held, &|| ()).unwrap_err();
+        assert_eq!(error_kind(&e), ErrorKind::Held, "{e}");
+        assert!(e.contains("port-bridge"), "{e}");
+        assert!(held_sent.recv_timeout(Duration::from_millis(200)).is_err());
+        // none exists / none answers: no port
+        let e = find_port_in(&[gone], &is_held, &|| ()).unwrap_err();
+        assert_eq!(error_kind(&e), ErrorKind::NoPort);
+        let (mute, _) = fake_modem("");
+        let e = find_port_in(&[&mute], &|_| None, &|| ()).unwrap_err();
+        assert_eq!(error_kind(&e), ErrorKind::NoPort);
+    }
+
+    #[test]
+    fn a_node_open_in_another_process_is_seen_in_proc() {
+        if !Path::new("/proc/self/fd").exists() {
+            return; // not Linux
+        }
+        // this process holds the fake modem's slave itself: that does not count
+        let (port, _) = fake_modem("\r\nOK\r\n");
+        assert_eq!(held_by(Path::new("/proc"), Path::new(&port)), None);
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .stdin(File::open(&port).unwrap())
+            .spawn()
+            .unwrap();
+        let who = held_by(Path::new("/proc"), Path::new(&port));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let who = who.expect("held by the child");
+        assert!(who.starts_with("sleep pid "), "{who}");
+        // not a character device: never held
+        assert_eq!(held_by(Path::new("/proc"), Path::new("/proc/self/stat")), None);
     }
 
     #[test]

@@ -408,6 +408,8 @@ pub fn parse_snapshot(buf: &[u8]) -> Option<devui_data_t> {
         d.qci = gi(&sec, "qci", 0) as i32;
         d.ambr_dl = json::get(&sec, "ambr_dl", 32).map_or(0.0, |v| json::atof(&v));
         d.ambr_ul = json::get(&sec, "ambr_ul", 32).map_or(0.0, |v| json::atof(&v));
+        d.qos_bearer = gs(&sec, "bearer", 16);
+        d.qos_stale = json::get(&sec, "stale", 8).is_some_and(|v| v == b"true") as i32;
         d.usb_mode = gs(&sec, "usb_mode", 16);
     }
     if let Some(sec) = json::get(buf, "system", STATE_BUF_MAX) {

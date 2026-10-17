@@ -28,6 +28,8 @@ fn radio() -> Radio {
         nr: true,
         ambr_dl: Some(1668.0),
         qci: Some(9),
+        qos_stale: false,
+        qos_nr: false,
         connected: true,
         rx_bps: 0,
     }
@@ -203,6 +205,15 @@ fn cap_layer() {
             "Capped at 5 Mbps · QCI 9"
         )
     );
+    // a stale qos block: no "capped" verdict from history (b31-community Q6)
+    r.qos_stale = true;
+    let l = judge_limit(&r);
+    assert_ne!(l.level, Level::Bad);
+    assert!(!l.detail.contains("限到"), "{}", l.detail);
+    r.qos_stale = false;
+    // an NR PDU session's number is a 5QI
+    r.qos_nr = true;
+    assert_eq!(judge_limit(&r).detail, "限到 5 Mbps · 5QI 9");
     r.ambr_dl = None;
     assert_eq!(judge_limit(&r).detail, "QoS 读不到");
 }

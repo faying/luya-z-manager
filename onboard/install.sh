@@ -409,36 +409,57 @@ ok "设备端安装完成。"
 
 # ── 6. 从电脑验证 SSH ────────────────────────────────────────────────────────
 # 设备端已经确认 dropbear 进程在、端口在监听（device/install.sh do_ssh，不然走不到这里）。
-# 这里只看电脑这边连不连得上，失败按 ssh 的报错分开说：拒绝连接 / 认证失败 / 超时 / 其他。
+# 失败时分 6 类说清楚：进程没起 / 没监听（再问一次设备，dropbear 可能装完后又退了）、
+# 拒绝连接 / 认证失败 / 超时（看 ssh 的报错）、成功。分类函数 ssh_err_class 有离线测试 onboard/test/ssh-classify.sh。
+# 失败只警告、不中止：设备那边已经装好，别的进入方式（adb）也还在。
 SSH_WHY=
+ssh_err_class() { # <ssh 的 stderr> → refused | auth | timeout | other:<最后一行>
+  case "$1" in
+    *"Connection refused"*) echo refused ;;
+    *"Permission denied"*|*"Too many authentication failures"*) echo auth ;;
+    *"timed out"*|*"No route to host"*|*"Network is unreachable"*) echo timeout ;;
+    *) echo "other:$(printf '%s' "$1" | tail -n 1)" ;;
+  esac
+}
+ssh_dev_class() { # 设备端探针的输出 → noproc | nolisten | 空（进程在、端口在听）
+  case "$1" in
+    *__NOPROC__*) echo noproc ;;
+    *__NOLISTEN__*) echo nolisten ;;
+  esac
+}
 verify_ssh() {
   local i err
   [ -f "$SSH_KEY" ] || { SSH_WHY=nokey; return 1; }
   for i in 1 2 3 4 5; do
-    err=$(ssh "${SSH_OPTS[@]}" -o BatchMode=yes "root@$GATEWAY" true </dev/null 2>&1 >/dev/null) && return 0
-    case "$err" in
-      *"Connection refused"*) SSH_WHY=refused ;;
-      *"Permission denied"*) SSH_WHY=auth ;;
-      *"timed out"*|*"Operation timed out"*) SSH_WHY=timeout ;;
-      *) SSH_WHY="other:$(printf '%s' "$err" | tail -n 1)" ;;
-    esac
+    err=$(ssh "${SSH_OPTS[@]}" -o BatchMode=yes "root@$GATEWAY" true </dev/null 2>&1 >/dev/null) && { SSH_WHY=ok; return 0; }
+    SSH_WHY=$(ssh_err_class "$err")
+    [ "$SSH_WHY" = auth ] && break   # 认证失败重试也不会好
     sleep 3
   done
+  # 通道是 adb 时再问设备一次：进程还在不在、端口还在不在听（ssh 通道说明它显然在）
+  if [ "$CH" != ssh ]; then
+    local d
+    d=$(dev_run "pidof dropbear >/dev/null || echo __NOPROC__; netstat -ltn 2>/dev/null | grep -q ':${SSH_PORT} ' || echo __NOLISTEN__" 2>/dev/null | tr -d '\r')
+    d=$(ssh_dev_class "$d")
+    [ -n "$d" ] && SSH_WHY=$d
+  fi
   return 1
 }
 case " $COMPONENTS " in *" ssh "*)
   if verify_ssh; then
     ok "SSH 公钥登录验证通过。"
   else
-    warn "设备上 dropbear 已经在 ${SSH_PORT} 端口监听，但这台电脑登不上 $GATEWAY:${SSH_PORT}："
+    warn "这台电脑登不上 $GATEWAY:${SSH_PORT}："
     case "$SSH_WHY" in
-      nokey)   warn "  这台电脑上没有私钥 $SSH_KEY。" ;;
-      refused) warn "  连接被拒绝：连到的不是 U60（GATEWAY 不对？），或代理把 $GATEWAY 接到了别处。" ;;
-      auth)    warn "  连上了但公钥认证失败：$SSH_KEY 不是包里那把公钥对应的私钥。" ;;
-      timeout) warn "  连接超时：电脑和 U60 之间不通（没连 U60 的 Wi-Fi？代理/防火墙挡了？）。" ;;
-      *)       warn "  ${SSH_WHY#other:}" ;;
+      nokey)    warn "  这台电脑上没有私钥 $SSH_KEY。" ;;
+      noproc)   warn "  设备上 dropbear 进程已经不在了（装机时起来过，之后退出了）：看设备 logread | grep dropbear。" ;;
+      nolisten) warn "  设备上 dropbear 进程在，但没在 ${SSH_PORT} 端口监听：设备上 netstat -ltn 看看端口被谁占了。" ;;
+      refused)  warn "  连接被拒绝：连到的不是 U60（GATEWAY 不对？），或代理把 $GATEWAY 接到了别处。" ;;
+      auth)     warn "  连上了但公钥认证失败：$SSH_KEY 不是包里那把公钥对应的私钥。" ;;
+      timeout)  warn "  连接超时/不可达：电脑和 U60 之间不通（没连 U60 的 Wi-Fi？代理/防火墙挡了？）。" ;;
+      *)        warn "  ${SSH_WHY#other:}" ;;
     esac
-    warn "手动再试: ssh -p $SSH_PORT -i $SSH_KEY root@$GATEWAY"
+    warn "手动再试: ssh -p $SSH_PORT -i $SSH_KEY root@$GATEWAY（adb 仍可用，rc.local 里的 dropbear 行只在设备上验证能起来后才写）"
   fi
 ;; esac
 

@@ -425,6 +425,14 @@ contract! {
     }
 }
 
+// The qos block (`qos::Values`). Every reader carries `bearer` and `stale` along:
+// - `ambr_dl`/`ambr_ul` (Mbps) are the network's ceiling for the connection, not a
+//   promised or measured speed;
+// - `qci` is a QCI when `bearer` is `eps` and a 5QI when it is `nr_pdu`: label it
+//   by `bearer`, not by the current radio mode;
+// - `stale`: the values are history (another core, another connection, or the
+//   current connection no longer in the log read); nothing is concluded from them
+//   (no "capped at N Mbps").
 contract! {
     pub struct Qos {
         normal ambr_dl: String,

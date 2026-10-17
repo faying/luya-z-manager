@@ -609,6 +609,17 @@ async fn the_at_routes_use_u60ds_port_and_the_agents_shapes() {
     for c in ["AT+CFUN?", "AT+CFUN=?", "ATI"] {
         assert!(!super::device_admin::phone::radio_set(c), "{c}");
     }
+    // calls are refused too (A2); `AT&D2` sanitizes to `ATD2`, a dial: refused on purpose
+    // basic commands chain (V.250): a dial after another one is still a dial
+    for c in ["ATD10086;", "atd 112", "ata", "AT+CHUP", "AT&D2", "ATE0D10086", "atz d112", "ATE0&D2"] {
+        let body = json!({ "command": c }).to_string();
+        let (st, b) = call(r.addr, "POST", "/api/at/send", &body).await;
+        assert_eq!(st, 403, "{c}: {b}");
+    }
+    assert!(sent.recv_timeout(Duration::from_millis(300)).is_err(), "nothing reached the port");
+    for c in ["AT+CHUP=?", "ATI", "AT+CSQ", "AT+CLCC", "AT&F", "ATE0", "AT+CGDCONT?", "AT^SYSINFO", "AT#ADC"] {
+        assert!(!super::device_admin::phone::call_control(c), "{c}");
+    }
     // USSD: the +CUSD after the OK, decoded (UCS-2)
     let (st, b) = call(r.addr, "POST", "/api/ussd/send", r#"{"code":"*100#"}"#).await;
     assert_eq!(st, 200, "{b}");

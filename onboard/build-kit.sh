@@ -21,7 +21,7 @@
 #                     tools/luyaz ship core），装成 /data/luyaz/luyaz-core；DATAD_BIN 给了就用那个
 #   esim.tgz          scripts/esim/build-esim-bundle.sh --out 现打：Alpine 的 lpac + 依赖库（alpine.lock 钉版本和
 #                     sha256）+ statx 兼容垫片 + qmi_uim_probe
-#   guard/            touch-ui/scripts 里还在用的设备脚本（= u60 ship scripts 那一套：supervise.sh、
+#   guard/            touch-ui/scripts 里还在用的设备脚本（= u60 ship scripts 那一套：
 #                     alert-lib.sh、agent-auth.sh、doctor.sh…）+ u60-ship.sh + luyaz-core/luyaz-sentinel/luyaz-web 的
 #                     procd init 脚本（装到 /data/luyaz/scripts 和 /etc/init.d；u60-ship.sh 在设备上叫 luyaz-ship.sh）。u60-guard.sh 不再打包（Phase 10 10b）
 #   chill/            CHILL：scripts/chill/stage.sh 摆好的 mihomo（sha256 固定）、规则集（下载时的最新版）、脚本、
@@ -184,7 +184,7 @@ if [ ! -f "$DEVUI_BIN" ]; then
   DEVUI_PREBUILT=0
   case "$DEVUI_BIN" in "$DEVUI_REPO"/out/*) ;; *) die "没有 $DEVUI_BIN" ;; esac
   step "触屏界面还没编：跑 ${DEVUI_REPO}/rs/build.sh device（Docker；源码卷没有就先 rs/setup-src.sh）"
-  { "$DEVUI_REPO/rs/setup-src.sh" && "$DEVUI_REPO/rs/build.sh" device "$DEVUI_BIN"; } >/dev/null || die "触屏界面构建失败（单独跑 ${DEVUI_REPO}/rs/build.sh device 看原因）"
+  { export LUYAZ_RS_IMAGE="${LUYAZ_RS_IMAGE:-$ZIGBUILD_IMAGE}"; "$DEVUI_REPO/rs/setup-src.sh" && "$DEVUI_REPO/rs/build.sh" device "$DEVUI_BIN"; } >/dev/null || die "触屏界面构建失败（单独跑 ${DEVUI_REPO}/rs/build.sh device 看原因）"
 fi
 # 触屏界面只有 Rust 版（Phase 10 X5 删了 C 版）：两版启动都打印 pages+chrome built，Rust 版才有 devui/src/
 grep -a -q 'pages+chrome built' "$DEVUI_BIN" || die "$(basename "$DEVUI_BIN") 不是触屏界面"

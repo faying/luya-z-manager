@@ -18,8 +18,22 @@
 
 ## Unreleased
 
-- touch: 系统页加「组件版本」卡片；「检查更新」让核心立刻去查。
 - scripts: `VERSION` 随脚本放到 `/data/luyaz/scripts/`，设备上能读到脚本的版本。
+
+## touch 1.0.1 — 2026-10-17
+
+- 「载波」卡片的 QoS 行按核心的 `bearer` 标 QCI 或 5QI（不看当前制式），AMBR 写成上限、带单位（「上限 1668/1008 Mbps」），`stale` 时标「（旧）」。
+- 系统页加「组件版本」卡片；「检查更新」让核心立刻去查。
+
+## lweb 1.1.2 — 2026-10-17
+
+- 信号页和 QCI 页按 `qos` 块的 `bearer` 写标签（NR PDU 会话写 5QI，EPS 承载写 QCI）；信号页在 stale 时标「旧承载」。
+
+## core 1.2.0 — 2026-10-17
+
+- 找 AT 端口时跳过被别的进程打开着的节点、不往里写；回答以整行的终结码结束（`OK`、`ERROR`、`+CME ERROR:`、`+CMS ERROR:`）；AT 出错带 `kind`（`busy`、`held`、`timeout`、`error`、`no-port`）。AT 终端拒发 `ATD…`、`ATA`、`AT+CHUP`。
+- QoS 按 WAN 的 IPv4 和 key.log 的 `CONNECTED … addr=` 行对上当前连接：别的连接的承载、或当前连接已不在读到的那段日志里，都标 `stale`；有几个数据 DNN 时取当前连接的。只有数字的会话 AMBR 单位码也能解（TS 24.501）。`qos` 块 stale 时诊断不下「限速」结论、不记 `qos_change`；诊断里 5QI 标成 5QI。
+- `qos` 块的 QCI/5QI 用厂商的当前值（`zwrt_data_tmp.wwaniface1.qci`，走 ubus 读）；读不到才用 key.log 里的。
 
 ## core 1.1.3 — 2026-10-17
 
