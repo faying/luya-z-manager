@@ -250,8 +250,11 @@ impl WifiDev {
         if t.is_empty() {
             return Ok(None);
         }
-        // 写得出来（退回、撤销要的旧密码还在）才接
-        wifi::plan_for(kind, &t, &m, &cur, |fp| self.lookup(fp))?;
+        // 写得出来（退回、撤销要的旧密码还在）、写完的 AP 布局固件跑得起来才接
+        let plan = wifi::plan_for(kind, &t, &m, &cur, |fp| self.lookup(fp))?;
+        if let Some(why) = luyaz_wifi::layout::refusal(&m, &wifi::simulate(&m, &plan)) {
+            return Err(why.into());
+        }
         Ok(Some(Value::Object(t)))
     }
 

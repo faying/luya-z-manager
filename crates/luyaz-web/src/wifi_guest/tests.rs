@@ -159,6 +159,20 @@ fn checks_refuse_what_the_device_would_drop_or_reject() {
     assert!(check(&f, Some(&c), Lang::En).is_ok());
     f.pw = "g".repeat(64);
     assert!(check(&f, Some(&c), Lang::En).is_err());
+    // one band's guest = three APs with the mains: both bands or neither (a layout already
+    // like that — this fixture, 2.4 only — is left alone)
+    let mut off = c.clone();
+    off.on_2g = false;
+    let mut f = form(&off);
+    f.on_5g = true;
+    assert!(check(&f, Some(&off), Lang::En).unwrap_err().text(Lang::En).contains("both bands"));
+    f.on_2g = true;
+    assert!(check(&f, Some(&off), Lang::En).is_ok());
+    let mut f = form(&c);
+    f.ssid = "renamed".into();
+    assert!(check(&f, Some(&c), Lang::En).is_ok(), "unchanged bands: not refused");
+    f.on_2g = false;
+    assert!(check(&f, Some(&c), Lang::En).is_ok(), "turning the lone band off is fine");
 }
 
 #[test]

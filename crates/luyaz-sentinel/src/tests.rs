@@ -1616,6 +1616,8 @@ struct W {
     lbd: Option<String>,
     comes_up: bool,
     up: bool,
+    /// other uci keys (`wireless.guest_*`)
+    uci: HashMap<String, String>,
 }
 
 impl WifiOps for W {
@@ -1672,7 +1674,7 @@ impl WifiOps for W {
         } else if key.ends_with(".lbd") {
             self.lbd.clone()
         } else {
-            None
+            self.uci.get(key).cloned()
         }
     }
     fn uci_set_commit(&mut self, pairs: &[(&str, &str)]) -> Result<(), String> {
@@ -1724,7 +1726,7 @@ fn wifi_through_the_core_writes_nothing_directly() {
             && wops(&w, "lock write").is_empty()
     );
     assert!(w.held.is_empty(), "locks let go");
-    assert!(wifi::APPLY.contains(r#""wireless.wifi0.disabled":"0","wireless.wifi1.disabled":"0","wireless.main_2g.disabled":"0","wireless.main_5g.disabled":"0"},"reload":true"#));
+    assert!(wifi::APPLY.contains(r#""wireless.wifi0.disabled":"0","wireless.wifi1.disabled":"0","wireless.main_2g.disabled":"0","wireless.main_5g.disabled":"0","wireless.guest_2g.disabled":"1","wireless.guest_5g.disabled":"1"},"reload":true,"best_effort":true"#));
 }
 
 #[test]
@@ -1788,6 +1790,42 @@ fn wifi_core_too_old_or_gone_direct_with_both_locks_in_order() {
         wops(&w, "lock"),
         vec![r#"lock write held=[]"#, r#"lock wifi held=["write"]"#]
     );
+}
+
+#[test]
+fn wifi_direct_rescue_turns_a_lone_guest_off() {
+    // one band's guest on + both mains = three APs, which the firmware cannot run
+    let mut w = W {
+        listening: false,
+        comes_up: true,
+        ..Default::default()
+    };
+    for (k, v) in [
+        ("wireless.guest_2g", "wifi-iface"),
+        ("wireless.guest_2g.disabled", "1"),
+        ("wireless.guest_5g", "wifi-iface"),
+        ("wireless.guest_5g.disabled", "0"),
+    ] {
+        w.uci.insert(k.into(), v.into());
+    }
+    assert_eq!(wifi::restore(&mut w), Ok(()));
+    let uci = wops(&w, "uci");
+    assert_eq!(uci.len(), 1);
+    assert!(
+        uci[0].contains("wireless.main_5g.disabled=0,wireless.guest_5g.disabled=1 "),
+        "{}",
+        uci[0]
+    );
+    assert!(!uci[0].contains("guest_2g"), "already off: not written");
+
+    // no guest sections on this firmware: nothing extra
+    let mut w = W {
+        listening: false,
+        comes_up: true,
+        ..Default::default()
+    };
+    assert_eq!(wifi::restore(&mut w), Ok(()));
+    assert!(!wops(&w, "uci")[0].contains("guest"));
 }
 
 #[test]

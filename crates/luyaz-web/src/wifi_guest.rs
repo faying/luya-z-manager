@@ -564,6 +564,15 @@ pub fn check(f: &FormIn, cur: Option<&Guest>, l: Lang) -> Result<Save, write::Ou
             "请给访客网络设密码，或选「开放」",
         )));
     }
+    // One band's guest beside both main networks makes exactly three APs, which this firmware
+    // cannot run (luyaz_wifi::layout, upstream #181): Wi-Fi goes down. Both bands or neither, as
+    // the stock page does; a layout already like that is left alone.
+    if f.on_2g != f.on_5g && (f.on_2g, f.on_5g) != (cur.on_2g, cur.on_5g) {
+        return Err(bad(l.pick(
+            "Turn the guest network on for both bands, or off: with one band only, this device runs three networks and Wi-Fi goes down",
+            "访客网络请两个频段一起开或一起关：只开一个频段，设备就要跑三个网络，Wi-Fi 会整个断掉",
+        )));
+    }
     let want = Guest {
         ssid: ssid.clone(),
         encryption: f.enc.clone(),
@@ -860,10 +869,10 @@ pub fn reply_of(status: u16, v: &Value, l: Lang) -> Result<Reply, write::Outcome
         }
         return Err(write::Outcome::Busy);
     }
-    Err(write::Outcome::Failed(
-        msg.unwrap_or(l.pick("the core service refused", "核心服务拒绝了"))
-            .to_owned(),
-    ))
+    Err(write::Outcome::Failed(match msg {
+        Some(m) => crate::wifi_main::u60d_words(m, l),
+        None => l.pick("the core service refused", "核心服务拒绝了").to_owned(),
+    }))
 }
 
 async fn send(app: &Shared, body: &Value, l: Lang) -> Result<Reply, write::Outcome> {

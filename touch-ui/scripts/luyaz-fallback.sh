@@ -19,7 +19,8 @@
 #   apn.enable               profile_id=WORD
 #   netselect.auto           (AT+COPS=0: back to automatic network selection)
 #   modem.online             (AT+CFUN=1: radio on)
-#   wifi.radio               ap_2g=0|1 ap_5g=0|1     (both AP interfaces; always written and reloaded)
+#   wifi.radio               ap_2g=0|1 ap_5g=0|1     (both AP interfaces, guests off; always written and
+#                                                    reloaded; ap_2g=0 ap_5g=1 refused)
 #   cellular.redial          [type=1|2]              (dial the data call again; both without type)
 #   nfc.set                  enabled=0|1 [flag=N]
 #   power.direct_supply.set  enabled=0|1|true|false
@@ -275,6 +276,8 @@ case $ACTION in
     wifi.radio)
         is01 "${P_ap_2g:-}" || invalid "ap_2g must be 0 or 1"
         is01 "${P_ap_5g:-}" || invalid "ap_5g must be 0 or 1"
+        # QCMAP's single-AP mode only starts wlan0 (2.4 GHz): 5 GHz alone = no Wi-Fi at all
+        [ "$P_ap_2g$P_ap_5g" = 01 ] && invalid "2.4 GHz off with 5 GHz on stops all Wi-Fi on this device"
         add ap_2g "$P_ap_2g"
         add ap_5g "$P_ap_5g"
         ;;
@@ -424,6 +427,12 @@ case $ACTION in
         # disabled = not on; the caller verifies by watching hostapd
         "$UCI" set "wireless.main_2g.disabled=$((1 - P_ap_2g))" 9>&- 8>&- || failed "uci set"
         "$UCI" set "wireless.main_5g.disabled=$((1 - P_ap_5g))" 9>&- 8>&- || failed "uci set"
+        # guests off: one band's guest beside the mains makes exactly three APs, or a guest without
+        # its main network — both leave Wi-Fi down (luyaz_wifi::layout). Missing sections are skipped.
+        for g in guest_2g guest_5g; do
+            "$UCI" -q get "wireless.$g" >/dev/null 9>&- 8>&- &&
+                { "$UCI" set "wireless.$g.disabled=1" 9>&- 8>&- || failed "uci set"; }
+        done
         "$UCI" commit wireless 9>&- 8>&- || failed "uci commit"
         write zwrt_wlan reload '{}'
         ;;

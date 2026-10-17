@@ -193,6 +193,17 @@ fn master_writes(want_on: bool, current_on: bool) -> Vec<(&'static str, &'static
     }
 }
 
+/// 总开关关 = 访客也关（有的节）：两个主网络关了、访客还开着，固件跑不起来（`luyaz_wifi::layout`
+/// 的 GUEST_ALONE），关 Wi-Fi 就会被拒。开的时候访客不动（和原厂一样，要自己再开）。
+fn guests_off_with_mains(plan: &mut Plan, cur: &Uci, want_on: bool) {
+    if want_on || master_on(cur) == want_on {
+        return;
+    }
+    for g in GUESTS.iter().filter(|g| exists(cur, g)) {
+        plan.put(cur, &format!("wireless.{g}.disabled"), "1");
+    }
+}
+
 /// 请求体里的值 → uci 写法（agent：字符串原样、数字十进制、布尔 1/0，再 sanitize）；别的类型不认。
 fn body_str(v: &Value) -> Option<String> {
     let s = match v {
@@ -318,6 +329,7 @@ pub fn main_plan(body: &Map<String, Value>, cur: &Uci) -> Result<Plan, String> {
         for (path, v) in master_writes(want_on, master_on(cur)) {
             plan.put(cur, path, v);
         }
+        guests_off_with_mains(&mut plan, cur, want_on);
     }
     Ok(plan)
 }
@@ -502,6 +514,7 @@ pub fn plan_for(
         for (path, v) in master_writes(want_on, master_on(cur)) {
             plan.put(cur, path, v);
         }
+        guests_off_with_mains(&mut plan, cur, want_on);
     }
     Ok(plan)
 }

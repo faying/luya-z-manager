@@ -47,8 +47,9 @@ check "u60-ship.sh: executor and manifest" 'grep -q "/data/luyaz/scripts/luyaz-s
 check "doctor-legacy.sh: manifest and heartbeat" 'grep -q "/data/luyaz/ship/manifest.jsonl" "$SCRIPTS/doctor-legacy.sh" && grep -q "/tmp/luyaz/ship/heartbeat" "$SCRIPTS/doctor-legacy.sh"'
 _rs=$SCRIPTS/../../crates
 if [ -f "$_rs/luyaz-core/src/paths.rs" ]; then
-    check "paths.rs: the same names" 'grep -q "\"/data/luyaz/ship\"" "$_rs/luyaz-core/src/paths.rs" && grep -q "\"/data/luyaz/ship/manifest.jsonl\"" "$_rs/luyaz-core/src/paths.rs" && grep -q "\"/data/luyaz/scripts/luyaz-ship.sh\"" "$_rs/luyaz-core/src/paths.rs" && grep -q "\"/tmp/luyaz/ship\"" "$_rs/luyaz-core/src/paths.rs"'
-    check "worker.rs: the same names" 'grep -q "\"/data/luyaz/ship/.migrated\"" "$_rs/luyaz-sentinel/src/worker.rs" && grep -q "\"/data/luyaz/scripts/luyaz-ship.sh\"" "$_rs/luyaz-sentinel/src/worker.rs"'
+    # (E3 left the Rust side on the new names only: paths.rs keeps the manifest, worker.rs the rest)
+    check "paths.rs: the same manifest" 'grep -q "\"/data/luyaz/ship/manifest.jsonl\"" "$_rs/luyaz-core/src/paths.rs"'
+    check "worker.rs: the same names" 'grep -q "\"/data/luyaz/scripts/luyaz-ship.sh\"" "$_rs/luyaz-sentinel/src/worker.rs" && grep -q "\"/data/luyaz/ship/txn\"" "$_rs/luyaz-sentinel/src/worker.rs" && grep -q "\"/tmp/luyaz/ship/heartbeat\"" "$_rs/luyaz-sentinel/src/worker.rs"'
 fi
 
 echo "luyaz-dir: $PASS passed, $FAIL failed"

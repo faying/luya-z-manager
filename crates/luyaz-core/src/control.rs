@@ -954,6 +954,16 @@ async fn wifi_apply(params: &Value) -> Outcome {
         }
         updates.push((path.clone(), value));
     }
+    // AP layouts the firmware cannot run (2.4 GHz off with 5 GHz on, a guest without its main
+    // network, exactly three APs) take all Wi-Fi down: refused before anything is written. An
+    // unreadable `wireless` (empty map) lets the write through on purpose: refusing then would also
+    // stop the sentinel's rescue, which writes a layout that is always runnable.
+    let before = state::uci_show("wireless").await;
+    let mut after = before.clone();
+    after.extend(updates.iter().cloned());
+    if let Some(why) = luyaz_wifi::layout::refusal(&before, &after) {
+        return Outcome::Invalid(why.into());
+    }
     let mut packages: Vec<&str> = Vec::new();
     for (path, value) in &updates {
         if let Err(e) = state::uci_write("set", path, Some(value)).await {

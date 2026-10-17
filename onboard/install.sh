@@ -20,7 +20,7 @@
 # 这些也可以写进本目录的 u60.env（模板见 u60.env.example），脚本启动时自动读取。
 # 其他：GATEWAY（默认 192.168.0.1）、SSH_KEY（默认 ~/.ssh/id_ed25519）
 #
-# 只适用于 CN 固件 B27 及以下；B28 起中兴删掉了开 ADB 的接口。
+# 只适用于还有 zwrt_bsp.usb set 的固件（CN B27 及以下）；国行 B31 实测没有，据称 B28 起就删了。
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -165,7 +165,7 @@ enable_adb() {
   resp=$(ubus_call "$session" zwrt_bsp.usb set '{"mode":"debug"}')
   case "$resp" in
     *'"result":[0'*) ok "已切到 USB 调试模式。" ;;
-    *) fail "开 ADB 被拒绝（固件是 B28 或更新？那版把这个接口删了，本包不适用）：$resp" ;;
+    *) fail "开 ADB 被拒绝：这版固件的 zwrt_bsp.usb 可能没有 set 方法（国行 B31 实测没有；B28 起据称就删了），本包不适用：$resp" ;;
   esac
 
   info "等 ADB 设备出现（用 USB-C 数据线把 U60 接到这台电脑；最多等 90 秒）…"

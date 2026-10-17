@@ -425,3 +425,45 @@ fn journal_undo_request_is_projected() {
         "Wi-Fi 开 · 2.4G Home · 另 1 项 → 2.4G Cafe · 另 1 项"
     );
 }
+
+#[test]
+fn layouts_the_firmware_cannot_run_are_seen_on_the_plan() {
+    use luyaz_wifi::layout::{refusal, NO_2G, THREE_APS};
+    let m = uci();
+    // 只关 2.4G，5G 开着：Wi-Fi 全断
+    for b in [json!({"radio2_disabled": "1"}), json!({"radio2_disabled": true})] {
+        let p = main_plan(&body(b), &m).unwrap();
+        assert_eq!(refusal(&m, &simulate(&m, &p)), Some(NO_2G));
+    }
+    // 只关 5G、总开关关：可以
+    for b in [json!({"radio5_disabled": "1"}), json!({"wifi_onoff": "0"})] {
+        let p = main_plan(&body(b), &m).unwrap();
+        assert_eq!(refusal(&m, &simulate(&m, &p)), None);
+    }
+    // 访客两个频段都开着时关 Wi-Fi：访客跟着关，不拒
+    let mut g = m.clone();
+    for (k, v) in [
+        ("wireless.guest_2g.disabled", "0"),
+        ("wireless.guest_5g", "wifi-iface"),
+        ("wireless.guest_5g.disabled", "0"),
+    ] {
+        g.insert(k.into(), v.into());
+    }
+    let p = main_plan(&body(json!({"wifi_onoff": "0"})), &g).unwrap();
+    assert!(p.set.contains(&("wireless.guest_2g.disabled".into(), "1".into())));
+    assert!(p.set.contains(&("wireless.guest_5g.disabled".into(), "1".into())));
+    assert_eq!(refusal(&g, &simulate(&g, &p)), None);
+    let want = body(json!({"on": false}));
+    let now = value(Kind::Main, &g, &vault()).unwrap();
+    let p = plan_for(Kind::Main, &want, &g, &now, |_| None).unwrap();
+    assert_eq!(refusal(&g, &simulate(&g, &p)), None, "退回/撤销同样");
+    // 只关一个频段的主网络、同频段访客还开着：拒
+    let p = main_plan(&body(json!({"radio5_disabled": "0"})), &g).unwrap();
+    assert!(p.is_empty());
+    let mut one = g.clone();
+    one.insert("wireless.main_5g.disabled".into(), "1".into());
+    assert_eq!(refusal(&g, &one), Some(luyaz_wifi::layout::GUEST_ALONE));
+    // 两个主网络 + 只开 2.4G 访客 = 3 个 AP
+    let p = guest_plan(&body(json!({"guest_disabled_2g": false})), &m).unwrap();
+    assert_eq!(refusal(&m, &simulate(&m, &p)), Some(THREE_APS));
+}

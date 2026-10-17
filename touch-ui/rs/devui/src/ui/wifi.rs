@@ -62,9 +62,17 @@ impl Ui {
                 self.aux.w5 = w5 as i32;
                 self.aux.hold_w24 = nz(now);
                 self.aux.hold_w5 = nz(now);
+                // both off: the guests too — one left on alone is a layout the firmware cannot run,
+                // and the core refuses it (luyaz_wifi::layout); best_effort: a guest section may be
+                // missing. 2.4 GHz off with 5 GHz on is refused by the core; the switch comes back.
+                let guests = if !w24 && !w5 {
+                    ",\"wireless.guest_2g.disabled\":\"1\",\"wireless.guest_5g.disabled\":\"1\""
+                } else {
+                    ""
+                };
                 let params = format!(
-                    "{{\"set\":{{\"wireless.main_2g.disabled\":\"{}\",\"wireless.main_5g.disabled\":\"{}\"}},\"reload\":true}}",
-                    !w24 as i32, !w5 as i32
+                    "{{\"set\":{{\"wireless.main_2g.disabled\":\"{}\",\"wireless.main_5g.disabled\":\"{}\"{guests}}},\"reload\":true,\"best_effort\":{}}}",
+                    !w24 as i32, !w5 as i32, !w24 && !w5
                 );
                 // the emergency script calls this write wifi.radio
                 self.data_control("wifi.apply", &params, Some(&format!("ap_2g={} ap_5g={}", w24 as i32, w5 as i32)));

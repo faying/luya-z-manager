@@ -45,6 +45,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 mod run;
+pub mod layout;
 pub mod scan;
 
 pub use run::output_within;

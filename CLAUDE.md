@@ -7,8 +7,9 @@ project: ZTE's firmware auto-update (FOTA) is never turned on.** Not by code,
 not by a script, not by a UI toggle, not "just to test".
 
 - Why: a firmware upgrade overwrites `/etc/rc.local` (every autostart in this
-  project is gone), and from B28 on ZTE closed the interface used to enable
-  ADB — upgrade once and there is no way back in.
+  project is gone), and newer firmware drops the interface used to enable
+  ADB (`zwrt_bsp.usb set`: gone on CN B31, reported gone from B28) — upgrade once
+  and the kit's way in is gone.
 - The kit already enforces it: `onboard/device/install.sh` → `fota_off()` sets
   `dm_update_mode=0`; `install.sh status` reports it as 「自动升级: 已关闭」.
 - "Off" looks like: `uci get zwrt_zte_dm.dm_update.dm_update_mode` = `0` and

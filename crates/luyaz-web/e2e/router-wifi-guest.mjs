@@ -99,6 +99,16 @@ async function own(p) {
   ok(/Cafe e2e/.test(await txt(p, "#wg-rows")) && /2\.4 GHz \+ 5 GHz/.test(await txt(p, "#wg-status")), "rows and status follow");
   ok(await p.locator("input[data-bind=_wgssid]").count() === 0 && (await p.getAttribute("#wg-btn", "aria-expanded")) === "false", "form closed after the readback");
 
+  // one band only = three APs with the mains (luyaz_wifi::layout): refused before any send
+  await open();
+  const n1 = await nOps();
+  await p.click("button[aria-labelledby=wg-on2-l]");
+  await apply();
+  await done("一起开");
+  ok(/两个频段一起开或一起关/.test(await txt(p, "#wg-save-op")) && (await nOps()) === n1, `one band refused: ${await txt(p, "#wg-save-op")}`);
+  await p.reload({ waitUntil: "load" });
+  await ready(p).catch(() => {});
+
   // the browser drops during the reload and comes back: the area shows how it ended
   await open();
   await p.click("button[aria-labelledby=wg-hid-l]");

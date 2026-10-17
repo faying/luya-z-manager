@@ -200,6 +200,24 @@ fn refusals_say_what_holds_the_device() {
     assert!(o.text(Lang::Zh).contains("Wi-Fi 6 在这里改不了"));
     let inv = json!({"ok": false, "error": {"code": "invalid_parameter", "message": "key_2g must be 8-64 characters"}});
     assert!(refusal(400, &inv, Lang::En).text(Lang::En).contains("key_2g must be 8-64"));
+    // the core's AP layout refusals (luyaz_wifi::layout) in the page's language
+    let lay = json!({"ok": false, "error": {"code": "invalid_parameter", "message": "this device cannot run exactly three Wi-Fi networks; turn the guest network on for both bands, or off"}});
+    assert!(refusal(400, &lay, Lang::Zh).text(Lang::Zh).contains("不能刚好开三个"));
+}
+
+#[test]
+fn only_2g_off_with_5g_on_is_refused_before_the_dialog() {
+    let (s, c) = (seed(), cur());
+    let mut d = s.clone();
+    d.b[0].radio = false;
+    let e = check(&s, &d, ["", ""], Some(&c), Lang::Zh).unwrap_err().text(Lang::Zh);
+    assert!(e.contains("只关 2.4 GHz"), "{e}");
+    // only 5 GHz off, or both: fine
+    let mut d = s.clone();
+    d.b[1].radio = false;
+    assert!(check(&s, &d, ["", ""], Some(&c), Lang::Zh).is_ok());
+    d.b[0].radio = false;
+    assert!(check(&s, &d, ["", ""], Some(&c), Lang::Zh).is_ok());
 }
 
 #[test]

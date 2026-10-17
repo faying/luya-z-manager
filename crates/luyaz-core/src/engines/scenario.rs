@@ -72,7 +72,14 @@ impl luyaz_wifi::Host for WifiHost {
 
     fn write_aps(&self, ap_2g: bool, ap_5g: bool) -> Result<Option<String>, String> {
         let flag = |on: bool| if on { "0" } else { "1" };
-        let params = json!({"set": {luyaz_wifi::AP_2G: flag(ap_2g), luyaz_wifi::AP_5G: flag(ap_5g)}, "reload": true});
+        let mut set = json!({luyaz_wifi::AP_2G: flag(ap_2g), luyaz_wifi::AP_5G: flag(ap_5g)});
+        if !ap_2g && !ap_5g {
+            // both off: guests too — a guest left on alone is a layout the firmware cannot run, and the
+            // core refuses it (luyaz_wifi::layout). best_effort: a firmware may lack a guest section.
+            set["wireless.guest_2g.disabled"] = json!("1");
+            set["wireless.guest_5g.disabled"] = json!("1");
+        }
+        let params = json!({"set": set, "reload": true, "best_effort": !ap_2g && !ap_5g});
         // the lock's wait (150 s) is outside /control's queue; this covers it and the reload
         match control(&self.control, self.token.as_deref(), "wifi.apply", &params, 240) {
             luyaz_api::control::Reply::Done { result, .. } => Ok(result["reload_error"].as_str().map(str::to_string)),

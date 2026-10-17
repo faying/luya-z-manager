@@ -99,9 +99,16 @@ printf '#!/bin/sh\necho "$*" >>"%s/uci"\n' "$T" >"$T/bin-uci"
 mkdir -p "$T/bin" && mv "$T/bin-uci" "$T/bin/uci" && chmod +x "$T/bin/uci"
 export LUYAZ_FALLBACK_UCI=$T/bin/uci
 run wifi.radio ap_2g=1 ap_5g=0
-check "wifi.radio: uci set both, commit, then reload" '[ "$RC" = 0 ] && [ "$(cat "$T/uci")" = "set wireless.main_2g.disabled=0
+check "wifi.radio: uci set both, guests off, commit, then reload" '[ "$RC" = 0 ] && [ "$(cat "$T/uci")" = "set wireless.main_2g.disabled=0
 set wireless.main_5g.disabled=1
+-q get wireless.guest_2g
+set wireless.guest_2g.disabled=1
+-q get wireless.guest_5g
+set wireless.guest_5g.disabled=1
 commit wireless" ] && [ "$(sent zwrt_wlan.reload)" = "{}" ]'
+: >"$T/uci"
+run wifi.radio ap_2g=0 ap_5g=1
+check "wifi.radio: 2.4 off with 5 on → exit 2, nothing written" '[ "$RC" = 2 ] && [ ! -s "$T/uci" ]'
 run wifi.radio ap_2g=1
 check "wifi.radio needs both → exit 2" '[ "$RC" = 2 ]'
 teardown

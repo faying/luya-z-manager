@@ -564,6 +564,12 @@ pub fn check(
             "2.4 GHz：美国不允许 12、13 信道；换一个或选自动",
         ).into());
     }
+    // 2.4 GHz off with 5 GHz still up: the firmware runs no Wi-Fi at all (luyaz_wifi::layout; the
+    // core refuses it too — said here before the dialog, in the page's language)
+    let up = |i: usize| draft.b[i].radio && cur.bands[i].ap_on;
+    if draft.on && (draft.b[0].radio != seed.b[0].radio || draft.b[1].radio != seed.b[1].radio) && up(1) && !up(0) {
+        errs.push(l.pick(LAYOUT_WORDS[0].1, LAYOUT_WORDS[0].2).trim_start_matches("Not applied: ").trim_start_matches("没有生效：").to_owned());
+    }
     if !errs.is_empty() {
         return Err(write::Outcome::NotYet(errs.join(l.pick("; ", "；"))));
     }
@@ -841,8 +847,30 @@ pub fn confirm(c: &Change, l: Lang) -> write::Confirm {
     }
 }
 
+/// The core's AP layout refusals (`luyaz_wifi::layout`), matched by their start.
+const LAYOUT_WORDS: [(&str, &str, &str); 3] = [
+    (
+        "turning 2.4 GHz off while 5 GHz stays on",
+        "Not applied: turning 2.4 GHz off while 5 GHz stays on stops all Wi-Fi on this device; turn both off, or only 5 GHz",
+        "没有生效：只关 2.4 GHz、5 GHz 还开着，这台设备的 Wi-Fi 会整个断掉；请两个都关，或只关 5 GHz",
+    ),
+    (
+        "a guest network needs the main network",
+        "Not applied: a guest network needs the main network of its band on",
+        "没有生效：访客网络开着时，同频段的主网络也要开着",
+    ),
+    (
+        "this device cannot run exactly three Wi-Fi networks",
+        "Not applied: this device cannot run exactly three Wi-Fi networks; turn the guest network on for both bands, or off",
+        "没有生效：这台设备不能刚好开三个 Wi-Fi 网络；访客网络请两个频段一起开或一起关",
+    ),
+];
+
 /// u60d's English-only messages in the page's language.
-fn u60d_words(m: &str, l: Lang) -> String {
+pub(crate) fn u60d_words(m: &str, l: Lang) -> String {
+    if let Some((_, en, zh)) = LAYOUT_WORDS.iter().find(|(p, ..)| m.starts_with(p)) {
+        return l.pick(en, zh).into();
+    }
     if m.starts_with("this firmware changes Wi-Fi 6") {
         return wifi6_refused(l);
     }

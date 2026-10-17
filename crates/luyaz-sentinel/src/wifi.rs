@@ -27,7 +27,11 @@ pub const POLL_S: u64 = 3;
 
 pub const SET_MODULE: &str =
     r#"{"action":"wifi.set_module","source":"guard","params":{"enabled":1}}"#;
-pub const APPLY: &str = r#"{"action":"wifi.apply","source":"guard","params":{"set":{"wireless.wifi0.disabled":"0","wireless.wifi1.disabled":"0","wireless.main_2g.disabled":"0","wireless.main_5g.disabled":"0"},"reload":true}}"#;
+pub const APPLY: &str = r#"{"action":"wifi.apply","source":"guard","params":{"set":{"wireless.wifi0.disabled":"0","wireless.wifi1.disabled":"0","wireless.main_2g.disabled":"0","wireless.main_5g.disabled":"0","wireless.guest_2g.disabled":"1","wireless.guest_5g.disabled":"1"},"reload":true,"best_effort":true}}"#;
+/// Guest APs are turned off by a rescue: with one band's guest on, the two main APs make exactly three,
+/// which the firmware cannot run (luyaz_wifi::layout) — the core refuses that write, and directly it
+/// would leave Wi-Fi down. `best_effort` because a firmware may lack a guest section.
+pub const GUESTS: [&str; 2] = ["guest_2g", "guest_5g"];
 pub const KEYS: [&str; 4] = [
     "wireless.wifi0.disabled",
     "wireless.wifi1.disabled",
@@ -166,7 +170,16 @@ fn direct(ops: &mut dyn WifiOps) -> Result<(), String> {
             ));
         }
     }
-    let pairs: Vec<(&str, &str)> = KEYS.iter().map(|k| (*k, "0")).collect();
+    let mut pairs: Vec<(&str, &str)> = KEYS.iter().map(|k| (*k, "0")).collect();
+    let guest_keys: Vec<String> = GUESTS
+        .iter()
+        .filter(|g| {
+            ops.uci_get(&format!("wireless.{g}")).is_some()
+                && ops.uci_get(&format!("wireless.{g}.disabled")).as_deref() != Some("1")
+        })
+        .map(|g| format!("wireless.{g}.disabled"))
+        .collect();
+    pairs.extend(guest_keys.iter().map(|k| (k.as_str(), "1")));
     let r = match ops.uci_set_commit(&pairs) {
         Err(e) => Err(format!("uci: {e}")),
         Ok(()) => {
