@@ -7,6 +7,7 @@
 Clear signal readouts, band and cell locking, eSIM, SMS, health checks and a watchdog, on the device's front panel and in your browser.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/faying/luya-z-manager?sort=date&display_name=tag)](https://github.com/faying/luya-z-manager/releases)
 ![Rust](https://img.shields.io/badge/Rust-1.99-orange.svg)
 ![Target](https://img.shields.io/badge/target-aarch64--musl-lightgrey.svg)
 ![UI](https://img.shields.io/badge/UI-English%20%C2%B7%20%E4%B8%AD%E6%96%87-green.svg)
@@ -27,7 +28,7 @@ Clear signal readouts, band and cell locking, eSIM, SMS, health checks and a wat
 
 - [Why](#why) · [Screenshots](#screenshots) · [Features](#features) · [Requirements](#requirements) · [Quick start](#quick-start)
 - [What it changes, and how to undo it](#what-it-changes-and-how-to-undo-it) · [Architecture](#architecture) · [Development](#development)
-- [Project status](#project-status) · [Documentation](#documentation) · [Credits](#credits) · [License](#license-and-disclaimer)
+- [Versions and updates](#versions-and-updates) · [Project status](#project-status) · [Documentation](#documentation) · [Credits](#credits) · [License](#license-and-disclaimer)
 
 ## Why
 
@@ -159,6 +160,14 @@ docs/          GETTING-STARTED.md, SCREENSHOTS.md, ARCHITECTURE.md, DESIGN.md (U
 ```
 
 </details>
+
+## Versions and updates
+
+The five parts — core, admin web, sentinel, touch UI and device scripts — each have their own version ([SemVer](https://semver.org)); an update bumps only the part that changed.
+
+- Current versions: [`versions.json`](versions.json). What changed in each: [CHANGELOG](CHANGELOG.md), and [Releases](https://github.com/faying/luya-z-manager/releases) (tags like `core-v1.1.0`).
+- On the device: admin web **Device info → Component versions**, or the touch screen **System → Component versions**. A newer version shows as `1.0.0 → 1.1.0`.
+- The device looks at `versions.json` here once a day (not while roaming). It only shows what is new; it never installs anything by itself.
 
 ## Project status
 

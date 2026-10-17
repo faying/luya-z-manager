@@ -7,6 +7,7 @@
 信号看得懂、能锁频锁小区、管 eSIM 和短信、有体检和看门狗——在设备前面板上，也在浏览器里。
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/faying/luya-z-manager?sort=date&display_name=tag)](https://github.com/faying/luya-z-manager/releases)
 ![Rust](https://img.shields.io/badge/Rust-1.99-orange.svg)
 ![Target](https://img.shields.io/badge/target-aarch64--musl-lightgrey.svg)
 ![UI](https://img.shields.io/badge/UI-English%20%C2%B7%20%E4%B8%AD%E6%96%87-green.svg)
@@ -27,7 +28,7 @@
 
 - [为什么做](#为什么做) · [截图](#截图) · [功能](#功能) · [前提条件](#前提条件) · [快速开始](#快速开始)
 - [会改动设备哪些地方、怎么退回](#会改动设备哪些地方怎么退回) · [架构](#架构) · [开发与构建](#开发与构建)
-- [项目状态](#项目状态) · [文档](#文档) · [致谢](#致谢) · [许可证](#许可证与免责声明)
+- [版本与更新](#版本与更新) · [项目状态](#项目状态) · [文档](#文档) · [致谢](#致谢) · [许可证](#许可证与免责声明)
 
 ## 为什么做
 
@@ -159,6 +160,14 @@ docs/          GETTING-STARTED、SCREENSHOTS、ARCHITECTURE、DESIGN.md（界面
 ```
 
 </details>
+
+## 版本与更新
+
+核心、管理网页、哨兵、触屏界面、设备脚本五个部分各有自己的版本号（[语义化版本](https://semver.org/lang/zh-CN/)），改了哪个只升哪个。
+
+- 当前版本：[`versions.json`](versions.json)。每次改了什么：[更新说明](CHANGELOG.zh-CN.md)，以及 [Releases](https://github.com/faying/luya-z-manager/releases)（标签形如 `core-v1.1.0`）。
+- 在设备上看：管理网页「设备信息 → 组件版本」，或触屏「系统 → 组件版本」。有新版会显示 `1.0.0 → 1.1.0`。
+- 设备每天来这里看一次 `versions.json`（漫游时不看），只显示有没有新版，不会自己安装。
 
 ## 项目状态
 
