@@ -5,7 +5,7 @@ use crate::json;
 use crate::lang::{self, tr};
 use devui_model::{diag_run_t, dg_layer_t};
 
-pub const DG_LAYERS_MAX: usize = 8;
+pub const DG_LAYERS_MAX: usize = 12;
 // dg_level_t
 pub const DG_PENDING: i32 = 0;
 pub const DG_RUNNING: i32 = 1;
@@ -14,6 +14,8 @@ pub const DG_WARN: i32 = 3;
 pub const DG_BAD: i32 = 4;
 pub const DG_NA: i32 = 5;
 pub const DG_INFO: i32 = 6;
+/// not run: a layer before it is bad (deep-diag-v2 §3); grey, not counted
+pub const DG_BLOCKED: i32 = 7;
 // dg_state_t
 pub const DG_NONE: i32 = 0;
 pub const DG_IDLE: i32 = 1;
@@ -48,7 +50,7 @@ fn num(o: &[u8], key: &str, def: i64) -> i64 {
 }
 
 fn level(s: &str) -> i32 {
-    const NAMES: [&str; 7] = ["pending", "running", "ok", "warn", "bad", "na", "info"];
+    const NAMES: [&str; 8] = ["pending", "running", "ok", "warn", "bad", "na", "info", "blocked"];
     // a level from a later agent: "can't tell", never good
     NAMES.iter().position(|&n| n == s).map_or(DG_NA, |i| i as i32)
 }
@@ -85,7 +87,7 @@ pub fn parse(d: &[u8]) -> (bool, diag_run_t) {
     r.step = num(d, "step", 0) as i32;
     r.steps = num(d, "steps", 0) as i32;
     r.age_s = num(d, "age_s", -1);
-    if let Some(arr) = json::get(d, "layers", 4096)
+    if let Some(arr) = json::get(d, "layers", 12288)
         && arr.first() == Some(&b'[')
     {
         let mut p = 0;
@@ -132,9 +134,14 @@ pub fn parse(d: &[u8]) -> (bool, diag_run_t) {
 pub fn layer_name(id: &str) -> &str {
     match id {
         "wifi" => "Wi-Fi",
+        "sim" => tr("SIM 卡"),
         "signal" => tr("信号"),
         "limit" => tr("限速"),
+        "bearer" => tr("数据连接"),
         "link" => tr("蜂窝链路"),
+        "dns" => tr("域名解析"),
+        "e2e" => tr("外网"),
+        "clock" => tr("设备时间"),
         "crowd" => tr("基站负载"),
         "proxy" => tr("代理"),
         "speed" => tr("速度"),
@@ -150,13 +157,14 @@ pub fn level_word(l: i32) -> &'static str {
         DG_WARN => tr("疑点"),
         DG_BAD => crate::trc!("诊断", "差"),
         DG_NA => tr("测不了"),
+        DG_BLOCKED => tr("没测"),
         _ => "",
     }
 }
 
 pub fn level_mark(l: i32) -> &'static str {
     match l {
-        DG_OK | DG_NA => "●",
+        DG_OK | DG_NA | DG_BLOCKED => "●",
         DG_WARN => "▲",
         DG_BAD => "■",
         _ => "",
@@ -181,6 +189,15 @@ mod tests {
         assert_eq!(level_mark(DG_WARN), "▲");
         assert_eq!(level_mark(DG_BAD), "■");
         assert!(level_mark(DG_PENDING).is_empty());
+        assert_eq!(layer_name("bearer"), "数据连接");
+        assert_eq!(layer_name("e2e"), "外网");
+        assert_eq!(level_word(DG_BLOCKED), "没测");
+        assert_eq!(level_mark(DG_BLOCKED), "●");
+        crate::lang::set_en(true);
+        assert_eq!(layer_name("dns"), "DNS");
+        assert_eq!(layer_name("clock"), "Device clock");
+        assert_eq!(level_word(DG_BLOCKED), "Not checked");
+        crate::lang::set_en(false);
     }
 }
 
@@ -252,11 +269,34 @@ mod parse_tests {
 
         // a level from a later agent reads as "can't tell"; more rows than slots
         assert_eq!(parse(br#"{"state":"done","layers":[{"id":"x","level":"new"}]}"#).1.layer[0].level, DG_NA);
-        let ls: Vec<String> = (0..12).map(|i| format!(r#"{{"id":"l{i}","level":"ok"}}"#)).collect();
+        let ls: Vec<String> = (0..16).map(|i| format!(r#"{{"id":"l{i}","level":"ok"}}"#)).collect();
         let (ok, r) = parse(format!(r#"{{"state":"running","layers":[{}]}}"#, ls.join(",")).as_bytes());
-        assert!(ok && r.n as usize == DG_LAYERS_MAX && r.layer[7].id == "l7");
+        assert!(ok && r.n as usize == DG_LAYERS_MAX && r.layer[11].id == "l11");
         // a detail longer than the slot is cut
         let (ok, r) = parse(format!(r#"{{"state":"done","layers":[{{"id":"wifi","level":"ok","detail":"{}"}}]}}"#, "a".repeat(300)).as_bytes());
         assert!(ok && r.layer[0].detail.len() == 191);
+    }
+
+    /// deep-diag-v2: eleven rows with long details all fit, blocked ones grey and not counted
+    #[test]
+    fn a_v2_run_with_blocked_layers() {
+        let _l = crate::lang::TEST_LANG.lock().unwrap_or_else(|e| e.into_inner());
+        lang::set_en(false);
+        let long = "很长的说明文字".repeat(9);
+        let ids = ["wifi", "sim", "signal", "limit", "bearer", "link", "dns", "e2e", "clock", "crowd", "proxy"];
+        let ls: Vec<String> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                let (lv, counted) = if i > 4 { ("blocked", false) } else { ("ok", true) };
+                format!(r#"{{"id":"{id}","level":"{lv}","detail":"{long}","detail_en":"{long}","counted":{counted}}}"#)
+            })
+            .collect();
+        let d = format!(r#"{{"state":"done","layers":[{}],"main":{{"layer":"bearer","level":"bad","text":"数据连接没建立","more":0}}}}"#, ls.join(","));
+        let (ok, r) = parse(d.as_bytes());
+        assert!(ok && r.n == 11, "{}", r.n);
+        let l = find(&r, "proxy").unwrap();
+        assert!(l.level == DG_BLOCKED && l.counted == 0 && l.detail == long);
+        assert!(find(&r, "bearer").unwrap().level == DG_OK && r.main_layer == "bearer");
     }
 }

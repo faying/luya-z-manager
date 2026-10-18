@@ -17,6 +17,9 @@
 //    can line device times up with its own clock.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Shared with the independent sentinel without bringing login dependencies into it.
+pub use luyaz_alerts::clock::*;
+
 /// "8.00" / "5.50" / "-3.50" → seconds. Half- and quarter-hour zones exist.
 pub fn parse_hours(s: &str) -> Option<i64> {
     let h: f64 = s.trim().parse().ok()?;
@@ -58,6 +61,50 @@ pub fn utc_offset(time_from_utc: Option<&str>, timezone: Option<&str>) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elapsed_requires_the_same_boot_and_never_uses_wall_time() {
+        let a = BootTime {
+            boot_id: "a".into(),
+            seconds: 0,
+        };
+        let later = BootTime {
+            seconds: 60,
+            ..a.clone()
+        };
+        assert_eq!(later.elapsed_since(&a), Some(60));
+        assert_eq!(a.elapsed_since(&later), None);
+        assert_eq!(
+            later.elapsed_since(&BootTime {
+                boot_id: "b".into(),
+                seconds: 0
+            }),
+            None
+        );
+        assert_eq!(
+            a.elapsed_since(&BootTime {
+                boot_id: String::new(),
+                seconds: 0
+            }),
+            None
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn boot_clock_matches_linux_uptime() {
+        let start = BootTime::read().expect("Linux boot clock");
+        let uptime: f64 = std::fs::read_to_string("/proc/uptime")
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let end = BootTime::read().unwrap();
+        assert_eq!(start.boot_id, end.boot_id);
+        assert!(uptime >= start.seconds as f64 && uptime < (end.seconds + 1) as f64);
+    }
 
     #[test]
     fn hours_parse() {

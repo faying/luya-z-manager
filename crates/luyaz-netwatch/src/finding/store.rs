@@ -15,7 +15,7 @@
 //! treated as expired while the clock is before `record::CLOCK_SET`.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use luyaz_api::finding::{Finding, Verdict};
 
@@ -149,7 +149,7 @@ impl Store {
             Verdict::Open(f) if f.iccid.is_empty() => {}
             Verdict::Open(f) => self.found(f, now, &mut out),
             Verdict::None { why } => match *why {
-                "up" | "all_ok" => {
+                "up" | "all_ok" | "path_dns_ok" => {
                     for e in &mut self.open {
                         e.ups = e.ups.saturating_add(1);
                     }

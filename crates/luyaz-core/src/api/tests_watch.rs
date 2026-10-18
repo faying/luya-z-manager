@@ -48,10 +48,18 @@ async fn with_writes_on_the_group_is_served_and_the_rest_too() {
     let (st, b) = call(addr, "GET", "/api/diagnose", "").await;
     assert_eq!(st, 200, "{b}");
     // the screen's other writes and reads
-    assert_eq!(call(addr, "POST", "/api/alerts/read", r#"{"seq":0}"#).await.0, 200);
+    assert_eq!(
+        call(addr, "POST", "/api/alerts/read", r#"{"seq":0}"#)
+            .await
+            .0,
+        200
+    );
     assert_eq!(call(addr, "GET", "/api/netinfo?lite=1", "").await.0, 200);
     // and someone looking at it keeps the exits fresh
-    wait("exits wanted", || r.join("tmp/netinfo-exits.wanted").exists()).await;
+    wait("exits wanted", || {
+        r.join("tmp/netinfo-exits.wanted").exists()
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -162,7 +170,7 @@ async fn a_returning_card_gets_its_apn_pick_back_as_auto() {
 }
 
 #[tokio::test]
-async fn diagnose_carries_the_open_finding_and_keeps_its_fields() {
+async fn diagnose_marks_legacy_network_unverified_and_keeps_other_fields() {
     use luyaz_api::diagnose::Level;
     use luyaz_api::finding::{Confidence, Evidence, Finding, KIND_NO_INTERNET, LayerId, Verdict};
     let r = root("finding");
@@ -191,8 +199,11 @@ async fn diagnose_carries_the_open_finding_and_keeps_its_fields() {
     let (_, b) = call(addr, "GET", "/api/diagnose", "").await;
     assert_eq!(b["data"]["state"], "idle");
     let f = &b["data"]["finding"];
-    assert_eq!(f["symptom"], "已连上，但外网不通");
-    assert_eq!((f["layer"].as_str(), f["confidence"].as_str()), (Some("internet"), Some("sure")));
+    assert_eq!(f["verification"], "legacy_path_unverified");
+    assert_eq!(
+        (f["layer"].as_str(), f["confidence"].as_str()),
+        (Some("internet"), Some("guess"))
+    );
     assert_eq!(f["iccid_tail"], "1234");
     assert_eq!(f["evidence"][0]["layer"], "internet");
     assert!(!b.to_string().contains("8986001234"), "{b}");

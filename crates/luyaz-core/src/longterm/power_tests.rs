@@ -202,6 +202,8 @@ fn reads_the_device_files_as_the_guard() {
         )
     );
     assert!(!x.charging && !x.screen_on);
+    assert_eq!(x.charging_known, Some(false));
+    assert_eq!(x.screen_known, Some(false));
     assert_eq!(x.zt, Some(41_000), "the modem-side zone is not read");
     assert_eq!(x.thr, Some(false));
     assert!(
@@ -220,6 +222,12 @@ fn reads_the_device_files_as_the_guard() {
     // charging by a positive current
     std::fs::write(r.join("bat/current_now"), "300000\n").unwrap();
     assert!(st.read(&p, &BTreeMap::new(), 0).charging);
+    assert_eq!(st.read(&p, &BTreeMap::new(), 0).charging_known, None);
+    std::fs::remove_file(p.bat.join("status")).unwrap();
+    std::fs::remove_file(&p.backlight).unwrap();
+    let unknown = st.read(&p, &BTreeMap::new(), 0);
+    assert_eq!(unknown.charging_known, None);
+    assert_eq!(unknown.screen_known, None);
     let _ = std::fs::remove_dir_all(&r);
 }
 

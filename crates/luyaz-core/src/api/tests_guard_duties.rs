@@ -41,7 +41,16 @@ async fn u60d_sends_alert_sms_and_keeps_lan_v6_off_once_the_guard_hands_over() {
     put(
         &root,
         "/tmp/luyaz/clock-ok",
-        "1 1791501265 93783 last_wall\n",
+        &luyaz_api::clock::ClockEvidence::observation(
+            luyaz_api::alerts::now(),
+            luyaz_api::clock::BootTime {
+                boot_id: "boot-a".into(),
+                seconds: 5000,
+            },
+            Some(5000),
+            luyaz_api::clock::ClockSource::Year,
+        )
+        .encode(),
     );
     put(&root, "/data/luyaz/ui/devui.conf", "lang=en\n");
     put(&root, "/data/luyaz/scripts/lan-ipv6-off", "");
@@ -129,7 +138,10 @@ async fn no_writes_no_duties() {
     let c = Compat::new(root.to_str().unwrap(), Sources::none());
     assert!(!crate::engines::guard_duties::owns(&c, "sms"));
     let c = c.with_writes(true);
-    assert!(crate::engines::guard_duties::owns(&c, "sms") && crate::engines::guard_duties::owns(&c, "lanv6"));
+    assert!(
+        crate::engines::guard_duties::owns(&c, "sms")
+            && crate::engines::guard_duties::owns(&c, "lanv6")
+    );
     assert!(!crate::engines::guard_duties::owns(&c, "datad-x"));
     let _ = fs::remove_dir_all(&root);
 }

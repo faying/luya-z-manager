@@ -79,6 +79,35 @@ macro_rules! fx_or_skip {
     };
 }
 
+// The retired shell's clock policy is intentionally superseded by P0-01. All other
+// rows still match byte for byte; clock evidence has its own regression matrix below.
+fn without_clock(text: &str) -> String {
+    let lines: Vec<_> = text.lines().collect();
+    let text_mode = lines.iter().any(|l| l.contains("时钟："));
+    if text_mode {
+        // The clock can now contribute a warning. Validate each complete summary against its
+        // own visible row levels before comparing all other rows with the retired shell.
+        let bad = lines.iter().filter(|l| l.starts_with("  ■ ")).count();
+        let warn = lines.iter().filter(|l| l.starts_with("  ▲ ")).count();
+        let expected = if bad == 0 && warn == 0 {
+            "  一切正常".into()
+        } else {
+            format!("  {bad} 项异常，{warn} 项需要注意")
+        };
+        assert_eq!(lines.last().copied(), Some(expected.as_str()));
+    }
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(i, l)| {
+            !l.contains("\tclock\t")
+                && !l.contains("时钟：")
+                && !(text_mode && *i == lines.len() - 1)
+        })
+        .map(|(_, l)| format!("{l}\n"))
+        .collect()
+}
+
 /// Rust == doctor.sh on one scenario, byte for byte and exit code: --tsv, --tsv2, text and
 /// --manifest; returns the Rust --tsv
 fn same_as_shell(scenario: &str) -> Option<String> {
@@ -89,9 +118,11 @@ fn same_as_shell(scenario: &str) -> Option<String> {
         (Mode::Text, ""),
     ] {
         let args: &[&str] = if arg.is_empty() { &[] } else { &[arg] };
+        let r = rust(&fx, mode);
+        let s = shell(&fx, args);
         assert_eq!(
-            rust(&fx, mode),
-            shell(&fx, args),
+            (without_clock(&r.0), r.1),
+            (without_clock(&s.0), s.1),
             "{arg:?}, scenario:\n{scenario}"
         );
     }
@@ -126,15 +157,22 @@ fn the_goldens_byte_for_byte() {
     for (name, scenario) in cases {
         let fx = fx_or_skip!(scenario);
         let (t, rc) = rust(&fx, Mode::Tsv);
-        assert_eq!(t, golden(&format!("golden/{name}.tsv")), "{name}.tsv");
+        assert_eq!(
+            without_clock(&t),
+            without_clock(&golden(&format!("golden/{name}.tsv"))),
+            "{name}.tsv"
+        );
         assert_eq!(rc, if name == "problems" { 1 } else { 0 });
         assert_eq!(
-            rust(&fx, Mode::Text).0,
-            golden(&format!("golden/{name}.txt")),
+            without_clock(&rust(&fx, Mode::Text).0),
+            without_clock(&golden(&format!("golden/{name}.txt"))),
             "{name}.txt"
         );
         if name == "problems" {
-            assert_eq!(rust(&fx, Mode::Tsv2).0, golden("tsv2-sample.tsv"));
+            assert_eq!(
+                without_clock(&rust(&fx, Mode::Tsv2).0),
+                without_clock(&golden("tsv2-sample.tsv"))
+            );
         }
     }
 }
@@ -581,4 +619,54 @@ fn the_doctor_is_not_a_core_by_name() {
     })
     .join()
     .unwrap();
+}
+
+#[test]
+fn clock_row_requires_fresh_boot_bound_evidence_and_does_not_claim_sync_for_an_estimate() {
+    use luyaz_api::clock::{BootTime, ClockEvidence, ClockSource};
+    let mut fx = fx_or_skip!("");
+    let boot = fx.dir.join("clock-boot");
+    std::fs::write(&boot, "a\n").unwrap();
+    fx.env
+        .insert("DOC_BOOT_ID_FILE".into(), boot.to_str().unwrap().into());
+    let c = cfg(&fx);
+    let wall = digits(&sh_out(&c.date, &["+%s"], false)).unwrap() as i64;
+    let e = ClockEvidence::observation(
+        wall,
+        BootTime {
+            boot_id: "a".into(),
+            seconds: 1000,
+        },
+        Some(1000),
+        ClockSource::Year,
+    );
+    std::fs::write(&c.clock_ok, e.encode()).unwrap();
+    let r = clock(&c);
+    assert_eq!(r.level, "ok");
+    assert!(r.detail.contains("估算") && r.detail.contains("尚未验证同步"));
+    assert!(r.detail_en.contains("sync unverified"));
+    for (up, boot_id, raw_wall, reason) in [
+        (1181, "a", wall + 181, "过期"),
+        (1000, "b", wall, "另一次开机"),
+        (1060, "a", wall + 60 + 28_800, "跳变"),
+        (1060, "a", wall + 60 - 28_800, "跳变"),
+    ] {
+        std::fs::write(&c.uptime, format!("{up}.00 1.00\n")).unwrap();
+        std::fs::write(&boot, boot_id).unwrap();
+        std::fs::write(fx.dir.join("now"), raw_wall.to_string()).unwrap();
+        let r = clock(&c);
+        assert_eq!(r.level, "warn");
+        assert!(r.detail.contains(reason), "{r:?}");
+        assert!(r.detail.contains("暂缓发送"));
+    }
+    // A year and a future/stale/legacy 'trusted' record never act as a fallback.
+    std::fs::write(&c.uptime, "1000.00 1.00").unwrap();
+    std::fs::write(&boot, "a").unwrap();
+    std::fs::write(fx.dir.join("now"), wall.to_string()).unwrap();
+    for text in ["", "1 1790499000 990 year\n", "garbage"] {
+        std::fs::write(&c.clock_ok, text).unwrap();
+        assert_eq!(clock(&c).level, "warn");
+    }
+    std::fs::write(&c.uptime, "0.00 1.00").unwrap();
+    assert!(clock(&c).detail.contains("刚开机"));
 }

@@ -248,8 +248,29 @@ fn run_lpac(args: &[&str], timeout: Duration) -> Result<Value, String> {
 
 /// Lowest free logical channel on the card, read by opening and closing one
 /// (`qmi_uim_probe open` prints `[open] channel=N` on stderr).
-fn free_channel() -> Option<u8> {
+pub fn free_channel() -> Option<u8> {
     channel_of(&run_cmd(&format!("{QMI_PROBE} open 2>&1")))
+}
+
+/// What the deep diagnosis' channel check found (deep-diag-v2 Q1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelCheck {
+    Free(u8),
+    /// The modem refused to open one (qmi_error=68): every channel is taken.
+    Full,
+    /// An eSIM job holds the card: not checked.
+    Busy,
+    /// No probe deployed, or it said something else (not known to be an eUICC).
+    Unknown,
+}
+
+/// `qmi_uim_probe open`'s output → free / full (only on qmi_error=68) / unknown.
+pub fn channel_check_of(probe_out: &str) -> ChannelCheck {
+    match channel_of(probe_out) {
+        Some(c) => ChannelCheck::Free(c),
+        None if probe_out.contains("qmi_error=68") => ChannelCheck::Full,
+        None => ChannelCheck::Unknown,
+    }
 }
 
 fn channel_of(probe_out: &str) -> Option<u8> {
@@ -698,6 +719,31 @@ impl Esim {
     pub fn busy(&self) -> bool {
         self.running.load(Ordering::Relaxed)
     }
+    /// The deep diagnosis' check for a free logical channel (open + close one, no lpac). It
+    /// holds the job slot meanwhile, so no switch can start on the card under it, and never
+    /// runs while one is going.
+    pub fn channel_check(&self) -> ChannelCheck {
+        if !self.host.installed() || !self.host.exists(QMI_PROBE) {
+            return ChannelCheck::Unknown;
+        }
+        if self
+            .running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .is_err()
+        {
+            return ChannelCheck::Busy;
+        }
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // bounded: a hung probe would keep the job slot. The device's busybox has no
+            // `timeout` applet (10-18), so a background sleep kills it after 3 s.
+            self.host.sh(&format!(
+                "{QMI_PROBE} open 2>&1 & p=$!; (sleep 3; kill -9 $p 2>/dev/null) & k=$!; wait $p; kill $k 2>/dev/null"
+            ))
+        }))
+        .unwrap_or_default();
+        self.running.store(false, Ordering::SeqCst);
+        channel_check_of(&out)
+    }
     /// GET /api/esim/job
     pub fn job(&self) -> (u16, Value) {
         let j = self.job.lock().unwrap().clone();
@@ -1085,6 +1131,12 @@ mod tests {
         assert_eq!(channel_of(out), Some(2));
         assert_eq!(channel_of("[open] channel=3\n"), Some(3));
         assert_eq!(channel_of("[!] open channel rejected by modem (qmi_error=68)\n"), None);
+        assert_eq!(
+            channel_check_of("[!] open channel rejected by modem (qmi_error=68)\n"),
+            ChannelCheck::Full
+        );
+        assert_eq!(channel_check_of("[open] channel=3\n"), ChannelCheck::Free(3));
+        assert_eq!(channel_check_of("sh: qmi_uim_probe: not found\n"), ChannelCheck::Unknown);
         assert_eq!(channel_of("[open] channel=0\n"), None);
         assert_eq!(channel_of(""), None);
     }
@@ -1386,6 +1438,21 @@ mod tests {
         }
         fn wake(&self, _hold: bool) {}
         fn sleep(&self, _d: Duration) {}
+    }
+
+    #[test]
+    fn channel_check_holds_the_slot_and_never_runs_under_a_job() {
+        let fake = Arc::new(Fake::default());
+        let e = Esim::new(fake.clone());
+        // the fake's probe says nothing it knows: unknown, slot freed again
+        assert_eq!(e.channel_check(), ChannelCheck::Unknown);
+        assert!(!e.busy());
+        assert!(fake.state.lock().unwrap().log.iter().any(|l| l.contains("qmi_uim_probe open")));
+        e.running.store(true, Ordering::SeqCst);
+        let before = fake.state.lock().unwrap().log.len();
+        assert_eq!(e.channel_check(), ChannelCheck::Busy);
+        assert_eq!(fake.state.lock().unwrap().log.len(), before, "no probe under a job");
+        assert!(e.busy(), "the job's slot is left alone");
     }
 
     fn switch_with(f: Fake) -> (Value, Arc<Fake>) {

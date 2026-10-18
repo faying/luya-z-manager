@@ -15,16 +15,17 @@ use axum::{
     extract::{ConnectInfo, Request, State},
     response::Response,
 };
+use luyaz_api::diagnose::{BearerIn, EsimChannel, Gate, LinkProbe, SimIn, Sta};
+use luyaz_api::finding::NetworkEvidence;
+use luyaz_api::netinfo as ni;
+use luyaz_netwatch::diagnose::{Diagnosis, Host};
+use luyaz_netwatch::{ReadError, Watch, record};
+use luyaz_policy::apn_pick as ap;
 use serde_json::{Value, json};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use luyaz_api::diagnose::{Gate, LinkProbe, Sta};
-use luyaz_api::netinfo as ni;
-use luyaz_netwatch::diagnose::{Diagnosis, Host};
-use luyaz_netwatch::{ReadError, Watch, record};
-use luyaz_policy::apn_pick as ap;
 
 use super::{Compat, reply};
 
@@ -75,6 +76,10 @@ struct DiagHost {
     screen: Arc<Mutex<Option<Value>>>,
     mihomo: String,
     handle: tokio::runtime::Handle,
+    /// the Finding path's last observation (deep-diag-v2 §2.1)
+    findings: Arc<super::finding::Findings>,
+    /// the eSIM engine: its job slot guards the channel check
+    esim: Arc<luyaz_esim::Esim>,
 }
 
 impl DiagHost {
@@ -171,6 +176,106 @@ impl Host for DiagHost {
         luyaz_netwatch::diagnose::link_probe(dns)
     }
 
+    fn sim_inputs(&self) -> SimIn {
+        SimIn {
+            state: fresh(self.hub.as_ref(), "sim")
+                // modem_state ("modem_init_complete", "modem_waitpin", …) is what judge_sim
+                // reads; state is ZTE's sim_states ("sim ready"), the fallback
+                .and_then(|v| {
+                    [&v["modem_state"], &v["state"]]
+                        .into_iter()
+                        .find_map(|x| x.as_str().filter(|s| !s.is_empty()).map(str::to_string))
+                }),
+            channel: None,
+        }
+    }
+
+    fn esim_channel(&self) -> Option<EsimChannel> {
+        use luyaz_esim::ChannelCheck as C;
+        Some(match self.esim.channel_check() {
+            C::Free(n) => EsimChannel::Free(n),
+            C::Full => EsimChannel::Full,
+            C::Busy => EsimChannel::Busy,
+            C::Unknown => EsimChannel::Unknown,
+        })
+    }
+
+    fn bearer_inputs(&self, state: Option<&Value>) -> BearerIn {
+        use luyaz_netwatch::diagnose as nd;
+        let mut b = nd::bearer_base(state);
+        let read = |p: &str| std::fs::read_to_string(self.path(p)).ok();
+        let defaults = read("/proc/net/route").and_then(|t| nd::default_routes(&t));
+        b.default_route = defaults.as_ref().map(|d| !d.is_empty());
+        let rp = |i: &str| {
+            read(&format!("/proc/sys/net/ipv4/conf/{i}/rp_filter"))
+                .and_then(|t| t.trim().parse::<u8>().ok())
+        };
+        if luyaz_netwatch::finding::path::valid_interface(&b.iface) {
+            b.rp_filter = nd::rp_effective(rp("all"), rp(&b.iface));
+        }
+        let devices: Vec<String> = std::fs::read_dir(self.path("/sys/class/net"))
+            .map(|d| {
+                d.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        b.exits = nd::ways_out(&b.iface, &defaults.unwrap_or_default(), &devices);
+        b
+    }
+
+    fn path_probe(&self, state: Option<&Value>) -> NetworkEvidence {
+        use luyaz_netwatch::finding::path;
+        let paths = state.map(path::paths).unwrap_or_default();
+        let now = luyaz_api::clock::BootTime::read();
+        // the state was read just now (fresh blocks only): observed = now
+        path::observe(
+            &paths,
+            now.clone(),
+            now,
+            // Finding stays quiet while CHILL redirects (its verdict is about the clients' path);
+            // a diagnosis the owner asked for still asks the bound cellular path
+            false,
+            &path::BoundSockets,
+        )
+    }
+
+    fn fresh_network(&self) -> Option<NetworkEvidence> {
+        self.findings.fresh_network()
+    }
+
+    fn local_dns(&self) -> Option<luyaz_api::diagnose::LocalDns> {
+        Some(luyaz_netwatch::diagnose::local_dns_probe())
+    }
+
+    fn clock_skew(&self) -> Option<i64> {
+        // plain HTTP by address: no DNS, no TLS (a wrong clock is what breaks TLS)
+        const TARGETS: [&str; 2] = ["http://1.1.1.1/", "http://119.29.29.29/"];
+        let offset = self.handle.block_on(super::utc_offset());
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(3))
+            .build()
+            .ok()?;
+        TARGETS.iter().find_map(|url| {
+            let date = self.handle.block_on(async {
+                let r = http.get(*url).send().await.ok()?;
+                r.headers().get("date")?.to_str().ok().map(str::to_string)
+            })?;
+            let real = luyaz_api::diagnose::http_date_unix(&date)?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_secs() as i64;
+            Some(now - offset - real)
+        })
+    }
+
+    fn clock_status(&self) -> Option<luyaz_api::clock::EvidenceStatus> {
+        Some(crate::longterm::clock_now(&crate::evlog::boot_id()).clock_status)
+    }
+
     fn push_event(&self, kind: &str, data: Value) {
         self.watch
             .push_event(record::Event::new(luyaz_netwatch::now_unix(), kind, data));
@@ -191,6 +296,7 @@ impl Group {
         stations: Arc<dyn Fn() -> Vec<ni::Station> + Send + Sync>,
         gate: Arc<Mutex<Gate>>,
         #[allow(unused_variables)] mihomo: &str,
+        esim: Arc<luyaz_esim::Esim>,
     ) -> Group {
         let watch = Arc::new(Watch::new());
         let screen: Arc<Mutex<Option<Value>>> = Arc::default();
@@ -208,6 +314,8 @@ impl Group {
             mihomo: mihomo.to_string(),
             handle: tokio::runtime::Handle::try_current()
                 .unwrap_or_else(|_| fallback_runtime().handle().clone()),
+            findings: findings.clone(),
+            esim,
         };
         Group {
             diag: Diagnosis::new(Arc::new(host), gate.clone()),
@@ -260,26 +368,41 @@ pub async fn sample(c: Compat) {
         let screen = (c.src.screen)().await;
         *lock(&g.screen) = screen.clone();
         let now = luyaz_netwatch::now_unix();
-        let check = (owns(&c) && round.is_multiple_of(super::finding::EVERY_ROUNDS)).then(|| {
-            let iccid = fresh(c.src.hub.as_ref(), "sim")
-                .and_then(|v| v["iccid"].as_str().map(str::to_string))
-                .unwrap_or_default();
-            (state.clone(), screen.clone(), iccid)
-        });
+        // Observe every existing five-second tick, even while a blocking probe is running.
+        // Missing reads, a receive event, connection changes and sampling gaps reset the hold.
+        let readings = c
+            .src
+            .hub
+            .as_ref()
+            .and_then(|hub| super::finding::sampling::Readings::capture(hub));
+        let elapsed = luyaz_api::clock::BootTime::read();
+        g.findings
+            .sample_passive(readings.as_ref(), elapsed.as_ref());
+        let check = owns(&c) && round.is_multiple_of(super::finding::EVERY_ROUNDS);
         let w = g.watch.clone();
+        let tick_screen = screen.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            w.tick(now, state.ok_or(ReadError::NoWanStatus), screen.as_ref())
+            w.tick(
+                now,
+                state.ok_or(ReadError::NoWanStatus),
+                tick_screen.as_ref(),
+            )
         })
         .await;
         // apart from the sampler: the probes can take ~12 s while the link is stalled
-        if let Some((state, screen, iccid)) = check
-            && !g.finding_busy.swap(true, Ordering::SeqCst)
-        {
+        if check && !g.finding_busy.swap(true, Ordering::SeqCst) {
             let c2 = c.clone();
             tokio::task::spawn_blocking(move || {
                 let g = &c2.group;
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    finding_round(g, state, screen, iccid, now)
+                    finding_round(
+                        g,
+                        readings,
+                        screen,
+                        now,
+                        c2.root.to_string(),
+                        c2.src.hub.clone(),
+                    )
                 }));
                 g.finding_busy.store(false, Ordering::SeqCst);
             });
@@ -288,19 +411,49 @@ pub async fn sample(c: Compat) {
 }
 
 /// One finding check after the round's sample (blocking: the probes are plain sockets).
-fn finding_round(g: &Group, state: Option<Value>, screen: Option<Value>, iccid: String, now: u64) {
-    let passive_down = luyaz_netwatch::alive_without_probe(&g.watch.snapshot(), now) != Some(true);
+fn finding_round(
+    g: &Group,
+    readings: Option<super::finding::sampling::Readings>,
+    screen: Option<Value>,
+    now: u64,
+    root: String,
+    hub: Option<Arc<crate::block::Hub>>,
+) {
+    let elapsed = luyaz_api::clock::BootTime::read();
+    let (passive_down, held_down) = g
+        .findings
+        .passive_admission(readings.as_ref(), elapsed.as_ref());
+    let expected = readings.as_ref().map(|r| r.connection.clone());
+    let current_connection = Arc::new(move || {
+        expected
+            .as_ref()
+            .zip(hub.as_ref())
+            .and_then(|(expected, hub)| {
+                super::finding::sampling::Readings::capture(hub).map(|r| r.connection == *expected)
+            })
+            == Some(true)
+    });
+    let findings = g.findings.clone();
     let i = super::finding::Inputs {
-        state,
+        state: readings.as_ref().map(|r| r.state.clone()),
         screen,
-        iccid,
+        iccid: readings
+            .as_ref()
+            .map(|r| r.connection.iccid.clone())
+            .unwrap_or_default(),
         passive_down,
-        // the stations read only matters when it may probe
         clients: passive_down && !(g.stations)().is_empty(),
-        probe_due: g.findings.probe_due(now),
-        held_down: g.findings.held_down(passive_down, now),
+        probe_due: g.findings.probe_due(elapsed.as_ref()),
+        held_down,
         busy: busy(&g.net, &g.speed_running),
         probed: AtomicBool::new(false),
+        observed: readings.map(|r| r.observed),
+        root,
+        network: Mutex::new(None),
+        current_connection,
+        reserve_probe: Arc::new(move || {
+            findings.reserve_probe(luyaz_api::clock::BootTime::read().as_ref())
+        }),
     };
     g.findings.round(&i, &g.gate, &g.watch, now);
 }
@@ -338,6 +491,7 @@ pub async fn diagnose_get(State(c): State<Compat>) -> Response {
     // D6: the old fields as they are, plus the open finding (null when none)
     if let Some(d) = v.get_mut("data").and_then(Value::as_object_mut) {
         d.insert("finding".into(), c.group.findings.view());
+        d.insert("connectivity".into(), c.group.findings.network_view());
     }
     reply(s, v)
 }

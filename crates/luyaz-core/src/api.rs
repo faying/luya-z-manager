@@ -210,6 +210,7 @@ impl Compat {
         );
         let net: Arc<netinfo::NetCache> = Arc::default();
         let gate: Arc<std::sync::Mutex<luyaz_api::diagnose::Gate>> = Arc::default();
+        let esim = Arc::new(luyaz_esim::Esim::new(src.esim.clone()));
         let group = Arc::new(watch::Group::new(
             &root,
             src.hub.clone(),
@@ -218,12 +219,13 @@ impl Compat {
             src.stations.clone(),
             gate.clone(),
             &src.mihomo,
+            esim.clone(),
         ));
         let health = health::runner(&root);
         Compat {
             root: Arc::new(root),
             speed,
-            esim: Arc::new(luyaz_esim::Esim::new(src.esim.clone())),
+            esim,
             src: Arc::new(src),
             ts: Arc::default(),
             net,

@@ -105,6 +105,9 @@ impl<I: WorkerIo> ShadowWorker<I> {
 }
 
 impl<I: WorkerIo> WorkerIo for ShadowWorker<I> {
+    fn boot_time(&mut self) -> Option<luyaz_alerts::clock::BootTime> {
+        self.real.boot_time()
+    }
     fn uptime(&mut self) -> u64 {
         self.real.uptime()
     }
@@ -249,12 +252,14 @@ pub fn start_events() {
 
 // ── the screen thread ───────────────────────────────────────────────────────
 
-
 /// Make [`STATE_DIR`] (0700) before anything writes it (main, before the events thread, whose
 /// sequence file lives there). An existing one keeps its mode.
 pub fn state_dir_at_start() {
     use std::os::unix::fs::DirBuilderExt;
-    let _ = fs::DirBuilder::new().recursive(true).mode(0o700).create(STATE_DIR);
+    let _ = fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(STATE_DIR);
 }
 
 pub fn load_persist() -> Persist {
@@ -631,7 +636,10 @@ pub fn screen_thread(shadow: bool, worker_round: Arc<AtomicI64>, sig: Option<Own
         }
         // The new FIFO only (R4 round ③); a stale old one from round ① is removed.
         let _ = fs::remove_file("/tmp/u60-uid.ctl");
-        rt.ctl = screen::CTL_FIFOS.iter().filter_map(|p| sys::ctl_open(p)).collect();
+        rt.ctl = screen::CTL_FIFOS
+            .iter()
+            .filter_map(|p| sys::ctl_open(p))
+            .collect();
     }
     let (mut s, acts) = Screen::new(sys::mono_ms(), sys::find_ui());
     rt.exec(&mut s, acts);
@@ -741,11 +749,7 @@ pub fn screen_thread(shadow: bool, worker_round: Arc<AtomicI64>, sig: Option<Own
             now_ms: now,
             persist: load_persist(),
             ui_exit: ui_exit.take(),
-            found_devui: if s.wants_scan() {
-                sys::find_ui()
-            } else {
-                None
-            },
+            found_devui: if s.wants_scan() { sys::find_ui() } else { None },
             vendor_alive: sys::find_comm(VENDOR_COMM).is_some(),
             card0_held: s.needs_card0() && sys::held_open(DRM_DEV),
             cmds,

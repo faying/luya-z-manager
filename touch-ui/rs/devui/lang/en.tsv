@@ -440,6 +440,11 @@ tailscale|节点	Peers
 后台没回应	Agent not responding
 固定位置时用摆放模式 ›	Use Placement if staying put ›
 基站负载	Cell load
+数据连接	Data connection
+域名解析	DNS
+外网	Internet
+设备时间	Device clock
+没测	Not checked
 对	Right
 对比	Compared
 已发送…	Sent…

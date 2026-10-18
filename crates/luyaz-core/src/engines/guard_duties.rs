@@ -16,9 +16,9 @@
 //! - `datad`: the guard's `datad-degraded` alert is not carried over (§3 G5: the health protocol
 //!   replaces it); naming it only stops the guard's round.
 
+use luyaz_api::alerts::{Alerts, sms};
 use serde_json::{Value, json};
 use std::time::Duration;
-use luyaz_api::alerts::{Alerts, sms};
 
 use crate::api::Compat;
 
@@ -140,7 +140,16 @@ impl sms::SmsIo for Host {
         r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
     fn clock_ok(&mut self) -> bool {
-        self.read(CLOCK_OK).split_whitespace().next() == Some("1")
+        let at = luyaz_api::clock::BootTime::from_uptime(
+            &self.read(BOOT_ID),
+            &self.read("/proc/uptime"),
+        );
+        luyaz_api::clock::evidence_status(
+            &self.read(CLOCK_OK),
+            at.as_ref(),
+            luyaz_api::alerts::now(),
+        )
+        .wall_usable()
     }
     fn lang_en(&mut self) -> bool {
         sms::lang_en(&self.read(DEVUI_CONF))
@@ -152,8 +161,8 @@ impl sms::SmsIo for Host {
         sms::tz_hours(&v)
     }
     fn send(&mut self, args: &Value) -> Result<(), sms::SendError> {
-        use sms::SendError::{NotSent, Rejected};
         use luyaz_api::control::Reply;
+        use sms::SendError::{NotSent, Rejected};
         let reply = self.handle.block_on(self.c.src.control.send_with(
             "guard",
             None,
@@ -200,5 +209,60 @@ impl sms::SmsIo for Host {
     }
     fn log(&mut self, msg: &str) {
         eprintln!("[compat] alert {msg}");
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+    use luyaz_api::clock::{BootTime, ClockEvidence, ClockSource};
+    use sms::SmsIo;
+
+    #[tokio::test]
+    async fn sms_host_checks_the_same_freshness_boot_and_step_rules_as_the_ledger() {
+        let root = std::env::temp_dir().join(format!("sms-clock-evidence-{}", std::process::id()));
+        let c = Compat::new(root.to_str().unwrap(), crate::api::Sources::none());
+        let mut h = Host {
+            c,
+            handle: tokio::runtime::Handle::current(),
+        };
+        let put = |p: &str, value: &str| {
+            let path = root.join(p.trim_start_matches('/'));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, value).unwrap();
+        };
+        let wall = luyaz_api::alerts::now();
+        put(BOOT_ID, "a\n");
+        put("/proc/uptime", "1000.00 1.00\n");
+        let e = ClockEvidence::observation(
+            wall,
+            BootTime {
+                boot_id: "a".into(),
+                seconds: 1000,
+            },
+            Some(1000),
+            ClockSource::Year,
+        );
+        put(CLOCK_OK, &e.encode());
+        assert!(h.clock_ok());
+        for step in [-28_800, 28_800] {
+            let mut stepped = e.clone();
+            stepped.raw_wall += step;
+            put(CLOCK_OK, &stepped.encode());
+            assert!(!h.clock_ok());
+        }
+        put(CLOCK_OK, &e.encode());
+        put(BOOT_ID, "b\n");
+        assert!(!h.clock_ok());
+        put(BOOT_ID, "a\n");
+        put("/proc/uptime", "1181.00 1.00\n");
+        assert!(!h.clock_ok());
+        put("/proc/uptime", "1000.00 1.00\n");
+        put(CLOCK_OK, "1 1790000000 1000 year\n");
+        assert!(!h.clock_ok());
+        std::fs::remove_file(root.join("proc/uptime")).unwrap();
+        put(CLOCK_OK, &e.encode());
+        assert!(!h.clock_ok());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

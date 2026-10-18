@@ -219,9 +219,13 @@ fn corner_box_and_comm_prefix() {
     assert!(!in_corner_box(255, 479) && !in_corner_box(319, 415));
     assert!(!is_devui_comm("zte_topsw_devui") && !is_devui_comm("luyaz-sentinel"));
     // Phase 10 R5: luyaz-ui and its side-by-side build; the old name no longer (round ③)
-    assert!(is_devui_comm("luyaz-ui") && is_devui_comm("luyaz-ui.test") && is_devui_comm("luyaz-ui.te"));
+    assert!(
+        is_devui_comm("luyaz-ui") && is_devui_comm("luyaz-ui.test") && is_devui_comm("luyaz-ui.te")
+    );
     assert!(!is_devui_comm("u60pro-devui") && !is_devui_comm("u60pro-devui.te"));
-    assert!(!is_devui_comm("luyaz-core") && !is_devui_comm("luyaz-web") && !is_devui_comm("luyaz-u"));
+    assert!(
+        !is_devui_comm("luyaz-core") && !is_devui_comm("luyaz-web") && !is_devui_comm("luyaz-u")
+    );
 }
 
 #[test]
@@ -236,7 +240,11 @@ fn both_fifos_listened_to() {
 fn ui_path_new_when_there_else_old() {
     use crate::run::*;
     assert_eq!(pick_ui(true), ("/data/luyaz/ui/luyaz-ui", "/data/luyaz/ui"));
-    assert_eq!(pick_ui(false), ("/data/luyaz/ui/luyaz-ui", "/data/luyaz/ui"), "round ③: never the old one");
+    assert_eq!(
+        pick_ui(false),
+        ("/data/luyaz/ui/luyaz-ui", "/data/luyaz/ui"),
+        "round ③: never the old one"
+    );
 }
 
 #[test]
@@ -523,9 +531,10 @@ fn log_wording_is_u60_uids() {
     let pid = w.devui.unwrap();
     w.crash(w_sig(11));
     w.run(&mut s, 5000);
-    assert!(w.logs.contains(&format!(
-        "luyaz-ui pid {pid} ended: killed by signal 11"
-    )));
+    assert!(
+        w.logs
+            .contains(&format!("luyaz-ui pid {pid} ended: killed by signal 11"))
+    );
     w.step_with(&mut s, vec![Cmd::Vendor], false);
     w.run(&mut s, 7000);
     assert!(w.logs.contains(&"request: vendor UI".to_string()));
@@ -725,6 +734,7 @@ impl Dev {
     fn new() -> Dev {
         Dev {
             wall: 1_790_000_000,
+            files: HashMap::from([("/proc/sys/kernel/random/boot_id".into(), "boot-a".into())]),
             dropbear: true,
             ..Default::default()
         }
@@ -739,6 +749,17 @@ impl Dev {
 }
 
 impl WorkerIo for Dev {
+    fn boot_time(&mut self) -> Option<luyaz_alerts::clock::BootTime> {
+        let boot_id = self
+            .files
+            .get("/proc/sys/kernel/random/boot_id")?
+            .trim()
+            .to_owned();
+        (!boot_id.is_empty()).then_some(luyaz_alerts::clock::BootTime {
+            boot_id,
+            seconds: self.up,
+        })
+    }
     fn uptime(&mut self) -> u64 {
         self.up
     }
@@ -849,7 +870,10 @@ fn wk() -> Worker {
 
 fn marker(d: &Dev) -> Option<&String> {
     let m = d.files.get("/tmp/luyaz/wifiguard.took-over");
-    assert!(!d.files.contains_key("/tmp/u60-wifiguard.took-over"), "the old name is not written");
+    assert!(
+        !d.files.contains_key("/tmp/u60-wifiguard.took-over"),
+        "the old name is not written"
+    );
     m
 }
 
@@ -1105,7 +1129,7 @@ fn guard_clock_trust() {
     assert_eq!(
         clock_ok(&d),
         "1 jump",
-        "NTP sets the clock (offset leaps a day+): trusted by the jump"
+        "forward leap after the unset clock: estimated, not proof of NTP"
     );
 
     let (mut w, mut d) = (wk(), Dev::new());
@@ -1114,7 +1138,7 @@ fn guard_clock_trust() {
     assert_eq!(
         clock_ok(&d),
         "1 year",
-        "first deployment, 2026, no last trusted clock: trusted by the year"
+        "first deployment, plausible year: estimated only"
     );
 
     let (mut w, mut d) = (wk(), Dev::new());
@@ -1135,7 +1159,11 @@ fn guard_clock_trust() {
         format!("{}\n", now - 3600),
     );
     w.round(&mut d);
-    assert_eq!(clock_ok(&d), "1 last_wall", "not earlier than it: trusted");
+    assert_eq!(
+        clock_ok(&d),
+        "1 last_wall",
+        "not earlier than it: estimated only"
+    );
     d.up = 1060;
     d.wall = now - 2 * 86_400;
     w.round(&mut d);
@@ -1147,7 +1175,7 @@ fn guard_clock_trust() {
 }
 
 #[test]
-fn trusted_wall_clock_kept_on_flash_hourly() {
+fn wall_estimate_kept_on_flash_hourly() {
     let wl = "/data/ledger/state/wall.last";
     let (mut w, mut d) = (wk(), Dev::new());
     d.up = 1000;
@@ -1157,11 +1185,13 @@ fn trusted_wall_clock_kept_on_flash_hourly() {
     assert_eq!(
         d.files[wl],
         format!("{now}\n"),
-        "trusted by the year: written"
+        "estimated by the year: history written"
     );
+    d.up += 3599;
     d.wall = now + 3599;
     w.clock_round(&mut d);
     assert_eq!(d.files[wl], format!("{now}\n"), "not within the hour");
+    d.up += 1;
     d.wall = now + 3600;
     w.clock_round(&mut d);
     assert_eq!(d.files[wl], format!("{}\n", now + 3600));
@@ -1174,8 +1204,10 @@ fn trusted_wall_clock_kept_on_flash_hourly() {
 
 fn ship_dev() -> Dev {
     let mut d = Dev::new();
-    d.files
-        .insert("/data/luyaz/scripts/luyaz-ship.sh".into(), "#!/bin/sh\n".into());
+    d.files.insert(
+        "/data/luyaz/scripts/luyaz-ship.sh".into(),
+        "#!/bin/sh\n".into(),
+    );
     d.up = 2000;
     d.hb(1995);
     d
@@ -1561,13 +1593,22 @@ fn power_off_charging_keeps_the_worker_idle() {
     assert_eq!((d.changes, d.restores, d.sms_rounds), (0, 0, 0));
     assert_eq!(d.files[&rec], "disabled\n", "modem recovery left alone");
     assert!(d.alerts.is_empty());
-    assert_eq!(d.logs.iter().filter(|l| l.contains("power-off charging")).count(), 1);
+    assert_eq!(
+        d.logs
+            .iter()
+            .filter(|l| l.contains("power-off charging"))
+            .count(),
+        1
+    );
 }
 
 #[test]
 fn boot_modes_as_the_guard_reads_them() {
     use crate::sys::boot_mode_normal;
-    assert!(!boot_mode_normal("mode_power_off_charger", "silent_boot.mode=nonsilent"));
+    assert!(!boot_mode_normal(
+        "mode_power_off_charger",
+        "silent_boot.mode=nonsilent"
+    ));
     assert!(boot_mode_normal("mode_power_on", ""));
     assert!(boot_mode_normal("mode_power_on_charger", ""));
     assert!(boot_mode_normal("", "x silent_boot.mode=nonsilent y"));
@@ -2113,7 +2154,10 @@ fn the_new_tmp_tree_is_marked_live_only_after_its_files_are_in_place() {
     w.migrated_round(&mut d);
     assert_eq!(d.files.get(MARK).map(String::as_str), Some(""));
     assert_eq!(d.files["/tmp/luyaz/handover"], CORE_DUTIES);
-    assert!(!d.files.keys().any(|k| k.starts_with("/tmp/u60-guard")), "old tree untouched");
+    assert!(
+        !d.files.keys().any(|k| k.starts_with("/tmp/u60-guard")),
+        "old tree untouched"
+    );
     let logs = d.logs.len();
     w.migrated_round(&mut d);
     assert_eq!(d.logs.len(), logs, "written once");
@@ -2126,4 +2170,77 @@ fn a_whole_round_leaves_the_mark_even_with_proc_unreadable() {
     w.round(&mut d);
     assert!(d.files.contains_key("/tmp/luyaz/clock-ok"));
     assert!(d.files.contains_key("/tmp/luyaz/.migrated"));
+}
+
+#[test]
+fn clock_steps_are_latched_across_sentinel_restart_until_original_offset_returns() {
+    use luyaz_alerts::clock::{ClockEvidence, EvidenceStatus, SyncState};
+    for step in [-28_800, 28_800] {
+        let (mut w, mut d) = (wk(), Dev::new());
+        d.up = 1000;
+        let original = d.wall;
+        w.round(&mut d);
+        let e = ClockEvidence::decode(&d.files["/tmp/luyaz/clock-ok"]).unwrap();
+        assert_eq!(e.sync_state, SyncState::Estimated);
+        assert!(e.utc_estimate.is_none());
+        d.up += 60;
+        d.wall += 60 + step;
+        w.round(&mut d);
+        assert_eq!(clock_ok(&d), "0 revoked");
+        let mut restarted = wk();
+        restarted.load(&mut d);
+        d.up += 60;
+        d.wall += 60;
+        restarted.round(&mut d);
+        assert_eq!(
+            clock_ok(&d),
+            "0 revoked",
+            "a plausible year cannot clear the step"
+        );
+        // Deliberately restore only the fake wall snapshot, never the host/device clock.
+        d.up += 60;
+        d.wall = original + 180;
+        restarted.round(&mut d);
+        let e = ClockEvidence::decode(&d.files["/tmp/luyaz/clock-ok"]).unwrap();
+        assert_eq!(
+            e.status(d.boot_time().as_ref(), d.wall),
+            EvidenceStatus::Estimated
+        );
+    }
+}
+
+#[test]
+fn clock_unknown_boot_and_device_reboot_cannot_reuse_old_observation() {
+    use luyaz_alerts::clock::{ClockEvidence, EvidenceStatus};
+    let (mut w, mut d) = (wk(), Dev::new());
+    w.round(&mut d); // zero boot seconds are valid
+    let old = ClockEvidence::decode(&d.files["/tmp/luyaz/clock-ok"]).unwrap();
+    d.files.remove("/proc/sys/kernel/random/boot_id");
+    w.clock_round(&mut d);
+    assert!(ClockEvidence::decode(&d.files["/tmp/luyaz/clock-ok"]).is_none());
+    d.files
+        .insert("/proc/sys/kernel/random/boot_id".into(), "boot-b".into());
+    d.up = 0;
+    assert_eq!(
+        old.status(d.boot_time().as_ref(), d.wall),
+        EvidenceStatus::BootMismatch
+    );
+    w.round(&mut d);
+    let e = ClockEvidence::decode(&d.files["/tmp/luyaz/clock-ok"]).unwrap();
+    assert_eq!(e.observed_at.boot_id, "boot-b");
+    assert_eq!(e.sync_state, luyaz_alerts::clock::SyncState::Estimated);
+}
+
+#[test]
+fn clock_suspend_advances_boot_time_without_looking_like_a_step() {
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 1000;
+    d.mono = 1000;
+    w.clock_round(&mut d);
+    d.up += 7200;
+    d.wall += 7200;
+    // MONOTONIC intentionally does not advance across this fake sleep.
+    w.clock_round(&mut d);
+    assert_eq!(clock_ok(&d), "1 continuity");
+    assert_eq!(w.clock.last.unwrap().monotonic, Some(1000));
 }

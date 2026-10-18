@@ -4,12 +4,15 @@
 //!   两层；别的动作、`op.keep`/`op.revert` 这类对进行中事务的操作一律拒绝。按**有效**批准者判断
 //!   （`source=mcp` 不带 `approved_by` 也算 mcp，O1）。取代第一期 T1「一律拒绝 approved_by=mcp」。
 //! - 按层限速（D5）：每层 30 分钟一次，只限 Agent；退回不经这里，不算次数。落盘在 ops 目录的
-//!   `agent-limit.json`（Unix 秒），重启不清零；落不了盘就不放行（O6）。一次操作要几步写时（`apn_use`
+//!   `agent-limit.json` 保留显示用 Unix 秒，`agent-limit-clock.json` 记 boot_id + CLOCK_BOOTTIME；
+//!   同次开机重启核心不清零，跨开机/旧档首次写先保守等 30 分钟；任一档落不了盘就不放行（O6）。
+//!   一次操作要几步写时（`apn_use`
 //!   的候选 APN：先复制成手动、再切过去）拿一张票（[`Ticket`]），后面几步带着票不再计数。
 //! - 敏感（D6、O9）：只看 APN 层。漫游中、且这张卡没被人标成「漫游不算贵」→ 敏感，只给网页地址；
 //!   漫游状态或卡号读不到也算敏感。按卡设置存在 ops 目录的 `roam-cheap.json`，只有人能改（网页）。
 //!   判定时读到的卡号交给事务（`Request::expect_iccid`），写之前再核对一次。
 
+use luyaz_api::clock::BootTime;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -22,6 +25,9 @@ use std::{
 /// 每层多久一次（D5）。
 pub const LIMIT_SECS: u64 = 30 * 60;
 const LIMIT_FILE: &str = "agent-limit.json";
+// Keep the old flat wall-time file readable by previous binaries. This companion is paired
+// with each wall timestamp; missing/mismatched evidence gets a bounded conservative hold.
+const LIMIT_CLOCK_FILE: &str = "agent-limit-clock.json";
 const CHEAP_FILE: &str = "roam-cheap.json";
 /// 票只在这次操作里用：几步写最多这么久。
 const TICKET_SECS: u64 = 10 * 60;
@@ -69,6 +75,8 @@ pub enum Refusal {
     Sensitive(String),
     /// 落不了盘（O6）。
     Store(String),
+    /// 无法安全计算期限，拒绝自动写。
+    Clock,
     /// 现在做不了（别的 CHILL 工作在跑、说不清 CHILL 通不通）：过一会再试。
     Busy(String),
     /// CHILL 没在跑（mihomo 不答话）：等人打开，不是过一会再试。
@@ -88,11 +96,17 @@ impl Refusal {
             Self::Limited { next_unix } => (
                 429,
                 "rate_limited",
-                "the agent changed this layer less than 30 minutes ago".into(),
+                "the 30-minute agent cooldown for this layer has not expired".into(),
                 json!({"next_unix": next_unix, "retry_after_s": next_unix.saturating_sub(now_unix)}),
             ),
             Self::Sensitive(why) => (403, "sensitive", why.clone(), json!({"page": "apn"})),
             Self::Store(why) => (503, "store_failed", why.clone(), json!({})),
+            Self::Clock => (
+                503,
+                "clock_unavailable",
+                "cannot read the boot clock; ask the owner".into(),
+                json!({}),
+            ),
             Self::Busy(why) => (409, "busy", why.clone(), json!({})),
             Self::Off(why) => (409, "chill_off", why.clone(), json!({})),
         }
@@ -109,9 +123,11 @@ pub struct Ticket {
     /// 这次占位之前的那次（还回去时恢复）。
     prev: Option<u64>,
     at: u64,
+    elapsed: BootTime,
+    prev_clock: Option<LimitClock>,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct Limits {
     #[serde(flatten)]
     last: BTreeMap<String, u64>,
@@ -123,9 +139,24 @@ struct Cheap {
     cheap: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct LimitClock {
+    wall: u64,
+    at: BootTime,
+}
+
+type LimitClocks = BTreeMap<String, LimitClock>;
+
+#[derive(Default)]
+struct GateState {
+    tickets: Vec<Ticket>,
+    limits: Limits,
+    clocks: LimitClocks,
+}
+
 pub struct Gate {
     dir: Option<PathBuf>,
-    st: Mutex<Vec<Ticket>>,
+    st: Mutex<GateState>,
 }
 
 /// 卡号的规范写法（按卡设置用）：去空白、去结尾的 F。
@@ -149,102 +180,213 @@ impl Gate {
     pub fn open(dir: Option<PathBuf>) -> Self {
         Self {
             dir,
-            st: Mutex::new(Vec::new()),
+            st: Mutex::new(GateState::default()),
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Ticket>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, GateState> {
         self.st.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn load(&self) -> Limits {
-        self.dir
-            .as_ref()
-            .and_then(|d| fs::read(d.join(LIMIT_FILE)).ok())
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+    fn read<T: serde::de::DeserializeOwned + Default>(&self, file: &str) -> Result<T, String> {
+        let path = self.dir.as_ref().expect("persistent gate").join(file);
+        match fs::read(&path) {
+            Ok(b) => serde_json::from_slice(&b).map_err(|e| format!("cannot read {file}: {e}")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+            Err(e) => Err(format!("cannot read {file}: {e}")),
+        }
     }
 
-    fn save(&self, l: &Limits) -> Result<(), String> {
-        let Some(dir) = &self.dir else { return Ok(()) };
-        fs::create_dir_all(dir)
-            .and_then(|()| {
-                super::pending::write_atomic(
-                    dir,
-                    LIMIT_FILE,
-                    &serde_json::to_vec(l).expect("limits serialize"),
-                )
-            })
-            .map_err(|e| format!("cannot save {LIMIT_FILE}: {e}"))
+    fn load(&self, state: &GateState) -> Result<(Limits, LimitClocks), String> {
+        if self.dir.is_none() {
+            return Ok((state.limits.clone(), state.clocks.clone()));
+        }
+        Ok((self.read(LIMIT_FILE)?, self.read(LIMIT_CLOCK_FILE)?))
     }
 
-    /// 这一层上次是什么时候（给读的界面）。
+    fn save(&self, state: &mut GateState, l: &Limits, clocks: &LimitClocks) -> Result<(), String> {
+        if let Some(dir) = &self.dir {
+            fs::create_dir_all(dir).map_err(|e| format!("cannot save agent limits: {e}"))?;
+            // A partial save consumes a slot rather than authorising a write. A companion
+            // timestamp only applies if its wall timestamp matches the old-format file.
+            for (file, bytes) in [
+                (LIMIT_FILE, serde_json::to_vec(l).expect("limits serialize")),
+                (
+                    LIMIT_CLOCK_FILE,
+                    serde_json::to_vec(clocks).expect("clocks serialize"),
+                ),
+            ] {
+                super::pending::write_atomic(dir, file, &bytes)
+                    .map_err(|e| format!("cannot save {file}: {e}"))?;
+            }
+        }
+        state.limits = l.clone();
+        state.clocks = clocks.clone();
+        Ok(())
+    }
+
+    /// Last wall timestamp for display only; it does not decide the deadline.
     pub fn last(&self, layer: Layer) -> Option<u64> {
-        self.load().last.get(layer.as_str()).copied()
+        self.load(&self.lock())
+            .ok()?
+            .0
+            .last
+            .get(layer.as_str())
+            .copied()
     }
 
-    /// 占这一层的位：30 分钟内做过就回下次时刻；先落盘成功再回票（O6）。
-    /// 时钟往回跳了（上次的时刻在一个窗口以后）不算数。
+    /// Thirty elapsed minutes per layer, including suspend. Core restarts in the same boot
+    /// reuse the saved boot clock. Legacy/unpaired/previous-boot records wait one full window
+    /// from the first attempted write; save that anchor so another core restart cannot reset it.
     pub fn reserve(
         &self,
         layer: Layer,
         iccid: Option<String>,
         now: u64,
     ) -> Result<Ticket, Refusal> {
-        let mut tickets = self.lock();
-        tickets.retain(|t| now.saturating_sub(t.at) < TICKET_SECS);
-        let mut l = self.load();
-        let prev = l.last.get(layer.as_str()).copied();
-        if let Some(at) = prev
-            && at <= now + LIMIT_SECS
-            && now < at + LIMIT_SECS
+        self.reserve_at(layer, iccid, now, BootTime::read().as_ref())
+    }
+
+    fn reserve_at(
+        &self,
+        layer: Layer,
+        iccid: Option<String>,
+        now: u64,
+        elapsed: Option<&BootTime>,
+    ) -> Result<Ticket, Refusal> {
+        let elapsed = elapsed
+            .filter(|t| !t.boot_id.is_empty())
+            .ok_or(Refusal::Clock)?;
+        let mut state = self.lock();
+        state.tickets.retain(|t| {
+            elapsed
+                .elapsed_since(&t.elapsed)
+                .is_some_and(|s| s < TICKET_SECS)
+        });
+        let (mut l, mut clocks) = self.load(&state).map_err(Refusal::Store)?;
+        let key = layer.as_str();
+        let prev_clock = clocks.get(key).cloned();
+        // A missing legacy file/key must not erase a still-present elapsed record.
+        if !l.last.contains_key(key)
+            && let Some(c) = &prev_clock
         {
-            return Err(Refusal::Limited {
-                next_unix: at + LIMIT_SECS,
-            });
+            l.last.insert(key.into(), c.wall);
         }
-        l.last.insert(layer.as_str().into(), now);
-        self.save(&l).map_err(Refusal::Store)?;
+        let prev = l.last.get(key).copied();
+        if let Some(wall) = prev {
+            let valid = prev_clock
+                .as_ref()
+                .filter(|c| c.wall == wall)
+                .and_then(|c| elapsed.elapsed_since(&c.at));
+            let age = match valid {
+                Some(age) => age,
+                None => {
+                    clocks.insert(
+                        key.into(),
+                        LimitClock {
+                            wall,
+                            at: elapsed.clone(),
+                        },
+                    );
+                    self.save(&mut state, &l, &clocks).map_err(Refusal::Store)?;
+                    0
+                }
+            };
+            if age < LIMIT_SECS {
+                return Err(Refusal::Limited {
+                    next_unix: now.saturating_add(LIMIT_SECS - age),
+                });
+            }
+        }
+        l.last.insert(key.into(), now);
+        clocks.insert(
+            key.into(),
+            LimitClock {
+                wall: now,
+                at: elapsed.clone(),
+            },
+        );
+        self.save(&mut state, &l, &clocks).map_err(Refusal::Store)?;
         let t = Ticket {
             id: format!("{:016x}", rand::random::<u64>()),
             layer,
             iccid,
             prev,
             at: now,
+            elapsed: elapsed.clone(),
+            prev_clock,
         };
-        tickets.push(t.clone());
+        state.tickets.push(t.clone());
         Ok(t)
     }
 
-    /// 带着票的后续一步：票还在、层对得上就放行（不再计数）。
-    pub fn redeem(&self, id: &str, layer: Layer, now: u64) -> Option<Ticket> {
-        let tickets = self.lock();
-        tickets
+    pub fn redeem(&self, id: &str, layer: Layer, _now: u64) -> Option<Ticket> {
+        self.redeem_at(id, layer, BootTime::read().as_ref())
+    }
+
+    fn redeem_at(&self, id: &str, layer: Layer, elapsed: Option<&BootTime>) -> Option<Ticket> {
+        let elapsed = elapsed?;
+        self.lock()
+            .tickets
             .iter()
-            .find(|t| t.id == id && t.layer == layer && now.saturating_sub(t.at) < TICKET_SECS)
+            .find(|t| {
+                t.id == id
+                    && t.layer == layer
+                    && elapsed
+                        .elapsed_since(&t.elapsed)
+                        .is_some_and(|s| s < TICKET_SECS)
+            })
             .cloned()
     }
 
-    /// 没动设备（忙、被拒绝、参数错）：位置还回去。只在这层的记录还是这张票的时候还。
+    /// Nothing changed: restore both timestamps, only while this ticket still owns the slot.
     pub fn release(&self, t: &Ticket) {
-        let mut tickets = self.lock();
-        tickets.retain(|x| x.id != t.id);
-        let mut l = self.load();
-        if l.last.get(t.layer.as_str()) != Some(&t.at) {
+        let mut state = self.lock();
+        // A repeated release must not clear a replacement reserved in the same clock second.
+        if !state.tickets.iter().any(|x| x.id == t.id) {
+            return;
+        }
+        state.tickets.retain(|x| x.id != t.id);
+        let (mut l, mut clocks) = match self.load(&state) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("ops: agent gate: {e}");
+                return;
+            }
+        };
+        let key = t.layer.as_str();
+        if l.last.get(key) != Some(&t.at)
+            || clocks.get(key)
+                != Some(&LimitClock {
+                    wall: t.at,
+                    at: t.elapsed.clone(),
+                })
+        {
             return;
         }
         match t.prev {
-            Some(p) => l.last.insert(t.layer.as_str().into(), p),
-            None => l.last.remove(t.layer.as_str()),
-        };
-        if let Err(e) = self.save(&l) {
+            Some(p) => {
+                l.last.insert(key.into(), p);
+            }
+            None => {
+                l.last.remove(key);
+            }
+        }
+        match &t.prev_clock {
+            Some(p) => {
+                clocks.insert(key.into(), p.clone());
+            }
+            None => {
+                clocks.remove(key);
+            }
+        }
+        if let Err(e) = self.save(&mut state, &l, &clocks) {
             eprintln!("ops: agent gate: {e}");
         }
     }
 
-    /// 做完了：票作废（之后的写重新计数）。
     pub fn done(&self, t: &Ticket) {
-        self.lock().retain(|x| x.id != t.id);
+        self.lock().tickets.retain(|x| x.id != t.id);
     }
 
     /// 人标成「漫游不算贵」的卡（规范写法）。
@@ -365,6 +507,25 @@ pub fn now_unix() -> u64 {
 mod tests {
     use super::*;
 
+    fn boot(seconds: u64) -> BootTime {
+        BootTime {
+            boot_id: "boot-a".into(),
+            seconds,
+        }
+    }
+
+    fn open(dir: Option<PathBuf>) -> Gate {
+        Gate::open(dir)
+    }
+
+    fn reserve(g: &Gate, layer: Layer, now: u64) -> Result<Ticket, Refusal> {
+        g.reserve_at(layer, None, now, Some(&boot(now)))
+    }
+
+    fn redeem(g: &Gate, id: &str, layer: Layer, now: u64) -> Option<Ticket> {
+        g.redeem_at(id, layer, Some(&boot(now)))
+    }
+
     fn dir() -> PathBuf {
         let d = std::env::temp_dir().join(format!("agent-gate-{:016x}", rand::random::<u64>()));
         fs::create_dir_all(&d).unwrap();
@@ -406,60 +567,219 @@ mod tests {
     #[test]
     fn one_per_layer_per_half_hour_and_it_survives_a_restart() {
         let d = dir();
-        let g = Gate::open(Some(d.clone()));
-        let t = g.reserve(Layer::Apn, None, 1_000).unwrap();
+        let g = open(Some(d.clone()));
+        let t = reserve(&g, Layer::Apn, 1_000).unwrap();
         assert_eq!(
-            g.reserve(Layer::Apn, None, 1_500),
+            reserve(&g, Layer::Apn, 1_500),
             Err(Refusal::Limited {
                 next_unix: 1_000 + LIMIT_SECS
             })
         );
         // 另一层不受影响
-        g.reserve(Layer::Chill, None, 1_500).unwrap();
+        reserve(&g, Layer::Chill, 1_500).unwrap();
         // 重启不清零
-        let g2 = Gate::open(Some(d.clone()));
+        let g2 = open(Some(d.clone()));
         assert!(matches!(
-            g2.reserve(Layer::Apn, None, 2_000),
+            reserve(&g2, Layer::Apn, 2_000),
             Err(Refusal::Limited { .. })
         ));
         // 票带着走几步
         assert_eq!(
-            g.redeem(&t.id, Layer::Apn, 1_100).map(|x| x.id),
+            redeem(&g, &t.id, Layer::Apn, 1_100).map(|x| x.id),
             Some(t.id.clone())
         );
-        assert!(g.redeem(&t.id, Layer::Chill, 1_100).is_none());
-        assert!(g.redeem("nope", Layer::Apn, 1_100).is_none());
+        assert!(redeem(&g, &t.id, Layer::Chill, 1_100).is_none());
+        assert!(redeem(&g, "nope", Layer::Apn, 1_100).is_none());
         // 30 分钟后又可以
-        g2.reserve(Layer::Apn, None, 1_000 + LIMIT_SECS).unwrap();
+        reserve(&g2, Layer::Apn, 1_000 + LIMIT_SECS).unwrap();
     }
 
     #[test]
     fn released_ticket_gives_the_slot_back() {
-        let g = Gate::open(Some(dir()));
-        g.reserve(Layer::Apn, None, 100).unwrap();
-        let t = g.reserve(Layer::Apn, None, 100 + LIMIT_SECS).unwrap();
+        let g = open(Some(dir()));
+        reserve(&g, Layer::Apn, 100).unwrap();
+        let t = reserve(&g, Layer::Apn, 100 + LIMIT_SECS).unwrap();
         g.release(&t);
         assert_eq!(g.last(Layer::Apn), Some(100));
-        assert!(g.redeem(&t.id, Layer::Apn, 100 + LIMIT_SECS).is_none());
-        g.reserve(Layer::Apn, None, 100 + LIMIT_SECS).unwrap();
+        assert!(redeem(&g, &t.id, Layer::Apn, 100 + LIMIT_SECS).is_none());
+        reserve(&g, Layer::Apn, 100 + LIMIT_SECS).unwrap();
     }
 
     #[test]
-    fn a_clock_that_jumped_back_does_not_lock_forever() {
-        let g = Gate::open(Some(dir()));
-        g.reserve(Layer::Apn, None, 1_000_000).unwrap();
-        g.reserve(Layer::Apn, None, 1_000).unwrap();
+    fn wall_steps_do_not_bypass_limits_or_extend_tickets() {
+        for jump in [-28800_i64, 28800] {
+            let g = open(Some(dir()));
+            let wall = 1_000_000;
+            let t = g
+                .reserve_at(Layer::Apn, None, wall, Some(&boot(100)))
+                .unwrap();
+            let stepped = (wall as i64 + jump) as u64;
+            assert_eq!(
+                g.reserve_at(Layer::Apn, None, stepped, Some(&boot(101))),
+                Err(Refusal::Limited {
+                    next_unix: stepped + LIMIT_SECS - 1
+                })
+            );
+            assert!(g.redeem_at(&t.id, Layer::Apn, Some(&boot(699))).is_some());
+            assert!(g.redeem_at(&t.id, Layer::Apn, Some(&boot(700))).is_none());
+            g.reserve_at(Layer::Apn, None, stepped, Some(&boot(100 + LIMIT_SECS)))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn same_boot_restart_uses_elapsed_time_even_with_unsynchronised_wall_time() {
+        let d = dir();
+        let g = open(Some(d.clone()));
+        g.reserve_at(Layer::Apn, None, 0, Some(&boot(0))).unwrap();
+        let back = Gate::open(Some(d));
+        assert_eq!(
+            back.reserve_at(Layer::Apn, None, 999_999, Some(&boot(100))),
+            Err(Refusal::Limited {
+                next_unix: 999_999 + LIMIT_SECS - 100
+            })
+        );
+        back.reserve_at(Layer::Apn, None, 1, Some(&boot(LIMIT_SECS)))
+            .unwrap();
+    }
+
+    #[test]
+    fn legacy_or_rebooted_limits_get_one_persisted_bounded_hold() {
+        for legacy in [true, false] {
+            let d = dir();
+            if legacy {
+                fs::write(d.join(LIMIT_FILE), r#"{"apn":1000000}"#).unwrap();
+            } else {
+                let old = Gate::open(Some(d.clone()));
+                old.reserve_at(
+                    Layer::Apn,
+                    None,
+                    1_000_000,
+                    Some(&BootTime {
+                        boot_id: "old-boot".into(),
+                        seconds: 10,
+                    }),
+                )
+                .unwrap();
+            }
+            let g = Gate::open(Some(d.clone()));
+            assert_eq!(
+                g.reserve_at(Layer::Apn, None, 1_000, Some(&boot(110))),
+                Err(Refusal::Limited {
+                    next_unix: 1_000 + LIMIT_SECS
+                })
+            );
+            // Reopening the core does not restart the conservative window.
+            let back = Gate::open(Some(d.clone()));
+            assert!(matches!(
+                back.reserve_at(Layer::Apn, None, 2_000_000, Some(&boot(200))),
+                Err(Refusal::Limited { .. })
+            ));
+            back.reserve_at(Layer::Apn, None, 1_000, Some(&boot(110 + LIMIT_SECS)))
+                .unwrap();
+            // The old-format file remains a flat map previous binaries can read.
+            let old: BTreeMap<String, u64> =
+                serde_json::from_slice(&fs::read(d.join(LIMIT_FILE)).unwrap()).unwrap();
+            assert_eq!(old["apn"], 1_000);
+        }
+    }
+
+    #[test]
+    fn unknown_clock_corrupt_state_or_companion_save_failure_cannot_authorise() {
+        let g = open(Some(dir()));
+        assert_eq!(
+            g.reserve_at(Layer::Apn, None, 1_000, None),
+            Err(Refusal::Clock)
+        );
+        let t = g
+            .reserve_at(Layer::Apn, None, 1_000, Some(&boot(100)))
+            .unwrap();
+        assert!(g.redeem_at(&t.id, Layer::Apn, None).is_none());
+        assert!(g.redeem_at(&t.id, Layer::Apn, Some(&boot(99))).is_none());
+        assert!(
+            g.redeem_at(
+                &t.id,
+                Layer::Apn,
+                Some(&BootTime {
+                    boot_id: "new-boot".into(),
+                    seconds: 101
+                })
+            )
+            .is_none()
+        );
+        let d = dir();
+        fs::write(d.join(LIMIT_FILE), "broken").unwrap();
+        assert!(matches!(
+            reserve(&open(Some(d)), Layer::Apn, 1),
+            Err(Refusal::Store(_))
+        ));
+        let d = dir();
+        fs::create_dir_all(d.join(format!(".{LIMIT_CLOCK_FILE}.tmp"))).unwrap();
+        let g = open(Some(d.clone()));
+        assert!(matches!(reserve(&g, Layer::Apn, 1), Err(Refusal::Store(_))));
+        assert_eq!(g.last(Layer::Apn), Some(1));
+        assert!(g.lock().tickets.is_empty());
+        // Legacy write succeeded but companion write failed. Repairing storage must not
+        // release the consumed slot; persist a conservative anchor on the next attempt.
+        fs::remove_dir(d.join(format!(".{LIMIT_CLOCK_FILE}.tmp"))).unwrap();
+        assert!(matches!(
+            reserve(&g, Layer::Apn, 2),
+            Err(Refusal::Limited { .. })
+        ));
+    }
+
+    #[test]
+    fn missing_or_mismatched_wall_record_cannot_erase_the_elapsed_limit() {
+        let d = dir();
+        let g = open(Some(d.clone()));
+        reserve(&g, Layer::Apn, 100).unwrap();
+        fs::remove_file(d.join(LIMIT_FILE)).unwrap();
+        assert!(matches!(
+            reserve(&g, Layer::Apn, 101),
+            Err(Refusal::Limited { .. })
+        ));
+        fs::write(d.join(LIMIT_FILE), r#"{"apn":9999999}"#).unwrap();
+        assert_eq!(
+            reserve(&g, Layer::Apn, 102),
+            Err(Refusal::Limited {
+                next_unix: 102 + LIMIT_SECS
+            })
+        );
+        assert_eq!(
+            reserve(&open(Some(d)), Layer::Apn, 103),
+            Err(Refusal::Limited {
+                next_unix: 102 + LIMIT_SECS
+            })
+        );
+    }
+
+    #[test]
+    fn volatile_gate_and_a_failed_preflight_keep_the_same_limits() {
+        let g = open(None);
+        let t = reserve(&g, Layer::Apn, 100).unwrap();
+        g.done(&t);
+        assert!(matches!(
+            reserve(&g, Layer::Apn, 101),
+            Err(Refusal::Limited { .. })
+        ));
+        let t = reserve(&g, Layer::Apn, 100 + LIMIT_SECS).unwrap();
+        g.release(&t);
+        assert_eq!(g.last(Layer::Apn), Some(100));
+        let expired = reserve(&g, Layer::Apn, 100 + LIMIT_SECS).unwrap();
+        g.release(&t); // replay an old release in the very same elapsed and wall second
+        assert_eq!(g.last(Layer::Apn), Some(expired.at));
+        assert!(redeem(&g, &expired.id, Layer::Apn, 100 + LIMIT_SECS).is_some());
+        let newer = reserve(&g, Layer::Apn, 100 + 2 * LIMIT_SECS).unwrap();
+        g.release(&expired);
+        assert_eq!(g.last(Layer::Apn), Some(newer.at));
     }
 
     #[test]
     fn cannot_save_means_no() {
         let d = dir();
         fs::create_dir_all(d.join(LIMIT_FILE)).unwrap(); // 一个目录占着文件名：写不了
-        let g = Gate::open(Some(d));
-        assert!(matches!(
-            g.reserve(Layer::Apn, None, 1),
-            Err(Refusal::Store(_))
-        ));
+        let g = open(Some(d));
+        assert!(matches!(reserve(&g, Layer::Apn, 1), Err(Refusal::Store(_))));
     }
 
     #[test]
@@ -474,7 +794,7 @@ mod tests {
 
     #[test]
     fn cheap_cards_are_kept_per_card() {
-        let g = Gate::open(Some(dir()));
+        let g = open(Some(dir()));
         assert_eq!(
             g.set_cheap("8944000000000000001F", true).unwrap(),
             ["8944000000000000001"]

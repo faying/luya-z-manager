@@ -35,7 +35,9 @@
 //! period late); every `g_*` is capped at the hour's awake seconds. A run of one source's down
 //! time longer than 10 min (across hours and restarts) also goes out as a `gap` event.
 
+pub mod activity;
 pub mod boot;
+pub mod energy;
 pub mod places;
 pub mod power;
 pub mod standby;
@@ -80,7 +82,13 @@ pub struct Clock {
     pub mono: i64,
     pub wall: i64,
     pub wall_ok: bool,
-    /// How clock-ok decided (`vendor` / `jump` / `last_wall` / `year`), when it says.
+    /// Fresh local-wall estimate, not proof of UTC synchronization.
+    #[serde(default)]
+    pub clock_status: luyaz_api::clock::EvidenceStatus,
+    /// Keep raw observations and the explicit unknown clock model for audit/replay.
+    #[serde(default)]
+    pub evidence: Option<luyaz_api::clock::ClockEvidence>,
+    /// How clock-ok decided, when it says.
     #[serde(default)]
     pub how: Option<String>,
 }
@@ -341,6 +349,13 @@ impl Fold {
     pub fn power_with(&mut self, c: &Clock, r: &power::Read) {
         let abroad = matches!((self.seen.serving_mcc, self.seen.home_mcc), (Some(s), Some(h)) if s > 0 && h > 0 && s != h);
         if let Some(h) = self.hour.as_mut() {
+            let known_abroad = match (self.seen.serving_mcc, self.seen.home_mcc) {
+                (Some(s), Some(h)) if s > 0 && h > 0 => Some(s != h),
+                _ => None,
+            };
+            h.pw.energy.observe(r, c, known_abroad);
+            h.pw.activity
+                .observe(r.activity.as_ref(), &c.boot, c.boottime, c.mono);
             match self.pw_last {
                 Some((b0, m0, q0)) => {
                     h.pw.add(r, q0, c.boottime - b0, c.mono - m0, abroad, c.boottime)
@@ -400,7 +415,8 @@ impl Fold {
     }
 
     fn event(&self, c: &Clock, k: &str, mut fields: Value) -> Value {
-        let mut v = json!({"t": wall_or_null(c), "up": c.boottime, "boot": boot8(&c.boot), "k": k});
+        let mut v = json!({"t": wall_or_null(c), "raw_wall": c.wall, "clock_status": c.clock_status,
+            "up": c.boottime, "boot": boot8(&c.boot), "k": k});
         if let (Some(o), Some(f)) = (v.as_object_mut(), fields.as_object_mut()) {
             o.append(f);
         }
@@ -532,21 +548,31 @@ impl Fold {
             out.events
                 .push(self.event(c, "boot", json!({"boot_id": c.boot})));
         }
-        // clock (LEDGER.md §7): the first trusted reading of the boot, then a revocation, trust
-        // again, or an offset that moved by more than a day
+        // Clock estimate: first usable reading, revocation/reacquisition, or an offset change
+        // beyond rounding/slew tolerance. None of these events asserts verified UTC.
         let off = c.wall - c.boottime;
         if c.wall_ok {
-            if !self.clock_said || self.clock_off.is_none_or(|o| (off - o).abs() > 86_400) {
+            if !self.clock_said
+                || self
+                    .clock_off
+                    .is_none_or(|o| off.abs_diff(o) > luyaz_api::clock::WALL_STEP_TOLERANCE_S)
+            {
                 self.clock_said = true;
                 self.clock_off = Some(off);
-                out.events
-                    .push(self.event(c, "clock", json!({"offset": off, "how": c.how})));
+                out.events.push(self.event(
+                    c,
+                    "clock",
+                    json!({"offset": off, "how": c.how, "evidence": c.evidence}),
+                ));
             }
         } else if self.clock_said {
             self.clock_said = false;
             self.clock_off = None;
-            out.events
-                .push(self.event(c, "clock", json!({"offset": null, "how": "revoked"})));
+            out.events.push(self.event(
+                c,
+                "clock",
+                json!({"offset": null, "how": "revoked", "evidence": c.evidence}),
+            ));
         }
         if let (Some(last), Some(h)) = (self.last.clone(), self.hour.as_mut()) {
             let dt = (c.mono - last.mono).max(0);
@@ -927,27 +953,44 @@ fn mono_s() -> i64 {
     ts.tv_sec
 }
 
-/// Now, by the device: the clock is trusted when the sentinel/guard's clock-ok says so (the same
-/// verdict the alert SMS uses).
+/// Snapshot without probing the network or changing system time. Expired or stepped clock
+/// evidence cannot label ledger records with a usable wall timestamp.
 pub(crate) fn clock_now(boot: &str) -> Clock {
+    let at = luyaz_api::clock::BootTime::read();
     let wall = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    // `<1|0> <wall − uptime> <uptime when written> <how>`
-    let ck = std::fs::read_to_string(crate::state::host_path("/tmp/luyaz/clock-ok"))
+    let ck = std::fs::read_to_string(crate::state::host_path(luyaz_api::clock::CLOCK_OK))
         .unwrap_or_default();
-    let f: Vec<&str> = ck.split_whitespace().collect();
+    clock_snapshot(boot, at, mono_s(), wall, &ck)
+}
+
+fn clock_snapshot(
+    boot: &str,
+    at: Option<luyaz_api::clock::BootTime>,
+    mono: i64,
+    wall: i64,
+    text: &str,
+) -> Clock {
+    use luyaz_api::clock::{ClockEvidence, EvidenceStatus};
+    let evidence = ClockEvidence::decode(text);
+    let clock_status = if at.as_ref().is_some_and(|t| t.boot_id != boot) {
+        EvidenceStatus::BootMismatch
+    } else {
+        evidence
+            .as_ref()
+            .map_or(EvidenceStatus::Unknown, |e| e.status(at.as_ref(), wall))
+    };
     Clock {
-        boot: boot.to_string(),
-        boottime: (crate::evlog::boottime_ms() / 1000) as i64,
-        mono: mono_s(),
+        boot: boot.into(),
+        boottime: at.and_then(|t| i64::try_from(t.seconds).ok()).unwrap_or(0),
+        mono,
         wall,
-        wall_ok: f.first() == Some(&"1"),
-        how: f
-            .get(3)
-            .filter(|h| **h != "none")
-            .map(|h| h.chars().take(16).collect()),
+        wall_ok: clock_status.wall_usable(),
+        how: evidence.as_ref().map(|e| e.source.how().into()),
+        evidence,
+        clock_status,
     }
 }
 
@@ -1095,8 +1138,8 @@ pub fn once(scratch: &Path) -> String {
     let mut st = watch::State::default();
     let lk = st.look(&wp, &boot, c.boottime, c.wall);
     let mut out = format!(
-        "boot {boot} up {} wall {} trusted {} how {:?}\n",
-        c.boottime, c.wall, c.wall_ok, c.how
+        "boot {boot} up {} wall {} wall_usable {} status {:?} how {:?}\n",
+        c.boottime, c.wall, c.wall_ok, c.clock_status, c.how
     );
     for (k, v) in &lk.lines {
         out.push_str(&format!("{k} {v}\n"));
@@ -1315,6 +1358,12 @@ mod tests {
             mono: up - sleep,
             wall: wall.unwrap_or(1000 + up),
             wall_ok: wall.is_some(),
+            clock_status: if wall.is_some() {
+                luyaz_api::clock::EvidenceStatus::Estimated
+            } else {
+                Default::default()
+            },
+            evidence: None,
             how: wall.map(|_| "vendor".into()),
         }
     }
@@ -1732,7 +1781,7 @@ mod tests {
         let mut out = Out::default();
         f.tick(&clk("b1", 10, 0, None), &mut out);
         f.tick(&clk("b1", 20, 0, Some(W + 20)), &mut out);
-        f.tick(&clk("b1", 30, 0, Some(W + 30 + 3600)), &mut out); // an hour: not a move
+        f.tick(&clk("b1", 30, 0, Some(W + 30 + 3600)), &mut out); // even an hour must now produce a clock event
         f.tick(&clk("b1", 40, 0, None), &mut out);
         f.tick(&clk("b1", 50, 0, Some(W + 50)), &mut out);
         f.tick(&clk("b1", 60, 0, Some(W + 60 + 2 * 86_400)), &mut out);
@@ -1746,6 +1795,7 @@ mod tests {
             ck,
             [
                 (json!(W), json!("vendor")),
+                (json!(W + 3600), json!("vendor")),
                 (Value::Null, json!("revoked")),
                 (json!(W), json!("vendor")),
                 (json!(W + 2 * 86_400), json!("vendor")),
@@ -1876,5 +1926,75 @@ mod calib_tests {
         }
         assert_eq!(std::fs::read_to_string(d.join("events.jsonl")).unwrap(), t);
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod clock_evidence_tests {
+    use super::*;
+    use luyaz_api::clock::{BootTime, ClockEvidence, ClockSource, EvidenceStatus};
+    const WALL: i64 = 1_790_000_000;
+    fn at(boot: &str, seconds: u64) -> BootTime {
+        BootTime {
+            boot_id: boot.into(),
+            seconds,
+        }
+    }
+
+    #[test]
+    fn snapshot_retains_raw_wall_but_drops_expired_wrong_boot_and_stepped_wall_labels() {
+        let e = ClockEvidence::observation(WALL, at("a", 100), Some(100), ClockSource::Year);
+        for (seconds, step, boot, status) in [
+            (100, 0, "a", EvidenceStatus::Estimated),
+            (280, 0, "a", EvidenceStatus::Estimated),
+            (281, 0, "a", EvidenceStatus::Stale),
+            (160, -28_800, "a", EvidenceStatus::WallChanged),
+            (160, 28_800, "a", EvidenceStatus::WallChanged),
+            (160, 0, "b", EvidenceStatus::BootMismatch),
+        ] {
+            let wall = WALL + (seconds as i64 - 100) + step;
+            let c = clock_snapshot(boot, Some(at(boot, seconds)), 100, wall, &e.encode());
+            assert_eq!(c.clock_status, status);
+            assert_eq!(c.wall, wall);
+            assert_eq!(c.evidence, Some(e.clone()));
+            let v = Fold::new("test").event(&c, "reading", json!({}));
+            assert_eq!(v["raw_wall"], wall);
+            assert_eq!(v["up"], seconds);
+            assert_eq!(v["t"].is_null(), !status.wall_usable());
+        }
+        for text in ["", "1 1790000000 100 year\n", "broken"] {
+            assert!(!clock_snapshot("a", Some(at("a", 100)), 100, WALL, text).wall_ok);
+        }
+        assert!(!clock_snapshot("a", None, 100, WALL, &e.encode()).wall_ok);
+    }
+
+    #[test]
+    fn fold_records_revocation_and_keeps_elapsed_energy_and_events_after_a_clock_step() {
+        let mut f = Fold::new("test");
+        let mut out = Out::default();
+        let e = ClockEvidence::observation(WALL, at("a", 100), Some(100), ClockSource::Year);
+        let c1 = clock_snapshot("a", Some(at("a", 100)), 100, WALL, &e.encode());
+        f.tick(&c1, &mut out);
+        let c2 = clock_snapshot(
+            "a",
+            Some(at("a", 160)),
+            160,
+            WALL + 60 + 28_800,
+            &e.encode(),
+        );
+        f.tick(&c2, &mut out);
+        assert!(out.events.iter().any(|v| v["k"] == "clock"
+            && v["offset"].is_null()
+            && v["clock_status"] == "wall_changed"));
+        assert!(f.hour.is_some(), "accounting continues using boot time");
+        let serialized = serde_json::to_string(&c2).unwrap();
+        assert_eq!(serde_json::from_str::<Clock>(&serialized).unwrap(), c2);
+        // Older persisted snapshots remain readable with explicit unknown evidence.
+        let old: Clock = serde_json::from_str(
+            r#"{"boot":"a","boottime":1,"mono":1,"wall":1790000000,"wall_ok":true}"#,
+        )
+        .unwrap();
+        assert_eq!(old.clock_status, EvidenceStatus::Unknown);
+        assert!(old.evidence.is_none());
     }
 }

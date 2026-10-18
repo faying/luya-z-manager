@@ -26,6 +26,8 @@ export const SCENARIOS = [
   "nbrscan", // POST /api/cell/neighbors/scan keeps the old simulated scan (the real device answers 410; cell-lock tests use this)
   "diag-waiting", // POST /api/diagnose: the run waits 3 s for "another operation" (waiting_for speedtest) before it starts
   "diag-slow", // POST /api/diagnose: 4 s per layer instead of 0.8 s (keeps a run going for busy-409 tests)
+  "diag-sim-warn", // POST /api/diagnose: the sim layer is a suspect (eSIM channels all taken)
+  "diag-bearer-bad", // POST /api/diagnose: not connected; every layer that needs the bearer is blocked
   "finding", // the core's open finding (T6): registered, data connection down, confidence sure; GET /api/diagnose data.finding + /api/public/status network.finding until POST /api/diagnose/dismiss
   "verdict-stall", // /api/public/status network.verdict = "stall" (connected, nothing comes back), signal itself good
   "verdict-crowd", // /api/public/status network.verdict = "crowd" (cell likely busy), signal itself good

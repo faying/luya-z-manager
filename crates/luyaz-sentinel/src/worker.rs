@@ -17,6 +17,9 @@
 //! (counts through suspend), exactly as the guard compares them, sleep detection included (WAKE_GAP).
 //! Only this process's own timers (dropbear's hourly limit) use the monotonic clock.
 
+pub use luyaz_alerts::clock::CLOCK_YEAR_MIN;
+use luyaz_alerts::clock::{BootTime, ClockEvidence, ClockSource, WALL_STEP_TOLERANCE_S};
+
 pub const INTERVAL_S: u64 = 60;
 /// After boot: judge nothing.
 pub const GRACE_S: u64 = 300;
@@ -28,8 +31,6 @@ pub const STALE_S: u64 = 300;
 pub const WAKE_GAP_S: u64 = 2 * INTERVAL_S + 30;
 /// Restore retries: 60, 120, 240, 480, 480, …
 pub const BACKOFF_MAX_S: u64 = 480;
-/// Clock trust (docs/LEDGER.md §7): before NTP the device reads 2025-01-04.
-pub const CLOCK_YEAR_MIN: i64 = 1_767_225_600; // 2026-01-01 00:00
 /// Executor heartbeat older than this = dead or stuck.
 pub const SHIP_STALE_S: u64 = 30;
 /// Staged and never started for this long = the Mac went away.
@@ -114,6 +115,8 @@ pub enum Health {
 
 /// Everything the worker reads or changes on the device.
 pub trait WorkerIo {
+    /// BOOTTIME plus boot identity; unknown must not become a wall-clock fallback.
+    fn boot_time(&mut self) -> Option<BootTime>;
     /// Whole seconds of `/proc/uptime` (0 when unreadable).
     fn uptime(&mut self) -> u64;
     /// The device's wall clock (local time labelled UTC).
@@ -245,41 +248,31 @@ impl WifiState {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ClockState {
-    /// wall − uptime when first seen this boot (`clock.first`).
+    pub boot: String,
+    /// Initial wall-minus-boot offset, only used to explain a pre-sync forward leap.
     pub first: Option<i64>,
-    /// The offset leapt forward over a day this boot (`clock.jump`).
-    pub jump: bool,
-    /// The last verdict: trusted, and the offset it was given for.
-    pub last: Option<(bool, i64)>,
+    /// Last accepted estimate. A later step cannot overwrite it, including across restarts.
+    pub anchor: Option<i64>,
+    pub last: Option<ClockEvidence>,
+    pub persisted_at: Option<u64>,
 }
 
 impl ClockState {
     fn encode(&self) -> String {
-        format!(
-            "first={}\njump={}\nlast={}\n",
-            self.first.map(|f| f.to_string()).unwrap_or_default(),
-            if self.jump { 1 } else { 0 },
-            self.last
-                .map(|(ok, off)| format!("{} {off}", if ok { 1 } else { 0 }))
-                .unwrap_or_default()
-        )
+        serde_json::json!({"boot": self.boot, "first": self.first, "anchor": self.anchor,
+            "last": self.last, "persisted_at": self.persisted_at})
+        .to_string()
     }
 
     fn decode(text: &str) -> ClockState {
-        let mut s = ClockState::default();
-        for line in text.lines() {
-            match line.split_once('=') {
-                Some(("first", v)) => s.first = v.parse().ok(),
-                Some(("jump", v)) => s.jump = v == "1",
-                Some(("last", v)) => {
-                    s.last = v
-                        .split_once(' ')
-                        .and_then(|(a, b)| Some((a == "1", b.parse().ok()?)));
-                }
-                _ => {}
-            }
+        let v: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+        ClockState {
+            boot: v["boot"].as_str().unwrap_or_default().into(),
+            first: v["first"].as_i64(),
+            anchor: v["anchor"].as_i64(),
+            last: serde_json::from_value(v["last"].clone()).ok(),
+            persisted_at: v["persisted_at"].as_u64(),
         }
-        s
     }
 }
 
@@ -417,7 +410,11 @@ impl Worker {
     // component is not ours to finish: its executor's timeouts, the core (5d) and the boot-time
     // luyaz-recover.sh cover it.
     pub fn ship_round(&mut self, io: &mut dyn WorkerIo) {
-        let (ship, ship_txn, ship_hb) = (self.paths.ship.clone(), self.paths.ship_txn.clone(), self.paths.ship_hb.clone());
+        let (ship, ship_txn, ship_hb) = (
+            self.paths.ship.clone(),
+            self.paths.ship_txn.clone(),
+            self.paths.ship_hb.clone(),
+        );
         let Some(txn) = io.read(&ship_txn) else {
             return;
         };
@@ -475,53 +472,75 @@ impl Worker {
     }
 
     // ── G3: clock trust (docs/LEDGER.md §7) ─────────────────────────────────
-    // `clock-ok` = `<1|0> <wall − uptime> <uptime when written> <how>`; how: vendor | jump | last_wall
-    // | year | revoked | none. (The vendor "time synced" probe is still unverified: never used.)
+    // The first line stays compatible; the second carries versioned, boot-bound evidence.
+    // Plausibility/continuity is only an estimated local wall clock, never verified UTC/NTP.
     pub fn clock_round(&mut self, io: &mut dyn WorkerIo) {
-        let up = io.uptime() as i64;
-        let w = io.wall().max(0);
-        let off = w - up;
+        let path = format!("{}/clock-ok", self.paths.tmp);
+        let Some(at) = io.boot_time() else {
+            io.write(&path, "0 0 0 none\n");
+            return;
+        };
+        let w = io.wall();
+        let Some(off) = i64::try_from(at.seconds)
+            .ok()
+            .and_then(|up| w.checked_sub(up))
+        else {
+            io.write(&path, "0 0 0 none\n");
+            return;
+        };
+        if self.clock.boot != at.boot_id {
+            self.clock = ClockState {
+                boot: at.boot_id.clone(),
+                ..Default::default()
+            };
+        }
         let first = *self.clock.first.get_or_insert(off);
-        if off - first > 86_400 {
-            self.clock.jump = true;
-        }
-        let mut ok = false;
-        let mut how = "none";
-        if let Some((true, woff)) = self.clock.last
-            && off < woff - 86_400
+        let last_wall = num(io.read(&self.paths.wall_last));
+        let source = if self
+            .clock
+            .anchor
+            .is_some_and(|a| off.abs_diff(a) > WALL_STEP_TOLERANCE_S)
         {
-            self.clock.first = Some(off); // a new forward leap is needed now
-            self.clock.jump = false;
-            how = "revoked";
-        }
-        if how != "revoked" && w >= CLOCK_YEAR_MIN {
-            let last = num(io.read(&self.paths.wall_last)) as i64;
-            if self.clock.jump {
-                ok = true;
-                how = "jump";
-            } else if last > 0 {
-                if w >= last - 86_400 {
-                    ok = true;
-                    how = "last_wall";
-                }
-            } else {
-                ok = true;
-                how = "year";
-            }
-        }
-        self.clock.last = Some((ok, off));
-        // the trusted wall clock on flash, at most once an hour (the guard's `ledger_wall`,
-        // docs/LEDGER.md §7; u60-sentinel.md §20)
-        if ok {
-            let last = num(io.read(&self.paths.wall_last)) as i64;
-            if w >= last + 3600 {
+            ClockSource::Revoked
+        } else if w < CLOCK_YEAR_MIN
+            || i64::try_from(last_wall)
+                .ok()
+                .is_none_or(|last| last > 0 && w < last.saturating_sub(86_400))
+        {
+            ClockSource::None
+        } else if self.clock.anchor.is_some() {
+            ClockSource::Continuity
+        } else if off.saturating_sub(first) > 86_400 {
+            ClockSource::Jump
+        } else if last_wall > 0 {
+            ClockSource::LastWall
+        } else {
+            ClockSource::Year
+        };
+        let mono = u64::try_from(io.mono_s()).ok();
+        let evidence = ClockEvidence::observation(w, at, mono, source);
+        if evidence
+            .status(Some(&evidence.observed_at), w)
+            .wall_usable()
+        {
+            self.clock.anchor = Some(off);
+            // Preserve the existing hourly maximum, now also bounded by elapsed time. A wall
+            // step cannot cause extra flash writes. This history remains an estimate.
+            let up = evidence.observed_at.seconds;
+            if self
+                .clock
+                .persisted_at
+                .is_none_or(|t| up.saturating_sub(t) >= 3600)
+                && u64::try_from(w)
+                    .ok()
+                    .is_some_and(|w| w >= last_wall.saturating_add(3600))
+            {
                 io.persist(&self.paths.wall_last, &format!("{w}\n"));
+                self.clock.persisted_at = Some(up);
             }
         }
-        io.write(
-            &format!("{}/clock-ok", self.paths.tmp),
-            &format!("{} {off} {up} {how}\n", if ok { 1 } else { 0 }),
-        );
+        io.write(&path, &evidence.encode());
+        self.clock.last = Some(evidence);
     }
 
     // ── §4: is the core healthy ─────────────────────────────────────────────

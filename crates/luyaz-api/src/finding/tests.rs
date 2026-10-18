@@ -268,3 +268,56 @@ fn a_typical_finding_stays_small() {
     let n = serde_json::to_string(&Verdict::Open(f)).unwrap().len();
     assert!(n < 2048, "{n} bytes");
 }
+
+#[test]
+fn stale_or_future_prerequisites_never_make_a_sure_root_cause() {
+    for at in [NOW - FRESH_SECS - 1, NOW + 1, u64::MAX] {
+        let mut l = layers(up(), FAIL, FAIL);
+        l[0].at = at;
+        assert_eq!(open(judge(&check(l))).confidence, Confidence::Likely);
+    }
+    let missing = DataIn {
+        has_ip: None,
+        ..up()
+    };
+    assert_eq!(judge_data(&missing, NOW).level, Level::Na);
+    let unknown = DataIn {
+        connect_status: Some("new_firmware_state".into()),
+        ..up()
+    };
+    assert_eq!(judge_data(&unknown, NOW).level, Level::Na);
+}
+
+#[test]
+fn path_dns_tls_and_overall_usability_are_independent() {
+    use ResultState::*;
+    for (path, dns, want) in [
+        (Passed, Failed, Some(LayerId::Dns)),
+        (Failed, Failed, Some(LayerId::Internet)),
+        (Unknown, Unknown, None),
+    ] {
+        let n = NetworkEvidence {
+            path_reachable: path,
+            dns,
+            reason: "offline".into(),
+            ..NetworkEvidence::default()
+        };
+        let (ip, dns) = judge_network(n, NOW);
+        let report = serde_json::to_value(&ip).unwrap();
+        assert_eq!(report["network"]["tls"], "unknown");
+        assert_eq!(report["network"]["internet_usable"], "unknown");
+        let c = check(vec![
+            judge_signal(Reg::Home, NOW),
+            judge_data(&up(), NOW),
+            ip,
+            dns,
+        ]);
+        if let Some(layer) = want {
+            let f = open(judge(&c));
+            assert_eq!((f.layer, f.confidence), (layer, Confidence::Likely));
+            assert!(!f.symptom_en.contains("is unreachable"));
+        } else {
+            assert!(matches!(judge(&c), Verdict::Unverified { .. }));
+        }
+    }
+}

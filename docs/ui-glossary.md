@@ -199,19 +199,34 @@
 | 层 | 主句 | English | 动作 | English |
 |---|---|---|---|---|
 | wifi | Wi-Fi 信号差 | Poor Wi-Fi | 靠近一点，或换个频段 | Move closer, or switch Wi-Fi band |
+| sim（没卡、PIN、PUK） | 行内原文：没有 SIM 卡 / SIM 卡要输入 PIN / SIM 卡被 PUK 锁住 | No SIM card / SIM needs its PIN / SIM locked (PUK) | — | — |
+| sim（eSIM 通道占满，疑点） | eSIM 通道占满 | eSIM channels all taken | 切换 profile 前先重启设备 | Restart the device before switching profiles |
 | signal | 信号弱 / 干扰大 / 信号一般 | Weak signal / Noisy signal / Fair signal | 固定位置时用摆放模式；在路上只能等 | Use Placement if you're staying put; on the move, wait |
 | signal（载波窄） | 这里只给了窄载波 | Narrow carrier here | 换个地方试试 | Try another spot |
 | signal（无服务等） | datad 大字原文 | datad headline_en | — | — |
 | limit | 运营商限速 | Carrier speed cap | 找运营商 | Ask your carrier |
+| bearer | 数据连接没建立 | Data connection is down | 看看数据开关和 APN | Check mobile data and the APN |
+| bearer（rp_filter，疑点） | 回包可能被丢 | Replies may be dropped | 多出口时 rp_filter 要是 0 或 2 | With several ways out, rp_filter should be 0 or 2 |
 | link | 蜂窝链路不稳 | Cellular link unstable | 过几分钟再试，或换个地方 | Try again in a few minutes, or move |
+| dns | 域名解析有问题 | DNS problem | 过几分钟再试；还不行就重启设备 | Try again in a few minutes; if it stays, restart the device |
+| e2e | 外网不通 | Internet unreachable | 过几分钟再试，或换个地方 | Try again in a few minutes, or move |
+| clock（疑点） | 设备时间可能不准 | Device clock may be off | HTTPS 网站打不开时，先等时间同步 | If HTTPS sites fail, wait for the clock to sync |
 | crowd | 疑似基站拥挤 | Cell likely busy | 过几分钟再试，或换个地方 | Try again in a few minutes, or move |
 | proxy | 代理节点慢或不通 | Proxy node slow or down | 换节点 | Switch node |
 | （全部正常） | 没查到问题 | No problem found | 可能是对方网站慢；也可以加测速度 | The site itself may be slow; you can also add a speed test |
-| （等了 120 s） | 测不了：正在搜网 / 正在选网 / 正在测速 | Can't check: Searching for networks / Registering on a network / Speed test running | — | — |
+| （等了 120 s） | 测不了：正在搜网 / 正在选网 / 正在测速 / 正在检查网络 | Can't check: Searching for networks / Registering on a network / Speed test running / Checking the connection | — | — |
+
+第二版的层（`docs/designs/deep-diag-v2.md`）行内的词：
+- sim：已就绪 Ready（不是能查的 eUICC 时只显示、不计入 N/M）· 已就绪 · eSIM 通道空闲 Ready · eSIM channel free · 已就绪 · eSIM 正在操作，没查通道 Ready · eSIM busy, channels not checked · eSIM 通道占满，切换 profile 会失败 eSIM channels all taken; switching profiles will fail · SIM 卡还没就绪 SIM not ready yet · 读不到 SIM 卡状态 SIM state unreadable。
+- bearer：已连上 · rmnet_data0 Connected · rmnet_data0 · 没拨上号 Not connected · 拨上了，但没有地址 Connected, but no address · 没有默认路由 No default route · 读不到数据连接 Data connection unreadable · rmnet_data0 · rp_filter=1，有 N 个出口，回包可能被丢 rp_filter=1 with N ways out: replies may be dropped。
+- dns：设备 DNS 24 ms · 运营商 DNS 能答 / 没答 / 没测 Device DNS 24 ms · carrier DNS answers / not answering / not checked · 设备的 DNS 坏了 · 运营商 DNS 能答 The device's DNS is broken · carrier DNS answers · DNS 不通 DNS not answering · 设备的 DNS 没回应 The device's DNS is not answering · 设备的 DNS 只答了 1/2 The device's DNS answered 1/2；只有运营商那边时后面接 Finding 的 `reason` 原文。
+- e2e：HTTP 有回应 HTTP replied · 检测目标没回应 Probe targets did not reply · 没测成 Not checked，后面都接 ` · <reason>`（Finding 的 `NetworkEvidence.reason` 原文，和连通性证据页一致）。
+- clock：已核对 Verified · 估算的，没核对 Estimated, not verified（只给值，不下结论）· 时间证据过期了 / 设备时间被改过 / 设备时间不再可信，HTTPS 可能失败 Clock evidence is stale / Device clock was changed / Device clock no longer trusted; HTTPS may fail · 不知道准不准 Unknown。
+- 被挡住（blocked）：灰 ● 没测 · 前面的<层名>不通 / grey ● Not checked · <Layer> is down；不计入 N/M，不算「另有 N 处」，不会是主句。只在诊断页显示，首页不显示。
 
 「测不了 · 原因」：超时 Timed out · 不是经 Wi-Fi 连的 Not on Wi-Fi · 没有设备连着 No devices on Wi-Fi · 读不到 Unreadable · 数据服务没回应 Data service not answering · 读不到信号 No signal reading · QoS 读不到 QoS unavailable · 没有运营商 DNS No carrier DNS · 发不出去 Couldn't send · 没有小区编号 No cell ID · 历史不够 Not enough history · 代理没回应 Proxy not answering · 直连也不通 Direct also failing · 出错 Error。
 
-忙的时候测速、搜网、手动注册回：正在诊断，约 N 秒后再试 / Diagnosing; try again in about N s。
+忙的时候测速、搜网、手动注册回：正在诊断，约 N 秒后再试 / Diagnosing; try again in about N s；Finding 正在探测时回：正在检查网络，约 N 秒后再试 / Checking the connection; try again in about N s（`busy: "finding"`）。
 
 「加测速度」那一行（只写路线和数字，不下结论，D9）：直连 ↓ {} Mbps / Direct ↓ {} Mbps；没测完：被停下 Stopped · 没测成 Didn't finish。
 
@@ -221,9 +236,9 @@
 
 | 位置 | 中文 | English |
 |---|---|---|
-| 层名 | Wi-Fi · 信号 · 限速 · 蜂窝链路 · 基站负载 · 速度 | Wi-Fi · Signal · Speed cap · Cellular link · Cell load · Speed |
+| 层名 | Wi-Fi · SIM 卡 · 信号 · 限速 · 数据连接 · 蜂窝链路 · 域名解析 · 外网 · 设备时间 · 基站负载 · 速度 | Wi-Fi · SIM · Signal · Speed cap · Data connection · Cellular link · DNS · Internet · Device clock · Cell load · Speed |
 | 层名（CHILL 开着时） | 代理 | Proxy |
-| 层的结论词 | ● 正常 · ▲ 疑点 · ■ 差 · 灰 ● 测不了 · 原因 | ● OK · ▲ Suspect · ■ Poor · grey ● Can't check · reason |
+| 层的结论词 | ● 正常 · ▲ 疑点 · ■ 差 · 灰 ● 测不了 · 原因 · 灰 ● 没测 · 前面的<层名>不通 | ● OK · ▲ Suspect · ■ Poor · grey ● Can't check · reason · grey ● Not checked · <Layer> is down |
 | 层的进度 | 等待 · 测试中… · 测试中… 3 秒（速度行） | Waiting · Testing… · Testing… 3 s |
 | 状态块：进行中 | 正在检查… 3/6 · 约 10 秒，会发少量探测包 | Checking… 3/6 · About 10 s; sends a few probe packets |
 | 状态块：排队 | 等另一个操作做完… · 做完自动开始 | Waiting… · Starts when it's done |

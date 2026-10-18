@@ -201,6 +201,19 @@ const PAGES = {
       await p.click("#dg-again button");
       await p.waitForFunction(() => /正在检查/.test(document.querySelector("#dg-status")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
       ok(/正在检查… \d+\/\d+/.test(await state()) && await p.locator("#dg-status [role=progressbar]").count() === 1, `check again: ${await state()}`);
+      // v2: a bad bearer blocks what needs it (grey 「没测」, not counted); a full eSIM is a suspect
+      await scenario("diag-bearer-bad");
+      // the run started above must end first (a start during a run joins it)
+      await p.waitForFunction(() => !/正在检查/.test(document.querySelector("#dg-status")?.textContent ?? ""), null, { timeout: 20000 }).catch(() => {});
+      await p.click("#dg-again button");
+      await p.waitForFunction(() => /数据连接没建立/.test(document.querySelector("#dg-status")?.textContent ?? ""), null, { timeout: 20000 }).catch(() => {});
+      const bb = (await p.textContent("#dg-body")) ?? "";
+      ok(/数据连接没建立/.test(await state()) && (bb.match(/没测/g) ?? []).length >= 5 && /前面的数据连接不通/.test(bb), `bearer bad: ${await state()} · ${(bb.match(/没测/g) ?? []).length} blocked`);
+      ok(!/另有/.test((await p.textContent("#dg-status")) ?? ""), "blocked rows are not 「另有 N 处」");
+      await scenario("diag-sim-warn");
+      await p.click("#dg-again button");
+      await p.waitForFunction(() => /eSIM 通道占满/.test(document.querySelector("#dg-status")?.textContent ?? ""), null, { timeout: 20000 }).catch(() => {});
+      ok(/eSIM 通道占满/.test(await state()), `sim warn: ${await state()}`);
       // T6: the core's open finding — evidence here, 「忽略」 closes it (the readback is it gone)
       await scenario("finding");
       await p.waitForSelector("#dg-finding section", { timeout: 35000 }).catch(() => {});

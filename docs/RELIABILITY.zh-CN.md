@@ -115,3 +115,12 @@
 - **服务崩溃**：核心 `svcwatch.rs` 写 `/data/crashlog/<名字>/`（每个程序 5 个、合计 1 MB），按第 4 节告警；主动停止或重启不算崩溃。核心自己的崩溃靠标记 `/data/luyaz/core/core.running` 发现。
 - **基带崩溃**：核心 `crashwatch.rs`（kmsg + netlink），状态 `/tmp/luyaz/core/crashwatch.json`，事件进长期存储 `/data/luyaz/core/long`。
 - **`.migrated`**：`/tmp/luyaz/.migrated` 由哨兵最后写，前提是 `clock-ok` 已有、handover 文件等于核心的全部职责；ship 拉起哨兵前先删它。`/data/luyaz/core/.migrated` 是核心新布局的开关。目录在却没有它，doctor 报「搬了一半」。
+
+## 10. Finding 探测预算（本机 P0-02 修订，未部署）
+
+- Core `api/finding/budget.rs` 管 `/data/luyaz/core/findings.probe-budget.json`：`{"version":1,"last":{"boot_id":"…","seconds":600}}`。独立于 Finding 存储；换卡、恢复或忽略告警都不清零。BOOTTIME 包含休眠，准入不用墙钟。
+- 每轮 Finding HTTP/DNS 请求前，在 `findings.probe-budget.lock` 上拿非阻塞独占锁，锁内重读预算；写 `findings.probe-budget.tmp`、fsync 文件、rename、fsync 目录后，才允许发包。任一步失败都不发包，内存重试期限仍前移 600 秒。不写完成记录，不随每轮采样写预算；预留后崩溃也算已用。
+- 同一 boot 的 Core 重启保留预算。记录缺失、损坏、未知版本或在未来时，从 Core 启动保守等 600 秒；开机钟不可用就拒绝探测。有效的另一 boot 记录等到本次开机 600 秒。已隔离的未来记录可在等待结束后替换，但不能覆盖另一实例刚保存的新预算。
+- Finding 的被动准入沿用已有 5 秒采样。采样间隔超过 10 秒、必需读数缺失/过期、状态或计数未知、计数归零、SIM/interfaces 变更代次改变，都会打断 60 秒观察窗口。休眠可使预算到期，但不能证明故障连续存在。流量安静只允许一次有限探测，不等于断网证据。
+- `Hub::observations` 同锁读取最新内部数据、BOOTTIME 和变更代次；不改 `/v2` 时间戳、revision 和发布策略。每次请求前、最终结果及保存报告的 `fresh` 都重查连接身份/新鲜度，变化则整轮失效；采集器见过的 A→B→A 也能识别。未被采集器观测到的短暂切换仍未验证；这不是内核会话标识或完整路由证明。
+- 只迁移 Finding 试点的准入；旧深查、通用 netwatch 状态和事务探测保持现有行为。退回旧二进制就失去这些保护，单留预算文件不能保护旧版。真机落盘、休眠和功耗影响仍需另行验证。

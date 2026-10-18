@@ -191,6 +191,8 @@
 
 ## 7. 时钟
 
+**2026-10-18 本机修订（未部署）**：下面是旧 guard 的历史约定。现行本机 Sentinel/Core 使用共享 `luyaz-alerts::clock::ClockEvidence`；年份等仅为 estimated，不证明同步/UTC。v2 `clock-ok` 保留第一行并附 boot 绑定 JSON；新读端检查 ≤180s 新鲜度、同 boot 和 5s 连续性，大幅跳变撤销跨 Sentinel 进程重启保留。doctor 不再用年份回退宣称“已对时”。具体范围、混合版本影响和验收见 `../../docs/designs/u60-mcp.md`「P0-01 第二批」；本节的旧 scorecard 回填规则尚未迁移。
+
 - **可信**：年份 ≥ 2026，并且满足任一：
   1. 原厂对时状态表明已对时（字段在设备上核实后填进 `GUARD_SNTP_OK_CMD`；没核实前这一条不用）；
   2. 本次开机里观察到「墙钟 − 开机秒数」向前跳了 1 天以上（`jump`）；

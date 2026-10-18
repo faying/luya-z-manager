@@ -11,18 +11,19 @@
 //! What it reads (no AT: the AT port has one lock and the data layer's `AT+CGACT?`/`AT+CEER`
 //! readings are left out for now): the signal block (`type`, `roaming`), the interfaces
 //! block's `cellular` (`enable` read like the home screen does, `roam_enable`, `connect_status`, `connect_fail_count`,
-//! `ipv4_address`), the sim block's `iccid`, and the home screen's `story.state` (no SIM,
+//! IPv4/IPv6 addresses), the sim block's `iccid`, and the home screen's `story.state` (no SIM,
 //! airplane). It probes only when the passive reading has said down for [`DOWN_HOLD_SECS`] in a
 //! row, a client is connected, and the last probing check is [`RECHECK_SECS`] ago (design:
 //! rechecks at most every 10 minutes).
 
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
+use luyaz_api::clock::BootTime;
 use luyaz_api::diagnose::Gate;
-use luyaz_api::finding::{DataIn, Premises, Probe, Reg, Verdict};
+use luyaz_api::finding::{DataIn, NetworkEvidence, Premises, Reg, Verdict};
 use luyaz_netwatch::finding::store::{Change, Store};
 use luyaz_netwatch::finding::{self as nf, FindingHost};
 use luyaz_netwatch::{Watch, record};
@@ -32,6 +33,8 @@ pub const FILE: &str = "/data/luyaz/core/findings.json";
 /// Sampler rounds (5 s) between checks.
 pub const EVERY_ROUNDS: u32 = 6;
 pub const RECHECK_SECS: u64 = 600;
+mod budget;
+pub(super) mod sampling;
 /// How long the passive reading must say down, without a break, before a probe may run (design
 /// Open Question 2, owner 2026-10-17). Why 60 s: the signal log 2026-10-10..10-17 (7.5 days)
 /// shows reconnects while registered back within 10 s, and the one long gap (100 s) came back by
@@ -89,6 +92,11 @@ pub struct Inputs {
     pub busy: Option<&'static str>,
     /// set when the internet probe ran
     pub probed: AtomicBool,
+    pub observed: Option<BootTime>,
+    pub root: String,
+    pub network: Mutex<Option<NetworkEvidence>>,
+    pub current_connection: Arc<dyn Fn() -> bool + Send + Sync>,
+    pub reserve_probe: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
 fn cellular(state: Option<&Value>) -> Option<&Value> {
@@ -111,8 +119,21 @@ fn flag(v: Option<&Value>, key: &str) -> Option<bool> {
     }
 }
 
+impl Inputs {
+    fn fresh(&self) -> bool {
+        self.observed
+            .as_ref()
+            .zip(BootTime::read().as_ref())
+            .and_then(|(then, now)| now.elapsed_since(then))
+            .is_some_and(|age| age <= nf::path::MAX_AGE)
+    }
+}
+
 impl FindingHost for Inputs {
     fn premises(&self) -> Premises {
+        if !self.fresh() {
+            return Premises::default();
+        }
         let story = self
             .screen
             .as_ref()
@@ -133,7 +154,7 @@ impl FindingHost for Inputs {
     }
 
     fn can_probe(&self) -> bool {
-        self.clients && self.probe_due && self.held_down
+        self.readings_current() && self.clients && self.probe_due && self.held_down
     }
 
     fn iccid(&self) -> String {
@@ -161,27 +182,119 @@ impl FindingHost for Inputs {
     }
 
     fn data(&self) -> DataIn {
+        if !self.fresh() {
+            return DataIn::default();
+        }
         let cell = cellular(self.state.as_ref());
         let s = |k: &str| cell.and_then(|c| c[k].as_str()).map(str::to_string);
         DataIn {
             connect_status: s("connect_status"),
             fail_count: cell.and_then(|c| c["connect_fail_count"].as_i64()),
-            has_ip: cell.map(|c| c["ipv4_address"].as_str().is_some_and(|a| !a.is_empty())),
+            has_ip: self.state.as_ref().and_then(nf::path::has_ip),
             pdp_active: None,
             ceer: None,
         }
     }
 
-    fn operator_dns(&self) -> Vec<String> {
-        self.state
-            .as_ref()
-            .map(luyaz_netwatch::operator_dns)
-            .unwrap_or_default()
+    fn readings_current(&self) -> bool {
+        self.fresh() && (self.current_connection)()
     }
 
-    fn internet_probe(&self) -> Option<Probe> {
-        self.probed.store(true, Ordering::SeqCst);
-        Some(nf::internet_either())
+    fn network_probe(&self) -> NetworkEvidence {
+        self.network_probe_with(&nf::path::BoundSockets)
+    }
+}
+
+/// Recheck identity/freshness before each request. No fallback once a connection changes.
+struct Guarded<'a> {
+    inputs: &'a Inputs,
+    io: &'a dyn nf::path::Transport,
+    invalid: AtomicBool,
+}
+impl Guarded<'_> {
+    fn current(&self) -> bool {
+        if self.invalid.load(Ordering::SeqCst) {
+            return false;
+        }
+        if !self.inputs.readings_current() {
+            self.invalid.store(true, Ordering::SeqCst);
+            return false;
+        }
+        true
+    }
+}
+impl nf::path::Transport for Guarded<'_> {
+    fn http(
+        &self,
+        path: &nf::path::Path,
+        target: std::net::SocketAddr,
+    ) -> luyaz_api::finding::ResultState {
+        if self.current() {
+            self.io.http(path, target)
+        } else {
+            luyaz_api::finding::ResultState::Unknown
+        }
+    }
+    fn dns(
+        &self,
+        path: &nf::path::Path,
+        target: std::net::SocketAddr,
+    ) -> luyaz_api::finding::ResultState {
+        if self.current() {
+            self.io.dns(path, target)
+        } else {
+            luyaz_api::finding::ResultState::Unknown
+        }
+    }
+}
+
+impl Inputs {
+    fn network_probe_with(&self, io: &dyn nf::path::Transport) -> NetworkEvidence {
+        let unknown = |reason: &str| NetworkEvidence {
+            reason: reason.into(),
+            observed_at: self.observed.clone(),
+            ..NetworkEvidence::default()
+        };
+        let n = if !self.readings_current() {
+            unknown("snapshot_or_connection_changed")
+        } else if !(self.reserve_probe)() {
+            unknown("probe_budget_unavailable")
+        } else {
+            // Reservation is durable before any packet; panic/crash also consumes the budget.
+            self.probed.store(true, Ordering::SeqCst);
+            let paths = self.state.as_ref().map(nf::path::paths).unwrap_or_default();
+            let redirected = redirected(&self.root);
+            let guarded = Guarded {
+                inputs: self,
+                io,
+                invalid: AtomicBool::new(false),
+            };
+            let mut n = nf::path::observe(
+                &paths,
+                self.observed.clone(),
+                BootTime::read(),
+                redirected,
+                &guarded,
+            );
+            n.observed_at = self.observed.clone();
+            if !guarded.current() {
+                n = unknown("snapshot_or_connection_changed_during_probe");
+            }
+            n
+        };
+        *lock(&self.network) = Some(n.clone());
+        n
+    }
+}
+
+/// CHILL may redirect the device's own traffic: anything but a readable "stopped" (or no state
+/// file at all) counts as redirected. Shared with the deep diagnosis' path probe.
+pub(super) fn redirected(root: &str) -> bool {
+    match std::fs::read_to_string(format!("{root}{}", luyaz_api::chill::CHILL_STATE)) {
+        Ok(s) => serde_json::from_str::<Value>(&s)
+            .ok()
+            .is_none_or(|v| v["state"] != "stopped"),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
     }
 }
 
@@ -189,9 +302,14 @@ impl FindingHost for Inputs {
 pub struct Findings {
     store: Mutex<Store>,
     path: PathBuf,
-    last_probe: AtomicU64,
-    /// when the passive reading first said down in the current run of downs; 0 = up
-    down_since: AtomicU64,
+    budget: Mutex<budget::Budget>,
+    passive: Mutex<sampling::Passive>,
+    network: Mutex<Option<StoredNetwork>>,
+}
+
+struct StoredNetwork {
+    evidence: NetworkEvidence,
+    current: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
 impl Findings {
@@ -204,9 +322,13 @@ impl Findings {
             .unwrap_or_default();
         let f = Findings {
             store: Mutex::new(store),
-            path,
-            last_probe: AtomicU64::new(0),
-            down_since: AtomicU64::new(0),
+            path: path.clone(),
+            budget: Mutex::new(budget::Budget::load(
+                path.with_extension("probe-budget.json"),
+                BootTime::read().as_ref(),
+            )),
+            passive: Mutex::new(sampling::Passive::default()),
+            network: Mutex::new(None),
         };
         f.publish();
         f
@@ -220,6 +342,14 @@ impl Findings {
             .open
             .iter()
             .filter(|e| e.finding["confidence"] == "sure")
+            // Old unbound HTTP findings must not reappear as a sure internet diagnosis.
+            .filter(|e| {
+                !matches!(e.finding["layer"].as_str(), Some("internet" | "dns"))
+                    || e.finding["evidence"].as_array().is_some_and(|ev| {
+                        ev.iter()
+                            .any(|v| v["network"]["internet_usable"] == "passed")
+                    })
+            })
             .max_by_key(|e| e.last)?;
         let f = &e.finding;
         let t = |k: &str| f[k].as_str().unwrap_or("").to_string();
@@ -249,6 +379,16 @@ impl Findings {
             return Value::Null;
         };
         let mut f = e.finding.clone();
+        if matches!(f["layer"].as_str(), Some("internet" | "dns"))
+            && !f["evidence"]
+                .as_array()
+                .is_some_and(|ev| ev.iter().any(|v| v.get("network").is_some()))
+        {
+            f["confidence"] = "guess".into();
+            f["verification"] = "legacy_path_unverified".into();
+            f["symptom"] = "旧版探测的蜂窝出口未验证，需重新检查".into();
+            f["symptom_en"] = "Legacy probe cellular path unverified; recheck needed".into();
+        }
         if let Some(o) = f.as_object_mut() {
             o.remove("iccid");
             o.insert(
@@ -263,26 +403,56 @@ impl Findings {
         f
     }
 
-    pub fn probe_due(&self, now: u64) -> bool {
-        now.saturating_sub(self.last_probe.load(Ordering::SeqCst)) >= RECHECK_SECS
+    /// The latest observation while it is fresh and its connection current (what
+    /// [`Findings::network_view`] marks `fresh`): the deep diagnosis reuses it (deep-diag-v2 §2.1).
+    pub fn fresh_network(&self) -> Option<NetworkEvidence> {
+        let stored = lock(&self.network);
+        let stored = stored.as_ref()?;
+        let n = &stored.evidence;
+        let fresh = n
+            .observed_at
+            .as_ref()
+            .zip(BootTime::read().as_ref())
+            .and_then(|(a, b)| b.elapsed_since(a))
+            .is_some_and(|age| age <= nf::path::MAX_AGE);
+        (fresh && (stored.current)()).then(|| n.clone())
     }
 
-    /// Tracks the run of passive downs (same clock as [`Findings::probe_due`]): the first down
-    /// starts it, an up clears it. True once it has lasted [`DOWN_HOLD_SECS`]. A short outage
-    /// never probes, so it never starts the [`RECHECK_SECS`] wait.
-    pub fn held_down(&self, passive_down: bool, now: u64) -> bool {
-        if !passive_down {
-            self.down_since.store(0, Ordering::SeqCst);
-            return false;
-        }
-        let since = match self.down_since.load(Ordering::SeqCst) {
-            0 => {
-                self.down_since.store(now, Ordering::SeqCst);
-                now
-            }
-            t => t,
+    /// Latest scoped observation, with elapsed freshness checked at read time.
+    pub fn network_view(&self) -> Value {
+        let stored = lock(&self.network);
+        let Some(stored) = stored.as_ref() else {
+            return Value::Null;
         };
-        now.saturating_sub(since) >= DOWN_HOLD_SECS
+        let n = &stored.evidence;
+        let fresh = n
+            .observed_at
+            .as_ref()
+            .zip(BootTime::read().as_ref())
+            .and_then(|(a, b)| b.elapsed_since(a))
+            .is_some_and(|age| age <= nf::path::MAX_AGE);
+        let fresh = fresh && (stored.current)();
+        serde_json::json!({"fresh": fresh, "observation": n})
+    }
+
+    pub fn probe_due(&self, now: Option<&BootTime>) -> bool {
+        lock(&self.budget).due(now)
+    }
+
+    pub fn reserve_probe(&self, now: Option<&BootTime>) -> bool {
+        lock(&self.budget).reserve(now)
+    }
+
+    pub fn sample_passive(&self, readings: Option<&sampling::Readings>, now: Option<&BootTime>) {
+        lock(&self.passive).sample(readings, now);
+    }
+
+    pub fn passive_admission(
+        &self,
+        readings: Option<&sampling::Readings>,
+        now: Option<&BootTime>,
+    ) -> (bool, bool) {
+        lock(&self.passive).admission(readings, now)
     }
 
     /// One check. Busy (another operation holds the gate): nothing changes, try next time.
@@ -294,8 +464,18 @@ impl Findings {
         now: u64,
     ) -> Option<Verdict> {
         let v = nf::check(i, gate).ok()?;
-        if i.probed.load(Ordering::SeqCst) {
-            self.last_probe.store(now, Ordering::SeqCst);
+        if let Some(n) = lock(&i.network).clone() {
+            *lock(&self.network) = Some(StoredNetwork {
+                evidence: n,
+                current: i.current_connection.clone(),
+            });
+        }
+        if !i.readings_current() {
+            // Even Unverified carries a card to Store::observe; a stale card must not expire
+            // findings belonging to the new connection. Do not mutate the store at all.
+            return Some(Verdict::Unverified {
+                why: "snapshot_or_connection_changed",
+            });
         }
         self.observe(&v, &i.iccid, watch, now);
         Some(v)

@@ -6,9 +6,9 @@
 //! process (`luyaz-doctor`), so nothing that recognises the core by `/proc/<pid>/comm`
 //! (`zwrt-datad*`, `luyaz-core*`) takes it for a second core.
 //!
-//! Parity, not redesign: every row has doctor.sh's id, level, labels, detail and position, and
-//! every command and path has doctor.sh's default and `DOC_*` override, so the shell's fixtures
-//! (touch-ui scripts/test/doctor) drive both. Changing a judgement is a separate question.
+//! P0-01 replaces the old clock judgement with shared, fresh, boot-bound evidence. Other rows
+//! retain doctor.sh's ids, levels, labels, details and order. Commands/paths retain the `DOC_*`
+//! overrides, so the shell's fixtures (touch-ui scripts/test/doctor) still drive both.
 //!
 //! Batch 1: the output layer (text, `--tsv`, `--tsv2`, exit code) and the file/uci rows boot-sync,
 //! fota, clock, core-move, tmp-move, crashes, disk. Batch 2: svc-*, dup-*, svc-zte-agent, heartbeat,
@@ -21,8 +21,6 @@ use std::process::{Command, Stdio};
 
 /// What the process calls itself while it runs doctor (not a core name: `paths::is_core`).
 pub const COMM: &str = "luyaz-doctor";
-
-const CLOCK_YEAR_MIN: i64 = 1767225600; // 2026-01-01 00:00
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
@@ -68,7 +66,6 @@ pub struct Cfg {
     df: Vec<String>,
     uptime: String,
     clock_ok: String,
-    wall_last: String,
     alerts: String,
     crash: String,
     data_dir: String,
@@ -156,7 +153,6 @@ impl Cfg {
             df: w("DOC_DF", "df"),
             uptime: s("DOC_UPTIME", "/proc/uptime"),
             clock_ok: s("DOC_CLOCK_OK", &format!("{guard_tmp}/clock-ok")),
-            wall_last: s("DOC_WALL_LAST", "/data/ledger/state/wall.last"),
             alerts: s("DOC_ALERTS", "/data/alerts"),
             crash: s("DOC_CRASH", "/data/crashlog"),
             data_dir: s("DOC_DATA", "/data"),
@@ -712,52 +708,58 @@ fn uptime_s(c: &Cfg) -> i64 {
 }
 
 fn clock(c: &Cfg) -> Row {
+    use luyaz_api::clock::{BootTime, EvidenceStatus, evidence_status};
     let up = uptime_s(c);
-    let t = digits(&sh_out(&c.date, &["+%s"], false)).unwrap_or(0);
-    // read -r ck _cw cu _ch <"$CLOCK_OK"
-    let (mut ck, mut cu) = (String::new(), None);
-    if let Ok(b) = std::fs::read(&c.clock_ok) {
-        let s = String::from_utf8_lossy(&b);
-        let first = s.split('\n').next().unwrap_or("");
-        let f: Vec<&str> = first.split([' ', '\t']).filter(|x| !x.is_empty()).collect();
-        ck = f.first().map(|x| x.to_string()).unwrap_or_default();
-        // with exactly 3 fields cu is the 3rd; with more, _ch takes the rest and cu is still the 3rd
-        cu = f.get(2).and_then(|x| digits(x));
-    }
-    let clk = match cu {
-        Some(cu) if cu <= up && up - cu <= 300 => ck == "1",
-        _ => {
-            let last = cat(&c.wall_last).and_then(|s| digits(&s)).unwrap_or(0);
-            t >= CLOCK_YEAR_MIN && (last == 0 || t >= last - 86400)
-        }
-    };
-    if clk {
+    let t = digits(&sh_out(&c.date, &["+%s"], false))
+        .and_then(|v| i64::try_from(v).ok())
+        .unwrap_or(0);
+    let at = BootTime::from_uptime(
+        &cat(&c.boot_id_file).unwrap_or_default(),
+        &cat(&c.uptime).unwrap_or_default(),
+    );
+    let status = evidence_status(&cat(&c.clock_ok).unwrap_or_default(), at.as_ref(), t);
+    if status.wall_usable() {
         let dt = sh_out(&c.date, &["+%Y-%m-%d %H:%M"], false);
-        row(
-            "ok",
-            "clock",
-            "时钟",
-            format!("已对时（{dt} 设备当地时间）"),
-            "Clock",
-            format!("Synced ({dt} device local time)"),
-        )
+        let (zh, en) = if status == EvidenceStatus::Verified {
+            (
+                format!("同步证据已验证（{dt} 设备当地时间）"),
+                format!("Verified sync evidence ({dt} device local time)"),
+            )
+        } else {
+            (
+                format!("时间为估算（{dt} 设备当地时间），尚未验证同步"),
+                format!("Estimated ({dt} device local time); sync unverified"),
+            )
+        };
+        row("ok", "clock", "时钟", zh, "Clock", en)
     } else if up < 300 {
         row(
             "ok",
             "clock",
             "时钟",
-            "刚开机，还在对时".into(),
+            "刚开机，尚无有效时间证据".into(),
             "Clock",
-            "Just booted; still syncing".into(),
+            "Just booted; no valid clock evidence yet".into(),
         )
     } else {
+        let (zh, en) = match status {
+            EvidenceStatus::Stale => ("时间证据已过期", "Clock evidence expired"),
+            EvidenceStatus::BootMismatch => (
+                "时间证据属于另一次开机",
+                "Clock evidence belongs to another boot",
+            ),
+            EvidenceStatus::WallChanged | EvidenceStatus::Revoked => {
+                ("检测到时间跳变", "Clock step detected")
+            }
+            _ => ("缺少有效时间证据", "No valid clock evidence"),
+        };
         row(
             "warn",
             "clock",
             "时钟",
-            "还没对时，告警短信在对时前不发".into(),
+            format!("{zh}；告警短信暂缓发送"),
             "Clock",
-            "Not synced yet; no alert SMS until it is".into(),
+            format!("{en}; alert SMS held"),
         )
     }
 }

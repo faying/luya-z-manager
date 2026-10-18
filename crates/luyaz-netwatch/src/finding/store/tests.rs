@@ -1,6 +1,6 @@
 use super::*;
 use luyaz_api::diagnose::Level;
-use luyaz_api::finding::{Confidence, Evidence, LayerId, KIND_NO_INTERNET};
+use luyaz_api::finding::{Confidence, Evidence, KIND_NO_INTERNET, LayerId};
 
 const T: u64 = CLOCK_SET + 1_000_000;
 
@@ -62,9 +62,10 @@ fn resolves_after_two_up_checks_in_a_row() {
     s.observe(&open("1"), "1", T + 20);
     assert!(s.observe(&UP, "1", T + 30).is_empty());
     // can't tell does not count either way
-    assert!(s
-        .observe(&Verdict::Unverified { why: "not_probed" }, "1", T + 35)
-        .is_empty());
+    assert!(
+        s.observe(&Verdict::Unverified { why: "not_probed" }, "1", T + 35)
+            .is_empty()
+    );
     let c = s.observe(&Verdict::None { why: "up" }, "1", T + 40);
     assert!(matches!(&c[..], [Change::Close(_, Close::Resolved)]));
     assert!(s.open.is_empty());
@@ -207,9 +208,10 @@ fn events_carry_the_iccid_tail_only() {
 fn no_card_reading_changes_nothing() {
     let mut s = Store::default();
     s.observe(&open("A"), "A", T);
-    assert!(s
-        .observe(&Verdict::Unverified { why: "premises" }, "", T + 10)
-        .is_empty());
+    assert!(
+        s.observe(&Verdict::Unverified { why: "premises" }, "", T + 10)
+            .is_empty()
+    );
     assert!(s.observe(&open(""), "", T + 20).is_empty());
     assert_eq!(s.open.len(), 1);
     assert_eq!(s.open[0].iccid, "A");

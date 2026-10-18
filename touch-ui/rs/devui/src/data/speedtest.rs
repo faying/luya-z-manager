@@ -24,6 +24,8 @@ pub const ST_DISCOVERING: i32 = 7;
 
 pub struct Speedtest {
     online: bool,
+    /// The progress was asked at least once (it is asked only while the speed page is open).
+    checked: bool,
     last_ms: i64,
     phase: i32,
     progress: i32,
@@ -45,6 +47,7 @@ impl Default for Speedtest {
     fn default() -> Self {
         Speedtest {
             online: false,
+            checked: false,
             last_ms: 0,
             phase: ST_IDLE,
             progress: 0,
@@ -82,6 +85,7 @@ impl Speedtest {
         }
         self.last_ms = t;
         let (code, b) = agent.api("GET", "/api/speedtest/progress", None, ST_RESP_MAX);
+        self.checked = true;
         let Some(data) = b.filter(|_| code == 200).and_then(|b| json::get(&b, "data", ST_RESP_MAX)) else {
             self.online = false;
             return true;
@@ -163,8 +167,10 @@ impl Speedtest {
     pub fn running(&self) -> bool {
         matches!(self.phase, ST_DISCOVERING | ST_LATENCY | ST_DOWNLOAD | ST_UPLOAD)
     }
+    /// Not asked yet counts as reachable: the cellular page's row said 「服务不可用」 until the
+    /// speed page had been opened once (10-18).
     pub fn reachable(&self) -> bool {
-        self.online
+        self.online || !self.checked
     }
 
     /// true = started (the agent runs it in the background); refused: the agent's own words
@@ -355,6 +361,16 @@ mod provider_tests {
         });
         (api,thread)
     }
+    #[test]
+    fn not_asked_yet_is_not_unavailable() {
+        let mut speed = Speedtest::default();
+        assert!(speed.reachable());
+        speed.checked = true;
+        assert!(!speed.reachable());
+        speed.online = true;
+        assert!(speed.reachable());
+    }
+
     #[test]
     fn starting_provider_and_explicit_node_are_scoped_and_immediately_running() {
         let mut speed = Speedtest::default();

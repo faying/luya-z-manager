@@ -29,7 +29,9 @@ use crate::i18n::Lang;
 use crate::pages::{Shared, StreamQuery, async_stream, patch, split_leaves};
 
 const PATH: &str = "/tools/diagnose";
-const LAYER_ORDER: [&str; 6] = ["wifi", "signal", "limit", "link", "crowd", "proxy"];
+const LAYER_ORDER: [&str; 11] = [
+    "wifi", "sim", "signal", "limit", "bearer", "link", "dns", "e2e", "clock", "crowd", "proxy",
+];
 
 fn pick(v: &Value, key: &str, l: Lang) -> String {
     let zh = v[key].as_str().unwrap_or("");
@@ -51,9 +53,14 @@ fn is_live(d: &Value) -> bool {
 fn layer_name(id: &str, l: Lang) -> String {
     match id {
         "wifi" => "Wi-Fi",
+        "sim" => l.pick("SIM", "SIM 卡"),
         "signal" => l.pick("Signal", "信号"),
         "limit" => l.pick("Speed cap", "限速"),
+        "bearer" => l.pick("Data connection", "数据连接"),
         "link" => l.pick("Cellular link", "蜂窝链路"),
+        "dns" => l.pick("DNS", "域名解析"),
+        "e2e" => l.pick("Internet", "外网"),
+        "clock" => l.pick("Device clock", "设备时间"),
         "crowd" => l.pick("Cell load", "基站负载"),
         "proxy" => l.pick("Proxy", "代理"),
         "speed" => l.pick("Speed", "速度"),
@@ -112,6 +119,13 @@ fn row_view(layer: &Value, l: Lang, speed_for: Option<u64>) -> RowV {
             muted,
         ),
         "bad" => (Some("bad"), l.pick("Poor", "差").into(), detail, muted),
+        // not run: a layer before it is down (grey, not counted)
+        "blocked" => (
+            Some("neutral"),
+            l.pick("Not checked", "没测").into(),
+            detail,
+            true,
+        ),
         "na" => (
             Some("neutral"),
             if detail.is_empty() {
@@ -396,8 +410,8 @@ fn view(g: &Got, l: Lang) -> View {
         v.word = l.pick("Not checked yet", "还没查过").into();
         v.reason = Some(
             l.pick(
-                "Find out whether it's Wi-Fi, signal, a speed cap, the cellular link or cell load",
-                "查一查卡在 Wi-Fi、信号、限速、蜂窝链路还是基站负载",
+                "Find out whether it's Wi-Fi, the SIM, signal, a speed cap, the data connection, DNS or cell load",
+                "查一查卡在 Wi-Fi、SIM 卡、信号、限速、数据连接、域名解析还是基站负载",
             )
             .into(),
         );
@@ -767,7 +781,8 @@ mod tests {
                 {"id":"link","level":"warn","detail":"丢包 3%","detail_en":"3% loss","counted":true},
                 {"id":"wifi","level":"ok","detail":"-45 dBm","detail_en":"-45 dBm","counted":true},
                 {"id":"proxy","level":"bad","detail":"超时","detail_en":"timeout","counted":true},
-                {"id":"crowd","level":"na","detail":"无数据","detail_en":"no data","counted":false}],
+                {"id":"crowd","level":"na","detail":"无数据","detail_en":"no data","counted":false},
+                {"id":"clock","level":"blocked","detail":"前面的外网不通","detail_en":"Internet is down","counted":false}],
             "main":{"layer":"proxy","level":"bad","text":"代理节点慢或不通","text_en":"Proxy node slow or down",
                     "action":"换节点","action_en":"Switch node","action_to":"proxy","more":1},
             "feedback":null,
@@ -787,10 +802,19 @@ mod tests {
         assert!(v.proxy);
         assert_eq!(v.at.as_deref(), Some("14:05 测"));
         let names: Vec<&str> = v.rows.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, ["Wi-Fi", "蜂窝链路", "基站负载", "代理", "速度"]);
-        assert_eq!(v.rows[2].word, "测不了 · 无数据");
-        assert!(v.rows[2].muted);
-        assert_eq!(v.rows[4].word, "直连 ↓ 86 Mbps");
+        assert_eq!(
+            names,
+            ["Wi-Fi", "蜂窝链路", "设备时间", "基站负载", "代理", "速度"]
+        );
+        assert_eq!(v.rows[3].word, "测不了 · 无数据");
+        assert!(v.rows[3].muted);
+        // blocked: grey, says why
+        assert_eq!(
+            (v.rows[2].word.as_str(), v.rows[2].tone, v.rows[2].muted),
+            ("没测", Some("neutral"), true)
+        );
+        assert_eq!(v.rows[2].detail, "前面的外网不通");
+        assert_eq!(v.rows[5].word, "直连 ↓ 86 Mbps");
         let n = v.next.unwrap();
         assert!(n.roaming && !n.answered);
     }

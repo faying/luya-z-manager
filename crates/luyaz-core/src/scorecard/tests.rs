@@ -183,6 +183,8 @@ fn core_coverage_reaches_the_card() {
         mono: up,
         wall: W + up,
         wall_ok: true,
+        clock_status: luyaz_api::clock::EvidenceStatus::Estimated,
+        evidence: None,
         how: None,
     };
     let text = |v: &[serde_json::Value]| v.iter().map(|x| x.to_string() + "\n").collect::<String>();
@@ -354,10 +356,16 @@ fn a_planned_reboot_is_manual_whatever_its_code() {
             label: "24 小时".into(),
             ..Default::default()
         });
-        text.lines().find(|l| l.contains("S1 ")).unwrap().to_string()
+        text.lines()
+            .find(|l| l.contains("S1 "))
+            .unwrap()
+            .to_string()
     };
     let crash = card("");
     assert!(crash.contains("S1 意外整机重启：1 次"), "{crash}");
     let asked = card(r#","planned":"ssh:test""#);
-    assert!(asked.contains("S1 意外整机重启：0 次（另有人为 1 次）"), "{asked}");
+    assert!(
+        asked.contains("S1 意外整机重启：0 次（另有人为 1 次）"),
+        "{asked}"
+    );
 }

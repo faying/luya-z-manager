@@ -14,9 +14,11 @@
 //! - [`Verdict::Open`]: a probe proved it. Confidence is sure or likely; "guess" (only the
 //!   symptom, no layer evidence) is never opened by `judge` under D8, it stays for other callers.
 //!
-//! The internet probe must not need DNS (bound to the cellular interface, IP-literal target, plain
-//! HTTP rather than HTTPS: the device clock is local time labelled UTC, a TLS check would fail on
-//! it). Otherwise a DNS fault shows up as an internet fault and gets "sure" on the wrong layer.
+//! Scoped network observations carry interface/family/source/route and separate path, DNS,
+//! TLS and internet states. This pilot does not establish TLS/internet usability.
+//! The path probe uses bound IP-literal HTTP sockets without DNS. It is only path evidence;
+//! it does not establish TLS or overall internet usability and network failures stay likely.
+//! Verified HTTPS recovery checks require a separate time/certificate design, never a TLS bypass.
 //!
 //! Times are device-clock seconds throughout.
 
@@ -84,6 +86,8 @@ pub struct Evidence {
     pub detail_en: String,
     /// When it was read.
     pub at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkEvidence>,
 }
 
 impl Evidence {
@@ -100,10 +104,12 @@ impl Evidence {
             detail: zh.into(),
             detail_en: en.into(),
             at,
+            network: None,
         }
     }
     fn fresh(&self, now: u64) -> bool {
-        self.at + FRESH_SECS >= now
+        now.checked_sub(self.at)
+            .is_some_and(|age| age <= FRESH_SECS)
     }
 }
 
@@ -214,7 +220,21 @@ pub fn judge_data(d: &DataIn, at: u64) -> Evidence {
         .filter(|c| !c.is_empty() && !c.contains("No cause"))
         .map(|c| format!("（{c}）"))
         .unwrap_or_default();
-    let connected = status.contains("connected") && !status.contains("disconnected");
+    let connected = match status {
+        "connected" | "ipv4_connected" | "ipv6_connected" | "ipv4_ipv6_connected" => true,
+        "disconnected"
+        | "ipv4_disconnected"
+        | "ipv6_disconnected"
+        | "ipv4_ipv6_disconnected"
+        | "connecting" => false,
+        _ => {
+            return e(
+                Level::Na,
+                "未知数据连接状态".into(),
+                "Unknown data connection status".into(),
+            );
+        }
+    };
     if !connected || d.pdp_active == Some(false) {
         let fails = d
             .fail_count
@@ -239,7 +259,82 @@ pub fn judge_data(d: &DataIn, at: u64) -> Evidence {
             "Connected without an IP".into(),
         );
     }
+    if d.has_ip.is_none() {
+        return e(
+            Level::Na,
+            "已连接，IP 未知".into(),
+            "Connected; IP unknown".into(),
+        );
+    }
     e(Level::Ok, "已连接".into(), "Connected".into())
+}
+
+/// A bounded observation, not a claim that every destination/service works.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResultState {
+    Passed,
+    Failed,
+    #[default]
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PathEvidence {
+    pub interface: String,
+    pub family: &'static str,
+    /// Provenance only; do not publish the subscriber's source address.
+    pub source: &'static str,
+    /// Binding constrains the socket; transparent redirection is not disproved.
+    pub route: &'static str,
+    pub path_reachable: ResultState,
+    pub dns: ResultState,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct NetworkEvidence {
+    pub paths: Vec<PathEvidence>,
+    pub path_reachable: ResultState,
+    pub dns: ResultState,
+    pub tls: ResultState,
+    pub internet_usable: ResultState,
+    pub reason: String,
+    pub observed_at: Option<crate::clock::BootTime>,
+}
+
+/// Only scoped path/DNS evidence. No HTTP status or resolver reply proves TLS/internet.
+pub fn judge_network(n: NetworkEvidence, at: u64) -> (Evidence, Evidence) {
+    use ResultState::*;
+    let (level, zh, en) = match n.path_reachable {
+        Passed => (
+            Level::Ok,
+            "蜂窝 HTTP 路径有回应，未验证 TLS/上网",
+            "Cellular HTTP path replied; TLS/internet unverified",
+        ),
+        Failed => (
+            Level::Bad,
+            "检测目标未回应，尚不能确认整体断网",
+            "Probe targets did not reply; overall outage unconfirmed",
+        ),
+        Unknown => (Level::Na, "蜂窝路径未知", "Cellular path unknown"),
+    };
+    let mut path = Evidence::new(LayerId::Internet, level, zh, en, at);
+    let (level, zh, en) = match n.dns {
+        Passed => (
+            Level::Ok,
+            "查询名有地址回答",
+            "Query name resolved to an address",
+        ),
+        Failed => (
+            Level::Bad,
+            "DNS 查询未成功，尚不能确认所有解析失败",
+            "DNS query failed; general resolver failure unconfirmed",
+        ),
+        Unknown => (Level::Na, "DNS 未验证", "DNS unverified"),
+    };
+    let dns = Evidence::new(LayerId::Dns, level, zh, en, at);
+    path.network = Some(n);
+    (path, dns)
 }
 
 /// One probe's result; None = not run.
@@ -354,7 +449,17 @@ pub fn judge(c: &Check) -> Verdict {
     }
     let Some(i) = ev.iter().position(|e| e.level == Level::Bad) else {
         return if ev.iter().all(|e| e.level == Level::Ok) {
-            Verdict::None { why: "all_ok" }
+            Verdict::None {
+                why: if ev.iter().any(|e| {
+                    e.network
+                        .as_ref()
+                        .is_some_and(|n| n.internet_usable != ResultState::Passed)
+                }) {
+                    "path_dns_ok"
+                } else {
+                    "all_ok"
+                },
+            }
         } else {
             Verdict::Unverified {
                 why: "inconclusive",
@@ -362,12 +467,32 @@ pub fn judge(c: &Check) -> Verdict {
         };
     };
     let clean = ev[..i].iter().all(|e| e.level == Level::Ok);
-    let confidence = if clean && ev[i].fresh(c.now) {
+    let scoped_network = i >= 2
+        && ev.iter().any(|e| {
+            e.network
+                .as_ref()
+                .is_some_and(|n| n.internet_usable != ResultState::Passed)
+        });
+    let confidence = if clean && !scoped_network && ev[..=i].iter().all(|e| e.fresh(c.now)) {
         Confidence::Sure
     } else {
         Confidence::Likely
     };
-    let (zh, en) = symptom(ev[i].layer);
+    let (zh, en) = if scoped_network {
+        if ev[i].layer == LayerId::Dns {
+            (
+                "DNS 查询未成功，整体上网能力尚未确认",
+                "DNS query failed; overall internet usability unconfirmed",
+            )
+        } else {
+            (
+                "检测目标未回应，尚不能确认整体断网",
+                "Probe targets did not reply; overall outage unconfirmed",
+            )
+        }
+    } else {
+        symptom(ev[i].layer)
+    };
     Verdict::Open(Finding {
         kind: KIND_NO_INTERNET,
         iccid: c.iccid.clone(),

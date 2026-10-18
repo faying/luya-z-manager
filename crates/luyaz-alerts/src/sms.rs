@@ -41,7 +41,8 @@ pub trait SmsIo {
     fn uptime(&mut self) -> u64;
     fn boot_id(&mut self) -> String;
     fn pid_alive(&mut self, pid: u32) -> bool;
-    /// `/tmp/luyaz/clock-ok` says the clock can be trusted (the sentinel computes it).
+    /// Fresh, same-boot wall estimate with no observed step, as the sentinel computes it.
+    /// This preserves local-wall rate limiting; it does not mean verified UTC/NTP.
     fn clock_ok(&mut self) -> bool;
     /// The screen's language is English (`lang=en`, last line, in devui.conf).
     fn lang_en(&mut self) -> bool;

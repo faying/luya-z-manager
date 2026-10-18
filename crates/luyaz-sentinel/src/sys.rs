@@ -163,7 +163,11 @@ pub fn find_ui() -> Option<i32> {
         let name = e.file_name();
         let Some(n) = name.to_str() else { continue };
         let Ok(pid) = n.parse::<i32>() else { continue };
-        if pid != me && comm(n).map(|c| crate::screen::is_devui_comm(&c)).unwrap_or(false) {
+        if pid != me
+            && comm(n)
+                .map(|c| crate::screen::is_devui_comm(&c))
+                .unwrap_or(false)
+        {
             return Some(pid);
         }
     }
@@ -584,6 +588,9 @@ pub struct RealWorker {
 }
 
 impl WorkerIo for RealWorker {
+    fn boot_time(&mut self) -> Option<luyaz_alerts::clock::BootTime> {
+        luyaz_alerts::clock::BootTime::read()
+    }
     fn uptime(&mut self) -> u64 {
         uptime_s()
     }
@@ -661,7 +668,7 @@ impl WorkerIo for RealWorker {
         let mut cmd = Command::new("sh");
         let ship = crate::worker::Paths::default().ship;
         cmd.args([ship.as_str(), "recover-live"])
-        .stdin(Stdio::null());
+            .stdin(Stdio::null());
         if let Ok(f) = log
             && let Ok(f2) = f.try_clone()
         {
@@ -715,7 +722,9 @@ impl WorkerIo for RealWorker {
 /// A ship transaction of one of `comps` with a live executor (heartbeat ≤ 90 s, its pid running
 /// the executor).
 pub fn txn_live(comps: &[&str]) -> bool {
-    let crate::worker::Paths { ship_txn, ship_hb, .. } = crate::worker::Paths::default();
+    let crate::worker::Paths {
+        ship_txn, ship_hb, ..
+    } = crate::worker::Paths::default();
     let Some(txn) = read(&ship_txn) else {
         return false;
     };
@@ -744,7 +753,8 @@ pub fn txn_live(comps: &[&str]) -> bool {
     ) else {
         return false;
     };
-    uptime_s().saturating_sub(hu) <= crate::worker::SHIP_STALE_S && cmdline_has(hp, crate::worker::SHIP_CMDLINE)
+    uptime_s().saturating_sub(hu) <= crate::worker::SHIP_STALE_S
+        && cmdline_has(hp, crate::worker::SHIP_CMDLINE)
 }
 
 /// u60-guard.init's test: power-off charging is `mode_power_off_*` in zwrt_zte_mc_tmp; power-on
@@ -895,7 +905,12 @@ impl luyaz_alerts::sms::SmsIo for SentinelSms {
         r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
     fn clock_ok(&mut self) -> bool {
-        read(CLOCK_OK).is_some_and(|s| s.split_whitespace().next() == Some("1"))
+        luyaz_alerts::clock::evidence_status(
+            &read(CLOCK_OK).unwrap_or_default(),
+            luyaz_alerts::clock::BootTime::read().as_ref(),
+            wall_s(),
+        )
+        .wall_usable()
     }
     fn lang_en(&mut self) -> bool {
         read(DEVUI_CONF).is_some_and(|c| luyaz_alerts::sms::lang_en(&c))

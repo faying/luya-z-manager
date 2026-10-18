@@ -4,6 +4,9 @@
 // done. The judgement follows the persona: normal → nothing found; weak →
 // weak signal (bad) + a slow cellular link (warn), i.e. "+1 more". The proxy
 // layer is there while the proxy service runs, like the agent's `proxy_on()`.
+// v2 layers (deep-diag-v2.md): scenario `diag-sim-warn` = eSIM channels all
+// taken (warn); `diag-bearer-bad` = not connected, so every layer that needs
+// the bearer is `blocked` (grey, not counted, sends nothing).
 //
 // While a run is going, the speed test, the network search and manual
 // register answer the agent's 409 (`refusal`): 正在诊断，约 N 秒后再试.
@@ -26,6 +29,8 @@ interface MockRun {
   waitMs: number;
   stepMs: number;
   weak: boolean;
+  simWarn: boolean;
+  bearerBad: boolean;
   proxy: boolean;
   feedback: boolean | null;
   speedAt: number | null;
@@ -67,18 +72,35 @@ const devSecs = (ms: number) => Math.floor(ms / 1000) + DEVICE_UTC_OFFSET;
 
 type Final = Omit<DiagLayer, "counted"> & { counted?: boolean };
 
+const blocked = (id: string): Final => ({ id, level: "blocked" as DiagLevel, detail: "前面的数据连接不通", detail_en: "Data connection is down", counted: false });
+
 function finals(r: MockRun): Final[] {
   const out: Final[] = [
     { id: "wifi", level: "ok", detail: "−52 dBm · 866 Mbps · 重传 2%", detail_en: "−52 dBm · 866 Mbps · 2% retries" },
+    r.simWarn
+      ? { id: "sim", level: "warn", detail: "eSIM 通道占满，切换 profile 会失败", detail_en: "eSIM channels all taken; switching profiles will fail" }
+      : { id: "sim", level: "ok", detail: "已就绪 · eSIM 通道空闲", detail_en: "Ready · eSIM channel free" },
     r.weak
       ? { id: "signal", level: "bad", detail: "信号弱 · RSRP −115 dBm · SINR −2 dB", detail_en: "Weak signal · RSRP −115 dBm · SINR −2 dB" }
       : { id: "signal", level: "ok", detail: "RSRP −95 dBm · SINR 18 dB", detail_en: "RSRP −95 dBm · SINR 18 dB" },
     { id: "limit", level: "na", detail: "QoS 读不到", detail_en: "QoS unavailable" },
+  ];
+  if (r.bearerBad) {
+    out.push({ id: "bearer", level: "bad", detail: "没拨上号", detail_en: "Not connected" });
+    for (const id of ["link", "dns", "e2e", "clock", "crowd"]) out.push(blocked(id));
+    if (r.proxy) out.push(blocked("proxy"));
+    return out;
+  }
+  out.push(
+    { id: "bearer", level: "ok", detail: "已连上 · rmnet_data0", detail_en: "Connected · rmnet_data0" },
     r.weak
       ? { id: "link", level: "warn", detail: "延迟 180 ms · 丢包 4%", detail_en: "180 ms · 4% loss" }
       : { id: "link", level: "ok", detail: "延迟 28 ms · 丢包 0%", detail_en: "28 ms · 0% loss" },
+    { id: "dns", level: "ok", detail: "设备 DNS 24 ms · 运营商 DNS 能答", detail_en: "Device DNS 24 ms · carrier DNS answers" },
+    { id: "e2e", level: "ok", detail: "HTTP 有回应 · scoped_http_dns_only", detail_en: "HTTP replied · scoped_http_dns_only" },
+    { id: "clock", level: "info", detail: "估算的，没核对", detail_en: "Estimated, not verified" },
     { id: "crowd", level: "na", detail: "历史不够", detail_en: "Not enough history" },
-  ];
+  );
   if (r.proxy) out.push({ id: "proxy", level: "ok", detail: "TW 01 · 120 ms（直连 95 ms）", detail_en: "TW 01 · 120 ms (direct 95 ms)" });
   return out;
 }
@@ -108,6 +130,8 @@ function pickMain(layers: DiagLayer[]): DiagMain {
   }
   const more = layers.filter((l) => l.id !== m.id && (l.level === "warn" || l.level === "bad")).length;
   const byLayer: Record<string, [string, string, string, string, DiagMain["action_to"]]> = {
+    sim: ["eSIM 通道占满", "eSIM channels all taken", "切换 profile 前先重启设备", "Restart the device before switching profiles", ""],
+    bearer: ["数据连接没建立", "Data connection is down", "看看数据开关和 APN", "Check mobile data and the APN", ""],
     signal: ["信号弱", "Weak signal", "固定位置时用摆放模式；在路上只能等", "Use Placement if you're staying put; on the move, wait", "placement"],
     link: ["蜂窝链路不稳", "Cellular link unstable", "过几分钟再试，或换个地方", "Try again in a few minutes, or move", ""],
     proxy: ["代理节点慢或不通", "Proxy node slow or down", "换节点", "Switch node", "proxy"],
@@ -187,6 +211,8 @@ export const routes: Route[] = [
         waitMs: ctx.has("diag-waiting") ? WAIT_MS : 0,
         stepMs: ctx.has("diag-slow") ? SLOW_STEP_MS : STEP_MS,
         weak: ctx.has("weak"),
+        simWarn: ctx.has("diag-sim-warn"),
+        bearerBad: ctx.has("diag-bearer-bad"),
         proxy: shared.chill.state === "running",
         feedback: null,
         speedAt: null,

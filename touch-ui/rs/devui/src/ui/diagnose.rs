@@ -449,8 +449,9 @@ impl Ui {
 
         // the rows: what the run has; before the first reply, the layers it will have
         if self.dg.pending || r.state == DG_NONE || r.state == DG_IDLE {
+            // proxy last: the CHILL trim below drops it
             let ids: &[&str] = &[
-                "wifi", "signal", "limit", "link", "crowd",
+                "wifi", "sim", "signal", "limit", "bearer", "link", "dns", "e2e", "clock", "crowd",
                 "proxy",
             ];
             let nids = ids.len();

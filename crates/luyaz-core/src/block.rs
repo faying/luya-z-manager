@@ -342,6 +342,16 @@ pub struct BlockView {
     pub data: Value,
 }
 
+/// Internal successful read, independent of publication throttling and wall time.
+/// Not part of the /v2 wire schema.
+#[derive(Clone)]
+pub struct Observation {
+    pub name: &'static str,
+    pub data: Value,
+    pub observed: Option<luyaz_api::clock::BootTime>,
+    pub generation: u64,
+}
+
 struct Block {
     spec: BlockSpec,
     revision: u64,
@@ -356,6 +366,8 @@ struct Block {
     published_at: Option<Instant>,
     last_attempt: Option<Instant>,
     last_success: Option<Instant>,
+    observed_boot: Option<luyaz_api::clock::BootTime>,
+    generation: u64,
     last_failed: bool,
     /// `/control` 之后「下一轮立即读」（V2-21、V2-27）。
     immediate: bool,
@@ -374,6 +386,8 @@ impl Block {
             published_at: None,
             last_attempt: None,
             last_success: None,
+            observed_boot: None,
+            generation: 0,
             last_failed: false,
             immediate: false,
         }
@@ -545,6 +559,10 @@ impl Hub {
                 b.last_failed = false;
                 b.last_success = Some(now);
                 b.observed_at = wall_secs();
+                b.observed_boot = luyaz_api::clock::BootTime::read();
+                if b.stale || b.data.as_ref() != Some(&shaped) {
+                    b.generation = b.generation.saturating_add(1);
+                }
                 // 原始回复没变，依赖它的块不用重算（电池的 sysfs 电压电流每次读都变，别多发一条）。
                 let raw_changed = b.raw.as_ref() != Some(&v);
                 b.raw = Some(v);
@@ -565,6 +583,8 @@ impl Hub {
             }
             _ => {
                 b.last_failed = true;
+                b.observed_boot = None;
+                b.generation = b.generation.saturating_add(1);
                 if !b.stale {
                     // V2-12：读失败立即 stale；数据保留。
                     b.stale = true;
@@ -749,6 +769,24 @@ impl Hub {
             .iter()
             .find(|b| b.spec.name == name)
             .map(Block::view)
+    }
+
+    /// Capture related latest reads under one lock. Missing/stale data remains absent.
+    /// BOOTTIME includes suspend; external wall timestamps and /v2 revision stay unchanged.
+    pub fn observations(&self, names: &[&str]) -> Vec<Observation> {
+        let g = self.lock();
+        g.blocks
+            .iter()
+            .filter(|b| names.contains(&b.spec.name) && !b.stale)
+            .filter_map(|b| {
+                Some(Observation {
+                    name: b.spec.name,
+                    data: b.data.clone()?,
+                    observed: b.observed_boot.clone(),
+                    generation: b.generation,
+                })
+            })
+            .collect()
     }
 
     /// 旧接口用（V2-29）：stale（含从没读成功）按读失败处理，不给保留的旧值。
@@ -1212,5 +1250,40 @@ pub(crate) mod tests {
         hub.record("battery", Ok(json!("not an object")), now);
         hub.record("charger", Ok(json!({"charger_connect": 1})), now);
         assert_eq!(*seen.lock().unwrap(), vec!["battery", "charger"]);
+    }
+}
+
+#[cfg(test)]
+mod finding_observation_tests {
+    use super::*;
+    #[test]
+    fn wall_timestamp_steps_do_not_change_internal_elapsed_evidence() {
+        let hub = Hub::new(
+            vec![BlockSpec::derived("sim", Box::new(OnChange))],
+            Box::new(NoSink),
+        );
+        hub.record(
+            "sim",
+            Ok(serde_json::json!({"iccid":"fixture"})),
+            Instant::now(),
+        );
+        let a = hub.observations(&["sim"]).pop().unwrap();
+        assert!(a.observed.is_some());
+        for wall in [
+            0,
+            1_900_000_000,
+            1_900_000_000 + 28800,
+            1_900_000_000 - 28800,
+        ] {
+            hub.lock().blocks[0].observed_at = wall;
+            let b = hub.observations(&["sim"]).pop().unwrap();
+            assert_eq!(b.observed, a.observed);
+            assert_eq!(b.generation, a.generation);
+            assert_eq!(
+                hub.view("sim").unwrap().observed_at,
+                wall,
+                "wire timestamp remains display data"
+            );
+        }
     }
 }

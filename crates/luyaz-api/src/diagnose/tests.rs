@@ -32,6 +32,8 @@ fn radio() -> Radio {
         qos_nr: false,
         connected: true,
         rx_bps: 0,
+        carriers: String::new(),
+        bw_mhz: None,
     }
 }
 
@@ -164,12 +166,9 @@ fn signal_layer() {
     let l = judge_signal(&radio());
     assert_eq!(
         (l.level, l.detail.as_str()),
-        (Level::Ok, "信号强 · 干扰小 · RSRP -87 · SINR 17.7")
+        (Level::Ok, "信号强，干扰小")
     );
-    assert_eq!(
-        l.detail_en,
-        "Signal strong · noise low · RSRP -87 · SINR 17.7"
-    );
+    assert_eq!(l.detail_en, "Strong signal, little noise");
     let mut r = radio();
     r.story = Some(story("weak", "bad", "warn"));
     assert_eq!(judge_signal(&r).level, Level::Bad);
@@ -178,9 +177,11 @@ fn signal_layer() {
     let mut st = story("narrow", "ok", "ok");
     st["cause"] = "narrow".into();
     r.story = Some(st);
+    r.bw_mhz = Some(20);
     let l = judge_signal(&r);
-    assert_eq!(l.level, Level::Warn);
-    assert!(l.detail.contains("载波窄"), "{}", l.detail);
+    assert_eq!((l.level, l.detail.as_str()), (Level::Warn, "信号强，干扰小，此刻带宽只有 20 MHz"));
+    // and the headline that goes with it
+    assert_eq!(pick_main(&[l]).text, "此刻带宽窄");
     r.story = Some(story("nosvc", "", ""));
     let l = judge_signal(&r);
     assert_eq!(
@@ -214,8 +215,17 @@ fn cap_layer() {
     // an NR PDU session's number is a 5QI
     r.qos_nr = true;
     assert_eq!(judge_limit(&r).detail, "限到 5 Mbps · 5QI 9");
+    // a QCI without an AMBR (what the device reports, 10-18): no cap reported
     r.ambr_dl = None;
+    let l = judge_limit(&r);
+    assert_eq!((l.level, l.detail.as_str()), (Level::Ok, "没报限速 · 5QI 9"));
+    r.qci = None;
     assert_eq!(judge_limit(&r).detail, "QoS 读不到");
+    // the carriers go on the row too
+    r.qci = Some(6);
+    r.qos_nr = false;
+    r.carriers = "n41 100M + B3 20M".into();
+    assert_eq!(judge_limit(&r).detail, "没报限速 · n41 100M + B3 20M · QCI 6");
 }
 
 // ---- cellular link ---------------------------------------------------------------
@@ -481,7 +491,7 @@ fn every_main_has_english_and_an_action() {
         ("wifi", ""),
         ("signal", "信号弱"),
         ("signal", "信号强 · 干扰大"),
-        ("signal", "信号强 · 载波窄"),
+        ("signal", "信号强，此刻带宽只有 20 MHz"),
         ("signal", "信号中"),
         ("limit", ""),
         ("link", ""),
@@ -505,15 +515,15 @@ fn every_main_has_english_and_an_action() {
 #[test]
 fn steps_count_only_what_applies() {
     let mut r = Run::new(1, 0, "touch", false);
-    assert_eq!((r.step, r.steps, r.layers.len()), (0, 5, 5));
+    assert_eq!((r.step, r.steps, r.layers.len()), (0, 10, 10));
     let mut w = judge_wifi(&Who::Touch, &[]);
     w.counted = false;
     r.put(w);
-    assert_eq!((r.step, r.steps), (0, 4));
+    assert_eq!((r.step, r.steps), (0, 9));
     r.running("signal");
     r.put(judge_signal(&radio()));
-    assert_eq!((r.step, r.steps), (1, 4));
-    assert_eq!(Run::new(2, 0, "client", true).steps, 6);
+    assert_eq!((r.step, r.steps), (1, 9));
+    assert_eq!(Run::new(2, 0, "client", true).steps, 11);
 }
 
 #[test]
@@ -534,6 +544,7 @@ fn the_gate_refuses_while_a_diagnosis_runs() {
     let (code, body) = refusal_at(
         &Gate {
             diag_since: Some(1000),
+            ..Gate::default()
         },
         1005,
     )
@@ -546,7 +557,8 @@ fn the_gate_refuses_while_a_diagnosis_runs() {
     assert_eq!(
         refusal_at(
             &Gate {
-                diag_since: Some(1000)
+                diag_since: Some(1000),
+                ..Gate::default()
             },
             1060
         )
@@ -554,4 +566,337 @@ fn the_gate_refuses_while_a_diagnosis_runs() {
         .1["retry_after_s"],
         1
     );
+}
+
+#[test]
+fn a_finding_probe_is_refused_in_its_own_words_and_time() {
+    let g = Gate {
+        finding_since: Some(1000),
+        ..Gate::default()
+    };
+    let (code, body) = refusal_at(&g, 1004).unwrap();
+    assert_eq!(
+        (code, body["busy"].as_str(), body["retry_after_s"].as_u64()),
+        (409, Some("finding"), Some(10))
+    );
+    assert_eq!(body["error"], "正在检查网络，约 10 秒后再试");
+    // a diagnosis going too: its words and its time, never the Finding's start
+    let both = Gate {
+        diag_since: Some(1003),
+        finding_since: Some(1000),
+    };
+    let (_, body) = refusal_at(&both, 1004).unwrap();
+    assert_eq!(
+        (body["busy"].as_str(), body["retry_after_s"].as_u64()),
+        (Some("diagnose"), Some(19))
+    );
+}
+
+// ---- v2 ----------------------------------------------------------------------------
+
+fn sim(state: &str, channel: Option<EsimChannel>) -> SimIn {
+    SimIn {
+        state: Some(state.into()),
+        channel,
+    }
+}
+
+#[test]
+fn sim_layer() {
+    let j = |s: &str, c| judge_sim(&sim(s, c));
+    assert_eq!(j("modem_sim_undetected", None).level, Level::Bad);
+    assert_eq!(j("modem_sim_destroy", None).detail, "没有 SIM 卡");
+    assert_eq!(j("modem_waitpin", None).detail, "SIM 卡要输入 PIN");
+    assert_eq!(j("modem_waitpuk", None).detail, "SIM 卡被 PUK 锁住");
+    assert_eq!(j("modem_init", None).level, Level::Na);
+    assert_eq!(judge_sim(&SimIn::default()).level, Level::Na);
+    // ZTE's sim_states wording counts as ready too (the hub's sim.state, 10-18)
+    assert_eq!(j("sim ready", Some(EsimChannel::Free(2))).level, Level::Ok);
+    let full = j("modem_init_complete", Some(EsimChannel::Full));
+    assert_eq!((full.level, full.counted), (Level::Warn, true));
+    assert!(full.detail.contains("eSIM 通道占满"));
+    let free = j("modem_init_complete", Some(EsimChannel::Free(2)));
+    assert_eq!((free.level, free.counted), (Level::Ok, true));
+    assert_eq!(
+        j("modem_init_complete", Some(EsimChannel::Busy)).level,
+        Level::Ok
+    );
+    // not an eUICC we can check: shown, not counted
+    for c in [None, Some(EsimChannel::Unknown)] {
+        let l = j("modem_init_complete", c);
+        assert_eq!(
+            (l.level, l.counted, l.detail.as_str()),
+            (Level::Ok, false, "已就绪")
+        );
+    }
+}
+
+fn bearer() -> BearerIn {
+    BearerIn {
+        connected: Some(true),
+        has_ip: Some(true),
+        iface: "rmnet_data0".into(),
+        default_route: Some(true),
+        rp_filter: Some(0),
+        exits: 1,
+    }
+}
+
+#[test]
+fn bearer_layer() {
+    let ok = judge_bearer(&bearer());
+    assert_eq!(
+        (ok.level, ok.detail.as_str()),
+        (Level::Ok, "已连上")
+    );
+    let j = |f: &dyn Fn(&mut BearerIn)| {
+        let mut b = bearer();
+        f(&mut b);
+        judge_bearer(&b)
+    };
+    assert_eq!(j(&|b| b.connected = Some(false)).detail, "没拨上号");
+    assert_eq!(j(&|b| b.has_ip = Some(false)).detail, "拨上了，但没有地址");
+    assert_eq!(j(&|b| b.default_route = Some(false)).detail, "没有默认路由");
+    // unknowns never bad (bad blocks six layers)
+    let unknown = j(&|b| {
+        b.connected = None;
+        b.has_ip = None;
+        b.default_route = None;
+    });
+    assert_eq!(unknown.level, Level::Na);
+    assert_eq!(j(&|b| b.default_route = None).level, Level::Ok);
+    // rp_filter: strict with several ways out warns; loose (2), off (0) or one way out don't
+    assert_eq!(
+        j(&|b| {
+            b.rp_filter = Some(1);
+            b.exits = 2
+        })
+        .level,
+        Level::Warn
+    );
+    assert_eq!(
+        j(&|b| {
+            b.rp_filter = Some(1);
+            b.exits = 1
+        })
+        .level,
+        Level::Ok
+    );
+    assert_eq!(
+        j(&|b| {
+            b.rp_filter = Some(2);
+            b.exits = 3
+        })
+        .level,
+        Level::Ok
+    );
+    assert_eq!(
+        j(&|b| {
+            b.rp_filter = None;
+            b.exits = 3
+        })
+        .level,
+        Level::Ok
+    );
+}
+
+fn net(path: ResultState, dns: ResultState) -> crate::finding::NetworkEvidence {
+    crate::finding::NetworkEvidence {
+        path_reachable: path,
+        dns,
+        reason: "scoped_http_dns_only".into(),
+        ..Default::default()
+    }
+}
+
+use crate::finding::ResultState;
+
+#[test]
+fn dns_layer() {
+    use ResultState::*;
+    let d = |answered, ms| LocalDns {
+        asked: 2,
+        answered,
+        ms,
+    };
+    let j = |l: Option<LocalDns>, c| judge_dns(l.as_ref(), Some(&net(Passed, c)));
+    assert_eq!(
+        j(Some(d(0, None)), Passed).detail,
+        "设备的 DNS 坏了 · 运营商 DNS 能答"
+    );
+    assert_eq!(j(Some(d(0, None)), Failed).detail, "DNS 不通");
+    assert_eq!(j(Some(d(0, None)), Unknown).level, Level::Bad);
+    assert_eq!(j(Some(d(1, Some(30))), Passed).level, Level::Warn);
+    assert_eq!(j(Some(d(2, Some(1000))), Passed).level, Level::Ok);
+    assert_eq!(j(Some(d(2, Some(1001))), Passed).level, Level::Warn);
+    assert_eq!(
+        j(Some(d(2, Some(40))), Passed).detail,
+        "能解析，40 ms · 运营商的也正常"
+    );
+    // no local probe: the carrier's alone (the normal reason adds no words)
+    assert_eq!(j(None, Passed).detail, "运营商 DNS 能答");
+    assert_eq!(j(None, Failed).level, Level::Bad);
+    assert_eq!(j(None, Unknown).level, Level::Na);
+    assert_eq!(judge_dns(None, None).level, Level::Na);
+}
+
+#[test]
+fn e2e_layer() {
+    use ResultState::*;
+    assert_eq!(judge_e2e(None).level, Level::Na);
+    let ok = judge_e2e(Some(&net(Passed, Unknown)));
+    assert_eq!(
+        (ok.level, ok.detail.as_str()),
+        (Level::Ok, "能上网")
+    );
+    assert_eq!(judge_e2e(Some(&net(Failed, Unknown))).level, Level::Bad);
+    let mut n = net(Unknown, Unknown);
+    n.reason = "proxy_route_unverified".into();
+    let l = judge_e2e(Some(&n));
+    assert_eq!(
+        (l.level, l.detail_en.as_str()),
+        (Level::Na, "Not checked · traffic goes through the proxy")
+    );
+    assert_eq!(l.detail, "没测成 · 流量经代理");
+    n.reason = "something_new".into();
+    assert_eq!(judge_e2e(Some(&n)).detail, "没测成 · something_new");
+}
+
+#[test]
+fn clock_layer() {
+    use crate::clock::EvidenceStatus as E;
+    let j = |s| judge_clock(Some(s), None).level;
+    assert_eq!(j(E::Verified), Level::Ok);
+    assert_eq!(j(E::Estimated), Level::Info);
+    for s in [E::Stale, E::BootMismatch, E::WallChanged, E::Revoked] {
+        assert_eq!(j(s), Level::Warn, "{s:?}");
+    }
+    assert_eq!(j(E::Unknown), Level::Na);
+    assert_eq!(judge_clock(None, None).level, Level::Na);
+    // an HTTP Date wins over the evidence
+    let k = |d| judge_clock(Some(E::Unknown), Some(d));
+    assert_eq!((k(0).level, k(0).detail.as_str()), (Level::Ok, "和网络时间一致"));
+    assert_eq!((k(-12).level, k(-12).detail.as_str()), (Level::Ok, "慢 12 秒"));
+    assert_eq!(k(CLOCK_OK_S + 1).level, Level::Warn);
+    assert_eq!(k(CLOCK_BAD_S).level, Level::Warn);
+    let bad = k(3600);
+    assert_eq!((bad.level, bad.detail.as_str()), (Level::Bad, "快 3600 秒，HTTPS 会失败"));
+}
+
+#[test]
+fn http_dates() {
+    assert_eq!(http_date_unix("Thu, 01 Jan 1970 00:00:00 GMT"), Some(0));
+    assert_eq!(http_date_unix("Sun, 18 Oct 2026 10:50:00 GMT"), Some(1_792_320_600));
+    assert_eq!(http_date_unix("Tue, 29 Feb 2028 23:59:59 GMT"), Some(1_835_481_599));
+    assert_eq!(http_date_unix("Sun, 18 Oct 2026 10:50:00 UTC"), None);
+    assert_eq!(http_date_unix("Sun, 18 Foo 2026 10:50:00 GMT"), None);
+    assert_eq!(http_date_unix(""), None);
+}
+
+fn layers_at(levels: &[(&'static str, Level)]) -> Vec<Layer> {
+    LAYERS
+        .iter()
+        .map(|id| {
+            let lv = levels
+                .iter()
+                .find(|(i, _)| i == id)
+                .map_or(Level::Ok, |(_, l)| *l);
+            Layer::new(id).set(lv, "x", "x")
+        })
+        .collect()
+}
+
+#[test]
+fn the_dependency_table() {
+    // every layer named in it exists, and depends only on layers before it
+    for (id, deps) in DEPS {
+        let at = LAYERS.iter().position(|l| l == id).expect("known layer");
+        for d in *deps {
+            assert!(
+                LAYERS.iter().position(|l| l == d).unwrap() < at,
+                "{id} → {d}"
+            );
+        }
+    }
+    let ok = layers_at(&[]);
+    assert!(LAYERS.iter().all(|id| blocked_by(&ok, id).is_none()));
+    let l = layers_at(&[("sim", Level::Bad)]);
+    assert_eq!(blocked_by(&l, "bearer"), Some("sim"));
+    // a weak signal is bad but does not block: the bearer still gets checked
+    let l = layers_at(&[("signal", Level::Bad)]);
+    assert_eq!(blocked_by(&l, "bearer"), None);
+    // warn and na never block
+    let l = layers_at(&[("bearer", Level::Warn), ("e2e", Level::Na)]);
+    assert!(
+        ["link", "dns", "e2e", "clock", "proxy"]
+            .iter()
+            .all(|id| blocked_by(&l, id).is_none())
+    );
+    // a chain: blocked e2e blocks clock with the first bad one's name
+    let mut l = layers_at(&[("bearer", Level::Bad)]);
+    let e2e = l.iter().position(|x| x.id == "e2e").unwrap();
+    l[e2e] = Layer::new("e2e").blocked("bearer");
+    assert_eq!(blocked_by(&l, "clock"), Some("bearer"));
+    assert_eq!(blocked_by(&l, "wifi"), None);
+}
+
+#[test]
+fn bad_bearer_blocks_everything_after_it_and_is_the_main_cause() {
+    let mut run = Run::new(1, 0, "touch", true);
+    for id in LAYERS {
+        let l = Layer::new(id);
+        let l = match id {
+            "bearer" => l.set(Level::Bad, "没拨上号", "Not connected"),
+            _ => match blocked_by(&run.layers, id) {
+                Some(by) => l.blocked(by),
+                None => l.set(Level::Ok, "x", "x"),
+            },
+        };
+        run.put(l);
+    }
+    for id in ["link", "dns", "e2e", "clock", "crowd", "proxy"] {
+        let l = run.layers.iter().find(|l| l.id == id).unwrap();
+        assert_eq!((l.level, l.counted), (Level::Blocked, false), "{id}");
+        assert_eq!(l.detail, "前面的数据连接不通");
+    }
+    // N/M leaves them out: wifi sim signal limit bearer
+    assert_eq!((run.step, run.steps), (5, 5));
+    let m = pick_main(&run.layers);
+    assert_eq!(
+        (m.layer, m.more, m.text.as_str()),
+        ("bearer", 0, "数据连接没建立")
+    );
+    assert_eq!(json!(Level::Blocked), json!("blocked"));
+}
+
+#[test]
+fn main_cause_words_for_the_new_layers() {
+    let m = pick_main(&layers_at(&[("sim", Level::Warn)]));
+    assert_eq!((m.layer, m.text.as_str()), ("sim", "eSIM 通道占满"));
+    let mut l = layers_at(&[]);
+    l[1] = Layer::new("sim").set(Level::Bad, "没有 SIM 卡", "No SIM card");
+    assert_eq!(pick_main(&l).text, "没有 SIM 卡");
+    assert_eq!(
+        pick_main(&layers_at(&[("bearer", Level::Warn)])).text,
+        "回包可能被丢"
+    );
+    assert_eq!(
+        pick_main(&layers_at(&[("dns", Level::Bad)])).text,
+        "域名解析有问题"
+    );
+    assert_eq!(
+        pick_main(&layers_at(&[("e2e", Level::Bad)])).text,
+        "外网不通"
+    );
+    assert_eq!(
+        pick_main(&layers_at(&[("clock", Level::Warn)])).text,
+        "设备时间可能不准"
+    );
+    // a bad one wins over an earlier warn; blocked never counts
+    let m = pick_main(&layers_at(&[
+        ("sim", Level::Warn),
+        ("dns", Level::Bad),
+        ("crowd", Level::Blocked),
+    ]));
+    assert_eq!((m.layer, m.more), ("dns", 1));
 }

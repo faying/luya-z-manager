@@ -58,7 +58,10 @@ pub struct Read {
     pub cap: Option<i64>,
     pub bt: Option<i64>,
     pub charging: bool,
+    /// Evidence from the existing status/current reads; None = absent or conflicting.
+    pub charging_known: Option<bool>,
     pub screen_on: bool,
+    pub screen_known: Option<bool>,
     pub zt: Option<i64>,
     /// Some(true) = a policy is capped below its boot maximum; None = no cpufreq.
     pub thr: Option<bool>,
@@ -69,6 +72,8 @@ pub struct Read {
     pub chill_ok: bool,
     /// This process: (pid, start time, user+system ticks).
     pub cpu: Option<(u32, u64, u64)>,
+    /// Minimal CPU/task counters from the same existing minute check.
+    pub activity: Option<super::activity::Read>,
     /// The card's program name → RSS kB.
     pub rss: BTreeMap<String, i64>,
     pub free_mb: Option<i64>,
@@ -85,6 +90,9 @@ pub struct Read {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Acc {
+    pub(super) energy: super::energy::Acc,
+    #[serde(default)]
+    pub(super) activity: super::activity::Acc,
     e: f64,
     n_e: u32,
     n_vi: u32,
@@ -127,12 +135,13 @@ impl Acc {
         let sl = dt - awake;
         let (mut e, mut es) = (None, 0);
         if let (Some(q), Some(q0), Some(v)) = (r.q, q0, r.v) {
-            e = Some((q0 - q) as f64 * v as f64 / 1e6);
+            // Keep the historical fields, but never overflow on a corrupt/reset counter.
+            e = q0.checked_sub(q).map(|dq| dq as f64 * v as f64 / 1e6);
             es = dt;
         } else if let (Some(v), Some(i)) = (r.v, r.i)
             && i < 0
         {
-            e = Some(v as f64 * (-i) as f64 * awake as f64 / 3.6e9);
+            e = Some(v as f64 * -(i as f64) * awake as f64 / 3.6e9);
             es = awake;
             self.n_vi += 1;
             if sl > 0 {
@@ -233,6 +242,7 @@ impl Acc {
     /// The `hour_power` fields (besides the head).
     pub fn power(&self) -> Value {
         let mut o = json!({
+            "counter_quality": self.energy.value(),
             "src": if self.n_vi > 0 { json!("vi") } else if self.n_e > 0 { json!("counter") } else { Value::Null },
             "e": Self::mwh((self.n_e > 0).then_some(self.e)),
         });
@@ -296,7 +306,8 @@ impl Acc {
             }
             _ => Value::Null,
         };
-        let mut o = json!({"cpu_datad": cpu, "idle_rows": null, "idle_wan": null});
+        let mut o = json!({"cpu_datad": cpu, "idle_rows": null, "idle_wan": null,
+                          "activity": self.activity.value()});
         let m = o.as_object_mut().expect("object");
         for (k, _) in RSS {
             m.insert(format!("rss_{k}"), json!(self.rss.get(k)));
@@ -500,6 +511,7 @@ impl ReadState {
         let b = |f: &str| num(&p.bat.join(f));
         let i = b("current_now");
         let status = rd(&p.bat.join("status")).unwrap_or_default();
+        let screen = num(&p.backlight);
         let mut r = Read {
             v: b("voltage_now"),
             i,
@@ -507,7 +519,9 @@ impl ReadState {
             cap: b("capacity"),
             bt: b("temp"),
             charging: status == "Charging" || status == "Full" || i.is_some_and(|i| i > 0),
-            screen_on: num(&p.backlight).is_some_and(|x| x > 0),
+            charging_known: super::energy::charging(&status, i),
+            screen_on: screen.is_some_and(|x| x > 0),
+            screen_known: screen.filter(|x| *x >= 0).map(|x| x > 0),
             ..Default::default()
         };
         let zones = self.zones.get_or_insert_with(|| {
@@ -599,19 +613,9 @@ impl ReadState {
             });
         }
         let me = p.self_pid;
-        if let (Some(st), Ok(s)) = (
-            super::watch::start_time(&p.proc_, me),
-            std::fs::read_to_string(p.proc_.join(me.to_string()).join("stat")),
-        ) && let Some(rest) = s.rfind(')').and_then(|i| s.get(i + 2..))
-        {
-            let f: Vec<&str> = rest.split_whitespace().collect();
-            if let (Some(u), Some(k)) = (
-                f.get(11).and_then(|x| x.parse::<u64>().ok()),
-                f.get(12).and_then(|x| x.parse::<u64>().ok()),
-            ) {
-                r.cpu = Some((me, st, u + k));
-            }
-        }
+        let activity = super::activity::read(&p.proc_, me);
+        r.cpu = activity.process.as_ref().map(|p| (p.pid, p.start, p.cpu));
+        r.activity = Some(activity);
         for (k, prog) in RSS {
             let pid = if crate::paths::is_core(prog) {
                 Some(me)

@@ -25,6 +25,38 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 - scripts: `VERSION` is shipped to `/data/luyaz/scripts/` so the scripts' version can be read on the device.
 - scripts: ship's UI-trouble check matches the touch UI's crash line under both names (`u60pro-devui pid … ended:` and `luyaz-ui pid … ended:`). Ship this before sentinel 1.0.2.
 
+## core 1.4.4 — 2026-10-18
+
+- Diagnosis rows in plain words: the signal row says how strong and how noisy without numbers (it was cut off), the cap row lists the carriers the cell gives, and the other rows drop interface names and protocol words.
+
+## touch 1.1.1 — 2026-10-18
+
+- The cellular page's speed-test row no longer says "Unavailable" before the speed page was opened.
+
+## core 1.4.3 — 2026-10-18
+
+- Diagnosis rows that said "not checked" on the device now answer: the internet and DNS rows probe the cellular path with CHILL on, the clock row compares with an HTTP `Date`, a QCI without an AMBR reads "no cap reported", and reason codes are in words.
+
+## core 1.4.2 — 2026-10-18
+
+- The diagnosis eSIM channel check runs on the device (it used `timeout`, which the device lacks, and always said unknown).
+
+## core 1.4.1 — 2026-10-18
+
+- The diagnosis SIM row reads the modem state; on the device it said "SIM not ready yet" with the card ready and data up.
+
+## touch 1.1.0 — 2026-10-18
+
+- The diagnose page shows the new rows and the grey "not checked" style.
+
+## lweb 1.2.0 — 2026-10-18
+
+- The diagnose page shows the new rows and the grey "not checked" style.
+
+## core 1.4.0 — 2026-10-18
+
+- Deep diagnosis v2: new rows for the SIM (and a full eSIM channel table on an eUICC), the data bearer (address, route, rp_filter), DNS through the device's own dnsmasq, an end-to-end request (the Finding path's probe) and the clock; a row whose earlier row failed is not probed and shows grey ("not checked"), so the headline is the first real cause. A running Finding probe no longer looks like a running diagnosis.
+
 ## core 1.3.4 — 2026-10-18
 
 - The eSIM ISD-R channel a killed lpac leaves open is closed again: the modem never reclaimed it (measured: two watchdog kills used up every free channel and every eSIM call failed until a reboot). Needs the `qmi_uim_probe` with `close` (`scripts/qmi_uim_probe.c`); an older probe just leaves the channel as before.

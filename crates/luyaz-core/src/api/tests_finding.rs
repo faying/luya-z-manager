@@ -18,6 +18,11 @@ fn inputs(state: Value, story: &str) -> Inputs {
         held_down: true,
         busy: None,
         probed: AtomicBool::new(false),
+        observed: BootTime::read(),
+        root: "/nonexistent-luyaz-fixture".into(),
+        network: Mutex::new(None),
+        current_connection: Arc::new(|| true),
+        reserve_probe: Arc::new(|| true),
     }
 }
 
@@ -89,7 +94,7 @@ fn registration_and_data_readings() {
     let d = inputs(
         device(
             json!({}),
-            json!({"connect_status": "disconnected", "connect_fail_count": 3, "ipv4_address": ""}),
+            json!({"connect_status": "disconnected", "connect_fail_count": 3, "ipv4_address": "", "ipv6_address": ""}),
         ),
         "ok",
     )
@@ -99,63 +104,76 @@ fn registration_and_data_readings() {
 }
 
 #[test]
-fn no_probe_without_a_client_or_inside_ten_minutes() {
+fn ipv6_address_is_not_a_missing_ipv4_fault_and_unknown_stays_unknown() {
+    let mut i = inputs(
+        device(
+            json!({"type":"SA", "roaming":"Home"}),
+            json!({
+                "enable":1, "connect_status":"ipv6_connected", "ipv4_address":"", "ipv6_address":"2001:db8::2"
+            }),
+        ),
+        "stall",
+    );
+    assert_eq!(i.data().has_ip, Some(true));
+    assert_eq!(
+        luyaz_api::finding::judge_data(&i.data(), T).level,
+        Level::Ok
+    );
+    i.state.as_mut().unwrap()["interfaces"]["cellular"]["ipv6_address"] = Value::Null;
+    assert_eq!(i.data().has_ip, None);
+    assert_eq!(
+        luyaz_api::finding::judge_data(&i.data(), T).level,
+        Level::Na
+    );
+    i.observed = None;
+    assert!(!i.can_probe());
+    assert_eq!(i.data(), DataIn::default());
+    assert!(expected_outage(&i.premises()).is_err());
+}
+
+#[test]
+fn stale_snapshot_and_unverified_proxy_do_not_use_the_host_network() {
+    let root = std::env::temp_dir().join(format!("finding-path-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(root.join("tmp")).unwrap();
+    let mut i = inputs(
+        device(
+            json!({}),
+            json!({
+                "ipv4_address":"192.0.2.2", "ipv4_dev_name":"no_such_cell", "ipv4_dns_prefer":"192.0.2.53"
+            }),
+        ),
+        "stall",
+    );
+    i.root = root.to_string_lossy().into();
+    std::fs::write(root.join("tmp/chill.state"), r#"{"state":"running"}"#).unwrap();
+    let n = i.network_probe();
+    assert_eq!(n.reason, "proxy_route_unverified");
+    assert_eq!(n.path_reachable, luyaz_api::finding::ResultState::Unknown);
+    assert!(n.paths.is_empty());
+    i.observed.as_mut().unwrap().seconds = i.observed.as_ref().unwrap().seconds.saturating_sub(31);
+    assert!(!i.can_probe());
+    // A different boot always fails, even on a freshly booted test container.
+    i.observed.as_mut().unwrap().boot_id = "other".into();
+    assert!(!i.can_probe());
+    assert_eq!(i.network_probe().reason, "snapshot_or_connection_changed");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn no_probe_without_client_budget_or_hold() {
     let mut i = inputs(json!({}), "ok");
     assert!(i.can_probe());
     i.clients = false;
     assert!(!i.can_probe());
-    let f = Findings::load(std::env::temp_dir().join("luyaz-findings-none.json"));
-    assert!(f.probe_due(T));
-    f.last_probe.store(T, Ordering::SeqCst);
-    assert!(!f.probe_due(T + RECHECK_SECS - 1));
-    assert!(f.probe_due(T + RECHECK_SECS));
-}
-
-/// What the sampler would decide at `now`: the same steps as `watch::finding_round`.
-fn may_probe(f: &Findings, down: bool, now: u64) -> bool {
-    let mut i = inputs(json!({}), "ok");
-    i.passive_down = down;
-    i.probe_due = f.probe_due(now);
-    i.held_down = f.held_down(down, now);
-    i.can_probe()
-}
-
-#[test]
-fn probes_only_after_a_minute_of_downs() {
-    let f = Findings::load(std::env::temp_dir().join("luyaz-findings-hold.json"));
-    // down 5 s, then back: no probe
-    assert!(!may_probe(&f, true, T));
-    assert!(!may_probe(&f, true, T + 5));
-    assert!(!may_probe(&f, false, T + 10));
-    // down 30 s: no probe
-    assert!(!may_probe(&f, true, T + 100));
-    assert!(!may_probe(&f, true, T + 130));
-    // back in between: the count starts again
-    assert!(!may_probe(&f, false, T + 150));
-    assert!(!may_probe(&f, true, T + 160));
-    assert!(!may_probe(&f, true, T + 160 + DOWN_HOLD_SECS - 1));
-    // a minute in a row: it probes
-    assert!(may_probe(&f, true, T + 160 + DOWN_HOLD_SECS));
-}
-
-#[test]
-fn short_outages_keep_the_recheck_wait_free() {
-    let f = Findings::load(std::env::temp_dir().join("luyaz-findings-short.json"));
-    // three short outages (`round` only starts the wait when the probe ran)
-    for k in 0..3 {
-        let t = T + k * 100;
-        assert!(!may_probe(&f, true, t));
-        assert!(!may_probe(&f, true, t + 30));
-        assert!(!may_probe(&f, false, t + 40));
-    }
-    assert_eq!(f.last_probe.load(Ordering::SeqCst), 0);
-    // the next long one probes as soon as it has lasted a minute
-    let t = T + 1000;
-    assert!(!may_probe(&f, true, t));
-    assert!(may_probe(&f, true, t + DOWN_HOLD_SECS));
-    // after a probe the 10-minute wait applies, held or not
-    f.last_probe.store(t + DOWN_HOLD_SECS, Ordering::SeqCst);
-    assert!(!may_probe(&f, true, t + DOWN_HOLD_SECS + 30));
+    i.clients = true;
+    i.probe_due = false;
+    assert!(!i.can_probe());
+    i.probe_due = true;
+    i.held_down = false;
+    assert!(!i.can_probe());
+    i.held_down = true;
+    i.current_connection = Arc::new(|| false);
+    assert!(!i.can_probe());
 }
 
 fn open(iccid: &str) -> Verdict {
@@ -212,7 +230,14 @@ fn home_shows_only_sure_and_ignore_keeps_it_away() {
     let _ = std::fs::remove_file(&path);
     let w = Watch::new();
     let f = Findings::load(path);
-    let likely = match open("89860011") {
+    let data_open = || match open("89860011") {
+        Verdict::Open(mut x) => {
+            x.layer = LayerId::Data;
+            Verdict::Open(x)
+        }
+        v => v,
+    };
+    let likely = match data_open() {
         Verdict::Open(mut x) => {
             x.confidence = Confidence::Likely;
             Verdict::Open(x)
@@ -222,11 +247,11 @@ fn home_shows_only_sure_and_ignore_keeps_it_away() {
     f.observe(&likely, "89860011", &w, T);
     assert_eq!(f.home(), None);
     assert_eq!(f.view()["iccid_tail"], "0011");
-    f.observe(&open("89860011"), "89860011", &w, T + 30);
+    f.observe(&data_open(), "89860011", &w, T + 30);
     let h = f.home().unwrap();
     assert_eq!(
         (h.layer.as_str(), h.symptom.as_str()),
-        ("internet", "已连上，但外网不通")
+        ("data", "已连上，但外网不通")
     );
     assert!(!h.to_value().to_string().contains("8986"));
 
@@ -239,4 +264,229 @@ fn home_shows_only_sure_and_ignore_keeps_it_away() {
     f.observe(&open("89860011"), "89860011", &w, T + 3600);
     assert_eq!(f.view(), Value::Null);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn legacy_network_findings_cannot_reappear_as_sure_on_home() {
+    let f = Findings::load(
+        std::env::temp_dir().join(format!("finding-legacy-{}", rand::random::<u64>())),
+    );
+    f.observe(&open("89860011"), "89860011", &Watch::new(), T);
+    assert_eq!(f.home(), None);
+    let v = f.view();
+    assert_eq!(v["confidence"], "guess");
+    assert_eq!(v["verification"], "legacy_path_unverified");
+    assert!(!v.to_string().contains("89860011"));
+    let _ = std::fs::remove_file(&f.path);
+}
+
+#[test]
+fn network_observation_survives_without_an_open_finding_and_expires_on_read() {
+    use luyaz_api::finding::ResultState;
+    let path = std::env::temp_dir().join(format!("finding-report-{}", rand::random::<u64>()));
+    let f = Findings::load(path.clone());
+    let mut i = inputs(json!({}), "ok");
+    i.clients = false;
+    // Replay a completed local probe; the closed client gate prevents all real packets.
+    i.probed.store(true, Ordering::SeqCst);
+    *lock(&i.network) = Some(NetworkEvidence {
+        observed_at: BootTime::read(),
+        path_reachable: ResultState::Passed,
+        reason: "offline_replay".into(),
+        ..NetworkEvidence::default()
+    });
+    f.round(&i, &Mutex::new(Gate::default()), &Watch::new(), T);
+    assert!(f.view().is_null());
+    let v = f.network_view();
+    assert_eq!(v["fresh"], true);
+    assert_eq!(v["observation"]["path_reachable"], "passed");
+    assert_eq!(v["observation"]["internet_usable"], "unknown");
+    lock(&f.network)
+        .as_mut()
+        .unwrap()
+        .evidence
+        .observed_at
+        .as_mut()
+        .unwrap()
+        .boot_id = "other".into();
+    assert_eq!(f.network_view()["fresh"], false);
+    assert!(
+        !path.exists(),
+        "observations alone must not add flash writes"
+    );
+}
+
+fn path_inputs() -> Inputs {
+    inputs(
+        device(
+            json!({"type":"SA","roaming":"Home"}),
+            json!({
+                "enable":1,"roam_enable":0,"connect_status":"ipv4_connected",
+                "ipv4_address":"192.0.2.2","ipv4_dev_name":"cell0","ipv4_dns_prefer":"192.0.2.53"
+            }),
+        ),
+        "stall",
+    )
+}
+
+struct StubTransport {
+    calls: std::sync::atomic::AtomicUsize,
+    on_request: Box<dyn Fn()>,
+}
+impl nf::path::Transport for StubTransport {
+    fn http(&self, _: &nf::path::Path, _: std::net::SocketAddr) -> luyaz_api::finding::ResultState {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        (self.on_request)();
+        luyaz_api::finding::ResultState::Passed
+    }
+    fn dns(&self, p: &nf::path::Path, t: std::net::SocketAddr) -> luyaz_api::finding::ResultState {
+        self.http(p, t)
+    }
+}
+fn stub(f: impl Fn() + 'static) -> StubTransport {
+    StubTransport {
+        calls: 0.into(),
+        on_request: Box::new(f),
+    }
+}
+
+#[test]
+fn no_packets_when_budget_or_connection_is_unknown() {
+    let io = stub(|| {});
+    let mut i = path_inputs();
+    i.reserve_probe = Arc::new(|| false);
+    let n = i.network_probe_with(&io);
+    assert_eq!(n.reason, "probe_budget_unavailable");
+    assert!(!i.probed.load(Ordering::SeqCst));
+    i.current_connection = Arc::new(|| false);
+    i.reserve_probe = Arc::new(|| panic!("changed connection must not claim budget"));
+    assert_eq!(
+        i.network_probe_with(&io).reason,
+        "snapshot_or_connection_changed"
+    );
+    assert_eq!(io.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn connection_change_during_http_discards_success_and_stops_remaining_requests() {
+    let current = Arc::new(AtomicBool::new(true));
+    let mut i = path_inputs();
+    let c = current.clone();
+    i.current_connection = Arc::new(move || c.load(Ordering::SeqCst));
+    let io = stub(move || current.store(false, Ordering::SeqCst));
+    let n = i.network_probe_with(&io);
+    assert_eq!(io.calls.load(Ordering::SeqCst), 1);
+    assert!(i.probed.load(Ordering::SeqCst));
+    assert_eq!(n.reason, "snapshot_or_connection_changed_during_probe");
+    assert_eq!(n.path_reachable, luyaz_api::finding::ResultState::Unknown);
+    assert_eq!(n.dns, luyaz_api::finding::ResultState::Unknown);
+    assert!(n.paths.is_empty(), "discard per-path success too");
+    assert!(!i.readings_current());
+}
+
+#[test]
+fn budget_is_durable_before_request_and_panic_does_not_refund_it() {
+    let root =
+        std::env::temp_dir().join(format!("finding-before-packet-{}", rand::random::<u64>()));
+    let path = root.join("budget.json");
+    let boot = |seconds| BootTime {
+        boot_id: "fixture".into(),
+        seconds,
+    };
+    let b = Arc::new(Mutex::new(budget::Budget::load(
+        path.clone(),
+        Some(&boot(0)),
+    )));
+    let mut i = path_inputs();
+    let b2 = b.clone();
+    let at = boot(600);
+    i.reserve_probe = Arc::new(move || lock(&b2).reserve(Some(&at)));
+    let p = path.clone();
+    let io = stub(move || {
+        let v: Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+        assert_eq!(v["last"]["seconds"], 600);
+        panic!("simulated request crash after durable reservation");
+    });
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| i.network_probe_with(&io)))
+            .is_err()
+    );
+    assert!(!budget::Budget::load(path.clone(), Some(&boot(601))).due(Some(&boot(1199))));
+    assert_eq!(
+        i.network_probe_with(&stub(|| panic!("must not issue a second request")))
+            .reason,
+        "probe_budget_unavailable"
+    );
+    assert_eq!(io.calls.load(Ordering::SeqCst), 1);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn changed_connection_does_not_resolve_finding_or_bless_saved_report() {
+    let path = std::env::temp_dir().join(format!("finding-switch-{}", rand::random::<u64>()));
+    let f = Findings::load(path.clone());
+    f.observe(&open("89860011"), "89860011", &Watch::new(), T);
+    let current = Arc::new(AtomicBool::new(true));
+    let c = current.clone();
+    let mut i = path_inputs();
+    i.current_connection = Arc::new(move || c.load(Ordering::SeqCst));
+    i.clients = false; // No real requests in this replay.
+    *lock(&i.network) = Some(NetworkEvidence {
+        observed_at: BootTime::read(),
+        reason: "offline_replay".into(),
+        ..NetworkEvidence::default()
+    });
+    f.round(&i, &Mutex::new(Gate::default()), &Watch::new(), T);
+    assert_eq!(f.network_view()["fresh"], true);
+    current.store(false, Ordering::SeqCst);
+    assert_eq!(f.network_view()["fresh"], false);
+    i.passive_down = false; // Even a stale "up" cannot resolve an old finding.
+    for _ in 0..2 {
+        assert!(matches!(
+            f.round(&i, &Mutex::new(Gate::default()), &Watch::new(), T),
+            Some(Verdict::Unverified { .. })
+        ));
+    }
+    assert_eq!(f.value()["open"].as_array().unwrap().len(), 1);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn stale_card_context_cannot_expire_another_cards_current_finding() {
+    let path = std::env::temp_dir().join(format!("finding-old-card-{}", rand::random::<u64>()));
+    let f = Findings::load(path.clone());
+    f.observe(&open("NEW"), "NEW", &Watch::new(), T);
+    let mut i = path_inputs();
+    i.iccid = "OLD".into();
+    i.current_connection = Arc::new(|| false);
+    assert!(matches!(
+        f.round(&i, &Mutex::new(Gate::default()), &Watch::new(), T),
+        Some(Verdict::Unverified { .. })
+    ));
+    assert_eq!(f.value()["open"][0]["iccid"], "NEW");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn guard_never_resumes_requests_after_an_observed_connection_failure() {
+    use nf::path::Transport;
+    let current = Arc::new(AtomicBool::new(true));
+    let c = current.clone();
+    let mut i = path_inputs();
+    i.current_connection = Arc::new(move || c.load(Ordering::SeqCst));
+    let io = stub(|| {});
+    let guarded = Guarded {
+        inputs: &i,
+        io: &io,
+        invalid: AtomicBool::new(false),
+    };
+    let path = nf::path::paths(i.state.as_ref().unwrap()).remove(0);
+    let target = "192.0.2.53:53".parse().unwrap();
+    guarded.http(&path, target);
+    current.store(false, Ordering::SeqCst);
+    guarded.dns(&path, target);
+    current.store(true, Ordering::SeqCst);
+    guarded.http(&path, target);
+    assert_eq!(io.calls.load(Ordering::SeqCst), 1);
+    assert!(!guarded.current());
 }

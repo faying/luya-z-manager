@@ -7,8 +7,14 @@
 //! at a time: a second start while one is waiting or running gets that same run. A finished run
 //! is kept 10 minutes.
 //!
-//! Layers, in the order the main cause is picked from: Wi-Fi, signal, speed cap, cellular link,
-//! cell load, proxy. Each ends ok / warn / bad / na ("can't tell", never the main cause).
+//! Layers, in the order the main cause is picked from (`deep-diag-v2.md` §2): Wi-Fi, SIM, signal,
+//! speed cap, bearer, cellular link, DNS, internet (e2e), clock, cell load, proxy. Each ends ok /
+//! warn / bad / na ("can't tell", never the main cause), or blocked: a layer it depends on
+//! (`luyaz_api::diagnose::DEPS`) is bad, so it sends nothing and is left out of "N/M" (§3).
+//!
+//! DNS and e2e reuse the Finding path (§2.1): one `finding::path::observe` on the bound cellular
+//! sockets (at most 2 HTTP + 2 DNS), plus 2 queries to the device's own dnsmasq. A Finding probe
+//! holding the gate is waited for, and what it just saw is used instead of probing again.
 //!
 //! Sharing the modem and the uplink (D4/D10): one gate, handed in by the caller because the same
 //! lock guards its search/register and speed test. A run that finds one of those going waits for
@@ -16,7 +22,8 @@
 //! (`luyaz_api::diagnose::refusal_at`). Both sides check and claim under the gate, so neither can
 //! slip in between. The run does not drive the modem.
 //!
-//! What it sends: 10 DNS queries to the operator's resolver, and, with the proxy on, one health
+//! What it sends: 10 DNS queries to the operator's resolver, the Finding path's 2 + 2, 2 local
+//! queries, and, with the proxy on, one health
 //! check of the node in use plus one direct request to the same generate_204 URL (D11). Nothing
 //! while idle.
 //!
@@ -35,8 +42,20 @@ use serde_json::{json, Value};
 use luyaz_api::diagnose::*;
 use luyaz_speedtest::{OnDone, SpeedTestProgress};
 
+use luyaz_api::clock::EvidenceStatus;
+use luyaz_api::finding::{NetworkEvidence, ResultState};
+
 use crate::record::{Event, Reading};
 use crate::{dns_query, now_unix, operator_dns};
+
+/// The Finding path's worst case is 2 × 5 s HTTP + 2 × 2 s DNS: its own cap, above that.
+pub const PATH_MAX: Duration = Duration::from_secs(16);
+/// After a Finding probe frees the gate, how long its result may take to be stored.
+pub const FRESH_WAIT: Duration = Duration::from_millis(1500);
+/// The device's own resolver gets this long for its two names.
+pub const LOCAL_DNS_MAX: Duration = Duration::from_secs(2);
+/// One domestic name, one foreign one (v2 §2 dns).
+pub const LOCAL_DNS_NAMES: [&str; 2] = ["www.qq.com", "www.google.com"];
 
 /// What a run reads and where it writes, on the agent or in u60d.
 pub trait Host: Send + Sync + 'static {
@@ -63,6 +82,40 @@ pub trait Host: Send + Sync + 'static {
     }
     fn link_probe(&self, dns: &[String]) -> LinkProbe {
         link_probe(dns)
+    }
+    /// The sim block (`get_sim_info`): the card's state only.
+    fn sim_inputs(&self) -> SimIn {
+        SimIn::default()
+    }
+    /// The eSIM channel check, asked only with the card ready; must not run while an eSIM
+    /// operation holds the card (the host claims the eSIM engine for it). None = no eSIM tools.
+    fn esim_channel(&self) -> Option<EsimChannel> {
+        None
+    }
+    /// The bearer layer's inputs. The default reads the state alone; the device adds routes and
+    /// rp_filter.
+    fn bearer_inputs(&self, state: Option<&Value>) -> BearerIn {
+        bearer_base(state)
+    }
+    /// The Finding path's bound observation (`finding::path::observe`) for this state.
+    fn path_probe(&self, _state: Option<&Value>) -> NetworkEvidence {
+        NetworkEvidence { reason: "not_probed".into(), ..NetworkEvidence::default() }
+    }
+    /// A Finding observation that is still fresh (written within `finding::path::MAX_AGE`).
+    fn fresh_network(&self) -> Option<NetworkEvidence> {
+        None
+    }
+    /// The device's own resolver (dnsmasq); None = not asked.
+    fn local_dns(&self) -> Option<LocalDns> {
+        None
+    }
+    /// Seconds the device clock (as real UTC) is ahead of an HTTP server's `Date`. None = no answer.
+    fn clock_skew(&self) -> Option<i64> {
+        None
+    }
+    /// The clock evidence's status now.
+    fn clock_status(&self) -> Option<EvidenceStatus> {
+        None
     }
     /// Into the signal history (`diagnose`, `speed`, `diagnose_feedback`).
     fn push_event(&self, kind: &str, data: Value);
@@ -227,9 +280,12 @@ impl Diagnosis {
     fn execute(self: &Arc<Self>, id: u64, who: Who) {
         // wait for a search / register / speed test, then claim the gate
         let asked = Instant::now();
+        let mut waited_finding = false;
         loop {
             let mut g = self.gate();
-            match self.host.others_busy() {
+            let busy = if g.finding_since.is_some() { Some("finding") } else { self.host.others_busy() };
+            waited_finding |= busy == Some("finding");
+            match busy {
                 None => {
                     g.diag_since = Some(now_unix());
                     drop(g);
@@ -266,6 +322,19 @@ impl Diagnosis {
         let w = within(left(), move || judge_wifi(&who, &h.stations())).unwrap_or_else(|| timed_out(Layer::new("wifi")));
         self.update(id, |r| r.put(w));
 
+        // SIM: the card's state; the eSIM channel check only with the card otherwise ok (v2 Q1)
+        self.update(id, |r| r.running("sim"));
+        let h = Arc::clone(&self.host);
+        let sim = within(left(), move || {
+            let mut i = h.sim_inputs();
+            if judge_sim(&i).level == Level::Ok {
+                i.channel = h.esim_channel();
+            }
+            judge_sim(&i)
+        })
+        .unwrap_or_else(|| timed_out(Layer::new("sim")));
+        self.update(id, |r| r.put(sim));
+
         // signal + cap, one read of datad
         self.update(id, |r| {
             r.running("signal");
@@ -274,9 +343,9 @@ impl Diagnosis {
         let h = Arc::clone(&self.host);
         let read = within(left(), move || {
             let (st, sc) = h.radio_inputs();
-            radio_from(st.as_ref(), sc.as_ref())
+            (radio_from(st.as_ref(), sc.as_ref()), st)
         });
-        let (radio, key, dns, _) = read.clone().unwrap_or_default();
+        let ((radio, key, dns, _), state) = read.clone().unwrap_or_default();
         match read {
             Some(_) => self.update(id, |r| {
                 r.put(judge_signal(&radio));
@@ -289,33 +358,142 @@ impl Diagnosis {
             }),
         }
 
+        // its own statement: the slot's lock is let go before anything else takes it
+        let blocked = |id: &str| {
+            let slot = self.slot();
+            slot.as_ref().and_then(|r| blocked_by(&r.layers, id))
+        };
+
+        // bearer: local reads only
+        let by = blocked("bearer");
+        if let Some(by) = by {
+            self.update(id, |r| r.put(Layer::new("bearer").blocked(by)));
+        } else {
+            self.update(id, |r| r.running("bearer"));
+            let h = Arc::clone(&self.host);
+            let st = state.clone();
+            let b = within(left(), move || judge_bearer(&h.bearer_inputs(st.as_ref())))
+                .unwrap_or_else(|| timed_out(Layer::new("bearer")));
+            self.update(id, |r| r.put(b));
+        }
+
+        // link, dns and e2e need the bearer; their probes run side by side
+        let need_bearer = blocked("link");
+        let net_rx = if need_bearer.is_none() {
+            self.update(id, |r| {
+                r.running("link");
+                r.running("dns");
+                r.running("e2e");
+            });
+            // a Finding probe just ran: use what it saw (its result is stored right after it frees the gate)
+            let reused = if waited_finding {
+                let t = Instant::now();
+                loop {
+                    // an observation that sent nothing (CHILL on, stale snapshot) is no answer
+                    if let Some(n) = self.host.fresh_network().filter(|n| n.path_reachable != ResultState::Unknown) {
+                        break Some(n);
+                    }
+                    if t.elapsed() >= FRESH_WAIT {
+                        break None;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+            } else {
+                None
+            };
+            let (tx, rx) = mpsc::channel();
+            match reused {
+                Some(n) => {
+                    let _ = tx.send(n);
+                }
+                None => {
+                    let h = Arc::clone(&self.host);
+                    let st = state.clone();
+                    thread::spawn(move || {
+                        let _ = tx.send(h.path_probe(st.as_ref()));
+                    });
+                }
+            }
+            let h = Arc::clone(&self.host);
+            let local = thread::spawn(move || h.local_dns());
+            Some((rx, local))
+        } else {
+            None
+        };
+
         // cellular link
-        self.update(id, |r| r.running("link"));
-        let probe = if radio.connected && !dns.is_empty() {
+        let probe = if need_bearer.is_none() && radio.connected && !dns.is_empty() {
             let d = dns.clone();
             let h = Arc::clone(&self.host);
             within(left(), move || h.link_probe(&d))
         } else {
             None
         };
-        self.update(id, |r| r.put(judge_link(radio.connected, !dns.is_empty(), probe.as_ref())));
+        match need_bearer {
+            Some(by) => self.update(id, |r| {
+                for l in ["link", "dns", "e2e"] {
+                    r.put(Layer::new(l).blocked(by));
+                }
+            }),
+            None => self.update(id, |r| r.put(judge_link(radio.connected, !dns.is_empty(), probe.as_ref()))),
+        }
+
+        // dns + e2e: the bound path observation (its own cap) and the local resolver
+        let mut net_pending = None;
+        if let Some((rx, local)) = net_rx {
+            let net = rx.recv_timeout(PATH_MAX).ok();
+            if net.is_none() {
+                net_pending = Some(rx);
+            }
+            let local = local.join().ok().flatten();
+            self.update(id, |r| {
+                r.put(judge_dns(local.as_ref(), net.as_ref()));
+                r.put(judge_e2e(net.as_ref()));
+            });
+        }
+
+        // clock: an HTTP Date against the device clock (one HEAD), else the evidence's status
+        let by = blocked("clock");
+        if let Some(by) = by {
+            self.update(id, |r| r.put(Layer::new("clock").blocked(by)));
+        } else {
+            self.update(id, |r| r.running("clock"));
+            let h = Arc::clone(&self.host);
+            let skew = within(left(), move || h.clock_skew()).flatten();
+            let st = self.host.clock_status();
+            self.update(id, |r| r.put(judge_clock(st, skew)));
+        }
 
         // cell load, from history
-        self.update(id, |r| r.running("crowd"));
-        let now = now_unix();
-        let events = self.host.events(now.saturating_sub(7 * 86_400), now + 1);
-        let (past, speeds) = past_from_events(&events);
-        self.update(id, |r| r.put(judge_crowd(&radio, &key, probe.as_ref(), &past, &speeds)));
+        let by = blocked("crowd");
+        if let Some(by) = by {
+            self.update(id, |r| r.put(Layer::new("crowd").blocked(by)));
+        } else {
+            self.update(id, |r| r.running("crowd"));
+            let now = now_unix();
+            let events = self.host.events(now.saturating_sub(7 * 86_400), now + 1);
+            let (past, speeds) = past_from_events(&events);
+            self.update(id, |r| r.put(judge_crowd(&radio, &key, probe.as_ref(), &past, &speeds)));
+        }
 
         // proxy
         let has_proxy = self.slot().as_ref().is_some_and(|r| r.layers.iter().any(|l| l.id == "proxy"));
         if has_proxy {
-            self.update(id, |r| r.running("proxy"));
-            let h = Arc::clone(&self.host);
-            let p = within(left(), move || h.proxy_probe());
-            self.update(id, |r| r.put(judge_proxy(p.as_ref())));
+            let by = blocked("proxy");
+            if let Some(by) = by {
+                self.update(id, |r| r.put(Layer::new("proxy").blocked(by)));
+            } else {
+                self.update(id, |r| r.running("proxy"));
+                let h = Arc::clone(&self.host);
+                let p = within(left(), move || h.proxy_probe());
+                self.update(id, |r| r.put(judge_proxy(p.as_ref())));
+            }
         }
 
+        // an observation past its cap still holds bound sockets: the gate stays until it ends
+        if let Some(rx) = net_pending {
+            let _ = rx.recv_timeout(PATH_MAX);
+        }
         self.gate().diag_since = None;
         let mut done = None;
         self.update(id, |r| {
@@ -354,6 +532,95 @@ fn within<T: Send + 'static>(max: Duration, f: impl FnOnce() -> T + Send + 'stat
     rx.recv_timeout(max).ok()
 }
 
+/// The bearer layer from the state alone: `wan_status` and finding::path's addresses and paths.
+pub fn bearer_base(state: Option<&Value>) -> BearerIn {
+    let wan = state.and_then(|s| s["net"]["wan_status"].as_str()).unwrap_or("").trim();
+    let paths = state.map(crate::finding::path::paths).unwrap_or_default();
+    BearerIn {
+        connected: (!wan.is_empty()).then(|| crate::wan_connected(wan)),
+        has_ip: state.and_then(crate::finding::path::has_ip),
+        iface: paths.first().map(|p| p.interface.clone()).unwrap_or_default(),
+        ..BearerIn::default()
+    }
+}
+
+/// `/proc/net/route`: is there a default route (any interface), and on which interfaces.
+/// None = not a route table.
+pub fn default_routes(text: &str) -> Option<Vec<String>> {
+    let mut lines = text.lines();
+    if !lines.next()?.starts_with("Iface") {
+        return None;
+    }
+    let mut out: Vec<String> = Vec::new();
+    for l in lines {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        // Destination and Mask both 0; flags RTF_UP
+        let up = f.get(3).and_then(|x| u32::from_str_radix(x, 16).ok()).is_some_and(|x| x & 1 != 0);
+        let mask0 = f.get(7).is_none_or(|m| *m == "00000000");
+        if f.len() >= 2 && f[1] == "00000000" && up && mask0 && !out.iter().any(|i| i == f[0]) {
+            out.push(f[0].to_string());
+        }
+    }
+    Some(out)
+}
+
+/// The other ways out: interfaces with a default route besides the cellular one, plus tunnels
+/// that route by policy (Tailscale's table 52, CHILL's TUN) found among the network devices.
+pub fn ways_out(cellular: &str, defaults: &[String], devices: &[String]) -> usize {
+    // tun0, utun1, wg0…: a prefix and digits (not tunl0 / sit0, the kernel's idle ipip/sit devices)
+    let numbered = |d: &str, p: &str| d.strip_prefix(p).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    let tunnel = |d: &str| d.starts_with("tailscale") || ["tun", "utun", "wg"].iter().any(|p| numbered(d, p)) || d == "Meta";
+    let mut ways: Vec<&str> = vec![cellular];
+    for d in defaults.iter().map(String::as_str).chain(devices.iter().map(String::as_str).filter(|d| tunnel(d))) {
+        if !ways.contains(&d) {
+            ways.push(d);
+        }
+    }
+    ways.len()
+}
+
+/// The effective rp_filter on an interface: the larger of `all` and its own (kernel rule).
+pub fn rp_effective(all: Option<u8>, own: Option<u8>) -> Option<u8> {
+    match (all, own) {
+        (None, None) => None,
+        (a, b) => Some(a.unwrap_or(0).max(b.unwrap_or(0))),
+    }
+}
+
+/// Two names to the device's own resolver on one socket; only answers with an address count.
+pub fn local_dns_probe() -> LocalDns {
+    let mut out = LocalDns { asked: 0, answered: 0, ms: None };
+    let Ok(sock) = UdpSocket::bind("127.0.0.1:0") else { return out };
+    if sock.connect("127.0.0.1:53").is_err() {
+        return out;
+    }
+    let base = (now_unix() as u16) ^ 0x6d6d;
+    let qs: Vec<Vec<u8>> = LOCAL_DNS_NAMES.iter().enumerate().map(|(i, n)| dns_query(base.wrapping_add(i as u16), n)).collect();
+    let start = Instant::now();
+    for q in &qs {
+        if sock.send(q).is_ok() {
+            out.asked += 1;
+        }
+    }
+    let mut got = vec![false; qs.len()];
+    let mut buf = [0u8; 512];
+    while out.answered < out.asked {
+        let Some(left) = LOCAL_DNS_MAX.checked_sub(start.elapsed()).filter(|d| !d.is_zero()) else { break };
+        if sock.set_read_timeout(Some(left)).is_err() {
+            break;
+        }
+        let Ok(n) = sock.recv(&mut buf) else { break };
+        for (i, q) in qs.iter().enumerate() {
+            if !got[i] && crate::finding::path::dns_answer(&buf[..n], q) == Some(ResultState::Passed) {
+                got[i] = true;
+                out.answered += 1;
+                out.ms = Some(start.elapsed().as_millis() as u32);
+            }
+        }
+    }
+    out
+}
+
 /// Past runs and capped speed tests, from the history's events.
 pub fn past_from_events(events: &[Event]) -> (Vec<PastRun>, Vec<PastSpeed>) {
     let ev: Vec<(String, Value)> =
@@ -375,7 +642,8 @@ pub fn num(v: Option<&Value>) -> Option<f64> {
 pub fn radio_from(state: Option<&Value>, screen: Option<&Value>) -> (Radio, CellKey, Vec<String>, u64) {
     let now = now_unix();
     let reading = Reading::parse(now, state, screen, None);
-    let story = screen.and_then(|s| s.get("net")).and_then(|n| n.get("story")).cloned();
+    let net = screen.and_then(|s| s.get("net"));
+    let story = net.and_then(|n| n.get("story")).cloned();
     let tier = screen.and_then(|s| s.get("net")).and_then(|n| n.get("bars_tier")).and_then(Value::as_i64).filter(|t| *t >= 0);
     let nr = reading.rat == "SA";
     let pick = |a: Option<f64>, b: Option<f64>| if nr { a } else { b };
@@ -394,6 +662,13 @@ pub fn radio_from(state: Option<&Value>, screen: Option<&Value>) -> (Radio, Cell
         qos_nr: qos.and_then(|q| q.get("bearer")).and_then(Value::as_str) == Some("nr_pdu"),
         connected: reading.connected,
         rx_bps: state.and_then(|s| s.get("traffic")).and_then(|t| t.get("rx_speed")).and_then(Value::as_i64).unwrap_or(0),
+        // "↓ n41 100M + B3 20M   ↑ n41" → the downlink part
+        carriers: net
+            .and_then(|n| n.get("ca_sub"))
+            .and_then(Value::as_str)
+            .map(|c| c.split('↑').next().unwrap_or("").trim().trim_start_matches('↓').trim().to_string())
+            .unwrap_or_default(),
+        bw_mhz: net.and_then(|n| n.get("act_bw")).and_then(Value::as_i64).filter(|b| *b > 0),
     };
     let key = CellKey { plmn: reading.plmn, cell: reading.cell, ch: reading.channel, hour: ((now % 86_400) / 3600) as u8 };
     (radio, key, dns, now)

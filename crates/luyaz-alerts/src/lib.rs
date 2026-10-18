@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+pub mod clock;
 pub mod sms;
 
 pub const DIR: &str = "/data/alerts";
@@ -555,19 +556,10 @@ pub fn kind_label(kind: &str) -> String {
 /// instead of keeping its own copy (L2 review R8).
 pub fn kind_label_en(kind: &str) -> String {
     const T: &[(&str, &str)] = &[
-        (
-            "agent-crash",
-            "Admin backend exited unexpectedly",
-        ),
-        (
-            "agent-silent",
-            "Admin backend stopped responding",
-        ),
+        ("agent-crash", "Admin backend exited unexpectedly"),
+        ("agent-silent", "Admin backend stopped responding"),
         ("agent-hung", "Admin backend was stuck and was restarted"),
-        (
-            "datad-crash",
-            "Data service exited unexpectedly",
-        ),
+        ("datad-crash", "Data service exited unexpectedly"),
         ("devui-crash", "Screen UI exited unexpectedly"),
         ("web-crash", "Admin pages (luyaz-web) exited unexpectedly"),
         (
