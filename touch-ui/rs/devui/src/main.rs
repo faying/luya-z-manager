@@ -1,4 +1,4 @@
-//! u60pro-devui: the touch UI (see lib.rs).
+//! luyaz-ui: the touch UI (see lib.rs).
 // SPDX-License-Identifier: MIT
 
 /// Read from the file by the core (luyaz-core versions.rs), never by running the program.

@@ -1,5 +1,5 @@
-//! SMS forwarding (moved from zte-agent `sms_forward.rs`, Phase 4 step 9e), shared by the agent
-//! and u60d. Every side effect (datad's SMS feed and pages, ubus reads, the vendor send, datad
+//! SMS forwarding (moved from zte-agent `sms_forward.rs`, Phase 4 step 9e), run by
+//! the core. Every side effect (datad's SMS feed and pages, ubus reads, the vendor send, datad
 //! actions, alerts, shadow records, sleeping) goes through [`Host`]; the HTTP destinations are
 //! sent from here. The agent's host is the device; tests use a fake.
 //!

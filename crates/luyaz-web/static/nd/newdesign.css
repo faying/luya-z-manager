@@ -205,9 +205,9 @@
 :root {
   /* Type. Latin and digits on Geist (Figma's own suggested stand-in for
    * figmaSans); Chinese on the platform's CJK face; data in Geist Mono. */
-  --nd-font: var(--font-geist), "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC",
+  --nd-font: var(--font-geist, Geist), "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC",
     "Microsoft YaHei", sans-serif;
-  --nd-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, "Cascadia Mono", "Noto Sans Mono", monospace;
+  --nd-mono: var(--font-geist-mono, "Geist Mono"), ui-monospace, "SF Mono", Menlo, "Cascadia Mono", "Noto Sans Mono", monospace;
 
   --nd-r-panel: 16px;
   --nd-r-card: 12px;

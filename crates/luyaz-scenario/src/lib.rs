@@ -77,9 +77,9 @@ const LOG_TAIL_LINES: usize = 300;
 /// agent's engine waits for it to go before starting, so the two never tick at once.
 pub const LEASE_FILE: &str = "/tmp/scenario.owner";
 
-// ── Contract with u60-guard (touch-ui scripts/u60-guard.sh) ─────────────────
+// ── Contract with the sentinel's Wi-Fi guard (luyaz-sentinel) ────────────────
 //
-// u60-guard is the watchdog that forces Wi-Fi on when the engine stops
+// The Wi-Fi guard is the watchdog that forces Wi-Fi on when the engine stops
 // working while the APs are down. It knows the engine only through these two
 // files, both on tmpfs so a reboot starts clean:
 //
@@ -87,16 +87,16 @@ pub const LEASE_FILE: &str = "/tmp/scenario.owner";
 //    every loop, whether or not the engine is enabled or configured: it proves
 //    the engine is alive, not that it is switching. Content is whole seconds of
 //    /proc/uptime (monotonic, immune to the clock jump when the network sets
-//    the time). u60-guard only starts judging once it has seen it at least once.
-//    Whichever process runs the engine writes it (the agent, or u60d once handed).
-//  * TAKEOVER_FILE — written by u60-guard when it steps in. While it exists the
+//    the time). The guard only starts judging once it has seen it at least once.
+//    Whichever process runs the engine writes it (the core).
+//  * TAKEOVER_FILE — written by the guard when it steps in. While it exists the
 //    engine does no detection and ignores the pin, and goes back to (and stays
 //    in) away: a persistent pin of "home" would otherwise take the APs straight
 //    back down. The engine removes it after TAKEOVER_HOLD of its own continuous
-//    running, which is how control is handed back. If u60-guard rewrites it
+//    running, which is how control is handed back. If the guard rewrites it
 //    (a second takeover), the clock starts again.
 //
-// Which is why u60-guard must write the marker ONCE per takeover, with content
+// Which is why the guard must write the marker ONCE per takeover, with content
 // unique to that takeover (its uptime at the time) — rewriting it every check
 // would restart the hold forever and control would never come back.
 pub const HEARTBEAT_FILE: &str = "/tmp/scenario.heartbeat";
@@ -355,7 +355,7 @@ pub struct Engine {
     busy: AtomicBool,
     /// Last restore retry while pinned (unix secs).
     pin_retry_at: AtomicI64,
-    /// Which u60-guard takeover marker this process is honouring, and since when (monotonic).
+    /// Which Wi-Fi guard takeover marker this process is honouring, and since when (monotonic).
     takeover: Mutex<Option<(String, f64)>>,
     tick_ring: Mutex<TickRing>,
     /// When the heartbeat was last written, on the monotonic clock (which stops in suspend, so
@@ -427,7 +427,7 @@ impl Engine {
         self.io.publish(&text);
     }
 
-    /// Is u60-guard in charge of Wi-Fi? True while its marker exists; once this
+    /// Is the Wi-Fi guard in charge of Wi-Fi? True while its marker exists; once this
     /// process has run for the hold time with the same marker, removes it and
     /// hands control back to detection and the pin.
     fn guard_takeover(&self) -> bool {
@@ -477,8 +477,8 @@ impl Engine {
         lk(&self.state).clone()
     }
 
-    /// Whole seconds of uptime into the heartbeat file, renamed into place so u60-guard never
-    /// reads a half-written number. No uptime, no heartbeat: u60-guard reads that as "not
+    /// Whole seconds of uptime into the heartbeat file, renamed into place so the guard never
+    /// reads a half-written number. No uptime, no heartbeat: the guard reads that as "not
     /// alive", the safe side.
     pub fn heartbeat(&self) {
         *lk(&self.beat) = Some(Instant::now());
@@ -497,7 +497,7 @@ impl Engine {
     /// Bootsafe, then tick until taken back ([`Io::active`]). The host runs this on a thread of
     /// its own: `bootsafe` can take tens of seconds if it has to repair Wi-Fi, an apply up to a few
     /// minutes, and nothing else may wait for that. The heartbeat goes first, before bootsafe:
-    /// u60-guard should see the engine alive as early as possible.
+    /// The guard should see the engine alive as early as possible.
     pub fn run(&self) {
         self.heartbeat();
         self.bootsafe();
@@ -586,7 +586,7 @@ impl Engine {
         let _ = fs::write(self.p(RTC_WAKEALARM), "0");
     }
 
-    /// Kept on /data so that u60-guard, which sends the SMS, still knows the last
+    /// Kept on /data so that the SMS sender (core or sentinel) still knows the last
     /// location after the engine has died. Best effort.
     fn set_abroad(&self, abroad: bool) {
         let alerts = luyaz_api::alerts::Alerts::at(Path::new(&self.p(luyaz_api::alerts::DIR)));
@@ -867,7 +867,7 @@ impl Engine {
             Ok(()) => {
                 st.current = scen.id.clone();
                 st.last_switch = Some(self.io.now());
-                // u60-guard holds SMS alerts while abroad (roaming charges).
+                // The SMS sender holds alerts while abroad (roaming charges).
                 self.set_abroad(sc::is_abroad(scen));
                 st.last_error = None;
                 if !scen.inhibit_sleep {
@@ -908,7 +908,7 @@ impl Engine {
         }
         let _busy = BusyGuard(&self.busy);
 
-        // u60-guard stepped in while we were dead or stuck. Its Wi-Fi-on wins
+        // The Wi-Fi guard stepped in while we were dead or stuck. Its Wi-Fi-on wins
         // over detection and over the pin until the takeover is released.
         let takeover = self.guard_takeover();
         let cfg = self.config();

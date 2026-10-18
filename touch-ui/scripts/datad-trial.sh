@@ -1,6 +1,6 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
-# datad-trial.sh — run a side-by-side zwrt-datad test build on the U60 Pro
+# datad-trial.sh — run a side-by-side luyaz-core test build on the U60 Pro
 # (MU5250), watch it, and put the production datad back by itself.
 #
 # The old touch UI only reads 127.0.0.1:9460, so the test build cannot run
@@ -12,15 +12,15 @@
 # Promotion into the live slot is `u60-ship.sh`'s job, never this one's.
 #
 # On the device:
-#   1. push the new build as /data/plugins/zwrt-datad/zwrt-datad.test
+#   1. push the new build as /data/luyaz/luyaz-core.test
 #      (chmod +x); this script and u60-ship.sh (as luyaz-ship.sh) live in /data/luyaz/scripts/
 #   2. sh /data/luyaz/scripts/datad-trial.sh launch [VAR=value …]
-#        preflight; /etc/init.d/zwrt-datad stop; start zwrt-datad.test with
+#        preflight; /etc/init.d/luyaz-core stop; start luyaz-core.test with
 #        the arguments and environment of the init script's start_service
 #        (extra VAR=value, e.g. LUYAZ_UBUS=cli|socket, are added);
-#        once it serves /state, `start` the watcher. If it does not come up,
+#        once it serves /v2/state, `start` the watcher. If it does not come up,
 #        production is started again at once and launch fails.
-#        The test build runs WITHOUT supervise.sh: a crash is not respawned,
+#        The test build runs WITHOUT procd: a crash is not respawned,
 #        so the watcher sees it.
 #   3. sh /data/luyaz/scripts/datad-trial.sh status   running? + last log lines
 #      sh /data/luyaz/scripts/datad-trial.sh abort    stop now, restore production

@@ -596,6 +596,34 @@ for moved in no yes; do
     fi
     teardown
 done
+# fail closed: a retired start in any shape, not only the plain line (u60-ship.sh rc_retired)
+for shape in indented conditional chained uid-only datad-amp commented; do
+    setup
+    CASE="rc.local .prev, retired start $shape (moved, programs gone)"
+    LEAK0=$(leak_snapshot)
+    mkdir -p "$R/etc" "$R/data/luyaz/ship/prev" "$R/data/luyaz/core"
+    : >"$R/data/luyaz/core/.migrated"
+    printf '#!/bin/sh\n/etc/init.d/luyaz-core start\n/etc/init.d/luyaz-sentinel start\nexit 0\n' >"$R/etc/rc.local"
+    case $shape in
+        indented) l='  /etc/init.d/u60-uid start' ;;
+        conditional) l='[ -x /etc/init.d/u60-guard ] && /etc/init.d/u60-guard start' ;;
+        chained) l='/etc/init.d/luyaz-sentinel start; /etc/init.d/u60-uid start' ;;
+        uid-only) l='/etc/init.d/u60-uid start   # screen' ;;
+        datad-amp) l='	/etc/init.d/zwrt-datad start &' ;;
+        commented) l='# /etc/init.d/u60-uid start' ;;
+    esac
+    printf '#!/bin/sh\n/etc/init.d/luyaz-core start\n%s\nexit 0\n' "$l" >"$R/data/luyaz/ship/prev/etc.rc.local.prev-$TXN"
+    RN=$(md5 "$R/etc/rc.local") RO=$(md5 "$R/data/luyaz/ship/prev/etc.rc.local.prev-$TXN")
+    printf 'v=3\ntxn=%s\ncomp=sentinel\nphase=check\nreason=\nboot_id=aaaa-1111\nexec_pid=77\nfile=%s|%s|%s\nend=1\n' \
+        "$TXN" "$R/etc/rc.local" "$RO" "$RN" >"$R/data/luyaz/ship/txn"
+    recover
+    if [ $shape = commented ]; then
+        check "$CASE: only a comment, so the old rc.local back (exit 10)" '[ "$RC" = 10 ] && [ "$(md5 "$R/etc/rc.local")" = "$RO" ]'
+    else
+        check "$CASE: refused, rc.local untouched, says so" '[ "$RC" != 10 ] && [ "$(md5 "$R/etc/rc.local")" = "$RN" ] && grep -q "不还原" "$R/data/luyaz/ship/recover.log"'
+    fi
+    teardown
+done
 for moved in no yes; do
     setup
     CASE="core program at the old path, moved: $moved"

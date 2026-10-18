@@ -1,4 +1,4 @@
-//! 网络 (src/ui_parts/network.c): zte-agent's /api/netinfo on four pages. 情景 → the 情景 page,
+//! 网络 (src/ui_parts/network.c): luyaz-core's /api/netinfo on four pages. 情景 → the 情景 page,
 //! 出口 IP → the exit tab, 运营商 + 手动选网 → 运营商选择, 邻小区 → 小区信息; net_reflow lays
 //! each page out from its base. Drawn by net_paint (apn.rs, as in C). What touches the modem
 //! (scan, register, back to automatic) and pinning a scene take two taps: the first colours the

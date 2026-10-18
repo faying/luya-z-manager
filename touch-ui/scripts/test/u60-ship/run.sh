@@ -903,6 +903,8 @@ EOF
 dcheck "ts stops" 'touch $T/frozen' 'touch $T/frozen' "屏幕数据停了" "屏幕数据停了"
 dcheck "process gone" 'rm -f $T/pids/luyaz-core.test' 'rm -f $T/pids/luyaz-core' "测试版崩溃" "正式版消失"
 dcheck "u60-uid gives up" 'echo u60-uid: giving up: 2 launches >>$T/logread' 'echo u60-uid: giving up: 2 launches >>$T/logread' "界面异常（u60-uid" "界面异常（u60-uid"
+dcheck "UI crash line, old name" 'echo u60pro-devui pid 812 ended: exit 1 >>$T/logread' 'echo u60pro-devui pid 812 ended: exit 1 >>$T/logread' "界面异常（u60-uid" "界面异常（u60-uid"
+dcheck "UI crash line, new name" 'echo luyaz-ui pid 812 ended: exit 1 >>$T/logread' 'echo luyaz-ui pid 812 ended: exit 1 >>$T/logread' "界面异常（u60-uid" "界面异常（u60-uid"
 dcheck "screen UI gone" 'rm -f $T/pids/luyaz-ui' 'rm -f $T/pids/luyaz-ui' "界面异常（luyaz-ui 进程消失）" "界面异常（luyaz-ui 进程消失）"
 
 # a normal u60-uid launch line ("… before giving up)") is not trouble
@@ -1178,6 +1180,22 @@ mkdir -p "$T/old" "$T/new"; for d in old new; do echo 2 >"$T/$d/attempts"; echo 
 UID_STATE=$T/old UID_STATE_NEW=$T/new uid_clear
 check "$CASE: launch count and give-up cleared in both dirs" '[ -z "$(find "$T/old" "$T/new" -type f)" ]'
 check "$CASE: the kill lines take luyaz-ui only" '[ "$(grep -c "KILL.* \$(\$PIDOF luyaz-ui 2>/dev/null) 2>/dev/null$" "$SHIP")" = 2 ] && ! grep -q "PIDOF u60pro-devui" "$SHIP"'
+teardown
+
+# rc_retired (restore_one's rc.local refusal): every retired start counts, in any shape
+setup
+CASE="rc_retired"
+LEAK0=$(leak_snapshot)
+sed -n '/^rc_retired() {/,/^}/p' "$SHIP" >"$T/rr.sh"
+rr() { printf '#!/bin/sh\n%s\nexit 0\n' "$1" >"$T/rc"; ( . "$T/rr.sh"; rc_retired "$T/rc" ); }
+check "$CASE: plain uid + guard" '[ "$(rr "/etc/init.d/u60-uid start
+/etc/init.d/u60-guard start")" = "u60-uid u60-guard" ]'
+check "$CASE: indented, conditional, chained, with &" '[ "$(rr "  /etc/init.d/u60-uid start")" = u60-uid ] && [ "$(rr "[ -x /etc/init.d/u60-guard ] && /etc/init.d/u60-guard start")" = u60-guard ] && [ "$(rr "true; /etc/init.d/zwrt-datad start &")" = zwrt-datad ]'
+check "$CASE: a comment line is not a start" '[ -z "$(rr "  # /etc/init.d/u60-uid start")" ]'
+check "$CASE: the current services are not retired" '[ -z "$(rr "/etc/init.d/luyaz-core start
+/etc/init.d/luyaz-sentinel start")" ]'
+check "$CASE: missing or a symlink: unreadable" '[ "$( . "$T/rr.sh"; rc_retired "$T/nope")" = unreadable ] && ln -s "$T/rc" "$T/rcl" && [ "$( . "$T/rr.sh"; rc_retired "$T/rcl")" = unreadable ]'
+check "$CASE: restore_one asks it, not only rc_mode" "sed -n '/^restore_one() {/,/^}/p' '$SHIP' | grep -q 'rc_retired \"\$_rprev\"'"
 teardown
 
 echo "u60-ship: $PASS passed, $FAIL failed"

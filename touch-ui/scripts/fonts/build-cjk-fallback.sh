@@ -4,7 +4,7 @@
 #
 #   scripts/fonts/build-cjk-fallback.sh <输出目录> [缓存目录]
 #
-# 产出（放进装机包的字体目录，和 Nunito 一起装到 /data/plugins/u60pro-devui/fonts/）：
+# 产出（放进装机包的字体目录，和 Nunito 一起装到 /data/luyaz/ui/fonts/）：
 #   u60-cjk-fallback.ttf        Resource Han Rounded CN Regular 的子集，改名 "U60 CJK Fallback"
 #   OFL-ResourceHanRounded.txt  原字体的许可证（OFL 1.1）
 #   u60-cjk-fallback.txt        收了哪些字、多少个

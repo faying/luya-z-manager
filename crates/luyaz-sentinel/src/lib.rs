@@ -2,7 +2,7 @@
 //!
 //! Two jobs, sized by one question — "must this still happen when the core (u60d) is dead?":
 //!  * the screen owner ([`screen`]): the only thing that starts or stops our touch UI and the only
-//!    thing that hands the panel to the vendor UI (replaces u60-uid);
+//!    thing that hands the panel to the vendor UI;
 //!  * [`worker`]: Wi-Fi fallback, modem crash recovery, the clock verdict, log caps, ship
 //!    recover-live, dropbear, and the core's health (from u60-guard).
 //!

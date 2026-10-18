@@ -1,8 +1,8 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
 # luyaz-fallback.sh — the one emergency direct write on the U60 Pro (MU5250),
-# for when zwrt-datad (the only writer, E4) is really gone. The touch screen
-# and zte-agent both call it instead of running ubus themselves
+# for when luyaz-core (the only writer, E4) is really gone. Callers use it
+# instead of running ubus themselves
 # (write-op-layer.md D18, D23, D29).
 #
 #     luyaz-fallback.sh [--by SOURCE] ACTION [key=value ...]
@@ -35,8 +35,8 @@
 #   2. lock: flock on $LUYAZ_WRITE_LOCK (/var/run/luyaz-write.lock), tried
 #      once a second for $LUYAZ_FALLBACK_LOCK_WAIT (10) s → else exit 4.
 #   3. datad gone? Twice, $LUYAZ_FALLBACK_GAP (1) s apart. Alive when the pid in
-#      $LUYAZ_PID_FILE (/var/run/luyaz-core.pid) has a comm starting with "zwrt-datad" (side-by-side
-#      names like zwrt-datad.test count), or when its /healthz answers at all,
+#      $LUYAZ_PID_FILE (/var/run/luyaz-core.pid) has a comm starting with "luyaz-core" (side-by-side
+#      names like luyaz-core.test count; so does the old "zwrt-datad"), or when its /healthz answers at all,
 #      503 included (a datad that writes no pid file). Alive either time → exit
 #      3, nothing written.
 #   4. reads the write needs (cellular.set: get_wwaniface; direct supply: the
@@ -55,11 +55,11 @@
 # One line on stdout says which.
 #
 # AT commands take the AT port's own lock first ($LUYAZ_AT_LOCK,
-# /var/run/luyaz-at.lock, shared with datad and zte-agent: two readers on one
+# /var/run/luyaz-at.lock, shared with luyaz-core: two readers on one
 # tty take each other's replies), up to 15 s.
 #
 # Test hooks: LUYAZ_FALLBACK_UCI (uci), LUYAZ_FALLBACK_AT (a command given the AT text, prints the
-# modem's answer; default: the port, as zte-agent does it), LUYAZ_FALLBACK_UBUS (ubus), LUYAZ_FALLBACK_WGET (wget),
+# modem's answer; default: the port, as the core does it), LUYAZ_FALLBACK_UBUS (ubus), LUYAZ_FALLBACK_WGET (wget),
 # LUYAZ_FALLBACK_HEALTH_URL (empty = no /healthz check), LUYAZ_FALLBACK_PROC
 # (/proc), LUYAZ_FALLBACK_LOCK_WAIT, LUYAZ_FALLBACK_GAP, LUYAZ_FALLBACK_VERIFY_GAP.
 # Tests: scripts/test/luyaz-fallback/run.sh (busybox image).
@@ -385,7 +385,7 @@ if [ -n "$OPS" ]; then
     sync
 fi
 
-# One AT command, the way zte-agent sends it (cat the port in the background,
+# One AT command, the way the core sends it (cat the port in the background,
 # write, wait, stop the reader); prints what came back.
 at_raw() {
     if [ -n "$ATHOOK" ]; then

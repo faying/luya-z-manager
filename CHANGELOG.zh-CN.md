@@ -18,7 +18,32 @@
 
 ## Unreleased
 
+- scripts: doctor-legacy.sh 的重复实例检查标签和 core 1.2.1 一样。
 - scripts: `VERSION` 随脚本放到 `/data/luyaz/scripts/`，设备上能读到脚本的版本。
+- scripts: ship 检查界面异常时，触屏崩溃那一行新旧两种名字都认（`u60pro-devui pid … ended:` 和 `luyaz-ui pid … ended:`）。要先于 sentinel 1.0.2 上机。
+
+## touch 1.0.2 — 2026-10-18
+
+- LTE-NSA 下 NR 那一路没有 SINR 时，摆放模式改用 LTE 锚点的 SINR，不再显示「--」（[#4](https://github.com/faying/luya-z-manager/issues/4)）。
+
+## lweb 1.1.3 — 2026-10-18
+
+- 登录页用回网站的无衬线字体（之前字体变量只有别的页面设，登录页退成衬线字）。
+- 首页载波行在 1280 px 以上不再重叠（小区 ID 一律另起一行）。
+- QCI 页打开只显示核心的 `qos` 块；承载表（经 AT 读，约 12 秒）按「读取承载表」才读，页面开着不再轮询。
+- `:9090` 请求头 10 秒内没收完就断开，每个地址同时最多 64 条连接。
+
+## core 1.3.0 — 2026-10-18
+
+- `doctor --report 24h|7d [--summary]` 由核心自己出（和 `/v2/scorecard` 同一张成绩单）；doctor.sh 薄壳不再为它转给 doctor-legacy.sh。
+
+## core 1.2.1 — 2026-10-18
+
+- doctor 的重复实例检查改叫「核心实例数」「触屏实例数」，不再显示旧程序名；检查项 id（`dup-zwrt-datad`、`dup-u60pro-devui`）不变。
+
+## sentinel 1.0.2 — 2026-10-18
+
+- 日志、告警和崩溃记录里的触屏名字从 `u60pro-devui` 改成 `luyaz-ui`。Requires: ship 检查认两种崩溃行名字的那版 scripts（旧的 ship 脚本认不出新的崩溃行）。
 
 ## touch 1.0.1 — 2026-10-17
 

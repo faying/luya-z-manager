@@ -1,4 +1,4 @@
-//! tests/netinfo_test.c: the parser against /api/netinfo bodies shaped like zte-agent's
+//! tests/netinfo_test.c: the parser against /api/netinfo bodies shaped like luyaz-core's
 //! netinfo.rs output (serde sorts keys, so `error` comes first in every exit object).
 // SPDX-License-Identifier: MIT
 

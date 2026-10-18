@@ -1,4 +1,4 @@
-//! The battery estimate's line (src/estimate.c, battery_est.c): zte-agent works it out
+//! The battery estimate's line (src/estimate.c, battery_est.c): luyaz-core works it out
 //! (battery_eta.rs); this reads GET /api/screen's battery every 10 s while 系统 is up and
 //! words it; nothing read for 30 s: 「—」, not the old line as new.
 // SPDX-License-Identifier: MIT

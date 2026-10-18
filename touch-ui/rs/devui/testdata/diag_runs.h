@@ -1,5 +1,5 @@
 /*
- * diag_runs.h - zte-agent diagnosis runs (GET /api/diagnose "data") in the
+ * diag_runs.h - luyaz-core diagnosis runs (GET /api/diagnose "data") in the
  * shape deep_diag.rs sends them, texts as its judge_* functions write them.
  * Used by the render fixtures (diagnose-* scenes) and tests/diag_view_test.c.
  *

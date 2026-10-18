@@ -23,9 +23,9 @@
 //! **recover-live for the sentinel's own transactions** (§7 item 3, G2's core half): a `sentinel`
 //! transaction left in an unfinished phase with no live executor (heartbeat > [`EXEC_DEAD_S`] old or
 //! its pid gone — the script's own `HB_STALE`; `staged` gets [`STAGED_GRACE_S`] for the Mac to start
-//! it) → `luyaz-ship.sh recover-live`, one at a time. Only while no `u60-guard.sh` runs: the guard
-//! still finishes every transaction but its own, and recover-live has no lock, so two at once would
-//! be two rollbacks. Until 5f retires the guard this rule never fires. The sentinel finishes the
+//! it) → `luyaz-ship.sh recover-live`, one at a time. Never with `/proc` unreadable: a live executor
+//! would look dead, and recover-live has no lock, so that would be two rollbacks at once (the
+//! u60-guard.sh this used to wait for is gone since 10c). The sentinel finishes the
 //! others and skips its own (it may be the one being replaced).
 //!
 //! Runs while u60d's writes are on, every [`LOOK_SECS`]. Rule 2 only logs what it would do unless
@@ -91,8 +91,8 @@ pub struct Orphan {
     /// The executor heartbeat's uptime field, if there is one.
     pub hb: Option<u64>,
     pub script: bool,
-    /// A `u60-guard.sh` runs (or /proc could not be read).
-    pub guard: bool,
+    /// `/proc` could not be read: no executor can be told alive.
+    pub blind: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -249,7 +249,7 @@ impl Watch {
 
 /// Why recover-live is due for this sentinel transaction, or `None` when it is not (yet).
 pub fn orphan_why(o: &Orphan) -> Option<String> {
-    if !o.script || o.guard {
+    if !o.script || o.blind {
         return None;
     }
     // staged, executor not started yet: the Mac starts it seconds later (no t_phase: not waited
@@ -313,7 +313,7 @@ fn ship_state(c: &Compat, uptime: u64) -> (Option<Txn>, Option<Orphan>) {
         t_phase,
         hb: hu,
         script: c.path(SHIP_SCRIPT).exists(),
-        guard: guard_running(c),
+        blind: std::fs::read_dir(c.path("/proc")).is_err(),
     });
     (live, orphan)
 }
@@ -322,24 +322,6 @@ fn ship_state(c: &Compat, uptime: u64) -> (Option<Txn>, Option<Orphan>) {
 fn ship_running(c: &Compat, pid: u32) -> bool {
     std::fs::read(c.path(&format!("/proc/{pid}/cmdline")))
         .is_ok_and(|b| crate::paths::is_ship_cmdline(&String::from_utf8_lossy(&b)))
-}
-
-fn cmdline_has(c: &Compat, pid: u32, needle: &str) -> bool {
-    std::fs::read(c.path(&format!("/proc/{pid}/cmdline")))
-        .is_ok_and(|b| String::from_utf8_lossy(&b).contains(needle))
-}
-
-/// A `u60-guard.sh` runs; `/proc` unreadable counts as yes (never act blind).
-fn guard_running(c: &Compat) -> bool {
-    let Ok(rd) = std::fs::read_dir(c.path("/proc")) else {
-        return true;
-    };
-    rd.flatten().any(|e| {
-        e.file_name()
-            .to_str()
-            .and_then(|n| n.parse::<u32>().ok())
-            .is_some_and(|pid| cmdline_has(c, pid, "u60-guard.sh"))
-    })
 }
 
 /// Which UIs run: (ours = comm starts with luyaz-ui ([`crate::paths::is_ui`]),
@@ -733,7 +715,7 @@ mod tests {
             t_phase: Some(1900),
             hb,
             script: true,
-            guard: false,
+            blind: false,
         }
     }
 
@@ -752,11 +734,11 @@ mod tests {
         );
         assert_eq!(
             orphan_why(&Orphan {
-                guard: true,
+                blind: true,
                 ..o.clone()
             }),
             None,
-            "a guard runs: it finishes this one (no lock in recover-live)"
+            "/proc unreadable: never recovered blind (no lock in recover-live)"
         );
         assert_eq!(
             orphan_why(&Orphan {
@@ -958,11 +940,19 @@ mod tests {
             .orphan
             .expect("a sentinel transaction with no executor");
         assert_eq!((o.uptime, o.t_phase, o.hb), (2010, Some(1990), Some(2000)));
-        assert!(o.script && o.guard);
-        assert_eq!(orphan_why(&o), None, "the guard runs: left to it");
+        assert!(o.script && !o.blind);
+        assert!(
+            orphan_why(&o).unwrap().contains("heartbeat 10s old"),
+            "a u60-guard.sh process (retired in 10c) holds nothing back any more"
+        );
         fs::remove_dir_all(root.join("proc/77")).unwrap();
+        fs::rename(root.join("proc"), root.join("proc.off")).unwrap();
         let o = observe(&c, 500).orphan.unwrap();
-        assert!(!o.guard);
+        assert!(o.blind);
+        assert_eq!(orphan_why(&o), None, "/proc unreadable: never recovered blind");
+        fs::rename(root.join("proc.off"), root.join("proc")).unwrap();
+        let o = observe(&c, 500).orphan.unwrap();
+        assert!(!o.blind);
         assert!(orphan_why(&o).unwrap().contains("heartbeat 10s old"));
         // alive and fresh: not an orphan
         fs::create_dir_all(root.join("proc/4711")).unwrap();

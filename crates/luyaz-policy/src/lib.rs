@@ -5,8 +5,7 @@
 //! same types); u60d calls the component when one is installed and these functions otherwise, so
 //! both builds come from this one crate and are tested against the same cases.
 //!
-//! Moved from zte-agent while the agent still runs: u60d only computes and records what a policy
-//! would do (shadow); the agent keeps acting until it retires (10-08, single executor).
+//! Moved from the retired zte-agent; the core is the single executor (10-08).
 
 pub mod action;
 pub mod apn_pick;

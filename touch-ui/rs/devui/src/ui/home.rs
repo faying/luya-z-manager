@@ -215,7 +215,7 @@ fn hold_key(v: &net_view_t) -> u32 {
     v.story.headline.bytes().fold(5381u32, |k, c| k.wrapping_mul(33).wrapping_add(c as u32))
 }
 
-/// CHILL 手动优先的提示 (src/ui_parts/exit.c mf_view): what zte-agent says, with a mark and a
+/// CHILL 手动优先的提示 (src/ui_parts/exit.c mf_view): what luyaz-core says, with a mark and a
 /// colour by its kind; a stale one dimmed with the time it stopped.
 pub struct MfView {
     pub on: bool,
@@ -951,7 +951,7 @@ impl Ui {
         kit::show(self.home.ca_card, ca_n > 0);
     }
 
-    /// 出口 (Home): IP and place from zte-agent's cache; operator and roaming are on the top
+    /// 出口 (Home): IP and place from luyaz-core's cache; operator and roaming are on the top
     /// line already.
     pub(super) fn home_exit_paint(&mut self) {
         if !self.tab_visible(TAB_HOME) {
@@ -1053,7 +1053,7 @@ impl Ui {
         kit::show(exit_sub, !sub.is_empty());
     }
 
-    /// 情景 (Home): repainted when zte-agent's answer changed.
+    /// 情景 (Home): repainted when luyaz-core's answer changed.
     pub(super) fn home_scene_paint(&mut self, changed: bool) {
         if !changed {
             return;
@@ -1257,7 +1257,7 @@ impl Ui {
     }
 }
 
-/// A Wi-Fi client's signal in words; zte-agent grades it (netinfo.rs signal_tier).
+/// A Wi-Fi client's signal in words; luyaz-core grades it (netinfo.rs signal_tier).
 pub fn wifi_sig_word(tier: &str) -> Option<&'static str> {
     match tier {
         "great" => Some(tr("信号很好")),

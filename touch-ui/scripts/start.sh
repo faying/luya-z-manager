@@ -2,13 +2,14 @@
 # Boot chores for the U60 Pro (MU5250) screen UI. Installed at
 # /data/plugins/u60pro-devui/start.sh.
 #
-# The screen belongs to u60-uid (u60-uid.init; both retired, now luyaz-sentinel): it starts, restarts and gives
-# up the UI. u60-uid runs `start.sh prep` once when it starts; all this script
+# The screen belongs to luyaz-sentinel (/etc/init.d/luyaz-sentinel; it replaced
+# u60-uid): it starts, restarts and gives up the UI and runs `start.sh prep`
+# once when it starts; all this script
 # does is append the boot conditions to boot-trace.log.
 #
 # Called with no argument (the old rc.local hook, and install-autostart.sh at
 # the end of an install) it does the same chores and starts nothing: the UI
-# and zwrt-datad are started by their procd services. The old `legacy` and
+# and luyaz-core are started by their procd services. The old `legacy` and
 # `procd` launch modes (nohup UI, .fallback startup guard, corner-wake, a
 # nohup zwrt-datad) are gone with u60pro-devui.init and corner-wake.
 #
@@ -78,7 +79,7 @@ boot_trace
 case "$MODE" in
     prep) ;;
     legacy|procd)
-        echo "start.sh: the screen belongs to u60-uid (/etc/init.d/u60-uid); boot chores only" >&2
+        echo "start.sh: the screen belongs to luyaz-sentinel (/etc/init.d/luyaz-sentinel); boot chores only" >&2
         ;;
     *)
         echo "usage: $0 [prep]" >&2

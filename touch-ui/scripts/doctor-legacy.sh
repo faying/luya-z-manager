@@ -1363,8 +1363,10 @@ for p in zwrt-datad u60pro-devui; do
     [ "$p" = zwrt-datad ] && n=$((n + $(count_comm luyaz-core)))
     # the touch UI under either name (10h R5): one of each is two owners of card0
     [ "$p" = u60pro-devui ] && n=$((n + $(count_comm luyaz-ui)))
+    # ids keep the old names (tests and saved output key on them); only the labels show
+    case $p in zwrt-datad) l=核心实例数 le="Core instances" ;; *) l=触屏实例数 le="Touch UI instances" ;; esac
     if [ "$n" -gt 1 ]; then
-        report bad "dup-$p" "$p 实例数" "$n 份在跑（应当只有 1 份）" "$p instances" "$n running (should be 1)"
+        report bad "dup-$p" "$l" "$n 份在跑（应当只有 1 份）" "$le" "$n running (should be 1)"
     fi
 done
 

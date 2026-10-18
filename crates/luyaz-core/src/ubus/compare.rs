@@ -1,4 +1,4 @@
-//! `zwrt-datad --ubus-compare 对象:方法 …`：同一个只读调用经 socket 后端和 `ubus call` 各做一遍，比较结果。
+//! `luyaz-core --ubus-compare 对象:方法 …`：同一个只读调用经 socket 后端和 `ubus call` 各做一遍，比较结果。
 //!
 //! 给 socket 后端上机前在真设备上核对协议用（帧头字节序、消息/属性/状态编号、blob 编码、HELLO、
 //! INVOKE 回复的 peer、LOOKUP 的对象 ID）。每个调用按 socket、CLI、socket 的顺序做三次：

@@ -1,12 +1,14 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
-# agent-auth.sh — move zte-agent's admin password to where zte-agent.init (retired) read
-# it, and prove the agent is not running open afterwards.
+# agent-auth.sh — move the admin password into the password file luyaz-web
+# reads (/data/luyaz/web.env; /data/zte-agent.env in the old layout), and prove
+# the admin pages are not running open afterwards.
 #
-#   agent-auth.sh migrate   /data/local/tmp/start_zte_agent.sh → /data/zte-agent.env
+#   agent-auth.sh migrate   /data/local/tmp/start_zte_agent.sh → the password file
 #   agent-auth.sh verify    the three checks, against http://127.0.0.1:9090
 #
-# Why this matters: zte-agent with no password set answers EVERY request
+# Why this matters (first seen with the retired zte-agent): an admin
+# backend with no password set answers EVERY request
 # unauthenticated. The old launcher carried the password as an `export`; the
 # procd service does not run that launcher, so moving to procd without this
 # step would silently open the admin API to the whole LAN.

@@ -19,7 +19,6 @@
 .hm-carrier .nd-row__label { width: 4rem; flex-shrink: 0; }
 .hm-carrier .nd-row__value { flex: 1; text-align: start; white-space: nowrap; }
 .hm-carrier .nd-aux { width: 100%; min-width: 0; }
-@media (min-width: 1280px) { .hm-carrier .nd-aux { width: auto; } }
 /* One empty marker per card group says "these numbers are not updating" (a pushed attribute, so the
    cards themselves are never replaced): dim the values like .nd-stale. */
 .hm-flag { display: none; }

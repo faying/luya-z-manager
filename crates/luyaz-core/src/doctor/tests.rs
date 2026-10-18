@@ -515,8 +515,8 @@ export DOC_IP=$T/bin/ip DOC_ROUTE=$T/route
 }
 
 #[test]
-fn modes_not_ported_say_so() {
-    assert_eq!(main(&["--report".to_owned()]), EXIT_NOT_PORTED);
+fn report_wants_a_window() {
+    assert_eq!(report(&Cfg::from(&|_| None), None, None).1, 2);
 }
 
 #[test]

@@ -92,14 +92,19 @@ const PAGES = {
   },
   qci: {
     path: "/router/qci",
-    ready: (p) => p.waitForSelector("#qc-bearers tbody tr", { timeout: 20000 }),
+    // the table is an AT read: only on a press (an open tab alone never reads)
+    ready: async (p) => {
+      await p.waitForSelector("#qc-bearers button", { timeout: 20000 });
+      await p.click("#qc-bearers button");
+      await p.waitForSelector("#qc-bearers tbody tr", { timeout: 20000 });
+    },
     async own(p, ctx) {
       ok(/\d+ 个承载在用/.test(await txt(p, "#qc-status")), `status: ${await txt(p, "#qc-status .nd-status__state")}`);
       const rows = await p.locator("#qc-bearers tbody tr").count();
       ok(rows >= 1, `bearer rows: ${rows}`);
       ok(/来自调制解调器|实测|根据 APN 推断/.test(await txt(p, "#qc-bearers tbody")), "source column worded");
       ok(/IMS 信令|基于 TCP/.test(await txt(p, "#qc-bearers tbody")), "QCI labels");
-      ok(/QCI \d+ · ↓ [\d.]+ ↑ [\d.—]+ Mbps/.test(await txt(p, "#qc-now")), `u60d summary: ${await txt(p, "#qc-now .nd-row__value")}`);
+      ok(/(?:QCI|5QI) \d+ · ↓ [\d.]+ ↑ [\d.—]+ Mbps/.test(await txt(p, "#qc-now")), `u60d summary: ${await txt(p, "#qc-now .nd-row__value")}`);
       ok(/与设备“关于”界面上显示的值一致/.test(await txt(p, "#qc-bearers")), "the note");
       // raw toggle
       const btn = p.locator("button[aria-controls=qc-raw-out]");
@@ -114,8 +119,10 @@ const PAGES = {
       const shared = await q.locator("#qc-bearers tbody tr").count();
       ok(shared === rows, `second tab: table in its first render (${shared} rows, ${Date.now() - t0} ms)`);
       await q.close();
-      // agent down: the next read fails, the table stays greyed with the failure said
+      // agent down: the next (pressed) read fails, the table stays greyed with the failure said
       await scenario("down");
+      await p.waitForSelector("#qc-bearers button", { timeout: 20000 });
+      await p.click("#qc-bearers button");
       await p.waitForFunction(() => /最近一次刷新失败/.test(document.querySelector("#qc-bearers")?.textContent ?? ""), null, { timeout: 40000 }).catch(() => {});
       ok(/最近一次刷新失败：(连不上后台|HTTP 502)。显示的是上一次的读数。/.test(await txt(p, "#qc-bearers")), `agent down: ${await txt(p, "#qc-bearers p[role=alert]")}`);
       ok(await p.locator("#qc-bearers tbody tr").count() === rows && /数字停在 \d\d:\d\d/.test(await txt(p, "#qc-status")), "table kept, numbers stopped at hh:mm");
@@ -426,7 +433,7 @@ const PAGES = {
       let s0 = await stats();
       await send.click();
       await p.waitForSelector("#smsc-confirm", { timeout: 5000 }).catch(() => {});
-      ok(/把 6 个字符发给 \+886900000104，分 1 条短信经移动网络发出，运营商可能按条收费。发出后没法撤回。/.test(await txt(p, "#smsc-confirm")), "tier 2: the confirm names number, length, parts, cost");
+      ok(/把 6 个字符发给 \+886900000104，分 1 条短信经移动网络发出，运营商可能按条收费。发出后没法撤回。/.test(await txt(p, "#smsc-confirm")), `tier 2: ${await txt(p, "#smsc-confirm")}`);
       ok(await txt(p, "#smsc-err") === "", "the error line went");
       await sleep(400);
       await p.screenshot({ path: `${OUT}/b2-compose-confirm.png` });

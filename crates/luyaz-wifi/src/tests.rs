@@ -58,7 +58,7 @@ fn lock_takes_both_layers_and_releases_both() {
     // (flock conflicts between descriptions even within one process — the
     // same thing `flock` in a shell would see).
     assert!(!try_flock(path), "flock should be held");
-    // The holder's pid is in the file for u60-guard.
+    // The holder's pid is in the file for other holders.
     let pid: u32 = std::fs::read_to_string(path).unwrap().trim().parse().unwrap();
     assert_eq!(pid, std::process::id());
     // In-process layer: a second acquisition times out instead of hanging.
@@ -90,7 +90,7 @@ fn lock_takes_both_layers_and_releases_both() {
     assert!(try_flock(path), "flock should be free");
     drop(lock_at(path, Duration::from_millis(100)).expect("in-process layer free"));
 
-    // A process-external holder (what u60-guard looks like to us) blocks the
+    // A process-external holder (another process, e.g. the sentinel) blocks the
     // flock layer until the deadline, and the in-process flag is given back.
     let outside = OpenOptions::new().read(true).write(true).open(path).unwrap();
     // SAFETY: valid fd.

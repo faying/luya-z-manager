@@ -97,7 +97,7 @@ fn age_cfg(c: &mut Chill) {
     }
 }
 
-/// A zte-agent that answers 200 {} to everything (the exit change goes through it).
+/// A luyaz-core that answers 200 {} to everything (the exit change goes through it).
 fn agent_ok() -> CoreApi {
     let (l, port) = listen();
     std::thread::spawn(move || {
@@ -189,7 +189,7 @@ fn configs_read_sparingly() {
     f.stop();
 }
 
-/// A zte-agent answering one canned reply per request, in turn.
+/// A luyaz-core answering one canned reply per request, in turn.
 fn agent_canned(replies: Vec<(i32, &'static str)>) -> (CoreApi, Arc<std::sync::Mutex<Vec<String>>>) {
     let (l, port) = listen();
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));

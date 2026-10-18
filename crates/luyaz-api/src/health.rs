@@ -183,7 +183,7 @@ pub fn safe_name(n: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
 }
 
-/// The crash logs supervise.sh / u60-uid keep under `dir` (`<program>/<file>.log`), newest first.
+/// The crash logs the sentinel keeps under `dir` (`<program>/<file>.log`), newest first.
 pub fn crash_logs(dir: &Path) -> Vec<Value> {
     let mut out = Vec::new();
     let Ok(progs) = fs::read_dir(dir) else {

@@ -1,4 +1,4 @@
-//! The eSIM page (src/esim.c): zte-agent's /api/esim/* (the agent switches and makes the modem
+//! The eSIM page (src/esim.c): luyaz-core's /api/esim/* (the agent switches and makes the modem
 //! read the new card; this only lists and asks): the profile list, the job, two-tap switching.
 // SPDX-License-Identifier: MIT
 

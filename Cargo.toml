@@ -23,7 +23,7 @@ codegen-units = 1
 strip = true
 
 # u60d's device build (`cargo zigbuild --profile release-device -p luyaz-core`): the same settings as
-# zwrt-datad's release profile (data-service rust/Cargo.toml), which u60d replaces. Its own profile
+# the archived data service's release profile (data-service rust/Cargo.toml; zwrt-datad, which u60d replaced). Its own profile
 # so `release` (luyaz-web: unwind, a panicking request ends only its own task) stays as it is (cargo
 # takes profiles from the workspace root only, and panic/lto cannot be set per package).
 # luyaz-sentinel and the touch UI (touch-ui/rs/build.sh; its old release profile was exactly

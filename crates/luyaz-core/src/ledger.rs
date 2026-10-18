@@ -768,7 +768,7 @@ mod tests {
         };
         s0.procs = vec![
             proc_(100, 1, 100, "/data/tailscale/tailscaled", "tailscaled", 10),
-            proc_(200, 1, 100, "sh /data/u60-guard/u60-guard.sh", "sh", 5),
+            proc_(200, 1, 100, "sh /data/luyaz/scripts/doctor.sh", "sh", 5),
             proc_(999, 1, 100, "u60d", "u60d", 1),
         ];
         s0.threads = vec![
@@ -814,7 +814,7 @@ mod tests {
         };
         s1.procs = vec![
             proc_(100, 1, 100, "/data/tailscale/tailscaled", "tailscaled", 14),
-            proc_(200, 1, 100, "sh /data/u60-guard/u60-guard.sh", "sh", 6),
+            proc_(200, 1, 100, "sh /data/luyaz/scripts/doctor.sh", "sh", 6),
             proc_(999, 1, 100, "u60d", "u60d", 2),
         ];
         s1.threads = vec![
@@ -895,9 +895,9 @@ mod tests {
         // tailscaled: main 30 + exited thread residual 5
         assert_eq!(row("/data/tailscale/tailscaled").wakes, 35);
         assert_eq!(row("/data/tailscale/tailscaled").cpu_ms, 40);
-        assert_eq!(row("sh /data/u60-guard/u60-guard.sh → awk").wakes, 7);
-        assert_eq!(row("sh /data/u60-guard/u60-guard.sh → awk").cpu_ms, 20);
-        let g = "sh /data/u60-guard/u60-guard.sh".to_string();
+        assert_eq!(row("sh /data/luyaz/scripts/doctor.sh → awk").wakes, 7);
+        assert_eq!(row("sh /data/luyaz/scripts/doctor.sh → awk").cpu_ms, 20);
+        let g = "sh /data/luyaz/scripts/doctor.sh".to_string();
         assert_eq!(
             m.forks[0],
             ForkRow {

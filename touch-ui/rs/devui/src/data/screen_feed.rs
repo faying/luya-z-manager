@@ -1,4 +1,4 @@
-//! zwrt-datad's GET /v2/screen (src/screen_feed.c): the home signal card's and the status
+//! luyaz-core's GET /v2/screen (src/screen_feed.c): the home signal card's and the status
 //! bar's conclusions, computed by datad from the snapshot the screen shows; read once per new
 //! snapshot (at most every 300 ms; after a failure every 5 s), and every 5 s anyway (a stuck
 //! executor never moves the snapshot, and exec_age_ms is how the screen sees that, E4).

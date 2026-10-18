@@ -1,4 +1,4 @@
-// Local mock of zte-agent (:9090) for developing the admin web without a
+// Local mock of the device API (stands in for luyaz-core) for developing the admin web without a
 // device. Zero dependencies: Node's built-in http only. Run from source/manager:
 //
 //   node crates/luyaz-web/e2e/mock-agent/server.ts
@@ -353,6 +353,6 @@ const server = http.createServer((req, res) => {
 server.on("clientError", (_err, socket) => socket.destroy());
 
 server.listen(PORT, HOST, () => {
-  console.log(`[mock] zte-agent mock on http://${HOST}:${PORT}  (${routeTable.size} routes, scenario: ${scenarioList(runtimeScenarios)})`);
+  console.log(`[mock] device API mock on http://${HOST}:${PORT}  (${routeTable.size} routes, scenario: ${scenarioList(runtimeScenarios)})`);
   console.log(`[mock] browser: localStorage.setItem("u60.agent_url", "http://localhost:${PORT}")`);
 });

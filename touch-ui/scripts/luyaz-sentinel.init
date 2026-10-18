@@ -2,12 +2,12 @@
 # procd service for luyaz-sentinel (manager crates/luyaz-sentinel; manager
 # docs/designs/u60-sentinel.md): the screen owner (replaces u60-uid) and the
 # guard's must-still-happen duties (replaces u60-guard). Installed by
-# `u60 ship sentinel` (5f), which also swaps the u60-uid and u60-guard lines in
-# /etc/rc.local for `/etc/init.d/luyaz-sentinel start`.
+# `tools/luyaz ship sentinel` (5f), which also swapped the retired u60-uid and
+# u60-guard lines in /etc/rc.local for `/etc/init.d/luyaz-sentinel start`.
 #
-# Runs in power-off charging too, as u60-uid did: the UI shows its charging
-# screen there. The sentinel itself keeps its worker idle in that mode (no
-# Wi-Fi switched on in an "off" device), like u60-guard.init (retired) did not start.
+# Runs in power-off charging too: the UI shows its charging screen there. The
+# sentinel itself keeps its worker idle in that mode (no Wi-Fi switched on in
+# an "off" device).
 #
 # `stop` leaves the UI on screen; the next start adopts it. Hand the screen to
 # the vendor UI with `echo vendor > /tmp/luyaz-screen.ctl`, not `stop`.

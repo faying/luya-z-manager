@@ -10,7 +10,7 @@ see ../FRAME-FONT-LICENSE). Run it again when a line changes:
     sh -c 'pip -q install pillow==11.3.0 && python3 /w/crates/luyaz-sentinel/frame/gen.py /f/u60-cjk-fallback.ttf /w/crates/luyaz-sentinel/src/frame_text.rs'
 
 (from source/manager; the font is in the install kit's fonts/ or on the device under
-/data/plugins/u60pro-devui/fonts/). Output is deterministic for one font file and Pillow version.
+/data/luyaz/ui/fonts/). Output is deterministic for one font file and Pillow version.
 """
 import hashlib
 import sys

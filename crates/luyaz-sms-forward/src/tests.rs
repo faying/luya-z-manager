@@ -223,7 +223,7 @@ impl HoldSim {
     fn st(&self) -> ForwardState {
         serde_json::from_str(&self.state).unwrap()
     }
-    /// zte-agent restart: in-memory clock gone, state file kept.
+    /// Core restart: in-memory clock gone, state file kept.
     fn restart(&mut self) {
         self.clock = OnlineClock::default();
     }

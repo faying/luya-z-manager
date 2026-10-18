@@ -299,7 +299,7 @@ async fn health_from_the_agents_snapshot() {
     let root = device("health");
     put(
         &root,
-        "/data/crashlog/zte-agent/20261008-101010-up99.log",
+        "/data/crashlog/luyaz-web/20261008-101010-up99.log",
         "status: killed by SIGSEGV\n",
     );
     let addr = start(Compat::new(root.to_str().unwrap(), Sources::none())).await;
@@ -314,13 +314,13 @@ async fn health_from_the_agents_snapshot() {
         d["checks"][1],
         json!({"level": "bad", "id": "screen", "label": "触屏界面", "detail": "没在运行", "label_en": "Screen UI", "detail_en": "Not running"})
     );
-    assert_eq!(d["crashlogs"][0]["program"], "zte-agent");
+    assert_eq!(d["crashlogs"][0]["program"], "luyaz-web");
     assert_eq!(d["crashlogs"][0]["status"], "killed by SIGSEGV");
     // one crash log, the agent's route and reply; names checked
     let (st, body) = call(
         addr,
         "GET",
-        "/api/health/crashlog?program=zte-agent&file=20261008-101010-up99.log",
+        "/api/health/crashlog?program=luyaz-web&file=20261008-101010-up99.log",
         None,
         "",
     )
@@ -328,7 +328,7 @@ async fn health_from_the_agents_snapshot() {
     assert_eq!((st, body["data"]["text"].clone()), (200, json!("status: killed by SIGSEGV\n")));
     let (st, _) = call(addr, "GET", "/api/health/crashlog?program=..&file=x.log", None, "").await;
     assert_eq!(st, 400);
-    let (st, _) = call(addr, "GET", "/api/health/crashlog?program=zte-agent&file=no.log", None, "").await;
+    let (st, _) = call(addr, "GET", "/api/health/crashlog?program=luyaz-web&file=no.log", None, "").await;
     assert_eq!(st, 404);
     // no snapshot (the agent has not run the doctor yet)
     fs::remove_file(root.join("tmp/health.json")).unwrap();

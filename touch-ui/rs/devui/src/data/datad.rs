@@ -1,4 +1,4 @@
-//! zwrt-datad (src/data.c): the /v2 snapshot (GET /v2/state) and its event stream
+//! luyaz-core (src/data.c): the /v2 snapshot (GET /v2/state) and its event stream
 //! (/v2/events, SSE), put back into the old /state shape so one parser reads both; reconnect on
 //! an epoch change or a seq gap, stale blocks left out, the 45 s silence check; and the writes
 //! (POST /control), parked until datad answers (a client that hangs up first loses the request:

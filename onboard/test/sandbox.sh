@@ -116,11 +116,9 @@ SED
       -e "s#ubus call zwrt_zte_dm set_update_mode#true#" \
       -e "s#uci -q set zwrt_zte_dm.dm_update.TURNOFFPOLLING=1 \&\& uci -q commit zwrt_zte_dm#true#" \
       -e "s#killall zte-agent#true#" \
-      -e "s#/tmp/zte-agent.pid#/tmp/kitsb-agent.pid#g; s#/tmp/zte-agent.log#/tmp/kitsb-agent.log#g" \
+      -e "s#/tmp/zte-agent.pid#/tmp/kitsb-agent.pid#g" \
       -e "s#/data/zte-agent#$SB/zte-agent#g; s#/data/admin#$SB/admin#g" \
-      -e "s#pidof zte-agent >/dev/null || die#kill -0 \"\$(cat /tmp/kitsb-agent.pid)\" 2>/dev/null || die#" \
       -e "s#127.0.0.1:9090#127.0.0.1:19090#g" \
-      -e "s#          cat \"\$P/agent.env\"#          cat \"\$P/agent.env\"; echo \"export ZTE_AGENT_BIND=127.0.0.1:19090 ZTE_AGENT_UI_DIR=$SB/admin\"#" \
       -e "s#put_tree \"\$P/esim.tgz\" /data/esim#put_tree \"\$P/esim.tgz\" $SB/esim; sed -i \"s,/data/esim,$SB/esim,g\" $SB/esim/lpac.sh#" \
       -e "s#/data/esim/lpac.sh chip info#$SB/esim/lpac.sh chip info#" \
       -e 's#^do_devui() {#do_devui() { die "sandbox: devui disabled";#' \

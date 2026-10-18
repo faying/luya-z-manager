@@ -1,6 +1,5 @@
-//! The guard's handover list, `/tmp/u60-guard.handover`: the duties the core runs, one name per
-//! line. The guard wrote it until it retired (5f); the sentinel writes it now
-//! (`luyaz-sentinel/src/worker.rs` `GUARD_HANDOVER`). (The agent's own list and its
+//! The handover list, `/tmp/luyaz/handover`: the duties the core runs, one name per line.
+//! The sentinel writes it (`luyaz-sentinel/src/worker.rs`, `Paths::handover`). (The agent's own list and its
 //! `agent-retired` marker went in Phase 10, X1.)
 
 /// The file's text for these parts: one name per line.

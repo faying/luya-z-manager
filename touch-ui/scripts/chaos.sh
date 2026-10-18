@@ -1,20 +1,21 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
 # chaos.sh — break things on the real device and check they come back.
-# Regression check for the procd/supervise.sh/u60-guard setup (阶段 1a).
+# Regression check for the procd setup (阶段 1a; since Phase 10 X9 the core's
+# svcwatch records crashes, supervise.sh and u60-guard are gone).
 #
 # Runs ON the device, after the migration is complete:
-#   ssh -n u60 'sh /data/luyaz/scripts/chaos.sh kill-agent'
+#   ssh -n u60 'sh /data/luyaz/scripts/chaos.sh safe'
 #
-#   kill-agent     kill -9 zte-agent        → one new instance within 10 s, alert recorded
-#   kill-datad     kill -9 the core (zwrt-datad; luyaz-core after the 10e move; also kill-core) → same
-#   kill-guard     kill -9 u60-guard        → procd brings it back
-#   kill-uid       kill -9 u60-uid          → procd brings it back, it adopts the running UI
-#                                             (no second u60pro-devui, nothing counted)
-#   safe           all five above
-#   wifi-rescue    DISRUPTIVE: freezes the agent (SIGSTOP), turns both APs off,
-#                  and waits up to 7 min for u60-guard to turn Wi-Fi back on.
-#                  Every Wi-Fi client drops for that time. Ask the owner first.
+#   kill-core      kill -9 luyaz-core       → one new instance within 10 s, alert recorded
+#                                             (also kill-datad)
+#   kill-web       kill -9 luyaz-web        → same (also kill-agent)
+#   kill-sentinel  kill -9 luyaz-sentinel   → same, and it adopts the running UI
+#                                             (no second luyaz-ui, nothing counted; also kill-uid)
+#   safe           all three above
+#   wifi-rescue    DISRUPTIVE, NOT PORTED: written for the retired zte-agent and
+#                  u60-guard (freezes the agent, turns both APs off, waits up to
+#                  7 min for the guard); fails at once on a current device.
 #
 # Uses only process-level faults plus, for wifi-rescue, the same uci keys the
 # scenario engine writes. Nothing here touches rc.local, the modem, or eSIM.
@@ -71,36 +72,12 @@ kill_program() { # kill_program <comm> <alert-kind>
     fi
 }
 
-guard_pid() {
-    for d in /proc/[0-9]*; do
-        tr '\0' ' ' 2>/dev/null <"$d/cmdline" | grep -q "u60-guard.sh" && echo "${d#/proc/}"
-    done | head -n 1
-}
-
-kill_guard() {
-    echo "kill -9 u60-guard"
-    g=$(guard_pid)
-    [ -n "$g" ] || { bad "u60-guard is not running"; return; }
-    kill -9 "$g"
-    if wait_until 15 '[ -n "$(guard_pid)" ] && [ "$(guard_pid)" != "$g" ]'; then
-        ok "procd restarted u60-guard"
-    else
-        bad "u60-guard not restarted within 15 s"
-    fi
-}
-
-kill_uid() {
-    echo "kill -9 u60-uid"
-    u=$(pids_of u60-uid)
+kill_sentinel() {
+    u=$(pids_of luyaz-sentinel)
     d=$(ui_pids)
-    [ -n "$u" ] || { bad "u60-uid is not running"; return; }
     a0=$(uid_attempts)
-    kill -9 $u
-    if wait_until 15 "[ -n \"\$(pids_of u60-uid)\" ] && [ \"\$(pids_of u60-uid)\" != \"$u\" ]"; then
-        ok "procd restarted u60-uid"
-    else
-        bad "u60-uid not restarted within 15 s"
-    fi
+    kill_program luyaz-sentinel sentinel-crash
+    [ -n "$u" ] || return
     sleep 5
     [ "$(ui_pids)" = "$d" ] && ok "same UI still on screen (adopted, pid $d)" ||
         bad "UI changed: was '$d', now '$(ui_pids | tr '\n' ' ')'"
@@ -154,19 +131,17 @@ luyaz_new() { [ -f "$1/data/luyaz/core/.migrated" ]; }
 if luyaz_new ""; then CORE_NAME=luyaz-core; else CORE_NAME=zwrt-datad; fi
 
 case "$1" in
-    kill-agent) kill_program zte-agent agent-crash ;;
+    kill-web | kill-agent) kill_program luyaz-web web-crash ;;
     kill-datad | kill-core) kill_program "$CORE_NAME" datad-crash ;;
-    kill-guard) kill_guard ;;
-    kill-uid) kill_uid ;;
+    kill-sentinel | kill-uid) kill_sentinel ;;
     safe)
-        kill_program zte-agent agent-crash
         kill_program "$CORE_NAME" datad-crash
-        kill_guard
-        kill_uid
+        kill_program luyaz-web web-crash
+        kill_sentinel
         ;;
     wifi-rescue) wifi_rescue ;;
     *)
-        sed -n '5,20p' "$0"
+        sed -n '4,21p' "$0"
         exit 2
         ;;
 esac

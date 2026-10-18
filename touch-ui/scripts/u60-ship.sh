@@ -17,9 +17,9 @@
 #   1. screen data stopped: /v2/state's live block (observed_at) has not moved for 30 s
 #      (a failed or timed-out fetch counts as "not changed")
 #   2. test build crashed: `pidof luyaz-core.test` is empty
-#   3. screen trouble: u60-uid logged a give-up / vendor-UI hand-over / an
-#      unrequested u60pro-devui exit (/tmp/luyaz-screen.log; the device has no
-#      logd, so logread is empty), or u60pro-devui is gone
+#   3. screen trouble: the sentinel logged a give-up / vendor-UI hand-over / an
+#      unrequested touch UI exit (/tmp/luyaz-screen.log; the device has no
+#      logd, so logread is empty), or the touch UI is gone
 #   (zte-agent's netwatch counter was a fourth check; gone with the agent,
 #   8d-2c: u60d writes no such counter.)
 # Abort: kill the test build, `/etc/init.d/luyaz-core start`, reason into the
@@ -269,8 +269,8 @@ VERDICT=$SHIP_DIR/verdict                 # the trial judge's line (core, §7)
 # The scripts component (D2): the guard component without the guard itself,
 # once the sentinel took its place. zte-agent's init (both copies) left in
 # 8d-2c: nothing starts the retired agent; the files stay on the device as
-# they are. agent-auth.sh stays: it writes /data/zte-agent.env, which
-# luyaz-web logs in with.
+# they are. agent-auth.sh stays: it writes /data/luyaz/web.env (the old
+# layout's /data/zte-agent.env), which luyaz-web logs in with.
 # zwrt-datad.init (and its /etc/init.d copy) left in Luya-Z rename E3: no device has the old
 # layout it starts in; the copies on the device stay as they are (it refuses the new layout).
 SCRIPTS_FILES="alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION"
@@ -280,10 +280,12 @@ SCRIPTS_FILES="alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh co
 # (Not in SCRIPTS_FILES: that list must stay within the install kit's.)
 SCRIPTS_INITS="luyaz-core luyaz-sentinel luyaz-web"
 
-# u60-uid's own wording (src/uid.c logf_). Its file lines have no "u60-uid:"
-# prefix, so the pattern must not require one. "giving up:" with the colon:
+# The screen owner's own wording (u60-uid's src/uid.c logf_, kept word for word by
+# luyaz-sentinel's screen.rs). The crash line names the UI: "luyaz-ui pid" from sentinel
+# 1.0.2 on, "u60pro-devui pid" before; both stay matched while an older sentinel can
+# be rolled back to. Its file lines have no "u60-uid:" prefix, so the pattern must not require one. "giving up:" with the colon:
 # every normal launch line ends "(attempt N of M before giving up)".
-UID_BAD='(giving up:|starting the vendor UI|vendor UI on screen|u60pro-devui pid [0-9]+ ended:)'
+UID_BAD='(giving up:|starting the vendor UI|vendor UI on screen|(u60pro-devui|luyaz-ui) pid [0-9]+ ended:)'
 
 now() { cut -d. -f1 "$UPTIME_FILE"; }
 
@@ -355,11 +357,11 @@ watcher_pid_ok() {
     [ -n "$1" ] && [ -d "/proc/$1" ] && tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null | grep -q 'datad-trial\.sh'
 }
 
-# uid_bad_in <file…>: u60-uid's bad lines in those files (0 if none there)
+# uid_bad_in <file…>: the screen owner's bad lines in those files (0 if none there)
 uid_bad_in() { num "$(cat "$@" 2>/dev/null | grep -E "$UID_BAD" | grep -vc '(requested)')"; }
 inode_of() { ls -i "$1" 2>/dev/null | awk 'NR == 1 { print $1 }'; }
 
-# uid_bad_reset, then uid_bad_count → UB_N: u60-uid's bad lines so far, as a
+# uid_bad_reset, then uid_bad_count → UB_N: the screen owner's bad lines so far, as a
 # count that only grows across a rotation (not in a $( ), it keeps state).
 # Each call notes the log's and .old's inode and bad lines. A file seen last
 # time that is gone now takes its bad lines into UB_GONE: the last log is
@@ -876,6 +878,26 @@ legacy_here() {
     [ -x "$DEVUI_DIR/u60-uid" ] && [ -f "$GUARD_DIR/u60-guard.sh" ]
 }
 
+# rc_retired <rc.local>: the retired services it starts (u60-uid, u60-guard,
+# zwrt-datad), space-separated, in any form outside a comment line — an
+# indented, conditional or chained start counts, so a shape rc_mode does not
+# know cannot slip past a refusal; "unreadable" when it cannot be read. Same
+# rule as u60-recover.sh rec_rc_retired.
+rc_retired() {
+    if [ ! -r "$1" ] || [ -L "$1" ]; then
+        echo unreadable
+        return
+    fi
+    awk '
+        { l = $0; sub(/^[ \t]+/, "", l) }
+        l ~ /^#/ { next }
+        { while (match(l, /\/etc\/init\.d\/(u60-uid|u60-guard|zwrt-datad)/)) {
+              n = substr(l, RSTART + 12, RLENGTH - 12)
+              if (!(n in s)) { s[n] = 1; o = o (o == "" ? "" : " ") n }
+              l = substr(l, RSTART + RLENGTH) } }
+        END { print o }' "$1"
+}
+
 # rc_derive <legacy rc.local> <out>: the converted file. The u60-uid line
 # becomes the sentinel's, the u60-guard line goes, and the recovery line re-runs
 # rc.local when u60-recover.sh put an older rc.local back (exit 10): the shell
@@ -978,7 +1000,7 @@ sent_renew() {
 }
 
 # sent_release [<UI md5>]: the sentinel takes the screen back and launches the
-# live UI; ≤ 2×UID_UP s until it runs at that version. UI_PID as uid_restart.
+# live UI; ≤ 2×UID_UP s until it runs at that version. UI_PID as legacy_uid_restart.
 sent_release() {
     _wu=${1:-$(md5_of "$(ui_bin)")}
     uid_clear
@@ -1065,7 +1087,7 @@ c_sentinel_stop() {
             _i=$((_i + 1))
         done
     fi
-    uid_stop || return 1
+    screen_hold || return 1
     if [ -n "$(guard_pids)" ]; then
         c_guard_stop || return 1
     fi
@@ -1114,7 +1136,7 @@ c_sentinel_start() {
         return 1
     fi
     log "起旧的一套：u60-uid，再 u60-guard"
-    uid_restart || return 1
+    legacy_uid_restart || return 1
     c_guard_start
 }
 
@@ -1507,14 +1529,37 @@ live_pid() {
 # live one. pidof is exact, so the side-by-side build is looked for by its own TEST_NAME.
 ui_pid() { live_pid luyaz-ui; }
 
-# uid_stop: u60-uid stop (the UI stays on screen), ≤ 5 s until it is gone
-uid_stop() {
-    # the sentinel owns the screen (5f on): it puts the screen down and keeps
-    # the rest of its duties (Wi-Fi, recovery, dropbear), §5 new 4
-    if [ "$(screen_owner)" = sentinel ]; then
+# screen_hold: take the screen from its owner for a touch transaction (the UI
+# stays on screen). A running sentinel is asked (it keeps the rest of its
+# duties: Wi-Fi, recovery, dropbear; §5 new 4); the old u60-uid only on a
+# legacy install (legacy_here; 10c deleted it). Neither = nobody to hold
+# the screen from = 0.
+screen_hold() {
+    if [ -n "$(sent_pids)" ]; then
         sent_hold
-        return
+    elif legacy_here; then
+        legacy_uid_stop
     fi
+}
+
+# screen_release [<UI md5> [<u60-uid md5>]] (the uid-restart command): hand the
+# screen back and confirm the UI runs at that version; UI_PID as sent_release.
+# Sentinel down and not a legacy install: 1 with REASON at once, instead of
+# starting the deleted u60-uid init twice and waiting 2×UID_UP for nothing.
+screen_release() {
+    if [ -n "$(sent_pids)" ]; then
+        sent_release "$1"
+    elif legacy_here; then
+        legacy_uid_restart "$@"
+    else
+        REASON="哨兵没在跑，屏幕交不回去（不碰已删的 u60-uid；先 /etc/init.d/luyaz-sentinel start）"
+        return 1
+    fi
+}
+
+# legacy_uid_stop (before 10c only, legacy_here): u60-uid stop (the UI stays
+# on screen), ≤ 5 s until it is gone
+legacy_uid_stop() {
     [ -n "$(first_pid u60-uid)" ] || return 0
     log "停 u60-uid（$UID_INITD stop，界面留在屏上）"
     step "$TO_INITD" "$UID_INITD" stop >/dev/null 2>&1
@@ -1529,19 +1574,15 @@ uid_stop() {
     done
 }
 
-# uid_restart [<UI md5> [<u60-uid md5>]] (R8; the install kit calls it too):
+# legacy_uid_restart [<UI md5> [<u60-uid md5>]] (before 10c only, legacy_here; R8):
 # u60-uid stop → clear its launch count and give-up → start → ≤ UID_UP s
 # until u60-uid and u60pro-devui both run, each program (/proc/<pid>/exe)
 # with the md5 given (default: the live file on disk) → else start once
 # more → else 1 with REASON. UI_PID = the UI's pid when it worked.
-uid_restart() {
-    if [ -n "$(sent_pids)" ]; then
-        sent_release "$1"
-        return
-    fi
+legacy_uid_restart() {
     _wu=${1:-$(md5_of "$(ui_bin)")}
     _wi=${2:-$(md5_of "$DEVUI_DIR/u60-uid")}
-    uid_stop || return 1
+    legacy_uid_stop || return 1
     uid_clear
     _try=1
     while [ $_try -le 2 ]; do
@@ -1638,7 +1679,7 @@ touch_launch_cmd() { echo "nohup sh -c cd \"\$1\" && exec \"\$2\" sh $UI_DIR $TE
 
 c_touch_stop() {
     TOUCH_RESTARTED=
-    uid_stop || return 1
+    screen_hold || return 1
     uid_clear
     _p=$(ui_pid)
     if [ -n "$_p" ]; then
@@ -1650,7 +1691,7 @@ c_touch_stop() {
     while [ -n "$(ui_pid)" ]; do
         if [ $_i -ge 10 ]; then
             REASON="正式界面 10s 内没有退出（pid $(ui_pid)）"
-            uid_restart >/dev/null
+            screen_release >/dev/null
             return 1
         fi
         [ $_i = 5 ] && $KILL -9 $($PIDOF luyaz-ui 2>/dev/null) 2>/dev/null
@@ -1663,7 +1704,7 @@ c_touch_start() {
     if [ -n "$TOUCH_RESTARTED" ] && [ -n "$(first_pid u60-uid)" ] && [ -n "$(ui_pid)" ]; then
         return 0 # trial_watch put production back already
     fi
-    uid_restart
+    screen_release
 }
 # The test build: what u60-uid runs (chdir into the plugin directory, exec
 # the binary; src/uid.c launch()), minus u60-uid: a crash must stay a crash.
@@ -1698,7 +1739,7 @@ c_touch_trial_watch() {
             if [ -z "$(first_pid "$TEST_NAME")" ]; then
                 REASON="测试版崩溃（第 $((T - T0))s，pidof $TEST_NAME 为空）"
                 log "试跑：$REASON，马上拉起正式版"
-                uid_restart && TOUCH_RESTARTED=1
+                screen_release && TOUCH_RESTARTED=1
                 return 1
             fi
         fi
@@ -1717,8 +1758,8 @@ c_touch_kill_test() {
 }
 c_touch_check() { watch_screen "$X_CHECK" "$(md5_of "$(ui_bin)")"; }
 
-c_uid_stop() { uid_stop; }
-c_uid_start() { uid_restart; }
+c_uid_stop() { screen_hold; }
+c_uid_start() { screen_release; }
 c_uid_check() { watch_screen "$X_CHECK" "$(md5_of "$(ui_bin)")"; }
 
 # ── guard (/data/u60-guard + our four /etc/init.d scripts) ──────────────────
@@ -2090,9 +2131,22 @@ restore_one() {
         log "！！还原不了 $_rp：$_rprev 不在或 md5 不对"
         return 1
     fi
-    if [ "$_rp" = "$RC_LOCAL" ] && [ "$(rc_mode "$_rprev")" = legacy ] && ! legacy_here; then
-        log "！！不还原 $_rp：那一份起 u60-uid + u60-guard，它们已经删了（Phase 10 10c）"
-        return 1
+    # fail closed: any start of a retired service, in any form, not just the
+    # exact legacy shape rc_mode knows (a "bad" one would otherwise go back)
+    if [ "$_rp" = "$RC_LOCAL" ]; then
+        _rr=" $(rc_retired "$_rprev") "
+        case "$_rr" in *" unreadable "*)
+            log "！！不还原 $_rp：$_rprev 读不了"
+            return 1 ;;
+        esac
+        case "$_rr" in *" zwrt-datad "*) if luyaz_new "$ROOT"; then
+            log "！！不还原 $_rp：那一份起 /etc/init.d/zwrt-datad，核心已经搬到 luyaz-core（不能退回旧布局，见 docs/designs/u60-phase10.md）"
+            return 1
+        fi ;; esac
+        case "$_rr" in *" u60-uid "* | *" u60-guard "*) if ! legacy_here; then
+            log "！！不还原 $_rp：那一份起 u60-uid / u60-guard，它们已经删了（Phase 10 10c）"
+            return 1
+        fi ;; esac
     fi
     cp_sync "$_rprev" "$_rp" || return 1
     [ "$(md5_of "$_rp")" = "$_ro" ] || return 1
@@ -3520,7 +3574,7 @@ ship_uid_restart() {
         ship_refuse 重启屏幕 "u60-ship 事务 $X_TXN（$X_COMP）还在进行：$X_PHASE"
     fi
     txn_clear
-    if uid_restart "$@"; then
+    if screen_release "$@"; then
         say "u60-uid 和界面都在，版本对"
         return 0
     fi

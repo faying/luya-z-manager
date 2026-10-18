@@ -137,7 +137,7 @@ fn forty_long_rows_fit_the_screen_buffer() {
 
 #[test]
 fn names_cannot_escape_the_crash_dir() {
-    assert!(safe_name("zte-agent"));
+    assert!(safe_name("luyaz-core"));
     assert!(safe_name("20260923-150424-up2325.log"));
     assert!(!safe_name(".."));
     assert!(!safe_name("../etc"));

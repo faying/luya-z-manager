@@ -21,7 +21,32 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+- scripts: doctor-legacy.sh labels its duplicate-instance checks like core 1.2.1.
 - scripts: `VERSION` is shipped to `/data/luyaz/scripts/` so the scripts' version can be read on the device.
+- scripts: ship's UI-trouble check matches the touch UI's crash line under both names (`u60pro-devui pid … ended:` and `luyaz-ui pid … ended:`). Ship this before sentinel 1.0.2.
+
+## touch 1.0.2 — 2026-10-18
+
+- Placement (摆放模式) on LTE-NSA uses the LTE anchor's SINR when the NR leg reports none, instead of showing "--" ([#4](https://github.com/faying/luya-z-manager/issues/4)).
+
+## lweb 1.1.3 — 2026-10-18
+
+- the login page uses the site's sans-serif font (it fell back to a serif font: the font variable was only set by the other pages).
+- Home's carrier rows no longer overlap at widths of 1280 px and up (the cell IDs always go on their own line).
+- the QCI page shows the core's `qos` block on open; the bearer table (an AT read, about 12 s) is read only when you press "Read bearer table", not polled while the page is open.
+- `:9090` drops a connection whose request headers do not arrive within 10 s and serves at most 64 connections per address at a time.
+
+## core 1.3.0 — 2026-10-18
+
+- `doctor --report 24h|7d [--summary]` is answered by the core itself (the same card `/v2/scorecard` gives); the doctor.sh shim no longer needs doctor-legacy.sh for it.
+
+## core 1.2.1 — 2026-10-18
+
+- doctor's duplicate-instance checks are labelled "Core instances" and "Touch UI instances" instead of the old program names; the check ids (`dup-zwrt-datad`, `dup-u60pro-devui`) stay.
+
+## sentinel 1.0.2 — 2026-10-18
+
+- log lines, alerts and crash records name the touch UI `luyaz-ui` instead of `u60pro-devui`. Requires: the scripts release whose ship check matches both crash-line names (an older ship script misses the new line).
 
 ## touch 1.0.1 — 2026-10-17
 

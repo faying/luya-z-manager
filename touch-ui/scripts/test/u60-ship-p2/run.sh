@@ -144,7 +144,7 @@ case "\$1" in
         fi
         un=luyaz-ui; ub=$UD/luyaz-ui
         if [ -f $T/ui-broken ] && grep -q NEW \$ub; then
-            echo "u60pro-devui pid 9999 ended: exit 1" >>$T/uidlog
+            echo "luyaz-ui pid 9999 ended: exit 1" >>$T/uidlog
             exit 0
         fi
         n=\$(( \$(cat $T/nextpid 2>/dev/null || echo 8200) + 1 )); echo \$n >$T/nextpid
@@ -230,6 +230,8 @@ EOF
     printf 'OLD-UI /data/luyaz/scripts\n' >"$UD/luyaz-ui"
     printf '#!/bin/sh\n# OLD start.sh\nexit 0\n' >"$DV/start.sh"
     printf 'OLD-UID\n' >"$DV/u60-uid"
+    # a legacy install has both (legacy_here); 10c cases delete them
+    mkdir -p "$GD" && printf '#!/bin/sh\nexit 0\n' >"$GD/u60-guard.sh"
     chmod 755 "$UD/luyaz-ui" "$DV/start.sh" "$DV/u60-uid"
     UI_OLD=$(md5 "$UD/luyaz-ui") SS_OLD=$(md5 "$DV/start.sh") UID_OLD=$(md5 "$DV/u60-uid")
     echo 8100 >"$T/pids/u60-uid"
@@ -716,6 +718,15 @@ rm -f "$T/pids/u60-uid"
 sh "$SHIP" uid-restart >"$T/out" 2>&1
 RC=$?
 check "$CASE: started again, exit 0" '[ $RC = 0 ] && [ "$(grep -c "^start" "$T/uid-initd.log")" = 2 ] && [ -s "$T/pids/u60-uid" ]'
+teardown
+
+setup
+CASE="uid-restart after 10c, no sentinel running"
+rm -f "$DV/u60-uid" "$GD/u60-guard.sh"
+: >"$T/uid-initd.log"
+sh "$SHIP" uid-restart >"$T/out" 2>&1
+RC=$?
+check "$CASE: exit 1 at once, says the sentinel is down, the u60-uid init never run" '[ $RC = 1 ] && grep -q "哨兵没在跑" "$T/out" && [ ! -s "$T/uid-initd.log" ]'
 teardown
 
 # T14 web (zte-agent's /data/admin) was removed in 8d-2c with the agent; the

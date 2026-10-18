@@ -1,4 +1,4 @@
-//! src/diag_view.c: zte-agent's diagnosis run parsed, and the words the 网络诊断 page uses.
+//! src/diag_view.c: luyaz-core's diagnosis run parsed, and the words the 网络诊断 page uses.
 // SPDX-License-Identifier: MIT
 
 use crate::json;

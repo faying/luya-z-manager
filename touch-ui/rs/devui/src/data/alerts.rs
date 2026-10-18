@@ -1,4 +1,4 @@
-//! 健康与告警 (src/alerts.c): zte-agent's /api/alerts and /api/health (logged in), read when
+//! 健康与告警 (src/alerts.c): luyaz-core's /api/alerts and /api/health (logged in), read when
 //! the page opens and every 10 s while it is up; 全部已读.
 // SPDX-License-Identifier: MIT
 
@@ -56,7 +56,7 @@ impl Alerts {
                 seq: json::get_int(o, "seq", 0),
                 time: json::get_int(o, "time", 0), // null → 0
                 uptime: json::get_int(o, "uptime", 0),
-                label: json_text(o, "label", 128), // zte-agent words it
+                label: json_text(o, "label", 128), // luyaz-core words it
                 text: jstr(o, "text", 128),
                 unread: (jstr(o, "unread", 8) == "true") as i32,
             };
@@ -237,7 +237,7 @@ mod tests {
         a.parse_checks(format!(r#"{{"checks":[{}]}}"#, cs.join(",")).as_bytes());
         assert_eq!(a.health_count(), HEALTH_MAX as i32);
 
-        // events: the label comes from zte-agent; an older agent sends none
+        // events: the label comes from luyaz-core; an older agent sends none
         a.parse_events(
             r#"[{"seq":3,"time":null,"uptime":42,"kind":"agent-crash","label":"管理后台意外退出，已自动重启","text":"t","unread":true},{"seq":2,"time":1782396733,"uptime":1,"kind":"x-new","text":"u","unread":false}]"#.as_bytes(),
         );

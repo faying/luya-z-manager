@@ -28,7 +28,7 @@
 #   binaries  /data/tailscale/{tailscaled,tailscale}
 #   state     /data/tailscale/state
 #   socket    /tmp/tailscaled.sock
-#   log       /data/tailscaled.log  (appended; u60-guard keeps it ≤ 1 MB + one .old)
+#   log       /data/tailscaled.log  (appended; luyaz-sentinel keeps it ≤ 1 MB + one .old)
 #   boot log  /data/tailscale/boot.log  (what each start decided; caps itself)
 #
 # Boot safety. rc.local runs inside
@@ -55,7 +55,7 @@
 #     the same worker (so disabled, safe mode, the CGNAT check, the tuning.env
 #     and TS_TAILSCALED_BIN fallbacks all apply again), after --cleanup.
 #     Liveness only: a tailscaled that runs but is not healthy is apply.sh's
-#     and u60-guard's business, not this. Waits TS_REVIVE_DELAYS seconds
+#     business (and the core's health checks), not this. Waits TS_REVIVE_DELAYS seconds
 #     before the 1st, 2nd, 3rd... restart (the last value repeats), starts the
 #     backoff over once tailscaled stayed up TS_STABLE seconds, and at most
 #     TS_REVIVE_MAX restarts per TS_REVIVE_WINDOW seconds of uptime; past that
@@ -66,7 +66,7 @@
 #     its restarts, and the start it runs brings up a new one). Restarts in a
 #     boot do not count as staying up: a TUN tailscaled that had to be
 #     revived is not marked stable, so the boot still counts as a strike.
-#     u60-guard only records its health. TS_WATCH=0 turns the watcher off.
+#     Nothing else restarts it. TS_WATCH=0 turns the watcher off.
 #   - Under procd the watcher is not started; the same backoff lives in
 #     __fg instead: procd starts it again 5 s after tailscaled dies (respawn
 #     with no retry limit), and __fg first sleeps the TS_REVIVE_DELAYS step,
@@ -345,7 +345,7 @@ rv_delay() { # <restarts so far>: seconds to wait before the next one
     set +f
     echo "${_d:-300}"
 }
-alert() { # <kind> <text>: into /data/alerts when u60-guard's library is there
+alert() { # <kind> <text>: into /data/alerts when alert-lib.sh is there
     [ -f "$ALERT_LIB" ] || return 0
     (. "$ALERT_LIB" && alert_add "$1" "$2") >/dev/null 2>&1
     return 0
@@ -631,7 +631,7 @@ worker() {
     fi
     migrate_state
     if [ "$MODE" = tun ]; then TUNARG=--tun=tailscale0; else TUNARG=--tun=userspace-networking; fi
-    # Append (>>), never truncate-on-open: u60-guard caps the file by copying it
+    # Append (>>), never truncate-on-open: luyaz-sentinel caps the file by copying it
     # to .old and truncating, which is only safe for an O_APPEND writer.
     # shellcheck disable=SC2086 # the extra flags/env are deliberately word-split
     env $TS_TAILSCALED_ENV nohup "$BIN" --state="$D/state/tailscaled.state" --statedir="$D/state" \

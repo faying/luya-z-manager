@@ -1,5 +1,5 @@
 //! Bearer-token login (moved from zte-agent `src/auth.rs`, Phase 4 step 8a): the password's
-//! SHA-256, tokens for an hour. zte-agent and u60d's touch compatibility layer use this one copy.
+//! SHA-256, tokens for an hour. luyaz-web and the core's touch compatibility layer use this one copy.
 
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -101,7 +101,8 @@ pub fn password_matches(password: &str, attempt: &str) -> bool {
     hash_matches(&format!("{:X}", Sha256::digest(password.as_bytes())), attempt)
 }
 
-/// The admin password file (`/data/zte-agent.env`, written by agent-auth.sh, mode 600): one line
+/// The admin password file (`/data/luyaz/web.env`; the old `/data/zte-agent.env` is still read;
+/// written by agent-auth.sh, mode 600): one line
 /// `ZTE_AGENT_PASSWORD=<value>`, the value taken literally to the end of the line (no shell
 /// quoting). Empty counts as missing — "" would be accepted as a real password.
 pub fn password_from_env_file(text: &str) -> Option<&str> {

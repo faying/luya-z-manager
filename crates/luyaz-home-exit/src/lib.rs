@@ -1,4 +1,4 @@
-//! CHILL home exit, the engine shared by zte-agent and u60d (moved from zte-agent `src/home_exit.rs`,
+//! CHILL home exit, the engine run by the core (moved from zte-agent `src/home_exit.rs`,
 //! u60-platform.md Phase 4 step 9a). Every side effect outside mihomo goes through [`Host`].
 //!
 //! CHILL home exit (`docs/designs/home-exit.md`, E3): send part of the traffic
@@ -473,8 +473,7 @@ impl Machine {
  *  Host: everything outside mihomo that the engine reads or changes
  * -------------------------------------------------------------- */
 
-/// What the engine needs from the program it runs in. zte-agent's host reads datad's feed and
-/// raises alerts its own way; u60d's reads its own blocks. Paths are the device's; a test host
+/// What the engine needs from the program it runs in (the core's host reads its own blocks). Paths are the device's; a test host
 /// maps them into a temporary directory.
 pub trait Host: Send + Sync {
     /// One `KEY` from chill.env (`''` when absent).
@@ -835,7 +834,7 @@ pub fn now_unix() -> u64 {
 type MakeIo = dyn Fn(Arc<dyn Host>) -> Box<dyn Io + Send> + Send + Sync;
 
 /// One home exit: the machine, the 30 s loop and the two handlers. Exactly one program runs it
-/// at a time (zte-agent until step 9 hands `home_exit` over, then u60d).
+/// at a time (the core).
 pub struct HomeExit {
     m: Mutex<Machine>,
     host: Arc<dyn Host>,

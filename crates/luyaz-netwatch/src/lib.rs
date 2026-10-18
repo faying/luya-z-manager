@@ -1,5 +1,5 @@
 //! The cellular link watcher's judgements and its signal history (`docs/designs/slow-diagnosis.md`
-//! step 1), shared by zte-agent and u60d (u60-platform.md Phase 4 step 9b). Moved from zte-agent's
+//! step 1), run by the core (u60-platform.md Phase 4 step 9b). Moved from zte-agent's
 //! `netwatch.rs` so the two cannot drift: what one sample says ([`sample`], [`alive_without_probe`]),
 //! where datad puts the operator's resolvers ([`operator_dns`]), the one-packet DNS probe, the count
 //! of failed datad reads ([`ErrorCounter`]), and the minute records and events of

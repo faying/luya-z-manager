@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::i18n::Lang;
 
-/// Must match the whitelist in zte-agent `chill.rs` (MAIN_GROUP / AI_GROUP).
+/// Must match the whitelist in luyaz-api `chill.rs` (MAIN_GROUP / AI_GROUP).
 pub const MAIN_GROUP: &str = "🚀 节点选择";
 pub const AI_GROUP: &str = "🤖 AI";
 

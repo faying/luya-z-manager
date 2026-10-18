@@ -5,11 +5,11 @@
 //! touch device; the timeout is [`Screen::next_wake_ms`] (at most 60 s, the heartbeat). It never waits
 //! for a lock. The worker thread runs [`Worker::round`] every 60 s and does everything that may block.
 //!
-//! Shadow mode (`--shadow`) runs the same decisions against the live device next to u60-uid and
-//! u60-guard and changes nothing: [`ShadowWorker`] wraps the real device and records every change
+//! Shadow mode (`--shadow`) runs the same decisions against the live device next to the running
+//! screen owner and changes nothing: [`ShadowWorker`] wraps the real device and records every change
 //! instead of making it, and the screen thread records its acts instead of carrying them out. It
-//! never opens the control FIFO (reading it would steal u60-uid's commands, and creating it would
-//! unlink u60-uid's), card0 or the touch device, never writes a state file, takes no lock. Everything
+//! never opens the control FIFO (reading it would steal the owner's commands, and creating it would
+//! unlink the owner's), card0 or the touch device, never writes a state file, takes no lock. Everything
 //! goes to `/tmp/luyaz-sentinel.shadow` (capped at 512 KB, one `.old`).
 
 use std::collections::HashMap;
@@ -41,6 +41,8 @@ pub const F_GAVE_UP: &str = "/data/luyaz/screen/gave-up";
 /// On tmpfs on purpose: a reboot always comes back to our UI. Only the give-up and the attempt count
 /// survive a reboot.
 pub const F_WANT: &str = "/tmp/luyaz/screen.want";
+/// Keeps the old name: earlier records live here and the core's crash readers and web health
+/// list this directory; moving it would split the history.
 pub const CRASH_DIR: &str = "/data/crashlog/u60pro-devui";
 pub const DRM_DEV: &str = "/dev/dri/card0";
 pub const VENDOR_INIT: &str = "/etc/init.d/zte_topsw_devui";
@@ -190,8 +192,8 @@ impl<I: WorkerIo> WorkerIo for ShadowWorker<I> {
     fn alert_sms(&mut self) {
         self.would("send alert SMS (core unhealthy)".into());
     }
-    fn guard_running(&mut self) -> bool {
-        self.real.guard_running()
+    fn proc_blind(&mut self) -> bool {
+        self.real.proc_blind()
     }
     fn boot_is_normal(&mut self) -> bool {
         self.real.boot_is_normal()
@@ -311,7 +313,7 @@ fn record_crash(why: &str) {
         lines[lines.len().saturating_sub(200)..].join("\n")
     };
     let body = format!(
-        "program: u60pro-devui\nstatus:  {why}\ntime:    {} device local\n--- last 200 lines of {DEVUI_LOG} ---\n{tail}\n",
+        "program: luyaz-ui\nstatus:  {why}\ntime:    {} device local\n--- last 200 lines of {DEVUI_LOG} ---\n{tail}\n",
         st.replace('T', " ")
     );
     let _ = fs::write(&name, body);
@@ -765,5 +767,5 @@ pub fn screen_thread(shadow: bool, worker_round: Arc<AtomicI64>, sig: Option<Own
             let _ = fs::remove_file(p);
         }
     }
-    rt.log("stopping (u60pro-devui left running)");
+    rt.log("stopping (luyaz-ui left running)");
 }

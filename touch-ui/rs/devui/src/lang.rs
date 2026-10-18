@@ -47,7 +47,7 @@ pub fn is_en() -> bool {
 }
 
 /// The value after "lang=": exactly "en" (a trailing newline allowed) → true. Same rule as
-/// u60-guard's sms_lang.
+/// the old guard script's sms_lang.
 pub fn parse(v: &str) -> bool {
     v == "en" || v == "en\n"
 }

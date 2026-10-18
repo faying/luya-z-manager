@@ -208,8 +208,8 @@ mod tests {
     #[test]
     fn keys() {
         assert_eq!(
-            proc_key(b"sh\0/data/u60-guard/u60-guard.sh\0", "sh"),
-            "sh /data/u60-guard/u60-guard.sh"
+            proc_key(b"sh\0/data/luyaz/scripts/doctor.sh\0", "sh"),
+            "sh /data/luyaz/scripts/doctor.sh"
         );
         assert_eq!(
             proc_key(b"/usr/bin/mihomo\0-d\0/data/chill\0", "mihomo"),
@@ -217,8 +217,8 @@ mod tests {
         );
         assert_eq!(proc_key(b"", "kworker/0:1"), "[kworker/0:1]");
         assert_eq!(
-            proc_key(b"/data/zte-agent\0", "zte-agent"),
-            "/data/zte-agent"
+            proc_key(b"/data/luyaz/luyaz-web\0", "luyaz-web"),
+            "/data/luyaz/luyaz-web"
         );
     }
 

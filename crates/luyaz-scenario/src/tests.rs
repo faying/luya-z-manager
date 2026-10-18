@@ -94,7 +94,7 @@ fn a_trip_home_away_abroad_and_back() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].action.action.body.as_ref().map(Value::from).unwrap()["member"], "JP");
     let flag = fs::read_to_string(f.file("/data/alerts/abroad")).ok();
-    assert!(flag.is_some(), "the abroad flag for u60-guard's SMS hold");
+    assert!(flag.is_some(), "the abroad flag for the alert SMS hold");
 
     // home again (local SIM back, home Wi-Fi): leaving abroad puts JP back before home applies
     f.d().mcc = Some("460".into());

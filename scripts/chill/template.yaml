@@ -27,8 +27,8 @@
 mode: rule
 # v6 不进 TUN（2026-09-24 实测后关掉）。当天上午曾打开（ipv6: true），用来兜住局域网设备
 # 直接用 v6 地址绕过代理的连接；但实测它在**一个包都没有**时也让 mihomo 多吃约单核 12%、
-# 唤醒翻倍，odhcpd 再多约 2.7%。改为从源头关掉局域网 v6：u60-guard 在
-# /data/u60-guard/lan-ipv6-off 存在时保持 br-lan 的 disable_ipv6=1，设备拿不到 v6，
+# 唤醒翻倍，odhcpd 再多约 2.7%。改为从源头关掉局域网 v6：luyaz-core 在
+# /data/luyaz/scripts/lan-ipv6-off 存在时保持 br-lan 的 disable_ipv6=1，设备拿不到 v6，
 # 也就没有 v6 连接可绕过。要重新打开，两处都要改回来。
 ipv6: false
 log-level: warning
@@ -49,19 +49,19 @@ external-controller: '${CONTROLLER}'
 # 来自 chill.env 的 CHILL_SECRET，留空（默认）就是阶段一行为：不带 token，
 # 靠来源白名单（inet chill 表，见 §7）挡。设了值就要求所有调用方带
 # Authorization: Bearer <secret> —— touch-ui（chill.conf 的 secret=）和
-# zte-agent（chill.rs）都已支持，两边先用新配置重启过一遍再打开这个值，
+# luyaz-core（ops/chill.rs）都已支持，两边先用新配置重启过一遍再打开这个值，
 # 否则它们会在还没换上新配置前就先收到 401。
 secret: '${CHILL_SECRET}'
 external-ui: ui
 
-# 本机专用入口：zte-agent 的「网络」页经它查 CHILL 出口 IP 的归属地（netinfo.rs，
+# 本机专用入口：管理网页的「网络」页经核心查 CHILL 出口 IP 的归属地（netinfo.rs，
 # 端口要和那边的 DEFAULT_PROXY_PORT 一致）。写死只听 127.0.0.1，不跟 allow-lan 走；
 # 进来的连接不过规则，直接交给「🚀 节点选择」，查到的就是主出口。
 # 本机自己的连接不进 TUN（include-interface 只有 br-lan），所以没有这个入口就查不到。
 listeners:
   - {name: netinfo, type: mixed, port: 7894, listen: 127.0.0.1, udp: false, proxy: 🚀 节点选择}
   # 「直连 · AI 不动」时主组是 DIRECT，还走 CHILL 的只有 AI：从这个入口查 AI 的出口
-  #（zte-agent netinfo.rs 的 DEFAULT_AI_PORT）。
+  #（crates/luyaz-api netinfo.rs 的 DEFAULT_AI_PORT）。
   - {name: netinfo-ai, type: mixed, port: 7895, listen: 127.0.0.1, udp: false, proxy: 🤖 AI}
 
 # 家里出口（E3）：家里那台机器上的 SOCKS5（经 Tailscale 子网路由到达，不改整机路由）。

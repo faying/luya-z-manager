@@ -1,5 +1,5 @@
 //! `luyaz-sentinel`          run (procd; from 5f on, the screen owner)
-//! `luyaz-sentinel --shadow` decide next to u60-uid and u60-guard and change nothing (§9 step 1);
+//! `luyaz-sentinel --shadow` decide next to the running sentinel and change nothing (§9 step 1);
 //!                           everything to /tmp/luyaz-sentinel.shadow
 //! `luyaz-sentinel --version`
 //!

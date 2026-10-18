@@ -427,24 +427,73 @@ async fn rebind(
     }
 }
 
+/// Resolves once `stop` says true (the watch `Ref` is dropped inside: it is not `Send`).
+async fn until_stop(stop: &mut tokio::sync::watch::Receiver<bool>) {
+    let _ = stop.wait_for(|s| *s).await;
+}
+
+/// Open connections per address at most; the next accept waits for one to close. Each open tab
+/// holds one push stream and a browser opens at most 6 per host, so 64 is many tabs.
+const MAX_CONNS: usize = 64;
+/// A request's headers must arrive within this; a client that opens a connection and says nothing
+/// (or trickles bytes) is dropped instead of holding a slot for ever.
+const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `axum::serve` without a header-read timeout or a connection cap, done by hand with hyper:
+/// each connection takes a permit, gets `ConnectInfo<SocketAddr>` like
+/// `into_make_service_with_connect_info`, and keeps upgrades (the CHILL WebSocket). On stop the
+/// loop stops accepting; open connections are dropped with the process.
+async fn accept_loop(
+    l: tokio::net::TcpListener,
+    router: Router,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+    max_conns: usize,
+    header_timeout: Duration,
+) {
+    let addr = l.local_addr().map(|a| a.to_string()).unwrap_or_default();
+    let slots = Arc::new(tokio::sync::Semaphore::new(max_conns));
+    loop {
+        let permit = tokio::select! {
+            p = slots.clone().acquire_owned() => match p { Ok(p) => p, Err(_) => return },
+            () = until_stop(&mut stop) => return,
+        };
+        let (sock, peer) = tokio::select! {
+            r = l.accept() => match r {
+                Ok(c) => c,
+                Err(e) => {
+                    // EMFILE and friends: back off instead of spinning
+                    eprintln!("[luyaz-web] accept {addr}: {e}");
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    continue;
+                }
+            },
+            () = until_stop(&mut stop) => return,
+        };
+        let router = router.clone();
+        tokio::spawn(async move {
+            let svc = hyper::service::service_fn(move |mut req: hyper::Request<hyper::body::Incoming>| {
+                req.extensions_mut().insert(axum::extract::ConnectInfo(peer));
+                let mut r = router.clone();
+                async move { tower_service::Service::call(&mut r, req).await }
+            });
+            let conn = hyper::server::conn::http1::Builder::new()
+                .timer(hyper_util::rt::TokioTimer::new())
+                .header_read_timeout(header_timeout)
+                .serve_connection(hyper_util::rt::TokioIo::new(sock), svc)
+                .with_upgrades();
+            let _ = conn.await;
+            drop(permit);
+        });
+    }
+}
+
 /// Bind every address; serve each one bound. An address in use is retried in the background
 /// ([`rebind`]); any other failure gives that address up. None bound at start: exit.
 async fn serve_all(binds: Vec<String>, router: Router, every: Duration) {
     let (stop_tx, stop) = tokio::sync::watch::channel(false);
     let mut tasks = Vec::new();
-    let serve = |l: tokio::net::TcpListener, router: Router, mut stop: tokio::sync::watch::Receiver<bool>| async move {
-        let addr = l.local_addr().map(|a| a.to_string()).unwrap_or_default();
-        if let Err(e) = axum::serve(
-            l,
-            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .with_graceful_shutdown(async move {
-            let _ = stop.wait_for(|s| *s).await;
-        })
-        .await
-        {
-            eprintln!("[luyaz-web] serve {addr}: {e}");
-        }
+    let serve = |l: tokio::net::TcpListener, router: Router, stop: tokio::sync::watch::Receiver<bool>| {
+        accept_loop(l, router, stop, MAX_CONNS, HEADER_TIMEOUT)
     };
     let mut bound = 0;
     for addr in binds.iter().map(|b| b.trim()).filter(|b| !b.is_empty()) {
@@ -560,6 +609,37 @@ mod tests {
         let Cmd::Serve { bind, logo_dir, .. } = c.cmd else { panic!() };
         assert_eq!(bind, ["0.0.0.0:9090", "0.0.0.0:8080", "127.0.0.1:1"]);
         assert_eq!(logo_dir, std::path::Path::new("/data/luyaz/operator-logos"));
+    }
+
+    /// One slot, a 200 ms header timeout: a silent client is cut off, and only then does the
+    /// next one get answered (with its peer address, as ConnectInfo).
+    #[tokio::test]
+    async fn silent_clients_time_out_and_connections_are_capped() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let router = Router::new().route(
+            "/",
+            get(|axum::extract::ConnectInfo(p): axum::extract::ConnectInfo<std::net::SocketAddr>| async move {
+                p.ip().to_string()
+            }),
+        );
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        tokio::spawn(accept_loop(l, router, rx, 1, Duration::from_millis(200)));
+
+        let mut silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let started = std::time::Instant::now();
+        let mut next = tokio::net::TcpStream::connect(addr).await.unwrap();
+        next.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut got = String::new();
+        tokio::time::timeout(Duration::from_secs(3), next.read_to_string(&mut got)).await.unwrap().unwrap();
+        assert!(got.starts_with("HTTP/1.1 200") && got.ends_with("127.0.0.1"), "{got}");
+        assert!(started.elapsed() >= Duration::from_millis(100), "waited for the slot");
+        let mut buf = [0u8; 64];
+        let n = tokio::time::timeout(Duration::from_secs(1), silent.read(&mut buf)).await.unwrap().unwrap_or(0);
+        assert!(n == 0 || buf[..n].starts_with(b"HTTP/1.1 408"), "silent one closed");
+        let _ = tx.send(true);
     }
 
     #[tokio::test]

@@ -31,7 +31,7 @@ pub const CRASH_DIR: &str = "/data/crashlog";
 pub const CRASH_KEEP: usize = 5;
 pub const CRASH_TOTAL: u64 = 1_048_576;
 pub const TAIL_LINES: usize = 200;
-/// The core's name in its log, records and alerts (paths::CORE; 10e keeps it).
+/// The core's pre-D2 log (/tmp/zwrt-datad.log); fallback only, [`core_log`] prefers the new one.
 pub const CORE_LOG: &str = "/tmp/zwrt-datad.log";
 /// Luya-Z rename D2: luyaz-core.init's log from now on; [`core_log`] picks the one there.
 pub const CORE_LOG_NEW: &str = "/tmp/luyaz-core.log";

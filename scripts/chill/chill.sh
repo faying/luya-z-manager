@@ -457,7 +457,7 @@ direct_dns4() {
 }
 
 # ── 家里出口（E3，docs/designs/home-exit.md）──────────────────────────────
-# chill.env（由 u60d 写；zte-agent 2026-10-14 已删）：
+# chill.env（由 u60d 即 luyaz-core 写）：
 #   CHILL_HOME_EXIT=IPv4:端口   家里的 SOCKS5；空 = 整个功能不出现
 #   CHILL_HOME_MEDIA=1          国内版权走家里
 #   CHILL_HOME_IP=1             家里 IP 网站（$HOME_IP_LIST）走家里
@@ -545,7 +545,7 @@ home_vars() {
 #     iptables，碰不到 nft 表，所以不用定期自检。
 #   - 优先级 -140，排在 legacy mangle（-150）后面、用 or 打标：/etc 里原厂有不带掩码的
 #     set-mark 0xC0，排在它前面的话我们这一位会被覆盖。
-#   - 只做 IPv4：局域网 IPv6 由 u60-guard 关着（lan-ipv6-off），v6 的 table 2022 本来就是空的。
+#   - 只做 IPv4：局域网 IPv6 由 luyaz-core 关着（/data/luyaz/scripts/lan-ipv6-off），v6 的 table 2022 本来就是空的。
 #   - auto-merge：cn.list 有相邻/重叠段，不合并 nft 会拒绝（实测 6204 条 → 3300 个区间）。
 # 先删后建、不在一个批次里「建-删-建」：nft 1.1 上那样整批报 ENOENT。中间一瞬间 CN 流量
 # 进 TUN，mihomo 的 GEOIP,CN 规则照样让它直连。

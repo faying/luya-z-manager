@@ -21,9 +21,6 @@ use std::process::{Command, Stdio};
 
 /// What the process calls itself while it runs doctor (not a core name: `paths::is_core`).
 pub const COMM: &str = "luyaz-doctor";
-/// Exit code, with nothing printed (stdout or stderr), for the modes left to doctor-legacy.sh
-/// (`--report`): the doctor.sh shim then runs that instead.
-pub const EXIT_NOT_PORTED: i32 = 64;
 
 const CLOCK_YEAR_MIN: i64 = 1767225600; // 2026-01-01 00:00
 
@@ -200,10 +197,7 @@ impl Cfg {
             fp: s("DOC_FP", &format!("{guard_tmp}/ledger/fp")),
             fp_changed: s("DOC_FP_CHANGED", &format!("{guard_tmp}/ledger/fp-changed")),
             standby_stat: s("DOC_STANDBY_STAT", "/tmp/standby.stat"),
-            standby_base: s(
-                "DOC_STANDBY_BASE",
-                "/data/luyaz/scripts/standby.baseline",
-            ),
+            standby_base: s("DOC_STANDBY_BASE", "/data/luyaz/scripts/standby.baseline"),
             ledger_dir: s("DOC_LEDGER_DIR", "/data/ledger"),
             ledger_tmp: s("DOC_LEDGER_TMP", &format!("{guard_tmp}/ledger")),
             crashcap_dir: s("DOC_CRASHCAP_DIR", "/data/crashcap"),
@@ -636,15 +630,27 @@ fn rpc_acl(c: &Cfg) -> Row {
             "匿名权限",
             format!("不登录也能调原厂出厂/ADB 方法:{l}（原厂 ACL，没收紧）"),
             "Anonymous RPC",
-            format!("Stock factory/ADB methods callable without login:{l} (stock ACL, not tightened)"),
+            format!(
+                "Stock factory/ADB methods callable without login:{l} (stock ACL, not tightened)"
+            ),
         );
     }
     let (z, e) = if no == 6 {
-        ("出厂/ADB 方法要登录才能调", "Factory/ADB methods need a login")
+        (
+            "出厂/ADB 方法要登录才能调",
+            "Factory/ADB methods need a login",
+        )
     } else {
         ("读不到", "Unreadable")
     };
-    row("ok", "rpc-acl", "匿名权限", z.into(), "Anonymous RPC", e.into())
+    row(
+        "ok",
+        "rpc-acl",
+        "匿名权限",
+        z.into(),
+        "Anonymous RPC",
+        e.into(),
+    )
 }
 
 fn fota(c: &Cfg) -> Row {
@@ -958,19 +964,20 @@ fn services(c: &Cfg) -> Vec<Row> {
             )
         });
     }
-    // the core under either name (10e): a leftover old one next to the new is two
+    // the core under either name (10e): a leftover old one next to the new is two.
+    // The ids keep the old names: tests and saved doctor output key on them; only labels show.
     for (p, id, label, label_en) in [
         (
             "zwrt-datad",
             "dup-zwrt-datad",
-            "zwrt-datad 实例数",
-            "zwrt-datad instances",
+            "核心实例数",
+            "Core instances",
         ),
         (
             "u60pro-devui",
             "dup-u60pro-devui",
-            "u60pro-devui 实例数",
-            "u60pro-devui instances",
+            "触屏实例数",
+            "Touch UI instances",
         ),
     ] {
         let mut n = count_comm(c, p);
@@ -1433,6 +1440,38 @@ pub fn set_comm() {
     }
 }
 
+/// `--report 24h|7d [--summary]`: the scorecard and its exit code.
+fn report(c: &Cfg, w: Option<&str>, sum: Option<&str>) -> (String, i32) {
+    let w = match w {
+        Some("24h") => 86_400.0,
+        Some("7d") => 604_800.0,
+        _ => return ("用法：doctor.sh --report 24h|7d\n".into(), 2),
+    };
+    let summary = sum == Some("--summary");
+    let (lv, det) = standby::check(c, false);
+    let mut body = format!("{lv}\t{det}\n");
+    if !summary {
+        for r in run(c, Mode::Tsv).iter().filter(|r| r.level != "ok") {
+            body.push_str(&format!("{}：{}\n", r.label, r.detail));
+        }
+    }
+    let p = crate::scorecard::live::Paths::host();
+    let card = crate::scorecard::live::card(&p, w, summary, Some(&body));
+    // the last line is `rc=<n>`
+    let body = card.strip_suffix('\n').unwrap_or(&card);
+    let (text, last) = body.rsplit_once('\n').map_or(("", body), |(t, l)| (t, l));
+    let rc = last
+        .strip_prefix("rc=")
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(2);
+    let text = if text.is_empty() {
+        String::new()
+    } else {
+        format!("{text}\n")
+    };
+    (text, rc)
+}
+
 /// `<core> doctor ARGS`: the exit code. Like doctor.sh only the first argument counts.
 /// Text mode's last lines: the scorecard's summary, the core's card now (`report_core 7d`, the
 /// standby verdict as the body), else the ledger's summary file as it was last written.
@@ -1502,12 +1541,13 @@ pub fn main(args: &[String]) -> i32 {
         },
         Some("--ledger-selftest") => selftest::run(&cfg),
         Some("--calibrate-standby") => standby::calibrate(&cfg),
-        // no live caller (X11 batch 4): u60-guard, which ran --report for its summary, is retired;
-        // doctor.sh keeps it
-        Some("--report") => {
-            // silent: doctor.sh falls back on 64, and its output must be the old body's alone
-            return EXIT_NOT_PORTED;
-        }
+        // the core's card, fed as doctor-legacy.sh fed /v2/scorecard: the standby row first,
+        // then (without --summary) this run's rows that are not ok
+        Some("--report") => report(
+            &cfg,
+            args.get(1).map(String::as_str),
+            args.get(2).map(String::as_str),
+        ),
         _ => full(&cfg, Mode::Text),
     };
     use std::io::Write;

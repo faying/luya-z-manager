@@ -700,18 +700,8 @@ impl WorkerIo for RealWorker {
     fn boot_is_normal(&mut self) -> bool {
         boot_is_normal()
     }
-    fn guard_running(&mut self) -> bool {
-        let Ok(rd) = fs::read_dir("/proc") else {
-            return true; // cannot tell: leave the file to the guard
-        };
-        rd.flatten().any(|e| {
-            e.file_name()
-                .to_str()
-                .and_then(|n| n.parse::<i32>().ok())
-                .is_some_and(|pid| {
-                    pid != std::process::id() as i32 && cmdline_has(pid, "u60-guard.sh")
-                })
-        })
+    fn proc_blind(&mut self) -> bool {
+        fs::read_dir("/proc").is_err()
     }
     fn alert_sms(&mut self) {
         let a = luyaz_alerts::Alerts::at(std::path::Path::new(luyaz_alerts::DIR));

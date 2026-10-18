@@ -159,11 +159,11 @@ fn root(tag: &str) -> (PathBuf, Paths) {
     w(
         "proc/100/stat",
         &format!(
-            "100 (zwrt-datad) S{} 300 0 0 0 0 0 0 0 5 0 0\n",
+            "100 (luyaz-core) S{} 300 0 0 0 0 0 0 0 5 0 0\n",
             " 0".repeat(10)
         ),
     );
-    w("proc/100/status", "Name:\tzwrt-datad\nVmRSS:\t   3456 kB\n");
+    w("proc/100/status", "Name:\tluyaz-core\nVmRSS:\t   3456 kB\n");
     w("dumps/a.bin", &"x".repeat(10));
     std::fs::create_dir_all(r.join("data")).unwrap();
     let p = Paths {

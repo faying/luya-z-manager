@@ -443,7 +443,7 @@ fn cold_start_launches_ours() {
     assert!(
         w.logs
             .iter()
-            .any(|l| l.starts_with("launched u60pro-devui pid ")
+            .any(|l| l.starts_with("launched luyaz-ui pid ")
                 && l.ends_with("(attempt 1 of 2 before giving up)"))
     );
     w.run(&mut s, STABLE_MS + 2000);
@@ -474,7 +474,7 @@ fn c10_restart_ten_times_one_ui() {
     assert_eq!(
         w.logs
             .iter()
-            .filter(|l| *l == "adopted running u60pro-devui pid 4242")
+            .filter(|l| *l == "adopted running luyaz-ui pid 4242")
             .count(),
         10
     );
@@ -524,7 +524,7 @@ fn log_wording_is_u60_uids() {
     w.crash(w_sig(11));
     w.run(&mut s, 5000);
     assert!(w.logs.contains(&format!(
-        "u60pro-devui pid {pid} ended: killed by signal 11"
+        "luyaz-ui pid {pid} ended: killed by signal 11"
     )));
     w.step_with(&mut s, vec![Cmd::Vendor], false);
     w.run(&mut s, 7000);
@@ -532,7 +532,7 @@ fn log_wording_is_u60_uids() {
     assert!(
         w.logs
             .iter()
-            .any(|l| l.starts_with("stopping u60pro-devui pid ") && l.ends_with("(requested)"))
+            .any(|l| l.starts_with("stopping luyaz-ui pid ") && l.ends_with("(requested)"))
     );
     assert!(
         w.logs
@@ -552,7 +552,7 @@ fn log_wording_is_u60_uids() {
         "ended:",
     ];
     for l in &w.logs {
-        if l.contains("launched u60pro-devui") {
+        if l.contains("launched luyaz-ui") {
             assert!(
                 !bad.iter().any(|b| l.contains(b)),
                 "a normal launch line must not look bad: {l}"
@@ -651,7 +651,7 @@ fn hold_and_release() {
     let mut s = w.start();
     w.step_with(&mut s, vec![Cmd::Hold(600)], false);
     assert_eq!(s.on_screen(), OnScreen::Held);
-    w.devui = Some(88); // ship's side-by-side u60pro-devui.test
+    w.devui = Some(88); // ship's side-by-side luyaz-ui.test
     w.run(&mut s, 60_000);
     assert!(s.cur.is_none(), "held: not adopted");
     assert_eq!(w.spawns, 0);
@@ -717,7 +717,7 @@ struct Dev {
     changes: u32,
     core_replacing: bool,
     sms_rounds: u32,
-    guard: bool,
+    blind: bool,
     charging: bool,
 }
 
@@ -835,8 +835,8 @@ impl WorkerIo for Dev {
     fn alert_sms(&mut self) {
         self.sms_rounds += 1;
     }
-    fn guard_running(&mut self) -> bool {
-        self.guard
+    fn proc_blind(&mut self) -> bool {
+        self.blind
     }
     fn boot_is_normal(&mut self) -> bool {
         !self.charging
@@ -1147,15 +1147,12 @@ fn guard_clock_trust() {
 }
 
 #[test]
-fn trusted_wall_clock_kept_on_flash_hourly_once_no_guard_runs() {
+fn trusted_wall_clock_kept_on_flash_hourly() {
     let wl = "/data/ledger/state/wall.last";
     let (mut w, mut d) = (wk(), Dev::new());
     d.up = 1000;
     let now = d.wall;
-    d.guard = true;
-    w.clock_round(&mut d);
-    assert!(!d.files.contains_key(wl), "the guard's while it runs");
-    d.guard = false;
+    d.blind = true;
     w.clock_round(&mut d);
     assert_eq!(
         d.files[wl],
@@ -1305,20 +1302,20 @@ fn ship_recover_live() {
 }
 
 #[test]
-fn ship_left_to_a_running_guard_except_its_own() {
+fn ship_never_recovered_blind() {
     let mut w = wk();
     let mut d = ship_dev();
-    d.guard = true;
+    d.blind = true;
     txn(&mut d, "check", "datad", 1900);
     executor(&mut d, 1500, false);
     w.ship_round(&mut d);
     assert_eq!(
         d.recover_calls, 0,
-        "a guard runs: it finishes this one (no lock in recover-live)"
+        "/proc unreadable: a live executor would look dead (no lock in recover-live)"
     );
-    txn(&mut d, "check", "guard", 1900);
+    d.blind = false;
     w.ship_round(&mut d);
-    assert_eq!(d.recover_calls, 1, "the guard's own: still the sentinel's");
+    assert_eq!(d.recover_calls, 1, "/proc readable again: recovered");
 }
 
 /// run.sh 2218: killed right after a heartbeat at 2000, rounds 60 s apart: taken over ≤ 90 s.
@@ -1425,7 +1422,7 @@ fn logcap() {
 
 #[test]
 fn logcap_default_covers_every_service_log() {
-    // every RAM log our procd services write (supervise.sh: /tmp/<name>.log), luyaz-web included
+    // every RAM log our procd services write (/tmp/<name>.log; old names kept for leftovers), luyaz-web included
     let p = Paths::default();
     for l in [
         "/tmp/zte-agent.log",
@@ -1537,18 +1534,12 @@ fn alert_sms_only_while_the_core_is_unhealthy_and_not_being_replaced() {
 }
 
 #[test]
-fn with_no_guard_the_sentinel_hands_its_duties_to_the_core() {
+fn the_sentinel_hands_its_duties_to_the_core() {
     use crate::worker::CORE_DUTIES;
     const GUARD_HANDOVER: &str = "/tmp/luyaz/handover";
     let (mut w, mut d) = (wk(), Dev::new());
-    d.guard = true;
+    d.blind = true;
     d.files.insert(GUARD_HANDOVER.into(), "sms\n".into());
-    w.handover_round(&mut d);
-    assert_eq!(
-        d.files[GUARD_HANDOVER], "sms\n",
-        "the guard's file while it runs"
-    );
-    d.guard = false;
     w.handover_round(&mut d);
     assert_eq!(d.files[GUARD_HANDOVER], CORE_DUTIES);
     let logs = d.logs.len();
@@ -2129,12 +2120,9 @@ fn the_new_tmp_tree_is_marked_live_only_after_its_files_are_in_place() {
 }
 
 #[test]
-fn a_whole_round_leaves_the_mark_and_a_guard_keeps_it_away() {
+fn a_whole_round_leaves_the_mark_even_with_proc_unreadable() {
     let (mut w, mut d) = (wk(), Dev::new());
-    d.guard = true;
-    w.round(&mut d);
-    assert!(!d.files.contains_key("/tmp/luyaz/.migrated"), "the guard's handover");
-    d.guard = false;
+    d.blind = true;
     w.round(&mut d);
     assert!(d.files.contains_key("/tmp/luyaz/clock-ok"));
     assert!(d.files.contains_key("/tmp/luyaz/.migrated"));

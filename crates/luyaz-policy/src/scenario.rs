@@ -4,7 +4,7 @@
 //! decides which scenario holds, and applies its actions on entry. This module is the deciding
 //! part: the config types, `validate`, `detect`, `decide` (hysteresis), `scan_interval`, the
 //! restore-on-exit bookkeeping (`restore_key`, `restore_action`, `due_restores`), the MCC rule,
-//! the u60-guard takeover clock, and `step`, which is one tick of the agent's `Engine::tick`
+//! the Wi-Fi guard takeover clock, and `step`, which is one tick of the agent's `Engine::tick`
 //! after its inputs have been read. Applying (uci snapshots, `wifi_radio::apply`, routed HTTP
 //! actions, rollback, the sleep daemon, the RTC alarm, files) stays in the host.
 //!
@@ -26,7 +26,7 @@ pub use crate::action::{Action, Json};
 pub const AWAY_ID: &str = "away";
 /// While pinned there are no scans; failed restores are retried this often.
 pub const PIN_RETRY_SECS: i64 = 60;
-/// u60-guard's takeover is released after this much continuous running.
+/// The Wi-Fi guard's takeover is released after this much continuous running.
 pub const TAKEOVER_HOLD_SECS: f64 = 600.0;
 /// A scan that misses the current Wi-Fi-detected scenario is checked once more after this.
 pub const MISS_RECHECK_DELAY_SECS: u64 = 3;
@@ -582,7 +582,7 @@ pub fn mcc_from(state: &str, imsi: &str) -> Option<String> {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Takeover {
-    /// No marker: u60-guard is not involved.
+    /// No marker: the Wi-Fi guard is not involved.
     None,
     /// Marker present and not yet held long enough: stay in away, ignore pin.
     Active,
@@ -889,7 +889,7 @@ pub fn step(i: &TickInput) -> TickOutcome {
         }
     };
 
-    // u60-guard's Wi-Fi-on wins over detection and the pin until released.
+    // The Wi-Fi guard's Wi-Fi-on wins over detection and the pin until released.
     if i.takeover {
         if i.enabled && !cfg.scenarios.is_empty() && st.current != AWAY_ID {
             out.intent = switch(AWAY_ID);

@@ -1,4 +1,4 @@
-//! The screen owner (u60-sentinel.md §5): who is on the panel, ours (u60pro-devui) or the vendor's
+//! The screen owner (u60-sentinel.md §5): who is on the panel, ours (luyaz-ui) or the vendor's
 //! (zte_topsw_devui). A port of u60-uid (touch-ui `src/uid.c` + `src/uid_core.c`) with the review's
 //! additions: the three launch gates (D14), `hold`/`release` for ship (§5 item 4) and the empty-screen
 //! self-check (§5 item 2). No I/O here: [`Screen::step`] turns what the caller observed into
@@ -295,7 +295,7 @@ pub struct Input {
     pub persist: Persist,
     /// The current UI ended: `Some(status)` for our child, `None` = unknown (adopted).
     pub ui_exit: Option<Option<i32>>,
-    /// A process whose comm starts with `u60pro-devui`, from a /proc scan ([`Screen::wants_scan`]).
+    /// A process whose comm starts with `luyaz-ui` (`.test` too), from a /proc scan ([`Screen::wants_scan`]).
     pub found_devui: Option<i32>,
     pub vendor_alive: bool,
     /// Only looked at while a launch waits ([`Screen::needs_card0`]).
@@ -370,7 +370,7 @@ impl Screen {
                 requested: false,
                 steady: false,
             });
-            acts.push(Act::Log(format!("adopted running u60pro-devui pid {pid}")));
+            acts.push(Act::Log(format!("adopted running luyaz-ui pid {pid}")));
         }
         (s, acts)
     }
@@ -454,7 +454,7 @@ impl Screen {
                 self.launched_ms = Some(now_ms);
                 self.launches += 1;
                 vec![Act::Log(format!(
-                    "launched u60pro-devui pid {pid} (attempt {attempts} of {MAX_ATTEMPTS} before giving up)"
+                    "launched luyaz-ui pid {pid} (attempt {attempts} of {MAX_ATTEMPTS} before giving up)"
                 ))]
             }
             Err(e) => vec![Act::Log(format!("fork failed: {e}"))],
@@ -480,23 +480,23 @@ impl Screen {
                 let why = exit_words(st);
                 let req = if ui.requested { " (requested)" } else { "" };
                 acts.push(Act::Log(format!(
-                    "u60pro-devui pid {} ended: {why}{req}",
+                    "luyaz-ui pid {} ended: {why}{req}",
                     ui.pid
                 )));
                 if exit_is_failure(ui.requested, Some(st)) {
                     acts.push(Act::RecordCrash(why.clone()));
-                    acts.push(Act::Alert("devui-crash", format!("u60pro-devui {why}")));
+                    acts.push(Act::Alert("devui-crash", format!("luyaz-ui {why}")));
                 }
             }
             (Kind::Child, None) => {
                 acts.push(Act::Log(format!(
-                    "lost track of u60pro-devui pid {} (already reaped?)",
+                    "lost track of luyaz-ui pid {} (already reaped?)",
                     ui.pid
                 )));
             }
             (Kind::Adopted, _) => {
                 acts.push(Act::Log(format!(
-                    "adopted u60pro-devui pid {} is gone (exit status unknown, not counted)",
+                    "adopted luyaz-ui pid {} is gone (exit status unknown, not counted)",
                     ui.pid
                 )));
             }
@@ -540,7 +540,7 @@ impl Screen {
                 }
                 Cmd::Hold(secs) => {
                     let what = match self.cur.take() {
-                        Some(ui) => format!("; not watching u60pro-devui pid {}", ui.pid),
+                        Some(ui) => format!("; not watching luyaz-ui pid {}", ui.pid),
                         None => String::new(),
                     };
                     acts.push(Act::Log(format!(
@@ -605,7 +605,7 @@ impl Screen {
                 steady: false,
             });
             self.launch = Launch::Idle;
-            acts.push(Act::Log(format!("adopted u60pro-devui pid {pid}")));
+            acts.push(Act::Log(format!("adopted luyaz-ui pid {pid}")));
         }
 
         // D14 gate 3: the vendor UI turned up right after our launch — two owners of card0. Stop ours,
@@ -616,7 +616,7 @@ impl Screen {
             } else if inp.vendor_alive && ui.kind == Kind::Child {
                 self.launched_ms = None;
                 acts.push(Act::Log(format!(
-                    "vendor UI came up within {} s of our launch: stopping u60pro-devui pid {} and keeping the vendor UI",
+                    "vendor UI came up within {} s of our launch: stopping luyaz-ui pid {} and keeping the vendor UI",
                     COEXIST_MS / 1000,
                     ui.pid
                 )));
@@ -647,7 +647,7 @@ impl Screen {
             Decision::Launch => self.launch_step(now, &p, inp, &mut acts),
             Decision::MarkSteady => {
                 acts.push(Act::Log(format!(
-                    "u60pro-devui steady for {} min: attempt count cleared",
+                    "luyaz-ui steady for {} min: attempt count cleared",
                     STABLE_MS / 60000
                 )));
                 acts.push(Act::SetAttempts(0));
@@ -677,7 +677,7 @@ impl Screen {
                 if let Some(u) = self.cur.as_mut() {
                     u.requested = true;
                     acts.push(Act::Log(format!(
-                        "stopping u60pro-devui pid {} (requested)",
+                        "stopping luyaz-ui pid {} (requested)",
                         u.pid
                     )));
                     acts.push(Act::Stop(u.pid));

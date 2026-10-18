@@ -5,7 +5,7 @@
 #
 # SVG 目录一般是 manager 的 assets/operator-logos（网页首页用的同一批）；
 # 找不到 SVG 的可放透明底大 PNG，同样处理；同名 PNG 和 SVG 都有时用 PNG（后处理，覆盖 SVG 的结果）。
-# 每个 <slug>.svg 产出两张，装到 /data/plugins/u60pro-devui/operator-logos/：
+# 每个 <slug>.svg 产出两张，装到 /data/luyaz/ui/operator-logos/：
 #   <slug>.png     原色，浅色主题用
 #   <slug>-w.png   单色白（界面里再压到约 85% 不透明），深色主题用：深蓝、深红的 logo 在深绿底上看不见
 # 先裁掉透明边和白底边，再按视觉面积（H=16 时约 16×46）缩放：方形图标高 16，长字标矮一些；

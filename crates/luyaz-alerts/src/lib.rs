@@ -1,7 +1,7 @@
 //! The alert files under `/data/alerts` (moved from zte-agent `src/alerts.rs`, Phase 4 step 8a):
 //! reading the queue and SMS log, the read cursor, the flags, appending an event the way
 //! `alert-lib.sh` does, the summary the web and the touch screen show, and the kind labels.
-//! zte-agent (admin web), u60d (touch compatibility layer) and luyaz-sentinel all use this one
+//! luyaz-web, the core (touch compatibility layer) and luyaz-sentinel all use this one
 //! copy; its own crate since Phase 5 (u60-sentinel.md D9, was `luyaz_api::alerts`, still re-exported
 //! there).
 //!
@@ -236,7 +236,7 @@ impl Alerts {
     /// Append one event the way touch-ui `scripts/alert-lib.sh` does
     /// (RELIABILITY.md §4): under `lock`, bump `seq`, append, trim past
     /// 300 lines to the last 200. `text` is cleaned to printable ASCII, 120
-    /// chars. u60-guard picks it up for the SMS like any other kind.
+    /// chars. The SMS sender picks it up like any other kind.
     pub fn add(&self, kind: &str, text: &str, wall: i64, uptime: u64) -> std::io::Result<u64> {
         if !valid_kind(kind) {
             return Err(std::io::Error::other("bad kind"));

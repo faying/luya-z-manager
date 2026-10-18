@@ -1,7 +1,7 @@
 //! The CHILL panel's data (src/chill.c): mihomo's clash API on 127.0.0.1:9999 read directly
 //! (the main group's pick, /configs at most every 30 s, /group, /connections, the node list and
 //! the chain behind the pick), the node/group picks (sent without waiting), the group delay test
-//! (its socket kept and read a little each round), the profile, and zte-agent's 家里出口
+//! (its socket kept and read a little each round), the profile, and luyaz-core's 家里出口
 //! (E3: GET/PUT /api/services/chill/home).
 // SPDX-License-Identifier: MIT
 
@@ -780,7 +780,7 @@ impl Chill {
         self.online
     }
 
-    /// The exit state, zte-agent chill.rs exit_state()'s rule: the mode, then in rule mode
+    /// The exit state, luyaz-api chill.rs exit_state()'s rule: the mode, then in rule mode
     /// whether 「🚀 节点选择」 is DIRECT.
     pub fn exit_raw(&self) -> &'static str {
         match self.mode_raw.as_str() {
@@ -807,7 +807,7 @@ impl Chill {
         }
     }
 
-    /// The exit through zte-agent (PUT /api/services/chill/exit); shown as asked until the next
+    /// The exit through luyaz-core (PUT /api/services/chill/exit); shown as asked until the next
     /// read says otherwise.
     pub fn set_exit(&mut self, agent: &mut CoreApi, state: &str) -> bool {
         if state.is_empty() {
@@ -913,7 +913,7 @@ impl Chill {
         self.thermal_eco
     }
 
-    /// eco / standard / perf through zte-agent (in or out of eco restarts the core).
+    /// eco / standard / perf through luyaz-core (in or out of eco restarts the core).
     pub fn set_profile(&mut self, agent: &mut CoreApi, p: &str) -> bool {
         if !valid_profile(p) {
             return false;

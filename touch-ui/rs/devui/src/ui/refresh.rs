@@ -122,7 +122,7 @@ impl Ui {
         };
         self.system_health_paint();
 
-        // the network pages only need zte-agent, not datad: before datad's early return
+        // the network pages only need the /api side, not /v2: before datad's early return
         {
             let mode = a.ni_mode;
             let paint = mode != NI_OFF && mode != NI_HOME;

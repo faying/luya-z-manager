@@ -155,7 +155,7 @@ pub trait Source {
     fn sms_delete_arm(&mut self, i: usize);
     fn sms_delete_tap(&mut self, i: usize) -> bool;
 
-    // ---- zte-agent ----
+    // ---- luyaz-core ----
     fn alerts_mark_all_read(&mut self);
     /// 「检查更新」 (component versions)
     fn versions_check(&mut self);

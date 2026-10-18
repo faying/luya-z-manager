@@ -1,4 +1,4 @@
-//! Home's 情景 card and the agent's health (src/scenario.c): zte-agent's GET /api/public/status
+//! Home's 情景 card and the agent's health (src/scenario.c): luyaz-core's GET /api/public/status
 //! (no login), every 30 s on any page (the status bar's 「后台失联」 must be right everywhere),
 //! at once when Home comes into view unless the agent is not answering.
 // SPDX-License-Identifier: MIT
@@ -201,7 +201,7 @@ impl Scenario {
         }
     }
 
-    /// CHILL's master switch through zte-agent (logged in). Shown as asked at once; read
+    /// CHILL's master switch through luyaz-core (logged in). Shown as asked at once; read
     /// again in 4 s (chill.sh takes a few seconds).
     pub fn chill_set(&mut self, agent: &mut CoreApi, on: bool) -> bool {
         let code = agent.post(if on { "/api/services/chill/enable" } else { "/api/services/chill/disable" });

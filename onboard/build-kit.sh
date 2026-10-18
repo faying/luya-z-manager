@@ -148,7 +148,7 @@ zigbuild() {
 
 # ── 高级后台：luyaz-web（:9090）────────────────────────────────────────────────
 # profile release（unwind，同 tools/luyaz ship lweb：一个请求 panic 只结束它自己）。
-# 密码文件仍是 /data/zte-agent.env（文件名留到 Phase 10），设备端 agent-auth.sh migrate 写。
+# 密码文件是 /data/luyaz/web.env（Phase 10 R6 之前是 /data/zte-agent.env），设备端 agent-auth.sh migrate 写。
 step "luyaz-web（cargo zigbuild）"
 LW_OUT=$(zigbuild release luyaz-web) || exit 1
 cp "$LW_OUT" "$PL/luyaz-web"

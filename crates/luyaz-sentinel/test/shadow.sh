@@ -21,5 +21,5 @@ check "UI still running" 'kill -0 $UI'
 new=$(comm -13 /tmp/before /tmp/after | grep -v -e '^/tmp/before$' -e '^/tmp/after$')
 check "only the shadow file is new" '[ "$new" = /tmp/luyaz-sentinel.shadow ]'
 echo "new: $new"
-grep -q "adopted running u60pro-devui pid $UI" /tmp/luyaz-sentinel.shadow && echo "  (shadow adopted the running UI)"
+grep -q "adopted running luyaz-ui pid $UI" /tmp/luyaz-sentinel.shadow && echo "  (shadow adopted the running UI)"
 echo "passed $ok, failed $bad"

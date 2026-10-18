@@ -1,4 +1,4 @@
-//! src/ui_parts/speedtest.c and refresh.c's 「Speedtest subpage」: 测速 on zte-agent's own speed
+//! src/ui_parts/speedtest.c and refresh.c's 「Speedtest subpage」: 测速 on luyaz-core's own speed
 //! test. Also 性能测试 (system.c build_sub_perf, cellular.c bench_cb).
 // SPDX-License-Identifier: MIT
 

@@ -300,14 +300,14 @@ impl Ui {
         r
     }
 
-    /// zte-agent: turn CHILL on or off.
+    /// luyaz-core: turn CHILL on or off.
     pub fn scenario_chill_set(&mut self, on: bool) -> bool {
         let r = self.src.scenario_chill_set(on);
         self.sync();
         r
     }
 
-    /// The exit (zte-agent PUT /api/services/chill/exit).
+    /// The exit (luyaz-core PUT /api/services/chill/exit).
     pub fn chill_set_exit(&mut self, state: &str) -> bool {
         let r = self.src.chill_set_exit(state);
         self.sync();

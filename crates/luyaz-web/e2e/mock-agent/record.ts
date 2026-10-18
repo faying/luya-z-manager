@@ -1,5 +1,5 @@
 // Read-only recorder: fetch an audited allowlist of GET endpoints from the
-// REAL zte-agent, save the responses, and print a key diff against the mock
+// REAL device API (luyaz-core), save the responses, and print a key diff against the mock
 // fixtures. For later use on the device, with the owner's OK (Decision
 // ledger R5 / D11). Do not run it during the power test.
 //

@@ -1,4 +1,4 @@
-//! src/net_view.c: zwrt-datad's /v2/screen "net" parsed (the rules are datad's), its verdict
+//! src/net_view.c: luyaz-core's /v2/screen "net" parsed (the rules are datad's), its verdict
 //! codes, "is this a verdict 网络诊断 can say more about", and the placeholder view.
 // SPDX-License-Identifier: MIT
 

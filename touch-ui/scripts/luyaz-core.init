@@ -5,10 +5,11 @@
 # luyaz-migrate.sh run moved the core. Began as a copy of zwrt-datad.init (gone since Luya-Z
 # rename E3) with the new program path: only starts in the new layout
 # (/data/luyaz/core/.migrated, written last by the move), as zwrt-datad.init
-# only in the old one, so there is never a second core. Unchanged on purpose: the log /tmp/zwrt-datad.log and the
-# crash records under the name zwrt-datad (the core's svcwatch keeps it: the sentinel
-# and the ledger read them by it), /var/run/zwrt-datad.pid, the data dir
-# /data/zwrt-datad (the LAN token moved to /data/luyaz/core/auth.token in D2).
+# only in the old one, so there is never a second core. Since Luya-Z rename D2 the
+# log is /tmp/luyaz-core.log (see start_service), the core writes its pid to
+# /var/run/luyaz-core.pid, and its state lives under /data/luyaz/core/ (the LAN
+# token at /data/luyaz/core/auth.token); before D2 these were /tmp/zwrt-datad.log,
+# /var/run/zwrt-datad.pid and /data/zwrt-datad.
 #
 # Launch semantics are the old start.sh start_datad_legacy's, moved here unchanged:
 # normal boots only, token seeding, LAN listener arguments, modem stream

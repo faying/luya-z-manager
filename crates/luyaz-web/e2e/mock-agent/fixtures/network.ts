@@ -384,7 +384,7 @@ const LAN = {
   dns_metric: 0,
   delegation: true,
   "ipv4-address": [{ address: "192.168.0.1", mask: 24 }],
-  // LAN IPv6 is off (u60-guard keeps br-lan disable_ipv6=1).
+  // LAN IPv6 is off (the core's lanv6 duty keeps br-lan disable_ipv6=1).
   "ipv6-address": [],
   "ipv6-prefix": [],
   "ipv6-prefix-assignment": [],

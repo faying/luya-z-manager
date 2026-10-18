@@ -450,9 +450,8 @@ pub fn state(c: &Cfg, fresh: bool) -> State {
             let u = m_uptime(c);
             let live = match (hu, hp) {
                 (Some(hu), Some(hp)) if u - hu <= 30 => {
-                    std::fs::read(format!("{}/{hp}/cmdline", c.proc_dir)).is_ok_and(|b| {
-                        crate::paths::is_ship_cmdline(&String::from_utf8_lossy(&b))
-                    })
+                    std::fs::read(format!("{}/{hp}/cmdline", c.proc_dir))
+                        .is_ok_and(|b| crate::paths::is_ship_cmdline(&String::from_utf8_lossy(&b)))
                 }
                 _ => false,
             };
@@ -602,7 +601,10 @@ const RECORD_RENAMED: [(&str, &str); 4] = [
 
 /// A record name as written before D4c → its new name (as doctor.sh's `canon`).
 fn canon_record(n: &str) -> &str {
-    RECORD_RENAMED.iter().find(|(_, o)| *o == n).map_or(n, |(n, _)| n)
+    RECORD_RENAMED
+        .iter()
+        .find(|(_, o)| *o == n)
+        .map_or(n, |(n, _)| n)
 }
 
 fn same_record(recorded: &str, listed: &str) -> bool {
@@ -641,7 +643,11 @@ fn record_list(c: &Cfg) -> Vec<(String, String, bool)> {
         .unwrap_or(&c.ship_txn);
     // the names as doctor.sh lists them (D4c names; older manifest lines are read through
     // `canon_record`), next to the transaction file (as in doctor.sh).
-    v.push(("luyaz-recover.sh".into(), format!("{txn_dir}/luyaz-recover.sh"), false));
+    v.push((
+        "luyaz-recover.sh".into(),
+        format!("{txn_dir}/luyaz-recover.sh"),
+        false,
+    ));
     v.push(("ui-fonts".into(), c.ui_fonts.clone(), true));
     v.push(("ui-logos".into(), c.ui_logos.clone(), true));
     v.push(("core-plugins".into(), c.u60d_plugins.clone(), true));

@@ -1,4 +1,4 @@
-//! The 网络 pages' data (src/netinfo.c): zte-agent's /api/netinfo (exits, operators, roaming,
+//! The 网络 pages' data (src/netinfo.c): luyaz-core's /api/netinfo (exits, operators, roaming,
 //! the selection and its guard, the operator scan, neighbours, scenes, Wi-Fi clients, APNs),
 //! read as much as the page on screen needs; and the actions, which only start something (the
 //! agent does the slow part; the next read shows how it went).

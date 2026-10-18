@@ -1,9 +1,9 @@
 #!/bin/sh
 # Device-side installer, run by the install kit (manager onboard/device/install.sh)
-# before it hands the screen to u60-uid: cleans up older installs, starts the
-# vendor zte_topsw_devui for early panel/touch bring-up, and puts the
+# before it hands the screen to luyaz-sentinel: cleans up older installs, starts
+# the vendor zte_topsw_devui for early panel/touch bring-up, and puts the
 # start.sh hook (marker # u60pro_devui) in rc.local, which the kit then
-# replaces in place with /etc/init.d/u60-uid start. start.sh itself only does
+# replaces in place with /etc/init.d/luyaz-sentinel start. start.sh itself only does
 # boot chores now; it starts no UI.
 #
 # Expects the binaries + start.sh already copied into the plugin dirs.

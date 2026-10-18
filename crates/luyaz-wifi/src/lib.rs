@@ -33,7 +33,7 @@
 //! agent and u60d run the same code. The writes go through the caller's [`Host`]: the agent sends
 //! them to datad's `/control` (with its emergency script behind it), u60d to its own `/control`.
 //! The lock is the same in both processes: an in-process flag here (one per process) and the flock on
-//! [`LOCK_FILE`] that u60-guard and u60d's `/control` (D3) take too.
+//! [`LOCK_FILE`] that the sentinel and the core's `/control` (D3) take too.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -364,7 +364,7 @@ pub fn apply_locked(h: &dyn Host, lk: &WifiLock, ap_2g: bool, ap_5g: bool) -> Re
 // = 0` (vendor `zwrt_wlan set {zte_mbb:{wifi_onoff}}`), not with the AP flags.
 // While it reads "0", writing `main_*.disabled=0` and reloading leaves the APs
 // down. `wifi.set_module` makes the stock call (with the current `lbd`), the
-// same thing u60-guard's `vendor_wifi_on` does.
+// same thing the old guard script's `vendor_wifi_on` did.
 
 /// The vendor switch's uci key. A missing key means on.
 pub const VENDOR_ONOFF: &str = "wireless.zte_mbb.wifi_onoff";
@@ -380,7 +380,7 @@ fn vendor_switch_needs_on(want_on: bool, onoff: Option<&str>) -> bool {
 /// off — the home scenario — never touches it). Under the Wi-Fi lock, before
 /// the AP flags are written. `None` when nothing needed doing; otherwise how
 /// the write went. Callers go on with the AP write either way, and their
-/// verify is the authority (as in u60-guard).
+/// verify is the authority.
 pub fn vendor_on_if_off(h: &dyn Host, _lk: &WifiLock, want_on: bool) -> Option<Result<(), String>> {
     if !want_on {
         return None;

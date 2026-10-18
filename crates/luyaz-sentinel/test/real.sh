@@ -45,7 +45,7 @@ sleep 3
 check "vendor request: ours stopped, vendor on" '[ -z "$(ui)" ] && [ -n "$(vendor)" ]'
 check "/tmp keeps 1777" '[ "$(stat -c %a /tmp)" = 1777 ]'
 check "want file says vendor" 'grep -q vendor /tmp/luyaz/screen.want'
-check "stop logged once, requested, no crash" '[ "$(grep -c "stopping u60pro-devui pid $U (requested)" /tmp/luyaz-screen.log)" = 1 ] && grep -q "pid $U ended: exit 0 (requested)" /tmp/luyaz-screen.log && ! grep -q devui-crash /data/alerts/queue 2>/dev/null'
+check "stop logged once, requested, no crash" '[ "$(grep -c "stopping luyaz-ui pid $U (requested)" /tmp/luyaz-screen.log)" = 1 ] && grep -q "pid $U ended: exit 0 (requested)" /tmp/luyaz-screen.log && ! grep -q devui-crash /data/alerts/queue 2>/dev/null'
 echo devui >/tmp/luyaz-screen.ctl
 sleep 4
 U=$(ui)
@@ -65,11 +65,11 @@ check "after give-up, devui request brings ours back" '[ -n "$U" ] && [ ! -f /da
 kill -TERM $SP; wait $SP
 check "TERM: sentinel exits 0" '[ $? = 0 ]'
 check "TERM: FIFO removed, UI left running" '[ ! -e /tmp/luyaz-screen.ctl ] && [ "$(ui)" = "$U" ]'
-check "TERM: logged" 'tail -1 /tmp/luyaz-screen.log | grep -q "stopping (u60pro-devui left running)"'
+check "TERM: logged" 'tail -1 /tmp/luyaz-screen.log | grep -q "stopping (luyaz-ui left running)"'
 $B >>/tmp/sentinel.stderr 2>&1 &
 SP=$!
 sleep 2
-check "restart adopts, launches nothing" 'grep -q "adopted running u60pro-devui pid $U" /tmp/luyaz-screen.log && [ "$(pgrep -x luyaz-ui | wc -l)" = 1 ]'
+check "restart adopts, launches nothing" 'grep -q "adopted running luyaz-ui pid $U" /tmp/luyaz-screen.log && [ "$(pgrep -x luyaz-ui | wc -l)" = 1 ]'
 check "restart: the old dir still not copied" '! grep -q "screen state copied" /tmp/luyaz-screen.log'
 kill -TERM $SP; wait $SP
 # R5 round ③: an old u60pro-devui is not ours any more, and its path is never started

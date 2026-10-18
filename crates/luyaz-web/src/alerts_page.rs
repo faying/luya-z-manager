@@ -1,6 +1,6 @@
 //! /alerts (告警), the old `alerts/page.tsx`: what failed while nobody was watching, and where the
-//! alert SMS goes. The events come from the device's process supervisor and Wi-Fi watchdog
-//! (u60-guard), which also sends the SMS.
+//! alert SMS goes. The events come from the core and the sentinel (process supervisor and
+//! Wi-Fi watchdog); the core sends the SMS (the sentinel while the core is unhealthy).
 //!
 //! Where each value comes from (the old page read `/api/alerts` every 30 s; u60d serves it, the
 //! agent when u60d says "not mine", both through `agent.rs` with the tab's own session):

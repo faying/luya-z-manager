@@ -218,7 +218,7 @@ fn first_go_live_takes_the_ring_as_seen() {
 #[test]
 fn oom_and_thermal() {
     let ev = events(
-        "t 1000\nt 1002\nk 800 900 Out of memory: Killed process 1234 (zte-agent) total-vm:1kB\n\
+        "t 1000\nt 1002\nk 800 900 Out of memory: Killed process 1234 (luyaz-web) total-vm:1kB\n\
          k 801 900 zte_thermal_monitor soc:zte_thermal_monitor: zte_thermal_update_throttling_level() to 0x3\nt 1004\nE\n",
     );
     assert_eq!(kind(&ev, "oom")[0]["id"], "oom-feedc0de-800");

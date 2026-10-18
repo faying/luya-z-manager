@@ -4,7 +4,7 @@
 //! - `client`：`UbusClient`（HELLO/LOOKUP/INVOKE/DATA/STATUS，seq+peer 过滤，超时重连，LOOKUP 缓存与失效），
 //!   `UbusError`、`RoundSkips`（本轮跳过超时对象）。
 //! - `backend`：`LUYAZ_UBUS=cli|socket` 选后端，`UbusBackend` trait、`Backend`。
-//! - `compare`：`zwrt-datad --ubus-compare 对象:方法 …`，同一个只读调用经 socket 后端和 `ubus call` 各做一遍比结果（上机前核对协议）。
+//! - `compare`：`luyaz-core --ubus-compare 对象:方法 …`，同一个只读调用经 socket 后端和 `ubus call` 各做一遍比结果（上机前核对协议）。
 //!
 //! 执行者（`executor.rs`，T4）持有一个 `Backend`，datad 的全部 ubus 调用都经过它。
 //! 只给测试用的接口标了 `#[cfg(test)]`。

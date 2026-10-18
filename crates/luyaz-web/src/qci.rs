@@ -4,12 +4,12 @@
 //! Two sources:
 //! - **The bearer table is still the agent's** `/api/network/qos`: it sends `AT+CGCONTRDP` and one
 //!   `AT+CGEQOSRDP=<cid>` per context on the modem's AT port (about 12 s on the device); u60d has
-//!   no per-context table. The old page polled it per tab, one request at a time, 15 s apart with
-//!   a 30 s timeout. Here **one read serves every open /router/qci tab** (the AT port is serial):
-//!   a shared cache, at most one request in flight, a new one at most every 15 s and only while a
-//!   tab's stream asks for it. The request runs in its own task, so a tab's stream (the frame,
-//!   the op-bar clock) never waits 12 s for it; when it lands every /router/qci stream is kicked.
-//! - **u60d's `qos` block** (new on this page; the signal page's "QCI · AMBR" row): the QCI/5QI
+//!   no per-context table. The old page polled it per tab every 15 s; here it is **read only when
+//!   someone presses "Read bearer table"** (or "Retry"), so an open tab does not keep the AT port
+//!   busy. One read serves every open /router/qci tab (the AT port is serial): a shared cache, at
+//!   most one request in flight, a new one at most every 15 s. The request runs in its own task,
+//!   so a tab's stream never waits 12 s for it; when it lands every /router/qci stream is kicked.
+//! - **u60d's `qos` block** (shown by default; the signal page's "QCI · AMBR" row): the QCI/5QI
 //!   and AMBR of the current data connection, from the modem's key log. It is a different source
 //!   from the table's `qci_device` (uci `zwrt_data_tmp`), so it is shown on its own, not merged.
 
@@ -39,6 +39,8 @@ pub struct Got {
     pub ok: Option<(Value, SystemTime)>,
     done_at: Option<Instant>,
     inflight_since: Option<Instant>,
+    /// Someone pressed "Read bearer table" / "Retry" and the read has not started yet.
+    want: bool,
 }
 
 static CACHE: Mutex<Got> = Mutex::new(Got {
@@ -46,6 +48,7 @@ static CACHE: Mutex<Got> = Mutex::new(Got {
     ok: None,
     done_at: None,
     inflight_since: None,
+    want: false,
 });
 
 pub fn label(q: i64, l: Lang) -> Option<&'static str> {
@@ -87,6 +90,8 @@ pub struct Bearer {
 }
 
 pub enum Table {
+    /// Nobody has asked for the table yet (it costs an AT read).
+    NotRead,
     Loading,
     Failed,
     Empty,
@@ -117,6 +122,8 @@ pub struct View {
     pub note: Option<String>,
     pub raw: Option<String>,
     pub now: Option<Now>,
+    /// A read is in flight (or waiting for its 15 s turn).
+    pub reading: bool,
 }
 
 impl View {
@@ -224,14 +231,16 @@ pub fn view(g: &Got, qos: Option<(&Value, bool)>, now_at: Instant, l: Lang) -> V
         .and_then(|r| r.as_ref().err())
         .filter(|_| !old);
     let signed_out = err == Some(&Fail::SignedOut);
+    let reading = g.inflight_since.is_some() || g.want;
     let now = qos.map(|(q, stale)| now_view(q, stale, l));
     let Some((d, at)) = &g.ok else {
         return View {
             l,
             tone: if err.is_some() { "bad" } else { "neutral" },
-            state: match err {
-                Some(_) => l.pick("Can't read the bearers", "读不到承载").into(),
-                None => l.pick("Reading bearers…", "正在读取承载…").into(),
+            state: match (err, reading) {
+                (Some(_), _) => l.pick("Can't read the bearers", "读不到承载").into(),
+                (None, true) => l.pick("Reading bearers…", "正在读取承载…").into(),
+                (None, false) => l.pick("Bearer table not read", "还没读承载表").into(),
             },
             reason: Some(match err {
                 Some(e) => e.text(l),
@@ -246,14 +255,15 @@ pub fn view(g: &Got, qos: Option<(&Value, bool)>, now_at: Instant, l: Lang) -> V
             retry: err.is_some() && !signed_out,
             signed_out,
             refresh_failed: None,
-            table: if err.is_some() {
-                Table::Failed
-            } else {
-                Table::Loading
+            table: match (err, reading) {
+                (Some(_), _) => Table::Failed,
+                (None, true) => Table::Loading,
+                (None, false) => Table::NotRead,
             },
             note: None,
             raw: None,
             now,
+            reading,
         };
     };
     let contexts = d["contexts"].as_array().cloned().unwrap_or_default();
@@ -285,8 +295,8 @@ pub fn view(g: &Got, qos: Option<(&Value, bool)>, now_at: Instant, l: Lang) -> V
         l,
         tone: if stale { "stale" } else { tone },
         state,
-        // an old reading is being read again (the stream started a read)
-        reason: if old {
+        // an old reading is being read again (someone pressed "Read bearer table")
+        reason: if old && reading {
             Some(l.pick("Reading bearers…", "正在读取承载…").into())
         } else {
             reason
@@ -315,6 +325,7 @@ pub fn view(g: &Got, qos: Option<(&Value, bool)>, now_at: Instant, l: Lang) -> V
                 .to_owned(),
         ),
         now,
+        reading,
     }
 }
 
@@ -360,12 +371,17 @@ fn maybe_start(app: &Shared, who: &Caller) -> Duration {
     if inflight {
         return TIMEOUT;
     }
+    // only on request: an open tab alone never reads (a press kicks every stream)
+    if !c.want {
+        return Duration::from_secs(3600);
+    }
     let due = c.done_at.is_none_or(|t| now.duration_since(t) >= EVERY);
     if !due {
         return EVERY.saturating_sub(now.duration_since(c.done_at.unwrap()))
             + Duration::from_millis(50);
     }
     c.inflight_since = Some(now);
+    c.want = false;
     drop(c);
     let (app, who) = (app.clone(), who.clone());
     tokio::spawn(async move {
@@ -415,7 +431,7 @@ impl Page {
 }
 
 /// The page renders what the shared cache has (no AT read here: it would hold the page 12 s);
-/// its stream starts the read.
+/// a press on "Read bearer table" starts the read.
 pub async fn page(State(app): State<Shared>, req: axum::extract::Request) -> Response {
     let headers = req.headers().clone();
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
@@ -458,12 +474,16 @@ pub async fn events(
     crate::agent::stream(app, ctx, q.g, PATH, p)
 }
 
-/// Retry: after a failure, read now (not 15 s after the failure).
+/// "Read bearer table" / "Retry": one shared read (after a failure now, otherwise at most every
+/// 15 s; a press while one is in flight is that read).
 pub async fn refresh(State(app): State<Shared>) -> axum::http::StatusCode {
     {
         let mut c = CACHE.lock().unwrap();
         if matches!(c.last, Some(Err(_))) {
             c.done_at = None;
+        }
+        if c.inflight_since.is_none() {
+            c.want = true;
         }
     }
     let _ = app.kick.send(PATH);
@@ -523,9 +543,13 @@ mod tests {
     #[test]
     fn reading_failed_and_stale_states() {
         let v = view(&Got::default(), None, Instant::now(), Lang::En);
-        assert_eq!(v.state, "Reading bearers…");
+        assert_eq!(v.state, "Bearer table not read");
         assert!(v.reason.unwrap().contains("12 seconds"));
-        assert!(matches!(v.table, Table::Loading) && !v.retry);
+        assert!(matches!(v.table, Table::NotRead) && !v.retry && !v.reading);
+        let asked = Got { want: true, ..Default::default() };
+        let v = view(&asked, None, Instant::now(), Lang::En);
+        assert_eq!(v.state, "Reading bearers…");
+        assert!(matches!(v.table, Table::Loading) && v.reading);
         let v = view(
             &got(Some(Err(Fail::Unreachable)), false),
             None,
@@ -584,15 +608,31 @@ mod tests {
         let v = view(&g, None, later, Lang::Zh);
         assert_eq!(v.tone, "stale", "old table greyed");
         assert!(v.meta.unwrap().starts_with("数字停在 "));
-        assert_eq!(v.reason.as_deref(), Some("正在读取承载…"));
+        assert_eq!(v.reason, None, "not reading again until asked");
         assert!(v.refresh_failed.is_none() && !v.retry, "nothing failed");
-        // an old sign-out from another session: reading, not 'signed out'
+        g.want = true;
+        let v = view(&g, None, later, Lang::Zh);
+        assert_eq!(v.reason.as_deref(), Some("正在读取承载…"));
+        // an old sign-out from another session: not 'signed out', just not read
         let mut g = got(Some(Err(Fail::SignedOut)), false);
         g.done_at = Some(Instant::now());
         let v = view(&g, None, later, Lang::En);
-        assert!(!v.signed_out && v.tone == "neutral" && matches!(v.table, Table::Loading));
+        assert!(!v.signed_out && v.tone == "neutral" && matches!(v.table, Table::NotRead));
         // fresh: as it is
         assert!(view(&g, None, Instant::now(), Lang::En).signed_out);
+    }
+
+    #[test]
+    fn an_open_tab_does_not_read_until_asked() {
+        let mut c = Got::default();
+        assert!(!c.want && c.inflight_since.is_none());
+        c.want = true;
+        let v = view(&c, None, Instant::now(), Lang::En);
+        assert!(v.reading);
+        let html = Leaves { v: &view(&Got::default(), None, Instant::now(), Lang::En) }
+            .render()
+            .unwrap();
+        assert!(html.contains("@post('/router/qci/refresh')") && html.contains("Read bearer table"));
     }
 
     #[test]

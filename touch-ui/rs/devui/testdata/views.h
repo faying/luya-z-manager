@@ -1,5 +1,5 @@
 /*
- * views.h - each render scene's home-card view, as zwrt-datad's /v2/screen
+ * views.h - each render scene's home-card view, as luyaz-core's /v2/screen
  * "net" would send it. Generated (2026-09-26, touch-ui tag parity-net-v1; mode_word/
  * mode_auto added from the C table before it moved too)
  * from the screen's own rules before they moved to datad; datad is held to

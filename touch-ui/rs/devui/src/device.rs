@@ -12,8 +12,8 @@
 //! SIGTERM / SIGINT end it cleanly: datad's pace back to 1 s, the backlight off only when we
 //! started a shutdown, the DRM buffer released.
 //!
-//!   u60pro-devui [--tab=N] [--scroll=Y] [--screen-off[=key]] [--autooff=MS] [--bright=N] [--exec-…]
-//!   u60pro-devui --offscreen [--exit-after=MS] [--texts=FILE] [--png=FILE]   (no panel, no input)
+//!   luyaz-ui [--tab=N] [--scroll=Y] [--screen-off[=key]] [--autooff=MS] [--bright=N] [--exec-…]
+//!   luyaz-ui --offscreen [--exit-after=MS] [--texts=FILE] [--png=FILE]   (no panel, no input)
 // SPDX-License-Identifier: MIT
 
 use crate::conf::{Conf, CONF_FILE};

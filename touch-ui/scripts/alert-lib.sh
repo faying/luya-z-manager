@@ -5,14 +5,14 @@
 #   . /data/luyaz/scripts/alert-lib.sh
 #   alert_add agent-crash "exit 139 (SIGSEGV)"
 #
-# Shared by supervise.sh (a supervised program died) and u60-guard.sh (the
-# Wi-Fi watchdog). File formats: source/manager docs/RELIABILITY.md §4 — the
+# Shared by the device shell scripts that raise alerts (e.g. scripts/tailscale/
+# start.sh); luyaz-core's svcwatch writes the same queue. File formats: source/manager docs/RELIABILITY.md §4 — the
 # agent reads what this writes, so change both together.
 #
 # Why events carry a sequence number and not a line number or a timestamp:
 # the file is trimmed, which moves line numbers, and before the network sets
 # the clock the device thinks it is 2025-01-04. The number is allocated under the
-# directory's flock, so the web's "read" cursor and u60-guard's "SMS done"
+# directory's flock, so the web's "read" cursor and the core's "SMS done"
 # cursor stay valid across trims.
 # SPDX-License-Identifier: MIT
 # ─────────────────────────────────────────────────────────────────────────────

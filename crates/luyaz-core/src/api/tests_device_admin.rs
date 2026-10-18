@@ -475,7 +475,7 @@ async fn kill_bloat_kills_only_the_listed_daemons() {
             (10, "/usr/bin/zte_topsw_tr069", "tr069", 5, 100),
             (11, "/usr/bin/zte_topsw_mc", "zte_topsw_mc", 5, 100),
             (12, "", "zte_dua", 5, 50),
-            (13, "/data/zte-agent", "zte-agent", 5, 10),
+            (13, "/data/luyaz/luyaz-web", "luyaz-web", 5, 10),
         ],
     );
     let (st, b) = call(r.addr, "POST", "/api/system/kill-bloat", r#"{"all":true}"#).await;
@@ -496,7 +496,7 @@ async fn kill_bloat_kills_only_the_listed_daemons() {
     assert_eq!(*r.killed.lock().unwrap(), vec![10]);
     assert_eq!(
         b["data"]["skipped"],
-        json!([{"pid": 11, "name": "zte_topsw_mc"}, {"pid": 13, "name": "zte-agent"}])
+        json!([{"pid": 11, "name": "zte_topsw_mc"}, {"pid": 13, "name": "luyaz-web"}])
     );
     for body in ["{}", r#"{"pids":[]}"#, "x"] {
         let (st, _) = call(r.addr, "POST", "/api/system/kill-bloat", body).await;

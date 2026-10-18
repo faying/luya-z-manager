@@ -1,5 +1,5 @@
 //! src/ui_parts/apn.c: the APN page, the › row cards on the tabs (nav_card) and net_paint,
-//! which draws zte-agent's netinfo onto the pages network.rs built.
+//! which draws luyaz-core's netinfo onto the pages network.rs built.
 // SPDX-License-Identifier: MIT
 
 use super::network::{

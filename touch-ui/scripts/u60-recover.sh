@@ -107,6 +107,13 @@ path_ok() {
 
 # luyaz_new ROOT: the core's layout switch (same line in u60-ship.sh; scripts/test/luyaz-dir)
 luyaz_new() { [ -f "$1/data/luyaz/core/.migrated" ]; }
+# rec_rc_retired <rc.local> <names ERE>: it starts one of them in any form outside
+# a comment line (indented, conditional, chained); unreadable counts as yes, so a
+# refusal fails closed. Same rule as u60-ship.sh rc_retired.
+rec_rc_retired() {
+    [ -r "$1" ] && [ ! -L "$1" ] || return 0
+    grep -v '^[[:space:]]*#' "$1" | grep -qE "/etc/init\.d/($2)([^A-Za-z0-9_.-]|\$)"
+}
 
 # v5_path <path>: a file only a v=5 log may name
 v5_path() {
@@ -214,7 +221,7 @@ restore_one() {
                 log "！！不还原 $1：核心已经搬到 /data/luyaz（.migrated），旧路径不放回（不能退回旧布局，见 docs/designs/u60-phase10.md），正式文件没动"
                 return 1 ;;
         esac
-        if [ "$1" = "$ROOT/etc/rc.local" ] && grep -q '^[[:space:]]*/etc/init.d/zwrt-datad start' "$_prev" 2>/dev/null; then
+        if [ "$1" = "$ROOT/etc/rc.local" ] && rec_rc_retired "$_prev" zwrt-datad; then
             log "！！不还原 $1：那一份起 /etc/init.d/zwrt-datad，核心已经搬到 luyaz-core（不能退回旧布局，见 docs/designs/u60-phase10.md），正式文件没动"
             return 1
         fi
@@ -225,7 +232,7 @@ restore_one() {
     fi
     # Phase 10 10c (review D7): never an rc.local that starts u60-uid/u60-guard
     # once they are deleted: it would start no screen owner, every boot
-    if [ "$1" = "$ROOT/etc/rc.local" ] && grep -q '^/etc/init.d/u60-\(uid\|guard\) start' "$_prev" &&
+    if [ "$1" = "$ROOT/etc/rc.local" ] && rec_rc_retired "$_prev" 'u60-uid|u60-guard' &&
         ! { [ -x "$ROOT/data/plugins/u60pro-devui/u60-uid" ] && [ -f "$ROOT/data/u60-guard/u60-guard.sh" ]; }; then
         log "！！不还原 $1：那一份起 u60-uid + u60-guard，它们已经删了，正式文件没动"
         return 1

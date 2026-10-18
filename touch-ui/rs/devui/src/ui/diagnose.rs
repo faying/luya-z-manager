@@ -1,7 +1,7 @@
 //! src/ui_parts/diagnose.c: 网络诊断 and 摆放模式 (manager docs/designs/slow-diagnosis.md §4.2,
 //! §12.2–12.5).
 //!
-//! 网络诊断: zte-agent runs it (about 10 s, ≤ 20 s); the page starts it, reads it every second
+//! 网络诊断: luyaz-core runs it (about 10 s, ≤ 20 s); the page starts it, reads it every second
 //! while it runs and draws what it says. The run is kept 10 minutes: coming back within that
 //! shows it with when it was measured; after that, opening the page measures again. Status
 //! block = the main cause and one thing to do; a row per layer; then 加测速度 and 对 / 不对.
@@ -688,7 +688,9 @@ impl Ui {
         let m = self.model.clone();
         let d = &m.data;
         let rat = logic::rat(&d.net_type);
-        let nr = rat == Rat::G5Sa || rat == Rat::G5Nsa;
+        // NSA: the NR leg often reports no SINR while the LTE anchor does (issue #4) — use NR
+        // only when its SINR parses, else the anchor; SA has no LTE leg
+        let nr = rat == Rat::G5Sa || (rat == Rat::G5Nsa && pl_tenths(&d.nr_snr).is_some());
         let snr = if nr { &d.nr_snr } else { &d.lte_snr };
         let pci = if nr { d.nr_pci } else { d.lte_pci };
         let band: String = if nr {
@@ -701,7 +703,7 @@ impl Ui {
         let sample = if live && d.valid != 0 && rat != Rat::None { pl_tenths(snr) } else { None };
         let have = sample.is_some();
         let v = sample.unwrap_or(0);
-        let lte_or_nr = nr || rat == Rat::G4;
+        let lte_or_nr = nr || rat == Rat::G4 || rat == Rat::G5Nsa;
         let pl = self.pl.clone_handles();
         self.set(pl.cap, cf!(tr("%s SINR · 越大越好"), if nr { "5G" } else { "4G" }));
         // a different cell: the best so far was somewhere else

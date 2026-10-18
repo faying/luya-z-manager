@@ -1,5 +1,5 @@
-//! The eSIM engine (moved from zte-agent `esim.rs`, Phase 4 step 8e), shared by the agent and
-//! u60d's touch compatibility layer. Every side effect (lpac, the shell, the reboot, the
+//! The eSIM engine (moved from zte-agent `esim.rs`, Phase 4 step 8e), used by the
+//! core's touch compatibility layer. Every side effect (lpac, the shell, the reboot, the
 //! data check, the wake lock, sleeping) goes through [`Host`] (the write layer's interrupt before a
 //! switch is the caller's, passed to [`Esim::switch`]): the device is
 //! [`RealHost`], tests use a fake that never touches a card or reboots.

@@ -156,8 +156,9 @@ pub trait WorkerIo {
     fn core_being_replaced(&mut self) -> bool;
     /// One alert SMS round as the sender `sentinel` (`u60-alerts::sms`).
     fn alert_sms(&mut self);
-    /// Any process running u60-guard.sh (the guard is still in charge of its rounds).
-    fn guard_running(&mut self) -> bool;
+    /// `/proc` cannot be read, so no process can be told alive (u60-guard is gone since 10c;
+    /// this is all that is left of its check).
+    fn proc_blind(&mut self) -> bool;
     /// A normal boot, not power-off charging (u60-guard.init `boot_is_normal`).
     fn boot_is_normal(&mut self) -> bool;
 }
@@ -362,18 +363,14 @@ impl Worker {
     }
 
     /// u60-sentinel.md §16, the 5f precondition: u60d runs the guard's SMS and LAN IPv6 duties only
-    /// while the handover file (`/tmp/luyaz/handover`, was `/tmp/u60-guard.handover`) names them, and only the guard wrote it. With no guard
-    /// running, the sentinel (its successor) writes it, naming all three; while a guard runs, the
-    /// file stays the guard's (its list, its one-round delay when taking back).
+    /// while the handover file (`/tmp/luyaz/handover`, was `/tmp/u60-guard.handover`) names them.
+    /// The guard that used to share it is deleted (10c), so the sentinel always writes it.
     pub fn handover_round(&mut self, io: &mut dyn WorkerIo) {
-        if io.guard_running() {
-            return;
-        }
         let h = self.paths.handover.clone();
         if io.read(&h).as_deref() != Some(CORE_DUTIES) {
             io.write(&h, CORE_DUTIES);
             io.log(
-                "no u60-guard running: the core runs sms, lanv6, datad, crashcap, standby and fp",
+                "no old guard running: the core runs sms, lanv6, datad, crashcap, standby and fp",
             );
         }
     }
@@ -443,9 +440,9 @@ impl Worker {
         if comp == "sentinel" || !io.exists(&ship) {
             return;
         }
-        // a running guard finishes every transaction but its own; recover-live has no lock, so
-        // never both (until the guard is gone after 5f; u60-sentinel.md §22)
-        if comp != "guard" && io.guard_running() {
+        // recover-live has no lock: with /proc unreadable a live executor looks dead, so never
+        // act blind (u60-sentinel.md §22; the guard that used to finish these is gone since 10c)
+        if io.proc_blind() {
             return;
         }
         let now = io.uptime();
@@ -514,8 +511,8 @@ impl Worker {
         }
         self.clock.last = Some((ok, off));
         // the trusted wall clock on flash, at most once an hour (the guard's `ledger_wall`,
-        // docs/LEDGER.md §7; u60-sentinel.md §20): the guard's while one runs
-        if ok && !io.guard_running() {
+        // docs/LEDGER.md §7; u60-sentinel.md §20)
+        if ok {
             let last = num(io.read(&self.paths.wall_last)) as i64;
             if w >= last + 3600 {
                 io.persist(&self.paths.wall_last, &format!("{w}\n"));
