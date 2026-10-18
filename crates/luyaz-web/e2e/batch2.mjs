@@ -56,7 +56,7 @@ const PAGES = {
       ok(await txt(p, "#di-ver-core .nd-row__value") === "1.0.0" && /已是最新/.test(await txt(p, "#di-ver-core")), "versions: core 1.0.0, up to date");
       ok(/有新版：1\.1\.0/.test(await txt(p, "#di-ver-touch")), `versions: touch has a newer one: ${await txt(p, "#di-ver-touch")}`);
       ok(await txt(p, "#di-ver-scripts .nd-row__value") === "未编号", "versions: scripts from before 1.0.0 say so");
-      ok(/(\d+ 小时前|刚刚)$/.test(await txt(p, "#di-ver-checked .nd-row__value")), `versions: last check: ${await txt(p, "#di-ver-checked .nd-row__value")}`);
+      ok(/(\d+ (分钟|小时|天)前|刚刚)$/.test(await txt(p, "#di-ver-checked .nd-row__value")), `versions: last check: ${await txt(p, "#di-ver-checked .nd-row__value")}`);
       await p.click("#di-versions-err button");
       await p.waitForFunction(() => /刚刚/.test(document.querySelector("#di-ver-checked")?.textContent ?? ""), null, { timeout: 15000 }).catch(() => {});
       ok(/刚刚/.test(await txt(p, "#di-ver-checked .nd-row__value")), "versions: 检查更新 asks u60d and the row follows");
@@ -433,7 +433,7 @@ const PAGES = {
       let s0 = await stats();
       await send.click();
       await p.waitForSelector("#smsc-confirm", { timeout: 5000 }).catch(() => {});
-      ok(/把 6 个字符发给 \+886900000104，分 1 条短信经移动网络发出，运营商可能按条收费。发出后没法撤回。/.test(await txt(p, "#smsc-confirm")), `tier 2: ${await txt(p, "#smsc-confirm")}`);
+      ok(/把 6 个字符发给 \+886912000451，分 1 条短信经移动网络发出，运营商可能按条收费。发出后没法撤回。/.test(await txt(p, "#smsc-confirm")), `tier 2: ${await txt(p, "#smsc-confirm")}`);
       ok(await txt(p, "#smsc-err") === "", "the error line went");
       await sleep(400);
       await p.screenshot({ path: `${OUT}/b2-compose-confirm.png` });
@@ -447,7 +447,7 @@ const PAGES = {
       await p.type("#smsc-body", "!");
       ok(await p.locator("#smsc-confirm").count() === 0, "typing closes the confirm");
       const h = /h=([0-9a-f]+)/.exec(await p.evaluate(() => document.querySelector("#smsc-op")?.innerHTML ?? "") ?? "")?.[1];
-      const bad = await fetch(`${WEB}/sms/compose/send?h=0000000000000000`, { method: "POST", headers: { origin: new URL(WEB).origin, cookie: `lw_sid=${sid}`, "datastar-request": "true", "content-type": "application/json" }, body: JSON.stringify({ to: "+886900000104", body: "测试 e2e" }) }).then((r) => r.text());
+      const bad = await fetch(`${WEB}/sms/compose/send?h=0000000000000000`, { method: "POST", headers: { origin: new URL(WEB).origin, cookie: `lw_sid=${sid}`, "datastar-request": "true", "content-type": "application/json" }, body: JSON.stringify({ to: "+886912000451", body: "测试 e2e" }) }).then((r) => r.text());
       ok(/没有发出：确认之后号码或内容又改了/.test(bad) && h === undefined, "a stale confirm is not sent");
       let s1 = await stats();
       ok(s1.sms_sends.length === s0.sms_sends.length, "Cancel / stale: nothing sent");
@@ -457,11 +457,11 @@ const PAGES = {
       await p.click("#smsc-confirm .nd-btn--confirm");
       await p.waitForFunction(() => /设备已接受/.test(document.querySelector("#smsc-op")?.textContent ?? ""), null, { timeout: 20000 }).catch(() => {});
       const res = await txt(p, "#smsc-op");
-      ok(res === "设备已接受：发给 +886900000104 的短信", `accepted, never success (${res.includes("成功") ? "says 成功" : "ok"})`);
+      ok(res === "设备已接受：发给 +886912000451 的短信", `accepted, never success (${res.includes("成功") ? "says 成功" : "ok"})`);
       s1 = await stats();
       const sent = s1.sms_sends.slice(s0.sms_sends.length);
       ok(sent.length === 1, `one send (${sent.length})`);
-      ok(sent[0]?.number === "+886900000104" && sent[0]?.message_hex === "6D4B8BD50020006500320065" && /^\d\d(;\d\d){5};[+-]?\d+$/.test(sent[0]?.sms_time ?? ""), "sent: number, UCS-2 hex, sms_time format");
+      ok(sent[0]?.number === "+886912000451" && sent[0]?.message_hex === "6D4B8BD50020006500320065" && /^\d\d(;\d\d){5};[+-]?\d+$/.test(sent[0]?.sms_time ?? ""), "sent: number, UCS-2 hex, sms_time format");
       ok(await p.inputValue("#smsc-to") === "" && await p.inputValue("#smsc-body") === "", "the form empties after the send");
       const ids = s1.op_ids.filter((x) => x.startsWith("lw-"));
       ok(new Set(ids).size === ids.length, "own op_id, not resent");
