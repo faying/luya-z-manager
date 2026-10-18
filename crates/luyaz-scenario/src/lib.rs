@@ -101,6 +101,8 @@ pub const LEASE_FILE: &str = "/tmp/scenario.owner";
 // would restart the hold forever and control would never come back.
 pub const HEARTBEAT_FILE: &str = "/tmp/scenario.heartbeat";
 pub const TAKEOVER_FILE: &str = "/tmp/luyaz/wifiguard.took-over";
+/// Uptime past which bootsafe treats its start as a core restart, not a boot.
+const RESTART_MIN_UPTIME: u64 = 300;
 /// The agent's tick records (`/tmp/scenario.tick.json`), read by u60d's shadow.
 pub const TICK_FILE: &str = "/tmp/scenario.tick.json";
 const TICK_RING: usize = 8;
@@ -523,6 +525,17 @@ impl Engine {
         self.io.set_auto_sleep(true);
         self.clear_wakealarm();
         let away = lk(&self.cfg).scenario(AWAY_ID).cloned();
+        // The core restarted (a ship, a crash), the device did not: the APs are down because the
+        // applied scenario took them down, not because something broke. Keep it; "repairing"
+        // brought Wi-Fi up for the ~100 s until home was seen again (device, 10-18).
+        let prev: RunState = read_json(&self.p(STATE_FILE));
+        if let Some(why) = self.kept_after_restart(&prev) {
+            let mut st = lk(&self.state);
+            *st = RunState { candidate: String::new(), hits: 0, misses: 0, ..prev };
+            self.write_state(&st);
+            self.log(&format!("[bootsafe] {why}; left as is"));
+            return;
+        }
         {
             let mut st = lk(&self.state);
             *st = RunState::default();
@@ -563,6 +576,22 @@ impl Engine {
                 }
             }
         }
+    }
+
+    /// `Some(reason)` when bootsafe should leave Wi-Fi alone: up longer than `RESTART_MIN_UPTIME`
+    /// (a core restart, not a boot: a boot keeps the full repair), no guard takeover, and the
+    /// state the engine left says a scenario other than away is applied and it turned every AP
+    /// it wrote off.
+    fn kept_after_restart(&self, prev: &RunState) -> Option<String> {
+        let up = self.io.uptime_secs()?;
+        let off = |(k, v): (&String, &String)| k.ends_with(".disabled") && v == "1";
+        (up >= RESTART_MIN_UPTIME
+            && !Path::new(&self.p(TAKEOVER_FILE)).exists()
+            && !prev.current.is_empty()
+            && prev.current != AWAY_ID
+            && !prev.applied.is_empty()
+            && prev.applied.iter().all(off))
+        .then(|| format!("Wi-Fi off by scenario \"{}\" (core restart, up {up} s)", prev.current))
     }
 
     // ── sleep survival ──────────────────────────────────────────────────────

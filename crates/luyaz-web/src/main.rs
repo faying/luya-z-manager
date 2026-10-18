@@ -221,6 +221,7 @@ pub fn app(
         .route("/clients/refresh", post(clients::refresh))
         .route("/tools/speedtest", get(speedtest::page))
         .route("/tools/speedtest/events", get(speedtest::events))
+        .route("/tools/speedtest/config", post(speedtest::configure))
         .route("/tools/speedtest/start", post(speedtest::start))
         .route("/tools/speedtest/stop", post(speedtest::stop))
         .route("/tools/speedtest/servers", post(speedtest::servers))

@@ -143,6 +143,7 @@ impl Live {
             st_upload_mbps: Some(st.ul()),
             st_server: Some(st.server().into()),
             st_error: Some(st.error().into()),
+            st_servers_error: Some(st.servers_error().into()),
             st_running: st.running() as i32,
             st_agent_reachable: st.reachable() as i32,
             st_start_error: Some(st.start_error().into()),

@@ -9,13 +9,13 @@ use crate::lang::tr;
 use crate::lv::{self, sys, Obj};
 use crate::theme::{t, uf};
 
-/// speedtest.h ST_MAX_SERVERS; +1 = 「自动」 on row 0
-const ST_SRV_ROWS: usize = 24 + 1;
+/// ST_MAX_SERVERS plus Auto, Ookla and LibreSpeed choices.
+const ST_SRV_ROWS: usize = 24 + 3;
 const ST_IDLE: i32 = 0;
 const ST_DOWNLOAD: i32 = 2;
 const ST_UPLOAD: i32 = 3;
 pub const ST_COMPLETE: i32 = 4;
-const ST_ERROR: i32 = 5;
+const ST_ERROR: i32 = 6;
 
 #[derive(Default)]
 pub struct Speed {
@@ -29,6 +29,7 @@ pub struct Speed {
     btn_lbl: Obj,
     offline: Obj,
     srv_card: Obj,
+    srv_hint: Obj,
     srv_row: Vec<Obj>,
     srv_name: Vec<Obj>,
     srv_ok: Vec<Obj>,
@@ -63,8 +64,8 @@ impl Ui {
     pub(super) fn build_sub_speed(&mut self, p: Obj) {
         let th = t();
         let f = uf();
-        let sc = kit::scroll(p, 0, SUB_VIEW, 4 + 220 + 10 + 20 + ST_SRV_ROWS as i32 * ROW_H + 16);
-        let c = kit::card(sc, MARGIN, 4, CARD_W, 220);
+        let sc = kit::scroll(p, 0, SUB_VIEW, 4 + 280 + 10 + 20 + ST_SRV_ROWS as i32 * ROW_H + 86);
+        let c = kit::card(sc, MARGIN, 4, CARD_W, 280);
         let s = &mut self.st;
         kit::label(c, f.cj12, th.t3, PAD, 10, tr("网络测速"));
         s.phase = kit::label_r(c, f.cj12, th.t2, CARD_W - PAD, 10, "");
@@ -77,8 +78,9 @@ impl Ui {
         s.offline = kit::label_w(c, f.cj13, th.bad_t, PAD, 190, CARD_W - 2 * PAD, true, "");
         kit::show(s.offline, false);
 
-        kit::section(sc, 4 + 220 + 10, tr("服务器"));
-        s.srv_card = kit::card(sc, MARGIN, 4 + 220 + 10 + 20, CARD_W, ST_SRV_ROWS as i32 * ROW_H);
+        kit::section(sc, 4 + 280 + 10, tr("服务器"));
+        s.srv_hint = kit::label_w(sc, f.cj12, th.t3, MARGIN + PAD, 4 + 280 + 10 + 20, CARD_W - 2 * PAD, true, "");
+        s.srv_card = kit::card(sc, MARGIN, 4 + 280 + 10 + 90, CARD_W, ST_SRV_ROWS as i32 * ROW_H);
         for i in 0..ST_SRV_ROWS {
             let row = kit::bx(s.srv_card, 0, i as i32 * ROW_H, CARD_W, ROW_H, th.card, 0);
             row.set_style_bg_opa(lv::OPA_TRANSP, 0);
@@ -88,12 +90,14 @@ impl Ui {
             }
             s.srv_ok.push(kit::label(row, lv::montserrat(14), th.acc_t, PAD, 12, SYMBOL_OK));
             s.srv_name.push(kit::label_w(row, f.cj14, th.t1, PAD + 22, 11, CARD_W - 2 * PAD - 22, false, ""));
-            if i > 0 {
+            if i > 2 {
                 kit::show(row, false); // shown once the list arrives
             }
             s.srv_row.push(row);
         }
-        s.srv_name[0].set_text(tr("自动（最佳服务器）"));
+        s.srv_name[0].set_text(tr("自动（含备用来源）"));
+        s.srv_name[1].set_text("Ookla");
+        s.srv_name[2].set_text("LibreSpeed");
         sc.scroll_to_y(0);
     }
 
@@ -163,7 +167,7 @@ impl Ui {
     }
 
     fn speedtest_srv(&mut self, i: usize) {
-        self.src.speedtest_select_server(i as i32 - 1); // row 0 = 自动 = -1
+        self.src.speedtest_select_server(if i < 3 { -(i as i32) - 1 } else { i as i32 - 3 });
         self.sync();
         // the tick moves at once, not at the next refresh
         for (k, &ok) in self.st.srv_ok.iter().enumerate() {
@@ -188,9 +192,7 @@ impl Ui {
             offline.set_pos(PAD, 32);
             kit::show(unit, false);
             phase_l.set_text("");
-            offline.set_text(tr(
-                "连不上测速服务（数据服务 127.0.0.1:9460）。\n检查数据服务有没有在跑。",
-            ));
+            offline.set_text(tr("设备服务没有回应，请稍后重试。"));
         } else {
             for o in [live, detail, result, server, btn] {
                 kit::show(o, true);
@@ -250,21 +252,22 @@ impl Ui {
         // the server list (only while the page is up)
         if self.polled.servers {
             let n = m.st_servers.len();
-            for i in 1..ST_SRV_ROWS {
+            self.set(self.st.srv_hint, m.st_servers_error.as_deref().unwrap_or(""));
+            for i in 3..ST_SRV_ROWS {
                 let (row, name) = (self.st.srv_row[i], self.st.srv_name[i]);
-                if i > n {
+                if i - 3 >= n {
                     kit::show(row, false);
                     continue;
                 }
-                let sv = &m.st_servers[i - 1];
+                let sv = &m.st_servers[i - 3];
                 kit::show(row, true);
-                self.set(name, cf!("%s · %s, %s", &sv.sponsor, &sv.name, &sv.country));
+                self.set(name, cf!("%s · %s", if sv.provider == "librespeed" { "LibreSpeed" } else { "Ookla" }, &sv.name));
             }
-            self.st.srv_card.set_height((n as i32 + 1) * ROW_H);
+            self.st.srv_card.set_height((n as i32 + 3) * ROW_H);
         }
         let sel = m.st_selected_index;
         for (i, &ok) in self.st.srv_ok.iter().enumerate() {
-            let is_sel = (sel < 0 && i == 0) || (sel >= 0 && i as i32 == sel + 1);
+            let is_sel = (sel < 0 && i as i32 == -sel - 1) || (sel >= 0 && i as i32 == sel + 3);
             kit::show(ok, is_sel);
         }
     }

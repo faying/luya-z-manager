@@ -187,6 +187,11 @@ fn run_lpac(args: &[&str], timeout: Duration) -> Result<Value, String> {
     if !installed() {
         return Err("lpac not installed under /data/esim".into());
     }
+    // The channel lpac is about to get (the lowest free one). If lpac is
+    // killed, the modem keeps that channel open for good (measured 10-18: not
+    // reclaimed after 3 min, and two kills used up every free channel), so the
+    // watchdog closes it after the kill.
+    let chan = free_channel();
     let child = Command::new(LPAC_BIN)
         .args(args)
         .env("LD_LIBRARY_PATH", LIB_DIR)
@@ -223,6 +228,11 @@ fn run_lpac(args: &[&str], timeout: Duration) -> Result<Value, String> {
         .map_err(|e| format!("lpac wait failed: {e}"));
     done.store(true, Ordering::Relaxed);
     let out = out?;
+    if !out.status.success() && out.status.code().is_none() {
+        if let Some(c) = chan {
+            run_cmd(&format!("{QMI_PROBE} close {c} 2>/dev/null"));
+        }
+    }
 
     parse_lpac_output(&String::from_utf8_lossy(&out.stdout), out.status.success()).map_err(|e| {
         if e.is_empty() {
@@ -234,6 +244,18 @@ fn run_lpac(args: &[&str], timeout: Duration) -> Result<Value, String> {
             e
         }
     })
+}
+
+/// Lowest free logical channel on the card, read by opening and closing one
+/// (`qmi_uim_probe open` prints `[open] channel=N` on stderr).
+fn free_channel() -> Option<u8> {
+    channel_of(&run_cmd(&format!("{QMI_PROBE} open 2>&1")))
+}
+
+fn channel_of(probe_out: &str) -> Option<u8> {
+    let rest = &probe_out[probe_out.find("[open] channel=")? + 15..];
+    let n: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    n.parse().ok().filter(|c| (1..=19).contains(c))
 }
 
 /// lpac's stdout → the `data` of its final `{"type":"lpa"}` line, or the error
@@ -1056,6 +1078,16 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_free_channel_is_read_from_the_probe_output() {
+        let out = "  0010: 00 21 6f 1f\n[open] channel=2 SW=9000\n[close] channel 2 released\n";
+        assert_eq!(channel_of(out), Some(2));
+        assert_eq!(channel_of("[open] channel=3\n"), Some(3));
+        assert_eq!(channel_of("[!] open channel rejected by modem (qmi_error=68)\n"), None);
+        assert_eq!(channel_of("[open] channel=0\n"), None);
+        assert_eq!(channel_of(""), None);
+    }
 
     /// One lpac 2.3.0 run as it prints it: progress lines, then the lpa line.
     fn lpa(code: i64, message: &str, data: Value) -> String {

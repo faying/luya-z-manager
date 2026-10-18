@@ -10,10 +10,25 @@
 <div id="st-op" class="grid gap-1"></div>
 </section>
 {{ self.leaf("st-wall")|safe }}
-<section aria-labelledby="st-server-t"><h2 id="st-server-t" class="nd-group-title">{{ shell.t("Server", "服务器") }}</h2>
+<section aria-labelledby="st-server-t"><h2 id="st-server-t" class="nd-group-title">{{ shell.t("Provider and server", "测速来源与节点") }}</h2>
 {{ servers|safe }}
 </section>
 {{ self.leaf("st-details")|safe }}
+<section aria-labelledby="st-config-t" data-signals="{{ config_signals }}">
+<h2 id="st-config-t" class="nd-group-title">{{ shell.t("LibreSpeed endpoints", "LibreSpeed 节点") }}</h2>
+<div class="nd-group grid gap-3 p-4">
+<p class="nd-aux">{{ shell.t("Auto uses these endpoints when Ookla is unavailable. No endpoints are bundled; add a server reachable from your network. Results depend on the provider and server.", "Ookla 不可用时，自动模式会尝试这里的节点。默认未内置节点，请添加当前网络可访问的服务器。不同来源与节点的测速结果可能不同。") }}</p>
+{% if let Some(e) = config_error %}<p class="st-bad" role="alert">{{ e }}</p>{% endif %}
+<details><summary>{{ shell.t("Configure endpoints", "配置节点") }}</summary>
+<div class="grid gap-3 mt-3">
+<label class="grid gap-1" for="st-config"><span>{{ shell.t("Endpoint configuration (JSON)", "节点配置（JSON）") }}</span><textarea id="st-config" class="nd-field nd-mono" rows="10" spellcheck="false" aria-describedby="st-config-help" data-bind:libreconfig></textarea></label>
+<p id="st-config-help" class="nd-aux">{{ shell.t("Up to 8 servers. Replace the example URL with your own server; Go backends use garbage and empty instead of .php paths. Saving does not run a test.", "最多 8 个节点。请把示例地址换成实际服务器；Go 后端的路径使用 garbage 和 empty，不带 .php。保存不会启动测速。") }}</p>
+<pre class="nd-aux st-config-example">{"librespeed_servers":[{"id":1,"name":"My server","server":"https://example.com/speedtest/","dlURL":"garbage.php","ulURL":"empty.php","pingURL":"empty.php"}]}</pre>
+<button type="button" class="nd-btn nd-btn--secondary" data-on:click="$askconfig = !$askconfig" aria-controls="st-config-confirm" data-attr:aria-expanded="$askconfig ? 'true' : 'false'">{{ shell.t("Save endpoints", "保存节点") }}</button>
+<div id="st-config-confirm" class="nd-confirm" data-show="$askconfig" style="display:none"><p class="nd-confirm__text">{{ shell.t("Replace the saved LibreSpeed endpoint list?", "替换已保存的 LibreSpeed 节点列表？") }}</p><div class="nd-confirm__actions"><button type="button" class="nd-btn nd-btn--confirm" data-on:click="$askconfig = false; @post('/tools/speedtest/config', {retryMaxCount: 0})">{{ shell.t("Confirm: Save", "确认：保存") }}</button><button type="button" class="nd-btn nd-btn--secondary" data-on:click="$askconfig = false">{{ shell.t("Cancel", "取消") }}</button></div></div>
+</div></details>
+<div id="st-config-result" role="status"></div>
+</div></section>
 </div>
 </div>
 {% endblock %}

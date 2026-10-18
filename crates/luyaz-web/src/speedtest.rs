@@ -3,7 +3,7 @@
 //!
 //! ```text
 //!  stream: GET /api/speedtest/progress every 1 s while a test runs (or was just started), else
-//!          every 10 s (another tab or the touch screen may start one); servers once, first step
+//!          every 10 s (another tab or the touch screen may start one); cached servers periodically
 //!  Start = tier 2: inline confirm (states the data cost) ─▶ POST /tools/speedtest/start
 //!          (signals: $server) ─▶ agent /api/speedtest/start; 409 = already running, shown as is
 //!  Stop  = tier 2: inline confirm ─▶ POST /tools/speedtest/stop ─▶ agent stop ─▶ readback: progress
@@ -20,11 +20,11 @@ use axum::extract::{Query, State};
 use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use futures_util::Stream;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use crate::agent::{Caller, Fail, Polled, stopped};
+use crate::agent::{stopped, Caller, Fail, Polled};
 use crate::i18n::Lang;
-use crate::pages::{Shared, StreamQuery, async_stream, patch, split_leaves};
+use crate::pages::{async_stream, patch, split_leaves, Shared, StreamQuery};
 use crate::view::Readout;
 
 const PATH: &str = "/tools/speedtest";
@@ -43,7 +43,7 @@ fn expecting() -> bool {
 }
 
 fn active(phase: &str) -> bool {
-    matches!(phase, "latency" | "download" | "upload")
+    matches!(phase, "discovering" | "latency" | "download" | "upload")
 }
 
 fn done(phase: &str) -> bool {
@@ -66,6 +66,7 @@ fn mb(bytes: f64) -> String {
 
 fn phase_word(p: &str, l: Lang) -> &'static str {
     match p {
+        "discovering" => l.pick("Finding a test server…", "正在寻找测速节点…"),
         "latency" => l.pick("Measuring latency…", "正在测量延迟…"),
         "download" => l.pick("Testing download…", "正在测试下载…"),
         "upload" => l.pick("Testing upload…", "正在测试上传…"),
@@ -178,18 +179,24 @@ fn view(g: &Got, expect: bool, l: Lang) -> View {
                 }),
         ),
         Some(p) if phase == "error" => {
-            let e = p["error"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(l.pick("The device gave no reason", "设备没有给出原因"));
+            let e = p[if l == Lang::En && p["error_en"].is_string() {
+                "error_en"
+            } else {
+                "error"
+            }]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(l.pick("The device gave no reason", "设备没有给出原因"));
             (
                 "bad",
                 l.pick("Speed test failed", "测速没成功").into(),
-                Some(match l {
-                    Lang::En => {
-                        format!("{e} · Check that mobile data is on, then start again.")
+                Some(if p["error_code"].is_string() {
+                    e.to_string()
+                } else {
+                    match l {
+                        Lang::En => format!("{e} · Retry or select another speed-test provider."),
+                        Lang::Zh => format!("{e} · 请重试或切换测速来源。"),
                     }
-                    Lang::Zh => format!("{e} · 确认移动数据开着，再按「开始」。"),
                 }),
             )
         }
@@ -287,9 +294,14 @@ fn servers_of(r: Result<Value, Fail>, l: Lang) -> Result<Vec<(String, String)>, 
                 a.iter()
                     .filter_map(|s| {
                         Some((
-                            s["id"].as_i64()?.to_string(),
                             format!(
-                                "{} — {}, {}",
+                                "{}:{}",
+                                s["provider"].as_str().unwrap_or("ookla"),
+                                s["id"].as_u64()?
+                            ),
+                            format!(
+                                "{} · {} — {}, {}",
+                                s["provider"].as_str().unwrap_or("ookla"),
                                 s["sponsor"].as_str().unwrap_or(""),
                                 s["name"].as_str().unwrap_or(""),
                                 s["country"].as_str().unwrap_or("")
@@ -322,6 +334,7 @@ pub struct Poll {
     l: Lang,
     got: Got,
     servers: Option<String>,
+    servers_at: Option<Instant>,
 }
 
 impl Poll {
@@ -331,6 +344,7 @@ impl Poll {
             l,
             got: Got::default(),
             servers: None,
+            servers_at: None,
         }
     }
 
@@ -360,7 +374,11 @@ impl Poll {
 
 impl Polled for Poll {
     async fn step(&mut self, app: &Shared) -> (Vec<(String, String)>, Duration) {
-        if self.servers.is_none() {
+        if self
+            .servers_at
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(5))
+        {
+            self.servers_at = Some(Instant::now());
             let who = self.who.clone();
             let (_, s) = tokio::join!(
                 self.fetch(app),
@@ -395,6 +413,8 @@ struct Page {
     shell: crate::shell::Shell,
     leaves: Vec<(String, String)>,
     servers: String,
+    config_signals: String,
+    config_error: Option<String>,
 }
 
 impl Page {
@@ -418,8 +438,18 @@ pub async fn page(State(app): State<Shared>, req: axum::extract::Request) -> Res
             Some(format!("{PATH}/events?g={}", st.generation)),
         )
     });
+    let cfg = crate::agent::get(&app, &p.who, "/api/speedtest/config").await;
+    let (config_value, config_error) = match cfg {
+        Ok(v) => (
+            v["config"].clone(),
+            v["load_error"].as_str().map(str::to_owned),
+        ),
+        Err(e) => (Value::Null, Some(e.text(ctx.lang))),
+    };
     let html = Page {
         shell,
+        config_signals: json!({"libreconfig":serde_json::to_string_pretty(&config_value).unwrap_or_default(),"askconfig":false}).to_string(),
+        config_error,
         leaves: p.leaves(),
         servers: ServersFrag {
             s: &Servers {
@@ -493,6 +523,73 @@ fn not_applied(l: Lang, e: &str) -> String {
     }
 }
 
+fn start_request(sig: &Value) -> Value {
+    if let Some(id) = sig["server"].as_u64() {
+        return json!({"provider":"ookla","server_id":id});
+    }
+    let choice = sig["server"].as_str().unwrap_or("auto");
+    if let Some((provider, id)) = choice.split_once(':') {
+        return json!({"provider":provider,"server_id":id.parse::<u64>().unwrap_or(0)});
+    }
+    // Numeric choices are the old Ookla-only client's selection.
+    if let Ok(id) = choice.parse::<u64>() {
+        return json!({"provider":"ookla","server_id":id});
+    }
+    json!({"provider":choice})
+}
+
+/// Save only; no probes or measurements are performed while configuring endpoints.
+pub async fn configure(
+    State(app): State<Shared>,
+    req: axum::extract::Request,
+) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let l = Lang::from_headers(req.headers());
+    let who = Caller::of(&app, &req);
+    let bytes = axum::body::to_bytes(req.into_body(), 64 * 1024)
+        .await
+        .unwrap_or_default();
+    let signals: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    let parsed = signals["libreconfig"]
+        .as_str()
+        .and_then(|s| serde_json::from_str::<Value>(s).ok());
+    let stream = async_stream(move |tx| async move {
+        let result = if let Some(cfg) = parsed {
+            match crate::agent::put_raw(&app, &who, "/api/speedtest/config", &cfg).await {
+                Ok((code, v)) if (200..300).contains(&code) && v["ok"] != false => {
+                    match crate::agent::get(&app, &who, "/api/speedtest/config").await {
+                        Ok(v) if v["config"] == cfg => Ok(()),
+                        _ => Err(l.pick("Saved, but readback could not be verified. Reload before retrying.", "已提交，但未能核对保存结果。请刷新后确认。").to_string()),
+                    }
+                },
+                Ok((code, v)) => Err(crate::agent::refused(code, &v).text(l)),
+                Err(e) => Err(e.text(l)),
+            }
+        } else {
+            Err(l
+                .pick(
+                    "Enter valid LibreSpeed configuration JSON.",
+                    "请输入有效的 LibreSpeed 配置 JSON。",
+                )
+                .to_string())
+        };
+        let (tone, message) = match result {
+            Ok(()) => (
+                "ok",
+                l.pick(
+                    "LibreSpeed endpoints saved and verified.",
+                    "LibreSpeed 节点已保存并核对。",
+                )
+                .to_string(),
+            ),
+            Err(e) => ("bad", e),
+        };
+        let html = op_html(l, tone, &message).replace("id=\"st-op\"", "id=\"st-config-result\"");
+        let _ = tx.send(patch(&html)).await;
+        let _ = app.kick.send(PATH);
+    });
+    Sse::new(stream)
+}
+
 /// Datastar sends the page's signals as the POST body.
 pub async fn start(
     State(app): State<Shared>,
@@ -504,15 +601,7 @@ pub async fn start(
         .await
         .unwrap_or_default();
     let sig: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    let server = match &sig["server"] {
-        Value::String(s) => s.parse::<i64>().ok(),
-        Value::Number(n) => n.as_i64(),
-        _ => None,
-    };
-    let req_body = match server {
-        Some(id) => json!({"server_id": id}),
-        None => json!({}),
-    };
+    let req_body = start_request(&sig);
     let stream = async_stream(move |tx| async move {
         let _ = tx.send(patch(&sending(l))).await;
         let r = crate::agent::post_raw(&app, &who, "/api/speedtest/start", &req_body).await;
@@ -591,7 +680,7 @@ pub async fn servers(
     let l = Lang::from_headers(req.headers());
     let who = Caller::of(&app, &req);
     let stream = async_stream(move |tx| async move {
-        let r = crate::agent::get(&app, &who, "/api/speedtest/servers").await;
+        let r = crate::agent::get(&app, &who, "/api/speedtest/servers?refresh=1").await;
         let html = ServersFrag {
             s: &Servers {
                 l,
@@ -615,6 +704,40 @@ mod tests {
             last_ok: Some(SystemTime::now()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn discovery_and_provider_errors_do_not_claim_the_core_is_down() {
+        let v = view(
+            &got(json!({"phase":"discovering","progress":0})),
+            false,
+            Lang::En,
+        );
+        assert!(v.running && v.word.contains("Finding"));
+        let p = json!({"phase":"error","error":"Ookla 测速服务无法连接", "error_en":"Ookla speed-test service is unreachable", "error_code":"provider_unreachable"});
+        let v = view(&got(p), false, Lang::En);
+        assert!(v.reason.unwrap().contains("Ookla speed-test service"));
+        assert_eq!(
+            start_request(&json!({"server":"librespeed:7"})),
+            json!({"provider":"librespeed","server_id":7})
+        );
+        assert_eq!(
+            start_request(&json!({"server":"ookla"})),
+            json!({"provider":"ookla"})
+        );
+        assert_eq!(
+            start_request(&json!({"server":"auto"})),
+            json!({"provider":"auto"})
+        );
+        let html = ServersFrag {
+            s: &Servers {
+                l: Lang::En,
+                list: Some(Err("Ookla unreachable".into())),
+            },
+        }
+        .render()
+        .unwrap();
+        assert!(html.contains("LibreSpeed") && !html.contains("still works"));
     }
 
     #[test]

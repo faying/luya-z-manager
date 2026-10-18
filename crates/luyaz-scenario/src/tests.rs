@@ -408,3 +408,32 @@ fn chill_back_on_is_waited_for_before_the_main_group() {
     assert!(!keys.contains(&sc::CHILL_ON_KEY.to_string()));
     assert_eq!(keys.len(), 1, "the main group waits for the next scan: {keys:?}");
 }
+
+/// A core restart (up past RESTART_MIN_UPTIME) at home, APs off by the home scenario: bootsafe
+/// keeps the state and touches nothing. The same at boot (up < 300 s) still repairs.
+#[test]
+fn bootsafe_keeps_home_off_after_a_core_restart_not_after_a_boot() {
+    for (mono, kept) in [(600.0, true), (0.0, false)] {
+        let f = Fake::new(if kept { "restart-home" } else { "boot-home" });
+        f.write_config(&config());
+        f.d().mono = mono;
+        f.d().uci.insert(luyaz_wifi::AP_2G.into(), "1".into());
+        f.d().uci.insert(luyaz_wifi::AP_5G.into(), "1".into());
+        let prev = json!({"current": "home", "candidate": "", "hits": 0, "misses": 0,
+            "applied": {luyaz_wifi::AP_2G: "1", luyaz_wifi::AP_5G: "1"},
+            "last_switch": 1, "last_error": null, "last_scan": 1, "scan_failures": 0});
+        fs::write(f.file(STATE_FILE), prev.to_string()).unwrap();
+        let e = Engine::new(f.clone());
+        f.calls();
+        e.bootsafe();
+        let calls = f.calls();
+        if kept {
+            assert!(f.log().contains("[bootsafe] Wi-Fi off by scenario \"home\""), "{}", f.log());
+            assert_eq!(e.run_state().current, "home");
+            assert!(!calls.iter().any(|c| c.starts_with("wifi ")), "{calls:?}");
+        } else {
+            assert!(f.log().contains("[bootsafe] Wi-Fi was down"), "{}", f.log());
+            assert!(calls.iter().any(|c| c.starts_with("wifi ")), "{calls:?}");
+        }
+    }
+}

@@ -1155,19 +1155,24 @@ async fn speed_test_through_the_agents_engine() {
     let c = Compat::new(root.to_str().unwrap(), src).with_writes(true);
     let gate = c.gate.clone();
     let addr = start(c).await;
-    let (st, b) = call(addr, "GET", "/api/speedtest/servers", "").await;
-    assert_eq!((st, b["data"][0]["id"].as_u64()), (200, Some(7)), "{b}");
+    for _ in 0..100 {
+        let (st, b) = call(addr, "GET", "/api/speedtest/servers", "").await;
+        assert_eq!(st, 200, "{b}");
+        if b["data"][0]["id"] == 7 { break; }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     // a diagnosis running: refused with its sentence
     gate.lock().unwrap().diag_since = Some(super::home::now_unix());
     let (st, b) = call(addr, "POST", "/api/speedtest/start", "{}").await;
     assert_eq!((st, b["busy"].as_str()), (409, Some("diagnose")));
     gate.lock().unwrap().diag_since = None;
-    assert_eq!(
-        call(addr, "POST", "/api/speedtest/start", r#"{"server_id":9}"#)
-            .await
-            .0,
-        404
-    );
+    // Unknown IDs are reported by the accepted background job, not by blocking start.
+    assert_eq!(call(addr, "POST", "/api/speedtest/start", r#"{"server_id":9}"#).await.0, 200);
+    for _ in 0..100 {
+        let (_, b) = call(addr, "GET", "/api/speedtest/progress", "").await;
+        if b["data"]["phase"] == "error" { break; }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     let (st, b) = call(addr, "POST", "/api/speedtest/start", r#"{"server_id":7}"#).await;
     assert_eq!((st, b["data"]["status"].as_str()), (200, Some("started")));
     let (st, b) = call(addr, "POST", "/api/speedtest/start", "{}").await;
@@ -1176,7 +1181,7 @@ async fn speed_test_through_the_agents_engine() {
         (409, Some("test already running"))
     );
     let (_, b) = call(addr, "GET", "/api/speedtest/progress", "").await;
-    assert_eq!(b["data"]["server"], "Test (Loop)");
+    assert_eq!(b["data"]["server"], "Ookla · Test (Loop)");
     assert_eq!(
         call(addr, "POST", "/api/speedtest/stop", "{}").await.1["data"]["status"],
         "stopping"
@@ -1306,4 +1311,38 @@ async fn esim_switch_through_the_agents_engine() {
         )]
     );
     assert_eq!(d.lock().unwrap().log[0]["params"], json!({"what": "esim"}));
+}
+
+/// A blocked/slow provider cannot hold the API reply or prevent stopping discovery.
+#[tokio::test]
+async fn speedtest_discovery_is_background_and_config_survives_restart() {
+    let root = std::env::temp_dir().join(format!("luyaz-speed-background-{}", std::process::id()));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/servers", listener.local_addr().unwrap());
+    let mock = axum::Router::new().route("/servers", get(|| async {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        reply(503, json!({"error":"blocked"}))
+    }));
+    tokio::spawn(async move { axum::serve(listener, mock).await });
+    let c = Compat::new(root.to_str().unwrap(), Sources { speed_servers:url, ..Sources::none() }).with_writes(true);
+    let addr = start(c).await;
+    let cfg = json!({"librespeed_servers":[{"id":1,"name":"Local","server":"https://example.com/","dlURL":"garbage.php","ulURL":"empty.php","pingURL":"empty.php"}]});
+    assert_eq!(call(addr, "PUT", "/api/speedtest/config", &cfg.to_string()).await.0, 200);
+    assert_eq!(call(addr, "GET", "/api/speedtest/config", "").await.1["data"]["config"], cfg);
+    let restored = Compat::new(root.to_str().unwrap(), Sources::none());
+    assert_eq!(restored.speed.config().1["data"]["config"], cfg);
+    let t = std::time::Instant::now();
+    assert_eq!(call(addr, "POST", "/api/speedtest/start", r#"{"provider":"ookla"}"#).await.0, 200);
+    assert!(t.elapsed() < Duration::from_millis(500));
+    assert_eq!(call(addr, "POST", "/api/speedtest/start", "{}").await.0, 409);
+    assert_eq!(call(addr, "GET", "/api/speedtest/progress", "").await.1["data"]["phase"], "discovering");
+    assert_eq!(call(addr, "POST", "/api/speedtest/stop", "{}").await.0, 200);
+    for _ in 0..100 {
+        if call(addr, "GET", "/api/speedtest/progress", "").await.1["data"]["phase"] == "cancelled" {
+            let _ = fs::remove_dir_all(root);
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("discovery did not cancel");
 }

@@ -12,10 +12,10 @@
 <p class="nd-confirm__text">{{ v.l.pick("The test ends now; results so far are kept. You can start it again at any time.", "马上结束测速，已经测到的结果会保留。随时可以再开始。") }}</p>
 <div class="nd-confirm__actions"><button type="button" class="nd-btn nd-btn--confirm" data-on:click="$askStop = false; @post('/tools/speedtest/stop', {retryMaxCount: 0})">{{ v.l.pick("Confirm: Stop", "确认：停止") }}</button><button type="button" class="nd-btn nd-btn--secondary" data-on:click="$askStop = false">{{ v.l.pick("Cancel", "取消") }}</button></div>
 </div>{% else %}<div id="st-start-confirm" role="group" aria-label="{{ v.l.pick("Start", "开始") }}" class="nd-confirm" style="display:none" data-show="$ask" data-on:keydown__window="evt.key === 'Escape' && ($ask = false)">
-<p class="nd-confirm__text">{{ v.l.pick("Uses mobile data: one test downloads and uploads for about 10 seconds each — tens to hundreds of MB on a fast connection.", "会用掉移动数据：下载和上传各测约 10 秒，网速快时一次要几十到几百 MB。") }}</p>
+<p class="nd-confirm__text">{{ v.l.pick("Uses mobile data: up to 60 seconds and about 512 MB per test, including fallback attempts.", "会用掉移动数据：每次最多 60 秒、约 512 MB，包含切换备用来源的尝试。") }}</p>
 <div class="nd-confirm__actions"><button type="button" class="nd-btn nd-btn--confirm" data-on:click="$ask = false; @post('/tools/speedtest/start', {retryMaxCount: 0})">{{ v.l.pick("Confirm: Start", "确认：开始") }}</button><button type="button" class="nd-btn nd-btn--secondary" data-on:click="$ask = false">{{ v.l.pick("Cancel", "取消") }}</button></div>
 </div>{% endif %}
-{% if !v.running %}<p id="st-cost" class="nd-aux mt-2 px-1">{{ v.l.pick("Uses mobile data: one test downloads and uploads for about 10 seconds each — tens to hundreds of MB on a fast connection.", "会用掉移动数据：下载和上传各测约 10 秒，网速快时一次要几十到几百 MB。") }}</p>{% endif %}
+{% if !v.running %}<p id="st-cost" class="nd-aux mt-2 px-1">{{ v.l.pick("Uses mobile data: up to 60 seconds and about 512 MB per test, including fallback attempts.", "会用掉移动数据：每次最多 60 秒、约 512 MB，包含切换备用来源的尝试。") }}</p>{% endif %}
 </div>
 <!--leaf-->
 <section id="st-wall" class="nd-wall nd-wall--3" aria-label="{{ v.l.pick("Results", "测速结果") }}">

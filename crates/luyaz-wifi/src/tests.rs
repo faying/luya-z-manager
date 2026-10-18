@@ -108,3 +108,13 @@ fn max_hold_covers_a_normal_apply() {
     assert!(Duration::from_secs(30) + ON_DEADLINE < MAX_HOLD);
     assert!(MAX_HOLD < ENGINE_WAIT);
 }
+
+#[test]
+fn a_reload_is_verified_only_when_hostapd_serves_the_new_name() {
+    let st = "state=ENABLED\nchannel=1\nssid[0]=U-Chill\nbss[0]=wlan0\n";
+    assert!(status_serves(st, Some("U-Chill")));
+    assert!(!status_serves(st, Some("U-Chill-t")), "old hostapd, old name: not yet");
+    assert!(status_serves(st, None), "no name to compare: ENABLED is enough");
+    assert!(!status_serves("state=DISABLED\nssid[0]=U-Chill\n", Some("U-Chill")));
+    assert!(!status_serves(st, Some("U-Chil")), "whole name, not a prefix");
+}

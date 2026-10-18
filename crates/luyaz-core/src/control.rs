@@ -312,7 +312,10 @@ pub async fn execute(action: &str, params: &Value) -> Outcome {
             .await
         }
         "apn.add" => apn(params, "add_manu_apn", false).await,
-        "apn.modify" => apn(params, "modify_manu_apn", true).await,
+        "apn.modify" => match apn_keep_password(params).await {
+            Ok(p) => apn(&p, "modify_manu_apn", true).await,
+            Err(e) => Outcome::Failed(e),
+        },
         "apn.delete" => {
             // 正在用的那条不能删（删了连接就没了，也没法撤销）
             if let Ok(Some(id)) = string(params, "profile_id", true)
@@ -804,6 +807,27 @@ async fn apn_in_use(id: &str) -> bool {
         Some(n) => n.mode == 1 && n.manual == id,
         None => true,
     }
+}
+
+/// `modify_manu_apn` overwrites the whole profile: a call without `password` clears it (seen on
+/// the device 10-18, a rename of a profile not in use). The web's password field is write-only
+/// (empty = keep), so a modify without one carries the profile's current password.
+async fn apn_keep_password(params: &Value) -> Result<Value, String> {
+    if params.get("password").is_some() {
+        return Ok(params.clone());
+    }
+    let id = params.get("profile_id").and_then(Value::as_str).unwrap_or("");
+    let o = "zwrt_apn_object";
+    let (mode, list) = (
+        state::ubus(o, "get_apn_mode", json!({})).await?,
+        state::ubus(o, "get_manu_apn_list", json!({})).await?,
+    );
+    let pw = crate::ops::apn::Now::parse(&mode, &list)
+        .and_then(|n| n.content_of(id).and_then(|c| c.get("password")).cloned())
+        .ok_or_else(|| format!("cannot read the current password of APN profile {id}"))?;
+    let mut p = params.clone();
+    p["password"] = pw;
+    Ok(p)
 }
 
 async fn apn(params: &Value, method: &str, profile_required: bool) -> Outcome {

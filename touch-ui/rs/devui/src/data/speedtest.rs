@@ -10,7 +10,7 @@ use crate::lang::{self, tr};
 use devui_model::speedtest_server_t;
 
 const ST_TTL_MS: i64 = 1000;
-const ST_RESP_MAX: usize = 4096;
+const ST_RESP_MAX: usize = 65536;
 pub const ST_MAX_SERVERS: usize = 24;
 
 pub const ST_IDLE: i32 = 0;
@@ -20,6 +20,7 @@ pub const ST_UPLOAD: i32 = 3;
 pub const ST_COMPLETE: i32 = 4;
 pub const ST_CANCELLED: i32 = 5;
 pub const ST_ERROR: i32 = 6;
+pub const ST_DISCOVERING: i32 = 7;
 
 pub struct Speedtest {
     online: bool,
@@ -37,6 +38,7 @@ pub struct Speedtest {
     srv: Vec<speedtest_server_t>,
     selected: i32,
     srv_last_ms: i64,
+    servers_error: String,
 }
 
 impl Default for Speedtest {
@@ -57,6 +59,7 @@ impl Default for Speedtest {
             srv: Vec::new(),
             selected: -1,
             srv_last_ms: 0,
+            servers_error: String::new(),
         }
     }
 }
@@ -87,6 +90,7 @@ impl Speedtest {
         let ph = jget(&data, "phase", 16);
         self.phase = match ph.as_str() {
             "idle" => ST_IDLE,
+            "discovering" => ST_DISCOVERING,
             "latency" => ST_LATENCY,
             "download" => ST_DOWNLOAD,
             "upload" => ST_UPLOAD,
@@ -102,7 +106,10 @@ impl Speedtest {
         self.dl = get_double(&data, "download_mbps", -1.0);
         self.ul = get_double(&data, "upload_mbps", -1.0);
         jset(&data, "server", 96, &mut self.server);
-        jset(&data, "error", 96, &mut self.error);
+        let zh = jget(&data, "error", 256);
+        let en = jget(&data, "error_en", 256);
+        let en = if en == "null" { "" } else { &en };
+        self.error = lang::pick(&zh, en).to_string();
         if self.error == "null" {
             self.error.clear();
         }
@@ -115,6 +122,7 @@ impl Speedtest {
 
     pub fn phase_label(&self) -> &'static str {
         match self.phase {
+            ST_DISCOVERING => tr("寻找节点…"),
             ST_LATENCY => tr("测延迟中…"),
             ST_DOWNLOAD => tr("下载中…"),
             ST_UPLOAD => tr("上传中…"),
@@ -153,7 +161,7 @@ impl Speedtest {
         &self.start_err
     }
     pub fn running(&self) -> bool {
-        matches!(self.phase, ST_LATENCY | ST_DOWNLOAD | ST_UPLOAD)
+        matches!(self.phase, ST_DISCOVERING | ST_LATENCY | ST_DOWNLOAD | ST_UPLOAD)
     }
     pub fn reachable(&self) -> bool {
         self.online
@@ -163,12 +171,13 @@ impl Speedtest {
     /// (e.g. 409 while a diagnosis runs) in start_error.
     pub fn start(&mut self, agent: &mut CoreApi) -> bool {
         let js = if self.selected >= 0 && (self.selected as usize) < self.srv.len() {
-            format!("{{\"server_id\":{}}}", self.srv[self.selected as usize].id)
+            format!("{{\"provider\":\"{}\",\"server_id\":{}}}", if self.srv[self.selected as usize].provider == "librespeed" { "librespeed" } else { "ookla" }, self.srv[self.selected as usize].id)
         } else {
-            "{}".to_string()
+            match self.selected { -2 => "{\"provider\":\"ookla\"}", -3 => "{\"provider\":\"librespeed\"}", _ => "{\"provider\":\"auto\"}" }.to_string()
         };
         let (code, b) = agent.api("POST", "/api/speedtest/start", Some(&js), ST_RESP_MAX);
         if code == 200 {
+            self.phase = ST_DISCOVERING;
             self.last_ms = 0; // read again at once
         }
         self.start_err.clear();
@@ -205,7 +214,7 @@ impl Speedtest {
         code == 200
     }
 
-    /// The objects of "data":[…] (parse_servers): each cut at 399 bytes.
+    /// The objects of "data":[…] (parse_servers): each bounded at 2048 bytes.
     fn parse_servers(&mut self, body: &[u8]) {
         let Some(a) = find(body, b"\"data\":[", 0) else { return };
         let mut p = a + 8;
@@ -218,8 +227,9 @@ impl Speedtest {
                 break;
             }
             let Some(end) = skip_object(body, p) else { break };
-            let obj = &body[p..=end.min(p + 398)];
+            let obj = &body[p..=end.min(p + 2047)];
             self.srv.push(speedtest_server_t {
+                provider: jget(obj, "provider", 24),
                 id: json::get_int(obj, "id", 0),
                 name: jget(obj, "name", 48),
                 sponsor: jget(obj, "sponsor", 64),
@@ -232,15 +242,30 @@ impl Speedtest {
     /// The server list once (the agent caches it 5 min). true = read now.
     pub fn servers_poll(&mut self, agent: &mut CoreApi, active: bool) -> bool {
         let t = mono_ms();
-        if !active || !self.srv.is_empty() || t - self.srv_last_ms < ST_TTL_MS {
+        if !active || self.running() || t - self.srv_last_ms < 5000 {
             return false;
         }
         self.srv_last_ms = t;
         let (code, b) = agent.api("GET", "/api/speedtest/servers", None, ST_RESP_MAX);
-        let Some(b) = b.filter(|_| code == 200) else { return false };
-        self.parse_servers(&b);
+        self.servers_error.clear();
+        if code == 200 {
+            let selected = self.srv.get(self.selected as usize).map(|s| (s.provider.clone(), s.id));
+            if let Some(b) = b {
+                self.parse_servers(&b);
+                if self.srv.is_empty() { self.servers_error = tr("正在更新节点列表").into(); }
+                if let Some((provider, id)) = selected {
+                    self.selected = self.srv.iter().position(|s| s.id == id && s.provider == provider).map_or(-1, |i| i as i32);
+                }
+            }
+        } else if let Some(b) = b {
+            let zh = jget(&b, "error", 256);
+            let en = jget(&b, "error_en", 256);
+            self.servers_error = lang::pick(&zh, &en).to_string();
+        } else { self.servers_error = tr("节点列表暂不可用，请重试").into(); }
         true
     }
+
+    pub fn servers_error(&self) -> &str { &self.servers_error }
 
     pub fn servers(&self) -> &[speedtest_server_t] {
         &self.srv
@@ -250,7 +275,7 @@ impl Speedtest {
     }
     /// -1 = automatic (the agent picks)
     pub fn select_server(&mut self, i: i32) {
-        self.selected = if i >= 0 && (i as usize) < self.srv.len() { i } else { -1 };
+        self.selected = if (-3..=-1).contains(&i) || (i >= 0 && (i as usize) < self.srv.len()) { i } else { -1 };
     }
 }
 
@@ -299,5 +324,63 @@ mod tests {
         assert_eq!(get_double(br#"{"a":null,"b":"12.5","c":3}"#, "a", -1.0), -1.0);
         assert_eq!(get_double(br#"{"a":null,"b":"12.5","c":3}"#, "b", -1.0), 12.5);
         assert_eq!(get_double(br#"{"a":null,"b":"12.5","c":3}"#, "c", -1.0), 3.0);
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    fn mock(body: &'static str) -> (CoreApi, std::thread::JoinHandle<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut api = CoreApi::default();
+        api.config(listener.local_addr().unwrap().port());
+        let thread = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+            let mut bytes = Vec::new();
+            let mut buf = [0;4096];
+            loop {
+                let n = socket.read(&mut buf).unwrap();
+                if n == 0 { break; }
+                bytes.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&bytes);
+                if let Some((headers, data)) = text.split_once("\r\n\r\n") {
+                    let len:usize = headers.lines().find_map(|s| s.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap())).unwrap_or(0);
+                    if data.len() >= len { break; }
+                }
+            }
+            write!(socket,"HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            String::from_utf8(bytes).unwrap()
+        });
+        (api,thread)
+    }
+    #[test]
+    fn starting_provider_and_explicit_node_are_scoped_and_immediately_running() {
+        let mut speed = Speedtest::default();
+        speed.parse_servers(br#"{"data":[{"id":7,"provider":"librespeed","name":"Fallback","sponsor":"LibreSpeed","country":""}]}"#);
+        for (selection, expected) in [(-1,"\"provider\":\"auto\""),(-2,"\"provider\":\"ookla\""),(-3,"\"provider\":\"librespeed\""),(0,"\"server_id\":7")] {
+            speed.select_server(selection);
+            let (mut api, thread) = mock(r#"{"ok":true,"data":{"status":"started"}}"#);
+            assert!(speed.start(&mut api));
+            assert!(speed.running());
+            let request = thread.join().unwrap();
+            assert!(request.starts_with("POST /v2/api/speedtest/start "));
+            assert!(request.contains(expected), "{request}");
+            if selection == 0 { assert!(request.contains("\"provider\":\"librespeed\"")); }
+        }
+    }
+    #[test]
+    fn provider_error_is_localized_while_core_is_reachable() {
+        lang::set_en(true);
+        let (mut api, thread) = mock(r#"{"ok":true,"data":{"phase":"error","error":"Ookla 服务无法连接","error_en":"Ookla speed-test service is unreachable","error_code":"provider_unreachable"}}"#);
+        let mut speed = Speedtest::default();
+        assert!(speed.poll(&mut api, true));
+        thread.join().unwrap();
+        assert!(speed.reachable());
+        assert_eq!(speed.phase(), ST_ERROR);
+        assert_eq!(speed.error(), "Ookla speed-test service is unreachable");
+        assert!(!speed.running());
+        lang::set_en(false);
     }
 }

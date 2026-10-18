@@ -204,7 +204,10 @@ pub struct Compat {
 impl Compat {
     pub fn new(root: &str, src: Sources) -> Self {
         let root = root.trim_end_matches('/').to_string();
-        let speed = Arc::new(luyaz_speedtest::SpeedTest::new(&src.speed_servers));
+        let speed = Arc::new(
+            luyaz_speedtest::SpeedTest::new(&src.speed_servers)
+                .with_config_path(format!("{root}/speedtest.json")),
+        );
         let net: Arc<netinfo::NetCache> = Arc::default();
         let gate: Arc<std::sync::Mutex<luyaz_api::diagnose::Gate>> = Arc::default();
         let group = Arc::new(watch::Group::new(
@@ -428,6 +431,10 @@ impl Compat {
                 .route(
                     "/api/agent/roam-cheap",
                     get(ops::roam_cheap_get).put(ops::roam_cheap_put),
+                )
+                .route(
+                    "/api/speedtest/config",
+                    get(speed::config).put(speed::configure),
                 )
                 .route("/api/speedtest/servers", get(speed::servers))
                 .route("/api/speedtest/start", post(speed::start))

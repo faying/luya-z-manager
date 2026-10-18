@@ -80,3 +80,5 @@
 .cpu-desc { max-width: 720px; color: var(--nd-t2); }
 .cpu-box { position: relative; height: 64px; }
 .cpu-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+.st-config-example { white-space: pre-wrap; overflow-wrap: anywhere; }

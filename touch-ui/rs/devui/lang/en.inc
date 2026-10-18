@@ -646,3 +646,8 @@
     { "检查失败", "Check failed", NULL },
     { "，暂用 %s", "; on %s for now", NULL },
     { "首选 %s 不通，暂用 %s", "Pick %s is down; on %s for now", NULL },
+    { "寻找节点…", "Finding server…", NULL },
+    { "自动（含备用来源）", "Auto (with fallback)", NULL },
+    { "正在更新节点列表", "Updating server list", NULL },
+    { "节点列表暂不可用，请重试", "Server list unavailable; retry", NULL },
+    { "设备服务没有回应，请稍后重试。", "Device service did not answer. Retry shortly.", NULL },

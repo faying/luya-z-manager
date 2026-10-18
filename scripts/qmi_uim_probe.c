@@ -493,11 +493,12 @@ static int cmd_eid(int s) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s lookup|status|open|eid|simreset|iccid|apps|provision [slot]\n", argv[0]);
+        fprintf(stderr, "Usage: %s lookup|status|open|close <chan>|eid|simreset|iccid|apps|provision [slot]\n", argv[0]);
         return 2;
     }
     /* Optional trailing slot arg (1-based) for open/eid/provision. Default 1. */
-    if (argc >= 3) {
+    int is_close = !strcmp(argv[1], "close");
+    if (argc >= 3 && !is_close) {
         int sl = atoi(argv[2]);
         if (sl >= 1 && sl <= 8) g_slot = (uint8_t)sl;
     }
@@ -509,6 +510,13 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "lookup")) rc = 0;
     else if (!strcmp(argv[1], "status")) rc = cmd_status(s);
     else if (!strcmp(argv[1], "open")) { int c = isdr_open(s); if (c >= 0) { isdr_close(s, c); rc = 0; } }
+    /* Release a logical channel left open by a killed lpac (the modem does
+     * not reclaim it when the QRTR client goes away). */
+    else if (is_close) {
+        int c = argc >= 3 ? atoi(argv[2]) : 0;
+        if (c >= 1 && c <= 19) { isdr_close(s, c); rc = 0; }
+        else fprintf(stderr, "close needs a channel 1-19\n");
+    }
     else if (!strcmp(argv[1], "eid")) rc = cmd_eid(s);
     else if (!strcmp(argv[1], "simreset")) rc = cmd_simreset(s);
     else if (!strcmp(argv[1], "iccid")) { int a = cmd_iccid(s, 6), b = cmd_iccid(s, 0); rc = a || b; }

@@ -660,3 +660,9 @@ U60 在充电	U60 charging
 检查失败	Check failed
 ，暂用 %s	; on %s for now
 首选 %s 不通，暂用 %s	Pick %s is down; on %s for now
+
+寻找节点…	Finding server…
+自动（含备用来源）	Auto (with fallback)
+正在更新节点列表	Updating server list
+节点列表暂不可用，请重试	Server list unavailable; retry
+设备服务没有回应，请稍后重试。	Device service did not answer. Retry shortly.

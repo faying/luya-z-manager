@@ -25,6 +25,26 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 - scripts: `VERSION` is shipped to `/data/luyaz/scripts/` so the scripts' version can be read on the device.
 - scripts: ship's UI-trouble check matches the touch UI's crash line under both names (`u60pro-devui pid … ended:` and `luyaz-ui pid … ended:`). Ship this before sentinel 1.0.2.
 
+## core 1.3.4 — 2026-10-18
+
+- The eSIM ISD-R channel a killed lpac leaves open is closed again: the modem never reclaimed it (measured: two watchdog kills used up every free channel and every eSIM call failed until a reboot). Needs the `qmi_uim_probe` with `close` (`scripts/qmi_uim_probe.c`); an older probe just leaves the channel as before.
+
+## core 1.3.3 — 2026-10-18
+
+- A Wi-Fi settings change is confirmed only once the running hostapd broadcasts the name uci now holds, not merely ENABLED: the vendor reload lands ~40 s late and the old hostapd answered ENABLED with the old name, so the page said done before the change had happened.
+
+## core 1.3.2 — 2026-10-18
+
+- The scenario engine's bootsafe no longer turns Wi-Fi on when only the core restarted (up past 5 min) and the applied scenario (e.g. home) had turned the APs off; it brought Wi-Fi up for ~100 s on every ship. A boot still repairs as before.
+
+## core 1.3.1 — 2026-10-18
+
+- Editing an APN profile that is not in use without typing a password no longer clears its password: `modify_manu_apn` overwrites the whole profile, so the core now sends the current password along (found on the device 10-18).
+
+## lweb 1.1.4 — 2026-10-18
+
+- Changing LAN settings (/router/lan) is off: on the device `router_set_lan_para` reboots the whole U60 and the values only reach `zwrt_router.dhcp`, not `dhcp.lan`. The confirm now says the U60 reboots. `LUYAZ_WEB_LAN_WRITES=1` turns it back on (browser checks).
+
 ## touch 1.0.2 — 2026-10-18
 
 - Placement (摆放模式) on LTE-NSA uses the LTE anchor's SINR when the NR leg reports none, instead of showing "--" ([#4](https://github.com/faying/luya-z-manager/issues/4)).

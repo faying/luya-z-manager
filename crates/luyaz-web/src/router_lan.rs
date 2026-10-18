@@ -423,6 +423,25 @@ pub struct Plan {
     pub range_changed: bool,
 }
 
+/// Writes are off (10-18, on the device): `router_set_lan_para` answered ok, then the firmware
+/// rebooted the whole device; the values landed only in `zwrt_router.dhcp`, not in `dhcp.lan`
+/// (what dnsmasq and the `dhcp` block read). Off until that sync and the reboot are understood;
+/// `LUYAZ_WEB_LAN_WRITES=1` turns them back on (the browser checks against the mock).
+fn writes_off_now() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUYAZ_WEB_LAN_WRITES").as_deref() != Ok("1"))
+}
+
+fn writes_off(l: Lang) -> write::Outcome {
+    write::Outcome::NotYet(
+        l.pick(
+            "Changing LAN settings is off for now: on this device it reboots the whole U60 and the change does not take effect",
+            "暂不开放更改局域网设置：在这台设备上会整机重启，而且改动不生效",
+        )
+        .into(),
+    )
+}
+
 fn not_read(l: Lang) -> write::Outcome {
     write::Outcome::NotYet(
         l.pick(
@@ -704,8 +723,8 @@ pub fn confirm(p: &Plan, c: &Cur, remote: bool, l: Lang) -> write::Confirm {
             )
         } else {
             l.pick(
-                "The LAN restarts: connected devices drop for a moment and fetch a new address.",
-                "局域网会重启：连着的设备短暂断开，再重新拿地址。",
+                "The U60 reboots (about a minute): every connected device drops and fetches a new address.",
+                "U60 会整机重启（约 1 分钟）：所有连着的设备断开，再重新拿地址。",
             )
         }
         .into(),
@@ -1033,7 +1052,9 @@ pub async fn form_open(
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
     let l = ctx.lang;
     one(app.hub.read(|st| {
-        if cur(st).is_some_and(|c| c.editable()) {
+        if writes_off_now() {
+            area(l, ctx.remote, "", None, &write::Phase::Done(writes_off(l)))
+        } else if cur(st).is_some_and(|c| c.editable()) {
             form(true, st, l) + "\n" + &area(l, ctx.remote, "", None, &write::Phase::Idle)
         } else {
             area(l, ctx.remote, "", None, &write::Phase::Done(not_read(l)))
@@ -1066,7 +1087,7 @@ pub async fn ask(State(app): State<Shared>, req: axum::extract::Request) -> impl
     let d: Draft = serde_json::from_slice(&body(req).await).unwrap_or_default();
     let html = app.hub.read(|st| {
         let c = cur(st);
-        match check(&d, c.as_ref(), l) {
+        match check(&d, c.as_ref(), l).and_then(|p| if writes_off_now() { Err(writes_off(l)) } else { Ok(p) }) {
             Err(o) => area(l, ctx.remote, "", None, &write::Phase::Done(o)),
             Ok(p) => {
                 let cf = confirm(&p, c.as_ref().unwrap(), ctx.remote, l);
@@ -1130,7 +1151,7 @@ pub async fn set(
 ) -> impl IntoResponse {
     let l = crate::topbar::Ctx::of_request(&req, PATH).lang;
     let here = by_lan_address(req.headers(), app.hub.read(cur).and_then(|c| c.ip));
-    let w = match take(&q.t) {
+    let w = match take(&q.t).filter(|_| !writes_off_now()) {
         // checked again against what u60d says now
         Some(p) => app.hub.read(|st| {
             let d = Draft {

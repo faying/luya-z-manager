@@ -3,6 +3,7 @@
 // screenshots) and each write path once against the mock u60d (src/mock/router_lan.rs).
 //   WEB=http://127.0.0.1:18215 MOCK=http://127.0.0.1:19415 OUT=/tmp/lw-lan \
 //     crates/luyaz-web/e2e/run.sh router-lan
+// serve needs LUYAZ_WEB_LAN_WRITES=1 (writes are off by default since 10-18: on the device they reboot it).
 import { chromium } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { execSync } from "node:child_process";

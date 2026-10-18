@@ -342,6 +342,8 @@ pub struct esim_profile_t {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct speedtest_server_t {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub provider: String,
     pub id: i64,
     pub name: String,
     pub sponsor: String,

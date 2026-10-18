@@ -76,6 +76,8 @@ pub struct Model {
     pub st_upload_mbps: Option<f64>,
     pub st_server: Option<String>,
     pub st_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub st_servers_error: Option<String>,
     pub st_running: i32,
     pub st_agent_reachable: i32,
     pub st_start_error: Option<String>,

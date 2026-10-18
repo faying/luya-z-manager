@@ -55,6 +55,8 @@ pub const AP_5G: &str = "wireless.main_5g.disabled";
 const HOSTAPD_CTRL: &str = "/data/vendor/wifi/hostapd";
 const IFACE_2G: &str = "wlan0";
 const IFACE_5G: &str = "wlan2";
+const SSID_2G: &str = "wireless.main_2g.ssid";
+const SSID_5G: &str = "wireless.main_5g.ssid";
 /// `hostapd_cli status` gives up after this (the agent's `ubus::CMD_TIMEOUT`).
 const CMD_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -239,11 +241,29 @@ fn hostapd_count() -> usize {
 /// indistinguishable from a wrong `-p` path or a hostapd that has not come up
 /// yet. Proving presence is safe; proving absence is not.
 fn hostapd_enabled(iface: &str) -> bool {
+    hostapd_status(iface).is_some_and(|t| t.contains("state=ENABLED"))
+}
+
+fn hostapd_status(iface: &str) -> Option<String> {
     output_within(Command::new("hostapd_cli").args(["-i", iface, "-p", HOSTAPD_CTRL, "status"]), CMD_TIMEOUT)
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("state=ENABLED"))
-        .unwrap_or(false)
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+}
+
+/// After a settings reload: ENABLED *and* broadcasting the name uci now holds. The vendor reload
+/// lands late (device 10-18: ~40 s after the write); until then the old hostapd still answers
+/// ENABLED with the old name, and "enabled" alone verified a change that had not happened yet.
+/// A name uci can't give is not checked.
+fn hostapd_serves(h: &dyn Host, iface: &str, ssid_key: &str) -> bool {
+    let Some(t) = hostapd_status(iface) else { return false };
+    let want = h.uci_get(ssid_key).filter(|s| !s.is_empty());
+    status_serves(&t, want.as_deref())
+}
+
+fn status_serves(status: &str, ssid: Option<&str>) -> bool {
+    status.contains("state=ENABLED")
+        && ssid.is_none_or(|s| status.lines().any(|l| l.strip_prefix("ssid[0]=") == Some(s)))
 }
 
 fn poll_until(deadline: Duration, mut done: impl FnMut() -> bool) -> bool {
@@ -438,7 +458,7 @@ pub fn settled(h: &dyn Host) -> Option<bool> {
     match current_expectation(h) {
         Expect::On { ap_2g, ap_5g } => {
             let n = hostapd_count();
-            Some(n > 0 && n != usize::MAX && (!ap_2g || hostapd_enabled(IFACE_2G)) && (!ap_5g || hostapd_enabled(IFACE_5G)))
+            Some(n > 0 && n != usize::MAX && (!ap_2g || hostapd_serves(h, IFACE_2G, SSID_2G)) && (!ap_5g || hostapd_serves(h, IFACE_5G, SSID_5G)))
         }
         Expect::Off => Some(hostapd_count() == 0),
         Expect::Unknown => None,
@@ -457,7 +477,7 @@ pub fn reload_and_verify(h: &dyn Host, lk: &WifiLock) -> Value {
     let reload = reload(h, lk);
     let verified = match current_expectation(h) {
         Expect::On { ap_2g, ap_5g } => Some(poll_until(ON_DEADLINE, || {
-            hostapd_count() > 0 && (!ap_2g || hostapd_enabled(IFACE_2G)) && (!ap_5g || hostapd_enabled(IFACE_5G))
+            hostapd_count() > 0 && (!ap_2g || hostapd_serves(h, IFACE_2G, SSID_2G)) && (!ap_5g || hostapd_serves(h, IFACE_5G, SSID_5G))
         })),
         Expect::Off => Some(poll_until(OFF_DEADLINE, || hostapd_count() == 0)),
         Expect::Unknown => None,
