@@ -656,3 +656,5 @@
     { "正在更新节点列表", "Updating server list", NULL },
     { "节点列表暂不可用，请重试", "Server list unavailable; retry", NULL },
     { "设备服务没有回应，请稍后重试。", "Device service did not answer. Retry shortly.", NULL },
+    { "正在检查记住的方式：%s", "Checking the remembered USB choice: %s", NULL },
+    { "自动切换未完成 · 请手动选择 USB 用法", "Automatic USB change did not complete; choose a USB use manually", NULL },

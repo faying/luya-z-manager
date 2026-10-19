@@ -211,7 +211,7 @@ fn reads_the_device_files_as_the_guard() {
         "default route by the cellular link and rc.local starts it"
     );
     assert_eq!(x.ts_ok, Some(false), "no socket: down");
-    assert_eq!(x.rss.get("datad"), Some(&3456));
+    assert_eq!(x.rss.get("core"), Some(&3456));
     assert!(x.free_mb.is_some());
     assert_eq!(x.dump_mb, Some(0));
     // the cap lowered: throttled; raised again: the new highest, not throttled
@@ -282,19 +282,28 @@ fn chill_on_and_healthy() {
     let mut st = ReadState::default();
     let x = st.read(&p, &BTreeMap::new(), now);
     assert!(x.chill_on && x.chill_ok);
-    std::fs::write(p.chill_dir.join("pause_until"), format!("{}\n", now + 600)).unwrap();
+    std::fs::create_dir_all(p.proc_.join("sys/kernel/random")).unwrap();
+    std::fs::write(p.proc_.join("sys/kernel/random/boot_id"), "boot-a\n").unwrap();
+    std::fs::write(p.proc_.join("uptime"), "100.00 0.00\n").unwrap();
+    std::fs::write(p.chill_dir.join("pause.v2"), "v2 boot-a 0 600\n").unwrap();
     assert!(!st.read(&p, &BTreeMap::new(), now).chill_on, "paused");
-    std::fs::remove_file(p.chill_dir.join("pause_until")).unwrap();
-    std::fs::write(&p.chill_idle, format!("{}\n", now + 120)).unwrap();
+    assert!(
+        !st.read(&p, &BTreeMap::new(), now - 28800).chill_on,
+        "wall backstep irrelevant"
+    );
+    std::fs::remove_file(p.chill_dir.join("pause.v2")).unwrap();
+    std::fs::write(&p.chill_idle, "v2 boot-a 0 180\n").unwrap();
+    assert!(!st.read(&p, &BTreeMap::new(), now).chill_on, "idle paused");
+    std::fs::write(&p.chill_idle, "v2 boot-a 0 100\n").unwrap();
+    assert!(st.read(&p, &BTreeMap::new(), now).chill_on, "expired");
+    std::fs::write(&p.chill_idle, "v2 boot-b 0 180\n").unwrap();
+    assert!(st.read(&p, &BTreeMap::new(), now).chill_on, "other boot");
+    std::fs::write(p.chill_dir.join("pause_until"), "1790000000\n").unwrap();
     assert!(
         !st.read(&p, &BTreeMap::new(), now).chill_on,
-        "paused by the core (6e)"
+        "legacy manual pause requires clear"
     );
-    std::fs::write(&p.chill_idle, format!("{}\n", now - 1)).unwrap();
-    assert!(
-        st.read(&p, &BTreeMap::new(), now).chill_on,
-        "a lapsed lease is no pause"
-    );
+    std::fs::remove_file(p.chill_dir.join("pause_until")).unwrap();
     std::fs::remove_file(&p.chill_idle).unwrap();
     // its state is old: on, not healthy
     let x = st.read(&p, &BTreeMap::new(), now + 300);

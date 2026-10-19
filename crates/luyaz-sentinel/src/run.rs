@@ -41,9 +41,9 @@ pub const F_GAVE_UP: &str = "/data/luyaz/screen/gave-up";
 /// On tmpfs on purpose: a reboot always comes back to our UI. Only the give-up and the attempt count
 /// survive a reboot.
 pub const F_WANT: &str = "/tmp/luyaz/screen.want";
-/// Keeps the old name: earlier records live here and the core's crash readers and web health
-/// list this directory; moving it would split the history.
-pub const CRASH_DIR: &str = "/data/crashlog/u60pro-devui";
+/// The touch UI's crash records (`/data/crashlog/<program>/`, Luya-Z F; the core moves the ones
+/// in the old `u60pro-devui` directory here).
+pub const CRASH_DIR: &str = "/data/crashlog/luyaz-ui";
 pub const DRM_DEV: &str = "/dev/dri/card0";
 pub const VENDOR_INIT: &str = "/etc/init.d/zte_topsw_devui";
 pub const VENDOR_COMM: &str = "zte_topsw_devui";

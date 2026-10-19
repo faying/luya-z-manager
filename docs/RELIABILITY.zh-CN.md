@@ -99,7 +99,7 @@
 ## 7. 体检和备份
 
 - `luyaz-core doctor`（进程名 `luyaz-doctor`；`/data/luyaz/scripts/doctor.sh` 是薄壳）。只读。输出：给人看的文字、`--tsv`（`<ok|warn|bad>\t<id>\t<名称>\t<说明>`）、`--tsv2`（头 `#tsv2`，英文）；有 bad 行退出码 1。另有 `--manifest`、`--tree-fp`、`--ledger-selftest`。
-- `--calibrate-standby` 写待机基线（第 8 节）。`--report` 核心不做（退出 64），薄壳转给 `doctor-legacy.sh`。
+- `--calibrate-standby` 写待机基线（第 8 节）；`--report 24h|7d [--summary]` 输出长期计分卡（`scorecard::live::card`，Core 1.3.0 / `7637b1b1e` 已搬进核心）。`doctor.sh` 只在核心不存在、早于 X11 或退出 64 时退回 `doctor-legacy.sh`。
 - 核心自己跑体检（启动后 20 秒第一次，之后定时），快照由 `/api/health` 提供。
 - `touch-ui/scripts/config-backup.sh`：只备份配置（清单在脚本开头），Tailscale 身份要 `--with-tailscale`。备份只存在电脑上（`./install.sh backup`）；`restore` 先 plan、写前留 `.pre-restore`、不 reload Wi-Fi。
 
@@ -111,12 +111,12 @@
 
 ## 9. 时钟判定、崩溃记录、`.migrated`
 
-- **时钟** `/tmp/luyaz/clock-ok`：`<1|0> <墙钟−开机秒> <开机秒> <依据>`（`vendor|jump|last_wall|year|revoked|none`），哨兵写；短信路径、核心长期存储、doctor 读。哨兵把 `/data/ledger/state/wall.last`（最多每小时一次）留作跨重启的依据。
+- **时钟** `/tmp/luyaz/clock-ok`：第一行 `<1|0> <墙钟−开机秒> <开机秒> <依据>`（`vendor|jump|last_wall|year|revoked|none`）；第二行（`94fec16ec` 起）为 v2 `ClockEvidence` JSON（`raw_wall`、带 `boot_id`/BOOTTIME 的 `observed_at`、`monotonic`、`source`、`sync_state`），哨兵写；短信路径、核心长期存储、排程器与 doctor 读。v2 读端要求两行一致、属于当前 boot、年龄 ≤ 180 秒且相对 BOOTTIME 漂移 ≤ 5 秒（哨兵升级到 `94fec16ec` 之后前若仍只写单行，v2 读端按 `Unknown` 保守暂缓短信与日历任务）。哨兵把 `/data/ledger/state/wall.last`（最多每小时一次）留作跨重启的依据。
 - **服务崩溃**：核心 `svcwatch.rs` 写 `/data/crashlog/<名字>/`（每个程序 5 个、合计 1 MB），按第 4 节告警；主动停止或重启不算崩溃。核心自己的崩溃靠标记 `/data/luyaz/core/core.running` 发现。
 - **基带崩溃**：核心 `crashwatch.rs`（kmsg + netlink），状态 `/tmp/luyaz/core/crashwatch.json`，事件进长期存储 `/data/luyaz/core/long`。
 - **`.migrated`**：`/tmp/luyaz/.migrated` 由哨兵最后写，前提是 `clock-ok` 已有、handover 文件等于核心的全部职责；ship 拉起哨兵前先删它。`/data/luyaz/core/.migrated` 是核心新布局的开关。目录在却没有它，doctor 报「搬了一半」。
 
-## 10. Finding 探测预算（本机 P0-02 修订，未部署）
+## 10. Finding 探测预算（P0-02 修订，已提交 `94fec16ec`，Core `5db284761` 已上机）
 
 - Core `api/finding/budget.rs` 管 `/data/luyaz/core/findings.probe-budget.json`：`{"version":1,"last":{"boot_id":"…","seconds":600}}`。独立于 Finding 存储；换卡、恢复或忽略告警都不清零。BOOTTIME 包含休眠，准入不用墙钟。
 - 每轮 Finding HTTP/DNS 请求前，在 `findings.probe-budget.lock` 上拿非阻塞独占锁，锁内重读预算；写 `findings.probe-budget.tmp`、fsync 文件、rename、fsync 目录后，才允许发包。任一步失败都不发包，内存重试期限仍前移 600 秒。不写完成记录，不随每轮采样写预算；预留后崩溃也算已用。

@@ -61,6 +61,8 @@ fn item_words(item: &str) -> (&'static str, &'static str, &'static str) {
         APN => ("正在换 APN", "APN", "APN"),
         WIFI_MAIN => ("正在改 Wi-Fi", "Wi-Fi", "Wi-Fi"),
         WIFI_GUEST => ("正在改访客 Wi-Fi", "访客 Wi-Fi", "Guest Wi-Fi"),
+        super::chill::PROFILE => ("正在换 CHILL 档位", "CHILL 档位", "CHILL profile"),
+        super::chill::EXIT => ("正在换 CHILL 出口", "CHILL 出口", "CHILL exit"),
         "netselect.session" => ("正在搜网", "搜网", "Network search"),
         _ => ("正在改设置", "设置", "Setting"),
     }
@@ -77,6 +79,8 @@ pub fn value_words(item: &str, v: &Value) -> Words {
         (APN, v) => apn_words(v),
         // Wi-Fi：总开关、名称，其余只说几项；密码和指纹都不显示
         (WIFI_MAIN | WIFI_GUEST, v) => super::wifi::words(v),
+        (super::chill::PROFILE, Value::String(s)) => chill_profile_words(s),
+        (super::chill::EXIT, Value::String(s)) => chill_exit_words(s),
         (BAND_NR | BAND_ALL, Value::Object(m)) if m.contains_key("reset") => {
             ("默认".into(), "Default".into())
         }
@@ -136,6 +140,27 @@ fn apn_words(v: &Value) -> Words {
         Some(1) => (format!("手动 · {manual}"), format!("Manual · {manual}")),
         _ => ("-".into(), "-".into()),
     }
+}
+
+fn chill_profile_words(s: &str) -> Words {
+    let (zh, en) = match s {
+        "eco" => ("省电", "Eco"),
+        "standard" => ("标准", "Standard"),
+        "perf" => ("性能", "Performance"),
+        _ => (s, s),
+    };
+    (zh.into(), en.into())
+}
+
+fn chill_exit_words(s: &str) -> Words {
+    let (zh, en) = match s {
+        "proxy" => ("代理", "Proxy"),
+        "direct_keep_ai" => ("直连 · AI 不动", "Direct · AI stays"),
+        "direct_all" => ("全部直连", "All direct"),
+        "global" => ("全局", "Global"),
+        _ => (s, s),
+    };
+    (zh.into(), en.into())
 }
 
 /// 一组频段：6 个以内逐个写（`B1 B3`），再多只写个数。
@@ -299,6 +324,9 @@ pub struct Ctx {
 
 /// DD10：能不能撤销，不能时的原因。
 fn undo_denied(t: &Txn, ctx: Ctx) -> Option<(&'static str, &'static str)> {
+    if super::txn::blank(&t.old) {
+        return Some(("没有旧值可退回", "No previous value"));
+    }
     if ctx.later_change {
         return Some(SINCE);
     }
@@ -389,9 +417,13 @@ pub fn view(t: &Txn, now: u64, ctx: Ctx) -> Value {
         .readback
         .as_ref()
         .is_some_and(|r| super::txn::matches(goal(t), r));
-    // Wi-Fi 的项：第二步是 AP 已按设置起来（读数的 registered 在这里是这个意思），第三步不等数据
+    let chill = matches!(t.confirm, super::txn::Confirm::Chill);
+    // Wi-Fi 的项：第二步是 AP 已按设置起来（读数的 registered 在这里是这个意思），第三步不等数据；
+    // CHILL 的项：第二步是 mihomo 在运行，第三步是经代理出口连续两次通。
     let (reg_zh, reg_en, data_zh, data_en) = if wifi {
         ("Wi-Fi 已起来", "Wi-Fi up", "不用等数据", "No data check")
+    } else if chill {
+        ("CHILL 在运行", "CHILL running", "出口连通", "Exit reachable")
     } else {
         ("已注册", "Registered", "数据", "Data")
     };
@@ -401,6 +433,7 @@ pub fn view(t: &Txn, now: u64, ctx: Ctx) -> Value {
         {"key": "data", "zh": data_zh, "en": data_en, "done": t.data_ok},
     ]);
     let can = t.phase == Phase::Verifying && t.counting();
+    let can_revert = can && !super::txn::blank(&t.rollback_to);
     let undo = if live {
         Value::Null
     } else {
@@ -451,7 +484,7 @@ pub fn view(t: &Txn, now: u64, ctx: Ctx) -> Value {
     put("revert_label_en", json!(format!("Revert to {}", x.1)));
     put("keep_label_zh", json!(cat("保留", &y.0)));
     put("keep_label_en", json!(format!("Keep {}", y.1)));
-    put("can_revert", json!(can));
+    put("can_revert", json!(can_revert));
     put("can_keep", json!(can));
     put("undo", undo);
     v

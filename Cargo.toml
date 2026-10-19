@@ -18,8 +18,7 @@ license = "MIT"
 
 [profile.release]
 opt-level = "z"
-lto = true
-codegen-units = 1
+lto = "thin"
 strip = true
 
 # u60d's device build (`cargo zigbuild --profile release-device -p luyaz-core`): the same settings as

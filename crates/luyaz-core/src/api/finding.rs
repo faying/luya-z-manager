@@ -298,6 +298,14 @@ pub(super) fn redirected(root: &str) -> bool {
     }
 }
 
+/// This load's random identity for the store (decision-execution-loop §4.1 D2); unreadable =
+/// "" = nothing executable.
+fn new_epoch() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/random/uuid")
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_default()
+}
+
 /// The open findings and the suppressed table, and when the last probing check ran.
 pub struct Findings {
     store: Mutex<Store>,
@@ -319,7 +327,8 @@ impl Findings {
             .ok()
             .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
             .map(|v| Store::from_value(&v))
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .with_epoch(new_epoch());
         let f = Findings {
             store: Mutex::new(store),
             path: path.clone(),
@@ -477,12 +486,32 @@ impl Findings {
                 why: "snapshot_or_connection_changed",
             });
         }
-        self.observe(&v, &i.iccid, watch, now);
+        let boot = BootTime::read();
+        self.observe_at(
+            &v,
+            &i.iccid,
+            watch,
+            now,
+            boot.as_ref().or(i.observed.as_ref()),
+        );
         Some(v)
     }
 
+    #[cfg(test)]
     pub(super) fn observe(&self, v: &Verdict, iccid: &str, watch: &Watch, now: u64) {
-        let changes = lock(&self.store).observe(v, iccid, now);
+        let boot = BootTime::read();
+        self.observe_at(v, iccid, watch, now, boot.as_ref());
+    }
+
+    pub(super) fn observe_at(
+        &self,
+        v: &Verdict,
+        iccid: &str,
+        watch: &Watch,
+        now: u64,
+        boot: Option<&BootTime>,
+    ) {
+        let changes = lock(&self.store).observe_at(v, iccid, now, boot);
         self.apply(&changes, watch, now);
         // the confidence of an open one can change without a transition
         self.publish();
@@ -492,6 +521,18 @@ impl Findings {
     /// `kind` seen most recently, checked against the ICCID's last 4 digits when given (the
     /// view never carries the whole ICCID). False: nothing open matches.
     pub fn dismiss_shown(&self, kind: &str, tail: Option<&str>, watch: &Watch, now: u64) -> bool {
+        let boot = BootTime::read();
+        self.dismiss_shown_at(kind, tail, watch, now, boot.as_ref())
+    }
+
+    pub fn dismiss_shown_at(
+        &self,
+        kind: &str,
+        tail: Option<&str>,
+        watch: &Watch,
+        now: u64,
+        boot: Option<&BootTime>,
+    ) -> bool {
         let iccid = {
             let s = lock(&self.store);
             let Some(e) = s
@@ -504,7 +545,7 @@ impl Findings {
             };
             e.iccid.clone()
         };
-        let changes = lock(&self.store).dismiss(kind, &iccid, now);
+        let changes = lock(&self.store).dismiss_at(kind, &iccid, now, boot);
         self.apply(&changes, watch, now);
         !changes.is_empty()
     }

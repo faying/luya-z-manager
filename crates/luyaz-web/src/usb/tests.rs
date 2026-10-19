@@ -24,10 +24,31 @@ fn hub_with(cc: i64, pb: i64, mode: &str) -> Arc<Hub> {
     hub
 }
 
-fn agent(settable: Option<bool>) -> Agent {
+pub(crate) fn agent(settable: Option<bool>) -> Agent {
     let mut v = json!({"connect": 0, "mode": "rndis", "typec_cc": "cc1", "usb2rj45": 0});
     if let Some(s) = settable {
         v["mode_settable"] = json!(s);
+    }
+    // Synthetic Core policies, independent of the legacy compatibility bool.
+    for id in ["usb.mode.set", "usb.attach.share", "usb.attach.fast_charge"] {
+        let status = if id == "usb.mode.set" {
+            settable
+        } else {
+            Some(true)
+        };
+        v["write_policies"][id] = json!({
+            "disposition": match status { Some(false) => "denied", Some(true) => "ready", None => "human_preflight" },
+            "assessment": {
+                "capability_id":id, "status": match status { Some(false)=>"unsupported",Some(true)=>"supported",None=>"unknown" },
+                "reason":"no_evidence", "evidence_ids":[], "contradicting_evidence_ids":[],
+                "availability":{"state":"unknown","reason":"synthetic"},
+                "scope":{"device_id":"synthetic", "fingerprint":null,"collector_id":"synthetic","generation":0,
+                    "rule_revision":1,"adapter_revision":1,"component_revision":"synthetic","cohort":"unknown",
+                    "context":{"ubus_epoch":null,"usb_epoch":null,"sim_epoch":null,"connection_epoch":null,"radio_mode":null}},
+                "freshness":{"fresh":false,"max_age_seconds":60,"age_seconds":null},
+                "validation":null,"last_attempt_evidence_id":null,"selected_dialect":null
+            }
+        });
     }
     let mut a = Agent::default();
     a.update(Ok(v));
@@ -58,7 +79,8 @@ fn agent_fields_like_the_old_page() {
             cc: Some("no_cc".into()),
             mode: Some("mtp".into()),
             rj45: Some(true),
-            settable: Some(false)
+            settable: Some(false),
+            policies: Default::default(),
         }
     );
     assert_eq!(port(&json!({})).settable, None, "absent = unknown");
@@ -75,7 +97,7 @@ fn values_come_from_the_blocks_and_the_agent() {
     assert!(v.modes.iter().all(|m| !m.2), "no radio selected");
     assert!(
         !v.mode_dis && !v.fixed,
-        "unknown settable: like the old page"
+        "unverified human action keeps the confirmation path"
     );
     // nothing plugged in (typec block): fast charging can't be switched
     assert!(v.pb_dis && v.pb == Some(false));
@@ -317,4 +339,25 @@ fn a_lost_reply_area_posts_back_with_the_target() {
     );
     assert!(d.contains("<dialog") && d.contains("Tailscale") && d.contains("nd-btn--danger"));
     assert!(d.contains("/usb/mode/set?mode=debug"));
+}
+
+#[test]
+fn legacy_bools_and_missing_or_broken_policies_cannot_offer_a_write() {
+    for data in [
+        json!({"mode_settable":true}),
+        json!({"mode_settable":false}),
+        json!({"mode_settable":true,"write_policies":{"usb.mode.set":{"disposition":"ready"}}}),
+    ] {
+        let mut a = Agent::default();
+        a.update(Ok(data));
+        assert!(mode_gate(&a, Lang::En).is_some());
+        assert!(
+            hub_with(1, 0, "user")
+                .read(|st| pb_gate(st, &a, Lang::En))
+                .is_err()
+        );
+    }
+    let a = agent(None);
+    let v = hub_with(1, 0, "user").read(|st| view(st, &a, &Busy::default(), Lang::Zh));
+    assert!(!v.mode_dis && html(&v).contains("尚未验证"));
 }

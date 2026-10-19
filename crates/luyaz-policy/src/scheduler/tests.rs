@@ -33,7 +33,10 @@ fn forbidden_paths() {
         ("/API/DEVICE/FACTORY-RESET?x=1", Some("factory reset")),
         ("/api/system//kill-bloat/", Some("kill-bloat")),
         ("/api/device/%70oweroff", Some("an encoded or dotted path")),
-        ("/api/device/./factory-reset", Some("an encoded or dotted path")),
+        (
+            "/api/device/./factory-reset",
+            Some("an encoded or dotted path"),
+        ),
         ("/api/wifi/../at/send", Some("an encoded or dotted path")),
         ("/api/device/power-save", None),
     ] {
@@ -260,4 +263,45 @@ fn scheduler_json_round_trips() {
     let old: Job =
         serde_json::from_str(&text.replace(",\"last_restore_status\":null", "")).unwrap();
     assert_eq!(old, j);
+}
+
+#[test]
+fn due_refuses_unsynced_clock_and_survives_backward_8h_clock_jumps() {
+    let mut rec = recurring(1, "03:00", &[0]);
+    rec.restore = Some(Restore {
+        time: "07:00".into(),
+        body: None,
+    });
+    let mut once = job(2, "/api/wifi/radio", true);
+    once.schedule = Schedule::Once { at: 1_500_000_000 };
+
+    // 1. Before SNTP sets the clock (`now_ts < CLOCK_SET`), nothing fires even if HH:MM or `at` matches.
+    for unsynced in [0, 1_000, 1_500_000_001, CLOCK_SET - 1] {
+        assert!(
+            due(&[rec.clone(), once.clone()], unsynced, 3, 0, 0).is_empty(),
+            "unsynced {unsynced}"
+        );
+    }
+
+    // 2. Small backward clock adjustment (<= 60 s) in the same minute still guards against double firing.
+    rec.last_run = Some(NOW);
+    assert!(due(std::slice::from_ref(&rec), NOW - 30, 3, 0, 0).is_empty());
+    assert!(due(std::slice::from_ref(&rec), NOW - 60, 3, 0, 0).is_empty());
+
+    // 3. Large backward clock jump (-8h = -28_800 s) does NOT wedge the recurring job or its restore.
+    assert_eq!(
+        due(std::slice::from_ref(&rec), NOW - 28_800, 3, 0, 0),
+        vec![(1, false)]
+    );
+
+    // 4. If a previous restore was recorded at `NOW + 4 * 3600` and the clock later jumped backward
+    //    by -8h before the next main run at `NOW - 28_800`, `record` clears the future `last_restore`
+    //    so the upcoming restore at 07:00 still fires.
+    rec.last_restore = Some(NOW + 4 * 3600);
+    record(&mut rec, false, Some(200), None, NOW - 28_800);
+    assert_eq!(rec.last_restore, None);
+    assert_eq!(
+        due(std::slice::from_ref(&rec), NOW - 14_400, 7, 0, 0),
+        vec![(1, true)]
+    );
 }

@@ -262,7 +262,7 @@ pub enum Act {
     ClearGaveUp,
     WantVendor,
     ClearWant,
-    /// Leave a crash record in /data/crashlog/u60pro-devui (5 kept).
+    /// Leave a crash record in /data/crashlog/luyaz-ui (5 kept).
     RecordCrash(String),
     /// `/etc/init.d/zte_topsw_devui stop` + `killall -9`.
     StopVendor,

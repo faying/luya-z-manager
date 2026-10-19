@@ -1,8 +1,8 @@
 //! 8d-1d: scheduled jobs, u60d's with writes on.
 
-use crate::engines::scheduler::{Caller, NO_RESULT, now_local, tick};
 use super::tests_ops::{Dev, Shared, control_server, start};
 use super::*;
+use crate::engines::scheduler::{Caller, NO_RESULT, clock_usable, now_local, tick, tick_at};
 use std::fs;
 use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -98,7 +98,12 @@ fn base_job(id: u32, method: &str, path: &str, schedule: Value) -> Value {
 fn a_once_reboot_is_marked_before_it_runs_and_never_runs_again() {
     let root = dir("reboot");
     let p = jobs_at(&root);
-    let j = base_job(1, "POST", "/api/device/reboot", json!({"type": "once", "at": MON_3.0 - 30}));
+    let j = base_job(
+        1,
+        "POST",
+        "/api/device/reboot",
+        json!({"type": "once", "at": MON_3.0 - 30}),
+    );
     fs::write(&p, json!({"jobs": [j]}).to_string()).unwrap();
     let p2 = p.clone();
     let mut fake = Fake::new(|_| (200, json!({"ok": true})));
@@ -110,9 +115,15 @@ fn a_once_reboot_is_marked_before_it_runs_and_never_runs_again() {
         assert_eq!(j["last_error"], NO_RESULT, "{j}");
     });
     assert_eq!(tick(&p, &fake, MON_3), 1);
-    assert_eq!(fake.calls(), vec![("POST".into(), "/api/device/reboot".into(), "".into())]);
+    assert_eq!(
+        fake.calls(),
+        vec![("POST".into(), "/api/device/reboot".into(), "".into())]
+    );
     let j = job(&read(&p), 1);
-    assert_eq!((j["last_status"].clone(), j["last_error"].clone()), (json!(200), Value::Null));
+    assert_eq!(
+        (j["last_status"].clone(), j["last_error"].clone()),
+        (json!(200), Value::Null)
+    );
 
     // the device rebooted before the result came back: the mark alone keeps it from running again
     let mut j = job(&read(&p), 1);
@@ -154,7 +165,10 @@ fn recurring_runs_once_a_minute_and_unsupported_or_forbidden_are_recorded() {
     assert_eq!(job(&v, 2)["last_error"], "不支持：u60d 没有这个路径");
     let f = job(&v, 3);
     assert_eq!(f["enabled"], false);
-    assert!(f["last_error"].as_str().unwrap().starts_with("已停用："), "{f}");
+    assert!(
+        f["last_error"].as_str().unwrap().starts_with("已停用："),
+        "{f}"
+    );
     // next Monday it runs again
     assert_eq!(tick(&p, &fake, (MON_3.0 + 7 * 86400, 3, 0, 0)), 2);
     let _ = fs::remove_dir_all(&root);
@@ -164,19 +178,31 @@ fn recurring_runs_once_a_minute_and_unsupported_or_forbidden_are_recorded() {
 fn a_once_job_with_restore_runs_then_puts_back_with_the_restore_body() {
     let root = dir("restore");
     let p = jobs_at(&root);
-    let mut j = base_job(1, "PUT", "/api/wifi/guest", json!({"type": "once", "at": MON_3.0 - 10}));
+    let mut j = base_job(
+        1,
+        "PUT",
+        "/api/wifi/guest",
+        json!({"type": "once", "at": MON_3.0 - 10}),
+    );
     j["action"]["body"] = json!({"enabled": true});
     j["restore"] = json!({"time": "04:00", "body": {"enabled": false}});
     fs::write(&p, json!({"jobs": [j]}).to_string()).unwrap();
     let fake = Fake::new(|_| (200, json!({"ok": true})));
     assert_eq!(tick(&p, &fake, MON_3), 1);
-    assert_eq!(job(&read(&p), 1)["enabled"], true, "a once job with a restore stays on");
+    assert_eq!(
+        job(&read(&p), 1)["enabled"],
+        true,
+        "a once job with a restore stays on"
+    );
     assert_eq!(tick(&p, &fake, (MON_3.0 + 3600, 4, 0, 0)), 1);
     let calls = fake.calls();
     assert_eq!(calls[0].2, r#"{"enabled":true}"#);
     assert_eq!(calls[1].2, r#"{"enabled":false}"#);
     let j = job(&read(&p), 1);
-    assert_eq!((j["enabled"].clone(), j["last_restore_status"].clone()), (json!(false), json!(200)));
+    assert_eq!(
+        (j["enabled"].clone(), j["last_restore_status"].clone()),
+        (json!(false), json!(200))
+    );
     assert_eq!(tick(&p, &fake, (MON_3.0 + 86400 + 3600, 4, 0, 1)), 0);
     let _ = fs::remove_dir_all(&root);
 }
@@ -203,8 +229,18 @@ async fn routes_are_served_with_writes_on_and_the_reboot_carries_the_source() {
         "action":{"method":"POST","path":"/api/esim/switch"}}"#;
     let (st, _) = call(addr, "POST", "/api/scheduler/jobs", bad).await;
     assert_eq!(st, 400);
-    let (st, b) = call(addr, "PUT", "/api/scheduler/jobs/toggle", r#"{"id":1,"enabled":false}"#).await;
-    assert_eq!((st, b["data"]["enabled"].clone()), (200, json!(false)), "{b}");
+    let (st, b) = call(
+        addr,
+        "PUT",
+        "/api/scheduler/jobs/toggle",
+        r#"{"id":1,"enabled":false}"#,
+    )
+    .await;
+    assert_eq!(
+        (st, b["data"]["enabled"].clone()),
+        (200, json!(false)),
+        "{b}"
+    );
     // the agent's file shape: it can take the jobs back
     let v = read(&jobs_at(&root));
     assert_eq!(v.len(), 1);
@@ -215,11 +251,20 @@ async fn routes_are_served_with_writes_on_and_the_reboot_carries_the_source() {
     assert_eq!(st, 404);
 
     // a scheduled reboot: device.reboot as the scheduler
-    let (st, b) =
-        call_with(addr, "POST", "/api/device/reboot", "X-U60-Source: scheduler\r\n", "").await;
+    let (st, b) = call_with(
+        addr,
+        "POST",
+        "/api/device/reboot",
+        "X-U60-Source: scheduler\r\n",
+        "",
+    )
+    .await;
     assert_eq!(st, 200, "{b}");
     let log = d.lock().unwrap().log.clone();
-    let r = log.iter().find(|v| v["action"] == "device.reboot").expect("reboot sent");
+    let r = log
+        .iter()
+        .find(|v| v["action"] == "device.reboot")
+        .expect("reboot sent");
     assert_eq!(r["source"], "scheduler");
     let _ = fs::remove_dir_all(&root);
 }
@@ -228,4 +273,96 @@ async fn routes_are_served_with_writes_on_and_the_reboot_carries_the_source() {
 fn local_time_is_in_range() {
     let (ts, hh, mm, dow) = now_local();
     assert!(ts > 1_700_000_000 && hh < 24 && mm < 60 && dow < 7);
+}
+
+#[test]
+fn clock_evidence_and_boottime_cooldown_gate_scheduled_jobs_under_8h_jumps() {
+    use luyaz_api::clock::{BootTime, ClockEvidence, ClockSource};
+    use std::collections::HashMap;
+
+    let root = dir("clock-gate");
+    let p = jobs_at(&root);
+    let every = json!({"type": "recurring", "time": "03:00", "days": [0]});
+    let mut forbidden = base_job(2, "POST", "/api/esim/switch", every.clone());
+    forbidden["enabled"] = json!(true);
+    fs::write(
+        &p,
+        json!({"jobs": [base_job(1, "PUT", "/api/wifi/guest", every), forbidden]}).to_string(),
+    )
+    .unwrap();
+    let fake = Fake::new(|_| (200, json!({"ok": true})));
+    let boot = |id: &str, seconds: u64| BootTime {
+        boot_id: id.into(),
+        seconds,
+    };
+
+    // 1. Unusable clock (legacy 1-line or revoked/jumped evidence): forbidden jobs are still
+    //    disabled, but due jobs do NOT fire.
+    let b0 = boot("b1", 100);
+    let mut cd = HashMap::new();
+    assert!(!clock_usable("1 1791774000 100 year\n", Some(&b0), MON_3.0));
+    assert_eq!(tick_at(&p, &fake, MON_3, false, Some(&b0), &mut cd), 0);
+    assert!(fake.calls().is_empty());
+    assert_eq!(
+        job(&read(&p), 2)["enabled"],
+        false,
+        "forbidden still disabled"
+    );
+
+    // 2. Valid current-boot v2 ClockEvidence allows the recurring job to fire once.
+    let ev =
+        ClockEvidence::observation(MON_3.0, b0.clone(), Some(28_800), ClockSource::Year).encode();
+    assert!(clock_usable(&ev, Some(&b0), MON_3.0));
+    assert_eq!(tick_at(&p, &fake, MON_3, true, Some(&b0), &mut cd), 1);
+    assert_eq!(fake.calls().len(), 1);
+
+    // 3. Even if the wall clock jumps to the next week's Monday 03:00 (`+7d`) only 30s of BootTime
+    //    later, the 60s BootTime cooldown blocks firing the same job again inside 60s of boot time.
+    let b_30s = boot("b1", 130);
+    assert_eq!(
+        tick_at(
+            &p,
+            &fake,
+            (MON_3.0 + 7 * 86_400, 3, 0, 0),
+            true,
+            Some(&b_30s),
+            &mut cd,
+        ),
+        0
+    );
+    assert_eq!(fake.calls().len(), 1);
+
+    // 4. A ±8h wall-clock step before Sentinel's next round (`WallChanged`) or after Sentinel locks
+    //    `Revoked` makes `clock_usable` false.
+    let b_40s = boot("b1", 140);
+    for step in [-28_800i64, 28_800] {
+        assert!(
+            !clock_usable(&ev, Some(&b_40s), MON_3.0 + 40 + step),
+            "step {step} must be rejected"
+        );
+    }
+    let revoked = ClockEvidence::observation(
+        MON_3.0 + 28_800,
+        b_40s.clone(),
+        Some(28_800),
+        ClockSource::Revoked,
+    )
+    .encode();
+    assert!(!clock_usable(&revoked, Some(&b_40s), MON_3.0 + 28_800));
+
+    // 5. After >60s of BootTime and with valid clock, the next week's run is allowed.
+    let b_61s = boot("b1", 161);
+    assert_eq!(
+        tick_at(
+            &p,
+            &fake,
+            (MON_3.0 + 7 * 86_400, 3, 0, 0),
+            true,
+            Some(&b_61s),
+            &mut cd,
+        ),
+        1
+    );
+    assert_eq!(fake.calls().len(), 2);
+    let _ = fs::remove_dir_all(&root);
 }

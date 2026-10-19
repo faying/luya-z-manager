@@ -167,7 +167,7 @@ impl Ui {
         } else if m.notice_ok != 0 {
             // a write datad turned down (the data side keeps it for 4 s)
             let n = &m.notice;
-            let txt = if n.kind == CTL_BUSY && !n.say_zh.is_empty() {
+            let txt = if !n.say_zh.is_empty() {
                 pick(&n.say_zh, &n.say_en)
             } else if n.kind == CTL_BUSY {
                 tr("正在改别的设置，稍等")

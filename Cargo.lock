@@ -1251,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-core"
-version = "1.4.4"
+version = "1.5.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1358,7 +1358,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-sentinel"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "libc",
  "luyaz-alerts",

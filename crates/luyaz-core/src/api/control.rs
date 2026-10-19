@@ -119,7 +119,11 @@ impl Client {
                 b.insert(k.clone(), v.clone());
             }
         }
-        self.post(&body, TIMEOUT).await
+        // USB adds a bounded preflight/readback inside the existing lock and queue.
+        let usb = matches!(action, "usb.set" | "usb.attach_mode")
+            || (action == "vendor.call" && params["method"] == "set"
+                && matches!(params["object"].as_str(), Some("zwrt_bsp.powerbank" | "zwrt_bsp.typec" | "zwrt_bsp.usb")));
+        self.post(&body, if usb { Duration::from_secs(75) } else { TIMEOUT }).await
     }
 }
 

@@ -169,7 +169,7 @@ fn core_marker_from_this_boot_is_a_crash() {
     // killed (marker left): the next start keeps the log as it was before it
     let before: String = (1..=250).map(|i| format!("old {i}\n")).collect();
     f.core_started(&m, "boot-a", 102, &before);
-    let d = f.crash.join("zwrt-datad");
+    let d = f.crash.join("luyaz-core");
     let body = std::fs::read_to_string(
         std::fs::read_dir(&d)
             .unwrap()
@@ -185,7 +185,7 @@ fn core_marker_from_this_boot_is_a_crash() {
         queue(&f),
         vec![(
             "datad-crash".into(),
-            "zwrt-datad exited, status unknown".into()
+            "luyaz-core exited, status unknown".into()
         )]
     );
     assert_eq!(std::fs::read_to_string(&m).unwrap(), "boot-a 102\n");

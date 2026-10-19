@@ -141,6 +141,27 @@ async fn ubus_ttl_read(
     method: &str,
     args: Value,
 ) -> (Result<Value, String>, bool) {
+    ubus_ttl_read_inner(ttl_s, service, method, args, None).await
+}
+
+async fn profile_ubus(
+    hub: &crate::block::Hub,
+    ttl_s: u64,
+    service: &str,
+    method: &str,
+) -> Result<Value, String> {
+    ubus_ttl_read_inner(ttl_s, service, method, json!({}), Some(hub.firmware()))
+        .await
+        .0
+}
+
+async fn ubus_ttl_read_inner(
+    ttl_s: u64,
+    service: &str,
+    method: &str,
+    args: Value,
+    profile: Option<&crate::device_profile::collect::Collector>,
+) -> (Result<Value, String>, bool) {
     // 旧采集里的安全点：这里不持有任何锁，排队的 /control 可以先做（V2-24）。
     crate::executor::preempt().await;
     let cached = ttl_s != 0 && cache_enabled();
@@ -148,6 +169,7 @@ async fn ubus_ttl_read(
     if cached && let Some(v) = cache_get(&UBUS_CACHE, &key) {
         return (v, true);
     }
+    let token = profile.map(|p| p.token());
     let v = crate::executor::call(service, method, &args).await;
     if let Err(e @ crate::ubus::client::UbusError::Skipped { .. }) = &v {
         let previous = if cached {
@@ -156,6 +178,15 @@ async fn ubus_ttl_read(
             None
         };
         return (previous.ok_or_else(|| e.to_string()), false);
+    }
+    if let Some((profile, token)) = profile.zip(token) {
+        profile.ubus(
+            token,
+            luyaz_api::clock::BootTime::read(),
+            service,
+            method,
+            v.as_ref().ok(),
+        );
     }
     let v = v.map_err(|e| e.to_string());
     if cached {
@@ -174,15 +205,31 @@ fn cache_last_ok(cache: &Cache<Result<Value, String>>, key: &str) -> Option<Valu
 
 /// 按块间隔读一个 UCI 包（R19）：`ttl_s` 就是间隔（阶段 2 迁完之前沿用 UCI_CACHE 的 TTL）。
 async fn uci_show_ttl(ttl_s: u64, package: &str) -> BTreeMap<String, String> {
+    uci_show_ttl_inner(ttl_s, package, None).await
+}
+
+async fn uci_show_ttl_inner(
+    ttl_s: u64,
+    package: &str,
+    profile: Option<&crate::device_profile::collect::Collector>,
+) -> BTreeMap<String, String> {
     // 和 ubus_ttl 一样的安全点：排队的 /control 先做，这里读到的是控制之后的值（V2-24/V2-28）。
     crate::executor::preempt().await;
+    let token = profile.map(|p| p.token());
     if ttl_s == 0 || !cache_enabled() {
-        return uci_show(package).await;
+        let v = uci_show(package).await;
+        if let Some((p, token)) = profile.zip(token) {
+            p.uci(token, package, &v, luyaz_api::clock::BootTime::read());
+        }
+        return v;
     }
     if let Some(v) = cache_get(&UCI_CACHE, package) {
         return v;
     }
     let v = uci_show(package).await;
+    if let Some((p, token)) = profile.zip(token) {
+        p.uci(token, package, &v, luyaz_api::clock::BootTime::read());
+    }
     cache_put(
         &UCI_CACHE,
         package.to_string(),
@@ -803,8 +850,8 @@ pub async fn collect(sample_interval_ms: u64, hub: &crate::block::Hub) -> Snapsh
 async fn read_inputs(hub: &crate::block::Hub) -> Inputs {
     // Vendor ubus implementations on these devices lose replies under a large
     // burst of concurrent clients, so state collection is deliberately serial.
-    let common = ubus_ttl(60, "zwrt_zte_mdm.api", "get_zwrt_common_info", json!({})).await;
-    let board = ubus_ttl(300, "system", "board", json!({})).await;
+    let common = profile_ubus(hub, 60, "zwrt_zte_mdm.api", "get_zwrt_common_info").await;
+    let board = profile_ubus(hub, 300, "system", "board").await;
     let info = ubus_ttl(0, "system", "info", json!({})).await;
     let net = ubus_ttl(0, "zte_nwinfo_api", "nwinfo_get_netinfo", json!({})).await;
     let traffic = ubus_ttl(
@@ -872,7 +919,7 @@ async fn read_inputs(hub: &crate::block::Hub) -> Inputs {
         json!({"config":"zwrt_data_tmp","section":"wwaniface1","option":"qci"}),
     )
     .await;
-    let usb = ubus_ttl(30, "zwrt_bsp.usb", "list", json!({})).await;
+    let usb = profile_ubus(hub, 30, "zwrt_bsp.usb", "list").await;
     let battery = hub.legacy("battery");
     let charger = hub.legacy("charger");
     let nfc = ubus_ttl(60, "zwrt_nfc", "zwrt_nfc_wifi_get", json!({})).await;
@@ -922,7 +969,12 @@ async fn read_inputs(hub: &crate::block::Hub) -> Inputs {
     // Configuration packages change only when someone saves settings, and
     // every save through /control clears the cache.
     for p in snapshot::PACKAGES {
-        uci_sets.push(uci_show_ttl(30, p).await)
+        let values = if matches!(p, "zwrt_common_info" | "zwrt_tr069" | "zte_nwinfo") {
+            uci_show_ttl_inner(30, p, Some(hub.firmware())).await
+        } else {
+            uci_show_ttl(30, p).await
+        };
+        uci_sets.push(values)
     }
     // 访客 Wi-Fi 开着才问剩余时间（倒计时，60 秒一读）。
     let guest_on = ["guest_2g", "guest_5g"]
@@ -948,6 +1000,7 @@ async fn read_inputs(hub: &crate::block::Hub) -> Inputs {
         Err(_) => None,
     };
     // 同步读文件一次交给阻塞线程池，先后和原来一样：thermal、runtime、key.log、租约、电源轨。
+    let qos_token = hub.firmware().token();
     let (cpu_sys, zones, cpu_usage_tenths, runtime, qos_logs, leases, rails) = blocking(|| {
         let (cpu_sys, zones, runtime_zones) = thermal_zones();
         let (cpu_usage_tenths, runtime) = runtime(runtime_zones);
@@ -963,6 +1016,13 @@ async fn read_inputs(hub: &crate::block::Hub) -> Inputs {
         )
     })
     .await;
+    let query = qos_query(
+        &object(net.clone()),
+        &string(&object(sim.clone()), "sim_imsi"),
+        &object(wan4_if.clone()),
+        uci_qci(&qci_now),
+    );
+    hub.firmware().qos(qos_token, &qos_logs, query);
     Inputs {
         common,
         board,
@@ -1783,5 +1843,61 @@ mod tests {
         assert_eq!(lan, 0);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].mac, "aa:bb:cc:dd:ee:ff");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn firmware_capture_uses_physical_reads_not_cache_hits_or_skips() {
+        use crate::ubus::mock_ubusd::{Action, MockUbusd};
+        let _serial = CACHE_TEST.lock().await;
+        invalidate_cache();
+        let m = MockUbusd::start_new().await;
+        let object = "zwrt_zte_mdm.api";
+        let method = "get_zwrt_common_info";
+        m.add_method(
+            object,
+            0x10,
+            method,
+            json!({"manufacturer":"ZTE", "model_name":"MU5250",
+            "integrate_version":"CN_ZTE_MU5250V1.0.0B31"}),
+        );
+        m.add_method(object, 0x10, "hang", json!({}));
+        let hub = std::sync::Arc::new(crate::block::Hub::new(
+            vec![],
+            Box::new(crate::block::NoSink),
+        ));
+        let exec = crate::executor::Executor::spawn(
+            m.backend(Duration::from_millis(50)),
+            hub.clone(),
+            crate::executor::Config::default(),
+            Duration::from_secs(1),
+        );
+        let h = hub.clone();
+        exec.round_now(async move {
+            profile_ubus(&h, 60, object, method).await.unwrap();
+        })
+        .await;
+        let before = hub
+            .firmware()
+            .report(luyaz_api::clock::BootTime::read().as_ref());
+        let count = m.invokes(object);
+        let h = hub.clone();
+        exec.round_now(async move {
+            profile_ubus(&h, 60, object, method).await.unwrap();
+        })
+        .await;
+        assert_eq!(m.invokes(object), count);
+        assert_eq!(before.evidence, hub.firmware().report(None).evidence);
+        // Force a physical-read path, then make the executor skip it after the object's timeout.
+        invalidate_cache();
+        m.script(object, "hang", Action::Hang);
+        let h = hub.clone();
+        exec.round_now(async move {
+            let _ = ubus_ttl(0, object, "hang", json!({})).await;
+            assert!(profile_ubus(&h, 60, object, method).await.is_err());
+        })
+        .await;
+        assert_eq!(before.evidence, hub.firmware().report(None).evidence);
+        assert_eq!(m.invokes(object), count + 1); // only the existing hang call was sent
+        invalidate_cache();
     }
 }

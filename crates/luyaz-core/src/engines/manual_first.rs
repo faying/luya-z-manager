@@ -33,11 +33,11 @@ impl Host for U60dHost {
     }
 
     fn cell_alive(&self) -> bool {
-        self.watch.cell_alive(luyaz_netwatch::now_unix())
+        self.watch.cell_alive(luyaz_api::clock::BootTime::read().as_ref())
     }
 
     fn direct_dns_ms(&self) -> Option<u32> {
-        self.watch.direct_dns_ms()
+        self.watch.direct_dns_ms(luyaz_api::clock::BootTime::read().as_ref())
     }
 
     /// The shadow records are the agent's.

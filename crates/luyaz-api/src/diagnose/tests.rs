@@ -584,6 +584,7 @@ fn a_finding_probe_is_refused_in_its_own_words_and_time() {
     let both = Gate {
         diag_since: Some(1003),
         finding_since: Some(1000),
+        txn: None,
     };
     let (_, body) = refusal_at(&both, 1004).unwrap();
     assert_eq!(
@@ -758,6 +759,17 @@ fn e2e_layer() {
         (Level::Na, "Not checked · traffic goes through the proxy")
     );
     assert_eq!(l.detail, "没测成 · 流量经代理");
+    for (reason, zh_tail, en_tail) in [
+        ("snapshot_or_connection_changed", "检测时连接变了", "connection changed during check"),
+        ("snapshot_or_connection_changed_during_probe", "检测时连接变了", "connection changed during check"),
+        ("probe_budget_unavailable", "刚测过，稍后再试", "checked moments ago; try shortly"),
+        ("device_bound_policy_unverified", "出口绑定没核实", "route binding unverified"),
+    ] {
+        n.reason = reason.into();
+        let l = judge_e2e(Some(&n));
+        assert_eq!(l.detail, format!("没测成 · {zh_tail}"));
+        assert_eq!(l.detail_en, format!("Not checked · {en_tail}"));
+    }
     n.reason = "something_new".into();
     assert_eq!(judge_e2e(Some(&n)).detail, "没测成 · something_new");
 }

@@ -22,6 +22,14 @@
 - scripts: `VERSION` 随脚本放到 `/data/luyaz/scripts/`，设备上能读到脚本的版本。
 - scripts: ship 检查界面异常时，触屏崩溃那一行新旧两种名字都认（`u60pro-devui pid … ended:` 和 `luyaz-ui pid … ended:`）。要先于 sentinel 1.0.2 上机。
 
+## sentinel 1.0.3 — 2026-10-18
+
+- 触屏的崩溃记录写到 `/data/crashlog/luyaz-ui`。
+
+## core 1.5.0 — 2026-10-18
+
+- 帐本和报表的键改用新名（`luyaz-core`、`luyaz-ui`；RSS 列 `rss_core`、`rss_ui`），旧记录（`zwrt-datad`、`u60pro-devui`、`rss_datad`、`rss_devui`）照算。核心的崩溃记录写到 `/data/crashlog/luyaz-core`，并把 `/data/crashlog/u60pro-devui`、`zwrt-datad` 搬进新目录（每轮检查都搬，不会重算）。
+
 ## core 1.4.4 — 2026-10-18
 
 - 深查各行改成大白话：信号行只说强弱和干扰（原来写不下），限速行列出基站给的载波，其他行去掉网卡名和协议词。

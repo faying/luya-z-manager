@@ -312,49 +312,72 @@ pub(super) async fn modem_reply(c: &Compat) -> (u16, Value) {
 
 // ---- USB ----
 
-/// `ubus -v list` prints a `'<object>' @<id>` header, then one `"<method>":{<args>}` line per
-/// method. Output without that header is not a listing we understand: None, not "no such method".
-pub(super) fn lists_method(listing: &str, object: &str, method: &str) -> Option<bool> {
-    let header = format!("'{object}' ");
-    if !listing.lines().any(|l| l.starts_with(&header)) {
-        return None;
-    }
-    let want = format!("\"{method}\":");
-    Some(listing.lines().any(|l| l.trim_start().starts_with(&want)))
-}
-
-/// Whether the firmware offers the USB mode setter. None when it cannot be asked (including
-/// read-only mode, which refuses `ubus list`).
-pub(super) async fn usb_settable() -> Option<bool> {
-    let out = crate::command::run(
-        &crate::ubus::backend::cli_bin(),
-        ["-v", "list", "zwrt_bsp.usb"],
-        Duration::from_secs(5),
-    )
-    .await
-    .ok()?;
-    lists_method(&String::from_utf8_lossy(&out), "zwrt_bsp.usb", "set")
-}
-
-pub(super) fn usb_data(mut data: Value, settable: Option<bool>) -> Value {
-    if let (Some(obj), Some(s)) = (data.as_object_mut(), settable) {
-        obj.insert("mode_settable".into(), json!(s));
+/// Compatibility fields are projections of the same report used by the final executor.
+/// A successful read or a method listing never becomes a verified write.
+pub(super) fn usb_data(
+    mut data: Value,
+    report: Option<&luyaz_api::firmware::CapabilityReport>,
+) -> Value {
+    use luyaz_api::firmware::Support;
+    if let Some(obj) = data.as_object_mut() {
+        obj.remove("mode_settable");
+        obj.remove("write_policies");
+        let mut policies = serde_json::Map::new();
+        if let Some(report) = report {
+            for id in ["usb.mode.set", "usb.attach.share", "usb.attach.fast_charge"] {
+                if let Some(policy) = report.usb_write_policy(id) {
+                    if id == "usb.mode.set" {
+                        match policy.assessment.status {
+                            Support::Supported => {
+                                obj.insert("mode_settable".into(), json!(true));
+                            }
+                            Support::Unsupported => {
+                                obj.insert("mode_settable".into(), json!(false));
+                            }
+                            Support::Unknown => {}
+                        }
+                    }
+                    policies.insert(id.into(), json!(policy));
+                }
+            }
+        }
+        obj.insert("write_policies".into(), Value::Object(policies));
     }
     data
 }
-
 /// GET /api/usb/status
 pub async fn usb_status(State(c): State<Compat>) -> Response {
     respond(usb_reply(&c).await)
 }
 
 async fn usb_reply(c: &Compat) -> (u16, Value) {
+    let token = c.src.hub.as_ref().map(|h| h.firmware().token());
     match ubus(c, "zwrt_bsp.usb", "list", json!({})).await {
         Ok(data) => {
-            let settable = usb_settable().await;
-            (200, json!({"ok": true, "data": usb_data(data, settable)}))
+            if let Some((hub, token)) = c.src.hub.as_ref().zip(token) {
+                hub.firmware().ubus(
+                    token,
+                    luyaz_api::clock::BootTime::read(),
+                    "zwrt_bsp.usb",
+                    "list",
+                    Some(&data),
+                );
+            }
+            let report = c.src.hub.as_ref().map(|h| h.firmware().report(luyaz_api::clock::BootTime::read().as_ref()));
+            (200, json!({"ok": true, "data": usb_data(data, report.as_ref())}))
         }
-        Err(e) => fail(e),
+        Err(e) => {
+            if let Some((hub, token)) = c.src.hub.as_ref().zip(token) {
+                hub.firmware().ubus(
+                    token,
+                    luyaz_api::clock::BootTime::read(),
+                    "zwrt_bsp.usb",
+                    "list",
+                    None,
+                );
+            }
+            fail(e)
+        }
     }
 }
 

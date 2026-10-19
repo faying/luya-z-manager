@@ -1058,3 +1058,11 @@ fn chill_rolls_back_and_a_person_wins() {
     assert_eq!(t.on_reading(&chill_read("direct_all", None), 3_000), Next::Done);
     assert_eq!(end(&t), (Phase::Cancelled, Some(Reason::ManualChange)));
 }
+
+#[test]
+fn revert_without_rollback_target_is_refused() {
+    let mut t = txn(false);
+    t.rollback_to = Value::Null;
+    assert_eq!(t.revert(), Err("no previous setting to revert to"));
+    assert_eq!(t.phase, Phase::Verifying);
+}

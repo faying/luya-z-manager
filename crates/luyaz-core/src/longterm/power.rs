@@ -36,14 +36,14 @@ const TS_SOCK: &str = "/tmp/tailscaled.sock";
 const CHILL_DIR: &str = "/data/chill";
 const CHILL_STATE: &str = "/tmp/chill.state";
 const THERMAL_ECO: &str = "/tmp/chill.thermal-eco";
-/// The core's screen-off pause lease (u60-radio.md 6e): a wall second CHILL stays stopped until.
-pub const CHILL_IDLE: &str = "/tmp/chill.idle";
+/// The core's boot-bound BOOTTIME screen-off pause lease (u60-radio.md 6e).
+pub const CHILL_IDLE: &str = "/tmp/chill.idle.v2";
 const DUMP_DIR: &str = "/data/vendor/ramdump";
 /// Programs whose RSS `hour_proc` keeps, by the card's names.
 pub const RSS: [(&str, &str); 5] = [
     ("agent", "zte-agent"),
-    ("datad", "zwrt-datad"),
-    ("devui", "u60pro-devui"),
+    ("core", crate::paths::CORE),
+    ("ui", crate::paths::UI),
     ("mihomo", "mihomo"),
     ("ts", "tailscaled"),
 ];
@@ -581,8 +581,14 @@ impl ReadState {
         }
         // paused by hand, or by the core while the screen is off and nobody is connected (6e):
         // off by intent, not unhealthy
-        let paused = num(&p.chill_dir.join("pause_until")).is_some_and(|t| t > wall)
-            || num(&p.chill_idle).is_some_and(|t| t > wall);
+        let boot = std::fs::read_to_string(p.proc_.join("sys/kernel/random/boot_id"))
+            .ok()
+            .zip(std::fs::read_to_string(p.proc_.join("uptime")).ok())
+            .and_then(|(id, up)| luyaz_api::alerts::clock::BootTime::from_uptime(&id, &up));
+        let paused = luyaz_api::alerts::deadline::manual_paused(&p.chill_dir, boot.as_ref())
+            || std::fs::read_to_string(&p.chill_idle)
+                .ok()
+                .is_some_and(|s| luyaz_api::alerts::deadline::active(&s, boot.as_ref()));
         r.chill_on =
             wan && p.chill_dir.is_dir() && !p.chill_dir.join("disabled").exists() && !paused;
         if r.chill_on

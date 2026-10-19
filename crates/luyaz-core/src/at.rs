@@ -123,6 +123,8 @@ const LOCK_WAIT: Duration = Duration::from_secs(10);
 /// An answer ends with OK or ERROR; the agent waits a fixed 8 s for COPS=0,
 /// we stop at the answer and give up a little earlier.
 const ANSWER_WAIT: Duration = Duration::from_secs(6);
+/// Bound for the direct operate_mode read before any AT lock or port.
+const MODE_READ_WAIT: Duration = Duration::from_secs(3);
 /// One read's buffer: bigger than any reply on the list (`AT+CGCONTRDP` with several contexts).
 const READ_BUF: usize = 16 * 1024;
 
@@ -130,8 +132,8 @@ const READ_BUF: usize = 16 * 1024;
 pub enum Cmd {
     /// `AT+COPS=0`: automatic network selection.
     CopsAuto,
-    /// `AT+CFUN=1`: radio online (the vendor's nwinfo_set_mode ONLINE does
-    /// not bring the modem back from LPM).
+    /// Compatibility spelling only: the shared policy rejects CFUN setters before
+    /// opening a port. LPM recovery requires a device restart.
     CfunOnline,
     /// `AT+CGCONTRDP`: the active PDP contexts (read).
     Cgcontrdp,
@@ -194,7 +196,11 @@ impl Phone {
     fn job(&self) -> Job {
         let secs = Duration::from_secs;
         let (text, wait, until) = match self {
-            Phone::Ussd(code) => (format!("AT+CUSD=1,\"{code}\",15"), secs(8), Until::Line("+CUSD:")),
+            Phone::Ussd(code) => (
+                format!("AT+CUSD=1,\"{code}\",15"),
+                secs(8),
+                Until::Line("+CUSD:"),
+            ),
             Phone::UssdCancel => ("AT+CUSD=2".into(), secs(3), Until::Final),
             Phone::Cuad => ("AT+CUAD".into(), secs(3), Until::Final),
             Phone::Stin(s) => ("AT+STIN?".into(), secs(*s), Until::Final),
@@ -364,6 +370,19 @@ async fn run(
     port: Option<String>,
     total: Duration,
 ) -> Result<Answer, String> {
+    // Before any lock, probe, port open or thread: no manual/terminal/internal bypass.
+    if job
+        .text
+        .as_deref()
+        .is_some_and(crate::device_profile::policy::radio_set)
+    {
+        let policy = crate::device_profile::policy::availability("modem.recover_from_lpm", None)
+            .expect("fixed recovery policy");
+        return Err(format!(
+            "{}: CFUN setters are blocked; recovery requires a device restart",
+            policy.reason
+        ));
+    }
     let key = format!("{lock:?} {port:?}");
     let name = job.name().to_string();
     if stuck().contains(&key) {
@@ -371,6 +390,44 @@ async fn run(
             "{name}: the AT port is still stuck on an earlier command"
         ));
     }
+    // All production callers share this boundary, including terminal/USSD/probe/internal.
+    // A current read permits this explicit attempt; it does not mint a radio epoch.
+    // The pre-read shares the caller's total budget and has its own short bound.
+    let started = Instant::now();
+    let binding = if let Some(hub) = crate::executor::profile_hub() {
+        let mode = tokio::time::timeout(
+            MODE_READ_WAIT.min(total),
+            crate::executor::call(
+                "uci",
+                "get",
+                &serde_json::json!({
+                    "config":"zte_nwinfo", "section":"sys_info", "option":"operate_mode"
+                }),
+            ),
+        )
+        .await;
+        let token = hub.firmware().token();
+        if !mode.as_ref().is_ok_and(|m| {
+            m.as_ref()
+                .is_ok_and(|v| v["value"].as_str().map(str::trim) == Some("ONLINE"))
+        }) || !hub
+            .firmware()
+            .at_ready(&token, luyaz_api::clock::BootTime::read().as_ref())
+        {
+            return Err(
+                "radio_not_online: a fresh ONLINE observation is required before opening AT".into(),
+            );
+        }
+        let mark = hub.firmware().radio_mark();
+        Some((hub, token, mark))
+    } else {
+        None
+    };
+    let total = total.saturating_sub(started.elapsed());
+    // Port selection returns only a name, not the complete probe exchange. Neither
+    // configured nor discovered names can be promoted into a synthetic OK response.
+    let command = job.text.clone().unwrap_or_default();
+    let original = binding.clone();
     let progress = crate::executor::progress_handle();
     let (tx, rx) = tokio::sync::oneshot::channel();
     let done = Arc::new(AtomicBool::new(false));
@@ -378,7 +435,18 @@ async fn run(
     std::thread::Builder::new()
         .name("at".into())
         .spawn(move || {
-            let r = send_blocking(job, lock, port, &|| progress.tick());
+            let r = send_blocking(job, lock, port, &|| progress.tick(), &|| {
+                // Only an observed radio change stops the attempt; lock waits and unrelated
+                // ubus/USB invalidations do not (they still keep the reply from being proof).
+                if original
+                    .as_ref()
+                    .is_none_or(|(hub, _, mark)| hub.firmware().radio_unchanged(*mark))
+                {
+                    Ok(())
+                } else {
+                    Err("radio_not_online: the radio left ONLINE before the AT command".into())
+                }
+            });
             // under the same mutex as the timeout path below: either it sees
             // `done`, or its entry is already there for us to remove
             let mut s = stuck();
@@ -389,7 +457,24 @@ async fn run(
         })
         .map_err(|e| format!("AT thread: {e}"))?;
     match tokio::time::timeout(total, rx).await {
-        Ok(Ok(r)) => r,
+        Ok(Ok(r)) => {
+            // The command already reached the modem: always return its answer. A stale or
+            // late answer only loses its value as capability evidence.
+            if let Some((hub, token, _)) = &binding
+                && hub
+                    .firmware()
+                    .at_reply_current(token, luyaz_api::clock::BootTime::read().as_ref())
+            {
+                let reply = r.as_ref().ok().map(|a| a.text.as_str());
+                hub.firmware().at_read(
+                    token.clone(),
+                    luyaz_api::clock::BootTime::read(),
+                    &command,
+                    reply,
+                );
+            }
+            r
+        }
         Ok(Err(_)) => Err(format!("{name}: AT thread ended without an answer")),
         Err(_) => {
             let mut s = stuck();
@@ -433,13 +518,16 @@ fn send_blocking(
     lock: Option<String>,
     port: Option<String>,
     progress: &dyn Fn(),
+    context: &dyn Fn() -> Result<(), String>,
 ) -> Result<Answer, String> {
     let _lock = take_lock(lock)?;
+    context()?;
     progress();
     let port = match port {
         Some(p) => p,
-        None => find_port(progress)?,
+        None => find_port(progress, context)?,
     };
+    context()?;
     let Some(text) = &job.text else {
         return Ok(Answer {
             port,
@@ -462,17 +550,35 @@ fn send_blocking(
     })
 }
 
-fn find_port(progress: &dyn Fn()) -> Result<String, String> {
-    find_port_in(PORTS, &|p| held_by(Path::new("/proc"), p), progress)
+fn find_port(
+    progress: &dyn Fn(),
+    context: &dyn Fn() -> Result<(), String>,
+) -> Result<String, String> {
+    find_port_in_checked(
+        PORTS,
+        &|p| held_by(Path::new("/proc"), p),
+        progress,
+        context,
+    )
+}
+
+#[cfg(test)]
+fn find_port_in(
+    ports: &[&str],
+    held: &dyn Fn(&Path) -> Option<String>,
+    progress: &dyn Fn(),
+) -> Result<String, String> {
+    find_port_in_checked(ports, held, progress, &|| Ok(()))
 }
 
 /// The first of `ports` that exists, that `held` says no other process has open, and that
 /// answers "AT" with OK. Never writes to a held node: a probe there would take another
 /// program's answer (and its "AT" would reach that program's reader).
-fn find_port_in(
+fn find_port_in_checked(
     ports: &[&str],
     held: &dyn Fn(&Path) -> Option<String>,
     progress: &dyn Fn(),
+    context: &dyn Fn() -> Result<(), String>,
 ) -> Result<String, String> {
     let mut holders = Vec::new();
     let mut existing = 0;
@@ -486,6 +592,7 @@ fn find_port_in(
             holders.push(format!("{p} ({who})"));
             continue;
         }
+        context()?;
         let ok = exchange(p, "AT", Duration::from_secs(1))
             .is_ok_and(|a| final_code(&a) == Some(Final::Ok));
         progress();
@@ -539,7 +646,11 @@ fn set_nonblocking(f: &std::fs::File, on: bool) {
     unsafe {
         let fl = libc::fcntl(fd, libc::F_GETFL);
         if fl >= 0 {
-            let fl = if on { fl | libc::O_NONBLOCK } else { fl & !libc::O_NONBLOCK };
+            let fl = if on {
+                fl | libc::O_NONBLOCK
+            } else {
+                fl & !libc::O_NONBLOCK
+            };
             libc::fcntl(fd, libc::F_SETFL, fl);
         }
     }
@@ -566,7 +677,8 @@ fn complete(s: &str, until: Until) -> bool {
         Until::Line(prefix) => {
             // an error after an OK too (`AT+CUSD` says OK, then +CME ERROR)
             codes(s).any(|c| c == Final::Error)
-                || s.find(prefix).is_some_and(|i| s[i..].contains(['\r', '\n']))
+                || s.find(prefix)
+                    .is_some_and(|i| s[i..].contains(['\r', '\n']))
         }
         Until::Wait => false,
     }
@@ -630,6 +742,20 @@ fn exchange_until(
 pub(crate) mod tests {
     use super::*;
     use std::ffi::CStr;
+
+    #[test]
+    fn changed_context_is_checked_after_lock_before_port_access() {
+        let e = send_blocking(
+            Job::fixed(Cmd::Cgcontrdp),
+            None,
+            Some("/does-not-exist/at-port".into()),
+            &|| {},
+            &|| Err("synthetic context changed".into()),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(e, "synthetic context changed");
+    }
 
     /// A pseudo-terminal standing in for the modem: answers `answer` to every
     /// command line it reads; returns the slave path and what it was sent.
@@ -734,43 +860,67 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_ussd_answer_after_the_ok_is_waited_for() {
-        let (port, sent) = fake_modem_parts(&[
-            (0, "\r\nOK\r\n"),
-            (400, "\r\n+CUSD: 1,\"0042\",72\r\n"),
-        ]);
+        let (port, sent) =
+            fake_modem_parts(&[(0, "\r\nOK\r\n"), (400, "\r\n+CUSD: 1,\"0042\",72\r\n")]);
         let t = Instant::now();
-        let a = phone(target(&port), Phone::ussd("*1x0#; rm")).await.unwrap();
+        let a = phone(target(&port), Phone::ussd("*1x0#; rm"))
+            .await
+            .unwrap();
         assert!(a.contains("+CUSD: 1,\"0042\",72"), "{a:?}");
-        assert!(t.elapsed() < Duration::from_secs(3), "stops at the +CUSD line");
+        assert!(
+            t.elapsed() < Duration::from_secs(3),
+            "stops at the +CUSD line"
+        );
         assert_eq!(sent.recv().unwrap(), "AT+CUSD=1,\"*10#\",15");
     }
 
     #[tokio::test]
     async fn the_terminal_gets_errors_and_silence_as_answers() {
         let (port, sent) = fake_modem_parts(&[(0, "\r\n+CME ERROR: 4\r\n")]);
-        let a = raw(target(&port), "AT+FOO", Duration::from_secs(2)).await.unwrap();
+        let a = raw(target(&port), "AT+FOO", Duration::from_secs(2))
+            .await
+            .unwrap();
         assert!(a.text.contains("ERROR") && a.port == port, "{a:?}");
         assert_eq!(sent.recv().unwrap(), "AT+FOO");
         let (port, _) = fake_modem_parts(&[]);
         let t = Instant::now();
-        let a = raw(target(&port), "AT", Duration::from_millis(400)).await.unwrap();
+        let a = raw(target(&port), "AT", Duration::from_millis(400))
+            .await
+            .unwrap();
         assert_eq!(a.text, "");
         assert!(t.elapsed() >= Duration::from_millis(350));
         // one command per call: no line breaks into a second one
         for bad in ["", "AT\rAT+CFUN=0", "AT\n", "AT\u{1b}"] {
-            assert!(raw(target(&port), bad, Duration::from_secs(1)).await.is_err(), "{bad:?}");
+            assert!(
+                raw(target(&port), bad, Duration::from_secs(1))
+                    .await
+                    .is_err(),
+                "{bad:?}"
+            );
         }
     }
 
     #[tokio::test]
     async fn stk_reads_the_whole_wait_and_the_probe_names_the_port() {
-        assert_eq!(Phone::Cusate(3).job().text.unwrap(), "AT+CUSATE=\"D3078202018190010103\"");
+        assert_eq!(
+            Phone::Cusate(3).job().text.unwrap(),
+            "AT+CUSATE=\"D3078202018190010103\""
+        );
         assert_eq!(Phone::Cusatd.job().until, Until::Wait);
         assert_eq!(probe(target("/dev/nope")).await.unwrap(), "/dev/nope");
         let (port, _) = fake_modem_parts(&[(0, "\r\nOK\r\n"), (200, "\r\n+CUSATP: D00A\r\n")]);
-        let job = Job::loose("AT+CUSATD=1".into(), Duration::from_millis(700), Until::Wait);
-        let a = run(job, None, Some(port), Duration::from_secs(3)).await.unwrap();
-        assert!(a.text.contains("OK") && a.text.contains("+CUSATP: D00A"), "{a:?}");
+        let job = Job::loose(
+            "AT+CUSATD=1".into(),
+            Duration::from_millis(700),
+            Until::Wait,
+        );
+        let a = run(job, None, Some(port), Duration::from_secs(3))
+            .await
+            .unwrap();
+        assert!(
+            a.text.contains("OK") && a.text.contains("+CUSATP: D00A"),
+            "{a:?}"
+        );
     }
 
     #[test]
@@ -814,23 +964,41 @@ pub(crate) mod tests {
         assert_eq!(final_code("\r\n+CUSD: 0,\"NO ERROR, OK\",15\r\n"), None);
         assert_eq!(final_code("\r\n+COPS: 0,0,\"OKTEL\"\r\n"), None);
         assert_eq!(final_code("AT\r"), None);
-        assert!(!complete("\r\n+CUSD: 0,\"ERROR in text", Until::Line("+CUSD:")));
+        assert!(!complete(
+            "\r\n+CUSD: 0,\"ERROR in text",
+            Until::Line("+CUSD:")
+        ));
         assert!(complete("\r\n+CME ERROR: 4\r\n", Until::Line("+CUSD:")));
         assert!(!complete("\r\nOK\r\n", Until::Line("+CUSD:")));
-        assert!(complete("\r\nOK\r\n\r\n+CME ERROR: 30\r\n", Until::Line("+CUSD:")));
+        assert!(complete(
+            "\r\nOK\r\n\r\n+CME ERROR: 30\r\n",
+            Until::Line("+CUSD:")
+        ));
     }
 
     #[test]
     fn errors_say_their_kind() {
         let k = |e: &str| error_kind(e).name();
         assert_eq!(k("AT port busy (another command is running)"), "busy");
-        assert_eq!(k("every AT port is held by another process: /dev/at_mdm0 (port-bridge pid 9)"), "held");
+        assert_eq!(
+            k("every AT port is held by another process: /dev/at_mdm0 (port-bridge pid 9)"),
+            "held"
+        );
         assert_eq!(k("no AT port found"), "no-port");
         assert_eq!(k("AT+COPS=0: no answer"), "timeout");
-        assert_eq!(k("AT+COPS=0: no answer within 25 s (the AT port is stuck)"), "timeout");
-        assert_eq!(k("AT+COPS=0: the AT port is still stuck on an earlier command"), "timeout");
+        assert_eq!(
+            k("AT+COPS=0: no answer within 25 s (the AT port is stuck)"),
+            "timeout"
+        );
+        assert_eq!(
+            k("AT+COPS=0: the AT port is still stuck on an earlier command"),
+            "timeout"
+        );
         assert_eq!(k("AT+COPS=0: +CME ERROR: 3"), "error");
-        assert_eq!(k("open /dev/at_mdm2: Permission denied (os error 13)"), "error");
+        assert_eq!(
+            k("open /dev/at_mdm2: Permission denied (os error 13)"),
+            "error"
+        );
     }
 
     #[test]
@@ -838,7 +1006,8 @@ pub(crate) mod tests {
         let (free, sent) = fake_modem("\r\nOK\r\n");
         let (held, held_sent) = fake_modem("\r\nOK\r\n");
         let held_p = held.clone();
-        let is_held = move |p: &Path| (p == Path::new(&held_p)).then(|| "port-bridge pid 1".to_string());
+        let is_held =
+            move |p: &Path| (p == Path::new(&held_p)).then(|| "port-bridge pid 1".to_string());
         let gone = "/dev/at_mdm2-not-here";
         // at_mdm2 missing, the next held: the free one is found, the held one never written to
         let got = find_port_in(&[gone, &held, &free], &is_held, &|| ()).unwrap();
@@ -879,7 +1048,10 @@ pub(crate) mod tests {
         let who = who.expect("held by the child");
         assert!(who.starts_with("sleep pid "), "{who}");
         // not a character device: never held
-        assert_eq!(held_by(Path::new("/proc"), Path::new("/proc/self/stat")), None);
+        assert_eq!(
+            held_by(Path::new("/proc"), Path::new("/proc/self/stat")),
+            None
+        );
     }
 
     #[test]
@@ -911,39 +1083,22 @@ pub(crate) mod tests {
         let (port, _) = fake_modem("\r\nOK\r\n");
         let total = Duration::from_millis(300);
         let t = Instant::now();
-        let e = send_within(
-            Cmd::CfunOnline,
-            Some(lock.clone()),
-            Some(port.clone()),
-            total,
-        )
-        .await
-        .unwrap_err();
+        let e = send_within(Cmd::CopsAuto, Some(lock.clone()), Some(port.clone()), total)
+            .await
+            .unwrap_err();
         assert!(
             e.contains("stuck") && t.elapsed() < Duration::from_secs(2),
             "{e}"
         );
-        let e = send_within(
-            Cmd::CfunOnline,
-            Some(lock.clone()),
-            Some(port.clone()),
-            total,
-        )
-        .await
-        .unwrap_err();
+        let e = send_within(Cmd::CopsAuto, Some(lock.clone()), Some(port.clone()), total)
+            .await
+            .unwrap_err();
         assert!(e.contains("still stuck"), "{e}");
         // the stage ends: the left-behind thread finishes and frees the key
         FileExt::unlock(&held).unwrap();
         let t = Instant::now();
         loop {
-            match send_within(
-                Cmd::CfunOnline,
-                Some(lock.clone()),
-                Some(port.clone()),
-                total,
-            )
-            .await
-            {
+            match send_within(Cmd::CopsAuto, Some(lock.clone()), Some(port.clone()), total).await {
                 Ok(a) => break assert!(a.contains("OK")),
                 Err(e) if t.elapsed() < Duration::from_secs(5) => {
                     assert!(e.contains("stuck"), "{e}");

@@ -8,6 +8,8 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::time::Duration;
 
+pub mod admit;
+
 /// A run that waits longer than this for another operation gives up.
 pub const WAIT_MAX: u64 = 120;
 pub const LAYER_MAX: Duration = Duration::from_secs(5);
@@ -47,6 +49,9 @@ pub struct Gate {
     /// Device-clock seconds when the running Finding probe started (deep-diag-v2 §2.1): kept
     /// apart so a Finding probe is never shown as "diagnosing", nor timed like one.
     pub finding_since: Option<u64>,
+    /// A write transaction's admission (decision-execution-loop.md §1.3 / §4.1 D1): while it is
+    /// here no new diagnosis, Finding probe or speed test starts. See [`admit`].
+    pub txn: Option<admit::TxnHold>,
 }
 
 /// About how many seconds until the running diagnosis is done.
@@ -57,6 +62,9 @@ pub fn eta(since: u64, now: u64) -> u64 {
 /// The 409 a speed test or a search/register gets while a diagnosis runs. The time and the
 /// words come from the diagnosis alone; a Finding probe gets its own words and its own time.
 pub fn refusal_at(g: &Gate, now: u64) -> Option<(u16, Value)> {
+    if g.txn.is_some() {
+        return Some((409, admit::busy_json()));
+    }
     let Some(since) = g.diag_since else {
         let n = (g.finding_since? + FINDING_TYPICAL)
             .saturating_sub(now)
@@ -940,6 +948,12 @@ fn with_reason(zh: &str, en: &str, reason: &str) -> (String, String) {
     let (rz, re) = match reason {
         "" | "scoped_http_dns_only" => return (zh.into(), en.into()),
         "stale_or_unknown_snapshot" => ("状态太旧", "state too old"),
+        "snapshot_or_connection_changed"
+        | "snapshot_or_connection_changed_during_probe" => {
+            ("检测时连接变了", "connection changed during check")
+        }
+        "probe_budget_unavailable" => ("刚测过，稍后再试", "checked moments ago; try shortly"),
+        "device_bound_policy_unverified" => ("出口绑定没核实", "route binding unverified"),
         "proxy_route_unverified" => ("流量经代理", "traffic goes through the proxy"),
         "no_cellular_path" => ("没有蜂窝出口", "no cellular way out"),
         "ipv6_http_targets_unverified" => ("IPv6 目标没核实", "IPv6 targets unverified"),
@@ -1219,6 +1233,7 @@ pub fn gave_up(run: &mut Run, on: &str) {
         "scan" => ("正在搜网", "Searching for networks"),
         "register" => ("正在选网", "Registering on a network"),
         "finding" => ("正在检查网络", "Checking the connection"),
+        "txn" => ("正在改设置", "Applying a setting"),
         _ => ("正在测速", "Speed test running"),
     };
     for l in run.layers.clone() {

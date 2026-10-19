@@ -23,6 +23,37 @@ pub struct Spec {
     pub deadline_env: &'static str,
     /// 确认规则（D34：只有 APN 要求写之后的新连接）。
     pub confirm: Confirm,
+    /// 这个动作能不能自动退回（decision-execution-loop.md §1.2/O3）。只有 `CapturedAndProven` 才算；
+    /// 第一批只登记，engine 仍按 `LUYAZ_ROLLBACK` + `Request.rollback` 决定（按它拒写留第二批另确认）。
+    #[allow(dead_code)] // 第一批只登记；engine 第二批才读
+    pub rollback_capability: RollbackCapability,
+    /// 事务确认时拿到的完成证据：只证明写到位，**不等于原故障已修复**（那要 `fault_recheck`）。
+    #[allow(dead_code)]
+    pub completion_evidence: CompletionEvidence,
+}
+
+/// 逐动作退回能力（§1.2）。初值只有 `Unknown` / `Unsupported`：逐项实测并获授权后才改成 `CapturedAndProven`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RollbackCapability {
+    /// 旧值可捕获、回写已验证、恢复路径可观察。
+    #[allow(dead_code)] // 还没有动作达到
+    CapturedAndProven,
+    /// 不能退回：只能停下并人工修复。
+    Unsupported,
+    Unknown,
+}
+
+/// 事务确认依据的证据（对应 [`Confirm`]）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompletionEvidence {
+    /// 读回一致 + 重新注册。
+    ReadbackRegistered,
+    /// 读回一致 + 写之后的新连接。
+    ReadbackNewConn,
+    /// 读回一致 + CHILL 自己的检查。
+    ReadbackChill,
+    /// 只有 AP 读回：不证明旧客户端/远程能回来。
+    ApReadbackOnly,
 }
 
 pub const NETWORK_MODE: &str = "network.mode";
@@ -59,6 +90,8 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 120_000,
         deadline_env: "LUYAZ_DEADLINE_NETWORK_MODE_MS",
         confirm: Confirm::Registered,
+        rollback_capability: RollbackCapability::Unknown,
+        completion_evidence: CompletionEvidence::ReadbackRegistered,
     },
     Spec {
         action: "band.set_lte",
@@ -68,6 +101,8 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 120_000,
         deadline_env: "LUYAZ_DEADLINE_BAND_MS",
         confirm: Confirm::Registered,
+        rollback_capability: RollbackCapability::Unknown,
+        completion_evidence: CompletionEvidence::ReadbackRegistered,
     },
     Spec {
         action: "band.set_nr",
@@ -77,6 +112,8 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 120_000,
         deadline_env: "LUYAZ_DEADLINE_BAND_MS",
         confirm: Confirm::Registered,
+        rollback_capability: RollbackCapability::Unknown,
+        completion_evidence: CompletionEvidence::ReadbackRegistered,
     },
     Spec {
         action: "band.reset",
@@ -86,6 +123,8 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 120_000,
         deadline_env: "LUYAZ_DEADLINE_BAND_MS",
         confirm: Confirm::Registered,
+        rollback_capability: RollbackCapability::Unknown,
+        completion_evidence: CompletionEvidence::ReadbackRegistered,
     },
     Spec {
         action: "cell.lock_lte",
@@ -95,6 +134,8 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 120_000,
         deadline_env: "LUYAZ_DEADLINE_CELL_MS",
         confirm: Confirm::Registered,
+        rollback_capability: RollbackCapability::Unknown,
+        completion_evidence: CompletionEvidence::ReadbackRegistered,
     },
     Spec {
         action: "cell.lock_nr",
@@ -104,6 +145,8 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 120_000,
         deadline_env: "LUYAZ_DEADLINE_CELL_MS",
         confirm: Confirm::Registered,
+        rollback_capability: RollbackCapability::Unknown,
+        completion_evidence: CompletionEvidence::ReadbackRegistered,
     },
     Spec {
         action: "apn.set_mode",
@@ -113,6 +156,8 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 90_000,
         deadline_env: "LUYAZ_DEADLINE_APN_MS",
         confirm: Confirm::Apn,
+        rollback_capability: RollbackCapability::Unsupported,
+        completion_evidence: CompletionEvidence::ReadbackNewConn,
     },
     Spec {
         action: "apn.enable",
@@ -122,6 +167,8 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 90_000,
         deadline_env: "LUYAZ_DEADLINE_APN_MS",
         confirm: Confirm::Apn,
+        rollback_capability: RollbackCapability::Unsupported,
+        completion_evidence: CompletionEvidence::ReadbackNewConn,
     },
     Spec {
         action: "apn.modify",
@@ -131,6 +178,8 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 90_000,
         deadline_env: "LUYAZ_DEADLINE_APN_MS",
         confirm: Confirm::Apn,
+        rollback_capability: RollbackCapability::Unsupported,
+        completion_evidence: CompletionEvidence::ReadbackNewConn,
     },
     Spec {
         // 换正在用的 APN（第二期 D3，O3）：兼容层 `apn_use` 的一次切换（候选 APN 先复制成手动的，普通写）——
@@ -142,6 +191,8 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 90_000,
         deadline_env: "LUYAZ_DEADLINE_APN_MS",
         confirm: Confirm::Apn,
+        rollback_capability: RollbackCapability::Unsupported,
+        completion_evidence: CompletionEvidence::ReadbackNewConn,
     },
     Spec {
         // CHILL（第二期 D2，见 `ops::chill`）：只有 Agent 经 /control 走这里
@@ -152,6 +203,8 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 120_000,
         deadline_env: "LUYAZ_DEADLINE_CHILL_MS",
         confirm: Confirm::Chill,
+        rollback_capability: RollbackCapability::Unsupported,
+        completion_evidence: CompletionEvidence::ReadbackChill,
     },
     Spec {
         action: "chill.exit",
@@ -161,6 +214,8 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 120_000,
         deadline_env: "LUYAZ_DEADLINE_CHILL_MS",
         confirm: Confirm::Chill,
+        rollback_capability: RollbackCapability::Unsupported,
+        completion_evidence: CompletionEvidence::ReadbackChill,
     },
     Spec {
         action: "wifi.settings",
@@ -170,6 +225,8 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 90_000,
         deadline_env: "LUYAZ_DEADLINE_WIFI_MS",
         confirm: Confirm::Wifi,
+        rollback_capability: RollbackCapability::Unsupported,
+        completion_evidence: CompletionEvidence::ApReadbackOnly,
     },
     Spec {
         action: "wifi.guest",
@@ -179,6 +236,8 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 90_000,
         deadline_env: "LUYAZ_DEADLINE_WIFI_MS",
         confirm: Confirm::Wifi,
+        rollback_capability: RollbackCapability::Unsupported,
+        completion_evidence: CompletionEvidence::ApReadbackOnly,
     },
 ];
 
@@ -429,6 +488,12 @@ impl Spec {
     pub fn to_params(&self, v: &Value) -> Value {
         (self.params)(v)
     }
+
+    /// 能否自动退回：只看逐动作能力，全局默认和调用者的 `rollback: true` 都不能把它变成可退回。
+    #[allow(dead_code)]
+    pub fn auto_rollback_allowed(&self) -> bool {
+        self.rollback_capability == RollbackCapability::CapturedAndProven
+    }
 }
 
 /// D14：`cellular.set` 只把数据或漫游关掉（参数只有 `enabled`/`roaming`，且都是关）算安全类写，
@@ -652,5 +717,55 @@ mod tests {
             lte.target(&json!({"pci":"12"})),
             Err("missing parameter: earfcn".into())
         );
+    }
+
+    /// §1.2/O3：第一批没有任何动作可自动退回；APN/CHILL/Wi-Fi 明确不能退回；完成证据只跟确认规则走。
+    #[test]
+    fn no_action_is_auto_rollback_yet() {
+        for s in SPECS {
+            assert!(!s.auto_rollback_allowed(), "{}", s.action);
+            assert_ne!(
+                s.rollback_capability,
+                RollbackCapability::CapturedAndProven,
+                "{}",
+                s.action
+            );
+            let (rb, ev) = match s.confirm {
+                Confirm::Registered => (
+                    RollbackCapability::Unknown,
+                    CompletionEvidence::ReadbackRegistered,
+                ),
+                Confirm::Apn => (
+                    RollbackCapability::Unsupported,
+                    CompletionEvidence::ReadbackNewConn,
+                ),
+                Confirm::Chill => (
+                    RollbackCapability::Unsupported,
+                    CompletionEvidence::ReadbackChill,
+                ),
+                Confirm::Wifi => (
+                    RollbackCapability::Unsupported,
+                    CompletionEvidence::ApReadbackOnly,
+                ),
+            };
+            assert_eq!(
+                (s.rollback_capability, s.completion_evidence),
+                (rb, ev),
+                "{}",
+                s.action
+            );
+        }
+    }
+
+    #[test]
+    fn only_captured_and_proven_allows_auto_rollback() {
+        let base = &SPECS[0];
+        let with = |c| Spec {
+            rollback_capability: c,
+            ..*base
+        };
+        assert!(with(RollbackCapability::CapturedAndProven).auto_rollback_allowed());
+        assert!(!with(RollbackCapability::Unsupported).auto_rollback_allowed());
+        assert!(!with(RollbackCapability::Unknown).auto_rollback_allowed());
     }
 }

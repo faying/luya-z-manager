@@ -553,3 +553,58 @@ fn cell_value_words() {
         "不锁小区"
     );
 }
+
+#[test]
+fn chill_and_non_rollbackable_ui_words() {
+    let mut t = Txn::new(
+        NewTxn {
+            op_id: "c1".into(),
+            action: "chill.exit".into(),
+            item: crate::ops::chill::EXIT.into(),
+            source: Source::Mcp,
+            approved_by: Source::Mcp,
+            undo: false,
+            target: "direct_keep_ai".into(),
+            old: "proxy".into(),
+            rollback_to: "proxy".into(),
+            sim: sim(),
+            conn: None,
+            confirm: Confirm::Chill,
+            rollback_enabled: true,
+            deadline_ms: 90_000,
+            boot_id: "b".into(),
+        },
+        1_000,
+    );
+    t.begin_apply();
+    let v = view(&t, 1_500, Ctx::default());
+    assert_eq!(
+        (s(&v, "say_zh"), s(&v, "what_zh"), s(&v, "what_en")),
+        ("正在换 CHILL 出口", "CHILL 出口", "CHILL exit")
+    );
+    assert!(s(&v, "say_zh").len() < 32);
+    assert_eq!(
+        (s(&v, "old_zh"), s(&v, "target_zh"), s(&v, "target_en")),
+        ("代理", "直连 · AI 不动", "Direct · AI stays")
+    );
+    let steps = v["steps"].as_array().unwrap();
+    assert_eq!(steps[1]["zh"], "CHILL 在运行");
+    assert_eq!(steps[2]["zh"], "出口连通");
+    assert_eq!(
+        value_words(crate::ops::chill::PROFILE, &json!("eco")),
+        ("省电".into(), "Eco".into())
+    );
+
+    // 没有旧值可退回：验证期不能点退回，终态也不能点撤销
+    t.applied(Applied::Done, 1_500);
+    t.rollback_to = Value::Null;
+    t.old = Value::Null;
+    let v = view(&t, 2_000, Ctx::default());
+    assert_eq!(v["can_revert"], false);
+    assert_eq!(v["can_keep"], true);
+    t.phase = Phase::Confirmed;
+    t.reason = Some(Reason::Verified);
+    let v = view(&t, 3_000, Ctx::default());
+    assert_eq!(v["undo"]["ok"], false);
+    assert_eq!(s(&v["undo"], "why_zh"), "没有旧值可退回");
+}

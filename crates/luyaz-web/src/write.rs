@@ -661,7 +661,7 @@ mod tests {
         let inline = area(&ask(Tier::Inline, None), true);
         assert!(inline.contains("id=\"x-y-confirm\"") && inline.contains("nd-confirm"));
         assert!(inline.contains("设备重启，所有连接断开。"));
-        assert!(!inline.contains("<dialog") && inline.contains("Tailscale"));
+        assert!(!inline.contains("<dialog") && inline.contains("Tailscale") && inline.contains("role=\"alert\""));
         assert!(!area(&ask(Tier::Inline, None), false).contains("Tailscale"));
         assert_eq!(post_once("/x/go?id=3"), "@post('/x/go?id=3', {retryMaxCount: 0})");
         assert!(inline.contains("{retryMaxCount: 0}"), "a confirm is never retried");

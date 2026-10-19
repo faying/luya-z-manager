@@ -3,14 +3,14 @@
 //!
 //! ```text
 //!  on open / 刷新 / after the change ─▶ agent /api/usb/status (tab's session; u60d first)
-//!        mode_settable ─▶ the button is disabled in the very first HTML, with the reason
+//!        shared USB write policy ─▶ the button is disabled in the very first HTML, with the reason
 //!  hub `qos.usb_mode` ─▶ the mode shown (the agent's `mode` only while the block is missing)
 //!  启用 ─▶ ask (gate again) ─▶ dialog ─▶ set (gate again) ─▶ usb::mode_write("debug") ─▶ readback
 //! ```
 //! - No polling: the old page read nothing; this one reads on open, on 刷新 and after its own
 //!   change, and the mode follows the hub's `qos` block by itself.
 //! - One writer: [`crate::usb::mode_write`] and [`crate::usb::mode_gate`] (the /usb page's own);
-//!   `mode_settable: false` (CN B31) is never sent, whichever way the request comes.
+//!   The Core executor checks the same assessment again before dispatch.
 //! - Unlike /usb, a tab already in debug mode may press it again (the old page's 「重新启用」).
 //! - The dialog's texts are the old page's (its recovery line points to the /usb page).
 
@@ -59,6 +59,8 @@ pub struct View {
     pub on: bool,
     /// `mode_settable: false`: the button is off and says why.
     pub fixed: bool,
+    pub blocked: bool,
+    pub capability_note: Option<&'static str>,
 }
 
 impl View {
@@ -125,7 +127,13 @@ pub fn view(mode: Option<&str>, a: &Agent, l: Lang) -> View {
         retry: a.port.is_none() && a.fail.is_some(),
         stale: a.port.is_some() && a.fail.is_some(),
         on: mode == Some("debug"),
-        fixed: a.port.as_ref().and_then(|p| p.settable) == Some(false),
+        blocked: usb::mode_gate(a, l).is_some(),
+        capability_note: usb::policy_note(a, "usb.mode.set", l),
+        fixed: a
+            .port
+            .as_ref()
+            .and_then(|p| p.policies.get("usb.mode.set"))
+            .is_some_and(|p| p.assessment.status == luyaz_api::firmware::Support::Unsupported),
     }
 }
 
@@ -373,17 +381,11 @@ pub async fn cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usb::Port;
 
     fn agent(settable: Option<bool>, mode: Option<&str>) -> Agent {
-        Agent {
-            port: Some(Port {
-                settable,
-                mode: mode.map(Into::into),
-                ..Port::default()
-            }),
-            ..Agent::default()
-        }
+        let mut a = crate::usb::tests::agent(settable);
+        a.port.as_mut().unwrap().mode = mode.map(Into::into);
+        a
     }
 
     #[test]
@@ -392,10 +394,16 @@ mod tests {
         let v = view(Some("user"), &a, Lang::En);
         assert!(v.fixed && !v.on);
         let html = Leaves { v: &v }.render().unwrap();
-        assert!(html.contains("disabled") && html.contains("This firmware can&#39;t turn on ADB mode"), "{html}");
+        assert!(
+            html.contains("disabled") && html.contains("This firmware can&#39;t turn on ADB mode"),
+            "{html}"
+        );
         let ok = view(Some("mtp"), &agent(Some(true), Some("mtp")), Lang::En);
         let html = Leaves { v: &ok }.render().unwrap();
-        assert!(!html.contains("disabled") && html.contains("/tools/enable-adb/ask"), "{html}");
+        assert!(
+            !html.contains("disabled") && html.contains("/tools/enable-adb/ask"),
+            "{html}"
+        );
         assert!(usb::mode_gate(&a, Lang::En).is_some(), "never sent");
         assert!(usb::mode_gate(&agent(Some(true), None), Lang::En).is_none());
     }
@@ -406,7 +414,10 @@ mod tests {
         assert_eq!(view(Some("debug"), &a, Lang::En).state, "ADB is on");
         assert!(view(Some("debug"), &a, Lang::En).on);
         let off = view(Some("rndis"), &a, Lang::Zh);
-        assert_eq!((off.state.as_str(), off.reason.as_deref()), ("ADB 未开启", Some("USB 模式：RNDIS")));
+        assert_eq!(
+            (off.state.as_str(), off.reason.as_deref()),
+            ("ADB 未开启", Some("USB 模式：RNDIS"))
+        );
         assert_eq!(view(None, &a, Lang::En).state, "USB mode not reported");
         let down = Agent {
             fail: Some(crate::agent::Fail::Unreachable),
@@ -418,8 +429,14 @@ mod tests {
 
     #[test]
     fn only_a_read_back_mode_is_reported_as_enabled() {
-        assert!(matches!(said(write::Outcome::Accepted, Lang::En), write::Outcome::Accepted));
+        assert!(matches!(
+            said(write::Outcome::Accepted, Lang::En),
+            write::Outcome::Accepted
+        ));
         let o = said(write::Outcome::Applied("x".into()), Lang::En);
-        assert_eq!(o.text(Lang::En), "ADB debug mode enabled. Connect via USB and run adb devices.");
+        assert_eq!(
+            o.text(Lang::En),
+            "ADB debug mode enabled. Connect via USB and run adb devices."
+        );
     }
 }

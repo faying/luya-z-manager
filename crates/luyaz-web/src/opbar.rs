@@ -41,10 +41,11 @@ fn item_route(item: &str) -> &'static str {
         "network.mode" => "/router/network-mode",
         "band.lte" | "band.nr" | "band.all" => "/bandlock",
         "cell.lte" | "cell.nr" => "/router/celllock",
-        "apn" => "/router/apn",
+        "apn" | "apn.use" => "/router/apn",
         "netselect.session" => "/router/mobile-network",
         "wifi.main" => "/router/wifi",
         "wifi.guest" => "/router/wifi-guest",
+        "chill.profile" | "chill.exit" => "/services/chill",
         _ => "/changes",
     }
 }
@@ -680,5 +681,12 @@ mod tests {
                 .unwrap();
             assert_eq!(bar.kind, Kind::Disconnected, "{link:?}");
         }
+    }
+
+    #[test]
+    fn item_routes_cover_apn_use_and_chill() {
+        assert_eq!(item_route("apn.use"), "/router/apn");
+        assert_eq!(item_route("chill.profile"), "/services/chill");
+        assert_eq!(item_route("chill.exit"), "/services/chill");
     }
 }

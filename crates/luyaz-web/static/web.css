@@ -64,6 +64,9 @@ svg { display: block; flex-shrink: 0; }
 .t-note--ok { color: var(--nd-okT); }
 .t-note--bad { color: var(--nd-badT); }
 .t-note--warn { color: var(--nd-warnT); }
+.t-note--ok::before { content: "● "; content: "● " / ""; }
+.t-note--bad::before { content: "■ "; content: "■ " / ""; }
+.t-note--warn::before, .nd-dialog__remote::before { content: "▲ "; content: "▲ " / ""; }
 .t-sw { display: inline-flex; align-items: center; gap: 8px; }
 
 /* Language switch: icon + the other language's name. */

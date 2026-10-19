@@ -101,7 +101,7 @@ fn stat_start_time_and_comm_search() {
         .unwrap()
         .replacen("S 0", "S 40", 1);
     std::fs::write(&st, t).unwrap();
-    assert_eq!(find_pids(&d.p.proc_, &["zwrt-datad"])["zwrt-datad"], 40);
+    assert_eq!(find_pids(&d.p.proc_, &["luyaz-core"])["luyaz-core"], 40);
     // a comm with ") " in it does not move the fields
     d.proc(9, "a) b", 42, b"c");
     assert_eq!(start_time(&d.p.proc_, 9), Some(42));
@@ -118,9 +118,9 @@ fn ver_once_a_boot_then_on_a_new_build() {
     let get = |p: &str| v.iter().find(|x| x["prog"] == p).copied().unwrap().clone();
     assert_eq!(get("tailscaled")["md5"], md5_hex(b"ts-1", 8));
     assert_eq!(get("tailscaled")["pid"], 200);
-    assert_eq!(get("zwrt-datad")["extra"], "ubus=socket");
+    assert_eq!(get("luyaz-core")["extra"], "ubus=socket");
     assert_eq!(
-        get("u60pro-devui")["md5"],
+        get("luyaz-ui")["md5"],
         Value::Null,
         "not running: written as such"
     );
@@ -219,7 +219,7 @@ fn proc_restart_with_crashlog_and_ship() {
     let lk = st2.look(&p2, "b1b1b1b1-0000", 1200, now_wall());
     let pr = of(&lk, "proc_restart");
     assert_eq!(pr.len(), 1);
-    assert_eq!(pr[0]["prog"], "zwrt-datad");
+    assert_eq!(pr[0]["prog"], "luyaz-core");
     assert_eq!(
         (pr[0]["old"].clone(), pr[0]["new"].clone()),
         (json!(100), json!(150))
@@ -247,6 +247,29 @@ fn svc_exit_first_go_live_takes_what_is_there() {
     std::fs::remove_dir_all(&d.p.crashlog).unwrap();
     let lk = d.look(&mut st, 240);
     assert!(lk.cov.contains(&("crashlog".into(), false)));
+}
+
+#[test]
+fn old_crash_dirs_move_without_new_crashes() {
+    let d = Dev::new("sxm");
+    d.write("crashlog/u60pro-devui/a-up10.log", "status: exit 1\n");
+    d.write("crashlog/zwrt-datad/b-up20.log", "status: signal 9\n");
+    let mut st = State::default();
+    assert!(of(&d.look(&mut st, 60), "svc_exit").is_empty());
+    // an older sentinel writes the old directory again: one new crash, under the new key
+    d.write("crashlog/u60pro-devui/c-up30.log", "status: exit 2\n");
+    let lk = d.look(&mut st, 120);
+    let sx = of(&lk, "svc_exit");
+    assert_eq!(sx.len(), 1, "{sx:?}");
+    assert_eq!(sx[0]["prog"], "luyaz-ui");
+    assert!(!d.p.crashlog.join("u60pro-devui").exists());
+    assert!(d.p.crashlog.join("luyaz-core/b-up20.log").is_file());
+    let seen = std::fs::read_to_string(d.p.long.join("crashlog.seen")).unwrap();
+    assert!(
+        !seen.contains("u60pro-devui/") && !seen.contains("zwrt-datad/"),
+        "{seen}"
+    );
+    assert!(of(&d.look(&mut st, 180), "svc_exit").is_empty());
 }
 
 #[test]
@@ -371,12 +394,12 @@ fn the_core_is_found_under_its_new_name_by_prefix() {
     d.proc(30, "luyaz-core.test", 700, b"c");
     d.proc(31, "u60-uid", 701, b"u");
     let got = find_pids(&d.p.proc_, &PROGS);
-    // the ledger key stays zwrt-datad (old records)
-    assert_eq!(got.get("zwrt-datad"), Some(&30));
+    // the ledger key is the new name (Luya-Z F)
+    assert_eq!(got.get("luyaz-core"), Some(&30));
     assert_eq!(got.get("u60-uid"), Some(&31));
     assert!(!got.contains_key("luyaz-core.test"));
     d.proc(20, "luyaz-core", 650, b"c");
-    assert_eq!(find_pids(&d.p.proc_, &RESTARTS)["zwrt-datad"], 20);
+    assert_eq!(find_pids(&d.p.proc_, &RESTARTS)["luyaz-core"], 20);
 }
 
 #[test]
@@ -384,8 +407,8 @@ fn ship_restart_knows_the_core_under_both_names() {
     // D4c: the executor writes comp=core; older transactions say datad
     for comp in ["datad", "core"] {
         let t = format!("comp={comp}\nboot_id=b\nphase=trial\nt_phase=100\n");
-        assert_eq!(ship_restart(Some(&t), "zwrt-datad", "b", 150), 1, "{comp}");
+        assert_eq!(ship_restart(Some(&t), "luyaz-core", "b", 150), 1, "{comp}");
     }
     let t = "comp=sentinel\nboot_id=b\nphase=trial\nt_phase=100\n";
-    assert_eq!(ship_restart(Some(t), "zwrt-datad", "b", 150), 0);
+    assert_eq!(ship_restart(Some(t), "luyaz-core", "b", 150), 0);
 }

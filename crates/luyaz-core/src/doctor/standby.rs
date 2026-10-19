@@ -4,13 +4,12 @@
 use super::{Cfg, cat, digits};
 use std::collections::BTreeMap;
 
-// Ledger keys, by position (longterm/standby.rs `PROGS`, which says why the old names stay):
-// u60pro-devui = the touch UI, zwrt-datad = the core, zte-agent = retired.
+// Ledger keys, by position (longterm/standby.rs `PROGS`); zte-agent = retired.
 const PROGS: &[&str] = &[
     "tailscaled",
     "mihomo",
-    "u60pro-devui",
-    "zwrt-datad",
+    crate::paths::UI,
+    crate::paths::CORE,
     "zte-agent",
 ];
 const LABELS: &[&str] = &[
@@ -74,15 +73,15 @@ fn fingerprints(c: &Cfg) -> Vec<(usize, String)> {
                 cfg_md5(&c.chill.env)
             ),
             "zte-agent" => "retired".into(),
-            "zwrt-datad" => {
-                let f = prog_md5(c, c.core_name());
-                if f == "?" {
-                    prog_md5(c, "zwrt-datad")
-                } else {
-                    f
+            // the fp file is tmpfs, written by this core: the new key, or an older core's
+            p => {
+                let f = prog_md5(c, p);
+                match (f.as_str(), p) {
+                    ("?", crate::paths::CORE) => prog_md5(c, "zwrt-datad"),
+                    ("?", crate::paths::UI) => prog_md5(c, "u60pro-devui"),
+                    _ => f,
                 }
             }
-            p => prog_md5(c, p),
         };
         v.push((4 + i, f));
     }

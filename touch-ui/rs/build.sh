@@ -34,5 +34,5 @@ case ${1:-native} in
 esac
 # shellcheck disable=SC2086
 exec docker run --rm $OUTV -v "$HERE/../..":/repo -v "${LUYAZ_RS_SRC_VOL:-${U60_RS_SRC_VOL:-u60-spike-src}}":/s:ro \
-    -v "${LUYAZ_RS_REG_VOL:-${U60_RS_REG_VOL:-u60-cargo-registry}}":/usr/local/cargo/registry -v "${LUYAZ_RS_TARGET_VOL:-${U60_RS_TARGET_VOL:-u60-devui-rs-target}}":/t -e CARGO_TARGET_DIR=/t -w /repo -e LVGL_DIR=/s/lvgl -e FT_SRC=/s/freetype -e LV_CONF_DIR=/repo/touch-ui \
+    -v "${LUYAZ_RS_REG_VOL:-${U60_RS_REG_VOL:-u60-cargo-registry}}":/usr/local/cargo/registry -v "${LUYAZ_RS_ZIG_VOL:-${U60_RS_ZIG_VOL:-u60-zig-cache}}":/root/.cache -v "${LUYAZ_RS_TARGET_VOL:-${U60_RS_TARGET_VOL:-u60-devui-rs-target}}":/t -e CARGO_TARGET_DIR=/t -w /repo -e LVGL_DIR=/s/lvgl -e FT_SRC=/s/freetype -e LV_CONF_DIR=/repo/touch-ui \
     "${LUYAZ_RS_IMAGE:-u60-rust-ci:1.99.0}" sh -c "$cmd"

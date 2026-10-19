@@ -10,7 +10,7 @@
 <button type="button" class="nd-btn {% if c.danger %}nd-btn--danger{% else %}nd-btn--confirm{% endif %}" data-write="{{ id }}"{% if let Some(w) = c.word %} data-attr:disabled="(${{ self.sig() }} ?? '').trim() !== '{{ w }}'"{% endif %} data-on:click="{{ self.set_js(c.word.is_some()) }}">{{ c.action }}</button></div>
 </dialog>{% else %}<div id="{{ id }}-confirm" role="group" aria-label="{{ c.title }}" class="nd-confirm" data-on:keydown__window="evt.key === 'Escape' && @post('{{ cancel }}')">
 <p class="nd-confirm__text" aria-live="polite">{{ c.what }}</p>
-{% if remote && c.cuts_uplink %}<p class="nd-confirm__text t-note--warn">{{ l.pick("You are connected remotely over Tailscale. If this step cuts the connection, someone has to be at the device to recover it.", "你正在经 Tailscale 远程操作；如果这一步断网，要到设备旁边才能恢复。") }}</p>
+{% if remote && c.cuts_uplink %}<p class="nd-confirm__text t-note--warn" role="alert">{{ l.pick("You are connected remotely over Tailscale. If this step cuts the connection, someone has to be at the device to recover it.", "你正在经 Tailscale 远程操作；如果这一步断网，要到设备旁边才能恢复。") }}</p>
 {% endif %}<div class="nd-confirm__actions"><button type="button" class="nd-btn {% if c.danger %}nd-btn--danger{% else %}nd-btn--confirm{% endif %}" data-write="{{ id }}" data-on:click="{{ self.set_js(false) }}">{{ c.action }}</button>
 <button type="button" class="nd-btn nd-btn--secondary" data-init="el.focus()" data-on:click="@post('{{ cancel }}')">{{ l.pick("Cancel", "取消") }}</button></div>
 </div>{% endif %}{% when Phase::Pending(t) %}{% if !t.is_empty() %}<p class="t-note" role="status">{{ t }}</p>{% endif %}{% when Phase::Done(o) %}<p class="t-note t-note--{{ o.tone() }}" role="{{ o.role() }}">{{ self.said(o) }}</p>{% when Phase::Idle %}{% endmatch %}</div>

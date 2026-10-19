@@ -185,19 +185,27 @@ pub fn disable_forbidden(jobs: &mut [Job]) -> Vec<(u32, String, String)> {
     out
 }
 
+/// Earliest plausible device epoch (2026-01-01 00:00:00 UTC, matching `CLOCK_YEAR_MIN`): before
+/// SNTP sets the clock after boot, no scheduled job or restore may fire on the 1970/build-time RTC.
+pub const CLOCK_SET: i64 = 1_767_225_600;
+
 /// Jobs that fire now, in job order: `(id, is_restore)`. A restore runs the job's action with
 /// `restore.body`. `now_ts` is the device clock (unix seconds as the device keeps them),
-/// `hh:mm` and `dow` (0 = Monday) its local time. The 60 s guards keep a 30 s tick from firing
-/// twice in the same minute. Forbidden paths are not filtered here: the host refuses them when
-/// it runs them (403), which `record` then stores.
+/// `hh:mm` and `dow` (0 = Monday) its local time. The 60 s guards keep a 30 s tick (or a small
+/// backward clock adjustment in the same minute) from firing twice in the same minute without
+/// wedging recurring jobs after a large backward wall-clock jump (e.g. -8 h). Forbidden paths are
+/// not filtered here: the host refuses them when it runs them (403), which `record` then stores.
 pub fn due(jobs: &[Job], now_ts: i64, hh: u8, mm: u8, dow: u8) -> Vec<(u32, bool)> {
+    if now_ts < CLOCK_SET || hh > 23 || mm > 59 || dow > 6 {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     for job in jobs.iter().filter(|j| j.enabled) {
         let run = match &job.schedule {
             Schedule::Recurring { time, days } => {
                 at_minute(time, hh, mm)
                     && days.contains(&dow)
-                    && job.last_run.is_none_or(|lr| now_ts - lr > 60)
+                    && job.last_run.is_none_or(|lr| now_ts.abs_diff(lr) > 60)
             }
             Schedule::Once { at } => now_ts >= *at && job.last_run.is_none(),
         };
@@ -214,7 +222,7 @@ pub fn due(jobs: &[Job], now_ts: i64, hh: u8, mm: u8, dow: u8) -> Vec<(u32, bool
                 (Some(_), None) => true,
                 _ => false,
             };
-            let guard = job.last_restore.is_none_or(|lr| now_ts - lr > 60);
+            let guard = job.last_restore.is_none_or(|lr| now_ts.abs_diff(lr) > 60);
             if should_restore && guard {
                 out.push((job.id, true));
             }
@@ -244,6 +252,11 @@ pub fn record(
         job.last_run = Some(now_ts);
         job.last_status = status;
         job.last_error = error;
+        // If the wall clock stepped backward since the previous restore (`last_restore >= now_ts`),
+        // clear `last_restore` so `last_run > last_restore` does not wedge the upcoming restore.
+        if job.last_restore.is_some_and(|lrest| lrest >= now_ts) {
+            job.last_restore = None;
+        }
         // a once job without a restore is done after running
         if once && job.restore.is_none() {
             job.enabled = false;

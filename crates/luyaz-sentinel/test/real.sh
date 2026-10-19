@@ -56,7 +56,7 @@ sleep 8
 check "crash then crash on start: gave up" '[ -f /data/luyaz/screen/gave-up ] && [ -n "$(vendor)" ] && [ -z "$(ui)" ]'
 check "two devui-crash, one devui-gave-up in the queue" '[ "$(grep -c devui-crash /data/alerts/queue)" = 2 ] && [ "$(grep -c devui-gave-up /data/alerts/queue)" = 1 ]'
 check "events in the new dir, the old dir left as it was" '[ -s /data/luyaz/screen/events ] && [ "$(cat /data/u60-uid/events.seq)" = 41 ] && [ ! -e /data/u60-uid/events ]'
-check "a crash record left" '[ "$(ls /data/crashlog/u60pro-devui/*.log | wc -l)" -ge 1 ]'
+check "a crash record left" '[ "$(ls /data/crashlog/luyaz-ui/*.log | wc -l)" -ge 1 ]'
 rm -f /tmp/ui-crash
 echo devui >/tmp/luyaz-screen.ctl
 sleep 4

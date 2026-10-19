@@ -350,7 +350,11 @@ pub(super) fn owns(c: &Compat) -> bool {
 /// netwatch's verdict for the public status (nothing with the writes off).
 pub(super) fn verdict(c: &Compat) -> Option<String> {
     owns(c)
-        .then(|| c.group.watch.verdict(luyaz_netwatch::now_unix()))
+        .then(|| {
+            c.group
+                .watch
+                .verdict(luyaz_api::clock::BootTime::read().as_ref())
+        })
         .flatten()
 }
 
@@ -384,6 +388,7 @@ pub async fn sample(c: Compat) {
         let _ = tokio::task::spawn_blocking(move || {
             w.tick(
                 now,
+                elapsed.as_ref(),
                 state.ok_or(ReadError::NoWanStatus),
                 tick_screen.as_ref(),
             )

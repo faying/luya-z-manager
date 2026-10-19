@@ -27,8 +27,9 @@ pub enum Live {
     HalfMoved,
 }
 
-/// The core's program name in ledger and report keys (old records use it; 10e keeps it).
-pub const CORE: &str = "zwrt-datad";
+/// The core's program name in ledger and report keys (Luya-Z F; records before it say
+/// `zwrt-datad`, which [`prog_key`] reads as this).
+pub const CORE: &str = "luyaz-core";
 
 /// A process or file name that is the core: `zwrt-datad*` (incl. the side-by-side
 /// `zwrt-datad.test`) or the Phase 10 name `luyaz-core*`. By prefix, never exact (9-17).
@@ -41,8 +42,9 @@ pub fn core_key(name: &str) -> &str {
     if is_core(name) { CORE } else { name }
 }
 
-/// The touch UI's program name in ledger and report keys (10h R5 keeps the old one).
-pub const UI: &str = "u60pro-devui";
+/// The touch UI's program name in ledger and report keys (Luya-Z F; records before it say
+/// `u60pro-devui`, which [`prog_key`] reads as this).
+pub const UI: &str = "luyaz-ui";
 
 /// A comm that is our touch UI: `luyaz-ui*` (side-by-side builds included). By prefix, never
 /// exact (9-17). The old name u60pro-devui is gone since Phase 10 R5 round ③.
@@ -55,7 +57,7 @@ pub fn is_ui(name: &str) -> bool {
 pub fn prog_key(name: &str) -> &str {
     if is_core(name) {
         CORE
-    } else if name == "luyaz-ui" {
+    } else if name == "luyaz-ui" || name == "u60pro-devui" {
         UI
     } else {
         name
@@ -102,11 +104,23 @@ mod tests {
 
     #[test]
     fn core_names_by_prefix() {
-        for n in ["zwrt-datad", "zwrt-datad.test", "luyaz-core", "luyaz-core.test"] {
+        for n in [
+            "zwrt-datad",
+            "zwrt-datad.test",
+            "luyaz-core",
+            "luyaz-core.test",
+        ] {
             assert!(is_core(n), "{n}");
             assert_eq!(core_key(n), CORE);
         }
-        for n in ["zte-agent", "u60-uid", "luyaz-sentinel", "zwrt-data", "luyaz-cor", ""] {
+        for n in [
+            "zte-agent",
+            "u60-uid",
+            "luyaz-sentinel",
+            "zwrt-data",
+            "luyaz-cor",
+            "",
+        ] {
             assert!(!is_core(n), "{n}");
             assert_eq!(core_key(n), n);
         }
@@ -117,12 +131,23 @@ mod tests {
         for n in ["luyaz-ui", "luyaz-ui.test"] {
             assert!(is_ui(n), "{n}");
         }
-        for n in ["u60pro-devui", "u60pro-devui.te", "zte_topsw_devui", "luyaz-u", "luyaz-core", ""] {
+        for n in [
+            "u60pro-devui",
+            "u60pro-devui.te",
+            "zte_topsw_devui",
+            "luyaz-u",
+            "luyaz-core",
+            "",
+        ] {
             assert!(!is_ui(n), "{n}");
         }
         assert_eq!(prog_key("luyaz-ui"), UI);
         assert_eq!(prog_key("u60pro-devui"), UI);
-        assert_eq!(prog_key("luyaz-ui.te"), "luyaz-ui.te", "side-by-side: as u60pro-devui.te was");
+        assert_eq!(
+            prog_key("luyaz-ui.te"),
+            "luyaz-ui.te",
+            "side-by-side: as u60pro-devui.te was"
+        );
         assert_eq!(prog_key("luyaz-core"), CORE);
     }
 

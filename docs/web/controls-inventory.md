@@ -1,6 +1,13 @@
 # 管理网页控件与数据清单（改版前基线）
 
-> **这是 2026-09-24 的历史快照**：描述的是已删的 Next.js 网页（`web/`）和 zte-agent（10-14 删）。文中的 `zte-agent/src/…`、`/data/u60-guard/doctor.sh` 等都是当时的样子；现在网页是 `crates/luyaz-web`，接口由 `crates/luyaz-core` 提供，体检是 `/data/luyaz/scripts/doctor.sh`（= `luyaz-core doctor`）。
+> **这是 2026-09-24 的历史快照（改版前基线）**：
+> - **已删除的旧实现**：文中的 Next.js 网页（`web/src/app/(panel)/**/page.tsx`、`web/tests/e2e/inventory.spec.ts`，2026-10-15 Phase 10 X13 已删）、`zte-agent/src/…`（2026-10-14 Phase 10 8d-2c 已删）与 `/data/u60-guard/doctor.sh` 均已退役。
+> - **仍继续有效的部分**：下文「档位规则」（一/二/三档与「二·远程三」确认分级，`docs/DESIGN.md` §5 引用）以及功能/无障碍控件核对基线（确保改版不丢功能与确认门禁）。
+> - **现行代码对照（`luyaz-web` + `luyaz-core`）**：
+>   - 管理网页路由与页面表：`crates/luyaz-web/src/routes.rs`（模板 `crates/luyaz-web/templates/`，样式 `crates/luyaz-web/static/nd/`）。
+>   - 写操作分档确认与事务条：`crates/luyaz-web/src/opbar.rs`、`crates/luyaz-web/templates/components/write.html`，核心事务描述表在 `crates/luyaz-core/src/ops/spec.rs` 与 `crates/luyaz-core/src/ops/ui.rs`（`/v2/ops`、`/control`）。
+>   - 后端读写接口：`crates/luyaz-core/src/api/`、`crates/luyaz-core/src/control.rs`（`127.0.0.1:9460`）与 `crates/luyaz-esim/`（`lpac`）。
+>   - 端到端测试：`crates/luyaz-web/e2e/`（`run.sh` + mock core）；体检：`/data/luyaz/scripts/doctor.sh`（薄壳转发 `luyaz-core doctor`）。
 
 ## 说明
 

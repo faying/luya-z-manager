@@ -436,6 +436,8 @@ pub struct Hub {
     inner: Mutex<Inner>,
     sink: Box<dyn EventSink>,
     after_read: std::sync::OnceLock<AfterRead>,
+    /// Shared by background collection, compat reads and the capability HTTP report.
+    firmware: crate::device_profile::collect::Collector,
 }
 
 fn wall_secs() -> u64 {
@@ -455,7 +457,12 @@ impl Hub {
             }),
             sink,
             after_read: std::sync::OnceLock::new(),
+            firmware: crate::device_profile::collect::Collector::new(),
         }
+    }
+
+    pub(crate) fn firmware(&self) -> &crate::device_profile::collect::Collector {
+        &self.firmware
     }
 
     /// 装上「读成功后」回调；只能装一次（再装返回 false）。

@@ -749,6 +749,9 @@ impl Dev {
 }
 
 impl WorkerIo for Dev {
+    fn utc_anchor(&mut self) -> Option<String> {
+        self.files.get(luyaz_alerts::utc::ANCHOR_PATH).cloned()
+    }
     fn boot_time(&mut self) -> Option<luyaz_alerts::clock::BootTime> {
         let boot_id = self
             .files
@@ -2243,4 +2246,90 @@ fn clock_suspend_advances_boot_time_without_looking_like_a_step() {
     w.clock_round(&mut d);
     assert_eq!(clock_ok(&d), "1 continuity");
     assert_eq!(w.clock.last.unwrap().monotonic, Some(1000));
+}
+
+#[test]
+fn utc_gateway_expiry_cannot_be_extended_by_worker_or_restart() {
+    use luyaz_alerts::{
+        clock::{ClockEvidence, EvidenceStatus},
+        utc::*,
+    };
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 1000;
+    let at = d.boot_time().unwrap();
+    let a = UtcAnchor {
+        version: 1,
+        source: ReferenceSource::ChronyNts,
+        source_id: "nts.example".into(),
+        evidence_sha256: "a".repeat(64),
+        observed_at: at,
+        raw_wall: d.wall,
+        utc_estimate: d.wall - 28800,
+        uncertainty_s: 2,
+        valid_for_s: 120,
+        drift_ppm: 1000,
+        display_zone: 28800,
+    };
+    d.files
+        .insert(ANCHOR_PATH.into(), serde_json::to_string(&a).unwrap());
+    for _ in 0..3 {
+        w.round(&mut d);
+        let e = ClockEvidence::decode(&d.files["/tmp/luyaz/clock-ok"]).unwrap();
+        assert_eq!(
+            e.status(d.boot_time().as_ref(), d.wall),
+            EvidenceStatus::Verified
+        );
+        d.up += 60;
+        d.wall += 60;
+    }
+    let mut restarted = wk();
+    restarted.load(&mut d);
+    restarted.round(&mut d);
+    let e = ClockEvidence::decode(&d.files["/tmp/luyaz/clock-ok"]).unwrap();
+    assert_eq!(
+        e.status(d.boot_time().as_ref(), d.wall),
+        EvidenceStatus::Estimated
+    );
+    d.files.insert(ANCHOR_PATH.into(), "{bad".into());
+    restarted.clock_round(&mut d);
+    assert_eq!(
+        ClockEvidence::decode(&d.files["/tmp/luyaz/clock-ok"])
+            .unwrap()
+            .sync_state,
+        luyaz_alerts::clock::SyncState::Estimated
+    );
+    // A valid reference cannot mask the Sentinel wall-step latch.
+    d.files
+        .insert(ANCHOR_PATH.into(), serde_json::to_string(&a).unwrap());
+    d.wall += 28800;
+    restarted.clock_round(&mut d);
+    assert_eq!(clock_ok(&d), "0 revoked");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn utc_file_requires_root_private_regular_single_link_and_bounded_size() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("sentinel-utc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("anchor");
+    std::fs::write(&file, "{}").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    // Test containers are root; non-root runners must conservatively reject their own file.
+    let root = unsafe { libc::geteuid() } == 0;
+    assert_eq!(crate::sys::trusted_utc_file(&file).is_some(), root);
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o666)).unwrap();
+    assert!(crate::sys::trusted_utc_file(&file).is_none());
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&file, &link).unwrap();
+    assert!(crate::sys::trusted_utc_file(&link).is_none());
+    let hard = dir.join("hard");
+    std::fs::hard_link(&file, &hard).unwrap();
+    assert!(crate::sys::trusted_utc_file(&file).is_none());
+    std::fs::remove_file(hard).unwrap();
+    std::fs::write(&file, "x".repeat(4097)).unwrap();
+    assert!(crate::sys::trusted_utc_file(&file).is_none());
+    assert!(crate::sys::trusted_utc_file(&dir).is_none());
+    std::fs::remove_dir_all(dir).unwrap();
 }

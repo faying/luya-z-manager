@@ -853,10 +853,13 @@ impl Txn {
         self.expire(Reason::Timeout)
     }
 
-    /// 用户点「立即退回」：自动退回关着也照做（这是用户的写）。
+    /// 用户点「立即退回」：自动退回关着也照做（这是用户的写）；没有可退回的旧值时拒绝。
     pub fn revert(&mut self) -> Result<Next, &'static str> {
         match self.phase {
             Phase::Verifying if self.intent.is_none() => {
+                if blank(&self.rollback_to) {
+                    return Err("no previous setting to revert to");
+                }
                 Ok(self.start_rollback(Reason::UserRevert))
             }
             Phase::RollingBack => Err("already rolling back"),

@@ -96,16 +96,8 @@ pub async fn qos(State(c): State<Compat>) -> Response {
 /// The two reads `qos_reply` sends, mapped onto `crate::at`'s fixed list (cid 1..=24; anything
 /// else is refused, never sent).
 async fn at_read(text: String) -> Result<String, String> {
-    let cmd = match text.as_str() {
-        "AT+CGCONTRDP" => crate::at::Cmd::Cgcontrdp,
-        t => match t
-            .strip_prefix("AT+CGEQOSRDP=")
-            .and_then(|c| c.parse::<u8>().ok())
-        {
-            Some(cid) if (1..=24).contains(&cid) => crate::at::Cmd::Cgeqosrdp(cid),
-            _ => return Err(format!("{text}: not in u60d's AT command list")),
-        },
-    };
+    let cmd = crate::device_profile::at::qos_command(&text)
+        .ok_or_else(|| format!("{text}: not in u60d's AT command list"))?;
     crate::at::send(cmd).await
 }
 
@@ -192,55 +184,8 @@ where
     )
 }
 
-/// `+CGEQOSRDP: <cid>,<QCI>[,<DL_GBR>,<UL_GBR>,<DL_MBR>,<UL_MBR>]` (the first such line).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct Qos {
-    pub qci: Option<u32>,
-    pub dl_gbr: Option<u32>,
-    pub ul_gbr: Option<u32>,
-    pub dl_mbr: Option<u32>,
-    pub ul_mbr: Option<u32>,
-}
-
-pub(super) fn parse_cgeqosrdp(resp: &str) -> Qos {
-    let Some(rest) = resp
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("+CGEQOSRDP:"))
-    else {
-        return Qos::default();
-    };
-    let p: Vec<&str> = rest.split(',').map(str::trim).collect();
-    let n = |i: usize| p[i].parse().ok();
-    let mut q = Qos::default();
-    if p.len() >= 2 {
-        q.qci = n(1);
-    }
-    if p.len() >= 6 {
-        (q.dl_gbr, q.ul_gbr, q.dl_mbr, q.ul_mbr) = (n(2), n(3), n(4), n(5));
-    }
-    q
-}
-
-/// Every `+CGCONTRDP:` record → (cid, bearer_id, apn), in the modem's order.
-pub(super) fn parse_cgcontrdp(resp: &str) -> Vec<(u32, u32, String)> {
-    resp.lines()
-        .filter_map(|l| l.trim().strip_prefix("+CGCONTRDP:"))
-        .filter_map(|rest| parse_cgcontrdp_head(rest.trim()))
-        .collect()
-}
-
-/// `<cid>,<bearer_id>,"<apn>",...`: the APN is the first quoted token, else the next field.
-fn parse_cgcontrdp_head(s: &str) -> Option<(u32, u32, String)> {
-    let mut it = s.splitn(3, ',');
-    let cid = it.next()?.trim().parse().ok()?;
-    let bearer_id = it.next()?.trim().parse().ok()?;
-    let tail = it.next()?.trim_start();
-    let apn = match tail.strip_prefix('"') {
-        Some(rest) => rest.split('"').next().unwrap_or(""),
-        None => tail.split(',').next().unwrap_or("").trim(),
-    };
-    Some((cid, bearer_id, apn.to_string()))
-}
+// Existing response display decoders now live with the reviewed command dialects.
+pub(super) use crate::device_profile::at::{Qos, parse_cgcontrdp, parse_cgeqosrdp};
 
 /// IMS-bearing APN → 5 (signalling), anything else → 9 (best effort). Labelled as inferred.
 pub(super) fn infer_5qi(apn: &str) -> u8 {

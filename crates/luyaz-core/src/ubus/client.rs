@@ -44,6 +44,8 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UbusError {
+    /// Refused before the write INVOKE, with the current shared capability explanation.
+    CapabilityDenied(Box<crate::device_profile::usb::Denial>),
     /// 参数不合法（对象名、方法名、args 不是对象、消息过大），没有发请求。文字同 `state::ubus`。
     InvalidArgument(String),
     /// 在截止时间内没等到 STATUS。连接已关闭、该对象 ID 缓存已作废；本轮应跳过这个对象（V2-18）。
@@ -77,6 +79,7 @@ impl UbusError {
 impl fmt::Display for UbusError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CapabilityDenied(e) => e.fmt(f),
             Self::InvalidArgument(m) | Self::Io(m) => f.write_str(m),
             Self::Timeout { detail, .. } | Self::NoData { detail, .. } => f.write_str(detail),
             Self::Skipped { object } => {

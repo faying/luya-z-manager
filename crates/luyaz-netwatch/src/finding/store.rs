@@ -11,12 +11,19 @@
 //! only the latest check's evidence (one per layer) plus first/last/count and is at most
 //! [`ENTRY_MAX`] bytes. Every transition hands back a [`Change`] for `finding.*` events.
 //!
+//! Identity (decision-execution-loop.md §4.1 D2): [`Store::epoch`] is random per load (never
+//! persisted) and every evidence or state change gives the entry the next store-wide
+//! `revision` (persisted, monotonic). A proposal binds both; an entry from an older file without
+//! a revision, or a store without an epoch, is never executable ([`Store::identity`] = None).
+//! The revision rides along whenever the store is saved; it does not add saves.
+//!
 //! Clock (local time labelled UTC, and wrong until SNTP after a boot): a suppression is never
 //! treated as expired while the clock is before `record::CLOCK_SET`.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
+use luyaz_api::clock::BootTime;
 use luyaz_api::finding::{Finding, Verdict};
 
 use crate::record::CLOCK_SET;
@@ -41,6 +48,9 @@ pub struct Entry {
     pub ups: u8,
     /// The latest check's `Finding` as JSON (layer, confidence, symptom, evidence).
     pub finding: Value,
+    /// Store-wide revision of its last evidence/state change; None = from a file before D2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -48,6 +58,26 @@ pub struct Suppressed {
     pub kind: String,
     pub iccid: String,
     pub until: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dismissed_at: Option<BootTime>,
+}
+
+impl Suppressed {
+    fn active_at(&self, now: u64, boot: Option<&BootTime>) -> bool {
+        if let (Some(now_b), Some(then_b)) = (boot, self.dismissed_at.as_ref()) {
+            if !now_b.boot_id.is_empty() && now_b.boot_id == then_b.boot_id {
+                if let Some(age) = now_b.elapsed_since(then_b) {
+                    return age < SUPPRESS_SECS;
+                }
+                // Same boot_id but `then_b` is in the future (corrupted persisted boot timestamp):
+                // fall through to the wall-clock check rather than holding forever.
+            }
+        }
+        if !clock_set(now) || !clock_set(self.until) {
+            return true;
+        }
+        self.until > now
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -56,6 +86,19 @@ pub struct Store {
     pub open: Vec<Entry>,
     #[serde(default)]
     pub suppressed: Vec<Suppressed>,
+    /// The last revision handed out.
+    #[serde(default)]
+    pub revision: u64,
+    /// This load's random identity; "" = unknown, nothing executable.
+    #[serde(skip)]
+    pub epoch: String,
+}
+
+/// What a proposal binds to (D2): this load's epoch and the entry's revision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Identity {
+    pub epoch: String,
+    pub revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,7 +166,36 @@ impl Store {
         for e in &mut s.open {
             fit(&mut e.finding);
         }
+        // a hand-edited or damaged file: never hand out a revision already used
+        let top = s.open.iter().filter_map(|e| e.revision).max().unwrap_or(0);
+        s.revision = s.revision.max(top);
         s
+    }
+
+    /// This load's identity (random, from the caller).
+    pub fn with_epoch(mut self, epoch: impl Into<String>) -> Store {
+        self.epoch = epoch.into();
+        self
+    }
+
+    /// The open entry's identity, or None when it can't be bound (no epoch, no revision).
+    pub fn identity(&self, kind: &str, iccid: &str) -> Option<Identity> {
+        if self.epoch.is_empty() {
+            return None;
+        }
+        let e = self
+            .open
+            .iter()
+            .find(|e| e.kind == kind && e.iccid == iccid)?;
+        Some(Identity {
+            epoch: self.epoch.clone(),
+            revision: e.revision?,
+        })
+    }
+
+    fn next_revision(&mut self) -> u64 {
+        self.revision = self.revision.saturating_add(1);
+        self.revision
     }
 
     pub fn to_value(&self) -> Value {
@@ -131,14 +203,34 @@ impl Store {
     }
 
     pub fn is_suppressed(&self, kind: &str, iccid: &str, now: u64) -> bool {
+        self.is_suppressed_at(kind, iccid, now, None)
+    }
+
+    pub fn is_suppressed_at(
+        &self,
+        kind: &str,
+        iccid: &str,
+        now: u64,
+        boot: Option<&BootTime>,
+    ) -> bool {
         self.suppressed
             .iter()
-            .any(|s| s.kind == kind && s.iccid == iccid && (!clock_set(now) || s.until > now))
+            .any(|s| s.kind == kind && s.iccid == iccid && s.active_at(now, boot))
     }
 
     /// One check's verdict for the card in now (`iccid`, "" = unknown).
     pub fn observe(&mut self, v: &Verdict, iccid: &str, now: u64) -> Vec<Change> {
-        self.prune(now);
+        self.observe_at(v, iccid, now, None)
+    }
+
+    pub fn observe_at(
+        &mut self,
+        v: &Verdict,
+        iccid: &str,
+        now: u64,
+        boot: Option<&BootTime>,
+    ) -> Vec<Change> {
+        self.prune_at(now, boot);
         let mut out = Vec::new();
         // another card: the old card's findings no longer hold (no reading is not another card)
         if !iccid.is_empty() {
@@ -147,11 +239,14 @@ impl Store {
         match v {
             // without the card it can't be keyed
             Verdict::Open(f) if f.iccid.is_empty() => {}
-            Verdict::Open(f) => self.found(f, now, &mut out),
+            Verdict::Open(f) => self.found(f, now, boot, &mut out),
             Verdict::None { why } => match *why {
                 "up" | "all_ok" | "path_dns_ok" => {
-                    for e in &mut self.open {
+                    for i in 0..self.open.len() {
+                        let r = self.next_revision();
+                        let e = &mut self.open[i];
                         e.ups = e.ups.saturating_add(1);
+                        e.revision = Some(r);
                     }
                     self.close_where(|e| e.ups >= RESOLVE_UPS, Close::Resolved, &mut out);
                 }
@@ -166,6 +261,16 @@ impl Store {
 
     /// The user's "ignore": closes it and keeps the key closed for 24 h.
     pub fn dismiss(&mut self, kind: &str, iccid: &str, now: u64) -> Vec<Change> {
+        self.dismiss_at(kind, iccid, now, None)
+    }
+
+    pub fn dismiss_at(
+        &mut self,
+        kind: &str,
+        iccid: &str,
+        now: u64,
+        boot: Option<&BootTime>,
+    ) -> Vec<Change> {
         let mut out = Vec::new();
         self.close_where(
             |e| e.kind == kind && e.iccid == iccid,
@@ -181,24 +286,40 @@ impl Store {
         self.suppressed.push(Suppressed {
             kind: kind.to_string(),
             iccid: iccid.to_string(),
-            until: now + SUPPRESS_SECS,
+            until: now.saturating_add(SUPPRESS_SECS),
+            dismissed_at: boot.cloned().filter(|b| !b.boot_id.is_empty()),
         });
         out
     }
 
-    /// Drop suppressions that ran out (never before the clock is set).
+    /// Drop suppressions that ran out (never before the clock is set unless same-boot BootTime
+    /// proves 24 h have elapsed).
     pub fn prune(&mut self, now: u64) {
-        if clock_set(now) {
-            self.suppressed.retain(|s| s.until > now);
-        }
+        self.prune_at(now, None);
     }
 
-    fn found(&mut self, f: &Finding, now: u64, out: &mut Vec<Change>) {
-        if self.is_suppressed(f.kind, &f.iccid, now) {
+    pub fn prune_at(&mut self, now: u64, boot: Option<&BootTime>) {
+        if clock_set(now) {
+            for s in &mut self.suppressed {
+                if !clock_set(s.until) {
+                    let rem = boot
+                        .zip(s.dismissed_at.as_ref())
+                        .and_then(|(now_b, then_b)| now_b.elapsed_since(then_b))
+                        .map_or(SUPPRESS_SECS, |age| SUPPRESS_SECS.saturating_sub(age));
+                    s.until = now.saturating_add(rem);
+                }
+            }
+        }
+        self.suppressed.retain(|s| s.active_at(now, boot));
+    }
+
+    fn found(&mut self, f: &Finding, now: u64, boot: Option<&BootTime>, out: &mut Vec<Change>) {
+        if self.is_suppressed_at(f.kind, &f.iccid, now, boot) {
             return;
         }
         let mut body = serde_json::to_value(f).unwrap_or(Value::Null);
         fit(&mut body);
+        let r = self.next_revision();
         if let Some(e) = self
             .open
             .iter_mut()
@@ -210,6 +331,7 @@ impl Store {
             e.count = e.count.saturating_add(1);
             e.ups = 0;
             e.finding = body;
+            e.revision = Some(r);
             if moved {
                 out.push(Change::Update(e.clone()));
             }
@@ -224,6 +346,7 @@ impl Store {
             count: 1,
             ups: 0,
             finding: body,
+            revision: Some(r),
         };
         out.push(Change::Open(e.clone()));
         self.open.push(e);
@@ -235,9 +358,16 @@ impl Store {
             if let Some(i) = (0..self.open.len()).min_by_key(|&i| self.open[i].first) {
                 let e = self.open.remove(i);
                 out.push(Change::Close(e, Close::Evicted));
-            } else if let Some(i) =
-                (0..self.suppressed.len()).min_by_key(|&i| self.suppressed[i].until)
-            {
+            } else if let Some(i) = (0..self.suppressed.len()).min_by(|&a, &b| {
+                let sa = &self.suppressed[a];
+                let sb = &self.suppressed[b];
+                match (&sa.dismissed_at, &sb.dismissed_at) {
+                    (Some(da), Some(db)) if !da.boot_id.is_empty() && da.boot_id == db.boot_id => {
+                        da.seconds.cmp(&db.seconds)
+                    }
+                    _ => sa.until.cmp(&sb.until),
+                }
+            }) {
                 self.suppressed.remove(i);
             }
         }

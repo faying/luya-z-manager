@@ -587,7 +587,32 @@ pub struct RealWorker {
     recover: Option<std::process::Child>,
 }
 
+/// Open once, reject symlinks/non-root/writable files, and bound reads before JSON parsing.
+pub(crate) fn trusted_utc_file(path: &std::path::Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let f = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    let meta = f.metadata().ok()?;
+    if !meta.is_file()
+        || meta.uid() != 0
+        || meta.mode() & 0o022 != 0
+        || meta.nlink() != 1
+        || meta.len() > 4096
+    {
+        return None;
+    }
+    let mut text = String::new();
+    f.take(4097).read_to_string(&mut text).ok()?;
+    (text.len() <= 4096).then_some(text)
+}
+
 impl WorkerIo for RealWorker {
+    fn utc_anchor(&mut self) -> Option<String> {
+        trusted_utc_file(std::path::Path::new(luyaz_alerts::utc::ANCHOR_PATH))
+    }
     fn boot_time(&mut self) -> Option<luyaz_alerts::clock::BootTime> {
         luyaz_alerts::clock::BootTime::read()
     }

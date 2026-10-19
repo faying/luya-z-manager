@@ -117,6 +117,10 @@ pub enum Health {
 pub trait WorkerIo {
     /// BOOTTIME plus boot identity; unknown must not become a wall-clock fallback.
     fn boot_time(&mut self) -> Option<BootTime>;
+    /// Trusted root-owned, non-symlink UTC attestation; adapters must validate file access.
+    fn utc_anchor(&mut self) -> Option<String> {
+        None
+    }
     /// Whole seconds of `/proc/uptime` (0 when unreadable).
     fn uptime(&mut self) -> u64;
     /// The device's wall clock (local time labelled UTC).
@@ -518,7 +522,16 @@ impl Worker {
             ClockSource::Year
         };
         let mono = u64::try_from(io.mono_s()).ok();
-        let evidence = ClockEvidence::observation(w, at, mono, source);
+        let mut evidence = ClockEvidence::observation(w, at, mono, source);
+        // Root-provisioned, bounded one-shot evidence only. No network calls or periodic
+        // upstream query. Re-reading cannot refresh the anchor's original source lifetime.
+        if let Some(anchor) = io
+            .utc_anchor()
+            .filter(|s| s.len() <= 4096)
+            .and_then(|s| serde_json::from_str::<luyaz_alerts::utc::UtcAnchor>(&s).ok())
+        {
+            anchor.apply(&mut evidence);
+        }
         if evidence
             .status(Some(&evidence.observed_at), w)
             .wall_usable()

@@ -275,7 +275,7 @@ pub fn log_parse(reply: &str, max: usize) -> Option<Vec<OpLog>> {
 }
 
 /// DD14 display names; datad's journal rows carry them, owners don't
-const SRC: [(&str, &str, &str); 7] = [
+const SRC: [(&str, &str, &str); 8] = [
     ("screen", "触屏", "Screen"),
     ("legacy", "触屏", "Screen"),
     ("web", "网页", "Web"),
@@ -283,6 +283,7 @@ const SRC: [(&str, &str, &str); 7] = [
     ("scheduler", "定时任务", "Schedule"),
     ("auto", "自动", "Auto"),
     ("guard", "自动恢复", "Auto-recovery"),
+    ("mcp", "MCP", "MCP"),
 ];
 
 /// Who last wrote `item` (have = false when nobody is on record), None when the reply is not
@@ -408,12 +409,15 @@ mod tests {
             "{\"ok\":true,\"result\":{\"entries\":[],\"owners\":{\"network.mode\":{\"source\":\"scenario\",",
             "\"user\":false,\"undo\":false,\"value\":\"Only_LTE\",\"op_id\":\"sc-7\",\"ts\":1,",
             "\"t\":\"2026-10-04 09:15:02\"},\"wifi\":{\"source\":\"mystery\",\"op_id\":null,",
-            "\"t\":\"2026-10-04 08:00:00\"}}}}"
+            "\"t\":\"2026-10-04 08:00:00\"},\"chill.profile\":{\"source\":\"mcp\",\"op_id\":\"mcp-1\",",
+            "\"t\":\"2026-10-04 10:00:00\"}}}}"
         );
         let ow = owner_parse(own, "network.mode").unwrap();
         assert!(ow.have && ow.when == "10-04 09:15" && ow.source == "情景" && ow.op_id == "sc-7");
         let ow = owner_parse(own, "wifi").unwrap();
         assert!(ow.have && ow.source == "mystery" && ow.op_id.is_empty());
+        let ow = owner_parse(own, "chill.profile").unwrap();
+        assert!(ow.have && ow.source == "MCP" && ow.op_id == "mcp-1");
         assert!(!owner_parse(own, "band.lock").unwrap().have);
         assert!(!owner_parse(rep, "network.mode").unwrap().have);
         assert!(owner_parse("{\"ok\":false}", "network.mode").is_none());

@@ -230,6 +230,7 @@ impl App {
         let usb_exec = app.inner.exec.clone();
         let usb: Arc<dyn Fn() + Send + Sync> =
             Arc::new(move || usb_exec.kick(&["typec", "powerbank", "charger"]));
+        let context_hub = app.inner.exec.hub().clone();
         listen::spawn_if_enabled(
             std::env::var(listen::ENV_ENABLE).ok().as_deref(),
             listen::Options::from_env(),
@@ -253,6 +254,17 @@ impl App {
                     fire: usb,
                 },
             ],
+            Arc::new(move |notice| {
+                use crate::device_profile::context::Loss;
+                let loss = match notice {
+                    listen::Notice::Event(listen::TYPEC_EVENT | listen::POWERBANK_EVENT) => {
+                        Loss::Usb
+                    }
+                    listen::Notice::Gap => Loss::Ubus,
+                    _ => return,
+                };
+                context_hub.firmware().invalidate_context(loss);
+            }),
         );
         app.inner.stage.send_replace(Stage::Ready);
     }
@@ -342,39 +354,7 @@ impl App {
         open_auth_routes: bool,
         ui: Option<Router>,
     ) -> Result<()> {
-        let mut router = Router::new()
-            .route("/", get(index))
-            .route("/healthz", get(health))
-            .route("/version", get(version))
-            .route("/state", get(gone))
-            .route("/events", get(gone))
-            .route("/v2/events", get(v2_events))
-            .route("/v2/state", get(v2_state))
-            .route("/v2/screen", get(v2_screen))
-            .route("/capabilities", get(capabilities))
-            .route("/control", post(control))
-            .route("/v2/sentinel/event", post(sentinel_event))
-            .route("/v2/scorecard", get(scorecard).post(scorecard))
-            .route("/v2/longterm/calib", post(longterm_calib))
-            .route("/v2/versions", get(versions))
-            .route("/v2/versions/check", post(versions_check));
-        // M6b: the screen's agent-shaped API (`/v2/api/...`, compat's `/api/...` routes), loopback
-        // listener only. Nested at `/v2`: the routes above are static and win over the nest's tail.
-        if let Some(ui) = ui {
-            router = router.nest_service("/v2", ui);
-        }
-        if open_auth_routes {
-            router = router
-                .route("/auth/login", post(auth_login))
-                .route("/auth/exchange", post(auth_exchange));
-        }
-        router = router.layer(middleware::from_fn_with_state(self.clone(), starting_gate));
-        if require_auth {
-            router = router.layer(middleware::from_fn_with_state(self.clone(), authenticate));
-        }
-        let router = router
-            .layer(RequestBodyLimitLayer::new(1024 * 1024))
-            .with_state(self.clone());
+        let router = self.router(require_auth, open_auth_routes, ui);
         let server = axum::serve(
             crate::conn::DatadListener::new(listener),
             router.into_make_service_with_connect_info::<crate::conn::Peer>(),
@@ -399,6 +379,43 @@ impl App {
         result?;
         Ok(())
     }
+
+    fn router(&self, require_auth: bool, open_auth_routes: bool, ui: Option<Router>) -> Router {
+        let mut router = Router::new()
+            .route("/", get(index))
+            .route("/healthz", get(health))
+            .route("/version", get(version))
+            .route("/state", get(gone))
+            .route("/events", get(gone))
+            .route("/v2/events", get(v2_events))
+            .route("/v2/state", get(v2_state))
+            .route("/v2/screen", get(v2_screen))
+            .route("/capabilities", get(capabilities))
+            .route("/v2/device/capabilities", get(device_capabilities))
+            .route("/control", post(control))
+            .route("/v2/sentinel/event", post(sentinel_event))
+            .route("/v2/scorecard", get(scorecard).post(scorecard))
+            .route("/v2/longterm/calib", post(longterm_calib))
+            .route("/v2/versions", get(versions))
+            .route("/v2/versions/check", post(versions_check));
+        // M6b: the screen's agent-shaped API (`/v2/api/...`, compat's `/api/...` routes), loopback
+        // listener only. Nested at `/v2`: the routes above are static and win over the nest's tail.
+        if let Some(ui) = ui {
+            router = router.nest_service("/v2", ui);
+        }
+        if open_auth_routes {
+            router = router
+                .route("/auth/login", post(auth_login))
+                .route("/auth/exchange", post(auth_exchange));
+        }
+        router = router.layer(middleware::from_fn_with_state(self.clone(), starting_gate));
+        if require_auth {
+            router = router.layer(middleware::from_fn_with_state(self.clone(), authenticate));
+        }
+        router
+            .layer(RequestBodyLimitLayer::new(1024 * 1024))
+            .with_state(self.clone())
+    }
 }
 
 /// P1-3：第一轮采完之前（`Stage::Starting`），读数据的接口先等第一轮（最多 10 秒），还没好就回 503 `starting`
@@ -410,6 +427,7 @@ async fn starting_gate(State(app): State<App>, request: Request, next: Next) -> 
         "/" | "/healthz"
             | "/version"
             | "/capabilities"
+            | "/v2/device/capabilities"
             | "/control"
             | "/v2/scorecard"
             | "/state"
@@ -428,7 +446,6 @@ async fn starting_gate(State(app): State<App>, request: Request, next: Next) -> 
     )
         .into_response()
 }
-
 
 /// `GET|POST /v2/scorecard?w=24h|7d[&summary=1]` (u60-sentinel.md §19 T9b): the device
 /// scorecard over the guard ledger, as `doctor.sh --report` prints it, then `rc=<n>`. A POST body
@@ -497,7 +514,10 @@ async fn scorecard(method: Method, uri: axum::http::Uri, body: axum::body::Bytes
     };
     match tokio::time::timeout(Duration::from_secs(30), run).await {
         Ok(Ok((st, out))) if st.success() => (
-            [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            )],
             out,
         )
             .into_response(),
@@ -708,15 +728,24 @@ async fn sentinel_event(
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Response {
     if !peer.ip().is_loopback() {
-        return (StatusCode::FORBIDDEN, Json(json!({"ok": false, "error": "loopback only"})))
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"ok": false, "error": "loopback only"})),
+        )
             .into_response();
     }
     let Ok(Json(b)) = payload else {
-        return (StatusCode::BAD_REQUEST, Json(json!({"ok": false, "error": "bad json"})))
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"ok": false, "error": "bad json"})),
+        )
             .into_response();
     };
     let (Some(id), Some(kind)) = (b["id"].as_str(), b["kind"].as_str()) else {
-        return (StatusCode::BAD_REQUEST, Json(json!({"ok": false, "error": "id and kind"})))
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"ok": false, "error": "id and kind"})),
+        )
             .into_response();
     };
     let text = b["text"].as_str().unwrap_or("").to_string();
@@ -735,7 +764,10 @@ async fn sentinel_event(
     .await;
     match r {
         Ok(Ok((seq, new))) => Json(json!({"ok": true, "seq": seq, "new": new})).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({"ok": false, "error": e.to_string()})))
+        Ok(Err(e)) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"ok": false, "error": e.to_string()})),
+        )
             .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -820,6 +852,21 @@ fn capability_controls() -> Vec<&'static str> {
     let mut controls = vec!["state.set_interval"];
     controls.extend_from_slice(crate::control::ACTIONS);
     controls
+}
+
+/// Passive shared report. Available before the first collection (all unknown), protected
+/// by the listener's existing authentication policy. Reading never kicks the executor.
+async fn device_capabilities(State(app): State<App>) -> impl IntoResponse {
+    let report = app
+        .inner
+        .exec
+        .hub()
+        .firmware()
+        .report(luyaz_api::clock::BootTime::read().as_ref());
+    (
+        [(axum::http::header::CACHE_CONTROL, "private, no-store")],
+        Json(report),
+    )
 }
 
 async fn capabilities() -> Json<Value> {
@@ -940,6 +987,10 @@ async fn shutdown(app: App) {
     app.inner.stop.send_replace(true);
     crate::ubus::listen::shutdown(std::time::Duration::from_secs(2)).await;
 }
+
+#[cfg(test)]
+#[path = "server/device_capabilities_tests.rs"]
+mod device_capabilities_tests;
 
 #[cfg(test)]
 mod tests {

@@ -4,13 +4,17 @@
 //! Nobody = the screen off, 0 LAN clients (unknown is somebody), tailscaled readable and not
 //! advertising an exit node (unreadable is somebody: no tailnet peer can reach the internet
 //! through this device otherwise, §13), and CHILL meant on. Held for [`HOLD_S`], the core writes
-//! a lease — the wall second mihomo may stay stopped until — to [`LEASE`] and renews it every
+//! a boot-bound BOOTTIME lease specifying how long mihomo may stay stopped — to [`LEASE`] and renews it every
 //! [`TICK_S`] (local reads only, so a phone joining or the screen waking ends the pause within
 //! seconds; tailscaled's prefs are read every [`PREFS_S`]); chill.sh's supervisor stops the core while the lease runs and starts it again
 //! when it lapses. Any condition failing removes the lease at once; a core that dies leaves a
 //! lease that lapses within [`LEASE_S`], so mihomo never stays down without the core saying so.
 //! tmpfs: a reboot clears it.
 
+use luyaz_api::alerts::{
+    clock::BootTime,
+    deadline::{self, Deadline},
+};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -49,19 +53,26 @@ pub fn nobody(o: &Obs) -> bool {
 
 #[derive(Debug, Default)]
 pub struct Idle {
-    since: Option<u64>,
+    since: Option<BootTime>,
 }
 
 impl Idle {
-    /// The lease to write (its wall second), or None to remove it. `mono` for the hold, `wall`
-    /// for the lease (chill.sh compares it with `date +%s`).
-    pub fn step(&mut self, mono: u64, wall: u64, o: &Obs) -> Option<u64> {
-        if !nobody(o) {
+    /// Suspend counts toward the hold; unknown/backwards/different boot resets it.
+    pub fn step(&mut self, now: Option<&BootTime>, o: &Obs) -> Option<Deadline> {
+        if !nobody(o) || now.is_none() {
             self.since = None;
             return None;
         }
-        let since = *self.since.get_or_insert(mono);
-        (mono.saturating_sub(since) >= HOLD_S).then_some(wall + LEASE_S)
+        let now = now?;
+        if self
+            .since
+            .as_ref()
+            .is_some_and(|t| now.elapsed_since(t).is_none())
+        {
+            self.since = None;
+        }
+        let since = self.since.get_or_insert_with(|| now.clone());
+        (now.elapsed_since(since)? >= HOLD_S).then(|| Deadline::new(now.clone(), LEASE_S))?
     }
 }
 
@@ -93,9 +104,14 @@ fn exit_node_now(p: &Paths) -> Option<bool> {
     }
 }
 
-fn look(p: &Paths, hub: &crate::block::Hub, wall: u64, exit_node: Option<bool>) -> Obs {
+fn look(
+    p: &Paths,
+    hub: &crate::block::Hub,
+    now: Option<&BootTime>,
+    exit_node: Option<bool>,
+) -> Obs {
     let num = |f: &Path| -> Option<i64> { std::fs::read_to_string(f).ok()?.trim().parse().ok() };
-    let paused = num(&p.chill_dir.join("pause_until")).is_some_and(|t| t > wall as i64);
+    let paused = deadline::manual_paused(&p.chill_dir, now);
     Obs {
         screen_on: num(&p.backlight).map(|b| b > 0),
         clients: hub
@@ -107,12 +123,6 @@ fn look(p: &Paths, hub: &crate::block::Hub, wall: u64, exit_node: Option<bool>) 
     }
 }
 
-fn wall_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
-}
-
 /// The loop: a look every [`TICK_S`], the lease written or removed.
 pub fn spawn(hub: Arc<crate::block::Hub>) {
     let h = |x: &str| PathBuf::from(crate::state::host_path(x));
@@ -122,30 +132,35 @@ pub fn spawn(hub: Arc<crate::block::Hub>) {
         chill_dir: h(CHILL_DIR),
         lease: h(LEASE),
     };
-    let t0 = std::time::Instant::now();
     let _ = std::thread::Builder::new()
         .name("chill-idle".into())
         .spawn(move || {
             let mut idle = Idle::default();
             let mut on = false;
-            let mut prefs: Option<(u64, Option<bool>)> = None;
+            let mut prefs: Option<(BootTime, Option<bool>)> = None;
             loop {
-                let wall = wall_now();
-                let mono = t0.elapsed().as_secs();
+                let now = BootTime::read();
                 // an unreadable answer is not kept: asked again next tick
-                let x = match prefs {
-                    Some((at, Some(x))) if mono - at < PREFS_S => Some(x),
+                let x = match prefs.as_ref() {
+                    Some((at, Some(x)))
+                        if now
+                            .as_ref()
+                            .and_then(|n| n.elapsed_since(at))
+                            .is_some_and(|s| s < PREFS_S) =>
+                    {
+                        Some(*x)
+                    }
                     _ => {
                         let x = exit_node_now(&p);
-                        prefs = Some((mono, x));
+                        prefs = now.clone().map(|n| (n, x));
                         x
                     }
                 };
-                let o = look(&p, &hub, wall, x);
-                match idle.step(mono, wall, &o) {
+                let o = look(&p, &hub, now.as_ref(), x);
+                match idle.step(now.as_ref(), &o) {
                     Some(until) => {
                         if let Err(e) =
-                            crate::api::ops::atomic_write(&p.lease, format!("{until}\n").as_bytes())
+                            crate::api::ops::atomic_write(&p.lease, until.encode().as_bytes())
                         {
                             eprintln!("[chill-idle] lease: {e}");
                         } else if !on {
@@ -221,26 +236,38 @@ mod tests {
     #[test]
     fn five_minutes_then_a_lease_renewed_and_dropped_at_once() {
         let mut i = Idle::default();
-        let w = 1_800_000_000;
-        assert_eq!(i.step(0, w, &quiet()), None);
-        assert_eq!(i.step(270, w + 270, &quiet()), None, "4.5 min: not yet");
-        assert_eq!(i.step(300, w + 300, &quiet()), Some(w + 300 + LEASE_S));
-        assert_eq!(
-            i.step(305, w + 305, &quiet()),
-            Some(w + 305 + LEASE_S),
-            "renewed"
-        );
+        let at = |seconds| BootTime {
+            boot_id: "a".into(),
+            seconds,
+        };
+        assert_eq!(i.step(Some(&at(0)), &quiet()), None);
+        assert_eq!(i.step(Some(&at(270)), &quiet()), None);
+        assert_eq!(i.step(Some(&at(300)), &quiet()).unwrap().until, 480);
+        assert_eq!(i.step(Some(&at(305)), &quiet()).unwrap().until, 485);
         let on = Obs {
             screen_on: Some(true),
             ..quiet()
         };
-        assert_eq!(i.step(310, w + 310, &on), None, "the screen on: at once");
+        assert_eq!(i.step(Some(&at(310)), &on), None);
+        assert_eq!(i.step(Some(&at(315)), &quiet()), None);
+        assert_eq!(i.step(Some(&at(615)), &quiet()).unwrap().until, 795);
+        assert_eq!(i.step(None, &quiet()), None);
+        assert_eq!(i.step(Some(&at(999)), &quiet()), None);
         assert_eq!(
-            i.step(315, w + 315, &quiet()),
+            i.step(Some(&at(900)), &quiet()),
             None,
-            "and the hold starts over"
+            "backwards resets hold"
         );
-        assert_eq!(i.step(615, w + 615, &quiet()), Some(w + 615 + LEASE_S));
+        assert_eq!(
+            i.step(
+                Some(&BootTime {
+                    boot_id: "b".into(),
+                    seconds: 2000
+                }),
+                &quiet()
+            ),
+            None
+        );
     }
 
     #[test]

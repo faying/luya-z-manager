@@ -13,15 +13,18 @@
 //! dies mid-call) is not run again after the restart. Its status says the result never came back
 //! until the call returns and fills it in.
 
+use luyaz_api::clock::BootTime;
+use luyaz_policy::scheduler::{self as sp, Job};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use luyaz_policy::scheduler::{self as sp, Job};
 
 use crate::api::Compat;
 
 pub const JOBS_FILE: &str = "/data/local/tmp/scheduler.json";
+pub const CLOCK_OK: &str = "/tmp/luyaz/clock-ok";
 const TICK_SECS: u64 = 30;
 /// How often the thread looks whether a tick is due.
 const LOOK_SECS: u64 = 2;
@@ -63,16 +66,20 @@ pub(crate) fn now_local() -> (i64, u8, u8, u8) {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    // libc marks musl's time_t deprecated (its width changed in musl 1.2); 64-bit on this target
-    #[allow(deprecated)]
-    let t = secs as libc::time_t;
-    // SAFETY: localtime_r only writes the tm we pass it.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
-        return (secs, 0, 0, 0);
-    }
-    let dow = ((tm.tm_wday + 6) % 7) as u8;
-    (secs, tm.tm_hour as u8, tm.tm_min as u8, dow)
+    let (hh, mm, dow) = luyaz_api::clock::local_hm_dow(
+        secs,
+        luyaz_api::alerts::current_offset(),
+        luyaz_api::clock::system_gmtoff(),
+    )
+    .unwrap_or((0, 0, 0));
+    (secs, hh, mm, dow)
+}
+
+/// Whether the wall clock is usable for firing calendar jobs: requires `now_ts >= CLOCK_YEAR_MIN`
+/// and a fresh, unrevoked current-boot `ClockEvidence` v2 record from `luyaz-sentinel`.
+pub(crate) fn clock_usable(evidence: &str, boot: Option<&BootTime>, now_ts: i64) -> bool {
+    now_ts >= luyaz_api::clock::CLOCK_YEAR_MIN
+        && luyaz_api::clock::evidence_status(evidence, boot, now_ts).wall_usable()
 }
 
 pub(crate) fn save(p: &std::path::Path, jobs: &[Job]) -> Result<(), String> {
@@ -104,7 +111,9 @@ impl Caller for Http {
         let url = format!("{}{path}", self.base);
         let auth = self.token.as_ref().map(|t| format!("Bearer {t}"));
         let r = if method == "GET" {
-            let mut q = a.get(&url).header(luyaz_api::headers::SOURCE_HEADER, "scheduler");
+            let mut q = a
+                .get(&url)
+                .header(luyaz_api::headers::SOURCE_HEADER, "scheduler");
             if let Some(h) = &auth {
                 q = q.header("Authorization", h);
             }
@@ -128,7 +137,10 @@ impl Caller for Http {
                 resp.status().as_u16(),
                 resp.body_mut().read_json().unwrap_or(Value::Null),
             ),
-            Err(e) => (502, json!({"ok": false, "error": format!("luyaz-core: {e}")})),
+            Err(e) => (
+                502,
+                json!({"ok": false, "error": format!("luyaz-core: {e}")}),
+            ),
         }
     }
 }
@@ -151,7 +163,30 @@ fn outcome(status: u16, v: &Value) -> (Option<u16>, Option<String>) {
 
 /// One tick at the device's `(now_ts, hh, mm, dow)`: marks what is due, saves, runs each, then
 /// fills in the results. Returns how many ran.
+#[cfg(test)]
 pub fn tick(path: &std::path::Path, io: &dyn Caller, now: (i64, u8, u8, u8)) -> usize {
+    let mut cooldown = HashMap::new();
+    tick_at(
+        path,
+        io,
+        now,
+        now.0 >= luyaz_api::clock::CLOCK_YEAR_MIN,
+        None,
+        &mut cooldown,
+    )
+}
+
+/// Boot- and evidence-gated tick: always disables forbidden jobs, but only fires due jobs when
+/// `clock_ok` holds and at least 60 s of `BootTime` have elapsed since the same `(id, restore)`
+/// last fired on this boot.
+pub(crate) fn tick_at(
+    path: &std::path::Path,
+    io: &dyn Caller,
+    now: (i64, u8, u8, u8),
+    clock_ok: bool,
+    boot_now: Option<&BootTime>,
+    cooldown: &mut HashMap<(u32, bool), BootTime>,
+) -> usize {
     let (now_ts, hh, mm, dow) = now;
     // 1: what is due, marked as run (and saved) before anything runs
     let due: Vec<(u32, bool, String, String, Vec<u8>)> = {
@@ -160,7 +195,23 @@ pub fn tick(path: &std::path::Path, io: &dyn Caller, now: (i64, u8, u8, u8)) -> 
             return 0;
         };
         let stopped = sp::disable_forbidden(&mut jobs);
-        let fires = sp::due(&jobs, now_ts, hh, mm, dow);
+        let fires = if clock_ok {
+            sp::due(&jobs, now_ts, hh, mm, dow)
+        } else {
+            Vec::new()
+        };
+        let fires: Vec<(u32, bool)> = fires
+            .into_iter()
+            .filter(|&(id, restore)| {
+                let Some(now_b) = boot_now else {
+                    return true;
+                };
+                cooldown
+                    .get(&(id, restore))
+                    .and_then(|prev| now_b.elapsed_since(prev))
+                    .is_none_or(|age| age > 60)
+            })
+            .collect();
         if fires.is_empty() {
             if !stopped.is_empty() {
                 let _ = save(path, &jobs);
@@ -177,9 +228,20 @@ pub fn tick(path: &std::path::Path, io: &dyn Caller, now: (i64, u8, u8, u8)) -> 
             } else {
                 job.action.body.clone()
             };
-            let body = body.map(|b| serde_json::to_vec(&b).unwrap_or_default()).unwrap_or_default();
-            out.push((id, restore, job.action.method.clone(), job.action.path.clone(), body));
+            let body = body
+                .map(|b| serde_json::to_vec(&b).unwrap_or_default())
+                .unwrap_or_default();
+            out.push((
+                id,
+                restore,
+                job.action.method.clone(),
+                job.action.path.clone(),
+                body,
+            ));
             sp::record(job, restore, None, Some(NO_RESULT.to_string()), now_ts);
+            if let Some(now_b) = boot_now.filter(|b| !b.boot_id.is_empty()) {
+                cooldown.insert((id, restore), now_b.clone());
+            }
         }
         if save(path, &jobs).is_err() {
             // not marked: running now could run it again after a restart, so not at all
@@ -228,13 +290,26 @@ pub fn spawn(c: Compat, io: std::sync::Arc<dyn Caller>) {
         .name("u60d-scheduler".into())
         .spawn(move || {
             let mut last: Option<std::time::Instant> = None;
+            let mut cooldown: HashMap<(u32, bool), BootTime> = HashMap::new();
+            let clock_path = c.path(CLOCK_OK);
             loop {
                 std::thread::sleep(Duration::from_secs(LOOK_SECS));
                 if last.is_some_and(|t| t.elapsed() < Duration::from_secs(TICK_SECS)) {
                     continue;
                 }
                 last = Some(std::time::Instant::now());
-                let ran = tick(&file(&c), io.as_ref(), now_local());
+                let now = now_local();
+                let boot = BootTime::read();
+                let evidence = std::fs::read_to_string(&clock_path).unwrap_or_default();
+                let clock_ok = clock_usable(&evidence, boot.as_ref(), now.0);
+                let ran = tick_at(
+                    &file(&c),
+                    io.as_ref(),
+                    now,
+                    clock_ok,
+                    boot.as_ref(),
+                    &mut cooldown,
+                );
                 if ran > 0 {
                     eprintln!("[scheduler] ran {ran} job(s)");
                 }

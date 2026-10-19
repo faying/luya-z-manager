@@ -490,3 +490,62 @@ fn guard_never_resumes_requests_after_an_observed_connection_failure() {
     assert_eq!(io.calls.load(Ordering::SeqCst), 1);
     assert!(!guarded.current());
 }
+
+#[test]
+fn dismiss_shown_respects_boottime_across_restarts_and_8h_wall_steps() {
+    let dir = std::env::temp_dir().join(format!("luyaz-findings-jump-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("findings.json");
+    let w = Watch::new();
+    let f = Findings::load(path.clone());
+    let boot = |id: &str, seconds: u64| BootTime {
+        boot_id: id.into(),
+        seconds,
+    };
+
+    // Dismiss before SNTP (`early < CLOCK_SET`) on boot "b1".
+    let early = 500;
+    f.observe_at(
+        &open("89860011"),
+        "89860011",
+        &w,
+        early,
+        Some(&boot("b1", 10)),
+    );
+    assert!(f.dismiss_shown_at(
+        KIND_NO_INTERNET,
+        Some("0011"),
+        &w,
+        early,
+        Some(&boot("b1", 20))
+    ));
+    assert!(f.view().is_null());
+
+    // Restart Core on the same boot, then SNTP sets the clock and later steps +8h at 16h elapsed.
+    let f2 = Findings::load(path.clone());
+    f2.observe_at(
+        &open("89860011"),
+        "89860011",
+        &w,
+        T + 16 * 3600 + 28_800,
+        Some(&boot("b1", 20 + 16 * 3600)),
+    );
+    assert!(
+        f2.view().is_null(),
+        "+8h wall step must not expire 24h suppression at 16h of boot time"
+    );
+
+    // At 24h of boot time, even if wall clock stepped backward -8h, suppression expires.
+    f2.observe_at(
+        &open("89860011"),
+        "89860011",
+        &w,
+        T + 16 * 3600 - 28_800,
+        Some(&boot(
+            "b1",
+            20 + luyaz_netwatch::finding::store::SUPPRESS_SECS,
+        )),
+    );
+    assert_eq!(f2.view()["iccid_tail"], "0011");
+    let _ = std::fs::remove_dir_all(&dir);
+}

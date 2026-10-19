@@ -39,14 +39,42 @@ pub fn system_gmtoff() -> i64 {
     }
 }
 
-/// `sntp_zone`: ZTE's configured zone in seconds; `gmtoff`: the system TZ's.
-/// If the system TZ is ever set for real, the clock is plain UTC and the SNTP
-/// zone is already applied by libc — then there is nothing to correct.
-pub fn offset_from(sntp_zone: Option<i64>, gmtoff: i64) -> i64 {
-    if gmtoff != 0 {
-        return 0;
-    }
+/// `sntp_zone`: ZTE's configured zone in seconds; `_gmtoff`: the system TZ's.
+/// On ZTE firmware, `zwrt_zte_sntp` writes local wall time (`UTC + sntp_zone`) into the system
+/// clock (`CLOCK_REALTIME`) even if a process or `/etc/TZ` sets a non-zero `tm_gmtoff`. Never
+/// infer from `gmtoff != 0` that the system clock is plain UTC.
+pub fn offset_from(sntp_zone: Option<i64>, _gmtoff: i64) -> i64 {
     sntp_zone.unwrap_or(0)
+}
+
+/// Local display/SMS zone in seconds ahead of real UTC: ZTE's configured `sntp_zone` when
+/// present, otherwise `gmtoff` (never `sntp_zone + gmtoff`, which would double-add `+8h` when
+/// `TZ` is non-zero while `zwrt_zte_sntp` still writes local wall time).
+pub fn zone_from(sntp_zone: Option<i64>, gmtoff: i64) -> i64 {
+    sntp_zone.unwrap_or(gmtoff)
+}
+
+/// Decompose device `secs` into `(hour, minute, weekday 0 = Monday)`.
+/// When `sntp_zone` is non-zero (`LocalWallAsUtc`), `secs` already holds local wall time in the
+/// UTC epoch, so `gmtime_r(&secs)` extracts the wall digits without letting a non-zero
+/// `tm_gmtoff` shift them a second time. When no SNTP zone is configured (`None` or `Some(0)`),
+/// `secs + gmtoff` gives local wall time.
+pub fn local_hm_dow(secs: i64, sntp_zone: Option<i64>, gmtoff: i64) -> Option<(u8, u8, u8)> {
+    let wall = if sntp_zone.is_some_and(|z| z != 0) {
+        secs
+    } else {
+        secs.checked_add(gmtoff)?
+    };
+    // libc marks musl's time_t deprecated (its width changed in musl 1.2); 64-bit on this target
+    #[allow(deprecated)]
+    let t = wall as libc::time_t;
+    // SAFETY: gmtime_r only writes the tm we pass it.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::gmtime_r(&t, &mut tm) }.is_null() {
+        return None;
+    }
+    let dow = ((tm.tm_wday + 6) % 7) as u8;
+    Some((tm.tm_hour as u8, tm.tm_min as u8, dow))
 }
 
 /// Seconds the device clock runs ahead of real UTC, from ZTE's two uci settings
@@ -117,9 +145,29 @@ mod tests {
     }
 
     #[test]
-    fn offset_only_when_the_system_tz_is_utc() {
+    fn offset_and_local_digits_do_not_trust_nonzero_tz_over_vendor_wall_clock() {
         assert_eq!(offset_from(Some(28800), 0), 28800);
-        assert_eq!(offset_from(Some(28800), 28800), 0);
+        // Even if TZ is non-zero, zwrt_zte_sntp still writes local wall time to CLOCK_REALTIME.
+        assert_eq!(offset_from(Some(28800), 28800), 28800);
+        assert_eq!(offset_from(Some(28800), -18000), 28800);
         assert_eq!(offset_from(None, 0), 0);
+        assert_eq!(offset_from(None, 28800), 0);
+
+        assert_eq!(zone_from(Some(28800), 0), 28800);
+        assert_eq!(zone_from(Some(28800), 28800), 28800);
+        assert_eq!(zone_from(None, 28800), 28800);
+        assert_eq!(zone_from(None, 0), 0);
+
+        // 2026-10-12 03:00:00 stored as UTC epoch (Monday).
+        let mon_3 = 1_791_774_000;
+        assert_eq!(local_hm_dow(mon_3, Some(28800), 0), Some((3, 0, 0)));
+        assert_eq!(
+            local_hm_dow(mon_3, Some(28800), 28800),
+            Some((3, 0, 0)),
+            "non-zero TZ must not shift ZTE local-wall-as-UTC a second time to 11:00"
+        );
+        assert_eq!(local_hm_dow(mon_3, Some(28800), -18000), Some((3, 0, 0)));
+        assert_eq!(local_hm_dow(mon_3, None, 0), Some((3, 0, 0)));
+        assert_eq!(local_hm_dow(mon_3 - 28800, None, 28800), Some((3, 0, 0)));
     }
 }

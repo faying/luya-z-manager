@@ -79,7 +79,8 @@ comp=core
 commit=7e8d223                 7–40 位十六进制
 mac_time=1790000000            Mac 的 Unix 时间（设备时钟开机后可能没对上）
 format=1                       这个版本的数据格式版本（仓库里声明，T8）
-trial=180                      可选，试跑秒数 60–86400（--trial）
+trial=180                      可选，试跑秒数 30–86400（--trial / --fast）
+check=120                      可选，转正后检查秒数 30–86400（--check / --fast）
 note=requires-ignored          可选：requires-ignored（--ignore-requires）、rollback（luyaz rollback）、rollback+requires-ignored；照抄进清单行
 file=luyaz-core 0123…cdef      产物文件名 + md5，组件的每个正式文件一行
 state=/data/luyaz/core/cooling.conf   可选，可重复；必须在组件的状态文件清单里；一行都没有 = 用组件的整张清单

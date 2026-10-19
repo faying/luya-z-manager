@@ -329,6 +329,22 @@ for bad in 'format=a' 'format=' 'mac_time=12a' 'trial=10' 'trial=08' 'trial=9999
     teardown
 done
 
+for bad in 'check=10' 'check=08' 'check=99999999'; do
+    setup
+    upload "" "$bad"
+    stage
+    refused "bad $bad" "check"
+    nolog
+    teardown
+done
+
+setup
+upload "" "check=30"
+sed -i 's/^trial=.*/trial=30/' "$R/data/luyaz/ship/stage/$TXN/meta"
+stage
+check "stage accepts trial=30 and check=30 (--fast)" '[ $RC = 0 ] && grep -qx "trial=30" "$R/data/luyaz/ship/txn" && grep -qx "check=30" "$R/data/luyaz/ship/txn"'
+teardown
+
 setup
 upload "" "evil=1"
 stage

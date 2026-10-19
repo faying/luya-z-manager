@@ -12,15 +12,15 @@
 //! The forwarder is built from the two state files at start and holds the lease
 //! (`/tmp/sms-forward.owner`).
 
+use luyaz_sms_forward::{self as sf, Host, Page, SmsForwarder};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use luyaz_sms_forward::{self as sf, Host, Page, SmsForwarder};
 
-use crate::api::control::Client;
 use crate::api::Compat;
+use crate::api::control::Client;
 
 /// How often the hub's blocks are looked at.
 const LOOK_SECS: u64 = 2;
@@ -159,7 +159,9 @@ impl Host for U60dHost {
     fn tick(&self, _record: Value) {}
 
     fn sms_zone_hours(&self) -> i64 {
-        (luyaz_api::clock::system_gmtoff() + self.handle.block_on(crate::api::utc_offset())) / 3600
+        let off = self.handle.block_on(crate::api::utc_offset());
+        luyaz_api::clock::zone_from((off != 0).then_some(off), luyaz_api::clock::system_gmtoff())
+            / 3600
     }
 
     fn active(&self) -> bool {

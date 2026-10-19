@@ -87,22 +87,63 @@ fn device_shape() {
 }
 
 #[test]
-fn method_listing() {
-    let l = "'zwrt_bsp.usb' @1234abcd\n\t\"list\":{}\n\t\"set\":{\"mode\":\"String\"}\n";
-    assert_eq!(lists_method(l, "zwrt_bsp.usb", "set"), Some(true));
+fn usb_compatibility_is_a_projection_not_a_second_resolver() {
+    use luyaz_api::firmware::{Support, UsbWriteDisposition};
+    let c = crate::device_profile::collect::Collector::new();
+    let mut report = c.report(None);
+    let data = usb_data(json!({"mode":"user", "mode_settable":true}), Some(&report));
+    assert!(
+        data.get("mode_settable").is_none(),
+        "unknown cannot inherit a vendor bool"
+    );
+    assert_eq!(data["write_policies"].as_object().unwrap().len(), 3);
+    for id in ["usb.mode.set", "usb.attach.share", "usb.attach.fast_charge"] {
+        assert_eq!(
+            data["write_policies"][id],
+            json!(report.usb_write_policy(id).unwrap())
+        );
+    }
+    report
+        .assessments
+        .iter_mut()
+        .find(|a| a.capability_id == "usb.mode.set")
+        .unwrap()
+        .status = Support::Unsupported;
+    let data = usb_data(json!({}), Some(&report));
+    assert_eq!(data["mode_settable"], false);
     assert_eq!(
-        lists_method("'zwrt_bsp.usb' @1\n\t\"list\":{}\n", "zwrt_bsp.usb", "set"),
-        Some(false)
+        report.usb_write_policy("usb.mode.set").unwrap().disposition,
+        UsbWriteDisposition::Denied
     );
     assert_eq!(
-        lists_method("Command failed: Not found", "zwrt_bsp.usb", "set"),
-        None
+        usb_data(json!({"a":1}), None),
+        json!({"a":1,"write_policies":{}})
     );
+}
+#[tokio::test]
+async fn usb_read_failure_is_shared_without_querying_a_method_listing() {
+    let hub = std::sync::Arc::new(crate::block::Hub::new(
+        vec![],
+        Box::new(crate::block::NoSink),
+    ));
+    let src = Sources {
+        hub: Some(hub.clone()),
+        ubus: std::sync::Arc::new(|_, _, _| Box::pin(async { Err("temporary failure".into()) })),
+        ..Sources::none()
+    };
+    let c = Compat::new("/nonexistent-firmware-test", src);
+    let response = usb_status(State(c)).await;
+    assert_eq!(response.status(), 503);
+    let report = hub.firmware().report(None);
+    assert_eq!(report.evidence.len(), 1);
+    let e = &report.evidence[0];
+    assert_eq!(e.capability_id, "usb.status.read");
     assert_eq!(
-        usb_data(json!({"a":1}), Some(false)),
-        json!({"a":1,"mode_settable":false})
+        e.result.as_ref().unwrap().outcome,
+        luyaz_api::firmware::ProbeOutcome::Unavailable
     );
-    assert_eq!(usb_data(json!({"a":1}), None), json!({"a":1}));
+    assert!(e.result.as_ref().unwrap().proof.is_none());
+    report.validate().unwrap();
 }
 
 #[test]
@@ -168,5 +209,45 @@ async fn battery_shape() {
         battery_at(&ps).unwrap()["charger"],
         json!({"online": true, "voltage_uv": 5000000, "current_ua": null,
                "input_current_limit_ua": null})
+    );
+}
+
+#[tokio::test]
+async fn usb_get_projects_shared_report_without_method_discovery() {
+    let hub = std::sync::Arc::new(crate::block::Hub::new(
+        vec![],
+        Box::new(crate::block::NoSink),
+    ));
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = calls.clone();
+    let src = Sources {
+        hub: Some(hub.clone()),
+        ubus: std::sync::Arc::new(move |object, method, _| {
+            assert_eq!((object, method), ("zwrt_bsp.usb", "list"));
+            count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Box::pin(async { Ok(json!({"mode":"user","mode_settable":true})) })
+        }),
+        ..Sources::none()
+    };
+    let c = Compat::new("/nonexistent-firmware-test", src);
+    let response = usb_status(State(c)).await;
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert!(body["data"].get("mode_settable").is_none());
+    let r = hub
+        .firmware()
+        .report(luyaz_api::clock::BootTime::read().as_ref());
+    assert_eq!(
+        body["data"]["write_policies"]["usb.mode.set"],
+        json!(r.usb_write_policy("usb.mode.set").unwrap())
+    );
+    assert!(
+        r.evidence
+            .iter()
+            .all(|e| e.capability_id != "usb.mode.setter.surface")
     );
 }

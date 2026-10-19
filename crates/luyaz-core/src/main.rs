@@ -18,6 +18,7 @@
 mod crashwatch;
 mod diag;
 mod doctor;
+mod device_profile;
 mod envelope;
 #[allow(dead_code)]
 mod evlog;

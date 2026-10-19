@@ -7,6 +7,7 @@ pub enum Outcome {
     NotHandled,
     Invalid(String),
     Failed(String),
+    CapabilityDenied(Box<crate::device_profile::usb::Denial>),
     Ok(Value),
 }
 
@@ -148,6 +149,7 @@ async fn call(service: &str, method: &str, args: Value) -> Outcome {
 fn write_outcome(reply: Result<Value, crate::ubus::client::UbusError>) -> Outcome {
     match write_reply(reply) {
         Ok(value) => Outcome::Ok(value),
+        Err(crate::ubus::client::UbusError::CapabilityDenied(e)) => Outcome::CapabilityDenied(e),
         Err(error) => Outcome::Failed(error.to_string()),
     }
 }
@@ -244,7 +246,7 @@ pub async fn execute(action: &str, params: &Value) -> Outcome {
         // 回自动选网：原厂没有能用的 ubus 调用（9-26 读过原厂搜网协议），只能 AT+COPS=0
         "netselect.auto" => at_outcome(crate::at::send(crate::at::Cmd::CopsAuto).await),
         "cellular.redial" => redial(params).await,
-        // nwinfo_set_mode ONLINE 不能把基带从 LPM 拉回来，只有 AT+CFUN=1 行
+        // The shared AT boundary blocks this known-bad recovery before opening a port.
         "modem.online" => at_outcome(crate::at::send(crate::at::Cmd::CfunOnline).await),
         "apn.set_pdp_type" => apn_pdp_type(params).await,
         "wifi.apply" => wifi_apply(params).await,
@@ -742,8 +744,9 @@ async fn usb_attach_mode(params: &Value) -> Outcome {
                 }
             }
             let args = json!({"source_module": USB_SOURCE_MODULE, "DR_Swap": "device"});
-            if let Outcome::Failed(e) = call("zwrt_bsp.typec", "set", args).await {
-                return Outcome::Failed(e);
+            match call("zwrt_bsp.typec", "set", args).await {
+                Outcome::Ok(_) => {},
+                other => return other,
             }
             if poll_until("zwrt_bsp.typec", "list", json!({}), 15, |v| {
                 v.get("data_role").and_then(Value::as_str) == Some("device")
@@ -764,8 +767,9 @@ async fn usb_attach_mode(params: &Value) -> Outcome {
                 Err(e) => return Outcome::Failed(e),
             }
             let args = json!({"source_module": USB_SOURCE_MODULE, "state": 1});
-            if let Outcome::Failed(e) = call("zwrt_bsp.powerbank", "set", args).await {
-                return Outcome::Failed(e);
+            match call("zwrt_bsp.powerbank", "set", args).await {
+                Outcome::Ok(_) => {},
+                other => return other,
             }
             if poll_until("zwrt_bsp.powerbank", "get", get, 10, on).await {
                 done(true)

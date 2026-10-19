@@ -19,11 +19,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use luyaz_api::clock::BootTime;
 use serde_json::Value;
 
 pub mod diagnose;
 pub mod finding;
+mod passive;
 pub mod record;
+pub use passive::{PassiveLink, Snapshot, alive_without_probe, sample};
+use passive::fresh;
 
 /// Received something this recently ⇒ the link is alive, no probe needed.
 pub const RX_FRESH_SECS: u64 = 30;
@@ -112,54 +116,6 @@ fn write_count(path: &Path, n: u64) -> io::Result<()> {
     let tmp = PathBuf::from(tmp);
     std::fs::File::create(&tmp)?.write_all(format!("{n}\n").as_bytes())?;
     std::fs::rename(&tmp, path)
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Snapshot {
-    /// Unix time of the last sample; 0 = never sampled.
-    pub at: u64,
-    /// datad's `wan_status` says a data call is up. `None` = datad unreadable.
-    pub connected: Option<bool>,
-    pub rx_bytes: Option<u64>,
-    /// Last time the receive counter was seen to move.
-    pub rx_moved_at: u64,
-    /// Operator DNS servers (IPv4), from datad's `wan_dns`.
-    pub dns: Vec<String>,
-}
-
-/// `Some(answer)` when the samples decide it; `None` = connected but nothing
-/// received lately, so only a probe can tell.
-pub fn alive_without_probe(s: &Snapshot, now: u64) -> Option<bool> {
-    // No sample yet, or datad down: don't block anything on our own blindness.
-    if s.at == 0 || s.connected.is_none() {
-        return Some(true);
-    }
-    if s.connected == Some(false) {
-        return Some(false);
-    }
-    if s.rx_moved_at > 0 && now.saturating_sub(s.rx_moved_at) <= RX_FRESH_SECS {
-        return Some(true);
-    }
-    None
-}
-
-/// Fold one sample into the previous snapshot.
-pub fn sample(prev: &Snapshot, now: u64, state: Option<&Value>, rx: Option<u64>) -> Snapshot {
-    let net = state.map(|v| v.get("net").unwrap_or(v));
-    let connected = net.and_then(|n| n.get("wan_status")).and_then(Value::as_str).map(wan_connected);
-    let dns = state.map(operator_dns).filter(|d| !d.is_empty()).unwrap_or_else(|| prev.dns.clone());
-    let moved = match (prev.rx_bytes, rx) {
-        (Some(a), Some(b)) => b != a,
-        // First reading: we cannot tell yet.
-        _ => false,
-    };
-    Snapshot {
-        at: now,
-        connected,
-        rx_bytes: rx.or(prev.rx_bytes),
-        rx_moved_at: if moved { now } else { prev.rx_moved_at },
-        dns,
-    }
 }
 
 /// `"ipv4_ipv6_connected"` → true; `"disconnected"`, `"connecting"`, `""` → false.
@@ -282,7 +238,7 @@ pub const VERDICT_FRESH: u64 = 30;
 /// side's watcher samples without writing it. [`ERRORS_FILE`] stays the agent's (its own reads).
 pub struct Watch {
     snap: Mutex<Snapshot>,
-    verdict: Mutex<Option<(String, u64)>>,
+    verdict: Mutex<Option<(String, BootTime)>>,
     log: Mutex<Option<record::Log>>,
     errors: Mutex<Option<ErrorCounter>>,
 }
@@ -300,7 +256,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Watch {
     pub const fn new() -> Self {
         Watch {
-            snap: Mutex::new(Snapshot { at: 0, connected: None, rx_bytes: None, rx_moved_at: 0, dns: Vec::new() }),
+            snap: Mutex::new(Snapshot { at: 0, observed_at: None, connected: None, rx_bytes: None, rx_moved_at: None, dns: Vec::new() }),
             verdict: Mutex::new(None),
             log: Mutex::new(None),
             errors: Mutex::new(None),
@@ -333,7 +289,13 @@ impl Watch {
 
     /// One sample: datad's state in the old `/state` shape (or why it could not be read) and the
     /// home screen (`/v2/screen`; `None` leaves the minute's verdict as "-" and is no error).
-    pub fn tick(&self, now: u64, fetched: Result<Value, ReadError>, screen: Option<&Value>) {
+    pub fn tick(
+        &self,
+        now: u64,
+        elapsed: Option<&BootTime>,
+        fetched: Result<Value, ReadError>,
+        screen: Option<&Value>,
+    ) {
         if let Some(c) = lock(&self.errors).as_mut() {
             c.record(classify(&fetched));
         }
@@ -341,12 +303,16 @@ impl Watch {
         let rx = cell_rx_bytes(state.as_ref());
         {
             let mut s = lock(&self.snap);
-            let next = sample(&s, now, state.as_ref(), rx);
+            let next = sample(&s, now, elapsed, state.as_ref(), rx);
             *s = next;
         }
         let reading = record::Reading::parse(now, state.as_ref(), screen, rx);
         if let Some(v) = &reading.verdict {
-            *lock(&self.verdict) = Some((v.clone(), now));
+            *lock(&self.verdict) = elapsed
+                .filter(|t| !t.boot_id.is_empty())
+                .map(|t| (v.clone(), t.clone()));
+        } else if elapsed.is_none_or(|t| t.boot_id.is_empty()) {
+            *lock(&self.verdict) = None;
         }
         if let Some(l) = lock(&self.log).as_mut() {
             l.feed(&reading);
@@ -355,9 +321,9 @@ impl Watch {
 
     /// datad's current home-screen verdict code (ok, weak, stall, …); None when datad hasn't
     /// answered for [`VERDICT_FRESH`] s.
-    pub fn verdict(&self, now: u64) -> Option<String> {
+    pub fn verdict(&self, now: Option<&BootTime>) -> Option<String> {
         let v = lock(&self.verdict).clone()?;
-        (now.saturating_sub(v.1) <= VERDICT_FRESH).then_some(v.0)
+        fresh(Some(&v.1), now, VERDICT_FRESH).then_some(v.0)
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -367,17 +333,32 @@ impl Watch {
     /// Is the cellular link itself working? Connected, and either something arrived in the last
     /// 30 s or — only then — one plain DNS query to the operator's resolver gets an answer
     /// (≤ 2 s): call it only when about to act on the answer.
-    pub fn cell_alive(&self, now: u64) -> bool {
+    /// Unknown observations pause manual-first decisions; they do not report a
+    /// measured outage, emit an event, or start a new probe.
+    pub fn cell_alive(&self, now: Option<&BootTime>) -> bool {
+        self.cell_alive_with(now, dns_rtt_ms)
+    }
+
+    fn cell_alive_with(
+        &self,
+        now: Option<&BootTime>,
+        probe: impl FnOnce(&[String]) -> Option<u32>,
+    ) -> bool {
         let s = self.snapshot();
         match alive_without_probe(&s, now) {
-            Some(v) => v,
-            None => dns_rtt_ms(&s.dns).is_some(),
+            PassiveLink::Receiving => true,
+            PassiveLink::Unknown | PassiveLink::Down => false,
+            PassiveLink::NeedsProbe => probe(&s.dns).is_some(),
         }
     }
 
-    /// Round trip of one DNS query to the operator's resolver, in ms.
-    pub fn direct_dns_ms(&self) -> Option<u32> {
-        dns_rtt_ms(&self.snapshot().dns)
+    /// An action-time DNS query only with a current, known connected observation.
+    pub fn direct_dns_ms(&self, now: Option<&BootTime>) -> Option<u32> {
+        let s = self.snapshot();
+        match alive_without_probe(&s, now) {
+            PassiveLink::Receiving | PassiveLink::NeedsProbe => dns_rtt_ms(&s.dns),
+            PassiveLink::Unknown | PassiveLink::Down => None,
+        }
     }
 
     /// Record an event (deep diagnosis, proxy fallback …): kept in the history and appended to
@@ -420,6 +401,10 @@ mod tests {
     use serde_json::json;
     use std::fs;
 
+    fn bt(seconds: u64) -> BootTime {
+        BootTime { boot_id: "test-boot".into(), seconds }
+    }
+
     #[test]
     fn operator_dns_wherever_datad_puts_it() {
         // the device's shape: wan_dns under uci_device_info, a list under interfaces.wan4
@@ -431,7 +416,7 @@ mod tests {
         assert_eq!(operator_dns(&only_iface), ["192.0.2.53"]);
         assert_eq!(operator_dns(&json!({"net": {"wan_dns": "1.1.1.1"}})), ["1.1.1.1"]);
         assert!(operator_dns(&json!({"net": {}})).is_empty());
-        let s = sample(&Snapshot::default(), 10, Some(&dev), None);
+        let s = sample(&Snapshot::default(), 10, Some(&bt(10)), Some(&dev), None);
         assert_eq!(s.dns, ["222.66.251.8", "116.236.159.8"]);
     }
 
@@ -488,29 +473,29 @@ mod tests {
     fn rx_movement_and_liveness() {
         let st = json!({"net": {"wan_status": "ipv4_ipv6_connected", "wan_dns": "1.1.1.1"}});
         let s0 = Snapshot::default();
-        assert_eq!(alive_without_probe(&s0, 100), Some(true), "no sample yet: don't claim it is down");
+        assert_eq!(alive_without_probe(&s0, Some(&bt(100))), PassiveLink::Unknown, "no sample is not proof");
 
-        let s1 = sample(&s0, 100, Some(&st), Some(1000));
-        assert_eq!(s1.rx_moved_at, 0, "first reading cannot show movement");
-        assert_eq!(alive_without_probe(&s1, 100), None);
+        let s1 = sample(&s0, 100, Some(&bt(100)), Some(&st), Some(1000));
+        assert_eq!(s1.rx_moved_at, None, "first reading cannot show movement");
+        assert_eq!(alive_without_probe(&s1, Some(&bt(100))), PassiveLink::NeedsProbe);
 
-        let s2 = sample(&s1, 105, Some(&st), Some(2000));
-        assert_eq!(s2.rx_moved_at, 105);
-        assert_eq!(alive_without_probe(&s2, 135), Some(true));
-        assert_eq!(alive_without_probe(&s2, 136), None, "stale after 30 s: needs a probe");
+        let s2 = sample(&s1, 105, Some(&bt(105)), Some(&st), Some(2000));
+        assert_eq!(s2.rx_moved_at, Some(bt(105)));
+        assert_eq!(alive_without_probe(&s2, Some(&bt(135))), PassiveLink::Receiving);
+        assert_eq!(alive_without_probe(&s2, Some(&bt(136))), PassiveLink::Unknown, "stale observation must not start a probe");
 
-        let s3 = sample(&s2, 140, Some(&st), Some(2000));
-        assert_eq!(s3.rx_moved_at, 105, "counter still ⇒ keeps the old time");
+        let s3 = sample(&s2, 140, Some(&bt(140)), Some(&st), Some(2000));
+        assert_eq!(s3.rx_moved_at, None, "35s sampling gap breaks the old pair");
         assert_eq!(s3.dns, vec!["1.1.1.1"]);
 
         let down = json!({"net": {"wan_status": "disconnected", "wan_dns": "--"}});
-        let s4 = sample(&s3, 145, Some(&down), Some(3000));
-        assert_eq!(alive_without_probe(&s4, 145), Some(false));
+        let s4 = sample(&s3, 145, Some(&bt(145)), Some(&down), Some(3000));
+        assert_eq!(alive_without_probe(&s4, Some(&bt(145))), PassiveLink::Down);
         assert_eq!(s4.dns, vec!["1.1.1.1"], "\"--\" keeps the last known resolver");
 
-        let s5 = sample(&s4, 150, None, None);
+        let s5 = sample(&s4, 150, Some(&bt(150)), None, None);
         assert_eq!(s5.connected, None);
-        assert_eq!(alive_without_probe(&s5, 150), Some(true), "datad down: not our call");
+        assert_eq!(alive_without_probe(&s5, Some(&bt(150))), PassiveLink::Unknown, "missing data is not proof");
     }
 
     fn tmpdir(name: &str) -> PathBuf {
@@ -601,10 +586,10 @@ mod tests {
         let screen = json!({"net": {"story": {"state": "ok"}}});
         // 2026-10-02 12:00 device clock: past record::CLOCK_SET
         let t0 = 1_790_942_400;
-        w.tick(t0, Ok(st.clone()), Some(&screen));
+        w.tick(t0, Some(&bt(100)), Ok(st.clone()), Some(&screen));
         assert!(!w.writes());
-        assert_eq!(w.verdict(t0 + 30).as_deref(), Some("ok"));
-        assert_eq!(w.verdict(t0 + 31), None, "stale verdict says nothing");
+        assert_eq!(w.verdict(Some(&bt(130))).as_deref(), Some("ok"));
+        assert_eq!(w.verdict(Some(&bt(131))), None, "stale verdict says nothing");
         w.push_event(record::Event::new(t0, "speed", json!({})));
         assert!(w.history(0, u64::MAX).1.is_empty(), "not writing: the event is dropped");
         w.open(&d);
@@ -614,7 +599,7 @@ mod tests {
         w.close();
         assert!(w.history(0, u64::MAX).1.is_empty());
         // sampling goes on after close
-        w.tick(t0 + 5, Ok(st), None);
+        w.tick(t0 + 5, Some(&bt(105)), Ok(st), None);
         assert_eq!(w.snapshot().at, t0 + 5);
         let _ = fs::remove_dir_all(&d);
     }

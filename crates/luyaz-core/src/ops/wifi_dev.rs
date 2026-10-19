@@ -291,6 +291,7 @@ impl WifiDev {
                             out["vendor_switch"] = json!("failed");
                             out["vendor_switch_error"] = json!(e);
                         }
+                        Outcome::CapabilityDenied(e) => return Err(e.to_string()),
                         Outcome::NotHandled => {}
                     }
                 }
@@ -302,6 +303,7 @@ impl WifiDev {
                             out["skipped"] = v["skipped"].clone();
                         }
                         Outcome::Failed(e) | Outcome::Invalid(e) => return Err(e),
+                        Outcome::CapabilityDenied(e) => return Err(e.to_string()),
                         Outcome::NotHandled => return Err("wifi.apply not handled".into()),
                     }
                 }

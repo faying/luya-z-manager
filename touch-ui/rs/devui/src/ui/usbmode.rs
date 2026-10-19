@@ -18,7 +18,7 @@ const UM_ROW_H: i32 = 52;
 /// remembered choice: wait this long after the plug-in
 const UM_GRACE_MS: u32 = 3000;
 /// no readback by then: say it did not take
-const UM_PEND_MS: u32 = 15000;
+const UM_PEND_MS: u32 = 75000; // Core write lock + USB preflight/write/readback; no automatic retry
 /// 已生效 stays this long, then the sheet closes
 const UM_DONE_MS: u32 = 1500;
 const UM_BANNER_MS: u32 = 5000;
@@ -245,8 +245,11 @@ impl Ui {
         if i < 0 || !self.um.attached {
             return;
         }
-        if i == self.um.cur || self.um_send(i, true) {
+        if i == self.um.cur || i == 2 {
             self.um.banner = cf!(tr("已按记住的方式：%s"), tr(UM_NAME[i as usize]));
+        } else if self.um_send(i, true) {
+            // Reaching Core is not success: unknown capabilities refuse automatic writes.
+            self.um.banner = cf!(tr("正在检查记住的方式：%s"), tr(UM_NAME[i as usize]));
         } else {
             self.um.banner = tr("数据服务不可用 · 没按记住的方式切").into();
         }
@@ -315,9 +318,13 @@ impl Ui {
             } else if m.notice_ok != 0 && m.notice.action == "usb.attach_mode" && m.notice.at.wrapping_sub(self.um.pend_at) as i32 >= 0 {
                 self.um.pend = -1;
                 if self.usbmode_visible() {
-                    self.um_status(tr("没切成 · 可以再试一次"), th.bad_t);
+                    let why = if m.notice.say_zh.is_empty() { tr("没切成 · 可以再试一次") }
+                        else { crate::lang::pick(&m.notice.say_zh, &m.notice.say_en) };
+                    self.um_status(why, th.bad_t);
                 } else if self.um.pend_auto {
-                    self.um.banner = tr("没按记住的方式切成 · 插着网口转接头？").into();
+                    self.um.banner = if m.notice.say_zh.is_empty() {
+                        tr("自动切换未完成 · 请手动选择 USB 用法").into()
+                    } else { crate::lang::pick(&m.notice.say_zh, &m.notice.say_en).into() };
                     self.um.banner_at = nz(now);
                 }
             } else if now.wrapping_sub(self.um.pend_at) >= UM_PEND_MS {

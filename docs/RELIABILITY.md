@@ -99,7 +99,7 @@ Served by the core on loopback as `/v2/api/…`; luyaz-web (`alerts_page.rs`) is
 ## 7. Health check and backup
 
 - `luyaz-core doctor` (process name `luyaz-doctor`; `/data/luyaz/scripts/doctor.sh` is a thin shim). Read-only. Output: human text, `--tsv` (`<ok|warn|bad>\t<id>\t<名称>\t<说明>`), `--tsv2` (header `#tsv2`, English); exit 1 if any row is bad. Also `--manifest`, `--tree-fp`, `--ledger-selftest`.
-- `--calibrate-standby` writes the standby baseline (section 8). `--report` is not in the core (exit 64); the shim falls back to `doctor-legacy.sh` for it.
+- `--calibrate-standby` writes the standby baseline (section 8); `--report 24h|7d [--summary]` outputs the longterm scorecard (`scorecard::live::card`, ported in Core 1.3.0 / `7637b1b1e`). `doctor.sh` only falls back to `doctor-legacy.sh` when the core binary is missing, pre-X11, or exits 64.
 - The core runs the checks itself (first 20 s after start, then periodically) and serves the snapshot at `/api/health`.
 - `touch-ui/scripts/config-backup.sh`: configuration only (list at the top of the script), Tailscale identity only with `--with-tailscale`. Backups live only on the computer (`./install.sh backup`); `restore` plans first, leaves `.pre-restore`, does not reload Wi-Fi.
 
@@ -111,12 +111,12 @@ Served by the core on loopback as `/v2/api/…`; luyaz-web (`alerts_page.rs`) is
 
 ## 9. Clock verdict, crash records, `.migrated`
 
-- **Clock** `/tmp/luyaz/clock-ok`: `<1|0> <wall−uptime> <uptime> <how>` (`vendor|jump|last_wall|year|revoked|none`), written by the sentinel; read by the SMS path, the core's longterm store and doctor. The sentinel keeps `/data/ledger/state/wall.last` (at most hourly) as evidence across reboots.
+- **Clock** `/tmp/luyaz/clock-ok`: line 1 is `<1|0> <wall−uptime> <uptime> <how>` (`vendor|jump|last_wall|year|revoked|none`); line 2 (since `94fec16ec`) is v2 `ClockEvidence` JSON (`raw_wall`, `observed_at` with `boot_id`/BOOTTIME, `monotonic`, `source`, `sync_state`), written by the sentinel and read by the SMS path, the core's longterm store, the scheduler and doctor. v2 readers require both lines to match the current boot within 180 s and ≤ 5 s drift relative to BOOTTIME (until the sentinel is upgraded past `ea7e1e0af` to write line 2, v2 readers treat a single-line file as `Unknown` and hold SMS/calendar actions). The sentinel keeps `/data/ledger/state/wall.last` (at most hourly) as evidence across reboots.
 - **Service crashes**: core `svcwatch.rs` writes `/data/crashlog/<name>/` (5 per program, 1 MB total) and alerts per section 4; a requested stop or restart is not a crash. The core's own crash is detected by the marker `/data/luyaz/core/core.running`.
 - **Modem crashes**: core `crashwatch.rs` (kmsg + netlink), state `/tmp/luyaz/core/crashwatch.json`, events into the longterm store `/data/luyaz/core/long`.
 - **`.migrated`**: `/tmp/luyaz/.migrated` is written last by the sentinel, only after `clock-ok` exists and the handover file equals the core's full duty list; ship removes it before starting a sentinel. `/data/luyaz/core/.migrated` is the core layout switch. doctor flags a directory without it as a half-done move.
 
-## 10. Finding probe budget (local P0-02 revision, not deployed)
+## 10. Finding probe budget (P0-02 revision, committed in `94fec16ec`, deployed in Core `5db284761`)
 
 - Core `api/finding/budget.rs` owns `/data/luyaz/core/findings.probe-budget.json`: `{"version":1,"last":{"boot_id":"…","seconds":600}}`. It is independent of the finding store; SIM changes and resolving/dismissing findings do not reset it. BOOTTIME includes suspend; wall time is never used for admission.
 - Before any Finding HTTP/DNS request, claim the shared 600-second budget under a nonblocking exclusive lock on `findings.probe-budget.lock`. Re-read the budget under the lock, write `findings.probe-budget.tmp`, fsync the file, rename, and fsync the directory. Any failure prevents packets; the in-memory retry deadline still advances by 600 seconds. No completion write or per-sample budget write. A crash after reservation keeps the budget consumed.

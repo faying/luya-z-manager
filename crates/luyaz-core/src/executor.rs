@@ -97,6 +97,7 @@ pub struct Busy;
 
 /// 可装箱的后端（`UbusBackend` 用 `impl Future`，不能直接做 trait object）。
 trait DynBackend: Send {
+    fn usb_methods<'a>(&'a mut self, object: &'a str) -> BoxFuture<'a, Result<Vec<u8>, UbusError>>;
     fn call<'a>(
         &'a mut self,
         object: &'a str,
@@ -107,6 +108,9 @@ trait DynBackend: Send {
 }
 
 impl<B: UbusBackend> DynBackend for B {
+    fn usb_methods<'a>(&'a mut self, object: &'a str) -> BoxFuture<'a, Result<Vec<u8>, UbusError>> {
+        Box::pin(UbusBackend::usb_methods(self, object))
+    }
     fn call<'a>(
         &'a mut self,
         object: &'a str,
@@ -290,9 +294,25 @@ pub struct Executor {
 
 static GLOBAL: OnceLock<Executor> = OnceLock::new();
 
+tokio::task_local! {
+    /// Set only inside a validated control job. Internal jobs default to automatic.
+    static USB_HUMAN: bool;
+}
+
+pub(crate) async fn usb_human_scope<T>(human: bool, future: impl Future<Output = T>) -> T {
+    USB_HUMAN.scope(human, future).await
+}
+
 /// 装成全局执行者（`state::ubus` 在执行者外调用时用它）。只装一次。
 pub fn install(e: &Executor) {
     let _ = GLOBAL.set(e.clone());
+}
+
+/// Existing shared owner, including direct AT routes outside the executor task.
+pub(crate) fn profile_hub() -> Option<Arc<Hub>> {
+    CTX.try_with(|c| c.shared.hub.clone())
+        .ok()
+        .or_else(|| GLOBAL.get().map(|e| e.shared.hub.clone()))
 }
 
 /// 当前是否在执行者里（测试用）。
@@ -363,7 +383,31 @@ impl Shared {
         if writing {
             self.reopen_gate().await;
         }
+        let usb_id = crate::device_profile::usb::capability(object, method);
+        let usb_before = if let Some(id) = usb_id {
+            if object == "zwrt_bsp.typec"
+                && (args["DR_Swap"] != "device" || args.get("PR_Swap").is_some())
+            {
+                return Err(UbusError::InvalidArgument(
+                    "only the reviewed DR_Swap device operation is supported".into(),
+                ));
+            }
+            Some(self.usb_preflight(id, object).await?)
+        } else {
+            None
+        };
+        let usb_token = usb_id.map(|_| self.hub.firmware().token());
         let r = self.raw_call(round, cool, object, method, args).await;
+        if let Some((token, before)) = usb_token.zip(usb_before) {
+            self.usb_readback(
+                token,
+                object,
+                args,
+                &before,
+                r.is_ok() || matches!(r, Err(UbusError::NoData { .. })),
+            )
+            .await;
+        }
         if writing && matches!(r, Err(UbusError::Timeout { .. })) {
             // 我们这边超时了，原厂那边可能还在做：结果未知，闸先关上。
             eprintln!(
@@ -444,11 +488,31 @@ impl Shared {
         let start = Instant::now();
         // 采集轮里用短超时（socket 2 秒），控制任务和内部任务用长超时（8 秒，V2-19）。
         self.live.call_started();
+        let context_token = self.hub.firmware().token();
         let r = {
             let mut b = self.backend.lock().await;
             b.set_round(round);
             b.call(object, method, args).await
         };
+        if matches!(
+            r,
+            Err(UbusError::Io(_) | UbusError::Protocol(_) | UbusError::Timeout { .. })
+        ) {
+            self.hub
+                .firmware()
+                .invalidate_context(crate::device_profile::context::Loss::Ubus);
+        } else if object == "uci"
+            && method == "get"
+            && args["config"] == "zte_nwinfo"
+            && args["section"] == "sys_info"
+            && args["option"] == "operate_mode"
+        {
+            self.hub.firmware().radio_read(
+                context_token,
+                r.as_ref().ok().and_then(|v| v["value"].as_str()),
+                luyaz_api::clock::BootTime::read(),
+            );
+        }
         self.live.call_done();
         if round {
             let mut rs = lock(&self.round);
@@ -821,3 +885,5 @@ impl Executor {
 
 #[cfg(test)]
 mod tests;
+
+mod usb;

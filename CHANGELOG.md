@@ -25,6 +25,14 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 - scripts: `VERSION` is shipped to `/data/luyaz/scripts/` so the scripts' version can be read on the device.
 - scripts: ship's UI-trouble check matches the touch UI's crash line under both names (`u60pro-devui pid … ended:` and `luyaz-ui pid … ended:`). Ship this before sentinel 1.0.2.
 
+## sentinel 1.0.3 — 2026-10-18
+
+- the touch UI's crash records go to `/data/crashlog/luyaz-ui`.
+
+## core 1.5.0 — 2026-10-18
+
+- ledger and report keys use the new names (`luyaz-core`, `luyaz-ui`; RSS columns `rss_core`, `rss_ui`); older records under `zwrt-datad`/`u60pro-devui`/`rss_datad`/`rss_devui` still count. The core's crash records go to `/data/crashlog/luyaz-core`, and the core moves `/data/crashlog/u60pro-devui` and `zwrt-datad` into the new directories (each check, without counting them again).
+
 ## core 1.4.4 — 2026-10-18
 
 - Diagnosis rows in plain words: the signal row says how strong and how noisy without numbers (it was cut off), the cap row lists the carriers the cell gives, and the other rows drop interface names and protocol words.

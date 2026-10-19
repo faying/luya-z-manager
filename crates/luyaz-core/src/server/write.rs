@@ -441,7 +441,10 @@ async fn control_job(
             eprintln!("[control] planned-reboot marker: {e}");
         }
     }
-    let response = control_task(app.clone(), &action, body).await;
+    // A remembered screen choice is automation, even though its transport says screen.
+    // Missing/legacy sources and internal callers cannot authorize an unknown USB write.
+    let usb_human = usb_human(&body);
+    let response = executor::usb_human_scope(usb_human, control_task(app.clone(), &action, body)).await;
     if let Some(j) = &journal
         && !ends
     {
@@ -461,6 +464,11 @@ async fn control_job(
         marker.mark_immediate(blocks_for_action(&action));
     }
     Some(response)
+}
+
+fn usb_human(body: &Value) -> bool {
+    who_of(body).is_some_and(|who| who.approved_by.can_confirm())
+        && body["params"]["remembered"] != true
 }
 
 /// D40：事务在确认或退回中时，影响上网的写（安全类写除外，照旧插队）按来源处理：用户的（screen、web、
@@ -929,6 +937,10 @@ async fn control_task(app: App, action: &str, body: Value) -> Response {
             return control_ok(action, value);
         }
         crate::control::Outcome::Invalid(error) => return invalid_parameter(action, &error),
+        crate::control::Outcome::CapabilityDenied(error) => return (
+            StatusCode::from_u16(error.status()).expect("fixed capability refusal status"),
+            Json(json!({"ok":false, "action":action, "error":error})),
+        ).into_response(),
         crate::control::Outcome::Failed(error) => return control_failed(action, error),
         crate::control::Outcome::NotHandled => {}
     }
@@ -976,6 +988,36 @@ fn invalid_parameter(action: &str, message: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn usb_manual_authority_never_follows_transport_alone() {
+        for source in [
+            "auto",
+            "scenario",
+            "scheduler",
+            "guard",
+            "legacy",
+            "mcp",
+            "",
+        ] {
+            assert!(
+                !super::usb_human(&serde_json::json!({"source":source,"params":{}})),
+                "{source}"
+            );
+        }
+        for source in ["web", "screen"] {
+            assert!(super::usb_human(
+                &serde_json::json!({"source":source,"params":{}})
+            ));
+            assert!(!super::usb_human(
+                &serde_json::json!({"source":source,"params":{"remembered":true}})
+            ));
+        }
+        assert!(super::usb_human(
+            &serde_json::json!({"source":"mcp","approved_by":"web","params":{}})
+        ));
+        assert!(!super::usb_human(&serde_json::json!({"params":{}})));
+    }
+
     use super::*;
 
     #[test]

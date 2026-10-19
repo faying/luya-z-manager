@@ -19,16 +19,16 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// The programs measured (the guard's `STANDBY_PROGS`, in its order: doctor reads by position).
-/// These are ledger keys, not device names: [`crate::paths::prog_key`] files `luyaz-ui` under
-/// `u60pro-devui` and the core under `zwrt-datad`, so those columns measure the live programs.
+/// These are ledger keys ([`crate::paths::prog_key`]); before Luya-Z F the UI and the core were
+/// `u60pro-devui` and `zwrt-datad` here (same positions, so old baselines still line up).
 /// `zte-agent` is retired and stays `-` (doctor marks it `retired`, never judged); the slot is kept
 /// because a baseline's columns and `fp` lines are by position. Renaming a key orphans every
 /// baseline and fingerprint on the device.
 pub const PROGS: [&str; 5] = [
     "tailscaled",
     "mihomo",
-    "u60pro-devui",
-    "zwrt-datad",
+    crate::paths::UI,
+    crate::paths::CORE,
     "zte-agent",
 ];
 /// Lines kept in the standby file.
@@ -333,15 +333,15 @@ mod tests {
     #[test]
     fn standby_lines_only_with_the_screen_off_and_the_last_60_kept() {
         let (r, p) = root("round");
-        // the programs' columns: only zwrt-datad runs
+        // the programs' columns: only the core runs
         let cols = |datad: &str| {
             PROGS
                 .iter()
-                .map(|q| if *q == "zwrt-datad" { datad } else { "-" })
+                .map(|q| if *q == crate::paths::CORE { datad } else { "-" })
                 .collect::<Vec<_>>()
                 .join(" ")
         };
-        let pids: BTreeMap<String, u32> = [("zwrt-datad".to_string(), 7)].into();
+        let pids: BTreeMap<String, u32> = [(crate::paths::CORE.to_string(), 7)].into();
         task(&p, 7, 7, 10, 2);
         task(&p, 7, 8, 5, 0);
         fs::write(

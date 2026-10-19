@@ -13,7 +13,7 @@ browser ──▶ luyaz-web :9090 (admin web) ──▶ luyaz-core
 luyaz-sentinel: screen owner + watchdog
 ```
 
-`luyaz-core` is the only program that talks to the modem and the stock services. It turns ubus calls, AT commands and sysfs into one local API. The admin web and the touch UI are both clients of that API; neither touches the hardware directly.
+`luyaz-core` is the normal authority that talks to the modem and the stock services. It turns ubus calls, AT commands and sysfs into one local API (`/v2` and `/control`). The admin web and the touch UI are both clients of that API; only the sentinel and the touch UI's bounded emergency fallbacks (below) touch stock interfaces directly when `luyaz-core` is unreachable.
 
 ## Components
 
@@ -32,6 +32,15 @@ luyaz-sentinel: screen owner + watchdog
 - Everything starts from a few lines in `/etc/rc.local`, one `/etc/init.d/<name> start` per service. No stock service is disabled or changed: the stock boot daemon waits for its whole service list, and removing one leaves the device stuck on the logo.
 - procd restarts the core, the admin web and the sentinel if they exit. The sentinel in turn restarts the touch UI.
 - The screen must never stay empty: if no interface is on it for a few minutes, the firmware reboots the whole device. This is why the sentinel falls back to the stock interface instead of retrying forever.
+
+## Touch UI emergency fallbacks
+
+During normal operation `luyaz-ui` reads `/v2/screen` (`/v2/state` + `/v2/events`) and sends all writes to `POST /control` on `127.0.0.1:9460`. So the device remains recoverable on-screen if `luyaz-core` is down or hung, `luyaz-ui` keeps four bounded direct paths (`touch-ui/rs/devui/src/ui/power.rs`, `src/data/live.rs`, `src/data/datad.rs`):
+
+- **Power menu fallback** (`power_fallback` / `power_last_resort`): reboot and power-off try `POST /control` (`device.reboot` / `device.poweroff`) first. If `luyaz-core` is unreachable, `luyaz-ui` runs `sync` and calls `ubus -t 10 call zwrt_mc.device.manager device_reboot|device_poweroff '{"moduleName":"zte_topsw_devui"}'` with fallback to `reboot`/`poweroff`. If the device is still up 40 s after confirmation, `power_last_resort` invokes `reboot`/`poweroff` directly.
+- **Control fallback when Core is unreachable** (`datad.rs::control_fb` → `/data/luyaz/scripts/luyaz-fallback.sh`): triggered only when TCP connect to `127.0.0.1:9460` fails (never on HTTP 409/503 or timeout while the core may still be executing). The script re-checks via `pidof` that `luyaz-core` is not running before applying essential recovery controls (`wifi.radio`, `cellular.data`, `cellular.roaming`, `cellular.rat`, `apn.mode`, `sim.slot`, `usb.mode`, `charge.inhibit`, `fast.boot`).
+- **Stock UI switch fallback** (`request_vendor` / `vendor_fallback`): writes `vendor\n` to `/tmp/luyaz-screen.ctl`; if the sentinel is not listening on the FIFO, spawns a delayed `/etc/init.d/zte_topsw_devui start` and sends `SIGTERM` to itself to release DRM master (`/dev/dri/card0`).
+- **Local hardware I/O**: backlight (`/sys/class/backlight`), power key (`/dev/input`), and auxiliary Wi-Fi state (`/sys/class/net/wlan*/operstate`, `iw`).
 
 ## Where things live
 

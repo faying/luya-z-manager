@@ -290,13 +290,14 @@ pub async fn write_profile(want: &str) -> Result<Value, String> {
 
 /// 核心的「没人用就暂停」租约还没到期（`engines::chill_idle`）：mihomo 这时停着，改了也测不出通不通。
 pub fn idle_paused() -> bool {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
     std::fs::read_to_string(crate::engines::chill_idle::LEASE)
         .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .is_some_and(|until| now < until)
+        .is_some_and(|s| {
+            luyaz_api::alerts::deadline::active(
+                &s,
+                luyaz_api::alerts::clock::BootTime::read().as_ref(),
+            )
+        })
 }
 
 /// 现在能不能动 CHILL（Agent 的关用）：有 CHILL 工作在跑（这次开机的槽，或重启前起的 `chill.sh`）就不行。

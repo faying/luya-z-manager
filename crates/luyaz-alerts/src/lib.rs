@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 pub mod clock;
+pub mod deadline;
 pub mod sms;
+pub mod utc;
 
 pub const DIR: &str = "/data/alerts";
 
@@ -40,7 +42,7 @@ pub fn set_current_offset(offset: i64) {
     CURRENT_OFFSET.store(offset, std::sync::atomic::Ordering::Relaxed);
 }
 
-fn current_offset() -> Option<i64> {
+pub fn current_offset() -> Option<i64> {
     Some(CURRENT_OFFSET.load(std::sync::atomic::Ordering::Relaxed)).filter(|&o| o != i64::MIN)
 }
 

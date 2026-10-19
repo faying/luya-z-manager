@@ -13,7 +13,7 @@ luyaz-core :9460 ──▶ luyaz-ui（触屏）
 luyaz-sentinel：屏幕主人 + 看门狗
 ```
 
-`luyaz-core` 是唯一和调制解调器、原厂服务打交道的程序，把 ubus、AT 命令和 sysfs 整理成一套本机 API。管理网页和触屏界面都是这套 API 的客户端，都不直接碰硬件。
+`luyaz-core` 是正常情况下唯一和调制解调器、原厂服务打交道的程序，把 ubus、AT 命令和 sysfs 整理成一套本机 API（`/v2` 与 `/control`）。管理网页和触屏界面都是这套 API 的客户端；只有哨兵以及触屏在核心失联时的有界紧急兜底（见下）会直接操作原厂接口。
 
 ## 组件
 
@@ -32,6 +32,15 @@ luyaz-sentinel：屏幕主人 + 看门狗
 - 全部从 `/etc/rc.local` 里的几行启动，每个服务一行 `/etc/init.d/<名字> start`。不停用、不改任何原厂服务：原厂的开机守护进程要等它清单里的服务全部就位，少一个就卡在 logo。
 - 核心、管理网页、哨兵退出后由 procd 重启；触屏界面由哨兵重启。
 - 屏幕不能长时间空着：几分钟没有任何界面，固件会整机重启。所以哨兵起不来触屏时交还原厂界面，而不是无限重试。
+
+## 触屏紧急兜底边界
+
+正常运行时 `luyaz-ui` 从 `127.0.0.1:9460` 读 `/v2/screen`（`/v2/state` + `/v2/events`），所有写操作发往 `POST /control`。为保证 `luyaz-core` 挂掉或卡死时拿在手里的设备仍能自救，`luyaz-ui` 保留四条有界的本地兜底路径（`touch-ui/rs/devui/src/ui/power.rs`、`src/data/live.rs`、`src/data/datad.rs`）：
+
+- **电源菜单兜底**（`power_fallback` / `power_last_resort`）：重启、关机先调 `POST /control`（`device.reboot` / `device.poweroff`）。核心连不上时，触屏直接 `sync` 并调 `ubus -t 10 call zwrt_mc.device.manager device_reboot|device_poweroff '{"moduleName":"zte_topsw_devui"}'`，失败退回 `reboot`/`poweroff`；确认后 40 秒仍未关机/重启，则由 `power_last_resort` 直接调系统 `reboot`/`poweroff`。
+- **核心不在线时的控制兜底**（`datad.rs::control_fb` → `/data/luyaz/scripts/luyaz-fallback.sh`）：只在 `127.0.0.1:9460` TCP 连接失败时触发（核心回 409/503 或请求超时绝不触发，以免核心其实在执行却被绕过）。脚本先用 `pidof` 再次确认 `luyaz-core` 没在跑，再直接执行断网自救必需的开关（`wifi.radio`、`cellular.data`、`cellular.roaming`、`cellular.rat`、`apn.mode`、`sim.slot`、`usb.mode`、`charge.inhibit`、`fast.boot`）。
+- **切回原厂界面兜底**（`request_vendor` / `vendor_fallback`）：优先往 `/tmp/luyaz-screen.ctl` 写 `vendor\n`；若哨兵没在听 FIFO，则后台延时拉起 `/etc/init.d/zte_topsw_devui start` 并给自己发 `SIGTERM` 让出 DRM master（`/dev/dri/card0`）。
+- **本地硬件读写**：背光（`/sys/class/backlight`）、电源键（`/dev/input`）与辅助 Wi-Fi 状态（`/sys/class/net/wlan*/operstate`、`iw`）。
 
 ## 东西放在哪
 

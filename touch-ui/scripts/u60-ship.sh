@@ -2705,6 +2705,7 @@ ship_stage() {
             mac_time=*) X_MACTIME=${_l#mac_time=} ;;
             format=*) X_FORMAT=${_l#format=} ;;
             trial=*) X_TRIAL=${_l#trial=} ;;
+            check=*) X_CHECK=${_l#check=} ;;
             note=*) X_NOTE=${_l#note=} ;;
             file=*) _mfiles="$_mfiles${_l#file=}$NL" ;;
             dir=*) _mdirs="$_mdirs${_l#dir=}$NL" ;;
@@ -2754,12 +2755,17 @@ ship_stage() {
     fi
     _clash=$(observe_clash "$X_COMP") && P="$P${NL}$_clash"
     if [ -n "$X_TRIAL" ]; then
-        if ! matches "$X_TRIAL" '^[0-9]{1,5}$' || [ "$(num "$X_TRIAL")" -lt 60 ] || [ "$(num "$X_TRIAL")" -gt 86400 ]; then
-            P="$P${NL}trial “$X_TRIAL” 不在 60–86400 秒"
+        if ! matches "$X_TRIAL" '^[0-9]{1,5}$' || [ "$(num "$X_TRIAL")" -lt 30 ] || [ "$(num "$X_TRIAL")" -gt 86400 ]; then
+            P="$P${NL}trial “$X_TRIAL” 不在 30–86400 秒"
+        fi
+    fi
+    if [ -n "$X_CHECK" ]; then
+        if ! matches "$X_CHECK" '^[0-9]{1,5}$' || [ "$(num "$X_CHECK")" -lt 30 ] || [ "$(num "$X_CHECK")" -gt 86400 ]; then
+            P="$P${NL}check “$X_CHECK” 不在 30–86400 秒"
         fi
     fi
     X_TRIAL=$(num "${X_TRIAL:-$C_TRIAL}")
-    X_CHECK=$C_CHECK
+    X_CHECK=$(num "${X_CHECK:-$C_CHECK}")
 
     # files: exactly the component's, md5 as uploaded, live present (or,
     # for a component that may add files, its directory present)

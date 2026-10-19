@@ -37,7 +37,8 @@ RESOLV_SYS="${RESOLV_SYS:-/etc/resolv.conf}"
 EVENTS="$CHILL_DIR/events.log"
 DISABLED="$CHILL_DIR/disabled"
 GAVEUP="$CHILL_DIR/gaveup"
-PAUSE_UNTIL="$CHILL_DIR/pause_until"
+LEGACY_PAUSE="$CHILL_DIR/pause_until"
+PAUSE_UNTIL="$CHILL_DIR/pause.v2"
 PROFILE_FILE="$CHILL_DIR/profile"     # 档位：eco / standard / perf，没有 = standard
 MODE_FILE="$CHILL_DIR/mode"           # 最近一次的出口模式（rule/global/direct），重启核心后恢复
 HOME_IP_LIST="$CHILL_DIR/home_ip.list"  # 家里出口：要家里 IP 的网站（用户手写）
@@ -49,7 +50,7 @@ LOG=/tmp/chill.log
 RULES_BEFORE=/tmp/chill.rules.before
 RESTART_FLAG=/tmp/chill.restart       # 有它 = 监督循环下一拍平稳重启核心（不算崩溃）
 THERMAL_ECO=/tmp/chill.thermal-eco    # 有它 = 因温度暂时按 eco 跑（重启设备自然清掉）
-IDLE_LEASE=/tmp/chill.idle            # 核心写的「息屏暂停」租约：到这个秒数前停着（u60-radio.md 6e）
+IDLE_LEASE=/tmp/chill.idle.v2            # 核心写的「息屏暂停」租约：到这个秒数前停着（u60-radio.md 6e）
 
 FAKE_IP_NET=198.18.0.0/16
 TABLE=2022
@@ -90,12 +91,67 @@ CHILL_CORE_RSS_MAX="${CHILL_CORE_RSS_MAX:-$CORE_RSS_MAX_DEFAULT}"
 
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*" >> "$LOG" 2>/dev/null || true; }
 
-# 核心的息屏暂停租约还没到期（息屏、没有客户端、不是出口节点，满 5 分钟；核心每 30 秒续一次，
-# 核心没了 3 分钟内自己失效）。读不懂按没有。
-idle_paused() {
-  _u=$(cat "$IDLE_LEASE" 2>/dev/null)
-  case "$_u" in '' | *[!0-9]*) return 1 ;; esac
-  [ "$(date +%s)" -lt "$_u" ]
+# /proc/uptime includes suspend. Built-in read/arithmetic: no date/cat/awk per tick.
+CHILL_PROC="${CHILL_PROC:-/proc}"
+uint() {
+  case "$1" in ''|*[!0-9]*|0?*) return 1 ;; esac
+  [ "${#1}" -le 12 ]
+}
+boot_now() {
+  IFS=' ' read -r _up _rest 2>/dev/null < "$CHILL_PROC/uptime" || return 1
+  case "$_up" in
+    *.*) _frac=${_up#*.}; case "$_frac" in ''|*[!0-9]*) return 1 ;; esac ;;
+  esac
+  _up=${_up%%.*}
+  uint "$_up" || return 1
+  printf '%s\n' "$_up"
+}
+boot_id() {
+  IFS= read -r _bid 2>/dev/null < "$CHILL_PROC/sys/kernel/random/boot_id" || return 1
+  case "$_bid" in ''|*[!A-Za-z0-9-]*) return 1 ;; esac
+  [ "${#_bid}" -le 64 ] || return 1
+  printf '%s\n' "$_bid"
+}
+# Return 0 active, 1 inactive (including reboot), 2 invalid/unknown.
+# Read a whole file and reject trailing data, exactly like Rust's parser.
+deadline_state() {
+  _ds=$(cat "$1" 2>/dev/null) || return 2
+  set -f
+  set -- $_ds
+  set +f
+  [ "$#" -eq 4 ] || return 2
+  [ "$1" = v2 ] || return 2
+  case "$2" in ''|*[!A-Za-z0-9-]*) return 2 ;; esac
+  [ "${#2}" -le 64 ] || return 2
+  uint "$3" && uint "$4" && [ "$4" -ge "$3" ] || return 2
+  _db=$(boot_id) && _dn=$(boot_now) || return 2
+  [ "$2" = "$_db" ] || return 1
+  [ "$_dn" -ge "$3" ] || return 2
+  [ "$_dn" -lt "$4" ]
+}
+idle_paused() { deadline_state "$IDLE_LEASE"; [ "$?" -eq 0 ]; }
+# An unreadable manual pause/legacy epoch must not silently resume traffic. Explicit
+# pause 0 clears it. A valid v2 pause expires on reboot, not on service restart.
+manual_paused() {
+  [ -e "$LEGACY_PAUSE" ] && return 0
+  [ -e "$PAUSE_UNTIL" ] || return 1
+  deadline_state "$PAUSE_UNTIL"; _ps=$?
+  [ "$_ps" -eq 1 ] && return 1
+  return 0
+}
+pause_for() {
+  _minutes=$1
+  uint "$_minutes" && [ "$_minutes" -le 10080 ] || return 2
+  if [ "$_minutes" -eq 0 ]; then
+    rm -f "$PAUSE_UNTIL" "$LEGACY_PAUSE"
+    return
+  fi
+  _pb=$(boot_id) && _pn=$(boot_now) || return 1
+  _pu=$((_pn + _minutes * 60))
+  uint "$_pu" || return 1
+  (umask 077; printf 'v2 %s %s %s\n' "$_pb" "$_pn" "$_pu" > "$PAUSE_UNTIL.$$" ) &&
+    mv "$PAUSE_UNTIL.$$" "$PAUSE_UNTIL" || return 1
+  rm -f "$LEGACY_PAUSE"
 }
 
 # 状态迁移留痕（DT3）。只在状态真的变化时写，截断到最后 20 行。
@@ -222,11 +278,15 @@ dns_answers() {
 # 返回 0 = 就绪，1 = 到时间还没就绪，2 = 核心已经退出（交给调用方的 kill -0 处理）。
 wait_core_ready() {
   _wpid="$1"
-  _wend=$(( $(date +%s) + CORE_READY_MAX ))
+  _wn=$(boot_now) || return 1
+  _wend=$((_wn + CORE_READY_MAX))
+  _wtries=0
   while :; do
     kill -0 "$_wpid" 2>/dev/null || return 2
     api_alive 1 && dns_answers && return 0
-    [ "$(date +%s)" -lt "$_wend" ] || return 1
+    _wn=$(boot_now) || return 1
+    [ "$_wn" -lt "$_wend" ] && [ "$_wtries" -lt "$CORE_READY_MAX" ] || return 1
+    _wtries=$((_wtries + 1))
     sleep 1
   done
 }
@@ -291,18 +351,26 @@ strip_owned() {
     p >= lo && p <= hi { next }
     { print }' 2>/dev/null
 }
+# 只看「快照里有、现在没有」（删除）：新增不算漂移。原厂会按接口动态加规则
+# （如 IPv6 的 `42000000xx: from all iif wlanN failed_policy`，优先级随 ifindex 变），
+# 按新增判会常驻误报、每分钟刷日志；也不按优先级或关键字加白名单。
+missing_rules() { # missing_rules <快照> <现状>：输出快照里有、现状里没有的行
+  awk 'NR==FNR { have[$0] = 1; next } !($0 in have)' "$2" "$1" 2>/dev/null
+}
 check_rules_drift() {
   [ -f "$RULES_BEFORE" ] || return 0
   { ip rule show; ip -6 rule show; } 2>/dev/null | strip_owned > /tmp/chill.rules.after
-  if strip_owned < "$RULES_BEFORE" | cmp -s - /tmp/chill.rules.after; then
+  strip_owned < "$RULES_BEFORE" > /tmp/chill.rules.snap
+  _gone=$(missing_rules /tmp/chill.rules.snap /tmp/chill.rules.after)
+  if [ -z "$_gone" ]; then
     rules_drift=false
   else
     rules_drift=true
-    log "rules_drift: 自管区间之外的 ip rule 与启动前快照不一致"
-    log "--- 差异 ---"
-    strip_owned < "$RULES_BEFORE" | diff - /tmp/chill.rules.after 2>/dev/null | head -10 >> "$LOG" 2>/dev/null
+    log "rules_drift: 自管区间之外有启动前快照里的 ip rule 不见了"
+    log "--- 消失的规则 ---"
+    printf '%s\n' "$_gone" | head -10 >> "$LOG" 2>/dev/null
   fi
-  rm -f /tmp/chill.rules.after
+  rm -f /tmp/chill.rules.after /tmp/chill.rules.snap
 }
 
 # 清理存量核心：只认 /proc/<pid>/exe 指向我们的 bin，**绝不按进程名**匹配，
@@ -723,8 +791,8 @@ enter_direct() {
 # gaveup，哪怕两次间隔几小时——那不是设计要的「10 分钟内 3 次」。
 # 返回 0 表示还可以再试，返回 1 表示已达上限、应进入 gaveup。
 note_crash() {
-  now=$(date +%s)
-  if [ "$crash_t0" -eq 0 ] || [ $((now - crash_t0)) -gt "$CRASH_WINDOW" ]; then
+  now=$(boot_now) || return 1
+  if [ "$crash_t0" -lt 0 ] || [ "$now" -lt "$crash_t0" ] || [ $((now - crash_t0)) -gt "$CRASH_WINDOW" ]; then
     crash_n=0; crash_t0=$now
   fi
   crash_n=$((crash_n + 1))
@@ -743,7 +811,8 @@ next_backoff() {
     *) _w=900 ;;
   esac
   [ "$_w" -lt "$DWELL_SECONDS" ] && _w="$DWELL_SECONDS"
-  backoff=$(( $(date +%s) + _w ))
+  _bn=$(boot_now) || { backoff=unknown; return 1; }
+  backoff=$((_bn + _w))
   log "降级第 ${degrade_n} 次，退避 ${_w} 秒"
 }
 
@@ -760,7 +829,7 @@ restart_core() {
 thermal_step() {
   [ -n "$CHILL_TEMP_WARM" ] || return 1
   if [ ! -f "$THERMAL_ECO" ]; then
-    cool_since=0
+    cool_since=-1
     [ "$(profile_read)" = eco ] && return 1
     [ "$1" -ge "$CHILL_TEMP_WARM" ] || return 1
     : > "$THERMAL_ECO"
@@ -769,12 +838,12 @@ thermal_step() {
     return 0
   fi
   if [ "$1" -ge $((CHILL_TEMP_WARM - TEMP_RECOVER_DELTA)) ]; then
-    cool_since=0; return 1
+    cool_since=-1; return 1
   fi
-  now=$(date +%s)
-  [ "${cool_since:-0}" -gt 0 ] || { cool_since=$now; return 1; }
+  now=$(boot_now) || return 1
+  [ "${cool_since:--1}" -ge 0 ] && [ "$now" -ge "$cool_since" ] || { cool_since=$now; return 1; }
   [ $((now - cool_since)) -ge "$COOL_HOLD" ] || return 1
-  rm -f "$THERMAL_ECO"; cool_since=0
+  rm -f "$THERMAL_ECO"; cool_since=-1
   event "cool cpuss=$(( $1 / 1000 )) -> $(profile_read)"
   restart_core "$(profile_read)"
   return 0
@@ -802,17 +871,14 @@ run() {
 
   started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   rules_drift=false; mem_pressure=false; bypass_stale_json='[]'
-  crash_n=0; crash_t0=0; backoff=0; direct_since=0; degrade_n=0; state_idle=0
+  crash_n=0; crash_t0=-1; backoff=0; direct_since=0; degrade_n=0; state_idle=0
 
   while :; do
     # ---- 不该启动的情形，保持进程存活、停在直连 ----
     if [ -f "$DISABLED" ]; then enter_direct disabled; sleep 5; continue; fi
     if [ -f "$GAVEUP" ];   then enter_direct gaveup;   sleep 5; continue; fi
-    if [ -f "$PAUSE_UNTIL" ]; then
-      until_ts=$(cat "$PAUSE_UNTIL" 2>/dev/null || echo 0)
-      if [ "$(date +%s)" -lt "$until_ts" ]; then enter_direct paused; sleep 5; continue; fi
-      rm -f "$PAUSE_UNTIL"
-    fi
+    if manual_paused; then enter_direct paused; sleep 5; continue; fi
+    [ -e "$PAUSE_UNTIL" ] && rm -f "$PAUSE_UNTIL"
     # 息屏暂停：只在进入时记一次（每 5 秒一行的日志没有用）
     if idle_paused; then
       [ "$state_idle" = 1 ] || { enter_direct idle; state_idle=1; }
@@ -821,8 +887,10 @@ run() {
     state_idle=0
     if ! rulesets_ok; then enter_direct ruleset_missing; sleep 30; continue; fi
     if ! wan_is_cellular; then enter_direct captive_wan; sleep 15; continue; fi
-    if [ "$backoff" -gt 0 ]; then
-      [ "$(date +%s)" -lt "$backoff" ] && { sleep 5; continue; }
+    if [ "$backoff" != 0 ]; then
+      _rn=$(boot_now) || { sleep 5; continue; }
+      [ "$backoff" = unknown ] && { next_backoff; sleep 5; continue; }
+      [ "$_rn" -lt "$backoff" ] && { sleep 5; continue; }
       backoff=0
     fi
 
@@ -873,6 +941,8 @@ run() {
         break
       fi
 
+      if manual_paused; then enter_direct paused; break; fi
+
       # 息屏暂停：停核心回直连（不算崩溃：在「子进程消失」之前处理），外层循环等租约到期
       if idle_paused; then
         enter_direct idle; state_idle=1
@@ -906,7 +976,7 @@ run() {
       t=$(max_temp)
       if [ "$t" -ge "$CHILL_TEMP_HOT" ]; then
         enter_direct overheat
-        direct_since=$(date +%s)
+        direct_since=$(boot_now) || direct_since=0
         next_backoff
         break
       fi
@@ -919,7 +989,7 @@ run() {
       if [ "$avail" -lt "$MEM_AVAIL_MIN" ]; then
         if [ "$rss" -gt "$CHILL_CORE_RSS_MAX" ]; then
           enter_direct lowmem
-          direct_since=$(date +%s)
+          direct_since=$(boot_now) || direct_since=0
           next_backoff
           break
         else
@@ -1022,7 +1092,7 @@ case "${1:-}" in
     ;;
   pause)
     m="${2:-30}"
-    echo $(( $(date +%s) + m * 60 )) > "$PAUSE_UNTIL"
+    pause_for "$m" || { echo "暂停失败：分钟需为 0–10080，且开机时钟必须可读" >&2; exit 1; }
     echo "已暂停 ${m} 分钟"
     ;;
   safe-start)

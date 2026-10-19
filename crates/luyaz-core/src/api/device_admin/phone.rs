@@ -30,12 +30,7 @@ fn target(c: &Compat) -> at::Target {
 /// does not bring the modem back from LPM and `AT+CFUN=1` blocks on the port (CLAUDE.md, B31):
 /// only a restart does, and this device is someone's only uplink abroad. Unlike the agent.
 pub(crate) fn radio_set(cmd: &str) -> bool {
-    let s: String = cmd
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect::<String>()
-        .to_ascii_uppercase();
-    s.match_indices("CFUN=").any(|(i, _)| !s[i + 5..].starts_with('?'))
+    crate::device_profile::policy::radio_set(cmd)
 }
 
 /// A call: dial (`ATD…`), answer (`ATA`) or hang up (`+CHUP`, anything but the `=?` test form):

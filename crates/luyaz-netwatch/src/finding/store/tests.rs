@@ -1,6 +1,6 @@
 use super::*;
 use luyaz_api::diagnose::Level;
-use luyaz_api::finding::{Confidence, Evidence, KIND_NO_INTERNET, LayerId};
+use luyaz_api::finding::{Confidence, Evidence, LayerId, KIND_NO_INTERNET};
 
 const T: u64 = CLOCK_SET + 1_000_000;
 
@@ -62,10 +62,9 @@ fn resolves_after_two_up_checks_in_a_row() {
     s.observe(&open("1"), "1", T + 20);
     assert!(s.observe(&UP, "1", T + 30).is_empty());
     // can't tell does not count either way
-    assert!(
-        s.observe(&Verdict::Unverified { why: "not_probed" }, "1", T + 35)
-            .is_empty()
-    );
+    assert!(s
+        .observe(&Verdict::Unverified { why: "not_probed" }, "1", T + 35)
+        .is_empty());
     let c = s.observe(&Verdict::None { why: "up" }, "1", T + 40);
     assert!(matches!(&c[..], [Change::Close(_, Close::Resolved)]));
     assert!(s.open.is_empty());
@@ -124,6 +123,64 @@ fn suppression_holds_while_the_clock_is_unset() {
 }
 
 #[test]
+fn suppression_survives_unsynced_dismiss_and_plus_minus_8h_clock_jumps() {
+    let boot = |id: &str, seconds: u64| BootTime {
+        boot_id: id.into(),
+        seconds,
+    };
+
+    // 1. Dismissed before SNTP sets the wall clock (`early < CLOCK_SET`), then SNTP jumps to `T`:
+    //    same-boot `BootTime` governs the 24h window and heals `until` for cross-boot persistence.
+    let mut s = Store::default();
+    let early = 1_000;
+    s.observe_at(&open("1"), "1", early, Some(&boot("b1", 100)));
+    assert_eq!(
+        s.dismiss_at(KIND_NO_INTERNET, "1", early, Some(&boot("b1", 120)))
+            .len(),
+        1
+    );
+    assert!(!clock_set(s.suppressed[0].until));
+    // SNTP jumps wall clock to `T` 30s later on the same boot: still suppressed, `until` healed.
+    assert!(s
+        .observe_at(&open("1"), "1", T, Some(&boot("b1", 150)))
+        .is_empty());
+    assert_eq!(s.suppressed[0].until, T + SUPPRESS_SECS - 30);
+    // +8h wall-clock jump at 16h of boot time: must NOT expire 8h early!
+    assert!(s
+        .observe_at(
+            &open("1"),
+            "1",
+            T + 16 * 3600 + 28_800,
+            Some(&boot("b1", 120 + 16 * 3600)),
+        )
+        .is_empty());
+    // -8h wall-clock jump at 24h of boot time: expires on time at 24h of boot time, not 32h!
+    assert_eq!(
+        kinds(&s.observe_at(
+            &open("1"),
+            "1",
+            T + SUPPRESS_SECS - 28_800,
+            Some(&boot("b1", 120 + SUPPRESS_SECS)),
+        )),
+        ["finding.open"]
+    );
+    assert!(s.suppressed.is_empty());
+
+    // 2. Dismissed while unset without `BootTime` (or rebooted before SNTP): when SNTP sets `T`,
+    //    `until` heals to `T + SUPPRESS_SECS` instead of vanishing immediately.
+    let mut s2 = Store::default();
+    s2.observe(&open("2"), "2", early);
+    s2.dismiss(KIND_NO_INTERNET, "2", early);
+    assert!(s2.is_suppressed(KIND_NO_INTERNET, "2", T));
+    assert!(s2.observe(&open("2"), "2", T).is_empty());
+    assert_eq!(s2.suppressed[0].until, T + SUPPRESS_SECS);
+    assert_eq!(
+        kinds(&s2.observe(&open("2"), "2", T + SUPPRESS_SECS)),
+        ["finding.open"]
+    );
+}
+
+#[test]
 fn round_trip_keeps_open_and_suppressed() {
     let mut s = Store::default();
     s.observe(&open("1"), "1", T);
@@ -169,6 +226,7 @@ fn at_most_eight_entries_oldest_open_goes_first() {
             count: 1,
             ups: 0,
             finding: Value::Null,
+            revision: None,
         });
         s.dismiss(kind, "s", T);
     }
@@ -182,6 +240,7 @@ fn at_most_eight_entries_oldest_open_goes_first() {
             count: 1,
             ups: 0,
             finding: Value::Null,
+            revision: None,
         });
     }
     assert_eq!(s.open.len() + s.suppressed.len(), MAX_ENTRIES);
@@ -208,11 +267,79 @@ fn events_carry_the_iccid_tail_only() {
 fn no_card_reading_changes_nothing() {
     let mut s = Store::default();
     s.observe(&open("A"), "A", T);
-    assert!(
-        s.observe(&Verdict::Unverified { why: "premises" }, "", T + 10)
-            .is_empty()
-    );
+    assert!(s
+        .observe(&Verdict::Unverified { why: "premises" }, "", T + 10)
+        .is_empty());
     assert!(s.observe(&open(""), "", T + 20).is_empty());
     assert_eq!(s.open.len(), 1);
     assert_eq!(s.open[0].iccid, "A");
+}
+
+// ---- identity (decision-execution-loop §4.1 D2) ----
+
+#[test]
+fn every_evidence_or_state_change_takes_the_next_revision() {
+    let mut s = Store::default().with_epoch("e1");
+    s.observe(&open("s"), "s", T);
+    let r1 = s.identity(KIND_NO_INTERNET, "s").unwrap();
+    assert_eq!(
+        r1,
+        Identity {
+            epoch: "e1".into(),
+            revision: 1
+        }
+    );
+    // the same verdict again: no event, but new evidence = new revision
+    assert!(s.observe(&open("s"), "s", T + 1).is_empty());
+    assert_eq!(s.identity(KIND_NO_INTERNET, "s").unwrap().revision, 2);
+    // one "up": state moved
+    s.observe(&Verdict::None { why: "up" }, "s", T + 2);
+    assert_eq!(s.identity(KIND_NO_INTERNET, "s").unwrap().revision, 3);
+    // can't tell: nothing changes
+    s.observe(&Verdict::Unverified { why: "x" }, "s", T + 3);
+    assert_eq!(s.identity(KIND_NO_INTERNET, "s").unwrap().revision, 3);
+}
+
+#[test]
+fn no_epoch_or_an_old_file_is_never_executable() {
+    let mut s = Store::default();
+    s.observe(&open("s"), "s", T);
+    assert!(s.identity(KIND_NO_INTERNET, "s").is_none(), "no epoch");
+    // a file from before D2: no revision fields
+    let mut v = s.to_value();
+    v.as_object_mut().unwrap().remove("revision");
+    v["open"][0].as_object_mut().unwrap().remove("revision");
+    let old = Store::from_value(&v).with_epoch("e2");
+    assert_eq!(old.open.len(), 1);
+    assert!(old.identity(KIND_NO_INTERNET, "s").is_none());
+}
+
+#[test]
+fn a_reload_keeps_the_revision_but_never_the_epoch() {
+    let mut s = Store::default().with_epoch("e1");
+    s.observe(&open("s"), "s", T);
+    s.observe(&open("s"), "s", T + 1);
+    let v = s.to_value();
+    assert!(v.get("epoch").is_none());
+    let back = Store::from_value(&v);
+    assert_eq!(back.epoch, "");
+    assert_eq!(back.revision, 2);
+    let back = back.with_epoch("e2");
+    assert_ne!(
+        back.identity(KIND_NO_INTERNET, "s"),
+        s.identity(KIND_NO_INTERNET, "s")
+    );
+}
+
+#[test]
+fn a_damaged_counter_never_reuses_a_revision() {
+    let mut s = Store::default().with_epoch("e1");
+    s.observe(&open("s"), "s", T);
+    s.observe(&open("s"), "s", T + 1);
+    let mut v = s.to_value();
+    v["revision"] = 0.into();
+    let mut back = Store::from_value(&v).with_epoch("e1");
+    assert_eq!(back.revision, 2);
+    back.observe(&open("s"), "s", T + 2);
+    assert_eq!(back.identity(KIND_NO_INTERNET, "s").unwrap().revision, 3);
 }

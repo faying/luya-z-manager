@@ -50,6 +50,10 @@ MODE_FILE="$CHILL_DIR/mode"
 RESTART_FLAG="$CHILL_DIR/restart"
 THERMAL_ECO="$CHILL_DIR/thermal-eco"
 IDLE_LEASE="$CHILL_DIR/idle"
+CHILL_PROC="$CHILL_DIR/proc"
+mkdir -p "$CHILL_PROC/sys/kernel/random"
+printf 'boot-a\n' > "$CHILL_PROC/sys/kernel/random/boot_id"
+printf '10000.00 0.00\n' > "$CHILL_PROC/uptime"
 
 # ─────────────────────────────────────────────────────────────────────────────
 sec "build_filters：结构与裁剪"
@@ -110,6 +114,25 @@ case "$out" in *9100:*) ok "保留区间上界外 9100" ;; *) ng "误删了 9100
 case "$out" in *8990:*) ng "未剔除下界 8990" ;; *) ok "剔除下界 8990" ;; esac
 case "$out" in *8999:*) ng "未剔除绕行规则 8999" ;; *) ok "剔除绕行规则 8999" ;; esac
 case "$out" in *9099:*) ng "未剔除上界 9099" ;; *) ok "剔除上界 9099" ;; esac
+
+sec "check_rules_drift：只认删除"
+
+RULES_BEFORE="$CHILL_DIR/rules.before"
+printf '%s\n' "$SAMPLE" > "$RULES_BEFORE"
+RULES_NOW="$SAMPLE"
+ip() { [ "${1:-}" = "-6" ] || printf '%s\n' "$RULES_NOW"; }
+rules_drift=; check_rules_drift; eq "没变：不漂移" "$rules_drift" "false"
+RULES_NOW="$SAMPLE
+4200000059:	from all iif wlan0 failed_policy"
+rules_drift=; check_rules_drift; eq "原厂新增规则：不漂移" "$rules_drift" "false"
+RULES_NOW=$(printf '%s\n' "$SAMPLE" | grep -v '^8990:\|^9000:')
+rules_drift=; check_rules_drift; eq "自管区间内消失：不漂移" "$rules_drift" "false"
+: > "$LOG"
+RULES_NOW=$(printf '%s\n' "$SAMPLE" | grep -v '^5210:')
+rules_drift=; check_rules_drift; eq "Tailscale 5210 消失：漂移" "$rules_drift" "true"
+has "日志写出消失的规则" "$(cat "$LOG")" '5210:'
+case "$(cat "$LOG")" in *5270:*) ng "日志混进了没消失的规则" ;; *) ok "日志只写消失的规则" ;; esac
+unset -f ip; rm -f "$RULES_BEFORE"
 
 # ─────────────────────────────────────────────────────────────────────────────
 sec "render：占位符与拒绝渲染"
@@ -251,7 +274,7 @@ EVENTS="$EVENTS_SAVE"
 sec "note_crash：崩溃计数与窗口重置"
 
 # 这些只在故障时才执行，平时看不出对错，正是最需要回归保护的部分。
-crash_n=0; crash_t0=0
+crash_n=0; crash_t0=-1
 note_crash; eq "第 1 次崩溃后计数为 1" "$crash_n" "1"
 note_crash; eq "第 2 次崩溃后计数为 2" "$crash_n" "2"
 if note_crash; then ng "第 3 次应返回非 0（达上限）"; else ok "第 3 次达上限返回非 0"; fi
@@ -259,7 +282,7 @@ eq "达上限时计数为 3" "$crash_n" "3"
 
 # 距首次崩溃超过窗口应重置。此前「启动即退出」那条路径没有重置逻辑，
 # 累计 3 次就永久 gaveup，哪怕间隔几小时——这条断言就是防它回归。
-crash_t0=$(( $(date +%s) - CRASH_WINDOW - 60 ))
+crash_t0=$(( $(boot_now) - CRASH_WINDOW - 60 ))
 if note_crash; then ok "超窗后重置并可继续重试"; else ng "超窗后仍判定为达上限"; fi
 eq "超窗重置后计数归 1" "$crash_n" "1"
 
@@ -276,13 +299,13 @@ near() { # near <名称> <实际> <期望> [容差秒]
   if [ "$_d" -le "$_tol" ]; then ok "$1"; else ng "$1（期望 ~$3 实际 $2）"; fi
 }
 
-now=$(date +%s); next_backoff
+now=$(boot_now); next_backoff
 w1=$((backoff - now)); near "第 1 次退避约 120 秒" "$w1" 120
-now=$(date +%s); next_backoff
+now=$(boot_now); next_backoff
 w2=$((backoff - now)); near "第 2 次退避约 300 秒" "$w2" 300
-now=$(date +%s); next_backoff
+now=$(boot_now); next_backoff
 w3=$((backoff - now)); near "第 3 次退避约 900 秒" "$w3" 900
-now=$(date +%s); next_backoff
+now=$(boot_now); next_backoff
 w4=$((backoff - now)); near "第 4 次及以后保持约 900 秒" "$w4" 900
 if [ "$w1" -ge "$DWELL_SECONDS" ]; then ok "退避不低于驻留下限（${DWELL_SECONDS}s）"; else ng "退避低于驻留下限"; fi
 
@@ -486,7 +509,7 @@ eq "降档后生效值 eco" "$(profile_effective)" "eco"
 CALLS=""
 if thermal_step 62000; then ng "只降到 WARM-5°C 不该回档"; else ok "没降够 10°C 不回档"; fi
 if thermal_step 50000; then ng "刚凉下来不该马上回档"; else ok "凉下来先开始计时"; fi
-cool_since=$(( $(date +%s) - COOL_HOLD - 1 ))
+cool_since=$(( $(boot_now) - COOL_HOLD - 1 ))
 if thermal_step 50000; then ok "凉够 ${COOL_HOLD} 秒回到原档位"; else ng "凉够了没回档"; fi
 [ -f "$THERMAL_ECO" ] && ng "回档后降档标记还在" || ok "回档后降档标记清掉"
 has "回档也平稳重启" "$CALLS" "kill flush"
@@ -509,7 +532,7 @@ curl() {
 dns_answers() { [ "$DNS_OK" = 1 ]; }
 FAKE_NOW=1000000; SLEPT=0; KILLS=0
 sleep() { SLEPT=$((SLEPT+1)); FAKE_NOW=$((FAKE_NOW+$1)); }
-date() { if [ "${1:-}" = "+%s" ]; then echo "$FAKE_NOW"; else command date "$@"; fi; }
+boot_now() { echo "$FAKE_NOW"; }
 kill() { KILLS=$((KILLS+1)); [ "$KILLS" -le "$KILL_ALIVE_UNTIL" ]; }
 ready_case() { # ready_case <curl 第几次起成功> <dns 能否应答> <核心活几次检查>
   : > "$CURL_LOG"; CURL_OK_FROM=$1; DNS_OK=$2; KILL_ALIVE_UNTIL=$3; SLEPT=0; KILLS=0
@@ -541,7 +564,7 @@ ready_case 1 1 0
 eq "核心起来就退出：返回 2、不探测" "$RC:$(wc -l < "$CURL_LOG" | tr -d ' ')" "2:0"
 
 CHILL_SECRET=''
-unset -f curl dns_answers sleep date kill
+unset -f curl dns_answers sleep boot_now kill
 
 # ─────────────────────────────────────────────────────────────────────────────
 sec "国内直连：nft 集合代替 route-exclude-address 的 CN 段（CHILL_CN_SET）"
@@ -625,16 +648,48 @@ rm -f "$PROFILE_FILE"; state_profile_now
 has "state_profile_now：回到 standard" "$(cat "$STATE")" '"profile":"standard","profile_effective":"standard"'
 rm -f "$STATE"; state_profile_now; eq "state_profile_now：没有 state 文件就不建" "$([ -f "$STATE" ] && echo y || echo n)" "n"
 
-sec "息屏暂停租约（6e）"
+sec "boot-bound deadlines：租约 / 手动暂停 / 重启 / 坏档"
+CHILL_PROC="$CHILL_DIR/proc"
+mkdir -p "$CHILL_PROC/sys/kernel/random"
+printf 'boot-a\n' > "$CHILL_PROC/sys/kernel/random/boot_id"
+printf '100.25 0.00\n' > "$CHILL_PROC/uptime"
+LEGACY_PAUSE="$CHILL_DIR/pause_until"; PAUSE_UNTIL="$CHILL_DIR/pause.v2"
+IDLE_LEASE="$CHILL_DIR/idle.v2"
 rm -f "$IDLE_LEASE"
 eq "没有租约：不暂停" "$(idle_paused && echo y || echo n)" "n"
-echo $(( $(date +%s) + 120 )) > "$IDLE_LEASE"
-eq "租约没到期：暂停" "$(idle_paused && echo y || echo n)" "y"
-echo $(( $(date +%s) - 1 )) > "$IDLE_LEASE"
-eq "租约过期（核心没了）：不暂停" "$(idle_paused && echo y || echo n)" "n"
-echo 'garbage' > "$IDLE_LEASE"
-eq "读不懂：不暂停" "$(idle_paused && echo y || echo n)" "n"
-rm -f "$IDLE_LEASE"
+printf 'v2 boot-a 0 180\n' > "$IDLE_LEASE"
+eq "租约未到期（0 有效）：暂停" "$(idle_paused && echo y || echo n)" "y"
+# date 的 ±8h 不参与任何 deadline，直接让调用 date +%s 的回归失败。
+date() { [ "${1:-}" = '+%s' ] && return 99; command date "$@"; }
+eq "wall time 不可读不影响租约" "$(idle_paused && echo y || echo n)" "y"
+printf '180.00 0.00\n' > "$CHILL_PROC/uptime"
+eq "边界到期：恢复" "$(idle_paused && echo y || echo n)" "n"
+printf '7200.00 0.00\n' > "$CHILL_PROC/uptime"
+eq "休眠计入到期" "$(idle_paused && echo y || echo n)" "n"
+printf '100.00 0.00\n' > "$CHILL_PROC/uptime"
+for bad in '1790000000' 'v2 a 00 180' 'v2 boot-a 101 180' 'v2 boot-b 0 180' 'v2 boot-a -1 180' 'v2 boot-a 0 180 extra'; do
+  printf '%s\n' "$bad" > "$IDLE_LEASE"
+  eq "拒绝旧/坏/未来/跨 boot：$bad" "$(idle_paused && echo y || echo n)" "n"
+done
+pause_for 2
+eq "手动暂停 v2" "$(cat "$PAUSE_UNTIL")" 'v2 boot-a 100 220'
+eq "同 boot 服务重启仍暂停" "$(manual_paused && echo y || echo n)" y
+printf 'boot-b\n' > "$CHILL_PROC/sys/kernel/random/boot_id"
+eq "设备重启失效" "$(manual_paused && echo y || echo n)" n
+printf 'boot-a\n' > "$CHILL_PROC/sys/kernel/random/boot_id"
+printf 'garbage\n' > "$PAUSE_UNTIL"
+eq "手动坏档保守保留直连" "$(manual_paused && echo y || echo n)" y
+printf '9999999999\n' > "$LEGACY_PAUSE"
+rm -f "$PAUSE_UNTIL"
+eq "旧 epoch 暂停不猜测转换" "$(manual_paused && echo y || echo n)" y
+pause_for 0
+eq "显式 pause 0 清两代手动记录" "$(manual_paused && echo y || echo n)" n
+for bad in -1 01 abc '1+2' 10081; do
+  if pause_for "$bad"; then ng "拒绝非法分钟 $bad"; else ok "拒绝非法分钟 $bad"; fi
+done
+rm -f "$CHILL_PROC/uptime"
+if pause_for 2; then ng "缺时钟不得写暂停"; else ok "缺时钟拒绝写暂停"; fi
+unset -f date
 
 # ─────────────────────────────────────────────────────────────────────────────
 printf '\n=== 结果：%d 通过 / %d 失败\n' "$PASS" "$FAIL"

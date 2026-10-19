@@ -12,22 +12,12 @@
 //!   `charger_type`, `charging` (the charger list's fields, which u60d folds into the battery
 //!   block; u60d writes 0 for a field the firmware leaves out, so "—" can read as 「否」/「0」);
 //!   direct power = `charger.direct_supply.mode` (only enable/disable; another raw value is "—").
-//! - The agent's `/api/usb/status` with the tab's own session, every 3 s: `connect` (cable),
-//!   `typec_cc`, `usb2rj45`, and `mode_settable` (false when the firmware has no `zwrt_bsp.usb set`,
-//!   as on CN B31; absent when unknown). `/api/device/charger` is not read any more.
+//! - Core's `/api/usb/status`: cable/role fields plus `write_policies`, projected from
+//!   the same report that the executor resolves immediately before every USB write.
 //!
-//! Writes (web/docs/controls-inventory.md §/usb):
-//! - Mode, tier 3: `usb.set {mode}`, read back from `qos.usb_mode` for up to 30 s (the old page's
-//!   `waitDevice` 30 s). luyaz-web runs on the device, so the readback does not wait for the
-//!   device: only the browser's own link (a computer on USB) can drop. A dropped reply posts
-//!   `cancel?want=<mode>&lost=true` (Datastar retries it until the link is back), which looks at
-//!   the mode once more before saying 「连接中断…」. u60d's `usb.set` has no firmware check, so the
-//!   agent's 501 gate is repeated here: `mode_settable: false` → never sent (ask and send both
-//!   re-read it). Unknown → like the old page.
-//! - Fast charging, tier 2: `vendor.call` `zwrt_bsp.powerbank set {state}` (u60d's allow-list, the
-//!   same call the agent's `/api/usb/powerbank` made), read back from `powerbank.state`. Not sent
-//!   while nothing is plugged in (the firmware drops it on unplug).
-//! - `usb.attach_mode` (「充电 + 上网」) is chosen on the touch screen only (inventory): not here.
+//! Unknown permits only explicit human confirmation followed by a fresh Core preflight.
+//! Automatic/remembered actions require verified support and ready availability.
+//! Writes retain the existing confirmation tiers and observable readback.
 
 use std::convert::Infallible;
 use std::time::{Duration, SystemTime};
@@ -64,6 +54,7 @@ pub struct Port {
     pub rj45: Option<bool>,
     /// false: the firmware has no setter; None: not known.
     pub settable: Option<bool>,
+    pub policies: std::collections::BTreeMap<String, luyaz_api::firmware::UsbWritePolicy>,
 }
 
 /// 1/"1"/true → true, 0/"0"/false → false, anything else → unknown (the old page's `tri`).
@@ -91,6 +82,7 @@ pub fn port(v: &Value) -> Port {
         mode: text(&v["mode"]),
         rj45: tri(&v["usb2rj45"]),
         settable: v["mode_settable"].as_bool(),
+        policies: serde_json::from_value(v["write_policies"].clone()).unwrap_or_default(),
     }
 }
 
@@ -185,6 +177,7 @@ pub struct View {
     pub modes: Vec<(&'static str, String, bool)>,
     pub mode_dis: bool,
     pub mode_stale: bool,
+    pub mode_note: Option<&'static str>,
     /// `mode_settable: false`.
     pub fixed: bool,
     /// A mode that is none of the three ("user" on the B31 device).
@@ -312,7 +305,10 @@ pub fn view(st: &St, a: &Agent, busy: &Busy, l: Lang) -> View {
     }
     let retry = a.fail.is_some();
 
-    let fixed = p.and_then(|p| p.settable) == Some(false);
+    let fixed = p
+        .and_then(|p| p.policies.get("usb.mode.set"))
+        .is_some_and(|p| p.assessment.status == luyaz_api::firmware::Support::Unsupported);
+    let mode_blocked = mode_gate(a, l).is_some();
     let pb_stale = pb_block.is_some_and(|(_, s)| s);
 
     // the USB port group
@@ -436,14 +432,21 @@ pub fn view(st: &St, a: &Agent, busy: &Busy, l: Lang) -> View {
             .iter()
             .map(|m| (*m, m.to_uppercase(), known == Some(*m)))
             .collect(),
-        mode_dis: p.is_none() || a_stale || fixed || busy.mode,
+        mode_dis: p.is_none() || a_stale || mode_blocked || busy.mode,
+        mode_note: policy_note(a, "usb.mode.set", l),
         mode_stale,
         fixed,
         other: mode.filter(|_| known.is_none()),
         pb,
-        pb_dis: pb.is_none() || pb_stale || busy.pb.is_some() || no_cc,
+        pb_dis: pb.is_none()
+            || pb_stale
+            || busy.pb.is_some()
+            || no_cc
+            || policy_gate(a, "usb.attach.fast_charge", l).is_some(),
         pb_stale,
-        pb_sub: if pb.is_none() && pb_block.is_some() {
+        pb_sub: if let Some(note) = policy_note(a, "usb.attach.fast_charge", l) {
+            note
+        } else if pb.is_none() && pb_block.is_some() {
             l.pick(
                 "The device didn't report the power bank state.",
                 "设备没有返回充电宝状态。",
@@ -587,31 +590,60 @@ pub fn pb_confirm(on: bool, l: Lang) -> write::Confirm {
     }
 }
 
-/// Why the mode can't be sent now (None: it can). `mode_settable: false` is never sent: u60d's
-/// `usb.set` doesn't check the firmware, the agent did (501).
-pub fn mode_gate(a: &Agent, l: Lang) -> Option<write::Outcome> {
-    match (&a.port, &a.fail) {
-        (_, Some(f)) => Some(write::Outcome::Failed(f.text(l))),
-        (None, None) => Some(write::Outcome::NotYet(
-            l.pick(
-                "USB state not read yet; try again shortly",
-                "还没读到 USB 状态，稍后再试",
-            )
-            .into(),
+/// Only a current Core policy may offer a confirmation. Legacy bools cannot authorize it.
+fn policy_gate(a: &Agent, id: &str, l: Lang) -> Option<write::Outcome> {
+    use luyaz_api::firmware::{Support, UsbWriteDisposition};
+    if let Some(f) = &a.fail {
+        return Some(write::Outcome::Failed(f.text(l)));
+    }
+    let policy = a.port.as_ref().and_then(|p| p.policies.get(id));
+    let message = match policy {
+        None => Some(l.pick(
+            "USB capability report not available; try again shortly",
+            "还没读到 USB 能力报告，稍后再试",
         )),
-        (Some(p), None) if p.settable == Some(false) => Some(write::Outcome::NotYet(
+        Some(p) if p.assessment.status == Support::Unsupported => Some(if id == "usb.mode.set" {
             l.pick(
                 "This firmware can't change the USB mode",
                 "这版固件不能改 USB 模式",
             )
-            .into(),
+        } else {
+            l.pick(
+                "This firmware doesn't support this USB operation",
+                "这版固件不支持此 USB 操作",
+            )
+        }),
+        Some(p) if p.disposition == UsbWriteDisposition::Denied => Some(l.pick(
+            "USB operation blocked by the current capability report",
+            "当前能力报告阻止此 USB 操作",
         )),
+        _ => None,
+    };
+    message.map(|m| write::Outcome::NotYet(m.into()))
+}
+
+pub(crate) fn policy_note(a: &Agent, id: &str, l: Lang) -> Option<&'static str> {
+    use luyaz_api::firmware::UsbWriteDisposition;
+    match a.port.as_ref().and_then(|p| p.policies.get(id)) {
+        None => Some(l.pick("USB capability report not available; try again shortly", "还没读到 USB 能力报告，稍后再试")),
+        Some(p) if p.disposition == UsbWriteDisposition::HumanPreflight => Some(l.pick(
+            "Unverified on this device. Confirming checks the current USB state before sending; automatic changes stay off.",
+            "此设备尚未验证。确认后会先检查当前 USB 状态；自动切换暂不执行。")),
+        Some(p) if p.disposition == UsbWriteDisposition::Denied => Some(l.pick(
+            "USB operation blocked by the current capability report", "当前能力报告阻止此 USB 操作")),
         _ => None,
     }
 }
 
+pub fn mode_gate(a: &Agent, l: Lang) -> Option<write::Outcome> {
+    policy_gate(a, "usb.mode.set", l)
+}
+
 /// The current fast-charging state if it can be changed now, else why not.
 pub fn pb_gate(st: &St, a: &Agent, l: Lang) -> Result<bool, write::Outcome> {
+    if let Some(o) = policy_gate(a, "usb.attach.fast_charge", l) {
+        return Err(o);
+    }
     let Some(on) = powerbank(st) else {
         return Err(write::Outcome::NotYet(
             l.pick(
@@ -644,7 +676,7 @@ pub fn mode_write(target: &str, l: Lang) -> write::Write {
         applied: mode_applied(target, l),
         timeout: MODE_READBACK,
         typed: None,
-        request_timeout: None,
+        request_timeout: Some(Duration::from_secs(75)),
     }
 }
 
@@ -661,7 +693,7 @@ pub fn pb_write(on: bool, l: Lang) -> write::Write {
         .into(),
         timeout: write::READBACK,
         typed: None,
-        request_timeout: None,
+        request_timeout: Some(Duration::from_secs(75)),
     }
 }
 
@@ -816,7 +848,7 @@ pub struct ModeQuery {
     mode: String,
 }
 
-/// A mode button: the dialog (tier 3), or why not. Re-reads `mode_settable`.
+/// A mode button: the dialog (tier 3), or why not. Re-reads the Core projection.
 pub async fn mode_ask(
     State(app): State<Shared>,
     Query(q): Query<ModeQuery>,
@@ -1004,4 +1036,4 @@ pub async fn pb_cancel(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

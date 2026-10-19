@@ -399,9 +399,6 @@ async fn dns_set(State(c): State<Compat>, req: Request) -> Response {
     body_to_vendor(&c, req, "zwrt_router.api", "router_set_wan_dns").await
 }
 
-const USB_UNSUPPORTED: &str =
-    "this firmware has no USB mode setter (zwrt_bsp.usb offers no set method)";
-
 /// The agent's `usb_mode_set` body mapping: the web's `{mode}` and the vendor's own key names →
 /// `usb.set`'s parameters.
 pub(super) fn usb_params(parsed: &Value) -> Result<Value, (u16, Value)> {
@@ -435,7 +432,7 @@ pub(super) fn usb_params(parsed: &Value) -> Result<Value, (u16, Value)> {
     Ok(Value::Object(p))
 }
 
-/// PUT /api/usb/mode: 501 when the firmware has no setter (CN B31), else `usb.set`.
+/// PUT /api/usb/mode: the common executor checks support immediately before the write.
 async fn usb_mode(State(c): State<Compat>, req: Request) -> Response {
     let (source, body) = take(req).await;
     let Some(parsed) = body.and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else {
@@ -445,9 +442,6 @@ async fn usb_mode(State(c): State<Compat>, req: Request) -> Response {
         Ok(p) => p,
         Err((s, v)) => return reply(s, v),
     };
-    if sys_reads::usb_settable().await == Some(false) {
-        return reply(501, json!({"ok": false, "error": USB_UNSUPPORTED}));
-    }
     let (status, body) = c.writer(source).send("usb.set", &params).await.into_http();
     reply(status, body)
 }

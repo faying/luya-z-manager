@@ -14,6 +14,18 @@ use std::time::Duration;
 
 const SNAP: &str = r#"{"epoch":"e1","seq":0,"blocks":{"signal":{"revision":1,"observed_at":1,"stale":false,"data":{"type":"NR5G_SA","operator":"X"}}}}"#;
 
+#[test]
+fn usb_capability_refusal_is_not_confused_with_another_busy_change() {
+    // Synthetic complete Core reply, with an assessment larger than the old 2 KiB window.
+    let body = format!(r#"{{"ok":false,"error":{{"code":"capability_unverified","policy":{{"padding":"{}"}}}}}}"#, "x".repeat(2500));
+    let (_, en) = usb_refusal(body.as_bytes()).unwrap();
+    assert!(en.contains("unverified") && en.contains("manually"));
+    assert!(usb_refusal(br#"{"error":{"code":"usb_method_absent"}}"#).unwrap().1.contains("does not support"));
+    assert!(usb_refusal(br#"{"error":{"code":"usb_preflight_unavailable"}}"#).unwrap().1.contains("no change was sent"));
+    assert!(usb_refusal(br#"{"error":{"code":"busy"}}"#).is_none());
+    assert!(usb_refusal(br#"{"error":{"message":"unknown"}}"#).is_none());
+}
+
 fn cfg(port: u16) -> Cfg {
     Cfg { host: "127.0.0.1".into(), port, retry_ms: 100, silent_ms: 400, silent_retry_ms: 150, io_ms: 300 }
 }

@@ -88,7 +88,7 @@ function handler(req, res) {
     res.writeHead(204);
     return res.end();
   }
-  if (req.method === "GET" && req.url.startsWith("/api/usb/status") && settable !== "absent") {
+  if (req.method === "GET" && req.url.startsWith("/api/usb/status")) {
     const up = http.request({ host: "127.0.0.1", port: MOCK, path: req.url, method: "GET", headers: req.headers }, (r) => {
       let body = "";
       r.setEncoding("utf8");
@@ -96,7 +96,23 @@ function handler(req, res) {
       r.on("end", () => {
         try {
           const v = JSON.parse(body);
-          if (v?.data && typeof v.data === "object") v.data.mode_settable = settable === "true";
+          if (v?.data && typeof v.data === "object") {
+            if (settable !== "absent") v.data.mode_settable = settable === "true";
+            else delete v.data.mode_settable;
+            // Synthetic Core projection for browser tests; never live device evidence.
+            v.data.write_policies = Object.fromEntries(["usb.mode.set", "usb.attach.share", "usb.attach.fast_charge"].map((id) => {
+              const status = id === "usb.mode.set" ? (settable === "false" ? "unsupported" : settable === "true" ? "supported" : "unknown") : "unknown";
+              return [id, { disposition: status === "unsupported" ? "denied" : "human_preflight", assessment: {
+                capability_id: id, status, reason: "no_evidence", evidence_ids: [], contradicting_evidence_ids: [],
+                availability: { state: "unknown", reason: "synthetic" },
+                scope: { device_id: "synthetic", fingerprint: null, collector_id: "synthetic", generation: 0,
+                  rule_revision: 1, adapter_revision: 1, component_revision: "synthetic", cohort: "unknown", context: {
+                    ubus_epoch: null, usb_epoch: null, sim_epoch: null, connection_epoch: null, radio_mode: null } },
+                freshness: { fresh: false, max_age_seconds: 60, age_seconds: null }, validation: null,
+                last_attempt_evidence_id: null, selected_dialect: null,
+              } }];
+            }));
+          }
           body = JSON.stringify(v);
         } catch { /* not JSON: as it is */ }
         const h = { ...r.headers };

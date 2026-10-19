@@ -34,6 +34,9 @@ struct MockInner {
     /// 执行者最近一次 `set_round` 的值，以及每次调用时的值 (键, 在采集轮里)。
     round: bool,
     round_log: Vec<(String, bool)>,
+    usb_listings: HashMap<String, Result<Vec<u8>, UbusError>>,
+    usb_listing_log: Vec<String>,
+    usb_listing_delay: Duration,
 }
 
 #[derive(Clone, Default)]
@@ -66,6 +69,21 @@ impl Mock {
 }
 
 impl UbusBackend for Mock {
+    async fn usb_methods(&mut self, object: &str) -> Result<Vec<u8>, UbusError> {
+        let (result, delay) = {
+            let mut m = lock(&self.0);
+            m.usb_listing_log.push(object.into());
+            (
+                m.usb_listings
+                    .get(object)
+                    .cloned()
+                    .unwrap_or_else(|| Err(UbusError::Io("no synthetic listing".into()))),
+                m.usb_listing_delay,
+            )
+        };
+        tokio::time::sleep(delay).await;
+        result
+    }
     fn kind(&self) -> BackendKind {
         BackendKind::Socket
     }
@@ -1176,7 +1194,11 @@ fn held_lock(name: &str, hold: Duration) -> (String, std::thread::JoinHandle<()>
 /// 真机上三段最长 15 + 10 + 6 秒；这里各 1.2 秒（真实时间），用 2 秒的上限检查。
 #[tokio::test(flavor = "current_thread")]
 async fn lock_and_at_waits_count_as_progress() {
-    let (exec, _mock, _) = setup(vec![], Config::default(), 1000);
+    let (exec, mock, _) = setup(vec![], Config::default(), 1000);
+    mock.default_step(
+        "uci.get",
+        Step::Reply(json!({"value":"ONLINE"}), Duration::ZERO),
+    );
     let stage = Duration::from_millis(1200);
     let (write_lock, w) = held_lock("write", stage);
     let (at_lock, a) = held_lock("at", stage * 2);
@@ -1454,4 +1476,348 @@ fn cooldown_env_parsing() {
         Config::cooldown_from(Some(" 30000 ")),
         Duration::from_secs(30)
     );
+}
+
+// USB gate fixtures are synthetic. Recorded listing bytes alone are not device support.
+fn usb_listing(mock: &Mock, object: &str, text: &str) {
+    lock(&mock.0)
+        .usb_listings
+        .insert(object.into(), Ok(text.as_bytes().to_vec()));
+}
+fn usb_mode_device(mock: &Mock, mode: &str) {
+    lock(&mock.0)
+        .device
+        .insert("zwrt_bsp.usb".into(), json!({"mode":mode}));
+}
+const USB_PRESENT: &str = "'zwrt_bsp.usb' @1\n\t\"list\":{}\n\t\"set\":{\"mode\":\"String\"}\n";
+async fn human_usb(exec: &Executor, object: &'static str, args: Value) -> Result<Value, UbusError> {
+    exec.task(usb_human_scope(true, async move {
+        call(object, "set", &args).await
+    }))
+    .await
+}
+
+#[tokio::test(start_paused = true)]
+async fn usb_gate_unknown_internal_and_automatic_callers_never_probe_or_write() {
+    let (exec, mock, _) = setup(vec![], Config::default(), 1000);
+    for object in ["zwrt_bsp.usb", "zwrt_bsp.typec", "zwrt_bsp.powerbank"] {
+        let args = if object.ends_with("typec") {
+            json!({"DR_Swap":"device"})
+        } else {
+            json!({"state":1})
+        };
+        assert!(matches!(exec.call(object,"set",&args).await,
+            Err(UbusError::CapabilityDenied(e)) if e.code == "capability_unverified"));
+    }
+    assert!(mock.names().is_empty());
+    assert!(lock(&mock.0).usb_listing_log.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn usb_gate_recorded_missing_setter_does_not_disable_powerbank() {
+    let (exec, mock, _) = setup(vec![], Config::default(), 1000);
+    let fixture = "'zwrt_bsp.powerbank' @00000001\n\t\"set\":{\"state\":\"Integer\"}\n\t\"get\":{\"property\":\"String\"}\n'zwrt_bsp.typec' @00000002\n\t\"list\":{}\n\t\"set\":{\"PR_Swap\":\"String\",\"DR_Swap\":\"String\"}\n'zwrt_bsp.usb' @00000003\n\t\"list\":{}\n";
+    for object in ["zwrt_bsp.usb", "zwrt_bsp.powerbank"] {
+        usb_listing(&mock, object, fixture);
+    }
+    assert!(
+        matches!(human_usb(&exec,"zwrt_bsp.usb",json!({"mode":"debug"})).await,
+        Err(UbusError::CapabilityDenied(e)) if e.status() == 501 && e.preflight.as_ref().unwrap().proof == Some(luyaz_api::firmware::Proof::MethodAbsent))
+    );
+    assert!(
+        mock.names().is_empty(),
+        "absence refuses before any state read or write"
+    );
+    lock(&mock.0)
+        .device
+        .insert("zwrt_bsp.powerbank".into(), json!({"state":0}));
+    lock(&mock.0).device.insert(
+        "zwrt_bsp.typec".into(),
+        json!({"cc_attch_state":1,"data_role":"host"}),
+    );
+    let result = exec
+        .task(usb_human_scope(true, async {
+            crate::control::execute(
+                "vendor.call",
+                &json!({
+                    "object":"zwrt_bsp.powerbank", "method":"set", "args":{"state":1}
+                }),
+            )
+            .await
+        }))
+        .await;
+    assert!(
+        matches!(result, crate::control::Outcome::Ok(_)),
+        "{result:?}"
+    );
+    assert_eq!(
+        mock.names()
+            .iter()
+            .filter(|s| s.as_str() == "zwrt_bsp.powerbank.set")
+            .count(),
+        1
+    );
+    assert!(!mock.names().contains(&"zwrt_bsp.usb.set".into()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn usb_gate_manual_readback_records_effect_but_missing_epochs_stay_unknown() {
+    use luyaz_api::firmware::{Proof, Support};
+    let (exec, mock, _) = setup(vec![], Config::default(), 1000);
+    usb_listing(&mock, "zwrt_bsp.usb", USB_PRESENT);
+    usb_mode_device(&mock, "user");
+    assert!(
+        human_usb(&exec, "zwrt_bsp.usb", json!({"mode":"debug"}))
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        mock.names(),
+        ["zwrt_bsp.usb.list", "zwrt_bsp.usb.set", "zwrt_bsp.usb.list"]
+    );
+    let report = exec
+        .hub()
+        .firmware()
+        .report(luyaz_api::clock::BootTime::read().as_ref());
+    report.validate().unwrap();
+    assert!(
+        report
+            .evidence
+            .iter()
+            .any(|e| e.capability_id == "usb.mode.set"
+                && e.result.as_ref().unwrap().proof == Some(Proof::WriteVerified))
+    );
+    assert_eq!(
+        report
+            .usb_write_policy("usb.mode.set")
+            .unwrap()
+            .assessment
+            .status,
+        Support::Unknown
+    );
+    assert!(matches!(
+        exec.call("zwrt_bsp.usb", "set", &json!({"mode":"mtp"}))
+            .await,
+        Err(UbusError::CapabilityDenied(_))
+    ));
+    assert_eq!(
+        mock.names().len(),
+        3,
+        "a prior human operation cannot authorize automation"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn usb_gate_ack_and_noop_do_not_verify_an_effect() {
+    for already_set in [false, true] {
+        let (exec, mock, _) = setup(vec![], Config::default(), 1000);
+        usb_listing(&mock, "zwrt_bsp.usb", USB_PRESENT);
+        usb_mode_device(&mock, if already_set { "debug" } else { "user" });
+        mock.default_step("zwrt_bsp.usb.set", Step::Reply(json!({}), Duration::ZERO));
+        assert!(
+            human_usb(&exec, "zwrt_bsp.usb", json!({"mode":"debug"}))
+                .await
+                .is_ok()
+        );
+        let r = exec.hub().firmware().report(None);
+        assert!(
+            r.evidence
+                .iter()
+                .filter(|e| e.capability_id == "usb.mode.set")
+                .all(|e| e.result.as_ref().unwrap().proof.is_none())
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn usb_gate_malformed_listing_disconnected_and_budget_expiry_never_write() {
+    for case in ["malformed", "unplugged", "timeout"] {
+        let (exec, mock, _) = setup(vec![], Config::default(), 1000);
+        let object = if case == "unplugged" {
+            "zwrt_bsp.typec"
+        } else {
+            "zwrt_bsp.usb"
+        };
+        usb_listing(
+            &mock,
+            object,
+            if case == "malformed" {
+                "'zwrt_bsp.usb' @1\n"
+            } else if case == "unplugged" {
+                "'zwrt_bsp.typec' @1\n\t\"set\":{\"DR_Swap\":\"String\"}\n\t\"list\":{}\n"
+            } else {
+                USB_PRESENT
+            },
+        );
+        if case == "timeout" {
+            lock(&mock.0).usb_listing_delay = Duration::from_secs(20);
+        }
+        let args = if case == "unplugged" {
+            json!({"DR_Swap":"device"})
+        } else {
+            json!({"mode":"debug"})
+        };
+        assert!(matches!(
+            human_usb(&exec, object, args).await,
+            Err(UbusError::CapabilityDenied(_))
+        ));
+        assert!(mock.names().iter().all(|s| !s.ends_with(".set")), "{case}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn usb_gate_rechecks_generation_after_waiting_for_preflight() {
+    let (exec, mock, _) = setup(vec![], Config::default(), 1000);
+    usb_listing(&mock, "zwrt_bsp.usb", USB_PRESENT);
+    usb_mode_device(&mock, "user");
+    lock(&mock.0).usb_listing_delay = Duration::from_millis(100);
+    let hub = exec.hub().clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        hub.firmware().ubus(
+            hub.firmware().token(),
+            luyaz_api::clock::BootTime::read(),
+            "zwrt_zte_mdm.api",
+            "get_zwrt_common_info",
+            Some(&json!({"model_name":"MU5250"})),
+        );
+    });
+    assert!(
+        matches!(human_usb(&exec,"zwrt_bsp.usb",json!({"mode":"debug"})).await,
+        Err(UbusError::CapabilityDenied(e)) if e.code=="capability_context_changed")
+    );
+    assert!(!mock.names().contains(&"zwrt_bsp.usb.set".into()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn usb_gate_rejection_exits_attach_workflow_before_success_polling() {
+    let (exec, mock, _) = setup(vec![], Config::default(), 1000);
+    lock(&mock.0).device.insert(
+        "zwrt_bsp.typec".into(),
+        json!({"cc_attch_state":1,"data_role":"host"}),
+    );
+    let out = exec
+        .task(async {
+            crate::control::execute(
+                "usb.attach_mode",
+                &json!({"mode":"share","remembered":true}),
+            )
+            .await
+        })
+        .await;
+    assert!(
+        matches!(out, crate::control::Outcome::CapabilityDenied(_)),
+        "{out:?}"
+    );
+    assert_eq!(
+        mock.names(),
+        ["zwrt_bsp.typec.list", "zwrt_bsp.usb.list"],
+        "only the original remembered-choice preconditions; no success polling"
+    );
+    assert!(lock(&mock.0).usb_listing_log.is_empty());
+}
+
+#[tokio::test]
+async fn at_boundary_requires_a_direct_online_read_before_any_port_access() {
+    for mode in ["LOW_POWER", "OFFLINE", "", "ONLINE"] {
+        let (exec, mock, _) = setup(vec![], Config::default(), 1000);
+        mock.default_step(
+            "uci.get",
+            Step::Reply(json!({"value":mode}), Duration::ZERO),
+        );
+        let result = exec
+            .control(async {
+                crate::at::send_with(
+                    crate::at::Cmd::Cgcontrdp,
+                    Some("/does-not-exist/at-lock".into()),
+                    Some("/does-not-exist/at-port".into()),
+                )
+                .await
+            })
+            .await
+            .unwrap();
+        let e = result.unwrap_err();
+        assert_eq!(mock.names(), vec!["uci.get"]);
+        if mode == "ONLINE" {
+            assert!(e.contains("lock"), "{e}");
+        } else {
+            assert!(e.contains("radio_not_online"), "{e}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn configured_port_lookup_is_not_a_transport_read_proof() {
+    let (exec, mock, _) = setup(vec![], Config::default(), 1000);
+    mock.default_step(
+        "uci.get",
+        Step::Reply(json!({"value":"ONLINE"}), Duration::ZERO),
+    );
+    exec.control(async {
+        crate::at::probe(crate::at::Target {
+            lock: None,
+            port: Some("/does-not-exist/port-only".into()),
+        })
+        .await
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let report = exec
+        .hub()
+        .firmware()
+        .report(luyaz_api::clock::BootTime::read().as_ref());
+    assert!(
+        report
+            .evidence
+            .iter()
+            .all(|e| e.capability_id != "at.transport.read")
+    );
+}
+
+/// Review fix: a lock wait past the 5 s admission window and unrelated USB/ubus
+/// invalidations do not fail an admitted AT command or discard its answer; only an
+/// observed radio change does. The stale answer is returned but is not evidence.
+#[tokio::test(flavor = "current_thread")]
+async fn admitted_at_survives_lock_waits_and_unrelated_invalidations() {
+    use crate::device_profile::context::Loss;
+    let (exec, mock, _) = setup(vec![], Config::default(), 1000);
+    mock.default_step(
+        "uci.get",
+        Step::Reply(json!({"value":"ONLINE"}), Duration::ZERO),
+    );
+    let (at_lock, _a) = held_lock("at-wait", Duration::from_millis(6500));
+    let (port, sent) = crate::at::tests::fake_modem_after("\r\nOK\r\n", Duration::ZERO);
+    let e = exec.clone();
+    let job = tokio::spawn(async move {
+        e.control(async move {
+            crate::at::send_with(crate::at::Cmd::CopsAuto, Some(at_lock), Some(port)).await
+        })
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    exec.hub().firmware().invalidate_context(Loss::Usb);
+    exec.hub().firmware().invalidate_context(Loss::Ubus);
+    let answer = job.await.unwrap().unwrap().unwrap();
+    assert!(answer.contains("OK"), "{answer:?}");
+    assert_eq!(sent.recv().unwrap(), "AT+COPS=0");
+
+    // An observed departure from ONLINE while waiting stops it before the port.
+    let (at_lock, _a) = held_lock("at-radio", Duration::from_millis(800));
+    let (port, sent) = crate::at::tests::fake_modem_after("\r\nOK\r\n", Duration::ZERO);
+    let e = exec.clone();
+    let job = tokio::spawn(async move {
+        e.control(async move {
+            crate::at::send_with(crate::at::Cmd::CopsAuto, Some(at_lock), Some(port)).await
+        })
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let token = exec.hub().firmware().token();
+    exec.hub()
+        .firmware()
+        .radio_read(token, Some("LOW_POWER"), luyaz_api::clock::BootTime::read());
+    let err = job.await.unwrap().unwrap().unwrap_err();
+    assert!(err.contains("radio_not_online"), "{err}");
+    assert!(sent.try_recv().is_err(), "nothing reached the port");
 }

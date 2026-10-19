@@ -40,7 +40,7 @@ fn name(key: &str) -> Words {
         "sim.set_slot" => ("卡槽", "SIM slot"),
         "apn.set_mode" | "apn.mode" => ("APN 方式", "APN mode"),
         "apn.add" | "apn.modify" | "apn.delete" | "apn.enable" | "apn.profile"
-        | "apn.set_pdp_type" => ("APN", "APN"),
+        | "apn.set_pdp_type" | "apn.use" | "apn" => ("APN", "APN"),
         "modem.airplane" => ("飞行模式", "Airplane mode"),
         "modem.online" => ("打开移动网络", "Radio on"),
         "netselect.scan" => ("搜网", "Network scan"),
@@ -72,6 +72,8 @@ fn name(key: &str) -> Words {
         "vendor.call" => ("原厂设置", "Vendor setting"),
         "esim" => ("eSIM", "eSIM"),
         "chill" => ("CHILL", "CHILL"),
+        "chill.profile" => ("CHILL 档位", "CHILL profile"),
+        "chill.exit" => ("CHILL 出口", "CHILL exit"),
         k if k.starts_with("esim.") => ("eSIM", "eSIM"),
         k if k.starts_with("chill") => ("CHILL", "CHILL"),
         other => return (other.to_owned(), other.to_owned()),
@@ -229,7 +231,9 @@ fn txn_entry(line: &Value, later_change: bool) -> (Words, Words, &'static str, V
         ),
     };
     let readback = line.get("readback").filter(|v| !v.is_null());
-    let why = if later_change {
+    let why = if super::txn::blank(raw("old")) {
+        Some(("没有旧值可退回", "No previous value"))
+    } else if later_change {
         Some(("之后又改过", "Changed since"))
     } else {
         ui::undo_why(

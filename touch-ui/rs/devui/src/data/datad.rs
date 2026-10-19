@@ -26,6 +26,20 @@ const SSE_MAX_PARSE_FAIL: u32 = 5;
 const CONTROL_SLOTS: usize = 8;
 const CONTROL_LINGER_MS: u32 = 5000;
 const CONTROL_REPLY_MAX: usize = 2048;
+const USB_CONTROL_REPLY_MAX: usize = 8192; // includes Core's bounded capability explanation
+
+fn usb_refusal(body: &[u8]) -> Option<(&'static str, &'static str)> {
+    let error = json::get(body, "error", USB_CONTROL_REPLY_MAX)?;
+    match jget(&error, "code", 80).as_str() {
+        "capability_unverified" => Some(("USB 用法尚未验证 · 请手动确认", "USB use is unverified; confirm it manually")),
+        "firmware_unsupported" | "usb_method_absent" => Some(("这版固件不支持此 USB 操作", "This firmware does not support this USB operation")),
+        "capability_blocked" => Some(("当前能力报告阻止此 USB 操作", "The current capability report blocks this USB operation")),
+        "capability_context_changed" => Some(("USB 状态已改变 · 请重新确认", "USB state changed; confirm again")),
+        "usb_preflight_unavailable" => Some(("USB 检查未完成 · 没有发送切换", "USB preflight did not complete; no change was sent")),
+        "usb_not_attached" => Some(("请先在 USB-C 口插上设备", "Plug a device into the USB-C port first")),
+        _ => None,
+    }
+}
 /// The emergency write script (Luya-Z rename D1/D4).
 const FALLBACK_SCRIPT: &str = "/data/luyaz/scripts/luyaz-fallback.sh";
 /// = start.sh's -i 1000; 5000 = datad's upper limit
@@ -1061,6 +1075,13 @@ impl Datad {
             self.notice.say_zh = jget(&doing, "say_zh", 160);
             self.notice.say_en = jget(&doing, "say_en", 160);
         }
+        if s.action == "usb.attach_mode"
+            && let Some((zh, en)) = usb_refusal(body)
+        {
+            self.notice.kind = 3; // a capability refusal is not "another change is busy"
+            self.notice.say_zh = zh.into();
+            self.notice.say_en = en.into();
+        }
         eprintln!("ui: control {}: datad said {}", s.action, text(&s.reply[..s.reply.len().min(12)]));
     }
 
@@ -1072,14 +1093,15 @@ impl Datad {
             let mut done = false;
             while wait(fd, false, 0) > 0 {
                 let s = &mut self.ctl[i];
-                let room = CONTROL_REPLY_MAX - 1 - s.reply.len();
+                let max_reply = if s.action == "usb.attach_mode" { USB_CONTROL_REPLY_MAX } else { CONTROL_REPLY_MAX };
+                let room = max_reply - 1 - s.reply.len();
                 let at = s.reply.len();
                 s.reply.resize(at + room, 0);
                 // SAFETY: room bytes reserved past `at`
                 let n = unsafe { libc::recv(fd, s.reply[at..].as_mut_ptr().cast(), room, libc::MSG_DONTWAIT) };
                 s.reply.truncate(at + n.max(0) as usize);
                 if n > 0 {
-                    if s.reply.len() >= CONTROL_REPLY_MAX - 1 {
+                    if s.reply.len() >= max_reply - 1 {
                         done = true;
                         break;
                     }
@@ -1097,10 +1119,12 @@ impl Datad {
                 self.control_judge(&s);
                 continue;
             }
-            if now.wrapping_sub(self.ctl[i].t) >= CONTROL_LINGER_MS {
+            // USB's final Core preflight and readback run after its existing write lock.
+            let linger_ms = if self.ctl[i].action == "usb.attach_mode" { 75_000 } else { CONTROL_LINGER_MS };
+            if now.wrapping_sub(self.ctl[i].t) >= linger_ms {
                 // no answer yet: datad may still be doing it; nothing runs directly (twice could
                 // register the modem twice)
-                eprintln!("ui: control {}: no reply in {CONTROL_LINGER_MS} ms", self.ctl[i].action);
+                eprintln!("ui: control {}: no reply in {linger_ms} ms", self.ctl[i].action);
                 self.ctl.remove(i);
                 continue;
             }

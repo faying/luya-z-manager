@@ -271,7 +271,7 @@ Redesigned on 2026-09-24 in a **Cohere + Figma** visual language (reference file
 
 **Live data** (same once it becomes push): when a number changes only the number changes — no reflow, no flash; inputs being typed in, expanded details and pending confirms are not overwritten by new data (DR12); screen readers announce only verdict and alert changes, not every refreshed reading (DR13).
 
-**Current implementation (luyaz-web; the old Next.js web was deleted 10-15, Phase 10 X13)**: tokens `crates/luyaz-web/static/nd/newdesign.css`; component styles in the same directory `nd.css`, `shell.css` (concatenated by `src/assets.rs`); contrast `node crates/luyaz-web/tools/contrast.ts > docs/web/contrast.md`; route table `crates/luyaz-web/src/routes.rs`; tier inventory `docs/web/controls-inventory.md` (written for the old web, not updated). When the implementation changes, edit this paragraph; the rules above stay.
+**Current implementation (luyaz-web; the old Next.js web was deleted 10-15, Phase 10 X13)**: tokens `crates/luyaz-web/static/nd/newdesign.css`; component styles in the same directory `nd.css`, `shell.css` (concatenated by `src/assets.rs`); contrast `node crates/luyaz-web/tools/contrast.ts > docs/web/contrast.md`; route table `crates/luyaz-web/src/routes.rs`; transaction bar & write confirmation `crates/luyaz-web/src/opbar.rs`, `crates/luyaz-web/templates/components/write.html`, and Core transaction specs `crates/luyaz-core/src/ops/spec.rs`; e2e tests `crates/luyaz-web/e2e/`; tier inventory `docs/web/controls-inventory.md` (historical 2026-09-24 Next.js / `zte-agent` baseline whose 3-tier classification rules remain normative). When the implementation changes, edit this paragraph; the rules above stay.
 
 ---
 

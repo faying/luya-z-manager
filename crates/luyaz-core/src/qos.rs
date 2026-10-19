@@ -126,7 +126,9 @@ pub fn logs() -> Arc<Parsed> {
     {
         return parsed.clone();
     }
-    let parsed = Arc::new(read_logs());
+    let mut parsed = read_logs();
+    parsed.observed_at = luyaz_api::clock::BootTime::read();
+    let parsed = Arc::new(parsed);
     if caching && let Ok(mut l) = LAST.lock() {
         *l = Some((std::time::Instant::now(), parsed.clone()));
     }
@@ -188,10 +190,41 @@ fn read_tail(path: &Path) -> Option<String> {
 /// seen outside any bearer context.
 #[derive(Clone, Default, Debug)]
 pub struct Parsed {
+    /// Original physical log-read time. Reusing the parsed cache never renews this.
+    pub(crate) observed_at: Option<luyaz_api::clock::BootTime>,
     candidates: Vec<Candidate>,
     fallback_qci: Option<i64>,
     /// every `CONNECTED … addr=` line: its place and IPv4 address
     connections: Vec<(usize, Ipv4Addr)>,
+}
+
+/// Stronger than the display fallback: a complete bearer in the current log, of the
+/// current core and connection. Bare UCI QCI, rotated/history and partial AMBR never prove it.
+pub(crate) fn validated_read(
+    parsed: &Parsed,
+    query: Query,
+) -> Option<(&'static str, serde_json::Value)> {
+    let addr = query.addr?;
+    let candidate = parsed.candidates.iter().rev().find(|c| {
+        c.current
+            && c.core == query.core
+            && c.core != Core::Unknown
+            && c.addr == Some(addr)
+            && (c.core == Core::Nr
+                || matches!((c.mcc, c.mnc), (Some(m), Some(n))
+                if Some((m, n)) == query.serving || Some((m, n)) == query.home))
+    })?;
+    let qci = candidate.qci.filter(|q| (1..=255).contains(q))?;
+    let dl = candidate.dl.filter(|n| n.is_finite() && *n >= 0.0)?;
+    let ul = candidate.ul.filter(|n| n.is_finite() && *n >= 0.0)?;
+    Some((
+        if candidate.core == Core::Eps {
+            "qos.eps.log.read"
+        } else {
+            "qos.nr_pdu.log.read"
+        },
+        serde_json::json!({"qci":qci,"ambr_dl":format_mbps(dl),"ambr_ul":format_mbps(ul),"bearer":candidate.core.name()}),
+    ))
 }
 
 /// The address of a `cidN CONNECTED … addr=a.b.c.d` line (not DISCONNECTED).
@@ -331,6 +364,7 @@ fn collect(texts: &[(&str, bool)]) -> Parsed {
         }
     }
     Parsed {
+        observed_at: None,
         candidates,
         fallback_qci: fallback.qci,
         connections,
@@ -693,6 +727,106 @@ mod tests {
         let log = format!("{B31_LTE}{B31_SA}");
         let v = parse_texts(&[(&log, true)], sa_now);
         assert_eq!(got(&v), (9, "2000.000", "1000.000", "nr_pdu", false));
+    }
+
+    #[test]
+    fn firmware_qos_validator_requires_complete_current_core_and_connection() {
+        // B31_* are the module's existing reconstructed examples, not new live evidence.
+        let eps = collect(&[(B31_LTE, true)]);
+        let query = at(q(CT, CT, Core::Eps), "10.208.147.50");
+        let (id, value) = validated_read(&eps, query).unwrap();
+        assert_eq!(id, "qos.eps.log.read");
+        assert_eq!(value["qci"], 9);
+        assert_eq!(value["ambr_dl"], "1660.000");
+        assert!(
+            validated_read(
+                &eps,
+                Query {
+                    addr: None,
+                    ..query
+                }
+            )
+            .is_none()
+        );
+        assert!(
+            validated_read(
+                &eps,
+                Query {
+                    core: Core::Nr,
+                    ..query
+                }
+            )
+            .is_none()
+        );
+        assert!(
+            validated_read(
+                &eps,
+                Query {
+                    addr: Some("10.0.0.1".parse().unwrap()),
+                    ..query
+                }
+            )
+            .is_none()
+        );
+        assert!(validated_read(&collect(&[(B31_LTE, false)]), query).is_none());
+        assert!(
+            validated_read(
+                &Parsed::default(),
+                Query {
+                    qci_now: Some(9),
+                    ..query
+                }
+            )
+            .is_none()
+        );
+        let nr_text = format!("{B31_SA}[DATA] cid1 CONNECTED addr=10.208.147.50\n");
+        let nr = collect(&[(&nr_text, true)]);
+        assert_eq!(
+            validated_read(
+                &nr,
+                Query {
+                    core: Core::Nr,
+                    ..query
+                }
+            )
+            .unwrap()
+            .0,
+            "qos.nr_pdu.log.read"
+        );
+    }
+
+    #[test]
+    fn firmware_qos_observations_keep_original_cache_age_and_unknown_context() {
+        use luyaz_api::{clock::BootTime, firmware::*};
+        let mut parsed = collect(&[(B31_LTE, true)]);
+        parsed.observed_at = Some(BootTime {
+            boot_id: "synthetic".into(),
+            seconds: 1,
+        });
+        let c = crate::device_profile::collect::Collector::new();
+        let query = at(q(CT, CT, Core::Eps), "10.208.147.50");
+        c.qos(c.token(), &parsed, query);
+        let before = c.report(None);
+        c.qos(c.token(), &parsed, query);
+        let after = c.report(None);
+        let e = after
+            .evidence
+            .iter()
+            .find(|e| e.capability_id == "qos.eps.log.read")
+            .unwrap();
+        assert_eq!(e.time.observed_at, parsed.observed_at);
+        assert_eq!(e.time.observed_at, before.evidence[0].time.observed_at);
+        assert_eq!(e.result.as_ref().unwrap().proof, Some(Proof::ReadValidated));
+        assert!(
+            after
+                .assessments
+                .iter()
+                .all(|a| a.status == Support::Unknown)
+        );
+        let encoded = serde_json::to_string(e).unwrap();
+        assert!(!encoded.contains("10.208.147.50"));
+        assert!(!encoded.contains("ctnet"));
+        after.validate().unwrap();
     }
 
     #[test]

@@ -528,7 +528,12 @@ impl Ui {
         self.set_at(title, 9, if state == OPR_LIVE { &it.say } else { &it.what });
         self.set(say, &it.say);
         kit::text_color(say, if state == OPR_LIVE { th.t1 } else { op_mark_col(it.mark) });
-        self.set(meta, cf!("%s → %s · %s", &it.old_v, &it.target, &it.source));
+        let m = if it.old_v.is_empty() {
+            cf!("%s · %s", &it.target, &it.source)
+        } else {
+            cf!("%s → %s · %s", &it.old_v, &it.target, &it.source)
+        };
+        self.set(meta, m);
         kit::show(note, !it.note.is_empty());
         if !it.note.is_empty() {
             note.set_text(&it.note);
@@ -572,6 +577,8 @@ impl Ui {
             tr("自动退回没开：没通也会保持").into()
         } else if state == OPR_RESULT && it.phase == "not_applied" {
             tr("基带崩过以后常见，重启后再切一次").into()
+        } else if state == OPR_RESULT && it.phase == "unverified" {
+            tr("自动退回没开：没通也会保持").into()
         } else if state == OPR_RESULT && it.phase == "rollback_failed" {
             cf!(tr("现在：%s · 上次确认：%s"), if it.readback.is_empty() { tr("当前设置未知") } else { it.readback.as_str() }, &it.rollback_to)
         } else {

@@ -44,11 +44,20 @@ def load(path, lines=False):
     return data, {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
 
 
-def select(rows, bounds, start, end):
+def select(rows, bounds, start, end, invalid_outside=None):
     """Never prorate a crossing record, or silently deduplicate overlapping exports."""
     selected, excluded = [], 0
     for row in rows:
         a, b = bounds(row)
+        # Old hourly producers emitted boot-start point rows. Only a finite,
+        # nonnegative point provably outside [start, end) can be excluded safely.
+        # Unknown/reversed bounds still fail, even when they appear historical.
+        if (invalid_outside is not None and nonnegative(a) and number(b)
+                and a == b and (a < start or a >= end)):
+            invalid_outside.append({"from_ms": a, "to_ms": b,
+                                    "reason": "zero_length_outside_window"})
+            excluded += 1
+            continue
         if not nonnegative(a) or not number(b) or b <= a:
             raise ValueError("invalid interval")
         if a >= start and b <= end:
@@ -60,6 +69,13 @@ def select(rows, bounds, start, end):
         if current[0] < previous[1]:
             raise ValueError("duplicate/overlapping intervals; use one export per window")
     return selected, excluded
+
+
+def hour_bounds(row):
+    a, b = row["from"], row["to"]
+    if not nonnegative(a) or not nonnegative(b):
+        raise ValueError("invalid interval")
+    return a*1000, b*1000
 
 
 def coverage(selected, start, end):
@@ -150,7 +166,8 @@ def hour_summary(data, boot, start, end, cell, max_discharge_ua=None):
     # establish the full boot; a matching prefix alone is not device identity.
     boot_prefix = "".join(c for c in boot if c in "0123456789abcdefABCDEF")[:8]
     rows = [r for r in data if r.get("k") == "hour_power" and r.get("boot") == boot_prefix]
-    selected, excluded = select(rows, lambda r: (r["from"] * 1000, r["to"] * 1000), start, end)
+    invalid_outside = []
+    selected, excluded = select(rows, hour_bounds, start, end, invalid_outside)
     candidates, rejected = [], []
     for a, b, row in selected:
         reasons = []
@@ -180,6 +197,7 @@ def hour_summary(data, boot, start, end, cell, max_discharge_ua=None):
     duration = sum(b-a for a, b, _ in candidates)
     energy = sum(r[f"{cell}_e"] for _, _, r in candidates)
     return {"coverage": coverage(selected, start, end), "outside_or_crossing_records": excluded,
+            "invalid_outside_window": invalid_outside,
             "cell": cell, "candidate_coverage": coverage(candidates, start, end),
             "candidate_counter_mwh": energy if candidates else None,
             "candidate_counter_mean_mw": energy * 3_600_000 / duration if duration else None,
@@ -281,7 +299,8 @@ def hour_activity_summary(data, boot, start, end):
     """
     prefix = "".join(c for c in boot if c in "0123456789abcdefABCDEF")[:8]
     rows = [r for r in data if r.get("k") == "hour_proc" and r.get("boot") == prefix]
-    selected, excluded = select(rows, lambda r: (r["from"]*1000, r["to"]*1000), start, end)
+    invalid_outside = []
+    selected, excluded = select(rows, hour_bounds, start, end, invalid_outside)
     definitions = {"core_cpu": "ticks", "reaped_children_cpu": "ticks",
                    "task_creation": "count", "context_switches": "count"}
     sums = {key: [0, 0] for key in (*definitions, "system_cpu")}
@@ -348,6 +367,7 @@ def hour_activity_summary(data, boot, start, end):
         metrics[key] = result
     return {"status": "descriptive_only" if new_records else "unavailable_in_legacy_or_missing_records",
             "coverage": coverage(selected, start, end), "outside_or_crossing_records": excluded,
+            "invalid_outside_window": invalid_outside,
             "activity_records": new_records, "hz": hz, "metrics": metrics,
             "producer_rejected_intervals": rejected, "invalid_metrics": invalid,
             "true_wakeups": None, "per_process_attribution": None}

@@ -12,6 +12,7 @@
 <!--leaf-->
 <div id="usb-modes" class="grid gap-3{% if v.mode_stale %} nd-stale{% endif %}"><div role="radiogroup" aria-labelledby="usb-mode-t" class="nd-seg"><div class="nd-seg__track">{% for (k, label, on) in v.modes %}<button type="button" role="radio" class="nd-seg__item" aria-checked="{% if *on %}true{% else %}false{% endif %}"{% if *on %} data-selected="true"{% endif %}{% if v.mode_dis %} disabled data-disabled="true"{% else %}{% if !on %} data-on:click="@post('/usb/mode/ask?mode={{ k }}')"{% endif %}{% endif %}>{{ label }}</button>{% endfor %}</div></div>
 {% if v.fixed %}<span class="nd-aux">{{ v.l.pick("This firmware can't change the USB mode", "这版固件不能改 USB 模式") }}</span>{% endif %}
+{% if !v.fixed %}{% if let Some(n) = v.mode_note %}<span class="nd-aux">{{ n }}</span>{% endif %}{% endif %}
 {% if let Some(m) = v.other %}<span class="nd-aux">{{ v.l.pick("Current mode: ", "当前模式：") }}<span class="nd-mono" data-data>{{ m }}</span></span>{% endif %}</div>
 <!--leaf-->
 <div id="usb-pbrow" class="nd-group{% if v.pb_stale %} nd-stale{% endif %}"><div class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label" id="usb-pb-label">{{ v.l.pick("Fast charging", "快速充电宝") }}</span><span class="nd-row__sub block">{{ v.pb_sub }}</span></span>

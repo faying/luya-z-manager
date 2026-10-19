@@ -75,7 +75,9 @@ pub fn enabled_from(value: Option<&str>) -> bool {
 /// `ubus listen` 的一行是 `events` 里的哪个事件：`{ "<事件名>": {...} }`，顶层只看第一个键。
 pub fn event_of(line: &str, events: &[&str]) -> Option<usize> {
     match serde_json::from_str::<serde_json::Value>(line) {
-        Ok(serde_json::Value::Object(m)) => {
+        Ok(serde_json::Value::Object(m))
+            if m.len() == 1 && m.values().all(serde_json::Value::is_object) =>
+        {
             let name = m.keys().next()?;
             events.iter().position(|e| e == name)
         }
@@ -103,7 +105,20 @@ impl Options {
 }
 
 /// 按环境变量起监听；关闭时返回 `false`、不起子进程。每种事件的 `fire` 在各自去抖后调用。
-pub fn spawn_if_enabled(value: Option<&str>, opts: Options, handlers: Vec<Handler>) -> bool {
+#[derive(Clone, Copy)]
+pub enum Notice {
+    Gap,
+    Event(&'static str),
+}
+pub type Observer = Arc<dyn Fn(Notice) + Send + Sync>;
+
+pub fn spawn_if_enabled(
+    value: Option<&str>,
+    opts: Options,
+    handlers: Vec<Handler>,
+    observe: Observer,
+) -> bool {
+    observe(Notice::Gap);
     if !enabled_from(value) {
         eprintln!("luyaz-core: {ENV_ENABLE}=0，不监听原厂事件");
         return false;
@@ -116,7 +131,7 @@ pub fn spawn_if_enabled(value: Option<&str>, opts: Options, handlers: Vec<Handle
         events.push(h.event);
         txs.push(tx);
     }
-    let task = tokio::spawn(supervise(opts, events, txs));
+    let task = tokio::spawn(supervise(opts, events, txs, observe));
     // 登记给 shutdown() 收尾；进程里只起一份，已有就换成新的（旧的 abort 后子进程靠 kill_on_drop 收掉）。
     if let Ok(mut slot) = TASK.lock()
         && let Some(old) = slot.replace(task)
@@ -147,13 +162,20 @@ pub async fn debounce(
 }
 
 /// 一直跑：起子进程、逐行读、退出就退避重启。`txs[i]` 收 `events[i]`。
-pub async fn supervise(opts: Options, events: Vec<&'static str>, txs: Vec<mpsc::Sender<()>>) {
+pub async fn supervise(
+    opts: Options,
+    events: Vec<&'static str>,
+    txs: Vec<mpsc::Sender<()>>,
+    observe: Observer,
+) {
     let mut backoff = opts.backoff_min;
     let mut failing = false;
     let names = events.join(" ");
     loop {
         let started = Instant::now();
-        let outcome = run_once(&opts.program, &events, &txs).await;
+        observe(Notice::Gap);
+        let outcome = run_once(&opts.program, &events, &txs, &observe).await;
+        observe(Notice::Gap);
         if txs.iter().any(|t| t.is_closed()) || *stop_tx().borrow() {
             return;
         }
@@ -168,14 +190,21 @@ pub async fn supervise(opts: Options, events: Vec<&'static str>, txs: Vec<mpsc::
         sleep(backoff).await;
         let next = (backoff * 2).min(opts.backoff_max);
         if next == opts.backoff_max && backoff != opts.backoff_max {
-            eprintln!("luyaz-core: ubus listen {names} 反复退出（{outcome}），之后每 {next:?} 重试");
+            eprintln!(
+                "luyaz-core: ubus listen {names} 反复退出（{outcome}），之后每 {next:?} 重试"
+            );
         }
         backoff = next;
     }
 }
 
 /// 跑一次子进程直到它退出；返回退出原因（写日志用）。
-async fn run_once(program: &str, events: &[&str], txs: &[mpsc::Sender<()>]) -> String {
+async fn run_once(
+    program: &str,
+    events: &[&'static str],
+    txs: &[mpsc::Sender<()>],
+    observe: &Observer,
+) -> String {
     let mut stop = stop_tx().subscribe();
     if *stop.borrow_and_update() {
         return "datad 退出".into();
@@ -195,10 +224,10 @@ async fn run_once(program: &str, events: &[&str], txs: &[mpsc::Sender<()>]) -> S
     let Some(stdout) = child.stdout.take() else {
         return "没有 stdout".into();
     };
-    let mut lines = BufReader::new(stdout).lines();
+    let mut lines = BufReader::new(stdout);
     loop {
         let next = tokio::select! {
-            r = lines.next_line() => r,
+            r = bounded_line(&mut lines) => r,
             _ = stop.changed() => {
                 let _ = child.kill().await; // kill + wait，不留僵尸
                 return "datad 退出".into();
@@ -206,9 +235,7 @@ async fn run_once(program: &str, events: &[&str], txs: &[mpsc::Sender<()>]) -> S
         };
         match next {
             Ok(Some(line)) => {
-                if let Some(i) = event_of(&line, events)
-                    && txs[i].send(()).await.is_err()
-                {
+                if !dispatch(&line, events, txs, observe) {
                     return "datad 退出".into();
                 }
             }
@@ -225,10 +252,94 @@ async fn run_once(program: &str, events: &[&str], txs: &[mpsc::Sender<()>]) -> S
     }
 }
 
+fn dispatch(
+    line: &str,
+    events: &[&'static str],
+    txs: &[mpsc::Sender<()>],
+    observe: &Observer,
+) -> bool {
+    if let Some(i) = event_of(line, events) {
+        // Synchronous, before debounce or queueing, even with a full kick channel.
+        observe(Notice::Event(events[i]));
+        !matches!(
+            txs[i].try_send(()),
+            Err(mpsc::error::TrySendError::Closed(()))
+        )
+    } else {
+        observe(Notice::Gap);
+        true
+    }
+}
+
+/// Bound a CLI line without allocating until an attacker-controlled newline arrives.
+async fn bounded_line<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> std::io::Result<Option<String>> {
+    let mut line = Vec::new();
+    loop {
+        let buf = reader.fill_buf().await?;
+        if buf.is_empty() {
+            if line.is_empty() {
+                return Ok(None);
+            }
+            return Err(std::io::Error::other("incomplete event line"));
+        }
+        let n = buf
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(buf.len(), |i| i + 1);
+        if line.len() + n > 8192 {
+            return Err(std::io::Error::other("event line exceeds 8 KiB"));
+        }
+        let ended = buf[n - 1] == b'\n';
+        line.extend_from_slice(&buf[..n]);
+        reader.consume(n);
+        if ended {
+            return String::from_utf8(line)
+                .map(Some)
+                .map_err(std::io::Error::other);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn bounded_event_lines_reject_loss_and_oversize() {
+        for bytes in [b"partial".to_vec(), vec![b'x'; 8193], vec![255, b'\n']] {
+            assert!(bounded_line(&mut bytes.as_slice()).await.is_err());
+        }
+        let mut good = b"{}\n{}\n".as_slice();
+        assert_eq!(bounded_line(&mut good).await.unwrap(), Some("{}\n".into()));
+        assert_eq!(bounded_line(&mut good).await.unwrap(), Some("{}\n".into()));
+        assert_eq!(bounded_line(&mut good).await.unwrap(), None);
+    }
+
+    #[test]
+    fn context_invalidation_is_never_debounced_or_dropped_with_kicks() {
+        let (n, fire) = counter();
+        let observe: Observer = Arc::new(move |_| fire());
+        let (tx, _rx) = mpsc::channel(1);
+        for _ in 0..100 {
+            assert!(dispatch(
+                r#"{"BSP_TYPEC_EVENT":{"cc_attch_state":1}}"#,
+                &[TYPEC_EVENT],
+                std::slice::from_ref(&tx),
+                &observe
+            ));
+        }
+        assert_eq!(n.load(Ordering::SeqCst), 100);
+        assert!(dispatch(
+            r#"{"BSP_TYPEC_EVENT":{},"unexpected":{}}"#,
+            &[TYPEC_EVENT],
+            &[tx],
+            &observe
+        ));
+        assert_eq!(n.load(Ordering::SeqCst), 101);
+    }
 
     fn counter() -> (Arc<AtomicUsize>, Arc<dyn Fn() + Send + Sync>) {
         let n = Arc::new(AtomicUsize::new(0));
@@ -335,7 +446,12 @@ mod tests {
             min_interval: KICK_MIN_INTERVAL,
             fire,
         };
-        assert!(!spawn_if_enabled(Some("0"), opts, vec![h]));
+        assert!(!spawn_if_enabled(
+            Some("0"),
+            opts,
+            vec![h],
+            Arc::new(|_| {})
+        ));
     }
 
     fn mock_script() -> String {
@@ -373,7 +489,12 @@ mod tests {
             debounce: DEBOUNCE,
         };
         let (tx2, _rx2) = mpsc::channel(64);
-        let h = tokio::spawn(supervise(opts, vec![EVENT, TYPEC_EVENT], vec![tx, tx2]));
+        let h = tokio::spawn(supervise(
+            opts,
+            vec![EVENT, TYPEC_EVENT],
+            vec![tx, tx2],
+            Arc::new(|_| {}),
+        ));
         let mut got = 0;
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while got < 3 && std::time::Instant::now() < deadline {

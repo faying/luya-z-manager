@@ -83,6 +83,17 @@ pub trait UbusBackend: Send {
     ) -> impl Future<Output = Result<Value, UbusError>> + Send;
     /// 接下来的调用是否在采集轮里（执行者每次调用前设置）。socket 后端据此选超时，其他后端不管。
     fn set_round(&mut self, _round: bool) {}
+
+    /// Final USB write preflight only. No GET or periodic discovery uses this.
+    fn usb_methods(&mut self, object: &str) -> impl Future<Output = Result<Vec<u8>, UbusError>> + Send {
+        async move {
+            if !matches!(object, "zwrt_bsp.usb" | "zwrt_bsp.typec" | "zwrt_bsp.powerbank") {
+                return Err(UbusError::InvalidArgument("not a reviewed USB object".into()));
+            }
+            command::run(&cli_bin(), ["-v", "list", object], Duration::from_secs(5))
+                .await.map_err(|e| UbusError::Io(e.to_string()))
+        }
+    }
 }
 
 /// 现状：每次调用起一个 `ubus call`。

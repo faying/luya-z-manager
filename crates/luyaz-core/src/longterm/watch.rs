@@ -39,14 +39,14 @@ const GRACE_S: i64 = 300;
 const DATAD_FRESH_S: i64 = 180;
 
 const PROGS: [&str; 5] = [
-    "zwrt-datad",
-    "u60pro-devui",
+    crate::paths::CORE,
+    crate::paths::UI,
     "u60-uid",
     "tailscaled",
     "mihomo",
 ];
 const SCRIPTS: [&str; 4] = ["u60-guard.sh", "doctor.sh", "alert-lib.sh", "supervise.sh"];
-const RESTARTS: [&str; 2] = ["zwrt-datad", "u60-uid"];
+const RESTARTS: [&str; 2] = [crate::paths::CORE, "u60-uid"];
 /// Our own program name: this process.
 const SELF: &str = crate::paths::CORE;
 
@@ -184,6 +184,49 @@ pub fn find_pids(proc_: &Path, names: &[&str]) -> BTreeMap<String, u32> {
     found
 }
 
+/// Crash directories under their names before Luya-Z F → the new ones, and `crashlog.seen`
+/// with them, so a moved record is not a new crash. Each round: an older sentinel or core can
+/// still write the old directory.
+pub fn move_old_crashlogs(crashlog: &Path, seen_path: &Path) {
+    for (old, new) in [
+        ("u60pro-devui", crate::paths::UI),
+        ("zwrt-datad", crate::paths::CORE),
+    ] {
+        let (od, nd) = (crashlog.join(old), crashlog.join(new));
+        let Ok(rd) = std::fs::read_dir(&od) else {
+            continue;
+        };
+        if std::fs::create_dir_all(&nd).is_err() {
+            continue;
+        }
+        let mut moved = Vec::new();
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if std::fs::rename(e.path(), nd.join(&name)).is_ok() {
+                moved.push(name);
+            }
+        }
+        if !moved.is_empty()
+            && let Some(seen) = read(seen_path)
+        {
+            let text: String = seen
+                .lines()
+                .map(|l| match l.strip_prefix(&format!("{old}/")) {
+                    Some(r) if moved.iter().any(|m| r.starts_with(&format!("{m} "))) => {
+                        format!("{new}/{r}\n")
+                    }
+                    _ => format!("{l}\n"),
+                })
+                .collect();
+            let tmp = seen_path.with_extension("seen.tmp");
+            if std::fs::write(&tmp, text).is_ok() {
+                let _ = std::fs::rename(&tmp, seen_path);
+            }
+        }
+        let _ = std::fs::remove_dir(&od);
+    }
+}
+
 /// A child under its parent's name is not the program (datad's `/v2/scorecard` runs the card in
 /// a child of its own binary; taking it for datad reads as a restart).
 fn child_of_same(proc_: &Path, pid: u32, comm: &str) -> bool {
@@ -203,7 +246,7 @@ fn child_of_same(proc_: &Path, pid: u32, comm: &str) -> bool {
 fn ship_restart(txn: Option<&str>, prog: &str, boot: &str, up: i64) -> u8 {
     let Some(t) = txn else { return 0 };
     let comps: &[&str] = match prog {
-        "zwrt-datad" => &["datad", "core"], // core: its name on the device since D4c
+        crate::paths::CORE => &["datad", "core"], // core: its name on the device since D4c
         "u60-uid" => &["touch", "uid"],
         _ => return 0,
     };
@@ -327,6 +370,7 @@ impl State {
             .collect();
         // ── svc_exit (before proc_restart: its crashlog field) ──
         let seen_path = p.long.join("crashlog.seen");
+        move_old_crashlogs(&p.crashlog, &seen_path);
         let seen = read(&seen_path);
         let first_ever = seen.is_none();
         let seen = seen.unwrap_or_default();
@@ -378,7 +422,7 @@ impl State {
                             out.lines.push((
                                 "svc_exit",
                                 json!({
-                                    "id": format!("cl-{m}"), "prog": clean(&prog), "file": clean(&name),
+                                    "id": format!("cl-{m}"), "prog": clean(crate::paths::prog_key(&prog)), "file": clean(&name),
                                     "status": status, "found": if self.booted { "round" } else { "boot_init" },
                                     "crash_up": cu,
                                 }),
@@ -436,7 +480,7 @@ impl State {
                     "proc_restart",
                     json!({
                         "id": format!("pr-{b8}-{pid}-{st}"), "prog": prog, "old": op, "new": pid,
-                        "crashlog": u8::from(cl_new.iter().any(|c| crate::paths::core_key(c) == prog)),
+                        "crashlog": u8::from(cl_new.iter().any(|c| crate::paths::prog_key(c) == prog)),
                         "ship": ship_restart(txn.as_deref(), prog, boot, up),
                     }),
                 ));

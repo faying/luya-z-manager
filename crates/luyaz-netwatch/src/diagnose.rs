@@ -283,7 +283,14 @@ impl Diagnosis {
         let mut waited_finding = false;
         loop {
             let mut g = self.gate();
-            let busy = if g.finding_since.is_some() { Some("finding") } else { self.host.others_busy() };
+            // a write transaction's reservation (decision-execution-loop §1.3) waits like the rest
+            let busy = if g.txn.is_some() {
+                Some("txn")
+            } else if g.finding_since.is_some() {
+                Some("finding")
+            } else {
+                self.host.others_busy()
+            };
             waited_finding |= busy == Some("finding");
             match busy {
                 None => {

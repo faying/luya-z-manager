@@ -36,7 +36,9 @@ const GS: [&str; 7] = [
 /// The four power cells of `hour_power`.
 const CS: [&str; 4] = ["on_home", "on_abroad", "off_home", "off_abroad"];
 /// The programs `hour_proc` keeps the RSS of.
-const RS: [&str; 5] = ["agent", "datad", "devui", "mihomo", "ts"];
+const RS: [&str; 5] = ["agent", "core", "ui", "mihomo", "ts"];
+/// Column names before Luya-Z F, read when the new one is missing.
+const RS_OLD: [&str; 5] = ["agent", "datad", "devui", "mihomo", "ts"];
 
 /// What doctor passes its awk besides the ledger (`report_ledger`).
 #[derive(Clone, Debug, Default)]
@@ -356,7 +358,7 @@ impl Card {
                 }
             }
             "ver" => {
-                let (p, m) = (f("prog"), f("md5"));
+                let (p, m) = (crate::paths::prog_key(&f("prog")).to_string(), f("md5"));
                 if m != "null" && self.ver_m.get(&p).is_some_and(|o| *o != m) {
                     self.ver_c.insert(p.clone(), (s, up));
                 }
@@ -391,8 +393,17 @@ impl Card {
                     },
                 );
             }
-            "svc_exit" => self.sx.push((at, f("prog"), f("status"))),
-            "proc_restart" => self.pr.push((at, f("prog"), f("crashlog"), f("ship"))),
+            "svc_exit" => self.sx.push((
+                at,
+                crate::paths::prog_key(&f("prog")).to_string(),
+                f("status"),
+            )),
+            "proc_restart" => self.pr.push((
+                at,
+                crate::paths::prog_key(&f("prog")).to_string(),
+                f("crashlog"),
+                f("ship"),
+            )),
             "uid" => {
                 if fld(l, "what") == "gave_up" {
                     self.ug.push(at);
@@ -460,6 +471,9 @@ impl Card {
                     };
                     for (j, r) in RS.iter().enumerate() {
                         q.rss[j] = f(&format!("rss_{r}"));
+                        if q.rss[j].is_empty() || q.rss[j] == "null" {
+                            q.rss[j] = f(&format!("rss_{}", RS_OLD[j]));
+                        }
                     }
                     self.hq.insert(i, q);
                 }
@@ -981,8 +995,8 @@ impl Card {
         // S4 our programs, each from its last new build
         const PG: [&str; 5] = [
             "zte-agent",
-            "zwrt-datad",
-            "u60pro-devui",
+            crate::paths::CORE,
+            crate::paths::UI,
             "u60-uid",
             "u60-guard.sh",
         ];
@@ -1414,7 +1428,7 @@ impl Card {
         );
         let ch = self
             .ver_c
-            .get("zwrt-datad")
+            .get(crate::paths::CORE)
             .and_then(|&(s, u)| self.wall(s, u));
         let ws = wstart(D1, ch);
         let (mut cpu, mut nc) = (0.0, 0);

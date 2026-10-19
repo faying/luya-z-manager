@@ -218,17 +218,12 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
     } else {
         &hardware_version
     });
-    let template = match profile.as_str() {
-        "mu5250" => "MU5250",
-        "mu5252" => "MU5252",
-        "mc7523" => "MC7523",
-        "mc8532b" => "MC8532B",
-        _ => "legacy_compat",
-    };
+    let adapter = crate::device_profile::identity::model_adapter(&profile.to_ascii_uppercase());
+    let template = adapter.as_ref().map_or("legacy_compat", |a| a.model.as_str());
     // Only templates the C side marks NETWORK_SOURCE_NWINFO_UBUS_WITH_UCI_FALLBACK
     // may fill network fields from the zte_nwinfo UCI cache. MU5250/MC7523 are
     // ubus-only: a failed nwinfo call must read as "no data", not stale UCI.
-    if matches!(template, "MU5252" | "MC8532B") {
+    if adapter.as_ref().is_some_and(|a| a.network_source == luyaz_api::firmware::NetworkSource::UbusWithUciFallback) {
         topflow_net_fallback(&mut raw_net, &uci_sets);
     }
     // The *_band_lock fields are the current lock set: after locking to n78
@@ -337,7 +332,7 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
     // MU5250/MU5252 only trust ubus's `cpuss_temp` (matches the C template's
     // TEMP_SOURCE_U60_UBUS_ONLY) — no other-key or sysfs-average fallback,
     // since that silently substitutes a plausible-looking but wrong value.
-    let cpu_temp = if matches!(template, "MU5250" | "MU5252") {
+    let cpu_temp = if adapter.as_ref().is_some_and(|a| a.cpu_temperature == luyaz_api::firmware::CpuTemperatureSource::CpussOnly) {
         let v = integer_or(&thermal, "cpuss_temp", -1);
         if v < 0 {
             0
@@ -777,25 +772,7 @@ pub(crate) fn uci_get<'a>(sets: &'a [BTreeMap<String, String>], path: &str) -> &
 }
 
 pub(crate) fn normalize_profile(v: &str) -> String {
-    let mut out = String::new();
-    let mut sep = true;
-    for c in v.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-            sep = false
-        } else if !sep && matches!(c, '-' | '_' | ' ' | '/' | '.') {
-            out.push('_');
-            sep = true
-        }
-    }
-    while out.ends_with('_') {
-        out.pop();
-    }
-    if out.is_empty() {
-        "unknown".into()
-    } else {
-        out
-    }
+    crate::device_profile::identity::normalize_profile(v)
 }
 
 /// MCC → 国家。一个国家有几个 MCC 的归到同一个（美国 310–316、印度 404–406、日本 440/441、
@@ -1323,7 +1300,8 @@ pub(crate) fn wifi_section(
     sets: &[BTreeMap<String, String>],
 ) -> Option<&'static str> {
     let get = |s: &str, k: &str| uci_get(sets, &format!("wireless.{s}.{k}"));
-    if template == "MU5250" {
+    if crate::device_profile::identity::model_adapter(template)
+        .is_some_and(|a| a.wifi_section == luyaz_api::firmware::WifiSectionSource::Main2g) {
         return ["ssid", "key", "encryption"]
             .into_iter()
             .any(|k| !get("main_2g", k).is_empty())

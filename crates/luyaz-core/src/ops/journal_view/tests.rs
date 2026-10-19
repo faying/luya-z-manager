@@ -167,3 +167,23 @@ fn confirmed_proposals_say_both() {
     assert_eq!(get(&e[2], "result_zh"), "等 Wi-Fi 锁超时，重试");
     en_ok(get(&e[2], "result_en"));
 }
+
+#[test]
+fn chill_and_blank_old_entries() {
+    let mut e = vec![
+        json!({"op_id": "c1", "action": "chill.exit", "item": "chill.exit", "source": "mcp",
+               "approved_by": "mcp", "undo": false, "old": "proxy", "new": "direct_keep_ai",
+               "rollback_to": "proxy", "readback": "direct_keep_ai",
+               "result": "confirmed", "reason": "verified"}),
+        json!({"op_id": "n1", "action": "network.set_mode", "item": "network.mode", "source": "web",
+               "undo": false, "old": null, "new": "Only_LTE", "rollback_to": null,
+               "readback": "Only_LTE", "result": "confirmed", "reason": "verified"}),
+    ];
+    decorate(&mut e);
+    assert_eq!(
+        (get(&e[0], "what_zh"), get(&e[0], "change_zh")),
+        ("CHILL 出口", "代理 → 直连 · AI 不动")
+    );
+    assert_eq!(e[1]["undo_view"]["ok"], false);
+    assert_eq!(get(&e[1]["undo_view"], "why_zh"), "没有旧值可退回");
+}

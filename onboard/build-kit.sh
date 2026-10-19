@@ -139,7 +139,8 @@ zigbuild() {
   if command -v cargo-zigbuild >/dev/null 2>&1; then
     ( cd "$ROOT" && LUYAZ_COMMIT=$head cargo zigbuild --profile "$1" --target aarch64-unknown-linux-musl -p "$2" ) >"$log" 2>&1
   else
-    docker run --rm -v "$ROOT":/src -w /src -e CARGO_TARGET_DIR=/src/target -e LUYAZ_COMMIT="$head" "$ZIGBUILD_IMAGE" \
+    docker run --rm -v "$ROOT":/repo -v u60-cargo-registry:/usr/local/cargo/registry -v u60-zig-cache:/root/.cache \
+      -w /repo -e CARGO_TARGET_DIR=/repo/target -e LUYAZ_COMMIT="$head" "$ZIGBUILD_IMAGE" \
       cargo zigbuild --profile "$1" --target aarch64-unknown-linux-musl -p "$2" >"$log" 2>&1
   fi || { tail -n 20 "$log" >&2; die "$2 构建失败"; }
   [ -f "$out" ] || die "$2 没编出来（$out 不在）"

@@ -15,6 +15,7 @@
 use std::sync::Mutex;
 
 use luyaz_api::diagnose::Gate;
+use luyaz_api::diagnose::admit::Probe as GateProbe;
 use luyaz_api::finding::*;
 
 use crate::now_unix;
@@ -65,6 +66,10 @@ pub fn check(host: &dyn FindingHost, gate: &Mutex<Gate>) -> Result<Verdict, Busy
     }
     {
         let mut g = gate.lock().unwrap_or_else(|e| e.into_inner());
+        // a write transaction's reservation (decision-execution-loop §1.3): don't start
+        if g.txn.is_some() {
+            return Err(Busy("txn"));
+        }
         if g.diag_since.is_some() {
             return Err(Busy("diagnose"));
         }
@@ -72,13 +77,13 @@ pub fn check(host: &dyn FindingHost, gate: &Mutex<Gate>) -> Result<Verdict, Busy
             return Err(Busy(k));
         }
         // its own field (deep-diag-v2 §2.1): never shown or timed as a diagnosis
-        g.finding_since = Some(now);
+        g.probe_enter(GateProbe::Finding, now).map_err(Busy)?;
     }
     let probed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let network = host.network_probe();
         judge_network(network, now_unix())
     }));
-    gate.lock().unwrap_or_else(|e| e.into_inner()).finding_since = None;
+    gate.lock().unwrap_or_else(|e| e.into_inner()).probe_exit(GateProbe::Finding);
     let (internet, dns) = probed.unwrap_or_else(|_| {
         let t = now_unix();
         judge_network(

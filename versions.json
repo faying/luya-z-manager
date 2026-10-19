@@ -1,9 +1,9 @@
 {
   "v": 1,
   "components": {
-    "core": "1.4.4",
+    "core": "1.5.0",
     "lweb": "1.2.0",
-    "sentinel": "1.0.2",
+    "sentinel": "1.0.3",
     "touch": "1.1.1",
     "scripts": "1.0.0"
   }

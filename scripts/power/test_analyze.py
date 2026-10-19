@@ -199,6 +199,40 @@ class Integrity(unittest.TestCase):
         self.assertEqual(a.hour_summary([hour() | {"boot": "different"}], BOOT, 0,
                                        3_600_000, "off_home")["coverage"]["records"], 0)
 
+    def test_legacy_zero_length_hours_outside_window_are_reported(self):
+        # Shape reproduced from the live export: boot-start point rows precede
+        # a complete hour. Keep fixture identities synthetic and raw exports private.
+        rows = [hour() | {"from": 25200, "to": 28800},
+                activity_hour(25200, 28800, observed=3522, ticks=7495, count=69367)]
+        expected = a.hour_summary(rows, BOOT, 25200000, 28800000, "off_home")
+        points = [{"k": kind, "boot": BOOT[:8], "from": point, "to": point}
+                  for kind in ("hour_power", "hour_proc") for point in (47, 28800)]
+        result = a.hour_summary(points + rows, BOOT, 25200000, 28800000, "off_home")
+        self.assertEqual(result["coverage"], expected["coverage"])
+        self.assertEqual(result["activity"]["metrics"], expected["activity"]["metrics"])
+        self.assertEqual(result["candidate_counter_mean_mw"], expected["candidate_counter_mean_mw"])
+        for section in (result, result["activity"]):
+            self.assertEqual(section["outside_or_crossing_records"], 2)
+            self.assertEqual(section["invalid_outside_window"], [
+                {"from_ms": point*1000, "to_ms": point*1000,
+                 "reason": "zero_length_outside_window"} for point in (47, 28800)])
+
+    def test_zero_length_hours_inside_window_still_fail(self):
+        for kind in ("hour_power", "hour_proc"):
+            for point in (25200, 26000, 28799):
+                with self.subTest(kind=kind, point=point), self.assertRaisesRegex(ValueError, "invalid interval"):
+                    a.hour_summary([{"k": kind, "boot": BOOT[:8], "from": point, "to": point}],
+                                   BOOT, 25200000, 28800000, "off_home")
+
+    def test_unlocatable_or_reversed_hours_are_not_silently_excluded(self):
+        for kind in ("hour_power", "hour_proc"):
+            for bounds in ({"from":48,"to":47}, {"from":-1,"to":-1},
+                           {"from":None,"to":47}, {"from":47},
+                           {"from":True,"to":True}, {"from":"47","to":"47"}):
+                with self.subTest(kind=kind, bounds=bounds), self.assertRaises((ValueError, KeyError, TypeError)):
+                    a.hour_summary([{"k":kind,"boot":BOOT[:8]} | bounds],
+                                   BOOT, 25200000, 28800000, "off_home")
+
     def test_cli_roundtrip_hash_and_invalid_capture(self):
         with tempfile.TemporaryDirectory() as directory:
             ledger = Path(directory) / "ledger.json"

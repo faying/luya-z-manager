@@ -106,6 +106,7 @@ pub enum ClockSource {
     LastWall,
     Jump,
     Continuity,
+    TrustedGateway,
     Revoked,
     #[default]
     #[serde(other)]
@@ -120,6 +121,7 @@ impl ClockSource {
             Self::LastWall => "last_wall",
             Self::Jump => "jump",
             Self::Continuity => "continuity",
+            Self::TrustedGateway => "trusted_gateway",
             Self::Revoked => "revoked",
         }
     }
@@ -140,6 +142,9 @@ pub struct ClockEvidence {
     pub uncertainty_s: Option<u64>,
     pub source: ClockSource,
     pub sync_state: SyncState,
+    /// Root-provisioned attestation; independent source expiry must never slide per round.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utc_reference: Option<crate::utc::UtcAnchor>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,6 +186,7 @@ impl ClockEvidence {
             utc_estimate: None,
             uncertainty_s: None,
             source,
+            utc_reference: None,
             sync_state: if matches!(source, ClockSource::None | ClockSource::Revoked) {
                 SyncState::Unknown
             } else {
@@ -226,9 +232,21 @@ impl ClockEvidence {
             SyncState::Unknown => EvidenceStatus::Unknown,
             SyncState::Estimated => EvidenceStatus::Estimated,
             SyncState::Verified
-                if self.clock_model != ClockModel::Unknown
-                    && self.utc_estimate.is_some()
-                    && self.uncertainty_s.is_some() =>
+                if self.source == ClockSource::TrustedGateway
+                    && self.utc_reference.as_ref().is_some_and(|anchor| {
+                        anchor.project(now, raw_wall).is_some_and(|p| {
+                            p.clock_model == self.clock_model
+                                && self.display_zone == Some(anchor.display_zone)
+                                && Some(p.utc_estimate)
+                                    == self
+                                        .utc_estimate
+                                        .and_then(|u| u.checked_add(i64::try_from(age).ok()?))
+                                && self.uncertainty_s
+                                    == anchor
+                                        .project(&self.observed_at, self.raw_wall)
+                                        .map(|p| p.uncertainty_s)
+                        })
+                    }) =>
             {
                 EvidenceStatus::Verified
             }

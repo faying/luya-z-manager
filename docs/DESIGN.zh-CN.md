@@ -269,7 +269,7 @@ changing、revert_fail 是写操作叠上去的（E4，datad `screen.rs` `with_o
 
 **实时数据**（换成推送以后也一样）：数字变了只换数字，不重排、不闪；正在输入的框、展开的详情、待确认的操作不被新数据冲掉（DR12）；读屏只念结论和告警的变化，不念每次刷新的读数（DR13）。
 
-**当前实现（luyaz-web，Next.js 旧网页 10-15 删了，Phase 10 X13）**：token `crates/luyaz-web/static/nd/newdesign.css`；组件样式同目录 `nd.css`、`shell.css`（`src/assets.rs` 拼成一份）；对比度 `node crates/luyaz-web/tools/contrast.ts > docs/web/contrast.md`；页面表 `crates/luyaz-web/src/routes.rs`；档位清单 `docs/web/controls-inventory.md`（按旧网页写的，没改）。换实现时改这一段，上面的规则不动。
+**当前实现（luyaz-web，Next.js 旧网页 10-15 删了，Phase 10 X13）**：token `crates/luyaz-web/static/nd/newdesign.css`；组件样式同目录 `nd.css`、`shell.css`（`src/assets.rs` 拼成一份）；对比度 `node crates/luyaz-web/tools/contrast.ts > docs/web/contrast.md`；页面表 `crates/luyaz-web/src/routes.rs`；事务条与写确认 `crates/luyaz-web/src/opbar.rs`、`crates/luyaz-web/templates/components/write.html` 及核心事务表 `crates/luyaz-core/src/ops/spec.rs`；e2e 测试 `crates/luyaz-web/e2e/`；档位清单 `docs/web/controls-inventory.md`（2026-09-24 旧网页/`zte-agent` 历史基线，其中三档分级规则继续有效）。换实现时改这一段，上面的规则不动。
 
 ---
 
