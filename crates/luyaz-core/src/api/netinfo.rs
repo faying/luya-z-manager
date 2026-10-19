@@ -90,30 +90,10 @@ impl NetCache {
     }
 }
 
-/// `iw` on every AP interface (the agent's `wifi_stations`). Blocking.
+/// `iw` on every AP interface (the agent's `wifi_stations`): bounded per call and single-flight
+/// (resilience audit R6, see `luyaz_api::netinfo::iw`). Blocking.
 pub fn wifi_stations() -> Vec<ni::Station> {
-    let sh = |cmd: &str| {
-        std::process::Command::new("sh")
-            .args(["-c", cmd])
-            .stdin(std::process::Stdio::null())
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-            .unwrap_or_default()
-    };
-    let mut out = Vec::new();
-    for iface in ni::ap_ifaces(&sh("iw dev 2>/dev/null")) {
-        let ap = ni::parse_ap_info(&sh(&format!("iw dev {iface} info 2>/dev/null")));
-        for mut st in ni::parse_station_dump(
-            &sh(&format!("iw dev {iface} station dump 2>/dev/null")),
-            &iface,
-        ) {
-            st.band = ap.band;
-            st.channel = ap.channel;
-            st.width_mhz = ap.width_mhz;
-            out.push(st);
-        }
-    }
-    out
+    ni::iw::stations()
 }
 
 /// The SIM's (state, imsi): u60d's `sim` block when fresh, else one direct read (the agent's

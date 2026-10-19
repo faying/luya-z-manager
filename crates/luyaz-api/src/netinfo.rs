@@ -710,7 +710,7 @@ pub fn same_plmn(a: &str, b: &str) -> bool {
 // ── local modem state ──────────────────────────────────────────────────────
 
 /// Fields of `nwinfo_get_netinfo` this module reads. Names follow what
-/// zwrt-datad reads from the same call (state.rs); `rplmn_num` vs
+/// data-service read from the same call (state.rs); `rplmn_num` vs
 /// `rmcc`+`rmnc` is still to be confirmed on the device.
 pub fn serving_plmn(net: &Value) -> String {
     let direct = num_or_str(net, "rplmn_num");
@@ -884,7 +884,7 @@ impl Reason {
         }
     }
 
-    /// datad holds back-to-automatic while a network-mode change is being
+    /// core holds back-to-automatic while a network-mode change is being
     /// confirmed (D40 `op_busy`): not a failed attempt, waiting it out.
     pub fn auto_held(why: &str) -> Self {
         Reason {
@@ -1806,8 +1806,8 @@ pub fn profile_id(v: &Value) -> Option<String> {
 }
 
 /// A vendor-format APN profile (the web body, or an entry of
-/// `get_auto_apn_list`) → datad `apn.add` / `apn.modify` params. B27 keeps
-/// `pdpType`, `pppAuthMode`, `roamingPdpType` as integers; datad sends them so.
+/// `get_auto_apn_list`) → core `apn.add` / `apn.modify` params. B27 keeps
+/// `pdpType`, `pppAuthMode`, `roamingPdpType` as integers; core sends them so.
 pub fn apn_params(v: &Value, modify: bool) -> Result<Value, String> {
     let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
     let int = |k: &str| -> Result<Option<i64>, String> {
@@ -1944,6 +1944,8 @@ pub fn page(p: Page) -> Value {
     }
     data
 }
+
+pub mod iw;
 
 #[cfg(test)]
 mod tests;

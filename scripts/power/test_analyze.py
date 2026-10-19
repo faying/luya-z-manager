@@ -51,7 +51,7 @@ def quality_hour(observed=3540, energy=400_000):
 def activity_hour(start=0, end=3600, observed=3540, ticks=100, count=120):
     cpu = {"observed_s": observed, "ticks": ticks}
     return {"k": "hour_proc", "boot": BOOT[:8], "from": start, "to": end,
-            "cpu_datad": 999,  # legacy value must never fill missing coverage
+            "cpu_core": 999,  # legacy value must never fill missing coverage
             "activity": {"v": 1, "clock": "boottime_seconds", "hz": 100,
                          "rejected": {"awake_gap": 1},
                          "core_cpu": cpu, "reaped_children_cpu": cpu,
@@ -279,7 +279,7 @@ class Integrity(unittest.TestCase):
 
     def test_legacy_or_missing_activity_is_unknown_not_legacy_cpu_fill(self):
         result = a.hour_summary([hour(), {"k": "hour_proc", "boot": BOOT[:8], "from": 0,
-                                          "to": 3600, "cpu_datad": 999}],
+                                          "to": 3600, "cpu_core": 999}],
                                 BOOT, 0, 3_600_000, "off_home")["activity"]
         self.assertIsNone(result["metrics"]["core_cpu"]["cpu_s"])
         self.assertEqual(result["activity_records"], 0)

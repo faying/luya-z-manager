@@ -25,7 +25,7 @@
 //! its pid gone — the script's own `HB_STALE`; `staged` gets [`STAGED_GRACE_S`] for the Mac to start
 //! it) → `luyaz-ship.sh recover-live`, one at a time. Never with `/proc` unreadable: a live executor
 //! would look dead, and recover-live has no lock, so that would be two rollbacks at once (the
-//! u60-guard.sh this used to wait for is gone since 10c). The sentinel finishes the
+//! an old watchdog this used to wait for is gone since 10c). The sentinel finishes the
 //! others and skips its own (it may be the one being replaced).
 //!
 //! Runs while u60d's writes are on, every [`LOOK_SECS`]. Rule 2 only logs what it would do unless
@@ -933,7 +933,7 @@ mod tests {
         fs::create_dir_all(root.join("proc/77")).unwrap();
         fs::write(
             root.join("proc/77/cmdline"),
-            "/bin/sh\0/data/u60-guard/u60-guard.sh\0",
+            "/bin/sh\0/data/luyaz/scripts/doctor.sh\0",
         )
         .unwrap();
         let o = observe(&c, 500)
@@ -943,7 +943,7 @@ mod tests {
         assert!(o.script && !o.blind);
         assert!(
             orphan_why(&o).unwrap().contains("heartbeat 10s old"),
-            "a u60-guard.sh process (retired in 10c) holds nothing back any more"
+            "a process that is not the executor holds nothing back"
         );
         fs::remove_dir_all(root.join("proc/77")).unwrap();
         fs::rename(root.join("proc"), root.join("proc.off")).unwrap();

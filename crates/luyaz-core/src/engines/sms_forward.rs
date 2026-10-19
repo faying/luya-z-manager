@@ -116,7 +116,7 @@ impl Host for U60dHost {
         self.handle.block_on((self.ubus)(o, m, args))
     }
 
-    /// The agent's `datad_write::vendor`, under the thread's source.
+    /// The agent's `core_write::vendor`, under the thread's source.
     fn vendor(&self, obj: &str, method: &str, params: Option<&str>) -> Result<Value, String> {
         let args: Value = match params {
             None => json!({}),

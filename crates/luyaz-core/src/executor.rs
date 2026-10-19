@@ -1,6 +1,6 @@
 //! 单一采集执行者（docs/STATE_V2.md 第 7、8 节，R13/R3/R12/R2）。
 //!
-//! 一个 tokio 任务持有 ubus 后端，datad 里所有 ubus 请求都经过它，同一时间最多一个在途：
+//! 一个 tokio 任务持有 ubus 后端，核心里所有 ubus 请求都经过它，同一时间最多一个在途：
 //!
 //! - **采集轮**：先读到期的块（`block::Hub`，每轮 ubus 预算 3 秒、没轮到的下一轮先读），
 //!   再跑还没迁移的旧采集（`RoundDriver::legacy`，即 `state::collect` 那一套，不受 3 秒预算截断；

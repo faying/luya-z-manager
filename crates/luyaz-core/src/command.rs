@@ -12,10 +12,10 @@ use tokio::{
 
 const MAX_OUTPUT: usize = 1024 * 1024;
 
-/// 让子进程随 datad 一起死（SIGKILL 也一样）：Linux 上 fork 后、exec 前调
+/// 让子进程随核心一起死（SIGKILL 也一样）：Linux 上 fork 后、exec 前调
 /// `prctl(PR_SET_PDEATHSIG, SIGKILL)`。
 ///
-/// 细节：pdeathsig 按「fork 出它的那个**线程**」退出触发，不是按进程。datad 的 spawn 发生在
+/// 细节：pdeathsig 按「fork 出它的那个**线程**」退出触发，不是按进程。核心的 spawn 发生在
 /// tokio 工作线程上，工作线程和运行时同生共死，不会先于进程退出；但不要从 `spawn_blocking`
 /// 里起长期子进程（阻塞池线程空闲 10 秒就退出，会误杀子进程）。
 /// 另外 fork 之后、prctl 之前父进程可能已经死了（子进程已被过继给 init，prctl 不会再触发），

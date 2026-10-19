@@ -28,29 +28,29 @@
 # SOURCE is who asked (screen, web, …; default screen). It goes into the
 # takeover marker only.
 #
-# Order, all under the cross-process write lock datad also takes:
+# Order, all under the cross-process write lock the core also takes:
 #   1. arguments checked; the ubus JSON is built here from checked values only
 #      (callers pass user input through system(), so this is the boundary).
 #      Anything off → exit 2, nothing touched.
 #   2. lock: flock on $LUYAZ_WRITE_LOCK (/var/run/luyaz-write.lock), tried
 #      once a second for $LUYAZ_FALLBACK_LOCK_WAIT (10) s → else exit 4.
-#   3. datad gone? Twice, $LUYAZ_FALLBACK_GAP (1) s apart. Alive when the pid in
+#   3. the core gone? Twice, $LUYAZ_FALLBACK_GAP (1) s apart. Alive when the pid in
 #      $LUYAZ_PID_FILE (/var/run/luyaz-core.pid) has a comm starting with "luyaz-core" (side-by-side
-#      names like luyaz-core.test count; so does the old "zwrt-datad"), or when its /healthz answers at all,
-#      503 included (a datad that writes no pid file). Alive either time → exit
+#      names like luyaz-core.test count), or when its /healthz answers at all,
+#      503 included (a core that writes no pid file). Alive either time → exit
 #      3, nothing written.
 #   4. reads the write needs (cellular.set: get_wwaniface; direct supply: the
 #      current mode, already there → exit 0 with nothing written).
-#   5. one JSON line appended to $LUYAZ_OPS_DIR/takeover (/data/u60-ops),
-#      then sync. datad, on its next start, sees it under the same lock and
+#   5. one JSON line appended to $LUYAZ_OPS_DIR/takeover (/data/luyaz/core/ops),
+#      then sync. The core, on its next start, sees it under the same lock and
 #      drops the change it had pending (it would otherwise roll this one back).
 #      No marker, no write: cannot append → exit 1.
-#   6. the write, the same ubus calls datad's /control makes for the action
+#   6. the write, the same ubus calls the core's /control makes for the action
 #      (control.rs). cellular.set reads get_wwaniface and changes only the
-#      named fields, like datad: the old 4-field fallback dropped the rest.
+#      named fields, like the core: the old 4-field fallback dropped the rest.
 #      Runs in the foreground; callers background the whole script.
 #
-# Exit: 0 written · 1 ubus/marker failed · 2 bad arguments · 3 datad is
+# Exit: 0 written · 1 ubus/marker failed · 2 bad arguments · 3 the core is
 # running, not written · 4 write lock busy (being taken over), not written.
 # One line on stdout says which.
 #
@@ -72,14 +72,11 @@ WGET=${LUYAZ_FALLBACK_WGET:-wget}
 HEALTH=${LUYAZ_FALLBACK_HEALTH_URL-http://127.0.0.1:9460/healthz}
 PROC=${LUYAZ_FALLBACK_PROC:-/proc}
 LOCK=${LUYAZ_WRITE_LOCK-/var/run/luyaz-write.lock}
-ATLOCK=${LUYAZ_AT_LOCK-/var/run/luyaz-at.lock} # both u60-*.lock before Luya-Z rename E2
+ATLOCK=${LUYAZ_AT_LOCK-/var/run/luyaz-at.lock}
 ATHOOK=${LUYAZ_FALLBACK_AT:-}
-# Luya-Z rename D2: the core's pid file (before: /var/run/zwrt-datad.pid; a list is taken, a
-# stale entry names no live core). The ops dir: the new one once it was moved (a kit install
-# keeps the old one).
+# The core's pid file (a list is taken, a stale entry names no live core).
 PIDF=${LUYAZ_PID_FILE-/var/run/luyaz-core.pid}
-if [ -d /data/luyaz/core/ops ]; then OPS=${LUYAZ_OPS_DIR-/data/luyaz/core/ops}
-else OPS=${LUYAZ_OPS_DIR-/data/u60-ops}; fi
+OPS=${LUYAZ_OPS_DIR-/data/luyaz/core/ops}
 
 # Numbers only from here on: busybox ash dies on a bad number in $(( )).
 num() { case $1 in '' | *[!0-9]*) echo "$2" ;; *) echo "$1" ;; esac; }
@@ -224,7 +221,7 @@ case $ACTION in
     cellular.set)
         # The enable read back is not sent back: it is the last value written,
         # 0 after boot while the auto dial is connected, and writing that 0 cuts
-        # the data (E4 T12, B31). Like datad's cellular_args.
+        # the data (E4 T12, B31). Like the core's cellular_args.
         OV=
         if [ -n "${P_enabled+x}" ]; then
             is01 "$P_enabled" || invalid "enabled must be 0 or 1"
@@ -238,7 +235,7 @@ case $ACTION in
         fi
         if [ -n "${P_connect_mode+x}" ]; then
             isint "$P_connect_mode" || invalid "connect_mode must be a number"
-            # a string, like datad (control.rs maps it as one)
+            # a string, like the core (control.rs maps it as one)
             OV="${OV}connect_mode=\"$P_connect_mode\";"
             add connect_mode "\"$P_connect_mode\""
         fi
@@ -321,12 +318,12 @@ if [ -n "$LOCK" ]; then
             sleep 1
         done
     else
-        # same as datad: a lock that cannot be opened does not stop the write
+        # same as the core: a lock that cannot be opened does not stop the write
         echo "luyaz-fallback: cannot open $LOCK, writing without it" >&2
     fi
 fi
 
-# ── 3. is datad really gone? ──────────────────────────────────────────────────
+# ── 3. is the core really gone? ──────────────────────────────────────────────────
 alive() {
     for _pf in $PIDF; do
         pid=
@@ -336,22 +333,22 @@ alive() {
             *)
                 comm=
                 [ -r "$PROC/$pid/comm" ] && read -r comm <"$PROC/$pid/comm"
-                # the core under its old or new name (10e; prefix: side-by-side trials)
-                case $comm in zwrt-datad* | luyaz-core*) return 0 ;; esac
+                # prefix: side-by-side trials
+                case $comm in luyaz-core*) return 0 ;; esac
                 ;;
         esac
     done
     [ -n "$HEALTH" ] || return 1
-    # Any HTTP answer is a datad: /healthz says 503 while it is starting or
+    # Any HTTP answer is the core: /healthz says 503 while it is starting or
     # its executor is stuck, and busybox wget then fails with "server returned
     # error" (not answering at all is "can't connect" or a timeout).
     _h=$("$WGET" -q -T 2 -O /dev/null "$HEALTH" 2>&1 9>&-) && return 0
     case $_h in *"server returned error"*) return 0 ;; esac
     return 1
 }
-alive && done_ 3 "datad running: not written"
+alive && done_ 3 "core running: not written"
 sleep "$GAP"
-alive && done_ 3 "datad running: not written"
+alive && done_ 3 "core running: not written"
 
 # ── 4. reads the write needs (no marker yet: a failed read changes nothing) ──
 call() { "$UBUS" call "$1" "$2" "$3" 2>&1 9>&-; }
@@ -482,7 +479,7 @@ case $ACTION in
         # an empty reply is success (B20); otherwise no "error" and result 0
         if [ -n "$(printf '%s' "$reply" | tr -d ' \t\r\n')" ]; then
             printf '%s\n' "$reply" | json get error >/dev/null && failed "zwrt_bsp.charger set"
-            # like datad: only a result that reads as a non-zero number fails
+            # like the core: only a result that reads as a non-zero number fails
             res=$(printf '%s\n' "$reply" | json get result | tr -d ' ')
             case $res in '' | *[!0-9-]* | -) ;; *[!0]*) failed "zwrt_bsp.charger set" ;; esac
         fi

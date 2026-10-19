@@ -19,7 +19,7 @@
 
 ## 输入
 
-- 采样序列，按时间升序：`[t 秒, 电池电流 µA, 充电器是否接着]`。电流正数 = 进电池（充电），负数 = 放电（sysfs `battery/current_now` 的符号）。充电器状态取 datad 的 `charger_connect`，不知道时沿用上一条。
+- 采样序列，按时间升序：`[t 秒, 电池电流 µA, 充电器是否接着]`。电流正数 = 进电池（充电），负数 = 放电（sysfs `battery/current_now` 的符号）。充电器状态取核心的 `charger_connect`，不知道时沿用上一条。
 - `soc`：`battery/capacity`，0–100。
 - `charge_full_uah`：`battery/charge_full`；可缺。
 - `charge_counter_uah`：`battery/charge_counter`（剩余电量）；可缺。

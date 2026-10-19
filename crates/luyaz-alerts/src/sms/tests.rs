@@ -128,7 +128,7 @@ fn log_results(a: &Alerts) -> Vec<(u64, String, String)> {
 #[test]
 fn verdicts_in_the_guards_order() {
     let base = Facts {
-        kind: "agent-crash",
+        kind: "web-crash",
         number: Some("+8613800000000"),
         abroad: false,
         sms_abroad: false,
@@ -226,11 +226,9 @@ fn rate_limits_count_only_sent_and_future_stamps_count() {
 const KINDS: &[&str] = &[
     "wifi-takeover",
     "wifi-restore-failed",
-    "agent-silent",
-    "agent-hung",
-    "agent-crash",
-    "datad-crash",
-    "datad-degraded",
+    "sentinel-silent",
+    "web-crash",
+    "core-crash",
     "devui-crash",
     "devui-gave-up",
     "sms-test",
@@ -249,12 +247,12 @@ const KINDS: &[&str] = &[
 #[test]
 fn texts_word_for_word_as_the_guard_sent_them_plus_the_code() {
     assert_eq!(
-        sms_text("agent-hung", false, T0, 7),
-        "【Luya-Z】管理后台卡住了，已强制重启。不用管。（10-01 14:32）#7"
+        sms_text("web-crash", false, T0, 7),
+        "【Luya-Z】管理网页意外退出，已自动重启。不用管。（10-01 14:32）#7"
     );
     assert_eq!(
-        sms_text("agent-hung", true, T0, 7),
-        "[Luya-Z] Admin hung; force-restarted; no action (01 Oct 14:32)#7"
+        sms_text("web-crash", true, T0, 7),
+        "[Luya-Z] Admin pages crashed; restarted; no action (01 Oct 14:32)#7"
     );
     assert_eq!(
         sms_text("x-y", false, T0, 1),
@@ -310,7 +308,7 @@ fn ucs2_time_and_dates() {
 
 #[test]
 fn a_round_sends_logs_moves_the_cursor_and_deletes_the_copy() {
-    let a = setup("happy", &["agent-crash", "sms-failed", "devui-crash"]);
+    let a = setup("happy", &["web-crash", "sms-failed", "devui-crash"]);
     let mut io = Fake::new();
     assert_eq!(a.sms_round("core", 10, &mut io), Round::Done(3));
     let sent = io.sent();
@@ -323,7 +321,7 @@ fn a_round_sends_logs_moves_the_cursor_and_deletes_the_copy() {
     assert_eq!(
         log_results(&a),
         vec![
-            (1, "agent-crash".into(), "sent".into()),
+            (1, "web-crash".into(), "sent".into()),
             (3, "devui-crash".into(), "sent".into())
         ]
     );
@@ -335,7 +333,7 @@ fn a_round_sends_logs_moves_the_cursor_and_deletes_the_copy() {
 #[test]
 fn sender_died_mid_send_its_alert_goes_again() {
     // The sentinel claimed alert 1 and died before the send returned (pid 99 gone).
-    let a = setup("crash", &["agent-silent"]);
+    let a = setup("crash", &["sentinel-silent"]);
     a.write_whole(
         "sms-sending",
         &format!("1\tsentinel\t99\tboot-a\t990\t{T0}\n"),
@@ -370,7 +368,7 @@ fn uncertain_after_120_s_even_if_the_pid_lives_or_after_a_reboot() {
         ),
         ("reboot", format!("1\tsentinel\t20\tboot-z\t5\t{T0}\n"), 1),
     ] {
-        let a = setup(name, &["agent-silent"]);
+        let a = setup(name, &["sentinel-silent"]);
         a.write_whole("sms-sending", &claim).unwrap();
         let mut io = Fake::new();
         let r = a.sms_round("core", 10, &mut io);
@@ -386,9 +384,12 @@ fn uncertain_after_120_s_even_if_the_pid_lives_or_after_a_reboot() {
 fn a_resend_is_not_rate_limited() {
     // The uncertain one may never have gone out; the log already has a "sent" of the same kind
     // within the hour (another alert), which would otherwise suppress it.
-    let a = setup("resend-rate", &["agent-silent", "agent-silent"]);
-    a.write_whole("sms-log", &format!("{}\t1\tagent-silent\tsent\n", T0 - 100))
-        .unwrap();
+    let a = setup("resend-rate", &["sentinel-silent", "sentinel-silent"]);
+    a.write_whole(
+        "sms-log",
+        &format!("{}\t1\tsentinel-silent\tsent\n", T0 - 100),
+    )
+    .unwrap();
     a.write_whole("sms-done", "1\n").unwrap();
     a.write_whole(
         "sms-sending",
@@ -403,7 +404,7 @@ fn a_resend_is_not_rate_limited() {
 
 #[test]
 fn sender_restart_takes_its_own_old_claim_over() {
-    let a = setup("restart", &["agent-silent"]);
+    let a = setup("restart", &["sentinel-silent"]);
     a.write_whole(
         "sms-sending",
         &format!("1\tsentinel\t77\tboot-a\t995\t{T0}\n"),
@@ -416,7 +417,7 @@ fn sender_restart_takes_its_own_old_claim_over() {
 
 #[test]
 fn no_trusted_clock_holds_everything_and_drops_the_claim() {
-    let a = setup("clock", &["agent-crash"]);
+    let a = setup("clock", &["web-crash"]);
     let mut io = Fake::new();
     io.clock_ok = false;
     assert_eq!(a.sms_round("core", 10, &mut io), Round::Held);
@@ -429,17 +430,17 @@ fn no_trusted_clock_holds_everything_and_drops_the_claim() {
 
 #[test]
 fn a_failed_send_is_logged_alerted_and_not_texted_about() {
-    let a = setup("fail", &["agent-crash"]);
+    let a = setup("fail", &["web-crash"]);
     let mut io = Fake::new();
     io.fail = true;
     assert_eq!(a.sms_round("core", 10, &mut io), Round::Done(2));
     assert_eq!(
         log_results(&a),
-        vec![(1, "agent-crash".into(), "failed".into())]
+        vec![(1, "web-crash".into(), "failed".into())]
     );
     let ev = a.events();
     assert_eq!(ev.last().unwrap().kind, "sms-failed");
-    assert_eq!(ev.last().unwrap().text, "alert 1 (agent-crash) not sent");
+    assert_eq!(ev.last().unwrap().text, "alert 1 (web-crash) not sent");
     // the same round went on to the sms-failed it added: skipped, no SMS about a failed SMS
     assert!(io.sent().is_empty());
     assert_eq!(a.read_u64("sms-done"), 2);
@@ -447,14 +448,14 @@ fn a_failed_send_is_logged_alerted_and_not_texted_about() {
 
 #[test]
 fn no_number_and_abroad_are_recorded() {
-    let a = setup("nonum", &["agent-crash"]);
+    let a = setup("nonum", &["web-crash"]);
     a.set_flag("sms-to", false).unwrap();
     let mut io = Fake::new();
     a.sms_round("core", 10, &mut io);
     assert_eq!(log_results(&a)[0].2, "no-number");
     a.write_whole("sms-to", "+8613800000000\n").unwrap();
     a.set_flag("abroad", true).unwrap();
-    a.add("agent-crash", "x", T0, 1).unwrap();
+    a.add("web-crash", "x", T0, 1).unwrap();
     a.sms_round("core", 10, &mut io);
     assert_eq!(log_results(&a)[1].2, "suppressed-abroad");
     assert!(io.sent().is_empty());
@@ -479,7 +480,7 @@ fn sms_log_keeps_the_last_100() {
         .map(|i| format!("{}\t{i}\tx\tno-number\n", T0 - 99_999))
         .collect();
     a.write_whole("sms-log", &rows).unwrap();
-    a.add("agent-crash", "x", T0, 1).unwrap();
+    a.add("web-crash", "x", T0, 1).unwrap();
     a.write_whole("sms-done", "0\n").unwrap();
     a.sms_round("core", 10, &mut Fake::new());
     let all = log_results(&a);
@@ -492,11 +493,11 @@ fn two_senders_at_once_send_each_alert_once() {
     let a = setup(
         "two",
         &[
-            "agent-crash",
+            "web-crash",
             "devui-crash",
-            "datad-crash",
-            "agent-hung",
-            "agent-silent",
+            "core-crash",
+            "dropbear-down",
+            "sentinel-silent",
         ],
     );
     let dir = a.dir.clone();
@@ -529,7 +530,7 @@ fn two_senders_at_once_send_each_alert_once() {
 #[test]
 fn an_idle_round_writes_nothing() {
     use std::os::unix::fs::MetadataExt;
-    let a = setup("idle", &["agent-crash"]);
+    let a = setup("idle", &["web-crash"]);
     let mut io = Fake::new();
     a.sms_round("core", 10, &mut io);
     let before: Vec<(i64, i64)> = ["", "lock", "sms-done"]
@@ -554,7 +555,7 @@ fn an_idle_round_writes_nothing() {
 
 #[test]
 fn not_reaching_the_device_keeps_the_alert_pending() {
-    let a = setup("unreach", &["agent-crash"]);
+    let a = setup("unreach", &["web-crash"]);
     let mut io = Fake::new();
     io.unreachable = true;
     assert_eq!(a.sms_round("core", 10, &mut io), Round::Done(0));

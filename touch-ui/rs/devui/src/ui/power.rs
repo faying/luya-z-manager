@@ -64,8 +64,8 @@ impl Ui {
         p.arm = -1;
     }
 
-    /// Through datad (E4: it writes the request into the change log and waits for it to reach
-    /// flash first); datad not there: the vendor call directly. Either way the 40 s last resort.
+    /// Through core (E4: it writes the request into the change log and waits for it to reach
+    /// flash first); core not there: the vendor call directly. Either way the 40 s last resort.
     pub(super) fn power_run(&mut self, which: i32) {
         self.pw.going = which;
         self.pw.go_ms = lv::tick_get();

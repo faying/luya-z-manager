@@ -3,14 +3,13 @@
 //!
 //!   u60d [--dir /data/luyaz/core/ledger] [--listen 127.0.0.1:9470] [--wan rmnet_data0]
 //!   u60d --probe SECS      two reads SECS apart, print the partial minute as JSON, exit
-//!   u60d --once [-i MS]    one read round of the device (moved from zwrt-datad), print the
-//!                          snapshot as JSON, exit — the same output as `zwrt-datad --once`
+//!   u60d --once [-i MS]    one read round of the device (moved from data-service), print the
+//!                          snapshot as JSON, exit — the same output as data-service's `--once`
 //!   u60d --evlog-stats N [-i MS]   N read rounds into an in-memory event log, print what it
 //!                          wrote per block (the log never goes to /data before T7)
 //!   u60d --ubus-compare OBJECT:METHOD ...   read-only: socket vs `ubus call`, see ubus/compare.rs
-//!   u60d serve <zwrt-datad arguments>   Phase 3: u60d in place of zwrt-datad (serve.rs): the same
-//!                          HTTP interface, ports, pid file and data directory. When argv[0]'s file
-//!                          name starts with `zwrt-datad` or `luyaz-core`, the whole command line is datad's.
+//!   u60d serve <arguments>   Phase 3: the core's server (serve.rs). When argv[0]'s file name
+//!                          starts with `luyaz-core`, the whole command line is the server's.
 //!
 //! Ledger mode: one `sleep_until` in the whole process; the HTTP listener only wakes us when
 //! someone connects. Reads only; the one thing it writes is its own directory.
@@ -34,7 +33,7 @@ mod scorecard;
 #[allow(dead_code)]
 mod sens;
 
-// Phase 3: HTTP and the write path moved from zwrt-datad (serve.rs)
+// Phase 3: HTTP and the write path moved from data-service (serve.rs)
 mod at;
 mod auth;
 mod conn;
@@ -51,7 +50,7 @@ mod wifi;
 // Phase 4: the policy host and the policies moved from zte-agent (plugin.rs)
 mod plugin;
 
-// Phase 2: the read path moved from zwrt-datad (read.rs)
+// Phase 2: the read path moved from data-service (read.rs)
 // Shadow mode uses only part of it; the rest (heartbeat, watchdog hooks, write scope, /v2/screen)
 // comes into use with the comparator and Phase 3, so dead code is allowed here until then.
 mod api;
@@ -135,7 +134,7 @@ fn parse_args() -> Cfg {
                 c.evlog_stats = Some(v().parse().unwrap_or_else(|_| usage("--evlog-stats")))
             }
             "-i" => c.interval_ms = Some(v().parse().unwrap_or_else(|_| usage("-i"))),
-            // zwrt-datad's option; the read path keeps no files, so it is accepted and ignored
+            // data-service's option; the read path keeps no files, so it is accepted and ignored
             "--data-dir" => drop(v()),
             _ => usage(&a),
         }
@@ -333,19 +332,19 @@ fn main() {
         .enable_time()
         .build()
         .expect("runtime");
-    // serve mode: datad's command line (serve.rs); `u60d serve ARGS` or argv[0] = zwrt-datad* or luyaz-core*
-    let datad_argv = if raw.first().is_some_and(|a0| serve::invoked_as_datad(a0)) {
+    // serve mode (serve.rs): `luyaz-core serve ARGS` or argv[0] = luyaz-core*
+    let core_argv = if raw.first().is_some_and(|a0| serve::invoked_as_core(a0)) {
         Some(raw.clone())
     } else if raw.get(1).map(String::as_str) == Some("serve") {
         Some(
-            std::iter::once("zwrt-datad".to_owned())
+            std::iter::once("luyaz-core".to_owned())
                 .chain(raw[2..].iter().cloned())
                 .collect(),
         )
     } else {
         None
     };
-    if let Some(argv) = datad_argv {
+    if let Some(argv) = core_argv {
         if let Err(error) = rt.block_on(serve::main(argv)) {
             eprintln!("Error: {error:?}");
             std::process::exit(1);
@@ -495,7 +494,7 @@ fn main() {
         probe(&cfg, secs);
         return;
     }
-    // same clamp as zwrt-datad's -i
+    // same clamp as data-service's -i
     let interval =
         |default: u64| Duration::from_millis(cfg.interval_ms.unwrap_or(default).clamp(500, 5000));
     if let Some(n) = cfg.evlog_stats {

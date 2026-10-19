@@ -61,7 +61,7 @@
 - 说明：只用可打印 ASCII，≤ 120 字符，绝不含任何配置（号码、密码、SSID）。格式不对的行跳过。
 - 现在会产生的类别：
   - 哨兵：`agent-silent`、`wifi-takeover`、`wifi-restore-failed`、`dropbear-down`、`dropbear-restarted`、`devui-crash`、`devui-gave-up`
-  - 核心 svcwatch：`datad-crash`（核心自己）、`web-crash`、`sentinel-crash`
+  - core svcwatch：`core-crash`（核心自己；改名 F4 前叫 `core-crash`，旧记录照认）、`web-crash`、`sentinel-crash`
   - 核心哨兵监视：`sentinel-silent`、`screen-empty`（只在空屏兜底开关打开时）
   - 核心引擎：`home-exit-down`、`home-exit-check-failed`、`sms-forward-stuck`
   - 触屏：`devui-theme-paused`
@@ -99,7 +99,7 @@
 ## 7. 体检和备份
 
 - `luyaz-core doctor`（进程名 `luyaz-doctor`；`/data/luyaz/scripts/doctor.sh` 是薄壳）。只读。输出：给人看的文字、`--tsv`（`<ok|warn|bad>\t<id>\t<名称>\t<说明>`）、`--tsv2`（头 `#tsv2`，英文）；有 bad 行退出码 1。另有 `--manifest`、`--tree-fp`、`--ledger-selftest`。
-- `--calibrate-standby` 写待机基线（第 8 节）；`--report 24h|7d [--summary]` 输出长期计分卡（`scorecard::live::card`，Core 1.3.0 / `7637b1b1e` 已搬进核心）。`doctor.sh` 只在核心不存在、早于 X11 或退出 64 时退回 `doctor-legacy.sh`。
+- `--calibrate-standby` 写待机基线（第 8 节）；`--report 24h|7d [--summary]` 输出长期计分卡（`scorecard::live::card`，Core 1.3.0 / `7637b1b1e` 已搬进核心）。`doctor.sh` 只转给 `/data/luyaz/luyaz-core doctor`，没有核心就退出 2（shell 兜底 `doctor-legacy.sh` 改名 F4 已删）。
 - 核心自己跑体检（启动后 20 秒第一次，之后定时），快照由 `/api/health` 提供。
 - `touch-ui/scripts/config-backup.sh`：只备份配置（清单在脚本开头），Tailscale 身份要 `--with-tailscale`。备份只存在电脑上（`./install.sh backup`）；`restore` 先 plan、写前留 `.pre-restore`、不 reload Wi-Fi。
 

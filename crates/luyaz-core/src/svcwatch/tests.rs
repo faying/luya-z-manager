@@ -141,12 +141,12 @@ fn five_per_program_and_one_mb_in_all() {
     assert!(all.contains("exit 6"));
     // 1 MB across programs: an old big one goes first
     let big = "y".repeat(700_000);
-    record(&f.crash, "zwrt-datad", "old", "l", &big, 1_760_000_000, 10).unwrap();
+    record(&f.crash, "luyaz-ui", "old", "l", &big, 1_760_000_000, 10).unwrap();
     std::thread::sleep(Duration::from_millis(20));
     let newest = record(&f.crash, "luyaz-web", "new", "l", &big, 1_760_000_100, 11).unwrap();
     assert!(newest.exists());
     assert_eq!(
-        std::fs::read_dir(f.crash.join("zwrt-datad"))
+        std::fs::read_dir(f.crash.join("luyaz-ui"))
             .unwrap()
             .count(),
         0
@@ -184,7 +184,7 @@ fn core_marker_from_this_boot_is_a_crash() {
     assert_eq!(
         queue(&f),
         vec![(
-            "datad-crash".into(),
+            "core-crash".into(),
             "luyaz-core exited, status unknown".into()
         )]
     );
@@ -212,14 +212,10 @@ fn another_boots_marker_is_a_reboot_not_a_crash() {
 
 #[test]
 fn only_the_installed_core_keeps_a_marker() {
-    for y in [
-        "zwrt-datad",
-        "/data/plugins/zwrt-datad/zwrt-datad",
-        "/data/luyaz/luyaz-core",
-    ] {
+    for y in ["luyaz-core", "/data/luyaz/luyaz-core"] {
         assert!(marks(y), "{y}");
     }
-    for n in ["zwrt-datad.test", "/data/luyaz/luyaz-core.test", "u60d", ""] {
+    for n in ["zwrt-datad", "/data/luyaz/luyaz-core.test", "u60d", ""] {
         assert!(!marks(n), "{n}");
     }
 }

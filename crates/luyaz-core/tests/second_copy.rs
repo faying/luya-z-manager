@@ -10,10 +10,10 @@ fn a_second_core_exits_on_the_busy_port_without_a_marker() {
     let port = held.local_addr().unwrap().port();
     let root = std::env::temp_dir().join(format!("u60d-second-copy-{}", std::process::id()));
     std::fs::create_dir_all(root.join("data/luyaz/core")).unwrap();
-    // `u60d serve` runs as zwrt-datad (keeps a marker once it is the one core)
+    // `luyaz-core serve` runs as luyaz-core (keeps a marker once it is the one core)
     let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_luyaz-core"))
         .args(["serve", "-p", &port.to_string(), "--data-dir"])
-        .arg(root.join("datad"))
+        .arg(root.join("core"))
         .env("LUYAZ_HOST_ROOT", &root)
         .env("LUYAZ_PID_FILE", "")
         .env("LUYAZ_UBUS", "cli")

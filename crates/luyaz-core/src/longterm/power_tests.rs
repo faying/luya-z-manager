@@ -87,7 +87,7 @@ fn temps_throttle_exits_and_cpu() {
     assert_eq!(q["chill_on_s"], 120);
     assert_eq!(q["chill_ok_s"], 0);
     // 360 ticks in 3600 s = 1 per mille
-    assert_eq!(q["cpu_datad"], 1);
+    assert_eq!(q["cpu_core"], 1);
     // another process by the end: unknown
     let mut b = Acc::default();
     b.note(
@@ -104,7 +104,7 @@ fn temps_throttle_exits_and_cpu() {
         },
         3600,
     );
-    assert_eq!(b.proc_()["cpu_datad"], Value::Null);
+    assert_eq!(b.proc_()["cpu_core"], Value::Null);
     assert_eq!(
         Acc::default().power()["throttle_s"],
         Value::Null,

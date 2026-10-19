@@ -4,7 +4,7 @@
 //!
 //! - soc, current, charge_full, charge_counter: sysfs `/sys/class/power_supply/battery`;
 //! - charger plugged: the battery block's `charger_connect`; charging stopped: the charger block's
-//!   `direct_supply.enabled` (what the agent's datad feed reads);
+//!   `direct_supply.enabled` (what the agent's core feed reads);
 //! - the charge limit and the agent's manual override: `charge.rs` (the agent's limit file, and
 //!   the override mirrored from manual charge writes in `/control`).
 //!
@@ -148,7 +148,7 @@ fn feed(g: &mut State, r: &Reading, now: f64, wall: u64) -> p::Report {
 fn reading(hub: &Hub) -> Reading {
     let bat = |f: &str| read_num(&format!("/sys/class/power_supply/battery/{f}"));
     let block = |name: &str| hub.view(name).filter(|v| !v.stale).map(|v| v.data);
-    // the agent's datad feed: plug state only while the charger block is fresh too
+    // the agent's core feed: plug state only while the charger block is fresh too
     let charger = block("charger");
     let charger_connected = charger
         .is_some()

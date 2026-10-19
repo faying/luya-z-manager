@@ -197,7 +197,7 @@ fn cfg(rollback: bool) -> Config {
 }
 
 fn temp_dir() -> PathBuf {
-    let d = std::env::temp_dir().join(format!("datad-ops-{:016x}", rand::random::<u64>()));
+    let d = std::env::temp_dir().join(format!("core-ops-{:016x}", rand::random::<u64>()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -749,7 +749,7 @@ async fn crash_mid_apply_resumes_without_reapplying() {
         serde_json::from_slice(&std::fs::read(dir.join("pending.json")).unwrap()).unwrap();
     assert_eq!(saved.phase, Phase::Applying);
 
-    // datad 被杀、拉起：新引擎，同一个目录。设备其实已经切过去了。
+    // 核心被杀、拉起：新引擎，同一个目录。设备其实已经切过去了。
     let dev2 = Dev::new();
     dev2.s().net_select = "Only_LTE".into();
     let e3 = engine(&dev2, true, Some(dir.clone()));
@@ -1377,7 +1377,7 @@ async fn last_result_survives_restart() {
     let e = engine(&dev, false, Some(dir.clone()));
     let op = op_of(&e.submit(req("Only_LTE", Source::Web)).await);
     settle(&e, &id(&op)).await;
-    // datad 重启：结果还在，还没点
+    // 核心重启：结果还在，还没点
     let e2 = engine(&dev, false, Some(dir.clone()));
     let b = e2.block();
     assert_eq!(b["last"]["op_id"], op["op_id"]);
@@ -1541,7 +1541,7 @@ async fn rollback_notice_until_acked() {
     let saved: Value =
         serde_json::from_slice(&std::fs::read(dir.join("notice.json")).unwrap()).unwrap();
     assert_eq!(saved, json!({"acked": ["rollback_on"]}));
-    // datad 重启：不再出现
+    // 核心重启：不再出现
     let again = engine(&dev, true, Some(dir.clone()));
     assert!(again.block().get("notice").is_none());
     // 不落盘时只在内存里记
@@ -1674,7 +1674,7 @@ async fn unconfirmed_mcp_write_is_automatic() {
     assert!(owner.get("approved_by").is_none());
 }
 
-/// 落盘：批准者和来源相同时 pending.json 没有这个键（和以前逐字节一样、datad 也读得懂）；
+/// 落盘：批准者和来源相同时 pending.json 没有这个键（和以前逐字节一样、核心也读得懂）；
 /// 不同时写进去，重启后还在。旧文件没有这个键 = 和来源相同。
 #[tokio::test(start_paused = true)]
 async fn pending_file_carries_approved_by_only_when_it_differs() {

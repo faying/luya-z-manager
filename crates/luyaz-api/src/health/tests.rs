@@ -15,17 +15,17 @@ fn parses_doctor_tsv_and_skips_junk() {
 fn the_manifest_row_is_an_ordinary_row() {
     // doctor.sh --tsv ends with the device manifest's verdict (touch-ui docs/SHIP.md)
     let tsv = "ok\tstandby\t待机\t正常\n\
-               warn\tmanifest\t清单\t不一致的是 zwrt-datad（清单 6bbf6ea6，实际 af3c8ad8）\n";
+               warn\tmanifest\t清单\t不一致的是 luyaz-core（清单 6bbf6ea6，实际 af3c8ad8）\n";
     let c = parse(tsv);
     assert_eq!(c.len(), 2);
     assert_eq!(c[1].id, "manifest");
     assert_eq!(c[1].label, "清单");
     assert_eq!(
         c[1].detail,
-        "不一致的是 zwrt-datad（清单 6bbf6ea6，实际 af3c8ad8）"
+        "不一致的是 luyaz-core（清单 6bbf6ea6，实际 af3c8ad8）"
     );
     assert_eq!(counts(&c), (0, 1));
-    let ok = parse("ok\tmanifest\t清单\t观察中（还剩 42 分钟）：datad 刚上机；一致（12 项）\n");
+    let ok = parse("ok\tmanifest\t清单\t观察中（还剩 42 分钟）：核心刚上机；一致（12 项）\n");
     assert_eq!(counts(&ok), (0, 0));
 }
 
@@ -65,13 +65,13 @@ fn parses_doctor_tsv2_with_english() {
     assert_eq!(j["label"], "触屏界面");
 }
 
-/// touch-ui's sample of real `doctor.sh --tsv2` output (touch-ui/ in this repo since
-/// Phase 10 10f; skipped when it is not there).
+/// A sample of real `<core> doctor --tsv2` output (the core's doctor test data; skipped
+/// when it is not there).
 #[test]
 fn parses_touch_ui_tsv2_sample() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../touch-ui/scripts/test/doctor/tsv2-sample.tsv"
+        "/../luyaz-core/src/doctor/testdata/tsv2-sample.tsv"
     );
     let Ok(text) = fs::read_to_string(path) else {
         eprintln!("skipped: no {path}");

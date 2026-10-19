@@ -59,7 +59,7 @@ pub async fn results(State(c): State<Compat>) -> Response {
 
 /// POST /api/cell/signal-detect/start (`nwinfo_start_detect_signal_quality`). Unlike the agent,
 /// refused while a deep diagnosis runs, as the speed test is: the detection works the modem and
-/// would skew what the diagnosis measures. Nothing else holds it off (datad never counted it as
+/// would skew what the diagnosis measures. Nothing else holds it off (core never counted it as
 /// a network-affecting write, `ops::spec`).
 pub async fn start(State(c): State<Compat>) -> Response {
     let busy = luyaz_api::diagnose::refusal_at(&c.gate(), c.clock.now() as u64);

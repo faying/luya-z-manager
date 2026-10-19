@@ -32,6 +32,8 @@ pub struct ChillJobs {
     job: Mutex<Value>,
     /// the job slot; u60d's CHILL transactions (the agent's, `ops::chill`) take the same one
     running: Arc<AtomicBool>,
+    /// chill.sh's deadline (`ops::chill::SH_TIMEOUT`; tests shorten it)
+    limit: std::time::Duration,
 }
 
 impl Default for ChillJobs {
@@ -43,10 +45,15 @@ impl Default for ChillJobs {
 impl ChillJobs {
     /// With this job slot (the device's: `ops::chill::slot()`).
     pub fn sharing(running: Arc<AtomicBool>) -> Self {
+        Self::sharing_within(running, crate::ops::chill::SH_TIMEOUT)
+    }
+    /// With this job slot and chill.sh deadline.
+    pub fn sharing_within(running: Arc<AtomicBool>, limit: std::time::Duration) -> Self {
         ChillJobs {
             job: Mutex::new(json!({"id": 0, "kind": "", "status": "idle", "message": "",
                 "started_unix": 0, "finished_unix": 0})),
             running,
+            limit,
         }
     }
 }
@@ -63,22 +70,13 @@ impl ChillJobs {
 
 /// `chill.sh <args>`: (ok, stdout + stderr). Never killed with u60d: like the agent's, a job
 /// whose parent restarts (every ship restarts u60d) finishes on its own, instead of leaving mihomo
-/// half started or stopped.
-async fn chill_sh(c: &Compat, args: &str) -> (bool, String) {
+/// half started or stopped. Killed (its process group) past `limit` instead (resilience audit R7):
+/// a wedged chill.sh would otherwise hold the CHILL slot until u60d restarts.
+async fn chill_sh(c: &Compat, args: &str, limit: std::time::Duration) -> (bool, String) {
     let cmd = format!("{} {args}", c.path(ch::CHILL_SH).display());
-    match tokio::process::Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await
-    {
-        Ok(o) => {
-            let mut s = String::from_utf8_lossy(&o.stdout).into_owned();
-            s.push_str(&String::from_utf8_lossy(&o.stderr));
-            (o.status.success(), s)
-        }
-        Err(e) => (false, format!("exec failed: {e}")),
+    match crate::ops::chill::sh_within(&cmd, limit).await {
+        Ok(r) => r,
+        Err(e) => (false, e),
     }
 }
 
@@ -100,7 +98,7 @@ fn start_job(c: &Compat, kind: &str, args: String, ok: fn(&str, &str) -> String)
     };
     let c2 = c.clone();
     tokio::spawn(async move {
-        let (success, out) = chill_sh(&c2, &args).await;
+        let (success, out) = chill_sh(&c2, &args, c2.chill.limit).await;
         {
             let mut j = c2.chill.lock();
             if success {

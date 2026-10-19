@@ -1,11 +1,7 @@
 //! The guard's light duties, once the guard hands them over (u60-sentinel.md §10 step 5c, T4).
 //!
-//! The guard reads its handover list from `/data/u60d/guard.env` (`GUARD_HANDOVER=sms,lanv6,datad`)
-//! at the top of every round, skips the rounds it names, and writes the names it skipped to
-//! [`FILE`] (same shape as the agent's handover file). u60d runs a duty only while its writes are
-//! on and that file names it, so the two never both run one: handing over takes effect the round
-//! the guard first skips it, taking back the round after the guard stops naming it (the guard
-//! waits one round before it sends again).
+//! The sentinel writes the handover list to [`FILE`]; u60d runs a duty only while its writes are
+//! on and that file names it (the old guard that shared it is retired, 10c).
 //!
 //! - `sms`: the alert SMS, [`luyaz_api::alerts::sms`] with u60d as the sender `core`; the send and
 //!   the deletion of the sent copy go through u60d's own `/control` as source `guard` (the duty's
@@ -13,8 +9,8 @@
 //! - `lanv6`: while `/data/luyaz/scripts/lan-ipv6-off` exists, keep br-lan's `disable_ipv6` at 1
 //!   (user's decision 9-24; zte_router turns it back on). The reconciler's third user-authorised
 //!   auto-restore item (§12): put back, logged as an outside change.
-//! - `datad`: the guard's `datad-degraded` alert is not carried over (§3 G5: the health protocol
-//!   replaces it); naming it only stops the guard's round.
+//! - `core` (`core` before F7): read by nobody now — it only stopped the retired guard's
+//!   degraded-alert round (§3 G5: the health protocol replaced it). The sentinel still lists it.
 
 use luyaz_api::alerts::{Alerts, sms};
 use serde_json::{Value, json};
@@ -32,7 +28,7 @@ const LOOK_SECS: u64 = 30;
 const LAN_V6_FLAG: &str = "/data/luyaz/scripts/lan-ipv6-off";
 const LAN_V6_SYSCTL: &str = "/proc/sys/net/ipv6/conf/br-lan/disable_ipv6";
 const CLOCK_OK: &str = "/tmp/luyaz/clock-ok";
-/// Luya-Z D5: with the touch UI (it was in /data/plugins/u60pro-devui)
+/// With the touch UI
 const DEVUI_CONF: &str = "/data/luyaz/ui/devui.conf";
 const BOOT_ID: &str = "/proc/sys/kernel/random/boot_id";
 /// The sender's name in the claim file.

@@ -10,8 +10,8 @@ tree.listing          the exact text that is hashed: "<md5> <path>" per file,
 tree.expected         md5 of tree.listing = the fingerprint of tree/
                       (computed twice: md5 -q on macOS, md5sum in the device
                       busybox image)
-u60-recover.v1-2bb17b1.sh   the u60-recover.sh installed on the device in
-                      phase one (git show 2bb17b1:scripts/u60-recover.sh,
+u60-recover.v1-2bb17b1.sh   the luyaz-recover.sh installed on the device in
+                      phase one (git show 2bb17b1:scripts/luyaz-recover.sh,
                       md5 cabc78d3…): it must leave every v=2 log alone.
 
 Cases git cannot carry (empty directory, symlink, "|" or newline in a name,

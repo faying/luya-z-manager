@@ -244,9 +244,9 @@ fn empty_or_unready_sim_has_no_mcc() {
 }
 
 #[test]
-fn datad_sim_block_maps_like_the_ubus_reply() {
+fn core_sim_block_maps_like_the_ubus_reply() {
     let ok = j(json!({"state": "sim ready", "imsi": "440101234567890", "iccid": "8981"}));
-    assert_eq!(mcc_from_datad_sim(&ok).as_deref(), Some("440"));
+    assert_eq!(mcc_from_core_sim(&ok).as_deref(), Some("440"));
     for bad in [
         json!({"state": "sim ready", "imsi": ""}),
         json!({"state": "sim absent", "imsi": "440101234567890"}),
@@ -256,7 +256,7 @@ fn datad_sim_block_maps_like_the_ubus_reply() {
         json!({"state": "sim ready"}),
         json!({}),
     ] {
-        assert_eq!(mcc_from_datad_sim(&j(bad.clone())), None, "{bad}");
+        assert_eq!(mcc_from_core_sim(&j(bad.clone())), None, "{bad}");
     }
 }
 

@@ -8,12 +8,12 @@ pub struct Snapshot {
     /// Raw wall label for history only; never use it for freshness.
     pub at: u64,
     pub observed_at: Option<BootTime>,
-    /// datad's `wan_status` says a data call is up. `None` = datad unreadable.
+    /// the core's `wan_status` says a data call is up. `None` = core unreadable.
     pub connected: Option<bool>,
     pub rx_bytes: Option<u64>,
     /// Last proven receive-counter increase, on the same boot's elapsed clock.
     pub rx_moved_at: Option<BootTime>,
-    /// Operator DNS servers (IPv4), from datad's `wan_dns`.
+    /// Operator DNS servers (IPv4), from the core's `wan_dns`.
     pub dns: Vec<String>,
 }
 

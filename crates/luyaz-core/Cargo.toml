@@ -1,6 +1,6 @@
 [package]
 name = "luyaz-core"
-version = "1.5.0"
+version = "1.5.4"
 edition = "2024"
 rust-version = "1.99"
 description = "Luya-Z core daemon (luyaz-core): device read path, HTTP API and write path, policies, wake ledger."
@@ -8,7 +8,7 @@ license = "MIT"
 
 [dependencies]
 tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "signal", "macros", "io-util", "sync", "process", "fs"] }
-# moved from zwrt-datad (data-service 8605c28): the read path
+# moved from data-service (data-service 8605c28): the read path
 anyhow = "1"
 aes-gcm = "0.10"
 base64 = "0.22"
@@ -34,7 +34,7 @@ luyaz-scenario = { path = "../luyaz-scenario" }
 luyaz-wifi = { path = "../luyaz-wifi" }
 # the scenario engine's thread calls /control and this touch layer blocking (step 9h)
 ureq = { version = "3", features = ["json"] }
-# moved from zwrt-datad (data-service 68416eb): HTTP and the write path (Phase 3)
+# moved from data-service (data-service 68416eb): HTTP and the write path (Phase 3)
 axum = { version = "0.8", features = ["http1", "json", "query", "tokio"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"

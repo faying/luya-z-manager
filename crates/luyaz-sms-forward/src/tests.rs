@@ -5,8 +5,8 @@ fn snap(max_id: u64, received: &[(u64, Option<i64>)]) -> DeviceSnapshot {
     DeviceSnapshot { max_id, received: received.to_vec() }
 }
 
-/// 短信同类场景: datad drops, an SMS arrives, the direct poll (within
-/// 60 s) forwards it; datad comes back, the source-switch pass finds
+/// 短信同类场景: core drops, an SMS arrives, the direct poll (within
+/// 60 s) forwards it; core comes back, the source-switch pass finds
 /// nothing new — no second send.
 #[test]
 fn sms_during_fallback_forwarded_once() {
@@ -15,11 +15,11 @@ fn sms_during_fallback_forwarded_once() {
     let mut dev = FakeDev::new(1..=100);
     let mut st = Persisted::new(100, Some(1_000_000));
     let mut sent: Vec<u64> = Vec::new();
-    // datad drops at 100 → source switch, checks once (nothing new).
+    // core drops at 100 → source switch, checks once (nothing new).
     assert!(sched.source_changed(false));
     st.pass(&dev, None, &mut sent).unwrap();
     sched.polled(s(100));
-    // SMS 101 arrives at 110 (no datad wake).
+    // SMS 101 arrives at 110 (no core wake).
     dev.add(101..=101);
     let mut now = 110;
     while !sched.due(s(now)) {
@@ -31,13 +31,13 @@ fn sms_during_fallback_forwarded_once() {
     st.pass(&dev, None, &mut sent).unwrap();
     sched.polled(s(now));
     assert_eq!(sent, vec![101]);
-    // datad back: source switch, pass via datad, nothing new.
+    // core back: source switch, pass via core, nothing new.
     assert!(sched.source_changed(true));
     assert!(!sched.source_changed(true), "same source: no extra wake");
     st.pass(&dev, None, &mut sent).unwrap();
     sched.polled(s(now + 30));
     assert_eq!(sent, vec![101], "no re-send after recovery");
-    assert!(!sched.due(s(now + 30 + 299)), "via datad: back to the 5-min net");
+    assert!(!sched.due(s(now + 30 + 299)), "via core: back to the 5-min net");
 }
 
 // ── T10 paging ──
@@ -81,7 +81,7 @@ impl FakeDev {
             .collect();
         Ok(json!({"messages": rows}))
     }
-    /// datad's `sms.list_after` over this device (same algorithm).
+    /// the core's `sms.list_after` over this device (same algorithm).
     fn list_after(&self, after: u64, limit: u64, calls: &mut usize) -> Result<Page, String> {
         *calls += 1;
         list_after_direct(after, limit, &mut |store, page| {
@@ -111,7 +111,7 @@ impl Persisted {
         let mut calls = 0;
         let mut fetch = |after: u64, limit: u64| {
             if fail_on_call == Some(calls + 1) {
-                return Err("datad went away".to_string());
+                return Err("core went away".to_string());
             }
             dev.list_after(after, limit, &mut calls)
         };
@@ -449,11 +449,11 @@ fn sms_interrupted_on_page_3_resumes() {
     assert_eq!(st.load().0, 130);
 }
 
-/// Verify 3: datad is down while 120 SMS arrive and the direct read also
-/// fails part way (one store); back on datad, the source-switch pass
+/// Verify 3: core is down while 120 SMS arrive and the direct read also
+/// fails part way (one store); back on core, the source-switch pass
 /// forwards all 120, once.
 #[test]
-fn sms_datad_outage_120_backfilled() {
+fn sms_core_outage_120_backfilled() {
     let mut dev = FakeDev::new(1..=100);
     let mut st = Persisted::new(100, Some(0));
     let mut sched = PollSchedule::new(Duration::ZERO, true);
@@ -482,7 +482,7 @@ fn sms_datad_outage_120_backfilled() {
     );
     assert!(r.unwrap_err().contains("mem_store 0"));
     assert!(sent.is_empty());
-    // datad back: switch to datad and page through.
+    // core back: switch to core and page through.
     assert!(sched.source_changed(true));
     st.pass(&dev, None, &mut sent).unwrap();
     once_each(&sent, 101..=220);
@@ -943,7 +943,7 @@ fn sms_switch_on_resets_baseline() {
 
 // ── the engine through a fake host (9e: single owner) ──
 
-/// A device behind [`Host`]: datad's `sms` block over `rows`, vendor sends recorded by number,
+/// A device behind [`Host`]: the core's `sms` block over `rows`, vendor sends recorded by number,
 /// ubus reads failing (the cleanup after an SMS send just logs), no sleeping.
 #[derive(Default)]
 struct FakeHost {

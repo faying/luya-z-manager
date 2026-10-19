@@ -1,7 +1,7 @@
 //! 跨进程写锁（D29，write-op-layer.md E-O2）：`/var/run/luyaz-write.lock`（flock）。
 //!
-//! datad 每个写步骤、以及启动时处理 takeover/pending 的全过程都拿着它；触屏/agent 的应急直写脚本
-//! （`luyaz-fallback.sh`）从判定 datad 不在到写完也拿着它。拿不到就等（每 50 ms 试一次）；
+//! 核心每个写步骤、以及启动时处理 takeover/pending 的全过程都拿着它；触屏/agent 的应急直写脚本
+//! （`luyaz-fallback.sh`）从判定核心不在到写完也拿着它。拿不到就等（每 50 ms 试一次）；
 //! 等满 15 秒还拿不到就记一行、不拿锁照做（比卡住执行者让看门狗杀掉好；15 秒小于订阅方判卡死的 20 秒）。
 //! 拿着锁的这段在执行者里是「写的上下文」（`executor::write_scope`）：调用超时会关闸（V2-33）。
 //! `LUYAZ_WRITE_LOCK` 指定路径，空串 = 不用锁。文件打不开时只记一次日志。

@@ -1,5 +1,5 @@
 //! SMS forwarding (moved from zte-agent `sms_forward.rs`, Phase 4 step 9e), run by
-//! the core. Every side effect (datad's SMS feed and pages, ubus reads, the vendor send, datad
+//! the core. Every side effect (the core's SMS feed and pages, ubus reads, the vendor send, core
 //! actions, alerts, shadow records, sleeping) goes through [`Host`]; the HTTP destinations are
 //! sent from here. The agent's host is the device; tests use a fake.
 //!
@@ -28,16 +28,16 @@ pub const STATE_PATH: &str = "/data/local/tmp/sms_forward_state.json";
 
 /// What the engine does to the device. Errors are the host's own text (logged as they come).
 pub trait Host: Send + Sync + 'static {
-    /// datad's `sms` block summary (max id, count), if subscribed and fresh; `None` = read ubus
+    /// the core's `sms` block summary (max id, count), if subscribed and fresh; `None` = read ubus
     /// directly.
     fn sms_summary(&self) -> Option<(u64, u64)>;
-    /// One datad `sms.list_after` page (busy retried by the host).
+    /// One core `sms.list_after` page (busy retried by the host).
     fn list_after(&self, after: u64, limit: u64) -> Result<Page, String>;
     /// A ubus read; `long_timeout` = the long read timeout (SMS lists), else the default.
     fn ubus_read(&self, obj: &str, method: &str, params: Option<&str>, long_timeout: bool) -> Result<Value, String>;
-    /// A vendor setter through datad (sending an SMS), as the calling thread's source.
+    /// A vendor setter through core (sending an SMS), as the calling thread's source.
     fn vendor(&self, obj: &str, method: &str, params: Option<&str>) -> Result<Value, String>;
-    /// A datad action (`sms.delete`, `sms.mark_read`) as source auto.
+    /// A core action (`sms.delete`, `sms.mark_read`) as source auto.
     fn control(&self, action: &str, params: &Value) -> Result<Value, String>;
     fn alert(&self, key: &str, text: &str);
     /// A shadow record for u60d (the host keeps the ring).
@@ -271,13 +271,13 @@ pub struct ForwardLogEntry {
 
 // ── wake-ups ─────────────────────────────────────────────────────────
 
-/// Why the forwarder woke: datad's `sms` block summary (max id / count)
+/// Why the forwarder woke: the core's `sms` block summary (max id / count)
 /// changed, or the source switched (订阅中 with an `sms` block ⇄ 退路 / no
 /// block). Replaces the `zwrt_wms_status_event` ubus listen (T10/D2).
 struct Wake;
 
-/// While datad's `sms` block drives us: a check every 5 min as a safety net.
-/// Reading ubus directly (退路, no feed, or a datad without the block):
+/// While the core's `sms` block drives us: a check every 5 min as a safety net.
+/// Reading ubus directly (退路, no feed, or a core without the block):
 /// every [`FALLBACK_SMS_POLL`] — nothing else wakes us then.
 const IDLE_SMS_POLL: Duration = Duration::from_secs(300);
 const FALLBACK_SMS_POLL: Duration = Duration::from_secs(60);
@@ -286,17 +286,17 @@ const FALLBACK_SMS_POLL: Duration = Duration::from_secs(60);
 #[derive(Debug)]
 struct PollSchedule {
     last_poll: Duration,
-    /// The last check went through datad (`sms` block fresh, subscribed).
-    via_datad: bool,
+    /// The last check went through core (`sms` block fresh, subscribed).
+    via_core: bool,
 }
 
 impl PollSchedule {
-    fn new(now: Duration, via_datad: bool) -> Self {
-        PollSchedule { last_poll: now, via_datad }
+    fn new(now: Duration, via_core: bool) -> Self {
+        PollSchedule { last_poll: now, via_core }
     }
 
     fn period(&self) -> Duration {
-        if self.via_datad {
+        if self.via_core {
             IDLE_SMS_POLL
         } else {
             FALLBACK_SMS_POLL
@@ -304,11 +304,11 @@ impl PollSchedule {
     }
 
     /// The source for this check; true if it switched (then page through
-    /// either way — into direct reads to cover the gap, back to datad to
+    /// either way — into direct reads to cover the gap, back to core to
     /// catch anything the last direct read missed).
-    fn source_changed(&mut self, via_datad: bool) -> bool {
-        let changed = self.via_datad != via_datad;
-        self.via_datad = via_datad;
+    fn source_changed(&mut self, via_core: bool) -> bool {
+        let changed = self.via_core != via_core;
+        self.via_core = via_core;
         changed
     }
 
@@ -355,7 +355,7 @@ struct ForwardPlan {
     rollback: bool,
 }
 
-/// Decide what to forward. Pure; see R4/R15 in the datad plan.
+/// Decide what to forward. Pure; see R4/R15 in the data-service plan.
 ///
 /// * Read failed (either store errored) → nothing forwarded, nothing moves.
 /// * Normal: forward received ids > watermark; watermark = max of those.
@@ -1084,7 +1084,7 @@ impl SmsForwarder {
             if sched.source_changed(summary.is_some()) {
                 eprintln!(
                     "[sms_forward] SMS source now {}: checking SMS",
-                    if summary.is_some() { "datad" } else { "direct ubus" }
+                    if summary.is_some() { "core" } else { "direct ubus" }
                 );
             }
             self.check(summary);
@@ -1093,7 +1093,7 @@ impl SmsForwarder {
     }
 
     /// One check: page through everything above the watermark. `summary` =
-    /// datad's `sms` block (subscribed, fresh); `None` = read ubus directly.
+    /// the core's `sms` block (subscribed, fresh); `None` = read ubus directly.
     fn check(&self, summary: Option<(u64, u64)>) {
         let config = self.config.lock().unwrap().clone();
         let enabled_rules: Vec<&ForwardRule> = config.rules.iter().filter(|r| r.enabled).collect();
@@ -1118,15 +1118,15 @@ impl SmsForwarder {
         if let Some((max_id, _)) = summary {
             let (wm, lt) = load();
             let mut fetch = |after: u64, limit: u64| self.host.list_after(after, limit);
-            match recorded_pass(&*self.host, "datad", wm, lt, max_id, &mut fetch, &mut forward, &mut commit) {
+            match recorded_pass(&*self.host, "core", wm, lt, max_id, &mut fetch, &mut forward, &mut commit) {
                 Ok(n) => {
                     if n > 0 {
-                        eprintln!("[sms_forward] forwarded {n} message(s) after id {wm} (via datad)");
+                        eprintln!("[sms_forward] forwarded {n} message(s) after id {wm} (via core)");
                     }
                     return;
                 }
                 // Progress so far is committed; finish by reading ubus (D2's 退路).
-                Err(e) => eprintln!("[sms_forward] datad sms.list_after failed: {e}; reading ubus directly"),
+                Err(e) => eprintln!("[sms_forward] core sms.list_after failed: {e}; reading ubus directly"),
             }
         }
 
@@ -1445,9 +1445,9 @@ fn push_log(log: &mut Vec<ForwardLogEntry>, entry: ForwardLogEntry) {
 
 // ── paging (T10 / R16) ──────────────────────────────────────────────
 
-/// Page size for `sms.list_after` and the direct reads (datad's limit cap).
+/// Page size for `sms.list_after` and the direct reads (the core's limit cap).
 const LIST_PAGE: u64 = 50;
-/// Pages per store before a direct read gives up (as datad: 20 × 50).
+/// Pages per store before a direct read gives up (as core: 20 × 50).
 const LIST_MAX_PAGES: u64 = 20;
 
 /// One `sms.list_after` page: items with id > after_id, ascending.
@@ -1458,7 +1458,7 @@ pub struct Page {
 }
 
 /// One item → `(id, received SMS if tag 0/1)`. Field names as
-/// `zte_libwms_get_sms_data` (datad returns the same, with plaintext).
+/// `zte_libwms_get_sms_data` (core returns the same, with plaintext).
 fn decode_item(item: &Value) -> (u64, Option<DecodedSms>) {
     let id = item_id(item);
     // tag: 0=unread, 1=read, 2=sent, 3=draft — only forward received (0/1)
@@ -1510,7 +1510,7 @@ fn max_time(a: Option<i64>, b: Option<i64>) -> Option<i64> {
 }
 
 /// Page through the device's SMS above the watermark and forward them. Pure:
-/// `fetch(after_id, limit)` is datad's `sms.list_after` or the direct read
+/// `fetch(after_id, limit)` is the core's `sms.list_after` or the direct read
 /// ([`list_after_direct`]) — the same paging either way; `forward` delivers
 /// one SMS; `commit(watermark, last_time)` persists.
 ///
@@ -1609,12 +1609,12 @@ fn run_pass(
     }
 }
 
-/// `sms.list_after` without datad: the firmware only takes
+/// `sms.list_after` without core: the firmware only takes
 /// `"order by id desc"`, so each store (NV = 1, SIM = 0; one shared id
 /// counter) is read page by page from the top until an id ≤ `after_id`, a
 /// short page, or a page with nothing new; merged, deduplicated, ascending,
 /// first `limit`. Either store failing fails the whole read (R15). Same
-/// rules as datad's (`data-service` `sms::list_after_with`).
+/// rules as the core's (`data-service` `sms::list_after_with`).
 fn list_after_direct(
     after_id: u64,
     limit: u64,

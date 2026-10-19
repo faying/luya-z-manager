@@ -37,7 +37,7 @@ pub fn write_timeout() -> Duration {
         .unwrap_or(WRITE_TIMEOUT)
 }
 
-/// datad 的监听：接受连接时设 keepalive，并套上写超时。
+/// 核心的监听：接受连接时设 keepalive，并套上写超时。
 pub struct DatadListener {
     inner: TcpListener,
     write_timeout: Duration,

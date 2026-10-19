@@ -17,8 +17,9 @@ const ES_JOB_MS: i64 = 1000;
 /// the agent did not answer: don't stall every round
 const ES_BACKOFF_MS: i64 = 5000;
 const ES_ARM_MS: i64 = 4000;
-/// the agent itself takes at most ~60 s
-const ES_GIVEUP_MS: i64 = 120000;
+/// above the agent's switch steps (luyaz-esim: enable 30 s, simreset 15 s, mdm restart 30 s,
+/// IDENTITY_WAIT 45 s, DATA_WAIT 60 s, plus the reads), same as the web's SWITCH_LIMIT
+const ES_GIVEUP_MS: i64 = 240000;
 const ES_MAX: usize = 16;
 /// a profile may carry a base64 icon
 const ES_RESP_MAX: usize = 65536;
@@ -197,6 +198,9 @@ impl Esim {
             } else if status == "done" {
                 self.msg = if reboot == "true" {
                     trunc(tr("已切换，设备即将重启"), 160)
+                } else if reason == "no_data" {
+                    // card and modem moved, the data call did not come back (no reboot)
+                    trunc(tr("已切换，数据还没恢复"), 160)
                 } else {
                     bytes_cap(&cf!(tr("已切换到 %s（%ld 秒）"), &self.target_name, secs), 160)
                 };

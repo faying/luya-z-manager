@@ -9,7 +9,7 @@
 //! 3. delivered either way → a `D` line in the events file. A sentinel that dies in between finds
 //!    the event without its `D` at start and delivers it again (same id, so still once).
 //!
-//! While the core itself is being replaced (a datad ship transaction with a live executor, D6),
+//! While the core itself is being replaced (a core ship transaction with a live executor, D6),
 //! delivery waits: the core is expected back within the trial, and its replacement takes the POST.
 //! Whether the alert then goes out as an SMS is the send states' business (`u60-alerts::sms`).
 //!
@@ -67,7 +67,7 @@ pub trait EventIo {
     fn post(&mut self, ev: &Event) -> Post;
     /// `add_once` into the alert queue; false when even that failed.
     fn enqueue(&mut self, ev: &Event) -> bool;
-    /// A datad (core) ship transaction with a live executor.
+    /// A core ship transaction with a live executor.
     fn core_being_replaced(&mut self) -> bool;
     fn log(&mut self, msg: &str);
 }

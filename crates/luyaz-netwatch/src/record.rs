@@ -2,12 +2,12 @@
 //! 24 h and on disk for 7 days (`docs/designs/slow-diagnosis.md` §4.3, which
 //! amends `docs/designs/signal-history.md`; eng review 10-02 D6/D12).
 //!
-//! Fed by the netwatch thread every 5 s with what it already read: datad's
-//! `/state`, the verdict from `/v2/screen` (`net.story.state`; datad decides,
+//! Fed by the netwatch thread every 5 s with what it already read: the core's
+//! `/state`, the verdict from `/v2/screen` (`net.story.state`; core decides,
 //! the agent does not) and the modem's receive counter. Nothing here
 //! sends a packet.
 //!
-//! On disk, in [`DIR`] (`ZTE_AGENT_SIGNAL_LOG` overrides), one pair of files
+//! On disk, in [`DIR`] (`LUYAZ_SIGNAL_LOG` overrides), one pair of files
 //! per day of the device clock (local time labelled UTC, so the date is taken
 //! from `t` as is): `YYYYMMDD.jsonl` for minutes, appended every 10 minutes,
 //! and `YYYYMMDD.events.jsonl`, appended the moment an event happens — the
@@ -75,7 +75,7 @@ pub struct Reading {
     pub qci: Option<i64>,
     pub ambr: Option<String>,
     pub rx_bytes: Option<u64>,
-    /// datad's `story.state` from `/v2/screen`; None = not read.
+    /// the core's `story.state` from `/v2/screen`; None = not read.
     pub verdict: Option<String>,
 }
 
@@ -88,7 +88,7 @@ fn num(v: Option<&Value>) -> Option<f64> {
     x.is_finite().then_some(x)
 }
 
-/// Integer readings where 0 is datad's "not there".
+/// Integer readings where 0 is the core's "not there".
 fn nonzero(v: Option<&Value>) -> Option<f64> {
     num(v).filter(|x| *x != 0.0)
 }
@@ -112,7 +112,7 @@ fn rat_of(t: &str) -> &'static str {
     }
 }
 
-/// Carriers in datad's `nrca` / `lteca` (`;`-separated entries).
+/// Carriers in the core's `nrca` / `lteca` (`;`-separated entries).
 fn ca_count(v: Option<&Value>) -> Option<u32> {
     let s = v?.as_str()?;
     Some(s.split(';').filter(|p| !p.trim().is_empty() && p.trim() != "--").count() as u32)
@@ -392,7 +392,7 @@ pub struct Recorder {
     down_since: Option<u64>,
     stalled_since: Option<u64>,
     weak: Weak,
-    datad_lost: bool,
+    core_lost: bool,
 }
 
 impl Recorder {
@@ -437,10 +437,10 @@ impl Recorder {
         }
 
         if !r.ok {
-            if !self.datad_lost && self.prev_ok.is_some() {
-                ev.push(Event::new(r.at, "datad_lost", json!({})));
+            if !self.core_lost && self.prev_ok.is_some() {
+                ev.push(Event::new(r.at, "core_lost", json!({})));
             }
-            self.datad_lost = true;
+            self.core_lost = true;
             self.prev = Some(r.clone());
             return (self.keep(ev), closed);
         }
@@ -460,9 +460,9 @@ impl Recorder {
         }
         acc.last = Some(r.clone());
 
-        if self.datad_lost {
-            ev.push(Event::new(r.at, "datad_back", json!({})));
-            self.datad_lost = false;
+        if self.core_lost {
+            ev.push(Event::new(r.at, "core_back", json!({})));
+            self.core_lost = false;
         }
         if let Some(p) = self.prev_ok.clone() {
             self.changes(&p, r, &mut ev);

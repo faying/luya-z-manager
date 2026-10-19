@@ -1,4 +1,4 @@
-//! datad's `/control` answers as the agent's HTTP replies (moved from zte-agent `datad_write.rs`,
+//! the core's `/control` answers as the agent's HTTP replies (moved from zte-agent `core_write.rs`,
 //! Phase 4 step 8d): what a write came back with ([`Reply`]), how the agent answers the page for it
 //! ([`Reply::into_http`]) and how its own loops read it ([`Reply::into_result`], [`retry_after`]).
 //! u60d's touch compatibility layer sends its writes to its own `/control` and answers the screen
@@ -7,31 +7,31 @@
 use serde_json::{Value, json};
 use std::time::Duration;
 
-/// datad's answer to one write.
+/// the core's answer to one write.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reply {
     /// Written (200). `op` is the transaction state for described actions.
     Done { result: Value, op: Option<Value> },
-    /// Written by the emergency script while datad was gone.
+    /// Written by the emergency script while core was gone.
     Fallback,
-    /// The vendor call failed, or datad could not read the current value
+    /// The vendor call failed, or core could not read the current value
     /// first (502 and the like). `op` as above.
     Failed { error: String, op: Option<Value> },
     /// The request itself was refused (400): bad parameters.
     Invalid(String),
-    /// Another change is in progress (409 busy, with what it is), or datad's
+    /// Another change is in progress (409 busy, with what it is), or the core's
     /// queue is full (503 busy).
     Busy { doing: Option<Value> },
     /// A network-mode transaction is confirming and this write is from an
     /// automatic source (409 `op_busy`, D40): not a failure, try again once
-    /// it ends. `op` is datad's `{op_id, item, phase}`.
+    /// it ends. `op` is the core's `{op_id, item, phase}`.
     OpBusy { message: String, op: Option<Value> },
-    /// No answer from datad. `maybe_done`: the request was sent and may have
+    /// No answer from core. `maybe_done`: the request was sent and may have
     /// been carried out.
     Unreachable { error: String, maybe_done: bool },
 }
 
-/// datad's HTTP reply → [`Reply`].
+/// the core's HTTP reply → [`Reply`].
 pub fn parse(status: u16, reply: &Value) -> Reply {
     let op = reply.get("op").filter(|v| !v.is_null()).cloned();
     let code = reply["error"]["code"].as_str().unwrap_or("");
@@ -70,7 +70,7 @@ impl Reply {
 
     /// The agent's usual HTTP answer: 200 `{"ok":true,"data":…}` (+ `op`),
     /// 409 busy, 400 invalid, 503 for a failed vendor call (as before: the web
-    /// page reads "method not found" there as "not supported") and for datad
+    /// page reads "method not found" there as "not supported") and for core
     /// not answering.
     pub fn into_http(self) -> (u16, Value) {
         match self {
@@ -95,7 +95,7 @@ impl Reply {
                     .as_ref()
                     .and_then(|d| d["action"].as_str())
                     .unwrap_or("");
-                // datad's own sentence when it has one (V2-39: what, who, how long)
+                // the core's own sentence when it has one (V2-39: what, who, how long)
                 let say = |k: &str| {
                     doing
                         .as_ref()
@@ -109,7 +109,7 @@ impl Reply {
                         "ok": false,
                         "error": say("say_zh").unwrap_or_else(|| if what.is_empty() { "设备正在改别的设置，等它结束再试".to_string() } else { format!("设备正在改别的设置（{what}），等它结束再试") }),
                         "error_en": say("say_en").unwrap_or_else(|| if what.is_empty() { "Another change is in progress; try again when it finishes".to_string() } else { format!("Another change is in progress ({what}); try again when it finishes") }),
-                        "busy": "datad",
+                        "busy": "core",
                         "doing": doing,
                     }),
                 )
@@ -133,7 +133,7 @@ impl Reply {
                 };
                 (
                     503,
-                    json!({"ok": false, "error": zh, "error_en": en, "detail": error, "datad": "down"}),
+                    json!({"ok": false, "error": zh, "error_en": en, "detail": error, "core": "down"}),
                 )
             }
         }
@@ -146,17 +146,17 @@ impl Reply {
             Reply::Fallback => Ok(Value::Null),
             Reply::Failed { error, .. } | Reply::Invalid(error) => Err(error),
             Reply::Busy { doing } => Err(format!(
-                "datad busy{}",
+                "core busy{}",
                 doing
                     .and_then(|d| d["action"].as_str().map(|a| format!(" ({a})")))
                     .unwrap_or_default()
             )),
             Reply::OpBusy { message, .. } => Err(format!("{OP_BUSY_ERR}: {message}")),
-            Reply::Unreachable { error, .. } => Err(format!("datad: {error}")),
+            Reply::Unreachable { error, .. } => Err(format!("core: {error}")),
         }
     }
 
-    /// datad held this automatic write off while a transaction confirms (D40).
+    /// core held this automatic write off while a transaction confirms (D40).
     /// The agent's loops use [`retry_after`] on `into_result`; this is for a
     /// caller that keeps the reply.
     pub fn is_op_busy(&self) -> bool {
@@ -168,7 +168,7 @@ pub const OP_BUSY_ZH: &str = "正在确认刚换的网络模式，等它结束�
 pub const OP_BUSY_EN: &str = "Checking the new network mode; try again when it finishes";
 
 /// How [`Reply::into_result`] starts the error for [`Reply::OpBusy`].
-pub const OP_BUSY_ERR: &str = "datad op_busy";
+pub const OP_BUSY_ERR: &str = "core op_busy";
 
 /// An [`Reply::into_result`] error that is an op_busy, not a failure.
 pub fn is_op_busy_err(e: &str) -> bool {
@@ -180,7 +180,7 @@ pub fn is_op_busy_err(e: &str) -> bool {
 /// of them is a busy loop.
 pub const OP_BUSY_RETRY: Duration = Duration::from_secs(10);
 
-/// For an automatic writer's loop: `Some(wait)` = datad said op_busy, try
+/// For an automatic writer's loop: `Some(wait)` = core said op_busy, try
 /// again after `wait` without counting it as a failed attempt; `None` = the
 /// result stands (success or a real failure).
 pub fn retry_after<T>(r: &Result<T, String>) -> Option<Duration> {

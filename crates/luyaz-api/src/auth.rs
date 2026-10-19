@@ -101,15 +101,18 @@ pub fn password_matches(password: &str, attempt: &str) -> bool {
     hash_matches(&format!("{:X}", Sha256::digest(password.as_bytes())), attempt)
 }
 
-/// The admin password file (`/data/luyaz/web.env`; the old `/data/zte-agent.env` is still read;
-/// written by agent-auth.sh, mode 600): one line
-/// `ZTE_AGENT_PASSWORD=<value>`, the value taken literally to the end of the line (no shell
+/// The admin password file (`/data/luyaz/web.env`;
+/// written by web-auth.sh, mode 600): one line
+/// `LUYAZ_WEB_PASSWORD=<value>`, the value taken literally to the end of the line (no shell
 /// quoting). Empty counts as missing — "" would be accepted as a real password.
 pub fn password_from_env_file(text: &str) -> Option<&str> {
-    text.lines()
-        .find_map(|l| l.strip_prefix("ZTE_AGENT_PASSWORD="))
-        .map(|v| v.trim_end_matches('\r'))
-        .filter(|v| !v.is_empty())
+    let key = |k: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix(k))
+            .map(|v| v.trim_end_matches('\r'))
+            .filter(|v| !v.is_empty())
+    };
+    key("LUYAZ_WEB_PASSWORD=")
 }
 
 mod hex {
@@ -139,9 +142,12 @@ mod tests {
 
     #[test]
     fn password_file_and_match() {
-        assert_eq!(password_from_env_file("ZTE_AGENT_PASSWORD=s3cr3t!#\n"), Some("s3cr3t!#"));
-        assert_eq!(password_from_env_file("X=1\r\nZTE_AGENT_PASSWORD=a b\r\n"), Some("a b"));
-        assert_eq!(password_from_env_file("ZTE_AGENT_PASSWORD=\n"), None);
+        assert_eq!(password_from_env_file("LUYAZ_WEB_PASSWORD=s3cr3t!#\n"), Some("s3cr3t!#"));
+        assert_eq!(password_from_env_file("X=1\r\nLUYAZ_WEB_PASSWORD=a b\r\n"), Some("a b"));
+        assert_eq!(password_from_env_file("LUYAZ_WEB_PASSWORD=\n"), None);
+        // the old key went after F7 rewrote the device's web.env
+        assert_eq!(password_from_env_file("ZTE_AGENT_PASSWORD=old\n"), None);
+        assert_eq!(password_from_env_file("ZTE_AGENT_PASSWORD=old\nLUYAZ_WEB_PASSWORD=new\n"), Some("new"));
         assert_eq!(password_from_env_file(""), None);
         assert!(password_matches("secret", "secret"));
         assert!(!password_matches("secret", "Secret") && !password_matches("secret", ""));

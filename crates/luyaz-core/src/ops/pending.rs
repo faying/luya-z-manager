@@ -1,6 +1,6 @@
 //! 进行中事务的落盘（write-op-layer.md「重启续退」、D31）：`<目录>/pending.json`，原子写
 //! （临时文件 → fsync → rename → fsync 目录）。另有触屏/agent 应急直写前留下的 `takeover` 标记（D18）。
-//! 目录写不了时只记一行日志，datad 照常服务（不落盘就没有重启续退）。
+//! 目录写不了时只记一行日志，核心照常服务（不落盘就没有重启续退）。
 
 use super::txn::Txn;
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ struct Notices {
     acked: Vec<String>,
 }
 
-/// 最近结束的事务和有没有人点过「知道了」（E4 T13，V2-37）：datad 重启后结果还在。
+/// 最近结束的事务和有没有人点过「知道了」（E4 T13，V2-37）：核心重启后结果还在。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Last {
     pub txn: Txn,

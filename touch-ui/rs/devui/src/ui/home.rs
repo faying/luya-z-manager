@@ -206,7 +206,7 @@ pub fn fmt_bytes_total(b: i64) -> Vec<u8> {
     }
 }
 
-/// A key for the headline hold: datad's verdict code, or the headline's djb hash (a datad from
+/// A key for the headline hold: the core's verdict code, or the headline's djb hash (a core from
 /// before 10-01 sends no code).
 fn hold_key(v: &net_view_t) -> u32 {
     if v.state != nv::ST_UNKNOWN {
@@ -623,17 +623,17 @@ impl Ui {
         self.home_reflow();
     }
 
-    /// The status card (refresh.c 「Home: signal card」), from datad's view of the network.
-    pub(super) fn home_signal_paint(&mut self, v: &net_view_t, datad_silent: bool) {
+    /// The status card (refresh.c 「Home: signal card」), from the core's view of the network.
+    pub(super) fn home_signal_paint(&mut self, v: &net_view_t, core_silent: bool) {
         let th = t();
         let f = uf();
         let m = self.model.clone();
         let d = &m.data;
-        if !datad_silent {
+        if !core_silent {
             self.home.ever_valid = true;
             self.home.last_valid_wall = self.now();
         }
-        if datad_silent {
+        if core_silent {
             return; // home_signal_down() already says since when
         }
         let now = lv::tick_get();
@@ -917,7 +917,7 @@ impl Ui {
                 kit::show(o, !act);
             }
             if act {
-                // datad sends the numbers already written
+                // core sends the numbers already written
                 self.set(k.band, &c.label);
                 self.set(k.bw, cf!("%dM", c.bw));
                 k.band.update_layout();
@@ -1268,12 +1268,12 @@ pub fn wifi_sig_word(tier: &str) -> Option<&'static str> {
     }
 }
 
-/// A switch the user just flipped keeps its new value this long, or until datad reports the
-/// same value, so it does not snap back while datad's next read is on its way.
+/// A switch the user just flipped keeps its new value this long, or until core reports the
+/// same value, so it does not snap back while the core's next read is on its way.
 const AUX_HOLD_MS: u32 = 30000;
 
 /// Device state the main snapshot fields don't cover (home.c 「auxiliary device state」): the
-/// DHCP pool, direct power supply and the cellular data / roaming switches come from datad;
+/// DHCP pool, direct power supply and the cellular data / roaming switches come from core;
 /// the radios (/sys) and Wi-Fi power save (iw) are read on the device while a page that shows
 /// them is up, at most every 5 s.
 pub struct Aux {
@@ -1313,20 +1313,20 @@ impl Default for Aux {
     }
 }
 
-/// Take datad's value unless a local flip is still being held.
-fn aux_take(cur: &mut i32, hold: &mut u32, from_datad: i32, now: u32) {
-    if from_datad < 0 {
+/// Take the core's value unless a local flip is still being held.
+fn aux_take(cur: &mut i32, hold: &mut u32, from_core: i32, now: u32) {
+    if from_core < 0 {
         return; // not in /state: keep what we have
     }
-    if *hold != 0 && from_datad != *cur && now.wrapping_sub(*hold) < AUX_HOLD_MS {
+    if *hold != 0 && from_core != *cur && now.wrapping_sub(*hold) < AUX_HOLD_MS {
         return;
     }
     *hold = 0;
-    *cur = from_datad;
+    *cur = from_core;
 }
 
 impl Ui {
-    /// home.c aux_refresh: datad's values; the radios and power save from the device.
+    /// home.c aux_refresh: the core's values; the radios and power save from the device.
     pub(super) fn aux_refresh(&mut self, active: bool, d: &devui_model::devui_data_t) {
         let now = lv::tick_get();
         let a = &mut self.aux;

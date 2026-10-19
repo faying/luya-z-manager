@@ -14,7 +14,7 @@ use std::{
 //
 // Every round used to run ~26 `ubus call`s and 12 `uci show`s, serially, each
 // a fork+exec — and many vendor handlers fork helpers of their own, so on a
-// U60 Pro (MU5250) stopping datad dropped the device-wide fork rate from ~180–
+// U60 Pro (MU5250) stopping core dropped the device-wide fork rate from ~180–
 // 300/s to ~57/s. Most of that data barely moves (IMEI, board, config
 // packages, data limits), so each call gets a time-to-live and is reused until
 // it expires. Anything the user changes through /control clears the whole
@@ -261,7 +261,7 @@ fn uci_save_dir() -> std::path::PathBuf {
 }
 
 /// R19：`/tmp/.uci/<包>` 不存在或为 0 字节（设备上 commit 后留下的空文件）且配置文件能解析时，
-/// datad 自己解析 `/etc/config/<包>`，不 fork；否则返回 `None`，调用方退回 `uci` 子进程。
+/// 核心自己解析 `/etc/config/<包>`，不 fork；否则返回 `None`，调用方退回 `uci` 子进程。
 /// `LUYAZ_UCI_PARSE=0` 一律走子进程（回退开关）。
 fn uci_parsed(package: &str) -> Option<crate::uci::Package> {
     if std::env::var("LUYAZ_UCI_PARSE").as_deref() == Ok("0") {
@@ -285,7 +285,7 @@ fn uci_show_map(raw: &[u8]) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// u60d：serve 模式（接管 datad）登记短信会话密钥，和 datad 一样；别的模式只在
+/// u60d：serve 模式（接管旧数据服务 data-service）登记短信会话密钥，和它一样；别的模式只在
 /// `LUYAZ_SMS_SESSION=1` 时登记（影子模式一律不登记）。见 PORTING.md。
 pub static SMS_SESSION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -840,7 +840,7 @@ pub async fn collect(sample_interval_ms: u64, hub: &crate::block::Hub) -> Snapsh
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64,
-        datad: Default::default(),
+        core: Default::default(),
         fields,
     }
 }
@@ -925,9 +925,9 @@ async fn read_inputs(hub: &crate::block::Hub) -> Inputs {
     let nfc = ubus_ttl(60, "zwrt_nfc", "zwrt_nfc_wifi_get", json!({})).await;
     let apn = apn_reads().await;
     let router = router_reads().await;
-    // u60d：登记短信会话密钥（`zwrt_web web_http_enstr_set`）会顶掉 datad 在厂商那里登记的那把，
-    // datad 之后就解不开短信（它的密钥缓存到重启）。所以只在 u60d 就是 datad（`u60d serve`、
-    // 以 zwrt-datad 名字起）时登记（SMS_SESSION）。见 PORTING.md。
+    // u60d：登记短信会话密钥（`zwrt_web web_http_enstr_set`）会顶掉另一个进程（当年并跑的 data-service）在厂商那里登记的那把，
+    // 它之后就解不开短信（密钥缓存到重启）。所以只在 u60d 就是核心（`luyaz-core` 名字起、serve 模式）
+    // 时登记（SMS_SESSION）。见 PORTING.md。
     if SMS_SESSION.load(std::sync::atomic::Ordering::Relaxed)
         || std::env::var("LUYAZ_SMS_SESSION").as_deref() == Ok("1")
     {

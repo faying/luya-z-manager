@@ -8,9 +8,9 @@
 # 不需要从任何已装好的设备上拉东西。包里的东西和来源：
 #   dropbear          OpenWrt 23.05.4 官方 ipk，按 sha256 钉死（和维护者设备上 /data/dropbear 是同一个二进制）
 #   luyaz-web         管理网页（:9090），本仓库 HEAD 的 crates/luyaz-web 现编（cargo zigbuild，profile release；
-#                     没装就走 Docker，镜像按 digest 固定）。zte-agent 和 web/ 的静态导出 2026-10-14 起不再打包
+#                     没装就走 Docker，镜像按 digest 固定）
 #   operator-logos/   网页首页的运营商 logo（assets/operator-logos 原样；开源版没有，就不带）
-#   luyaz-sentinel    哨兵（屏幕主人 + 看门狗，取代 u60-uid 和 u60-guard），本仓库 HEAD 的 crates/luyaz-sentinel
+#   luyaz-sentinel    哨兵（屏幕主人 + 看门狗），本仓库 HEAD 的 crates/luyaz-sentinel
 #                     现编（profile release-device，同 tools/luyaz ship sentinel）；SENTINEL_BIN 给了就用那个
 #   devui/            触屏界面：DEVUI_BIN 没给、且 touch-ui/out/ 里没有时，
 #                     自动跑 touch-ui/rs/build.sh device 现编（Rust 版）；启动/自启脚本
@@ -18,19 +18,19 @@
 #   devui/fonts/      Nunito 600/700/800 + 中文兜底字体（都是 OFL，按 sha256 钉死的公开下载，Docker 里生成，
 #                     缓存 onboard/cache/fonts）。设备自带的 ZTE 字体（/usr/ui/fonts）不打包，触屏直接读设备上的
 #   devui/luyaz-core  核心 = 本仓库 HEAD 的 crates/luyaz-core（cargo zigbuild --profile release-device，同
-#                     tools/luyaz ship core），装成 /data/luyaz/luyaz-core；DATAD_BIN 给了就用那个
+#                     tools/luyaz ship core），装成 /data/luyaz/luyaz-core；CORE_BIN 给了就用那个
 #   esim.tgz          scripts/esim/build-esim-bundle.sh --out 现打：Alpine 的 lpac + 依赖库（alpine.lock 钉版本和
 #                     sha256）+ statx 兼容垫片 + qmi_uim_probe
-#   guard/            touch-ui/scripts 里还在用的设备脚本（= u60 ship scripts 那一套：
-#                     alert-lib.sh、agent-auth.sh、doctor.sh…）+ u60-ship.sh + luyaz-core/luyaz-sentinel/luyaz-web 的
-#                     procd init 脚本（装到 /data/luyaz/scripts 和 /etc/init.d；u60-ship.sh 在设备上叫 luyaz-ship.sh）。u60-guard.sh 不再打包（Phase 10 10b）
+#   scripts/          touch-ui/scripts 里还在用的设备脚本（= u60 ship scripts 那一套：
+#                     alert-lib.sh、web-auth.sh、doctor.sh…）+ luyaz-ship.sh + luyaz-core/luyaz-sentinel/luyaz-web 的
+#                     procd init 脚本（装到 /data/luyaz/scripts 和 /etc/init.d）
 #   chill/            CHILL：scripts/chill/stage.sh 摆好的 mihomo（sha256 固定）、规则集（下载时的最新版）、脚本、
 #                     zashboard（sha256 固定），下载缓存在 onboard/cache/chill。CHILL=0 不打
 #
 # 环境变量：DEVUI_REPO（默认本仓库的 touch-ui/）、CHILL=0（不打 CHILL）、
 #           DEVUI_BIN=路径（触屏二进制，默认 $DEVUI_REPO/out/luyaz-ui，没有就现编）、
 #           SENTINEL_BIN=路径（用这个 luyaz-sentinel，不现编）、
-#           DATAD_BIN=路径（用这个核心，不现编 luyaz-core）、
+#           CORE_BIN=路径（用这个核心，不现编 luyaz-core）、
 #           SHIP_RECORDS=目录（u60 ship 存在本机的上机记录：每次事务一个子目录，放着上机的文件和清单副本。
 #           给了它，触屏、哨兵、数据服务就先用设备上正在跑的那份（按最新清单的 md5 在记录里找），
 #           找不到才走默认；上面三个 *_BIN 显式给了的优先。FRESH=1 不用记录、照常现编）、
@@ -44,7 +44,7 @@
 #   触屏二进制必须是 LVGL 版（make 编的）。touch-ui 的 scripts/build.sh 编的是旧 litehtml 版，
 #     而且会写到同一个 u60pro-devui.stripped，默认路径下一不留神就打进旧界面。
 #   核心必须是 Rust 版（luyaz-core），且没有写死的外部更新源（releases/latest/download）。
-#     用 DATAD_BIN 指定的文件可能是更早的 C 版或带上游更新源的版本。
+#     用 CORE_BIN 指定的文件可能是更早的 C 版或带上游更新源的版本。
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -94,8 +94,7 @@ shipped() {
   line=$(grep -F "\"path\":\"$1\",\"md5\":" "$m" | tail -n 1) || return 1
   md5=$(printf '%s\n' "$line" | sed -n "s|.*\"path\":\"$1\",\"md5\":\"\([0-9a-f]\{32\}\)\".*|\1|p")
   [ -n "$md5" ] || return 1
-  # $2：记录里的另一个文件名（核心在 ship 记录里一直叫 zwrt-datad，设备上是 /data/luyaz/luyaz-core）
-  for f in "$SHIP_RECORDS"/*/"$(basename "$1")" ${2:+"$SHIP_RECORDS"/*/"$2"}; do
+  for f in "$SHIP_RECORDS"/*/"$(basename "$1")"; do
     [ -f "$f" ] && [ "$(md5q "$f")" = "$md5" ] || continue
     SHIP_FILE=$f
     SHIP_COMMIT=$(printf '%s\n' "$line" | sed -n 's/^{"v":1,"kind":"ship",.*"commit":"\([0-9a-f]\{40\}\)".*/\1/p')
@@ -106,7 +105,7 @@ shipped() {
 # 判断核心二进制能不能进装机包：0 = 能；1 = 不是 Luya-Z 改名 D3 起的核心（没有构建标记
 # LUYAZ_CORE_BUILD_SELF_CONTAINED；包里的 init 只给 LUYAZ_ 环境变量，D3 前的核心只认旧名）；
 # 2 = 带着上游写死的外部更新源。
-datad_bin_check() {
+core_bin_check() {
   grep -a -q 'LUYAZ_CORE_BUILD_SELF_CONTAINED' "$1" || return 1
   ! grep -a -q 'releases/latest/download' "$1" || return 2
   return 0
@@ -149,7 +148,7 @@ zigbuild() {
 
 # ── 高级后台：luyaz-web（:9090）────────────────────────────────────────────────
 # profile release（unwind，同 tools/luyaz ship lweb：一个请求 panic 只结束它自己）。
-# 密码文件是 /data/luyaz/web.env（Phase 10 R6 之前是 /data/zte-agent.env），设备端 agent-auth.sh migrate 写。
+# 密码文件是 /data/luyaz/web.env，设备端 web-auth.sh migrate 写。
 step "luyaz-web（cargo zigbuild）"
 LW_OUT=$(zigbuild release luyaz-web) || exit 1
 cp "$LW_OUT" "$PL/luyaz-web"
@@ -165,19 +164,17 @@ fi
 # ── devui ───────────────────────────────────────────────────────────────────
 step "devui（${DEVUI_REPO}）"
 # 设备现行版（SHIP_RECORDS）：只替代没显式给的；SHIP_<组件> 记编它的提交，写进 kit-source
-SHIP_touch= SHIP_sentinel= SHIP_datad= TOUCH_START=
+SHIP_touch= SHIP_sentinel= SHIP_core=
 if [ -z "${DEVUI_BIN:-}" ] && shipped /data/luyaz/ui/luyaz-ui; then
   DEVUI_BIN=$SHIP_FILE SHIP_touch=${SHIP_COMMIT:-0000000}
-  # start.sh 和触屏程序一起上机：用同一次记录里的，和程序配套
-  shipped /data/plugins/u60pro-devui/start.sh && TOUCH_START=$SHIP_FILE
   step "  触屏用设备现行版：$DEVUI_BIN（${SHIP_touch:0:7}）"
 fi
 if [ -z "${SENTINEL_BIN:-}" ] && shipped /data/luyaz/luyaz-sentinel; then
   SENTINEL_BIN=$SHIP_FILE SHIP_sentinel=${SHIP_COMMIT:-0000000}
   step "  哨兵用设备现行版：$SENTINEL_BIN（${SHIP_sentinel:0:7}）"
 fi
-if [ -z "${DATAD_BIN:-}" ] && shipped /data/luyaz/luyaz-core zwrt-datad; then
-  DATAD_BIN=$SHIP_FILE SHIP_datad=${SHIP_COMMIT:-0000000}
+if [ -z "${CORE_BIN:-}" ] && shipped /data/luyaz/luyaz-core; then
+  CORE_BIN=$SHIP_FILE SHIP_core=${SHIP_COMMIT:-0000000}
 fi
 DEVUI_BIN="${DEVUI_BIN:-$DEVUI_REPO/out/luyaz-ui}"
 DEVUI_PREBUILT=1
@@ -191,8 +188,6 @@ fi
 grep -a -q 'pages+chrome built' "$DEVUI_BIN" || die "$(basename "$DEVUI_BIN") 不是触屏界面"
 grep -a -q 'devui/src/' "$DEVUI_BIN" || die "$(basename "$DEVUI_BIN") 是已删的 C 版触屏（Phase 10 X5 起只打 Rust 版：touch-ui/rs/build.sh device 编）"
 cp "$DEVUI_BIN" "$PL/devui/luyaz-ui"  # Phase 10 R5: installed as /data/luyaz/ui/luyaz-ui
-cp "${TOUCH_START:-$DEVUI_REPO/scripts/start.sh}" "$PL/devui/start.sh"
-cp "$DEVUI_REPO/scripts/install-autostart.sh" "$PL/devui/"
 # 触屏字体：Nunito（数字）+ 中文兜底（设备自带 ZTE 字体缺失时用），都是 OFL。
 # 字体文件是二进制，不进任何 git，只随装机包走；设备自带的 /usr/ui/fonts 不打包。
 FONT_FILES="Nunito-600.ttf Nunito-700.ttf Nunito-800.ttf OFL-Nunito.txt u60-cjk-fallback.ttf OFL-ResourceHanRounded.txt"
@@ -227,16 +222,16 @@ fi
 
 # ── 进程监督与 Wi-Fi 兜底 ─────────────────────────────────────────────────────
 step "设备脚本（${DEVUI_REPO}/scripts）"
-mkdir -p "$PL/guard"
-# u60-ship.sh（设备上叫 luyaz-ship.sh）、datad-trial.sh（它的壳，要和它放一起）也进 /data/luyaz/scripts；
-# u60-recover.sh 由设备端放成 /data/luyaz/ship/luyaz-recover.sh（自检过才放，已有就不换；rc.local 那一行只由 recover 组件加）
-# 去掉 u60-ship.sh、datad-trial.sh、u60-recover.sh 以后，这张表要和 u60-ship.sh 的 SCRIPTS_FILES + SCRIPTS_INITS
-# 一致（u60 ship scripts，touch-ui docs/SHIP.md）。zwrt-datad.init 在 Luya-Z 改名 E3 从两边一起去掉了（只有旧布局用它，装机包拒装旧布局）
-for f in alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION \
-         u60-ship.sh datad-trial.sh u60-recover.sh \
+mkdir -p "$PL/scripts"
+# luyaz-ship.sh、core-trial.sh（它的壳，要和它放一起）也进 /data/luyaz/scripts；
+# luyaz-recover.sh 由设备端放成 /data/luyaz/ship/luyaz-recover.sh（自检过才放，已有就不换；rc.local 那一行只由 recover 组件加）
+# 去掉 luyaz-ship.sh、core-trial.sh、luyaz-recover.sh 以后，这张表要和 luyaz-ship.sh 的 SCRIPTS_FILES + SCRIPTS_INITS
+# 一致（u60 ship scripts，touch-ui docs/SHIP.md）。
+for f in alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION \
+         luyaz-ship.sh core-trial.sh luyaz-recover.sh \
          luyaz-core.init luyaz-sentinel.init luyaz-web.init; do
   [ -f "$DEVUI_REPO/scripts/$f" ] || die "缺 $DEVUI_REPO/scripts/$f"
-  cp "$DEVUI_REPO/scripts/$f" "$PL/guard/"
+  cp "$DEVUI_REPO/scripts/$f" "$PL/scripts/"
 done
 # 设备清单（kind=kit）的来源：装机包日期、各组件编的提交、数据格式版本、有没有未提交改动。
 # touch 记 touch-ui 当前的提交；用 DEVUI_BIN 指定现成程序时，程序未必是这个提交编的，记成有改动。
@@ -259,15 +254,15 @@ kit_format() { sed 's/#.*//' "$1" 2>/dev/null | awk 'NF { print $1; exit }'; }
     echo "${c}_format=$(kit_format "$DEVUI_REPO/ship/$c/format")"
     echo "${c}_dirty=$([ -n "$(dirty "$DEVUI_REPO" src scripts)" ] || [ "$DEVUI_PREBUILT" = 1 ] && echo 1 || echo 0)"
   done
-  # datad：本仓库当前的提交编的 luyaz-core（u60 ship core 一样记 manager 的提交，格式在
-  # crates/luyaz-core/ship/datad）；用 DATAD_BIN 指定现成程序（下面不现编）时记成有改动
-  echo "datad_format=$(kit_format "$ROOT/crates/luyaz-core/ship/datad/format")"
-  if [ -n "$SHIP_datad" ]; then
-    echo "datad_commit=$SHIP_datad"
-    echo "datad_dirty=$([ "$SHIP_datad" = 0000000 ] && echo 1 || echo 0)"
+  # core：本仓库当前的提交编的 luyaz-core（u60 ship core 一样记 manager 的提交，格式在
+  # crates/luyaz-core/ship/core）；用 CORE_BIN 指定现成程序（下面不现编）时记成有改动
+  echo "core_format=$(kit_format "$ROOT/crates/luyaz-core/ship/core/format")"
+  if [ -n "$SHIP_core" ]; then
+    echo "core_commit=$SHIP_core"
+    echo "core_dirty=$([ "$SHIP_core" = 0000000 ] && echo 1 || echo 0)"
   else
-    echo "datad_commit=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo 0000000)"
-    echo "datad_dirty=$([ -n "${DATAD_BIN:-}" ] || [ -n "$(dirty "$ROOT" crates Cargo.toml Cargo.lock)" ] && echo 1 || echo 0)"
+    echo "core_commit=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo 0000000)"
+    echo "core_dirty=$([ -n "${CORE_BIN:-}" ] || [ -n "$(dirty "$ROOT" crates Cargo.toml Cargo.lock)" ] && echo 1 || echo 0)"
   fi
   # sentinel：本仓库当前的提交编的（同 u60 ship sentinel；没有 ship/sentinel/format，记 1）
   echo "sentinel_format=1"
@@ -278,7 +273,7 @@ kit_format() { sed 's/#.*//' "$1" 2>/dev/null | awk 'NF { print $1; exit }'; }
     echo "sentinel_commit=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo 0000000)"
     echo "sentinel_dirty=$([ -n "${SENTINEL_BIN:-}" ] || [ -n "$(dirty "$ROOT" crates Cargo.toml Cargo.lock)" ] && echo 1 || echo 0)"
   fi
-} > "$PL/guard/kit-source"
+} > "$PL/scripts/kit-source"
 
 # ── 哨兵 luyaz-sentinel（本仓库现编，profile release-device，同 tools/luyaz ship sentinel）──────────
 if [ -z "${SENTINEL_BIN:-}" ]; then
@@ -293,25 +288,25 @@ fi
 cp "$SENTINEL_BIN" "$PL/luyaz-sentinel"
 
 # ── 核心 luyaz-core（本仓库现编，profile release-device，同 tools/luyaz ship core）──────
-if [ -z "${DATAD_BIN:-}" ]; then
+if [ -z "${CORE_BIN:-}" ]; then
   step "核心 luyaz-core（cargo zigbuild --profile release-device）"
-  DATAD_BIN=$(zigbuild release-device luyaz-core) || exit 1
-  DATAD_SRC="luyaz-core $(rev "$ROOT")$(dirty "$ROOT" crates Cargo.toml Cargo.lock)"
+  CORE_BIN=$(zigbuild release-device luyaz-core) || exit 1
+  CORE_SRC="luyaz-core $(rev "$ROOT")$(dirty "$ROOT" crates Cargo.toml Cargo.lock)"
 else
-  step "核心（${DATAD_BIN}）"
-  [ -f "$DATAD_BIN" ] || die "DATAD_BIN 不存在: $DATAD_BIN"
-  DATAD_SRC="$(basename "$DATAD_BIN")"
-  [ -z "$SHIP_datad" ] || DATAD_SRC="设备现行版 ${SHIP_datad:0:7}（$DATAD_BIN）"
+  step "核心（${CORE_BIN}）"
+  [ -f "$CORE_BIN" ] || die "CORE_BIN 不存在: $CORE_BIN"
+  CORE_SRC="$(basename "$CORE_BIN")"
+  [ -z "$SHIP_core" ] || CORE_SRC="设备现行版 ${SHIP_core:0:7}（$CORE_BIN）"
 fi
-cp "$DATAD_BIN" "$PL/devui/luyaz-core"
+cp "$CORE_BIN" "$PL/devui/luyaz-core"
 # D3 起的核心（标记 LUYAZ_CORE_BUILD_SELF_CONTAINED）；
-# 装机包要完全自主：不能带上游写死的更新源。规则见上面 datad_bin_check。
-datad_rc=0; datad_bin_check "$PL/devui/luyaz-core" || datad_rc=$?
-case $datad_rc in
+# 装机包要完全自主：不能带上游写死的更新源。规则见上面 core_bin_check。
+core_rc=0; core_bin_check "$PL/devui/luyaz-core" || core_rc=$?
+case $core_rc in
   0) ;;
-  1) die "包里的核心不是 Luya-Z 改名 D3 起的核心（${DATAD_BIN}；二进制里没有 LUYAZ_CORE_BUILD_SELF_CONTAINED）。
-  用 DATAD_BIN=… 指定 D3 起的核心，或去掉 DATAD_BIN 让脚本现编 luyaz-core" ;;
-  *) die "包里的核心还带着写死的外部更新源（releases/latest/download）。用去掉了更新源的 fork 版（DATAD_BIN=…）" ;;
+  1) die "包里的核心不是 Luya-Z 改名 D3 起的核心（${CORE_BIN}；二进制里没有 LUYAZ_CORE_BUILD_SELF_CONTAINED）。
+  用 CORE_BIN=… 指定 D3 起的核心，或去掉 CORE_BIN 让脚本现编 luyaz-core" ;;
+  *) die "包里的核心还带着写死的外部更新源（releases/latest/download）。用去掉了更新源的 fork 版（CORE_BIN=…）" ;;
 esac
 
 # ── eSIM（lpac 包，本机现打）────────────────────────────────────────────────
@@ -350,10 +345,10 @@ chmod 755 "$KIT/install.sh"
   echo "来源："
   echo "  manager       $(rev "$ROOT")$(dirty "$ROOT" crates Cargo.toml Cargo.lock assets/operator-logos onboard)"
   echo "  luyaz-web     二进制 $(sha256 "$PL/luyaz-web" | cut -c1-12)$([ -d "$PL/operator-logos" ] && echo "，运营商 logo $(ls "$PL/operator-logos" | wc -l | tr -d ' ') 个")"
-  echo "  luyaz-ui      $(rev "$DEVUI_REPO")$(dirty "$DEVUI_REPO" rs scripts)（guard/ 脚本同源）"
+  echo "  luyaz-ui      $(rev "$DEVUI_REPO")$(dirty "$DEVUI_REPO" rs scripts)（scripts/ 同源）"
   echo "  luyaz-ui      二进制 $(basename "$DEVUI_BIN") $(sha256 "$DEVUI_BIN" | cut -c1-12)"
   echo "  luyaz-sentinel ${SENTINEL_SRC} $(sha256 "$SENTINEL_BIN" | cut -c1-12)"
-  echo "  luyaz-core    ${DATAD_SRC} $(sha256 "$DATAD_BIN" | cut -c1-12)"
+  echo "  luyaz-core    ${CORE_SRC} $(sha256 "$CORE_BIN" | cut -c1-12)"
   echo "  eSIM          ${ESIM_SRC}"
   echo "  dropbear      $(basename "$DROPBEAR_URL")"
   [ -d "$PL/chill" ] && echo "  CHILL         mihomo ${MIHOMO_VER:-v1.19.31}、zashboard ${ZASHBOARD_VER:-v3.27.0}（规则集下载于 $(date -r "$CACHE/chill/ruleset/cn.list" '+%Y-%m-%d')）"
@@ -365,11 +360,11 @@ chmod 755 "$KIT/install.sh"
 } > "$KIT/MANIFEST.txt"
 
 # each component's version (docs/designs/component-versions.md): from the LUYAZ_VERSION=
-# marker in the binary (not run), the scripts' from guard/VERSION; null: a build before 1.0.0
+# marker in the binary (not run), the scripts' from scripts/VERSION; null: a build before 1.0.0
 kver() { v=$(grep -a -o 'LUYAZ_VERSION=[0-9]*\.[0-9]*\.[0-9]*;' "$1" 2>/dev/null | head -n 1); v=${v#LUYAZ_VERSION=}; v=${v%;}; if [ -n "$v" ]; then echo "\"$v\""; else echo null; fi; }
-_sv=$(cat "$PL/guard/VERSION" 2>/dev/null)
+_sv=$(cat "$PL/scripts/VERSION" 2>/dev/null)
 printf '{\n  "v": 1,\n  "kit": "%s",\n  "components": {\n    "core": %s,\n    "lweb": %s,\n    "sentinel": %s,\n    "touch": %s,\n    "scripts": %s\n  }\n}\n' \
-  "$STAMP" "$(kver "$DATAD_BIN")" "$(kver "$PL/luyaz-web")" "$(kver "$SENTINEL_BIN")" "$(kver "$DEVUI_BIN")" \
+  "$STAMP" "$(kver "$CORE_BIN")" "$(kver "$PL/luyaz-web")" "$(kver "$SENTINEL_BIN")" "$(kver "$DEVUI_BIN")" \
   "$(if [ -n "$_sv" ]; then echo "\"$_sv\""; else echo null; fi)" >"$KIT/versions.json"
 
 OUT="$DIST/luyaz-kit-$STAMP.tar.gz"

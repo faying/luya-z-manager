@@ -35,6 +35,45 @@ pub fn slot() -> Arc<AtomicBool> {
     S.get_or_init(Arc::default).clone()
 }
 
+/// `chill.sh start|stop|profile` 的截止时间（韧性审计 R7）。`start` 走 init 脚本起 mihomo、
+/// 等它就绪（chill.sh 里最长的等待是就绪探测，几十秒内）；`profile` 改档后重启 mihomo。5 分钟
+/// 远超正常用时，只用来截住卡死的那次：到点杀掉整个进程组、放开工作槽、报超时。
+pub const SH_TIMEOUT: Duration = Duration::from_secs(300);
+/// `chill.sh reload`（家里出口引擎每拍可能调用）：只重渲染配置 + 让 mihomo 重读，60 秒足够。
+pub const RELOAD_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// `sh -c cmd`，限时 `limit`：`Ok((退出成功, stdout + stderr))`，超时 `Err("… timed out after N s")`。
+/// 子进程在自己的进程组里，不随核心一起死（核心重启时任务自己跑完，不留半启动的 mihomo）；
+/// 超时才杀整个组（chill.sh 和它起的子进程）。
+pub async fn sh_within(cmd: &str, limit: Duration) -> Result<(bool, String), String> {
+    let child = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .map_err(|e| format!("exec failed: {e}"))?;
+    let pid = child.id();
+    match tokio::time::timeout(limit, child.wait_with_output()).await {
+        Ok(Ok(o)) => {
+            let mut s = String::from_utf8_lossy(&o.stdout).into_owned();
+            s.push_str(&String::from_utf8_lossy(&o.stderr));
+            Ok((o.status.success(), s))
+        }
+        Ok(Err(e)) => Err(format!("exec failed: {e}")),
+        Err(_) => {
+            // 还没被回收（wait 没返回），进程号仍是它的组；绝不 kill(-0)。
+            if let Some(pid) = pid.filter(|p| *p > 0) {
+                unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
+            }
+            eprintln!("ops: chill: `{cmd}` timed out after {} s, killed", limit.as_secs());
+            Err(format!("timed out after {} s", limit.as_secs()))
+        }
+    }
+}
+
 /// 有 `chill.sh` 在跑（核心重启之前起的子进程也算，O10：内存里的槽重启就没了）。
 pub fn sh_running() -> bool {
     let Ok(dir) = std::fs::read_dir("/proc") else {
@@ -267,24 +306,15 @@ pub async fn write_profile(want: &str) -> Result<Value, String> {
     {
         return Err("another CHILL job is running".into());
     }
-    let out = tokio::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!("{} profile {want}", ch::CHILL_SH))
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await;
+    let out = sh_within(&format!("{} profile {want}", ch::CHILL_SH), SH_TIMEOUT).await;
     slot.store(false, Ordering::SeqCst);
     match out {
-        Ok(o) if o.status.success() => Ok(json!({"profile": want})),
-        Ok(o) => {
-            let mut s = String::from_utf8_lossy(&o.stdout).into_owned();
-            s.push_str(&String::from_utf8_lossy(&o.stderr));
-            Err(format!(
-                "chill.sh profile {want} failed: {}",
-                ch::tail(&s, 4)
-            ))
-        }
-        Err(e) => Err(format!("exec failed: {e}")),
+        Ok((true, _)) => Ok(json!({"profile": want})),
+        Ok((false, s)) => Err(format!(
+            "chill.sh profile {want} failed: {}",
+            ch::tail(&s, 4)
+        )),
+        Err(e) => Err(format!("chill.sh profile {want}: {e}")),
     }
 }
 
@@ -307,6 +337,27 @@ pub fn busy() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn a_hung_chill_sh_is_killed_at_its_deadline() {
+        use std::time::Duration;
+        // R7: `sleep 3600` stands in for a wedged chill.sh; its background child dies with it.
+        let mark = format!("/tmp/luyaz-chill-r7-{}", std::process::id());
+        let t0 = std::time::Instant::now();
+        let r = super::sh_within(
+            &format!("(sleep 2; touch {mark}) & sleep 3600"),
+            Duration::from_millis(300),
+        )
+        .await;
+        assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
+        assert!(r.unwrap_err().contains("timed out"));
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(!std::path::Path::new(&mark).exists(), "the group was not killed");
+        assert_eq!(
+            super::sh_within("echo out; echo err >&2; exit 3", Duration::from_secs(5)).await,
+            Ok((false, "out\nerr\n".into()))
+        );
+    }
+
     #[test]
     fn only_job_subcommands_count() {
         use super::is_job;

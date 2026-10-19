@@ -122,7 +122,7 @@ impl Ui {
         };
         self.system_health_paint();
 
-        // the network pages only need the /api side, not /v2: before datad's early return
+        // the network pages only need the /api side, not /v2: before the core's early return
         {
             let mode = a.ni_mode;
             let paint = mode != NI_OFF && mode != NI_HOME;
@@ -146,26 +146,26 @@ impl Ui {
             return;
         }
         // answered before, silent now: keep the last numbers, dimmed, say since when
-        let datad_silent = m.backend_silent != 0;
+        let core_silent = m.backend_silent != 0;
         let v = self.screen_view();
         let d = &m.data;
-        if !datad_silent {
+        if !core_silent {
             self.usbmode_tick(d); // a phone plugged in: ask (or do the remembered)
         }
         self.dg.net_roam = v.roam != 0;
         self.op_refresh(); // E4: 事务行 / Home's notice line
         if self.sub_visible(Sub::Place) {
-            self.place_paint(!datad_silent);
+            self.place_paint(!core_silent);
         }
         self.diag_refresh();
-        if datad_silent {
+        if core_silent {
             self.banner_set(Some(tr("后台数据服务不可用").as_bytes()));
             self.home_signal_down();
         } else if m.screen_stuck != 0 {
             // E4: answers, but its executor has not moved for 20 s (V2-40)
             self.banner_set(Some(tr("数据服务没响应 · 暂时不能改设置").as_bytes()));
         } else if m.notice_ok != 0 {
-            // a write datad turned down (the data side keeps it for 4 s)
+            // a write core turned down (the data side keeps it for 4 s)
             let n = &m.notice;
             let txt = if !n.say_zh.is_empty() {
                 pick(&n.say_zh, &n.say_en)
@@ -192,7 +192,7 @@ impl Ui {
         // status bar: the same tiers as Home's 信号强/中/弱 (4–5 green, 3 orange, 1–2 red)
         {
             let tier = v.bars_tier;
-            // tier -1 with bars > 0 = datad has not graded it: grey, not red
+            // tier -1 with bars > 0 = core has not graded it: grey, not red
             let sig_col = match tier {
                 2 => th.green,
                 1 => th.orange,
@@ -231,7 +231,7 @@ impl Ui {
             self.statusbar_layout(&full, &shrt, &down, d.bat_percent, chg, self.alert_st != 0, alert_col);
         }
 
-        self.home_signal_paint(&v, datad_silent);
+        self.home_signal_paint(&v, core_silent);
         self.home_exit_paint();
         self.home_scene_paint(sc_changed);
         if self.tab_visible(TAB_HOME) || self.tab_visible(super::TAB_EXIT) || self.sub_visible(super::Sub::Ts) {
@@ -244,7 +244,7 @@ impl Ui {
         self.esim_refresh(sim_changed);
         self.speed_paint();
         self.system_paint();
-        self.charts_paint(datad_silent);
+        self.charts_paint(core_silent);
         self.sms_paint();
         if self.polled.alerts {
             self.alerts_paint();
@@ -252,7 +252,7 @@ impl Ui {
         self.sig_paint(&v.mode_word);
 
         // 锁频 and the 网络模式 row: what the device is on (TCHGWL_5G and NETWORK_auto are
-        // automatic too: datad says which are)
+        // automatic too: core says which are)
         {
             let mut sel = LK_MODE_V.iter().rposition(|&x| x == d.net_select).map_or(-1, |i| i as i32);
             if v.mode_auto != 0 {

@@ -34,10 +34,10 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const LPAC_BIN: &str = "/data/esim/lpac";
 const LIB_DIR: &str = "/data/esim/lib";
@@ -59,14 +59,31 @@ const MAX_NICKNAME_LEN: usize = 64;
 /// timed-out enable can leave the card answering slowly for a moment.
 const READBACK_TRIES: usize = 3;
 const READBACK_GAP: Duration = Duration::from_millis(1500);
-/// Sending this switch's enable/disable notifications waits for the data call
-/// to come back (checked every `NOTIF_DATA_POLL`, at most `NOTIF_DATA_WAIT`)
-/// and then gives lpac `LPAC_TIMEOUT_NOTIF`: while it runs it holds the job
-/// slot, and the user may want to switch straight back if the new profile has
-/// no service — so it is kept short, and skipped when data is not up.
+/// Sending this switch's enable/disable notifications happens only once the
+/// switch saw the data call back (polled every `NOTIF_DATA_POLL`, see
+/// `DATA_WAIT`) and gives lpac `LPAC_TIMEOUT_NOTIF`: while it runs it holds the
+/// job slot, and the user may want to switch straight back if the new profile
+/// has no service — so it is kept short, and skipped when data is not up.
 const NOTIF_DATA_POLL: Duration = Duration::from_secs(5);
-const NOTIF_DATA_WAIT: Duration = Duration::from_secs(60);
 const LPAC_TIMEOUT_NOTIF: Duration = Duration::from_secs(45);
+/// The switch is checked in three timed steps (resilience audit R5): the card
+/// (`read_profiles_retry`), then the ZTE stack's identity, then the data call.
+/// Identity: upstream measured up to 28 s on B27; past `IDENTITY_WAIT` (polled
+/// every `IDENTITY_POLL`) the stack is taken as stuck and the device reboots.
+/// Data: past `DATA_WAIT` (polled every `NOTIF_DATA_POLL`) the job ends
+/// "switched, data not back" (`reason: "no_data"`), with no reboot. Neither is
+/// measured on B31 yet: each step's time is logged so they can be calibrated.
+const IDENTITY_WAIT: Duration = Duration::from_secs(45);
+const IDENTITY_POLL: Duration = Duration::from_secs(2);
+const DATA_WAIT: Duration = Duration::from_secs(60);
+/// After a switch the card answers `profile list` with transitional errors for
+/// a while (upstream B27: 5–25 s of `euicc_init` failures / QMI error 80
+/// SimFileNotFound). For `LIST_STALE_WINDOW` after a switch ends, such an error
+/// returns the last good list marked `stale`/`updating` instead of a 502 (R4).
+/// Not measured on B31. There is no retry thread: lpac calls are not yet
+/// serialised (R2), so the UIs' own 1–1.5 s polls are the retry and the window
+/// is its bound.
+const LIST_STALE_WINDOW: Duration = Duration::from_secs(30);
 
 /* -------------------------------------------------------------- *
  *  State
@@ -87,7 +104,9 @@ pub struct JobState {
     /// `message`: "card_busy" (the card answered catBusy and the profile did
     /// not change — only a device restart or reinserting the card clears it),
     /// "not_switched" (lpac or the card refused; the card still has the old
-    /// profile), "" otherwise.
+    /// profile), "no_data" (a `done` switch: the card and the modem are on the
+    /// new profile but the data call did not come back in time; no reboot),
+    /// "" otherwise.
     reason: String,
 }
 
@@ -95,6 +114,15 @@ pub struct Esim {
     job: Arc<Mutex<JobState>>,
     running: Arc<AtomicBool>,
     host: Arc<dyn Host>,
+    list: Arc<Mutex<ListCache>>,
+}
+
+/// The last profile list the card answered, and when the last switch ended
+/// (see `LIST_STALE_WINDOW`).
+#[derive(Default)]
+struct ListCache {
+    last: Option<(Value, Instant)>,
+    switched_at: Option<Instant>,
 }
 
 impl Esim {
@@ -113,6 +141,7 @@ impl Esim {
                 reason: String::new(),
             })),
             running: Arc::new(AtomicBool::new(false)),
+            list: Arc::new(Mutex::new(ListCache::default())),
         }
     }
 }
@@ -128,8 +157,9 @@ pub trait Host: Send + Sync + 'static {
     fn installed(&self) -> bool;
     /// Run lpac; the `data` of its final `{"type":"lpa"}` line.
     fn lpac(&self, args: &[&str], timeout: Duration) -> Result<Value, String>;
-    /// A shell command's stdout (ubus reads, the UIM power-cycle, the mdm restart).
-    fn sh(&self, cmd: &str) -> String;
+    /// A shell command's stdout (ubus reads, the UIM power-cycle, the mdm restart), its process
+    /// group killed past `limit` (empty output then). See the `*_TIMEOUT` constants.
+    fn sh(&self, cmd: &str, limit: Duration) -> String;
     fn exists(&self, path: &str) -> bool;
     /// Reboot the device (the switch's fallback when the stack does not converge).
     fn reboot(&self);
@@ -138,6 +168,10 @@ pub trait Host: Send + Sync + 'static {
     /// Hold (true) or release the wake lock.
     fn wake(&self, hold: bool);
     fn sleep(&self, d: Duration);
+    /// Monotonic now (tests move it with `sleep`).
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
 }
 
 /// The device. `data_up` comes from the host program (the agent's netinfo read, u60d's ubus).
@@ -152,8 +186,8 @@ impl Host for RealHost {
     fn lpac(&self, args: &[&str], timeout: Duration) -> Result<Value, String> {
         run_lpac(args, timeout)
     }
-    fn sh(&self, cmd: &str) -> String {
-        run_cmd(cmd)
+    fn sh(&self, cmd: &str, limit: Duration) -> String {
+        run_cmd(cmd, limit)
     }
     fn exists(&self, path: &str) -> bool {
         Path::new(path).exists()
@@ -230,7 +264,7 @@ fn run_lpac(args: &[&str], timeout: Duration) -> Result<Value, String> {
     let out = out?;
     if !out.status.success() && out.status.code().is_none() {
         if let Some(c) = chan {
-            run_cmd(&format!("{QMI_PROBE} close {c} 2>/dev/null"));
+            run_cmd(&format!("{QMI_PROBE} close {c} 2>/dev/null"), PROBE_TIMEOUT);
         }
     }
 
@@ -249,7 +283,7 @@ fn run_lpac(args: &[&str], timeout: Duration) -> Result<Value, String> {
 /// Lowest free logical channel on the card, read by opening and closing one
 /// (`qmi_uim_probe open` prints `[open] channel=N` on stderr).
 pub fn free_channel() -> Option<u8> {
-    channel_of(&run_cmd(&format!("{QMI_PROBE} open 2>&1")))
+    channel_of(&run_cmd(&format!("{QMI_PROBE} open 2>&1"), PROBE_TIMEOUT))
 }
 
 /// What the deep diagnosis' channel check found (deep-diag-v2 Q1).
@@ -323,13 +357,83 @@ const QMI_PROBE: &str = "/data/esim/qmi_uim_probe";
 /// sync barrier healthy. Restarting the whole set is unnecessary.
 const MDM_INITD: &str = "/etc/init.d/zte_topsw_mdm";
 
-fn run_cmd(cmd: &str) -> String {
-    Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .output()
+/* Deadlines for the side commands (resilience audit R1). Each is killed as a process group past
+ * its limit, so a wedged probe or init script cannot hold the job slot for good.
+ * - PROBE_TIMEOUT: `qmi_uim_probe open/close` is one QMI round trip, well under a second when the
+ *   modem answers; `channel_check` used 3 s since 10-18. 5 s leaves room on a busy modem.
+ * - SIMRESET_TIMEOUT: the UIM power-cycle waits for the card to come back (a few seconds).
+ * - UBUS_TIMEOUT: `ubus -t 5`; the outer limit only catches a ubus CLI that ignores its own.
+ * - MDM_RESTART_TIMEOUT: `zte_topsw_mdm restart` (procd stop + start) took a few seconds on
+ *   device; 30 s is generous, the switch then falls back to the reboot if nothing converged. */
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const SIMRESET_TIMEOUT: Duration = Duration::from_secs(15);
+const UBUS_TIMEOUT: Duration = Duration::from_secs(10);
+const MDM_RESTART_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `sh -c cmd`'s stdout, or "" if it fails to start or outlives `limit` (then its whole process
+/// group is killed: the shell and whatever it started).
+fn run_cmd(cmd: &str, limit: Duration) -> String {
+    output_within_group(Command::new("sh").arg("-c").arg(cmd), limit)
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default()
+}
+
+/// A command in its own process group, killed as a group past `limit` (luyaz-api's
+/// `health::runner::output_within_group`). stderr is discarded.
+fn output_within_group(
+    cmd: &mut Command,
+    limit: Duration,
+) -> std::io::Result<std::process::Output> {
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let reader = child.stdout.take().map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            buf
+        })
+    });
+    let t0 = std::time::Instant::now();
+    let mut nap = Duration::from_millis(1);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if t0.elapsed() < limit => {
+                std::thread::sleep(nap);
+                nap = (nap * 2).min(Duration::from_millis(20));
+            }
+            other => {
+                // Before wait(): once reaped, the id could be someone else's. Never kill(-0).
+                let pid = child.id() as libc::pid_t;
+                if pid > 0 {
+                    unsafe { libc::kill(-pid, libc::SIGKILL) };
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                // The reader ends when the pipe closes; not joined, in case something escaped
+                // the group and still holds it.
+                return Err(match other {
+                    Err(e) => e,
+                    _ => std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("timed out after {} ms", limit.as_millis()),
+                    ),
+                });
+            }
+        }
+    };
+    let stdout = reader.and_then(|h| h.join().ok()).unwrap_or_default();
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    })
 }
 
 /// (imsi, iccid) the ZTE modem stack currently believes is active — its cached
@@ -337,8 +441,11 @@ fn run_cmd(cmd: &str) -> String {
 /// The ZTE `sim_iccid` carries a trailing BCD pad nibble ("…072F") and reads
 /// empty for a beat right after a re-read, so callers lean on the IMSI.
 fn ubus_sim_identity(h: &dyn Host) -> (String, String) {
-    let v = serde_json::from_str::<Value>(&h.sh("ubus call zwrt_zte_mdm.api get_sim_info '{}'"))
-        .unwrap_or(Value::Null);
+    let v = serde_json::from_str::<Value>(&h.sh(
+        "ubus -t 5 call zwrt_zte_mdm.api get_sim_info '{}'",
+        UBUS_TIMEOUT,
+    ))
+    .unwrap_or(Value::Null);
     let imsi = v["sim_imsi"].as_str().unwrap_or("").to_string();
     let iccid = v["sim_iccid"].as_str().unwrap_or("").to_string();
     (imsi, iccid)
@@ -362,10 +469,13 @@ fn switch_converged(h: &dyn Host, target_iccid: &str, old_imsi: &str) -> bool {
 /// Is the ZTE daemon sync barrier healthy? A broken barrier after the mdm
 /// restart means the stack is wedged and we must fall back to a reboot.
 fn ubus_sync_ok(h: &dyn Host) -> bool {
-    serde_json::from_str::<Value>(&h.sh("ubus call zwrt_topsw_daemon.sync get_sync_info '{}'"))
-        .ok()
-        .and_then(|v| v["noSyncModuleName"].as_str().map(|s| s == "sync success"))
-        .unwrap_or(false)
+    serde_json::from_str::<Value>(&h.sh(
+        "ubus -t 5 call zwrt_topsw_daemon.sync get_sync_info '{}'",
+        UBUS_TIMEOUT,
+    ))
+    .ok()
+    .and_then(|v| v["noSyncModuleName"].as_str().map(|s| s == "sync success"))
+    .unwrap_or(false)
 }
 
 /* -------------------------------------------------------------- *
@@ -384,6 +494,16 @@ fn body_str<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
 /// 127 = undefinedError) to "unknown"; newer builds may spell it out.
 fn is_card_busy(err: &str) -> bool {
     err.contains("es10c_enable_profile") && (err.contains(": unknown") || err.contains("catBusy"))
+}
+
+/// The card's answers while it settles after a switch: lpac's `euicc_init`
+/// failing, or QMI error 80 (SimFileNotFound). catBusy is never one of them.
+fn is_transitional(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    !is_card_busy(err)
+        && (e.contains("euicc_init")
+            || e.contains("simfilenotfound")
+            || (e.contains("qmi") && e.contains("80")))
 }
 
 /// ICCIDs compared the way the card and the ZTE stack spell them: lpac and
@@ -450,7 +570,10 @@ fn decide_enable(lpac: &Result<(), String>, card: CardSays) -> EnableOutcome {
                 "card is busy (catBusy) — restart the device (or take the card out and put it back), then switch again ({e})"
             ),
         },
-        (_, Err(e)) => EnableOutcome::Failed { busy: false, msg: e.clone() },
+        (_, Err(e)) => EnableOutcome::Failed {
+            busy: false,
+            msg: e.clone(),
+        },
     }
 }
 
@@ -598,19 +721,12 @@ fn send_switch_notifications(
     if seqs.is_empty() {
         return;
     }
-    let mut waited = Duration::ZERO;
-    loop {
-        // The first sleep also lets the UIs (1–1.5 s polls) see the switch
-        // job's own result before this job takes the slot.
-        h.sleep(NOTIF_DATA_POLL);
-        waited += NOTIF_DATA_POLL;
-        if h.data_up() {
-            break;
-        }
-        if waited >= NOTIF_DATA_WAIT {
-            eprintln!("esim: data not back after the switch; notifications {seqs:?} left pending");
-            return;
-        }
+    // The caller saw data back. This pause lets the UIs (1–1.5 s polls) see
+    // the switch job's own result before this job takes the slot.
+    h.sleep(NOTIF_DATA_POLL);
+    if !h.data_up() {
+        eprintln!("esim: data dropped after the switch; notifications {seqs:?} left pending");
+        return;
     }
     if running
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
@@ -695,11 +811,38 @@ impl Esim {
             );
         }
         match self.host.lpac(&["profile", "list"], LPAC_TIMEOUT_FAST) {
-            Ok(d) => (
-                200,
-                json!({"ok": true, "data": {"installed": true, "busy": false, "profiles": d}}),
-            ),
-            Err(e) => (502, json!({"ok": false, "error": e})),
+            Ok(d) => {
+                if d.is_array() {
+                    self.list.lock().unwrap().last = Some((d.clone(), self.host.now()));
+                }
+                (
+                    200,
+                    json!({"ok": true, "data": {"installed": true, "busy": false, "profiles": d}}),
+                )
+            }
+            Err(e) => {
+                let now = self.host.now();
+                let c = self.list.lock().unwrap();
+                let settling = c
+                    .switched_at
+                    .is_some_and(|t| now.saturating_duration_since(t) < LIST_STALE_WINDOW);
+                match &c.last {
+                    Some((l, at)) if settling && is_transitional(&e) => {
+                        eprintln!(
+                            "esim: profile list while the card settles: {e}; last good list served"
+                        );
+                        (
+                            200,
+                            json!({"ok": true, "data": {
+                                "installed": true, "busy": false, "profiles": l,
+                                "stale": true, "updating": true,
+                                "age_s": now.saturating_duration_since(*at).as_secs(),
+                            }}),
+                        )
+                    }
+                    _ => (502, json!({"ok": false, "error": e})),
+                }
+            }
         }
     }
     /// GET /api/esim/notifications
@@ -734,11 +877,9 @@ impl Esim {
             return ChannelCheck::Busy;
         }
         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // bounded: a hung probe would keep the job slot. The device's busybox has no
-            // `timeout` applet (10-18), so a background sleep kills it after 3 s.
-            self.host.sh(&format!(
-                "{QMI_PROBE} open 2>&1 & p=$!; (sleep 3; kill -9 $p 2>/dev/null) & k=$!; wait $p; kill $k 2>/dev/null"
-            ))
+            // bounded: a hung probe would keep the job slot (killed past PROBE_TIMEOUT).
+            self.host
+                .sh(&format!("{QMI_PROBE} open 2>&1"), PROBE_TIMEOUT)
         }))
         .unwrap_or_default();
         self.running.store(false, Ordering::SeqCst);
@@ -807,11 +948,12 @@ impl Esim {
         let job = Arc::clone(&self.job);
         let running = Arc::clone(&self.running);
         let h = Arc::clone(&self.host);
+        let list = Arc::clone(&self.list);
         std::thread::spawn(move || {
             let h: &dyn Host = &*h;
             h.wake(true);
             // The switch (and the simreset / zte_topsw_mdm restart after it) does
-            // not go through datad: tell it first, so a network-mode change still
+            // not go through core: tell it first, so a network-mode change still
             // confirming is not rolled back over the new card (D40). Best effort.
             interrupt();
             // Record the pre-switch identity so we can detect when the ZTE stack has
@@ -829,8 +971,16 @@ impl Esim {
                     .map(|_| ())
             }))
             .unwrap_or_else(|_| Err("internal panic".into()));
-            let card =
-                read_profiles_retry(h).map_or(CardSays::Unknown, |l| target_state(&l, &iccid));
+            let card_t = h.now();
+            let readback = read_profiles_retry(h);
+            let card = readback
+                .as_ref()
+                .map_or(CardSays::Unknown, |l| target_state(l, &iccid));
+            if let Some(l) = readback {
+                // the list the UIs fall back on while the card settles (R4)
+                list.lock().unwrap().last = Some((l, h.now()));
+            }
+            let card_s = h.now().saturating_duration_since(card_t).as_secs();
             if let Err(e) = &res {
                 eprintln!("esim: profile enable {iccid}: {e}; card says {card:?}");
             }
@@ -855,31 +1005,29 @@ impl Esim {
             // minute. If identity doesn't converge or the barrier breaks, fall back
             // to the always-safe reboot.
             if h.exists(QMI_PROBE) {
-                let _ = h.sh(&format!("{QMI_PROBE} simreset"));
+                let _ = h.sh(&format!("{QMI_PROBE} simreset"), SIMRESET_TIMEOUT);
             }
-            let _ = h.sh(&format!("{MDM_INITD} restart"));
+            let _ = h.sh(&format!("{MDM_INITD} restart"), MDM_RESTART_TIMEOUT);
 
+            // Step 2, identity: the stack moves off the old IMSI (or onto the ICCID).
+            // Wall time (the ubus reads count too): these are the B31 calibration numbers.
+            let t = h.now();
             let mut converged = false;
-            for _ in 0..15 {
-                h.sleep(Duration::from_millis(2000));
+            while h.now().saturating_duration_since(t) < IDENTITY_WAIT {
+                h.sleep(IDENTITY_POLL);
                 if switch_converged(h, &iccid, &old_imsi) {
                     converged = true;
                     break;
                 }
             }
-
-            if converged {
-                finish_job(
-                    &job,
-                    &running,
-                    Ok("switched — no reboot needed".into()),
-                    false,
+            let ident_s = h.now().saturating_duration_since(t).as_secs();
+            if !converged {
+                eprintln!(
+                    "esim: switch {iccid}: card {card_s} s, identity not back after {ident_s} s: rebooting"
                 );
-                send_switch_notifications(h, &job, &running, to_send);
-                h.wake(false);
-            } else {
                 // Fast path didn't take; reboot recovers cleanly. Keep the wake lock
                 // held so the device can't doze before it reboots.
+                list.lock().unwrap().switched_at = Some(h.now());
                 finish_job(
                     &job,
                     &running,
@@ -887,7 +1035,47 @@ impl Esim {
                     true,
                 );
                 h.reboot();
+                return;
             }
+
+            // Step 3, data: the switch is only done once the data call is back.
+            // No reboot when it isn't — that is the user's call (or a later rule).
+            let t = h.now();
+            let data = loop {
+                if h.data_up() {
+                    break true;
+                }
+                if h.now().saturating_duration_since(t) >= DATA_WAIT {
+                    break false;
+                }
+                h.sleep(NOTIF_DATA_POLL);
+            };
+            let data_s = h.now().saturating_duration_since(t).as_secs();
+            let steps = format!("card {card_s} s, identity {ident_s} s, data {data_s} s");
+            eprintln!(
+                "esim: switch {iccid}: {steps}{}",
+                if data { "" } else { " (not back)" }
+            );
+            list.lock().unwrap().switched_at = Some(h.now());
+            if data {
+                finish_job(
+                    &job,
+                    &running,
+                    Ok(format!("switched — no reboot needed ({steps})")),
+                    false,
+                );
+                send_switch_notifications(h, &job, &running, to_send);
+            } else {
+                // this switch's notifications stay pending (the eSIM page can send them)
+                finish_job_with(
+                    &job,
+                    &running,
+                    Ok(format!("switched — data not back yet ({steps})")),
+                    false,
+                    "no_data",
+                );
+            }
+            h.wake(false);
         });
         (
             200,
@@ -908,7 +1096,7 @@ impl Esim {
                 return (
                     400,
                     json!({"ok": false, "error": "missing activation code"}),
-                )
+                );
             }
         };
         if code.len() > MAX_CODE_LEN || code.chars().any(|c| c.is_control()) {
@@ -1126,17 +1314,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_hung_side_command_is_killed_with_its_group() {
+        // R1: a wedged probe / init script returns "" within its limit, and what it started dies
+        // too (the shell's background child would otherwise keep the pipe and run on).
+        let mark = format!("/tmp/luyaz-esim-r1-{}", std::process::id());
+        let t0 = std::time::Instant::now();
+        let out = run_cmd(
+            &format!("echo started; (sleep 2; touch {mark}) & sleep 3600"),
+            Duration::from_millis(300),
+        );
+        assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
+        assert_eq!(out, "");
+        std::thread::sleep(Duration::from_millis(2500));
+        assert!(!Path::new(&mark).exists(), "the group was not killed");
+        assert_eq!(run_cmd("echo ok", Duration::from_secs(5)), "ok\n");
+    }
+
+    #[test]
     fn the_free_channel_is_read_from_the_probe_output() {
         let out = "  0010: 00 21 6f 1f\n[open] channel=2 SW=9000\n[close] channel 2 released\n";
         assert_eq!(channel_of(out), Some(2));
         assert_eq!(channel_of("[open] channel=3\n"), Some(3));
-        assert_eq!(channel_of("[!] open channel rejected by modem (qmi_error=68)\n"), None);
+        assert_eq!(
+            channel_of("[!] open channel rejected by modem (qmi_error=68)\n"),
+            None
+        );
         assert_eq!(
             channel_check_of("[!] open channel rejected by modem (qmi_error=68)\n"),
             ChannelCheck::Full
         );
-        assert_eq!(channel_check_of("[open] channel=3\n"), ChannelCheck::Free(3));
-        assert_eq!(channel_check_of("sh: qmi_uim_probe: not found\n"), ChannelCheck::Unknown);
+        assert_eq!(
+            channel_check_of("[open] channel=3\n"),
+            ChannelCheck::Free(3)
+        );
+        assert_eq!(
+            channel_check_of("sh: qmi_uim_probe: not found\n"),
+            ChannelCheck::Unknown
+        );
         assert_eq!(channel_of("[open] channel=0\n"), None);
         assert_eq!(channel_of(""), None);
     }
@@ -1179,9 +1393,11 @@ mod tests {
             parse_lpac_output("{\"type\":\"progress\"}\n", false),
             Err(String::new())
         );
-        assert!(parse_lpac_output("", true)
-            .unwrap_err()
-            .contains("no result line"));
+        assert!(
+            parse_lpac_output("", true)
+                .unwrap_err()
+                .contains("no result line")
+        );
     }
 
     #[test]
@@ -1373,6 +1589,10 @@ mod tests {
         busy: bool,
         /// the ZTE stack picks up the new card (IMSI changes, sync ok)
         converges: bool,
+        /// …but only from this identity read on (0 = the first after the switch)
+        converge_at: u32,
+        /// the data call never comes back
+        no_data: bool,
         state: Mutex<FakeState>,
     }
 
@@ -1383,6 +1603,15 @@ mod tests {
         log: Vec<String>,
         rebooted: bool,
         interrupted: bool,
+        /// the next this many `profile list` answer a transitional error
+        list_fails: u32,
+        /// fake clock: what `sleep` was asked for
+        slept: Duration,
+    }
+
+    fn fake_epoch() -> Instant {
+        static T: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        *T.get_or_init(Instant::now)
     }
 
     impl Host for Fake {
@@ -1393,6 +1622,10 @@ mod tests {
             let mut s = self.state.lock().unwrap();
             s.log.push(format!("lpac {}", args.join(" ")));
             match args {
+                ["profile", "list"] if s.list_fails > 0 => {
+                    s.list_fails -= 1;
+                    Err("lpac: euicc_init: QMI error 80 (code -1)".into())
+                }
                 ["profile", "list"] => Ok(json!([
                     {"iccid": "89852000000000000001", "profileState": if s.enabled == "89852000000000000001" { "enabled" } else { "disabled" }},
                     {"iccid": "89852000000000000002", "profileState": if s.enabled == "89852000000000000002" { "enabled" } else { "disabled" }},
@@ -1410,7 +1643,7 @@ mod tests {
                 _ => Ok(Value::Null),
             }
         }
-        fn sh(&self, cmd: &str) -> String {
+        fn sh(&self, cmd: &str, _limit: Duration) -> String {
             let mut s = self.state.lock().unwrap();
             s.log.push(format!("sh {cmd}"));
             if cmd.contains("get_sync_info") {
@@ -1418,7 +1651,8 @@ mod tests {
             }
             if cmd.contains("get_sim_info") {
                 s.imsi_reads += 1;
-                let imsi = if self.converges && s.imsi_reads > 1 {
+                // read 1 is the pre-switch identity
+                let imsi = if self.converges && s.imsi_reads > 1 + self.converge_at {
                     "440100000000002"
                 } else {
                     "440100000000001"
@@ -1434,10 +1668,17 @@ mod tests {
             self.state.lock().unwrap().rebooted = true;
         }
         fn data_up(&self) -> bool {
-            true
+            !self.no_data
         }
         fn wake(&self, _hold: bool) {}
-        fn sleep(&self, _d: Duration) {}
+        fn sleep(&self, d: Duration) {
+            let mut s = self.state.lock().unwrap();
+            s.slept += d;
+            s.log.push(format!("sleep {}", d.as_millis()));
+        }
+        fn now(&self) -> Instant {
+            fake_epoch() + self.state.lock().unwrap().slept
+        }
     }
 
     #[test]
@@ -1447,15 +1688,31 @@ mod tests {
         // the fake's probe says nothing it knows: unknown, slot freed again
         assert_eq!(e.channel_check(), ChannelCheck::Unknown);
         assert!(!e.busy());
-        assert!(fake.state.lock().unwrap().log.iter().any(|l| l.contains("qmi_uim_probe open")));
+        assert!(
+            fake.state
+                .lock()
+                .unwrap()
+                .log
+                .iter()
+                .any(|l| l.contains("qmi_uim_probe open"))
+        );
         e.running.store(true, Ordering::SeqCst);
         let before = fake.state.lock().unwrap().log.len();
         assert_eq!(e.channel_check(), ChannelCheck::Busy);
-        assert_eq!(fake.state.lock().unwrap().log.len(), before, "no probe under a job");
+        assert_eq!(
+            fake.state.lock().unwrap().log.len(),
+            before,
+            "no probe under a job"
+        );
         assert!(e.busy(), "the job's slot is left alone");
     }
 
     fn switch_with(f: Fake) -> (Value, Arc<Fake>) {
+        let (j, fake, _) = switch_on(f);
+        (j, fake)
+    }
+
+    fn switch_on(f: Fake) -> (Value, Arc<Fake>, Esim) {
         let fake = Arc::new(f);
         let e = Esim::new(fake.clone());
         let f2 = fake.clone();
@@ -1467,7 +1724,7 @@ mod tests {
         for _ in 0..500 {
             let (_, j) = e.job();
             if j["data"]["status"] != "running" {
-                return (j["data"].clone(), fake);
+                return (j["data"].clone(), fake, e);
             }
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -1522,5 +1779,140 @@ mod tests {
         );
         let s = fake.state.lock().unwrap();
         assert!(!s.rebooted && !s.log.iter().any(|l| l.contains("zte_topsw_mdm restart")));
+    }
+
+    #[test]
+    fn a_slow_identity_within_the_deadline_does_not_reboot() {
+        // the stack moves on the 20th read, ≈ 40 s: the old 15 × 2 s loop rebooted here
+        let (j, fake) = switch_with(Fake {
+            enable_works: true,
+            converges: true,
+            converge_at: 19,
+            ..Fake::default()
+        });
+        assert_eq!(
+            (
+                j["status"].as_str(),
+                j["rebooting"].as_bool(),
+                j["reason"].as_str()
+            ),
+            (Some("done"), Some(false), Some("")),
+            "{j}"
+        );
+        assert!(
+            j["message"].as_str().unwrap().contains("identity 40 s"),
+            "{j}"
+        );
+        assert!(!fake.state.lock().unwrap().rebooted);
+    }
+
+    #[test]
+    fn identity_past_the_deadline_reboots() {
+        let (j, fake) = switch_with(Fake {
+            enable_works: true,
+            converges: true,
+            converge_at: 30,
+            ..Fake::default()
+        });
+        assert_eq!(j["rebooting"].as_bool(), Some(true), "{j}");
+        let s = fake.state.lock().unwrap();
+        assert!(s.rebooted);
+        let waited =
+            Duration::from_secs(2 * s.log.iter().filter(|l| *l == "sleep 2000").count() as u64);
+        assert!(
+            waited >= IDENTITY_WAIT && waited < IDENTITY_WAIT + IDENTITY_POLL,
+            "{waited:?}"
+        );
+    }
+
+    #[test]
+    fn a_switch_without_data_is_not_a_plain_success_and_does_not_reboot() {
+        let (j, fake) = switch_with(Fake {
+            enable_works: true,
+            converges: true,
+            no_data: true,
+            ..Fake::default()
+        });
+        assert_eq!(
+            (
+                j["status"].as_str(),
+                j["reason"].as_str(),
+                j["rebooting"].as_bool()
+            ),
+            (Some("done"), Some("no_data"), Some(false)),
+            "{j}"
+        );
+        assert!(j["message"].as_str().unwrap().contains("data 60 s"), "{j}");
+        let s = fake.state.lock().unwrap();
+        assert!(!s.rebooted);
+        assert!(
+            !s.log.iter().any(|l| l.contains("notification process")),
+            "notifications stay pending"
+        );
+    }
+
+    #[test]
+    fn the_list_while_the_card_settles_is_the_last_good_one() {
+        let (_, fake, e) = switch_on(Fake {
+            enable_works: true,
+            converges: true,
+            ..Fake::default()
+        });
+        // the notifications job may still hold the slot for a beat
+        for _ in 0..500 {
+            if !e.busy() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        fake.state.lock().unwrap().list_fails = 2;
+        for _ in 0..2 {
+            let (code, v) = e.profiles();
+            assert_eq!(code, 200, "{v}");
+            assert_eq!(
+                (
+                    v["data"]["stale"].as_bool(),
+                    v["data"]["updating"].as_bool()
+                ),
+                (Some(true), Some(true))
+            );
+            // the readback after the enable: the new profile already shows enabled
+            assert_eq!(v["data"]["profiles"][1]["profileState"], "enabled", "{v}");
+        }
+        let (code, v) = e.profiles();
+        assert_eq!(code, 200);
+        assert!(
+            v["data"]["stale"].is_null(),
+            "fresh list once the card answers: {v}"
+        );
+
+        // past the window, the same error is a real failure again
+        fake.state.lock().unwrap().slept += LIST_STALE_WINDOW;
+        fake.state.lock().unwrap().list_fails = 1;
+        assert_eq!(e.profiles().0, 502);
+    }
+
+    #[test]
+    fn without_a_switch_a_list_error_is_a_502() {
+        let fake = Arc::new(Fake::default());
+        let e = Esim::new(fake.clone());
+        assert_eq!(e.profiles().0, 200);
+        fake.state.lock().unwrap().list_fails = 1;
+        assert_eq!(e.profiles().0, 502);
+    }
+
+    #[test]
+    fn transitional_errors_are_told_apart() {
+        assert!(is_transitional("lpac: euicc_init: QMI error 80 (code -1)"));
+        assert!(is_transitional("lpac: SimFileNotFound"));
+        assert!(!is_transitional(
+            "lpac: es10c_enable_profile: unknown (code -1)"
+        ));
+        assert!(!is_transitional(
+            "lpac: es10c_enable_profile: catBusy euicc_init"
+        ));
+        assert!(!is_transitional(
+            "lpac: es9p_initiate_authentication: timeout"
+        ));
     }
 }

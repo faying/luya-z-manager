@@ -2,7 +2,7 @@ use crate::{
     auth::{self, Sessions},
     block::{self, Hub},
     executor::{self, Executor, RoundDriver},
-    model::{DatadVersion, Snapshot},
+    model::{CoreVersion, Snapshot},
     state, v2,
 };
 use anyhow::Result;
@@ -79,7 +79,7 @@ const HEALTH_STALL_MS: u64 = 20_000;
 /// V2-22：距上一条心跳满这么久，独立定时器就补一条。
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(5);
 
-/// D18：应急直写脚本据此判断 datad 在不在（pid + /proc/<pid>/comm 前缀）。
+/// D18：应急直写脚本据此判断核心在不在（pid + /proc/<pid>/comm 前缀）。
 /// `LUYAZ_PID_FILE`，默认 `/var/run/luyaz-core.pid`（Luya-Z 改名 D2；之前 `/var/run/zwrt-datad.pid`，
 /// `luyaz-fallback.sh` 两个都看、认活着的那个），空串 = 不写。
 pub fn write_pid_file() {
@@ -139,7 +139,7 @@ impl App {
         // 第一轮之前的占位快照：只在 `Stage::Starting` 时存在，读接口这时先等第一轮（`starting_gate`），不会发出去。
         let placeholder = Snapshot {
             ts: 0,
-            datad: Default::default(),
+            core: Default::default(),
             fields: Map::new(),
         };
         let (tx, _) = watch::channel(placeholder.clone());
@@ -476,7 +476,7 @@ async fn scorecard(method: Method, uri: axum::http::Uri, body: axum::body::Bytes
         return failed("no path to itself");
     };
     let mut cmd = tokio::process::Command::new(exe);
-    // argv[0] "zwrt-datad*" would start a second server (serve::invoked_as_datad)
+    // argv[0] "luyaz-core*" would start a second server (serve::invoked_as_core)
     cmd.arg0("u60d").args(["--scorecard-live", w]);
     if arg("summary") == Some("1") {
         cmd.arg("--summary");
@@ -836,7 +836,7 @@ async fn versions_check() -> Json<Value> {
     }
 }
 
-async fn version() -> Json<DatadVersion> {
+async fn version() -> Json<CoreVersion> {
     Json(Default::default())
 }
 /// 旧的 `/state`、`/events`（2026-10 删，legacy-api-removal.md）：回 410，漏改的调用者看这条错误
@@ -912,7 +912,7 @@ async fn v2_screen(State(app): State<App>) -> Json<Value> {
 }
 
 /// `/v2/screen` 的回复。`exec_age_ms`（V2-40）：触屏不订阅 `/v2/events`、看不到心跳，
-/// 从这里判断 datad 卡没卡（这个请求读的是现成的快照，不经执行者，卡住时照样回）。
+/// 从这里判断核心卡没卡（这个请求读的是现成的快照，不经执行者，卡住时照样回）。
 fn screen_json(
     ts: i64,
     net: crate::project::screen::NetView,
@@ -1011,8 +1011,8 @@ mod tests {
     use std::collections::HashSet;
     #[test]
     fn version_shape() {
-        let v = serde_json::to_value(DatadVersion::default()).unwrap();
-        assert_eq!(v["name"], "u60d"); // u60d: DatadVersion reports u60d (PORTING.md)
+        let v = serde_json::to_value(CoreVersion::default()).unwrap();
+        assert_eq!(v["name"], "u60d"); // u60d: CoreVersion reports u60d (PORTING.md)
     }
 
     #[test]

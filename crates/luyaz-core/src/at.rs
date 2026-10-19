@@ -1,4 +1,4 @@
-//! The few AT commands datad sends (write-op-layer.md T7b, D17): going back to
+//! The few AT commands core sends (write-op-layer.md T7b, D17): going back to
 //! automatic network selection and bringing the radio online; and the two bearer
 //! reads of `/api/network/qos` (8d-1b). A fixed list, never a string from a client.
 //! Batch 5c adds the USSD and SIM-toolkit commands ([`Phone`], built from checked parts) and
@@ -333,7 +333,7 @@ pub async fn send(cmd: Cmd) -> Result<String, String> {
 /// watchdog and `exec_age_ms` (STATE_V2.md V2-32). Each stage has its own
 /// limit, but a stage can still block inside the kernel: on B31 with the modem
 /// in LPM, a call on the AT port did not return for over 30 s and the watchdog
-/// killed datad twice (10-05). So the whole command gets `TOTAL_WAIT`, below
+/// killed core twice (10-05). So the whole command gets `TOTAL_WAIT`, below
 /// the watchdog's 30 s; past it the thread is left behind, and until it
 /// returns every new command fails at once instead of piling up more threads.
 pub(crate) async fn send_with(
@@ -1056,7 +1056,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_lock_is_shared_with_the_agent() {
-        let dir = std::env::temp_dir().join(format!("datad-at-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("core-at-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("at.lock");
         let held = File::create(&path).unwrap();
@@ -1075,7 +1075,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_stuck_stage_is_left_behind_and_blocks_later_commands_until_it_ends() {
-        let dir = std::env::temp_dir().join(format!("datad-at-stuck-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("core-at-stuck-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let lock = dir.join("at.lock").to_string_lossy().into_owned();
         let held = File::create(&lock).unwrap();

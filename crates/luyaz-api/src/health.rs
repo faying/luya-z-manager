@@ -239,7 +239,8 @@ pub fn has_cjk(s: &str) -> bool {
 
 mod runner;
 pub use runner::{
-    DOCTOR, DOCTOR_TIMEOUT, EVERY, FIRST_WAIT, Runner, run_checks, run_checks_core, run_doctor_within,
+    DOCTOR, DOCTOR_TIMEOUT, EVERY, FIRST_WAIT, Runner, output_within_group, run_checks, run_checks_core,
+    run_doctor_within,
 };
 
 #[cfg(test)]

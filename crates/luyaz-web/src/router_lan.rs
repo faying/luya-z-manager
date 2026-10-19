@@ -14,7 +14,7 @@
 //! leasetime}`. Chosen over the agent's passthrough (`lan_ipaddr`, `dhcp_enable`, …): those keys
 //! were the old page's own and were never seen working, while `zte_start` / `zte_end` are the
 //! firmware's uci options (`dhcp.lan.zte_start='192.168.0.2'`, full addresses), which upstream
-//! datad read and wrote. Still unconfirmed on a device: the readback is the only proof.
+//! core read and wrote. Still unconfirmed on a device: the readback is the only proof.
 //!
 //! Tiers (controls-inventory.md §/router/lan, brief): a new LAN address or netmask is tier 3
 //! everywhere (devices get new addresses, this page must be reopened at the new address); DHCP

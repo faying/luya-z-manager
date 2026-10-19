@@ -1177,7 +1177,7 @@ async fn block_goes_stale_mid_round_when_the_round_drags() {
 /// 一把被别人（应急脚本、agent）拿着的 flock：`hold` 之后放开。
 fn held_lock(name: &str, hold: Duration) -> (String, std::thread::JoinHandle<()>) {
     use fs2::FileExt;
-    let dir = std::env::temp_dir().join(format!("datad-exec-{}-{name}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("core-exec-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("lock");
     let f = std::fs::File::create(&path).unwrap();

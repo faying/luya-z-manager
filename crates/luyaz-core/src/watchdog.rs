@@ -1,4 +1,4 @@
-//! datad 内部看门狗（write-op-layer.md「活性」，D12，STATE_V2.md V2-32）。
+//! 核心内部看门狗（write-op-layer.md「活性」，D12，STATE_V2.md V2-32）。
 //!
 //! 一个独立的系统线程（不在 tokio 里，运行时整个卡住也照样看），每秒看一次执行者：
 //! 超过上限（默认 30 秒，`LUYAZ_WATCHDOG_S`，0 = 关）没有前进、而且不是一个还在自己超时里的调用，

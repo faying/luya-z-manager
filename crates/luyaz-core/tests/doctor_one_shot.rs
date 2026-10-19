@@ -81,9 +81,8 @@ fn run(name: &str, copy: bool) {
 
 #[test]
 fn doctor_under_every_core_name_is_one_shot_and_renamed() {
-    for name in ["zwrt-datad", "luyaz-core", "u60d"] {
+    for name in ["luyaz-core", "u60d"] {
         run(name, false);
     }
     run("luyaz-core.test", true);
-    run("zwrt-datad.test", true);
 }

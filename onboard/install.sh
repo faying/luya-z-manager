@@ -217,11 +217,9 @@ show_status() { # 状态不需要推整个包，只推设备端脚本
 }
 
 show_doctor() { # 体检脚本是独立的：推包里那份到 /tmp 直接跑，没装过 guard 的设备也能查
-  # doctor.sh 是薄壳（转给核心的 doctor）；核心没有 doctor 或要 --report 时找同目录的
-  # doctor-legacy.sh，所以两个一起推到同一个临时目录
-  local dir="$KIT/payload/guard" d=/tmp/u60-kit-doctor f files=doctor.sh
-  [ -f "$dir/doctor.sh" ] || fail "包里没有 payload/guard/doctor.sh"
-  [ -f "$dir/doctor-legacy.sh" ] && files="doctor.sh doctor-legacy.sh"
+  # doctor.sh 是薄壳：转给设备上 /data/luyaz/luyaz-core 的 doctor（没装核心就报错退出）
+  local dir="$KIT/payload/scripts" d=/tmp/u60-kit-doctor f files=doctor.sh
+  [ -f "$dir/doctor.sh" ] || fail "包里没有 payload/scripts/doctor.sh"
   if [ "$CH" = ssh ]; then
     # shellcheck disable=SC2086
     COPYFILE_DISABLE=1 tar -C "$dir" -cf - $files \
@@ -243,12 +241,12 @@ push_file() { # <local> <device path>
   fi
 }
 
-# 配置备份只存在这台电脑上。设备端脚本是包里的 payload/guard/config-backup.sh。
+# 配置备份只存在这台电脑上。设备端脚本是包里的 payload/scripts/config-backup.sh。
 do_backup() {
   local dir="${BACKUP_DIR:-$KIT/backups}" out
   mkdir -p "$dir" && chmod 700 "$dir"
   out="$dir/config-$(date +%Y%m%d-%H%M%S).tgz"
-  push_file "$KIT/payload/guard/config-backup.sh" /tmp/u60-cb.sh || fail "推送备份脚本失败"
+  push_file "$KIT/payload/scripts/config-backup.sh" /tmp/u60-cb.sh || fail "推送备份脚本失败"
   if [ "$CH" = ssh ]; then
     ssh "${SSH_OPTS[@]}" "root@$GATEWAY" "sh /tmp/u60-cb.sh export $WITH_TS" < /dev/null > "$out"
   else
@@ -264,8 +262,8 @@ do_backup() {
   # 系统文件另存一份（只给人看、升级前留底，restore 不会恢复它们）：rc.local、我们的 init 脚本、
   # dropbear 的 host key 和启动脚本。固件升级会换掉 rc.local 和 /etc/init.d（B31 社区调研 K4）。
   local sys="${out%.tgz}.system.tgz"
-  local tarcmd="cd / && tar czf - \$(for f in etc/rc.local etc/init.d/luyaz-core etc/init.d/zwrt-datad etc/init.d/luyaz-sentinel etc/init.d/luyaz-web \
-      etc/init.d/chill etc/init.d/u60-guard etc/init.d/u60-uid data/ssh/dropbear_ed25519_host_key data/ssh/authorized_keys \
+  local tarcmd="cd / && tar czf - \$(for f in etc/rc.local etc/init.d/luyaz-core etc/init.d/luyaz-sentinel etc/init.d/luyaz-web \
+      etc/init.d/chill data/ssh/dropbear_ed25519_host_key data/ssh/authorized_keys \
       data/local/tmp/start_dropbear.sh; do [ -e \$f ] && echo \$f; done)"
   if [ "$CH" = ssh ]; then
     ssh "${SSH_OPTS[@]}" "root@$GATEWAY" "$tarcmd" < /dev/null > "$sys" 2>/dev/null
@@ -284,7 +282,7 @@ do_backup() {
 
 do_restore() {
   local ans
-  push_file "$KIT/payload/guard/config-backup.sh" /tmp/u60-cb.sh || fail "推送脚本失败"
+  push_file "$KIT/payload/scripts/config-backup.sh" /tmp/u60-cb.sh || fail "推送脚本失败"
   push_file "$RESTORE_FILE" /tmp/u60-cb-restore.tgz || fail "推送备份失败"
   dev_run "sh /tmp/u60-cb.sh verify /tmp/u60-cb-restore.tgz" | tr -d '\r' || fail "这份备份校验没过，不恢复"
   echo; info "恢复会做这些（same = 一样不动；overwrite 会先把原文件留成 .pre-restore）："
@@ -355,15 +353,15 @@ case " $COMPONENTS " in *" admin "*)
   fi
   if [ -z "$AGENT_PW" ]; then
     # 设备上没装过后台时，现在就停，别等推送完在设备端才失败（那样 devui/esim 也跟着没装）
-    dev_run '{ [ -s /data/luyaz/web.env ] || [ -s /data/zte-agent.env ] || [ -f /data/local/tmp/start_zte_agent.sh ]; } && echo AGENT_INSTALLED' 2>/dev/null | grep -q AGENT_INSTALLED \
+    dev_run '[ -s /data/luyaz/web.env ] && echo AGENT_INSTALLED' 2>/dev/null | grep -q AGENT_INSTALLED \
       || fail "需要高级后台密码：设备上还没装过后台。设置 AGENT_PASSWORD（或 ROUTER_PASSWORD，两者相同时）再跑"
     warn "没有后台密码：沿用设备上已有的。"
   else
     case "$AGENT_PW" in
       *[\'\"\\\ ]*) fail "后台密码不能含引号、反斜杠或空格（设备上的 /data/luyaz/web.env 按原样存它，管理网页 luyaz-web 按原样读）" ;;
     esac
-    # 设备端 agent-auth.sh migrate 把它写成 /data/luyaz/web.env（600；Phase 10 前的布局是 /data/zte-agent.env）
-    printf "export ZTE_AGENT_PASSWORD='%s'\n" "$AGENT_PW" > "$TMP/u60-kit/payload/agent.env"
+    # 设备端 web-auth.sh migrate 把它写成 /data/luyaz/web.env（600）
+    printf "export LUYAZ_WEB_PASSWORD='%s'\n" "$AGENT_PW" > "$TMP/u60-kit/payload/web-password.env"
   fi
 ;; esac
 
@@ -374,14 +372,14 @@ S="$TMP/u60-kit/payload"
 for c in $COMPONENTS; do
   case "$c" in
     ssh)   cp "$KIT/payload/dropbear" "$S/"; cp "$SSH_KEY.pub" "$S/authorized_keys" ;;
-    admin) cp "$KIT/payload/luyaz-web" "$S/"; [ -d "$S/guard" ] || cp -R "$KIT/payload/guard" "$S/"
+    admin) cp "$KIT/payload/luyaz-web" "$S/"; [ -d "$S/scripts" ] || cp -R "$KIT/payload/scripts" "$S/"
            if [ -d "$KIT/payload/operator-logos" ]; then cp -R "$KIT/payload/operator-logos" "$S/"; fi ;;
     devui) [ -f "$KIT/payload/luyaz-sentinel" ] || fail "这个装机包没带 luyaz-sentinel（装机包太旧？）"
            cp -R "$KIT/payload/devui" "$S/"; cp "$KIT/payload/luyaz-sentinel" "$S/"
-           [ -d "$S/guard" ] || cp -R "$KIT/payload/guard" "$S/" ;;
+           [ -d "$S/scripts" ] || cp -R "$KIT/payload/scripts" "$S/" ;;
     esim)  cp "$KIT/payload/esim.tgz" "$S/" ;;
-    recover) [ -f "$KIT/payload/guard/u60-recover.sh" ] || fail "这个装机包没带 u60-recover.sh（装机包太旧？）"
-             [ -d "$S/guard" ] || cp -R "$KIT/payload/guard" "$S/" ;;
+    recover) [ -f "$KIT/payload/scripts/luyaz-recover.sh" ] || fail "这个装机包没带 luyaz-recover.sh（装机包太旧？）"
+             [ -d "$S/scripts" ] || cp -R "$KIT/payload/scripts" "$S/" ;;
     chill) [ -d "$KIT/payload/chill" ] || fail "这个装机包没带 CHILL（打包时 CHILL=0？）"
            cp -R "$KIT/payload/chill" "$S/" ;;
   esac

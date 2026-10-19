@@ -57,7 +57,7 @@ async fn u60d_sends_alert_sms_and_keeps_lan_v6_off_once_the_guard_hands_over() {
     put(&root, "/proc/sys/net/ipv6/conf/br-lan/disable_ipv6", "0\n");
     let a = luyaz_api::alerts::Alerts::at(&root.join("data/alerts"));
     a.write_whole("sms-to", "+8613800000000\n").unwrap();
-    a.add("agent-crash", "x", luyaz_api::alerts::now(), 4000)
+    a.add("web-crash", "x", luyaz_api::alerts::now(), 4000)
         .unwrap();
 
     let d: Shared = Arc::new(Mutex::new(Dev::default()));
@@ -93,7 +93,7 @@ async fn u60d_sends_alert_sms_and_keeps_lan_v6_off_once_the_guard_hands_over() {
     put(
         &root,
         crate::engines::guard_duties::FILE,
-        &luyaz_api::handover::text(&["sms", "lanv6", "datad"]),
+        &luyaz_api::handover::text(&["sms", "lanv6", "core"]),
     );
     wait("sent", || a.read_u64("sms-done") == 1).await;
     let sent = actions(&d, "vendor.call");
@@ -105,7 +105,7 @@ async fn u60d_sends_alert_sms_and_keeps_lan_v6_off_once_the_guard_hands_over() {
         .map(|i| char::from_u32(u32::from_str_radix(&body[i * 4..i * 4 + 4], 16).unwrap()).unwrap())
         .collect();
     assert!(
-        text.starts_with("[Luya-Z] Admin crashed;") && text.ends_with(")#1"),
+        text.starts_with("[Luya-Z] Admin pages crashed;") && text.ends_with(")#1"),
         "{text}"
     );
     wait("copy deleted", || !actions(&d, "sms.delete").is_empty()).await;
@@ -113,7 +113,7 @@ async fn u60d_sends_alert_sms_and_keeps_lan_v6_off_once_the_guard_hands_over() {
     assert!(
         fs::read_to_string(a.path("sms-log"))
             .unwrap()
-            .contains("\t1\tagent-crash\tsent")
+            .contains("\t1\tweb-crash\tsent")
     );
     wait("v6 off", || v6() == "1\n").await;
 
@@ -142,7 +142,7 @@ async fn no_writes_no_duties() {
         crate::engines::guard_duties::owns(&c, "sms")
             && crate::engines::guard_duties::owns(&c, "lanv6")
     );
-    assert!(!crate::engines::guard_duties::owns(&c, "datad-x"));
+    assert!(!crate::engines::guard_duties::owns(&c, "core-x"));
     let _ = fs::remove_dir_all(&root);
 }
 

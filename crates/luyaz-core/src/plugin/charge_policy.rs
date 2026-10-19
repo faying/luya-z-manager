@@ -7,7 +7,7 @@
 //! Inputs as the agent reads them (`zte-agent/src/charge_policy.rs` `event_loop`/`enforce`):
 //! plugged = the battery block's `charger_connect` while the charger block is fresh; stopped = the
 //! charger block's `direct_supply.enabled`; capacity and status from sysfs; the limit and the
-//! manual override from `charge.rs`. The agent passes on every datad feed change (about every
+//! manual override from `charge.rs`. The agent passes on every core feed change (about every
 //! second); here it is every battery/charger read, so a decision can come up to 5 s later.
 //! (That second is only the agent being woken by other blocks: its feed is these same 5 s reads.)
 //!

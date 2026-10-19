@@ -67,7 +67,7 @@ impl Backlight {
         self.is_on
     }
 
-    /// sysfs brightness > 0, without touching our own flag (datad's pace).
+    /// sysfs brightness > 0, without touching our own flag (the core's pace).
     pub fn panel_lit(&self) -> bool {
         read_int(&self.brightness(), 0) > 0
     }

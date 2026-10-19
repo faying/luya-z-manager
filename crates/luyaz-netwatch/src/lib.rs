@@ -1,16 +1,16 @@
 //! The cellular link watcher's judgements and its signal history (`docs/designs/slow-diagnosis.md`
 //! step 1), run by the core (u60-platform.md Phase 4 step 9b). Moved from zte-agent's
 //! `netwatch.rs` so the two cannot drift: what one sample says ([`sample`], [`alive_without_probe`]),
-//! where datad puts the operator's resolvers ([`operator_dns`]), the one-packet DNS probe, the count
-//! of failed datad reads ([`ErrorCounter`]), and the minute records and events of
+//! where core puts the operator's resolvers ([`operator_dns`]), the one-packet DNS probe, the count
+//! of failed core reads ([`ErrorCounter`]), and the minute records and events of
 //! `/data/signal-log` ([`record`]). Who samples, and how often, stays with the caller.
 //!
-//! The receive counter is the modem's own `traffic.rx_bytes` (datad's copy of `real_rx_bytes`), not
+//! The receive counter is the modem's own `traffic.rx_bytes` (the core's copy of `real_rx_bytes`), not
 //! `rmnet_data0`: client traffic goes through IPA offload and mostly never shows there (ER1,
 //! checked on the device 2026-10-02).
 //!
 //! [`ErrorCounter`] writes its count as one decimal line (temp file + rename; `0` at startup). The
-//! count only grows; a restart starts it at 0 again, so readers (touch-ui `datad-trial.sh`) treat a
+//! count only grows; a restart starts it at 0 again, so readers (touch-ui `core-trial.sh`) treat a
 //! smaller number as a restart. One writer only.
 
 use std::io::{self, Write};
@@ -37,7 +37,7 @@ pub const ERRORS_FILE: &str = "/tmp/netwatch.errors";
 /// After the first error, log one line per this many (5 s samples ⇒ ~5 min).
 pub const LOG_EVERY: u64 = 60;
 
-/// Why one sample could not read datad.
+/// Why one sample could not read core.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadError {
     /// Connect/timeout/HTTP error status.
@@ -58,7 +58,7 @@ impl ReadError {
     }
 }
 
-/// The error (if any) of one fetch of datad's `/state`. The `wan_status`
+/// The error (if any) of one fetch of the core's `/state`. The `wan_status`
 /// lookup is the same one [`sample`] uses.
 pub fn classify(fetched: &Result<Value, ReadError>) -> Option<ReadError> {
     match fetched {
@@ -73,7 +73,7 @@ pub fn classify(fetched: &Result<Value, ReadError>) -> Option<ReadError> {
     }
 }
 
-/// In-process count of failed datad reads, mirrored to a file.
+/// In-process count of failed core reads, mirrored to a file.
 pub struct ErrorCounter {
     path: PathBuf,
     count: u64,
@@ -99,7 +99,7 @@ impl ErrorCounter {
         self.count += 1;
         let written = write_count(&self.path, self.count);
         if self.count == 1 || self.count.is_multiple_of(LOG_EVERY) {
-            eprintln!("netwatch: datad /state unreadable ({}), {} error(s) so far", e.as_str(), self.count);
+            eprintln!("netwatch: core /state unreadable ({}), {} error(s) so far", e.as_str(), self.count);
             if let Err(w) = written {
                 eprintln!("netwatch: cannot write {}: {w}", self.path.display());
             }
@@ -123,7 +123,7 @@ pub fn wan_connected(s: &str) -> bool {
     s.ends_with("connected") && !s.contains("disconnect")
 }
 
-/// The operator's IPv4 resolvers from datad's `/state`. On the device (checked
+/// The operator's IPv4 resolvers from the core's `/state`. On the device (checked
 /// 2026-10-02) `wan_dns` is under `uci_device_info`, not `net` — reading only
 /// `net.wan_dns` found nothing, so the DNS probe never ran and manual-first saw
 /// "direct is slow too" every time. Tried in order: `net.wan_dns`,
@@ -140,7 +140,7 @@ pub fn operator_dns(state: &Value) -> Vec<String> {
     list.map(|a| a.iter().filter_map(Value::as_str).flat_map(parse_dns).collect()).unwrap_or_default()
 }
 
-/// datad's `wan_dns` looks like `222.66.251.8' '116.236.159.8` (shell-quoted
+/// the core's `wan_dns` looks like `222.66.251.8' '116.236.159.8` (shell-quoted
 /// list): keep the IPv4 addresses.
 pub fn parse_dns(s: &str) -> Vec<String> {
     s.split(|c: char| !(c.is_ascii_digit() || c == '.'))
@@ -180,7 +180,7 @@ pub fn legacy_from_v2(v2: &Value) -> Value {
 }
 
 /// Bytes the modem has received this data session (`traffic.rx_bytes` in
-/// datad's `/state`; see the module comment for why not `rmnet_data0`).
+/// the core's `/state`; see the module comment for why not `rmnet_data0`).
 pub fn cell_rx_bytes(state: Option<&Value>) -> Option<u64> {
     state?.get("traffic")?.get("rx_bytes")?.as_u64()
 }
@@ -228,12 +228,12 @@ pub fn now_unix() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// datad's home verdict older than this = datad stopped answering; say nothing rather than a
+/// the core's home verdict older than this = core stopped answering; say nothing rather than a
 /// stale code.
 pub const VERDICT_FRESH: u64 = 30;
 
-/// One watcher, fed every 5 s: the latest [`Snapshot`], datad's home verdict, the signal log while
-/// this process owns it, and the datad error count where asked. `/data/signal-log` has one writer:
+/// One watcher, fed every 5 s: the latest [`Snapshot`], the core's home verdict, the signal log while
+/// this process owns it, and the core error count where asked. `/data/signal-log` has one writer:
 /// the agent until netwatch is handed to u60d, then u60d (u60-platform.md step 9b); the other
 /// side's watcher samples without writing it. [`ERRORS_FILE`] stays the agent's (its own reads).
 pub struct Watch {
@@ -276,8 +276,8 @@ impl Watch {
         }
     }
 
-    /// Count failed datad reads into `path` (reset to 0 now). Only the agent does: the count is
-    /// about its own reads of datad, whoever writes the log.
+    /// Count failed core reads into `path` (reset to 0 now). Only the agent does: the count is
+    /// about its own reads of core, whoever writes the log.
     pub fn count_errors(&self, path: impl Into<PathBuf>) {
         *lock(&self.errors) = Some(ErrorCounter::new(path));
     }
@@ -287,7 +287,7 @@ impl Watch {
         lock(&self.log).is_some()
     }
 
-    /// One sample: datad's state in the old `/state` shape (or why it could not be read) and the
+    /// One sample: the core's state in the old `/state` shape (or why it could not be read) and the
     /// home screen (`/v2/screen`; `None` leaves the minute's verdict as "-" and is no error).
     pub fn tick(
         &self,
@@ -319,7 +319,7 @@ impl Watch {
         }
     }
 
-    /// datad's current home-screen verdict code (ok, weak, stall, …); None when datad hasn't
+    /// the core's current home-screen verdict code (ok, weak, stall, …); None when core hasn't
     /// answered for [`VERDICT_FRESH`] s.
     pub fn verdict(&self, now: Option<&BootTime>) -> Option<String> {
         let v = lock(&self.verdict).clone()?;
@@ -377,7 +377,7 @@ impl Watch {
     }
 }
 
-/// The parts of datad's legacy `/state` that netwatch reads, from the `/v2` blocks (same shapes,
+/// The parts of the core's legacy `/state` that netwatch reads, from the `/v2` blocks (same shapes,
 /// V2-46): `net` = signal, `traffic` = the live block's, and `qos`, `uci_device_info`,
 /// `interfaces` as they are. `block` gives a fresh block's data, `None` when missing or stale
 /// (left out, which is how `/state` renders a failed read). `None` without a fresh signal block.
@@ -406,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn operator_dns_wherever_datad_puts_it() {
+    fn operator_dns_wherever_core_puts_it() {
         // the device's shape: wan_dns under uci_device_info, a list under interfaces.wan4
         let dev = json!({"net": {"wan_status": "ipv4_ipv6_connected"},
             "uci_device_info": {"wan_dns": "222.66.251.8' '116.236.159.8"},
@@ -446,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn receive_counter_from_datad() {
+    fn receive_counter_from_core() {
         assert_eq!(cell_rx_bytes(Some(&json!({"traffic": {"rx_bytes": 317798120u64}}))), Some(317798120));
         assert_eq!(cell_rx_bytes(Some(&json!({"traffic": {}}))), None);
         assert_eq!(cell_rx_bytes(Some(&json!({"net": {}}))), None);
@@ -454,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_datad_dns() {
+    fn parses_core_dns() {
         assert_eq!(parse_dns("222.66.251.8' '116.236.159.8"), vec!["222.66.251.8", "116.236.159.8"]);
         assert_eq!(parse_dns("--"), Vec::<String>::new());
         assert_eq!(parse_dns("1.2.3"), Vec::<String>::new());

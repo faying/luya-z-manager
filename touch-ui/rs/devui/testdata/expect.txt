@@ -13,7 +13,7 @@
 *	system	Wi-Fi
 *	system	出口
 *	system	系统
-!loading,datad-down	home	5G
+!loading,core-down	home	5G
 good	home	11:41
 good	home	↓12.3Mb ↑1.5Mb
 good	home	78
@@ -332,7 +332,7 @@ weak	home	慢：信号弱
 nosim	home	没有 SIM 卡
 nosim	home	在「蜂窝 → SIM 与 eSIM」启用
 loading	home	正在读取…
-datad-down	home	数据服务掉线 · 数字停在
+core-down	home	数据服务掉线 · 数字停在
 empty	exit	需要登录
 empty	home	在管理网页打开登录链接
 empty	exit	已关闭
@@ -340,7 +340,7 @@ abroad	home	出口节点
 abroad	home	直连 · AI 不动
 lowbat	home	电量低，尽快充电
 full-charging	system	充电中
-!loading,datad-down	charts-collecting	正在收集 · 1 分钟后出现曲线
+!loading,core-down	charts-collecting	正在收集 · 1 分钟后出现曲线
 empty	wifi	还没有设备连上
 empty	esim	现在插的是普通 SIM 卡
 *	cellular	运营商选择
@@ -367,7 +367,7 @@ abroad	net	手动
 abroad	net	已注册到 46692
 weak	net	超时没注册上，已回到自动选网
 weak	exit	刷新失败
-datad-down	net	连不上管理后台
+core-down	net	连不上管理后台
 loading	exit	查询中…
 good	scene	选择
 good	scene	自动
@@ -387,7 +387,7 @@ abroad	exit	中国台湾 台北市 · 中华电信
 abroad	home	CHILL 直连
 good	home	U60-Test · 6 台
 weak	home	RSRP -112：离基站远，靠窗通常好些
-datad-down	home	读不到数据
+core-down	home	读不到数据
 nosignal	home	只能紧急呼叫
 nosignal	home	正在搜网
 nosignal	home	没注册上：欠费
@@ -496,7 +496,7 @@ lowbat	system	约可用 1 小时 32 分
 full-charging	system	已充满
 weak	system	已到上限，暂停充电
 long-names	system	约 3 小时 18 分充到 80%
-datad-down	system	预估
+core-down	system	预估
 bandlock	lock	n78
 bandlock	lock	B3
 bandlock	lock	n41
@@ -564,7 +564,7 @@ diagnose-result	diagnose-error	后台没回应
 diagnose-result	diagnose-error	重试
 diagnose-result	diagnose-error	蜂窝链路
 op-busy	home	正在换制式（网页发起，32 秒），稍等
-op-datad-stuck	home	数据服务没响应 · 暂时不能改设置
+op-core-stuck	home	数据服务没响应 · 暂时不能改设置
 op-verifying,op-rollback-off	home	正在确认
 op-verifying	home	后没通就退回到自动
 op-rolled-back	home	没通 · 已退回自动

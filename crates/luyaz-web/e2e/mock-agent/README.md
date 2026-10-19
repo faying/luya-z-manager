@@ -75,7 +75,7 @@ curl  http://127.0.0.1:9199/__mock/state                  # shared state + route
 | `diag-sim-warn` | `POST /api/diagnose`: the sim layer is warn (eSIM channels all taken), so it is the main cause. |
 | `diag-bearer-bad` | `POST /api/diagnose`: bearer bad (not connected); link, dns, e2e, clock, crowd (and proxy) are `blocked`. |
 | `finding` | The core's open finding (T6): registered, data connection down, confidence sure — `GET /api/diagnose` `data.finding` (evidence per layer, `iccid_tail`) and `/api/public/status` `network.finding` (symptom only). `POST /api/diagnose/dismiss` keeps it away for 5 s (the core's 24 h, shortened). |
-| `verdict-stall` / `verdict-crowd` | `/api/public/status` `network.verdict` is `stall` / `crowd` (datad's home verdict) while the signal itself stays good. Otherwise the verdict follows the persona: `weak`, `nosvc` (nosignal), `airplane`, else `ok`. |
+| `verdict-stall` / `verdict-crowd` | `/api/public/status` `network.verdict` is `stall` / `crowd` (the core's home verdict) while the signal itself stays good. Otherwise the verdict follows the persona: `weak`, `nosvc` (nosignal), `airplane`, else `ok`. |
 | `mf-alldown` | CHILL's manual-first notice says the hand-picked node and its fallback are both down (`notice_kind: "alldown"`), in `/api/public/status` and `/api/services/chill`. |
 
 Scenarios combine, e.g. `weak,missing` or `carriers8,stale`.

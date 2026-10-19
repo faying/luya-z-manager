@@ -243,8 +243,8 @@ impl Source for Replay {
     fn touch_reports(&self, m: &Model) -> u64 {
         m.touch_reports
     }
-    fn datad_version(&self, m: &Model) -> u64 {
-        m.datad_version
+    fn core_version(&self, m: &Model) -> u64 {
+        m.core_version
     }
     fn health_count(&self, m: &Model) -> i32 {
         m.health_n

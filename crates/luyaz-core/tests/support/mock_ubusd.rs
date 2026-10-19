@@ -1,4 +1,4 @@
-//! 可编程的 mock ubusd（T3）。datad 是二进制 crate，所以它由 `src/ubus/mod.rs` 用 `#[path]`
+//! 可编程的 mock ubusd（T3）。核心是二进制 crate，所以它由 `src/ubus/mod.rs` 用 `#[path]`
 //! 引进 crate 自己的单元测试（cargo 不会把 tests/ 下的子目录当成测试目标）。
 //!
 //! 按 ubusd 的做法对答：连上先发 HELLO（peer = 分给这条连接的 client id）；LOOKUP 回每个匹配对象一帧

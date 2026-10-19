@@ -547,11 +547,11 @@ pub struct RunState {
 
 // ── SIM ─────────────────────────────────────────────────────────────────────
 
-/// A fresh datad `sim` block is the answer, "unknown" included; without one, `direct` (the
+/// A fresh core `sim` block is the answer, "unknown" included; without one, `direct` (the
 /// host's `get_sim_info` read) decides.
 pub fn sim_mcc_from(block: Option<Json>, direct: impl FnOnce() -> Option<Json>) -> Option<String> {
     match block {
-        Some(sim) => mcc_from_datad_sim(&sim),
+        Some(sim) => mcc_from_core_sim(&sim),
         None => mcc_from_sim_info(&direct()?),
     }
 }
@@ -561,8 +561,8 @@ pub fn mcc_from_sim_info(info: &Json) -> Option<String> {
     mcc_from(str_field(info, "sim_states"), str_field(info, "sim_imsi"))
 }
 
-/// datad's `sim` block: the same two values, renamed (`state`, `imsi`).
-pub fn mcc_from_datad_sim(sim: &Json) -> Option<String> {
+/// the core's `sim` block: the same two values, renamed (`state`, `imsi`).
+pub fn mcc_from_core_sim(sim: &Json) -> Option<String> {
     mcc_from(str_field(sim, "state"), str_field(sim, "imsi"))
 }
 

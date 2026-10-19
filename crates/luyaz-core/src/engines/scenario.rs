@@ -235,7 +235,7 @@ impl Io for U60dIo {
     /// u60d's SIM block (its last value when stale: a SIM does not change its country unseen).
     fn sim_mcc(&self) -> Option<String> {
         let sim = self.hub.as_ref()?.view("sim")?;
-        luyaz_scenario::policy::mcc_from_datad_sim(&luyaz_scenario::Json::from(sim.data.clone()))
+        luyaz_scenario::policy::mcc_from_core_sim(&luyaz_scenario::Json::from(sim.data.clone()))
     }
 }
 

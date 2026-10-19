@@ -2,25 +2,22 @@
 //! kinds the guard's ledger task writes each round, as it writes them (touch-ui docs/LEDGER.md
 //! §4, §10, §11):
 //!
-//! - `ver`: each program once a boot (`md5` of `/proc/<pid>/exe`, `how=exe`; `zwrt-datad` is
+//! - `ver`: each program once a boot (`md5` of `/proc/<pid>/exe`, `how=exe`; `luyaz-core` is
 //!   this process, `extra` its ubus backend), then again when its pid changed and its md5 too;
-//!   the guard's scripts once a boot (`how=file`).
-//! - `proc_restart`: zwrt-datad, u60-uid whose pid or start time changed (one that
-//!   is gone keeps its record and counts when it comes back); `crashlog`, `ship` as the guard.
+//!   the scripts once a boot (`how=file`).
+//! - `proc_restart`: the core when its pid or start time changed (one that is gone keeps its
+//!   record and counts when it comes back); `crashlog`, `ship` as the guard.
 //! - `svc_exit`: a new or changed file under `/data/crashlog/<program>/`; the core's own list
 //!   (`long/crashlog.seen`), the first look ever only takes what is there.
-//! - `uid`: give-ups, hand-backs and requests in u60-uid's log, numbered by line over the boot
-//!   (`.old` when the guard renamed it). Read only: renaming stays the guard's until 5f, when the
-//!   sentinel's events take over this kind.
-//! - `datad_degraded`: episodes of the agent's marker (start 5 min into the boot when fresh and
-//!   new; end gone / new_episode / stale / reboot); the open one in `long/datad.open`.
+//! - `uid`: give-ups, hand-backs and requests in the screen log, numbered by line over the boot
+//!   (`.old` when it was renamed).
 //! - `recovery_seen`: the modem's remoteproc recovery, first reading of the boot and any fall
 //!   back to disabled.
 //!
 //! Programs are found by `comm` in /proc only when one of the known pids is gone or changed its
 //! start time, or at most every [`RESCAN_S`] for one not running; otherwise only
 //! `/proc/<pid>/stat` of the known ones is read. Files the look writes besides the event lines
-//! (`crashlog.seen`, `datad.open`) are returned as [`After`] steps, done once the lines are on
+//! (`crashlog.seen`) are returned as [`After`] steps, done once the lines are on
 //! disk, so a kill in between repeats an event (same id) rather than losing one.
 //!
 //! Coverage: `crashlog` = the directory is readable, `uidlog` = the log's last line (or
@@ -33,20 +30,9 @@ use std::path::{Path, PathBuf};
 
 /// A program not running is looked for again at most this often.
 pub const RESCAN_S: i64 = 600;
-/// After boot: no datad episode starts before this (the guard's GRACE).
-const GRACE_S: i64 = 300;
-/// The marker is fresh (the agent still vouches for it) when younger than this.
-const DATAD_FRESH_S: i64 = 180;
-
-const PROGS: [&str; 5] = [
-    crate::paths::CORE,
-    crate::paths::UI,
-    "u60-uid",
-    "tailscaled",
-    "mihomo",
-];
-const SCRIPTS: [&str; 4] = ["u60-guard.sh", "doctor.sh", "alert-lib.sh", "supervise.sh"];
-const RESTARTS: [&str; 2] = [crate::paths::CORE, "u60-uid"];
+const PROGS: [&str; 4] = [crate::paths::CORE, crate::paths::UI, "tailscaled", "mihomo"];
+const SCRIPTS: [&str; 2] = ["doctor.sh", "alert-lib.sh"];
+const RESTARTS: [&str; 1] = [crate::paths::CORE];
 /// Our own program name: this process.
 const SELF: &str = crate::paths::CORE;
 
@@ -54,9 +40,8 @@ const SELF: &str = crate::paths::CORE;
 pub struct Paths {
     pub proc_: PathBuf,
     pub crashlog: PathBuf,
-    /// The screen log (`/tmp/u60-uid.log` before Luya-Z rename E2c).
+    /// The screen log.
     pub uid_log: PathBuf,
-    pub marker: PathBuf,
     pub recovery: PathBuf,
     pub recovery_set: PathBuf,
     pub ship_txn: PathBuf,
@@ -74,7 +59,6 @@ impl Paths {
             proc_: h("/proc"),
             crashlog: h("/data/crashlog"),
             uid_log: h("/tmp/luyaz-screen.log"),
-            marker: h("/data/luyaz/scripts/datad-degraded"),
             recovery: h("/sys/class/remoteproc/remoteproc0/recovery"),
             recovery_set: h("/tmp/luyaz/recovery-set"),
             ship_txn: h("/data/luyaz/ship/txn"),
@@ -104,12 +88,8 @@ pub struct State {
     booted: bool,
     /// When /proc was last searched by name (boot seconds).
     scanned: Option<i64>,
-    /// u60-uid's log: lines read in the current file, lines in the files before it.
+    /// The screen log: lines read in the current file, lines in the files before it.
     uid: (u64, u64),
-    /// The datad episode this boot is following: (since, boot seconds it started).
-    datad_ep: Option<(i64, i64)>,
-    /// Episodes started (and maybe ended) this boot.
-    datad_seen: Vec<i64>,
     recovery: Option<String>,
 }
 
@@ -118,8 +98,6 @@ pub struct State {
 pub enum After {
     /// Lines to add to `long/crashlog.seen`.
     Seen(Vec<String>),
-    /// `long/datad.open`: `<since> <boot8>`, or gone.
-    DatadOpen(Option<String>),
 }
 
 /// What one look gives.
@@ -175,7 +153,7 @@ pub fn find_pids(proc_: &Path, names: &[&str]) -> BTreeMap<String, u32> {
             continue;
         };
         let c = c.trim_end_matches('\n');
-        // the core and the touch UI under either name are found under their ledger keys
+        // a side-by-side core is found under the core's ledger key
         let k = crate::paths::prog_key(c);
         if names.contains(&k) && !found.contains_key(k) && !child_of_same(proc_, pid, c) {
             found.insert(k.to_string(), pid);
@@ -184,51 +162,8 @@ pub fn find_pids(proc_: &Path, names: &[&str]) -> BTreeMap<String, u32> {
     found
 }
 
-/// Crash directories under their names before Luya-Z F → the new ones, and `crashlog.seen`
-/// with them, so a moved record is not a new crash. Each round: an older sentinel or core can
-/// still write the old directory.
-pub fn move_old_crashlogs(crashlog: &Path, seen_path: &Path) {
-    for (old, new) in [
-        ("u60pro-devui", crate::paths::UI),
-        ("zwrt-datad", crate::paths::CORE),
-    ] {
-        let (od, nd) = (crashlog.join(old), crashlog.join(new));
-        let Ok(rd) = std::fs::read_dir(&od) else {
-            continue;
-        };
-        if std::fs::create_dir_all(&nd).is_err() {
-            continue;
-        }
-        let mut moved = Vec::new();
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            if std::fs::rename(e.path(), nd.join(&name)).is_ok() {
-                moved.push(name);
-            }
-        }
-        if !moved.is_empty()
-            && let Some(seen) = read(seen_path)
-        {
-            let text: String = seen
-                .lines()
-                .map(|l| match l.strip_prefix(&format!("{old}/")) {
-                    Some(r) if moved.iter().any(|m| r.starts_with(&format!("{m} "))) => {
-                        format!("{new}/{r}\n")
-                    }
-                    _ => format!("{l}\n"),
-                })
-                .collect();
-            let tmp = seen_path.with_extension("seen.tmp");
-            if std::fs::write(&tmp, text).is_ok() {
-                let _ = std::fs::rename(&tmp, seen_path);
-            }
-        }
-        let _ = std::fs::remove_dir(&od);
-    }
-}
-
-/// A child under its parent's name is not the program (datad's `/v2/scorecard` runs the card in
-/// a child of its own binary; taking it for datad reads as a restart).
+/// A child under its parent's name is not the program (the core's `/v2/scorecard` runs the card in
+/// a child of its own binary; taking it for the core reads as a restart).
 fn child_of_same(proc_: &Path, pid: u32, comm: &str) -> bool {
     let Some(st) = read(&proc_.join(pid.to_string()).join("stat")) else {
         return false;
@@ -245,17 +180,15 @@ fn child_of_same(proc_: &Path, pid: u32, comm: &str) -> bool {
 /// 1 when `prog`'s restart is a deployment's own (the guard's `ship_restart`).
 fn ship_restart(txn: Option<&str>, prog: &str, boot: &str, up: i64) -> u8 {
     let Some(t) = txn else { return 0 };
-    let comps: &[&str] = match prog {
-        crate::paths::CORE => &["datad", "core"], // core: its name on the device since D4c
-        "u60-uid" => &["touch", "uid"],
-        _ => return 0,
-    };
+    if prog != crate::paths::CORE {
+        return 0;
+    }
     let get = |k: &str| {
         t.lines()
             .find_map(|l| l.strip_prefix(k).and_then(|v| v.strip_prefix('=')))
             .unwrap_or("")
     };
-    if get("boot_id") != boot || !comps.contains(&get("comp")) {
+    if get("boot_id") != boot || get("comp") != "core" {
         return 0;
     }
     if matches!(
@@ -284,7 +217,7 @@ fn crash_file(name: &str, text: &str) -> (Value, Value) {
     (json!(status), json!(up))
 }
 
-/// u60-uid's lines: what kind, if any.
+/// The screen log's lines: what kind, if any.
 fn uid_what(line: &str) -> Option<&'static str> {
     let rest = line.split_once(' ').map_or("", |x| x.1);
     if rest.starts_with("giving up") {
@@ -338,9 +271,8 @@ impl State {
         }
     }
 
-    /// One look. `boot` is the full boot id, `up` boot seconds, `wall` the wall clock (for the
-    /// marker's age).
-    pub fn look(&mut self, p: &Paths, boot: &str, up: i64, wall: i64) -> Look {
+    /// One look. `boot` is the full boot id, `up` boot seconds.
+    pub fn look(&mut self, p: &Paths, boot: &str, up: i64) -> Look {
         let mut out = Look::default();
         let b8: String = boot
             .chars()
@@ -370,7 +302,6 @@ impl State {
             .collect();
         // ── svc_exit (before proc_restart: its crashlog field) ──
         let seen_path = p.long.join("crashlog.seen");
-        move_old_crashlogs(&p.crashlog, &seen_path);
         let seen = read(&seen_path);
         let first_ever = seen.is_none();
         let seen = seen.unwrap_or_default();
@@ -422,7 +353,7 @@ impl State {
                             out.lines.push((
                                 "svc_exit",
                                 json!({
-                                    "id": format!("cl-{m}"), "prog": clean(crate::paths::prog_key(&prog)), "file": clean(&name),
+                                    "id": format!("cl-{m}"), "prog": clean(&prog), "file": clean(&name),
                                     "status": status, "found": if self.booted { "round" } else { "boot_init" },
                                     "crash_up": cu,
                                 }),
@@ -480,7 +411,7 @@ impl State {
                     "proc_restart",
                     json!({
                         "id": format!("pr-{b8}-{pid}-{st}"), "prog": prog, "old": op, "new": pid,
-                        "crashlog": u8::from(cl_new.iter().any(|c| crate::paths::prog_key(c) == prog)),
+                        "crashlog": u8::from(cl_new.iter().any(|c| c == prog)),
                         "ship": ship_restart(txn.as_deref(), prog, boot, up),
                     }),
                 ));
@@ -489,8 +420,6 @@ impl State {
         }
         // ── uid ──
         self.uid_look(p, &b8, &mut out);
-        // ── datad_degraded ──
-        self.datad_look(p, &b8, up, wall, &mut out);
         // ── recovery_seen ──
         if let Some(v) = read(&p.recovery)
             .map(|v| v.trim().to_string())
@@ -560,76 +489,6 @@ impl State {
             .unwrap_or(false);
         out.cov.push(("uidlog".into(), ok));
     }
-
-    fn datad_look(&mut self, p: &Paths, b8: &str, up: i64, wall: i64, out: &mut Look) {
-        let end = |how: &str, since: i64, eb8: &str, dur: Value, out: &mut Look| {
-            out.lines.push((
-                "datad_degraded",
-                json!({
-                    "id": format!("dde-{eb8}-{since}"), "state": "end", "since": since,
-                    "reason": null, "dur_s": dur, "how": how,
-                }),
-            ));
-            out.after.push(After::DatadOpen(None));
-        };
-        let mut open: Option<i64> = None;
-        if let Some(t) = read(&p.long.join("datad.open")) {
-            let mut f = t.split_whitespace();
-            if let (Some(s), Some(eb)) = (f.next().and_then(|s| s.parse().ok()), f.next()) {
-                if eb != b8 {
-                    end("reboot", s, eb, Value::Null, out);
-                } else {
-                    open = Some(s);
-                }
-            }
-        }
-        let (mut ms, mut mr, mut fresh, exists) = (None, None, false, p.marker.exists());
-        if let Some(t) = read(&p.marker) {
-            let mut l = t.lines();
-            ms = l.next().and_then(|x| x.trim().parse::<i64>().ok());
-            mr = l.next().map(clean).filter(|x| !x.is_empty());
-            if let Ok(m) = std::fs::metadata(&p.marker).and_then(|m| m.modified())
-                && let Ok(d) = m.duration_since(std::time::UNIX_EPOCH)
-            {
-                fresh = wall - (d.as_secs() as i64) < DATAD_FRESH_S;
-            }
-        }
-        if let Some(eo) = open {
-            let how = if !exists {
-                Some("gone")
-            } else if ms.is_some_and(|s| s != eo) {
-                Some("new_episode")
-            } else if !fresh {
-                Some("stale")
-            } else {
-                None
-            };
-            if let Some(how) = how {
-                // its start this boot, if this fold saw it (else the length is unknown)
-                let dur = match self.datad_ep {
-                    Some((es, eu)) if es == eo && how != "stale" && up >= eu => json!(up - eu),
-                    _ => Value::Null,
-                };
-                end(how, eo, b8, dur, out);
-                self.datad_ep = None;
-                open = None;
-            }
-        }
-        let Some(s) = ms else { return };
-        if open.is_some() || !fresh || up < GRACE_S || self.datad_seen.contains(&s) {
-            return;
-        }
-        out.lines.push((
-            "datad_degraded",
-            json!({
-                "id": format!("dds-{b8}-{s}"), "state": "start", "since": s, "reason": mr,
-                "dur_s": null, "how": null,
-            }),
-        ));
-        self.datad_seen.push(s);
-        self.datad_ep = Some((s, up));
-        out.after.push(After::DatadOpen(Some(format!("{s} {b8}"))));
-    }
 }
 
 /// The [`After`] steps, once the lines are written.
@@ -647,19 +506,6 @@ pub fn commit(long: &Path, after: &[After]) -> std::io::Result<()> {
                     writeln!(f, "{l}")?;
                 }
                 f.sync_all()?;
-            }
-            After::DatadOpen(None) => {
-                let _ = std::fs::remove_file(long.join("datad.open"));
-            }
-            After::DatadOpen(Some(t)) => {
-                let p = long.join("datad.open");
-                let tmp = p.with_extension("tmp");
-                {
-                    let mut f = std::fs::File::create(&tmp)?;
-                    writeln!(f, "{t}")?;
-                    f.sync_all()?;
-                }
-                std::fs::rename(&tmp, &p)?;
             }
         }
     }

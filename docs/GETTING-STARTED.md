@@ -116,7 +116,7 @@ You can also build the pieces separately and point `build-kit.sh` at the existin
 
 ```sh
 (cd touch-ui && rs/setup-src.sh && rs/build.sh device out/luyaz-ui)   # read from here by default
-DATAD_BIN=/path/to/luyaz-core ./onboard/build-kit.sh       # a core built elsewhere instead of building luyaz-core
+CORE_BIN=/path/to/luyaz-core ./onboard/build-kit.sh       # a core built elsewhere instead of building luyaz-core
 ```
 
 Other variables: `DEVUI_BIN` (touch binary), `SENTINEL_BIN` (luyaz-sentinel), `ESIM_TGZ` (a prebuilt eSIM bundle), `DEVUI_FONTS_DIR` (a prebuilt font directory), `FONTS=0` (no fonts),

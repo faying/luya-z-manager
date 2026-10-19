@@ -1,6 +1,6 @@
 //! E4 write transactions on the screen (src/ui_parts/op.c): the 事务行 under the status bar,
-//! Home's one-time 「自动退回已打开」 line, the 网络模式 segment's line while datad has a
-//! transaction for it, 「上次改动」 under 网络模式, and the write controls greyed while datad is
+//! Home's one-time 「自动退回已打开」 line, the 网络模式 segment's line while core has a
+//! transaction for it, 「上次改动」 under 网络模式, and the write controls greyed while core is
 //! stuck; the 事务页 (conclusion → 旧 → 新 · 来源 → three steps → countdown → buttons) and
 //! 系统 › 改动记录 with each change in full.
 // SPDX-License-Identifier: MIT
@@ -43,7 +43,7 @@ pub struct Op {
     seen_live: String,
     brief_id: String,
     brief_at: u32,
-    /// 知道了 tapped here: hide before datad says so
+    /// 知道了 tapped here: hide before core says so
     acked: String,
     row_state: i32,
     row_shift: i32,
@@ -267,7 +267,7 @@ impl Ui {
         (it.remaining_ms - lv::tick_get().wrapping_sub(self.op.at) as i64).max(0)
     }
 
-    /// datad has not said anything new for a while (or is stuck): the clock stops.
+    /// core has not said anything new for a while (or is stuck): the clock stops.
     fn op_stale(&self) -> bool {
         self.model.screen_stuck != 0 || lv::tick_get().wrapping_sub(self.op.at) >= OP_STALE_MS
     }
@@ -630,7 +630,7 @@ impl Ui {
     }
 
     // ---- 系统 › 改动记录 (DD5, DD10, DD11) ----
-    // datad's journal.list, each line already in words. Read when the page opens; a failed
+    // the core's journal.list, each line already in words. Read when the page opens; a failed
     // read keeps what was shown, dimmed, and says so. Two lines a row: what · change, then
     // time · source · result. A row opens its detail, where 撤销 / 重做 is (two taps) or,
     // greyed, why not.
@@ -776,7 +776,7 @@ impl Ui {
         }
     }
 
-    /// The network-mode segment (lock.rs): datad's own verdict while it has a transaction for
+    /// The network-mode segment (lock.rs): the core's own verdict while it has a transaction for
     /// that item (replaces the screen's 20 s read-back guess), and its result if that ended
     /// (seen by this screen) at or after tick `since`.
     pub(super) fn op_mode_line(&self, since: u32) -> Option<String> {
@@ -821,7 +821,7 @@ impl Ui {
         }
     }
 
-    /// Read with the change log when the tab comes into view and whenever datad's op block
+    /// Read with the change log when the tab comes into view and whenever the core's op block
     /// changes while it is in view.
     fn op_owner_refresh(&mut self) {
         let v = &self.op.view;
@@ -836,7 +836,7 @@ impl Ui {
         self.op.owner_seen = vis;
     }
 
-    // ---- DD8: write controls grey while datad is stuck ----
+    // ---- DD8: write controls grey while core is stuck ----
     fn op_guard_paint(&mut self) {
         let stuck = self.model.screen_stuck;
         if stuck == self.op.guard_was {

@@ -11,7 +11,7 @@
 *	system	Wi-Fi
 *	system	Route
 *	system	System
-!loading,datad-down	home	5G
+!loading,core-down	home	5G
 good	home	11:41
 good	home	↓12.3Mb ↑1.5Mb
 good	home	78
@@ -286,7 +286,7 @@ abroad	home	Exit node
 abroad	home	Direct · AI stays
 lowbat	home	Battery low; charge soon
 full-charging	system	Charging
-!loading,datad-down	charts-collecting	Collecting · chart in 1 min
+!loading,core-down	charts-collecting	Collecting · chart in 1 min
 empty	wifi	No devices connected yet
 *	cellular	Network Operator
 good	exit	203.0.113.24
@@ -305,7 +305,7 @@ abroad	exit	Public IP
 abroad	exit	CHILL direct
 abroad	net	Roaming
 abroad	net	Manual
-datad-down	net	Can't reach the admin backend
+core-down	net	Can't reach the admin backend
 loading	exit	Looking up…
 good	scene	Choose
 good	scene	Auto
@@ -315,7 +315,7 @@ abroad	scene	CHILL route
 good	exit	203.0.113.24
 good	home	Local
 abroad	home	CHILL Direct
-datad-down	home	No update
+core-down	home	No update
 nosignal	home	Searching
 nsa	home	n78 100M + B3 20M + B1 20M
 lte	home	China Telecom · 4G LTE · Local
@@ -377,7 +377,7 @@ jp	home	SoftBank · 4G LTE-A · Roaming
 nosignal	home	SOS
 full-charging	system	Fully charged
 weak	system	At limit; charging paused
-datad-down	system	Estimate
+core-down	system	Estimate
 bandlock	lock	n78
 bandlock	lock	B3
 bandlock	lock	n41
@@ -386,7 +386,7 @@ bandlock	lock	All bands (not locked)
 *	system	语言 / Language
 *	system	Alert SMS use this too
 
-# home: datad story headline_en / hint_en (tests/render/views.h)
+# home: core story headline_en / hint_en (tests/render/views.h)
 good	home	All good
 weak	home	Slow
 weak	home	Weak signal, RSRP -112 dBm; try ne
@@ -479,7 +479,7 @@ diagnose-result	diagnose-error	Agent not responding
 diagnose-result	diagnose-error	Retry
 diagnose-result	diagnose-error	Cellular link
 op-busy	home	Busy: network mode (Web)
-op-datad-stuck	home	Data service not responding
+op-core-stuck	home	Data service not responding
 op-verifying,op-rollback-off	home	Checking
 op-verifying	home	if no data
 op-rolled-back	home	No data · back to Auto

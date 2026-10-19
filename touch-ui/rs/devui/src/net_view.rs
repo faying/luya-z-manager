@@ -1,4 +1,4 @@
-//! src/net_view.c: luyaz-core's /v2/screen "net" parsed (the rules are datad's), its verdict
+//! src/net_view.c: luyaz-core's /v2/screen "net" parsed (the rules are the core's), its verdict
 //! codes, "is this a verdict 网络诊断 can say more about", and the placeholder view.
 // SPDX-License-Identifier: MIT
 
@@ -9,7 +9,7 @@ use devui_model::{net_view_t, nv_carrier_t};
 
 pub const NV_CA_MAX: usize = 5;
 
-// datad story.state (screen.rs State)
+// core story.state (screen.rs State)
 pub const ST_UNKNOWN: i32 = 0;
 pub const ST_OK: i32 = 1;
 pub const ST_NOSIM: i32 = 2;
@@ -45,7 +45,7 @@ fn str(o: &[u8], key: &str, cap: usize) -> String {
     }
 }
 
-/// A text field: in English its <key>_en sibling when datad sent one that is not empty.
+/// A text field: in English its <key>_en sibling when core sent one that is not empty.
 fn text(o: &[u8], key: &str, cap: usize) -> String {
     if lang::is_en() {
         let k = format!("{key}_en");
@@ -160,7 +160,7 @@ pub fn parse(net: &[u8]) -> (bool, net_view_t) {
     (ok, v)
 }
 
-/// A view that only says datad has not given one (yet).
+/// A view that only says core has not given one (yet).
 pub fn placeholder(headline: &str, why: &str) -> net_view_t {
     let mut v = net_view_t { ca: vec![nv_carrier_t::default(); NV_CA_MAX], bars_tier: -1, sim_usable: 1, ..Default::default() };
     v.story.tone = NET_NEUTRAL;
@@ -381,7 +381,7 @@ mod parse_tests {
 
     // tests/net_view_test.c
     #[test]
-    fn parses_datads_net() {
+    fn parses_core_net() {
         lang::set_en(false);
         assert!(test_views().len() >= 20);
         assert!(p(r#"{"story":{"headline":"x"},"carriers":"}"}"#).1.ca_n == 0);
@@ -417,7 +417,7 @@ mod parse_tests {
         let (ok, v) = p(&format!(r#"{{"story":{{"headline":"x"}},"carriers":[{}]}}"#, cs.join(",")));
         assert!(ok && v.ca_n as usize == NV_CA_MAX && v.ca[4].band == 5 && v.ca[4].kind == b'B' as i32);
 
-        // story.state as a code; an old datad without it, or a new code → unknown
+        // story.state as a code; an old core without it, or a new code → unknown
         let st = [
             ("ok", ST_OK),
             ("nosim", ST_NOSIM),

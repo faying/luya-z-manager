@@ -161,12 +161,12 @@ pub struct Busy {
 #[derive(Clone, Debug, Default)]
 pub struct Obs {
     pub now: u64,
-    /// The serving network's MCC from datad (`/v2` signal, D2); `None` =
+    /// The serving network's MCC from core (`/v2` signal, D2); `None` =
     /// unknown, which never counts as "in China".
     pub serving_mcc: Option<i64>,
     /// What chill.env says now.
     pub env: Items,
-    /// LAN clients (Wi-Fi + wired) from datad's `clients` block; `None` =
+    /// LAN clients (Wi-Fi + wired) from the core's `clients` block; `None` =
     /// unknown, which probes as before.
     pub clients: Option<i64>,
     /// The screen's backlight; `None` = unknown (the agent), the old rule.
@@ -487,7 +487,7 @@ pub trait Host: Send + Sync {
     /// `tailscale status --json`; `None` when not installed or not answering.
     fn tailscale_json(&self) -> Option<Value>;
     fn alert(&self, kind: &str, text: &str);
-    /// datad's D2 fields: (serving_mcc, true_roaming), `None` each when unknown.
+    /// the core's D2 fields: (serving_mcc, true_roaming), `None` each when unknown.
     fn where_now(&self) -> (Option<i64>, Option<bool>);
     /// LAN clients (Wi-Fi + wired); `None` when unknown.
     fn clients_now(&self) -> Option<i64>;

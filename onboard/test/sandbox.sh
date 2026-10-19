@@ -79,21 +79,19 @@ EOF
   chmod +x "$T/bin/adb"
 
   # admin = luyaz-web：沙盒里换成 $SB/luyaz/luyaz-web，只听 127.0.0.1:19090，密码、会话、logo 都在 $SB；
-  # 不装 /data/luyaz/scripts、/etc/init.d（install_guard 换成只放 agent-auth.sh），不记设备清单
+  # 不装 /data/luyaz/scripts、/etc/init.d（install_scripts 换成只放 web-auth.sh），不记设备清单
   cat > "$T/admin.sed" <<SED
 s|^LW=/data/luyaz\$|LW=$SB/luyaz|
-s|^    install_guard   #.*|    mkdir -p $SB/scripts \&\& put "\$P/guard/agent-auth.sh" $SB/scripts/agent-auth.sh 755; S=$SB/scripts|
+s|^    install_scripts   #.*|    mkdir -p $SB/scripts \&\& put "\$P/scripts/web-auth.sh" $SB/scripts/web-auth.sh 755; S=$SB/scripts|
 s|^    \[ -x /etc/init.d/luyaz-web \] .*|    kill "\$(cat /tmp/kitsb-lweb.pid 2>/dev/null)" 2>/dev/null|
-s|pidof zte-agent luyaz-web >/dev/null \|\| netstat -ltn 2>/dev/null \| grep -q ':9090 '|kill -0 "\$(cat /tmp/kitsb-lweb.pid 2>/dev/null)" 2>/dev/null|
-s|AGENT_AUTH_OLD="\$P/agent.env" sh "\$S/agent-auth.sh" migrate|AGENT_AUTH_ENV=$SB/zte-agent.env AGENT_AUTH_OLD="\$P/agent.env" sh "\$S/agent-auth.sh" migrate|
-s|^        sh "\$S/agent-auth.sh" migrate|        AGENT_AUTH_ENV=$SB/zte-agent.env AGENT_AUTH_OLD=$SB/start_zte_agent.sh sh "\$S/agent-auth.sh" migrate|
+s|pidof luyaz-web >/dev/null \|\| netstat -ltn 2>/dev/null \| grep -q ':9090 '|kill -0 "\$(cat /tmp/kitsb-lweb.pid 2>/dev/null)" 2>/dev/null|
 s|^    rc_add "/etc/init.d/luyaz-web start" "/etc/init.d/luyaz-web start"|    rc_add "sh $SB/lweb-start.sh" "$SB/lweb-start.sh"|
 s|^    /etc/init.d/luyaz-web start\$|    sh $SB/lweb-start.sh|
 s|^    svc_running luyaz-web \&\& pidof luyaz-web >/dev/null|    kill -0 "\$(cat /tmp/kitsb-lweb.pid 2>/dev/null)" 2>/dev/null|
 s|^    kit_record lweb\$|    true|
 SED
   sed -f "$T/admin.sed" "$K/device/install.sh" > "$K/device/install.a" && mv "$K/device/install.a" "$K/device/install.sh"
-  for want in "LW=$SB/luyaz" "S=$SB/scripts" "sh $SB/lweb-start.sh" "kitsb-lweb.pid" "AGENT_AUTH_ENV=$SB/zte-agent.env AGENT_AUTH_OLD=$SB/start_zte_agent.sh"; do
+  for want in "LW=$SB/luyaz" "S=$SB/scripts" "sh $SB/lweb-start.sh" "kitsb-lweb.pid"; do
     grep -qF "$want" "$K/device/install.sh" || { echo "✗ admin 的沙盒改写没套上：$want（device/install.sh 改过了？）" >&2; exit 1; }
   done
 
@@ -105,19 +103,14 @@ SED
       -e "s#^S=\${KIT_SCRIPTS:-/data/luyaz/scripts}#S=$SB/scripts#" \
       -e "s#^CORE_DIR=\${KIT_CORE_DIR:-/data/luyaz/core}#CORE_DIR=$SB/luyaz-core#" \
       -e "s#^SCREEN_DIR=\${KIT_SCREEN_DIR:-/data/luyaz/screen}#SCREEN_DIR=$SB/luyaz-screen#" \
-      -e "s#\${KIT_OLD_STATE:-/data/u60-kit}#$SB/old-state#g" \
-      -e "s#^WEB_ENV=/data/luyaz/web.env#WEB_ENV=$SB/zte-agent.env#" \
+      -e "s#^WEB_ENV=/data/luyaz/web.env#WEB_ENV=$SB/web.env#" \
       -e "s#/data/local/tmp/start_dropbear.sh#$SB/start_dropbear.sh#g" \
-      -e "s#/data/local/tmp/start_zte_agent.sh#$SB/start_zte_agent.sh#g" \
       -e "s#/data/ssh#$SB/ssh#g" \
       -e "s#/etc/dropbear#$SB/etc/dropbear#g" \
       -e "s#/tmp/dropbear.pid#/tmp/kitsb-dropbear.pid#g" \
       -e "s#-p 2222#-p 2223#g; s#:2222 #:2223 #g; s#(:2222)#(:2223)#g" \
       -e "s#ubus call zwrt_zte_dm set_update_mode#true#" \
       -e "s#uci -q set zwrt_zte_dm.dm_update.TURNOFFPOLLING=1 \&\& uci -q commit zwrt_zte_dm#true#" \
-      -e "s#killall zte-agent#true#" \
-      -e "s#/tmp/zte-agent.pid#/tmp/kitsb-agent.pid#g" \
-      -e "s#/data/zte-agent#$SB/zte-agent#g; s#/data/admin#$SB/admin#g" \
       -e "s#127.0.0.1:9090#127.0.0.1:19090#g" \
       -e "s#put_tree \"\$P/esim.tgz\" /data/esim#put_tree \"\$P/esim.tgz\" $SB/esim; sed -i \"s,/data/esim,$SB/esim,g\" $SB/esim/lpac.sh#" \
       -e "s#/data/esim/lpac.sh chip info#$SB/esim/lpac.sh chip info#" \
@@ -132,18 +125,17 @@ SED
   fi
   # 防呆：会写设备真实位置的东西一样都不能剩（注释行、只读的 status、已禁用的 admin/devui/recover 和只有它们
   # 调用的函数除外）。被禁用的函数体整段跳过：从「名字() {」到下一个行首的「}」
-  if awk '/^(do_admin|do_devui|do_recover|install_guard|layout_new|retire_agent|place_recover|recover_put|rc_owner|owners_stop|sentinel_start|kit_record|do_chill|do_status)\(\) \{/ { skip = 1 }
+  if awk '/^(do_admin|do_devui|do_recover|install_scripts|place_recover|recover_put|rc_owner|owners_stop|sentinel_start|kit_record|do_chill|do_status)\(\) \{/ { skip = 1 }
           !skip { print } skip && /^}/ { skip = 0 }' "$K/device/install.sh" \
      | grep -vE '^[[:space:]]*#|^[[:space:]]*p "' \
-     | grep -nE '(^|[^b])/etc/rc\.local|/data/ssh|/data/zte-agent|/data/admin|/data/luyaz|/data/u60d|/etc/init\.d/|put_tree "\$P/esim.tgz" /data/esim|set_update_mode|uci -q (set|commit)|killall zte-agent| -p 2222|127\.0\.0\.1:9090' \
+     | grep -nE '(^|[^b])/etc/rc\.local|/data/ssh|/data/luyaz|/data/plugins|/etc/init\.d/|put_tree "\$P/esim.tgz" /data/esim|set_update_mode|uci -q (set|commit)| -p 2222|127\.0\.0\.1:9090' \
      | grep -vE '^[0-9]+:(SENT_LINE|LW)=|^[0-9]+:[[:space:]]*\[ -x "/etc/init.d/\$s" \]|svc_running|/etc/init.d/zte_topsw'; then
     echo "✗ 设备端脚本改过了，沙盒改写没覆盖到上面这些行，先更新本脚本" >&2; exit 1
   fi
 
   sed -i '' -e 's#^SSH_PORT=2222#SSH_PORT=2223#' -e 's#dev_run "reboot"#dev_run "echo sandbox-no-reboot"#' \
-            -e "s#/data/local/tmp/start_zte_agent.sh#$SB/start_zte_agent.sh#g" \
-            -e "s#/data/zte-agent.env#$SB/zte-agent.env#g" -e "s#/data/luyaz/web.env#$SB/zte-agent.env#g" "$K/install.sh"
-  if grep -n '"reboot"\|/data/local/tmp/start_\|/data/zte-agent\|/data/luyaz/web.env' "$K/install.sh" | grep -v '"reboot")'; then
+            -e "s#/data/luyaz/web.env#$SB/web.env#g" "$K/install.sh"
+  if grep -n '"reboot"\|/data/luyaz/web.env' "$K/install.sh" | grep -v '"reboot")'; then
     echo "✗ 电脑端脚本里还有真的 reboot 调用或设备真实路径，先更新本脚本" >&2; exit 1
   fi
   ( cd "$K" && { sed -n '1,/^sha256/p' MANIFEST.txt
@@ -161,7 +153,7 @@ run() {
   clean >/dev/null
   # 沙盒的 luyaz-web 启动脚本（do_admin 里 /etc/init.d/luyaz-web start 的替身）
   dev "mkdir -p $SB && cat > $SB/lweb-start.sh" <<LWS
-nohup $SB/luyaz/luyaz-web serve --bind 127.0.0.1:19090 --upstream http://127.0.0.1:9460 --password-file $SB/zte-agent.env \\
+nohup $SB/luyaz/luyaz-web serve --bind 127.0.0.1:19090 --upstream http://127.0.0.1:9460 --password-file $SB/web.env \\
     --session-file $SB/web-sessions --logo-dir $SB/luyaz/operator-logos >/tmp/kitsb-lweb.log 2>&1 &
 echo \$! > /tmp/kitsb-lweb.pid
 LWS
@@ -217,7 +209,7 @@ LWS
 }
 
 # 测试前后对比：设备真实位置的文件、两个自动升级开关、我们的进程
-SNAP='md5sum /etc/rc.local /etc/dropbear/authorized_keys /data/local/tmp/start_*.sh /data/zte-agent.env /data/luyaz/luyaz-web /etc/init.d/*; uci get zwrt_zte_dm.dm_update.dm_update_mode; uci get zwrt_zte_dm.dm_update.TURNOFFPOLLING; pidof luyaz-web luyaz-sentinel u60pro-devui luyaz-ui zwrt-datad'
+SNAP='md5sum /etc/rc.local /etc/dropbear/authorized_keys /data/local/tmp/start_*.sh /data/luyaz/web.env /data/luyaz/luyaz-web /etc/init.d/*; uci get zwrt_zte_dm.dm_update.dm_update_mode; uci get zwrt_zte_dm.dm_update.TURNOFFPOLLING; pidof luyaz-web luyaz-sentinel luyaz-ui luyaz-core'
 
 case "${1:-}" in
   dry) prepare ;;

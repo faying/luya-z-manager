@@ -31,7 +31,6 @@ ROOT_SRC=${CB_ROOT:-}          # tests: read the "device" from here instead of /
 
 # Configuration files, absolute paths. Secrets are marked: restored as 600.
 FILES="
-/data/zte-agent.env                          secret
 /data/luyaz/web.env                          secret
 /data/alerts/sms-to                          secret
 /data/alerts/sms-abroad                      plain
@@ -146,8 +145,8 @@ do_verify() {
                 [ -r "$B/$f" ] && echo "  ok   $p" || { echo "  FAIL $p unreadable"; echo x >> "$X/bad"; } ;;
         esac
         case "$p" in
-            /data/zte-agent.env | /data/luyaz/web.env)
-                grep -q '^ZTE_AGENT_PASSWORD=.' "$B/$f" || { echo "  FAIL $p has no password line"; echo x >> "$X/bad"; } ;;
+            /data/luyaz/web.env)
+                grep -q -e '^LUYAZ_WEB_PASSWORD=.' -e '^ZTE_AGENT_PASSWORD=.' "$B/$f" || { echo "  FAIL $p has no password line"; echo x >> "$X/bad"; } ;;
         esac
     done
     if [ -f "$B/wireless.uci" ]; then
@@ -187,7 +186,12 @@ do_restore() { # <archive> <root>
         t=$R${p#/}
         mkdir -p "$(dirname "$t")"
         [ -e "$t" ] && cp -p "$t" "$t.pre-restore" 2>/dev/null
-        cp "$X/u60-backup/$f" "$t.restore-tmp" && mv -f "$t.restore-tmp" "$t" || { echo "  FAIL $p"; continue; }
+        cp "$X/u60-backup/$f" "$t.restore-tmp" || { echo "  FAIL $p"; continue; }
+        # an archive from before F7 has the password under the old key: written under the new one
+        if [ "$p" = /data/luyaz/web.env ] && ! grep -q '^LUYAZ_WEB_PASSWORD=' "$t.restore-tmp"; then
+            sed -i 's/^ZTE_AGENT_PASSWORD=/LUYAZ_WEB_PASSWORD=/' "$t.restore-tmp"
+        fi
+        mv -f "$t.restore-tmp" "$t" || { echo "  FAIL $p"; continue; }
         case "$(kind_of "$p")" in secret | json-secret | tailscale) chmod 600 "$t" ;; *) chmod 644 "$t" ;; esac
         echo "  restored $p"
     done

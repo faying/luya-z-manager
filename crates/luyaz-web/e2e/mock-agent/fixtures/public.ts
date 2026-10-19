@@ -25,7 +25,7 @@ export const MF_ALLDOWN = {
   notice_kind: "alldown" as const,
 };
 
-/** datad's home verdict as netwatch.rs passes it on (story.state). */
+/** the core's home verdict as netwatch.rs passes it on (story.state). */
 function verdict(ctx: Ctx): string {
   if (ctx.has("verdict-stall")) return "stall";
   if (ctx.has("verdict-crowd")) return "crowd";

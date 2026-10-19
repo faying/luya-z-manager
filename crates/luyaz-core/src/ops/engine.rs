@@ -5,7 +5,7 @@
 //!   安全类写（关数据/漫游，旧事务记 preempted，D14）；对进行中事务的「立即退回」「保留现状」。
 //! - 每一步对设备的读写都是执行者里的短任务（`Device` 经 `state::ubus`）；锁只在做决定时拿，
 //!   从不跨 await 持有。
-//! - 每次动设备之前先落意图、之后落结果（`pending.json`，D31）；datad 重启后接着确认，写不重做；
+//! - 每次动设备之前先落意图、之后落结果（`pending.json`，D31）；核心重启后接着确认，写不重做；
 //!   退回按读回幂等补发（O7：读回还不是退回目标就再发一次）。
 //! - 没有 source 的旧请求：锁被占或执行者队列满时先回和今天一样的成功，排进旧请求队列，
 //!   锁空出来再按原来的 `/control` 处理执行一次（每项只留最新、120 秒过期、安全类插队时清空）。
@@ -60,7 +60,7 @@ pub trait Device: Send + Sync + 'static {
         value: &Value,
         params: &Value,
     ) -> impl Future<Output = Result<Value, WriteError>> + Send;
-    /// BOOTTIME 毫秒：datad 重启不归零、休眠时也走。所有时限都按它算，tokio 的计时只当节拍。
+    /// BOOTTIME 毫秒：核心重启不归零、休眠时也走。所有时限都按它算，tokio 的计时只当节拍。
     fn now_ms(&self) -> u64;
     fn boot_id(&self) -> String;
 }
@@ -77,7 +77,7 @@ pub type LegacyRunner = Arc<dyn Fn(String, Value) -> BoxFuture<bool> + Send + Sy
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// 到点没通自动退回（D30：所有写入口收进 datad 并验收之前默认关）。
+    /// 到点没通自动退回（D30：所有写入口收进核心并验收之前默认关）。
     pub rollback: bool,
     /// 确认时多久读一次。
     pub poll: Duration,
@@ -529,7 +529,7 @@ impl<D: Device> Engine<D> {
         self.publish_now();
     }
 
-    /// 每轮采集交一次：进行中时倒计时跟着走，datad 卡住时这块和别的块一样变 stale。
+    /// 每轮采集交一次：进行中时倒计时跟着走，核心卡住时这块和别的块一样变 stale。
     pub fn publish_now(&self) {
         let st = self.lock();
         self.publish(&st);
@@ -631,7 +631,7 @@ impl<D: Device> Engine<D> {
         Ok(())
     }
 
-    /// `op.interrupt`（D40）：agent 里不经 datad 的用户写（eSIM 切换、AT 终端）之前发。有进行中的事务就
+    /// `op.interrupt`（D40）：agent 里不经核心的用户写（eSIM 切换、AT 终端）之前发。有进行中的事务就
     /// 取消（other_change），流水账另记一行带 `what`；没有就什么都不做。
     pub fn interrupt(&self, who: impl Into<Who>, what: &str) -> Value {
         let who = who.into();
@@ -659,7 +659,7 @@ impl<D: Device> Engine<D> {
         json!({"interrupted": true, "op_id": op_id})
     }
 
-    /// datad 启动时：有落盘的事务就接着跑（D13、D18、D31）。没有就什么都不读（不多发 ubus）。
+    /// 核心启动时：有落盘的事务就接着跑（D13、D18、D31）。没有就什么都不读（不多发 ubus）。
     /// 整个过程拿着跨进程写锁（D29）：应急直写正在写时，等它写完再看 takeover 标记。
     pub async fn start(&self) {
         let _lock = super::write_lock::acquire().await;

@@ -19,7 +19,7 @@ pub const KEEP_SECS: u64 = 600;
 /// Expected length of a run, for "try again in about N s".
 pub const RUN_TYPICAL: u64 = 20;
 pub const LINK_PROBES: usize = 10;
-/// datad's "in use" line (screen.rs `busy`): 1 Mbit/s received.
+/// the core's "in use" line (screen.rs `busy`): 1 Mbit/s received.
 pub const IN_USE_BPS: i64 = 125_000;
 pub const BASELINE_MIN: usize = 3;
 pub const SPEED_MIN: usize = 3;
@@ -419,7 +419,7 @@ pub fn worst(a: Level, b: Level) -> Level {
     if rank(b) > rank(a) { b } else { a }
 }
 
-/// What the runner reads for the signal and cap layers: datad's `/v2/screen`
+/// What the runner reads for the signal and cap layers: the core's `/v2/screen`
 /// `net.story` and a few raw values from `/state`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Radio {
@@ -665,7 +665,7 @@ pub fn judge_crowd(
     let l = Layer::new("crowd");
     let mut zh = Vec::new();
     let mut en = Vec::new();
-    // ① good signal, poor RSRQ (datad's crowd rule without the "in use" part)
+    // ① good signal, poor RSRQ (the core's crowd rule without the "in use" part)
     let e1 = match (r.tier, r.rsrq) {
         (Some(t), Some(q)) if t >= 1 => {
             if q < if r.nr { -15.0 } else { -12.0 } {

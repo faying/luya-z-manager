@@ -18,9 +18,71 @@
 
 ## Unreleased
 
-- scripts: doctor-legacy.sh 的重复实例检查标签和 core 1.2.1 一样。
-- scripts: `VERSION` 随脚本放到 `/data/luyaz/scripts/`，设备上能读到脚本的版本。
-- scripts: ship 检查界面异常时，触屏崩溃那一行新旧两种名字都认（`u60pro-devui pid … ended:` 和 `luyaz-ui pid … ended:`）。要先于 sentinel 1.0.2 上机。
+- touch: `start.sh` 退役，touch 上机只带 `luyaz-ui`。下一次 touch 上机前先 ship scripts（在那之前执行器还要 `start.sh`）。
+- scripts：`web-auth.sh` 只读 `LUYAZ_WEB_PASSWORD`（`ZTE_AGENT_PASSWORD` 的退路删了；config-backup 还原旧备份时照样改写成新键）。`luyaz-recover.sh` 不管有没有 `.migrated`，都不放回旧路径的核心程序和起 `zwrt-datad` 的 rc.local（10-19 已用 `install-recover` 装到设备）。
+
+## lweb 1.2.3 — 2026-10-19
+
+- USB 页「快速充电宝」一行：能力只是尚未验证时，原来的提示（「先在 USB-C 口插上手机」「18W 快充…」）照常显示，「尚未验证」另起一行；1427ef5d9 起这句说明把原提示盖掉了。
+- 只从 `/data/luyaz/web.env` 读 `LUYAZ_WEB_PASSWORD`（旧键退路删了；设备上的文件 F7 已改写）。
+
+## core 1.5.4 — 2026-10-19
+
+- 外部命令不会再卡住核心：eSIM 探针、`simreset`、ubus、modem 重启都有截止时间，超时整组杀掉；`iw` 读终端限 2 s、同一时间只跑一份（忙时回上次结果）；`chill.sh` 超时（任务 5 分钟、home-exit 重载 60 s）后放开 CHILL 工作槽。见 docs/designs/resilience-audit-2026-10-19.md。
+
+## scripts 1.0.3 — 2026-10-19
+
+- 仓库里的文件名跟设备一致（改名 F7）：`luyaz-ship.sh`、`luyaz-recover.sh`、`core-trial.sh`、`web-auth.sh`（原 `agent-auth.sh`；scripts 组件带 `web-auth.sh`）。`/data/luyaz/web.env` 里的密码键是 `LUYAZ_WEB_PASSWORD`；没有新键时 `web-auth.sh`、装机包和 config-backup 仍认 `ZTE_AGENT_PASSWORD`，恢复旧备份写新键。装机包里的目录叫 `scripts/`（原 `guard/`）。
+
+## touch 1.1.2 — 2026-10-19
+
+- 只是内部名字：和核心通信的数据模块叫 `core_link`（原 `datad`），渲染场景 `core-down`（原 `datad-down`）。
+
+## lweb 1.2.2 — 2026-10-19
+
+- 从 `/data/luyaz/web.env` 读 `LUYAZ_WEB_PASSWORD`；设备上的文件改写之前，没有新键时还读 `ZTE_AGENT_PASSWORD`。
+
+## sentinel 1.0.6 — 2026-10-19
+
+- 交接清单写 `core`，不再写 `datad`（核心两个都不读：做的事不变）。
+
+## core 1.5.3 — 2026-10-19
+
+- 最后一批旧名去掉（改名 F7）：快照的版本块叫 `core`（原 `datad`），`/control` 的回复是 `"busy":"core"` / `"core":"down"`，netwatch 事件 `core_lost` / `core_back`。长期层不再写 `g_datad`（它一直和 `g_core` 相同），写 `cpu_core`（原 `cpu_datad`）；成绩单只认 `g_core`、`cpu_core`、`core_degraded`、`rss_core`、`rss_ui`：上机后把设备上的历史文件改写成新名。
+
+## scripts 1.0.2 — 2026-10-19
+
+- 上机执行器、init、chaos、agent-auth、fallback、config-backup 只认新布局和新组件名（`core`；`datad`、`guard`、`uid`、`--convert`、`move-d4` 都删了）。上机前设备清单先改写成 `core`。
+
+## lweb 1.2.1 — 2026-10-19
+
+- 不再退回读 `/data/zte-agent.env`。
+
+## sentinel 1.0.5 — 2026-10-19
+
+- 不再写 `/tmp/luyaz/.migrated`，也不认旧日志名和 `comp=datad` 的上机事务。
+
+## core 1.5.2 — 2026-10-19
+
+- 只认现在的名字（Luya-Z 改名 F5/6）：组件叫 `core`、程序 `luyaz-core`，设置在 `/data/luyaz/core/core.env`（原 `datad.env`）。待机帐本去掉已退役的 `zte-agent` 一栏；longterm 不再盯 `u60-uid`、旧 guard 脚本和 `datad_degraded`。
+
+## core 1.5.1 — 2026-10-19
+
+- doctor 检查项 id 换成现在的名字：`core-http`、`web-http`、`dup-luyaz-core`、`dup-luyaz-ui`（原 `datad-http`、`agent-http`、`dup-zwrt-datad`、`dup-u60pro-devui`）。核心自己的崩溃告警叫 `core-crash`；旧的 `datad-crash` 记录照样显示原来的文字和短信（Luya-Z 改名 F4）。
+- doctor 不再检查已退役的东西：`svc-zte-agent`、`svc-zwrt-datad`、`svc-u60-guard`、`svc-u60-uid`、core-move、tmp-move 和旧进程名。已退役告警（`agent-*`、`datad-degraded`）的文字、短信和 `datad-crash` 旧名对照都删了；设备上的旧记录在上机时改写成 `core-crash`。
+
+## scripts 1.0.1 — 2026-10-19
+
+- 删除 `doctor-legacy.sh`；`doctor.sh` 只转给核心的 doctor。
+- doctor-legacy.sh 用和核心一样的新检查项 id；`chaos.sh` 认 `core-crash`。
+- 装机包不再往设备放 `start.sh` 和它的 rc.local 钩子，并退役 `/data/plugins/u60pro-devui/`（原厂界面备份对过 md5 后搬到 `/data/luyaz/ui/vendor-devui.orig-backup`，开机记录一起搬）。
+- doctor-legacy.sh 的重复实例检查标签和 core 1.2.1 一样。
+- `VERSION` 随脚本放到 `/data/luyaz/scripts/`，设备上能读到脚本的版本。
+- ship 检查界面异常时，触屏崩溃那一行新旧两种名字都认（`u60pro-devui pid … ended:` 和 `luyaz-ui pid … ended:`）。要先于 sentinel 1.0.2 上机。
+
+## sentinel 1.0.4 — 2026-10-19
+
+- 开机记录由哨兵自己写（`/data/luyaz/ui/boot-trace.log`，格式同 `start.sh prep`），不再跑 `/data/plugins/u60pro-devui/start.sh`。
 
 ## sentinel 1.0.3 — 2026-10-18
 

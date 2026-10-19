@@ -640,7 +640,7 @@ async fn ops_route(
                 Err(e) => op_error(action, StatusCode::CONFLICT, "invalid_state", &e, None),
             });
         }
-        // D40：agent 里不经 datad 的用户写（eSIM 切换、AT 终端）之前发，取消进行中的自动退回。
+        // D40：agent 里不经核心的用户写（eSIM 切换、AT 终端）之前发，取消进行中的自动退回。
         // DD18：「自动退回已打开」的提示点「知道了」。都只认触屏和网页。
         "op.interrupt" | "op.notice_ack" => {
             let what = params

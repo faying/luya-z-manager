@@ -31,14 +31,12 @@ const D7: f64 = 604_800.0;
 const D1: f64 = 86_400.0;
 /// The sources an hour line counts gaps for (`g_<src>`).
 const GS: [&str; 7] = [
-    "guard", "job", "watcher", "capture", "uidlog", "crashlog", "datad",
+    "guard", "job", "watcher", "capture", "uidlog", "crashlog", "core",
 ];
 /// The four power cells of `hour_power`.
 const CS: [&str; 4] = ["on_home", "on_abroad", "off_home", "off_abroad"];
 /// The programs `hour_proc` keeps the RSS of.
 const RS: [&str; 5] = ["agent", "core", "ui", "mihomo", "ts"];
-/// Column names before Luya-Z F, read when the new one is missing.
-const RS_OLD: [&str; 5] = ["agent", "datad", "devui", "mihomo", "ts"];
 
 /// What doctor passes its awk besides the ledger (`report_ledger`).
 #[derive(Clone, Debug, Default)]
@@ -152,14 +150,14 @@ pub struct Card {
     gx: Vec<At>,
     ver_m: HashMap<String, String>,
     ver_c: HashMap<String, (i64, f64)>,
-    datad_x: String,
+    core_x: String,
     ssr: Vec<Ssr>,
     last_ssr: HashMap<i64, usize>,
     res: HashMap<String, Res>,
     sx: Vec<(At, String, String)>,
     pr: Vec<(At, String, String, String)>,
     ug: Vec<At>,
-    /// datad_degraded episodes: start, since, dur_s ("" until it ends).
+    /// core_degraded episodes: start, since, dur_s ("" until it ends).
     dd: Vec<(At, String)>,
     ddi: HashMap<String, usize>,
     gaps: Vec<(i64, String, String, String)>,
@@ -366,7 +364,7 @@ impl Card {
                     self.ver_m.insert(p.clone(), m);
                 }
                 if crate::paths::is_core(&p) {
-                    self.datad_x = f("extra");
+                    self.core_x = f("extra");
                 }
             }
             "ssr" => {
@@ -409,7 +407,7 @@ impl Card {
                     self.ug.push(at);
                 }
             }
-            "datad_degraded" => {
+            "core_degraded" => {
                 let (st, sc) = (f("state"), f("since"));
                 if st == "start" {
                     self.dd.push((at, String::new()));
@@ -461,7 +459,7 @@ impl Card {
             "hour_proc" => {
                 if let Some(&i) = self.hk.get(&(s, idfrom(id).to_bits())) {
                     let mut q = HourProc {
-                        cpu: f("cpu_datad"),
+                        cpu: f("cpu_core"),
                         con: f("chill_on_s"),
                         cok: f("chill_ok_s"),
                         ton: f("ts_on_s"),
@@ -471,9 +469,6 @@ impl Card {
                     };
                     for (j, r) in RS.iter().enumerate() {
                         q.rss[j] = f(&format!("rss_{r}"));
-                        if q.rss[j].is_empty() || q.rss[j] == "null" {
-                            q.rss[j] = f(&format!("rss_{}", RS_OLD[j]));
-                        }
                     }
                     self.hq.insert(i, q);
                 }
@@ -1000,7 +995,7 @@ impl Card {
             "u60-uid",
             "u60-guard.sh",
         ];
-        const PL: [&str; 5] = ["agent", "datad", "触屏", "u60-uid", "guard"];
+        const PL: [&str; 5] = ["agent", "core", "触屏", "u60-uid", "guard"];
         let mut val = String::new();
         let mut worst = "达标";
         for q in 0..5 {
@@ -1097,7 +1092,7 @@ impl Card {
             &cv,
             "自动",
         );
-        // S6 datad degraded (one day)
+        // S6 core degraded (one day)
         let ws = wstart(D1, None);
         let (mut n, mut tot, mut unk) = (0, 0.0, 0);
         for (a, d) in &self.dd {
@@ -1110,7 +1105,7 @@ impl Card {
                 }
             }
         }
-        let cv = c.cov(ws, &["guard", "datad"]);
+        let cv = c.cov(ws, &["guard", "core"]);
         let s6n = n;
         let v = if n > 0 {
             format!(
@@ -1128,7 +1123,7 @@ impl Card {
         row(
             &mut out,
             "S6",
-            "datad 降级",
+            "核心降级",
             &v,
             tier(n > 0, &cv, ws, D1),
             ws,
@@ -1455,8 +1450,8 @@ impl Card {
             ws,
             D1,
         );
-        row(&mut out, "P4a", "datad 的 CPU", &v, t, ws, D1, &cv, "自动");
-        let x = self.datad_x.as_str();
+        row(&mut out, "P4a", "核心的 CPU", &v, t, ws, D1, &cv, "自动");
+        let x = self.core_x.as_str();
         let p4b = x == "ubus=socket" || x == "ubus=auto";
         let v = if !p4b {
             "cli 后端，每读一次起一个 ubus 进程"
@@ -1580,7 +1575,7 @@ impl Card {
         if summary {
             let _ = writeln!(
                 out,
-                "  账本（{}，截至 {}）：意外重启 {s1n} 次（{s1t}）、基带崩溃 {s3n} 次、datad 降级今天 {s6n} 次",
+                "  账本（{}，截至 {}）：意外重启 {s1n} 次（{s1t}）、基带崩溃 {s3n} 次、核心降级今天 {s6n} 次",
                 inp.label,
                 md_hm(wend)
             );

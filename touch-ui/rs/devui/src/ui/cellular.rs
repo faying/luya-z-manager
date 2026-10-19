@@ -87,7 +87,7 @@ impl Ui {
         let now = lv::tick_get();
         let th = t();
         if self.cell.md_arm.tap((id * 2) as i32 + on as i32, now, MD_ARM_MS) {
-            // datad merges into the whole get_wwaniface object: only the switch pressed
+            // core merges into the whole get_wwaniface object: only the switch pressed
             let k = if id == MD_DATA { "enabled" } else { "roaming" };
             self.data_control("cellular.set", &format!("{{\"{k}\":{}}}", on as i32), Some(&format!("{k}={}", on as i32)));
             if id == MD_DATA {
@@ -177,7 +177,7 @@ impl Ui {
         let md = kit::card(rest, MARGIN, y + 20, CARD_W, 100);
         self.lk.seg = kit::seg(md, PAD, 12, CARD_W - 2 * PAD, &super::lock::LK_MODE_N, Some(super::lock::lk_mode_cb));
         self.lk.mode_lbl = kit::label_w(md, f.cj12, th.t3, PAD, 54, CARD_W - 2 * PAD, true, tr("切换会短暂断网，需要按两次确认"));
-        // 「上次改动 10-03 14:32 · 网页 ›」 (DD5): only while datad knows who last changed it
+        // 「上次改动 10-03 14:32 · 网页 ›」 (DD5): only while core knows who last changed it
         self.cell.mode_card = md;
         let own = kit::bx(md, 0, 100, CARD_W, ROW_H, th.card, 0);
         own.set_style_bg_opa(lv::OPA_TRANSP, 0);
@@ -269,7 +269,7 @@ impl Ui {
     pub(super) fn refresh_wifi(&mut self, d: &devui_data_t) {
         let th = t();
         let w = self.wifi.clone();
-        // "Open" is what the encryption mode says: datad never sends the passphrase, so an
+        // "Open" is what the encryption mode says: core never sends the passphrase, so an
         // empty key is not an open network
         let open = d.wifi_enc.is_empty() || d.wifi_enc.contains("none");
         self.set(w.ssid, if d.wifi_ssid.is_empty() { "—" } else { d.wifi_ssid.as_str() });

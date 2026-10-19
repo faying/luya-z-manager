@@ -32,7 +32,7 @@ check "one clean line, 5 fields" '[ "$(wc -l <$T/alerts/queue)" = 1 ] && [ "$(aw
 check "tabs/newlines/non-ASCII removed" 'grep -q "exit 139 segv next line  done$" $T/alerts/queue'
 check "rejects a bad kind" '! alert_add Bad_Kind x && [ "$(wc -l <$T/alerts/queue)" = 1 ]'
 long=$(printf 'x%.0s' $(seq 1 200))
-alert_add datad-crash "$long"
+alert_add core-crash "$long"
 check "text cut to 120 chars" '[ "$(tail -n1 $T/alerts/queue | cut -f5 | wc -c)" = 121 ]'
 i=0
 while [ $i -lt 300 ]; do alert_add agent-crash "n$i"; i=$((i + 1)); done

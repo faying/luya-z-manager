@@ -60,7 +60,7 @@ async function own(p, ctx) {
   ok(await p.getAttribute("#al-abroad button", "aria-checked") === "false" && /国外情景/.test(await txt(p, "#al-abroad")), "abroad off + 'abroad now' note");
   ok(await p.locator("#al-recent li").count() === 4 && /24 小时内已发 \d+ 条/.test(await txt(p, "#al-recent")), `recent SMS list + sent in 24 h (${await txt(p, "#al-recent-t")})`);
   ok(/已发送/.test(await txt(p, "#al-recent")) && /在国外，未发/.test(await txt(p, "#al-recent")) && /超出限额/.test(await txt(p, "#al-recent")), "SMS results worded");
-  ok(/管理后台意外退出/.test(await txt(p, "#al-recent")), "SMS rows carry the kind label");
+  ok(/管理网页意外退出/.test(await txt(p, "#al-recent")), "SMS rows carry the kind label");
 
   // number: a bad draft is said and cannot be saved
   await p.fill("#al-n", "12");

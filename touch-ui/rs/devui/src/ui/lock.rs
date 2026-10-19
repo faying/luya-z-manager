@@ -82,7 +82,7 @@ pub struct Lock {
     /// the mode last read back (index, -1 = not in this row or never read)
     pub mode_real: i32,
     pub bg: [BandGroup; 3],
-    /// E4: the line last taken from datad's transaction, "" none
+    /// E4: the line last taken from the core's transaction, "" none
     c_op: String,
 }
 
@@ -254,9 +254,9 @@ impl Ui {
         kit::seg_arm(&lk.seg, idx);
     }
 
-    /// Every refresh, datad or not (a tap always gets an ending): highlight the mode the modem
+    /// Every refresh, core or not (a tap always gets an ending): highlight the mode the modem
     /// is on, close the confirm window, finish a wait for the read-back. sel = the device's
-    /// mode as an index; known = false when datad can't be read (the highlight then stays on
+    /// mode as an index; known = false when core can't be read (the highlight then stays on
     /// the last mode read back). Skipped while a tap is armed.
     pub(super) fn lk_mode_sync(&mut self, mut sel: i32, known: bool) {
         let now = lv::tick_get();
@@ -275,7 +275,7 @@ impl Ui {
             return;
         }
         if lk.mode_want >= 0 || self.op.view.active.have || !lk.c_op.is_empty() {
-            // E4: while datad has a transaction for this item, its verdict and countdown (from
+            // E4: while core has a transaction for this item, its verdict and countdown (from
             // the screen or the web page); a result only if it ended after this tap
             let since = if lk.mode_want >= 0 {
                 nz(lk.mode_sent)
@@ -418,7 +418,7 @@ impl Ui {
     }
 
     /// Chips = every band the modem supports; selected = the current lock set. sup is empty
-    /// on a datad without the vendor defaults: fall back to the lock set.
+    /// on a core without the vendor defaults: fall back to the lock set.
     pub(super) fn band_group_sync(&mut self, gi: usize, sup: &str, lock: &str) {
         let sup = if sup.is_empty() { lock } else { sup };
         let key = format!("{sup}|{lock}");

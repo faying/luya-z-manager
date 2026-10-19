@@ -141,7 +141,7 @@ fn device_state_fits() {
     assert!(bad.is_empty(), "{bad:#?}");
 }
 
-/// A charger mode other than enable/disable comes out as nulls (as datad writes it) and the
+/// A charger mode other than enable/disable comes out as nulls (as core writes it) and the
 /// contract takes it; before the projection built the type, the contract said bool/String
 /// and would have refused the block.
 #[test]
@@ -166,7 +166,7 @@ fn unknown_direct_supply_mode_passes() {
     assert!(c.exact);
 }
 
-/// No SIM or an unknown country: the roaming fields are null (as datad writes them) and
+/// No SIM or an unknown country: the roaming fields are null (as core writes them) and
 /// the contract takes them; it used to say i64/bool and would have refused the block.
 #[test]
 fn unknown_roaming_countries_pass() {

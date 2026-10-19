@@ -39,7 +39,7 @@ docker run --rm -v "$root":/w -v luyaz-shots-target:/target -v u60-cargo-registr
 cp "$work/Cargo.lock" "$root/Cargo.lock"
 
 python3 "$here/gen-fake-sse.py" "$work/fake-events.sse"
-printf 'ZTE_AGENT_PASSWORD=x\n' > "$work/pw.env"
+printf 'LUYAZ_WEB_PASSWORD=x\n' > "$work/pw.env"
 
 echo "== start mock + serve, fake agent"
 docker rm -f $name >/dev/null 2>&1 || true

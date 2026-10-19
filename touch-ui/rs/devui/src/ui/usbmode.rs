@@ -1,6 +1,6 @@
 //! 插线时的 USB 用法 (src/ui_parts/usbmode.c): what a phone plugged into the U60 is for. A
 //! sheet that asks (or the remembered choice, 3 s after the plug-in), and the 系统 card with
-//! what is in effect and the remembered choice. datad's usb.attach_mode does it.
+//! what is in effect and the remembered choice. the core's usb.attach_mode does it.
 // SPDX-License-Identifier: MIT
 
 use super::cellular::nz;
@@ -186,7 +186,7 @@ impl Ui {
         self.um_paint();
     }
 
-    /// Send mode i; remembered = the automatic run. false if datad could not be asked.
+    /// Send mode i; remembered = the automatic run. false if core could not be asked.
     fn um_send(&mut self, i: i32, remembered: bool) -> bool {
         if i == 2 {
             return true; // 网口配件: the vendor writes nothing either

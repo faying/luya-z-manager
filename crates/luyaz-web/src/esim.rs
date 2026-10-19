@@ -56,6 +56,10 @@ const CHIP_RETRY: Duration = Duration::from_secs(30);
 const JOB_EVERY: Duration = Duration::from_millis(1500);
 const NOTIF_JOB_EVERY: Duration = Duration::from_secs(2);
 const JOB_LIMIT: Duration = Duration::from_secs(120);
+/// A switch is checked card → identity → data in the engine (`luyaz-esim`: enable 30 s,
+/// simreset 15 s, mdm restart 30 s, `IDENTITY_WAIT` 45 s, `DATA_WAIT` 60 s, plus the reads):
+/// must stay above their sum, or a slow-but-fine switch reads as timed out.
+const SWITCH_LIMIT: Duration = Duration::from_secs(240);
 /// Downloads go over the mobile link to the SM-DP+ and can take minutes.
 const DOWNLOAD_LIMIT: Duration = Duration::from_secs(600);
 /// A switch re-attaches the modem (~40 s); the list may read busy meanwhile.
@@ -840,6 +844,9 @@ pub fn confirm(act: Act, r: &Req, from: Option<&str>, n_notifs: usize, l: Lang) 
 pub enum JobEnd {
     Done {
         rebooting: bool,
+        /// A switch whose data call did not come back in time (the agent's `reason: "no_data"`):
+        /// the card and the modem are on the new profile, no reboot was done.
+        no_data: bool,
     },
     Error {
         message: String,
@@ -863,6 +870,7 @@ pub fn job_end(ours: u64, j: &Value) -> Option<JobEnd> {
     match j["status"].as_str() {
         Some("done") => Some(JobEnd::Done {
             rebooting: j["rebooting"].as_bool() == Some(true),
+            no_data: j["reason"].as_str() == Some("no_data"),
         }),
         Some("error") => Some(JobEnd::Error {
             message: j["message"].as_str().unwrap_or("").to_owned(),
@@ -913,6 +921,23 @@ pub fn applied(act: Act, r: &Req, l: Lang) -> String {
         (Act::Notif, Lang::En) => "Notifications sent".into(),
         (Act::Notif, Lang::Zh) => "通知已发送".into(),
     }
+}
+
+/// The switch took (card and modem) but the data call did not come back: never plain success.
+pub fn no_data(r: &Req, l: Lang) -> write::Outcome {
+    write::Outcome::Ended(
+        match l {
+            Lang::En => format!(
+                "Switched to “{}”, but mobile data has not come back yet. Wait a minute; if it stays down, check the APN or switch back.",
+                r.name
+            ),
+            Lang::Zh => format!(
+                "已切换到「{}」，但移动数据还没恢复。等一分钟；一直不通就检查 APN 或切回去。",
+                r.name
+            ),
+        },
+        "warn",
+    )
 }
 
 /// The job (or the nickname call) said it worked, the card doesn't show it: never success.
@@ -999,10 +1024,10 @@ async fn wait_job(app: &Shared, who: &Caller, ours: u64, act: Act) -> JobEnd {
     } else {
         JOB_EVERY
     };
-    let limit = if act == Act::Download {
-        DOWNLOAD_LIMIT
-    } else {
-        JOB_LIMIT
+    let limit = match act {
+        Act::Download => DOWNLOAD_LIMIT,
+        Act::Switch => SWITCH_LIMIT,
+        _ => JOB_LIMIT,
     };
     let deadline = tokio::time::Instant::now() + limit;
     let mut tick = tokio::time::Instant::now();
@@ -1129,7 +1154,9 @@ async fn run(
             Some(id) => match wait_job(&app, &who, id, act).await {
                 JobEnd::Error { message, reason } => job_failed(&message, &reason, l),
                 JobEnd::TimedOut => timed_out(l),
-                JobEnd::Done { rebooting: true } if act == Act::Switch => {
+                JobEnd::Done {
+                    rebooting: true, ..
+                } if act == Act::Switch => {
                     *reboot_mark().lock().unwrap() = Some(Instant::now());
                     bump(&app);
                     let html = format!(
@@ -1152,6 +1179,13 @@ async fn run(
                     // close the reply now: the reboot must not cut it (a cut reply reads as lost)
                     let _ = tx.send(patch(&html)).await;
                     return;
+                }
+                JobEnd::Done { no_data: true, .. } if act == Act::Switch => {
+                    if readback(&app, &who, act, &r).await {
+                        no_data(&r, l)
+                    } else {
+                        not_read(act, &r, l)
+                    }
                 }
                 JobEnd::Done { .. } | JobEnd::Moved => {
                     if readback(&app, &who, act, &r).await {

@@ -1,4 +1,4 @@
-//! datad's E4 transaction view (src/op_view.c): the /v2/screen "op" object, the change log
+//! the core's E4 transaction view (src/op_view.c): the /v2/screen "op" object, the change log
 //! (journal.list) and who last changed a setting, read into plain fields. Texts come in both
 //! languages (<key>_zh / <key>_en); the screen's language picks. Field sizes as in C (a longer
 //! value is cut where C cuts it).
@@ -98,7 +98,7 @@ fn s(obj: &[u8], key: &str, cap: usize) -> String {
     }
 }
 
-/// datad sends every sentence twice: <key>_zh and <key>_en
+/// core sends every sentence twice: <key>_zh and <key>_en
 fn text(obj: &[u8], key: &str, cap: usize) -> String {
     if lang::is_en() {
         let v = s(obj, &format!("{key}_en"), cap);
@@ -274,7 +274,7 @@ pub fn log_parse(reply: &str, max: usize) -> Option<Vec<OpLog>> {
     Some(out)
 }
 
-/// DD14 display names; datad's journal rows carry them, owners don't
+/// DD14 display names; the core's journal rows carry them, owners don't
 const SRC: [(&str, &str, &str); 8] = [
     ("screen", "触屏", "Screen"),
     ("legacy", "触屏", "Screen"),

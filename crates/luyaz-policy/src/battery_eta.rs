@@ -149,7 +149,7 @@ pub struct Report {
     pub minutes: Option<i64>,
     /// 100, or the charge limit while it is on.
     pub target_pct: i64,
-    /// Device clock, seconds (same base as datad's `ts`).
+    /// Device clock, seconds (same base as the core's `ts`).
     pub observed_at: u64,
     /// Samples in the buffer.
     pub samples: usize,

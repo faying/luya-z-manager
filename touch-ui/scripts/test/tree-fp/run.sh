@@ -1,8 +1,8 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
-# The directory fingerprint (docs/SHIP.md) is one algorithm in three device
-# scripts: u60-ship.sh tree-fp, u60-recover.sh tree-fp, doctor.sh --tree-fp.
-# All three must give scripts/test/fixtures/tree.expected for fixtures/tree/
+# The directory fingerprint (docs/SHIP.md) is one algorithm in two device
+# scripts: luyaz-ship.sh tree-fp, luyaz-recover.sh tree-fp (the core's doctor
+# --tree-fp is checked on the same fixture by its own Rust test). Both must give scripts/test/fixtures/tree.expected for fixtures/tree/
 # (the Mac side, tools/luyaz, checks the same fixture with md5 -q), agree on
 # runtime trees, and refuse the same broken ones. Runs in a busybox container
 # (scripts/test/docker.sh); writes only under mktemp -d.
@@ -16,11 +16,10 @@ FAIL=0
 ok() { PASS=$((PASS + 1)); echo "  ok   $1"; }
 bad() { FAIL=$((FAIL + 1)); echo "  FAIL $1"; }
 
-fp() { # fp <ship|recover|doctor> <dir> → prints the fingerprint, exit status kept
+fp() { # fp <ship|recover> <dir> → prints the fingerprint, exit status kept
     case "$1" in
-        ship) sh "$SCRIPTS/u60-ship.sh" tree-fp "$2" ;;
-        recover) sh "$SCRIPTS/u60-recover.sh" tree-fp "$2" ;;
-        doctor) sh "$SCRIPTS/doctor.sh" --tree-fp "$2" ;;
+        ship) sh "$SCRIPTS/luyaz-ship.sh" tree-fp "$2" ;;
+        recover) sh "$SCRIPTS/luyaz-recover.sh" tree-fp "$2" ;;
     esac
 }
 
@@ -34,7 +33,7 @@ SLOW=$(cd "$FIX/tree" && find . -type f | sed 's|^\./||' | LC_ALL=C sort |
     while IFS= read -r f; do printf '%s %s\n' "$(md5sum <"$f" | cut -d' ' -f1)" "$f"; done)
 [ "$(printf '%s\n' "$SLOW" | md5sum | cut -d' ' -f1)" = "$WANT" ] && ok "slow per-file loop gives tree.expected" || bad "slow per-file loop differs"
 
-for s in ship recover doctor; do
+for s in ship recover; do
     got=$(fp $s "$FIX/tree")
     rc=$?
     [ $rc = 0 ] && [ "$got" = "$WANT" ] && ok "$s: fixture → $WANT" || bad "$s: fixture → “$got” (rc $rc), want $WANT"
@@ -44,7 +43,7 @@ T=$(mktemp -d)
 cp -a "$FIX/tree" "$T/t"
 
 agree() { # agree <case> <dir> <expected fp or FAIL>
-    for s in ship recover doctor; do
+    for s in ship recover; do
         got=$(fp $s "$2")
         rc=$?
         if [ "$3" = FAIL ]; then

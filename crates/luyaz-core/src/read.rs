@@ -1,15 +1,15 @@
-//! Phase 2: the device read path, moved from zwrt-datad (data-service `8605c28`, the build on the
+//! Phase 2: the device read path, moved from data-service (data-service `8605c28`, the build on the
 //! device since 10-07). `block`, `cell_window`, `command`, `executor`, `model`, `project/`, `qos`,
-//! `sms`, `state`, `uci` and `ubus/` keep datad's file names so a later datad fix can be carried
+//! `sms`, `state`, `uci` and `ubus/` keep the core's file names so a later core fix can be carried
 //! over with a plain diff; what was left out and what still has to follow is in `PORTING.md`.
 //!
-//! Shadow mode (u60-platform.md Phase 2): u60d reads the same things datad reads and the outputs
+//! Shadow mode (u60-platform.md Phase 2): u60d reads the same things core reads and the outputs
 //! are compared block by block. Nothing here writes to the device.
 
 use crate::{block, executor, model::Snapshot, state};
 use std::{sync::Arc, time::Duration};
 
-/// One collection round, the same as `zwrt-datad --once`: the executor runs the round
+/// One collection round, the same as data-service's `--once`: the executor runs the round
 /// (blocks first, then the snapshot), the result is the full snapshot.
 pub async fn once(interval: Duration) -> Snapshot {
     rounds(interval, 1, Box::new(block::NoSink)).await

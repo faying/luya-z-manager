@@ -113,7 +113,7 @@ enum Cmd {
         /// until the owner picks another number).
         #[arg(long, default_value_t = 10)]
         idle_secs: u64,
-        /// The admin password file (`ZTE_AGENT_PASSWORD=…`, the device's /data/luyaz/web.env):
+        /// The admin password file (`LUYAZ_WEB_PASSWORD=…`, the device's /data/luyaz/web.env):
         /// logins are checked here, nowhere else. Without it every login is refused.
         #[arg(long, env = "LUYAZ_WEB_PASSWORD_FILE")]
         password_file: Option<std::path::PathBuf>,

@@ -83,27 +83,27 @@ If the U60 is not at `192.168.0.1`: `GATEWAY=192.168.x.1 ./install.sh`.
 
 Programs and data all live in `/data` (firmware upgrades don't wipe it). Autostart is only a few lines added to `/etc/rc.local`; no stock service is changed.
 The core luyaz-core, the advanced admin web luyaz-web and the sentinel luyaz-sentinel are supervised by the system's procd: if one crashes it is restarted automatically and an alert is logged (SMS notification can be set up in the admin web under 「系统 → 告警」 (System → Alerts)).
-After `admin` and `devui`, the kit writes what it installed (kit date, commit) into the device manifest `/data/luyaz/ship/manifest.jsonl`, one line per component (lweb; touch, sentinel, datad = the core), which `doctor` compares with the files.
-`devui` installs the touch UI, luyaz-core and luyaz-sentinel. In `rc.local` the line `/etc/init.d/luyaz-core start` is followed by `/etc/init.d/luyaz-sentinel start`; lines from older kits (`zwrt-datad`, start.sh, `u60-uid`, `u60-guard`) are replaced, and those services are stopped (never disabled). After starting the sentinel it waits up to 60 s until it runs under procd, its heartbeat says `ours`, and the running touch UI is the file just installed. `admin` installs only luyaz-web.
-The kit installs the current layout directly. A device still on the old layout (`/data/u60d`, `/data/u60-uid` or `/data/u60-ship` without the new `.migrated` markers, or `/data/u60-kit` instead of `/data/luyaz/kit`) is refused with a message saying what to move first.
+After `admin` and `devui`, the kit writes what it installed (kit date, commit) into the device manifest `/data/luyaz/ship/manifest.jsonl`, one line per component (lweb; touch, sentinel, core), which `doctor` compares with the files.
+`devui` installs the touch UI, luyaz-core and luyaz-sentinel. In `rc.local` the line `/etc/init.d/luyaz-core start` is followed by `/etc/init.d/luyaz-sentinel start`. After starting the sentinel it waits up to 60 s until it runs under procd, its heartbeat says `ours`, and the running touch UI is the file just installed. `admin` installs only luyaz-web.
+The kit installs the current layout only. A device with an older layout (`/data/u60d`, `/data/u60-uid`, `/data/u60-ship`, `/data/plugins/u60pro-devui` or `/data/plugins/zwrt-datad` still there) is refused: upgrade it with an older kit first.
 
 | Path | Purpose |
 |---|---|
 | `/data/ssh/` | dropbear, host key, `authorized_keys` (**the master copy of your public keys**) |
 | `/data/local/tmp/start_dropbear.sh` | At boot, syncs the public keys to `/etc/dropbear/` and starts dropbear (:2222) |
 | `/data/luyaz/luyaz-core`, `/data/luyaz/core/` | Core (:9460, local only): the touch UI's and admin web's data, and every change, go through it. State in `/data/luyaz/core/`, log `/tmp/luyaz-core.log` |
-| `/data/luyaz/luyaz-web`, `/data/luyaz/operator-logos/` | Advanced admin web (luyaz-web on :9090). zte-agent was removed on 2026-10-14: the kit stops an old one and drops its `rc.local` line |
-| `/data/luyaz/web.env` | **Admin web password** (readable by root only; older kits kept it in `/data/zte-agent.env`) |
-| `/data/luyaz/luyaz-sentinel`, `/data/luyaz/screen/` | Sentinel (replaces u60-uid and u60-guard): owns the screen, restarts the touch UI if it crashes, after two failed starts in a row switches back to the stock interface with an alert (long-press the bottom-right corner for 3 seconds to come back); also the Wi-Fi fallback watchdog and alert SMS. Control FIFO `/tmp/luyaz-screen.ctl`, log `/tmp/luyaz-sentinel.log`, heartbeat `/tmp/luyaz-sentinel.hb` |
-| `/data/luyaz/ui/` | Touch UI `luyaz-ui`, its fonts and operator logos. `/data/plugins/u60pro-devui/` keeps only `start.sh` and backups |
-| `/data/luyaz/scripts/`, `/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}` | Device scripts (doctor.sh, a shim over `luyaz-core doctor`; alert-lib.sh …; the ship executor luyaz-ship.sh and datad-trial.sh too) and process supervision (started at boot by `/etc/init.d/… start` lines in `rc.local`, not via `enable`) |
+| `/data/luyaz/luyaz-web`, `/data/luyaz/operator-logos/` | Advanced admin web (luyaz-web on :9090) |
+| `/data/luyaz/web.env` | **Admin web password** (readable by root only) |
+| `/data/luyaz/luyaz-sentinel`, `/data/luyaz/screen/` | Sentinel: owns the screen, restarts the touch UI if it crashes, after two failed starts in a row switches back to the stock interface with an alert (long-press the bottom-right corner for 3 seconds to come back); also the Wi-Fi fallback watchdog and alert SMS. Control FIFO `/tmp/luyaz-screen.ctl`, log `/tmp/luyaz-sentinel.log`, heartbeat `/tmp/luyaz-sentinel.hb` |
+| `/data/luyaz/ui/` | Touch UI `luyaz-ui`, its fonts and operator logos, the boot trace `boot-trace.log` and the stock UI backup `vendor-devui.orig-backup` |
+| `/data/luyaz/scripts/`, `/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}` | Device scripts (doctor.sh, a shim over `luyaz-core doctor`; alert-lib.sh …; the ship executor luyaz-ship.sh and core-trial.sh too) and process supervision (started at boot by `/etc/init.d/… start` lines in `rc.local`, not via `enable`) |
 | `/data/luyaz/ship/` | `u60 ship` transactions, manifest `manifest.jsonl`, boot clean-up `luyaz-recover.sh` |
 | `/data/alerts/`, `/data/crashlog/` | Alert records, logs from program crashes |
 | `/data/esim/` | lpac (eSIM card read/write tool) |
 | `/data/chill/`, `/etc/init.d/chill` | CHILL: mihomo, rule sets, zashboard, `chill.sh`; subscription URL in `/data/chill/chill.env` (you write it, readable by root only) |
 | `/data/luyaz/kit/rc.local.orig` | Backup of the stock `rc.local` from before the first install |
 
-Older kits left `/data/zte-agent*`, `/data/admin/`, `/data/plugins/zwrt-datad/`, `/data/u60-guard/`, `/data/u60-uid/` behind; nothing uses them now and they are safe to delete.
+Older kits left `/data/zte-agent*`, `/data/admin/`, `/data/plugins/zwrt-datad/`, `/data/u60-guard/`, `/data/u60-uid/` behind; nothing uses them now and they are safe to delete (this kit refuses to install while the last two layouts' directories are there).
 
 ## Everyday use
 

@@ -1,6 +1,6 @@
 //! 原厂事件监听（docs/STATE_V2.md V2-31、V2-48）。
 //!
-//! datad 起一个长期运行的 `ubus listen <事件…>` 子进程，逐行读它的输出；每行按事件名查 [`Handler`] 表，
+//! 核心起一个长期运行的 `ubus listen <事件…>` 子进程，逐行读它的输出；每行按事件名查 [`Handler`] 表，
 //! 每种事件各自（300 ms 去抖后）调它的回调：短信事件让短信读取「立即读」，Type-C 插拔和快充充电宝事件
 //! 让 `typec`、`powerbank`、`charger` 块立即读，都唤醒执行者尽快开始一轮。
 //! 同一种事件两次触发之间至少隔 `Handler::min_interval`（短信 2 秒）：密集时不会每 300 ms 整轮重采。
@@ -13,8 +13,8 @@
 //!   日志只在第一次失败和退避到顶时各写一行，不刷屏。
 //! - `LUYAZ_SMS_LISTEN=0` 关掉整个监听（默认开；名字是只有短信事件时起的）：短信退回按节拍读，
 //!   `typec`、`powerbank` 退回 60 秒兜底轮询。
-//! - 子进程不能比 datad 活得久：spawn 时设 `PR_SET_PDEATHSIG=SIGKILL`（datad 被 SIGKILL 也跟着死），
-//!   datad 收到 SIGTERM/SIGINT 时先 [`shutdown`]（kill + wait 子进程）再退出。
+//! - 子进程不能比核心活得久：spawn 时设 `PR_SET_PDEATHSIG=SIGKILL`（核心被 SIGKILL 也跟着死），
+//!   核心收到 SIGTERM/SIGINT 时先 [`shutdown`]（kill + wait 子进程）再退出。
 
 use super::backend::cli_bin;
 use std::{process::Stdio, sync::Arc, time::Duration};
@@ -58,7 +58,7 @@ fn stop_tx() -> &'static watch::Sender<bool> {
 }
 static TASK: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>> = std::sync::Mutex::new(None);
 
-/// datad 退出前调：让监听子进程退出并收尸，最多等 `limit`。
+/// 核心退出前调：让监听子进程退出并收尸，最多等 `limit`。
 pub async fn shutdown(limit: Duration) {
     stop_tx().send_replace(true);
     let task = TASK.lock().ok().and_then(|mut t| t.take());
@@ -207,7 +207,7 @@ async fn run_once(
 ) -> String {
     let mut stop = stop_tx().subscribe();
     if *stop.borrow_and_update() {
-        return "datad 退出".into();
+        return "核心退出".into();
     }
     let child = crate::command::die_with_parent(&mut Command::new(program))
         .arg("listen")
@@ -230,13 +230,13 @@ async fn run_once(
             r = bounded_line(&mut lines) => r,
             _ = stop.changed() => {
                 let _ = child.kill().await; // kill + wait，不留僵尸
-                return "datad 退出".into();
+                return "核心退出".into();
             }
         };
         match next {
             Ok(Some(line)) => {
                 if !dispatch(&line, events, txs, observe) {
-                    return "datad 退出".into();
+                    return "核心退出".into();
                 }
             }
             Ok(None) => break,
@@ -461,7 +461,7 @@ mod tests {
     /// V2-31：监听子进程挂掉会退避重启，重启后的事件照样送到。
     #[tokio::test]
     async fn sms_listener_restarts_after_exit() {
-        let dir = std::env::temp_dir().join(format!("datad-listen-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("core-listen-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let log = dir.join("listen.log");
         let events = dir.join("events");

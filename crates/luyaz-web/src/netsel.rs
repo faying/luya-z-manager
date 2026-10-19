@@ -12,7 +12,7 @@
 //!
 //! Mobile network:
 //! - connection, mobile data, roaming = u60d's `interfaces.cellular` (`connect_status`, `enable`,
-//!   `roam_enable`; `enable` 0 with the call up counts as on, as datad / the old page do); data and
+//!   `roam_enable`; `enable` 0 with the call up counts as on, as core / the old page do); data and
 //!   roaming are written with u60d `cellular.set` (tier 2, tier 3 over Tailscale as the old page;
 //!   data on also sends `connect_mode` 1 as the agent did);
 //! - radio off ("airplane") = the agent's `/api/modem/status` `operate_mode` (u60d has no field);

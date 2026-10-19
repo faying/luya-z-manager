@@ -1,6 +1,6 @@
 [package]
 name = "luyaz-sentinel"
-version = "1.0.3"
+version = "1.0.6"
 edition = "2024"
 rust-version = "1.99"
 description = "Luya-Z sentinel for the U60 Pro (MU5250): the screen owner and the things that must go on when the core (u60d) is dead — Wi-Fi fallback, modem crash recovery, the clock verdict, log caps, ship recover-live, dropbear (u60-sentinel.md Phase 5). std only, no async runtime."

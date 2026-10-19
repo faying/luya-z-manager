@@ -1,6 +1,6 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
-# Tests for luyaz-fallback.sh (the emergency direct write when zwrt-datad is
+# Tests for luyaz-fallback.sh (the emergency direct write when the core is
 # gone; write-op-layer.md D18/D23/D29). ubus and wget are stand-ins that log
 # every call; /proc is a fake tree except in the one real-process case.
 # Everything lives under $T.
@@ -69,7 +69,7 @@ marks() { cat "$T/ops/takeover" 2>/dev/null | wc -l | tr -d ' '; }
 # the JSON sent to the one write call named $1
 sent() { calls | grep "^$1 " | head -n 1 | cut -d' ' -f4-; }
 
-echo "luyaz-fallback: one payload per action (datad gone)"
+echo "luyaz-fallback: one payload per action (core gone)"
 for c in \
     'network.set_mode mode=Only_LTE|zte_nwinfo_api.nwinfo_set_netselect|{"net_select":"Only_LTE"}' \
     'band.set_lte bands=1,3,28|zte_nwinfo_api.nwinfo_set_lte_ext_band|{"lte_band":"1,3,28"}' \
@@ -120,10 +120,10 @@ check "cellular.redial type=3 → exit 2" '[ "$RC" = 2 ]'
 teardown
 setup
 run nfc.set enabled=1
-check "nfc.set: then zwrt_nfc_wifi_change, like datad" '[ "$(calls | cut -d" " -f1 | tr "\n" " ")" = "zwrt_nfc.zwrt_nfc_wifi_set zwrt_nfc.zwrt_nfc_wifi_change " ]'
+check "nfc.set: then zwrt_nfc_wifi_change, like the core" '[ "$(calls | cut -d" " -f1 | tr "\n" " ")" = "zwrt_nfc.zwrt_nfc_wifi_set zwrt_nfc.zwrt_nfc_wifi_change " ]'
 teardown
 
-echo "luyaz-fallback: AT commands (datad gone)"
+echo "luyaz-fallback: AT commands (core gone)"
 for c in 'netselect.auto|AT+COPS=0' 'modem.online|AT+CFUN=1'; do
     setup
     # stand-in modem: logs the text and whether the AT lock is held, answers OK
@@ -168,29 +168,29 @@ teardown
 setup
 export LUYAZ_OPS_DIR=
 run band.reset
-check "no ops dir (datad keeps no state) → writes without a marker" '[ "$RC" = 0 ] && [ "$(ncalls)" = 1 ]'
+check "no ops dir (core keeps no state) → writes without a marker" '[ "$RC" = 0 ] && [ "$(ncalls)" = 1 ]'
 teardown
 
-echo "luyaz-fallback: is datad gone? (D18)"
-for c in 'zwrt-datad|3' 'zwrt-datad.test|3' 'sh|0' 'zwrt-data|0'; do
+echo "luyaz-fallback: is the core gone? (D18)"
+for c in 'luyaz-core|3' 'luyaz-core.test|3' 'sh|0' 'luyaz-cor|0' 'zwrt-datad|0'; do
     setup
     echo 4242 >"$T/pid"
     mkdir -p "$T/proc/4242"
     echo "${c%|*}" >"$T/proc/4242/comm"
     run band.reset
     check "pid file → comm \"${c%|*}\": exit ${c#*|}" '[ "$RC" = "${c#*|}" ]'
-    [ "${c#*|}" = 3 ] && check "comm \"${c%|*}\": nothing written, no marker" '[ "$(ncalls)" = 0 ] && [ "$(marks)" = 0 ] && [ "$OUT" = "datad running: not written" ]'
+    [ "${c#*|}" = 3 ] && check "comm \"${c%|*}\": nothing written, no marker" '[ "$(ncalls)" = 0 ] && [ "$(marks)" = 0 ] && [ "$OUT" = "core running: not written" ]'
     teardown
 done
 setup
-# datad writes "<pid>\n"; also take it without the newline
+# core writes "<pid>\n"; also take it without the newline
 printf '4242' >"$T/pid"
 mkdir -p "$T/proc/4242"
-printf 'zwrt-datad\n' >"$T/proc/4242/comm"
+printf 'luyaz-core\n' >"$T/proc/4242/comm"
 run band.reset
 check "pid file without a newline → still read, exit 3" '[ "$RC" = 3 ]'
 teardown
-# Luya-Z rename D2: two pid files (new name first); a stale one does not hide the live core
+# two pid files; a stale one does not hide the live core
 for c in 'stale-new|3' 'stale-old|3' 'both-stale|0'; do
     setup
     export LUYAZ_PID_FILE="$T/pid.new $T/pid"
@@ -201,7 +201,7 @@ for c in 'stale-new|3' 'stale-old|3' 'both-stale|0'; do
         both-stale) echo 999 >"$T/pid.new"; echo 998 >"$T/pid" ;;
     esac
     run band.reset
-    check "D2 two pid files, ${c%|*}: exit ${c#*|}" '[ "$RC" = "${c#*|}" ]'
+    check "two pid files, ${c%|*}: exit ${c#*|}" '[ "$RC" = "${c#*|}" ]'
     teardown
 done
 for p in '12ab' '' '-1' '99999999999999999999'; do
@@ -239,15 +239,15 @@ check "no /healthz URL → pid check only" '[ "$RC" = 0 ] && [ ! -e "$T/wget.n" 
 teardown
 setup
 # a real process under a side-by-side name: comm is the script's file name
-printf '#!/bin/sh\nwhile :; do sleep 1; done\n' >"$T/zwrt-datad.test"
-chmod +x "$T/zwrt-datad.test"
-"$T/zwrt-datad.test" &
+printf '#!/bin/sh\nwhile :; do sleep 1; done\n' >"$T/luyaz-core.test"
+chmod +x "$T/luyaz-core.test"
+"$T/luyaz-core.test" &
 DP=$!
 echo $DP >"$T/pid"
 export LUYAZ_FALLBACK_PROC=/proc
 sleep 0.2
 run band.reset
-check "real process zwrt-datad.test → exit 3" '[ "$RC" = 3 ] && [ "$(ncalls)" = 0 ]'
+check "real process luyaz-core.test → exit 3" '[ "$RC" = 3 ] && [ "$(ncalls)" = 0 ]'
 kill $DP 2>/dev/null
 wait $DP 2>/dev/null
 run band.reset
@@ -266,7 +266,7 @@ s1=$(date +%s)
 check "held longer than the wait → exit 4" '[ "$RC" = 4 ] && [ "$OUT" = "busy: being taken over" ]'
 check "nothing written, no marker" '[ "$(ncalls)" = 0 ] && [ "$(marks)" = 0 ]'
 check "gave up after about the wait" '[ $((s1 - s0)) -ge 2 ] && [ $((s1 - s0)) -le 4 ]'
-check "did not check datad before it had the lock" '[ ! -e "$T/wget.n" ]'
+check "did not check core before it had the lock" '[ ! -e "$T/wget.n" ]'
 kill $HP 2>/dev/null
 wait $HP 2>/dev/null
 teardown
@@ -305,7 +305,7 @@ setup
 printf '%s\n' "$WWAN" >"$T/r/zwrt_data.get_wwaniface"
 run cellular.set enabled=1
 check "exit 0" '[ "$RC" = 0 ]'
-check "read with datad's params" '[ "$(sent zwrt_data.get_wwaniface)" = "{\"source_module\":\"web\",\"cid\":1,\"connect_status\":\"\"}" ]'
+check "read with the core's params" '[ "$(sent zwrt_data.get_wwaniface)" = "{\"source_module\":\"web\",\"cid\":1,\"connect_status\":\"\"}" ]'
 want='{"cid":1,"enable":1,"roam_enable":1,"apn":"inter\"net,{x}","pdp_type":"IPV4V6","ipv4":{ "addr": "10.0.0.2", "dns": [ "1.1.1.1", "8.8.8.8" ] },"source_module":"WEBUI"}'
 check "everything else kept, escaped and nested values untouched" '[ "$(sent zwrt_data.set_wwaniface)" = "$want" ]'
 teardown
@@ -313,7 +313,7 @@ setup
 printf '{ "pdp_type": "IP", "nested": { "enable": 0 } }\n' >"$T/r/zwrt_data.get_wwaniface"
 run cellular.set roaming=0 connect_mode=1
 want='{"pdp_type":"IP","nested":{ "enable": 0 },"roam_enable":0,"connect_mode":"1","source_module":"WEBUI","cid":1}'
-check "missing fields appended (connect_mode a string, like datad), a nested \"enable\" is not top-level" '[ "$(sent zwrt_data.set_wwaniface)" = "$want" ]'
+check "missing fields appended (connect_mode a string, like the core), a nested \"enable\" is not top-level" '[ "$(sent zwrt_data.set_wwaniface)" = "$want" ]'
 check "marker params" 'grep -q "\"params\":{\"roaming\":0,\"connect_mode\":\"1\"}" "$T/ops/takeover"'
 teardown
 setup
@@ -342,7 +342,7 @@ run cellular.set enabled=1
 check "set fails → exit 1, says which call" '[ "$RC" = 1 ] && [ "$OUT" = "failed: zwrt_data set_wwaniface" ]'
 teardown
 
-echo "luyaz-fallback: power.direct_supply.set reads back, like datad"
+echo "luyaz-fallback: power.direct_supply.set reads back, like the core"
 setup
 echo disable >"$T/r/mode"
 run power.direct_supply.set enabled=true

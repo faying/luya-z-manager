@@ -179,7 +179,17 @@ fn job_slot_answers() {
     );
     assert_eq!(
         job_end(5, &json!({"id": 5, "status": "done", "rebooting": true})),
-        Some(JobEnd::Done { rebooting: true })
+        Some(JobEnd::Done {
+            rebooting: true,
+            no_data: false
+        })
+    );
+    assert_eq!(
+        job_end(5, &json!({"id": 5, "status": "done", "reason": "no_data"})),
+        Some(JobEnd::Done {
+            rebooting: false,
+            no_data: true
+        })
     );
     assert_eq!(
         job_end(
@@ -235,6 +245,9 @@ fn a_switch_is_proven_by_the_card_never_by_the_job() {
     );
     let o = not_read(Act::Switch, &r, Lang::En);
     assert!(o.tone() == "warn" && !o.text(Lang::En).to_lowercase().contains("switched to"));
+    // switched but no data back: a warning that says so, never plain Applied
+    let o = no_data(&r, Lang::Zh);
+    assert!(o.tone() == "warn" && o.text(Lang::Zh).contains("移动数据还没恢复"));
     // the reboot verifier: the target not enabled is never Applied
     let o = after_outcome(Some(&p[1]), Some(&p[0]), true, Lang::Zh);
     assert_eq!(o.tone(), "bad");

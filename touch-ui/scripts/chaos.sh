@@ -2,23 +2,18 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # chaos.sh — break things on the real device and check they come back.
 # Regression check for the procd setup (阶段 1a; since Phase 10 X9 the core's
-# svcwatch records crashes, supervise.sh and u60-guard are gone).
+# svcwatch records crashes).
 #
 # Runs ON the device, after the migration is complete:
 #   ssh -n u60 'sh /data/luyaz/scripts/chaos.sh safe'
 #
 #   kill-core      kill -9 luyaz-core       → one new instance within 10 s, alert recorded
-#                                             (also kill-datad)
-#   kill-web       kill -9 luyaz-web        → same (also kill-agent)
+#   kill-web       kill -9 luyaz-web        → same
 #   kill-sentinel  kill -9 luyaz-sentinel   → same, and it adopts the running UI
-#                                             (no second luyaz-ui, nothing counted; also kill-uid)
+#                                             (no second luyaz-ui, nothing counted)
 #   safe           all three above
-#   wifi-rescue    DISRUPTIVE, NOT PORTED: written for the retired zte-agent and
-#                  u60-guard (freezes the agent, turns both APs off, waits up to
-#                  7 min for the guard); fails at once on a current device.
 #
-# Uses only process-level faults plus, for wifi-rescue, the same uci keys the
-# scenario engine writes. Nothing here touches rc.local, the modem, or eSIM.
+# Uses only process-level faults. Nothing here touches rc.local, the modem, or eSIM.
 # SPDX-License-Identifier: MIT
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -35,11 +30,10 @@ pids_of() {
     done
 }
 count_of() { pids_of "$1" | wc -l | tr -d ' '; }
-# our touch UI under either name (Phase 10 R5), and the screen's attempts (R4; one dir since E3)
-ui_pids() { pids_of u60pro-devui; pids_of luyaz-ui; }
+# our touch UI, and the screen's attempts
+ui_pids() { pids_of luyaz-ui; }
 uid_attempts() { cat /data/luyaz/screen/attempts 2>/dev/null; }
 last_seq() { cut -f1 /data/alerts/queue 2>/dev/null | tail -n 1; }
-hostapd_count() { ps w | awk '/\/hostapd( |$)/ && !/awk/ {n++} END {print n+0}'; }
 
 # wait_until <seconds> <shell test> — 0 if the test passed in time
 wait_until() {
@@ -85,63 +79,17 @@ kill_sentinel() {
     [ "$(uid_attempts)" = "$a0" ] && ok "attempt count unchanged" || bad "attempt count changed"
 }
 
-wifi_rescue() {
-    echo "wifi-rescue (DISRUPTIVE: Wi-Fi off for up to ~7 min)"
-    a=$(pids_of zte-agent)
-    [ -n "$a" ] || { bad "zte-agent not running"; return; }
-    # Frozen, not killed: procd would restart a killed agent and the test
-    # would measure the agent, not the watchdog.
-    kill -STOP $a
-    trap 'kill -CONT '"$a"' 2>/dev/null' EXIT INT TERM
-    (
-        flock 9
-        echo $$ >/tmp/luyaz-wifi.lock
-        uci set wireless.main_2g.disabled=1
-        uci set wireless.main_5g.disabled=1
-        uci commit wireless
-        ubus call zwrt_wlan reload >/dev/null 2>&1
-    ) 9>>/tmp/luyaz-wifi.lock
-    wait_until 30 '[ "$(hostapd_count)" = 0 ]' && ok "APs down, agent frozen" || bad "APs did not go down"
-    t0=$(cut -d. -f1 /proc/uptime)
-    # heartbeat 300 s + one 60 s round + 45 s verify, with margin
-    if wait_until 480 '[ "$(hostapd_count)" -gt 0 ]'; then
-        ok "u60-guard brought Wi-Fi back after $(($(cut -d. -f1 /proc/uptime) - t0)) s"
-    else
-        bad "Wi-Fi still off after 8 min — turning it on by hand"
-        (flock 9; uci set wireless.main_2g.disabled=0; uci set wireless.main_5g.disabled=0
-         uci commit wireless; ubus call zwrt_wlan reload >/dev/null 2>&1) 9>>/tmp/luyaz-wifi.lock
-    fi
-    [ -f /tmp/u60-wifiguard.took-over ] && ok "takeover marker written" || bad "no takeover marker"
-    m1=$(cat /tmp/u60-wifiguard.took-over 2>/dev/null)
-    sleep 70
-    [ "$(cat /tmp/u60-wifiguard.took-over 2>/dev/null)" = "$m1" ] && ok "marker not rewritten on the next round" ||
-        bad "marker content changed"
-    kill -CONT $a
-    trap - EXIT INT TERM
-    wait_until 60 '[ $(( $(cut -d. -f1 /proc/uptime) - $(cat /tmp/scenario.heartbeat 2>/dev/null || echo 0) )) -lt 60 ]' &&
-        ok "agent heartbeat resumed" || bad "agent heartbeat did not resume"
-    sleep 30
-    [ "$(hostapd_count)" -gt 0 ] && ok "agent left Wi-Fi on (took the takeover)" || bad "Wi-Fi went off again after the agent resumed"
-    echo "  note: the agent releases the marker 10 min after resuming; check /tmp/u60-wifiguard.took-over later"
-}
-
-# the core's process name follows the layout switch (Phase 10 10e; same line in
-# u60-ship.sh, scripts/test/luyaz-dir)
-luyaz_new() { [ -f "$1/data/luyaz/core/.migrated" ]; }
-if luyaz_new ""; then CORE_NAME=luyaz-core; else CORE_NAME=zwrt-datad; fi
-
 case "$1" in
-    kill-web | kill-agent) kill_program luyaz-web web-crash ;;
-    kill-datad | kill-core) kill_program "$CORE_NAME" datad-crash ;;
-    kill-sentinel | kill-uid) kill_sentinel ;;
+    kill-web) kill_program luyaz-web web-crash ;;
+    kill-core) kill_program luyaz-core core-crash ;;
+    kill-sentinel) kill_sentinel ;;
     safe)
-        kill_program "$CORE_NAME" datad-crash
+        kill_program luyaz-core core-crash
         kill_program luyaz-web web-crash
         kill_sentinel
         ;;
-    wifi-rescue) wifi_rescue ;;
     *)
-        sed -n '4,21p' "$0"
+        sed -n '4,15p' "$0"
         exit 2
         ;;
 esac

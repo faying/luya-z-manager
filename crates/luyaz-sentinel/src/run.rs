@@ -26,32 +26,26 @@ use crate::screen::{self, Act, Input, Persist, Screen};
 use crate::sys;
 use crate::worker::{Health, Paths, Worker, WorkerIo};
 
-/// The touch UI's old home (Phase 10 R5): start.sh and the `*.orig-backup` stay here for good.
-pub const DEVUI_DIR: &str = "/data/plugins/u60pro-devui";
 /// Its home since R5: the only program the sentinel starts (round ③).
 pub const UI_DIR: &str = "/data/luyaz/ui";
 pub const UI_BIN: &str = "/data/luyaz/ui/luyaz-ui";
 pub const DEVUI_LOG: &str = "/tmp/luyaz-ui.log";
-pub const START_SH: &str = "/data/plugins/u60pro-devui/start.sh";
-/// The screen's state (Phase 10 R4). The copy from the old `/data/u60-uid` went with Luya-Z
-/// rename E3: every device has this one (and its `.migrated`, which only older readers look at).
+/// The screen's state (Phase 10 R4).
 pub const STATE_DIR: &str = "/data/luyaz/screen";
 pub const F_ATTEMPTS: &str = "/data/luyaz/screen/attempts";
 pub const F_GAVE_UP: &str = "/data/luyaz/screen/gave-up";
 /// On tmpfs on purpose: a reboot always comes back to our UI. Only the give-up and the attempt count
 /// survive a reboot.
 pub const F_WANT: &str = "/tmp/luyaz/screen.want";
-/// The touch UI's crash records (`/data/crashlog/<program>/`, Luya-Z F; the core moves the ones
-/// in the old `u60pro-devui` directory here).
+/// The touch UI's crash records (`/data/crashlog/<program>/`).
 pub const CRASH_DIR: &str = "/data/crashlog/luyaz-ui";
 pub const DRM_DEV: &str = "/dev/dri/card0";
 pub const VENDOR_INIT: &str = "/etc/init.d/zte_topsw_devui";
 pub const VENDOR_COMM: &str = "zte_topsw_devui";
-pub const DEVUI_COMM: &str = "u60pro-devui";
 pub const UI_COMM: &str = "luyaz-ui";
 
-/// Which program to start, and its working directory: luyaz-ui only since round ③ (the old
-/// u60pro-devui is deleted from the device; a missing program is a failed launch, counted).
+/// Which program to start, and its working directory (a missing program is a failed launch,
+/// counted).
 pub fn pick_ui(_new_exists: bool) -> (&'static str, &'static str) {
     (UI_BIN, UI_DIR)
 }
@@ -630,12 +624,8 @@ pub fn screen_thread(shadow: bool, worker_round: Arc<AtomicI64>, sig: Option<Own
         }
         // corner-wake is retired: it would start our UI behind our back.
         sh("killall corner-wake 2>/dev/null");
-        // One-time boot chores that used to live in start.sh's launch path.
-        if std::path::Path::new(START_SH).exists() {
-            sh(&format!("sh {START_SH} prep >/dev/null 2>&1"));
-        }
-        // The new FIFO only (R4 round ③); a stale old one from round ① is removed.
-        let _ = fs::remove_file("/tmp/u60-uid.ctl");
+        // One-time boot chores (rename F3: was `start.sh prep`, start.sh is retired).
+        sys::boot_trace(sys::BOOT_TRACE);
         rt.ctl = screen::CTL_FIFOS
             .iter()
             .filter_map(|p| sys::ctl_open(p))

@@ -55,7 +55,7 @@ impl Ui {
         match id {
             WSW_MASTER | WSW_24 | WSW_5 => {
                 // the same lasting switch as the web page (E4): the main AP interfaces' uci
-                // `disabled`, written and reloaded by datad (wifi.apply)
+                // `disabled`, written and reloaded by core (wifi.apply)
                 let w24 = if id == WSW_5 { self.aux.w24 == 1 } else { on };
                 let w5 = if id == WSW_24 { self.aux.w5 == 1 } else { on };
                 self.aux.w24 = w24 as i32;
@@ -78,7 +78,7 @@ impl Ui {
                 self.data_control("wifi.apply", &params, Some(&format!("ap_2g={} ap_5g={}", w24 as i32, w5 as i32)));
             }
             WSW_PSM => {
-                // through datad (E4): the hotplug script keeps it across an ifup
+                // through core (E4): the hotplug script keeps it across an ifup
                 self.aux.psm = on as i32;
                 self.data_control("wifi.power_save", &format!("{{\"enabled\":{}}}", on as i32), None);
             }

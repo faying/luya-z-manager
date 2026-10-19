@@ -8,8 +8,8 @@
 | 组件 | 内容 |
 |---|---|
 | `ssh` | dropbear，端口 2222，只认密钥，开机自启（先起 dropbear、10 秒内确认进程在且 2222 在监听，才写 rc.local 那一行；没起来 rc.local 不动）。电脑端 SSH 检查失败会说是哪种：没有密钥 / 连接被拒 / 认证失败 / 超时 |
-| `admin` | 只装高级后台 = 管理网页 luyaz-web（不再起 u60-guard），`http://<设备>:9090/`（数据和改动都经核心 luyaz-core，它随 `devui` 装在 `/data/luyaz/luyaz-core`，见下表）。zte-agent 2026-10-14 起删了：设备上有旧的会停掉、去掉它在 rc.local 的那一行，并写 `/data/luyaz/core/agent-retired`（核心见它才接管全部后台任务） |
-| `devui` | 前面板触屏界面 + 核心 luyaz-core（`/data/luyaz/luyaz-core`，procd 服务 `/etc/init.d/luyaz-core`）+ 哨兵 luyaz-sentinel（管屏幕和看门狗，取代 u60-uid、u60-guard）。rc.local 在 `/etc/init.d/luyaz-core start`（旧装法的 `/etc/init.d/zwrt-datad start` 原地换成它）后面只留一行 `/etc/init.d/luyaz-sentinel start   # u60 ship sentinel: …`，旧的 start.sh、u60-uid、u60-guard 行去掉；旧 u60-uid/u60-guard 服务 stop（绝不 disable），文件留在设备上。起哨兵后最多等 60 秒，核对：哨兵在 procd 下运行、心跳第 3 栏是 `ours`、界面进程 exe md5 = 刚装的文件。设备清单记 touch、sentinel、datad 三条（`admin` 记 lweb 一条） |
+| `admin` | 只装高级后台 = 管理网页 luyaz-web，`http://<设备>:9090/`（数据和改动都经核心 luyaz-core，它随 `devui` 装在 `/data/luyaz/luyaz-core`，见下表） |
+| `devui` | 前面板触屏界面 + 核心 luyaz-core（`/data/luyaz/luyaz-core`，procd 服务 `/etc/init.d/luyaz-core`）+ 哨兵 luyaz-sentinel（管屏幕和看门狗）。rc.local 在 `/etc/init.d/luyaz-core start` 后面只留一行 `/etc/init.d/luyaz-sentinel start   # u60 ship sentinel: …`。只装现在的布局：还有 `/data/u60d`、`/data/u60-uid`、`/data/u60-ship`、`/data/plugins/u60pro-devui`、`/data/plugins/zwrt-datad` 的设备拒装（先用旧版装机包升级）。起哨兵后最多等 60 秒，核对：哨兵在 procd 下运行、心跳第 3 栏是 `ours`、界面进程 exe md5 = 刚装的文件。设备清单记 touch、sentinel、core 三条（`admin` 记 lweb 一条） |
 | `esim` | lpac，配合可插拔 eUICC 卡管理/切换 profile |
 | `recover`（可选，不在全套里） | u60 ship 的开机收尾：换上 `/data/luyaz/ship/luyaz-recover.sh`（设备上自检过才换），并在 `/etc/rc.local` 各服务启动行之前加一行调用它。**改 rc.local，先问用户**。`admin`/`devui` 只在设备上还没有这个脚本时放一份，不碰 rc.local |
 | `chill`（可选，不在全套里） | CHILL 透明代理：mihomo + 规则集 + zashboard 面板（`/data/chill`）。第一次装**不启动**：要用户自己写订阅地址（`/data/chill/chill.env`，别替用户填、别读出来），再 `chill.sh safe-start` + 5 分钟内 `confirm` |
@@ -112,19 +112,18 @@ adb shell '<命令>'        # 只有 ADB 通的时候（ADB 重启后就没了�
 |---|---|
 | `/data/ssh/` | dropbear、host key、`authorized_keys` 正本（开机同步到 `/etc/dropbear/`） |
 | `/data/local/tmp/start_dropbear.sh` | SSH 的开机启动脚本 |
-| `/data/luyaz/web.env` | 后台密码（`ZTE_AGENT_PASSWORD=…`，600；luyaz-web 每次登录现读，命令行里只有路径） |
+| `/data/luyaz/web.env` | 后台密码（`LUYAZ_WEB_PASSWORD=…`，600；luyaz-web 每次登录现读，命令行里只有路径） |
 | `/data/luyaz/luyaz-sentinel`、`/etc/init.d/luyaz-sentinel` | 哨兵：触屏界面唯一的主人（拉起/接管、连续 2 次没稳住就交还原厂界面并告警、长按右下角 3 秒回来），兼 Wi-Fi 兜底看门狗 + 告警短信（原 u60-guard）。状态在 `/data/luyaz/screen/`，控制 FIFO `/tmp/luyaz-screen.ctl`（10-15 之前是 `/tmp/u60-uid.ctl`，已不再听）：`vendor` / `devui` / `hold` / `release`（只在它运行时用）；心跳 `/tmp/luyaz-sentinel.hb` 第 3 栏是屏幕上是谁（ours/vendor/none/held）。**屏幕上几分钟没有任何界面，固件会整机重启**：永远不要只停一个界面而不起另一个 |
-| `/data/luyaz/scripts/`、`/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}` | 设备脚本（`doctor.sh`（`<核心> doctor` 的薄壳，核心不可用时退到 `doctor-legacy.sh`）、`alert-lib.sh` 等；执行器 `luyaz-ship.sh`、`datad-trial.sh` 也在这里；不再有 `u60-guard.sh`、`supervise.sh`）和 procd 监督（崩溃拉起）；**不要 `enable`/`disable`**（overlay whiteout），开机靠 rc.local 里的 `start` 行 |
+| `/data/luyaz/scripts/`、`/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}` | 设备脚本（`doctor.sh`（`<core> doctor` 的薄壳）、`alert-lib.sh` 等；执行器 `luyaz-ship.sh`、`core-trial.sh` 也在这里；不再有 `u60-guard.sh`、`supervise.sh`）和 procd 监督（崩溃拉起）；**不要 `enable`/`disable`**（overlay whiteout），开机靠 rc.local 里的 `start` 行 |
 | `/data/alerts/`、`/data/crashlog/` | 告警事件与短信记录、崩溃日志 |
-| `/data/luyaz/luyaz-web`、`/data/luyaz/operator-logos/` | 高级后台（旧装机包的 `/data/zte-agent`、`/data/admin/` 留着，不再用）；`/data/luyaz/core/` 是核心 luyaz-core 的状态（含 `.migrated`：新布局的开关），`/data/luyaz/screen/` 是哨兵的 |
-| `/data/luyaz/ui/` | 触屏界面 `luyaz-ui`（进程名同）、字体、`touchsim` |
-| `/data/plugins/u60pro-devui/` | 只有触屏的 `start.sh`（程序、`devui.conf`、`operator-logos/` 在 `/data/luyaz/ui/`） |
+| `/data/luyaz/luyaz-web`、`/data/luyaz/operator-logos/` | 高级后台；`/data/luyaz/core/` 是核心 luyaz-core 的状态（设置在 `core.env`），`/data/luyaz/screen/` 是哨兵的 |
+| `/data/luyaz/ui/` | 触屏界面 `luyaz-ui`（进程名同）、字体、`touchsim`、`devui.conf`、`operator-logos/`、开机记录 `boot-trace.log`、原厂界面备份 `vendor-devui.orig-backup` |
 | `/data/esim/` | lpac（`/data/esim/lpac.sh chip info` / `profile list`） |
 | `/data/chill/`、`/etc/init.d/chill` | CHILL（`sh /data/chill/chill.sh status`）。改全屋网络：启动、停止、`CHILL_API_LAN`、防火墙区 `chill` 都**先问用户**。停它用 `chill.sh stop`（会把 dnsmasq 换回原样），别 kill mihomo |
-| `/etc/rc.local` | 只加了几行自启；原厂版本备份在 `/data/luyaz/kit/rc.local.orig`（Luya-Z 改名 E 之前装的设备在 `/data/u60-kit/`，再装之前要先 `mv /data/u60-kit /data/luyaz/kit`） |
+| `/etc/rc.local` | 只加了几行自启；原厂版本备份在 `/data/luyaz/kit/rc.local.orig` |
 
-日志：`/tmp/luyaz-web.log`、`/tmp/luyaz-ui.log`、`/tmp/luyaz-core.log`、`/tmp/luyaz-sentinel.log`、`logread`（procd）、`/tmp/u60-kit-devui.log`（devui 安装）、
-`/data/plugins/u60pro-devui/boot-trace.log`。
+日志：`/tmp/luyaz-web.log`、`/tmp/luyaz-ui.log`、`/tmp/luyaz-core.log`、`/tmp/luyaz-sentinel.log`、`logread`（procd）、
+`/data/luyaz/ui/boot-trace.log`（哨兵每次启动写一段）。
 
 ## 四、常见失败
 
@@ -173,7 +172,7 @@ adb shell '<命令>'        # 只有 ADB 通的时候（ADB 重启后就没了�
 
 ```sh
 mkdir -p /data/luyaz/kit && cp /etc/rc.local /data/luyaz/kit/rc.local.before-revert
-grep -v 'u60pro_devui' /data/luyaz/kit/rc.local.before-revert | grep -v -e '/etc/init.d/luyaz-sentinel start' -e '/etc/init.d/u60-uid start' -e '/etc/init.d/u60-guard start' > /tmp/rc.new \
+grep -v -e '/etc/init.d/luyaz-sentinel start' /data/luyaz/kit/rc.local.before-revert > /tmp/rc.new \
   && sh -n /tmp/rc.new && cat /tmp/rc.new > /etc/rc.local
 echo vendor > /tmp/luyaz-screen.ctl   # 由哨兵换界面：它在同一步里起原厂界面，屏幕不会空着
 sleep 8; /etc/init.d/luyaz-sentinel stop  # 之后不再管屏幕（原厂界面服务一直是 enable 的，开机自己起）

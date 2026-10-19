@@ -542,7 +542,7 @@ fn strtol_full(s: &str) -> Option<i64> {
     s.parse().ok()
 }
 
-/// "192.168.0.2 - 192.168.0.253" from datad's dhcp ip/start/limit; "" when unusable.
+/// "192.168.0.2 - 192.168.0.253" from the core's dhcp ip/start/limit; "" when unusable.
 pub fn dhcp_pool_text(ip: &str, start: &str, limit: &str) -> String {
     let Some(dot) = ip.rfind('.').filter(|&d| d > 0) else { return String::new() };
     let start = start.rfind('.').map_or(start, |d| &start[d + 1..]);
@@ -554,7 +554,7 @@ pub fn dhcp_pool_text(ip: &str, start: &str, limit: &str) -> String {
     }
 }
 
-// ---- datad /control reply ----
+// ---- core /control reply ----
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ctl {
     Ok,

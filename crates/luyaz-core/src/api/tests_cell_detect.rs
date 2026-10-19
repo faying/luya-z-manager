@@ -155,7 +155,7 @@ async fn control_refusal_and_no_control_are_503() {
     let addr = start(Compat::new(&root("nocontrol"), sources(None)).with_writes(true)).await;
     let (st, b) = call(addr, "POST", "/api/cell/signal-detect/stop", None, "").await;
     assert_eq!(st, 503);
-    assert!(b["error"].as_str().unwrap().starts_with("datad: "), "{b}");
+    assert!(b["error"].as_str().unwrap().starts_with("core: "), "{b}");
 }
 
 #[tokio::test]

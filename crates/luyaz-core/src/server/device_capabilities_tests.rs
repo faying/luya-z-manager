@@ -13,7 +13,7 @@ async fn app() -> (App, crate::ubus::mock_ubusd::MockUbusd) {
     );
     let snapshot = Snapshot {
         ts: 0,
-        datad: Default::default(),
+        core: Default::default(),
         fields: Map::new(),
     };
     let ops = crate::ops::Engine::new(

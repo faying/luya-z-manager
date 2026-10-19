@@ -19,18 +19,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// The programs measured (the guard's `STANDBY_PROGS`, in its order: doctor reads by position).
-/// These are ledger keys ([`crate::paths::prog_key`]); before Luya-Z F the UI and the core were
-/// `u60pro-devui` and `zwrt-datad` here (same positions, so old baselines still line up).
-/// `zte-agent` is retired and stays `-` (doctor marks it `retired`, never judged); the slot is kept
-/// because a baseline's columns and `fp` lines are by position. Renaming a key orphans every
-/// baseline and fingerprint on the device.
-pub const PROGS: [&str; 5] = [
-    "tailscaled",
-    "mihomo",
-    crate::paths::UI,
-    crate::paths::CORE,
-    "zte-agent",
-];
+/// These are ledger keys ([`crate::paths::prog_key`]). A baseline's columns and `fp` lines are
+/// by position: renaming or dropping a key orphans every baseline and fingerprint on the device.
+pub const PROGS: [&str; 4] = ["tailscaled", "mihomo", crate::paths::UI, crate::paths::CORE];
 /// Lines kept in the standby file.
 const KEEP: usize = 60;
 /// Checks further apart than this were across a sleep (the guard's `WAKE_GAP`, 2 rounds + 30 s).
@@ -254,7 +245,7 @@ mod tests {
 
     #[test]
     fn line_as_the_guards_awk() {
-        // 60 s apart, 120 + 30 packets, datad 600 switches → 10.0/s, one program gone, one new pid
+        // 60 s apart, 120 + 30 packets, core 600 switches → 10.0/s, one program gone, one new pid
         let prev = "1000 500 100 11:100 - 13:1000 14:50 15:7";
         let cur = "1060 620 130 11:160 - 13:1600 99:60 15:7";
         assert_eq!(
@@ -334,10 +325,10 @@ mod tests {
     fn standby_lines_only_with_the_screen_off_and_the_last_60_kept() {
         let (r, p) = root("round");
         // the programs' columns: only the core runs
-        let cols = |datad: &str| {
+        let cols = |core: &str| {
             PROGS
                 .iter()
-                .map(|q| if *q == crate::paths::CORE { datad } else { "-" })
+                .map(|q| if *q == crate::paths::CORE { core } else { "-" })
                 .collect::<Vec<_>>()
                 .join(" ")
         };
@@ -386,14 +377,14 @@ mod tests {
         let (r, p) = root("fp");
         fs::create_dir_all(p.proc_.join("7")).unwrap();
         fs::write(p.proc_.join("7/exe"), b"one").unwrap();
-        let pids: BTreeMap<String, u32> = [("zte-agent".to_string(), 7)].into();
+        let pids: BTreeMap<String, u32> = [(crate::paths::CORE.to_string(), 7)].into();
         fp_round(&p, 100, &pids).unwrap();
         let m1 = super::super::watch::md5_path(&p.proc_.join("7/exe"), 8).unwrap();
         assert_eq!(
             fs::read_to_string(p.ltmp.join("fp")).unwrap(),
             PROGS
                 .iter()
-                .map(|q| if *q == "zte-agent" {
+                .map(|q| if *q == crate::paths::CORE {
                     format!("{q} 7 {m1}\n")
                 } else {
                     format!("{q} - -\n")
@@ -408,7 +399,7 @@ mod tests {
         // new pid, new binary: fp-changed
         fs::create_dir_all(p.proc_.join("9")).unwrap();
         fs::write(p.proc_.join("9/exe"), b"two").unwrap();
-        let pids: BTreeMap<String, u32> = [("zte-agent".to_string(), 9)].into();
+        let pids: BTreeMap<String, u32> = [(crate::paths::CORE.to_string(), 9)].into();
         fp_round(&p, 220, &pids).unwrap();
         assert_eq!(
             fs::read_to_string(p.ltmp.join("fp-changed")).unwrap(),
@@ -419,7 +410,7 @@ mod tests {
         assert!(
             fs::read_to_string(p.ltmp.join("fp"))
                 .unwrap()
-                .ends_with("zte-agent - -\n")
+                .ends_with("luyaz-core - -\n")
         );
         let _ = fs::remove_dir_all(&r);
     }

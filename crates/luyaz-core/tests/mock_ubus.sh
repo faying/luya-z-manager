@@ -13,7 +13,7 @@ set -eu
     printf '%s\n' system zte_nwinfo_api zwrt_data zwrt_zte_mdm.api
     exit 0
 }
-# `ubus listen <事件>`（datad 的短信事件监听，V2-31）。默认：不出任何事件，datad 退出就跟着退出。
+# `ubus listen <事件>`（核心的短信事件监听，V2-31）。默认：不出任何事件，核心退出就跟着退出。
 # MOCK_LISTEN_LOG：每次启动追加一行；MOCK_LISTEN_EVENTS_FILE：把这个文件新追加的行原样输出（当作事件）；
 # MOCK_LISTEN_EXIT_AFTER：输出完已有的行后过这么多秒就退出（模拟监听挂掉）。
 [ "$1" = "listen" ] && {
@@ -47,7 +47,7 @@ if [ -n "${MOCK_CALL_LOG:-}" ]; then
 fi
 
 # Regression aid for issue #26: record any socket descriptor this exec'd child
-# inherited from datad. A correctly close-on-exec'd listener must not appear.
+# inherited from core. A correctly close-on-exec'd listener must not appear.
 if [ -n "${LUYAZ_FD_DUMP:-}" ] && [ -d "/proc/$$/fd" ]; then
     for _link in /proc/$$/fd/*; do
         _n=${_link##*/}
@@ -240,7 +240,7 @@ print(json.dumps({"messages": rows}))' "$args" "$n"
     network.interface.zte_wan6:status)
         printf '%s\n' '{"up":true,"pending":false,"available":true,"autostart":true,"dynamic":false,"uptime":3500,"l3_device":"rmnet_data0","proto":"static","device":"rmnet_data0","metric":0,"dns_metric":0,"delegation":true,"ipv4-address":[],"ipv6-address":[{"address":"2001:db8:4f2a:1c07::1","mask":64}],"ipv6-prefix":[],"ipv6-prefix-assignment":[],"route":[{"target":"::","mask":0,"nexthop":"fe80::1","source":"2001:db8:4f2a:1c07::/64"}],"dns-server":["2001:db8:100::53"],"dns-search":[],"neighbors":[],"inactive":{"ipv4-address":[],"ipv6-address":[],"route":[],"dns-server":[],"dns-search":[],"neighbors":[]},"data":{}}'
         ;;
-    # zwrt_bsp.usb list：datad 只读 mode（debug = ADB 开，user = 关，见 docs/STATE_SCHEMA.md）；
+    # zwrt_bsp.usb list：核心只读 mode（debug = ADB 开，user = 关，见 docs/STATE_SCHEMA.md）；
     # 其余字段按 manager 管理网页的 UsbStatus 形状。
     zwrt_bsp.usb:list)
         printf '%s\n' '{"connect":0,"mode":"user","typec_cc":"no_cc","usb2rj45":0}'

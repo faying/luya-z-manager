@@ -6,11 +6,11 @@
 
 | 脚本 | 设备上的位置 | 谁更新它 |
 |---|---|---|
-| `scripts/u60-ship.sh` | `/data/luyaz/scripts/luyaz-ship.sh`（`datad-trial.sh` 在同一目录，是它的壳；Luya-Z 改名 D4 前是 `/data/u60-guard/u60-ship.sh`） | 每次 ship 随上传一起带上；换之前先在设备上 `sh -n` + `u60-ship.sh selftest` |
-| `scripts/u60-recover.sh` | `/data/luyaz/ship/luyaz-recover.sh`（D4 前 `/data/u60-ship/u60-recover.sh`，`move-d4` 后那里只剩转发的薄壳） | **不随 ship 更新**；换它是单独一步（`sh -n` + `u60-recover.sh selftest` + 先问用户），和改 rc.local 一样 |
+| `scripts/luyaz-ship.sh` | `/data/luyaz/scripts/luyaz-ship.sh`（`core-trial.sh` 在同一目录，是它的壳；装机包放，ship 不换它） | 每次 ship 随上传一起带上（`luyaz-ship.sh.new`）；换之前先在设备上 `sh -n` + `luyaz-ship.sh selftest` |
+| `scripts/luyaz-recover.sh` | `/data/luyaz/ship/luyaz-recover.sh` | **不随 ship 更新**；换它是单独一步（`sh -n` + `luyaz-recover.sh selftest` + 先问用户），和改 rc.local 一样 |
 
 本文件是两者和 Mac 端 `luyaz`（T7；`luyaz ship <组件>`、`luyaz rollback`、`luyaz status` 等，是维护者自己工作区的工具，不在本仓库里，没有它的人用装机包 `onboard/`）、哨兵兜底（G2，原 guard 的 T4）、doctor（T6）之间的约定。改格式要升版本号（下面每种文件都有 `v`），
-并且旧版 u60-recover.sh 必须仍能安全地处理（它看不懂的版本一律不动文件）。
+并且旧版 luyaz-recover.sh 必须仍能安全地处理（它看不懂的版本一律不动文件）。
 
 ## 设备上的文件
 
@@ -19,7 +19,7 @@
 | `/data/luyaz/ship/stage/<事务号>/` | Mac 上传的 `meta` 和产物 | Mac 写；`stage` 核对后把产物拷到旁路名并删掉暂存副本，只留 `meta`；事务结束时整个目录删掉 |
 | `/data/luyaz/ship/txn` | 当前（或最近一次）事务的事务日志 | 每次改：临时文件 → sync → mv → sync |
 | `/data/luyaz/ship/ship.log` | 执行器、stage、recover-live 的人看日志 | 追加 |
-| `/data/luyaz/ship/recover.log` | u60-recover.sh 的日志（只在它动手或看不懂时写） | 追加 |
+| `/data/luyaz/ship/recover.log` | luyaz-recover.sh 的日志（只在它动手或看不懂时写） | 追加 |
 | `/data/luyaz/ship/test.log` | 试跑时测试版的标准输出/错误 | 追加 |
 | `/data/luyaz/ship/lock` | `stage` 用的 flock 文件（防两个 stage 同时进来） | — |
 | `/data/luyaz/ship/manifest.jsonl` | 设备清单，一行一条 | 整个文件重写：临时文件 → sync → mv → sync |
@@ -30,7 +30,7 @@
 
 所有设备路径在测试里都可以整体加前缀（`U60S_ROOT`、`U60S_TMP`、`U60R_ROOT`），测试不会碰容器里真的 `/data`、`/tmp/luyaz/ship`。
 
-这些路径只有新的一套（de-old，10-16）：`/data/luyaz/ship/.migrated` 不在（设备没跑过 `u60-ship.sh move-d4`）时 `stage` 和 `prepare-rollback` 一律拒绝，提示先 `move-d4`；`move-d4` 自己、`status`、`selftest` 照常。旧路径只有 `move-d4` 还认。
+这些路径只有新的一套（Luya-Z 布局）；旧布局（`/data/u60-guard`、`/data/u60-ship`、`/data/u60d`）的设备装机包和 ship 都不认，要先用旧版装机包升级。
 
 ## 事务号
 
@@ -44,28 +44,42 @@
 
 | 组件 | 期 | 状态 | 正式文件 | 状态文件（精确清单，不按目录） | 试跑 / 转正后检查 |
 |---|---|---|---|---|---|
-| `core`（别名 `datad`；Luya-Z D4c 起事务号和清单写 `core`，旧的 `datad` 行照样算同一个） | 一 | 可用 | 核心 `/data/luyaz/luyaz-core` | 无（10-06 起；下面格式示例里的 cooling.conf 只是举例） | 旁路顶替 180 s / 120 s（datad-trial 的全部检查） |
-| `touch` | 二 | 可用（10-15 起只编 `rs/`） | `/data/luyaz/ui/luyaz-ui`、`/data/plugins/u60pro-devui/start.sh` | `/data/luyaz/ui/devui.conf` | 旁路顶替 60 s / 120 s（下面「第二期」的 touch 检查） |
-| `scripts` | 五 | 可用（5f 前装哨兵的启动脚本；10-12 起也带 luyaz-web 的，要 formats 4，先 install-recover） | `/data/luyaz/scripts/` 下 `SCRIPTS_FILES`（Luya-Z 改名 D1 起；`/data/u60-guard/` 的旧副本已删，D1、D4 的下限无条件生效；第一次往新目录 ship 时 stage 建目录；`u60-fallback.sh` 10-16 改名 `luyaz-fallback.sh`：第一次带新名字的 ship 把它当新文件放上去，旧的 `u60-fallback.sh` 不在清单里、留在原处不动（没人再读）；ship 和 scripts 的退回都删不掉 `luyaz-fallback.sh`，`touch` 在它不在时拒绝（触屏只找这个名字）；GUARD_FILES 去掉 guard 自己，8d-2c 起也去掉 `zte-agent.init`，Luya-Z 改名 E3 起也去掉 `zwrt-datad.init`）+ `/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}`（`SCRIPTS_INITS`；txn v=4/5；`/etc/init.d/zte-agent` 8d-2c 起、`/etc/init.d/zwrt-datad` 和 scripts 目录里的 `zwrt-datad.init` E3 起不再管，留在设备上不动，旧 init 在新布局下拒绝启动） | — | direct，— / 60 s（md5 + sh -n） |
-| `sentinel` | 五 | 可用（转换要用户同意） | `/data/luyaz/luyaz-sentinel`；第一次（`--convert`）另加 `/etc/rc.local`，在设备上从现有文件改出来（txn v=3） | — | direct，— / 300 s（下面「哨兵」的检查 + 核心的判定，两者都要过） |
+| `core` | 一 | 可用 | `/data/luyaz/luyaz-core` | 无（下面格式示例里的 cooling.conf 只是举例） | 旁路顶替 180 s / 120 s（core-trial 的全部检查） |
+| `touch` | 二 | 可用（10-15 起只编 `rs/`） | `/data/luyaz/ui/luyaz-ui`（改名 F3 起不带 `start.sh`） | `/data/luyaz/ui/devui.conf` | 旁路顶替 60 s / 120 s（下面「第二期」的 touch 检查） |
+| `scripts` | 五 | 可用（带 luyaz-web、luyaz-core 的 init：txn v=5，设备上的 luyaz-recover.sh 要有 formats 5） | `/data/luyaz/scripts/` 下 `SCRIPTS_FILES`（`alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION`，和 Mac 端 `luyaz` 的同名表一致；`luyaz-fallback.sh` 不在时 `touch` 拒绝）+ `/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}`（`SCRIPTS_INITS`）。改名留下的旧文件（`agent-auth.sh`、`datad-trial.sh`、`u60-fallback.sh` 等）不在表里，ship 不管 | — | direct，— / 60 s（md5 + sh -n） |
+| `sentinel` | 五 | 可用 | `/data/luyaz/luyaz-sentinel`（只换程序，rc.local 不动） | — | direct，— / 300 s（下面「哨兵」的检查 + 核心的判定，两者都要过） |
 | `lweb` | 8c | 可用（10-13 上机；第一次要先 install-recover、ship scripts，rc.local 加一行都问用户） | `/data/luyaz/luyaz-web`（manager crates/luyaz-web，`release`：unwind；8d-2c 起 `0.0.0.0:9090`） | — | 旁路顶替 120 s / 120 s（下面「luyaz-web」的检查） |
-| `agent`、`web`、`uid`、`guard` | — | **已删除**（agent、web 8d-2c；uid、guard Phase 10 10c，屏幕和看门狗归哨兵）：stage / record-kit / prepare-rollback 按名字拒绝，`luyaz` 构建前就拒；设备上的旧文件不动 | — | — | — |
+| `agent`、`web`、`uid`、`guard`、`datad` | — | **已删除**（屏幕和看门狗归哨兵，`datad` 只叫 `core`）：stage / record-kit / prepare-rollback 按名字拒绝，`luyaz` 构建前就拒；设备上的旧文件不动 | — | — | — |
 | `selftest` | — | 只在设了 `U60S_ROOT`（沙盒）时存在，供 `selftest` 和测试用 | 沙盒里的两个文件 | 沙盒里的两个文件 | 没有旁路（direct），检查 2 s |
 
-- **core 的检查**（试跑看测试版，转正后看正式版，每 10 秒）：`/v2/state` 的 live 块 30 秒不变；进程不在；屏幕日志（哨兵写 `/tmp/luyaz-screen.log`；E2c 前叫 `/tmp/u60-uid.log`）出现放弃 /
-  交还原厂界面 / 界面意外退出，或界面 `luyaz-ui` 不在。任何一项 → 试跑中止 / 转正后退回。（原来的第四项 zte-agent netwatch 计数 8d-2c 随 agent 删掉：核心不写这个计数。）
+- **core 的检查**（试跑看测试版，转正后看正式版，每 10 秒）：`/v2/state` 的 live 块 30 秒不变；进程不在；屏幕日志（哨兵写 `/tmp/luyaz-screen.log`）出现放弃 /
+  交还原厂界面 / 界面意外退出，或界面 `luyaz-ui` 不在。任何一项 → 试跑中止 / 转正后退回。
   屏幕日志读 `/tmp/luyaz-screen.log.old` + `/tmp/luyaz-screen.log`（到 64 KB 被 mv 成 `.old`；以前是 guard，现在是哨兵）。计数跟着轮转走：每次记下两份的 inode
   和各自的坏行数，上次见过、这次没了的那份（被轮转换掉的旧 `.old`）把它的坏行数累加进「已消失」，所以轮转前刚写的一行照样算新的，
   旧 `.old` 里原有的坏行被换掉也不会让计数变小、吃掉新的一行。只有一次轮询之间轮转两次（64 KB × 2），中间那份里的行看不到。
   touch 的界面检查同样。测试用 `DT_LOGREAD` 时是那份输出的简单计数。
-- 试跑启动的命令和 init 脚本 `start_service` 一样（init 由 procd 直接拉起，试跑不经 procd，崩了不被拉起；supervise.sh 10-15 已退役）：core（`datad`）、touch、lweb 见 `print-launch <组件>`。测试里各有一个
+- 试跑启动的命令和 init 脚本 `start_service` 一样（init 由 procd 直接拉起，试跑不经 procd，崩了不被拉起；supervise.sh 10-15 已退役）：core（`core`）、touch、lweb 见 `print-launch <组件>`。测试里各有一个
   「和 init 脚本对不上就失败」的用例。
 - 只追加的日志和账本（`/data/scenario/log`、核心的 `/data/luyaz/core/long/*.jsonl` 等）不是状态文件，退回时不会被覆盖。
 - 状态文件只能是普通文件（或者不存在）。
-- 组件描述在 `u60-ship.sh` 的 `comp_load` 里：`C_KIND`（`trial` 旁路顶替 / `direct` 直接转正）、`C_FILES`、`C_DIRS`（整个换的目录）、
+- 组件描述在 `luyaz-ship.sh` 的 `comp_load` 里：`C_KIND`（`trial` 旁路顶替 / `direct` 直接转正）、`C_FILES`、`C_DIRS`（整个换的目录）、
   `C_STATE_ALLOW`、`C_TRIAL`、`C_CHECK`、`C_ALLOW_NEW`（正式文件可以原来没有：touch、lweb、sentinel、scripts）、`C_PRE`（direct 转正前先跑 `pre` 钩子，
   不过 = 中止：sentinel）、`C_NOTREADY`，外加每个组件一组 `c_<组件>_*` 钩子：`pre`、`stop`、`start`（起来并确认）、
   `launch_test`、`trial_watch`、`kill_test`、`check`。
+
+## 核心手工试跑 `core-trial.sh`（ship 之外）
+
+`luyaz ship core` 的试跑走事务（上面的 `trial` 阶段）。`/data/luyaz/scripts/core-trial.sh` 是另一条路：不进事务、不写清单、不转正，
+只让测试版核心顶替正式版跑一段时间，看完自己把正式版放回去。用来在 ship 之前长时间看一版（默认窗口 `DT_WINDOW` = 3600 s）。
+
+- **是什么**：`luyaz-ship.sh` 的壳（`ENTRY=core-trial`，`.` 进同目录的 `luyaz-ship.sh`），检查、中止和还原的代码和 ship 的核心试跑是同一份（`watch_core`）。装机包放到
+  `/data/luyaz/scripts/`，不进 scripts 组件（见下面「谁管哪个脚本」）；rename F7 前叫 `datad-trial.sh`，设备上的旧文件 F7 已删。
+- **用法**：测试版推成 `/data/luyaz/luyaz-core.test`（`chmod +x`），然后
+  `core-trial.sh launch [VAR=value …]`（停正式版，用 init 脚本 `start_service` 的参数和环境起测试版，不经 procd；`/v2/state` 有回应才开始看，起不来立刻放回正式版、launch 失败）、
+  `status`、`abort`（马上停、放回正式版）、`start`（只看一个手工起好的测试版）、`print-launch`（只打印启动命令）。
+- **日志**：`/data/luyaz/scripts/core-trial.log`（看守：原因、结果）、`core-trial.test.log`（测试版的输出）；看守 pid 在 `/tmp/core-trial.pid`。
+- **和 ship 互斥**：看守在跑时 ship 的 stage 拒绝（「core-trial 的守护在跑」）。反过来 core-trial 不看事务日志：ship 在跑时别手工 launch。
+- 只能起一份核心（老界面只读 `127.0.0.1:9460`），所以是**顶替**不是并排；换正式位置永远是 ship 的事，core-trial 不碰 `/data/luyaz/luyaz-core`。
 
 ## 暂存目录和 meta（Mac → 设备）
 
@@ -86,7 +100,7 @@ file=luyaz-core 0123…cdef      产物文件名 + md5，组件的每个正式�
 state=/data/luyaz/core/cooling.conf   可选，可重复；必须在组件的状态文件清单里；一行都没有 = 用组件的整张清单
 ```
 
-`u60-ship.sh stage <事务号>` 拒绝（退出码 1，正式位置和状态文件都不动，旁路文件清掉）的情况：
+`luyaz-ship.sh stage <事务号>` 拒绝（退出码 1，正式位置和状态文件都不动，旁路文件清掉）的情况：
 
 - 事务号、组件名、提交号、时间、格式版本、试跑秒数、md5 任何一个格式不对；meta 里有看不懂的键；少了某个正式文件的 `file=`；
 - 组件未知、`C_NOTREADY`；状态文件不在清单里、不是普通文件、路径越界（只允许 `/data/…` 下和我们 4 个 init 脚本，
@@ -94,8 +108,8 @@ state=/data/luyaz/core/cooling.conf   可选，可重复；必须在组件的状
 - 产物 md5 不对（上传没完成）、正式文件不存在（第一次安装走装机包；`C_ALLOW_NEW` 的组件例外：目录在、文件原来没有 = 新文件）；
   脚本产物（`*.sh`、`*.init`、`/etc/init.d/*`）`sh -n` 不过；
 - 目录产物：tgz 的 md5 不对、包里有链接 / 特殊文件 / 绝对路径 / `..`（busybox tar 会自己去掉开头的 `../` 并只在标准错误说一句，这一句也算）、
-  解开以后指纹不对、正式目录不在或算不了指纹；要写 v=2 而设备上的 u60-recover.sh 读不了 v=2；
-- 有事务在进行（非终态）或停在「failed」；datad-trial（核心试跑）的守护在跑；另一个 stage 拿着 flock；
+  解开以后指纹不对、正式目录不在或算不了指纹；要写 v=2 而设备上的 luyaz-recover.sh 读不了 v=2；
+- 有事务在进行（非终态）或停在「failed」；core-trial（核心试跑）的守护在跑；另一个 stage 拿着 flock；
 - `/data` 可用 < 200 MB；
 - 格式版本和设备上的不同：设备上的版本 = 清单里这个组件最后一条 ship 记录的 `format`，没有记录按 1 算。
   **高了**按 R14 拒绝（要单独写迁移和退回方案）；**低了**也拒绝（报告没覆盖，按「宁可中止」处理：旧程序读新格式的数据不可预期）。
@@ -130,9 +144,9 @@ state=/data/luyaz/core/neighbor.json|-          （- 表示原来不存在，退
 end=1                           必须是最后一行：没有它就算日志不完整
 ```
 
-- `end=1` 缺了（写到一半、被截断）：u60-ship.sh 当作看不懂（挡住 stage），u60-recover.sh 不动文件、只记一行。
+- `end=1` 缺了（写到一半、被截断）：luyaz-ship.sh 当作看不懂（挡住 stage），luyaz-recover.sh 不动文件、只记一行。
 
-- 旁路名、上一版的名字**不写进日志**，由正式路径推出来：`<路径>.test`、`<路径>.prev-<事务号>`（u60-recover.sh 不信日志里的任意路径）。
+- 旁路名、上一版的名字**不写进日志**，由正式路径推出来：`<路径>.test`、`<路径>.prev-<事务号>`（luyaz-recover.sh 不信日志里的任意路径）。
 - `statelist=<路径>`（可重复）是 stage 时定下的状态文件清单（只有路径）；`state=` 在停掉正式版、把状态文件拷成 `.prev-<事务号>` 并 sync 之后才写进日志；那之前断电不需要还原状态文件（正式版停着，文件没动）。
 - `reason` 是给人看的一句话（去掉换行和 `|`）。
 
@@ -166,19 +180,19 @@ staged → trial → promote → check → manifest → done
 否则 `.prev` 的 md5 必须等于旧 md5，才 cp 到同目录临时名 → sync → mv → sync；`.prev` 不对就不碰正式文件、记下来、结果为 `failed`。
 原来不存在的状态文件（`-`）退回时删掉。
 
-### 断电后开机（u60-recover.sh）和同一次开机的兜底（recover-live）
+### 断电后开机（luyaz-recover.sh）和同一次开机的兜底（recover-live）
 
-| 断电时的阶段 | 开机时 u60-recover.sh | 同一次开机 `u60-ship.sh recover-live` |
+| 断电时的阶段 | 开机时 luyaz-recover.sh | 同一次开机 `luyaz-ship.sh recover-live` |
 |---|---|---|
 | `staged`、`trial` | 程序不动；状态文件换回试跑前的 `.prev`（R14，用户 10-01 定；同样按 md5，换不回 → `failed`）→ `aborted`，reason「开机时已中止（断电时在 X…）」 | 杀测试版、还原状态文件（只在 trial）、起正式版 → `aborted` |
 | `promote`、`check`、`rollback` | 程序和状态文件全部换回 `.prev`（按 md5，已是旧版就跳过，可重复执行）→ `rolledback`，reason「开机时已退回」；有换不回的 → `failed` | 停服务、同左换回、起服务 → `rolledback` / `failed` |
 | `manifest` | 不动文件 → `manifest_pending` | 补完清单 → `done` |
 | 终态 | 什么都不做（≤ 1 秒，不写任何文件） | 什么都不做 |
 
-第二期组件的 recover-live 照同一张表，停 / 起服务用组件自己的钩子：touch 的「起」是 `uid-restart`（名字沿用；试跑中的 touch 先杀测试版）；
+第二期组件的 recover-live 照同一张表，停 / 起服务用组件自己的钩子：touch 的「起」是 `screen-restart`（试跑中的 touch 先杀测试版）；
 旧的 v=2 目录事务（8d-2c 删掉的 web）没有停 / 起，只换目录。sentinel 自己的事务哨兵兜底不管，由 `luyaz status` 调。
 
-u60-recover.sh 只在「日志里的开机号 ≠ 现在的开机号」时动手（同一次开机归执行器和哨兵兜底）；日志的 `v` 看不懂、没有 `end=1`、
+luyaz-recover.sh 只在「日志里的开机号 ≠ 现在的开机号」时动手（同一次开机归执行器和哨兵兜底）；日志的 `v` 看不懂、没有 `end=1`、
 字段不合格式、路径越界、程序文件被标成「原来不存在」时一律不动文件（整份日志里只要有一行不对就全部不动），只在 recover.log 记一行。它不做算术、不 `.` 任何文件、不联网。
 
 ## 执行器心跳 `/tmp/luyaz/ship/heartbeat`（给哨兵兜底用）
@@ -196,7 +210,7 @@ init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来
 `recover-live` 自己再查一遍：执行器还活着（pid 在、cmdline 里有 `-ship.sh`）且心跳 ≤ 30 秒 → 退出码 3、不动；`--force` 先 kill -9 执行器再做。
 它干活时也写心跳，所以哨兵下一轮不会再起第二个。
 
-## 命令（u60-ship.sh）
+## 命令（luyaz-ship.sh）
 
 | 命令 | 作用 | 退出码 |
 |---|---|---|
@@ -208,7 +222,7 @@ init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来
 | `abort` | 给执行器发 TERM（它按阶段自己收尾） | 0 / 1 没有执行器 |
 | `recover-live [--force]` | 见上 | 0 / 3 执行器还活着 |
 | `manifest-finish` | 把 `manifest_pending`（或停在 `manifest` 且执行器已死）补成 `done` | 0 / 1 |
-| `print-launch datad\|touch\|lweb` | 打印试跑会启动的命令（测试拿它和 init 脚本比） | 0 |
+| `print-launch core\|touch\|lweb` | 打印试跑会启动的命令（测试拿它和 init 脚本比） | 0 |
 | `record <名\|all> <Mac 时间> [原因]` | 只记录的文件按现在的 md5 记一行 | 0 / 1 拒绝 |
 | `record-kit <组件> <装机包日期> <提交号> <格式> <Mac 时间> [dirty]` | 装机包装完写一条 `kind=kit`；有事务在进行时拒绝 | 0 / 1 |
 | `prepare-rollback <组件> <事务号> <Mac 时间>` | 把组件最后一次上机的 `.prev-<那次事务号>` 拷进 `stage/<事务号>/` 并写好 meta（提交号、格式取再上一次上机的；没有就是 `0000000`、现在的格式；`note=rollback`），之后照常 stage / start：退回也走试跑、转正、检查 | 0 / 1 拒绝 |
@@ -223,18 +237,18 @@ init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来
 ```
 
 - 同一组件以最后一条 `kind=ship` 或 `kind=kit` 为设备上的现状（格式版本、doctor 的比对、luyaz 的依赖检查都这样算）。
-- **装机包**（T9）：`onboard/device/install.sh` 装完 admin 后调 `u60-ship.sh record-kit <组件> <装机包日期> <提交号> <格式版本> <Mac 时间> [dirty]`：
+- **装机包**（T9）：`onboard/device/install.sh` 装完 admin 后调 `luyaz-ship.sh record-kit <组件> <装机包日期> <提交号> <格式版本> <Mac 时间> [dirty]`：
   ```json
   {"v":1,"kind":"kit","comp":"core","kit":"20261001","commit":"abc1234","format":1,"mac_time":1790000000,"boot_id":"…","uptime":80,"files":[{"path":"/data/luyaz/luyaz-core","md5":"…"}],"state":[],"note":"kit-dirty"}
   ```
   没有 `prev`：装机包不留上一版，所以最后一条是 kit 时 `prepare-rollback` 拒绝。`note:"kit-dirty"` = 打包时那个仓库有未提交改动。
-- **只记录的文件**（R1/D10）：`u60-ship.sh record <名|all> <Mac 时间> [原因]` 写 `kind=record` 行，同一名字以最后一条为准：
+- **只记录的文件**（R1/D10）：`luyaz-ship.sh record <名|all> <Mac 时间> [原因]` 写 `kind=record` 行，同一名字以最后一条为准：
   ```json
   {"v":1,"kind":"record","name":"rc.local","path":"/etc/rc.local","md5":"…","mac_time":1790000000,"boot_id":"…","uptime":5600,"why":"手工改了"}
   ```
   名字固定：`tailscale-start.sh`、`tuning.env`、`tailscaled`、`tailscaled-nofight`；
-  `init.d/luyaz-core`、`init.d/tailscale`；`rc.local`；`luyaz-recover.sh`；目录 `ui-fonts`（`/data/luyaz/ui/fonts`）、`ui-logos`、`core-plugins`（Luya-Z D4c 前叫 `u60-recover.sh`、`devui-fonts`、`devui-logos`、`u60d-plugins`：清单里的旧名照样算，`record` 也认旧名、写新名）。
-  `init.d/zte-agent`、`init.d/u60-guard`、`init.d/u60-uid`、`init.d/zwrt-datad` 已由 `retire` 行退役（10c、E3）。文件不存在记 `"md5":"-"`。
+  `init.d/luyaz-core`、`init.d/tailscale`；`rc.local`；`luyaz-recover.sh`；目录 `ui-fonts`（`/data/luyaz/ui/fonts`）、`ui-logos`、`core-plugins`（D4c 前叫 `u60-recover.sh`、`devui-fonts`、`devui-logos`、`u60d-plugins`：清单里的旧名照样算，`record` 也认旧名、写新名）。
+  退役程序的 init（zte-agent、u60-guard、u60-uid、zwrt-datad）不再是记录名，设备清单里的旧记录改名 F5/6 时已删。文件不存在记 `"md5":"-"`。
   私有版另有 CHILL 的 `chill.sh`、`template.yaml`；`chill.env` 是设置文件，不进清单。
   运行中会被正常改写的设置文件不进清单。原因去掉引号、反斜杠和控制字符，最长 120 字节。有事务在进行时拒绝。
   doctor.sh 里有同一张名字表，测试检查两边一致。
@@ -266,22 +280,22 @@ init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来
 
 | 组件 | 正式内容 | 来源（luyaz 在提交 X 的 worktree 里） | 方式 | 试跑 / 检查 | txn `v` |
 |---|---|---|---|---|---|
-| `touch` | `/data/luyaz/ui/luyaz-ui`、`/data/plugins/u60pro-devui/start.sh` | `rs/build.sh device` 编的 `luyaz-ui`（C 版和 `scripts/build-docker.sh` 10-15 删除，tag `legacy-c-touch-ui`；没有 `rs/` 的提交 luyaz 拒绝）；`scripts/start.sh` | 旁路顶替 | 60 s / 120 s | 1 |
+| `touch` | `/data/luyaz/ui/luyaz-ui` | `rs/build.sh device` 编的 `luyaz-ui`（C 版和 `scripts/build-docker.sh` 10-15 删除，tag `legacy-c-touch-ui`；没有 `rs/` 的提交 luyaz 拒绝；`scripts/start.sh` 改名 F3 退役） | 旁路顶替 | 60 s / 120 s | 1 |
 | `scripts` | `/data/luyaz/scripts/` 下 `SCRIPTS_FILES` + `/etc/init.d/<名>`（`SCRIPTS_INITS`） | `git show X:scripts/<名>`；init.d 的 = `scripts/<名>.init` | direct | — / 60 s | 4 或 5（有 `/etc/init.d/luyaz-web` / `luyaz-core`） |
 
 - `uid`、`guard`（第二期原有）10c 退役，见上面的组件表。
-- `SCRIPTS_FILES="alert-lib.sh agent-auth.sh chaos.sh doctor.sh doctor-legacy.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh"`，
-  `SCRIPTS_INITS="luyaz-core luyaz-sentinel luyaz-web"`（u60-ship.sh 和 luyaz 各一张同样的表）。设备目录里其余文件（日志、`lan-ipv6-off`、`standby.baseline`、手工备份）一律不碰。
+- `SCRIPTS_FILES="alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh"`，
+  `SCRIPTS_INITS="luyaz-core luyaz-sentinel luyaz-web"`（luyaz-ship.sh 和 luyaz 各一张同样的表）。设备目录里其余文件（日志、`lan-ipv6-off`、`standby.baseline`、手工备份）一律不碰。
   从清单里拿掉的文件 ship 不会删，留在设备上没人调用，要删手工删。
 - init 脚本归 scripts：产物按正式文件的文件名命名；新的 init 要等那个服务下次启动（ship 那个组件、手工 restart 或重启设备）才生效。
   原来没有的 init 脚本照「新文件」处理（`-`，退回时删掉）；没被 procd 启用的脚本放进去也不会开机自启。
 - **清单的只记录条目跟着更新**：事务的文件里有只记录名单上的（如 `init.d/luyaz-core`），`done` 时同一次写清单在 ship 行**前面**各写一条
   `kind=record`（md5 = 新的，`why` = `ship <事务号>`），doctor 不再报它们「不一致」；退回、中止不写；`luyaz rollback scripts` 本身是一次 ship，写回旧的 md5。
-- **谁管哪个脚本**：`u60-ship.sh`、`datad-trial.sh` （设备上 `luyaz-ship.sh`）只随每次 ship 上传（K4），不进 scripts 组件，scripts 退回也不会把它们换回旧版；
-  `u60-recover.sh`（设备上 `luyaz-recover.sh`）只由 `install-recover` 换（先问用户）。
+- **谁管哪个脚本**：`luyaz-ship.sh` 只随每次 ship 上传（K4），`core-trial.sh` 只由装机包放；都不进 scripts 组件，scripts 退回也不会把它们换回旧版；
+  `luyaz-recover.sh` 只由 `install-recover` 换（先问用户）。
 - **字体 `fonts/`、运营商 logo `operator-logos/` 不进 touch**：它们不是 touch-ui 某个提交的产物（字体是钉死 sha256 的公开下载，logo 由 manager 的 SVG 生成），
   按 R1 作只记录的目录条目：`record` 名字 `ui-fonts`、`ui-logos`，记目录指纹。换它们照旧走装机包。
-- **核心 luyaz-core 的策略组件 `/data/luyaz/core/plugins/`（旧布局 `/data/u60d/plugins/`）**（manager `crates/luyaz-plugins/build.sh` 编的 `plugins.json` + `.cwasm`）也是只记录的目录条目 `core-plugins`：
+- **核心 luyaz-core 的策略组件 `/data/luyaz/core/plugins/`**（manager `crates/luyaz-plugins/build.sh` 编的 `plugins.json` + `.cwasm`）也是只记录的目录条目 `core-plugins`：
   手工放好（暂存目录 + `mv`）后 `luyaz record core-plugins`；核心只在启动时读，放好后要等下一次 ship core 或重启核心才生效；清单或 sha256 不对就用内置实现。
 - 旧做法的 `ui/` 模板目录现在的触屏程序不读，不进任何组件。
 
@@ -298,7 +312,7 @@ init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来
 目录里有普通文件和目录以外的东西（链接、设备文件）、或者文件名带换行、`|`，算失败（stage 拒绝、doctor 报 warn）。空目录 = 空串的 md5。
 两边各有一个用例用同一个夹具（`scripts/test/fixtures/tree/` 和它的期望值）对答案：Mac 端 bash 3.2 + `md5 -q`、设备 busybox `md5sum`。
 期望值在 `scripts/test/fixtures/tree.expected`（`4cf3547a1a7205c976ec74f0dd968146`），被算 md5 的原文在 `tree.listing`（对不上时 diff 它）。
-设备上三个脚本各有入口：`u60-ship.sh tree-fp <目录>`、`u60-recover.sh tree-fp <目录>`、`doctor.sh --tree-fp <目录>`（算不了退出 1、不打印）。
+设备上三个脚本各有入口：`luyaz-ship.sh tree-fp <目录>`、`luyaz-recover.sh tree-fp <目录>`、`doctor.sh --tree-fp <目录>`（算不了退出 1、不打印）。
 
 ### 暂存和 meta（新增的行）
 
@@ -322,10 +336,10 @@ file=/data/luyaz/scripts/<新文件>|-|<新 md5>     程序文件原来不存在
 file=/etc/init.d/<名>|<旧>|<新>
 ```
 
-- **只有用到上面任何一项时才写 v=2**；core、touch、lweb 照旧 v=1，最早的 u60-recover.sh（cabc78d3，只懂 v=1）照常处理，
+- **只有用到上面任何一项时才写 v=2**；core、touch、lweb 照旧 v=1，最早的 luyaz-recover.sh（cabc78d3，只懂 v=1）照常处理，
   看到 v=2 一律不动（它本来就这样）。
 - **stage 前置**：要写 v=2 时，设备上的 `/data/luyaz/ship/luyaz-recover.sh formats` 必须打印含 `2` 的一行；旧版没有 `formats` 命令 → 拒绝，
-  原因「先装新版 u60-recover.sh（luyaz install-recover，要用户同意）」。
+  原因「先装新版 luyaz-recover.sh（luyaz install-recover，要用户同意）」。
 - **`/etc/` 下文件的上一版不放在 `/etc/init.d`**（免得多一个看起来像服务的文件）：`/etc/init.d/luyaz-core` 的上一版是
   `/data/luyaz/ship/prev/etc.init.d.luyaz-core.prev-<事务号>`。规则写死在两个脚本里：`/etc/init.d/<名>` → `$SHIP_DIR/prev/etc.init.d.<名>.prev-<事务号>`，
   其余路径照旧 `<路径>.prev-<事务号>`。
@@ -338,7 +352,7 @@ file=/etc/init.d/<名>|<旧>|<新>
 
 ### 事务日志 v=3（哨兵，manager docs/designs/u60-sentinel.md 5d-0）
 
-v=2 的所有规则不变，另外只有 v=3 的日志可以写这两个文件（v=1、v=2 的日志里出现 → u60-recover.sh 一律不动）：
+v=2 的所有规则不变，另外只有 v=3 的日志可以写这两个文件（v=1、v=2 的日志里出现 → luyaz-recover.sh 一律不动）：
 
 ```
 v=3
@@ -347,30 +361,30 @@ file=/etc/rc.local|<旧>|<新>
 ```
 
 - `/etc/rc.local` 的上一版是 `/data/luyaz/ship/prev/etc.rc.local.prev-<事务号>`；`/etc/init.d/luyaz-sentinel` 同 init 脚本规则。
-- **stage 前置**：写 v=3 时设备上 `u60-recover.sh formats` 必须含 `3`（10-10 起的版本打印 `1 2 3`）；装新版走 `luyaz install-recover`（要用户同意）。
+- **stage 前置**：写 v=3 时设备上 `luyaz-recover.sh formats` 必须含 `3`（10-10 起的版本打印 `1 2 3`）；装新版走 `luyaz install-recover`（要用户同意）。
 - 写 v=3 的：带 rc.local 的 sentinel 事务（转换）、scripts（带哨兵的启动脚本）。
 
 ### 事务日志 v=4（luyaz-web，manager docs/designs/u60-web.md 第 6 步）
 
-v=3 的所有规则不变，另外只有 v=4 的日志可以写 `/etc/init.d/luyaz-web`（v=1～3 的日志里出现 → u60-recover.sh 一律不动）。
-- **stage 前置**：写 v=4 时设备上 `u60-recover.sh formats` 必须含 `4`（10-12 起的版本打印 `1 2 3 4`）；装新版走 `luyaz install-recover`（要用户同意）。
-- 写 v=4 的：scripts（带 luyaz-web 的启动脚本）。所以 10-12 以后的 **每一次 `ship scripts` 都要设备上先有 formats 4 的 u60-recover.sh**。
+v=3 的所有规则不变，另外只有 v=4 的日志可以写 `/etc/init.d/luyaz-web`（v=1～3 的日志里出现 → luyaz-recover.sh 一律不动）。
+- **stage 前置**：写 v=4 时设备上 `luyaz-recover.sh formats` 必须含 `4`（10-12 起的版本打印 `1 2 3 4`）；装新版走 `luyaz install-recover`（要用户同意）。
+- 写 v=4 的：scripts（带 luyaz-web 的启动脚本）。所以 10-12 以后的 **每一次 `ship scripts` 都要设备上先有 formats 4 的 luyaz-recover.sh**。
 - 日志版本取所有条目要的最高值（`txn_v`；之前新文件、`/etc` 路径会把已经算出的 3 压回 2，带哨兵 init 时只是因为它排在最后才没出事）。
 
 ### 事务日志 v=5（核心的 init，manager docs/designs/u60-phase10.md 10e）
 
 v=4 的所有规则不变，另外只有 v=5 的日志可以写 `/etc/init.d/luyaz-core`；`formats` 要含 `5`（打印 `1 2 3 4 5`）。
-所以现在每一次 `ship scripts` 都是 v=5。新布局（`/data/luyaz/core/.migrated`）下 recover 绝不放回起旧路径核心的 rc.local。
+所以现在每一次 `ship scripts` 都是 v=5。recover 绝不放回旧路径的核心程序和起 `/etc/init.d/zwrt-datad` 的 rc.local（10e 起；原来只在有 `/data/luyaz/core/.migrated` 时，F5/6 删了这个标记，F7 收尾改成无条件）。
 
 ### luyaz-web（`lweb`，manager docs/designs/u60-web.md 第 6 步）
 
 **第一次的顺序**（每步都先问用户）：`luyaz install-recover`（formats 要有 4）→ `luyaz ship scripts`（装 `/etc/init.d/luyaz-web`；没有程序时它拒绝启动，所以放着没事）→
-`luyaz ship lweb`（`ship/lweb/requires` 里那行 `agent 0bab76b8` 8d-2c 起不再查：`luyaz` 跳过已删除组件的依赖，两个方向都跳，在 stderr 说一句）→ 手工在 rc.local 里 datad 那行后面加
-`/etc/init.d/luyaz-web start`（在 u60-recover.sh 那行之后；`luyaz` 的前置检查和 `after-upgrade` 都认这一行）。之后升级只要 `luyaz ship lweb`。
+`luyaz ship lweb`（`ship/lweb/requires` 里那行 `agent 0bab76b8` 8d-2c 起不再查：`luyaz` 跳过已删除组件的依赖，两个方向都跳，在 stderr 说一句）→ 手工在 rc.local 里核心那行后面加
+`/etc/init.d/luyaz-web start`（在 luyaz-recover.sh 那行之后；`luyaz` 的前置检查和 `after-upgrade` 都认这一行）。之后升级只要 `luyaz ship lweb`。
 
 - **init**：procd 直接起 `/data/luyaz/luyaz-web serve --bind 0.0.0.0:9090 --upstream http://127.0.0.1:9460 --password-file /data/luyaz/web.env`（supervise.sh 10-15 退役），
   respawn 300 5 5、term_timeout 10；日志 `/tmp/luyaz-web.log`（哨兵按 256 KB 截），崩溃留 `/data/crashlog/luyaz-web/`，告警类别 `web-crash`（luyaz-alerts 里有它的说法）。
-- **试跑**：和 datad 一样旁路顶替（引擎试跑前本来就停正式版，换端口没有好处）：停正式版 → `nohup /data/luyaz/luyaz-web.test serve …`（参数同 init，
+- **试跑**：和核心一样旁路顶替（引擎试跑前本来就停正式版，换端口没有好处）：停正式版 → `nohup /data/luyaz/luyaz-web.test serve …`（参数同 init，
   `print-launch lweb`；测试比对 init 的那一行）→ 每 10 s：进程在、`/health` 200 且有 `link`（没人看时是 `idle`，不要求 `live`）、`/login` 200 且有内容（luyaz-web 自己渲染、不要会话的页）、`/proc/net/tcp` 里有 `00000000:1F90` 在听
   （init 丢了 `--bind` 时只听本机，本机 curl 照样通）。**检查**再加：同一个 pid、跑的是这一版。
 - **第一次上机没有旧版**：stop 没东西停；start 看到没有程序就不起、算成功，所以试跑不过 → aborted、转正后起不来 → rolledback，都回到「没有 luyaz-web」，不会 failed。
@@ -381,56 +395,54 @@ v=4 的所有规则不变，另外只有 v=5 的日志可以写 `/etc/init.d/luy
 
 ### 哨兵（manager docs/designs/u60-sentinel.md 5f，T7；Codex 10-10 复核过设计）
 
-**5f 的顺序**：`luyaz install-recover`（formats 要有 3）→ `luyaz ship scripts`（装 `/etc/init.d/luyaz-sentinel`）→ `luyaz ship sentinel --convert`（都先问用户）。之后升级哨兵只要 `luyaz ship sentinel`（只换程序，rc.local 不动）。
+升级哨兵：`luyaz ship sentinel`（只换程序，rc.local 不动；它的 init 随 `ship scripts`）。
 
-- **rc.local 只认两种样子**（`rc_mode`）：旧（恰好一行 `/etc/init.d/u60-uid start`，紧跟恰好一行 `/etc/init.d/u60-guard start`，没有哨兵行）或已转换（恰好一行 `/etc/init.d/luyaz-sentinel start`，两行旧的都没有）；两种都要 `u60-recover.sh` 那行恰好一次、在前面，`zwrt-datad start` 在屏幕主人之前，`exit 0` 在后面，三个名字不能在别处（条件、复合命令）出现。行尾 `   # 注释` 可以。其余一律拒绝。
-- **转换在设备上改**（`rc_derive`）：u60-uid 那行换成哨兵行、u60-guard 那行删掉、恢复那行（新旧路径都认）变成 `sh /data/luyaz/ship/luyaz-recover.sh; [ $? = 10 ] && exec /bin/sh /etc/rc.local …`，其余字节不动；改前改后都 `sh -n`，改法记进 ship.log。旧 rc.local 要 `--convert` 才改（meta `note=convert`），已转换的再带 `--convert` 拒绝。
-- **开机恢复退回 rc.local 时返回 10**：正在跑的 shell 拿着新 rc.local，不退出会接着起一个已经没有的哨兵；新 rc.local 那一行看到 10 就重新执行换回的旧文件（旧文件不认 10，不会绕圈）。
-- **停**：先杀影子哨兵（`--shadow`），再停哨兵（init stop，5 s 后 TERM），再 u60-uid stop（界面留在屏上），再 guard stop；任何一个停不下就失败。**起**：按盘上的文件决定起哪一套（rc.local 是哨兵的样子且 init 和程序都在 → 起哨兵并等它接管界面；否则 u60-uid 再 guard），**还有屏幕主人在跑就拒绝起**（不会有两个主人；停失败的回滚停在那里，人来处理）。
-- **检查 300 s**：同一个哨兵进程、跑的是这一版；心跳至少动 2 次、从不超过 150 s 不动；u60-uid 不能出现；屏幕空不超过 20 s；**核心的判定**（`/data/luyaz/ship/verdict`，行首是本事务号）是 fail 立刻回滚，窗口结束时不是 ok 也回滚（D5：没有判定也不转正）。
-- **D4 一次只换一个**：暂存 datad 或 sentinel 时，按清单历史看另一个上次上机是否还在 1 小时观察期里（同一次开机），在就拒绝。
-- **哨兵管屏幕时 ship touch**：不停哨兵，往 `/tmp/luyaz-screen.ctl`（10-15 起唯一的 FIFO；旧 `/tmp/u60-uid.ctl` 不再听）写 `hold <试跑+检查+300 s>`（5 s 写不进算失败），等心跳第 3 栏变成 `held` 再杀界面；完了写 `release`，等哨兵拉起这一版界面、心跳回到 `ours`。检查窗口结束时也要核心判定 ok。
+- **rc.local 只认一种样子**（`rc_mode`）：`sh /data/luyaz/ship/luyaz-recover.sh` 那行恰好一次、`/etc/init.d/luyaz-core start` 和恰好一行 `/etc/init.d/luyaz-sentinel start` 都在它后面，`exit 0` 在哨兵行后面；哨兵的名字不能在别处（条件、复合命令）出现。行尾 `   # 注释` 可以。其余一律拒绝（`bad`）。
+- **开机恢复退回 rc.local 时返回 10**：恢复那行是 `sh /data/luyaz/ship/luyaz-recover.sh; [ $? = 10 ] && exec /bin/sh /etc/rc.local …`，正在跑的 shell 拿着旧内容，看到 10 就重新执行换回的文件。
+- **停**：先杀影子哨兵（`--shadow`），再停哨兵（init stop，5 s 后 TERM），界面留在屏上；停不下就失败。**起**：起盘上的哨兵（退回后是旧版）并等它接管界面，**还有屏幕主人在跑就拒绝起**（不会有两个主人；停失败的回滚停在那里，人来处理）。
+- **检查 300 s**：同一个哨兵进程、跑的是这一版；心跳至少动 2 次、从不超过 150 s 不动；屏幕空不超过 20 s；**核心的判定**（`/data/luyaz/ship/verdict`，行首是本事务号）是 fail 立刻回滚，窗口结束时不是 ok 也回滚（D5：没有判定也不转正）。
+- **D4 一次只换一个**：暂存核心或 sentinel 时，按清单历史看另一个上次上机是否还在 1 小时观察期里（同一次开机），在就拒绝。
+- **哨兵管屏幕时 ship touch**：不停哨兵，往 `/tmp/luyaz-screen.ctl` 写 `hold <试跑+检查+300 s>`（5 s 写不进算失败），等心跳第 3 栏变成 `held` 再杀界面；完了写 `release`，等哨兵拉起这一版界面、心跳回到 `ours`。检查窗口结束时也要核心判定 ok。
 ### 清单
 
 目录条目：`{"path":"/data/admin","tree":"<指纹>","prev":"/data/admin.prev-<事务号>"}`（没有 `md5`）。doctor `--manifest` 对它算指纹比较（不走 md5 缓存，
 每次现算）。只记录的目录：`{"v":1,"kind":"record","name":"ui-fonts","path":"/data/luyaz/ui/fonts","tree":"…",…}`。
 
-### u60-recover.sh（新版）
+### luyaz-recover.sh（新版）
 
-- 多认 v=2（上面的目录、`-` 程序文件、`/etc/init.d` 上一版的位置）；`sh u60-recover.sh formats` 打印 `1 2`。
+- 多认 v=2（上面的目录、`-` 程序文件、`/etc/init.d` 上一版的位置）；`sh luyaz-recover.sh formats` 打印 `1 2`。
 - 开机时它在所有服务之前跑，所以只换文件、不重启任何服务（和现在一样）。
-- 换它：`u60-ship.sh install-recover <事务号>`（事务号以 `-recover` 结尾；暂存目录 `stage/<事务号>/` 里放 `u60-recover.sh` 和 `meta`：
-  `v=1`、`txn=`、`comp=recover`、`commit=`、`mac_time=`、`file=u60-recover.sh <md5>`，别的键都拒绝）：`sh -n` → 用暂存的那份跑 `selftest` → 临时名 → sync → mv → sync →
-  写 `kind=record` 名 `luyaz-recover.sh`（D4c 前叫 `u60-recover.sh`）。有事务在进行时拒绝。Mac 端 `luyaz install-recover [--commit X]`，每次都先问用户。
+- 换它：`luyaz-ship.sh install-recover <事务号>`（事务号以 `-recover` 结尾；暂存目录 `stage/<事务号>/` 里放 `luyaz-recover.sh` 和 `meta`：
+  `v=1`、`txn=`、`comp=recover`、`commit=`、`mac_time=`、`file=luyaz-recover.sh <md5>`，别的键都拒绝）：`sh -n` → 用暂存的那份跑 `selftest` → 临时名 → sync → mv → sync →
+  写 `kind=record` 名 `luyaz-recover.sh`。有事务在进行时拒绝。Mac 端 `luyaz install-recover [--commit X]`，每次都先问用户。
 
 ### 各组件的钩子要点
 
-- **touch**（T12）：stop = 让屏幕主人放手（哨兵：`hold`，见上；只有旧设备上才是 `u60-uid stop`），再按名字杀正式界面 `luyaz-ui`（`pidof`，绝不 `pgrep -f`）并等它真的退出（两个界面抢 `/dev/dri/card0` = 整机重启）；
-  清 `/data/luyaz/screen/` 和 `/data/u60-uid/` 的 `attempts`、`gave-up`。launch_test = 和哨兵起界面一样（`chdir` 到界面目录再 exec；命令见 `print-launch touch`：
+- **touch**（T12）：stop = 让哨兵放手（`hold`，见上），再按名字杀正式界面 `luyaz-ui`（`pidof`，绝不 `pgrep -f`）并等它真的退出（两个界面抢 `/dev/dri/card0` = 整机重启）；
+  清 `/data/luyaz/screen/` 的 `attempts`、`gave-up`。launch_test = 和哨兵起界面一样（`chdir` 到界面目录再 exec；命令见 `print-launch touch`：
   `nohup sh -c 'cd "$1" && exec "$2"' sh /data/luyaz/ui /data/luyaz/ui/luyaz-ui.test`）起 `luyaz-ui.test`（`pidof luyaz-ui` 和 `pidof luyaz-ui.test` 互不认对方）。
-  trial_watch：前 30 秒每秒查、之后每 2 秒；测试版没了 → 立刻 `uid-restart`（正式版），
-  屏幕空着的总时长（正式界面退出 → 下一个界面进程出现）超过 20 秒也算失败。start = `uid-restart`（核 exe md5 = 新版）。check：屏幕主人和界面在、
+  trial_watch：前 30 秒每秒查、之后每 2 秒；测试版没了 → 立刻 `screen-restart`（正式版），
+  屏幕空着的总时长（正式界面退出 → 下一个界面进程出现）超过 20 秒也算失败。start = `screen-restart`（核 exe md5 = 新版）。check：哨兵和界面在、
   屏幕日志没有放弃 / 交还原厂 / 界面意外退出、界面进程的 exe md5 不变（没被重启过）。
-- **uid-restart**（R8/D9，命令 `u60-ship.sh uid-restart [<界面 md5> [<u60-uid md5>]]`，装机包也调；哨兵在跑时 = 写 `release` 让哨兵拉起界面并核 md5，下面的 u60-uid 流程只在旧设备上走；不给 md5 = 用磁盘上正式文件
-  `/data/luyaz/ui/luyaz-ui`、`/data/plugins/u60pro-devui/u60-uid` 现在的 md5；退出码 0 好了 / 1 没好（原因打印出来）；有事务在进行时拒绝）：u60-uid 在跑就 `stop` → 清 attempts、gave-up →
-  `start` → 等两个进程都在且 `/proc/<pid>/exe` 的 md5 等于给出的值（10 秒）→ 不对就再 `start` 一次 → 还不对退出 1。
+- **screen-restart**（命令 `luyaz-ship.sh screen-restart [<界面 md5>]`，装机包也调）：写 `release` 让哨兵拉起界面，等界面进程在且 `/proc/<pid>/exe` 的 md5 等于给出的值（不给 = 磁盘上 `/data/luyaz/ui/luyaz-ui` 的）；
+  退出码 0 好了 / 1 没好（原因打印出来）；有事务在进行时拒绝。
 - **uid**（T13）、**guard**（T15）：10c 退役，钩子已删。
 
 ## 测试
 
-- `scripts/test/u60-ship/run.sh`：stage 的每种拒绝、core 正常上机、试跑不过、检查不过、清单写不上和补完、`.prev` 只留 3 份
-  （夹具里放着真实的手工备份名）、每个断点 kill -9 后跑 u60-recover.sh 按 md5 断言、撕裂状态（0 字节正式文件、截断或不对的 `.prev`）、
-  心跳间隔（试跑 ≤ 1 秒、其余 ≤ 5 秒）、recover-live、datad-trial 与事务互斥、每个用例后真实 `/data`、`/tmp/luyaz/ship` 没有被写。
-- `scripts/test/u60-recover/run.sh`：正常开机三种情况 ≤ 1 秒且整棵目录逐字节不变、每个阶段的开机结果、看不懂的日志不动、重复执行结果一样、`selftest`。
-- `scripts/test/datad-trial/run.sh`：原 218 个用例原样通过（8d-2c 删了 netwatch 那一组，换成「计数上升、没有 wan_status 都不中止」一条）。
-- `scripts/test/u60-recover/run.sh` 另有 v=2：每个阶段、两次改名之间断电（没有正式目录）、目录还原中途断电（正式在 `.bad`、`.rec-tmp` 半截）、
-  目录 `.prev` 不对或有链接、只认 `/data/admin`、v=1 里出现 v=2 的东西不动；**旧版 u60-recover.sh**（`scripts/test/fixtures/u60-recover.v1-2bb17b1.sh`，
+- `scripts/test/luyaz-ship/run.sh`：stage 的每种拒绝、core 正常上机、试跑不过、检查不过、清单写不上和补完、`.prev` 只留 3 份
+  （夹具里放着真实的手工备份名）、每个断点 kill -9 后跑 luyaz-recover.sh 按 md5 断言、撕裂状态（0 字节正式文件、截断或不对的 `.prev`）、
+  心跳间隔（试跑 ≤ 1 秒、其余 ≤ 5 秒）、recover-live、core-trial 与事务互斥、每个用例后真实 `/data`、`/tmp/luyaz/ship` 没有被写。
+- `scripts/test/luyaz-recover/run.sh`：正常开机三种情况 ≤ 1 秒且整棵目录逐字节不变、每个阶段的开机结果、看不懂的日志不动、重复执行结果一样、`selftest`。
+- `scripts/test/core-trial/run.sh`：原 218 个用例原样通过（8d-2c 删了 netwatch 那一组，换成「计数上升、没有 wan_status 都不中止」一条）。
+- `scripts/test/luyaz-recover/run.sh` 另有 v=2：每个阶段、两次改名之间断电（没有正式目录）、目录还原中途断电（正式在 `.bad`、`.rec-tmp` 半截）、
+  目录 `.prev` 不对或有链接、只认 `/data/admin`、v=1 里出现 v=2 的东西不动；**旧版 luyaz-recover.sh**（`scripts/test/fixtures/u60-recover.v1-2bb17b1.sh`，
   = 设备上的 cabc78d3）看到每个阶段的 v=2 日志都不动；`formats`。
-- `scripts/test/u60-ship-p2/run.sh`（第二期）：
+- `scripts/test/luyaz-ship-p2/run.sh`（第二期）：
   - touch：正常上机（试跑心跳每秒、测试版从插件目录起、清启动计数）；测试版 5 秒内崩 → ≤ 1 秒拉起正式版；测试版一直不出现 → 屏幕空 20 秒判失败、
-    正式版拉回；10 分钟内连上三次 u60-uid 不放弃（替身照 uid.c 计数，不清计数时第三次放弃作对照）；检查中界面被重启 / u60-uid 放弃 → 退回；
+    正式版拉回；检查中界面被重启 / 哨兵放弃 → 退回；
     新界面起不来 → 退回；测试版杀不掉 → failed 且不起正式版；旧界面杀不掉 → 中止；真 busybox `pidof` 两个名字互不认（真进程）；断电和 recover-live。
-  - uid-restart：默认比磁盘上的 md5、给定 md5、版本不对 start 两次后退出 1、放弃后清掉再起、u60-uid 起来马上又没了（9-26）→ 再 start、有事务时拒绝。
+  - screen-restart：默认比磁盘上的 md5、给定 md5、版本不对退出 1、有事务时拒绝。
   - uid、guard（10c 退役）、web（8d-2c）：只剩「按名字拒绝」的用例。
   - 屏幕日志轮转（`/tmp/luyaz-screen.log`）：检查中写了放弃再马上被 mv 成 `.old` → 照样退回（旧 `.old` 里本来有放弃行时也一样）；轮转换掉一份有旧放弃的 `.old` → 不误报；
     旧 `.old` 被删、再轮转两次 → 不误报。
@@ -438,7 +450,7 @@ v=4 的所有规则不变，另外只有 v=5 的日志可以写 `/etc/init.d/luy
   - lweb：第一次上机（v=2、只 start 一次、试跑命令 = init、下次开机安静）、升级（stop start、留 `.prev`）、第一次试跑起不来 → aborted 且不留程序、
     测试版只听本机 → aborted 说原因、检查中被重启 → 退回、第一次转正后起不来 → 退回到没有且 procd 实例停掉、升级后 rollback 回旧版、
     第一次上机后 rollback 是空事务、没有 init → 拒绝、试跑命令和 `luyaz-web.init` 一致；
-    scripts 带 luyaz-web 的 init 是 v=4、设备 u60-recover.sh 没有 formats 4 时拒绝。
+    scripts 带 luyaz-web 的 init 是 v=4、设备 luyaz-recover.sh 没有 formats 4 时拒绝。
 - `scripts/test/tree-fp/run.sh`：三个脚本对夹具得 `tree.expected`，空目录、链接、带 `|` 或换行的名字、fifo 结果一致。
 - `scripts/test/cross-repo/run.sh`（在主机上跑，容器里只有 /scripts 时跳过）：`SCRIPTS_FILES` ⊂ manager `onboard/build-kit.sh` 的脚本清单，
-  清单里其余的只能是 u60-ship.sh、datad-trial.sh、u60-recover.sh 或 `SCRIPTS_INITS` 的 init；touch 试跑的启动方式 = 起界面的方式；各组件的 state-files ⊂ `C_STATE_ALLOW`。
+  清单里其余的只能是 luyaz-ship.sh、core-trial.sh、luyaz-recover.sh 或 `SCRIPTS_INITS` 的 init；touch 试跑的启动方式 = 起界面的方式；各组件的 state-files ⊂ `C_STATE_ALLOW`。

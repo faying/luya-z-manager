@@ -4,7 +4,7 @@
 //!
 //! The stateless reads are on demand, with a timeout, as `sys_reads.rs`; the writes and the AT
 //! port's routes only with u60d's writes on. The writes go through u60d's own `/control` as the caller's
-//! source, the actions the agent sends datad (`zte-agent/src/datad_write.rs`): `device.poweroff`,
+//! source, the actions the agent sends core (`zte-agent/src/core_write.rs`): `device.poweroff`,
 //! `usb.set`, and `vendor.call` for the rest. The process monitor's kill is a signal, as in the agent.
 //!
 //! The scheduler's forbidden list and the scenario's allow-list keep refusing factory reset, power
@@ -29,7 +29,7 @@ pub(super) mod procs;
 /// What the routes reach besides ubus and `/control` (tests swap these).
 #[derive(Clone)]
 pub struct Host {
-    /// the AT port (`None`: `LUYAZ_AT_LOCK` / `LUYAZ_AT_PORT`, as datad's own commands)
+    /// the AT port (`None`: `LUYAZ_AT_LOCK` / `LUYAZ_AT_PORT`, as the core's own commands)
     pub at: Option<crate::at::Target>,
     /// SIGKILL to one pid (kill-bloat)
     pub kill: Arc<dyn Fn(u32) -> bool + Send + Sync>,
@@ -225,7 +225,7 @@ async fn take(req: Request) -> (&'static str, Option<Bytes>) {
     )
 }
 
-/// `vendor.call` as `source`; the agent's `datad_write::vendor` answer (200 data / 503 error).
+/// `vendor.call` as `source`; the agent's `core_write::vendor` answer (200 data / 503 error).
 async fn vendor(
     c: &Compat,
     source: &'static str,

@@ -8,7 +8,7 @@
 //! sampler opens the log at start (the last day comes back from disk).
 //!
 //! Inputs are u60d's own: the hub's blocks for the state, its `/v2/screen` view for the verdict.
-//! `/tmp/netwatch.errors` stays the agent's (it counts the agent's reads of datad).
+//! `/tmp/netwatch.errors` stays the agent's (it counts the agent's reads of core).
 
 use axum::{
     body::Bytes,

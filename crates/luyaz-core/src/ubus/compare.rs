@@ -237,7 +237,7 @@ async fn cli_run(bin: &str, args: &[&str]) -> Result<(i32, Vec<u8>), String> {
     }
 }
 
-/// socket 调一次；超时就等 1 秒重试一次（datad 可能正在调同一个对象）。返回结果、用时、是否重试过。
+/// socket 调一次；超时就等 1 秒重试一次（核心可能正在调同一个对象）。返回结果、用时、是否重试过。
 async fn socket_call(
     sock: &mut SocketBackend,
     object: &str,

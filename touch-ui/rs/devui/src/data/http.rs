@@ -1,6 +1,6 @@
 //! The one small HTTP/1.x client the modules share (src/http.c): synchronous with a timeout per
-//! step, the caller's buffer size, chunked bodies decoded. datad's /v2 stream and /control keep
-//! their own code (datad.rs), as in C.
+//! step, the caller's buffer size, chunked bodies decoded. the core's /v2 stream and /control keep
+//! their own code (core.rs), as in C.
 // SPDX-License-Identifier: MIT
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};

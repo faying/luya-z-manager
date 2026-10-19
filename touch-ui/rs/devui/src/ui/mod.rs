@@ -287,8 +287,8 @@ impl Ui {
         }
     }
 
-    /// A write through datad (/control), with the emergency write the script makes of it when
-    /// datad cannot be reached (fb None = none).
+    /// A write through core (/control), with the emergency write the script makes of it when
+    /// core cannot be reached (fb None = none).
     pub fn data_control(&mut self, action: &str, params: &str, fb: Option<&str>) -> bool {
         self.data_control_fb(action, params, action, fb)
     }

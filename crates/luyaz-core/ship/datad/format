@@ -1,4 +1,0 @@
-# u60d 在 datad 位置上机（tools/luyaz ship datad --from u60d）用这一份；从 data-service 68416eb 的 ship/datad 拷来，内容照旧。
-# u60 ship：datad 的持久数据格式版本（touch-ui docs/SHIP.md）。
-# 改了状态文件的格式就加 1，并另写迁移和退回方案：ship 遇到版本变化会拒绝自动上机。
-1

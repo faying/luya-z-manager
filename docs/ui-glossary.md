@@ -5,7 +5,7 @@
 > L2 第 0 阶段 2026-10-01 定稿（用户定 4 条 + 外部评审）。以后新加界面文字先在这里加词。
 > 设计稿：`docs/designs/ui-english.md`（不公开）。措辞规则见 `docs/DESIGN.md` §1 第 6 条，首页结论表和长度预算见 §4。
 
-触屏、管理网页、后台（核心 luyaz-core、哨兵 luyaz-sentinel；文中 datad = 核心，agent、guard 已退役）的英文都以本表为准。同一个东西只有一个英文叫法；提示里点名页面时，用的页名必须和本表一模一样。
+触屏、管理网页、后台（核心 luyaz-core、哨兵 luyaz-sentinel；文中核心 = 核心，agent、guard 已退役）的英文都以本表为准。同一个东西只有一个英文叫法；提示里点名页面时，用的页名必须和本表一模一样。
 
 宽度是用真机字体 Nunito（正文 600、粗体 700）按实际字号量的；触屏 render 测试最后按像素确认。
 
@@ -80,7 +80,7 @@
 | nosim | 无 SIM | No SIM | 82 | bad |
 | airplane | 移动网络已关 | Airplane | 99 | 中性 |
 | （读取中） | 读取中… | Loading… | 91 + … | 中性 |
-| （datad 掉线，触屏自己写） | 读不到数据 | No update | 119 | 中性 |
+| （核心掉线，触屏自己写） | 读不到数据 | No update | 119 | 中性 |
 
 ## 5. 首页提示行（13 号，≤2 行，按 ≤540px 算）
 
@@ -112,7 +112,7 @@
 | narrow | 这里只给了 1 条 {} MHz | Only one {} MHz carrier here | 176 |
 | ok，限定只用 4G | 制式限定只用 4G，去「蜂窝」改回 | Network mode is 4G only; set it to Auto in Cellular | 304 |
 | （漫游时附加） | ；漫游中 | ; roaming | |
-| datad 掉线（触屏顶行） | 数据服务掉线 · 数字停在 hh:mm | Data service offline · last update 14:32 | 235 |
+| 核心掉线（触屏顶行） | 数据服务掉线 · 数字停在 hh:mm | Data service offline · last update 14:32 | 235 |
 
 ## 6. 首页右栏、顶行、顶栏
 
@@ -151,7 +151,7 @@
 
 ## 8. 运营商英文名
 
-规则（设计评审决定 13）：用简短通用名，去掉 Co., Ltd.；运营商表（`crates/luyaz-api/src/netinfo.rs`）里没有的，显示网络广播名原样。datad 的 4 家必须和 agent 一字不差（跨仓库测试比对）。
+规则（设计评审决定 13）：用简短通用名，去掉 Co., Ltd.；运营商表（`crates/luyaz-api/src/netinfo.rs`）里没有的，显示网络广播名原样。核心的 4 家必须和 agent 一字不差（跨仓库测试比对）。
 
 | MCC-MNC | 中文 | English |
 |---|---|---|
@@ -183,8 +183,8 @@
 | agent-silent | 管理后台超过5分钟没反应。上网一般不受影响；Wi-Fi要是关着，会自动打开。 | [Luya-Z] Admin silent 5+ min; internet usually fine (01 Oct 14:32) | 70 |
 | agent-hung | 管理后台卡住了，已强制重启。不用管。 | [Luya-Z] Admin hung; force-restarted; no action (01 Oct 14:32) | 66 |
 | agent-crash | 管理后台意外退出，已自动重启。不用管。 | [Luya-Z] Admin crashed; restarted; no action needed (01 Oct 14:32) | 70 |
-| datad-crash | 屏幕的数据服务意外退出，已自动重启。不用管。 | [Luya-Z] Data service crashed; restarted; no action (01 Oct 14:32) | 70 |
-| datad-degraded | 屏幕的数据服务超过5分钟不正常，管理后台已改用备用方式读数据。上网不受影响。 | [Luya-Z] Data service down 5+ min; fallback; net OK (01 Oct 14:32) | 70 |
+| core-crash（旧 core-crash） | 屏幕的数据服务意外退出，已自动重启。不用管。 | [Luya-Z] Data service crashed; restarted; no action (01 Oct 14:32) | 70 |
+| core-degraded | 屏幕的数据服务超过5分钟不正常，管理后台已改用备用方式读数据。上网不受影响。 | [Luya-Z] Data service down 5+ min; fallback; net OK (01 Oct 14:32) | 70 |
 | devui-crash | 屏幕界面闪退了，已自动重新打开。不用管。 | [Luya-Z] Screen UI crashed; reopened; no action (01 Oct 14:32) | 66 |
 | devui-gave-up | 屏幕界面连续打不开，已换成原厂界面，上网不受影响。长按屏幕右下角3秒可换回。 | [Luya-Z] Stock UI on; hold bottom-right 3s to undo (01 Oct 14:32) | 69 |
 | sms-test | 这是测试短信。收到了，说明告警短信能正常发到你手机。 | [Luya-Z] Test SMS: alert texts reach your phone (01 Oct 14:32) | 66 |
@@ -203,7 +203,7 @@
 | sim（eSIM 通道占满，疑点） | eSIM 通道占满 | eSIM channels all taken | 切换 profile 前先重启设备 | Restart the device before switching profiles |
 | signal | 信号弱 / 干扰大 / 信号一般 | Weak signal / Noisy signal / Fair signal | 固定位置时用摆放模式；在路上只能等 | Use Placement if you're staying put; on the move, wait |
 | signal（载波窄） | 这里只给了窄载波 | Narrow carrier here | 换个地方试试 | Try another spot |
-| signal（无服务等） | datad 大字原文 | datad headline_en | — | — |
+| signal（无服务等） | 核心大字原文 | core headline_en | — | — |
 | limit | 运营商限速 | Carrier speed cap | 找运营商 | Ask your carrier |
 | bearer | 数据连接没建立 | Data connection is down | 看看数据开关和 APN | Check mobile data and the APN |
 | bearer（rp_filter，疑点） | 回包可能被丢 | Replies may be dropped | 多出口时 rp_filter 要是 0 或 2 | With several ways out, rp_filter should be 0 or 2 |
@@ -261,7 +261,7 @@
 | 数字上方 | 5G SINR · 越大越好 / 4G SINR · 越大越好 | 5G SINR · higher is better |
 | 信号词（按 SINR：≥20 / ≥13 / ≥0 / <0） | ● 信号很好 · ● 信号良好 · ▲ 信号一般 · ■ 信号较差 | Great signal · Good signal · Fair signal · Poor signal |
 | 没信号 / 3G、2G | 没有信号 / 这个制式没有 SINR | No signal / No SINR on this network |
-| datad 停更 | 数字停在 14:32 | Last update 14:32 |
+| 核心停更 | 数字停在 14:32 | Last update 14:32 |
 | 行 | 这次最好 · 对比 · 在用 | Best so far · Compared · In use |
 | 对比（只写事实） | ▲ 比最好低 3.5 dB；差 ≤1 dB：● 接近最好 | ▲ 3.5 dB below best; ● Near the best |
 | 换了小区 / 按了重新开始 | 换了小区，重新计 / 已清零，重新计 | New cell; counting again / Reset; counting again |
@@ -281,7 +281,7 @@
 
 ## 13. 写操作（事务，E4；核心 `ops/ui.rs`，设计 `docs/designs/write-op-layer.md` 状态文案表）
 
-句子由 datad 写（op 块和改动记录的 `*_zh/_en`），触屏和网页照着显示；下面只是对照。触屏和网页自己写的几句英文两边相同（触屏 `lang_test.c`、网页 `tests/unit/opsWords.test.ts` 查：不含中文、不写 Please、状态短句不带句号）。中文拼接：中文挨中文不空格、挨数字和英文空一格（「已退回自动」「退回到 4G + 5G」）。X = 退回目标，Y = 目标，「旧」= 写之前的值。
+句子由核心写（op 块和改动记录的 `*_zh/_en`），触屏和网页照着显示；下面只是对照。触屏和网页自己写的几句英文两边相同（触屏 `lang_test.c`、网页 `tests/unit/opsWords.test.ts` 查：不含中文、不写 Please、状态短句不带句号）。中文拼接：中文挨中文不空格、挨数字和英文空一格（「已退回自动」「退回到 4G + 5G」）。X = 退回目标，Y = 目标，「旧」= 写之前的值。
 
 **来源**（DD14）
 
@@ -330,7 +330,7 @@
 
 「保留」「不需要确认」都不写「已确认」：不能让人以为验证过能通。
 
-**按钮和确认**（datad 给按钮名；后果句触屏、网页各自写，两边一致）
+**按钮和确认**（核心给按钮名；后果句触屏、网页各自写，两边一致）
 
 | 位置 | 中文 | English |
 |---|---|---|
@@ -348,12 +348,12 @@
 
 **撤销**（DD10）：撤销 / Undo，撤销过的再点叫 重做 / Redo。不能撤的原因：之后又改过 / Changed since；换过卡 / SIM changed；设置没变 · 不用撤销 / Nothing to undo；先再试一次退回 / Retry the revert instead；这类操作不能撤销 / Can't be undone。
 
-**不在 datad 的几句**（DD8、DD11、DD12）
+**不在核心的几句**（DD8、DD11、DD12）
 
 | 情况 | 中文 | English |
 |---|---|---|
 | 数据服务卡住 | 数据服务没响应 · 暂时不能改设置 | Data service not responding |
-| 忙（datad 回的） | 正在换制式（触屏发起，32 秒），稍等 | Busy: network mode (Screen) |
+| 忙（核心回的） | 正在换制式（触屏发起，32 秒），稍等 | Busy: network mode (Screen) |
 | 推送停了 | 停在 1:42 · 等设备响应 | Stopped at 1:42 · waiting for the device |
 | 网页断线（只网页） | 和设备断开了 · 操作结果未知 | Disconnected · result unknown |
 | 改动记录 | 改动记录 | Change log |
@@ -401,7 +401,7 @@ DESIGN.zh-CN.md §5 用来描述网页、跟框架无关的词。只在文档和
 
 ## 外部评审（10-01，独立子代理；Codex 卡死没跑成）
 
-15 条采纳 14 条：漫游写成找运营商/套餐而非 SIM；RSRP/SINR/RSRQ 带单位；no action needed 代替 nothing to do；devui-gave-up 说清长按是换回；on backup 易被当成电池，改 using fallback；Airplane 代替 Cell off（和提示一致）；datad 掉线照实写 Data service offline；web admin；干扰统一叫 Noise；提示行一句话用 `;`；带宽 Wide、No cell、Cell busy、Restricted 等小改。
+15 条采纳 14 条：漫游写成找运营商/套餐而非 SIM；RSRP/SINR/RSRQ 带单位；no action needed 代替 nothing to do；devui-gave-up 说清长按是换回；on backup 易被当成电池，改 using fallback；Airplane 代替 Cell off（和提示一致）；核心掉线照实写 Data service offline；web admin；干扰统一叫 Noise；提示行一句话用 `;`；带宽 Wide、No cell、Cell busy、Restricted 等小改。
 不采纳 1 条：「运营商选择」和网页 Mobile Network 不是同一页（网页那页还管飞行模式），名字不必一样。
 
 ## 10-01 用户定的 4 条
@@ -413,5 +413,5 @@ DESIGN.zh-CN.md §5 用来描述网页、跟框架无关的词。只在文档和
 
 ## 顺带发现（10-01 第 1 阶段已改）
 
-- datad 5 条指错页的中文提示已改成「蜂窝」，语料只做这两处替换（179 行），没有重录。
-- datad 认无服务改看 `story.state`（nosvc、sos），不再比对中文大字。
+- core 5 条指错页的中文提示已改成「蜂窝」，语料只做这两处替换（179 行），没有重录。
+- 核心认无服务改看 `story.state`（nosvc、sos），不再比对中文大字。

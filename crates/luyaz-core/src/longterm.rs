@@ -15,7 +15,7 @@
 //! where u60d sees less (no energy counter, home MCC without MNC), the field says so by its name.
 //!
 //! Flash: one line an hour (~300 bytes) plus a few events a day, each appended and fsynced: well
-//! under 0.1 MB a day. Off unless `LUYAZ_LONGTERM=1` (the device turns it on in datad.env).
+//! under 0.1 MB a day. Off unless `LUYAZ_LONGTERM=1` (the device turns it on in core.env).
 //!
 //! **Coverage** (u60-sentinel.md §19 「T9c 前定」): each hour line carries `g_<src>`, the awake
 //! seconds that source was not working, in CLOCK_MONOTONIC (so sleep is neither covered nor a
@@ -29,8 +29,6 @@
 //! IN_Q_OVERFLOW) = that route down from its last clean read. `crashlog`, `uidlog` come from the
 //! minute look ([`watch`]): a check whose look did not say they worked charges them since the
 //! previous check (a look that never runs reads as down, never as a missing field that reads 0).
-//! `datad` is this process's own data (the agent's marker rules, §11), so it is down only when
-//! the core is.
 //! A span found after an hour closed is charged to the hour it is found in (at most one probe
 //! period late); every `g_*` is capped at the hour's awake seconds. A run of one source's down
 //! time longer than 10 min (across hours and restarts) also goes out as a `gap` event.
@@ -60,11 +58,9 @@ pub const STATE: &str = "/tmp/luyaz/core/longterm.json";
 /// The fold's copy on flash, rewritten at every check (the guard's `state/acc.last`): after a
 /// reboot, the last boot's open hour is closed where it was last saved instead of lost with tmpfs.
 pub const OPEN: &str = "open.json";
-/// Sources the core watches: itself, the crash watcher's three routes, the minute look's two,
-/// and datad (this process).
-pub const WATCHED: &[&str] = &[
-    "core", "watcher", "capture", "link", "crashlog", "uidlog", "datad",
-];
+/// Sources the core watches: itself, the crash watcher's three routes, the minute look's two.
+/// (Its own data, once a separate `core` source, is down exactly when the core is: `g_core`.)
+pub const WATCHED: &[&str] = &["core", "watcher", "capture", "link", "crashlog", "uidlog"];
 /// The crash watcher's routes (all down when its thread does not answer the probe).
 const CW: &[&str] = &["watcher", "capture", "link"];
 /// Sources the minute look reports (absent from a check's report = down since the previous one).
@@ -327,7 +323,7 @@ impl Fold {
         if self.boot != c.boot {
             self.tick(c, out);
         }
-        let mut lk = self.look.look(p, &c.boot, c.boottime, c.wall);
+        let mut lk = self.look.look(p, &c.boot, c.boottime);
         for (k, f) in std::mem::take(&mut lk.lines) {
             out.events.push(self.event(c, k, f));
         }
@@ -1127,7 +1123,7 @@ pub fn calib_event(dir: &Path, id: &str, rows: u64) -> std::io::Result<Value> {
 /// `u60d --longterm-once <scratch dir>`: one minute look, one power reading and the key.log
 /// backfill against the real device, printed; nothing under `/data/luyaz/core/long` is read or written
 /// (the look's own files go to the scratch dir). For a side run before a ship: the ship trial
-/// does not read datad.env, so none of this runs until the core is live.
+/// does not read core.env, so none of this runs until the core is live.
 pub fn once(scratch: &Path) -> String {
     let t0 = std::time::Instant::now();
     let _ = std::fs::create_dir_all(scratch);
@@ -1136,7 +1132,7 @@ pub fn once(scratch: &Path) -> String {
     let mut wp = watch::Paths::device();
     wp.long = scratch.to_path_buf();
     let mut st = watch::State::default();
-    let lk = st.look(&wp, &boot, c.boottime, c.wall);
+    let lk = st.look(&wp, &boot, c.boottime);
     let mut out = format!(
         "boot {boot} up {} wall {} wall_usable {} status {:?} how {:?}\n",
         c.boottime, c.wall, c.wall_ok, c.clock_status, c.how
@@ -1690,7 +1686,7 @@ mod tests {
         // the two checks whose report had no minute look: its sources down for those minutes
         assert_eq!(h["g_crashlog"], 120);
         assert_eq!(h["g_uidlog"], 120);
-        assert_eq!(h["g_datad"], 0);
+        assert!(h.get("g_datad").is_none(), "no separate datad source since F7");
         let gaps: Vec<&Value> = out.events.iter().filter(|e| e["k"] == "gap").collect();
         assert_eq!(gaps.len(), 2, "watcher and link ran past 10 min: {gaps:?}");
         for g in &gaps {

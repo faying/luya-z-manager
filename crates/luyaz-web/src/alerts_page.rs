@@ -1000,14 +1000,14 @@ mod tests {
     fn sample() -> Value {
         json!({
             "events": [
-                {"seq": 3, "time": null, "uptime": 125, "kind": "datad-crash", "label": "数据服务意外退出", "label_en": "Data service exited", "text": "exit 1", "unread": true},
+                {"seq": 3, "time": null, "uptime": 125, "kind": "core-crash", "label": "数据服务意外退出", "label_en": "Data service exited", "text": "exit 1", "unread": true},
                 {"seq": 2, "time": 1_791_000_000, "uptime": 99, "kind": "wifi-takeover", "label": "Wi-Fi 看门狗", "label_en": "Wi-Fi watchdog", "text": "", "unread": false},
             ],
             "unread": 1, "read": 2, "clock_set": false,
             "sms": {"configured": true, "number": "+8612300000000", "abroad_allowed": false,
                     "abroad_now": true, "sent_24h": 2,
                     "recent": [{"time": 1_791_000_000, "seq": 2, "kind": "wifi-takeover", "result": "suppressed-abroad"},
-                               {"time": 5, "seq": 3, "kind": "datad-crash", "result": "sent"}]},
+                               {"time": 5, "seq": 3, "kind": "core-crash", "result": "sent"}]},
         })
     }
 

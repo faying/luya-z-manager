@@ -14,7 +14,7 @@
 //!
 //! zte-agent's tests compare its own `run_pass` with this one on random lists (contract test).
 
-/// Page size for `sms.list_after` and the direct reads (datad's limit cap).
+/// Page size for `sms.list_after` and the direct reads (the core's limit cap).
 pub const LIST_PAGE: u64 = 50;
 /// How far before the last handled SMS a received one may be dated and still count as new.
 pub const REIMPORT_MARGIN_SECS: i64 = 7 * 86_400;

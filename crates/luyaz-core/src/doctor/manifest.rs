@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-const OBSERVE: i64 = 600; // = u60-ship.sh
+const OBSERVE: i64 = 600; // = luyaz-ship.sh
 
 // ── md5 (RFC 1321): the same hex as busybox md5sum ─────────────────────────
 
@@ -614,8 +614,9 @@ fn same_record(recorded: &str, listed: &str) -> bool {
             .any(|(n, o)| (*n == listed && *o == recorded) || (*o == listed && *n == recorded))
 }
 
-/// doctor.sh `record_list`: (name, path, tree)
-fn record_list(c: &Cfg) -> Vec<(String, String, bool)> {
+/// The files the manifest only records, as luyaz-ship.sh `record_list` (a test holds them to
+/// the same names): (name, path, tree)
+pub(super) fn record_list(c: &Cfg) -> Vec<(String, String, bool)> {
     let mut v: Vec<(String, String, bool)> = Vec::new();
     v.push((
         "chill.sh".into(),
@@ -632,7 +633,7 @@ fn record_list(c: &Cfg) -> Vec<(String, String, bool)> {
         format!("{ts}/nofight/tailscaled"),
         false,
     ));
-    for s in [c.core_name(), "tailscale"] {
+    for s in ["luyaz-core", "tailscale"] {
         v.push((format!("init.d/{s}"), format!("{}/{s}", c.initd), false));
     }
     v.push(("rc.local".into(), c.rc.clone(), false));

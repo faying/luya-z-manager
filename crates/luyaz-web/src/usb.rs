@@ -186,6 +186,8 @@ pub struct View {
     pub pb_dis: bool,
     pub pb_stale: bool,
     pub pb_sub: &'static str,
+    /// unverified fast charging (human preflight): said beside the hint, not instead of it
+    pub pb_note: Option<&'static str>,
     pub pb_busy: Option<bool>,
     pub port: Vec<Row>,
     pub port_stale: bool,
@@ -444,7 +446,11 @@ pub fn view(st: &St, a: &Agent, busy: &Busy, l: Lang) -> View {
             || no_cc
             || policy_gate(a, "usb.attach.fast_charge", l).is_some(),
         pb_stale,
-        pb_sub: if let Some(note) = policy_note(a, "usb.attach.fast_charge", l) {
+        // blocked (denied, no report yet): the capability note instead of the hint; only unverified
+        // (human preflight): the hint stays and the note goes beside it in pb_note
+        pb_sub: if let Some(note) = policy_note(a, "usb.attach.fast_charge", l)
+            .filter(|_| policy_gate(a, "usb.attach.fast_charge", l).is_some())
+        {
             note
         } else if pb.is_none() && pb_block.is_some() {
             l.pick(
@@ -462,6 +468,8 @@ pub fn view(st: &St, a: &Agent, busy: &Busy, l: Lang) -> View {
                 "给 USB-C 口上的手机 18W 快充，不上网；拔掉就结束。「充电 + 上网」在触屏上选。",
             )
         },
+        pb_note: policy_note(a, "usb.attach.fast_charge", l)
+            .filter(|_| policy_gate(a, "usb.attach.fast_charge", l).is_none()),
         pb_busy: busy.pb,
         port,
         port_stale: a_stale,

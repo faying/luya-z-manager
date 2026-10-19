@@ -206,15 +206,15 @@ pub fn run(c: &Cfg) -> (String, i32) {
         "jsonfilter 多个 -e（中间一个路径不存在）",
         if j_ok { "" } else { "网络缓存读不全" },
     );
-    let w = sh_raw(&c.wget, &["-q", "-T", "2", "-O", "-", &c.datad_url], true);
+    let w = sh_raw(&c.wget, &["-q", "-T", "2", "-O", "-", &c.core_url], true);
     let w_ok = w.starts_with('{');
     st(
         w_ok,
-        "wget -T 2 读 datad /v2/state",
+        "wget -T 2 读核心 /v2/state",
         if w_ok {
             ""
         } else {
-            "网络缓存没有来源（datad 没在跑也会这样）"
+            "网络缓存没有来源（核心没在跑也会这样）"
         },
     );
     let _ = std::fs::remove_dir_all(&tmp);

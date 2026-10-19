@@ -4,14 +4,8 @@
 use super::{Cfg, cat, digits};
 use std::collections::BTreeMap;
 
-// Ledger keys, by position (longterm/standby.rs `PROGS`); zte-agent = retired.
-const PROGS: &[&str] = &[
-    "tailscaled",
-    "mihomo",
-    crate::paths::UI,
-    crate::paths::CORE,
-    "zte-agent",
-];
+// Ledger keys, by position (longterm/standby.rs `PROGS`).
+const PROGS: &[&str] = &crate::longterm::standby::PROGS;
 const LABELS: &[&str] = &[
     "-",
     "蜂窝包/分",
@@ -20,7 +14,6 @@ const LABELS: &[&str] = &[
     "mihomo唤醒/秒",
     "触屏唤醒/秒",
     "数据服务唤醒/秒",
-    "后台唤醒/秒",
 ];
 const LABELS_EN: &[&str] = &[
     "-",
@@ -30,7 +23,6 @@ const LABELS_EN: &[&str] = &[
     "mihomo wakeups/s",
     "Screen UI wakeups/s",
     "Data service wakeups/s",
-    "Admin wakeups/s",
 ];
 
 /// `standby_last`: uptime, cellular, tunnel, then one column per program
@@ -72,16 +64,7 @@ fn fingerprints(c: &Cfg) -> Vec<(usize, String)> {
                 cfg_md5(&c.chill.template),
                 cfg_md5(&c.chill.env)
             ),
-            "zte-agent" => "retired".into(),
-            // the fp file is tmpfs, written by this core: the new key, or an older core's
-            p => {
-                let f = prog_md5(c, p);
-                match (f.as_str(), p) {
-                    ("?", crate::paths::CORE) => prog_md5(c, "zwrt-datad"),
-                    ("?", crate::paths::UI) => prog_md5(c, "u60pro-devui"),
-                    _ => f,
-                }
-            }
+            p => prog_md5(c, p),
         };
         v.push((4 + i, f));
     }
@@ -227,7 +210,7 @@ pub fn check(c: &Cfg, en: bool) -> (&'static str, String) {
     let (sep, ssep) = if en { ("; ", ", ") } else { ("；", "、") };
     for k in 3..=last() {
         let b = get(&bm, k);
-        if b == "-" || b.is_empty() || get(&cf, k) == "retired" {
+        if b == "-" || b.is_empty() {
             continue;
         }
         let ks = k.to_string();

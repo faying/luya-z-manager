@@ -59,7 +59,7 @@ pub const LOCAL_DNS_NAMES: [&str; 2] = ["www.qq.com", "www.google.com"];
 
 /// What a run reads and where it writes, on the agent or in u60d.
 pub trait Host: Send + Sync + 'static {
-    /// datad's state in the old `/state` shape and the home screen (`/v2/screen`), one read each.
+    /// the core's state in the old `/state` shape and the home screen (`/v2/screen`), one read each.
     fn radio_inputs(&self) -> (Option<Value>, Option<Value>);
     /// Every Wi-Fi station, named from the DHCP leases.
     fn stations(&self) -> Vec<Sta> {
@@ -342,7 +342,7 @@ impl Diagnosis {
         .unwrap_or_else(|| timed_out(Layer::new("sim")));
         self.update(id, |r| r.put(sim));
 
-        // signal + cap, one read of datad
+        // signal + cap, one read of core
         self.update(id, |r| {
             r.running("signal");
             r.running("limit");
@@ -635,7 +635,7 @@ pub fn past_from_events(events: &[Event]) -> (Vec<PastRun>, Vec<PastSpeed>) {
     past_from(&ev)
 }
 
-/// A number from datad: JSON number or numeric string, finite.
+/// A number from core: JSON number or numeric string, finite.
 pub fn num(v: Option<&Value>) -> Option<f64> {
     match v? {
         Value::Number(n) => n.as_f64(),
@@ -719,27 +719,10 @@ pub fn link_probe(dns: &[String]) -> LinkProbe {
     LinkProbe { sent: sent_at.iter().filter(|t| t.is_some()).count(), rtts: got.into_iter().flatten().collect() }
 }
 
-/// Every station on every AP interface (`iw`), with the band of the interface it is on.
+/// Every station on every AP interface (`iw`), with the band of the interface it is on. Bounded
+/// per call and single-flight with u60d's own reads (resilience audit R6).
 pub fn real_stations() -> Vec<luyaz_api::netinfo::Station> {
-    use luyaz_api::netinfo::{ap_ifaces, parse_ap_info, parse_station_dump};
-    let sh = |cmd: &str| {
-        std::process::Command::new("sh")
-            .args(["-c", cmd])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-            .unwrap_or_default()
-    };
-    let mut stations = Vec::new();
-    for iface in ap_ifaces(&sh("iw dev 2>/dev/null")) {
-        let ap = parse_ap_info(&sh(&format!("iw dev {iface} info 2>/dev/null")));
-        for mut st in parse_station_dump(&sh(&format!("iw dev {iface} station dump 2>/dev/null")), &iface) {
-            st.band = ap.band;
-            st.channel = ap.channel;
-            st.width_mhz = ap.width_mhz;
-            stations.push(st);
-        }
-    }
-    stations
+    luyaz_api::netinfo::iw::stations()
 }
 
 /// The Wi-Fi layer's view of the stations, named from the leases text (`/tmp/dhcp.leases`).

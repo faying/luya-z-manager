@@ -654,7 +654,7 @@ fn alerts_data(unread: u64) -> Value {
     };
     json!({"events": [
         ev(2, "wifi_down", "Wi-Fi 掉了", "Wi-Fi dropped", "已自动恢复"),
-        ev(1, "datad_restart", "数据服务重启", "Data service restarted", ""),
+        ev(1, "core_restart", "数据服务重启", "Data service restarted", ""),
     ], "unread": unread, "read": 2 - unread, "uptime_now": 300, "clock_set": false,
        "sms": {"configured": false, "number": null, "recent": []}})
 }
@@ -970,7 +970,7 @@ fn usb_write(m: &Arc<Mock>, body: &Value, noreadback: bool) -> Response {
         ("qos", "usb_mode", json!(mode))
     } else {
         if p["object"] != "zwrt_bsp.powerbank" || p["method"] != "set" {
-            return bad("not a vendor call datad makes");
+            return bad("not a vendor call core makes");
         }
         let Some(state) = p["args"]["state"].as_i64() else {
             return bad("args.state");

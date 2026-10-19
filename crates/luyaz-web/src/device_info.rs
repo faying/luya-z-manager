@@ -8,7 +8,7 @@
 //! |---|---|---|
 //! | IMEI | `/api/sim/imei` (`get_imei`) | `live.system.imei` (same `get_imei`) |
 //! | IMSI, ICCID, SIM state | `/api/sim/info` (`get_sim_info`) | `sim.imsi`, `sim.iccid`, `sim.state` (= `sim_states`) |
-//! | Phone number | `/api/cell/extra` (datad `sim.msisdn`) | `sim.msisdn` |
+//! | Phone number | `/api/cell/extra` (core `sim.msisdn`) | `sim.msisdn` |
 //! | Operator, network type | `/api/network/signal` (`nwinfo_get_netinfo`) | `signal.operator` (full name; the short name only via `uci_device_info.radio_operator`), `signal.type` |
 //! | WAN IPv4, DNS / IPv6 / LAN IP | `/api/network/wan` / `wan6` / `lan-status` (netifd) | `interfaces.wan4` / `wan6` / `lan` (same netifd status) |
 //! | Gateway | `wan.route[0].nexthop` (netifd) | `interfaces.cellular.ipv4_gateway` (u60d drops netifd's routes; the modem's gateway, in the WAN subnet in the recording; not compared with netifd's nexthop) |

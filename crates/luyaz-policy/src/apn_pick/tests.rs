@@ -1,5 +1,5 @@
 //! zte-agent `apn_pick.rs`'s tests, moved as they are, except: `op_busy_is_retried_and_not_counted`
-//! lost its two lines about datad's reply type (host side). Left in the agent:
+//! lost its two lines about the core's reply type (host side). Left in the agent:
 //! `same_profile_matches_numbers_and_strings`, `notice_only_while_fresh_unless_sticky`,
 //! `store_round_trips` (profile matching, the notice and the file are host side).
 use super::*;
@@ -44,7 +44,7 @@ fn store_with_pick() -> Store {
     s
 }
 
-/// datad answered op_busy (D40): the watcher leaves the Watch as it is,
+/// core answered op_busy (D40): the watcher leaves the Watch as it is,
 /// so the next look acts again, and it never counts toward giving up.
 #[test]
 fn op_busy_is_retried_and_not_counted() {

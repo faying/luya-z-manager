@@ -444,7 +444,7 @@ fn place_join() {
 
 #[test]
 fn operators_in_the_table_get_the_glossary_english() {
-    // docs/ui-glossary.md §8, copied exactly; datad's four must match.
+    // docs/ui-glossary.md §8, copied exactly; the core's four must match.
     let table: &[(&str, &str)] = &[
         ("46000", "China Mobile"),
         ("46002", "China Mobile"),

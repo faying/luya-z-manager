@@ -1,21 +1,19 @@
-//! Phase 10 X11: `<core> doctor` — the core's own copy of touch-ui `scripts/doctor.sh`
-//! (manager docs/designs/u60-phase10.md「X11 核心接管体检」).
+//! Phase 10 X11: `<core> doctor` — the health check (manager docs/designs/u60-phase10.md
+//! 「X11 核心接管体检」). touch-ui `scripts/doctor.sh` is a thin shim over it; the old shell body
+//! (doctor-legacy.sh) and its parity tests are gone (Luya-Z rename F4).
 //!
 //! A one-shot subcommand: main.rs dispatches it before anything else (no runtime, no flock, no pid
 //! file, no crash markers, no migration, no core log), and the first thing it does is rename the
 //! process (`luyaz-doctor`), so nothing that recognises the core by `/proc/<pid>/comm`
-//! (`zwrt-datad*`, `luyaz-core*`) takes it for a second core.
+//! (`luyaz-core*`) takes it for a second core.
 //!
-//! P0-01 replaces the old clock judgement with shared, fresh, boot-bound evidence. Other rows
-//! retain doctor.sh's ids, levels, labels, details and order. Commands/paths retain the `DOC_*`
-//! overrides, so the shell's fixtures (touch-ui scripts/test/doctor) still drive both.
+//! Clock rows use shared, fresh, boot-bound evidence (P0-01). Commands and paths take `DOC_*`
+//! overrides, so the fixture in `doctor/testdata/setup.sh` drives every row; the expected
+//! outputs are the goldens and snapshots beside it.
 //!
-//! Batch 1: the output layer (text, `--tsv`, `--tsv2`, exit code) and the file/uci rows boot-sync,
-//! fota, clock, core-move, tmp-move, crashes, disk. Batch 2: svc-*, dup-*, svc-zte-agent, heartbeat,
-//! takeover, wifi, screen, alerts, sms. The other rows keep their slot
-//! in [`run`]. Batch 3: whiteout, phonehome, CHILL, HTTP. Batch 4: the manifest (`--manifest`,
-//! `--tree-fp`), standby, `--ledger-selftest`, text mode's scorecard lines; later
-//! `--calibrate-standby` (standby.rs `calibrate`). Left to doctor.sh: `--report` (no live caller).
+//! Rows: boot-sync, fota, clock, crashes, disk, svc-*, dup-*, heartbeat, takeover, wifi, screen,
+//! alerts, sms, whiteout, phonehome, CHILL, HTTP; modes `--tsv`, `--tsv2`, `--manifest`,
+//! `--tree-fp`, `--ledger-selftest`, `--calibrate-standby`, `--report`.
 
 use std::process::{Command, Stdio};
 
@@ -57,8 +55,7 @@ fn row(
     }
 }
 
-/// Commands and paths, each `${DOC_X:-default}` as in doctor.sh. Paths are taken as the shell
-/// takes them: only core-move looks under `DOC_ROOT` (the shell's `LROOT`).
+/// Commands and paths, each `${DOC_X:-default}` (the tests point them into a fixture).
 pub struct Cfg {
     ubus: Vec<String>,
     uci: Vec<String>,
@@ -81,7 +78,7 @@ pub struct Cfg {
     lweb_bin: String,
     overlay_rcd: String,
     daemon_conf: String,
-    datad_url: String,
+    core_url: String,
     ip: Vec<String>,
     manifest: String,
     ship_txn: String,
@@ -91,7 +88,7 @@ pub struct Cfg {
     md5sum: Option<Vec<String>>,
     ts_dir: String,
     ts_tuning: String,
-    /// the touch UI's fonts: /data/luyaz/ui/fonts once there (Phase 10 R5), else DOC_DEVUI_DIR/fonts
+    /// the touch UI's fonts, beside the program
     ui_fonts: String,
     /// its operator logos (Luya-Z D5: with the program)
     ui_logos: String,
@@ -114,20 +111,9 @@ pub struct Cfg {
     scorecard_url: String,
     calib_url: String,
     chill: chill::Cfg,
-    root: String,
-    luyaz_tmp: String,
 }
 
 impl Cfg {
-    /// CORE_NAME: luyaz-core after the move (`$DOC_ROOT/data/luyaz/core/.migrated`), else zwrt-datad
-    fn core_name(&self) -> &'static str {
-        if crate::paths::live(&self.root, crate::paths::DATA_NEW) == crate::paths::Live::New {
-            "luyaz-core"
-        } else {
-            "zwrt-datad"
-        }
-    }
-
     pub fn from(get: &dyn Fn(&str) -> Option<String>) -> Cfg {
         let s = |k: &str, d: &str| {
             get(k)
@@ -168,7 +154,7 @@ impl Cfg {
             lweb_bin: s("DOC_LWEB_BIN", "/data/luyaz/luyaz-web"),
             overlay_rcd: s("DOC_OVERLAY_RCD", "/zteoverlay/etc-upper_a/rc.d"),
             daemon_conf: s("DOC_DAEMON_CONF", "/etc/config/zte_topsw_daemon.conf"),
-            datad_url: s("DOC_DATAD_URL", "http://127.0.0.1:9460/v2/state"),
+            core_url: s("DOC_DATAD_URL", "http://127.0.0.1:9460/v2/state"),
             ip: w("DOC_IP", "ip"),
             manifest: s("DOC_MANIFEST", crate::paths::MANIFEST),
             ship_txn: s("DOC_SHIP_TXN", "/data/luyaz/ship/txn"),
@@ -179,14 +165,7 @@ impl Cfg {
                 .map(|v| v.split_whitespace().map(str::to_owned).collect()),
             ts_dir: s("DOC_TS_DIR", "/data/tailscale"),
             ts_tuning: s("DOC_TS_TUNING", "/data/tailscale/tuning.env"),
-            ui_fonts: s(
-                "DOC_UI_FONTS",
-                &if std::path::Path::new("/data/luyaz/ui/fonts").is_dir() {
-                    "/data/luyaz/ui/fonts".to_owned()
-                } else {
-                    format!("{}/fonts", s("DOC_DEVUI_DIR", "/data/plugins/u60pro-devui"))
-                },
-            ),
+            ui_fonts: s("DOC_UI_FONTS", "/data/luyaz/ui/fonts"),
             ui_logos: s("DOC_UI_LOGOS", "/data/luyaz/ui/operator-logos"),
             u60d_plugins: s("DOC_U60D_PLUGINS", &format!("{data_dir}/plugins")),
             boot_id_file: s("DOC_BOOT_ID_FILE", "/proc/sys/kernel/random/boot_id"),
@@ -216,8 +195,6 @@ impl Cfg {
                 template: s("DOC_CHILL_TEMPLATE", "/data/chill/template.yaml"),
                 dir: s("DOC_CHILL_DIR", "/data/chill"),
             },
-            root: get("DOC_ROOT").unwrap_or_default(),
-            luyaz_tmp: s("DOC_LUYAZ_TMP", "/tmp/luyaz"),
         }
     }
 }
@@ -282,8 +259,6 @@ pub fn run(c: &Cfg, mode: Mode) -> Vec<Row> {
     rows.push(phonehome(c));
     rows.push(rpc_acl(c));
     rows.push(clock(c));
-    rows.extend(core_move(c));
-    rows.extend(tmp_move(c));
     rows.extend(services(c));
     rows.extend(chill::rows(c));
     rows.extend(http(c));
@@ -507,7 +482,7 @@ fn http(c: &Cfg) -> [Row; 2] {
         if wget_ok(c, "http://127.0.0.1:9090/health") {
             row(
                 "ok",
-                "agent-http",
+                "web-http",
                 "管理网页 :9090",
                 "能访问".into(),
                 "Web admin :9090",
@@ -516,17 +491,17 @@ fn http(c: &Cfg) -> [Row; 2] {
         } else {
             row(
                 "bad",
-                "agent-http",
+                "web-http",
                 "管理网页 :9090",
                 "打不开".into(),
                 "Web admin :9090",
                 "Not reachable".into(),
             )
         },
-        if wget_ok(c, &c.datad_url) {
+        if wget_ok(c, &c.core_url) {
             row(
                 "ok",
-                "datad-http",
+                "core-http",
                 "数据服务 :9460",
                 "能访问".into(),
                 "Data service :9460",
@@ -535,7 +510,7 @@ fn http(c: &Cfg) -> [Row; 2] {
         } else {
             row(
                 "bad",
-                "datad-http",
+                "core-http",
                 "数据服务 :9460",
                 "读不到 /v2/state（屏幕会没有数据）".into(),
                 "Data service :9460",
@@ -773,56 +748,6 @@ fn executable(path: &str) -> bool {
     unsafe { libc::access(p.as_ptr(), libc::X_OK) == 0 }
 }
 
-fn core_move(c: &Cfg) -> Option<Row> {
-    match crate::paths::live(&c.root, crate::paths::DATA_NEW) {
-        crate::paths::Live::New => {
-            let mut lm = String::new();
-            let init = format!("{}/luyaz-core", c.initd);
-            let prog = format!("{}/data/luyaz/luyaz-core", c.root);
-            for p in [init, prog] {
-                if !executable(&p) {
-                    lm.push(' ');
-                    lm.push_str(&p);
-                }
-            }
-            (!lm.is_empty()).then(|| {
-                row(
-                    "bad",
-                    "core-move",
-                    "核心搬家",
-                    format!("已切到新布局（.migrated），但缺:{lm}（重启后核心起不来；见 docs/designs/u60-phase10.md）"),
-                    "Core move",
-                    format!("Switched to the new layout (.migrated) but missing:{lm} (the core won't start after a reboot; see docs/designs/u60-phase10.md)"),
-                )
-            })
-        }
-        crate::paths::Live::HalfMoved => Some(row(
-            "bad",
-            "core-move",
-            "核心搬家",
-            "/data/luyaz/core 在但没有 .migrated：搬了一半，还在用旧路径（旧布局，见 docs/designs/u60-phase10.md）".into(),
-            "Core move",
-            "/data/luyaz/core exists without .migrated: moved half-way, still on the old paths (old layout, see docs/designs/u60-phase10.md)".into(),
-        )),
-        crate::paths::Live::Old => None,
-    }
-}
-
-fn tmp_move(c: &Cfg) -> Option<Row> {
-    let d = &c.luyaz_tmp;
-    (std::path::Path::new(d).is_dir() && !std::path::Path::new(&format!("{d}/.migrated")).is_file())
-        .then(|| {
-            row(
-                "bad",
-                "tmp-move",
-                "哨兵暂存目录",
-                format!("{d} 在但没有 .migrated：哨兵搬了一半，还在用 /tmp/u60-guard"),
-                "Sentinel scratch dir",
-                format!("{d} exists without .migrated: moved half-way, still on /tmp/u60-guard"),
-            )
-        })
-}
-
 /// `grep -q PATTERN FILE` (the shell's own grep: the pattern holds `$INITD`, a regex)
 fn grep_q(pattern: &str, file: &str) -> bool {
     Command::new("grep")
@@ -879,45 +804,13 @@ fn svc_running(c: &Cfg, name: &str) -> bool {
 
 fn services(c: &Cfg) -> Vec<Row> {
     let mut rows = Vec::new();
-    let core = if c.core_name() == "luyaz-core" {
-        "luyaz-core"
-    } else {
-        "zwrt-datad"
-    };
-    let mut svcs: Vec<&str> = if rc_starts(c, "luyaz-sentinel") {
-        vec![core, "luyaz-sentinel"]
-    } else {
-        vec![core, "u60-guard", "u60-uid"]
-    };
-    // zte-agent is retired (8d-2c): none expected; one still running is odd
-    if count_comm(c, "zte-agent") >= 1 {
-        rows.push(row(
-            "warn",
-            "svc-zte-agent",
-            "高级后台",
-            "已退役（8d-2c），却还在跑：核心不会接手它的活".into(),
-            "Admin backend",
-            "Retired (8d-2c) but still running: the core does not take over its work".into(),
-        ));
-    } else {
-        rows.push(row(
-            "ok",
-            "svc-zte-agent",
-            "高级后台",
-            "已退役（核心和新管理网页接替）".into(),
-            "Admin backend",
-            "Retired (the core and the new admin pages took over)".into(),
-        ));
-    }
+    let mut svcs: Vec<&str> = vec!["luyaz-core", "luyaz-sentinel"];
     if std::path::Path::new(&c.lweb_bin).exists() || rc_starts(c, "luyaz-web") {
         svcs.push("luyaz-web");
     }
     for s in svcs {
         let (id, label, label_en): (&'static str, &'static str, &'static str) = match s {
-            "zwrt-datad" => ("svc-zwrt-datad", "数据服务", "Data service"),
             "luyaz-core" => ("svc-luyaz-core", "数据服务", "Data service"),
-            "u60-guard" => ("svc-u60-guard", "Wi-Fi 兜底看门狗", "Wi-Fi watchdog"),
-            "u60-uid" => ("svc-u60-uid", "屏幕守护进程", "Screen supervisor"),
             "luyaz-sentinel" => (
                 "svc-luyaz-sentinel",
                 "哨兵（屏幕和看门狗）",
@@ -966,30 +859,23 @@ fn services(c: &Cfg) -> Vec<Row> {
             )
         });
     }
-    // the core under either name (10e): a leftover old one next to the new is two.
-    // The ids keep the old names: tests and saved doctor output key on them; only labels show.
+    // a second copy of the core or the touch UI (two owners of card0); comm is a prefix match,
+    // so a side-by-side test build (`luyaz-ui.test`) counts too
     for (p, id, label, label_en) in [
         (
-            "zwrt-datad",
-            "dup-zwrt-datad",
+            "luyaz-core",
+            "dup-luyaz-core",
             "核心实例数",
             "Core instances",
         ),
         (
-            "u60pro-devui",
-            "dup-u60pro-devui",
+            "luyaz-ui",
+            "dup-luyaz-ui",
             "触屏实例数",
             "Touch UI instances",
         ),
     ] {
-        let mut n = count_comm(c, p);
-        if p == "zwrt-datad" {
-            n += count_comm(c, "luyaz-core");
-        }
-        // the touch UI under either name (10h R5): one of each is two owners of card0
-        if p == "u60pro-devui" {
-            n += count_comm(c, "luyaz-ui");
-        }
+        let n = count_comm(c, p);
         if n > 1 {
             rows.push(row(
                 "bad",
@@ -1130,7 +1016,7 @@ fn screen(c: &Cfg) -> Row {
             "Screen UI",
             "Stock UI on, as asked".into(),
         )
-    } else if count_comm(c, "u60pro-devui") + count_comm(c, "luyaz-ui") >= 1 {
+    } else if count_comm(c, "luyaz-ui") >= 1 {
         match cat(&format!("{}/attempts", c.uid_state)).as_deref() {
             None | Some("") | Some("0") => row(
                 "ok",

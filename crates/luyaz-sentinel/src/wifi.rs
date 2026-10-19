@@ -1,5 +1,5 @@
 //! Turning Wi-Fi back on when the scenario engine is gone (G4; the guard's `restore_wifi`,
-//! `vendor_wifi_on`, `via_datad`, `set_autosleep`).
+//! `vendor_wifi_on`, `via_core`, `set_autosleep`).
 //!
 //! Through the core's `/control` first (source `guard`, as the guard: u60d journals it and knows the
 //! source); written directly only when nothing listens on the core's port, or the core is too old to
@@ -39,7 +39,7 @@ pub const KEYS: [&str; 4] = [
     "wireless.main_5g.disabled",
 ];
 
-/// How a call to the core's `/control` went (the guard's `via_datad` return codes).
+/// How a call to the core's `/control` went (the guard's `via_core` return codes).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Core {
     /// `"ok":true`.

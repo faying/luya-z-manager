@@ -47,10 +47,9 @@ pub struct Paths {
     pub state: String,
     pub heartbeat: String,
     pub marker: String,
-    /// The /tmp tree the sentinel alone writes (Phase 10e: `/tmp/luyaz`, was `/tmp/u60-guard`):
-    /// `clock-ok`, `recovery-set`, and last `.migrated`, which moves the readers over.
+    /// The /tmp tree the sentinel alone writes (`/tmp/luyaz`): `clock-ok`, `recovery-set`.
     pub tmp: String,
-    /// The duties handed to the core (was `/tmp/u60-guard.handover`).
+    /// The duties handed to the core.
     pub handover: String,
     pub wall_last: String,
     pub rtc: String,
@@ -84,8 +83,6 @@ impl Default for Paths {
             cap_bytes: 1_048_576,
             // RAM logs trimmed otherwise only when their writer starts (the .old copy is RAM too).
             cap_tmp_logs: vec![
-                s("/tmp/zte-agent.log"),
-                s("/tmp/zwrt-datad.log"),
                 s("/tmp/luyaz-core.log"),
                 s("/tmp/luyaz-ui.log"),
                 s("/tmp/luyaz-screen.log"),
@@ -98,7 +95,7 @@ impl Default for Paths {
     }
 }
 
-/// A cmdline needle both executor names have (`u60-ship.sh`, `luyaz-ship.sh`).
+/// A cmdline needle both executor names have (`luyaz-ship.sh`, `luyaz-ship.sh`).
 pub const SHIP_CMDLINE: &str = "-ship.sh";
 
 /// The core's `/healthz`.
@@ -159,7 +156,7 @@ pub trait WorkerIo {
     /// Copy to `<path>.old`, then truncate. False when it failed.
     fn cap_log(&mut self, path: &str) -> bool;
     fn start_dropbear(&mut self) -> bool;
-    /// A datad (core) ship transaction with a live executor (D6).
+    /// A core ship transaction with a live executor (D6).
     fn core_being_replaced(&mut self) -> bool;
     /// One alert SMS round as the sender `sentinel` (`u60-alerts::sms`).
     fn alert_sms(&mut self);
@@ -174,7 +171,7 @@ pub trait WorkerIo {
 /// Once the guard is retired (5f), the core runs all of them: nobody else sends alert SMS while
 /// the core is healthy, keeps LAN IPv6 off, writes the kernel log to flash (`crashcap`, G8), the
 /// standby records (G10) or the program fingerprints (G11) (u60-sentinel.md §20).
-pub const CORE_DUTIES: &str = "sms\nlanv6\ndatad\ncrashcap\nstandby\nfp\n";
+pub const CORE_DUTIES: &str = "sms\nlanv6\ncore\ncrashcap\nstandby\nfp\n";
 
 fn num(s: Option<String>) -> u64 {
     // the guard's `num`: the whole content a plain number, else 0
@@ -355,36 +352,19 @@ impl Worker {
         self.logcap_round(io);
         self.dropbear_round(io);
         self.handover_round(io);
-        self.migrated_round(io);
         self.save(io);
     }
 
     /// u60-sentinel.md §16, the 5f precondition: u60d runs the guard's SMS and LAN IPv6 duties only
-    /// while the handover file (`/tmp/luyaz/handover`, was `/tmp/u60-guard.handover`) names them.
+    /// while the handover file (`/tmp/luyaz/handover`) names them.
     /// The guard that used to share it is deleted (10c), so the sentinel always writes it.
     pub fn handover_round(&mut self, io: &mut dyn WorkerIo) {
         let h = self.paths.handover.clone();
         if io.read(&h).as_deref() != Some(CORE_DUTIES) {
             io.write(&h, CORE_DUTIES);
             io.log(
-                "no old guard running: the core runs sms, lanv6, datad, crashcap, standby and fp",
+                "no old guard running: the core runs sms, lanv6, core, crashcap, standby and fp",
             );
-        }
-    }
-
-    /// Phase 10e: `<tmp>/.migrated` tells the readers (core, doctor, ship) the new /tmp tree is
-    /// live. Written last, once `clock-ok` and the handover are in place there; ship removes it
-    /// before starting a sentinel, so an older one (that writes the old tree) leaves it absent.
-    pub fn migrated_round(&mut self, io: &mut dyn WorkerIo) {
-        let mark = format!("{}/.migrated", self.paths.tmp);
-        if io.exists(&mark) {
-            return;
-        }
-        if io.exists(&format!("{}/clock-ok", self.paths.tmp))
-            && io.read(&self.paths.handover).as_deref() == Some(CORE_DUTIES)
-        {
-            io.write(&mark, "");
-            io.log(&format!("{} is live: wrote {mark}", self.paths.tmp));
         }
     }
 

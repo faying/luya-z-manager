@@ -26,7 +26,7 @@ pub const NI_CLIENTS: i32 = 5;
 /// What is on screen at a refresh: the `active` argument of each poll, as refresh.c computes it.
 #[derive(Clone, Debug, Default)]
 pub struct Activity {
-    /// backlight_panel_lit(): datad's pace
+    /// backlight_panel_lit(): the core's pace
     pub panel_lit: bool,
     /// backlight_is_on(): /v2/screen is read only while lit
     pub lit: bool,
@@ -100,9 +100,9 @@ pub const KEY_EV_LONG: i32 = 2;
 
 pub trait Source {
     // ---- the main loop ----
-    /// datad's stream, every pass (data_backend_poll + commit); true = a new snapshot
+    /// the core's stream, every pass (data_backend_poll + commit); true = a new snapshot
     fn pump(&mut self, now_ms: u32) -> bool;
-    /// datad's socket, -1 none (the quiet and dark loops wait on it)
+    /// the core's socket, -1 none (the quiet and dark loops wait on it)
     fn data_fd(&self) -> i32;
 
     // ---- the refresh ----
@@ -125,8 +125,8 @@ pub trait Source {
     /// flushes pushed to the panel; touch reports seen
     fn frames(&self, m: &Model) -> u64;
     fn touch_reports(&self, m: &Model) -> u64;
-    /// datad's committed snapshot version
-    fn datad_version(&self, m: &Model) -> u64;
+    /// the core's committed snapshot version
+    fn core_version(&self, m: &Model) -> u64;
     /// health_count(): -1 not read yet, -2 read but nothing came
     fn health_count(&self, m: &Model) -> i32;
     fn sms_delete_armed(&self, m: &Model, i: usize) -> bool;
@@ -142,7 +142,7 @@ pub trait Source {
     fn key_fd(&self) -> i32;
     fn key_held(&self) -> bool;
 
-    // ---- datad ----
+    // ---- core ----
     fn data_set_pace(&mut self, panel_lit: bool);
     /// /control; fb_args None = no emergency write (fb_action: the script's name for it)
     fn data_control_fb(&mut self, action: &str, params: &str, fb_action: &str, fb_args: Option<&str>) -> bool;
@@ -195,7 +195,7 @@ pub trait Source {
     fn request_vendor(&mut self) -> bool;
     /// no screen owner: start the vendor UI in 2 s and stop this process
     fn vendor_fallback(&mut self);
-    /// datad could not be asked to power down: the vendor call directly
+    /// core could not be asked to power down: the vendor call directly
     fn power_fallback(&mut self, reboot: bool);
     /// 40 s and still up: busybox reboot / poweroff
     fn power_last_resort(&mut self, reboot: bool);

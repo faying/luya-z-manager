@@ -8,7 +8,7 @@ use super::alerts::Alerts;
 use super::battery::BatteryEst;
 use super::versions::Versions;
 use super::chill::Chill;
-use super::datad::{Cfg, Datad};
+use super::core_link::{Cfg, CoreLink};
 use super::diagnose::Diagnose;
 use super::esim::Esim;
 use super::http;
@@ -32,7 +32,7 @@ const LANG_HOLD_MS: u64 = 400;
 
 pub struct Live {
     pub agent: CoreApi,
-    pub datad: Datad,
+    pub core: CoreLink,
     sf: ScreenFeed,
     scenario: Scenario,
     netinfo: Netinfo,
@@ -53,7 +53,7 @@ impl Live {
     pub fn new(key: Key) -> Live {
         Live {
             agent: CoreApi::default(),
-            datad: Datad::new(Cfg::default()),
+            core: CoreLink::new(Cfg::default()),
             sf: ScreenFeed::new(SfCfg::default()),
             scenario: Scenario::new(),
             netinfo: Netinfo::default(),
@@ -70,16 +70,16 @@ impl Live {
         }
     }
 
-    /// datad's stream: every main-loop pass (data_backend_poll + commit_latest).
+    /// the core's stream: every main-loop pass (data_backend_poll + commit_latest).
     pub fn pump(&mut self, now_ms: u32) -> bool {
-        self.datad.poll(now_ms) && self.datad.commit_latest()
+        self.core.poll(now_ms) && self.core.commit_latest()
     }
 
     /// The view model from the getters (vm_model.c's order and meaning).
     pub fn build(&mut self) -> Model {
-        let (data_ok, data) = self.datad.refresh();
-        let (live_ok, live) = self.datad.refresh_live();
-        let notice = self.datad.notice(NOTICE_MS);
+        let (data_ok, data) = self.core.refresh();
+        let (live_ok, live) = self.core.refresh_live();
+        let notice = self.core.notice(NOTICE_MS);
         let st = &self.speed;
         let ni = &self.netinfo.ni;
         Model {
@@ -87,12 +87,12 @@ impl Live {
             data,
             live_ok: live_ok as i32,
             live,
-            backend_alive_wall: self.datad.alive_wall(),
-            backend_silent: self.datad.silent() as i32,
+            backend_alive_wall: self.core.alive_wall(),
+            backend_silent: self.core.silent() as i32,
             notice_ok: notice.is_some() as i32,
             notice: notice.unwrap_or_default(),
-            datad_version: self.datad.version(),
-            sms_armed: self.datad.sms_armed_index(),
+            core_version: self.core.version(),
+            sms_armed: self.core.sms_armed_index(),
 
             screen_status: self.sf.status(),
             screen_net: self.sf.net().cloned(),
@@ -188,7 +188,7 @@ impl Live {
     fn journal(&self) -> Option<String> {
         let body = r#"{"action":"journal.list","source":"screen","params":{"limit":30}}"#;
         let req = http::build("POST", "/control", "127.0.0.1", "", Some(body), 256)?;
-        let fd = http::connect_tcp(&self.datad.cfg.host, self.datad.cfg.port, 300)?;
+        let fd = http::connect_tcp(&self.core.cfg.host, self.core.cfg.port, 300)?;
         let r = http::exchange(fd, req.as_bytes(), 57344, 600);
         r.body.filter(|_| r.status == 200).map(|b| util::text(&b))
     }
@@ -209,25 +209,25 @@ impl Source for Live {
         Live::pump(self, now_ms)
     }
     fn data_fd(&self) -> i32 {
-        self.datad.fd()
+        self.core.fd()
     }
     fn poll(&mut self, _n: u32, a: &Activity) -> Polled {
         let mut p = Polled::default();
         let ag = &mut self.agent;
-        self.datad.set_pace(a.panel_lit);
-        // before datad's early return: agent_health() is the time since the last good read
+        self.core.set_pace(a.panel_lit);
+        // before the core's early return: agent_health() is the time since the last good read
         p.scenario = self.scenario.poll(ag, a.home);
         p.netinfo = self.netinfo.poll(ag, a.ni_mode);
         // data_refresh(): no snapshot yet, try now
-        self.datad.refresh_init();
-        if !self.datad.refresh().0 {
+        self.core.refresh_init();
+        if !self.core.refresh().0 {
             p.diagnose = self.diag.poll(ag, a.diag);
             return p;
         }
-        let silent = self.datad.silent();
-        // dark: nothing shows it, so datad is not asked to compute it
+        let silent = self.core.silent();
+        // dark: nothing shows it, so core is not asked to compute it
         if a.lit && !silent {
-            p.screen = self.sf.poll(self.datad.version());
+            p.screen = self.sf.poll(self.core.version());
         }
         p.diagnose = self.diag.poll(ag, a.diag);
         p.tailscale = self.ts.poll(a.tailscale);
@@ -236,7 +236,7 @@ impl Source for Live {
         p.chill = self.chill.poll(a.chill);
         p.esim = self.esim.poll(ag, a.esim);
         if a.esim_prefetch {
-            let key = self.datad.sim_key();
+            let key = self.core.sim_key();
             if self.esim.prefetch(ag, &key) {
                 p.esim = true;
             }
@@ -280,14 +280,14 @@ impl Source for Live {
     fn touch_reports(&self, _m: &Model) -> u64 {
         plat::touch::report_count()
     }
-    fn datad_version(&self, _m: &Model) -> u64 {
-        self.datad.version()
+    fn core_version(&self, _m: &Model) -> u64 {
+        self.core.version()
     }
     fn health_count(&self, _m: &Model) -> i32 {
         self.alerts.health_count()
     }
     fn sms_delete_armed(&self, _m: &Model, i: usize) -> bool {
-        self.datad.sms_delete_armed(i)
+        self.core.sms_delete_armed(i)
     }
 
     fn bl_on(&mut self) {
@@ -314,31 +314,31 @@ impl Source for Live {
     }
 
     fn data_set_pace(&mut self, panel_lit: bool) {
-        self.datad.set_pace(panel_lit);
+        self.core.set_pace(panel_lit);
     }
     fn data_control_fb(&mut self, action: &str, params: &str, fb_action: &str, fb_args: Option<&str>) -> bool {
-        self.datad.control_fb(action, params, fb_action, fb_args)
+        self.core.control_fb(action, params, fb_action, fb_args)
     }
     fn data_control_undo(&mut self, action: &str, params: &str) -> bool {
-        self.datad.control_send_ex(action, params, true)
+        self.core.control_send_ex(action, params, true)
     }
     fn journal_list(&mut self, _m: &Model) -> Option<String> {
         self.journal()
     }
     fn sms_mark_read_id(&mut self, id: i64) {
-        self.datad.sms_mark_read_id(id);
+        self.core.sms_mark_read_id(id);
     }
     fn sms_mark_all_read(&mut self) {
-        self.datad.sms_mark_all_read();
+        self.core.sms_mark_all_read();
     }
     fn sms_delete_id(&mut self, id: i64) {
-        self.datad.sms_delete_id(id);
+        self.core.sms_delete_id(id);
     }
     fn sms_delete_arm(&mut self, i: usize) {
-        self.datad.sms_delete_arm(i);
+        self.core.sms_delete_arm(i);
     }
     fn sms_delete_tap(&mut self, i: usize) -> bool {
-        self.datad.sms_delete_tap(i)
+        self.core.sms_delete_tap(i)
     }
 
     fn alerts_mark_all_read(&mut self) {

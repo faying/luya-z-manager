@@ -100,12 +100,12 @@ const PROCS: ProcSeed[] = [
   { pid: 988, name: "dnsmasq", rss_kb: 2_508, cpu: 0.1 },
   { pid: 1004, name: "dropbear", rss_kb: 1_096, cpu: 0 },
   { pid: 1210, name: "sh", rss_kb: 1_020, cpu: 0 },
-  { pid: 1224, name: "zte-agent", rss_kb: 11_264, cpu: 1.2 },
+  { pid: 1224, name: "luyaz-web", rss_kb: 11_264, cpu: 1.2 },
   { pid: 1231, name: "sh", rss_kb: 1_016, cpu: 0 },
-  { pid: 1245, name: "zwrt-datad", rss_kb: 6_904, cpu: 0.8 },
+  { pid: 1245, name: "luyaz-core", rss_kb: 6_904, cpu: 0.8 },
   { pid: 1260, name: "sh", rss_kb: 1_132, cpu: 0.1 },
-  { pid: 1302, name: "u60-uid", rss_kb: 1_048, cpu: 0 },
-  { pid: 1318, name: "u60pro-devui", rss_kb: 18_540, cpu: 1.6 },
+  { pid: 1302, name: "luyaz-sentinel", rss_kb: 1_048, cpu: 0 },
+  { pid: 1318, name: "luyaz-ui", rss_kb: 18_540, cpu: 1.6 },
   { pid: 1406, name: "mihomo", rss_kb: 42_760, cpu: 2.4 },
   { pid: 1455, name: "tailscaled", rss_kb: 31_228, cpu: 0.9 },
   { pid: 19, name: "ksoftirqd/1", rss_kb: 0, cpu: 0.2 },
@@ -132,7 +132,7 @@ function sampleTop(now: number): SystemTop {
       // First sample after start: no previous ticks → 0 for everyone (system.rs:521-528).
       cpu_pct: first ? 0 : Math.round(wob * 10) / 10,
       rss_kb: p.rss_kb,
-      state: p.name === "zte-agent" ? "running" : "sleeping",
+      state: p.name === "luyaz-web" ? "running" : "sleeping",
       is_bloat: BLOAT_DAEMONS.includes(p.name),
     };
   });
@@ -175,18 +175,18 @@ const DEVUI_CRASH_AT = T0 - 31 * 3600 - 12 * 60;
 
 /** /data/alerts/queue, oldest first. */
 const EVENTS: Omit<AlertEvent, "unread">[] = [
-  { seq: 7, time: PREV_BOOT_TIME, uptime: 51_234, kind: "agent-crash", text: "zte-agent killed by SIGABRT" },
+  { seq: 7, time: PREV_BOOT_TIME, uptime: 51_234, kind: "web-crash", text: "luyaz-web killed by SIGABRT" },
   { seq: 8, time: PREV_BOOT_TIME + 312, uptime: 51_546, kind: "wifi-takeover", text: "agent silent 300s, AP off; forcing Wi-Fi on" },
   // Current boot, before SNTP set the clock → time null.
-  { seq: 9, time: null, uptime: 41, kind: "datad-crash", text: "zwrt-datad exit 1" },
-  { seq: 10, time: DEVUI_CRASH_AT, uptime: DEVUI_CRASH_AT - BOOT, kind: "devui-crash", text: "u60pro-devui killed by SIGSEGV" },
+  { seq: 9, time: null, uptime: 41, kind: "core-crash", text: "luyaz-core exit 1" },
+  { seq: 10, time: DEVUI_CRASH_AT, uptime: DEVUI_CRASH_AT - BOOT, kind: "devui-crash", text: "luyaz-ui killed by SIGSEGV" },
 ];
 
 /** /data/alerts/sms-log, oldest first. */
 const SMS_LOG: AlertSmsRecord[] = [
-  { time: PREV_BOOT_TIME + 45, seq: 7, kind: "agent-crash", result: "sent" },
+  { time: PREV_BOOT_TIME + 45, seq: 7, kind: "web-crash", result: "sent" },
   { time: PREV_BOOT_TIME + 350, seq: 8, kind: "wifi-takeover", result: "suppressed-rate" },
-  { time: BOOT + 180, seq: 9, kind: "datad-crash", result: "suppressed-abroad" },
+  { time: BOOT + 180, seq: 9, kind: "core-crash", result: "suppressed-abroad" },
   { time: DEVUI_CRASH_AT + 40, seq: 10, kind: "devui-crash", result: "suppressed-abroad" },
 ];
 
@@ -230,10 +230,8 @@ function smsBlock(): AlertsSms {
 
 /** alerts.rs kind_label / kind_label_en: the agent words every kind, in both languages. */
 const KIND_LABELS: Record<string, [string, string]> = {
-  "agent-crash": ["管理后台意外退出，已自动重启", "Admin backend (zte-agent) exited unexpectedly"],
-  "agent-silent": ["管理后台失去响应", "Admin backend (zte-agent) stopped responding"],
-  "agent-hung": ["管理后台卡死，已被强制重启", "Admin backend was stuck and was restarted"],
-  "datad-crash": ["数据服务意外退出，已自动重启", "Data service (zwrt-datad) exited unexpectedly"],
+  "core-crash": ["数据服务意外退出，已自动重启", "Data service exited unexpectedly"],
+  "web-crash": ["管理网页意外退出，已自动重启", "Admin pages (luyaz-web) exited unexpectedly"],
   "devui-crash": ["触屏界面闪退，已自动重新打开", "Screen UI exited unexpectedly"],
   "devui-gave-up": ["触屏界面反复打不开，已换回原厂界面（长按屏幕右下角 3 秒重试）", "Screen UI kept failing; stock UI is on screen (hold the bottom-right corner 3 s to retry)"],
   "devui-theme-paused": ["自动切换深浅色已暂停，重启后恢复", "Automatic light/dark switching on the screen paused until reboot"],
@@ -241,7 +239,6 @@ const KIND_LABELS: Record<string, [string, string]> = {
   "wifi-restore-failed": ["Wi-Fi 看门狗没能打开 Wi-Fi", "Wi-Fi watchdog could not turn Wi-Fi on"],
   "sms-failed": ["告警短信发送失败", "Alert SMS could not be sent"],
   "sms-test": ["测试短信", "Test SMS"],
-  "datad-degraded": ["数据服务持续没响应，后台改为直接读取", "Data service (zwrt-datad) not answering; admin backend reads the modem directly"],
 };
 
 function kindLabels(kind: string): { label: string; label_en: string } {
@@ -295,21 +292,21 @@ function crashFile(program: string, at: number, uptime: number, status: string, 
 
 /** /data/crashlog/<program>/*.log — all older than 24 h. */
 const CRASH_FILES: CrashFile[] = [
-  crashFile("u60pro-devui", DEVUI_CRASH_AT, DEVUI_CRASH_AT - BOOT, "killed by SIGSEGV", [
+  crashFile("luyaz-ui", DEVUI_CRASH_AT, DEVUI_CRASH_AT - BOOT, "killed by SIGSEGV", [
     `${stamp(DEVUI_CRASH_AT - 2)} devui: page functions/chill.html -> home`,
-    `${stamp(DEVUI_CRASH_AT - 1)} devui: datad sse reconnect`,
-    `${stamp(DEVUI_CRASH_AT)} supervise: u60pro-devui ended: killed by SIGSEGV`,
+    `${stamp(DEVUI_CRASH_AT - 1)} devui: core sse reconnect`,
+    `${stamp(DEVUI_CRASH_AT)} sentinel: luyaz-ui ended: killed by SIGSEGV`,
   ]),
   // Written before SNTP: the RTC was still around 1971, so the name and mtime say so.
-  crashFile("zwrt-datad", 31_536_000 + 41, 41, "exit 1", [
-    "zwrt-datad 0.10.0 starting",
+  crashFile("luyaz-core", 31_536_000 + 41, 41, "exit 1", [
+    "luyaz-core 1.5.1 starting",
     "error: ubus connect failed: Connection refused (os error 111)",
-    "19710101-000041 supervise: zwrt-datad ended: exit 1",
+    "19710101-000041 luyaz-core ended: exit 1",
   ]),
-  crashFile("zte-agent", PREV_BOOT_TIME, 51_234, "killed by SIGABRT", [
+  crashFile("luyaz-web", PREV_BOOT_TIME, 51_234, "killed by SIGABRT", [
     "[health] doctor run ok",
     "thread 'http-3' panicked at src/server.rs: called `Option::unwrap()` on a `None` value",
-    `${stamp(PREV_BOOT_TIME)} supervise: zte-agent ended: killed by SIGABRT`,
+    `${stamp(PREV_BOOT_TIME)} luyaz-web ended: killed by SIGABRT`,
   ]),
 ];
 
@@ -327,12 +324,11 @@ function doctorChecks(now: number): HealthCheck[] {
     c("ok", "fota", "ZTE 自动升级", "已关闭", "ZTE auto-update", "Off"),
     c("ok", "whiteout", "开机链接", "开机同步名单里的服务没有被屏蔽", "Boot links", "No boot-sync service is masked"),
     c("ok", "clock", "时钟", `已对时（${clock} 设备当地时间）`, "Clock", `Synced (${clock} device local time)`),
-    c("ok", "svc-zte-agent", "高级后台", "procd 监督中", "Admin backend", "Supervised by procd"),
-    c("ok", "svc-zwrt-datad", "数据服务", "procd 监督中", "Data service", "Supervised by procd"),
-    c("ok", "svc-u60-guard", "Wi-Fi 兜底看门狗", "procd 监督中", "Wi-Fi watchdog", "Supervised by procd"),
-    c("ok", "svc-u60-uid", "屏幕守护进程", "procd 监督中", "Screen supervisor", "Supervised by procd"),
-    c("ok", "agent-http", "管理网页 :9090", "能访问", "Web admin :9090", "Reachable"),
-    c("ok", "datad-http", "数据服务 :9460", "能访问", "Data service :9460", "Reachable"),
+    c("ok", "svc-luyaz-core", "核心", "procd 监督中", "Core", "Supervised by procd"),
+    c("ok", "svc-luyaz-sentinel", "哨兵", "procd 监督中", "Sentinel", "Supervised by procd"),
+    c("ok", "svc-luyaz-web", "管理网页", "procd 监督中", "Web admin", "Supervised by procd"),
+    c("ok", "web-http", "管理网页 :9090", "能访问", "Web admin :9090", "Reachable"),
+    c("ok", "core-http", "数据服务 :9460", "能访问", "Data service :9460", "Reachable"),
     c("ok", "heartbeat", "后台心跳", "4 秒前", "Admin heartbeat", "4 s ago"),
     shared.wifiOn
       ? c("ok", "wifi", "Wi-Fi", "在广播", "Wi-Fi", "Broadcasting")

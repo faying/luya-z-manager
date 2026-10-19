@@ -4,7 +4,7 @@ use super::*;
 use crate::ops::Source;
 
 fn temp_dir() -> PathBuf {
-    let d = std::env::temp_dir().join(format!("datad-journal-{:016x}", rand::random::<u64>()));
+    let d = std::env::temp_dir().join(format!("core-journal-{:016x}", rand::random::<u64>()));
     fs::create_dir_all(&d).unwrap();
     d
 }

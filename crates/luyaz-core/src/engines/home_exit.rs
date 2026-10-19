@@ -1,7 +1,6 @@
 //! The home exit run by u60d (u60-platform.md Phase 4 step 9a): the engine the agent runs
-//! (`crates/luyaz-home-exit`) with u60d as its host. Only with `LUYAZ_HOME_EXIT=1`, which goes on
-//! together with `home_exit` in the agent's `ZTE_AGENT_HANDOVER` (one machine, one loop, one
-//! writer of chill.env's `CHILL_HOME_*` and `home-exit.json`). Off, nothing here runs and the
+//! (`crates/luyaz-home-exit`) with u60d as its host. Only with `LUYAZ_HOME_EXIT=1` (core.env;
+//! one machine, one loop, one writer of chill.env's `CHILL_HOME_*` and `home-exit.json`). Off, nothing here runs and the
 //! touch screen's GET reads the shadow as before (`home.rs`).
 //!
 //! The engine is blocking (ureq to mihomo, `chill.sh reload`, the 30 s trial), like the agent's:
@@ -45,6 +44,26 @@ impl U60dHost {
     }
 }
 
+/// `chill.sh reload` with a deadline: its process group is killed past `limit` and the tick goes
+/// on with an error, so the engine's next tick still runs.
+fn chill_reload_within(cmd: &str, limit: std::time::Duration) -> Result<(), String> {
+    let mut c = std::process::Command::new("sh");
+    c.arg("-c").arg(cmd);
+    match luyaz_api::health::output_within_group(&mut c, limit) {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => {
+            let mut s = String::from_utf8_lossy(&o.stdout).into_owned();
+            s.push_str(&String::from_utf8_lossy(&o.stderr));
+            Err(format!("reload failed: {}", ch::tail(&s, 6)))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            eprintln!("[home_exit] chill.sh reload timed out after {} s, killed", limit.as_secs());
+            Err(format!("reload timed out after {} s", limit.as_secs()))
+        }
+        Err(e) => Err(format!("reload failed: {e}")),
+    }
+}
+
 impl Host for U60dHost {
     fn env_var(&self, name: &str) -> String {
         ch::env_var(
@@ -69,21 +88,9 @@ impl Host for U60dHost {
         serde_json::from_str(&std::fs::read_to_string(self.path(ch::CHILL_STATE)).ok()?).ok()
     }
     fn chill_reload(&self) -> Result<(), String> {
+        // bounded (resilience audit R7): a wedged reload would stall this engine's 30 s loop
         let cmd = format!("{} reload", self.path(ch::CHILL_SH).display());
-        match std::process::Command::new("sh")
-            .arg("-c")
-            .arg(&cmd)
-            .stdin(std::process::Stdio::null())
-            .output()
-        {
-            Ok(o) if o.status.success() => Ok(()),
-            Ok(o) => {
-                let mut s = String::from_utf8_lossy(&o.stdout).into_owned();
-                s.push_str(&String::from_utf8_lossy(&o.stderr));
-                Err(format!("reload failed: {}", ch::tail(&s, 6)))
-            }
-            Err(e) => Err(format!("reload failed: {e}")),
-        }
+        chill_reload_within(&cmd, crate::ops::chill::RELOAD_TIMEOUT)
     }
     fn tailscale_json(&self) -> Option<Value> {
         (self.tailscale)()
@@ -127,5 +134,21 @@ impl Host for U60dHost {
     }
     fn mihomo_api(&self) -> String {
         self.mihomo.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_hung_reload_returns_at_its_deadline() {
+        let t0 = Instant::now();
+        let e = super::chill_reload_within("sleep 3600", Duration::from_millis(300)).unwrap_err();
+        assert!(e.contains("timed out"), "{e}");
+        assert!(t0.elapsed() < Duration::from_secs(2));
+        // the next tick runs as usual
+        assert_eq!(super::chill_reload_within("true", Duration::from_secs(5)), Ok(()));
+        assert!(super::chill_reload_within("echo no; exit 1", Duration::from_secs(5)).unwrap_err().contains("no"));
     }
 }

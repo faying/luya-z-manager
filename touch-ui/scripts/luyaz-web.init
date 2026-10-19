@@ -14,7 +14,7 @@
 # LUYAZ_WEB_PAGES (the migrated pages, comma-separated) is the program's own
 # default; to send one page back to the agent without a rebuild, add
 #   procd_set_param env LUYAZ_WEB_PAGES=...
-# here (u60-ship.sh lw_launch_cmd must then say the same: scripts/test/u60-ship).
+# here (luyaz-ship.sh lw_launch_cmd must then say the same: scripts/test/luyaz-ship).
 #
 # Do NOT run `enable`/`disable` (overlay whiteouts, manager CLAUDE.md).
 # respawn 300 5 5: see luyaz-core.init.

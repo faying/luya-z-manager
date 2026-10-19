@@ -223,7 +223,7 @@ mod tests {
         lang::set_en(false);
         let mut a = Alerts::default();
         assert_eq!(a.health_count(), -1, "nothing read yet");
-        let d = r#"{"bad":1,"checked_at":1790250000,"checks":[{"detail":"在广播","id":"wifi","label":"Wi-Fi","level":"ok"},{"detail":"没配置号码：后台挂了你不会知道","id":"sms","label":"短信告警","level":"warn"},{"detail":"x [a] \"q\" }{","id":"disk","label":"/data 空间","level":"bad"},{"detail":"能访问","id":"agent-http","label":"管理网页 :9090","level":"ok"}],"crashlogs":[{"file":"a.log","level":"warn","program":"p"}],"error":null,"warn":1}"#;
+        let d = r#"{"bad":1,"checked_at":1790250000,"checks":[{"detail":"在广播","id":"wifi","label":"Wi-Fi","level":"ok"},{"detail":"没配置号码：后台挂了你不会知道","id":"sms","label":"短信告警","level":"warn"},{"detail":"x [a] \"q\" }{","id":"disk","label":"/data 空间","level":"bad"},{"detail":"能访问","id":"web-http","label":"管理网页 :9090","level":"ok"}],"crashlogs":[{"file":"a.log","level":"warn","program":"p"}],"error":null,"warn":1}"#;
         a.parse_checks(d.as_bytes());
         assert_eq!(a.health_count(), 2, "two not-ok checks");
         assert_eq!(a.health_checked(), 2, "two ok checks counted");

@@ -56,7 +56,7 @@ async fn alerts_and_the_read_cursor() {
     fs::create_dir_all(&d).unwrap();
     fs::write(
         d.join("queue"),
-        "7\t1758600000\t42\tagent-crash\tA\n8\t35392498\t7\twifi-takeover\tB\n",
+        "7\t1758600000\t42\tweb-crash\tA\n8\t35392498\t7\twifi-takeover\tB\n",
     )
     .unwrap();
     // writes off (the shadow period): the agent owns the cursor, this is 404 like anything not here
@@ -72,7 +72,7 @@ async fn alerts_and_the_read_cursor() {
     let data = &body["data"];
     assert_eq!(data["unread"], 2);
     assert_eq!(data["events"][0]["seq"], 8);
-    assert_eq!(data["events"][1]["label"], "管理后台意外退出，已自动重启");
+    assert_eq!(data["events"][1]["label"], "管理网页意外退出，已自动重启");
     assert!(data["utc_offset"].is_i64());
     assert!(data.get("next").is_none(), "no since = the plain summary");
     // the cursor (u60-mcp.md R4): oldest first, `next`, a gap before seq 7
@@ -160,7 +160,7 @@ fn device(name: &str) -> std::path::PathBuf {
     put(
         &root,
         "/data/alerts/queue",
-        "7\t1758600000\t42\tagent-crash\tA\n",
+        "7\t1758600000\t42\tweb-crash\tA\n",
     );
     put(
         &root,

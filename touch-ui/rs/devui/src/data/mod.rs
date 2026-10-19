@@ -8,7 +8,7 @@ pub mod alerts;
 pub mod battery;
 pub mod versions;
 pub mod chill;
-pub mod datad;
+pub mod core_link;
 pub mod diagnose;
 pub mod esim;
 pub mod http;

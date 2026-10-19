@@ -5,8 +5,9 @@
 **现状（2026-10-17）**：u60-guard 已退役（10c 删）。账本现在由核心 luyaz-core 的长期层写（manager `crates/luyaz-core/src/longterm.rs`、`longterm/`；
 `LUYAZ_LONGTERM=1` 才开）：
 - 持久：`/data/luyaz/core/long/hours.jsonl`（每小时一行，留 90 天）、`events.jsonl`（重要事件，留 30 天、最多 1 MB），追加 + fsync；
-  行的种类和字段名照本文第 4 节（`boot`、`ver`、`proc_restart`、`uid`、`datad_degraded`、`hour`、`hour_power`、`hour_proc` 等），
-  连旧名也照旧：`rss_agent`/`rss_datad`/`rss_devui`、`cpu_datad`、`prog` 里的 `zwrt-datad`、`u60-uid`（代码按这些键对应核心、触屏）。
+  行的种类和字段名照本文第 4 节（`boot`、`ver`、`proc_restart`、`uid`、`core_degraded`、`hour`、`hour_power`、`hour_proc` 等），
+  字段名改名 F7（10-19）起只有新名：`rss_core`/`rss_ui`（以前 `rss_datad`/`rss_devui`）、`cpu_core`（`cpu_core`）、`core_degraded`（`core_degraded`）、
+  `g_core`（核心的 `g_datad` 和 `g_core` 一直相同，F7 起不再写）；设备上的旧记录 F7 上机后改写成新名。`prog` 里的旧程序名由 `paths::prog_key` 对应。
 - 易失：`/tmp/luyaz/ledger`（下文 `/tmp/u60-guard/ledger/`）、时钟结论 `/tmp/luyaz/clock-ok`（下文 `/tmp/u60-guard/clock-ok`）、
   `/tmp/luyaz/handover`；屏幕日志 `/tmp/luyaz-screen.log`（下文 u60-uid 日志）由哨兵 luyaz-sentinel 写。
 - 读的一方：`<核心> doctor --report 24h|7d`（`/data/luyaz/scripts/doctor.sh` 是薄壳；成绩单在 `crates/luyaz-core/src/scorecard*`），
@@ -124,12 +125,12 @@
 | `svc_exit` | 账本任务 | crashlog 目录里出现新文件 | `cl-<文件 md5 前 12 位>` | `prog`；`file`；`status`（文件第 2 行）；`found`：`round` / `boot_init`；`crash_up` 文件名里的开机秒数 | ✔ |
 | `proc_restart` | 账本任务 | datad、agent、u60-uid 的 pid 或进程启动时间变了（不在了先不记，回来时记） | `pr-<boot8>-<新 pid>-<启动时间>` | `prog`；`old`、`new` pid；`crashlog`（这一轮看到过它的新 crashlog 没有，0/1）；`ship`（1 = 上机事务重启的：`/data/u60-ship/txn` 是本次开机、对应组件（u60-uid 对应 touch 或 uid）、还在跑或结束不到 10 分钟；10-04 加，旧行没有） | ✔ |
 | `uid` | 账本任务 | u60-uid 日志里的放弃（`giving up`）、交还（`starting the vendor UI`）、人为请求（`request:`、`corner long-press:`，记作 `other`） | `uid-<boot8>-<日志行号>`（本次开机累计的行号：日志改名成 `.old` 以后接着往下数，不从 1 重来） | `what`：`handback` / `gave_up` / `other`；`detail`（那一行原文） | ✔ |
-| `datad_degraded` | 账本任务 | 一次降级开始、结束（第 11 节） | 开始 `dds-<boot8>-<since>`，结束 `dde-<开始那次开机的 boot8>-<since>` | `state`：`start` / `end`；`since` 标记第一行；`reason`；`dur_s`（`end` 时，按本次开机的开机秒数算；不知道写 null）；`how`（`end` 时：`gone` / `new_episode` / `stale` / `reboot`） | ✔ |
+| `core_degraded` | 账本任务 | 一次降级开始、结束（第 11 节） | 开始 `dds-<boot8>-<since>`，结束 `dde-<开始那次开机的 boot8>-<since>` | `state`：`start` / `end`；`since` 标记第一行；`reason`；`dur_s`（`end` 时，按本次开机的开机秒数算；不知道写 null）；`how`（`end` 时：`gone` / `new_episode` / `stale` / `reboot`） | ✔ |
 | `gap` | 账本任务 | 醒着时 watcher、capture、uidlog、crashlog、datad 某个数据源没在工作，恢复时写（第 8 节） | — | `src`；`from`（最后一次还在工作的那一轮）、`to` 开机秒数 | |
 | `calib` | doctor（暂存） | `--calibrate-standby` 写了新基线 | `calib-<boot8>-<开机秒数>` | `rows` | ✔ |
 | `hour` | 账本任务 | 每个整点（对时前按开机满一小时） | `h-<boot8>-<from>` | `from`、`to` 开机秒数；`ft`、`tt` 墙钟（不可信写 null）；`awake`、`asleep`（只算有证据的休眠）秒；`rounds`、`skipped`（主循环的轮数和其中跳过账本任务的）；`max_gap`；`net`、`home`（整点那一刻）、`abroad`（在国外的醒着秒数）；`free_mb`；`dump_mb`；`budget`；`g_guard`、`g_job`、`g_watcher`、`g_capture`、`g_uidlog`、`g_crashlog`、`g_datad`：各数据源这一小时没在工作的醒着秒数（第 8 节） | |
 | `hour_power` | 账本任务 | 紧跟 `hour` | `hp-<boot8>-<from>` | `src`：`counter` / `vi`（读不到写 null）；`e` 总能量 mWh；`on_home_s`、`on_home_e`、`on_abroad_s`、`on_abroad_e`、`off_home_s`、`off_home_e`、`off_abroad_s`、`off_abroad_e`；`chg_s`；`batt_from`、`batt_to` %；`batt_tmax` 0.1 °C；`zone_tmax` m°C（只取主芯片侧的温度区：`cpuss-*`、`aoss-*`、`sys-therm-*`、`xo-therm`、`pm*_tz`、`battery`；基带侧的 `sdr*`、`mmw*`、`epm*`、`mdm*` 读一次就是一个发给基带的 QMI 请求，不读）；`throttle_s`（没有 cpufreq 写 null）；`e_partial`（能量缺了一部分：V×I 下有过休眠，或有读不到的轮）；核心起（manager `docs/designs/u60-radio.md` §4、D9/D10）：`off_home_quiet_pm`、`off_abroad_quiet_pm` 息屏不充电时蜂窝安静的千分比（连续 0 包 ≥10 s 的整段，跟诊断档 quiet10 同定义，约 5 s 粒度，休眠不算）、`off_home_wan_pkts`、`off_abroad_wan_pkts` 这段时间的蜂窝包数（厂商计数，含 IPA 转发；没比到写 null）；`off_home_cli_s` 息屏在家时有客户端的秒数（客户端数未知也算有）；`chill_profile` 这小时 CHILL 的实际档位（`eco`/`standard`/`perf`，CHILL 关着或暂停写 `off`，换过写 `mixed`，没有 CHILL 写 null） | |
-| `hour_proc` | 账本任务 | 紧跟 `hour_power` | `hq-<boot8>-<from>` | `rss_agent`、`rss_datad`、`rss_devui`、`rss_mihomo`、`rss_ts` kB（整点那一刻，不在跑写 null）；`cpu_datad` 本小时平均千分比（同一个进程从头跑到尾才算，否则 null）；`idle_rows` 息屏且空闲的分钟数、`idle_wan` 这些分钟蜂窝包数的中位数（没有基线写 null）；`chill_on_s`、`chill_ok_s`、`ts_on_s`、`ts_chk_s`、`ts_ok_s`（第 6 节「出口」） | |
+| `hour_proc` | 账本任务 | 紧跟 `hour_power` | `hq-<boot8>-<from>` | `rss_agent`、`rss_core`、`rss_ui`、`rss_mihomo`、`rss_ts` kB（整点那一刻，不在跑写 null）；`cpu_core` 本小时平均千分比（同一个进程从头跑到尾才算，否则 null）；`idle_rows` 息屏且空闲的分钟数、`idle_wan` 这些分钟蜂窝包数的中位数（没有基线写 null）；`chill_on_s`、`chill_ok_s`、`ts_on_s`、`ts_chk_s`、`ts_ok_s`（第 6 节「出口」） | |
 
 以后的种类（第二步起）：`reboot_request`（`by`、`why`，我们的每条重启路径发出前写，要挺过重启）、`session`（设备占用锁）、`deploy`（E1）。
 
@@ -342,7 +343,7 @@
 | S4 | 每个程序：`svc_exit`（非 0 退出）+ 没有 crashlog 的 `proc_restart`；guard：同一次开机里没有 `requested` 的第二次及以后的 `guard_start`；`ship=1` 的（上机事务自己重启的）不算，手工重启仍算 | 0 | 7 天 | crashlog、guard |
 | S5a | 原因码 1185 的次数 | 0 | 7 天 | 同 S1 |
 | S5b | `uid what=gave_up` 次数（再对照 `/data/u60-uid/gave-up`、告警 `devui-gave-up`） | 0 | 7 天 | uidlog |
-| S6 | `datad_degraded` 次数和总分钟数 | 每天 0 | 1 天 | guard、datad |
+| S6 | `core_degraded` 次数和总分钟数 | 每天 0 | 1 天 | guard、datad |
 | S7 | E1 前靠已知事实（版本漂移） | — | — | — |
 | S8 | CHILL：`chill_ok_s` ÷ `chill_on_s`；Tailscale：`ts_ok_s` ÷ `ts_chk_s`，覆盖另按第 8 节「Tailscale 自己的覆盖」；把没查到的全算正常也不到 99% 就直接不达标。两个都没开过写没测 | ≥ 99% | 7 天 | guard |
 | U1–U5 | 第二步前没测，或靠已知事实（写明） | — | — | — |
@@ -350,7 +351,7 @@
 | P1 | `hour_power.e` 折成平均功率和按当前电量的续航；先不定目标，攒够 7 天 | 待定 | 7 天 | guard |
 | P2 | 四格（亮屏/息屏 × 在家/国外）的平均功率，剔除充电分钟；每格样本少于 6 小时写「样本不足」 | 待定 | 7 天 | guard |
 | P3 | 当前待机判定是否只在空闲时做、有没有过期的列 | 规则成立 | — | 待机记录 |
-| P4a | `hour_proc.cpu_datad` 的平均 | ≤ 2% | 1 天 | guard |
+| P4a | `hour_proc.cpu_core` 的平均 | ≤ 2% | 1 天 | guard |
 | P4b | datad `ver.extra` 是否 `ubus=socket` 或 `ubus=auto`（socket，连不上 ubusd 时临时退回 CLI） | socket / auto | — | — |
 | P5 | 连续运行 ≥ 24 小时的开机：以开机满 1 小时后第一条 `hour_proc` 为基准，RSS 增长 ≤ 10%；`oom` 为 0 | ≤ 10%、0 | 7 天 | guard、watcher |
 | P6 | `hour_power.throttle_s` 合计（null 的小时算没测）、`thermal` 里比本次开机第一条更高的等级出现的次数 | 0 | 7 天 | guard、watcher |

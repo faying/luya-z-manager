@@ -18,7 +18,7 @@
 //!     bound (a second copy that lost the bind never touches it) and removed on the TERM/INT path
 //!     only. Found at start with this boot's id: the last run crashed; the record is the log's
 //!     tail as it was before this start ([`log_len_at_start`]). Another boot's marker is a reboot,
-//!     not a crash. Side-by-side builds (`zwrt-datad.test`) never write one ([`marks`]).
+//!     not a crash. Side-by-side builds (`luyaz-core.test`) never write one ([`marks`]).
 //! - a requested stop is not a crash: above;
 //! - the leftover child of a SIGKILLed wrapper: there is no wrapper; the core refuses a second
 //!   copy (port bind, serve.rs) and so does luyaz-web (its only `--bind`).
@@ -31,16 +31,9 @@ pub const CRASH_DIR: &str = "/data/crashlog";
 pub const CRASH_KEEP: usize = 5;
 pub const CRASH_TOTAL: u64 = 1_048_576;
 pub const TAIL_LINES: usize = 200;
-/// The core's pre-D2 log (/tmp/zwrt-datad.log); fallback only, [`core_log`] prefers the new one.
-pub const CORE_LOG: &str = "/tmp/zwrt-datad.log";
-/// Luya-Z rename D2: luyaz-core.init's log from now on; [`core_log`] picks the one there.
-pub const CORE_LOG_NEW: &str = "/tmp/luyaz-core.log";
-
-/// The core's log this run: the new name when the init writes it, else the old one.
-pub fn core_log() -> &'static str {
-    if Path::new(&crate::state::host_path(CORE_LOG_NEW)).exists() { CORE_LOG_NEW } else { CORE_LOG }
-}
-pub const CORE_KIND: &str = "datad-crash";
+/// luyaz-core.init's log.
+pub const CORE_LOG: &str = "/tmp/luyaz-core.log";
+pub const CORE_KIND: &str = "core-crash";
 /// In the core's state dir (/data/luyaz/core).
 pub const MARKER: &str = "/data/luyaz/core/core.running";
 
@@ -176,13 +169,10 @@ impl Marker {
     }
 }
 
-/// Only the installed program (argv0 file name exactly `zwrt-datad` or `luyaz-core`) keeps a marker:
-/// a side-by-side `zwrt-datad.test` that a trial kills must not leave a crash for the next start.
+/// Only the installed program (argv0 file name exactly `luyaz-core`) keeps a marker: a
+/// side-by-side `luyaz-core.test` that a trial kills must not leave a crash for the next start.
 pub fn marks(argv0: &str) -> bool {
-    matches!(
-        Path::new(argv0).file_name().and_then(|n| n.to_str()),
-        Some("zwrt-datad" | "luyaz-core")
-    )
+    Path::new(argv0).file_name().and_then(|n| n.to_str()) == Some("luyaz-core")
 }
 
 // ── files ───────────────────────────────────────────────────────────────────
@@ -304,7 +294,7 @@ impl Files {
                 crate::paths::CORE,
                 CORE_KIND,
                 &describe(None),
-                core_log(),
+                CORE_LOG,
                 &tail(before_this_start(log_before), TAIL_LINES),
             );
         }
@@ -373,7 +363,7 @@ static MARK: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// First thing in serve mode.
 pub fn note_start() {
-    let _ = LOG_BEFORE.set(log_len_at_start(Path::new(&crate::state::host_path(core_log()))));
+    let _ = LOG_BEFORE.set(log_len_at_start(Path::new(&crate::state::host_path(CORE_LOG))));
 }
 
 /// Once both listeners are bound: the last run's crash, this run's marker, the watchers.

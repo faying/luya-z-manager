@@ -844,6 +844,43 @@ async fn chill_exit_abroad() {
     assert_eq!(r.len(), 1);
 }
 
+/// R7: a wedged chill.sh ends the job as an error at its deadline and frees the slot.
+#[tokio::test]
+async fn chill_job_times_out_and_frees_the_slot() {
+    let root = std::env::temp_dir().join(format!("u60d-ops-chill-hang-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let sh = root.join("data/chill/chill.sh");
+    fs::create_dir_all(sh.parent().unwrap()).unwrap();
+    fs::write(&sh, "#!/bin/sh
+[ \"$1\" = start ] && exit 0
+sleep 3600
+").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&sh, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let addr = start(
+        Compat::new(root.to_str().unwrap(), Sources::none())
+            .with_writes(true)
+            .with_chill_limit(Duration::from_millis(300)),
+    )
+    .await;
+    let t0 = std::time::Instant::now();
+    assert_eq!(call(addr, "POST", "/api/services/chill/disable", "").await.0, 200);
+    let j = loop {
+        let j = call(addr, "GET", "/api/services/chill/job", "").await.1["data"].clone();
+        if j["status"] != "running" {
+            break j;
+        }
+        assert!(t0.elapsed() < Duration::from_secs(3), "job never ended");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(j["status"], "error");
+    assert!(j["message"].as_str().unwrap().contains("timed out"), "{j}");
+    // the slot is free again
+    assert_eq!(call(addr, "POST", "/api/services/chill/enable", "").await.0, 200);
+}
+
 /// CHILL on/off/profile: chill.sh as a job, one at a time; abroad, off adds "switch it on when
 /// home", on drops it.
 #[tokio::test]
@@ -1226,7 +1263,7 @@ impl luyaz_esim::Host for Card {
             _ => Ok(Value::Null),
         }
     }
-    fn sh(&self, cmd: &str) -> String {
+    fn sh(&self, cmd: &str, _limit: std::time::Duration) -> String {
         if cmd.contains("get_sync_info") {
             return r#"{"noSyncModuleName":"sync success"}"#.into();
         }

@@ -94,8 +94,6 @@ pub struct Got {
     /// The newest good `entries` (newest first) and when it came.
     pub ok: Option<(Vec<Value>, SystemTime)>,
     pub err: Option<ReadErr>,
-    /// u60d does not know `journal.list` (no change log in this version).
-    pub old: bool,
     at: Option<Instant>,
     tried: Option<OpKey>,
     inflight: bool,
@@ -105,7 +103,6 @@ pub struct Got {
 static CACHE: Mutex<Got> = Mutex::new(Got {
     ok: None,
     err: None,
-    old: false,
     at: None,
     tried: None,
     inflight: false,
@@ -131,7 +128,7 @@ fn op_key(st: &St) -> OpKey {
 }
 
 /// `journal.list` from u60d (a read: no op_id, not journaled).
-async fn read_journal(app: &Shared) -> Result<Vec<Value>, (ReadErr, bool)> {
+async fn read_journal(app: &Shared) -> Result<Vec<Value>, ReadErr> {
     let body = json!({"action": "journal.list", "params": {"limit": LIMIT}, "source": "web"});
     let r = app
         .http
@@ -142,27 +139,23 @@ async fn read_journal(app: &Shared) -> Result<Vec<Value>, (ReadErr, bool)> {
         .await
         .map_err(|e| {
             if e.is_connect() {
-                (ReadErr::Unreachable, false)
+                ReadErr::Unreachable
             } else {
-                (ReadErr::NoReply, false)
+                ReadErr::NoReply
             }
         })?;
-    let v: Value = r.json().await.map_err(|_| (ReadErr::NoReply, false))?;
+    let v: Value = r.json().await.map_err(|_| ReadErr::NoReply)?;
     if v["ok"].as_bool() == Some(true) {
         return Ok(v["result"]["entries"]
             .as_array()
             .cloned()
             .unwrap_or_default());
     }
-    let old = v["error"]["code"].as_str() == Some("unknown_action");
-    Err((
-        ReadErr::Refused(
-            v["error"]["message"]
-                .as_str()
-                .unwrap_or("refused")
-                .to_owned(),
-        ),
-        old,
+    Err(ReadErr::Refused(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or("refused")
+            .to_owned(),
     ))
 }
 
@@ -178,16 +171,14 @@ pub async fn read_now(app: &Shared) -> Result<Vec<Value>, ReadErr> {
             Ok(e) => {
                 c.ok = Some((e.clone(), SystemTime::now()));
                 c.err = None;
-                c.old = false;
             }
-            Err((e, old)) => {
+            Err(e) => {
                 c.err = Some(e.clone());
-                c.old = *old;
             }
         }
     }
     let _ = app.kick.send(PATH);
-    r.map_err(|(e, _)| e)
+    r
 }
 
 /// The newest good change log (newest first), if any read has come back.
@@ -417,8 +408,6 @@ pub fn detail(e: &Value, l: Lang, stuck: bool, gone: bool) -> Detail {
 
 pub enum Main {
     Loading,
-    /// u60d without a change log.
-    Old,
     /// Never read: 「读不到改动记录 · 数据服务没响应」 + 重试.
     Failed,
     List {
@@ -450,7 +439,6 @@ impl View {
 /// it leaves the latest 50).
 pub fn view(got: &Got, want: &Want, snap: &mut Option<Value>, stuck: bool, l: Lang) -> View {
     let main = match &got.ok {
-        None if got.old => Main::Old,
         None if got.err.is_some() => Main::Failed,
         None => Main::Loading,
         Some((entries, at)) => {

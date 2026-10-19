@@ -505,7 +505,7 @@ mod tests {
         }
         // reopen: the table comes back from the segment, no names repeated
         let mut s = Store::open(&dir, 400, 1 << 20).unwrap();
-        assert_eq!(ids(&mut s, "agent", "datad"), (2, 3));
+        assert_eq!(ids(&mut s, "agent", "core"), (2, 3));
         // fill until it rotates: the new segment starts over at 0
         let mut rotated = false;
         for i in 0..40 {
@@ -522,7 +522,7 @@ mod tests {
         assert_eq!(dropped, 0);
         assert!(groups.len() >= 2);
         let first = segment_names(&groups[0]);
-        assert_eq!(&first[..4], &["mihomo", "tailscaled", "agent", "datad"]);
+        assert_eq!(&first[..4], &["mihomo", "tailscaled", "agent", "core"]);
         let last = groups.last().unwrap();
         let names = segment_names(last);
         let rec = last.iter().rev().find(|r| r.kind == 2).unwrap();

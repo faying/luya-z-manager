@@ -295,7 +295,7 @@ def counter_summary(selected, start, end, cell, max_discharge_ua=None):
 def hour_activity_summary(data, boot, start, end):
     """Fold new hour_proc counters using each metric's actual observed seconds.
 
-    Legacy cpu_datad is intentionally never used to fill these fields.
+    Legacy cpu_core is intentionally never used to fill these fields.
     """
     prefix = "".join(c for c in boot if c in "0123456789abcdefABCDEF")[:8]
     rows = [r for r in data if r.get("k") == "hour_proc" and r.get("boot") == prefix]

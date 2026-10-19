@@ -1,5 +1,5 @@
 //! luyaz-core's GET /v2/screen (src/screen_feed.c): the home signal card's and the status
-//! bar's conclusions, computed by datad from the snapshot the screen shows; read once per new
+//! bar's conclusions, computed by core from the snapshot the screen shows; read once per new
 //! snapshot (at most every 300 ms; after a failure every 5 s), and every 5 s anyway (a stuck
 //! executor never moves the snapshot, and exec_age_ms is how the screen sees that, E4).
 // SPDX-License-Identifier: MIT
@@ -45,7 +45,7 @@ pub struct ScreenFeed {
     behind_since: i64,
     version: u64,
     view_version: u64,
-    /// -1: not said (older datad)
+    /// -1: not said (older core)
     exec_age: i64,
     /// the reply's "op" (write transactions), "" if none
     op: String,
@@ -62,7 +62,7 @@ impl ScreenFeed {
             self.status = SF_FAILING;
             return false;
         };
-        // still enough with every *_en field (datad screen/tests.rs checks the worst case)
+        // still enough with every *_en field (core screen/tests.rs checks the worst case)
         let r = http::exchange(fd, req.as_bytes(), 16384, SF_IO_MS);
         if r.status == 404 {
             self.status = SF_OLD_DATAD;
@@ -88,7 +88,7 @@ impl ScreenFeed {
         changed
     }
 
-    /// Each refresh with datad's snapshot version. true = the view changed.
+    /// Each refresh with the core's snapshot version. true = the view changed.
     pub fn poll(&mut self, version: u64) -> bool {
         let t = mono_ms();
         let was = self.net().is_some();
@@ -120,7 +120,7 @@ impl ScreenFeed {
         changed || was != self.net().is_some()
     }
 
-    /// The latest view; None before the first good reply, while datad answers 404, or when
+    /// The latest view; None before the first good reply, while core answers 404, or when
     /// the snapshot moved on and fetching its view has failed for stale_ms.
     pub fn net(&self) -> Option<&net_view_t> {
         if !self.have {
@@ -207,7 +207,7 @@ mod tests {
         let mut s = ScreenFeed::new(SfCfg { port, gap_ms: 0, retry_ms: 0, stale_ms: 300, refresh_ms: 200 });
         assert!(s.net().is_none() && s.status() == SF_NONE);
 
-        // an old datad without /v2/screen
+        // an old core without /v2/screen
         let hits = Arc::new(AtomicUsize::new(0));
         let f = fake(port, 404, "", hits.clone());
         s.poll(1);
@@ -228,7 +228,7 @@ mod tests {
         assert!(hits.load(Ordering::SeqCst) == 2 && s.net().is_some());
         stop(f);
 
-        // datad gone, the snapshot moved on: the old view stays a while, then not
+        // core gone, the snapshot moved on: the old view stays a while, then not
         s.poll(3);
         assert!(s.net().is_some() && s.status() == SF_FAILING);
         std::thread::sleep(Duration::from_millis(400));
@@ -245,7 +245,7 @@ mod tests {
         s.poll(3);
         assert!(s.net().is_some());
 
-        // E4: exec_age_ms and op; an older datad sends neither
+        // E4: exec_age_ms and op; an older core sends neither
         assert!(s.exec_age() == -1 && !s.stuck() && s.op().is_empty());
         let f = fake(port, 200, r#","op":{"rollback_enabled":false,"active":null,"last":null},"exec_age_ms":250"#, hits.clone());
         hits.store(0, Ordering::SeqCst);

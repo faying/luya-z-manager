@@ -118,7 +118,7 @@ fn minute_summary() {
 }
 
 #[test]
-fn minute_with_datad_down() {
+fn minute_with_core_down() {
     let mut rec = Recorder::default();
     for k in 0..12 {
         let r = if k < 4 { rd(T0 + k * 5, &sa_state(-90), "ok", 0) } else { Reading::parse(T0 + k * 5, None, None, None) };
@@ -135,7 +135,7 @@ fn minute_with_datad_down() {
     let (ev, m) = rec.feed(&Reading::parse(T0 + 60, None, None, None));
     let m = m.unwrap();
     assert_eq!((m.n, m.verdict.as_str(), m.rat.as_str()), (0, "-", "none"));
-    // never had datad, so nothing was "lost"
+    // never had core, so nothing was "lost"
     assert!(ev.is_empty() && rec.events.is_empty());
 }
 
@@ -217,12 +217,12 @@ fn data_down_and_up_with_duration() {
     let (ev, _) = rec.feed(&rd(T0 + 5, &off, "nodata", 0));
     assert_eq!(kinds(&ev), ["data_down"]);
     rec.feed(&rd(T0 + 10, &off, "nodata", 0));
-    // datad gone for a bit: still compares with the last good reading
+    // core gone for a bit: still compares with the last good reading
     rec.feed(&Reading::parse(T0 + 15, None, None, None));
     let (ev, _) = rec.feed(&rd(T0 + 43, &sa_state(-90), "ok", 0));
-    assert_eq!(kinds(&ev), ["datad_back", "data_up"]);
+    assert_eq!(kinds(&ev), ["core_back", "data_up"]);
     assert_eq!(ev[1].data["down_s"], 38);
-    assert_eq!(kinds(&rec.events.iter().cloned().collect::<Vec<_>>()), ["data_down", "datad_lost", "datad_back", "data_up"]);
+    assert_eq!(kinds(&rec.events.iter().cloned().collect::<Vec<_>>()), ["data_down", "core_lost", "core_back", "data_up"]);
 }
 
 #[test]

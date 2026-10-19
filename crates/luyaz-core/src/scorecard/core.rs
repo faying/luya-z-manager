@@ -30,7 +30,7 @@ const G: [(&str, &str); 6] = [
     ("capture", "g_capture"),
     ("uidlog", "g_uidlog"),
     ("crashlog", "g_crashlog"),
-    ("datad", "g_datad"),
+    ("core", "g_core"),
 ];
 
 /// An hour line's coverage in the card's names; missing = down all the awake hour.

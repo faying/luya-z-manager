@@ -21,9 +21,71 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
-- scripts: doctor-legacy.sh labels its duplicate-instance checks like core 1.2.1.
-- scripts: `VERSION` is shipped to `/data/luyaz/scripts/` so the scripts' version can be read on the device.
-- scripts: ship's UI-trouble check matches the touch UI's crash line under both names (`u60pro-devui pid … ended:` and `luyaz-ui pid … ended:`). Ship this before sentinel 1.0.2.
+- touch: `start.sh` is retired; a touch ship carries only `luyaz-ui`. Ship scripts before the next touch ship (the executor still expects `start.sh` until then).
+- scripts: `web-auth.sh` reads only `LUYAZ_WEB_PASSWORD` (the `ZTE_AGENT_PASSWORD` fallback is gone; config-backup still rewrites it when restoring an old archive). `luyaz-recover.sh` never puts back the old-path core program or an rc.local starting `zwrt-datad`, whether or not `.migrated` is there (installed on the device 10-19 with `install-recover`).
+
+## lweb 1.2.3 — 2026-10-19
+
+- the USB page's fast-charging row keeps its hint ("plug a phone in first", "18 W fast charging…") while the capability is only unverified; the "unverified" note goes beside it. Since 1427ef5d9 the note replaced the hint.
+- reads only `LUYAZ_WEB_PASSWORD` from `/data/luyaz/web.env` (the old-key fallback is gone; the device file was rewritten in F7).
+
+## core 1.5.4 — 2026-10-19
+
+- external commands can no longer hang the core: eSIM probes, `simreset`, ubus and modem restart run with a deadline and are killed as a process group; `iw` station reads have a 2 s deadline and run one at a time (a busy read returns the last result); `chill.sh` calls time out (jobs 5 min, home-exit reload 60 s) and free the CHILL slot. See docs/designs/resilience-audit-2026-10-19.md.
+
+## scripts 1.0.3 — 2026-10-19
+
+- repo names follow the device (rename F7): `luyaz-ship.sh`, `luyaz-recover.sh`, `core-trial.sh`, `web-auth.sh` (was `agent-auth.sh`; the scripts component carries `web-auth.sh`). The password in `/data/luyaz/web.env` is `LUYAZ_WEB_PASSWORD`; `web-auth.sh`, the kit and config-backup still read `ZTE_AGENT_PASSWORD` when the new key is missing, and restoring an old archive writes the new key. The kit's payload directory is `scripts/` (was `guard/`).
+
+## touch 1.1.2 — 2026-10-19
+
+- internal names only: the data module talking to the core is `core_link` (was `datad`), the render scene `core-down` (was `datad-down`).
+
+## lweb 1.2.2 — 2026-10-19
+
+- reads the password as `LUYAZ_WEB_PASSWORD` from `/data/luyaz/web.env`, falling back to `ZTE_AGENT_PASSWORD` until the device file is rewritten.
+
+## sentinel 1.0.6 — 2026-10-19
+
+- the handover list names `core` instead of `datad` (the core reads neither: nothing changes in what it does).
+
+## core 1.5.3 — 2026-10-19
+
+- the last old names are gone (rename F7): the snapshot's version block is `core` (was `datad`), `/control` replies say `"busy":"core"` / `"core":"down"`, netwatch events `core_lost` / `core_back`. The long-term layer no longer writes `g_datad` (it always equalled `g_core`) and writes `cpu_core` (was `cpu_datad`); the scorecard reads only `g_core`, `cpu_core`, `core_degraded`, `rss_core`, `rss_ui`: the device's history files are rewritten to the new names after this ships.
+
+## scripts 1.0.2 — 2026-10-19
+
+- the ship executor, init, chaos, agent-auth, fallback and config-backup know only the new layout and component names (`core`; `datad`, `guard`, `uid`, `--convert`, `move-d4` are gone). The device manifest is rewritten to `core` before this ships.
+
+## lweb 1.2.1 — 2026-10-19
+
+- no fallback to `/data/zte-agent.env`.
+
+## sentinel 1.0.5 — 2026-10-19
+
+- no more `/tmp/luyaz/.migrated`, old log names or `comp=datad` ship transactions.
+
+## core 1.5.2 — 2026-10-19
+
+- only the current names are known (Luya-Z rename F5/6): the component is `core`, the program `luyaz-core`, settings in `/data/luyaz/core/core.env` (was `datad.env`). The standby ledger drops the retired `zte-agent` column; longterm no longer watches `u60-uid`, the old guard scripts or `datad_degraded`.
+
+## core 1.5.1 — 2026-10-19
+
+- doctor check ids use the current names: `core-http`, `web-http`, `dup-luyaz-core`, `dup-luyaz-ui` (were `datad-http`, `agent-http`, `dup-zwrt-datad`, `dup-u60pro-devui`). The core's own crash alert is `core-crash`; old `datad-crash` rows keep their label and SMS text (Luya-Z rename F4).
+- doctor no longer checks retired things: `svc-zte-agent`, `svc-zwrt-datad`, `svc-u60-guard`, `svc-u60-uid`, core-move, tmp-move, and the old process names. Alert labels and SMS texts for retired kinds (`agent-*`, `datad-degraded`) and the `datad-crash` alias are gone; old rows on the device are rewritten to `core-crash` when this ships.
+
+## scripts 1.0.1 — 2026-10-19
+
+- `doctor-legacy.sh` is deleted; `doctor.sh` only runs the core's doctor.
+- doctor-legacy.sh uses the same new check ids as the core; `chaos.sh` expects `core-crash`.
+- the install kit no longer puts `start.sh` or its rc.local hook on the device and retires `/data/plugins/u60pro-devui/` (stock UI backup → `/data/luyaz/ui/vendor-devui.orig-backup` after an md5 check, boot trace along).
+- doctor-legacy.sh labels its duplicate-instance checks like core 1.2.1.
+- `VERSION` is shipped to `/data/luyaz/scripts/` so the scripts' version can be read on the device.
+- ship's UI-trouble check matches the touch UI's crash line under both names (`u60pro-devui pid … ended:` and `luyaz-ui pid … ended:`). Ship this before sentinel 1.0.2.
+
+## sentinel 1.0.4 — 2026-10-19
+
+- writes the boot trace itself (`/data/luyaz/ui/boot-trace.log`, same format as `start.sh prep`) and no longer runs `/data/plugins/u60pro-devui/start.sh`.
 
 ## sentinel 1.0.3 — 2026-10-18
 

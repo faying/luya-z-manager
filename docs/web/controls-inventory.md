@@ -68,7 +68,7 @@
 | 顶栏状态条·短信图标 + 未读角标 | `/api/public/status` | `sms.unread` | 10000 | 是：public.rs:107 容量查询失败时未读数为 0 |
 | 顶栏页面标题 | 无（按当前路由查 NAV 的 `tKey`） | — | — | — |
 | 顶栏 agent 地址（`host:port`，小屏隐藏） | 无（`getApiBase()`，localStorage `u60.agent_url` 或同源） | — | — | — |
-| 事务横条（E4 T9，2026-10-03 加）：进行中「正在确认 · 1:42」（倒计时 aria-hidden），≥640 带「制式 · 自动 → 只用 4G · 触屏」；结束后结果常驻到「知道了」（3 秒类只在本页亲眼看到结束时显示）；退回也没通 role=alert；datad 卡住「数据服务没响应」；进行中掉线「和设备断开了 · 操作结果未知」。在该项自己的页不显示 | `/api/ops` | `op.active/last`（文字全是 datad 的 `say/what/old/target/source_zh/_en`）、`datad`、`supported` | 进行中 2000，否则 5000；断线时每 3 秒重试 | 否（agent 透传 datad 的 op 块） |
+| 事务横条（E4 T9，2026-10-03 加）：进行中「正在确认 · 1:42」（倒计时 aria-hidden），≥640 带「制式 · 自动 → 只用 4G · 触屏」；结束后结果常驻到「知道了」（3 秒类只在本页亲眼看到结束时显示）；退回也没通 role=alert；核心卡住「数据服务没响应」；进行中掉线「和设备断开了 · 操作结果未知」。在该项自己的页不显示 | `/api/ops` | `op.active/last`（文字全是核心的 `say/what/old/target/source_zh/_en`）、`core`、`supported` | 进行中 2000，否则 5000；断线时每 3 秒重试 | 否（agent 透传核心的 op 块） |
 | 告警横幅：「N 条新告警」+ 最新一条种类 + 正文 + 短信状态提示（「短信告警未配置。」/「上一条告警短信发送失败。」） | `/api/alerts` | `unread`、`events[].unread/kind/text`、`sms.configured`、`sms.recent[0].result`；在 `/alerts` 页不显示 | 30000 | 否（alerts.rs:262 读本地文件） |
 
 #### 控件
@@ -156,7 +156,7 @@
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
 | 服务卡「短信」行（整行链接到 `/sms`） | link「N 条未读」/「无」 〔现名：link「N 条未读短信」（首页头部的短信角标链接；原服务卡「短信」行）〕 | 无（导航） | — | — | 无 | —（本地） |
-| 状态块「查原因 →」（2026-10-02 加：datad 结论 `network.verdict` 是 limit/weak/noise/crowd/narrow/nodata/stall 时；没有结论的旧后台按网页自己的信号弱/无服务） | link「查原因 →」 〔交互后：结论异常时；场景 weak〕 | 无（导航到 `/tools/diagnose?start=1`，那里开始检查） | — | — | 无 | —（本地） |
+| 状态块「查原因 →」（2026-10-02 加：核心结论 `network.verdict` 是 limit/weak/noise/crowd/narrow/nodata/stall 时；没有结论的旧后台按网页自己的信号弱/无服务） | link「查原因 →」 〔交互后：结论异常时；场景 weak〕 | 无（导航到 `/tools/diagnose?start=1`，那里开始检查） | — | — | 无 | —（本地） |
 | 状态块「已注册不通」一句 +「看证据 →」（2026-10-17 T6：核心 `network.finding`，只有「确定」档；优先于「查原因 →」） | link「看证据 →」 〔交互后：场景 finding〕 | 无（导航到 `/tools/diagnose`，不自动开始检查） | — | — | 无 | —（本地） |
 
 首页没有任何写操作。
@@ -209,13 +209,13 @@
 
 页面**不读取当前锁频配置**：NR/LTE 勾选框初始全不选，与设备上实际锁定的频段无关。
 
-2026-10-03（E4 T9c）起：agent 加了 GET `/api/cell/band/lock`（uci `zte_nwinfo.band_lock.*` 当前锁定 + `zwrt_zte_nwinfo.default_band_lock.*` 恢复默认后的全集，都是逗号分隔的频段号，没有就是 null）。页面多一行「锁定的频段」（`SA n… · NSA n… · LTE B…`，等于默认时写「没锁（全部频段）」），三个写之后都按它读回（每 2 秒一次、最多 5 次，按集合比）；固件没有这些项时照旧「设备已接受」。固件是不是马上更新这些 uci 项，T12 上机时看。datad 卡住时三个写都不能点。
+2026-10-03（E4 T9c）起：agent 加了 GET `/api/cell/band/lock`（uci `zte_nwinfo.band_lock.*` 当前锁定 + `zwrt_zte_nwinfo.default_band_lock.*` 恢复默认后的全集，都是逗号分隔的频段号，没有就是 null）。页面多一行「锁定的频段」（`SA n… · NSA n… · LTE B…`，等于默认时写「没锁（全部频段）」），三个写之后都按它读回（每 2 秒一次、最多 5 次，按集合比）；固件没有这些项时照旧「设备已接受」。固件是不是马上更新这些 uci 项，T12 上机时看。核心卡住时三个写都不能点。
 
 #### 控件
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| 「重置 / 全部解锁」（页头，红色） | button「重置 / 全部解锁」 | POST `/api/cell/band/reset`（无请求体；T7a 起经 datad `band.reset` = `nwinfo_reset_band_cell_setting`，小区锁定也一起去掉，D22） | 1 | `/api/cell/band/lock` 每项等于默认（T9c） | 「频段和小区锁一起恢复：所有频段锁定和小区锁定都会去掉，设备改回自动选择。」 | 三 |
+| 「重置 / 全部解锁」（页头，红色） | button「重置 / 全部解锁」 | POST `/api/cell/band/reset`（无请求体；T7a 起经核心 `band.reset` = `nwinfo_reset_band_cell_setting`，小区锁定也一起去掉，D22） | 1 | `/api/cell/band/lock` 每项等于默认（T9c） | 「频段和小区锁一起恢复：所有频段锁定和小区锁定都会去掉，设备改回自动选择。」 | 三 |
 | NR 模式单选「NSA」/「SA」 | radio「NSA」、radio「SA」 | 无——**选了也不影响提交**：`applyNR` 固定先发 nsa 再发 sa，`nrMode` 没被用到 | — | — | 无 | —（本地） |
 | NR 频段勾选框 n1 n3 n5 n7 n8 n28 n38 n40 n41 n66 n71 n77 n78 n79（14 个） | checkbox「n1」…「n79」 〔现名：button「n1」「n79」（toolbar「NR (5G) 频段」里的开关按钮，aria-pressed）〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 「应用 NR 锁定」（未选时禁用） | button「应用 NR 锁定」 | POST `/api/cell/band/nr` `{nr5g_type, nr5g_band:"78,41"}`（去掉 n 前缀逗号拼接；ubus `nwinfo_set_nrbandlock`） | **2 步**：① `{nr5g_type:"nsa", nr5g_band}` ② `{nr5g_type:"sa", nr5g_band}`；第 ① 步成功第 ② 步失败时 NSA 已锁、SA 没锁，页面只报错不回滚 | `/api/cell/band/lock` 的 `nr_sa`/`nr_nsa` = 所选（按范围，T9c） | 无 | 三（锁频） |
@@ -407,7 +407,7 @@
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| 「全部解锁」（页头，红色） | button「全部解锁」 | POST `/api/cell/lock/reset`（经 datad `band.reset` = `nwinfo_reset_band_cell_setting`，频段锁定也一起恢复，D22） | 1 | 无读回（固件没有可读的小区锁定状态；驻留小区的 PCI 取决于覆盖，不能当读回，T9c 定）；间接看 `/api/network/signal` 的驻留小区 | 「频段和小区锁一起恢复：所有小区锁定和频段锁定都会去掉。」 | 三 |
+| 「全部解锁」（页头，红色） | button「全部解锁」 | POST `/api/cell/lock/reset`（经核心 `band.reset` = `nwinfo_reset_band_cell_setting`，频段锁定也一起恢复，D22） | 1 | 无读回（固件没有可读的小区锁定状态；驻留小区的 PCI 取决于覆盖，不能当读回，T9c 定）；间接看 `/api/network/signal` 的驻留小区 | 「频段和小区锁一起恢复：所有小区锁定和频段锁定都会去掉。」 | 三 |
 | NR·PCI * 输入框 | 无（label 未关联）；建议 textbox「NR PCI」 | 无（草稿） | — | — | 无 | —（本地） |
 | NR·EARFCN * 输入框 | 无；建议 textbox「NR EARFCN」 | 无（草稿） | — | — | 无 | —（本地） |
 | NR·频段（可选）输入框 | 无；建议 textbox「NR 频段」 〔现名：textbox「NR 频段（可选）」〕 | 无（草稿） | — | — | 无 | —（本地） |
@@ -449,11 +449,11 @@
 | 「应用」 | button「应用」 | PUT `/api/device/charge-control` `{charge_limit_enabled, charge_limit, hysteresis}` | 1 | 返回体就是重读的状态；GET `/api/device/charge-control` `charge_limit_enabled/charge_limit/hysteresis` | 无 | 二 |
 | 省电模式开关 | switch「开」/「关」（随状态变）；建议 switch「省电模式」 | PUT `/api/device/power-save` `{deviceInfoList:[{power_saver_mode:"1"/"0"}]}`（ubus `set_device_info`） | 1（先乐观翻转，失败再翻回） | POST `/api/device/power-save` 读 `power_saver_mode` | 无 | 二 |
 | 快速启动开关 | switch「开」/「关」（随状态变）；建议 switch「快速启动」 | PUT `/api/device/fast-boot` `{fast_boot:"1"/"0"}` | 1（乐观翻转） | `/api/device/fast-boot` `fast_boot` | 无 | 二 |
-| 「停止充电」开关（10-04 审计 C） | switch「停止充电」 | PUT `/api/device/charge-control` `{charging_stopped}` → datad `power.direct_supply.set`（切断充电输入、改用电池供电） | 1 | GET `/api/device/charge-control` `charging_stopped` | 页内确认，写明「插着电电量也会往下掉」 | 二 |
+| 「停止充电」开关（10-04 审计 C） | switch「停止充电」 | PUT `/api/device/charge-control` `{charging_stopped}` → core `power.direct_supply.set`（切断充电输入、改用电池供电） | 1 | GET `/api/device/charge-control` `charging_stopped` | 页内确认，写明「插着电电量也会往下掉」 | 二 |
 | 「重启设备」 | button「重启设备」 | 无（进入确认态） | — | — | 无 | —（本地） |
 | 「确认重启」 | button「确认重启」 〔交互后：确认改为对话框；点 button「重启设备」〕 | POST `/api/device/reboot`（ubus `system reboot`） | 1 | 无读回（设备断线；可观察 `/api/device/system` `uptime` 变小） | 自定义确认（非 window.confirm）：「路由器将重启并暂时无法连接。」 | 三（重启） |
 | 重启确认态「取消」 | button「取消」 〔交互后：确认对话框里；点 button「重启设备」〕 | 无 | — | — | 无 | —（本地） |
-| 「关机」（10-04 审计 C） | button「关机」 → 对话框 button「关机」 | POST `/api/device/poweroff` → datad `device.poweroff`（没有退路直调） | 1 | 无读回（设备关了，不等它回来） | 对话框写「只能在设备上长按电源键开机，这里和远程都开不了」 | 三；定时任务禁止调用 |
+| 「关机」（10-04 审计 C） | button「关机」 → 对话框 button「关机」 | POST `/api/device/poweroff` → core `device.poweroff`（没有退路直调） | 1 | 无读回（设备关了，不等它回来） | 对话框写「只能在设备上长按电源键开机，这里和远程都开不了」 | 三；定时任务禁止调用 |
 | 「恢复出厂设置」 | button「恢复出厂设置」 | 无（进入第一段确认） | — | — | 无 | —（本地） |
 | 「确定」（第一段） | button「确定」 〔现名：textbox「{前}恢复出厂{后}」（两段确认合成一个对话框：第一段「确定」换成输入确认词「恢复出厂」）〕〔交互后：点 button「恢复出厂设置」〕 | 无（进入第二段确认） | — | — | 自定义确认：「这将清除所有设置。确定吗？」 | —（本地） |
 | 「立即重置」（第二段） | button「立即重置」 〔交互后：确认对话框里，输入确认词前是禁用的；点 button「恢复出厂设置」〕 | POST `/api/device/factory-reset`（ubus `zwrt_bsp.power factory_reset`） | 1 | 无读回 | 自定义两段确认：「这将清除所有设置。确定吗？」→「最终确认——此操作无法撤销。」 | 三（恢复出厂） |
@@ -673,14 +673,14 @@
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
 | 模式单选 6 项，顺序和名字照原厂网页（`/usr/zte_web/web/js/config/ufi/U60Pro/config.js` 的 `AUTO_MODES`）：「5G/4G/3G（自动）」「只用 5G NSA」「只用 5G SA」「4G/3G」「只用 4G」「只用 3G」（值 `WL_AND_5G` / `LTE_AND_5G` / `Only_5G` / `WCDMA_AND_LTE` / `Only_LTE` / `Only_WCDMA`，与原厂相同；原来的 `auto_select`、`5G_only` 这类值模组不认） | radio，名称=标签 〔现名：radio「5G/4G/3G（自动）」「只用 5G NSA」「只用 5G SA」「4G/3G」「只用 4G」「只用 3G」（名称只用标签）〕 | 无（草稿） | — | — | 无 | —（本地） |
-| 「应用」（未改动时禁用；datad 卡住时选项也不能点） | button「应用」 | PUT `/api/modem/network-mode` `{net_select}`（agent 只收固件的 14 个值，其他回 400；经 datad `network.set_mode`。确认弹窗里「只用 5G SA」「只用 3G」另有一段加粗的国外提醒：很多国家没有 SA / 已关 3G，设备又没有 2G；新 datad 自动退回没开时加「自动退回没开：没通也会保持。」） | 1 个写请求；旧 datad：之后每 2 秒 GET `/api/network/signal` 最多 5 次确认；新 datad（`/api/ops` `supported`）：不自己读回，交给事务 | 旧 datad：`/api/network/signal` `net_select` = 所选值；新 datad：事务状态块（datad 按读数确认，可能自动退回） | 无 | 三（选网方式） |
-| 事务状态块「退回 X」（E4 T9，进行中、datad 说能退回时；第一下展开后果「马上改回「X」，会重新注册，断网几十秒」，第二下才发） | button「退回自动」 〔交互后：有进行中的改动时〕 | POST `/api/ops/act` `{act:"revert", op_id}` → datad `op.revert`（来源 web） | 1 | `/api/ops` 的 `op.last` | 页内两段（ConfirmInline） | 二 |
+| 「应用」（未改动时禁用；core 卡住时选项也不能点） | button「应用」 | PUT `/api/modem/network-mode` `{net_select}`（agent 只收固件的 14 个值，其他回 400；经 core `network.set_mode`。确认弹窗里「只用 5G SA」「只用 3G」另有一段加粗的国外提醒：很多国家没有 SA / 已关 3G，设备又没有 2G；新 core 自动退回没开时加「自动退回没开：没通也会保持。」） | 1 个写请求；旧 core：之后每 2 秒 GET `/api/network/signal` 最多 5 次确认；新 core（`/api/ops` `supported`）：不自己读回，交给事务 | 旧 core：`/api/network/signal` `net_select` = 所选值；新 core：事务状态块（core 按读数确认，可能自动退回） | 无 | 三（选网方式） |
+| 事务状态块「退回 X」（E4 T9，进行中、核心说能退回时；第一下展开后果「马上改回「X」，会重新注册，断网几十秒」，第二下才发） | button「退回自动」 〔交互后：有进行中的改动时〕 | POST `/api/ops/act` `{act:"revert", op_id}` → core `op.revert`（来源 web） | 1 | `/api/ops` 的 `op.last` | 页内两段（ConfirmInline） | 二 |
 | 事务状态块「保留 Y」（同上；后果「不再自动退回；还没确认通，没网要你自己改回去」；同一时刻只开一个确认，设备先到点就作废） | button「保留只用 …」 〔交互后：有进行中的改动时〕 | POST `/api/ops/act` `{act:"keep", op_id}` | 1 | 同上 | 页内两段 | 二 |
-| 事务结果「知道了」（常驻类结果；触屏和网页一起收起） | button「知道了」 〔交互后：有没点「知道了」的结果时〕 | POST `/api/ops/act` `{act:"ack", op_id}` → datad `op.ack`（只记账） | 1 | `op.last.acked` | 无 | 一 |
-| 「自动退回已打开」一次性提示的「知道了」（顶部横条，DD18；没有进行中的改动和要显示的结果时才出；触屏和网页点一次都算） | button「知道了」 〔交互后：`op.notice` 是 `rollback_on` 时〕 | POST `/api/ops/act` `{act:"notice_ack"}` → datad `op.notice_ack`（来源 web，只记账） | 1 | `op.notice` 消失 | 无 | 一 |
-| 「再试一次退回到 X」（退回也没通时，DD9） | button「再试一次退回到自动」 〔交互后：退回也没通时〕 | POST `/api/ops/write` `{op_id, request:{action:"network.set_mode", params:{mode: rollback_to}}}`（直接发给 datad，用 datad 自己的取值，`NETWORK_auto` 也行） | 1 | 新事务 | 页内两段 | 二 |
+| 事务结果「知道了」（常驻类结果；触屏和网页一起收起） | button「知道了」 〔交互后：有没点「知道了」的结果时〕 | POST `/api/ops/act` `{act:"ack", op_id}` → core `op.ack`（只记账） | 1 | `op.last.acked` | 无 | 一 |
+| 「自动退回已打开」一次性提示的「知道了」（顶部横条，DD18；没有进行中的改动和要显示的结果时才出；触屏和网页点一次都算） | button「知道了」 〔交互后：`op.notice` 是 `rollback_on` 时〕 | POST `/api/ops/act` `{act:"notice_ack"}` → core `op.notice_ack`（来源 web，只记账） | 1 | `op.notice` 消失 | 无 | 一 |
+| 「再试一次退回到 X」（退回也没通时，DD9） | button「再试一次退回到自动」 〔交互后：退回也没通时〕 | POST `/api/ops/write` `{op_id, request:{action:"network.set_mode", params:{mode: rollback_to}}}`（直接发给核心，用核心自己的取值，`NETWORK_auto` 也行） | 1 | 新事务 | 页内两段 | 二 |
 | 「重启设备」（退回也没通 / 没切成时，DD9/DD17） | button「重启设备」 〔交互后：退回也没通或没切成时〕 | POST `/api/device/reboot`（同设备控制页） | 1 | uptime 变小 | 页内两段 | 二 |
-| 「上次改动 10-03 14:32 · 触屏 ›」（DD5） | link「上次改动 …」 〔交互后：新 datad 且这一项被改过〕 | 无（导航到 `/changes/?op=<op_id>`；数据 `/api/ops/journal` 的 `owners["network.mode"]`） | — | — | 无 | —（本地） |
+| 「上次改动 10-03 14:32 · 触屏 ›」（DD5） | link「上次改动 …」 〔交互后：新核心且这一项被改过〕 | 无（导航到 `/changes/?op=<op_id>`；数据 `/api/ops/journal` 的 `owners["network.mode"]`） | — | — | 无 | —（本地） |
 
 写接口假成功风险：否·透传（modem_ext.rs `modem_network_mode_set`，先校验取值），但页面有自己的读回轮询。
 
@@ -1050,8 +1050,8 @@
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| Wi-Fi 节能开关 | switch「Wi-Fi 节能」 | PUT `/api/wifi/power-save` `{enabled}` → datad `wifi.power_save`（hotplug 脚本 + wlan0–3 iw，读回） | 1 | GET `/api/wifi/power-save` `enabled`（Wi-Fi 开着读 iw，关着读存的选择） | 无（不断网） | 一 |
-| NFC 碰一碰开关 | switch「NFC 碰一碰」 | PUT `/api/nfc` `{enabled}` → datad `nfc.set {enabled, flag:2}` | 1 | GET `/api/nfc` `enabled` | 无 | 一 |
+| Wi-Fi 节能开关 | switch「Wi-Fi 节能」 | PUT `/api/wifi/power-save` `{enabled}` → core `wifi.power_save`（hotplug 脚本 + wlan0–3 iw，读回） | 1 | GET `/api/wifi/power-save` `enabled`（Wi-Fi 开着读 iw，关着读存的选择） | 无（不断网） | 一 |
+| NFC 碰一碰开关 | switch「NFC 碰一碰」 | PUT `/api/nfc` `{enabled}` → core `nfc.set {enabled, flag:2}` | 1 | GET `/api/nfc` `enabled` | 无 | 一 |
 
 旧 agent 两个接口都是 404：这一组不出现。
 
@@ -1580,7 +1580,7 @@
 | 快速充电宝开关 | switch「快速充电宝」 | PUT `/api/usb/powerbank` `{state:1/0}`（ubus `zwrt_bsp.powerbank set`，= 原厂插线弹窗的「快速充电宝」；10-07 起没插设备（`typec_cc` = `no_cc`）时禁用并说明） | 1 | `/api/device/charger` `otg_powerbank_state` | 行内确认 | 二 |
 | 模式按钮「DEBUG」「MTP」「RNDIS」 | button「DEBUG」「MTP」「RNDIS」（当前模式只靠样式，无 `aria-pressed`） 〔现名：radio「DEBUG」「MTP」「RNDIS」〕 | PUT `/api/usb/mode` `{mode:"debug"/"mtp"/"rndis"}`（`mode_settable:false` 时整组禁用并说明，PUT 回 501；国行 B31 就是这样） | 1 | `/api/usb/status` `mode` | 「将 USB 模式更改为“{模式}”？这将断开当前会话。」 | 三（USB 模式；选 DEBUG 等同开 ADB） |
 
-「充电宝开关」10-07 改名「快速充电宝」：调用就是原厂弹窗的快充，只在插着手机时有效（10-07 实测手机显示快充），拔线后固件自己回 0；关（state 0）的效果没实测过。「充电 + 上网」只在触屏上选（datad `usb.attach_mode`）。
+「充电宝开关」10-07 改名「快速充电宝」：调用就是原厂弹窗的快充，只在插着手机时有效（10-07 实测手机显示快充），拔线后固件自己回 0；关（state 0）的效果没实测过。「充电 + 上网」只在触屏上选（核心 `usb.attach_mode`）。
 
 写接口假成功风险：两者都是「否·透传」（usb.rs:13-33）。
 
@@ -1588,7 +1588,7 @@
 
 ## /changes 改动记录
 
-文件：`app/(panel)/changes/page.tsx`（E4 T9b，2026-10-03 加；设计 docs/designs/write-op-layer.md DD5、DD10、DD11）。文字全是 datad 的（`journal.list`，STATE_V2.md V2-41）。旧 datad（`/api/ops` 没有 `supported`）写「这版数据服务还没有改动记录」，不去读。
+文件：`app/(panel)/changes/page.tsx`（E4 T9b，2026-10-03 加；设计 docs/designs/write-op-layer.md DD5、DD10、DD11）。文字全是核心的（`journal.list`，STATE_V2.md V2-41）。旧核心（`/api/ops` 没有 `supported`）写「这版数据服务还没有改动记录」，不去读。
 
 #### 数据项
 
@@ -1604,9 +1604,9 @@
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| 列表行（点开详情） | button，名称=两行文字 〔交互后：新 datad 有记录时〕 | 无（本页内切到详情，网址加 `?op=`） | — | — | 无 | —（本地） |
+| 列表行（点开详情） | button，名称=两行文字 〔交互后：新核心有记录时〕 | 无（本页内切到详情，网址加 `?op=`） | — | — | 无 | —（本地） |
 | 详情「‹ 改动记录」 | button「‹ 改动记录」 〔交互后：打开一条详情〕 | 无 | — | — | 无 | —（本地） |
-| 详情「撤销」/「重做」（datad 说能撤才可点；会断蜂窝的网络模式用第三档弹窗，其他第二档；发出后旧网页回到列表、结果由事务横条接着显示；luyaz-web 停在这条的详情里显示结果（10-12 用户定，结果不会在跳页时丢） | button「撤销」 〔交互后：打开一条事务的详情〕 | POST `/api/ops/write` `{op_id, request: undo_view.request}`（`undo:true`，agent 加来源 web，只认描述表的动作） | 1 | 新事务（`/api/ops`） | 三（网络模式）/ 二 | 三 / 二 |
+| 详情「撤销」/「重做」（核心说能撤才可点；会断蜂窝的网络模式用第三档弹窗，其他第二档；发出后旧网页回到列表、结果由事务横条接着显示；luyaz-web 停在这条的详情里显示结果（10-12 用户定，结果不会在跳页时丢） | button「撤销」 〔交互后：打开一条事务的详情〕 | POST `/api/ops/write` `{op_id, request: undo_view.request}`（`undo:true`，agent 加来源 web，只认描述表的动作） | 1 | 新事务（`/api/ops`） | 三（网络模式）/ 二 | 三 / 二 |
 
 ---
 

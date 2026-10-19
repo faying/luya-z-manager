@@ -1,8 +1,8 @@
 // The write-op layer (E4 T9): GET /api/ops, POST /api/ops/act, POST
-// /api/ops/write, GET /api/ops/journal. Shapes copied from datad's real view
+// /api/ops/write, GET /api/ops/journal. Shapes copied from the core's real view
 // (STATE_V2.md §12; touch-ui tests/op_view_test.c) and journal (V2-41).
 //
-// Off by default ("supported": false, like an older datad) so the network-mode
+// Off by default ("supported": false, like an older core) so the network-mode
 // page keeps its own readback in the other specs. Tests pick a state with
 // GET /__mock/ops?set=<preset> (server.ts); the same reply lists what the
 // page sent (`acts`, `writes`).
@@ -73,22 +73,22 @@ const verifying = (opId: string, rollback = true): Json =>
 
 const result = (opId: string, o: Json): Json => base({ op_id: opId, acked: false, needs_ack: true, ...o });
 
-const PRESETS: Record<string, () => { supported: boolean; datad: string; op: Json | null }> = {
-  off: () => ({ supported: false, datad: "up", op: null }),
-  idle: () => ({ supported: true, datad: "up", op: { rollback_enabled: true, active: null, last: null } }),
-  "idle-rollback-off": () => ({ supported: true, datad: "up", op: { rollback_enabled: false, active: null, last: null } }),
+const PRESETS: Record<string, () => { supported: boolean; core: string; op: Json | null }> = {
+  off: () => ({ supported: false, core: "up", op: null }),
+  idle: () => ({ supported: true, core: "up", op: { rollback_enabled: true, active: null, last: null } }),
+  "idle-rollback-off": () => ({ supported: true, core: "up", op: { rollback_enabled: false, active: null, last: null } }),
   // auto revert just switched on, nobody pressed "Got it" yet (DD18)
-  notice: () => ({ supported: true, datad: "up", op: { rollback_enabled: true, active: null, last: null, notice: "rollback_on" } }),
+  notice: () => ({ supported: true, core: "up", op: { rollback_enabled: true, active: null, last: null, notice: "rollback_on" } }),
   // started on the touch screen: the web shows it too (DD14: source 触屏)
   verifying: () => ({
     supported: true,
-    datad: "up",
+    core: "up",
     op: { rollback_enabled: true, active: { ...verifying("screen-12-3"), source: "screen", source_zh: "触屏", source_en: "Screen" }, last: null },
   }),
-  "rollback-off": () => ({ supported: true, datad: "up", op: { rollback_enabled: false, active: verifying("screen-12-4", false), last: null } }),
+  "rollback-off": () => ({ supported: true, core: "up", op: { rollback_enabled: false, active: verifying("screen-12-4", false), last: null } }),
   sticky: () => ({
     supported: true,
-    datad: "up",
+    core: "up",
     op: {
       rollback_enabled: true,
       active: null,
@@ -105,7 +105,7 @@ const PRESETS: Record<string, () => { supported: boolean; datad: string; op: Jso
   }),
   "rollback-failed": () => ({
     supported: true,
-    datad: "up",
+    core: "up",
     op: {
       rollback_enabled: true,
       active: null,
@@ -124,7 +124,7 @@ const PRESETS: Record<string, () => { supported: boolean; datad: string; op: Jso
   }),
   "not-applied": () => ({
     supported: true,
-    datad: "up",
+    core: "up",
     op: {
       rollback_enabled: true,
       active: null,
@@ -139,10 +139,10 @@ const PRESETS: Record<string, () => { supported: boolean; datad: string; op: Jso
       }),
     },
   }),
-  stuck: () => ({ supported: true, datad: "stuck", op: { rollback_enabled: true, active: verifying("screen-12-5"), last: null } }),
+  stuck: () => ({ supported: true, core: "stuck", op: { rollback_enabled: true, active: verifying("screen-12-5"), last: null } }),
 };
 
-// journal.list as datad words it (V2-41): newest first, one row per kind
+// journal.list as core words it (V2-41): newest first, one row per kind
 const ENTRIES: Json[] = [
   { source: "screen", action: "op.ack", result: "ok", hide: true, what_zh: "op.ack", what_en: "op.ack" },
   {
@@ -178,7 +178,7 @@ const OWNERS: Json = {
 };
 let journal: "full" | "empty" | "down" = "full";
 let entries: Json[] = ENTRIES.slice();
-/** The vendor call errors after datad started the transaction (503 + op). */
+/** The vendor call errors after core started the transaction (503 + op). */
 let applyFails = false;
 
 let state = PRESETS.off();
@@ -199,7 +199,7 @@ export function mockOps(set: string | null): { ok: boolean; error?: string; data
         },
         ...entries,
       ];
-      return { ok: true, data: { supported: state.supported, datad: state.datad, acts, writes } };
+      return { ok: true, data: { supported: state.supported, core: state.core, acts, writes } };
     }
     entries = ENTRIES.slice();
     applyFails = set === "idle-apply-fails";
@@ -207,14 +207,14 @@ export function mockOps(set: string | null): { ok: boolean; error?: string; data
       state = PRESETS.idle();
       acts = [];
       writes = [];
-      return { ok: true, data: { supported: true, datad: "up", acts, writes } };
+      return { ok: true, data: { supported: true, core: "up", acts, writes } };
     }
     if (set === "journal-empty" || set === "journal-down") {
       state = PRESETS.idle();
       journal = set === "journal-empty" ? "empty" : "down";
       acts = [];
       writes = [];
-      return { ok: true, data: { supported: true, datad: "up", acts, writes } };
+      return { ok: true, data: { supported: true, core: "up", acts, writes } };
     }
     journal = "full";
     const p = PRESETS[set];
@@ -223,7 +223,7 @@ export function mockOps(set: string | null): { ok: boolean; error?: string; data
     acts = [];
     writes = [];
   }
-  return { ok: true, data: { supported: state.supported, datad: state.datad, acts, writes } };
+  return { ok: true, data: { supported: state.supported, core: state.core, acts, writes } };
 }
 
 /** Network mode written while the layer is on: a transaction starts (modem.ts). */
@@ -244,7 +244,7 @@ export const routes: Route[] = [
   {
     method: "GET",
     path: "/api/ops",
-    handler: () => ok({ op: state.op, datad: state.datad, stalled: state.datad === "stuck", supported: state.supported }),
+    handler: () => ok({ op: state.op, core: state.core, stalled: state.core === "stuck", supported: state.supported }),
   },
   {
     method: "POST",

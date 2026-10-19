@@ -1,13 +1,12 @@
-//! Serve mode: u60d in place of zwrt-datad (u60 platform Phase 3). This is datad's `main.rs`
-//! (data-service `68416eb`) with the same `Args`, ports, pid file and data directory, so the
-//! binary can sit at `/data/plugins/zwrt-datad/zwrt-datad` under the existing init script.
+//! Serve mode: the core's server (u60 platform Phase 3). This started as the old data service's
+//! `main.rs` (data-service `68416eb`) with the same `Args` and ports.
 //!
-//!   u60d serve <zwrt-datad arguments>
-//!   zwrt-datad* <zwrt-datad arguments>     (argv[0]'s file name starts with `zwrt-datad`)
+//!   luyaz-core serve <arguments>
+//!   luyaz-core* <arguments>     (argv[0]'s file name starts with `luyaz-core`)
 //!
-//! Differences against datad's `main.rs`, all deliberate (PORTING.md):
+//! Differences against data-service's `main.rs`, all deliberate (PORTING.md):
 //! - a `current_thread` runtime (built in `main.rs`), not `#[tokio::main]` multi-thread;
-//! - the SMS session key is registered (`state::SMS_SESSION`), like datad;
+//! - the SMS session key is registered (`state::SMS_SESSION`), like data-service;
 //! - `--version` prints u60d's version.
 
 use crate::{model, server, server::App, ubus};
@@ -25,7 +24,7 @@ fn validate_listener_security(addr: SocketAddr, require_auth: bool) -> Result<()
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "zwrt-datad", version = env!("CARGO_PKG_VERSION"))]
+#[command(name = "luyaz-core", version = env!("CARGO_PKG_VERSION"))]
 struct Args {
     #[arg(long)]
     once: bool,
@@ -51,13 +50,13 @@ struct Args {
 }
 
 /// 构建标记：给打包脚本认「这是 Luya-Z 核心、不带外部更新源」用
-/// （onboard/build-kit.sh、tools/luyaz、u60-ship.sh 用 `grep -a` 查；D3 前叫 `ZWRT_DATAD_FORK_RUST_SELF_CONTAINED`：
-/// tools/luyaz 按提交编老版本时新旧都认，装机包和设备上的 u60-ship.sh 只认新的）。
+/// （onboard/build-kit.sh、tools/luyaz、luyaz-ship.sh 用 `grep -a` 查；D3 前叫 `ZWRT_DATAD_FORK_RUST_SELF_CONTAINED`：
+/// tools/luyaz 按提交编老版本时新旧都认，装机包和设备上的 luyaz-ship.sh 只认新的）。
 /// 不参与任何 HTTP 输出；`#[used]` + main 里的 black_box 保证 LTO/strip 后仍在二进制里。
 #[used]
 static BUILD_MARKER: [u8; 31] = *b"LUYAZ_CORE_BUILD_SELF_CONTAINED";
 
-/// Runs datad's command line as datad would; `raw[0]` is the program name.
+/// Runs data-service's command line as data-service did; `raw[0]` is the program name.
 /// Returns only for `--once`, `--compare-state-shape` and argument errors; serving ends the process.
 pub async fn main(raw: Vec<String>) -> Result<()> {
     std::hint::black_box(&BUILD_MARKER);
@@ -109,7 +108,7 @@ pub async fn main(raw: Vec<String>) -> Result<()> {
     let addr: SocketAddr = format!("{}:{}", args.bind, args.port).parse()?;
     validate_listener_security(addr, local_requires_auth)?;
     // 先监听、再采第一轮（P1-3）：第一轮期间 `/healthz` 就能回 503 `starting`，看门狗也已经在看。
-    // 端口被占（另一个 datad 还在）时在这里就退出，不碰事务恢复。
+    // 端口被占（另一个核心还在）时在这里就退出，不碰事务恢复。
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let lan = match &args.lan_bind {
         Some(lan_bind) => {
@@ -162,11 +161,10 @@ pub async fn main(raw: Vec<String>) -> Result<()> {
     }
 }
 
-/// argv[0] says zwrt-datad: the binary sits where datad sat (`/data/plugins/zwrt-datad/zwrt-datad`)
-/// or is a side-by-side copy (`zwrt-datad.test`, which `tools/luyaz ship` and `luyaz-fallback.sh`
-/// recognise by the `zwrt-datad*` prefix), or the Phase 10 name `luyaz-core*` (R1: recognised
-/// before 10e renames the binary). Only the file name counts, not the directory.
-pub fn invoked_as_datad(argv0: &str) -> bool {
+/// argv[0] says luyaz-core: the installed binary or a side-by-side copy (`luyaz-core.test`, which
+/// `tools/luyaz ship` and `luyaz-fallback.sh` recognise by the prefix). Only the file name counts,
+/// not the directory.
+pub fn invoked_as_core(argv0: &str) -> bool {
     std::path::Path::new(argv0)
         .file_name()
         .and_then(|n| n.to_str())
@@ -189,34 +187,30 @@ mod tests {
     #[test]
     fn argv0_dispatch() {
         for yes in [
-            "zwrt-datad",
-            "zwrt-datad.test",
-            "/data/plugins/zwrt-datad/zwrt-datad",
-            "./zwrt-datad.prev-cache-20260923",
-            // Phase 10 R1: the new name, before 10e switches to it
             "luyaz-core",
             "/data/luyaz/luyaz-core",
             "luyaz-core.test",
         ] {
-            assert!(invoked_as_datad(yes), "{yes}");
+            assert!(invoked_as_core(yes), "{yes}");
         }
         for no in [
             "u60d",
             "/data/u60d/u60d",
-            "/data/plugins/zwrt-datad/u60d",
+            "zwrt-datad",
+            "/data/plugins/zwrt-datad/zwrt-datad",
             "/tmp/u60d.test",
             "/data/luyaz/core/u60d",
             "luyaz-web",
             "",
         ] {
-            assert!(!invoked_as_datad(no), "{no}");
+            assert!(!invoked_as_core(no), "{no}");
         }
     }
 
     #[test]
-    fn args_are_datads() {
+    fn args_parse() {
         let a = Args::try_parse_from([
-            "zwrt-datad",
+            "luyaz-core",
             "-i",
             "1000",
             "--lan-bind",
@@ -224,7 +218,7 @@ mod tests {
             "--lan-port",
             "9461",
             "--auth-token-file",
-            "/data/zwrt-datad/token",
+            "/data/luyaz/core/auth.token",
             "--webshell",
             "--neighbor",
         ])
@@ -234,7 +228,7 @@ mod tests {
         assert_eq!(a.lan_port, 9461);
         assert_eq!((a.bind.as_str(), a.port), ("127.0.0.1", 9460));
         assert!(!a.once);
-        let a = Args::try_parse_from(["zwrt-datad", "--once"]).unwrap();
+        let a = Args::try_parse_from(["luyaz-core", "--once"]).unwrap();
         assert!(a.once);
     }
 }

@@ -15,7 +15,7 @@ Source: `/plan-design-review` 2026-09-16 (decisions 1A / 2A / 3A / 4A / 5A / 6A 
 3. **Empty states are a feature.** Never just "no data"; always give the reason and the next action.
 4. **Subtract first.** Every element must earn its pixels; if it doesn't fit, cut it — don't fill space with decoration.
 5. **Use a card only when the card itself is the interaction.** Display-only groups use a heading plus a divider.
-6. **English wording** (set 2026-10-01 in L2; one set for touch UI, web, datad, agent and alert SMS; words follow `docs/ui-glossary.md`):
+6. **English wording** (set 2026-10-01 in L2; one set for touch UI, web, core, agent and alert SMS; words follow `docs/ui-glossary.md`):
    - Sentence case; page names are proper nouns and use Title Case like the web menu (Band Lock, Speed Test). Proper names as-is: Wi-Fi, eSIM, Tailscale.
    - No period on labels and state words. Hint lines are one sentence, start with a verb when there's an action, no "Please", no trailing period.
    - Name a page by its name, unquoted, exactly as in the glossary (Turn on mobile data in Cellular).
@@ -118,15 +118,15 @@ Rust (`touch-ui/rs/`, LVGL 9.5 via `lvgl-sys`; the old C version is deleted, tag
 With no signal or no data, the exit IP and CHILL rates are dimmed so nobody takes them as live.
 
 **Interpret first, parameters second** (2026-09-24, user: "don't expose raw parameters; put an understandable reading on top"):
-- The status card's verdict, hint, RAT wording, carrier wording and signal rating are all decided by datad `rust/src/screen.rs` `story()`/`say()` (moved from touch `ui_net_story()` on 2026-09-26), every branch unit-tested. The touch UI only displays them.
+- The status card's verdict, hint, RAT wording, carrier wording and signal rating are all decided by core `rust/src/screen.rs` `story()`/`say()` (moved from touch `ui_net_story()` on 2026-09-26), every branch unit-tested. The touch UI only displays them.
 - Parameters (SINR, RSRP, RSSI, band, bandwidth) are small supporting text only.
 
-**Home verdict table** (set 2026-10-01 in L2, datad `say()` is authoritative; full Chinese/English hint lines in `docs/ui-glossary.md` §5):
+**Home verdict table** (set 2026-10-01 in L2, core `say()` is authoritative; full Chinese/English hint lines in `docs/ui-glossary.md` §5):
 
 | Priority | story.state | Large text (Chinese) | Large text (English, ≤150px) | Tone |
 |---|---|---|---|---|
 | 1 | (touch: no data yet) | 读取中… | Loading… | neutral |
-| 2 | (touch: datad down) | 读不到数据 | No update | neutral, values greyed but kept |
+| 2 | (touch: core down) | 读不到数据 | No update | neutral, values greyed but kept |
 | 3 | nosim | 无 SIM | No SIM | bad |
 | 4 | airplane | 移动网络已关 | Airplane | neutral |
 | 5 | changing | 正在换制式 / 正在确认 / 正在退回 | Switching / Checking / Reverting | neutral |
@@ -141,11 +141,11 @@ With no signal or no data, the exit IP and CHILL rates are dimmed so nobody take
 | 14 | narrow | 慢：载波窄 | Slow | warn |
 | 15 | ok | 顺畅 | All good | ok |
 
-changing and revert_fail are overlaid by write operations (E4, datad `screen.rs` `with_op()`, only in `net.home` of `/v2/screen`; `net.story` is always just the network verdict): switching RAT often passes through no-service, so it ranks above no-service to avoid a run of red; not overlaid on no SIM or mobile network off. The hint line carries the countdown sentence (「1:42 后没通就退回到自动」, "if not connected in 1:42, revert to auto") or, on revert failure, the current and last confirmed values. Other persistent results don't take the large text; they add one sentence at the end of the hint line.
+changing and revert_fail are overlaid by write operations (E4, core `screen.rs` `with_op()`, only in `net.home` of `/v2/screen`; `net.story` is always just the network verdict): switching RAT often passes through no-service, so it ranks above no-service to avoid a run of red; not overlaid on no SIM or mobile network off. The hint line carries the countdown sentence (「1:42 后没通就退回到自动」, "if not connected in 1:42, revert to auto") or, on revert failure, the current and last confirmed values. Other persistent results don't take the large text; they add one sentence at the end of the hint line.
 
-English "slow" is just Slow; the reason goes to the right column (signal, Noise, Load) and the hint line. hot = the firmware itself flagged thermal throttling (uci `zwrt_zte_mc_tmp.cpe.hightemp_datalimit_status` non-zero, datad `/state` `thermal.hightemp_limit`) — a fact, not an inference, so it ranks above limit and signal checks; unreadable counts as absent. stall = dialed, and in 30 seconds `rmnet_data0` sent ≥ 20 packets but received none (window kept by the datad sampling loop, `docs/designs/slow-diagnosis.md` §4.1). Roaming is never a verdict by itself; the hint line gets 「；漫游中 / ; roaming」 appended.
+English "slow" is just Slow; the reason goes to the right column (signal, Noise, Load) and the hint line. hot = the firmware itself flagged thermal throttling (uci `zwrt_zte_mc_tmp.cpe.hightemp_datalimit_status` non-zero, core `/state` `thermal.hightemp_limit`) — a fact, not an inference, so it ranks above limit and signal checks; unreadable counts as absent. stall = dialed, and in 30 seconds `rmnet_data0` sent ≥ 20 packets but received none (window kept by the core sampling loop, `docs/designs/slow-diagnosis.md` §4.1). Roaming is never a verdict by itself; the hint line gets 「；漫游中 / ; roaming」 appended.
 
-**English length budget** (real Nunito sizes; datad and agent tests approximate by characters, the touch render checks text stays inside its parent and the screen and siblings don't overlap):
+**English length budget** (real Nunito sizes; core and agent tests approximate by characters, the touch render checks text stays inside its parent and the screen and siblings don't overlap):
 
 | Place | Size | Limit | If over |
 |---|---|---|---|
@@ -177,7 +177,7 @@ Wording of each part:
 - **Bands**: written B3 / n78. Things like 「GSM 900」「DCS 1800」 are frequencies, kept as-is.
 - **4G without carrier aggregation**: the serving cell is only in the `lte_*` fields and must be filled in from there — never show "no carrier".
 
-Render test scenes: good, weak, nosignal, datad-down, loading, nosim, abroad, lowbat, full-charging, long-names, empty, nsa, lte, 3g, nodata, 5ga, edge, each in dark and light theme.
+Render test scenes: good, weak, nosignal, core-down, loading, nosim, abroad, lowbat, full-charging, long-names, empty, nsa, lte, 3g, nodata, 5ga, edge, each in dark and light theme.
 
 **Home carriers** (carrier detail card): serving cell first (`nr_band/nr_bw/nr_rsrp/nr_pci/nr_channel`), then every `nrca`/`lteca` group appended as-is (the serving cell appears again inside them with a -140 floor value — that's the modem's configured carrier, not deduplicated); inactive carriers collapse to one t3 line.
 
@@ -192,13 +192,13 @@ Render test scenes: good, weak, nosignal, datad-down, loading, nosim, abroad, lo
 
 **Features without a data source say what's missing**: neighbor cells / MIMO / BLER aren't available on this device (no `/modem/latest-signals`); the page states why instead of drawing an empty shell.
 
-**Transactions (write-op layer, E4, design `docs/designs/write-op-layer.md` DD3, DD5, DD9, DD12, DD13, DD16)**: for every write that goes through datad (currently network mode), all text is sent by datad in the `op` block (`say/next/note/what/source/old/target`, each with `_zh/_en`); the touch UI only lays it out; vocabulary in `docs/ui-glossary.md` §13.
+**Transactions (write-op layer, E4, design `docs/designs/write-op-layer.md` DD3, DD5, DD9, DD12, DD13, DD16)**: for every write that goes through core (currently network mode), all text is sent by core in the `op` block (`say/next/note/what/source/old/target`, each with `_zh/_en`); the touch UI only lays it out; vocabulary in `docs/ui-glossary.md` §13.
 - Home and the matching settings page (Cellular › Network mode) show it in the existing status block, no extra progress card; other tabs and sub-pages get a **transaction row** under the title bar 「正在换制式 · 1:42 ›」 ("switching RAT · 1:42 ›", whole row ≥40 tall), which opens the **transaction page**.
-- Transaction page, five layers: verdict → 「旧 → 新 · 来源 时间」 ("old → new · source time") → three progress lines (setting applied / registered / data, ✓ or …) → countdown (「1:42 后没通就退回到 X」 "revert to X if not connected in 1:42"; with auto-revert off 「还剩 0:48 · 自动退回没开」 "0:48 left · auto-revert off") → buttons. If datad pushes nothing for 20 seconds: countdown greys out as 「停在 1:42 · 等设备响应」 ("stopped at 1:42 · waiting for device") and stops ticking.
+- Transaction page, five layers: verdict → 「旧 → 新 · 来源 时间」 ("old → new · source time") → three progress lines (setting applied / registered / data, ✓ or …) → countdown (「1:42 后没通就退回到 X」 "revert to X if not connected in 1:42"; with auto-revert off 「还剩 0:48 · 自动退回没开」 "0:48 left · auto-revert off") → buttons. If core pushes nothing for 20 seconds: countdown greys out as 「停在 1:42 · 等设备响应」 ("stopped at 1:42 · waiting for device") and stops ticking.
 - Buttons name concrete values: 「退回 X」 ("revert to X") primary on the left, 「保留 Y」 ("keep Y") secondary on the right; both two-step confirm, only one pending at a time, pending = fillOrange plus one consequence sentence. At expiry the device decides and the pending confirm is void; while reverting, only progress shows, no buttons.
-- When done, the transaction row becomes a result row (「▲ 没通 · 已退回自动 ›」, "▲ not connected · reverted to auto ›"); 3-second kinds (switched, reverted, no confirm needed) only show if their end was actually witnessed; persistent kinds stay until 「知道了」 ("got it") is tapped (only recorded via datad; touch and web dismiss together). Revert also failed (DD9): red takes the status block, shows current and last confirmed values, buttons 「再试一次退回到 X」 ("try reverting to X again") and 「重启设备」 ("reboot device").
+- When done, the transaction row becomes a result row (「▲ 没通 · 已退回自动 ›」, "▲ not connected · reverted to auto ›"); 3-second kinds (switched, reverted, no confirm needed) only show if their end was actually witnessed; persistent kinds stay until 「知道了」 ("got it") is tapped (only recorded via core; touch and web dismiss together). Revert also failed (DD9): red takes the status block, shows current and last confirmed values, buttons 「再试一次退回到 X」 ("try reverting to X again") and 「重启设备」 ("reboot device").
 - System › Change log: one entry per two lines (「制式 · 自动 → 只用 4G」 / 「10-03 14:32 · 网页 · 已切到只用 4G」, "RAT · auto → 4G only" / "… · web · switched to 4G only"), tap for detail; undo/redo live in the detail; un-undoable entries are greyed with a reason.
-- Data service stuck (20 s without movement): controls that write via datad grey out early with 「数据服务没响应 · 暂时不能改设置」 ("data service not responding · can't change settings right now"). Busy (another write running) doesn't grey out early; on tap, show the sentence datad returns.
+- Data service stuck (20 s without movement): controls that write via core grey out early with 「数据服务没响应 · 暂时不能改设置」 ("data service not responding · can't change settings right now"). Busy (another write running) doesn't grey out early; on tap, show the sentence core returns.
 
 **Diagnose page rows** (网络诊断, deep diagnosis v2, `docs/designs/deep-diag-v2.md`; words in `docs/ui-glossary.md` §10): one row per layer in run order: Wi-Fi · SIM 卡 · 信号 · 限速 · 数据连接 · 蜂窝链路 · 域名解析 · 外网 · 设备时间 · 基站负载 · 代理 (only with CHILL on) (Wi-Fi · SIM · Signal · Speed cap · Data connection · Cellular link · DNS · Internet · Device clock · Cell load · Proxy), then the speed row. A layer whose prerequisite is bad is `blocked`: grey name and grey ● 「没测 · 前面的<层名>不通」 (Not checked · <Layer> is down), not counted in 「正在检查… N/M」, not in 「另有 N 处疑点」, never the main sentence. Blocked rows show on the diagnose page only, never on Home. Up to 12 rows (`DG_LAYERS_MAX`); the card scrolls.
 
@@ -255,11 +255,11 @@ Redesigned on 2026-09-24 in a **Cohere + Figma** visual language (reference file
 - Navigation: <640 four bottom tabs (Home / Charts / Functions / System), 640–1023 left icon rail, ≥1024 240px sidebar with groups; ⌘K searches all pages (Chinese, pinyin, aliases). The route table (path, family, title, search aliases) is defined in one place; navigation, ⌘K and families all derive from it.
 - Page order: title → status block (state · reason · next step · freshness) → things you can change → detail. Settings pages max width 720; data pages may use two columns.
 - **Three write tiers**: tier 1 sends directly; tier 2 confirms inline on the page (stating the consequence); tier 3 is a dialog (what happens / how long it's down / how to recover; Tailscale warning when accessed remotely; factory reset requires typing 「恢复出厂」 "factory reset"). Every write is read back afterwards; if readback fails say 「设备已接受」 ("device accepted"), not "success"; multi-step writes show each step, and on failure resend only unfinished steps. There's an inventory of which tier each control belongs to; change the inventory before changing a control.
-- **Transactions** (E4, design `docs/designs/write-op-layer.md` DD4, DD5, DD8, DD15): writes through datad (currently network mode) no longer read back themselves; the device confirms; text follows datad's `op` block, vocabulary in `docs/ui-glossary.md` §13.
+- **Transactions** (E4, design `docs/designs/write-op-layer.md` DD4, DD5, DD8, DD15): writes through core (currently network mode) no longer read back themselves; the device confirms; text follows the core's `op` block, vocabulary in `docs/ui-glossary.md` §13.
   - Shell strip (alert bar style, `role=status`, revert failure `role=alert`): on every page, in progress 「正在确认 · 1:42」 ("checking · 1:42"), ≥640 adds 「制式 · 旧 → 新 · 来源」 ("RAT · old → new · source"); 「详情 ›」 ("details ›") goes to the matching page, and it isn't shown on that page. The countdown is `aria-hidden`; only phase changes are announced.
   - The matching page's status block becomes the transaction state: same five layers as touch, buttons 「退回 X」「保留 Y」 are tier-2 inline confirms; stacked vertically on mobile, full width, ≥44px.
   - System › Device › Change log (`/changes`): same two lines as touch; undo in the detail, tier 3 for anything that drops cellular (network mode), tier 2 otherwise; every attempt gets a new `op_id`, never resent. Settings pages end with 「上次改动 14:32 · 触屏 ›」 ("last change 14:32 · touch ›") linking to that entry (currently network mode only).
-  - Data service stuck: the strip says 「数据服务没响应」 ("data service not responding"), writes via datad grey out; web disconnects mid-change: the strip says 「和设备断开了 · 操作结果未知」 ("disconnected from device · result unknown"), no auto-resend, the result shows normally after reconnect. Old datad (`supported:false` from `/api/ops`): no strip and no change log; writes read back as before.
+  - Data service stuck: the strip says 「数据服务没响应」 ("data service not responding"), writes via core grey out; web disconnects mid-change: the strip says 「和设备断开了 · 操作结果未知」 ("disconnected from device · result unknown"), no auto-resend, the result shows normally after reconnect. Old core (`supported:false` from `/api/ops`): no strip and no change log; writes read back as before.
 - When data goes stale keep old values, grey them, write "N min ago"; never clear to 0.
 - Icons are Phosphor: selected and tiles filled, the rest bold line.
 

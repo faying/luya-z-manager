@@ -1,0 +1,164 @@
+=== scenario
+
+--- rc=0
+PASS 账本目录可写（$T/ledger）
+PASS key.log 的原因码（这次开机 1150）
+PASS 基带崩溃自恢复开关（enabled）
+PASS dd iflag=skip_bytes
+PASS ls -ln 第 5 列是大小
+PASS awk 的 mktime / strftime
+PASS awk 的 ?:（括起来的写法）
+PASS flock -n
+PASS jsonfilter 多个 -e（中间一个路径不存在）
+PASS wget -T 2 读核心 /v2/state
+PASS ip -4 -o addr 看得到 rmnet_data0 的地址
+PASS 默认路由走 rmnet_data0（$T/route）
+PASS kmsg 落盘（0 秒内）
+
+全部通过
+=== scenario
+mv "$T/key.log" "$T/key.log.0"; : >"$T/key.log"
+--- rc=0
+PASS 账本目录可写（$T/ledger）
+PASS key.log 的原因码（这次开机 1150）
+PASS 基带崩溃自恢复开关（enabled）
+PASS dd iflag=skip_bytes
+PASS ls -ln 第 5 列是大小
+PASS awk 的 mktime / strftime
+PASS awk 的 ?:（括起来的写法）
+PASS flock -n
+PASS jsonfilter 多个 -e（中间一个路径不存在）
+PASS wget -T 2 读核心 /v2/state
+PASS ip -4 -o addr 看得到 rmnet_data0 的地址
+PASS 默认路由走 rmnet_data0（$T/route）
+PASS kmsg 落盘（0 秒内）
+
+全部通过
+=== scenario
+mv "$T/key.log" "$T/key.log.0"; printf 'reboot_reason_code=1 x reboot_reason_code=1185!!! \nreboot_reason_code=x\n' >"$T/key.log"
+--- rc=0
+PASS 账本目录可写（$T/ledger）
+PASS key.log 的原因码（这次开机 1185）
+PASS 基带崩溃自恢复开关（enabled）
+PASS dd iflag=skip_bytes
+PASS ls -ln 第 5 列是大小
+PASS awk 的 mktime / strftime
+PASS awk 的 ?:（括起来的写法）
+PASS flock -n
+PASS jsonfilter 多个 -e（中间一个路径不存在）
+PASS wget -T 2 读核心 /v2/state
+PASS ip -4 -o addr 看得到 rmnet_data0 的地址
+PASS 默认路由走 rmnet_data0（$T/route）
+PASS kmsg 落盘（0 秒内）
+
+全部通过
+=== scenario
+echo "999999 1 0" >"$T/lt/w.pos"; echo "123" >"$T/lt/watcher.pid"
+--- rc=0
+PASS 账本目录可写（$T/ledger）
+PASS key.log 的原因码（这次开机 1150）
+PASS 基带崩溃自恢复开关（enabled）
+PASS dd iflag=skip_bytes
+PASS ls -ln 第 5 列是大小
+PASS awk 的 mktime / strftime
+PASS awk 的 ?:（括起来的写法）
+PASS flock -n
+PASS jsonfilter 多个 -e（中间一个路径不存在）
+PASS wget -T 2 读核心 /v2/state
+PASS ip -4 -o addr 看得到 rmnet_data0 的地址
+PASS 默认路由走 rmnet_data0（$T/route）
+PASS kmsg 落盘（0 秒内）
+PASS 观察循环读过了测试行
+
+全部通过
+=== scenario
+echo "10 1 0" >"$T/lt/w.pos"; echo "123" >"$T/lt/watcher.pid"
+--- rc=1
+PASS 账本目录可写（$T/ledger）
+PASS key.log 的原因码（这次开机 1150）
+PASS 基带崩溃自恢复开关（enabled）
+PASS dd iflag=skip_bytes
+PASS ls -ln 第 5 列是大小
+PASS awk 的 mktime / strftime
+PASS awk 的 ?:（括起来的写法）
+PASS flock -n
+PASS jsonfilter 多个 -e（中间一个路径不存在）
+PASS wget -T 2 读核心 /v2/state
+PASS ip -4 -o addr 看得到 rmnet_data0 的地址
+PASS 默认路由走 rmnet_data0（$T/route）
+PASS kmsg 落盘（0 秒内）
+FAIL 观察循环读过了测试行：它的位置 10 没过 16
+
+1 项没通过
+=== scenario
+: >"$T/key.log"; rm -f "$T/crashcap/kmsg-aaaaaaaa.log" "$T/recovery"; export DOC_KMSG=$T/no/such/kmsg; printf 'Iface\tDestination\n' >"$T/route"; printf '#!/bin/sh\nexit 1\n' >"$T/bin/wget"; printf '#!/bin/sh\n' >"$T/bin/jsonfilter"
+--- rc=1
+PASS 账本目录可写（$T/ledger）
+FAIL key.log 的原因码：$T/key.log 和 $T/key.log.0 里都找不到 reboot_reason_code=
+FAIL 基带崩溃自恢复开关：读不到 $T/recovery
+PASS dd iflag=skip_bytes
+PASS ls -ln 第 5 列是大小
+PASS awk 的 mktime / strftime
+PASS awk 的 ?:（括起来的写法）
+PASS flock -n
+FAIL jsonfilter 多个 -e（中间一个路径不存在）：网络缓存读不全
+FAIL wget -T 2 读核心 /v2/state：网络缓存没有来源（核心没在跑也会这样）
+PASS ip -4 -o addr 看得到 rmnet_data0 的地址
+FAIL 默认路由走 rmnet_data0（$T/route）：崩溃跟随只能看地址（此刻没联网也会这样）
+FAIL kmsg 落盘：没有这次开机的落盘文件 $T/crashcap/kmsg-aaaaaaaa.log
+
+6 项没通过
+=== scenario
+export DOC_KMSG=$T/no/such/kmsg
+--- rc=1
+PASS 账本目录可写（$T/ledger）
+PASS key.log 的原因码（这次开机 1150）
+PASS 基带崩溃自恢复开关（enabled）
+PASS dd iflag=skip_bytes
+PASS ls -ln 第 5 列是大小
+PASS awk 的 mktime / strftime
+PASS awk 的 ?:（括起来的写法）
+PASS flock -n
+PASS jsonfilter 多个 -e（中间一个路径不存在）
+PASS wget -T 2 读核心 /v2/state
+PASS ip -4 -o addr 看得到 rmnet_data0 的地址
+PASS 默认路由走 rmnet_data0（$T/route）
+FAIL kmsg 落盘：写不进 $T/no/such/kmsg
+
+1 项没通过
+=== scenario
+export DOC_KMSG=$T/elsewhere; : >"$T/elsewhere"
+--- rc=1
+PASS 账本目录可写（$T/ledger）
+PASS key.log 的原因码（这次开机 1150）
+PASS 基带崩溃自恢复开关（enabled）
+PASS dd iflag=skip_bytes
+PASS ls -ln 第 5 列是大小
+PASS awk 的 mktime / strftime
+PASS awk 的 ?:（括起来的写法）
+PASS flock -n
+PASS jsonfilter 多个 -e（中间一个路径不存在）
+PASS wget -T 2 读核心 /v2/state
+PASS ip -4 -o addr 看得到 rmnet_data0 的地址
+PASS 默认路由走 rmnet_data0（$T/route）
+FAIL kmsg 落盘：测试行 1 秒内没出现在 $T/crashcap/kmsg-aaaaaaaa.log
+
+1 项没通过
+=== scenario
+chmod 500 "$T/ledger"; export DOC_LEDGER_DIR=$T/ledger/sub/x; rm -f "$T/bootid"
+--- rc=1
+PASS 账本目录可写（$T/ledger/sub/x）
+PASS key.log 的原因码（这次开机 1150）
+PASS 基带崩溃自恢复开关（enabled）
+PASS dd iflag=skip_bytes
+PASS ls -ln 第 5 列是大小
+PASS awk 的 mktime / strftime
+PASS awk 的 ?:（括起来的写法）
+PASS flock -n
+PASS jsonfilter 多个 -e（中间一个路径不存在）
+PASS wget -T 2 读核心 /v2/state
+PASS ip -4 -o addr 看得到 rmnet_data0 的地址
+PASS 默认路由走 rmnet_data0（$T/route）
+FAIL kmsg 落盘：没有这次开机的落盘文件 $T/crashcap/kmsg-boot.log
+
+1 项没通过

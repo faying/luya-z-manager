@@ -1,14 +1,16 @@
-//! Parity with touch-ui scripts/doctor.sh: the shell test's own `setup` (scripts/test/doctor/run.sh)
-//! builds the fixture, then the Rust rows are compared with the goldens and with doctor.sh run live
-//! on the same fixture, row by row for the ids ported so far.
+//! The doctor on a stubbed device: `testdata/setup.sh` builds the fixture (every command and
+//! path a `DOC_*` override), a scenario changes it, and the rows are compared with the goldens
+//! (`testdata/golden/`) and with snapshots (`testdata/snap/`). The snapshots started as the
+//! retired doctor-legacy.sh's output, row for row (Luya-Z rename F4 dropped the shell copy);
+//! after a deliberate change, rewrite them with `DOCTOR_SNAP_UPDATE=1 cargo test -p luyaz-core
+//! doctor::` and read the diff.
 
 use super::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-fn scripts() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../touch-ui/scripts");
-    p.join("doctor.sh").is_file().then_some(p)
+fn testdata() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/doctor/testdata")
 }
 
 struct Fx {
@@ -22,71 +24,86 @@ impl Drop for Fx {
     }
 }
 
-/// run.sh's `setup`, then `scenario` (sh, with `$T` the fixture).
-fn fixture(scenario: &str) -> Option<Fx> {
-    let s = scripts()?;
-    let script = format!(
-        "RUN='{run}'\neval \"$(sed -n '/^setup() {{/,/^}}/p' \"$RUN\")\"\nsetup\n{scenario}\nenv | grep '^DOC_' >\"$T/doc.env\"\necho \"$T\"\n",
-        run = s.join("test/doctor/run.sh").display()
-    );
+fn sh(script: &str, env: &HashMap<String, String>) -> String {
     let o = Command::new("sh")
         .arg("-c")
         .arg(script)
+        .envs(env)
         .stderr(Stdio::inherit())
         .output()
-        .ok()?;
-    let dir = PathBuf::from(String::from_utf8_lossy(&o.stdout).trim());
-    let env = std::fs::read_to_string(dir.join("doc.env"))
-        .ok()?
+        .expect("sh");
+    String::from_utf8_lossy(&o.stdout).trim().to_owned()
+}
+
+fn load_env(dir: &std::path::Path) -> HashMap<String, String> {
+    std::fs::read_to_string(dir.join("doc.env"))
+        .expect("doc.env")
         .lines()
         .filter_map(|l| l.split_once('=').map(|(k, v)| (k.to_owned(), v.to_owned())))
-        .collect();
-    Some(Fx { dir, env })
+        .collect()
+}
+
+/// setup.sh's `setup`, then `scenario` (sh, with `$T` the fixture).
+fn fixture(scenario: &str) -> Fx {
+    let script = format!(
+        ". '{}'\nsetup\n{scenario}\nenv | grep '^DOC_' >\"$T/doc.env\"\necho \"$T\"\n",
+        testdata().join("setup.sh").display()
+    );
+    let dir = PathBuf::from(sh(&script, &HashMap::new()));
+    let env = load_env(&dir);
+    Fx { dir, env }
+}
+
+/// More sh on a fixture (its DOC_* exported, `$T` set): `extra` adds variables first.
+fn then(fx: &mut Fx, extra: &[(&str, String)], script: &str) {
+    let mut env = fx.env.clone();
+    env.insert("T".into(), fx.dir.to_string_lossy().into_owned());
+    for (k, v) in extra {
+        env.insert((*k).into(), v.clone());
+    }
+    sh(
+        &format!("{script}\nenv | grep '^DOC_' >\"$T/doc.env\"\n"),
+        &env,
+    );
+    fx.env = load_env(&fx.dir);
 }
 
 fn cfg(fx: &Fx) -> Cfg {
     Cfg::from(&|k| fx.env.get(k).cloned())
 }
 
+/// `cfg` with some overrides (what the old fixtures passed to one doctor.sh run)
+fn cfg_with(fx: &Fx, over: &[(&str, &str)]) -> Cfg {
+    Cfg::from(&|k| {
+        over.iter()
+            .find(|(o, _)| *o == k)
+            .map(|(_, v)| (*v).to_owned())
+            .or_else(|| fx.env.get(k).cloned())
+    })
+}
+
 fn rust(fx: &Fx, mode: Mode) -> (String, i32) {
     full(&cfg(fx), mode)
 }
 
-fn shell(fx: &Fx, args: &[&str]) -> (String, i32) {
-    let o = Command::new("sh")
-        .arg(scripts().unwrap().join("doctor.sh"))
-        .args(args)
-        .envs(&fx.env)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .unwrap();
-    (
-        String::from_utf8_lossy(&o.stdout).into_owned(),
-        o.status.code().unwrap_or(-1),
-    )
+/// `--calibrate-standby` on the fixture as the old scenarios ran it (no scorecard fetch)
+fn calibrate(fx: &Fx) {
+    calibrate_with(fx, &[]);
 }
 
-macro_rules! fx_or_skip {
-    ($s:expr) => {
-        match fixture($s) {
-            Some(f) => f,
-            None => {
-                eprintln!("skipped: touch-ui/scripts/doctor.sh or sh not here");
-                return;
-            }
-        }
-    };
+fn calibrate_with(fx: &Fx, over: &[(&str, &str)]) {
+    let mut o = vec![("DOC_WGET", "/bin/false")];
+    o.extend_from_slice(over);
+    standby::calibrate(&cfg_with(fx, &o));
 }
 
-// The retired shell's clock policy is intentionally superseded by P0-01. All other
-// rows still match byte for byte; clock evidence has its own regression matrix below.
+// The clock row is judged on live evidence (P0-01: the boot id is the host's), so the goldens
+// and snapshots leave it out, and text mode's closing count with it.
 fn without_clock(text: &str) -> String {
     let lines: Vec<_> = text.lines().collect();
     let text_mode = lines.iter().any(|l| l.contains("时钟："));
     if text_mode {
-        // The clock can now contribute a warning. Validate each complete summary against its
-        // own visible row levels before comparing all other rows with the retired shell.
+        // Validate each complete summary against its own visible row levels first.
         let bad = lines.iter().filter(|l| l.starts_with("  ■ ")).count();
         let warn = lines.iter().filter(|l| l.starts_with("  ▲ ")).count();
         let expected = if bad == 0 && warn == 0 {
@@ -108,63 +125,120 @@ fn without_clock(text: &str) -> String {
         .collect()
 }
 
-/// Rust == doctor.sh on one scenario, byte for byte and exit code: --tsv, --tsv2, text and
-/// --manifest; returns the Rust --tsv
-fn same_as_shell(scenario: &str) -> Option<String> {
-    let fx = fixture(scenario)?;
-    for (mode, arg) in [
+/// One scenario's whole output: --tsv, --tsv2, text (each with its exit code) and --manifest,
+/// the fixture's path as `$T`.
+fn all_modes(fx: &Fx) -> String {
+    let mut out = String::new();
+    for (mode, name) in [
         (Mode::Tsv, "--tsv"),
         (Mode::Tsv2, "--tsv2"),
-        (Mode::Text, ""),
+        (Mode::Text, "text"),
     ] {
-        let args: &[&str] = if arg.is_empty() { &[] } else { &[arg] };
-        let r = rust(&fx, mode);
-        let s = shell(&fx, args);
-        assert_eq!(
-            (without_clock(&r.0), r.1),
-            (without_clock(&s.0), s.1),
-            "{arg:?}, scenario:\n{scenario}"
-        );
+        let (t, rc) = rust(fx, mode);
+        out.push_str(&format!("--- {name} rc={rc}\n{}", without_clock(&t)));
     }
-    assert_eq!(
-        (manifest::report(&cfg(&fx)), 0),
-        shell(&fx, &["--manifest"]),
-        "--manifest, scenario:\n{scenario}"
-    );
-    Some(rust(&fx, Mode::Tsv).0)
+    out.push_str(&format!("--- --manifest\n{}", manifest::report(&cfg(fx))));
+    // rc.local holds the fixture's path, so its md5 changes with every run: name it instead
+    // (setup's rc.local as `<rc0>`, the one the scenario left as `<rc>`)
+    for (f, name) in [("rc.orig", "<rc0>"), ("rc", "<rc>")] {
+        if let Ok(b) = std::fs::read(fx.dir.join(f)) {
+            out = out.replace(&manifest::md5_hex(&b), name);
+        }
+    }
+    out.replace(&*fx.dir.to_string_lossy(), "$T")
+}
+
+/// Compare with `testdata/snap/<name>.txt`, or write it under DOCTOR_SNAP_UPDATE=1.
+fn snap(name: &str, cases: &[(String, String)]) {
+    let mut text = String::new();
+    for (scenario, out) in cases {
+        text.push_str("=== scenario\n");
+        text.push_str(scenario.trim_end());
+        text.push('\n');
+        text.push_str(out);
+        if !out.ends_with('\n') {
+            text.push('\n');
+        }
+    }
+    let path = testdata().join("snap").join(format!("{name}.txt"));
+    if std::env::var_os("DOCTOR_SNAP_UPDATE").is_some() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &text).unwrap();
+        return;
+    }
+    let want = std::fs::read_to_string(&path).unwrap_or_default();
+    if want != text {
+        // the first case that differs, so the message stays readable
+        let (w, t): (Vec<_>, Vec<_>) = (
+            want.split("=== scenario\n").collect(),
+            text.split("=== scenario\n").collect(),
+        );
+        for (a, b) in w.iter().zip(&t) {
+            assert_eq!(b, a, "{}", path.display());
+        }
+        assert_eq!(t.len(), w.len(), "{}: case count", path.display());
+    }
+}
+
+macro_rules! fx_or_skip {
+    ($s:expr) => {
+        fixture($s)
+    };
 }
 
 const PROBLEMS: &str = r#"echo "zte_topsw_devui" >"$T/sync"; echo 1 >"$T/mode"; echo 0 >"$T/aps"
-touch "$T/down-u60-guard"; echo 500 >"$T/hb"; touch "$T/uid/gave-up"; : >"$T/alerts/sms-to"
-grep -v "u60-uid start" "$T/rc" >"$T/rc2"; mv "$T/rc2" "$T/rc"
+touch "$T/down-luyaz-sentinel"; echo 500 >"$T/hb"; touch "$T/uid/gave-up"; : >"$T/alerts/sms-to"
+grep -v "luyaz-core start" "$T/rc" >"$T/rc2"; mv "$T/rc2" "$T/rc"
 printf '9\t1\tcrash\tx\ty\n' >"$T/alerts/queue""#;
 
 fn golden(name: &str) -> String {
-    std::fs::read_to_string(scripts().unwrap().join("test/doctor").join(name)).unwrap()
+    std::fs::read_to_string(testdata().join(name)).unwrap_or_default()
 }
 
-const STANDBY: &str = r#"export DOC_STANDBY_STAT=$T/sb DOC_STANDBY_BASE=$T/sb.base DOC_LEDGER_DIR=$T/ledger DOC_BOOT_ID_FILE=$T/bootid
+const STANDBY_PRE: &str = r#"export DOC_STANDBY_STAT=$T/sb DOC_STANDBY_BASE=$T/sb.base DOC_LEDGER_DIR=$T/ledger DOC_BOOT_ID_FILE=$T/bootid
 echo aaaaaaaa-0000-4000-8000-000000000001 >"$T/bootid"
-i=0; while [ $i -lt 40 ]; do echo "$((100 + i * 20)) $((50 + i)) 20 30.0 5.0 2.0 1.0 0.5" >>"$T/sb"; i=$((i + 1)); done
-DOC_WGET=/bin/false sh "$(dirname "$RUN")/../../doctor.sh" --calibrate-standby >/dev/null
-: >"$T/sb"; i=0; while [ $i -lt 10 ]; do echo "$((300 + i * 60)) 200 20 30.0 5.0 2.0 1.0 0.5" >>"$T/sb"; i=$((i + 1)); done
+i=0; while [ $i -lt 40 ]; do echo "$((100 + i * 20)) $((50 + i)) 20 30.0 5.0 2.0 1.0" >>"$T/sb"; i=$((i + 1)); done"#;
+const STANDBY_POST: &str = r#": >"$T/sb"; i=0; while [ $i -lt 10 ]; do echo "$((300 + i * 60)) 200 20 30.0 5.0 2.0 1.0" >>"$T/sb"; i=$((i + 1)); done
 unset DOC_LEDGER_DIR DOC_BOOT_ID_FILE"#;
+
+fn golden_fixture(name: &str) -> Fx {
+    match name {
+        "problems" => fixture(PROBLEMS),
+        "standby" => {
+            let mut fx = fixture(STANDBY_PRE);
+            calibrate(&fx);
+            then(&mut fx, &[], STANDBY_POST);
+            fx
+        }
+        _ => fixture(""),
+    }
+}
 
 #[test]
 fn the_goldens_byte_for_byte() {
-    let mut cases = vec![("healthy", ""), ("problems", PROBLEMS)];
-    cases.push(("standby", STANDBY)); // the golden's records carry the private mihomo column
-    for (name, scenario) in cases {
-        let fx = fx_or_skip!(scenario);
+    let update = std::env::var_os("DOCTOR_SNAP_UPDATE").is_some();
+    // the standby golden's records carry the private mihomo column
+    for name in ["healthy", "problems", "standby"] {
+        let fx = golden_fixture(name);
         let (t, rc) = rust(&fx, Mode::Tsv);
+        let text = rust(&fx, Mode::Text).0;
+        assert_eq!(rc, if name == "problems" { 1 } else { 0 });
+        if update {
+            std::fs::write(testdata().join(format!("golden/{name}.tsv")), &t).unwrap();
+            std::fs::write(testdata().join(format!("golden/{name}.txt")), &text).unwrap();
+            if name == "problems" {
+                let t2 = rust(&fx, Mode::Tsv2).0;
+                std::fs::write(testdata().join("tsv2-sample.tsv"), t2).unwrap();
+            }
+            continue;
+        }
         assert_eq!(
             without_clock(&t),
             without_clock(&golden(&format!("golden/{name}.tsv"))),
             "{name}.tsv"
         );
-        assert_eq!(rc, if name == "problems" { 1 } else { 0 });
         assert_eq!(
-            without_clock(&rust(&fx, Mode::Text).0),
+            without_clock(&text),
             without_clock(&golden(&format!("golden/{name}.txt"))),
             "{name}.txt"
         );
@@ -178,11 +252,7 @@ fn the_goldens_byte_for_byte() {
 }
 
 #[test]
-fn scenarios_match_doctor_sh_live() {
-    if scripts().is_none() {
-        eprintln!("skipped: no doctor.sh");
-        return;
-    }
+fn scenarios() {
     let scenarios = [
         // healthy / problems (the goldens)
         "",
@@ -192,20 +262,12 @@ fn scenarios_match_doctor_sh_live() {
         // two lines with the name, one with two names (sed: the last per line)
         r#"printf '#!/bin/sh\necho "{ \\"noSyncModuleName\\": \\"a\\", \\"noSyncModuleName\\":\\"b\\" }"\necho "\\"noSyncModuleName\\": \\"c\\""\n' >"$T/bin/ubus""#,
         r#"echo 0 >"$T/poll""#,
-        // crashes (run.sh): read alerts, then unread; nested, dotted and old files
+        // crashes : read alerts, then unread; nested, dotted and old files
         r#"touch "$T/crash/x.log""#,
         r#"touch "$T/crash/x.log"; printf '9\t1\tcrash\tx\ty\n' >"$T/alerts/queue""#,
         r#"touch "$T/crash/x.log"; printf '9\t1\tcrash\tx\ty\n' >"$T/alerts/queue"; echo 9 >"$T/alerts/read""#,
         r#"mkdir -p "$T/crash/a"; touch "$T/crash/a/y.log" "$T/crash/.log" "$T/crash/z.txt"; touch -d '3 days ago' "$T/crash/old.log"; printf '7x\t1\tc\tx\ty\n3\tshort\n' >"$T/alerts/queue"; echo 5 >"$T/alerts/read""#,
-        // core-move (run.sh 10e): complete, init missing, both missing, half-way
-        r#"mkdir -p "$T/root/data/luyaz/core"; : >"$T/root/data/luyaz/core/.migrated"; printf 'bin\n' >"$T/root/data/luyaz/luyaz-core"; chmod 755 "$T/root/data/luyaz/luyaz-core"; printf '#!/bin/sh\n' >"$T/initd/luyaz-core"; chmod +x "$T/initd/luyaz-core""#,
-        r#"mkdir -p "$T/root/data/luyaz/core"; : >"$T/root/data/luyaz/core/.migrated"; printf 'bin\n' >"$T/root/data/luyaz/luyaz-core"; chmod 755 "$T/root/data/luyaz/luyaz-core""#,
-        r#"mkdir -p "$T/root/data/luyaz/core"; : >"$T/root/data/luyaz/core/.migrated"; printf 'bin\n' >"$T/root/data/luyaz/luyaz-core""#,
-        r#"mkdir -p "$T/root/data/luyaz/core""#,
-        // tmp-move
-        r#"mkdir -p "$T/tmp-luyaz""#,
-        r#"mkdir -p "$T/tmp-luyaz"; : >"$T/tmp-luyaz/.migrated""#,
-        // clock (run.sh)
+        // clock
         r#"echo 1735948800 >"$T/now""#,
         r#"echo 1735948800 >"$T/now"; echo "100.0 1" >"$T/uptime""#,
         r#"echo "0 1790499000 990 none" >"$T/clock-ok""#,
@@ -216,17 +278,15 @@ fn scenarios_match_doctor_sh_live() {
         // (a garbage /proc/uptime is left out: the shell's later rows do arithmetic on it and dash
         // stops there, so crashes/disk never print; the Rust clock row agrees with the shell's)
         r#"rm -f "$T/uptime"; echo x >"$T/now"; echo "1 2 3" >"$T/clock-ok""#,
-        // services (run.sh): the sentinel took over, luyaz-web, zte-agent, old install, two cores
-        r#"sed -i "s#.*u60-uid start#$T/initd/luyaz-sentinel start#; /u60-guard start/d" "$T/rc"; for f in u60-uid u60-guard; do rm -f "$T/initd/$f"; touch "$T/down-$f"; done; cp "$T/initd/zte-agent" "$T/initd/luyaz-sentinel""#,
-        r#"sed -i "s#.*zwrt-datad start#&\\n$T/initd/luyaz-web start#" "$T/rc"; cp "$T/initd/zte-agent" "$T/initd/luyaz-web"; touch "$T/down-luyaz-web""#,
-        r#": >"$T/luyaz-web"; export DOC_LWEB_BIN=$T/luyaz-web; cp "$T/initd/zte-agent" "$T/initd/luyaz-web""#,
-        r#"mkdir -p "$T/proc/103"; echo zte-agent >"$T/proc/103/comm""#,
+        // services: the sentinel down, luyaz-web (in rc.local, down; or only its program), no
+        // procd services at all, a second core and touch UI (side-by-side names count), the
+        // sentinel not in rc.local
+        r#"touch "$T/down-luyaz-sentinel""#,
+        r#"sed -i "s#.*luyaz-core start#&\\n$T/initd/luyaz-web start#" "$T/rc"; cp "$T/initd/luyaz-core" "$T/initd/luyaz-web"; touch "$T/down-luyaz-web""#,
+        r#": >"$T/luyaz-web"; export DOC_LWEB_BIN=$T/luyaz-web; cp "$T/initd/luyaz-core" "$T/initd/luyaz-web""#,
         r#"rm -f "$T"/initd/*"#,
-        r#"mkdir -p "$T/proc/102" "$T/proc/104"; echo zwrt-datad >"$T/proc/102/comm"; echo u60pro-devui-x >"$T/proc/104/comm""#,
-        // 10h R5: the touch UI under its new name next to the old one is two
-        r#"mkdir -p "$T/proc/104"; echo luyaz-ui.te >"$T/proc/104/comm""#,
-        r#"mkdir -p "$T/root/data/luyaz/core" "$T/proc/102"; : >"$T/root/data/luyaz/core/.migrated"; printf '#!/bin/sh\n' >"$T/initd/luyaz-core"; chmod +x "$T/initd/luyaz-core"; sed -i "s#.*zwrt-datad start#$T/initd/luyaz-core start#" "$T/rc"; echo luyaz-core >"$T/proc/101/comm"; echo zwrt-datad.test >"$T/proc/102/comm""#,
-        r#"sed -i "s#^$T/initd/u60-guard start#\# &#" "$T/rc""#,
+        r#"mkdir -p "$T/proc/102" "$T/proc/104"; echo luyaz-core.test >"$T/proc/102/comm"; echo luyaz-ui.test >"$T/proc/104/comm""#,
+        r#"sed -i "s#^$T/initd/luyaz-sentinel start#\# &#" "$T/rc""#,
         // heartbeat, takeover, Wi-Fi, screen
         r#"rm -f "$T/hb""#,
         r#"echo 880 >"$T/hb"; touch "$T/marker""#,
@@ -243,7 +303,7 @@ fn scenarios_match_doctor_sh_live() {
         r#"mknod "$T/rcd/K10foo" c 0 0; mknod "$T/rcd/S20bar" c 0 0; touch "$T/rcd/S30plain""#,
         r#"mknod "$T/rcd/K10foo" c 0 0; mknod "$T/rcd/K05zte_topsw_wlan" c 0 0"#,
         r#"rm -rf "$T/rcd""#,
-        // phone-home (run.sh)
+        // phone-home
         r#"mkdir -p "$T/proc/200" "$T/proc/201"; echo zte_mqtt_sdk_st >"$T/proc/200/comm"; echo zte_smart_manag >"$T/proc/201/comm""#,
         r#"printf "zwrt_mqtt.config.mqttOnreportEnable='0'\n" >"$T/mqtt"; printf "zwrt_tr069.ManagementServer.EnableCWMP='1'\nzwrt_tr069.ManagementServer.URL='http://acs.example'\n" >"$T/tr069"; rm -f "$T/dadian""#,
         r#"rm -f "$T/mqtt" "$T/tr069""#,
@@ -259,16 +319,15 @@ fn scenarios_match_doctor_sh_live() {
         r#"printf '#!/bin/sh\nexit 1\n' >"$T/bin/df""#,
         r#"printf '#!/bin/sh\necho "a b"\n' >"$T/bin/df""#,
     ];
-    for s in scenarios {
-        same_as_shell(s).expect("fixture");
-    }
+    let cases: Vec<_> = scenarios
+        .iter()
+        .map(|s| (s.to_string(), all_modes(&fixture(s))))
+        .collect();
+    snap("scenarios", &cases);
 }
 
 #[test]
-fn chill_rows_match_doctor_sh_live() {
-    if scripts().is_none() {
-        return;
-    }
+fn chill_rows() {
     let base = r#"mkdir -p "$T/proc/net"
 printf '#!/bin/sh\ncase "$*" in *public/status*) cat %s/public 2>/dev/null ;; *%%E9%%87%%8C) cat %s/proxy 2>/dev/null ;; esac\nexit 0\n' "$T" "$T" >"$T/bin/wget"
 printf '#!/bin/sh\ncat %s/iproute 2>/dev/null\n' "$T" >"$T/bin/ip"; chmod +x "$T/bin/wget" "$T/bin/ip"
@@ -307,56 +366,57 @@ export DOC_IP=$T/bin/ip DOC_CHILL_STATE=$T/chill.state
         scenarios.push(hist(t, d));
     }
     scenarios.push(format!(r#"{run_ts}; echo garbage >"$T/proxy""#));
+    let mut cases = Vec::new();
     for s in scenarios {
-        let t = same_as_shell(&format!("{base}{s}")).expect("fixture");
+        let fx = fixture(&format!("{base}{s}"));
         if s.contains("history") {
+            let t = rust(&fx, Mode::Tsv).0;
             assert!(t.contains("\thome-exit\t"), "{t}");
         }
+        cases.push((s, all_modes(&fx)));
     }
+    snap("chill", &cases);
 }
 
 const MS: &str = r#"export DOC_MANIFEST=$T/m.jsonl DOC_SHIP_TXN=$T/txn DOC_SHIP_HB=$T/hb.ship DOC_MD5_CACHE=$T/md5c/cache DOC_TS_DIR=$T/ts DOC_BOOT_ID_FILE=$T/bootid DOC_CHILL_DIR=$T/chill
 echo bbbb-0000 >"$T/bootid"
-printf 'datad build A\n' >"$T/datad"; DM=$(md5sum "$T/datad" | cut -d' ' -f1); RM=$(md5sum "$T/rc" | cut -d' ' -f1)
+printf 'core build A\n' >"$T/core"; DM=$(md5sum "$T/core" | cut -d' ' -f1); RM=$(md5sum "$T/rc" | cut -d' ' -f1)
 mship() { printf '{"v":1,"kind":"ship","comp":"%s","txn":"20260930-120000-%s","commit":"abc1234","format":1,"mac_time":1790000000,"boot_id":"x","uptime":5,"files":[{"path":"%s","md5":"%s","prev":"%s.prev-x"}],"state":[]}\n' "$1" "$1" "$2" "$3" "$2" >>"$T/m.jsonl"; }
 mrec() { printf '{"v":1,"kind":"record","name":"%s","path":"%s","md5":"%s","mac_time":1790000000,"boot_id":"x","uptime":5,"why":"t"}\n' "$1" "$2" "$3" >>"$T/m.jsonl"; }
-txnf() { printf 'v=1\ntxn=20260930-120000-datad\ncomp=datad\nphase=%s\nreason=%s\nboot_id=%s\nt_phase=%s\nend=1\n' "$1" "$2" "${3:-bbbb-0000}" "${4:-900}" >"$T/txn"; }
+txnf() { printf 'v=1\ntxn=20260930-120000-core\ncomp=core\nphase=%s\nreason=%s\nboot_id=%s\nt_phase=%s\nend=1\n' "$1" "$2" "${3:-bbbb-0000}" "${4:-900}" >"$T/txn"; }
 "#;
 
 #[test]
-fn manifest_matches_doctor_sh_live() {
-    if scripts().is_none() {
-        return;
-    }
-    let dirs = r#"export DOC_DEVUI_DIR=$T/devui
+fn manifest() {
+    // the two trees first, then their fingerprints (computed here) go into the manifest
+    let dirs_pre = r#"export DOC_UI_FONTS=$T/devui/fonts
 mkdir -p "$T/admin/_next/static" "$T/devui/fonts" "$T/admin/empty"
-printf 'page\n' >"$T/admin/index.html"; printf 'js\n' >"$T/admin/_next/static/a b.js"; printf 'font\n' >"$T/devui/fonts/x.ttf"
-AF=$(sh "$(dirname "$RUN")/../../doctor.sh" --tree-fp "$T/admin"); FF=$(sh "$(dirname "$RUN")/../../doctor.sh" --tree-fp "$T/devui/fonts")
-printf '{"v":1,"kind":"ship","comp":"web","txn":"t","commit":"a","format":1,"files":[{"path":"%s","tree":"%s","prev":"%s.prev"}],"state":[]}\n' "$T/admin" "$AF" "$T/admin" >>"$T/m.jsonl"
-printf '{"v":1,"kind":"record","name":"devui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/devui/fonts" "$FF" >>"$T/m.jsonl"
+printf 'page\n' >"$T/admin/index.html"; printf 'js\n' >"$T/admin/_next/static/a b.js"; printf 'font\n' >"$T/devui/fonts/x.ttf""#;
+    let dirs = r#"printf '{"v":1,"kind":"ship","comp":"web","txn":"t","commit":"a","format":1,"files":[{"path":"%s","tree":"%s","prev":"%s.prev"}],"state":[]}\n' "$T/admin" "$AF" "$T/admin" >>"$T/m.jsonl"
+printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/devui/fonts" "$FF" >>"$T/m.jsonl"
 "#;
     let scenarios = [
-        r#"mship datad "$T/datad" "$DM"; mrec rc.local "$T/rc" "$RM""#,
-        r#"mship datad "$T/datad" "$DM"; mrec rc.local "$T/rc" "$RM"; printf 'datad build B\n' >"$T/datad""#,
-        r#"mship datad "$T/datad" "$DM"; mrec rc.local "$T/rc" "$RM"; printf 'datad build B\n' >"$T/datad"; echo "x edited" >>"$T/rc""#,
-        r#"printf 'datad build B\n' >"$T/datad"; mship datad "$T/datad" "$DM"; mship datad "$T/datad" "$(md5sum $T/datad | cut -d' ' -f1)"; mrec tailscaled "$T/ts/tailscaled" -"#,
-        r#"mship datad "$T/datad" "$DM"; mrec tailscaled "$T/ts/tailscaled" -; mkdir -p "$T/ts"; echo bin >"$T/ts/tailscaled""#,
-        r#"printf 'doctor v2\n' >"$T/datad"; mship guard "$T/datad" "$DM"; mship scripts "$T/datad" "$(md5sum $T/datad | cut -d' ' -f1)""#,
-        r#"printf 'doctor v2\n' >"$T/datad"; mship guard "$T/datad" "$DM"; mship scripts "$T/datad" "$(md5sum $T/datad | cut -d' ' -f1)"; mship guard "$T/datad" "$DM""#,
-        r#"mship datad "$T/datad" "$DM"; mship old "$T/rc" "$RM"; mrec tuning.env "$T/tuning.env" -; printf '{"v":1,"kind":"retire","comps":"old x","records":"tuning.env"}\n' >>"$T/m.jsonl""#,
+        r#"mship core "$T/core" "$DM"; mrec rc.local "$T/rc" "$RM""#,
+        r#"mship core "$T/core" "$DM"; mrec rc.local "$T/rc" "$RM"; printf 'core build B\n' >"$T/core""#,
+        r#"mship core "$T/core" "$DM"; mrec rc.local "$T/rc" "$RM"; printf 'core build B\n' >"$T/core"; echo "x edited" >>"$T/rc""#,
+        r#"printf 'core build B\n' >"$T/core"; mship core "$T/core" "$DM"; mship core "$T/core" "$(md5sum $T/core | cut -d' ' -f1)"; mrec tailscaled "$T/ts/tailscaled" -"#,
+        r#"mship core "$T/core" "$DM"; mrec tailscaled "$T/ts/tailscaled" -; mkdir -p "$T/ts"; echo bin >"$T/ts/tailscaled""#,
+        r#"printf 'doctor v2\n' >"$T/core"; mship guard "$T/core" "$DM"; mship scripts "$T/core" "$(md5sum $T/core | cut -d' ' -f1)""#,
+        r#"printf 'doctor v2\n' >"$T/core"; mship guard "$T/core" "$DM"; mship scripts "$T/core" "$(md5sum $T/core | cut -d' ' -f1)"; mship guard "$T/core" "$DM""#,
+        r#"mship core "$T/core" "$DM"; mship old "$T/rc" "$RM"; mrec tuning.env "$T/tuning.env" -; printf '{"v":1,"kind":"retire","comps":"old x","records":"tuning.env"}\n' >>"$T/m.jsonl""#,
         r#"echo 'garbage {' >"$T/m.jsonl""#,
-        r#"mship datad "$T/datad" "$DM"; txnf manifest_pending x"#,
-        r#"mship datad "$T/datad" "$DM"; txnf failed '退回不完整'"#,
-        r#"mship datad "$T/datad" "$DM"; txnf failed 'executor gone'"#,
-        r#"mship datad "$T/datad" "$DM"; txnf check ''"#,
-        r#"mship datad "$T/datad" "$DM"; txnf check ''; mkdir -p "$T/proc/700"; printf 'sh\000/data/luyaz/scripts/luyaz-ship.sh\000run\000' >"$T/proc/700/cmdline"; echo "995 700 20260930-120000-datad check" >"$T/hb.ship""#,
-        r#"mship datad "$T/datad" "$DM"; txnf trial ''; mkdir -p "$T/proc/700"; printf 'sh\000other\000' >"$T/proc/700/cmdline"; echo "995 700" >"$T/hb.ship""#,
-        r#"mship datad "$T/datad" "$DM"; txnf done '' bbbb-0000 900"#,
-        r#"mship datad "$T/datad" "$DM"; txnf done '' cccc-0000 900"#,
-        r#"mship datad "$T/datad" "$DM"; txnf rolledback '开机时已退回（断电时在 check）'"#,
-        r#"mship datad "$T/datad" "$DM"; txnf aborted 'user said stop'; printf 'datad build B\n' >"$T/datad""#,
-        r#"printf 'datad build B\n' >"$T/datad"; mship datad "$T/datad" "$DM"; mship core "$T/datad" "$(md5sum $T/datad | cut -d' ' -f1)"; mrec u60-recover.sh "$T/rc" "$RM"; mrec luyaz-recover.sh "$T/rc" "$RM""#,
-        r#"mship core "$T/datad" "$DM"; mship datad "$T/datad" "$DM"; txnf trial ''"#,
+        r#"mship core "$T/core" "$DM"; txnf manifest_pending x"#,
+        r#"mship core "$T/core" "$DM"; txnf failed '退回不完整'"#,
+        r#"mship core "$T/core" "$DM"; txnf failed 'executor gone'"#,
+        r#"mship core "$T/core" "$DM"; txnf check ''"#,
+        r#"mship core "$T/core" "$DM"; txnf check ''; mkdir -p "$T/proc/700"; printf 'sh\000/data/luyaz/scripts/luyaz-ship.sh\000run\000' >"$T/proc/700/cmdline"; echo "995 700 20260930-120000-core check" >"$T/hb.ship""#,
+        r#"mship core "$T/core" "$DM"; txnf trial ''; mkdir -p "$T/proc/700"; printf 'sh\000other\000' >"$T/proc/700/cmdline"; echo "995 700" >"$T/hb.ship""#,
+        r#"mship core "$T/core" "$DM"; txnf done '' bbbb-0000 900"#,
+        r#"mship core "$T/core" "$DM"; txnf done '' cccc-0000 900"#,
+        r#"mship core "$T/core" "$DM"; txnf rolledback '开机时已退回（断电时在 check）'"#,
+        r#"mship core "$T/core" "$DM"; txnf aborted 'user said stop'; printf 'core build B\n' >"$T/core""#,
+        r#"printf 'core build B\n' >"$T/core"; mship datad "$T/core" "$DM"; mship core "$T/core" "$(md5sum $T/core | cut -d' ' -f1)"; mrec u60-recover.sh "$T/rc" "$RM"; mrec luyaz-recover.sh "$T/rc" "$RM""#,
+        r#"mship core "$T/core" "$DM"; mship datad "$T/core" "$DM"; txnf trial ''"#,
         dirs,
         &format!(r#"{dirs}ln -s index.html "$T/admin/link""#),
         &format!(r#"{dirs}rm -rf "$T/devui/fonts""#),
@@ -365,32 +425,72 @@ printf '{"v":1,"kind":"record","name":"devui-fonts","path":"%s","tree":"%s","why
             r#"{dirs}export DOC_MD5SUM=md5sum; dd if=/dev/zero of="$T/big" bs=1024 count=300 2>/dev/null; mship lweb "$T/big" "$(md5sum $T/big | cut -d' ' -f1)""#
         ),
     ];
+    let mut cases = Vec::new();
     for s in scenarios {
-        same_as_shell(&format!("{MS}{s}")).expect("fixture");
+        let fx = if let Some(rest) = s.strip_prefix(dirs) {
+            let mut fx = fixture(&format!("{MS}{dirs_pre}"));
+            let fp = |d: &str| manifest::tree_fp(&fx.dir.join(d).to_string_lossy()).unwrap();
+            let extra = [("AF", fp("admin")), ("FF", fp("devui/fonts"))];
+            then(&mut fx, &extra, &format!("{MS}{dirs}{rest}"));
+            fx
+        } else {
+            fixture(&format!("{MS}{s}"))
+        };
+        cases.push((s.to_string(), all_modes(&fx)));
     }
+    snap("manifest", &cases);
 }
 
 #[test]
-fn tree_fp_matches_doctor_sh() {
-    let Some(fx) = fixture(
+fn tree_fp() {
+    let fx = fixture(
         r#"mkdir -p "$T/a/b c/d" "$T/e" "$T/l" "$T/p" "$T/n"; printf 'x\n' >"$T/a/1"; printf 'y' >"$T/a/b c/d/2"; : >"$T/a/b c/3"
 ln -s 1 "$T/l/x"; : >"$T/p/a|b"; ln -s "$T/a" "$T/link"; : >"$T/n/$(printf 'a\nb')""#,
-    ) else {
+    );
+    let cases: Vec<_> = ["a", "e", "l", "p", "n", "link", "missing", "a/1"]
+        .iter()
+        .map(|d| {
+            let fp = manifest::tree_fp(&fx.dir.join(d).to_string_lossy());
+            (d.to_string(), format!("{fp:?}\n"))
+        })
+        .collect();
+    snap("tree-fp", &cases);
+    // the shared fixture every copy of the algorithm must agree on (touch-ui scripts/test)
+    let fix =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../touch-ui/scripts/test/fixtures");
+    if let Ok(want) = std::fs::read_to_string(fix.join("tree.expected")) {
+        let got = manifest::tree_fp(&fix.join("tree").to_string_lossy());
+        assert_eq!(got.as_deref(), Some(want.trim()));
+    }
+}
+
+/// doctor lists exactly the names `luyaz-ship.sh record` writes (was a shell test against
+/// doctor-legacy.sh): read off its `record_list`.
+#[test]
+fn record_names_are_the_ship_executors() {
+    let ship = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../touch-ui/scripts/luyaz-ship.sh");
+    let Ok(text) = std::fs::read_to_string(&ship) else {
         return;
     };
-    for d in ["a", "e", "l", "p", "n", "link", "missing", "a/1"] {
-        let dir = fx.dir.join(d).to_string_lossy().into_owned();
-        let (out, rc) = shell(&fx, &["--tree-fp", &dir]);
-        let mine = manifest::tree_fp(&dir).map(|f| format!("{f}\n"));
-        assert_eq!(
-            (
-                mine.clone().unwrap_or_default(),
-                if mine.is_some() { 0 } else { 1 }
-            ),
-            (out, rc),
-            "{d}"
-        );
+    let body = &text[text.find("\nrecord_list() {").expect("record_list")..];
+    let body = &body[..body.find("\n}\n").unwrap()];
+    let mut theirs: Vec<String> = Vec::new();
+    for l in body.lines().map(str::trim) {
+        if l.starts_with("for _s in $CORE_NAME tailscale;") {
+            theirs.extend(["init.d/luyaz-core".into(), "init.d/tailscale".into()]);
+        } else if let Some(r) = l.split("echo \"").nth(1) {
+            let n = r.split(' ').next().unwrap().to_owned();
+            if !theirs.contains(&n) {
+                theirs.push(n);
+            }
+        }
     }
+    let fx = fixture("");
+    let mine: Vec<String> = manifest::record_list(&cfg(&fx))
+        .into_iter()
+        .map(|r| r.0)
+        .collect();
+    assert_eq!(mine, theirs);
 }
 
 #[test]
@@ -423,23 +523,21 @@ fn md5_is_md5sum() {
 
 const FPFIX: &str = r#"export DOC_STANDBY_STAT=$T/sb DOC_STANDBY_BASE=$T/sb.base
 MCOL=' 5.0'
-printf 'tailscaled 501 aaaaaaaa\nmihomo 502 bbbbbbbb\nu60pro-devui 503 cccccccc\nzwrt-datad 504 dddddddd\nzte-agent 505 eeeeeeee\n' >"$T/fp"
-rows() { _i=0; while [ $_i -lt "$1" ]; do echo "$(($2 + _i * 60)) $3 20 ${4:-30.0}$MCOL 2.0 1.0 0.5"; _i=$((_i + 1)); done; }
-cal() { : >"$T/sb"; i=0; while [ $i -lt 40 ]; do echo "$((100 + i * 20)) $((50 + i)) 20 30.0$MCOL 2.0 1.0 0.5" >>"$T/sb"; i=$((i + 1)); done
-  DOC_WGET=/bin/false DOC_LEDGER_DIR=$T/ledger sh "$(dirname "$RUN")/../../doctor.sh" --calibrate-standby >/dev/null; }
+printf 'tailscaled 501 aaaaaaaa\nmihomo 502 bbbbbbbb\nluyaz-ui 503 cccccccc\nluyaz-core 504 dddddddd\n' >"$T/fp"
+rows() { _i=0; while [ $_i -lt "$1" ]; do echo "$(($2 + _i * 60)) $3 20 ${4:-30.0}$MCOL 2.0 1.0"; _i=$((_i + 1)); done; }
+// cal: the 40 rows a baseline is calibrated from; the tests run --calibrate-standby right after
+cal() { : >"$T/sb"; i=0; while [ $i -lt 40 ]; do echo "$((100 + i * 20)) $((50 + i)) 20 30.0$MCOL 2.0 1.0" >>"$T/sb"; i=$((i + 1)); done; }
 "#;
 
 #[test]
-fn standby_matches_doctor_sh_live() {
-    if scripts().is_none() {
-        return;
-    }
+fn standby() {
     // the shell comments in FPFIX are Rust comments for the public strip; drop them for sh
     let fpfix: String = FPFIX
         .lines()
         .filter(|l| !l.starts_with("//"))
         .map(|l| format!("{l}\n"))
         .collect();
+    let mut cases = Vec::new();
     for s in [
         "",
         r#"cal; rows 5 700 300 >"$T/sb""#,
@@ -447,27 +545,41 @@ fn standby_matches_doctor_sh_live() {
         r#"cal; rows 10 300 200 >"$T/sb""#,
         r#"cal; rows 10 300 70 90.0 >"$T/sb""#,
         r#"cal; rows 9 300 70 90.0 >"$T/sb"; rows 1 900 70 90.5 >>"$T/sb""#,
-        r#"cal; { rows 4 300 70; echo "600 70 20 - - - - -"; rows 5 660 70; } >"$T/sb""#,
-        r#"cal; : >"$T/sb"; i=1; while [ $i -le 10 ]; do echo "$((i * 9)) 500 20 30.0$MCOL 2.0 1.0 0.5" >>"$T/sb"; i=$((i + 1)); done"#,
+        r#"cal; { rows 4 300 70; echo "600 70 20 - - - -"; rows 5 660 70; } >"$T/sb""#,
+        r#"cal; : >"$T/sb"; i=1; while [ $i -le 10 ]; do echo "$((i * 9)) 500 20 30.0$MCOL 2.0 1.0" >>"$T/sb"; i=$((i + 1)); done"#,
         r#"cal; rm -f "$T/sb""#,
         r#"echo "TS_NO_LOGS_NO_SUPPORT=true" >"$T/tuning.env"; cal; rows 10 300 70 90.0 >"$T/sb"; sed -i 's/^tailscaled 501 aaaaaaaa/tailscaled 601 ffffffff/' "$T/fp""#,
         r#"echo "TS_NO_LOGS_NO_SUPPORT=true" >"$T/tuning.env"; cal; rows 10 300 70 90.0 >"$T/sb"; echo "TS_DEBUG_FIREWALL_MODE=auto" >>"$T/tuning.env""#,
         r#"cal; rows 10 300 70 90.0 >"$T/sb"; echo 800 >"$T/fp-changed""#,
         r#"cal; rows 10 300 70 90.0 >"$T/sb"; rm -f "$T/fp""#,
         r#"cal; rows 10 300 70 >"$T/sb"; printf '2 69.5 10.0\n3 20.0 0.0\n4 30.0 0.0\n' >"$T/sb.base""#,
-        r#"cal; rows 10 300 70 | sed 's/ 0.5$/ 9.0/' >"$T/sb""#,
+        r#"cal; rows 10 300 70 | sed 's/ 1.0$/ 9.0/' >"$T/sb""#,
         r#"cal; rows 10 300 70 | sed 's/ 2.0 / 7.5 /' >"$T/sb""#,
     ] {
-        let t = same_as_shell(&format!("export DOC_FP=$T/fp DOC_FP_CHANGED=$T/fp-changed DOC_TS_TUNING=$T/tuning.env\n{fpfix}{s}")).expect("fixture");
+        let pre = format!(
+            "export DOC_FP=$T/fp DOC_FP_CHANGED=$T/fp-changed DOC_TS_TUNING=$T/tuning.env\n{fpfix}"
+        );
+        // `cal;` = the calibration rows, then --calibrate-standby (in Rust), then the rest
+        let fx = match s.split_once("cal;") {
+            Some((before, after)) => {
+                let mut fx = fixture(&format!("{pre}{before}cal"));
+                let ledger = format!("{}/ledger", fx.dir.display());
+                calibrate_with(&fx, &[("DOC_LEDGER_DIR", &ledger)]);
+                // (pre again for `rows`; it rewrites only what the calibration did not touch)
+                then(&mut fx, &[], &format!("{pre}{after}"));
+                fx
+            }
+            None => fixture(&format!("{pre}{s}")),
+        };
+        let t = rust(&fx, Mode::Tsv).0;
         assert!(t.contains("\tstandby\t"));
+        cases.push((s.to_string(), all_modes(&fx)));
     }
+    snap("standby", &cases);
 }
 
 #[test]
-fn calibrate_standby_matches_doctor_sh_live() {
-    if scripts().is_none() {
-        return;
-    }
+fn calibrate_standby() {
     let fpfix: String = FPFIX
         .lines()
         .filter(|l| !l.starts_with("//"))
@@ -476,38 +588,29 @@ fn calibrate_standby_matches_doctor_sh_live() {
     let pre = format!(
         "export DOC_FP=$T/fp DOC_FP_CHANGED=$T/fp-changed DOC_TS_TUNING=$T/tuning.env DOC_WGET=/bin/false\n{fpfix}"
     );
+    let mut cases = Vec::new();
     for s in [
         r#"rows 40 100 70 >"$T/sb""#,
         r#"rows 29 100 70 >"$T/sb""#,
         r#"rm -f "$T/sb""#,
-        r#"{ rows 20 100 70; echo "1400 - - - - - - -"; rows 15 1500 90 45.5; } >"$T/sb"; rm -f "$T/fp""#,
-        r#"rows 31 100 70 | sed 's/ 0.5$/ -/' >"$T/sb"; echo "TS_NO_LOGS_NO_SUPPORT=true" >"$T/tuning.env""#,
+        r#"{ rows 20 100 70; echo "1400 - - - - - -"; rows 15 1500 90 45.5; } >"$T/sb"; rm -f "$T/fp""#,
+        r#"rows 31 100 70 | sed 's/ 1.0$/ -/' >"$T/sb"; echo "TS_NO_LOGS_NO_SUPPORT=true" >"$T/tuning.env""#,
     ] {
-        let (fa, fb) = (
-            fixture(&format!("{pre}{s}")).expect("fixture"),
-            fixture(&format!("{pre}{s}")).expect("fixture"),
-        );
-        let (mine, rc) = standby::calibrate(&cfg(&fa));
-        let (theirs, rc2) = shell(&fb, &["--calibrate-standby"]);
-        let (a, b) = (
-            fa.dir.to_string_lossy().into_owned(),
-            fb.dir.to_string_lossy().into_owned(),
-        );
-        assert_eq!(
-            (mine.replace(&a, "$T"), rc),
-            (theirs.replace(&b, "$T"), rc2),
-            "scenario:\n{s}"
-        );
-        let base = |d: &std::path::Path| std::fs::read_to_string(d.join("sb.base")).ok();
-        assert_eq!(base(&fa.dir), base(&fb.dir), "baseline, scenario:\n{s}");
+        let fx = fixture(&format!("{pre}{s}"));
+        let (out, rc) = standby::calibrate(&cfg(&fx));
+        let base =
+            std::fs::read_to_string(fx.dir.join("sb.base")).unwrap_or_else(|_| "(none)\n".into());
+        let d = fx.dir.to_string_lossy().into_owned();
+        cases.push((
+            s.to_string(),
+            format!("--- rc={rc}\n{}--- sb.base\n{base}", out.replace(&d, "$T")),
+        ));
     }
+    snap("calibrate-standby", &cases);
 }
 
 #[test]
-fn ledger_selftest_matches_doctor_sh_live() {
-    if scripts().is_none() {
-        return;
-    }
+fn ledger_selftest() {
     let ss = r#"export DOC_LEDGER_DIR=$T/ledger DOC_CRASHCAP_DIR=$T/crashcap DOC_KEYLOG=$T/key.log DOC_MSS_RECOVERY=$T/recovery DOC_BOOT_ID_FILE=$T/bootid DOC_JSONFILTER=$T/bin/jsonfilter DOC_LEDGER_TMP=$T/lt DOC_SELFTEST_WAIT=1
 mkdir -p "$T/ledger" "$T/crashcap" "$T/lt"
 echo aaaaaaaa-0000-4000-8000-000000000001 >"$T/bootid"
@@ -522,6 +625,7 @@ printf 'Iface\tDestination\tGateway\tFlags\nrmnet_data0\t00000000\t00000000\t000
 chmod +x "$T/bin/jsonfilter" "$T/bin/wget" "$T/bin/ip"
 export DOC_IP=$T/bin/ip DOC_ROUTE=$T/route
 "#;
+    let mut cases = Vec::new();
     for s in [
         "",
         r#"mv "$T/key.log" "$T/key.log.0"; : >"$T/key.log""#,
@@ -533,23 +637,15 @@ export DOC_IP=$T/bin/ip DOC_ROUTE=$T/route
         r#"export DOC_KMSG=$T/elsewhere; : >"$T/elsewhere""#,
         r#"chmod 500 "$T/ledger"; export DOC_LEDGER_DIR=$T/ledger/sub/x; rm -f "$T/bootid""#,
     ] {
-        // each on its own fixture: the test line each appends moves the other's offset
-        let (fa, fb) = (
-            fixture(&format!("{ss}{s}")).expect("fixture"),
-            fixture(&format!("{ss}{s}")).expect("fixture"),
-        );
-        let (mine, rc) = selftest::run(&cfg(&fa));
-        let (theirs, rc2) = shell(&fb, &["--ledger-selftest"]);
-        let (a, b) = (
-            fa.dir.to_string_lossy().into_owned(),
-            fb.dir.to_string_lossy().into_owned(),
-        );
-        assert_eq!(
-            (mine.replace(&a, "$T"), rc),
-            (theirs.replace(&b, "$T"), rc2),
-            "scenario:\n{s}"
-        );
+        let fx = fixture(&format!("{ss}{s}"));
+        let (out, rc) = selftest::run(&cfg(&fx));
+        let d = fx.dir.to_string_lossy().into_owned();
+        cases.push((
+            s.to_string(),
+            format!("--- rc={rc}\n{}", out.replace(&d, "$T")),
+        ));
     }
+    snap("ledger-selftest", &cases);
 }
 
 #[test]

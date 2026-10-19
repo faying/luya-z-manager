@@ -2,7 +2,7 @@
 //! block's `data`, each field marked for sensitivity (`sens.rs`).
 //!
 //! For now the projection still builds `serde_json::Value`s (moved byte for byte from
-//! datad); these types sit at the event log's door: a block goes into the log only
+//! core); these types sit at the event log's door: a block goes into the log only
 //! through its contract (decoded, redacted for the log). A block that does not decode
 //! is written as `{"untyped":true}`, never as its plain value; fields the contract does
 //! not name are dropped and counted (`inexact`). `tools/u60d-parity.sh` ran every mock case

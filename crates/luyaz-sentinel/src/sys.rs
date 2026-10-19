@@ -424,7 +424,7 @@ pub fn single_instance(path: &str) -> Result<File, String> {
 
 // ── logs ────────────────────────────────────────────────────────────────────
 
-/// The screen log (`/tmp/u60-uid.log` before Luya-Z rename E2c).
+/// The screen log.
 pub const UID_LOG: &str = "/tmp/luyaz-screen.log";
 pub const SENTINEL_LOG: &str = "/tmp/luyaz-sentinel.log";
 pub const SHADOW_LOG: &str = "/tmp/luyaz-sentinel.shadow";
@@ -785,14 +785,22 @@ pub fn txn_live(comps: &[&str]) -> bool {
 /// u60-guard.init's test: power-off charging is `mode_power_off_*` in zwrt_zte_mc_tmp; power-on
 /// modes are normal; with neither, a non-silent boot on the kernel command line is.
 pub fn boot_is_normal() -> bool {
-    let state = read("/etc/config/zwrt_zte_mc_tmp")
+    boot_mode_normal(
+        &mc_tmp("mode_main_state"),
+        &read("/proc/cmdline").unwrap_or_default(),
+    )
+}
+
+/// One `option <name> '<value>'` of zwrt_zte_mc_tmp ("" when missing).
+fn mc_tmp(name: &str) -> String {
+    let key = format!("option {name}");
+    read("/etc/config/zwrt_zte_mc_tmp")
         .and_then(|t| {
             t.lines()
-                .find(|l| l.contains("option mode_main_state"))
+                .find(|l| l.contains(&key))
                 .and_then(|l| l.split('\'').nth(1).map(str::to_string))
         })
-        .unwrap_or_default();
-    boot_mode_normal(&state, &read("/proc/cmdline").unwrap_or_default())
+        .unwrap_or_default()
 }
 
 pub fn boot_mode_normal(state: &str, cmdline: &str) -> bool {
@@ -805,9 +813,78 @@ pub fn boot_mode_normal(state: &str, cmdline: &str) -> bool {
     cmdline.contains("silent_boot.mode=nonsilent")
 }
 
-/// The core is being replaced (D6): a datad transaction with a live executor.
+/// The boot conditions, one block per sentinel start.
+pub const BOOT_TRACE: &str = "/data/luyaz/ui/boot-trace.log";
+const BOOT_TRACE_KEEP: usize = 160;
+const BOOT_TRACE_FILES: &[&str] = &[
+    "/sys/class/power_supply/usb/online",
+    "/sys/class/power_supply/usb/voltage_now",
+    "/sys/class/power_supply/battery/status",
+    "/sys/class/power_supply/battery/capacity",
+    "/sys/class/power_supply/charger_zte/present_mbb",
+    "/sys/class/power_supply/charger_zte/status_mbb",
+    "/sys/class/power_supply/type-c_zte/present_mbb",
+    "/sys/class/power_supply/type-c_zte/real_type_mbb",
+    "/sys/class/power_supply/statistics_zte/batt_status",
+    "/sys/class/power_supply/statistics_zte/batt_online",
+    "/sys/class/power_supply/battery_zte/status_mbb",
+    "/sys/class/power_supply/battery_zte/online_mbb",
+];
+
+/// Appends this boot's block to `path` and keeps the last 160 lines (start.sh's format).
+pub fn boot_trace(path: &str) {
+    let state = mc_tmp("mode_main_state");
+    let cmdline = read("/proc/cmdline").unwrap_or_default();
+    let mut b = format!(
+        "=== {} ===\nmode_main_state={state}\nreboot_reason_code={}\nbootmode={}\ncmdline={}",
+        stamp(wall_s()).replace('T', " "),
+        mc_tmp("reboot_reason_code"),
+        // power-off charging boots do not expose silent_boot.mode=nonsilent
+        if boot_mode_normal(&state, &cmdline) {
+            "normal"
+        } else {
+            "charge"
+        },
+        cmdline
+    );
+    if !b.ends_with('\n') {
+        b.push('\n');
+    }
+    for f in BOOT_TRACE_FILES {
+        if std::path::Path::new(f).exists() {
+            b.push_str(&format!("{f}={}\n", read(f).unwrap_or_default().trim_end()));
+        }
+    }
+    let mut events: Vec<String> = fs::read_dir("/dev/input")
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with("event"))
+                .collect()
+        })
+        .unwrap_or_default();
+    events.sort();
+    for e in events {
+        let name = read(&format!("/sys/class/input/{e}/device/name")).unwrap_or_default();
+        b.push_str(&format!("/dev/input/{e}={}\n", name.trim_end()));
+    }
+    b.push('\n');
+    let _ = write_atomic(path, &boot_trace_keep(&read(path).unwrap_or_default(), &b));
+}
+
+/// `old` + `block`, cut to the last 160 lines.
+pub fn boot_trace_keep(old: &str, block: &str) -> String {
+    let all = format!("{old}{block}");
+    let lines: Vec<&str> = all.lines().collect();
+    let from = lines.len().saturating_sub(BOOT_TRACE_KEEP);
+    let mut out = lines[from..].join("\n");
+    out.push('\n');
+    out
+}
+
+/// The core is being replaced (D6): a core transaction with a live executor.
 pub fn core_being_replaced() -> bool {
-    txn_live(&["datad", "core"])
+    txn_live(&["core"])
 }
 
 fn boot_id() -> String {
@@ -891,7 +968,7 @@ impl crate::events::EventIo for RealEvents {
 
 // ── alert SMS while the core is unhealthy (§6, D15) ─────────────────────────
 
-/// The touch UI's settings (Luya-Z D5: with the program; it was in /data/plugins/u60pro-devui).
+/// The touch UI's settings (with the program).
 pub const DEVUI_CONF: &str = "/data/luyaz/ui/devui.conf";
 const CLOCK_OK: &str = "/tmp/luyaz/clock-ok";
 

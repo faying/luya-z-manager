@@ -103,7 +103,7 @@ impl luyaz_esim::Host for NoCard {
     fn lpac(&self, _: &[&str], _: std::time::Duration) -> Result<Value, String> {
         Err("lpac not installed".into())
     }
-    fn sh(&self, _: &str) -> String {
+    fn sh(&self, _: &str, _: std::time::Duration) -> String {
         String::new()
     }
     fn exists(&self, _: &str) -> bool {
@@ -356,6 +356,13 @@ impl Compat {
     /// CHILL jobs on this job slot (the device's is shared with u60d's CHILL transactions, O10).
     pub fn with_chill_slot(mut self, slot: Arc<std::sync::atomic::AtomicBool>) -> Self {
         self.chill = Arc::new(chill_jobs::ChillJobs::sharing(slot));
+        self
+    }
+
+    /// CHILL jobs with a short chill.sh deadline (tests of the R7 kill).
+    #[cfg(test)]
+    pub fn with_chill_limit(mut self, limit: std::time::Duration) -> Self {
+        self.chill = Arc::new(chill_jobs::ChillJobs::sharing_within(Arc::default(), limit));
         self
     }
 

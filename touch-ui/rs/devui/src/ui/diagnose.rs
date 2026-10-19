@@ -67,7 +67,7 @@ pub struct Diag {
     /// 对 / 不对 tapped for this run id
     fb_local: i32,
     fb_id: i64,
-    /// roaming now (datad's view), for the speed confirm
+    /// roaming now (the core's view), for the speed confirm
     pub net_roam: bool,
     tone: i32,
 }
@@ -86,7 +86,7 @@ pub struct Place {
     v: [i32; PL_SAMPLES],
     n: usize,
     head: usize,
-    /// datad snapshot the last sample came from
+    /// core snapshot the last sample came from
     ver: u64,
     best: i32,
     have_best: bool,
@@ -680,7 +680,7 @@ impl Ui {
         sc.scroll_to_y(0);
     }
 
-    /// live = datad answered this second; the model's data is its snapshot (or the last one).
+    /// live = core answered this second; the model's data is its snapshot (or the last one).
     pub(super) fn place_paint(&mut self, live: bool) {
         let th = t();
         if self.pl.big.is_null() {
@@ -716,8 +716,8 @@ impl Ui {
             }
             self.pl.key = key;
         }
-        // a new sample per new datad snapshot
-        let ver = self.src.datad_version(&self.model);
+        // a new sample per new core snapshot
+        let ver = self.src.core_version(&self.model);
         let p = &mut self.pl;
         if have && lte_or_nr && ver != p.ver {
             p.ver = ver;
@@ -742,7 +742,7 @@ impl Ui {
 
         let mut col = th.t3;
         if !live && self.pl.n > 0 {
-            // datad stopped: the last number stays, dimmed, with when
+            // core stopped: the last number stays, dimmed, with when
             let alive = m.backend_alive_wall;
             let hm = dg_hm(if alive != 0 { alive } else { self.home.last_valid_wall });
             self.set(pl.big, pl_fmt(med));

@@ -1,0 +1,63 @@
+=== scenario
+rows 40 100 70 >"$T/sb"
+--- rc=0
+基线已写入 $T/sb.base（40 行记录）
+--- sb.base
+v2
+2 70.0 0.0
+3 20.0 0.0
+4 30.0 0.0
+5 5.0 0.0
+6 2.0 0.0
+7 1.0 0.0
+fp 3 aaaaaaaa+none
+fp 4 aaaaaaaa+none
+fp 5 bbbbbbbb+none+none
+fp 6 cccccccc
+fp 7 dddddddd
+=== scenario
+rows 29 100 70 >"$T/sb"
+--- rc=1
+只有 29 行息屏记录，至少要 30 行（屏幕熄灭约 30 分钟后再试）
+--- sb.base
+(none)
+=== scenario
+rm -f "$T/sb"
+--- rc=1
+只有 0 行息屏记录，至少要 30 行（屏幕熄灭约 30 分钟后再试）
+--- sb.base
+(none)
+=== scenario
+{ rows 20 100 70; echo "1400 - - - - - -"; rows 15 1500 90 45.5; } >"$T/sb"; rm -f "$T/fp"
+--- rc=0
+基线已写入 $T/sb.base（36 行记录）
+--- sb.base
+v2
+2 70.0 0.0
+3 20.0 0.0
+4 30.0 0.0
+5 5.0 0.0
+6 2.0 0.0
+7 1.0 0.0
+fp 3 ?+none
+fp 4 ?+none
+fp 5 ?+none+none
+fp 6 ?
+fp 7 ?
+=== scenario
+rows 31 100 70 | sed 's/ 1.0$/ -/' >"$T/sb"; echo "TS_NO_LOGS_NO_SUPPORT=true" >"$T/tuning.env"
+--- rc=0
+基线已写入 $T/sb.base（31 行记录）
+--- sb.base
+v2
+2 70.0 0.0
+3 20.0 0.0
+4 30.0 0.0
+5 5.0 0.0
+6 2.0 0.0
+7 - -
+fp 3 aaaaaaaa+f2907cea
+fp 4 aaaaaaaa+f2907cea
+fp 5 bbbbbbbb+none+none
+fp 6 cccccccc
+fp 7 dddddddd

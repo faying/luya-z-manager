@@ -54,7 +54,7 @@ fn mode_confirm_warns_and_says_rollback_off() {
 }
 
 #[test]
-fn data_switch_reads_like_datad() {
+fn data_switch_reads_like_core() {
     let c = |enable: Value, status: &str| {
         hub_with(json!({"interfaces": {"cellular": {"enable": enable, "connect_status": status, "roam_enable": 1}}})).read(cell).unwrap()
     };

@@ -9,7 +9,7 @@ fn s(x: u64) -> Duration {
     Duration::from_secs(x)
 }
 
-/// 拔电 → datad 断开 → 插电 → datad 恢复: the plug-in during fallback is
+/// 拔电 → 核心断开 → 插电 → 核心恢复: the plug-in during fallback is
 /// acted on within 60 s, and the recovery does not act on it again.
 #[test]
 fn plug_in_during_fallback_enforced_once() {
@@ -32,7 +32,7 @@ fn plug_in_during_fallback_enforced_once() {
         None
     );
 
-    // datad drops at 100: the feed has no answer; the loop polls directly.
+    // core drops at 100: the feed has no answer; the loop polls directly.
     // Plug-in lands at 101, just after a direct read — the worst case.
     let plug_at = 101;
     now = 100;
@@ -65,7 +65,7 @@ fn plug_in_during_fallback_enforced_once() {
         "low-frequency direct reads, got {direct_calls}"
     );
 
-    // datad back at 200: the snapshot says connected. Not a new plug-in.
+    // core back at 200: the snapshot says connected. Not a new plug-in.
     for t in [200, 230, 260, 300, 400] {
         let p = d.pass(s(t), Some(true), t == 200, true, &mut || {
             panic!("subscribed: no direct")

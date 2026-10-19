@@ -264,7 +264,7 @@ impl Ui {
         if automatic {
             l.hist = logic::exec_next(Some(&self.launch.hist), self.src.boot_s(&self.model));
         }
-        // the new process sets its own pace; don't leave datad slow if it never does
+        // the new process sets its own pace; don't leave core slow if it never does
         self.src.data_set_pace(true);
         let r = self.src.exec(&l);
         self.sync();
@@ -626,7 +626,7 @@ impl Ui {
         120 + 110
     }
 
-    /// 健康 on 系统: the device check's counts (refreshed before the datad check: it is the
+    /// 健康 on 系统: the device check's counts (refreshed before the core check: it is the
     /// agent's).
     pub(super) fn system_health_paint(&mut self) {
         let th = t();
@@ -708,12 +708,12 @@ impl Ui {
 
     /// Fed every tick whatever page is showing, so the charts open on real history. One point
     /// per CHART_STEP ticks: the average of those readings.
-    pub(super) fn charts_paint(&mut self, datad_silent: bool) {
+    pub(super) fn charts_paint(&mut self, core_silent: bool) {
         let m = self.model.clone();
         let d = &m.data;
         let ch = &mut self.charts;
-        if datad_silent {
-            // no fake flat history while datad is gone; no point averaging across the gap
+        if core_silent {
+            // no fake flat history while core is gone; no point averaging across the gap
             (ch.acc_cpu, ch.acc_mem, ch.acc_rx, ch.acc_tx, ch.acc_bat, ch.acc_n) = (0, 0, 0, 0, 0, 0);
             return;
         }

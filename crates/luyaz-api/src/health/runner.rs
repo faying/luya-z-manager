@@ -68,7 +68,7 @@ pub fn run_doctor_within(doctor: &str, flag: &str, limit: Duration) -> Result<St
 
 /// A command in its own process group, killed as a group past `limit` (the agent's
 /// `ubus::output_within_group`).
-fn output_within_group(cmd: &mut Command, limit: Duration) -> std::io::Result<Output> {
+pub fn output_within_group(cmd: &mut Command, limit: Duration) -> std::io::Result<Output> {
     use std::os::unix::process::CommandExt;
     cmd.process_group(0);
     let mut child = cmd

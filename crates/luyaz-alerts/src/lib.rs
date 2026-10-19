@@ -504,10 +504,7 @@ impl Alerts {
 /// [`kind_label_en`]); it no longer keeps its own copy (L2 review R8).
 pub fn kind_label(kind: &str) -> String {
     const T: &[(&str, &str)] = &[
-        ("agent-crash", "管理后台意外退出，已自动重启"),
-        ("agent-silent", "管理后台失去响应"),
-        ("agent-hung", "管理后台卡死，已被强制重启"),
-        ("datad-crash", "数据服务意外退出，已自动重启"),
+        ("core-crash", "数据服务意外退出，已自动重启"),
         ("devui-crash", "触屏界面闪退，已自动重新打开"),
         // Phase 10 X9: the core watches these two procd services
         ("web-crash", "管理网页意外退出，已自动重启"),
@@ -521,7 +518,6 @@ pub fn kind_label(kind: &str) -> String {
         ("wifi-restore-failed", "Wi-Fi 看门狗没能打开 Wi-Fi"),
         ("sms-failed", "告警短信发送失败"),
         ("sms-test", "测试短信"),
-        ("datad-degraded", "数据服务持续没响应，后台改为直接读取"),
         // luyaz-sentinel (u60-sentinel.md Phase 5)
         (
             "screen-two-uis",
@@ -558,10 +554,7 @@ pub fn kind_label(kind: &str) -> String {
 /// instead of keeping its own copy (L2 review R8).
 pub fn kind_label_en(kind: &str) -> String {
     const T: &[(&str, &str)] = &[
-        ("agent-crash", "Admin backend exited unexpectedly"),
-        ("agent-silent", "Admin backend stopped responding"),
-        ("agent-hung", "Admin backend was stuck and was restarted"),
-        ("datad-crash", "Data service exited unexpectedly"),
+        ("core-crash", "Data service exited unexpectedly"),
         ("devui-crash", "Screen UI exited unexpectedly"),
         ("web-crash", "Admin pages (luyaz-web) exited unexpectedly"),
         (
@@ -583,10 +576,6 @@ pub fn kind_label_en(kind: &str) -> String {
         ),
         ("sms-failed", "Alert SMS could not be sent"),
         ("sms-test", "Test SMS"),
-        (
-            "datad-degraded",
-            "Data service not answering; admin backend reads the modem directly",
-        ),
         // luyaz-sentinel (u60-sentinel.md Phase 5)
         (
             "screen-two-uis",
@@ -656,17 +645,12 @@ mod tests {
     #[test]
     fn kind_labels_as_the_screen_had_them() {
         use super::kind_label;
-        assert_eq!(kind_label("agent-crash"), "管理后台意外退出，已自动重启");
+        assert_eq!(kind_label("core-crash"), "数据服务意外退出，已自动重启");
         assert_eq!(
             kind_label("devui-gave-up"),
             "触屏界面反复打不开，已换回原厂界面（长按屏幕右下角 3 秒重试）"
         );
         assert_eq!(kind_label("sms-test"), "测试短信");
-        // the screen used to fall back to the raw kind for this one
-        assert_eq!(
-            kind_label("datad-degraded"),
-            "数据服务持续没响应，后台改为直接读取"
-        );
         assert_eq!(kind_label("something-new"), "其他告警（something-new）");
         assert_eq!(kind_label(""), "其他告警（）");
     }
@@ -678,10 +662,7 @@ mod tests {
         use super::{kind_label, kind_label_en};
 
         let kinds = [
-            "agent-crash",
-            "agent-silent",
-            "agent-hung",
-            "datad-crash",
+            "core-crash",
             "devui-crash",
             "web-crash",
             "sentinel-crash",
@@ -691,7 +672,6 @@ mod tests {
             "wifi-restore-failed",
             "sms-failed",
             "sms-test",
-            "datad-degraded",
         ];
         for k in kinds {
             let en = kind_label_en(k);
@@ -706,8 +686,8 @@ mod tests {
             );
         }
         assert_eq!(
-            kind_label_en("agent-crash"),
-            "Admin backend exited unexpectedly"
+            kind_label_en("core-crash"),
+            "Data service exited unexpectedly"
         );
         assert_eq!(
             kind_label_en("something-new"),
@@ -788,11 +768,11 @@ mod tests {
 
     #[test]
     fn queue_parser_keeps_good_lines_and_skips_the_rest() {
-        let text = "1\t1758600000\t42\tagent-crash\texit 139 (SIGSEGV)\n\
+        let text = "1\t1758600000\t42\tweb-crash\texit 139 (SIGSEGV)\n\
                     garbage line\n\
                     2\t35392498\t7\twifi-takeover\tagent silent 300s, AP off; forcing Wi-Fi on\n\
                     3\t1758600100\t99\tBad_Kind\tx\n\
-                    4\t1758600200\t120\tdatad-crash\ttoo\tmany\n\
+                    4\t1758600200\t120\tcore-crash\ttoo\tmany\n\
                     5\t1758600300\t130\tsms-failed\tresult=5\n\
                     6\t17586";
         let ev = parse_queue(text);
@@ -803,7 +783,7 @@ mod tests {
 
     #[test]
     fn sms_log_parser() {
-        let log = parse_sms_log("1758600000\t1\tagent-crash\tsent\nbad\n1758600001\t2\tx\t\n");
+        let log = parse_sms_log("1758600000\t1\tweb-crash\tsent\nbad\n1758600001\t2\tx\t\n");
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].result, "sent");
     }
@@ -832,7 +812,7 @@ mod tests {
         let a = scratch("unread");
         fs::write(
             a.path("queue"),
-            "7\t1758600000\t42\tagent-crash\tA\n8\t35392498\t7\twifi-takeover\tB\n",
+            "7\t1758600000\t42\tweb-crash\tA\n8\t35392498\t7\twifi-takeover\tB\n",
         )
         .unwrap();
         assert_eq!(a.unread(), 2);
@@ -907,7 +887,7 @@ mod tests {
         fs::write(a.path("seq"), "0\n").unwrap();
         a.offset = Some(28800);
         for i in 0..5 {
-            a.add("agent-crash", &format!("e{i}"), 1_758_600_000 + i, 10)
+            a.add("web-crash", &format!("e{i}"), 1_758_600_000 + i, 10)
                 .unwrap();
         }
         a
@@ -919,18 +899,18 @@ mod tests {
         let a = scratch("snapshot");
         fs::write(
             a.path("queue"),
-            "1\t1758600000\t42\tagent-crash\tA\n2\t35392498\t7\twifi-takeover\tB\n",
+            "1\t1758600000\t42\tweb-crash\tA\n2\t35392498\t7\twifi-takeover\tB\n",
         )
         .unwrap();
         fs::write(a.path("offsets"), "1\t28800\n").unwrap();
         fs::write(a.path("read"), "1\n").unwrap();
-        fs::write(a.path("sms-log"), "1758600001\t1\tagent-crash\tsent\n").unwrap();
+        fs::write(a.path("sms-log"), "1758600001\t1\tweb-crash\tsent\n").unwrap();
         let got = a.summary(1_758_600_500, Some(9), 28800).to_string();
         assert_eq!(got, SNAPSHOT, "{got}");
         let _ = fs::remove_dir_all(&a.dir);
     }
 
-    const SNAPSHOT: &str = r#"{"clock_set":true,"events":[{"kind":"wifi-takeover","label":"Wi-Fi 看门狗重新打开了 Wi-Fi","label_en":"Wi-Fi watchdog turned Wi-Fi back on","seq":2,"text":"B","time":null,"unread":true,"uptime":7},{"kind":"agent-crash","label":"管理后台意外退出，已自动重启","label_en":"Admin backend exited unexpectedly","seq":1,"text":"A","time":1758600000,"unread":false,"uptime":42}],"read":1,"sms":{"abroad_allowed":false,"abroad_now":false,"configured":false,"number":null,"processed":0,"recent":[{"kind":"agent-crash","label":"管理后台意外退出，已自动重启","label_en":"Admin backend exited unexpectedly","result":"sent","seq":1,"time":1758600001}],"sent_24h":1},"unread":1,"uptime_now":9,"utc_offset":28800}"#;
+    const SNAPSHOT: &str = r#"{"clock_set":true,"events":[{"kind":"wifi-takeover","label":"Wi-Fi 看门狗重新打开了 Wi-Fi","label_en":"Wi-Fi watchdog turned Wi-Fi back on","seq":2,"text":"B","time":null,"unread":true,"uptime":7},{"kind":"web-crash","label":"管理网页意外退出，已自动重启","label_en":"Admin pages (luyaz-web) exited unexpectedly","seq":1,"text":"A","time":1758600000,"unread":false,"uptime":42}],"read":1,"sms":{"abroad_allowed":false,"abroad_now":false,"configured":false,"number":null,"processed":0,"recent":[{"kind":"web-crash","label":"管理网页意外退出，已自动重启","label_en":"Admin pages (luyaz-web) exited unexpectedly","result":"sent","seq":1,"time":1758600001}],"sent_24h":1},"unread":1,"uptime_now":9,"utc_offset":28800}"#;
 
     #[test]
     fn cursor_pages_in_order_with_next() {
@@ -996,7 +976,7 @@ mod tests {
         // R6: the result is logged under the old seq; the snapshot still has it.
         let a = cursor_fixture("sms");
         let next = a.since(0, 50, 0, 0)["next"].as_u64().unwrap();
-        fs::write(a.path("sms-log"), "1758600009\t2\tagent-crash\tsent\n").unwrap();
+        fs::write(a.path("sms-log"), "1758600009\t2\tweb-crash\tsent\n").unwrap();
         let r = a.since(next, 50, 0, 0);
         assert!(r["events"].as_array().unwrap().is_empty());
         assert_eq!(
@@ -1016,10 +996,10 @@ mod tests {
         // a writer without an offset (alert-lib.sh, the sentinel's fallback): unknown
         let mut b = Alerts::at(&a.dir);
         b.offset = None;
-        let s = b.add("agent-crash", "x", 0, 0).unwrap();
+        let s = b.add("web-crash", "x", 0, 0).unwrap();
         assert!(a.since(s - 1, 1, 0, 0)["events"][0]["offset"].is_null());
         for _ in 0..400 {
-            a.add("agent-crash", "x", 0, 0).unwrap();
+            a.add("web-crash", "x", 0, 0).unwrap();
         }
         let first = a.events()[0].seq;
         let offs = a.offsets();

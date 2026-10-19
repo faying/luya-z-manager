@@ -191,13 +191,6 @@ fn list_detail_and_states() {
             && h.contains("nd-group nd-stale")
             && h.contains("已切到只用 4G")
     );
-    let old = Got {
-        err: Some(ReadErr::Refused("unknown action".into())),
-        old: true,
-        ..Got::default()
-    };
-    let h = html(&view(&old, &Want::default(), &mut None, false, Lang::Zh));
-    assert!(h.contains("这版数据服务还没有改动记录"));
 }
 
 #[test]
@@ -243,7 +236,6 @@ fn english_pages_have_no_chinese() {
         ),
         view(
             &Got {
-                old: true,
                 err: Some(ReadErr::NoReply),
                 ..Got::default()
             },

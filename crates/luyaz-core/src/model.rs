@@ -3,12 +3,12 @@ use serde_json::{Map, Value};
 use std::{collections::BTreeMap, fs};
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
-pub struct DatadVersion {
+pub struct CoreVersion {
     pub name: &'static str,
     pub version: &'static str,
 }
 
-impl Default for DatadVersion {
+impl Default for CoreVersion {
     fn default() -> Self {
         Self {
             name: "u60d",
@@ -20,7 +20,7 @@ impl Default for DatadVersion {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Snapshot {
     pub ts: i64,
-    pub datad: DatadVersion,
+    pub core: CoreVersion,
     #[serde(flatten)]
     pub fields: Map<String, Value>,
 }

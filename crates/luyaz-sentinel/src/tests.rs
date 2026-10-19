@@ -1224,7 +1224,7 @@ fn txn(d: &mut Dev, phase: &str, comp: &str, t_phase: u64) {
 fn executor(d: &mut Dev, hb_up: u64, alive: bool) {
     d.files.insert(
         "/tmp/luyaz/ship/heartbeat".into(),
-        format!("{hb_up} 4711 20260930-120000-datad check\n"),
+        format!("{hb_up} 4711 20260930-120000-core check\n"),
     );
     d.cmdlines.remove(&4711);
     if alive {
@@ -1247,13 +1247,13 @@ fn ship_recover_live() {
         "failed",
     ] {
         let mut d = ship_dev();
-        txn(&mut d, ph, "datad", 1900);
+        txn(&mut d, ph, "core", 1900);
         executor(&mut d, 1500, false);
         w.ship_round(&mut d);
         assert_eq!(d.recover_calls, 0, "{ph} is finished, not touched");
     }
     let mut d = ship_dev();
-    txn(&mut d, "check", "datad", 1900);
+    txn(&mut d, "check", "core", 1900);
     executor(&mut d, 1990, true);
     w.ship_round(&mut d);
     assert_eq!(
@@ -1261,7 +1261,7 @@ fn ship_recover_live() {
         "executor alive, heartbeat 10 s old: left alone"
     );
     let mut d = ship_dev();
-    txn(&mut d, "check", "datad", 1900);
+    txn(&mut d, "check", "core", 1900);
     executor(&mut d, 1969, true);
     w.ship_round(&mut d);
     assert_eq!(
@@ -1269,10 +1269,10 @@ fn ship_recover_live() {
         "heartbeat 31 s old (stuck): recover-live"
     );
     assert!(d.logs.iter().any(|l| l.contains(
-        "u60-ship: transaction (datad, check) has no live executor (heartbeat 31s old)"
+        "u60-ship: transaction (core, check) has no live executor (heartbeat 31s old)"
     )));
     let mut d = ship_dev();
-    txn(&mut d, "trial", "datad", 1900);
+    txn(&mut d, "trial", "core", 1900);
     executor(&mut d, 1999, false);
     w.ship_round(&mut d);
     assert_eq!(
@@ -1280,7 +1280,7 @@ fn ship_recover_live() {
         "fresh heartbeat but the executor is gone: recover-live"
     );
     let mut d = ship_dev();
-    txn(&mut d, "promote", "datad", 1900);
+    txn(&mut d, "promote", "core", 1900);
     w.ship_round(&mut d);
     assert!(
         d.recover_calls == 1 && d.logs.iter().any(|l| l.contains("heartbeat missing")),
@@ -1303,20 +1303,20 @@ fn ship_recover_live() {
         "a guard transaction is (the guard cannot finish its own)"
     );
     let mut d = ship_dev();
-    txn(&mut d, "staged", "datad", 1900);
+    txn(&mut d, "staged", "core", 1900);
     w.ship_round(&mut d);
     assert_eq!(
         d.recover_calls, 0,
         "staged 100 s ago, not started yet: left alone"
     );
-    txn(&mut d, "staged", "datad", 1600);
+    txn(&mut d, "staged", "core", 1600);
     w.ship_round(&mut d);
     assert_eq!(
         d.recover_calls, 1,
         "staged 400 s ago and never started: recover-live"
     );
     let mut d = ship_dev();
-    txn(&mut d, "check", "datad", 1900);
+    txn(&mut d, "check", "core", 1900);
     executor(&mut d, 1500, false);
     d.files.remove("/data/luyaz/scripts/luyaz-ship.sh");
     w.ship_round(&mut d);
@@ -1341,7 +1341,7 @@ fn ship_never_recovered_blind() {
     let mut w = wk();
     let mut d = ship_dev();
     d.blind = true;
-    txn(&mut d, "check", "datad", 1900);
+    txn(&mut d, "check", "core", 1900);
     executor(&mut d, 1500, false);
     w.ship_round(&mut d);
     assert_eq!(
@@ -1358,7 +1358,7 @@ fn ship_never_recovered_blind() {
 fn ship_executor_killed_taken_over_by_the_next_round() {
     let mut w = wk();
     let mut d = ship_dev();
-    txn(&mut d, "check", "datad", 1900);
+    txn(&mut d, "check", "core", 1900);
     executor(&mut d, 2000, true);
     d.up = 2029;
     w.ship_round(&mut d);
@@ -1457,11 +1457,10 @@ fn logcap() {
 
 #[test]
 fn logcap_default_covers_every_service_log() {
-    // every RAM log our procd services write (/tmp/<name>.log; old names kept for leftovers), luyaz-web included
+    // every RAM log our procd services write (/tmp/<name>.log), luyaz-web included
     let p = Paths::default();
     for l in [
-        "/tmp/zte-agent.log",
-        "/tmp/zwrt-datad.log",
+        "/tmp/luyaz-core.log",
         "/tmp/luyaz-sentinel.log",
         "/tmp/luyaz-sentinel.out",
         "/tmp/luyaz-web.log",
@@ -1560,7 +1559,7 @@ fn alert_sms_only_while_the_core_is_unhealthy_and_not_being_replaced() {
     w.core_round(&mut d);
     assert_eq!(
         d.sms_rounds, 1,
-        "a datad ship in its trial: its replacement sends (D6)"
+        "a core ship in its trial: its replacement sends (D6)"
     );
     d.core_replacing = false;
     d.health = Some(Health::Ok);
@@ -1616,6 +1615,19 @@ fn boot_modes_as_the_guard_reads_them() {
     assert!(boot_mode_normal("mode_power_on_charger", ""));
     assert!(boot_mode_normal("", "x silent_boot.mode=nonsilent y"));
     assert!(!boot_mode_normal("", "silent_boot.mode=silent"));
+}
+
+#[test]
+fn boot_trace_keeps_the_last_160_lines() {
+    use crate::sys::boot_trace_keep;
+    assert_eq!(
+        boot_trace_keep("", "=== a ===\nx=1\n\n"),
+        "=== a ===\nx=1\n\n"
+    );
+    let old: String = (0..200).map(|i| format!("l{i}\n")).collect();
+    let out = boot_trace_keep(&old, "new\n");
+    assert_eq!(out.lines().count(), 160);
+    assert!(out.starts_with("l41\n") && out.ends_with("l199\nnew\n"));
 }
 
 #[test]
@@ -2105,9 +2117,9 @@ fn shadow_worker_changes_nothing() {
         .insert("/sys/class/rtc/rtc0/since_epoch".into(), "1000\n".into());
     d.files
         .insert("/data/luyaz/scripts/luyaz-ship.sh".into(), "x".into());
-    txn(&mut d, "check", "datad", 1900);
+    txn(&mut d, "check", "core", 1900);
     d.files
-        .insert("/tmp/zte-agent.log".into(), "z".repeat(300_000));
+        .insert("/tmp/luyaz-web.log".into(), "z".repeat(300_000));
     d.dropbear = false;
     let mut sh = ShadowWorker::new(d);
     let mut w = wk();
@@ -2141,38 +2153,6 @@ fn write_synced_leaves_the_directory_mode_alone() {
     );
     assert_eq!(std::fs::read_to_string(&f).unwrap(), "vendor\n");
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn the_new_tmp_tree_is_marked_live_only_after_its_files_are_in_place() {
-    use crate::worker::CORE_DUTIES;
-    const MARK: &str = "/tmp/luyaz/.migrated";
-    let (mut w, mut d) = (wk(), Dev::new());
-    w.migrated_round(&mut d);
-    assert!(!d.files.contains_key(MARK), "nothing written yet");
-    w.handover_round(&mut d);
-    w.migrated_round(&mut d);
-    assert!(!d.files.contains_key(MARK), "no clock-ok yet");
-    w.clock_round(&mut d);
-    w.migrated_round(&mut d);
-    assert_eq!(d.files.get(MARK).map(String::as_str), Some(""));
-    assert_eq!(d.files["/tmp/luyaz/handover"], CORE_DUTIES);
-    assert!(
-        !d.files.keys().any(|k| k.starts_with("/tmp/u60-guard")),
-        "old tree untouched"
-    );
-    let logs = d.logs.len();
-    w.migrated_round(&mut d);
-    assert_eq!(d.logs.len(), logs, "written once");
-}
-
-#[test]
-fn a_whole_round_leaves_the_mark_even_with_proc_unreadable() {
-    let (mut w, mut d) = (wk(), Dev::new());
-    d.blind = true;
-    w.round(&mut d);
-    assert!(d.files.contains_key("/tmp/luyaz/clock-ok"));
-    assert!(d.files.contains_key("/tmp/luyaz/.migrated"));
 }
 
 #[test]

@@ -61,7 +61,7 @@ On `/data`, mode 700: a reboot loop must neither wipe alerts nor reset the SMS q
 - Text: printable ASCII, ≤ 120 characters, never any configuration (numbers, passwords, SSIDs). Malformed lines are skipped.
 - Kinds emitted now:
   - sentinel: `agent-silent`, `wifi-takeover`, `wifi-restore-failed`, `dropbear-down`, `dropbear-restarted`, `devui-crash`, `devui-gave-up`
-  - core svcwatch: `datad-crash` (the core itself), `web-crash`, `sentinel-crash`
+  - core svcwatch: `core-crash` (the core itself; `core-crash` before rename F4, old rows still read), `web-crash`, `sentinel-crash`
   - core sentinel watch: `sentinel-silent`, `screen-empty` (only if the screen-guard switch is on)
   - core engines: `home-exit-down`, `home-exit-check-failed`, `sms-forward-stuck`
   - touch UI: `devui-theme-paused`
@@ -99,7 +99,7 @@ Served by the core on loopback as `/v2/api/…`; luyaz-web (`alerts_page.rs`) is
 ## 7. Health check and backup
 
 - `luyaz-core doctor` (process name `luyaz-doctor`; `/data/luyaz/scripts/doctor.sh` is a thin shim). Read-only. Output: human text, `--tsv` (`<ok|warn|bad>\t<id>\t<名称>\t<说明>`), `--tsv2` (header `#tsv2`, English); exit 1 if any row is bad. Also `--manifest`, `--tree-fp`, `--ledger-selftest`.
-- `--calibrate-standby` writes the standby baseline (section 8); `--report 24h|7d [--summary]` outputs the longterm scorecard (`scorecard::live::card`, ported in Core 1.3.0 / `7637b1b1e`). `doctor.sh` only falls back to `doctor-legacy.sh` when the core binary is missing, pre-X11, or exits 64.
+- `--calibrate-standby` writes the standby baseline (section 8); `--report 24h|7d [--summary]` outputs the longterm scorecard (`scorecard::live::card`, ported in Core 1.3.0 / `7637b1b1e`). `doctor.sh` only runs `/data/luyaz/luyaz-core doctor`; without a core it exits 2 (the shell fallback `doctor-legacy.sh` was removed in Luya-Z rename F4).
 - The core runs the checks itself (first 20 s after start, then periodically) and serves the snapshot at `/api/health`.
 - `touch-ui/scripts/config-backup.sh`: configuration only (list at the top of the script), Tailscale identity only with `--with-tailscale`. Backups live only on the computer (`./install.sh backup`); `restore` plans first, leaves `.pre-restore`, does not reload Wi-Fi.
 

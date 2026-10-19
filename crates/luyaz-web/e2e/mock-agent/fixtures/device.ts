@@ -367,7 +367,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // device_ext.rs device_poweroff — datad device.poweroff. The mock stays up
+    // device_ext.rs device_poweroff — core device.poweroff. The mock stays up
     // (a real device is gone until someone presses its power button).
     method: "POST",
     path: "/api/device/poweroff",

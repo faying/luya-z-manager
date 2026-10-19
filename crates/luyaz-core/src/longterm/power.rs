@@ -306,7 +306,7 @@ impl Acc {
             }
             _ => Value::Null,
         };
-        let mut o = json!({"cpu_datad": cpu, "idle_rows": null, "idle_wan": null,
+        let mut o = json!({"cpu_core": cpu, "idle_rows": null, "idle_wan": null,
                           "activity": self.activity.value()});
         let m = o.as_object_mut().expect("object");
         for (k, _) in RSS {

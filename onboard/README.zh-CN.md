@@ -82,27 +82,27 @@ U60 地址不是 `192.168.0.1` 时：`GATEWAY=192.168.x.1 ./install.sh`。
 
 程序和数据都在 `/data`（固件升级也不会清）。开机自启只在 `/etc/rc.local` 里加了几行，没有改任何原厂服务。
 核心 luyaz-core、高级后台 luyaz-web 和哨兵 luyaz-sentinel 由系统的 procd 监督：崩溃会被自动拉起，并记一条告警（后台「系统 → 告警」可以设短信通知）。
-`admin`、`devui` 装完会把装了什么（装机包日期、提交号）写进设备清单 `/data/luyaz/ship/manifest.jsonl`，每个组件一行（lweb；touch、sentinel、datad = 核心），`doctor` 拿它和文件比对。
-`devui` 装触屏界面、luyaz-core 和 luyaz-sentinel。`rc.local` 里 `/etc/init.d/luyaz-core start` 后面跟一行 `/etc/init.d/luyaz-sentinel start`；旧装机包留下的行（`zwrt-datad`、start.sh、`u60-uid`、`u60-guard`）会被换掉，这些服务也会停掉（不会 disable）。起哨兵后最多等 60 秒，确认它在 procd 下运行、心跳写着 `ours`、跑着的触屏程序就是刚装的那个。`admin` 只装 luyaz-web。
-装机包直接装成现在的布局。还是旧布局的设备（有 `/data/u60d`、`/data/u60-uid` 或 `/data/u60-ship` 但没有新的 `.migrated` 标记，或者只有 `/data/u60-kit` 没有 `/data/luyaz/kit`）会被拒装，并提示先搬什么。
+`admin`、`devui` 装完会把装了什么（装机包日期、提交号）写进设备清单 `/data/luyaz/ship/manifest.jsonl`，每个组件一行（lweb；touch、sentinel、core），`doctor` 拿它和文件比对。
+`devui` 装触屏界面、luyaz-core 和 luyaz-sentinel。`rc.local` 里 `/etc/init.d/luyaz-core start` 后面跟一行 `/etc/init.d/luyaz-sentinel start`。起哨兵后最多等 60 秒，确认它在 procd 下运行、心跳写着 `ours`、跑着的触屏程序就是刚装的那个。`admin` 只装 luyaz-web。
+装机包只装现在的布局。更早布局的设备（还有 `/data/u60d`、`/data/u60-uid`、`/data/u60-ship`、`/data/plugins/u60pro-devui` 或 `/data/plugins/zwrt-datad`）会被拒装：先用旧版装机包升级。
 
 | 路径 | 用途 |
 |---|---|
 | `/data/ssh/` | dropbear、host key、`authorized_keys`（**公钥正本**） |
 | `/data/local/tmp/start_dropbear.sh` | 开机时把公钥同步到 `/etc/dropbear/` 并启动 dropbear（:2222） |
 | `/data/luyaz/luyaz-core`、`/data/luyaz/core/` | 核心（:9460，只听本机）：触屏和后台的数据、所有改动都经过它。状态在 `/data/luyaz/core/`，日志 `/tmp/luyaz-core.log` |
-| `/data/luyaz/luyaz-web`、`/data/luyaz/operator-logos/` | 高级后台（luyaz-web，:9090）。zte-agent 2026-10-14 起已删：装机包会停掉旧的、去掉它在 `rc.local` 里那一行 |
-| `/data/luyaz/web.env` | **后台密码**（只有 root 可读；旧装机包放在 `/data/zte-agent.env`） |
-| `/data/luyaz/luyaz-sentinel`、`/data/luyaz/screen/` | 哨兵（取代 u60-uid 和 u60-guard）：管屏幕，触屏程序崩了拉起，连续两次起不来就交还原厂界面并告警（长按右下角 3 秒回来）；也负责 Wi-Fi 兜底看门狗和告警短信。控制 FIFO `/tmp/luyaz-screen.ctl`，日志 `/tmp/luyaz-sentinel.log`，心跳 `/tmp/luyaz-sentinel.hb` |
-| `/data/luyaz/ui/` | 触屏程序 `luyaz-ui`、字体和运营商 logo。`/data/plugins/u60pro-devui/` 只剩 `start.sh` 和备份 |
-| `/data/luyaz/scripts/`、`/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}` | 设备端脚本（doctor.sh，是 `luyaz-core doctor` 的薄壳；alert-lib.sh 等；上机执行器 luyaz-ship.sh、datad-trial.sh 也在这）和进程监督（开机由 `rc.local` 里的 `/etc/init.d/… start` 行启动，不走 `enable`） |
+| `/data/luyaz/luyaz-web`、`/data/luyaz/operator-logos/` | 高级后台（luyaz-web，:9090） |
+| `/data/luyaz/web.env` | **后台密码**（只有 root 可读） |
+| `/data/luyaz/luyaz-sentinel`、`/data/luyaz/screen/` | 哨兵：管屏幕，触屏程序崩了拉起，连续两次起不来就交还原厂界面并告警（长按右下角 3 秒回来）；也负责 Wi-Fi 兜底看门狗和告警短信。控制 FIFO `/tmp/luyaz-screen.ctl`，日志 `/tmp/luyaz-sentinel.log`，心跳 `/tmp/luyaz-sentinel.hb` |
+| `/data/luyaz/ui/` | 触屏程序 `luyaz-ui`、字体和运营商 logo、开机记录 `boot-trace.log`、原厂界面备份 `vendor-devui.orig-backup` |
+| `/data/luyaz/scripts/`、`/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}` | 设备端脚本（doctor.sh，是 `luyaz-core doctor` 的薄壳；alert-lib.sh 等；上机执行器 luyaz-ship.sh、core-trial.sh 也在这）和进程监督（开机由 `rc.local` 里的 `/etc/init.d/… start` 行启动，不走 `enable`） |
 | `/data/luyaz/ship/` | `u60 ship` 的事务、清单 `manifest.jsonl`、开机收尾脚本 `luyaz-recover.sh` |
 | `/data/alerts/`、`/data/crashlog/` | 告警记录、程序崩溃时的日志 |
 | `/data/esim/` | lpac（eSIM 卡读写工具） |
 | `/data/chill/`、`/etc/init.d/chill` | CHILL：mihomo、规则集、zashboard、`chill.sh`；订阅地址在 `/data/chill/chill.env`（你自己写，只有 root 可读） |
 | `/data/luyaz/kit/rc.local.orig` | 第一次安装前原厂 `rc.local` 的备份 |
 
-旧装机包留下的 `/data/zte-agent*`、`/data/admin/`、`/data/plugins/zwrt-datad/`、`/data/u60-guard/`、`/data/u60-uid/` 已经没人用，可以删。
+旧装机包留下的 `/data/zte-agent*`、`/data/admin/`、`/data/plugins/zwrt-datad/`、`/data/u60-guard/`、`/data/u60-uid/` 已经没人用，可以删（后两种布局的目录还在时，这个装机包拒装）。
 
 ## 日常用法
 

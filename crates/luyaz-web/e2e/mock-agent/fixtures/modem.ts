@@ -293,7 +293,7 @@ export const routes: Route[] = [
       const v = str(bodyField(ctx.body, "net_select"));
       if (!v || !NET_SELECT_VALUES.includes(v)) return fail(`net_select must be one of ${NET_SELECT_VALUES.join(", ")}`, 400);
       if (!ctx.has("fakesuccess")) netSelect = v;
-      // with datad's write-op layer on, the reply names the transaction (agent datad_write.rs)
+      // with the core's write-op layer on, the reply names the transaction (agent core_write.rs)
       const op = opsStartNetworkMode(v);
       if (op && opsApplyFails()) return { status: 503, raw: { ok: false, error: "ubus call zte_nwinfo_api nwinfo_set_netselect failed", op } };
       return op ? { raw: { ok: true, data: UBUS_EMPTY, op } } : ok(UBUS_EMPTY);
@@ -440,7 +440,7 @@ export const routes: Route[] = [
     path: "/api/cell/band/reset",
     handler: (ctx) => {
       if (ctx.has("fakesuccess")) return ok(UBUS_EMPTY);
-      // datad band.reset = nwinfo_reset_band_cell_setting: cell locks go too (D22)
+      // core band.reset = nwinfo_reset_band_cell_setting: cell locks go too (D22)
       cellLock.nr = null;
       cellLock.lte = null;
       nrBandLock.nsa = null;
@@ -454,7 +454,7 @@ export const routes: Route[] = [
   {
     method: "GET",
     path: "/api/cell/extra",
-    // cell.rs cell_extra_get: datad qos (AMBR in Mbps) and sim.msisdn; missing: a SIM without its number, no AMBR
+    // cell.rs cell_extra_get: core qos (AMBR in Mbps) and sim.msisdn; missing: a SIM without its number, no AMBR
     handler: (ctx) =>
       ctx.has("missing")
         ? ok({ qci: null, ambr_dl_mbps: null, ambr_ul_mbps: null, msisdn: null, source: "feed" })

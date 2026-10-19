@@ -58,7 +58,7 @@ pub const E4_ACTIONS: &[&str] = &[
 ];
 
 /// E4 T7c：其余原厂设置的写，参数原样交给原厂（和 agent 以前直接调的一样），
-/// 只是改由 datad 一家写、记流水账。一个 (对象, 方法) 一行，不在表里的一律拒。
+/// 只是改由核心一家写、记流水账。一个 (对象, 方法) 一行，不在表里的一律拒。
 pub const VENDOR_CALLS: &[(&str, &str)] = &[
     // 路由（网页的路由页）
     ("zwrt_router.api", "router_set_lan_para"),
@@ -1079,7 +1079,7 @@ async fn dns_doh(params: &Value) -> Outcome {
     }
 }
 
-/// Wi-Fi 节能（MU5250，E4：触屏以前自己写，10-04 用户定改经 datad）。和触屏原来的做法一样：
+/// Wi-Fi 节能（MU5250，E4：触屏以前自己写，10-04 用户定改经核心）。和触屏原来的做法一样：
 /// 选择落在 hotplug 脚本里（ifup 时重新套用，换机重启都留得住），再马上套到在用的接口上，
 /// 读回 wlan0（没有就 wlan2）。`wifi.psm.set` 是 MU5252 按 SSID 的旧接口，冻结不动。
 async fn wifi_power_save(params: &Value) -> Outcome {
@@ -1166,7 +1166,7 @@ async fn power_save_apply(dir: &std::path::Path, iw: &str, enabled: bool) -> Out
 }
 
 /// 原厂 `zwrt_wms_delete_sms` 删不掉存在 SIM 里的短信（回 result 3，不删），列表又是从
-/// 原厂的 sms.db 读的：agent 删完还在的就直接在库里删（E4 T7c，搬进 datad）。
+/// 原厂的 sms.db 读的：agent 删完还在的就直接在库里删（E4 T7c，搬进核心）。
 /// `ids` 只能是数字和分号；SQL 是固定的。
 async fn sms_db_delete(params: &Value) -> Outcome {
     let ids = match string(params, "ids", true) {
@@ -1354,7 +1354,7 @@ mod tests {
     #[tokio::test]
     async fn power_save_saves_applies_and_reads_back() {
         use std::os::unix::fs::PermissionsExt;
-        let d = std::env::temp_dir().join(format!("datad-psm-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("core-psm-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("psm"), "old").unwrap();

@@ -5,11 +5,11 @@
 //! - lit and busy: wake every ≤ 8 ms (animations, touch);
 //! - lit and quiet (three passes in a row drew nothing, no animation, no finger, no key): the
 //!   refresh and touch-read timers pause, the key poll slows to 1 s, and the loop sleeps in
-//!   poll() on touch, key and datad until the next timer that still runs (≤ 1 s); a touch, a
+//!   poll() on touch, key and core until the next timer that still runs (≤ 1 s); a touch, a
 //!   key, or anything invalidated wakes it at once (LUYAZ_UI_QUIET=0: off);
 //! - dark: the same timers pause, the key poll too, and the loop sleeps on the same fds.
 //!
-//! SIGTERM / SIGINT end it cleanly: datad's pace back to 1 s, the backlight off only when we
+//! SIGTERM / SIGINT end it cleanly: the core's pace back to 1 s, the backlight off only when we
 //! started a shutdown, the DRM buffer released.
 //!
 //!   luyaz-ui [--tab=N] [--scroll=Y] [--screen-off[=key]] [--autooff=MS] [--bright=N] [--exec-…]
@@ -161,7 +161,7 @@ fn maybe_dump_fb() {
     });
 }
 
-/// Wait on the input fds and datad's socket; true when touch or the key woke it.
+/// Wait on the input fds and the core's socket; true when touch or the key woke it.
 fn wait_fds(fds: &[i32], data_fd: i32, ms: i32) -> bool {
     let mut pf: Vec<libc::pollfd> = fds.iter().filter(|&&f| f >= 0).map(|&fd| libc::pollfd { fd, events: libc::POLLIN, revents: 0 }).collect();
     let input_n = pf.len();
@@ -378,7 +378,7 @@ pub fn run(args: &[String]) -> i32 {
         std::thread::sleep(std::time::Duration::from_millis(idle.min(8) as u64));
     }
 
-    ui::with(|u| u.src.data_set_pace(true)); // don't leave datad slow behind a stopped UI
+    ui::with(|u| u.src.data_set_pace(true)); // don't leave core slow behind a stopped UI
     if let Some(f) = arg(args, "--texts=") {
         let mut t = Vec::new();
         ui::with(|u| texts(u.tiles[ui::TAB_HOME], &mut t));

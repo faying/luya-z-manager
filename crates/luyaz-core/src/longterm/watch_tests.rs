@@ -17,7 +17,6 @@ impl Dev {
             proc_: root.join("proc"),
             crashlog: root.join("crashlog"),
             uid_log: root.join("tmp/luyaz-screen.log"),
-            marker: root.join("guard/datad-degraded"),
             recovery: root.join("recovery"),
             recovery_set: root.join("tmp/recovery-set"),
             ship_txn: root.join("txn"),
@@ -27,7 +26,7 @@ impl Dev {
             ubus: "socket".into(),
         };
         let d = Dev { root, p };
-        d.proc(100, "zwrt-datad", 5, b"datad-1");
+        d.proc(100, "luyaz-core", 5, b"core-1");
         d
     }
 
@@ -57,7 +56,7 @@ impl Dev {
 
     /// One look, its file steps done (as the long-term thread does after writing the lines).
     fn look(&self, st: &mut State, up: i64) -> Look {
-        let lk = st.look(&self.p, "b1b1b1b1-0000", up, now_wall());
+        let lk = st.look(&self.p, "b1b1b1b1-0000", up);
         commit(&self.p.long, &lk.after).unwrap();
         lk
     }
@@ -67,13 +66,6 @@ impl Drop for Dev {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
     }
-}
-
-fn now_wall() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64
 }
 
 fn of<'a>(lk: &'a Look, k: &str) -> Vec<&'a Value> {
@@ -93,9 +85,9 @@ fn stat_start_time_and_comm_search() {
     assert_eq!(start_time(&d.p.proc_, 8), None);
     // the first hit by pid, as the guard's find_pid over /proc/[0-9]*
     assert_eq!(find_pids(&d.p.proc_, &["tailscaled"])["tailscaled"], 3);
-    // datad's card child (a lower pid after a wrap) is not datad
-    d.proc(40, "zwrt-datad", 500, b"d");
-    d.proc(2, "zwrt-datad", 900, b"d");
+    // the core's card child (a lower pid after a wrap) is not the core
+    d.proc(40, "luyaz-core", 500, b"d");
+    d.proc(2, "luyaz-core", 900, b"d");
     let st = d.p.proc_.join("2/stat");
     let t = std::fs::read_to_string(&st)
         .unwrap()
@@ -126,7 +118,7 @@ fn ver_once_a_boot_then_on_a_new_build() {
     );
     assert_eq!(get("doctor.sh")["how"], "file");
     assert!(
-        !v.iter().any(|x| x["prog"] == "u60-guard.sh"),
+        !v.iter().any(|x| x["prog"] == "alert-lib.sh"),
         "no file, no line"
     );
     assert!(of(&d.look(&mut st, 120), "ver").is_empty());
@@ -142,7 +134,7 @@ fn ver_once_a_boot_then_on_a_new_build() {
     assert_eq!(v.len(), 1);
     assert_eq!(v[0]["md5"], md5_hex(b"ts-2", 8));
     // the touch UI comes up later: found on the rescan, md5 differs from "not running"
-    d.proc(300, "u60pro-devui", 700, b"ui");
+    d.proc(300, "luyaz-ui", 700, b"ui");
     assert!(
         of(&d.look(&mut st, 300), "ver").is_empty(),
         "rescan not due yet"
@@ -156,51 +148,8 @@ fn ver_once_a_boot_then_on_a_new_build() {
 #[test]
 fn proc_restart_with_crashlog_and_ship() {
     let d = Dev::new("pr");
-    d.proc(400, "u60-uid", 10, b"u");
     let mut st = State::default();
     d.look(&mut st, 60);
-    // u60-uid crashed: a crash file and a new pid in the same look
-    d.gone(400);
-    d.proc(401, "u60-uid", 900, b"u");
-    d.write(
-        "crashlog/u60-uid/20261010-up880.log",
-        "program: u60-uid\nstatus: signal 11\n",
-    );
-    let lk = d.look(&mut st, 960);
-    let pr = of(&lk, "proc_restart");
-    assert_eq!(pr.len(), 1);
-    assert_eq!(pr[0]["id"], "pr-b1b1b1b1-401-900");
-    assert_eq!(
-        (pr[0]["old"].clone(), pr[0]["new"].clone()),
-        (json!(400), json!(401))
-    );
-    assert_eq!(pr[0]["crashlog"], 1);
-    assert_eq!(pr[0]["ship"], 0);
-    let sx = of(&lk, "svc_exit");
-    assert_eq!(sx.len(), 1);
-    assert_eq!(sx[0]["status"], "signal 11");
-    assert_eq!(sx[0]["crash_up"], 880);
-    assert_eq!(sx[0]["found"], "round");
-    assert_eq!(
-        sx[0]["id"],
-        format!(
-            "cl-{}",
-            md5_hex(b"program: u60-uid\nstatus: signal 11\n", 12)
-        )
-    );
-    // u60-uid restarted by a deployment of the touch UI that is still running
-    d.write(
-        "txn",
-        "boot_id=b1b1b1b1-0000\ncomp=touch\nphase=check\nt_phase=1000\n",
-    );
-    d.gone(401);
-    d.proc(402, "u60-uid", 1000, b"u");
-    let lk = d.look(&mut st, 1020);
-    let pr = of(&lk, "proc_restart");
-    assert_eq!(pr.len(), 1);
-    assert_eq!(pr[0]["prog"], "u60-uid");
-    assert_eq!(pr[0]["ship"], 1);
-    assert_eq!(pr[0]["crashlog"], 0);
     // ours: a new process of this boot resumes the state with the old pid
     let mut st2 = st.clone();
     let mut p2 = Paths {
@@ -211,15 +160,38 @@ fn proc_restart_with_crashlog_and_ship() {
     p2.crashlog = d.p.crashlog.clone();
     p2.long = d.p.long.clone();
     p2.uid_log = d.p.uid_log.clone();
-    p2.marker = d.p.marker.clone();
     p2.recovery = d.p.recovery.clone();
     p2.ship_txn = d.p.ship_txn.clone();
     p2.guard_dir = d.p.guard_dir.clone();
-    d.proc(150, "zwrt-datad", 1100, b"datad-2");
-    let lk = st2.look(&p2, "b1b1b1b1-0000", 1200, now_wall());
+    d.proc(150, "luyaz-core", 1100, b"core-2");
+    d.write(
+        "crashlog/luyaz-core/20261010-up1080.log",
+        "program: luyaz-core\nstatus: signal 11\n",
+    );
+    // restarted by a deployment of the core that is still running
+    d.write(
+        "txn",
+        "boot_id=b1b1b1b1-0000\ncomp=core\nphase=check\nt_phase=1100\n",
+    );
+    let lk = st2.look(&p2, "b1b1b1b1-0000", 1200);
     let pr = of(&lk, "proc_restart");
     assert_eq!(pr.len(), 1);
     assert_eq!(pr[0]["prog"], "luyaz-core");
+    assert_eq!(pr[0]["id"], "pr-b1b1b1b1-150-1100");
+    assert_eq!(pr[0]["crashlog"], 1);
+    assert_eq!(pr[0]["ship"], 1);
+    let sx = of(&lk, "svc_exit");
+    assert_eq!(sx.len(), 1);
+    assert_eq!(sx[0]["status"], "signal 11");
+    assert_eq!(sx[0]["crash_up"], 1080);
+    assert_eq!(sx[0]["found"], "round");
+    assert_eq!(
+        sx[0]["id"],
+        format!(
+            "cl-{}",
+            md5_hex(b"program: luyaz-core\nstatus: signal 11\n", 12)
+        )
+    );
     assert_eq!(
         (pr[0]["old"].clone(), pr[0]["new"].clone()),
         (json!(100), json!(150))
@@ -231,7 +203,7 @@ fn proc_restart_with_crashlog_and_ship() {
 #[test]
 fn svc_exit_first_go_live_takes_what_is_there() {
     let d = Dev::new("sx");
-    d.write("crashlog/u60pro-devui/old-up10.log", "status: exit 1\n");
+    d.write("crashlog/luyaz-ui/old-up10.log", "status: exit 1\n");
     let mut st = State::default();
     let lk = d.look(&mut st, 60);
     assert!(of(&lk, "svc_exit").is_empty());
@@ -239,7 +211,7 @@ fn svc_exit_first_go_live_takes_what_is_there() {
     assert!(of(&d.look(&mut st, 120), "svc_exit").is_empty());
     // a file that grew is new again (name + size), as the guard's list
     d.write(
-        "crashlog/u60pro-devui/old-up10.log",
+        "crashlog/luyaz-ui/old-up10.log",
         "status: exit 1\nmore\n",
     );
     assert_eq!(of(&d.look(&mut st, 180), "svc_exit").len(), 1);
@@ -247,29 +219,6 @@ fn svc_exit_first_go_live_takes_what_is_there() {
     std::fs::remove_dir_all(&d.p.crashlog).unwrap();
     let lk = d.look(&mut st, 240);
     assert!(lk.cov.contains(&("crashlog".into(), false)));
-}
-
-#[test]
-fn old_crash_dirs_move_without_new_crashes() {
-    let d = Dev::new("sxm");
-    d.write("crashlog/u60pro-devui/a-up10.log", "status: exit 1\n");
-    d.write("crashlog/zwrt-datad/b-up20.log", "status: signal 9\n");
-    let mut st = State::default();
-    assert!(of(&d.look(&mut st, 60), "svc_exit").is_empty());
-    // an older sentinel writes the old directory again: one new crash, under the new key
-    d.write("crashlog/u60pro-devui/c-up30.log", "status: exit 2\n");
-    let lk = d.look(&mut st, 120);
-    let sx = of(&lk, "svc_exit");
-    assert_eq!(sx.len(), 1, "{sx:?}");
-    assert_eq!(sx[0]["prog"], "luyaz-ui");
-    assert!(!d.p.crashlog.join("u60pro-devui").exists());
-    assert!(d.p.crashlog.join("luyaz-core/b-up20.log").is_file());
-    let seen = std::fs::read_to_string(d.p.long.join("crashlog.seen")).unwrap();
-    assert!(
-        !seen.contains("u60pro-devui/") && !seen.contains("zwrt-datad/"),
-        "{seen}"
-    );
-    assert!(of(&d.look(&mut st, 180), "svc_exit").is_empty());
 }
 
 #[test]
@@ -299,7 +248,7 @@ fn uid_lines_numbered_over_the_boot_through_a_rename() {
     assert_eq!(u[0]["what"], "gave_up");
     assert_eq!(u[1]["what"], "other");
     assert!(lk.cov.contains(&("uidlog".into(), true)));
-    // the guard renames it after one more line; u60-uid starts a new file
+    // renamed after one more line; a new file starts
     d.write(
         "tmp/luyaz-screen.log.old",
         "10:00:01 started\n10:00:02 giving up after 2 failures\n10:00:03 request: back\n10:00:04 starting the vendor UI\n",
@@ -309,46 +258,6 @@ fn uid_lines_numbered_over_the_boot_through_a_rename() {
     let ids: Vec<&Value> = of(&lk, "uid").iter().map(|v| &v["id"]).collect();
     assert_eq!(ids, [&json!("uid-b1b1b1b1-4"), &json!("uid-b1b1b1b1-5")]);
     assert!(of(&d.look(&mut st, 240), "uid").is_empty());
-}
-
-#[test]
-fn datad_episode_start_end_and_across_a_reboot() {
-    let d = Dev::new("dd");
-    let mut st = State::default();
-    d.write("guard/datad-degraded", "1791500000\nsocket gone\n");
-    assert!(
-        of(&d.look(&mut st, 200), "datad_degraded").is_empty(),
-        "grace"
-    );
-    let lk = d.look(&mut st, 400);
-    let dd = of(&lk, "datad_degraded");
-    assert_eq!(dd.len(), 1);
-    assert_eq!(dd[0]["id"], "dds-b1b1b1b1-1791500000");
-    assert_eq!(dd[0]["reason"], "socket gone");
-    assert_eq!(
-        std::fs::read_to_string(d.p.long.join("datad.open")).unwrap(),
-        "1791500000 b1b1b1b1\n"
-    );
-    assert!(of(&d.look(&mut st, 460), "datad_degraded").is_empty());
-    std::fs::remove_file(&d.p.marker).unwrap();
-    let lk = d.look(&mut st, 700);
-    let dd = of(&lk, "datad_degraded");
-    assert_eq!(dd[0]["id"], "dde-b1b1b1b1-1791500000");
-    assert_eq!(dd[0]["how"], "gone");
-    assert_eq!(dd[0]["dur_s"], 300);
-    assert!(!d.p.long.join("datad.open").exists());
-    // the same episode again (marker back with the same since): not started twice
-    d.write("guard/datad-degraded", "1791500000\nx\n");
-    assert!(of(&d.look(&mut st, 760), "datad_degraded").is_empty());
-    // one open at a reboot ends in the next boot
-    d.write("long/datad.open", "1791600000 aaaaaaaa\n");
-    std::fs::remove_file(&d.p.marker).unwrap();
-    let mut st = State::default();
-    let lk = d.look(&mut st, 60);
-    let dd = of(&lk, "datad_degraded");
-    assert_eq!(dd[0]["id"], "dde-aaaaaaaa-1791600000");
-    assert_eq!(dd[0]["how"], "reboot");
-    assert_eq!(dd[0]["dur_s"], Value::Null);
 }
 
 #[test]
@@ -377,8 +286,7 @@ fn recovery_first_and_falling_back() {
 fn nothing_missing_no_rescan() {
     let d = Dev::new("ret1");
     d.proc(301, "mihomo", 10, b"m");
-    d.proc(302, "u60pro-devui", 10, b"ui");
-    d.proc(303, "u60-uid", 10, b"uid");
+    d.proc(302, "luyaz-ui", 10, b"ui");
     d.proc(304, "tailscaled", 10, b"ts");
     let mut st = State::default();
     d.look(&mut st, 60);
@@ -388,27 +296,23 @@ fn nothing_missing_no_rescan() {
 }
 
 #[test]
-fn the_core_is_found_under_its_new_name_by_prefix() {
+fn the_core_is_found_by_prefix() {
     let d = Dev::new("corename");
     d.gone(100);
     d.proc(30, "luyaz-core.test", 700, b"c");
-    d.proc(31, "u60-uid", 701, b"u");
+    d.proc(31, "zwrt-datad", 701, b"u");
     let got = find_pids(&d.p.proc_, &PROGS);
-    // the ledger key is the new name (Luya-Z F)
     assert_eq!(got.get("luyaz-core"), Some(&30));
-    assert_eq!(got.get("u60-uid"), Some(&31));
+    assert!(!got.contains_key("zwrt-datad"));
     assert!(!got.contains_key("luyaz-core.test"));
     d.proc(20, "luyaz-core", 650, b"c");
     assert_eq!(find_pids(&d.p.proc_, &RESTARTS)["luyaz-core"], 20);
 }
 
 #[test]
-fn ship_restart_knows_the_core_under_both_names() {
-    // D4c: the executor writes comp=core; older transactions say datad
-    for comp in ["datad", "core"] {
-        let t = format!("comp={comp}\nboot_id=b\nphase=trial\nt_phase=100\n");
-        assert_eq!(ship_restart(Some(&t), "luyaz-core", "b", 150), 1, "{comp}");
-    }
+fn ship_restart_is_the_cores_own_deployment() {
+    let t = "comp=core\nboot_id=b\nphase=trial\nt_phase=100\n";
+    assert_eq!(ship_restart(Some(t), "luyaz-core", "b", 150), 1);
     let t = "comp=sentinel\nboot_id=b\nphase=trial\nt_phase=100\n";
     assert_eq!(ship_restart(Some(t), "luyaz-core", "b", 150), 0);
 }

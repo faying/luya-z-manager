@@ -1,4 +1,4 @@
-//! E4 写操作层（manager `docs/designs/write-op-layer.md`）：datad 里的通用事务引擎。
+//! E4 写操作层（manager `docs/designs/write-op-layer.md`）：核心里的通用事务引擎。
 //!
 //! - `txn`：事务状态机（纯逻辑）。
 //! - `spec`：动作描述表（T2 只有网络模式）和安全类写的判断。

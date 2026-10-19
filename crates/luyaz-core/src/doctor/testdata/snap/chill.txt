@@ -1,0 +1,1461 @@
+=== scenario
+
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+: >"$T/chill.env"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+: >"$T/chill.env"; printf '  sl  local_address rem_address   st\n   0: 0100007F:270F 00000000:0000 0A 0\n   1: 00000000:0050 00000000:0000 0A 0\n   2: 0142000A:270F 0A00000A:D431 01 0\n' >"$T/proc/net/tcp"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	只听本机
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	只听本机	CHILL API	This device only
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：只听本机
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+: >"$T/chill.env"; printf '  sl  local_address rem_address   st\n   0: 00000000:270F 00000000:0000 0A 0\n   1: 0142000A:270F 0:0 0A 0\n' >"$T/proc/net/tcp"; printf '  sl  local_address rem_address   st\n   0: 00000000000000000000000000000000:270F 00000000000000000000000000000000:0000 0A 0\n' >"$T/proc/net/tcp6"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+warn	chill-api	CHILL 管理接口	对局域网开放（:9999 听在 0.0.0.0 :: 0142000A）；chill.env 里 CHILL_API_LAN 应为 0
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+warn	chill-api	CHILL 管理接口	对局域网开放（:9999 听在 0.0.0.0 :: 0142000A）；chill.env 里 CHILL_API_LAN 应为 0	CHILL API	Open to the LAN (:9999 on 0.0.0.0 :: 0142000A); set CHILL_API_LAN=0 in chill.env
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ▲ CHILL 管理接口：对局域网开放（:9999 听在 0.0.0.0 :: 0142000A）；chill.env 里 CHILL_API_LAN 应为 0
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+printf "SUB_URL='x'\nCHILL_HOME_EXIT='192.0.2.10'\n" >"$T/chill.env"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+warn	home-exit	家里出口	chill.env 的 CHILL_HOME_EXIT 不是 IPv4:端口（192.0.2.10）
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+warn	home-exit	家里出口	chill.env 的 CHILL_HOME_EXIT 不是 IPv4:端口（192.0.2.10）	Home exit	CHILL_HOME_EXIT in chill.env is not IPv4:port (192.0.2.10)
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ▲ 家里出口：chill.env 的 CHILL_HOME_EXIT 不是 IPv4:端口（192.0.2.10）
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+printf "CHILL_HOME_EXIT=\"1.2.3.4:5:6\"\n" >"$T/chill.env"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+warn	home-exit	家里出口	chill.env 的 CHILL_HOME_EXIT 不是 IPv4:端口（1.2.3.4:5:6）
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+warn	home-exit	家里出口	chill.env 的 CHILL_HOME_EXIT 不是 IPv4:端口（1.2.3.4:5:6）	Home exit	CHILL_HOME_EXIT in chill.env is not IPv4:port (1.2.3.4:5:6)
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ▲ 家里出口：chill.env 的 CHILL_HOME_EXIT 不是 IPv4:端口（1.2.3.4:5:6）
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+printf "CHILL_HOME_EXIT=1.2.3.4:80  \nCHILL_HOME_EXIT='x' y\n" >"$T/chill.env"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+warn	home-exit	家里出口	chill.env 的 CHILL_HOME_EXIT 不是 IPv4:端口（1.2.3.4:80  ）
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+warn	home-exit	家里出口	chill.env 的 CHILL_HOME_EXIT 不是 IPv4:端口（1.2.3.4:80  ）	Home exit	CHILL_HOME_EXIT in chill.env is not IPv4:port (1.2.3.4:80  )
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ▲ 家里出口：chill.env 的 CHILL_HOME_EXIT 不是 IPv4:端口（1.2.3.4:80  ）
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+ok	home-exit	家里出口	CHILL 没在跑，用不上
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+ok	home-exit	家里出口	CHILL 没在跑，用不上	Home exit	Not in use (CHILL not running)
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ● 家里出口：CHILL 没在跑，用不上
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"direct","reason":"idle"}' >"$T/chill.state"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+ok	home-exit	家里出口	CHILL 息屏暂停（没人用），用不上
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+ok	home-exit	家里出口	CHILL 息屏暂停（没人用），用不上	Home exit	Not in use (CHILL paused: screen off, nobody connected)
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ● 家里出口：CHILL 息屏暂停（没人用），用不上
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"running","reason":null}' >"$T/chill.state"; echo "192.0.2.10 via 10.1.2.4 dev rmnet_data0" >"$T/iproute"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+warn	home-exit	家里出口	到 192.0.2.10 不走 Tailscale（子网路由没发布，或 Tailscale 没连上）
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+warn	home-exit	家里出口	到 192.0.2.10 不走 Tailscale（子网路由没发布，或 Tailscale 没连上）	Home exit	No Tailscale route to 192.0.2.10 (subnet route not advertised, or Tailscale down)
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ▲ 家里出口：到 192.0.2.10 不走 Tailscale（子网路由没发布，或 Tailscale 没连上）
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"running","reason":null}' >"$T/chill.state"; echo "192.0.2.10 dev tailscale0 table 52" >"$T/iproute"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+ok	home-exit	家里出口	经 Tailscale 通；还没测过家里（没人用时不测）
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+ok	home-exit	家里出口	经 Tailscale 通；还没测过家里（没人用时不测）	Home exit	Routed via Tailscale; home not probed yet (no probe while nobody uses it)
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ● 家里出口：经 Tailscale 通；还没测过家里（没人用时不测）
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"running","reason":null}' >"$T/chill.state"; echo "192.0.2.10 dev tailscale0 table 52" >"$T/iproute"; printf '{"alive":true,"extra":{"http://x/204":{"history":[{"time":"2026-09-27T08:00:00Z","delay":1}]}},"history":[{"time":"2026-09-27T08:00:00.1Z","delay":2},{"time":"2026-09-27T09:01:40.123456789Z","delay":52}],"name":"x"}' >"$T/proxy"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+ok	home-exit	家里出口	经 Tailscale 能用（52 ms）
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+ok	home-exit	家里出口	经 Tailscale 能用（52 ms）	Home exit	Working via Tailscale (52 ms)
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ● 家里出口：经 Tailscale 能用（52 ms）
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"running","reason":null}' >"$T/chill.state"; echo "192.0.2.10 dev tailscale0 table 52" >"$T/iproute"; printf '{"alive":true,"extra":{"http://x/204":{"history":[{"time":"2026-09-27T08:00:00Z","delay":1}]}},"history":[{"time":"2026-09-27T08:00:00.1Z","delay":2},{"time":"2026-09-27T09:01:40.5Z","delay":0}],"name":"x"}' >"$T/proxy"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+warn	home-exit	家里出口	家里没回应（192.0.2.10:1080；Mac 睡了，或代理端口变了）
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+warn	home-exit	家里出口	家里没回应（192.0.2.10:1080；Mac 睡了，或代理端口变了）	Home exit	Home not answering (192.0.2.10:1080; Mac asleep, or proxy port changed)
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ▲ 家里出口：家里没回应（192.0.2.10:1080；Mac 睡了，或代理端口变了）
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"running","reason":null}' >"$T/chill.state"; echo "192.0.2.10 dev tailscale0 table 52" >"$T/iproute"; printf '{"alive":true,"extra":{"http://x/204":{"history":[{"time":"2026-09-27T08:00:00Z","delay":1}]}},"history":[{"time":"2026-09-27T08:00:00.1Z","delay":2},{"time":"2026-09-27T08:50:00Z","delay":52}],"name":"x"}' >"$T/proxy"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+ok	home-exit	家里出口	经 Tailscale 能用（52 ms）
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+ok	home-exit	家里出口	经 Tailscale 能用（52 ms）	Home exit	Working via Tailscale (52 ms)
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ● 家里出口：经 Tailscale 能用（52 ms）
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"running","reason":null}' >"$T/chill.state"; echo "192.0.2.10 dev tailscale0 table 52" >"$T/iproute"; printf '{"alive":true,"extra":{"http://x/204":{"history":[{"time":"2026-09-27T08:00:00Z","delay":1}]}},"history":[{"time":"2026-09-27T08:00:00.1Z","delay":2},{"time":"2026-09-27T08:20:00Z","delay":52}],"name":"x"}' >"$T/proxy"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+ok	home-exit	家里出口	经 Tailscale 能用（52 ms，46 分钟前）
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+ok	home-exit	家里出口	经 Tailscale 能用（52 ms，46 分钟前）	Home exit	Working via Tailscale (52 ms, 46 min ago)
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ● 家里出口：经 Tailscale 能用（52 ms，46 分钟前）
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"running","reason":null}' >"$T/chill.state"; echo "192.0.2.10 dev tailscale0 table 52" >"$T/iproute"; printf '{"alive":true,"extra":{"http://x/204":{"history":[{"time":"2026-09-27T08:00:00Z","delay":1}]}},"history":[{"time":"2026-09-27T08:00:00.1Z","delay":2},{"time":"2026-09-27T07:00:00Z","delay":0}],"name":"x"}' >"$T/proxy"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+warn	home-exit	家里出口	家里没回应（192.0.2.10:1080，126 分钟前；Mac 睡了，或代理端口变了）
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+warn	home-exit	家里出口	家里没回应（192.0.2.10:1080，126 分钟前；Mac 睡了，或代理端口变了）	Home exit	Home not answering (192.0.2.10:1080, 126 min ago; Mac asleep, or proxy port changed)
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ▲ 家里出口：家里没回应（192.0.2.10:1080，126 分钟前；Mac 睡了，或代理端口变了）
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"running","reason":null}' >"$T/chill.state"; echo "192.0.2.10 dev tailscale0 table 52" >"$T/iproute"; printf '{"alive":true,"extra":{"http://x/204":{"history":[{"time":"2026-09-27T08:00:00Z","delay":1}]}},"history":[{"time":"2026-09-27T08:00:00.1Z","delay":2},{"time":"2026-09-27T09:10:00Z","delay":52}],"name":"x"}' >"$T/proxy"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+ok	home-exit	家里出口	经 Tailscale 能用（52 ms）
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+ok	home-exit	家里出口	经 Tailscale 能用（52 ms）	Home exit	Working via Tailscale (52 ms)
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ● 家里出口：经 Tailscale 能用（52 ms）
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单
+=== scenario
+printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"running","reason":null}' >"$T/chill.state"; echo "192.0.2.10 dev tailscale0 table 52" >"$T/iproute"; echo garbage >"$T/proxy"
+--- --tsv rc=0
+ok	boot-sync	开机同步	sync success
+ok	fota	ZTE 自动升级	已关闭
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调
+ok	svc-luyaz-core	数据服务	procd 监督中
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）
+ok	home-exit	家里出口	经 Tailscale 通；还没测过家里（没人用时不测）
+ok	web-http	管理网页 :9090	能访问
+ok	core-http	数据服务 :9460	能访问
+ok	heartbeat	后台心跳	5 秒前
+ok	wifi	Wi-Fi	在广播
+ok	screen	触屏界面	运行中
+ok	alerts	告警	没有未读
+ok	sms	短信告警	已配置
+ok	crashes	崩溃记录	最近 24 小时没有
+ok	disk	/data 空间	剩 1171 MB
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+ok	manifest	清单	还没有清单
+--- --tsv2 rc=0
+#tsv2
+ok	boot-sync	开机同步	sync success	Boot sync	All stock services registered (sync success)
+ok	fota	ZTE 自动升级	已关闭	ZTE auto-update	Off
+ok	whiteout	开机链接	开机同步名单里的服务没有被屏蔽	Boot links	No boot-sync service is masked
+ok	phonehome	原厂外联上报	MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑	Stock phone-home	MQTT reporting on (not running); TR-069 on (not running), no server set; 2 analytics switches on; app catalog updates (smart_manage) not running
+ok	rpc-acl	匿名权限	出厂/ADB 方法要登录才能调	Anonymous RPC	Factory/ADB methods need a login
+ok	svc-luyaz-core	数据服务	procd 监督中	Data service	Supervised by procd
+ok	svc-luyaz-sentinel	哨兵（屏幕和看门狗）	procd 监督中	Sentinel (screen and watchdog)	Supervised by procd
+ok	chill-api	CHILL 管理接口	没在监听（CHILL 没开）	CHILL API	Not listening (CHILL off)
+ok	home-exit	家里出口	经 Tailscale 通；还没测过家里（没人用时不测）	Home exit	Routed via Tailscale; home not probed yet (no probe while nobody uses it)
+ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
+ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
+ok	heartbeat	后台心跳	5 秒前	Admin heartbeat	5 s ago
+ok	wifi	Wi-Fi	在广播	Wi-Fi	Broadcasting
+ok	screen	触屏界面	运行中	Screen UI	Running
+ok	alerts	告警	没有未读	Alerts	None unread
+ok	sms	短信告警	已配置	Alert SMS	Set up
+ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h
+ok	disk	/data 空间	剩 1171 MB	/data space	1171 MB free
+ok	standby	待机	未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）	Standby	Not calibrated (run doctor.sh --calibrate-standby after 30-60 min with the screen off)
+ok	manifest	清单	还没有清单	Manifest	No manifest yet
+--- text rc=0
+  ● 清单：还没有清单
+  ● 开机同步：sync success
+  ● ZTE 自动升级：已关闭
+  ● 开机链接：开机同步名单里的服务没有被屏蔽
+  ● 原厂外联上报：MQTT 上报开着（没在跑）；TR-069 开着（没在跑），没配服务器；打点开关 2 个开着；应用库更新（smart_manage）没在跑
+  ● 匿名权限：出厂/ADB 方法要登录才能调
+  ● 数据服务：procd 监督中
+  ● 哨兵（屏幕和看门狗）：procd 监督中
+  ● CHILL 管理接口：没在监听（CHILL 没开）
+  ● 家里出口：经 Tailscale 通；还没测过家里（没人用时不测）
+  ● 管理网页 :9090：能访问
+  ● 数据服务 :9460：能访问
+  ● 后台心跳：5 秒前
+  ● Wi-Fi：在广播
+  ● 触屏界面：运行中
+  ● 告警：没有未读
+  ● 短信告警：已配置
+  ● 崩溃记录：最近 24 小时没有
+  ● /data 空间：剩 1171 MB
+  ● 待机：未校准（屏幕熄灭 30~60 分钟后执行 doctor.sh --calibrate-standby）
+
+--- --manifest
+unrecorded	record:chill.sh	/data/chill/chill.sh	-	-
+unrecorded	record:template.yaml	$T/tpl	-	-
+unrecorded	record:tailscale-start.sh	/data/tailscale/start.sh	-	-
+unrecorded	record:tuning.env	$T/tuning.env	-	-
+unrecorded	record:tailscaled	/data/tailscale/tailscaled	-	-
+unrecorded	record:tailscaled-nofight	/data/tailscale/nofight/tailscaled	-	-
+unrecorded	record:init.d/luyaz-core	$T/initd/luyaz-core	-	3e2b31c72181b87149ff995e7202c0e3
+unrecorded	record:init.d/tailscale	$T/initd/tailscale	-	-
+unrecorded	record:rc.local	$T/rc	-	<rc0>
+unrecorded	record:luyaz-recover.sh	/data/luyaz/ship/luyaz-recover.sh	-	-
+unrecorded	record:ui-fonts	/data/luyaz/ui/fonts	-	-
+unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
+unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
+state	ok	还没有清单

@@ -9,8 +9,8 @@ bad() { FAIL=$((FAIL + 1)); echo "  FAIL $1"; }
 check() { _d=$1; shift; if eval "$@"; then ok "$_d"; else bad "$_d  [$*]"; fi; }
 
 T=$(mktemp -d); D=$T/dev
-mkdir -p $D/data/scenario $D/data/alerts $D/data/chill $D/data/tailscale/state $D/data/local/tmp $T/bin
-echo 'ZTE_AGENT_PASSWORD=pw123' >$D/data/zte-agent.env
+mkdir -p $D/data/luyaz $D/data/scenario $D/data/alerts $D/data/chill $D/data/tailscale/state $D/data/local/tmp $T/bin
+echo 'LUYAZ_WEB_PASSWORD=pw123' >$D/data/luyaz/web.env
 echo '{"version":2,"scenarios":[]}' >$D/data/scenario/scenarios.json
 echo '{"k":1}' >$D/data/local/tmp/scheduler.json
 echo '+8612300000000' >$D/data/alerts/sms-to
@@ -30,7 +30,7 @@ export CB_ROOT=$D CB_UCI=$T/bin/uci
 
 sh $CB export >$T/b.tgz
 list=$(tar tzf $T/b.tgz)
-check "export includes config" 'echo "$list" | grep -q "files/data/scenario/scenarios.json" && echo "$list" | grep -q "files/data/zte-agent.env"'
+check "export includes config" 'echo "$list" | grep -q "files/data/scenario/scenarios.json" && echo "$list" | grep -q "files/data/luyaz/web.env"'
 check "runtime state left out" '! echo "$list" | grep -q "state.json"'
 check "tailscale identity left out by default" '! echo "$list" | grep -q tailscale'
 check "Wi-Fi exported as uci text" 'echo "$list" | grep -q "u60-backup/wireless.uci"'
@@ -42,14 +42,23 @@ check "verify passes on a good backup" 'sh $CB verify $T/b.tgz >/dev/null'
 R=$T/root; mkdir -p $R/data/scenario; echo '{"old":1}' >$R/data/scenario/scenarios.json
 sh $CB plan $T/b.tgz $R >$T/plan
 check "plan: existing different file = overwrite" 'grep -q "overwrite  /data/scenario/scenarios.json" $T/plan'
-check "plan: missing file = new" 'grep -q "new        /data/zte-agent.env" $T/plan'
-check "plan writes nothing" '[ "$(cat $R/data/scenario/scenarios.json)" = "{\"old\":1}" ] && [ ! -e $R/data/zte-agent.env ]'
+check "plan: missing file = new" 'grep -q "new        /data/luyaz/web.env" $T/plan'
+check "plan writes nothing" '[ "$(cat $R/data/scenario/scenarios.json)" = "{\"old\":1}" ] && [ ! -e $R/data/luyaz/web.env ]'
 sh $CB restore $T/b.tgz $R >/dev/null
-check "restore writes the files" 'cmp -s $R/data/zte-agent.env $D/data/zte-agent.env && cmp -s $R/data/scenario/scenarios.json $D/data/scenario/scenarios.json'
-check "secrets restored 600" '[ "$(stat -c %a $R/data/zte-agent.env)" = 600 ] && [ "$(stat -c %a $R/data/chill/chill.env)" = 600 ]'
+check "restore writes the files" 'cmp -s $R/data/luyaz/web.env $D/data/luyaz/web.env && cmp -s $R/data/scenario/scenarios.json $D/data/scenario/scenarios.json'
+check "secrets restored 600" '[ "$(stat -c %a $R/data/luyaz/web.env)" = 600 ] && [ "$(stat -c %a $R/data/chill/chill.env)" = 600 ]'
 check "plain config restored 644" '[ "$(stat -c %a $R/data/scenario/scenarios.json)" = 644 ]'
 check "previous copy kept" '[ "$(cat $R/data/scenario/scenarios.json.pre-restore)" = "{\"old\":1}" ]'
 check "wireless written to etc/config under the root" 'grep -q "main_2g" $R/etc/config/wireless'
+
+# An archive from before F7: the password under the old key, restored under the new one
+echo 'ZTE_AGENT_PASSWORD=pw123' >$D/data/luyaz/web.env
+sh $CB export >$T/bold.tgz
+check "verify passes on an archive with the old key" 'sh $CB verify $T/bold.tgz >/dev/null'
+R2=$T/root2; mkdir -p $R2
+sh $CB restore $T/bold.tgz $R2 >/dev/null
+check "old key restored as LUYAZ_WEB_PASSWORD" '[ "$(cat $R2/data/luyaz/web.env)" = "LUYAZ_WEB_PASSWORD=pw123" ] && [ "$(stat -c %a $R2/data/luyaz/web.env)" = 600 ]'
+echo 'LUYAZ_WEB_PASSWORD=pw123' >$D/data/luyaz/web.env
 
 # Tampering
 mkdir -p $T/evil/u60-backup; echo x >$T/evil/u60-backup/MANIFEST; echo pwn >$T/evil/escape

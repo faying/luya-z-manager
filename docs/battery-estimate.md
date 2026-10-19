@@ -19,7 +19,7 @@ The result is in `estimate` of `GET /api/battery` and `battery` of `GET /api/scr
 
 ## Inputs
 
-- Samples, ascending by time: `[t seconds, battery current µA, charger connected]`. Positive current = into the battery (charging), negative = discharging (sign of sysfs `battery/current_now`). Charger state comes from datad's `charger_connect`; when unknown, the previous value is kept.
+- Samples, ascending by time: `[t seconds, battery current µA, charger connected]`. Positive current = into the battery (charging), negative = discharging (sign of sysfs `battery/current_now`). Charger state comes from the core's `charger_connect`; when unknown, the previous value is kept.
 - `soc`: `battery/capacity`, 0–100.
 - `charge_full_uah`: `battery/charge_full`; optional.
 - `charge_counter_uah`: `battery/charge_counter` (remaining charge); optional.

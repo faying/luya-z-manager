@@ -116,7 +116,7 @@ cd luya-z-manager
 
 ```sh
 (cd touch-ui && rs/setup-src.sh && rs/build.sh device out/luyaz-ui)   # 默认就读这里
-DATAD_BIN=/path/to/luyaz-core ./onboard/build-kit.sh       # 用别处编好的核心，不现编 luyaz-core
+CORE_BIN=/path/to/luyaz-core ./onboard/build-kit.sh       # 用别处编好的核心，不现编 luyaz-core
 ```
 
 其他变量：`DEVUI_BIN`（触屏二进制）、`SENTINEL_BIN`（luyaz-sentinel）、`ESIM_TGZ`（现成的 eSIM 包）、`DEVUI_FONTS_DIR`（现成的字体目录）、`FONTS=0`（不带字体）、

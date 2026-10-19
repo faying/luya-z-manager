@@ -31,7 +31,7 @@
 //!
 //! Moved from zte-agent `wifi_radio.rs` and `wifi_scan.rs` (u60-platform.md Phase 4 step 9h) so the
 //! agent and u60d run the same code. The writes go through the caller's [`Host`]: the agent sends
-//! them to datad's `/control` (with its emergency script behind it), u60d to its own `/control`.
+//! them to the core's `/control` (with its emergency script behind it), u60d to its own `/control`.
 //! The lock is the same in both processes: an in-process flag here (one per process) and the flock on
 //! [`LOCK_FILE`] that the sentinel and the core's `/control` (D3) take too.
 
@@ -70,7 +70,7 @@ pub const ON_DEADLINE: Duration = Duration::from_secs(45);
 const POLL_EVERY: Duration = Duration::from_millis(1500);
 
 /// What the switch needs from the process it runs in: uci reads and the three writes, which each
-/// side sends its own way (the agent to datad with the emergency script behind it, u60d to its own
+/// side sends its own way (the agent to core with the emergency script behind it, u60d to its own
 /// `/control`). Only ever called under the lock.
 pub trait Host {
     /// One uci value; `None` when it cannot be read.

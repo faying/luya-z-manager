@@ -14,9 +14,9 @@ use std::time::Duration;
 pub const POLL_ACTIVE_SECS: u64 = 60;
 pub const POLL_IDLE_SECS: u64 = 300;
 pub const DEFAULT_HYSTERESIS: u8 = 5;
-/// The agent's datad feed fallback: a direct read at most this often (`datad_feed::FALLBACK_POLL`).
+/// The agent's core feed fallback: a direct read at most this often (`core_feed::FALLBACK_POLL`).
 pub const FALLBACK_POLL: Duration = Duration::from_secs(30);
-/// Longest wait between passes (`datad_feed::MAX_WAIT`).
+/// Longest wait between passes (`core_feed::MAX_WAIT`).
 pub const MAX_WAIT: Duration = Duration::from_secs(60);
 
 /// What `enforce` looks at.

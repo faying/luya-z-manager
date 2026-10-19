@@ -256,23 +256,6 @@ pub struct LoginForm {
     next: String,
 }
 
-/// Phase 10 R6: the password file is moving from `/data/zte-agent.env` to `/data/luyaz/web.env`
-/// (10e, one `mv`). Given the old one, the new one wins when it is there; checked at every login,
-/// so the move needs no restart. Any other path is used as given.
-pub fn password_path(given: &std::path::Path) -> PathBuf {
-    if let Some(data) = given
-        .to_str()
-        .and_then(|s| s.strip_suffix("/zte-agent.env"))
-        .filter(|d| d.ends_with("/data"))
-    {
-        let new = PathBuf::from(format!("{data}/luyaz/web.env"));
-        if new.is_file() {
-            return new;
-        }
-    }
-    given.to_path_buf()
-}
-
 /// The login check: the password file alone decides (Err(true) = wrong password, Err(false) =
 /// no file given, or it is unreadable or has no password: refuse, never run open).
 async fn check(app: &Shared, password: &str) -> Result<(), bool> {
@@ -280,7 +263,6 @@ async fn check(app: &Shared, password: &str) -> Result<(), bool> {
         eprintln!("[auth] no --password-file; refusing logins");
         return Err(false);
     };
-    let path = &password_path(path);
     let text = tokio::fs::read_to_string(path).await.map_err(|e| {
         eprintln!("[auth] {}: {e}; refusing logins", path.display());
         false
@@ -360,25 +342,6 @@ fn js_str(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn the_new_password_file_wins_when_it_is_there() {
-        use super::password_path;
-        let d = std::env::temp_dir().join(format!("lw-pwpath-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(d.join("data/luyaz")).unwrap();
-        let old = d.join("data/zte-agent.env");
-        let new = d.join("data/luyaz/web.env");
-        std::fs::write(&old, "ZTE_AGENT_PASSWORD=a\n").unwrap();
-        assert_eq!(password_path(&old), old, "only the old one");
-        std::fs::write(&new, "ZTE_AGENT_PASSWORD=b\n").unwrap();
-        assert_eq!(password_path(&old), new, "both: the new one");
-        std::fs::remove_file(&old).unwrap();
-        assert_eq!(password_path(&old), new, "only the new one");
-        let other = d.join("pw.env");
-        assert_eq!(password_path(&other), other, "any other path as given");
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
     use super::*;
 
     #[test]

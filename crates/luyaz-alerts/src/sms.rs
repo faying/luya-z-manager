@@ -134,13 +134,7 @@ fn body_zh(kind: &str) -> String {
         "wifi-restore-failed" => {
             "想自动打开U60的Wi-Fi没成功，还在重试。如果手机连不上U60，请重启它。"
         }
-        "agent-silent" => "管理后台超过5分钟没反应。上网一般不受影响；Wi-Fi要是关着，会自动打开。",
-        "agent-hung" => "管理后台卡住了，已强制重启。不用管。",
-        "agent-crash" => "管理后台意外退出，已自动重启。不用管。",
-        "datad-crash" => "屏幕的数据服务意外退出，已自动重启。不用管。",
-        "datad-degraded" => {
-            "屏幕的数据服务超过5分钟不正常，管理后台已改用备用方式读数据。上网不受影响。"
-        }
+        "core-crash" => "屏幕的数据服务意外退出，已自动重启。不用管。",
         "devui-crash" => "屏幕界面闪退了，已自动重新打开。不用管。",
         "devui-gave-up" => {
             "屏幕界面连续打不开，已换成原厂界面，上网不受影响。长按屏幕右下角3秒可换回。"
@@ -161,18 +155,14 @@ fn body_zh(kind: &str) -> String {
     m.to_string()
 }
 
-/// The same in English (guard `sms_body_en`; docs/ui-glossary.md §9): printable ASCII only. Five
+/// The same in English (guard `sms_body_en`; docs/ui-glossary.md §9): printable ASCII only. Four
 /// are a few words shorter than the guard's so the short code still fits one SMS
-/// (wifi-restore-failed, datad-crash, datad-degraded, devui-gave-up, dropbear-down).
+/// (wifi-restore-failed, core-crash, devui-gave-up, dropbear-down).
 fn body_en(kind: &str) -> String {
     let m = match kind {
         "wifi-takeover" => "Admin down; Wi-Fi turned on; no action",
         "wifi-restore-failed" => "Wi-Fi won't start; retrying; stuck? Reboot",
-        "agent-silent" => "Admin silent 5+ min; internet usually fine",
-        "agent-hung" => "Admin hung; force-restarted; no action",
-        "agent-crash" => "Admin crashed; restarted; no action needed",
-        "datad-crash" => "Data service crashed; restarted; no action",
-        "datad-degraded" => "Data service down 5+ min; fallback; net OK",
+        "core-crash" => "Data service crashed; restarted; no action",
         "devui-crash" => "Screen UI crashed; reopened; no action",
         "devui-gave-up" => "Stock UI on; hold bottom-right 3s to undo",
         "sms-test" => "Test SMS: alert texts reach your phone",

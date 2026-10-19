@@ -20,7 +20,7 @@ pub struct Model {
     pub notice_ok: i32,
     pub notice: data_notice_t,
     /// data_backend_version(): bumps with each committed snapshot
-    pub datad_version: u64,
+    pub core_version: u64,
     /// the SMS row a long press armed for deleting (sms_delete_armed), -1 none
     pub sms_armed: i32,
 

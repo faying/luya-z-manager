@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn busy_uses_datads_sentence() {
+fn busy_uses_core_sentence() {
     let doing = json!({"action":"network.set_mode","say_zh":"正在换制式（触屏发起，32 秒），稍等","say_en":"Busy: network mode (Screen)"});
     let (s, v) = Reply::Busy { doing: Some(doing) }.into_http();
     assert_eq!(
@@ -126,7 +126,7 @@ fn op_busy_is_its_own_reply() {
     // an automatic loop can tell it from a failure
     let e = r.into_result().unwrap_err();
     assert!(is_op_busy_err(&e), "{e}");
-    assert!(!is_op_busy_err("datad busy (network.set_mode)"));
+    assert!(!is_op_busy_err("core busy (network.set_mode)"));
 }
 
 #[test]
@@ -180,7 +180,7 @@ fn http_answers() {
         doing: Some(json!({"action":"network.set_mode"})),
     }
     .into_http();
-    assert_eq!((s, v["busy"].as_str()), (409, Some("datad")));
+    assert_eq!((s, v["busy"].as_str()), (409, Some("core")));
     assert!(v["error"].as_str().unwrap().contains("network.set_mode"));
     let (s, v) = Reply::Failed {
         error: "Method not found".into(),
@@ -194,7 +194,7 @@ fn http_answers() {
     }
     .into_http();
     assert_eq!(
-        (s, v["error"].as_str(), v["datad"].as_str()),
+        (s, v["error"].as_str(), v["core"].as_str()),
         (503, Some(DATAD_DOWN), Some("down"))
     );
     let (_, v) = Reply::Unreachable {
@@ -213,7 +213,7 @@ fn the_screen_is_not_sent_to_itself() {
     }
     .into_http_screen();
     assert_eq!(
-        (s, v["error"].as_str(), v["datad"].as_str()),
+        (s, v["error"].as_str(), v["core"].as_str()),
         (503, Some(DATAD_DOWN_SCREEN), Some("down"))
     );
     let (_, v) = Reply::Unreachable {

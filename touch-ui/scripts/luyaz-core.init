@@ -1,19 +1,11 @@
 #!/bin/sh /etc/rc.common
-# procd service for luyaz-core (the core, formerly zwrt-datad; manager
-# docs/designs/u60-phase10.md 10e R1/R2). Install to /etc/init.d/luyaz-core;
-# rc.local starts it with `/etc/init.d/luyaz-core start` once the (retired)
-# luyaz-migrate.sh run moved the core. Began as a copy of zwrt-datad.init (gone since Luya-Z
-# rename E3) with the new program path: only starts in the new layout
-# (/data/luyaz/core/.migrated, written last by the move), as zwrt-datad.init
-# only in the old one, so there is never a second core. Since Luya-Z rename D2 the
-# log is /tmp/luyaz-core.log (see start_service), the core writes its pid to
+# procd service for luyaz-core (the core; manager docs/designs/u60-phase10.md 10e R1/R2).
+# Install to /etc/init.d/luyaz-core; rc.local starts it with `/etc/init.d/luyaz-core start`.
+# The log is /tmp/luyaz-core.log (see start_service), the core writes its pid to
 # /var/run/luyaz-core.pid, and its state lives under /data/luyaz/core/ (the LAN
-# token at /data/luyaz/core/auth.token); before D2 these were /tmp/zwrt-datad.log,
-# /var/run/zwrt-datad.pid and /data/zwrt-datad.
+# token at /data/luyaz/core/auth.token).
 #
-# Launch semantics are the old start.sh start_datad_legacy's, moved here unchanged:
-# normal boots only, token seeding, LAN listener arguments, modem stream
-# settings, and the data service's own auto-update kept off.
+# Normal boots only, token seeding, LAN listener arguments.
 #
 # Do NOT run `enable`/`disable` (overlay whiteouts, manager CLAUDE.md).
 # SPDX-License-Identifier: MIT
@@ -28,23 +20,19 @@ TOKEN_FILE=/data/luyaz/core/auth.token
 LAN_BIND=0.0.0.0
 LAN_PORT=9461
 ROLLBACK_FLAG=/data/luyaz/core/ops/rollback-on
-# u60d taking over from the agent (manager docs/designs/u60-platform.md, Phase 4 step 9): extra
-# settings from /data/luyaz/core/datad.env, one VAR=value per line; only plain values are taken, and only the
+# Extra settings from /data/luyaz/core/core.env, one VAR=value per line; only plain values are taken, and only the
 # core's switches (core_switches below).
 # Absent (every install by default) = none. Change it, then restart this service. Not in the
 # ship trial's launch: a trial build runs without them.
-CORE_ENV=/data/luyaz/core/datad.env
-# Luya-Z rename D3 (manager docs/designs/luyaz-rename.md): the core reads only LUYAZ_* names (the old
-# ZWRT_DATAD_*, U60D_* went with the D3 clean-up). Only the listed switches are taken from datad.env,
+CORE_ENV=/data/luyaz/core/core.env
+# The core reads only LUYAZ_* names. Only the listed switches are taken from core.env,
 # so it can never set the rollback or ubus settings.
 core_switches() {
     grep -E '^LUYAZ_(CHILL_IDLE|CONTRACT_DEBUG|CRASHWATCH|HOME_EXIT|LONGTERM|MIHOMO_API|PLUGINS|POLICIES|SMS_SESSION)=[A-Za-z0-9_.,:/-]*$' "$1" 2>/dev/null
 }
-# the layout switch (same line in u60-ship.sh and the others; scripts/test/luyaz-dir)
-luyaz_new() { [ -f "$1/data/luyaz/core/.migrated" ]; }
 
 # Same test as start.sh: in power-off charging the UI falls back to sysfs,
-# so there is nothing for datad to do.
+# so there is nothing for the core to do.
 boot_is_normal() {
     _state=$(awk -F"'" '/option mode_main_state/ { print $2; exit }' /etc/config/zwrt_zte_mc_tmp 2>/dev/null)
     case "$_state" in
@@ -54,7 +42,7 @@ boot_is_normal() {
     grep -q 'silent_boot.mode=nonsilent' /proc/cmdline 2>/dev/null
 }
 
-# datad refuses to start without a non-empty token file; the token protects
+# the core refuses to start without a non-empty token file; the token protects
 # its LAN listener.
 seed_token() {
     if [ ! -s "$TOKEN_FILE" ]; then
@@ -69,17 +57,14 @@ seed_token() {
 }
 
 start_service() {
-    # the old layout's core is zwrt-datad's (/etc/init.d/zwrt-datad)
-    luyaz_new "" || return 1
     boot_is_normal || return 0
     [ -x "$BIN" ] || return 1
     seed_token || return 1
-    killall -9 u60-datad 2>/dev/null # the old aggregator, if a legacy install left it
     procd_open_instance
     # --lan-bind is what opens the LAN listener AND keeps loopback auth-free
     # for the touch UI; --lan-port alone does neither.
     # X9 (manager docs/designs/u60-phase10.md): the program itself under procd, no wrapper; output
-    # appended to /tmp/luyaz-core.log (D2; before: /tmp/zwrt-datad.log; the sentinel caps both), crash records and alerts by the core (u60d svcwatch)
+    # appended to /tmp/luyaz-core.log (the sentinel caps it), crash records and alerts by the core (u60d svcwatch)
     procd_set_param command /bin/sh -c 'exec >>/tmp/luyaz-core.log 2>&1 </dev/null; echo "=== $(date +%Y-%m-%dT%H:%M:%S) start $0"; exec "$0" "$@"' "$BIN" -i 1000 --lan-bind "$LAN_BIND" --lan-port "$LAN_PORT" --auth-token-file "$TOKEN_FILE"
     # LUYAZ_UBUS=auto: read ubus over ubusd's socket instead of forking
     # `ubus call` each time; falls back to the CLI for 30 s only when a request
