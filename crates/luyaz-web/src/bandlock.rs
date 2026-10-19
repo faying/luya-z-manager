@@ -34,6 +34,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::topbar::Via;
 use crate::agent::Polled;
 use crate::changes::Seen;
 use crate::hub::{Link, St};
@@ -452,6 +453,7 @@ pub fn confirm(w: Which, list: &[u32], l: Lang) -> write::Confirm {
         cuts_uplink: true,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -543,7 +545,7 @@ pub fn outcome(s: &Seen, sent: write::Sent, read: bool, w: Which, list: &[u32], 
     }
 }
 
-fn area(w: Which, l: Lang, remote: bool, list: &[u32], phase: &write::Phase) -> String {
+fn area(w: Which, l: Lang, remote: Via, list: &[u32], phase: &write::Phase) -> String {
     let p = w.path();
     let set = match w {
         Which::Reset => format!("/bandlock/{p}/set"),
@@ -574,11 +576,13 @@ pub struct BandsQuery {
 async fn ask(app: Shared, w: Which, q: BandsQuery, req: axum::extract::Request) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
     let l = ctx.lang;
-    let (b, stuck) = app.hub.read(|st| (bands(st), st.stuck));
+    let (b, stuck, revert) =
+        app.hub.read(|st| (bands(st), st.stuck, write::Revert::txn(st.blocks.get("op").map(|b| &b.data))));
     let phase = match check(w, &q.bands, b.as_ref(), stuck, l) {
         Err(o) => write::Phase::Done(o),
         Ok(list) => {
-            let html = area(w, l, ctx.remote, &list, &write::Phase::Ask(confirm(w, &list, l)));
+            let c = write::Confirm { revert, ..confirm(w, &list, l) };
+            let html = area(w, l, ctx.remote, &list, &write::Phase::Ask(c));
             return one(html);
         }
     };
@@ -592,11 +596,11 @@ async fn set(app: Shared, w: Which, q: BandsQuery, req: axum::extract::Request) 
         let list = match check(w, &q.bands, b.as_ref(), stuck, l) {
             Ok(list) => list,
             Err(o) => {
-                let _ = tx.send(patch(&area(w, l, false, &[], &write::Phase::Done(o)))).await;
+                let _ = tx.send(patch(&area(w, l, Via::Local, &[], &write::Phase::Done(o)))).await;
                 return;
             }
         };
-        let pending = |t: String| area(w, l, false, &list, &write::Phase::Pending(t));
+        let pending = |t: String| area(w, l, Via::Local, &list, &write::Phase::Pending(t));
         let first = match w {
             Which::Reset => l.pick("Resetting…", "正在恢复默认…"),
             _ => l.pick("Locking…", "正在锁定…"),
@@ -616,7 +620,7 @@ async fn set(app: Shared, w: Which, q: BandsQuery, req: axum::extract::Request) 
         let sent = match write::send_body(&app.http, &app.control_url, &body, Some(SEND_TIMEOUT), l).await {
             Ok(s) => s,
             Err(o) => {
-                let _ = tx.send(patch(&area(w, l, false, &list, &write::Phase::Done(o)))).await;
+                let _ = tx.send(patch(&area(w, l, Via::Local, &list, &write::Phase::Done(o)))).await;
                 return;
             }
         };
@@ -670,7 +674,7 @@ async fn set(app: Shared, w: Which, q: BandsQuery, req: axum::extract::Request) 
         let o = outcome(&last, sent, read, w, &list, l);
         let html = format!(
             "{}\n{}",
-            area(w, l, false, &list, &write::Phase::Done(o)),
+            area(w, l, Via::Local, &list, &write::Phase::Done(o)),
             draft(&app, l)
         );
         let _ = tx.send(patch(&html)).await;

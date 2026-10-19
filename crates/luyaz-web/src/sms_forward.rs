@@ -42,6 +42,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled};
 use crate::i18n::Lang;
 use crate::pages::{Shared, StreamQuery, split_leaves};
@@ -780,6 +781,7 @@ pub fn cfg_confirm(b: &Value, l: Lang) -> write::Confirm {
         cuts_uplink: false,
         word: None,
         danger: b["delete_after_forward"] == true,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -1063,6 +1065,7 @@ pub fn rule_confirm(b: &Value, edit: bool, l: Lang) -> write::Confirm {
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -1144,7 +1147,7 @@ impl Page {
 }
 
 /// The write areas: `fwd-cfg`, `fwd-rule` (the form), `fwd-rules` (a row's buttons), `fwd-log`.
-fn area(id: &str, l: Lang, remote: bool, set: &str, phase: &write::Phase) -> String {
+fn area(id: &str, l: Lang, remote: Via, set: &str, phase: &write::Phase) -> String {
     let cancel = format!("{PATH}/{}/cancel", &id[4..]);
     write::Area {
         id,
@@ -1222,7 +1225,7 @@ async fn body(req: axum::extract::Request) -> Vec<u8> {
 }
 
 /// Who, the language, remote, from a request.
-fn who(app: &Shared, req: &axum::extract::Request) -> (Caller, Lang, bool) {
+fn who(app: &Shared, req: &axum::extract::Request) -> (Caller, Lang, Via) {
     let ctx = crate::topbar::Ctx::of_request(req, PATH);
     (Caller::of(app, req), ctx.lang, ctx.remote)
 }
@@ -1269,14 +1272,14 @@ fn pending(id: &str, l: Lang, en: &'static str, zh: &'static str) -> String {
     area(
         id,
         l,
-        false,
+        Via::Local,
         "",
         &write::Phase::Pending(l.pick(en, zh).into()),
     )
 }
 
 fn done(id: &str, l: Lang, o: write::Outcome) -> String {
-    area(id, l, false, "", &write::Phase::Done(o))
+    area(id, l, Via::Local, "", &write::Phase::Done(o))
 }
 
 // settings
@@ -1584,6 +1587,7 @@ pub fn toggle_confirm(r: &Rule, on: bool, l: Lang) -> write::Confirm {
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -1609,6 +1613,7 @@ pub fn test_confirm(r: &Rule, l: Lang) -> write::Confirm {
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -1643,6 +1648,7 @@ pub fn del_confirm(r: &Rule, l: Lang) -> write::Confirm {
         cuts_uplink: false,
         word: None,
         danger: true,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -1839,6 +1845,7 @@ pub fn retry_confirm(n: usize, l: Lang) -> write::Confirm {
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -1864,6 +1871,7 @@ pub fn clear_confirm(n: usize, l: Lang) -> write::Confirm {
         cuts_uplink: false,
         word: None,
         danger: true,
+        revert: crate::write::Revert::No,
     }
 }
 

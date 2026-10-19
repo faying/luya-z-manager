@@ -38,6 +38,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::{self, Caller, Fail, esc};
 use crate::i18n::Lang;
 use crate::pages::{Shared, async_stream};
@@ -326,7 +327,7 @@ struct Page {
 
 struct Rq {
     l: Lang,
-    remote: bool,
+    remote: Via,
     who: Caller,
     cmd: String,
 }
@@ -436,6 +437,7 @@ async fn send(State(app): State<Shared>, req: Request) -> axum::response::Respon
             cuts_uplink: true,
             word: None,
             danger: true,
+            revert: crate::write::Revert::No,
         };
         let set = format!("/tools/at/confirm?h={}", tok(&sent));
         return one(format!("{}\n{}", err_html(None), area(&r, &set, &Phase::Ask(c)))).into_response();
@@ -614,7 +616,7 @@ mod tests {
     #[test]
     fn nothing_on_the_page_offers_cfun() {
         let l = Lang::En;
-        let r = Rq { l, remote: false, who: Caller { token: None, peer: None, sid: None }, cmd: String::new() };
+        let r = Rq { l, remote: Via::Local, who: Caller { token: None, peer: None, sid: None }, cmd: String::new() };
         let mut all = vec![
             port_html(l, &PortState::Looking),
             port_html(l, &PortState::None),
@@ -638,6 +640,7 @@ mod tests {
                 cuts_uplink: true,
                 word: None,
                 danger: true,
+                revert: crate::write::Revert::No,
             }),
         ));
         let html = all.join("\n");

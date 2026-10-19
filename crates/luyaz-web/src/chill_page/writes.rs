@@ -30,6 +30,7 @@ use serde_json::{Value, json};
 use super::data::*;
 use super::view::{AREAS, area};
 use super::{PATH, bump, set_paused};
+use crate::topbar::Via;
 use crate::agent::{self, Caller, Fail};
 use crate::i18n::Lang;
 use crate::pages::{Shared, patch};
@@ -41,7 +42,7 @@ const JOB_EVERY: Duration = Duration::from_millis(1500);
 const JOB_LIMIT: Duration = Duration::from_secs(180);
 const HOME_LIMIT: Duration = Duration::from_secs(90);
 
-fn who(app: &Shared, req: &Request) -> (Caller, Lang, bool) {
+fn who(app: &Shared, req: &Request) -> (Caller, Lang, Via) {
     let ctx = crate::topbar::Ctx::of_request(req, PATH);
     (Caller::of(app, req), ctx.lang, ctx.remote)
 }
@@ -51,11 +52,11 @@ fn one(html: String) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
 }
 
 fn done(id: &str, l: Lang, o: Outcome) -> String {
-    area(id, l, false, "", &Phase::Done(o))
+    area(id, l, Via::Local, "", &Phase::Done(o))
 }
 
 fn pending(id: &str, l: Lang, text: &str) -> String {
-    area(id, l, false, "", &Phase::Pending(text.to_owned()))
+    area(id, l, Via::Local, "", &Phase::Pending(text.to_owned()))
 }
 
 fn inline(title: String, what: String, action: String) -> Confirm {
@@ -69,10 +70,11 @@ fn inline(title: String, what: String, action: String) -> Confirm {
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
-fn ask(id: &str, l: Lang, remote: bool, set: &str, c: Confirm) -> String {
+fn ask(id: &str, l: Lang, remote: Via, set: &str, c: Confirm) -> String {
     area(id, l, remote, set, &Phase::Ask(c))
 }
 

@@ -29,6 +29,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::Polled;
 use crate::hub::{Link, St};
 use crate::i18n::Lang;
@@ -379,10 +380,11 @@ pub fn confirm(w: Which, k: &Lock, l: Lang) -> write::Confirm {
         cuts_uplink: true,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
-fn area(w: Which, l: Lang, remote: bool, k: &Lock, phase: &write::Phase) -> String {
+fn area(w: Which, l: Lang, remote: Via, k: &Lock, phase: &write::Phase) -> String {
     let p = w.path();
     let set = match w {
         Which::Reset => format!("{PATH}/{p}/set"),
@@ -415,7 +417,11 @@ async fn ask(app: Shared, w: Which, q: CellQuery, req: axum::extract::Request) -
     let (loaded, stuck) = state(&app);
     let phase = match check(w, &q, loaded, stuck, l) {
         Err(o) => write::Phase::Done(o),
-        Ok(k) => return one(area(w, l, ctx.remote, &k, &write::Phase::Ask(confirm(w, &k, l)))),
+        Ok(k) => {
+            let revert = app.hub.read(|st| write::Revert::txn(st.blocks.get("op").map(|b| &b.data)));
+            let c = write::Confirm { revert, ..confirm(w, &k, l) };
+            return one(area(w, l, ctx.remote, &k, &write::Phase::Ask(c)));
+        }
     };
     one(area(w, l, ctx.remote, &Lock::default(), &phase))
 }
@@ -427,11 +433,11 @@ async fn set(app: Shared, w: Which, q: CellQuery, req: axum::extract::Request) -
         let k = match check(w, &q, loaded, stuck, l) {
             Ok(k) => k,
             Err(o) => {
-                let _ = tx.send(patch(&area(w, l, false, &Lock::default(), &write::Phase::Done(o)))).await;
+                let _ = tx.send(patch(&area(w, l, Via::Local, &Lock::default(), &write::Phase::Done(o)))).await;
                 return;
             }
         };
-        let pending = |t: String| area(w, l, false, &k, &write::Phase::Pending(t));
+        let pending = |t: String| area(w, l, Via::Local, &k, &write::Phase::Pending(t));
         let first = match w {
             Which::Reset => l.pick("Resetting…", "正在恢复默认…"),
             _ => l.pick("Locking…", "正在锁定…"),
@@ -445,7 +451,7 @@ async fn set(app: Shared, w: Which, q: CellQuery, req: axum::extract::Request) -
         let sent = match write::send_body(&app.http, &app.control_url, &body, Some(SEND_TIMEOUT), l).await {
             Ok(s) => s,
             Err(o) => {
-                let _ = tx.send(patch(&area(w, l, false, &k, &write::Phase::Done(o)))).await;
+                let _ = tx.send(patch(&area(w, l, Via::Local, &k, &write::Phase::Done(o)))).await;
                 return;
             }
         };
@@ -466,7 +472,7 @@ async fn set(app: Shared, w: Which, q: CellQuery, req: axum::extract::Request) -
             return;
         };
         let o = crate::follow::outcome(&f, sent, applied(w, &k, l), l);
-        let _ = tx.send(patch(&area(w, l, false, &k, &write::Phase::Done(o)))).await;
+        let _ = tx.send(patch(&area(w, l, Via::Local, &k, &write::Phase::Done(o)))).await;
     }))
 }
 

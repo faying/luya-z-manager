@@ -39,6 +39,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::topbar::Via;
 use crate::agent::Polled;
 use crate::hub::{Hub, St};
 use crate::i18n::Lang;
@@ -542,6 +543,7 @@ pub fn confirm(e: &Value, l: Lang) -> write::Confirm {
             cuts_uplink: !RELOADS_WIFI.contains(&action),
             word: None,
             danger: false,
+            revert: crate::write::Revert::No,
         }
     } else {
         write::Confirm {
@@ -558,6 +560,7 @@ pub fn confirm(e: &Value, l: Lang) -> write::Confirm {
             cuts_uplink: false,
             word: None,
             danger: false,
+            revert: crate::write::Revert::No,
         }
     }
 }
@@ -692,7 +695,7 @@ pub fn leaves(v: &View) -> Vec<(String, String)> {
     split_leaves(&Leaves { v }.render().unwrap())
 }
 
-fn area(l: Lang, remote: bool, set: &str, phase: &write::Phase) -> String {
+fn area(l: Lang, remote: Via, set: &str, phase: &write::Phase) -> String {
     write::Area {
         id: "ch-undo",
         l,
@@ -886,14 +889,14 @@ pub async fn undo(
     let set = format!("/changes/undo?op={}", q.op);
     let pending = area(
         l,
-        false,
+        Via::Local,
         &set,
         &write::Phase::Pending(l.pick("Sending…", "正在发送…").into()),
     );
     let done = async move {
         let o = run_undo(&app, &q.op, l).await;
         let _ = read_now(&app).await;
-        area(l, false, &set, &write::Phase::Done(o))
+        area(l, Via::Local, &set, &write::Phase::Done(o))
     };
     write::respond(pending, done)
 }

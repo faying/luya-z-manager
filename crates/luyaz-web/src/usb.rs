@@ -31,6 +31,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled};
 use crate::hub::{Hub, Link, St};
 use crate::i18n::Lang;
@@ -552,6 +553,7 @@ pub fn mode_confirm(target: &str, current: Option<&str>, l: Lang) -> write::Conf
         cuts_uplink: true,
         word: None,
         danger: target == "debug",
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -595,6 +597,7 @@ pub fn pb_confirm(on: bool, l: Lang) -> write::Confirm {
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -764,7 +767,7 @@ impl Page {
     }
 }
 
-fn mode_area(l: Lang, remote: bool, target: &str, phase: &write::Phase) -> String {
+fn mode_area(l: Lang, remote: Via, target: &str, phase: &write::Phase) -> String {
     let set = format!("/usb/mode/set?mode={target}");
     let cancel = format!("/usb/mode/cancel?want={target}");
     write::Area {
@@ -783,7 +786,7 @@ fn pb_area(l: Lang, target: bool, phase: &write::Phase) -> String {
     write::Area {
         id: "usb-pb",
         l,
-        remote: false,
+        remote: Via::Local,
         set: &set,
         cancel: "/usb/pb/cancel",
         phase,
@@ -905,7 +908,7 @@ pub async fn mode_set(
         ),
         mode_area(
             l,
-            false,
+            Via::Local,
             target,
             &write::Phase::Pending(match l {
                 Lang::En => format!("Switching to {}…", mode_label(target)),
@@ -932,7 +935,7 @@ pub async fn mode_set(
         format!(
             "{}\n{}",
             leaf(&app, &a, &Busy::default(), l, "usb-modes"),
-            mode_area(l, false, target, &write::Phase::Done(o))
+            mode_area(l, Via::Local, target, &write::Phase::Done(o))
         )
     })
 }

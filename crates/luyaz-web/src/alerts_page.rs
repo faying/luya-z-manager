@@ -35,6 +35,7 @@ use axum::routing::{get, post};
 use futures_util::Stream;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled, esc};
 use crate::i18n::Lang;
 use crate::pages::{Shared, StreamQuery, patch, split_leaves};
@@ -575,7 +576,7 @@ impl Page {
     }
 }
 
-fn area(id: &str, set: &str, cancel: &str, l: Lang, remote: bool, phase: &Phase) -> String {
+fn area(id: &str, set: &str, cancel: &str, l: Lang, remote: Via, phase: &Phase) -> String {
     write::Area {
         id,
         l,
@@ -591,13 +592,13 @@ const MARK_CANCEL: &str = "/alerts/mark/cancel";
 const NUM_CANCEL: &str = "/alerts/number/cancel";
 const ABROAD_CANCEL: &str = "/alerts/abroad/cancel";
 
-fn mark_area(l: Lang, remote: bool, phase: &Phase) -> String {
+fn mark_area(l: Lang, remote: Via, phase: &Phase) -> String {
     area("al-mark", "/alerts/mark", MARK_CANCEL, l, remote, phase)
 }
-fn num_area(l: Lang, remote: bool, set: &str, phase: &Phase) -> String {
+fn num_area(l: Lang, remote: Via, set: &str, phase: &Phase) -> String {
     area("al-num", set, NUM_CANCEL, l, remote, phase)
 }
-fn abroad_area(l: Lang, remote: bool, set: &str, phase: &Phase) -> String {
+fn abroad_area(l: Lang, remote: Via, set: &str, phase: &Phase) -> String {
     area("al-abroad", set, ABROAD_CANCEL, l, remote, phase)
 }
 
@@ -678,7 +679,7 @@ fn taken(r: Result<(u16, Value), Fail>, l: Lang) -> Result<(), Outcome> {
     }
 }
 
-async fn do_mark(app: Shared, who: Caller, l: Lang, remote: bool) -> String {
+async fn do_mark(app: Shared, who: Caller, l: Lang, remote: Via) -> String {
     let phase = Phase::Done(mark_outcome(&app, &who, l).await);
     reread(&app);
     mark_area(l, remote, &phase)
@@ -727,7 +728,7 @@ pub async fn mark_send(
 }
 
 fn cancel(
-    f: fn(Lang, bool, &str, &Phase) -> String,
+    f: fn(Lang, Via, &str, &Phase) -> String,
     q: &write::CancelQuery,
     req: &axum::extract::Request,
 ) -> String {
@@ -775,6 +776,7 @@ fn inline(l: Lang, title: String, what: String, action: String) -> write::Confir
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -859,7 +861,7 @@ pub async fn number_ask(
     })
 }
 
-async fn do_number(app: Shared, who: Caller, l: Lang, remote: bool, n: String) -> String {
+async fn do_number(app: Shared, who: Caller, l: Lang, remote: Via, n: String) -> String {
     let o = number_outcome(&app, &who, l, &n).await;
     reread(&app);
     num_area(l, remote, "", &Phase::Done(o))
@@ -934,7 +936,7 @@ pub async fn abroad_ask(
     ))
 }
 
-async fn do_abroad(app: Shared, who: Caller, l: Lang, remote: bool, on: bool) -> String {
+async fn do_abroad(app: Shared, who: Caller, l: Lang, remote: Via, on: bool) -> String {
     let o = abroad_outcome(&app, &who, l, on).await;
     reread(&app);
     abroad_area(l, remote, "", &Phase::Done(o))

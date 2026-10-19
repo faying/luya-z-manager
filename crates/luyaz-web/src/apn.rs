@@ -44,6 +44,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled};
 use crate::hub::{Link, St};
 use crate::i18n::Lang;
@@ -617,7 +618,7 @@ impl Act {
     }
 }
 
-fn area(act: &Act, l: Lang, remote: bool, phase: &write::Phase) -> String {
+fn area(act: &Act, l: Lang, remote: Via, phase: &write::Phase) -> String {
     let (set, cancel) = (act.set_url(), act.cancel_url());
     write::Area { id: act.area_id(), l, remote, set: &set, cancel: &cancel, phase }.html()
 }
@@ -659,6 +660,7 @@ fn dialog(title: String, what: String, down: Option<String>, rec: Option<String>
         cuts_uplink: cuts,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -851,7 +853,7 @@ fn gate(app: &Shared, l: Lang) -> Result<Option<Apn>, write::Outcome> {
     Ok(a)
 }
 
-fn ask_html(act: &Act, save: Option<&Save>, l: Lang, remote: bool, app: &Shared) -> String {
+fn ask_html(act: &Act, save: Option<&Save>, l: Lang, remote: Via, app: &Shared) -> String {
     let phase = match gate(app, l).and_then(|a| confirm(act, a.as_ref(), save, l)) {
         Ok(c) => write::Phase::Ask(c),
         Err(o) => write::Phase::Done(o),
@@ -863,16 +865,16 @@ async fn run(app: Shared, act: Act, save: Option<Save>, who: Caller, l: Lang, tx
     let a = match gate(&app, l) {
         Ok(a) => a,
         Err(o) => {
-            let _ = tx.send(patch(&area(&act, l, false, &write::Phase::Done(o)))).await;
+            let _ = tx.send(patch(&area(&act, l, Via::Local, &write::Phase::Done(o)))).await;
             return;
         }
     };
     // checked again at the send (the list may have changed since the dialog opened)
     if let Err(o) = confirm(&act, a.as_ref(), save.as_ref(), l) {
-        let _ = tx.send(patch(&area(&act, l, false, &write::Phase::Done(o)))).await;
+        let _ = tx.send(patch(&area(&act, l, Via::Local, &write::Phase::Done(o)))).await;
         return;
     }
-    let pending = |t: String| area(&act, l, false, &write::Phase::Pending(t));
+    let pending = |t: String| area(&act, l, Via::Local, &write::Phase::Pending(t));
     if tx.send(patch(&pending(l.pick("Sending…", "正在发送…").into()))).await.is_err() {
         return;
     }
@@ -881,7 +883,7 @@ async fn run(app: Shared, act: Act, save: Option<Save>, who: Caller, l: Lang, tx
         let o = pick(&app, &who, id, &apn, l, &tx, &pending).await;
         // the rows' marks come from netinfo: re-read now, not at the next 30 s poll
         let _ = app.kick.send(PATH);
-        let _ = tx.send(patch(&area(&act, l, false, &write::Phase::Done(o)))).await;
+        let _ = tx.send(patch(&area(&act, l, Via::Local, &write::Phase::Done(o)))).await;
         return;
     }
     let all = steps(&act, save.as_ref());
@@ -937,7 +939,7 @@ async fn run(app: Shared, act: Act, save: Option<Save>, who: Caller, l: Lang, tx
         *t = l.pick("APN added", "APN 已添加").into();
     }
     let ok = matches!(last, write::Outcome::Applied(_)) || matches!(&last, write::Outcome::Ended(_, t) if *t == "ok");
-    let mut html = area(&act, l, false, &write::Phase::Done(last));
+    let mut html = area(&act, l, Via::Local, &write::Phase::Done(last));
     if ok && matches!(act, Act::Save(_)) {
         html.push('\n');
         html.push_str("<div id=\"ap-form\"></div>");
@@ -1174,7 +1176,7 @@ fn id_ok(act: &Act) -> bool {
     }
 }
 
-fn bad_id(act: &Act, l: Lang, remote: bool) -> String {
+fn bad_id(act: &Act, l: Lang, remote: Via) -> String {
     let why = if matches!(act, Act::Pick(_)) {
         l.pick("not a carrier profile", "不是运营商的配置")
     } else {
@@ -1198,7 +1200,7 @@ async fn set(app: Shared, act: Act, req: axum::extract::Request) -> Sse<impl Str
     let ok_id = id_ok(&act);
     Sse::new(async_stream(move |tx| async move {
         if !ok_id {
-            let _ = tx.send(patch(&bad_id(&act, l, false))).await;
+            let _ = tx.send(patch(&bad_id(&act, l, Via::Local))).await;
             return;
         }
         run(app, act, None, who, l, tx).await;
@@ -1242,7 +1244,7 @@ pub async fn form_open(State(app): State<Shared>, Query(q): Query<IdQuery>, req:
     let l = crate::topbar::Ctx::of_request(&req, PATH).lang;
     let a = app.hub.read(apn);
     let p = a.as_ref().and_then(|a| a.find(&q.id)).cloned();
-    let clear = area(&Act::Save(String::new()), l, false, &write::Phase::Idle);
+    let clear = area(&Act::Save(String::new()), l, Via::Local, &write::Phase::Idle);
     one(format!("{}\n{clear}", form(p.as_ref(), l)))
 }
 pub async fn form_close() -> impl IntoResponse {
@@ -1277,7 +1279,7 @@ pub async fn save_set(State(app): State<Shared>, Query(q): Query<TokenQuery>, re
     Sse::new(async_stream(move |tx| async move {
         let Some(s) = save else {
             let o = write::Outcome::NotYet(l.pick("The form expired; press Save again", "表单已过期，请再按一次「保存」").into());
-            let _ = tx.send(patch(&area(&act, l, false, &write::Phase::Done(o)))).await;
+            let _ = tx.send(patch(&area(&act, l, Via::Local, &write::Phase::Done(o)))).await;
             return;
         };
         run(app, act, Some(s), who, l, tx).await;

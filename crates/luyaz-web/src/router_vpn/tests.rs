@@ -98,10 +98,10 @@ fn busy_row_and_confirm_tiers() {
     let v = hub.read(|st| view(st, Some(("pptp", true)), Lang::Zh));
     assert!(v.dis);
     assert_eq!(v.rows.as_ref().unwrap()[1].busy.as_deref(), Some("正在打开…"));
-    let c = confirm("pptp", true, false, Lang::Zh);
+    let c = confirm("pptp", true, Via::Local, Lang::Zh);
     assert_eq!(c.tier, write::Tier::Inline);
     assert_eq!(c.action, "确认：打开 PPTP 穿透");
-    let c = confirm("ipsec", false, true, Lang::En);
+    let c = confirm("ipsec", false, Via::Tailnet, Lang::En);
     assert!(c.tier == write::Tier::Dialog && c.cuts_uplink && !c.danger);
     assert_eq!(c.title, "Change IPSec passthrough?");
     // what the confirm asks for: the other state when reported, the button's when not
@@ -172,7 +172,7 @@ fn the_english_page_has_no_chinese() {
             assert!(!cjk(&html(&v)), "{}", html(&v));
         }
     }
-    for (k, on, remote) in [("l2tp", true, true), ("ipsec", false, false)] {
+    for (k, on, remote) in [("l2tp", true, Via::Tailnet), ("ipsec", false, Via::Local)] {
         let c = confirm(k, on, remote, Lang::En);
         for s in [&c.title, &c.what, &c.action, c.downtime.as_ref().unwrap(), c.recovery.as_ref().unwrap()] {
             assert!(!cjk(s), "{s}");

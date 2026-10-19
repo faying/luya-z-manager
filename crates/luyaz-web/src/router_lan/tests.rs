@@ -233,7 +233,7 @@ fn tiers() {
             "12h",
         )),
         &c,
-        false,
+        Via::Local,
         Lang::En,
     );
     assert_eq!(cf.tier, write::Tier::Dialog);
@@ -252,7 +252,7 @@ fn tiers() {
             "12h",
         )),
         &c,
-        false,
+        Via::Local,
         Lang::En,
     );
     assert_eq!(cf.tier, write::Tier::Dialog);
@@ -266,10 +266,10 @@ fn tiers() {
         "149",
         "12h",
     ));
-    let cf = confirm(&off, &c, false, Lang::Zh);
+    let cf = confirm(&off, &c, Via::Local, Lang::Zh);
     assert_eq!(cf.tier, write::Tier::Inline);
     assert!(cf.what.contains("DHCP 关闭") && cf.downtime.is_none());
-    assert_eq!(confirm(&off, &c, true, Lang::Zh).tier, write::Tier::Dialog);
+    assert_eq!(confirm(&off, &c, Via::Tailnet, Lang::Zh).tier, write::Tier::Dialog);
 }
 
 #[test]
@@ -337,7 +337,7 @@ fn readback_and_notes() {
     // the area carries the new address to cancel, for a lost reply
     let a = area(
         Lang::Zh,
-        false,
+        Via::Local,
         "/router/lan/set?t=x",
         ip,
         &write::Phase::Idle,

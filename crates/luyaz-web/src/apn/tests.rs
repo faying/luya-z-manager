@@ -101,7 +101,7 @@ fn the_password_is_in_no_html() {
     let a = Apn::of(&block(1));
     let s = check_save(&form("manu2", "Work", "corp", "hunter2pw", true), Some(&a), false, Lang::Zh).unwrap();
     let c = confirm(&Act::Save("tok".into()), Some(&a), Some(&s), Lang::Zh).unwrap();
-    let html = area(&Act::Save("tok".into()), Lang::Zh, false, &write::Phase::Ask(c));
+    let html = area(&Act::Save("tok".into()), Lang::Zh, Via::Local, &write::Phase::Ask(c));
     assert!(!html.contains("hunter2pw") && html.contains("/router/apn/save/set?t=tok"));
     let t = put(s.clone());
     assert_eq!(take(&t), Some(s));
@@ -188,6 +188,6 @@ fn pick_ids_confirm_and_readback() {
     assert_eq!(pick_state(&ni("manual", "ctnet", Some("manu9"), false, ""), "ctnet"), Some(Ok(())));
     assert_eq!(pick_state(&ni("auto", "ctiot", None, false, "拨号失败"), "ctnet"), Some(Err("拨号失败".into())));
     assert_eq!(pick_state(&ni("auto", "ctiot", None, false, ""), "ctnet"), None);
-    let html = area(&Act::Pick("auto2".into()), Lang::En, false, &write::Phase::Ask(c));
+    let html = area(&Act::Pick("auto2".into()), Lang::En, Via::Local, &write::Phase::Ask(c));
     assert!(html.contains("/router/apn/pick/set?id=auto2") && html.contains("ap-pick"));
 }

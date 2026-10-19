@@ -45,6 +45,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled, esc};
 use crate::i18n::Lang;
 use crate::pages::{Shared, StreamQuery, patch, split_leaves};
@@ -446,7 +447,7 @@ impl Which {
 }
 
 /// `set` is the confirm button's target ("" when there is nothing to confirm).
-fn area(w: Which, l: Lang, remote: bool, set: &str, phase: &Phase) -> String {
+fn area(w: Which, l: Lang, remote: Via, set: &str, phase: &Phase) -> String {
     let cancel = format!("{PATH}/{}/cancel", w.dir());
     write::Area {
         id: w.id(),
@@ -593,6 +594,7 @@ pub fn toggle_confirm(want: bool, l: Lang) -> Confirm {
         cuts_uplink: true,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -775,6 +777,7 @@ pub fn params_confirm(f: &Four, l: Lang) -> Confirm {
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -895,6 +898,7 @@ pub fn reset_confirm(l: Lang) -> Confirm {
         cuts_uplink: true,
         word: None,
         danger: true,
+        revert: crate::write::Revert::No,
     }
 }
 

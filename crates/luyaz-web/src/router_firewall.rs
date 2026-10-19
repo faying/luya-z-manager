@@ -44,6 +44,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::Polled;
 use crate::hub::{Link, St};
 use crate::i18n::Lang;
@@ -847,15 +848,16 @@ fn confirm(
         cuts_uplink: true,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
-pub fn sw_confirm(s: Sw, remote: bool, lan: Option<Lan>, l: Lang) -> write::Confirm {
+pub fn sw_confirm(s: Sw, remote: Via, lan: Option<Lan>, l: Lang) -> write::Confirm {
     if let Sw::Level(k) = s {
         let lv = level_label(l, k);
         return match l {
             Lang::En => confirm(
-                remote,
+                remote.remote(),
                 format!("Set the firewall level to {lv}?"),
                 format!(
                     "The firewall applies the {lv} rule set; some connections from outside may start or stop working."
@@ -866,7 +868,7 @@ pub fn sw_confirm(s: Sw, remote: bool, lan: Option<Lan>, l: Lang) -> write::Conf
                 l,
             ),
             Lang::Zh => confirm(
-                remote,
+                remote.remote(),
                 format!("把防火墙级别设为「{lv}」？"),
                 format!("防火墙改用「{lv}」这一档规则，有些来自外部的连接可能开始或停止工作。"),
                 format!("确认：设为「{lv}」"),
@@ -911,7 +913,7 @@ pub fn sw_confirm(s: Sw, remote: bool, lan: Option<Lan>, l: Lang) -> write::Conf
         .to_string()
     });
     confirm(
-        remote || nat_off,
+        remote.remote() || nat_off,
         title,
         what.into(),
         action,
@@ -1124,11 +1126,11 @@ pub fn pf_check(f: &PfIn, st: &St, l: Lang) -> Result<Rule, write::Outcome> {
     }
 }
 
-pub fn pf_confirm(r: &Rule, remote: bool, lan: Option<Lan>, l: Lang) -> write::Confirm {
+pub fn pf_confirm(r: &Rule, remote: Via, lan: Option<Lan>, l: Lang) -> write::Confirm {
     let (n, p, w, i, lp) = (&r.name, &r.protocol, &r.wan_port, &r.lan_ip, &r.lan_port);
     match l {
         Lang::En => confirm(
-            remote,
+            remote.remote(),
             format!("Add port forwarding rule “{n}”?"),
             format!("Traffic from the internet to {p} port {w} goes to {i}:{lp}."),
             format!("Confirm: add rule {n}"),
@@ -1137,7 +1139,7 @@ pub fn pf_confirm(r: &Rule, remote: bool, lan: Option<Lan>, l: Lang) -> write::C
             l,
         ),
         Lang::Zh => confirm(
-            remote,
+            remote.remote(),
             format!("添加端口转发规则「{n}」？"),
             format!("来自互联网、发往 {p} 端口 {w} 的流量会转给 {i}:{lp}。"),
             format!("确认：添加规则「{n}」"),
@@ -1163,7 +1165,7 @@ pub fn pf_write(r: &Rule, before: usize, l: Lang) -> write::Write {
     )
 }
 
-pub fn del_confirm(r: &Rule, remote: bool, lan: Option<Lan>, l: Lang) -> write::Confirm {
+pub fn del_confirm(r: &Rule, remote: Via, lan: Option<Lan>, l: Lang) -> write::Confirm {
     let d = |s: &str| {
         if s.is_empty() {
             "—".to_string()
@@ -1174,7 +1176,7 @@ pub fn del_confirm(r: &Rule, remote: bool, lan: Option<Lan>, l: Lang) -> write::
     let (n, w, i) = (r.label(), d(&r.wan_port), d(&r.lan_ip));
     match l {
         Lang::En => confirm(
-            remote,
+            remote.remote(),
             format!("Delete rule “{n}”?"),
             format!("Traffic to port {w} stops reaching {i}. To undo, add the rule again."),
             format!("Confirm: delete rule {n}"),
@@ -1183,7 +1185,7 @@ pub fn del_confirm(r: &Rule, remote: bool, lan: Option<Lan>, l: Lang) -> write::
             l,
         ),
         Lang::Zh => confirm(
-            remote,
+            remote.remote(),
             format!("删除规则「{n}」？"),
             format!("发往端口 {w} 的流量不再转给 {i}。要恢复，重新添加这条规则。"),
             format!("确认：删除规则「{n}」"),
@@ -1281,7 +1283,7 @@ impl Page {
 }
 
 /// The write areas: `fw-sw`, `fw-dmz`, `fw-pf` (add), `fw-del`.
-fn area(id: &str, l: Lang, remote: bool, set: &str, phase: &write::Phase) -> String {
+fn area(id: &str, l: Lang, remote: Via, set: &str, phase: &write::Phase) -> String {
     let cancel = format!("{PATH}/{}/cancel", &id[3..]);
     write::Area {
         id,
@@ -1433,14 +1435,14 @@ pub async fn sw_set(
     let pending = area(
         "fw-sw",
         l,
-        false,
+        Via::Local,
         "",
         &write::Phase::Pending(s.map(|s| s.pending(l)).unwrap_or_default()),
     );
     run(
         app,
         pending,
-        move |o| area("fw-sw", l, false, "", &write::Phase::Done(o)),
+        move |o| area("fw-sw", l, Via::Local, "", &write::Phase::Done(o)),
         w,
         l,
     )
@@ -1597,7 +1599,7 @@ pub async fn dmz_set(
     let pending = area(
         "fw-dmz",
         l,
-        false,
+        Via::Local,
         "",
         &write::Phase::Pending(l.pick("Applying DMZ…", "正在应用 DMZ…").into()),
     );
@@ -1613,7 +1615,7 @@ pub async fn dmz_set(
             };
             format!(
                 "{close}{}",
-                area("fw-dmz", l, false, "", &write::Phase::Done(o))
+                area("fw-dmz", l, Via::Local, "", &write::Phase::Done(o))
             )
         },
         w,
@@ -1672,7 +1674,7 @@ pub async fn pf_set(
     let pending = area(
         "fw-pf",
         l,
-        false,
+        Via::Local,
         "",
         &write::Phase::Pending(l.pick("Adding the rule…", "正在添加规则…").into()),
     );
@@ -1688,7 +1690,7 @@ pub async fn pf_set(
             };
             format!(
                 "{close}{}",
-                area("fw-pf", l, false, "", &write::Phase::Done(o))
+                area("fw-pf", l, Via::Local, "", &write::Phase::Done(o))
             )
         },
         w,
@@ -1773,14 +1775,14 @@ pub async fn del_set(
     let pending = area(
         "fw-del",
         l,
-        false,
+        Via::Local,
         "",
         &write::Phase::Pending(l.pick("Deleting the rule…", "正在删除规则…").into()),
     );
     run(
         app,
         pending,
-        move |o| area("fw-del", l, false, "", &write::Phase::Done(o)),
+        move |o| area("fw-del", l, Via::Local, "", &write::Phase::Done(o)),
         w,
         l,
     )

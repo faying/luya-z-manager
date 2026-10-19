@@ -39,6 +39,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled};
 use crate::i18n::Lang;
 use crate::pages::{Shared, StreamQuery, split_leaves};
@@ -716,7 +717,7 @@ impl Page {
 }
 
 /// The write areas: `dc-charge` (the limit), `dc-mode` (the three switches), `dc-rst` (the dialogs).
-fn area(id: &str, l: Lang, remote: bool, set: &str, phase: &write::Phase) -> String {
+fn area(id: &str, l: Lang, remote: Via, set: &str, phase: &write::Phase) -> String {
     let cancel = format!("{PATH}/{}/cancel", &id[3..]);
     write::Area {
         id,
@@ -821,7 +822,7 @@ fn judged(sent: Result<Value, Fail>, held: Option<bool>, applied: String, l: Lan
 }
 
 fn busy_area(id: &str, l: Lang) -> String {
-    area(id, l, false, "", &write::Phase::Done(write::Outcome::Busy))
+    area(id, l, Via::Local, "", &write::Phase::Done(write::Outcome::Busy))
 }
 
 fn on_off(l: Lang, on: bool, en_on: &str, en_off: &str, zh_on: &str, zh_off: &str) -> String {
@@ -911,6 +912,7 @@ pub async fn charge_ask(State(app): State<Shared>, req: axum::extract::Request) 
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     };
     let set = format!("{PATH}/charge/set?e={}&l={}&h={}", d.on, d.limit, d.hyst);
     one(area("dc-charge", l, ctx.remote, &set, &write::Phase::Ask(c)))
@@ -937,7 +939,7 @@ pub async fn charge_set(
     let pending = area(
         "dc-charge",
         l,
-        false,
+        Via::Local,
         "",
         &write::Phase::Pending(l.pick("Applying…", "正在应用…").into()),
     );
@@ -951,7 +953,7 @@ pub async fn charge_set(
             hyst: q.h,
         };
         if !(50..=100).contains(&d.limit) || !(1..=20).contains(&d.hyst) {
-            return area("dc-charge", l, false, "", &write::Phase::Done(write::Outcome::Failed(
+            return area("dc-charge", l, Via::Local, "", &write::Phase::Done(write::Outcome::Failed(
                 l.pick("limit out of range", "数值超出范围").into(),
             )));
         }
@@ -993,7 +995,7 @@ pub async fn charge_set(
         };
         kick(&app);
         let applied = matches!(o, write::Outcome::Applied(_));
-        let res = area("dc-charge", l, false, "", &write::Phase::Done(o));
+        let res = area("dc-charge", l, Via::Local, "", &write::Phase::Done(o));
         if applied {
             // the form starts again from what the device now says (draft = device)
             format!("{}\n{res}", form_html(l, Some(d)))
@@ -1114,6 +1116,7 @@ pub async fn mode_ask(
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     };
     let set = format!("{PATH}/mode/set?k={k}&on={}", q.on);
     one(area("dc-mode", l, ctx.remote, &set, &write::Phase::Ask(c)))
@@ -1130,7 +1133,7 @@ pub async fn mode_set(
     let pending = area(
         "dc-mode",
         l,
-        false,
+        Via::Local,
         "",
         &write::Phase::Pending(l.pick("Applying…", "正在应用…").into()),
     );
@@ -1207,7 +1210,7 @@ pub async fn mode_set(
             }
         };
         kick(&app);
-        area("dc-mode", l, false, "", &write::Phase::Done(o))
+        area("dc-mode", l, Via::Local, "", &write::Phase::Done(o))
     })
 }
 
@@ -1304,6 +1307,7 @@ fn rst_confirm(k: Rst, l: Lang) -> write::Confirm {
             cuts_uplink: true,
             word: None,
             danger: false,
+            revert: crate::write::Revert::No,
         },
         Rst::Off => write::Confirm {
             tier: write::Tier::Dialog,
@@ -1332,6 +1336,7 @@ fn rst_confirm(k: Rst, l: Lang) -> write::Confirm {
             cuts_uplink: true,
             word: None,
             danger: false,
+            revert: crate::write::Revert::No,
         },
         Rst::Reset => {
             let what = l.pick(
@@ -1359,6 +1364,7 @@ fn rst_confirm(k: Rst, l: Lang) -> write::Confirm {
                 cuts_uplink: true,
                 word: Some(reset_word(l).into()),
                 danger: true,
+                revert: crate::write::Revert::No,
             }
         }
     }
@@ -1390,7 +1396,7 @@ pub async fn rst_set(
     let pending = area(
         "dc-rst",
         l,
-        false,
+        Via::Local,
         "",
         &write::Phase::Pending(
             match k {
@@ -1402,7 +1408,7 @@ pub async fn rst_set(
         ),
     );
     write::respond(pending, async move {
-        let done = |o| area("dc-rst", l, false, "", &write::Phase::Done(o));
+        let done = |o| area("dc-rst", l, Via::Local, "", &write::Phase::Done(o));
         let Some(k) = k else {
             return done(write::Outcome::Failed(l.pick("unknown action", "不认识的操作").into()));
         };

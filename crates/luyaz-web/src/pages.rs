@@ -216,7 +216,7 @@ fn roam_html(l: Lang, on: Option<bool>, target: bool, phase: &write::Phase) -> S
     let op = write::Area {
         id: "roam",
         l,
-        remote: false,
+        remote: crate::topbar::Via::Local,
         set: &set,
         cancel: "/roam/cancel",
         phase,
@@ -266,6 +266,7 @@ fn roam_confirm(l: Lang, target: bool) -> write::Confirm {
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 

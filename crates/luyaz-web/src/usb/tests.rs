@@ -308,7 +308,7 @@ fn the_english_page_has_no_chinese() {
         assert!(!cjk(&h), "{h}");
         for m in MODES {
             let c = write::Phase::Ask(mode_confirm(m, Some("user"), Lang::En));
-            assert!(!cjk(&mode_area(Lang::En, true, m, &c)));
+            assert!(!cjk(&mode_area(Lang::En, Via::Tailnet, m, &c)));
         }
         for on in [true, false] {
             let c = write::Phase::Ask(pb_confirm(on, Lang::En));
@@ -325,7 +325,7 @@ fn the_english_page_has_no_chinese() {
 
 #[test]
 fn a_lost_reply_area_posts_back_with_the_target() {
-    let h = mode_area(Lang::Zh, false, "rndis", &write::Phase::Pending("x".into()));
+    let h = mode_area(Lang::Zh, Via::Local, "rndis", &write::Phase::Pending("x".into()));
     assert!(
         h.contains("/usb/mode/cancel?want=rndis&#38;lost=true")
             || h.contains("/usb/mode/cancel?want=rndis&amp;lost=true"),
@@ -333,7 +333,7 @@ fn a_lost_reply_area_posts_back_with_the_target() {
     );
     let d = mode_area(
         Lang::Zh,
-        true,
+        Via::Tailnet,
         "debug",
         &write::Phase::Ask(mode_confirm("debug", None, Lang::Zh)),
     );

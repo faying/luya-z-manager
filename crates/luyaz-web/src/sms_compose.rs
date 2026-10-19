@@ -164,6 +164,7 @@ pub fn confirm(d: &Draft, roaming: bool, l: Lang) -> write::Confirm {
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -254,7 +255,7 @@ fn area(l: Lang, set: &str, phase: &write::Phase) -> String {
     write::Area {
         id: "smsc",
         l,
-        remote: false,
+        remote: crate::topbar::Via::Local,
         set,
         cancel: "/sms/compose/cancel",
         phase,

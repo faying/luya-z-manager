@@ -27,6 +27,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::convert::Infallible;
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled};
 use crate::i18n::Lang;
 use crate::pages::{Shared, split_leaves};
@@ -508,7 +509,7 @@ impl Page {
     }
 }
 
-fn area(l: Lang, remote: bool, set: &str, phase: &write::Phase) -> String {
+fn area(l: Lang, remote: Via, set: &str, phase: &write::Phase) -> String {
     write::Area {
         id: "pc-kill",
         l,
@@ -611,7 +612,7 @@ pub struct KillQ {
 }
 
 /// What the confirm says, from the list as this server last read it.
-pub fn confirm(top: Option<&Top>, q: &KillQ, remote: bool, l: Lang) -> Result<write::Confirm, write::Outcome> {
+pub fn confirm(top: Option<&Top>, q: &KillQ, remote: Via, l: Lang) -> Result<write::Confirm, write::Outcome> {
     let _ = remote;
     let downtime = l
         .pick(
@@ -667,6 +668,7 @@ pub fn confirm(top: Option<&Top>, q: &KillQ, remote: bool, l: Lang) -> Result<wr
             cuts_uplink: false,
             word: None,
             danger: true,
+            revert: crate::write::Revert::No,
         });
     }
     let pid = q.pid.ok_or_else(|| write::Outcome::Failed(l.pick("no process selected", "没有选中进程").into()))?;
@@ -686,6 +688,7 @@ pub fn confirm(top: Option<&Top>, q: &KillQ, remote: bool, l: Lang) -> Result<wr
         cuts_uplink: false,
         word: None,
         danger: true,
+        revert: crate::write::Revert::No,
     })
 }
 
@@ -762,7 +765,7 @@ pub async fn kill_set(
     let who = Caller::of(&app, &req);
     let pending = area(
         l,
-        false,
+        Via::Local,
         "",
         &write::Phase::Pending(l.pick("Killing…", "正在结束…").into()),
     );
@@ -778,7 +781,7 @@ pub async fn kill_set(
             Err(e) => write::Outcome::Failed(e.text(l)),
         };
         forget(&app).await;
-        area(l, false, "", &write::Phase::Done(o))
+        area(l, Via::Local, "", &write::Phase::Done(o))
     })
 }
 
@@ -852,13 +855,13 @@ mod tests {
     #[test]
     fn the_confirm_lists_what_it_will_kill_and_the_rest() {
         let t = parse(&top());
-        let c = confirm(t.as_ref(), &KillQ { pid: None, all: true }, false, Lang::En).unwrap();
+        let c = confirm(t.as_ref(), &KillQ { pid: None, all: true }, Via::Local, Lang::En).unwrap();
         assert_eq!(c.title, "Kill all 3 listed processes?");
         assert!(c.what.contains("zte_dua (10)") && c.what.contains("and 2 more") && c.what.contains("zte-topsw-tunnel"));
         assert!(c.danger && c.tier == write::Tier::Dialog);
-        let c = confirm(t.as_ref(), &KillQ { pid: Some(10), all: false }, false, Lang::En).unwrap();
+        let c = confirm(t.as_ref(), &KillQ { pid: Some(10), all: false }, Via::Local, Lang::En).unwrap();
         assert_eq!(c.what, "Sends SIGKILL to: zte_dua (10)");
-        assert!(confirm(None, &KillQ { pid: None, all: true }, false, Lang::En).is_err());
+        assert!(confirm(None, &KillQ { pid: None, all: true }, Via::Local, Lang::En).is_err());
     }
 
     #[test]

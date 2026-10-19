@@ -128,8 +128,8 @@ fn a_pin_appears_in_no_reply() {
     let mut all = Vec::new();
     for l in [Lang::En, Lang::Zh] {
         for k in [Kind::VerifyPin, Kind::VerifyPuk, Kind::PinOn, Kind::PinOff, Kind::ChangePin, Kind::Nck] {
-            all.push(area(l, true, Some(k), &Phase::Ask(confirm(k, &c, l))));
-            all.push(area(l, true, Some(k), &Phase::Pending(l.pick("Sending…", "提交中…").into())));
+            all.push(area(l, Via::Tailnet, Some(k), &Phase::Ask(confirm(k, &c, l))));
+            all.push(area(l, Via::Tailnet, Some(k), &Phase::Pending(l.pick("Sending…", "提交中…").into())));
             for o in [
                 Outcome::Applied(applied(k, l).into()),
                 Outcome::AcceptedSaid(said(k, l).into()),
@@ -139,7 +139,7 @@ fn a_pin_appears_in_no_reply() {
                 busy(l),
                 cant_read(&Fail::Unreachable, l),
             ] {
-                all.push(area(l, true, Some(k), &Phase::Done(o)));
+                all.push(area(l, Via::Tailnet, Some(k), &Phase::Done(o)));
             }
             let a = check(k, &f(), l).ok().unwrap();
             all.push(request(&a).0.to_owned());
@@ -199,7 +199,7 @@ fn the_english_page_has_no_chinese() {
     p.info_fail = Some(Fail::Unreachable);
     all.extend(p.leaves().into_iter().map(|(_, h)| h));
     for k in [Kind::VerifyPin, Kind::VerifyPuk, Kind::PinOn, Kind::PinOff, Kind::ChangePin, Kind::Nck] {
-        all.push(area(l, true, Some(k), &Phase::Ask(confirm(k, &c, l))));
+        all.push(area(l, Via::Tailnet, Some(k), &Phase::Ask(confirm(k, &c, l))));
         all.push(applied(k, l).into());
         all.push(said(k, l).into());
         all.push(wrong(k, l).into());

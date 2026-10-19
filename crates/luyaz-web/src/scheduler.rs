@@ -45,6 +45,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled};
 use crate::i18n::Lang;
 use crate::pages::{Shared, StreamQuery, split_leaves};
@@ -716,7 +717,7 @@ impl Page {
 }
 
 /// The write areas: `sch-save` (the form's create / update), `sch-row` (switch, delete).
-fn area(id: &str, l: Lang, remote: bool, set: &str, phase: &write::Phase) -> String {
+fn area(id: &str, l: Lang, remote: Via, set: &str, phase: &write::Phase) -> String {
     let cancel = format!("{PATH}/{}/cancel", &id[4..]);
     write::Area {
         id,
@@ -1217,6 +1218,7 @@ fn confirm(
             cuts_uplink: false,
             word: None,
             danger: false,
+            revert: crate::write::Revert::No,
         }
     } else {
         write::Confirm {
@@ -1229,6 +1231,7 @@ fn confirm(
             cuts_uplink: false,
             word: None,
             danger: false,
+            revert: crate::write::Revert::No,
         }
     }
 }
@@ -1363,7 +1366,7 @@ pub async fn save_set(
     let pending = area(
         "sch-save",
         l,
-        false,
+        Via::Local,
         "",
         &write::Phase::Pending(l.pick("Saving…", "正在保存…").into()),
     );
@@ -1379,7 +1382,7 @@ pub async fn save_set(
         };
         format!(
             "{close}{}",
-            area("sch-save", l, false, "", &write::Phase::Done(o))
+            area("sch-save", l, Via::Local, "", &write::Phase::Done(o))
         )
     })
 }
@@ -1533,7 +1536,7 @@ pub async fn toggle_set(
     let pending = area(
         "sch-row",
         l,
-        false,
+        Via::Local,
         "",
         &write::Phase::Pending(
             if q.on {
@@ -1580,7 +1583,7 @@ pub async fn toggle_set(
             .await
         }
         .await;
-        area("sch-row", l, false, "", &write::Phase::Done(o))
+        area("sch-row", l, Via::Local, "", &write::Phase::Done(o))
     })
 }
 
@@ -1616,6 +1619,7 @@ pub async fn del_ask(
         cuts_uplink: false,
         word: None,
         danger: true,
+        revert: crate::write::Revert::No,
     };
     let set = format!("{PATH}/del/set?id={}", j.id);
     one(area("sch-row", l, ctx.remote, &set, &write::Phase::Ask(c)))
@@ -1632,7 +1636,7 @@ pub async fn del_set(
     let pending = area(
         "sch-row",
         l,
-        false,
+        Via::Local,
         "",
         &write::Phase::Pending(l.pick("Deleting…", "正在删除…").into()),
     );
@@ -1655,7 +1659,7 @@ pub async fn del_set(
             l,
         )
         .await;
-        area("sch-row", l, false, "", &write::Phase::Done(o))
+        area("sch-row", l, Via::Local, "", &write::Phase::Done(o))
     })
 }
 

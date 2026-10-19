@@ -11,6 +11,7 @@ use std::time::SystemTime;
 use serde_json::Value;
 
 use super::data::*;
+use crate::topbar::Via;
 use crate::agent::{Fail, bytes, esc, stopped};
 use crate::i18n::Lang;
 use crate::sms::symbol;
@@ -662,7 +663,7 @@ fn log(g: &Got, l: Lang, tab: &str) -> String {
 }
 
 /// The write area under a section (`{id}-op`): same shape as the other pages' [`crate::write::Area`].
-pub fn area(id: &str, l: Lang, remote: bool, set: &str, phase: &crate::write::Phase) -> String {
+pub fn area(id: &str, l: Lang, remote: Via, set: &str, phase: &crate::write::Phase) -> String {
     let cancel = format!("/services/chill/cancel?a={}", &id[3..]);
     crate::write::Area {
         id,

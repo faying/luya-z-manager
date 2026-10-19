@@ -763,7 +763,7 @@ fn read_area(l: Lang, phase: &write::Phase) -> String {
     write::Area {
         id: "sms-read",
         l,
-        remote: false,
+        remote: crate::topbar::Via::Local,
         set: "/sms/read",
         cancel: "/sms/read/cancel",
         phase,
@@ -775,7 +775,7 @@ fn del_area(l: Lang, set: &str, phase: &write::Phase) -> String {
     write::Area {
         id: "sms-del",
         l,
-        remote: false,
+        remote: crate::topbar::Via::Local,
         set,
         cancel: "/sms/delete/cancel",
         phase,
@@ -996,6 +996,7 @@ fn del_confirm(l: Lang, n: usize, from: &str) -> write::Confirm {
         cuts_uplink: false,
         word: None,
         danger: true,
+        revert: crate::write::Revert::No,
     }
 }
 

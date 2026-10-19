@@ -12,7 +12,7 @@
 <script defer src="{{ crate::assets::url("shell.js") }}"></script>
 <style>:root{--font-geist:Geist;--font-geist-mono:"Geist Mono"}</style>
 </head>
-<body>
+<body{% if !crate::pin::id().is_empty() %} data-signals:luyazdev="'{{ crate::pin::id() }}'"{% endif %}>
 <div class="nd min-h-dvh bg-nd-bg text-nd-t1 sm:flex" data-family="{{ shell.family() }}">
 <a class="nd-skip" href="#main">{{ shell.t("Skip to main content", "跳到正文") }}</a>
 

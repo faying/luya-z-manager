@@ -28,6 +28,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::Polled;
 use crate::hub::{Link, St};
 use crate::i18n::Lang;
@@ -351,7 +352,7 @@ fn action(name: &str, on: bool, l: Lang) -> String {
 
 /// Tier 2 (inline) on the LAN, tier 3 (dialog) over Tailscale: switching passthrough reloads the
 /// firewall, which can drop a remote session.
-pub fn confirm(key: &str, on: bool, remote: bool, l: Lang) -> write::Confirm {
+pub fn confirm(key: &str, on: bool, remote: Via, l: Lang) -> write::Confirm {
     let name = field(key).map_or("", |f| f.2);
     let what = match (l, on) {
         (Lang::En, true) => format!("Devices on the U60 can open {name} VPN connections to servers outside."),
@@ -361,7 +362,7 @@ pub fn confirm(key: &str, on: bool, remote: bool, l: Lang) -> write::Confirm {
     };
     let act = action(name, on, l);
     write::Confirm {
-        tier: if remote {
+        tier: if remote.remote() {
             write::Tier::Dialog
         } else {
             write::Tier::Inline
@@ -392,6 +393,7 @@ pub fn confirm(key: &str, on: bool, remote: bool, l: Lang) -> write::Confirm {
         cuts_uplink: true,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -485,7 +487,7 @@ impl Page {
     }
 }
 
-fn area(l: Lang, remote: bool, key: &str, on: bool, phase: &write::Phase) -> String {
+fn area(l: Lang, remote: Via, key: &str, on: bool, phase: &write::Phase) -> String {
     let set = format!("/router/vpn/set?f={key}&on={on}");
     write::Area {
         id: "vpn-sw",
@@ -607,7 +609,7 @@ pub async fn set(
         rows_leaf(&app, key.map(|k| (k, on)), l),
         area(
             l,
-            false,
+            Via::Local,
             key.unwrap_or(""),
             on,
             &write::Phase::Pending(String::new())
@@ -640,7 +642,7 @@ pub async fn set(
         format!(
             "{}\n{}",
             rows_leaf(&app, None, l),
-            area(l, false, key.unwrap_or(""), on, &write::Phase::Done(o))
+            area(l, Via::Local, key.unwrap_or(""), on, &write::Phase::Done(o))
         )
     })
 }
@@ -650,7 +652,7 @@ pub async fn cancel(
     req: axum::extract::Request,
 ) -> impl IntoResponse {
     let l = crate::topbar::Ctx::of_request(&req, PATH).lang;
-    one(area(l, false, "", false, &write::cancel_phase(&q)))
+    one(area(l, Via::Local, "", false, &write::cancel_phase(&q)))
 }
 
 #[cfg(test)]

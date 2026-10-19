@@ -40,6 +40,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use crate::topbar::Via;
 use crate::agent::Polled;
 use crate::changes::Seen;
 use crate::hub::{Link, St};
@@ -776,6 +777,7 @@ fn confirm(s: &Save, l: Lang) -> write::Confirm {
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -904,7 +906,7 @@ fn applied(l: Lang) -> String {
         .into()
 }
 
-fn area(l: Lang, remote: bool, t: &str, phase: &write::Phase) -> String {
+fn area(l: Lang, remote: Via, t: &str, phase: &write::Phase) -> String {
     let (set, cancel) = if t.is_empty() {
         (String::new(), format!("{PATH}/cancel"))
     } else {
@@ -946,12 +948,12 @@ fn gate(st: &St, l: Lang) -> Result<Guest, write::Outcome> {
 }
 
 async fn run(app: Shared, t: String, s: Save, l: Lang, tx: tokio::sync::mpsc::Sender<Event>) {
-    let done = |o: write::Outcome| area(l, false, &t, &write::Phase::Done(o));
+    let done = |o: write::Outcome| area(l, Via::Local, &t, &write::Phase::Done(o));
     if let Err(o) = app.hub.read(|st| gate(st, l)) {
         let _ = tx.send(patch(&done(o))).await;
         return;
     }
-    let pending = |w: String| area(l, false, &t, &write::Phase::Pending(w));
+    let pending = |w: String| area(l, Via::Local, &t, &write::Phase::Pending(w));
     if tx
         .send(patch(&pending(l.pick("Sending…", "正在发送…").into())))
         .await
@@ -1216,7 +1218,7 @@ pub async fn set(
                 .into(),
             );
             let _ = tx
-                .send(patch(&area(l, false, "", &write::Phase::Done(o))))
+                .send(patch(&area(l, Via::Local, "", &write::Phase::Done(o))))
                 .await;
             return;
         };

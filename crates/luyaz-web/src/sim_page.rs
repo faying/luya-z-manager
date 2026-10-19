@@ -56,6 +56,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled, esc};
 use crate::i18n::Lang;
 use crate::pages::{Shared, StreamQuery, patch, split_leaves};
@@ -555,6 +556,7 @@ pub fn confirm(kind: Kind, c: &Card, l: Lang) -> Confirm {
         cuts_uplink: kind == Kind::PinOn,
         word: None,
         danger: matches!(kind, Kind::VerifyPuk | Kind::Nck),
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -960,7 +962,7 @@ fn leaf_of(leaves: &[(String, String)], id: &str) -> String {
     leaves.iter().find(|(k, _)| k == id).map_or(String::new(), |(_, h)| h.clone())
 }
 
-fn area(l: Lang, remote: bool, kind: Option<Kind>, phase: &Phase) -> String {
+fn area(l: Lang, remote: Via, kind: Option<Kind>, phase: &Phase) -> String {
     let set = kind.map_or(String::new(), |k| format!("{PATH}/set?k={}", k.id()));
     write::Area {
         id: "sim",

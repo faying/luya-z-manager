@@ -98,17 +98,17 @@ fn net_view_status_jobs_and_results() {
 
 #[test]
 fn net_confirms_by_tier() {
-    assert_eq!(net_confirm(&Act::Data(false), false, "", Lang::Zh).tier, write::Tier::Inline);
-    let c = net_confirm(&Act::Data(false), true, "", Lang::Zh);
+    assert_eq!(net_confirm(&Act::Data(false), Via::Local, "", Lang::Zh).tier, write::Tier::Inline);
+    let c = net_confirm(&Act::Data(false), Via::Tailnet, "", Lang::Zh);
     assert!(c.tier == write::Tier::Dialog && c.cuts_uplink && c.downtime.is_some());
-    assert_eq!(net_confirm(&Act::Data(true), true, "", Lang::Zh).tier, write::Tier::Inline);
-    let r = net_confirm(&Act::Register { plmn: "46692".into(), rat: "11".into() }, false, "中华电信", Lang::Zh);
+    assert_eq!(net_confirm(&Act::Data(true), Via::Tailnet, "", Lang::Zh).tier, write::Tier::Inline);
+    let r = net_confirm(&Act::Register { plmn: "46692".into(), rat: "11".into() }, Via::Local, "中华电信", Lang::Zh);
     assert!(r.title == "注册到 中华电信？" && r.what.contains("（46692）") && r.tier == write::Tier::Dialog);
-    assert_eq!(net_confirm(&Act::Scan, false, "", Lang::Zh).tier, write::Tier::Dialog);
-    assert_eq!(net_confirm(&Act::Auto, true, "", Lang::Zh).tier, write::Tier::Inline);
+    assert_eq!(net_confirm(&Act::Scan, Via::Local, "", Lang::Zh).tier, write::Tier::Dialog);
+    assert_eq!(net_confirm(&Act::Auto, Via::Tailnet, "", Lang::Zh).tier, write::Tier::Inline);
     assert!(reg_ok("46692", "11") && !reg_ok("4669", "11") && !reg_ok("46692", "1;1"));
     for a in [Act::Data(true), Act::Data(false), Act::Roam(true), Act::Roam(false), Act::Scan, Act::Auto, Act::Reboot] {
-        let c = net_confirm(&a, true, "X", Lang::En);
+        let c = net_confirm(&a, Via::Tailnet, "X", Lang::En);
         assert!(!cjk(&c.title) && !cjk(&c.what) && !cjk(&c.action), "{a:?}");
     }
 }

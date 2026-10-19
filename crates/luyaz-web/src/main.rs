@@ -42,6 +42,7 @@ mod netsel;
 mod oplogo;
 mod opbar;
 mod pages;
+mod pin;
 mod proxy;
 mod qci;
 mod router_filter;
@@ -171,6 +172,13 @@ pub fn app(
             .as_ref()
             .map(|_| std::path::PathBuf::from("/data/luyaz/web-sessions"))
     });
+    // the device pin (R18-P0-04) lives with the sessions: only on the device
+    // (`LUYAZ_WEB_DEVICE_ID_FILE` elsewhere, for the browser checks)
+    match std::env::var_os("LUYAZ_WEB_DEVICE_ID_FILE") {
+        Some(f) => pin::init(std::path::Path::new(&f)),
+        None if password_file.is_some() => pin::init(std::path::Path::new(pin::FILE)),
+        None => {}
+    }
     let hub = hub::Hub::new();
     tokio::spawn(hub::run(hub.clone(), format!("{upstream}/v2/events"), idle));
     let http = reqwest::Client::builder()

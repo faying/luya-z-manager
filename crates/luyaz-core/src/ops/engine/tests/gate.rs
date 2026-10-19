@@ -178,3 +178,21 @@ fn only_wifi_skips_the_gate() {
             .any(|s| s.action.starts_with("wifi.") && !gated(s))
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn the_screen_gets_busy_inside_its_five_seconds() {
+    let dev = Dev::new();
+    let (e, g) = gated_engine(&dev, 25_000);
+    g.probe(true);
+    let t0 = Instant::now();
+    match e.submit(req("Only_LTE", Source::Screen)).await {
+        Submit::Busy(v) => assert_eq!(v["busy"], "txn"),
+        other => panic!("{other:?}"),
+    }
+    assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
+    assert!(!g.held());
+    // 网页照旧等满它的时限
+    let t0 = Instant::now();
+    assert!(matches!(e.submit(req("Only_LTE", Source::Web)).await, Submit::Busy(_)));
+    assert!(t0.elapsed() >= Duration::from_secs(25));
+}

@@ -430,7 +430,7 @@ mod tests {
         Ctx {
             lang: Lang::Zh,
             path: path.into(),
-            remote: false,
+            remote: crate::topbar::Via::Local,
         }
     }
 

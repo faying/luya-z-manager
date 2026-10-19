@@ -26,6 +26,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures_util::Stream;
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Polled};
 use crate::i18n::Lang;
 use crate::pages::{Shared, StreamQuery, split_leaves};
@@ -188,7 +189,7 @@ impl Page {
     }
 }
 
-fn area(l: Lang, remote: bool, set: &str, phase: &write::Phase) -> String {
+fn area(l: Lang, remote: Via, set: &str, phase: &write::Phase) -> String {
     write::Area {
         id: "adb",
         l,
@@ -288,6 +289,7 @@ fn confirm(l: Lang) -> write::Confirm {
         cuts_uplink: true,
         word: None,
         danger: true,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -324,7 +326,7 @@ pub async fn set(State(app): State<Shared>, req: axum::extract::Request) -> impl
     let who = Caller::of(&app, &req);
     let pending = area(
         l,
-        false,
+        Via::Local,
         "",
         &write::Phase::Pending(l.pick("Enabling ADB…", "正在启用 ADB…").into()),
     );
@@ -345,7 +347,7 @@ pub async fn set(State(app): State<Shared>, req: axum::extract::Request) -> impl
             ),
         };
         let _ = app.kick.send(PATH);
-        area(l, false, "", &write::Phase::Done(o))
+        area(l, Via::Local, "", &write::Phase::Done(o))
     })
 }
 

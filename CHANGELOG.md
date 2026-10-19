@@ -21,6 +21,19 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+## lweb 1.3.1 — 2026-10-19
+
+- the remote warning in a confirm now says whether this step reverts by itself: network mode, band lock and cell lock follow the device's auto-revert setting; every other write says it does not revert.
+
+## core 1.5.7 — 2026-10-19
+
+- a write from the touch screen waits at most 4 s at the transaction gate, so the screen (which gives up on `/control` after 5 s) sees the busy answer.
+
+## lweb 1.3.0 — 2026-10-19
+
+- Remote warning by path (R18-P0-04): a browser behind another Tailscale node's subnet route no longer reads as local; the top bar says "Remote via Tailscale", "Remote via a subnet route" or "Unknown source", and a confirm that can cut the uplink says how to take over locally if nothing reverts it.
+- Wrong-device guard: each page carries this device's random ID (`/data/luyaz/web-device-id`); a write from a page opened on another U60 is refused with "Opened on another device".
+
 ## touch 1.1.4 — 2026-10-19
 
 - eSIM: "Card settling, list updates soon" while the core serves its last list; no switch until a fresh list.

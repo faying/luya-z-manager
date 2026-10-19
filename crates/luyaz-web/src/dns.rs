@@ -27,6 +27,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled};
 use crate::i18n::Lang;
 use crate::pages::{Shared, StreamQuery, split_leaves};
@@ -273,7 +274,7 @@ impl Page {
     }
 }
 
-fn area(l: Lang, remote: bool, set: &str, phase: &write::Phase) -> String {
+fn area(l: Lang, remote: Via, set: &str, phase: &write::Phase) -> String {
     write::Area {
         id: "dns-w",
         l,
@@ -334,7 +335,7 @@ fn one(html: String) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     }))
 }
 
-pub fn confirm(p: &Plan, remote: bool, l: Lang) -> write::Confirm {
+pub fn confirm(p: &Plan, remote: Via, l: Lang) -> write::Confirm {
     let what = match (l, p.manual) {
         (Lang::En, true) => format!(
             "The router's DNS becomes {}. DNS restarts; names may not resolve for a few seconds.",
@@ -348,7 +349,7 @@ pub fn confirm(p: &Plan, remote: bool, l: Lang) -> write::Confirm {
         (Lang::Zh, false) => "路由器改回用运营商分配的 DNS。DNS 会重启，几秒内可能解析不了域名。".to_owned(),
     };
     write::Confirm {
-        tier: if remote { write::Tier::Dialog } else { write::Tier::Inline },
+        tier: if remote.remote() { write::Tier::Dialog } else { write::Tier::Inline },
         title: l.pick("Apply the DNS settings?", "应用 DNS 设置？").into(),
         what,
         downtime: Some(l.pick("A few seconds while DNS restarts.", "DNS 重启期间的几秒钟。").into()),
@@ -364,6 +365,7 @@ pub fn confirm(p: &Plan, remote: bool, l: Lang) -> write::Confirm {
         cuts_uplink: true,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -451,13 +453,13 @@ pub async fn set(
     let who = Caller::of(&app, &req);
     // checked again here: the confirm's URL is the tab's to edit
     let plan = check(&Draft { mode: q.mode, primary: q.p, secondary: q.s }, l);
-    let pending = area(l, false, "", &write::Phase::Pending(l.pick("Applying the DNS settings…", "正在应用 DNS 设置…").into()));
+    let pending = area(l, Via::Local, "", &write::Phase::Pending(l.pick("Applying the DNS settings…", "正在应用 DNS 设置…").into()));
     write::respond(pending, async move {
         let o = match plan {
             Err(o) => o,
             Ok(p) => apply(&app, &who, &p, l).await,
         };
-        area(l, false, "", &write::Phase::Done(o))
+        area(l, Via::Local, "", &write::Phase::Done(o))
     })
 }
 
@@ -526,8 +528,8 @@ mod tests {
     #[test]
     fn remote_gets_the_dialog_and_the_english_page_is_english() {
         let p = check(&d("manual", "1.1.1.1", ""), Lang::En).unwrap();
-        assert_eq!(confirm(&p, false, Lang::En).tier, write::Tier::Inline);
-        let c = confirm(&p, true, Lang::En);
+        assert_eq!(confirm(&p, Via::Local, Lang::En).tier, write::Tier::Inline);
+        let c = confirm(&p, Via::Tailnet, Lang::En);
         assert!(c.tier == write::Tier::Dialog && c.cuts_uplink);
         let cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c) || ('\u{3000}'..='\u{303f}').contains(&c));
         for g in [Got::default(), Got { err: Some(Fail::Unreachable), ..Default::default() }] {

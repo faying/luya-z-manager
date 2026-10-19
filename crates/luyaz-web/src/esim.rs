@@ -43,6 +43,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled};
 use crate::i18n::Lang;
 use crate::pages::{Shared, StreamQuery, async_stream, patch, split_leaves};
@@ -793,6 +794,7 @@ pub fn confirm(act: Act, r: &Req, from: Option<&str>, n_notifs: usize, l: Lang) 
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     };
     match act {
         Act::Switch => write::Confirm {
@@ -819,6 +821,7 @@ pub fn confirm(act: Act, r: &Req, from: Option<&str>, n_notifs: usize, l: Lang) 
             cuts_uplink: true,
             word: None,
             danger: false,
+            revert: crate::write::Revert::No,
         },
         Act::Delete => write::Confirm {
             tier: write::Tier::Dialog,
@@ -839,6 +842,7 @@ pub fn confirm(act: Act, r: &Req, from: Option<&str>, n_notifs: usize, l: Lang) 
             cuts_uplink: false,
             word: Some(delete_word(l).into()),
             danger: true,
+            revert: crate::write::Revert::No,
         },
         Act::Nick => inline(
             l.pick("Rename", "改名"),
@@ -1079,7 +1083,7 @@ async fn wait_job(app: &Shared, who: &Caller, ours: u64, act: Act) -> JobEnd {
 fn area_html(
     act: Act,
     l: Lang,
-    remote: bool,
+    remote: Via,
     set: &str,
     cancel: &str,
     phase: &write::Phase,
@@ -1099,7 +1103,7 @@ fn cancel_url(act: Act) -> String {
     format!("{PATH}/cancel?a={}", act.area())
 }
 
-fn area(act: Act, l: Lang, remote: bool, phase: &write::Phase) -> String {
+fn area(act: Act, l: Lang, remote: Via, phase: &write::Phase) -> String {
     area_html(act, l, remote, "", &cancel_url(act), phase)
 }
 
@@ -1152,7 +1156,7 @@ async fn run(
     let pend = area_html(
         act,
         l,
-        false,
+        Via::Local,
         "",
         &cancel,
         &write::Phase::Pending(pending_text),
@@ -1194,7 +1198,7 @@ async fn run(
                         area(
                             act,
                             l,
-                            false,
+                            Via::Local,
                             &write::Phase::Pending(format!(
                                 "{} {}",
                                 reboot_banner(l),
@@ -1230,7 +1234,7 @@ async fn run(
     let ok = matches!(o, write::Outcome::Applied(_));
     bump(&app);
     let _ = tx
-        .send(patch(&area(act, l, false, &write::Phase::Done(o))))
+        .send(patch(&area(act, l, Via::Local, &write::Phase::Done(o))))
         .await;
     if ok {
         match act {
@@ -1389,7 +1393,7 @@ async fn gate(
 fn ask_reply(
     act: Act,
     l: Lang,
-    remote: bool,
+    remote: Via,
     r: Result<(write::Confirm, Req), write::Outcome>,
 ) -> String {
     match r {
@@ -1627,7 +1631,7 @@ pub async fn set(
                 .send(patch(&area(
                     act_of_area(&q.a),
                     l,
-                    false,
+                    Via::Local,
                     &write::Phase::Done(o),
                 )))
                 .await;
@@ -1641,7 +1645,7 @@ pub async fn set(
                     .into(),
             );
             let _ = tx
-                .send(patch(&area(act, l, false, &write::Phase::Done(o))))
+                .send(patch(&area(act, l, Via::Local, &write::Phase::Done(o))))
                 .await;
             return;
         }
@@ -1764,7 +1768,7 @@ pub async fn after(
         bump(&app);
         let html = format!(
             "{}\n{AFTER_EMPTY}",
-            area(Act::Switch, l, false, &write::Phase::Done(o))
+            area(Act::Switch, l, Via::Local, &write::Phase::Done(o))
         );
         let _ = tx.send(patch(&html)).await;
     }))

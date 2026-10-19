@@ -45,6 +45,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled};
 use crate::i18n::Lang;
 use crate::pages::{Shared, StreamQuery, split_leaves};
@@ -958,7 +959,7 @@ impl Page {
 }
 
 /// The write area `id` (`{id}-op`), its cancel posting to `cancel?a={id}`.
-pub(crate) fn area(id: &str, l: Lang, remote: bool, set: &str, phase: &Phase) -> String {
+pub(crate) fn area(id: &str, l: Lang, remote: Via, set: &str, phase: &Phase) -> String {
     let cancel = format!("{PATH}/cancel?a={id}");
     write::Area {
         id,
@@ -1044,11 +1045,11 @@ async fn body(req: axum::extract::Request) -> Vec<u8> {
 }
 
 fn done(id: &str, l: Lang, o: Outcome) -> String {
-    area(id, l, false, "", &Phase::Done(o))
+    area(id, l, Via::Local, "", &Phase::Done(o))
 }
 
 fn pending(id: &str, l: Lang, text: &str) -> String {
-    area(id, l, false, "", &Phase::Pending(text.to_owned()))
+    area(id, l, Via::Local, "", &Phase::Pending(text.to_owned()))
 }
 
 pub(crate) fn not_read(l: Lang, f: &Fail) -> Outcome {
@@ -1107,6 +1108,7 @@ pub(crate) fn inline(title: String, what: String, action: String) -> Confirm {
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -1117,7 +1119,7 @@ pub(crate) async fn ask_with(
     req: axum::extract::Request,
     area_name: &'static str,
     need_state: bool,
-    build: impl FnOnce(&Value, &Value, Lang, bool) -> Result<(Kind, Confirm), String>,
+    build: impl FnOnce(&Value, &Value, Lang, Via) -> Result<(Kind, Confirm), String>,
 ) -> Response {
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
     let who = Caller::of(app, &req);
@@ -1349,7 +1351,7 @@ async fn ask_wifi(
         // Wi-Fi switch in effect (tier 2; tier 3 for a remote browser)
         if !on {
             c.cuts_uplink = true;
-            if remote {
+            if remote.remote() {
                 c.tier = Tier::Dialog;
                 c.downtime = Some(t!(l,
                     "From the moment the device enters “{name}” until it leaves it.",

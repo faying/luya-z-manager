@@ -35,6 +35,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled};
 use crate::hub::{Link, St};
 use crate::i18n::Lang;
@@ -241,10 +242,11 @@ pub fn mode_confirm(want: &str, rollback_off: bool, l: Lang) -> write::Confirm {
         cuts_uplink: true,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
-fn mode_area(l: Lang, remote: bool, want: &str, phase: &write::Phase) -> String {
+fn mode_area(l: Lang, remote: Via, want: &str, phase: &write::Phase) -> String {
     let set = format!("{MODE_PATH}/set?mode={}", safe_mode(want));
     let cancel = format!("{MODE_PATH}/cancel");
     write::Area { id: "nm", l, remote, set: &set, cancel: &cancel, phase }.html()
@@ -262,8 +264,9 @@ pub async fn mode_ask(State(app): State<Shared>, Query(q): Query<ModeQuery>, req
     let html = app.hub.read(|st| match mode_check(&q.mode, st, l) {
         Err(o) => mode_area(l, ctx.remote, "", &write::Phase::Done(o)),
         Ok(m) => {
-            let off = st.blocks.get("op").is_some_and(|b| b.data["rollback_enabled"].as_bool() == Some(false));
-            mode_area(l, ctx.remote, &m, &write::Phase::Ask(mode_confirm(&m, off, l)))
+            let revert = write::Revert::txn(st.blocks.get("op").map(|b| &b.data));
+            let c = write::Confirm { revert, ..mode_confirm(&m, revert == write::Revert::Off, l) };
+            mode_area(l, ctx.remote, &m, &write::Phase::Ask(c))
         }
     });
     one(html)
@@ -275,11 +278,11 @@ pub async fn mode_set(State(app): State<Shared>, Query(q): Query<ModeQuery>, req
         let want = match app.hub.read(|st| mode_check(&q.mode, st, l)) {
             Ok(m) => m,
             Err(o) => {
-                let _ = tx.send(patch(&mode_area(l, false, "", &write::Phase::Done(o)))).await;
+                let _ = tx.send(patch(&mode_area(l, Via::Local, "", &write::Phase::Done(o)))).await;
                 return;
             }
         };
-        let pending = |t: String| mode_area(l, false, &want, &write::Phase::Pending(t));
+        let pending = |t: String| mode_area(l, Via::Local, &want, &write::Phase::Pending(t));
         if tx.send(patch(&pending(l.pick("Switching…", "正在切换…").into()))).await.is_err() {
             return;
         }
@@ -289,7 +292,7 @@ pub async fn mode_set(State(app): State<Shared>, Query(q): Query<ModeQuery>, req
         let sent = match write::send_body(&app.http, &app.control_url, &body, Some(SEND_TIMEOUT), l).await {
             Ok(s) => s,
             Err(o) => {
-                let _ = tx.send(patch(&mode_area(l, false, &want, &write::Phase::Done(o)))).await;
+                let _ = tx.send(patch(&mode_area(l, Via::Local, &want, &write::Phase::Done(o)))).await;
                 return;
             }
         };
@@ -307,7 +310,7 @@ pub async fn mode_set(State(app): State<Shared>, Query(q): Query<ModeQuery>, req
             Lang::Zh => format!("网络模式已改成「{label}」"),
         };
         let o = crate::follow::outcome(&f, sent, applied, l);
-        let _ = tx.send(patch(&format!("{}\n{}", mode_area(l, false, &want, &write::Phase::Done(o)), mode_draft(&app)))).await;
+        let _ = tx.send(patch(&format!("{}\n{}", mode_area(l, Via::Local, &want, &write::Phase::Done(o)), mode_draft(&app)))).await;
     }))
 }
 
@@ -667,7 +670,7 @@ impl Act {
     }
 }
 
-fn net_area(act: &Act, l: Lang, remote: bool, phase: &write::Phase) -> String {
+fn net_area(act: &Act, l: Lang, remote: Via, phase: &write::Phase) -> String {
     let (set, cancel) = act.urls();
     write::Area { id: act.id(), l, remote, set: &set, cancel: &cancel, phase }.html()
 }
@@ -677,9 +680,9 @@ fn reg_ok(plmn: &str, rat: &str) -> bool {
     (5..=6).contains(&plmn.len()) && plmn.bytes().all(|b| b.is_ascii_digit()) && rat.len() <= 8 && rat.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
-pub fn net_confirm(act: &Act, remote: bool, name: &str, l: Lang) -> write::Confirm {
+pub fn net_confirm(act: &Act, remote: Via, name: &str, l: Lang) -> write::Confirm {
     let inline = |title: &str, what: &str, action: &str, cuts: bool| write::Confirm {
-        tier: if remote && cuts { write::Tier::Dialog } else { write::Tier::Inline },
+        tier: if remote.remote() && cuts { write::Tier::Dialog } else { write::Tier::Inline },
         title: title.into(),
         what: what.into(),
         downtime: None,
@@ -688,6 +691,7 @@ pub fn net_confirm(act: &Act, remote: bool, name: &str, l: Lang) -> write::Confi
         cuts_uplink: cuts,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     };
     match act {
         // tier 2; tier 3 over Tailscale (turning data off can cut the page's own uplink)
@@ -719,6 +723,7 @@ pub fn net_confirm(act: &Act, remote: bool, name: &str, l: Lang) -> write::Confi
             cuts_uplink: true,
             word: None,
             danger: false,
+            revert: crate::write::Revert::No,
         },
         Act::Register { plmn, .. } => write::Confirm {
             tier: write::Tier::Dialog,
@@ -736,6 +741,7 @@ pub fn net_confirm(act: &Act, remote: bool, name: &str, l: Lang) -> write::Confi
             cuts_uplink: true,
             word: None,
             danger: false,
+            revert: crate::write::Revert::No,
         },
         Act::Auto => write::Confirm {
             tier: write::Tier::Inline,
@@ -747,6 +753,7 @@ pub fn net_confirm(act: &Act, remote: bool, name: &str, l: Lang) -> write::Confi
             cuts_uplink: false,
             word: None,
             danger: false,
+            revert: crate::write::Revert::No,
         },
         Act::Reboot => write::Confirm {
             tier: write::Tier::Dialog,
@@ -758,6 +765,7 @@ pub fn net_confirm(act: &Act, remote: bool, name: &str, l: Lang) -> write::Confi
             cuts_uplink: true,
             word: None,
             danger: false,
+            revert: crate::write::Revert::No,
         },
     }
 }
@@ -856,10 +864,10 @@ async fn wait_agent(
 
 async fn net_run(app: Shared, act: Act, who: Caller, l: Lang, tx: tokio::sync::mpsc::Sender<Event>) {
     if let Err(o) = net_gate(&act, &app, l) {
-        let _ = tx.send(patch(&net_area(&act, l, false, &write::Phase::Done(o)))).await;
+        let _ = tx.send(patch(&net_area(&act, l, Via::Local, &write::Phase::Done(o)))).await;
         return;
     }
-    let pending = |t: String| net_area(&act, l, false, &write::Phase::Pending(t));
+    let pending = |t: String| net_area(&act, l, Via::Local, &write::Phase::Pending(t));
     let first = match &act {
         Act::Scan => l.pick("Starting the scan…", "正在开始扫描…"),
         Act::Register { .. } => l.pick("Registering…", "正在注册…"),
@@ -963,7 +971,7 @@ async fn net_run(app: Shared, act: Act, who: Caller, l: Lang, tx: tokio::sync::m
         },
     };
     let _ = app.kick.send(NET_PATH);
-    let _ = tx.send(patch(&net_area(&act, l, false, &write::Phase::Done(o)))).await;
+    let _ = tx.send(patch(&net_area(&act, l, Via::Local, &write::Phase::Done(o)))).await;
 }
 
 async fn net_set(app: Shared, act: Act, req: axum::extract::Request) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {

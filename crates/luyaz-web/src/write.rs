@@ -41,6 +41,7 @@ use futures_util::Stream;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::topbar::Via;
 use crate::hub::{Hub, St};
 use crate::i18n::Lang;
 use crate::pages::{async_stream, patch};
@@ -74,6 +75,32 @@ pub struct Confirm {
     /// again on the server ([`Write::typed`]). No quotes or backslashes (it goes into a JS string).
     pub word: Option<String>,
     pub danger: bool,
+    /// Whether u60d undoes this step by itself if the device loses its uplink: the remote warning
+    /// says so instead of the generic "if nothing reverts it" (remote-path-guard.md).
+    pub revert: Revert,
+}
+
+/// Does u60d revert this step by itself?
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Revert {
+    /// Not a u60d transaction (or one with no trial): nothing reverts it.
+    No,
+    /// A u60d transaction while auto revert is on: no data after the trial → back to before.
+    On,
+    /// A u60d transaction while auto revert is off (`op.rollback_enabled = false`).
+    Off,
+}
+
+impl Revert {
+    /// For a u60d transaction, from the hub's `op` block. Not known yet → `No`: auto revert is off
+    /// unless the device turned it on, so never promise a revert we have not seen.
+    pub fn txn(op: Option<&serde_json::Value>) -> Revert {
+        match op.and_then(|d| d["rollback_enabled"].as_bool()) {
+            Some(true) => Revert::On,
+            Some(false) => Revert::Off,
+            None => Revert::No,
+        }
+    }
 }
 
 /// How a send ended.
@@ -167,7 +194,7 @@ pub struct Area<'a> {
     pub id: &'a str,
     pub l: Lang,
     /// The browser came over Tailscale (`topbar::remote`).
-    pub remote: bool,
+    pub remote: Via,
     /// POST target of the confirm button (the send).
     pub set: &'a str,
     /// POST target of Cancel / Esc.
@@ -638,10 +665,11 @@ mod tests {
             cuts_uplink: true,
             word: word.map(Into::into),
             danger: word.is_some(),
+            revert: crate::write::Revert::No,
         })
     }
 
-    fn area(phase: &Phase, remote: bool) -> String {
+    fn area(phase: &Phase, remote: Via) -> String {
         Area {
             id: "x-y",
             l: Lang::Zh,
@@ -655,14 +683,14 @@ mod tests {
 
     #[test]
     fn the_three_tiers_render() {
-        let idle = area(&Phase::Idle, false);
+        let idle = area(&Phase::Idle, Via::Local);
         assert!(idle.contains("id=\"x-y-op\"") && !idle.contains("<dialog"), "{idle}");
 
-        let inline = area(&ask(Tier::Inline, None), true);
+        let inline = area(&ask(Tier::Inline, None), Via::Tailnet);
         assert!(inline.contains("id=\"x-y-confirm\"") && inline.contains("nd-confirm"));
         assert!(inline.contains("设备重启，所有连接断开。"));
         assert!(!inline.contains("<dialog") && inline.contains("Tailscale") && inline.contains("role=\"alert\""));
-        assert!(!area(&ask(Tier::Inline, None), false).contains("Tailscale"));
+        assert!(!area(&ask(Tier::Inline, None), Via::Local).contains("Tailscale"));
         assert_eq!(post_once("/x/go?id=3"), "@post('/x/go?id=3', {retryMaxCount: 0})");
         assert!(inline.contains("{retryMaxCount: 0}"), "a confirm is never retried");
         assert!(inline.contains("el.focus()"), "focus on Cancel");
@@ -670,23 +698,23 @@ mod tests {
         assert!(matches!(cancel_phase(&CancelQuery { lost: true }), Phase::Done(Outcome::Unknown)));
         assert!(matches!(cancel_phase(&CancelQuery::default()), Phase::Idle));
 
-        let dlg = area(&ask(Tier::Dialog, None), false);
+        let dlg = area(&ask(Tier::Dialog, None), Via::Local);
         assert!(dlg.contains("<dialog") && dlg.contains("el.showModal()"));
         for s in ["会发生什么", "断开多久", "约 90 秒", "怎么恢复", "确认：重启"] {
             assert!(dlg.contains(s), "{s}: {dlg}");
         }
         assert!(!dlg.contains("Tailscale"), "local browser: no remote warning");
-        assert!(area(&ask(Tier::Dialog, None), true).contains("Tailscale"));
+        assert!(area(&ask(Tier::Dialog, None), Via::Tailnet).contains("Tailscale"));
 
-        let typed = area(&ask(Tier::Dialog, Some("恢复出厂")), false);
+        let typed = area(&ask(Tier::Dialog, Some("恢复出厂")), Via::Local);
         assert!(typed.contains("输入「恢复出厂」确认"), "{typed}");
         assert!(typed.contains("data-bind=\"_w_x_y\""));
         assert!(typed.contains("/x/set?a=1&#38;word=") && typed.contains("nd-btn--danger"), "{typed}");
         assert!(typed.contains("data-attr:disabled"));
 
-        let pend = area(&Phase::Pending("正在重启…".into()), false);
+        let pend = area(&Phase::Pending("正在重启…".into()), Via::Local);
         assert!(pend.contains("正在重启…") && pend.contains("role=\"status\""));
-        let done = area(&Phase::Done(Outcome::Accepted), false);
+        let done = area(&Phase::Done(Outcome::Accepted), Via::Local);
         assert!(done.contains("t-note--neutral") && done.contains("设备已接受"));
     }
 

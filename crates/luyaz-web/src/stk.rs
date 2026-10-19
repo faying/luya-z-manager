@@ -36,6 +36,7 @@ use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::{self, Caller, Fail, esc};
 use crate::i18n::Lang;
 use crate::pages::Shared;
@@ -95,7 +96,7 @@ struct Sig {
 /// One request, read once: language, remote, who, and the signals.
 struct Rq {
     l: Lang,
-    remote: bool,
+    remote: Via,
     who: Caller,
     sig: Sig,
 }
@@ -187,6 +188,7 @@ fn confirm(l: Lang, title: String, what: String) -> Confirm {
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -960,7 +962,7 @@ mod tests {
     #[test]
     fn the_english_page_has_no_chinese() {
         let l = Lang::En;
-        let r = Rq { l, remote: false, who: Caller { token: None, peer: None, sid: None }, sig: Sig::default() };
+        let r = Rq { l, remote: Via::Local, who: Caller { token: None, peer: None, sid: None }, sig: Sig::default() };
         let m = Menu { t: "Home".into(), i: vec![Item { id: 1, l: "A".into() }] };
         let mut all = vec![
             ussd_out(l, None),

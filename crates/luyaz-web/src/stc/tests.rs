@@ -160,10 +160,10 @@ fn the_english_page_has_no_chinese() {
         (Which::Reset, reset_confirm(l)),
         (Which::Params, params_confirm(&Four { lt: "1".into(), nt: "2".into(), lm: "3".into(), nm: "4".into() }, l)),
     ] {
-        all.push(area(w, l, true, "/x", &Phase::Ask(c)));
+        all.push(area(w, l, Via::Tailnet, "/x", &Phase::Ask(c)));
     }
     for o in [busy(l), cant_read(&Fail::SignedOut, l), unsupported_note(l), Outcome::Unknown, Outcome::Accepted] {
-        all.push(area(Which::Reset, l, false, "", &Phase::Done(o)));
+        all.push(area(Which::Reset, l, Via::Local, "", &Phase::Done(o)));
     }
     let html = all.join("\n");
     assert!(

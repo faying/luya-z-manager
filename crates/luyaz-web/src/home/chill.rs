@@ -70,7 +70,7 @@ pub(super) fn frame(l: Lang) -> String {
     let idle = write::Area {
         id: AREA,
         l,
-        remote: false,
+        remote: crate::topbar::Via::Local,
         set: "",
         cancel: "/home/chill/cancel",
         phase: &write::Phase::Idle,
@@ -316,7 +316,7 @@ fn area(l: Lang, phase: &write::Phase) -> String {
     write::Area {
         id: AREA,
         l,
-        remote: false,
+        remote: crate::topbar::Via::Local,
         set: "",
         cancel: "/home/chill/cancel",
         phase,

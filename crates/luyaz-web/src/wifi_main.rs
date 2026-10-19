@@ -55,6 +55,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Polled};
 use crate::hub::{Link, St};
 use crate::i18n::Lang;
@@ -790,6 +791,7 @@ pub fn confirm(c: &Change, l: Lang) -> write::Confirm {
             cuts_uplink: false,
             word: None,
             danger: false,
+            revert: crate::write::Revert::No,
         };
     }
     let downtime = if c.master_off() {
@@ -844,6 +846,7 @@ pub fn confirm(c: &Change, l: Lang) -> write::Confirm {
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -1379,7 +1382,7 @@ impl Page {
 
 /// The write areas: `wf-main` (the settings; `op` = the op_id its lost reply follows), `wf-psm`,
 /// `wf-nfc`.
-fn area(id: &str, l: Lang, remote: bool, set: &str, op: &str, phase: &write::Phase) -> String {
+fn area(id: &str, l: Lang, remote: Via, set: &str, op: &str, phase: &write::Phase) -> String {
     let mut cancel = format!("{PATH}/{}/cancel", &id[3..]);
     if !op.is_empty() {
         cancel.push_str("?op=");
@@ -1459,13 +1462,13 @@ fn one(html: String) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
 /// 「更改设置」: the form, seeded with u60d's values now.
 pub async fn form_open(State(app): State<Shared>, req: axum::extract::Request) -> impl IntoResponse {
     let l = crate::topbar::Ctx::of_request(&req, PATH).lang;
-    let clear = area("wf-main", l, false, "", "", &write::Phase::Idle);
+    let clear = area("wf-main", l, Via::Local, "", "", &write::Phase::Idle);
     let html = app.hub.read(|st| {
         if wifi(st).is_none() {
             format!(
                 "{}\n{}",
                 form(false, st, l),
-                area("wf-main", l, false, "", "", &write::Phase::Done(not_read(l)))
+                area("wf-main", l, Via::Local, "", "", &write::Phase::Done(not_read(l)))
             )
         } else {
             format!("{}\n{clear}", form(true, st, l))
@@ -1583,7 +1586,7 @@ async fn run_main(app: &Shared, h: &Held, tx: &tokio::sync::mpsc::Sender<Event>,
     // a transaction (or no reply: there may be one) is followed for up to u60d's 90 s
     let txn = reply["op"]["op_id"].is_string() || sent == write::Sent::NoReply;
     let c = h.change.clone();
-    let pending = |t: String| area("wf-main", l, false, "", &h.op_id, &write::Phase::Pending(t));
+    let pending = |t: String| area("wf-main", l, Via::Local, "", &h.op_id, &write::Phase::Pending(t));
     let f = crate::follow::follow(
         app,
         tx,
@@ -1607,7 +1610,7 @@ fn done_html(app: &Shared, o: write::Outcome, op: &str, l: Lang) -> String {
     } else {
         String::new()
     };
-    format!("{close}{}", area("wf-main", l, false, "", op, &write::Phase::Done(o)))
+    format!("{close}{}", area("wf-main", l, Via::Local, "", op, &write::Phase::Done(o)))
 }
 
 pub async fn main_set(
@@ -1622,7 +1625,7 @@ pub async fn main_set(
             let o = write::Outcome::NotYet(
                 l.pick("The form expired; press Apply again", "表单已过期，请再按一次「应用」").into(),
             );
-            let _ = tx.send(patch(&area("wf-main", l, false, "", "", &write::Phase::Done(o)))).await;
+            let _ = tx.send(patch(&area("wf-main", l, Via::Local, "", "", &write::Phase::Done(o)))).await;
             return;
         };
         // checked again at the send: still readable, nothing running
@@ -1634,13 +1637,13 @@ pub async fn main_set(
             }
         });
         if let Some(o) = gate {
-            let _ = tx.send(patch(&area("wf-main", l, false, "", "", &write::Phase::Done(o)))).await;
+            let _ = tx.send(patch(&area("wf-main", l, Via::Local, "", "", &write::Phase::Done(o)))).await;
             return;
         }
         let pending = area(
             "wf-main",
             l,
-            false,
+            Via::Local,
             "",
             &h.op_id,
             &write::Phase::Pending(l.pick("Sending…", "正在发送…").into()),
@@ -1687,7 +1690,7 @@ pub async fn main_cancel(
             return;
         }
         let op = q.op.clone();
-        let pending = |t: String| area("wf-main", l, false, "", &op, &write::Phase::Pending(t));
+        let pending = |t: String| area("wf-main", l, Via::Local, "", &op, &write::Phase::Pending(t));
         let first = app.hub.read(|st| crate::changes::seen(st, &op));
         let quiet = matches!(first, crate::changes::Seen::Nothing);
         if tx
@@ -1743,7 +1746,7 @@ pub async fn psm_set(
     let l = crate::topbar::Ctx::of_request(&req, PATH).lang;
     let who = Caller::of(&app, &req);
     let on = q.on;
-    let pending = area("wf-psm", l, false, "", "", &write::Phase::Pending(String::new()));
+    let pending = area("wf-psm", l, Via::Local, "", "", &write::Phase::Pending(String::new()));
     write::respond(pending, async move {
         let body = json!({"action": "wifi.power_save", "params": {"enabled": on}, "source": "web", "op_id": write::next_op_id()});
         let o = match write::send_body_reply(&app.http, &app.control_url, &body, None, l).await {
@@ -1766,7 +1769,7 @@ pub async fn psm_set(
             }
         };
         let _ = app.kick.send(PATH);
-        area("wf-psm", l, false, "", "", &write::Phase::Done(o))
+        area("wf-psm", l, Via::Local, "", "", &write::Phase::Done(o))
     })
 }
 
@@ -1795,10 +1798,10 @@ pub async fn nfc_set(
         typed: None,
         request_timeout: None,
     };
-    let pending = area("wf-nfc", l, false, "", "", &write::Phase::Pending(String::new()));
+    let pending = area("wf-nfc", l, Via::Local, "", "", &write::Phase::Pending(String::new()));
     write::respond(pending, async move {
         let o = write::execute(&app.http, &app.control_url, &app.hub, &w, l).await;
-        area("wf-nfc", l, false, "", "", &write::Phase::Done(o))
+        area("wf-nfc", l, Via::Local, "", "", &write::Phase::Done(o))
     })
 }
 

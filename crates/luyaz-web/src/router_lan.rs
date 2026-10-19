@@ -40,6 +40,7 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::topbar::Via;
 use crate::agent::Polled;
 use crate::hub::{Link, St};
 use crate::i18n::Lang;
@@ -666,7 +667,7 @@ pub fn lan_write(p: &Plan, l: Lang) -> write::Write {
 }
 
 /// The confirm: what changes, sentence by sentence (the old page's `describe`).
-pub fn confirm(p: &Plan, c: &Cur, remote: bool, l: Lang) -> write::Confirm {
+pub fn confirm(p: &Plan, c: &Cur, remote: Via, l: Lang) -> write::Confirm {
     let mut what = Vec::new();
     let en = l == Lang::En;
     if p.ip_changed {
@@ -748,7 +749,7 @@ pub fn confirm(p: &Plan, c: &Cur, remote: bool, l: Lang) -> write::Confirm {
         )
         .into()
     };
-    let dialog = p.renumber || remote;
+    let dialog = p.renumber || remote.remote();
     write::Confirm {
         tier: if dialog {
             write::Tier::Dialog
@@ -771,6 +772,7 @@ pub fn confirm(p: &Plan, c: &Cur, remote: bool, l: Lang) -> write::Confirm {
         cuts_uplink: true,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -935,7 +937,7 @@ impl Page {
 }
 
 /// The write area; `ip`: the new address, carried to `cancel` so a lost reply can name it.
-fn area(l: Lang, remote: bool, set: &str, ip: Option<Ipv4Addr>, phase: &write::Phase) -> String {
+fn area(l: Lang, remote: Via, set: &str, ip: Option<Ipv4Addr>, phase: &write::Phase) -> String {
     let cancel = match ip {
         Some(ip) => format!("{PATH}/cancel?ip={ip}"),
         None => format!("{PATH}/cancel"),
@@ -1172,7 +1174,7 @@ pub async fn set(
         .and_then(|(_, p)| p.ip_changed.then_some(p.ip));
     let pending = area(
         l,
-        false,
+        Via::Local,
         "",
         ip,
         &write::Phase::Pending(
@@ -1194,7 +1196,7 @@ pub async fn set(
         };
         format!(
             "{close}{}\n{}",
-            area(l, false, "", ip, &write::Phase::Done(o.clone())),
+            area(l, Via::Local, "", ip, &write::Phase::Done(o.clone())),
             note(l, done_note(&o, here), ip)
         )
     })

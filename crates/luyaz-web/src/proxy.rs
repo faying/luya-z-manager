@@ -165,6 +165,19 @@ pub async fn gate(State(app): State<Shared>, req: Request, next: Next) -> Respon
         }
         let ds = datastar(req.headers());
         let h = req.headers().clone();
+        // a write from a page opened on another device: refuse before it reaches u60d (pin.rs)
+        let req = if ds && method == axum::http::Method::POST && !crate::pin::id().is_empty() {
+            let (parts, body) = req.into_parts();
+            let Ok(bytes) = axum::body::to_bytes(body, PIN_BODY_MAX).await else {
+                return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+            };
+            if crate::pin::other_device(crate::pin::id(), &bytes) {
+                return other_device_reply(&h);
+            }
+            Request::from_parts(parts, Body::from(bytes))
+        } else {
+            req
+        };
         let resp = next.run(req).await;
         // a push stream ends with the same notice when its session does
         if ds && method == axum::http::Method::GET && event_stream(&resp) {
@@ -290,7 +303,12 @@ fn expired_event(h: &HeaderMap) -> String {
     }
     .render()
     .unwrap();
-    let data = format!("mode replace\n{}", crate::sse::patch_data(&html));
+    patch_event(&html)
+}
+
+/// One `datastar-patch-elements` event replacing the element `html` names by id.
+fn patch_event(html: &str) -> String {
+    let data = format!("mode replace\n{}", crate::sse::patch_data(html));
     let mut ev = String::from("event: datastar-patch-elements\n");
     for line in data.lines() {
         ev.push_str("data: ");
@@ -299,6 +317,32 @@ fn expired_event(h: &HeaderMap) -> String {
     }
     ev.push('\n');
     ev
+}
+
+/// A Datastar POST body read for the device pin is never larger than this (signals only).
+const PIN_BODY_MAX: usize = 1 << 20;
+
+#[derive(askama::Template)]
+#[template(path = "other_device.html")]
+struct OtherDevice {
+    l: crate::i18n::Lang,
+    page: String,
+}
+
+/// The wrong-device notice in `#lw-expired`, like the expired one (200: Datastar drops a non-2xx).
+fn other_device_reply(h: &HeaderMap) -> Response {
+    use askama::Template;
+    let html = OtherDevice {
+        l: crate::i18n::Lang::from_headers(h),
+        page: page_of(h),
+    }
+    .render()
+    .unwrap();
+    Response::builder()
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(patch_event(&html)))
+        .unwrap()
 }
 
 /// 200 with the one patch: a non-2xx would be dropped by Datastar without a word.

@@ -242,6 +242,9 @@ pub fn set_txn_gate(g: TxnGate) {
     let _ = TXN_GATE.set(g);
 }
 
+/// 触屏来的最多等多久：触屏对 `/control` 只等 5 秒，要在那之前回 busy 它才看得到。
+const SCREEN_GATE_WAIT_MS: u64 = 4_000;
+
 /// 引擎在 Gate 上的名字：同一时刻只有一个进行中的事务，所以只要一个。
 const GATE_OWNER: &str = "ops.engine";
 
@@ -538,9 +541,12 @@ impl<D: Device> Engine<D> {
 
     /// 在 Gate 上预留并等正在跑的探测结束（§4.3 E1）。Err = 写入前回 busy（什么都没留下）。
     /// 设备时钟和 tokio 时钟谁先到等待上限都算超时（测试里 tokio 时钟是停住的）。
-    async fn admit(&self, g: &TxnGate) -> Result<Hold, Value> {
+    async fn admit(&self, g: &TxnGate, source: Source) -> Result<Hold, Value> {
         let lock = || g.gate.lock().unwrap_or_else(|e| e.into_inner());
-        let wait_ms = g.wait_ms.min(admit::TXN_WAIT_MAX_MS);
+        let mut wait_ms = g.wait_ms.min(admit::TXN_WAIT_MAX_MS);
+        if source == Source::Screen {
+            wait_ms = wait_ms.min(SCREEN_GATE_WAIT_MS);
+        }
         let boot = self.inner.dev.boot_id();
         let mut a = lock().txn_reserve(GATE_OWNER, &boot, self.now(), wait_ms, (g.others)());
         // 从预留起就由 Hold 负责放：等待中被取消或 panic 也不会留下
@@ -866,7 +872,7 @@ impl<D: Device> Engine<D> {
         if let Some(g) = &gate
             && self.lock().hold.is_none()
         {
-            match self.admit(g).await {
+            match self.admit(g, req.source).await {
                 Ok(h) => hold = Some(h),
                 Err(busy) => return Submit::Busy(busy),
             }

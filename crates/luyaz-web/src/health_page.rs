@@ -33,6 +33,7 @@ use axum::routing::{get, post};
 use futures_util::Stream;
 use serde_json::Value;
 
+use crate::topbar::Via;
 use crate::agent::{Caller, Fail, Polled, esc};
 use crate::alerts_page::mdhm;
 use crate::i18n::Lang;
@@ -485,7 +486,7 @@ impl Page {
 
 const CANCEL: &str = "/health/check/cancel";
 
-fn chk_area(l: Lang, remote: bool, set: &str, phase: &Phase) -> String {
+fn chk_area(l: Lang, remote: Via, set: &str, phase: &Phase) -> String {
     write::Area {
         id: "hl-chk",
         l,
@@ -563,6 +564,7 @@ pub fn check_confirm(l: Lang) -> write::Confirm {
         cuts_uplink: false,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 

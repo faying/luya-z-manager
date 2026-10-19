@@ -294,18 +294,18 @@ fn the_bodies_are_the_agents() {
 fn tiers_nat_off_and_dmz_always_ask_in_a_dialog() {
     use write::Tier::{Dialog, Inline};
     let l = Lang::Zh;
-    assert_eq!(sw_confirm(Sw::Fw(false), false, lan24(), l).tier, Inline);
-    assert_eq!(sw_confirm(Sw::Fw(false), true, lan24(), l).tier, Dialog);
-    assert_eq!(sw_confirm(Sw::Nat(true), false, lan24(), l).tier, Inline);
-    let c = sw_confirm(Sw::Nat(false), false, lan24(), l);
+    assert_eq!(sw_confirm(Sw::Fw(false), Via::Local, lan24(), l).tier, Inline);
+    assert_eq!(sw_confirm(Sw::Fw(false), Via::Tailnet, lan24(), l).tier, Dialog);
+    assert_eq!(sw_confirm(Sw::Nat(true), Via::Local, lan24(), l).tier, Inline);
+    let c = sw_confirm(Sw::Nat(false), Via::Local, lan24(), l);
     assert_eq!(c.tier, Dialog);
     assert!(
         c.what.contains("断网")
             && c.downtime.is_some()
             && c.recovery.unwrap().contains("192.168.0.1")
     );
-    assert_eq!(sw_confirm(Sw::Level("low"), false, lan24(), l).tier, Inline);
-    assert_eq!(sw_confirm(Sw::Upnp(true), true, None, l).tier, Dialog);
+    assert_eq!(sw_confirm(Sw::Level("low"), Via::Local, lan24(), l).tier, Inline);
+    assert_eq!(sw_confirm(Sw::Upnp(true), Via::Tailnet, None, l).tier, Dialog);
     for on in [true, false] {
         let c = dmz_confirm(
             &Dmz {
@@ -323,10 +323,10 @@ fn tiers_nat_off_and_dmz_always_ask_in_a_dialog() {
         name: "NAS".into(),
         ..Rule::default()
     };
-    assert_eq!(pf_confirm(&r, false, None, l).tier, Inline);
-    assert_eq!(del_confirm(&r, true, None, l).tier, Dialog);
+    assert_eq!(pf_confirm(&r, Via::Local, None, l).tier, Inline);
+    assert_eq!(del_confirm(&r, Via::Tailnet, None, l).tier, Dialog);
     // the English texts have no Chinese
-    let en = sw_confirm(Sw::Nat(false), true, lan24(), Lang::En);
+    let en = sw_confirm(Sw::Nat(false), Via::Tailnet, lan24(), Lang::En);
     let all = format!(
         "{}{}{}{}{}",
         en.title,

@@ -301,7 +301,7 @@ fn tier_per_action() {
     let a = write::Area {
         id: "ch-undo",
         l: Lang::Zh,
-        remote: true,
+        remote: Via::Tailnet,
         set: "/changes/undo?op=web-20",
         cancel: "/changes/undo/cancel",
         phase: &write::Phase::Ask(confirm(&entries()[1], Lang::Zh)),

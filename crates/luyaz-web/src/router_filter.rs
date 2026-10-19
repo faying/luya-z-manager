@@ -39,6 +39,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::topbar::Via;
 use crate::agent::Polled;
 use crate::hub::{Hub, Link, St};
 use crate::i18n::Lang;
@@ -411,9 +412,9 @@ fn leaf(app: &Shared, l: Lang, id: &str) -> String {
 
 // ---- confirms, gates, writes ----
 
-fn confirm(remote: bool, title: String, what: String, action: String, l: Lang) -> write::Confirm {
+fn confirm(remote: Via, title: String, what: String, action: String, l: Lang) -> write::Confirm {
     write::Confirm {
-        tier: if remote {
+        tier: if remote.remote() {
             write::Tier::Dialog
         } else {
             write::Tier::Inline
@@ -438,6 +439,7 @@ fn confirm(remote: bool, title: String, what: String, action: String, l: Lang) -
         cuts_uplink: true,
         word: None,
         danger: false,
+        revert: crate::write::Revert::No,
     }
 }
 
@@ -711,7 +713,7 @@ impl Page {
     }
 }
 
-fn area(id: &'static str, l: Lang, remote: bool, set: &str, phase: &Phase) -> String {
+fn area(id: &'static str, l: Lang, remote: Via, set: &str, phase: &Phase) -> String {
     let cancel = format!("{PATH}/{}/cancel", &id[3..]);
     write::Area {
         id,
@@ -724,16 +726,16 @@ fn area(id: &'static str, l: Lang, remote: bool, set: &str, phase: &Phase) -> St
     .html()
 }
 
-fn quick_area(l: Lang, remote: bool, phase: &Phase) -> String {
+fn quick_area(l: Lang, remote: Via, phase: &Phase) -> String {
     area("tf-quick", l, remote, "/router/telemetry/quick/set", phase)
 }
 
-fn add_area(l: Lang, remote: bool, d: &str, phase: &Phase) -> String {
+fn add_area(l: Lang, remote: Via, d: &str, phase: &Phase) -> String {
     let set = format!("{PATH}/add/set?d={}", enc(d));
     area("tf-add", l, remote, &set, phase)
 }
 
-fn del_area(l: Lang, remote: bool, d: &str, phase: &Phase) -> String {
+fn del_area(l: Lang, remote: Via, d: &str, phase: &Phase) -> String {
     let set = format!("{PATH}/del/set?d={}", enc(d));
     area("tf-del", l, remote, &set, phase)
 }
@@ -859,7 +861,7 @@ pub async fn quick_set(
         leaf(&app, l, "tf-quickbtn"),
         quick_area(
             l,
-            false,
+            Via::Local,
             &Phase::Pending(
                 l.pick("Blocking the telemetry domains…", "正在拦截遥测域名…")
                     .into()
@@ -898,7 +900,7 @@ pub async fn quick_set(
         format!(
             "{}\n{}",
             leaf(&app, l, "tf-quickbtn"),
-            quick_area(l, false, &Phase::Done(o))
+            quick_area(l, Via::Local, &Phase::Done(o))
         )
     })
 }
@@ -962,7 +964,7 @@ pub async fn add_set(
     let host = host_of(req.headers());
     let pending = add_area(
         l,
-        false,
+        Via::Local,
         &q.d,
         &Phase::Pending(match l {
             Lang::En => format!("Blocking {}…", q.d),
@@ -988,7 +990,7 @@ pub async fn add_set(
         } else {
             String::new()
         };
-        format!("{clr}\n{}", add_area(l, false, &q.d, &Phase::Done(o)))
+        format!("{clr}\n{}", add_area(l, Via::Local, &q.d, &Phase::Done(o)))
     })
 }
 
@@ -1042,7 +1044,7 @@ pub async fn del_set(
     let l = crate::topbar::Ctx::of_request(&req, PATH).lang;
     let pending = del_area(
         l,
-        false,
+        Via::Local,
         &q.d,
         &Phase::Pending(match l {
             Lang::En => format!("Removing {}…", q.d),
@@ -1063,7 +1065,7 @@ pub async fn del_set(
                 .await
             }
         };
-        del_area(l, false, &q.d, &Phase::Done(o))
+        del_area(l, Via::Local, &q.d, &Phase::Done(o))
     })
 }
 
