@@ -2,7 +2,7 @@
   "v": 1,
   "components": {
     "core": "1.5.4",
-    "lweb": "1.2.2",
+    "lweb": "1.2.3",
     "sentinel": "1.0.6",
     "touch": "1.1.2",
     "scripts": "1.0.3"
