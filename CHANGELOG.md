@@ -21,8 +21,39 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
-- touch: `start.sh` is retired; a touch ship carries only `luyaz-ui`. Ship scripts before the next touch ship (the executor still expects `start.sh` until then).
-- scripts: `web-auth.sh` reads only `LUYAZ_WEB_PASSWORD` (the `ZTE_AGENT_PASSWORD` fallback is gone; config-backup still rewrites it when restoring an old archive). `luyaz-recover.sh` never puts back the old-path core program or an rc.local starting `zwrt-datad`, whether or not `.migrated` is there (installed on the device 10-19 with `install-recover`).
+## touch 1.1.4 — 2026-10-19
+
+- eSIM: "Card settling, list updates soon" while the core serves its last list; no switch until a fresh list.
+
+## lweb 1.2.4 — 2026-10-19
+
+- eSIM: while the card settles the list shows as "from N s ago, updating…" and stays locked; a settling list never counts as a write's readback.
+
+## sentinel 1.0.8 — 2026-10-19
+
+- the recover-live cap check is shared with the core (`luyaz_wifi::check_slot`), now tested.
+
+## core 1.5.6 — 2026-10-19
+
+- doctor adds a `timeout` row naming the commands that ran out of time; the recover-live cap check is shared with the sentinel (`luyaz_wifi::check_slot`).
+
+## scripts 1.0.4 — 2026-10-19
+
+- `luyaz-ship.sh recover-live` takes `recover.lock` (`flock -n`): a second one refuses with 3; detached programs no longer inherit the lock fds. (R9)
+- `web-auth.sh` reads only `LUYAZ_WEB_PASSWORD` (the `ZTE_AGENT_PASSWORD` fallback is gone; config-backup still rewrites it when restoring an old archive). `luyaz-recover.sh` never puts back the old-path core program or an rc.local starting `zwrt-datad`, whether or not `.migrated` is there (installed on the device 10-19 with `install-recover`).
+
+## touch 1.1.3 — 2026-10-19
+
+- eSIM: "switched, data not back yet" after a switch without data; waits up to 240 s for a switch. (R5)
+- `start.sh` is retired; a touch ship carries only `luyaz-ui`. Ship scripts before the next touch ship (the executor still expects `start.sh` until then).
+
+## sentinel 1.0.7 — 2026-10-19
+
+- command timeouts kill the whole process group; a recover-live it started is killed after 15 min. (R8, R9)
+
+## core 1.5.5 — 2026-10-19
+
+- eSIM: one call on the card at a time (polling reads answer from the last list instead of queueing); lpac runs in its own process group with a 1 MB output cap, its stderr tail goes into the error; while the card settles after a switch the list is the last good one (`stale`); a switch waits card → identity (45 s) → data (60 s), no data back is a warning, not a reboot. doctor: every external command has a 10 s deadline. A recover-live it started is killed after 15 min. (resilience R2–R5, R8–R10)
 
 ## lweb 1.2.3 — 2026-10-19
 

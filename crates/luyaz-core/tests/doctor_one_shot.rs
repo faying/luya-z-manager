@@ -86,3 +86,53 @@ fn doctor_under_every_core_name_is_one_shot_and_renamed() {
     }
     run("luyaz-core.test", true);
 }
+
+/// R10: a hung `ubus` (and the sleep it started) costs one command deadline, not the run.
+#[test]
+fn a_hung_command_costs_its_deadline_not_the_run() {
+    let t = std::env::temp_dir().join(format!("u60d-doctor-{}-hung", std::process::id()));
+    let _ = std::fs::remove_dir_all(&t);
+    let root = t.join("root");
+    let fx = t.join("fx");
+    std::fs::create_dir_all(root.join("data/luyaz/core")).unwrap();
+    std::fs::create_dir_all(&fx).unwrap();
+    let ubus = fx.join("ubus");
+    std::fs::write(&ubus, "#!/bin/sh\nsleep 600 &\nsleep 600\n").unwrap();
+    std::fs::set_permissions(&ubus, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let t0 = std::time::Instant::now();
+    let o = Command::new(env!("CARGO_BIN_EXE_luyaz-core"))
+        .args(["doctor", "--tsv2"])
+        .env("LUYAZ_HOST_ROOT", &root)
+        .env("LUYAZ_PID_FILE", root.join("pid"))
+        .env("DOC_CMD_LIMIT_MS", "300")
+        .env("DOC_UBUS", &ubus)
+        .env("DOC_UCI", fx.join("none"))
+        .env("DOC_DATE", fx.join("none"))
+        .env("DOC_DF", fx.join("none"))
+        .env("DOC_WGET", fx.join("none"))
+        .env("DOC_UPTIME", fx.join("uptime"))
+        .env("DOC_CLOCK_OK", fx.join("clock-ok"))
+        .env("DOC_WALL_LAST", fx.join("wall.last"))
+        .env("DOC_ALERTS", fx.join("alerts"))
+        .env("DOC_CRASH", fx.join("crash"))
+        .env("DOC_DATA", &fx)
+        .env("DOC_INITD", fx.join("initd"))
+        .env("DOC_ROOT", &root)
+        .env("DOC_LUYAZ_TMP", fx.join("tmp-luyaz"))
+        .output()
+        .unwrap();
+    let took = t0.elapsed();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("timed out after 300 ms"), "{err}");
+    let out = String::from_utf8_lossy(&o.stdout);
+    let row = out
+        .lines()
+        .find(|l| l.contains("\ttimeout\t"))
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(
+        row.starts_with("warn\ttimeout\t") && row.contains("ubus"),
+        "{row}"
+    );
+    assert!(took < std::time::Duration::from_secs(30), "took {took:?}");
+    let _ = std::fs::remove_dir_all(&t);
+}

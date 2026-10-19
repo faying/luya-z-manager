@@ -741,6 +741,22 @@ check "$CASE: stale heartbeat: hung executor killed, rolled back" '[ "$(phase)" 
 teardown
 
 setup
+CASE="recover-live, another one already at it"
+upload
+stage
+U60S_CRASH_AT=check:begin run
+( flock -x 7; "$_real_sleep" 3 ) 7>"$R/data/luyaz/ship/recover.lock" &
+H=$!
+"$_real_sleep" 0.3
+sh "$SHIP" recover-live >"$T/out" 2>&1
+RC=$?
+check "$CASE: the second refuses with 3, nothing done" '[ $RC = 3 ] && grep -q "另一个 recover-live" "$T/out" && [ "$(phase)" = check ] && [ "$(md5 "$LIVE")" = "$NEW" ]'
+wait $H
+sh "$SHIP" recover-live >"$T/out" 2>&1
+check "$CASE: once it is gone, the next one takes over" '[ "$(phase)" = rolledback ] && [ "$(md5 "$LIVE")" = "$OLD" ]'
+teardown
+
+setup
 CASE="recover-live after kill -9 in check"
 upload
 stage

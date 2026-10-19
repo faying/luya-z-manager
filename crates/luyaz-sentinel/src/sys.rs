@@ -582,9 +582,13 @@ impl WifiOps for RealWifi {
     }
 }
 
+/// A recover-live still running after this is stuck: killed with its group, the slot freed.
+const RECOVER_CAP: Duration = Duration::from_secs(15 * 60);
+
 #[derive(Default)]
 pub struct RealWorker {
-    recover: Option<std::process::Child>,
+    /// The recover-live we started and when.
+    recover: luyaz_wifi::Slot,
 }
 
 /// Open once, reject symlinks/non-root/writable files, and bound reads before JSON parsing.
@@ -681,10 +685,13 @@ impl WorkerIo for RealWorker {
         wifi::set_autosleep(&mut RealWifi::default(), on);
     }
     fn recover_live(&mut self) -> bool {
-        if let Some(c) = self.recover.as_mut()
-            && matches!(c.try_wait(), Ok(None))
-        {
-            return false; // ours is still at it
+        match luyaz_wifi::check_slot(&mut self.recover, RECOVER_CAP) {
+            luyaz_wifi::SlotState::Running(_) => return false, // ours is still at it
+            luyaz_wifi::SlotState::Killed(pid) => worker_log(&format!(
+                "recover-live (pid {pid}) still running after {} s: killed",
+                RECOVER_CAP.as_secs()
+            )),
+            _ => {}
         }
         let log = OpenOptions::new()
             .create(true)
@@ -694,6 +701,8 @@ impl WorkerIo for RealWorker {
         let ship = crate::worker::Paths::default().ship;
         cmd.args([ship.as_str(), "recover-live"])
             .stdin(Stdio::null());
+        // its own group, so the cap above takes its children too
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
         if let Ok(f) = log
             && let Ok(f2) = f.try_clone()
         {
@@ -701,7 +710,7 @@ impl WorkerIo for RealWorker {
         }
         match cmd.spawn() {
             Ok(c) => {
-                self.recover = Some(c);
+                self.recover = Some((c, Instant::now()));
                 true
             }
             Err(e) => {

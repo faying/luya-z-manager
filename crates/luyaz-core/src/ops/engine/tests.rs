@@ -35,6 +35,8 @@ struct DevState {
     boot: String,
     clock_base: Instant,
     write_delay: Duration,
+    /// 每次写调用的 `strict`（闭环发起，§4.3 E2）。
+    strict: Vec<bool>,
     /// 数据通路：应当有数据（None = 读不到）、已连接、连接身份、DNS 探测通不通。
     expected: Option<bool>,
     connected: bool,
@@ -69,6 +71,7 @@ impl Dev {
             boot: "boot-a".into(),
             clock_base: Instant::now(),
             write_delay: Duration::ZERO,
+            strict: vec![],
             expected: Some(true),
             connected: true,
             conn: Conn {
@@ -144,7 +147,9 @@ impl Device for Dev {
         _spec: &'static Spec,
         value: &Value,
         _params: &Value,
+        strict: bool,
     ) -> Result<Value, WriteError> {
+        self.s().strict.push(strict);
         let value = value.as_str().unwrap_or_default();
         let (apply, delay) = {
             let mut s = self.s();
@@ -1886,3 +1891,6 @@ async fn a_person_never_waits_for_an_agent_trial() {
         pair("cancelled", "other_change")
     );
 }
+
+mod gate;
+mod from_loop;

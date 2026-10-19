@@ -278,26 +278,47 @@ fn no_card_reading_changes_nothing() {
 // ---- identity (decision-execution-loop §4.1 D2) ----
 
 #[test]
-fn every_evidence_or_state_change_takes_the_next_revision() {
+fn only_a_material_change_takes_the_next_revision() {
     let mut s = Store::default().with_epoch("e1");
     s.observe(&open("s"), "s", T);
-    let r1 = s.identity(KIND_NO_INTERNET, "s").unwrap();
+    let rev = |s: &Store| s.identity(KIND_NO_INTERNET, "s").unwrap().revision;
     assert_eq!(
-        r1,
+        s.identity(KIND_NO_INTERNET, "s").unwrap(),
         Identity {
             epoch: "e1".into(),
             revision: 1
         }
     );
-    // the same verdict again: no event, but new evidence = new revision
-    assert!(s.observe(&open("s"), "s", T + 1).is_empty());
-    assert_eq!(s.identity(KIND_NO_INTERNET, "s").unwrap().revision, 2);
-    // one "up": state moved
-    s.observe(&Verdict::None { why: "up" }, "s", T + 2);
-    assert_eq!(s.identity(KIND_NO_INTERNET, "s").unwrap().revision, 3);
+    // the same finding every 5 s (§4.3 E4): counted, the revision holds even with new text
+    assert!(s.observe(&open("s"), "s", T + 5).is_empty());
+    let reworded = finding("s", LayerId::Internet, Confidence::Sure, "另一句");
+    s.observe(&reworded, "s", T + 10);
+    assert_eq!((rev(&s), s.open[0].count), (1, 3));
+    // confidence moved
+    s.observe(
+        &finding("s", LayerId::Internet, Confidence::Likely, "x"),
+        "s",
+        T + 15,
+    );
+    assert_eq!(rev(&s), 2);
+    // a layer's evidence level moved, layer and confidence did not
+    let mut warn = finding("s", LayerId::Internet, Confidence::Likely, "x");
+    if let Verdict::Open(f) = &mut warn {
+        f.evidence[0].level = Level::Warn;
+    }
+    s.observe(&warn, "s", T + 20);
+    assert_eq!(rev(&s), 3);
+    // the first "up" starts the count; a second one in a row would resolve, so stop at one
+    s.observe(&Verdict::None { why: "up" }, "s", T + 25);
+    assert_eq!((rev(&s), s.open[0].ups), (4, 1));
     // can't tell: nothing changes
-    s.observe(&Verdict::Unverified { why: "x" }, "s", T + 3);
-    assert_eq!(s.identity(KIND_NO_INTERNET, "s").unwrap().revision, 3);
+    s.observe(&Verdict::Unverified { why: "x" }, "s", T + 30);
+    assert_eq!(rev(&s), 4);
+    // seen again: the up count clears
+    s.observe(&warn, "s", T + 35);
+    assert_eq!((rev(&s), s.open[0].ups), (5, 0));
+    s.observe(&warn, "s", T + 40);
+    assert_eq!(rev(&s), 5);
 }
 
 #[test]
@@ -318,7 +339,7 @@ fn no_epoch_or_an_old_file_is_never_executable() {
 fn a_reload_keeps_the_revision_but_never_the_epoch() {
     let mut s = Store::default().with_epoch("e1");
     s.observe(&open("s"), "s", T);
-    s.observe(&open("s"), "s", T + 1);
+    s.observe(&Verdict::None { why: "up" }, "s", T + 1);
     let v = s.to_value();
     assert!(v.get("epoch").is_none());
     let back = Store::from_value(&v);
@@ -335,11 +356,12 @@ fn a_reload_keeps_the_revision_but_never_the_epoch() {
 fn a_damaged_counter_never_reuses_a_revision() {
     let mut s = Store::default().with_epoch("e1");
     s.observe(&open("s"), "s", T);
-    s.observe(&open("s"), "s", T + 1);
+    s.observe(&Verdict::None { why: "up" }, "s", T + 1);
     let mut v = s.to_value();
     v["revision"] = 0.into();
     let mut back = Store::from_value(&v).with_epoch("e1");
     assert_eq!(back.revision, 2);
+    // seen again: the up count clears, a real change
     back.observe(&open("s"), "s", T + 2);
     assert_eq!(back.identity(KIND_NO_INTERNET, "s").unwrap().revision, 3);
 }

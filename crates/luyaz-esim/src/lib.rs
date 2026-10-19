@@ -113,8 +113,68 @@ pub struct JobState {
 pub struct Esim {
     job: Arc<Mutex<JobState>>,
     running: Arc<AtomicBool>,
-    host: Arc<dyn Host>,
+    host: Arc<Card>,
     list: Arc<Mutex<ListCache>>,
+}
+
+/// The host with the card behind one lock (resilience audit R2): every lpac run
+/// (its `free_channel` probe, the run, the channel close after a kill) and every
+/// `qmi_uim_probe` call holds it, so two never meet on the card and a guessed
+/// free channel can't be another lpac's. Jobs wait for it; the UIs' reads use
+/// [`Card::try_lpac`] and answer from what they had instead of queueing.
+pub struct Card {
+    inner: Arc<dyn Host>,
+    lock: Mutex<()>,
+}
+
+impl Card {
+    fn hold(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.lock.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    /// `None` while another call has the card.
+    fn try_lpac(&self, args: &[&str], timeout: Duration) -> Option<Result<Value, String>> {
+        let _g = match self.lock.try_lock() {
+            Ok(g) => g,
+            Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        Some(self.inner.lpac(args, timeout))
+    }
+}
+
+impl Host for Card {
+    fn installed(&self) -> bool {
+        self.inner.installed()
+    }
+    fn lpac(&self, args: &[&str], timeout: Duration) -> Result<Value, String> {
+        let _g = self.hold();
+        self.inner.lpac(args, timeout)
+    }
+    fn sh(&self, cmd: &str, limit: Duration) -> String {
+        if cmd.starts_with(QMI_PROBE) {
+            let _g = self.hold();
+            return self.inner.sh(cmd, limit);
+        }
+        self.inner.sh(cmd, limit)
+    }
+    fn exists(&self, path: &str) -> bool {
+        self.inner.exists(path)
+    }
+    fn reboot(&self) {
+        self.inner.reboot()
+    }
+    fn data_up(&self) -> bool {
+        self.inner.data_up()
+    }
+    fn wake(&self, hold: bool) {
+        self.inner.wake(hold)
+    }
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d)
+    }
+    fn now(&self) -> Instant {
+        self.inner.now()
+    }
 }
 
 /// The last profile list the card answered, and when the last switch ended
@@ -128,7 +188,10 @@ struct ListCache {
 impl Esim {
     pub fn new(host: Arc<dyn Host>) -> Self {
         Self {
-            host,
+            host: Arc::new(Card {
+                inner: host,
+                lock: Mutex::new(()),
+            }),
             job: Arc::new(Mutex::new(JobState {
                 id: 0,
                 kind: String::new(),
@@ -226,56 +289,47 @@ fn run_lpac(args: &[&str], timeout: Duration) -> Result<Value, String> {
     // reclaimed after 3 min, and two kills used up every free channel), so the
     // watchdog closes it after the kill.
     let chan = free_channel();
-    let child = Command::new(LPAC_BIN)
-        .args(args)
-        .env("LD_LIBRARY_PATH", LIB_DIR)
-        .env("LD_PRELOAD", COMPAT_SHIM)
-        .env("LPAC_APDU", "qmi_qrtr")
-        .env("LPAC_HTTP", "curl")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .stdin(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("spawn lpac failed: {e}"))?;
-
-    // Watchdog: kill the child if it wedges (e.g. modem unresponsive). A killed
-    // child makes wait_with_output return promptly with whatever was written.
-    let pid = child.id();
-    let done = Arc::new(AtomicBool::new(false));
-    {
-        let done = Arc::clone(&done);
-        std::thread::spawn(move || {
-            let step = Duration::from_millis(250);
-            let mut waited = Duration::ZERO;
-            while waited < timeout {
-                if done.load(Ordering::Relaxed) {
-                    return;
-                }
-                std::thread::sleep(step);
-                waited += step;
-            }
-            let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
-        });
-    }
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("lpac wait failed: {e}"));
-    done.store(true, Ordering::Relaxed);
-    let out = out?;
-    if !out.status.success() && out.status.code().is_none() {
+    let ran = run_group(
+        Command::new(LPAC_BIN)
+            .args(args)
+            .env("LD_LIBRARY_PATH", LIB_DIR)
+            .env("LD_PRELOAD", COMPAT_SHIM)
+            .env("LPAC_APDU", "qmi_qrtr")
+            .env("LPAC_HTTP", "curl"),
+        timeout,
+    )
+    .map_err(|e| format!("spawn lpac failed: {e}"))?;
+    lpac_result(ran, timeout, || {
         if let Some(c) = chan {
             run_cmd(&format!("{QMI_PROBE} close {c} 2>/dev/null"), PROBE_TIMEOUT);
         }
-    }
+    })
+}
 
-    parse_lpac_output(&String::from_utf8_lossy(&out.stdout), out.status.success()).map_err(|e| {
-        if e.is_empty() {
-            format!(
-                "lpac exited with {} and no result (killed after timeout?)",
-                out.status
-            )
+/// lpac's answer from how its run ended. `release` runs when lpac was killed (by us or a
+/// signal): the modem keeps a killed lpac's channel open for good.
+fn lpac_result(ran: Ran, timeout: Duration, release: impl FnOnce()) -> Result<Value, String> {
+    let killed = ran.status.is_none_or(|s| s.code().is_none());
+    if killed {
+        release();
+    }
+    let why = if ran.err_tail.is_empty() {
+        String::new()
+    } else {
+        format!(" — stderr: {}", ran.err_tail)
+    };
+    let Some(status) = ran.status else {
+        return Err(if ran.overflow {
+            format!("lpac output over {MAX_OUTPUT} bytes: killed")
         } else {
-            e
+            format!("lpac killed after {} s timeout", timeout.as_secs())
+        });
+    };
+    parse_lpac_output(&String::from_utf8_lossy(&ran.stdout), status.success()).map_err(|e| {
+        if e.is_empty() {
+            format!("lpac exited with {status} and no result{why}")
+        } else {
+            format!("{e}{why}")
         }
     })
 }
@@ -373,67 +427,125 @@ const MDM_RESTART_TIMEOUT: Duration = Duration::from_secs(30);
 /// `sh -c cmd`'s stdout, or "" if it fails to start or outlives `limit` (then its whole process
 /// group is killed: the shell and whatever it started).
 fn run_cmd(cmd: &str, limit: Duration) -> String {
-    output_within_group(Command::new("sh").arg("-c").arg(cmd), limit)
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default()
+    match run_group(Command::new("sh").arg("-c").arg(cmd), limit) {
+        Ok(Ran {
+            status: Some(_),
+            stdout,
+            ..
+        }) => String::from_utf8_lossy(&stdout).into_owned(),
+        _ => String::new(),
+    }
 }
 
-/// A command in its own process group, killed as a group past `limit` (luyaz-api's
-/// `health::runner::output_within_group`). stderr is discarded.
-fn output_within_group(
-    cmd: &mut Command,
-    limit: Duration,
-) -> std::io::Result<std::process::Output> {
+/// The most of a command's stdout kept (core `command::MAX_OUTPUT`); past it the group is
+/// killed and the run reports `overflow`. lpac's answers are a few KB.
+const MAX_OUTPUT: usize = 1 << 20;
+/// The end of stderr kept for error messages.
+const ERR_TAIL: usize = 2048;
+
+/// How a [`run_group`] run ended.
+struct Ran {
+    /// `None`: killed (past its limit, or its output too long).
+    status: Option<std::process::ExitStatus>,
+    stdout: Vec<u8>,
+    /// the last `ERR_TAIL` bytes of stderr
+    err_tail: String,
+    overflow: bool,
+}
+
+/// A command in its own process group (luyaz-api's `health::runner::output_within_group`):
+/// killed as a group past `limit` or once stdout passes `MAX_OUTPUT`.
+fn run_group(cmd: &mut Command, limit: Duration) -> std::io::Result<Ran> {
     use std::io::Read;
     use std::os::unix::process::CommandExt;
+    use std::sync::atomic::AtomicBool;
     cmd.process_group(0);
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()?;
-    let reader = child.stdout.take().map(|mut pipe| {
+    let overflow = Arc::new(AtomicBool::new(false));
+    let out = child.stdout.take().map(|mut pipe| {
+        let overflow = Arc::clone(&overflow);
         std::thread::spawn(move || {
             let mut buf = Vec::new();
-            let _ = pipe.read_to_end(&mut buf);
+            let mut chunk = [0u8; 8192];
+            while let Ok(n) = pipe.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                if buf.len() + n > MAX_OUTPUT {
+                    overflow.store(true, Ordering::SeqCst);
+                    break; // the group is killed; dropping the pipe ends its writes too
+                }
+                buf.extend_from_slice(&chunk[..n]);
+            }
             buf
+        })
+    });
+    let err = child.stderr.take().map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut tail = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = pipe.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                tail.extend_from_slice(&chunk[..n]);
+                if tail.len() > ERR_TAIL {
+                    tail.drain(..tail.len() - ERR_TAIL);
+                }
+            }
+            tail
         })
     });
     let t0 = std::time::Instant::now();
     let mut nap = Duration::from_millis(1);
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if t0.elapsed() < limit => {
+            // overflowing output can end the run itself (SIGPIPE once the reader stops)
+            Ok(Some(_)) if overflow.load(Ordering::SeqCst) => break None,
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if t0.elapsed() < limit && !overflow.load(Ordering::SeqCst) => {
                 std::thread::sleep(nap);
                 nap = (nap * 2).min(Duration::from_millis(20));
             }
-            other => {
-                // Before wait(): once reaped, the id could be someone else's. Never kill(-0).
-                let pid = child.id() as libc::pid_t;
-                if pid > 0 {
-                    unsafe { libc::kill(-pid, libc::SIGKILL) };
-                }
-                let _ = child.kill();
-                let _ = child.wait();
-                // The reader ends when the pipe closes; not joined, in case something escaped
-                // the group and still holds it.
-                return Err(match other {
-                    Err(e) => e,
-                    _ => std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        format!("timed out after {} ms", limit.as_millis()),
-                    ),
-                });
+            Err(e) => {
+                kill_group(&mut child);
+                return Err(e);
+            }
+            Ok(_) => {
+                kill_group(&mut child);
+                break None;
             }
         }
     };
-    let stdout = reader.and_then(|h| h.join().ok()).unwrap_or_default();
-    Ok(std::process::Output {
+    // The readers end when the pipes close. After a kill they are not joined, in case
+    // something escaped the group and still holds a pipe.
+    let (stdout, tail) = match status {
+        Some(_) => (
+            out.and_then(|h| h.join().ok()).unwrap_or_default(),
+            err.and_then(|h| h.join().ok()).unwrap_or_default(),
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
+    Ok(Ran {
         status,
         stdout,
-        stderr: Vec::new(),
+        err_tail: String::from_utf8_lossy(&tail).trim().to_string(),
+        overflow: overflow.load(Ordering::SeqCst),
     })
+}
+
+fn kill_group(child: &mut std::process::Child) {
+    // Before wait(): once reaped, the id could be someone else's. Never kill(-0).
+    let pid = child.id() as libc::pid_t;
+    if pid > 0 {
+        unsafe { libc::kill(-pid, libc::SIGKILL) };
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// (imsi, iccid) the ZTE modem stack currently believes is active — its cached
@@ -810,7 +922,25 @@ impl Esim {
                 json!({"ok": true, "data": {"installed": true, "busy": true, "profiles": Value::Null}}),
             );
         }
-        match self.host.lpac(&["profile", "list"], LPAC_TIMEOUT_FAST) {
+        let Some(res) = self.host.try_lpac(&["profile", "list"], LPAC_TIMEOUT_FAST) else {
+            // another read has the card: the last list if there is one, else "busy" as above
+            let now = self.host.now();
+            return match &self.list.lock().unwrap().last {
+                Some((l, at)) => (
+                    200,
+                    json!({"ok": true, "data": {
+                        "installed": true, "busy": false, "profiles": l,
+                        "stale": true, "updating": true,
+                        "age_s": now.saturating_duration_since(*at).as_secs(),
+                    }}),
+                ),
+                None => (
+                    200,
+                    json!({"ok": true, "data": {"installed": true, "busy": true, "profiles": Value::Null}}),
+                ),
+            };
+        };
+        match res {
             Ok(d) => {
                 if d.is_array() {
                     self.list.lock().unwrap().last = Some((d.clone(), self.host.now()));
@@ -853,7 +983,14 @@ impl Esim {
         if self.running.load(Ordering::Relaxed) {
             return (200, json!({"ok": true, "data": Value::Null}));
         }
-        match self.host.lpac(&["notification", "list"], LPAC_TIMEOUT_FAST) {
+        // another call has the card: null, the same answer as under a job
+        let Some(res) = self
+            .host
+            .try_lpac(&["notification", "list"], LPAC_TIMEOUT_FAST)
+        else {
+            return (200, json!({"ok": true, "data": Value::Null}));
+        };
+        match res {
             Ok(d) => (200, json!({"ok": true, "data": d})),
             Err(e) => (502, json!({"ok": false, "error": e})),
         }
@@ -1330,6 +1467,61 @@ mod tests {
         assert_eq!(run_cmd("echo ok", Duration::from_secs(5)), "ok\n");
     }
 
+    fn sh_group(script: &str, limit: Duration) -> Ran {
+        run_group(Command::new("sh").arg("-c").arg(script), limit).unwrap()
+    }
+
+    #[test]
+    fn a_hung_lpac_dies_with_its_children_and_frees_its_channel() {
+        // R3: lpac with a child (an external curl, say) that outlives it
+        let mark = format!("/tmp/luyaz-esim-r3-{}", std::process::id());
+        let ran = sh_group(
+            &format!("(sleep 1; touch {mark}) & sleep 600"),
+            Duration::from_millis(200),
+        );
+        assert!(ran.status.is_none());
+        let mut released = false;
+        let e = lpac_result(ran, Duration::from_secs(30), || released = true).unwrap_err();
+        assert!(released && e.contains("timeout"), "{e}");
+        std::thread::sleep(Duration::from_millis(1500));
+        assert!(!Path::new(&mark).exists(), "the child outlived the kill");
+    }
+
+    #[test]
+    fn endless_lpac_output_is_cut_off_not_kept() {
+        let t0 = std::time::Instant::now();
+        let ran = sh_group("head -c 10000000 /dev/zero", Duration::from_secs(20));
+        assert!(ran.status.is_none() && ran.overflow && ran.stdout.is_empty());
+        assert!(t0.elapsed() < Duration::from_secs(10));
+        let e = lpac_result(ran, Duration::from_secs(30), || {}).unwrap_err();
+        assert!(e.contains("output over"), "{e}");
+    }
+
+    #[test]
+    fn lpac_stderr_tail_goes_into_the_error() {
+        let ran = sh_group(
+            "head -c 10000 /dev/zero | tr '\\0' x >&2; echo 'apdu: no channel' >&2; exit 3",
+            Duration::from_secs(5),
+        );
+        assert!(ran.err_tail.len() <= ERR_TAIL && ran.err_tail.ends_with("apdu: no channel"));
+        let mut released = false;
+        let e = lpac_result(ran, Duration::from_secs(30), || released = true).unwrap_err();
+        assert!(!released, "an lpac that exited on its own keeps no channel");
+        assert!(
+            e.contains("exited with") && e.contains("stderr:") && e.contains("no channel"),
+            "{e}"
+        );
+        // a normal answer still parses
+        let ran = sh_group(
+            r#"echo '{"type":"lpa","payload":{"code":0,"message":"success","data":[]}}'"#,
+            Duration::from_secs(5),
+        );
+        assert_eq!(
+            lpac_result(ran, Duration::from_secs(30), || {}),
+            Ok(json!([]))
+        );
+    }
+
     #[test]
     fn the_free_channel_is_read_from_the_probe_output() {
         let out = "  0010: 00 21 6f 1f\n[open] channel=2 SW=9000\n[close] channel 2 released\n";
@@ -1593,6 +1785,11 @@ mod tests {
         converge_at: u32,
         /// the data call never comes back
         no_data: bool,
+        /// each lpac run takes this long (real time), to make calls overlap
+        lpac_ms: u64,
+        /// lpac runs and probe calls going on right now, and the most seen at once
+        on_card: std::sync::atomic::AtomicU32,
+        most_on_card: std::sync::atomic::AtomicU32,
         state: Mutex<FakeState>,
     }
 
@@ -1609,6 +1806,24 @@ mod tests {
         slept: Duration,
     }
 
+    pub(super) struct OnCard<'a>(&'a Fake);
+
+    impl Drop for OnCard<'_> {
+        fn drop(&mut self) {
+            self.0.on_card.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    impl Fake {
+        /// Count this call as on the card for `lpac_ms`.
+        fn on_card(&self) -> OnCard<'_> {
+            let n = self.on_card.fetch_add(1, Ordering::SeqCst) + 1;
+            self.most_on_card.fetch_max(n, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(self.lpac_ms));
+            OnCard(self)
+        }
+    }
+
     fn fake_epoch() -> Instant {
         static T: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
         *T.get_or_init(Instant::now)
@@ -1619,6 +1834,7 @@ mod tests {
             true
         }
         fn lpac(&self, args: &[&str], _t: Duration) -> Result<Value, String> {
+            let _on = self.on_card();
             let mut s = self.state.lock().unwrap();
             s.log.push(format!("lpac {}", args.join(" ")));
             match args {
@@ -1644,6 +1860,7 @@ mod tests {
             }
         }
         fn sh(&self, cmd: &str, _limit: Duration) -> String {
+            let _on = cmd.starts_with(QMI_PROBE).then(|| self.on_card());
             let mut s = self.state.lock().unwrap();
             s.log.push(format!("sh {cmd}"));
             if cmd.contains("get_sync_info") {
@@ -1914,5 +2131,58 @@ mod tests {
         assert!(!is_transitional(
             "lpac: es9p_initiate_authentication: timeout"
         ));
+    }
+
+    #[test]
+    fn the_card_sees_one_call_at_a_time() {
+        let fake = Arc::new(Fake {
+            enable_works: true,
+            converges: true,
+            lpac_ms: 30,
+            ..Fake::default()
+        });
+        let e = Arc::new(Esim::new(fake.clone()));
+        let (code, _) = e.switch(br#"{"iccid":"89852000000000000002"}"#, Box::new(|| {}));
+        assert_eq!(code, 200);
+        let readers: Vec<_> = (0..3)
+            .map(|i| {
+                let e = e.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..10 {
+                        let (code, _) = match i {
+                            0 => e.profiles(),
+                            1 => e.notifications(),
+                            _ => e.status(),
+                        };
+                        assert_eq!(code, 200);
+                    }
+                    let _ = e.channel_check();
+                })
+            })
+            .collect();
+        for r in readers {
+            r.join().unwrap();
+        }
+        while e.busy() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            fake.most_on_card.load(Ordering::SeqCst),
+            1,
+            "two calls met on the card"
+        );
+    }
+
+    #[test]
+    fn a_read_while_the_card_is_held_answers_from_the_last_list() {
+        let fake = Arc::new(Fake::default());
+        let e = Esim::new(fake.clone());
+        assert!(e.profiles().1["data"]["stale"].is_null());
+        let _held = e.host.hold();
+        let (code, v) = e.profiles();
+        assert_eq!(code, 200);
+        assert_eq!(v["data"]["stale"], true, "{v}");
+        assert!(v["data"]["profiles"].is_array(), "{v}");
+        assert!(e.notifications().1["data"].is_null());
     }
 }

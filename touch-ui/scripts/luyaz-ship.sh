@@ -109,6 +109,7 @@ REC_NAME=luyaz-recover.sh
 TXN_FILE=$SHIP_DIR/txn
 STAGE_DIR=$SHIP_DIR/stage
 LOCK_FILE=$SHIP_DIR/lock
+RECOVER_LOCK=$SHIP_DIR/recover.lock       # recover-live: one at a time (core + sentinel both start it)
 HB_FILE=$SHIP_TMP/heartbeat
 BOOT_ID_FILE=${U60S_BOOT_ID:-/proc/sys/kernel/random/boot_id}
 SYNC=${U60S_SYNC:-sync}
@@ -432,12 +433,13 @@ launch_cmd() {
 # detach <outfile> <command…>: run the command in the background, out of this
 # session (survives the SSH logout), stdin /dev/null, stdout+stderr appended to
 # <outfile>. The command and its arguments are passed as separate words, never
-# pasted into a shell string.
+# pasted into a shell string. The lock fds (7–9) are closed: a test binary that
+# lives on must not hold a flock.
 detach() {
     _out=$1
     shift
     if command -v "$SETSID" >/dev/null 2>&1; then
-        "$SETSID" "$@" >>"$_out" 2>&1 </dev/null &
+        "$SETSID" "$@" >>"$_out" 2>&1 </dev/null 7>&- 8>&- 9>&- &
     elif command -v "$SSD" >/dev/null 2>&1 || command -v "/sbin/$SSD" >/dev/null 2>&1; then
         command -v "$SSD" >/dev/null 2>&1 || SSD=/sbin/$SSD
         # -p on a file that never exists: BusyBox then matches no running
@@ -445,10 +447,10 @@ detach() {
         # refuse "already running"). $0 of the inner sh = the output file.
         # shellcheck disable=SC2016
         "$SSD" -S -b -p "$PIDFILE.none" -x "$SH" -- \
-            -c 'exec "$@" >>"$0" 2>&1 </dev/null' "$_out" "$@"
+            -c 'exec "$@" >>"$0" 2>&1 </dev/null' "$_out" "$@" 7>&- 8>&- 9>&-
     else
         log "没有 setsid 也没有 start-stop-daemon：用 nohup … & 后台启动，SSH 断开时可能被一起带走"
-        "$@" >>"$_out" 2>&1 </dev/null &   # both callers already start with nohup
+        "$@" >>"$_out" 2>&1 </dev/null 7>&- 8>&- 9>&- &   # both callers already start with nohup
     fi
 }
 
@@ -2638,8 +2640,19 @@ ship_abort() {
 }
 
 # recover-live [--force]: the executor died (OOM kill -9) or hangs; finish
-# the transaction in this boot. Refuses while the executor looks alive.
+# the transaction in this boot. Refuses while the executor looks alive, and
+# while another recover-live holds $RECOVER_LOCK (the heartbeat alone left a
+# race: two started together both saw no executor). The lock is taken before
+# the transaction is read, so the second one sees what the first left.
 ship_recover_live() {
+    if command -v flock >/dev/null 2>&1; then
+        mkdir -p "$SHIP_DIR" 2>/dev/null
+        exec 7>"$RECOVER_LOCK"
+        flock -n 7 || {
+            say "另一个 recover-live 正在接手，不再起第二个"
+            return 3
+        }
+    fi
     txn_load || {
         say "没有事务"
         return 0

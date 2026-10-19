@@ -48,7 +48,7 @@ mod run;
 pub mod layout;
 pub mod scan;
 
-pub use run::output_within;
+pub use run::{check_slot, kill_group, output_within, Slot, SlotState};
 
 pub const AP_2G: &str = "wireless.main_2g.disabled";
 pub const AP_5G: &str = "wireless.main_5g.disabled";

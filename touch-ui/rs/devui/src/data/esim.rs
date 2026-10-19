@@ -41,6 +41,8 @@ pub struct Esim {
     seen_status: String,
     busy: bool,
     busy_kind: String,
+    /// the list is the core's last one while the card settles (`stale`): shown, no switching
+    settling: bool,
     /// this screen's switch, not answered yet; 0 = none
     my_job: i64,
     target_iccid: String,
@@ -70,6 +72,7 @@ impl Default for Esim {
             seen_status: String::new(),
             busy: false,
             busy_kind: String::new(),
+            settling: false,
             my_job: 0,
             target_iccid: String::new(),
             target_name: String::new(),
@@ -156,6 +159,7 @@ impl Esim {
             return true;
         };
         self.prof = parse_profiles(&arr);
+        self.settling = json::get(&data, "stale", 16).is_some_and(|v| v == b"true");
         self.err.clear();
         self.loaded = true;
         true
@@ -223,9 +227,10 @@ impl Esim {
 
     fn display_sig(&self, t: i64) -> String {
         let mut s = format!(
-            "{}/{}/{}/{}/{}/{}",
+            "{}/{}/{}/{}/{}/{}/{}",
             self.prof.len(),
             self.busy as i32,
+            self.settling as i32,
             self.offline as i32,
             self.my_job,
             if self.my_job != 0 { (t - self.t0) / 1000 } else { 0 },
@@ -338,11 +343,14 @@ impl Esim {
         if !self.msg.is_empty() {
             return self.msg.clone();
         }
+        if self.settling {
+            return tr("卡片还在稳定，列表稍后更新").into();
+        }
         tr("就绪").into()
     }
 
     pub fn ready(&self) -> bool {
-        self.my_job == 0 && !self.busy && self.err.is_empty() && self.msg.is_empty()
+        self.my_job == 0 && !self.busy && !self.settling && self.err.is_empty() && self.msg.is_empty()
     }
 
     pub fn profiles(&self) -> Vec<esim_profile_t> {
@@ -373,7 +381,7 @@ impl Esim {
     pub fn select(&mut self, agent: &mut CoreApi, i: usize) -> i32 {
         let t = mono_ms();
         let Some(e) = self.prof.get(i).cloned() else { return ESIM_SEL_FAIL };
-        if self.busy || self.my_job != 0 {
+        if self.busy || self.settling || self.my_job != 0 {
             return ESIM_SEL_BUSY;
         }
         if e.enabled {
@@ -462,5 +470,29 @@ mod tests {
         assert_eq!(e.select(&mut a, 0), ESIM_SEL_BUSY);
         h.join().unwrap();
         assert!(seen.lock().unwrap()[1].ends_with(r#"{"iccid":"89852000000000004567"}"#));
+    }
+
+    #[test]
+    fn a_settling_list_shows_and_refuses_a_switch() {
+        crate::lang::set_en(false);
+        let list = r#"{"iccid":"89860000000000000001","profileName":"CU","profileState":"enabled"},{"iccid":"89852000000000004567","profileName":"Ubigi","profileState":"disabled"}"#;
+        let (port, _seen, h) = canned(
+            vec![
+                format!("HTTP/1.0 200 OK\r\n\r\n{{\"ok\":true,\"data\":{{\"installed\":true,\"stale\":true,\"updating\":true,\"age_s\":4,\"profiles\":[{list}]}}}}"),
+                format!("HTTP/1.0 200 OK\r\n\r\n{{\"ok\":true,\"data\":{{\"installed\":true,\"profiles\":[{list}]}}}}"),
+            ],
+            2,
+        );
+        let mut a = CoreApi::default();
+        a.config(port);
+        let mut e = Esim::default();
+        assert!(e.load_list(&mut a));
+        assert_eq!(e.profiles().len(), 2, "the list still shows");
+        assert_eq!(e.state(), "卡片还在稳定，列表稍后更新");
+        assert!(!e.ready());
+        assert_eq!(e.select(&mut a, 1), ESIM_SEL_BUSY, "no switch on a settling list");
+        assert!(e.load_list(&mut a));
+        assert!(e.ready() && e.state() == "就绪", "a fresh list clears it");
+        h.join().unwrap();
     }
 }

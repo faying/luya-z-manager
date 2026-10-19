@@ -334,8 +334,7 @@ fn uis(c: &Compat) -> (bool, bool) {
     static OURS: std::sync::Mutex<Option<(std::path::PathBuf, String)>> =
         std::sync::Mutex::new(None);
     let ours_comm = |dir: &std::path::Path| {
-        std::fs::read_to_string(dir.join("comm"))
-            .is_ok_and(|t| crate::paths::is_ui(t.trim_end()))
+        std::fs::read_to_string(dir.join("comm")).is_ok_and(|t| crate::paths::is_ui(t.trim_end()))
     };
     let proc = c.path("/proc");
     let mut cache = OURS.lock().unwrap_or_else(|e| e.into_inner());
@@ -464,8 +463,12 @@ fn act(c: &Compat, a: Act) {
     }
 }
 
-/// The recover-live we started, while it runs: one at a time.
-static RECOVER: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+/// The recover-live we started and when, while it runs: one at a time.
+static RECOVER: std::sync::Mutex<luyaz_wifi::Slot> = std::sync::Mutex::new(None);
+
+/// A recover-live still running after this is stuck: its session is killed and the slot is free
+/// again (a rollback takes minutes, not this).
+const RECOVER_CAP: Duration = Duration::from_secs(15 * 60);
 
 /// `sh luyaz-ship.sh recover-live` in its own session (stopping u60d must not stop a rollback),
 /// output to [`RECOVER_LOG`]; the executor's own log has the steps.
@@ -473,19 +476,19 @@ fn recover_live(c: &Compat) {
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
     let mut slot = RECOVER.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(ch) = slot.as_mut() {
-        match ch.try_wait() {
-            Ok(None) => {
-                eprintln!(
-                    "[compat] sentinel watch: recover-live still running (pid {})",
-                    ch.id()
-                );
-                return;
-            }
-            Ok(Some(st)) => eprintln!("[compat] sentinel watch: last recover-live ended: {st}"),
-            Err(_) => {}
+    match luyaz_wifi::check_slot(&mut slot, RECOVER_CAP) {
+        luyaz_wifi::SlotState::Running(pid) => {
+            eprintln!("[compat] sentinel watch: recover-live still running (pid {pid})");
+            return;
         }
-        *slot = None;
+        luyaz_wifi::SlotState::Killed(pid) => eprintln!(
+            "[compat] sentinel watch: recover-live (pid {pid}) still running after {} s: killed",
+            RECOVER_CAP.as_secs()
+        ),
+        luyaz_wifi::SlotState::Ended(Some(st)) => {
+            eprintln!("[compat] sentinel watch: last recover-live ended: {st}")
+        }
+        luyaz_wifi::SlotState::Ended(None) | luyaz_wifi::SlotState::Free => {}
     }
     let log = c.path(RECOVER_LOG);
     if let Some(d) = log.parent() {
@@ -520,7 +523,7 @@ fn recover_live(c: &Compat) {
                 "[compat] sentinel watch: recover-live started (pid {})",
                 ch.id()
             );
-            *slot = Some(ch);
+            *slot = Some((ch, std::time::Instant::now()));
         }
         Err(e) => eprintln!("[compat] sentinel watch: cannot start recover-live: {e}"),
     }
@@ -838,7 +841,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .as_mut()
-                .is_none_or(|ch| matches!(ch.try_wait(), Ok(Some(_))))
+                .is_none_or(|(ch, _)| matches!(ch.try_wait(), Ok(Some(_))))
         };
         until(&ended);
         let ran = fs::read_to_string(&mark).unwrap();
@@ -949,7 +952,11 @@ mod tests {
         fs::rename(root.join("proc"), root.join("proc.off")).unwrap();
         let o = observe(&c, 500).orphan.unwrap();
         assert!(o.blind);
-        assert_eq!(orphan_why(&o), None, "/proc unreadable: never recovered blind");
+        assert_eq!(
+            orphan_why(&o),
+            None,
+            "/proc unreadable: never recovered blind"
+        );
         fs::rename(root.join("proc.off"), root.join("proc")).unwrap();
         let o = observe(&c, 500).orphan.unwrap();
         assert!(!o.blind);

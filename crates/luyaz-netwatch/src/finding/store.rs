@@ -12,10 +12,11 @@
 //! [`ENTRY_MAX`] bytes. Every transition hands back a [`Change`] for `finding.*` events.
 //!
 //! Identity (decision-execution-loop.md §4.1 D2): [`Store::epoch`] is random per load (never
-//! persisted) and every evidence or state change gives the entry the next store-wide
-//! `revision` (persisted, monotonic). A proposal binds both; an entry from an older file without
-//! a revision, or a store without an epoch, is never executable ([`Store::identity`] = None).
-//! The revision rides along whenever the store is saved; it does not add saves.
+//! persisted) and every material change (§4.3 E4: layer, confidence, a layer's evidence level,
+//! the "up" count starting or clearing) gives the entry the next store-wide `revision`
+//! (persisted, monotonic); re-seeing the same finding every 5 s does not. A proposal binds
+//! both; an entry from an older file without a revision, or a store without an epoch, is never
+//! executable ([`Store::identity`] = None). The revision rides along whenever the store is saved; it does not add saves.
 //!
 //! Clock (local time labelled UTC, and wrong until SNTP after a boot): a suppression is never
 //! treated as expired while the clock is before `record::CLOCK_SET`.
@@ -243,10 +244,13 @@ impl Store {
             Verdict::None { why } => match *why {
                 "up" | "all_ok" | "path_dns_ok" => {
                     for i in 0..self.open.len() {
-                        let r = self.next_revision();
+                        // only the first "up" moves the revision (§4.3 E4); the rest just count
+                        let r = (self.open[i].ups == 0).then(|| self.next_revision());
                         let e = &mut self.open[i];
                         e.ups = e.ups.saturating_add(1);
-                        e.revision = Some(r);
+                        if r.is_some() {
+                            e.revision = r;
+                        }
                     }
                     self.close_where(|e| e.ups >= RESOLVE_UPS, Close::Resolved, &mut out);
                 }
@@ -319,24 +323,32 @@ impl Store {
         }
         let mut body = serde_json::to_value(f).unwrap_or(Value::Null);
         fit(&mut body);
-        let r = self.next_revision();
-        if let Some(e) = self
+        if let Some(i) = self
             .open
-            .iter_mut()
-            .find(|e| e.kind == f.kind && e.iccid == f.iccid)
+            .iter()
+            .position(|e| e.kind == f.kind && e.iccid == f.iccid)
         {
+            let e = &self.open[i];
             let moved = e.finding.get("layer") != body.get("layer")
                 || e.finding.get("confidence") != body.get("confidence");
+            // a new revision only for a real change (§4.3 E4): layer, confidence, any layer's
+            // evidence level, or the "up" count clearing; freshness is the 30 s pre-write check
+            let r = (moved || levels(&e.finding) != levels(&body) || e.ups > 0)
+                .then(|| self.next_revision());
+            let e = &mut self.open[i];
             e.last = now;
             e.count = e.count.saturating_add(1);
             e.ups = 0;
             e.finding = body;
-            e.revision = Some(r);
+            if r.is_some() {
+                e.revision = r;
+            }
             if moved {
                 out.push(Change::Update(e.clone()));
             }
             return;
         }
+        let r = self.next_revision();
         self.make_room(out);
         let e = Entry {
             kind: f.kind.to_string(),
@@ -386,6 +398,25 @@ impl Store {
 }
 
 /// Keep one finding under [`ENTRY_MAX`]: cut the evidence texts, then drop the evidence.
+/// Each layer's evidence level, in order; what E4 counts as an evidence change.
+fn levels(finding: &Value) -> Vec<(&Value, &Value)> {
+    static NONE: Value = Value::Null;
+    finding
+        .get("evidence")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .map(|v| {
+                    (
+                        v.get("layer").unwrap_or(&NONE),
+                        v.get("level").unwrap_or(&NONE),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn fit(body: &mut Value) {
     if size(body) <= ENTRY_MAX {
         return;

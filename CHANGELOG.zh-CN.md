@@ -18,8 +18,39 @@
 
 ## Unreleased
 
-- touch: `start.sh` 退役，touch 上机只带 `luyaz-ui`。下一次 touch 上机前先 ship scripts（在那之前执行器还要 `start.sh`）。
-- scripts：`web-auth.sh` 只读 `LUYAZ_WEB_PASSWORD`（`ZTE_AGENT_PASSWORD` 的退路删了；config-backup 还原旧备份时照样改写成新键）。`luyaz-recover.sh` 不管有没有 `.migrated`，都不放回旧路径的核心程序和起 `zwrt-datad` 的 rc.local（10-19 已用 `install-recover` 装到设备）。
+## touch 1.1.4 — 2026-10-19
+
+- eSIM 核心给的是上次的列表时显示「卡片还在稳定，列表稍后更新」，拿到新列表前不能切换。
+
+## lweb 1.2.4 — 2026-10-19
+
+- eSIM 卡片还在稳定时，列表显示「这是 N 秒前的列表，正在更新…」并锁住；这种列表不算写入的回读。
+
+## sentinel 1.0.8 — 2026-10-19
+
+- recover-live 上限的判断和核心共用（`luyaz_wifi::check_slot`），有了测试。
+
+## core 1.5.6 — 2026-10-19
+
+- doctor 有命令超时时多一行 `timeout`，写明哪些命令；recover-live 上限的判断和哨兵共用（`luyaz_wifi::check_slot`）。
+
+## scripts 1.0.4 — 2026-10-19
+
+- `luyaz-ship.sh recover-live` 先拿 `recover.lock`（`flock -n`），第二个回 3；后台起的程序不再继承锁的 fd。（R9）
+- `web-auth.sh` 只读 `LUYAZ_WEB_PASSWORD`（`ZTE_AGENT_PASSWORD` 的退路删了；config-backup 还原旧备份时照样改写成新键）。`luyaz-recover.sh` 不管有没有 `.migrated`，都不放回旧路径的核心程序和起 `zwrt-datad` 的 rc.local（10-19 已用 `install-recover` 装到设备）。
+
+## touch 1.1.3 — 2026-10-19
+
+- eSIM 切换后数据没回来显示「已切换，数据还没恢复」；等切换的上限 240 s。（R5）
+- `start.sh` 退役，touch 上机只带 `luyaz-ui`。下一次 touch 上机前先 ship scripts（在那之前执行器还要 `start.sh`）。
+
+## sentinel 1.0.7 — 2026-10-19
+
+- 命令超时杀整个进程组；自己起的 recover-live 跑过 15 分钟就杀掉。（R8、R9）
+
+## core 1.5.5 — 2026-10-19
+
+- eSIM 卡上同时只有一个调用（轮询读取被占时回上次的列表，不排队）；lpac 跑在自己的进程组里，输出上限 1 MB，stderr 最后一段拼进错误；切换后卡还没稳时给上次的列表（`stale`）；切换按 卡 → 身份（45 s）→ 数据（60 s）检查，数据没回来是警告、不重启。doctor 每条外部命令 10 s 截止。自己起的 recover-live 跑过 15 分钟就杀掉。（韧性审计 R2–R5、R8–R10）
 
 ## lweb 1.2.3 — 2026-10-19
 

@@ -5,6 +5,8 @@
 //! 等满 15 秒还拿不到就记一行、不拿锁照做（比卡住执行者让看门狗杀掉好；15 秒小于订阅方判卡死的 20 秒）。
 //! 拿着锁的这段在执行者里是「写的上下文」（`executor::write_scope`）：调用超时会关闸（V2-33）。
 //! `LUYAZ_WRITE_LOCK` 指定路径，空串 = 不用锁。文件打不开时只记一次日志。
+//! 闭环发起的执行用严格版 [`acquire_strict`]（decision-execution-loop §4.3 E2）：拿不到（等满或文件打不开）
+//! 就在写入前回 [`Busy`]，不照做；人手动写入照旧用 [`acquire`] 的 fail-open。
 //! 哨兵、`luyaz-fallback.sh` 拿同一个文件（Luya-Z 改名 E2 前叫 `/var/run/u60-write.lock`，过渡期拿过一对，已去旧）。
 
 use fs2::FileExt;
@@ -85,6 +87,49 @@ pub(crate) async fn acquire_path(path: Option<String>) -> WriteLock {
     lock
 }
 
+/// 严格版拿不到锁：写入前就该回「忙，请重试」，什么都没写。
+#[derive(Debug, PartialEq, Eq)]
+pub struct Busy;
+
+/// 严格版（E2，只给闭环发起的执行）：等满 15 秒还拿不到、或锁文件打不开，回 `Busy`，不照做。
+pub async fn acquire_strict() -> Result<WriteLock, Busy> {
+    acquire_strict_path(path(), WAIT).await
+}
+
+/// `acquire_strict`，路径和最长等待由调用方给（`None` = 不用锁，直接算拿到）。
+pub(crate) async fn acquire_strict_path(
+    path: Option<String>,
+    wait: Duration,
+) -> Result<WriteLock, Busy> {
+    let lock = wait_strict(path, wait).await;
+    crate::executor::progress();
+    lock
+}
+
+async fn wait_strict(path: Option<String>, wait: Duration) -> Result<WriteLock, Busy> {
+    let Some(path) = path else {
+        return Ok(held(None));
+    };
+    let file = open(&path).map_err(|e| {
+        eprintln!("ops: cannot open write lock {path}: {e}; strict write refused");
+        Busy
+    })?;
+    let start = tokio::time::Instant::now();
+    loop {
+        if file.try_lock_exclusive().is_ok() {
+            return Ok(held(Some(file)));
+        }
+        if start.elapsed() >= wait {
+            eprintln!(
+                "ops: write lock {path} still held after {} s, strict write refused",
+                wait.as_secs()
+            );
+            return Err(Busy);
+        }
+        tokio::time::sleep(STEP).await;
+    }
+}
+
 async fn wait_for(path: Option<String>) -> WriteLock {
     let Some(path) = path else {
         return held(None);
@@ -113,3 +158,6 @@ async fn wait_for(path: Option<String>) -> WriteLock {
         tokio::time::sleep(STEP).await;
     }
 }
+
+#[cfg(test)]
+mod tests;

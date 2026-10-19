@@ -14,7 +14,7 @@ fn list() -> Value {
 fn ps() -> Vec<Profile> {
     match profiles(&list()) {
         Listed::List(p) => p,
-        Listed::Busy => panic!("busy"),
+        _ => panic!("not a list"),
     }
 }
 
@@ -314,4 +314,25 @@ fn the_stash_is_one_shot() {
     );
     assert!(take(&t).is_some());
     assert!(take(&t).is_none(), "a token sends once");
+}
+
+#[test]
+fn a_settling_list_is_shown_locked_and_proves_nothing() {
+    let mut v = list();
+    v["stale"] = json!(true);
+    v["updating"] = json!(true);
+    v["age_s"] = json!(7);
+    let Listed::Settling(ps, 7) = profiles(&v) else {
+        panic!("not settling")
+    };
+    assert_eq!(ps.len(), 3);
+    let mut c = card();
+    c.take_list(Ok(Listed::Settling(ps, 7)));
+    let w = view(&c, false, Lang::Zh);
+    assert_eq!(w.tone, "stale");
+    assert!(w.locked && w.meta.as_deref().unwrap().contains("7 秒前"));
+    assert_eq!(w.state, "使用中：台湾旅行", "the list still shows");
+    c.take_list(Ok(profiles(&list())));
+    let w = view(&c, false, Lang::En);
+    assert!(w.tone == "ok" && !w.locked, "a fresh list unlocks");
 }

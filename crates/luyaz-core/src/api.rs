@@ -341,11 +341,23 @@ impl Compat {
         // the scenario engine's own calls go to u60d's listener, next to its /control (M6c)
         let v2 = format!("{}/v2", control.0.trim_end_matches("/control"));
         let token = control.1.clone();
-        Compat::new(
+        let c = Compat::new(
             &crate::state::host_path(""),
             Sources::host(hub, control, screen),
-        )
-        .with_writes(true)
+        );
+        // the engine's network transactions reserve this gate before writing (decision loop
+        // §4.3 E1); "others" = a speed test or a search/register, as the probes see it
+        let (net, speed) = (c.net.clone(), c.speed.running_flag());
+        crate::ops::engine::set_txn_gate(crate::ops::engine::TxnGate {
+            gate: c.gate.clone(),
+            others: Arc::new(move || {
+                speed.load(std::sync::atomic::Ordering::SeqCst)
+                    || net.ops.lock().unwrap_or_else(|e| e.into_inner()).kind
+                        != luyaz_api::netinfo::OpKind::Idle
+            }),
+            wait_ms: luyaz_api::diagnose::admit::TXN_WAIT_MAX_MS,
+        });
+        c.with_writes(true)
         .with_scenario_io(crate::engines::scenario::device_io(v2.clone()))
         .with_scheduler_io(Arc::new(crate::engines::scheduler::Http { base: v2, token }))
         .with_exits(true)

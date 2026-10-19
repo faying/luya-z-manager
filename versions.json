@@ -1,10 +1,10 @@
 {
   "v": 1,
   "components": {
-    "core": "1.5.4",
-    "lweb": "1.2.3",
-    "sentinel": "1.0.6",
-    "touch": "1.1.2",
-    "scripts": "1.0.3"
+    "core": "1.5.6",
+    "lweb": "1.2.4",
+    "sentinel": "1.0.8",
+    "touch": "1.1.4",
+    "scripts": "1.0.4"
   }
 }

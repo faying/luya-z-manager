@@ -600,7 +600,9 @@ impl engine::Device for UbusDevice {
         spec: &'static Spec,
         value: &Value,
         params: &Value,
+        strict: bool,
     ) -> Result<Value, WriteError> {
+        // Wi-Fi、CHILL 各走自己的锁，严格写锁（§4.3 E2）只管下面这条 ubus 写路径
         if let Some(kind) = wifi::Kind::of(spec.item) {
             return self.wifi.write(&self.exec, kind, value, params).await;
         }
@@ -681,7 +683,12 @@ impl engine::Device for UbusDevice {
         let r = self
             .exec
             .task(async move {
-                let _lock = write_lock::acquire().await;
+                // 闭环发起的（strict）拿不到就什么都不调；人手动的照旧等满照做
+                let _lock = if strict {
+                    write_lock::acquire_strict().await?
+                } else {
+                    write_lock::acquire().await
+                };
                 let mut last = Ok(Value::Null);
                 for (object, method, args) in steps {
                     // nwinfo_set_netselect 成功时什么都不回（T11 真机，B31）
@@ -692,9 +699,15 @@ impl engine::Device for UbusDevice {
                         break;
                     }
                 }
-                last
+                Ok::<_, write_lock::Busy>(last)
             })
             .await;
+        let Ok(r) = r else {
+            return Err(WriteError {
+                message: "write lock busy; nothing written".into(),
+                timed_out: false,
+            });
+        };
         // 和 `/control` 一样：写过之后慢数据缓存作废，全部块下一轮立即读。
         crate::state::invalidate_cache();
         match r {

@@ -169,33 +169,38 @@ pub fn valid_key(k: &str) -> bool {
             || (k.starts_with('n') && k.len() > 1 && k[1..].bytes().all(|c| c.is_ascii_digit())))
 }
 
-/// The card's answer: the list, or busy with a job.
+/// The card's answer: the list, busy with a job, or the core's last list while the card settles
+/// after a switch or another call holds it (`stale`/`updating`, its age in seconds). A settling
+/// list is shown but proves no write.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Listed {
     Busy,
     List(Vec<Profile>),
+    Settling(Vec<Profile>, u64),
 }
 
 pub fn profiles(v: &Value) -> Listed {
     if v["busy"].as_bool() == Some(true) || !v["profiles"].is_array() {
         return Listed::Busy;
     }
-    Listed::List(
-        v["profiles"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .enumerate()
-            .map(|(i, p)| Profile {
-                key: key_of(p["isdpAid"].as_str(), i),
-                iccid: p["iccid"].as_str().unwrap_or("").to_owned(),
-                enabled: p["profileState"].as_str() == Some("enabled"),
-                nick: text(&p["profileNickname"]),
-                spn: text(&p["serviceProviderName"]),
-                pname: text(&p["profileName"]),
-            })
-            .collect(),
-    )
+    let ps = v["profiles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .map(|(i, p)| Profile {
+            key: key_of(p["isdpAid"].as_str(), i),
+            iccid: p["iccid"].as_str().unwrap_or("").to_owned(),
+            enabled: p["profileState"].as_str() == Some("enabled"),
+            nick: text(&p["profileNickname"]),
+            spn: text(&p["serviceProviderName"]),
+            pname: text(&p["profileName"]),
+        })
+        .collect();
+    if v["stale"].as_bool() == Some(true) {
+        return Listed::Settling(ps, v["age_s"].as_u64().unwrap_or(0));
+    }
+    Listed::List(ps)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -240,6 +245,8 @@ pub struct Card {
     pub list_fail: Option<Fail>,
     pub list_at: Option<SystemTime>,
     pub busy: bool,
+    /// The list is the core's last one while the card settles: its age in seconds.
+    pub settling: Option<u64>,
     /// The running job's kind while busy ("switch", "download", …).
     pub job: Option<String>,
     pub notifs: Option<Vec<Notif>>,
@@ -261,6 +268,14 @@ impl Card {
                 self.list_at = Some(SystemTime::now());
                 self.busy = false;
                 self.job = None;
+                self.settling = None;
+            }
+            Ok(Listed::Settling(ps, age)) => {
+                self.list = Some(ps);
+                self.list_fail = None;
+                self.busy = false;
+                self.job = None;
+                self.settling = Some(age);
             }
             Ok(Listed::Busy) => {
                 self.busy = true;
@@ -461,6 +476,21 @@ pub fn view(c: &Card, reboot: bool, l: Lang) -> View {
             },
         },
     }
+    if let Some(age) = c.settling
+        && installed
+        && !stale
+        && !c.busy
+        && !reboot
+    {
+        tone = "stale";
+        meta = Some(match l {
+            Lang::En => {
+                format!("The card is still settling — this list is from {age} s ago, updating…")
+            }
+            Lang::Zh => format!("卡片还在稳定——这是 {age} 秒前的列表，正在更新…"),
+        });
+        meta_data = false;
+    }
     if installed && stale && !c.busy && !reboot {
         tone = "stale";
         meta = Some(format!(
@@ -539,7 +569,7 @@ pub fn view(c: &Card, reboot: bool, l: Lang) -> View {
         retry,
         rows,
         stale,
-        locked: c.list.is_none() || stale || busy,
+        locked: c.list.is_none() || stale || busy || c.settling.is_some(),
         notif_dis: busy || notifs.is_empty(),
         notifs,
         chip,
@@ -1320,6 +1350,15 @@ async fn gate(
         Ok(Listed::List(ps)) => ps,
         Ok(Listed::Busy) => {
             return Err(write::Outcome::NotYet(job_clash(l).into()));
+        }
+        Ok(Listed::Settling(..)) => {
+            return Err(write::Outcome::NotYet(
+                l.pick(
+                    "The card is still settling after the last change; try again in a few seconds.",
+                    "卡片在上次改动后还没稳定，过几秒再试。",
+                )
+                .into(),
+            ));
         }
         Err(f) => {
             return Err(write::Outcome::NotYet(match l {

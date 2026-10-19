@@ -15,7 +15,10 @@
 //! alerts, sms, whiteout, phonehome, CHILL, HTTP; modes `--tsv`, `--tsv2`, `--manifest`,
 //! `--tree-fp`, `--ledger-selftest`, `--calibrate-standby`, `--report`.
 
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(test)]
+use std::process::Stdio;
+use std::time::Duration;
 
 /// What the process calls itself while it runs doctor (not a core name: `paths::is_core`).
 pub const COMM: &str = "luyaz-doctor";
@@ -209,18 +212,72 @@ fn sh_raw(cmd: &[String], args: &[&str], quiet: bool) -> String {
     let Some((prog, pre)) = cmd.split_first() else {
         return String::new();
     };
-    Command::new(prog)
-        .args(pre)
-        .args(args)
-        .stdin(Stdio::null())
-        .stderr(if quiet {
-            Stdio::null()
-        } else {
-            Stdio::inherit()
-        })
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default()
+    let Some(o) = within(Command::new(prog).args(pre).args(args)) else {
+        return String::new();
+    };
+    if !quiet {
+        use std::io::Write;
+        let _ = std::io::stderr().write_all(&o.stderr);
+    }
+    String::from_utf8_lossy(&o.stdout).into_owned()
+}
+
+/// One command's deadline (`DOC_CMD_LIMIT_MS` overrides). doctor run from a shell has no outer
+/// limit (the health runner's is for the whole run), so a hung `ubus` or `uci` must not hang it.
+fn cmd_limit() -> Duration {
+    std::env::var("DOC_CMD_LIMIT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(Duration::from_secs(10), Duration::from_millis)
+}
+
+/// Run under [`cmd_limit`] in its own process group; a timeout says so on stderr and counts as a
+/// command that gave nothing.
+fn within(cmd: &mut Command) -> Option<std::process::Output> {
+    let prog = cmd.get_program().to_string_lossy().into_owned();
+    let limit = cmd_limit();
+    match luyaz_wifi::output_within(cmd, limit) {
+        Ok(o) => Some(o),
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            eprintln!("doctor: {prog} timed out after {} ms", limit.as_millis());
+            let mut t = TIMED_OUT.lock().unwrap_or_else(|e| e.into_inner());
+            if !t.contains(&prog) {
+                t.push(prog);
+            }
+            None
+        }
+        Err(_) => None,
+    }
+}
+
+/// The commands that ran out of time in this run: one `timeout` row says which (their own rows
+/// read as "gave nothing").
+static TIMED_OUT: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn timeout_row() -> Option<Row> {
+    let t = std::mem::take(&mut *TIMED_OUT.lock().unwrap_or_else(|e| e.into_inner()));
+    (!t.is_empty()).then(|| {
+        let names = t.join(", ");
+        row(
+            "warn",
+            "timeout",
+            "命令超时",
+            format!(
+                "{names} 超过 {} 秒没回，相关行按没读到判",
+                cmd_limit().as_secs()
+            ),
+            "Command timeout",
+            format!(
+                "{names} gave no answer in {} s; rows from it read as unknown",
+                cmd_limit().as_secs()
+            ),
+        )
+    })
+}
+
+/// `within(..)` exited 0.
+fn ok_within(cmd: &mut Command) -> bool {
+    within(cmd).is_some_and(|o| o.status.success())
 }
 
 fn strip_nl(mut s: String) -> String {
@@ -248,6 +305,7 @@ fn cat(path: &str) -> Option<String> {
 pub fn run(c: &Cfg, mode: Mode) -> Vec<Row> {
     let mut rows = Vec::new();
     // the manifest: first line for people, last row for --tsv (R9)
+    TIMED_OUT.lock().unwrap_or_else(|e| e.into_inner()).clear();
     let m = manifest::state(c, false);
     let mrow = row(m.level, "manifest", "清单", m.text, "Manifest", m.text_en);
     if mode == Mode::Text {
@@ -278,6 +336,7 @@ pub fn run(c: &Cfg, mode: Mode) -> Vec<Row> {
         String::new()
     };
     rows.push(row(lv, "standby", "待机", d, "Standby", de));
+    rows.extend(timeout_row());
     if mode != Mode::Text {
         rows.push(mrow);
     }
@@ -349,12 +408,7 @@ fn whiteout(c: &Cfg) -> Option<Row> {
 }
 
 fn grep_q_e(pattern: &str, file: &str) -> bool {
-    Command::new("grep")
-        .args(["-qE", pattern, file])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    ok_within(Command::new("grep").args(["-qE", pattern, file]))
 }
 
 /// `sed -n "s/^<key>='*\([^']*\)'*\$/\1/p"` over uci show output, one value per matching line
@@ -467,14 +521,11 @@ fn wget_ok(c: &Cfg, url: &str) -> bool {
     let Some((prog, pre)) = c.wget.split_first() else {
         return false;
     };
-    Command::new(prog)
-        .args(pre)
-        .args(["-q", "-T", "5", "-O", "/dev/null", url])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    ok_within(
+        Command::new(prog)
+            .args(pre)
+            .args(["-q", "-T", "5", "-O", "/dev/null", url]),
+    )
 }
 
 fn http(c: &Cfg) -> [Row; 2] {
@@ -750,12 +801,7 @@ fn executable(path: &str) -> bool {
 
 /// `grep -q PATTERN FILE` (the shell's own grep: the pattern holds `$INITD`, a regex)
 fn grep_q(pattern: &str, file: &str) -> bool {
-    Command::new("grep")
-        .args(["-q", pattern, file])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    ok_within(Command::new("grep").args(["-q", pattern, file]))
 }
 
 fn rc_starts(c: &Cfg, svc: &str) -> bool {
@@ -1160,13 +1206,10 @@ fn unread_alerts(c: &Cfg) -> usize {
 
 fn crashes(c: &Cfg, unread: usize) -> Row {
     // the shell's own find (recursive, -mtime in whole days against the real clock)
-    let out = Command::new("find")
-        .args([c.crash.as_str(), "-name", "*.log", "-mtime", "-1"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .map(|o| o.stdout)
-        .unwrap_or_default();
+    let out =
+        within(Command::new("find").args([c.crash.as_str(), "-name", "*.log", "-mtime", "-1"]))
+            .map(|o| o.stdout)
+            .unwrap_or_default();
     let recent = out.iter().filter(|&&b| b == b'\n').count();
     if recent == 0 {
         return row(

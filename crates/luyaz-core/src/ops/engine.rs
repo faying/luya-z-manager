@@ -9,6 +9,11 @@
 //!   退回按读回幂等补发（O7：读回还不是退回目标就再发一次）。
 //! - 没有 source 的旧请求：锁被占或执行者队列满时先回和今天一样的成功，排进旧请求队列，
 //!   锁空出来再按原来的 `/control` 处理执行一次（每项只留最新、120 秒过期、安全类插队时清空）。
+//! - 准入（decision-execution-loop §4.3 E1）：网络相关事务（Wi-Fi 以外的描述表动作，手动和闭环都算）
+//!   读当前值之前先在诊断 Gate 上预留，等正在跑的探测结束（最多 25 秒），等不到就在写入前回 busy、
+//!   不建事务。预留跟着进行中的事务（`St::hold`），事务一离开 `active` 就放；覆盖同一项、人的写
+//!   取消 Agent 试用时由新事务接着拿，不重新排队。安全类写（D14）不经这里，照旧插队。核心重启后
+//!   续跑的事务不拿预留（Gate 只在内存里）。没接 Gate 时（测试、只读）照旧。
 
 use super::{
     pending::{Last, Store},
@@ -18,6 +23,10 @@ use super::{
     ui,
 };
 use crate::project::screen::ScreenOp;
+use luyaz_api::diagnose::{
+    Gate,
+    admit::{self, Admit},
+};
 use serde_json::{Value, json};
 use std::{
     collections::VecDeque,
@@ -54,11 +63,13 @@ pub trait Device: Send + Sync + 'static {
     }
     /// 把这一项写成 `value`（规范化的目标值）。`params` 是这次写的原始 `/control` 参数（只在新写时有，
     /// 不落盘，比如 APN 密码只在这里出现）；退回时是 `Spec::to_params(退回目标)`。
+    /// `strict`：闭环发起的写（decision-execution-loop §4.3 E2）拿不到跨进程写锁就不写、回错。
     fn write(
         &self,
         spec: &'static Spec,
         value: &Value,
         params: &Value,
+        strict: bool,
     ) -> impl Future<Output = Result<Value, WriteError>> + Send;
     /// BOOTTIME 毫秒：核心重启不归零、休眠时也走。所有时限都按它算，tokio 的计时只当节拍。
     fn now_ms(&self) -> u64;
@@ -214,9 +225,48 @@ pub const SESSION_BLOCKS: &[&str] = &[
     "apn.set_pdp_type",
 ];
 
+/// 事务准入用的 Gate（§4.3 E1）：和诊断、Finding 探测、测速、搜网共用的那一个。
+#[derive(Clone)]
+pub struct TxnGate {
+    pub gate: Arc<Mutex<Gate>>,
+    /// 测速或搜网/注册正在跑（在 Gate 的锁里读）。
+    pub others: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// 最多等多久（上限 `admit::TXN_WAIT_MAX_MS`）。
+    pub wait_ms: u64,
+}
+
+static TXN_GATE: OnceLock<TxnGate> = OnceLock::new();
+
+/// 设备上接 Gate（core `api.rs` 开写入时调一次）；之后建的、和已经建好的引擎都用它。
+pub fn set_txn_gate(g: TxnGate) {
+    let _ = TXN_GATE.set(g);
+}
+
+/// 引擎在 Gate 上的名字：同一时刻只有一个进行中的事务，所以只要一个。
+const GATE_OWNER: &str = "ops.engine";
+
+/// 拿着的预留；丢掉就放（等待中被取消、panic、事务结束，都走这里）。
+struct Hold(Arc<Mutex<Gate>>);
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .txn_release(GATE_OWNER);
+    }
+}
+
+/// 要先过 Gate 的：Wi-Fi 以外的描述表动作（制式、锁频、锁小区、APN、CHILL）。
+fn gated(spec: &Spec) -> bool {
+    !spec.action.starts_with("wifi.")
+}
+
 #[derive(Default)]
 struct St {
     active: Option<Box<Txn>>,
+    /// 进行中的网络事务在 Gate 上的预留；`active` 一结束就放（[`St::retire`]）。
+    hold: Option<Hold>,
     session: Option<Session>,
     recent: VecDeque<Txn>,
     legacy: VecDeque<LegacyReq>,
@@ -238,6 +288,8 @@ struct Inner<D> {
     runner: OnceLock<LegacyRunner>,
     draining: AtomicBool,
     observer: OnceLock<Observer>,
+    /// 测试各自接的 Gate；没有就用 [`set_txn_gate`] 接的。
+    gate: OnceLock<TxnGate>,
 }
 
 pub struct Engine<D: Device> {
@@ -378,6 +430,7 @@ impl St {
 
     /// 把进行中的事务移进最近列表（它已经是终态）、记一行流水账。不删落盘：调用方决定。
     fn retire(&mut self, rec: &Record, store: &Store) {
+        self.hold = None;
         if let Some(t) = self.active.take() {
             eprintln!(
                 "ops: {} {} from {:?} ended {:?}/{:?}",
@@ -464,7 +517,52 @@ impl<D: Device> Engine<D> {
                 runner: OnceLock::new(),
                 draining: AtomicBool::new(false),
                 observer: OnceLock::new(),
+                gate: OnceLock::new(),
             }),
+        }
+    }
+
+    /// 这个引擎自己的 Gate（测试用；设备上走 [`set_txn_gate`]）。
+    #[cfg(test)]
+    pub fn set_gate(&self, g: TxnGate) {
+        let _ = self.inner.gate.set(g);
+    }
+
+    fn txn_gate(&self) -> Option<&TxnGate> {
+        // 测试只用自己接的：同一进程里别的测试接过全局的也不串
+        if cfg!(test) {
+            return self.inner.gate.get();
+        }
+        self.inner.gate.get().or_else(|| TXN_GATE.get())
+    }
+
+    /// 在 Gate 上预留并等正在跑的探测结束（§4.3 E1）。Err = 写入前回 busy（什么都没留下）。
+    /// 设备时钟和 tokio 时钟谁先到等待上限都算超时（测试里 tokio 时钟是停住的）。
+    async fn admit(&self, g: &TxnGate) -> Result<Hold, Value> {
+        let lock = || g.gate.lock().unwrap_or_else(|e| e.into_inner());
+        let wait_ms = g.wait_ms.min(admit::TXN_WAIT_MAX_MS);
+        let boot = self.inner.dev.boot_id();
+        let mut a = lock().txn_reserve(GATE_OWNER, &boot, self.now(), wait_ms, (g.others)());
+        // 从预留起就由 Hold 负责放：等待中被取消或 panic 也不会留下
+        let hold = matches!(a, Admit::Granted | Admit::Waiting).then(|| Hold(g.gate.clone()));
+        let start = tokio::time::Instant::now();
+        while a == Admit::Waiting {
+            tokio::time::sleep(admit::TXN_POLL).await;
+            let now = self.now();
+            let mut gl = lock();
+            a = gl.txn_poll(GATE_OWNER, &boot, now, (g.others)());
+            if a == Admit::Waiting && start.elapsed() >= Duration::from_millis(wait_ms) {
+                gl.txn_release(GATE_OWNER);
+                a = Admit::TimedOut;
+            }
+        }
+        match (a, hold) {
+            (Admit::Granted, Some(h)) => Ok(h),
+            // 没拿到：Hold 在这里丢掉（txn_release 只放自己的，别人的不动）
+            (a, _) => {
+                eprintln!("ops: gate refused a network change: {a:?}");
+                Err(admit::busy_json())
+            }
         }
     }
 
@@ -704,7 +802,19 @@ impl<D: Device> Engine<D> {
     /// 先看一眼锁（明显 busy 就不读设备），再读当前值和 SIM，然后在一把锁里重新判断、
     /// 覆盖旧事务（superseded，继承退回目标，D35）、落盘新事务的写意图——中间没有空窗，
     /// 被覆盖事务的 pending.json 直接被新的盖掉。
-    pub async fn submit(&self, mut req: Request) -> Submit {
+    pub async fn submit(&self, req: Request) -> Submit {
+        self.submit_as(req, false).await
+    }
+
+    /// 闭环发起的执行（decision-execution-loop §4.3 E3）：动作的退回能力不是 `CapturedAndProven`
+    /// 就不带自动退回（到点没确认记 unverified/no_rollback），全局开关、批准者、`Request::rollback`
+    /// 都不能把它打开；写设备用严格写锁（E2）。现在还没有调用方，闭环入口做好再接。
+    #[allow(dead_code)]
+    pub async fn submit_from_loop(&self, req: Request) -> Submit {
+        self.submit_as(req, true).await
+    }
+
+    async fn submit_as(&self, mut req: Request, from_loop: bool) -> Submit {
         let now = self.now();
         let op_id = req.op_id.clone().unwrap_or_else(new_op_id);
         let who = req.who();
@@ -749,6 +859,18 @@ impl<D: Device> Engine<D> {
             }
             Err(e) => return Submit::Refused(e),
         };
+        // §4.3 E1：网络事务读当前值之前先过 Gate；进行中的网络事务已经拿着时（覆盖同一项、
+        // 人的写取消 Agent 试用）由下面那段接过来，不重新排队
+        let gate = gated(req.spec).then(|| self.txn_gate().cloned()).flatten();
+        let mut hold = None;
+        if let Some(g) = &gate
+            && self.lock().hold.is_none()
+        {
+            match self.admit(g).await {
+                Ok(h) => hold = Some(h),
+                Err(busy) => return Submit::Busy(busy),
+            }
+        }
         // 写之前读当前值和 SIM（退回目标、R3 的「旧值」、D32 的 SIM 身份）。
         let (old, sim, conn) = match self.inner.dev.read(req.spec).await {
             Ok(Reading {
@@ -774,18 +896,42 @@ impl<D: Device> Engine<D> {
         let now = self.now();
         {
             let mut st = self.lock();
+            // 这次要结束的事务（被取消的 Agent 试用、被覆盖的同一项）的预留由这次接着拿；
+            // 提前返回时它还在 `active` 里就放回去
+            let prior = st.hold.take();
+            let keep = |st: &mut St, prior: Option<Hold>| {
+                if st.active.is_some() {
+                    st.hold = prior;
+                }
+            };
             if let Some(v) = st.find(&op_id, now) {
+                keep(&mut st, prior);
                 return Submit::Existing(v);
             }
             if let Some(s) = &st.session {
-                return Submit::Busy(doing_session(s, now));
+                let busy = doing_session(s, now);
+                keep(&mut st, prior);
+                return Submit::Busy(busy);
             }
             st.yield_to(req.who(), &self.inner.record, &self.inner.store);
+            if let Some(t) = st.active.as_ref()
+                && !overridable(t, &req)
+            {
+                let busy = doing(t, now);
+                keep(&mut st, prior);
+                return Submit::Busy(busy);
+            }
+            let hold = if gate.is_some() {
+                // 自己没拿、要接的又已经结束了（读的时候它到了终态）：写入前回 busy
+                match hold.or(prior) {
+                    Some(h) => Some(h),
+                    None => return Submit::Busy(admit::busy_json()),
+                }
+            } else {
+                None
+            };
             let mut inherit = None;
             if let Some(t) = st.active.as_mut() {
-                if !overridable(t, &req) {
-                    return Submit::Busy(doing(t, now));
-                }
                 inherit = Some(t.rollback_to.clone());
                 t.cancel(Reason::Superseded);
                 st.retire(&self.inner.record, &self.inner.store);
@@ -810,7 +956,7 @@ impl<D: Device> Engine<D> {
                     rollback_enabled: req.rollback.unwrap_or(
                         (self.inner.cfg.rollback || req.approved_by == Source::Mcp)
                             && req.approved_by != Source::Legacy,
-                    ),
+                    ) && (!from_loop || req.spec.auto_rollback_allowed()),
                     deadline_ms: req.spec.deadline_ms(),
                     boot_id: self.inner.dev.boot_id(),
                 },
@@ -824,12 +970,13 @@ impl<D: Device> Engine<D> {
                 );
             }
             st.active = Some(Box::new(t));
+            st.hold = hold;
             self.persist(&mut st, true);
         }
         let result = self
             .inner
             .dev
-            .write(req.spec, &req.target, &req.params)
+            .write(req.spec, &req.target, &req.params, from_loop)
             .await;
         // 写到了设备（成功，或超时、结果未知）：这一项最后是这个来源写的（D16）。
         let reached = match &result {
@@ -1022,7 +1169,7 @@ impl<D: Device> Engine<D> {
         if let Err(e) = self
             .inner
             .dev
-            .write(spec, &value, &spec.to_params(&value))
+            .write(spec, &value, &spec.to_params(&value), false)
             .await
         {
             eprintln!("ops: {op_id} rollback write failed: {}", e.message);

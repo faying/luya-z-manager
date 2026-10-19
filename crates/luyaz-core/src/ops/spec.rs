@@ -490,7 +490,7 @@ impl Spec {
     }
 
     /// 能否自动退回：只看逐动作能力，全局默认和调用者的 `rollback: true` 都不能把它变成可退回。
-    #[allow(dead_code)]
+    /// 只管闭环发起的执行（§4.3 E3）；人手动写入照旧按 `LUYAZ_ROLLBACK`。
     pub fn auto_rollback_allowed(&self) -> bool {
         self.rollback_capability == RollbackCapability::CapturedAndProven
     }
