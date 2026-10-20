@@ -1171,6 +1171,33 @@ fn local_wifi_and_other_actions_take_no_receipt() {
     assert_eq!(t.receipt(), Err("this change does not take a receipt"));
 }
 
+/// R18-P0-02 ②：本机没发出去的探测是 unknown：不计失败、不确认，只按 5 秒间隔再试。
+#[test]
+fn unknown_probe_neither_counts_nor_confirms() {
+    let mut t = txn(false);
+    let r = live("Only_LTE", conn("10.0.0.1", 500));
+    assert!(t.wants_probe(&r, 3_000).is_some());
+    t.probe_unknown(3_000);
+    assert!(t.wants_probe(&r, 4_000).is_none(), "5 s between probes");
+    assert_eq!(t.on_reading(&r, 4_000), Next::Wait);
+    assert_eq!(t.probe_fails, 0);
+    assert_eq!(t.phase, Phase::Verifying);
+    assert!(t.wants_probe(&r, 8_000).is_some());
+}
+
+/// R18-P0-02 ③：喂回前的复核比 `same` 严：起点只有一边读到、地址变了、没地址都算变了。
+#[test]
+fn still_is_stricter_than_same() {
+    let a = conn("10.0.0.1", 500);
+    assert!(a.still(&conn("10.0.0.1", 1_500)));
+    assert!(!a.still(&conn("10.0.0.1", 5_000)));
+    assert!(!a.still(&conn("10.0.0.2", 500)));
+    let mut none = a.clone();
+    none.up_since_ms = None;
+    assert!(a.same(&none) && !a.still(&none));
+    assert!(!conn("", 500).still(&conn("", 500)));
+}
+
 /// Wi-Fi 事务的 SIM 记空（换卡不影响 Wi-Fi）。
 fn no_sim() -> SimId {
     SimId {

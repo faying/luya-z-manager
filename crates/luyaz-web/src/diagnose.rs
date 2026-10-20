@@ -181,6 +181,220 @@ pub struct View {
     /// The decision loop's pending proposal (core §4.9), shown under the finding for a person
     /// to approve (§4.10).
     pub proposal: Option<ProposalV>,
+    /// `radio.band_flap` (core §4.11): only when the replay explains; never an action.
+    pub flap: Option<String>,
+    /// `power.hot_drain` (core §4.11): hot and draining fast, or hot with the drain unreadable;
+    /// never an action.
+    pub hot: Option<String>,
+    /// `usage.long_idle` (core §4.11): only when the replay suggests; never an action.
+    pub idle: Option<String>,
+    /// `perf.slow_strong_signal` (core §4.11): proven vs only possible layers when the signal is
+    /// strong; never an action.
+    pub slow: Option<String>,
+}
+
+/// Core `data.slow_signal`: words for the person when the replay explains, nothing otherwise.
+fn slow_view(b: &Value, l: Lang) -> Option<String> {
+    let a = &b["advice"];
+    if a["advice"] != "explain" {
+        return None;
+    }
+    let names = |k: &str| -> Vec<String> {
+        a[k].as_array()
+            .map(|v| {
+                v.iter()
+                    .filter_map(|x| x.as_str())
+                    .filter(|id| luyaz_api::execution::slow_signal::LAYERS.contains(id))
+                    .map(|id| layer_name(id, l))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let (proven, possible) = (names("proven"), names("possible"));
+    if proven.is_empty() && possible.is_empty() {
+        return None;
+    }
+    let sep = l.pick(", ", "、");
+    let mut out = l
+        .pick(
+            "The signal is strong, so the slowness is most likely not the radio.",
+            "信号是强的，所以慢多半不在信号。",
+        )
+        .to_string();
+    if !proven.is_empty() {
+        out.push(' ');
+        out.push_str(&match l {
+            Lang::En => format!(
+                "Found by the check: {} (see its row for what to do).",
+                proven.join(sep)
+            ),
+            Lang::Zh => format!("这次检查查实的：{}（怎么处理看那一行）。", proven.join(sep)),
+        });
+    }
+    if !possible.is_empty() {
+        out.push(' ');
+        out.push_str(&match l {
+            Lang::En => format!(
+                "Only possible: {} (no comparison with real traffic on this cell).",
+                possible.join(sep)
+            ),
+            Lang::Zh => format!(
+                "只是可能：{}（没有同一小区实际流量的对照）。",
+                possible.join(sep)
+            ),
+        });
+    }
+    out.push(' ');
+    out.push_str(l.pick(
+        "Nothing is changed automatically; switching network mode, band or proxy is yours to do.",
+        "这里不会自动改；换制式、锁频或关代理都由你自己决定。",
+    ));
+    Some(out)
+}
+
+/// Core `data.long_idle`: words for the person when the replay suggests the CHILL idle pause,
+/// nothing otherwise (already saving, in use and unknown stay off the page).
+fn idle_view(b: &Value, l: Lang) -> Option<String> {
+    let a = &b["advice"];
+    if a["advice"] != "suggest" || a["step"] != "chill_idle_pause" {
+        return None;
+    }
+    let n = a["hours"].as_u64()?;
+    Some(match l {
+        Lang::En => format!(
+            "Nobody has used the device for the last {n} hours (screen off, no devices connected, next to no traffic). The CHILL idle pause could save power then: add LUYAZ_CHILL_IDLE=1 to core.env yourself and restart luyaz-core (/etc/init.d/luyaz-core restart); it pauses CHILL after 5 minutes with nobody around and resumes as soon as the screen or a device is back. Nothing is changed automatically."
+        ),
+        Lang::Zh => format!(
+            "最近 {n} 小时没人用（息屏、没有设备连着、几乎没有流量）。这种时候 CHILL 闲置暂停能省电：可以自己在 core.env 加 LUYAZ_CHILL_IDLE=1 再重启 luyaz-core（/etc/init.d/luyaz-core restart），没人用 5 分钟后暂停 CHILL，一亮屏或有设备连上就恢复。这里不会自动改。"
+        ),
+    })
+}
+
+fn deg(dc: i64) -> String {
+    format!("{:.1}", dc as f64 / 10.0)
+}
+
+/// Core `data.hot_drain`: words for the person when the replay explains, or when the battery is
+/// hot but no clean counter reading says anything about the drain. Everything else stays off.
+fn hot_view(b: &Value, l: Lang) -> Option<String> {
+    let a = &b["advice"];
+    let kind = a["advice"].as_str()?;
+    let why = a["why"].as_str().unwrap_or("");
+    let drain_unread =
+        kind == "unknown" && matches!(why, "drain_unqualified" | "no_drain_baseline");
+    if kind != "explain" && !drain_unread {
+        return None;
+    }
+    let src = if kind == "explain" { a } else { b };
+    let (t, n) = (src["batt_dc"].as_i64()?, src["batt_normal_dc"].as_i64()?);
+    let cell = match b["window"]["cell"].as_str()? {
+        "on_home" => l.pick("screen on, home network", "亮屏、本地网络"),
+        "on_abroad" => l.pick("screen on, roaming", "亮屏、漫游"),
+        "off_home" => l.pick("screen off, home network", "息屏、本地网络"),
+        "off_abroad" => l.pick("screen off, roaming", "息屏、漫游"),
+        _ => return None,
+    };
+    let head = match l {
+        Lang::En => format!(
+            "Last hour the battery reached {} °C; in the same condition ({cell}) it usually stays at or below {} °C.",
+            deg(t),
+            deg(n)
+        ),
+        Lang::Zh => format!(
+            "上一小时电池最高 {} °C；同样情况（{cell}）下平时不超过 {} °C。",
+            deg(t),
+            deg(n)
+        ),
+    };
+    let ambient = l.pick(
+        "Room temperature isn't measured, so a warm place or a bag can't be ruled out.",
+        "没有测环境温度，所以排除不了放在热的地方或包里。",
+    );
+    if drain_unread {
+        let d = if why == "drain_unqualified" {
+            l.pick(
+                "Whether it also drained faster can't be told: no clean battery counter reading for that hour (devices connected, or the condition changed).",
+                "耗电有没有变快判断不了：那一小时没有干净的电量计读数（连着设备，或中途情况变了）。",
+            )
+        } else {
+            l.pick(
+                "Whether it also drained faster can't be told yet: too few clean hours in this condition to compare with.",
+                "耗电有没有变快暂时判断不了：这种情况下干净的对照小时还不够。",
+            )
+        };
+        return Some(format!("{head} {d} {ambient}"));
+    }
+    let (mw, nmw) = (a["drain_mw"].as_u64()?, a["drain_normal_mw"].as_u64()?);
+    let words = |k: &str| -> Option<&'static str> {
+        Some(match k {
+            "clients" => l.pick("devices connected", "有设备连着"),
+            "cellular" => l.pick("more cellular traffic than usual", "蜂窝流量比平时多"),
+            "cpu" => l.pick("the CPU busier than usual", "CPU 比平时忙"),
+            "throttled" => l.pick("the CPU throttled", "CPU 降过频"),
+            "chip_hot" => l.pick("the chip hotter than usual", "芯片比平时热"),
+            "battery_health" => l.pick("battery health not Good", "电池健康不是 Good"),
+            _ => return None,
+        })
+    };
+    let list = |k: &str| -> Vec<&'static str> {
+        a[k].as_array()
+            .map(|v| v.iter().filter_map(|x| words(x.as_str()?)).collect())
+            .unwrap_or_default()
+    };
+    let (with, unread) = (list("alongside"), list("unread"));
+    let sep = l.pick(", ", "、");
+    let mut out = match l {
+        Lang::En => format!("{head} It also drained about {mw} mW against a usual {nmw} mW."),
+        Lang::Zh => format!("{head} 耗电约 {mw} mW，平时约 {nmw} mW。"),
+    };
+    out.push(' ');
+    out.push_str(&match (l, with.is_empty()) {
+        (Lang::En, false) => format!(
+            "At the same time: {} (happened together, not necessarily the cause).",
+            with.join(sep)
+        ),
+        (Lang::Zh, false) => format!("同时：{}（只是同时发生，不一定是原因）。", with.join(sep)),
+        (Lang::En, true) => "Nothing else stood out.".into(),
+        (Lang::Zh, true) => "别的方面看不出异常。".into(),
+    });
+    if !unread.is_empty() {
+        out.push(' ');
+        out.push_str(&match l {
+            Lang::En => format!("Not compared: {}.", unread.join(sep)),
+            Lang::Zh => format!("没能比较：{}。", unread.join(sep)),
+        });
+    }
+    let tail = l.pick(
+        "Nothing is changed automatically; power-saving settings (CHILL, Wi-Fi) are yours to choose.",
+        "这里不会自动改任何设置；要不要开省电（CHILL、Wi-Fi）由你决定。",
+    );
+    Some(format!("{out} {ambient} {tail}"))
+}
+
+/// Core `data.band_flap`: words for the person when the replay explains, nothing otherwise
+/// (unknown and "nothing to say" stay off the page: no guessing).
+fn flap_view(b: &Value, l: Lang) -> Option<String> {
+    let a = &b["advice"];
+    if a["advice"] != "explain" {
+        return None;
+    }
+    let band: String = a["band"]
+        .as_str()
+        .filter(|s| !s.is_empty())?
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(8)
+        .collect();
+    let n = a["drops"].as_u64()?;
+    let min = b["window_s"].as_u64().unwrap_or(1800) / 60;
+    Some(match l {
+        Lang::En => format!(
+            "The data connection dropped {n} times in the last {min} minutes, all on {band}, with good signal, on one cell and nothing else to explain it. If it keeps happening, consider changing the network mode or band yourself (Band lock); nothing is changed automatically."
+        ),
+        Lang::Zh => format!(
+            "最近 {min} 分钟数据连接断了 {n} 次，都在 {band} 上；信号不差、没换小区，也没有别的原因能解释。如果一直这样，可以考虑自己改网络模式或频段（锁频页）；这里不会自动改。"
+        ),
+    })
 }
 
 pub struct ProposalV {
@@ -326,6 +540,13 @@ fn view(g: &Got, l: Lang) -> View {
         next: None,
         finding: g.diag.as_ref().and_then(|d| finding_view(&d["finding"], l)),
         proposal: g.diag.as_ref().and_then(|d| proposal_view(&d["proposal"])),
+        flap: g.diag.as_ref().and_then(|d| flap_view(&d["band_flap"], l)),
+        hot: g.diag.as_ref().and_then(|d| hot_view(&d["hot_drain"], l)),
+        idle: g.diag.as_ref().and_then(|d| idle_view(&d["long_idle"], l)),
+        slow: g
+            .diag
+            .as_ref()
+            .and_then(|d| slow_view(&d["slow_signal"], l)),
     };
     if down {
         v.tone = "bad";
@@ -962,6 +1183,110 @@ mod tests {
         no_digest["params_digest"] = json!("");
         assert!(proposal_view(&no_digest).is_none());
         assert!(proposal_view(&Value::Null).is_none());
+    }
+
+    #[test]
+    fn band_flap_shows_only_an_explanation() {
+        let b = json!({"advice":{"advice":"explain","band":"n78","drops":4},"drops":4,"covered_s":2000,"window_s":1800});
+        let en = flap_view(&b, Lang::En).unwrap();
+        assert!(en.contains("4 times") && en.contains("n78") && en.contains("30 minutes"), "{en}");
+        assert!(flap_view(&b, Lang::Zh).unwrap().contains("断了 4 次"));
+        for a in [json!({"advice":"unknown","why":"window_incomplete"}), json!({"advice":"none","why":"too_few_drops"})] {
+            assert!(flap_view(&json!({"advice": a}), Lang::En).is_none());
+        }
+        let odd = json!({"advice":{"advice":"explain","band":"<b>","drops":3}});
+        assert_eq!(flap_view(&odd, Lang::En).map(|s| s.contains('<')), Some(false));
+        assert!(flap_view(&Value::Null, Lang::En).is_none());
+    }
+
+    #[test]
+    fn hot_drain_explains_or_says_the_drain_is_unread() {
+        let b = json!({"advice":{"advice":"explain","batt_dc":412,"batt_normal_dc":360,"drain_mw":900,"drain_normal_mw":400,
+            "alongside":["cpu","clients"],"unread":["cellular"],"ambient":"unread"},
+            "window":{"cell":"off_home","window_s":3600},"batt_dc":412,"batt_normal_dc":360});
+        let en = hot_view(&b, Lang::En).unwrap();
+        assert!(
+            en.contains("41.2 °C") && en.contains("36.0 °C") && en.contains("900 mW"),
+            "{en}"
+        );
+        assert!(
+            en.contains("the CPU busier than usual, devices connected")
+                && en.contains("Not compared: more cellular"),
+            "{en}"
+        );
+        assert!(
+            en.contains("Room temperature") && en.contains("not necessarily the cause"),
+            "{en}"
+        );
+        let zh = hot_view(&b, Lang::Zh).unwrap();
+        assert!(
+            zh.contains("息屏、本地网络") && zh.contains("不会自动改"),
+            "{zh}"
+        );
+        let u = json!({"advice":{"advice":"unknown","why":"drain_unqualified"},"window":{"cell":"off_home"},
+            "batt_dc":420,"batt_normal_dc":390});
+        assert!(hot_view(&u, Lang::En).unwrap().contains("can't be told"));
+        for a in [
+            json!({"advice":"unknown","why":"window_stale"}),
+            json!({"advice":"none","why":"not_hot"}),
+            json!({"advice":"none","why":"charging"}),
+        ] {
+            assert!(hot_view(&json!({"advice": a, "window":{"cell":"off_home"},"batt_dc":420,"batt_normal_dc":390}), Lang::En).is_none());
+        }
+        assert!(hot_view(&Value::Null, Lang::En).is_none());
+        let odd = json!({"advice":{"advice":"explain","batt_dc":400,"batt_normal_dc":360,"drain_mw":900,"drain_normal_mw":400,
+            "alongside":["<b>"],"unread":[]},"window":{"cell":"<b>"}});
+        assert!(hot_view(&odd, Lang::En).is_none());
+    }
+
+    #[test]
+    fn long_idle_shows_only_a_suggestion() {
+        let b = json!({"advice":{"advice":"suggest","hours":5,"step":"chill_idle_pause"},"quiet_run":5});
+        let en = idle_view(&b, Lang::En).unwrap();
+        assert!(
+            en.contains("last 5 hours") && en.contains("LUYAZ_CHILL_IDLE=1"),
+            "{en}"
+        );
+        assert!(
+            idle_view(&b, Lang::Zh)
+                .unwrap()
+                .contains("最近 5 小时没人用")
+        );
+        for a in [
+            json!({"advice":"none","why":"already_saving"}),
+            json!({"advice":"unknown","why":"coverage_gap"}),
+            json!({"advice":"suggest","hours":5,"step":"other"}),
+        ] {
+            assert!(idle_view(&json!({ "advice": a }), Lang::En).is_none());
+        }
+        assert!(idle_view(&Value::Null, Lang::En).is_none());
+    }
+
+    #[test]
+    fn slow_signal_names_proven_and_possible_layers() {
+        let b =
+            json!({"advice":{"advice":"explain","proven":["wifi","proxy"],"possible":["crowd"]}});
+        let en = slow_view(&b, Lang::En).unwrap();
+        assert!(
+            en.contains("Found by the check: Wi-Fi, Proxy")
+                && en.contains("Only possible: Cell load"),
+            "{en}"
+        );
+        let zh = slow_view(&b, Lang::Zh).unwrap();
+        assert!(
+            zh.contains("查实的：Wi-Fi、代理") && zh.contains("只是可能：基站负载"),
+            "{zh}"
+        );
+        let only = json!({"advice":{"advice":"explain","proven":[],"possible":["crowd"]}});
+        assert!(!slow_view(&only, Lang::En).unwrap().contains("Found by"));
+        for a in [
+            json!({"advice":"unknown","why":"no_check"}),
+            json!({"advice":"none","why":"signal_not_strong"}),
+            json!({"advice":"explain","proven":["<b>"],"possible":[]}),
+        ] {
+            assert!(slow_view(&json!({ "advice": a }), Lang::En).is_none());
+        }
+        assert!(slow_view(&Value::Null, Lang::En).is_none());
     }
 
     #[test]

@@ -763,11 +763,11 @@ impl engine::Device for UbusDevice {
         }
     }
 
-    async fn probe(&self, target: &ProbeTarget) -> Result<(), String> {
+    async fn probe(&self, target: &ProbeTarget) -> Result<(), txn::ProbeErr> {
         if target.chill {
             return match chill::probe().await {
                 chill::Probe::Up => Ok(()),
-                p => Err(format!("CHILL path {p:?}")),
+                p => Err(format!("CHILL path {p:?}").into()),
             };
         }
         probe::dns(target).await

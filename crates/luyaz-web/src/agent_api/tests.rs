@@ -267,6 +267,18 @@ async fn through_the_gate() {
         (200, Some("up"), Some("ok"))
     );
     assert!(!v.to_string().contains("1234"));
+    // 多台 R2: every answer names this device, made on the first one (0600) and kept
+    let id = v["device_id"].as_str().unwrap().to_string();
+    assert!(id.len() == 12 && id.bytes().all(|b| b.is_ascii_hexdigit()), "{id}");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let m = std::fs::metadata(dir.join("agent.id")).unwrap().permissions().mode();
+        assert_eq!(m & 0o777, 0o600);
+    }
+    for path in ["/agent-api/diagnose", "/agent-api/power", "/agent-api/events?since=59", "/agent-api/action-url?for=apn"] {
+        let (st, v) = call(path, Some(T2)).await;
+        assert_eq!((st, v["device_id"].as_str()), (200, Some(id.as_str())), "{path}: {v}");
+    }
     // no cursor: the newest 20; with one: the next page
     let (_, v) = call("/agent-api/events", Some(T2)).await;
     assert_eq!(v["events"].as_array().unwrap().len(), 20);
@@ -302,6 +314,7 @@ async fn through_the_gate() {
     };
     let (st, v) = act("/agent-api/act/chill/exit", T1, json!({"state": "direct_keep_ai"})).await;
     assert_eq!((st, v["reason"].as_str()), (403, Some("read_only_token")));
+    assert_eq!(v["device_id"].as_str(), Some(id.as_str()), "a refusal says which device too");
     std::fs::write(&tf, format!("claude {T1} act\nhermes {T2}\n")).unwrap();
     let (st, v) = act("/agent-api/act/chill/exit", T1, json!({"state": "direct_keep_ai"})).await;
     assert_eq!((st, v["reason"].as_str()), (403, Some("act_source")), "no act-allow file: no one");
@@ -314,6 +327,7 @@ async fn through_the_gate() {
     )
     .await;
     assert_eq!((st, v["state"].as_str()), (200, Some("trial")), "{v}");
+    assert_eq!(v["device_id"].as_str(), Some(id.as_str()));
     let b = seen.lock().unwrap().last().cloned().unwrap();
     assert_eq!((b["source"].as_str(), b["approved_by"].as_str()), (Some("mcp"), Some("mcp")));
     assert_eq!(b["params"], json!({"profile_id": "manu2"}));
@@ -362,6 +376,27 @@ async fn through_the_gate() {
         (st, v["state"].as_str(), v["http"].as_u64()),
         (200, Some("unavailable"), Some(404))
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 多台 R2 (M-T1): made once, then the same; junk in the file is replaced; no directory = none.
+#[test]
+fn device_id_made_once_then_kept() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("luyaz-agent-id-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("agent.id");
+    let a = device_id_at(&f).unwrap();
+    assert!(a.len() == 12 && a.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(device_id_at(&f).as_deref(), Some(a.as_str()));
+    std::fs::write(&f, "ABCDEF012345\n").unwrap();
+    assert_eq!(device_id_at(&f).as_deref(), Some("abcdef012345"), "read, lower-cased");
+    std::fs::write(&f, "not an id\n").unwrap();
+    let b = device_id_at(&f).unwrap();
+    assert!(b.len() == 12 && b != "not an id");
+    assert_eq!(device_id_at(&dir.join("nope/agent.id")), None);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

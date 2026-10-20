@@ -15,6 +15,10 @@ pub struct Snapshot {
     pub rx_moved_at: Option<BootTime>,
     /// Operator DNS servers (IPv4), from the core's `wan_dns`.
     pub dns: Vec<String>,
+    /// The IPv4 cellular path of this same observation (Finding's [`crate::finding::path::paths`]):
+    /// the direct DNS query binds to it (R18-P0-02). Never carried over from an older sample;
+    /// `None` = interface unknown, and then no query is sent.
+    pub path: Option<crate::finding::path::Path>,
 }
 
 /// Observation uncertainty must not become either proof of a working link or a
@@ -91,6 +95,11 @@ pub fn sample(
             None
         },
         dns,
+        path: state.and_then(|v| {
+            crate::finding::path::paths(v)
+                .into_iter()
+                .find(|p| p.source.is_ipv4())
+        }),
     }
 }
 

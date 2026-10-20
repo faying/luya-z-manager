@@ -395,6 +395,9 @@ impl Watch {
     }
 
     fn event(&mut self, up_ms: u64, k: &str, id: String, fields: Value) {
+        if k == "ssr" {
+            crate::api::band_flap::ssr(up_ms);
+        }
         let mut v =
             json!({"t": Value::Null, "up": nud(up_ms), "boot": b8(&self.boot), "k": k, "id": id});
         if let (Some(o), Value::Object(f)) = (v.as_object_mut(), fields) {

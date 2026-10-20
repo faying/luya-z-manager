@@ -57,6 +57,7 @@ fn initialize_list_ping() {
             "change_apn",
             "get_change_status",
             "get_action_url",
+            "list_devices",
         ]
     );
     for t in r.unwrap()["result"]["tools"].as_array().unwrap() {
@@ -283,4 +284,223 @@ fn pin_leaves_non_answers_alone() {
         Got::Answer(401, _)
     ));
     assert!(matches!(check_identity(Some("ab"), Got::Slow(8)), Got::Slow(8)));
+}
+
+// ---- 多台: the device list ----
+
+fn tmpdir(tag: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("luyaz-mcp-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+const LIST: &str = "# my routers\n\nhome 192.0.2.10 ~/.config/luyaz/hermes.token abcdef012345\ntravel http://100.64.0.9:9090 travel.token   # the one abroad\nlab [fd7a:115c::1]:9091 /etc/lab.token\nold http://10.1.1.1 x.token\n";
+
+#[test]
+fn device_list_parses_good_lines_and_comments() {
+    let l = parse_devices(LIST, Path::new("/cfg"), Path::new("/home/u")).unwrap();
+    type Row<'a> = (&'a str, &'a str, u16, &'a str, Option<&'a str>, usize);
+    let got: Vec<Row> = l
+        .iter()
+        .map(|d| (d.name.as_str(), d.host.as_str(), d.port, d.token_file.to_str().unwrap(), d.id.as_deref(), d.line))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("home", "192.0.2.10", 9090, "/home/u/.config/luyaz/hermes.token", Some("abcdef012345"), 3),
+            ("travel", "100.64.0.9", 9090, "/cfg/travel.token", None, 4),
+            ("lab", "fd7a:115c::1", 9091, "/etc/lab.token", None, 5),
+            ("old", "10.1.1.1", 80, "/cfg/x.token", None, 6),
+        ]
+    );
+}
+
+/// D6: one bad line or a repeated name refuses the whole list, naming the line.
+#[test]
+fn device_list_is_strict() {
+    let p = |t: &str| parse_devices(t, Path::new("/"), Path::new("/h"));
+    for (text, want) in [
+        ("a 10.0.0.1 t\nb 10.0.0.2\n", "line 2"),
+        ("a 10.0.0.1 t\na 10.0.0.2 t\n", "already used on line 1"),
+        ("a 10.0.0.1 t zz-not-hex\n", "line 1: device id"),
+        ("a https://10.0.0.1 t\n", "line 1: address"),
+        ("a 10.0.0.1/x t\n", "line 1: address"),
+        ("a/b 10.0.0.1 t\n", "line 1: name"),
+        ("a 10.0.0.1 t abc extra\n", "line 1: expected"),
+        ("# nothing\n\n", "no device lines"),
+    ] {
+        let e = p(text).unwrap_err();
+        assert!(e.contains(want), "{text:?}: {e}");
+    }
+}
+
+#[test]
+fn no_list_file_means_the_single_device() {
+    let d = tmpdir("setup");
+    let f = d.join("devices");
+    let single = || Setup::Single { url: "http://192.0.2.1:9090".into(), pin: None };
+    assert!(matches!(load_setup(&f, single), Setup::Single { .. }));
+    std::fs::write(&f, "a 10.0.0.1 t\nbroken\n").unwrap();
+    match load_setup(&f, single) {
+        Setup::Broken(why) => assert!(why.contains("line 2") && why.contains("No device is used"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    std::fs::write(&f, "a 10.0.0.1 t\n").unwrap();
+    assert!(matches!(load_setup(&f, single), Setup::List(l) if l.len() == 1));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+fn list_setup() -> Setup {
+    Setup::List(parse_devices(LIST, Path::new("/cfg"), Path::new("/home/u")).unwrap())
+}
+
+/// One call on a setup; Vec of (device name, path) the fetch saw.
+fn call_on(setup: &Setup, msg: Value, got: impl Fn(&str, &str) -> Got) -> (Value, Vec<(String, String)>) {
+    let mut asked = Vec::new();
+    let mut f = |d: Option<&Device>, c: &Call| {
+        let n = d.map_or("-".to_string(), |d| d.name.clone());
+        asked.push((n.clone(), c.path.clone()));
+        got(&n, &c.path)
+    };
+    let r = handle_setup(&msg, setup, &mut f).unwrap();
+    (r["result"].clone(), asked)
+}
+
+fn text(r: &Value) -> &str {
+    r["content"][0]["text"].as_str().unwrap()
+}
+
+#[test]
+fn device_argument_picks_the_device() {
+    let s = list_setup();
+    let ok = |n: &str, _: &str| Got::Answer(200, format!(r#"{{"device_id":"{}","verdict":"ok"}}"#, if n == "home" { "abcdef012345" } else { "0000000000aa" }));
+    let (r, asked) = call_on(&s, tool("get_device_health", json!({"device": "travel"})), ok);
+    assert_eq!(asked, [("travel".to_string(), "/agent-api/health".to_string())]);
+    let v: Value = serde_json::from_str(text(&r)).unwrap();
+    assert_eq!((v["device"].as_str(), r["isError"].as_bool()), (Some("travel"), Some(false)));
+    assert!(v["identity"].as_str().unwrap().starts_with("unconfirmed") && v["identity"].as_str().unwrap().contains("enroll travel"));
+    let (r, _) = call_on(&s, tool("get_recent_events", json!({"device": "home", "since": 3})), ok);
+    let v: Value = serde_json::from_str(text(&r)).unwrap();
+    assert_eq!((v["device"].as_str(), v["identity"].as_str()), (Some("home"), Some("confirmed")));
+    // several devices, none named; an unknown one: said, with the names, nothing asked
+    for (args, code) in [(json!({}), "device_required"), (json!({"device": "moon"}), "unknown_device")] {
+        let (r, asked) = call_on(&s, tool("get_device_health", args), ok);
+        assert!(asked.is_empty());
+        assert_eq!((r["isError"].as_bool(), r["structuredContent"]["error"].as_str()), (Some(true), Some(code)));
+        assert!(text(&r).contains("home, travel, lab, old"), "{}", text(&r));
+    }
+    // one device: may be left out
+    let one = Setup::List(parse_devices("solo 10.0.0.1 t\n", Path::new("/"), Path::new("/")).unwrap());
+    let (r, asked) = call_on(&one, tool("get_power_profile", json!({})), ok);
+    assert_eq!((asked[0].0.as_str(), r["isError"].as_bool()), ("solo", Some(false)));
+    // other answers are prefixed with the name
+    let (r, _) = call_on(&s, tool("get_device_health", json!({"device": "lab"})), |_, _| Got::Unreachable("refused".into()));
+    assert!(text(&r).starts_with("[lab] The device cannot be reached"), "{}", text(&r));
+}
+
+#[test]
+fn enrolled_device_answering_as_another_is_refused() {
+    let s = list_setup();
+    let (r, _) = call_on(&s, tool("get_device_health", json!({"device": "home"})), |_, _| Got::Answer(200, r#"{"device_id":"999999999999","verdict":"secret"}"#.into()));
+    assert_eq!(r["isError"], true);
+    assert_eq!(r["structuredContent"], json!({"error": "wrong_device", "device": "home", "device_id": "999999999999"}));
+    assert!(text(&r).contains("luyaz-mcp enroll home") && !text(&r).contains("secret"));
+    let (r, _) = call_on(&s, tool("get_device_health", json!({"device": "home"})), |_, _| Got::Answer(200, r#"{"verdict":"secret"}"#.into()));
+    assert_eq!(r["structuredContent"]["error"], "no_device_id");
+    // a change to an enrolled device: its identity is read first, a wrong one gets no POST
+    let (r, asked) = call_on(&s, tool("set_chill_exit", json!({"device": "home", "state": "proxy"})), |_, _| Got::Answer(200, r#"{"device_id":"999999999999"}"#.into()));
+    assert_eq!(asked, [("home".to_string(), "/agent-api/health".to_string())]);
+    assert_eq!(r["structuredContent"]["error"], "wrong_device");
+    let (r, asked) = call_on(&s, tool("set_chill_exit", json!({"device": "home", "state": "proxy"})), |_, _| Got::Answer(200, r#"{"device_id":"abcdef012345","state":"trial"}"#.into()));
+    assert_eq!(asked.iter().map(|a| a.1.as_str()).collect::<Vec<_>>(), ["/agent-api/health", "/agent-api/act/chill/exit"]);
+    assert_eq!(r["isError"], false);
+}
+
+#[test]
+fn list_devices_gives_names_and_addresses_only() {
+    let (r, asked) = call_on(&list_setup(), tool("list_devices", json!({})), |_, _| panic!("no fetch"));
+    assert!(asked.is_empty());
+    let v: Value = serde_json::from_str(text(&r)).unwrap();
+    assert_eq!(v["devices"][0], json!({"name": "home", "address": "192.0.2.10", "enrolled": true, "device_id": "abcdef012345"}));
+    assert_eq!(v["devices"][1], json!({"name": "travel", "address": "http://100.64.0.9:9090", "enrolled": false}));
+    assert!(!text(&r).contains("token"), "{}", text(&r));
+}
+
+#[test]
+fn broken_list_is_said_by_every_tool() {
+    let s = Setup::Broken("The device list /x has a problem on line 2: bad. No device is used until it is fixed.".into());
+    for (n, a) in [("get_device_health", json!({})), ("list_devices", json!({})), ("use_apn", json!({"id": "auto", "device": "home"}))] {
+        let (r, asked) = call_on(&s, tool(n, a), |_, _| panic!("no fetch"));
+        assert!(asked.is_empty());
+        assert_eq!(r["structuredContent"]["error"], "devices_file", "{n}");
+        assert!(text(&r).contains("line 2"));
+    }
+}
+
+#[test]
+fn single_device_refuses_a_device_name_and_keeps_its_shape() {
+    let s = Setup::Single { url: "http://192.0.2.1:9090".into(), pin: None };
+    let (r, asked) = call_on(&s, tool("get_device_health", json!({"device": "home"})), |_, _| panic!("no fetch"));
+    assert!(asked.is_empty());
+    assert_eq!(r["structuredContent"]["error"], "unknown_device");
+    let (r, _) = call_on(&s, tool("get_device_health", json!({})), |_, _| Got::Answer(200, r#"{"verdict":"ok"}"#.into()));
+    let v: Value = serde_json::from_str(text(&r)).unwrap();
+    assert_eq!(v, json!({"verdict": "ok"}), "no name added without a list");
+}
+
+#[test]
+fn every_tool_takes_device() {
+    for t in tools().as_array().unwrap() {
+        if t["name"] != "list_devices" {
+            assert_eq!(t["inputSchema"]["properties"]["device"]["type"], "string", "{}", t["name"]);
+        }
+    }
+}
+
+/// R5: enroll writes the fourth column of its line only; comments and other lines stay.
+#[test]
+fn write_id_keeps_the_rest() {
+    let d = tmpdir("write");
+    let f = d.join("devices");
+    std::fs::write(&f, LIST).unwrap();
+    assert_eq!(write_id(&f, "travel", "00112233aabb").unwrap(), None);
+    assert_eq!(write_id(&f, "home", "ffffffffffff").unwrap().as_deref(), Some("abcdef012345"));
+    let t = std::fs::read_to_string(&f).unwrap();
+    assert_eq!(
+        t,
+        LIST.replace("travel.token   # the one abroad", "travel.token 00112233aabb # the one abroad")
+            .replace("hermes.token abcdef012345", "hermes.token ffffffffffff")
+    );
+    assert!(write_id(&f, "moon", "00").is_err());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// O2: two enrolls at once (separate opens of the lock, as two processes) both stay.
+#[test]
+fn concurrent_enrolls_both_stay() {
+    let d = tmpdir("race");
+    let f = d.join("devices");
+    let names: Vec<String> = (0..8).map(|i| format!("d{i}")).collect();
+    std::fs::write(&f, names.iter().map(|n| format!("{n} 10.0.0.1 t\n")).collect::<String>()).unwrap();
+    let hs: Vec<_> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let (f, n) = (f.clone(), n.clone());
+            std::thread::spawn(move || {
+                for k in 0..20 {
+                    write_id(&f, &n, &format!("{i:02x}{k:010x}")).unwrap();
+                }
+            })
+        })
+        .collect();
+    for h in hs {
+        h.join().unwrap();
+    }
+    let l = parse_devices(&std::fs::read_to_string(&f).unwrap(), &d, &d).unwrap();
+    for (i, dev) in l.iter().enumerate() {
+        assert_eq!(dev.id.as_deref(), Some(format!("{i:02x}{:010x}", 19).as_str()), "{}", dev.name);
+    }
+    let _ = std::fs::remove_dir_all(&d);
 }

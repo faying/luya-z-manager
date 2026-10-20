@@ -45,11 +45,12 @@ X
     printf '#!/bin/sh\ncase "$1" in +%%s) cat %s/now ;; *) echo "2026-09-27 10:00" ;; esac\n' "$T" >"$T/bin/date"
     printf '#!/bin/sh\necho "Filesystem 1K-blocks Used Available Use%% Mounted on"\necho "/dev/ubi0 4000000 2800000 1200000 70%% /data"\n' >"$T/bin/df"
     echo 1790500000 >"$T/now"
+    echo 0123456789abcdef0123456789abcdef >"$T/devid"
     chmod +x "$T"/bin/*
     export DOC_UBUS=$T/bin/ubus DOC_UCI=$T/bin/uci DOC_PS=$T/bin/ps DOC_WGET=$T/bin/wget DOC_RC=$T/rc \
         DOC_INITD=$T/initd DOC_UPTIME=$T/uptime DOC_HEARTBEAT=$T/hb DOC_MARKER=$T/marker DOC_ALERTS=$T/alerts \
         DOC_CRASH=$T/crash DOC_UID_STATE=$T/uid DOC_OVERLAY_RCD=$T/rcd DOC_DAEMON_CONF=$T/daemon.conf DOC_DATA=/ DOC_PROC=$T/proc \
         DOC_DATE=$T/bin/date DOC_DF=$T/bin/df DOC_UID_WANT=$T/uid.want DOC_CLOCK_OK=$T/clock-ok DOC_WALL_LAST=$T/wall.last \
-        DOC_FP=$T/fp DOC_FP_CHANGED=$T/fp-changed DOC_TS_TUNING=$T/tuning.env
+        DOC_FP=$T/fp DOC_FP_CHANGED=$T/fp-changed DOC_TS_TUNING=$T/tuning.env DOC_DEVICE_ID=$T/devid
     export DOC_CHILL_TEMPLATE=$T/tpl DOC_CHILL_ENV=$T/chill.env
 }

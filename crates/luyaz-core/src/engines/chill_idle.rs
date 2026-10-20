@@ -123,6 +123,13 @@ fn look(
     }
 }
 
+/// CHILL meant on now (the look's rule), for `/api/diagnose`'s `long_idle`.
+pub fn meant_on() -> bool {
+    let dir = PathBuf::from(crate::state::host_path(CHILL_DIR));
+    let paused = deadline::manual_paused(&dir, BootTime::read().as_ref());
+    dir.is_dir() && !dir.join("disabled").exists() && !paused
+}
+
 /// The loop: a look every [`TICK_S`], the lease written or removed.
 pub fn spawn(hub: Arc<crate::block::Hub>) {
     let h = |x: &str| PathBuf::from(crate::state::host_path(x));

@@ -28,7 +28,7 @@ for init in luyaz-core luyaz-web luyaz-sentinel; do
     CMD=$(printf '%s' "$CMD" | sed "s#$LOG#$T/$init.log#; s/^[[:space:]]*procd_set_param command //")
     echo "earlier line" >"$T/$init.log"
     # the init's variables the arguments use
-    BIN=$T/fakeprog LAN_BIND=0.0.0.0 LAN_PORT=9461 TOKEN_FILE=/x/auth.token
+    BIN=$T/fakeprog LAN_BIND=127.0.0.1 LAN_PORT=9461 TOKEN_FILE=/x/auth.token
     eval "set -- $CMD"
     "$@" &
     P=$!

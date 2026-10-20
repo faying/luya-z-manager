@@ -1,6 +1,6 @@
 [package]
 name = "luyaz-core"
-version = "1.7.2"
+version = "1.11.2"
 edition = "2024"
 rust-version = "1.99"
 description = "Luya-Z core daemon (luyaz-core): device read path, HTTP API and write path, policies, wake ledger."

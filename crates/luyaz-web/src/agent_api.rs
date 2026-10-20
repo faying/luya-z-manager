@@ -12,6 +12,8 @@
 //! - Text that came from outside (health details, evidence, alert text) is cut to 64 characters
 //!   and wrapped as `{"untrusted": "…"}`.
 //! - Core down: `{"core": "down", "sentinel_hb_age_s": …}`, 200, not a 502.
+//! - Every answer carries `device_id` (`agent.id` beside the token file, 12 random hex digits,
+//!   made once): the computer's `luyaz-mcp enroll` pins it (u60-mcp.md 多台 R2/R5).
 //! - Nothing runs between requests; both files are read on each request, so deleting a token line
 //!   revokes it at once.
 //!
@@ -444,9 +446,75 @@ fn core_down() -> Response {
 pub(crate) fn reply(v: Value) -> Response {
     (
         [(axum::http::header::CACHE_CONTROL, "no-store")],
-        axum::Json(v),
+        axum::Json(with_device_id(v)),
     )
         .into_response()
+}
+
+// ---- which device this is (u60-mcp.md 多台 R2, M-T1) ----
+
+/// Beside the token file: `/data/luyaz/agent.id`.
+fn id_file() -> PathBuf {
+    let (token, _) = files();
+    token
+        .parent()
+        .map_or_else(|| PathBuf::from("agent.id"), |d| d.join("agent.id"))
+}
+
+fn valid_id(s: &str) -> bool {
+    s.len() == 12 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// This device's agent id: 12 random hex digits, made on the first `/agent-api` answer and kept
+/// (0600, written to a temporary name and renamed). Not the admin web's `web-device-id`: the
+/// agent sees only this one. Deleting the file makes a new one (the computer then has to
+/// re-enroll the device). None = no file and none could be made (logged).
+pub fn device_id_at(path: &std::path::Path) -> Option<String> {
+    // two first answers at once must not make two ids
+    static MAKING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _g = MAKING.lock().unwrap_or_else(|e| e.into_inner());
+    if let Ok(s) = std::fs::read_to_string(path) {
+        let s = s.trim();
+        if valid_id(s) {
+            return Some(s.to_ascii_lowercase());
+        }
+    }
+    let made = (|| -> std::io::Result<String> {
+        use std::io::{Read, Write};
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut b = [0u8; 6];
+        std::fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
+        let id: String = b.iter().map(|x| format!("{x:02x}")).collect();
+        let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(format!("{id}\n").as_bytes())?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)?;
+        Ok(id)
+    })();
+    match made {
+        Ok(id) => Some(id),
+        Err(e) => {
+            eprintln!("[agent-api] no device id: {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// Every `/agent-api` answer (reads, changes, refusals, core down) says which device it is, so
+/// the computer can tell when an address now reaches another one.
+fn with_device_id(mut v: Value) -> Value {
+    if let Some(o) = v.as_object_mut()
+        && let Some(id) = device_id_at(&id_file())
+    {
+        o.insert("device_id".into(), id.into());
+    }
+    v
 }
 
 fn log(name: &str, path: &str) {

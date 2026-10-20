@@ -232,6 +232,17 @@ impl Conn {
         self.ipv4.is_empty() && !self.ipv6.is_empty()
     }
 
+    /// 锁外探测之后的复核（R18-P0-02）：比 [`Conn::same`] 严——两边都要有地址，起点只有一边读到也算变了。
+    pub fn still(&self, other: &Conn) -> bool {
+        !self.addr().is_empty()
+            && self.addr() == other.addr()
+            && match (self.up_since_ms, other.up_since_ms) {
+                (Some(a), Some(b)) => a.abs_diff(b) <= CONN_JITTER_MS,
+                (None, None) => true,
+                _ => false,
+            }
+    }
+
     fn same(&self, other: &Conn) -> bool {
         self.addr() == other.addr()
             && match (self.up_since_ms, other.up_since_ms) {
@@ -265,6 +276,41 @@ pub struct ProbeTarget {
     pub v6: bool,
     /// CHILL 的真路径探测（[`Confirm::Chill`]）：不问 DNS，经 mihomo 取一次 generate_204。
     pub chill: bool,
+}
+
+/// 探测没成（R18-P0-02）。`local` = 本机建 socket、绑定接口就失败了，什么也没发出去：结果是 unknown，
+/// 不计入失败次数，也不算确认（`Reading::probe` 留 None）。其余（没回答、错误码、没有地址）照旧算失败。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProbeErr {
+    pub local: bool,
+    pub msg: String,
+}
+
+impl ProbeErr {
+    pub fn local(msg: impl Into<String>) -> Self {
+        Self {
+            local: true,
+            msg: msg.into(),
+        }
+    }
+}
+
+impl From<String> for ProbeErr {
+    fn from(msg: String) -> Self {
+        Self { local: false, msg }
+    }
+}
+
+impl From<&str> for ProbeErr {
+    fn from(msg: &str) -> Self {
+        msg.to_string().into()
+    }
+}
+
+impl std::fmt::Display for ProbeErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.msg)
+    }
 }
 
 /// CHILL 要连续通几次才算过（D10）。
@@ -713,6 +759,14 @@ impl Txn {
             return None;
         }
         Some(target)
+    }
+
+    /// 探测结果是 unknown（本机 socket/绑定失败，或喂回前连接已变）：不计数、不确认，只记时间，
+    /// 照常隔 5 秒再试（R18-P0-02）。
+    pub fn probe_unknown(&mut self, now: u64) {
+        if self.waiting() {
+            self.probe_last_ms = Some(now);
+        }
     }
 
     /// 记下探测结果；换了连接、或上一轮已经用完（这是新的一轮），就重新计数。

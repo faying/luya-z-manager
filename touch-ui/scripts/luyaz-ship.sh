@@ -78,7 +78,7 @@ WRAPPER=${DT_WRAPPER:-start.test.sh}
 # scripts/test/core-trial checks these against scripts/luyaz-core.init.
 # (the token: luyaz-core.init's)
 _tok=/data/luyaz/core/auth.token
-LAUNCH_ARGS="-i 1000 --lan-bind 0.0.0.0 --lan-port 9461 --auth-token-file $_tok"
+LAUNCH_ARGS="-i 1000 --lan-bind 127.0.0.1 --lan-port 9461 --auth-token-file $_tok"
 # (LUYAZ_ names only since the Luya-Z rename D3 clean-up, see luyaz-core.init)
 LAUNCH_ENV="LUYAZ_UBUS=auto"
 # Auto revert (E4 D30): the init script turns it on while this file exists;

@@ -136,8 +136,18 @@ pub fn valid_number(n: &str) -> bool {
     n.len() <= 20 && digits.len() >= 3 && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// The device name an alert SMS carries after the signature (10-20, two U60s on one phone):
+/// one line, no control characters, at most `NAME_MAX` characters; `None` when empty or bad.
+pub const NAME_MAX: usize = 16;
+pub fn clean_name(n: &str) -> Option<String> {
+    let n = n.trim();
+    (!n.is_empty() && n.chars().count() <= NAME_MAX && !n.chars().any(char::is_control))
+        .then(|| n.to_string())
+}
+
 /// `PUT /api/alerts/sms` (the agent's, and u60d's since 8d-1c): `{"number": "+86…" | "",
-/// "abroad": bool}`, either field may be omitted; an empty number turns SMS alerts off.
+/// "abroad": bool, "name": "…" | ""}`, any field may be omitted; an empty number turns SMS
+/// alerts off, an empty name drops the device name from the texts.
 /// Err = (HTTP status, message).
 pub fn set_sms(a: &Alerts, body: &[u8]) -> Result<(), (u16, String)> {
     let parsed: Value =
@@ -164,6 +174,22 @@ pub fn set_sms(a: &Alerts, body: &[u8]) -> Result<(), (u16, String)> {
         };
         a.set_flag("sms-abroad", b)
             .map_err(|e| (500, format!("save abroad switch: {e}")))?;
+    }
+    if let Some(n) = parsed.get("name") {
+        let Some(n) = n.as_str() else {
+            return Err((400, "name must be a string".into()));
+        };
+        let res = if n.trim().is_empty() {
+            a.set_flag("sms-name", false)
+        } else if let Some(n) = clean_name(n) {
+            a.write_whole("sms-name", &format!("{n}\n"))
+        } else {
+            return Err((
+                400,
+                format!("name: one line, at most {NAME_MAX} characters"),
+            ));
+        };
+        res.map_err(|e| (500, format!("save name: {e}")))?;
     }
     Ok(())
 }
@@ -377,6 +403,13 @@ impl Alerts {
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| valid_number(s))
+    }
+
+    /// `sms-name`: the device name after the SMS signature, if one is set (`clean_name`).
+    pub fn sms_name(&self) -> Option<String> {
+        fs::read_to_string(self.path("sms-name"))
+            .ok()
+            .and_then(|s| clean_name(s.lines().next().unwrap_or("")))
     }
 
     pub fn summary(&self, now: i64, uptime_now: Option<u64>, utc_offset: i64) -> Value {
@@ -786,6 +819,21 @@ mod tests {
         let log = parse_sms_log("1758600000\t1\tweb-crash\tsent\nbad\n1758600001\t2\tx\t\n");
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].result, "sent");
+    }
+
+    #[test]
+    fn names() {
+        assert_eq!(
+            clean_name(" U60Pro全球版 \n").as_deref(),
+            Some("U60Pro全球版")
+        );
+        assert_eq!(clean_name("  "), None);
+        assert_eq!(clean_name("a\tb"), None);
+        assert_eq!(
+            clean_name(&"名".repeat(NAME_MAX)).map(|n| n.chars().count()),
+            Some(NAME_MAX)
+        );
+        assert_eq!(clean_name(&"名".repeat(NAME_MAX + 1)), None);
     }
 
     #[test]

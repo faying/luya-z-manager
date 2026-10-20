@@ -39,7 +39,11 @@ async fn handle_inner(
     // P1-3：启动中（第一轮、事务恢复还没做完）先等，最多 20 秒；还没好就照队列满回 503 `busy`。
     // R18-P0-04：带了 expect_device_id 就先核对是不是这台设备，不对什么都不做
     if let Some(r) = device_gate(&action, &body, || {
-        std::fs::read_to_string(DEVICE_ID_FILE).ok()
+        let id = std::fs::read_to_string(DEVICE_ID_FILE).ok();
+        if id.is_none() {
+            eprintln!("[control] {DEVICE_ID_FILE} unreadable: refusing a write that names a device");
+        }
+        id
     }) {
         return r;
     }

@@ -21,6 +21,14 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+## lweb 1.9.0 — 2026-10-20
+
+- every `/agent-api` answer carries `device_id` (random 12 hex digits in `/data/luyaz/agent.id`, 0600, made on the first answer) so `luyaz-mcp enroll` can pin the device (multiple U60s, u60-mcp.md R2).
+
+## core 1.10.0 — 2026-10-20
+
+- alert SMS can carry a device name after the signature (`/data/alerts/sms-name`, or `"name"` in PUT /api/alerts/sms): 【Luya-Z】U60Pro全球版：… ; longer texts go out as one long SMS
+
 ## core 1.7.2 — 2026-10-20
 
 - an NR session kept after the radio falls back to ENDC is no longer shown as old.

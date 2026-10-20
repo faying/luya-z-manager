@@ -69,6 +69,7 @@ pub struct Cfg {
     alerts: String,
     crash: String,
     data_dir: String,
+    device_id: String,
     initd: String,
     rc: String,
     ps: Vec<String>,
@@ -145,6 +146,7 @@ impl Cfg {
             alerts: s("DOC_ALERTS", "/data/alerts"),
             crash: s("DOC_CRASH", "/data/crashlog"),
             data_dir: s("DOC_DATA", "/data"),
+            device_id: s("DOC_DEVICE_ID", "/data/luyaz/web-device-id"),
             initd: s("DOC_INITD", "/etc/init.d"),
             rc: s("DOC_RC", "/etc/rc.local"),
             ps: w("DOC_PS", "ps w"),
@@ -329,6 +331,7 @@ pub fn run(c: &Cfg, mode: Mode) -> Vec<Row> {
     rows.push(sms(c));
     rows.push(crashes(c, unread));
     rows.push(disk(c));
+    rows.extend(device_id(c));
     let (lv, d) = standby::check(c, false);
     let de = if mode == Mode::Tsv2 {
         standby::check(c, true).1
@@ -1300,6 +1303,24 @@ fn disk(c: &Cfg) -> Row {
                 )
             }
         }
+    }
+}
+
+/// R18-P0-04：管理网页的设备 ID 档（核心的 `/control` 用它核对 `expect_device_id`）。
+/// 缺了或读不懂 = 网页带着 ID 的写会全被拒（409 wrong_device）；好的时候不占一行。
+fn device_id(c: &Cfg) -> Option<Row> {
+    let id = cat(&c.device_id).map(|s| s.trim().to_owned()).unwrap_or_default();
+    if id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        None
+    } else {
+        Some(row(
+            "warn",
+            "device_id",
+            "设备 ID",
+            format!("{} 缺失或读不懂：网页的写会被拒", c.device_id),
+            "Device ID",
+            format!("{} missing or unreadable: web writes will be refused", c.device_id),
+        ))
     }
 }
 

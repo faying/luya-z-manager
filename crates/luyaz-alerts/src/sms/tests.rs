@@ -247,20 +247,32 @@ const KINDS: &[&str] = &[
 #[test]
 fn texts_word_for_word_as_the_guard_sent_them_plus_the_code() {
     assert_eq!(
-        sms_text("web-crash", false, T0, 7),
+        sms_text("web-crash", false, T0, 7, None),
         "【Luya-Z】管理网页意外退出，已自动重启。不用管。（10-01 14:32）#7"
     );
     assert_eq!(
-        sms_text("web-crash", true, T0, 7),
+        sms_text("web-crash", true, T0, 7, None),
         "[Luya-Z] Admin pages crashed; restarted; no action (01 Oct 14:32)#7"
     );
     assert_eq!(
-        sms_text("x-y", false, T0, 1),
+        sms_text("x-y", false, T0, 1, None),
         "【Luya-Z】有新告警（x-y），请到管理网页「系统→告警」查看。（10-01 14:32）#1"
     );
     assert_eq!(
-        sms_text("a$b", true, T0, 1),
+        sms_text("a$b", true, T0, 1, None),
         "[Luya-Z] Alert ab; see Alerts on web (01 Oct 14:32)#1"
+    );
+}
+
+#[test]
+fn a_device_name_goes_after_the_signature() {
+    assert_eq!(
+        sms_text("web-crash", false, T0, 7, Some("U60Pro全球版")),
+        "【Luya-Z】U60Pro全球版：管理网页意外退出，已自动重启。不用管。（10-01 14:32）#7"
+    );
+    assert_eq!(
+        sms_text("web-crash", true, T0, 7, Some("U60Pro")),
+        "[Luya-Z] U60Pro: Admin pages crashed; restarted; no action (01 Oct 14:32)#7"
     );
 }
 
@@ -268,7 +280,7 @@ fn texts_word_for_word_as_the_guard_sent_them_plus_the_code() {
 fn every_text_is_one_sms_with_a_long_code() {
     for k in KINDS {
         for en in [false, true] {
-            let t = sms_text(k, en, T0, 99_999);
+            let t = sms_text(k, en, T0, 99_999, None);
             assert!(t.ends_with("#999"), "{t}");
             assert!(
                 t.chars().count() <= 70,
@@ -284,7 +296,7 @@ fn every_text_is_one_sms_with_a_long_code() {
 
 #[test]
 fn an_overlong_unknown_kind_is_cut_in_english() {
-    let t = sms_text("some-very-long-unknown-kind-name-here", true, T0, 999);
+    let t = sms_text("some-very-long-unknown-kind-name-here", true, T0, 999, None);
     assert!(t.chars().count() <= 70, "{t}");
 }
 

@@ -93,7 +93,7 @@ fn nonzero(v: Option<&Value>) -> Option<f64> {
     num(v).filter(|x| *x != 0.0)
 }
 
-fn rat_of(t: &str) -> &'static str {
+pub fn rat_of(t: &str) -> &'static str {
     let u = t.to_ascii_uppercase();
     if u.is_empty() || u.contains("LIMIT") || u.contains("EMERGENCY") || u.contains("NO_SERVICE") || u.contains("NOSERVICE") {
         "none"

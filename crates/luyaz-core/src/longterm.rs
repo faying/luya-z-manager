@@ -472,7 +472,9 @@ impl Fold {
                 let s = &mut self.seen;
                 s.battery = data["percent"].as_i64();
                 s.batt_temp = data["temp"].as_i64();
-                s.charging = data["charging"].as_i64().unwrap_or(0) != 0;
+                // the fuel gauge's current, as `hour_power` reads it: the block's `charging` is
+                // the charger's status code, set on this device while the battery drains
+                s.charging = data["bat_ua"].as_i64().is_some_and(|i| i > 0);
                 if let Some(h) = self.hour.as_mut() {
                     if h.batt_from.is_none() {
                         h.batt_from = s.battery;
@@ -1381,7 +1383,7 @@ mod tests {
             &c(100, 0),
             "battery",
             false,
-            &json!({"percent": 80, "temp": 300, "charging": 0}),
+            &json!({"percent": 80, "temp": 300, "charging": 1, "bat_ua": -400_000}),
             &mut out,
         );
         f.block(
@@ -1403,7 +1405,7 @@ mod tests {
             &c(800, 0),
             "battery",
             false,
-            &json!({"percent": 70, "temp": 350, "charging": 1}),
+            &json!({"percent": 70, "temp": 350, "charging": 1, "bat_ua": 900_000}),
             &mut out,
         );
         f.tick(&c(1300, 300), &mut out); // slept 300 s in between
@@ -1422,7 +1424,9 @@ mod tests {
         assert_eq!(h["batt_tmax"], 350);
         assert_eq!(h["link_down"], 1);
         assert!(h["abroad"].as_i64().unwrap() >= 900);
-        assert!(h["chg_s"].as_i64().unwrap() > 0);
+        // only after the gauge's current turned positive at 800, not the status code's 1 at 100
+        let chg = h["chg_s"].as_i64().unwrap();
+        assert!(chg > 0 && chg <= 600, "{chg}");
         let kinds: Vec<&str> = out
             .events
             .iter()
@@ -1489,7 +1493,7 @@ mod tests {
                 let c = clk("b1", i * 60, i / 50 * 30, Some(1_791_500_000 + i * 60));
                 let b = match i % 4 {
                     0 => Some(("signal".to_string(), false, sig(460, 1, 460))),
-                    1 => Some(("battery".to_string(), false, json!({"percent": 100 - i / 4, "temp": 300, "charging": i % 3}))),
+                    1 => Some(("battery".to_string(), false, json!({"percent": 100 - i / 4, "temp": 300, "bat_ua": i % 3 - 1}))),
                     2 => Some((
                         "interfaces".to_string(),
                         false,

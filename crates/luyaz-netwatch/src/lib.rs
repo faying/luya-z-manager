@@ -186,18 +186,25 @@ pub fn cell_rx_bytes(state: Option<&Value>) -> Option<u64> {
 }
 
 /// Round trip of one DNS query to the first of the first two resolvers that answers, in ms. `None`
-/// when none is known or none answered within 2 s.
-pub fn dns_rtt_ms(servers: &[String]) -> Option<u32> {
-    servers.iter().take(2).find_map(|ip| dns_query_ms(ip))
+/// when none is known, none answered within 2 s, or the snapshot has no IPv4 cellular path: the
+/// query is bound to that interface and source (Finding's bound socket), never sent on the
+/// default route (R18-P0-02).
+pub fn dns_rtt_ms(s: &Snapshot) -> Option<u32> {
+    let path = s.path.as_ref().filter(|p| p.source.is_ipv4())?;
+    s.dns
+        .iter()
+        .filter_map(|ip| ip.parse::<std::net::Ipv4Addr>().ok())
+        .take(2)
+        .find_map(|ip| dns_query_ms(path, SocketAddr::new(ip.into(), 53)))
 }
 
-/// One `A` query for a fixed name. Only a reply that passes Finding's check
+/// One `A` query for a fixed name over a socket bound to `path` (`SO_BINDTODEVICE` + source
+/// address, as Finding binds). Only a reply that passes Finding's check
 /// ([`finding::path::dns_answer`]: echoed question + an address for the name) counts; NXDOMAIN,
-/// SERVFAIL, NODATA or unrelated records are not liveness evidence (R18-P0-02). Still unbound:
-/// the watcher snapshot carries no interface identity; see u60-mcp.md「P0-02」.
-fn dns_query_ms(ip: &str) -> Option<u32> {
-    let addr: SocketAddr = format!("{ip}:53").parse().ok()?;
-    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+/// SERVFAIL, NODATA or unrelated records are not liveness evidence. A socket that cannot be bound
+/// says nothing (`None`).
+fn dns_query_ms(path: &finding::path::Path, addr: SocketAddr) -> Option<u32> {
+    let sock: UdpSocket = finding::path::socket(path, true).ok()?.into();
     sock.set_read_timeout(Some(DNS_TIMEOUT)).ok()?;
     let id = (now_unix() as u16) ^ 0x5a5a;
     let q = dns_query(id, "www.qq.com");
@@ -265,7 +272,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Watch {
     pub const fn new() -> Self {
         Watch {
-            snap: Mutex::new(Snapshot { at: 0, observed_at: None, connected: None, rx_bytes: None, rx_moved_at: None, dns: Vec::new() }),
+            snap: Mutex::new(Snapshot { at: 0, observed_at: None, connected: None, rx_bytes: None, rx_moved_at: None, dns: Vec::new(), path: None }),
             verdict: Mutex::new(None),
             log: Mutex::new(None),
             errors: Mutex::new(None),
@@ -341,7 +348,7 @@ impl Watch {
 
     /// Is the cellular link itself working? Connected, and either something arrived in the last
     /// 30 s or — only then — one plain DNS query to the operator's resolver gets an answer
-    /// (≤ 2 s): call it only when about to act on the answer.
+    /// (≤ 2 s, bound to the cellular path of the same snapshot): call it only when about to act on the answer.
     /// Unknown observations pause manual-first decisions; they do not report a
     /// measured outage, emit an event, or start a new probe.
     pub fn cell_alive(&self, now: Option<&BootTime>) -> bool {
@@ -351,13 +358,13 @@ impl Watch {
     fn cell_alive_with(
         &self,
         now: Option<&BootTime>,
-        probe: impl FnOnce(&[String]) -> Option<u32>,
+        probe: impl FnOnce(&Snapshot) -> Option<u32>,
     ) -> bool {
         let s = self.snapshot();
         match alive_without_probe(&s, now) {
             PassiveLink::Receiving => true,
             PassiveLink::Unknown | PassiveLink::Down => false,
-            PassiveLink::NeedsProbe => probe(&s.dns).is_some(),
+            PassiveLink::NeedsProbe => probe(&s).is_some(),
         }
     }
 
@@ -365,7 +372,7 @@ impl Watch {
     pub fn direct_dns_ms(&self, now: Option<&BootTime>) -> Option<u32> {
         let s = self.snapshot();
         match alive_without_probe(&s, now) {
-            PassiveLink::Receiving | PassiveLink::NeedsProbe => dns_rtt_ms(&s.dns),
+            PassiveLink::Receiving | PassiveLink::NeedsProbe => dns_rtt_ms(&s),
             PassiveLink::Unknown | PassiveLink::Down => None,
         }
     }

@@ -17,8 +17,13 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod band_flap;
+pub mod hot_drain;
 pub mod https;
+pub mod long_idle;
 pub mod no_internet;
+pub mod slow_signal;
+pub mod wifi_change;
 
 /// The card: full ICCID + slot, kept on the device only (screens show the tail).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

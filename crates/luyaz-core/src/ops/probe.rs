@@ -3,9 +3,10 @@
 //! 连接只有 IPv6 时（D41）改向 IPv6 DNS 发 AAAA 查询，同样绑定接口。
 //! 回答要和 Finding 同一套校验（`luyaz_netwatch::finding::path::dns_answer`，R18-P0-02）：问题回显一致、
 //! 有这个名字（可经 CNAME）的同族地址才算通；NXDOMAIN/SERVFAIL 等错误码、NODATA、不相关的记录
-//! 都不算通（只有 id 不能证明解析器真在工作）。不是 ubus，不经执行者。
+//! 都不算通（只有 id 不能证明解析器真在工作）。本机建 socket、绑定接口失败时什么也没发出去，回
+//! [`ProbeErr::local`]（unknown：不算失败也不算确认）。不是 ubus，不经执行者。
 
-use super::txn::ProbeTarget;
+use super::txn::{ProbeErr, ProbeTarget};
 use luyaz_api::finding::ResultState;
 use std::{
     net::{IpAddr, SocketAddr},
@@ -19,7 +20,7 @@ const NAME: &str = "www.qq.com";
 
 /// 绑定到 `target.iface`，依次问前两个 IPv4 DNS（`target.v6` 时是前两个 IPv6 DNS），有一个回答就算通。
 /// 没有接口或没有这一族的 DNS 直接算不通，绝不发不绑定接口的查询。
-pub async fn dns(target: &ProbeTarget) -> Result<(), String> {
+pub async fn dns(target: &ProbeTarget) -> Result<(), ProbeErr> {
     if target.iface.is_empty() {
         return Err("no cellular interface".into());
     }
@@ -38,30 +39,39 @@ pub async fn dns(target: &ProbeTarget) -> Result<(), String> {
             "no IPv4 DNS server".into()
         });
     }
-    let mut last = String::new();
+    // 有一个真问过、没通，就是失败；全都没能发出去（本机失败）才是 unknown
+    let mut last: Option<ProbeErr> = None;
     for addr in servers {
         match query(&target.iface, addr, QUERY_TIMEOUT).await {
             Ok(()) => return Ok(()),
-            Err(e) => last = format!("{addr}: {e}"),
+            Err(e) => {
+                let local = e.local && last.as_ref().is_none_or(|l| l.local);
+                last = Some(ProbeErr {
+                    local,
+                    msg: format!("{addr}: {}", e.msg),
+                });
+            }
         }
     }
-    Err(last)
+    Err(last.unwrap_or_else(|| "no DNS server".into()))
 }
 
 /// 一次绑定接口的查询：IPv4 的 DNS 问 A，IPv6 的 DNS 问 AAAA。
-pub async fn query(iface: &str, addr: SocketAddr, timeout: Duration) -> Result<(), String> {
+pub async fn query(iface: &str, addr: SocketAddr, timeout: Duration) -> Result<(), ProbeErr> {
     let (local, qtype) = if addr.is_ipv6() {
         ("[::]:0", QTYPE_AAAA)
     } else {
         ("0.0.0.0:0", QTYPE_A)
     };
-    let sock = std::net::UdpSocket::bind(local).map_err(|e| e.to_string())?;
-    bind_device(&sock, iface)?;
-    sock.set_nonblocking(true).map_err(|e| e.to_string())?;
-    let sock = tokio::net::UdpSocket::from_std(sock).map_err(|e| e.to_string())?;
+    let local_err = |e: std::io::Error| ProbeErr::local(e.to_string());
+    let sock = std::net::UdpSocket::bind(local).map_err(local_err)?;
+    bind_device(&sock, iface).map_err(ProbeErr::local)?;
+    sock.set_nonblocking(true).map_err(local_err)?;
+    let sock = tokio::net::UdpSocket::from_std(sock).map_err(local_err)?;
     let id = rand::random::<u16>();
     let q = packet(id, NAME, qtype);
     sock.send_to(&q, addr).await.map_err(|e| e.to_string())?;
+    // 从这里起是真发出去了：没回答、错误码、没有地址都算失败
     let mut buf = [0u8; 512];
     tokio::time::timeout(timeout, async {
         loop {
@@ -71,14 +81,14 @@ pub async fn query(iface: &str, addr: SocketAddr, timeout: Duration) -> Result<(
             }
             match luyaz_netwatch::finding::path::dns_answer(&buf[..n], &q) {
                 Some(ResultState::Passed) => return Ok(()),
-                Some(ResultState::Failed) => return Err("DNS error rcode".to_string()),
-                Some(ResultState::Unknown) => return Err("answer without an address".to_string()),
+                Some(ResultState::Failed) => return Err("DNS error rcode".into()),
+                Some(ResultState::Unknown) => return Err("answer without an address".into()),
                 None => {}
             }
         }
     })
     .await
-    .map_err(|_| "no answer".to_string())?
+    .map_err(|_| ProbeErr::from("no answer"))?
 }
 
 fn bind_device(sock: &std::net::UdpSocket, iface: &str) -> Result<(), String> {
@@ -234,7 +244,7 @@ mod tests {
         };
         match query("lo", addr, Duration::from_secs(2)).await {
             Ok(()) => {}
-            Err(e) if e.contains("Operation not permitted") => {
+            Err(e) if e.msg.contains("Operation not permitted") => {
                 eprintln!("skipped: cannot bind to a device here ({e})");
                 return;
             }
@@ -253,7 +263,8 @@ mod tests {
         };
         // 端口固定 53：没有人在 ::1:53 上听，只确认它试的是 IPv6 的那个
         let err = dns(&target).await.unwrap_err();
-        assert!(err.starts_with("[::1]:53"), "{err}");
+        assert!(err.msg.starts_with("[::1]:53"), "{err}");
+        assert!(!err.local, "a sent query that got nothing is a failure");
     }
 
     /// 一个按 `rcode` 回答的假 DNS（0 = 带地址；`echo_only` = 只回 id、没有记录）。
@@ -282,7 +293,7 @@ mod tests {
         let ok = stub_with(0, false).await;
         match query("lo", ok, Duration::from_secs(2)).await {
             Ok(()) => {}
-            Err(e) if e.contains("Operation not permitted") => {
+            Err(e) if e.msg.contains("Operation not permitted") => {
                 eprintln!("skipped: cannot bind to a device here ({e})");
                 return;
             }
@@ -296,7 +307,7 @@ mod tests {
             let a = stub_with(rcode, echo).await;
             assert_eq!(
                 query("lo", a, Duration::from_secs(2)).await,
-                Err(want.to_string()),
+                Err(want.into()),
                 "rcode {rcode} echo {echo}"
             );
         }
@@ -322,7 +333,7 @@ mod tests {
         let addr = stub().await;
         match query("lo", addr, Duration::from_secs(2)).await {
             Ok(()) => {}
-            Err(e) if e.contains("Operation not permitted") => {
+            Err(e) if e.msg.contains("Operation not permitted") => {
                 eprintln!("skipped: cannot bind to a device here ({e})");
                 return;
             }
@@ -350,7 +361,28 @@ mod tests {
         assert!(
             query("nosuch0", addr, Duration::from_millis(500))
                 .await
-                .is_err()
+                .is_err_and(|e| e.local),
+            "no such interface: nothing sent, unknown"
         );
+    }
+
+    /// R18-P0-02 ②：本机 socket/绑定失败是 unknown（`local`），一个都没发出去时 `dns` 也是 unknown。
+    #[tokio::test]
+    async fn local_bind_failure_is_unknown_not_a_failure() {
+        let bad = query(
+            "rmnet_data0;",
+            "127.0.0.1:53".parse().unwrap(),
+            QUERY_TIMEOUT,
+        )
+        .await
+        .unwrap_err();
+        assert!(bad.local, "{bad}");
+        let target = ProbeTarget {
+            iface: "bad;name".into(),
+            dns: vec!["192.0.2.53".into(), "192.0.2.54".into()],
+            v6: false,
+            chill: false,
+        };
+        assert!(dns(&target).await.unwrap_err().local);
     }
 }

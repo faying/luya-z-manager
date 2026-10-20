@@ -17,7 +17,7 @@ BIN=/data/luyaz/luyaz-core
 # Luya-Z rename D2 (manager docs/designs/luyaz-rename.md): the token, the ops dir and the log move
 # under the luyaz names (the old token and /data/u60-ops are gone since D2's clean-up).
 TOKEN_FILE=/data/luyaz/core/auth.token
-LAN_BIND=0.0.0.0
+LAN_BIND=127.0.0.1
 LAN_PORT=9461
 ROLLBACK_FLAG=/data/luyaz/core/ops/rollback-on
 # Extra settings from /data/luyaz/core/core.env, one VAR=value per line; only plain values are taken, and only the

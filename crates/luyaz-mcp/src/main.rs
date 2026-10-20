@@ -19,6 +19,14 @@
 //!   device's agent id as enrolled by the owner. When set, every 200 answer must carry the same
 //!   `device_id`; a different one, or none, is refused and its body is not passed on (the address
 //!   now answers for another device, or its admin web is too old to say who it is). Unset = no check.
+//! - Several devices (docs/designs/u60-mcp.md 多台, D1/D5/D6): the device list
+//!   `~/.config/luyaz/devices` (or `LUYAZ_MCP_DEVICES`), one line per device,
+//!   `name address tokenfile [device_id]`, `#` comments. When the file exists it replaces the
+//!   variables above: every tool takes an optional `device` (a name; needed when there are several),
+//!   `list_devices` names them, and each answer carries the name and whether the identity is
+//!   confirmed. The fourth column is written by `luyaz-mcp enroll <name>` (reads the device's
+//!   `device_id`, under a lock); an enrolled device that answers with another id is refused. One bad
+//!   line or a repeated name: the whole list is refused, every tool says which line.
 //! - The device cannot be reached: the tool answers so in words, not as a protocol error; offline
 //!   self-help is the touch screen and the LAN repair page, not this.
 //! - No SDK: the tools need `initialize`, `tools/list`, `tools/call` and `ping`, and plain
@@ -26,6 +34,7 @@
 
 use std::io::{BufRead, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -133,8 +142,190 @@ fn tools() -> Value {
     ]);
     if let (Some(a), Some(b)) = (list.as_array_mut(), more.as_array()) {
         a.extend(b.iter().cloned());
+        // 多台 D1: every tool may name the device
+        for t in a.iter_mut() {
+            t["inputSchema"]["properties"]["device"] = json!({"type": "string",
+                "description": "Which device: a name from list_devices. Needed only when the device list has more than one."});
+        }
+        a.push(json!({
+            "name": "list_devices",
+            "description": "The devices this server can reach: name, address, and whether the owner enrolled (confirmed) its identity (then also its device_id). Use a name as the `device` argument of the other tools. No tokens. Read-only.",
+            "inputSchema": none,
+            "annotations": {"readOnlyHint": true, "openWorldHint": false},
+        }));
     }
     list
+}
+
+// ---- the device list (多台) ----
+
+/// One line of the device list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Device {
+    pub name: String,
+    /// As written in the list.
+    pub address: String,
+    pub host: String,
+    pub port: u16,
+    pub token_file: PathBuf,
+    /// The enrolled id (fourth column); None = identity not confirmed.
+    pub id: Option<String>,
+    /// 1-based line in the file.
+    pub line: usize,
+}
+
+/// Where the devices come from, read again for each call.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Setup {
+    /// No list: `LUYAZ_MCP_URL` and the token variables, with the optional pin.
+    Single { url: String, pin: Option<String> },
+    List(Vec<Device>),
+    /// The list is there but wrong (D6): nothing is used, every tool says why.
+    Broken(String),
+}
+
+/// `LUYAZ_MCP_DEVICES`, else `~/.config/luyaz/devices`.
+pub fn devices_path() -> PathBuf {
+    match std::env::var("LUYAZ_MCP_DEVICES") {
+        Ok(p) if !p.trim().is_empty() => PathBuf::from(p.trim()),
+        _ => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/luyaz/devices"),
+    }
+}
+
+/// The fields of a line: up to a field that starts with `#` (a trailing comment).
+fn fields(line: &str) -> Vec<&str> {
+    line.split_whitespace().take_while(|f| !f.starts_with('#')).collect()
+}
+
+fn valid_name(s: &str) -> bool {
+    s.len() <= 32 && safe_id(s)
+}
+
+/// `http://host[:port]` (port 80 when none) or a bare `host[:port]` (port 9090, the admin web).
+fn parse_address(a: &str) -> Result<(String, u16), String> {
+    if a.contains("://") {
+        return parse_url(a).map_err(|e| e.replace("LUYAZ_MCP_URL", "the address"));
+    }
+    let (h, p) = parse_url(&format!("http://{a}")).map_err(|e| e.replace("LUYAZ_MCP_URL", "the address"))?;
+    let has_port = if a.starts_with('[') { a.contains("]:") } else { a.contains(':') };
+    Ok((h, if has_port { p } else { 9090 }))
+}
+
+/// The list's text, strict (D6): a line that is not `name address tokenfile [device_id]`, a bad
+/// name, address or id, or a name used twice → Err naming the line. `dir` resolves relative token
+/// paths, `home` a leading `~/`.
+pub fn parse_devices(text: &str, dir: &Path, home: &Path) -> Result<Vec<Device>, String> {
+    let mut out: Vec<Device> = Vec::new();
+    for (i, raw) in text.lines().enumerate() {
+        let n = i + 1;
+        let f = fields(raw);
+        if f.is_empty() {
+            continue;
+        }
+        let bad = |why: String| Err(format!("line {n}: {why}"));
+        if !(3..=4).contains(&f.len()) {
+            return bad("expected `name address tokenfile [device_id]`".into());
+        }
+        if !valid_name(f[0]) {
+            return bad(format!("name {:?} must be 1-32 letters, digits, '.', '_' or '-'", f[0]));
+        }
+        if let Some(d) = out.iter().find(|d| d.name == f[0]) {
+            return bad(format!("name {:?} is already used on line {}", f[0], d.line));
+        }
+        let (host, port) = match parse_address(f[1]) {
+            Ok(a) => a,
+            Err(e) => return bad(format!("address {:?}: {e}", f[1])),
+        };
+        let token_file = match f[2].strip_prefix("~/") {
+            Some(rest) => home.join(rest),
+            None if f[2].starts_with('/') => PathBuf::from(f[2]),
+            None => dir.join(f[2]),
+        };
+        let id = match f.get(3) {
+            None => None,
+            Some(s) => match norm_id(s) {
+                Some(id) => Some(id),
+                None => return bad(format!("device id {s:?} is not hex (write it with `luyaz-mcp enroll {}`)", f[0])),
+            },
+        };
+        out.push(Device { name: f[0].into(), address: f[1].into(), host, port, token_file, id, line: n });
+    }
+    if out.is_empty() {
+        return Err("no device lines (`name address tokenfile`)".into());
+    }
+    Ok(out)
+}
+
+/// The setup for one call: the list when its file exists, else the single device.
+pub fn load_setup(path: &Path, single: impl FnOnce() -> Setup) -> Setup {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return single(),
+        Err(e) => return Setup::Broken(format!("The device list {} cannot be read ({e}). No device is used until it is fixed.", path.display())),
+    };
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let dir = path.parent().unwrap_or(Path::new("."));
+    match parse_devices(&text, dir, &home) {
+        Ok(d) => Setup::List(d),
+        Err(e) => Setup::Broken(format!("The device list {} has a problem on {e}. No device is used until it is fixed.", path.display())),
+    }
+}
+
+/// The device a call is for: the named one, or the only one.
+pub fn select<'a>(list: &'a [Device], want: &Value) -> Result<&'a Device, (&'static str, String)> {
+    let names = || list.iter().map(|d| d.name.as_str()).collect::<Vec<_>>().join(", ");
+    match want {
+        Value::Null if list.len() == 1 => Ok(&list[0]),
+        Value::Null => Err(("device_required", format!("Several devices are listed: say which one with `device` ({}).", names()))),
+        Value::String(n) => list
+            .iter()
+            .find(|d| &d.name == n)
+            .ok_or_else(|| ("unknown_device", format!("No device named {n:?}. Listed: {}.", names()))),
+        _ => Err(("bad_device", "`device` must be a name (a string)".into())),
+    }
+}
+
+/// Rewrite the fourth column of `name`'s line, holding `<list>.lock` for the whole read, check
+/// and write (two enrolls at once both stay); the file is replaced by a rename, comments and the
+/// other lines are kept as they are. Ok = the id it had before.
+pub fn write_id(path: &Path, name: &str, id: &str) -> Result<Option<String>, String> {
+    let lock_path = path.with_file_name(format!(
+        "{}.lock",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("devices")
+    ));
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| format!("{}: {e}", lock_path.display()))?;
+    lock.lock().map_err(|e| format!("lock {}: {e}", lock_path.display()))?;
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let list = parse_devices(&text, Path::new("."), &home).map_err(|e| format!("{}: {e}", path.display()))?;
+    let d = list
+        .iter()
+        .find(|d| d.name == name)
+        .ok_or_else(|| format!("no device named {name:?} in {}", path.display()))?;
+    let mut out = String::with_capacity(text.len() + 16);
+    for (i, line) in text.split_inclusive('\n').enumerate() {
+        if i + 1 != d.line {
+            out.push_str(line);
+            continue;
+        }
+        let body = line.trim_end_matches(['\n', '\r']);
+        let f = fields(body);
+        let comment = body.find(" #").map(|at| &body[at..]).unwrap_or("");
+        out.push_str(&format!("{} {} {} {id}{comment}", f[0], f[1], f[2]));
+        out.push_str(&line[body.len()..]);
+    }
+    let tmp = path.with_file_name(format!(".devices.tmp{}", std::process::id()));
+    std::fs::write(&tmp, &out).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    if let Ok(m) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&tmp, m.permissions());
+    }
+    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(d.id.clone())
 }
 
 /// A call to the device: the path and, for a change, the JSON body (POST).
@@ -336,6 +527,77 @@ fn tool_result(got: Got) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": is_error})
 }
 
+/// A tool error the alert script can tell apart: `structuredContent.error` = `code`.
+fn tool_error(code: &str, text: String) -> Value {
+    json!({"content": [{"type": "text", "text": text}], "isError": true,
+           "structuredContent": {"error": code}})
+}
+
+/// [`tool_result`] for a listed device: the answer carries its list name and whether its identity
+/// is confirmed; a refusal names it and says how to re-enroll.
+fn result_for(got: Got, who: Option<&Device>) -> Value {
+    let Some(d) = who else {
+        return match got {
+            Got::WrongDevice(id) => {
+                let mut r = tool_result(Got::WrongDevice(id.clone()));
+                r["structuredContent"] = json!({"error": if id.is_some() { "wrong_device" } else { "no_device_id" }, "device_id": id});
+                r
+            }
+            g => tool_result(g),
+        };
+    };
+    match got {
+        Got::WrongDevice(id) => {
+            let mut r = tool_error(
+                if id.is_some() { "wrong_device" } else { "no_device_id" },
+                match &id {
+                    Some(id) => format!("Refused: {} ({}) now answers as another device (device_id {id}, enrolled {}). Its answer was not used. If the owner really replaced the device, they run `luyaz-mcp enroll {}`; otherwise the address in the device list is wrong.", d.name, d.address, d.id.as_deref().unwrap_or("-"), d.name),
+                    None => format!("Refused: {} is enrolled but its answer carries no device_id (its admin web is too old to say which device it is). Its answer was not used.", d.name),
+                },
+            );
+            r["structuredContent"]["device"] = json!(d.name);
+            r["structuredContent"]["device_id"] = json!(id);
+            r
+        }
+        Got::Answer(200, body) => {
+            let body = match serde_json::from_str::<Value>(&body) {
+                Ok(Value::Object(mut o)) => {
+                    o.insert("device".into(), json!(d.name));
+                    o.insert(
+                        "identity".into(),
+                        json!(match d.id {
+                            Some(_) => "confirmed".to_string(),
+                            None => format!("unconfirmed: not enrolled (the owner can run `luyaz-mcp enroll {}`)", d.name),
+                        }),
+                    );
+                    Value::Object(o).to_string()
+                }
+                _ => body,
+            };
+            tool_result(Got::Answer(200, body))
+        }
+        g => {
+            let mut r = tool_result(g);
+            if let Some(t) = r["content"][0]["text"].as_str() {
+                r["content"][0]["text"] = json!(format!("[{}] {t}", d.name));
+            }
+            r
+        }
+    }
+}
+
+/// The device's answer to `c`; with a pin, a change is only sent after a read shows the address
+/// still answers as the pinned device (the check after a POST would come too late).
+fn fetch_checked(c: &Call, pin: Option<&str>, fetch: &mut dyn FnMut(&Call) -> Got) -> Got {
+    if c.body.is_some() && pin.is_some() {
+        match check_identity(pin, fetch(&Call::get("/agent-api/health"))) {
+            Got::Answer(200, _) => {}
+            other => return other,
+        }
+    }
+    check_identity(pin, fetch(c))
+}
+
 /// One JSON-RPC message in, at most one out (notifications get none).
 pub fn handle(msg: &Value, fetch: &mut dyn FnMut(&Call) -> Got) -> Option<Value> {
     handle_pinned(msg, None, fetch)
@@ -347,6 +609,17 @@ pub fn handle_pinned(
     pin: Option<&str>,
     fetch: &mut dyn FnMut(&Call) -> Got,
 ) -> Option<Value> {
+    let setup = Setup::Single { url: DEFAULT_URL.into(), pin: pin.map(str::to_owned) };
+    handle_setup(msg, &setup, &mut |_: Option<&Device>, c: &Call| fetch(c))
+}
+
+/// [`handle`] for a setup: the single device or the device list (`fetch` gets the listed device,
+/// None for the single one).
+pub fn handle_setup(
+    msg: &Value,
+    setup: &Setup,
+    fetch: &mut dyn FnMut(Option<&Device>, &Call) -> Got,
+) -> Option<Value> {
     let id = msg.get("id").cloned();
     let method = msg["method"].as_str().unwrap_or("");
     let id = id?; // a notification (initialized, cancelled, …): nothing to say
@@ -355,20 +628,20 @@ pub fn handle_pinned(
             "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or(PROTOCOL),
             "capabilities": {"tools": {"listChanged": false}},
             "serverInfo": {"name": "luyaz-mcp", "version": env!("CARGO_PKG_VERSION")},
-            "instructions": "One Luya-Z router. The get_* and diagnose tools only read. set_chill_profile, set_chill_exit, use_apn and change_apn change the device and need a token the owner marked `act`; the device checks every change itself, tries it for up to 2 minutes and rolls it back when it does not get through. A `sensitive` answer comes with a page URL: hand it to the owner and stop.",
+            "instructions": "Luya-Z routers (one, or several in the owner's device list: list_devices names them; pass `device` when there is more than one). The get_* and diagnose tools only read. set_chill_profile, set_chill_exit, use_apn and change_apn change the device and need a token the owner marked `act`; the device checks every change itself, tries it for up to 2 minutes and rolls it back when it does not get through. A `sensitive` answer comes with a page URL: hand it to the owner and stop.",
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools": tools()})),
         "tools/call" => {
             let name = msg["params"]["name"].as_str().unwrap_or("");
             let args = &msg["params"]["arguments"];
-            match call_for(name, args) {
-                Ok(c) => {
-                    let verb = if c.body.is_some() { "POST" } else { "GET" };
-                    eprintln!("[luyaz-mcp] {name} → {verb} {}", c.path);
-                    Ok(tool_result(check_identity(pin, fetch(&c))))
+            if name == "list_devices" {
+                Ok(list_devices(setup))
+            } else {
+                match call_for(name, args) {
+                    Ok(c) => Ok(call_device(name, &c, &args["device"], setup, fetch)),
+                    Err(e) => Err((-32602, e)),
                 }
-                Err(e) => Err((-32602, e)),
             }
         }
         _ => Err((-32601, format!("method not found: {method}"))),
@@ -379,6 +652,57 @@ pub fn handle_pinned(
             json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": m}})
         }
     })
+}
+
+fn list_devices(setup: &Setup) -> Value {
+    let v = match setup {
+        Setup::Single { url, pin } => json!({
+            "list": false,
+            "note": "No device list: this server talks to one device (LUYAZ_MCP_URL); `device` is not used.",
+            "devices": [{"address": url, "enrolled": pin.is_some()}],
+        }),
+        Setup::List(list) => json!({
+            "list": true,
+            // the enrolled id (not a secret) lets the alert script keep its place across a rename
+            "devices": list.iter().map(|d| {
+                let mut v = json!({"name": d.name, "address": d.address, "enrolled": d.id.is_some()});
+                if let Some(id) = &d.id {
+                    v["device_id"] = json!(id);
+                }
+                v
+            }).collect::<Vec<_>>(),
+        }),
+        Setup::Broken(why) => return tool_error("devices_file", why.clone()),
+    };
+    json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}], "isError": false})
+}
+
+fn call_device(
+    name: &str,
+    c: &Call,
+    want: &Value,
+    setup: &Setup,
+    fetch: &mut dyn FnMut(Option<&Device>, &Call) -> Got,
+) -> Value {
+    let verb = if c.body.is_some() { "POST" } else { "GET" };
+    match setup {
+        Setup::Broken(why) => tool_error("devices_file", why.clone()),
+        Setup::Single { pin, .. } => {
+            if !want.is_null() {
+                return tool_error("unknown_device", "There is no device list (~/.config/luyaz/devices), so `device` cannot be chosen: this server talks to one device.".into());
+            }
+            eprintln!("[luyaz-mcp] {name} → {verb} {}", c.path);
+            result_for(fetch_checked(c, pin.as_deref(), &mut |c| fetch(None, c)), None)
+        }
+        Setup::List(list) => match select(list, want) {
+            Err((code, why)) => tool_error(code, why),
+            Ok(d) => {
+                eprintln!("[luyaz-mcp] {name} → {} {verb} {}", d.name, c.path);
+                let got = fetch_checked(c, d.id.as_deref(), &mut |c| fetch(Some(d), c));
+                result_for(got, Some(d))
+            }
+        },
+    }
 }
 
 // ---- plain HTTP/1.1 GET ----
@@ -507,40 +831,110 @@ fn read_token(path: &str) -> Result<String, String> {
         .ok_or_else(|| format!("{path}: no token line"))
 }
 
+/// `luyaz-mcp enroll <name>`: read the listed device's id and write it into its line (R5).
+fn enroll(name: &str) -> Result<String, String> {
+    let path = devices_path();
+    let list = match load_setup(&path, || Setup::Broken(format!("There is no device list at {}: add a line `{name} address tokenfile` first.", path.display()))) {
+        Setup::List(l) => l,
+        Setup::Broken(why) => return Err(why),
+        Setup::Single { .. } => unreachable!(),
+    };
+    let d = select(&list, &json!(name)).map_err(|(_, why)| why)?;
+    let token = read_token(&d.token_file.to_string_lossy())?;
+    let id = match get(&d.host, d.port, &Call::get("/agent-api/health"), token.trim()) {
+        Got::Answer(200, body) => serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|v| v["device_id"].as_str().and_then(norm_id))
+            .ok_or_else(|| format!("{name} ({}) answered without a device_id: its admin web (lweb) is too old. Update it, then enroll again.", d.address))?,
+        other => {
+            let r = tool_result(other);
+            return Err(format!("{name} ({}): {}", d.address, r["content"][0]["text"].as_str().unwrap_or("no answer")));
+        }
+    };
+    let before = write_id(&path, name, &id)?;
+    Ok(match before {
+        Some(old) if old == id => format!("{name}: already enrolled as {id}"),
+        Some(old) => format!("{name}: enrolled as {id} (was {old}: this address now answers as another device)"),
+        None => format!("{name}: enrolled as {id}"),
+    })
+}
+
 fn main() {
-    if std::env::args().nth(1).as_deref() == Some("--version") {
-        println!("luyaz-mcp {}", env!("CARGO_PKG_VERSION"));
-        return;
+    match std::env::args().nth(1).as_deref() {
+        Some("--version") => {
+            println!("luyaz-mcp {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
+        Some("enroll") => {
+            let Some(name) = std::env::args().nth(2) else {
+                eprintln!("usage: luyaz-mcp enroll <name from the device list>");
+                std::process::exit(2)
+            };
+            match enroll(&name) {
+                Ok(m) => println!("{m}"),
+                Err(e) => {
+                    eprintln!("luyaz-mcp enroll: {e}");
+                    std::process::exit(1)
+                }
+            }
+            return;
+        }
+        _ => {}
     }
     let url = std::env::var("LUYAZ_MCP_URL").unwrap_or_else(|_| DEFAULT_URL.into());
-    let (host, port) = parse_url(&url).unwrap_or_else(|e| {
-        eprintln!("[luyaz-mcp] {e}");
-        std::process::exit(2)
-    });
     let token_env = std::env::var("LUYAZ_MCP_TOKEN")
         .ok()
         .filter(|t| !t.trim().is_empty());
     let token_file = std::env::var("LUYAZ_MCP_TOKEN_FILE").unwrap_or_default();
-    // the file is read on each call: a token replaced on disk takes effect without restarting
-    let mut fetch = |c: &Call| match token_env
-        .clone()
-        .map(Ok)
-        .unwrap_or_else(|| read_token(&token_file))
-    {
-        Ok(t) => get(&host, port, c, t.trim()),
-        Err(e) => Got::Unreachable(format!(
-            "no token: {e} (set LUYAZ_MCP_TOKEN or LUYAZ_MCP_TOKEN_FILE)"
-        )),
+    let devices = devices_path();
+    let first = load_setup(&devices, || Setup::Single { url: url.clone(), pin: None });
+    // the single device is configured (and checked) only when there is no list
+    let single = if matches!(first, Setup::Single { .. }) {
+        let (host, port) = parse_url(&url).unwrap_or_else(|e| {
+            eprintln!("[luyaz-mcp] {e}");
+            std::process::exit(2)
+        });
+        let pin = parse_pin(std::env::var("LUYAZ_MCP_DEVICE_ID").ok().as_deref()).unwrap_or_else(|e| {
+            eprintln!("[luyaz-mcp] {e}");
+            std::process::exit(2)
+        });
+        eprintln!(
+            "[luyaz-mcp] device {host}:{port}{}",
+            pin.as_deref().map(|p| format!(" pinned {p}")).unwrap_or_default()
+        );
+        Some((host, port, pin))
+    } else {
+        eprintln!("[luyaz-mcp] device list {}", devices.display());
+        None
     };
-    let pin = parse_pin(std::env::var("LUYAZ_MCP_DEVICE_ID").ok().as_deref()).unwrap_or_else(|e| {
-        eprintln!("[luyaz-mcp] {e}");
-        std::process::exit(2)
-    });
-    let pin = pin.as_deref();
-    eprintln!(
-        "[luyaz-mcp] device {host}:{port}{}",
-        pin.map(|p| format!(" pinned {p}")).unwrap_or_default()
-    );
+    // the files are read on each call: a token replaced on disk, or a list edited or enrolled,
+    // takes effect without restarting
+    let mut fetch = |d: Option<&Device>, c: &Call| {
+        let (host, port, token) = match d {
+            Some(d) => (d.host.clone(), d.port, read_token(&d.token_file.to_string_lossy())),
+            None => {
+                let Some((host, port, _)) = &single else {
+                    return Got::Unreachable("the device list appeared after start: restart luyaz-mcp".into());
+                };
+                (
+                    host.clone(),
+                    *port,
+                    token_env.clone().map(Ok).unwrap_or_else(|| read_token(&token_file)),
+                )
+            }
+        };
+        match token {
+            Ok(t) => get(&host, port, c, t.trim()),
+            Err(e) => Got::Unreachable(format!(
+                "no token: {e} ({})",
+                if d.is_some() { "the third column of the device list" } else { "set LUYAZ_MCP_TOKEN or LUYAZ_MCP_TOKEN_FILE" }
+            )),
+        }
+    };
+    let setup_now = || match &single {
+        Some((_, _, pin)) => load_setup(&devices, || Setup::Single { url: url.clone(), pin: pin.clone() }),
+        None => load_setup(&devices, || Setup::Broken(format!("The device list {} is gone: restart luyaz-mcp to use LUYAZ_MCP_URL.", devices.display()))),
+    };
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
     for line in stdin.lock().lines() {
@@ -550,10 +944,11 @@ fn main() {
         }
         let reply = match serde_json::from_str::<Value>(&line) {
             Ok(Value::Array(batch)) => {
-                let r: Vec<Value> = batch.iter().filter_map(|m| handle_pinned(m, pin, &mut fetch)).collect();
+                let setup = setup_now();
+                let r: Vec<Value> = batch.iter().filter_map(|m| handle_setup(m, &setup, &mut fetch)).collect();
                 (!r.is_empty()).then_some(Value::Array(r))
             }
-            Ok(m) => handle_pinned(&m, pin, &mut fetch),
+            Ok(m) => handle_setup(&m, &setup_now(), &mut fetch),
             Err(_) => Some(json!({"jsonrpc": "2.0", "id": null,
                                   "error": {"code": -32700, "message": "parse error"}})),
         };

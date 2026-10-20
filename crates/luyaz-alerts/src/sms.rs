@@ -191,22 +191,28 @@ fn body_en(kind: &str) -> String {
 /// The SMS for one alert: language, the device-local time now, and the short code `#<seq>`
 /// (D15: the guard's text, unchanged, plus the code at the end). The code is the last three digits
 /// of the queue seq: enough to tell a resent duplicate from a new alert, and the longest English
-/// text stays one 70-character SMS.
-pub fn sms_text(kind: &str, en: bool, wall: i64, seq: u64) -> String {
+/// text stays one 70-character SMS. A device name (`sms-name`, 10-20: two U60s alerting one
+/// phone) goes after the signature, `【Luya-Z】名字：…`; the longer texts then go out as a long
+/// SMS (UCS-2 over 70 characters: the firmware splits it, the phone shows one; CN B31, 10-20).
+pub fn sms_text(kind: &str, en: bool, wall: i64, seq: u64, name: Option<&str>) -> String {
     let (_, mo, d, h, mi, _) = civil(wall);
     let seq = seq % 1000;
+    let (name_zh, name_en) = match name {
+        Some(n) => (format!("{n}："), format!("{n}: ")),
+        None => (String::new(), String::new()),
+    };
     if en {
         const MON: [&str; 12] = [
             "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
         ];
         format!(
-            "[Luya-Z] {} ({d:02} {} {h:02}:{mi:02})#{seq}",
+            "[Luya-Z] {name_en}{} ({d:02} {} {h:02}:{mi:02})#{seq}",
             body_en(kind),
             MON[(mo - 1) as usize]
         )
     } else {
         format!(
-            "【Luya-Z】{}（{mo:02}-{d:02} {h:02}:{mi:02}）#{seq}",
+            "【Luya-Z】{name_zh}{}（{mo:02}-{d:02} {h:02}:{mi:02}）#{seq}",
             body_zh(kind)
         )
     }
@@ -530,7 +536,8 @@ impl Alerts {
                 Verdict::Record(r) => Some(r),
                 Verdict::Send => {
                     let number = number.unwrap_or_default();
-                    let text = sms_text(&ev.kind, io.lang_en(), wall, ev.seq);
+                    let name = self.sms_name();
+                    let text = sms_text(&ev.kind, io.lang_en(), wall, ev.seq, name.as_deref());
                     let tz = io.tz_hours();
                     match io.send(&send_args(&number, &text, wall, tz)) {
                         Ok(()) => {

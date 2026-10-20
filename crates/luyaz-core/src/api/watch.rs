@@ -499,11 +499,27 @@ fn answer(r: Result<(u16, Value), tokio::task::JoinError>) -> Response {
 /// GET /api/diagnose
 pub async fn diagnose_get(State(c): State<Compat>) -> Response {
     let (s, mut v) = c.group.diag.get();
+    // the run itself, before the fields below are added next to it
+    let slow = super::slow_signal::view(&v["data"], c.src.hub.as_deref());
+    // parses the ledger again once an hour: off the async workers
+    let hub = c.src.hub.clone();
+    let (hot, idle) = tokio::task::spawn_blocking(move || {
+        (
+            super::hot_drain::view(),
+            super::long_idle::view(hub.as_deref()),
+        )
+    })
+    .await
+    .unwrap_or((Value::Null, Value::Null));
     // D6: the old fields as they are, plus the open finding (null when none)
     if let Some(d) = v.get_mut("data").and_then(Value::as_object_mut) {
         d.insert("finding".into(), c.group.findings.view());
         d.insert("proposal".into(), c.group.producer.view());
         d.insert("connectivity".into(), c.group.findings.network_view());
+        d.insert("band_flap".into(), super::band_flap::view());
+        d.insert("hot_drain".into(), hot);
+        d.insert("long_idle".into(), idle);
+        d.insert("slow_signal".into(), slow);
     }
     reply(s, v)
 }

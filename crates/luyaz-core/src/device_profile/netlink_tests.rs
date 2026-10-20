@@ -84,7 +84,10 @@ fn parse_reads_link_names_addr_index_and_route_oif() {
                 flags: UP,
                 gone: false
             },
-            Msg::Addr { index: 17 },
+            Msg::Addr {
+                index: 17,
+                gone_global: true
+            },
             Msg::Route { oif: Some(17) },
         ]
     );
@@ -108,7 +111,20 @@ fn same_ip_redial_bumps_on_both_delete_and_add() {
     let mut redial = addr(RTM_DELADDR, 17);
     redial.extend(route(RTM_DELROUTE, 17));
     redial.extend(addr(RTM_NEWADDR, 17));
-    assert_eq!(steps(&mut t, &redial), [Step::Bump, Step::Bump, Step::Bump]);
+    // the delete is also a drop (band_flap), which bumps too
+    assert_eq!(steps(&mut t, &redial), [Step::Drop, Step::Bump, Step::Bump]);
+}
+
+#[test]
+fn only_a_global_address_leaving_ours_is_a_drop() {
+    let mut t = live();
+    // link-local (scope 253) leaving: a bump, not a drop
+    let mut ll = addr(RTM_DELADDR, 17);
+    ll[16 + 3] = 253;
+    assert_eq!(steps(&mut t, &ll), [Step::Bump]);
+    // before the dump completes: nothing
+    let mut fresh = Tracker::default();
+    assert_eq!(steps(&mut fresh, &addr(RTM_DELADDR, 17)), [Step::Nothing]);
 }
 
 #[test]
@@ -288,14 +304,23 @@ fn a_mode_read_and_a_reprobe_both_restore_the_radio_epoch() {
     c.connection_live(true);
     c.sim_listening();
     // The `zte_nwinfo` UCI collection path (`uci`), not `radio_read`: 1.6.1 missed it.
-    let values = [("zte_nwinfo.sys_info.operate_mode".to_string(), "ONLINE".to_string())]
-        .into_iter()
-        .collect();
+    let values = [(
+        "zte_nwinfo.sys_info.operate_mode".to_string(),
+        "ONLINE".to_string(),
+    )]
+    .into_iter()
+    .collect();
     c.uci(c.token(), "zte_nwinfo", &values, None);
     assert_eq!(c.token().context.radio_mode.as_deref(), Some("ONLINE"));
-    assert!(radio(&c).is_some(), "a mode read must not leave the radio epoch behind");
+    assert!(
+        radio(&c).is_some(),
+        "a mode read must not leave the radio epoch behind"
+    );
     c.radio_read(c.token(), Some("LOW_POWER"), None);
-    assert!(radio(&c).is_some(), "a mode change gives a new value while both are live");
+    assert!(
+        radio(&c).is_some(),
+        "a mode change gives a new value while both are live"
+    );
     // An executor ubus error revokes; the listener answering the re-sent probe re-arms.
     c.invalidate_context(Loss::Ubus);
     assert_eq!(radio(&c), None);

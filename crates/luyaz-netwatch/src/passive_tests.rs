@@ -159,11 +159,11 @@ fn uncertain_passive_data_sends_no_dns_and_cannot_admit_manual_fallback() {
     let w = Watch::new();
     let st = json!({"net":{"wan_status":"ipv4_connected","wan_dns":"192.0.2.53"},
                         "traffic":{"rx_bytes":10}});
-    let never_probe = |_: &[String]| -> Option<u32> { panic!("unexpected DNS probe") };
+    let never_probe = |_: &Snapshot| -> Option<u32> { panic!("unexpected DNS probe") };
     assert!(!w.cell_alive_with(Some(&bt(0)), never_probe));
     w.tick(0, Some(&bt(0)), Ok(st.clone()), None);
-    assert!(w.cell_alive_with(Some(&bt(0)), |dns| {
-        assert_eq!(dns, ["192.0.2.53"]);
+    assert!(w.cell_alive_with(Some(&bt(0)), |s| {
+        assert_eq!(s.dns, ["192.0.2.53"]);
         Some(5)
     }));
     assert!(!w.cell_alive_with(None, never_probe));
@@ -202,4 +202,64 @@ fn uncertain_passive_data_sends_no_dns_and_cannot_admit_manual_fallback() {
         None,
     );
     assert!(!w.cell_alive_with(Some(&bt(15)), never_probe));
+}
+
+/// R18-P0-02 ①: the snapshot carries the IPv4 cellular path of the same observation; an
+/// observation without interface identity has none (unknown), and nothing is carried over.
+#[test]
+fn snapshot_takes_the_ipv4_cellular_path_or_none() {
+    let st = json!({"net":{"wan_status":"ipv4_connected","wan_dns":"192.0.2.53"},
+        "interfaces":{"cellular":{"ipv4_dev_name":"rmnet_data0","ipv4_address":"10.1.2.3"},
+            "wan4":{"device":"rmnet_data0","up":true}}});
+    let s = sample(&Snapshot::default(), 0, Some(&bt(1)), Some(&st), Some(1));
+    let p = s.path.clone().expect("path from interfaces");
+    assert_eq!(p.interface, "rmnet_data0");
+    assert_eq!(p.source.to_string(), "10.1.2.3");
+    let bare = json!({"net":{"wan_status":"ipv4_connected","wan_dns":"192.0.2.53"}});
+    let s2 = sample(&s, 5, Some(&bt(6)), Some(&bare), Some(2));
+    assert_eq!(s2.path, None, "not carried over from the older sample");
+    assert_eq!(s2.dns, ["192.0.2.53"]);
+}
+
+/// Missing interface = unknown: no query on the default route, even with a DNS server known.
+#[test]
+fn no_interface_sends_no_direct_dns() {
+    let s = Snapshot {
+        dns: vec!["127.0.0.1".into()],
+        path: None,
+        ..Snapshot::default()
+    };
+    assert_eq!(crate::dns_rtt_ms(&s), None);
+}
+
+/// The direct query uses Finding's bound socket: bound to `lo` it reaches a loopback resolver,
+/// bound to an interface that does not exist it says nothing. Skipped without CAP_NET_RAW.
+#[test]
+#[cfg(target_os = "linux")]
+fn direct_dns_query_is_bound_to_the_path() {
+    let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let addr = sock.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let mut b = [0; 512];
+        while let Ok((n, peer)) = sock.recv_from(&mut b) {
+            let mut r = b[..n].to_vec();
+            r[2] |= 0x80;
+            r[3] = 0x80;
+            r[7] = 1;
+            r.extend_from_slice(&[0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 192, 0, 2, 1]);
+            let _ = sock.send_to(&r, peer);
+        }
+    });
+    let path = |iface: &str| crate::finding::path::Path {
+        interface: iface.into(),
+        source: addr.ip(),
+        source_kind: "fixture",
+        dns: vec![],
+    };
+    if crate::finding::path::socket(&path("lo"), true).is_err() {
+        eprintln!("skipped: cannot bind to a device here");
+        return;
+    }
+    assert!(crate::dns_query_ms(&path("lo"), addr).is_some());
+    assert_eq!(crate::dns_query_ms(&path("nosuch0"), addr), None);
 }

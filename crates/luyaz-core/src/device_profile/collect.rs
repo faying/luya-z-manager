@@ -520,6 +520,7 @@ impl Collector {
     pub(crate) fn connection_live(&self, live: bool) {
         let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
         g.conn_live = live;
+        crate::api::band_flap::live(live);
         g.context.connection_epoch = None;
         g.remint_connection();
         g.bump_radio();
@@ -530,6 +531,7 @@ impl Collector {
     pub(crate) fn sim_listening(&self) {
         let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
         g.sim_live = true;
+        crate::api::band_flap::sim_changed();
         g.context.sim_epoch = None;
         g.remint_sim();
         g.bump_radio();
@@ -538,6 +540,7 @@ impl Collector {
 
     /// Any `zwrt_card_state_event` (hot remove, ready, repeats): a new SIM epoch.
     pub(crate) fn sim_event(&self) {
+        crate::api::band_flap::sim_changed();
         let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
         g.context.sim_epoch = None;
         g.remint_sim();

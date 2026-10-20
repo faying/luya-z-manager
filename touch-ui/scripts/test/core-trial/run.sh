@@ -557,7 +557,7 @@ for _m in ssd none; do
     launch LUYAZ_UBUS=cli
     EXPECT=$(sh "$TRIAL" print-launch LUYAZ_UBUS=cli | sed 's/^env //; s/ nohup .*//')
     check "$_m launch: exit 0" '[ "$RC" = 0 ]'
-    check "$_m launch: test build args" "sed -n 1p '$T/nohup.log' | grep -qx '$T/luyaz-core.test -i 1000 --lan-bind 0.0.0.0 --lan-port 9461 --auth-token-file /data/luyaz/core/auth.token'"
+    check "$_m launch: test build args" "sed -n 1p '$T/nohup.log' | grep -qx '$T/luyaz-core.test -i 1000 --lan-bind 127.0.0.1 --lan-port 9461 --auth-token-file /data/luyaz/core/auth.token'"
     check "$_m launch: env reached the test build" "grep -q 'UBUS=cli ROLLBACK=[01]' '$T/data/test.log'"
     check "$_m launch: stdout and stderr in test log" "grep -q '^out: ' '$T/data/test.log' && grep -q '^err: stderr' '$T/data/test.log'"
     check "$_m launch: header kept" "sed -n 1p '$T/data/test.log' | grep -q '^=== '"

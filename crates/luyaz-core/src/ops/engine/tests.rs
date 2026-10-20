@@ -116,7 +116,7 @@ impl Device for Dev {
             probe: None,
         })
     }
-    async fn probe(&self, target: &ProbeTarget) -> Result<(), String> {
+    async fn probe(&self, target: &ProbeTarget) -> Result<(), txn::ProbeErr> {
         let mut s = self.s();
         // IPv6 探测记成「接口/v6」（D41）
         s.probes.push(if target.v6 {

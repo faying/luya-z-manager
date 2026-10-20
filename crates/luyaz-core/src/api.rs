@@ -32,6 +32,10 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use luyaz_api::alerts::Alerts;
 
+pub(crate) mod band_flap;
+pub(crate) mod hot_drain;
+pub(crate) mod long_idle;
+pub(crate) mod slow_signal;
 mod cell_detect;
 mod charge;
 mod health;
@@ -804,6 +808,14 @@ mod tests_manual_first;
 mod tests_ops;
 #[cfg(test)]
 mod tests_watch;
+#[cfg(test)]
+mod tests_band_flap;
+#[cfg(test)]
+mod tests_hot_drain;
+#[cfg(test)]
+mod tests_long_idle;
+#[cfg(test)]
+mod tests_slow_signal;
 #[cfg(test)]
 mod tests_sys_reads;
 #[cfg(test)]

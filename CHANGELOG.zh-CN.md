@@ -18,6 +18,14 @@
 
 ## Unreleased
 
+## lweb 1.9.0 — 2026-10-20
+
+- `/agent-api` 的每个回应都带 `device_id`（`/data/luyaz/agent.id` 里的 12 位随机十六进制，0600，第一次回应时生成），供 `luyaz-mcp enroll` 钉住设备（多台 U60，u60-mcp.md R2）。
+
+## core 1.10.0 — 2026-10-20
+
+- 告警短信可以在签名后带设备名（`/data/alerts/sms-name`，或 PUT /api/alerts/sms 的 `"name"`）：【Luya-Z】U60Pro全球版：… ；超过 70 字的作为一条长短信发出
+
 ## core 1.7.2 — 2026-10-20
 
 - 退回 ENDC 后保留的 NR 会话不再显示成旧的。

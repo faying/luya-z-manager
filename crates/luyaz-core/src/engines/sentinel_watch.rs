@@ -366,7 +366,7 @@ fn uis(c: &Compat) -> (bool, bool) {
     (ours, vendor)
 }
 
-fn mono_s() -> i64 {
+pub(crate) fn mono_s() -> i64 {
     let mut ts = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,

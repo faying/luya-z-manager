@@ -50,7 +50,9 @@ pub trait Device: Send + Sync + 'static {
     /// 一次新鲜读数（不用缓存）：这一项的配置读回、是否已注册、完整 SIM 身份、数据通路。
     fn read(&self, spec: &'static Spec) -> impl Future<Output = Result<Reading, String>> + Send;
     /// 一次 DNS 探测（D25、D33）：绑定到蜂窝接口，问运营商 DNS，有回答就算通。
-    fn probe(&self, target: &ProbeTarget) -> impl Future<Output = Result<(), String>> + Send;
+    /// `Err` 的 `local` = 本机就没发出去（unknown，R18-P0-02）。
+    fn probe(&self, target: &ProbeTarget)
+    -> impl Future<Output = Result<(), txn::ProbeErr>> + Send;
     /// 提交时按设备现状定目标值：占位换成真值（`band.reset {}` → 默认的三组频段）、APN 的指纹和检查；
     /// `Ok(None)` = 这次不算事务（改的不是正在用的 APN），照原来的 `/control` 做。别的原样回。
     fn resolve(
@@ -185,6 +187,8 @@ struct LegacyReq {
 const RECENT: usize = 16;
 /// 等确认期间至少隔这么久落一次盘（重启后算上一次开机等了多久）。
 const SEEN_SAVE_MS: u64 = 10_000;
+/// 锁外探测（DNS 最长 6 秒、CHILL 约 7 秒）加复核读数最多这么久，超过就不算新鲜（R18-P0-02 ③）。
+const PROBE_FRESH_MS: u64 = 15_000;
 
 /// DD18：第一次打开自动退回时的提示。
 pub const NOTICE_ROLLBACK_ON: &str = "rollback_on";
@@ -1112,18 +1116,38 @@ impl<D: Device> Engine<D> {
                 None => None,
             };
             // 读数别的条件都齐了：在锁外做一次 DNS 探测（不经执行者、不拿写锁）。
-            if let Some(Ok(r)) = &mut reading {
+            let mut probe_unknown = false;
+            if let (Some(Ok(r)), Some(s)) = (&mut reading, spec) {
                 let target = {
                     let mut st = self.lock();
                     let Some(t) = st.live(&op_id) else { break };
                     t.wants_probe(r, self.now())
                 };
                 if let Some(target) = target {
+                    let started = self.now();
                     let result = self.inner.dev.probe(&target).await;
-                    if let Err(e) = &result {
-                        self.log_probe_failure(&op_id, &target, e);
+                    r.probe = match &result {
+                        Ok(()) => Some(true),
+                        Err(e) if e.local => {
+                            eprintln!(
+                                "ops: {op_id} DNS probe could not start ({e}); unknown, not counted"
+                            );
+                            None
+                        }
+                        Err(e) => {
+                            self.log_probe_failure(&op_id, &target, &e.msg);
+                            Some(false)
+                        }
+                    };
+                    // R18-P0-02 ③：探测在锁外，喂回前像 Finding 那样复核新鲜度和连接身份；变了就丢掉结果。
+                    if r.probe.is_some() && !self.probe_still_current(s, r, &target, started).await
+                    {
+                        eprintln!(
+                            "ops: {op_id} connection changed during the probe; result dropped"
+                        );
+                        r.probe = None;
                     }
-                    r.probe = Some(result.is_ok());
+                    probe_unknown = r.probe.is_none();
                 }
             }
             let now = self.now();
@@ -1132,6 +1156,9 @@ impl<D: Device> Engine<D> {
             if t.generation != generation {
                 // 读的时候阶段变了（用户点了退回/保留）：这个读数不算。
                 continue;
+            }
+            if probe_unknown {
+                t.probe_unknown(now);
             }
             // 结果都在事务里：终态由 finish 收，要退回的下一圈由上面发。
             let _ = match &reading {
@@ -1143,6 +1170,35 @@ impl<D: Device> Engine<D> {
             self.finish(&mut st);
         }
         self.kick_legacy();
+    }
+
+    /// 锁外探测的结果还算不算数（R18-P0-02 ③，同 Finding 的取样复核）：探测连读数不超过
+    /// [`PROBE_FRESH_MS`]，再新鲜读一次，SIM、接口、连接身份（[`txn::Conn::still`]）都没变。CHILL 的
+    /// 路径探测没有蜂窝连接可比，只看时间。读不到 = 不能证明没变，丢掉。
+    async fn probe_still_current(
+        &self,
+        spec: &'static Spec,
+        before: &Reading,
+        target: &ProbeTarget,
+        started: u64,
+    ) -> bool {
+        if self.now().saturating_sub(started) > PROBE_FRESH_MS {
+            return false;
+        }
+        if target.chill {
+            return true;
+        }
+        let Ok(after) = self.inner.dev.read(spec).await else {
+            return false;
+        };
+        let (Some(a), Some(b)) = (&before.data, &after.data) else {
+            return false;
+        };
+        after.sim == before.sim
+            && b.connected
+            && b.iface == target.iface
+            && a.conn.still(&b.conn)
+            && self.now().saturating_sub(started) <= PROBE_FRESH_MS
     }
 
     /// 探测失败每轮只在第一次失败、和失败满次数时各记一行（契约测试里每拍都会失败）。

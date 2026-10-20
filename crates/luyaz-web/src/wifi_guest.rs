@@ -1186,6 +1186,12 @@ pub async fn ask(State(app): State<Shared>, req: axum::extract::Request) -> impl
             Ok(s) => {
                 let mut c = confirm(&s, l);
                 crate::follow::receipt_note(&mut c, ctx.remote, l);
+                let kind = if s.reconnect.is_some() {
+                    luyaz_api::execution::wifi_change::Change::Settings
+                } else {
+                    luyaz_api::execution::wifi_change::Change::OnOff
+                };
+                crate::follow::remote_risk_note(&mut c, ctx.remote, kind, None, l);
                 let t = put(s);
                 area(l, ctx.remote, &t, &write::Phase::Ask(c))
             }

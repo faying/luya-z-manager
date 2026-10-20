@@ -296,7 +296,7 @@ pub fn observe(
 
 pub struct BoundSockets;
 
-fn socket(path: &Path, udp: bool) -> std::io::Result<Socket> {
+pub(crate) fn socket(path: &Path, udp: bool) -> std::io::Result<Socket> {
     if !valid_interface(&path.interface) {
         return Err(std::io::ErrorKind::InvalidInput.into());
     }

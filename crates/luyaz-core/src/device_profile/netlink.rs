@@ -38,6 +38,8 @@ pub(crate) enum Msg {
     },
     Addr {
         index: u32,
+        /// RTM_DELADDR of a scope-universe address: a drop for `radio.band_flap`.
+        gone_global: bool,
     },
     Route {
         oif: Option<u32>,
@@ -87,6 +89,7 @@ pub(crate) fn parse(mut buf: &[u8]) -> Result<Vec<Msg>, ()> {
                 }
                 Msg::Addr {
                     index: u32::from_ne_bytes(body[4..8].try_into().unwrap()),
+                    gone_global: kind == RTM_DELADDR && body[3] == 0,
                 }
             }
             RTM_NEWROUTE | RTM_DELROUTE => {
@@ -141,6 +144,8 @@ pub(crate) enum Step {
     Live,
     /// A data-interface change: mint a new epoch.
     Bump,
+    /// A global address left a data interface: mint a new epoch and count a drop.
+    Drop,
     /// Revoke and resubscribe.
     Lost,
 }
@@ -207,7 +212,13 @@ impl Tracker {
                 }
                 ours || self.rmnet.contains(index)
             }
-            Msg::Addr { index } | Msg::Route { oif: Some(index) } => {
+            Msg::Addr {
+                index,
+                gone_global: true,
+            } if self.live && (!self.known.contains(index) || self.rmnet.contains(index)) => {
+                return Step::Drop;
+            }
+            Msg::Addr { index, .. } | Msg::Route { oif: Some(index) } => {
                 !self.known.contains(index) || self.rmnet.contains(index)
             }
             // A route without an output interface: can't rule it out.
@@ -305,6 +316,10 @@ fn run(hub: &crate::block::Hub) -> bool {
                     Step::Nothing => {}
                     Step::Live => hub.firmware().connection_live(true),
                     Step::Bump => hub.firmware().connection_event(),
+                    Step::Drop => {
+                        hub.firmware().connection_event();
+                        crate::api::band_flap::drop_seen(hub);
+                    }
                     Step::Lost => return tracker.live,
                 }
             }
