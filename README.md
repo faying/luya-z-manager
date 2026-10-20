@@ -22,7 +22,7 @@ Clear signal readouts, band and cell locking, eSIM, SMS, health checks and a wat
 > **Hardware:** runs on the ZTE U60 Pro (MU5250). Community project, not affiliated with ZTE. Use at your own risk.
 
 > [!IMPORTANT]
-> **Can I install it?** A fresh install needs firmware **B27 or earlier**. From B28 on, ZTE removed the interface the installer uses to get in, and there is no verified way around it yet. Check your version first ([how](docs/GETTING-STARTED.md#2-prerequisites)) and **do not update the firmware before installing**.
+> **Can I install it?** A fresh install works on firmware **B31 or earlier**. On B27 or earlier the installer gets in by itself; from B28 on ZTE removed that interface, so you first ***REMOVED*** (tested on a device that came with B31; ***REMOVED***). Versions after B31 are untested. Check your version first ([how](docs/GETTING-STARTED.md#2-prerequisites)) and **do not update the firmware before installing**.
 
 ## Contents
 
@@ -80,7 +80,7 @@ The proxy is not part of the full install. It ships with no subscription or pers
 | | |
 |---|---|
 | Device | ZTE U60 Pro (MU5250) |
-| Firmware for a fresh install | **B27 or earlier** (see the note at the top) |
+| Firmware for a fresh install | **B31 or earlier**; B28 – B31 need SSH opened first (see the note at the top) |
 | Build machine | Docker (macOS or Linux); the kit builds everything inside containers, no local toolchain needed |
 | Install | A computer on the device's Wi-Fi, a USB-C data cable and the router admin password |
 | Binaries | None published yet: you build them yourself, the guide has every step |
