@@ -366,7 +366,7 @@ pub async fn send_body_reply(
     request_timeout: Option<Duration>,
     l: Lang,
 ) -> Result<(Sent, Value), Outcome> {
-    let mut rb = http.post(control_url).json(body);
+    let mut rb = http.post(control_url).json(&crate::pin::stamp(body));
     if let Some(t) = request_timeout {
         rb = rb.timeout(t);
     }

@@ -191,8 +191,10 @@ pub fn dns_rtt_ms(servers: &[String]) -> Option<u32> {
     servers.iter().take(2).find_map(|ip| dns_query_ms(ip))
 }
 
-/// One `A` query for a fixed name; any well-formed reply with our id counts
-/// (even NXDOMAIN: the resolver answered, so the path works).
+/// One `A` query for a fixed name. Only a reply that passes Finding's check
+/// ([`finding::path::dns_answer`]: echoed question + an address for the name) counts; NXDOMAIN,
+/// SERVFAIL, NODATA or unrelated records are not liveness evidence (R18-P0-02). Still unbound:
+/// the watcher snapshot carries no interface identity; see u60-mcp.md「P0-02」.
 fn dns_query_ms(ip: &str) -> Option<u32> {
     let addr: SocketAddr = format!("{ip}:53").parse().ok()?;
     let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
@@ -205,8 +207,15 @@ fn dns_query_ms(ip: &str) -> Option<u32> {
     let deadline = t + DNS_TIMEOUT;
     while Instant::now() < deadline {
         let (n, from) = sock.recv_from(&mut buf).ok()?;
-        if from == addr && n >= 12 && buf[0..2] == id.to_be_bytes() && buf[2] & 0x80 != 0 {
-            return Some(t.elapsed().as_millis() as u32);
+        if from != addr {
+            continue;
+        }
+        match finding::path::dns_answer(&buf[..n], &q) {
+            Some(luyaz_api::finding::ResultState::Passed) => {
+                return Some(t.elapsed().as_millis() as u32);
+            }
+            Some(_) => return None,
+            None => {}
         }
     }
     None

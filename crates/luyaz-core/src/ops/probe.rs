@@ -1,9 +1,12 @@
 //! 确认用的 DNS 探测（write-op-layer.md D25、D33）：向运营商 DNS 发一个 A 查询（约 30 字节，回答约
 //! 100 字节），socket 绑定到蜂窝数据接口（`SO_BINDTODEVICE`），不经 mwan3 的其他出口。
 //! 连接只有 IPv6 时（D41）改向 IPv6 DNS 发 AAAA 查询，同样绑定接口。
-//! 有我们 id 的回答就算通，NXDOMAIN 也算（解析器回了话，路是通的）。不是 ubus，不经执行者。
+//! 回答要和 Finding 同一套校验（`luyaz_netwatch::finding::path::dns_answer`，R18-P0-02）：问题回显一致、
+//! 有这个名字（可经 CNAME）的同族地址才算通；NXDOMAIN/SERVFAIL 等错误码、NODATA、不相关的记录
+//! 都不算通（只有 id 不能证明解析器真在工作）。不是 ubus，不经执行者。
 
 use super::txn::ProbeTarget;
+use luyaz_api::finding::ResultState;
 use std::{
     net::{IpAddr, SocketAddr},
     time::Duration,
@@ -57,15 +60,20 @@ pub async fn query(iface: &str, addr: SocketAddr, timeout: Duration) -> Result<(
     sock.set_nonblocking(true).map_err(|e| e.to_string())?;
     let sock = tokio::net::UdpSocket::from_std(sock).map_err(|e| e.to_string())?;
     let id = rand::random::<u16>();
-    sock.send_to(&packet(id, NAME, qtype), addr)
-        .await
-        .map_err(|e| e.to_string())?;
+    let q = packet(id, NAME, qtype);
+    sock.send_to(&q, addr).await.map_err(|e| e.to_string())?;
     let mut buf = [0u8; 512];
     tokio::time::timeout(timeout, async {
         loop {
             let (n, from) = sock.recv_from(&mut buf).await.map_err(|e| e.to_string())?;
-            if from == addr && n >= 12 && buf[0..2] == id.to_be_bytes() && buf[2] & 0x80 != 0 {
-                return Ok(());
+            if from != addr {
+                continue;
+            }
+            match luyaz_netwatch::finding::path::dns_answer(&buf[..n], &q) {
+                Some(ResultState::Passed) => return Ok(()),
+                Some(ResultState::Failed) => return Err("DNS error rcode".to_string()),
+                Some(ResultState::Unknown) => return Err("answer without an address".to_string()),
+                None => {}
             }
         }
     })
@@ -172,6 +180,28 @@ mod tests {
         );
     }
 
+    /// 把收到的查询变成一个带地址的回答（Finding 的校验要问题回显 + 同族地址）。
+    pub(super) fn answer(q: &[u8], rcode: u8) -> Vec<u8> {
+        let mut r = q.to_vec();
+        r[2] |= 0x80;
+        r[3] = 0x80 | rcode;
+        if rcode != 0 {
+            return r;
+        }
+        r[7] = 1;
+        let qtype = [q[q.len() - 4], q[q.len() - 3]];
+        r.extend_from_slice(&[0xc0, 12]);
+        r.extend_from_slice(&qtype);
+        r.extend_from_slice(&[0, 1, 0, 0, 0, 60]);
+        if qtype == [0, 28] {
+            r.extend_from_slice(&[0, 16]);
+            r.extend_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        } else {
+            r.extend_from_slice(&[0, 4, 192, 0, 2, 1]);
+        }
+        r
+    }
+
     /// 一个只回 id 的假 DNS（记下问的是哪一类）。
     async fn stub_at(bind: &str) -> std::io::Result<(SocketAddr, Arc<Mutex<Vec<u16>>>)> {
         let s = tokio::net::UdpSocket::bind(bind).await?;
@@ -186,9 +216,7 @@ mod tests {
                         .unwrap()
                         .push(u16::from_be_bytes([buf[n - 4], buf[n - 3]]));
                 }
-                let mut r = buf[..n].to_vec();
-                r[2] |= 0x80;
-                let _ = s.send_to(&r, from).await;
+                let _ = s.send_to(&answer(&buf[..n], 0), from).await;
             }
         });
         Ok((addr, seen))
@@ -228,6 +256,52 @@ mod tests {
         assert!(err.starts_with("[::1]:53"), "{err}");
     }
 
+    /// 一个按 `rcode` 回答的假 DNS（0 = 带地址；`echo_only` = 只回 id、没有记录）。
+    async fn stub_with(rcode: u8, echo_only: bool) -> SocketAddr {
+        let s = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = s.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 512];
+            while let Ok((n, from)) = s.recv_from(&mut buf).await {
+                let r = if echo_only {
+                    let mut r = buf[..n].to_vec();
+                    r[2] |= 0x80;
+                    r
+                } else {
+                    answer(&buf[..n], rcode)
+                };
+                let _ = s.send_to(&r, from).await;
+            }
+        });
+        addr
+    }
+
+    /// R18-P0-02：NXDOMAIN、SERVFAIL、只回 id 的空回答都不算通（旧语义把它们当成通）。
+    #[tokio::test]
+    async fn nxdomain_servfail_and_empty_replies_are_not_alive() {
+        let ok = stub_with(0, false).await;
+        match query("lo", ok, Duration::from_secs(2)).await {
+            Ok(()) => {}
+            Err(e) if e.contains("Operation not permitted") => {
+                eprintln!("skipped: cannot bind to a device here ({e})");
+                return;
+            }
+            Err(e) => panic!("answer with an address: {e}"),
+        }
+        for (rcode, echo, want) in [
+            (3, false, "DNS error rcode"),
+            (2, false, "DNS error rcode"),
+            (0, true, "answer without an address"),
+        ] {
+            let a = stub_with(rcode, echo).await;
+            assert_eq!(
+                query("lo", a, Duration::from_secs(2)).await,
+                Err(want.to_string()),
+                "rcode {rcode} echo {echo}"
+            );
+        }
+    }
+
     /// 一个只回 id 的假 DNS。
     async fn stub() -> SocketAddr {
         let s = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -235,9 +309,7 @@ mod tests {
         tokio::spawn(async move {
             let mut buf = [0u8; 512];
             while let Ok((n, from)) = s.recv_from(&mut buf).await {
-                let mut r = buf[..n].to_vec();
-                r[2] |= 0x80;
-                let _ = s.send_to(&r, from).await;
+                let _ = s.send_to(&answer(&buf[..n], 0), from).await;
             }
         });
         addr

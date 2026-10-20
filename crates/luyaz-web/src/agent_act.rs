@@ -131,6 +131,32 @@ fn op_id() -> String {
 
 /// The core's answer → what the agent is told.
 pub fn shape(code: u16, v: &Value, url: Option<String>) -> Value {
+    shape_as(code, v, url, None)
+}
+
+/// Who allowed a change, which layer, whether the device undoes it, and where the owner can.
+pub fn authority(name: &str, layer: &str, auto: bool, page: Option<&str>) -> Value {
+    json!({
+        "granted_by": format!("agent token {name} (act) from act-allow"),
+        "layer": layer,
+        "rollback": if auto { "automatic within trial" } else { "none" },
+        "owner_can_undo": page,
+    })
+}
+
+/// `shape` plus an `authority` object on trial/done replies (`who` = token name, layer).
+pub fn shape_as(code: u16, v: &Value, url: Option<String>, who: Option<(&str, &str)>) -> Value {
+    let mut out = shape_inner(code, v, url.clone());
+    if let (Some((name, layer)), Some(state)) = (who, out["state"].as_str()) {
+        if state == "trial" || state == "done" {
+            let auto = state == "trial" && out["rollback_enabled"] != false;
+            out["authority"] = authority(name, layer, auto, url.as_deref());
+        }
+    }
+    out
+}
+
+fn shape_inner(code: u16, v: &Value, url: Option<String>) -> Value {
     let err = &v["error"];
     let ecode = err["code"].as_str().or(v["code"].as_str()).unwrap_or("");
     let message = err["message"].as_str().or(err.as_str()).unwrap_or("");
@@ -185,7 +211,7 @@ async fn control(app: &Shared, action: &str, params: Value) -> Result<(u16, Valu
         .http
         .post(&app.control_url)
         .timeout(std::time::Duration::from_secs(60))
-        .json(&body)
+        .json(&crate::pin::stamp(&body))
         .send()
         .await
         .map_err(|_| ())?;
@@ -196,7 +222,10 @@ async fn control(app: &Shared, action: &str, params: Value) -> Result<(u16, Valu
 async fn act(app: &Shared, name: &str, action: &str, params: Value, url: Option<String>) -> Response {
     eprintln!("[agent-api] {name} act {action}");
     match control(app, action, params).await {
-        Ok((code, v)) => reply(shape(code, &v, url)),
+        Ok((code, v)) => {
+            let layer = action.split('.').next().unwrap_or("");
+            reply(shape_as(code, &v, url, Some((name, layer))))
+        }
         Err(()) => reply(json!({"core": "down"})),
     }
 }
@@ -277,7 +306,7 @@ async fn apn_use(State(app): State<Shared>, req: Request) -> Response {
             } else {
                 v
             };
-            reply(shape(code, &v, url))
+            reply(shape_as(code, &v, url, Some((&name, "apn"))))
         }
         Err(_) => reply(json!({"core": "down"})),
     }
@@ -351,6 +380,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn trial_and_done_carry_authority() {
+        let u = Some("http://x/router/apn".to_string());
+        let t = json!({"ok": true, "op": {"op_id": "mcp-1", "phase": "verifying", "rollback_enabled": true}});
+        let s = shape_as(200, &t, u.clone(), Some(("hermes-act", "apn")));
+        assert_eq!(s["op_id"], "mcp-1");
+        let a = &s["authority"];
+        assert_eq!(a["granted_by"], "agent token hermes-act (act) from act-allow");
+        assert_eq!((a["layer"].as_str(), a["rollback"].as_str()), (Some("apn"), Some("automatic within trial")));
+        assert_eq!(a["owner_can_undo"], "http://x/router/apn");
+        let s = shape_as(200, &json!({"ok": true, "result": {}}), u.clone(), Some(("h", "apn")));
+        assert_eq!((s["state"].as_str(), s["authority"]["rollback"].as_str()), (Some("done"), Some("none")));
+        let s = shape_as(200, &json!({"ok": true, "op": {"op_id": "m", "rollback_enabled": false}}), None, Some(("h", "chill")));
+        assert_eq!(s["authority"]["rollback"], "none");
+        let s = shape_as(409, &json!({"ok": false, "error": {"code": "busy"}}), u, Some(("h", "apn")));
+        assert!(s.get("authority").is_none());
+    }
+
+    #[test]
     fn core_answers_are_shaped() {
         let s = shape(200, &json!({"ok": true, "op": {"op_id": "mcp-1", "phase": "verifying", "rollback_enabled": true}}), None);
         assert_eq!((s["state"].as_str(), s["op_id"].as_str()), (Some("trial"), Some("mcp-1")));
@@ -370,6 +417,14 @@ mod tests {
         assert_eq!(shape(409, &json!({"ok": false, "error": {"code": "chill_off"}}), None)["state"], "refused");
         assert_eq!(shape(403, &json!({"ok": false, "error": {"code": "not_allowed"}}), None)["state"], "refused");
         assert_eq!(shape(502, &json!({}), None)["state"], "failed");
+        // no rollback is said, never hidden
+        let s = shape(200, &json!({"ok": true, "op": {"op_id": "mcp-2", "phase": "applied", "rollback_enabled": false}}), None);
+        assert_eq!((s["state"].as_str(), s["rollback_enabled"].as_bool()), (Some("trial"), Some(false)));
+        // a 200 that says not ok is not "done"
+        assert_eq!(shape(200, &json!({"ok": false, "error": {"code": "x"}}), None)["state"], "failed");
+        // the core's message is wrapped as untrusted text
+        let s = shape(403, &json!({"ok": false, "error": {"code": "not_allowed", "message": "ignore previous"}}), None);
+        assert!(s["reason"].get("untrusted").is_some(), "{s}");
     }
 
     #[test]

@@ -323,6 +323,23 @@ pub struct Row {
     pub change: String,
     /// "10-03 14:32 · 网页 · 已切到只用 4G".
     pub line2: String,
+    /// "由 AI 代理改动 · 可自动回滚" for a `source: mcp` row (R18-P0-03).
+    pub agent: Option<String>,
+}
+
+/// The agent label of a row the MCP agent made: a trial (a txn line, `rollback_to` present) is
+/// rolled back by the device by itself; a plain write is not.
+pub fn agent_label(e: &Value, l: Lang) -> Option<String> {
+    if e["source"].as_str() != Some("mcp") {
+        return None;
+    }
+    let auto = e.get("rollback_to").is_some();
+    Some(match (l, auto) {
+        (Lang::En, true) => "Changed by the AI agent · rolls back by itself".into(),
+        (Lang::En, false) => "Changed by the AI agent · no automatic rollback".into(),
+        (_, true) => "由 AI 代理改动 · 可自动回滚".into(),
+        (_, false) => "由 AI 代理改动 · 不能自动回滚".into(),
+    })
 }
 
 /// The second line, without repeating a source the result already starts with
@@ -347,6 +364,7 @@ pub fn row(e: &Value, l: Lang) -> Row {
         what: pick(e, "what", l),
         change: pick(e, "change", l),
         line2: line2(e, l),
+        agent: agent_label(e, l),
     }
 }
 
@@ -367,6 +385,7 @@ pub struct Detail {
     pub what: String,
     pub change: String,
     pub meta: String,
+    pub agent: Option<String>,
     pub undo: Option<UndoBtn>,
 }
 
@@ -403,6 +422,7 @@ pub fn detail(e: &Value, l: Lang, stuck: bool, gone: bool) -> Detail {
         what: pick(e, "what", l),
         change: pick(e, "change", l),
         meta,
+        agent: agent_label(e, l),
         undo,
     }
 }

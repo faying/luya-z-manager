@@ -500,3 +500,12 @@ fn want_keys_are_safe() {
     };
     assert_eq!(w.query(), "");
 }
+
+#[test]
+fn agent_rows_say_who_and_rollback() {
+    let t = json!({"t": "2026-10-20 10:00:00", "source": "mcp", "op_id": "mcp-1", "rollback_to": "a"});
+    assert_eq!(agent_label(&t, Lang::Zh).as_deref(), Some("由 AI 代理改动 · 可自动回滚"));
+    let p = json!({"t": "2026-10-20 10:00:00", "source": "mcp"});
+    assert_eq!(row(&p, Lang::En).agent.as_deref(), Some("Changed by the AI agent · no automatic rollback"));
+    assert!(row(&json!({"source": "web"}), Lang::Zh).agent.is_none());
+}

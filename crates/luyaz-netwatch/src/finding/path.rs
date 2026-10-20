@@ -434,7 +434,10 @@ fn name(b: &[u8], mut at: usize) -> Option<(Vec<u8>, usize)> {
 }
 
 /// Validate question + an address for that name (possibly through CNAME), not just QR/id.
-pub(crate) fn dns_answer(b: &[u8], q: &[u8]) -> Option<ResultState> {
+/// `None` = not a reply to `q` (keep listening); `Failed` = error rcode (NXDOMAIN, SERVFAIL…);
+/// `Unknown` = a reply without an address for the name (NODATA, unrelated records).
+/// Shared by Finding, the transaction DNS probe and the old watcher's direct query (P0-02).
+pub fn dns_answer(b: &[u8], q: &[u8]) -> Option<ResultState> {
     if b.len() < 12 || b[..2] != q[..2] || b[2] & 0xf8 != 0x80 || b[2] & 2 != 0 || b[4..6] != [0, 1]
     {
         return None;

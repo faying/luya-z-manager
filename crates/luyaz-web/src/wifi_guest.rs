@@ -881,7 +881,7 @@ async fn send(app: &Shared, body: &Value, l: Lang) -> Result<Reply, write::Outco
     let r = app
         .http
         .post(&app.control_url)
-        .json(body)
+        .json(&crate::pin::stamp(body))
         .timeout(SEND_TIMEOUT)
         .send()
         .await;

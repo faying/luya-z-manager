@@ -66,6 +66,22 @@ pub fn other_device(mine: &str, body: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
+/// A `/control` write body with this device's ID as `expect_device_id`: u60d refuses it (409
+/// `wrong_device`) when the core behind `control_url` is another device's. No pin → unchanged.
+pub fn stamp(body: &serde_json::Value) -> serde_json::Value {
+    stamp_with(id(), body)
+}
+
+fn stamp_with(mine: &str, body: &serde_json::Value) -> serde_json::Value {
+    let mut b = body.clone();
+    if !mine.is_empty()
+        && let Some(o) = b.as_object_mut()
+    {
+        o.entry("expect_device_id").or_insert_with(|| mine.into());
+    }
+    b
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +117,16 @@ mod tests {
         std::fs::write(&f, "junk").unwrap();
         assert_ne!(load(&f).unwrap(), "junk", "a broken file is replaced");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_write_body_carries_the_pin() {
+        let me = "0123456789abcdef0123456789abcdef";
+        let b = serde_json::json!({"action": "network.set_mode", "source": "web"});
+        assert_eq!(stamp_with(me, &b)["expect_device_id"], me);
+        assert!(
+            stamp_with("", &b).get("expect_device_id").is_none(),
+            "no pin, no field"
+        );
     }
 }

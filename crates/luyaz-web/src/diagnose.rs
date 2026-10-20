@@ -816,7 +816,7 @@ pub async fn approve(
     let r = app
         .http
         .post(&app.control_url)
-        .json(&body)
+        .json(&crate::pin::stamp(&body))
         .timeout(APPROVE_TIMEOUT)
         .send()
         .await;

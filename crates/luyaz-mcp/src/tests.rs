@@ -232,3 +232,55 @@ fn a_read_only_token_is_said_plainly() {
     let r = tool_result(Got::Answer(403, r#"{"state":"refused","reason":"act_source"}"#.into()));
     assert!(r["content"][0]["text"].as_str().unwrap().contains("act-allow"));
 }
+
+#[test]
+fn pin_parses_hex_only() {
+    assert_eq!(parse_pin(None).unwrap(), None);
+    assert_eq!(parse_pin(Some("  ")).unwrap(), None);
+    assert_eq!(
+        parse_pin(Some(" A1b2C3 ")).unwrap().as_deref(),
+        Some("a1b2c3")
+    );
+    assert!(parse_pin(Some("not-an-id")).is_err());
+}
+
+fn health_call(pin: Option<&str>, body: &'static str) -> Value {
+    let mut f = |_: &Call| Got::Answer(200, body.into());
+    handle_pinned(
+        &json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                "params": {"name": "get_device_health", "arguments": {}}}),
+        pin,
+        &mut f,
+    )
+    .unwrap()["result"]
+        .clone()
+}
+
+#[test]
+fn pinned_device_must_answer_as_itself() {
+    // same id (case-insensitive): passed on
+    let r = health_call(Some("abc123"), r#"{"device_id":"ABC123","verdict":"ok"}"#);
+    assert_eq!(r["isError"], false);
+    assert!(r["content"][0]["text"].as_str().unwrap().contains("verdict"));
+    // another device: refused, its data not shown
+    let r = health_call(Some("abc123"), r#"{"device_id":"def456","verdict":"secret"}"#);
+    assert_eq!(r["isError"], true);
+    let t = r["content"][0]["text"].as_str().unwrap();
+    assert!(t.contains("another device") && t.contains("def456") && !t.contains("secret"));
+    // pinned, no id (old admin web): refused
+    let r = health_call(Some("abc123"), r#"{"verdict":"secret"}"#);
+    assert_eq!(r["isError"], true);
+    assert!(!r["content"][0]["text"].as_str().unwrap().contains("secret"));
+    // not pinned: no check
+    let r = health_call(None, r#"{"device_id":"def456","verdict":"ok"}"#);
+    assert_eq!(r["isError"], false);
+}
+
+#[test]
+fn pin_leaves_non_answers_alone() {
+    assert!(matches!(
+        check_identity(Some("ab"), Got::Answer(401, String::new())),
+        Got::Answer(401, _)
+    ));
+    assert!(matches!(check_identity(Some("ab"), Got::Slow(8)), Got::Slow(8)));
+}

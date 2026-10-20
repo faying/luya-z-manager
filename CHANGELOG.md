@@ -21,6 +21,48 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+## core 1.7.2 — 2026-10-20
+
+- an NR session kept after the radio falls back to ENDC is no longer shown as old.
+- decision loop: when a person-approved redial is confirmed and the bound HTTPS recheck passes (recorded as recovered), the finding it was proposed for closes as `resolved` right away instead of waiting for two passive checks. No 24 h suppression; other outcomes still wait for the passive checks.
+
+## core 1.7.1 — 2026-10-20
+
+- decision loop: at startup the core follows every redial attempt a restart left open to its end (recorded as unknown, no recheck), so an attempt can no longer stay `attempt_running` for good.
+
+## core 1.7.0, lweb 1.5.0, touch 1.2.0 — 2026-10-20
+
+- core: `/control` `loop.approve {proposal_id, params_digest}`: a person on the screen or the web approves the redial proposal shown; a different or spent proposal is refused (409 `proposal_changed` / `already_used`), the agent can never approve. A fresh mode read before the write; after the transaction a bound HTTPS recheck and the result is recorded.
+- lweb: an approval card under the open finding on the diagnosis page (Redial, press twice).
+- touch: a redial button on the diagnosis page (two taps).
+- Requires: core 1.7.0 for lweb 1.5.0 and touch 1.2.0.
+
+## core 1.6.11 — 2026-10-20
+
+- eSIM: the wait for data after a profile switch is 90 s (a roaming profile took 55–60 s on B31).
+- LTE cell lock is marked `captured_and_proven` after the device test; network-mode transactions get a 180 s deadline; PCI values are range-checked.
+
+## core 1.6.10 — 2026-10-20
+
+- `data.reconnect` (redial) exists for the decision loop only; automatic execution goes through an allow-list that ships empty.
+
+## core 1.6.9 — 2026-10-20
+
+- an identical rmnet `RTM_NEWLINK` (the driver repeats it several times a second) no longer changes the connection epoch; real link, flag, address and route changes still do.
+
+## core 1.6.1–1.6.7 — 2026-10-19/20
+
+- connection, SIM and radio epochs from the netlink and ubus subscriptions; O2 recheck: bound multi-target HTTPS over the cellular interface, operator DNS within a 20 s budget, clock trust needs two agreeing organisations; `o2-check` subcommand.
+
+## lweb 1.4.1 — 2026-10-19
+
+- the remote Wi-Fi receipt sends its `op_id` inside `params`, where the core reads it (the first real remote test rolled back with `no_receipt`).
+
+## core 1.6.0, lweb 1.4.0 — 2026-10-19
+
+- core: remote Wi-Fi receipt: a Wi-Fi change made from off the LAN waits 60 s for the page's `op.receipt` after the read-back, and puts the old settings back without one (whatever the global auto-revert switch says).
+- lweb: from Tailscale, a subnet route or an unknown path, Wi-Fi writes ask for the receipt and the page sends it by itself; the confirm says so.
+
 ## core 1.6.8 — 2026-10-20
 
 - 5G cell lock (`cell.lock_nr`) is marked `captured_and_proven` after the real-device test (a lock to a missing cell rolls back at the deadline through the stock reset), so closed-loop 5G cell locks auto-revert too. LTE cell lock stays `unknown` (not tested).

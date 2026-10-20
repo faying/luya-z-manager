@@ -1546,7 +1546,7 @@ async fn send(app: &Shared, body: &Value, l: Lang) -> Result<(write::Sent, Value
     let rb = app
         .http
         .post(&app.control_url)
-        .json(body)
+        .json(&crate::pin::stamp(body))
         .timeout(SEND_TIMEOUT);
     match rb.send().await {
         Err(e) if e.is_connect() => Err(write::Outcome::Failed(

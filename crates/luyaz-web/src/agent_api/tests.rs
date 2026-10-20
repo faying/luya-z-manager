@@ -176,6 +176,8 @@ async fn through_the_gate() {
     crate::agent_act::set_act_allow(act_allow.clone());
     let seen: std::sync::Arc<std::sync::Mutex<Vec<Value>>> = Default::default();
     let seen2 = seen.clone();
+    let apn_seen: std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>> = Default::default();
+    let apn_seen2 = apn_seen.clone();
 
     let core = Router::new()
         .route("/v2/api/public/status", rget(|| async { axum::Json(json!({"ok": true, "data": status()})) }))
@@ -186,6 +188,14 @@ async fn through_the_gate() {
                 seen.lock().unwrap().push(b.clone());
                 axum::Json(json!({"ok": true, "action": b["action"],
                     "op": {"op_id": b["op_id"], "phase": "verifying", "rollback_enabled": true}}))
+            }
+        }))
+        .route("/v2/api/netinfo/apn", axum::routing::post(move |h: axum::http::HeaderMap, axum::Json(b): axum::Json<Value>| {
+            let seen = apn_seen2.clone();
+            async move {
+                let src = h.get(luyaz_api::headers::SOURCE_HEADER).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                seen.lock().unwrap().push((src, b));
+                axum::Json(json!({"ok": true, "data": {"op_id": "mcp-apn-1"}}))
             }
         }))
         .route("/v2/api/alerts", rget(|axum::extract::RawQuery(q): axum::extract::RawQuery| async move {
@@ -317,6 +327,32 @@ async fn through_the_gate() {
     assert!(v["url"].as_str().unwrap().ends_with("/router/apn"));
     let (_, v) = call("/agent-api/action-url?for=esim", Some(T2)).await;
     assert_eq!(v["state"], "refused");
+    // apn.use: the source header is always mcp, only the id reaches the core
+    let (st, v) = act(
+        "/agent-api/act/apn/use",
+        T1,
+        json!({"id": "manu2", "source": "screen", "approved_by": "screen", "extra": 1}),
+    )
+    .await;
+    assert_eq!((st, v["state"].as_str(), v["op_id"].as_str()), (200, Some("trial"), Some("mcp-apn-1")), "{v}");
+    let (src, b) = apn_seen.lock().unwrap().last().cloned().unwrap();
+    assert_eq!((src.as_str(), b), ("mcp", json!({"id": "manu2"})));
+    let (st, _) = act("/agent-api/act/apn/use", T1, json!({"id": "../x"})).await;
+    assert_eq!(st, 400);
+    // an act token from an address outside agent.act-allow (agent.allow still lets it read)
+    std::fs::write(&act_allow, "192.168.50.88/32\n").unwrap();
+    let (st, v) = act("/agent-api/act/chill/exit", T1, json!({"state": "direct_keep_ai"})).await;
+    assert_eq!((st, v["reason"].as_str()), (403, Some("act_source")));
+    std::fs::write(&act_allow, "127.0.0.1/32\n").unwrap();
+    // act taken back: the third column dropped = read, the line deleted = no token
+    std::fs::write(&tf, format!("claude {T1}\nhermes {T2}\n")).unwrap();
+    let (st, v) = act("/agent-api/act/chill/exit", T1, json!({"state": "direct_keep_ai"})).await;
+    assert_eq!((st, v["reason"].as_str()), (403, Some("read_only_token")));
+    std::fs::write(&tf, format!("hermes {T2}\n")).unwrap();
+    let (st, _) = act("/agent-api/act/chill/exit", T1, json!({"state": "direct_keep_ai"})).await;
+    assert_eq!(st, 401);
+    let n = seen.lock().unwrap().len();
+    assert_eq!(n, 1, "no refused act reached the core");
     // revoked: delete the line
     std::fs::write(&tf, format!("hermes {T2}\n")).unwrap();
     assert_eq!(call("/agent-api/health", Some(T1)).await.0, 401);

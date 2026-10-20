@@ -37,6 +37,12 @@ async fn handle_inner(
     peer: Option<std::net::SocketAddr>,
 ) -> Response {
     // P1-3：启动中（第一轮、事务恢复还没做完）先等，最多 20 秒；还没好就照队列满回 503 `busy`。
+    // R18-P0-04：带了 expect_device_id 就先核对是不是这台设备，不对什么都不做
+    if let Some(r) = device_gate(&action, &body, || {
+        std::fs::read_to_string(DEVICE_ID_FILE).ok()
+    }) {
+        return r;
+    }
     if !app.wait_stage(Stage::Ready, CONTROL_START_WAIT).await {
         return control_busy(&action);
     }
@@ -72,6 +78,42 @@ async fn handle_inner(
         }
     }
     response
+}
+
+/// 这台设备的 ID（R18-P0-04，docs/designs/remote-path-guard.md）：luyaz-web 第一次启动时生成的随机值，
+/// u60d 只读不建。
+const DEVICE_ID_FILE: &str = "/data/luyaz/web-device-id";
+
+/// 错设备保护：请求带了 `expect_device_id` 而和本机的不同（或本机读不到 ID）→ 409 `wrong_device`，
+/// 在任何写之前；不带 = 照旧。不是字符串 → 400。`mine` 只在带了的时候才读。
+fn device_gate(
+    action: &str,
+    body: &Value,
+    mine: impl FnOnce() -> Option<String>,
+) -> Option<Response> {
+    let want = match body.get("expect_device_id") {
+        None | Some(Value::Null) => return None,
+        Some(Value::String(s)) => s.trim(),
+        Some(_) => {
+            return Some(invalid_parameter(
+                action,
+                "expect_device_id must be a string",
+            ));
+        }
+    };
+    let same = mine().is_some_and(|m| {
+        let m = m.trim();
+        !m.is_empty() && m.eq_ignore_ascii_case(want)
+    });
+    (!same).then(|| {
+        op_error(
+            action,
+            StatusCode::CONFLICT,
+            "wrong_device",
+            "this request was meant for another device",
+            None,
+        )
+    })
 }
 
 /// Agent 的一次放行（[`agent_gate`]）。
@@ -1118,5 +1160,53 @@ mod tests {
         ] {
             assert!(matches!(agent_gate(action, &body).await, Ok(None)), "{action} {body}");
         }
+    }
+
+    /// R18-P0-04：expect_device_id 不对 → 409 wrong_device（不读写别的）；对 → 放过；不带 → 不读本机 ID、放过。
+    #[test]
+    fn expect_device_id_must_match_this_device() {
+        let me = || Some("0123456789abcdef0123456789abcdef\n".to_owned());
+        let r = device_gate(
+            "network.set_mode",
+            &json!({"expect_device_id": "ffffffffffffffffffffffffffffffff"}),
+            me,
+        )
+        .expect("mismatch refused");
+        assert_eq!(r.status(), StatusCode::CONFLICT);
+        // 本机读不到 ID：核对不了，也拒绝
+        let r = device_gate(
+            "network.set_mode",
+            &json!({"expect_device_id": "ab"}),
+            || None,
+        );
+        assert_eq!(r.unwrap().status(), StatusCode::CONFLICT);
+        assert!(
+            device_gate(
+                "network.set_mode",
+                &json!({"expect_device_id": "0123456789ABCDEF0123456789abcdef"}),
+                me
+            )
+            .is_none()
+        );
+        assert!(
+            device_gate("network.set_mode", &json!({"source": "web"}), || {
+                panic!("not read when absent")
+            })
+            .is_none()
+        );
+        let r = device_gate("network.set_mode", &json!({"expect_device_id": 7}), me);
+        assert_eq!(r.unwrap().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn wrong_device_reply_names_the_code() {
+        let r = device_gate("wifi.settings", &json!({"expect_device_id": "x"}), || {
+            Some("y".into())
+        })
+        .unwrap();
+        let b = axum::body::to_bytes(r.into_body(), 4096).await.unwrap();
+        let v: Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "wrong_device");
     }
 }
