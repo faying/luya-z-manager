@@ -233,6 +233,11 @@ pub fn final_line(
             format!("Wi-Fi 没起来 · {}", cat("还是", &y.0)),
             format!("Wi-Fi not up · still {}", y.1),
         ),
+        (RolledBack, Some(NoReceipt)) => (
+            "warn",
+            format!("远端没回来 · {}", cat("已退回", &x.0)),
+            format!("Remote did not come back · back to {}", x.1),
+        ),
         (RolledBack, Some(Timeout)) if wifi => (
             "warn",
             format!("Wi-Fi 没起来 · {}", cat("已退回", &x.0)),

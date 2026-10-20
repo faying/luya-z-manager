@@ -365,3 +365,22 @@ fn a_damaged_counter_never_reuses_a_revision() {
     back.observe(&open("s"), "s", T + 2);
     assert_eq!(back.identity(KIND_NO_INTERNET, "s").unwrap().revision, 3);
 }
+
+#[test]
+fn a_proven_repair_resolves_only_its_own_load() {
+    let mut s = Store::default().with_epoch("e1");
+    s.observe(&open("s"), "s", T);
+    // another load, another card, another kind: nothing
+    assert!(s.resolve(KIND_NO_INTERNET, "s", "e0").is_empty());
+    assert!(s.resolve(KIND_NO_INTERNET, "t", "e1").is_empty());
+    assert!(s.resolve("other", "s", "e1").is_empty());
+    let c = s.resolve(KIND_NO_INTERNET, "s", "e1");
+    assert!(matches!(&c[..], [Change::Close(_, Close::Resolved)]));
+    assert!(s.open.is_empty() && s.suppressed.is_empty());
+    // closed already: no second event
+    assert!(s.resolve(KIND_NO_INTERNET, "s", "e1").is_empty());
+    // no epoch: never
+    let mut n = Store::default();
+    n.observe(&open("s"), "s", T);
+    assert!(n.resolve(KIND_NO_INTERNET, "s", "").is_empty());
+}

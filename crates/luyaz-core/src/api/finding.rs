@@ -456,6 +456,33 @@ impl Findings {
         lock(&self.passive).sample(readings, now);
     }
 
+    /// [`sampling::Passive::down_secs`].
+    pub fn down_secs(
+        &self,
+        readings: Option<&sampling::Readings>,
+        now: Option<&BootTime>,
+    ) -> Option<u64> {
+        lock(&self.passive).down_secs(readings, now)
+    }
+
+    /// The open finding's binding (store epoch + revision), or None.
+    pub fn identity(&self, kind: &str, iccid: &str) -> Option<luyaz_netwatch::finding::store::Identity> {
+        lock(&self.store).identity(kind, iccid)
+    }
+
+    /// The decision loop's re-read under the engine lock (memory only).
+    #[allow(dead_code)] // `propose::now_for`
+    pub fn snapshot(&self, kind: &str, iccid: &str) -> luyaz_api::execution::FindingSnapshot {
+        match self.identity(kind, iccid) {
+            Some(id) => luyaz_api::execution::FindingSnapshot {
+                open: true,
+                epoch: Some(id.epoch),
+                revision: Some(id.revision),
+            },
+            None => luyaz_api::execution::FindingSnapshot::default(),
+        }
+    }
+
     pub fn passive_admission(
         &self,
         readings: Option<&sampling::Readings>,
@@ -546,6 +573,14 @@ impl Findings {
             e.iccid.clone()
         };
         let changes = lock(&self.store).dismiss_at(kind, &iccid, now, boot);
+        self.apply(&changes, watch, now);
+        !changes.is_empty()
+    }
+
+    /// The decision loop proved its repair (confirmed + bound HTTPS recheck passed): close the
+    /// finding it was proposed for now instead of waiting for the passive ups. True: closed.
+    pub fn resolve(&self, kind: &str, iccid: &str, epoch: &str, watch: &Watch, now: u64) -> bool {
+        let changes = lock(&self.store).resolve(kind, iccid, epoch);
         self.apply(&changes, watch, now);
         !changes.is_empty()
     }

@@ -141,11 +141,9 @@ impl Passive {
         self.last = Some(now.clone());
     }
 
-    pub fn admission(&self, r: Option<&Readings>, now: Option<&BootTime>) -> (bool, bool) {
-        let Some((r, now)) = r.zip(now) else {
-            return (true, false);
-        };
-        let current = self.connection.as_ref() == Some(&r.connection)
+    /// The readings belong to the sampled connection, are fresh, and the samples are unbroken.
+    fn current(&self, r: &Readings, now: &BootTime) -> bool {
+        self.connection.as_ref() == Some(&r.connection)
             && now
                 .elapsed_since(&r.observed)
                 .is_some_and(|age| age <= nf::path::MAX_AGE)
@@ -153,9 +151,29 @@ impl Passive {
                 .last
                 .as_ref()
                 .and_then(|t| now.elapsed_since(t))
-                .is_some_and(|age| age <= SAMPLE_GAP);
+                .is_some_and(|age| age <= SAMPLE_GAP)
+            && self.known
+    }
+
+    /// Seconds the passive reading has said down without a break (0 = up); None = can't tell.
+    /// The decision loop's `passive_down_s` (decision-execution-loop §4.9).
+    pub fn down_secs(&self, r: Option<&Readings>, now: Option<&BootTime>) -> Option<u64> {
+        let (r, now) = r.zip(now)?;
+        if !self.current(r, now) {
+            return None;
+        }
+        if !self.candidate {
+            return Some(0);
+        }
+        now.elapsed_since(self.down_since.as_ref()?)
+    }
+
+    pub fn admission(&self, r: Option<&Readings>, now: Option<&BootTime>) -> (bool, bool) {
+        let Some((r, now)) = r.zip(now) else {
+            return (true, false);
+        };
         // Unknown must not be reported as an up observation (which resolves stored findings).
-        if !current || !self.known {
+        if !self.current(r, now) {
             return (true, false);
         }
         let candidate = self.candidate;

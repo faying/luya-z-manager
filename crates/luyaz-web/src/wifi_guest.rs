@@ -947,7 +947,7 @@ fn gate(st: &St, l: Lang) -> Result<Guest, write::Outcome> {
     guest(st).ok_or_else(|| not_read(l))
 }
 
-async fn run(app: Shared, t: String, s: Save, l: Lang, tx: tokio::sync::mpsc::Sender<Event>) {
+async fn run(app: Shared, t: String, s: Save, l: Lang, tx: tokio::sync::mpsc::Sender<Event>, receipt: bool) {
     let done = |o: write::Outcome| area(l, Via::Local, &t, &write::Phase::Done(o));
     if let Err(o) = app.hub.read(|st| gate(st, l)) {
         let _ = tx.send(patch(&done(o))).await;
@@ -963,7 +963,8 @@ async fn run(app: Shared, t: String, s: Save, l: Lang, tx: tokio::sync::mpsc::Se
     }
     let op_id = write::next_op_id();
     remember(&t, &op_id, &s);
-    let body = json!({"action": "wifi.guest", "source": "web", "params": s.params, "op_id": op_id});
+    // O3: from off the LAN, the core waits for this page to come back (crate::follow) or reverts
+    let body = json!({"action": "wifi.guest", "source": "web", "params": s.params, "op_id": op_id, "receipt": receipt});
     let changes = app.hub.watch();
     let o = match send(&app, &body, l).await {
         Err(o) => o,
@@ -1183,7 +1184,8 @@ pub async fn ask(State(app): State<Shared>, req: axum::extract::Request) -> impl
         |st| match gate(st, l).and_then(|g| check(&f, Some(&g), l)) {
             Err(o) => area(l, ctx.remote, "", &write::Phase::Done(o)),
             Ok(s) => {
-                let c = confirm(&s, l);
+                let mut c = confirm(&s, l);
+                crate::follow::receipt_note(&mut c, ctx.remote, l);
                 let t = put(s);
                 area(l, ctx.remote, &t, &write::Phase::Ask(c))
             }
@@ -1205,7 +1207,8 @@ pub async fn set(
     Query(q): Query<TokenQuery>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
-    let l = crate::topbar::Ctx::of_request(&req, PATH).lang;
+    let ctx = crate::topbar::Ctx::of_request(&req, PATH);
+    let (l, receipt) = (ctx.lang, ctx.remote != Via::Local);
     let save = take(&q.t);
     let t = q.t.clone();
     Sse::new(async_stream(move |tx| async move {
@@ -1222,7 +1225,7 @@ pub async fn set(
                 .await;
             return;
         };
-        run(app, t, s, l, tx).await;
+        run(app, t, s, l, tx, receipt).await;
     }))
 }
 

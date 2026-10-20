@@ -178,6 +178,29 @@ pub struct View {
     pub next: Option<Next>,
     /// The core's open finding (registered but no internet, T6), with or without a run.
     pub finding: Option<FindingV>,
+    /// The decision loop's pending proposal (core §4.9), shown under the finding for a person
+    /// to approve (§4.10).
+    pub proposal: Option<ProposalV>,
+}
+
+pub struct ProposalV {
+    pub id: String,
+    pub digest: String,
+    pub tail: String,
+}
+
+/// Only the one action the loop proposes today; anything else is not shown (no button for an
+/// action this page can't describe).
+fn proposal_view(p: &Value) -> Option<ProposalV> {
+    if p["action"] != "data.reconnect" {
+        return None;
+    }
+    let s = |k: &str| p[k].as_str().filter(|v| !v.is_empty()).map(str::to_owned);
+    Some(ProposalV {
+        id: s("proposal_id")?,
+        digest: s("params_digest")?,
+        tail: s("iccid_tail").unwrap_or_default(),
+    })
 }
 
 /// The evidence page of one open finding: what it is, how sure, since when, per layer.
@@ -302,6 +325,7 @@ fn view(g: &Got, l: Lang) -> View {
         rows: Vec::new(),
         next: None,
         finding: g.diag.as_ref().and_then(|d| finding_view(&d["finding"], l)),
+        proposal: g.diag.as_ref().and_then(|d| proposal_view(&d["proposal"])),
     };
     if down {
         v.tone = "bad";
@@ -765,6 +789,93 @@ pub async fn dismiss(
     one(html)
 }
 
+#[derive(Deserialize)]
+pub struct ApproveQuery {
+    id: String,
+    digest: String,
+}
+
+/// The core waits for the admission gate and reads the mode before it answers.
+const APPROVE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// 「重拨」 on the proposal (decision loop §4.10): the person approves the one shown; the core
+/// refuses if another one is pending by now. The readback is the transaction on /changes and the
+/// finding on this page.
+pub async fn approve(
+    State(app): State<Shared>,
+    Query(q): Query<ApproveQuery>,
+    req: axum::extract::Request,
+) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let l = Lang::from_headers(req.headers());
+    let body = json!({
+        "action": "loop.approve",
+        "params": {"proposal_id": q.id, "params_digest": q.digest},
+        "source": "web",
+        "op_id": crate::write::next_op_id(),
+    });
+    let r = app
+        .http
+        .post(&app.control_url)
+        .json(&body)
+        .timeout(APPROVE_TIMEOUT)
+        .send()
+        .await;
+    let reply = match r {
+        Err(e) if e.is_connect() => Err(true),
+        Err(_) => Err(false),
+        Ok(r) => r.json::<Value>().await.map_err(|_| false),
+    };
+    let html = match reply {
+        Ok(v) if v["ok"] == true => note(
+            "",
+            l.pick(
+                "Redialling; the data connection drops for about 15 s",
+                "正在重拨，数据连接会断开约 15 秒",
+            ),
+        ),
+        Ok(v) => {
+            let (en, zh) = match v["error"]["code"].as_str().unwrap_or("") {
+                "proposal_changed" => (
+                    "The suggestion changed meanwhile; look again",
+                    "建议已经变了，请重新看一下",
+                ),
+                "already_used" => (
+                    "Used already; a new suggestion comes with a new check",
+                    "这条建议已经用过；新的检查会给新建议",
+                ),
+                "cooldown" => (
+                    "Tried recently; not again yet",
+                    "刚试过，暂时不再试",
+                ),
+                "busy" | "op_busy" => (
+                    "Another change is running; try again later",
+                    "另一项改动正在进行，稍后再试",
+                ),
+                _ => ("", ""),
+            };
+            if en.is_empty() {
+                let m = v["error"]["message"].as_str().unwrap_or("");
+                note(
+                    "bad",
+                    &format!("{}{m}", l.pick("Not run: ", "没有执行：")),
+                )
+            } else {
+                note("warn", l.pick(en, zh))
+            }
+        }
+        Err(true) => note("bad", l.pick("can't reach the core service", "连不上核心服务")),
+        Err(false) => note(
+            "warn",
+            l.pick(
+                "No answer from the core; see Changes for whether it ran",
+                "核心没有回答；是否执行了请看「变更」",
+            ),
+        ),
+    };
+    let _ = app.kick.send(PATH);
+    one(html)
+}
+
 /// Retry while the agent is not responding: read again now.
 pub async fn refresh(State(app): State<Shared>) -> axum::http::StatusCode {
     let _ = app.kick.send(PATH);
@@ -837,6 +948,20 @@ mod tests {
         let v = view(&g, Lang::En);
         assert_eq!(v.word, "Agent not responding");
         assert!(matches!(v.action, Action::Retry) && v.down && !v.rows.is_empty());
+    }
+
+    #[test]
+    fn only_a_complete_redial_proposal_gets_a_button() {
+        let p = json!({"proposal_id":"ab12","params_digest":"d0","action":"data.reconnect","iccid_tail":"1234"});
+        let v = proposal_view(&p).unwrap();
+        assert_eq!((v.id.as_str(), v.digest.as_str(), v.tail.as_str()), ("ab12", "d0", "1234"));
+        let mut other = p.clone();
+        other["action"] = json!("network.mode");
+        assert!(proposal_view(&other).is_none());
+        let mut no_digest = p.clone();
+        no_digest["params_digest"] = json!("");
+        assert!(proposal_view(&no_digest).is_none());
+        assert!(proposal_view(&Value::Null).is_none());
     }
 
     #[test]

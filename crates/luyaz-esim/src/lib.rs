@@ -71,16 +71,20 @@ const LPAC_TIMEOUT_NOTIF: Duration = Duration::from_secs(45);
 /// Identity: upstream measured up to 28 s on B27; past `IDENTITY_WAIT` (polled
 /// every `IDENTITY_POLL`) the stack is taken as stuck and the device reboots.
 /// Data: past `DATA_WAIT` (polled every `NOTIF_DATA_POLL`) the job ends
-/// "switched, data not back" (`reason: "no_data"`), with no reboot. Neither is
-/// measured on B31 yet: each step's time is logged so they can be calibrated.
+/// "switched, data not back" (`reason: "no_data"`), with no reboot. B31, 10-20
+/// (eUICC, CMLink ⇄ CTM roaming): card 0 s, identity 3 s, data 10 s and 55–60 s —
+/// the roaming profile only just made 60 s, so data waits 90 s (identity keeps
+/// 45 s: it is the reboot trigger and 3 s is far inside it).
 const IDENTITY_WAIT: Duration = Duration::from_secs(45);
 const IDENTITY_POLL: Duration = Duration::from_secs(2);
-const DATA_WAIT: Duration = Duration::from_secs(60);
+const DATA_WAIT: Duration = Duration::from_secs(90);
 /// After a switch the card answers `profile list` with transitional errors for
 /// a while (upstream B27: 5–25 s of `euicc_init` failures / QMI error 80
 /// SimFileNotFound). For `LIST_STALE_WINDOW` after a switch ends, such an error
 /// returns the last good list marked `stale`/`updating` instead of a 502 (R4).
-/// Not measured on B31. There is no retry thread: lpac calls are not yet
+/// B31, 10-20 (eUICC, four CMLink ⇄ CTM switches): the list read fine
+/// throughout and no transitional error was logged, so 30 s is headroom only.
+/// There is no retry thread: lpac calls are not yet
 /// serialised (R2), so the UIs' own 1–1.5 s polls are the retry and the window
 /// is its bound.
 const LIST_STALE_WINDOW: Duration = Duration::from_secs(30);
@@ -2059,7 +2063,7 @@ mod tests {
             (Some("done"), Some("no_data"), Some(false)),
             "{j}"
         );
-        assert!(j["message"].as_str().unwrap().contains("data 60 s"), "{j}");
+        assert!(j["message"].as_str().unwrap().contains("data 90 s"), "{j}");
         let s = fake.state.lock().unwrap();
         assert!(!s.rebooted);
         assert!(

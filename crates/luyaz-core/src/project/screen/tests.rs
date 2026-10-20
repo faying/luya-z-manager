@@ -1980,6 +1980,7 @@ fn response_with_op_fits_the_old_screens_buffers() {
                 rollback_enabled: true,
                 deadline_ms: 120_000,
                 boot_id: "b".repeat(36),
+                receipt: false,
             },
             0,
         );

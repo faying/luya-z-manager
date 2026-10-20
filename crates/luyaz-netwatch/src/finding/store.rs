@@ -263,6 +263,22 @@ impl Store {
         out
     }
 
+    /// A repair proved it fixed (decision loop: confirmed + bound HTTPS recheck passed): closes
+    /// the key as resolved without waiting for the passive ups, no suppression. Only within the
+    /// load the proposal was bound to (`epoch`); another load or nothing open: no change.
+    pub fn resolve(&mut self, kind: &str, iccid: &str, epoch: &str) -> Vec<Change> {
+        let mut out = Vec::new();
+        if self.epoch.is_empty() || self.epoch != epoch {
+            return out;
+        }
+        self.close_where(
+            |e| e.kind == kind && e.iccid == iccid,
+            Close::Resolved,
+            &mut out,
+        );
+        out
+    }
+
     /// The user's "ignore": closes it and keeps the key closed for 24 h.
     pub fn dismiss(&mut self, kind: &str, iccid: &str, now: u64) -> Vec<Change> {
         self.dismiss_at(kind, iccid, now, None)

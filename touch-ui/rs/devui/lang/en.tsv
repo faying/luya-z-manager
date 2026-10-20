@@ -460,6 +460,9 @@ tailscale|节点	Peers
 正在检查…	Checking…
 正在检查… %d/%d	Checking… %d/%d
 正在测，稍等	Testing; one moment
+建议：重拨数据连接	Suggested: redial the data connection
+会断网约 15 秒，再按一次	Drops data ~15 s; tap again
+已送出批准；核心核对后才重拨	Approval sent; the core checks before redialling
 正常	OK
 没有信号	No signal
 没记上：后台没回应，可再点一次	Not saved: agent not responding; tap again

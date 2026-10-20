@@ -177,7 +177,14 @@ pub enum Reason {
     OtherChange,
     /// 不需要确认的动作（状态文案表有这一行；描述表里还没有这类动作）。
     NoVerify,
+    /// O3：远端发起的 Wi-Fi 改动，原来的网页改完又连上来送了回执。
+    Receipt,
+    /// O3：AP 起来以后 [`RECEIPT_MS`] 内没等到回执：不看全局开关，退回（用户 10-19 定）。
+    NoReceipt,
 }
+
+/// O3（decision-execution-loop §1.2）：AP 读回确认以后等远端回执多久（用户 10-19 定 60 秒）。
+pub const RECEIPT_MS: u64 = 60_000;
 
 /// 确认规则（D34）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -396,6 +403,8 @@ pub struct NewTxn {
     pub rollback_enabled: bool,
     pub deadline_ms: u64,
     pub boot_id: String,
+    /// O3：远端发起的 Wi-Fi 改动，AP 起来后还要等原来的网页送回执才算完成。
+    pub receipt: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -457,6 +466,12 @@ pub struct Txn {
     pub rollback_enabled: bool,
     pub deadline_ms: u64,
     pub boot_id: String,
+    /// O3：要等远端回执（见 [`NewTxn::receipt`]）。
+    #[serde(default)]
+    pub receipt: bool,
+    /// O3：AP 已确认、在等回执；到这个时刻（BOOTTIME 毫秒）还没等到就退回。
+    #[serde(default)]
+    pub receipt_by_ms: Option<u64>,
     /// 写之后经历的整机重启次数（D13）。
     pub boots: u32,
     /// 以前几次开机里已经等过的时长（D13 累计）。
@@ -508,6 +523,8 @@ impl Txn {
             rollback_enabled: n.rollback_enabled,
             deadline_ms: n.deadline_ms,
             boot_id: n.boot_id,
+            receipt: n.receipt,
+            receipt_by_ms: None,
             boots: 0,
             elapsed_prev_ms: 0,
             took_ms: None,
@@ -745,6 +762,33 @@ impl Txn {
         j
     }
 
+    /// O3：回执时限到了没等到：一律退回（不看全局开关）；没有可退回的旧值就记 no_rollback。
+    fn receipt_due(&mut self, now: u64) -> Option<Next> {
+        let by = self.receipt_by_ms?;
+        if self.phase != Phase::Verifying || self.intent.is_some() || now < by {
+            return None;
+        }
+        Some(if blank(&self.rollback_to) {
+            self.finish(Phase::Unverified, Reason::NoRollback)
+        } else {
+            self.start_rollback(Reason::NoReceipt)
+        })
+    }
+
+    /// O3：原来的网页送来回执。AP 还没确认（还没开始等回执）时拒绝，网页过一会儿再送。
+    pub fn receipt(&mut self) -> Result<(), &'static str> {
+        match self.phase {
+            Phase::Verifying if self.intent.is_none() && self.receipt_by_ms.is_some() => {
+                self.finish(Phase::Confirmed, Reason::Receipt);
+                Ok(())
+            }
+            Phase::Verifying if self.receipt => Err("Wi-Fi not confirmed yet"),
+            Phase::RollingBack => Err("already rolling back"),
+            p if p.is_final() => Err("change already finished"),
+            _ => Err("this change does not take a receipt"),
+        }
+    }
+
     /// 到点没确认：自动退回开着就退，关着就以 unverified/no_rollback 结束（D30）。
     fn expire(&mut self, why: Reason) -> Next {
         if self.rollback_enabled {
@@ -785,6 +829,17 @@ impl Txn {
                     self.ever_matched = true;
                     if r.registered {
                         match self.data_judge(r) {
+                            DataJudge::Ok if self.receipt => {
+                                // O3：AP 起来了也先不算完，留在可退回的 verifying 里等回执
+                                if self.receipt_by_ms.is_none() {
+                                    self.took_ms = Some(
+                                        self.elapsed_prev_ms
+                                            + now.saturating_sub(self.wait_start_ms),
+                                    );
+                                    self.receipt_by_ms = Some(now + RECEIPT_MS);
+                                }
+                                return self.receipt_due(now).unwrap_or(Next::Wait);
+                            }
                             DataJudge::Ok => {
                                 self.took_ms = Some(
                                     self.elapsed_prev_ms + now.saturating_sub(self.wait_start_ms),
@@ -841,6 +896,10 @@ impl Txn {
             return Next::Wait;
         }
         self.seen_ms = self.seen_ms.max(now);
+        if self.phase == Phase::Verifying && self.receipt_by_ms.is_some() {
+            // 等回执时只看回执时限，原来的确认时限已经过了这一关
+            return self.receipt_due(now).unwrap_or(Next::Wait);
+        }
         if now.saturating_sub(self.wait_start_ms) < self.deadline_ms {
             return Next::Wait;
         }
@@ -907,6 +966,10 @@ impl Txn {
             // 时钟归零了：之前记的时刻都作废，开机后的连接都算新的。
             self.ref_ms = 0;
             self.reset_probe();
+            // 时钟归零：回执重新给满一个时限（重启前的时刻没有意义）
+            if self.receipt_by_ms.is_some() {
+                self.receipt_by_ms = Some(now + RECEIPT_MS);
+            }
         }
         match (self.phase, self.intent) {
             (Phase::Accepted, _) => {
@@ -943,6 +1006,9 @@ impl Txn {
 
     /// 离到点还有多久（不在等时为 None）。
     pub fn remaining_ms(&self, now: u64) -> Option<u64> {
+        if let Some(by) = self.receipt_by_ms.filter(|_| self.phase == Phase::Verifying) {
+            return Some(by.saturating_sub(now));
+        }
         self.waiting().then(|| {
             self.deadline_ms
                 .saturating_sub(now.saturating_sub(self.wait_start_ms))
@@ -970,6 +1036,13 @@ impl Txn {
             "age_ms": now.saturating_sub(self.created_ms),
             "remaining_ms": remaining,
         });
+        if self.receipt {
+            // O3：网页看这个决定要不要送回执、还剩多久
+            v["receipt"] = json!({
+                "waiting": self.phase == Phase::Verifying && self.receipt_by_ms.is_some(),
+                "remaining_ms": self.receipt_by_ms.map(|t| t.saturating_sub(now)),
+            });
+        }
         self.who().tag(&mut v);
         v
     }

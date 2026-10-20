@@ -1,7 +1,8 @@
 //! `data.no_internet` replay (decision-execution-loop.md §2, §4 B5): from one evidence set to a
 //! read-only suggestion or unknown, plus which entry conditions still keep it read-only. It never
 //! produces an executable proposal in this batch: the B31 data-session reconnect is unverified,
-//! there is no authoritative connection generation, no O2 recheck and no wired gate.
+//! the SIM/connection/radio epochs exist but are not authoritative, there is no O2 recheck and
+//! no wired gate.
 
 use super::Check;
 use serde::Serialize;
@@ -52,11 +53,13 @@ pub enum Layer {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Missing {
-    /// Multi-target HTTPS + trusted clock + verified policy routing recheck.
+    /// Multi-target HTTPS + trusted clock + verified policy routing recheck. Rules in `https`;
+    /// not yet run on the device.
     O2,
     /// Per-action rollback capability and completion evidence.
     O3,
-    /// Atomic Finding revision + SIM + authoritative connection generation.
+    /// Atomic Finding revision + SIM + connection generation. The binding is in
+    /// `check_execution`; the epoch producers are still non-authoritative.
     O5,
     /// The admission gate wired into the engine's write path.
     T4,
@@ -64,13 +67,14 @@ pub enum Missing {
     B31Reconnect,
 }
 
-const ALL_MISSING: [Missing; 5] = [
-    Missing::O2,
-    Missing::O3,
-    Missing::O5,
-    Missing::T4,
-    Missing::B31Reconnect,
-];
+/// Still missing (10-20). O3 closed 10-19 (receipt verified both ways on the device); O2
+/// closed 10-20 (`https` rules + bound o2-check on the device, both families, clock trusted);
+/// T4 closed 10-20 (a real band transaction waited for a running diagnosis, and a diagnosis
+/// asked during the transaction waited for its end, on the device); B31 closed 10-20 (IPv4,
+/// IPv6 and dual-stack redials all came back within 15 s on the device); O5 closed 10-20 by the
+/// owner: SIM and connection epochs as observed (redials, IPv6 loss, steady while idle, core
+/// 1.6.9), the radio epoch stood in for by a fresh ONLINE mode read before the engine.
+pub const ALL_MISSING: [Missing; 0] = [];
 
 /// Same as the pilot (`finding.rs`): 60 s of passive-down, readings at most 30 s old.
 pub const HOLD_S: u64 = 60;
@@ -91,14 +95,25 @@ pub enum Advice {
 }
 
 impl Advice {
-    /// Always false in this batch.
+    /// Never by itself: a proposal runs only with an approval (a person, or the allow-list).
     pub fn executable(&self) -> bool {
         false
+    }
+
+    /// The one action a proposal may carry: a lost data session or address → redial (B31,
+    /// `ops/reconnect.rs`). DNS and exit faults, registration: no action, read-only advice.
+    pub fn action(&self) -> Option<&'static str> {
+        match self {
+            Advice::ReadOnly {
+                layer: Layer::DataSession | Layer::Ip,
+                missing,
+            } if missing.is_empty() => Some("data.reconnect"),
+            _ => None,
+        }
     }
 }
 
 pub fn replay(e: &Evidence) -> Advice {
-    // no producer of an authoritative connection generation yet (P1-01): O5 always missing
     let missing = || ALL_MISSING.to_vec();
     let unknown = |why| Advice::Unknown {
         why,

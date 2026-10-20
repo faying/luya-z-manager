@@ -429,10 +429,18 @@ pub fn select(parsed: &Parsed, query: Query) -> Values {
         ambr_dl: selected.dl.map(format_mbps).unwrap_or_default(),
         ambr_ul: selected.ul.map(format_mbps).unwrap_or_default(),
         bearer: if found { selected.core.name() } else { "" },
+        // An NR session whose CONNECTED line names the current address is not stale on
+        // EPS: on CMHK roaming (2026-10-20) the session came up with its 5QI and AMBR
+        // and the firmware then reported ENDC for hours with no new bearer line. The
+        // other way (an EPS bearer, now SA) stays stale: on B31 the move logged a new
+        // PDU session line with other values (b31_samples).
         stale: found
             && ((query.core != Core::Unknown
                 && selected.core != Core::Unknown
-                && selected.core != query.core)
+                && selected.core != query.core
+                && !(selected.core == Core::Nr
+                    && query.addr.is_some()
+                    && selected.addr == query.addr))
                 || other_connection(parsed, &selected, query.addr)),
     }
 }
@@ -979,6 +987,21 @@ mod tests {
         let log = format!("{LTE_HOME}{NR_SESSION}");
         let v = parse_texts(&[(&log, true)], q((460, 0), (460, 0), Core::Eps));
         assert_eq!(got(&v), (6, "2000.000", "200.000", "nr_pdu", true));
+    }
+
+    #[test]
+    fn sa_session_kept_after_falling_back_to_endc_is_current() {
+        // CMHK roaming, 2026-10-20: the session came up on SA, then the radio
+        // reported ENDC; the CONNECTED line still names the current address.
+        let log = "[DATA] pdu_session_id=2 msg_type=194 dnn=3gnet session_ambr_dl=3000 session_ambr_dl_unit=6(1Mbps) session_ambr_ul=300 session_ambr_ul_unit=6(1Mbps)
+[DATA] qci = 6 6
+[DATA] cid1 CONNECTED connect_status=ipv4_connected, ipv4 dev=rmnet_data0, addr=10.170.63.190, gw=10.170.63.189
+";
+        let endc = q((454, 12), (454, 12), Core::Eps);
+        let v = parse_texts(&[(log, true)], at(endc, "10.170.63.190"));
+        assert_eq!(got(&v), (6, "3000.000", "300.000", "nr_pdu", false));
+        // another address: still the old connection's values
+        assert!(parse_texts(&[(log, true)], at(endc, "10.170.63.200")).stale);
     }
 
     #[test]

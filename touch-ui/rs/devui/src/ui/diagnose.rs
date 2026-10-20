@@ -25,6 +25,8 @@ use devui_model::{dg_layer_t, diag_run_t};
 /// the layers + the speed row
 const DG_ROWS: usize = dv::DG_LAYERS_MAX + 1;
 const DG_ARM_MS: u32 = 5000;
+/// [`Arm`] ids: 0 = the roaming speed test, this = the proposal's redial
+const DG_ARM_REDIAL: i32 = 1;
 const DG_NOTE_MS: u32 = 4000;
 const DG_ACT_NONE: i32 = 0;
 const DG_ACT_PLACE: i32 = 1;
@@ -50,6 +52,9 @@ pub struct Diag {
     card: Obj,
     pub btn: Obj,
     btn_lbl: Obj,
+    /// redial for the core's proposal (decision loop §4.10), two taps
+    pub rd: Obj,
+    rd_lbl: Obj,
     note: Obj,
     fb: Obj,
     fb_lbl: Obj,
@@ -102,6 +107,10 @@ pub struct Place {
 
 unsafe extern "C" fn dg_start_cb(_e: *mut sys::lv_event_t) {
     super::with(|u| u.dg_start_tap());
+}
+
+unsafe extern "C" fn dg_redial_cb(_e: *mut sys::lv_event_t) {
+    super::with(|u| u.dg_redial_tap());
 }
 
 unsafe extern "C" fn dg_speed_cb(_e: *mut sys::lv_event_t) {
@@ -256,6 +265,26 @@ impl Ui {
         self.diag_paint();
     }
 
+    /// The first tap arms (the data drops ~15 s, no undo); the second approves the proposal
+    /// shown. The core refuses one that changed meanwhile; its refusal comes back as the notice.
+    fn dg_redial_tap(&mut self) {
+        let Some(p) = self.model.diagnose_proposal.clone() else { return };
+        let th = t();
+        if !self.dg.arm.tap(DG_ARM_REDIAL, lv::tick_get(), DG_ARM_MS) {
+            self.diag_paint();
+            return;
+        }
+        let params = format!("{{\"proposal_id\":\"{}\",\"params_digest\":\"{}\"}}", p.id, p.digest);
+        let ok = self.data_control("loop.approve", &params, None);
+        if ok {
+            self.dg_note(tr("已送出批准；核心核对后才重拨"), th.t2);
+        } else {
+            self.dg_note(tr("后台没回应"), th.bad_t);
+        }
+        self.src.diagnose_kick();
+        self.diag_paint();
+    }
+
     fn dg_fb_tap(&mut self, right: i32) {
         let r = self.dg_run();
         self.dg.fb_local = right;
@@ -337,6 +366,8 @@ impl Ui {
             kit::show(w.act, false);
             kit::show(w.bx, false);
         }
+        (dg.rd, dg.rd_lbl) = kit::button(sc, MARGIN, 0, CARD_W, 44, tr("建议：重拨数据连接"), BtnKind::Plain, Some(dg_redial_cb), 0);
+        kit::show(dg.rd, false);
         (dg.btn, dg.btn_lbl) = kit::button(sc, MARGIN, 0, CARD_W, 44, tr("加测速度 · 约 5 秒、最多 30 MB"), BtnKind::Plain, Some(dg_speed_cb), 0);
         dg.note = kit::label_w(sc, f.cj12, th.t3, MARGIN + 6, 0, CARD_W - 12, true, "");
         // 「14:32 测 · 结论对吗？」 + 对 / 不对 (each ≥ 40×40)
@@ -551,6 +582,18 @@ impl Ui {
         self.dg.card.set_height(y);
         y += 4 + 10;
 
+        // ---- the core's proposal: redial ----
+        let rd_show = err == 0 && self.model.diagnose_proposal.is_some();
+        kit::show(self.dg.rd, rd_show);
+        if rd_show {
+            let (rd, lbl) = (self.dg.rd, self.dg.rd_lbl);
+            let armed = self.dg.arm.live(DG_ARM_REDIAL, now, DG_ARM_MS);
+            self.set(lbl, if armed { tr("会断网约 15 秒，再按一次") } else { tr("建议：重拨数据连接") });
+            kit::button_kind(rd, lbl, if armed { BtnKind::Armed } else { BtnKind::Plain });
+            rd.set_y(y);
+            y += 44 + 6;
+        }
+
         // ---- 加测速度 / 重试 ----
         let done = r.state == DG_DONE && !self.dg.pending;
         let show_btn = err != 0 || done;
@@ -561,7 +604,7 @@ impl Ui {
             if err != 0 {
                 kind = BtnKind::Primary;
                 self.set(lbl, tr("重试"));
-            } else if self.dg.arm.at != 0 {
+            } else if self.dg.arm.live(0, now, DG_ARM_MS) {
                 kind = BtnKind::Armed;
                 self.set(lbl, tr("走漫游流量，再按一次"));
             } else if r.has_speed != 0 && r.speed.level == DG_RUNNING {

@@ -665,14 +665,41 @@ async fn ops_route(
                 },
             ));
         }
-        "op.revert" | "op.keep" => {
+        // 闭环（decision-execution-loop §4.10）：人批准当前的提议；只认触屏和网页，按批准者看。
+        "loop.approve" => {
+            let Some(sh) = crate::api::propose::shared() else {
+                return Some(op_error(action, StatusCode::SERVICE_UNAVAILABLE, "unavailable", "no proposal source", None));
+            };
+            // its own task: a client that goes away (touch lets go after 5 s) can't stop it
+            // between the saved reservation and the engine's answer
+            let (a, who, p) = (app.clone(), who_of(body), params.clone());
+            let r = match tokio::spawn(async move {
+                crate::api::approve::run(&a.inner.ops, crate::api::approve::device_loop(), sh, a.hub(), who, &p).await
+            })
+            .await
+            {
+                Ok(r) => r,
+                Err(_) => crate::api::approve::Reply::Exec(crate::api::execute::Exec::Refused("internal".into())),
+            };
+            let (status, v) = r.http();
+            return Some(if status == 200 {
+                control_ok(action, v)
+            } else {
+                (
+                    StatusCode::from_u16(status).unwrap_or(StatusCode::CONFLICT),
+                    Json(json!({"ok": false, "action": action, "error": v})),
+                )
+                    .into_response()
+            });
+        }
+        "op.revert" | "op.keep" | "op.receipt" => {
             let Some(op_id) = op_id else {
                 return Some(invalid_parameter(action, "missing parameter: op_id"));
             };
-            let r = if action == "op.revert" {
-                ops.revert(op_id)
-            } else {
-                ops.keep(op_id)
+            let r = match action {
+                "op.revert" => ops.revert(op_id),
+                "op.receipt" => ops.receipt(op_id),
+                _ => ops.keep(op_id),
             };
             return Some(match r {
                 Ok(v) => control_ok(action, v),
@@ -783,6 +810,7 @@ async fn ops_route(
         undo,
         rollback: pass.and_then(|p| p.rollback),
         expect_iccid: pass.and_then(|p| p.ticket.iccid.clone()),
+        receipt: body.get("receipt").and_then(Value::as_bool).unwrap_or(false),
     };
     let submitted = if crate::ops::spec::is_wifi(spec.item) {
         // Wi-Fi 设置：提交之前拿 Wi-Fi 锁（和 agent 一样最多等 5 秒），拿不到就是忙，事务还没开始。

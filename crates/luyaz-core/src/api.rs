@@ -41,7 +41,10 @@ pub(crate) mod control;
 mod device_admin;
 mod esim;
 mod exits;
+pub(crate) mod execute;
 pub(crate) mod finding;
+pub(crate) mod approve;
+pub(crate) mod propose;
 mod home;
 pub(crate) mod home_exit;
 mod net_reads;
@@ -59,6 +62,12 @@ mod wifi_reads;
 
 /// Starts the background duties (they run with or without anyone calling the routes).
 pub fn start(c: Compat) {
+    // the approval (`/control` `loop.approve`) reaches the proposal through this
+    propose::register(propose::Shared {
+        producer: c.group.producer.clone(),
+        findings: c.group.findings.clone(),
+        watch: c.group.watch.clone(),
+    });
     tokio::spawn(async move { c.resume().await });
 }
 

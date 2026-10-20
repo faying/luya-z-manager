@@ -34,7 +34,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc, Mutex, MutexGuard, OnceLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -131,6 +131,9 @@ pub struct Request {
     pub rollback: Option<bool>,
     /// 提交时要求的 SIM（第二期 O9）：敏感判定时读到的 ICCID；写之前读到的不是它就拒绝、不动设备。
     pub expect_iccid: Option<String>,
+    /// O3：远端发起的 Wi-Fi 改动，AP 起来后等原来的网页送回执（`op.receipt`），等不到就退回。
+    /// 只对 Wi-Fi 动作有效。
+    pub receipt: bool,
 }
 
 impl Request {
@@ -141,6 +144,9 @@ impl Request {
         }
     }
 }
+
+/// The loop's last check, run under the engine lock (see [`Engine::submit_from_loop`]).
+pub type Precheck = Box<dyn FnOnce(bool) -> Result<(), String> + Send>;
 
 #[derive(Debug)]
 pub enum Submit {
@@ -237,6 +243,13 @@ pub struct TxnGate {
 
 static TXN_GATE: OnceLock<TxnGate> = OnceLock::new();
 
+static USER_WRITES: OnceLock<Arc<AtomicU64>> = OnceLock::new();
+
+/// 设备上的引擎的用户写次数（[`Engine::register_user_writes`]）；没登记 = None，闭环不出提议。
+pub fn device_user_writes() -> Option<u64> {
+    USER_WRITES.get().map(|a| a.load(Ordering::SeqCst))
+}
+
 /// 设备上接 Gate（core `api.rs` 开写入时调一次）；之后建的、和已经建好的引擎都用它。
 pub fn set_txn_gate(g: TxnGate) {
     let _ = TXN_GATE.set(g);
@@ -293,6 +306,9 @@ struct Inner<D> {
     observer: OnceLock<Observer>,
     /// 测试各自接的 Gate；没有就用 [`set_txn_gate`] 接的。
     gate: OnceLock<TxnGate>,
+    /// 用户的影响上网的写（事务、other_write、interrupt）各加一：闭环提议记下当时的值，
+    /// 寫前檢查時變了就是 `human_wrote`（decision-execution-loop §4.9）。
+    user_writes: Arc<AtomicU64>,
 }
 
 pub struct Engine<D: Device> {
@@ -521,7 +537,25 @@ impl<D: Device> Engine<D> {
                 draining: AtomicBool::new(false),
                 observer: OnceLock::new(),
                 gate: OnceLock::new(),
+                user_writes: Arc::default(),
             }),
+        }
+    }
+
+    /// 用户影响上网的写的次数（只增不减；见 `Inner::user_writes`）。设备上读 [`device_user_writes`]。
+    #[allow(dead_code)] // tests
+    pub fn user_writes(&self) -> u64 {
+        self.inner.user_writes.load(Ordering::SeqCst)
+    }
+
+    /// 设备上的引擎（`server.rs`）登记自己的计数，闭环提议从 [`device_user_writes`] 读。
+    pub fn register_user_writes(&self) {
+        let _ = USER_WRITES.set(self.inner.user_writes.clone());
+    }
+
+    fn note_user_write(&self, who: &Who, item: &str) {
+        if who.approved_by.is_user() && !spec::is_wifi(item) {
+            self.inner.user_writes.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -719,6 +753,7 @@ impl<D: Device> Engine<D> {
     /// 用户与否按 `approved_by` 判断（T22，D23：人确认过的 MCP 写算用户写）。
     pub fn other_write(&self, who: impl Into<Who>) -> Result<(), Value> {
         let who = who.into();
+        self.note_user_write(&who, "");
         {
             let mut st = self.lock();
             // Wi-Fi 设置不影响上网：照做，不取消它
@@ -739,6 +774,7 @@ impl<D: Device> Engine<D> {
     /// 取消（other_change），流水账另记一行带 `what`；没有就什么都不做。
     pub fn interrupt(&self, who: impl Into<Who>, what: &str) -> Value {
         let who = who.into();
+        self.note_user_write(&who, "");
         let op_id = {
             let mut st = self.lock();
             let Some(t) = st.active.as_mut().filter(|t| !spec::is_wifi(&t.item)) else {
@@ -809,18 +845,23 @@ impl<D: Device> Engine<D> {
     /// 覆盖旧事务（superseded，继承退回目标，D35）、落盘新事务的写意图——中间没有空窗，
     /// 被覆盖事务的 pending.json 直接被新的盖掉。
     pub async fn submit(&self, req: Request) -> Submit {
-        self.submit_as(req, false).await
+        self.submit_as(req, None).await
     }
 
     /// 闭环发起的执行（decision-execution-loop §4.3 E3）：动作的退回能力不是 `CapturedAndProven`
     /// 就不带自动退回（到点没确认记 unverified/no_rollback），全局开关、批准者、`Request::rollback`
     /// 都不能把它打开；写设备用严格写锁（E2）。现在还没有调用方，闭环入口做好再接。
-    #[allow(dead_code)]
-    pub async fn submit_from_loop(&self, req: Request) -> Submit {
-        self.submit_as(req, true).await
+    ///
+    /// `precheck` 在第二段锁里、Gate 预留已确定之后、建事务之前调用（参数：是否拿着预留），
+    /// 回 Err 就什么都不写（§1.1：同一串行边界里重取并比对，`check_execution` 在这里跑）。
+    /// 闭环的事务和 Agent 的一样，先落盘成功才动设备。
+    #[allow(dead_code)] // only api/execute.rs, which has no production caller yet
+    pub async fn submit_from_loop(&self, req: Request, precheck: Precheck) -> Submit {
+        self.submit_as(req, Some(precheck)).await
     }
 
-    async fn submit_as(&self, mut req: Request, from_loop: bool) -> Submit {
+    async fn submit_as(&self, mut req: Request, precheck: Option<Precheck>) -> Submit {
+        let from_loop = precheck.is_some();
         let now = self.now();
         let op_id = req.op_id.clone().unwrap_or_else(new_op_id);
         let who = req.who();
@@ -936,6 +977,12 @@ impl<D: Device> Engine<D> {
             } else {
                 None
             };
+            if let Some(check) = precheck
+                && let Err(why) = check(hold.is_some())
+            {
+                keep(&mut st, hold);
+                return Submit::Refused(why);
+            }
             let mut inherit = None;
             if let Some(t) = st.active.as_mut() {
                 inherit = Some(t.rollback_to.clone());
@@ -965,15 +1012,19 @@ impl<D: Device> Engine<D> {
                     ) && (!from_loop || req.spec.auto_rollback_allowed()),
                     deadline_ms: req.spec.deadline_ms(),
                     boot_id: self.inner.dev.boot_id(),
+                    receipt: req.receipt && super::spec::is_wifi(req.spec.item),
                 },
                 now,
             );
             t.begin_apply();
             // O6：Agent 的事务先落盘成功（退回材料在里面）才动设备
-            if req.approved_by == Source::Mcp && !self.inner.store.save(&t) {
+            if (req.approved_by == Source::Mcp || from_loop) && !self.inner.store.save(&t) {
                 return Submit::Refused(
                     "cannot save the change on the device; not changing anything".into(),
                 );
+            }
+            if !from_loop {
+                self.note_user_write(&who, req.spec.item);
             }
             st.active = Some(Box::new(t));
             st.hold = hold;
@@ -1044,7 +1095,7 @@ impl<D: Device> Engine<D> {
                 let rollback = (t.phase == Phase::RollingBack
                     && t.intent == Some(txn::Intent::Rollback))
                 .then(|| t.rollback_to.clone());
-                (t.generation, spec::find(&t.action), rollback)
+                (t.generation, spec::find_any(&t.action), rollback)
             };
             // 发之前读不到设备时 send_rollback 回 false：下一拍再试。
             if let Some(v) = rollback
@@ -1218,6 +1269,22 @@ impl<D: Device> Engine<D> {
         self.persist(&mut st, true);
         drop(st);
         self.inner.wake.notify_one();
+        Ok(v)
+    }
+
+    /// O3：远端 Wi-Fi 改动的回执（原来的网页改完又连上来了）。
+    pub fn receipt(&self, op_id: &str) -> Result<Value, String> {
+        let now = self.now();
+        let v = {
+            let mut st = self.lock();
+            let Some(t) = st.live(op_id) else {
+                return Err("no such change in progress".into());
+            };
+            t.receipt()?;
+            self.finish(&mut st);
+            st.find(op_id, now).unwrap_or(Value::Null)
+        };
+        self.kick_legacy();
         Ok(v)
     }
 

@@ -97,19 +97,26 @@ fn the_first_bad_layer_is_named_and_stays_read_only() {
             missing: ALL_MISSING.to_vec()
         }
     );
-    // B31's reconnect is unverified: listed as missing, nothing executable
-    if let Advice::ReadOnly { missing, .. } = &a {
-        assert!(missing.contains(&Missing::B31Reconnect) && missing.contains(&Missing::O5));
-    }
+    // nothing missing any more: a lost session proposes the redial, never runs by itself
+    assert_eq!(a.action(), Some("data.reconnect"));
+    assert!(!a.executable());
+    let mut e = base();
+    e.has_ip = Some(false);
+    assert_eq!(replay(&e).action(), Some("data.reconnect"));
     let mut e = base();
     e.dns = Some(Dns::Fail);
+    let a = replay(&e);
     assert!(matches!(
-        replay(&e),
+        a,
         Advice::ReadOnly {
             layer: Layer::Dns,
             ..
         }
     ));
+    assert_eq!(a.action(), None, "a DNS fault is not fixed by a redial");
+    let mut e = base();
+    e.registered = Some(false);
+    assert_eq!(replay(&e).action(), None);
 }
 
 #[test]
@@ -117,7 +124,7 @@ fn every_unknown_says_what_is_missing() {
     let mut e = base();
     e.https = None;
     match replay(&e) {
-        Advice::Unknown { missing, .. } => assert_eq!(missing.len(), 5),
+        Advice::Unknown { missing, .. } => assert_eq!(missing, ALL_MISSING),
         a => panic!("{a:?}"),
     }
 }

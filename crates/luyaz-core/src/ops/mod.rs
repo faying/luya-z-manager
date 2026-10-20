@@ -22,6 +22,7 @@ pub mod engine;
 pub mod journal_view;
 pub mod pending;
 pub mod probe;
+pub mod reconnect;
 pub mod record;
 pub mod spec;
 pub mod txn;
@@ -33,7 +34,9 @@ pub mod write_lock;
 
 use crate::executor::Executor;
 use serde_json::{Value, json};
-use spec::{APN, BAND_ALL, BAND_LTE, BAND_NR, CELL_LTE, CELL_NR, NETWORK_MODE, Spec};
+use spec::{
+    APN, BAND_ALL, BAND_LTE, BAND_NR, CELL_LTE, CELL_NR, DATA_SESSION, NETWORK_MODE, Spec,
+};
 use std::{path::PathBuf, time::Instant};
 use txn::{Conn, DataPath, ProbeTarget, Reading, SimId};
 
@@ -372,7 +375,7 @@ fn readback(item: &str, net: &Value) -> Option<Value> {
     match item {
         NETWORK_MODE => Some(text(net, "net_select"))
             .filter(|v| !v.is_empty())
-            .map(Value::String),
+            .map(|v| Value::String(spec::canonical_mode(&v).to_string())),
         BAND_LTE => b("lte_band").map(Value::String),
         BAND_NR => Some(json!({"sa": b("nr5g_sa_band_lock")?, "nsa": b("nr5g_nsa_band_lock")?})),
         CELL_LTE => cell(net, "lock_lte_cell", &["pci", "earfcn"]),
@@ -554,7 +557,7 @@ impl engine::Device for UbusDevice {
         }
         if !matches!(
             spec.item,
-            NETWORK_MODE | BAND_LTE | BAND_NR | BAND_ALL | CELL_LTE | CELL_NR | APN
+            NETWORK_MODE | BAND_LTE | BAND_NR | BAND_ALL | CELL_LTE | CELL_NR | APN | DATA_SESSION
         ) {
             return Err(format!("no reader for {}", spec.item));
         }
@@ -562,6 +565,7 @@ impl engine::Device for UbusDevice {
         let sim = crate::state::ubus("zwrt_zte_mdm.api", "get_sim_info", json!({})).await?;
         let value = match spec.item {
             APN => apn_now().await?.map(|n| n.value(&self.vault)),
+            DATA_SESSION => Some(Value::from(reconnect::read_session().await?)),
             item => readback(item, &net),
         };
         Ok(Reading {
@@ -617,6 +621,42 @@ impl engine::Device for UbusDevice {
                 message,
                 timed_out: false,
             });
+        }
+        if spec.item == DATA_SESSION {
+            // 闭环专用（`ops::reconnect`）：同样在执行者里拿写锁，闭环的拿不到就不写
+            let r = self
+                .exec
+                .task(async move {
+                    let _lock = if strict {
+                        write_lock::acquire_strict().await?
+                    } else {
+                        write_lock::acquire().await
+                    };
+                    Ok::<_, write_lock::Busy>(
+                        reconnect::redial(|a| async move {
+                            crate::executor::call("zwrt_qcmap_cli", "set_qcliiface", &a)
+                                .await
+                                .map_err(|e| e.to_string())
+                        })
+                        .await,
+                    )
+                })
+                .await;
+            crate::state::invalidate_cache();
+            return match r {
+                Ok(Ok(v)) => {
+                    self.exec.mark_immediate(None);
+                    Ok(v)
+                }
+                Ok(Err(message)) => Err(WriteError {
+                    message,
+                    timed_out: false,
+                }),
+                Err(_) => Err(WriteError {
+                    message: "write lock busy; nothing written".into(),
+                    timed_out: false,
+                }),
+            };
         }
         let apn = if spec.item == APN {
             let now = apn_now()
@@ -780,7 +820,7 @@ mod tests {
     #[test]
     fn band_readbacks_match_normalized_targets() {
         let net = net_sample();
-        assert_eq!(readback(NETWORK_MODE, &net), Some(json!("TCHGWL_5G")));
+        assert_eq!(readback(NETWORK_MODE, &net), Some(json!("WL_AND_5G")));
         let lte = spec::find("band.set_lte").unwrap();
         assert_eq!(
             readback(BAND_LTE, &net),

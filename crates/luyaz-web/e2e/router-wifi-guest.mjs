@@ -94,6 +94,7 @@ async function own(p) {
   await done("已改成|没有生效|设备已接受|连接中断");
   const b = await lastOp();
   ok(await p.locator("#wg-save-op .t-note--ok").count() === 1, `applied: ${await txt(p, "#wg-save-op")}`);
+  ok(b.receipt === false && !/自动回报/.test(dt) && (await stats()).receipts.length === 0, "LAN: no receipt asked, no receipt note");
   ok(b.source === "web" && /^lw-/.test(b.op_id) && same(b.params, { guest_ssid: "Cafe e2e", guest_key: "secretpw99", guest_disabled_5g: "0" }), `body: ${JSON.stringify(b.params)}`);
   await until(p, () => /Cafe e2e/.test(document.querySelector("#wg-rows")?.textContent ?? ""));
   ok(/Cafe e2e/.test(await txt(p, "#wg-rows")) && /2\.4 GHz \+ 5 GHz/.test(await txt(p, "#wg-status")), "rows and status follow");
@@ -186,7 +187,55 @@ async function own(p) {
   await sleep(500);
 }
 
-const browser = await chromium.launch({ channel: "chrome" });
+// O3: from off the LAN (a Host without a dot) the change asks for a receipt; the page sends it by
+// itself once the core waits (mock: src/mock/receipt.rs); without it the core puts the old back
+async function remote(browser) {
+  const RW = WEB.replace("127.0.0.1", "lwremote");
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await ctx.addCookies([{ name: "lw_sid", value: sid, url: RW }, { name: "u60_lang", value: "zh", url: RW }]);
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on("pageerror", (e) => errs.push(e.message));
+  const op = () => txt(p, "#wg-save-op");
+  const change = async (ssid) => {
+    await p.goto(RW + "/router/wifi-guest", { waitUntil: "load" });
+    await ready(p).catch(() => ok(false, "remote: live content never showed"));
+    await p.click("#wg-btn");
+    await p.waitForSelector("input[data-bind=_wgssid]", { timeout: 8000 });
+    await p.fill("input[data-bind=_wgssid]", ssid);
+    await p.click("#wg-form button:has-text('应用')");
+    await p.locator("dialog#wg-save-confirm[open]").waitFor({ timeout: 8000 }).catch(() => {});
+    const dlg = await txt(p, "#wg-save-confirm");
+    await p.click("#wg-save-confirm .nd-btn--confirm");
+    return dlg;
+  };
+  const end = (re) => until(p, (re) => new RegExp(re).test(document.querySelector("#wg-save-op")?.textContent ?? ""), re, 40000);
+
+  await reset(); await post("/mock/receipt", { reset: true });
+  const dlg = await change("Far guest");
+  ok(/这个页面会自动回报/.test(dlg) && /60 秒/.test(dlg), `remote: the receipt note in the confirm (${dlg.slice(0, 120)})`);
+  await end("已改成|已退回|没有生效");
+  const b = await lastOp();
+  ok(b.receipt === true, `remote: body asks for a receipt (${b.receipt})`);
+  const rs = (await stats()).receipts;
+  ok(rs.length === 1 && rs[0].accepted && rs[0].body.action === "op.receipt" && rs[0].body.params?.op_id === b.op_id && rs[0].body.op_id === undefined,
+    `remote: the browser sent the receipt by itself, op_id in params (${JSON.stringify(rs)})`);
+  ok(await p.locator("#wg-save-op .t-note--ok").count() === 1, `remote with receipt: ${await op()}`);
+
+  // the page is cut off: no receipt reaches the core, which puts the old settings back
+  await reset(); await post("/mock/receipt", { reset: true, lost: true, ms: 3000 });
+  await change("Lost guest");
+  await end("已退回|没有生效");
+  ok(/远端没回来/.test(await op()) && await p.locator("#wg-save-op .t-note--warn").count() === 1, `no receipt: ${await op()}`);
+  ok(!/Lost guest/.test(await txt(p, "#wg-rows")), "no receipt: the old name stays");
+  ok(errs.length === 0, `remote: no page errors ${errs.join("; ")}`);
+  await p.screenshot({ path: `${OUT}/wg-remote-no-receipt.png`, fullPage: true });
+  await post("/mock/receipt", { reset: true }); await reset();
+  await ctx.close();
+}
+
+const browser = await chromium.launch({ channel: "chrome", args: ["--host-resolver-rules=MAP lwremote 127.0.0.1"] });
+await remote(browser);
 for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [1280, 900, "desk", "en", "dark"], [390, 844, "phone", "zh", "light"]]) {
   const ctx = await browser.newContext({ viewport: { width: w, height: h } });
   await ctx.addCookies([{ name: "lw_sid", value: sid, url: WEB }, { name: "u60_lang", value: lang, url: WEB }]);

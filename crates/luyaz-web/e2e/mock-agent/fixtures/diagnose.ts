@@ -226,10 +226,14 @@ export const routes: Route[] = [
     ownMissing: true,
     handler: (ctx) => {
       const finding = mockFinding(ctx);
-      if (!current) return ok({ state: "idle", finding });
+      // the decision loop's pending proposal (core api/propose.rs view()) comes with the finding
+      const proposal = finding
+        ? { proposal_id: "a1b2c3", params_digest: "d4e5f6", kind: "data.no_internet", action: "data.reconnect", iccid_tail: "1234" }
+        : null;
+      if (!current) return ok({ state: "idle", finding, proposal });
       const v = view(current, ctx.now);
-      if (v.state === "done" && (v.age_s ?? 0) > KEEP_S) return ok({ state: "idle", finding });
-      return ok({ ...v, finding });
+      if (v.state === "done" && (v.age_s ?? 0) > KEEP_S) return ok({ state: "idle", finding, proposal });
+      return ok({ ...v, finding, proposal });
     },
   },
   {

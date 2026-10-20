@@ -62,20 +62,27 @@ pub(crate) fn coverage() -> std::collections::BTreeMap<String, luyaz_api::firmwa
             "BSP_TYPEC_EVENT/BSP_POWERBANK_EVENT",
             "no_subscription_ack_or_sequence_loss_contract",
         ),
+        // Minted from ubus `zwrt_card_state_event` once a self-sent probe confirms the
+        // subscription; ubusd's behaviour for a slow subscriber is unverified.
         (
             "sim_epoch",
-            "existing_sim_snapshot",
-            "no_continuous_sim_lifecycle_source",
+            "ubus_card_state_event_probe_confirmed",
+            "single_hotswap_observed_ubusd_loss_contract_unverified",
         ),
+        // Minted by `netlink` (subscribe, dump, ENOBUFS revokes). Observed (10-20, core
+        // 1.6.9): same-IP redial, IPv6-only loss, dual-stack loss with a new IPv4, steady
+        // while idle; SSR and a SIM swap unobserved, so not authoritative yet.
         (
             "connection_epoch",
-            "existing_wwan_snapshot",
-            "no_continuous_connection_lifecycle_source",
+            "rtnetlink_rmnet_link_addr_route",
+            "redial_ipv6_dual_observed_ssr_sim_unverified",
         ),
+        // No mode-change event exists (B31 strings, §12.8); derived from the rtnetlink and
+        // ubus subscriptions plus mode reads. LPM/SSR can't be exercised, so never observed.
         (
             "radio_epoch",
-            "uci_operate_mode",
-            "observed_mode_only_no_lifecycle_epoch",
+            "derived_rtnetlink_ubus_card_power_mode",
+            "lpm_and_ssr_unobserved_no_mode_event",
         ),
     ]
     .into_iter()

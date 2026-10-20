@@ -514,3 +514,39 @@ fn at_dialect_proof_requires_epochs_and_redacts_payload() {
         .unwrap();
     assert_eq!(a.status, Support::Unknown);
 }
+
+#[test]
+fn loop_epochs_count_the_radio_only_after_a_recent_online_read() {
+    let c = Collector::new();
+    epochs(&c);
+    let (e, id) = c.loop_epochs(Some(&at(20)), 30);
+    assert_eq!(e.radio.as_deref(), Some("synthetic-radio"));
+    assert!(!id.is_empty());
+    // too old for the window
+    assert_eq!(c.loop_epochs(Some(&at(40)), 30).0.radio, None);
+    // other boot
+    let other = BootTime {
+        boot_id: "other".into(),
+        seconds: 2,
+    };
+    assert_eq!(c.loop_epochs(Some(&other), 30).0.radio, None);
+    // not ONLINE
+    c.0.lock().unwrap().context.radio_mode = Some("LOW_POWER".into());
+    assert_eq!(c.loop_epochs(Some(&at(2)), 30).0.radio, None);
+}
+
+#[test]
+fn a_fresh_online_read_keeps_the_radio_epoch_the_proposal_bound() {
+    // the approval reads the mode again before the engine (api/approve.rs): the same ONLINE
+    // must give the same epoch, or every approval would be refused as a radio change
+    let c = Collector::new();
+    epochs(&c);
+    let first = c.loop_epochs(Some(&at(2)), 30).0.radio;
+    assert_eq!(first.as_deref(), Some("synthetic-radio"));
+    c.radio_read(c.token(), Some("ONLINE"), Some(at(200)));
+    assert_eq!(c.loop_epochs(Some(&at(201)), 30).0.radio, first);
+    // a mode change between is another epoch
+    c.radio_read(c.token(), Some("LOW_POWER"), Some(at(210)));
+    c.radio_read(c.token(), Some("ONLINE"), Some(at(220)));
+    assert_ne!(c.loop_epochs(Some(&at(221)), 30).0.radio, first);
+}

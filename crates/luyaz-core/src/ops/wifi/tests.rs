@@ -329,6 +329,7 @@ fn the_password_never_leaves_the_vault() {
             rollback_enabled: true,
             deadline_ms: 90_000,
             boot_id: "b".into(),
+            receipt: false,
         },
         1_000,
     );
@@ -375,6 +376,7 @@ fn wifi_confirms_without_data() {
             rollback_enabled: false,
             deadline_ms: 90_000,
             boot_id: "b".into(),
+            receipt: false,
         },
         1_000,
     );

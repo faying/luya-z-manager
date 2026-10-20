@@ -332,6 +332,7 @@ fn txn_line_has_only_the_iccid_tail() {
             rollback_enabled: false,
             deadline_ms: 1,
             boot_id: "b".into(),
+            receipt: false,
         },
         1,
     );

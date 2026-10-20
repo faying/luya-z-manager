@@ -21,6 +21,18 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+## core 1.6.8 — 2026-10-20
+
+- 5G cell lock (`cell.lock_nr`) is marked `captured_and_proven` after the real-device test (a lock to a missing cell rolls back at the deadline through the stock reset), so closed-loop 5G cell locks auto-revert too. LTE cell lock stays `unknown` (not tested).
+
+## core 1.6.5 — 2026-10-20
+
+- band lock (`band.set_lte`, `band.set_nr`, `band.reset`) is marked `captured_and_proven` after the real-device test (good switches confirm, a lock to an absent band rolls back at the deadline), so closed-loop band writes now auto-revert too. Network mode and cell lock stay `unknown`.
+
+## core 1.5.8 — 2026-10-19
+
+- network mode: the three "auto" values (`WL_AND_5G`, `TCHGWL_5G`, `NETWORK_auto`) count as one in a transaction. Writing `TCHGWL_5G` reads back `WL_AND_5G`, which used to end a good switch or a rollback as `manual_change` / `not_applied`.
+
 ## lweb 1.3.1 — 2026-10-19
 
 - the remote warning in a confirm now says whether this step reverts by itself: network mode, band lock and cell lock follow the device's auto-revert setting; every other write says it does not revert.

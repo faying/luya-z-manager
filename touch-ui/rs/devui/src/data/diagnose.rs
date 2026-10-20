@@ -4,12 +4,12 @@
 // SPDX-License-Identifier: MIT
 
 use super::core_api::CoreApi;
-use super::util::{bytes_cap, jset, mono_ms, trunc};
+use super::util::{bytes_cap, jset, jstr, mono_ms, trunc};
 use crate::cf;
 use crate::diag_view::{self, DG_IDLE, DG_LAYERS_MAX, DG_NONE, DG_RUN, DG_RUNNING, DG_WAITING};
 use crate::json;
 use crate::lang::{self, tr};
-use devui_model::{diag_run_t, dg_layer_t};
+use devui_model::{diag_run_t, dg_layer_t, dg_proposal_t};
 
 const DG_FAST_MS: i64 = 1000;
 const DG_SLOW_MS: i64 = 5000;
@@ -25,7 +25,22 @@ pub struct Diagnose {
     refused: String,
     poll_ms: i64,
     kick: bool,
-    sig: Option<(diag_run_t, i32, bool)>,
+    sig: Option<(diag_run_t, i32, bool, Option<dg_proposal_t>)>,
+    /// the core's pending redial proposal (`data.proposal`)
+    proposal: Option<dg_proposal_t>,
+}
+
+/// `data.proposal` when it is a complete redial (no button for an action the screen can't name).
+pub fn proposal_of(data: &[u8]) -> Option<dg_proposal_t> {
+    let p = json::get(data, "proposal", 1024).filter(|p| p != b"null")?;
+    if jstr(&p, "action", 64) != "data.reconnect" {
+        return None;
+    }
+    let (id, digest) = (jstr(&p, "proposal_id", 64), jstr(&p, "params_digest", 64));
+    if id.is_empty() || digest.is_empty() {
+        return None;
+    }
+    Some(dg_proposal_t { id, digest, tail: jstr(&p, "iccid_tail", 8) })
 }
 
 impl Default for Diagnose {
@@ -38,6 +53,7 @@ impl Default for Diagnose {
             poll_ms: 0,
             kick: true,
             sig: None,
+            proposal: None,
         }
     }
 }
@@ -57,6 +73,7 @@ impl Diagnose {
         };
         let Some(b) = body.filter(|_| (200..300).contains(&code)) else { return false };
         let Some(data) = json::get(b, "data", DG_RESP_MAX) else { return false };
+        self.proposal = proposal_of(&data);
         let (ok, r) = diag_view::parse(&data);
         if !ok {
             return false;
@@ -116,7 +133,10 @@ impl Diagnose {
         let (code, body) = agent.api("GET", "/api/diagnose", None, DG_RESP_MAX);
         let body = body.filter(|_| code == 200);
         self.take(code, body.as_deref());
-        let sig = (self.run.clone(), self.err, self.idle);
+        if code != 200 {
+            self.proposal = None;
+        }
+        let sig = (self.run.clone(), self.err, self.idle, self.proposal.clone());
         if self.sig.as_ref() == Some(&sig) {
             return false;
         }
@@ -129,6 +149,9 @@ impl Diagnose {
     }
     pub fn run(&self) -> &diag_run_t {
         &self.run
+    }
+    pub fn proposal(&self) -> Option<&dg_proposal_t> {
+        self.proposal.as_ref()
     }
     pub fn agent_err(&self) -> i32 {
         self.err
@@ -181,5 +204,21 @@ impl Diagnose {
         self.run.feedback = right as i32;
         self.sig = None;
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_complete_redial_proposal_is_kept() {
+        let d = br#"{"state":"idle","proposal":{"proposal_id":"ab12","params_digest":"d0","action":"data.reconnect","iccid_tail":"1234"}}"#;
+        let p = proposal_of(d).unwrap();
+        assert_eq!((p.id.as_str(), p.digest.as_str(), p.tail.as_str()), ("ab12", "d0", "1234"));
+        assert!(proposal_of(br#"{"proposal":null}"#).is_none());
+        assert!(proposal_of(br#"{"state":"idle"}"#).is_none());
+        assert!(proposal_of(br#"{"proposal":{"proposal_id":"ab12","params_digest":"d0","action":"network.mode"}}"#).is_none());
+        assert!(proposal_of(br#"{"proposal":{"proposal_id":"","params_digest":"d0","action":"data.reconnect"}}"#).is_none());
     }
 }

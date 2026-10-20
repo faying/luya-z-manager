@@ -10,13 +10,14 @@
 //! - unknown never becomes success or an action;
 //! - `human_kept` is kept apart from the fault's own state;
 //! - one proposal binds at most one transaction; asking again returns the same op ([`Ledger`]);
-//! - another card, another connection, another Finding epoch/revision, a human write or expiry
-//!   voids the proposal;
+//! - another card, the same card re-seated, another connection, a radio change, another Finding
+//!   epoch/revision, a human write or expiry voids the proposal (O5);
 //! - an approval only carries the permission decision made elsewhere (`ops/agent.rs` for the
 //!   MCP's restricted APN/CHILL self-approval, Web/Screen for a human); it adds none.
 
 use serde::{Deserialize, Serialize};
 
+pub mod https;
 pub mod no_internet;
 
 /// The card: full ICCID + slot, kept on the device only (screens show the tail).
@@ -43,9 +44,28 @@ pub struct FindingSnapshot {
     pub revision: Option<u64>,
 }
 
-/// An authoritative connection generation (P1-01 lifecycle). IP + estimated up-since
-/// (`txn::Conn`) is not one; until a producer exists this is always None = unknown.
-pub type ConnGen = Option<String>;
+/// The SIM, connection and radio epochs (firmware-capabilities.md §12.6–§12.8), taken together
+/// from one collector `Scope` so no epoch can come from an older read than another (O5). The
+/// producers mark them non-authoritative; an IP + estimated up-since (`txn::Conn`) is not one.
+/// None or "" = unknown.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Epochs {
+    /// A new value on every card event, so a re-seated card with the same ICCID differs.
+    pub sim: Option<String>,
+    pub conn: Option<String>,
+    pub radio: Option<String>,
+}
+
+impl Epochs {
+    /// The only constructor: one `Scope.context`, i.e. one `Collector::token()`.
+    pub fn of(c: &crate::firmware::Context) -> Self {
+        Epochs {
+            sim: c.sim_epoch.clone(),
+            conn: c.connection_epoch.clone(),
+            radio: c.radio_epoch.clone(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -62,8 +82,8 @@ pub struct Proposal {
     pub finding: FindingRef,
     pub boot_id: String,
     pub sim: SimId,
-    /// None = unknown: never executable.
-    pub conn: ConnGen,
+    /// Any unknown: never executable.
+    pub epochs: Epochs,
     pub action_id: String,
     /// Digest of the normalised parameters.
     pub params_digest: String,
@@ -106,7 +126,8 @@ pub struct Now {
     pub device_id: String,
     /// None = the card can't be read.
     pub sim: Option<SimId>,
-    pub conn: ConnGen,
+    /// From one `Scope` read in the same locked section as the Finding snapshot.
+    pub epochs: Epochs,
     /// The admission gate is held, granted, by this proposal.
     pub gate_granted: bool,
     /// A human wrote the same item since the proposal.
@@ -125,6 +146,8 @@ pub enum Refuse {
     SimChanged,
     ConnUnknown,
     ConnChanged,
+    RadioUnknown,
+    RadioChanged,
     FindingClosed,
     FindingUnknown,
     FindingChanged,
@@ -160,10 +183,22 @@ pub fn check_execution(
         Some(s) if *s != p.sim => return Err(Refuse::SimChanged),
         _ => {}
     }
-    match (&p.conn, &now.conn) {
-        (None, _) | (_, None) => return Err(Refuse::ConnUnknown),
-        (Some(a), Some(b)) if a != b => return Err(Refuse::ConnChanged),
-        _ => {}
+    let (pe, ne) = (&p.epochs, &now.epochs);
+    for (was, is, unknown, changed) in [
+        (&pe.sim, &ne.sim, Refuse::SimUnknown, Refuse::SimChanged),
+        (&pe.conn, &ne.conn, Refuse::ConnUnknown, Refuse::ConnChanged),
+        (
+            &pe.radio,
+            &ne.radio,
+            Refuse::RadioUnknown,
+            Refuse::RadioChanged,
+        ),
+    ] {
+        match (was.as_deref(), is.as_deref()) {
+            (None | Some(""), _) | (_, None | Some("")) => return Err(unknown),
+            (Some(x), Some(y)) if x != y => return Err(changed),
+            _ => {}
+        }
     }
     if !f.open {
         return Err(Refuse::FindingClosed);

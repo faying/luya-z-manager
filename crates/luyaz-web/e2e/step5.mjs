@@ -219,6 +219,13 @@ const PAGES = {
       await p.waitForSelector("#dg-finding section", { timeout: 35000 }).catch(() => {});
       const fd = (await p.textContent("#dg-finding").catch(() => "")) ?? "";
       ok(/数据连接没建立/.test(fd) && /确定/.test(fd) && /…1234/.test(fd) && await p.locator("#dg-finding .dg-row").count() === 4, `finding evidence: ${fd.replace(/\s+/g, " ").slice(0, 120)}`);
+      // §4.10: the proposal under the finding; 「重拨」 arms, the second press approves it
+      ok(/建议：重拨数据连接/.test(fd), `proposal shown: ${fd.replace(/\s+/g, " ").slice(0, 120)}`);
+      await p.click("#dg-finding .dg-approve");
+      ok(/会断网约 15 秒/.test((await p.textContent("#dg-finding .dg-approve")) ?? ""), "redial arms first");
+      await p.click("#dg-finding .dg-approve");
+      await p.waitForFunction(() => /正在重拨/.test(document.querySelector("#dg-op")?.textContent ?? ""), null, { timeout: 6000 }).catch(() => {});
+      ok(/正在重拨/.test((await p.textContent("#dg-op")) ?? ""), "redial approved");
       await p.click("#dg-finding .dg-dismiss");
       await p.waitForFunction(() => !document.querySelector("#dg-finding section"), null, { timeout: 6000 }).catch(() => {});
       ok(await p.locator("#dg-finding section").count() === 0, "ignore: the finding is gone");

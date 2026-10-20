@@ -31,6 +31,17 @@ pub const EVENT: &str = "zwrt_wms_status_event";
 pub const TYPEC_EVENT: &str = "BSP_TYPEC_EVENT";
 /// 快充充电宝开关：`{"state":1}`，拔线后固件自己回 0。
 pub const POWERBANK_EVENT: &str = "BSP_POWERBANK_EVENT";
+/// SIM 热拔插：拔卡 `{"sim_hotswap":"sim hot remove"}`，插回是带 `sim_states` 的整份卡资料
+/// （含个人信息，只看事件名，不留内容）。B31 真机 2026-10-19，firmware-capabilities §12.7。
+pub const CARD_EVENT: &str = "zwrt_card_state_event";
+/// 休眠／唤醒（`zte_topsw_mc` 发）。只看事件名：无线电代次换新（R18-P1-01，§12.8）。
+pub const POWER_EVENT: &str = "zwrt_device_power_state_event";
+/// 订阅确认（R18-P1-01）：`ubus listen` 不回报何时登记好，核心自己 `ubus send` 这条，
+/// 收到才算这一轮的订阅生效（[`Notice::Ready`]）。排在参数最后，前面的都已登记。
+pub const PROBE_EVENT: &str = "luyaz_listen_probe";
+/// 探针最多发几次、间隔多久；收到就停。
+const PROBE_TRIES: u32 = 10;
+const PROBE_EVERY: Duration = Duration::from_secs(1);
 pub const ENV_ENABLE: &str = "LUYAZ_SMS_LISTEN";
 /// 短时间多次事件合并成一次。
 pub const DEBOUNCE: Duration = Duration::from_millis(300);
@@ -109,6 +120,8 @@ impl Options {
 pub enum Notice {
     Gap,
     Event(&'static str),
+    /// 本轮子进程收到了自己的探针：从这里起事件不会漏在登记之前（每轮至多一次）。
+    Ready,
 }
 pub type Observer = Arc<dyn Fn(Notice) + Send + Sync>;
 
@@ -212,6 +225,7 @@ async fn run_once(
     let child = crate::command::die_with_parent(&mut Command::new(program))
         .arg("listen")
         .args(events)
+        .arg(PROBE_EVENT)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -225,6 +239,9 @@ async fn run_once(
         return "没有 stdout".into();
     };
     let mut lines = BufReader::new(stdout);
+    let seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let probe = tokio::spawn(send_probes(program.to_owned(), seen.clone()));
+    let _probe = AbortOnDrop(probe);
     loop {
         let next = tokio::select! {
             r = bounded_line(&mut lines) => r,
@@ -235,6 +252,13 @@ async fn run_once(
         };
         match next {
             Ok(Some(line)) => {
+                // 每条探针都算 Ready：执行者那边一次 ubus 出错撤销了代次后会补发（[`reprobe`]），
+                // 这个子进程还收得到，就说明订阅一直在。
+                if event_of(&line, &[PROBE_EVENT]).is_some() {
+                    seen.store(true, std::sync::atomic::Ordering::SeqCst);
+                    observe(Notice::Ready);
+                    continue;
+                }
                 if !dispatch(&line, events, txs, observe) {
                     return "核心退出".into();
                 }
@@ -249,6 +273,53 @@ async fn run_once(
     match child.wait().await {
         Ok(s) => format!("{s}"),
         Err(e) => format!("{e}"),
+    }
+}
+
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// 补发一条探针（R18-P1-01）：执行者的 ubus 调用出错撤销了 SIM／无线电代次，监听子进程却没断，
+/// 收到这条就重新 Ready。发不出去（ubusd 真的坏了）就保持撤销。
+pub fn reprobe() {
+    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    rt.spawn(async {
+        let _ = crate::command::die_with_parent(&mut Command::new(cli_bin()))
+            .args(["send", PROBE_EVENT, "{}"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .status()
+            .await;
+    });
+}
+
+/// 子进程起来后给自己发探针，直到收到或发满 [`PROBE_TRIES`] 次。发不出去只是不 Ready。
+async fn send_probes(program: String, seen: Arc<std::sync::atomic::AtomicBool>) {
+    for _ in 0..PROBE_TRIES {
+        sleep(PROBE_EVERY / 4).await;
+        if seen.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let _ = crate::command::die_with_parent(&mut Command::new(&program))
+            .args(["send", PROBE_EVENT, "{}"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .status()
+            .await;
+        sleep(PROBE_EVERY).await;
+        if seen.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
     }
 }
 
@@ -514,9 +585,48 @@ mod tests {
         assert!(
             starts
                 .iter()
-                .all(|l| *l == format!("listen {EVENT} {TYPEC_EVENT}"))
+                .all(|l| *l == format!("listen {EVENT} {TYPEC_EVENT} {PROBE_EVENT}"))
         );
         assert!(got >= 3, "每个子进程的事件都送到了：{got}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R18-P1-01：每条探针都变成 Ready（补发的也算），不算 Gap、不送给处理表。
+    #[tokio::test]
+    async fn every_probe_line_marks_the_subscription_ready() {
+        let dir = std::env::temp_dir().join(format!("core-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let events = dir.join("events");
+        std::fs::write(
+            &events,
+            format!("{{ \"{PROBE_EVENT}\": {{}} }}\n{{ \"{PROBE_EVENT}\": {{}} }}\n{{ \"{CARD_EVENT}\": {{}} }}\n"),
+        )
+        .unwrap();
+        let script = dir.join("ubus");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nMOCK_LISTEN_EVENTS_FILE='{}' MOCK_LISTEN_EXIT_AFTER=0 exec sh '{}' \"$@\"\n",
+                events.display(),
+                mock_script()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let s2 = seen.clone();
+        let observe: Observer = Arc::new(move |n| {
+            s2.lock().unwrap().push(match n {
+                Notice::Gap => "gap",
+                Notice::Ready => "ready",
+                Notice::Event(_) => "event",
+            })
+        });
+        let (tx, _rx) = mpsc::channel(64);
+        let out = run_once(&script.display().to_string(), &[CARD_EVENT], &[tx], &observe).await;
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen, ["ready", "ready", "event"], "{out}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -542,6 +542,14 @@ pub struct dg_layer_t {
     pub counted: i32,
 }
 
+/// The decision loop's pending proposal (core api/propose.rs view): only a redial is shown.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct dg_proposal_t {
+    pub id: String,
+    pub digest: String,
+    pub tail: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct diag_run_t {
     pub state: i32,

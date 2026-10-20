@@ -104,6 +104,7 @@ async function own(p) {
   ok(await txt(p, "#wf-main-op") === "Wi-Fi 设置已生效", `rename: ${await txt(p, "#wf-main-op")}`);
   let b = await lastOp();
   ok(b.action === "wifi.settings" && b.source === "web" && /^lw-/.test(b.op_id) && same(b.params, { ssid_2g: "U60-New" }), `rename body ${JSON.stringify(b.params)}`);
+  ok(b.receipt === false && !/自动回报/.test(dlg) && (await stats()).receipts.length === 0, "LAN: no receipt asked, no receipt note");
   await until(p, () => /U60-New/.test(document.querySelector("#wf-bands")?.textContent ?? ""));
   ok(/U60-New/.test(await txt(p, "#wf-bands")) && await p.locator("input[data-bind=_fs2]").count() === 0, "read back, form closed");
   ok(/上次改动：Wi-Fi 设置已生效/.test(await txt(p, "#wf-status")), "status: last change");
@@ -205,7 +206,55 @@ async function own(p) {
   await reset();
 }
 
-const browser = await chromium.launch({ channel: "chrome" });
+// O3: from off the LAN (a Host without a dot) the change asks for a receipt; the page sends it by
+// itself once the core waits (mock: src/mock/receipt.rs); without it the core puts the old back
+async function remote(browser) {
+  const RW = WEB.replace("127.0.0.1", "lwremote");
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await ctx.addCookies([{ name: "lw_sid", value: sid, url: RW }, { name: "u60_lang", value: "zh", url: RW }]);
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on("pageerror", (e) => errs.push(e.message));
+  const op = () => txt(p, "#wf-main-op");
+  const change = async (ssid) => {
+    await p.goto(RW + "/router/wifi", { waitUntil: "load" });
+    await ready(p).catch(() => ok(false, "remote: live content never showed"));
+    await p.click("#wf-editbtn");
+    await p.waitForSelector("input[data-bind=_fs2]", { timeout: 8000 });
+    await p.fill("input[data-bind=_fs2]", ssid);
+    await p.click("#wf-form button:has-text('应用')");
+    await p.locator("dialog#wf-main-confirm[open]").waitFor({ timeout: 8000 }).catch(() => {});
+    const dlg = await txt(p, "dialog#wf-main-confirm");
+    await p.click("dialog#wf-main-confirm .nd-btn--confirm");
+    return dlg;
+  };
+  const end = (re) => until(p, (re) => new RegExp(re).test(document.querySelector("#wf-main-op")?.textContent ?? ""), re, 40000);
+
+  await reset(); await post("/mock/receipt", { reset: true });
+  const dlg = await change("U60-Far");
+  ok(/这个页面会自动回报/.test(dlg) && /60 秒/.test(dlg), `remote: the receipt note in the confirm (${dlg.slice(0, 120)})`);
+  await end("设置已生效|已退回|没有生效");
+  const b = await lastOp();
+  ok(b.action === "wifi.settings" && b.receipt === true, `remote: body asks for a receipt (${b.receipt})`);
+  const rs = (await stats()).receipts;
+  ok(rs.length === 1 && rs[0].accepted && rs[0].body.action === "op.receipt" && rs[0].body.params?.op_id === b.op_id && rs[0].body.op_id === undefined,
+    `remote: the browser sent the receipt by itself, op_id in params (${JSON.stringify(rs)})`);
+  ok(await op() === "Wi-Fi 设置已生效", `remote with receipt: ${await op()}`);
+
+  // the page is cut off: no receipt reaches the core, which puts the old settings back
+  await reset(); await post("/mock/receipt", { reset: true, lost: true, ms: 3000 });
+  await change("U60-Lost");
+  await end("已退回|没有生效");
+  ok(/远端没回来 · 已退回原来的设置/.test(await op()) && await p.locator("#wf-main-op .t-note--warn").count() === 1, `no receipt: ${await op()}`);
+  ok(!/U60-Lost/.test(await txt(p, "#wf-bands")), "no receipt: the old name is back");
+  ok(errs.length === 0, `remote: no page errors ${errs.join("; ")}`);
+  await p.screenshot({ path: `${OUT}/wifi-remote-no-receipt.png`, fullPage: true });
+  await post("/mock/receipt", { reset: true }); await reset();
+  await ctx.close();
+}
+
+const browser = await chromium.launch({ channel: "chrome", args: ["--host-resolver-rules=MAP lwremote 127.0.0.1"] });
+await remote(browser);
 for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [1280, 900, "desk", "en", "dark"], [390, 844, "phone", "zh", "light"]]) {
   const ctx = await browser.newContext({ viewport: { width: w, height: h } });
   await ctx.addCookies([{ name: "lw_sid", value: sid, url: WEB }, { name: "u60_lang", value: lang, url: WEB }]);

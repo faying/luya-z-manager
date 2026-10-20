@@ -248,6 +248,7 @@ pub fn app(
         .route("/tools/diagnose/speed", post(diagnose::speed))
         .route("/tools/diagnose/feedback", post(diagnose::feedback))
         .route("/tools/diagnose/dismiss", post(diagnose::dismiss))
+        .route("/tools/diagnose/approve", post(diagnose::approve))
         .route("/tools/diagnose/refresh", post(diagnose::refresh))
         .route("/device-info", get(device_info::page))
         .route("/device-info/events", get(device_info::events))

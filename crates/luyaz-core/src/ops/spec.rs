@@ -32,11 +32,11 @@ pub struct Spec {
     pub completion_evidence: CompletionEvidence,
 }
 
-/// 逐动作退回能力（§1.2）。初值只有 `Unknown` / `Unsupported`：逐项实测并获授权后才改成 `CapturedAndProven`。
+/// 逐动作退回能力（§1.2）。初值只有 `Unknown` / `Unsupported`：逐项实测并获授权后才改成 `CapturedAndProven`
+/// （D42：真机上好的切换确认、坏的切换按时限退回，用户同意后才改）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RollbackCapability {
-    /// 旧值可捕获、回写已验证、恢复路径可观察。
-    #[allow(dead_code)] // 还没有动作达到
+    /// 旧值可捕获、回写已验证、恢复路径可观察。锁频三个动作和 4G/5G 锁小区 10-20 真机过了（write-op-layer.md「D42 逐项实测」）。
     CapturedAndProven,
     /// 不能退回：只能停下并人工修复。
     Unsupported,
@@ -87,7 +87,9 @@ pub static SPECS: &[Spec] = &[
         item: NETWORK_MODE,
         normalize: network_mode,
         params: network_mode_params,
-        deadline_ms: 120_000,
+        // 10-20 真机（CMLink 漫游）：Only_LTE → 自动一次 78 s、一次超过 120 s（约 155 s 没服务，期间读回仍是旧值）
+        // 被误退。放到 180 s。
+        deadline_ms: 180_000,
         deadline_env: "LUYAZ_DEADLINE_NETWORK_MODE_MS",
         confirm: Confirm::Registered,
         rollback_capability: RollbackCapability::Unknown,
@@ -101,7 +103,7 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 120_000,
         deadline_env: "LUYAZ_DEADLINE_BAND_MS",
         confirm: Confirm::Registered,
-        rollback_capability: RollbackCapability::Unknown,
+        rollback_capability: RollbackCapability::CapturedAndProven,
         completion_evidence: CompletionEvidence::ReadbackRegistered,
     },
     Spec {
@@ -112,7 +114,7 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 120_000,
         deadline_env: "LUYAZ_DEADLINE_BAND_MS",
         confirm: Confirm::Registered,
-        rollback_capability: RollbackCapability::Unknown,
+        rollback_capability: RollbackCapability::CapturedAndProven,
         completion_evidence: CompletionEvidence::ReadbackRegistered,
     },
     Spec {
@@ -123,7 +125,7 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 120_000,
         deadline_env: "LUYAZ_DEADLINE_BAND_MS",
         confirm: Confirm::Registered,
-        rollback_capability: RollbackCapability::Unknown,
+        rollback_capability: RollbackCapability::CapturedAndProven,
         completion_evidence: CompletionEvidence::ReadbackRegistered,
     },
     Spec {
@@ -134,7 +136,7 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 120_000,
         deadline_env: "LUYAZ_DEADLINE_CELL_MS",
         confirm: Confirm::Registered,
-        rollback_capability: RollbackCapability::Unknown,
+        rollback_capability: RollbackCapability::CapturedAndProven,
         completion_evidence: CompletionEvidence::ReadbackRegistered,
     },
     Spec {
@@ -145,7 +147,7 @@ pub static SPECS: &[Spec] = &[
         deadline_ms: 120_000,
         deadline_env: "LUYAZ_DEADLINE_CELL_MS",
         confirm: Confirm::Registered,
-        rollback_capability: RollbackCapability::Unknown,
+        rollback_capability: RollbackCapability::CapturedAndProven,
         completion_evidence: CompletionEvidence::ReadbackRegistered,
     },
     Spec {
@@ -352,6 +354,16 @@ fn cell_num(params: &Value, key: &str) -> Result<String, String> {
     }
 }
 
+/// PCI 的上限：LTE 0–503、NR 0–1007（3GPP）。超了原厂回 `Invalid argument (2)`（10-20 真机：LTE PCI 999），
+/// 在提交前就拒绝，不建事务。
+fn cell_pci(params: &Value, max: u64) -> Result<String, String> {
+    let v = cell_num(params, "pci")?;
+    match v.parse::<u64>() {
+        Ok(n) if n <= max => Ok(v),
+        _ => Err(format!("pci must be 0-{max}")),
+    }
+}
+
 fn wants_off(params: &Value) -> bool {
     params.get("off") == Some(&Value::Bool(true))
 }
@@ -361,7 +373,7 @@ fn cell_lte(params: &Value) -> Result<Value, String> {
         return Ok(cell_off());
     }
     Ok(serde_json::json!({
-        "pci": cell_num(params, "pci")?,
+        "pci": cell_pci(params, 503)?,
         "earfcn": cell_num(params, "earfcn")?,
     }))
 }
@@ -375,7 +387,7 @@ fn cell_nr(params: &Value) -> Result<Value, String> {
         other => other.clone(),
     });
     Ok(serde_json::json!({
-        "pci": cell_num(params, "pci")?,
+        "pci": cell_pci(params, 1007)?,
         "arfcn": cell_num(params, "arfcn")?,
         "band": cell_num(&serde_json::json!({ "band": band }), "band")?,
     }))
@@ -459,7 +471,18 @@ fn same(v: &Value) -> Value {
 }
 
 fn network_mode(params: &Value) -> Result<Value, String> {
-    crate::control::string(params, "mode", true).map(|v| Value::String(v.unwrap_or_default()))
+    crate::control::string(params, "mode", true)
+        .map(|v| Value::String(canonical_mode(&v.unwrap_or_default()).to_string()))
+}
+
+/// 制式的「自动」有三个取值：`TCHGWL_5G`（手动注册后会变成它）、`NETWORK_auto`（锁频页恢复默认后）
+/// 都当 `WL_AND_5G`。写 `TCHGWL_5G` 固件读回 `WL_AND_5G`（10-19 真机），不归一会把退回误判成
+/// `manual_change` / `not_applied`。目标值和读回都过这里。
+pub fn canonical_mode(mode: &str) -> &str {
+    match mode {
+        "TCHGWL_5G" | "NETWORK_auto" => "WL_AND_5G",
+        m => m,
+    }
 }
 
 fn network_mode_params(v: &Value) -> Value {
@@ -468,6 +491,37 @@ fn network_mode_params(v: &Value) -> Value {
 
 pub fn find(action: &str) -> Option<&'static Spec> {
     SPECS.iter().find(|s| s.action == action)
+}
+
+/// 数据会话（`ops::reconnect`）：值 "up" / "down"（蜂窝口有没有全局地址）。
+pub const DATA_SESSION: &str = "data.session";
+
+/// 只给闭环用的动作（decision-execution-loop §4.6 B31）：不在 [`SPECS`] 里，`/control`、触屏、网页、MCP
+/// 都找不到；只有引擎按事务里记的动作名用 [`find_any`] 找回来。
+pub static LOOP_ONLY: &[Spec] = &[Spec {
+    action: "data.reconnect",
+    item: DATA_SESSION,
+    normalize: session_up,
+    params: session_params,
+    deadline_ms: 90_000,
+    deadline_env: "LUYAZ_DEADLINE_DATA_RECONNECT_MS",
+    confirm: Confirm::Registered,
+    // 重拨没有旧值可回写：不能退回，失败就停下交给人（§1.4）
+    rollback_capability: RollbackCapability::Unsupported,
+    completion_evidence: CompletionEvidence::ReadbackRegistered,
+}];
+
+fn session_up(_: &Value) -> Result<Value, String> {
+    Ok(Value::from("up"))
+}
+
+fn session_params(_: &Value) -> Value {
+    serde_json::json!({})
+}
+
+/// 引擎驱动事务用：描述表加只给闭环的动作。
+pub fn find_any(action: &str) -> Option<&'static Spec> {
+    find(action).or_else(|| LOOP_ONLY.iter().find(|s| s.action == action))
 }
 
 impl Spec {
@@ -546,6 +600,43 @@ pub fn affects_network(action: &str, params: &Value) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn auto_modes_are_one_value() {
+        let t = |m: &str| {
+            find("network.set_mode")
+                .unwrap()
+                .target(&json!({"mode": m}))
+                .unwrap()
+        };
+        for m in ["WL_AND_5G", "TCHGWL_5G", "NETWORK_auto"] {
+            assert_eq!(t(m), json!("WL_AND_5G"), "{m}");
+        }
+        assert_eq!(t("Only_5G"), json!("Only_5G"));
+        // 读回同样归一：固件报 TCHGWL_5G 时，退回到 WL_AND_5G 不算「第三个值」
+        assert!(super::super::txn::matches(
+            &t("TCHGWL_5G"),
+            &json!(canonical_mode("TCHGWL_5G"))
+        ));
+    }
+
+    #[test]
+    fn cell_pci_is_range_checked() {
+        let lte = |pci: &str| {
+            find("cell.lock_lte")
+                .unwrap()
+                .target(&json!({"pci": pci, "earfcn": "1300"}))
+        };
+        assert_eq!(lte("503").unwrap()["pci"], json!("503"));
+        assert_eq!(lte("504").unwrap_err(), "pci must be 0-503");
+        let nr = |pci: &str| {
+            find("cell.lock_nr")
+                .unwrap()
+                .target(&json!({"pci": pci, "arfcn": "627264", "band": "n78"}))
+        };
+        assert_eq!(nr("1007").unwrap()["pci"], json!("1007"));
+        assert!(nr("1008").is_err());
+    }
 
     #[test]
     fn network_affecting_writes() {
@@ -719,18 +810,25 @@ mod tests {
         );
     }
 
-    /// §1.2/O3：第一批没有任何动作可自动退回；APN/CHILL/Wi-Fi 明确不能退回；完成证据只跟确认规则走。
+    /// §1.2/O3：只有真机测过的锁频和 4G/5G 锁小区（D42，10-20）可自动退回；APN/CHILL/Wi-Fi 明确不能退回；
+    /// 完成证据只跟确认规则走。
     #[test]
-    fn no_action_is_auto_rollback_yet() {
+    fn only_tested_actions_auto_rollback() {
+        const PROVEN: &[&str] = &[
+            "band.set_lte",
+            "band.set_nr",
+            "band.reset",
+            "cell.lock_lte",
+            "cell.lock_nr",
+        ];
         for s in SPECS {
-            assert!(!s.auto_rollback_allowed(), "{}", s.action);
-            assert_ne!(
-                s.rollback_capability,
-                RollbackCapability::CapturedAndProven,
-                "{}",
-                s.action
-            );
+            let proven = PROVEN.contains(&s.action);
+            assert_eq!(s.auto_rollback_allowed(), proven, "{}", s.action);
             let (rb, ev) = match s.confirm {
+                Confirm::Registered if proven => (
+                    RollbackCapability::CapturedAndProven,
+                    CompletionEvidence::ReadbackRegistered,
+                ),
                 Confirm::Registered => (
                     RollbackCapability::Unknown,
                     CompletionEvidence::ReadbackRegistered,

@@ -50,6 +50,8 @@ pub struct Group {
     stations: Arc<dyn Fn() -> Vec<ni::Station> + Send + Sync>,
     /// a finding check is running
     finding_busy: Arc<AtomicBool>,
+    /// the decision loop's pending proposal (§4.9), made after each finding check
+    pub(super) producer: Arc<super::propose::Producer>,
 }
 
 /// A search, a manual register or a speed test going (the diagnosis and the finding check).
@@ -327,6 +329,7 @@ impl Group {
             speed_running,
             stations,
             finding_busy: Arc::default(),
+            producer: Arc::default(),
         }
     }
 }
@@ -428,6 +431,8 @@ fn finding_round(
     let (passive_down, held_down) = g
         .findings
         .passive_admission(readings.as_ref(), elapsed.as_ref());
+    let kept = readings.clone();
+    let hub2 = hub.clone();
     let expected = readings.as_ref().map(|r| r.connection.clone());
     let current_connection = Arc::new(move || {
         expected
@@ -461,6 +466,7 @@ fn finding_round(
         }),
     };
     g.findings.round(&i, &g.gate, &g.watch, now);
+    super::propose::after_round(&g.producer, &g.findings, &i, kept.as_ref(), hub2.as_deref());
 }
 
 // ── deep diagnosis ─────────────────────────────────────────────────────────
@@ -496,6 +502,7 @@ pub async fn diagnose_get(State(c): State<Compat>) -> Response {
     // D6: the old fields as they are, plus the open finding (null when none)
     if let Some(d) = v.get_mut("data").and_then(Value::as_object_mut) {
         d.insert("finding".into(), c.group.findings.view());
+        d.insert("proposal".into(), c.group.producer.view());
         d.insert("connectivity".into(), c.group.findings.network_view());
     }
     reply(s, v)

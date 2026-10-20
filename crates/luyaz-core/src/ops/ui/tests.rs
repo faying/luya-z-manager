@@ -29,6 +29,7 @@ fn txn(rollback: bool) -> Txn {
             rollback_enabled: rollback,
             deadline_ms: 120_000,
             boot_id: "b".into(),
+            receipt: false,
         },
         1_000,
     );
@@ -573,6 +574,7 @@ fn chill_and_non_rollbackable_ui_words() {
             rollback_enabled: true,
             deadline_ms: 90_000,
             boot_id: "b".into(),
+            receipt: false,
         },
         1_000,
     );

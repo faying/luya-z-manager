@@ -24,6 +24,7 @@ mod evlog;
 mod ledger;
 mod longterm;
 mod nl;
+mod o2;
 mod paths;
 mod peer_pid;
 mod procfs;
@@ -315,6 +316,10 @@ fn main() {
     // serve's first side effect (svcwatch, flock, pid file, crash markers, migration, core log)
     if raw.get(1).map(String::as_str) == Some("doctor") {
         std::process::exit(doctor::main(&raw[2..]));
+    }
+    // `<core> o2-check <iface> <source-ip>`: one read-only bound HTTPS run (O2)
+    if raw.get(1).map(String::as_str) == Some("o2-check") {
+        std::process::exit(o2::main(&raw[2..]));
     }
     // `<core> plan-reboot [why]`: mark the coming shell `reboot` as asked for (ledger S1)
     if raw.get(1).map(String::as_str) == Some("plan-reboot") {

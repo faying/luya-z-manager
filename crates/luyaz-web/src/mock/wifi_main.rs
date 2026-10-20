@@ -198,8 +198,11 @@ fn settings(m: &Arc<Mock>, body: &Value) -> Response {
     let verifying = with(json!({"phase": "verifying", "say_zh": "正在确认 Wi-Fi 起来了", "say_en": "Checking Wi-Fi is up",
         "mark": null, "stay": "live", "next_zh": "{t} 后没起来就退回", "next_en": "Back in {t} if it doesn't come up",
         "remaining_ms": 90000}));
+    let receipt = body["receipt"].as_bool() == Some(true);
     let ok = end != "rolled_back";
-    let last = with(if ok {
+    let mut waiting = verifying.clone();
+    waiting["receipt"] = super::receipt::view(super::receipt::wait_ms());
+    let mut last = with(if ok {
         json!({"phase": "confirmed", "reason": "verified", "mark": "ok", "stay": "brief", "acked": false, "needs_ack": false,
                "say_zh": "Wi-Fi 设置已生效", "say_en": "Wi-Fi settings in effect"})
     } else {
@@ -208,6 +211,7 @@ fn settings(m: &Arc<Mock>, body: &Value) -> Response {
     });
     publish_op(m, applying, Value::Null);
     let m2 = m.clone();
+    let id2 = id.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(ms / 3)).await;
         if ok {
@@ -215,6 +219,16 @@ fn settings(m: &Arc<Mock>, body: &Value) -> Response {
         }
         publish_op(&m2, verifying, Value::Null);
         tokio::time::sleep(Duration::from_millis(ms - ms / 3)).await;
+        // O3: a remote change also waits for the page's receipt (receipt.rs); none: put back
+        if ok && receipt {
+            publish_op(&m2, waiting, Value::Null);
+            if super::receipt::wait(&id2).await {
+                last["reason"] = json!("receipt");
+            } else {
+                publish_keys(&m2, &cur);
+                last = super::no_receipt(last, ("原来的设置", "the old settings"));
+            }
+        }
         publish_op(&m2, Value::Null, last);
     });
     let mut result = json!({"status": "ok"});

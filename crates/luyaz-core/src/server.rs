@@ -152,6 +152,7 @@ impl App {
             crate::ops::pending::Store::open(crate::ops::ops_dir()),
             crate::ops::record::Record::open(crate::ops::ops_dir()),
         );
+        ops.register_user_writes();
         let (stage, _) = watch::channel(Stage::Starting);
         Ok(Self {
             inner: Arc::new(Inner {
@@ -231,6 +232,10 @@ impl App {
         let usb: Arc<dyn Fn() + Send + Sync> =
             Arc::new(move || usb_exec.kick(&["typec", "powerbank", "charger"]));
         let context_hub = app.inner.exec.hub().clone();
+        // B31：上次核心在重拨中途没了（标记还在），先把数据会话开回来；见 ops/reconnect.rs。
+        tokio::task::spawn_blocking(crate::ops::reconnect::recover);
+        // R18-P1-01：数据网卡（rmnet）的内核事件产生连接代次；见 device_profile/netlink.rs。
+        crate::device_profile::netlink::spawn(context_hub.clone());
         listen::spawn_if_enabled(
             std::env::var(listen::ENV_ENABLE).ok().as_deref(),
             listen::Options::from_env(),
@@ -253,6 +258,17 @@ impl App {
                     min_interval: listen::USB_KICK_MIN_INTERVAL,
                     fire: usb,
                 },
+                // R18-P1-01：卡事件、休眠唤醒只为 SIM／无线电代次订阅（observe 里处理），不额外踢执行者。
+                Handler {
+                    event: listen::CARD_EVENT,
+                    min_interval: listen::USB_KICK_MIN_INTERVAL,
+                    fire: Arc::new(|| {}),
+                },
+                Handler {
+                    event: listen::POWER_EVENT,
+                    min_interval: listen::USB_KICK_MIN_INTERVAL,
+                    fire: Arc::new(|| {}),
+                },
             ],
             Arc::new(move |notice| {
                 use crate::device_profile::context::Loss;
@@ -260,6 +276,13 @@ impl App {
                     listen::Notice::Event(listen::TYPEC_EVENT | listen::POWERBANK_EVENT) => {
                         Loss::Usb
                     }
+                    listen::Notice::Event(listen::CARD_EVENT) => {
+                        return context_hub.firmware().sim_event();
+                    }
+                    listen::Notice::Event(listen::POWER_EVENT) => {
+                        return context_hub.firmware().radio_event();
+                    }
+                    listen::Notice::Ready => return context_hub.firmware().sim_listening(),
                     listen::Notice::Gap => Loss::Ubus,
                     _ => return,
                 };
@@ -282,6 +305,11 @@ impl App {
     }
 
     /// The blocks (u60d's touch compatibility layer reads the signal block's roaming fields).
+    /// The decision loop's attempts the last core left open (§4.10): follow them to their end.
+    pub fn resume_loop(&self) {
+        crate::api::approve::resume(self.inner.ops.clone(), self.hub());
+    }
+
     pub fn hub(&self) -> Arc<crate::block::Hub> {
         self.inner.exec.hub().clone()
     }

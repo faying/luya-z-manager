@@ -191,7 +191,7 @@ impl Device for Dev {
     }
 }
 
-const DEADLINE: u64 = 120_000;
+const DEADLINE: u64 = 180_000;
 
 fn cfg(rollback: bool) -> Config {
     Config {
@@ -242,6 +242,7 @@ fn req(target: &str, source: Source) -> Request {
         undo: false,
         rollback: None,
         expect_iccid: None,
+        receipt: false,
     }
 }
 
@@ -321,9 +322,9 @@ async fn connected_but_dns_dead_rolls_back() {
     assert_eq!(end(&fin), pair("rolled_back", "timeout"));
     assert_eq!(fin["ever_matched"], true);
     assert_eq!(dev.s().writes, ["Only_LTE", "WL_AND_5G"]);
-    // 新设置上：每拍 2 秒，第 2、8、14 秒一轮，隔 30 秒在 44、50、56 秒，再在 86、92、98 秒，
-    // 下一轮 128 秒已过 120 秒的时限 → 9 次；退回后再探测一次就通了
-    assert_eq!(dev.s().probes.len(), 10);
+    // 新设置上：每拍 2 秒，第 2、8、14 秒一轮，隔 30 秒一轮（44…、86…、128…、170、176），
+    // 下一次 182 秒已过 180 秒的时限 → 14 次；退回后再探测一次就通了
+    assert_eq!(dev.s().probes.len(), 15);
 }
 
 #[tokio::test(start_paused = true)]
@@ -775,7 +776,7 @@ async fn crash_mid_rollback_never_sends_a_second_rollback() {
     // 退回的写一直不回：停在「退回意图已落盘」
     tokio::time::sleep(Duration::from_secs(60)).await;
     dev.s().apply = Apply::Hang;
-    tokio::time::sleep(Duration::from_secs(70)).await;
+    tokio::time::sleep(Duration::from_secs(130)).await;
     let saved: Txn =
         serde_json::from_slice(&std::fs::read(dir.join("pending.json")).unwrap()).unwrap();
     assert_eq!(saved.phase, Phase::RollingBack);
@@ -808,7 +809,7 @@ async fn crash_before_the_rollback_write_sends_it_after_restart() {
         iccid: String::new(),
         slot: 0,
     };
-    tokio::time::sleep(Duration::from_secs(70)).await;
+    tokio::time::sleep(Duration::from_secs(130)).await;
     let saved: Txn =
         serde_json::from_slice(&std::fs::read(dir.join("pending.json")).unwrap()).unwrap();
     assert_eq!(saved.phase, Phase::RollingBack);
@@ -1894,3 +1895,4 @@ async fn a_person_never_waits_for_an_agent_trial() {
 
 mod gate;
 mod from_loop;
+mod loop_exec;

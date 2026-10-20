@@ -358,3 +358,51 @@ fn unvalidated_ipv6_http_service_failure_is_unknown_not_an_outage() {
     assert_eq!(n.reason, "ipv6_http_targets_unverified");
     assert_eq!(n.internet_usable, Unknown);
 }
+
+#[test]
+fn bound_lookups_return_addresses_or_say_no() {
+    let q = crate::dns_query(7, "www.qq.com");
+    assert_eq!(
+        answer_addrs(&answer(&q, 1, &[192, 0, 2, 9]), &q),
+        Some(Resolved::Addrs(vec!["192.0.2.9".parse().unwrap()]))
+    );
+    let mut nx = q.clone();
+    nx[2] = 0x81;
+    nx[3] = 0x83;
+    assert_eq!(answer_addrs(&nx, &q), Some(Resolved::Failed));
+    nx[3] = 0x80;
+    assert_eq!(
+        answer_addrs(&nx, &q),
+        Some(Resolved::Unknown),
+        "NODATA is not a failure"
+    );
+    let mut tc = answer(&q, 1, &[192, 0, 2, 9]);
+    tc[2] |= 2;
+    assert_eq!(answer_addrs(&tc, &q), Some(Resolved::Unknown), "truncated");
+    let mut wrong = answer(&q, 1, &[192, 0, 2, 9]);
+    wrong[0] ^= 1;
+    assert_eq!(answer_addrs(&wrong, &q), None, "another query's reply");
+    let mut q6 = q;
+    let i = q6.len() - 3;
+    q6[i] = 28;
+    let mut v6 = [0u8; 16];
+    v6[..2].copy_from_slice(&[0x24, 0x08]);
+    assert_eq!(
+        answer_addrs(&answer(&q6, 28, &v6), &q6),
+        Some(Resolved::Addrs(vec![IpAddr::from(v6)]))
+    );
+}
+
+#[test]
+fn no_server_of_the_family_is_unknown_not_failed() {
+    let path = Path {
+        interface: "lo".into(),
+        source_kind: "fixture",
+        source: "127.0.0.1".parse().unwrap(),
+        dns: vec!["::1".parse().unwrap()],
+    };
+    assert_eq!(
+        resolve(&path, "www.qq.com", Duration::from_secs(1)),
+        Resolved::Unknown
+    );
+}

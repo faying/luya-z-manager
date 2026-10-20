@@ -501,6 +501,7 @@ impl Shared {
             self.hub
                 .firmware()
                 .invalidate_context(crate::device_profile::context::Loss::Ubus);
+            crate::ubus::listen::reprobe();
         } else if object == "uci"
             && method == "get"
             && args["config"] == "zte_nwinfo"

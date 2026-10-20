@@ -234,6 +234,9 @@ fn route(name: &str, args: &Value) -> Result<String, String> {
 pub enum Got {
     Answer(u16, String),
     Unreachable(String),
+    /// Connected and sent, but no answer in time: the link is up, the core is slow or busy.
+    /// An action may already be under way, so this is not "the network is down".
+    Slow(u64),
 }
 
 /// A tool result from what the device said.
@@ -274,6 +277,10 @@ fn tool_result(got: Got) -> Value {
             true,
         ),
         Got::Answer(code, _) => (format!("The device answered HTTP {code}."), true),
+        Got::Slow(secs) => (
+            format!("The device accepted the request but did not answer within {secs}s, so the link is up and the core is slow or busy (a network change may still be verifying). An action may already have taken effect: read the status again before repeating it."),
+            false,
+        ),
         Got::Unreachable(why) => (
             format!("The device cannot be reached ({why}). Tailscale or the home link may be down, or the device is offline. For offline self-help use the device's touch screen or its LAN repair page."),
             false,
@@ -416,6 +423,13 @@ fn get(host: &str, port: u16, c: &Call, token: &str) -> Got {
     }
     let mut raw = Vec::new();
     if let Err(e) = s.take(BODY_MAX as u64).read_to_end(&mut raw) {
+        if matches!(
+            e.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ) {
+            let waited = if c.body.is_some() { ACT_TIMEOUT } else { TIMEOUT };
+            return Got::Slow(waited.as_secs());
+        }
         return Got::Unreachable(format!("read: {e}"));
     }
     match parse_response(&raw) {

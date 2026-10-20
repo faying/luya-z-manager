@@ -130,6 +130,9 @@ fn failures_are_said_in_words() {
     };
     let (t, e) = text(|_| Got::Unreachable("connect 192.0.2.1:9090: timed out".into()));
     assert!(t.contains("cannot be reached") && !e, "{t}");
+    // R18-P1-02: a slow core is not a network outage, and an action may have gone through
+    let (t, e) = text(|_| Got::Slow(75));
+    assert!(t.contains("75s") && t.contains("link is up") && !t.contains("cannot be reached") && !e, "{t}");
     let (t, e) = text(|_| Got::Answer(401, String::new()));
     assert!(t.contains("token") && e);
     let (t, e) = text(|_| Got::Answer(403, String::new()));

@@ -136,6 +136,7 @@ pub async fn main(raw: Vec<String>) -> Result<()> {
         ui = Some(c.clone().v2_router());
     }
     crate::api::start(c);
+    app.resume_loop();
     // X9 (supervise.sh's duties): both listeners are ours, so this is the one core
     crate::svcwatch::start(&argv0);
     server::write_pid_file();

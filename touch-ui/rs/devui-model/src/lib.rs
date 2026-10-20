@@ -102,6 +102,9 @@ pub struct Model {
     pub diagnose_idle: i32,
     pub diagnose_agent_err: i32,
     pub diagnose_error: Option<String>,
+    /// a redial the core proposes for the open finding (decision loop §4.10); None = none
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnose_proposal: Option<dg_proposal_t>,
 
     pub battery_est: Option<String>,
 

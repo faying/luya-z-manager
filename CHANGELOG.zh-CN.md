@@ -18,6 +18,18 @@
 
 ## Unreleased
 
+## core 1.6.8 — 2026-10-20
+
+- 5G 锁小区（`cell.lock_nr`）真机测过（锁到不存在的小区，到时限经原厂恢复默认退回），标成 `captured_and_proven`：闭环来源的 5G 锁小区也会自动退回。LTE 锁小区没测，仍是 `unknown`。
+
+## core 1.6.5 — 2026-10-20
+
+- 锁频（`band.set_lte`、`band.set_nr`、`band.reset`）真机测过（好的切换确认、锁到没有的频段到时限退回），标成 `captured_and_proven`：闭环来源的锁频也会自动退回了。制式、锁小区仍是 `unknown`。
+
+## core 1.5.8 — 2026-10-19
+
+- 制式：三个「自动」取值（`WL_AND_5G`、`TCHGWL_5G`、`NETWORK_auto`）在事务里算同一个值。写 `TCHGWL_5G` 固件读回 `WL_AND_5G`，以前好的切换或退回会被判成 `manual_change` / `not_applied`。
+
 ## lweb 1.3.1 — 2026-10-19
 
 - 确认框里的远程警告按动作说会不会自动退回：网络模式、锁频、锁小区跟着设备的自动退回设置说，其他写入说不会自动退回。

@@ -7,6 +7,15 @@ fn sim() -> SimId {
     }
 }
 
+fn epochs() -> Epochs {
+    Epochs::of(&crate::firmware::Context {
+        sim_epoch: Some("s-1".into()),
+        connection_epoch: Some("c-3".into()),
+        radio_epoch: Some("r-2".into()),
+        ..Default::default()
+    })
+}
+
 fn proposal() -> Proposal {
     Proposal {
         proposal_id: "p1".into(),
@@ -18,7 +27,7 @@ fn proposal() -> Proposal {
         },
         boot_id: "b1".into(),
         sim: sim(),
-        conn: Some("gen-3".into()),
+        epochs: epochs(),
         action_id: "apn.use".into(),
         params_digest: "d1".into(),
         reason: "r".into(),
@@ -55,7 +64,7 @@ fn now() -> Now {
         boot_ms: Some(2_000),
         device_id: "dev".into(),
         sim: Some(sim()),
-        conn: Some("gen-3".into()),
+        epochs: epochs(),
         gate_granted: true,
         human_wrote: false,
     }
@@ -117,11 +126,39 @@ fn every_mismatch_or_unknown_refuses() {
             SimChanged,
             Box::new(|_, _, _, n| n.sim.as_mut().unwrap().iccid = "8986000000000009999".into()),
         ),
-        (ConnUnknown, Box::new(|p, _, _, _| p.conn = None)),
-        (ConnUnknown, Box::new(|_, _, _, n| n.conn = None)),
+        // the same card re-seated: same ICCID and slot, a new card event
+        (
+            SimChanged,
+            Box::new(|_, _, _, n| n.epochs.sim = Some("s-2".into())),
+        ),
+        (SimUnknown, Box::new(|p, _, _, _| p.epochs.sim = None)),
+        (SimUnknown, Box::new(|_, _, _, n| n.epochs.sim = None)),
+        (
+            SimUnknown,
+            Box::new(|p, _, _, n| {
+                p.epochs.sim = Some(String::new());
+                n.epochs.sim = Some(String::new());
+            }),
+        ),
+        (ConnUnknown, Box::new(|p, _, _, _| p.epochs.conn = None)),
+        (ConnUnknown, Box::new(|_, _, _, n| n.epochs.conn = None)),
+        (
+            ConnUnknown,
+            Box::new(|_, _, _, n| n.epochs.conn = Some(String::new())),
+        ),
         (
             ConnChanged,
-            Box::new(|_, _, _, n| n.conn = Some("gen-4".into())),
+            Box::new(|_, _, _, n| n.epochs.conn = Some("c-4".into())),
+        ),
+        (RadioUnknown, Box::new(|p, _, _, _| p.epochs.radio = None)),
+        (RadioUnknown, Box::new(|_, _, _, n| n.epochs.radio = None)),
+        (
+            RadioUnknown,
+            Box::new(|_, _, _, n| n.epochs.radio = Some(String::new())),
+        ),
+        (
+            RadioChanged,
+            Box::new(|_, _, _, n| n.epochs.radio = Some("r-3".into())),
         ),
         (FindingClosed, Box::new(|_, _, f, _| f.open = false)),
         (FindingUnknown, Box::new(|_, _, f, _| f.revision = None)),

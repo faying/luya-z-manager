@@ -167,6 +167,7 @@ impl Live {
             diagnose_idle: self.diag.idle() as i32,
             diagnose_agent_err: self.diag.agent_err(),
             diagnose_error: Some(self.diag.error().into()),
+            diagnose_proposal: self.diag.proposal().cloned(),
 
             battery_est: Some(self.bat.text().into()),
             versions: self.vers.rows().to_vec(),

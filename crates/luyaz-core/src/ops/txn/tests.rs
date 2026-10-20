@@ -29,6 +29,7 @@ fn txn(rollback: bool) -> Txn {
             rollback_enabled: rollback,
             deadline_ms: D,
             boot_id: "boot-a".into(),
+            receipt: false,
         },
         1_000,
     );
@@ -143,6 +144,7 @@ fn apply_error_with_old_readback_is_not_applied_at_once() {
             rollback_enabled: true,
             deadline_ms: D,
             boot_id: "boot-a".into(),
+            receipt: false,
         },
         0,
     );
@@ -391,6 +393,7 @@ fn crash_during_apply_is_never_reapplied() {
             rollback_enabled: true,
             deadline_ms: D,
             boot_id: "boot-a".into(),
+            receipt: false,
         },
         0,
     );
@@ -1000,6 +1003,7 @@ fn chill_txn() -> Txn {
             rollback_enabled: true,
             deadline_ms: D,
             boot_id: "boot-a".into(),
+            receipt: false,
         },
         1_000,
     );
@@ -1065,4 +1069,112 @@ fn revert_without_rollback_target_is_refused() {
     t.rollback_to = Value::Null;
     assert_eq!(t.revert(), Err("no previous setting to revert to"));
     assert_eq!(t.phase, Phase::Verifying);
+}
+
+/// O3：远端发起的 Wi-Fi 改动（`receipt`）。全局退回开关按 `rollback` 给。
+fn wifi_remote(rollback: bool) -> Txn {
+    let mut t = Txn::new(
+        NewTxn {
+            op_id: "w1".into(),
+            action: "wifi.settings".into(),
+            item: "wifi.main".into(),
+            source: Source::Web,
+            approved_by: Source::Web,
+            undo: false,
+            target: "new".into(),
+            old: "old".into(),
+            rollback_to: "old".into(),
+            sim: no_sim(),
+            conn: None,
+            confirm: Confirm::Wifi,
+            rollback_enabled: rollback,
+            deadline_ms: 90_000,
+            boot_id: "boot-a".into(),
+            receipt: true,
+        },
+        1_000,
+    );
+    t.begin_apply();
+    t.applied(Applied::Done, 1_000);
+    t
+}
+
+fn ap(v: &str) -> Reading {
+    Reading {
+        value: Some(v.into()),
+        registered: true,
+        sim: no_sim(),
+        data: None,
+        probe: None,
+    }
+}
+
+#[test]
+fn remote_wifi_waits_for_a_receipt_after_the_ap_is_up() {
+    let mut t = wifi_remote(true);
+    assert_eq!(t.receipt(), Err("Wi-Fi not confirmed yet"), "AP not up yet");
+    assert_eq!(t.on_reading(&ap("new"), 10_000), Next::Wait);
+    assert_eq!(t.phase, Phase::Verifying, "AP up is not the end");
+    let s = t.status(10_000);
+    assert_eq!(s["receipt"]["waiting"], true);
+    assert_eq!(s["receipt"]["remaining_ms"], RECEIPT_MS);
+    assert_eq!(t.remaining_ms(40_000), Some(RECEIPT_MS - 30_000));
+    // The main 90 s deadline no longer applies while waiting for the receipt.
+    assert_eq!(t.on_tick(69_999), Next::Wait);
+    assert_eq!(t.receipt(), Ok(()));
+    assert_eq!((t.phase, t.reason), (Phase::Confirmed, Some(Reason::Receipt)));
+}
+
+#[test]
+fn no_receipt_reverts_even_with_auto_rollback_off() {
+    let mut t = wifi_remote(false);
+    t.on_reading(&ap("new"), 10_000);
+    // Later readings keep it waiting until the window is over.
+    assert_eq!(t.on_reading(&ap("new"), 69_999), Next::Wait);
+    assert_eq!(t.on_reading(&ap("new"), 70_000), Next::Rollback("old".into()));
+    assert_eq!(t.phase, Phase::RollingBack);
+    assert_eq!(t.rollback_reason, Some(Reason::NoReceipt));
+    t.rollback_sent(71_000);
+    assert_eq!(t.on_reading(&ap("old"), 80_000), Next::Done);
+    assert_eq!((t.phase, t.reason), (Phase::RolledBack, Some(Reason::NoReceipt)));
+}
+
+#[test]
+fn no_receipt_on_a_tick_and_nothing_to_revert_to_is_no_rollback() {
+    let mut t = wifi_remote(true);
+    t.on_reading(&ap("new"), 10_000);
+    assert_eq!(t.on_tick(70_000), Next::Rollback("old".into()));
+    let mut t = wifi_remote(true);
+    t.rollback_to = Value::Null;
+    t.on_reading(&ap("new"), 10_000);
+    assert_eq!(t.on_tick(70_000), Next::Done);
+    assert_eq!((t.phase, t.reason), (Phase::Unverified, Some(Reason::NoRollback)));
+}
+
+#[test]
+fn a_reboot_while_waiting_restarts_the_receipt_window() {
+    let mut t = wifi_remote(true);
+    t.on_reading(&ap("new"), 50_000);
+    assert_eq!(t.resume("boot-b", 2_000), Next::Wait);
+    assert_eq!(t.on_tick(61_999), Next::Wait);
+    assert_eq!(t.on_tick(62_000), Next::Rollback("old".into()));
+}
+
+#[test]
+fn local_wifi_and_other_actions_take_no_receipt() {
+    let mut t = wifi_remote(true);
+    t.receipt = false;
+    assert_eq!(t.on_reading(&ap("new"), 10_000), Next::Done);
+    assert_eq!(t.reason, Some(Reason::Verified));
+    assert!(t.status(10_000).get("receipt").is_none());
+    let mut t = txn(true);
+    assert_eq!(t.receipt(), Err("this change does not take a receipt"));
+}
+
+/// Wi-Fi 事务的 SIM 记空（换卡不影响 Wi-Fi）。
+fn no_sim() -> SimId {
+    SimId {
+        iccid: String::new(),
+        slot: 0,
+    }
 }

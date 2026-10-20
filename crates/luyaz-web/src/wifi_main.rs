@@ -96,6 +96,7 @@ pub fn routes() -> Router<Shared> {
     Router::new()
         .route(PATH, get(page))
         .route("/router/wifi/events", get(events))
+        .route("/router/wifi/receipt", post(crate::follow::receipt))
         .route("/router/wifi/refresh", post(refresh))
         .route("/router/wifi/form", post(form_open))
         .route("/router/wifi/close", post(form_close))
@@ -1519,7 +1520,8 @@ pub async fn main_ask(State(app): State<Shared>, req: axum::extract::Request) ->
     let html = match checked {
         Err(o) => area("wf-main", l, ctx.remote, "", "", &write::Phase::Done(o)),
         Ok(c) => {
-            let cf = confirm(&c, l);
+            let mut cf = confirm(&c, l);
+            crate::follow::receipt_note(&mut cf, ctx.remote, l);
             let op_id = write::next_op_id();
             let t = put(Held {
                 change: c,
@@ -1567,8 +1569,15 @@ fn applied(l: Lang) -> String {
 }
 
 /// Send the change and follow it to its end; the area's last words.
-async fn run_main(app: &Shared, h: &Held, tx: &tokio::sync::mpsc::Sender<Event>, l: Lang) -> Option<write::Outcome> {
-    let body = json!({"action": ACTION, "params": h.change.params, "source": "web", "op_id": h.op_id});
+async fn run_main(
+    app: &Shared,
+    h: &Held,
+    tx: &tokio::sync::mpsc::Sender<Event>,
+    l: Lang,
+    receipt: bool,
+) -> Option<write::Outcome> {
+    // O3: from off the LAN, the core waits for this page to come back (crate::follow) or reverts
+    let body = json!({"action": ACTION, "params": h.change.params, "source": "web", "op_id": h.op_id, "receipt": receipt});
     let changes = app.hub.watch();
     let (sent, reply) = match send(app, &body, l).await {
         Ok(r) => r,
@@ -1618,7 +1627,8 @@ pub async fn main_set(
     Query(q): Query<TokenQuery>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
-    let l = crate::topbar::Ctx::of_request(&req, PATH).lang;
+    let ctx = crate::topbar::Ctx::of_request(&req, PATH);
+    let (l, receipt) = (ctx.lang, ctx.remote != Via::Local);
     let held = take(&q.t);
     Sse::new(async_stream(move |tx| async move {
         let Some(h) = held else {
@@ -1652,7 +1662,7 @@ pub async fn main_set(
             // the tab went away before anything was sent: don't write
             return;
         }
-        let Some(o) = run_main(&app, &h, &tx, l).await else {
+        let Some(o) = run_main(&app, &h, &tx, l, receipt).await else {
             return;
         };
         let _ = tx.send(patch(&done_html(&app, o, &h.op_id, l))).await;

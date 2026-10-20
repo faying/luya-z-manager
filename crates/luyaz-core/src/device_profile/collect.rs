@@ -30,6 +30,11 @@ struct Inner {
     // Observed departures from ONLINE (or failed mode reads). Unrelated invalidations do
     // not count, so an in-flight AT command is only stopped by a real radio change.
     radio_changes: u64,
+    // The rtnetlink producer holds a loss-free subscription (see `netlink`).
+    conn_live: bool,
+    // The ubus listener confirmed its subscription with a probe (`listen::Notice::Ready`)
+    // and has not had a gap since.
+    sim_live: bool,
 }
 
 pub(crate) struct Collector(Mutex<Inner>);
@@ -224,6 +229,38 @@ impl Inner {
         }
     }
 
+    /// After a revocation, a still-live subscription gives a *new* opaque epoch: nothing
+    /// bound to the old one matches again, and no event can have been missed meanwhile.
+    fn remint_connection(&mut self) {
+        if self.conn_live && self.context.connection_epoch.is_none() {
+            self.context.connection_epoch = Some(opaque_id()).filter(|id| !id.is_empty());
+        }
+    }
+
+    fn remint_sim(&mut self) {
+        if self.sim_live && self.context.sim_epoch.is_none() {
+            self.context.sim_epoch = Some(opaque_id()).filter(|id| !id.is_empty());
+        }
+    }
+
+    /// Radio epoch (R18-P1-01, firmware-capabilities §12.8): derived, there is no mode-change
+    /// event. It exists only while both the rtnetlink and the ubus subscriptions are confirmed,
+    /// and every connection, card or power-state event and every observed mode change gives a
+    /// new value: a modem reset or LPM drops the data call and resets the card.
+    fn bump_radio(&mut self) {
+        self.context.radio_epoch = None;
+        if self.conn_live && self.sim_live {
+            self.context.radio_epoch = Some(opaque_id()).filter(|id| !id.is_empty());
+        }
+    }
+
+    /// After a mode change cleared all three: new values for whatever is still live.
+    fn remint(&mut self) {
+        self.remint_connection();
+        self.remint_sim();
+        self.bump_radio();
+    }
+
     fn note_radio(&mut self, mode: Option<&str>) {
         if mode.map(str::trim) != Some("ONLINE") {
             self.radio_changes = self.radio_changes.saturating_add(1);
@@ -294,11 +331,33 @@ impl Collector {
             context: Context::default(),
             radio_at: None,
             radio_changes: 0,
+            conn_live: false,
+            sim_live: false,
         }))
     }
 
     pub(crate) fn token(&self) -> Scope {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).scope()
+    }
+
+    /// The decision loop's epochs and device id, from one `scope()` (decision-execution-loop
+    /// §4.9). O5 as the owner closed it: the radio epoch counts only while the last real mode
+    /// read said ONLINE within `seconds`; otherwise it is None (unknown, never executable).
+    /// Memory only: safe under the engine lock.
+    pub(crate) fn loop_epochs(
+        &self,
+        now: Option<&BootTime>,
+        seconds: u64,
+    ) -> (luyaz_api::execution::Epochs, String) {
+        let g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let scope = g.scope();
+        let mut e = luyaz_api::execution::Epochs::of(&scope.context);
+        if g.context.radio_mode.as_deref() != Some("ONLINE")
+            || !super::context::within(g.radio_at.as_ref(), now, seconds)
+        {
+            e.radio = None;
+        }
+        (e, scope.device_id)
     }
 
     /// Called only after an actual transport attempt, never on a TTL cache hit or Skipped.
@@ -408,6 +467,7 @@ impl Collector {
                     .map(String::as_str);
                 g.note_radio(mode);
                 if super::context::radio(&mut g.context, mode) {
+                    g.remint();
                     g.generation = g.generation.saturating_add(1);
                 }
                 g.radio_at = at;
@@ -447,7 +507,57 @@ impl Collector {
         super::context::invalidate(&mut g.context, loss);
         if matches!(loss, super::context::Loss::Ubus) {
             g.radio_at = None;
+            // A listener gap can hide a SIM event; only the next probe re-arms it.
+            g.sim_live = false;
+            g.remint_connection();
+            g.bump_radio();
         }
+        g.generation = g.generation.saturating_add(1);
+    }
+
+    /// rtnetlink producer: `true` once a link dump completed on a subscribed socket,
+    /// `false` on overrun/read error/close. Either way the old epoch is gone.
+    pub(crate) fn connection_live(&self, live: bool) {
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.conn_live = live;
+        g.context.connection_epoch = None;
+        g.remint_connection();
+        g.bump_radio();
+        g.generation = g.generation.saturating_add(1);
+    }
+
+    /// ubus listener confirmed its subscription (probe seen) after a gap.
+    pub(crate) fn sim_listening(&self) {
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.sim_live = true;
+        g.context.sim_epoch = None;
+        g.remint_sim();
+        g.bump_radio();
+        g.generation = g.generation.saturating_add(1);
+    }
+
+    /// Any `zwrt_card_state_event` (hot remove, ready, repeats): a new SIM epoch.
+    pub(crate) fn sim_event(&self) {
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.context.sim_epoch = None;
+        g.remint_sim();
+        g.bump_radio();
+        g.generation = g.generation.saturating_add(1);
+    }
+
+    /// Any rmnet link/address/route event, even a repeat (same-IP redial is ABA).
+    pub(crate) fn connection_event(&self) {
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.context.connection_epoch = None;
+        g.remint_connection();
+        g.bump_radio();
+        g.generation = g.generation.saturating_add(1);
+    }
+
+    /// `zwrt_device_power_state_event` (sleep/wake): the radio may have changed state.
+    pub(crate) fn radio_event(&self) {
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.bump_radio();
         g.generation = g.generation.saturating_add(1);
     }
 
@@ -460,6 +570,7 @@ impl Collector {
             return;
         }
         if super::context::radio(&mut g.context, value) {
+            g.remint();
             g.generation = g.generation.saturating_add(1);
         }
         g.radio_at = at;

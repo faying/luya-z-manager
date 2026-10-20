@@ -25,7 +25,9 @@ async fn strict_refuses_when_someone_else_holds_it() {
     assert!(start.elapsed() >= Duration::from_millis(200));
     // 回 Busy 后什么都没拿着：对方一放，别人马上拿得到
     drop(other);
-    let again = acquire_strict_path(Some(p.to_str().unwrap().into()), Duration::ZERO).await;
+    // 一点余量：零等待时一次 try_lock 偶尔失败（10-20 在容器里约每十次一回）
+    let again =
+        acquire_strict_path(Some(p.to_str().unwrap().into()), Duration::from_millis(500)).await;
     assert!(again.unwrap().held());
     let _ = std::fs::remove_file(&p);
 }

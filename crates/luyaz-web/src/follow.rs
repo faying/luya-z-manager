@@ -47,8 +47,9 @@ pub async fn follow(
     read: impl Fn(&St) -> bool,
 ) -> Option<Followed> {
     let t0 = tokio::time::Instant::now();
-    let deadline = t0 + window;
+    let mut deadline = t0 + window;
     let mut last = Seen::Nothing;
+    let mut receipted = false;
     let mut said = String::new();
     loop {
         match app.hub.read(|st| crate::changes::seen(st, op_id)) {
@@ -57,6 +58,15 @@ pub async fn follow(
                 break;
             }
             Seen::Live(v) => {
+                // O3: the AP is up and the core waits for this page. Reaching the browser and
+                // getting its POST back is the receipt; a cut-off page never sends it.
+                if !receipted && v["receipt"]["waiting"].as_bool() == Some(true) {
+                    receipted = true;
+                    deadline = deadline.max(tokio::time::Instant::now() + RECEIPT_FOLLOW);
+                    if tx.send(receipt_patch(op_id)).await.is_err() {
+                        return None;
+                    }
+                }
                 let now = crate::bandlock::progress(&v, l);
                 if now != said {
                     said = now.clone();
@@ -88,6 +98,58 @@ pub async fn follow(
     Some(Followed { seen: last, read })
 }
 
+/// O3: say in the confirm that a change from off the LAN waits for this page and reverts without it.
+pub fn receipt_note(cf: &mut write::Confirm, via: crate::topbar::Via, l: Lang) {
+    if via == crate::topbar::Via::Local {
+        return;
+    }
+    let note = l.pick(
+        "You are not on the device's LAN: once Wi-Fi is back up, this page reports in by itself. If it cannot within 60 s, the device puts the old settings back.",
+        "你不在设备的局域网里：Wi-Fi 起来后，这个页面会自动回报；60 秒内回报不了，设备会自己改回原来的设置。",
+    );
+    cf.recovery = Some(match cf.recovery.take() {
+        Some(r) => format!("{r} {note}"),
+        None => note.to_string(),
+    });
+}
+
+/// O3: how much longer to follow once the core waits for a receipt (its 60 s and a margin).
+const RECEIPT_FOLLOW: Duration = Duration::from_secs(70);
+
+/// An invisible element that POSTs the receipt as soon as the browser gets it.
+fn receipt_patch(op_id: &str) -> axum::response::sse::Event {
+    let op: String = op_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .collect();
+    axum::response::sse::Event::default()
+        .event("datastar-patch-elements")
+        .data(format!(
+            "selector body\nmode append\nelements <span hidden data-init=\"@post('/router/wifi/receipt?op={op}')\"></span>"
+        ))
+}
+
+/// The core reads `op.*` targets from `params`, not the top level.
+fn receipt_body(op: &str) -> serde_json::Value {
+    serde_json::json!({"action": "op.receipt", "params": {"op_id": op}, "source": "web"})
+}
+
+#[derive(serde::Deserialize)]
+pub struct ReceiptQuery {
+    op: String,
+}
+
+/// O3: the page that made a remote Wi-Fi change is back. Pass it on; nothing to show.
+pub async fn receipt(
+    axum::extract::State(app): axum::extract::State<Shared>,
+    axum::extract::Query(q): axum::extract::Query<ReceiptQuery>,
+) -> axum::http::StatusCode {
+    match app.http.post(&app.control_url).json(&receipt_body(&q.op)).send().await {
+        Ok(r) if r.status().is_success() => axum::http::StatusCode::NO_CONTENT,
+        _ => axum::http::StatusCode::CONFLICT,
+    }
+}
+
 /// The page's words for a followed write: u60d's for a finished transaction; `applied` when the
 /// readback shows it and no transaction was seen.
 pub fn outcome(f: &Followed, sent: write::Sent, applied: String, l: Lang) -> write::Outcome {
@@ -105,3 +167,52 @@ pub fn outcome(f: &Followed, sent: write::Sent, applied: String, l: Lang) -> wri
     }
 }
 
+
+#[cfg(test)]
+mod receipt_tests {
+    use super::*;
+    use crate::topbar::Via;
+
+    fn cf(recovery: Option<&str>) -> write::Confirm {
+        write::Confirm {
+            tier: write::Tier::Dialog,
+            title: String::new(),
+            what: String::new(),
+            downtime: None,
+            recovery: recovery.map(str::to_string),
+            action: String::new(),
+            cuts_uplink: false,
+            word: None,
+            danger: false,
+            revert: write::Revert::No,
+        }
+    }
+
+    #[test]
+    fn the_receipt_element_posts_back_for_this_op_only() {
+        let e = format!("{:?}", receipt_patch("w-12.a_b\"<x>"));
+        assert!(e.contains("mode append"), "{e}");
+        assert!(e.contains("/router/wifi/receipt?op=w-12.a_bx"), "{e}");
+        assert!(!e.contains("<x>"), "{e}");
+    }
+
+    #[test]
+    fn the_receipt_names_the_op_where_the_core_reads_it() {
+        assert_eq!(receipt_body("w-1")["params"]["op_id"], "w-1");
+    }
+
+    #[test]
+    fn only_off_lan_confirms_mention_the_receipt() {
+        for via in [Via::Tailnet, Via::SubnetRoute, Via::Unknown] {
+            let mut c = cf(Some("Reconnect."));
+            receipt_note(&mut c, via, Lang::En);
+            let r = c.recovery.unwrap();
+            assert!(r.starts_with("Reconnect. ") && r.contains("60 s"), "{r}");
+        }
+        let mut c = cf(None);
+        receipt_note(&mut c, Via::Local, Lang::Zh);
+        assert_eq!(c.recovery, None);
+        receipt_note(&mut c, Via::Tailnet, Lang::Zh);
+        assert!(c.recovery.unwrap().contains("60 秒"));
+    }
+}

@@ -406,6 +406,15 @@ async fn control(State(m): State<Arc<Mock>>, body: axum::Json<Value>) -> Respons
         return axum::Json(json!({"ok": true, "action": action, "result": list_after(&m, &body["params"])}))
             .into_response();
     }
+    if action == "op.receipt" {
+        return receipt::control(&m, &body);
+    }
+    // the decision loop's approval (core api/approve.rs): started, as the core answers it
+    if action == "loop.approve" {
+        let id = body["params"]["proposal_id"].as_str().unwrap_or_default();
+        return axum::Json(json!({"ok": true, "action": action, "result": {"op_id": format!("loop-{id}"), "started": true}}))
+            .into_response();
+    }
     m.op_ids
         .lock()
         .unwrap()
@@ -644,6 +653,7 @@ async fn stats(State(m): State<Arc<Mock>>) -> axum::Json<Value> {
         "apn_ops": m.apn_ops.lock().unwrap().clone(),
         "reboots": m.reboots.load(Ordering::SeqCst),
         "page_ops": m.page_ops.lock().unwrap().clone(),
+        "receipts": receipt::log(),
     }))
 }
 
@@ -1100,6 +1110,7 @@ mod router_firewall;
 mod router_lan;
 mod router_qos;
 mod home;
+mod receipt;
 mod router_vpn;
 mod wifi_guest;
 mod wifi_main;
@@ -1141,6 +1152,7 @@ fn batch4_routes(r: Router<Arc<Mock>>) -> Router<Arc<Mock>> {
     let r = router_lan::routes(r);
     let r = wifi_guest::routes(r);
     let r = wifi_main::routes(r);
+    let r = receipt::routes(r);
     home::routes(r)
 }
 
@@ -1309,8 +1321,14 @@ fn run_txn(m: &Arc<Mock>, body: &Value, t: Txn, on_ok: Box<dyn FnOnce(&Mock) + S
         "next_zh": null, "next_en": null, "remaining_ms": null}));
     let verifying = with(json!({"phase": "verifying", "say_zh": "正在确认", "say_en": "Checking", "mark": null, "stay": "live",
         "next_zh": "{t} 内确认", "next_en": "confirming within {t}", "remaining_ms": 102000}));
+    let receipt = body["receipt"].as_bool() == Some(true);
     let ok = end == "confirmed";
-    let last = with(if ok {
+    let waiting = {
+        let mut v = verifying.clone();
+        v["receipt"] = receipt::view(receipt::wait_ms());
+        v
+    };
+    let mut last = with(if ok {
         json!({"phase": "confirmed", "reason": "verified", "mark": "ok", "stay": "brief", "acked": false, "needs_ack": false,
                "say_zh": format!("已改成{}", tw.0), "say_en": format!("Now {}", tw.1)})
     } else {
@@ -1340,6 +1358,16 @@ fn run_txn(m: &Arc<Mock>, body: &Value, t: Txn, on_ok: Box<dyn FnOnce(&Mock) + S
             return;
         }
         tokio::time::sleep(Duration::from_millis(2000)).await;
+        // O3: a remote change also waits for the page's receipt (receipt.rs)
+        if ok && receipt {
+            publish(&m2, waiting, Value::Null);
+            if receipt::wait(&id).await {
+                last["reason"] = json!("receipt");
+            } else {
+                last = no_receipt(last, (&ow.0, &ow.1));
+            }
+        }
+        let ok = last["phase"] == "confirmed";
         if ok {
             on_ok(&m2);
             for name in ["signal", "apn"] {
@@ -1360,6 +1388,18 @@ fn run_txn(m: &Arc<Mock>, body: &Value, t: Txn, on_ok: Box<dyn FnOnce(&Mock) + S
         publish(&m2, Value::Null, last);
     });
     axum::Json(reply).into_response()
+}
+
+/// O3: the core's (RolledBack, NoReceipt) words over a transaction's `last`.
+fn no_receipt(mut last: Value, old: (&str, &str)) -> Value {
+    for (k, x) in [("phase", json!("rolled_back")), ("reason", json!("no_receipt")), ("mark", json!("warn")),
+        ("stay", json!("sticky")), ("needs_ack", json!(true)),
+        ("say_zh", json!(format!("远端没回来 · 已退回{}", old.0))),
+        ("say_en", json!(format!("Remote did not come back · back to {}", old.1)))]
+    {
+        last[k] = x;
+    }
+    last
 }
 
 #[derive(serde::Deserialize)]

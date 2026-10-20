@@ -490,5 +490,154 @@ pub(crate) fn dns_answer(b: &[u8], q: &[u8]) -> Option<ResultState> {
     Some(ResultState::Unknown)
 }
 
+/// A bound operator-DNS lookup (O2): what the recheck's HTTPS targets resolve to over the
+/// cellular path, not the system resolver (which has no deadline and may be CHILL's).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Resolved {
+    Addrs(Vec<IpAddr>),
+    /// An error rcode, an empty answer or every server timed out: the DNS layer said no.
+    Failed,
+    /// Could not bind, or no server of the source's family: says nothing.
+    Unknown,
+}
+
+/// A/AAAA (by the source's family) for `host` from `path.dns`, all within `budget`.
+pub fn resolve(path: &Path, host: &str, budget: Duration) -> Resolved {
+    let servers: Vec<IpAddr> = path
+        .dns
+        .iter()
+        .copied()
+        .filter(|d| d.is_ipv6() == path.source.is_ipv6())
+        .take(2)
+        .collect();
+    if servers.is_empty() {
+        return Resolved::Unknown;
+    }
+    let start = Instant::now();
+    // what each server ended with: an address list wins; every asked one saying no (error
+    // rcode or silence) is Failed; anything else (NODATA, truncated, unasked) stays unknown
+    let mut said_no = 0;
+    let mut unsure = false;
+    for (i, server) in servers.iter().enumerate() {
+        let Some(left) = budget.checked_sub(start.elapsed()).filter(|d| !d.is_zero()) else {
+            unsure = true;
+            break;
+        };
+        // share what is left between the servers not tried yet
+        let each = (left / (servers.len() - i) as u32).min(DNS_TIMEOUT);
+        let Ok(s) = socket(path, true) else {
+            return Resolved::Unknown;
+        };
+        let sock: UdpSocket = s.into();
+        if sock.connect(SocketAddr::new(*server, 53)).is_err() {
+            unsure = true;
+            continue;
+        }
+        let id = (super::now_unix() as u16) ^ 0x2b2b ^ i as u16;
+        let mut q = crate::dns_query(id, host);
+        if path.source.is_ipv6() {
+            let k = q.len() - 3;
+            q[k] = 28;
+        }
+        if sock.set_write_timeout(Some(each)).is_err() || sock.send(&q).is_err() {
+            unsure = true;
+            continue;
+        }
+        let sent = Instant::now();
+        let mut buf = [0u8; 1232];
+        let mut got = None;
+        while let Some(left) = each.checked_sub(sent.elapsed()).filter(|d| !d.is_zero()) {
+            if sock.set_read_timeout(Some(left)).is_err() {
+                break;
+            }
+            let Ok(n) = sock.recv(&mut buf) else { break };
+            if let Some(r) = answer_addrs(&buf[..n], &q) {
+                got = Some(r);
+                break;
+            }
+        }
+        match got {
+            Some(Resolved::Addrs(a)) => return Resolved::Addrs(a),
+            // a full wait with no reply counts as a no; a cut-short one doesn't
+            Some(Resolved::Failed) => said_no += 1,
+            None if each >= DNS_TIMEOUT => said_no += 1,
+            _ => unsure = true,
+        }
+    }
+    if said_no > 0 && !unsure {
+        Resolved::Failed
+    } else {
+        Resolved::Unknown
+    }
+}
+
+/// Like [`dns_answer`], but returns the addresses reached through the CNAME chain.
+pub(crate) fn answer_addrs(b: &[u8], q: &[u8]) -> Option<Resolved> {
+    if b.len() < 12 || b[..2] != q[..2] || b[2] & 0xf8 != 0x80 || b[4..6] != [0, 1] {
+        return None;
+    }
+    if b[2] & 2 != 0 {
+        // truncated: the answer may be there, we can't read it over UDP
+        return Some(Resolved::Unknown);
+    }
+    let (asked, end) = name(q, 12)?;
+    let (echo, mut offset) = name(b, 12)?;
+    if asked != echo || b.get(offset..offset + 4)? != q.get(end..end + 4)? {
+        return None;
+    }
+    offset += 4;
+    if b[3] & 15 != 0 {
+        return Some(Resolved::Failed);
+    }
+    let count = u16::from_be_bytes([b[6], b[7]]);
+    if count > 32 {
+        return None;
+    }
+    let qtype = q.get(end..end + 2)?;
+    let mut addresses: Vec<(Vec<u8>, IpAddr)> = Vec::new();
+    let mut aliases = Vec::new();
+    for _ in 0..count {
+        let (owner, next) = name(b, offset)?;
+        offset = next;
+        let h = b.get(offset..offset + 10)?;
+        let len = u16::from_be_bytes([h[8], h[9]]) as usize;
+        offset += 10;
+        let rdata = b.get(offset..offset + len)?;
+        if h[2..4] == [0, 1] {
+            if &h[..2] == qtype && qtype == [0, 1] && len == 4 {
+                let a: [u8; 4] = rdata.try_into().ok()?;
+                addresses.push((owner, IpAddr::from(a)));
+            } else if &h[..2] == qtype && qtype == [0, 28] && len == 16 {
+                let a: [u8; 16] = rdata.try_into().ok()?;
+                addresses.push((owner, IpAddr::from(a)));
+            } else if h[..2] == [0, 5] {
+                let (alias, next) = name(b, offset)?;
+                if next != offset + len {
+                    return None;
+                }
+                aliases.push((owner, alias));
+            }
+        }
+        offset += len;
+    }
+    let mut current = asked;
+    for _ in 0..=aliases.len() {
+        let found: Vec<IpAddr> = addresses
+            .iter()
+            .filter(|(o, _)| *o == current)
+            .map(|(_, a)| *a)
+            .collect();
+        if !found.is_empty() {
+            return Some(Resolved::Addrs(found));
+        }
+        let Some((_, to)) = aliases.iter().find(|(from, _)| *from == current) else {
+            // NODATA: the name exists without this family's address; not a DNS failure
+            return Some(Resolved::Unknown);
+        };
+        current = to.clone();
+    }
+    Some(Resolved::Unknown)
+}
+
 #[cfg(test)]
 mod tests;
