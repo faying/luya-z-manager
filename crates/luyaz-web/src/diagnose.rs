@@ -196,6 +196,18 @@ pub struct View {
 /// Core `data.slow_signal`: words for the person when the replay explains, nothing otherwise.
 fn slow_view(b: &Value, l: Lang) -> Option<String> {
     let a = &b["advice"];
+    if a["advice"] == "suggest" {
+        let m = a["busy_s"].as_u64()? / 60;
+        return Some(match l {
+            Lang::En => format!(
+                "The signal is strong and data has been moving for {m} min. If it feels slow, \
+                 run a check above: it tells which part is slowing it down. Nothing runs by itself."
+            ),
+            Lang::Zh => format!(
+                "信号是强的，已经连续传了 {m} 分钟数据。如果觉得慢，点上面的检查，它会查出慢在哪一层；不会自己跑。"
+            ),
+        });
+    }
     if a["advice"] != "explain" {
         return None;
     }
@@ -1287,6 +1299,16 @@ mod tests {
             assert!(slow_view(&json!({ "advice": a }), Lang::En).is_none());
         }
         assert!(slow_view(&Value::Null, Lang::En).is_none());
+    }
+
+    #[test]
+    fn slow_busy_suggests_a_check() {
+        let b = json!({"advice": {"advice": "suggest", "busy_s": 150, "step": "deep_check"}});
+        let en = slow_view(&b, Lang::En).unwrap();
+        assert!(en.contains("for 2 min") && en.is_ascii(), "{en}");
+        assert!(slow_view(&b, Lang::Zh).unwrap().contains("2 分钟"));
+        let bad = json!({"advice": {"advice": "suggest", "busy_s": "x"}});
+        assert!(slow_view(&bad, Lang::En).is_none());
     }
 
     #[test]

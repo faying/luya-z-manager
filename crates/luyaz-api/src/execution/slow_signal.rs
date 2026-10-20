@@ -8,6 +8,11 @@
 //! plus the carrier width) must be fine. One SINR reading never names a cause. Cell load is
 //! never proven from here (no baseline of real traffic on the same cell), so it is always only
 //! "possible", as is every layer the check left at warn.
+//!
+//! The other way in (§2: passive transfer ≥ 60 s): with no deep check to read, a strong signal
+//! carrying real traffic for [`BUSY_S`] only earns the suggestion to run one. Whether that
+//! transfer is slow is never judged here: there is no same-cell rate baseline, and the
+//! suggestion sends nothing by itself.
 
 use serde::Serialize;
 
@@ -15,6 +20,13 @@ use crate::diagnose::Level;
 
 /// A deep check older than this describes another moment.
 pub const MAX_AGE_S: u64 = 600;
+/// Strong signal with real traffic this long, in a row…
+pub const BUSY_S: u64 = 60;
+/// …at least this many bytes a second (1 Mbit/s) at every sample.
+pub const BUSY_MIN_BPS: i64 = 125_000;
+/// Samples further apart than this break the run.
+pub const BUSY_GAP_S: u64 = 15;
+
 /// Layers that can explain slowness besides the radio, in the deep check's order.
 pub const LAYERS: [&str; 9] = [
     "wifi", "sim", "limit", "bearer", "link", "dns", "e2e", "crowd", "proxy",
@@ -31,6 +43,45 @@ pub struct Evidence {
     pub same_cell: Option<bool>,
     /// The deep check's layers: id → level.
     pub layers: Vec<(String, Level)>,
+    /// Seconds the signal has been strong with real traffic, up to now ([`Busy`]).
+    pub busy_s: Option<u64>,
+}
+
+/// The passive run: fed by the core's sampler, every few seconds.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Busy {
+    since: Option<u64>,
+    last: Option<u64>,
+}
+
+impl Busy {
+    pub const fn new() -> Self {
+        Self {
+            since: None,
+            last: None,
+        }
+    }
+
+    /// One sample at `now` (monotonic s): the signal layer's level on the live reading and the
+    /// downlink bytes a second. Anything else, unread, or a gap starts over.
+    pub fn observe(&mut self, now: u64, signal: Option<Level>, rx_bps: Option<i64>) {
+        let on = signal == Some(Level::Ok) && rx_bps.is_some_and(|b| b >= BUSY_MIN_BPS);
+        let gap = self.last.is_none_or(|l| now.saturating_sub(l) > BUSY_GAP_S);
+        if !on {
+            *self = Self::default();
+            return;
+        }
+        if gap {
+            self.since = Some(now);
+        }
+        self.last = Some(now);
+    }
+
+    /// How long the run has lasted, if it is still going at `now`.
+    pub fn seconds(&self, now: u64) -> Option<u64> {
+        let (s, l) = (self.since?, self.last?);
+        (now.saturating_sub(l) <= BUSY_GAP_S).then(|| l - s)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -46,6 +97,9 @@ pub enum Advice {
         proven: Vec<&'static str>,
         possible: Vec<&'static str>,
     },
+    /// No deep check to read, but a strong signal has carried real traffic for `busy_s`: if it
+    /// feels slow, run one. Nothing is judged slow and nothing is sent.
+    Suggest { busy_s: u64, step: &'static str },
 }
 
 impl Advice {
@@ -60,10 +114,21 @@ fn level(e: &Evidence, id: &str) -> Option<Level> {
 }
 
 pub fn replay(e: &Evidence) -> Advice {
-    let unknown = |why| Advice::Unknown { why };
+    // no check of this moment and cell to read: the passive way in, or unknown
+    let unknown = |why| match e.busy_s {
+        Some(s) if s >= BUSY_S => Advice::Suggest {
+            busy_s: s,
+            step: "deep_check",
+        },
+        _ => Advice::Unknown { why },
+    };
     match e.done {
         None => return unknown("no_check"),
-        Some(false) => return unknown("check_running"),
+        Some(false) => {
+            return Advice::Unknown {
+                why: "check_running",
+            };
+        }
         Some(true) => {}
     }
     match e.age_s {
@@ -82,7 +147,11 @@ pub fn replay(e: &Evidence) -> Advice {
                 why: "signal_not_strong",
             };
         }
-        _ => return unknown("signal_unknown"),
+        _ => {
+            return Advice::Unknown {
+                why: "signal_unknown",
+            };
+        }
     }
     let (mut proven, mut possible) = (Vec::new(), Vec::new());
     for id in LAYERS {
@@ -93,7 +162,9 @@ pub fn replay(e: &Evidence) -> Advice {
         }
     }
     if proven.is_empty() && possible.is_empty() {
-        return unknown("no_layer_explains");
+        return Advice::Unknown {
+            why: "no_layer_explains",
+        };
     }
     Advice::Explain { proven, possible }
 }

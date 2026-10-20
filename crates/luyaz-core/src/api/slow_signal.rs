@@ -9,7 +9,10 @@
 //! - Layer levels as the run wrote them; an unrecognised level is left out (never counted).
 
 use luyaz_api::diagnose::Level;
-use luyaz_api::execution::slow_signal::{Evidence, replay};
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
+
+use luyaz_api::execution::slow_signal::{Busy, Evidence, replay};
 use serde_json::{Value, json};
 
 fn level(s: &str) -> Option<Level> {
@@ -70,7 +73,25 @@ pub fn evidence(run: &Value, cell: Option<i64>) -> Evidence {
         age_s: run.get("age_s").and_then(Value::as_u64),
         same_cell: then.zip(cell).map(|(a, b)| a == b),
         layers,
+        busy_s: None,
     }
+}
+
+/// The passive run (`Busy`), fed by the watcher's sampler every 5 s.
+static BUSY: Mutex<Busy> = Mutex::new(Busy::new());
+
+fn mono() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_secs()
+}
+
+/// One sampler round: the live reading's signal level (the deep check's own rule) and downlink.
+pub fn observe(state: Option<&Value>, screen: Option<&Value>) {
+    let (radio, ..) = luyaz_netwatch::diagnose::radio_from(state, screen);
+    let level = luyaz_api::diagnose::judge_signal(&radio).level;
+    let rx = state.is_some().then_some(radio.rx_bps);
+    let mut b = BUSY.lock().unwrap_or_else(|e| e.into_inner());
+    b.observe(mono(), Some(level), rx);
 }
 
 /// `/api/diagnose`'s `slow_signal`.
@@ -79,5 +100,10 @@ pub fn view(run: &Value, hub: Option<&crate::block::Hub>) -> Value {
         .and_then(|h| h.view("signal"))
         .filter(|v| !v.stale)
         .and_then(|v| cell_now(&v.data));
-    json!({ "advice": replay(&evidence(run, cell)) })
+    let mut e = evidence(run, cell);
+    e.busy_s = BUSY
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .seconds(mono());
+    json!({ "advice": replay(&e), "busy_s": e.busy_s })
 }

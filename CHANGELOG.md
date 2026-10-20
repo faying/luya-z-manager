@@ -21,13 +21,43 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+## core 1.11.3, lweb 1.9.1 — 2026-10-20
+
+- core: `perf.slow_strong_signal` has a passive way in: strong signal (the deep check's own signal rule on the live reading) with downlink ≥ 1 Mbit/s for 60 s and no deep check to read → suggests running one. Never judges slow, never sends anything.
+- lweb: the diagnosis page shows that suggestion.
+
+## core 1.11.2 — 2026-10-20
+
+- the hour ledger counts charging seconds only while the fuel gauge's current is positive (the battery block's `charging` flag is set on this device while the battery drains), the same rule as the hour power figure.
+
 ## lweb 1.9.0 — 2026-10-20
 
 - every `/agent-api` answer carries `device_id` (random 12 hex digits in `/data/luyaz/agent.id`, 0600, made on the first answer) so `luyaz-mcp enroll` can pin the device (multiple U60s, u60-mcp.md R2).
 
+## core 1.11.1, lweb 1.8.1 — 2026-10-20
+
+- core: `slow_signal` reads the serving cell with the deep check's own RAT rule (NR/5G/SA_* and ENDC no longer read as `cell_changed`).
+- lweb: the `long_idle` explanation says to restart the core.
+
+## core 1.11.0, lweb 1.8.0 — 2026-10-20
+
+- core: three read-only decision-loop scenarios (§4.11) with evidence on `/api/diagnose`: `power.hot_drain` (this boot's last closed hour against matched hours from the hour ledger), `usage.long_idle` (two quiet covered hours at home, screen off, no clients) and `perf.slow_strong_signal` (over the person's own deep check). Never an action, never a probe.
+- lweb: the diagnosis page explains all three.
+
 ## core 1.10.0 — 2026-10-20
 
 - alert SMS can carry a device name after the signature (`/data/alerts/sms-name`, or `"name"` in PUT /api/alerts/sms): 【Luya-Z】U60Pro全球版：… ; longer texts go out as one long SMS
+
+## core 1.9.0, lweb 1.7.0 — 2026-10-20
+
+- core: `radio.band_flap` evidence from rtnetlink address drops on rmnet (band/cell/SINR from the signal block, SSR from crashwatch), on `/api/diagnose` as `data.band_flap`. Read-only.
+- lweb: the diagnosis page shows the band_flap explanation; the Wi-Fi confirms carry a `remote.wifi_change` risk line per origin (revert checks come before the client count).
+
+## core 1.8.0, lweb 1.6.0, scripts 1.0.5 — 2026-10-20
+
+- core: R18-P0 batch: `expect_device_id`, agent authority, DNS liveness bound to the cellular interface (never the default route), transaction probe tri-state (a local socket failure is unknown), an off-lock probe result kept only if a fresh read within 15 s shows the same SIM, interface and connection; the core LAN listener (:9461, no callers) binds to 127.0.0.1.
+- lweb: matching changes for the R18-P0 batch.
+- scripts: doctor shows a row only when the web device id file can't be read.
 
 ## core 1.7.2 — 2026-10-20
 

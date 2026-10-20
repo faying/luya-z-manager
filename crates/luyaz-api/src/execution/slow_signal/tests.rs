@@ -20,6 +20,7 @@ fn base() -> Evidence {
             l("crowd", Level::Warn),
             l("proxy", Level::Na),
         ],
+        busy_s: None,
     }
 }
 
@@ -35,6 +36,7 @@ fn why(a: &Advice) -> &'static str {
     match a {
         Advice::None { why } | Advice::Unknown { why } => why,
         Advice::Explain { .. } => "explain",
+        Advice::Suggest { .. } => "suggest",
     }
 }
 
@@ -119,4 +121,75 @@ fn serializes_tagged() {
     let v = serde_json::to_value(replay(&base())).unwrap();
     assert_eq!(v["advice"], "explain");
     assert_eq!(v["proven"][0], "wifi");
+}
+
+#[test]
+fn busy_suggests_a_check_only_where_there_is_none_to_read() {
+    type Edit = fn(&mut Evidence);
+    let cases: &[(&str, Edit, &str)] = &[
+        ("no check", |e| e.done = None, "suggest"),
+        ("old", |e| e.age_s = Some(MAX_AGE_S + 1), "suggest"),
+        ("moved", |e| e.same_cell = Some(false), "suggest"),
+        ("cell unread", |e| e.same_cell = None, "suggest"),
+        ("running", |e| e.done = Some(false), "check_running"),
+        ("a fresh check speaks", |_| {}, "explain"),
+        (
+            "nothing explains",
+            |e| {
+                for id in ["wifi", "crowd"] {
+                    set(e, id, Level::Ok)
+                }
+            },
+            "no_layer_explains",
+        ),
+        (
+            "too short",
+            |e| {
+                e.done = None;
+                e.busy_s = Some(BUSY_S - 1)
+            },
+            "no_check",
+        ),
+    ];
+    for (name, edit, want) in cases {
+        let mut e = base();
+        e.busy_s = Some(BUSY_S);
+        edit(&mut e);
+        assert_eq!(why(&replay(&e)), *want, "{name}");
+    }
+}
+
+#[test]
+fn busy_runs_while_strong_and_moving() {
+    let mut b = Busy::default();
+    let fast = Some(BUSY_MIN_BPS);
+    for t in (0..=60).step_by(5) {
+        b.observe(t, Some(Level::Ok), fast);
+    }
+    assert_eq!(b.seconds(60), Some(60));
+    assert_eq!(b.seconds(60 + BUSY_GAP_S + 1), None, "stopped being fed");
+    // a gap starts over
+    b.observe(100, Some(Level::Ok), fast);
+    assert_eq!(b.seconds(100), Some(0));
+    // weak, slow traffic, or unread: over
+    for (sig, rx) in [
+        (Some(Level::Warn), fast),
+        (Some(Level::Ok), Some(BUSY_MIN_BPS - 1)),
+        (None, fast),
+        (Some(Level::Ok), None),
+    ] {
+        let mut b = Busy::default();
+        b.observe(0, Some(Level::Ok), fast);
+        b.observe(5, sig, rx);
+        assert_eq!(b.seconds(5), None);
+    }
+}
+
+#[test]
+fn the_suggestion_never_acts() {
+    let a = Advice::Suggest {
+        busy_s: 90,
+        step: "deep_check",
+    };
+    assert_eq!(a.action(), None);
 }

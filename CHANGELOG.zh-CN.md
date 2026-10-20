@@ -18,13 +18,43 @@
 
 ## Unreleased
 
+## core 1.11.3、lweb 1.9.1 — 2026-10-20
+
+- core：`perf.slow_strong_signal` 多了被动入口：信号强（按深度检测自己的信号规则看实时读数）、下行 ≥ 1 Mbit/s 持续 60 秒、又没有深度检测可读时，建议跑一次。从不判定「慢」，也不发任何东西。
+- lweb：诊断页显示这条建议。
+
+## core 1.11.2 — 2026-10-20
+
+- 小时账只在电量计电流为正时才算充电秒数（这台设备放电时电池块的 `charging` 也会置上），和小时功耗同一规则。
+
 ## lweb 1.9.0 — 2026-10-20
 
 - `/agent-api` 的每个回应都带 `device_id`（`/data/luyaz/agent.id` 里的 12 位随机十六进制，0600，第一次回应时生成），供 `luyaz-mcp enroll` 钉住设备（多台 U60，u60-mcp.md R2）。
 
+## core 1.11.1、lweb 1.8.1 — 2026-10-20
+
+- core：`slow_signal` 按深度检测自己的制式规则认服务小区（NR/5G/SA_* 和 ENDC 不再被当成 `cell_changed`）。
+- lweb：`long_idle` 的说明改成提示重启核心。
+
+## core 1.11.0、lweb 1.8.0 — 2026-10-20
+
+- core：决策层三个只读场景（§4.11），证据在 `/api/diagnose`：`power.hot_drain`（本次开机最后一个完整小时对比小时账里条件相同的小时）、`usage.long_idle`（在家、熄屏、无终端的两个安静小时）、`perf.slow_strong_signal`（基于用户自己的深度检测）。从不执行动作、不发探测。
+- lweb：诊断页解释这三个场景。
+
 ## core 1.10.0 — 2026-10-20
 
 - 告警短信可以在签名后带设备名（`/data/alerts/sms-name`，或 PUT /api/alerts/sms 的 `"name"`）：【Luya-Z】U60Pro全球版：… ；超过 70 字的作为一条长短信发出
+
+## core 1.9.0、lweb 1.7.0 — 2026-10-20
+
+- core：`radio.band_flap` 证据，来自 rmnet 上 rtnetlink 的地址掉线（频段/小区/SINR 取信号块，SSR 取 crashwatch），在 `/api/diagnose` 的 `data.band_flap`。只读。
+- lweb：诊断页显示 band_flap 说明；Wi-Fi 确认框按来源带 `remote.wifi_change` 风险提示（先查回滚，再看终端数）。
+
+## core 1.8.0、lweb 1.6.0、scripts 1.0.5 — 2026-10-20
+
+- core：R18-P0 一批：`expect_device_id`、代理权限、DNS 存活检测绑定蜂窝接口（不走默认路由）、事务探测三态（本地 socket 失败算未知）、锁外探测结果只有 15 秒内重读到同一 SIM、接口、连接才采用；核心 LAN 监听（:9461，没有调用方）改绑 127.0.0.1。
+- lweb：配合 R18-P0 的改动。
+- scripts：体检只在读不到网页设备 ID 文件时才显示一行。
 
 ## core 1.7.2 — 2026-10-20
 

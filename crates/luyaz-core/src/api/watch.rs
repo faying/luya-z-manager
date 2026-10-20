@@ -374,6 +374,7 @@ pub async fn sample(c: Compat) {
         let state = luyaz_netwatch::state_from_blocks(|n| fresh(c.src.hub.as_ref(), n));
         let screen = (c.src.screen)().await;
         *lock(&g.screen) = screen.clone();
+        super::slow_signal::observe(state.as_ref(), screen.as_ref());
         let now = luyaz_netwatch::now_unix();
         // Observe every existing five-second tick, even while a blocking probe is running.
         // Missing reads, a receive event, connection changes and sampling gaps reset the hold.
