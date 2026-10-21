@@ -35,3 +35,16 @@
 .op-logo img { width: auto; max-width: 100%; }
 .op-badge { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; vertical-align: middle; margin-inline-end: 6px; border-radius: 9999px; background: var(--nd-fill); color: var(--nd-t1); line-height: 1; }
 #hm-sub { display: flex; align-items: center; }
+/* tailnet poller banner (home/poller.rs) */
+.hm-poller__body { padding: 12px 16px; display: grid; gap: 6px; }
+.hm-poller__acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.hm-poller__acts .nd-btn { min-height: 44px; }
+.hm-poller .t-note { padding: 0; }
+/* dual SIM group (home_dual.rs): slot · logo · operator on one line */
+.hm-dual__op { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.hm-dual .nd-row__value { white-space: nowrap; }
+.hm-dual--idle .nd-row__label, .hm-dual--idle .nd-row__value { color: var(--nd-t2); }
+.hm-dual--idle img { opacity: .6; }
+.hm-dual .hm-dual--weak { color: var(--nd-warnT); }
+.hm-poller__op { padding: 0 4px; }
+.hm-poller__op:empty { display: none; }

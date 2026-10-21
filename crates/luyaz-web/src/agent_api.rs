@@ -51,7 +51,7 @@ pub fn set_files(token: PathBuf, allow: PathBuf) {
     let _ = FILES.set((token, allow));
 }
 
-fn files() -> (PathBuf, PathBuf) {
+pub(crate) fn files() -> (PathBuf, PathBuf) {
     FILES
         .get()
         .cloned()

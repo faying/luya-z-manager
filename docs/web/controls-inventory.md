@@ -1540,6 +1540,7 @@
 | 已记下，谢谢 | 同上 | `feedback` | 同上 | 否 |
 | 「未解决的问题」：symptom、把握（确定/可能/猜测）、起止和次数、卡尾号、每层证据（2026-10-17 T6） | 同上 | `finding`（`symptom(_en)`、`confidence`、`first`/`last`/`count`、`iccid_tail`、`evidence[].layer/level/detail(_en)`；没有为 null） | 同上 | 否（核心的 store，跨重启保留） |
 | 是否漫游（决定加测速度要不要按两下） | `/api/netinfo?lite=1` | `roaming` | 30000 | 否 |
+| 「恢复上次能用的设置」：确认能用的时间、和现在不一样的几项（现在 → 那时）、每项能否自动退回、恢复时逐项进度和结尾（2026-10-20，core 1.12.0） | `/api/verified` | `at`、`steps[].item/now/to/rollback`、`available`/`why`、`progress.steps[].state/why`、`progress.end` | 15000（恢复进行中跟页面一起刷） | 否 |
 
 #### 控件
 
@@ -1551,9 +1552,10 @@
 | 「加测速度 · 约 5 秒、最多 30 MB」（漫游时第一下变「走漫游流量，再按一次」，5 秒不按还原） | button「加测速度 · 约 5 秒、最多 30 MB」 〔交互后：检查完成后才有〕 | POST `/api/diagnose/speed` `{id}`（只测下载，≤30 MB；正在测速等情况回 409 + `error`/`error_en`） | 1（漫游时按两下） | `/api/diagnose` `speed` | 漫游时两段（同一按钮第二下） | 二（消耗蜂窝流量） |
 | 「对」「不对」（这次判断对不对，每次只问一回） | button「对」/「不对」 〔交互后：检查完成后才有〕 | POST `/api/diagnose/feedback` `{id, right}` | 1 | `/api/diagnose` `feedback` | 无 | 一 |
 | 「忽略」（「未解决的问题」区，2026-10-17 T6：核心有开着的 Finding 时才有；这张卡 24 小时内不再提示） | button「忽略」 〔交互后：场景 finding〕 | POST `/api/diagnose/dismiss` `{kind, iccid_tail}`（没有对应的开着的 Finding 回 404，网页按已关闭处理） | 1 | `/api/diagnose` `finding` 变 null | 无 | 一（只关提示，不改设置） |
+| 「恢复…」（「恢复上次能用的设置」区；这张卡在这个国家有记录、和现在不一样、没有事务和守护会话时才可按；有 APN 一项时要先勾「也改 APN（改了不会自动退回）」） | button「恢复…」 〔交互后：场景 verified〕 | POST `/control` `{action:"verified.restore", source:"web"}`（核心只认 source 和 approved_by 都是 screen/web；逐项一个普通事务：解锁小区 → 频段 → 制式 → 锁小区 → APN，每步 `expect_iccid`、过会话闸） | 每项一次事务，哪一步没确认就停 | `/api/verified` `progress`；各事务在 `/changes` | 对话框（会断网、远程时有 Tailscale 警告） | 三 |
 | 动作「去换节点 →」（主因是代理时） | link「去换节点 →」 〔交互后：主因是代理层时〕 | 无（导航到 `/services/chill`） | — | — | 无 | —（本地） |
 
-写接口假成功风险：否（三个写都只动 agent 内存里的这一次检查，结果就是 GET 读回的那一份）。
+写接口假成功风险：否（三个写都只动 agent 内存里的这一次检查，结果就是 GET 读回的那一份）。「恢复…」例外：它改蜂窝设置，结果按每一项事务自己的读回确认；结尾再跑一次绑蜂窝 HTTPS + DNS 检查，只报告通没通，不再改别的。
 
 ---
 

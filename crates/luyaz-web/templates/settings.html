@@ -2,7 +2,7 @@
 {% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("sys.css") }}">{% endblock %}
 {% block main %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
-<p class="nd-body mb-4 max-w-[720px] text-nd-t2">{{ shell.t("These settings apply to this browser only; nothing here changes the device.", "这里的设置只对这个浏览器生效，不会改动设备。") }}</p>
+<p class="nd-body mb-4 max-w-[720px] text-nd-t2">{{ shell.t("Interface and session apply to this browser only; the Tailscale allow list below is kept on the device.", "界面和登录状态只对这个浏览器生效；下面的 Tailscale 轮询白名单存在设备上。") }}</p>
 <div class="grid max-w-[720px] gap-6">
 <section aria-labelledby="st-ui-t"><h2 id="st-ui-t" class="nd-group-title">{{ shell.t("Interface", "界面") }}</h2>
 <div class="nd-group">
@@ -21,6 +21,14 @@
 <section aria-labelledby="st-ss-t"><h2 id="st-ss-t" class="nd-group-title">{{ shell.t("Session", "登录状态") }}</h2>
 <div class="nd-group"><form method="post" action="/logout" class="nd-row flex-wrap gap-2"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("Log out of this browser", "退出这个浏览器的登录") }}</span><span class="nd-row__sub block">{{ shell.t("Ends this session; you will need the password to come back.", "结束这次登录，再进来要输入密码。") }}</span></span>
 <button type="submit" class="nd-btn nd-btn--secondary">{{ shell.icon("SignOut", 20)|safe }}{{ shell.t("Log out", "退出登录") }}</button></form></div>
+</section>
+<section aria-labelledby="st-pl-t"><h2 id="st-pl-t" class="nd-group-title">{{ shell.t("Tailscale polling allow list", "Tailscale 轮询白名单") }}</h2>
+<p class="nd-aux mb-2">{{ shell.t("Peers allowed to keep polling the admin ports over Tailscale without a home-page warning. Matched by address and port only: a gateway's address allows everything behind it.", "这些对端经 Tailscale 持续访问管理接口时，首页不再提醒。只按地址和端口匹配：网关的地址等于放行它后面的整个网段。") }}</p>
+{% if let Some((tone, text)) = note %}<p class="t-note t-note--{{ tone }} mb-2" role="status">{{ text }}</p>{% endif %}
+<div class="nd-group">{% match allow %}{% when None %}<p class="nd-body p-4 text-nd-t2">{{ shell.t("Can't read the allow list from the core", "读不到核心的白名单") }}</p>{% when Some(rows) %}{% if rows.is_empty() %}<p class="nd-body p-4 text-nd-t2">{{ shell.t("Nothing allowed yet. Use “It’s mine” on the home-page warning.", "还没有放行的设备。首页提醒上点「是我自己的」会加到这里。") }}</p>{% endif %}{% for a in rows %}
+<div class="nd-row flex-wrap gap-2"><span class="nd-row__text"><span class="nd-row__label nd-mono" data-data>{{ a.peer }} :{{ a.port }}</span><span class="nd-row__sub block" data-data>{% if !a.label.is_empty() %}{{ a.label }} · {% endif %}{% match a.until %}{% when Some(u) %}{{ shell.t("until ", "到 ") }}{{ u }}{% when None %}{{ shell.t("for good", "永久") }}{% endmatch %}</span></span>
+{% if a.until.is_some() %}<form method="post" action="/settings/poller"><input type="hidden" name="op" value="forever"><input type="hidden" name="peer" value="{{ a.peer }}"><input type="hidden" name="port" value="{{ a.port }}"><input type="hidden" name="label" value="{{ a.label }}"><button type="submit" class="nd-btn nd-btn--secondary nd-btn--sm" aria-label="{{ shell.t("Allow for good: ", "改成永久：") }}{{ a.peer }} :{{ a.port }}">{{ shell.t("Make permanent", "改成永久") }}</button></form>{% endif %}
+<form method="post" action="/settings/poller"><input type="hidden" name="op" value="remove"><input type="hidden" name="peer" value="{{ a.peer }}"><input type="hidden" name="port" value="{{ a.port }}"><button type="submit" class="nd-btn nd-btn--ghost nd-btn--sm" aria-label="{{ shell.t("Delete: ", "删除：") }}{{ a.peer }} :{{ a.port }}">{{ shell.t("Delete", "删除") }}</button></form></div>{% endfor %}{% endmatch %}</div>
 </section>
 </div>
 {% endblock %}

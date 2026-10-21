@@ -58,6 +58,10 @@ pub(crate) struct Inputs {
     pub nv_read: bool,
     pub sms_sim: Result<Value, String>,
     pub sim_list_read: bool,
+    /// Device epoch seconds when the round was read (stamps `sim.dual.slots[].signal.at`).
+    pub now_epoch: u64,
+    /// The QMI sampler's last standby-slot reading ([`crate::qmi_nas::last`]).
+    pub standby_signal: Option<(i64, crate::qmi_nas::Reading, u64)>,
     /// 两库第一页解密、合并后的短信列表（`sms::normalize_lists`）；容量没读到时没读，为 `None`。
     pub sms_list: Option<Vec<c::SmsItem>>,
     pub lan_if: Result<Value, String>,
@@ -150,6 +154,8 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
         nv_read,
         sms_sim,
         sim_list_read,
+        now_epoch,
+        standby_signal,
         sms_list,
         lan_if,
         wan4_if,
@@ -518,6 +524,7 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
         modem_state: string(&sim, "modem_main_state"),
         pin_status: string(&sim, "pin_status"),
         current_slot: integer(&sim, "current_sim_slot"),
+        dual: sim_dual(&sim, &uci_sets).map(|d| dual_signals(d, &raw_net, now_epoch, standby_signal.as_ref())),
         dual_sim: integer(&sim, "support_dual_sim"),
         sim1_provision: integer(&sim, "sim1_provision_state"),
         sim2_provision: integer(&sim, "sim2_provision_state"),
@@ -762,6 +769,146 @@ pub(crate) fn integer_or(v: &Value, key: &str, default: i64) -> i64 {
 
 pub(crate) fn interface(v: &Value) -> Value {
     json!({"up":v.get("up").and_then(Value::as_bool).unwrap_or(false),"proto":string(v,"proto"),"device":string(v,"l3_device"),"ipv4":v.get("ipv4-address").cloned().unwrap_or_else(||json!([])),"ipv6":v.get("ipv6-address").cloned().unwrap_or_else(||json!([])),"dns":v.get("dns-server").cloned().unwrap_or_else(||json!([]))})
+}
+
+/// The dual-SIM view of `get_sim_info` (全球版, 10-20): slot 1 fields have no prefix,
+/// slot 2's are `sim2_`; the ICCID of a slot that is not provisioned is only in UCI
+/// (`simcard_0_iccid` = slot 1, `simcard_1_iccid` = slot 2, checked on u60g 10-20).
+/// `None` unless `support_dual_sim` is 1, so the single-slot device has no `dual` key.
+pub(crate) fn sim_dual(sim: &Value, uci_sets: &[BTreeMap<String, String>]) -> Option<c::SimDual> {
+    if string(sim, "support_dual_sim") != "1" {
+        return None;
+    }
+    // (slot, state key, operator key, mcc/mnc prefix)
+    let keys = [(1, "sim_states", "Operator", ""), (2, "sim2_states", "Operator2", "sim2_")];
+    let active_slot = integer(sim, "current_sim_slot");
+    let slots: Vec<c::SimSlot> = keys
+        .into_iter()
+        .map(|(slot, state, operator, p)| {
+            let provisioned = string(sim, &format!("sim{slot}_provision_state")) == "1";
+            let iccid = uci_get(uci_sets, &format!("zwrt_zte_mdm.sim_info.simcard_{}_iccid", slot - 1));
+            let raw = string(sim, state);
+            let state = slot_state(provisioned, !iccid.is_empty(), &raw);
+            let role = match () {
+                _ if !provisioned => "off",
+                _ if slot == active_slot && state == "ready" => "data",
+                _ => "standby",
+            };
+            c::SimSlot {
+                slot,
+                provisioned,
+                present: !iccid.is_empty(),
+                ready: provisioned.then(|| raw == "sim ready"),
+                state: state.into(),
+                role: role.into(),
+                signal: None,
+                operator: string(sim, operator),
+                mcc: string(sim, &format!("{p}mdm_mcc")),
+                mnc: string(sim, &format!("{p}mdm_mnc")),
+                iccid_tail: iccid.get(iccid.len().saturating_sub(4)..).unwrap_or("").into(),
+            }
+        })
+        .collect();
+    let both = slots.iter().all(|s| s.provisioned);
+    Some(c::SimDual {
+        smart: uci_get(uci_sets, "zwrt_zte_mdm.sim_info.st_auto_switch_card_flag") == "1",
+        mode: if both { "dual" } else { "single" }.into(),
+        active_slot,
+        switching: string(sim, "switch_card_status") == "0",
+        slots,
+        smart_rule: smart_rule(uci_sets),
+    })
+}
+
+/// Each slot's radio. The data slot is nwinfo's (`raw_net`); the standby slot is the QMI
+/// sampler's last fresh reading for that slot.
+fn dual_signals(
+    d: c::SimDual,
+    raw_net: &Value,
+    now: u64,
+    last: Option<&(i64, crate::qmi_nas::Reading, u64)>,
+) -> c::SimDual {
+    let standby = standby_slot(&d);
+    let standby_sig = crate::qmi_nas::usable(last, standby, now);
+    attach_signals(d, nwinfo_signal(raw_net, now), standby_sig)
+}
+
+/// The slot the QMI sampler should read: the standby slot in dual mode, else 0 (none), so
+/// the single-slot u60 never starts it.
+pub(crate) fn standby_slot(d: &c::SimDual) -> i64 {
+    if d.mode != "dual" {
+        return 0;
+    }
+    d.slots.iter().find(|s| s.role == "standby").map_or(0, |s| s.slot)
+}
+
+fn attach_signals(
+    mut d: c::SimDual,
+    data: Option<c::SimSignal>,
+    standby: Option<(crate::qmi_nas::Reading, u64)>,
+) -> c::SimDual {
+    for s in &mut d.slots {
+        s.signal = match s.role.as_str() {
+            "data" => data.clone(),
+            "standby" if d.mode == "dual" => standby.clone().map(|(r, at)| c::SimSignal {
+                rat: r.rat.into(),
+                rsrp: r.rsrp,
+                rsrq: r.rsrq,
+                snr: r.snr.map(|x| format!("{x:.1}")),
+                bars: crate::qmi_nas::bars(r.rsrp),
+                at,
+            }),
+            _ => None,
+        };
+    }
+    d
+}
+
+/// The data slot's radio from nwinfo: NR when it has an RSRP, else LTE; bars are the
+/// firmware's `signalbar`.
+fn nwinfo_signal(raw_net: &Value, at: u64) -> Option<c::SimSignal> {
+    let n = |k: &str| integer(raw_net, k);
+    let f = |k: &str| string(raw_net, k).parse::<f64>().ok();
+    let (rat, rsrp, rsrq, snr) = if n("nr5g_rsrp") < 0 {
+        ("nr", n("nr5g_rsrp"), n("nr5g_rsrq"), f("nr5g_snr"))
+    } else if n("lte_rsrp") < 0 {
+        ("lte", n("lte_rsrp"), n("lte_rsrq"), f("lte_snr"))
+    } else {
+        return None;
+    };
+    Some(c::SimSignal {
+        rat: rat.into(),
+        rsrp,
+        rsrq: (rsrq < 0).then_some(rsrq),
+        snr: snr.map(|x| format!("{x:.1}")),
+        bars: n("signalbar"),
+        at,
+    })
+}
+
+/// One slot's state word. The firmware reports nothing for a slot that is not provisioned,
+/// so that is "off" whatever the card is; an empty state with no ICCID is "absent".
+fn slot_state(provisioned: bool, present: bool, raw: &str) -> &'static str {
+    let raw = raw.to_ascii_lowercase();
+    match () {
+        _ if !provisioned => "off",
+        _ if raw == "sim ready" => "ready",
+        _ if raw.contains("pin") || raw.contains("puk") => "locked",
+        _ if !present || raw.is_empty() || raw.contains("absent") || raw.contains("no sim") => "absent",
+        _ => "not_ready",
+    }
+}
+
+/// UCI `zte_nwinfo.dsds` thresholds; `None` when the section has none of them.
+fn smart_rule(uci_sets: &[BTreeMap<String, String>]) -> Option<c::SimSmartRule> {
+    let list = |k: &str| -> Vec<i64> {
+        (1..=3)
+            .filter_map(|i| uci_get(uci_sets, &format!("zte_nwinfo.dsds.slot_switch_thr_{k}{i}")).parse().ok())
+            .collect()
+    };
+    let (rsrp, snr) = (list("rsrp"), list("snr"));
+    let period_s = uci_get(uci_sets, "zte_nwinfo.dsds.slot_switch_period").parse().unwrap_or(0);
+    (!rsrp.is_empty() || !snr.is_empty() || period_s > 0).then_some(c::SimSmartRule { rsrp, snr, period_s })
 }
 
 pub(crate) fn uci_get<'a>(sets: &'a [BTreeMap<String, String>], path: &str) -> &'a str {
@@ -1551,5 +1698,113 @@ mod batch4_tests {
         assert_eq!(v["guest"]["on_2g"], true);
         assert_eq!(v["guest"]["left_s"], 3599);
         assert!(wifi_block(&wireless(&[("wifi0.country", "US")]), None).is_none());
+    }
+}
+
+#[cfg(test)]
+mod sim_dual_tests {
+    use super::*;
+
+    fn mdm(pairs: &[(&str, &str)]) -> Vec<BTreeMap<String, String>> {
+        vec![
+            pairs
+                .iter()
+                .map(|(k, v)| (format!("zwrt_zte_mdm.sim_info.{k}"), v.to_string()))
+                .collect(),
+        ]
+    }
+
+    /// u60g 真机形状（10-20，只读；单卡、槽 1 启用、内置卡未启用；识别码是假的）。
+    #[test]
+    fn global_single_slot1() {
+        let sim = json!({"sim_states":"sim ready","mdm_mcc":"460","mdm_mnc":"01","Operator":"CUCC",
+            "switch_card_status":"1","sim2_states":"","sim2_mdm_mcc":"","sim2_mdm_mnc":"",
+            "Operator2":"CMCC","support_dual_sim":"1","sim1_provision_state":"1",
+            "sim2_provision_state":"0","current_sim_slot":"1"});
+        let uci = mdm(&[
+            ("simcard_0_iccid", "89860000000000001111"),
+            ("simcard_1_iccid", "89860000000000002222"),
+        ]);
+        let d = sim_dual(&sim, &uci).unwrap();
+        assert_eq!((d.mode.as_str(), d.active_slot, d.smart, d.switching), ("single", 1, false, false));
+        let (s1, s2) = (&d.slots[0], &d.slots[1]);
+        assert_eq!((s1.provisioned, s1.present, s1.ready), (true, true, Some(true)));
+        assert_eq!((s1.mcc.as_str(), s1.operator.as_str(), s1.iccid_tail.as_str()), ("460", "CUCC", "1111"));
+        // 未启用的槽没有状态：ready 是「不知道」，不能当成没准备好（否则永远开不了双卡）
+        assert_eq!((s2.provisioned, s2.present, s2.ready), (false, true, None));
+        assert_eq!((s1.role.as_str(), s2.state.as_str(), s2.role.as_str()), ("data", "off", "off"));
+        assert_eq!((s2.mcc.as_str(), s2.operator.as_str(), s2.iccid_tail.as_str()), ("", "CMCC", "2222"));
+    }
+
+    #[test]
+    fn dual_smart_switching() {
+        let sim = json!({"support_dual_sim":"1","sim1_provision_state":"1","sim2_provision_state":"1",
+            "current_sim_slot":"2","switch_card_status":"0","sim2_states":"sim ready"});
+        let d = sim_dual(&sim, &mdm(&[("st_auto_switch_card_flag", "1")])).unwrap();
+        assert_eq!((d.mode.as_str(), d.active_slot, d.smart, d.switching), ("dual", 2, true, true));
+        assert_eq!(d.slots[1].ready, Some(true));
+        assert!(!d.slots[0].present);
+        assert_eq!((d.slots[1].role.as_str(), d.slots[0].state.as_str()), ("data", "absent"));
+        assert!(d.smart_rule.is_none());
+    }
+
+    /// u60g 真机形状（10-20 23:10，双卡、主卡 1，只读）：卡 1 上网，卡 2 待机；门限来自 zte_nwinfo.dsds。
+    #[test]
+    fn global_dual_main1_roles_and_rule() {
+        let sim = json!({"sim_states":"sim ready","Operator":"CUCC","sim2_states":"sim ready","Operator2":"CMCC",
+            "support_dual_sim":"1","sim1_provision_state":"1","sim2_provision_state":"1",
+            "current_sim_slot":"1","switch_card_status":"1"});
+        let mut uci = mdm(&[("simcard_0_iccid", "8986000000001111"), ("simcard_1_iccid", "8986000000002222")]);
+        uci.push(
+            [("rsrp1", "-115"), ("rsrp2", "-108"), ("rsrp3", "-105"), ("snr1", "0"), ("snr2", "-3"), ("snr3", "5"), ("period", "120")]
+                .iter()
+                .map(|(k, v)| {
+                    let k = if *k == "period" { "slot_switch_period".to_string() } else { format!("slot_switch_thr_{k}") };
+                    (format!("zte_nwinfo.dsds.{k}"), v.to_string())
+                })
+                .collect(),
+        );
+        let d = sim_dual(&sim, &uci).unwrap();
+        let roles: Vec<_> = d.slots.iter().map(|s| (s.state.as_str(), s.role.as_str())).collect();
+        assert_eq!(roles, [("ready", "data"), ("ready", "standby")]);
+        let r = d.smart_rule.unwrap();
+        assert_eq!((r.rsrp, r.snr, r.period_s), (vec![-115, -108, -105], vec![0, -3, 5], 120));
+    }
+
+    #[test]
+    fn slot_states() {
+        assert_eq!(slot_state(false, true, "sim ready"), "off");
+        assert_eq!(slot_state(true, true, "sim ready"), "ready");
+        assert_eq!(slot_state(true, true, "sim pin"), "locked");
+        assert_eq!(slot_state(true, false, ""), "absent");
+        assert_eq!(slot_state(true, true, "sim init"), "not_ready");
+    }
+
+    #[test]
+    fn dual_signals_per_role() {
+        let sim = json!({"support_dual_sim":"1","sim1_provision_state":"1","sim2_provision_state":"1",
+            "sim_states":"sim ready","sim2_states":"sim ready","current_sim_slot":"1"});
+        let d = sim_dual(&sim, &mdm(&[])).unwrap();
+        let net = json!({"nr5g_rsrp":"-85","nr5g_rsrq":"-11","nr5g_snr":"18.6","signalbar":"5"});
+        let data = nwinfo_signal(&net, 7);
+        let r = crate::qmi_nas::Reading { rat: "nr", rsrp: -107, rsrq: Some(-15), snr: Some(1.5) };
+        let d = attach_signals(d, data, Some((r, 9)));
+        let s1 = d.slots[0].signal.as_ref().unwrap();
+        assert_eq!((s1.rat.as_str(), s1.rsrp, s1.rsrq, s1.snr.as_deref(), s1.bars, s1.at), ("nr", -85, Some(-11), Some("18.6"), 5, 7));
+        let s2 = d.slots[1].signal.as_ref().unwrap();
+        assert_eq!((s2.rsrp, s2.bars, s2.at), (-107, 3, 9));
+        // no reading for the standby slot: status only
+        let d = attach_signals(sim_dual(&sim, &mdm(&[])).unwrap(), None, None);
+        assert!(d.slots.iter().all(|s| s.signal.is_none()));
+        assert!(nwinfo_signal(&json!({}), 0).is_none());
+    }
+
+    /// 主力机（support_dual_sim=0）：整段省略，sim 块不多 `dual` 键。
+    #[test]
+    fn single_slot_device_has_no_dual() {
+        let sim = json!({"support_dual_sim":"0","sim1_provision_state":"1","current_sim_slot":"1"});
+        assert!(sim_dual(&sim, &mdm(&[])).is_none());
+        let v = c::value(&c::Sim { dual: None, ..Default::default() });
+        assert!(v.get("dual").is_none());
     }
 }

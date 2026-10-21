@@ -1,0 +1,11 @@
+<div id="ds-now" class="grid gap-2"><div class="nd-group{% if v.stale %} nd-stale{% endif %}">
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Mode", "模式") }}</span></span><span id="ds-mode" class="nd-row__value">{{ v.mode }}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Main card", "主卡") }}</span></span><span id="ds-main" class="nd-row__value">{{ v.main }}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Smart switching", "智能切换") }}</span></span><span class="nd-row__value">{{ v.smart }}</span></div>
+</div>{% for s in v.slots %}<div class="nd-group{% if v.stale %} nd-stale{% endif %}">
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ s.name }}</span></span><span class="nd-row__value">{{ s.state }}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Carrier", "运营商") }}</span></span><span class="nd-row__value nd-mono">{{ s.carrier }}</span></div>
+<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">ICCID</span></span><span class="nd-row__value nd-mono">{{ s.tail }}</span></div>
+</div>{% endfor %}{% if let Some(t) = v.note %}<p class="t-note px-1">{{ t }}</p>{% endif %}{% if let Some(t) = v.txn %}<p class="t-note px-1" role="status">{{ t }}</p>{% endif %}{% if let Some(w) = v.why %}<p class="t-note t-note--warn px-1" role="alert">{{ w }}</p>{% endif %}</div>
+<!--leaf-->
+<div id="ds-cur" hidden data-signals="{_dis: {{ v.dis }}, _dsup: {{ v.supported }}}"></div>

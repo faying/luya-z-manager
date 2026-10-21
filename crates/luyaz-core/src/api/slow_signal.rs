@@ -105,5 +105,10 @@ pub fn view(run: &Value, hub: Option<&crate::block::Hub>) -> Value {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .seconds(mono());
-    json!({ "advice": replay(&e), "busy_s": e.busy_s })
+    let a = replay(&e);
+    json!({
+        "advice": a,
+        "busy_s": e.busy_s,
+        "say": luyaz_api::execution::say::slow(&a),
+    })
 }

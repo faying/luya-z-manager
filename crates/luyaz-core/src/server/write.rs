@@ -711,6 +711,20 @@ async fn ops_route(
                 },
             ));
         }
+        // 恢复上次验证过的连接（restore-verified-connection.md）：只认触屏和网页，逐项走普通事务。
+        "verified.restore" => {
+            let Some(who) = who_of(body).filter(|w| w.source.can_confirm() && w.approved_by.can_confirm()) else {
+                return Some(invalid_parameter(action, "verified.restore needs source screen or web"));
+            };
+            return Some(match crate::verified::restore(who).await {
+                Ok(v) => control_ok(action, v),
+                Err(why) => (
+                    StatusCode::CONFLICT,
+                    Json(json!({"ok": false, "action": action, "error": why})),
+                )
+                    .into_response(),
+            });
+        }
         // 闭环（decision-execution-loop §4.10）：人批准当前的提议；只认触屏和网页，按批准者看。
         "loop.approve" => {
             let Some(sh) = crate::api::propose::shared() else {
@@ -973,10 +987,11 @@ fn ends_device(action: &str, body: &Value) -> bool {
 }
 
 /// 只读、不改设备的动作：不清慢数据缓存、不标块（`sms.list_after` 翻页时每页一次，清缓存会让下一轮全部重读）。
+/// `poller.*` 只写核心自己的白名单文件、改内存里的事件（poller.rs）。
 /// `state.set_interval` 只改本进程执行者的采样间隔（`Executor::set_interval_ms`，一个原子数 + 唤醒），
 /// 不碰设备；触屏每次亮灭屏都调，以前每次都清全部缓存、全量重读（audit-2026-10-06 附录 A）。
 fn read_only(action: &str) -> bool {
-    matches!(action, "sms.list_after" | "state.set_interval")
+    matches!(action, "sms.list_after" | "state.set_interval") || action.starts_with("poller.")
 }
 
 /// `/control` 动作 → 它会改变的块。没列出的动作算「没有映射」，成功后全部块立即读（R12）。
@@ -1017,6 +1032,13 @@ async fn control_task(app: App, action: &str, body: Value) -> Response {
         ).into_response(),
         crate::control::Outcome::Failed(error) => return control_failed(action, error),
         crate::control::Outcome::NotHandled => {}
+    }
+    // power.tailnet_poller's allow list and banner (poller.rs): the core's own file, no device call
+    if let Some(r) = crate::poller::control(action, body.get("params").unwrap_or(&json!({}))) {
+        return match r {
+            Ok(v) => control_ok(action, v),
+            Err(e) => invalid_parameter(action, &e),
+        };
     }
     if action == "state.set_interval" {
         let milliseconds = body

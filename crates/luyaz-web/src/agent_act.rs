@@ -32,7 +32,7 @@ pub fn set_act_allow(p: PathBuf) {
     let _ = ACT_ALLOW.set(p);
 }
 
-fn act_allow() -> PathBuf {
+pub(crate) fn act_allow() -> PathBuf {
     ACT_ALLOW
         .get()
         .cloned()

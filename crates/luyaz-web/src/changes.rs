@@ -323,23 +323,34 @@ pub struct Row {
     pub change: String,
     /// "10-03 14:32 · 网页 · 已切到只用 4G".
     pub line2: String,
-    /// "由 AI 代理改动 · 可自动回滚" for a `source: mcp` row (R18-P0-03).
+    /// Who approved an agent change and whether it rolls back, for a `source: mcp` row (R18-P0-03).
     pub agent: Option<String>,
 }
 
-/// The agent label of a row the MCP agent made: a trial (a txn line, `rollback_to` present) is
-/// rolled back by the device by itself; a plain write is not.
+/// The agent label of a row the MCP agent made (R18-P0-03): where the permission came from, and
+/// whether it rolls back. `approved_by` web/screen = a person approved the agent's proposal there;
+/// missing or mcp = the agent approved it itself under its act token (the core's write gate allows
+/// only those). A trial (a txn line, `rollback_to` present) is rolled back by the device by
+/// itself; a plain write is not.
 pub fn agent_label(e: &Value, l: Lang) -> Option<String> {
     if e["source"].as_str() != Some("mcp") {
         return None;
     }
-    let auto = e.get("rollback_to").is_some();
-    Some(match (l, auto) {
-        (Lang::En, true) => "Changed by the AI agent · rolls back by itself".into(),
-        (Lang::En, false) => "Changed by the AI agent · no automatic rollback".into(),
-        (_, true) => "由 AI 代理改动 · 可自动回滚".into(),
-        (_, false) => "由 AI 代理改动 · 不能自动回滚".into(),
-    })
+    let who = match (e["approved_by"].as_str(), l) {
+        (Some("web"), Lang::En) => "Proposed by the AI agent, approved by you on the web page",
+        (Some("web"), _) => "由 AI 代理提议、你在网页批准",
+        (Some("screen"), Lang::En) => "Proposed by the AI agent, approved by you on the screen",
+        (Some("screen"), _) => "由 AI 代理提议、你在触屏批准",
+        (_, Lang::En) => "Changed by the AI agent (its own act permission)",
+        (_, _) => "由 AI 代理改动（它自己的 act 授权）",
+    };
+    let undo = match (e.get("rollback_to").is_some(), l) {
+        (true, Lang::En) => "rolls back by itself",
+        (false, Lang::En) => "no automatic rollback",
+        (true, _) => "可自动回滚",
+        (false, _) => "不能自动回滚",
+    };
+    Some(format!("{who} · {undo}"))
 }
 
 /// The second line, without repeating a source the result already starts with

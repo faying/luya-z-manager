@@ -950,6 +950,8 @@ struct Page {
     leaves: Vec<(String, String)>,
     panels: String,
     op: String,
+    /// The device has two slots (`sim.dual`): link to /router/dualsim.
+    dual: bool,
 }
 
 impl Page {
@@ -981,8 +983,11 @@ async fn page(State(app): State<Shared>, req: Request) -> Response {
     let mut p = Poll::new(Caller::of(&app, &req), ctx.lang);
     p.fetch(&app).await;
     let leaves = p.leaves();
-    let shell = app.hub.read(|st| {
-        crate::shell::Shell::new(&headers, PATH).live(st, &ctx, Some(format!("{PATH}/events?g={}", st.generation)))
+    let (shell, dual) = app.hub.read(|st| {
+        (
+            crate::shell::Shell::new(&headers, PATH).live(st, &ctx, Some(format!("{PATH}/events?g={}", st.generation))),
+            crate::dualsim::dual(st).flatten().is_some(),
+        )
     });
     let html = Page {
         shell,
@@ -990,6 +995,7 @@ async fn page(State(app): State<Shared>, req: Request) -> Response {
         panels: panels(ctx.lang, &|id| leaf_of(&leaves, id)),
         leaves,
         op: area(ctx.lang, ctx.remote, None, &Phase::Idle),
+        dual,
     }
     .render()
     .unwrap();

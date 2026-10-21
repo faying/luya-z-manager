@@ -22,7 +22,9 @@ pub mod hot_drain;
 pub mod https;
 pub mod long_idle;
 pub mod no_internet;
+pub mod say;
 pub mod slow_signal;
+pub mod verified;
 pub mod wifi_change;
 
 /// The card: full ICCID + slot, kept on the device only (screens show the tail).

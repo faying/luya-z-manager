@@ -41,19 +41,20 @@ What it looks like once installed (screenshots use fake data):
 
 **Device**
 
-- ZTE U60 Pro (MU5250), **firmware B27 or earlier** (in the stock web UI under 「设备信息」 (Device Information), it looks like `…MU5250V1.0.0B27`).
-  From B28 on, ZTE removed the interface for enabling USB debugging (ADB), and the install kit no longer works. **Do not upgrade the firmware before installing.**
+- ZTE U60 Pro (MU5250), **firmware B31 or earlier** (in the stock web UI under 「设备信息」 (Device Information), it looks like `…MU5250V1.0.0B31`).
+  On B27 or earlier the install kit opens SSH over USB debugging (ADB). From B28 on, ZTE removed the interface for enabling ADB, so you open SSH yourself first (see below); after that the install kit works the same. Versions after B31 have not been tested, so **do not upgrade the firmware before installing.**
   See "Firmware versions" below for what each version means.
 - The router admin password (the one you use to log in at `http://192.168.0.1`). The install script uses it to enable ADB through the web interface, then installs key-only SSH (port 2222).
 - A USB-C cable that carries data.
 - For eSIM, a removable eUICC card (5ber, eSTK.me and the like).
 
-**Firmware versions** (B31 is the version the maintainer actually upgraded to on 2026-10-03; B28–B30 were not tried)
+**Firmware versions** (tested: B27; B31 both as an upgrade, since 2026-10-03, and on a device that came with B31, 2026-10-20; B28–B30 not tried but expected to behave like B31)
 
 | Your situation | Result |
 |---|---|
 | New device, B27 or earlier | Install from scratch with this guide |
-| New device, B28 or later (including B31) | **Cannot install**: ADB cannot be enabled, so the install kit fails at the first step, and this project has no verified way to do a first install (an untested idea follows below) |
+| New device, B28 – B31 | **Works**, but ADB cannot be enabled, so the install kit cannot open SSH by itself. Open SSH first through the stock configuration restore (below), then install as usual. Tested on a device that came with B31 |
+| Newer than B31 | **Unknown**: not tested |
 | Already installed, then upgraded to B31 | The programs themselves run on B31 (the maintainer's device has been on B31 since 10-03). But the upgrade resets `/etc/rc.local` to the stock version and removes the services installed under `/etc/init.d/`, so after the reboot SSH, the admin web, the touch UI and luyaz-core no longer start, and the screen shows the stock UI |
 
 What survives the upgrade: every program and all data under `/data`, the SSH program and keys (`/data/ssh`), the network address, the web password and your settings; firmware auto-update stays off.
@@ -61,10 +62,10 @@ To recover, the key step is adding the line that starts SSH back to `rc.local` w
 ***REMOVED***, so the steps are not documented here. Once SSH is back, run `./install.sh admin devui` from a freshly built install kit; it puts the services back and fixes `rc.local`.
 Note: `/data/luyaz/kit/rc.local.orig` holds the stock `rc.local` of the firmware **before** the upgrade. To uninstall after an upgrade, do not copy it over the new one; just remove the lines this project added.
 
-**New device already on B28 or later: an untested idea for people who want to try it themselves.** When the stock web UI restores a configuration backup, it unpacks the files in it as root with `tar -C /` and then reboots.
-So in theory you could: take a backup in the web UI → ***REMOVED*** to `rc.local`, and put an SSH server (for example the dropbear from the install kit) and your public key into the archive → ***REMOVED*** → restore it in the web UI.
-Once SSH works, you continue the way an already installed, upgraded device does, with `./install.sh admin devui` and so on.
-This project **has not made this work** and provides no tooling for it: ***REMOVED***; whether the firmware rejects paths outside `/etc` on restore is unverified; and a restore that breaks `/etc` can leave the device unable to boot. At your own risk, and only if you know how to bring the device back with the stock tools.
+**New device on B28 – B31: ***REMOVED***.** When the stock web UI restores a configuration backup, it unpacks the files in it as root with `tar -C /` and then reboots.
+So: take a backup in the web UI → ***REMOVED*** to `rc.local`, and put an SSH server (for example the dropbear from the install kit) and your public key into the archive → ***REMOVED*** → restore it in the web UI.
+The maintainer did this on a device that came with B31 (2026-10-20): SSH was up about a minute after the restore, and the rest of the install went as on an upgraded device (`./install.sh admin devui` and so on).
+This project does not ship a tool or ***REMOVED***; ***REMOVED***, so look there. Keep the untouched backup to restore if something goes wrong, do not insert a SIM or connect any WAN until SSH works (an automatic firmware download could change the format), and make sure you can recover the device the stock way first.
 
 **Install computer** (macOS / Linux / Git Bash on Windows): `adb`, `ssh`, `curl`.
 
@@ -221,7 +222,7 @@ After that, use the admin web's 「CHILL」 page to turn it on or off, change th
 ## 8. Rules every newcomer must follow
 
 - **Do not upgrade the firmware, and do not turn on firmware auto-update.** An upgrade resets `/etc/rc.local` and removes the services installed under `/etc/init.d/`, so SSH and every autostart stop working
-  (`/data` and your settings survive), and new devices on B28 or later cannot be installed at all. See "Firmware versions" in section 2.
+  (`/data` and your settings survive), and on versions after B31 nobody knows yet whether a new install works. See "Firmware versions" in section 2.
 - **Do not run `/etc/init.d/<stock service> disable`.** The stock master daemon waits for a list of services in its configuration to all be ready before it lets boot continue; if one is missing, the device sticks on the logo, does not dial, and the touchscreen stops responding.
 - Autostart goes only through `/etc/rc.local`. Back it up before changing it, and check the syntax with `sh -n /etc/rc.local` afterwards.
 - Programs and data go in `/data`. `/tmp` is a RAM disk and is cleared on reboot. Do not write partitions, do not `dd`.

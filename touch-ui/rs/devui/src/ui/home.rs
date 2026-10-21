@@ -8,6 +8,10 @@ use super::{Sub, Ui, SF_OLD_DATAD, TAB_CELL, TAB_HOME, TAB_WIFI, VIEW_H};
 use crate::cf;
 use crate::clock;
 use crate::kit::{self, Hero, CARD_W, HERO_H, MARGIN, PAD, ROW_H, TAB_PAD, W};
+
+/// the dual-standby block under the hero: two 18 px lines
+/// Dual standby: the hero grows by one line (two slot lines replace the top line).
+const DUAL_H: i32 = 18;
 use crate::lang::{self, tr, trn};
 use crate::logic::{self, NetHold, CAUSE_NARROW, NET_BAD, NET_OK, NET_WARN};
 use crate::lv::{self, sys, EventCb, Obj};
@@ -61,6 +65,21 @@ pub struct Home {
     pub cell_card: Obj,
     pub cc_hero: Hero,
     pub cc_hint_box: Obj,
+    /// dual standby: one line per slot under the hero (left: card · operator · RAT, right: role + RSRP · SINR)
+    pub cc_dual: Obj,
+    pub cc_dual_l: [Obj; 2],
+    pub cc_dual_r: [Obj; 2],
+    /// each line's own operator logo (same files as cc_logo)
+    pub cc_dual_img: [Obj; 2],
+    /// what each line's image shows: (slug, w, h); w 0 = none
+    dual_logo: [(Option<String>, i32, i32); 2],
+    /// each line's logo opacity as last set (-1 = not yet)
+    dual_opa: [i32; 2],
+    /// the top line as last composed (operator · RAT · local), for the data slot's line
+    st_line: Vec<u8>,
+    /// its last part when roaming (「漫游」): the dual line never drops it
+    st_roam: Vec<u8>,
+    dual_on: bool,
     cc_hint: Obj,
     cc_diag: Obj,
     cc_hint_sub: Sub,
@@ -116,6 +135,15 @@ impl Default for Home {
             cell_card: Obj::NULL,
             cc_hero: Hero::default(),
             cc_hint_box: Obj::NULL,
+            cc_dual: Obj::NULL,
+            cc_dual_l: [Obj::NULL; 2],
+            cc_dual_r: [Obj::NULL; 2],
+            cc_dual_img: [Obj::NULL; 2],
+            dual_logo: [(None, 0, 0), (None, 0, 0)],
+            dual_opa: [-1; 2],
+            st_line: Vec::new(),
+            st_roam: Vec::new(),
+            dual_on: false,
             cc_hint: Obj::NULL,
             cc_diag: Obj::NULL,
             cc_hint_sub: Sub::Diag,
@@ -397,6 +425,20 @@ impl Ui {
         h.cc_hero = kit::hero(c, f.cj24b);
         kit::show(h.cc_hero.unit, false);
         h.cc_hero.big.set_x(PAD); // same margin left and right
+        // dual standby: two slot lines on the wash, in place of the top line
+        h.cc_dual = kit::bx(c, 0, 0, CARD_W, 46, th.card, 0);
+        h.cc_dual.set_style_bg_opa(lv::OPA_TRANSP, 0);
+        for i in 0..2 {
+            let y = 8 + i as i32 * 19;
+            h.cc_dual_img[i] = Obj::image(h.cc_dual);
+            h.cc_dual_img[i].remove_flag(lv::LV_OBJ_FLAG_CLICKABLE);
+            kit::show(h.cc_dual_img[i], false);
+            h.cc_dual_l[i] = kit::label_w(h.cc_dual, f.cj12, th.t1, PAD, y, CARD_W - 2 * PAD - 120, false, "");
+            h.cc_dual_l[i].set_long_mode(lv::LV_LABEL_LONG_MODE_DOTS);
+            h.cc_dual_r[i] = kit::label_w(h.cc_dual, f.cj12, th.t1, CARD_W - PAD - 150, y, 150, false, "");
+            h.cc_dual_r[i].set_style_text_align(lv::LV_TEXT_ALIGN_RIGHT, 0);
+        }
+        kit::show(h.cc_dual, false);
         // the hint line: while the verdict is abnormal the whole row opens 网络诊断 (查原因 ›)
         h.cc_hint_box = kit::bx(c, 0, HERO_H, CARD_W, ROW_H, th.card, 0);
         h.cc_hint_box.set_style_bg_opa(lv::OPA_TRANSP, 0);
@@ -542,6 +584,34 @@ impl Ui {
 
     /// Load the logo for slug (None = hide). Files are optional (trademarks, not in the public
     /// repo): a missing file hides the logo rather than draw LVGL's broken-image box.
+    /// Load operator-logos/<slug>(-w).png into img: Some((w, h)) when readable and ≤ 96×18.
+    pub(super) fn logo_load(img: Obj, slug: &str) -> Option<(i32, i32)> {
+        let dir = std::env::var("LUYAZ_UI_LOGO_DIR").ok().filter(|d| !d.is_empty());
+        let p = format!("{}/{slug}{}.png", dir.as_deref().unwrap_or("/data/luyaz/ui/operator-logos"), if t().dark { "-w" } else { "" });
+        std::fs::File::open(&p).ok()?;
+        let src = format!("A:{p}");
+        match lv::image_info(&src) {
+            Some((w, ih)) if w > 0 && w <= 96 && ih <= 18 => {
+                img.set_image_src(&src);
+                img.set_style_image_opa(if t().dark { 217 } else { lv::OPA_COVER }, 0);
+                Some((w as i32, ih as i32))
+            }
+            _ => None,
+        }
+    }
+
+    /// Dual line i: show slug's logo (cached: reloads only when the slug changes).
+    fn dual_logo_set(&mut self, i: usize, slug: Option<&str>) -> i32 {
+        let slug = slug.filter(|s| !s.is_empty());
+        if self.home.dual_logo[i].0.as_deref() != slug {
+            let img = self.home.cc_dual_img[i];
+            let wh = slug.and_then(|s| Self::logo_load(img, s)).unwrap_or((0, 0));
+            self.home.dual_logo[i] = (slug.map(String::from), wh.0, wh.1);
+            self.home.dual_opa[i] = -1; // logo_load set its own
+        }
+        self.home.dual_logo[i].1
+    }
+
     fn home_logo_set(&mut self, slug: Option<&str>) {
         let slug = slug.filter(|s| !s.is_empty());
         let h = &mut self.home;
@@ -571,8 +641,153 @@ impl Ui {
         }
     }
 
-    /// The logo leftmost on the top line, instead of the dot and the operator name; without
-    /// a logo the dot and the name as before.
+    /// Dual standby only (`sim.dual.mode == "dual"`): one line per slot on the wash, the data
+    /// slot first: [logo] RAT · place …… 上网中 / 待机. Returns whether shown.
+    fn home_dual(&mut self, d: &devui_model::devui_data_t, _v: &net_view_t) -> bool {
+        let th = t();
+        let dual = d.sim_dual.as_ref().filter(|x| x.mode == "dual" && !x.slots.is_empty());
+        let on = dual.is_some();
+        self.home_dual_layout(on);
+        self.cell_dual(dual);
+        let Some(x) = dual else { return false };
+        let tone_t = [th.ok_t, th.warn_t, th.bad_t, th.t3, th.acc_t, th.on_fill, th.on_fill, th.on_fill]
+            .get(self.home.cc_tone as usize)
+            .copied()
+            .unwrap_or(th.t3);
+        // the data slot always on the first line, whatever its number
+        let mut order: Vec<&devui_model::sim_slot_t> = x.slots.iter().collect();
+        order.sort_by_key(|s| s.role != "data");
+        for i in 0..2 {
+            let (l, r, img) = (self.home.cc_dual_l[i], self.home.cc_dual_r[i], self.home.cc_dual_img[i]);
+            let Some(s) = order.get(i).copied() else {
+                kit::show(img, false);
+                self.set(l, "");
+                self.set(r, "");
+                continue;
+            };
+            let data = s.role == "data";
+            let data_line = data && !self.home.st_line.is_empty();
+            let slug: Option<String> = if data_line {
+                self.home.logo_slug.clone()
+            } else {
+                let (mcc, mnc) = (s.mcc.parse().unwrap_or(0), s.mnc.parse().unwrap_or(-1));
+                crate::data::core_link::mainland_logo(mcc, mnc, &s.operator).map(String::from)
+            };
+            let lw_logo = self.dual_logo_set(i, slug.as_deref());
+            let mut lx = PAD;
+            kit::show(img, lw_logo > 0);
+            if lw_logo > 0 {
+                let lh = self.home.dual_logo[i].2;
+                img.set_pos(lx, l.y() + (uf().cj12.line_height() - lh) / 2);
+                lx += lw_logo + 5;
+            }
+            // right: what this card is doing; a state word when it cannot
+            let state = match s.state.as_str() {
+                "" | "ready" => None,
+                "locked" => Some(tr("PIN 锁")),
+                "absent" => Some(tr("无卡")),
+                "off" => Some(tr("未启用")),
+                _ => Some(tr("未就绪")),
+            };
+            let (right, rcol): (Vec<u8>, u32) = if data && x.switching != 0 {
+                (tr("切换中").into(), th.t2)
+            } else if let Some(w) = state {
+                (w.into(), th.t2)
+            } else if data {
+                (if x.smart != 0 { tr("上网中 · 自动切换") } else { tr("上网中") }.into(), th.t2)
+            } else if s.has_sig != 0 && (1..=2).contains(&s.sig_bars) {
+                // core's bars_tier (screen.rs): 1–2 = 弱; only that is worth a word on the idle card
+                (tr("待机 · 信号弱").into(), th.warn_t)
+            } else {
+                (tr("待机").into(), th.t2)
+            };
+            let rw = lv::text_w(&right, uf().cj12).min(150);
+            kit::text_color(r, rcol);
+            self.set(r, &right);
+            // left: the data card's own top line; the idle card has no data call, so its RAT is plain
+            let avail = CARD_W - PAD - rw - 8 - lx;
+            l.set_x(lx);
+            l.set_width(avail);
+            let left = if data_line {
+                // too wide: drop whole trailing parts (「 · 本地」) before the label's "…" would cut one;
+                // roaming is never dropped: the parts before it go first
+                let sep = " · ".as_bytes();
+                let roam = self.home.st_roam.clone();
+                let mut st = self.home.st_line.clone();
+                let tail: Vec<u8> = if !roam.is_empty() && st.ends_with(&roam) && st.len() > roam.len() + sep.len() {
+                    st.truncate(st.len() - roam.len() - sep.len());
+                    [sep, roam.as_slice()].concat()
+                } else {
+                    Vec::new()
+                };
+                let tail_w = if tail.is_empty() { 0 } else { lv::text_w(&tail, uf().cj12) };
+                while lv::text_w(&st, uf().cj12) + tail_w > avail {
+                    match st.windows(sep.len()).rposition(|w| w == sep) {
+                        Some(k) => st.truncate(k),
+                        None => break,
+                    }
+                }
+                // roaming still does not fit after the RAT: roaming alone (the status bar has the RAT);
+                // 「漫游到 X」 after X's own logo shortens to 漫游
+                if !tail.is_empty() && lv::text_w(&st, uf().cj12) + tail_w > avail {
+                    st = roam.clone();
+                    if lv::text_w(&st, uf().cj12) > avail && lw_logo > 0 {
+                        st = tr("漫游").as_bytes().to_vec();
+                    }
+                } else {
+                    st.extend_from_slice(&tail);
+                }
+                st
+            } else {
+                // idle on NR is always SA (NSA needs a data call on the LTE anchor)
+                let rat = match s.sig_rat.as_str() {
+                    "nr" => "5G SA",
+                    "lte" => "4G",
+                    _ => "",
+                };
+                let name: Vec<u8> = if lw_logo > 0 {
+                    Vec::new()
+                } else {
+                    let (mcc, mnc) = (s.mcc.parse().unwrap_or(0), s.mnc.parse().unwrap_or(-1));
+                    crate::data::core_link::mainland_operator_cn(mcc, mnc, &s.operator).unwrap_or(s.operator.as_str()).into()
+                };
+                cf!("%s%s%s", &name, if rat.is_empty() || name.is_empty() { "" } else { " · " }, rat)
+            };
+            // the data card in the hero's tone, the idle one dimmed; the right word says which
+            kit::text_color(l, if data { tone_t } else { th.t2 });
+            let opa = match (data, t().dark) {
+                (true, true) => 217,
+                (true, false) => lv::OPA_COVER,
+                (false, _) => 140,
+            };
+            if self.home.dual_opa[i] != opa as i32 {
+                self.home.dual_opa[i] = opa as i32;
+                img.set_style_image_opa(opa, 0);
+            }
+            self.set(l, left);
+        }
+        true
+    }
+
+    /// Dual standby: the hero grows by DUAL_H; the two slot lines take the top line's place,
+    /// the verdict row below is single-card's, moved down.
+    fn home_dual_layout(&mut self, on: bool) {
+        kit::show(self.home.cc_dual, on);
+        let (h, e) = (&self.home.cc_hero, if on { DUAL_H } else { 0 });
+        h.wash.set_height(HERO_H + e);
+        h.wash2.set_y(HERO_H + e - 20);
+        h.big.set_y(34 + e);
+        h.r1.set_y(30 + e);
+        h.r2.set_y(52 + e);
+        kit::show(h.st, !on);
+        kit::show(h.rtop, !on);
+        if on {
+            kit::show(h.dot, false);
+            kit::show(self.home.cc_logo, false);
+        }
+        self.home.dual_on = on;
+    }
+
     fn home_logo_place(&mut self) {
         let h = &self.home;
         let (w, lh) = (h.logo_w, h.logo_h);
@@ -580,8 +795,9 @@ impl Ui {
         if w != 0 {
             h.cc_logo.set_pos(PAD, 16 - lh / 2);
         }
-        kit::show(h.cc_logo, w > 0);
-        kit::show(h.cc_hero.dot, w == 0);
+        // dual standby: the slot lines have their own logos; showing these between would redraw
+        kit::show(h.cc_logo, w > 0 && !h.dual_on);
+        kit::show(h.cc_hero.dot, w == 0 && !h.dual_on);
         h.cc_hero.st.set_x(x);
         h.cc_hero.st.set_width(CARD_W - x - PAD);
     }
@@ -594,6 +810,11 @@ impl Ui {
         self.home.cc_tone = 3;
         self.home_logo_set(None); // data stopped: whose network we are on is unknown
         self.home_logo_place();
+        if self.home.dual_on {
+            // dual layout stays (rows below keep their place); the top line carries the message
+            kit::show(self.home.cc_dual, false);
+            kit::show(self.home.cc_hero.st, true);
+        }
         let hero = self.home.cc_hero;
         if !self.home.ever_valid {
             self.set(hero.st, tr("正在读取…"));
@@ -681,6 +902,8 @@ impl Ui {
         self.home_logo_set(Some(&v.logo));
         if v.sim_usable == 0 {
             self.set(hero.st, tr("没有 SIM 卡"));
+            self.home.st_line.clear();
+            self.home.st_roam.clear();
         } else {
             // the status bar has the short form (5G-A / 4G+ …): here how it is built
             let mut fine = v.fine.clone();
@@ -716,6 +939,12 @@ impl Ui {
                     break;
                 }
             }
+            self.home.st_roam = if v.roam != 0 {
+                if self.home.logo_w != 0 { v.r#where.as_bytes().to_vec() } else { tr("漫游").as_bytes().to_vec() }
+            } else {
+                Vec::new()
+            };
+            self.home.st_line = line.clone();
             self.set(hero.st, line);
         }
         let headline = self.home.shown_headline.clone();
@@ -771,6 +1000,9 @@ impl Ui {
         self.home_logo_place();
 
         let mut y = HERO_H;
+        if self.home_dual(d, v) {
+            y += DUAL_H;
+        }
         {
             // abnormal (slow, not connected, connected but nothing back): the hint row opens
             // 网络诊断 with 「查原因 ›」 at its end; beside the hint if it costs no extra line

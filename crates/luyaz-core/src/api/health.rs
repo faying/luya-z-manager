@@ -74,7 +74,20 @@ pub async fn get(State(c): State<Compat>, RawQuery(q): RawQuery) -> Response {
             c.health.refresh();
         }
         let s = Snapshot::read(&c.path(h::SNAPSHOT_FILE));
-        h::reply(&s, h::crash_logs(&c.path(h::CRASH_DIR)))
+        let mut v = h::reply(&s, h::crash_logs(&c.path(h::CRASH_DIR)));
+        // the read-only scenarios worth a word (touch health page); not checks: they never
+        // count as a warn or raise an alert
+        let notices: Vec<serde_json::Value> = [
+            super::hot_drain::view(),
+            super::long_idle::view(c.src.hub.as_deref()),
+        ]
+        .into_iter()
+        .filter_map(|v| v.get("say").filter(|s| !s.is_null()).cloned())
+        .collect();
+        if let Some(o) = v.as_object_mut() {
+            o.insert("notices".into(), notices.into());
+        }
+        v
     })
     .await
     .unwrap_or(serde_json::Value::Null);

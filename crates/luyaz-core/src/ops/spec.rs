@@ -71,6 +71,9 @@ pub const CELL_NR: &str = "cell.nr";
 /// APN（3-3，见 `ops::apn`）：一项，值 `{mode, manual, fp}`；切模式、启用、改正在用的那条都是它的事务。
 pub const APN: &str = "apn";
 
+/// 双卡（全球版，见 `ops::dual_sim`）：值 `{mode, smart?, active_slot?}`。
+pub const DUAL_SIM: &str = "sim.dual";
+
 /// Wi-Fi 设置（第四批 4-0b，见 `ops::wifi`）：主网络（两个频段、总开关、国家码）和访客网络各一项，
 /// 值是 `wifi` 块展开成一层的键，密码只有指纹。
 pub const WIFI_MAIN: &str = "wifi.main";
@@ -218,6 +221,18 @@ pub static SPECS: &[Spec] = &[
         confirm: Confirm::Chill,
         rollback_capability: RollbackCapability::Unsupported,
         completion_evidence: CompletionEvidence::ReadbackChill,
+    },
+    Spec {
+        // 双卡（dual-sim-global.md）：切卡断网 10–25 s（10-20 真机），时限同锁频；退回能力等真机验过再改
+        action: "sim.dual",
+        item: DUAL_SIM,
+        normalize: super::dual_sim::normalize,
+        params: same,
+        deadline_ms: 120_000,
+        deadline_env: "LUYAZ_DEADLINE_DUAL_SIM_MS",
+        confirm: Confirm::Registered,
+        rollback_capability: RollbackCapability::Unknown,
+        completion_evidence: CompletionEvidence::ReadbackRegistered,
     },
     Spec {
         action: "wifi.settings",

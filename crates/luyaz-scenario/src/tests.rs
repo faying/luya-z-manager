@@ -437,3 +437,44 @@ fn bootsafe_keeps_home_off_after_a_core_restart_not_after_a_boot() {
         }
     }
 }
+
+/// 10-20: a scenarios.json copied in by hand sat unread until the core restarted. Now the next
+/// tick takes it; a broken or missing file keeps the loaded config; the web's own write is not
+/// mistaken for a hand edit.
+#[test]
+fn a_hand_edited_config_is_picked_up() {
+    let f = Fake::new("reload");
+    let e = Engine::new(f.clone());
+    assert!(e.config().scenarios.is_empty());
+
+    f.write_config(&config());
+    e.tick();
+    assert_eq!(e.config(), config());
+    assert!(f.log().contains("configuration file changed; reloaded"));
+
+    // the same file again: nothing said
+    e.tick();
+    assert_eq!(f.log().matches("reloaded").count(), 1);
+
+    // broken: kept, said once
+    fs::write(f.file(CONFIG_FILE), "{ not json").unwrap();
+    e.tick();
+    e.tick();
+    assert_eq!(e.config(), config());
+    assert_eq!(f.log().matches("does not read").count(), 1);
+
+    // gone: kept
+    fs::remove_file(f.file(CONFIG_FILE)).unwrap();
+    e.tick();
+    assert_eq!(e.config(), config());
+    assert!(f.log().contains("configuration file is gone; keeping the one loaded"));
+
+    // the web's PUT writes the file itself: not a hand edit afterwards
+    let mut c2 = config();
+    c2.scenarios.retain(|s| s.id != "abroad");
+    let (code, _) = e.http_put(serde_json::to_string(&c2).unwrap().as_bytes());
+    assert_eq!(code, 200);
+    e.tick();
+    assert_eq!(e.config(), c2);
+    assert_eq!(f.log().matches("reloaded").count(), 1);
+}

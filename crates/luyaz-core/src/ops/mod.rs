@@ -18,6 +18,7 @@
 pub mod agent;
 pub mod apn;
 pub mod chill;
+pub mod dual_sim;
 pub mod engine;
 pub mod journal_view;
 pub mod pending;
@@ -35,7 +36,8 @@ pub mod write_lock;
 use crate::executor::Executor;
 use serde_json::{Value, json};
 use spec::{
-    APN, BAND_ALL, BAND_LTE, BAND_NR, CELL_LTE, CELL_NR, DATA_SESSION, NETWORK_MODE, Spec,
+    APN, BAND_ALL, BAND_LTE, BAND_NR, CELL_LTE, CELL_NR, DATA_SESSION, DUAL_SIM, NETWORK_MODE,
+    Spec,
 };
 use std::{path::PathBuf, time::Instant};
 use txn::{Conn, DataPath, ProbeTarget, Reading, SimId};
@@ -438,6 +440,36 @@ async fn apn_now() -> Result<Option<apn::Now>, String> {
     Ok(apn::Now::parse(&mode, &manual))
 }
 
+/// 恢复上次验证过的连接（`crate::verified`）用的现状：卡、各项读回（写法和事务读回一样）、
+/// 手动 APN 表的 (编号, 指纹)。一次新鲜读；读不到的项不放进去。
+pub struct Current {
+    pub iccid: String,
+    pub items: std::collections::BTreeMap<String, Value>,
+    pub apn_list: Vec<(String, String)>,
+}
+
+pub async fn current() -> Result<Current, String> {
+    let net = crate::state::ubus("zte_nwinfo_api", "nwinfo_get_netinfo", json!({})).await?;
+    let sim = crate::state::ubus("zwrt_zte_mdm.api", "get_sim_info", json!({})).await?;
+    let mut items = std::collections::BTreeMap::new();
+    for item in [CELL_LTE, CELL_NR, BAND_LTE, BAND_NR, NETWORK_MODE] {
+        if let Some(v) = readback(item, &net) {
+            items.insert(item.to_owned(), v);
+        }
+    }
+    let mut apn_list = Vec::new();
+    if let Some(n) = apn_now().await? {
+        let vault = apn::Vault::open(ops_dir());
+        items.insert(APN.to_owned(), n.value(&vault));
+        apn_list = n.list.iter().map(|(id, c)| (id.clone(), vault.fp(c))).collect();
+    }
+    Ok(Current {
+        iccid: sim_id(&sim).iccid,
+        items,
+        apn_list,
+    })
+}
+
 type Step = (&'static str, &'static str, Value);
 
 const RESET: (&str, &str) = ("zte_nwinfo_api", "nwinfo_reset_band_cell_setting");
@@ -555,6 +587,22 @@ impl engine::Device for UbusDevice {
                 probe: None,
             });
         }
+        if spec.item == DUAL_SIM {
+            let net = crate::state::ubus("zte_nwinfo_api", "nwinfo_get_netinfo", json!({})).await?;
+            let sim = crate::state::ubus("zwrt_zte_mdm.api", "get_sim_info", json!({})).await?;
+            let smart = crate::state::uci_value(dual_sim::SMART_UCI).await;
+            return Ok(Reading {
+                value: dual_sim::readback(&sim, &smart),
+                registered: registered(&text(&net, "network_type")),
+                // 切主卡本来就换 ICCID：SIM 固定为空，sim_check 不取消（D1），由读回 + 数据通确认
+                sim: SimId {
+                    iccid: String::new(),
+                    slot: 0,
+                },
+                data: self.data(&net).await,
+                probe: None,
+            });
+        }
         if !matches!(
             spec.item,
             NETWORK_MODE | BAND_LTE | BAND_NR | BAND_ALL | CELL_LTE | CELL_NR | APN | DATA_SESSION
@@ -588,6 +636,13 @@ impl engine::Device for UbusDevice {
         }
         if spec.item == APN {
             return self.resolve_apn(spec, target, params).await;
+        }
+        if spec.item == DUAL_SIM {
+            let sim = crate::state::ubus("zwrt_zte_mdm.api", "get_sim_info", json!({})).await?;
+            let i1 = crate::state::uci_value("zwrt_zte_mdm.sim_info.simcard_0_iccid").await;
+            let i2 = crate::state::uci_value("zwrt_zte_mdm.sim_info.simcard_1_iccid").await;
+            dual_sim::precheck(&sim, [&i1, &i2], &target)?;
+            return Ok(Some(target));
         }
         if spec.item != BAND_ALL || target != spec::reset_marker() {
             return Ok(Some(target));
@@ -682,6 +737,18 @@ impl engine::Device for UbusDevice {
             )
         } else {
             None
+        };
+        let apn = if spec.item == DUAL_SIM {
+            let sim = crate::state::ubus("zwrt_zte_mdm.api", "get_sim_info", json!({}))
+                .await
+                .and_then(|sim| dual_sim::steps(value, &sim))
+                .map_err(|message| WriteError {
+                    message,
+                    timed_out: false,
+                })?;
+            Some(sim)
+        } else {
+            apn
         };
         let state = if apn.is_none() && needs_state(spec.item, value, params) {
             let net = crate::state::ubus("zte_nwinfo_api", "nwinfo_get_netinfo", json!({}))

@@ -168,6 +168,8 @@ impl Live {
             diagnose_agent_err: self.diag.agent_err(),
             diagnose_error: Some(self.diag.error().into()),
             diagnose_proposal: self.diag.proposal().cloned(),
+            diagnose_slow: self.diag.slow().into(),
+            diagnose_restore: self.diag.restore().cloned(),
 
             battery_est: Some(self.bat.text().into()),
             versions: self.vers.rows().to_vec(),

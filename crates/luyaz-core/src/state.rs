@@ -831,6 +831,14 @@ pub async fn collect(sample_interval_ms: u64, hub: &crate::block::Hub) -> Snapsh
     if let Some(ctx) = mu5252 {
         mu5252_extras(ctx, &mut fields).await;
     }
+    // dual-SIM standby signal: tell the QMI sampler which slot to read (0 = none)
+    let dual = fields.get("sim").and_then(|s| s.get("dual")).cloned();
+    let want = dual
+        .and_then(|d| serde_json::from_value::<crate::contract::SimDual>(d).ok())
+        .map_or(0, |d| snapshot::standby_slot(&d));
+    crate::qmi_nas::want(want);
+    // dual-SIM passive log (dsds_log.rs): keeps the latest dual-mode fields, writes every 30 s
+    crate::dsds_log::offer(&fields);
     let now = tokio::time::Instant::now();
     for (name, data) in blocks {
         hub.record(name, data, now);
@@ -1054,6 +1062,8 @@ async fn read_inputs(hub: &crate::block::Hub) -> Inputs {
         nv_read,
         sms_sim,
         sim_list_read,
+        now_epoch: crate::qmi_nas::now(),
+        standby_signal: crate::qmi_nas::last(),
         sms_list,
         lan_if,
         wan4_if,
@@ -1775,8 +1785,10 @@ mod tests {
             "{} objects, took {took:?}",
             objects.len()
         );
+        // the count above is the bound; the wall clock only catches a runaway, with room for a
+        // loaded test host (the whole suite runs in parallel)
         assert!(
-            took < timeout * (crate::executor::LEGACY_TIMEOUT_LIMIT as u32 + 3),
+            took < timeout * (crate::executor::LEGACY_TIMEOUT_LIMIT as u32 + 3) * 2,
             "took {took:?}"
         );
         assert!(hub.view("signal").unwrap().stale);

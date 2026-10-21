@@ -520,6 +520,7 @@ pub async fn diagnose_get(State(c): State<Compat>) -> Response {
         d.insert("band_flap".into(), super::band_flap::view());
         d.insert("hot_drain".into(), hot);
         d.insert("long_idle".into(), idle);
+        d.insert("tailnet_poller".into(), crate::poller::view());
         d.insert("slow_signal".into(), slow);
     }
     reply(s, v)
@@ -529,6 +530,10 @@ pub async fn diagnose_get(State(c): State<Compat>) -> Response {
 pub async fn diagnose_start(State(c): State<Compat>, req: Request) -> Response {
     let who = remote(&req);
     let (s, v) = c.group.diag.start(who);
+    // the user's deep check: afterwards one bound HTTPS check may record the verified set
+    if s == 200 {
+        crate::verified::after_diagnose(c.group.diag.clone());
+    }
     reply(s, v)
 }
 

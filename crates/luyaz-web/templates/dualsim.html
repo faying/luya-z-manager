@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+{{ self.leaf("ds-cur")|safe }}
+<div class="grid gap-6 pg-cols" data-signals="{_dm: '{{ dm }}', _ds: '{{ ds }}', _dsm: {{ dsm }}}">
+<div class="grid content-start gap-6">
+<section aria-labelledby="ds-now-t"><h2 id="ds-now-t" class="nd-group-title">{{ l.pick("SIM slots", "卡槽") }}</h2>
+{{ self.leaf("ds-now")|safe }}
+</section>
+</div>
+<div class="grid content-start gap-6" data-show="$_dsup"{% if !supported %} style="display: none"{% endif %}>
+<section aria-labelledby="ds-set-t"><h2 id="ds-set-t" class="nd-group-title">{{ l.pick("Switch", "切换") }}</h2>
+<div class="nd-group grid gap-3 p-4">
+<fieldset class="grid gap-2"><legend class="nd-aux">{{ l.pick("Mode", "模式") }}</legend>
+<label class="flex items-center gap-2"><input type="radio" name="dm" value="single"{% if dm == "single" %} checked{% endif %} data-bind="_dm" data-attr:disabled="$_dis"><span class="nd-body">{{ l.pick("Single SIM", "单卡") }}</span></label>
+<label class="flex items-center gap-2"><input type="radio" name="dm" value="dual"{% if dm == "dual" %} checked{% endif %} data-bind="_dm" data-attr:disabled="$_dis"><span class="nd-body">{{ l.pick("Dual SIM (both cards on standby)", "双卡（两张卡都待机）") }}</span></label>
+</fieldset>
+<label class="flex items-center gap-2" data-show="$_dm === 'dual'"{% if dm != "dual" %} style="display: none"{% endif %}><input type="checkbox"{% if dsm %} checked{% endif %} data-bind="_dsm" data-attr:disabled="$_dis"><span class="nd-body">{{ l.pick("Smart switching (the firmware picks the main card)", "智能切换（由原厂自己选主卡）") }}</span></label>
+<fieldset class="grid gap-2" data-show="$_dm !== 'dual' || !$_dsm"{% if dm == "dual" && dsm %} style="display: none"{% endif %}><legend class="nd-aux">{{ l.pick("Main card (carries data)", "主卡（用来上网）") }}</legend>
+<label class="flex items-center gap-2"><input type="radio" name="ds" value="1"{% if ds == "1" %} checked{% endif %} data-bind="_ds" data-attr:disabled="$_dis"><span class="nd-body">{{ self.slot_name(1) }}</span></label>
+<label class="flex items-center gap-2"><input type="radio" name="ds" value="2"{% if ds == "2" %} checked{% endif %} data-bind="_ds" data-attr:disabled="$_dis"><span class="nd-body">{{ self.slot_name(2) }}</span></label>
+</fieldset>
+<div><button type="button" class="nd-btn nd-btn--primary" disabled data-attr:disabled="$_dis" data-on:click="@post('{{ crate::dualsim::PATH }}/ask?mode=' + $_dm + '&amp;slot=' + $_ds + '&amp;smart=' + ($_dsm ? '1' : '0'))">{{ l.pick("Switch…", "切换…") }}</button></div>
+{{ op|safe }}</div>
+</section>
+</div>
+</div>
+{% endblock %}

@@ -35,6 +35,7 @@ impl Engine {
         }
         *lk(&self.cfg) = cfg.clone();
         self.write_json(CONFIG_FILE, &cfg);
+        *lk(&self.cfg_seen) = crate::stamp(&self.p(CONFIG_FILE));
         self.log("configuration replaced");
         self.ok_state()
     }

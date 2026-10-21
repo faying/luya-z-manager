@@ -226,11 +226,16 @@ fn logs_in(d: &Path) -> Vec<(std::time::SystemTime, PathBuf, u64)> {
 
 fn prune(dir: &Path, pd: &Path, keep: &Path) {
     let mut mine = logs_in(pd);
-    mine.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    // the one just written counts first: mtimes written within one clock tick tie, and a reused
+    // ".1" name would otherwise sort last and leave CRASH_KEEP + 1 behind
+    mine.sort_by(|a, b| {
+        (b.1 == keep)
+            .cmp(&(a.1 == keep))
+            .then_with(|| b.0.cmp(&a.0))
+            .then_with(|| b.1.cmp(&a.1))
+    });
     for (_, p, _) in mine.iter().skip(CRASH_KEEP) {
-        if p != keep {
-            let _ = std::fs::remove_file(p);
-        }
+        let _ = std::fs::remove_file(p);
     }
     let mut all: Vec<_> = std::fs::read_dir(dir)
         .into_iter()

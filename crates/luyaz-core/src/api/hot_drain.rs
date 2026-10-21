@@ -286,6 +286,7 @@ pub fn view() -> Value {
     let (e, window) = evidence(&rows, &boot8(), now, health.as_deref());
     json!({
         "advice": replay(&e),
+        "say": luyaz_api::execution::say::hot(&e, &replay(&e)),
         "window": window,
         "batt_dc": e.batt_dc,
         "batt_normal_dc": e.batt_normal_dc,

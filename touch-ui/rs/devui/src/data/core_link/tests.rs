@@ -389,3 +389,29 @@ fn sms_delete_needs_two_steps() {
     assert!(!d.sms_delete_tap(1), "inside the debounce: the long press's own release");
     assert!(!d.sms_delete_arm(5));
 }
+
+/// `sim.dual` (global edition): both slots, null `ready` on the one that is off; absent = one slot.
+#[test]
+fn sim_dual_parse() {
+    let dual = r#"{"state":"ready","iccid":"8986","dual":{"smart":false,"mode":"single","active_slot":1,"switching":false,"slots":[{"slot":1,"provisioned":true,"present":true,"ready":true,"operator":"CUCC","mcc":"460","mnc":"01","iccid_tail":"1111"},{"slot":2,"provisioned":false,"present":true,"ready":null,"operator":"CMCC","mcc":"","mnc":"","iccid_tail":"2222"}]},"spn":"x"}"#;
+    let d = super::sim_dual(&crate::json::get(dual.as_bytes(), "dual", 2048).unwrap()).unwrap();
+    assert!(d.mode == "single" && d.smart == 0 && d.active_slot == 1 && d.switching == 0 && d.slots.len() == 2);
+    let (a, b) = (&d.slots[0], &d.slots[1]);
+    assert!(a.slot == 1 && a.provisioned == 1 && a.ready == 1 && a.operator == "CUCC" && a.mnc == "01" && a.iccid_tail == "1111");
+    assert!(b.slot == 2 && b.provisioned == 0 && b.present == 1 && b.ready == -1 && b.mcc.is_empty());
+    // the top-level keys of sim are not taken from inside dual
+    assert_eq!(crate::data::util::jget(dual.as_bytes(), "spn", 32), "x");
+    assert!(crate::json::get(br#"{"state":"ready"}"#, "dual", 2048).is_none());
+    assert!(super::sim_dual(b"null").is_none());
+}
+
+/// core 1.14 slot fields: state, role and the optional per-slot signal.
+#[test]
+fn sim_dual_parse_signal() {
+    let dual = r#"{"dual":{"active_slot":1,"mode":"dual","slots":[{"iccid_tail":"3668","operator":"CUCC","present":true,"provisioned":true,"ready":true,"role":"data","signal":{"at":1792542594,"bars":5,"rat":"nr","rsrp":-84,"rsrq":-11,"snr":"18.7"},"slot":1,"state":"ready"},{"operator":"CMCC","present":true,"provisioned":true,"ready":true,"role":"standby","slot":2,"state":"ready"}],"smart":false,"switching":false}}"#;
+    let d = super::sim_dual(&crate::json::get(dual.as_bytes(), "dual", 2048).unwrap()).unwrap();
+    let (a, b) = (&d.slots[0], &d.slots[1]);
+    assert!(a.role == "data" && a.state == "ready" && a.has_sig == 1 && a.sig_rat == "nr");
+    assert!(a.sig_rsrp == -84 && a.sig_rsrq == -11 && a.sig_snr == "18.7" && a.sig_bars == 5);
+    assert!(b.role == "standby" && b.has_sig == 0 && b.sig_snr.is_empty());
+}

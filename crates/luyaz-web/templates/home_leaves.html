@@ -71,6 +71,8 @@
 <!--leaf-->
 <span id="hi-roam" class="nd-row__value">{% match v.roaming %}{% when Some(true) %}<span class="nd-mark nd-mark--warn"><span class="nd-mark__sym" aria-hidden="true">▲</span><span>{{ v.l.pick("Roaming", "漫游") }}</span></span>{% when Some(false) %}{{ v.l.pick("Home", "本地") }}{% else %}—{% endmatch %}</span>
 <!--leaf-->
+{{ v.dual|safe }}
+<!--leaf-->
 <i id="hm-fl-w" class="hm-flag" hidden{% if v.w_stale %} data-stale{% endif %}></i>
 <!--leaf-->
 <span id="hw-on" class="nd-row__value">{{ v.wifi_on }}</span>

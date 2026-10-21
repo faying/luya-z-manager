@@ -914,7 +914,7 @@ impl Txn {
                     if self.apply_failed {
                         return self.finish(Phase::NotApplied, Reason::Ignored);
                     }
-                } else if !blank(v) {
+                } else if !blank(v) && !self.transient_values() {
                     // R3：既不是旧值也不是目标值的第三个值。
                     return self.finish(Phase::Cancelled, Reason::ManualChange);
                 }
@@ -926,11 +926,17 @@ impl Txn {
                     let why = self.rollback_reason.unwrap_or(Reason::Timeout);
                     return self.finish(Phase::RolledBack, why);
                 }
-            } else if !matches(&self.target, v) && !blank(v) {
+            } else if !matches(&self.target, v) && !blank(v) && !self.transient_values() {
                 return self.finish(Phase::Cancelled, Reason::ManualChange);
             }
         }
         self.on_tick(now)
+    }
+
+    /// 切换中途会读到第三个值的项（双卡：旗标先变、主卡后换，`{dual, 旧槽}` 会停几秒）：
+    /// 第三个值只当「还没到」，到点照时限处理，不算人改的。代价：这期间真有人在原厂页面改了也会被退回。
+    fn transient_values(&self) -> bool {
+        self.item == super::spec::DUAL_SIM
     }
 
     /// 这一拍没拿到读数（读失败）：只看时限。
@@ -960,7 +966,13 @@ impl Txn {
         if self.phase == Phase::RollingBack {
             return self.finish(Phase::RollbackFailed, Reason::RollbackTimeout);
         }
-        if self.read_ok && !self.ever_matched {
+        // 双卡这类会停在半路的：最后的读回已经不是旧值，说明改了一半，照样退回
+        let half_way = self.transient_values()
+            && self
+                .readback
+                .as_ref()
+                .is_some_and(|v| *v != self.old && !blank(v));
+        if self.read_ok && !self.ever_matched && !half_way {
             return self.finish(Phase::NotApplied, Reason::Ignored);
         }
         self.expire(Reason::Timeout)

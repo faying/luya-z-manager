@@ -2,6 +2,7 @@
 //! the eSIM profiles; a tap on one switches to it, two taps).
 // SPDX-License-Identifier: MIT
 
+use super::dualsim::DS_H;
 use super::network::NetFlash;
 use super::{Ui, SUB_VIEW};
 use crate::cf;
@@ -26,6 +27,11 @@ pub struct Esim {
     empty: Obj,
     info: [Obj; 3],
     list_sec: Obj,
+    sc: Obj,
+    info_sec: Obj,
+    info_card: Obj,
+    /// the 双卡 block is in (its height pushes the rest down)
+    dual_in: bool,
     pub row: [Obj; ESIM_MAX_ROWS],
     row_name: [Obj; ESIM_MAX_ROWS],
     row_sub: [Obj; ESIM_MAX_ROWS],
@@ -48,7 +54,7 @@ impl Ui {
         const INFO: [&str; 3] = [n_("号码"), "ICCID", "IMSI"];
         let th = t();
         let f = uf();
-        let sc = kit::scroll(p, 0, SUB_VIEW, 4 + 20 + HERO_H + 10 + 20 + 3 * ROW_H + 10 + 20 + ESIM_MAX_ROWS as i32 * ESIM_ROW_H + 16);
+        let sc = kit::scroll(p, 0, SUB_VIEW, Self::esim_extent(false));
         kit::section(sc, 4, tr("当前配置"));
         let cur = kit::card(sc, MARGIN, 24, CARD_W, HERO_H);
         let es = &mut self.es;
@@ -58,9 +64,11 @@ impl Ui {
         es.state = es.hero.r2;
         es.hero.st.set_text(tr("使用中"));
         // 卡信息: a plain SIM and an eSIM alike (9-25: with a plain SIM the page was all 「-」)
+        es.sc = sc;
         let mut y = 24 + HERO_H + 10;
-        kit::section(sc, y, tr("卡信息"));
+        es.info_sec = kit::section(sc, y, tr("卡信息"));
         let info = kit::card(sc, MARGIN, y + 20, CARD_W, 3 * ROW_H);
+        es.info_card = info;
         for (i, k) in INFO.iter().enumerate() {
             es.info[i] = kit::row(info, i as i32 * ROW_H, tr(k), i == 0);
         }
@@ -81,6 +89,29 @@ impl Ui {
             es.row_tag[i] = kit::label_r(row, f.cj13, th.acc_t, CARD_W - PAD, 16, "");
             kit::show(row, false);
         }
+        self.build_dualsim(sc, 24 + HERO_H + 10);
+    }
+
+    /// The scroll's content height, with or without the 双卡 block.
+    fn esim_extent(dual: bool) -> i32 {
+        4 + 20 + HERO_H + 10 + if dual { DS_H } else { 0 } + 20 + 3 * ROW_H + 10 + 20 + ESIM_MAX_ROWS as i32 * ESIM_ROW_H + 16
+    }
+
+    /// 双卡 appeared or went (a dual device, once core has read it): move 卡信息 and the eSIM
+    /// list below it, or back up.
+    fn esim_layout(&mut self, dual: bool) {
+        let es = &mut self.es;
+        if dual == es.dual_in {
+            return;
+        }
+        es.dual_in = dual;
+        let mut y = 24 + HERO_H + 10 + if dual { DS_H } else { 0 };
+        es.info_sec.set_y(y);
+        es.info_card.set_y(y + 20);
+        y += 20 + 3 * ROW_H + 10;
+        es.list_sec.set_y(y);
+        es.list_card.set_y(y + 20);
+        kit::scroll_extent(es.sc, Self::esim_extent(dual));
     }
 
     /// A tap on a profile: say why when nothing moves, never ignore it silently (9-25).
@@ -240,5 +271,7 @@ impl Ui {
             self.es.flash_shown = self.es.flash.on();
             self.esim_paint();
         }
+        self.esim_layout(self.model.data.sim_dual.is_some());
+        self.ds_paint();
     }
 }

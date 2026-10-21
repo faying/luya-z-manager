@@ -111,6 +111,7 @@ const OWN_PREFIX: &[&str] = &[
     // 5c
     "/router/device",
     "/router/sim",
+    "/router/dualsim",
     "/router/stc",
     "/router/stk",
     "/tools/at",

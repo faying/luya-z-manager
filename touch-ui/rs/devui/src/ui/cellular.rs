@@ -38,7 +38,19 @@ pub struct Cell {
     /// 「测速 ›」「网络诊断 ›」 on this tab (the exit tab's 测速 row is built later)
     pub speed_sub: Obj,
     pub diag_sub: Obj,
+    /// dual standby: 「双卡」 above 排查, one row per card (data card first)
+    dual_box: Obj,
+    dual_img: [Obj; 2],
+    dual_name: [Obj; 2],
+    dual_role: [Obj; 2],
+    dual_sig: [Obj; 2],
+    /// what each row's image shows: (slug, w); w 0 = none
+    dual_logo: [(Option<String>, i32); 2],
 }
+
+/// 「双卡」: section title + two 56 px rows
+const DUAL_ROW: i32 = 56;
+const DUAL_BOX_H: i32 = 20 + 2 * DUAL_ROW;
 
 /// 0 = none: a tick kept as a time stamp is never 0.
 pub fn nz(t: u32) -> u32 {
@@ -152,6 +164,28 @@ impl Ui {
         // 当前连接: every carrier (built with Home)
         self.home.ca_card.set_parent(sc);
         self.home.ca_card.set_pos(MARGIN, 4);
+        // 双卡 (dual standby only): between the carrier card and the rest
+        let db = Obj::create(sc);
+        db.remove_style_all();
+        db.remove_flag(lv::LV_OBJ_FLAG_SCROLLABLE);
+        db.set_size(W, DUAL_BOX_H);
+        kit::section(db, 0, tr("双卡"));
+        let dc = kit::card(db, MARGIN, 20, CARD_W, 2 * DUAL_ROW);
+        for i in 0..2 {
+            let y = i as i32 * DUAL_ROW;
+            if i > 0 {
+                kit::sep(dc, y);
+            }
+            self.cell.dual_img[i] = Obj::image(dc);
+            self.cell.dual_img[i].remove_flag(lv::LV_OBJ_FLAG_CLICKABLE);
+            kit::show(self.cell.dual_img[i], false);
+            self.cell.dual_name[i] = kit::label_w(dc, f.cj14, th.t1, PAD, y + 9, 170, false, "");
+            self.cell.dual_name[i].set_long_mode(lv::LV_LABEL_LONG_MODE_DOTS);
+            self.cell.dual_role[i] = kit::label_r(dc, f.cj13, th.t2, CARD_W - PAD, y + 10, "");
+            self.cell.dual_sig[i] = kit::label_w(dc, f.cj12, th.t2, PAD, y + 32, CARD_W - 2 * PAD, false, "");
+        }
+        kit::show(db, false);
+        self.cell.dual_box = db;
         let rest = Obj::create(sc);
         rest.remove_style_all();
         rest.remove_flag(lv::LV_OBJ_FLAG_SCROLLABLE);
@@ -201,6 +235,72 @@ impl Ui {
         self.cell_reflow();
     }
 
+    /// The 双卡 card: shown in dual standby (`x` Some), hidden otherwise.
+    pub(super) fn cell_dual(&mut self, x: Option<&devui_model::sim_dual_t>) {
+        let th = t();
+        let on = x.is_some();
+        if self.cell.dual_box.is_null() {
+            return;
+        }
+        if self.cell.dual_box.hidden() == on {
+            kit::show(self.cell.dual_box, on);
+            self.cell_reflow();
+        }
+        let Some(x) = x else { return };
+        let mut order: Vec<&devui_model::sim_slot_t> = x.slots.iter().collect();
+        order.sort_by_key(|s| s.role != "data");
+        for i in 0..2 {
+            let (img, name, role, sig) = (self.cell.dual_img[i], self.cell.dual_name[i], self.cell.dual_role[i], self.cell.dual_sig[i]);
+            let Some(s) = order.get(i).copied() else {
+                kit::show(img, false);
+                self.set(name, "");
+                self.set(role, "");
+                self.set(sig, "");
+                continue;
+            };
+            let (mcc, mnc) = (s.mcc.parse().unwrap_or(0), s.mnc.parse().unwrap_or(-1));
+            let slug = crate::data::core_link::mainland_logo(mcc, mnc, &s.operator);
+            if self.cell.dual_logo[i].0.as_deref() != slug {
+                let w = slug.and_then(|g| Self::logo_load(img, g)).map_or(0, |(w, h)| {
+                    img.set_pos(PAD, i as i32 * DUAL_ROW + 9 + (uf().cj14.line_height() - h) / 2);
+                    w
+                });
+                self.cell.dual_logo[i] = (slug.map(String::from), w);
+            }
+            let lw = self.cell.dual_logo[i].1;
+            kit::show(img, lw > 0);
+            let cn = crate::data::core_link::mainland_operator_cn(mcc, mnc, &s.operator).unwrap_or(s.operator.as_str());
+            // with a logo the name is not repeated: 卡 number only
+            let text: Vec<u8> = if lw > 0 { cf!(tr("卡槽 %d"), s.slot) } else { cf!("%s · %s", cn, &cf!(tr("卡槽 %d"), s.slot)) };
+            name.set_x(if lw > 0 { PAD + lw + 8 } else { PAD });
+            self.set(name, text);
+            let data = s.role == "data";
+            let r: &str = match s.state.as_str() {
+                "" | "ready" => {
+                    if data && x.switching != 0 {
+                        tr("切换中")
+                    } else if data {
+                        tr("上网中")
+                    } else {
+                        tr("待机")
+                    }
+                }
+                "locked" => tr("PIN 锁"),
+                "absent" => tr("无卡"),
+                "off" => tr("未启用"),
+                _ => tr("未就绪"),
+            };
+            self.set(role, r);
+            let line: Vec<u8> = if s.has_sig != 0 {
+                cf!(tr("信号强度 %d dBm · 信号质量 %s dB"), s.sig_rsrp, &s.sig_snr)
+            } else {
+                tr("信号强度 — · 信号质量 —").into()
+            };
+            self.set(sig, line);
+            kit::text_color(name, if data { th.t1 } else { th.t2 });
+        }
+    }
+
     /// The 网络模式 card with or without 「上次改动」: 100 / 140 high, the cards after it move.
     pub(super) fn cell_own_layout(&mut self, show: bool) {
         let c = &self.cell;
@@ -222,7 +322,11 @@ impl Ui {
         }
         let ca = self.home.ca_card;
         let h = ca.style_height(0);
-        let y = if ca.hidden() { 0 } else { 4 + h + MARGIN - 4 };
+        let mut y = if ca.hidden() { 0 } else { 4 + h + MARGIN - 4 };
+        if !c.dual_box.hidden() {
+            c.dual_box.set_y(y + 4);
+            y += DUAL_BOX_H + MARGIN;
+        }
         c.rest.set_y(y);
         kit::scroll_extent(c.scroll, y + c.rest.style_height(0) - 10 + TAB_PAD);
     }

@@ -7,6 +7,7 @@
 mod apn;
 mod cellular;
 mod diagnose;
+mod dualsim;
 mod esim;
 mod exit;
 mod home;
@@ -161,6 +162,10 @@ pub struct Ui {
     top_net: Obj,
     top_updown: Obj,
     top_sig: [Obj; 5],
+    /// dual standby: two rows of 5 (data slot on top, standby below)
+    top_sig2: [Obj; 10],
+    /// dual rows shown (None = not yet decided)
+    sig_dual: Option<bool>,
     top_alert: Obj,
     top_batt: Battery,
     /// 0 none, 1 unread, 2 agent lost
@@ -169,6 +174,7 @@ pub struct Ui {
     pub top_label: String,
     rate_shown: Vec<u8>,
     c_sig: [u32; 5],
+    c_sig2: [u32; 10],
     c_pct: i32,
     c_chg: i32,
 
@@ -197,6 +203,7 @@ pub struct Ui {
     pub um: usbmode::Usb,
     pub sms: sms::Sms,
     pub es: esim::Esim,
+    pub ds: dualsim::DualSim,
     pub st: speed::Speed,
     pub ts: exit::TsPage,
     pub sg: exit::SigPage,
@@ -584,13 +591,20 @@ impl Ui {
         self.update_tabs();
     }
 
-    /// time · 5 signal dots · RAT · rate [tap: Mbps/MB/s] · ▲ [tap: alerts] · battery.
+    /// time · 5 signal dots (two rows of 5 in dual standby) · RAT · rate [tap: Mbps/MB/s] · ▲ [tap: alerts] · battery.
     fn build_statusbar(&mut self) {
         let th = t();
         let bar = kit::bx(Obj::layer_top(), 0, 0, W, BAR_H, th.bg, 0);
         self.top_time = kit::label(bar, uf().n15, th.t1, 12, 4, "--:--");
         for i in 0..5 {
             self.top_sig[i] = kit::dot(bar, 60 + i as i32 * 8, 11, 5, th.track);
+        }
+        // dual standby (iPhone-style two rows, flat): 4px dots, 6px pitch, rows at y 7 / 15
+        for i in 0..10 {
+            let (row, col) = (i as i32 / 5, i as i32 % 5);
+            self.top_sig2[i] = kit::dot(bar, 60 + col * 6, 7 + row * 8, 4, th.track);
+            self.c_sig2[i] = th.track;
+            kit::show(self.top_sig2[i], false);
         }
         self.top_net = kit::label(bar, uf().n12, th.t1, 104, 6, "");
         self.top_net.set_width(TOP_LEFT_END - 104 - 2);
@@ -764,12 +778,15 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
         top_net: Obj::NULL,
         top_updown: Obj::NULL,
         top_sig: [Obj::NULL; 5],
+        top_sig2: [Obj::NULL; 10],
+        sig_dual: None,
         top_alert: Obj::NULL,
         top_batt: Battery::default(),
         alert_st: 0,
         top_label: String::new(),
         rate_shown: Vec::new(),
         c_sig: [0; 5],
+        c_sig2: [0; 10],
         c_pct: -1,
         c_chg: -1,
         banner: Obj::NULL,
@@ -792,6 +809,7 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
         um: usbmode::Usb::default(),
         sms: sms::Sms::default(),
         es: esim::Esim::default(),
+        ds: dualsim::DualSim::default(),
         st: speed::Speed::default(),
         ts: exit::TsPage::default(),
         sg: exit::SigPage::default(),

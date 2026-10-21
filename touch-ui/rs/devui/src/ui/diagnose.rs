@@ -27,6 +27,8 @@ const DG_ROWS: usize = dv::DG_LAYERS_MAX + 1;
 const DG_ARM_MS: u32 = 5000;
 /// [`Arm`] ids: 0 = the roaming speed test, this = the proposal's redial
 const DG_ARM_REDIAL: i32 = 1;
+/// [`Arm`] id: 恢复上次能用的设置
+const DG_ARM_RESTORE: i32 = 2;
 const DG_NOTE_MS: u32 = 4000;
 const DG_ACT_NONE: i32 = 0;
 const DG_ACT_PLACE: i32 = 1;
@@ -55,6 +57,12 @@ pub struct Diag {
     /// redial for the core's proposal (decision loop §4.10), two taps
     pub rd: Obj,
     rd_lbl: Obj,
+    /// 恢复上次能用的设置 (core `/api/verified`), two taps; its line under it
+    pub rs: Obj,
+    rs_lbl: Obj,
+    rs_say: Obj,
+    /// the core's line on a strong but slow signal, read-only (no ›)
+    slow: Obj,
     note: Obj,
     fb: Obj,
     fb_lbl: Obj,
@@ -111,6 +119,23 @@ unsafe extern "C" fn dg_start_cb(_e: *mut sys::lv_event_t) {
 
 unsafe extern "C" fn dg_redial_cb(_e: *mut sys::lv_event_t) {
     super::with(|u| u.dg_redial_tap());
+}
+
+unsafe extern "C" fn dg_restore_cb(_e: *mut sys::lv_event_t) {
+    super::with(|u| u.dg_restore_tap());
+}
+
+/// A restored item's name (core `verified::ITEMS`).
+fn dg_item_name(item: &str) -> &'static str {
+    match item {
+        "cell.lte" => tr("LTE 锁小区"),
+        "cell.nr" => tr("NR 锁小区"),
+        "band.lte" => tr("LTE 频段"),
+        "band.nr" => tr("NR 频段"),
+        "network.mode" => tr("网络模式"),
+        "apn" => "APN",
+        _ => tr("其他设置"),
+    }
 }
 
 unsafe extern "C" fn dg_speed_cb(_e: *mut sys::lv_event_t) {
@@ -285,6 +310,34 @@ impl Ui {
         self.diag_paint();
     }
 
+    /// The first tap arms and says what will be set back; the second asks the core, which checks
+    /// again and runs it item by item (progress comes back with the page's reads).
+    fn dg_restore_tap(&mut self) {
+        let Some(v) = self.model.diagnose_restore.clone() else { return };
+        let th = t();
+        if v.state == 1 {
+            self.dg_note(tr("正在恢复，稍等"), th.t2);
+            self.diag_paint();
+            return;
+        }
+        if !v.avail || v.items.is_empty() {
+            return;
+        }
+        if !self.dg.arm.tap(DG_ARM_RESTORE, lv::tick_get(), DG_ARM_MS) {
+            self.diag_paint();
+            return;
+        }
+        self.dg_note(tr("已发送，逐项恢复"), th.t2);
+        self.diag_paint();
+        lv::refr_now();
+        let ok = self.data_control("verified.restore", "{}", None);
+        if !ok {
+            self.dg_note(tr("后台没回应"), th.bad_t);
+        }
+        self.src.diagnose_kick();
+        self.diag_paint();
+    }
+
     fn dg_fb_tap(&mut self, right: i32) {
         let r = self.dg_run();
         self.dg.fb_local = right;
@@ -368,6 +421,12 @@ impl Ui {
         }
         (dg.rd, dg.rd_lbl) = kit::button(sc, MARGIN, 0, CARD_W, 44, tr("建议：重拨数据连接"), BtnKind::Plain, Some(dg_redial_cb), 0);
         kit::show(dg.rd, false);
+        (dg.rs, dg.rs_lbl) = kit::button(sc, MARGIN, 0, CARD_W, 44, tr("恢复上次能用的设置"), BtnKind::Plain, Some(dg_restore_cb), 0);
+        kit::show(dg.rs, false);
+        dg.rs_say = kit::label_w(sc, f.cj12, th.t2, MARGIN + 6, 0, CARD_W - 12, true, "");
+        kit::show(dg.rs_say, false);
+        dg.slow = kit::label_w(sc, f.cj12, th.t2, MARGIN + 6, 0, CARD_W - 12, true, "");
+        kit::show(dg.slow, false);
         (dg.btn, dg.btn_lbl) = kit::button(sc, MARGIN, 0, CARD_W, 44, tr("加测速度 · 约 5 秒、最多 30 MB"), BtnKind::Plain, Some(dg_speed_cb), 0);
         dg.note = kit::label_w(sc, f.cj12, th.t3, MARGIN + 6, 0, CARD_W - 12, true, "");
         // 「14:32 测 · 结论对吗？」 + 对 / 不对 (each ≥ 40×40)
@@ -592,6 +651,54 @@ impl Ui {
             kit::button_kind(rd, lbl, if armed { BtnKind::Armed } else { BtnKind::Plain });
             rd.set_y(y);
             y += 44 + 6;
+        }
+
+        // ---- 恢复上次能用的设置 ----
+        let rv = if err == 0 { self.model.diagnose_restore.clone() } else { None };
+        kit::show(self.dg.rs, rv.as_ref().is_some_and(|v| v.state == 1 || (v.avail && !v.items.is_empty())));
+        kit::show(self.dg.rs_say, rv.is_some());
+        if let Some(v) = rv {
+            let (rs, lbl, say) = (self.dg.rs, self.dg.rs_lbl, self.dg.rs_say);
+            let armed = v.avail && self.dg.arm.live(DG_ARM_RESTORE, now, DG_ARM_MS);
+            let names: Vec<&str> = v.items.iter().map(|i| dg_item_name(i)).collect();
+            let joined = names.join(if crate::lang::is_en() { ", " } else { "、" });
+            let (lab, kind) = if v.state == 1 {
+                (cf!(tr("正在恢复 %d/%d…"), v.done, v.total), BtnKind::Plain)
+            } else if armed {
+                (tr("会断网一阵，再按一次").into(), BtnKind::Armed)
+            } else {
+                (tr("恢复上次能用的设置").into(), BtnKind::Plain)
+            };
+            self.set(lbl, lab);
+            kit::button_kind(rs, lbl, kind);
+            if !rs.hidden() {
+                rs.set_y(y);
+                y += 44 + 4;
+            }
+            let (txt, col): (Vec<u8>, u32) = match v.state {
+                1 => (cf!(tr("逐项改回：%s"), &joined), th.t2),
+                2 => (tr("已恢复，网络通了").into(), th.ok_t),
+                3 => (tr("已恢复，但网络还是不通").into(), th.warn_t),
+                4 => (cf!(tr("停在「%s」，已改的保持不变"), dg_item_name(&v.failed)), th.warn_t),
+                _ => (cf!(tr("和上次能用时不同：%s。逐项改回，每项都会断网一阵"), &joined), th.t2),
+            };
+            self.set(say, &txt);
+            kit::text_color(say, col);
+            say.set_y(y);
+            say.update_layout();
+            y += say.height() + 6;
+        }
+
+        // ---- the core's words on a strong but slow signal ----
+        let sl = self.dg.slow;
+        let sl_show = err == 0 && !self.model.diagnose_slow.is_empty();
+        kit::show(sl, sl_show);
+        if sl_show {
+            let txt = self.model.diagnose_slow.clone();
+            self.set(sl, &txt);
+            sl.set_y(y);
+            sl.update_layout();
+            y += sl.height() + 6;
         }
 
         // ---- 加测速度 / 重试 ----

@@ -131,6 +131,54 @@ pub struct devui_data_t {
     pub sim_imsi: String,
     pub sim_msisdn: String,
     pub sim_spn: String,
+    /// `sim.dual` (global edition, manager docs/designs/dual-sim-global.md); None = one slot
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sim_dual: Option<sim_dual_t>,
+}
+
+/// Dual SIM as the core reads it: mode "single" | "dual", the main slot (1/2), smart switching,
+/// the firmware switching on its own, both slots.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct sim_dual_t {
+    pub mode: String,
+    pub smart: i32,
+    pub active_slot: i32,
+    pub switching: i32,
+    pub slots: Vec<sim_slot_t>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct sim_slot_t {
+    pub slot: i32,
+    pub provisioned: i32,
+    /// a card is in it (an ICCID is known, on or off)
+    pub present: i32,
+    /// 1 ready, 0 not, -1 unknown (off: the firmware reports no state)
+    pub ready: i32,
+    pub operator: String,
+    pub mcc: String,
+    pub mnc: String,
+    pub iccid_tail: String,
+    /// "ready" | "not_ready" | "locked" | "absent" | "off" (core 1.14+, else "")
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub state: String,
+    /// "data" | "standby" | "off" (core 1.14+, else "")
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub role: String,
+    /// 1 when core sent a `signal` reading for this slot
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub has_sig: i32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sig_rat: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sig_rsrp: i32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sig_rsrq: i32,
+    /// one decimal, as core sends it ("18.7"); "" when absent
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sig_snr: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sig_bars: i32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -406,6 +454,9 @@ pub struct ver_row_t {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct health_item_t {
     pub bad: i32,
+    /// 1 = a read-only notice from the core (`notices`), not a failed check
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub note: i32,
     pub id: String,
     pub label: String,
     pub detail: String,
@@ -550,6 +601,22 @@ pub struct dg_proposal_t {
     pub tail: String,
 }
 
+/// The last verified connection (core `GET /api/verified`): what a restore would set back, and
+/// how the one running goes.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct dg_restore_t {
+    /// a restore may start now (the core's `available`)
+    pub avail: bool,
+    /// the items that differ, in restore order (`steps[].item`)
+    pub items: Vec<String>,
+    /// the run: 0 none, 1 running, 2 restored, 3 restored but still down, 4 stopped
+    pub state: i32,
+    pub done: i32,
+    pub total: i32,
+    /// the item it stopped at (state 4)
+    pub failed: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct diag_run_t {
     pub state: i32,
@@ -574,4 +641,8 @@ pub struct diag_run_t {
     pub has_speed: i32,
     pub speed: dg_layer_t,
     pub age_s: i64,
+}
+
+fn is_zero(v: &i32) -> bool {
+    *v == 0
 }

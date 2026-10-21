@@ -1205,3 +1205,104 @@ fn no_sim() -> SimId {
         slot: 0,
     }
 }
+
+/// 双卡（dual-sim-global.md）：读数的 SIM 固定为空（`UbusDevice::read`），切主卡换了 ICCID 也不取消。
+fn dual_txn(target: Value, old: Value) -> Txn {
+    let mut t = Txn::new(
+        NewTxn {
+            op_id: "dual1".into(),
+            action: "sim.dual".into(),
+            item: "sim.dual".into(),
+            source: Source::Web,
+            approved_by: Source::Web,
+            undo: false,
+            target,
+            old: old.clone(),
+            rollback_to: old,
+            sim: SimId { iccid: String::new(), slot: 0 },
+            conn: Some(conn("10.0.0.1", 500)),
+            confirm: Confirm::Registered,
+            rollback_enabled: true,
+            deadline_ms: D,
+            boot_id: "boot-a".into(),
+            receipt: false,
+        },
+        1_000,
+    );
+    t.begin_apply();
+    t.applied(Applied::Done, 1_000);
+    t
+}
+
+fn dual_read(v: Value, data_up: bool) -> Reading {
+    Reading {
+        value: Some(v),
+        registered: true,
+        sim: SimId { iccid: String::new(), slot: 0 },
+        data: Some(DataPath {
+            expected: Some(true),
+            connected: data_up,
+            conn: conn("10.0.0.2", 20_000),
+            iface: "rmnet_data0".into(),
+            dns: vec!["192.0.2.53".into()],
+        }),
+        probe: None,
+    }
+}
+
+#[test]
+fn dual_sim_slot_swap_confirms_without_sim_cancel() {
+    let single1 = serde_json::json!({"mode":"single","active_slot":1});
+    let dual2 = serde_json::json!({"mode":"dual","smart":false,"active_slot":2});
+    let mut t = dual_txn(dual2.clone(), single1);
+    // 中途：旗标已变、主卡还没换（第三个值）→ 等，不算人改的
+    let mid = serde_json::json!({"mode":"dual","smart":false,"active_slot":1});
+    assert_eq!(t.on_reading(&dual_read(mid, false), 5_000), Next::Wait);
+    // 换卡断网那段：读回到了、数据没通 → 等，不取消
+    assert_eq!(t.on_reading(&dual_read(dual2.clone(), false), 10_000), Next::Wait);
+    assert!(!t.phase.is_final());
+    let (n, _) = feed(&mut t, dual_read(dual2, true), true, 30_000);
+    assert_eq!(n, Next::Done);
+    assert_eq!(end(&t), (Phase::Confirmed, Some(Reason::Verified)));
+}
+
+#[test]
+fn dual_sim_smart_on_ignores_the_firmware_slot() {
+    // 智能开的目标没有 active_slot：读回也没有（原厂自己换卡不算失败，D3）
+    let smart = serde_json::json!({"mode":"dual","smart":true});
+    let mut t = dual_txn(smart.clone(), serde_json::json!({"mode":"single","active_slot":1}));
+    let (n, _) = feed(&mut t, dual_read(smart, true), true, 30_000);
+    assert_eq!(n, Next::Done);
+    assert_eq!(end(&t), (Phase::Confirmed, Some(Reason::Verified)));
+}
+
+#[test]
+fn dual_sim_wrong_slot_or_no_data_rolls_back() {
+    let single1 = serde_json::json!({"mode":"single","active_slot":1});
+    let dual2 = serde_json::json!({"mode":"dual","smart":false,"active_slot":2});
+    // 智能关时主卡不对：到点退回
+    let mut t = dual_txn(dual2.clone(), single1.clone());
+    let wrong = serde_json::json!({"mode":"dual","smart":false,"active_slot":1});
+    assert_eq!(t.on_reading(&dual_read(wrong, true), 30_000), Next::Wait);
+    assert_eq!(t.on_tick(1_000 + D), Next::Rollback(single1.clone()));
+    // 读回对、数据一直不通：也到点退回；退回读不回来 → rollback_failed
+    let mut t = dual_txn(dual2.clone(), single1.clone());
+    t.on_reading(&dual_read(dual2.clone(), false), 30_000);
+    assert_eq!(t.on_tick(1_000 + D), Next::Rollback(single1.clone()));
+    t.rollback_sent(2_000 + D);
+    assert_eq!(feed(&mut t, dual_read(single1.clone(), true), true, 4_000 + D).0, Next::Done);
+    assert_eq!(end(&t), (Phase::RolledBack, Some(Reason::Timeout)));
+    let mut t = dual_txn(dual2.clone(), single1);
+    t.on_tick(1_000 + D);
+    t.rollback_sent(2_000 + D);
+    assert_eq!(t.on_reading(&dual_read(dual2, false), 2_000 + 2 * D), Next::Done);
+    assert_eq!(end(&t), (Phase::RollbackFailed, Some(Reason::RollbackTimeout)));
+}
+
+#[test]
+fn dual_sim_resumes_after_core_restart() {
+    let single1 = serde_json::json!({"mode":"single","active_slot":1});
+    let mut t = dual_txn(serde_json::json!({"mode":"dual","smart":true}), single1.clone());
+    assert_eq!(t.resume("boot-a", 50_000), Next::Wait);
+    assert_eq!(t.on_tick(1_000 + D), Next::Rollback(single1));
+}

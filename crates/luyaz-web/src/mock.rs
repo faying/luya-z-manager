@@ -114,6 +114,8 @@ struct Mock {
     bands: Mutex<Option<(String, String, String)>>,
     /// Cell locks as the signal block's raw fields: (`nr_cell_lock`, `lte_cell_lock`).
     cells: Mutex<(String, String)>,
+    /// The sim block's `dual` (global edition); None = single-slot (the recording's).
+    dual: Mutex<Option<Value>>,
     /// Every apn.* body (with the password as sent: the e2e checks it went exactly once).
     apn_ops: Mutex<Vec<Value>>,
     /// `net_select` over the recording's after a confirmed network.set_mode (None = the recording's).
@@ -283,6 +285,14 @@ impl Mock {
             o.insert("nr_cell_lock".into(), json!(nr));
             o.insert("lte_cell_lock".into(), json!(lte));
         }
+        if name == "sim"
+            && let Some(o) = data.as_object_mut()
+        {
+            match self.dual.lock().unwrap().clone() {
+                Some(d) => o.insert("dual".into(), d),
+                None => o.remove("dual"),
+            };
+        }
         if name == "interfaces"
             && let Some(r) = *self.roam.lock().unwrap()
             && let Some(c) = data.get_mut("cellular").and_then(Value::as_object_mut)
@@ -449,7 +459,7 @@ async fn control(State(m): State<Arc<Mock>>, body: axum::Json<Value>) -> Respons
     if matches!(
         action.as_str(),
         "network.set_mode" | "band.set_lte" | "band.set_nr" | "band.reset" | "cell.lock_lte" | "cell.lock_nr"
-            | "apn.set_mode" | "apn.enable" | "apn.modify"
+            | "sim.dual" | "apn.set_mode" | "apn.enable" | "apn.modify"
     ) && let Some(doing) = active_op(&m)
     {
         let e = json!({"error": {"code": "busy", "message": "another change is in progress"}, "doing": doing});
@@ -463,6 +473,9 @@ async fn control(State(m): State<Arc<Mock>>, body: axum::Json<Value>) -> Respons
     }
     if action.starts_with("cell.") {
         return cell_txn(&m, &body);
+    }
+    if action == "sim.dual" {
+        return dual_txn(&m, &body);
     }
     if action.starts_with("apn.") {
         return apn_write(&m, &body);
@@ -681,8 +694,9 @@ async fn screen_alerts(State(m): State<Arc<Mock>>) -> Response {
         )
             .into_response();
     }
-    axum::Json(json!({"ok": true, "data": alerts_data(m.unread.load(Ordering::SeqCst))}))
-        .into_response()
+    let mut d = alerts_data(m.unread.load(Ordering::SeqCst));
+    poller::alerts_extra(&mut d);
+    axum::Json(json!({"ok": true, "data": d})).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -701,6 +715,7 @@ async fn screen_status(State(m): State<Arc<Mock>>) -> axum::Json<Value> {
         "services": {"chill": {"state": "running", "reason": null, "on": true}},
     });
     home::public_extra(&mut data);
+    poller::status_extra(&mut data);
     axum::Json(json!({"ok": true, "data": data}))
 }
 
@@ -1057,6 +1072,7 @@ pub fn router(raw: &str, speed: f64) -> Router {
         usb_ops: Mutex::new(Vec::new()),
         bands: Mutex::new(None),
         cells: Mutex::new((String::new(), String::new())),
+        dual: Mutex::new(None),
         apn_ops: Mutex::new(Vec::new()),
         net_select: Mutex::new(None),
         data_on: Mutex::new(None),
@@ -1088,6 +1104,7 @@ pub fn router(raw: &str, speed: f64) -> Router {
         .route("/mock/usb", post(set_usb))
         .route("/mock/bands", post(set_bands))
         .route("/mock/cells", post(set_cells))
+        .route("/mock/dual", post(set_dual))
         .route("/mock/apn", post(reset_apn))
         .route("/mock/net", post(reset_net))
         .route("/v2/api/alerts", get(screen_alerts))
@@ -1110,6 +1127,7 @@ mod router_firewall;
 mod router_lan;
 mod router_qos;
 mod home;
+mod poller;
 mod receipt;
 mod router_vpn;
 mod wifi_guest;
@@ -1126,6 +1144,7 @@ const BATCH4_CONTROL: &[Batch4Control] = &[
     wifi_guest::control,
     wifi_main::control,
     home::control,
+    poller::control,
 ];
 
 const BATCH4_SEED: &[fn(&Arc<Mock>)] = &[
@@ -1137,6 +1156,7 @@ const BATCH4_SEED: &[fn(&Arc<Mock>)] = &[
     wifi_guest::seed,
     wifi_main::seed,
     home::seed,
+    poller::seed,
 ];
 
 /// The first batch-4 page that claims the write answers it (logged in `page_ops` by the page).
@@ -1153,6 +1173,7 @@ fn batch4_routes(r: Router<Arc<Mock>>) -> Router<Arc<Mock>> {
     let r = wifi_guest::routes(r);
     let r = wifi_main::routes(r);
     let r = receipt::routes(r);
+    let r = poller::routes(r);
     home::routes(r)
 }
 
@@ -1370,7 +1391,7 @@ fn run_txn(m: &Arc<Mock>, body: &Value, t: Txn, on_ok: Box<dyn FnOnce(&Mock) + S
         let ok = last["phase"] == "confirmed";
         if ok {
             on_ok(&m2);
-            for name in ["signal", "apn"] {
+            for name in ["signal", "apn", "sim"] {
                 let cur = m2.blocks.lock().unwrap().get(name).cloned();
                 if let Some(b) = cur {
                     m2.publish(name, b["data"].clone(), b["observed_at"].as_u64().unwrap_or(0) + 1, false);
@@ -1511,6 +1532,62 @@ fn cell_txn(m: &Arc<Mock>, body: &Value) -> Response {
             let mut c = m.cells.lock().unwrap();
             if nr { c.0 = raw } else { c.1 = raw }
         }))
+}
+
+/// Dual SIM (`sim.dual`, /router/dualsim): the value is u60d's (`{mode, smart?, active_slot?}`);
+/// on confirm the `dual` view takes it (slots switched on to match, smart only in dual).
+fn dual_txn(m: &Arc<Mock>, body: &Value) -> Response {
+    let p = body["params"].clone();
+    let Some(cur) = m.dual.lock().unwrap().clone() else {
+        let e = json!({"ok": false, "action": "sim.dual", "error": {"code": "invalid_parameter", "message": "this device has no dual SIM"}});
+        return (StatusCode::BAD_REQUEST, axum::Json(e)).into_response();
+    };
+    let value_of = |d: &Value| match (d["mode"].as_str(), d["smart"] == json!(true)) {
+        (Some("dual"), true) => json!({"mode": "dual", "smart": true}),
+        (Some("dual"), false) => json!({"mode": "dual", "smart": false, "active_slot": d["active_slot"]}),
+        _ => json!({"mode": "single", "active_slot": d["active_slot"]}),
+    };
+    let old = value_of(&cur);
+    // u60d's words (core ops/ui.rs dual_sim_words)
+    let words = |v: &Value| {
+        let n = v["active_slot"].as_i64().unwrap_or(0);
+        match (v["mode"].as_str(), v["smart"] == json!(true)) {
+            (Some("dual"), true) => ("双卡 · 智能切换".to_string(), "Dual SIM · smart switching".to_string()),
+            (Some("dual"), false) => (format!("双卡 · 主卡 卡槽 {n}"), format!("Dual SIM · main slot {n}")),
+            _ => (format!("单卡 · 卡槽 {n}"), format!("Single SIM · slot {n}")),
+        }
+    };
+    let request = json!({"action": "sim.dual", "undo": true, "params": old});
+    let t = Txn { item: "sim.dual", what: ("双卡", "Dual SIM"), words: (words(&p), words(&old)), target: p.clone(), old, first: "正在切换", request };
+    run_txn(m, body, t, Box::new(move |m: &Mock| {
+        let mut g = m.dual.lock().unwrap();
+        let Some(d) = g.as_mut() else { return };
+        let dual = p["mode"] == "dual";
+        let smart = dual && p["smart"] == true;
+        d["mode"] = json!(if dual { "dual" } else { "single" });
+        d["smart"] = json!(smart);
+        if let Some(n) = p["active_slot"].as_i64() {
+            d["active_slot"] = json!(n);
+        }
+        let active = d["active_slot"].as_i64().unwrap_or(1);
+        if let Some(slots) = d["slots"].as_array_mut() {
+            for s in slots {
+                let on = dual || s["slot"].as_i64() == Some(active);
+                s["provisioned"] = json!(on);
+                s["ready"] = if on { json!(true) } else { Value::Null };
+            }
+        }
+    }))
+}
+
+/// Make the mock a dual-SIM device (body = the `dual` view) or single-slot again (`null`).
+async fn set_dual(State(m): State<Arc<Mock>>, body: axum::Json<Value>) -> StatusCode {
+    *m.dual.lock().unwrap() = (!body.0.is_null()).then(|| body.0.clone());
+    let cur = m.blocks.lock().unwrap().get("sim").cloned();
+    if let Some(b) = cur {
+        m.publish("sim", b["data"].clone(), b["observed_at"].as_u64().unwrap_or(0) + 1, false);
+    }
+    StatusCode::NO_CONTENT
 }
 
 #[derive(serde::Deserialize)]

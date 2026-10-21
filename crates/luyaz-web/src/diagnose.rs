@@ -162,6 +162,8 @@ pub struct Next {
     pub answered: bool,
 }
 
+mod restore;
+
 pub struct View {
     pub l: Lang,
     pub tone: &'static str,
@@ -191,6 +193,8 @@ pub struct View {
     /// `perf.slow_strong_signal` (core §4.11): proven vs only possible layers when the signal is
     /// strong; never an action.
     pub slow: Option<String>,
+    /// The last verified connection (core `GET /api/verified`): what differs and the button.
+    pub restore: Option<restore::RestoreV>,
 }
 
 /// Core `data.slow_signal`: words for the person when the replay explains, nothing otherwise.
@@ -517,6 +521,9 @@ struct Got {
     roaming: bool,
     /// When this stream first saw the speed row measuring (「测试中… 3 s」).
     speed_since: Option<Instant>,
+    /// Core `GET /api/verified`, and when it was read.
+    verified: Option<Value>,
+    verified_at: Option<Instant>,
 }
 
 fn down(e: &Option<Fail>) -> bool {
@@ -559,6 +566,10 @@ fn view(g: &Got, l: Lang) -> View {
             .diag
             .as_ref()
             .and_then(|d| slow_view(&d["slow_signal"], l)),
+        restore: g
+            .verified
+            .as_ref()
+            .and_then(|v| restore::view(v, l)),
     };
     if down {
         v.tone = "bad";
@@ -736,6 +747,21 @@ impl Poll {
             }
             Err(e) => self.got.err = Some(e),
         }
+        // the verified set reads the radio: every 15 s, every step while a restore runs
+        let restoring = self.got.verified.as_ref().is_some_and(|v| {
+            v["progress"].is_object() && v["progress"]["end"].is_null()
+        });
+        if restoring
+            || self
+                .got
+                .verified_at
+                .is_none_or(|t| t.elapsed() >= Duration::from_secs(15))
+        {
+            if let Ok(v) = crate::agent::get(app, &self.who, "/api/verified").await {
+                self.got.verified = Some(v);
+                self.got.verified_at = Some(Instant::now());
+            }
+        }
         // roaming decides the two-press speed test (same key as the home page), every 30 s
         if self
             .roam_at
@@ -774,6 +800,8 @@ struct Page {
     leaves: Vec<(String, String)>,
     /// Nothing to show from the last 10 minutes: the page may start a run by itself.
     idle: bool,
+    /// The restore's write area (its dialog), outside the streamed parts.
+    rs_op: String,
 }
 
 impl Page {
@@ -802,6 +830,7 @@ pub async fn page(State(app): State<Shared>, req: axum::extract::Request) -> Res
         shell,
         leaves: p.leaves(),
         idle,
+        rs_op: restore::area(ctx.lang, ctx.remote, &crate::write::Phase::Idle),
     }
     .render()
     .unwrap();
@@ -1107,6 +1136,91 @@ pub async fn approve(
     };
     let _ = app.kick.send(PATH);
     one(html)
+}
+
+/// 「恢复上次能用的设置」: the core checks again and runs it step by step; progress comes back
+/// through the page's own stream.
+pub async fn restore(
+    State(app): State<Shared>,
+    req: axum::extract::Request,
+) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let ctx = crate::topbar::Ctx::of_request(&req, PATH);
+    let l = ctx.lang;
+    let body = json!({
+        "action": "verified.restore",
+        "params": {},
+        "source": "web",
+        "op_id": crate::write::next_op_id(),
+    });
+    let r = app
+        .http
+        .post(&app.control_url)
+        .json(&crate::pin::stamp(&body))
+        .timeout(APPROVE_TIMEOUT)
+        .send()
+        .await;
+    let reply = match r {
+        Err(e) if e.is_connect() => Err(true),
+        Err(_) => Err(false),
+        Ok(r) => r.json::<Value>().await.map_err(|_| false),
+    };
+    let html = match reply {
+        Ok(v) if v["ok"] == true => note("", l.pick("Restoring step by step…", "正在逐项恢复…")),
+        Ok(v) => note(
+            "warn",
+            match v["error"].as_str().unwrap_or("") {
+                "already_there" => l.pick(
+                    "Already the last set that worked",
+                    "现在就是上次能用的那一套",
+                ),
+                "txn_active" | "busy" => l.pick(
+                    "Another change is running; try again later",
+                    "另一项改动正在进行，稍后再试",
+                ),
+                "no_record" => l.pick(
+                    "Nothing recorded for this card here",
+                    "这张卡在这里没有记录",
+                ),
+                "no_country" => l.pick(
+                    "The current country can't be read",
+                    "读不到现在在哪个国家",
+                ),
+                "session_active" => l.pick(
+                    "A guard session holds the network now; try again later",
+                    "现在有守护会话占着网络，稍后再试",
+                ),
+                _ => l.pick("Not run", "没有执行"),
+            },
+        ),
+        Err(true) => note("bad", l.pick("can't reach the core service", "连不上核心服务")),
+        Err(false) => note(
+            "warn",
+            l.pick(
+                "No answer from the core; see Changes for whether it ran",
+                "核心没有回答；是否执行了请看「变更」",
+            ),
+        ),
+    };
+    let _ = app.kick.send(PATH);
+    // the dialog closes with the answer
+    one(restore::area(l, ctx.remote, &crate::write::Phase::Idle) + &html)
+}
+
+/// The restore's dialog (tier 3, with the remote warning).
+pub async fn restore_ask(
+    req: axum::extract::Request,
+) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let ctx = crate::topbar::Ctx::of_request(&req, PATH);
+    let c = restore::confirm(ctx.lang);
+    one(restore::area(ctx.lang, ctx.remote, &crate::write::Phase::Ask(c)))
+}
+
+/// Cancel / Esc (and a lost reply: the progress shows on the page anyway).
+pub async fn restore_cancel(
+    req: axum::extract::Request,
+) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let ctx = crate::topbar::Ctx::of_request(&req, PATH);
+    one(restore::area(ctx.lang, ctx.remote, &crate::write::Phase::Idle))
 }
 
 /// Retry while the agent is not responding: read again now.

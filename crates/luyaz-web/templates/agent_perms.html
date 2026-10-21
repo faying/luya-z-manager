@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
+<div class="pg-col">
+<p class="nd-body">{{ l.pick("What the AI agent may read and change on this device. This page only shows it; permissions are set in the files on the device.", "AI 代理在这台设备上能看什么、能改什么。这页只显示；权限在设备上的文件里改。") }}</p>
+<section class="nd-status nd-status--{% if v.can_act %}warn{% elif v.on %}ok{% else %}neutral{% endif %}"><div class="nd-status__main"><div class="nd-status__state" role="status"><span>{% if v.can_act %}{{ l.pick("The agent can read and make changes", "代理可以读取，也可以改动") }}{% elif v.on %}{{ l.pick("The agent can only read", "代理只能读取") }}{% else %}{{ l.pick("The agent interface is off (no token)", "代理接口关闭（没有令牌）") }}{% endif %}</span></div>
+{% if let Some(c) = v.changed %}<div class="nd-status__reason"><span>{{ l.pick("Permission files last changed", "权限文件上次修改") }} <span class="nd-mono" data-data>{{ c }}</span></span></div>{% endif %}</div></section>
+
+<section aria-labelledby="ap-tok-t"><h2 id="ap-tok-t" class="nd-group-title">{{ l.pick("Tokens", "令牌") }}</h2>
+<div class="nd-group">{% for t in v.tokens %}<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label nd-mono" data-data>{{ t.name }}</span></span><span class="nd-row__value">{% if t.act %}{{ l.pick("Read and change", "读取和改动") }}{% else %}{{ l.pick("Read only", "只读") }}{% endif %}</span></div>{% else %}<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("No tokens", "没有令牌") }}</span></span><span class="nd-row__value">—</span></div>{% endfor %}</div>
+<p class="nd-aux px-1">/data/luyaz/agent.token · {{ l.pick("the tokens themselves are never shown", "令牌本身不显示") }}</p></section>
+
+<section aria-labelledby="ap-src-t"><h2 id="ap-src-t" class="nd-group-title">{{ l.pick("Allowed addresses", "允许的地址") }}</h2>
+<div class="nd-group">
+<div class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("May read", "可以读取") }}</span><span class="nd-row__sub block nd-mono pg-breakall" data-data>{{ v.built_in }}{% for c in v.read_from %} · {{ c }}{% endfor %}</span></span></div>
+<div class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("May change", "可以改动") }}</span><span class="nd-row__sub block nd-mono pg-breakall" data-data>{% if v.act_from.is_empty() %}{{ l.pick("none", "没有") }}{% else %}{{ v.act_from.join(" · ") }}{% endif %}</span></span></div>
+</div>
+<p class="nd-aux px-1">/data/luyaz/agent.allow · /data/luyaz/agent.act-allow</p></section>
+
+<section aria-labelledby="ap-scope-t"><h2 id="ap-scope-t" class="nd-group-title">{{ l.pick("What it may change", "可以改的范围") }}</h2>
+<div class="nd-group">{% for s in v.scopes %}<a class="nd-row nd-row--two" href="{{ s.href }}"><span class="nd-row__text"><span class="nd-row__label">{{ s.label }}</span><span class="nd-row__sub block">{% if v.l == Lang::En %}At most once every {{ v.limit_min }} min · no automatic rollback{% else %}每 {{ v.limit_min }} 分钟最多一次 · 不能自动退回{% endif %}</span></span><span class="nd-row__value">{% if let Some(t) = s.last %}{{ l.pick("Last", "上次") }} <span class="nd-mono" data-data>{{ t }}</span>{% else %}{{ l.pick("Never", "没改过") }}{% endif %}</span></a>{% endfor %}</div>
+<p class="nd-aux px-1">{{ l.pick("Neither rolls back by itself: if a change breaks something, set it back on that page. Nothing else (Wi-Fi, eSIM, bands, reboot) is open to the agent.", "这两项改了都不会自动退回：改坏了要你在对应页面改回来。Wi-Fi、eSIM、锁频、重启等其他设置代理都不能改。") }}</p></section>
+</div>
+{% endblock %}

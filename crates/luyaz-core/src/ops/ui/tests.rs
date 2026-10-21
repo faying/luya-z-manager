@@ -610,3 +610,12 @@ fn chill_and_non_rollbackable_ui_words() {
     assert_eq!(v["undo"]["ok"], false);
     assert_eq!(s(&v["undo"], "why_zh"), "没有旧值可退回");
 }
+
+#[test]
+fn dual_sim_words_say_mode_and_slot() {
+    use serde_json::json;
+    let w = |v| value_words(super::super::spec::DUAL_SIM, &v);
+    assert_eq!(w(json!({"mode":"single","active_slot":1})).0, "单卡 · 卡槽 1");
+    assert_eq!(w(json!({"mode":"dual","smart":false,"active_slot":2})).1, "Dual SIM · main slot 2");
+    assert_eq!(w(json!({"mode":"dual","smart":true})).0, "双卡 · 智能切换");
+}

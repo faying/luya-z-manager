@@ -6,11 +6,11 @@
 // SPDX-License-Identifier: MIT
 
 use super::http::{self, read_into, wait};
-use super::util::{find, jget, mono_ms32, text, trunc, wall};
+use super::util::{find, jget, jstr, mono_ms32, text, trunc, wall};
 use crate::json;
 use crate::lang::tr;
 use crate::logic::{self, Ctl};
-use devui_model::{data_notice_t, devui_data_t, devui_data_t_client, devui_data_t_sms};
+use devui_model::{data_notice_t, devui_data_t, devui_data_t_client, devui_data_t_sms, sim_dual_t, sim_slot_t};
 use std::os::fd::{AsRawFd, OwnedFd};
 
 pub const SMS_MAX: usize = 32;
@@ -141,7 +141,7 @@ impl Default for CoreLink {
 // ---- the old /state parser ----
 
 /// Shown only; English names from manager docs/ui-glossary.md §8.
-fn mainland_operator_cn(mcc: i32, mnc: i32, raw: &str) -> Option<&'static str> {
+pub(crate) fn mainland_operator_cn(mcc: i32, mnc: i32, raw: &str) -> Option<&'static str> {
     if mcc == 460 {
         match mnc {
             0 | 2 | 4 | 7 | 8 => return Some(tr("中国移动")),
@@ -156,6 +156,27 @@ fn mainland_operator_cn(mcc: i32, mnc: i32, raw: &str) -> Option<&'static str> {
         "China Unicom" | "CUCC" => Some(tr("中国联通")),
         "China Telecom" | "CTCC" => Some(tr("中国电信")),
         "China Broadnet" | "China Broadcasting Network" => Some(tr("中国广电")),
+        _ => None,
+    }
+}
+
+/// The logo file stem for a mainland operator (operator-logos/<slug>.png), same plan as
+/// mainland_operator_cn; the core's operator_logo has the same 460 rows (the standby slot has no screen view).
+pub(crate) fn mainland_logo(mcc: i32, mnc: i32, raw: &str) -> Option<&'static str> {
+    if mcc == 460 {
+        match mnc {
+            0 | 2 | 4 | 7 | 8 => return Some("china-mobile"),
+            1 | 6 | 9 => return Some("china-unicom"),
+            3 | 5 | 11 => return Some("china-telecom"),
+            15 => return Some("china-broadnet"),
+            _ => {}
+        }
+    }
+    match raw {
+        "China Mobile" | "CMCC" => Some("china-mobile"),
+        "China Unicom" | "CUCC" => Some("china-unicom"),
+        "China Telecom" | "CTCC" => Some("china-telecom"),
+        "China Broadnet" | "China Broadcasting Network" => Some("china-broadnet"),
         _ => None,
     }
 }
@@ -445,12 +466,59 @@ pub fn parse_snapshot(buf: &[u8]) -> Option<devui_data_t> {
         d.sim_imsi = gs(&sec, "imsi", 20);
         d.sim_msisdn = gs(&sec, "msisdn", 24);
         d.sim_spn = gs(&sec, "spn", 32);
+        d.sim_dual = json::get(&sec, "dual", 2048).and_then(|o| sim_dual(&o));
     }
     if force_hsr() {
         d.hsr = 1;
     }
     d.valid = 1;
     Some(d)
+}
+
+/// `sim.dual` (absent or null on a one-slot device).
+fn sim_dual(o: &[u8]) -> Option<sim_dual_t> {
+    if o.first() != Some(&b'{') {
+        return None;
+    }
+    let flag = |o: &[u8], k: &str| match json::get(o, k, 8).as_deref() {
+        Some(b"true") => 1,
+        Some(b"false") => 0,
+        _ => -1,
+    };
+    let mut slots = Vec::new();
+    if let Some(arr) = json::get(o, "slots", 2048) {
+        let mut p = 0;
+        while let Some((s, next)) = json::arr_next(&arr, p, 768) {
+            let sig = json::get(&s, "signal", 256).filter(|g| g.first() == Some(&b'{'));
+            let gi = |k: &str| sig.as_deref().map_or(0, |g| json::get_int(g, k, 0) as i32);
+            slots.push(sim_slot_t {
+                state: jstr(&s, "state", 12),
+                role: jstr(&s, "role", 10),
+                has_sig: sig.is_some() as i32,
+                sig_rat: sig.as_deref().map_or_else(String::new, |g| jstr(g, "rat", 8)),
+                sig_rsrp: gi("rsrp"),
+                sig_rsrq: gi("rsrq"),
+                sig_snr: sig.as_deref().map_or_else(String::new, |g| jstr(g, "snr", 8)),
+                sig_bars: gi("bars"),
+                slot: json::get_int(&s, "slot", 0) as i32,
+                provisioned: (flag(&s, "provisioned") == 1) as i32,
+                present: (flag(&s, "present") == 1) as i32,
+                ready: flag(&s, "ready"),
+                operator: jstr(&s, "operator", 32),
+                mcc: jstr(&s, "mcc", 8),
+                mnc: jstr(&s, "mnc", 8),
+                iccid_tail: jstr(&s, "iccid_tail", 8),
+            });
+            p = next;
+        }
+    }
+    Some(sim_dual_t {
+        mode: jstr(o, "mode", 16),
+        smart: (flag(o, "smart") == 1) as i32,
+        active_slot: json::get_int(o, "active_slot", 0) as i32,
+        switching: (flag(o, "switching") == 1) as i32,
+        slots,
+    })
 }
 
 /// The empty struct data_refresh hands out when there is none.

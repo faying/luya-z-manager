@@ -233,6 +233,7 @@ pub const SESSION_BLOCKS: &[&str] = &[
     "apn.delete",
     "modem.online",
     "apn.set_pdp_type",
+    "sim.dual",
 ];
 
 /// 事务准入用的 Gate（§4.3 E1）：和诊断、Finding 探测、测速、搜网共用的那一个。

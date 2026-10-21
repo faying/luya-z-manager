@@ -9,6 +9,8 @@
 <div class="hm-col">
 <div class="hm-o1">{{ status|safe }}</div>
 <div id="hm-why" class="hm-o1" hidden></div>
+<section id="hm-dual" class="hm-o1" hidden></section>
+{{ poller|safe }}
 <section id="hm-readouts" class="nd-wall nd-wall--3 hm-wall hm-o3" aria-label="{{ l.pick("Readings", "读数") }}">
 <i id="hm-fl-ro" class="hm-flag" hidden></i>
 <div class="nd-readout nd-readout--full nd-readout--hero"><div class="nd-readout__label">{{ l.pick("Aggregate bandwidth · MHz", "聚合带宽 · MHz") }}</div><div id="ro-bw" class="nd-readout__value"><span class="nd-skel" aria-label="…"></span></div><div id="ro-bw-w" class="nd-readout__sub" hidden></div></div>

@@ -112,6 +112,7 @@ impl Alerts {
             } else if self.hc.len() < HEALTH_MAX && (level == "warn" || level == "bad") {
                 self.hc.push(health_item_t {
                     bad: (level == "bad") as i32,
+                    note: 0,
                     id: jstr(obj, "id", 24),
                     label: json_text(obj, "label", 48),
                     detail: json_text(obj, "detail", 320),
@@ -122,10 +123,32 @@ impl Alerts {
         self.hc_n = self.hc.len() as i32;
     }
 
+    /// notices: [{id,label,detail}] after the checks: the core's read-only scenarios worth a
+    /// word (hot battery, long idle). Never counted as checks.
+    pub fn parse_notices(&mut self, data: &[u8]) {
+        let Some(p) = find(data, b"\"notices\"", 0).and_then(|p| find_byte(data, b'[', p)) else { return };
+        for o in objects(&data[p..]) {
+            if self.hc.len() >= HEALTH_MAX {
+                break;
+            }
+            self.hc.push(health_item_t {
+                bad: 0,
+                note: 1,
+                id: jstr(o, "id", 24),
+                label: json_text(o, "label", 48),
+                detail: json_text(o, "detail", 320),
+            });
+        }
+        self.hc_n = self.hc.len() as i32;
+    }
+
     fn load_health(&mut self, agent: &mut CoreApi) {
         let (code, b) = agent.api("GET", "/api/health", None, AL_RESP_MAX);
         match b.filter(|_| code == 200).and_then(|b| json::get(&b, "data", AL_RESP_MAX)) {
-            Some(d) => self.parse_checks(&d),
+            Some(d) => {
+                self.parse_checks(&d);
+                self.parse_notices(&d);
+            }
             None => {
                 // never read: say so instead of 读取中 forever; read before: keep it
                 if self.hc_n == -1 {

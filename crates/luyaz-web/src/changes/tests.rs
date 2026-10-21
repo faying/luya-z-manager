@@ -504,8 +504,17 @@ fn want_keys_are_safe() {
 #[test]
 fn agent_rows_say_who_and_rollback() {
     let t = json!({"t": "2026-10-20 10:00:00", "source": "mcp", "op_id": "mcp-1", "rollback_to": "a"});
-    assert_eq!(agent_label(&t, Lang::Zh).as_deref(), Some("由 AI 代理改动 · 可自动回滚"));
+    assert_eq!(agent_label(&t, Lang::Zh).as_deref(), Some("由 AI 代理改动（它自己的 act 授权） · 可自动回滚"));
     let p = json!({"t": "2026-10-20 10:00:00", "source": "mcp"});
-    assert_eq!(row(&p, Lang::En).agent.as_deref(), Some("Changed by the AI agent · no automatic rollback"));
+    assert_eq!(
+        row(&p, Lang::En).agent.as_deref(),
+        Some("Changed by the AI agent (its own act permission) · no automatic rollback")
+    );
+    let m = json!({"source": "mcp", "approved_by": "mcp"});
+    assert!(agent_label(&m, Lang::Zh).unwrap().contains("act 授权"));
+    let w = json!({"source": "mcp", "approved_by": "web", "rollback_to": "a"});
+    assert_eq!(agent_label(&w, Lang::Zh).as_deref(), Some("由 AI 代理提议、你在网页批准 · 可自动回滚"));
+    let s = json!({"source": "mcp", "approved_by": "screen"});
+    assert!(agent_label(&s, Lang::En).unwrap().starts_with("Proposed by the AI agent, approved by you on the screen"));
     assert!(row(&json!({"source": "web"}), Lang::Zh).agent.is_none());
 }

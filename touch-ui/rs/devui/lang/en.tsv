@@ -57,6 +57,7 @@ tailscale|节点	Peers
 ■ 体检：异常	■ Health check: problem
 ▲ %d 项注意	▲ %d warning|▲ %d warnings
 ▲ 体检：需要注意	▲ Health check: needs attention
+● 提示	● Note
 ● %d 项检查都正常	● All %d checks OK
 ● 一切正常	● All good
 上传中…	Uploading…
@@ -677,3 +678,44 @@ U60 在充电	U60 charging
 
 正在检查记住的方式：%s	Checking the remembered USB choice: %s
 自动切换未完成 · 请手动选择 USB 用法	Automatic USB change did not complete; choose a USB use manually
+ · 上限 %d/%d Mbps	 · max %d/%d Mbps
+（旧）	 (old)
+已切换，数据还没恢复	Switched, data not back yet
+卡片还在稳定，列表稍后更新	Card settling, list updates soon
+双卡	Dual SIM
+只用卡槽 1（插拔卡）	Slot 1 only (removable)
+只用卡槽 2（内置卡）	Slot 2 only (built-in)
+双卡 · 主卡 卡槽 1	Dual · main slot 1
+双卡 · 主卡 卡槽 2	Dual · main slot 2
+双卡 · 智能切换	Dual · smart switching
+单卡 · 卡槽 1	Single · slot 1
+单卡 · 卡槽 2	Single · slot 2
+没启用	off
+正在改别的设置，等它做完	Another change is running, wait for it
+设备正在自己换卡，等一下	The device is switching cards itself, wait a moment
+已经是这样了	Already set
+卡槽 %d 没有卡	No SIM in slot %d
+没发出去：连不上核心，等一下再试	Not sent: can't reach the core, try again shortly
+设备没回话，看「改动记录」	No answer from the device, see Change log
+设备正在自己换卡…	The device is switching cards…
+切换会断网约 10 秒，点两次确认	Switching cuts data for about 10 s, tap twice
+再点一次切换 · 断网约 10 秒 · 可能算漫游	Tap again · ~10 s offline · may roam here
+再点一次切换 · 断网约 10 秒	Tap again · ~10 s offline
+两张卡都开，上网用卡槽 1	Both on, data on slot 1
+两张卡都开，上网用卡槽 2	Both on, data on slot 2
+两张卡都开，设备自己选上网的卡	Both on, the device picks the data card
+恢复上次能用的设置	Restore the last working setup
+正在恢复，稍等	Restoring, please wait
+已发送，逐项恢复	Sent; restoring item by item
+正在恢复 %d/%d…	Restoring %d/%d…
+会断网一阵，再按一次	Cuts data for a while; tap again
+逐项改回：%s	Setting back: %s
+已恢复，网络通了	Restored; the connection works
+已恢复，但网络还是不通	Restored, but still no connection
+停在「%s」，已改的保持不变	Stopped at “%s”; items already done stay
+和上次能用时不同：%s。逐项改回，每项都会断网一阵	Differs from when it last worked: %s. Set back item by item; data drops at each
+LTE 锁小区	LTE cell lock
+NR 锁小区	NR cell lock
+LTE 频段	LTE bands
+NR 频段	NR bands
+其他设置	Other settings

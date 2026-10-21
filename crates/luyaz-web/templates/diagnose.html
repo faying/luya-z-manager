@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
 {% block main %}
-<div class="dg-page" data-signals="{armed: false, rd: false}"{% if idle %} data-init="(new URLSearchParams(location.search).get('start') === '1' || (document.referrer.startsWith(location.origin + '/') && new URL(document.referrer).pathname !== location.pathname && performance.getEntriesByType('navigation')[0]?.type !== 'reload')) && @post('/tools/diagnose/start?auto=true', {retryMaxCount: 0})"{% endif %}>
+<div class="dg-page" data-signals="{armed: false, rd: false, rsapn: false}"{% if idle %} data-init="(new URLSearchParams(location.search).get('start') === '1' || (document.referrer.startsWith(location.origin + '/') && new URL(document.referrer).pathname !== location.pathname && performance.getEntriesByType('navigation')[0]?.type !== 'reload')) && @post('/tools/diagnose/start?auto=true', {retryMaxCount: 0})"{% endif %}>
 <div class="mb-4 mt-2 flex flex-wrap items-center dg-head"><h1 class="nd-title flex-1">{{ shell.title() }}</h1>{{ self.leaf("dg-again")|safe }}</div>
 <div class="grid gap-6">
 <section aria-label="{{ shell.t("Diagnosis status", "诊断状态") }}">
@@ -10,6 +10,7 @@
 </section>
 {{ self.leaf("dg-finding")|safe }}
 {{ self.leaf("dg-body")|safe }}
+{{ rs_op|safe }}
 </div>
 </div>
 {% endblock %}

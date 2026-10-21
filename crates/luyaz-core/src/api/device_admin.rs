@@ -294,7 +294,7 @@ async fn fast_boot_set(State(c): State<Compat>, req: Request) -> Response {
 /// than one that says it failed.
 async fn poweroff(State(c): State<Compat>, req: Request) -> Response {
     let source = charge::source(&req);
-    let _ = tokio::task::spawn_blocking(|| std::process::Command::new("sync").status()).await;
+    super::sync_disks().await;
     let (status, body) = c
         .writer(source)
         .send("device.poweroff", &json!({}))

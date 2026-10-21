@@ -35,6 +35,7 @@ use crate::pages::{Shared, split_leaves};
 use crate::view::{self, Readout, js_num, num};
 
 mod chill;
+pub(crate) mod poller;
 
 const PATH: &str = "/";
 
@@ -43,6 +44,7 @@ pub fn routes() -> Router<Shared> {
         .route(PATH, get(page))
         .route("/home/events", get(events));
     let r = chill::routes(r);
+    let r = poller::routes(r);
     r
 }
 
@@ -53,6 +55,7 @@ struct Page {
     l: Lang,
     status: String,
     chill: String,
+    poller: String,
 }
 
 async fn page(State(app): State<Shared>, req: Request) -> Response {
@@ -73,6 +76,7 @@ async fn page(State(app): State<Shared>, req: Request) -> Response {
         l: ctx.lang,
         status,
         chill: chill::frame(ctx.lang),
+        poller: poller::frame(),
     }
     .render()
     .unwrap();
@@ -275,6 +279,8 @@ struct View {
     scene: Scene,
     ts: String,
     ts_stale: bool,
+    /// The 「双卡」 section (home_dual.rs); a hidden empty section outside dual mode.
+    dual: String,
 }
 
 #[derive(Template)]
@@ -297,6 +303,7 @@ struct Poll {
     /// Operator logo files (`--logo-dir`), copied from the app at each render.
     logo_dir: std::path::PathBuf,
     chill: chill::Chill,
+    poller: poller::Poller,
 }
 
 impl Poll {
@@ -312,6 +319,7 @@ impl Poll {
             ca_shape: None,
             logo_dir: std::path::PathBuf::new(),
             chill: chill::Chill::new(),
+            poller: poller::Poller::new(),
         }
     }
 
@@ -322,7 +330,7 @@ impl Poll {
             .min(self.ts.next())
             .min(self.ni.next())
             .min(self.wifi.next());
-        let e = e.min(self.chill.next());
+        let e = e.min(self.chill.next()).min(self.poller.next());
         e
     }
 
@@ -335,6 +343,7 @@ impl Poll {
         #[allow(unused_mut)]
         let mut out = split_leaves(&Leaves { v: &v }.render().unwrap());
         out.extend(self.chill.leaves(app, self.l, now));
+        out.extend(self.poller.leaves(self.l));
         out
     }
 
@@ -382,11 +391,20 @@ impl Poll {
                 sv.rsrp.word.clone()
             },
         };
+        // dual mode: the top readouts are the data slot's
+        let dual_tag = crate::home_dual::data_tag(st, l);
+        let tagged = |r: Readout| match &dual_tag {
+            Some(t) if !r.word.is_empty() => Readout { word: format!("{t} · {}", r.word), ..r },
+            Some(t) if r.value.is_some() => Readout { word: t.clone(), ..r },
+            _ => r,
+        };
+        let rsrp = tagged(rsrp);
         let sinr = Readout {
             value: if sig_loading { None } else { sv.sinr.value.clone() },
             empty: sv.sinr.empty,
             word: if sig_loading { String::new() } else { sv.sinr.word.clone() },
         };
+        let sinr = tagged(sinr);
         let sig_stale = seen && sv.stale;
         let verdict = st
             .side
@@ -819,6 +837,7 @@ impl Poll {
             scene,
             ts_stale: self.ts.stale(now),
             ts,
+            dual: crate::home_dual::leaf(st, l, &self.logo_dir),
         }
     }
 }
@@ -835,6 +854,7 @@ impl Polled for Poll {
             fetch(app, &self.who, self.wifi.due(now), "/api/wifi/status"),
         );
         self.chill.poll(app, &self.who, now, kicked).await;
+        self.poller.poll(app, &self.who, now, kicked).await;
         let at = Instant::now();
         if let Some(r) = screen {
             self.screen.set(at, r);
@@ -862,7 +882,7 @@ impl Polled for Poll {
         matches!(
             block,
             "signal" | "live" | "battery" | "clients" | "wifi" | "wlan" | "sms" | "interfaces"
-                | "uci_device_info" | "side"
+                | "uci_device_info" | "side" | "sim"
         )
     }
 
@@ -1180,6 +1200,7 @@ mod tests {
             l: Lang::En,
             status: String::new(),
             chill: chill::frame(Lang::En),
+            poller: poller::frame(),
         }
         .render()
         .unwrap();
@@ -1191,6 +1212,32 @@ mod tests {
             assert!(frame.contains(&format!("id=\"{id}\"")), "the frame lacks #{id}");
         }
         assert_eq!(cjk(&ls.iter().map(|(_, h)| h.as_str()).collect::<String>()), Vec::<char>::new());
+    }
+
+    #[test]
+    fn dual_mode_adds_the_two_card_group_and_tags_the_readouts() {
+        let hub = app_hub();
+        hub.set_link_for_test(Link::Live);
+        let mut p = poll();
+        let v = hub.read(|st| p.view(st, Instant::now()));
+        assert!(v.dual.contains("hidden") && !v.dual.contains("hds-"), "single slot: empty");
+        assert_eq!(v.rsrp.word, "RSRQ -11 · Good");
+        let sim = |mode: &str| json!({"state":"sim ready","dual":{"mode":mode,"active_slot":1,"smart":true,"switching":false,
+            "smart_rule":{"rsrp":[-115,-108,-105],"snr":[0,-3,5],"period_s":120},
+            "slots":[
+                {"slot":2,"operator":"CMCC","mcc":"460","mnc":"13","state":"ready","role":"standby","signal":{"rat":"nr","rsrp":-107,"rsrq":-14,"snr":"1.5","bars":3,"at":100}},
+                {"slot":1,"operator":"CUCC","mcc":"460","mnc":"01","state":"ready","role":"data","signal":{"rat":"nr","rsrp":-84,"rsrq":-11,"snr":"18.7","bars":5,"at":198}}]}});
+        // the block's observed_at is its revision (200): slot 2's reading is 100 s old
+        feed(&hub, "block", block("sim", 200, sim("dual")));
+        let v = hub.read(|st| p.view(st, Instant::now()));
+        let (a, b) = (v.dual.find("hds-1").unwrap(), v.dual.find("hds-2").unwrap());
+        assert!(a < b, "data card first");
+        assert!(v.dual.contains("China Unicom") && v.dual.contains("China Mobile") && v.dual.contains("In use · auto switch"));
+        assert!(v.dual.contains(">5G SA<") && v.dual.contains(">Standby<") && !v.dual.contains("dBm") && !v.dual.contains("SIM "));
+        assert_eq!(v.rsrp.word, "China Unicom · RSRQ -11 · Good");
+        feed(&hub, "block", block("sim", 201, sim("single")));
+        let v = hub.read(|st| p.view(st, Instant::now()));
+        assert!(v.dual.contains("hidden") && v.rsrp.word == "RSRQ -11 · Good", "single mode: unchanged");
     }
 
     fn cjk(s: &str) -> Vec<char> {

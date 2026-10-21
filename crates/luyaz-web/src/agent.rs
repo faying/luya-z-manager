@@ -77,6 +77,8 @@ const ON_U60D: &[&str] = &[
     // component versions, installed and newest (u60d versions.rs; /v2/versions, not under /api)
     "/versions",
     "/versions/check",
+    // passive dual-SIM log, data-card changes (u60d dsds_log.rs)
+    "/dual/switches",
     "/api/netinfo",
     "/api/netinfo/scan",
     // 8d-2: "use for this SIM" on /router/apn (compat ops::apn_use)
@@ -85,6 +87,8 @@ const ON_U60D: &[&str] = &[
     "/api/modem/register",
     "/api/modem/netselect/auto",
     "/api/speedtest/",
+    // power.tailnet_poller events and allow list (u60d poller.rs)
+    "/api/poller",
     "/api/diagnose",
     "/api/diagnose/",
     "/api/cpu",

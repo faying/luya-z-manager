@@ -14,7 +14,7 @@ use crate::pages::Shared;
 /// "MCC-MNC" (3+3 digits) → slug.
 fn slug_of(plmn: &str) -> Option<&'static str> {
     Some(match plmn {
-        "460-000" | "460-002" | "460-004" | "460-007" | "460-008" => "china-mobile",
+        "460-000" | "460-002" | "460-004" | "460-007" | "460-008" | "460-013" => "china-mobile",
         "460-001" | "460-006" | "460-009" | "454-007" => "china-unicom",
         "460-003" | "460-005" | "460-011" | "454-031" | "455-007" => "china-telecom",
         "460-015" => "china-broadnet",

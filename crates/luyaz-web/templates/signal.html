@@ -11,6 +11,7 @@
 <div class="grid content-start gap-4">
 {{ cell|safe }}
 <section><h2 class="nd-group-title">{{ shell.t("Mobile data", "移动数据") }}</h2>{{ roam|safe }}</section>
+{{ switches|safe }}
 <section><div class="nd-group"><a class="nd-row" href="/bandlock">{{ crate::shell::icon("CellTower", false, 20, "nd-row__icon")|safe }}<span class="nd-row__text"><span class="nd-row__label">{{ shell.t("Band lock", "去锁频") }}</span></span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a><a class="nd-row" href="/router/signal-detect">{{ crate::shell::icon("Broadcast", false, 20, "nd-row__icon")|safe }}<span class="nd-row__text"><span class="nd-row__label">{{ shell.t("Signal detect", "信号检测") }}</span></span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a></div></section>
 </div>
 </div>

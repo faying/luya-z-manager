@@ -17,6 +17,7 @@
 mod crashwatch;
 mod diag;
 mod doctor;
+mod dsds_log;
 mod device_profile;
 mod envelope;
 #[allow(dead_code)]
@@ -25,9 +26,12 @@ mod ledger;
 mod longterm;
 mod nl;
 mod o2;
+mod verified;
 mod paths;
 mod peer_pid;
+mod poller;
 mod procfs;
+mod qmi_nas;
 mod record;
 mod sample;
 mod scorecard;
@@ -316,6 +320,10 @@ fn main() {
     // serve's first side effect (svcwatch, flock, pid file, crash markers, migration, core log)
     if raw.get(1).map(String::as_str) == Some("doctor") {
         std::process::exit(doctor::main(&raw[2..]));
+    }
+    // `<core> qmi-signal [sub…]`: one read-only QMI NAS signal read per subscription
+    if raw.get(1).map(String::as_str) == Some("qmi-signal") {
+        std::process::exit(qmi_nas::main(&raw[2..]));
     }
     // `<core> o2-check <iface> <source-ip>`: one read-only bound HTTPS run (O2)
     if raw.get(1).map(String::as_str) == Some("o2-check") {

@@ -116,6 +116,8 @@ struct SignalPage {
     trend: String,
     cell: String,
     roam: String,
+    /// 「换卡记录」, empty outside dual mode
+    switches: String,
 }
 
 /// The status block alone, for pages that show the signal verdict next to other things (home).
@@ -273,6 +275,21 @@ fn roam_confirm(l: Lang, target: bool) -> write::Confirm {
 pub async fn signal(State(app): State<Shared>, req: axum::extract::Request) -> Response {
     let headers = req.headers().clone();
     let ctx = crate::topbar::Ctx::of_request(&req, "/signal");
+    // 「换卡记录」 (dual_switches.rs): dual mode only, read once per page load
+    let rule = app.hub.read(|st| crate::home_dual::dual(st).map(|(d, _)| crate::dual_switches::Rule::of(d)));
+    let switches = match rule {
+        None => String::new(),
+        Some(rule) => {
+            let who = crate::agent::Caller::of(&app, &req);
+            let got = tokio::time::timeout(
+                Duration::from_secs(3),
+                crate::agent::get(&app, &who, "/dual/switches?days=14"),
+            )
+            .await;
+            let reply = got.ok().and_then(Result::ok);
+            crate::dual_switches::section(reply.as_ref(), rule, ctx.lang)
+        }
+    };
     let Render {
         generation,
         frags: mut f,
@@ -293,6 +310,7 @@ pub async fn signal(State(app): State<Shared>, req: axum::extract::Request) -> R
         trend: f.remove("sig-trend").unwrap(),
         cell: f.remove("sig-cell").unwrap(),
         roam: roam_html(ctx.lang, on, false, &write::Phase::Idle),
+        switches,
     }
     .render()
     .unwrap();

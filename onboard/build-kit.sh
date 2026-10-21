@@ -59,8 +59,8 @@ if [ -f "$ONB/kit.local.env" ]; then
 fi
 DEVUI_REPO="${DEVUI_REPO:-$ROOT/touch-ui}"
 # Rust 构建镜像：没指定就按 onboard/build.Dockerfile 现建（和 data-service scripts/build.Dockerfile 同一份，
-# 标签取文件哈希，所以两个仓库共用同一个镜像）。
-if [ -z "${ZIGBUILD_IMAGE:-}" ]; then
+# 标签取文件哈希，所以两个仓库共用同一个镜像）。给了 KIT_ZIGBUILD 就不在本机建。
+if [ -z "${ZIGBUILD_IMAGE:-}" ] && [ -z "${KIT_ZIGBUILD:-}" ]; then
   ZIGBUILD_IMAGE=luyaz-rust-build:$( (shasum -a 256 "$ONB/build.Dockerfile" 2>/dev/null || sha256sum "$ONB/build.Dockerfile") | cut -c1-12)
   docker image inspect "$ZIGBUILD_IMAGE" >/dev/null 2>&1 ||
     docker build -q -t "$ZIGBUILD_IMAGE" -f "$ONB/build.Dockerfile" "$ONB" >/dev/null
@@ -131,11 +131,15 @@ cp "$WORK/usr/sbin/dropbear" "$PL/dropbear"
 
 # zigbuild <profile> <包>：本仓库现编一个 aarch64-musl 程序，打印产物路径。有 cargo-zigbuild 就本机编，
 # 没有走 Docker（同 tools/luyaz ship）。LUYAZ_COMMIT：核心把它当版本号写进长期记录（u60-sentinel.md §17）
+# KIT_ZIGBUILD=<命令>：换个地方编（比如另一台构建机），调用 <命令> <profile> <包> <commit> <产物路径>，
+# 它要把本仓库工作区编出的 aarch64-musl 程序放到 <产物路径>（包 devui = 触屏界面，见下面 devui 一节）
 zigbuild() {
   local head; head=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo 0000000)
   local out="$ROOT/target/aarch64-unknown-linux-musl/$1/$2" log="$WORK/build-$2.log"
   rm -f "$out"   # 编失败时别拿上次的旧产物充数
-  if command -v cargo-zigbuild >/dev/null 2>&1; then
+  if [ -n "${KIT_ZIGBUILD:-}" ]; then
+    $KIT_ZIGBUILD "$1" "$2" "$head" "$out" >"$log" 2>&1
+  elif command -v cargo-zigbuild >/dev/null 2>&1; then
     ( cd "$ROOT" && LUYAZ_COMMIT=$head cargo zigbuild --profile "$1" --target aarch64-unknown-linux-musl -p "$2" ) >"$log" 2>&1
   else
     docker run --rm -v "$ROOT":/repo -v u60-cargo-registry:/usr/local/cargo/registry -v u60-zig-cache:/root/.cache \
@@ -182,7 +186,12 @@ if [ ! -f "$DEVUI_BIN" ]; then
   DEVUI_PREBUILT=0
   case "$DEVUI_BIN" in "$DEVUI_REPO"/out/*) ;; *) die "没有 $DEVUI_BIN" ;; esac
   step "触屏界面还没编：跑 ${DEVUI_REPO}/rs/build.sh device（Docker；源码卷没有就先 rs/setup-src.sh）"
-  { export LUYAZ_RS_IMAGE="${LUYAZ_RS_IMAGE:-$ZIGBUILD_IMAGE}"; "$DEVUI_REPO/rs/setup-src.sh" && "$DEVUI_REPO/rs/build.sh" device "$DEVUI_BIN"; } >/dev/null || die "触屏界面构建失败（单独跑 ${DEVUI_REPO}/rs/build.sh device 看原因）"
+  if [ -n "${KIT_ZIGBUILD:-}" ]; then
+    mkdir -p "$(dirname "$DEVUI_BIN")"
+    $KIT_ZIGBUILD release-device devui "$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo 0000000)" "$DEVUI_BIN" >"$WORK/build-devui.log" 2>&1
+  else
+    { export LUYAZ_RS_IMAGE="${LUYAZ_RS_IMAGE:-$ZIGBUILD_IMAGE}"; "$DEVUI_REPO/rs/setup-src.sh" && "$DEVUI_REPO/rs/build.sh" device "$DEVUI_BIN"; } >/dev/null
+  fi || die "触屏界面构建失败（单独跑 ${DEVUI_REPO}/rs/build.sh device 看原因）"
 fi
 # 触屏界面只有 Rust 版（Phase 10 X5 删了 C 版）：两版启动都打印 pages+chrome built，Rust 版才有 devui/src/
 grep -a -q 'pages+chrome built' "$DEVUI_BIN" || die "$(basename "$DEVUI_BIN") 不是触屏界面"

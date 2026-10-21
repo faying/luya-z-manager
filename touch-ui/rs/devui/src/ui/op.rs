@@ -780,8 +780,13 @@ impl Ui {
     /// that item (replaces the screen's 20 s read-back guess), and its result if that ended
     /// (seen by this screen) at or after tick `since`.
     pub(super) fn op_mode_line(&self, since: u32) -> Option<String> {
+        self.op_item_line("network.mode", since)
+    }
+
+    /// op_mode_line for any item (双卡: `sim.dual`).
+    pub(super) fn op_item_line(&self, item: &str, since: u32) -> Option<String> {
         let (a, l) = (&self.op.view.active, &self.op.view.last);
-        if a.have && a.item == "network.mode" {
+        if a.have && a.item == item {
             let left = self.op_left_ms(a);
             return Some(if left >= 0 && !self.op_stale() {
                 format!("{} · {}", a.say, op_view::fill_clock("{t}", left))
@@ -789,7 +794,7 @@ impl Ui {
                 a.say.clone()
             });
         }
-        if since != 0 && l.have && l.item == "network.mode" && l.op_id == self.op.brief_id && self.op.brief_at.wrapping_sub(since) as i32 >= 0 {
+        if since != 0 && l.have && l.item == item && l.op_id == self.op.brief_id && self.op.brief_at.wrapping_sub(since) as i32 >= 0 {
             return Some(l.say.clone());
         }
         None

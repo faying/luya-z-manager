@@ -2108,12 +2108,238 @@
       "type": "object"
     },
     "sim": {
+      "$defs": {
+        "SimDual": {
+          "properties": {
+            "active_slot": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "mode": {
+              "description": "\"single\" | \"dual\" (both slots provisioned)",
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "slots": {
+              "items": {
+                "$ref": "#/$defs/SimSlot"
+              },
+              "type": "array",
+              "x-u60-level": "nested"
+            },
+            "smart": {
+              "description": "UCI `st_auto_switch_card_flag` (absent = off)",
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "smart_rule": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SimSmartRule"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Smart switching rule, UCI `zte_nwinfo.dsds` (absent when not set)",
+              "x-u60-level": "nested"
+            },
+            "switching": {
+              "description": "`switch_card_status == \"0\"`: the firmware is switching on its own",
+              "type": "boolean",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "smart",
+            "mode",
+            "active_slot",
+            "switching",
+            "slots"
+          ],
+          "type": "object"
+        },
+        "SimSignal": {
+          "properties": {
+            "at": {
+              "description": "device epoch seconds of the reading (device clock, see `clock.utc_offset`)",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "bars": {
+              "description": "0..5",
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "rat": {
+              "description": "\"nr\" | \"lte\"",
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "rsrp": {
+              "description": "dBm",
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "rsrq": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "snr": {
+              "description": "dB, one decimal (like `signal.nr_snr`)",
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "rat",
+            "rsrp",
+            "bars",
+            "at"
+          ],
+          "type": "object"
+        },
+        "SimSlot": {
+          "properties": {
+            "iccid_tail": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "mcc": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "mnc": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "operator": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "present": {
+              "description": "an ICCID is known for the slot (readable even when not provisioned)",
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "provisioned": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "ready": {
+              "description": "null when the slot is not provisioned (the firmware reports no state then)",
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "role": {
+              "description": "\"data\" (the radio readings in `network` are this slot's) | \"standby\" | \"off\".",
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "signal": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SimSignal"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "This slot's radio: the data slot from nwinfo, the standby slot from our own\nQMI NAS client (every 30 s); absent when there is no reading.",
+              "x-u60-level": "nested"
+            },
+            "slot": {
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "state": {
+              "description": "\"ready\" | \"not_ready\" | \"locked\" (PIN/PUK) | \"absent\" | \"off\" (not provisioned)",
+              "type": "string",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "slot",
+            "provisioned",
+            "present",
+            "state",
+            "role",
+            "operator",
+            "mcc",
+            "mnc",
+            "iccid_tail"
+          ],
+          "type": "object"
+        },
+        "SimSmartRule": {
+          "properties": {
+            "period_s": {
+              "description": "`slot_switch_period`, seconds",
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "rsrp": {
+              "description": "`slot_switch_thr_rsrp1..3`, dBm",
+              "items": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "type": "array",
+              "x-u60-level": "normal"
+            },
+            "snr": {
+              "description": "`slot_switch_thr_snr1..3`, dB",
+              "items": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "type": "array",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "rsrp",
+            "snr",
+            "period_s"
+          ],
+          "type": "object"
+        }
+      },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "current_slot": {
           "format": "int64",
           "type": "integer",
           "x-u60-level": "normal"
+        },
+        "dual": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SimDual"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Dual-SIM view (全球版); left out when `support_dual_sim != 1`.",
+          "x-u60-level": "nested"
         },
         "dual_sim": {
           "format": "int64",

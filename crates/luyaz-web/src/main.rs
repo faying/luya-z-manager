@@ -25,6 +25,7 @@ mod assets;
 mod auth;
 mod bandlock;
 mod celllock;
+mod dualsim;
 mod changes;
 mod clients;
 mod config_page;
@@ -55,6 +56,8 @@ mod scheduler;
 mod chill_page;
 mod chill_proxy;
 mod home;
+mod home_dual;
+mod dual_switches;
 mod scenario;
 mod settings;
 mod tailscale;
@@ -62,6 +65,7 @@ mod at_term;
 mod device_power;
 mod dns;
 mod enable_adb;
+mod agent_perms;
 mod processes;
 mod sim_page;
 mod stc;
@@ -127,7 +131,7 @@ enum Cmd {
         #[arg(
             long,
             env = "LUYAZ_WEB_PAGES",
-            default_value = "/signal,/charts,/functions,/system,/trends,/clients,/tools/speedtest,/router/signal-detect,/tools/diagnose,/device-info,/router/qci,/tools/cpu,/sms,/sms/compose,/changes,/usb,/bandlock,/router/celllock,/router/apn,/router/network-mode,/router/mobile-network,/router/qos,/router/vpn,/router/telemetry,/router/firewall,/router/lan,/router/wifi,/router/wifi-guest,/alerts,/sms/forward,/scheduler,/router/esim,/health,/settings,/config,/,/services/tailscale,/services/chill,/router/scenario,/router/device,/tools/enable-adb,/router/sim,/router/stc,/router/stk,/tools/at,/tools/processes,/router/dns"
+            default_value = "/signal,/charts,/functions,/system,/trends,/clients,/tools/speedtest,/router/signal-detect,/tools/diagnose,/device-info,/router/qci,/tools/cpu,/sms,/sms/compose,/changes,/usb,/bandlock,/router/celllock,/router/apn,/router/network-mode,/router/mobile-network,/router/qos,/router/vpn,/router/telemetry,/router/firewall,/router/lan,/router/wifi,/router/wifi-guest,/alerts,/sms/forward,/scheduler,/router/esim,/health,/settings,/config,/,/services/tailscale,/services/chill,/router/scenario,/router/device,/tools/enable-adb,/tools/agent,/router/sim,/router/dualsim,/router/stc,/router/stk,/tools/at,/tools/processes,/router/dns"
         )]
         pages: String,
         /// Operator logo files (`<slug>.svg`/`.png`). Trademarks: read from disk, never embedded.
@@ -249,6 +253,9 @@ pub fn app(
         .route("/tools/diagnose/feedback", post(diagnose::feedback))
         .route("/tools/diagnose/dismiss", post(diagnose::dismiss))
         .route("/tools/diagnose/approve", post(diagnose::approve))
+        .route("/tools/diagnose/restore", post(diagnose::restore))
+        .route("/tools/diagnose/restore/ask", post(diagnose::restore_ask))
+        .route("/tools/diagnose/restore/cancel", post(diagnose::restore_cancel))
         .route("/tools/diagnose/refresh", post(diagnose::refresh))
         .route("/device-info", get(device_info::page))
         .route("/device-info/events", get(device_info::events))
@@ -258,6 +265,7 @@ pub fn app(
         .route("/router/qci/events", get(qci::events))
         .route("/router/qci/refresh", post(qci::refresh))
         .route("/tools/cpu", get(cpu::page))
+        .route(agent_perms::PATH, get(agent_perms::page))
         .route("/tools/cpu/events", get(cpu::events))
         .route("/tools/cpu/refresh", post(cpu::refresh))
         .route("/sms", get(sms::page))
@@ -301,6 +309,11 @@ pub fn app(
         .route("/router/celllock/reset/ask", post(celllock::reset_ask))
         .route("/router/celllock/reset/set", post(celllock::reset_set))
         .route("/router/celllock/reset/cancel", post(celllock::reset_cancel))
+        .route("/router/dualsim", get(dualsim::page))
+        .route("/router/dualsim/events", get(dualsim::events))
+        .route("/router/dualsim/ask", post(dualsim::ask))
+        .route("/router/dualsim/set", post(dualsim::set))
+        .route("/router/dualsim/cancel", post(dualsim::cancel))
         .route("/router/apn", get(apn::page))
         .route("/router/apn/events", get(apn::events))
         .route("/router/apn/agent-roam", post(apn::agent_roam_set))

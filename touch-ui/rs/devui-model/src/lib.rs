@@ -105,6 +105,12 @@ pub struct Model {
     /// a redial the core proposes for the open finding (decision loop §4.10); None = none
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnose_proposal: Option<dg_proposal_t>,
+    /// the core's line on a strong but slow signal (`data.slow_signal.say`); empty = nothing
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub diagnose_slow: String,
+    /// 恢复上次能用的设置 (core `GET /api/verified`); None = nothing recorded / not read
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnose_restore: Option<dg_restore_t>,
 
     pub battery_est: Option<String>,
 

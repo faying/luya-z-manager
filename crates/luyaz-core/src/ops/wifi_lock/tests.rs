@@ -260,6 +260,13 @@ fn second_lock_rules() {
     assert!(second(&p.wifi, Mode::Own, true).is_err());
     assert!(matches!(second(&p.wifi, Mode::Covered, true), Ok(None)));
     drop(f);
+    // a child another test thread is forking holds a copy of the descriptor until its exec
+    for _ in 0..100 {
+        if free(&p.wifi) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let l = second(&p.wifi, Mode::Covered, true).unwrap();
     assert!(l.is_some() && !free(&p.wifi));
     drop(l);

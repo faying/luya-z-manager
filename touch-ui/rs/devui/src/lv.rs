@@ -56,7 +56,7 @@ pub use sys::lv_obj_flag_t::{
 };
 pub use sys::lv_part_t::{LV_PART_INDICATOR, LV_PART_ITEMS, LV_PART_KNOB, LV_PART_MAIN, LV_PART_SCROLLBAR};
 pub use sys::lv_state_t::{LV_STATE_CHECKED, LV_STATE_DISABLED, LV_STATE_PRESSED};
-pub use sys::lv_text_align_t::{LV_TEXT_ALIGN_CENTER, LV_TEXT_ALIGN_RIGHT};
+pub use sys::lv_text_align_t::{LV_TEXT_ALIGN_CENTER, LV_TEXT_ALIGN_LEFT, LV_TEXT_ALIGN_RIGHT};
 
 pub type Align = lv_align_t::Type;
 pub type EventCb = unsafe extern "C" fn(*mut lv_event_t);

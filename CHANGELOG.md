@@ -19,7 +19,126 @@ of other components.
 
 A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## lweb 1.13.0 — 2026-10-21
+
+- home shows a banner while a device keeps polling the admin ports over Tailscale (who, which port, how long, about 0.3–0.6 W more with the screen off) with 「It's mine」 (allowed 24 h) and 「Got it」; Settings lists the allow list with 「Make permanent」 and 「Delete」. Requires: core 1.15.0.
+
+## core 1.15.0 — 2026-10-21
+
+- `power.tailnet_poller` (docs/designs/tailnet-poller.md): with the screen off and not charging, each long-term check (60 s) reads conntrack and watches inbound :80 / :9090 from tailnet peers and from peers behind a subnet router; 10 minutes in a row at ≥ 20 packets a minute from one peer opens one event and one `tailnet-poller` alert. `GET /api/poller` (also `/api/diagnose` `tailnet_poller`); `/control` `poller.allow` (24 h by default, `forever`), `poller.unallow`, `poller.ack`; allow list in `/data/luyaz/core/poller-allow.json`.
+- the scenario engine picks up a hand-edited `/data/scenario/scenarios.json` on its next tick (changed mtime or length): a valid file replaces the loaded configuration and logs once; a missing, unreadable or invalid file keeps the loaded one and logs once. The web's own writes are not taken for a hand edit.
+
 ## Unreleased
+
+## touch 1.6.1 — 2026-10-21
+
+- dual SIM switch hint says ~10 s offline (measured ≈11 s on 10-21), not 10–25 s.
+
+## lweb 1.15.1 — 2026-10-21
+
+- dual SIM dialog says data drops for about 10 seconds (measured ≈11 s on 10-21), not 10–25.
+
+## lweb 1.15.0 — 2026-10-21
+
+- /signal, dual mode: 「换卡记录」 lists the data-card switches of the past 14 days with the likely reason (no service, 2G/3G, weak signal while the other card was good). Requires: core with `/v2/dual/switches`.
+
+## core 1.16.0 — 2026-10-21
+
+- dual SIM: passive log of the data card and both slots' signal every 30 s in `/data/luyaz/core/dsds/YYYY-MM-DD.jsonl` (dual mode only, 14 days, ~1 MB a day), with a `switch` event when the firmware moves the data card; `GET /v2/dual/switches?days=14`.
+
+## lweb 1.14.2 — 2026-10-21
+
+- 「Got it」 on the home Tailscale-polling banner also marks the matching `tailnet-poller` alert read in the alert bar (only when no other unread alert sits below it). Requires: core 1.15.1.
+
+## core 1.15.1 — 2026-10-21
+
+- `power.tailnet_poller` events and their acks are kept in `/data/luyaz/core/poller-state.json` (written only when an event opens, ends, comes back, is acked or allowed): a core restart no longer tells an acked, still running event again. A missing or broken file is a fresh start.
+
+## lweb 1.14.1 — 2026-10-21
+
+- dual standby: the data card's row says 5G SA / 5G NSA / 4G from the serving network, not the sampler's RAT.
+
+## lweb 1.14.0 — 2026-10-21
+
+- dual standby: the 双卡 group moves to the top of Home and reads like the touch screen: data card first, logo and name instead of SIM N, 上网中 / · 自动切换 / 切换中 / 待机, standby dimmed and 待机 · 信号弱 when weak; per-slot dBm/dB and the unverified smart-rule sentence are gone. The RSRP/SINR readouts are tagged with the data card's operator. China Mobile 460-13 now has its logo.
+
+## touch 1.6.0 — 2026-10-21
+
+- dual standby: Home drops the 卡N labels and the dBm/dB lines; the data card is always the top row (上网中, · 自动切换 when smart is on, 切换中 while switching), the standby row is dimmed with 5G SA/4G and turns to 待机 · 信号弱 when weak; the verdict row is the single-card one again, about the data card. 蜂窝 gains a 双卡 card with 信号强度 / 信号质量 per slot.
+
+## touch 1.5.4 — 2026-10-21
+
+- dual standby: the slot lines read in words (上网 · 信号强 / 待机 · 信号中); the verdict is one size smaller with both slots' RSRP · SINR beside it, and 干扰 · 负载 under it.
+
+## touch 1.5.3 — 2026-10-21
+
+- dual standby: the data slot's line never drops 「漫游」 (roaming); 「本地」 may still go when space is short.
+
+## touch 1.5.2 — 2026-10-21
+
+- dual standby: each slot line carries its own operator logo (or the localized name, e.g. 中国移动 instead of CMCC), like the single-card top line.
+
+## touch 1.5.1 — 2026-10-21
+
+- dual standby: the two slot lines now sit in the status block's top (the green wash), replacing the single top line, instead of a block under it.
+
+## lweb 1.12.0 — 2026-10-21
+
+- home: in dual-SIM mode a 「Dual SIM」 group shows both slots (operator, RAT, data/standby, RSRP · SINR, reading age; greyed after 60 s) and the smart-switch rule; the top RSRP/SINR readouts name the data slot. Single-slot devices and single mode are unchanged.
+
+## touch 1.5.0 — 2026-10-21
+
+- dual standby (global edition): the status bar shows two rows of signal dots (data slot on top in its usual colours, standby slot below in neutral grey), and Home shows one line per slot under the status block: card, operator, RAT, role and RSRP · SINR (or the card's state). Single-slot devices are unchanged. Reads the core 1.14 `sim.dual` slot fields.
+
+## core 1.14.0 — 2026-10-21
+
+- dual SIM: each slot reports `state` and `role`, `sim.dual.smart_rule` carries the smart-switch thresholds, and slots carry an optional `signal` (data slot from nwinfo, standby slot read every 30 s over a read-only QMI NAS client; only started when a standby slot exists). New `luyaz-core qmi-signal`.
+
+## touch 1.4.0 — 2026-10-20
+
+- Network diagnosis: a two-tap 「Restore the last working setup」 button when the cellular settings differ from the last verified connection for this card and country; progress and the result show under it.
+
+## core 1.13.2 — 2026-10-20
+
+- crash logs: when several are written within one clock tick, pruning now always keeps the newest and exactly 5 per program (a reused `.1` name could leave 6).
+
+## touch 1.3.1 — 2026-10-20
+
+- Dual SIM: the armed row's roaming warning is shorter (it was cut off on the 320 px screen).
+
+## touch 1.3.0 — 2026-10-20
+
+- Dual SIM on the SIM & eSIM page (global edition, shown only when core reports two slots): what each slot holds and five choices (slot 1 only, slot 2 only, dual with main slot 1 or 2, dual with smart switching); two taps send core's `sim.dual` transaction, whose words and countdown replace the line on top, with a roaming warning when the card may roam here. Requires: core 1.13.1.
+
+## lweb 1.11.0 — 2026-10-20
+
+- new Dual SIM page (`/router/dualsim`, linked from SIM / PIN on a dual-SIM device): both slots, single/dual, main card, smart switching; tier-3 dialog with a roaming note when the card may roam (or that can't be told); runs u60d's `sim.dual` transaction.
+
+## core 1.13.1 — 2026-10-20
+
+- `sim.dual` progress and values read as words ("Dual SIM · main slot 2") in the op block, the change log and the touch screen, instead of raw JSON.
+
+## core 1.13.0 — 2026-10-20
+
+- dual SIM (global edition): `/v2` `sim.dual` view of both slots, and a `sim.dual` change (single/dual, main slot, smart switching) run as a transaction with readback, data check and rollback; hidden where `support_dual_sim` is not 1.
+
+## core 1.12.0 — 2026-10-20
+
+- core: restore the last verified connection, first part (no button yet). After a deep check you start, one bound HTTPS + DNS check (~20 KB) may record the cellular settings that worked (cell locks, bands, mode, APN) per card and country. `GET /api/verified` shows what differs now; `/control verified.restore` (screen or web only, never the agent) sets them back one ordinary transaction at a time and stops at the first that doesn't confirm.
+
+## lweb 1.10.0 — 2026-10-20
+
+- lweb: the deep check page gets 「Restore the last settings that worked」 (needs core 1.12.0): what differs from the last verified set for this card and country, whether each item rolls back by itself, a separate tick when the APN changes, and the step-by-step progress.
+- lweb: new read-only page System → AI Agent Permissions (/tools/agent): the agent's tokens (names and read/change, never the token), the addresses allowed to read and to change, what it may change (APN, CHILL) with the once-per-30-minutes limit, the last change and that neither rolls back by itself, and when the permission files last changed. Nothing can be changed there.
+
+## lweb 1.9.2 — 2026-10-20
+
+- lweb: change log rows made through the AI agent say where the permission came from: the agent's own act permission, or you approving its proposal on the web page or the screen (plus whether it rolls back by itself).
+
+## core 1.11.4, touch 1.2.1 — 2026-10-20
+
+- core: short touch-screen words for the read-only scenarios (`say`): `slow_signal` in `/api/diagnose`, and `hot_drain` / `long_idle` as `/api/health` `notices` (never checks, never alerts).
+- touch: the diagnose page shows the strong-but-slow line under the redial row; the health page lists the core's notices after the checks (● mark, tap for the full text). Older cores just show nothing.
 
 ## core 1.11.3, lweb 1.9.1 — 2026-10-20
 

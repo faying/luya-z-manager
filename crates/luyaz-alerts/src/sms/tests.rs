@@ -665,3 +665,16 @@ fn newest_sent_copy_to_the_number() {
     );
     assert_eq!(newest_to(&serde_json::json!({}), "+1"), None);
 }
+
+#[test]
+fn tailnet_poller_is_never_an_sms() {
+    let f = Facts {
+        kind: "tailnet-poller",
+        number: Some("+8613800000000"),
+        abroad: false,
+        sms_abroad: false,
+        clock_ok: true,
+        rate_ok: true,
+    };
+    assert!(matches!(verdict(&f), Verdict::Skip));
+}

@@ -49,7 +49,7 @@ pub(crate) mod execute;
 pub(crate) mod finding;
 pub(crate) mod approve;
 pub(crate) mod propose;
-mod home;
+pub(crate) mod home;
 pub(crate) mod home_exit;
 mod net_reads;
 mod netinfo;
@@ -418,6 +418,7 @@ impl Compat {
             .route("/api/health/crashlog", get(health::crashlog))
             .route("/api/screen", get(screen))
             .route("/api/alerts", get(alerts_get))
+            .route("/api/poller", get(poller_get))
             .route("/api/netinfo/neighbors/scan", post(neighbors_scan))
             .route("/api/netinfo", get(netinfo::get))
             // 8d-1b: the agent's last reads luyaz-web used (agent path and reply shape)
@@ -492,7 +493,8 @@ impl Compat {
                 )
                 .route("/api/diagnose/speed", post(watch::diagnose_speed))
                 .route("/api/diagnose/feedback", post(watch::diagnose_feedback))
-                .route("/api/diagnose/dismiss", post(watch::diagnose_dismiss));
+                .route("/api/diagnose/dismiss", post(watch::diagnose_dismiss))
+                .route("/api/verified", get(verified_get));
             // the charge limit and the battery estimate (9c): only with the policies on
             let charge = Router::new()
                 .route(
@@ -615,6 +617,11 @@ pub async fn serve(listener: TcpListener, compat: Compat) -> std::io::Result<()>
     .await
 }
 
+/// GET /api/verified: the last verified set for this card × country and what a restore would do.
+async fn verified_get() -> Response {
+    reply(200, json!({"ok": true, "data": crate::verified::view().await}))
+}
+
 pub(crate) fn reply(status: u16, body: Value) -> Response {
     (
         StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
@@ -630,6 +637,15 @@ async fn screen() -> Response {
         200,
         json!({"ok": true, "data": {"v": 1, "battery": crate::plugin::battery_eta::report()}}),
     )
+}
+
+/// `sync` before a reboot or power-off. Not in unit tests: there it would flush the whole build
+/// host, which on a busy Docker host can take minutes and stalled the two route tests.
+pub(crate) async fn sync_disks() {
+    if cfg!(test) {
+        return;
+    }
+    let _ = tokio::task::spawn_blocking(|| std::process::Command::new("sync").status()).await;
 }
 
 fn uptime_now() -> Option<u64> {
@@ -655,6 +671,14 @@ fn cursor_query(q: Option<&str>) -> Option<(u64, usize)> {
         }
     }
     Some((since?, limit))
+}
+
+/// GET /api/poller: `power.tailnet_poller` events and the allow list (poller.rs).
+async fn poller_get() -> Response {
+    let v = tokio::task::spawn_blocking(crate::poller::view)
+        .await
+        .unwrap_or(Value::Null);
+    reply(200, json!({"ok": true, "data": v}))
 }
 
 /// GET /api/alerts (the agent's `alerts::alerts_get`). With `?since=<seq>[&limit=]` the cursor
@@ -701,7 +725,7 @@ async fn alerts_sms(State(c): State<Compat>, body: Bytes) -> Response {
 /// `system reboot` only when that one failed.
 async fn device_reboot(State(c): State<Compat>, req: Request) -> Response {
     let source = charge::source(&req);
-    let _ = tokio::task::spawn_blocking(|| std::process::Command::new("sync").status()).await;
+    sync_disks().await;
     let w = c.writer(source);
     let r = match w.send("device.reboot", &json!({})).await {
         luyaz_api::control::Reply::Failed { error, .. } => w

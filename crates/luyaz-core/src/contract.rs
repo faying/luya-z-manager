@@ -501,6 +501,9 @@ contract! {
 contract! {
     pub struct Sim {
         normal current_slot: i64,
+        /// Dual-SIM view (全球版); left out when `support_dual_sim != 1`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nested dual: Option<SimDual>,
         normal dual_sim: i64,
         personal iccid: String,
         personal imsi: String,
@@ -511,6 +514,72 @@ contract! {
         normal sim2_provision: i64,
         normal spn: String,
         normal state: String,
+    }
+}
+
+contract! {
+    pub struct SimDual {
+        /// UCI `st_auto_switch_card_flag` (absent = off)
+        normal smart: bool,
+        /// "single" | "dual" (both slots provisioned)
+        normal mode: String,
+        normal active_slot: i64,
+        /// `switch_card_status == "0"`: the firmware is switching on its own
+        normal switching: bool,
+        nested slots: Vec<SimSlot>,
+        /// Smart switching rule, UCI `zte_nwinfo.dsds` (absent when not set)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nested smart_rule: Option<SimSmartRule>,
+    }
+}
+
+contract! {
+    pub struct SimSignal {
+        /// "nr" | "lte"
+        normal rat: String,
+        /// dBm
+        normal rsrp: i64,
+        normal rsrq: Option<i64>,
+        /// dB, one decimal (like `signal.nr_snr`)
+        normal snr: Option<String>,
+        /// 0..5
+        normal bars: i64,
+        /// device epoch seconds of the reading (device clock, see `clock.utc_offset`)
+        normal at: u64,
+    }
+}
+
+contract! {
+    pub struct SimSmartRule {
+        /// `slot_switch_thr_rsrp1..3`, dBm
+        normal rsrp: Vec<i64>,
+        /// `slot_switch_thr_snr1..3`, dB
+        normal snr: Vec<i64>,
+        /// `slot_switch_period`, seconds
+        normal period_s: i64,
+    }
+}
+
+contract! {
+    pub struct SimSlot {
+        normal slot: i64,
+        normal provisioned: bool,
+        /// an ICCID is known for the slot (readable even when not provisioned)
+        normal present: bool,
+        /// null when the slot is not provisioned (the firmware reports no state then)
+        normal ready: Option<bool>,
+        /// "ready" | "not_ready" | "locked" (PIN/PUK) | "absent" | "off" (not provisioned)
+        normal state: String,
+        /// "data" (the radio readings in `network` are this slot's) | "standby" | "off".
+        normal role: String,
+        /// This slot's radio: the data slot from nwinfo, the standby slot from our own
+        /// QMI NAS client (every 30 s); absent when there is no reading.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nested signal: Option<SimSignal>,
+        normal operator: String,
+        normal mcc: String,
+        normal mnc: String,
+        personal iccid_tail: String,
     }
 }
 

@@ -9,6 +9,7 @@
 {{ self.leaf("sim-info")|safe }}
 {{ self.leaf("sim-trialserr")|safe }}
 </div>
+{% if dual %}<div class="nd-group"><a class="nd-row" href="/router/dualsim"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Dual SIM", "双卡") }}</span><span class="nd-row__sub">{{ l.pick("Single / dual, main card, smart switching", "单卡/双卡、主卡、智能切换") }}</span></span><span class="nd-row__value">›</span></a></div>{% endif %}
 <section aria-labelledby="sim-act-t"><h2 id="sim-act-t" class="nd-group-title">{{ l.pick("Actions", "操作") }}</h2>
 {{ self.leaf("sim-actions")|safe }}
 {{ panels|safe }}

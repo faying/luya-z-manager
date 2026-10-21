@@ -199,11 +199,43 @@ impl Ui {
                 0 => th.red,
                 _ => th.track,
             };
-            for i in 0..5 {
-                let col = if (i as i32) < d.bars { sig_col } else { th.track };
-                if col != self.c_sig[i] {
-                    self.c_sig[i] = col;
-                    kit::bg(self.top_sig[i], col);
+            // dual standby: top row = the data slot (same tiers), bottom row = standby, neutral t2
+            let standby = d.sim_dual.as_ref().filter(|x| x.mode == "dual").map(|x| {
+                x.slots.iter().find(|s| s.role == "standby").map_or(0, |s| if s.has_sig != 0 { s.sig_bars } else { 0 })
+            });
+            if self.sig_dual != Some(standby.is_some()) {
+                self.sig_dual = Some(standby.is_some());
+                for i in 0..5 {
+                    kit::show(self.top_sig[i], standby.is_none());
+                }
+                for i in 0..10 {
+                    kit::show(self.top_sig2[i], standby.is_some());
+                }
+                // the two rows are 10 px narrower: the RAT word follows them
+                self.top_net.set_x(if standby.is_some() { 94 } else { 104 });
+            }
+            if let Some(sb) = standby {
+                for i in 0..10 {
+                    let n = i as i32 % 5;
+                    let col = if i < 5 {
+                        if n < d.bars { sig_col } else { th.track }
+                    } else if n < sb {
+                        th.t2
+                    } else {
+                        th.track
+                    };
+                    if col != self.c_sig2[i] {
+                        self.c_sig2[i] = col;
+                        kit::bg(self.top_sig2[i], col);
+                    }
+                }
+            } else {
+                for i in 0..5 {
+                    let col = if (i as i32) < d.bars { sig_col } else { th.track };
+                    if col != self.c_sig[i] {
+                        self.c_sig[i] = col;
+                        kit::bg(self.top_sig[i], col);
+                    }
                 }
             }
             // the phone-style label needs the carrier counts: the signal card writes it

@@ -308,6 +308,7 @@ impl App {
     /// The decision loop's attempts the last core left open (§4.10): follow them to their end.
     pub fn resume_loop(&self) {
         crate::api::approve::resume(self.inner.ops.clone(), self.hub());
+        crate::verified::install(self.inner.ops.clone(), self.hub());
     }
 
     pub fn hub(&self) -> Arc<crate::block::Hub> {
@@ -425,6 +426,7 @@ impl App {
             .route("/v2/scorecard", get(scorecard).post(scorecard))
             .route("/v2/longterm/calib", post(longterm_calib))
             .route("/v2/versions", get(versions))
+            .route("/v2/dual/switches", get(dual_switches))
             .route("/v2/versions/check", post(versions_check));
         // M6b: the screen's agent-shaped API (`/v2/api/...`, compat's `/api/...` routes), loopback
         // listener only. Nested at `/v2`: the routes above are static and win over the nest's tail.
@@ -458,6 +460,7 @@ async fn starting_gate(State(app): State<App>, request: Request, next: Next) -> 
             | "/v2/device/capabilities"
             | "/control"
             | "/v2/scorecard"
+            | "/v2/dual/switches"
             | "/state"
             | "/events"
             | "/auth/login"
@@ -852,6 +855,26 @@ async fn longterm_calib(
 }
 
 /// Component versions, installed and newest (versions.rs).
+/// `GET /v2/dual/switches?days=1..14&limit=N` (dsds_log.rs): the data-slot changes the
+/// passive dual-SIM log saw, newest first: `{ok, data: {days, count, switches: [{t, from, to,
+/// smart, before, after}]}}`. Reads files only (no first-round wait).
+async fn dual_switches(uri: axum::http::Uri) -> Json<Value> {
+    let q = uri.query().unwrap_or("").to_owned();
+    let arg = |k: &str| {
+        q.split('&')
+            .find_map(|p| p.strip_prefix(k).and_then(|v| v.strip_prefix('=')))
+            .and_then(|v| v.parse::<i64>().ok())
+    };
+    let (days, limit) = (arg("days").unwrap_or(14), arg("limit").unwrap_or(50).clamp(1, 200) as usize);
+    let t = crate::qmi_nas::now() as i64;
+    let v = tokio::task::spawn_blocking(move || {
+        crate::dsds_log::switches(std::path::Path::new(crate::dsds_log::DIR), days, limit, t)
+    })
+    .await
+    .unwrap_or(Value::Null);
+    Json(json!({"ok": true, "data": v}))
+}
+
 async fn versions() -> Json<Value> {
     Json(crate::versions::report())
 }

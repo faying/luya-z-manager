@@ -21,6 +21,14 @@ fn fake_cli(root: &Path, body: &str) {
     fs::create_dir_all(bin.parent().unwrap()).unwrap();
     fs::write(&bin, format!("#!/bin/sh\n{body}\n")).unwrap();
     fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+    // A child another test thread forked while the file was open for writing keeps that descriptor
+    // until its exec, and exec'ing the script then fails with "Text file busy": wait it out.
+    for _ in 0..100 {
+        match std::process::Command::new(&bin).output() {
+            Err(e) if e.raw_os_error() == Some(26) => std::thread::sleep(Duration::from_millis(10)),
+            _ => break,
+        }
+    }
 }
 
 fn fake_socket_and_daemon(root: &Path) {

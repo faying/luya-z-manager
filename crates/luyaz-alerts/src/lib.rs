@@ -575,6 +575,8 @@ pub fn kind_label(kind: &str) -> String {
             "家里出口 15 分钟没回应，「其余都走家里」已关",
         ),
         ("home-exit-check-failed", "家里出口打开后自检没过，已关回去"),
+        // luyaz-core poller.rs (tailnet-poller.md)
+        ("tailnet-poller", "有设备经 Tailscale 持续访问管理接口，息屏更耗电"),
     ];
     T.iter()
         .find(|t| t.0 == kind)
@@ -641,6 +643,10 @@ pub fn kind_label_en(kind: &str) -> String {
         (
             "home-exit-check-failed",
             "Home exit failed its check after turning on; turned back off",
+        ),
+        (
+            "tailnet-poller",
+            "A device keeps polling the admin ports over Tailscale (more drain with the screen off)",
         ),
     ];
     T.iter()

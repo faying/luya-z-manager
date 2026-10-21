@@ -383,6 +383,13 @@ async fn a_failed_register_goes_back_to_automatic_and_redials() {
         202
     );
     let g = until(addr, |d| d["guard"]["phase"] == "reverted").await;
+    // "reverted" can show a moment before the session's close is sent
+    for _ in 0..100 {
+        if actions(&d).last().map(String::as_str) == Some("netselect.session.close") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert_eq!(
         g["guard"]["reason_code"], "register_failed",
         "{}",

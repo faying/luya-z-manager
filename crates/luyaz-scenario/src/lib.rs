@@ -363,6 +363,15 @@ pub struct Engine {
     /// When the heartbeat was last written, on the monotonic clock (which stops in suspend, so
     /// a device that slept is not mistaken for a stuck engine; `/proc/uptime` keeps counting).
     beat: Mutex<Option<Instant>>,
+    /// The config file as last read or written (mtime, length): a hand edit is picked up on the
+    /// next tick, not only when the core restarts (10-20: a copied scenarios.json sat unread).
+    cfg_seen: Mutex<FileStamp>,
+}
+
+type FileStamp = Option<(Option<std::time::SystemTime>, u64)>;
+
+fn stamp(path: &str) -> FileStamp {
+    fs::metadata(path).ok().map(|m| (m.modified().ok(), m.len()))
 }
 
 struct BusyGuard<'a>(&'a AtomicBool);
@@ -377,6 +386,7 @@ impl Engine {
     /// not allow any more) is kept as it is and said so: such an action fails when it runs, and
     /// the switch rolls back to away.
     pub fn new(io: Arc<dyn Io>) -> Engine {
+        let cfg_seen = stamp(&io.path(CONFIG_FILE));
         let cfg: Config = read_json(&io.path(CONFIG_FILE));
         let state: RunState = read_json(&io.path(STATE_FILE));
         let e = Engine {
@@ -388,6 +398,7 @@ impl Engine {
             takeover: Mutex::new(None),
             tick_ring: Mutex::new(TickRing::default()),
             beat: Mutex::new(None),
+            cfg_seen: Mutex::new(cfg_seen),
         };
         if let Err(err) = sc::validate(&lk(&e.cfg)) {
             e.log(&format!("configuration does not validate any more: {err}"));
@@ -469,6 +480,37 @@ impl Engine {
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
+    }
+
+    /// The config file changed since it was last read or written (by hand, or copied from the
+    /// other device): take it if it reads and validates, else keep the one loaded and say so.
+    /// Once per change either way. A file that went away keeps the loaded one too.
+    pub fn reload_config(&self) {
+        let path = self.p(CONFIG_FILE);
+        let now = stamp(&path);
+        {
+            let mut seen = lk(&self.cfg_seen);
+            if *seen == now {
+                return;
+            }
+            *seen = now;
+        }
+        if now.is_none() {
+            self.log("configuration file is gone; keeping the one loaded");
+            return;
+        }
+        let parsed = fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| serde_json::from_str::<Config>(&t).map_err(|e| e.to_string()));
+        match parsed {
+            Err(e) => self.log(&format!("configuration file changed but does not read ({e}); keeping the one loaded")),
+            Ok(cfg) => {
+                if let Err(e) = sc::validate(&cfg) {
+                    self.log(&format!("configuration file changed but does not validate ({e}); keeping the one loaded"));
+                } else if *lk(&self.cfg) != cfg {
+                    *lk(&self.cfg) = cfg;
+                    self.log("configuration file changed; reloaded");
+                }
+            }
+        }
     }
 
     pub fn config(&self) -> Config {
@@ -939,6 +981,7 @@ impl Engine {
 
         // The Wi-Fi guard stepped in while we were dead or stuck. Its Wi-Fi-on wins
         // over detection and over the pin until the takeover is released.
+        self.reload_config();
         let takeover = self.guard_takeover();
         let cfg = self.config();
         let st = self.run_state();

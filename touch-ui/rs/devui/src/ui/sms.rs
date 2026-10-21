@@ -364,7 +364,14 @@ impl Ui {
 
     fn hc_row_click(&mut self, i: usize) {
         let Some(h) = self.model.health.get(i).cloned() else { return };
-        self.alert_detail_open(&h.label, if h.bad != 0 { tr("■ 体检：异常") } else { tr("▲ 体检：需要注意") }.as_bytes(), &h.detail);
+        let meta = if h.note != 0 {
+            tr("● 提示")
+        } else if h.bad != 0 {
+            tr("■ 体检：异常")
+        } else {
+            tr("▲ 体检：需要注意")
+        };
+        self.alert_detail_open(&h.label, meta.as_bytes(), &h.detail);
     }
 
     fn al_row_click(&mut self, i: usize) {
@@ -473,8 +480,8 @@ impl Ui {
                 }
                 let h = &m.health[i];
                 kit::show(row, true);
-                mark.set_text(if h.bad != 0 { "■" } else { "▲" });
-                kit::text_color(mark, if h.bad != 0 { th.bad_t } else { th.warn_t });
+                mark.set_text(if h.note != 0 { "●" } else if h.bad != 0 { "■" } else { "▲" });
+                kit::text_color(mark, if h.note != 0 { th.t2 } else if h.bad != 0 { th.bad_t } else { th.warn_t });
                 self.set(label, &h.label);
                 self.set(detail, &h.detail);
             }

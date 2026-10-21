@@ -113,6 +113,7 @@ pub fn view(hub: Option<&crate::block::Hub>) -> Value {
     let e = evidence(&rows, &super::hot_drain::boot8(), up, &now(hub));
     json!({
         "advice": replay(&e),
+        "say": luyaz_api::execution::say::idle(&replay(&e)),
         "quiet_run": e.quiet_run,
         "min_hours": MIN_HOURS,
     })

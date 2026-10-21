@@ -239,6 +239,15 @@ pub static ROUTES: &[Route] = &[
         "sim pin 卡 ka"
     ),
     r!(
+        "/router/dualsim",
+        "Dual SIM",
+        "双卡",
+        "SimCard",
+        Network,
+        "dual sim 双卡 双卡切换 主卡 内置卡 shuangka",
+        hidden
+    ),
+    r!(
         "/router/esim",
         "eSIM",
         "eSIM",
@@ -495,6 +504,14 @@ pub static ROUTES: &[Route] = &[
         "Cpu",
         Tools,
         "进程 jincheng processes top"
+    ),
+    r!(
+        "/tools/agent",
+        "AI Agent Permissions",
+        "AI 代理权限",
+        "ShieldCheck",
+        Tools,
+        "ai agent 代理 daili 权限 quanxian token mcp"
     ),
     r!(
         "/tools/enable-adb",

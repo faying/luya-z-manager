@@ -64,6 +64,7 @@ fn item_words(item: &str) -> (&'static str, &'static str, &'static str) {
         super::chill::PROFILE => ("正在换 CHILL 档位", "CHILL 档位", "CHILL profile"),
         super::chill::EXIT => ("正在换 CHILL 出口", "CHILL 出口", "CHILL exit"),
         "netselect.session" => ("正在搜网", "搜网", "Network search"),
+        super::spec::DUAL_SIM => ("正在切换 SIM 卡", "双卡", "Dual SIM"),
         _ => ("正在改设置", "设置", "Setting"),
     }
 }
@@ -77,6 +78,7 @@ pub fn value_words(item: &str, v: &Value) -> Words {
         (BAND_LTE, Value::String(s)) => band_words("B", s),
         (CELL_LTE | CELL_NR, v) => cell_words(v),
         (APN, v) => apn_words(v),
+        (super::spec::DUAL_SIM, v) => dual_sim_words(v),
         // Wi-Fi：总开关、名称，其余只说几项；密码和指纹都不显示
         (WIFI_MAIN | WIFI_GUEST, v) => super::wifi::words(v),
         (super::chill::PROFILE, Value::String(s)) => chill_profile_words(s),
@@ -110,6 +112,17 @@ pub fn value_words(item: &str, v: &Value) -> Words {
         }
         (_, Value::String(s)) => (s.clone(), s.clone()),
         (_, v) => (v.to_string(), v.to_string()),
+    }
+}
+
+/// 双卡：「单卡 · 卡槽 1」「双卡 · 主卡 卡槽 2」「双卡 · 智能切换」。
+fn dual_sim_words(v: &Value) -> Words {
+    let slot = v.get("active_slot").and_then(Value::as_i64).unwrap_or(0);
+    match (v.get("mode").and_then(Value::as_str), v.get("smart") == Some(&Value::Bool(true))) {
+        (Some("single"), _) => (format!("单卡 · 卡槽 {slot}"), format!("Single SIM · slot {slot}")),
+        (Some("dual"), true) => ("双卡 · 智能切换".into(), "Dual SIM · smart switching".into()),
+        (Some("dual"), false) => (format!("双卡 · 主卡 卡槽 {slot}"), format!("Dual SIM · main slot {slot}")),
+        _ => ("-".into(), "-".into()),
     }
 }
 

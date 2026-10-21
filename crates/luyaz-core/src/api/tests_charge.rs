@@ -99,6 +99,11 @@ async fn charge_control_and_the_limit_with_writes_on() {
 
     // writes and policies on: u60d owns it
     wait("owned", crate::plugin::charge::owned).await;
+    // The mirror is process-wide: another test's loop may have taken it over first, with its own
+    // (missing) file, and then this loop never reads ours. Take this test's settings explicitly.
+    let file = root.join("data/local/tmp/charge_limit.json");
+    let mine = crate::plugin::charge::parse(fs::read_to_string(&file).ok().as_deref());
+    crate::plugin::charge::save(&mine, &file);
 
     // the settings as the agent left them
     let (st, b) = call(addr, "GET", "/api/device/charge-control", "", "").await;

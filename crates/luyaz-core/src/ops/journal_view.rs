@@ -38,6 +38,7 @@ fn name(key: &str) -> Words {
         "cell.lock_nr" | "cell.nr" => ("5G 小区锁", "5G cell lock"),
         "cell.unlock_all" => ("解锁小区", "Cell unlock"),
         "sim.set_slot" => ("卡槽", "SIM slot"),
+        "sim.dual" => ("双卡", "Dual SIM"),
         "apn.set_mode" | "apn.mode" => ("APN 方式", "APN mode"),
         "apn.add" | "apn.modify" | "apn.delete" | "apn.enable" | "apn.profile"
         | "apn.set_pdp_type" | "apn.use" | "apn" => ("APN", "APN"),

@@ -330,8 +330,14 @@ impl Fold {
         lk
     }
 
-    /// This check's power and process readings into the hour (`hour_power`, `hour_proc`).
-    pub fn power(&mut self, c: &Clock, p: &power::Paths, out: &mut Out) {
+    /// This check's power and process readings into the hour (`hour_power`, `hour_proc`); the
+    /// screen and charging as read (known or not), for the tailnet poller check.
+    pub fn power(
+        &mut self,
+        c: &Clock,
+        p: &power::Paths,
+        out: &mut Out,
+    ) -> (Option<bool>, Option<bool>) {
         if self.boot != c.boot {
             self.tick(c, out);
         }
@@ -339,6 +345,7 @@ impl Fold {
         r.clients = self.seen.clients;
         r.wan = Some(crate::cell_window::take_quiet());
         self.power_with(c, &r);
+        (r.screen_known, r.charging_known)
     }
 
     /// [`Fold::power`] with the readings given.
@@ -1285,7 +1292,9 @@ pub fn start(dir: PathBuf) -> std::sync::mpsc::Sender<Msg> {
                             eprintln!("[longterm] fp: {e}");
                         }
                     }
-                    fold.power(&c, &ppaths, &mut out);
+                    let (screen, charging) = fold.power(&c, &ppaths, &mut out);
+                    // power.tailnet_poller: conntrack on screen-off checks only (poller.rs)
+                    crate::poller::check(c.wall, c.mono, screen, charging);
                     let mut rep = sh.report();
                     rep.looks = lk.cov;
                     fold.cover(&c, &rep, &mut out);
