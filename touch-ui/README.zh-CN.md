@@ -2,7 +2,7 @@
 
 [English](README.md) · **中文**
 
-**Luya-Z** 的一部分：5G 随身 Wi-Fi 前面板 3.5 寸触屏的开源替代界面。用 Rust + LVGL + FreeType 写成，直接画到 DRM/KMS，经 evdev 读触摸，编成一个静态 aarch64 程序（设备上叫 `luyaz-ui`），独立于原厂界面运行。
+**Luya-Z** 的一部分：5G 随身 Wi-Fi 前面板 3.5 寸触屏的替代界面（源码公开）。用 Rust + LVGL + FreeType 写成，直接画到 DRM/KMS，经 evdev 读触摸，编成一个静态 aarch64 程序（设备上叫 `luyaz-ui`），独立于原厂界面运行。
 
 > **适用硬件：** 中兴 U60 Pro（MU5250）。社区项目，和中兴（ZTE）没有关系，风险自负。
 
@@ -93,5 +93,5 @@ rs/build.sh test             # cargo test
 
 ## 许可证与免责声明
 
-[MIT](LICENSE)。LVGL（MIT）、FreeType（FTL / GPLv2）、stb（public domain）按各自许可证使用，详见 [NOTICE](NOTICE)。
+属于 Luya-Z Manager，采用它的许可证 [PolyForm Noncommercial License 1.0.0](../LICENSE)：个人和其他非商业用途免费。2026-10-21 以前发布的版本仍是 MIT。LVGL（MIT）、FreeType（FTL / GPLv2）按各自许可证使用，详见 [NOTICE](NOTICE)。
 仓库不含任何中兴字体或厂商二进制。和中兴通讯没有关系，只在你自己的设备上使用。

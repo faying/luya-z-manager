@@ -6,7 +6,7 @@
 
 Clear signal readouts, band and cell locking, eSIM, SMS, health checks and a watchdog, on the device's front panel and in your browser.
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/faying/luya-z-manager?sort=date&display_name=tag)](https://github.com/faying/luya-z-manager/releases)
 ![Rust](https://img.shields.io/badge/Rust-1.99-orange.svg)
 ![Target](https://img.shields.io/badge/target-aarch64--musl-lightgrey.svg)
@@ -173,6 +173,8 @@ The five parts — core, admin web, sentinel, touch UI and device scripts — ea
 
 Maintained by one person and tested on one device (CN firmware). It is used daily, but expect rough edges on other firmware variants and regions. Bug reports with `./install.sh doctor` output are welcome.
 
+**There is no official seller.** Luya-Z is free. If you paid for a device with Luya-Z installed, or for an install service, the price and any support are between you and the seller; Luya-Z has nothing to do with the sale. Devices bought that way get the same help as anyone else: open an issue with `./install.sh doctor` output.
+
 ## Documentation
 
 Each doc links to its Chinese copy (`*.zh-CN.md`).
@@ -194,12 +196,14 @@ Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_C
 ## Credits
 
 - [faying](https://github.com/faying): core (luyaz-core), admin web (luyaz-web), sentinel, Rust touch UI, install kit, eSIM, Tailscale.
-- Wei REN: the earlier fork this work continued from; parts of the install kit and the eSIM probe come from it.
-- [33333s](https://github.com/33333s): the core's device read and write layer comes from [zwrt-datad](https://github.com/33333s/zwrt-datad) (MIT); [u60pro-devui](https://github.com/33333s/u60pro-devui) was the starting point of the touch UI.
+- Wei REN: the earlier fork this work continued from (install kit, eSIM probe).
+- [33333s](https://github.com/33333s): [zwrt-datad](https://github.com/33333s/zwrt-datad) was the starting point of the core's device layer, [u60pro-devui](https://github.com/33333s/u60pro-devui) of the touch UI.
 - [Jesther Silvestre](https://github.com/jesther-ai): this project started from [open-u60-pro](https://github.com/jesther-ai/open-u60-pro). Its agent and web UI have since been replaced.
+
+Code taken from these earlier projects has all been rewritten (October 2026); thanks to their authors for the groundwork.
 
 ## License and disclaimer
 
-[MIT](LICENSE). Sources, removed content and third-party components are listed in [NOTICE](NOTICE) and [touch-ui/NOTICE](touch-ui/NOTICE).
+Source available under the [PolyForm Noncommercial License 1.0.0](LICENSE): free for personal and other noncommercial use. Selling it, preinstalling it on devices you sell, or using it in a business needs a separate licence; ask via a GitHub issue. Versions and Releases published before 2026-10-21 stay under the MIT License they were released with. Third-party components are listed in [NOTICE](NOTICE).
 
 Not affiliated with or endorsed by ZTE Corporation. Use only on your own device. Reverse engineering was done solely for interoperability and learning; the repo contains no ZTE proprietary source code.

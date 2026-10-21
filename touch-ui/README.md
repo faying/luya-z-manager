@@ -2,7 +2,7 @@
 
 **English** · [中文](README.zh-CN.md)
 
-Part of **Luya-Z**: an open-source replacement UI for the 3.5-inch front-panel touchscreen of a 5G portable hotspot. Written in Rust + LVGL + FreeType, it draws straight to DRM/KMS, reads touch through evdev, and builds as one static aarch64 binary (`luyaz-ui` on the device) that runs independently of the stock UI.
+Part of **Luya-Z**: a source-available replacement UI for the 3.5-inch front-panel touchscreen of a 5G portable hotspot. Written in Rust + LVGL + FreeType, it draws straight to DRM/KMS, reads touch through evdev, and builds as one static aarch64 binary (`luyaz-ui` on the device) that runs independently of the stock UI.
 
 > **Hardware:** runs on the ZTE U60 Pro (MU5250). Community project, not affiliated with ZTE. Use at your own risk.
 
@@ -95,5 +95,5 @@ Each doc links to its Chinese copy (`*.zh-CN.md`) where one exists.
 
 ## License and disclaimer
 
-[MIT](LICENSE). LVGL (MIT), FreeType (FTL / GPLv2) and stb (public domain) are used under their own licenses; see [NOTICE](NOTICE).
+Part of Luya-Z Manager and under its licence, the [PolyForm Noncommercial License 1.0.0](../LICENSE): free for personal and other noncommercial use. Versions published before 2026-10-21 stay MIT. LVGL (MIT) and FreeType (FTL / GPLv2) are used under their own licenses; see [NOTICE](NOTICE).
 The repo contains no ZTE fonts or vendor binaries. Not affiliated with ZTE Corporation. Use only on your own device.

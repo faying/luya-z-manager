@@ -1,27 +1,18 @@
 Luya-Z Manager
 
-Copyright (c) 2025-present Jesther Silvestre
-Copyright (c) 2026 Wei REN
 Copyright (c) 2026 faying
-Copyright (c) 2026 zwrt-datad contributors (parts of crates/luyaz-core)
 
-Licensed under the MIT License (see LICENSE).
+Licensed under the PolyForm Noncommercial License 1.0.0 (see LICENSE).
 
-Sources
+History
 -------
-- jesther-ai/open-u60-pro (MIT): https://github.com/jesther-ai/open-u60-pro
-  The current code no longer contains its agent or web UI; both were
-  rewritten.
-- 33333s/zwrt-datad (MIT): https://github.com/33333s/zwrt-datad
-  crates/luyaz-core's device read and write layer (ubus, state, SMS, the
-  HTTP API) was moved in from a fork of it; see crates/luyaz-core/PORTING.md.
-- Changes by Wei REN up to 2026-09-15 (snapshot 420a6d9): install kit,
-  eSIM probe and scripts; parts of them remain in onboard/ and scripts/.
-- Later changes by faying (2026-09-16 on): core, admin web, sentinel,
-  Rust touch UI, install kit, eSIM, Tailscale.
-- touch-ui/ has its own sources and notices: see touch-ui/NOTICE.
+This project grew out of earlier MIT-licensed work: jesther-ai/open-u60-pro,
+33333s/zwrt-datad, 33333s/u60pro-devui and Wei REN's fork. All code taken from
+them was rewritten in October 2026; none of it remains. Versions and Releases
+published before 2026-10-21 contain that code and stay under the MIT License
+they were released with.
 
-This repository starts from a cleaned snapshot of that work, not from its git
+This repository starts from a cleaned snapshot, not from the original git
 history. Removed before publishing:
 - device_report.json, ubus_probe_report.json (runtime dumps of a real device)
 - vendor marketing photos used by the old admin web
@@ -39,6 +30,10 @@ Third-party components
 - docs/images/ are screenshots rendered from made-up test data (mock core
   and the touch UI's offscreen render test), not from a real device.
 - Rust crates: see Cargo.lock; each crate keeps its own license.
+- touch-ui/ builds against LVGL (MIT) and FreeType (FreeType License); their
+  sources are fetched at build time and are not included in this repository.
+- crates/luyaz-sentinel/FRAME-FONT-LICENSE: the font embedded in the sentinel's
+  fallback frame, SIL Open Font License 1.1.
 - crates/luyaz-web/static/datastar-1.0.4.js: Datastar v1.0.4
   (https://github.com/starfederation/datastar), MIT License, full text below.
 - crates/luyaz-web/package.json, package-lock.json: development-only npm tools

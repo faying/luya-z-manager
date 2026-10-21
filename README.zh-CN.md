@@ -6,7 +6,7 @@
 
 信号看得懂、能锁频锁小区、管 eSIM 和短信、有体检和看门狗——在设备前面板上，也在浏览器里。
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/faying/luya-z-manager?sort=date&display_name=tag)](https://github.com/faying/luya-z-manager/releases)
 ![Rust](https://img.shields.io/badge/Rust-1.99-orange.svg)
 ![Target](https://img.shields.io/badge/target-aarch64--musl-lightgrey.svg)
@@ -173,6 +173,8 @@ docs/          GETTING-STARTED、SCREENSHOTS、ARCHITECTURE、DESIGN.md（界面
 
 一个人维护，只在一台设备（国内版固件）上测过。每天在用，但换了固件版本或地区难免有毛病。报问题时附上 `./install.sh doctor` 的输出最好。
 
+**没有官方卖家。** Luya-Z 免费提供。如果你付钱买了装好 Luya-Z 的设备或安装服务，费用和售后是你和卖家之间的事，与 Luya-Z 无关。这样买来的设备和别人一样：有问题开 issue，附上 `./install.sh doctor` 的输出。
+
 ## 文档
 
 | 文档 | 内容 |
@@ -192,12 +194,14 @@ docs/          GETTING-STARTED、SCREENSHOTS、ARCHITECTURE、DESIGN.md（界面
 ## 致谢
 
 - [faying](https://github.com/faying)：核心（luyaz-core）、管理网页（luyaz-web）、哨兵、Rust 触屏、装机包、eSIM、Tailscale。
-- Wei REN：本项目接手的上一版分支；装机包和 eSIM 探测程序的一部分来自它。
-- [33333s](https://github.com/33333s)：核心读写设备的那一层来自 [zwrt-datad](https://github.com/33333s/zwrt-datad)（MIT）；[u60pro-devui](https://github.com/33333s/u60pro-devui) 是触屏界面的起点。
+- Wei REN：本项目接手的上一版分支（装机包、eSIM 探测程序）。
+- [33333s](https://github.com/33333s)：[zwrt-datad](https://github.com/33333s/zwrt-datad) 是核心设备层的起点，[u60pro-devui](https://github.com/33333s/u60pro-devui) 是触屏界面的起点。
 - [Jesther Silvestre](https://github.com/jesther-ai)：本项目从 [open-u60-pro](https://github.com/jesther-ai/open-u60-pro) 起步，其中的 agent 和网页现已全部换掉。
+
+来自这些早期项目的代码已全部重写（2026 年 10 月）；感谢各位作者打下的基础。
 
 ## 许可证与免责声明
 
-[MIT](LICENSE)。来源、删减内容和第三方组件见 [NOTICE](NOTICE) 和 [touch-ui/NOTICE](touch-ui/NOTICE)。
+源码公开，采用 [PolyForm Noncommercial License 1.0.0](LICENSE)：个人和其他非商业用途免费。转卖、预装在要卖的设备上、或在经营中使用，需要另取授权，请在 GitHub issue 联系。2026-10-21 以前发布的版本和 Releases 仍按发布时的 MIT 许可证。第三方组件见 [NOTICE](NOTICE)。
 
 和中兴通讯没有关系，也没有得到其认可。只在你自己的设备上使用。逆向只为互通和学习，仓库里没有中兴的专有源码。
