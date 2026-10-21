@@ -1,9 +1,24 @@
-/* touchsim.c - inject touch events into the device evdev node.
- * Usage: touchsim <device> <action> [args...]
- *   touchsim auto tap 160 240        — tap at (160,240)
- *   touchsim auto swipe 50 200 270 200 300 — swipe (50,200)→(270,200) 300ms
- *   touchsim /dev/input/event3 tap 160 240
- * "auto" probes /dev/input/event* for a touchscreen.
+/*
+ * touchsim - synthetic input for testing the touch UI over SSH.
+ *
+ * Writes Linux evdev events straight into an input node, so the running UI
+ * sees them exactly as if a finger (or a button) had been used.
+ *
+ *   touchsim NODE tap X Y
+ *   touchsim NODE swipe X0 Y0 X1 Y1 [MS]      MS defaults to 300
+ *   touchsim NODE key CODE [HOLD_MS]          HOLD_MS defaults to 60
+ *
+ * NODE is a path such as /dev/input/event3, or "auto" to use the first
+ * /dev/input/event* that reports multi-touch X and Y axes. Coordinates are
+ * raw panel coordinates (the U60 panel is mounted upside down, so a point
+ * seen at (x, y) in a screenshot is (319 - x, 479 - y) here). KEY_POWER is
+ * 116 and lives on /dev/input/event0; holding it 800 ms or more opens the
+ * power menu.
+ *
+ * Build (static aarch64):
+ *   zig cc -target aarch64-linux-musl -static -Os -o touchsim tools/touchsim.c
+ *
+ * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 #include <dirent.h>
 #include <errno.h>
@@ -14,167 +29,247 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
+#include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
-/* Minimal evdev UAPI */
-struct input_event {
-    struct timeval time;
+/* The evdev wire format and the few codes used here (linux/input.h values);
+ * spelled out so the file builds without kernel headers. */
+struct evdev_record {
+    struct timeval stamp;
     uint16_t type;
     uint16_t code;
-    int32_t  value;
+    int32_t value;
 };
 
-#define EV_SYN  0x00
-#define EV_KEY  0x01
-#define EV_ABS  0x03
-#define SYN_REPORT      0x00
-#define BTN_TOUCH       0x14a
-#define ABS_MT_SLOT     0x2f
-#define ABS_MT_POSITION_X 0x35
-#define ABS_MT_POSITION_Y 0x36
-#define ABS_MT_TRACKING_ID 0x39
-#define EVIOCGBIT_(ev, len) _IOC(_IOC_READ, 'E', 0x20 + (ev), len)
+enum {
+    T_SYN = 0x00,
+    T_KEY = 0x01,
+    T_ABS = 0x03,
+};
 
-static int test_bit(const unsigned long *arr, int bit)
+enum {
+    C_SYN_REPORT = 0x00,
+    C_BTN_TOUCH = 0x14a,
+    C_MT_X = 0x35,
+    C_MT_Y = 0x36,
+    C_MT_TRACKING = 0x39,
+};
+
+#define FRAME_MS 16          /* swipe step, roughly one display frame */
+#define MIN_SWIPE_STEPS 4
+#define TAP_HOLD_MS 50
+#define SWIPE_SETTLE_MS 30   /* pause at the end point before lifting */
+#define NODE_PATH_MAX 288
+
+static int out_fd = -1;
+
+static void pause_ms(long ms)
 {
-    return (arr[bit / (8 * sizeof(long))] >> (bit % (8 * sizeof(long)))) & 1UL;
+    if (ms <= 0)
+        return;
+    struct timespec ts = { ms / 1000, (ms % 1000) * 1000000L };
+    while (nanosleep(&ts, &ts) != 0 && errno == EINTR)
+        ;
 }
 
-static void send_event(int fd, uint16_t type, uint16_t code, int32_t value)
+static void emit(uint16_t type, uint16_t code, int32_t value)
 {
-    struct input_event ev;
-    memset(&ev, 0, sizeof(ev));
-    ev.type = type;
-    ev.code = code;
-    ev.value = value;
-    if (write(fd, &ev, sizeof(ev)) != sizeof(ev))
-        fprintf(stderr, "write event failed\n");
+    struct evdev_record r = { .type = type, .code = code, .value = value };
+    if (write(out_fd, &r, sizeof r) != (ssize_t)sizeof r)
+        fprintf(stderr, "touchsim: write failed: %s\n", strerror(errno));
 }
 
-/* tap at (x,y) */
-static void do_tap(int fd, int x, int y)
+static void sync_frame(void) { emit(T_SYN, C_SYN_REPORT, 0); }
+
+static void move_to(int x, int y)
 {
-    send_event(fd, EV_ABS, ABS_MT_TRACKING_ID, 0);
-    send_event(fd, EV_ABS, ABS_MT_POSITION_X, x);
-    send_event(fd, EV_ABS, ABS_MT_POSITION_Y, y);
-    send_event(fd, EV_KEY, BTN_TOUCH, 1);
-    send_event(fd, EV_SYN, SYN_REPORT, 0);
-    usleep(50000);
-    send_event(fd, EV_KEY, BTN_TOUCH, 0);
-    send_event(fd, EV_ABS, ABS_MT_TRACKING_ID, -1);
-    send_event(fd, EV_SYN, SYN_REPORT, 0);
+    emit(T_ABS, C_MT_X, x);
+    emit(T_ABS, C_MT_Y, y);
 }
 
-/* swipe from (x1,y1) to (x2,y2) over `duration_ms` */
-static void do_swipe(int fd, int x1, int y1, int x2, int y2, int dur_ms)
+/* Finger down in slot 0 at (x, y), as one frame. */
+static void finger_down(int x, int y)
 {
-    int steps = dur_ms / 16;
-    if (steps < 4) steps = 4;
-
-    send_event(fd, EV_ABS, ABS_MT_TRACKING_ID, 0);
-    send_event(fd, EV_ABS, ABS_MT_POSITION_X, x1);
-    send_event(fd, EV_ABS, ABS_MT_POSITION_Y, y1);
-    send_event(fd, EV_KEY, BTN_TOUCH, 1);
-    send_event(fd, EV_SYN, SYN_REPORT, 0);
-
-    for (int i = 1; i <= steps; i++) {
-        usleep(dur_ms * 1000 / steps);
-        int x = x1 + (x2 - x1) * i / steps;
-        int y = y1 + (y2 - y1) * i / steps;
-        send_event(fd, EV_ABS, ABS_MT_POSITION_X, x);
-        send_event(fd, EV_ABS, ABS_MT_POSITION_Y, y);
-        send_event(fd, EV_SYN, SYN_REPORT, 0);
-    }
-
-    usleep(30000);
-    send_event(fd, EV_KEY, BTN_TOUCH, 0);
-    send_event(fd, EV_ABS, ABS_MT_TRACKING_ID, -1);
-    send_event(fd, EV_SYN, SYN_REPORT, 0);
+    emit(T_ABS, C_MT_TRACKING, 0);
+    move_to(x, y);
+    emit(T_KEY, C_BTN_TOUCH, 1);
+    sync_frame();
 }
 
-static int probe_touch(char *out_path, size_t n)
+/* Finger up: no position, the contact just ends. */
+static void finger_up(void)
 {
-    DIR *d = opendir("/dev/input");
-    if (!d) return -1;
-    struct dirent *de;
-    while ((de = readdir(d)) != NULL) {
-        if (strncmp(de->d_name, "event", 5) != 0) continue;
-        char path[288];
-        snprintf(path, sizeof path, "/dev/input/%s", de->d_name);
-        int fd = open(path, O_RDWR | O_NONBLOCK);
-        if (fd < 0) continue;
-        unsigned long abs_bits[4] = {0};
-        if (ioctl(fd, EVIOCGBIT_(EV_ABS, sizeof abs_bits), abs_bits) >= 0 &&
-            test_bit(abs_bits, ABS_MT_POSITION_X) &&
-            test_bit(abs_bits, ABS_MT_POSITION_Y)) {
-            snprintf(out_path, n, "%s", path);
-            close(fd);
-            closedir(d);
-            return 0;
+    emit(T_KEY, C_BTN_TOUCH, 0);
+    emit(T_ABS, C_MT_TRACKING, -1);
+    sync_frame();
+}
+
+static int axis_bit(const unsigned char *mask, int bit)
+{
+    return (mask[bit / 8] >> (bit % 8)) & 1;
+}
+
+/* First event node with multi-touch X and Y; 0 on success. */
+static int find_touch_node(char *path, size_t len)
+{
+    DIR *dir = opendir("/dev/input");
+    if (!dir)
+        return -1;
+    int found = -1;
+    struct dirent *ent;
+    while (found != 0 && (ent = readdir(dir)) != NULL) {
+        if (strncmp(ent->d_name, "event", 5) != 0)
+            continue;
+        char cand[NODE_PATH_MAX];
+        snprintf(cand, sizeof cand, "/dev/input/%s", ent->d_name);
+        int fd = open(cand, O_RDONLY | O_NONBLOCK);
+        if (fd < 0)
+            continue;
+        unsigned char mask[16] = { 0 };   /* ABS codes 0..127 */
+        /* EVIOCGBIT(EV_ABS, len), encoded the Linux way: read | size | 'E' | nr */
+        unsigned long req = (2UL << 30) | ((unsigned long)sizeof mask << 16) | ('E' << 8) | (0x20 + T_ABS);
+        if (ioctl(fd, req, mask) >= 0 && axis_bit(mask, C_MT_X) && axis_bit(mask, C_MT_Y)) {
+            snprintf(path, len, "%s", cand);
+            found = 0;
         }
         close(fd);
     }
-    closedir(d);
-    return -1;
+    closedir(dir);
+    return found;
+}
+
+static int num(const char *s, int *out)
+{
+    char *end;
+    errno = 0;
+    long v = strtol(s, &end, 10);
+    if (errno || end == s || *end || v < -100000 || v > 100000)
+        return -1;
+    *out = (int)v;
+    return 0;
+}
+
+/* Parse up to max numbers from argv[from..] into v (extra words are ignored);
+ * optional ones that are absent keep v's preset. */
+static int nums(char **argv, int argc, int from, int need, int max, int *v)
+{
+    int have = argc - from;
+    if (have < need)
+        return -1;
+    if (have > max)
+        have = max;
+    for (int i = 0; i < have; i++)
+        if (num(argv[from + i], &v[i]) != 0)
+            return -1;
+    return 0;
+}
+
+static int cmd_tap(const char *node, char **argv, int argc)
+{
+    int v[2];
+    if (nums(argv, argc, 3, 2, 2, v) != 0)
+        return -1;
+    printf("tap %d,%d on %s\n", v[0], v[1], node);
+    finger_down(v[0], v[1]);
+    pause_ms(TAP_HOLD_MS);
+    finger_up();
+    return 0;
+}
+
+static int cmd_swipe(const char *node, char **argv, int argc)
+{
+    int v[5] = { 0, 0, 0, 0, 300 };
+    if (nums(argv, argc, 3, 4, 5, v) != 0 || v[4] < 0)
+        return -1;
+    int x0 = v[0], y0 = v[1], x1 = v[2], y1 = v[3], ms = v[4];
+    printf("swipe %d,%d -> %d,%d (%dms) on %s\n", x0, y0, x1, y1, ms, node);
+
+    int steps = ms / FRAME_MS;
+    if (steps < MIN_SWIPE_STEPS)
+        steps = MIN_SWIPE_STEPS;
+    long step_ms = (long)ms / steps;
+
+    finger_down(x0, y0);
+    for (int k = 1; k <= steps; k++) {
+        pause_ms(step_ms);
+        move_to(x0 + (x1 - x0) * k / steps, y0 + (y1 - y0) * k / steps);
+        sync_frame();
+    }
+    pause_ms(SWIPE_SETTLE_MS);
+    finger_up();
+    return 0;
+}
+
+/* A key press and release. The UI lights the panel only from the power key,
+ * so a headless check that starts with the screen dark needs this first. */
+static int cmd_key(const char *node, char **argv, int argc)
+{
+    int v[2] = { 0, 60 };
+    if (nums(argv, argc, 3, 1, 2, v) != 0 || v[0] < 0 || v[0] > 0x2ff || v[1] < 0)
+        return -1;
+    printf("key %d (%dms) on %s\n", v[0], v[1], node);
+    emit(T_KEY, (uint16_t)v[0], 1);
+    sync_frame();
+    pause_ms(v[1]);
+    emit(T_KEY, (uint16_t)v[0], 0);
+    sync_frame();
+    return 0;
+}
+
+static const struct {
+    const char *name;
+    int (*run)(const char *node, char **argv, int argc);
+    const char *args;
+} commands[] = {
+    { "tap", cmd_tap, "X Y" },
+    { "swipe", cmd_swipe, "X0 Y0 X1 Y1 [MS]" },
+    { "key", cmd_key, "CODE [HOLD_MS]   (KEY_POWER = 116, usually on /dev/input/event0)" },
+};
+#define N_COMMANDS (sizeof commands / sizeof commands[0])
+
+static int usage(void)
+{
+    for (size_t i = 0; i < N_COMMANDS; i++)
+        fprintf(stderr, "%s touchsim NODE|auto %s %s\n", i ? "      " : "usage:", commands[i].name,
+                commands[i].args);
+    return 1;
 }
 
 int main(int argc, char **argv)
 {
-    if (argc < 3) {
-        fprintf(stderr, "Usage: touchsim <dev|auto> tap <x> <y>\n");
-        fprintf(stderr, "       touchsim <dev|auto> swipe <x1> <y1> <x2> <y2> [dur_ms]\n");
-        fprintf(stderr, "       touchsim /dev/input/event0 key <code> [hold_ms]   (power = 116)\n");
-        return 1;
+    if (argc < 3)
+        return usage();
+
+    size_t which = N_COMMANDS;
+    for (size_t i = 0; i < N_COMMANDS; i++)
+        if (strcmp(argv[2], commands[i].name) == 0)
+            which = i;
+    if (which == N_COMMANDS) {
+        fprintf(stderr, "touchsim: unknown action '%s'\n", argv[2]);
+        return usage();
     }
 
-    char dev[288];
-    if (!strcmp(argv[1], "auto")) {
-        if (probe_touch(dev, sizeof dev) != 0) {
-            fprintf(stderr, "no touchscreen found\n");
+    char node[NODE_PATH_MAX];
+    if (strcmp(argv[1], "auto") == 0) {
+        if (find_touch_node(node, sizeof node) != 0) {
+            fprintf(stderr, "touchsim: no multi-touch input node under /dev/input\n");
             return 1;
         }
     } else {
-        strncpy(dev, argv[1], sizeof dev - 1);
+        snprintf(node, sizeof node, "%s", argv[1]);
     }
 
-    int fd = open(dev, O_RDWR);
-    if (fd < 0) {
-        fprintf(stderr, "cannot open %s: %s\n", dev, strerror(errno));
+    out_fd = open(node, O_WRONLY);
+    if (out_fd < 0) {
+        fprintf(stderr, "touchsim: cannot open %s: %s\n", node, strerror(errno));
         return 1;
     }
-
-    if (!strcmp(argv[2], "tap") && argc >= 5) {
-        int x = atoi(argv[3]), y = atoi(argv[4]);
-        printf("tap %d,%d on %s\n", x, y, dev);
-        do_tap(fd, x, y);
-    } else if (!strcmp(argv[2], "key") && argc >= 4) {
-        /* Press a key on an evdev node, e.g. power (KEY_POWER 116) on
-         * /dev/input/event0. Needed because the UI only lights the panel
-         * from the power key: with 自动息屏 set to 常亮 the backlight is
-         * never touched by the UI at all, so a UI started while the screen
-         * happens to be dark stays dark — and the Tailscale/eSIM pollers,
-         * which gate on backlight_is_on(), then never run and screenshot
-         * as empty cards. Long-press (>=800ms) opens the power menu. */
-        int code = atoi(argv[3]);
-        int hold = argc > 4 ? atoi(argv[4]) : 60;
-        printf("key %d (%dms) on %s\n", code, hold, dev);
-        send_event(fd, EV_KEY, code, 1);
-        send_event(fd, EV_SYN, SYN_REPORT, 0);
-        usleep(hold * 1000);
-        send_event(fd, EV_KEY, code, 0);
-        send_event(fd, EV_SYN, SYN_REPORT, 0);
-    } else if (!strcmp(argv[2], "swipe") && argc >= 7) {
-        int x1 = atoi(argv[3]), y1 = atoi(argv[4]);
-        int x2 = atoi(argv[5]), y2 = atoi(argv[6]);
-        int dur = argc > 7 ? atoi(argv[7]) : 300;
-        printf("swipe %d,%d -> %d,%d (%dms) on %s\n", x1, y1, x2, y2, dur, dev);
-        do_swipe(fd, x1, y1, x2, y2, dur);
-    } else {
-        fprintf(stderr, "unknown action\n");
-        close(fd);
-        return 1;
+    int rc = commands[which].run(node, argv, argc);
+    close(out_fd);
+    if (rc != 0) {
+        fprintf(stderr, "touchsim: bad arguments for '%s'\n", commands[which].name);
+        return usage();
     }
-
-    close(fd);
     return 0;
 }

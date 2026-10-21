@@ -103,7 +103,7 @@
 # Older installs kept the identity in $D/tailscaled.state or in a file named
 # $D/state; it is moved to $D/state/tailscaled.state before the first start,
 # so the node keeps its identity.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 SELF=$0

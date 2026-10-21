@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
+{% block main %}
+<h1 class="nd-title mb-2 mt-2">{{ shell.title() }}</h1>
+<p class="nd-aux mb-4 px-1">{{ l.pick("Counted by the device, per day on its clock and per SIM card (whichever card had mobile data at the time). Kept for 400 days. The operator's own count may differ a little.", "设备自己数的，按设备时间分天、按当时上网的那张卡记；保留 400 天。和运营商的账单可能有一点出入。") }}</p>
+<div class="pg-col">
+{{ main|safe }}
+</div>
+{% endblock %}

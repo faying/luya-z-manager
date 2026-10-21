@@ -16,9 +16,11 @@
 .tr-line { pointer-events: none; }
 .tr-line polyline { fill: none; stroke: var(--nd-accMark); stroke-width: 2px; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .tr-line polyline.tr-dash { stroke: var(--nd-t2); stroke-dasharray: 4 3; }
-.tr-line--stale polyline, .tr-line--stale polyline.tr-dash { stroke: var(--nd-t3); }
+.tr-line polyline.tr-sig { stroke: var(--nd-warnMark); stroke-width: 1.5px; }
+.tr-line--stale polyline, .tr-line--stale polyline.tr-dash, .tr-line--stale polyline.tr-sig { stroke: var(--nd-t3); }
 .tr-grid { stroke: var(--nd-hair); stroke-width: 1px; vector-effect: non-scaling-stroke; }
 .tr-tick { position: absolute; left: 0; width: 34px; text-align: right; font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums; color: var(--nd-t3); }
+.tr-tick--r { left: auto; right: 0; width: 24px; color: var(--nd-warnT); }
 .tr-svg { position: absolute; top: 0; bottom: 0; left: 40px; height: 100%; width: calc(100% - 40px); }
 .tr-empty { display: flex; height: 120px; align-items: center; justify-content: center; font-size: 14px; color: var(--nd-t2); }
 
@@ -82,3 +84,26 @@
 .cpu-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 
 .st-config-example { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* /usage (usage.rs): one bar a day, stacked by card */
+.us-card { padding: 12px; max-width: 1100px; }
+.us-bars { display: flex; align-items: flex-end; gap: 2px; height: 140px; }
+.us-bar { flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column-reverse; }
+.us-bar i { display: block; min-height: 1px; }
+.us-bar i:last-child { border-radius: 2px 2px 0 0; }
+.us-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-size: 13px; color: var(--nd-t2); }
+.us-key { display: inline-flex; align-items: center; gap: 6px; }
+.us-sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; flex: none; }
+.us-key .us-sw { margin-right: 0; }
+.us-list .nd-row__text { display: flex; flex-direction: column; min-width: 0; }
+/* /clients: identification line, private tag, details panel (lan-client-id.md T5) */
+.cl-row .cl-more { flex: none; margin-inline-end: -8px; }
+.cl-row .cl-more[aria-expanded="true"] svg { transform: rotate(90deg); }
+.cl-tag { display: inline-block; padding: 0 8px; border: 1px solid var(--nd-hair); border-radius: 999px; font-size: 12px; line-height: 18px; color: var(--nd-t2); white-space: nowrap; }
+.cl-det { display: grid; gap: 12px; padding: 12px 16px 16px; border-top: 1px solid var(--nd-sep); background: var(--nd-track); }
+.cl-src { display: grid; gap: 8px; margin: 0; }
+.cl-src > div { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 12px; }
+.cl-src dt { font-size: 13px; line-height: 20px; color: var(--nd-t3); }
+.cl-src dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--nd-t1); }
+.cl-alias { display: grid; gap: 6px; }
+.cl-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 639px) { .cl-acts > .nd-btn { flex: 1 1 100%; } }

@@ -4,7 +4,7 @@
 //!
 //! Positions are relative to the parent. "xr" = right edge at xr: such labels are aligned to
 //! the parent's right side, so they stay right-aligned when their text changes.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use crate::lang::tr;
 use crate::logic::{self, BatState};

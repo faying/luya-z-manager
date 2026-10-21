@@ -322,6 +322,7 @@ pub fn run(c: &Cfg, mode: Mode) -> Vec<Row> {
     rows.extend(services(c));
     rows.extend(chill::rows(c));
     rows.extend(http(c));
+    rows.extend(lanid(c));
     rows.push(heartbeat(c));
     rows.extend(takeover(c));
     rows.push(wifi(c));
@@ -572,6 +573,75 @@ fn http(c: &Cfg) -> [Row; 2] {
             )
         },
     ]
+}
+
+/// lan-client-id.md §4a 状态: the lanid thread as the core's `clients` block reports it. No row
+/// when the core can't be read (the core-http row says so) or is older than lanid.
+fn lanid(c: &Cfg) -> Option<Row> {
+    let out = sh_raw(&c.wget, &["-q", "-T", "2", "-O", "-", &c.core_url], true);
+    let v: serde_json::Value = serde_json::from_str(&out).ok()?;
+    let s = &v["blocks"]["clients"]["data"]["lanid"];
+    if !s.is_object() {
+        return None;
+    }
+    let n = |k: &str| s[k].as_u64().unwrap_or(0);
+    let why = s["why"].as_str().unwrap_or_default();
+    let on: Vec<&str> = [
+        ("dhcp", "DHCP"),
+        ("mdns", "mDNS"),
+        ("ssdp", "SSDP"),
+        ("netbios", "NetBIOS"),
+    ]
+    .into_iter()
+    .filter(|(k, _)| s["sources"][*k].as_bool() == Some(true))
+    .map(|(_, l)| l)
+    .collect();
+    let counts = format!(
+        "{} 批 {} 包，trap {}，丢 {}，封锁 {}，记录 {}",
+        n("batches"),
+        n("frames"),
+        n("traps"),
+        n("dropped"),
+        n("blocked"),
+        n("records")
+    );
+    let counts_en = format!(
+        "{} batches {} frames, {} traps, {} dropped, {} blocked, {} records",
+        n("batches"),
+        n("frames"),
+        n("traps"),
+        n("dropped"),
+        n("blocked"),
+        n("records")
+    );
+    Some(if !on.is_empty() {
+        row(
+            "ok",
+            "lanid",
+            "设备识别",
+            format!("{}：{counts}", on.join("/")),
+            "Client identification",
+            format!("{}: {counts_en}", on.join("/")),
+        )
+    } else if s["loaded"].as_bool() != Some(true) {
+        row(
+            "warn",
+            "lanid",
+            "设备识别",
+            format!("没开（{why}）：已连设备只显示 DHCP 名字"),
+            "Client identification",
+            format!("Off ({why}): clients show DHCP names only"),
+        )
+    } else {
+        row(
+            "warn",
+            "lanid",
+            "设备识别",
+            format!("组件已加载，但没在收包（{why}）"),
+            "Client identification",
+            format!("Component loaded but not receiving ({why})"),
+        )
+    })
 }
 
 /// The sed in doctor.sh: the last `"noSyncModuleName": "…"` on each line, one per line.

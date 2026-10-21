@@ -22,7 +22,7 @@
 # writing /etc/config/wireless; nothing here reloads Wi-Fi — that, like every
 # Wi-Fi change on this device, is for the owner to decide (and to do under the
 # Wi-Fi lock).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 UCI=${CB_UCI:-uci}

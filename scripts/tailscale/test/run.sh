@@ -1,6 +1,6 @@
 #!/bin/sh
 # apply.sh against stubbed tailscale/jsonfilter/pidof/kill (busybox container).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 PASS=0; FAIL=0
 ok() { PASS=$((PASS + 1)); echo "  ok   $1"; }

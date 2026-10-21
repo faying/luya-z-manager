@@ -2,7 +2,7 @@
 //! data getters return, as one value. `structs.rs` holds the C structs (generated from include/ until
 //! Phase 10 X5 deleted the C UI; maintained by hand since); [`Model`] is tests/render/vm_model.c's object, key for key. The render
 //! test writes one per shot (--dump-model); the Rust UI draws from it.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 mod structs;
 pub use structs::*;
@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Model {
     pub data_ok: i32,
-    pub data: devui_data_t,
+    pub data: core_snapshot_t,
     pub live_ok: i32,
-    pub live: devui_data_t,
+    pub live: core_snapshot_t,
     pub backend_alive_wall: i64,
     pub backend_silent: i32,
     pub notice_ok: i32,
@@ -120,6 +120,9 @@ pub struct Model {
     /// when the core last looked at the public repo, worded (「3 小时前」, 「检查失败」…)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub versions_checked: Option<String>,
+    /// 落地 (core GET /v2/usage/landing): None = none to show
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landing: Option<landing_t>,
 
     pub bl_panel_lit: i32,
     pub bl_is_on: i32,
@@ -176,7 +179,7 @@ mod tests {
             }
         }
         same(&back, &orig, "");
-        assert_eq!(m.data.operator_name, "中国电信");
-        assert!(m.data.valid != 0);
+        assert_eq!(m.data.carrier, "中国电信");
+        assert!(m.data.populated != 0);
     }
 }

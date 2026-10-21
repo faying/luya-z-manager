@@ -1,5 +1,5 @@
 //! luyaz-ui: the touch UI (see lib.rs).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 /// Read from the file by the core (luyaz-core versions.rs), never by running the program.
 #[used]

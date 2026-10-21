@@ -1,6 +1,6 @@
 //! Wall-clock fields without a time-zone database: the device clock is local time labelled
 //! UTC (ZTE SNTP) and the process runs without TZ, so C's localtime() is a UTC breakdown.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tm {

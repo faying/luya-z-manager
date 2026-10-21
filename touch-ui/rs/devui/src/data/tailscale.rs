@@ -1,18 +1,18 @@
-//! Home's Tailscale card and page (src/tailscale.c): tailscaled's LocalAPI
-//! (GET /localapi/v0/status on its unix socket, ~2 ms; not the CLI), every 5 s while Home,
-//! 出口 or the page is up; the socket probed each time (the UI often starts before tailscaled).
-// SPDX-License-Identifier: MIT
+//! Tailscale for Home's card, its 出口 line and the Tailscale page. The source is tailscaled's
+//! own LocalAPI, `GET /localapi/v0/status` over its unix socket: about 2 ms, where the CLI takes
+//! seconds. Read every 5 s while one of those is on screen; which socket exists is checked on
+//! every read, because at boot the UI is usually up before tailscaled is.
 
 use super::http;
-use super::util::{find_byte, jget, mono_ms, obj_end, text, trunc, wall};
+use super::util::{jget, jtrue, mono_ms, objects, text, trunc, wall};
 use crate::json;
 use devui_model::{tailscale_peer_t, tailscale_status_t};
 use std::os::fd::AsRawFd;
 
-/// the local socket answers in 2 ms; a stuck tailscaled must not hold Home up
+/// tailscaled answers in a couple of ms; one that hangs must not hold Home up for long
 const TS_IO_MS: i32 = 500;
 const TS_TTL_MS: i64 = 5000;
-/// the socket is there but does not answer
+/// a socket that exists but did not answer is asked less often
 const TS_BACKOFF_MS: i64 = 15000;
 const TS_RESP_MAX: usize = 131072;
 pub const TS_PEER_MAX: usize = 12;
@@ -28,43 +28,52 @@ pub struct Tailscale {
     sig: Option<String>,
 }
 
-/// DNSName's first label ("u60-pro.tail0.ts.net." → u60-pro), else HostName, at most cap - 1.
-fn short_name(o: &[u8], cap: usize) -> String {
-    match json::get(o, "DNSName", 256) {
-        Some(d) if !d.is_empty() => {
-            let d = text(&d);
-            trunc(d.split('.').next().unwrap_or(""), cap)
+/// What a node is called on screen: the host part of its MagicDNS name
+/// ("u60-pro.tail0.ts.net." gives "u60-pro"); a node without one goes by HostName.
+fn node_name(node: &[u8], cap: usize) -> String {
+    match json::get(node, "DNSName", 256).filter(|d| !d.is_empty()) {
+        Some(dns) => {
+            let host = dns.split(|&c| c == b'.').next().unwrap_or_default();
+            trunc(&text(host), cap)
         }
-        _ => jget(o, "HostName", cap),
+        None => jget(node, "HostName", cap),
     }
 }
 
-/// The first `max` strings of an array joined with sep (as they are, escapes not decoded); a
-/// piece that does not fit is cut and ends the list, like the C snprintf.
-fn join_strings(arr: &[u8], sep: &str, max: usize, cap: usize) -> String {
-    let mut out: Vec<u8> = Vec::new();
-    let mut p = 0;
-    for n in 0..max {
-        let Some(q) = find_byte(arr, b'"', p) else { break };
-        let mut e = q + 1;
-        while e < arr.len() && arr[e] != 0 && arr[e] != b'"' {
-            e += if arr[e] == b'\\' && e + 1 < arr.len() { 2 } else { 1 };
+/// The inside of every "…" in `arr`, in order and as written (escapes stay escapes). A string
+/// that is not closed, or runs into a NUL, ends the walk.
+fn quoted(arr: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let mut rest = arr;
+    std::iter::from_fn(move || {
+        let open = rest.iter().position(|&c| c == b'"')?;
+        let body = &rest[open + 1..];
+        let mut i = 0;
+        loop {
+            match body.get(i) {
+                None | Some(0) => return None,
+                Some(b'"') => break,
+                Some(b'\\') if i + 1 < body.len() => i += 2,
+                Some(_) => i += 1,
+            }
         }
-        if e >= arr.len() || arr[e] != b'"' {
+        rest = &body[i + 1..];
+        Some(&body[..i])
+    })
+}
+
+/// Up to `max` strings of a JSON array, `sep` between them, in a buffer of `cap` (so at most
+/// cap - 1 bytes). The string that would overflow is cut at the edge and nothing follows it.
+fn list_text(arr: &[u8], sep: &str, max: usize, cap: usize) -> String {
+    let room = cap - 1;
+    let mut out = Vec::with_capacity(room);
+    for (n, s) in quoted(arr).take(max).enumerate() {
+        let gap: &[u8] = if n == 0 { b"" } else { sep.as_bytes() };
+        let whole = gap.len() + s.len();
+        let left = room - out.len();
+        out.extend(gap.iter().chain(s).take(left));
+        if whole > left {
             break;
         }
-        let mut piece = Vec::new();
-        if n > 0 {
-            piece.extend_from_slice(sep.as_bytes());
-        }
-        piece.extend_from_slice(&arr[q + 1..e]);
-        let room = cap - 1 - out.len();
-        if piece.len() > room {
-            out.extend_from_slice(&piece[..room]);
-            break;
-        }
-        out.extend_from_slice(&piece);
-        p = e + 1;
     }
     text(&out)
 }
@@ -96,162 +105,138 @@ fn iso_ago(iso: &str, now: i64) -> i64 {
 }
 
 impl Tailscale {
-    fn get(sock: &str, path: &str) -> Option<Vec<u8>> {
+    /// One LocalAPI GET; the body only when tailscaled said 200.
+    fn ask(sock: &str, path: &str) -> Option<Vec<u8>> {
         let req = http::build("GET", path, "local-tailscaled.sock", "", None, 256)?;
-        let fd = http::connect_unix(sock)?;
-        if http::wait(fd.as_raw_fd(), true, TS_IO_MS) <= 0 {
+        let conn = http::connect_unix(sock)?;
+        if http::wait(conn.as_raw_fd(), true, TS_IO_MS) <= 0 {
             return None;
         }
-        let r = http::exchange(fd, req.as_bytes(), TS_RESP_MAX, TS_IO_MS);
-        if r.status == 200 { r.body } else { None }
+        let resp = http::exchange(conn, req.as_bytes(), TS_RESP_MAX, TS_IO_MS);
+        (resp.status == 200).then_some(resp.body).flatten()
     }
 
-    /// /localapi/v0/status into the fields the card and the page show (parse_status).
+    /// The status answer into what the card and the page show.
     pub fn parse_status(&mut self, b: &[u8]) {
-        let st = &mut self.st;
-        st.state = jget(b, "BackendState", 24);
-        st.health = json::get(b, "Health", 1024).map(|a| join_strings(&a, "", 1, 160)).unwrap_or_default();
-        st.name.clear();
-        st.ip.clear();
-        st.relay.clear();
-        st.routes.clear();
-        st.ip6.clear();
-        st.os.clear();
-        st.version.clear();
-        st.tailnet.clear();
-        st.key_expiry.clear();
-        st.self_online = 0;
-        if let Some(v) = json::get(b, "Version", 24) {
-            st.version = text(&v).split('-').next().unwrap_or("").to_string();
-        }
-        if let Some(tn) = json::get(b, "CurrentTailnet", 256)
-            && tn.first() == Some(&b'{')
-        {
-            st.tailnet = jget(&tn, "Name", 64);
-        }
-        if let Some(me) = json::get(b, "Self", 16384) {
-            st.name = short_name(&me, 64);
-            if let Some(arr) = json::get(&me, "TailscaleIPs", 1024) {
-                st.ip = join_strings(&arr, "", 1, 48);
-                let two = join_strings(&arr, ",", 2, 128);
-                if let Some(c) = two.find(',') {
-                    st.ip6 = trunc(&two[c + 1..], 48);
-                }
-            }
-            st.os = jget(&me, "OS", 16);
-            if let Some(ke) = json::get(&me, "KeyExpiry", 40)
-                && ke.len() >= 10
-                && !ke.starts_with(b"0001")
-            {
-                st.key_expiry = text(&ke[..10]);
-            }
-            st.relay = jget(&me, "Relay", 32);
-            if let Some(arr) = json::get(&me, "PrimaryRoutes", 1024) {
-                st.routes = join_strings(&arr, ", ", 4, 160);
-            }
-            st.self_online = (json::get(&me, "Online", 8).is_some_and(|v| v == b"true")) as i32;
-        }
+        self.st = tailscale_status_t { available: self.st.available, ok: self.st.ok, ..self.read_me(b) };
+        self.read_peers(b);
+    }
 
-        // Peer is {"nodekey:…": {…}, …}: each object cut out on its own
-        st.peers = 0;
-        st.peers_online = 0;
-        st.active = 0;
-        st.direct = 0;
-        st.exit_node.clear();
-        st.exit_online = 0;
-        self.peers.clear();
-        if let Some(peer) = json::get(b, "Peer", TS_RESP_MAX)
-            && peer.first() == Some(&b'{')
-        {
-            let now = wall();
-            let mut p = 1;
-            while let Some(o) = find_byte(&peer, b'{', p) {
-                let Some(e) = obj_end(&peer, o) else { break };
-                let pb = &peer[o..=e];
-                let tru = |k: &str| json::get(pb, k, 8).is_some_and(|v| v == b"true");
-                st.peers += 1;
-                let (online, active) = (tru("Online"), tru("Active"));
-                let mut direct = false;
-                if online {
-                    st.peers_online += 1;
-                }
-                if active {
-                    st.active += 1;
-                    // CurAddr set = hole-punched; empty = through DERP
-                    if json::get(pb, "CurAddr", 128).is_some_and(|c| !c.is_empty()) {
-                        st.direct += 1;
-                        direct = true;
-                    }
-                }
-                if self.peers.len() < TS_PEER_MAX {
-                    let ago = |k: &str| json::get(pb, k, 48).map_or(-1, |t| iso_ago(&text(&t), now));
-                    self.peers.push(tailscale_peer_t {
-                        name: short_name(pb, 40),
-                        ip: json::get(pb, "TailscaleIPs", 256).map(|a| join_strings(&a, "", 1, 24)).unwrap_or_default(),
-                        online: online as i32,
-                        active: active as i32,
-                        direct: direct as i32,
-                        exit_node: tru("ExitNode") as i32,
-                        os: jget(pb, "OS", 16),
-                        cur_addr: jget(pb, "CurAddr", 48),
-                        relay: jget(pb, "Relay", 16),
-                        rx: json::get_int(pb, "RxBytes", 0),
-                        tx: json::get_int(pb, "TxBytes", 0),
-                        hs_ago: ago("LastHandshake"),
-                        seen_ago: ago("LastSeen"),
-                    });
-                }
-                if tru("ExitNode") {
-                    st.exit_node = short_name(pb, 64);
-                    st.exit_online = online as i32;
-                }
-                p = e + 1;
+    /// The tailnet-wide fields and this node's own.
+    fn read_me(&self, b: &[u8]) -> tailscale_status_t {
+        let mut st = tailscale_status_t {
+            state: jget(b, "BackendState", 24),
+            health: json::get(b, "Health", 1024).map(|h| list_text(&h, "", 1, 160)).unwrap_or_default(),
+            ..Default::default()
+        };
+        if let Some(v) = json::get(b, "Version", 24) {
+            // "1.102.4-t0123abcd-g4567": the release number is enough
+            st.version = text(v.split(|&c| c == b'-').next().unwrap_or_default());
+        }
+        if let Some(net) = json::get(b, "CurrentTailnet", 256).filter(|n| n.starts_with(b"{")) {
+            st.tailnet = jget(&net, "Name", 64);
+        }
+        let Some(me) = json::get(b, "Self", 16384) else { return st };
+        st.name = node_name(&me, 64);
+        if let Some(ips) = json::get(&me, "TailscaleIPs", 1024) {
+            st.ip = list_text(&ips, "", 1, 48);
+            // the v6 address is the second one; both are read through the same 128-byte buffer
+            let both = list_text(&ips, ",", 2, 128);
+            if let Some((_, v6)) = both.split_once(',') {
+                st.ip6 = trunc(v6, 48);
             }
+        }
+        st.os = jget(&me, "OS", 16);
+        // the zero time (0001-…) is a key that does not expire
+        if let Some(exp) = json::get(&me, "KeyExpiry", 40).filter(|e| e.len() >= 10 && !e.starts_with(b"0001")) {
+            st.key_expiry = text(&exp[..10]);
+        }
+        st.relay = jget(&me, "Relay", 32);
+        if let Some(routes) = json::get(&me, "PrimaryRoutes", 1024) {
+            st.routes = list_text(&routes, ", ", 4, 160);
+        }
+        st.self_online = jtrue(&me, "Online") as i32;
+        st
+    }
+
+    /// "Peer" maps node keys to node objects: count them, keep the first TS_PEER_MAX for the
+    /// page, and note which one (if any) is the exit node.
+    fn read_peers(&mut self, b: &[u8]) {
+        self.peers.clear();
+        let Some(map) = json::get(b, "Peer", TS_RESP_MAX).filter(|m| m.starts_with(b"{")) else { return };
+        let now = wall();
+        for node in objects(&map[1..]) {
+            let online = jtrue(node, "Online");
+            let active = jtrue(node, "Active");
+            // a peer talking to us straight has CurAddr; one going through DERP has it empty
+            let direct = active && json::get(node, "CurAddr", 128).is_some_and(|a| !a.is_empty());
+            let exit = jtrue(node, "ExitNode");
+            let st = &mut self.st;
+            st.peers += 1;
+            st.peers_online += online as i32;
+            st.active += active as i32;
+            st.direct += direct as i32;
+            if exit {
+                st.exit_node = node_name(node, 64);
+                st.exit_online = online as i32;
+            }
+            if self.peers.len() == TS_PEER_MAX {
+                continue;
+            }
+            let since = |key: &str| json::get(node, key, 48).map_or(-1, |t| iso_ago(&text(&t), now));
+            self.peers.push(tailscale_peer_t {
+                name: node_name(node, 40),
+                ip: json::get(node, "TailscaleIPs", 256).map(|a| list_text(&a, "", 1, 24)).unwrap_or_default(),
+                online: online as i32,
+                active: active as i32,
+                direct: direct as i32,
+                exit_node: exit as i32,
+                os: jget(node, "OS", 16),
+                cur_addr: jget(node, "CurAddr", 48),
+                relay: jget(node, "Relay", 16),
+                rx: json::get_int(node, "RxBytes", 0),
+                tx: json::get_int(node, "TxBytes", 0),
+                hs_ago: since("LastHandshake"),
+                seen_ago: since("LastSeen"),
+            });
         }
     }
 
-    /// active = Home, 出口 or the page is up on a lit screen. true = what shows changed.
+    /// What the card and the page compare to know whether to redraw.
+    fn shown(&self) -> String {
+        let st = &self.st;
+        let counts = [st.available, st.ok, st.self_online, st.exit_online, st.peers, st.peers_online, st.active, st.direct];
+        let mut s = counts.map(|n| n.to_string()).join("/");
+        for field in [&st.state, &st.name, &st.ip, &st.relay, &st.routes, &st.exit_node, &st.health] {
+            s.push('\u{1}');
+            s.push_str(field);
+        }
+        s
+    }
+
+    /// active: Home, 出口 or the page is on a lit screen. true when what they show changed.
     pub fn poll(&mut self, active: bool) -> bool {
         if !active {
             self.was_active = false;
             return false;
         }
-        let t = mono_ms();
-        let ttl = if self.sock.is_some() && self.st.ok == 0 { TS_BACKOFF_MS } else { TS_TTL_MS };
-        if self.was_active && t - self.poll_ms < ttl {
+        let now = mono_ms();
+        let unanswered = self.sock.is_some() && self.st.ok == 0;
+        let every = if unanswered { TS_BACKOFF_MS } else { TS_TTL_MS };
+        if self.was_active && now - self.poll_ms < every {
             return false;
         }
         self.was_active = true;
-        self.poll_ms = t;
-        // probed every time: at boot the UI is often up before tailscaled
-        self.sock = SOCKS.iter().copied().find(|s| std::path::Path::new(s).exists());
+        self.poll_ms = now;
+        self.sock = SOCKS.into_iter().find(|s| std::path::Path::new(s).exists());
+        let body = self.sock.and_then(|s| Self::ask(s, "/localapi/v0/status"));
         self.st.ok = 0;
-        if let Some(s) = self.sock
-            && let Some(b) = Self::get(s, "/localapi/v0/status")
-        {
+        if let Some(b) = body {
             self.parse_status(&b);
             self.st.ok = 1;
         }
         self.st.available = self.sock.is_some() as i32;
-        let st = &self.st;
-        let sig = format!(
-            "{}/{}/{}/{}/{}/{}/{}/{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
-            st.available,
-            st.ok,
-            st.self_online,
-            st.exit_online,
-            st.peers,
-            st.peers_online,
-            st.active,
-            st.direct,
-            st.state,
-            st.name,
-            st.ip,
-            st.relay,
-            st.routes,
-            st.exit_node,
-            st.health
-        );
+        let sig = self.shown();
         if self.sig.as_ref() == Some(&sig) {
             return false;
         }
@@ -260,15 +245,14 @@ impl Tailscale {
     }
 
     pub fn status(&self) -> tailscale_status_t {
-        let mut s = self.st.clone();
-        s.available = self.sock.is_some() as i32;
-        s
+        tailscale_status_t { available: self.sock.is_some() as i32, ..self.st.clone() }
     }
 
     pub fn peers(&self) -> &[tailscale_peer_t] {
         &self.peers
     }
 }
+
 
 #[cfg(test)]
 mod tests {

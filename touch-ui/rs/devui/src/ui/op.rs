@@ -3,7 +3,7 @@
 //! transaction for it, 「上次改动」 under 网络模式, and the write controls greyed while core is
 //! stuck; the 事务页 (conclusion → 旧 → 新 · 来源 → three steps → countdown → buttons) and
 //! 系统 › 改动记录 with each change in full.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::{obj_scroller, Sub, Ui, SUBS, SUB_VIEW, TABS, TAB_CELL, TAB_HOME, VIEW_H};
 use crate::cf;

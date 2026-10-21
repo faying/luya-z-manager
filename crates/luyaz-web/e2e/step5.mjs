@@ -63,9 +63,9 @@ const PAGES = {
       ok(await p.locator("#cl-list .nd-row:visible").count() === 4, "4 active rows shown, the expired one hidden");
       ok(/5 GHz · Wi-Fi 6 · 2402 Mbps · 信号很好/.test(await p.textContent("#cl-list")), "Wi-Fi line");
       ok(/没连 Wi-Fi/.test(await p.textContent("#cl-list")), "not-on-Wi-Fi line");
-      await p.click("#cl-list button[aria-expanded]");
-      ok(await p.locator("#cl-list .nd-row:visible").count() === 5 && await p.getAttribute("#cl-list button[aria-expanded]", "aria-expanded") === "true", "toggle shows the expired lease");
-      ok(/隐藏已过期 \(1\)/.test(await p.locator("#cl-list button[aria-expanded]").innerText()), "toggle reads Hide");
+      await p.click("#cl-list button[aria-expanded]:not(.cl-more)");
+      ok(await p.locator("#cl-list .nd-row:visible").count() === 5 && await p.getAttribute("#cl-list button[aria-expanded]:not(.cl-more)", "aria-expanded") === "true", "toggle shows the expired lease");
+      ok(/隐藏已过期 \(1\)/.test(await p.locator("#cl-list button[aria-expanded]:not(.cl-more)").innerText()), "toggle reads Hide");
       // a push keeps the toggle (signal in the page, not server state)
       await p.click("button[aria-label='刷新']");
       await p.waitForTimeout(1500);
@@ -79,6 +79,49 @@ const PAGES = {
       await p.click("#cl-status button");
       await p.waitForSelector("#cl-status .nd-status--ok", { timeout: 8000 }).catch(() => {});
       ok(/实时/.test(await p.textContent("#cl-status")), "Retry: live again");
+      // identification (lan-client-id.md T5): winning name, kind · vendor, private tag, details
+      const list = () => p.textContent("#cl-list");
+      ok(/Sam's iPhone/.test(await list()) && /手机 · Apple/.test(await list()), "mDNS name wins, kind · vendor line");
+      ok(/Kid's iPad/.test(await list()), "an alias wins over the lease name");
+      ok(await p.locator("#cl-list .cl-row:has(#cl-n-020000000011) .cl-tag").count() === 1, "random MAC: 私有地址 tag");
+      ok(await p.locator("#cl-list .cl-row:has(#cl-n-a483e7000012) .cl-tag").count() === 0, "real MAC: no tag");
+      const mb = "#cl-b-a483e7000012", det = "#cl-d-a483e7000012";
+      await p.click(mb);
+      ok(await p.isVisible(det) && await p.getAttribute(mb, "aria-expanded") === "true", "details open");
+      const srcs = await p.locator(`${det} .cl-src > div`).allInnerTexts();
+      ok(srcs.length === 5 && /DHCP/.test(srcs[0]) && /NetBIOS/.test(srcs[1]) && /OUI/.test(srcs[2]) && /SSDP/.test(srcs[3]) && /笔记本电脑/.test(srcs[4]), `every source listed: ${srcs.map((x) => x.replace(/\s+/g, " ")).join(" | ")}`);
+      await p.fill(`${det} input`, "工作电脑");
+      await p.click(`${det} .cl-acts .nd-btn--secondary`);
+      await p.waitForSelector("#cl-alias-confirm", { timeout: 5000 }).catch(() => {});
+      ok(/「MacBook-Air」/.test(await p.textContent("#cl-alias-confirm")) && /「工作电脑」/.test(await p.textContent("#cl-alias-confirm")), "inline confirm says what changes");
+      await p.waitForTimeout(6000);
+      ok(await p.isVisible("#cl-alias-confirm") && await p.isVisible(det), "confirm and details survive a push");
+      await p.click("#cl-alias-confirm .nd-btn--confirm");
+      await p.waitForFunction(() => /别名已保存|设备已接受/.test(document.querySelector("#cl-alias-op")?.textContent ?? ""), null, { timeout: 15000 }).catch(() => {});
+      ok(/别名已保存/.test(await p.textContent("#cl-alias-op")), `alias read back: ${(await p.textContent("#cl-alias-op")).trim()}`);
+      await p.waitForFunction(() => document.querySelector("#cl-n-a483e7000012")?.textContent === "工作电脑", null, { timeout: 8000 }).catch(() => {});
+      ok(await p.textContent("#cl-n-a483e7000012") === "工作电脑", "row shows the alias");
+      ok(/你设的别名/.test(await p.textContent(det)), "details list the alias as a source");
+      await p.fill(`${det} input`, "电".repeat(22));
+      await p.click(`${det} .cl-acts .nd-btn--secondary`);
+      await p.waitForFunction(() => /64 字节/.test(document.querySelector("#cl-alias-op")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
+      ok(/64 字节/.test(await p.textContent("#cl-alias-op")), "a too-long alias is refused with the reason");
+      await p.click(`${det} .cl-acts .nd-btn--ghost`);
+      await p.waitForSelector("#cl-alias-confirm", { timeout: 5000 }).catch(() => {});
+      ok(/删除别名/.test(await p.textContent("#cl-alias-confirm")), "remove asks first");
+      await p.click("#cl-alias-confirm .nd-btn--confirm");
+      await p.waitForFunction(() => document.querySelector("#cl-n-a483e7000012")?.textContent === "MacBook-Air", null, { timeout: 15000 }).catch(() => {});
+      ok(/别名已删除/.test(await p.textContent("#cl-alias-op")) && await p.textContent("#cl-n-a483e7000012") === "MacBook-Air", "alias removed, the DHCP name is back");
+      await p.click(mb);
+      ok(!(await p.isVisible(det)), "details close");
+      // phone: targets ≥ 44 px
+      await p.setViewportSize({ width: 390, height: 844 });
+      await p.click(mb);
+      const boxes = await p.evaluate((d) => [document.querySelector("#cl-b-a483e7000012"), ...document.querySelectorAll(`${d} button, ${d} input`)].map((e) => Math.round(e.getBoundingClientRect().height)), det);
+      ok(boxes.every((h) => h >= 44), `phone targets ≥ 44 px (${boxes.join(",")})`);
+      ok(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "phone: details open, no sideways scroll");
+      await p.click(mb);
+      await p.setViewportSize({ width: 1280, height: 900 });
     },
   },
   speedtest: {

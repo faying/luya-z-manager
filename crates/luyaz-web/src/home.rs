@@ -35,6 +35,7 @@ use crate::pages::{Shared, split_leaves};
 use crate::view::{self, Readout, js_num, num};
 
 mod chill;
+mod landing;
 pub(crate) mod poller;
 
 const PATH: &str = "/";
@@ -45,6 +46,7 @@ pub fn routes() -> Router<Shared> {
         .route("/home/events", get(events));
     let r = chill::routes(r);
     let r = poller::routes(r);
+    let r = landing::routes(r);
     r
 }
 
@@ -56,6 +58,7 @@ struct Page {
     status: String,
     chill: String,
     poller: String,
+    landing: String,
 }
 
 async fn page(State(app): State<Shared>, req: Request) -> Response {
@@ -77,6 +80,7 @@ async fn page(State(app): State<Shared>, req: Request) -> Response {
         status,
         chill: chill::frame(ctx.lang),
         poller: poller::frame(),
+        landing: landing::frame(),
     }
     .render()
     .unwrap();
@@ -304,6 +308,7 @@ struct Poll {
     logo_dir: std::path::PathBuf,
     chill: chill::Chill,
     poller: poller::Poller,
+    landing: landing::Landing,
 }
 
 impl Poll {
@@ -320,6 +325,7 @@ impl Poll {
             logo_dir: std::path::PathBuf::new(),
             chill: chill::Chill::new(),
             poller: poller::Poller::new(),
+            landing: landing::Landing::new(),
         }
     }
 
@@ -330,7 +336,7 @@ impl Poll {
             .min(self.ts.next())
             .min(self.ni.next())
             .min(self.wifi.next());
-        let e = e.min(self.chill.next()).min(self.poller.next());
+        let e = e.min(self.chill.next()).min(self.poller.next()).min(self.landing.next());
         e
     }
 
@@ -344,6 +350,7 @@ impl Poll {
         let mut out = split_leaves(&Leaves { v: &v }.render().unwrap());
         out.extend(self.chill.leaves(app, self.l, now));
         out.extend(self.poller.leaves(self.l));
+        out.extend(self.landing.leaves(app, self.l, self.chill.status()));
         out
     }
 
@@ -676,6 +683,7 @@ impl Poll {
                 line: [
                     c.bw.map(|b| format!("{} MHz", js_num(b))),
                     c.rsrp.map(|r| format!("{r} dBm")),
+                    c.rsrq.map(|q| format!("RSRQ {}", js_num(q))),
                     c.sinr.map(|s| format!("SINR {}", js_num(s))),
                 ]
                 .into_iter()
@@ -855,6 +863,7 @@ impl Polled for Poll {
         );
         self.chill.poll(app, &self.who, now, kicked).await;
         self.poller.poll(app, &self.who, now, kicked).await;
+        self.landing.poll(app, &self.who, now, kicked).await;
         let at = Instant::now();
         if let Some(r) = screen {
             self.screen.set(at, r);
@@ -1201,6 +1210,7 @@ mod tests {
             status: String::new(),
             chill: chill::frame(Lang::En),
             poller: poller::frame(),
+            landing: landing::frame(),
         }
         .render()
         .unwrap();

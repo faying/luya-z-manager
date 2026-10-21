@@ -3,7 +3,7 @@
 # `procd_set_param command` with a fake program and a temp log: the log keeps what it had and
 # gains the start line and the program's output; the pid procd would track is the program's own
 # (exec, no sh left). Busybox container: scripts/test/docker.sh.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 SCRIPTS=${SCRIPTS:-/scripts}
 PASS=0

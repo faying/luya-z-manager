@@ -14,7 +14,7 @@
 # the clock the device thinks it is 2025-01-04. The number is allocated under the
 # directory's flock, so the web's "read" cursor and the core's "SMS done"
 # cursor stay valid across trims.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 ALERT_DIR=${ALERT_DIR:-/data/alerts}

@@ -199,6 +199,14 @@ pub static ROUTES: &[Route] = &[
         "近5分钟 曲线 网速 内存 电池曲线 jin5fenzhong trend trends graph cpu"
     ),
     r!(
+        "/usage",
+        "Data Usage",
+        "流量",
+        "SimCard",
+        Charts,
+        "流量 liuliang 用量 每天 按卡 usage data traffic 流量统计"
+    ),
+    r!(
         "/clients",
         "Clients",
         "已连设备",

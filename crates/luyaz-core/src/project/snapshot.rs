@@ -248,8 +248,13 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
             v.to_string()
         }
     };
-    let mut imsi = string(&sim, "sim_imsi");
-    if !valid_imsi(&imsi) {
+    // Dual SIM: the firmware's sim_* / msisdn / spn / UCI sim_info are always slot 1,
+    // slot 2 is only in sim2_*. When data is on slot 2 the sim block describes that card
+    // (screen logo, home PLMN); its number and SPN are not reported, so they stay blank.
+    let slot2 = data_on_slot2(&sim);
+    let card = |key: &str| card_field(&sim, slot2, key);
+    let mut imsi = card("sim_imsi");
+    if !valid_imsi(&imsi) && !slot2 {
         imsi = uci_get(&uci_sets, "zwrt_zte_mdm.sim_info.sim_imsi").into();
         if !valid_imsi(&imsi) {
             imsi.clear();
@@ -367,12 +372,15 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
     };
     let mut fields = Map::new();
     fields.insert("net".into(), Value::Object(net));
-    let (client_list, wifi_count, lan_count) =
+    let (mut client_list, wifi_count, lan_count) =
         connected_clients(&lan_clients, &wifi_clients, &leases);
+    // lan-client-id.md: aliases and what lanid learned (nothing without them)
+    let lanid = crate::lanid::project(&mut client_list);
     let clients = c::Clients {
         total: wifi_count + lan_count,
         wifi: wifi_count,
         lan: lan_count,
+        lanid,
         list: client_list,
     };
     fields.insert("clients".into(), c::value(&clients));
@@ -493,6 +501,9 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
         radio_nr_bandwidth: u("zte_nwinfo.cell_info.nr5g_bandwidth"),
         radio_lteca: u("zte_nwinfo.sys_info.lteca"),
         radio_net_select: u("zte_nwinfo.sys_info.net_select"),
+        nitz_timezone: u("zte_nwinfo.sys_info.nitz_timezone"),
+        nitz_time_dst: u("zte_nwinfo.sys_info.nitz_time_dst"),
+        nitz_sync_flag: u("zte_nwinfo.sys_info.nitz_sync_flag"),
         radio_nr_sa_bands: u("zte_nwinfo.band_lock.nr5g_sa_band_lock"),
         radio_nr_nsa_bands: u("zte_nwinfo.band_lock.nr5g_nsa_band_lock"),
         radio_lte_bands: u("zte_nwinfo.band_lock.lte_ext_band_lock"),
@@ -508,21 +519,21 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
         usb_mode: string(&usb, "mode"),
     };
     fields.insert("qos".into(), c::value(&qos));
-    let mut msisdn = string(&sim, "msisdn");
-    if !valid_msisdn(&msisdn) {
+    let mut msisdn = if slot2 { String::new() } else { string(&sim, "msisdn") };
+    if !valid_msisdn(&msisdn) && !slot2 {
         msisdn = uci_get(&uci_sets, "zwrt_zte_mdm.sim_info.msisdn").into();
         if !valid_msisdn(&msisdn) {
             msisdn.clear();
         }
     }
     let sim_block = c::Sim {
-        iccid: string(&sim, "sim_iccid"),
+        iccid: card("sim_iccid"),
         imsi: imsi.clone(),
         msisdn: msisdn.clone(),
-        spn: spn_from_ucs2_hex(&string(&sim, "spn_name_data")),
-        state: string(&sim, "sim_states"),
+        spn: if slot2 { String::new() } else { spn_from_ucs2_hex(&string(&sim, "spn_name_data")) },
+        state: card("sim_states"),
         modem_state: string(&sim, "modem_main_state"),
-        pin_status: string(&sim, "pin_status"),
+        pin_status: card("pin_status"),
         current_slot: integer(&sim, "current_sim_slot"),
         dual: sim_dual(&sim, &uci_sets).map(|d| dual_signals(d, &raw_net, now_epoch, standby_signal.as_ref())),
         dual_sim: integer(&sim, "support_dual_sim"),
@@ -740,6 +751,21 @@ pub(crate) fn uci_qci(v: &Result<Value, String>) -> Option<i64> {
 
 pub(crate) fn object(v: Result<Value, String>) -> Value {
     v.unwrap_or_else(|_| json!({}))
+}
+
+/// Data is on slot 2 and the firmware reports that card (sim2_iccid set).
+pub(crate) fn data_on_slot2(sim: &Value) -> bool {
+    integer(sim, "current_sim_slot") == 2 && !string(sim, "sim2_iccid").is_empty()
+}
+
+/// A get_sim_info field for the data card: `sim_imsi` / `pin_status` read as
+/// `sim2_imsi` / `sim2_pin_status` when data is on slot 2.
+pub(crate) fn card_field(sim: &Value, slot2: bool, key: &str) -> String {
+    if slot2 {
+        string(sim, &format!("sim2_{}", key.trim_start_matches("sim_")))
+    } else {
+        string(sim, key)
+    }
 }
 
 pub(crate) fn string(v: &Value, key: &str) -> String {
@@ -1541,7 +1567,12 @@ pub(crate) fn client_array(value: &Value, key: &str, leases: &Leases) -> Option<
                     .or_else(|| lease.map(|value| value.1.clone()))
                     .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| mac.clone());
-                Some(c::Client { name, ip, mac })
+                Some(c::Client {
+                    name,
+                    ip,
+                    mac,
+                    ..Default::default()
+                })
             })
             .collect()
     })
@@ -1734,6 +1765,23 @@ mod sim_dual_tests {
         assert_eq!((s2.provisioned, s2.present, s2.ready), (false, true, None));
         assert_eq!((s1.role.as_str(), s2.state.as_str(), s2.role.as_str()), ("data", "off", "off"));
         assert_eq!((s2.mcc.as_str(), s2.operator.as_str(), s2.iccid_tail.as_str()), ("", "CMCC", "2222"));
+    }
+
+    /// u60g 10-21：上网卡切到卡 2 后，get_sim_info 的 sim_* 仍是卡 1（联通），卡 2 只在 sim2_*。
+    #[test]
+    fn data_card_fields_follow_slot2() {
+        let sim = json!({"sim_imsi":"460012345678901","sim_iccid":"89860100000000000011","sim_states":"sim ready",
+            "pin_status":"0","sim2_imsi":"460131234567802","sim2_iccid":"89861300000000000029",
+            "sim2_states":"sim ready","sim2_pin_status":"0","current_sim_slot":"2"});
+        assert!(data_on_slot2(&sim));
+        assert_eq!(card_field(&sim, true, "sim_imsi"), "460131234567802");
+        assert_eq!(card_field(&sim, true, "sim_iccid"), "89861300000000000029");
+        assert_eq!(card_field(&sim, true, "pin_status"), "0");
+        let one = json!({"sim_imsi":"460012345678901","sim2_iccid":"89861300000000000029","current_sim_slot":"1"});
+        assert!(!data_on_slot2(&one));
+        assert_eq!(card_field(&one, false, "sim_imsi"), "460012345678901");
+        // 卡 2 没上报（未启用）：照旧读卡 1
+        assert!(!data_on_slot2(&json!({"current_sim_slot":"2"})));
     }
 
     #[test]

@@ -12,7 +12,7 @@
 # then runs $T/hook (break one thing at a set time). A "power cut" is
 # U60S_CRASH_AT=<point>: the executor kill -9s itself there (no traps run),
 # then luyaz-recover.sh runs with another boot_id, as rc.local would.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCRIPTS=${SCRIPTS:-/scripts}

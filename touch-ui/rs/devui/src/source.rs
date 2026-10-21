@@ -5,7 +5,7 @@
 //!
 //! Values that C reads live (the backlight, the clock, the frame and touch counters) are asked
 //! with the model at hand: the replay reads them from it, the device from the device.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 
 /// The screen owner's control FIFO: the sentinel's (Phase 10 R4; the old /tmp/u60-uid.ctl went
@@ -72,6 +72,8 @@ pub struct Polled {
     pub servers: bool,
     pub battery: bool,
     pub versions: bool,
+    /// 落地 changed
+    pub landing: bool,
     pub alerts: bool,
     pub diagnose: bool,
 }

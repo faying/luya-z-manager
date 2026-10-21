@@ -6,7 +6,7 @@
 # Everything lives under $T.
 #
 #   scripts/test/docker.sh        (runs every suite under scripts/test/)
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCRIPTS=${SCRIPTS:-/scripts}

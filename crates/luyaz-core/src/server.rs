@@ -31,16 +31,19 @@ pub(crate) use write::control_busy;
 pub struct App {
     inner: Arc<Inner>,
 }
+/// Shared server state behind every handler.
 struct Inner {
-    snapshot: RwLock<Snapshot>,
-    tx: watch::Sender<Snapshot>,
     /// 单一采集执行者：采样循环、全部 ubus 调用、/control 排队（STATE_V2.md 第 7、8 节）。
     exec: Executor,
-    _data_dir: PathBuf,
+    /// Last collected legacy snapshot, plus the channel that announces a changed one.
+    snapshot: RwLock<Snapshot>,
+    tx: watch::Sender<Snapshot>,
+    /// LAN credentials: the configured fixed token (if any) and the logins handed out by `/auth/*`.
     token: Option<String>,
     sessions: Mutex<Sessions>,
     /// `/v2/events` 的 SSE 连接名额。
     sse_slots: Arc<Semaphore>,
+    _data_dir: PathBuf,
     /// `/v2` 的流（epoch + broadcast），事件由 `Hub` 在锁里发进来。
     feed: Arc<v2::Feed>,
     /// E4 写操作层：事务引擎（`ops/`）。
@@ -56,6 +59,9 @@ struct Inner {
 /// 收到退出信号后最多等连接收尾这么久（P2-4）。procd 的 `term_timeout` 约 5 秒，到了就 SIGKILL；
 /// 这里留出余量。读不动的客户端（发送缓冲满）收不到流的结尾，graceful shutdown 会一直等它，所以要有上限。
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
+
+/// How many `/v2/events` subscribers may be connected at once.
+const MAX_SSE_CLIENTS: usize = 16;
 
 /// 启动进度（P1-3）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -142,7 +148,7 @@ impl App {
             core: Default::default(),
             fields: Map::new(),
         };
-        let (tx, _) = watch::channel(placeholder.clone());
+        let changed = watch::channel(placeholder.clone()).0;
         crate::ops::engine::on_agent_end(Box::new(|t| {
             crate::ops::agent::event(&crate::ops::agent::txn_text(t))
         }));
@@ -156,13 +162,13 @@ impl App {
         let (stage, _) = watch::channel(Stage::Starting);
         Ok(Self {
             inner: Arc::new(Inner {
-                snapshot: RwLock::new(placeholder),
-                tx,
                 exec,
-                _data_dir: data_dir,
+                snapshot: RwLock::new(placeholder),
+                tx: changed,
                 token,
                 sessions: Mutex::new(Sessions::default()),
-                sse_slots: Arc::new(Semaphore::new(16)),
+                sse_slots: Arc::new(Semaphore::new(MAX_SSE_CLIENTS)),
+                _data_dir: data_dir,
                 feed,
                 ops,
                 stage,
@@ -347,14 +353,14 @@ impl App {
             Ok(crate::longterm::places::advice_now()),
             tokio::time::Instant::now(),
         );
-        let mut old = self.inner.snapshot.write().await;
-        let mut comparable = next.clone();
-        comparable.ts = old.ts;
-        if comparable != *old {
-            *old = next.clone();
-            let _ = self.inner.tx.send(next);
+        let mut held = self.inner.snapshot.write().await;
+        // Only a change in content is announced; a new timestamp alone just moves `ts` forward.
+        let content_moved = held.core != next.core || held.fields != next.fields;
+        if content_moved {
+            let _ = self.inner.tx.send(next.clone());
+            *held = next;
         } else {
-            old.ts = next.ts;
+            held.ts = next.ts;
         }
     }
 }
@@ -427,6 +433,8 @@ impl App {
             .route("/v2/longterm/calib", post(longterm_calib))
             .route("/v2/versions", get(versions))
             .route("/v2/dual/switches", get(dual_switches))
+            .route("/v2/usage/days", get(usage_days))
+            .route("/v2/usage/landing", get(usage_landing))
             .route("/v2/versions/check", post(versions_check));
         // M6b: the screen's agent-shaped API (`/v2/api/...`, compat's `/api/...` routes), loopback
         // listener only. Nested at `/v2`: the routes above are static and win over the nest's tail.
@@ -461,6 +469,8 @@ async fn starting_gate(State(app): State<App>, request: Request, next: Next) -> 
             | "/control"
             | "/v2/scorecard"
             | "/v2/dual/switches"
+            | "/v2/usage/days"
+            | "/v2/usage/landing"
             | "/state"
             | "/events"
             | "/auth/login"
@@ -558,171 +568,161 @@ async fn scorecard(method: Method, uri: axum::http::Uri, body: axum::body::Bytes
     }
 }
 
+/// Paths reachable without any credential even when the listener requires one.
+const PUBLIC_PATHS: [&str; 4] = ["/", "/healthz", "/auth/login", "/auth/exchange"];
+
+/// The credential a client sent, looked up in order: `Authorization: Bearer`, the older
+/// `x-auth-token` header, then an `access_token=` query parameter (EventSource cannot set headers).
+fn presented_credential(request: &Request) -> Option<&str> {
+    let header = |name: &str| request.headers().get(name).and_then(|v| v.to_str().ok());
+    if let Some(bearer) = header("authorization").and_then(|v| v.strip_prefix("Bearer ")) {
+        return Some(bearer);
+    }
+    if let Some(token) = header("x-auth-token") {
+        return Some(token);
+    }
+    let query = request.uri().query()?;
+    query
+        .split('&')
+        .filter_map(|pair| pair.strip_prefix("access_token="))
+        .next()
+}
+
 async fn authenticate(State(app): State<App>, request: Request, next: Next) -> Response {
-    let path = request.uri().path();
-    if matches!(path, "/" | "/healthz" | "/auth/login" | "/auth/exchange") {
+    if PUBLIC_PATHS.contains(&request.uri().path()) {
         return next.run(request).await;
     }
-    let headers = request.headers();
-    let bearer = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-    let legacy = headers.get("x-auth-token").and_then(|v| v.to_str().ok());
-    let query = request.uri().query().and_then(|q| {
-        q.split('&')
-            .find_map(|part| part.strip_prefix("access_token="))
-    });
-    let presented = [bearer, legacy, query].into_iter().flatten().next();
-    let static_valid = static_token_valid(app.inner.token.as_deref(), presented);
-    let session_valid = if static_valid {
-        false
-    } else if let Some(value) = presented {
-        app.inner.sessions.lock().await.validate(value)
-    } else {
-        false
+    let allowed = match presented_credential(&request) {
+        None => false,
+        Some(given) if static_token_valid(app.inner.token.as_deref(), Some(given)) => true,
+        Some(given) => app.inner.sessions.lock().await.validate(given),
     };
-    if static_valid || session_valid {
-        next.run(request).await
-    } else {
-        (StatusCode::UNAUTHORIZED, Json(json!({"ok":false,"error":{"code":"unauthorized","message":"authentication required"}}))).into_response()
-    }
-}
-
-fn static_token_valid(configured: Option<&str>, presented: Option<&str>) -> bool {
-    configured.is_some_and(|wanted| {
-        presented.is_some_and(|value| constant_time_eq(value.as_bytes(), wanted.as_bytes()))
-    })
-}
-
-async fn auth_login(State(app): State<App>, headers: HeaderMap) -> Response {
-    let Some((username, password)) = basic_credentials(&headers) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"ok":false,"error":"missing_credentials"})),
-        )
-            .into_response();
-    };
-    if !auth::verify_password(&username, &password).await {
-        return (
+    if !allowed {
+        return error_reply(
             StatusCode::UNAUTHORIZED,
-            Json(json!({"ok":false,"error":"invalid_credentials"})),
-        )
-            .into_response();
+            json!({"ok":false,"error":{"code":"unauthorized","message":"authentication required"}}),
+        );
     }
-    match app.inner.sessions.lock().await.issue() {
-        Ok((token, expires_at)) => {
-            (StatusCode::OK, Json(auth::token_reply(token, expires_at))).into_response()
-        }
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"ok":false,"error":"token_issue_failed"})),
-        )
-            .into_response(),
+    next.run(request).await
+}
+
+/// The fixed LAN token matches only when one is configured: no token configured never means open.
+fn static_token_valid(configured: Option<&str>, presented: Option<&str>) -> bool {
+    match (configured, presented) {
+        (Some(expected), Some(given)) => same_bytes(given.as_bytes(), expected.as_bytes()),
+        _ => false,
     }
 }
 
+fn error_reply(status: StatusCode, body: Value) -> Response {
+    (status, Json(body)).into_response()
+}
+
+/// A short `{"ok":false,"error":"<code>"}` reply used by the login routes.
+fn auth_failure(status: StatusCode, code: &str) -> Response {
+    error_reply(status, json!({"ok":false,"error":code}))
+}
+
+/// Hand out a new login session after a successful check.
+async fn open_session(app: &App) -> Response {
+    let issued = app.inner.sessions.lock().await.issue();
+    match issued {
+        Ok((token, expires_at)) => Json(auth::token_reply(token, expires_at)).into_response(),
+        Err(_) => auth_failure(StatusCode::INTERNAL_SERVER_ERROR, "token_issue_failed"),
+    }
+}
+
+/// `POST /auth/login`: HTTP Basic with the stock web UI's user and password.
+async fn auth_login(State(app): State<App>, headers: HeaderMap) -> Response {
+    let Some((user, pass)) = basic_credentials(&headers) else {
+        return auth_failure(StatusCode::BAD_REQUEST, "missing_credentials");
+    };
+    if auth::verify_password(&user, &pass).await {
+        open_session(&app).await
+    } else {
+        auth_failure(StatusCode::UNAUTHORIZED, "invalid_credentials")
+    }
+}
+
+/// `POST /auth/exchange`: trade a token of the stock web UI (checked by `zwrt_web`) for a session.
 async fn auth_exchange(
     State(app): State<App>,
     ConnectInfo(crate::conn::Peer(peer)): ConnectInfo<crate::conn::Peer>,
     headers: HeaderMap,
 ) -> Response {
-    let token = headers
-        .get("x-web-token")
-        .or_else(|| headers.get("x-zte-webtoken"))
-        .and_then(|value| value.to_str().ok());
-    let Some(token) = token.filter(|value| !value.is_empty()) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"ok":false,"error":"missing_webtoken"})),
-        )
-            .into_response();
-    };
-    let mode = headers
-        .get("x-z-mode")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or_default();
-    let tag = headers
-        .get("x-z-tag")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("zwrt-datad");
-    if !auth::verify_webtoken(token, mode, &peer.ip().to_string(), tag).await {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"ok":false,"error":"invalid_webtoken"})),
-        )
-            .into_response();
+    let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    let web_token = text("x-web-token")
+        .or_else(|| text("x-zte-webtoken"))
+        .unwrap_or("");
+    if web_token.is_empty() {
+        return auth_failure(StatusCode::BAD_REQUEST, "missing_webtoken");
     }
-    match app.inner.sessions.lock().await.issue() {
-        Ok((token, expires_at)) => {
-            (StatusCode::OK, Json(auth::token_reply(token, expires_at))).into_response()
-        }
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"ok":false,"error":"token_issue_failed"})),
-        )
-            .into_response(),
+    let zmode: i64 = text("x-z-mode").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let ztag = text("x-z-tag").unwrap_or("zwrt-datad");
+    let remote = peer.ip().to_string();
+    if auth::verify_webtoken(web_token, zmode, &remote, ztag).await {
+        open_session(&app).await
+    } else {
+        auth_failure(StatusCode::UNAUTHORIZED, "invalid_webtoken")
     }
 }
 
+/// `Authorization: Basic …` split into user and password. Refused: oversized input, a NUL byte,
+/// an empty user name, non-UTF-8, or either half longer than 256 bytes.
 fn basic_credentials(headers: &HeaderMap) -> Option<(String, String)> {
-    let encoded = headers
-        .get("authorization")?
-        .to_str()
-        .ok()?
-        .strip_prefix("Basic ")?;
+    let raw = headers.get("authorization")?.to_str().ok()?;
+    let encoded = raw.strip_prefix("Basic ")?;
     if encoded.len() > 1024 {
         return None;
     }
-    let decoded = decode_base64(encoded)?;
-    if decoded.len() > 512 || decoded.contains(&0) {
+    let plain = decode_base64(encoded)?;
+    if plain.len() > 512 || plain.contains(&0) {
         return None;
     }
-    let separator = decoded.iter().position(|b| *b == b':')?;
-    if separator == 0 {
-        return None;
-    }
-    let username = String::from_utf8(decoded[..separator].to_vec()).ok()?;
-    let password = String::from_utf8(decoded[separator + 1..].to_vec()).ok()?;
-    if username.len() >= 257 || password.len() >= 257 {
-        return None;
-    }
-    Some((username, password))
+    let text = String::from_utf8(plain).ok()?;
+    let (user, pass) = text.split_once(':')?;
+    let fits = |part: &str| part.len() <= 256;
+    (!user.is_empty() && fits(user) && fits(pass)).then(|| (user.to_owned(), pass.to_owned()))
 }
 
+/// Standard-alphabet base64. Whitespace is skipped, the first `=` ends the input, any other
+/// character outside the alphabet fails; leftover bits that do not fill a byte are dropped.
 fn decode_base64(value: &str) -> Option<Vec<u8>> {
-    let mut acc = 0u32;
-    let mut bits = 0u8;
-    let mut out = Vec::new();
-    for byte in value.bytes().filter(|b| !b.is_ascii_whitespace()) {
-        if byte == b'=' {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut sextets = Vec::with_capacity(value.len());
+    for c in value.bytes() {
+        if c == b'=' {
             break;
         }
-        let digit = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        };
-        acc = (acc << 6) | u32::from(digit);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push(((acc >> bits) & 0xff) as u8);
-            acc &= if bits == 0 { 0 } else { (1 << bits) - 1 };
+        if c.is_ascii_whitespace() {
+            continue;
         }
+        sextets.push(ALPHABET.iter().position(|&a| a == c)? as u32);
     }
-    Some(out)
+    let mut bytes = Vec::with_capacity(sextets.len() * 3 / 4);
+    for group in sextets.chunks(4) {
+        // Pack up to four 6-bit values into the top of a 24-bit word, then take whole bytes.
+        let word = group
+            .iter()
+            .enumerate()
+            .fold(0u32, |w, (i, v)| w | (v << (18 - 6 * i)));
+        let whole = group.len() * 6 / 8;
+        bytes.extend((0..whole).map(|i| (word >> (16 - 8 * i)) as u8));
+    }
+    Some(bytes)
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
+/// Equality whose running time does not depend on where the inputs differ.
+fn same_bytes(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
         return false;
     }
-    a.iter().zip(b).fold(0u8, |diff, (x, y)| diff | (x ^ y)) == 0
+    let mut difference = 0u8;
+    for i in 0..left.len() {
+        difference |= left[i] ^ right[i];
+    }
+    difference == 0
 }
 
 async fn index() -> &'static str {
@@ -875,6 +875,37 @@ async fn dual_switches(uri: axum::http::Uri) -> Json<Value> {
     Json(json!({"ok": true, "data": v}))
 }
 
+/// `GET /v2/usage/days?n=1..400` (usage_log.rs): data usage per device date and card, newest
+/// first, today included: `{ok, data: {days: [{day, cards: [{card, tail, op, rx, tx}]}]}}`.
+/// Reads files only (no first-round wait).
+async fn usage_days(uri: axum::http::Uri) -> Json<Value> {
+    let n = uri
+        .query()
+        .unwrap_or("")
+        .split('&')
+        .find_map(|p| p.strip_prefix("n="))
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(30);
+    let v = tokio::task::spawn_blocking(move || {
+        crate::usage_log::days(std::path::Path::new(crate::usage_log::DIR), n)
+    })
+    .await
+    .unwrap_or(Value::Null);
+    Json(json!({"ok": true, "data": v}))
+}
+
+/// `GET /v2/usage/landing` (usage_log.rs): the last arrival in a country and the bytes used
+/// since: `{ok, data: {mcc, from, at, rx, tx} | null}` (`from` null: the first record, not a
+/// landing). Reads memory or a file only.
+async fn usage_landing() -> Json<Value> {
+    let v = tokio::task::spawn_blocking(|| {
+        crate::usage_log::landing(std::path::Path::new(crate::usage_log::DIR))
+    })
+    .await
+    .unwrap_or(Value::Null);
+    Json(json!({"ok": true, "data": v}))
+}
+
 async fn versions() -> Json<Value> {
     Json(crate::versions::report())
 }
@@ -899,10 +930,11 @@ async fn gone() -> Response {
     )
         .into_response()
 }
+/// Every `/control` action this build accepts: the interval setter plus `control::ACTIONS`.
 fn capability_controls() -> Vec<&'static str> {
-    let mut controls = vec!["state.set_interval"];
-    controls.extend_from_slice(crate::control::ACTIONS);
-    controls
+    std::iter::once("state.set_interval")
+        .chain(crate::control::ACTIONS.iter().copied())
+        .collect()
 }
 
 /// Passive shared report. Available before the first collection (all unknown), protected
@@ -920,31 +952,28 @@ async fn device_capabilities(State(app): State<App>) -> impl IntoResponse {
     )
 }
 
+/// `/capabilities`: what this core speaks. Both `control` and `controls` carry the same list
+/// (older clients read one, newer the other).
 async fn capabilities() -> Json<Value> {
-    let controls = capability_controls();
-    Json(json!({
-        "schema_version":1,
-        "protocol":1,
-        "events":["snapshot","block"],
-        "transport":["http","sse"],
-        "control":controls,
-        "controls":controls,
-        "rewrite":"rust"
-    }))
-}
-
-fn sse_limit() -> Response {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(json!({"ok":false,"error":{"code":"sse_client_limit","message":"too many SSE clients"}})),
-    )
-        .into_response()
+    let actions = Value::from(capability_controls());
+    let mut reply = Map::new();
+    reply.insert("schema_version".into(), 1.into());
+    reply.insert("protocol".into(), 1.into());
+    reply.insert("events".into(), json!(["snapshot", "block"]));
+    reply.insert("transport".into(), json!(["http", "sse"]));
+    reply.insert("control".into(), actions.clone());
+    reply.insert("controls".into(), actions);
+    reply.insert("rewrite".into(), "rust".into());
+    Json(Value::Object(reply))
 }
 
 /// `/v2/events`（STATE_V2.md 第 2–4 节）：SSE 连接名额满了回 503。
 async fn v2_events(State(app): State<App>) -> Response {
-    let Ok(permit) = app.inner.sse_slots.clone().try_acquire_owned() else {
-        return sse_limit();
+    let Ok(permit) = Arc::clone(&app.inner.sse_slots).try_acquire_owned() else {
+        return error_reply(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"ok":false,"error":{"code":"sse_client_limit","message":"too many SSE clients"}}),
+        );
     };
     let stream = v2::stream(app.inner.exec.hub(), &app.inner.feed, permit);
     v2::events_response(futures_util::StreamExt::take_until(stream, app.stopped()))
@@ -986,53 +1015,64 @@ async fn control(
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Response {
     let _ = method;
-    let Json(body) = match payload {
-        Ok(body) => body,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"ok":false,"error":{"code":"invalid_request","message":"request body must be valid JSON"}})),
-            )
-                .into_response();
-        }
+    let (action, body) = match control_request(payload) {
+        Ok(parsed) => parsed,
+        Err(refusal) => return *refusal,
     };
-    let action = body
-        .get("action")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if action.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"ok":false,"error":{"code":"invalid_request","message":"missing action"}})),
-        )
-            .into_response();
-    }
-    if body.get("params").is_some_and(|params| !params.is_object()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"ok":false,"action":action,"error":{"code":"invalid_request","message":"params must be a JSON object"}})),
-        )
-            .into_response();
-    }
-    let action = action.to_owned();
     let peer = peer.map(|p| p.0.0.0);
     write::handle(app, action, body, peer).await
 }
 
-async fn shutdown(app: App) {
+/// Check a `/control` body: valid JSON, a non-empty `action`, and `params` (when present) an
+/// object. Returns the action name and the body, or the 400 reply to send.
+fn control_request(payload: Result<Json<Value>, JsonRejection>) -> Result<(String, Value), Box<Response>> {
+    let invalid = |action: Option<&str>, message: &str| {
+        let mut reply = json!({"ok":false,"error":{"code":"invalid_request","message":message}});
+        if let Some(name) = action {
+            reply["action"] = Value::from(name);
+        }
+        Box::new(error_reply(StatusCode::BAD_REQUEST, reply))
+    };
+    let Ok(Json(body)) = payload else {
+        return Err(invalid(None, "request body must be valid JSON"));
+    };
+    let action = match body.get("action").and_then(Value::as_str) {
+        Some(name) if !name.is_empty() => name.to_owned(),
+        _ => return Err(invalid(None, "missing action")),
+    };
+    if matches!(body.get("params"), Some(params) if !params.is_object()) {
+        return Err(invalid(Some(&action), "params must be a JSON object"));
+    }
+    Ok((action, body))
+}
+
+/// Resolves on SIGTERM (procd's stop) or Ctrl-C.
+async fn termination_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
-        let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {},
-            _ = term.recv() => {},
+        match signal(SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                tokio::select! {
+                    _ = sigterm.recv() => {}
+                    _ = tokio::signal::ctrl_c() => {}
+                }
+            }
+            Err(e) => panic!("install SIGTERM handler: {e}"),
         }
     }
     #[cfg(not(unix))]
-    let _ = tokio::signal::ctrl_c().await;
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+async fn shutdown(app: App) {
+    termination_signal().await;
     // a requested stop (X9): the running marker goes, so the next start does not call it a crash
     crate::svcwatch::clean_stop();
+    // lan-client-id.md §4a: what lanid learned since its last hourly write
+    crate::lanid::flush(true);
     // 收到 SIGTERM/SIGINT：先让 SSE 流结束（P2-4），再收掉 ubus listen 的子进程（最多 2 秒），
     // 然后 axum 等连接收尾（`serve` 里另有总上限）。
     app.inner.stop.send_replace(true);

@@ -1,7 +1,7 @@
 //! The data side on the device (manager docs/designs/u60-touch-rewrite.md §3: devui-data): the
 //! C UI's data modules, function by function, producing the same view model from the same
 //! endpoints and files.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 pub mod core_api;
 pub mod alerts;
@@ -12,6 +12,7 @@ pub mod core_link;
 pub mod diagnose;
 pub mod esim;
 pub mod http;
+pub mod landing;
 pub mod live;
 pub mod netinfo;
 pub mod scenario;

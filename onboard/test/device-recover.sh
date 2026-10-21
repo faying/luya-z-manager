@@ -13,7 +13,7 @@
 #       u60-device-busybox:20260928 sh /onboard/test/device-recover.sh
 #
 # The full install still needs the real-device run (onboard/test/sandbox.sh).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 ONB=${ONB:-/onboard}

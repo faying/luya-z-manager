@@ -272,17 +272,19 @@ fn uci_parsed(package: &str) -> Option<crate::uci::Package> {
 
 /// `uci show` 文本 → `路径 → 值`（值去掉最外层单引号）。解析路径和子进程路径共用。
 fn uci_show_map(raw: &[u8]) -> BTreeMap<String, String> {
-    String::from_utf8_lossy(raw)
-        .lines()
-        .filter_map(|line| {
-            let (k, raw) = line.split_once('=')?;
-            let v = raw
-                .strip_prefix('\'')
-                .and_then(|x| x.strip_suffix('\''))
-                .unwrap_or(raw);
-            Some((k.into(), v.into()))
-        })
-        .collect()
+    let text = String::from_utf8_lossy(raw);
+    let mut out = BTreeMap::new();
+    for entry in text.lines() {
+        let Some(eq) = entry.find('=') else { continue };
+        let (path, rest) = (&entry[..eq], &entry[eq + 1..]);
+        // 'quoted' → quoted; anything else is kept verbatim.
+        let unquoted = match rest.len() {
+            n if n >= 2 && rest.starts_with('\'') && rest.ends_with('\'') => &rest[1..n - 1],
+            _ => rest,
+        };
+        out.insert(path.to_string(), unquoted.to_string());
+    }
+    out
 }
 
 /// u60d：serve 模式（接管旧数据服务 data-service）登记短信会话密钥，和它一样；别的模式只在
@@ -302,21 +304,31 @@ pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + '
 // （整个作为控制任务在执行者里跑），两者本来就由执行者串行，同一时间最多一个 uci 在途。
 pub(crate) async fn uci_show(package: &str) -> BTreeMap<String, String> {
     if crate::ubus::validate_name(package).is_err() {
-        return BTreeMap::new();
+        return Default::default();
     }
     let p = package.to_owned();
     let parsed = blocking(move || {
         uci_parsed(&p).map(|pkg| uci_show_map(&crate::uci::render_show(&p, &pkg)))
     })
     .await;
-    if let Some(map) = parsed {
-        return map;
+    match parsed {
+        Some(map) => map,
+        None => command::run(&uci_bin(), ["-q", "show", package], UCI_DEADLINE)
+            .await
+            .map(|raw| uci_show_map(&raw))
+            .unwrap_or_default(),
     }
-    let Ok(raw) = command::run(&uci_bin(), ["-q", "show", package], Duration::from_secs(5)).await
-    else {
-        return BTreeMap::new();
-    };
-    uci_show_map(&raw)
+}
+
+/// Every `uci` child process gets the same five seconds.
+const UCI_DEADLINE: Duration = Duration::from_secs(5);
+
+/// Accepts the characters a UCI path may use (`pkg.section.option`, `@type[0]`).
+fn uci_path_ok(path: &str) -> bool {
+    (1..=256).contains(&path.len())
+        && path
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'@' | b'[' | b']'))
 }
 
 /// 采集用的 `uci get <包>.<节>.<选项>`：能自己解析时不 fork（R19），否则同 `uci_read`。
@@ -345,237 +357,228 @@ pub(crate) async fn uci_value(path: &str) -> String {
     uci_read(path).await
 }
 pub async fn uci_read(path: &str) -> String {
-    if path.is_empty()
-        || path.len() > 256
-        || !path
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-@[]".contains(&b))
-    {
+    if !uci_path_ok(path) {
         return String::new();
     }
-    command::run(&uci_bin(), ["-q", "get", path], Duration::from_secs(5))
-        .await
-        .ok()
-        .map(|raw| String::from_utf8_lossy(&raw).trim().to_owned())
-        .unwrap_or_default()
+    match command::run(&uci_bin(), ["-q", "get", path], UCI_DEADLINE).await {
+        Ok(out) => String::from_utf8_lossy(&out).trim().to_string(),
+        Err(_) => String::new(),
+    }
 }
+
 pub async fn uci_write(operation: &str, path: &str, value: Option<&str>) -> Result<(), String> {
-    if !matches!(
-        operation,
-        "set" | "add_list" | "del_list" | "delete" | "commit" | "revert"
-    ) || path.is_empty()
-        || path.len() > 256
-        || !path
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-@[]".contains(&b))
-        || value.is_some_and(|v| v.len() > 8192 || v.contains(['\0', '\r', '\n']))
-    {
+    // Which verbs we pass through, and whether each one carries `=value`.
+    let takes_value = match operation {
+        "set" | "add_list" | "del_list" => true,
+        "delete" | "commit" | "revert" => false,
+        _ => return Err("invalid UCI mutation".into()),
+    };
+    let value_bad = |v: &str| v.len() > 8192 || v.chars().any(|c| matches!(c, '\0' | '\r' | '\n'));
+    if !uci_path_ok(path) || value.is_some_and(value_bad) {
         return Err("invalid UCI mutation".into());
     }
-    let mut args = vec![operation.to_owned()];
-    if matches!(operation, "set" | "add_list" | "del_list") {
-        let Some(value) = value else {
-            return Err("missing UCI value".into());
-        };
-        args.push(format!("{path}={value}"));
+    let target = if takes_value {
+        let v = value.ok_or_else(|| "missing UCI value".to_string())?;
+        format!("{path}={v}")
     } else {
-        args.push(path.to_owned());
+        path.to_string()
+    };
+    match command::run(&uci_bin(), [operation, target.as_str()], UCI_DEADLINE).await {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e.to_string()),
     }
-    command::run(&uci_bin(), args, Duration::from_secs(5))
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
 }
 
+// ── Host readers: /proc, /sys and a few vendor files ──────────────────────
+//
+// All of these are synchronous and cheap; `read_inputs` runs them together on
+// the blocking pool. Missing or unreadable files read as zero / empty.
+
+/// Path from an override variable, or the device default.
+fn env_or(var: &str, default: &str) -> String {
+    std::env::var(var).unwrap_or_else(|_| default.to_string())
+}
+
+/// First whitespace-trimmed integer in a file; 0 when absent.
+fn read_i64(path: impl AsRef<Path>) -> i64 {
+    match fs::read_to_string(path) {
+        Ok(text) => text.trim().parse().unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
+/// `/proc/net/tcp` hex endpoint `AABBCCDD:PPPP` → (address hex, port).
+fn hex_endpoint(field: &str) -> Option<(&str, u16)> {
+    let (addr, port) = field.split_once(':')?;
+    Some((addr, u16::from_str_radix(port, 16).unwrap_or(0)))
+}
+
+/// Aggregation tunnel probe for MU5252: among the TCP sockets whose inodes the
+/// ICG daemon owns (`LUYAZ_ICG_SOCKET_INODES`), count the outbound established
+/// ones (those whose local port is not one of its listeners) and report the
+/// first peer. Returns (tunnels, peer ip, peer port, probe ran).
 fn tcp_aggregation_summary() -> (usize, String, u16, bool) {
-    let path = std::env::var("LUYAZ_PROC_NET_TCP").unwrap_or_else(|_| "/proc/net/tcp".into());
-    let owned: Vec<u64> = std::env::var("LUYAZ_ICG_SOCKET_INODES")
-        .unwrap_or_default()
+    let inode_list = env_or("LUYAZ_ICG_SOCKET_INODES", "");
+    let ours: Vec<u64> = inode_list
         .split(',')
-        .filter_map(|v| v.trim().parse().ok())
+        .filter_map(|s| s.trim().parse().ok())
         .collect();
-    if owned.is_empty() {
+    if ours.is_empty() {
         return (0, String::new(), 0, false);
     }
-    let text = fs::read_to_string(path).unwrap_or_default();
-    let mut listeners = Vec::new();
-    let mut established = Vec::new();
-    for line in text.lines().skip(1) {
-        let columns: Vec<_> = line.split_whitespace().collect();
-        if columns.len() < 10 {
+    let table = fs::read_to_string(env_or("LUYAZ_PROC_NET_TCP", "/proc/net/tcp")).unwrap_or_default();
+    let mut listen_ports: Vec<u16> = Vec::new();
+    let mut connected: Vec<(u16, String, u16)> = Vec::new();
+    for row in table.lines().skip(1) {
+        let cols: Vec<&str> = row.split_whitespace().collect();
+        if cols.len() < 10 {
             continue;
         }
-        let inode = columns.last().and_then(|v| v.parse::<u64>().ok());
-        if !inode.is_some_and(|v| owned.contains(&v)) {
+        let inode: Option<u64> = cols[cols.len() - 1].parse().ok();
+        if !matches!(inode, Some(n) if ours.contains(&n)) {
             continue;
         }
-        let local = columns[1].split_once(':');
-        let remote = columns[2].split_once(':');
-        if columns[3] == "0A" {
-            if let Some((_, port)) = local {
-                listeners.push(u16::from_str_radix(port, 16).unwrap_or_default());
+        let local = hex_endpoint(cols[1]);
+        match cols[3] {
+            "0A" => {
+                if let Some((_, port)) = local {
+                    listen_ports.push(port);
+                }
             }
-        } else if columns[3] == "01"
-            && let (Some((_, local_port)), Some((address, remote_port))) = (local, remote)
-        {
-            established.push((
-                u16::from_str_radix(local_port, 16).unwrap_or_default(),
-                address.to_owned(),
-                u16::from_str_radix(remote_port, 16).unwrap_or_default(),
-            ));
+            "01" => {
+                if let (Some((_, lport)), Some((raddr, rport))) = (local, hex_endpoint(cols[2])) {
+                    connected.push((lport, raddr.to_string(), rport));
+                }
+            }
+            _ => {}
         }
     }
-    let outgoing: Vec<_> = established
-        .into_iter()
-        .filter(|(port, _, _)| !listeners.contains(port))
-        .collect();
-    let (ip, port) = outgoing
-        .first()
-        .map(|(_, address, port)| {
-            let raw = u32::from_str_radix(address, 16)
-                .unwrap_or_default()
-                .to_le_bytes();
-            (
-                format!("{}.{}.{}.{}", raw[0], raw[1], raw[2], raw[3]),
-                *port,
-            )
-        })
-        .unwrap_or_default();
-    (outgoing.len(), ip, port, true)
+    connected.retain(|(lport, _, _)| !listen_ports.contains(lport));
+    let (peer_ip, peer_port) = match connected.first() {
+        Some((_, hex, port)) => {
+            // The kernel prints the IPv4 address as a little-endian u32.
+            let ip = std::net::Ipv4Addr::from(u32::from_str_radix(hex, 16).unwrap_or(0).to_le_bytes());
+            (ip.to_string(), *port)
+        }
+        None => (String::new(), 0),
+    };
+    (connected.len(), peer_ip, peer_port, true)
 }
 
-fn read_i64(path: impl AsRef<Path>) -> i64 {
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or_default()
-}
+/// Kernel thermal zones. Returns the CPU figure (mean of the `cpuss*` zones,
+/// else the hottest zone), the `/state` list and the `/v2` runtime list.
 fn thermal_zones() -> (i64, Value, Vec<crate::contract::ThermalZone>) {
-    let mut zones = Vec::new();
-    let mut runtime_zones = Vec::new();
-    let mut cpuss = Vec::new();
-    let root =
-        std::env::var("LUYAZ_THERMAL_ROOT").unwrap_or_else(|_| "/sys/class/thermal".into());
-    let Ok(entries) = fs::read_dir(root) else {
+    let base = env_or("LUYAZ_THERMAL_ROOT", "/sys/class/thermal");
+    let Ok(dir) = fs::read_dir(base) else {
         return (0, json!([]), Vec::new());
     };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if !entry
-            .file_name()
-            .to_string_lossy()
-            .starts_with("thermal_zone")
-        {
+    // (zone type, millidegrees), only plausible readings.
+    let mut readings: Vec<(String, i64)> = Vec::new();
+    for item in dir.flatten() {
+        if !item.file_name().to_string_lossy().starts_with("thermal_zone") {
             continue;
         }
-        let name = fs::read_to_string(p.join("type"))
-            .unwrap_or_default()
-            .trim()
-            .to_owned();
-        let raw = read_i64(p.join("temp"));
-        if name.is_empty() || raw <= -40_000 || raw == 0 || raw > 200_000 {
-            continue;
+        let zone = item.path();
+        let kind = fs::read_to_string(zone.join("type")).unwrap_or_default().trim().to_string();
+        let milli = read_i64(zone.join("temp"));
+        let plausible = milli != 0 && milli > -40_000 && milli <= 200_000;
+        if !kind.is_empty() && plausible {
+            readings.push((kind, milli));
         }
-        let c = raw as f64 / 1000.0;
-        if name.starts_with("cpuss") {
-            cpuss.push(c)
-        }
-        runtime_zones.push(crate::contract::ThermalZone {
-            r#type: name.clone(),
-            temp_milli: raw,
-        });
-        zones.push(json!({"name":name,"celsius":c}));
     }
-    zones.sort_by_key(|a| string(a, "name"));
-    runtime_zones.sort_by(|a, b| a.r#type.cmp(&b.r#type));
-    let cpu = if cpuss.is_empty() {
-        zones
-            .iter()
-            .filter_map(|v| v.get("celsius").and_then(Value::as_f64))
-            .fold(0.0, f64::max)
+    readings.sort_by(|a, b| a.0.cmp(&b.0));
+    let celsius = |m: i64| m as f64 / 1000.0;
+    let cpu_cluster: Vec<f64> = readings
+        .iter()
+        .filter(|(k, _)| k.starts_with("cpuss"))
+        .map(|(_, m)| celsius(*m))
+        .collect();
+    let cpu = if cpu_cluster.is_empty() {
+        readings.iter().map(|(_, m)| celsius(*m)).fold(0.0, f64::max)
     } else {
-        cpuss.iter().sum::<f64>() / cpuss.len() as f64
+        cpu_cluster.iter().sum::<f64>() / cpu_cluster.len() as f64
     };
-    (cpu.round() as i64, Value::Array(zones), runtime_zones)
+    let listed = readings
+        .iter()
+        .map(|(k, m)| json!({"name": k, "celsius": celsius(*m)}))
+        .collect();
+    let runtime_list = readings
+        .into_iter()
+        .map(|(kind, milli)| crate::contract::ThermalZone { r#type: kind, temp_milli: milli })
+        .collect();
+    (cpu.round() as i64, Value::Array(listed), runtime_list)
 }
+
 /// 充电口和电池的电压、电流（`battery` 对象的 chg_*/bat_*）。
 fn read_rails() -> Rails {
+    let supply = |unit: &str, file: &str| {
+        read_i64(host_path(&format!("/sys/class/power_supply/{unit}/{file}")))
+    };
     Rails {
-        chg_uv: read_i64(host_path("/sys/class/power_supply/usb/voltage_now")),
-        chg_ua: read_i64(host_path("/sys/class/power_supply/usb/current_now")),
-        bat_uv: read_i64(host_path("/sys/class/power_supply/battery/voltage_now")),
-        bat_ua: read_i64(host_path("/sys/class/power_supply/battery/current_now")),
+        chg_uv: supply("usb", "voltage_now"),
+        chg_ua: supply("usb", "current_now"),
+        bat_uv: supply("battery", "voltage_now"),
+        bat_ua: supply("battery", "current_now"),
     }
 }
+
+/// dnsmasq lease file → lowercase MAC → (IP, hostname; `*` means none).
 fn lease_metadata() -> Leases {
-    let path =
-        std::env::var("LUYAZ_DHCP_LEASES_PATH").unwrap_or_else(|_| "/tmp/dhcp.leases".into());
-    fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|line| {
-            let p: Vec<_> = line.split_whitespace().collect();
-            (p.len() >= 4).then(|| {
-                (
-                    p[1].to_ascii_lowercase(),
-                    (
-                        p[2].to_owned(),
-                        if p[3] == "*" { "" } else { p[3] }.to_owned(),
-                    ),
-                )
-            })
-        })
-        .collect()
-}
-
-type CpuCounters = BTreeMap<String, (u64, u64)>;
-static CPU_PREVIOUS: OnceLock<Mutex<CpuCounters>> = OnceLock::new();
-
-fn count_lines(path: &str, header: bool) -> u64 {
-    let count = fs::read_to_string(path)
-        .map(|v| v.lines().count() as u64)
+    let text = fs::read_to_string(env_or("LUYAZ_DHCP_LEASES_PATH", "/tmp/dhcp.leases"))
         .unwrap_or_default();
-    count.saturating_sub(u64::from(header && count > 0))
+    let mut leases = Leases::new();
+    for row in text.lines() {
+        // expiry mac ip hostname [client-id]
+        let mut cols = row.split_whitespace().skip(1);
+        let (Some(mac), Some(ip), Some(host)) = (cols.next(), cols.next(), cols.next()) else {
+            continue;
+        };
+        let host = if host == "*" { "" } else { host };
+        leases.insert(mac.to_ascii_lowercase(), (ip.to_string(), host.to_string()));
+    }
+    leases
 }
 
+type CpuTable = BTreeMap<String, (u64, u64)>;
+static CPU_LAST: OnceLock<Mutex<CpuTable>> = OnceLock::new();
+
+/// Number of rows in a /proc table, minus the header row when asked.
+fn count_lines(path: &str, header: bool) -> u64 {
+    let rows = fs::read_to_string(path).map_or(0, |t| t.lines().count() as u64);
+    if header { rows.saturating_sub(1) } else { rows }
+}
+
+/// IPv4 TCP sockets in ESTABLISHED (state 01).
 fn tcp_active() -> u64 {
-    fs::read_to_string(host_path("/proc/net/tcp"))
-        .unwrap_or_default()
-        .lines()
-        .skip(1)
-        .filter(|line| line.split_whitespace().nth(3) == Some("01"))
-        .count() as u64
+    let table = fs::read_to_string(host_path("/proc/net/tcp")).unwrap_or_default();
+    let mut n = 0;
+    for row in table.lines().skip(1) {
+        if row.split_whitespace().nth(3) == Some("01") {
+            n += 1;
+        }
+    }
+    n
 }
 
 /// 测试用：LUYAZ_HOST_ROOT 设了时，下面这些写死的 /proc、/sys、/data 路径整体挪到它下面，
 /// 让 golden（tests/golden/）不受宿主机影响。设备上不设，路径和原来完全一样。
 pub(crate) fn host_path(path: &str) -> String {
-    static ROOT: OnceLock<Option<String>> = OnceLock::new();
-    match ROOT.get_or_init(|| {
-        std::env::var("LUYAZ_HOST_ROOT")
-            .ok()
-            .filter(|v| !v.is_empty())
-    }) {
-        Some(root) => format!("{root}{path}"),
-        None => path.to_owned(),
-    }
+    static PREFIX: OnceLock<String> = OnceLock::new();
+    let prefix = PREFIX.get_or_init(|| std::env::var("LUYAZ_HOST_ROOT").unwrap_or_default());
+    format!("{prefix}{path}")
 }
 
 fn meminfo() -> crate::contract::MemoryKb {
-    let mut values = BTreeMap::new();
-    let contents = fs::read_to_string(host_path("/proc/meminfo")).unwrap_or_default();
-    for line in contents.lines() {
-        if let Some((key, rest)) = line.split_once(':') {
-            values.insert(
-                key.to_owned(),
-                rest.split_whitespace()
-                    .next()
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or_default(),
-            );
-        }
-    }
-    let kb = |key: &str| values.get(key).copied().unwrap_or_default();
+    let text = fs::read_to_string(host_path("/proc/meminfo")).unwrap_or_default();
+    // "MemTotal:  123456 kB" → 123456; unknown keys read 0.
+    let kb = |name: &str| -> u64 {
+        text.lines()
+            .find_map(|row| {
+                let rest = row.strip_prefix(name)?.strip_prefix(':')?;
+                Some(rest.split_whitespace().next()?.parse().unwrap_or(0))
+            })
+            .unwrap_or(0)
+    };
     crate::contract::MemoryKb {
         total: kb("MemTotal"),
         free: kb("MemFree"),
@@ -587,235 +590,232 @@ fn meminfo() -> crate::contract::MemoryKb {
     }
 }
 
-// libc exposes statvfs counters with different integer widths across targets.
+/// Capacity of the `/data` filesystem in bytes.
+// statvfs field widths differ between libc targets, hence the casts.
 #[allow(clippy::unnecessary_cast)]
 fn storage() -> crate::contract::Storage {
-    let Ok(path) = CString::new(host_path("/data")) else {
-        return Default::default();
+    let Ok(cpath) = CString::new(host_path("/data")) else {
+        return crate::contract::Storage::default();
     };
-    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(path.as_ptr(), &mut stat) } != 0 {
-        return Default::default();
+    // SAFETY: statvfs only writes into the zeroed struct we own.
+    let mut fsinfo: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(cpath.as_ptr(), &mut fsinfo) } != 0 {
+        return crate::contract::Storage::default();
     }
-    let block = if stat.f_frsize > 0 {
-        stat.f_frsize
-    } else {
-        stat.f_bsize
-    } as u64;
-    let total = block.saturating_mul(stat.f_blocks as u64);
-    let free = block.saturating_mul(stat.f_bfree as u64);
+    let unit = match fsinfo.f_frsize as u64 {
+        0 => fsinfo.f_bsize as u64,
+        n => n,
+    };
+    let bytes = |blocks: u64| unit.saturating_mul(blocks);
+    let total = bytes(fsinfo.f_blocks as u64);
     crate::contract::Storage {
         total,
-        used: total.saturating_sub(free),
-        available: block.saturating_mul(stat.f_bavail as u64),
+        used: total.saturating_sub(bytes(fsinfo.f_bfree as u64)),
+        available: bytes(fsinfo.f_bavail as u64),
     }
 }
 
+/// One counter reading: cumulative bytes and when they were read.
 #[derive(Clone, Copy)]
-struct SpeedSample {
+struct ByteMark {
     rx: u64,
     tx: u64,
-    at_ms: u64,
+    ms: u64,
 }
 
-static LINK_PREVIOUS: OnceLock<Mutex<BTreeMap<String, SpeedSample>>> = OnceLock::new();
-static SPEED_RING: OnceLock<Mutex<VecDeque<SpeedSample>>> = OnceLock::new();
+static LINK_LAST: OnceLock<Mutex<BTreeMap<String, ByteMark>>> = OnceLock::new();
+static USER_HISTORY: OnceLock<Mutex<VecDeque<ByteMark>>> = OnceLock::new();
 
+/// Cumulative (rx, tx) bytes of a network interface.
 fn iface_bytes(name: &str) -> Option<(u64, u64)> {
-    let root =
-        std::env::var("LUYAZ_NET_CLASS_ROOT").unwrap_or_else(|_| "/sys/class/net".into());
-    let path = Path::new(&root).join(name).join("statistics");
-    let rx = fs::read_to_string(path.join("rx_bytes"))
-        .ok()?
-        .trim()
-        .parse()
-        .ok()?;
-    let tx = fs::read_to_string(path.join("tx_bytes"))
-        .ok()?
-        .trim()
-        .parse()
-        .ok()?;
-    Some((rx, tx))
+    let stats = Path::new(&env_or("LUYAZ_NET_CLASS_ROOT", "/sys/class/net"))
+        .join(name)
+        .join("statistics");
+    let counter = |file: &str| -> Option<u64> {
+        fs::read_to_string(stats.join(file)).ok()?.trim().parse().ok()
+    };
+    Some((counter("rx_bytes")?, counter("tx_bytes")?))
 }
 
+/// Milliseconds on a monotonic clock that starts at the first call.
 fn now_ms() -> u64 {
-    static START: OnceLock<Instant> = OnceLock::new();
-    START
-        .get_or_init(Instant::now)
-        .elapsed()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    let elapsed = EPOCH.get_or_init(Instant::now).elapsed().as_millis();
+    u64::try_from(elapsed).unwrap_or(u64::MAX)
 }
 
+/// Bytes per second between two counter readings `window` ms apart.
+fn rate(now_bytes: u64, then_bytes: u64, window: u64) -> u64 {
+    now_bytes.saturating_sub(then_bytes).saturating_mul(1000) / window
+}
+
+/// Per-interface counters and rates since the previous round.
 fn link_rates(now: u64) -> Vec<crate::contract::LinkRate> {
-    let previous = LINK_PREVIOUS.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let mut previous = previous.lock().unwrap();
-    let mut rates = Vec::new();
-    for name in ["rmnet_data0", "V3E1net0", "V3E2net0", "eth0"] {
-        let Some((rx, tx)) = iface_bytes(name) else {
-            previous.remove(name);
+    const WATCHED: [&str; 4] = ["rmnet_data0", "V3E1net0", "V3E2net0", "eth0"];
+    let mut last = LINK_LAST.get_or_init(Default::default).lock().unwrap();
+    let mut out = Vec::with_capacity(WATCHED.len());
+    for ifname in WATCHED {
+        let Some((rx, tx)) = iface_bytes(ifname) else {
+            last.remove(ifname);
             continue;
         };
-        let old = previous.get(name).copied();
-        let window = old.map_or(0, |sample| now.saturating_sub(sample.at_ms));
-        let valid = old.is_some_and(|sample| window > 0 && rx >= sample.rx && tx >= sample.tx);
-        let bps = |now: u64, then: u64| {
-            old.filter(|_| valid)
-                .map(|_| now.saturating_sub(then).saturating_mul(1000) / window)
-        };
-        rates.push(crate::contract::LinkRate {
-            interface: name.into(),
+        // A rate needs an earlier sample, time in between and counters that did
+        // not go backwards (interface reset).
+        let usable = last.get(ifname).copied().and_then(|prev| {
+            let span = now.saturating_sub(prev.ms);
+            (span > 0 && rx >= prev.rx && tx >= prev.tx).then_some((prev, span))
+        });
+        out.push(crate::contract::LinkRate {
+            interface: ifname.into(),
             source: "netdev".into(),
-            window_ms: if valid { window } else { 0 },
+            window_ms: usable.map_or(0, |(_, span)| span),
             rx_bytes: rx,
             tx_bytes: tx,
-            rx_bps: bps(rx, old.map_or(0, |o| o.rx)),
-            tx_bps: bps(tx, old.map_or(0, |o| o.tx)),
+            rx_bps: usable.map(|(prev, span)| rate(rx, prev.rx, span)),
+            tx_bps: usable.map(|(prev, span)| rate(tx, prev.tx, span)),
         });
-        previous.insert(name.into(), SpeedSample { rx, tx, at_ms: now });
+        last.insert(ifname.into(), ByteMark { rx, tx, ms: now });
     }
-    rates
+    out
 }
 
+/// Bytes seen from the users' side as (download, upload). The interface
+/// counters are from the router's point of view, so they are swapped: what the
+/// LAN bridge transmits is what users download. Falls back to the Wi-Fi APs,
+/// then to the cellular interfaces.
 fn user_bytes() -> (u64, u64) {
-    if let Some((rx, tx)) = iface_bytes("br-lan") {
-        return (tx, rx);
-    }
-    let wifi: Vec<_> = ["wlan0", "wlan2"]
-        .into_iter()
-        .filter_map(iface_bytes)
-        .collect();
-    if !wifi.is_empty() {
-        return wifi
-            .into_iter()
-            .fold((0_u64, 0_u64), |(rx, tx), (raw_rx, raw_tx)| {
-                (rx.saturating_add(raw_tx), tx.saturating_add(raw_rx))
-            });
-    }
-    ["rmnet_data0", "rmnet_ipa0"]
-        .into_iter()
-        .filter_map(iface_bytes)
-        .fold((0_u64, 0_u64), |(rx, tx), (raw_rx, raw_tx)| {
-            (rx.saturating_add(raw_tx), tx.saturating_add(raw_rx))
-        })
+    let swapped_sum = |names: &[&str]| -> Option<(u64, u64)> {
+        let mut found = false;
+        let mut down = 0u64;
+        let mut up = 0u64;
+        for (rx, tx) in names.iter().filter_map(|n| iface_bytes(n)) {
+            found = true;
+            down = down.saturating_add(tx);
+            up = up.saturating_add(rx);
+        }
+        found.then_some((down, up))
+    };
+    swapped_sum(&["br-lan"])
+        .or_else(|| swapped_sum(&["wlan0", "wlan2"]))
+        .or_else(|| swapped_sum(&["rmnet_data0", "rmnet_ipa0"]))
+        .unwrap_or((0, 0))
 }
 
+/// Average user throughput across the last (up to) 16 rounds.
 fn throughput(now: u64) -> crate::contract::Throughput {
+    const KEEP: usize = 16;
     let (rx, tx) = user_bytes();
-    let ring = SPEED_RING.get_or_init(|| Mutex::new(VecDeque::with_capacity(16)));
-    let mut ring = ring.lock().unwrap();
-    if ring.len() == 16 {
-        ring.pop_front();
+    let mut history = USER_HISTORY
+        .get_or_init(|| Mutex::new(VecDeque::with_capacity(KEEP)))
+        .lock()
+        .unwrap();
+    while history.len() >= KEEP {
+        history.pop_front();
     }
-    ring.push_back(SpeedSample { rx, tx, at_ms: now });
-    let Some(old) = ring.front().copied().filter(|_| ring.len() >= 2) else {
-        return Default::default();
-    };
-    let window = now.saturating_sub(old.at_ms);
-    if window == 0 {
-        return Default::default();
+    history.push_back(ByteMark { rx, tx, ms: now });
+    if history.len() < 2 {
+        return crate::contract::Throughput::default();
+    }
+    let oldest = history[0];
+    let span = now.saturating_sub(oldest.ms);
+    if span == 0 {
+        return crate::contract::Throughput::default();
     }
     crate::contract::Throughput {
-        rx_bps: rx.saturating_sub(old.rx).saturating_mul(1000) / window,
-        tx_bps: tx.saturating_sub(old.tx).saturating_mul(1000) / window,
-        window_ms: window,
+        rx_bps: rate(rx, oldest.rx, span),
+        tx_bps: rate(tx, oldest.tx, span),
+        window_ms: span,
+    }
+}
+
+/// `/proc/stat` → label (`cpu`, `cpu0`, …) → (total jiffies, idle+iowait).
+fn cpu_counters() -> CpuTable {
+    let stat = fs::read_to_string(host_path("/proc/stat")).unwrap_or_default();
+    let mut table = CpuTable::new();
+    for row in stat.lines() {
+        let mut cols = row.split_whitespace();
+        let Some(label) = cols.next() else { continue };
+        let Some(suffix) = label.strip_prefix("cpu") else { continue };
+        if !suffix.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let ticks: Vec<u64> = cols.take(8).map(|c| c.parse().unwrap_or(0)).collect();
+        if ticks.len() < 4 {
+            continue;
+        }
+        let idle = ticks[3] + ticks.get(4).copied().unwrap_or(0);
+        table.insert(label.to_string(), (ticks.iter().sum(), idle));
+    }
+    table
+}
+
+/// Per-mille busy share between two counter readings; -1 when unknown.
+fn busy_per_mille(before: Option<&(u64, u64)>, after: (u64, u64)) -> i64 {
+    let Some(&(t0, i0)) = before else { return -1 };
+    let total = after.0.saturating_sub(t0);
+    if total == 0 {
+        return -1;
+    }
+    let busy = total.saturating_sub(after.1.saturating_sub(i0));
+    (busy * 1000 / total) as i64
+}
+
+/// Current and maximum frequency (MHz) of one core, scaling_* first.
+fn core_freq(core: &str) -> crate::contract::Freq {
+    let dir = host_path(&format!("/sys/devices/system/cpu/{core}/cpufreq"));
+    let khz = |primary: &str, fallback: &str| match read_i64(format!("{dir}/{primary}")) {
+        0 => read_i64(format!("{dir}/{fallback}")),
+        v => v,
+    };
+    crate::contract::Freq {
+        cur: khz("scaling_cur_freq", "cpuinfo_cur_freq") / 1000,
+        max: khz("scaling_max_freq", "cpuinfo_max_freq") / 1000,
     }
 }
 
 fn runtime(runtime_zones: Vec<crate::contract::ThermalZone>) -> (i64, crate::contract::Runtime) {
-    let mut current = BTreeMap::new();
-    for line in fs::read_to_string(host_path("/proc/stat"))
-        .unwrap_or_default()
-        .lines()
-    {
-        let mut parts = line.split_whitespace();
-        let Some(label) = parts.next() else { continue };
-        if label != "cpu"
-            && !label
-                .strip_prefix("cpu")
-                .is_some_and(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
-        {
-            continue;
+    let fresh = cpu_counters();
+    let (overall, per_core) = {
+        let mut stored = CPU_LAST.get_or_init(Default::default).lock().unwrap();
+        let mut overall = -1;
+        let mut per_core = BTreeMap::new();
+        for (label, counters) in &fresh {
+            let share = busy_per_mille(stored.get(label), *counters);
+            if label == "cpu" {
+                overall = share;
+            } else {
+                per_core.insert(label.clone(), share);
+            }
         }
-        let nums: Vec<u64> = parts
-            .take(8)
-            .map(|v| v.parse().unwrap_or_default())
-            .collect();
-        if nums.len() < 4 {
-            continue;
-        }
-        let total: u64 = nums.iter().sum();
-        let idle = nums[3] + nums.get(4).copied().unwrap_or_default();
-        current.insert(label.to_owned(), (total, idle));
-    }
-    let previous = CPU_PREVIOUS.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let mut old = previous.lock().unwrap();
-    let mut usage = BTreeMap::new();
-    let mut total_usage = -1;
-    for (label, (total, idle)) in &current {
-        let value = old
-            .get(label)
-            .and_then(|(ot, oi)| {
-                let dt = total.saturating_sub(*ot);
-                let di = idle.saturating_sub(*oi);
-                (dt > 0).then(|| ((dt.saturating_sub(di)) * 1000 / dt) as i64)
-            })
-            .unwrap_or(-1);
-        if label == "cpu" {
-            total_usage = value
-        } else {
-            usage.insert(label.clone(), value);
-        }
-    }
-    *old = current;
-    drop(old);
-    let mut freqs = BTreeMap::new();
-    for core in usage.keys() {
-        let root = host_path(&format!("/sys/devices/system/cpu/{core}/cpufreq"));
-        let mut cur = read_i64(format!("{root}/scaling_cur_freq"));
-        let mut max = read_i64(format!("{root}/scaling_max_freq"));
-        if cur == 0 {
-            cur = read_i64(format!("{root}/cpuinfo_cur_freq"))
-        }
-        if max == 0 {
-            max = read_i64(format!("{root}/cpuinfo_max_freq"))
-        }
-        freqs.insert(
-            core.clone(),
-            crate::contract::Freq {
-                cur: cur / 1000,
-                max: max / 1000,
-            },
-        );
-    }
-    let active = tcp_active();
-    let tcp4 = count_lines(&host_path("/proc/net/tcp"), true);
-    let lines = |path: &str| count_lines(&host_path(path), true);
-    let connections = crate::contract::Connections {
-        tcp_active: active,
-        tcp_other: tcp4.saturating_sub(active),
-        tcp4,
-        tcp6: lines("/proc/net/tcp6"),
-        udp4: lines("/proc/net/udp"),
-        udp6: lines("/proc/net/udp6"),
-        unix: lines("/proc/net/unix"),
+        *stored = fresh;
+        (overall, per_core)
     };
-    let now = now_ms();
-    (
-        total_usage,
-        crate::contract::Runtime {
-            cpu_usage_tenths: total_usage,
-            cpu_cores: usage,
-            cpu_freq_mhz: freqs,
-            thermal_zones: runtime_zones,
-            memory_kb: meminfo(),
-            storage: storage(),
-            connections,
-            link_rates: link_rates(now),
-            throughput: throughput(now),
-        },
-    )
+    let freqs = per_core.keys().map(|core| (core.clone(), core_freq(core))).collect();
+    let rows = |p: &str| count_lines(&host_path(p), true);
+    let established = tcp_active();
+    let tcp4 = rows("/proc/net/tcp");
+    let connections = crate::contract::Connections {
+        tcp_active: established,
+        tcp_other: tcp4.saturating_sub(established),
+        tcp4,
+        tcp6: rows("/proc/net/tcp6"),
+        udp4: rows("/proc/net/udp"),
+        udp6: rows("/proc/net/udp6"),
+        unix: rows("/proc/net/unix"),
+    };
+    let at = now_ms();
+    let snapshot = crate::contract::Runtime {
+        cpu_usage_tenths: overall,
+        cpu_cores: per_core,
+        cpu_freq_mhz: freqs,
+        thermal_zones: runtime_zones,
+        memory_kb: meminfo(),
+        storage: storage(),
+        connections,
+        link_rates: link_rates(at),
+        throughput: throughput(at),
+    };
+    (overall, snapshot)
 }
 
 /// 旧接口的一轮采集。电池、充电器已迁到块模型（`block::phase1_blocks`），从 `hub` 取；
@@ -839,18 +839,13 @@ pub async fn collect(sample_interval_ms: u64, hub: &crate::block::Hub) -> Snapsh
     crate::qmi_nas::want(want);
     // dual-SIM passive log (dsds_log.rs): keeps the latest dual-mode fields, writes every 30 s
     crate::dsds_log::offer(&fields);
+    // per-day per-card usage (usage_log.rs): diffs the session counters every 60 s
+    crate::usage_log::offer(&fields);
     let now = tokio::time::Instant::now();
     for (name, data) in blocks {
         hub.record(name, data, now);
     }
-    Snapshot {
-        ts: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64,
-        core: Default::default(),
-        fields,
-    }
+    Snapshot { ts: unix_now(), core: Default::default(), fields }
 }
 
 /// 一轮要读的全部东西，顺序和以前在 `collect` 里一样（厂商 ubus 并发会丢回复，所以串行；
@@ -1026,7 +1021,10 @@ async fn read_inputs(hub: &crate::block::Hub) -> Inputs {
     .await;
     let query = qos_query(
         &object(net.clone()),
-        &string(&object(sim.clone()), "sim_imsi"),
+        &{
+            let sim = object(sim.clone());
+            card_field(&sim, data_on_slot2(&sim), "sim_imsi")
+        },
         &object(wan4_if.clone()),
         uci_qci(&qci_now),
     );
@@ -1081,249 +1079,403 @@ async fn read_inputs(hub: &crate::block::Hub) -> Inputs {
     }
 }
 
+/// Seconds since the Unix epoch on the device clock.
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// One of the two external 4G modules on the MU5252 (TopFlow) USB hub.
+struct ExtModule {
+    id: &'static str,
+    /// adb serial of the module's debug interface.
+    serial: &'static str,
+    ifname: &'static str,
+    /// mwan interface for IPv4; IPv6 is the same name with `_6`.
+    wan: &'static str,
+    usb_path: &'static str,
+    usb_id: &'static str,
+    /// subid of SIM slot 0 on this module; slot 1 is the next number.
+    first_subid: i64,
+}
+
+const EXT_MODULES: [ExtModule; 2] = [
+    ExtModule {
+        id: "v3e1",
+        serial: "V3E1T12345",
+        ifname: "V3E1net0",
+        wan: "zte_mwan3",
+        usb_path: "1-1",
+        usb_id: "19d2:0581",
+        first_subid: 3,
+    },
+    ExtModule {
+        id: "v3e2",
+        serial: "V3E2T12345",
+        ifname: "V3E2net0",
+        wan: "zte_mwan4",
+        usb_path: "1-2",
+        usb_id: "19d2:1716",
+        first_subid: 5,
+    },
+];
+
+/// mwan3 members reported in `aggregation.paths`: (id, label, mwan interface).
+const AGG_MEMBERS: [(&str, &str, &str); 4] = [
+    ("x75", "X75", "zte_mwan2"),
+    ("v3e1", "V3E1", "zte_mwan3"),
+    ("v3e2", "V3E2", "zte_mwan4"),
+    ("ethernet", "Ethernet", "waneth"),
+];
+
+async fn ubus_obj(service: &str, method: &str, args: Value) -> Value {
+    object(ubus(service, method, args).await)
+}
+
+async fn netif_status(name: &str) -> Value {
+    ubus_obj(&format!("network.interface.{name}"), "status", json!({})).await
+}
+
+/// `wwan` object shared by the integrated and the external modems.
+fn wwan_summary(w: &Value) -> Value {
+    json!({
+        "status": string(w, "connect_status"),
+        "ipv4_ifname": string(w, "ipv4_dev_name"),
+        "ipv6_ifname": string(w, "ipv6_dev_name"),
+    })
+}
+
+/// What the module itself can tell over adb: QoS from its key.log and the
+/// board temperature. Without `LUYAZ_ADB_BIN` nothing is asked.
+struct AdbProbe {
+    qos: crate::qos::Values,
+    /// When the QoS was read (0 = never).
+    qos_at: i64,
+    celsius: Option<i64>,
+}
+
+async fn adb_probe(adb: Option<&str>, serial: &str) -> AdbProbe {
+    let mut probe = AdbProbe { qos: Default::default(), qos_at: 0, celsius: None };
+    let Some(adb) = adb else { return probe };
+    let shell = |cmd: &'static [&'static str]| {
+        let mut argv = vec!["-s", serial, "shell"];
+        argv.extend_from_slice(cmd);
+        command::run(adb, argv, Duration::from_secs(5))
+    };
+    if let Ok(out) = shell(&["grep QCI= /logfs/key.log | tail -n 64"]).await
+        && let Some(values) = crate::qos::parse_external(&String::from_utf8_lossy(&out))
+    {
+        probe.qos = values;
+        probe.qos_at = unix_now();
+    }
+    if let Ok(out) = shell(&["cat", "/sys/devices/virtual/power/zte_power/adc2_temp"]).await {
+        probe.celsius = String::from_utf8_lossy(&out)
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|t| (-40..=125).contains(t));
+    }
+    probe
+}
+
+/// The built-in X75 5G modem entry of `modems`.
+async fn integrated_modem(ctx: &Mu5252Ctx, subid: i64) -> Value {
+    let net = &ctx.raw_net;
+    let traffic = ubus_obj(
+        "zwrt_data",
+        "get_wwandst",
+        json!({"source_module":"deviceui","cid":1,"type":1,"subid":subid}),
+    )
+    .await;
+    let rat = string(net, "network_type");
+    let bw_key = if rat == "SA" || rat == "NSA" { "nr5g_bandwidth" } else { "lte_bandwidth" };
+    let q = crate::qos::read(qos_query(net, &ctx.imsi, &ctx.wan4_if, None));
+    let n = |k: &str| integer(net, k);
+    let s = |k: &str| string(net, k);
+    json!({
+        "id": "x75",
+        "role": "integrated_5g",
+        "transport": "rmnet",
+        "subid": subid,
+        "ifname": "rmnet_data0",
+        "wan_interface": "zte_mwan2",
+        "net": {
+            "type": rat,
+            "bars": n("signalbar"),
+            "roaming": s("simcard_roam"),
+            "operator": s("network_provider_fullname"),
+            "band": s("wan_active_band"),
+            "bandwidth": s(bw_key),
+            "nr_rsrp": n("nr5g_rsrp"),
+            "nr_rsrq": n("nr5g_rsrq"),
+            "nr_snr": s("nr5g_snr"),
+            "nr_pci": n("nr5g_pci"),
+            "nr_cell_id": n("nr5g_cell_id"),
+            "nr_channel": n("nr5g_action_channel"),
+            "lte_rsrp": n("lte_rsrp"),
+            "lte_rsrq": n("lte_rsrq"),
+            "lte_pci": n("lte_pci"),
+            "cell_id": n("cell_id"),
+        },
+        "sim": {
+            "state": string(&ctx.sim, "sim_states"),
+            "slot": integer(&ctx.sim, "current_sim_slot"),
+            "iccid": string(&ctx.sim, "sim_iccid"),
+            "imsi": ctx.imsi,
+            "msisdn": ctx.msisdn,
+            "imei": string(&ctx.imei, "imei"),
+        },
+        "wwan": wwan_summary(&ctx.cellular),
+        "interfaces": {"ipv4": interface(&ctx.wan4_if), "ipv6": interface(&ctx.wan6_if)},
+        "traffic": realtime_traffic(&traffic),
+        "qos": {
+            "qci": q.qci, "ambr_dl": q.ambr_dl, "ambr_ul": q.ambr_ul,
+            "bearer": q.bearer, "stale": q.stale, "sampled_at": 0,
+        },
+    })
+}
+
+/// One external module: its `modems` entry and its `thermal.modems` entry.
+async fn external_modem(
+    m: &ExtModule,
+    index: usize,
+    v3t: &Value,
+    msim: &Value,
+    uci_sets: &[BTreeMap<String, String>],
+    adb: Option<&str>,
+) -> (Value, Value) {
+    let prefix = format!("v3t_{}_", index + 1);
+    let slot = integer(v3t, &format!("{prefix}st_slot")).clamp(0, 1);
+    let subid = m.first_subid + slot;
+    let net = topflow_external_net(msim, uci_sets, index, slot);
+    let wwan = ubus_obj(
+        "zwrt_data",
+        "get_wwaniface",
+        json!({"source_module":"deviceui","cid":1,"subid":subid}),
+    )
+    .await;
+    let traffic = ubus_obj(
+        "zwrt_data",
+        "get_wwandst",
+        json!({"source_module":"deviceui","cid":1,"type":1,"subid":subid}),
+    )
+    .await;
+    let v4 = netif_status(m.wan).await;
+    let v6 = netif_status(&format!("{}_6", m.wan)).await;
+    let probe = adb_probe(adb, m.serial).await;
+    let card = |field: &str| prefixed_string(v3t, &prefix, field);
+    let thermal = json!({
+        "id": m.id,
+        "available": probe.celsius.is_some(),
+        "celsius": probe.celsius,
+        "sampled_at": if probe.celsius.is_some() { probe.qos_at } else { 0 },
+    });
+    let modem = json!({
+        "id": m.id,
+        "role": "external_4g",
+        "transport": "cdc-ecm",
+        "subid": subid,
+        "ifname": m.ifname,
+        "wan_interface": m.wan,
+        "usb": {"path": m.usb_path, "id": m.usb_id, "present": false, "carrier": 0},
+        "debug": {"transport": "adb", "serial": m.serial, "available": adb.is_some()},
+        "net": net,
+        "sim": {
+            "state": card("modem_main_state"),
+            "slot": slot,
+            "iccid": card("sim_iccid"),
+            "imsi": card("sim_imsi"),
+            "msisdn": card("msisdn"),
+            "imei": card("imei"),
+        },
+        "wwan": wwan_summary(&wwan),
+        "interfaces": {"ipv4": interface(&v4), "ipv6": interface(&v6)},
+        "traffic": realtime_traffic(&traffic),
+        "qos": {
+            "qci": probe.qos.qci, "ambr_dl": probe.qos.ambr_dl,
+            "ambr_ul": probe.qos.ambr_ul, "sampled_at": probe.qos_at,
+        },
+    });
+    (modem, thermal)
+}
+
+/// One mwan3 member as an `aggregation.paths` entry; `None` when it is
+/// disabled, stopped and down (not worth listing).
+async fn aggregation_path(
+    (id, label, ifname): (&str, &str, &str),
+    member: &Value,
+    mwan_running: bool,
+) -> Option<Value> {
+    let enabled = parse_bool(member, "enabled");
+    let running = parse_bool(member, "running");
+    let member_up = parse_bool(member, "up");
+    let netif = netif_status(ifname).await;
+    let netif_up = parse_bool(&netif, "up");
+    let up = member_up || netif_up;
+    if !(enabled || running || up) {
+        return None;
+    }
+    let status = string(member, "status");
+    // Without a running mwan3 the netifd view is all there is.
+    let online = status.eq_ignore_ascii_case("online")
+        || (running && member_up)
+        || (netif_up && !mwan_running);
+    let field = |v: &Value, k: &str| v.get(k).cloned().unwrap_or(Value::Null);
+    let targets: Vec<Value> = member
+        .get("track_ip")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .map(|t| {
+                    let st = string(t, "status");
+                    let reachable = st.eq_ignore_ascii_case("online") || st.eq_ignore_ascii_case("up");
+                    json!({
+                        "ip": string(t, "ip"),
+                        "status": st,
+                        "online": reachable,
+                        "latency_ms": field(t, "latency"),
+                        "packet_loss_percent": field(t, "packetloss"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // Headline latency/loss: the first reachable target, else the first one
+    // that was actually probed.
+    let headline = targets
+        .iter()
+        .find(|t| t["online"] == true)
+        .or_else(|| targets.iter().find(|t| t["status"] != "skipped"))
+        .cloned();
+    let mut entry = json!({
+        "id": id,
+        "label": label,
+        "interface": ifname,
+        "enabled": enabled,
+        "running": running,
+        "up": up,
+        "online": online,
+        "interface_up": netif_up,
+        "interface_available": parse_bool(&netif, "available"),
+        "interface_pending": parse_bool(&netif, "pending"),
+        "status": status,
+        "tracking": string(member, "tracking"),
+        "uptime_seconds": integer(member, "uptime"),
+        "targets": targets,
+    });
+    if let Some(h) = headline {
+        for key in ["latency_ms", "packet_loss_percent"] {
+            if !h[key].is_null() {
+                entry[key] = h[key].clone();
+            }
+        }
+    }
+    Some(entry)
+}
+
+/// `key = value` lines of the ICG daemon config.
+fn parse_kv(text: &str) -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    for row in text.lines() {
+        if let Some((k, v)) = row.split_once('=') {
+            map.insert(k.trim().to_string(), v.trim().to_string());
+        }
+    }
+    map
+}
+
+/// The `aggregation` object (multi-WAN bonding through the ICG server).
+async fn aggregation_summary(mode: &str, mwan_running: bool) -> Value {
+    let status = ubus_obj("mwan3", "status", json!({})).await;
+    let members = status.get("interfaces").cloned().unwrap_or(Value::Null);
+    let mut paths = Vec::new();
+    for spec in AGG_MEMBERS {
+        if let Some(member) = members.get(spec.2)
+            && let Some(entry) = aggregation_path(spec, member, mwan_running).await
+        {
+            paths.push(entry);
+        }
+    }
+    let online_paths = paths.iter().filter(|p| p["online"] == true).count();
+    let (tunnels, live_ip, live_port, icg_running) = blocking(tcp_aggregation_summary).await;
+    let provisioned = !uci_value("zwrt_router.icgmwan.IcgDevId").await.is_empty();
+    let remaining = uci_value("zwrt_router.icgmwan.residual_flow").await;
+    let used_today = uci_value("zwrt_router.icgmwan.count_flow_today").await;
+    let conf_path = env_or("LUYAZ_ICG_CONFIG", "/etc/config/icg.conf");
+    let conf = parse_kv(&blocking(move || fs::read_to_string(conf_path)).await.unwrap_or_default());
+    let conf_num = |k: &str| conf.get(k).and_then(|v| v.parse::<u16>().ok()).unwrap_or(0);
+    // Prefer what the live tunnel shows over the configured server.
+    let server_ip = if live_ip.is_empty() {
+        conf.get("AggregationServerIP").cloned().unwrap_or_default()
+    } else {
+        live_ip
+    };
+    let tcp_port = if live_port == 0 { conf_num("AggregationServerTcpPort") } else { live_port };
+    let enabled = mode == "SMULTIWAN";
+    let state = match (enabled, provisioned, tunnels > 0) {
+        (false, _, _) => "disabled",
+        (true, false, _) => "unprovisioned",
+        (true, true, true) => "online",
+        (true, true, false) => "waiting",
+    };
+    json!({
+        "enabled": enabled,
+        "mode": mode,
+        "state": state,
+        "provisioned": provisioned,
+        "online": tunnels > 0,
+        "controller": {"icg_process_running": icg_running, "mwan3_running": mwan_running},
+        "tcp_tunnel_count": tunnels,
+        "server": {
+            "ip": server_ip,
+            "tcp_port": tcp_port,
+            "udp_start_port": conf_num("AggregationServerUdpStartPort"),
+            "source": if live_port > 0 { "runtime" } else { "config" },
+        },
+        "path_count": paths.len(),
+        "online_path_count": online_paths,
+        "paths": paths,
+        "traffic": {
+            "remaining_bytes": remaining.parse::<u64>().ok(),
+            "remaining_raw": remaining,
+            "today_used_bytes": used_today.parse::<u64>().ok(),
+            "today_used_raw": used_today,
+        },
+    })
+}
+
 /// MU5252（TopFlow）的多模组部分：按卡槽、按外挂模组再调 ubus（和 adb），边读边算，
 /// 补 `modems`、`thermal.modems`、`aggregation`、`multiwan`。Phase 2a 原样留在 IO 层，没拆成纯函数。
 async fn mu5252_extras(ctx: Mu5252Ctx, fields: &mut Map<String, Value>) {
-    let Mu5252Ctx {
-        raw_net,
-        imsi,
-        msisdn,
-        cpu_temp,
-        sim,
-        imei,
-        cellular,
-        wan4_if,
-        wan6_if,
-        uci_sets,
-    } = ctx;
-    let active_subid = integer(&sim, "current_sim_slot").clamp(1, 6);
-    let x75_traffic = object(
-        ubus(
-            "zwrt_data",
-            "get_wwandst",
-            json!({"source_module":"deviceui","cid":1,"type":1,"subid":active_subid}),
-        )
-        .await,
-    );
-    let v3t = object(ubus("zwrt_zte_mdm.api", "get_v3t_sim_info", json!({})).await);
-    let msim = object(ubus("zte_nwinfo_api", "nwinfo_get_msim_netinfo", json!({})).await);
-    let mut modems = Vec::new();
-    let network_type = string(&raw_net, "network_type");
-    let bandwidth = if matches!(network_type.as_str(), "SA" | "NSA") {
-        string(&raw_net, "nr5g_bandwidth")
+    let subid = integer(&ctx.sim, "current_sim_slot").clamp(1, 6);
+    let mut modems = vec![integrated_modem(&ctx, subid).await];
+    let mut temps = vec![if ctx.cpu_temp > 0 {
+        json!({"id": "x75", "available": true, "celsius": ctx.cpu_temp})
     } else {
-        string(&raw_net, "lte_bandwidth")
-    };
-    let x75_qos = crate::qos::read(qos_query(&raw_net, &imsi, &wan4_if, None));
-    modems.push(json!({
-        "id":"x75","role":"integrated_5g","transport":"rmnet","subid":active_subid,
-        "ifname":"rmnet_data0","wan_interface":"zte_mwan2",
-        "net":{"type":network_type,"bars":integer(&raw_net,"signalbar"),"roaming":string(&raw_net,"simcard_roam"),"operator":string(&raw_net,"network_provider_fullname"),"band":string(&raw_net,"wan_active_band"),"bandwidth":bandwidth,"nr_rsrp":integer(&raw_net,"nr5g_rsrp"),"nr_rsrq":integer(&raw_net,"nr5g_rsrq"),"nr_snr":string(&raw_net,"nr5g_snr"),"nr_pci":integer(&raw_net,"nr5g_pci"),"nr_cell_id":integer(&raw_net,"nr5g_cell_id"),"nr_channel":integer(&raw_net,"nr5g_action_channel"),"lte_rsrp":integer(&raw_net,"lte_rsrp"),"lte_rsrq":integer(&raw_net,"lte_rsrq"),"lte_pci":integer(&raw_net,"lte_pci"),"cell_id":integer(&raw_net,"cell_id")},
-        "sim":{"state":string(&sim,"sim_states"),"slot":integer(&sim,"current_sim_slot"),"iccid":string(&sim,"sim_iccid"),"imsi":imsi,"msisdn":msisdn,"imei":string(&imei,"imei")},
-        "wwan":{"status":string(&cellular,"connect_status"),"ipv4_ifname":string(&cellular,"ipv4_dev_name"),"ipv6_ifname":string(&cellular,"ipv6_dev_name")},
-        "interfaces":{"ipv4":interface(&wan4_if),"ipv6":interface(&wan6_if)},
-        "traffic":realtime_traffic(&x75_traffic),
-        "qos":{"qci":x75_qos.qci,"ambr_dl":x75_qos.ambr_dl,"ambr_ul":x75_qos.ambr_ul,"bearer":x75_qos.bearer,"stale":x75_qos.stale,"sampled_at":0}
-    }));
-    let mut thermal_modems = vec![
-        json!({"id":"x75","available":cpu_temp>0,"celsius":if cpu_temp>0 {json!(cpu_temp)} else {Value::Null}}),
-    ];
+        json!({"id": "x75", "available": false, "celsius": null})
+    }];
+    let v3t = ubus_obj("zwrt_zte_mdm.api", "get_v3t_sim_info", json!({})).await;
+    let msim = ubus_obj("zte_nwinfo_api", "nwinfo_get_msim_netinfo", json!({})).await;
     let adb = std::env::var("LUYAZ_ADB_BIN").ok();
-    for index in 0..2usize {
-        let id = if index == 0 { "v3e1" } else { "v3e2" };
-        let serial = if index == 0 {
-            "V3E1T12345"
-        } else {
-            "V3E2T12345"
-        };
-        let ifname = if index == 0 { "V3E1net0" } else { "V3E2net0" };
-        let wan = if index == 0 { "zte_mwan3" } else { "zte_mwan4" };
-        let usb_path = if index == 0 { "1-1" } else { "1-2" };
-        let usb_id = if index == 0 { "19d2:0581" } else { "19d2:1716" };
-        let sim_prefix = format!("v3t_{}", index + 1);
-        let slot = integer(&v3t, &format!("{sim_prefix}_st_slot")).clamp(0, 1);
-        let subid = if index == 0 { 3 + slot } else { 5 + slot };
-        let ext_net = topflow_external_net(&msim, &uci_sets, index, slot);
-        let wwan = object(
-            ubus(
-                "zwrt_data",
-                "get_wwaniface",
-                json!({"source_module":"deviceui","cid":1,"subid":subid}),
-            )
-            .await,
-        );
-        let ext_traffic = object(
-            ubus(
-                "zwrt_data",
-                "get_wwandst",
-                json!({"source_module":"deviceui","cid":1,"type":1,"subid":subid}),
-            )
-            .await,
-        );
-        let ipv4 = object(ubus(&format!("network.interface.{wan}"), "status", json!({})).await);
-        let ipv6 = object(ubus(&format!("network.interface.{wan}_6"), "status", json!({})).await);
-        let mut ext_qos = crate::qos::Values::default();
-        let mut sampled_at = 0i64;
-        let mut external_temp = None;
-        if let Some(adb) = &adb {
-            if let Ok(raw) = command::run(
-                adb,
-                [
-                    "-s",
-                    serial,
-                    "shell",
-                    "grep QCI= /logfs/key.log | tail -n 64",
-                ],
-                Duration::from_secs(5),
-            )
-            .await
-                && let Some(parsed) = crate::qos::parse_external(&String::from_utf8_lossy(&raw))
-            {
-                ext_qos = parsed;
-                sampled_at = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64;
-            }
-            if let Ok(raw) = command::run(
-                adb,
-                [
-                    "-s",
-                    serial,
-                    "shell",
-                    "cat",
-                    "/sys/devices/virtual/power/zte_power/adc2_temp",
-                ],
-                Duration::from_secs(5),
-            )
-            .await
-            {
-                external_temp = String::from_utf8_lossy(&raw)
-                    .trim()
-                    .parse::<i64>()
-                    .ok()
-                    .filter(|v| (-40..=125).contains(v));
-            }
-        }
-        thermal_modems.push(json!({"id":id,"available":external_temp.is_some(),"celsius":external_temp,"sampled_at":if external_temp.is_some(){sampled_at}else{0}}));
-        modems.push(json!({
-            "id":id,"role":"external_4g","transport":"cdc-ecm","subid":subid,"ifname":ifname,"wan_interface":wan,
-            "usb":{"path":usb_path,"id":usb_id,"present":false,"carrier":0},
-            "debug":{"transport":"adb","serial":serial,"available":adb.is_some()},
-            "net":ext_net,
-            "sim":{"state":prefixed_string(&v3t,&format!("{sim_prefix}_"),"modem_main_state"),"slot":slot,"iccid":prefixed_string(&v3t,&format!("{sim_prefix}_"),"sim_iccid"),"imsi":prefixed_string(&v3t,&format!("{sim_prefix}_"),"sim_imsi"),"msisdn":prefixed_string(&v3t,&format!("{sim_prefix}_"),"msisdn"),"imei":prefixed_string(&v3t,&format!("{sim_prefix}_"),"imei")},
-            "wwan":{"status":string(&wwan,"connect_status"),"ipv4_ifname":string(&wwan,"ipv4_dev_name"),"ipv6_ifname":string(&wwan,"ipv6_dev_name")},
-            "interfaces":{"ipv4":interface(&ipv4),"ipv6":interface(&ipv6)},
-            "traffic":realtime_traffic(&ext_traffic),
-            "qos":{"qci":ext_qos.qci,"ambr_dl":ext_qos.ambr_dl,"ambr_ul":ext_qos.ambr_ul,"sampled_at":sampled_at}
-        }));
+    for (i, module) in EXT_MODULES.iter().enumerate() {
+        let (modem, temp) =
+            external_modem(module, i, &v3t, &msim, &ctx.uci_sets, adb.as_deref()).await;
+        modems.push(modem);
+        temps.push(temp);
     }
     if let Some(thermal) = fields.get_mut("thermal") {
-        thermal["modems"] = Value::Array(thermal_modems);
+        thermal["modems"] = Value::Array(temps);
     }
     fields.insert("modems".into(), Value::Array(modems));
     let mode = uci_value("zwrt_router.network.opms_wan_mode").await;
-    let mwan_running = std::env::var("LUYAZ_MWAN3_RUNNING")
-        .ok()
-        .and_then(|v| v.parse::<i64>().ok())
-        .is_some_and(|v| v != 0);
-    let mwan_status = object(ubus("mwan3", "status", json!({})).await);
-    let mut paths = Vec::new();
-    let interfaces = mwan_status
-        .get("interfaces")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    for (id, label, name) in [
-        ("x75", "X75", "zte_mwan2"),
-        ("v3e1", "V3E1", "zte_mwan3"),
-        ("v3e2", "V3E2", "zte_mwan4"),
-        ("ethernet", "Ethernet", "waneth"),
-    ] {
-        let Some(path) = interfaces.get(name) else {
-            continue;
-        };
-        let enabled = parse_bool(path, "enabled");
-        let running = parse_bool(path, "running");
-        let mwan_up = parse_bool(path, "up");
-        let iface = object(ubus(&format!("network.interface.{name}"), "status", json!({})).await);
-        let interface_up = parse_bool(&iface, "up");
-        let up = mwan_up || interface_up;
-        if !enabled && !running && !up {
-            continue;
-        }
-        let status = string(path, "status");
-        let online = status.eq_ignore_ascii_case("online")
-            || (running && mwan_up)
-            || (!mwan_running && interface_up);
-        let mut targets = Vec::new();
-        if let Some(raw_targets) = path.get("track_ip").and_then(Value::as_array) {
-            for target in raw_targets {
-                let target_status = string(target, "status");
-                let target_online =
-                    matches!(target_status.to_ascii_lowercase().as_str(), "online" | "up");
-                targets.push(json!({"ip":string(target,"ip"),"status":target_status,"online":target_online,"latency_ms":target.get("latency").cloned().unwrap_or(Value::Null),"packet_loss_percent":target.get("packetloss").cloned().unwrap_or(Value::Null)}));
-            }
-        }
-        let preferred = targets
-            .iter()
-            .find(|target| target["online"] == true)
-            .or_else(|| targets.iter().find(|target| target["status"] != "skipped"));
-        let mut result = json!({"id":id,"label":label,"interface":name,"enabled":enabled,"running":running,"up":up,"online":online,"interface_up":interface_up,"interface_available":parse_bool(&iface,"available"),"interface_pending":parse_bool(&iface,"pending"),"status":status,"tracking":string(path,"tracking"),"uptime_seconds":integer(path,"uptime"),"targets":targets});
-        if let Some(preferred) = preferred {
-            if !preferred["latency_ms"].is_null() {
-                result["latency_ms"] = preferred["latency_ms"].clone();
-            }
-            if !preferred["packet_loss_percent"].is_null() {
-                result["packet_loss_percent"] = preferred["packet_loss_percent"].clone();
-            }
-        }
-        paths.push(result);
-    }
-    let path_count = paths.len();
-    let online_path_count = paths.iter().filter(|path| path["online"] == true).count();
-    let (tcp_tunnel_count, runtime_ip, runtime_port, icg_running) =
-        blocking(tcp_aggregation_summary).await;
-    let provisioned = !uci_value("zwrt_router.icgmwan.IcgDevId").await.is_empty();
-    let remaining = uci_value("zwrt_router.icgmwan.residual_flow").await;
-    let today_used = uci_value("zwrt_router.icgmwan.count_flow_today").await;
-    let config_path =
-        std::env::var("LUYAZ_ICG_CONFIG").unwrap_or_else(|_| "/etc/config/icg.conf".into());
-    let icg_config: BTreeMap<String, String> = blocking(move || fs::read_to_string(config_path))
-        .await
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|line| {
-            let (k, v) = line.split_once('=')?;
-            Some((k.trim().into(), v.trim().into()))
-        })
-        .collect();
-    let server_ip = if runtime_ip.is_empty() {
-        icg_config
-            .get("AggregationServerIP")
-            .cloned()
-            .unwrap_or_default()
-    } else {
-        runtime_ip
-    };
-    let tcp_port = if runtime_port == 0 {
-        icg_config
-            .get("AggregationServerTcpPort")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_default()
-    } else {
-        runtime_port
-    };
-    let udp_port = icg_config
-        .get("AggregationServerUdpStartPort")
-        .and_then(|v| v.parse::<u16>().ok())
-        .unwrap_or_default();
-    let enabled = mode == "SMULTIWAN";
-    fields.insert("aggregation".into(), json!({"enabled":enabled,"mode":mode,"state":if !enabled{"disabled"}else if !provisioned{"unprovisioned"}else if tcp_tunnel_count>0{"online"}else{"waiting"},"provisioned":provisioned,"online":tcp_tunnel_count>0,"controller":{"icg_process_running":icg_running,"mwan3_running":mwan_running},"tcp_tunnel_count":tcp_tunnel_count,"server":{"ip":server_ip,"tcp_port":tcp_port,"udp_start_port":udp_port,"source":if runtime_port>0{"runtime"}else{"config"}},"paths":paths,"path_count":path_count,"online_path_count":online_path_count,"traffic":{"remaining_bytes":remaining.parse::<u64>().ok(),"remaining_raw":remaining,"today_used_bytes":today_used.parse::<u64>().ok(),"today_used_raw":today_used}}));
-    fields.insert(
-        "multiwan".into(),
-        topflow_multiwan(&uci_sets, &mode, mwan_running),
+    let mwan_running = matches!(
+        std::env::var("LUYAZ_MWAN3_RUNNING").map(|v| v.parse::<i64>()),
+        Ok(Ok(n)) if n != 0
     );
+    let aggregation = aggregation_summary(&mode, mwan_running).await;
+    fields.insert("aggregation".into(), aggregation);
+    fields.insert("multiwan".into(), topflow_multiwan(&ctx.uci_sets, &mode, mwan_running));
 }
 
 /// 一次 ubus 调用。经过单一采集执行者（`executor.rs`，V2-18）：执行者里直接发，别处排队；
@@ -1567,8 +1719,10 @@ mod tests {
 
     #[test]
     fn profile() {
-        assert_eq!(normalize_profile("MC7523 HW1.0"), "mc7523_hw1_0");
-        assert_eq!(normalize_profile("MU5250"), "mu5250")
+        // lower-cased, every non-alphanumeric becomes `_`
+        for (raw, want) in [("MU5250", "mu5250"), ("MC7523 HW1.0", "mc7523_hw1_0")] {
+            assert_eq!(normalize_profile(raw), want);
+        }
     }
     #[test]
     fn integer_or_default() {
@@ -1606,9 +1760,9 @@ mod tests {
     }
     #[test]
     fn iface() {
-        let v = interface(&json!({}));
-        assert_eq!(v["up"], false);
-        assert_eq!(v["ipv4"], json!([]))
+        // an empty netifd reply is a down interface without addresses
+        let empty = interface(&json!({}));
+        assert!(empty["up"] == false && empty["ipv4"] == json!([]));
     }
     /// 旧采集读到的对象（块的两个也算），mock ubusd 上都注册上，正常时回 `{}`。
     const COLLECT_CALLS: &[(&str, &str)] = &[
@@ -1846,14 +2000,14 @@ mod tests {
 
     #[test]
     fn connected_clients_ignore_historical_leases() {
-        let (items, wifi, lan) = connected_clients(
-            &json!({"lan_access_list_info":[]}),
-            &json!({"wireless_access_list_info":[{"mac_address":"AA:BB:CC:DD:EE:FF","ip_address":"192.168.0.2","hostname":"online"}]}),
-            &lease_metadata(),
-        );
-        assert_eq!(wifi, 1);
-        assert_eq!(lan, 0);
-        assert_eq!(items.len(), 1);
+        // Only the vendor's live lists count; the lease file (whatever is on
+        // this host) must not add clients.
+        let live_wifi = json!({"wireless_access_list_info": [
+            {"mac_address": "AA:BB:CC:DD:EE:FF", "ip_address": "192.168.0.2", "hostname": "online"}
+        ]});
+        let no_lan = json!({"lan_access_list_info": []});
+        let (items, wifi, lan) = connected_clients(&no_lan, &live_wifi, &lease_metadata());
+        assert_eq!((wifi, lan, items.len()), (1, 0, 1));
         assert_eq!(items[0].mac, "aa:bb:cc:dd:ee:ff");
     }
 

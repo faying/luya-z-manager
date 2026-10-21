@@ -4,7 +4,7 @@
 //! (scan, register, back to automatic) and pinning a scene take two taps: the first colours the
 //! row or button and says what follows, a second within 4 s sends it; every tap is answered at
 //! once (9-25).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::{Sub, Ui, SUB_VIEW};
 use crate::kit::{self, CARD_W, MARGIN, PAD, ROW_H, TAB_PAD};

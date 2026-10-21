@@ -10,7 +10,7 @@
 #       [ -f /data/chill/disabled ] || /etc/init.d/chill start
 #
 # 结构照搬当年 touch-ui 的 procd 模板 u60pro-devui.init（已删；现在的 procd 写法见 touch-ui/scripts/luyaz-core.init）。
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 # 即便不 enable 也给出合理值：手动 enable 时要排在网络之后。

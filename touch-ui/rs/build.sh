@@ -14,7 +14,7 @@
 # Since 10f these crates are members of the manager's Cargo workspace (one Cargo.lock at the
 # manager root); the profile is the root's release-device (opt "s", lto, cg1, panic=abort, strip =
 # the old rs/ release), so the output is target/<triple>/release-device/luyaz-ui (Phase 10 R5; u60pro-devui before).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 P="-p lvgl-sys -p plat -p devui-model -p devui"

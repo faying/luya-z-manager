@@ -1,7 +1,7 @@
 //! The battery estimate's line (src/estimate.c, battery_est.c): luyaz-core works it out
 //! (battery_eta.rs); this reads GET /api/screen's battery every 10 s while 系统 is up and
 //! words it; nothing read for 30 s: 「—」, not the old line as new.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::core_api::CoreApi;
 use super::util::{bytes_cap, mono_ms};

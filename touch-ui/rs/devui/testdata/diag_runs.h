@@ -3,7 +3,7 @@
  * shape deep_diag.rs sends them, texts as its judge_* functions write them.
  * Used by the render fixtures (diagnose-* scenes) and tests/diag_view_test.c.
  *
- * SPDX-License-Identifier: MIT
+ * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 #ifndef RT_DIAG_RUNS_H
 #define RT_DIAG_RUNS_H

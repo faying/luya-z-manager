@@ -2,7 +2,7 @@
 //! bar's conclusions, computed by core from the snapshot the screen shows; read once per new
 //! snapshot (at most every 300 ms; after a failure every 5 s), and every 5 s anyway (a stuck
 //! executor never moves the snapshot, and exec_age_ms is how the screen sees that, E4).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::http;
 use super::util::mono_ms;

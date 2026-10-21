@@ -6,7 +6,7 @@
 # (the Mac side, tools/luyaz, checks the same fixture with md5 -q), agree on
 # runtime trees, and refuse the same broken ones. Runs in a busybox container
 # (scripts/test/docker.sh); writes only under mktemp -d.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCRIPTS=${SCRIPTS:-/scripts}

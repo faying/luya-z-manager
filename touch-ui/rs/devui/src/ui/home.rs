@@ -2,7 +2,7 @@
 //! conclusion, then 载波 · Wi-Fi · 出口 · 流量), 情景, Tailscale, and the net-speed chart
 //! (ui/system.rs, built with the charts). Cards are stacked by home_reflow under whatever the
 //! status card shows.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::{Sub, Ui, SF_OLD_DATAD, TAB_CELL, TAB_HOME, TAB_WIFI, VIEW_H};
 use crate::cf;
@@ -99,6 +99,11 @@ pub struct Home {
     last_exit: String,
     // 情景
     sc_card: Obj,
+    // 落地: a new country, for 24 h (travel-assist.md §5)
+    ld_card: Obj,
+    ld_title: Obj,
+    ld_when: Obj,
+    ld_note: Obj,
     sc_state: Obj,
     sc_note: Obj,
     pub sc_force: bool,
@@ -162,6 +167,10 @@ impl Default for Home {
             c_subcol: None,
             last_exit: String::new(),
             sc_card: Obj::NULL,
+            ld_card: Obj::NULL,
+            ld_title: Obj::NULL,
+            ld_when: Obj::NULL,
+            ld_note: Obj::NULL,
             sc_state: Obj::NULL,
             sc_note: Obj::NULL,
             sc_force: false,
@@ -484,6 +493,15 @@ impl Ui {
         }
         h.hr_traf.val.set_text("—");
 
+        // 落地: where the device has just arrived (read-only; gone after 24 h)
+        let l = kit::card(sc, MARGIN, 0, CARD_W, SC_CARD_H);
+        h.ld_title = kit::label(l, f.cj14, th.t1, PAD, 11, "");
+        h.ld_when = kit::label_r(l, f.cj14, th.t2, CARD_W - PAD, 11, "");
+        h.ld_note = kit::label_w(l, f.cj12, th.t2, PAD, 34, CARD_W - 2 * PAD, false, "");
+        h.ld_note.set_long_mode(lv::LV_LABEL_LONG_MODE_DOTS);
+        kit::show(l, false);
+        h.ld_card = l;
+
         // 情景: what the device decided about where it is (opens the 情景 page)
         let s = kit::card(sc, MARGIN, 0, CARD_W, SC_CARD_H);
         kit::label(s, f.cj14, th.t2, PAD, 11, tr("情景"));
@@ -563,6 +581,10 @@ impl Ui {
         }
         h.cell_card.set_y(y);
         y += visible_h(h.cell_card) + MARGIN;
+        if visible_h(h.ld_card) >= 0 {
+            h.ld_card.set_y(y);
+            y += SC_CARD_H + MARGIN;
+        }
         if visible_h(h.sc_card) >= 0 {
             h.sc_card.set_y(y);
             y += SC_CARD_H + MARGIN;
@@ -643,7 +665,7 @@ impl Ui {
 
     /// Dual standby only (`sim.dual.mode == "dual"`): one line per slot on the wash, the data
     /// slot first: [logo] RAT · place …… 上网中 / 待机. Returns whether shown.
-    fn home_dual(&mut self, d: &devui_model::devui_data_t, _v: &net_view_t) -> bool {
+    fn home_dual(&mut self, d: &devui_model::core_snapshot_t, _v: &net_view_t) -> bool {
         let th = t();
         let dual = d.sim_dual.as_ref().filter(|x| x.mode == "dual" && !x.slots.is_empty());
         let on = dual.is_some();
@@ -1088,13 +1110,13 @@ impl Ui {
         // Wi-Fi · 设备数 (opens the Wi-Fi tab)
         {
             let row = self.home.hr_wifi;
-            if d.wifi_enabled == 0 {
+            if d.ap_on == 0 {
                 self.set(row.val, tr("已关闭"));
             } else {
-                let ssid = if d.wifi_ssid.is_empty() { "-" } else { d.wifi_ssid.as_str() };
-                self.set(row.val, cf!(trn("%.16s · %d 台", d.clients_total as i64), ssid, d.clients_total));
+                let ssid = if d.ap_ssid.is_empty() { "-" } else { d.ap_ssid.as_str() };
+                self.set(row.val, cf!(trn("%.16s · %d 台", d.lan_total as i64), ssid, d.lan_total));
             }
-            kit::text_color(row.val, if d.wifi_enabled != 0 { th.t1 } else { th.t3 });
+            kit::text_color(row.val, if d.ap_on != 0 { th.t1 } else { th.t3 });
             row.bx.set_y(y);
             y += ROW_H;
         }
@@ -1283,6 +1305,40 @@ impl Ui {
         }
         self.set(exit_sub, &sub);
         kit::show(exit_sub, !sub.is_empty());
+    }
+
+    /// 落地 (Home): 「到了日本 · 2 小时前」, 「从中国来 · 落地以来 120MB」; shown for 24 h after a
+    /// landing the core recorded. Country names come from /api/netinfo (serving / home operator).
+    pub(super) fn home_landing_paint(&mut self) {
+        let m = self.model.clone();
+        let now = self.now();
+        let card = self.home.ld_card;
+        let show = m.landing.as_ref().filter(|l| now >= l.at - 300 && now - l.at < 86400);
+        let was = !card.hidden();
+        let Some(l) = show else {
+            if was {
+                kit::show(card, false);
+                self.home_reflow();
+            }
+            return;
+        };
+        let ni = m.netinfo.clone().unwrap_or_default();
+        let name = |mcc: i32| -> Option<String> {
+            [&ni.serving, &ni.home].into_iter().find(|o| o.mcc.parse::<i32>().ok() == Some(mcc) && !o.country.is_empty()).map(|o| o.country.clone())
+        };
+        let here = name(l.mcc).unwrap_or_else(|| format!("MCC {}", l.mcc));
+        let (title, when, note) = (self.home.ld_title, self.home.ld_when, self.home.ld_note);
+        self.set(title, cf!(tr("到了%s"), &here));
+        self.set(when, super::diagnose::ago(now - l.at));
+        let used = String::from_utf8_lossy(&fmt_bytes_total(l.rx + l.tx)).into_owned();
+        match name(l.from) {
+            Some(from) => self.set(note, cf!(tr("从%s来 · 落地以来 %s"), &from, &used)),
+            None => self.set(note, cf!(tr("落地以来 %s"), &used)),
+        }
+        if !was {
+            kit::show(card, true);
+            self.home_reflow();
+        }
     }
 
     /// 情景 (Home): repainted when luyaz-core's answer changed.
@@ -1559,16 +1615,16 @@ fn aux_take(cur: &mut i32, hold: &mut u32, from_core: i32, now: u32) {
 
 impl Ui {
     /// home.c aux_refresh: the core's values; the radios and power save from the device.
-    pub(super) fn aux_refresh(&mut self, active: bool, d: &devui_model::devui_data_t) {
+    pub(super) fn aux_refresh(&mut self, active: bool, d: &devui_model::core_snapshot_t) {
         let now = lv::tick_get();
         let a = &mut self.aux;
-        if d.valid != 0 {
+        if d.populated != 0 {
             aux_take(&mut a.dps, &mut a.hold_dps, d.dps_mode, now);
             aux_take(&mut a.data, &mut a.hold_data, d.cell_data, now);
             aux_take(&mut a.roam, &mut a.hold_roam, d.cell_roam, now);
             a.pool.clear();
-            if !d.dhcp_ip.is_empty() && !d.dhcp_start.is_empty() {
-                a.pool = logic::dhcp_pool_text(&d.dhcp_ip, &d.dhcp_start, &d.dhcp_limit);
+            if !d.lan_ip.is_empty() && !d.dhcp_first.is_empty() {
+                a.pool = logic::dhcp_pool_text(&d.lan_ip, &d.dhcp_first, &d.dhcp_count);
             }
         }
         if !active || (a.read_at != 0 && now.wrapping_sub(a.read_at) < 5000) {
@@ -1588,14 +1644,14 @@ impl Ui {
 
 /// 载波 card's QoS line: QCI or 5QI by the core's `bearer` (not the radio mode), AMBR as the
 /// network's ceiling in Mbps, （旧） when the core marks the values stale; empty without a value.
-pub(crate) fn qos_line(d: &devui_model::devui_data_t) -> Vec<u8> {
-    if d.qci <= 0 && d.ambr_dl <= 0.0 && d.ambr_ul <= 0.0 {
+pub(crate) fn qos_line(d: &devui_model::core_snapshot_t) -> Vec<u8> {
+    if d.qos_class <= 0 && d.ambr_down <= 0.0 && d.ambr_up <= 0.0 {
         return Vec::new();
     }
     let kind = if d.qos_bearer == "nr_pdu" { "5QI" } else { "QCI" };
-    let mut s = if d.qci > 0 { format!("{kind} {}", d.qci) } else { format!("{kind} —") }.into_bytes();
-    if d.ambr_dl > 0.0 || d.ambr_ul > 0.0 {
-        s.extend(cf!(tr(" · 上限 %d/%d Mbps"), d.ambr_dl as i32, d.ambr_ul as i32));
+    let mut s = if d.qos_class > 0 { format!("{kind} {}", d.qos_class) } else { format!("{kind} —") }.into_bytes();
+    if d.ambr_down > 0.0 || d.ambr_up > 0.0 {
+        s.extend(cf!(tr(" · 上限 %d/%d Mbps"), d.ambr_down as i32, d.ambr_up as i32));
     }
     if d.qos_stale != 0 {
         s.extend_from_slice(tr("（旧）").as_bytes());
@@ -1636,14 +1692,14 @@ mod tests {
 
     #[test]
     fn qos_line_labels_by_bearer_and_marks_stale() {
-        let mut d = devui_model::devui_data_t { qci: 9, ambr_dl: 1668.64, ambr_ul: 1008.4, ..Default::default() };
+        let mut d = devui_model::core_snapshot_t { qos_class: 9, ambr_down: 1668.64, ambr_up: 1008.4, ..Default::default() };
         d.qos_bearer = "eps".into();
         assert_eq!(qos_line(&d), "QCI 9 · 上限 1668/1008 Mbps".as_bytes());
         d.qos_bearer = "nr_pdu".into();
         assert_eq!(qos_line(&d), "5QI 9 · 上限 1668/1008 Mbps".as_bytes());
         d.qos_stale = 1;
         assert_eq!(qos_line(&d), "5QI 9 · 上限 1668/1008 Mbps（旧）".as_bytes());
-        let empty = devui_model::devui_data_t::default();
+        let empty = devui_model::core_snapshot_t::default();
         assert!(qos_line(&empty).is_empty());
     }
 }

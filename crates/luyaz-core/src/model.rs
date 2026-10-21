@@ -1,22 +1,11 @@
+//! Snapshot types served by `/v2/state`, plus an offline shape-diff tool.
+
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::{collections::BTreeMap, fs};
 
-#[derive(Clone, Debug, Serialize, PartialEq)]
-pub struct CoreVersion {
-    pub name: &'static str,
-    pub version: &'static str,
-}
-
-impl Default for CoreVersion {
-    fn default() -> Self {
-        Self {
-            name: "u60d",
-            version: env!("CARGO_PKG_VERSION"),
-        }
-    }
-}
-
+/// One published state document: a timestamp, who produced it, and every
+/// collected field flattened in beside them.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Snapshot {
     pub ts: i64,
@@ -25,107 +14,131 @@ pub struct Snapshot {
     pub fields: Map<String, Value>,
 }
 
-fn shape(value: &Value, path: &str, out: &mut BTreeMap<String, &'static str>) {
-    match value {
-        Value::Object(values) => {
-            for (key, value) in values {
-                let child = if path.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{path}.{key}")
-                };
-                shape(value, &child, out);
-            }
-        }
-        Value::Array(_) => {
-            out.insert(path.into(), "array");
-        }
-        Value::Null => {
-            out.insert(path.into(), "null");
-        }
-        Value::Bool(_) => {
-            out.insert(path.into(), "boolean");
-        }
-        Value::Number(_) => {
-            out.insert(path.into(), "number");
-        }
-        Value::String(_) => {
-            out.insert(path.into(), "string");
+/// Producer identity. The wire name stays `u60d` for existing clients.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct CoreVersion {
+    pub name: &'static str,
+    pub version: &'static str,
+}
+
+impl Default for CoreVersion {
+    fn default() -> Self {
+        let version = env!("CARGO_PKG_VERSION");
+        CoreVersion {
+            name: "u60d",
+            version,
         }
     }
 }
 
-/// Compare JSON structure without emitting values. This is intentionally a CLI
-/// diagnostic so device-local snapshots never need to leave the router.
-pub fn compare_state_shape(paths: &[String]) -> Result<Value, String> {
-    if paths.len() != 2 {
-        return Err("usage: --compare-state-shape BASELINE CANDIDATE".into());
+/// JSON type name used in shape reports.
+fn kind_of(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
-    let mut shapes = Vec::new();
-    for path in paths {
-        let metadata = fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-        if metadata.len() > 32 * 1024 * 1024 {
-            return Err(format!("{path}: input exceeds 32 MiB"));
+}
+
+fn join_path(parent: &str, key: &str) -> String {
+    if parent.is_empty() {
+        key.to_owned()
+    } else {
+        format!("{parent}.{key}")
+    }
+}
+
+/// Flatten `value` into dotted path -> type name. Objects are walked into and
+/// never appear themselves; arrays are leaves (their contents are not listed).
+fn shape(value: &Value, path: &str, out: &mut BTreeMap<String, &'static str>) {
+    if let Value::Object(members) = value {
+        for (key, member) in members {
+            shape(member, &join_path(path, key), out);
         }
-        let data = fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let value: Value = serde_json::from_slice(&data).map_err(|e| format!("{path}: {e}"))?;
-        let mut current = BTreeMap::new();
-        shape(&value, "", &mut current);
-        shapes.push(current);
+    } else {
+        out.insert(path.to_owned(), kind_of(value));
     }
-    let baseline = &shapes[0];
-    let candidate = &shapes[1];
-    let missing: Vec<_> = baseline
-        .keys()
-        .filter(|key| !candidate.contains_key(*key))
-        .cloned()
-        .collect();
-    let extra: Vec<_> = candidate
-        .keys()
-        .filter(|key| !baseline.contains_key(*key))
-        .cloned()
-        .collect();
-    let type_mismatches: Vec<_> = baseline
-        .iter()
-        .filter_map(|(key, expected)| {
-            let actual = candidate.get(key)?;
-            (actual != expected).then(|| {
-                serde_json::json!({
-                    "path":key, "baseline":expected, "candidate":actual
-                })
-            })
-        })
-        .collect();
-    let mut different_values = Vec::new();
-    fn compare_values(a: &Value, b: &Value, path: &str, out: &mut Vec<String>) {
-        match (a, b) {
-            (Value::Object(left), Value::Object(right)) => {
-                for (key, value) in left {
-                    if let Some(other) = right.get(key) {
-                        let child = if path.is_empty() {
-                            key.clone()
-                        } else {
-                            format!("{path}.{key}")
-                        };
-                        compare_values(value, other, &child, out);
-                    }
+}
+
+/// Paths (present on both sides) whose leaf values differ. Recursion only
+/// follows keys that exist in both objects; anything that is not a pair of
+/// objects is compared as a whole.
+fn changed_paths(left: &Value, right: &Value, path: &str, out: &mut Vec<String>) {
+    match (left.as_object(), right.as_object()) {
+        (Some(a), Some(b)) => {
+            for (key, lhs) in a {
+                if let Some(rhs) = b.get(key) {
+                    changed_paths(lhs, rhs, &join_path(path, key), out);
                 }
             }
-            _ if a != b => out.push(path.into()),
-            _ => {}
+        }
+        _ => {
+            if left != right {
+                out.push(path.to_owned());
+            }
         }
     }
-    let baseline_json: Value =
-        serde_json::from_slice(&fs::read(&paths[0]).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-    let candidate_json: Value =
-        serde_json::from_slice(&fs::read(&paths[1]).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-    compare_values(&baseline_json, &candidate_json, "", &mut different_values);
+}
+
+/// Size limit for each input file.
+const SHAPE_INPUT_MAX: u64 = 32 * 1024 * 1024;
+
+fn load_json(path: &str) -> Result<Value, String> {
+    let with_path = |e: &dyn std::fmt::Display| format!("{path}: {e}");
+    let size = fs::metadata(path).map_err(|e| with_path(&e))?.len();
+    if size > SHAPE_INPUT_MAX {
+        return Err(format!("{path}: input exceeds 32 MiB"));
+    }
+    let bytes = fs::read(path).map_err(|e| with_path(&e))?;
+    serde_json::from_slice(&bytes).map_err(|e| with_path(&e))
+}
+
+/// CLI diagnostic: report how two state snapshots differ in *structure*
+/// (missing/extra paths, type changes) plus the list of paths whose values
+/// differ. Values themselves are never printed, so a device-local snapshot can
+/// be compared without leaking its contents.
+pub fn compare_state_shape(paths: &[String]) -> Result<Value, String> {
+    let [base_path, cand_path] = paths else {
+        return Err("usage: --compare-state-shape BASELINE CANDIDATE".into());
+    };
+    let base_doc = load_json(base_path)?;
+    let cand_doc = load_json(cand_path)?;
+
+    let mut base = BTreeMap::new();
+    shape(&base_doc, "", &mut base);
+    let mut cand = BTreeMap::new();
+    shape(&cand_doc, "", &mut cand);
+
+    let mut missing = Vec::new();
+    let mut type_mismatches = Vec::new();
+    for (path, &was) in &base {
+        match cand.get(path) {
+            None => missing.push(path.clone()),
+            Some(&now) if now != was => type_mismatches.push(serde_json::json!({
+                "path": path, "baseline": was, "candidate": now,
+            })),
+            Some(_) => {}
+        }
+    }
+    let extra: Vec<String> = cand
+        .keys()
+        .filter(|path| !base.contains_key(*path))
+        .cloned()
+        .collect();
+
+    let mut different_values = Vec::new();
+    changed_paths(&base_doc, &cand_doc, "", &mut different_values);
+
     Ok(serde_json::json!({
-        "baseline_paths":baseline.len(), "candidate_paths":candidate.len(),
-        "missing":missing, "extra":extra, "type_mismatches":type_mismatches,
-        "different_values":different_values
+        "baseline_paths": base.len(),
+        "candidate_paths": cand.len(),
+        "missing": missing,
+        "extra": extra,
+        "type_mismatches": type_mismatches,
+        "different_values": different_values,
     }))
 }
 
@@ -135,14 +148,13 @@ mod tests {
 
     #[test]
     fn shape_never_contains_values() {
-        let mut out = BTreeMap::new();
-        shape(
-            &serde_json::json!({"secret":"12345","items":[{"id":7}]}),
-            "",
-            &mut out,
-        );
-        assert_eq!(out.get("secret"), Some(&"string"));
-        assert_eq!(out.get("items"), Some(&"array"));
-        assert!(!format!("{out:?}").contains("12345"));
+        let doc = serde_json::json!({"secret": "12345", "items": [{"id": 7}]});
+        let mut paths = BTreeMap::new();
+        shape(&doc, "", &mut paths);
+        // Types are reported, values are not.
+        assert_eq!(paths.get("secret"), Some(&"string"));
+        assert_eq!(paths.get("items"), Some(&"array"));
+        let rendered = format!("{paths:?}");
+        assert!(!rendered.contains("12345"));
     }
 }

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 description = "Precompiles a component into the .cwasm u60d loads, with u60d's wasmtime version and Config (crates/luyaz-core/src/plugin/config.rs), and prints its manifest entry."
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
 # must be the same version as u60d's (crates/luyaz-core/Cargo.toml); a .cwasm only loads into the

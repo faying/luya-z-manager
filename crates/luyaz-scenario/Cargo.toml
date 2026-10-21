@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.99"
 description = "U60 Pro (MU5250) scenario engine runtime (scan, switch, apply and roll back, restores, boot safety, heartbeat, the web routes), run by u60d (u60-platform.md Phase 4 step 9h; moved out of zte-agent, removed 2026-10-14). The decisions are u60-policy's `scenario::step`; everything device-side goes through the host's `Io`."
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 publish = false
 
 [features]

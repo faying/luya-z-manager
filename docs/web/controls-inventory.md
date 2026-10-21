@@ -252,6 +252,8 @@
 | 「刷新」（页头） | button「刷新」 | GET `/api/network/clients`（SWR `mutate` 重拉） | — | — | 无 | —（本地，只读） |
 | 错误横幅「Retry」 | button「Retry」（ErrorBanner 里写死英文，未翻译；建议「重试」） 〔现名：button「重试」〕〔交互后：读取失败时（错误状态）；场景 down〕 | 同上 | — | — | 无 | —（本地，只读） |
 | 「显示已过期 (N)」/「隐藏已过期 (N)」（有过期租约时出现） | button「显示已过期 (N)」 | 无（筛选） | — | — | 无 | —（本地） |
+| 设备行「详情」（展开各来源的名称、厂商、类型；luyaz-web，lan-client-id.md T5） | button「详情 <设备名>」 | GET `/api/lanid`（随列表每 5 s） | — | — | 无 | —（本地） |
+| 详情里「保存别名」/「删除别名」 | button「保存别名」/「删除别名」 | POST `/api/lanid/alias` `{mac, alias}`（"" = 删除） | — | GET `/api/lanid` `aliases[mac]` | 页内确认 | 2 |
 
 ---
 

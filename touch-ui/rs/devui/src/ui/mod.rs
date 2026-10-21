@@ -2,7 +2,7 @@
 //! shared chrome on lv_layer_top() (status bar, floating tab capsule, banner, 事务行). Pages are
 //! in the submodules, one per C file in src/ui_parts/. Data comes only from the view model
 //! (devui_model::Model): the page code does not know where it came from.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 mod apn;
 mod cellular;
@@ -838,19 +838,7 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
     });
 
     let th = t();
-    // under the status bar (built later, on lv_layer_top())
-    u.tv = Obj::tileview(scr);
-    u.tv.set_size(W, H - BAR_H);
-    u.tv.align(lv::LV_ALIGN_TOP_MID, 0, BAR_H);
-    u.tv.set_style_bg_color(th.bg, 0);
-    u.tv.set_style_bg_opa(lv::OPA_COVER, 0);
-    u.tv.set_scrollbar_mode(sys::lv_scrollbar_mode_t::LV_SCROLLBAR_MODE_OFF);
-    // every tile opaque: no theme is initialised, so tiles default to a transparent background
-    for i in 0..TABS {
-        u.tiles[i] = u.tv.add_tile(i as u8, 0, sys::lv_dir_t::LV_DIR_HOR);
-        u.tiles[i].set_style_bg_color(th.bg, 0);
-        u.tiles[i].set_style_bg_opa(lv::OPA_COVER, 0);
-    }
+    (u.tv, u.tiles) = tab_strip(scr, th.bg);
     u.build_home(u.tiles[TAB_HOME]);
     u.build_cellular(u.tiles[TAB_CELL]);
     u.build_wifi(u.tiles[TAB_WIFI]);
@@ -933,7 +921,7 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
         sc.scroll_to_y(u.launch.scroll_y);
     }
 
-    // benchmark driver: paused until its page is shown
+    // the speed page's animation ticks only while that page is up
     u.bench_timer = lv::Timer::create(speed::bench_cb, 1);
     u.bench_timer.pause();
 
@@ -965,6 +953,27 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
         u.build_exit_menu();
         u.key_timer = lv::Timer::create(power::key_poll_cb, 50);
     });
+}
+
+/// The tabs: one row of full-size tiles swiped sideways, below the status bar (which lives on
+/// lv_layer_top() and is built later). Every tile gets the page colour itself: with no LVGL
+/// theme loaded a tile would otherwise be see-through.
+fn tab_strip(scr: Obj, bg: u32) -> (Obj, [Obj; TABS]) {
+    let strip = Obj::tileview(scr);
+    strip.set_size(W, H - BAR_H);
+    strip.align(lv::LV_ALIGN_TOP_MID, 0, BAR_H);
+    strip.set_scrollbar_mode(sys::lv_scrollbar_mode_t::LV_SCROLLBAR_MODE_OFF);
+    let paint = |o: Obj| {
+        o.set_style_bg_color(bg, 0);
+        o.set_style_bg_opa(lv::OPA_COVER, 0);
+    };
+    paint(strip);
+    let tiles = std::array::from_fn(|col| {
+        let tile = strip.add_tile(col as u8, 0, sys::lv_dir_t::LV_DIR_HOR);
+        paint(tile);
+        tile
+    });
+    (strip, tiles)
 }
 
 unsafe extern "C" fn tv_changed_cb(_e: *mut sys::lv_event_t) {

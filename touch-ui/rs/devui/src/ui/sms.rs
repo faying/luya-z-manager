@@ -1,6 +1,6 @@
 //! src/ui_parts/sms.c (and the SMS taps in system.c): 短信 and 短信详情, 健康与告警 and its
 //! 详情. The lists are drawn by refresh (refresh.c 「SMS subpage」, 「Alerts subpage」).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::{Sub, Ui, SUB_VIEW, W};
 use crate::cf;
@@ -392,17 +392,17 @@ impl Ui {
         let th = t();
         let m = self.model.clone();
         let d = &m.data;
-        let sms_n = d.sms_n.max(0) as usize;
+        let sms_n = d.inbox_n.max(0) as usize;
         let n = sms_n.min(SMS_MAX_ROWS);
-        let unread = d.sms.iter().take(sms_n).filter(|s| s.unread != 0).count();
+        let unread = d.inbox.iter().take(sms_n).filter(|s| s.unread != 0).count();
         let s = &self.sms;
         let (count, btn, empty, list) = (s.count, s.allread_btn, s.empty, s.list);
         if sms_n == 0 {
             self.set(count, "");
         } else if unread > 0 {
-            self.set(count, cf!(tr("%d 条未读 · 共 %d 条"), unread, d.sms_n));
+            self.set(count, cf!(tr("%d 条未读 · 共 %d 条"), unread, d.inbox_n));
         } else {
-            self.set(count, cf!(tr("共 %d 条，都已读"), d.sms_n));
+            self.set(count, cf!(tr("共 %d 条，都已读"), d.inbox_n));
         }
         kit::show(btn, unread > 0);
         kit::show(empty, sms_n == 0);
@@ -418,7 +418,7 @@ impl Ui {
                 kit::show(row, false);
                 continue;
             }
-            let it = &d.sms[i];
+            let it = &d.inbox[i];
             self.sms.row_id[i] = it.id;
             kit::show(row, true);
             self.set(num, &it.num);
@@ -431,7 +431,7 @@ impl Ui {
 
         // 短信详情
         if self.sub_cur == Some(Sub::SmsDetail) {
-            let k = d.sms.iter().take(sms_n).position(|s| s.id == self.sms.smsd_id);
+            let k = d.inbox.iter().take(sms_n).position(|s| s.id == self.sms.smsd_id);
             match k {
                 None => {
                     // deleted (here or elsewhere) while open: nothing left to show
@@ -439,7 +439,7 @@ impl Ui {
                     self.sub_back();
                 }
                 Some(k) => {
-                    let it = &d.sms[k];
+                    let it = &d.inbox[k];
                     let s = &self.sms;
                     let (num, date, body, lbl, btn) = (s.smsd_num, s.smsd_date, s.smsd_body, s.smsd_del_lbl, s.smsd_del_btn);
                     self.set(num, &it.num);

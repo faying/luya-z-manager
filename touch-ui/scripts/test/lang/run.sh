@@ -5,7 +5,7 @@
 #   3. (info) rows whose English is longer in bytes than the Chinese
 # The C UI's checks (every TR literal in src/ has a row, tests/lang_test.c) left with it in
 # Phase 10 X5; the Rust table's own rules are rs/devui/src/lang.rs's tests.
-# Host script (docker). SPDX-License-Identifier: MIT
+# Host script (docker). SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 exec docker run --rm -v "$ROOT":/src:ro -w /src rust:1.99.0-slim@sha256:24e632c09342c20abf8312cf4f61430a911c01ed3a5e4c02b87292b1c39c5273 sh -c '
 rc=0

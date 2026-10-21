@@ -1,27 +1,28 @@
-//! The eSIM page (src/esim.c): luyaz-core's /api/esim/* (the agent switches and makes the modem
-//! read the new card; this only lists and asks): the profile list, the job, two-tap switching.
-// SPDX-License-Identifier: MIT
+//! The eSIM page. luyaz-core does the work (/api/esim/*: it switches profiles and gets the
+//! modem to read the new card); the screen only lists the profiles, shows the core's job and
+//! asks for a switch, which takes two taps on the same row.
 
 use super::core_api::CoreApi;
-use super::util::{bytes_cap, find, find_byte, jstr, mono_ms, objects, text, trunc};
+use super::util::{bytes_cap, find, find_byte, jstr, jtrue, mono_ms, objects, text, trunc};
 use crate::cf;
 use crate::json;
 use crate::lang::tr;
 use crate::source::{ESIM_SEL_ARMED, ESIM_SEL_BUSY, ESIM_SEL_COOLDOWN, ESIM_SEL_CURRENT, ESIM_SEL_FAIL, ESIM_SEL_STARTED};
 use devui_model::esim_profile_t;
 
-/// the job, while the page is up
+/// how often the job is read while the page is open
 const ES_IDLE_MS: i64 = 2000;
-/// a switch from this screen is running
+/// … and while a switch started here is running
 const ES_JOB_MS: i64 = 1000;
-/// the agent did not answer: don't stall every round
+/// the core did not answer: ask less often
 const ES_BACKOFF_MS: i64 = 5000;
+/// the second tap has to come within this
 const ES_ARM_MS: i64 = 4000;
-/// above the agent's switch steps (luyaz-esim: enable 30 s, simreset 15 s, mdm restart 30 s,
-/// IDENTITY_WAIT 45 s, DATA_WAIT 60 s, plus the reads), same as the web's SWITCH_LIMIT
+/// longer than all of the core's switch steps together (luyaz-esim: enable 30 s, simreset 15 s,
+/// mdm restart 30 s, IDENTITY_WAIT 45 s, DATA_WAIT 60 s, and the reads); the web waits as long
 const ES_GIVEUP_MS: i64 = 240000;
 const ES_MAX: usize = 16;
-/// a profile may carry a base64 icon
+/// profiles can carry a base64 icon
 const ES_RESP_MAX: usize = 65536;
 
 #[derive(Clone, Default, PartialEq)]
@@ -41,15 +42,15 @@ pub struct Esim {
     seen_status: String,
     busy: bool,
     busy_kind: String,
-    /// the list is the core's last one while the card settles (`stale`): shown, no switching
+    /// the core is showing its last list while the card settles (`stale`): listed, not switchable
     settling: bool,
-    /// this screen's switch, not answered yet; 0 = none
+    /// the job of a switch asked for here that has not finished; 0 = none
     my_job: i64,
     target_iccid: String,
     target_name: String,
     t0: i64,
     msg: String,
-    /// the last switch to this card got catBusy: restart the device or reseat the card
+    /// the last switch to this card ended in catBusy: only a restart or reseating the card helps
     busy_iccid: String,
     msg_ms: i64,
     arm_iccid: String,
@@ -91,196 +92,248 @@ impl Default for Esim {
     }
 }
 
-/// The profiles of the list (each object cut out on its own).
-fn parse_profiles(arr: &[u8]) -> Vec<Prof> {
-    let Some(p) = find_byte(arr, b'[', 0) else { return Vec::new() };
-    let mut out = Vec::new();
-    for o in objects(&arr[p..]) {
-        if out.len() >= ES_MAX {
-            break;
-        }
+impl Prof {
+    /// One profile object; None without an ICCID.
+    fn read(o: &[u8]) -> Option<Prof> {
         let iccid = jstr(o, "iccid", 24);
-        let pname = jstr(o, "profileName", 96);
-        let nick = jstr(o, "profileNickname", 96);
-        let sp = jstr(o, "serviceProviderName", 64);
-        let state = jstr(o, "profileState", 16);
         if iccid.is_empty() {
-            continue;
+            return None;
         }
-        let name = trunc(if !nick.is_empty() { &nick } else if !pname.is_empty() { &pname } else { &iccid }, 96);
-        let ib = iccid.as_bytes();
-        let tail = text(&ib[ib.len().saturating_sub(4)..]); // bytes, as C: a cut character must not panic
-        // with a nickname, the original name too, or which one is it
+        let official = jstr(o, "profileName", 96);
+        let nick = jstr(o, "profileNickname", 96);
+        let carrier = jstr(o, "serviceProviderName", 64);
+        let name = [&nick, &official].into_iter().find(|s| !s.is_empty()).unwrap_or(&iccid);
+        // second line: carrier, the real name when a nickname hides it, the last 4 digits
         let mut sub = String::new();
-        if !sp.is_empty() {
-            sub.push_str(&sp);
-            sub.push_str(" · ");
-        }
-        if !nick.is_empty() && !pname.is_empty() {
-            sub.push_str(&pname);
-            sub.push_str(" · ");
+        for part in [&carrier, if nick.is_empty() { &nick } else { &official }] {
+            if !part.is_empty() {
+                sub += part;
+                sub += " · ";
+            }
         }
         let sub = trunc(&sub, 192);
-        let rest = bytes_cap(&cf!(tr("尾号 %s"), &tail), 192 - sub.len());
-        out.push(Prof { iccid, name, sub: sub + &rest, enabled: state == "enabled" });
+        let digits = iccid.as_bytes();
+        let last4 = text(&digits[digits.len().saturating_sub(4)..]);
+        let room = 192 - sub.len();
+        Some(Prof {
+            name: trunc(name, 96),
+            sub: sub + &bytes_cap(&cf!(tr("尾号 %s"), &last4), room),
+            enabled: jstr(o, "profileState", 16) == "enabled",
+            iccid,
+        })
     }
-    out
+}
+
+/// The profiles in a list text, at most ES_MAX of those that have an ICCID.
+fn parse_profiles(list: &[u8]) -> Vec<Prof> {
+    let Some(open) = find_byte(list, b'[', 0) else { return Vec::new() };
+    objects(&list[open..]).into_iter().filter_map(Prof::read).take(ES_MAX).collect()
+}
+
+/// What GET /api/esim/profiles came back with.
+enum Listing {
+    Unreachable,
+    BadLogin,
+    NoCard,
+    NotInstalled,
+    /// the core is busy with the card and did not read it
+    Busy,
+    Got(Vec<Prof>, bool),
+}
+
+fn listing(code: i32, body: Option<&[u8]>) -> Listing {
+    let Some(body) = body.filter(|_| code != 0) else { return Listing::Unreachable };
+    if code == 401 {
+        return Listing::BadLogin;
+    }
+    // a 502 is lpac failing to read a card, which mostly means an ordinary SIM
+    let Some(data) = json::get(body, "data", ES_RESP_MAX).filter(|_| code == 200) else { return Listing::NoCard };
+    if json::get(&data, "installed", 16).is_some_and(|v| v == b"false") {
+        return Listing::NotInstalled;
+    }
+    if jtrue(&data, "busy") {
+        return Listing::Busy;
+    }
+    match json::get(&data, "profiles", ES_RESP_MAX) {
+        Some(list) => Listing::Got(parse_profiles(&list), jtrue(&data, "stale")),
+        None => Listing::NoCard,
+    }
+}
+
+/// The core's job slot: one job at a time, the last one stays until the next.
+struct Job {
+    id: i64,
+    status: String,
+    message: String,
+    kind: String,
+    rebooting: bool,
+    /// set by cores from 10-04 on; older ones only say it in the message
+    reason: String,
+}
+
+impl Job {
+    fn read(data: &[u8]) -> Job {
+        Job {
+            id: json::get_int(data, "id", 0),
+            status: jstr(data, "status", 16),
+            message: jstr(data, "message", 256),
+            kind: jstr(data, "kind", 16),
+            rebooting: jstr(data, "rebooting", 8) == "true",
+            reason: jstr(data, "reason", 24),
+        }
+    }
 }
 
 impl Esim {
-    /// false = the agent did not answer
+    /// Read the profile list. false when the core did not answer.
     fn load_list(&mut self, agent: &mut CoreApi) -> bool {
-        let (code, b) = agent.api("GET", "/api/esim/profiles", None, ES_RESP_MAX);
-        let Some(b) = b.filter(|_| code != 0) else {
-            self.err = trunc(tr("连不上管理后台"), 96);
-            return false;
+        let (code, body) = agent.api("GET", "/api/esim/profiles", None, ES_RESP_MAX);
+        let problem = match listing(code, body.as_deref()) {
+            Listing::Unreachable => {
+                self.err = trunc(tr("连不上管理后台"), 96);
+                return false;
+            }
+            Listing::BadLogin => {
+                self.err = trunc(tr("登录管理后台失败（密码不对？）"), 96);
+                return true;
+            }
+            // the core will not touch the card now; the old list stands
+            Listing::Busy => return true,
+            Listing::Got(prof, settling) => {
+                self.prof = prof;
+                self.settling = settling;
+                self.err.clear();
+                self.loaded = true;
+                return true;
+            }
+            Listing::NoCard => tr("未读到 eSIM 卡"),
+            Listing::NotInstalled => tr("未安装 eSIM 组件"),
         };
-        if code == 401 {
-            self.err = trunc(tr("登录管理后台失败（密码不对？）"), 96);
-            return true;
-        }
-        // 502 = lpac could not read a card: most likely a plain SIM
-        let Some(data) = json::get(&b, "data", ES_RESP_MAX).filter(|_| code == 200) else {
-            self.err = trunc(tr("未读到 eSIM 卡"), 96);
-            self.prof.clear();
-            return true;
-        };
-        if json::get(&data, "installed", 16).is_some_and(|v| v == b"false") {
-            self.err = trunc(tr("未安装 eSIM 组件"), 96);
-            self.prof.clear();
-            return true;
-        }
-        if json::get(&data, "busy", 16).is_some_and(|v| v == b"true") {
-            return true; // something runs, the agent does not read the card: keep the old list
-        }
-        let Some(arr) = json::get(&data, "profiles", ES_RESP_MAX) else {
-            self.err = trunc(tr("未读到 eSIM 卡"), 96);
-            self.prof.clear();
-            return true;
-        };
-        self.prof = parse_profiles(&arr);
-        self.settling = json::get(&data, "stale", 16).is_some_and(|v| v == b"true");
-        self.err.clear();
-        self.loaded = true;
+        self.err = trunc(problem, 96);
+        self.prof.clear();
         true
     }
 
-    /// The job. reload = something just ended (the list may have changed). false = no answer.
-    fn poll_job(&mut self, agent: &mut CoreApi, reload: &mut bool) -> bool {
-        let (code, b) = agent.api("GET", "/api/esim/job", None, ES_RESP_MAX);
-        let Some(data) = b.filter(|_| code == 200).and_then(|b| json::get(&b, "data", 1024)) else { return false };
-        let id = json::get_int(&data, "id", 0);
-        let status = jstr(&data, "status", 16);
-        let msg = jstr(&data, "message", 256);
-        self.busy_kind = jstr(&data, "kind", 16);
-        let reboot = jstr(&data, "rebooting", 8);
-        let reason = jstr(&data, "reason", 24); // agent 10-04 on; older: see message
-        self.busy = status == "running";
+    /// How a switch asked for here ended, from the job slot; None while it still runs.
+    fn switch_outcome(&mut self, job: &Job) -> Option<String> {
+        let secs = (mono_ms() - self.t0) / 1000;
+        let switched = || bytes_cap(&cf!(tr("已切换到 %s（%ld 秒）"), &self.target_name, secs), 160);
+        if job.id > self.my_job && job.kind == "notifications" {
+            // the slot moved on to the notifications the core sends after a switch that worked
+            // without a reboot: so ours worked
+            return Some(switched());
+        }
+        if job.id != self.my_job {
+            // the core restarted and our job went with it
+            return Some(trunc(tr("切换结果未知，请看当前配置"), 160));
+        }
+        match job.status.as_str() {
+            "done" if job.rebooting => Some(trunc(tr("已切换，设备即将重启"), 160)),
+            // card and modem are on the new profile but the data call is not back (no reboot)
+            "done" if job.reason == "no_data" => Some(trunc(tr("已切换，数据还没恢复"), 160)),
+            "done" => Some(switched()),
+            "error" if job.reason == "card_busy" || job.message.contains("card is busy") => {
+                // catBusy: waiting is no use, the card needs power cycling (its row says so)
+                self.busy_iccid = self.target_iccid.clone();
+                Some(trunc(tr("卡忙没切成"), 160))
+            }
+            "error" => Some(bytes_cap(&cf!(tr("切换失败：%s"), &job.message), 160)),
+            _ => None,
+        }
+    }
 
-        // any job that ends counts (the web's downloads and deletes change the list too)
-        if !self.busy && self.seen_id >= 0 && (id != self.seen_id || status != self.seen_status) {
+    /// Read the job slot. `reload` is set when a job just ended, since the list may have changed.
+    /// false when the core did not answer.
+    fn poll_job(&mut self, agent: &mut CoreApi, reload: &mut bool) -> bool {
+        let (code, body) = agent.api("GET", "/api/esim/job", None, ES_RESP_MAX);
+        let Some(data) = body.filter(|_| code == 200).and_then(|b| json::get(&b, "data", 1024)) else { return false };
+        let job = Job::read(&data);
+        self.busy_kind = job.kind.clone();
+        self.busy = job.status == "running";
+        let changed = job.id != self.seen_id || job.status != self.seen_status;
+        if !self.busy && self.seen_id >= 0 && changed {
+            // whatever ended (a download or delete from the web changes the list too)
             *reload = true;
-            // someone else's job ended: this screen's last result is stale. The agent's own
-            // notifications after a switch do not count: that switch's result stays
-            if id != self.my_job && self.busy_kind != "notifications" {
+            // somebody else's job makes our last result old news; the notifications the core
+            // sends after our own switch do not
+            if job.id != self.my_job && job.kind != "notifications" {
                 self.msg.clear();
                 self.busy_iccid.clear();
             }
         }
-        self.seen_id = id;
-        self.seen_status = trunc(&status, 16);
+        self.seen_id = job.id;
+        self.seen_status = trunc(&job.status, 16);
 
-        if self.my_job != 0 {
-            let secs = (mono_ms() - self.t0) / 1000;
-            if id > self.my_job && self.busy_kind == "notifications" {
-                // missed the switch's result; the slot already holds the notifications the
-                // agent sends after a successful switch (no reboot): it worked
-                self.msg = bytes_cap(&cf!(tr("已切换到 %s（%ld 秒）"), &self.target_name, secs), 160);
-            } else if id != self.my_job {
-                // the agent restarted: the job is gone
-                self.msg = trunc(tr("切换结果未知，请看当前配置"), 160);
-            } else if status == "done" {
-                self.msg = if reboot == "true" {
-                    trunc(tr("已切换，设备即将重启"), 160)
-                } else if reason == "no_data" {
-                    // card and modem moved, the data call did not come back (no reboot)
-                    trunc(tr("已切换，数据还没恢复"), 160)
-                } else {
-                    bytes_cap(&cf!(tr("已切换到 %s（%ld 秒）"), &self.target_name, secs), 160)
-                };
-            } else if status == "error" && (reason == "card_busy" || msg.contains("card is busy")) {
-                // catBusy: waiting does not help, only power to the card does (the row says so)
-                self.msg = trunc(tr("卡忙没切成"), 160);
-                self.busy_iccid = self.target_iccid.clone();
-            } else if status == "error" {
-                self.msg = bytes_cap(&cf!(tr("切换失败：%s"), &msg), 160);
-            } else {
-                return true; // still running
-            }
-            eprintln!("esim: job {} {status} after {secs} s: {msg}", self.my_job);
-            self.msg_ms = mono_ms();
-            self.my_job = 0;
-            *reload = true;
+        if self.my_job == 0 {
+            return true;
         }
+        let Some(msg) = self.switch_outcome(&job) else { return true };
+        let secs = (mono_ms() - self.t0) / 1000;
+        eprintln!("esim: job {} {} after {secs} s: {}", self.my_job, job.status, job.message);
+        self.msg = msg;
+        self.msg_ms = mono_ms();
+        self.my_job = 0;
+        *reload = true;
         true
     }
 
-    fn display_sig(&self, t: i64) -> String {
-        let mut s = format!(
-            "{}/{}/{}/{}/{}/{}/{}",
-            self.prof.len(),
-            self.busy as i32,
-            self.settling as i32,
-            self.offline as i32,
-            self.my_job,
-            if self.my_job != 0 { (t - self.t0) / 1000 } else { 0 },
-            (!self.arm_iccid.is_empty() && t - self.arm_ms <= ES_ARM_MS) as i32
-        );
-        for x in [&self.err, &self.msg, &self.busy_kind, &self.arm_iccid] {
-            s.push('\u{1}');
-            s.push_str(x);
+    /// Everything the page draws, to tell whether it needs drawing again.
+    fn display_sig(&self, now: i64) -> String {
+        let running_s = if self.my_job != 0 { (now - self.t0) / 1000 } else { 0 };
+        let armed = !self.arm_iccid.is_empty() && now - self.arm_ms <= ES_ARM_MS;
+        let flags = [self.busy, self.settling, self.offline].map(|f| (f as i32).to_string()).join("/");
+        let mut s = format!("{}/{flags}/{}/{running_s}/{}", self.prof.len(), self.my_job, armed as i32);
+        for line in [&self.err, &self.msg, &self.busy_kind, &self.arm_iccid] {
+            s += "\u{1}";
+            s += line;
         }
         for p in &self.prof {
-            s.push_str(&format!("\u{2}{}\u{1}{}\u{1}{}\u{1}{}", p.iccid, p.name, p.sub, p.enabled as i32));
+            s += &format!("\u{2}{}\u{1}{}\u{1}{}\u{1}{}", p.iccid, p.name, p.sub, p.enabled as i32);
         }
         s
     }
 
-    /// active = the eSIM page is up on a lit screen. Nothing when closed and no switch from here
-    /// runs; the list at once on opening. true = what shows changed.
+    /// Opening the page: no armed row, and a result from more than a minute ago is not shown
+    /// again.
+    fn on_open(&mut self, now: i64) {
+        self.arm_iccid.clear();
+        if self.my_job == 0 && now - self.msg_ms > 60000 {
+            self.msg.clear();
+            self.busy_iccid.clear();
+        }
+    }
+
+    /// active: the eSIM page is on a lit screen. With the page closed only a switch started here
+    /// is followed; opening it reads the list straight away. true when what shows changed.
     pub fn poll(&mut self, agent: &mut CoreApi, active: bool) -> bool {
         if !active {
             self.was_active = false;
+            if self.my_job == 0 {
+                return false;
+            }
         }
-        if !active && self.my_job == 0 {
-            return false;
-        }
-        let t = mono_ms();
-        let entering = active && !self.was_active;
+        let now = mono_ms();
+        let opening = active && !self.was_active;
         if active {
             self.was_active = true;
         }
-        if entering {
-            self.arm_iccid.clear();
-            if self.my_job == 0 && t - self.msg_ms > 60000 {
-                // a result from long ago is not hung up again
-                self.msg.clear();
-                self.busy_iccid.clear();
-            }
+        if opening {
+            self.on_open(now);
         }
-        if entering || t - self.poll_ms >= if self.my_job != 0 { ES_JOB_MS } else { self.poll_gap } {
+        let gap = if self.my_job != 0 { ES_JOB_MS } else { self.poll_gap };
+        if opening || now - self.poll_ms >= gap {
+            self.poll_ms = now;
             let mut reload = false;
-            self.poll_ms = t;
             let mut ok = self.poll_job(agent, &mut reload);
-            if self.my_job != 0 && t - self.t0 > ES_GIVEUP_MS {
+            if self.my_job != 0 && now - self.t0 > ES_GIVEUP_MS {
                 self.my_job = 0;
                 self.msg = trunc(tr("切换超时，请看当前配置"), 160);
-                self.msg_ms = t;
+                self.msg_ms = now;
                 reload = true;
             }
-            // the list runs lpac: only on entering, after a job, or when the agent is back; a
-            // card that could not be read (a plain SIM) is not knocked on every 2 s
-            if ok && active && (entering || reload || self.offline) {
+            // the list costs an lpac run: read it on opening, after a job, or once the core is
+            // back, never every round (a plain SIM would be asked every 2 s for nothing)
+            if ok && active && (opening || reload || self.offline) {
                 ok = self.load_list(agent);
             }
             if !ok {
@@ -290,8 +343,8 @@ impl Esim {
             self.offline = !ok;
             self.poll_gap = if ok { ES_IDLE_MS } else { ES_BACKOFF_MS };
         }
-        let sig = self.display_sig(t);
-        if self.sig.as_ref() == Some(&sig) {
+        let sig = self.display_sig(now);
+        if self.sig.as_deref() == Some(sig.as_str()) {
             return false;
         }
         self.sig = Some(sig);
@@ -302,51 +355,54 @@ impl Esim {
         self.loaded
     }
 
-    pub fn enabled_iccid(&self) -> &str {
-        self.prof.iter().find(|p| p.enabled).map_or("", |p| &p.iccid)
+    fn enabled(&self) -> Option<&Prof> {
+        self.prof.iter().find(|p| p.enabled)
     }
 
-    /// The list once for this card (key = the modem's ICCID, else its IMSI) with the page closed, so 蜂窝 can
-    /// tell a plain SIM from an eSIM. Once per card, success or not (lpac stalls the screen and
-    /// knocks on the card).
+    pub fn enabled_iccid(&self) -> &str {
+        self.enabled().map_or("", |p| &p.iccid)
+    }
+
+    /// Read the list once per card with the page closed (key: the modem's ICCID, or its IMSI),
+    /// so 蜂窝 can tell a plain SIM from an eSIM. Once only, whatever comes back: lpac holds the
+    /// screen up and pokes the card.
     pub fn prefetch(&mut self, agent: &mut CoreApi, key: &str) -> bool {
-        if key.is_empty() || self.prefetched == trunc(key, 32) || self.my_job != 0 {
+        let key = trunc(key, 32);
+        if key.is_empty() || key == self.prefetched || self.my_job != 0 {
             return false;
         }
-        self.prefetched = trunc(key, 32);
+        self.prefetched = key;
         self.load_list(agent)
     }
 
     pub fn current(&self) -> &str {
-        self.prof.iter().find(|p| p.enabled).map_or("-", |p| &p.name)
+        self.enabled().map_or("-", |p| &p.name)
     }
 
-    /// The state line, in the screen's language (only shown, never compared).
+    /// The status line in the screen's language; for showing only.
     pub fn state(&self) -> String {
         if self.my_job != 0 {
             return bytes_cap(&cf!(tr("切换中 · 已 %ld 秒"), (mono_ms() - self.t0) / 1000), 192);
         }
-        if self.busy {
-            // whole sentences, so the English can put the verb where it goes
-            return match self.busy_kind.as_str() {
+        let line = if self.busy {
+            // one sentence per kind, so each language can order it its own way
+            match self.busy_kind.as_str() {
                 "switch" => tr("网页端正在切换"),
                 "download" => tr("网页端正在下载"),
                 "delete" => tr("网页端正在删除"),
                 "notifications" => tr("正在发送 eSIM 通知"),
                 _ => tr("网页端正在操作"),
             }
-            .into();
-        }
-        if !self.err.is_empty() {
-            return self.err.clone();
-        }
-        if !self.msg.is_empty() {
-            return self.msg.clone();
-        }
-        if self.settling {
-            return tr("卡片还在稳定，列表稍后更新").into();
-        }
-        tr("就绪").into()
+        } else if !self.err.is_empty() {
+            self.err.as_str()
+        } else if !self.msg.is_empty() {
+            self.msg.as_str()
+        } else if self.settling {
+            tr("卡片还在稳定，列表稍后更新")
+        } else {
+            tr("就绪")
+        };
+        line.to_string()
     }
 
     pub fn ready(&self) -> bool {
@@ -354,19 +410,21 @@ impl Esim {
     }
 
     pub fn profiles(&self) -> Vec<esim_profile_t> {
-        let t = mono_ms();
-        let armed_live = !self.arm_iccid.is_empty() && t - self.arm_ms <= ES_ARM_MS;
+        let now = mono_ms();
+        let armed = (now - self.arm_ms <= ES_ARM_MS).then_some(self.arm_iccid.as_str()).filter(|a| !a.is_empty());
+        let going = (self.my_job != 0).then_some(self.target_iccid.as_str());
+        let busy_card = Some(self.busy_iccid.as_str()).filter(|b| !b.is_empty());
         self.prof
             .iter()
-            .map(|e| {
-                let going = self.my_job != 0 && self.target_iccid == e.iccid;
+            .map(|p| {
+                let here = Some(p.iccid.as_str());
                 esim_profile_t {
-                    name: e.name.clone(),
-                    sub: e.sub.clone(),
-                    enabled: e.enabled as i32,
-                    armed: (armed_live && self.arm_iccid == e.iccid) as i32,
-                    going: going as i32,
-                    card_busy: (!going && !self.busy_iccid.is_empty() && self.busy_iccid == e.iccid) as i32,
+                    name: p.name.clone(),
+                    sub: p.sub.clone(),
+                    enabled: p.enabled as i32,
+                    armed: (armed == here) as i32,
+                    going: (going == here) as i32,
+                    card_busy: (going != here && busy_card == here) as i32,
                 }
             })
             .collect()
@@ -376,62 +434,71 @@ impl Esim {
         self.my_job != 0
     }
 
-    /// A tap on profile i: two taps within 4 s switch (a switch cuts the data, at worst
-    /// reboots). ESIM_SEL_*.
+    /// The seconds in the core's cooldown answer ("… wait 480s and retry"), 0 if it gives none.
+    fn cooldown_secs(body: Option<&[u8]>) -> i64 {
+        let err = body.map(|b| jstr(b, "error", 128)).unwrap_or_default();
+        find(err.as_bytes(), b"wait ", 0).map_or(0, |at| json::atol(&err.as_bytes()[at + 5..]))
+    }
+
+    /// A tap on row i. The first tap arms the row, a second one on it within 4 s asks for the
+    /// switch: a switch drops the data and may end in a reboot. Returns an ESIM_SEL_* code.
     pub fn select(&mut self, agent: &mut CoreApi, i: usize) -> i32 {
-        let t = mono_ms();
-        let Some(e) = self.prof.get(i).cloned() else { return ESIM_SEL_FAIL };
+        let now = mono_ms();
+        let Some(p) = self.prof.get(i).cloned() else { return ESIM_SEL_FAIL };
         if self.busy || self.settling || self.my_job != 0 {
             return ESIM_SEL_BUSY;
         }
-        if e.enabled {
+        if p.enabled {
             self.arm_iccid.clear();
             return ESIM_SEL_CURRENT;
         }
-        // which card is armed goes by ICCID: a list re-read in between does not move it
-        if self.arm_iccid != e.iccid || t - self.arm_ms > ES_ARM_MS {
-            self.arm_iccid = e.iccid.clone();
-            self.arm_ms = t;
+        // armed by ICCID, so a list read between the taps does not move it to another row
+        let second_tap = self.arm_iccid == p.iccid && now - self.arm_ms <= ES_ARM_MS;
+        if !second_tap {
+            self.arm_iccid = p.iccid.clone();
+            self.arm_ms = now;
             return ESIM_SEL_ARMED;
         }
         self.arm_iccid.clear();
-        let js = trunc(&format!("{{\"iccid\":\"{}\"}}", e.iccid), 64);
-        let (code, b) = agent.api("POST", "/api/esim/switch", Some(&js), ES_RESP_MAX);
-        if code == 409 {
-            self.busy = true;
-            return ESIM_SEL_BUSY;
+        let ask = trunc(&format!(r#"{{"iccid":"{}"}}"#, p.iccid), 64);
+        let (code, body) = agent.api("POST", "/api/esim/switch", Some(&ask), ES_RESP_MAX);
+        match code {
+            409 => {
+                self.busy = true;
+                return ESIM_SEL_BUSY;
+            }
+            429 => {
+                // the core holds off after the card really answered catBusy, and says how long
+                let wait = Self::cooldown_secs(body.as_deref());
+                self.msg = if wait > 0 {
+                    bytes_cap(&cf!(tr("卡刚报过忙，还要等 %d 秒再试"), wait), 160)
+                } else {
+                    trunc(tr("卡刚报过忙，稍后再试"), 160)
+                };
+                self.msg_ms = mono_ms();
+                return ESIM_SEL_COOLDOWN;
+            }
+            _ => {}
         }
-        if code == 429 {
-            // the agent's cooldown, only after the card really said catBusy: "...wait 480s and
-            // retry" gives the seconds (this follows the agent's wording)
-            let err = b.as_deref().map(|b| jstr(b, "error", 128)).unwrap_or_default();
-            let wait = find(err.as_bytes(), b"wait ", 0).map_or(0, |w| json::atol(&err.as_bytes()[w + 5..]));
-            self.msg = if wait > 0 {
-                bytes_cap(&cf!(tr("卡刚报过忙，还要等 %d 秒再试"), wait), 160)
-            } else {
-                trunc(tr("卡刚报过忙，稍后再试"), 160)
-            };
-            self.msg_ms = mono_ms();
-            return ESIM_SEL_COOLDOWN;
-        }
-        let job = b.filter(|_| code == 200).and_then(|b| json::get(&b, "data", 256)).map_or(0, |d| json::get_int(&d, "job_id", 0));
+        let job = body.filter(|_| code == 200).and_then(|b| json::get(&b, "data", 256)).map_or(0, |d| json::get_int(&d, "job_id", 0));
         if job <= 0 {
             self.my_job = 0;
             eprintln!("esim: switch request failed (HTTP {code})");
             return ESIM_SEL_FAIL;
         }
+        eprintln!("esim: switch to {} started (job {job})", p.iccid);
         self.my_job = job;
-        self.target_iccid = e.iccid.clone();
-        self.target_name = e.name.clone();
-        self.t0 = t;
-        self.poll_ms = t;
+        self.target_iccid = p.iccid;
+        self.target_name = p.name;
+        self.t0 = now;
+        self.poll_ms = now;
         self.busy = true;
         self.msg.clear();
         self.busy_iccid.clear();
-        eprintln!("esim: switch to {} started (job {job})", e.iccid);
         ESIM_SEL_STARTED
     }
 }
+
 
 #[cfg(test)]
 mod tests {

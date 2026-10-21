@@ -4,7 +4,7 @@
 //! kernel names the new image after the path's basename, and "exe" would fail the check and get
 //! a second UI started next to this one (two UIs on /dev/dri/card0 reboot the device,
 //! 2026-09-17).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use crate::logic::{self, Launch};
 use std::os::unix::process::CommandExt;

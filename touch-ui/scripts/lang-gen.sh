@@ -8,7 +8,7 @@
 # between the quotes of a C string (\n, \", %% stay as typed). Key 场景|中文 =
 # TRC; English one|other = TRN. build.rs sorts, so order is free.
 # Anything else (no tab, two tabs, empty column) stops the build.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
 [ $# -eq 1 ] || { echo "usage: $0 en.tsv" >&2; exit 2; }
 awk -F '\t' '

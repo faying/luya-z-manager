@@ -18,6 +18,9 @@ mod crashwatch;
 mod diag;
 mod doctor;
 mod dsds_log;
+mod lanid;
+mod lanid_capture;
+mod usage_log;
 mod device_profile;
 mod envelope;
 #[allow(dead_code)]

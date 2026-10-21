@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 description = "Test only: the apn-pick world with a policy that never returns, for u60d's fallback test (crates/luyaz-core/src/plugin/apn_pick/tests.rs). Never installed on a device."
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 publish = false
 
 [lib]

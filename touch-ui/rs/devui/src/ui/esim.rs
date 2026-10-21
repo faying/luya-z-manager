@@ -1,6 +1,6 @@
 //! src/ui_parts/esim.c and refresh.c's esim_paint: SIM 与 eSIM (the card in use, its numbers,
 //! the eSIM profiles; a tap on one switches to it, two taps).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::dualsim::DS_H;
 use super::network::NetFlash;
@@ -188,7 +188,15 @@ impl Ui {
             es.state.set_text(if none {
                 tr("插上 SIM 卡或 eSIM 卡后这里显示卡信息")
             } else if plain {
-                if sim.msisdn.is_empty() { tr("号码没写在卡里") } else { sim.msisdn.as_str() }
+                // dual SIM, data on slot 2: the firmware reports no number for that card
+                let slot2 = m.data.sim_dual.as_ref().is_some_and(|x| x.active_slot == 2);
+                if !sim.msisdn.is_empty() {
+                    sim.msisdn.as_str()
+                } else if slot2 {
+                    tr("卡 2 不提供号码")
+                } else {
+                    tr("号码没写在卡里")
+                }
             } else {
                 state
             });

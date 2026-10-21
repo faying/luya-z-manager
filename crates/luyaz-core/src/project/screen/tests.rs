@@ -838,6 +838,8 @@ fn status_bar_label_by_the_network_you_are_on() {
 #[test]
 fn logos_and_imsi() {
     assert_eq!(operator_logo(460, 0), Some("china-mobile"));
+    assert_eq!(operator_logo(460, 13), Some("china-mobile"));
+    assert_eq!(imsi_plmn("460131234567802"), Some((460, 13)));
     assert_eq!(operator_logo(460, 11), Some("china-telecom"));
     assert_eq!(operator_logo(311, 480), Some("verizon"));
     assert_eq!(sim_logo(454, 12, "CMLink"), Some("cmlink"));

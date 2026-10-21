@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 description = "U60 Pro (MU5250) API pieces for u60d's compatibility layer and luyaz-web (u60-platform.md Phase 4 step 8): the alert files, the admin password login, the device clock's offset. Moved out of zte-agent (removed 2026-10-14)."
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
 luyaz-alerts = { path = "../luyaz-alerts" }

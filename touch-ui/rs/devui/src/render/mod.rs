@@ -28,7 +28,7 @@
 //! nothing changed must invalidate nothing, else the device's quiet loop wakes every second.
 //! LUYAZ_STILL_WHO=1 names the object in each area; LUYAZ_STILL_BT=1 prints who invalidated it (needs
 //! a build with symbols: CARGO_PROFILE_RELEASE_STRIP=false CARGO_PROFILE_RELEASE_DEBUG=1).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 mod checks;
 
@@ -209,6 +209,7 @@ impl Source for Replay {
             servers: true,
             battery: false,
             versions: false,
+            landing: false,
             alerts: true,
             diagnose: a.diag,
         }

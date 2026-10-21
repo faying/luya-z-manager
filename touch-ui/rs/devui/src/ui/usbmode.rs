@@ -1,7 +1,7 @@
 //! 插线时的 USB 用法 (src/ui_parts/usbmode.c): what a phone plugged into the U60 is for. A
 //! sheet that asks (or the remembered choice, 3 s after the plug-in), and the 系统 card with
 //! what is in effect and the remembered choice. the core's usb.attach_mode does it.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::cellular::nz;
 use super::Ui;
@@ -11,7 +11,7 @@ use crate::lang::{n_, tr};
 use crate::logic::{self, UsbEv, UsbPref, UsbTrack};
 use crate::lv::{self, sys, Obj};
 use crate::theme::{t, uf};
-use devui_model::devui_data_t;
+use devui_model::core_snapshot_t;
 
 const UM_ROWS: usize = 3;
 const UM_ROW_H: i32 = 52;
@@ -84,7 +84,7 @@ impl Default for Usb {
     }
 }
 
-fn usbmode_now_text(d: &devui_data_t) -> &'static str {
+fn usbmode_now_text(d: &core_snapshot_t) -> &'static str {
     if d.usb_cc < 0 {
         "—"
     } else if d.usb_cc != 1 {
@@ -269,7 +269,7 @@ impl Ui {
     }
 
     /// Every refresh with fresh data.
-    pub(super) fn usbmode_tick(&mut self, d: &devui_data_t) {
+    pub(super) fn usbmode_tick(&mut self, d: &core_snapshot_t) {
         let now = lv::tick_get();
         let th = t();
         let phone = d.usb_power_role == "source" && d.usb_data_role == "host";

@@ -15,8 +15,8 @@
 //                      Chunghwa NR band is allowed; unconfirmed firmware behaviour)
 //   modemPrivate.netSelect / cellLock → net_select / serving PCI+ARFCN
 
-import type { Ctx, Route } from "../lib.ts";
-import { ok, clone } from "../lib.ts";
+import type { Ctx, Reply, Route } from "../lib.ts";
+import { ok, clone, bodyField } from "../lib.ts";
 import { shared } from "../shared.ts";
 import { modemPrivate, NBR_UNSUPPORTED, NBR_UNSUPPORTED_EN } from "./modem.ts";
 import { candidateApnBlock } from "./router.ts";
@@ -416,7 +416,7 @@ interface MockClient {
  */
 const CLIENTS: MockClient[] = [
   { mac: "02:00:00:00:00:11", ip: "192.168.0.101", hostname: "iPhone", left: 38_210 },
-  { mac: "02:00:00:00:00:12", ip: "192.168.0.117", hostname: "MacBook-Air", left: 21_455 },
+  { mac: "a4:83:e7:00:00:12", ip: "192.168.0.117", hostname: "MacBook-Air", left: 21_455 },
   { mac: "02:00:00:00:00:13", ip: "192.168.0.123", hostname: "iPad", left: 9_140 },
   { mac: "02:00:00:00:00:14", ip: "192.168.0.142", hostname: "Xiaomi-14", left: 41_030 },
   { mac: "02:00:00:00:00:15", ip: "192.168.0.155", hostname: "Nintendo-Switch", left: -3_600 },
@@ -443,6 +443,71 @@ function clients(): NetworkClients {
     { mac: CLIENTS[3].mac, iface: "wlan0", band: "2.4 GHz", channel: 11, width_mhz: 40, wifi_gen: 4, link_down_mbps: 144, link_up_mbps: 72, signal: -71, signal_tier: "fair", connected_secs: 800 },
   ];
   return { hosts, dhcp_leases: leases, wifi };
+}
+
+// ─── LAN client identification (u60d lanid.rs, GET /api/lanid + POST /api/lanid/alias) ────
+// The core's report, cut to what the page reads: per MAC the merged client and every source
+// (winner first); aliases kept in memory with the core's checks (trim, ≤64 bytes, no control
+// characters, "" removes). The MacBook has a real (Apple) MAC, the rest are random ones.
+
+const LANID_ALIASES: Record<string, string> = { "02:00:00:00:00:13": "Kid's iPad" };
+const LANID_FACTS: Record<string, { field: string; source: string; value: string }[]> = {
+  "02:00:00:00:00:11": [
+    { field: "name", source: "mdns", value: "Sam's iPhone" },
+    { field: "name", source: "dhcp", value: "iPhone" },
+    { field: "vendor", source: "mdns", value: "Apple" },
+    { field: "kind", source: "mdns", value: "phone" },
+  ],
+  "a4:83:e7:00:00:12": [
+    { field: "name", source: "dhcp", value: "MacBook-Air" },
+    { field: "name", source: "netbios", value: "MACBOOK-AIR" },
+    { field: "vendor", source: "oui", value: "Apple, Inc." },
+    { field: "vendor", source: "ssdp", value: "Darwin" },
+    { field: "kind", source: "mdns", value: "laptop" },
+  ],
+  "02:00:00:00:00:13": [
+    { field: "name", source: "mdns", value: "iPad" },
+    { field: "kind", source: "mdns", value: "tablet" },
+  ],
+};
+
+function lanidMac(s: string): string | null {
+  const h = s.replace(/[:-]/g, "").toLowerCase();
+  return /^[0-9a-f]{12}$/.test(h) ? h.match(/../g)!.join(":") : null;
+}
+
+function lanid(): unknown {
+  const macs = [...new Set([...Object.keys(LANID_FACTS), ...Object.keys(LANID_ALIASES)])].sort();
+  const merged: Record<string, unknown> = {};
+  for (const m of macs) {
+    const alias = LANID_ALIASES[m];
+    const sources = [...(alias ? [{ field: "name", source: "alias", value: alias }] : []), ...(LANID_FACTS[m] ?? [])];
+    const first = (f: string) => sources.find((x) => x.field === f)?.value ?? "";
+    const client: Record<string, unknown> = { ip: "", mac: m, name: first("name") || m };
+    if (alias) client.alias = alias;
+    if (first("vendor")) client.vendor = first("vendor");
+    if (first("kind")) client.kind = first("kind");
+    if (parseInt(m.slice(0, 2), 16) & 2) client.private = true;
+    merged[m] = { client, sources };
+  }
+  return {
+    merged,
+    status: { batches: 12, blocked: 0, dropped: 0, frames: 80, loaded: true, records: 3, sources: { dhcp: true, mdns: true, netbios: true, ssdp: true }, traps: 0, why: "" },
+    aliases: { ...LANID_ALIASES },
+  };
+}
+
+function lanidAlias(ctx: Ctx): Reply {
+  const mac = bodyField(ctx.body, "mac");
+  const alias = bodyField(ctx.body, "alias");
+  if (typeof mac !== "string" || typeof alias !== "string") return { status: 400, raw: { ok: false, error: "mac and alias required" } };
+  const m = lanidMac(mac);
+  if (!m) return { status: 400, raw: { ok: false, error: "bad mac" } };
+  const a = alias.trim();
+  if (a && (Buffer.byteLength(a) > 64 || /\p{Cc}/u.test(a))) return { status: 400, raw: { ok: false, error: "alias: at most 64 bytes, no control characters" } };
+  if (a) LANID_ALIASES[m] = a;
+  else delete LANID_ALIASES[m];
+  return { raw: { ok: true, mac: m, alias: LANID_ALIASES[m] ?? "" } };
 }
 
 // ─── QoS / QCI ───────────────────────────────────────────────────────────────
@@ -604,6 +669,8 @@ export const routes: Route[] = [
     handler: (ctx) => ok({ ...clone(LAN), uptime: Math.floor(ctx.now / 1000 - LAN_UP_SINCE) } satisfies NetifdStatus),
   },
   { method: "GET", path: "/api/network/clients", handler: () => ok(clients()) },
+  { method: "GET", path: "/api/lanid", handler: () => ok(lanid()) },
+  { method: "POST", path: "/api/lanid/alias", handler: lanidAlias },
   // Real handler: ≥ 5.3 s + 3.3 s per PDP context on the AT port (qos.rs:19,52).
   // A short delay keeps the loading state visible without tripping the 9 s timeout.
   { method: "GET", path: "/api/network/qos", handler: (ctx) => ({ data: qos(ctx), delayMs: 1200 }) },

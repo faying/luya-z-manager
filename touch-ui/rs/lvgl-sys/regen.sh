@@ -4,7 +4,7 @@
 #   rs/lvgl-sys/regen.sh [--check]     --check: fail if the committed files differ
 # Needs the docker volume u60-spike-src with the patched LVGL (lvgl/) and FreeType (freetype/):
 # rs/setup-src.sh.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)

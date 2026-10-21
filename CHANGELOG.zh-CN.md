@@ -16,6 +16,72 @@
 
 英文版是 [CHANGELOG.md](CHANGELOG.md)。
 
+## lweb 1.20.0 — 2026-10-22
+
+- 已连设备：沿用了别名的设备标「新地址，沿用别名」，详情里显示原来的 MAC。
+
+## core 1.22.0 — 2026-10-22
+
+- 已连设备：换了新随机 MAC 回来、自己没有别名的设备，如果正好和一台不在线的设备对得上（同一个 mDNS 名字，或者同一个具体的 DHCP 主机名加同样的选项 55 顺序；只有主机名不算，对上两台也不算），就沿用那台的别名；从没见过的设备连上 90 秒后记一条告警「新设备连上了热点」（不发短信）。更新后第一次运行时，当时已有的设备都算认识，不告警。
+
+## core 1.21.4 — 2026-10-21
+
+- 双卡：QoS 查询用上网卡的 IMSI（上网卡在卡 2 时用卡 2 的）。
+
+## lweb 1.19.1 — 2026-10-21
+
+- 设备信息：上网卡在卡 2、号码为空时显示「卡 2 不提供号码」，不再说「卡里没存」。
+
+## touch 1.8.2 — 2026-10-21
+
+- SIM 页：上网卡在卡 2、号码为空时显示「卡 2 不提供号码」；PLMN 460-13 算中国移动。
+
+## Unreleased
+
+- kit: 给了 `OUI_TSV=`（`scripts/lanid/make-oui.sh` 生成的表）就装到 `/data/luyaz/lanid/oui.tsv`，用来显示厂商；公开构建没有这张表。
+
+- kit: 装机包带上 lanid-parse 组件（已连设备识别），装到 `/data/luyaz/core/plugins/`，只有这一个组件；没有时核心照常跑、识别关着。`LANID_CWASM=` 指定现成的。
+
+## lweb 1.19.0 — 2026-10-21
+
+- 已连设备显示每台设备的最佳名字（别名优先）、厂商、类型和「私有地址」标记，详情里列出每个来源的值；可在详情里设置或删除别名（页内确认，写后读回）。Requires: core 1.21.0。
+
+## touch 1.8.1 — 2026-10-21
+
+- 修复：1.8.0 在设备上找不到触屏和电源键（重写的输入代码把 EVIOCGBIT 返回的字节数当成失败）。
+
+## touch 1.8.0 — 2026-10-21
+
+- 已连设备列表优先显示别名，并显示厂商、设备类型和「随机地址」提示；带新字段的设备不再被跳过。Requires: core 1.21.0。
+
+## core 1.21.3 — 2026-10-21
+
+- 屏幕 logo：PLMN 460-13 算中国移动（1.21.2 起 `sim` 区块用卡 2 的 IMSI，没有这条 logo 就是空的）。
+
+## core 1.21.2 — 2026-10-21
+
+- 双卡：上网卡在卡 2 时，`sim` 区块（imsi、iccid、状态、PIN）改为卡 2 的；固件的 `sim_*` 永远是卡 1，屏幕因此显示卡 1 的运营商 logo。卡 2 不上报号码和 SPN，留空。
+
+## core 1.21.1 — 2026-10-21
+
+- lanid 不再把 ID 当名字显示（iOS 有的 mDNS 服务用 UUID 当实例名）；`_apple-mobdev2`/`_remotepairing` 判定为 Apple 手机或平板。
+
+## core 1.21.0 — 2026-10-21
+
+- 已连设备识别（`docs/designs/lan-client-id.md`）：`lanid` 线程在 br-lan 上被动听 DHCP 请求、mDNS、SSDP、NetBIOS（内核 BPF，不加组播组，不发包），由新的 wasm 组件 `lanid-parse` 解析，没有内置退路：没有组件时只显示 DHCP 名字。`clients` 多了 `alias`、`vendor`、`kind`、`private`；`GET /api/lanid` 列出每台设备各来源的值，`POST /api/lanid/alias` 设别名。学到的名字存在 `/data/luyaz/lanid/clients.json`（只在内容变化时写，最多每小时一次）。doctor 多一行「设备识别」。
+
+## core 1.20.0 — 2026-10-21
+
+- lanid 录包开关文件可以写 `mb=N`（环形两个文件各多大，1–32，默认 2），长时间录包不会只留几小时的 mDNS；`status.json` 多了 `file_mb`。
+
+## touch 1.7.0 — 2026-10-21
+
+- 摆放模式（蜂窝 › 排查）加近 30 秒 SINR 曲线；「这次最好」SINR 相同时比 RSRP，显示成「17.7 · -82 dBm · 2 分钟前」。首页在 core 记下新国家后 24 小时内显示落地卡（`GET /v2/usage/landing`）：「到了日本 · 2 小时前」「从中国来 · 落地以来 110MB」。Requires: core 1.18.2。
+
+## core 1.19.0 — 2026-10-21
+
+- 已连设备识别第 0 步录包（默认关）：启动时有 `/data/luyaz/core/lanid-capture` 才开，`lanid` 线程把 br-lan 上的 DHCP 请求、mDNS、SSDP、NetBIOS 帧（内核过滤、不解析）录进 `/tmp/luyaz/lanid/` 的 4 MB pcap 环形文件，48 h 后自停（`docs/designs/lan-client-id.md`）。
+
 ## lweb 1.13.0 — 2026-10-21
 
 - 有设备经 Tailscale 持续访问管理接口时，首页出一条横幅（谁、哪个口、多久、息屏约多耗 0.3–0.6 W），带「是我自己的」（放行 24 小时）和「知道了」；设置页列出白名单，可「改成永久」「删除」。Requires: core 1.15.0。
@@ -26,6 +92,41 @@
 - 情景引擎下一轮会读到手改的 `/data/scenario/scenarios.json`（看修改时间和长度）：读得懂、验证通过就换上并记一行；文件不见、读不了或验证不过就保留原来的设置，只记一次。网页自己写的不算手改。
 
 ## Unreleased
+
+- kit: 重写 install.sh、device/install.sh、build-kit.sh 里沿用下来的部分；参数、输出和装上的文件都不变。
+
+## core 1.18.3 — 2026-10-21
+
+- 把状态、短信、控制、服务、QoS、登录、型号和命令执行里沿用原数据服务的部分重写；行为、路由和 JSON 都不变。
+
+## core 1.18.2 — 2026-10-21
+
+- 落地记录真正读到所在国家了：之前读的是 `net.serving_mcc`，但旧 `net` 块里没有这个字段（只有 `/v2` 的 signal 块有），所以从来没记过；现在读 `net.mcc`（要是能对上一个国家）。
+
+## lweb 1.18.0 — 2026-10-21
+
+- 首页落地卡片（docs/designs/travel-assist.md §5）：到新国家后 24 小时内显示国家和从哪来、网络（运营商、漫游还是当地卡、制式）、当地时间（用网络给的时区；没有 NITZ 时用单时区国家的时区并标「估计」）、家里出口和落地以来的流量；「收起」可以隐藏。需要 core 1.18.2。
+
+## core 1.18.1 — 2026-10-21
+
+- 落地按国家判断，不按 MCC：310 和 311（都是美国）、440 和 441（日本）之类不会算一次落地。
+
+## core 1.18.0 — 2026-10-21
+
+- 出行落地记录（docs/designs/travel-assist.md §5）：连续 3 轮看到新的服务国家（`net.serving_mcc`）就新开一条记录，存在 `/data/luyaz/core/usage/landing.json`，含之前的国家、落地时间和之后用的流量；`GET /v2/usage/landing` → `{mcc, from, at, rx, tx}`（`from` 为 null：第一条记录，不算落地）。`uci_device_info` 增加网络时区 `nitz_timezone`、`nitz_time_dst`、`nitz_sync_flag`。
+
+## lweb 1.17.0 — 2026-10-21
+
+- /trends 新增「信号与网速」图：蜂窝下行和主载波 SINR 画在一起，SINR 用右侧 −10…30 dB 刻度。SINR 稳而网速掉，多半是基站忙；两条一起掉，是信号差。
+- 首页载波行补上每个载波的 RSRQ。
+
+## lweb 1.16.0 — 2026-10-21
+
+- 新页面 /usage（流量，在「图表」里）：近 30 天每天用了多少，一天一根柱、按 SIM 卡分色，下面是按卡合计和逐日数字；首页「今天」那一行点进来。Requires: core 1.17.0。
+
+## core 1.17.0 — 2026-10-21
+
+- 按天、按卡的流量（docs/designs/travel-assist.md §4）：每 60 秒把本次连接的流量增量记给当前数据卡（原厂计数不分卡）；`GET /v2/usage/days?n=1..400`；文件在 `/data/luyaz/core/usage/`（`today.json`、`days.jsonl`，保留 400 天）。
 
 ## touch 1.6.1 — 2026-10-21
 
@@ -121,7 +222,7 @@
 
 ## core 1.12.0 — 2026-10-20
 
-- core：「恢复上次能用的连线」第一部分（还没有按钮）。你按深查之后，多跑一次绑蜂窝的 HTTPS + DNS 检查（约 20 KB），通过就按「卡 × 国家」记下当时能用的蜂窝设置（锁小区、频段、制式、APN）。`GET /api/verified` 显示现在哪些不一样；`/control verified.restore`（只认触屏和网页，代理不能用）逐项用普通事务改回去，哪一步没确认就停。
+- core: 「恢复上次能用的连线」第一部分（还没有按钮）。你按深查之后，多跑一次绑蜂窝的 HTTPS + DNS 检查（约 20 KB），通过就按「卡 × 国家」记下当时能用的蜂窝设置（锁小区、频段、制式、APN）。`GET /api/verified` 显示现在哪些不一样；`/control verified.restore`（只认触屏和网页，代理不能用）逐项用普通事务改回去，哪一步没确认就停。
 
 ## lweb 1.10.0 — 2026-10-20
 
@@ -139,7 +240,7 @@
 
 ## core 1.11.3、lweb 1.9.1 — 2026-10-20
 
-- core：`perf.slow_strong_signal` 多了被动入口：信号强（按深度检测自己的信号规则看实时读数）、下行 ≥ 1 Mbit/s 持续 60 秒、又没有深度检测可读时，建议跑一次。从不判定「慢」，也不发任何东西。
+- core: `perf.slow_strong_signal` 多了被动入口：信号强（按深度检测自己的信号规则看实时读数）、下行 ≥ 1 Mbit/s 持续 60 秒、又没有深度检测可读时，建议跑一次。从不判定「慢」，也不发任何东西。
 - lweb：诊断页显示这条建议。
 
 ## core 1.11.2 — 2026-10-20
@@ -152,12 +253,12 @@
 
 ## core 1.11.1、lweb 1.8.1 — 2026-10-20
 
-- core：`slow_signal` 按深度检测自己的制式规则认服务小区（NR/5G/SA_* 和 ENDC 不再被当成 `cell_changed`）。
+- core: `slow_signal` 按深度检测自己的制式规则认服务小区（NR/5G/SA_* 和 ENDC 不再被当成 `cell_changed`）。
 - lweb：`long_idle` 的说明改成提示重启核心。
 
 ## core 1.11.0、lweb 1.8.0 — 2026-10-20
 
-- core：决策层三个只读场景（§4.11），证据在 `/api/diagnose`：`power.hot_drain`（本次开机最后一个完整小时对比小时账里条件相同的小时）、`usage.long_idle`（在家、熄屏、无终端的两个安静小时）、`perf.slow_strong_signal`（基于用户自己的深度检测）。从不执行动作、不发探测。
+- core: 决策层三个只读场景（§4.11），证据在 `/api/diagnose`：`power.hot_drain`（本次开机最后一个完整小时对比小时账里条件相同的小时）、`usage.long_idle`（在家、熄屏、无终端的两个安静小时）、`perf.slow_strong_signal`（基于用户自己的深度检测）。从不执行动作、不发探测。
 - lweb：诊断页解释这三个场景。
 
 ## core 1.10.0 — 2026-10-20
@@ -166,12 +267,12 @@
 
 ## core 1.9.0、lweb 1.7.0 — 2026-10-20
 
-- core：`radio.band_flap` 证据，来自 rmnet 上 rtnetlink 的地址掉线（频段/小区/SINR 取信号块，SSR 取 crashwatch），在 `/api/diagnose` 的 `data.band_flap`。只读。
+- core: `radio.band_flap` 证据，来自 rmnet 上 rtnetlink 的地址掉线（频段/小区/SINR 取信号块，SSR 取 crashwatch），在 `/api/diagnose` 的 `data.band_flap`。只读。
 - lweb：诊断页显示 band_flap 说明；Wi-Fi 确认框按来源带 `remote.wifi_change` 风险提示（先查回滚，再看终端数）。
 
 ## core 1.8.0、lweb 1.6.0、scripts 1.0.5 — 2026-10-20
 
-- core：R18-P0 一批：`expect_device_id`、代理权限、DNS 存活检测绑定蜂窝接口（不走默认路由）、事务探测三态（本地 socket 失败算未知）、锁外探测结果只有 15 秒内重读到同一 SIM、接口、连接才采用；核心 LAN 监听（:9461，没有调用方）改绑 127.0.0.1。
+- core: R18-P0 一批：`expect_device_id`、代理权限、DNS 存活检测绑定蜂窝接口（不走默认路由）、事务探测三态（本地 socket 失败算未知）、锁外探测结果只有 15 秒内重读到同一 SIM、接口、连接才采用；核心 LAN 监听（:9461，没有调用方）改绑 127.0.0.1。
 - lweb：配合 R18-P0 的改动。
 - scripts：体检只在读不到网页设备 ID 文件时才显示一行。
 
@@ -186,7 +287,7 @@
 
 ## core 1.7.0、lweb 1.5.0、touch 1.2.0 — 2026-10-20
 
-- core：`/control` `loop.approve {proposal_id, params_digest}`：屏幕或网页上的人批准当前显示的重拨提议；不是同一条或已用过的拒绝（409 `proposal_changed` / `already_used`），智能体永远不能批准。写前现读一次制式，事务结束后做绑定 HTTPS 复查并记录结果。
+- core: `/control` `loop.approve {proposal_id, params_digest}`：屏幕或网页上的人批准当前显示的重拨提议；不是同一条或已用过的拒绝（409 `proposal_changed` / `already_used`），智能体永远不能批准。写前现读一次制式，事务结束后做绑定 HTTPS 复查并记录结果。
 - lweb：诊断页未关闭的问题下面加批准卡片（「重拨」，按两次）。
 - touch：诊断页加重拨按钮（点两次）。
 - 需要：lweb 1.5.0、touch 1.2.0 需要 core 1.7.0。
@@ -214,7 +315,7 @@
 
 ## core 1.6.0、lweb 1.4.0 — 2026-10-19
 
-- core：远端 Wi-Fi 回执：从局域网外改 Wi-Fi，读回对上后等页面的 `op.receipt` 60 秒，没收到就退回原设置（不看全局自动退回开关）。
+- core: 远端 Wi-Fi 回执：从局域网外改 Wi-Fi，读回对上后等页面的 `op.receipt` 60 秒，没收到就退回原设置（不看全局自动退回开关）。
 - lweb：经 Tailscale、子网路由或来源不明时，Wi-Fi 写入要求回执、页面自动送出，确认框会说明。
 
 ## core 1.6.8 — 2026-10-20

@@ -2,7 +2,7 @@
 //! M1–M4: theme, fonts, the components (kit), the chrome, the five tabs and every subpage, drawn
 //! from a view model; M5: the data side (data) behind the screen's Source, and the device loop
 //! (device). The offscreen harness (render) replays the C render test through the same pages.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 // the kit mirrors ui_kit.c's signatures (positions, sizes, colours, callbacks)
 #![allow(clippy::too_many_arguments)]

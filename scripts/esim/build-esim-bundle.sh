@@ -1,104 +1,120 @@
 #!/usr/bin/env bash
 #
-# Build the /data/esim lpac bundle for the U60 Pro / MU5250 (aarch64 musl).
+# Package lpac for the U60 Pro / MU5250 (aarch64, musl) as the /data/esim bundle.
 #
-# The stock OpenWrt lpac package only ships the `at` / `uqmi` APDU backends,
-# which need a /dev/cdc-wdm the U60's integrated SDX75 modem doesn't expose.
-# Alpine's lpac is built WITH the `qmi_qrtr` driver, which talks straight to
-# the modem's QMI UIM service over the QRTR socket family — the same path the
-# ZTE daemons use, and the one verified working on this device.
+#   build-esim-bundle.sh --out FILE           write the bundle as a .tgz, no device involved
+#                                             (this is what onboard/build-kit.sh uses)
+#   build-esim-bundle.sh <gateway>            build, then install to /data/esim over ssh
+#   GATEWAY=<gateway> build-esim-bundle.sh    same; SSH_PORT defaults to 2222
 #
-# So we take Alpine's lpac binary + its shared-library closure (pinned by
-# version + sha256 in alpine.lock), add a tiny `statx` compat shim (the
-# device's musl 1.2.4 predates the statx symbol newer glib needs), and stage it
-# all under /data/esim with a wrapper that sets the driver env. TLS uses the
-# device's own /etc/ssl/certs/ca-certificates.crt, which is exactly the path
-# Alpine's libcurl is compiled to look for.
+# Why Alpine's lpac: the modem in this device (SDX75) has no /dev/cdc-wdm, so the
+# OpenWrt lpac (AT / uqmi backends only) cannot reach the card. Alpine builds lpac
+# with the qmi_qrtr backend, which speaks QMI UIM over a QRTR socket, the route
+# that works here. Its libcurl looks for /etc/ssl/certs/ca-certificates.crt, which
+# the device already has.
 #
-# Usage:
-#   scripts/esim/build-esim-bundle.sh --out esim.tgz     # build the tarball only (no device)
-#   GATEWAY=192.168.0.1 scripts/esim/build-esim-bundle.sh   # build + deploy over ssh
-#   scripts/esim/build-esim-bundle.sh 192.168.0.1           # same, gateway as argument
+# Bundle layout (paths inside the tarball start with ./):
+#   lpac               Alpine binary
+#   lpac.sh            wrapper: library path, statx shim preload, driver selection
+#   lib/               lpac's shared-library closure + libmusl-compat.so
+#   qmi_uim_probe      static helper that power-cycles the UIM (switch without reboot)
 #
-# The install kit (onboard/build-kit.sh) calls the --out mode itself.
-# Requires: zig (cross-compiler for the shim; or Docker, see ZIG below), python3.
+# Package versions and hashes come from alpine.lock (fetched by alpine_closure.py,
+# cache dir ALPINE_PKGS_DIR). Needs python3 and zig; without a local zig the
+# compiler runs in the messense/cargo-zigbuild Docker image.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
-OUT=""
-if [ "${1:-}" = "--out" ]; then
-  OUT="${2:?--out needs a file name}"
-  case "$OUT" in /*) ;; *) OUT="$PWD/$OUT" ;; esac
-else
-  GATEWAY="${1:-${GATEWAY:-}}"
-  [ -n "$GATEWAY" ] || { echo "usage: $0 --out FILE   |   GATEWAY=<device ip> $0" >&2; exit 2; }
-  SSH_PORT="${SSH_PORT:-2222}"
-  SSH="ssh -p ${SSH_PORT} root@${GATEWAY}"
-fi
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+ESIM_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPTS_DIR="$(cd "$ESIM_DIR/.." && pwd)"
+CACHE="${ALPINE_PKGS_DIR:-$ESIM_DIR/alpine-pkgs}"
 
-# zig on the host if present, otherwise the same zig inside Docker
-if command -v zig >/dev/null 2>&1; then
-  zigcc() { zig cc "$@"; }
-else
-  # paths under scripts/ and $WORK are remapped to the container's /s and /w
-  zigcc() {
-    local a args=() top
-    top="$(cd "$HERE/.." && pwd)"
-    for a in "$@"; do
-      case "$a" in
-        "$top"/*) args+=("/s/${a#"$top"/}") ;;
-        "$WORK"/*) args+=("/w/${a#"$WORK"/}") ;;
-        *) args+=("$a") ;;
-      esac
-    done
-    docker run --rm -v "$top:/s" -v "$WORK:/w" -w /s messense/cargo-zigbuild:latest zig cc "${args[@]}"
-  }
-fi
+out_file=""
+gateway=""
+case "${1:-}" in
+  --out)
+    out_file="${2:?--out needs a file name}"
+    [ "${out_file#/}" != "$out_file" ] || out_file="$PWD/$out_file"
+    ;;
+  *)
+    gateway="${1:-${GATEWAY:-}}"
+    if [ -z "$gateway" ]; then
+      echo "usage: $0 --out FILE   |   GATEWAY=<device ip> $0" >&2
+      exit 2
+    fi
+    ;;
+esac
 
-echo "==> Fetching pinned Alpine packages (alpine.lock)"
-python3 "$HERE/alpine_closure.py"
-PKGS_DIR="${ALPINE_PKGS_DIR:-$HERE/alpine-pkgs}"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+unpack="$tmp/unpack"
+bundle="$tmp/bundle"
+mkdir -p "$unpack" "$bundle/lib"
 
-echo "==> Extracting lpac + shared libraries"
-mkdir -p "$WORK/x" "$WORK/stage/lib"
-grep -v '^#' "$HERE/alpine.lock" | while read -r _ name ver _; do
-  [ -z "$name" ] || tar xzf "$PKGS_DIR/$name-$ver.apk" -C "$WORK/x" 2>/dev/null || true
+to_device() { ssh -p "${SSH_PORT:-2222}" "root@$gateway" "$@"; }
+
+# Cross compiler: zig cc on the host, or the same zig in a container. In the
+# container the scripts tree is mounted at /s and the temp dir at /w, so any
+# argument under those two directories is rewritten before it is passed on.
+cross_cc() {
+  if command -v zig >/dev/null 2>&1; then
+    zig cc "$@"
+    return
+  fi
+  local arg mapped=()
+  for arg in "$@"; do
+    case "$arg" in
+      "$SCRIPTS_DIR"/*) mapped+=("/s/${arg#"$SCRIPTS_DIR"/}") ;;
+      "$tmp"/*)         mapped+=("/w/${arg#"$tmp"/}") ;;
+      *)                mapped+=("$arg") ;;
+    esac
+  done
+  docker run --rm -v "$SCRIPTS_DIR:/s" -v "$tmp:/w" -w /s \
+    messense/cargo-zigbuild:latest zig cc "${mapped[@]}"
+}
+
+echo "==> Syncing pinned Alpine packages (alpine.lock)"
+ALPINE_PKGS_DIR="$CACHE" python3 "$ESIM_DIR/alpine_closure.py"
+
+echo "==> Unpacking lpac and its libraries"
+while read -r _repo pkg ver _sha; do
+  case "$_repo" in ''|'#'*) continue ;; esac
+  tar xzf "$CACHE/$pkg-$ver.apk" -C "$unpack" 2>/dev/null || true
+done < "$ESIM_DIR/alpine.lock"
+for libdir in "$unpack/usr/lib" "$unpack/lib"; do
+  [ -d "$libdir" ] || continue
+  find "$libdir" -maxdepth 1 -name '*.so*' -exec cp -a {} "$bundle/lib/" \;
 done
-cp -a "$WORK"/x/usr/lib/*.so* "$WORK/stage/lib/" 2>/dev/null || true
-cp -a "$WORK"/x/lib/*.so* "$WORK/stage/lib/" 2>/dev/null || true
-cp "$WORK/x/usr/bin/lpac" "$WORK/stage/lpac"
-chmod 755 "$WORK/stage/lpac"
+install -m 755 "$unpack/usr/bin/lpac" "$bundle/lpac"
 
-echo "==> Building statx compat shim (zig cc, aarch64-linux-musl)"
-zigcc -target aarch64-linux-musl -shared -fPIC -O2 \
-  "$HERE/musl_compat_shim.c" -o "$WORK/stage/lib/libmusl-compat.so"
+echo "==> Compiling libmusl-compat.so (statx shim)"
+cross_cc -target aarch64-linux-musl -shared -fPIC -O2 \
+  "$ESIM_DIR/musl_compat_shim.c" -o "$bundle/lib/libmusl-compat.so"
 
-echo "==> Building qmi_uim_probe (UIM power-cycle helper for the no-reboot switch)"
-zigcc -target aarch64-linux-musl -static -O2 \
-  "$(cd "$HERE/.." && pwd)/qmi_uim_probe.c" -o "$WORK/stage/qmi_uim_probe"
+echo "==> Compiling qmi_uim_probe (static)"
+cross_cc -target aarch64-linux-musl -static -O2 \
+  "$SCRIPTS_DIR/qmi_uim_probe.c" -o "$bundle/qmi_uim_probe"
 
-cat > "$WORK/stage/lpac.sh" <<'WRAP'
-#!/bin/sh
-export LD_LIBRARY_PATH=/data/esim/lib
-export LD_PRELOAD=/data/esim/lib/libmusl-compat.so
-export LPAC_APDU=qmi_qrtr
-export LPAC_HTTP=curl
-exec /data/esim/lpac "$@"
-WRAP
-chmod 755 "$WORK/stage/lpac.sh"
+printf '%s\n' \
+  '#!/bin/sh' \
+  '# lpac launcher: Alpine libraries, statx shim, QMI-over-QRTR card access, curl for HTTP' \
+  'export LD_LIBRARY_PATH=/data/esim/lib' \
+  'export LD_PRELOAD=/data/esim/lib/libmusl-compat.so' \
+  'export LPAC_APDU=qmi_qrtr' \
+  'export LPAC_HTTP=curl' \
+  'exec /data/esim/lpac "$@"' > "$bundle/lpac.sh"
+chmod 755 "$bundle/lpac.sh"
 
-if [ -n "$OUT" ]; then
-  COPYFILE_DISABLE=1 tar czf "$OUT" -C "$WORK/stage" .
-  echo "==> Wrote $OUT ($(du -h "$OUT" | cut -f1))"
+if [ -n "$out_file" ]; then
+  COPYFILE_DISABLE=1 tar czf "$out_file" -C "$bundle" .
+  echo "==> Wrote $out_file ($(du -h "$out_file" | cut -f1))"
   exit 0
 fi
 
-echo "==> Deploying to ${GATEWAY}:/data/esim ($(du -sh "$WORK/stage" | cut -f1))"
-COPYFILE_DISABLE=1 tar czf - -C "$WORK/stage" . | $SSH 'rm -rf /data/esim && mkdir -p /data/esim && tar xzf - -C /data/esim'
+echo "==> Installing to $gateway:/data/esim ($(du -sh "$bundle" | cut -f1))"
+COPYFILE_DISABLE=1 tar czf - -C "$bundle" . \
+  | to_device 'rm -rf /data/esim && mkdir -p /data/esim && tar xzf - -C /data/esim'
 
-echo "==> Verifying (chip info)"
-$SSH '/data/esim/lpac.sh chip info' | head -c 400
+echo "==> Checking the card (lpac chip info)"
+to_device '/data/esim/lpac.sh chip info' | head -c 400
 echo
-echo "==> Done. The agent's eSIM page (Mobile Network → eSIM) is now live."
+echo "==> Done: the eSIM page in the admin web (Mobile network -> eSIM) can use the card now."

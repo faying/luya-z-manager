@@ -7,7 +7,7 @@
 #
 # Exempt: scenes whose screen shows a running countdown (事务行「正在确认 · 1:26」), which really
 # changes every second.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
 [ $# -ge 1 ] || { sed -n 2,6p "$0"; exit 2; }
 models=$(cd "$1" && pwd); shift

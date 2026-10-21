@@ -14,7 +14,7 @@
 #   safe           all three above
 #
 # Uses only process-level faults. Nothing here touches rc.local, the modem, or eSIM.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 PASS=0

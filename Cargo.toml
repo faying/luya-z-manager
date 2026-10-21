@@ -14,7 +14,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.99"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [profile.release]
 opt-level = "z"

@@ -17,7 +17,7 @@
 #
 # 全在 Docker（python:3.12-slim）里做，本机不用装 Python 包；字体包按 sha256 固定。
 # 字体文件是二进制，不进任何 git 仓库。
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
 
 OUT=${1:?用法: build-cjk-fallback.sh <输出目录> [缓存目录]}

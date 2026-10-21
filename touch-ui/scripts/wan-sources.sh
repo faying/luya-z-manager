@@ -18,7 +18,7 @@
 # packet every few seconds keeps the radio awake as surely as a download.
 # Read-only. The report goes to /data/power/wan-sources-<time>.txt; the raw
 # header capture is deleted afterwards.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 WAN=${WS_WAN:-rmnet_data0}

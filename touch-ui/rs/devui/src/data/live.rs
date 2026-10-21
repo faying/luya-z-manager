@@ -1,11 +1,12 @@
 //! The data side on the device as the screen's Source: each poll where refresh.c calls it, each
 //! action as the C page calls it, and the view model built from the getters as
 //! tests/render/vm_model.c builds it.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::core_api::CoreApi;
 use super::alerts::Alerts;
 use super::battery::BatteryEst;
+use super::landing::Landing;
 use super::versions::Versions;
 use super::chill::Chill;
 use super::core_link::{Cfg, CoreLink};
@@ -43,6 +44,7 @@ pub struct Live {
     diag: Diagnose,
     bat: BatteryEst,
     vers: Versions,
+    landing: Landing,
     chill: Chill,
     pub bl: Backlight,
     pub key: Key,
@@ -64,6 +66,7 @@ impl Live {
             diag: Diagnose::default(),
             bat: BatteryEst::default(),
             vers: Versions::default(),
+            landing: Landing::default(),
             chill: Chill::default(),
             bl: Backlight::init(),
             key,
@@ -174,6 +177,7 @@ impl Live {
             battery_est: Some(self.bat.text().into()),
             versions: self.vers.rows().to_vec(),
             versions_checked: Some(self.vers.checked().into()),
+            landing: self.landing.get().cloned(),
 
             bl_panel_lit: self.bl.panel_lit() as i32,
             bl_is_on: self.bl.is_on() as i32,
@@ -248,6 +252,7 @@ impl Source for Live {
         p.servers = self.speed.servers_poll(ag, a.speed_page);
         p.battery = self.bat.poll(ag, a.sys);
         p.versions = self.vers.poll(ag, a.sys);
+        p.landing = self.landing.poll(ag, a.home && a.lit);
         p.alerts = self.alerts.poll(ag, a.alerts);
         p
     }

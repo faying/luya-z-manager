@@ -1,7 +1,7 @@
 //! 网络诊断's requests to luyaz-core (src/diagnose.c): start a run (or join the one going),
 //! read it (every second while it or its speed test runs, else 5 s), the capped speed test,
 //! right / wrong. The run is parsed by diag_view.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::core_api::CoreApi;
 use super::util::{bytes_cap, jset, jstr, jtrue, mono_ms, objects, trunc};

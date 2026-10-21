@@ -4,7 +4,7 @@
 //! process), so pages read t() at build time and never restyle. Every colour is already
 //! quantised to RGB565 and contrast-checked: text on a fill* is white; vivid colours carry no
 //! text; dimming = t3, never a lower opacity.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use crate::lang;
 use crate::lv::{self, Font};

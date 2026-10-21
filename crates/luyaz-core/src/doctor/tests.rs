@@ -766,3 +766,39 @@ fn clock_row_requires_fresh_boot_bound_evidence_and_does_not_claim_sync_for_an_e
     std::fs::write(&c.uptime, "0.00 1.00").unwrap();
     assert!(clock(&c).detail.contains("刚开机"));
 }
+
+#[test]
+fn lanid_row_from_the_clients_block() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = fixture("");
+    let run = |state: &str| {
+        let w = fx.dir.join("bin/wget-lanid");
+        std::fs::write(fx.dir.join("state.json"), state).unwrap();
+        std::fs::write(
+            &w,
+            format!("#!/bin/sh\ncat '{}'\n", fx.dir.join("state.json").display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&w, std::fs::Permissions::from_mode(0o755)).unwrap();
+        super::lanid(&cfg_with(&fx, &[("DOC_WGET", w.to_str().unwrap())]))
+    };
+    let on = r#"{"blocks":{"clients":{"data":{"lanid":{"loaded":true,"why":"","batches":3,"frames":40,
+        "traps":1,"dropped":2,"blocked":1,"records":5,
+        "sources":{"dhcp":true,"mdns":true,"ssdp":true,"netbios":true}}}}}}"#;
+    let r = run(on).unwrap();
+    assert_eq!(r.level, "ok");
+    assert!(
+        r.detail.contains("DHCP/mDNS/SSDP/NetBIOS") && r.detail.contains("trap 1"),
+        "{}",
+        r.detail
+    );
+    let off = r#"{"blocks":{"clients":{"data":{"lanid":{"loaded":false,"why":"no component","batches":0,
+        "frames":0,"traps":0,"dropped":0,"blocked":0,"records":0,
+        "sources":{"dhcp":false,"mdns":false,"ssdp":false,"netbios":false}}}}}}"#;
+    let r = run(off).unwrap();
+    assert_eq!(r.level, "warn");
+    assert!(r.detail.contains("no component"), "{}", r.detail);
+    // an older core, or none
+    assert!(run(r#"{"blocks":{"clients":{"data":{"list":[]}}}}"#).is_none());
+    assert!(run("").is_none());
+}

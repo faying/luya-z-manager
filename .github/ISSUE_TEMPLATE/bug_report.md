@@ -1,40 +1,21 @@
 ---
-name: Bug Report
-about: Report a bug to help us improve
+name: Bug report
+about: Something on the device or in the tools doesn't work
 labels: bug
 ---
 
-## Description
+**What happened**
 
-A clear description of the bug.
+**What you expected**
 
-## Steps to Reproduce
+**How to make it happen again**
 
-1.
-2.
-3.
+**Device**
 
-## Expected Behavior
+- Firmware (e.g. B31):
+- Component versions (web admin → Versions, or `./install.sh status`):
+- Opened from: touch screen / web admin / SSH
 
-What you expected to happen.
+**Logs**
 
-## Actual Behavior
-
-What actually happened.
-
-## Environment
-
-- **Device firmware version**:
-- **u60d / luyaz-web commit**:
-- **Browser** (for web admin issues): name and version
-- **Connection method**: ADB / SSH / LAN
-
-## Logs
-
-```
-Paste relevant logs here
-```
-
-## Additional Context
-
-Any other information that might help diagnose the issue.
+<!-- doctor output or log lines. Remove IMEI, ICCID, phone numbers and public IPs. -->

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.99"
 description = "U60 Pro (MU5250) Wi-Fi AP switch (lock, apply and verify) and nearby-network scan, run by u60d (u60-platform.md Phase 4 step 9h). Moved out of zte-agent's wifi_radio.rs and wifi_scan.rs (zte-agent removed 2026-10-14)."
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 publish = false
 
 [dependencies]

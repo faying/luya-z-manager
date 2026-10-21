@@ -2,7 +2,7 @@
 # the doctor runs stubbed, under a fresh $T. `setup` exports the DOC_* overrides; a scenario then
 # changes files under $T. Was the setup of touch-ui scripts/test/doctor/run.sh (gone with
 # doctor-legacy.sh, Luya-Z rename F4).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 setup() {
     T=$(mktemp -d); mkdir -p "$T/bin" "$T/initd" "$T/alerts" "$T/crash" "$T/uid" "$T/rcd" "$T/proc/100" "$T/proc/101"
     echo luyaz-ui >"$T/proc/100/comm"; echo luyaz-core >"$T/proc/101/comm"

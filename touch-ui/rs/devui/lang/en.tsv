@@ -147,6 +147,7 @@ tailscale|节点	Peers
 可能短暂影响网速	May slow data briefly
 号码	Number
 号码没写在卡里	No number on SIM
+卡 2 不提供号码	SIM 2 reports no number
 后台数据服务不可用	Data service unavailable
 告警 · %s	Alert · %s
 告警 · 开机后 %ld 分钟	Alert · %ld min after boot
@@ -719,3 +720,32 @@ NR 锁小区	NR cell lock
 LTE 频段	LTE bands
 NR 频段	NR bands
 其他设置	Other settings
+待机	standby
+未就绪	not ready
+PIN 锁	PIN locked
+无卡	no SIM
+未启用	off
+切换中	switching
+上网中	in use
+上网中 · 自动切换	in use · auto switch
+待机 · 信号弱	standby · weak signal
+卡槽 %d	Slot %d
+信号强度 %d dBm · 信号质量 %s dB	Strength %d dBm · quality %s dB
+信号强度 — · 信号质量 —	Strength — · quality —
+Luya-Z 免费提供。付钱买了装好的设备，费用和售后归卖家，与 Luya-Z 无关。	Luya-Z is free. If you paid for a device with it installed, price and support are the seller's, not Luya-Z's.
+
+# 出行助手：摆放模式曲线、首页落地（manager docs/designs/travel-assist.md，10-21）
+近 30 秒	Last 30 s
+到了%s	Arrived in %s
+从%s来 · 落地以来 %s	From %s · %s since landing
+落地以来 %s	%s since landing
+手机	Phone
+平板	Tablet
+笔记本电脑	Laptop
+电脑	Computer
+电视	TV
+音箱	Speaker
+手表	Watch
+打印机	Printer
+智能设备	Smart device
+随机地址	Private address

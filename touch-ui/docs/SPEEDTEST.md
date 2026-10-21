@@ -2,11 +2,12 @@
 
 **English** · [中文](SPEEDTEST.zh-CN.md)
 
-The touch UI's speed test page drives the core's speed test engine (manager repo, `crates/luyaz-speedtest`, the same one the admin web page uses); the screen side is `rs/devui/src/data/speedtest.rs` and `rs/devui/src/ui/speed.rs`. Nothing extra is installed on the device.
+The speed test page has no engine of its own. It asks the core to run a test and shows what the core reports; the engine is `crates/luyaz-speedtest`, shared with the admin web. Screen code: `rs/devui/src/data/speedtest.rs` (requests) and `rs/devui/src/ui/speed.rs` (page). Nothing extra needs to be installed on the device.
 
-- Start / stop: `POST /api/speedtest/start`, `POST /api/speedtest/stop` (the core runs the test in a background thread).
-- Progress: `GET /api/speedtest/progress`, polled about once a second while the page is open.
-- Servers: `GET /api/speedtest/servers` (cached for 5 minutes); the first row is 自动 (the core picks the best server).
-- Requests go to the core's loopback port `127.0.0.1:9460/v2/api/...` with no token (`rs/devui/src/data/core_api.rs`). When it cannot be reached, the page says so instead of starting.
+| What | Request (core loopback, `127.0.0.1:9460/v2/api/...`, no token) |
+|---|---|
+| Server list | `GET /api/speedtest/servers`; kept for 5 minutes. The first row, 自动 (auto), lets the core choose. |
+| Start / stop | `POST /api/speedtest/start`, `POST /api/speedtest/stop`; the test runs in the core's background thread. |
+| Progress | `GET /api/speedtest/progress`, about once a second while the page is open. |
 
-The old optional `better-speedtest` plugin (litehtml era) was never installed on real devices and is no longer supported; see tag `legacy-litehtml`.
+If the core does not answer, the page says so and does not start a test.

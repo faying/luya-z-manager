@@ -1,6 +1,6 @@
 //! 健康与告警 (src/alerts.c): luyaz-core's /api/alerts and /api/health (logged in), read when
 //! the page opens and every 10 s while it is up; 全部已读.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::core_api::CoreApi;
 use super::util::{bytes_cap, find, find_byte, fnv, jstr, mono_ms, obj_end, objects, trunc, FNV0};

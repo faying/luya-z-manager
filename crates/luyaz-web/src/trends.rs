@@ -42,6 +42,8 @@ pub struct Sample {
     pub bat: Option<f64>,
     /// Battery power, W (sysfs `current_now` sign, like the old page: + charging).
     pub watt: Option<f64>,
+    /// Serving carrier SINR, dB (`signal` block as it is then).
+    pub sinr: Option<f64>,
 }
 
 /// The sample a `live` block (and the battery block as it is then) gives.
@@ -83,6 +85,7 @@ pub fn sample(live: &Value, battery: Option<&Value>, at: Instant) -> Sample {
         mem,
         bat: b["percent"].as_f64(),
         watt,
+        sinr: None,
     }
 }
 
@@ -96,7 +99,12 @@ pub fn record(st: &mut St, now: Instant) {
         .get("battery")
         .filter(|b| !b.stale)
         .map(|b| &b.data);
-    let s = sample(&live.data, bat, now);
+    let mut s = sample(&live.data, bat, now);
+    s.sinr = st
+        .blocks
+        .get("signal")
+        .filter(|b| !b.stale)
+        .and_then(|b| crate::view::carriers(&b.data).first().and_then(|c| c.sinr));
     st.samples.push_back(s);
     prune(&mut st.samples, now);
 }
@@ -120,12 +128,16 @@ const PAD_Y: f64 = 8.0;
 pub struct Line {
     pub points: String,
     pub dashed: bool,
+    /// The SINR line on the signal-and-speed chart (its own colour, its own scale).
+    pub sig: bool,
 }
 
 pub struct Plot {
     /// Gridlines: (y in the viewBox, label, label top as % of the height).
     pub ticks: Vec<(String, String, String)>,
     pub lines: Vec<Line>,
+    /// Right-hand labels (y top %, label) for a second scale; empty on single-scale charts.
+    pub rticks: Vec<(String, String)>,
 }
 
 pub struct Chart {
@@ -141,7 +153,7 @@ pub struct View {
     /// Greyed lines: the data service's numbers are not current.
     pub stale: bool,
     pub full: bool,
-    pub charts: [Chart; 4],
+    pub charts: [Chart; 5],
 }
 
 fn fmt(v: Option<f64>, digits: usize) -> String {
@@ -204,9 +216,43 @@ fn plot(
                 .collect::<Vec<_>>()
                 .join(" "),
             dashed: *dashed,
+            sig: false,
         })
         .collect();
-    Some(Plot { ticks, lines })
+    Some(Plot { ticks, lines, rticks: Vec::new() })
+}
+
+/// SINR scale on the signal-and-speed chart: −10 dB at the bottom, 30 dB at the top.
+const SINR_LO: f64 = -10.0;
+const SINR_HI: f64 = 30.0;
+
+/// Download (Mbit/s, left labels) with the serving SINR over it on its own fixed scale (right
+/// labels). Speed down with SINR steady points at a busy cell; both down together, at the signal.
+fn plot_sig(samples: &[Sample]) -> Option<Plot> {
+    let mut p = plot(samples, &[(|x| x.down, false)], None)?;
+    let drawn = samples.iter().filter(|s| s.sinr.is_some()).count();
+    if drawn >= 2 {
+        let end = samples.last()?.at;
+        let win = WINDOW.as_secs_f64();
+        let x = |t: Instant| (1.0 - end.saturating_duration_since(t).as_secs_f64() / win) * (W - PAD_R);
+        let y = |v: f64| {
+            PAD_Y + (SINR_HI - v.clamp(SINR_LO, SINR_HI)) / (SINR_HI - SINR_LO) * (H - PAD_Y * 2.0)
+        };
+        p.lines.push(Line {
+            points: samples
+                .iter()
+                .filter_map(|s| s.sinr.map(|v| format!("{:.0},{:.0}", x(s.at), y(v))))
+                .collect::<Vec<_>>()
+                .join(" "),
+            dashed: false,
+            sig: true,
+        });
+        p.rticks = [SINR_LO, 10.0, SINR_HI]
+            .iter()
+            .map(|&v| (format!("{:.2}", y(v) / H * 100.0), format!("{v:.0}")))
+            .collect();
+    }
+    Some(p)
 }
 
 pub fn view(st: &St, now: Instant, l: Lang) -> View {
@@ -272,6 +318,22 @@ pub fn view(st: &St, now: Instant, l: Lang) -> View {
                 now: bat_now,
                 aria: l.pick("Battery level, last 5 minutes", "近 5 分钟电量"),
                 plot: plot(&s, &[(|x| x.bat, false)], Some(100.0)),
+            },
+            Chart {
+                key: "sig",
+                title: l.pick("Signal vs speed", "信号与网速"),
+                now: format!(
+                    "↓ {} Mbps · SINR {} dB",
+                    fmt(last.and_then(|x| x.down), 1),
+                    last.and_then(|x| x.sinr)
+                        .map(crate::view::js_num)
+                        .unwrap_or_else(|| "—".into())
+                ),
+                aria: l.pick(
+                    "Mobile download (left scale, Mbit/s) and serving-cell SINR (right scale, dB), last 5 minutes. Speed falling while SINR holds points at a busy cell; both falling, at the signal.",
+                    "近 5 分钟蜂窝下行（左刻度，Mbps）和主载波 SINR（右刻度，dB）。SINR 稳而网速掉，多半是基站忙；两条一起掉，是信号差。",
+                ),
+                plot: plot_sig(&s),
             },
         ],
     }
@@ -470,6 +532,32 @@ mod tests {
     }
 
     #[test]
+    fn the_signal_chart_puts_sinr_over_speed_on_its_own_scale() {
+        let now = Instant::now();
+        let at = |i: u64, down, sinr| Sample {
+            at: now - Duration::from_secs(i),
+            down: Some(down),
+            up: None,
+            cpu: None,
+            mem: None,
+            bat: None,
+            watt: None,
+            sinr,
+        };
+        // no SINR yet: speed alone, no right scale
+        let p = plot_sig(&[at(10, 5.0, None), at(5, 10.0, None)]).unwrap();
+        assert_eq!(p.lines.len(), 1);
+        assert!(p.rticks.is_empty());
+        let p = plot_sig(&[at(10, 5.0, Some(30.0)), at(5, 10.0, Some(-10.0))]).unwrap();
+        assert_eq!(p.lines.len(), 2);
+        assert!(p.lines[1].sig && !p.lines[0].sig);
+        // 30 dB at the top pad, −10 dB at the bottom pad
+        assert!(p.lines[1].points.ends_with(",112"), "{}", p.lines[1].points);
+        assert!(p.lines[1].points.contains(",8 "), "{}", p.lines[1].points);
+        assert_eq!(p.rticks.len(), 3);
+    }
+
+    #[test]
     fn samples_older_than_five_minutes_are_not_drawn() {
         let hub = hub_with_samples(3);
         let later = Instant::now() + WINDOW + Duration::from_secs(1);
@@ -535,7 +623,7 @@ mod tests {
         assert!(!html.contains("<polyline"), "the page has no lines");
         assert!(html.contains("id=\"tr-cpu-line\""), "but the line elements are there");
         let first = crate::topbar::diff(&page, &full);
-        assert_eq!(first.len(), 4, "the four lines, nothing else");
+        assert_eq!(first.len(), 5, "the five lines, nothing else");
         for k in ["speed", "cpu", "mem", "bat"] {
             assert!(
                 first.iter().any(|h| h.contains(&format!("id=\"tr-{k}-line\""))),

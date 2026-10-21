@@ -14,7 +14,7 @@
 # runs $T/hook. /proc is $T/proc: <pid>/exe is a copy of the program at the
 # moment the stub started it (like the kernel's view of a running binary),
 # <pid>/cmdline as the kernel writes it.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCRIPTS=${SCRIPTS:-/scripts}

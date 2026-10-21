@@ -42,7 +42,7 @@
 # Exit status: 0, or 10 when it put /etc/rc.local back (the rc.local the
 # sentinel component writes re-runs itself then: `exec /bin/sh /etc/rc.local`).
 # No arithmetic, no `.`, no network: a bad file must not stop the boot.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 ROOT=${U60R_ROOT:-}

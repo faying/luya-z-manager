@@ -1,7 +1,7 @@
 #!/bin/sh
 # web-auth.sh migrate: parsing and refusal cases (verify needs a live agent;
 # it is exercised against a sidecar agent, see the commit that added this).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 SCRIPTS=${SCRIPTS:-/scripts}
 PASS=0; FAIL=0
 ok() { PASS=$((PASS + 1)); echo "  ok   $1"; }

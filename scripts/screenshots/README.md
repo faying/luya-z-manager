@@ -5,7 +5,7 @@ Regenerates the English screenshots in `docs/images/` (gallery: [docs/SCREENSHOT
 | Script | Makes | How |
 |---|---|---|
 | `web.sh [OUT_DIR] [name…]` | `web-*.png` | Builds `luyaz-web` in Docker, replays a synthetic event stream (`gen-fake-sse.py`) with `luyaz-web mock`, puts the typed fake agent (`crates/luyaz-web/e2e/fake-agent.mjs`) behind `rewrite-agent.mjs` (one made-up operator, English eSIM names), shoots every page with Playwright (`shoot-web.mjs`, cookie `u60_lang=en`) |
-| `touch.sh [OUT_DIR]` | `touch-*.png` | Renders the touch UI off-screen (`luyaz-ui --render`) on the view models of the old C render test; makes those from tag `legacy-c-touch-ui` when `MODELS` is not given (cached in `~/.cache/luyaz-shots/models`) |
+| `touch.sh [OUT_DIR]` | `touch-*.png` | Renders the touch UI off-screen (`luyaz-ui --render`) on the view models in `MODELS` (the C render test's models are retired; new ones are to be generated from the Rust UI) |
 
 Output goes to `scripts/screenshots/out/` (not committed). Look at every image, then copy the ones you want into `docs/images/`.
 

@@ -7,6 +7,7 @@
 
 pub mod backlight;
 pub mod drm;
+mod evdev;
 pub mod key;
 pub mod meter;
 pub mod touch;
@@ -150,7 +151,7 @@ pub fn png_rgb565(w: u32, h: u32, px: &[u16]) -> Vec<u8> {
     png_rgb(w, h, &rgb)
 }
 
-/// LUYAZ_UI_DIRTY=each: one DIRTYFB per rectangle, as before (main.c)
+/// LUYAZ_UI_DIRTY=each: one DIRTYFB per rectangle, as before
 fn each() -> bool {
     std::env::var("LUYAZ_UI_DIRTY").is_ok_and(|v| v == "each")
 }

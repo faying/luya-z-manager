@@ -13,7 +13,7 @@
 #
 # logo 是商标：PNG 和 SVG 都不进开源仓库（tools/sync-public.sh 删），PNG 是二进制，不进任何 git，
 # 只随装机包走。全在 Docker（alpine + rsvg-convert + ImageMagick）里做，本机不用装东西。
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
 
 SRC=${1:?用法: build-operator-logos.sh <SVG 目录> <输出目录>}

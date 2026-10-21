@@ -1,5 +1,5 @@
 //! Tiny local servers for the data modules' tests (the C tests fork; these are threads).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};

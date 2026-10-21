@@ -4,7 +4,7 @@
 # tailscaled/tailscale and the real scripts/tailscale/start.sh.
 #   docker run --rm -v "$PWD":/w bash:5 bash /w/scripts/tailscale/test/install-module.sh
 # It rewrites /etc/rc.local, so it refuses to run outside a container.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 [ -f /.dockerenv ] || { echo "run this in a throwaway container (it edits /etc/rc.local)"; exit 2; }
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 PASS=0; FAIL=0

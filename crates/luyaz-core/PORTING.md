@@ -1,6 +1,6 @@
 # What u60d took from zwrt-datad
 
-Base: data-service `68416eb` (the datad build on the device since 2026-10-07; MIT, same as here).
+Base: data-service `68416eb` (the datad build on the device since 2026-10-07; MIT). The files listed here were rewritten on 2026-10-21 (`b8268904`); this page is kept as history.
 
 Moved in three steps: `8605c28` first (Phase 2 step 1), then `68416eb` on top (USB attach mode:
 the `typec` and `powerbank` blocks in `block.rs`, the multi-event listener in `ubus/listen.rs`,

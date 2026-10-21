@@ -11,6 +11,7 @@
 <div id="hm-why" class="hm-o1" hidden></div>
 <section id="hm-dual" class="hm-o1" hidden></section>
 {{ poller|safe }}
+{{ landing|safe }}
 <section id="hm-readouts" class="nd-wall nd-wall--3 hm-wall hm-o3" aria-label="{{ l.pick("Readings", "读数") }}">
 <i id="hm-fl-ro" class="hm-flag" hidden></i>
 <div class="nd-readout nd-readout--full nd-readout--hero"><div class="nd-readout__label">{{ l.pick("Aggregate bandwidth · MHz", "聚合带宽 · MHz") }}</div><div id="ro-bw" class="nd-readout__value"><span class="nd-skel" aria-label="…"></span></div><div id="ro-bw-w" class="nd-readout__sub" hidden></div></div>
@@ -23,7 +24,7 @@
 </section>
 <section class="hm-o4" aria-labelledby="hm-detail-t"><h2 id="hm-detail-t" class="nd-group-title">{{ l.pick("Detail", "详情") }}</h2><div class="nd-group"><i id="hm-fl-d" class="hm-flag" hidden></i>
 <a class="nd-row" href="/clients"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Connected devices", "已连接设备") }}</span></span><span id="hd-cl" class="nd-row__value">—</span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a>
-<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Today", "今天") }}</span></span><span id="hd-day" class="nd-row__value">—</span></div>
+<a class="nd-row" href="/usage"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Today", "今天") }}</span></span><span id="hd-day" class="nd-row__value">—</span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a>
 <div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("This month", "本月") }}</span></span><span id="hd-mon" class="nd-row__value">—</span></div>
 <div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Uptime", "运行时间") }}</span></span><span id="hd-up" class="nd-row__value">—</span></div>
 </div></section>

@@ -23,7 +23,7 @@
 #      don't count.
 # Run it on the host from the touch-ui checkout (sh scripts/test/cross-repo/
 # run.sh); in a container that only has /scripts each part says it skipped.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 export LC_ALL=C   # macOS awk/sort in a UTF-8 locale compare Chinese wrongly (all equal)

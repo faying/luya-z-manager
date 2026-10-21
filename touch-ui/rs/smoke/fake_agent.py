@@ -2,7 +2,7 @@
 """A fake u60d screen API for rs/smoke.sh on 127.0.0.1:9090 (fake_core.py forwards /v2/api/... here): /api/public/status (the
 scenario 在家, no unread alerts, the device check fine); everything else 404. Requests are logged
 to the file given as the first argument.
-SPDX-License-Identifier: MIT
+SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """
 import http.server
 import json

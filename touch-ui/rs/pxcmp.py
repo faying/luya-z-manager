@@ -4,7 +4,7 @@
   pxcmp.py REF.png OUT.png     prints how many pixels differ and their box; exit 1 if any
 
 Standard library only. (spike/inkcmp.py, not public, also says where things are offset.)
-SPDX-License-Identifier: MIT
+SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """
 import struct
 import sys

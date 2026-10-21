@@ -164,46 +164,59 @@ fn upper_prefix(s: &str, n: usize) -> String {
     String::from_utf8_lossy(&b).into_owned()
 }
 
-// ---- the screen's parse of /state (data.c parse_snapshot, net part) --------
+// ---- what the screen reads from the internal snapshot -------------------------
 
+/// The fields of the snapshot the signal card and status bar are worked out from, held the
+/// way the old screen held them: text cut to its field size, numbers as `json_get_int` gives.
 #[derive(Default, Debug, Clone)]
 struct Data {
-    net_type: String,
-    operator_name: String,
-    /// English for operator_name: the 4 mainland carriers by name, others as broadcast.
-    operator_name_en: String,
-    roaming: String,
-    band: String,
-    nr_band: String,
-    nr_snr: String,
-    wan_status: String,
-    lte_snr: String,
-    bandwidth: String,
-    operate_mode: String,
-    lte_pci: i64,
-    channel: i64,
-    nr_bw: String,
-    nrca: String,
-    lteca: String,
-    net_select: String,
-    bars: i64,
-    nr_rsrp: i64,
-    nr_rsrq: i64,
-    lte_rsrp: i64,
-    lte_rsrq: i64,
+    // carrier and registration
+    carrier: String,
+    /// the same carrier in English: mainland names translated, others as broadcast
+    carrier_en: String,
     mcc: i64,
     mnc: i64,
+    roam_state: String,
+    radio: String,
+    signal_level: i64,
+    wan_state: String,
+    modem_mode: String,
+    net_pref: String,
+
+    // 5G cell
+    nr_band_text: String,
     nr_pci: i64,
-    nr_channel: i64,
+    nr_arfcn: i64,
+    nr_width: String,
+    nr_rsrp: i64,
+    nr_rsrq: i64,
+    nr_snr: String,
+    nr_ca: String,
+
+    // LTE cell
+    band_text: String,
+    lte_pci: i64,
+    lte_arfcn: i64,
+    lte_width: String,
+    lte_rsrp: i64,
+    lte_rsrq: i64,
+    lte_snr: String,
+    lte_ca: String,
+
+    // the SIM
     sim_state: String,
     sim_imsi: String,
     sim_spn: String,
-    ambr_dl: f64,
-    rx_speed: i64,
-    cell_data: i64,
-    cell_roam: i64,
-    /// `thermal.hightemp_limit` == 1：固件在过热限速（读不到当没有）。
-    hot: bool,
+
+    /// mobile data / data roaming switches: 1 on, 0 off, -1 not known
+    data_switch: i64,
+    roam_switch: i64,
+    /// download rate now, B/s
+    down_bps: i64,
+    /// the bearer's downlink AMBR, Mbps; 0 when absent or from a stale bearer
+    ambr_down: f64,
+    /// `thermal.hightemp_limit` == 1: the firmware is throttling for heat (absent = no)
+    thermal_limited: bool,
 }
 
 /// The 4 mainland carriers as (中文, English); the English must match zte-agent's
@@ -231,75 +244,94 @@ fn mainland_operator(mcc: i64, mnc: i64, raw: &str) -> Option<(&'static str, &'s
     }
 }
 
+/// A number field read as the old screen's `int`: the low 32 bits, sign kept.
+fn int32(obj: &Value, key: &str) -> i64 {
+    i64::from(get_int(obj, key, 0) as i32)
+}
+
+/// A 0/1 switch; anything else (or nothing) is -1.
+fn switch(obj: &Value, key: &str) -> i64 {
+    match get_int(obj, key, -1) {
+        v @ (0 | 1) => v,
+        _ => -1,
+    }
+}
+
+fn read_net(d: &mut Data, net: &Value) {
+    d.mcc = int32(net, "mcc");
+    d.mnc = int32(net, "mnc");
+    let broadcast = getstr(net, "operator", 48);
+    (d.carrier, d.carrier_en) = match mainland_operator(d.mcc, d.mnc, &broadcast) {
+        Some((zh, en)) => (cstr(zh.to_string(), 48), cstr(en.to_string(), 48)),
+        None => (broadcast.clone(), broadcast),
+    };
+    d.roam_state = getstr(net, "roaming", 16);
+    d.radio = getstr(net, "type", 16);
+    d.signal_level = int32(net, "bars");
+    d.wan_state = getstr(net, "wan_status", 32);
+    d.modem_mode = getstr(net, "operate_mode", 16);
+    d.net_pref = getstr(net, "net_select", 16);
+
+    d.nr_band_text = getstr(net, "nr_band", 16);
+    d.nr_pci = int32(net, "nr_pci");
+    d.nr_arfcn = get_int(net, "nr_channel", 0);
+    d.nr_width = getstr(net, "nr_bw", 12);
+    d.nr_rsrp = int32(net, "nr_rsrp");
+    d.nr_rsrq = int32(net, "nr_rsrq");
+    d.nr_snr = getstr(net, "nr_snr", 12);
+    d.nr_ca = getstr(net, "nrca", 256);
+
+    d.band_text = getstr(net, "band", 16);
+    d.lte_pci = int32(net, "lte_pci");
+    // older cores call the LTE channel "channel", newer ones "lte_channel"
+    d.lte_arfcn = match get_int(net, "channel", 0) {
+        0 => get_int(net, "lte_channel", 0),
+        ch => ch,
+    };
+    d.lte_width = getstr(net, "bandwidth", 12);
+    d.lte_rsrp = int32(net, "lte_rsrp");
+    d.lte_rsrq = int32(net, "lte_rsrq");
+    d.lte_snr = getstr(net, "lte_snr", 12);
+    d.lte_ca = getstr(net, "lteca", 256);
+}
+
+/// The downlink AMBR unless the bearer it came from is no longer this connection's.
+fn ambr_down(qos: &Value) -> f64 {
+    if qos.get("stale").and_then(Value::as_bool) == Some(true) {
+        return 0.0;
+    }
+    raw(qos, "ambr_dl").map_or(0.0, |text| atof(&cstr(text, 32)))
+}
+
 fn parse(state: &Value) -> Data {
     let mut d = Data {
-        cell_data: -1,
-        cell_roam: -1,
-        ..Default::default()
+        data_switch: -1,
+        roam_switch: -1,
+        ..Data::default()
     };
-    if let Some(net) = state.get("net") {
-        d.net_type = getstr(net, "type", 16);
-        d.operator_name = getstr(net, "operator", 48);
-        d.roaming = getstr(net, "roaming", 16);
-        d.band = getstr(net, "band", 16);
-        d.nr_band = getstr(net, "nr_band", 16);
-        d.nr_snr = getstr(net, "nr_snr", 12);
-        d.wan_status = getstr(net, "wan_status", 32);
-        d.lte_snr = getstr(net, "lte_snr", 12);
-        d.bandwidth = getstr(net, "bandwidth", 12);
-        d.operate_mode = getstr(net, "operate_mode", 16);
-        d.lte_pci = i64::from(get_int(net, "lte_pci", 0) as i32);
-        d.channel = get_int(net, "channel", 0);
-        d.nr_bw = getstr(net, "nr_bw", 12);
-        d.nrca = getstr(net, "nrca", 256);
-        d.lteca = getstr(net, "lteca", 256);
-        d.net_select = getstr(net, "net_select", 16);
-        d.bars = i64::from(get_int(net, "bars", 0) as i32);
-        d.nr_rsrp = i64::from(get_int(net, "nr_rsrp", 0) as i32);
-        d.nr_rsrq = i64::from(get_int(net, "nr_rsrq", 0) as i32);
-        d.lte_rsrp = i64::from(get_int(net, "lte_rsrp", 0) as i32);
-        d.lte_rsrq = i64::from(get_int(net, "lte_rsrq", 0) as i32);
-        d.mcc = i64::from(get_int(net, "mcc", 0) as i32);
-        d.mnc = i64::from(get_int(net, "mnc", 0) as i32);
-        d.nr_pci = i64::from(get_int(net, "nr_pci", 0) as i32);
-        d.nr_channel = get_int(net, "nr_channel", 0);
-        if d.channel == 0 {
-            d.channel = get_int(net, "lte_channel", 0);
-        }
-        d.operator_name_en = d.operator_name.clone();
-        if let Some((cn, en)) = mainland_operator(d.mcc, d.mnc, &d.operator_name) {
-            d.operator_name = cstr(cn.to_string(), 48);
-            d.operator_name_en = cstr(en.to_string(), 48);
-        }
+    let section = |name: &str| state.get(name);
+    if let Some(net) = section("net") {
+        read_net(&mut d, net);
     }
-    if let Some(cell) = state.get("interfaces").and_then(|i| i.get("cellular")) {
-        let v = get_int(cell, "enable", -1);
-        d.cell_data = if v == 0 || v == 1 { v } else { -1 };
-        let v = get_int(cell, "roam_enable", -1);
-        d.cell_roam = if v == 0 || v == 1 { v } else { -1 };
-    }
-    if let Some(t) = state.get("traffic") {
-        d.rx_speed = get_int(t, "rx_speed", 0);
-    }
-    if let Some(q) = state.get("qos") {
-        // A bearer of the other core is history: no rate-limit conclusion from it.
-        let stale = q.get("stale").and_then(Value::as_bool).unwrap_or(false);
-        d.ambr_dl = if stale {
-            0.0
-        } else {
-            raw(q, "ambr_dl").map(|s| atof(&cstr(s, 32))).unwrap_or(0.0)
-        };
-    }
-    d.hot = state
-        .get("thermal")
-        .and_then(|t| t.get("hightemp_limit"))
-        .and_then(Value::as_i64)
-        == Some(1);
-    if let Some(sim) = state.get("sim") {
+    if let Some(sim) = section("sim") {
         d.sim_state = getstr(sim, "state", 24);
         d.sim_imsi = getstr(sim, "imsi", 20);
         d.sim_spn = getstr(sim, "spn", 32);
     }
+    if let Some(cellular) = section("interfaces").and_then(|i| i.get("cellular")) {
+        d.data_switch = switch(cellular, "enable");
+        d.roam_switch = switch(cellular, "roam_enable");
+    }
+    if let Some(traffic) = section("traffic") {
+        d.down_bps = get_int(traffic, "rx_speed", 0);
+    }
+    if let Some(qos) = section("qos") {
+        d.ambr_down = ambr_down(qos);
+    }
+    d.thermal_limited = section("thermal")
+        .and_then(|t| t.get("hightemp_limit"))
+        .and_then(Value::as_i64)
+        == Some(1);
     d
 }
 
@@ -508,6 +540,7 @@ fn operator_logo(mcc: i64, mnc: i64) -> Option<&'static str> {
         (460, 4, "china-mobile"),
         (460, 7, "china-mobile"),
         (460, 8, "china-mobile"),
+        (460, 13, "china-mobile"), // u60g 内置卡 (IMSI 46013, firmware says CMCC)
         (460, 1, "china-unicom"),
         (460, 6, "china-unicom"),
         (460, 9, "china-unicom"),
@@ -1515,20 +1548,22 @@ pub struct NetView {
 
 fn carriers(d: &Data, v: &mut NetView) {
     let mut ca: Vec<Carrier> = Vec::new();
-    let rat = rat_of(&d.net_type);
+    let rat = rat_of(&d.radio);
     // NR 载波只在现在用着 5G（SA/NSA）时算数：离开 5G 后 nr_* 会留着旧读数
     // （实测 LTE 下 nr_rsrp -116、lte_rsrp -95），不能拿来排第一、当主信号。
     let on_nr = matches!(rat, Rat::Sa | Rat::Nsa);
     // an idle NSA leg still reports nr5g_rsrp but has no band, bandwidth or channel
-    if on_nr && d.nr_rsrp != 0 && (!d.nr_band.is_empty() || atoi(&d.nr_bw) > 0 || d.nr_channel > 0)
+    if on_nr
+        && d.nr_rsrp != 0
+        && (!d.nr_band_text.is_empty() || atoi(&d.nr_width) > 0 || d.nr_arfcn > 0)
     {
         ca.push(Carrier {
             kind: "nr",
             band: 0,
             pci: d.nr_pci,
-            bw: atoi(&d.nr_bw) as i32 as i64,
+            bw: atoi(&d.nr_width) as i32 as i64,
             active: true,
-            arfcn: d.nr_channel,
+            arfcn: d.nr_arfcn,
             rsrp: String::new(),
             rsrq: String::new(),
             sinr: String::new(),
@@ -1542,12 +1577,12 @@ fn carriers(d: &Data, v: &mut NetView) {
     }
     if on_nr {
         let room = CA_MAX - ca.len();
-        ca.extend(parse_ca(&d.nrca, room, true));
+        ca.extend(parse_ca(&d.nr_ca, room, true));
     }
     // 同理，在 3G/2G 上 lteca 里也只是上次 4G 的旧读数（这些制式没有载波聚合，
     // summary 也按「无聚合」写），不能拿它的 SINR 判「干扰大」。
     if ca.len() < CA_MAX && !matches!(rat, Rat::G3 | Rat::G2) {
-        let mut lte = parse_ca(&d.lteca, CA_MAX - ca.len(), false);
+        let mut lte = parse_ca(&d.lte_ca, CA_MAX - ca.len(), false);
         let lte_snr = atof(if d.lte_snr.is_empty() {
             "0"
         } else {
@@ -1563,14 +1598,14 @@ fn carriers(d: &Data, v: &mut NetView) {
         let lte_n = lte.len();
         ca.extend(lte);
         if lte_n == 0 && d.lte_rsrp != 0 && matches!(rat, Rat::G4 | Rat::Nsa) {
-            let bs = band_short(&d.band, false);
+            let bs = band_short(&d.band_text, false);
             ca.push(Carrier {
                 kind: "lte",
                 band: atoi_after_first_byte(&bs),
                 pci: d.lte_pci,
-                bw: atoi(&d.bandwidth) as i32 as i64,
+                bw: atoi(&d.lte_width) as i32 as i64,
                 active: true,
-                arfcn: d.channel,
+                arfcn: d.lte_arfcn,
                 rsrp: String::new(),
                 rsrq: String::new(),
                 sinr: String::new(),
@@ -1591,16 +1626,16 @@ fn carriers(d: &Data, v: &mut NetView) {
             c.label_short = c.label.clone();
         } else if nr {
             c.label = cstr(
-                if d.nr_band.is_empty() {
+                if d.nr_band_text.is_empty() {
                     "-".into()
                 } else {
-                    d.nr_band.clone()
+                    d.nr_band_text.clone()
                 },
                 16,
             );
-            c.label_short = band_short(&d.nr_band, true);
+            c.label_short = band_short(&d.nr_band_text, true);
         } else {
-            c.label = band_short(&d.band, false);
+            c.label = band_short(&d.band_text, false);
             c.label_short = c.label.clone();
         }
         c.rsrp = fmt0(c.rsrp_v);
@@ -1628,7 +1663,7 @@ fn carriers(d: &Data, v: &mut NetView) {
             v.nr_band0 = if c.band != 0 {
                 c.band
             } else {
-                atoi_after_first_byte(&band_short(&d.nr_band, true))
+                atoi_after_first_byte(&band_short(&d.nr_band_text, true))
             };
         }
         v.nr_mhz += c.bw;
@@ -1676,15 +1711,15 @@ fn summary(d: &Data, v: &mut NetView) {
         list.push_str(&piece);
     }
     let list = cstr(list, 120);
-    let r2 = rat_of(&d.net_type);
+    let r2 = rat_of(&d.radio);
     let ca_val_en;
     if v.act_n == 0 && matches!(r2, Rat::G3 | Rat::G2) {
         v.ca_val = "无聚合".into();
         ca_val_en = "No CA".to_string();
-        v.ca_sub = if d.band.is_empty() {
+        v.ca_sub = if d.band_text.is_empty() {
             String::new()
         } else {
-            band_short(&d.band, false)
+            band_short(&d.band_text, false)
         };
     } else if v.act_n == 0 {
         (v.ca_val, ca_val_en) = if v.nosvc {
@@ -1731,21 +1766,23 @@ pub fn net_view_op(state: &Value, win: Option<CellWindow>, op: Option<&ScreenOp>
     let mut v = NetView::default();
     carriers(&d, &mut v);
 
-    v.roam_known = !d.roaming.is_empty();
-    v.roam =
-        !d.roaming.is_empty() && d.roaming != "Home" && d.roaming != "home" && d.roaming != "0";
+    v.roam_known = !d.roam_state.is_empty();
+    v.roam = !d.roam_state.is_empty()
+        && d.roam_state != "Home"
+        && d.roam_state != "home"
+        && d.roam_state != "0";
 
-    let ws = &d.wan_status;
+    let ws = &d.wan_state;
     let c0 = v.carriers.first();
     let nin = NetIn {
         sim_state: &d.sim_state,
-        airplane: d.operate_mode.contains("LPM") || d.operate_mode.contains("OFFLINE"),
-        net_type: &d.net_type,
-        bars: d.bars,
+        airplane: d.modem_mode.contains("LPM") || d.modem_mode.contains("OFFLINE"),
+        net_type: &d.radio,
+        bars: d.signal_level,
         data_up: ws.is_empty() || (ws.contains("connected") && !ws.contains("disconnect")),
         connected: ws.contains("connected") && !ws.contains("disconnect"),
         win,
-        roaming: if d.roaming.is_empty() {
+        roaming: if d.roam_state.is_empty() {
             -1
         } else {
             i64::from(v.roam)
@@ -1764,20 +1801,20 @@ pub fn net_view_op(state: &Value, win: Option<CellWindow>, op: Option<&ScreenOp>
         mnc: d.mnc,
         nr_band: v.nr_band0,
         nr_mhz: v.nr_mhz,
-        rx_bps: d.rx_speed,
-        ambr_dl: d.ambr_dl,
-        net_select: &d.net_select,
-        data_sw: match d.cell_data {
+        rx_bps: d.down_bps,
+        ambr_dl: d.ambr_down,
+        net_select: &d.net_pref,
+        data_sw: match d.data_switch {
             0 => Sw::Off,
             1 => Sw::On,
             _ => Sw::Unknown,
         },
-        roam_sw: match d.cell_roam {
+        roam_sw: match d.roam_switch {
             0 => Sw::Off,
             1 => Sw::On,
             _ => Sw::Unknown,
         },
-        hot: d.hot,
+        hot: d.thermal_limited,
     };
     v.story = story(&nin);
     v.nosvc = matches!(v.story.state, State::Nosvc | State::Sos);
@@ -1796,14 +1833,14 @@ pub fn net_view_op(state: &Value, win: Option<CellWindow>, op: Option<&ScreenOp>
     .into();
 
     let fine_en;
-    (v.fine, fine_en) = rat_long(&d.net_type, v.act_lte);
+    (v.fine, fine_en) = rat_long(&d.radio, v.act_lte);
     let name_en;
-    (v.name, name_en) = if d.operator_name.is_empty() {
+    (v.name, name_en) = if d.carrier.is_empty() {
         ("未注册".into(), "Not registered".into())
     } else {
-        (d.operator_name.clone(), d.operator_name_en.clone())
+        (d.carrier.clone(), d.carrier_en.clone())
     };
-    let (wh, where_en) = if v.nosvc || d.roaming.is_empty() {
+    let (wh, where_en) = if v.nosvc || d.roam_state.is_empty() {
         (String::new(), String::new())
     } else if v.other {
         (
@@ -1818,10 +1855,10 @@ pub fn net_view_op(state: &Value, win: Option<CellWindow>, op: Option<&ScreenOp>
     v.r#where = wh;
 
     summary(&d, &mut v);
-    v.bars_tier = bars_tier(d.bars);
+    v.bars_tier = bars_tier(d.signal_level);
     let mode_en;
-    (v.mode_word, mode_en) = net_select_word(&d.net_select);
-    v.mode_auto = net_select_is_auto(&d.net_select);
+    (v.mode_word, mode_en) = net_select_word(&d.net_pref);
+    v.mode_auto = net_select_is_auto(&d.net_pref);
 
     v.fine_en = en_for(&v.fine, &fine_en, 32);
     v.name_en = en_for(&v.name, &name_en, 48);

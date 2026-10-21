@@ -326,8 +326,24 @@
     "clients": {
       "$defs": {
         "Client": {
+          "description": "`name` is the winner of alias > mDNS instance > DHCP host name > NetBIOS name (lanid,\nlan-client-id.md §4a); the other fields come only from lanid and an alias, and are left\nout when empty, so without the lanid-parse component and aliases a client is as before.\nKept short on purpose (the touch UI skips client objects of 160 bytes or more): every\nvalue with its source is in `GET /api/lanid`, not here.",
           "properties": {
+            "alias": {
+              "description": "the user's name for this MAC (`POST /api/lanid/alias`)",
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "alias_from": {
+              "description": "the old MAC this alias was taken over from (the same device on a new random MAC)",
+              "type": "string",
+              "x-u60-level": "personal"
+            },
             "ip": {
+              "type": "string",
+              "x-u60-level": "personal"
+            },
+            "kind": {
+              "description": "a type token: phone, tablet, laptop, computer, tv, speaker, watch, printer, iot",
               "type": "string",
               "x-u60-level": "personal"
             },
@@ -338,12 +354,119 @@
             "name": {
               "type": "string",
               "x-u60-level": "personal"
+            },
+            "private": {
+              "description": "a locally administered (random) MAC: no OUI lookup",
+              "type": "boolean",
+              "x-u60-level": "personal"
+            },
+            "vendor": {
+              "type": "string",
+              "x-u60-level": "personal"
             }
           },
           "required": [
             "ip",
             "mac",
             "name"
+          ],
+          "type": "object"
+        },
+        "LanidSources": {
+          "description": "Which lanid sources run (all four, or none).",
+          "properties": {
+            "dhcp": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "mdns": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "netbios": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "ssdp": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "dhcp",
+            "mdns",
+            "netbios",
+            "ssdp"
+          ],
+          "type": "object"
+        },
+        "LanidStatus": {
+          "description": "The lanid thread's state (lan-client-id.md §4a 状态), refreshed at most every 10 min or\nwhen it turns on or off. Display only.",
+          "properties": {
+            "batches": {
+              "description": "frames the component was given, in batches",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "blocked": {
+              "description": "MACs blocked for an hour after a frame of theirs trapped the component",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "dropped": {
+              "description": "frames dropped before or after parsing (rate limit, blocked MAC, bad output)",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "frames": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "loaded": {
+              "description": "the lanid-parse component loaded",
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "records": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "sources": {
+              "$ref": "#/$defs/LanidSources",
+              "x-u60-level": "nested"
+            },
+            "traps": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "why": {
+              "description": "why it is off; empty when on",
+              "type": "string",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "batches",
+            "blocked",
+            "dropped",
+            "frames",
+            "loaded",
+            "records",
+            "sources",
+            "traps",
+            "why"
           ],
           "type": "object"
         }
@@ -354,6 +477,17 @@
           "format": "int64",
           "type": "integer",
           "x-u60-level": "normal"
+        },
+        "lanid": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LanidStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-u60-level": "nested"
         },
         "list": {
           "items": {
@@ -2755,6 +2889,27 @@
           "x-u60-level": "normal"
         },
         "mtu": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "nitz_sync_flag": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "nitz_time_dst": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "nitz_timezone": {
           "type": [
             "string",
             "null"

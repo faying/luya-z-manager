@@ -2,12 +2,18 @@ use crate::state;
 use serde_json::{Map, Value, json};
 use std::time::Duration;
 
+/// How one `/control` action ended; the server turns this into the HTTP reply.
 #[derive(Debug)]
 pub enum Outcome {
+    /// Not an action of this module (the server then tries the other handlers).
     NotHandled,
+    /// The client sent something unusable; nothing was written.
     Invalid(String),
+    /// The vendor call, or the readback after it, did not work out.
     Failed(String),
+    /// The USB capability layer refused the vendor call.
     CapabilityDenied(Box<crate::device_profile::usb::Denial>),
+    /// Done: the vendor reply, or a small summary built here.
     Ok(Value),
 }
 
@@ -95,62 +101,235 @@ pub const VENDOR_CALLS: &[(&str, &str)] = &[
     ("zwrt_wms", "zte_libwms_send_sms"),
 ];
 
+// ---- reading client parameters ----------------------------------------------
+//
+// The server has already made sure `params` is a JSON object. Each reader pulls
+// one member and turns a type mismatch into the client-facing error text; the
+// wording is part of the API (clients and tests match on it).
+
 fn object(params: &Value) -> &Map<String, Value> {
     params.as_object().expect("server validates params")
 }
+
+/// Longest string member accepted; anything longer counts as the wrong type.
+const MAX_TEXT: usize = 8192;
+
+/// Result for a member that is not there at all.
+fn absent<T>(name: &str, required: bool) -> Result<Option<T>, String> {
+    if required {
+        Err(format!("missing parameter: {name}"))
+    } else {
+        Ok(None)
+    }
+}
+
 pub(crate) fn string(params: &Value, name: &str, required: bool) -> Result<Option<String>, String> {
-    match object(params).get(name) {
-        Some(Value::String(value)) if value.len() <= 8192 => Ok(Some(value.clone())),
-        Some(_) => Err(format!("{name} must be a string")),
-        None if required => Err(format!("missing parameter: {name}")),
-        None => Ok(None),
-    }
+    let Some(raw) = object(params).get(name) else {
+        return absent(name, required);
+    };
+    raw.as_str()
+        .filter(|text| text.len() <= MAX_TEXT)
+        .map(|text| Some(text.to_owned()))
+        .ok_or_else(|| format!("{name} must be a string"))
 }
+
 pub(crate) fn integer(params: &Value, name: &str, required: bool) -> Result<Option<i64>, String> {
-    match object(params).get(name) {
-        Some(Value::Number(value)) => value
-            .as_i64()
-            .map(Some)
-            .ok_or_else(|| format!("{name} must be an integer")),
-        Some(_) => Err(format!("{name} must be an integer")),
-        None if required => Err(format!("missing parameter: {name}")),
-        None => Ok(None),
-    }
+    let Some(raw) = object(params).get(name) else {
+        return absent(name, required);
+    };
+    raw.as_i64()
+        .map(Some)
+        .ok_or_else(|| format!("{name} must be an integer"))
 }
-/// JSON 布尔或数字 0/1（上游 b8828c1 的放宽）。其余输入（缺失、2、1.5、字符串……）
-/// 的错误文字保持旧版不变：`{name} must be boolean`。
+
+/// A JSON boolean, or the numbers 0 / 1. Everything else (missing, 2, 1.5, a
+/// string …) is rejected with `{name} must be boolean`.
 pub(crate) fn boolean(params: &Value, name: &str) -> Result<bool, String> {
-    match object(params).get(name) {
-        Some(Value::Bool(v)) => Ok(*v),
-        Some(Value::Number(n)) if n.as_u64() == Some(0) => Ok(false),
-        Some(Value::Number(n)) if n.as_u64() == Some(1) => Ok(true),
-        _ => Err(format!("{name} must be boolean")),
-    }
+    let flag = object(params).get(name).and_then(|raw| {
+        raw.as_bool().or(match raw.as_u64() {
+            Some(0) => Some(false),
+            Some(1) => Some(true),
+            _ => None,
+        })
+    });
+    flag.ok_or_else(|| format!("{name} must be boolean"))
 }
-fn mapped(params: &Value, specs: &[(&str, &str, bool, bool)]) -> Result<Value, String> {
-    let mut args = Map::new();
-    for (input, output, required, is_int) in specs {
-        if *is_int {
-            if let Some(value) = integer(params, input, *required)? {
-                args.insert((*output).into(), json!(value));
-            }
-        } else if let Some(value) = string(params, input, *required)? {
-            args.insert((*output).into(), json!(value));
+
+// ---- "rename and forward" actions -------------------------------------------
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Text,
+    Int,
+}
+
+/// One client member and the vendor argument it becomes.
+#[derive(Clone, Copy)]
+struct Field {
+    from: &'static str,
+    to: &'static str,
+    need: bool,
+    kind: Kind,
+}
+
+const fn text(from: &'static str, to: &'static str, need: bool) -> Field {
+    Field { from, to, need, kind: Kind::Text }
+}
+const fn int(from: &'static str, to: &'static str, need: bool) -> Field {
+    Field { from, to, need, kind: Kind::Int }
+}
+
+/// Builds the vendor argument object. Members are visited in table order, so
+/// the first unusable one decides the error message.
+fn translate(params: &Value, fields: &[Field]) -> Result<Map<String, Value>, String> {
+    let mut vendor = Map::new();
+    for field in fields {
+        let value = match field.kind {
+            Kind::Text => string(params, field.from, field.need)?.map(Value::from),
+            Kind::Int => integer(params, field.from, field.need)?.map(Value::from),
+        };
+        if let Some(value) = value {
+            vendor.insert(field.to.to_owned(), value);
         }
     }
-    Ok(Value::Object(args))
+    Ok(vendor)
 }
-async fn call(service: &str, method: &str, args: Value) -> Outcome {
-    write_outcome(crate::executor::call(service, method, &args).await)
+
+/// Translate, then make the call. `need_some`: an all-optional table where at
+/// least one member has to be present.
+async fn forward(
+    params: &Value,
+    object: &str,
+    method: &str,
+    fields: &[Field],
+    need_some: bool,
+) -> Outcome {
+    match translate(params, fields) {
+        Err(error) => Outcome::Invalid(error),
+        Ok(args) if need_some && args.is_empty() => Outcome::Invalid("no fields supplied".into()),
+        Ok(args) => call(object, method, Value::Object(args)).await,
+    }
+}
+
+/// An action that is nothing but [`forward`] with a fixed table.
+struct Forward {
+    action: &'static str,
+    object: &'static str,
+    method: &'static str,
+    fields: &'static [Field],
+    need_some: bool,
+}
+
+const NWINFO: &str = "zte_nwinfo_api";
+const APN_OBJECT: &str = "zwrt_apn_object";
+const APN_ID: &[Field] = &[text("profile_id", "profileId", true)];
+
+const FORWARDS: &[Forward] = &[
+    Forward {
+        action: "network.set_mode",
+        object: NWINFO,
+        method: "nwinfo_set_netselect",
+        fields: &[text("mode", "net_select", true)],
+        need_some: false,
+    },
+    Forward {
+        action: "cell.lock_lte",
+        object: NWINFO,
+        method: "nwinfo_lock_lte_cell",
+        fields: &[
+            text("pci", "lock_lte_pci", true),
+            text("earfcn", "lock_lte_earfcn", true),
+        ],
+        need_some: false,
+    },
+    Forward {
+        action: "cell.lock_nr",
+        object: NWINFO,
+        method: "nwinfo_lock_nr_cell",
+        fields: &[
+            text("pci", "lock_nr_pci", true),
+            text("arfcn", "lock_nr_earfcn", true),
+            text("band", "lock_nr_cell_band", true),
+        ],
+        need_some: false,
+    },
+    Forward {
+        action: "lan.set",
+        object: "zwrt_router.api",
+        method: "router_set_lan_para",
+        fields: &[
+            text("ip", "ipaddr", false),
+            text("netmask", "netmask", false),
+            int("dhcp_disabled", "ignore", false),
+            text("dhcp_start", "zte_start", false),
+            text("dhcp_end", "zte_end", false),
+            text("lease_seconds", "leasetime", false),
+        ],
+        need_some: true,
+    },
+    Forward {
+        action: "usb.set",
+        object: "zwrt_bsp.usb",
+        method: "set",
+        fields: &[
+            text("mode", "mode", false),
+            text("port_switch", "usb_port_switch", false),
+            text("network_protocol", "usb_network_protocal", false),
+        ],
+        need_some: true,
+    },
+    Forward {
+        action: "apn.set_mode",
+        object: APN_OBJECT,
+        method: "set_apn_mode",
+        fields: &[int("mode", "apn_mode", true)],
+        need_some: false,
+    },
+    Forward {
+        action: "apn.enable",
+        object: APN_OBJECT,
+        method: "enable_manu_apn_id",
+        fields: APN_ID,
+        need_some: false,
+    },
+    Forward {
+        action: "sms.delete",
+        object: "zwrt_wms",
+        method: "zwrt_wms_delete_sms",
+        fields: &[text("ids", "id", true)],
+        need_some: false,
+    },
+    Forward {
+        action: "sms.mark_read",
+        object: "zwrt_wms",
+        method: "zwrt_wms_modify_tag",
+        fields: &[text("ids", "id", true), int("tag", "tag", false)],
+        need_some: false,
+    },
+];
+
+/// Actions that take no client input: (action, object, method, send the
+/// `moduleName:"web"` tag instead of an empty object).
+const FIXED: &[(&str, &str, &str, bool)] = &[
+    ("device.reboot", "zwrt_mc.device.manager", "device_reboot", true),
+    ("device.poweroff", "zwrt_mc.device.manager", "device_poweroff", true),
+    // D17 scan step; the vendor may only answer once the scan is over.
+    ("netselect.scan", NWINFO, "nwinfo_manual_scan", false),
+    ("wifi.reload", "zwrt_wlan", "reload", false),
+];
+
+async fn call(object: &str, method: &str, args: Value) -> Outcome {
+    write_outcome(crate::executor::call(object, method, &args).await)
 }
 
 /// 原厂有的写成功时什么都不回（`nwinfo_set_netselect`、`zwrt_wlan reload`，E4 T12 真机 B31），
 /// 这不算失败：结果靠之后的读回（事务）或调用方自己回读。
 fn write_outcome(reply: Result<Value, crate::ubus::client::UbusError>) -> Outcome {
+    use crate::ubus::client::UbusError;
     match write_reply(reply) {
         Ok(value) => Outcome::Ok(value),
-        Err(crate::ubus::client::UbusError::CapabilityDenied(e)) => Outcome::CapabilityDenied(e),
-        Err(error) => Outcome::Failed(error.to_string()),
+        Err(UbusError::CapabilityDenied(denial)) => Outcome::CapabilityDenied(denial),
+        Err(other) => Outcome::Failed(other.to_string()),
     }
 }
 
@@ -158,256 +337,100 @@ fn write_outcome(reply: Result<Value, crate::ubus::client::UbusError>) -> Outcom
 pub(crate) fn write_reply(
     reply: Result<Value, crate::ubus::client::UbusError>,
 ) -> Result<Value, crate::ubus::client::UbusError> {
-    match reply {
-        Err(crate::ubus::client::UbusError::NoData { .. }) => Ok(json!({})),
-        other => other,
+    if let Err(crate::ubus::client::UbusError::NoData { .. }) = reply {
+        return Ok(json!({}));
     }
+    reply
 }
-async fn mapped_call(
-    params: &Value,
-    service: &str,
-    method: &str,
-    specs: &[(&str, &str, bool, bool)],
-    require_any: bool,
-) -> Outcome {
-    match mapped(params, specs) {
-        Ok(Value::Object(args)) if require_any && args.is_empty() => {
-            Outcome::Invalid("no fields supplied".into())
-        }
-        Ok(args) => call(service, method, args).await,
-        Err(error) => Outcome::Invalid(error),
+
+/// The SMS module reports `(client_fault, message)`.
+fn sms_outcome(result: Result<Value, (bool, String)>) -> Outcome {
+    match result {
+        Ok(value) => Outcome::Ok(value),
+        Err((true, message)) => Outcome::Invalid(message),
+        Err((false, message)) => Outcome::Failed(message),
     }
 }
 
 pub async fn execute(action: &str, params: &Value) -> Outcome {
+    if let Some(entry) = FORWARDS.iter().find(|entry| entry.action == action) {
+        return forward(params, entry.object, entry.method, entry.fields, entry.need_some).await;
+    }
+    if let Some(&(_, object, method, tagged)) = FIXED.iter().find(|entry| entry.0 == action) {
+        let args = if tagged { json!({"moduleName": "web"}) } else { json!({}) };
+        return call(object, method, args).await;
+    }
     match action {
-        "device.reboot" => {
-            call(
-                "zwrt_mc.device.manager",
-                "device_reboot",
-                json!({"moduleName":"web"}),
-            )
-            .await
-        }
-        "device.poweroff" => {
-            call(
-                "zwrt_mc.device.manager",
-                "device_poweroff",
-                json!({"moduleName":"web"}),
-            )
-            .await
-        }
         "cellular.set" => cellular_set(params).await,
-        "network.set_mode" => {
-            mapped_call(
-                params,
-                "zte_nwinfo_api",
-                "nwinfo_set_netselect",
-                &[("mode", "net_select", true, false)],
-                false,
-            )
-            .await
-        }
         "band.set_lte" => band(params, true, false).await,
         "band.set_nr_sa" => band(params, false, false).await,
         "band.set_nr_nsa" => band(params, false, true).await,
         "band.set_nr" => band_steps(params, &["sa", "nsa"]).await,
-        "cell.lock_lte" => {
-            mapped_call(
-                params,
-                "zte_nwinfo_api",
-                "nwinfo_lock_lte_cell",
-                &[
-                    ("pci", "lock_lte_pci", true, false),
-                    ("earfcn", "lock_lte_earfcn", true, false),
-                ],
-                false,
-            )
-            .await
+        // With the three groups given, band.reset undoes a "restore defaults" by
+        // writing them back (cell locks untouched); bare, it is the vendor's own
+        // reset of every band and cell lock (the touch screen's reset button).
+        "band.reset" if params.as_object().is_some_and(|m| !m.is_empty()) => {
+            band_steps(params, &["lte", "sa", "nsa"]).await
         }
-        "cell.lock_nr" => {
-            mapped_call(
-                params,
-                "zte_nwinfo_api",
-                "nwinfo_lock_nr_cell",
-                &[
-                    ("pci", "lock_nr_pci", true, false),
-                    ("arfcn", "lock_nr_earfcn", true, false),
-                    ("band", "lock_nr_cell_band", true, false),
-                ],
-                false,
-            )
-            .await
-        }
-        // D17：搜网会话里的步骤（会话规则在 ops::engine::session_gate）。
-        // 原厂的搜网调用可能等到搜完才回：agent 本来就只给 3 秒，超时也照样看状态。
-        "netselect.scan" => call("zte_nwinfo_api", "nwinfo_manual_scan", json!({})).await,
+        "band.reset" => call(NWINFO, "nwinfo_reset_band_cell_setting", json!({})).await,
         "netselect.register" => netselect_register(params).await,
-        // 回自动选网：原厂没有能用的 ubus 调用（9-26 读过原厂搜网协议），只能 AT+COPS=0
+        // No usable ubus call returns to automatic selection, only AT+COPS=0.
         "netselect.auto" => at_outcome(crate::at::send(crate::at::Cmd::CopsAuto).await),
         "cellular.redial" => redial(params).await,
         // The shared AT boundary blocks this known-bad recovery before opening a port.
         "modem.online" => at_outcome(crate::at::send(crate::at::Cmd::CfunOnline).await),
         "apn.set_pdp_type" => apn_pdp_type(params).await,
         "wifi.apply" => wifi_apply(params).await,
-        "wifi.reload" => call("zwrt_wlan", "reload", json!({})).await,
         "vendor.call" => vendor_call(params).await,
         "dns.doh" => dns_doh(params).await,
         "sms.db_delete" => sms_db_delete(params).await,
         "wifi.power_save" => wifi_power_save(params).await,
-        // 带三组频段的 band.reset 是撤销「恢复默认」：把三组写回去（小区锁不动）。
-        "band.reset" if params.as_object().is_some_and(|m| !m.is_empty()) => {
-            band_steps(params, &["lte", "sa", "nsa"]).await
-        }
-        // 原厂「恢复默认频段/小区」：解开全部锁频和锁小区（触屏锁频页的重置按钮）。
-        "band.reset" => {
-            call(
-                "zte_nwinfo_api",
-                "nwinfo_reset_band_cell_setting",
-                json!({}),
-            )
-            .await
-        }
         "wifi.set_module" => wifi_module(params).await,
-        "lan.set" => {
-            mapped_call(
-                params,
-                "zwrt_router.api",
-                "router_set_lan_para",
-                &[
-                    ("ip", "ipaddr", false, false),
-                    ("netmask", "netmask", false, false),
-                    ("dhcp_disabled", "ignore", false, true),
-                    ("dhcp_start", "zte_start", false, false),
-                    ("dhcp_end", "zte_end", false, false),
-                    ("lease_seconds", "leasetime", false, false),
-                ],
-                true,
-            )
-            .await
-        }
         "power.direct_supply.set" => direct_supply(params).await,
-        "usb.set" => {
-            mapped_call(
-                params,
-                "zwrt_bsp.usb",
-                "set",
-                &[
-                    ("mode", "mode", false, false),
-                    ("port_switch", "usb_port_switch", false, false),
-                    ("network_protocol", "usb_network_protocal", false, false),
-                ],
-                true,
-            )
-            .await
-        }
         "usb.attach_mode" => usb_attach_mode(params).await,
         "nfc.set" => nfc(params).await,
-        "apn.set_mode" => {
-            mapped_call(
-                params,
-                "zwrt_apn_object",
-                "set_apn_mode",
-                &[("mode", "apn_mode", true, true)],
-                false,
-            )
-            .await
-        }
         "apn.add" => apn(params, "add_manu_apn", false).await,
         "apn.modify" => match apn_keep_password(params).await {
-            Ok(p) => apn(&p, "modify_manu_apn", true).await,
-            Err(e) => Outcome::Failed(e),
+            Ok(with_password) => apn(&with_password, "modify_manu_apn", true).await,
+            Err(error) => Outcome::Failed(error),
         },
         "apn.delete" => {
-            // 正在用的那条不能删（删了连接就没了，也没法撤销）
+            // Deleting the profile in use would drop the connection with no way back.
             if let Ok(Some(id)) = string(params, "profile_id", true)
                 && apn_in_use(&id).await
             {
                 return Outcome::Invalid("cannot delete the APN profile in use".into());
             }
-            mapped_call(
-                params,
-                "zwrt_apn_object",
-                "delete_manu_apn",
-                &[("profile_id", "profileId", true, false)],
-                false,
-            )
-            .await
+            forward(params, APN_OBJECT, "delete_manu_apn", APN_ID, false).await
         }
-        "apn.enable" => {
-            mapped_call(
-                params,
-                "zwrt_apn_object",
-                "enable_manu_apn_id",
-                &[("profile_id", "profileId", true, false)],
-                false,
-            )
-            .await
-        }
-        "sms.delete" => {
-            mapped_call(
-                params,
-                "zwrt_wms",
-                "zwrt_wms_delete_sms",
-                &[("ids", "id", true, false)],
-                false,
-            )
-            .await
-        }
-        "sms.mark_read" => {
-            mapped_call(
-                params,
-                "zwrt_wms",
-                "zwrt_wms_modify_tag",
-                &[("ids", "id", true, false), ("tag", "tag", false, true)],
-                false,
-            )
-            .await
-        }
-        "sms.send_raw" => match crate::sms::send(params).await {
-            Ok(value) => Outcome::Ok(value),
-            Err((true, error)) => Outcome::Invalid(error),
-            Err((false, error)) => Outcome::Failed(error),
-        },
-        "sms.list_after" => match crate::sms::list_after(params).await {
-            Ok(value) => Outcome::Ok(value),
-            Err((true, error)) => Outcome::Invalid(error),
-            Err((false, error)) => Outcome::Failed(error),
-        },
+        "sms.send_raw" => sms_outcome(crate::sms::send(params).await),
+        "sms.list_after" => sms_outcome(crate::sms::list_after(params).await),
         _ => Outcome::NotHandled,
     }
 }
 
+const CELLULAR_FIELDS: &[Field] = &[
+    int("enabled", "enable", false),
+    int("roaming", "roam_enable", false),
+    text("connect_mode", "connect_mode", false),
+];
+
+/// Read the WWAN profile, overlay the requested members, write it back.
 async fn cellular_set(params: &Value) -> Outcome {
-    let overrides = match mapped(
-        params,
-        &[
-            ("enabled", "enable", false, true),
-            ("roaming", "roam_enable", false, true),
-            ("connect_mode", "connect_mode", false, false),
-        ],
-    ) {
-        Ok(Value::Object(v)) if !v.is_empty() => v,
-        Ok(_) => return Outcome::Invalid("no cellular fields supplied".into()),
-        Err(e) => return Outcome::Invalid(e),
+    let changes = match translate(params, CELLULAR_FIELDS) {
+        Err(error) => return Outcome::Invalid(error),
+        Ok(changes) if changes.is_empty() => {
+            return Outcome::Invalid("no cellular fields supplied".into());
+        }
+        Ok(changes) => changes,
     };
-    let current = match state::ubus(
-        "zwrt_data",
-        "get_wwaniface",
-        json!({"source_module":"web","cid":1,"connect_status":""}),
-    )
-    .await
-    {
-        Ok(Value::Object(v)) => v,
+    let query = json!({"source_module": "web", "cid": 1, "connect_status": ""});
+    let current = match state::ubus("zwrt_data", "get_wwaniface", query).await {
+        Err(error) => return Outcome::Failed(error),
+        Ok(Value::Object(profile)) => profile,
         Ok(_) => return Outcome::Failed("invalid get_wwaniface response".into()),
-        Err(e) => return Outcome::Failed(e),
     };
-    call(
-        "zwrt_data",
-        "set_wwaniface",
-        cellular_args(current, overrides),
-    )
-    .await
+    call("zwrt_data", "set_wwaniface", cellular_args(current, changes)).await
 }
 
 /// 读回的整份 + 要改的。读回的 `enable` 不带回去：它是最近一次写进去的值，开机后默认 0，
@@ -514,153 +537,165 @@ async fn apn_pdp_type(params: &Value) -> Outcome {
     Outcome::Ok(json!({"ipv6_enabled": enabled, "pdp_type": pdp}))
 }
 
+/// Band lists are comma-separated decimal numbers; empty means "no lock".
+fn bands_ok(list: &str) -> bool {
+    list.bytes().all(|c| matches!(c, b'0'..=b'9' | b','))
+}
+
 async fn band(params: &Value, lte: bool, nsa: bool) -> Outcome {
-    let bands = match string(params, "bands", false) {
-        Ok(v) => v.unwrap_or_default(),
-        Err(e) => return Outcome::Invalid(e),
+    let list = match string(params, "bands", false) {
+        Err(error) => return Outcome::Invalid(error),
+        Ok(list) => list.unwrap_or_default(),
     };
-    if !bands.bytes().all(|b| b.is_ascii_digit() || b == b',') {
+    if !bands_ok(&list) {
         return Outcome::Invalid("bands must contain only numbers and commas".into());
     }
-    if lte {
-        call(
-            "zte_nwinfo_api",
-            "nwinfo_set_lte_ext_band",
-            json!({"lte_band":bands}),
-        )
-        .await
-    } else {
-        call(
-            "zte_nwinfo_api",
-            "nwinfo_set_nrbandlock",
-            json!({"nr5g_type":if nsa{"1"}else{"0"},"nr5g_band":bands}),
-        )
-        .await
-    }
+    let group = match (lte, nsa) {
+        (true, _) => "lte",
+        (false, true) => "nsa",
+        (false, false) => "sa",
+    };
+    let (object, method, args) = band_call(group, &list);
+    call(object, method, args).await
 }
+
 /// 一个 ubus 写一组频段：`lte` 走 LTE 扩展频段，`sa`/`nsa` 走 5G 锁频（原厂 nr5g_type 0/1）。
 pub(crate) fn band_call(key: &str, bands: &str) -> (&'static str, &'static str, Value) {
-    match key {
-        "lte" => (
-            "zte_nwinfo_api",
-            "nwinfo_set_lte_ext_band",
-            json!({"lte_band": bands}),
-        ),
-        _ => (
-            "zte_nwinfo_api",
-            "nwinfo_set_nrbandlock",
-            json!({"nr5g_type": if key == "nsa" {"1"} else {"0"}, "nr5g_band": bands}),
-        ),
+    if key == "lte" {
+        return (NWINFO, "nwinfo_set_lte_ext_band", json!({"lte_band": bands}));
     }
+    let nr_type = if key == "nsa" { "1" } else { "0" };
+    (
+        NWINFO,
+        "nwinfo_set_nrbandlock",
+        json!({"nr5g_type": nr_type, "nr5g_band": bands}),
+    )
 }
 
 /// 几组频段依次写（`band.set_nr`、撤销恢复默认）：参数先全部校验，第一步失败就停。
 async fn band_steps(params: &Value, keys: &[&str]) -> Outcome {
-    let mut steps = Vec::new();
-    for k in keys {
-        match string(params, k, true) {
-            Ok(Some(v)) if !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit() || b == b',') => {
-                steps.push(band_call(k, &v));
+    let mut plan = Vec::with_capacity(keys.len());
+    for &key in keys {
+        match string(params, key, true) {
+            Err(error) => return Outcome::Invalid(error),
+            Ok(Some(list)) if !list.is_empty() && bands_ok(&list) => plan.push(band_call(key, &list)),
+            Ok(_) => {
+                return Outcome::Invalid(format!("{key} must contain only numbers and commas"));
             }
-            Ok(_) => return Outcome::Invalid(format!("{k} must contain only numbers and commas")),
-            Err(e) => return Outcome::Invalid(e),
         }
     }
-    let mut last = Outcome::Ok(Value::Null);
-    for (object, method, args) in steps {
-        last = call(object, method, args).await;
-        if !matches!(last, Outcome::Ok(_)) {
+    let mut result = Outcome::Ok(Value::Null);
+    for (object, method, args) in plan {
+        result = call(object, method, args).await;
+        if !matches!(result, Outcome::Ok(_)) {
             break;
         }
     }
-    last
+    result
 }
-/// `power.direct_supply.set` 的 `enabled`：JSON 布尔、0/1，以及旧 C 版也认的
-/// 字符串 "0"/"1"/"true"/"false"（C 版 `required_bool_param`）。其余输入的错误文字不变。
+
+/// `power.direct_supply.set` 的 `enabled`：JSON 布尔、0/1，以及字符串
+/// "0"/"1"/"true"/"false"。其余输入的错误文字和 [`boolean`] 一样。
 pub(crate) fn direct_supply_enabled(params: &Value) -> Result<bool, String> {
-    match object(params).get("enabled") {
-        Some(Value::String(v)) if v == "1" || v == "true" => Ok(true),
-        Some(Value::String(v)) if v == "0" || v == "false" => Ok(false),
-        _ => boolean(params, "enabled"),
-    }
-}
-/// 写入回复是否算失败（C 版逻辑）：没有数据（空或全空白，B20 成功时就这样）不算失败，
-/// 靠后面的回读确认；有数据时必须是对象、没有 `error`、`result`（缺省 0）为 0。
-fn direct_supply_write_failed(reply: &Result<Value, crate::ubus::client::UbusError>) -> bool {
-    match reply {
-        Err(crate::ubus::client::UbusError::NoData { .. }) => false,
-        Err(_) => true,
-        Ok(Value::Object(body)) => {
-            let result = body.get("result").map_or(0, |v| {
-                v.as_i64()
-                    .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
-                    .unwrap_or(0)
-            });
-            body.contains_key("error") || result != 0
+    if let Some(Value::String(word)) = object(params).get("enabled") {
+        match word.as_str() {
+            "1" | "true" => return Ok(true),
+            "0" | "false" => return Ok(false),
+            _ => {}
         }
-        Ok(_) => true,
     }
+    boolean(params, "enabled")
 }
-async fn direct_supply(params: &Value) -> Outcome {
-    let wanted = match direct_supply_enabled(params) {
-        Ok(v) => v,
-        Err(e) => return Outcome::Invalid(e),
+
+/// 写入回复是否算失败：没有数据（B20 成功时就这样）不算，靠后面的回读确认；
+/// 有数据时必须是对象、没有 `error`，`result`（缺省或读不懂按 0）为 0。
+fn direct_supply_write_failed(reply: &Result<Value, crate::ubus::client::UbusError>) -> bool {
+    let body = match reply {
+        Err(crate::ubus::client::UbusError::NoData { .. }) => return false,
+        Ok(Value::Object(body)) => body,
+        _ => return true,
     };
-    let before = match state::ubus("zwrt_bsp.charger", "list", json!({})).await {
-        Ok(v) => v,
-        Err(e) => return Outcome::Failed(e),
-    };
-    let mode = before
+    if body.contains_key("error") {
+        return true;
+    }
+    let code = body
+        .get("result")
+        .and_then(|r| r.as_i64().or_else(|| r.as_str()?.trim().parse().ok()))
+        .unwrap_or(0);
+    code != 0
+}
+
+const CHARGER: &str = "zwrt_bsp.charger";
+
+fn supply_word(on: bool) -> &'static str {
+    if on { "enable" } else { "disable" }
+}
+
+/// The charger's current `direct_power_supply_mode` word, if it reports one.
+async fn charger_mode() -> Result<Option<String>, String> {
+    let listing = state::ubus(CHARGER, "list", json!({})).await?;
+    Ok(listing
         .get("direct_power_supply_mode")
-        .and_then(Value::as_str);
-    let Some(mode @ ("enable" | "disable")) = mode else {
-        return Outcome::Failed("direct supply is not supported or state is unknown".into());
+        .and_then(Value::as_str)
+        .map(str::to_owned))
+}
+
+/// Switch direct supply (power straight from the charger, battery bypassed),
+/// then wait for the charger to report the new mode. Already right: no write.
+async fn direct_supply(params: &Value) -> Outcome {
+    let want = match direct_supply_enabled(params) {
+        Ok(want) => want,
+        Err(error) => return Outcome::Invalid(error),
     };
-    let changed = (mode == "enable") != wanted;
+    let mode = charger_mode().await;
+    let is_on = match mode.as_ref().map(Option::as_deref) {
+        Err(error) => return Outcome::Failed(error.clone()),
+        Ok(Some("enable")) => true,
+        Ok(Some("disable")) => false,
+        Ok(_) => {
+            return Outcome::Failed("direct supply is not supported or state is unknown".into());
+        }
+    };
+    let changed = is_on != want;
     if changed {
+        let target = supply_word(want);
         let reply = crate::executor::call(
-            "zwrt_bsp.charger",
+            CHARGER,
             "set",
-            &json!({"direct_power_supply_mode":if wanted{"enable"}else{"disable"}}),
+            &json!({"direct_power_supply_mode": target}),
         )
         .await;
         if direct_supply_write_failed(&reply) {
-            return Outcome::Failed(match reply {
-                Err(e) => e.to_string(),
+            let why = match reply {
+                Err(error) => error.to_string(),
                 Ok(_) => "direct supply write failed".into(),
-            });
+            };
+            return Outcome::Failed(why);
         }
-        let expected = if wanted { "enable" } else { "disable" };
-        let mut verified = false;
-        for attempt in 0..5 {
-            if attempt != 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // The charger applies the switch a moment later: five looks, 100 ms apart.
+        let mut confirmed = false;
+        for look in 0..5 {
+            if look > 0 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
-            if state::ubus("zwrt_bsp.charger", "list", json!({}))
-                .await
-                .ok()
-                .and_then(|value| {
-                    value
-                        .get("direct_power_supply_mode")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-                .as_deref()
-                == Some(expected)
-            {
-                verified = true;
+            if charger_mode().await.ok().flatten().as_deref() == Some(target) {
+                confirmed = true;
                 break;
             }
         }
-        if !verified {
+        if !confirmed {
             return Outcome::Failed(
                 "direct supply readback did not confirm the requested mode".into(),
             );
         }
     }
-    Outcome::Ok(
-        json!({"supported":true,"enabled":wanted,"mode":if wanted{"enable"}else{"disable"},"changed":changed,"verified":true}),
-    )
+    Outcome::Ok(json!({
+        "supported": true,
+        "enabled": want,
+        "mode": supply_word(want),
+        "changed": changed,
+        "verified": true,
+    }))
 }
 /// 原厂屏幕（`zte_topsw_devui`）调这两个写时带的 `source_module`，照抄。
 const USB_SOURCE_MODULE: &str = "zte_topsw_devui";
@@ -779,24 +814,21 @@ async fn usb_attach_mode(params: &Value) -> Outcome {
         }
     }
 }
+const NFC_FIELDS: &[Field] = &[int("enabled", "switch", true), int("flag", "flag", false)];
+
+/// NFC tap-to-join: store the setting, then ask the NFC service to pick it up.
 async fn nfc(params: &Value) -> Outcome {
-    let args = match mapped(
-        params,
-        &[
-            ("enabled", "switch", true, true),
-            ("flag", "flag", false, true),
-        ],
-    ) {
-        Ok(v) => v,
-        Err(e) => return Outcome::Invalid(e),
+    let args = match translate(params, NFC_FIELDS) {
+        Ok(args) => Value::Object(args),
+        Err(error) => return Outcome::Invalid(error),
     };
-    match state::ubus("zwrt_nfc", "zwrt_nfc_wifi_set", args).await {
-        Ok(value) => {
-            let _ = state::ubus("zwrt_nfc", "zwrt_nfc_wifi_change", json!({})).await;
-            Outcome::Ok(value)
-        }
-        Err(e) => Outcome::Failed(e),
-    }
+    let reply = match state::ubus("zwrt_nfc", "zwrt_nfc_wifi_set", args).await {
+        Ok(reply) => reply,
+        Err(error) => return Outcome::Failed(error),
+    };
+    // The setting is already stored; a failed refresh is not worth reporting.
+    let _ = state::ubus("zwrt_nfc", "zwrt_nfc_wifi_change", json!({})).await;
+    Outcome::Ok(reply)
 }
 /// 手动模式下启用着的那条手动 profile 就是正在用的。读不到时当作在用（宁可不删）。
 async fn apn_in_use(id: &str) -> bool {
@@ -834,24 +866,22 @@ async fn apn_keep_password(params: &Value) -> Result<Value, String> {
     Ok(p)
 }
 
+/// Manual APN profile members; `profile_id` is needed for modify, not for add.
+const fn apn_fields(id_needed: bool) -> [Field; 8] {
+    [
+        text("profile_id", "profileId", id_needed),
+        text("name", "profilename", true),
+        text("apn", "wanapn", true),
+        text("username", "username", false),
+        text("password", "password", false),
+        int("auth_mode", "pppAuthMode", false),
+        int("pdp_type", "pdpType", false),
+        int("roaming_pdp_type", "roamingPdpType", false),
+    ]
+}
+
 async fn apn(params: &Value, method: &str, profile_required: bool) -> Outcome {
-    mapped_call(
-        params,
-        "zwrt_apn_object",
-        method,
-        &[
-            ("profile_id", "profileId", profile_required, false),
-            ("name", "profilename", true, false),
-            ("apn", "wanapn", true, false),
-            ("username", "username", false, false),
-            ("password", "password", false, false),
-            ("auth_mode", "pppAuthMode", false, true),
-            ("pdp_type", "pdpType", false, true),
-            ("roaming_pdp_type", "roamingPdpType", false, true),
-        ],
-        false,
-    )
-    .await
+    forward(params, APN_OBJECT, method, &apn_fields(profile_required), false).await
 }
 
 /// `zwrt_wlan set` arguments for the Wi-Fi master switch, as the stock web UI
@@ -1510,7 +1540,9 @@ mod tests {
     #[test]
     fn band_validation() {
         for bad in ["1 3", "n78", "1;reboot"] {
-            assert!(!bad.bytes().all(|b| b.is_ascii_digit() || b == b','));
+            assert!(!bands_ok(bad));
         }
+        assert!(bands_ok("1,3,78"));
+        assert!(bands_ok(""));
     }
 }

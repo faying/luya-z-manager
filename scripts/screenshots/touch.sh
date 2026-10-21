@@ -2,15 +2,14 @@
 # Touch UI screenshots on made-up data (docs/images/touch-*.png; README.md here).
 #
 #   LUYAZ_DEVICE_FONTS=<dir with ZTEZhengYuan.ttf, Roboto.ttf> LUYAZ_NUNITO_DIR=<dir with Nunito-*.ttf> \
-#   [MODELS=<model dir>] scripts/screenshots/touch.sh [OUT_DIR]     (default OUT_DIR: scripts/screenshots/out/touch)
+#   MODELS=<model dir> scripts/screenshots/touch.sh [OUT_DIR]     (default OUT_DIR: scripts/screenshots/out/touch)
 #
 # Renders the Rust UI off-screen (luyaz-ui --render, touch-ui/rs/devui/src/render/mod.rs) on the
-# view models of the old C render test. Without MODELS they are made first from tag
-# legacy-c-touch-ui (scripts/test/render/render.sh --model, English scenes only; a few hundred MB,
-# kept in $MODELS_CACHE, default ~/.cache/luyaz-shots/models). Needs Docker and
+# view models in MODELS (`index-<scene>.txt` per scene). The old ones came from the C render
+# test and are no longer used; new ones are to be generated from the Rust UI. Needs Docker and
 # `touch-ui/rs/build.sh native` (volume u60-devui-rs-target). The device fonts are not in the
 # repo (ZTEZhengYuan is proprietary): copy them from /usr/ui/fonts on a U60 Pro.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
@@ -29,24 +28,11 @@ touch-system good-light-en system 0
 touch-system-charts good-light-en system 1
 touch-alerts good-light-en alerts 0
 touch-bandlock bandlock-light-en lock 0'
-scenes=$(printf '%s\n' "$shots" | awk '{print $2}' | sed -E 's/-(light|dark)-en$//' | sort -u)
 
-models=${MODELS:-${MODELS_CACHE:-$HOME/.cache/luyaz-shots/models}}
-need=
-for s in $(printf '%s\n' "$shots" | awk '{print $2}' | sort -u); do [ -f "$models/index-$s.txt" ] || need=1; done
-if [ -n "$need" ]; then
-    echo "== view models from tag legacy-c-touch-ui → $models"
-    wt=$(mktemp -d)/c
-    git -C "$root" worktree add -q --detach "$wt" legacy-c-touch-ui
-    trap 'git -C "$root" worktree remove --force "$wt"' EXIT
-    mkdir -p "$models"
-    (cd "$wt/touch-ui" && scripts/test/render/build.sh &&
-        U60_DEVICE_FONTS=$LUYAZ_DEVICE_FONTS U60_NUNITO_DIR=$LUYAZ_NUNITO_DIR \
-        scripts/test/render/render.sh --model "$models" --lang en $scenes) || true
-    for s in $(printf '%s\n' "$shots" | awk '{print $2}' | sort -u); do
-        [ -f "$models/index-$s.txt" ] || { echo "no model for $s in $models" >&2; exit 1; }
-    done
-fi
+models=${MODELS:?dir with the view models (index-<scene>.txt)}
+for s in $(printf '%s\n' "$shots" | awk '{print $2}' | sort -u); do
+    [ -f "$models/index-$s.txt" ] || { echo "no model for $s in $models" >&2; exit 1; }
+done
 
 echo "== render → $out"
 raw=$(mktemp -d)

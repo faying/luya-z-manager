@@ -1,6 +1,6 @@
 //! tests/http_test.c: response parsing, and round trips against local servers (timeout,
 //! refused, truncation, unix socket, 401 → log in again).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::*;
 use crate::data::core_api::CoreApi;

@@ -7,7 +7,7 @@
  * fixtures feed them through net_view_parse(), the path the device uses.
  * 2026-10-01 按 data-service screen.rs 加了 state 和 *_en（L2）。
  *
- * SPDX-License-Identifier: MIT
+ * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 #ifndef RT_VIEWS_H
 #define RT_VIEWS_H

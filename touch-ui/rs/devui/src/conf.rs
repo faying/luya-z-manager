@@ -1,6 +1,6 @@
 //! devui.conf (src/ui.c load_devui_conf/save_devui_conf): speed_bits, autooff, bright,
 //! appearance*, lang, usb_attach. Saving writes exactly these keys.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use crate::clock;
 use crate::lang;

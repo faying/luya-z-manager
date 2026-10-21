@@ -15,7 +15,7 @@
 //! （`uci set` 之后还没 `commit`），这时只有 `uci show` 知道合并后的值，退回子进程。
 //! 设备上 `/tmp/.uci` 里有很多 0 字节文件（commit 之后留下的），0 字节 = 没有未保存改动，照样自己解析。
 //! 配置文件不存在也退回 `uci show`（结果由 uci 决定，和原来完全一样）。
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use std::path::Path;
 

@@ -2,7 +2,7 @@
 //! the selection and its guard, the operator scan, neighbours, scenes, Wi-Fi clients, APNs),
 //! read as much as the page on screen needs; and the actions, which only start something (the
 //! agent does the slow part; the next read shows how it went).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::core_api::CoreApi;
 use super::util::{bytes_cap, jstr, mono_ms, obj_end, trunc, wall};

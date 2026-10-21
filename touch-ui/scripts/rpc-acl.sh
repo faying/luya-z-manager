@@ -24,7 +24,7 @@
 # rpcd reloaded, and the result asked of rpcd with `session access` — never by
 # calling the methods. If rpcd does not agree, it is unmounted again.
 # doctor's rpc-acl row reads the same `session access` answers.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 DIR=${RPCACL_DIR:-/data/luyaz/rpc-acl}

@@ -1,6 +1,6 @@
 //! Wi-Fi (src/ui_parts/wifi.c): the hotspot, its switches, the connected devices and DHCP.
 //! The list and the values are drawn by refresh_wifi (cellular.rs, as in C).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::cellular::{nz, toggle_row, WIFI_CLI_H, WIFI_MAX_CLI};
 use super::network::NH_WIFI;
@@ -131,7 +131,7 @@ impl Ui {
             w.cli_name[i] = kit::label_w(r, f.cj14, th.t1, PAD, 8, 160, false, "");
             w.cli_mac[i] = kit::label_w(r, f.cj12, th.t3, PAD, 29, CARD_W - 2 * PAD, false, "");
             w.cli_ip[i] = kit::label_r(r, f.n15, th.t1, CARD_W - PAD, 7, "");
-            w.cli_tot[i] = kit::label(r, f.cj12, th.t3, PAD, 47, "");
+            w.cli_tot[i] = kit::label_w(r, f.cj12, th.t3, PAD, 47, CARD_W - 2 * PAD, false, "");
             kit::show(r, false);
             w.cli[i] = r;
         }

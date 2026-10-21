@@ -1,8 +1,7 @@
-//! tests/data_test.c: noticing that core went away after having answered (a fake core
-//! answers /v2/state and /v2/events, then goes silent with the stream open, then a fresh one
-//! comes back); retries paced, across the 32-bit ms wrap; the /v2 blocks put back together read
-//! exactly like the old /state; and /control parked until core answers.
-// SPDX-License-Identifier: MIT
+//! Against a fake core: noticing that core went away after having answered (it answers
+//! /v2/state and /v2/events, goes silent with the stream open, then a fresh one comes back);
+//! retries paced, across the 32-bit ms wrap; the /v2 blocks put back together read exactly like
+//! the old /state; /control parked until core answers; one full snapshot pinned field by field.
 
 use super::*;
 use std::io::{Read, Write};
@@ -182,11 +181,11 @@ fn v2_matches_legacy() {
         blk("powerbank", r#"{"state":0}"#),
     );
     let want = parse_snapshot(legacy.as_bytes()).unwrap();
-    assert!(want.sms_n == 2 && want.bat_percent == 77 && want.clients_total == 2);
+    assert!(want.inbox_n == 2 && want.batt_pct == 77 && want.lan_total == 2);
     assert!(want.usb_cc == 1 && want.powerbank == 0 && want.usb_power_role == "source" && want.usb_data_role == "host");
-    assert_eq!(want.sms[0].text, "测试 \"q\"");
-    assert_eq!(want.operator_name, "中国移动");
-    assert_eq!(want.ambr_dl, 1000.5);
+    assert_eq!(want.inbox[0].text, "测试 \"q\"");
+    assert_eq!(want.carrier, "中国移动");
+    assert_eq!(want.ambr_down, 1000.5);
     assert!(want.qos_bearer == "nr_pdu" && want.qos_stale == 1);
     assert!(want.dps_mode == 0 && want.cell_data == 1 && want.cell_roam == 0);
 
@@ -194,7 +193,7 @@ fn v2_matches_legacy() {
     // the snapshot event: every field the screen reads, byte for byte
     assert_eq!(feed(&mut d, "snapshot", &snap), 1);
     assert!(d.have_seq && d.seq == 41 && d.epoch == "e7");
-    assert_eq!(parse_snapshot(&d.live_json).unwrap(), want);
+    assert_eq!(parse_snapshot(&d.latest_raw).unwrap(), want);
     // GET /v2/state carries the same: same result, the stream position untouched
     assert_eq!(d.v2_apply_snapshot(snap.as_bytes(), false), 0);
     assert_eq!(d.seq, 41);
@@ -204,7 +203,7 @@ fn v2_matches_legacy() {
         feed(&mut d, "block", r#"{"epoch":"e7","seq":42,"name":"battery","revision":2,"observed_at":2,"stale":false,"data":{"percent":76}}"#),
         1
     );
-    assert!(d.live_data.bat_percent == 76 && d.live_data.sms_n == 2);
+    assert!(d.fresh_snap.batt_pct == 76 && d.fresh_snap.inbox_n == 2);
     assert_eq!(feed(&mut d, "heartbeat", r#"{"epoch":"e7","seq":43,"blocks":{},"exec_age_ms":0}"#), 0);
     // a block the screen does not read
     assert_eq!(feed(&mut d, "block", r#"{"epoch":"e7","seq":44,"name":"op","revision":2,"observed_at":2,"stale":false,"data":{}}"#), 0);
@@ -212,14 +211,14 @@ fn v2_matches_legacy() {
     // stale: left out like a failed read in the old /state, not the kept value
     let ev = format!(r#"{{"epoch":"e7","seq":45,"name":"clients","revision":2,"observed_at":1,"stale":true,"data":{L_CLI}}}"#);
     assert_eq!(feed(&mut d, "block", &ev), 1);
-    assert!(d.live_data.clients_total == 0 && d.live_data.client_n == 0);
+    assert!(d.fresh_snap.lan_total == 0 && d.fresh_snap.lan_n == 0);
     let ev = format!(r#"{{"epoch":"e7","seq":46,"name":"sms_list","revision":2,"observed_at":1,"stale":true,"data":{{"list":{L_LIST}}}}}"#);
     assert_eq!(feed(&mut d, "block", &ev), 1);
-    assert!(d.live_data.sms_n == 0 && d.live_data.sms_unread == 1);
+    assert!(d.fresh_snap.inbox_n == 0 && d.fresh_snap.sms_new == 1);
     // typec stale: unknown (-1), not "nothing plugged in"
     let ev = format!(r#"{{"epoch":"e7","seq":47,"name":"typec","revision":2,"observed_at":1,"stale":true,"data":{L_TYPEC}}}"#);
     assert_eq!(feed(&mut d, "block", &ev), 1);
-    assert!(d.live_data.usb_cc == -1 && d.live_data.powerbank == 0);
+    assert!(d.fresh_snap.usb_cc == -1 && d.fresh_snap.powerbank == 0);
     assert!(!d.resync);
 
     // a gap, another epoch, or a block before any snapshot: resync, nothing applied
@@ -227,14 +226,14 @@ fn v2_matches_legacy() {
         feed(&mut d, "block", r#"{"epoch":"e7","seq":49,"name":"battery","revision":3,"observed_at":3,"stale":false,"data":{"percent":10}}"#),
         0
     );
-    assert!(d.resync && d.live_data.bat_percent == 76);
+    assert!(d.resync && d.fresh_snap.batt_pct == 76);
     d.resync = false;
     assert_eq!(feed(&mut d, "heartbeat", r#"{"epoch":"e8","seq":48,"blocks":{}}"#), 0);
     assert!(d.resync);
     d.resync = false;
     d.have_seq = false;
     assert_eq!(feed(&mut d, "block", r#"{"epoch":"e7","seq":47,"name":"battery","stale":false,"data":{"percent":10}}"#), 0);
-    assert!(d.resync && d.live_data.bat_percent == 76);
+    assert!(d.resync && d.fresh_snap.batt_pct == 76);
 }
 
 #[test]
@@ -271,7 +270,7 @@ fn silent_then_back() {
     std::thread::sleep(Duration::from_millis(50));
     spin(&mut d, 150);
     let (ok, s) = d.refresh();
-    assert!(ok && s.net_type == "NR5G_SA");
+    assert!(ok && s.radio == "NR5G_SA");
     let alive = d.alive_wall();
     assert!(alive > 0);
     assert!(!d.silent());
@@ -281,7 +280,7 @@ fn silent_then_back() {
     spin(&mut d, 700);
     assert!(d.silent());
     let (ok, s) = d.refresh();
-    assert!(ok && s.net_type == "NR5G_SA");
+    assert!(ok && s.radio == "NR5G_SA");
     assert_eq!(d.alive_wall(), alive);
     f.kill();
 
@@ -307,9 +306,9 @@ fn reconnect_due_across_the_wrap() {
         std::thread::sleep(Duration::from_millis(50));
         let mut d = CoreLink::new(cfg(port));
         // pretend it had a snapshot, so the "never had one" path does not connect
-        d.live_valid = true;
-        d.current_valid = true;
-        d.next_retry_ms = due;
+        d.latest_ok = true;
+        d.shown_ok = true;
+        d.retry_at_ms = due;
         d.poll(now);
         std::thread::sleep(Duration::from_millis(50));
         let got = f.kill();
@@ -380,8 +379,8 @@ fn pace_only_on_a_change() {
 #[test]
 fn sms_delete_needs_two_steps() {
     let mut d = CoreLink::new(cfg(1));
-    d.current_data = parse_snapshot(format!(r#"{{"sms":{{"unread":1,"list":{L_LIST}}}}}"#).as_bytes()).unwrap();
-    d.current_valid = true;
+    d.shown_snap = parse_snapshot(format!(r#"{{"sms":{{"unread":1,"list":{L_LIST}}}}}"#).as_bytes()).unwrap();
+    d.shown_ok = true;
     assert!(!d.sms_delete_tap(0), "not armed");
     assert!(d.sms_delete_arm(1));
     assert!(d.sms_delete_armed(1) && !d.sms_delete_armed(0));
@@ -414,4 +413,34 @@ fn sim_dual_parse_signal() {
     assert!(a.role == "data" && a.state == "ready" && a.has_sig == 1 && a.sig_rat == "nr");
     assert!(a.sig_rsrp == -84 && a.sig_rsrq == -11 && a.sig_snr == "18.7" && a.sig_bars == 5);
     assert!(b.role == "standby" && b.has_sig == 0 && b.sig_snr.is_empty());
+}
+
+/// The whole old-/state parse of one full snapshot, pinned as text: caps, escapes, the operator
+/// override, nested lists, sim.dual. LUYAZ_GOLDEN=write regenerates the expected file.
+#[test]
+fn full_snapshot_golden() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/");
+    let src = std::fs::read(format!("{dir}snapshot-full.json")).unwrap();
+    let got = format!("{:#?}\n", parse_snapshot(&src).unwrap());
+    let path = format!("{dir}snapshot-full.golden");
+    if std::env::var("LUYAZ_GOLDEN").as_deref() == Ok("write") {
+        std::fs::write(&path, &got).unwrap();
+    }
+    assert_eq!(got, std::fs::read_to_string(&path).unwrap());
+}
+
+#[test]
+fn clients_keep_lanid_fields_and_a_full_list() {
+    let one = r#"{"alias":"Living-room TV with a long name","ip":"192.168.0.123","kind":"tv","mac":"02:00:00:00:00:aa","name":"Living-room TV with a long name","private":true,"vendor":"Example Electronics Co"}"#;
+    assert!(one.len() >= 160);
+    let list = vec![one; 16].join(",");
+    let s = format!(r#"{{"total":16,"wifi":16,"lan":0,"list":[{list}]}}"#);
+    let mut d = core_snapshot_t { lan: vec![lan_client_t::default(); 16], ..Default::default() };
+    read_clients(s.as_bytes(), &mut d);
+    assert_eq!(d.lan_n, 16);
+    let c = &d.lan[15];
+    assert_eq!((c.alias.as_str(), c.vendor.as_str(), c.kind.as_str(), c.private), ("Living-room TV with a long name", "Example Electronics Co", "tv", true));
+    // an old core: no lanid fields, as before
+    read_clients(br#"{"total":1,"list":[{"name":"n","ip":"1","mac":"m"}]}"#, &mut d);
+    assert!(d.lan_n == 1 && d.lan[0].alias.is_empty() && !d.lan[0].private);
 }

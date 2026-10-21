@@ -1,17 +1,19 @@
+//! QCI / 5QI and AMBR of the current data connection, recovered from the
+//! modem's `[DATA]` lines in `/data/logfs/key.log` (and its rotated `.0`).
+
 use serde::Serialize;
-use std::{
-    fs::File,
-    io::{Read, Seek, SeekFrom},
-    net::Ipv4Addr,
-    path::Path,
-    sync::Arc,
-};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::net::Ipv4Addr;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// The tail of each log read. key.log grows about 1 MB a day (B31, b31-community §1), so a
 /// connection older than about two days has its lines rolled out of it; then the current
 /// address's `CONNECTED` line is not found and the values are marked `stale` instead of an
 /// older bearer passing for the current one.
-const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
+const TAIL_WINDOW: u64 = 2 << 20;
 
 /// Which core the data connection rides on. NSA (EN-DC) still uses EPS
 /// bearers; only SA has NR PDU sessions.
@@ -24,11 +26,11 @@ pub enum Core {
 }
 
 impl Core {
-    fn name(self) -> &'static str {
+    fn label(self) -> &'static str {
         match self {
-            Core::Unknown => "",
-            Core::Eps => "eps",
-            Core::Nr => "nr_pdu",
+            Self::Eps => "eps",
+            Self::Nr => "nr_pdu",
+            Self::Unknown => "",
         }
     }
 }
@@ -58,15 +60,17 @@ pub struct Query {
 /// (label by `bearer`, not by the current radio mode); when `stale` is true the
 /// values are history and nothing may be concluded from them (no "limited to
 /// N Mbps" verdict).
+///
+/// Field order is the JSON key order: `qci`, `ambr_dl`, `ambr_ul`, `bearer`, `stale`.
 #[derive(Clone, Default, Debug, PartialEq, Serialize)]
 pub struct Values {
-    /// QCI of an EPS bearer, or the 5QI of an NR PDU session (`bearer`
-    /// says which). 0 = not known.
+    /// QCI (EPS) or 5QI (NR PDU session); 0 when unknown.
     pub qci: i64,
-    /// Mbps, three decimals; empty when not known.
+    /// Downlink ceiling in Mbps with three decimals, `""` when unknown.
     pub ambr_dl: String,
+    /// Uplink ceiling, same format.
     pub ambr_ul: String,
-    /// `eps`, `nr_pdu`, or empty when no bearer line was found.
+    /// `eps`, `nr_pdu`, or `""` if the logs held no data bearer at all.
     pub bearer: &'static str,
     /// The values are history, not the current limit: the bearer found is of
     /// the other core than the one the device is on now (e.g. an LTE bearer
@@ -76,38 +80,39 @@ pub struct Values {
     pub stale: bool,
 }
 
+/// One data bearer / PDU session as reconstructed from the logs. Lines that
+/// share core, PLMN and APN/DNN fold into the same entry.
 #[derive(Clone, Default, Debug)]
-struct Candidate {
-    current: bool,
+struct Bearer {
     core: Core,
-    mcc: Option<i64>,
-    mnc: Option<i64>,
-    /// the APN / DNN name (lower case, up to the first '.')
-    name: String,
-    seq: usize,
+    plmn: (Option<i64>, Option<i64>),
+    /// APN / DNN, lower case, cut at the first '.'
+    apn: String,
+    /// seen in the live log (not only in the rotated one)
+    in_live_log: bool,
+    /// ordinal of the last `[DATA]` line that mentioned it
+    last_seen: usize,
     qci: Option<i64>,
-    dl: Option<f64>,
-    ul: Option<f64>,
-    /// the address of a `CONNECTED … addr=` line next to its latest bearer line
+    down: Option<f64>,
+    up: Option<f64>,
+    /// IPv4 of the `CONNECTED … addr=` line paired with its latest mention
     addr: Option<Ipv4Addr>,
 }
 
 /// How many `[DATA]` lines apart a bearer line and its `CONNECTED` line may be.
-const NEAR: usize = 4;
+const PAIRING_DISTANCE: usize = 4;
 
-// Reading the tails of key.log and key.log.0 means scanning up to 4 MiB of
-// text; on a U60 Pro (MU5250) that ran every second. QCI/AMBR only change on
-// a bearer event, so keep the parsed bearers for 30 s. Picking one for the
-// current PLMN/core is cheap and runs every time, so flapping between SA and
-// NSA does not rescan the logs.
-// LUYAZ_CACHE=0 turns this off, as for the state cache.
-const REUSE_FOR: std::time::Duration = std::time::Duration::from_secs(30);
-static LAST: std::sync::Mutex<Option<(std::time::Instant, Arc<Parsed>)>> =
-    std::sync::Mutex::new(None);
+// Scanning up to 4 MiB of log text every second (the state poll rate on a
+// U60 Pro / MU5250) is wasteful when QCI/AMBR change only on bearer events,
+// so the parsed result is kept for 30 s. Choosing a bearer for a query is
+// cheap and is redone each call, so SA/NSA flapping costs no rescan.
+// LUYAZ_CACHE=0 disables reuse, same switch as the state cache.
+const CACHE_TTL: Duration = Duration::from_secs(30);
+static CACHED: Mutex<Option<(Instant, Arc<Parsed>)>> = Mutex::new(None);
 
 pub fn invalidate() {
-    if let Ok(mut l) = LAST.lock() {
-        *l = None;
+    if let Ok(mut slot) = CACHED.lock() {
+        slot.take();
     }
 }
 
@@ -118,72 +123,85 @@ pub fn read(query: Query) -> Values {
 /// The parsed bearer lines of both logs (reused for 30 s). Picking one for a
 /// query is [`select`], a pure function.
 pub fn logs() -> Arc<Parsed> {
-    let caching = std::env::var("LUYAZ_CACHE").as_deref() != Ok("0");
-    if caching
-        && let Ok(l) = LAST.lock()
-        && let Some((at, parsed)) = l.as_ref()
-        && at.elapsed() < REUSE_FOR
-    {
-        return parsed.clone();
-    }
-    let mut parsed = read_logs();
-    parsed.observed_at = luyaz_api::clock::BootTime::read();
-    let parsed = Arc::new(parsed);
-    if caching && let Ok(mut l) = LAST.lock() {
-        *l = Some((std::time::Instant::now(), parsed.clone()));
-    }
-    parsed
-}
-
-fn read_logs() -> Parsed {
-    let current =
-        std::env::var("LUYAZ_KEY_LOG").unwrap_or_else(|_| "/data/logfs/key.log".into());
-    let rotated = std::env::var("LUYAZ_KEY_LOG_ROTATED")
-        .unwrap_or_else(|_| "/data/logfs/key.log.0".into());
-    let texts: Vec<(String, bool)> = [(rotated.as_str(), false), (current.as_str(), true)]
-        .into_iter()
-        .filter_map(|(path, current)| read_tail(Path::new(path)).map(|t| (t, current)))
-        .collect();
-    let texts: Vec<(&str, bool)> = texts.iter().map(|(t, c)| (t.as_str(), *c)).collect();
-    collect(&texts)
-}
-
-pub fn parse_external(text: &str) -> Option<Values> {
-    let mut selected = None;
-    for line in text.lines() {
-        let lower = line.to_ascii_lowercase();
-        if !line.contains("[DATA]") || !lower.contains("cid1") {
-            continue;
-        }
-        let qci = integer_after_ci(&lower, "qci=")?;
-        let dl = integer_after_ci(&lower, "dl_ambr=")?;
-        let ul = integer_after_ci(&lower, "ul_ambr=")?;
-        if !(1..=255).contains(&qci) || dl < 0 || ul < 0 {
-            continue;
-        }
-        selected = Some(Values {
-            qci,
-            ambr_dl: format_mbps(dl as f64 / 1000.0),
-            ambr_ul: format_mbps(ul as f64 / 1000.0),
-            ..Default::default()
+    let reuse = !matches!(std::env::var("LUYAZ_CACHE").as_deref(), Ok("0"));
+    if reuse {
+        let fresh = CACHED.lock().ok().and_then(|slot| {
+            slot.as_ref()
+                .filter(|(stamp, _)| stamp.elapsed() < CACHE_TTL)
+                .map(|(_, p)| Arc::clone(p))
         });
+        if let Some(hit) = fresh {
+            return hit;
+        }
     }
-    selected
+    let mut scanned = scan_log_files();
+    scanned.observed_at = luyaz_api::clock::BootTime::read();
+    let shared = Arc::new(scanned);
+    if reuse && let Ok(mut slot) = CACHED.lock() {
+        *slot = Some((Instant::now(), Arc::clone(&shared)));
+    }
+    shared
 }
 
-fn read_tail(path: &Path) -> Option<String> {
-    let mut file = File::open(path).ok()?;
-    let size = file.metadata().ok()?.len();
-    let start = size.saturating_sub(MAX_LOG_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut bytes = Vec::with_capacity((size - start) as usize);
-    file.take(MAX_LOG_BYTES).read_to_end(&mut bytes).ok()?;
-    if start > 0
-        && let Some(pos) = bytes.iter().position(|b| *b == b'\n')
-    {
-        bytes.drain(..=pos);
+fn scan_log_files() -> Parsed {
+    let env_or = |name: &str, fallback: &str| std::env::var(name).unwrap_or_else(|_| fallback.to_owned());
+    let live = env_or("LUYAZ_KEY_LOG", "/data/logfs/key.log");
+    let older = env_or("LUYAZ_KEY_LOG_ROTATED", "/data/logfs/key.log.0");
+    // Oldest first: the rotated file, then the live one.
+    let mut bodies = Vec::with_capacity(2);
+    for (path, is_live) in [(older, false), (live, true)] {
+        if let Some(body) = tail_of(Path::new(&path)) {
+            bodies.push((body, is_live));
+        }
     }
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    let views: Vec<(&str, bool)> = bodies.iter().map(|(b, l)| (b.as_str(), *l)).collect();
+    collect(&views)
+}
+
+/// Reads the "external" log shape: `[DATA] cid1, QCI=[9], DL_AMBR=[150000]kbps, …`.
+/// The last complete cid1 line wins; a cid1 line missing one of the three
+/// numbers makes the whole read fail (`None`).
+pub fn parse_external(text: &str) -> Option<Values> {
+    let mut last = None;
+    for raw in text.lines().filter(|l| l.contains("[DATA]")) {
+        let line = raw.to_ascii_lowercase();
+        if !line.contains("cid1") {
+            continue;
+        }
+        let qci = first_int_after(&line, "qci=")?;
+        let down_kbps = first_int_after(&line, "dl_ambr=")?;
+        let up_kbps = first_int_after(&line, "ul_ambr=")?;
+        let sane = (1..=255).contains(&qci) && down_kbps >= 0 && up_kbps >= 0;
+        if sane {
+            last = Some(Values {
+                qci,
+                ambr_dl: format_mbps(down_kbps as f64 / 1000.0),
+                ambr_ul: format_mbps(up_kbps as f64 / 1000.0),
+                ..Values::default()
+            });
+        }
+    }
+    last
+}
+
+/// Last `TAIL_WINDOW` bytes of a file as text; when the read starts mid-file
+/// the partial first line is dropped.
+fn tail_of(path: &Path) -> Option<String> {
+    let mut f = File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let from = len.saturating_sub(TAIL_WINDOW);
+    f.seek(SeekFrom::Start(from)).ok()?;
+    let mut buf = Vec::new();
+    f.take(TAIL_WINDOW).read_to_end(&mut buf).ok()?;
+    let body = if from == 0 {
+        &buf[..]
+    } else {
+        match buf.iter().position(|&b| b == b'\n') {
+            Some(nl) => &buf[nl + 1..],
+            None => &buf[..],
+        }
+    };
+    Some(String::from_utf8_lossy(body).into_owned())
 }
 
 /// Every data bearer found in the logs, oldest first, plus a bare `qci = …`
@@ -192,10 +210,11 @@ fn read_tail(path: &Path) -> Option<String> {
 pub struct Parsed {
     /// Original physical log-read time. Reusing the parsed cache never renews this.
     pub(crate) observed_at: Option<luyaz_api::clock::BootTime>,
-    candidates: Vec<Candidate>,
-    fallback_qci: Option<i64>,
-    /// every `CONNECTED … addr=` line: its place and IPv4 address
-    connections: Vec<(usize, Ipv4Addr)>,
+    bearers: Vec<Bearer>,
+    /// first QCI seen on a line that belonged to no bearer
+    bare_qci: Option<i64>,
+    /// (line ordinal, address) of every `CONNECTED … addr=` line
+    connected: Vec<(usize, Ipv4Addr)>,
 }
 
 /// Stronger than the display fallback: a complete bearer in the current log, of the
@@ -204,53 +223,70 @@ pub(crate) fn validated_read(
     parsed: &Parsed,
     query: Query,
 ) -> Option<(&'static str, serde_json::Value)> {
-    let addr = query.addr?;
-    let candidate = parsed.candidates.iter().rev().find(|c| {
-        c.current
-            && c.core == query.core
-            && c.core != Core::Unknown
-            && c.addr == Some(addr)
-            && (c.core == Core::Nr
-                || matches!((c.mcc, c.mnc), (Some(m), Some(n))
-                if Some((m, n)) == query.serving || Some((m, n)) == query.home))
+    let want_addr = query.addr?;
+    let plmn_ok = |b: &Bearer| {
+        // NR PDU sessions do not name a PLMN; EPS bearers must name ours.
+        b.core == Core::Nr
+            || match b.plmn {
+                (Some(mcc), Some(mnc)) => {
+                    let p = Some((mcc, mnc));
+                    p == query.serving || p == query.home
+                }
+                _ => false,
+            }
+    };
+    let b = parsed.bearers.iter().rev().find(|b| {
+        b.in_live_log
+            && b.core != Core::Unknown
+            && b.core == query.core
+            && b.addr == Some(want_addr)
+            && plmn_ok(b)
     })?;
-    let qci = candidate.qci.filter(|q| (1..=255).contains(q))?;
-    let dl = candidate.dl.filter(|n| n.is_finite() && *n >= 0.0)?;
-    let ul = candidate.ul.filter(|n| n.is_finite() && *n >= 0.0)?;
-    Some((
-        if candidate.core == Core::Eps {
-            "qos.eps.log.read"
-        } else {
-            "qos.nr_pdu.log.read"
-        },
-        serde_json::json!({"qci":qci,"ambr_dl":format_mbps(dl),"ambr_ul":format_mbps(ul),"bearer":candidate.core.name()}),
-    ))
+    let usable = |x: &Option<f64>| x.filter(|v| v.is_finite() && *v >= 0.0);
+    let qci = b.qci.filter(|q| (1..=255).contains(q))?;
+    let (down, up) = (usable(&b.down)?, usable(&b.up)?);
+    let capability = match b.core {
+        Core::Eps => "qos.eps.log.read",
+        _ => "qos.nr_pdu.log.read",
+    };
+    let body = serde_json::json!({
+        "qci": qci,
+        "ambr_dl": format_mbps(down),
+        "ambr_ul": format_mbps(up),
+        "bearer": b.core.label(),
+    });
+    Some((capability, body))
 }
 
 /// The address of a `cidN CONNECTED … addr=a.b.c.d` line (not DISCONNECTED).
 fn connected_addr(lower: &str) -> Option<Ipv4Addr> {
-    if !lower.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "connected") {
+    let has_word = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|word| word == "connected");
+    if !has_word {
         return None;
     }
-    let p = lower.find("addr=")? + "addr=".len();
-    let token: String = lower[p..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    token.parse().ok()
+    let rest = after(lower, "addr=")?;
+    let end = rest
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
 }
 
 /// The APN / DNN a bearer line names, lower case, up to the first '.'.
 fn access_name(lower: &str) -> String {
-    ["dnn=", "access_point="]
-        .iter()
-        .find_map(|k| lower.find(k).map(|p| &lower[p + k.len()..]))
-        .map(|s| {
-            s.chars()
-                .take_while(|c| !c.is_whitespace() && *c != '.' && *c != ',')
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(rest) = after(lower, "dnn=").or_else(|| after(lower, "access_point=")) else {
+        return String::new();
+    };
+    let end = rest
+        .find(|c: char| c.is_whitespace() || c == '.' || c == ',')
+        .unwrap_or(rest.len());
+    rest[..end].to_owned()
+}
+
+/// Text following the first occurrence of `key`.
+fn after<'a>(s: &'a str, key: &str) -> Option<&'a str> {
+    s.find(key).map(|at| &s[at + key.len()..])
 }
 
 #[cfg(test)]
@@ -258,190 +294,195 @@ fn parse_texts(texts: &[(&str, bool)], query: Query) -> Values {
     select(&collect(texts), query)
 }
 
-fn collect(texts: &[(&str, bool)]) -> Parsed {
-    let mut candidates = Vec::<Candidate>::new();
-    let mut fallback = Candidate::default();
-    let mut seq = 0usize;
-    let mut connections = Vec::<(usize, Ipv4Addr)>::new();
-    // the latest bearer line still waiting for a CONNECTED line after it
-    let mut awaiting: Option<(usize, usize)> = None;
-    // the latest CONNECTED line no bearer line before it took
-    let mut unclaimed: Option<(usize, Ipv4Addr)> = None;
-    for (text, current) in texts {
-        let mut context: Option<usize> = None;
-        let mut context_left: u8 = 0;
-        let mut pending_qci = None;
-        let mut pending_left: u8 = 0;
-        for line in text.lines().filter(|line| line.contains("[DATA]")) {
-            seq += 1;
-            let lower = line.to_ascii_lowercase();
-            let data_context = !["dnn=ims", "dnn=sos", "dnn=emergency", "access_point=ims"]
-                .iter()
-                .any(|v| lower.contains(v))
-                && (lower.contains("dnn=") || lower.contains("access_point="));
-            let mut line_candidate = None;
-            if let Some(addr) = connected_addr(&lower) {
-                connections.push((seq, addr));
-                if let Some((idx, _)) = awaiting.take().filter(|(_, at)| seq - at <= NEAR) {
-                    candidates[idx].addr = Some(addr);
-                    unclaimed = None;
-                } else {
-                    unclaimed = Some((seq, addr));
-                }
+/// Lines whose APN/DNN marks them as voice or emergency, never the data path.
+const NON_DATA: [&str; 4] = ["dnn=ims", "dnn=sos", "dnn=emergency", "access_point=ims"];
+
+/// State that lives for one log file: which bearer the next few lines talk
+/// about, and a "default bearer qci" waiting for the bearer line after it.
+#[derive(Default)]
+struct FileWindow {
+    /// bearer the following lines refer to, with lines left (this line included)
+    subject: Option<(usize, u8)>,
+    /// a QCI announced just before its bearer line, with lines left
+    early_qci: Option<(i64, u8)>,
+}
+
+/// Line-by-line reconstruction across both log files.
+#[derive(Default)]
+struct Scanner {
+    out: Parsed,
+    line_no: usize,
+    /// latest bearer line still without a `CONNECTED` line: (bearer index, line)
+    unpaired_bearer: Option<(usize, usize)>,
+    /// latest `CONNECTED` line no bearer has taken yet: (line, address)
+    unpaired_conn: Option<(usize, Ipv4Addr)>,
+}
+
+impl Scanner {
+    fn file(&mut self, text: &str, live: bool) {
+        let mut win = FileWindow::default();
+        for raw in text.lines().filter(|l| l.contains("[DATA]")) {
+            self.line_no += 1;
+            let line = raw.to_ascii_lowercase();
+            self.note_connection(&line);
+            let touched = self.bearer_line(&line, live, &mut win);
+            self.qci_line(&line, &mut win);
+            if let Some(i) = touched {
+                self.ambr_line(&line, i);
             }
-            if data_context {
-                let cmcc = digits_after_ci(&lower, "mcc");
-                let cmnc = digits_after_ci(&lower, "mnc");
-                let core = line_core(&lower);
-                let name = access_name(&lower);
-                let idx = candidates
-                    .iter()
-                    .position(|c| {
-                        c.core == core && c.mcc == cmcc && c.mnc == cmnc && c.name == name
-                    })
-                    .unwrap_or_else(|| {
-                        candidates.push(Candidate {
-                            current: *current,
-                            core,
-                            mcc: cmcc,
-                            mnc: cmnc,
-                            name,
-                            seq,
-                            ..Default::default()
-                        });
-                        candidates.len() - 1
-                    });
-                let c = &mut candidates[idx];
-                c.current |= *current;
-                c.seq = seq;
-                // its connection: a CONNECTED line just after it, or one just before that the
-                // bearer line before it did not take
-                c.addr = unclaimed
-                    .take()
-                    .filter(|(at, _)| seq - at <= NEAR)
-                    .map(|(_, a)| a);
-                awaiting = c.addr.is_none().then_some((idx, seq));
-                if let Some(qci) = pending_qci.take() {
-                    c.qci = Some(qci);
-                }
-                context = Some(idx);
-                context_left = 4;
-                pending_left = 0;
-                line_candidate = Some(idx);
-            }
-            if lower.contains("qci")
-                && let Some(qci) = integer_after_ci(&lower, "qci")
-            {
-                if let Some(idx) = context.filter(|_| context_left > 0) {
-                    candidates[idx].qci = Some(qci);
-                } else if lower.contains("default bearer qci") {
-                    pending_qci = Some(qci);
-                    pending_left = 4;
-                    fallback.qci.get_or_insert(qci);
-                } else {
-                    fallback.qci.get_or_insert(qci);
-                }
-            }
-            if let Some(idx) = line_candidate {
-                if lower.contains("session_ambr") {
-                    candidates[idx].dl =
-                        session_ambr(&lower, "session_ambr_dl=", "session_ambr_dl_unit=");
-                    candidates[idx].ul =
-                        session_ambr(&lower, "session_ambr_ul=", "session_ambr_ul_unit=");
-                } else if lower.contains("apn_ambr") {
-                    candidates[idx].dl = apn_ambr(&lower, "apn_ambr_dl");
-                    candidates[idx].ul = apn_ambr(&lower, "apn_ambr_ul");
-                }
-            }
-            context_left = context_left.saturating_sub(1);
-            if context_left == 0 {
-                context = None;
-            }
-            pending_left = pending_left.saturating_sub(1);
-            if pending_left == 0 {
-                pending_qci = None;
-            }
+            // age the per-file windows by one line
+            win.subject = win.subject.and_then(|(i, n)| (n > 1).then_some((i, n - 1)));
+            win.early_qci = win.early_qci.and_then(|(q, n)| (n > 1).then_some((q, n - 1)));
         }
     }
-    Parsed {
-        observed_at: None,
-        candidates,
-        fallback_qci: fallback.qci,
-        connections,
+
+    fn note_connection(&mut self, line: &str) {
+        let Some(addr) = connected_addr(line) else {
+            return;
+        };
+        let now = self.line_no;
+        self.out.connected.push((now, addr));
+        match self.unpaired_bearer.take() {
+            Some((i, at)) if now - at <= PAIRING_DISTANCE => {
+                self.out.bearers[i].addr = Some(addr);
+                self.unpaired_conn = None;
+            }
+            _ => self.unpaired_conn = Some((now, addr)),
+        }
+    }
+
+    /// Records a data bearer line; returns the bearer's index.
+    fn bearer_line(&mut self, line: &str, live: bool, win: &mut FileWindow) -> Option<usize> {
+        let names_access = line.contains("dnn=") || line.contains("access_point=");
+        if !names_access || NON_DATA.iter().any(|tag| line.contains(tag)) {
+            return None;
+        }
+        let core = line_core(line);
+        let plmn = (leading_digits(line, "mcc"), leading_digits(line, "mnc"));
+        let apn = access_name(line);
+        let now = self.line_no;
+        let bearers = &mut self.out.bearers;
+        let i = match bearers
+            .iter()
+            .position(|b| b.core == core && b.plmn == plmn && b.apn == apn)
+        {
+            Some(i) => i,
+            None => {
+                bearers.push(Bearer { core, plmn, apn, in_live_log: live, last_seen: now, ..Bearer::default() });
+                bearers.len() - 1
+            }
+        };
+        // Pair with a CONNECTED line seen shortly before that no earlier
+        // bearer took; otherwise wait for one shortly after.
+        let conn = self.unpaired_conn.take();
+        let b = &mut bearers[i];
+        b.in_live_log |= live;
+        b.last_seen = now;
+        b.addr = conn.and_then(|(at, a)| (now - at <= PAIRING_DISTANCE).then_some(a));
+        self.unpaired_bearer = if b.addr.is_none() { Some((i, now)) } else { None };
+        if let Some((q, _)) = win.early_qci.take() {
+            b.qci = Some(q);
+        }
+        win.subject = Some((i, 4));
+        Some(i)
+    }
+
+    fn qci_line(&mut self, line: &str, win: &mut FileWindow) {
+        if !line.contains("qci") {
+            return;
+        }
+        let Some(q) = first_int_after(line, "qci") else {
+            return;
+        };
+        if let Some((i, _)) = win.subject {
+            self.out.bearers[i].qci = Some(q);
+            return;
+        }
+        if line.contains("default bearer qci") {
+            win.early_qci = Some((q, 4));
+        }
+        self.out.bare_qci.get_or_insert(q);
+    }
+
+    fn ambr_line(&mut self, line: &str, i: usize) {
+        let (down, up) = if line.contains("session_ambr") {
+            (
+                session_ambr(line, "session_ambr_dl=", "session_ambr_dl_unit="),
+                session_ambr(line, "session_ambr_ul=", "session_ambr_ul_unit="),
+            )
+        } else if line.contains("apn_ambr") {
+            (apn_ambr(line, "apn_ambr_dl"), apn_ambr(line, "apn_ambr_ul"))
+        } else {
+            return;
+        };
+        let b = &mut self.out.bearers[i];
+        b.down = down;
+        b.up = up;
     }
 }
 
-pub fn select(parsed: &Parsed, query: Query) -> Values {
-    let mut candidates = parsed.candidates.clone();
-    // The newest data bearer in the newest log wins. An EPS bearer names its
-    // PLMN and an NR PDU session does not, so a PLMN match must not let an old
-    // LTE bearer outrank a later 5G session; only a bearer naming a PLMN that
-    // is neither the serving nor the SIM's home network loses.
-    // (Idea from upstream zwrt-datad 1ffd943 / v0.10.65; the home-PLMN
-    // exception is ours: abroad, a home-routed APN names the home network.)
-    let foreign = |c: &Candidate| match (query.serving, c.mcc, c.mnc) {
-        (Some(serving), Some(m), Some(n)) => {
-            Some((m, n)) != Some(serving) && Some((m, n)) != query.home
-        }
-        _ => false,
-    };
-    // Among bearers of the core the device is on, the one whose CONNECTED line
-    // names the current address is the current connection's (several data
-    // DNNs at once). Only of that core: after a move LTE → SA the connection
-    // keeps its address, and a later PDU session line must still win.
-    let ours = |c: &Candidate| {
-        query.addr.is_some() && c.addr == query.addr && c.core == query.core
-    };
-    let score = |c: &Candidate| {
-        i32::from(c.current) * 1000 + if foreign(c) { 0 } else { 100 } + i32::from(ours(c)) * 10
-    };
-    candidates.sort_by_key(|c| (score(c), c.seq));
-    let mut selected = candidates.last().cloned().unwrap_or_default();
-    // Missing fields come only from older bearers of the same core and APN/DNN:
-    // an LTE AMBR must never fill in for an NR session, nor one DNN's for another's.
-    for c in candidates
-        .iter()
-        .rev()
-        .filter(|c| c.core == selected.core && c.name == selected.name)
-    {
-        if selected.qci.is_none() {
-            selected.qci = c.qci;
-        }
-        if selected.dl.is_none() {
-            selected.dl = c.dl;
-        }
-        if selected.ul.is_none() {
-            selected.ul = c.ul;
-        }
+fn collect(texts: &[(&str, bool)]) -> Parsed {
+    let mut scanner = Scanner::default();
+    for &(text, live) in texts {
+        scanner.file(text, live);
     }
-    let found = !candidates.is_empty();
-    // A bare `qci = …` is an LTE line; it never stands in for an NR 5QI.
-    let fallback_qci = parsed
-        .fallback_qci
-        .filter(|_| !found || selected.core == Core::Eps);
+    scanner.out
+}
+
+pub fn select(parsed: &Parsed, query: Query) -> Values {
+    // Ranking, highest first: seen in the live log; not naming a foreign
+    // PLMN; tied to the current address on the current core; most recent.
+    //
+    // NR PDU sessions carry no PLMN, so a PLMN match alone must not lift an
+    // old LTE bearer above a newer 5G session — only a bearer that names a
+    // PLMN which is neither serving nor home is pushed down (abroad, a
+    // home-routed APN legitimately names the home network).
+    // The address tie-break only counts on the current core: after LTE → SA
+    // the address stays, and the newer PDU session line must still win.
+    let rank = |b: &Bearer| {
+        let foreign = match (query.serving, b.plmn) {
+            (Some(serving), (Some(mcc), Some(mnc))) => {
+                (mcc, mnc) != serving && Some((mcc, mnc)) != query.home
+            }
+            _ => false,
+        };
+        let on_our_addr = query.addr.is_some() && b.addr == query.addr && b.core == query.core;
+        let weight = if b.in_live_log { 1000 } else { 0 }
+            + if foreign { 0 } else { 100 }
+            + if on_our_addr { 10 } else { 0 };
+        (weight, b.last_seen)
+    };
+    let mut ranked: Vec<&Bearer> = parsed.bearers.iter().collect();
+    ranked.sort_by_key(|b| rank(b));
+    let any = !ranked.is_empty();
+    let mut pick = ranked.last().map(|b| (*b).clone()).unwrap_or_default();
+    // Gaps are filled only from the same core and APN/DNN, best-ranked first:
+    // an LTE AMBR never stands in for an NR session, nor one DNN for another.
+    for older in ranked.iter().rev().filter(|b| b.core == pick.core && b.apn == pick.apn) {
+        pick.qci = pick.qci.or(older.qci);
+        pick.down = pick.down.or(older.down);
+        pick.up = pick.up.or(older.up);
+    }
+    // The bare `qci = …` comes from LTE lines; never use it as an NR 5QI.
+    let bare = parsed.bare_qci.filter(|_| !any || pick.core == Core::Eps);
+    let live_qci = query.qci_now.filter(|q| (1..=255).contains(q));
+    // Core mismatch makes the values history, with one exception: an NR
+    // session whose CONNECTED line names the current address stays valid
+    // while the firmware reports EPS/ENDC (CMHK roaming 2026-10-20: hours of
+    // ENDC with no new bearer line). An EPS bearer seen while on SA stays
+    // stale: on B31 that move logged a fresh PDU session with other values.
+    let core_moved = query.core != Core::Unknown
+        && pick.core != Core::Unknown
+        && pick.core != query.core;
+    let nr_on_our_addr = pick.core == Core::Nr && query.addr.is_some() && pick.addr == query.addr;
+    let stale = any
+        && ((core_moved && !nr_on_our_addr) || other_connection(parsed, &pick, query.addr));
     Values {
-        qci: query
-            .qci_now
-            .filter(|q| (1..=255).contains(q))
-            .or(selected.qci)
-            .or(fallback_qci)
-            .unwrap_or(0),
-        ambr_dl: selected.dl.map(format_mbps).unwrap_or_default(),
-        ambr_ul: selected.ul.map(format_mbps).unwrap_or_default(),
-        bearer: if found { selected.core.name() } else { "" },
-        // An NR session whose CONNECTED line names the current address is not stale on
-        // EPS: on CMHK roaming (2026-10-20) the session came up with its 5QI and AMBR
-        // and the firmware then reported ENDC for hours with no new bearer line. The
-        // other way (an EPS bearer, now SA) stays stale: on B31 the move logged a new
-        // PDU session line with other values (b31_samples).
-        stale: found
-            && ((query.core != Core::Unknown
-                && selected.core != Core::Unknown
-                && selected.core != query.core
-                && !(selected.core == Core::Nr
-                    && query.addr.is_some()
-                    && selected.addr == query.addr))
-                || other_connection(parsed, &selected, query.addr)),
+        qci: live_qci.or(pick.qci).or(bare).unwrap_or(0),
+        ambr_dl: pick.down.map(format_mbps).unwrap_or_default(),
+        ambr_ul: pick.up.map(format_mbps).unwrap_or_default(),
+        bearer: if any { pick.core.label() } else { "" },
+        stale,
     }
 }
 
@@ -449,11 +490,11 @@ pub fn select(parsed: &Parsed, query: Query) -> Values {
 /// lines: it sits next to another address's, or the logs read have CONNECTED lines but none for the current address (it rolled
 /// out of the window). With the address or every CONNECTED line unknown,
 /// nothing is concluded here.
-fn other_connection(parsed: &Parsed, bearer: &Candidate, addr: Option<Ipv4Addr>) -> bool {
+fn other_connection(parsed: &Parsed, bearer: &Bearer, addr: Option<Ipv4Addr>) -> bool {
     let Some(addr) = addr else {
         return false;
     };
-    if parsed.connections.is_empty() {
+    if parsed.connected.is_empty() {
         return false;
     }
     if bearer.addr.is_some_and(|a| a != addr) {
@@ -462,113 +503,118 @@ fn other_connection(parsed: &Parsed, bearer: &Candidate, addr: Option<Ipv4Addr>)
     // A CONNECTED line for the current address after the bearer is not taken as a new
     // connection: whether the vendor logs CONNECTED again without a bearer line is not
     // known, and a new connection logs its own bearer line anyway.
-    !parsed.connections.iter().any(|(_, a)| *a == addr)
+    parsed.connected.iter().all(|&(_, a)| a != addr)
 }
 
-/// EPS bearer lines carry `access_point=`/`eps_bearer_id`/`apn_ambr`; NR PDU
-/// session lines carry `pdu_session_id`/`session_ambr`/`dnn=`.
+/// PDU-session vocabulary (`pdu_session_id`, `session_ambr`, or `dnn=`
+/// without `access_point=`) means 5GC; anything else is an EPS bearer.
 fn line_core(lower: &str) -> Core {
-    if lower.contains("pdu_session_id")
-        || lower.contains("session_ambr")
-        || (lower.contains("dnn=") && !lower.contains("access_point="))
-    {
-        Core::Nr
+    let nr = ["pdu_session_id", "session_ambr"].iter().any(|t| lower.contains(t))
+        || (lower.contains("dnn=") && !lower.contains("access_point="));
+    if nr { Core::Nr } else { Core::Eps }
+}
+
+/// Up to six digits right after `tag` (no skipping), e.g. `mcc460`.
+fn leading_digits(s: &str, tag: &str) -> Option<i64> {
+    let rest = after(s, tag)?;
+    let n = rest.bytes().take(6).take_while(u8::is_ascii_digit).count();
+    if n == 0 { None } else { rest[..n].parse().ok() }
+}
+
+/// First run of digits anywhere after `tag` (skipping `=`, `[`, spaces, …).
+fn first_int_after(s: &str, tag: &str) -> Option<i64> {
+    let rest = after(s, tag)?;
+    let start = rest.find(|c: char| c.is_ascii_digit())?;
+    let tail = &rest[start..];
+    let len = tail.find(|c: char| !c.is_ascii_digit()).unwrap_or(tail.len());
+    tail[..len].parse().ok()
+}
+
+/// Decimal number (digits and dots) right after `key`.
+fn decimal_after(s: &str, key: &str) -> Option<f64> {
+    let rest = after(s, key)?;
+    let len = rest
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(rest.len());
+    rest[..len].parse().ok()
+}
+
+/// APN-AMBR of an EPS bearer, in Mbps (TS 24.301 §9.9.4.2).
+///
+/// The IE has three layers: the base octet (up to 8640 kbps), an extended
+/// octet that supersedes the base when present, and an extended-2 octet
+/// worth N × 256 Mbps added on top of the extended value. The vendor log
+/// prints them as `<key>=<kbps>`, `<key>_ext=<Mbps>` and `<key>_ext2=<Mbps>`,
+/// where `_ext2` is *cumulative*: base + extended + N × 256 (500 Mbps shows
+/// as `508.640Mbps`; on B27 the U60 Pro printed `1668.640`/`1008.640`), and
+/// an absent octet prints as `0.000`.
+///
+/// So with a non-zero `_ext2` above base + extended, the surplus is the
+/// 256-Mbps part. When the surplus is (within 0.01) a whole number of steps
+/// the true value is the extended value (or base if none) plus those steps —
+/// this also absorbs the log's rounding (`20008.641Mbps` = 32 + 78 × 256).
+/// Otherwise only the base is removed. Without a usable `_ext2`, the
+/// extended value wins over the base.
+/// (The cumulative-print reading first came from upstream 1ffd943 / 75247fc.)
+fn apn_ambr(s: &str, key: &str) -> Option<f64> {
+    let nonzero = |v: Option<f64>| v.filter(|x| *x > 0.0);
+    let base_mbps = decimal_after(s, &format!("{key}=")).map(|kbps| kbps / 1000.0);
+    let extended = nonzero(decimal_after(s, &format!("{key}_ext=")));
+    let Some(printed) = nonzero(decimal_after(s, &format!("{key}_ext2="))) else {
+        return extended.or(base_mbps);
+    };
+    let ext_part = extended.unwrap_or(0.0);
+    let Some(base) = base_mbps.filter(|b| printed > b + ext_part) else {
+        return Some(printed);
+    };
+    let steps = (printed - base - ext_part) / 256.0;
+    let n = steps.round();
+    if n >= 1.0 && (steps - n).abs() < 0.01 {
+        Some(extended.unwrap_or(base) + n * 256.0)
     } else {
-        Core::Eps
+        Some(printed - base)
     }
 }
 
-fn digits_after_ci(s: &str, tag: &str) -> Option<i64> {
-    let p = s.find(tag)? + tag.len();
-    let digits: String = s[p..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .take(6)
-        .collect();
-    (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
-}
-fn integer_after_ci(s: &str, tag: &str) -> Option<i64> {
-    let p = s.find(tag)? + tag.len();
-    let tail = s[p..].trim_start_matches(|c: char| !c.is_ascii_digit());
-    let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
-}
-fn number_after(s: &str, key: &str) -> Option<f64> {
-    let p = s.find(key)? + key.len();
-    let token: String = s[p..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    token.parse().ok()
-}
-/// APN-AMBR from an EPS bearer line (TS 24.301 9.9.4.2). The extended octet
-/// replaces the 8640 kbps base value, and a non-zero extended-2 octet adds
-/// N x 256 Mbps on top of the extended value. The vendor log prints `_ext2`
-/// with the base added as well (244 + 256 + 8.64 = `508.640Mbps` for
-/// 500 Mbps; a U60 Pro (MU5250) on B27 showed `1668.640`/`1008.640`) and
-/// `0.000` when the octet is absent, so the base is taken back out and a
-/// zero `_ext2` falls through to `_ext`. The printed sum is not always exact
-/// (`20008.641Mbps` for 32 + 78 x 256 = 20000 Mbps), so a value within 0.01
-/// of a whole number of 256 Mbps steps is snapped to it.
-/// (Upstream zwrt-datad 1ffd943 / v0.10.65 and 75247fc / v0.10.69.)
-fn apn_ambr(s: &str, key: &str) -> Option<f64> {
-    let positive = |v: f64| (v > 0.0).then_some(v);
-    let base = number_after(s, &format!("{key}=")).map(|v| v / 1000.0);
-    let ext = number_after(s, &format!("{key}_ext=")).and_then(positive);
-    let ext2 = number_after(s, &format!("{key}_ext2=")).and_then(positive);
-    match (ext2, base) {
-        (Some(v), Some(b)) if v > b + ext.unwrap_or(0.0) => {
-            let steps = (v - b - ext.unwrap_or(0.0)) / 256.0;
-            let whole = steps.round();
-            Some(if whole >= 1.0 && (steps - whole).abs() < 0.01 {
-                ext.unwrap_or(b) + whole * 256.0
-            } else {
-                v - b
-            })
-        }
-        (Some(v), _) => Some(v),
-        _ => ext.or(base),
-    }
-}
+/// Session-AMBR of an NR PDU session, in Mbps. The unit follows `unit_key`
+/// either as a bare TS 24.501 code (`6`) or as a code with its meaning in
+/// parentheses (`6(1Mbps)`, or just `(100Mbps)`); the parenthesised form wins.
 fn session_ambr(s: &str, value_key: &str, unit_key: &str) -> Option<f64> {
-    let value = number_after(s, value_key)?;
-    let p = s.find(unit_key)? + unit_key.len();
-    let unit = &s[p..];
-    let code: String = unit.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if !unit[code.len()..].starts_with('(') {
-        // the unit code alone, no "(1Mbps)" after it
-        return unit_code_mbps(code.parse().ok()?).map(|scale| value * scale);
-    }
-    let open = unit.find('(')? + 1;
-    let scale_token: String = unit[open..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    let mut scale: f64 = scale_token.parse().ok()?;
-    let suffix = unit[open + scale_token.len()..].to_ascii_lowercase();
-    if suffix.contains("gbps") {
-        scale *= 1000.0;
-    } else if suffix.contains("mbps") {
-    } else if suffix.contains("kbps") {
-        scale /= 1000.0;
-    } else if suffix.contains("bps") {
-        scale /= 1_000_000.0;
-    } else {
-        return None;
-    }
-    Some(value * scale)
+    let amount = decimal_after(s, value_key)?;
+    let unit = after(s, unit_key)?;
+    let code_len = unit.bytes().take_while(u8::is_ascii_digit).count();
+    let Some(inner) = unit[code_len..].strip_prefix('(') else {
+        let code: u32 = unit[..code_len].parse().ok()?;
+        return Some(amount * unit_code_mbps(code)?);
+    };
+    let num_len = inner
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(inner.len());
+    let factor: f64 = inner[..num_len].parse().ok()?;
+    let suffix = inner[num_len..].to_ascii_lowercase();
+    // "gbps", "mbps" and "kbps" all contain "bps", so the bare one goes last.
+    type ToMbps = fn(f64) -> f64;
+    let to_mbps: [(&str, ToMbps); 4] = [
+        ("gbps", |f| f * 1000.0),
+        ("mbps", |f| f),
+        ("kbps", |f| f / 1000.0),
+        ("bps", |f| f / 1_000_000.0),
+    ];
+    let (_, convert) = to_mbps.iter().find(|(unit, _)| suffix.contains(unit))?;
+    Some(amount * convert(factor))
 }
+
 /// Session-AMBR unit code (TS 24.501 §9.11.4.14, Table 9.11.4.14.1) in Mbps:
 /// 1 = 1 Kbps, 2 = 4 Kbps, … each step ×4, 6 = 1 Mbps, 11 = 1 Gbps, 16 = 1 Tbps,
 /// 21 = 1 Pbps, up to 25 = 256 Pbps. 0 (not used) and anything above: none.
 /// Matches the B31 log's `1(1Kbps)` and `6(1Mbps)`.
 fn unit_code_mbps(code: u32) -> Option<f64> {
-    if !(1..=25).contains(&code) {
+    if code == 0 || code > 25 {
         return None;
     }
-    let i = code - 1;
-    let step = 4f64.powi((i % 5) as i32);
-    Some(step * 1000f64.powi((i / 5) as i32) / 1000.0)
+    let (decade, within) = ((code - 1) / 5, (code - 1) % 5);
+    let kbps = 4f64.powi(within as i32) * 1000f64.powi(decade as i32);
+    Some(kbps / 1000.0)
 }
 
 fn format_mbps(v: f64) -> String {
@@ -580,25 +626,24 @@ mod tests {
     use super::*;
     #[test]
     fn parses_helpers() {
-        assert_eq!(integer_after_ci("default bearer qci = 9", "qci"), Some(9));
-        assert_eq!(apn_ambr("apn_ambr_dl=64000", "apn_ambr_dl"), Some(64.0));
-        assert_eq!(
-            session_ambr(
-                "session_ambr_dl=2 session_ambr_dl_unit=(100Mbps)",
-                "session_ambr_dl=",
-                "session_ambr_dl_unit="
-            ),
-            Some(200.0)
-        );
-        assert_eq!(
-            parse_external("[DATA] cid1, QCI=[9], DL_AMBR=[150000]kbps, UL_AMBR=[75000]kbps"),
-            Some(Values {
-                qci: 9,
-                ambr_dl: "150.000".into(),
-                ambr_ul: "75.000".into(),
-                ..Default::default()
-            })
-        );
+        // a QCI after free text and padding
+        assert_eq!(first_int_after("default bearer qci = 9", "qci"), Some(9));
+        // a lone base octet in kbps comes out in Mbps
+        let base_only = apn_ambr("apn_ambr_dl=64000", "apn_ambr_dl");
+        assert_eq!(base_only, Some(64.0));
+        // a parenthesised unit multiplies the amount
+        let line = "session_ambr_dl=2 session_ambr_dl_unit=(100Mbps)";
+        let dl = session_ambr(line, "session_ambr_dl=", "session_ambr_dl_unit=");
+        assert_eq!(dl, Some(200.0));
+        // the bracketed "external" shape, kbps → Mbps
+        let ext = "[DATA] cid1, QCI=[9], DL_AMBR=[150000]kbps, UL_AMBR=[75000]kbps";
+        let want = Values {
+            qci: 9,
+            ambr_dl: "150.000".into(),
+            ambr_ul: "75.000".into(),
+            ..Values::default()
+        };
+        assert_eq!(parse_external(ext), Some(want));
     }
 
     fn mbps(line: &str, key: &str) -> Option<String> {
@@ -1077,7 +1122,7 @@ mod tests {
         let nsa = select(&parsed, q(home.0, home.1, Core::Eps));
         assert_eq!(got(&sa), (6, "2000.000", "200.000", "nr_pdu", false));
         assert_eq!(got(&nsa), (6, "2000.000", "200.000", "nr_pdu", true));
-        assert_eq!(parsed.fallback_qci, Some(7));
+        assert_eq!(parsed.bare_qci, Some(7));
         // An NR session without its own 5QI line does not borrow the bare one.
         let nr_only = "[DATA] qci = 7\n[DATA] pdu_session_id=2 dnn=cmnet session_ambr_dl=10 session_ambr_dl_unit=6(1Mbps)\n";
         assert_eq!(parse_texts(&[(nr_only, true)], Query::default()).qci, 0);

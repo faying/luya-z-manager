@@ -3,7 +3,7 @@
 //! listener needs no token (the same as `/control` and `/v2/screen`), so there is no login.
 //! Callers still name the agent's paths (`/api/...`); the `/v2` prefix is added here.
 //! (`agent.rs` / `Agent` until Phase 10 §4; it has called the core, not the agent, since M6b.)
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::http;
 

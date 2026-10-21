@@ -181,6 +181,22 @@ fn version_group(vers: &Option<Result<Value, String>>, l: Lang) -> Group {
             stale: false,
         }),
     }
+    // people sell devices with Luya-Z installed: say plainly that it is free
+    rows.push(Row {
+        id: "di-ver-free",
+        label: "Luya-Z".into(),
+        val: Val::Text(l.pick("Free", "免费").into()),
+        mono: false,
+        data: false,
+        sub: Some(
+            l.pick(
+                "If you paid for a device with it installed, the price and support are the seller's; Luya-Z has nothing to do with the sale.",
+                "如果你付钱买了装好的设备，费用和售后归卖家，与 Luya-Z 无关。",
+            )
+            .into(),
+        ),
+        stale: false,
+    });
     Group {
         key: "versions",
         title: l.pick("Component versions", "组件版本"),
@@ -356,6 +372,10 @@ pub fn view_with(
         label: l.pick("Phone number", "本机号码").into(),
         val: match (sim.data, n) {
             (_, Some(n)) => Val::Text(n.to_owned()),
+            // dual SIM with data on slot 2: the firmware reports no number for that card
+            (Some(_), None) if simd["current_slot"] == 2 => {
+                Val::Text(l.pick("SIM 2 reports no number", "卡 2 不提供号码").into())
+            }
             (Some(_), None) => Val::Text(l.pick("Not on the SIM", "卡里没存").into()),
             (None, None) => val(&sim, None),
         },

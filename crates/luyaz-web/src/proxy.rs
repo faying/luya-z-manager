@@ -118,6 +118,8 @@ const OWN_PREFIX: &[&str] = &[
     "/tools/processes",
     "/tools/enable-adb",
     "/router/dns",
+    // travel-assist §4
+    "/usage",
 ];
 
 /// Paths anyone may load: assets, the login page, the language switch, the link status.

@@ -2,7 +2,7 @@
 //! the charts, 设备, 开关, 插入手机等设备时, 调试 and 切换到原厂界面; and the charts themselves.
 //! The net-speed chart is Home's (2026-09-25); CPU / 内存 / 电池 stay here. 60 points, one per
 //! 5 s (the average of five 1 s readings) = the last 5 minutes.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::cellular::nz;
 use super::{Sub, Ui, VIEW_H};
@@ -18,8 +18,8 @@ pub const CHART_PTS: u32 = 60;
 pub const CHART_STEP: i32 = 5;
 /// points before a curve is worth showing (1 min)
 pub const CHART_READY: i32 = 12;
-/// 常亮 / 30 秒 / 2 分钟
-const OFF_MS: [u32; 3] = [0, 30000, 120000];
+/// The auto-off choices in segment order, in ms; 0 keeps the screen on.
+const AUTOOFF_CHOICES: [u32; 3] = [0, 30_000, 120_000];
 const AP_VAL: [Appear; 3] = [Appear::Light, Appear::Dark, Appear::Auto];
 const LANG_NOTE: &str = "告警短信也用这个语言 · Alert SMS use this too";
 
@@ -112,13 +112,15 @@ pub fn rate_scale(bps: i64) -> i32 {
     v.clamp(0.0, 100.0) as i32
 }
 
+/// A rate in bytes per second: whole B/s below a kilobyte, else KB/s or MB/s to one decimal.
 pub fn fmt_rate(bps: i64) -> Vec<u8> {
-    if bps >= 1024 * 1024 {
-        cf!("%.1f MB/s", bps as f64 / 1048576.0)
-    } else if bps >= 1024 {
-        cf!("%.1f KB/s", bps as f64 / 1024.0)
-    } else {
-        cf!("%ld B/s", bps)
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * KB;
+    let r = bps as f64;
+    match r {
+        _ if r >= MB => cf!("%.1f MB/s", r / MB),
+        _ if r >= KB => cf!("%.1f KB/s", r / KB),
+        _ => cf!("%ld B/s", bps),
     }
 }
 
@@ -134,14 +136,11 @@ fn chart_wait(card: Obj, x: i32, y: i32) -> Obj {
     wait_backed(kit::label(card, uf().cj12, t().t3, x, y, tr("正在收集 · 1 分钟后出现曲线")))
 }
 
+/// Every step of a drag: the panel follows the finger.
 unsafe extern "C" fn bright_cb(e: *mut sys::lv_event_t) {
     // SAFETY: LVGL's event
-    let v = unsafe { lv::event_target(e) }.slider_value();
-    super::with(|u| {
-        u.src.bl_set(v);
-        u.sync();
-        u.bright_label();
-    });
+    let level = unsafe { lv::event_target(e) }.slider_value();
+    super::with(|u| u.bright_apply(level));
 }
 
 /// Saved on release, not per step: the slider fires dozens of changes per drag.
@@ -156,17 +155,8 @@ unsafe extern "C" fn bright_save_cb(e: *mut sys::lv_event_t) {
 
 unsafe extern "C" fn offsel_cb(e: *mut sys::lv_event_t) {
     // SAFETY: LVGL's event
-    let i = unsafe { lv::event_user(e) };
-    super::with(|u| {
-        u.autooff_ms = OFF_MS[i];
-        u.auto_slept = false;
-        kit::seg_set(&mut u.sys.off_seg, i as i32);
-        if u.conf.autooff_ms != OFF_MS[i] as i32 {
-            // kept across restarts
-            u.conf.autooff_ms = OFF_MS[i] as i32;
-            u.conf.save();
-        }
-    });
+    let choice = unsafe { lv::event_user(e) };
+    super::with(|u| u.autooff_pick(choice));
 }
 
 unsafe extern "C" fn dps_cb(e: *mut sys::lv_event_t) {
@@ -433,6 +423,27 @@ impl Ui {
         kit::text_color(l, t().t3);
     }
 
+    fn bright_apply(&mut self, level: i32) {
+        self.src.bl_set(level);
+        self.sync();
+        self.bright_label();
+    }
+
+    /// A new auto-off delay: counts from now (a dimmed screen wakes up as it was) and is
+    /// written to the config only when it differs, so it survives a restart.
+    fn autooff_pick(&mut self, choice: usize) {
+        let ms = AUTOOFF_CHOICES[choice];
+        kit::seg_set(&mut self.sys.off_seg, choice as i32);
+        self.autooff_ms = ms;
+        self.auto_slept = false;
+        let saved = ms as i32;
+        if self.conf.autooff_ms == saved {
+            return;
+        }
+        self.conf.autooff_ms = saved;
+        self.conf.save();
+    }
+
     fn bright_label(&mut self) {
         let mx = self.src.bl_max(&self.model);
         let max = if mx > 0 { mx } else { 255 };
@@ -478,8 +489,9 @@ impl Ui {
         // "Brightness" is wider than 亮度: in English the slider starts later, same right end
         let sl = if lang::is_en() { kit::slider(c, 96, 17, 134) } else { kit::slider(c, 58, 17, 172) };
         let (bl_max, bl_get) = (self.src.bl_max(&self.model), self.src.bl_get(&self.model));
+        // floor 10: a darker panel cannot be read; an unreadable level opens at full
         sl.slider_set_range(10, bl_max);
-        sl.slider_set_value(if bl_get > 0 { bl_get } else { bl_max });
+        sl.slider_set_value(Some(bl_get).filter(|&lvl| lvl > 0).unwrap_or(bl_max));
         sl.add_event_cb(bright_cb, lv::LV_EVENT_VALUE_CHANGED, 0);
         sl.add_event_cb(bright_save_cb, lv::LV_EVENT_RELEASED, 0);
         self.sys.bright = sl;
@@ -491,7 +503,7 @@ impl Ui {
         kit::sep(c, 80);
         kit::label(c, f.cj14, th.t2, PAD, 91, tr("外观"));
         self.sys.ap_seg = kit::seg(c, 116, 85, 170, &ap_lbl, Some(appearance_btn_cb));
-        let sel = OFF_MS.iter().rposition(|&ms| ms == self.autooff_ms).unwrap_or(0);
+        let sel = AUTOOFF_CHOICES.iter().rposition(|&ms| ms == self.autooff_ms).unwrap_or(0);
         kit::seg_set(&mut self.sys.off_seg, sel as i32);
         self.appearance_ui_sync();
         y += 60 + 120 + 10;
@@ -541,7 +553,10 @@ impl Ui {
         }
         s.vchk = kit::row_nav(c, 5 * ROW_H, tr("检查更新"), false, Some(versions_check_cb), 0);
         s.vchk.set_style_text_font(f.cj14, 0);
-        y += 6 * ROW_H + 10;
+        y += 6 * ROW_H + 6;
+        // people sell devices with Luya-Z installed: say plainly that it is free
+        kit::label_w(sc, f.cj12, th.t3, MARGIN + PAD, y, CARD_W - 2 * PAD, true, tr("Luya-Z 免费提供。付钱买了装好的设备，费用和售后归卖家，与 Luya-Z 无关。"));
+        y += 40;
 
         kit::section(sc, y, tr("开关"));
         y += 20;
@@ -672,18 +687,18 @@ impl Ui {
         }
         self.set(s.vchk, m.versions_checked.as_deref().unwrap_or(""));
         self.set(s.est, m.battery_est.as_deref().unwrap_or(""));
-        self.set(s.bat, cf!("%d%% · %d°C %d.%02ldV %ldmA", d.bat_percent, d.bat_temp, (d.bat_uv / 1000000) as i32, (d.bat_uv / 10000) % 100, d.bat_ua / 1000));
+        self.set(s.bat, cf!("%d%% · %d°C %d.%02ldV %ldmA", d.batt_pct, d.batt_temp, (d.batt_volt_uv / 1000000) as i32, (d.batt_volt_uv / 10000) % 100, d.batt_cur_ua / 1000));
         // charger_connect alone reads 1 with nothing plugged in on this hardware: a real voltage
-        if d.chg_uv > 1000000 {
-            self.set(s.chg, cf!("%d.%02ldV %ldmA", (d.chg_uv / 1000000) as i32, (d.chg_uv / 10000) % 100, d.chg_ua / 1000));
+        if d.chg_volt_uv > 1000000 {
+            self.set(s.chg, cf!("%d.%02ldV %ldmA", (d.chg_volt_uv / 1000000) as i32, (d.chg_volt_uv / 10000) % 100, d.chg_cur_ua / 1000));
         } else {
             self.set(s.chg, tr("未接入"));
         }
-        self.set(s.cpu, cf!(tr("占用 %ld%% · %ld°C"), d.cpu_usage, d.cpu_temp));
-        self.set(s.mem, cf!("%ld%% · %ldM / %ldM", d.mem_used_pct, (d.mem_total - d.mem_avail) / 1048576, d.mem_total / 1048576));
-        let up = d.uptime;
+        self.set(s.cpu, cf!(tr("占用 %ld%% · %ld°C"), d.cpu_pct, d.soc_temp));
+        self.set(s.mem, cf!("%ld%% · %ldM / %ldM", d.mem_pct, (d.mem_size - d.mem_free) / 1048576, d.mem_size / 1048576));
+        let up = d.uptime_s;
         self.set(s.up, cf!(if lang::is_en() { "%ldh %02ldm" } else { "%ldh%02ldm" }, up / 3600, (up / 60) % 60));
-        self.set(s.ver, if d.sw_version.is_empty() { "-" } else { d.sw_version.as_str() });
+        self.set(s.ver, if d.sw_build.is_empty() { "-" } else { d.sw_build.as_str() });
         if d.imei.len() >= 8 {
             let b = d.imei.as_bytes();
             let mut masked = b[..4].to_vec();
@@ -695,15 +710,15 @@ impl Ui {
         }
         self.set(
             s.usb,
-            if d.usb_mode == "debug" {
+            if d.adb_mode == "debug" {
                 tr("调试已开")
-            } else if !d.usb_mode.is_empty() {
+            } else if !d.adb_mode.is_empty() {
                 tr("调试关闭")
             } else {
                 "-"
             },
         );
-        self.set(s.fw, if d.fw.is_empty() { "-" } else { d.fw.as_str() });
+        self.set(s.fw, if d.firmware.is_empty() { "-" } else { d.firmware.as_str() });
     }
 
     /// Fed every tick whatever page is showing, so the charts open on real history. One point
@@ -717,11 +732,11 @@ impl Ui {
             (ch.acc_cpu, ch.acc_mem, ch.acc_rx, ch.acc_tx, ch.acc_bat, ch.acc_n) = (0, 0, 0, 0, 0, 0);
             return;
         }
-        ch.acc_cpu += d.cpu_usage.max(0);
-        ch.acc_mem += d.mem_used_pct;
-        ch.acc_rx += d.rx_speed;
-        ch.acc_tx += d.tx_speed;
-        ch.acc_bat += d.bat_percent as i64;
+        ch.acc_cpu += d.cpu_pct.max(0);
+        ch.acc_mem += d.mem_pct;
+        ch.acc_rx += d.down_bps;
+        ch.acc_tx += d.up_bps;
+        ch.acc_bat += d.batt_pct as i64;
         ch.acc_n += 1;
         if ch.acc_n >= CHART_STEP {
             let n = ch.acc_n as i64;
@@ -739,17 +754,17 @@ impl Ui {
             }
         }
         let ch = self.charts.clone();
-        self.set(ch.cpu_v, cf!("%ld%%", d.cpu_usage.max(0)));
-        self.set(ch.cpu_t, cf!("%ld°C", d.cpu_temp));
-        self.set(ch.mem_v, cf!("%ld%%", d.mem_used_pct));
-        self.set(ch.mem_sub, cf!("%ldM / %ldM", (d.mem_total - d.mem_avail) / 1048576, d.mem_total / 1048576));
-        self.set(ch.net_dn, cf!("↓ %s", &fmt_rate(d.rx_speed)));
-        self.set(ch.net_up, cf!("↑ %s", &fmt_rate(d.tx_speed)));
+        self.set(ch.cpu_v, cf!("%ld%%", d.cpu_pct.max(0)));
+        self.set(ch.cpu_t, cf!("%ld°C", d.soc_temp));
+        self.set(ch.mem_v, cf!("%ld%%", d.mem_pct));
+        self.set(ch.mem_sub, cf!("%ldM / %ldM", (d.mem_size - d.mem_free) / 1048576, d.mem_size / 1048576));
+        self.set(ch.net_dn, cf!("↓ %s", &fmt_rate(d.down_bps)));
+        self.set(ch.net_up, cf!("↑ %s", &fmt_rate(d.up_bps)));
         ch.net_up.update_layout();
         ch.net_dn.align(lv::LV_ALIGN_TOP_RIGHT, -(12 + ch.net_up.width() + 8), 8);
-        let chg = d.charger_connect != 0 && d.chg_uv > 1000000;
-        self.set(ch.bat_v, cf!("%d%%", d.bat_percent));
-        self.set(ch.bat_sub, cf!("%s · %d°C", if chg { tr("充电中") } else { tr("放电中") }, d.bat_temp));
+        let chg = d.charger_in != 0 && d.chg_volt_uv > 1000000;
+        self.set(ch.bat_v, cf!("%d%%", d.batt_pct));
+        self.set(ch.bat_sub, cf!("%s · %d°C", if chg { tr("充电中") } else { tr("放电中") }, d.batt_temp));
     }
 }
 
@@ -809,6 +824,12 @@ mod tests {
         assert_eq!(fmt_rate(1532000), b"1.5 MB/s");
         assert_eq!(fmt_rate(188000), b"183.6 KB/s");
         assert_eq!(fmt_rate(900), b"900 B/s");
+        // the edges
+        assert_eq!(fmt_rate(1023), b"1023 B/s");
+        assert_eq!(fmt_rate(1024), b"1.0 KB/s");
+        assert_eq!(fmt_rate(1048575), b"1024.0 KB/s");
+        assert_eq!(fmt_rate(1048576), b"1.0 MB/s");
+        assert_eq!(fmt_rate(-5), b"-5 B/s");
     }
 }
 

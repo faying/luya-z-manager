@@ -11,7 +11,7 @@
 # `stop` leaves the UI on screen; the next start adopts it. Hand the screen to
 # the vendor UI with `echo vendor > /tmp/luyaz-screen.ctl`, not `stop`.
 # Do NOT run `enable`/`disable` (overlay whiteouts, manager CLAUDE.md).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 START=97
 USE_PROCD=1

@@ -25,7 +25,7 @@
 # was actually used brings up (a start script on trial is never run again by
 # a watcher after the rollback). With /etc/init.d/tailscale installed, each
 # restart is "init stop" + the start script (which asks procd to start it).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 D=${TSA_DIR:-/data/tailscale}

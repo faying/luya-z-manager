@@ -3,7 +3,7 @@
 # in cranelift, neither belongs in the device workspace. Build everything: ./build.sh
 [workspace]
 # hostile-*: test only, never shipped
-members = ["battery-eta", "charge-policy", "scenario", "scheduler", "manual-first", "apn-pick", "sms-forward", "home-exit", "hostile-eta", "hostile-scenario", "hostile-scheduler", "hostile-manual-first", "hostile-apn-pick", "hostile-sms-forward", "hostile-home-exit", "plugc"]
+members = ["battery-eta", "charge-policy", "scenario", "scheduler", "manual-first", "apn-pick", "sms-forward", "home-exit", "lanid-parse", "hostile-eta", "hostile-scenario", "hostile-scheduler", "hostile-manual-first", "hostile-apn-pick", "hostile-sms-forward", "hostile-home-exit", "hostile-lanid-parse", "plugc"]
 resolver = "2"
 
 [profile.release]

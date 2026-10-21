@@ -494,6 +494,8 @@ impl Compat {
                 .route("/api/diagnose/speed", post(watch::diagnose_speed))
                 .route("/api/diagnose/feedback", post(watch::diagnose_feedback))
                 .route("/api/diagnose/dismiss", post(watch::diagnose_dismiss))
+                .route("/api/lanid", get(lanid_get))
+                .route("/api/lanid/alias", post(lanid_alias))
                 .route("/api/verified", get(verified_get));
             // the charge limit and the battery estimate (9c): only with the policies on
             let charge = Router::new()
@@ -620,6 +622,33 @@ pub async fn serve(listener: TcpListener, compat: Compat) -> std::io::Result<()>
 /// GET /api/verified: the last verified set for this card × country and what a restore would do.
 async fn verified_get() -> Response {
     reply(200, json!({"ok": true, "data": crate::verified::view().await}))
+}
+
+/// GET /api/lanid: the lanid status, every learned record with its sources, the aliases
+/// (lan-client-id.md; display only).
+async fn lanid_get() -> Response {
+    let v = tokio::task::spawn_blocking(crate::lanid::report)
+        .await
+        .unwrap_or(Value::Null);
+    reply(200, json!({"ok": true, "data": v}))
+}
+
+/// POST /api/lanid/alias `{"mac", "alias"}`: the user's name for a MAC (an empty alias removes
+/// it). Written to aliases.json and read back; the answer is the stored value.
+async fn lanid_alias(body: Bytes) -> Response {
+    let v: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let (Some(mac), Some(alias)) = (v["mac"].as_str(), v["alias"].as_str()) else {
+        return reply(400, json!({"ok": false, "error": "mac and alias required"}));
+    };
+    let (mac, alias) = (mac.to_owned(), alias.to_owned());
+    match tokio::task::spawn_blocking(move || crate::lanid::set_alias(&mac, &alias)).await {
+        Ok(Ok((mac, alias))) => reply(200, json!({"ok": true, "mac": mac, "alias": alias})),
+        Ok(Err(e)) if e == "bad mac" || e.starts_with("alias:") => {
+            reply(400, json!({"ok": false, "error": e}))
+        }
+        Ok(Err(e)) => reply(500, json!({"ok": false, "error": e})),
+        Err(e) => reply(500, json!({"ok": false, "error": e.to_string()})),
+    }
 }
 
 pub(crate) fn reply(status: u16, body: Value) -> Response {

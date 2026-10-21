@@ -18,7 +18,7 @@
 #
 # Do NOT run `enable`/`disable` (overlay whiteouts, manager CLAUDE.md).
 # respawn 300 5 5: see luyaz-core.init.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 START=96
 USE_PROCD=1

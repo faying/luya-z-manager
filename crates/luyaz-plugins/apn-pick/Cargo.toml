@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 description = "u60-policy's apn-pick decisions as a component (wit/apn-pick.wit)."
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [lib]
 crate-type = ["cdylib"]

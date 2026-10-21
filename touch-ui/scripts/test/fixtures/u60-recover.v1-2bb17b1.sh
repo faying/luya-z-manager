@@ -26,7 +26,7 @@
 # line, fields, paths outside /data) is left alone, with one line in
 # recover.log.
 # No arithmetic, no `.`, no network: a bad file must not stop the boot.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 ROOT=${U60R_ROOT:-}

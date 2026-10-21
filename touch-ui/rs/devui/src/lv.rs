@@ -3,7 +3,7 @@
 //!
 //! Safety: LVGL runs on one thread; an [`Obj`] is a live LVGL object (pages never delete
 //! objects: everything is built once and shown/hidden), a [`Font`] lives for the process.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #![allow(clippy::missing_safety_doc)]
 
 pub use lvgl_sys as sys;

@@ -19,6 +19,72 @@ of other components.
 
 A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## lweb 1.20.0 — 2026-10-22
+
+- Connected devices: a device that took over an alias is tagged 「New address, alias kept」 and its details show the old MAC.
+
+## core 1.22.0 — 2026-10-22
+
+- Connected devices: a device that comes back on a new random MAC (and has no alias of its own) takes over the alias of the one offline device it matches (same mDNS name, or same specific DHCP host name and option 55 list; never a host name alone, never two candidates), and a device never seen before raises one alert 「A new device joined the hotspot」 after 90 s (no SMS). The first run after the update takes every current device as known, silently.
+
+## core 1.21.4 — 2026-10-21
+
+- Dual SIM: the QoS query reads the data card's IMSI (slot 2 when data is on slot 2).
+
+## lweb 1.19.1 — 2026-10-21
+
+- Device info: with data on SIM 2 an empty phone number reads 「SIM 2 reports no number」 instead of 「Not on the SIM」.
+
+## touch 1.8.2 — 2026-10-21
+
+- SIM page: with data on SIM 2 an empty number reads 「SIM 2 reports no number」; PLMN 460-13 counts as China Mobile.
+
+## Unreleased
+
+- kit: `OUI_TSV=` (a table from `scripts/lanid/make-oui.sh`) is installed to `/data/luyaz/lanid/oui.tsv` for vendor names; the public build has none.
+
+- kit: carries the lanid-parse component (LAN client identification) and installs it to `/data/luyaz/core/plugins/` as the only component; without it the core runs with identification off. `LANID_CWASM=` uses a ready-made one.
+
+## lweb 1.19.0 — 2026-10-21
+
+- Connected devices shows each device's best name (your alias first), maker, type and a "Private address" tag, plus a details view listing every source's value; set or remove an alias there (inline confirm, read back). Requires: core 1.21.0.
+
+## touch 1.8.1 — 2026-10-21
+
+- Fix: 1.8.0 found no touchscreen and no power button on the device (the rewritten input code treated EVIOCGBIT's byte count as a failure).
+
+## touch 1.8.0 — 2026-10-21
+
+- the clients list shows a device's alias first, plus its vendor, type and a "Private address" hint; client entries carrying the new fields are no longer dropped. Requires: core 1.21.0.
+
+## core 1.21.3 — 2026-10-21
+
+- Screen logo: PLMN 460-13 is China Mobile (missing since 1.21.2 put slot 2's IMSI in the `sim` block, the logo went blank).
+
+## core 1.21.2 — 2026-10-21
+
+- Dual SIM: with data on slot 2 the `sim` block (imsi, iccid, state, PIN) now describes slot 2; the firmware's `sim_*` fields are always slot 1, so the screen showed the slot 1 operator logo. Slot 2 reports no number or SPN; those stay blank.
+
+## core 1.21.1 — 2026-10-21
+
+- lanid no longer shows ids as names (iOS announces some mDNS services under a UUID); `_apple-mobdev2`/`_remotepairing` mark an Apple phone or tablet.
+
+## core 1.21.0 — 2026-10-21
+
+- LAN client identification (`docs/designs/lan-client-id.md`): a `lanid` thread listens passively on br-lan for DHCP requests, mDNS, SSDP and NetBIOS (kernel BPF, no multicast join, nothing sent); a new wasm component `lanid-parse` parses them, with no built-in fallback: without the component only DHCP names show. `clients` gains `alias`, `vendor`, `kind`, `private`; `GET /api/lanid` lists every source per device; `POST /api/lanid/alias` sets an alias. Learned names are kept in `/data/luyaz/lanid/clients.json` (written at most hourly, only on change). doctor shows a 「设备识别」 row.
+
+## core 1.20.0 — 2026-10-21
+
+- the lanid capture flag takes `mb=N` (size of each of the two ring files, 1–32, default 2), so a long capture can hold more than a few hours of mDNS; `status.json` shows `file_mb`.
+
+## touch 1.7.0 — 2026-10-21
+
+- Placement (Cellular › troubleshooting) gets a 30 s SINR curve; the best so far breaks SINR ties on RSRP and reads `17.7 · -82 dBm · 2 min ago`. Home shows a landing card for 24 hours after the core records a new country (`GET /v2/usage/landing`): 「Arrived in Japan · 2 h ago」, 「From China · 110MB since landing」. Requires: core 1.18.2.
+
+## core 1.19.0 — 2026-10-21
+
+- opt-in step-0 capture for LAN client identification: with `/data/luyaz/core/lanid-capture` present at start, a `lanid` thread records DHCP requests, mDNS, SSDP and NetBIOS frames from br-lan (filtered in the kernel, not parsed) into a 4 MB pcap ring in `/tmp/luyaz/lanid/` for 48 h (`docs/designs/lan-client-id.md`). Off by default.
+
 ## lweb 1.13.0 — 2026-10-21
 
 - home shows a banner while a device keeps polling the admin ports over Tailscale (who, which port, how long, about 0.3–0.6 W more with the screen off) with 「It's mine」 (allowed 24 h) and 「Got it」; Settings lists the allow list with 「Make permanent」 and 「Delete」. Requires: core 1.15.0.
@@ -29,6 +95,41 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 - the scenario engine picks up a hand-edited `/data/scenario/scenarios.json` on its next tick (changed mtime or length): a valid file replaces the loaded configuration and logs once; a missing, unreadable or invalid file keeps the loaded one and logs once. The web's own writes are not taken for a hand edit.
 
 ## Unreleased
+
+- kit: rewrote the inherited parts of install.sh, device/install.sh and build-kit.sh; options, output and installed files are unchanged.
+
+## core 1.18.3 — 2026-10-21
+
+- rewrote the parts of state, SMS, control, server, QoS, auth, model and command handling that came from the original data service; behavior, routes and JSON are unchanged.
+
+## core 1.18.2 — 2026-10-21
+
+- the landing record now actually reads the serving country: it took `net.serving_mcc`, which the old `net` block never carries (only the `/v2` signal block does), so no record was ever made; now `net.mcc` when it names a country.
+
+## lweb 1.18.0 — 2026-10-21
+
+- home page landing card (docs/designs/travel-assist.md §5): for 24 hours after arriving in a new country, the country and where from, the network (operator, roaming or local SIM, RAT), local time from the network's time zone (a single-zone country's own zone marked 「estimate」 without NITZ), the home exit and the data used since landing; 「Dismiss」 hides it. Requires: core 1.18.2.
+
+## core 1.18.1 — 2026-10-21
+
+- a landing is a new country, not a new MCC: 310 and 311 (both the US), 440 and 441 (Japan) and the like never start a landing record.
+
+## core 1.18.0 — 2026-10-21
+
+- travel landing record (docs/designs/travel-assist.md §5): the serving country (`net.serving_mcc`) seen 3 rounds in a row starts a new record in `/data/luyaz/core/usage/landing.json` with the country before, the time and the bytes used since; `GET /v2/usage/landing` → `{mcc, from, at, rx, tx}` (`from` null: the first record, not a landing). `uci_device_info` gains the network time zone `nitz_timezone`, `nitz_time_dst`, `nitz_sync_flag`.
+
+## lweb 1.17.0 — 2026-10-21
+
+- /trends: new chart 「Signal vs speed」: mobile download with the serving-cell SINR over it on its own −10…30 dB scale (right labels). SINR steady while speed falls points at a busy cell; both falling, at the signal.
+- home carrier rows also show each carrier's RSRQ.
+
+## lweb 1.16.0 — 2026-10-21
+
+- new page /usage (Data Usage, in Charts): data used per day for the last 30 days as one bar a day stacked by SIM card, per-card totals and a day list; the home page's 「Today」 row opens it. Requires: core 1.17.0.
+
+## core 1.17.0 — 2026-10-21
+
+- data usage per device date and per card (docs/designs/travel-assist.md §4): every 60 s the session counters are booked to the current data card (the firmware's counter does not split by card); `GET /v2/usage/days?n=1..400`; files in `/data/luyaz/core/usage/` (`today.json`, `days.jsonl`, 400 days).
 
 ## touch 1.6.1 — 2026-10-21
 

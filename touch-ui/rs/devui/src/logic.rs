@@ -1,6 +1,6 @@
 //! The touch UI's pure decisions (src/ui_logic.c, include/ui_logic.h): no LVGL, no I/O.
 //! Tests: tests/ui_logic_test.c, case for case (the power-key cases go with key_input).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 const DARK_FROM_DEFAULT: i32 = 19 * 60;
 const DARK_TO_DEFAULT: i32 = 7 * 60;

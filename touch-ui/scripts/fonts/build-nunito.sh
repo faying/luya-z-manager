@@ -9,7 +9,7 @@
 # 这里用固定的 SOURCE_DATE_EPOCH，重跑结果逐字节相同）。
 # 产出：Nunito-600.ttf Nunito-700.ttf Nunito-800.ttf OFL-Nunito.txt
 # 字体文件是二进制，不进任何 git 仓库。
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
 
 OUT=${1:?用法: build-nunito.sh <输出目录> [缓存目录]}

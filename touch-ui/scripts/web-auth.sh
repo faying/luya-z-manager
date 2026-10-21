@@ -15,7 +15,7 @@
 #
 # The password never appears in output, in argv (ps shows argv to everyone),
 # or in a file other than the 600 env file and a 600 temp file for curl.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 OLD=${WEB_AUTH_OLD:-}

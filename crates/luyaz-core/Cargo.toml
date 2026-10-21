@@ -1,10 +1,10 @@
 [package]
 name = "luyaz-core"
-version = "1.16.0"
+version = "1.22.0"
 edition = "2024"
 rust-version = "1.99"
 description = "Luya-Z core daemon (luyaz-core): device read path, HTTP API and write path, policies, wake ledger."
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
 tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "signal", "macros", "io-util", "sync", "process", "fs"] }

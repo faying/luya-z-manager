@@ -1,3 +1,11 @@
+//! SMS on the vendor stack: reading the two message stores, the `/v2` summary
+//! block and sending (through `zwrt_wms`, or through a neighbouring modem's
+//! goform endpoint).
+//!
+//! The firmware wraps phone numbers and bodies in an AES-256-GCM "envelope"
+//! once a web crypto session exists. We register our own session key with
+//! `zwrt_web` (RSA-wrapped) and keep it in memory only.
+
 use crate::state;
 use aes_gcm::{
     Aes256Gcm, Nonce,
@@ -12,87 +20,119 @@ use std::{sync::LazyLock, time::Duration};
 use tokio::sync::Mutex;
 use zeroize::Zeroize;
 
+/// The AES key we registered with `zwrt_web` (None until the first successful registration).
 static SESSION_KEY: LazyLock<Mutex<Option<[u8; 32]>>> = LazyLock::new(|| Mutex::new(None));
 
+/// Envelope layout on the wire (before base64): nonce, then GCM tag, then ciphertext.
+const NONCE_LEN: usize = 12;
+const TAG_LEN: usize = 16;
+const HEADER_LEN: usize = NONCE_LEN + TAG_LEN;
+
+/// Maximum number of messages the legacy `normalize_lists` view returns.
+const NORMALIZED_CAP: usize = 32;
+
+/// Shape check for a send request. The values end up in a ubus call or a
+/// form body, so anything outside a tight alphabet is refused up front.
 fn valid(number: &str, message: &str, sms_time: &str) -> bool {
-    !number.is_empty()
-        && number.len() <= 32
-        && number
-            .bytes()
-            .enumerate()
-            .all(|(index, byte)| byte.is_ascii_digit() || (index == 0 && byte == b'+'))
-        && !message.is_empty()
-        && message.len() <= 4096
+    let number_ok = (1..=32).contains(&number.len())
+        && number.char_indices().all(|(pos, c)| match c {
+            '0'..='9' => true,
+            '+' => pos == 0,
+            _ => false,
+        });
+    // Body is UCS-2 as hex: whole bytes only.
+    let body_ok = (1..=4096).contains(&message.len())
         && message.len().is_multiple_of(2)
-        && message.bytes().all(|byte| byte.is_ascii_hexdigit())
-        && !sms_time.is_empty()
-        && sms_time.len() <= 64
+        && message.chars().all(|c| c.is_ascii_hexdigit());
+    let time_ok = (1..=64).contains(&sms_time.len())
         && sms_time
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b';' | b'+' | b'-'))
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == ';' || c == '+' || c == '-');
+    number_ok && body_ok && time_ok
 }
 
+/// The firmware hands out either an SPKI or a PKCS#1 PEM; accept both.
 fn public_key(pem: &str) -> Result<RsaPublicKey, String> {
-    RsaPublicKey::from_public_key_pem(pem)
-        .or_else(|_| RsaPublicKey::from_pkcs1_pem(pem))
-        .map_err(|_| "invalid vendor RSA public key".into())
+    match RsaPublicKey::from_public_key_pem(pem) {
+        Ok(key) => Ok(key),
+        Err(_) => RsaPublicKey::from_pkcs1_pem(pem)
+            .map_err(|_| String::from("invalid vendor RSA public key")),
+    }
 }
 
+fn lower_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(DIGITS[usize::from(b >> 4)] as char);
+        out.push(DIGITS[usize::from(b & 0x0f)] as char);
+    }
+    out
+}
+
+/// Return the registered session key, registering a fresh one if needed.
+/// Registration: fetch the vendor certificate, RSA-wrap the hex form of a
+/// random 32-byte key and hand it to `web_http_enstr_set`. The key is only
+/// remembered once the firmware accepted it.
 async fn ensure_crypto_session() -> Result<[u8; 32], String> {
-    let mut guard = SESSION_KEY.lock().await;
-    if let Some(key) = *guard {
-        return Ok(key);
+    let mut slot = SESSION_KEY.lock().await;
+    if let Some(existing) = slot.as_ref() {
+        return Ok(*existing);
     }
-    let reply = state::ubus("zwrt_web", "web_crt_get", json!({})).await?;
-    let pem = reply
-        .get("result")
-        .and_then(Value::as_str)
-        .ok_or("vendor RSA certificate unavailable")?;
-    let public = public_key(pem)?;
-    let mut key = [0_u8; 32];
-    OsRng.fill_bytes(&mut key);
-    let mut hex = String::with_capacity(64);
-    for byte in key {
-        use std::fmt::Write as _;
-        write!(&mut hex, "{byte:02x}").map_err(|e| e.to_string())?;
-    }
-    let wrapped = public
-        .encrypt(&mut OsRng, Pkcs1v15Encrypt, hex.as_bytes())
-        .map_err(|_| "vendor RSA key registration failed")?;
-    hex.zeroize();
-    if let Err(error) = state::ubus(
+    let cert = state::ubus("zwrt_web", "web_crt_get", json!({})).await?;
+    let Some(pem) = cert.get("result").and_then(Value::as_str) else {
+        return Err("vendor RSA certificate unavailable".into());
+    };
+    let rsa_key = public_key(pem)?;
+
+    let mut fresh = [0_u8; 32];
+    OsRng.fill_bytes(&mut fresh);
+    let mut key_text = lower_hex(&fresh);
+    let wrapped = rsa_key.encrypt(&mut OsRng, Pkcs1v15Encrypt, key_text.as_bytes());
+    key_text.zeroize();
+    let wrapped = wrapped.map_err(|_| String::from("vendor RSA key registration failed"))?;
+
+    let registered = state::ubus(
         "zwrt_web",
         "web_http_enstr_set",
-        json!({"web_enstr":STANDARD.encode(wrapped)}),
+        json!({ "web_enstr": STANDARD.encode(wrapped) }),
     )
-    .await
-    {
-        key.zeroize();
-        return Err(error);
+    .await;
+    match registered {
+        Ok(_) => {
+            *slot = Some(fresh);
+            Ok(fresh)
+        }
+        Err(error) => {
+            fresh.zeroize();
+            Err(error)
+        }
     }
-    *guard = Some(key);
-    Ok(key)
 }
 
 pub async fn prepare() -> bool {
     ensure_crypto_session().await.is_ok()
 }
 
+fn cipher_for(key: &[u8; 32]) -> Result<Aes256Gcm, String> {
+    Aes256Gcm::new_from_slice(key).map_err(|_| String::from("invalid AES key"))
+}
+
+/// Seal `plaintext` into the vendor envelope (base64 of nonce ‖ tag ‖ ciphertext).
 fn encrypt(key: &[u8; 32], plaintext: &str) -> Result<String, String> {
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| "invalid AES key")?;
-    let mut nonce = [0_u8; 12];
+    const FAILED: &str = "SMS envelope encryption failed";
+    let cipher = cipher_for(key)?;
+    let mut nonce = [0_u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce);
-    let mut encrypted = cipher
+    // aes-gcm appends the tag; the vendor wants it in front of the ciphertext.
+    let sealed = cipher
         .encrypt(Nonce::from_slice(&nonce), plaintext.as_bytes())
-        .map_err(|_| "SMS envelope encryption failed")?;
-    if encrypted.len() < 16 {
-        return Err("SMS envelope encryption failed".into());
-    }
-    let tag = encrypted.split_off(encrypted.len() - 16);
-    let mut envelope = Vec::with_capacity(28 + encrypted.len());
-    envelope.extend_from_slice(&nonce);
-    envelope.extend_from_slice(&tag);
-    envelope.extend_from_slice(&encrypted);
+        .map_err(|_| String::from(FAILED))?;
+    let Some(body_len) = sealed.len().checked_sub(TAG_LEN) else {
+        return Err(FAILED.into());
+    };
+    let (body, tag) = sealed.split_at(body_len);
+    let envelope: Vec<u8> = [&nonce[..], tag, body].concat();
     Ok(STANDARD.encode(envelope))
 }
 
@@ -103,117 +143,123 @@ async fn decrypt(value: &str) -> Result<Option<String>, String> {
 
 /// 解厂商 AES-GCM 信封。不是信封（明文 hex、太短、不是 base64）→ `Ok(None)`。
 fn open_envelope(key: Option<&[u8; 32]>, value: &str) -> Result<Option<String>, String> {
-    if value.len() < 40
-        || value.len().is_multiple_of(2) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
+    let looks_plain_hex =
+        value.len().is_multiple_of(2) && value.chars().all(|c| c.is_ascii_hexdigit());
+    if value.len() < 40 || looks_plain_hex {
         return Ok(None);
     }
-    let Ok(raw) = STANDARD.decode(value) else {
-        return Ok(None);
+    let raw = match STANDARD.decode(value) {
+        Ok(raw) if raw.len() > HEADER_LEN => raw,
+        _ => return Ok(None),
     };
-    if raw.len() <= 28 {
-        return Ok(None);
-    }
-    let key = key.ok_or("vendor SMS crypto session unavailable")?;
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| "invalid AES key")?;
-    let mut input = raw[28..].to_vec();
-    input.extend_from_slice(&raw[12..28]);
-    cipher
-        .decrypt(Nonce::from_slice(&raw[..12]), input.as_ref())
-        .map(|plain| Some(String::from_utf8_lossy(&plain).into_owned()))
-        .map_err(|_| "SMS envelope authentication failed".into())
+    let Some(key) = key else {
+        return Err("vendor SMS crypto session unavailable".into());
+    };
+    let (nonce, rest) = raw.split_at(NONCE_LEN);
+    let (tag, body) = rest.split_at(TAG_LEN);
+    // Put it back in the order aes-gcm expects: ciphertext ‖ tag.
+    let sealed: Vec<u8> = [body, tag].concat();
+    let plain = cipher_for(key)?
+        .decrypt(Nonce::from_slice(nonce), sealed.as_slice())
+        .map_err(|_| String::from("SMS envelope authentication failed"))?;
+    Ok(Some(String::from_utf8_lossy(&plain).into_owned()))
 }
 
+/// Decode UCS-2/UTF-16BE given as hex text. Non-hex characters are ignored and
+/// a trailing partial code unit is dropped.
 fn utf16be_hex(value: &str) -> String {
-    let digits: String = value.chars().filter(|ch| ch.is_ascii_hexdigit()).collect();
-    let units: Vec<u16> = digits
-        .as_bytes()
+    let nibbles: Vec<u16> = value
+        .chars()
+        .filter_map(|c| c.to_digit(16))
+        .map(|d| d as u16)
+        .collect();
+    let units: Vec<u16> = nibbles
         .as_chunks::<4>()
         .0
         .iter()
-        .filter_map(|chunk| std::str::from_utf8(chunk).ok())
-        .filter_map(|chunk| u16::from_str_radix(chunk, 16).ok())
+        .map(|&[a, b, c, d]| (a << 12) | (b << 8) | (c << 4) | d)
         .collect();
     String::from_utf16_lossy(&units)
 }
 
+/// Vendor date `yy,MM,dd,hh,mm,ss,...` → `MM-dd hh:mm`; anything else → empty.
 fn sms_date(value: &str) -> String {
-    let fields: Vec<_> = value.split(',').collect();
-    if fields.len() >= 6 {
-        let parsed: Option<Vec<i64>> = fields[1..=4]
-            .iter()
-            .map(|field| field.parse().ok())
-            .collect();
-        if let Some(parts) = parsed {
-            return format!(
-                "{:02}-{:02} {:02}:{:02}",
-                parts[0], parts[1], parts[2], parts[3]
-            );
+    let parts: Vec<&str> = value.split(',').collect();
+    if parts.len() < 6 {
+        return String::new();
+    }
+    let mut nums = [0_i64; 4];
+    for (dst, src) in nums.iter_mut().zip(&parts[1..5]) {
+        match src.parse() {
+            Ok(n) => *dst = n,
+            Err(_) => return String::new(),
         }
     }
-    String::new()
+    let [month, day, hour, minute] = nums;
+    format!("{month:02}-{day:02} {hour:02}:{minute:02}")
+}
+
+/// Integer that may arrive as a JSON number or as a decimal string.
+fn loose_i64(value: &Value) -> Option<i64> {
+    match value {
+        Value::String(text) => text.parse().ok(),
+        other => other.as_i64(),
+    }
+}
+
+/// First of two alternative keys that is present, as a string ("" otherwise).
+fn str_field<'a>(item: &'a Value, primary: &str, fallback: &str) -> &'a str {
+    item.get(primary)
+        .or_else(|| item.get(fallback))
+        .and_then(Value::as_str)
+        .unwrap_or("")
 }
 
 pub async fn normalize_lists(replies: &[Value]) -> Vec<crate::contract::SmsItem> {
-    let mut output = Vec::new();
-    let mut ids = std::collections::HashSet::new();
-    let items: Vec<Value> = replies
-        .iter()
-        .flat_map(|reply| {
-            reply
-                .get("list")
-                .or_else(|| reply.get("messages"))
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-        })
-        .collect();
-    for item in items {
-        if output.len() >= 32 {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    let rows = replies.iter().flat_map(|reply| {
+        reply
+            .get("list")
+            .or_else(|| reply.get("messages"))
+            .and_then(Value::as_array)
+            .map(|rows| rows.as_slice())
+            .unwrap_or(&[])
+    });
+    for row in rows {
+        if result.len() == NORMALIZED_CAP {
             break;
         }
-        let Some(id) = item.get("id").and_then(|value| {
-            value
-                .as_i64()
-                .or_else(|| value.as_str()?.parse::<i64>().ok())
-        }) else {
+        let Some(id) = row.get("id").and_then(loose_i64) else {
             continue;
         };
-        if !ids.insert(id) {
+        if !seen.insert(id) {
             continue;
         }
-        let number_raw = item
-            .get("num")
-            .or_else(|| item.get("number"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let text_raw = item
-            .get("text")
-            .or_else(|| item.get("content"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let Ok(number) = decrypt(number_raw).await else {
+        let raw_number = str_field(row, "num", "number");
+        let raw_text = str_field(row, "text", "content");
+        // An envelope we cannot open (or authenticate) drops the row.
+        let (Ok(opened_number), Ok(opened_text)) =
+            (decrypt(raw_number).await, decrypt(raw_text).await)
+        else {
             continue;
         };
-        let Ok(text) = decrypt(text_raw).await else {
-            continue;
+        // Plain numbers are digits already; only decrypted ones are UCS-2 hex.
+        let num = match opened_number {
+            Some(hex) => utf16be_hex(&hex),
+            None => raw_number.to_string(),
         };
-        let number = number.map_or_else(|| number_raw.to_owned(), |value| utf16be_hex(&value));
-        let text = utf16be_hex(text.as_deref().unwrap_or(text_raw));
-        let unread = item.get("tag").and_then(|value| {
-            value
-                .as_i64()
-                .or_else(|| value.as_str()?.parse::<i64>().ok())
-        }) == Some(1);
-        output.push(crate::contract::SmsItem {
+        let text = utf16be_hex(opened_text.as_deref().unwrap_or(raw_text));
+        let unread = row.get("tag").and_then(loose_i64) == Some(1);
+        result.push(crate::contract::SmsItem {
             id,
-            num: number,
-            date: sms_date(item.get("date").and_then(Value::as_str).unwrap_or_default()),
+            num,
+            date: sms_date(row.get("date").and_then(Value::as_str).unwrap_or("")),
             unread: i64::from(unread),
             text,
         });
     }
-    output
+    result
 }
 
 /// `sms.list_after` 每页条数（`data_per_page`）。等于 `limit` 上限，也是 zte-agent 在真机上一直用的页大小。
@@ -231,13 +277,12 @@ fn item_id(item: &Value) -> Option<u64> {
     })
 }
 
+/// Rows of one `zte_libwms_get_sms_data` page (`messages`, older builds `list`).
 fn page_items(reply: &Value) -> Vec<Value> {
-    reply
-        .get("messages")
-        .or_else(|| reply.get("list"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
+    match reply.get("messages").or_else(|| reply.get("list")) {
+        Some(Value::Array(rows)) => rows.clone(),
+        _ => Vec::new(),
+    }
 }
 
 /// `zte_libwms_get_sms_data` 一页的参数。固件的 `order_by` 只接受 `"order by id desc"`（Gate 0 实测）。
@@ -403,153 +448,186 @@ pub fn block_data(capacity: &Value, nv: &Value, sim: &Value) -> Value {
     })
 }
 
+/// Default goform endpoints of the two neighbouring modems, with the
+/// environment variable that overrides each.
+fn external_endpoint(sender: &str) -> (&'static str, &'static str) {
+    match sender {
+        "v3e1" => (
+            "LUYAZ_SMS_V3E1_URL",
+            "http://192.168.56.1/goform/goform_set_cmd_process",
+        ),
+        _ => (
+            "LUYAZ_SMS_V3E2_URL",
+            "http://192.168.57.1/goform/goform_set_cmd_process",
+        ),
+    }
+}
+
+/// Body limit for the goform reply; anything larger is not a real answer.
+const GOFORM_REPLY_MAX: usize = 4096;
+
+/// Send through another modem's stock web form (`goformId=SEND_SMS`).
 async fn send_external(
     sender: &str,
     number: &str,
     message: &str,
     sms_time: &str,
 ) -> Result<Value, String> {
-    let default = if sender == "v3e1" {
-        "http://192.168.56.1/goform/goform_set_cmd_process"
-    } else {
-        "http://192.168.57.1/goform/goform_set_cmd_process"
-    };
-    let variable = if sender == "v3e1" {
-        "LUYAZ_SMS_V3E1_URL"
-    } else {
-        "LUYAZ_SMS_V3E2_URL"
-    };
-    let url = std::env::var(variable).unwrap_or_else(|_| default.into());
-    let encode_plus = |value: &str| value.replace('+', "%2B");
-    let form = format!(
-        "goformId=SEND_SMS&Number={}&MessageBody={message}&ID=-1&encode_type=UNICODE&sms_time={}",
-        encode_plus(number),
-        encode_plus(sms_time)
+    let failed = || format!("{sender} SMS send failed");
+    let (env_name, fallback) = external_endpoint(sender);
+    let url = std::env::var(env_name).unwrap_or_else(|_| fallback.to_string());
+    // `valid` already limited both values to digits and `;+-`, so only '+' needs escaping.
+    let number = number.replace('+', "%2B");
+    let sms_time = sms_time.replace('+', "%2B");
+    let body = format!(
+        "goformId=SEND_SMS&Number={number}&MessageBody={message}&ID=-1&encode_type=UNICODE&sms_time={sms_time}"
     );
-    let client = reqwest::Client::builder()
-        .redirect(Policy::none())
+    let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
+        .redirect(Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
-    let response = client
+    let reply = http
         .post(url)
         .header("content-type", "application/x-www-form-urlencoded")
-        .body(form)
+        .body(body)
         .send()
         .await
         .map_err(|_| format!("{sender} SMS endpoint unavailable"))?;
-    if !response.status().is_success() || response.content_length().is_some_and(|v| v > 4096) {
-        return Err(format!("{sender} SMS send failed"));
+    let too_long = reply
+        .content_length()
+        .is_some_and(|len| len > GOFORM_REPLY_MAX as u64);
+    if too_long || !reply.status().is_success() {
+        return Err(failed());
     }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|_| format!("{sender} SMS send failed"))?;
-    if bytes.len() > 4096
-        || serde_json::from_slice::<Value>(&bytes)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("result")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .as_deref()
-            != Some("success")
-    {
-        return Err(format!("{sender} SMS send failed"));
+    let raw = reply.bytes().await.map_err(|_| failed())?;
+    if raw.len() > GOFORM_REPLY_MAX {
+        return Err(failed());
+    }
+    let accepted = serde_json::from_slice::<Value>(&raw)
+        .is_ok_and(|reply| reply.get("result").and_then(Value::as_str) == Some("success"));
+    if !accepted {
+        return Err(failed());
     }
     Ok(json!({"sender":sender,"status":3}))
 }
 
+/// Active SIM slot as the MDM reports it (0 if unknown).
 async fn current_slot() -> i64 {
-    state::ubus("zwrt_zte_mdm.api", "get_sim_info", json!({}))
-        .await
-        .ok()
-        .and_then(|value| {
-            value
-                .get("current_sim_slot")
-                .or_else(|| value.get("sim_slot"))
-                .and_then(Value::as_i64)
-        })
-        .unwrap_or_default()
+    let Ok(info) = state::ubus("zwrt_zte_mdm.api", "get_sim_info", json!({})).await else {
+        return 0;
+    };
+    ["current_sim_slot", "sim_slot"]
+        .iter()
+        .find_map(|key| info.get(*key))
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
 }
 
+fn provision_args(slot: i64, active: bool) -> Value {
+    json!({"active_slot": slot, "active_flag": i64::from(active)})
+}
+
+/// Switch the provisioning session to `slot` and wait (≤15 s) until the MDM
+/// reports it as current.
 async fn select_slot(slot: i64) -> Result<(), String> {
-    let old = if slot == 2 { 1 } else { 2 };
-    let _ = state::ubus(
-        "zwrt_zte_mdm.api",
-        "zwrt_mdm_change_provision_session",
-        json!({"active_slot":old,"active_flag":0}),
-    )
-    .await;
-    state::ubus(
-        "zwrt_zte_mdm.api",
-        "zwrt_mdm_change_provision_session",
-        json!({"active_slot":slot,"active_flag":1}),
-    )
-    .await?;
-    for _ in 0..30 {
+    const METHOD: &str = "zwrt_mdm_change_provision_session";
+    let other = if slot == 2 { 1 } else { 2 };
+    // Releasing the other slot is best effort; the activation below is what counts.
+    let _ = state::ubus("zwrt_zte_mdm.api", METHOD, provision_args(other, false)).await;
+    state::ubus("zwrt_zte_mdm.api", METHOD, provision_args(slot, true)).await?;
+    let mut attempts = 30;
+    while attempts > 0 {
         if current_slot().await == slot {
             return Ok(());
         }
+        attempts -= 1;
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     Err(format!("SIM slot {slot} did not become active"))
 }
 
+/// `zwrt_wms_get_cmd_status` result codes for the send command (`sms_cmd` 4).
+const CMD_DONE: i64 = 3;
+const CMD_FAILED: i64 = 2;
+
+/// Send through this device's own `zwrt_wms`, then poll the command status
+/// (up to 20 × 500 ms).
 async fn send_host(number: &str, message: &str, sms_time: &str) -> Result<Value, String> {
-    let mut key = ensure_crypto_session().await?;
-    let encrypted_number = encrypt(&key, number)?;
-    let encrypted_message = encrypt(&key, message)?;
-    key.zeroize();
-    state::ubus(
-        "zwrt_wms",
-        "zte_libwms_send_sms",
-        json!({"number":encrypted_number,"message_body":encrypted_message,"sms_time":sms_time,"encode_type":"UNICODE","id":"-1"}),
-    )
-    .await?;
+    let (sealed_number, sealed_body) = {
+        let mut key = ensure_crypto_session().await?;
+        let sealed = encrypt(&key, number).and_then(|n| Ok((n, encrypt(&key, message)?)));
+        key.zeroize();
+        sealed?
+    };
+    let request = json!({
+        "number": sealed_number,
+        "message_body": sealed_body,
+        "sms_time": sms_time,
+        "encode_type": "UNICODE",
+        "id": "-1",
+    });
+    state::ubus("zwrt_wms", "zte_libwms_send_sms", request).await?;
     for _ in 0..20 {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        let Ok(reply) =
-            state::ubus("zwrt_wms", "zwrt_wms_get_cmd_status", json!({"sms_cmd":4})).await
-        else {
-            continue;
-        };
-        match reply.get("sms_cmd_status_result").and_then(Value::as_i64) {
-            Some(3) => return Ok(json!({"sender":"host","status":3})),
-            Some(2) => return Err("zwrt_wms SMS command failed".into()),
+        let status = state::ubus("zwrt_wms", "zwrt_wms_get_cmd_status", json!({"sms_cmd":4}))
+            .await
+            .ok()
+            .and_then(|reply| reply.get("sms_cmd_status_result").and_then(Value::as_i64));
+        match status {
+            Some(CMD_DONE) => return Ok(json!({"sender":"host","status":3})),
+            Some(CMD_FAILED) => return Err("zwrt_wms SMS command failed".into()),
             _ => {}
         }
     }
     Err("zwrt_wms SMS command timed out".into())
 }
 
+/// Which path a `sender` value selects.
+enum Route {
+    External,
+    Host,
+    Slot(i64),
+}
+
+fn route(sender: &str) -> Option<Route> {
+    Some(match sender {
+        "v3e1" | "v3e2" => Route::External,
+        "host" | "x75" => Route::Host,
+        "sim1" => Route::Slot(1),
+        "sim2" => Route::Slot(2),
+        _ => return None,
+    })
+}
+
 pub async fn send(params: &Value) -> Result<Value, (bool, String)> {
-    let object = params.as_object().expect("server validates params");
-    let text = |name: &str| object.get(name).and_then(Value::as_str);
-    let sender = text("sender").unwrap_or("host");
-    let (Some(number), Some(message), Some(sms_time)) =
-        (text("number"), text("message_hex"), text("sms_time"))
+    let fields = params.as_object().expect("server validates params");
+    let get = |key: &str| fields.get(key).and_then(Value::as_str);
+    let sender = get("sender").unwrap_or("host");
+    let Some((number, message, sms_time)) = get("number")
+        .zip(get("message_hex"))
+        .zip(get("sms_time"))
+        .map(|((n, m), t)| (n, m, t))
     else {
         return Err((true, "missing SMS parameters".into()));
     };
     if !valid(number, message, sms_time) {
         return Err((true, "invalid SMS parameters".into()));
     }
-    let result = match sender {
-        "v3e1" | "v3e2" => send_external(sender, number, message, sms_time).await,
-        "host" | "x75" => send_host(number, message, sms_time).await,
-        "sim1" | "sim2" => {
-            let slot = if sender == "sim1" { 1 } else { 2 };
+    let Some(path) = route(sender) else {
+        return Err((true, "invalid SMS sender".into()));
+    };
+    let outcome = match path {
+        Route::External => send_external(sender, number, message, sms_time).await,
+        Route::Host => send_host(number, message, sms_time).await,
+        Route::Slot(slot) => {
             if current_slot().await != slot {
-                select_slot(slot).await.map_err(|error| (false, error))?;
+                select_slot(slot).await.map_err(|e| (false, e))?;
             }
             send_host(number, message, sms_time).await
         }
-        _ => return Err((true, "invalid SMS sender".into())),
     };
-    result.map_err(|error| (false, error))
+    outcome.map_err(|e| (false, e))
 }
 
 #[cfg(test)]
@@ -558,53 +636,63 @@ mod tests {
 
     #[test]
     fn validates_external_shape() {
+        // Accepted: international number, hex UCS-2 body, vendor time string.
         assert!(valid("+8613800000000", "6D4B8BD5", "26;08;27;04;00;00;+;0"));
+        // Separator inside the number is refused.
         assert!(!valid("+1;reboot", "00", "1"));
+        // Odd-length body is refused.
         assert!(!valid("10086", "0", "1"));
     }
 
     #[test]
     fn aes_envelope_layout_roundtrip() {
         let key = [7_u8; 32];
-        let encoded = encrypt(&key, "6D4B8BD5").unwrap();
-        let raw = STANDARD.decode(encoded).unwrap();
-        assert_eq!(raw.len(), 28 + 8);
-        let mut input = raw[28..].to_vec();
-        input.extend_from_slice(&raw[12..28]);
-        let plain = Aes256Gcm::new_from_slice(&key)
+        let sealed = STANDARD.decode(encrypt(&key, "6D4B8BD5").unwrap()).unwrap();
+        // nonce + tag in front of an 8-byte body.
+        assert_eq!(sealed.len(), HEADER_LEN + 8);
+        let (nonce, rest) = sealed.split_at(NONCE_LEN);
+        let (tag, body) = rest.split_at(TAG_LEN);
+        let reordered = [body, tag].concat();
+        let opened = Aes256Gcm::new_from_slice(&key)
             .unwrap()
-            .decrypt(Nonce::from_slice(&raw[..12]), input.as_ref())
+            .decrypt(Nonce::from_slice(nonce), reordered.as_slice())
             .unwrap();
-        assert_eq!(plain, b"6D4B8BD5");
+        assert_eq!(opened, b"6D4B8BD5");
     }
 
     #[tokio::test]
     async fn normalizes_plain_sms_and_deduplicates() {
-        let replies = [
-            json!({"messages":[{"id":"7","num":"10086","date":"26,08,27,04,00,00,+,0","tag":"1","text":"6D4B8BD5"}]}),
-            json!({"list":[{"id":7,"number":"duplicate","content":"0041"}]}),
-        ];
-        let list = normalize_lists(&replies).await;
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].num, "10086");
-        assert_eq!(list[0].text, "测试");
-        assert_eq!(list[0].date, "08-27 04:00");
-        assert_eq!(list[0].unread, 1);
+        let first = json!({"messages":[{"id":"7","num":"10086","date":"26,08,27,04,00,00,+,0","tag":"1","text":"6D4B8BD5"}]});
+        let again = json!({"list":[{"id":7,"number":"duplicate","content":"0041"}]});
+        let out = normalize_lists(&[first, again]).await;
+        assert_eq!(out.len(), 1);
+        let only = &out[0];
+        assert_eq!(
+            (
+                only.num.as_str(),
+                only.text.as_str(),
+                only.date.as_str(),
+                only.unread
+            ),
+            ("10086", "测试", "08-27 04:00", 1)
+        );
     }
 
     #[tokio::test]
     async fn authenticates_and_normalizes_encrypted_sms() {
         let key = [9_u8; 32];
         *SESSION_KEY.lock().await = Some(key);
-        let number = encrypt(&key, "00310030003000380036").unwrap();
-        let text = encrypt(&key, "6D4B8BD5").unwrap();
-        let list = normalize_lists(&[json!({"list":[{
-            "id":8,"num":number,"date":"26,08,27,04,00,00,+,0","tag":0,"text":text
-        }]})])
-        .await;
+        let row = json!({
+            "id": 8,
+            "num": encrypt(&key, "00310030003000380036").unwrap(),
+            "date": "26,08,27,04,00,00,+,0",
+            "tag": 0,
+            "text": encrypt(&key, "6D4B8BD5").unwrap(),
+        });
+        let out = normalize_lists(&[json!({ "list": [row] })]).await;
         *SESSION_KEY.lock().await = None;
-        assert_eq!(list[0].num, "10086");
-        assert_eq!(list[0].text, "测试");
+        assert_eq!(out[0].num, "10086");
+        assert_eq!(out[0].text, "测试");
     }
 
     /// 假的 `zte_libwms_get_sms_data`：照固件的规矩，只接受 `order by id desc`，按 page/data_per_page 切页。

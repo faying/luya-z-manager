@@ -1,19 +1,10 @@
-## Summary
+## What and why
 
-Brief description of what this PR does and why.
+<!-- What does this change, and what problem does it solve? -->
 
-## Changes
+## How it was tested
 
--
--
+<!-- Unit tests, e2e, sandbox install, real device (firmware version)… -->
 
-## Testing
-
-Describe how you tested these changes (device testing, unit tests, manual verification, etc.).
-
-## Checklist
-
-- [ ] `cargo fmt` passes
-- [ ] `cargo clippy` passes with no warnings
-- [ ] Tested on a real device (if applicable)
-- [ ] Updated documentation (if applicable)
+- [ ] `cargo fmt` / `cargo clippy` clean
+- [ ] Docs updated where behaviour changed

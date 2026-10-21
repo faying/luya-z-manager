@@ -3,7 +3,7 @@
 # header, "Supervision"). Installed from source/manager/scripts/tailscale/tailscale.init.
 # Never "enable" it: rc.local's "sh /data/tailscale/start.sh" starts it through
 # this file, and "enable" on this firmware leaves whiteouts in the overlay.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 START=96
 USE_PROCD=1

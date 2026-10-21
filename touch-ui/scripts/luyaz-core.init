@@ -8,7 +8,7 @@
 # Normal boots only, token seeding, LAN listener arguments.
 #
 # Do NOT run `enable`/`disable` (overlay whiteouts, manager CLAUDE.md).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 START=96
 USE_PROCD=1

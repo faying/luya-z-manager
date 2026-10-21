@@ -2,7 +2,7 @@
 //! the last mode kept when it comes back cut or not at all, a stopped core noticed from the
 //! small per-round request; and 家里出口 (parse, poll, switch). A fake mihomo on a thread
 //! counts each request; time is stepped by editing the timestamps.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::*;
 use crate::data::testsrv::{listen, read_req};
@@ -268,10 +268,10 @@ fn names_for_the_device_fonts() {
     assert_eq!(sanitize_name("🚀 节点选择", 96), "节点选择");
     assert_eq!(sanitize_name("🚀", 96), "-");
     assert_eq!(sanitize_name("a  b ", 96), "a b");
-    assert_eq!(urlenc("🚀 节点", 384), "%F0%9F%9A%80%20%E8%8A%82%E7%82%B9");
-    assert_eq!(human(1536), "1K");
-    assert_eq!(human(5 * 1048576 + 7), "5M");
-    assert_eq!(human(3 * 1073741824 / 2), "1.5G");
+    assert_eq!(path_escape("🚀 节点", 384), "%F0%9F%9A%80%20%E8%8A%82%E7%82%B9");
+    assert_eq!(size(1536), "1K");
+    assert_eq!(size(5 * 1048576 + 7), "5M");
+    assert_eq!(size(3 * 1073741824 / 2), "1.5G");
 }
 
 /// Every group gets a chip: 19 groups (more than the old 12/16 caps), main and AI first.

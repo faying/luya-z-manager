@@ -6,7 +6,7 @@
 //!     control; DOT/CLIP labels whose text is wider than the box are counted as truncated.
 //!
 //! Messages are bytes, cut like C's `%.60s` (a byte count, not characters).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use crate::lv::{self, sys, Obj};
 use std::ffi::c_char;

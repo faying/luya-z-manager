@@ -1,6 +1,6 @@
 //! 测速 (src/speedtest.c): luyaz-core's own speed test engine (/api/speedtest/*), its progress
 //! every second while the page or 出口 is up, the server list once.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::core_api::CoreApi;
 use super::util::{bytes_cap, find, jget, jset, mono_ms, trunc};

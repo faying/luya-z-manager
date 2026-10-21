@@ -1,6 +1,6 @@
 //! src/net_view.c: luyaz-core's /v2/screen "net" parsed (the rules are the core's), its verdict
 //! codes, "is this a verdict 网络诊断 can say more about", and the placeholder view.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use crate::json;
 use crate::lang;

@@ -2,7 +2,7 @@
 # start.sh against stubbed tailscaled/tailscale/ip/pidof/kill/df (busybox container):
 #   docker run --rm -v "$PWD":/w busybox sh /w/scripts/tailscale/test/start.sh
 # Failure injection for the boot-safety rules in the header of ../start.sh.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 S=$HERE/start.sh
 PASS=0; FAIL=0

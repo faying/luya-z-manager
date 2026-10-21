@@ -1,6 +1,6 @@
 //! The English table: lang/en.inc (scripts/lang-gen.sh from lang/en.tsv; was the C UI's
 //! src/lang_en.inc until Phase 10 X5), as a sorted Rust array.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use std::path::PathBuf;
 

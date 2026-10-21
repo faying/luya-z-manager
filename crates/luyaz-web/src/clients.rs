@@ -7,23 +7,56 @@
 //! `dhcp_leases` is a failure (R9: getDHCPLeases failed, the agent still says ok), so it can't
 //! read as "no devices". Lease expiry is on the device clock; "now" is netinfo's `now` (same clock).
 //! The expired toggle is a Datastar signal in the page (no server state), so pushes keep it.
+//!
+//! LAN client identification (lan-client-id.md T5, core 1.21.0): `/api/lanid` (u60d lanid.rs)
+//! is read with the other two and is extra like the traffic (an older core without it, or a
+//! failed read, leaves the page as before). Per row: the winning name in the core's order
+//! (alias > mDNS > DHCP: lease host name / host hint, then lanid's > NetBIOS), vendor, kind, a
+//! 「私有地址」 tag (locally administered MAC while lanid is loaded, the core's rule), and a
+//! details panel (`$cld` = the open MAC, a page signal so pushes keep it) with every source.
+//! Alias, tier 2: Save ─▶ `alias/ask` (the draft `_cla` in the body, kept under a random token
+//! server-side) ─▶ inline confirm ─▶ `alias/set?t=` ─▶ `POST /api/lanid/alias {mac, alias}`
+//! ("" removes) ─▶ read back `aliases[mac]` from `/api/lanid`. The area is outside the pushed list.
 
-use std::time::{Duration, SystemTime};
+use std::collections::HashMap;
+use std::convert::Infallible;
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime};
 
 use askama::Template;
 use axum::extract::{Query, State};
+use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
-use serde_json::Value;
+use futures_util::Stream;
+use serde_json::{Value, json};
 
 use crate::agent::{Caller, Fail, Polled, bytes, mbps, stopped};
 use crate::i18n::Lang;
-use crate::pages::{Shared, StreamQuery, split_leaves};
+use crate::pages::{Shared, StreamQuery, patch, split_leaves};
+use crate::topbar::Via;
+use crate::write::{self, Outcome, Phase};
 
 const PATH: &str = "/clients";
 const EVERY: Duration = Duration::from_secs(5);
 
+/// One value of one field and where it came from (`GET /api/lanid` `sources`), for the details.
+pub struct Src {
+    pub field: &'static str,
+    pub source: String,
+    pub value: String,
+}
+
 pub struct Row {
     pub name: String,
+    /// lowercase `aa:bb:…` (the core's key), "" without a MAC
+    pub mac: String,
+    pub alias: String,
+    /// the old MAC the alias was taken over from (lanid watch.rs: same device, new random MAC)
+    pub alias_from: String,
+    pub vendor: Option<String>,
+    pub kind: Option<&'static str>,
+    pub private: bool,
+    pub sources: Vec<Src>,
     pub wifi: Option<(String, String)>,
     pub not_on_wifi: bool,
     pub traffic: Option<String>,
@@ -52,6 +85,13 @@ pub struct View {
     pub list: List,
 }
 
+impl Row {
+    /// The MAC without colons, for element ids.
+    pub fn slug(&self) -> String {
+        self.mac.replace(':', "")
+    }
+}
+
 impl View {
     pub fn symbol(&self) -> &'static str {
         match self.tone {
@@ -69,6 +109,8 @@ struct Got {
     last_ok: Option<SystemTime>,
     err: Option<Fail>,
     no_table: bool,
+    /// the last good `/api/lanid` data
+    lanid: Option<Value>,
 }
 
 pub struct Poll {
@@ -157,6 +199,155 @@ fn same_mac(a: &Value, mac: &str) -> bool {
         .is_some_and(|m| m.eq_ignore_ascii_case(mac))
 }
 
+fn kind_word(k: &str, l: Lang) -> Option<&'static str> {
+    Some(match k {
+        "phone" => l.pick("Phone", "手机"),
+        "tablet" => l.pick("Tablet", "平板"),
+        "laptop" => l.pick("Laptop", "笔记本电脑"),
+        "computer" => l.pick("Computer", "电脑"),
+        "tv" => l.pick("TV", "电视"),
+        "speaker" => l.pick("Speaker", "音箱"),
+        "watch" => l.pick("Watch", "手表"),
+        "printer" => l.pick("Printer", "打印机"),
+        "iot" => l.pick("Smart home device", "智能家居设备"),
+        _ => return None,
+    })
+}
+
+fn field_word(f: &str, l: Lang) -> &'static str {
+    match f {
+        "name" => l.pick("Name", "名称"),
+        "vendor" => l.pick("Maker", "厂商"),
+        _ => l.pick("Type", "类型"),
+    }
+}
+
+/// How a source is called in the details.
+pub fn source_word(s: &str, l: Lang) -> String {
+    match s {
+        "alias" => l.pick("Your alias", "你设的别名").into(),
+        "dhcp" => "DHCP".into(),
+        "mdns" => "mDNS".into(),
+        "ssdp" => "SSDP".into(),
+        "netbios" => "NetBIOS".into(),
+        "oui" => l.pick("MAC prefix (OUI)", "MAC 前缀（OUI）").into(),
+        o => o.into(),
+    }
+}
+
+/// `aa:bb:cc:dd:ee:ff` from any casing or `-`; None when it is not a MAC.
+pub fn mac_key(s: &str) -> Option<String> {
+    let h: String = s.chars().filter(|c| *c != ':' && *c != '-').collect();
+    (h.len() == 12 && h.chars().all(|c| c.is_ascii_hexdigit())).then(|| {
+        h.to_ascii_lowercase()
+            .as_bytes()
+            .chunks(2)
+            .map(|c| String::from_utf8_lossy(c).into_owned())
+            .collect::<Vec<_>>()
+            .join(":")
+    })
+}
+
+/// The core's check of an alias (lanid.rs `valid_value`, after trim): at most 64 bytes, no
+/// control characters; "" (remove) is fine.
+pub fn alias_ok(a: &str) -> bool {
+    a.len() <= 64 && !a.chars().any(char::is_control)
+}
+
+/// Name, alias, vendor, kind, private, details of one MAC, from the lease's own name and lanid.
+#[allow(clippy::type_complexity)]
+fn identify(
+    lanid: Option<&Value>,
+    mac: &str,
+    lease_name: Option<String>,
+    l: Lang,
+) -> (
+    Option<String>,
+    String,
+    Option<String>,
+    Option<&'static str>,
+    bool,
+    Vec<Src>,
+) {
+    let key = mac_key(mac);
+    let loaded = lanid.is_some_and(|d| d["status"]["loaded"].as_bool() == Some(true));
+    let private = loaded
+        && key
+            .as_deref()
+            .and_then(|k| u8::from_str_radix(&k[..2], 16).ok())
+            .is_some_and(|b| b & 2 != 0);
+    let m = key
+        .as_deref()
+        .and_then(|k| lanid.map(|d| &d["merged"][k]))
+        .filter(|m| m.is_object());
+    let mut raw: Vec<(String, String, String)> = m
+        .and_then(|m| m["sources"].as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| {
+                    Some((
+                        s["field"].as_str()?.to_owned(),
+                        s["source"].as_str()?.to_owned(),
+                        s["value"].as_str().filter(|v| !v.is_empty())?.to_owned(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // the lease's own name is a DHCP name too: in the core's order, after alias and mDNS
+    if let Some(n) = &lease_name
+        && !raw
+            .iter()
+            .any(|(f, s, v)| f == "name" && s == "dhcp" && v == n)
+    {
+        let at = raw
+            .iter()
+            .position(|(f, s, _)| f == "name" && s != "alias" && s != "mdns")
+            .or_else(|| raw.iter().position(|(f, _, _)| f != "name"))
+            .unwrap_or(raw.len());
+        raw.insert(at, ("name".into(), "dhcp".into(), n.clone()));
+    }
+    let alias = m
+        .and_then(|m| m["client"]["alias"].as_str())
+        .unwrap_or("")
+        .to_owned();
+    let name = raw
+        .iter()
+        .find(|(f, _, _)| f == "name")
+        .map(|(_, _, v)| v.clone());
+    let first = |f: &str| {
+        raw.iter()
+            .find(|(x, _, _)| x == f)
+            .map(|(_, _, v)| v.clone())
+    };
+    let vendor = first("vendor");
+    let kind = first("kind").and_then(|k| kind_word(&k, l));
+    let sources = raw
+        .iter()
+        .map(|(f, s, v)| Src {
+            field: field_word(f, l),
+            source: source_word(s, l),
+            value: if f == "kind" {
+                kind_word(v, l).map_or_else(|| v.clone(), str::to_owned)
+            } else {
+                v.clone()
+            },
+        })
+        .collect();
+    (name, alias, vendor, kind, private, sources)
+}
+
+/// The old MAC whose alias `mac` took over ("" when it did not).
+fn alias_from(lanid: Option<&Value>, mac: &str) -> String {
+    mac_key(mac)
+        .and_then(|k| {
+            lanid?["merged"][k.as_str()]["client"]["alias_from"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .unwrap_or_default()
+}
+
 fn view(g: &Got, l: Lang) -> View {
     let signed_out = g.err == Some(Fail::SignedOut);
     let stale = g.err.is_some() || g.no_table;
@@ -202,12 +393,14 @@ fn view(g: &Got, l: Lang) -> View {
             .iter()
             .find_map(|k| hosts[k.as_str()]["name"].as_str().filter(|n| !n.is_empty()))
             .map(str::to_owned);
-        let name = le["hostname"]
+        let lease_name = le["hostname"]
             .as_str()
             .filter(|n| !n.is_empty())
             .map(str::to_owned)
-            .or(hint)
-            .unwrap_or_else(|| l.pick("Unknown device", "未知设备").into());
+            .or(hint);
+        let (name, alias, vendor, kind, private, sources) =
+            identify(g.lanid.as_ref(), mac, lease_name, l);
+        let name = name.unwrap_or_else(|| l.pick("Unknown device", "未知设备").into());
         let st = (!mac.is_empty())
             .then(|| wifi.and_then(|w| w.iter().find(|s| same_mac(s, mac))))
             .flatten();
@@ -217,6 +410,13 @@ fn view(g: &Got, l: Lang) -> View {
         let ip = le["ipaddr"].as_str().unwrap_or("—");
         let row = Row {
             name,
+            mac: mac_key(mac).unwrap_or_default(),
+            alias_from: alias_from(g.lanid.as_ref(), mac),
+            alias,
+            vendor,
+            kind,
+            private,
+            sources,
             wifi: st.map(|s| wifi_line(s, l)),
             not_on_wifi: st.is_none() && is_active && wifi.is_some(),
             traffic: tr.and_then(|t| traffic_line(t, l)),
@@ -292,10 +492,17 @@ impl Poll {
     }
 
     async fn fetch(&mut self, app: &Shared) {
-        let (c, n) = tokio::join!(
+        let (c, n, d) = tokio::join!(
             crate::agent::get(app, &self.who, "/api/network/clients"),
             crate::agent::get(app, &self.who, "/api/netinfo?lite=1&clients=1"),
+            crate::agent::get(app, &self.who, "/api/lanid"),
         );
+        // identification is extra too: keep the last answer (an older core has no /api/lanid)
+        if let Ok(d) = d
+            && d["status"].is_object()
+        {
+            self.got.lanid = Some(d);
+        }
         match c {
             Ok(v) if v["dhcp_leases"].is_array() => {
                 self.got.clients = Some(v);
@@ -333,6 +540,7 @@ impl Polled for Poll {
 struct Page {
     shell: crate::shell::Shell,
     leaves: Vec<(String, String)>,
+    alias_op: String,
 }
 
 impl Page {
@@ -359,6 +567,7 @@ pub async fn page(State(app): State<Shared>, req: axum::extract::Request) -> Res
     let html = Page {
         shell,
         leaves: p.leaves(),
+        alias_op: alias_area(ctx.lang, ctx.remote, "", &Phase::Idle),
     }
     .render()
     .unwrap();
@@ -384,6 +593,238 @@ pub async fn events(
 pub async fn refresh(State(app): State<Shared>) -> axum::http::StatusCode {
     let _ = app.kick.send(PATH);
     axum::http::StatusCode::NO_CONTENT
+}
+
+// ---- alias (tier 2) ----
+
+const ALIAS_CANCEL: &str = "/clients/alias/cancel";
+const STASH_TTL: Duration = Duration::from_secs(600);
+
+fn alias_area(l: Lang, remote: Via, set: &str, phase: &Phase) -> String {
+    write::Area {
+        id: "cl-alias",
+        l,
+        remote,
+        set,
+        cancel: ALIAS_CANCEL,
+        phase,
+    }
+    .html()
+}
+
+fn one(html: String) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    Sse::new(futures_util::stream::once(async move { Ok(patch(&html)) }))
+}
+
+/// What an ask confirmed: (MAC, alias, the device's shown name), under a random token, so the
+/// alias never travels in a URL.
+type Stash = Mutex<HashMap<String, (Instant, String, String, String)>>;
+
+fn stash() -> &'static Stash {
+    static S: std::sync::OnceLock<Stash> = std::sync::OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn put(mac: String, alias: String, name: String) -> String {
+    let t = crate::auth::random_id();
+    let mut m = stash().lock().unwrap();
+    m.retain(|_, (at, ..)| at.elapsed() < STASH_TTL);
+    m.insert(t.clone(), (Instant::now(), mac, alias, name));
+    t
+}
+
+fn take(t: &str) -> Option<(String, String)> {
+    stash()
+        .lock()
+        .unwrap()
+        .remove(t)
+        .filter(|(at, ..)| at.elapsed() < STASH_TTL)
+        .map(|(_, m, a, _)| (m, a))
+}
+
+fn bad_alias(l: Lang) -> Outcome {
+    Outcome::Failed(
+        l.pick(
+            "An alias is at most 64 bytes (about 21 Chinese characters), without control characters.",
+            "别名最多 64 字节（约 21 个汉字），不能有控制字符。",
+        )
+        .into(),
+    )
+}
+
+pub fn alias_confirm(alias: &str, name: &str, l: Lang) -> write::Confirm {
+    let (title, what, action) = if alias.is_empty() {
+        (
+            l.pick("Remove the alias", "删除别名"),
+            match l {
+                Lang::En => format!("“{name}” goes back to the name the device reports itself."),
+                Lang::Zh => format!("「{name}」改回设备自己报的名字。"),
+            },
+            l.pick("Confirm: remove the alias", "确认：删除别名"),
+        )
+    } else {
+        (
+            l.pick("Save the alias", "保存别名"),
+            match l {
+                Lang::En => format!(
+                    "“{name}” is shown as “{alias}” here and on the touch screen. Only this router keeps it; the device itself is not renamed."
+                ),
+                Lang::Zh => format!(
+                    "「{name}」在这里和触屏上显示为「{alias}」。只存在本机，不会改设备自己的名字。"
+                ),
+            },
+            l.pick("Confirm: save the alias", "确认：保存别名"),
+        )
+    };
+    write::Confirm {
+        tier: write::Tier::Inline,
+        title: title.into(),
+        what,
+        downtime: None,
+        recovery: None,
+        action: action.into(),
+        cuts_uplink: false,
+        word: None,
+        danger: false,
+        revert: write::Revert::No,
+    }
+}
+
+#[derive(serde::Deserialize, Default)]
+pub struct AliasIn {
+    #[serde(default, rename = "_cla")]
+    alias: String,
+    /// the name shown now (for the confirm's words only)
+    #[serde(default, rename = "_cln")]
+    name: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct AskQuery {
+    #[serde(default)]
+    mac: String,
+}
+
+/// 「保存」: the inline confirm (or why the draft cannot be saved).
+pub async fn alias_ask(
+    Query(q): Query<AskQuery>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
+    let ctx = crate::topbar::Ctx::of_request(&req, PATH);
+    let (l, r) = (ctx.lang, ctx.remote);
+    let body = axum::body::to_bytes(req.into_body(), 16 * 1024)
+        .await
+        .unwrap_or_default();
+    let f: AliasIn = serde_json::from_slice(&body).unwrap_or_default();
+    let alias = f.alias.trim().to_owned();
+    let Some(mac) = mac_key(&q.mac) else {
+        return one(alias_area(l, r, "", &Phase::Idle));
+    };
+    if !alias_ok(&alias) {
+        return one(alias_area(l, r, "", &Phase::Done(bad_alias(l))));
+    }
+    let name: String = f.name.trim().chars().take(64).collect();
+    let c = alias_confirm(&alias, if name.is_empty() { &mac } else { &name }, l);
+    let t = put(mac, alias, name);
+    one(alias_area(
+        l,
+        r,
+        &format!("/clients/alias/set?t={t}"),
+        &Phase::Ask(c),
+    ))
+}
+
+#[derive(serde::Deserialize)]
+pub struct SetQuery {
+    #[serde(default)]
+    t: String,
+}
+
+/// The stored alias of `mac` in `/api/lanid` ("" = none); None when it could not be read.
+async fn read_alias(app: &Shared, who: &Caller, mac: &str) -> Option<String> {
+    let d = crate::agent::get(app, who, "/api/lanid").await.ok()?;
+    let a = d["aliases"].as_object()?;
+    Some(
+        a.iter()
+            .find(|(k, _)| mac_key(k).as_deref() == Some(mac))
+            .and_then(|(_, v)| v.as_str())
+            .unwrap_or("")
+            .to_owned(),
+    )
+}
+
+async fn alias_outcome(app: &Shared, who: &Caller, l: Lang, mac: &str, alias: &str) -> Outcome {
+    let sent = crate::agent::post_raw(
+        app,
+        who,
+        "/api/lanid/alias",
+        &json!({"mac": mac, "alias": alias}),
+    )
+    .await;
+    let stored_mac = match sent {
+        Ok((c, v)) if (200..300).contains(&c) && v["ok"].as_bool() != Some(false) => v["mac"]
+            .as_str()
+            .and_then(mac_key)
+            .unwrap_or_else(|| mac.to_owned()),
+        Ok((c, v)) => return Outcome::Failed(crate::agent::refused(c, &v).text(l)),
+        Err(Fail::Unreachable) => return Outcome::Unknown,
+        Err(f) => return Outcome::Failed(f.text(l)),
+    };
+    match read_alias(app, who, &stored_mac).await {
+        Some(a) if a == alias => Outcome::Applied(
+            if alias.is_empty() {
+                l.pick("Alias removed", "别名已删除")
+            } else {
+                l.pick("Alias saved", "别名已保存")
+            }
+            .into(),
+        ),
+        _ => Outcome::Accepted,
+    }
+}
+
+pub async fn alias_set(
+    State(app): State<Shared>,
+    Query(q): Query<SetQuery>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
+    let ctx = crate::topbar::Ctx::of_request(&req, PATH);
+    let (l, r) = (ctx.lang, ctx.remote);
+    let who = Caller::of(&app, &req);
+    let pending = alias_area(
+        l,
+        r,
+        "",
+        &Phase::Pending(l.pick("Saving…", "正在保存…").into()),
+    );
+    let got = take(&q.t);
+    write::respond(pending, async move {
+        let o = match got {
+            Some((mac, alias)) => alias_outcome(&app, &who, l, &mac, &alias).await,
+            None => Outcome::NotYet(
+                l.pick(
+                    "This confirm has expired; press Save again.",
+                    "这个确认已过期，请重新点「保存」。",
+                )
+                .into(),
+            ),
+        };
+        let _ = app.kick.send(PATH);
+        alias_area(l, r, "", &Phase::Done(o))
+    })
+}
+
+pub async fn alias_cancel(
+    Query(q): Query<write::CancelQuery>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
+    let ctx = crate::topbar::Ctx::of_request(&req, PATH);
+    one(alias_area(
+        ctx.lang,
+        ctx.remote,
+        "",
+        &write::cancel_phase(&q),
+    ))
 }
 
 #[cfg(test)]
@@ -504,5 +945,128 @@ mod tests {
                 "{h}"
             );
         }
+    }
+
+    fn lanid() -> Value {
+        json!({"status": {"loaded": true}, "aliases": {"aa:bb:cc:dd:ee:02": "Mum's phone"},
+            "merged": {
+                "aa:bb:cc:dd:ee:01": {"client": {"mac": "aa:bb:cc:dd:ee:01"}, "sources": [
+                    {"field": "name", "source": "mdns", "value": "Living room TV"},
+                    {"field": "name", "source": "netbios", "value": "TV-01"},
+                    {"field": "vendor", "source": "oui", "value": "Sony"},
+                    {"field": "kind", "source": "mdns", "value": "tv"}]},
+                "aa:bb:cc:dd:ee:02": {"client": {"mac": "aa:bb:cc:dd:ee:02", "alias": "Mum's phone"}, "sources": [
+                    {"field": "name", "source": "alias", "value": "Mum's phone"}]}}})
+    }
+
+    #[test]
+    fn identification_in_the_cores_order_with_every_source() {
+        let mut g = got();
+        g.lanid = Some(lanid());
+        let v = view(&g, Lang::Zh);
+        let List::Rows { active, expired } = &v.list else {
+            panic!()
+        };
+        // mDNS beats the host hint; the hint is listed as DHCP, before NetBIOS
+        assert_eq!(active[0].name, "Living room TV");
+        assert_eq!(active[0].vendor.as_deref(), Some("Sony"));
+        assert_eq!(active[0].kind, Some("电视"));
+        let src: Vec<String> = active[0]
+            .sources
+            .iter()
+            .map(|s| format!("{}/{}/{}", s.field, s.source, s.value))
+            .collect();
+        assert_eq!(
+            src,
+            [
+                "名称/mDNS/Living room TV",
+                "名称/DHCP/hint-name",
+                "名称/NetBIOS/TV-01",
+                "厂商/MAC 前缀（OUI）/Sony",
+                "类型/mDNS/电视"
+            ]
+        );
+        // the alias beats the lease's host name
+        assert_eq!(active[1].name, "Mum's phone");
+        assert_eq!(active[1].alias, "Mum's phone");
+        assert!(active[0].private, "0xaa has the locally administered bit");
+        assert_eq!(expired[0].name, "old", "no lanid record: as before");
+        let html = Leaves { v: &v }.render().unwrap();
+        assert!(html.contains("cl-d-aabbccddee01") && html.contains("Living room TV"));
+    }
+
+    #[test]
+    fn alias_taken_over_from_an_old_mac_is_tagged() {
+        let mut g = got();
+        let mut l = lanid();
+        l["merged"]["aa:bb:cc:dd:ee:02"]["client"]["alias_from"] = json!("aa:bb:cc:dd:ee:77");
+        g.lanid = Some(l);
+        let v = view(&g, Lang::Zh);
+        let List::Rows { active, .. } = &v.list else {
+            panic!()
+        };
+        assert_eq!(active[1].alias_from, "aa:bb:cc:dd:ee:77");
+        assert!(active[0].alias_from.is_empty());
+        let html = Leaves { v: &v }.render().unwrap();
+        assert!(html.contains("新地址，沿用别名") && html.contains("aa:bb:cc:dd:ee:77"));
+    }
+
+    #[test]
+    fn private_only_while_lanid_is_loaded() {
+        let mut g = got();
+        g.clients.as_mut().unwrap()["dhcp_leases"][0]["macaddr"] = json!("06:11:22:33:44:55");
+        g.clients.as_mut().unwrap()["dhcp_leases"][1]["macaddr"] = json!("04:11:22:33:44:55");
+        g.lanid = Some(json!({"status": {"loaded": true}, "merged": {}, "aliases": {}}));
+        let List::Rows { active, .. } = view(&g, Lang::Zh).list else {
+            panic!()
+        };
+        assert!(active[0].private && active[0].sources.is_empty());
+        assert!(!active[1].private, "04 = a universal MAC");
+        g.lanid = Some(json!({"status": {"loaded": false}, "merged": {}, "aliases": {}}));
+        let List::Rows { active, .. } = view(&g, Lang::Zh).list else {
+            panic!()
+        };
+        assert!(!active[0].private);
+    }
+
+    #[test]
+    fn alias_checks_like_the_core() {
+        assert!(alias_ok("") && alias_ok("客厅电视") && alias_ok(&"a".repeat(64)));
+        assert!(!alias_ok(&"a".repeat(65)) && !alias_ok("a\tb") && !alias_ok(&"电".repeat(22)));
+        assert_eq!(
+            mac_key("AA-BB-CC-DD-EE-0F").as_deref(),
+            Some("aa:bb:cc:dd:ee:0f")
+        );
+        assert_eq!(
+            mac_key("aabbccddee0f").as_deref(),
+            Some("aa:bb:cc:dd:ee:0f")
+        );
+        assert!(mac_key("aa:bb").is_none() && mac_key("zz:bb:cc:dd:ee:ff").is_none());
+    }
+
+    #[test]
+    fn the_alias_confirms_say_what_changes() {
+        let c = alias_confirm("客厅电视", "TV-01", Lang::Zh);
+        assert_eq!(c.tier, write::Tier::Inline);
+        assert!(c.what.contains("「TV-01」") && c.what.contains("「客厅电视」"));
+        assert_eq!(c.action, "确认：保存别名");
+        let c = alias_confirm("", "TV-01", Lang::En);
+        assert_eq!(c.action, "Confirm: remove the alias");
+    }
+
+    #[test]
+    fn the_english_identification_has_no_chinese() {
+        let mut g = got();
+        g.lanid = Some(lanid());
+        let h = Leaves {
+            v: &view(&g, Lang::En),
+        }
+        .render()
+        .unwrap();
+        assert!(h.contains("MAC prefix (OUI)") && h.contains(">TV<"), "{h}");
+        assert!(
+            !h.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+            "{h}"
+        );
     }
 }

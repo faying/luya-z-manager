@@ -9,7 +9,7 @@
 //! 摆放模式: moving a device that stays put (a window sill, a shelf): the main radio's SINR as a
 //! 3-second median, big; the best this visit and how far off it we are now. A new cell starts
 //! the best over. The screen stays on while the page is up.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::{Sub, Ui, SUB_VIEW, TAB_CELL};
 use crate::cf;
@@ -34,6 +34,9 @@ const DG_ACT_NONE: i32 = 0;
 const DG_ACT_PLACE: i32 = 1;
 const DG_ACT_PROXY: i32 = 2;
 const PL_SAMPLES: usize = 3;
+const PL_CURVE_H: i32 = 96;
+/// the curve: one point per core snapshot (~1 s), the last 30
+const PL_CURVE: u32 = 30;
 
 #[derive(Default, Clone, Copy)]
 pub struct DgRow {
@@ -102,6 +105,8 @@ pub struct Place {
     /// core snapshot the last sample came from
     ver: u64,
     best: i32,
+    /// the best's RSRP (dBm; 0 = none): the tiebreak when SINR is level
+    best_rsrp: i32,
     have_best: bool,
     best_at: i64,
     /// RAT · band · PCI the best belongs to
@@ -111,6 +116,8 @@ pub struct Place {
     /// the reset was the button
     manual: bool,
     col: Option<u32>,
+    chart: Obj,
+    ser: lv::Series,
 }
 
 unsafe extern "C" fn dg_start_cb(_e: *mut sys::lv_event_t) {
@@ -163,6 +170,31 @@ fn dg_going(r: &diag_run_t) -> bool {
 }
 
 /// device clock seconds → "14:32" (local time labelled UTC: local()'s digits)
+/// How long ago, for a time d seconds back: 刚刚 / N 分钟前 / N 小时前 / N 天前.
+pub(super) fn ago(d: i64) -> String {
+    let d = d.max(0);
+    let w = if d < 60 {
+        tr("刚刚").as_bytes().to_vec()
+    } else if d < 3600 {
+        cf!(tr("%ld 分钟前"), d / 60)
+    } else if d < 172_800 {
+        cf!(tr("%ld 小时前"), d / 3600)
+    } else {
+        cf!(tr("%ld 天前"), d / 86400)
+    };
+    String::from_utf8_lossy(&w).into_owned()
+}
+
+/// The best so far: higher SINR wins, level SINR goes to the stronger RSRP (travel-assist §7 Q1).
+fn pl_better(sinr: i32, rsrp: i32, best: i32, best_rsrp: i32) -> bool {
+    sinr > best || (sinr == best && rsrp != 0 && (best_rsrp == 0 || rsrp > best_rsrp))
+}
+
+/// SINR tenths on the curve's scale: -10..30 dB.
+fn pl_curve_y(v: i32) -> i32 {
+    v.clamp(-100, 300)
+}
+
 fn dg_hm(t: i64) -> String {
     if t > 0 { clock::strftime("%H:%M", &clock::local(t)) } else { "--:--".into() }
 }
@@ -777,7 +809,11 @@ impl Ui {
         p.n = 0;
         p.head = 0;
         p.have_best = false;
+        p.best_rsrp = 0;
         p.reset_at = lv::tick_get().max(1);
+        if !p.chart.is_null() {
+            p.chart.chart_set_all_values(p.ser, lv::CHART_POINT_NONE);
+        }
     }
 
     /// Opening the page: 这次最好 is this visit's, not a leftover from the last one.
@@ -802,7 +838,7 @@ impl Ui {
     pub(super) fn build_sub_place(&mut self, p: Obj) {
         let th = t();
         let f = uf();
-        let sc = kit::scroll(p, 0, SUB_VIEW, 4 + 150 + 10 + 3 * ROW_H + 10 + 44 + 10 + 40 + 16);
+        let sc = kit::scroll(p, 0, SUB_VIEW, 4 + 150 + 10 + PL_CURVE_H + 10 + 3 * ROW_H + 10 + 44 + 10 + 40 + 16);
         let c = kit::card(sc, MARGIN, 4, CARD_W, 150);
         let pl = &mut self.pl;
         pl.col = Some(1);
@@ -818,6 +854,12 @@ impl Ui {
         pl.note = kit::label_w(c, f.cj12, th.t3, PAD, 120, CARD_W - 2 * PAD, false, "");
         pl.note.set_style_text_align(lv::LV_TEXT_ALIGN_CENTER, 0);
         let mut y = 4 + 150 + 10;
+        // the last 30 s of SINR: walking the room shows where it rose
+        let cc = kit::card(sc, MARGIN, y, CARD_W, PL_CURVE_H);
+        kit::label(cc, f.cj12, th.t3, PAD, 8, tr("近 30 秒"));
+        (pl.chart, pl.ser, _) = kit::chart(cc, PAD, 30, CARD_W - 2 * PAD, PL_CURVE_H - 40, PL_CURVE, th.blue, 0);
+        pl.chart.chart_set_axis_range(sys::lv_chart_axis_t::LV_CHART_AXIS_PRIMARY_Y, -100, 300);
+        y += PL_CURVE_H + 10;
         let rc = kit::card(sc, MARGIN, y, CARD_W, 3 * ROW_H);
         pl.best_l = kit::row(rc, 0, tr("这次最好"), true);
         pl.cmp = kit::row(rc, ROW_H, tr("对比"), false);
@@ -838,20 +880,20 @@ impl Ui {
         }
         let m = self.model.clone();
         let d = &m.data;
-        let rat = logic::rat(&d.net_type);
+        let rat = logic::rat(&d.radio);
         // NSA: the NR leg often reports no SINR while the LTE anchor does (issue #4) — use NR
         // only when its SINR parses, else the anchor; SA has no LTE leg
         let nr = rat == Rat::G5Sa || (rat == Rat::G5Nsa && pl_tenths(&d.nr_snr).is_some());
         let snr = if nr { &d.nr_snr } else { &d.lte_snr };
         let pci = if nr { d.nr_pci } else { d.lte_pci };
         let band: String = if nr {
-            d.nr_band.clone()
-        } else if !d.band.is_empty() {
-            logic::band_short(&d.band, false)
+            d.nr_band_text.clone()
+        } else if !d.band_text.is_empty() {
+            logic::band_short(&d.band_text, false)
         } else {
             String::new()
         };
-        let sample = if live && d.valid != 0 && rat != Rat::None { pl_tenths(snr) } else { None };
+        let sample = if live && d.populated != 0 && rat != Rat::None { pl_tenths(snr) } else { None };
         let have = sample.is_some();
         let v = sample.unwrap_or(0);
         let lte_or_nr = nr || rat == Rat::G4 || rat == Rat::G5Nsa;
@@ -868,7 +910,12 @@ impl Ui {
         }
         // a new sample per new core snapshot
         let ver = self.src.core_version(&self.model);
+        let rsrp = if nr { d.nr_rsrp } else { d.lte_rsrp };
         let p = &mut self.pl;
+        if live && ver != p.ver && !p.chart.is_null() {
+            let y = if have && lte_or_nr { pl_curve_y(v) } else { lv::CHART_POINT_NONE };
+            p.chart.chart_set_next_value(p.ser, y);
+        }
         if have && lte_or_nr && ver != p.ver {
             p.ver = ver;
             p.v[p.head] = v;
@@ -883,8 +930,9 @@ impl Ui {
             let n = p.n;
             a[..n].sort_unstable();
             med = a[(n - 1) / 2]; // two readings: the lower one
-            if live && have && (!p.have_best || med > p.best) {
+            if live && have && (!p.have_best || pl_better(med, rsrp, p.best, p.best_rsrp)) {
                 p.best = med;
+                p.best_rsrp = rsrp;
                 p.have_best = true;
                 p.best_at = m.now;
             }
@@ -925,7 +973,6 @@ impl Ui {
                 (tr("信号较差"), "■")
             };
             self.set(pl.big, pl_fmt(med));
-            let rsrp = if nr { d.nr_rsrp } else { d.lte_rsrp };
             if rsrp != 0 {
                 self.set(pl.word, cf!("%s %s · RSRP %d", mark, word, rsrp));
             } else {
@@ -947,8 +994,12 @@ impl Ui {
 
         if self.pl.have_best {
             let b = pl_fmt(self.pl.best);
-            let hm = dg_hm(self.pl.best_at);
-            self.set(pl.best_l, cf!("%s · %s", &b, &hm));
+            let when = ago(m.now - self.pl.best_at);
+            if self.pl.best_rsrp != 0 {
+                self.set(pl.best_l, cf!("%s · %d dBm · %s", &b, self.pl.best_rsrp, &when));
+            } else {
+                self.set(pl.best_l, cf!("%s · %s", &b, &when));
+            }
             let gap = self.pl.best - med;
             if self.pl.n == 0 {
                 self.set(pl.cmp, "—");
@@ -993,7 +1044,28 @@ impl Place {
 
 #[cfg(test)]
 mod tests {
-    use super::{pl_fmt, pl_tenths};
+    use super::{ago, pl_better, pl_curve_y, pl_fmt, pl_tenths};
+
+    #[test]
+    fn best_is_sinr_then_rsrp() {
+        assert!(pl_better(180, -90, 170, -80));
+        assert!(!pl_better(160, -70, 170, -80));
+        assert!(pl_better(170, -79, 170, -80));
+        assert!(!pl_better(170, -81, 170, -80));
+        assert!(!pl_better(170, 0, 170, -80));
+        assert!(pl_better(170, -100, 170, 0));
+        assert_eq!(pl_curve_y(-250), -100);
+        assert_eq!(pl_curve_y(400), 300);
+    }
+
+    #[test]
+    fn ago_words() {
+        crate::lang::set_en(false);
+        assert_eq!(ago(30), "刚刚");
+        assert_eq!(ago(150), "2 分钟前");
+        assert_eq!(ago(7300), "2 小时前");
+        assert_eq!(ago(-5), "刚刚");
+    }
 
     #[test]
     fn sinr_in_tenths() {

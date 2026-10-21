@@ -47,33 +47,38 @@ pub fn die_with_parent(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
+/// Run `program` directly (never through a shell) and return its stdout.
+///
+/// Fails when it cannot start, outlives `deadline`, prints more than
+/// `MAX_OUTPUT` bytes, or exits non-zero. stdin is empty and stderr is
+/// discarded (a pipe nobody drains would stall a chatty child).
 pub async fn run<I, S>(program: &str, args: I, deadline: Duration) -> Result<Vec<u8>>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let args: Vec<S> = args.into_iter().collect();
-    let mut child = die_with_parent(&mut Command::new(program))
-        .args(&args)
-        .stdin(Stdio::null())
-        // 没人看 stderr：接管道又不读，话多的程序会卡在写满的管道上。
-        .stderr(Stdio::null())
-        .stdout(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .with_context(|| format!("spawn {program}"))?;
-    let output = timeout(deadline, collect(&mut child)).await;
+    let mut cmd = Command::new(program);
+    die_with_parent(&mut cmd);
+    cmd.args(args);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::null());
+    // Dropping the child (timeout or oversize below) kills it.
+    cmd.kill_on_drop(true);
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => return Err(anyhow::Error::new(e).context(format!("spawn {program}"))),
+    };
+    let waited = timeout(deadline, collect(&mut child)).await;
     // 子进程有自己的超时（V2-32）：在执行者里时，结束（含超时、超长）算一次前进。
     crate::executor::progress();
-    // 超时或超长时 `child` 在这里被丢掉，kill_on_drop 杀掉它。
-    let (status, stdout) = output.with_context(|| format!("{program} timed out"))??;
-    let Some(status) = status else {
-        bail!("{program} output exceeds limit");
-    };
-    if !status.success() {
-        bail!("{program} exited with {status}");
+    // Keep the elapsed error in the chain: callers detect timeouts by downcasting.
+    let collected = waited.with_context(|| format!("{program} timed out"))?;
+    match collected? {
+        (None, _) => bail!("{program} output exceeds limit"),
+        (Some(status), _) if !status.success() => bail!("{program} exited with {status}"),
+        (Some(_), stdout) => Ok(stdout),
     }
-    Ok(stdout)
 }
 
 /// 边读边判 stdout（P2-6）：最多读 `MAX_OUTPUT + 1` 字节，超了不再读、不等退出，回 `None`；
@@ -97,15 +102,13 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn command_has_timeout_and_no_shell() {
-        let out = run("printf", ["%s", "$(id)"], Duration::from_secs(1))
-            .await
-            .unwrap();
-        assert_eq!(out, b"$(id)");
-        assert!(
-            run("sleep", ["2"], Duration::from_millis(10))
-                .await
-                .is_err()
-        );
+        // Arguments reach the program verbatim: no shell expands `$(...)`.
+        let literal = "$(id)";
+        let echoed = run("printf", ["%s", literal], Duration::from_secs(1)).await;
+        assert_eq!(echoed.unwrap(), literal.as_bytes());
+        // A child that outlives its deadline is an error.
+        let slow = run("sleep", ["2"], Duration::from_millis(10)).await;
+        assert!(slow.is_err());
     }
 
     #[tokio::test]

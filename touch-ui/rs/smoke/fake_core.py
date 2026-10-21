@@ -9,7 +9,7 @@
                    answered only after 1 s (the screen must not hang up first)
 
 Every request is logged to the file given as the first argument, one JSON line each.
-SPDX-License-Identifier: MIT
+SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """
 import json
 import urllib.error

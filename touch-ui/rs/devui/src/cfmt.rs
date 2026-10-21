@@ -2,7 +2,7 @@
 //! format at run time, so it cannot be a format!() literal. The subset the UI uses: flags `-0`,
 //! width, `.precision`, length letters (ignored), and `d i u x s f c %`. Bytes in, bytes out:
 //! `%.16s` cuts at a byte like C does (the C UI then shows a broken glyph; so does this).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 /// One printf argument.
 #[derive(Clone, Copy, Debug)]

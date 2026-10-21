@@ -1,7 +1,7 @@
 //! Home's 情景 card and the agent's health (src/scenario.c): luyaz-core's GET /api/public/status
 //! (no login), every 30 s on any page (the status bar's 「后台失联」 must be right everywhere),
 //! at once when Home comes into view unless the agent is not answering.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::core_api::CoreApi;
 use super::util::{fnv, jstr, jtrue, mono_ms, FNV0};

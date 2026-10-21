@@ -3,7 +3,7 @@
 # data-service scripts/build.Dockerfile and manager onboard/build.Dockerfile
 # (each repo must build on its own); keep them identical, and keep the Rust
 # version equal to rust-version in Cargo.toml and the CI toolchain.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 FROM rust:1.99.0@sha256:6ff07edce8775d0f64be7aba9197229407301bddf2054d62c27b541a6238a181
 ARG ZIG=0.17.0
 ARG ZIG_SHA256_X86_64=1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026

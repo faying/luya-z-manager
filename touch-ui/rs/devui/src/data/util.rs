@@ -1,152 +1,143 @@
-//! Small helpers the data modules share: the clocks C reads, and C's fixed-size string fields
-//! (snprintf into char[N] keeps at most N - 1 bytes).
-// SPDX-License-Identifier: MIT
+//! Helpers every data module leans on: clock readings, byte-capped strings (a field of `cap`
+//! bytes holds at most cap - 1), JSON field shortcuts, a change hash, and byte searches.
 
 use crate::json;
 
-/// CLOCK_MONOTONIC in ms, as the modules' now_ms() (long).
-pub fn mono_ms() -> i64 {
+fn clock(id: libc::clockid_t) -> Option<libc::timespec> {
     let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-    // SAFETY: plain clock read into a local
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
-    ts.tv_sec * 1000 + ts.tv_nsec / 1_000_000
+    // SAFETY: the kernel fills a timespec we own
+    (unsafe { libc::clock_gettime(id, &mut ts) } == 0).then_some(ts)
 }
 
-/// The same as data.c's mono_ms(): 32 bits, wrapping.
+/// Milliseconds on the monotonic clock.
+pub fn mono_ms() -> i64 {
+    clock(libc::CLOCK_MONOTONIC).map_or(0, |t| t.tv_sec * 1000 + t.tv_nsec / 1_000_000)
+}
+
+/// [`mono_ms`] cut to 32 bits; callers compare with wrapping arithmetic.
 pub fn mono_ms32() -> u32 {
     mono_ms() as u32
 }
 
-/// time(NULL)
+/// Seconds since the epoch.
 pub fn wall() -> i64 {
-    // SAFETY: time(NULL)
+    // SAFETY: a null pointer asks time() only for its return value
     unsafe { libc::time(std::ptr::null_mut()) }
 }
 
-/// CLOCK_BOOTTIME in s (ui_boot_s), CLOCK_MONOTONIC if that fails.
+/// Seconds since boot, sleep included; the monotonic clock where boottime is missing.
 pub fn boot_s() -> i64 {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-    // SAFETY: plain clock reads into a local
-    unsafe {
-        if libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut ts) != 0 {
-            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
-        }
-    }
-    ts.tv_sec
+    clock(libc::CLOCK_BOOTTIME).or_else(|| clock(libc::CLOCK_MONOTONIC)).map_or(0, |t| t.tv_sec)
 }
 
-/// Bytes as text (C hands them on as they are; a cut character becomes U+FFFD here).
+/// Lossy UTF-8: a character split by a byte cap turns into U+FFFD.
 pub fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }
 
-/// snprintf(buf, cap, "%s", s): at most cap - 1 bytes.
+/// The first `cap - 1` bytes of `b` at most, as text.
+pub fn bytes_cap(b: &[u8], cap: usize) -> String {
+    let keep = cap.saturating_sub(1).min(b.len());
+    text(&b[..keep])
+}
+
+/// `s` fitted into a field of `cap` bytes.
 pub fn trunc(s: &str, cap: usize) -> String {
-    if s.len() < cap {
-        return s.to_string();
+    match s.len() < cap {
+        true => s.to_owned(),
+        false => bytes_cap(s.as_bytes(), cap),
     }
-    text(&s.as_bytes()[..cap.saturating_sub(1)])
 }
 
-/// printf output (cf!) into a char[cap].
-pub fn bytes_cap(v: &[u8], cap: usize) -> String {
-    text(&v[..v.len().min(cap.saturating_sub(1))])
-}
-
-/// json_get into `out` when the key is there (C's json_get leaves `out` alone otherwise).
+/// Field `key` of `obj` (at most `cap - 1` bytes) into `out`; `out` stays as it was when the key
+/// is absent. Tells whether it was found.
 pub fn jset(obj: &[u8], key: &str, cap: usize, out: &mut String) -> bool {
-    match json::get(obj, key, cap) {
-        Some(v) => {
-            *out = text(&v);
-            true
-        }
-        None => false,
-    }
+    let Some(v) = json::get(obj, key, cap) else { return false };
+    *out = text(&v);
+    true
 }
 
-/// json_get into a char[cap], "" when the key is missing.
+/// Field `key` as text, empty when absent (a JSON null comes back as the word null).
 pub fn jget(obj: &[u8], key: &str, cap: usize) -> String {
-    json::get(obj, key, cap).map(|v| text(&v)).unwrap_or_default()
+    let mut s = String::new();
+    jset(obj, key, cap, &mut s);
+    s
 }
 
-/// json_get into a char[cap], "" when missing or null (the modules' json_str / jstr).
+/// Field `key` as text, empty when absent or null.
 pub fn jstr(obj: &[u8], key: &str, cap: usize) -> String {
-    match json::get(obj, key, cap) {
-        Some(v) if v != b"null" => text(&v),
-        _ => String::new(),
-    }
+    json::get(obj, key, cap).filter(|v| v.as_slice() != b"null").map(|v| text(&v)).unwrap_or_default()
 }
 
-/// The value is the word true.
+/// Field `key` is literally `true`.
 pub fn jtrue(obj: &[u8], key: &str) -> bool {
-    json::get(obj, key, 8).is_some_and(|v| v == b"true")
+    matches!(json::get(obj, key, 8).as_deref(), Some(b"true"))
 }
 
-/// The modules' change fingerprint (FNV-1a over a string).
-pub fn fnv(mut h: u32, s: &[u8]) -> u32 {
-    for &c in s {
-        h ^= c as u32;
-        h = h.wrapping_mul(16777619);
-    }
-    h
+/// The seed for [`fnv`].
+pub const FNV0: u32 = 0x811c_9dc5;
+
+/// Fold `bytes` into the 32-bit FNV-1a hash `h`: modules hash what they show to notice changes.
+pub fn fnv(h: u32, bytes: &[u8]) -> u32 {
+    bytes.iter().fold(h, |acc, &b| (acc ^ u32::from(b)).wrapping_mul(0x0100_0193))
 }
 
-pub const FNV0: u32 = 2166136261;
-
-/// Find `needle` in `hay` from `from` (strstr).
+/// Where `needle` first occurs in `hay` at or after `from`. An empty needle matches nothing.
 pub fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
-    if from > hay.len() || needle.is_empty() {
+    let rest = hay.get(from..)?;
+    if needle.is_empty() || needle.len() > rest.len() {
         return None;
     }
-    hay[from..].windows(needle.len()).position(|w| w == needle).map(|p| p + from)
+    (0..=rest.len() - needle.len()).find(|&i| rest[i..].starts_with(needle)).map(|i| from + i)
 }
 
-/// strchr from `from`.
+/// Where byte `c` first occurs in `hay` at or after `from`.
 pub fn find_byte(hay: &[u8], c: u8, from: usize) -> Option<usize> {
-    hay.get(from..)?.iter().position(|&b| b == c).map(|p| p + from)
+    let rest = hay.get(from..)?;
+    rest.iter().position(|&b| b == c).map(|i| from + i)
 }
 
-/// The end ('}' index) of the object starting at `p` ('{'), skipping braces in strings; None
-/// when it does not close (the modules' match_brace / obj_end).
-pub fn obj_end(s: &[u8], p: usize) -> Option<usize> {
-    let (mut depth, mut instr, mut esc) = (0i32, false, false);
-    for (i, &c) in s.iter().enumerate().skip(p) {
-        if c == 0 {
-            break;
-        }
-        if instr {
-            if esc {
-                esc = false;
-            } else if c == b'\\' {
-                esc = true;
-            } else if c == b'"' {
-                instr = false;
+/// Index of the `}` that brings the brace count started at `start` back to zero, ignoring braces
+/// inside JSON strings. Scanning stops at a NUL byte; None when nothing closes.
+pub fn obj_end(s: &[u8], start: usize) -> Option<usize> {
+    let mut open = 0i32;
+    let mut quoted = false;
+    let mut escaped = false;
+    for (i, &c) in s.iter().enumerate().skip(start).take_while(|&(_, &c)| c != 0) {
+        match (quoted, c) {
+            (true, _) if escaped => escaped = false,
+            (true, b'\\') => escaped = true,
+            (true, b'"') => quoted = false,
+            (true, _) => {}
+            (false, b'"') => quoted = true,
+            (false, b'{') => open += 1,
+            (false, b'}') => {
+                open -= 1;
+                if open == 0 {
+                    return Some(i);
+                }
             }
-        } else if c == b'"' {
-            instr = true;
-        } else if c == b'{' {
-            depth += 1;
-        } else if c == b'}' {
-            depth -= 1;
-            if depth == 0 {
-                return Some(i);
-            }
+            (false, _) => {}
         }
     }
     None
 }
 
-/// The objects of an array text one by one, as the modules cut them out: from each '{' to its
-/// matching '}' (they do not stop at the array's ']').
+/// Every balanced `{…}` in `s`, left to right, each search resuming after the last one closed.
+/// Brackets are not tracked, so objects after a `]` are included too.
 pub fn objects(s: &[u8]) -> Vec<&[u8]> {
-    let mut out = Vec::new();
-    let mut p = 0;
-    while let Some(o) = find_byte(s, b'{', p) {
-        let Some(e) = obj_end(s, o) else { break };
-        out.push(&s[o..=e]);
-        p = e + 1;
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some(open) = find_byte(s, b'{', at) {
+        match obj_end(s, open) {
+            Some(close) => {
+                found.push(&s[open..=close]);
+                at = close + 1;
+            }
+            None => break,
+        }
     }
-    out
+    found
 }
 
 #[cfg(test)]
@@ -154,18 +145,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strings_cut_like_c() {
+    fn capped_fields() {
         assert_eq!(trunc("abcdef", 4), "abc");
-        assert_eq!(trunc("ab", 4), "ab");
-        assert_eq!(jstr(br#"{"a":null,"b":"x"}"#, "a", 8), "");
-        assert_eq!(jstr(br#"{"a":null,"b":"x"}"#, "b", 8), "x");
-        assert_eq!(jget(br#"{"a":null}"#, "a", 8), "null");
+        assert_eq!(trunc("abc", 4), "abc");
+        assert_eq!(trunc("abcd", 4), "abc");
+        assert_eq!(trunc("x", 0), "");
+        assert_eq!(bytes_cap(b"hello", 3), "he");
+        assert_eq!(bytes_cap(b"hi", 9), "hi");
+        assert_eq!(bytes_cap(b"hi", 0), "");
+    }
+
+    #[test]
+    fn json_shortcuts() {
+        let o = br#"{"a":null,"b":"x","t":true,"f":false}"#;
+        assert_eq!(jstr(o, "a", 8), "");
+        assert_eq!(jstr(o, "b", 8), "x");
+        assert_eq!(jget(o, "a", 8), "null");
+        assert_eq!(jget(o, "zz", 8), "");
+        assert!(jtrue(o, "t") && !jtrue(o, "f") && !jtrue(o, "zz"));
+        let mut s = "keep".to_string();
+        assert!(!jset(o, "zz", 8, &mut s) && s == "keep");
+        assert!(jset(o, "b", 8, &mut s) && s == "x");
+    }
+
+    #[test]
+    fn hash_and_search() {
+        assert_eq!(fnv(FNV0, b""), 2166136261);
+        assert_eq!(fnv(FNV0, b"a"), 0xe40c292c);
+        assert_eq!(find(b"abcabc", b"bc", 0), Some(1));
+        assert_eq!(find(b"abcabc", b"bc", 2), Some(4));
+        assert_eq!(find(b"abc", b"", 0), None);
+        assert_eq!(find(b"abc", b"c", 3), None);
+        assert_eq!(find(b"abc", b"c", 4), None);
+        assert_eq!(find_byte(b"abc", b'c', 3), None);
+        assert_eq!(find_byte(b"abc", b'c', 9), None);
     }
 
     #[test]
     fn objects_in_an_array() {
         let a = br#"[{"a":"}"},{"b":{"c":1}}]"#;
-        let o = objects(a);
-        assert_eq!(o, vec![&br#"{"a":"}"}"#[..], &br#"{"b":{"c":1}}"#[..]]);
+        assert_eq!(objects(a), vec![&br#"{"a":"}"}"#[..], &br#"{"b":{"c":1}}"#[..]]);
+        assert_eq!(obj_end(br#"{"x\"}":1}"#, 0), Some(9));
+        assert_eq!(obj_end(b"{{}\0}", 0), None);
+        assert!(objects(b"{ unclosed").is_empty());
     }
 }

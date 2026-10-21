@@ -10,7 +10,7 @@
 # the end. Needs Docker, node, and `npm ci` in crates/luyaz-web once.
 # Env: IMAGE (Rust build image, default u60-rust-ci:1.99.0), CHROME (browser for Playwright,
 # when its own is not installed), PORT_BASE (default 28000: uses +81, +461, +470, +90, +91).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)

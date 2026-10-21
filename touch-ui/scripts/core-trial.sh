@@ -29,7 +29,7 @@
 #   `start` alone watches an already running test build (production stopped
 #   by hand); `print-launch` shows the launch command without running it.
 # What is checked, how it aborts and restores: the header of luyaz-ship.sh.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 # `.` of a missing file ends the whole shell on BusyBox: check first.

@@ -18,6 +18,13 @@
 //! Phase 10 (X2b): only the battery estimate and the charge policy are left here; the other
 //! policies run in their engines (compat), and their shadows that paired u60d with the agent are
 //! gone with the agent.
+//!
+//! One component has no built-in: lanid-parse ([`crate::lanid`], lan-client-id.md §4). It parses
+//! untrusted LAN packets, which must never happen in the core's own (`panic = "abort"`) code, so
+//! it does not go through [`Slot`]: it uses [`load_checked`], [`engine`] and [`store`] directly.
+//! No manifest entry, a sha256 mismatch or a load error turns its sources off (clients keep their
+//! DHCP names; the status and doctor say why); a trap drops only the frames that trapped and the
+//! component stays loaded.
 
 pub mod battery_eta;
 pub mod charge;

@@ -709,6 +709,27 @@ async fn alerts_to_agent(Query(q): Query<OnOff>) -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
+/// `/v2/usage/days` (core usage_log.rs): two cards over three days, one day with both.
+async fn usage_days() -> axum::Json<Value> {
+    let c = |card: &str, tail: &str, op: &str, rx: u64, tx: u64| {
+        json!({"card": card, "tail": tail, "op": op, "rx": rx, "tx": tx})
+    };
+    axum::Json(json!({"ok": true, "data": {"days": [
+        {"day": "2026-10-21", "cards": [c("1f00aa00bb00cc00", "9403", "China Telecom", 21_700_000, 9_400_000)]},
+        {"day": "2026-10-20", "cards": [
+            c("1f00aa00bb00cc00", "9403", "China Telecom", 310_000_000, 42_000_000),
+            c("7e00dd00ee00ff00", "3668", "China Unicom", 58_200_000, 10_700_000)]},
+        {"day": "2026-10-19", "cards": [c("7e00dd00ee00ff00", "3668", "China Unicom", 1_200_000_000, 80_000_000)]}
+    ]}}))
+}
+
+/// `/v2/usage/landing` (core usage_log.rs): landed in Japan from China 2 hours ago.
+async fn usage_landing() -> axum::Json<Value> {
+    static AT: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    let t = *AT.get_or_init(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64));
+    axum::Json(json!({"ok": true, "data": {"mcc": 440, "from": 460, "at": t - 7_200, "rx": 812_000_000, "tx": 64_000_000}}))
+}
+
 async fn screen_status(State(m): State<Arc<Mock>>) -> axum::Json<Value> {
     let mut data = json!({
         "alerts": {"unread": m.unread.load(Ordering::SeqCst)},
@@ -1109,6 +1130,8 @@ pub fn router(raw: &str, speed: f64) -> Router {
         .route("/mock/net", post(reset_net))
         .route("/v2/api/alerts", get(screen_alerts))
         .route("/v2/api/public/status", get(screen_status))
+        .route("/v2/usage/days", get(usage_days))
+        .route("/v2/usage/landing", get(usage_landing))
         // the agent-shaped reads u60d serves since 8d-1b are not mocked here: answer like a u60d
         // without the route, so luyaz-web asks the fake agent, which keeps the e2e data (agent.rs)
         .fallback(|| async {

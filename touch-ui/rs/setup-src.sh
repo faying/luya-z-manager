@@ -8,7 +8,7 @@
 # Nothing else is needed: no C toolchain image, no other cache (Phase 10 X5, review D11). An
 # existing complete volume is left as it is; remove it (docker volume rm) to start over.
 # LUYAZ_RS_IMAGE: the image to run in (default u60-rust-ci:1.99.0; build-kit.sh passes its own).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 VOL=${1:-${LUYAZ_RS_SRC_VOL:-${U60_RS_SRC_VOL:-u60-spike-src}}}

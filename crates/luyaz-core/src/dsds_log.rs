@@ -161,7 +161,7 @@ pub fn offer(fields: &serde_json::Map<String, Value>) {
 }
 
 /// The wall clock can be trusted for dates (the sentinel's clock evidence, as the scheduler).
-fn clock_ok(t: i64) -> bool {
+pub(crate) fn clock_ok(t: i64) -> bool {
     let read = |p: &str| std::fs::read_to_string(p).unwrap_or_default();
     let boot = luyaz_api::clock::BootTime::from_uptime(&read("/proc/sys/kernel/random/boot_id"), &read("/proc/uptime"));
     crate::engines::scheduler::clock_usable(&read(crate::engines::scheduler::CLOCK_OK), boot.as_ref(), t)

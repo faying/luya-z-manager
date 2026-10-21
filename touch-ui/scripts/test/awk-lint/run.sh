@@ -5,7 +5,7 @@
 # container) gets it right, so the behaviour tests cannot catch it. This
 # lint flags any "=" whose right-hand side reaches a "?" outside parentheses;
 # write x = (cond ? a : b) instead.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 SCRIPTS=${SCRIPTS:-/scripts}
 PASS=0; FAIL=0
 

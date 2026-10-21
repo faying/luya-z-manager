@@ -79,6 +79,10 @@ const ON_U60D: &[&str] = &[
     "/versions/check",
     // passive dual-SIM log, data-card changes (u60d dsds_log.rs)
     "/dual/switches",
+    // data used per day and card (u60d usage_log.rs)
+    "/usage/days",
+    // the last landing in a country (u60d usage_log.rs)
+    "/usage/landing",
     "/api/netinfo",
     "/api/netinfo/scan",
     // 8d-2: "use for this SIM" on /router/apn (compat ops::apn_use)
@@ -98,6 +102,9 @@ const ON_U60D: &[&str] = &[
     "/api/sms/capacity",
     "/api/router/wan-ipv6",
     "/api/network/clients",
+    // LAN client identification: every source per MAC, and the user's aliases (u60d lanid.rs)
+    "/api/lanid",
+    "/api/lanid/alias",
     "/api/network/qos",
     "/api/wifi/status",
     "/api/wifi/power-save",

@@ -1,7 +1,7 @@
 //! The one small HTTP/1.x client the modules share (src/http.c): synchronous with a timeout per
 //! step, the caller's buffer size, chunked bodies decoded. the core's /v2 stream and /control keep
 //! their own code (core.rs), as in C.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 

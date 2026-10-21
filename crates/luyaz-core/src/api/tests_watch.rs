@@ -253,3 +253,31 @@ async fn ignore_closes_the_shown_finding() {
     let (_, b) = call(addr, "GET", "/api/diagnose", "").await;
     assert_eq!(b["data"]["finding"], Value::Null);
 }
+
+#[tokio::test]
+async fn lanid_alias_is_written_and_read_back() {
+    crate::lanid::test_writable();
+    let r = root("lanid");
+    let c = Compat::new(r.to_str().unwrap(), Sources::none()).with_writes(true);
+    let addr = start(c.clone()).await;
+    let body = r#"{"mac":"02-00-5E-00-53-10","alias":"Test Tablet"}"#;
+    let (s, b) = call(addr, "POST", "/api/lanid/alias", body).await;
+    assert_eq!(
+        (s, &b["mac"], &b["alias"]),
+        (200, &json!("02:00:5e:00:53:10"), &json!("Test Tablet"))
+    );
+    let (_, b) = call(addr, "GET", "/api/lanid", "").await;
+    assert_eq!(b["data"]["aliases"]["02:00:5e:00:53:10"], "Test Tablet");
+    // empty removes it
+    let clear = r#"{"mac":"02:00:5e:00:53:10","alias":""}"#;
+    let (s, b) = call(addr, "POST", "/api/lanid/alias", clear).await;
+    assert_eq!((s, &b["alias"]), (200, &json!("")));
+    let bad = r#"{"mac":"nope","alias":"x"}"#;
+    assert_eq!(call(addr, "POST", "/api/lanid/alias", bad).await.0, 400);
+    let long = format!(
+        r#"{{"mac":"02:00:5e:00:53:10","alias":"{}"}}"#,
+        "a".repeat(65)
+    );
+    assert_eq!(call(addr, "POST", "/api/lanid/alias", &long).await.0, 400);
+    assert_eq!(call(addr, "POST", "/api/lanid/alias", "{}").await.0, 400);
+}

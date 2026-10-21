@@ -2,7 +2,7 @@
 //! 2.13.3 (the module list of scripts/_build_freetype.sh), all through `cc`, with the touch
 //! UI's Makefile flags. LVGL_DIR: patched LVGL v9.5.0 tree; FT_SRC: FreeType source tree;
 //! LV_CONF_DIR: the directory holding lv_conf.h (default: the repo root).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use std::path::{Path, PathBuf};
 

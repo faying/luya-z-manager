@@ -1,29 +1,29 @@
-# eSIM switching page
+# eSIM switching
 
 **English** · [中文](ESIM.zh-CN.md)
 
-On the touch screen, 「蜂窝 → SIM 与 eSIM」 (Cellular → SIM & eSIM) lists the profiles on the removable eUICC card in the SIM slot (5ber, eSTK.me and similar); tap twice to switch.
-**It only switches**; downloading, deleting and renaming are done in the admin web.
+Where: 「蜂窝 → SIM 与 eSIM」 (Cellular → SIM & eSIM). The page lists the profiles on a removable eUICC card in the SIM slot (5ber, eSTK.me and the like). Tapping a profile twice switches to it. That is all the screen does: downloading, deleting and renaming profiles belong to the admin web.
 
-## Data flow: call the core, don't run lpac directly
+## Who does the work
+
+The screen never runs lpac. It talks to the core, and the core (`crates/luyaz-esim`) drives lpac:
 
 ```
-lpac (qmi_qrtr) ◀── luyaz-core (crates/luyaz-esim) ──HTTP 127.0.0.1:9460/v2/api──▶ rs/devui/src/data/esim.rs ──▶ UI
+UI (rs/devui/src/data/esim.rs) ──HTTP 127.0.0.1:9460/v2/api──▶ luyaz-core ──▶ lpac (qmi_qrtr) ──▶ eUICC card
 ```
 
-Endpoints used (under `/v2` on the core's loopback port): `GET /api/esim/profiles`, `POST /api/esim/switch`, `GET /api/esim/job` (switch progress).
+| Request (under `/v2`, no token) | Use |
+|---|---|
+| `GET /api/esim/profiles` | The list on the card |
+| `POST /api/esim/switch` | Start a switch |
+| `GET /api/esim/job` | Progress of the running switch |
 
-The switch itself is a single `lpac profile enable`; the hard part is getting ZTE's stack to recognize the new card: it reads the SIM only once when its daemon starts,
-so the core power-cycles the UIM, restarts `zte_topsw_mdm` and waits for the IMSI to change, usually within 10 seconds. All of this happens in the core; the UI only shows progress and the result.
+Enabling a profile is one lpac call. Getting the modem to use it is the slow part: ZTE's stack reads the SIM once, when its daemon starts. So after enabling, the core power-cycles the UIM, restarts `zte_topsw_mdm` and waits until the IMSI changes, which normally takes under 10 seconds. The screen only shows the progress and the outcome.
 
-Prerequisite: the eSIM component is installed on the device (lpac in `/data/esim`, via the install kit's `./install.sh esim`); if it's missing, the page says so.
+The page needs the eSIM component on the device (lpac under `/data/esim`, installed with the kit's `./install.sh esim`). Without it the page says it is missing.
 
-## Login
+## Things worth knowing
 
-None: the core's loopback listener needs no token, so the UI does not log in.
-
-## Notes
-
-- Some cards (e.g. eSTK.me) sometimes answer a switch with `catBusy`. Waiting and retrying doesn't clear it; restarting the device (or taking the card out and putting it back) does. The core tries once, reads the card to confirm the profile didn't change, and the screen marks that profile "Busy: restart device or reinsert card".
-- Whether a switch worked is judged by the card's own profile list, not by lpac's exit. After a successful switch the core removes older enable/disable notifications that a newer one for the same profile has superseded, and sends the switch's own once data is back (otherwise they stay pending for the web page's "send notifications").
-- If you are operating remotely over this U60's own network, don't switch to a profile with no data; once switched, you can't connect back and have to switch back on the screen in front of the device.
+- **catBusy.** Some cards (eSTK.me, for one) occasionally refuse a switch with `catBusy`, and retrying later does not help; a device restart or pulling and reinserting the card does. The core makes one attempt, reads the card back to confirm nothing changed, and the page marks that profile "Busy: restart device or reinsert card".
+- **Success is read from the card.** The core trusts the card's own profile list, not lpac's exit status. After a good switch it also drops older enable/disable notifications for the same profile that the new one supersedes, and sends the new one once data works; anything left over waits for "send notifications" in the admin web.
+- **Remote use.** If your connection to the device runs over this U60's own mobile data, do not switch to a profile without data. You would lose the connection and have to switch back on the screen in person.

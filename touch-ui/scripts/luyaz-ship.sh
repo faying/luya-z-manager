@@ -38,7 +38,7 @@
 # Time comes from /proc/uptime (monotonic): the device clock is local time
 # labelled UTC and SNTP can step it.
 # Every command and path can be overridden from the environment for tests.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 ENTRY=${U60S_ENTRY:-u60-ship}

@@ -1,4 +1,4 @@
-//! The device main loop (src/main.c): the panel (DRM dumb buffer, 180°, one DIRTYFB per frame),
+//! The device main loop: the panel (DRM dumb buffer, 180°, one DIRTYFB per frame),
 //! the touchscreen through the screen's touch gate (with the lost-tap replay), the data side
 //! pumped every pass, and the three loop states:
 //!
@@ -14,7 +14,7 @@
 //!
 //!   luyaz-ui [--tab=N] [--scroll=Y] [--screen-off[=key]] [--autooff=MS] [--bright=N] [--exec-…]
 //!   luyaz-ui --offscreen [--exit-after=MS] [--texts=FILE] [--png=FILE]   (no panel, no input)
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use crate::conf::{Conf, CONF_FILE};
 use crate::data::live::Live;
@@ -49,8 +49,17 @@ struct ReadState {
     taplog: bool,
 }
 
-extern "C" fn on_signal(_sig: libc::c_int) {
+extern "C" fn request_stop(_sig: libc::c_int) {
     RUN.store(false, Ordering::Relaxed);
+}
+
+/// INT and TERM only lower RUN; the loop notices and winds down itself.
+fn trap_stop_signals() {
+    let handler = request_stop as *const () as libc::sighandler_t;
+    for sig in [libc::SIGTERM, libc::SIGINT] {
+        // SAFETY: the handler does nothing but an atomic store
+        unsafe { libc::signal(sig, handler) };
+    }
 }
 
 unsafe extern "C" fn tick_cb() -> u32 {
@@ -195,36 +204,33 @@ fn arg(args: &[String], k: &str) -> Option<String> {
 
 /// The device program. Returns the exit code.
 pub fn run(args: &[String]) -> i32 {
-    // SAFETY: plain signal handlers that only store a flag
-    unsafe {
-        libc::signal(libc::SIGINT, on_signal as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGTERM, on_signal as *const () as libc::sighandler_t);
-    }
+    trap_stop_signals();
     let offscreen = args.iter().any(|a| a == "--offscreen");
     let exit_after: Option<u32> = arg(args, "--exit-after=").and_then(|v| v.parse().ok());
-    let panel = if offscreen {
-        Panel::offscreen()
-    } else {
-        match Panel::drm() {
-            Ok(p) => p,
+    let panel = match offscreen {
+        true => Panel::offscreen(),
+        false => match Panel::drm() {
+            Ok(panel) => panel,
             Err(e) => {
-                eprintln!("fatal: display init failed: {e}");
+                eprintln!("luyaz-ui: no panel ({e}), giving up");
                 return 1;
             }
-        }
+        },
     };
     PANEL.with(|p| *p.borrow_mut() = Some(panel));
-    // touch is optional: the UI still draws without it
-    let touch = if offscreen { Touch::none(W as i32, H as i32) } else { Touch::open(W as i32, H as i32) };
-    if touch.fd() < 0 && !offscreen {
-        eprintln!("warning: continuing without touch input");
+    // without a touchscreen the screen still shows everything; only taps are lost
+    let (tw, th) = (W as i32, H as i32);
+    let touch = if offscreen { Touch::none(tw, th) } else { Touch::open(tw, th) };
+    if !offscreen && touch.fd() < 0 {
+        eprintln!("luyaz-ui: no touchscreen found, running display-only");
     }
     let touch_fd = touch.fd();
     TOUCH.with(|t| *t.borrow_mut() = Some(touch));
     let taplog = std::env::var_os("LUYAZ_UI_TAPLOG").is_some();
     RD.with(|r| r.borrow_mut().taplog = taplog);
 
-    // full-screen double buffers: a full redraw (a swipe) is one flush and one DIRTYFB
+    // two buffers the size of the panel, so redrawing everything (a page swipe) still costs a
+    // single flush and a single DIRTYFB
     #[repr(C, align(64))]
     struct Buf([u16; W * H]);
     static mut BUF1: Buf = Buf([0; W * H]);

@@ -1,7 +1,7 @@
 //! 蜂窝 (src/ui_parts/cellular.c): the carrier card on top, 排查 / SIM 卡 › rows, 移动数据 and
 //! 数据漫游 (two taps each), 网络模式 (lock.rs), then 网络 / 消息 › rows. Also, as in C: the
 //! exit tab's frame (build_exit) and the Wi-Fi tab's device list (refresh_wifi).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::network::{NH_EXIT, NH_WIFI};
 use super::{Sub, Ui, VIEW_H};
@@ -11,13 +11,44 @@ use crate::lang::{n_, tr, trn};
 use crate::logic::Arm;
 use crate::lv::{self, sys, Obj};
 use crate::theme::{t, uf};
-use devui_model::{devui_data_t, ni_client_t};
+use devui_model::{core_snapshot_t, ni_client_t};
 
 pub const MD_DATA: usize = 0;
 pub const MD_ROAM: usize = 1;
 const MD_ARM_MS: u32 = 5000;
 pub const WIFI_MAX_CLI: usize = 5;
 pub const WIFI_CLI_H: i32 = 50;
+
+/// A lan-client-id kind token in words (core's list: contract.rs Client.kind); unknown ones as sent.
+fn client_kind_word(k: &str) -> &str {
+    match k {
+        "phone" => tr("手机"),
+        "tablet" => tr("平板"),
+        "laptop" => tr("笔记本电脑"),
+        "computer" => tr("电脑"),
+        "tv" => tr("电视"),
+        "speaker" => tr("音箱"),
+        "watch" => tr("手表"),
+        "printer" => tr("打印机"),
+        "iot" => tr("智能设备"),
+        _ => k,
+    }
+}
+
+/// 「Apple · 手机 · 随机地址」: what lanid knows of a device, "" when nothing.
+fn client_desc(c: &devui_model::lan_client_t) -> Vec<u8> {
+    let mut parts: Vec<&str> = Vec::new();
+    if !c.vendor.is_empty() {
+        parts.push(&c.vendor);
+    }
+    if !c.kind.is_empty() {
+        parts.push(client_kind_word(&c.kind));
+    }
+    if c.private {
+        parts.push(tr("随机地址"));
+    }
+    parts.join(" · ").into_bytes()
+}
 
 #[derive(Default, Clone)]
 pub struct Cell {
@@ -370,17 +401,17 @@ impl Ui {
         out
     }
 
-    pub(super) fn refresh_wifi(&mut self, d: &devui_data_t) {
+    pub(super) fn refresh_wifi(&mut self, d: &core_snapshot_t) {
         let th = t();
         let w = self.wifi.clone();
         // "Open" is what the encryption mode says: core never sends the passphrase, so an
         // empty key is not an open network
-        let open = d.wifi_enc.is_empty() || d.wifi_enc.contains("none");
-        self.set(w.ssid, if d.wifi_ssid.is_empty() { "—" } else { d.wifi_ssid.as_str() });
+        let open = d.ap_auth.is_empty() || d.ap_auth.contains("none");
+        self.set(w.ssid, if d.ap_ssid.is_empty() { "—" } else { d.ap_ssid.as_str() });
         self.set(
             w.pass,
-            if !d.wifi_key.is_empty() {
-                d.wifi_key.as_str()
+            if !d.ap_psk.is_empty() {
+                d.ap_psk.as_str()
             } else if open {
                 tr("无密码")
             } else {
@@ -388,16 +419,16 @@ impl Ui {
             },
         );
         // the mode as the backend says it: psk2 / sae / sae-mixed differ
-        self.set(w.enc, if open { tr("开放") } else { d.wifi_enc.as_str() });
-        self.set(w.state, if d.wifi_enabled != 0 { tr("已开启") } else { tr("已关闭") });
-        kit::text_color(w.state, if d.wifi_enabled != 0 { th.ok_t } else { th.t3 });
+        self.set(w.enc, if open { tr("开放") } else { d.ap_auth.as_str() });
+        self.set(w.state, if d.ap_on != 0 { tr("已开启") } else { tr("已关闭") });
+        kit::text_color(w.state, if d.ap_on != 0 { th.ok_t } else { th.t3 });
 
         // the client list: fixed slots, hidden/shown
-        let n = (d.client_n.max(0) as usize).min(WIFI_MAX_CLI);
-        if d.client_n as usize > WIFI_MAX_CLI {
-            self.set(w.cli_n, cf!(tr("%d/%d 台"), n, d.client_n));
+        let n = (d.lan_n.max(0) as usize).min(WIFI_MAX_CLI);
+        if d.lan_n as usize > WIFI_MAX_CLI {
+            self.set(w.cli_n, cf!(tr("%d/%d 台"), n, d.lan_n));
         } else {
-            self.set(w.cli_n, cf!(trn("%d 台", d.client_n as i64), d.client_n));
+            self.set(w.cli_n, cf!(trn("%d 台", d.lan_n as i64), d.lan_n));
         }
         let mut cli_y = 0;
         for i in 0..WIFI_MAX_CLI {
@@ -406,8 +437,18 @@ impl Ui {
                 continue;
             }
             w.cli[i].remove_flag(lv::LV_OBJ_FLAG_HIDDEN);
-            let c = d.client.get(i).cloned().unwrap_or_default();
-            self.set(w.cli_name[i], if c.name.is_empty() { "?" } else { c.name.as_str() });
+            let c = d.lan.get(i).cloned().unwrap_or_default();
+            // the user's alias first (core already prefers it in name; an older core may not)
+            let name = [c.alias.as_str(), c.name.as_str()].into_iter().find(|v| !v.is_empty()).unwrap_or("?");
+            self.set(w.cli_name[i], name);
+            let desc = client_desc(&c);
+            let with_desc = |rest: &[u8]| -> Vec<u8> {
+                match (desc.is_empty(), rest.is_empty()) {
+                    (true, _) => rest.to_vec(),
+                    (false, true) => desc.clone(),
+                    (false, false) => [&desc[..], " · ".as_bytes(), rest].concat(),
+                }
+            };
             self.set(w.cli_ip[i], &c.ip);
             // a Wi-Fi device: the second line is 「5 GHz · ↓… ↑… · 信号很好」, bottom right the
             // totals; cable / USB devices keep the MAC
@@ -416,9 +457,9 @@ impl Ui {
                 let line = self.ni_client_line(s);
                 self.set(w.cli_mac[i], &line);
                 let (a, b) = (super::home::fmt_bytes_total(s.down), super::home::fmt_bytes_total(s.up));
-                self.set(w.cli_tot[i], cf!(tr("连上以来 ↓%s ↑%s"), &a, &b));
+                self.set(w.cli_tot[i], with_desc(&cf!(tr("连上以来 ↓%s ↑%s"), &a, &b)));
             } else {
-                self.set(w.cli_mac[i], &c.mac);
+                self.set(w.cli_mac[i], with_desc(c.mac.as_bytes()));
                 self.set(w.cli_tot[i], "");
             }
             let rh = if st.is_some() { WIFI_CLI_H + 18 } else { WIFI_CLI_H };
@@ -440,14 +481,14 @@ impl Ui {
         }
 
         // DHCP
-        self.set(w.gw, if d.dhcp_ip.is_empty() { "-" } else { d.dhcp_ip.as_str() });
+        self.set(w.gw, if d.lan_ip.is_empty() { "-" } else { d.lan_ip.as_str() });
         let pool = cf!(
             tr("%s · 共 %s"),
-            if d.dhcp_start.is_empty() { "-" } else { d.dhcp_start.as_str() },
-            if d.dhcp_limit.is_empty() { "-" } else { d.dhcp_limit.as_str() }
+            if d.dhcp_first.is_empty() { "-" } else { d.dhcp_first.as_str() },
+            if d.dhcp_count.is_empty() { "-" } else { d.dhcp_count.as_str() }
         );
         self.set_at(w.pool, 0, pool);
-        let lt = super::atol(&d.dhcp_leasetime);
+        let lt = super::atol(&d.dhcp_lease);
         let lease = if lt >= 3600 {
             cf!(tr("%ld 小时"), lt / 3600)
         } else if lt >= 60 {

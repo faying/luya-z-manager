@@ -6,7 +6,7 @@
 #
 #   docker run --rm -v "$PWD/scripts":/scripts:ro u60-device-busybox:20260928 \
 #       sh /scripts/test/luyaz-dir/run.sh
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCRIPTS=${SCRIPTS:-/scripts}

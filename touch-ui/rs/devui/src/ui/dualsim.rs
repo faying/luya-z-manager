@@ -1,7 +1,7 @@
 //! 双卡 on the SIM 与 eSIM page (global edition, manager docs/designs/dual-sim-global.md): what the
 //! two slots hold, five choices; two taps send one `sim.dual` through core, whose verdict and
 //! countdown take the line on top until it ends. Hidden on a one-slot device.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::cellular::nz;
 use super::network::NetFlash;

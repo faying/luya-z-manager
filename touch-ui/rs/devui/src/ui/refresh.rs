@@ -1,6 +1,6 @@
 //! The 1 s refresh (src/ui_parts/refresh.c refresh_cb): the view model drawn onto every page,
 //! in the C order (the status bar reads the RAT label the signal card wrote a second earlier).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::lock::LK_MODE_V;
 use super::{Sub, Ui, TAB_CELL, TAB_HOME, TAB_WIFI};
@@ -181,9 +181,9 @@ impl Ui {
             self.banner_set(Some(&b)); // 已按记住的方式：…
         } else if ah.lost_secs != 0 {
             self.banner_set(Some(&cf!(tr("管理后台失联 %ld 分钟"), ah.lost_secs / 60)));
-        } else if d.bat_temp >= 50 {
+        } else if d.batt_temp >= 50 {
             self.banner_set(Some(tr("电池过热，拔掉充电器放到阴凉处").as_bytes()));
-        } else if d.bat_percent <= 10 && !(d.charger_connect != 0 && d.chg_uv > 1000000) {
+        } else if d.batt_pct <= 10 && !(d.charger_in != 0 && d.chg_volt_uv > 1000000) {
             self.banner_set(Some(tr("电量低，尽快充电").as_bytes()));
         } else {
             self.banner_set(None);
@@ -218,7 +218,7 @@ impl Ui {
                 for i in 0..10 {
                     let n = i as i32 % 5;
                     let col = if i < 5 {
-                        if n < d.bars { sig_col } else { th.track }
+                        if n < d.signal_level { sig_col } else { th.track }
                     } else if n < sb {
                         th.t2
                     } else {
@@ -231,7 +231,7 @@ impl Ui {
                 }
             } else {
                 for i in 0..5 {
-                    let col = if (i as i32) < d.bars { sig_col } else { th.track };
+                    let col = if (i as i32) < d.signal_level { sig_col } else { th.track };
                     if col != self.c_sig[i] {
                         self.c_sig[i] = col;
                         kit::bg(self.top_sig[i], col);
@@ -245,27 +245,28 @@ impl Ui {
             // 「无服务」 needs the CJK font: the numeral font has no Chinese
             net.set_style_text_font(if label.as_bytes().first().is_some_and(|&c| c >= 0x80) { uf().cj12 } else { uf().n12 }, 0);
             let bits = self.conf.speed_bits;
-            let (dn, up) = (fmt_rate_top(d.rx_speed, bits, false), fmt_rate_top(d.tx_speed, bits, false));
-            let (dn2, up2) = (fmt_rate_top(d.rx_speed, bits, true), fmt_rate_top(d.tx_speed, bits, true));
+            let (dn, up) = (fmt_rate_top(d.down_bps, bits, false), fmt_rate_top(d.up_bps, bits, false));
+            let (dn2, up2) = (fmt_rate_top(d.down_bps, bits, true), fmt_rate_top(d.up_bps, bits, true));
             let full = cf!("↓%s ↑%s", &dn, &up);
             let shrt = cf!("↓%s ↑%s", &dn2, &up2);
             let down = cf!("↓%s", &dn2);
             // charging = charger_connect only: d.charging is a status code, truthy almost always
-            let chg = d.charger_connect != 0 && d.chg_uv > 1000000;
-            if d.bat_percent != self.c_pct || chg as i32 != self.c_chg {
-                self.c_pct = d.bat_percent;
+            let chg = d.charger_in != 0 && d.chg_volt_uv > 1000000;
+            if d.batt_pct != self.c_pct || chg as i32 != self.c_chg {
+                self.c_pct = d.batt_pct;
                 self.c_chg = chg as i32;
-                kit::battery_set(&self.top_batt, d.bat_percent, chg);
+                kit::battery_set(&self.top_batt, d.batt_pct, chg);
                 kit::show(self.top_batt.body, true);
                 kit::show(self.top_batt.nub, true);
             }
             let alert_col = if self.alert_st == 2 { th.bad_t } else { th.warn_t };
-            self.statusbar_layout(&full, &shrt, &down, d.bat_percent, chg, self.alert_st != 0, alert_col);
+            self.statusbar_layout(&full, &shrt, &down, d.batt_pct, chg, self.alert_st != 0, alert_col);
         }
 
         self.home_signal_paint(&v, core_silent);
         self.home_exit_paint();
         self.home_scene_paint(sc_changed);
+        self.home_landing_paint();
         if self.tab_visible(TAB_HOME) || self.tab_visible(super::TAB_EXIT) || self.sub_visible(super::Sub::Ts) {
             self.home_ts_paint();
         }
@@ -286,7 +287,7 @@ impl Ui {
         // 锁频 and the 网络模式 row: what the device is on (TCHGWL_5G and NETWORK_auto are
         // automatic too: core says which are)
         {
-            let mut sel = LK_MODE_V.iter().rposition(|&x| x == d.net_select).map_or(-1, |i| i as i32);
+            let mut sel = LK_MODE_V.iter().rposition(|&x| x == d.net_pref).map_or(-1, |i| i as i32);
             if v.mode_auto != 0 {
                 sel = 0;
             }
@@ -301,7 +302,7 @@ impl Ui {
         self.refresh_wifi(d);
         {
             let a = &self.aux;
-            let st = [a.w24 == 1 || a.w5 == 1, a.w24 == 1, a.w5 == 1, a.psm == 1, d.nfc_switch != 0];
+            let st = [a.w24 == 1 || a.w5 == 1, a.w24 == 1, a.w5 == 1, a.psm == 1, d.nfc_on != 0];
             let pool = a.pool.clone();
             let dps = a.dps;
             let w = self.wifi.clone();
@@ -336,7 +337,7 @@ impl Ui {
         let enabled = m.esim_enabled_iccid.as_deref().unwrap_or("");
         let k = logic::sim_kind(&d.sim_state, &d.sim_iccid, enabled);
         // then the card's own name (SPN), and the network's name last (roaming: not the card's)
-        let op = [n_home, d.sim_spn.clone(), d.operator_name.clone()].into_iter().find(|s| !s.is_empty()).unwrap_or_default();
+        let op = [n_home, d.sim_spn.clone(), d.carrier.clone()].into_iter().find(|s| !s.is_empty()).unwrap_or_default();
         // no ICCID from the modem: an eSIM's is the enabled profile's
         let iccid = if d.sim_iccid.is_empty() && k == logic::SimKind::Esim { enabled.to_string() } else { d.sim_iccid.clone() };
         let sim = Sim { kind: k, oper: op, iccid, imsi: d.sim_imsi.clone(), msisdn: d.sim_msisdn.clone() };
@@ -357,15 +358,15 @@ impl Ui {
             self.c_tile_on[0] = chill_on as i32;
             kit::text_color(ts[Sub::Chill as usize], if chill_on { th.ok_t } else { th.t2 });
         }
-        let unread = d.sms_unread > 0;
+        let unread = d.sms_new > 0;
         if self.c_tile_on[1] != unread as i32 {
             self.c_tile_on[1] = unread as i32;
             kit::text_color(ts[Sub::Sms as usize], if unread { th.acc_t } else { th.t2 });
         }
-        if d.sms_unread != 0 {
-            self.set(ts[Sub::Sms as usize], cf!(tr("%d 条 · %d 未读"), d.sms_n, d.sms_unread));
+        if d.sms_new != 0 {
+            self.set(ts[Sub::Sms as usize], cf!(tr("%d 条 · %d 未读"), d.inbox_n, d.sms_new));
         } else {
-            self.set(ts[Sub::Sms as usize], cf!(trc!("短信", "%d 条"), d.sms_n));
+            self.set(ts[Sub::Sms as usize], cf!(trc!("短信", "%d 条"), d.inbox_n));
         }
         self.set(
             ts[Sub::Chill as usize],

@@ -31,9 +31,9 @@ cd "$HERE"
 [ "$MANAGER" = /m ] || echo "build.sh: source at $MANAGER, not /m: out/ won't match a release build" >&2
 T=${CARGO_TARGET_DIR:-$HERE/target}
 # every component; its ABI is the package line of its wit file (u60d checks the same string)
-NAMES="battery-eta charge-policy scenario scheduler manual-first apn-pick sms-forward home-exit"
+NAMES="battery-eta charge-policy scenario scheduler manual-first apn-pick sms-forward home-exit lanid-parse"
 # test only: a component that never returns, standing in for the policy of the same world
-HOSTILE="hostile-eta:battery-eta hostile-scenario:scenario hostile-scheduler:scheduler hostile-manual-first:manual-first hostile-apn-pick:apn-pick hostile-sms-forward:sms-forward hostile-home-exit:home-exit"
+HOSTILE="hostile-eta:battery-eta hostile-scenario:scenario hostile-scheduler:scheduler hostile-manual-first:manual-first hostile-apn-pick:apn-pick hostile-sms-forward:sms-forward hostile-home-exit:home-exit hostile-lanid-parse:lanid-parse"
 abi() { sed -n 's/^package \(.*\);$/\1/p' "../luyaz-policy/wit/$1.wit"; }
 PLUGINS=
 for n in $NAMES; do PLUGINS="$PLUGINS $n:$(abi "$n")"; done
@@ -88,8 +88,10 @@ if [ "$MODE" = test ]; then
         entries=${entries:+$entries,}$entry
     done
     printf '{"plugins":[%s]}\n' "$entries" > out/test-hostile/plugins.json
+    # the lanid parser's own tests (native: it is plain Rust behind the component glue)
+    cargo test -q -p lanid-parse --lib 2>&1 | tail -n 3
     cd "$MANAGER"
     LUYAZ_TEST_PLUGINS=$HERE/out/test LUYAZ_TEST_HOSTILE=$HERE/out/test-hostile LUYAZ_REQUIRE_PLUGINS=1 \
-        cargo test -q -p luyaz-policy -p luyaz-core -- plugin battery_eta charge_policy scenario scheduler manual_first apn_pick sms_forward home_exit 2>&1 |
+        cargo test -q -p luyaz-policy -p luyaz-core -- plugin battery_eta charge_policy scenario scheduler manual_first apn_pick sms_forward home_exit lanid 2>&1 |
         tail -n 40
 fi

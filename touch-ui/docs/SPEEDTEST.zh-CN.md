@@ -2,11 +2,12 @@
 
 [English](SPEEDTEST.md) · **中文**
 
-触屏的测速页用的是 core 的测速引擎（manager 仓库 `crates/luyaz-speedtest`，管理网页也用它）；屏幕这边是 `rs/devui/src/data/speedtest.rs` 和 `rs/devui/src/ui/speed.rs`。设备上不用另装东西。
+测速页自己不带测速引擎，只是请 core 测、把 core 报回来的结果画出来；引擎是 `crates/luyaz-speedtest`，和管理网页共用。屏幕这边的代码：`rs/devui/src/data/speedtest.rs`（发请求）和 `rs/devui/src/ui/speed.rs`（页面）。设备上不用另装东西。
 
-- 开始 / 停止：`POST /api/speedtest/start`、`POST /api/speedtest/stop`（core 在后台线程里跑）。
-- 进度：`GET /api/speedtest/progress`，页面开着时大约每秒读一次。
-- 服务器：`GET /api/speedtest/servers`（缓存 5 分钟）；第一行是「自动」（core 挑最好的）。
-- 请求发到 core 的本机端口 `127.0.0.1:9460/v2/api/...`，不带 token（`rs/devui/src/data/core_api.rs`）。连不上时页面直接说明，不发起测速。
+| 做什么 | 请求（core 本机端口 `127.0.0.1:9460/v2/api/...`，不带 token） |
+|---|---|
+| 服务器列表 | `GET /api/speedtest/servers`，缓存 5 分钟。第一行「自动」让 core 自己挑。 |
+| 开始 / 停止 | `POST /api/speedtest/start`、`POST /api/speedtest/stop`；测试在 core 的后台线程里跑。 |
+| 进度 | `GET /api/speedtest/progress`，页面开着时大约每秒一次。 |
 
-旧的可选插件 `better-speedtest`（litehtml 时代）从没在真机上装过，已不再支持；见 tag `legacy-litehtml`。
+core 没有回应时，页面直接提示，不开始测速。

@@ -7,7 +7,7 @@
 //!   trn("%d 台设备", n)    English one|other, picked by n == 1
 //!   n_("中文")             marks a literal in a static table; tr() it where it is shown
 //!   pick(zh, en)           text from core/agent with an *_en sibling
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 #[cfg(not(test))]
 use std::sync::atomic::{AtomicBool, Ordering};

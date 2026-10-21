@@ -8,7 +8,7 @@
 # Time is fake: $T/uptime is /proc/uptime and the stub `sleep` advances it,
 # then runs $T/hook, which each case uses to break one thing at a set time.
 # /v2/state's live.observed_at moves with the fake clock unless $T/frozen exists.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCRIPTS=${SCRIPTS:-/scripts}

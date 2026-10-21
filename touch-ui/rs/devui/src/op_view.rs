@@ -2,7 +2,7 @@
 //! (journal.list) and who last changed a setting, read into plain fields. Texts come in both
 //! languages (<key>_zh / <key>_en); the screen's language picks. Field sizes as in C (a longer
 //! value is cut where C cuts it).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use crate::json;
 use crate::lang;

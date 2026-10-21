@@ -4,7 +4,7 @@ version = "0.3.0"
 edition = "2024"
 rust-version = "1.99"
 description = "MCP server (stdio) for Luya-Z devices (one, or a device list): runs on the computer, calls the device's /agent-api over HTTP with a bearer token (docs/designs/u60-mcp.md phase 1). Not part of the install kit."
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 publish = false
 
 [dependencies]

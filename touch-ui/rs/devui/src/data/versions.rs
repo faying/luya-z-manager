@@ -1,7 +1,7 @@
 //! Component versions (manager docs/designs/component-versions.md): GET /v2/versions every 30 s
 //! while 系统 is up; 「检查更新」 is POST /v2/versions/check, which the core finishes on its own
 //! (up to 20 s; the answer comes with the next read).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::core_api::CoreApi;
 use super::util::{mono_ms, wall};

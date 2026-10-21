@@ -1,12 +1,16 @@
-//! A DRM dumb buffer (RGB565) with DIRTYFB per pushed rectangle: src/drm_disp.c in Rust,
-//! raw ioctls only (the device has no libdrm we could link statically).
+//! The panel as a DRM dumb buffer: RGB565, CPU-drawn, each finished rectangle pushed with
+//! DIRTYFB. Plain ioctls, since there is no libdrm on the device to link against.
 
 use std::fs::{File, OpenOptions};
+use std::io;
 use std::os::fd::AsRawFd;
 
 const CARD: &str = "/dev/dri/card0";
-const FALLBACK_CONNECTOR: u32 = 31;
-const FALLBACK_CRTC: u32 = 34;
+/// What this panel's card reports when asking it fails (the U60's DSI connector and its CRTC).
+const PANEL_CONNECTOR: u32 = 31;
+const PANEL_CRTC: u32 = 34;
+const PANEL_W: u16 = 320;
+const PANEL_H: u16 = 480;
 
 #[repr(C)]
 #[derive(Default)]
@@ -139,26 +143,136 @@ struct FbDirty {
     clips_ptr: u64,
 }
 
-const fn iowr<T>(nr: u64) -> u64 {
-    (3 << 30) | ((std::mem::size_of::<T>() as u64) << 16) | ((b'd' as u64) << 8) | nr
-}
+// DRM_IOWR numbers
+const GETRESOURCES: u64 = 0xA0;
+const SETCRTC: u64 = 0xA2;
+const GETENCODER: u64 = 0xA6;
+const GETCONNECTOR: u64 = 0xA7;
+const ADDFB: u64 = 0xAE;
+const DIRTYFB: u64 = 0xB1;
+const CREATE_DUMB: u64 = 0xB2;
+const MAP_DUMB: u64 = 0xB3;
 
-fn ioctl<T>(fd: i32, req: u64, arg: &mut T) -> std::io::Result<()> {
+/// One DRM ioctl with its argument struct, retried when a signal interrupts it.
+fn drm<T>(card: &File, nr: u64, arg: &mut T) -> io::Result<()> {
+    let req = (3u64 << 30) | ((size_of::<T>() as u64) << 16) | ((b'd' as u64) << 8) | nr;
     loop {
-        // SAFETY: `arg` is the #[repr(C)] struct the kernel expects for `req`.
-        let r = unsafe { libc::ioctl(fd, req as _, arg as *mut T) };
-        if r == 0 {
+        // SAFETY: `arg` is the #[repr(C)] struct the kernel expects for request `nr`
+        if unsafe { libc::ioctl(card.as_raw_fd(), req as _, arg as *mut T) } == 0 {
             return Ok(());
         }
-        let e = std::io::Error::last_os_error();
-        if e.kind() != std::io::ErrorKind::Interrupted {
-            return Err(e);
+        let err = io::Error::last_os_error();
+        if err.kind() != io::ErrorKind::Interrupted {
+            return Err(err);
         }
     }
 }
 
+/// A list the kernel fills in: point it at a buffer of `n` ids.
+fn ids(n: u32) -> Vec<u32> {
+    vec![0; n as usize]
+}
+
+/// One connector as the kernel described it, reduced to what choosing a CRTC needs.
+#[derive(Default)]
+struct Output {
+    id: u32,
+    /// connected, with at least one mode
+    usable: bool,
+    /// the CRTC its current encoder drives (0 = none / unknown)
+    driven_by: u32,
+    /// possible_crtcs of each encoder it can use, in the kernel's order
+    reachable: Vec<u32>,
+}
+
+/// The first usable connector and its CRTC: the one already driving it, else the first CRTC any of
+/// its encoders can reach, else the card's first CRTC. Index into `outputs`, CRTC id.
+fn choose(crtcs: &[u32], outputs: &[Output]) -> Option<(usize, u32)> {
+    let reachable = |mask: u32| crtcs.iter().enumerate().find(|(i, _)| mask & (1 << i) != 0).map(|(_, c)| *c);
+    outputs.iter().enumerate().filter(|(_, o)| o.usable).find_map(|(i, o)| {
+        let crtc = Some(o.driven_by)
+            .filter(|&c| c != 0)
+            .or_else(|| o.reachable.iter().find_map(|&m| reachable(m)))
+            .or_else(|| crtcs.first().copied())
+            .filter(|&c| c != 0)?;
+        Some((i, crtc))
+    })
+}
+
+/// Ask the card for its connectors and pick one to drive: (connector, CRTC, its first mode).
+fn pick(card: &File) -> io::Result<(u32, u32, ModeInfo)> {
+    // first call: how many; second: the ids
+    let mut res = CardRes::default();
+    drm(card, GETRESOURCES, &mut res)?;
+    let (mut crtcs, mut conns, mut encs) = (ids(res.count_crtcs), ids(res.count_connectors), ids(res.count_encoders));
+    res.count_fbs = 0;
+    res.crtc_id_ptr = crtcs.as_mut_ptr() as u64;
+    res.connector_id_ptr = conns.as_mut_ptr() as u64;
+    res.encoder_id_ptr = encs.as_mut_ptr() as u64;
+    drm(card, GETRESOURCES, &mut res)?;
+
+    let encoder = |id: u32| {
+        let mut e = GetEncoder { encoder_id: id, ..Default::default() };
+        drm(card, GETENCODER, &mut e).ok().map(|()| e)
+    };
+    let mut outputs = Vec::with_capacity(conns.len());
+    let mut modes = Vec::with_capacity(conns.len());
+    for &id in &conns {
+        let (out, mode) = describe(card, id, &encoder).unwrap_or_else(|| (Output { id, ..Default::default() }, ModeInfo::default()));
+        outputs.push(out);
+        modes.push(mode);
+    }
+    let (i, crtc) = choose(&crtcs, &outputs).ok_or_else(|| io::Error::other("no connected connector"))?;
+    Ok((outputs[i].id, crtc, modes[i]))
+}
+
+/// A connected connector with modes: what `choose` needs and its first mode. None otherwise.
+fn describe(card: &File, id: u32, encoder: &dyn Fn(u32) -> Option<GetEncoder>) -> Option<(Output, ModeInfo)> {
+    let mut c = GetConnector { connector_id: id, ..Default::default() };
+    drm(card, GETCONNECTOR, &mut c).ok()?;
+    if c.connection != 1 || c.count_modes == 0 {
+        return None;
+    }
+    let mut modes = vec![ModeInfo::default(); c.count_modes as usize];
+    let mut encs = ids(c.count_encoders);
+    c.modes_ptr = modes.as_mut_ptr() as u64;
+    c.encoders_ptr = encs.as_mut_ptr() as u64;
+    c.count_props = 0;
+    drm(card, GETCONNECTOR, &mut c).ok()?;
+    if c.count_modes == 0 {
+        return None;
+    }
+    let driven_by = match c.encoder_id {
+        0 => 0,
+        e => encoder(e).map_or(0, |e| e.crtc_id),
+    };
+    let reachable = encs.iter().filter_map(|&e| encoder(e)).map(|e| e.possible_crtcs).collect();
+    Some((Output { id, usable: true, driven_by, reachable }, modes[0]))
+}
+
+/// The panel's own mode, for when the card cannot be asked.
+fn panel_mode() -> ModeInfo {
+    let mut m = ModeInfo {
+        clock: 1,
+        hdisplay: PANEL_W,
+        hsync_start: PANEL_W,
+        hsync_end: PANEL_W,
+        htotal: PANEL_W,
+        vdisplay: PANEL_H,
+        vsync_start: PANEL_H,
+        vsync_end: PANEL_H,
+        vtotal: PANEL_H,
+        vrefresh: 1,
+        kind: 0x48, // DRM_MODE_TYPE_PREFERRED | DRM_MODE_TYPE_DRIVER
+        ..Default::default()
+    };
+    let name = format!("{PANEL_W}x{PANEL_H}");
+    m.name[..name.len()].copy_from_slice(name.as_bytes());
+    m
+}
+
 pub struct Drm {
-    file: File,
+    card: File,
     map: *mut u16,
     map_len: usize,
     fb_id: u32,
@@ -167,132 +281,106 @@ pub struct Drm {
     pub pitch_px: usize,
 }
 
-fn pick(fd: i32) -> std::io::Result<(u32, u32, ModeInfo)> {
-    let mut res = CardRes::default();
-    ioctl(fd, iowr::<CardRes>(0xA0), &mut res)?;
-    let mut crtcs = vec![0u32; res.count_crtcs as usize];
-    let mut conns = vec![0u32; res.count_connectors as usize];
-    let mut encs = vec![0u32; res.count_encoders as usize];
-    res.crtc_id_ptr = crtcs.as_mut_ptr() as u64;
-    res.connector_id_ptr = conns.as_mut_ptr() as u64;
-    res.encoder_id_ptr = encs.as_mut_ptr() as u64;
-    res.count_fbs = 0;
-    ioctl(fd, iowr::<CardRes>(0xA0), &mut res)?;
-    for &cid in &conns {
-        let mut c = GetConnector { connector_id: cid, ..Default::default() };
-        if ioctl(fd, iowr::<GetConnector>(0xA7), &mut c).is_err() || c.connection != 1 || c.count_modes == 0 {
-            continue;
-        }
-        let mut modes = vec![ModeInfo::default(); c.count_modes as usize];
-        let mut cencs = vec![0u32; c.count_encoders as usize];
-        c.modes_ptr = modes.as_mut_ptr() as u64;
-        c.encoders_ptr = cencs.as_mut_ptr() as u64;
-        c.count_props = 0;
-        if ioctl(fd, iowr::<GetConnector>(0xA7), &mut c).is_err() || c.count_modes == 0 {
-            continue;
-        }
-        let mut crtc = 0;
-        if c.encoder_id != 0 {
-            let mut e = GetEncoder { encoder_id: c.encoder_id, ..Default::default() };
-            if ioctl(fd, iowr::<GetEncoder>(0xA6), &mut e).is_ok() {
-                crtc = e.crtc_id;
-            }
-        }
-        for &eid in &cencs {
-            if crtc != 0 {
-                break;
-            }
-            let mut e = GetEncoder { encoder_id: eid, ..Default::default() };
-            if ioctl(fd, iowr::<GetEncoder>(0xA6), &mut e).is_ok() {
-                crtc = crtcs.iter().enumerate().find(|(i, _)| e.possible_crtcs & (1 << i) != 0).map_or(0, |(_, c)| *c);
-            }
-        }
-        if crtc == 0 {
-            crtc = crtcs.first().copied().unwrap_or(0);
-        }
-        if crtc != 0 {
-            return Ok((cid, crtc, modes[0]));
-        }
-    }
-    Err(std::io::Error::other("no connected connector"))
-}
-
 impl Drm {
-    pub fn open() -> std::io::Result<Drm> {
-        let file = OpenOptions::new().read(true).write(true).open(CARD)?;
-        let fd = file.as_raw_fd();
-        let (conn, crtc, mode) = pick(fd).unwrap_or_else(|e| {
-            eprintln!("drm: {e}, fallback connector {FALLBACK_CONNECTOR} crtc {FALLBACK_CRTC}");
-            let mut m = ModeInfo { clock: 1, hdisplay: 320, vdisplay: 480, vrefresh: 1, kind: 0x48, ..Default::default() };
-            (m.hsync_start, m.hsync_end, m.htotal) = (320, 320, 320);
-            (m.vsync_start, m.vsync_end, m.vtotal) = (480, 480, 480);
-            m.name[..7].copy_from_slice(b"320x480");
-            (FALLBACK_CONNECTOR, FALLBACK_CRTC, m)
+    pub fn open() -> io::Result<Drm> {
+        let card = OpenOptions::new().read(true).write(true).open(CARD)?;
+        let (conn, crtc, mode) = pick(&card).unwrap_or_else(|e| {
+            eprintln!("drm: {e}, fallback connector {PANEL_CONNECTOR} crtc {PANEL_CRTC}");
+            (PANEL_CONNECTOR, PANEL_CRTC, panel_mode())
         });
-        let (w, h) = (mode.hdisplay as u32, mode.vdisplay as u32);
-        let mut dumb = CreateDumb { width: w, height: h, bpp: 16, ..Default::default() };
-        ioctl(fd, iowr::<CreateDumb>(0xB2), &mut dumb)?;
-        let mut fb = FbCmd { width: w, height: h, pitch: dumb.pitch, bpp: 16, depth: 16, handle: dumb.handle, ..Default::default() };
-        ioctl(fd, iowr::<FbCmd>(0xAE), &mut fb)?;
-        let mut map = MapDumb { handle: dumb.handle, ..Default::default() };
-        ioctl(fd, iowr::<MapDumb>(0xB3), &mut map)?;
-        // SAFETY: the kernel handed out this offset for a mapping of `size` bytes on `fd`.
-        let p = unsafe {
-            libc::mmap(std::ptr::null_mut(), dumb.size as usize, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, fd, map.offset as libc::off_t)
-        };
-        if p == libc::MAP_FAILED {
-            return Err(std::io::Error::last_os_error());
+        let (w, h) = (u32::from(mode.hdisplay), u32::from(mode.vdisplay));
+
+        // a 16-bit buffer the size of the mode, a framebuffer on it, and a CPU mapping of it
+        let mut buf = CreateDumb { width: w, height: h, bpp: 16, ..Default::default() };
+        drm(&card, CREATE_DUMB, &mut buf)?;
+        let mut fb = FbCmd { width: w, height: h, pitch: buf.pitch, bpp: 16, depth: 16, handle: buf.handle, ..Default::default() };
+        drm(&card, ADDFB, &mut fb)?;
+        let mut where_ = MapDumb { handle: buf.handle, ..Default::default() };
+        drm(&card, MAP_DUMB, &mut where_)?;
+        let len = buf.size as usize;
+        // SAFETY: MAP_DUMB handed out this offset for a `len`-byte mapping of the buffer on `card`
+        let map = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, card.as_raw_fd(), where_.offset as libc::off_t) };
+        if map == libc::MAP_FAILED {
+            return Err(io::Error::last_os_error());
         }
-        // SAFETY: freshly mapped, `size` bytes.
-        unsafe { std::ptr::write_bytes(p as *mut u8, 0, dumb.size as usize) };
-        let mut conn_id = conn;
-        let mut set = Crtc {
-            set_connectors_ptr: &mut conn_id as *mut u32 as u64,
-            count_connectors: 1,
-            crtc_id: crtc,
-            fb_id: fb.fb_id,
-            mode_valid: 1,
-            mode,
-            ..Default::default()
-        };
-        ioctl(fd, iowr::<Crtc>(0xA2), &mut set)?;
-        eprintln!("drm: connector {conn} crtc {crtc} {w}x{h} pitch {}", dumb.pitch);
-        let d = Drm {
-            file,
-            map: p as *mut u16,
-            map_len: dumb.size as usize,
-            fb_id: fb.fb_id,
-            width: w as usize,
-            height: h as usize,
-            pitch_px: dumb.pitch as usize / 2,
-        };
+        // SAFETY: the `len` bytes just mapped
+        unsafe { std::ptr::write_bytes(map.cast::<u8>(), 0, len) };
+        let d = Drm { card, map: map.cast(), map_len: len, fb_id: fb.fb_id, width: w as usize, height: h as usize, pitch_px: buf.pitch as usize / 2 };
+
+        // show it
+        let mut conn_ids = [conn];
+        let mut set = Crtc { set_connectors_ptr: conn_ids.as_mut_ptr() as u64, count_connectors: 1, crtc_id: crtc, fb_id: d.fb_id, mode_valid: 1, mode, ..Default::default() };
+        drm(&d.card, SETCRTC, &mut set)?;
+        eprintln!("drm: connector {conn} crtc {crtc} {w}x{h} pitch {}", buf.pitch);
         d.dirty(0, 0, d.width, d.height);
         Ok(d)
     }
 
+    fn all(&self) -> &[u16] {
+        // SAFETY: our mapping, map_len bytes, alive as long as self
+        unsafe { std::slice::from_raw_parts(self.map, self.map_len / 2) }
+    }
+
+    /// The whole buffer, pitch padding included.
     pub fn pixels(&mut self) -> &mut [u16] {
-        // SAFETY: the mapping lives as long as self and is map_len bytes.
+        // SAFETY: as in all(), and &mut self keeps it exclusive
         unsafe { std::slice::from_raw_parts_mut(self.map, self.map_len / 2) }
     }
 
     /// The visible rows (width × height, without the pitch's padding).
     pub fn rows(&self) -> Vec<u16> {
-        // SAFETY: the mapping lives as long as self and is map_len bytes
-        let all = unsafe { std::slice::from_raw_parts(self.map, self.map_len / 2) };
-        (0..self.height).flat_map(|y| all[y * self.pitch_px..y * self.pitch_px + self.width].iter().copied()).collect()
+        self.all().chunks(self.pitch_px).take(self.height).flat_map(|row| row[..self.width].iter().copied()).collect()
     }
 
-    /// Push [x1,x2)×[y1,y2) to the panel. Some drivers lack DIRTYFB: errors are ignored.
+    /// Send [x1,x2) × [y1,y2) to the panel. Not every driver has DIRTYFB, so failure is fine.
     pub fn dirty(&self, x1: usize, y1: usize, x2: usize, y2: usize) {
         let mut clip = ClipRect { x1: x1 as u16, y1: y1 as u16, x2: x2 as u16, y2: y2 as u16 };
         let mut cmd = FbDirty { fb_id: self.fb_id, flags: 0, color: 0, num_clips: 1, clips_ptr: &mut clip as *mut ClipRect as u64 };
-        let _ = ioctl(self.file.as_raw_fd(), iowr::<FbDirty>(0xB1), &mut cmd);
+        let _ = drm(&self.card, DIRTYFB, &mut cmd);
     }
 }
 
 impl Drop for Drm {
     fn drop(&mut self) {
-        // SAFETY: our own mapping.
-        unsafe { libc::munmap(self.map as *mut libc::c_void, self.map_len) };
+        // SAFETY: unmapping our own mapping once
+        unsafe { libc::munmap(self.map.cast(), self.map_len) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn out(id: u32, usable: bool, driven_by: u32, reachable: &[u32]) -> Output {
+        Output { id, usable, driven_by, reachable: reachable.to_vec() }
+    }
+
+    #[test]
+    fn the_crtc_already_driving_it_wins() {
+        assert_eq!(choose(&[34, 35], &[out(31, true, 35, &[0b01])]), Some((0, 35)));
+    }
+
+    #[test]
+    fn else_the_first_crtc_an_encoder_reaches() {
+        assert_eq!(choose(&[34, 35, 36], &[out(31, true, 0, &[0b100, 0b010])]), Some((0, 36)));
+        assert_eq!(choose(&[34, 35, 36], &[out(31, true, 0, &[0, 0b110])]), Some((0, 35)));
+    }
+
+    #[test]
+    fn else_the_cards_first_crtc() {
+        assert_eq!(choose(&[34, 35], &[out(31, true, 0, &[])]), Some((0, 34)));
+        assert_eq!(choose(&[34, 35], &[out(31, true, 0, &[0b1000])]), Some((0, 34)));
+    }
+
+    #[test]
+    fn unusable_connectors_are_skipped() {
+        let o = [out(30, false, 34, &[1]), out(31, true, 0, &[0b10])];
+        assert_eq!(choose(&[34, 35], &o), Some((1, 35)));
+        assert_eq!(choose(&[34], &[out(30, false, 34, &[1])]), None);
+    }
+
+    #[test]
+    fn no_crtc_at_all() {
+        assert_eq!(choose(&[], &[out(31, true, 0, &[1])]), None);
     }
 }

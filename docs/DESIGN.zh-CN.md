@@ -200,7 +200,7 @@ changing、revert_fail 是写操作叠上去的（E4，核心 `screen.rs` `with_
 - 系统 › 改动记录：一条两行（「制式 · 自动 → 只用 4G」/「10-03 14:32 · 网页 · 已切到只用 4G」），点开详情，撤销/重做在详情里；不能撤的变灰写原因。
 - 数据服务卡住（20 秒不动）：经核心的写控件提前变灰并写「数据服务没响应 · 暂时不能改设置」。忙（别的写在跑）不提前变灰，点了写核心回的那句。
 
-**回归测试**：`touch-ui/rs/build.sh test`（单测，含渲染的文字/字形/几何检查）；改页面再跑 `touch-ui/rs/parity.sh`：把 C 版渲染测试录下的场景（11 种 × 深浅，取自 tag `legacy-c-touch-ui` 的 `scripts/test/render/render.sh --model/--png`，C 版 Phase 10 X5 已删）在 Rust 触屏上重放，逐张比像素，并断言 `rs/devui/testdata/expect.txt` 里该出现的文字都在（控件清单）。改文案时同一个提交里改 expect.txt（公开版用 expect-public.txt）。
+**回归测试**：`touch-ui/rs/build.sh test`（单测，含渲染的文字/字形/几何检查）；改页面后用 `touch-ui/rs/still.sh` / `scripts/screenshots/touch.sh` 在视图模型上看，并在设备屏幕上确认。和 C 版渲染测试逐像素比对的 `parity.sh` 及其视图模型 2026-10-21 已退役，新的视图模型以后从 Rust 触屏生成。
 
 **已知踩过的坑**：
 - `LV_USE_STDLIB_MALLOC` 曾经设成 `LV_STDLIB_BUILTIN`（LVGL 自己划一块跟系统内存完全隔离的小内存池，从 128KB 一路加到 2MB 都还在崩），根因是这个隔离本身——litehtml 版（`htmlmain.c`）直接用系统 `malloc()`，面对的是整机 690MB+ 可用内存，从不出这个问题。已经改成 `LV_STDLIB_CLIB`（真正的系统 malloc/string/sprintf），跟 litehtml 版走同一条路，`LV_MEM_SIZE` 相关配置全部移除（只对 BUILTIN 模式有效）。**这条是真正修复，之前"减少不必要的 `lv_label_set_text` 调用"那版只是缓解，不是根治**——但那个优化本身仍然保留，两个问题不是互斥的。

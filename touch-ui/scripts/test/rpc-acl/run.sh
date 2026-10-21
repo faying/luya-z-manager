@@ -3,7 +3,7 @@
 # answers from whatever file sits at the target when it is reloaded, like the
 # real one. Needs python3 (the jsonfilter stub): run it in tools/luyaz-dev rust.
 # web.json.b31 is the stock ACL as on the device (CN B31, 2026-10-16).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 command -v python3 >/dev/null || { echo "  skipped: no python3 (run it in tools/luyaz-dev rust)"; exit 0; }
 HERE=$(cd "$(dirname "$0")" && pwd)
 S=$HERE/../../rpc-acl.sh

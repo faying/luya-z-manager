@@ -1,488 +1,518 @@
 /*
- * qmi_uim_probe - Verify eUICC (removable eSIM) APDU access on U60 Pro (SDX75)
+ * qmi_uim_probe — small QMI UIM client for the eUICC on the U60 (SDX75).
  *
- * Over AF_QIPCRTR: discover the QMI UIM service (svc id 11), open a logical
- * channel to the ISD-R applet, and read the eUICC's EID via ES10c GetEID.
+ * Talks to the modem's UIM service (QMI service 11) over an AF_QIPCRTR
+ * datagram socket. luyaz-esim relies on three subcommands and their output:
  *
- * Usage:
- *   qmi_uim_probe lookup          - list UIM service instances on the QRTR bus
- *   qmi_uim_probe status          - UIM Get Card Status (raw hexdump)
- *   qmi_uim_probe open            - open logical channel to ISD-R, print SW
- *   qmi_uim_probe eid             - full check: open ISD-R -> GetEID -> close
+ *   open [slot]     open + close a logical channel to the ISD-R; stderr gets
+ *                   "[open] channel=N", or "qmi_error=N" when refused
+ *                   (68 = no free channel)
+ *   close <chan>    close a channel a killed lpac left open (the modem keeps
+ *                   it until someone does)
+ *   simreset [slot] power the card down and up so the modem re-reads it after
+ *                   a profile switch (the stack ignores the card's REFRESH)
  *
- * Cross-compile on macOS:
- *   zig cc -target aarch64-linux-musl -static qmi_uim_probe.c -o qmi_uim_probe
+ * Diagnostics: lookup, status, apps, iccid, eid, provision.
+ *
+ * Build (static, aarch64): zig cc -target aarch64-linux-musl -static -Os \
+ *   qmi_uim_probe.c -o qmi_uim_probe
  */
 
+#include <ctype.h>
+#include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include <unistd.h>
-#include <errno.h>
-#include <ctype.h>
 #include <sys/socket.h>
-#include <sys/types.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 #ifndef AF_QIPCRTR
 #define AF_QIPCRTR 42
 #endif
 
-struct sockaddr_qrtr {
-    unsigned short sq_family;
-    uint32_t       sq_node;
-    uint32_t       sq_port;
+struct qrtr_addr {
+    unsigned short family;
+    uint32_t node;
+    uint32_t port;
 };
 
-/* QRTR name-service control packets */
-#define QRTR_PORT_CTRL       0xfffffffeu
-#define QRTR_TYPE_NEW_SERVER 4
-#define QRTR_TYPE_DEL_SERVER 5
-#define QRTR_TYPE_NEW_LOOKUP 10
+/* QRTR name service */
+#define NS_PORT        0xfffffffeu
+#define NS_NEW_SERVER  4
+#define NS_NEW_LOOKUP  10
 
-struct qrtr_ctrl_pkt {
-    uint32_t cmd;
-    struct { uint32_t service, instance, node, port; } server;
+struct ns_packet {
+    uint32_t type;
+    uint32_t service, instance, node, port;
 } __attribute__((packed));
 
-/* QMI UIM service (id 11) message ids */
-#define UIM_SVC_ID            11
-#define UIM_READ_TRANSPARENT  0x0020
-#define UIM_GET_CARD_STATUS   0x002F
-#define UIM_POWER_DOWN        0x0030
-#define UIM_POWER_UP          0x0031
-#define UIM_CHANGE_PROV       0x0038
-#define UIM_SEND_APDU         0x003B
-#define UIM_LOGICAL_CHANNEL   0x003F
-#define UIM_OPEN_LOGICAL_CHAN 0x0042
+/* QMI UIM */
+#define SVC_UIM            11
+#define MSG_READ_TRANSP    0x0020
+#define MSG_CARD_STATUS    0x002F
+#define MSG_POWER_DOWN     0x0030
+#define MSG_POWER_UP       0x0031
+#define MSG_CHANGE_PROV    0x0038
+#define MSG_SEND_APDU      0x003B
+#define MSG_CLOSE_CHANNEL  0x003F
+#define MSG_OPEN_CHANNEL   0x0042
 
-/* SGP.02/22 ISD-R AID */
-static const uint8_t ISDR_AID[] = {
-    0xA0,0x00,0x00,0x05,0x59,0x10,0x10,0xFF,0xFF,0xFF,0xFF,0x89,0x00,0x00,0x01,0x00
+#define QMI_HDR   7     /* flags(1) txn(2) msg(2) len(2) */
+#define QMI_RESP  0x02
+#define MAXMSG    8192
+
+/* ISD-R application id (GSMA SGP.22) */
+static const uint8_t isdr_aid[16] = {
+    0xA0, 0x00, 0x00, 0x05, 0x59, 0x10, 0x10, 0xFF,
+    0xFF, 0xFF, 0xFF, 0x89, 0x00, 0x00, 0x01, 0x00,
 };
 
-static uint8_t g_slot = 1;  /* target slot; override with a trailing arg */
-#define BUF_SZ 8192
+static int sock = -1;
+static struct qrtr_addr uim;     /* where the UIM service lives */
+static uint16_t next_txn = 1;
+static uint8_t slot = 1;
 
-static void hexdump(const char *tag, const uint8_t *p, size_t n) {
-    fprintf(stderr, "%s (%zu bytes):\n", tag, n);
-    for (size_t i = 0; i < n; i += 16) {
-        fprintf(stderr, "  %04zx: ", i);
-        for (size_t j = 0; j < 16; j++) {
-            if (i+j < n) fprintf(stderr, "%02x ", p[i+j]);
-            else fprintf(stderr, "   ");
+static uint16_t le16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
+static void put16(uint8_t *p, uint16_t v) { p[0] = v & 0xff; p[1] = v >> 8; }
+
+static void dump(const char *what, const uint8_t *p, size_t n)
+{
+    fprintf(stderr, "%s, %zu bytes:", what, n);
+    for (size_t i = 0; i < n; i++)
+        fprintf(stderr, "%s%02x", i % 32 ? " " : "\n  ", p[i]);
+    fputc('\n', stderr);
+}
+
+/* ---- message building ---- */
+
+struct msg {
+    uint8_t b[MAXMSG];
+    size_t n;
+};
+
+static void msg_start(struct msg *m, uint16_t id)
+{
+    memset(m->b, 0, QMI_HDR);
+    put16(m->b + 1, next_txn++);
+    put16(m->b + 3, id);
+    m->n = QMI_HDR;
+}
+
+static void msg_tlv(struct msg *m, uint8_t type, const void *v, uint16_t len)
+{
+    m->b[m->n] = type;
+    put16(m->b + m->n + 1, len);
+    memcpy(m->b + m->n + 3, v, len);
+    m->n += 3 + (size_t)len;
+}
+
+static void msg_u8(struct msg *m, uint8_t type, uint8_t v) { msg_tlv(m, type, &v, 1); }
+
+/* ---- reply parsing ---- */
+
+struct reply {
+    uint8_t b[MAXMSG];
+    size_t n;
+    uint16_t qerr;
+};
+
+/* Value of TLV `type` in a reply body, or NULL. */
+static const uint8_t *tlv(const struct reply *r, uint8_t type, uint16_t *len)
+{
+    size_t at = QMI_HDR;
+    while (at + 3 <= r->n) {
+        uint16_t l = le16(r->b + at + 1);
+        if (at + 3 + l > r->n)
+            break;
+        if (r->b[at] == type) {
+            *len = l;
+            return r->b + at + 3;
         }
-        fprintf(stderr, " ");
-        for (size_t j = 0; j < 16 && i+j < n; j++) {
-            uint8_t c = p[i+j];
-            fputc(isprint(c) ? c : '.', stderr);
-        }
-        fputc('\n', stderr);
-    }
-}
-
-static size_t qmi_build_header(uint8_t *buf, uint16_t txn, uint16_t msgid, uint16_t msglen) {
-    buf[0] = 0x00;
-    buf[1] = txn & 0xff; buf[2] = txn >> 8;
-    buf[3] = msgid & 0xff; buf[4] = msgid >> 8;
-    buf[5] = msglen & 0xff; buf[6] = msglen >> 8;
-    return 7;
-}
-
-static size_t tlv_add(uint8_t *p, uint8_t type, const void *val, uint16_t len) {
-    p[0] = type;
-    p[1] = len & 0xff; p[2] = len >> 8;
-    memcpy(p + 3, val, len);
-    return 3 + len;
-}
-
-static const uint8_t *tlv_find(const uint8_t *body, size_t body_len, uint8_t type, uint16_t *outlen) {
-    size_t i = 0;
-    while (i + 3 <= body_len) {
-        uint8_t t = body[i];
-        uint16_t l = body[i+1] | (body[i+2] << 8);
-        if (i + 3 + l > body_len) return NULL;
-        if (t == type) { *outlen = l; return body + i + 3; }
-        i += 3 + l;
+        at += 3 + (size_t)l;
     }
     return NULL;
 }
 
-static uint32_t g_uim_node, g_uim_port;
-static uint16_t g_txn = 1;
+/* ---- transport ---- */
 
-static int qrtr_open(void) {
-    int s = socket(AF_QIPCRTR, SOCK_DGRAM, 0);
-    if (s < 0) { perror("socket(AF_QIPCRTR)"); return -1; }
-    return s;
+static void set_timeout(int ms)
+{
+    struct timeval tv = { ms / 1000, (ms % 1000) * 1000 };
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
 }
 
-/* Discover UIM service via QRTR name service. Returns 0 and fills
- * g_uim_node/g_uim_port with the first match. */
-static int uim_lookup(int s, int verbose) {
-    struct sockaddr_qrtr local;
-    socklen_t sl = sizeof(local);
-    /* Auto-bind so getsockname yields our node */
-    struct qrtr_ctrl_pkt pkt = {0};
-    pkt.cmd = QRTR_TYPE_NEW_LOOKUP;
-    pkt.server.service = UIM_SVC_ID;
-    pkt.server.instance = 0;
+/* Ask the name service where UIM is; the first server answering wins. */
+static int find_uim(int list)
+{
+    struct qrtr_addr me = { 0 }, ns = { AF_QIPCRTR, 0, NS_PORT };
+    socklen_t ml = sizeof me;
+    struct ns_packet q = { .type = NS_NEW_LOOKUP, .service = SVC_UIM };
 
-    struct sockaddr_qrtr dst = { .sq_family = AF_QIPCRTR, .sq_node = 0, .sq_port = QRTR_PORT_CTRL };
-    /* learn local node first (bind implicitly) */
-    if (getsockname(s, (struct sockaddr*)&local, &sl) == 0 && local.sq_port != 0)
-        dst.sq_node = local.sq_node;
-    if (sendto(s, &pkt, sizeof(pkt), 0, (struct sockaddr*)&dst, sizeof(dst)) < 0) {
-        /* some kernels want the lookup sent to our own node's ctrl port after bind */
-        getsockname(s, (struct sockaddr*)&local, &sl);
-        dst.sq_node = local.sq_node;
-        if (sendto(s, &pkt, sizeof(pkt), 0, (struct sockaddr*)&dst, sizeof(dst)) < 0) {
-            perror("sendto(ctrl lookup)");
-            return -1;
-        }
+    if (getsockname(sock, (struct sockaddr *)&me, &ml) == 0)
+        ns.node = me.node;
+    if (sendto(sock, &q, sizeof q, 0, (struct sockaddr *)&ns, sizeof ns) < 0) {
+        perror("lookup");
+        return -1;
     }
 
-    struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
+    set_timeout(2000);
     int found = 0;
     for (;;) {
-        struct qrtr_ctrl_pkt rp;
-        struct sockaddr_qrtr from; socklen_t fl = sizeof(from);
-        ssize_t n = recvfrom(s, &rp, sizeof(rp), 0, (struct sockaddr*)&from, &fl);
-        if (n < 0) break; /* timeout = end of list on kernels without terminator */
-        if (from.sq_port != QRTR_PORT_CTRL) continue;
-        if ((size_t)n < sizeof(rp)) continue;
-        if (rp.cmd != QRTR_TYPE_NEW_SERVER) continue;
-        if (rp.server.service == 0 && rp.server.node == 0 && rp.server.port == 0)
-            break; /* terminator */
-        if (verbose)
+        struct ns_packet a;
+        struct qrtr_addr from;
+        socklen_t fl = sizeof from;
+        ssize_t n = recvfrom(sock, &a, sizeof a, 0, (struct sockaddr *)&from, &fl);
+        if (n < 0)
+            break;
+        if (from.port != NS_PORT || n < (ssize_t)sizeof a || a.type != NS_NEW_SERVER)
+            continue;
+        if (!a.service && !a.node && !a.port)
+            break;                              /* end of the list */
+        if (list)
             fprintf(stderr, "[uim] svc=%u inst=0x%x node=%u port=%u\n",
-                    rp.server.service, rp.server.instance, rp.server.node, rp.server.port);
-        if (!found) { g_uim_node = rp.server.node; g_uim_port = rp.server.port; found = 1; }
-    }
-    if (!found) { fprintf(stderr, "[!] no UIM service on QRTR bus\n"); return -1; }
-    fprintf(stderr, "[uim] using node=%u port=%u\n", g_uim_node, g_uim_port);
-    return 0;
-}
-
-static int qmi_send(int s, const uint8_t *pkt, size_t len) {
-    struct sockaddr_qrtr dst = { .sq_family = AF_QIPCRTR, .sq_node = g_uim_node, .sq_port = g_uim_port };
-    if (sendto(s, pkt, len, 0, (struct sockaddr*)&dst, sizeof(dst)) != (ssize_t)len) {
-        perror("sendto"); return -1;
-    }
-    return 0;
-}
-
-/* Receive a QMI *response* (ctrl byte 0x02) for the given msgid; skip
- * indications (0x04) and stray ctrl traffic. */
-static ssize_t qmi_recv(int s, uint8_t *buf, size_t bufsz, int timeout_ms, uint16_t want_msgid) {
-    struct timeval tv = { .tv_sec = timeout_ms/1000, .tv_usec = (timeout_ms%1000)*1000 };
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    for (;;) {
-        struct sockaddr_qrtr from = {0}; socklen_t fl = sizeof(from);
-        ssize_t n = recvfrom(s, buf, bufsz, 0, (struct sockaddr*)&from, &fl);
-        if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) { fprintf(stderr, "recv: timeout\n"); return -1; }
-            perror("recvfrom"); return -1;
+                    a.service, a.instance, a.node, a.port);
+        if (!found) {
+            uim = (struct qrtr_addr){ AF_QIPCRTR, a.node, a.port };
+            found = 1;
         }
-        if (from.sq_node != g_uim_node || from.sq_port != g_uim_port) continue;
-        if (n < 7) continue;
-        uint16_t msgid = buf[3] | (buf[4] << 8);
-        if (buf[0] == 0x02 && msgid == want_msgid) return n;
-        /* indication or unrelated response — ignore */
     }
-}
-
-static int qmi_result(const uint8_t *body, size_t body_len, uint16_t *err_out) {
-    uint16_t l = 0;
-    const uint8_t *v = tlv_find(body, body_len, 0x02, &l);
-    if (!v || l < 4) { fprintf(stderr, "[!] no result TLV\n"); return -1; }
-    uint16_t result = v[0] | (v[1] << 8);
-    uint16_t error  = v[2] | (v[3] << 8);
-    if (err_out) *err_out = error;
-    if (result != 0)
-        fprintf(stderr, "[result] FAILURE qmi_error=%u\n", error);
-    return result == 0 ? 0 : -1;
-}
-
-static int cmd_status(int s) {
-    uint8_t pkt[16];
-    size_t off = qmi_build_header(pkt, g_txn++, UIM_GET_CARD_STATUS, 0);
-    if (qmi_send(s, pkt, off) < 0) return 1;
-    uint8_t rbuf[BUF_SZ];
-    ssize_t r = qmi_recv(s, rbuf, sizeof(rbuf), 3000, UIM_GET_CARD_STATUS);
-    if (r < 0) return 1;
-    hexdump("< CARD_STATUS", rbuf, r);
-    return qmi_result(rbuf + 7, r - 7, NULL) ? 1 : 0;
-}
-
-/* Open logical channel to ISD-R. Returns channel id >=0, or -1. */
-static int isdr_open(int s) {
-    uint8_t pkt[64];
-    size_t off = qmi_build_header(pkt, g_txn++, UIM_OPEN_LOGICAL_CHAN, 0);
-    uint8_t slot = g_slot;
-    off += tlv_add(pkt + off, 0x01, &slot, 1);
-    uint8_t aid_tlv[1 + sizeof(ISDR_AID)];
-    aid_tlv[0] = sizeof(ISDR_AID);
-    memcpy(aid_tlv + 1, ISDR_AID, sizeof(ISDR_AID));
-    off += tlv_add(pkt + off, 0x10, aid_tlv, sizeof(aid_tlv));
-    uint16_t msglen = off - 7;
-    pkt[5] = msglen & 0xff; pkt[6] = msglen >> 8;
-
-    if (qmi_send(s, pkt, off) < 0) return -1;
-    uint8_t rbuf[BUF_SZ];
-    ssize_t r = qmi_recv(s, rbuf, sizeof(rbuf), 5000, UIM_OPEN_LOGICAL_CHAN);
-    if (r < 0) return -1;
-    hexdump("< OPEN_LOGICAL_CHANNEL", rbuf, r);
-
-    uint16_t qerr = 0;
-    if (qmi_result(rbuf + 7, r - 7, &qerr)) {
-        fprintf(stderr, "[!] open channel rejected by modem (qmi_error=%u)\n", qerr);
+    if (!found) {
+        fprintf(stderr, "[!] no UIM service on QRTR bus\n");
         return -1;
     }
-    uint16_t l = 0;
-    const uint8_t *v = tlv_find(rbuf + 7, r - 7, 0x10, &l);
-    if (!v || l < 1) { fprintf(stderr, "[!] no channel id in response\n"); return -1; }
-    int chan = v[0];
-    const uint8_t *cr = tlv_find(rbuf + 7, r - 7, 0x11, &l);
-    if (cr && l >= 2)
-        fprintf(stderr, "[open] channel=%d SW=%02X%02X\n", chan, cr[0], cr[1]);
-    else
-        fprintf(stderr, "[open] channel=%d\n", chan);
-    return chan;
+    fprintf(stderr, "[uim] using node=%u port=%u\n", uim.node, uim.port);
+    return 0;
 }
 
-/* Send one APDU on the channel; returns response length (incl. SW), -1 on error. */
-static ssize_t uim_send_apdu(int s, int chan, const uint8_t *apdu, size_t alen,
-                             uint8_t *out, size_t outcap) {
-    uint8_t pkt[BUF_SZ];
-    size_t off = qmi_build_header(pkt, g_txn++, UIM_SEND_APDU, 0);
-    uint8_t slot = g_slot;
-    off += tlv_add(pkt + off, 0x01, &slot, 1);
-    uint8_t apdu_tlv[2 + 300];
-    apdu_tlv[0] = alen & 0xff; apdu_tlv[1] = alen >> 8;
-    memcpy(apdu_tlv + 2, apdu, alen);
-    off += tlv_add(pkt + off, 0x02, apdu_tlv, 2 + alen);
-    uint8_t ch = (uint8_t)chan;
-    off += tlv_add(pkt + off, 0x10, &ch, 1);
-    uint16_t msglen = off - 7;
-    pkt[5] = msglen & 0xff; pkt[6] = msglen >> 8;
-
-    hexdump("> APDU", apdu, alen);
-    if (qmi_send(s, pkt, off) < 0) return -1;
-    uint8_t rbuf[BUF_SZ];
-    ssize_t r = qmi_recv(s, rbuf, sizeof(rbuf), 5000, UIM_SEND_APDU);
-    if (r < 0) return -1;
-    uint16_t qerr = 0;
-    if (qmi_result(rbuf + 7, r - 7, &qerr)) {
-        fprintf(stderr, "[!] send apdu rejected (qmi_error=%u)\n", qerr);
+/*
+ * Send `m`, wait for its response and read the result TLV.
+ * Returns 0 on success, 1 when the modem refused (r->qerr set), -1 when no
+ * answer came. Indications and other services' traffic are skipped.
+ */
+static int request(struct msg *m, struct reply *r, int timeout_ms)
+{
+    uint16_t id = le16(m->b + 3);
+    put16(m->b + 5, (uint16_t)(m->n - QMI_HDR));
+    if (sendto(sock, m->b, m->n, 0, (struct sockaddr *)&uim, sizeof uim) != (ssize_t)m->n) {
+        perror("send");
         return -1;
     }
-    uint16_t l = 0;
-    const uint8_t *v = tlv_find(rbuf + 7, r - 7, 0x10, &l);
-    if (!v || l < 2) { fprintf(stderr, "[!] no APDU response TLV\n"); return -1; }
-    uint16_t dlen = v[0] | (v[1] << 8);
-    if (dlen > l - 2 || dlen > outcap) { fprintf(stderr, "[!] bad APDU resp len\n"); return -1; }
-    memcpy(out, v + 2, dlen);
-    hexdump("< APDU resp", out, dlen);
-    return dlen;
-}
 
-static void isdr_close(int s, int chan) {
-    uint8_t pkt[32];
-    size_t off = qmi_build_header(pkt, g_txn++, UIM_LOGICAL_CHANNEL, 0);
-    uint8_t slot = g_slot;
-    off += tlv_add(pkt + off, 0x01, &slot, 1);
-    uint8_t ch = (uint8_t)chan;
-    off += tlv_add(pkt + off, 0x11, &ch, 1);
-    uint16_t msglen = off - 7;
-    pkt[5] = msglen & 0xff; pkt[6] = msglen >> 8;
-    if (qmi_send(s, pkt, off) < 0) return;
-    uint8_t rbuf[BUF_SZ];
-    ssize_t r = qmi_recv(s, rbuf, sizeof(rbuf), 3000, UIM_LOGICAL_CHANNEL);
-    if (r >= 7) qmi_result(rbuf + 7, r - 7, NULL);
-    fprintf(stderr, "[close] channel %d released\n", chan);
-}
+    set_timeout(timeout_ms);
+    for (;;) {
+        struct qrtr_addr from = { 0 };
+        socklen_t fl = sizeof from;
+        ssize_t n = recvfrom(sock, r->b, sizeof r->b, 0, (struct sockaddr *)&from, &fl);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                fprintf(stderr, "recv: timeout\n");
+            else
+                perror("recv");
+            return -1;
+        }
+        if (from.node != uim.node || from.port != uim.port || n < QMI_HDR)
+            continue;
+        if (r->b[0] == QMI_RESP && le16(r->b + 3) == id) {
+            r->n = (size_t)n;
+            break;
+        }
+    }
 
-/* Read EF_ICCID (3F00/2FE2). session_type 0 = primary GW provisioning (what
- * the modem's NAS is actually using), 6 = card slot 1 (live card content). */
-static int cmd_iccid(int s, uint8_t session_type) {
-    uint8_t pkt[64];
-    size_t off = qmi_build_header(pkt, g_txn++, UIM_READ_TRANSPARENT, 0);
-    uint8_t sess[2] = { session_type, 0 };           /* type, aid_len=0 */
-    off += tlv_add(pkt + off, 0x01, sess, sizeof(sess));
-    uint8_t file[5] = { 0xE2, 0x2F, 0x02, 0x00, 0x3F };  /* id=2FE2, path=3F00 */
-    off += tlv_add(pkt + off, 0x02, file, sizeof(file));
-    uint8_t rt[4] = { 0, 0, 0, 0 };                  /* offset=0 len=0 (all) */
-    off += tlv_add(pkt + off, 0x03, rt, sizeof(rt));
-    uint16_t msglen = off - 7;
-    pkt[5] = msglen & 0xff; pkt[6] = msglen >> 8;
-    if (qmi_send(s, pkt, off) < 0) return 1;
-    uint8_t rbuf[BUF_SZ];
-    ssize_t r = qmi_recv(s, rbuf, sizeof(rbuf), 5000, UIM_READ_TRANSPARENT);
-    if (r < 0) return 1;
-    uint16_t qerr = 0;
-    if (qmi_result(rbuf + 7, r - 7, &qerr)) {
-        fprintf(stderr, "[iccid sess=%u] failed qmi_error=%u\n", session_type, qerr);
+    uint16_t len = 0;
+    const uint8_t *res = tlv(r, 0x02, &len);
+    if (!res || len < 4) {
+        fprintf(stderr, "[!] no result TLV\n");
+        r->qerr = 0xffff;
         return 1;
     }
-    uint16_t l = 0;
-    const uint8_t *v = tlv_find(rbuf + 7, r - 7, 0x11, &l);
-    if (!v || l < 2) { fprintf(stderr, "[!] no read result\n"); return 1; }
-    uint16_t dlen = v[0] | (v[1] << 8);
-    printf("iccid(sess=%u)=", session_type);
-    for (int i = 0; i < dlen && i < 10; i++) {
-        uint8_t b = v[2 + i];
-        printf("%c", '0' + (b & 0x0f));
-        uint8_t hi = b >> 4;
-        if (hi <= 9) printf("%c", '0' + hi);
+    r->qerr = le16(res + 2);
+    if (le16(res) != 0) {
+        fprintf(stderr, "[result] FAILURE qmi_error=%u\n", r->qerr);
+        return 1;
     }
-    printf("\n");
     return 0;
 }
 
-/* List apps on the card (from Get Card Status). Prints app type/state/AID. */
-static int cmd_apps(int s, uint8_t *usim_aid_out, uint8_t *usim_aid_len) {
-    uint8_t pkt[16];
-    size_t off = qmi_build_header(pkt, g_txn++, UIM_GET_CARD_STATUS, 0);
-    if (qmi_send(s, pkt, off) < 0) return 1;
-    uint8_t rbuf[BUF_SZ];
-    ssize_t r = qmi_recv(s, rbuf, sizeof(rbuf), 5000, UIM_GET_CARD_STATUS);
-    if (r < 0) return 1;
-    uint16_t l = 0;
-    const uint8_t *v = tlv_find(rbuf + 7, r - 7, 0x10, &l);
-    if (!v || l < 10) { fprintf(stderr, "[!] no card status TLV\n"); return 1; }
-    /* u16 idx_gw_pri, u16 idx_1x_pri, u16 idx_gw_sec, u16 idx_1x_sec, u8 nslots */
-    uint16_t idx_gw_pri = v[0] | (v[1] << 8);
-    size_t p = 8;
-    uint8_t nslots = v[p++];
-    fprintf(stderr, "[cardstatus] gw_pri_index=0x%04x slots=%u\n", idx_gw_pri, nslots);
-    for (uint8_t slot = 0; slot < nslots && p + 6 <= l; slot++) {
-        uint8_t card_state = v[p], err_code = v[p+4], num_apps = v[p+5];
-        p += 6;
-        fprintf(stderr, "  slot%u: card_state=%u err=%u apps=%u\n", slot+1, card_state, err_code, num_apps);
-        for (uint8_t a = 0; a < num_apps && p + 7 <= l; a++) {
-            uint8_t app_type = v[p], app_state = v[p+1];
-            uint8_t aid_len = v[p+6];
-            const uint8_t *aid = v + p + 7;
-            p += 7 + aid_len + 7;  /* skip pin block: upin_repl,pin1_st,pin1_rt,puk1_rt,pin2_st,pin2_rt,puk2_rt */
-            fprintf(stderr, "    app%u: type=%u state=%u aid=", a, app_type, app_state);
-            for (int i = 0; i < aid_len; i++) fprintf(stderr, "%02x", aid[i]);
-            fprintf(stderr, "%s\n", (idx_gw_pri >> 8) == slot && (idx_gw_pri & 0xff) == a
-                        ? "  <- GW provisioning app" : "");
-            if (app_type == 2 /* USIM */ && slot == 0 && usim_aid_out && *usim_aid_len == 0) {
-                memcpy(usim_aid_out, aid, aid_len);
-                *usim_aid_len = aid_len;
+/* ---- logical channels ---- */
+
+static int channel_open(void)
+{
+    struct msg m;
+    struct reply r;
+    uint8_t aid[1 + sizeof isdr_aid] = { sizeof isdr_aid };
+    memcpy(aid + 1, isdr_aid, sizeof isdr_aid);
+
+    msg_start(&m, MSG_OPEN_CHANNEL);
+    msg_u8(&m, 0x01, slot);
+    msg_tlv(&m, 0x10, aid, sizeof aid);
+    int rc = request(&m, &r, 5000);
+    if (rc < 0)
+        return -1;
+    if (rc > 0) {
+        fprintf(stderr, "[!] open channel rejected by modem (qmi_error=%u)\n", r.qerr);
+        return -1;
+    }
+
+    uint16_t len = 0;
+    const uint8_t *ch = tlv(&r, 0x10, &len);
+    if (!ch || len < 1) {
+        fprintf(stderr, "[!] no channel id in response\n");
+        return -1;
+    }
+    const uint8_t *sw = tlv(&r, 0x11, &len);
+    if (sw && len >= 2)
+        fprintf(stderr, "[open] channel=%u SW=%02X%02X\n", ch[0], sw[0], sw[1]);
+    else
+        fprintf(stderr, "[open] channel=%u\n", ch[0]);
+    return ch[0];
+}
+
+static void channel_close(int ch)
+{
+    struct msg m;
+    struct reply r;
+    msg_start(&m, MSG_CLOSE_CHANNEL);
+    msg_u8(&m, 0x01, slot);
+    msg_u8(&m, 0x11, (uint8_t)ch);
+    request(&m, &r, 3000);
+    fprintf(stderr, "[close] channel %d released\n", ch);
+}
+
+/* One APDU on channel `ch`; the card's answer (data + SW) goes to `out`.
+ * Returns its length, or -1. */
+static int apdu(int ch, const uint8_t *cmd, uint16_t clen, uint8_t *out, size_t cap)
+{
+    struct msg m;
+    struct reply r;
+    uint8_t body[2 + 512];
+
+    if (clen > sizeof body - 2)
+        return -1;
+    put16(body, clen);
+    memcpy(body + 2, cmd, clen);
+    msg_start(&m, MSG_SEND_APDU);
+    msg_u8(&m, 0x01, slot);
+    msg_tlv(&m, 0x02, body, (uint16_t)(2 + clen));
+    msg_u8(&m, 0x10, (uint8_t)ch);
+
+    dump("> apdu", cmd, clen);
+    int rc = request(&m, &r, 5000);
+    if (rc) {
+        if (rc > 0)
+            fprintf(stderr, "[!] send apdu rejected (qmi_error=%u)\n", r.qerr);
+        return -1;
+    }
+    uint16_t len = 0;
+    const uint8_t *v = tlv(&r, 0x10, &len);
+    if (!v || len < 2 || le16(v) > len - 2 || le16(v) > cap) {
+        fprintf(stderr, "[!] bad APDU response\n");
+        return -1;
+    }
+    memcpy(out, v + 2, le16(v));
+    dump("< apdu", out, le16(v));
+    return le16(v);
+}
+
+/* ---- subcommands ---- */
+
+static int do_open(void)
+{
+    int ch = channel_open();
+    if (ch < 0)
+        return 1;
+    channel_close(ch);
+    return 0;
+}
+
+static int do_close(const char *arg)
+{
+    int ch = arg ? atoi(arg) : 0;
+    if (ch < 1 || ch > 19) {
+        fprintf(stderr, "close needs a channel 1-19\n");
+        return 1;
+    }
+    channel_close(ch);
+    return 0;
+}
+
+static int do_status(void)
+{
+    struct msg m;
+    struct reply r;
+    msg_start(&m, MSG_CARD_STATUS);
+    int rc = request(&m, &r, 3000);
+    if (rc >= 0 || r.n)
+        dump("< card status", r.b, r.n);
+    return rc != 0;
+}
+
+/* Power-cycle: down, short pause, up. Up is sent even if down was refused. */
+static int do_simreset(void)
+{
+    static const struct { uint16_t id; const char *name; } step[2] = {
+        { MSG_POWER_DOWN, "power_down" },
+        { MSG_POWER_UP, "power_up" },
+    };
+    for (int i = 0; i < 2; i++) {
+        struct msg m;
+        struct reply r;
+        msg_start(&m, step[i].id);
+        msg_u8(&m, 0x01, slot);
+        int rc = request(&m, &r, 5000);
+        if (rc < 0)
+            return 1;
+        fprintf(stderr, "[%s] %s (qmi_error=%u)\n", step[i].name,
+                rc ? "FAILED" : "OK", rc ? r.qerr : 0);
+        if (i == 0)
+            usleep(500000);
+    }
+    return 0;
+}
+
+/*
+ * Walk the card status TLV (0x10), print every app; return the first USIM
+ * AID on slot 1 in `aid` (`*aid_len` stays 0 when there is none).
+ * Layout: 4 x u16 session indexes, u8 slot count, then per slot
+ * card_state, upin_state, upin_retries, upuk_retries, error, app count, and
+ * per app type, state, perso_state, perso_feature, perso_retries,
+ * perso_unblock_retries, aid_len, aid, then seven PIN bytes.
+ */
+static int do_apps(uint8_t *aid, uint8_t *aid_len)
+{
+    struct msg m;
+    struct reply r;
+    msg_start(&m, MSG_CARD_STATUS);
+    if (request(&m, &r, 5000))
+        return 1;
+
+    uint16_t len = 0;
+    const uint8_t *v = tlv(&r, 0x10, &len);
+    if (!v || len < 9) {
+        fprintf(stderr, "[!] no card status TLV\n");
+        return 1;
+    }
+    uint16_t gw = le16(v);
+    size_t at = 9;
+    fprintf(stderr, "[cardstatus] gw_pri_index=0x%04x slots=%u\n", gw, v[8]);
+    for (unsigned s = 0; s < v[8] && at + 6 <= len; s++) {
+        unsigned napps = v[at + 5];
+        fprintf(stderr, "  slot%u: card_state=%u err=%u apps=%u\n",
+                s + 1, v[at], v[at + 4], napps);
+        at += 6;
+        for (unsigned a = 0; a < napps && at + 7 <= len; a++) {
+            const uint8_t *app = v + at;
+            uint8_t alen = app[6];
+            if (at + 7 + alen + 7 > len)
+                break;
+            fprintf(stderr, "    app%u: type=%u state=%u aid=", a, app[0], app[1]);
+            for (unsigned i = 0; i < alen; i++)
+                fprintf(stderr, "%02x", app[7 + i]);
+            fprintf(stderr, "%s\n", gw >> 8 == s && (gw & 0xff) == a
+                                        ? "  <- GW provisioning app" : "");
+            if (aid && s == 0 && app[0] == 2 && *aid_len == 0 && alen <= 32) {
+                memcpy(aid, app + 7, alen);
+                *aid_len = alen;
             }
+            at += 7 + (size_t)alen + 7;
         }
     }
     return 0;
 }
 
-/* Rebind the primary GW provisioning session to the (new) USIM app:
- * deactivate, then activate with slot 1 + AID from card status. */
-static int cmd_provision(int s) {
-    uint8_t aid[32]; uint8_t aid_len = 0;
-    if (cmd_apps(s, aid, &aid_len)) return 1;
-    if (aid_len == 0) { fprintf(stderr, "[!] no USIM app found on slot 1\n"); return 1; }
+/* EF_ICCID (MF 3F00, file 2FE2) through one session type:
+ * 6 = slot 1 card session, 0 = primary GW provisioning session. */
+static int read_iccid(uint8_t session)
+{
+    static const uint8_t file[5] = { 0xE2, 0x2F, 0x02, 0x00, 0x3F };
+    static const uint8_t whole[4] = { 0 };
+    uint8_t sess[2] = { session, 0 };
+    struct msg m;
+    struct reply r;
 
-    for (int step = 0; step < 2; step++) {
-        uint8_t pkt[64];
-        size_t off = qmi_build_header(pkt, g_txn++, UIM_CHANGE_PROV, 0);
-        uint8_t sess[2] = { 0 /* primary GW */, (uint8_t)step /* 0=deactivate 1=activate */ };
-        off += tlv_add(pkt + off, 0x01, sess, sizeof(sess));
-        if (step == 1) {
-            uint8_t appinfo[2 + 32];
-            appinfo[0] = g_slot;
-            appinfo[1] = aid_len;
-            memcpy(appinfo + 2, aid, aid_len);
-            off += tlv_add(pkt + off, 0x10, appinfo, 2 + aid_len);
-        }
-        uint16_t msglen = off - 7;
-        pkt[5] = msglen & 0xff; pkt[6] = msglen >> 8;
-        if (qmi_send(s, pkt, off) < 0) return 1;
-        uint8_t rbuf[BUF_SZ];
-        ssize_t r = qmi_recv(s, rbuf, sizeof(rbuf), 5000, UIM_CHANGE_PROV);
-        if (r < 0) return 1;
-        uint16_t qerr = 0;
-        int rc = qmi_result(rbuf + 7, r - 7, &qerr);
-        fprintf(stderr, "[prov %s] %s (qmi_error=%u)\n",
-                step == 0 ? "deactivate" : "activate",
-                rc == 0 ? "OK" : "FAILED", qerr);
-        if (step == 0) usleep(300 * 1000);
+    msg_start(&m, MSG_READ_TRANSP);
+    msg_tlv(&m, 0x01, sess, 2);
+    msg_tlv(&m, 0x02, file, sizeof file);
+    msg_tlv(&m, 0x03, whole, sizeof whole);
+    int rc = request(&m, &r, 5000);
+    if (rc) {
+        if (rc > 0)
+            fprintf(stderr, "[iccid sess=%u] failed qmi_error=%u\n", session, r.qerr);
+        return 1;
     }
+    uint16_t len = 0;
+    const uint8_t *v = tlv(&r, 0x11, &len);
+    if (!v || len < 2) {
+        fprintf(stderr, "[!] no read result\n");
+        return 1;
+    }
+    /* BCD with swapped nibbles; an F nibble is padding */
+    printf("iccid(sess=%u)=", session);
+    for (unsigned i = 0; i < le16(v) && i < 10 && 2 + i < len; i++) {
+        uint8_t b = v[2 + i];
+        putchar('0' + (b & 0x0f));
+        if ((b >> 4) <= 9)
+            putchar('0' + (b >> 4));
+    }
+    putchar('\n');
     return 0;
 }
 
-/* Power-cycle the SIM session so the modem re-reads the card after an eSIM
- * profile switch (the ZTE stack ignores the card's REFRESH). */
-static int cmd_simreset(int s) {
-    uint8_t rbuf[BUF_SZ];
-    uint8_t slot = g_slot;
-    for (int step = 0; step < 2; step++) {
-        uint16_t msg = step == 0 ? UIM_POWER_DOWN : UIM_POWER_UP;
-        uint8_t pkt[32];
-        size_t off = qmi_build_header(pkt, g_txn++, msg, 0);
-        off += tlv_add(pkt + off, 0x01, &slot, 1);
-        uint16_t msglen = off - 7;
-        pkt[5] = msglen & 0xff; pkt[6] = msglen >> 8;
-        if (qmi_send(s, pkt, off) < 0) return 1;
-        ssize_t r = qmi_recv(s, rbuf, sizeof(rbuf), 5000, msg);
-        if (r < 0) return 1;
-        uint16_t qerr = 0;
-        int rc = qmi_result(rbuf + 7, r - 7, &qerr);
-        fprintf(stderr, "[%s] %s (qmi_error=%u)\n",
-                step == 0 ? "power_down" : "power_up",
-                rc == 0 ? "OK" : "FAILED", qerr);
-        if (rc != 0 && step == 0 && qerr != 0)
-            fprintf(stderr, "    (continuing to power_up anyway)\n");
-        if (step == 0) usleep(500 * 1000);
-    }
-    return 0;
+static int do_iccid(void)
+{
+    int card = read_iccid(6);
+    int prov = read_iccid(0);
+    return card || prov;
 }
 
-static int cmd_eid(int s) {
-    int chan = isdr_open(s);
-    if (chan < 0) return 1;
+/* ES10c GetEID: STORE DATA {BF3E 5C 5A}; collect 61xx continuations. */
+static int do_eid(void)
+{
+    int ch = channel_open();
+    if (ch < 0)
+        return 1;
 
-    /* ES10c GetEID: STORE DATA BF3E035C015A, then GET RESPONSE while 61xx */
-    uint8_t cla = 0x80 | (chan & 0x03);  /* channels 1-3 encode in CLA low bits */
-    uint8_t apdu[300];
-    size_t alen = 0;
-    apdu[alen++] = cla; apdu[alen++] = 0xE2; apdu[alen++] = 0x91; apdu[alen++] = 0x00;
-    apdu[alen++] = 0x06;
-    apdu[alen++] = 0xBF; apdu[alen++] = 0x3E; apdu[alen++] = 0x03;
-    apdu[alen++] = 0x5C; apdu[alen++] = 0x01; apdu[alen++] = 0x5A;
-    apdu[alen++] = 0x00;
+    uint8_t cla = 0x80 | (ch & 0x03);
+    uint8_t cmd[16] = { cla, 0xE2, 0x91, 0x00, 0x06,
+                        0xBF, 0x3E, 0x03, 0x5C, 0x01, 0x5A, 0x00 };
+    uint16_t clen = 12;
+    uint8_t all[1024], part[512];
+    size_t got = 0;
+    int done = 0;
 
-    uint8_t acc[1024]; size_t acc_len = 0;
-    uint8_t resp[512];
-    int ok = 0;
-    for (int round = 0; round < 8; round++) {
-        ssize_t rl = uim_send_apdu(s, chan, apdu, alen, resp, sizeof(resp));
-        if (rl < 2) break;
-        uint8_t sw1 = resp[rl-2], sw2 = resp[rl-1];
-        if (rl > 2) { memcpy(acc + acc_len, resp, rl - 2); acc_len += rl - 2; }
-        if (sw1 == 0x61) {
-            alen = 0;
-            apdu[alen++] = cla; apdu[alen++] = 0xC0; apdu[alen++] = 0x00;
-            apdu[alen++] = 0x00; apdu[alen++] = sw2;
-            continue;
+    for (int i = 0; i < 8 && !done; i++) {
+        int n = apdu(ch, cmd, clen, part, sizeof part);
+        if (n < 2)
+            break;
+        uint8_t sw1 = part[n - 2], sw2 = part[n - 1];
+        if (n > 2 && got + (size_t)(n - 2) <= sizeof all) {
+            memcpy(all + got, part, (size_t)(n - 2));
+            got += (size_t)(n - 2);
         }
-        if (sw1 == 0x90 && sw2 == 0x00) { ok = 1; break; }
-        fprintf(stderr, "[!] unexpected SW=%02X%02X\n", sw1, sw2);
-        break;
+        if (sw1 == 0x90 && sw2 == 0x00) {
+            done = 1;
+        } else if (sw1 == 0x61) {           /* GET RESPONSE for the rest */
+            uint8_t more[5] = { cla, 0xC0, 0x00, 0x00, sw2 };
+            memcpy(cmd, more, sizeof more);
+            clen = sizeof more;
+        } else {
+            fprintf(stderr, "[!] unexpected SW=%02X%02X\n", sw1, sw2);
+            break;
+        }
     }
-    isdr_close(s, chan);
-    if (!ok || acc_len < 4) { fprintf(stderr, "[!] GetEID failed\n"); return 1; }
+    channel_close(ch);
 
-    hexdump("[es10c] GetEID response", acc, acc_len);
-    /* Expect BF3E xx 5A 10 <16-byte EID> */
-    for (size_t i = 0; i + 18 <= acc_len; i++) {
-        if (acc[i] == 0x5A && acc[i+1] == 0x10) {
+    if (!done) {
+        fprintf(stderr, "[!] GetEID failed\n");
+        return 1;
+    }
+    dump("[es10c] GetEID response", all, got);
+    for (size_t i = 0; i + 18 <= got; i++) {
+        if (all[i] == 0x5A && all[i + 1] == 0x10) {
             printf("EID=");
-            for (int j = 0; j < 16; j++) printf("%02X", acc[i+2+j]);
+            for (int j = 0; j < 16; j++)
+                printf("%02X", all[i + 2 + j]);
             printf("\n");
             return 0;
         }
@@ -491,38 +521,80 @@ static int cmd_eid(int s) {
     return 1;
 }
 
-int main(int argc, char **argv) {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s lookup|status|open|close <chan>|eid|simreset|iccid|apps|provision [slot]\n", argv[0]);
+/* Point the primary GW session at slot 1's USIM again: deactivate, then
+ * activate with the AID from the card status. */
+static int do_provision(void)
+{
+    uint8_t aid[32];
+    uint8_t aid_len = 0;
+    if (do_apps(aid, &aid_len))
+        return 1;
+    if (!aid_len) {
+        fprintf(stderr, "[!] no USIM app found on slot 1\n");
+        return 1;
+    }
+
+    for (uint8_t activate = 0; activate < 2; activate++) {
+        uint8_t sess[2] = { 0, activate };
+        struct msg m;
+        struct reply r;
+        msg_start(&m, MSG_CHANGE_PROV);
+        msg_tlv(&m, 0x01, sess, 2);
+        if (activate) {
+            uint8_t app[2 + 32] = { slot, aid_len };
+            memcpy(app + 2, aid, aid_len);
+            msg_tlv(&m, 0x10, app, (uint16_t)(2 + aid_len));
+        }
+        int rc = request(&m, &r, 5000);
+        if (rc < 0)
+            return 1;
+        fprintf(stderr, "[prov %s] %s (qmi_error=%u)\n",
+                activate ? "activate" : "deactivate", rc ? "FAILED" : "OK", rc ? r.qerr : 0);
+        if (!activate)
+            usleep(300000);
+    }
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    const char *cmd = argc > 1 ? argv[1] : "";
+    const char *arg = argc > 2 ? argv[2] : NULL;
+
+    if (!*cmd) {
+        fprintf(stderr, "usage: %s lookup|status|apps|iccid|eid|open|close <chan>|simreset|provision [slot]\n",
+                argv[0]);
         return 2;
     }
-    /* Optional trailing slot arg (1-based) for open/eid/provision. Default 1. */
-    int is_close = !strcmp(argv[1], "close");
-    if (argc >= 3 && !is_close) {
-        int sl = atoi(argv[2]);
-        if (sl >= 1 && sl <= 8) g_slot = (uint8_t)sl;
+    /* the optional trailing slot (1-8, default 1); close takes a channel there */
+    if (arg && strcmp(cmd, "close") != 0) {
+        int s = atoi(arg);
+        if (s >= 1 && s <= 8)
+            slot = (uint8_t)s;
     }
-    int s = qrtr_open();
-    if (s < 0) return 1;
-    if (uim_lookup(s, !strcmp(argv[1], "lookup")) < 0) return 1;
 
-    int rc = 1;
-    if (!strcmp(argv[1], "lookup")) rc = 0;
-    else if (!strcmp(argv[1], "status")) rc = cmd_status(s);
-    else if (!strcmp(argv[1], "open")) { int c = isdr_open(s); if (c >= 0) { isdr_close(s, c); rc = 0; } }
-    /* Release a logical channel left open by a killed lpac (the modem does
-     * not reclaim it when the QRTR client goes away). */
-    else if (is_close) {
-        int c = argc >= 3 ? atoi(argv[2]) : 0;
-        if (c >= 1 && c <= 19) { isdr_close(s, c); rc = 0; }
-        else fprintf(stderr, "close needs a channel 1-19\n");
+    sock = socket(AF_QIPCRTR, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        perror("socket(AF_QIPCRTR)");
+        return 1;
     }
-    else if (!strcmp(argv[1], "eid")) rc = cmd_eid(s);
-    else if (!strcmp(argv[1], "simreset")) rc = cmd_simreset(s);
-    else if (!strcmp(argv[1], "iccid")) { int a = cmd_iccid(s, 6), b = cmd_iccid(s, 0); rc = a || b; }
-    else if (!strcmp(argv[1], "apps")) { uint8_t dummy[32], dl = 0; rc = cmd_apps(s, dummy, &dl); }
-    else if (!strcmp(argv[1], "provision")) rc = cmd_provision(s);
-    else fprintf(stderr, "unknown cmd\n");
-    close(s);
+    if (find_uim(!strcmp(cmd, "lookup")) < 0)
+        return 1;
+
+    int rc;
+    if (!strcmp(cmd, "lookup"))         rc = 0;
+    else if (!strcmp(cmd, "open"))      rc = do_open();
+    else if (!strcmp(cmd, "close"))     rc = do_close(arg);
+    else if (!strcmp(cmd, "simreset"))  rc = do_simreset();
+    else if (!strcmp(cmd, "status"))    rc = do_status();
+    else if (!strcmp(cmd, "apps"))      rc = do_apps(NULL, NULL);
+    else if (!strcmp(cmd, "iccid"))     rc = do_iccid();
+    else if (!strcmp(cmd, "eid"))       rc = do_eid();
+    else if (!strcmp(cmd, "provision")) rc = do_provision();
+    else {
+        fprintf(stderr, "unknown command: %s\n", cmd);
+        rc = 1;
+    }
+    close(sock);
     return rc;
 }

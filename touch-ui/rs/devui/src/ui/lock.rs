@@ -1,7 +1,7 @@
 //! 锁频 (src/ui_parts/lock.c): one band picker per technology and 恢复默认 on the 锁频 page,
 //! and the 网络模式 segment on 蜂窝. Everything that reaches the modem is two taps (arm, then
 //! send within 5 s): a mis-tap drops the connection.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::cellular::nz;
 use super::{Ui, SUB_VIEW};

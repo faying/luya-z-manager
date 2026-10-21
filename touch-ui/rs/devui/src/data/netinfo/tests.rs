@@ -1,6 +1,6 @@
 //! tests/netinfo_test.c: the parser against /api/netinfo bodies shaped like luyaz-core's
 //! netinfo.rs output (serde sorts keys, so `error` comes first in every exit object).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::*;
 

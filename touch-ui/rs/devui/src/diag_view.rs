@@ -1,5 +1,5 @@
 //! src/diag_view.c: luyaz-core's diagnosis run parsed, and the words the 网络诊断 page uses.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use crate::json;
 use crate::lang::{self, tr};

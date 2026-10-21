@@ -1,6 +1,6 @@
 #!/bin/sh
 # wan-sources.sh summarizing against a fixture capture (busybox container).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 SCRIPTS=${SCRIPTS:-/scripts}
 PASS=0; FAIL=0
 ok() { PASS=$((PASS + 1)); echo "  ok   $1"; }

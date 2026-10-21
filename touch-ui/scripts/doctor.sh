@@ -7,7 +7,7 @@
 # This shim only runs it. The old shell body (doctor-legacy.sh) is gone
 # (Luya-Z rename F4): no core with doctor = exit 2.
 # DOC_CORE overrides the core (tests); DOC_ROOT prefixes its path.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 CORE=${DOC_CORE:-${DOC_ROOT:-}/data/luyaz/luyaz-core}
 if [ -x "$CORE" ] && grep -q luyaz-doctor "$CORE" 2>/dev/null; then

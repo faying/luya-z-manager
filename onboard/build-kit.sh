@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
-# build-kit.sh — 打出给别人的 U60 Pro（MU5250）装机包
+# ═════════════════════════════════════════════════════════════════════════════
+# build-kit.sh：打 Luya-Z 装机包（给 U60 Pro / MU5250 用）。
 #
 #   ./onboard/build-kit.sh            # → onboard/dist/luyaz-kit-YYYYMMDD.tar.gz
 #
 # 只要 manager 这一个仓库（touch-ui/ 在里面，Phase 10 10f）+ Docker + 网络就能从零打出完整的包，
 # 不需要从任何已装好的设备上拉东西。包里的东西和来源：
-#   dropbear          OpenWrt 23.05.4 官方 ipk，按 sha256 钉死（和维护者设备上 /data/dropbear 是同一个二进制）
+#   dropbear          SSH 服务端：OpenWrt 23.05.4 发布的 aarch64 ipk，下载后按写死的 sha256 核对
 #   luyaz-web         管理网页（:9090），本仓库 HEAD 的 crates/luyaz-web 现编（cargo zigbuild，profile release；
 #                     没装就走 Docker，镜像按 digest 固定）
 #   operator-logos/   网页首页的运营商 logo（assets/operator-logos 原样；开源版没有，就不带）
@@ -26,6 +26,8 @@
 #                     procd init 脚本（装到 /data/luyaz/scripts 和 /etc/init.d）
 #   chill/            CHILL：scripts/chill/stage.sh 摆好的 mihomo（sha256 固定）、规则集（下载时的最新版）、脚本、
 #                     zashboard（sha256 固定），下载缓存在 onboard/cache/chill。CHILL=0 不打
+# 另外：install.sh、device/install.sh、README、u60.env.example、CLAUDE.md（kit-CLAUDE.md）、
+#       MANIFEST.txt（来源 + 每个文件的 sha256，install.sh 先核对）、versions.json（各组件版本）。
 #
 # 环境变量：DEVUI_REPO（默认本仓库的 touch-ui/）、CHILL=0（不打 CHILL）、
 #           DEVUI_BIN=路径（触屏二进制，默认 $DEVUI_REPO/out/luyaz-ui，没有就现编）、
@@ -37,7 +39,8 @@
 #           ESIM_TGZ=路径（用现成的 eSIM 包，不现打）、
 #           DEVUI_FONTS_DIR=目录（现成的字体目录，要有 Nunito-600/700/800.ttf、OFL-Nunito.txt、
 #           u60-cjk-fallback.ttf、OFL-ResourceHanRounded.txt；不给就自动生成到 onboard/cache/fonts）、
-#           FONTS=0（不打字体：触屏数字退回设备自带 Roboto，中文用设备自带字体）
+#           FONTS=0（不打字体：触屏数字退回设备自带 Roboto，中文用设备自带字体）、
+#           KIT_ZIGBUILD=命令（Rust 程序换个地方编，见下面 zigbuild）、ZIGBUILD_IMAGE=镜像（本机 Docker 编时用）
 #           这些也可以写进 onboard/kit.local.env（不进 git），每次打包自动读取。
 #
 # 打包前会检查两样最容易装错、装错了又看不出来的东西，不对就停：
@@ -45,11 +48,11 @@
 #     而且会写到同一个 u60pro-devui.stripped，默认路径下一不留神就打进旧界面。
 #   核心必须是 Rust 版（luyaz-core），且没有写死的外部更新源（releases/latest/download）。
 #     用 CORE_BIN 指定的文件可能是更早的 C 版或带上游更新源的版本。
-# ─────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ONB="$ROOT/onboard"
+ONB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$ONB/.." && pwd)"
 # 本机的默认值（不进 git）：KEY=值 一行一个，命令行上给的环境变量优先
 if [ -f "$ONB/kit.local.env" ]; then
   while IFS='=' read -r k v; do
@@ -65,22 +68,29 @@ if [ -z "${ZIGBUILD_IMAGE:-}" ] && [ -z "${KIT_ZIGBUILD:-}" ]; then
   docker image inspect "$ZIGBUILD_IMAGE" >/dev/null 2>&1 ||
     docker build -q -t "$ZIGBUILD_IMAGE" -f "$ONB/build.Dockerfile" "$ONB" >/dev/null
 fi
-CACHE="$ONB/cache"
-DIST="$ONB/dist"
+CACHE="$ONB/cache"          # 下载和生成物的缓存，跨次复用
+DIST="$ONB/dist"            # 打好的包
 
+# SSH 服务端用 OpenWrt 官方发布的二进制，不自己编；换版本时两行一起改
 DROPBEAR_URL="https://downloads.openwrt.org/releases/23.05.4/targets/armsr/armv8/packages/dropbear_2022.82-6_aarch64_generic.ipk"
 DROPBEAR_SHA256="4fadd1b8529f22fb5d64ee27159d11f4feb68224657953d298a1acf85a83a5c0"
 
-# macOS 上 /usr/bin/git 可能被 Xcode 许可证拦住，默认走 CommandLineTools 的
+# macOS：没装完整 Xcode 时 /usr/bin/git 会弹许可证提示，默认改用 CommandLineTools 里的 git
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Library/Developer/CommandLineTools}"
 export PATH="$HOME/.cargo/bin:$PATH"
-export COPYFILE_DISABLE=1   # 别把 macOS 的 ._* 文件打进包
+export COPYFILE_DISABLE=1   # macOS tar 不要夹带 ._* 元数据文件
 
 step() { printf '\033[0;36m▶\033[0m %s\n' "$1"; }
 die()  { printf '\033[0;31m✗\033[0m %s\n' "$1" >&2; exit 1; }
-sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
-rev() { git -C "$1" log -1 --format='%h %ad %s' --date=short 2>/dev/null || echo unknown; }
-dirty() { [ -z "$(git -C "$1" status --porcelain -- "${@:2}" 2>/dev/null)" ] || echo " (有未提交改动)"; }
+sha256() { # <文件> → 十六进制摘要
+  local s; s=$(shasum -a 256 "$1"); printf '%s\n' "${s%% *}"
+}
+rev() { # <仓库> → 「短提交号 日期 标题」
+  git -C "$1" log -1 --date=short --format='%h %ad %s' 2>/dev/null || echo unknown
+}
+dirty() { # <仓库> [路径…] → 这些路径有未提交改动时打印标注
+  if [ -n "$(git -C "$1" status --porcelain -- "${@:2}" 2>/dev/null)" ]; then echo " (有未提交改动)"; fi
+}
 md5q() { if command -v md5sum >/dev/null 2>&1; then md5sum "$1" | awk '{print $1}'; else /sbin/md5 -q "$1"; fi; }
 # shipped <设备上的路径>：在 SHIP_RECORDS 里找设备上正在跑的那份。最新清单里这个路径的最后一行就是现状
 # （u60 rollback 也是一次 ship，写回旧的 md5）；记录里同名、同 md5 的文件就是它。
@@ -116,18 +126,23 @@ mkdir -p "$CACHE" "$DIST"
 STAMP=$(date +%Y%m%d)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-KIT="$WORK/luyaz-kit"
-PL="$KIT/payload"
+KIT="$WORK/luyaz-kit"       # 包的根目录
+PL="$KIT/payload"           # 推到设备上的东西
 mkdir -p "$PL/devui"
 
-# ── dropbear ────────────────────────────────────────────────────────────────
+# ── dropbear：从 ipk 里取出 usr/sbin/dropbear ─────────────────────────────────
+# ipk 是 tar.gz 套 tar.gz：外层的 data.tar.gz 里才是文件
 step "dropbear（OpenWrt 23.05.4，sha256 校验）"
-IPK="$CACHE/$(basename "$DROPBEAR_URL")"
-[ -f "$IPK" ] || curl -fsSL "$DROPBEAR_URL" -o "$IPK"
-[ "$(sha256 "$IPK")" = "$DROPBEAR_SHA256" ] || { rm -f "$IPK"; die "dropbear ipk 校验失败"; }
-tar xzf "$IPK" -C "$WORK" ./data.tar.gz
-tar xzf "$WORK/data.tar.gz" -C "$WORK" ./usr/sbin/dropbear
-cp "$WORK/usr/sbin/dropbear" "$PL/dropbear"
+DB_IPK="$CACHE/${DROPBEAR_URL##*/}"
+if [ ! -f "$DB_IPK" ]; then curl -fsSL -o "$DB_IPK" "$DROPBEAR_URL"; fi
+if [ "$(sha256 "$DB_IPK")" != "$DROPBEAR_SHA256" ]; then
+  rm -f "$DB_IPK"
+  die "dropbear ipk 校验失败"
+fi
+mkdir -p "$WORK/dropbear"
+tar xzf "$DB_IPK" -C "$WORK/dropbear" ./data.tar.gz
+tar xzf "$WORK/dropbear/data.tar.gz" -C "$WORK/dropbear" ./usr/sbin/dropbear
+cp "$WORK/dropbear/usr/sbin/dropbear" "$PL/dropbear"
 
 # zigbuild <profile> <包>：本仓库现编一个 aarch64-musl 程序，打印产物路径。有 cargo-zigbuild 就本机编，
 # 没有走 Docker（同 tools/luyaz ship）。LUYAZ_COMMIT：核心把它当版本号写进长期记录（u60-sentinel.md §17）
@@ -165,7 +180,7 @@ if ls "$ROOT"/assets/operator-logos/*.svg >/dev/null 2>&1; then
   done
 fi
 
-# ── devui ───────────────────────────────────────────────────────────────────
+# ── 触屏界面（devui）：程序、字体、logo ─────────────────────────────────────
 step "devui（${DEVUI_REPO}）"
 # 设备现行版（SHIP_RECORDS）：只替代没显式给的；SHIP_<组件> 记编它的提交，写进 kit-source
 SHIP_touch= SHIP_sentinel= SHIP_core=
@@ -318,6 +333,40 @@ case $core_rc in
   *) die "包里的核心还带着写死的外部更新源（releases/latest/download）。用去掉了更新源的 fork 版（CORE_BIN=…）" ;;
 esac
 
+# ── 组件 lanid-parse（已连设备识别的解析器，docs/designs/lan-client-id.md）──────────────
+# 只带这一个组件：其他策略在设备上照旧用内置实现。没有它核心照常跑，只是识别关着。
+# LANID_CWASM=路径 给了就用那个；否则本机 Docker 现编（crates/luyaz-plugins/build.sh，
+# plugc 只能在本机编）。编不出来只警告，不停。
+if [ -n "${LANID_CWASM:-}" ]; then
+  step "组件 lanid-parse（${LANID_CWASM}）"
+  [ -f "$LANID_CWASM" ] || die "LANID_CWASM 不存在: $LANID_CWASM"
+  LANID_SRC="$(basename "$LANID_CWASM")"
+else
+  step "组件 lanid-parse（crates/luyaz-plugins/build.sh device）"
+  LANID_CWASM="$ROOT/crates/luyaz-plugins/out/lanid-parse.cwasm"
+  rm -f "$LANID_CWASM"
+  "$ROOT/crates/luyaz-plugins/build.sh" device >/dev/null 2>&1 || true
+  LANID_SRC="lanid-parse $(rev "$ROOT")$(dirty "$ROOT" crates/luyaz-plugins crates/luyaz-policy/wit)"
+fi
+if [ -f "$LANID_CWASM" ]; then
+  LANID_ABI=$(sed -n 's/^package \(.*\);$/\1/p' "$ROOT/crates/luyaz-policy/wit/lanid-parse.wit")
+  mkdir -p "$PL/devui/plugins"
+  cp "$LANID_CWASM" "$PL/devui/plugins/lanid-parse.cwasm"
+  printf '{"plugins":[{"name":"lanid-parse","abi":"%s","file":"lanid-parse.cwasm","sha256":"%s"}]}\n' \
+    "$LANID_ABI" "$(sha256 "$LANID_CWASM")" >"$PL/devui/plugins/plugins.json"
+else
+  printf '\033[0;33m!\033[0m 没编出 lanid-parse.cwasm：装上后已连设备识别关着（只有 DHCP 名字）\n' >&2
+  LANID_SRC="没带（识别关着）"
+fi
+
+# OUI 厂商表（scripts/lanid/make-oui.sh 从 IEEE oui.txt 生成）：OUI_TSV=路径 给了才带；
+# 公开仓库不带这张表，没有时厂商只来自 mDNS/SSDP
+if [ -n "${OUI_TSV:-}" ]; then
+  [ -f "$OUI_TSV" ] || die "OUI_TSV 不存在: $OUI_TSV"
+  mkdir -p "$PL/devui/lanid"
+  cp "$OUI_TSV" "$PL/devui/lanid/oui.tsv"
+fi
+
 # ── eSIM（lpac 包，本机现打）────────────────────────────────────────────────
 if [ -n "${ESIM_TGZ:-}" ]; then
   step "eSIM：用现成的 ${ESIM_TGZ}"
@@ -341,31 +390,36 @@ if [ "${CHILL:-1}" != 0 ]; then
   tar czf "$PL/chill/ui.tgz" -C "$WORK/chill/ui" .
 fi
 
-# ── 脚本 + 文档 + 清单 ────────────────────────────────────────────────────────
+# ── 装机脚本、说明、清单 ──────────────────────────────────────────────────────
 step "装机脚本、说明、清单"
+mkdir -p "$KIT/device"
 cp "$ONB/install.sh" "$ONB/README.md" "$ONB/README.zh-CN.md" "$ONB/u60.env.example" "$KIT/"
-cp "$ONB/kit-CLAUDE.md" "$KIT/CLAUDE.md"   # 对方在包目录里开 Claude Code 会自动读到
-mkdir -p "$KIT/device" && cp "$ONB/device/install.sh" "$KIT/device/"
+cp "$ONB/device/install.sh" "$KIT/device/"
+cp "$ONB/kit-CLAUDE.md" "$KIT/CLAUDE.md"   # 在包目录里开 Claude Code，它会先读这份
 chmod 755 "$KIT/install.sh"
 
+# MANIFEST.txt：前面是给人看的来源（第 3 行起，打完包会印出几行），
+# 「sha256」那一行之后是 install.sh 要逐个核对的「摘要  路径」（两个空格）
+kit_hashes() {
+  ( cd "$KIT" && find install.sh device payload -type f | LC_ALL=C sort ) | while read -r rel; do
+    printf '%s  %s\n' "$(sha256 "$KIT/$rel")" "$rel"
+  done
+}
 {
-  echo "U60 装机包 $STAMP"
-  echo
-  echo "来源："
+  printf 'U60 装机包 %s\n\n来源：\n' "$STAMP"
   echo "  manager       $(rev "$ROOT")$(dirty "$ROOT" crates Cargo.toml Cargo.lock assets/operator-logos onboard)"
   echo "  luyaz-web     二进制 $(sha256 "$PL/luyaz-web" | cut -c1-12)$([ -d "$PL/operator-logos" ] && echo "，运营商 logo $(ls "$PL/operator-logos" | wc -l | tr -d ' ') 个")"
   echo "  luyaz-ui      $(rev "$DEVUI_REPO")$(dirty "$DEVUI_REPO" rs scripts)（scripts/ 同源）"
   echo "  luyaz-ui      二进制 $(basename "$DEVUI_BIN") $(sha256 "$DEVUI_BIN" | cut -c1-12)"
   echo "  luyaz-sentinel ${SENTINEL_SRC} $(sha256 "$SENTINEL_BIN" | cut -c1-12)"
   echo "  luyaz-core    ${CORE_SRC} $(sha256 "$CORE_BIN" | cut -c1-12)"
+  echo "  lanid-parse   ${LANID_SRC}$([ -f "$PL/devui/plugins/lanid-parse.cwasm" ] && echo " $(sha256 "$PL/devui/plugins/lanid-parse.cwasm" | cut -c1-12)")"
+  [ -f "$PL/devui/lanid/oui.tsv" ] && echo "  OUI 表        $(wc -l <"$PL/devui/lanid/oui.tsv" | tr -d ' ') 条 $(sha256 "$PL/devui/lanid/oui.tsv" | cut -c1-12)"
   echo "  eSIM          ${ESIM_SRC}"
-  echo "  dropbear      $(basename "$DROPBEAR_URL")"
+  echo "  dropbear      ${DROPBEAR_URL##*/}"
   [ -d "$PL/chill" ] && echo "  CHILL         mihomo ${MIHOMO_VER:-v1.19.31}、zashboard ${ZASHBOARD_VER:-v3.27.0}（规则集下载于 $(date -r "$CACHE/chill/ruleset/cn.list" '+%Y-%m-%d')）"
-  echo
-  echo "sha256（install.sh 开头会逐个校验）："
-  ( cd "$KIT" && find install.sh device payload -type f | LC_ALL=C sort | while read -r f; do
-      printf '%s  %s\n' "$(sha256 "$f")" "$f"
-    done )
+  printf '\nsha256（install.sh 开头会逐个校验）：\n'
+  kit_hashes
 } > "$KIT/MANIFEST.txt"
 
 # each component's version (docs/designs/component-versions.md): from the LUYAZ_VERSION=
@@ -379,4 +433,4 @@ printf '{\n  "v": 1,\n  "kit": "%s",\n  "components": {\n    "core": %s,\n    "l
 OUT="$DIST/luyaz-kit-$STAMP.tar.gz"
 tar czf "$OUT" -C "$WORK" luyaz-kit
 printf '\033[0;32m✓\033[0m %s（%s）\n' "$OUT" "$(du -h "$OUT" | cut -f1)"
-sed -n '3,7p' "$KIT/MANIFEST.txt"
+sed -n '3,7p' "$KIT/MANIFEST.txt"   # 来源的头几行

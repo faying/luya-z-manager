@@ -1,6 +1,6 @@
 //! Test helper: the C tests' string constants, read from their headers (the inputs stay one
 //! copy, shared with the C tests).
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 /// The C source without its comments (string literals kept as they are).
 pub fn strip_comments(src: &str) -> String {

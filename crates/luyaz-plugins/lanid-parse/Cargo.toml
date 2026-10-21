@@ -1,0 +1,13 @@
+[package]
+name = "lanid-parse"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "Parses the LAN frames luyaz-core's lanid thread queues (wit/lanid-parse.wit): DHCP, mDNS, SSDP, NetBIOS."
+license = "PolyForm-Noncommercial-1.0.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros", "realloc"] }

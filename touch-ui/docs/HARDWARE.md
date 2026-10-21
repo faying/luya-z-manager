@@ -1,28 +1,45 @@
-# Hardware interfaces (U60 Pro / MU5250 front panel)
+# Front-panel hardware (U60 Pro / MU5250)
 
 **English** · [中文](HARDWARE.zh-CN.md)
 
-Results of probing standard Linux interfaces on a running device, written down to make the code easier to read. **No vendor programs or assets are copied into this repo.**
+What the touch UI talks to, as measured on a running device through ordinary
+Linux interfaces. The code that uses it lives in `rs/plat/src/`.
 
-## Screen
+## Display — `drm.rs`
 
-- Node: `/dev/dri/card0` (standard DRM/KMS).
-- Panel: about 320×480, **RGB565 (16-bit)**.
-- Refresh: command-mode panel; after writing the dumb buffer, pixels are pushed with `DRM_IOCTL_MODE_DIRTYFB` (`vrefresh=1`, not continuous scanout).
-- Mounting orientation: rotated 180° relative to the framebuffer scan order, so drawing is flipped (`DEVUI_ROTATE_180`).
-- connector / crtc: enumerated automatically at runtime with `GETRESOURCES` / `GETCONNECTOR` / `GETENCODER`. The measured values (connector 31, crtc 34) are only a fallback in `include/devui_config.h`.
-- Only one program can hold `/dev/dri/card0` at a time; two UIs fighting over the screen trigger a whole-device reboot.
+| | |
+|---|---|
+| Device | `/dev/dri/card0`, plain DRM/KMS with a dumb buffer |
+| Size, format | about 320 × 480, 16-bit RGB565 |
+| Updates | command-mode panel: draw into the buffer, then flush it with `DRM_IOCTL_MODE_DIRTYFB` (the mode reports `vrefresh=1`; nothing scans out on its own) |
+| Orientation | mounted upside down relative to scan order, so the UI renders rotated 180° |
+| Connector / CRTC | looked up at start-up from the DRM resources; nothing hard-coded |
 
-## Touch
+Only one process may own `card0`. If two UIs open it at once the firmware ends
+up rebooting the whole device, which is why the screen has a single owner
+(luyaz-sentinel).
 
-- Node: one of the `/dev/input/event*` devices (measured: `event3`), found automatically at startup by scanning for a device with `ABS_MT_POSITION_X/Y` or `ABS_X/Y`.
-- The raw coordinate range is read with `EVIOCGABS` and scaled to screen pixels; the 180° rotation applies to touch coordinates too (`DEVUI_TOUCH_ROTATE_180`).
+## Touch — `touch.rs`
 
-## Device data
+At start-up the UI picks the `/dev/input/event*` node that reports multi-touch
+(or single-touch) X/Y axes; on the devices measured so far that was `event3`.
+The axis ranges come from `EVIOCGABS`, raw points are scaled to screen pixels,
+and the same 180° turn as the display is applied.
+`tools/touchsim.c` writes events into the same node for tests.
 
-The device runs OpenWrt (ZWRT). Signal, Wi-Fi, clients, battery, SMS and other state live in **ubus** (the `zwrt_*` namespace) and **uci**.
-The UI does not read them directly; it reads the `/v2/state` that the core (`luyaz-core`) has put together. This project does not link against the vendor's `libzte_*.so`.
+## Other inputs — `key.rs`, `backlight.rs`
 
-## Clean-room principle
+The power key arrives as `KEY_POWER` (116) on its own input node; the backlight is
+the sysfs LED `/sys/class/leds/led:lcd` (`brightness`, `max_brightness`).
 
-The stock `zte_topsw_devui`, `libzte_*.so`, fonts and images are used only for local interface analysis and are excluded in `.gitignore`. This project is an independent implementation based on public Linux/OpenWrt interfaces and is not affiliated with ZTE.
+## Where device data comes from
+
+The UI never reads ubus or uci itself. luyaz-core collects modem, Wi-Fi,
+battery and SMS state and serves it as `/v2/state` and `/v2/events`; the UI
+only consumes that.
+
+## What is not in this repository
+
+No ZTE program, library, font or image is included or linked. The stock UI was
+only observed from outside (which device nodes it opens) to learn the
+interfaces above. Luya-Z is not affiliated with ZTE.

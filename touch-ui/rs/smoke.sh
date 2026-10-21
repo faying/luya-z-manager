@@ -31,7 +31,7 @@
 #
 # Needs `rs/build.sh device` (or native) first. Writes OUT_DIR/<case>.{texts,png,core,agent,ui}.
 # Exit 0 when every check passed.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 out=${1:-/tmp/u60-smoke}
@@ -132,7 +132,7 @@ check "devui.conf read from /data/luyaz/ui (appearance=dark)" "grep -q 'appearan
 check "fonts at the device's own paths" "grep -q 'fonts cjk=device numerals=nunito' '$o/sentinel.ui'"
 check "comm luyaz-ui.test, cwd the UI dir (R5)" "grep -q 'comm=luyaz-ui.test cwd=/data/luyaz/ui' '$o/sentinel.ui'"
 check "core read, the pace sent" "grep -q 'GET /v2/events' '$o/sentinel.core' && grep -q 'state.set_interval' '$o/sentinel.core'"
-check "ended on SIGTERM" "grep -q 'first refresh done' '$o/sentinel.ui' && grep -q '^comm=u60pro' '$o/sentinel.ui' && ! grep -q 'still running' '$o/sentinel.ui'"
+check "ended on SIGTERM" "grep -q 'first refresh done' '$o/sentinel.ui' && grep -q '^comm=luyaz-ui' '$o/sentinel.ui' && ! grep -q 'still running' '$o/sentinel.ui'"
 echo "## exec"
 check "exec self-test (pid, comm, fds, arguments; a replaced binary refused)" "! grep -q FAIL '$o/exec.log' && [ \$(grep -c '^exit 0$' '$o/exec.log') = 2 ]"
 if [ "${SMOKE_BIN:-}" != native ]; then

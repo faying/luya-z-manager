@@ -30,8 +30,15 @@ const RATE_DAY_MAX: usize = 5;
 const SMS_LOG_KEEP: usize = 100;
 /// Kinds never sent as an SMS: a failed SMS, the screen's colours, what the agent changed (MCP
 /// second phase: the agent reads it back, the owner's alert forwarding shows it), the tailnet
-/// poller (owner 10-21: web and Hermes only).
-const NEVER: &[&str] = &["sms-failed", "devui-theme-paused", "agent-change", "tailnet-poller"];
+/// poller (owner 10-21: web and Hermes only), a new device on the LAN (guests on the hotspot would
+/// each cost an SMS; the screen and the web show it).
+const NEVER: &[&str] = &[
+    "sms-failed",
+    "devui-theme-paused",
+    "agent-change",
+    "tailnet-poller",
+    "lan-new-device",
+];
 
 /// What a sender needs from the device. The core implements `send` through its reconciler, the
 /// sentinel straight over ubus.

@@ -7,7 +7,7 @@
 # The cases came from scripts/test/u60-guard/run.sh, removed with the guard
 # (manager docs/designs/u60-sentinel.md 5f; its other cases are the
 # sentinel's and the core's Rust tests now, §21).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 SCRIPTS=${SCRIPTS:-/scripts}
 PASS=0

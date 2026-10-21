@@ -1,6 +1,6 @@
 #!/bin/sh
 # config-backup.sh round trip on a fake device tree (busybox container).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 SCRIPTS=${SCRIPTS:-/scripts}
 CB=$SCRIPTS/config-backup.sh
 PASS=0; FAIL=0

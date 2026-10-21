@@ -63,7 +63,7 @@
 # LUYAZ_FALLBACK_HEALTH_URL (empty = no /healthz check), LUYAZ_FALLBACK_PROC
 # (/proc), LUYAZ_FALLBACK_LOCK_WAIT, LUYAZ_FALLBACK_GAP, LUYAZ_FALLBACK_VERIFY_GAP.
 # Tests: scripts/test/luyaz-fallback/run.sh (busybox image).
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 UBUS=${LUYAZ_FALLBACK_UBUS:-ubus}

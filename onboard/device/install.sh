@@ -1,21 +1,21 @@
 #!/bin/sh
-# ─────────────────────────────────────────────────────────────────────────────
-# U60 装机包 — 设备端安装脚本（busybox ash）
+# ═════════════════════════════════════════════════════════════════════════════
+# Luya-Z 装机包：设备端（busybox ash）。
 #
-# 不要手动跑：由电脑端 install.sh 把整个包推到 /data/local/tmp/u60-kit，
-# 再通过 adb shell 或 ssh 调用本脚本。
+# 由电脑端 install.sh 调用，不用手动跑：它先把包解到 /data/local/tmp/u60-kit，
+# 再经 ssh 或 adb shell 执行
+#   sh device/install.sh ssh admin devui esim     按给的顺序装这些组件（chill、recover 要单独点名）
+#   sh device/install.sh status                   只读，打印各组件现状
 #
-#   sh device/install.sh ssh admin devui esim     # 按顺序装指定组件（chill 要单独点名）
-#   sh device/install.sh status                   # 只打印状态
-#
-# 约定（和 CLAUDE.md 一致）：
-#   • 开机自启只走 /etc/rc.local，绝不 /etc/init.d/<x> disable 原厂守护进程
+# 守则（和项目 CLAUDE.md 一致，不要放宽）：
+#   • 原厂服务一律不 /etc/init.d/<x> disable；开机自启只靠 /etc/rc.local
 #   • luyaz-web / luyaz-core / luyaz-sentinel 由 procd 监督（崩溃自动拉起 + 告警）：
 #     /etc/init.d/ 放各自的 init 脚本，但**不 enable**（/etc 是 overlay，enable/disable
 #     会留 whiteout），由 rc.local 里一行 `/etc/init.d/<名字> start` 拉起
-#   • 程序和数据全放 /data（固件升级也保留）；/etc 下只放 rc.local 的钩子
-#   • 每次改 rc.local 前先 sh -n 做语法检查，第一次改之前备份原厂版本
-# ─────────────────────────────────────────────────────────────────────────────
+#   • 程序、数据都在 /data（升级固件不丢）；/etc 只放 init 脚本和 rc.local 里的启动行
+#   • rc.local：第一次改前留一份原厂的，每次写之前 sh -n
+#   • 不碰分区；固件自动升级只往「关」的方向写
+# ═════════════════════════════════════════════════════════════════════════════
 set -u
 
 KIT=$(cd "$(dirname "$0")/.." && pwd)
@@ -25,24 +25,30 @@ RC=${KIT_RC:-/etc/rc.local}
 STATE=${KIT_STATE:-/data/luyaz/kit}       # 原厂 rc.local 备份 + 已装版本记录
 SHIPD=${KIT_SHIP_DIR:-/data/luyaz/ship}    # u60 ship：事务、清单 manifest.jsonl、开机收尾脚本 luyaz-recover.sh（touch-ui docs/SHIP.md）
 
+# 输出都带 [device] 前缀，电脑端原样转给用户
 log()  { echo "[device] $*"; }
 warn() { echo "[device] 注意: $*"; }
 die()  { echo "[device] 失败: $*"; exit 1; }
 
-# 装一个文件：先写 .new 再 mv，覆盖正在运行的二进制也不会 "Text file busy"
-put() { # <src> <dst> <mode>
-    cp "$1" "$2.new" && chmod "$3" "$2.new" && mv -f "$2.new" "$2" || die "写入 $2 失败"
+# 换文件不原地覆盖：写同目录的 .new 再改名。正在跑的程序照样能换（不会 Text file busy），
+# 中途出错原文件也还在。
+put() { # <来源> <目标> <权限>
+    cp "$1" "$2.new" && chmod "$3" "$2.new" && mv -f "$2.new" "$2" && return 0
+    die "写入 $2 失败"
 }
 
-# 解压一个目录：先解到 .new，成功了再整体替换
-put_tree() { # <tgz> <dst-dir>
-    rm -rf "$2.new" && mkdir -p "$2.new" && tar xzf "$1" -C "$2.new" || die "解压到 $2 失败"
-    chown -R 0:0 "$2.new" 2>/dev/null
-    rm -rf "$2" && mv "$2.new" "$2" || die "替换 $2 失败"
+# 整个目录换新：解到 <目标>.new，解完整了才删旧的、改名
+put_tree() { # <tgz> <目标目录>
+    _nd="$2.new"
+    rm -rf "$_nd"
+    { mkdir -p "$_nd" && tar xzf "$1" -C "$_nd"; } || die "解压到 $2 失败"
+    chown -R 0:0 "$_nd" 2>/dev/null      # 包是在电脑上打的，属主改回 root
+    { rm -rf "$2" && mv "$_nd" "$2"; } || die "替换 $2 失败"
 }
 
+# 原厂 rc.local 只留一次：之后再改都不覆盖这份
 backup_rc() {
-    [ -f "$STATE/rc.local.orig" ] && return 0
+    if [ -f "$STATE/rc.local.orig" ]; then return 0; fi
     mkdir -p "$STATE" && cp "$RC" "$STATE/rc.local.orig" && log "原厂 rc.local 已备份到 $STATE/rc.local.orig"
 }
 
@@ -65,15 +71,15 @@ rc_write() { # <candidate>
     rm -f "$1"
 }
 
-# 幂等地在 exit 0 之前插一行；<marker> 已存在就跳过
-rc_add() { # <line> <marker>
-    grep -qF "$2" "$RC" 2>/dev/null && return 0
+# rc.local 里加一行：放在第一行 exit 0 前面（没有 exit 0 就接在末尾）。
+# 文件里已经有 <标记> 就什么都不做，所以重跑不会加出第二行。
+rc_add() { # <要加的行> <标记>
+    if grep -qF "$2" "$RC" 2>/dev/null; then return 0; fi
     backup_rc
-    if grep -q '^exit 0' "$RC"; then
-        awk -v ins="$1" '/^exit 0/ && !d { print ins; d=1 } { print }' "$RC" > /tmp/rc.local.new
-    else
-        { cat "$RC"; echo "$1"; } > /tmp/rc.local.new
-    fi
+    cat "$RC" 2>/dev/null | awk -v line="$1" '
+        !put && /^exit 0/ { print line; put = 1 }
+        { print }
+        END { if (!put) print line }' > /tmp/rc.local.new
     rc_write /tmp/rc.local.new
     log "rc.local 加入: $1"
 }
@@ -250,53 +256,57 @@ svc_running() { # <name>
     ubus call service list "{\"name\":\"$1\"}" 2>/dev/null | jsonfilter -e "@[\"$1\"].instances.*.running" 2>/dev/null | grep -q true
 }
 
-# ── SSH：dropbear 装到 /data/ssh，端口 2222，公钥登录 ─────────────────────────
-do_ssh() {
-    [ -s "$P/authorized_keys" ] || die "包里没有公钥（authorized_keys）"
-    mkdir -p /data/ssh && chmod 700 /data/ssh
-    put "$P/dropbear" /data/ssh/dropbear 755
-    # OpenWrt 的 dropbear 是多合一程序，按调用名分派，dropbearkey 就是个软链
-    ln -sf dropbear /data/ssh/dropbearkey
-
-    touch /data/ssh/authorized_keys
-    while IFS= read -r k; do
-        [ -n "$k" ] || continue
-        grep -qxF "$k" /data/ssh/authorized_keys || echo "$k" >> /data/ssh/authorized_keys
-    done < "$P/authorized_keys"
-    chmod 600 /data/ssh/authorized_keys
-
-    # host key 也放 /data，固件升级后指纹不变，电脑那边不会报 host key 变了
-    if [ ! -s /data/ssh/dropbear_ed25519_host_key ]; then
-        /data/ssh/dropbearkey -t ed25519 -f /data/ssh/dropbear_ed25519_host_key >/dev/null 2>&1 \
-            || die "生成 host key 失败"
-    fi
-
-    cat > /data/local/tmp/start_dropbear.sh <<'EOF'
+# ── SSH：dropbear 放 /data/ssh，只认密钥，端口 2222 ─────────────────────────
+# 自启动脚本 /data/local/tmp/start_dropbear.sh 由 rc.local 调用；这里写出它的内容。
+write_dropbear_starter() {
+    cat > /data/local/tmp/start_dropbear.sh <<'STARTER'
 #!/bin/sh
-# 开机由 /etc/rc.local 调用。公钥和 host key 的正本都在 /data/ssh；
-# dropbear 只认 /etc/dropbear/authorized_keys，所以每次开机同步过去。
-# 加/删公钥请改 /data/ssh/authorized_keys。-s = 只允许密钥登录。
+# Luya-Z：开机时由 /etc/rc.local 调用，起 SSH（dropbear，2222，只认密钥）。
+# 公钥以 /data/ssh/authorized_keys 为准，这里每次开机抄到 dropbear 读的 /etc/dropbear；
+# host key 也在 /data/ssh，升级固件后指纹不变。
 mkdir -p /etc/dropbear && chmod 700 /etc/dropbear
 cp /data/ssh/authorized_keys /etc/dropbear/authorized_keys && chmod 600 /etc/dropbear/authorized_keys
 start-stop-daemon -S -b -m -p /tmp/dropbear.pid -x /data/ssh/dropbear -- \
     -F -s -p 2222 -r /data/ssh/dropbear_ed25519_host_key
-EOF
+STARTER
     chmod 755 /data/local/tmp/start_dropbear.sh
+}
 
-    # 先起、确认真在监听，再写 rc.local：写进开机自启的必须是这台设备上验证过能起来的东西
-    if netstat -ltn 2>/dev/null | grep -q ':2222 '; then
-        # 已经在跑（比如这次就是 ssh 进来重装的）：只同步公钥，不动进程
+ssh_listening() { netstat -ltn 2>/dev/null | grep -q ':2222 '; }
+
+do_ssh() {
+    [ -s "$P/authorized_keys" ] || die "包里没有公钥（authorized_keys）"
+    mkdir -p /data/ssh && chmod 700 /data/ssh
+    put "$P/dropbear" /data/ssh/dropbear 755
+    # 这个 dropbear 是多合一程序，看自己被叫成什么名字决定干什么；dropbearkey 指向它就行
+    ln -sf dropbear /data/ssh/dropbearkey
+
+    # 公钥只追加、不重复，设备上原有的保留
+    touch /data/ssh/authorized_keys
+    while IFS= read -r key; do
+        case "$key" in '') continue ;; esac
+        grep -qxF "$key" /data/ssh/authorized_keys || printf '%s\n' "$key" >> /data/ssh/authorized_keys
+    done < "$P/authorized_keys"
+    chmod 600 /data/ssh/authorized_keys
+
+    if [ ! -s /data/ssh/dropbear_ed25519_host_key ]; then
+        /data/ssh/dropbearkey -t ed25519 -f /data/ssh/dropbear_ed25519_host_key >/dev/null 2>&1 \
+            || die "生成 host key 失败"
+    fi
+    write_dropbear_starter
+
+    # 写进开机自启的，必须是在这台设备上刚刚确认能起来、能监听的东西
+    if ssh_listening; then
+        # 这次多半就是从 SSH 进来的：进程不动，只把新公钥同步过去
         pidof dropbear >/dev/null || die "2222 端口被别的程序占着、不是 dropbear，rc.local 没改"
         cp /data/ssh/authorized_keys /etc/dropbear/authorized_keys 2>/dev/null
         log "SSH: 2222 端口已在监听，公钥已同步"
     else
         sh /data/local/tmp/start_dropbear.sh
-        i=0
-        while [ $i -lt 10 ] && ! netstat -ltn 2>/dev/null | grep -q ':2222 '; do sleep 1; i=$((i + 1)); done
-        if ! pidof dropbear >/dev/null; then
-            die "dropbear 进程没起来（/data/ssh/dropbear 在这台设备上跑不了？），rc.local 没改"
-        fi
-        netstat -ltn 2>/dev/null | grep -q ':2222 ' || die "dropbear 进程在、但 10 秒内没在 2222 端口监听，rc.local 没改"
+        n=0
+        until ssh_listening || [ $n -ge 10 ]; do sleep 1; n=$((n + 1)); done
+        pidof dropbear >/dev/null || die "dropbear 进程没起来（/data/ssh/dropbear 在这台设备上跑不了？），rc.local 没改"
+        ssh_listening || die "dropbear 进程在、但 10 秒内没在 2222 端口监听，rc.local 没改"
         log "SSH: dropbear 已在 2222 端口启动"
     fi
     rc_add "sh /data/local/tmp/start_dropbear.sh" "start_dropbear.sh"
@@ -304,19 +314,18 @@ EOF
     fota_off
 }
 
-# 固件升级会覆盖 /etc/rc.local（自启全丢），而且 B28 起中兴封了开 ADB 的接口，
-# 升上去就再也回不来，所以装 SSH 时一并关掉自动升级。关闭 = 两个开关都是关的（项目硬规则的基准，
-# 同 tools/u60-cfgkit.py 的 FOTA_OFF、doctor.sh 的检查）：dm_update_mode=0 且 TURNOFFPOLLING=1。
-# 这里只会把它们往「关」写，绝不往「开」写。设完读回两个，不对就提醒。
+# ── 固件自动升级：装 SSH 时一并关掉 ───────────────────────────────────────────
+# 为什么：升级会换掉 /etc/rc.local（我们的自启全没了），而新固件又拿掉了开 ADB 的接口，升上去就回不来。
+# 「关」= dm_update_mode=0 且 TURNOFFPOLLING=1（项目硬规则的基准，tools/luyaz-cfgkit.py 的 FOTA_OFF、
+# doctor 用的是同一个）。这里只会往「关」写，绝不往「开」写；写完读回两项核对。
 fota_vals() { echo "dm_update_mode=$(uci -q get zwrt_zte_dm.dm_update.dm_update_mode) TURNOFFPOLLING=$(uci -q get zwrt_zte_dm.dm_update.TURNOFFPOLLING)"; }
 fota_is_off() { [ "$(fota_vals)" = "dm_update_mode=0 TURNOFFPOLLING=1" ]; }
 fota_off() {
     if [ "$(uci -q get zwrt_zte_dm.dm_update.dm_update_mode)" != 0 ]; then
-        roam=$(uci -q get zwrt_zte_dm.dm_update.dm_update_roam_permission)
-        itime=$(uci -q get zwrt_zte_dm.dm_update.dm_install_time)
-        ubus call zwrt_zte_dm set_update_mode \
-            "{\"dm_update_mode\":\"0\",\"dm_update_roam_permission\":\"${roam:-1}\",\"dm_install_time\":\"$itime\"}" \
-            >/dev/null 2>&1
+        # set_update_mode 要三项一起给；另外两项照抄现值（漫游许可没有值时按 1）
+        _roam=$(uci -q get zwrt_zte_dm.dm_update.dm_update_roam_permission)
+        _when=$(uci -q get zwrt_zte_dm.dm_update.dm_install_time)
+        ubus call zwrt_zte_dm set_update_mode "{\"dm_update_mode\":\"0\",\"dm_update_roam_permission\":\"${_roam:-1}\",\"dm_install_time\":\"$_when\"}" >/dev/null 2>&1
     fi
     if [ "$(uci -q get zwrt_zte_dm.dm_update.TURNOFFPOLLING)" != 1 ]; then
         uci -q set zwrt_zte_dm.dm_update.TURNOFFPOLLING=1 && uci -q commit zwrt_zte_dm
@@ -418,6 +427,22 @@ do_devui() {
     mkdir -p /data/luyaz
     put "$P/luyaz-sentinel" /data/luyaz/luyaz-sentinel 755
     put "$P/devui/luyaz-core" /data/luyaz/luyaz-core 755
+    # 已连设备识别的解析组件：包里有才装，整个目录换新（只有这一个组件，其他策略用内置实现）；
+    # 没有时核心照常跑，识别关着
+    if [ -f "$P/devui/plugins/plugins.json" ]; then
+        _pd=/data/luyaz/core/plugins
+        mkdir -p /data/luyaz/core
+        rm -rf "$_pd.new"
+        { mkdir -p "$_pd.new" && cp "$P"/devui/plugins/* "$_pd.new/"; } || die "写入 $_pd 失败"
+        chown -R 0:0 "$_pd.new" 2>/dev/null
+        chmod 700 "$_pd.new"; chmod 600 "$_pd.new"/*
+        { rm -rf "$_pd" && mv "$_pd.new" "$_pd"; } || die "替换 $_pd 失败"
+    fi
+    # OUI 厂商表：包里有才装（公开构建没有）
+    if [ -f "$P/devui/lanid/oui.tsv" ]; then
+        mkdir -p /data/luyaz/lanid
+        put "$P/devui/lanid/oui.tsv" /data/luyaz/lanid/oui.tsv 644
+    fi
     # 数字字体（Nunito，OFL）：装机包里有才装；没有时触屏退回 /usr/ui/fonts/Roboto.ttf
     if [ -d "$P/devui/fonts" ]; then
         mkdir -p "$UI/fonts"
@@ -455,17 +480,19 @@ do_devui() {
     kit_record touch
     kit_record sentinel
     kit_record core
+    # 组件目录是「只记录」的条目：记下现状，u60 status 才不报不一致
+    [ -f "$S/luyaz-ship.sh" ] && sh "$S/luyaz-ship.sh" record core-plugins "${KIT_MAC_TIME:-$(date +%s)}" 装机包 >/dev/null 2>&1
 }
 
-# ── eSIM：lpac（qmi_qrtr）装到 /data/esim，后台和屏幕都靠它读写卡 ───────────────
+# ── eSIM：lpac（走 qmi_qrtr）放 /data/esim；后台和触屏读写 eUICC 卡都用它 ─────
 do_esim() {
     put_tree "$P/esim.tgz" /data/esim
-    out=$(/data/esim/lpac.sh chip info 2>&1)
-    eid=$(echo "$out" | sed -n 's/.*"eidValue":"\([0-9A-Fa-f]*\)".*/\1/p')
-    if [ -n "$eid" ]; then
-        log "eSIM: 读到 eUICC 卡，EID $eid"
-    else
+    # 装完顺手读一次卡：插的是普通 SIM 时读不到，不算失败
+    _eid=$(/data/esim/lpac.sh chip info 2>&1 | sed -n 's/.*"eidValue":"\([0-9A-Fa-f]*\)".*/\1/p')
+    if [ -z "$_eid" ]; then
         log "eSIM: 组件已装，但没读到 eUICC 卡（现在插的是普通 SIM 的话这是正常的）"
+    else
+        log "eSIM: 读到 eUICC 卡，EID $_eid"
     fi
 }
 
@@ -571,17 +598,19 @@ do_chill() {
         || die "CHILL 换回原来的版本后也没起来（$(chill_state)）。chill.sh 停机时会回滚 DNS，网络是直连；看 /tmp/chill.state 和 /tmp/chill.log"
 }
 
+# ── status：只读，一项一行（中文宽度对不齐，就不对齐）────────────────────────
 do_status() {
-    p() { printf '  %s：%s\n' "$1" "$2"; }   # 中文按字节算宽度，对不齐，就不对齐了
-    fw=$(ubus call zwrt_web device_info '{}' 2>/dev/null | sed -n 's/.*"wa_inner_version": *"\([^"]*\)".*/\1/p')
-    p "固件" "${fw:-未知}"
-    p "SSH" "$(netstat -ltn 2>/dev/null | grep -q ':2222 ' && echo '运行中 (:2222)' || echo 未运行)"
+    p() { printf '  %s：%s\n' "$1" "$2"; }
+    yes_no() { if eval "$1"; then echo "$2"; else echo "$3"; fi; }   # <条件> <真> <假>
     svc() { svc_running "$1" && echo "（procd 监督）" || { [ -x "/etc/init.d/$1" ] && echo "（procd：未运行）"; }; }
+    _fw=$(ubus call zwrt_web device_info '{}' 2>/dev/null | sed -n 's/.*"wa_inner_version": *"\([^"]*\)".*/\1/p')
+    p "固件" "${_fw:-未知}"
+    p "SSH" "$(netstat -ltn 2>/dev/null | grep -q ':2222 ' && echo '运行中 (:2222)' || echo 未运行)"
     p "高级后台" "$(pidof luyaz-web >/dev/null && echo '运行中 (:9090)' || echo 未运行)$(svc luyaz-web)"
     p "devui" "$(pidof luyaz-ui >/dev/null && echo 运行中 || echo 未运行)$([ -f "$SCREEN_DIR/gave-up" ] && echo '，已放弃重试（长按右下角 3 秒恢复）')"
     p "哨兵" "$(pidof luyaz-sentinel >/dev/null && echo 运行中 || echo 未运行)$(svc luyaz-sentinel)$(h=$(cut -d' ' -f3 /tmp/luyaz-sentinel.hb 2>/dev/null) && [ -n "$h" ] && echo "，屏幕：$h")"
     p "核心" "$(pidof luyaz-core >/dev/null && echo 运行中 || echo 未运行)$(svc luyaz-core)"
-    p "eSIM 组件" "$([ -x /data/esim/lpac ] && echo 已装 || echo 未装)"
+    p "eSIM 组件" "$(yes_no '[ -x /data/esim/lpac ]' 已装 未装)"
     p "上机收尾" "$([ -f "$SHIPD/luyaz-recover.sh" ] && echo 'luyaz-recover.sh 已放' || echo 'luyaz-recover.sh 没放')$(grep -v '^[[:space:]]*#' "$RC" 2>/dev/null | grep -q 'luyaz-recover\.sh' && echo '，rc.local 有那一行' || echo '，rc.local 没有那一行（./install.sh recover）')"
     p "CHILL" "$([ -x /data/chill/chill.sh ] && { s=$(chill_state); echo "已装，${s:-未运行}$(svc chill)$([ -f /data/chill/disabled ] && echo '，已关闭')"; } || echo 未装)"
     p "自动升级" "$(fota_is_off && echo 已关闭 || echo "没有完全关闭（$(fota_vals)）")"
@@ -603,13 +632,13 @@ case " $COMPONENTS " in
 esac
 for c in "$@"; do
     case "$c" in
-        ssh)    do_ssh ;;
-        admin)  do_admin ;;
-        devui)  do_devui ;;
-        esim)   do_esim ;;
+        ssh)     do_ssh ;;
+        admin)   do_admin ;;
+        devui)   do_devui ;;
+        esim)    do_esim ;;
         recover) do_recover ;;
-        chill)  do_chill ;;
-        status) do_status ;;
-        *) die "不认识的组件: $c" ;;
+        chill)   do_chill ;;
+        status)  do_status ;;
+        *)       die "不认识的组件: $c" ;;
     esac
 done

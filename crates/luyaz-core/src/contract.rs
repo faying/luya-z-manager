@@ -56,16 +56,68 @@ contract! {
 }
 
 contract! {
+    /// `name` is the winner of alias > mDNS instance > DHCP host name > NetBIOS name (lanid,
+    /// lan-client-id.md §4a); the other fields come only from lanid and an alias, and are left
+    /// out when empty, so without the lanid-parse component and aliases a client is as before.
+    /// Kept short on purpose (the touch UI skips client objects of 160 bytes or more): every
+    /// value with its source is in `GET /api/lanid`, not here.
     pub struct Client {
+        /// the user's name for this MAC (`POST /api/lanid/alias`)
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        personal alias: String,
+        /// the old MAC this alias was taken over from (the same device on a new random MAC)
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        personal alias_from: String,
         personal ip: String,
+        /// a type token: phone, tablet, laptop, computer, tv, speaker, watch, printer, iot
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        personal kind: String,
         personal mac: String,
         personal name: String,
+        /// a locally administered (random) MAC: no OUI lookup
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        personal private: bool,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        personal vendor: String,
+    }
+}
+
+contract! {
+    /// Which lanid sources run (all four, or none).
+    pub struct LanidSources {
+        normal dhcp: bool,
+        normal mdns: bool,
+        normal netbios: bool,
+        normal ssdp: bool,
+    }
+}
+
+contract! {
+    /// The lanid thread's state (lan-client-id.md §4a 状态), refreshed at most every 10 min or
+    /// when it turns on or off. Display only.
+    pub struct LanidStatus {
+        /// frames the component was given, in batches
+        normal batches: u64,
+        /// MACs blocked for an hour after a frame of theirs trapped the component
+        normal blocked: u64,
+        /// frames dropped before or after parsing (rate limit, blocked MAC, bad output)
+        normal dropped: u64,
+        normal frames: u64,
+        /// the lanid-parse component loaded
+        normal loaded: bool,
+        normal records: u64,
+        nested sources: LanidSources,
+        normal traps: u64,
+        /// why it is off; empty when on
+        normal why: String,
     }
 }
 
 contract! {
     pub struct Clients {
         normal lan: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nested lanid: Option<LanidStatus>,
         nested list: Vec<Client>,
         normal total: i64,
         normal wifi: i64,
@@ -698,6 +750,12 @@ contract! {
         normal radio_lte_rsrq: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         normal radio_lte_snr: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        normal nitz_sync_flag: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        normal nitz_time_dst: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        normal nitz_timezone: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         normal radio_lteca: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,124 +1,117 @@
-//! Bearer-token login (moved from zte-agent `src/auth.rs`, Phase 4 step 8a): the password's
-//! SHA-256, tokens for an hour. luyaz-web and the core's touch compatibility layer use this one copy.
+//! Login for the admin password: one shared copy for luyaz-web and the core's touch layer.
+//!
+//! The password is kept only as its SHA-256 digest. A successful login hands out a random
+//! 128-bit session token (32 hex characters) that stays valid for an hour.
 
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
+use std::io::Read;
+use std::sync::{Mutex, MutexGuard};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
-/// Simple bearer-token auth.
-/// Password is the same as the router web UI admin password.
-/// Stored as SHA-256 of the plaintext password (uppercase hex).
+/// How long a session token lives, in seconds.
+const SESSION_SECS: u64 = 60 * 60;
+
+type Digest32 = [u8; 32];
+
+/// The configured password (as a digest) and the sessions handed out so far.
+#[derive(Default)]
 pub struct AuthState {
-    /// SHA256(password) uppercase hex — stored so we can verify login attempts.
-    password_hash: Mutex<Option<String>>,
-    /// Active bearer tokens mapped to expiry timestamps.
-    tokens: Mutex<Vec<Token>>,
-}
-
-struct Token {
-    value: String,
-    expires: u64,
-}
-
-const TOKEN_TTL_SECS: u64 = 3600; // 1 hour
-
-impl Default for AuthState {
-    fn default() -> Self {
-        Self::new()
-    }
+    secret: Mutex<Option<Digest32>>,
+    /// token → unix time it stops working
+    sessions: Mutex<HashMap<String, u64>>,
 }
 
 impl AuthState {
     pub fn new() -> Self {
-        Self {
-            password_hash: Mutex::new(None),
-            tokens: Mutex::new(Vec::new()),
-        }
+        Self::default()
     }
 
-    /// Set the admin password (called once at startup from env or config).
+    /// Configure the admin password; until this is called every login fails.
     pub fn set_password(&self, password: &str) {
-        let hash = format!("{:X}", Sha256::digest(password.as_bytes()));
-        *self.password_hash.lock().unwrap() = Some(hash);
+        *lock(&self.secret) = Some(digest(password));
     }
 
-    /// Check if a password has been configured.
     pub fn has_password(&self) -> bool {
-        self.password_hash.lock().unwrap().is_some()
+        lock(&self.secret).is_some()
     }
 
-    /// Attempt login with plaintext password. Returns bearer token on success.
+    /// A new session token if `password` is the configured one.
     pub fn login(&self, password: &str) -> Option<String> {
-        let stored = self.password_hash.lock().unwrap();
-        let ok = stored.as_deref().is_some_and(|s| hash_matches(s, password));
-        if !ok {
-            return None;
-        }
-        drop(stored);
-        Some(self.issue())
+        let secret = (*lock(&self.secret))?;
+        same(&secret, &digest(password)).then(|| self.issue())
     }
 
-    /// A fresh random token for an hour. Login uses it after the password checks out; a caller
-    /// inside the process (u60d's scenario engine calling its own routes) uses it directly.
+    /// Mint a session token without a password check. Used after `login` succeeds and by code
+    /// in the same process that calls its own protected routes.
     pub fn issue(&self) -> String {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        // random, not derived from anything a caller could know
-        let mut seed = [0u8; 16];
-        let read = std::fs::File::open("/dev/urandom").and_then(|mut f| std::io::Read::read_exact(&mut f, &mut seed));
-        if read.is_err() {
-            let material = format!("internal{now}{:?}{}", std::time::Instant::now(), std::process::id());
-            seed.copy_from_slice(&Sha256::digest(material.as_bytes())[..16]);
-        }
-        let token = hex::encode(seed);
-        let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
-        tokens.retain(|t| t.expires > now);
-        tokens.push(Token { value: token.clone(), expires: now + TOKEN_TTL_SECS });
+        let now = unix_now();
+        let token = to_hex(&random16());
+        let mut sessions = lock(&self.sessions);
+        sessions.retain(|_, until| *until > now);
+        sessions.insert(token.clone(), now + SESSION_SECS);
         token
     }
 
-    /// Validate a bearer token.
+    /// Whether `token` was issued here and has not expired.
     pub fn validate(&self, token: &str) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let tokens = self.tokens.lock().unwrap();
-        tokens.iter().any(|t| t.value == token && t.expires > now)
+        let now = unix_now();
+        lock(&self.sessions)
+            .get(token)
+            .is_some_and(|until| *until > now)
     }
 }
 
-/// `attempt` against the stored SHA-256 (uppercase hex), in constant time: the comparison doesn't
-/// stop at the first differing byte.
-fn hash_matches(stored: &str, attempt: &str) -> bool {
-    let hash = format!("{:X}", Sha256::digest(attempt.as_bytes()));
-    stored.len() == hash.len() && stored.bytes().zip(hash.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
-}
-
-/// `attempt` against the plaintext admin password, compared as their hashes (constant time).
-/// luyaz-web checks its login this way against the password file (u60-web.md 8d-1a).
+/// Whether `attempt` equals the plaintext `password`, comparing digests in constant time.
 pub fn password_matches(password: &str, attempt: &str) -> bool {
-    hash_matches(&format!("{:X}", Sha256::digest(password.as_bytes())), attempt)
+    same(&digest(password), &digest(attempt))
 }
 
-/// The admin password file (`/data/luyaz/web.env`;
-/// written by web-auth.sh, mode 600): one line
-/// `LUYAZ_WEB_PASSWORD=<value>`, the value taken literally to the end of the line (no shell
-/// quoting). Empty counts as missing — "" would be accepted as a real password.
+/// The password from the text of `/data/luyaz/web.env` (written by web-auth.sh, mode 600).
+/// The line is `LUYAZ_WEB_PASSWORD=<value>`; the value runs literally to the end of the line,
+/// without shell quoting. An empty value means no password, never the empty password.
 pub fn password_from_env_file(text: &str) -> Option<&str> {
-    let key = |k: &str| {
-        text.lines()
-            .find_map(|l| l.strip_prefix(k))
-            .map(|v| v.trim_end_matches('\r'))
-            .filter(|v| !v.is_empty())
-    };
-    key("LUYAZ_WEB_PASSWORD=")
+    text.lines()
+        .filter_map(|line| line.strip_prefix("LUYAZ_WEB_PASSWORD="))
+        .map(|value| value.strip_suffix('\r').unwrap_or(value))
+        .find(|value| !value.is_empty())
 }
 
-mod hex {
-    pub fn encode(bytes: impl AsRef<[u8]>) -> String {
-        bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
+fn digest(text: &str) -> Digest32 {
+    Sha256::digest(text.as_bytes()).into()
+}
+
+/// Constant-time equality: every byte is looked at whatever the earlier ones were.
+fn same(a: &Digest32, b: &Digest32) -> bool {
+    a.iter().zip(b).fold(0u8, |diff, (x, y)| diff | (x ^ y)) == 0
+}
+
+/// 16 bytes from the kernel's random source; if that can't be read, a hash of the clock and
+/// pid (still nothing a client can predict from outside).
+fn random16() -> [u8; 16] {
+    let mut out = [0u8; 16];
+    let read = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut out));
+    if read.is_err() {
+        let seed = format!("{:?}/{}/{}", Instant::now(), unix_now(), std::process::id());
+        out.copy_from_slice(&digest(&seed)[..16]);
     }
+    out
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// A poisoned lock still holds usable data here, so take it instead of panicking.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 #[cfg(test)]

@@ -1,0 +1,14 @@
+[package]
+name = "hostile-lanid-parse"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "Test only: a lanid-parse that misbehaves on marked frames (spins, eats memory, panics, answers oversize)."
+license = "PolyForm-Noncommercial-1.0.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros", "realloc"] }

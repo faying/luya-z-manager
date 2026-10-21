@@ -1,14 +1,12 @@
-//! The power key (src/key_input.c): the /dev/input/event* that reports KEY_POWER and is not a
-//! touchscreen (pmic_pwrkey); short and long presses (long = held 1.2 s, said once while held,
-//! or at release when nobody polled while it was held: the screen was dark).
-// SPDX-License-Identifier: MIT
+//! The power button: whichever input device can send KEY_POWER and has no axes (so not the
+//! touchscreen). A press shorter than KEY_LONG_MS is short; one held longer is long, said the
+//! moment the hold crosses the line if someone is polling, else when it ends (a dark screen polls
+//! nothing).
 
-use crate::touch::{event_nodes, ioc_read, open_nonblock, test_bit};
+use crate::evdev::{self, Device, EV_ABS, EV_KEY};
 use std::os::fd::{AsRawFd, OwnedFd};
 
-const EV_KEY: u16 = 0x01;
-const EV_ABS: u64 = 0x03;
-const KEY_POWER: usize = 116;
+const KEY_POWER: u16 = 116;
 pub const KEY_LONG_MS: u32 = 1200;
 
 pub const EV_NONE: i32 = 0;
@@ -19,69 +17,151 @@ pub const EV_LONG: i32 = 2;
 pub struct Key {
     fd: Option<OwnedFd>,
     pub pressed: bool,
-    press_ms: u32,
-    long_emitted: bool,
+    /// when the current press began
+    down_at: u32,
+    /// the current press has already been reported as long
+    said_long: bool,
+}
+
+fn is_power_button(dev: &Device) -> bool {
+    let types = dev.codes::<1>(0);
+    let keys = dev.codes::<2>(EV_KEY);
+    match (types, keys) {
+        (Some(t), Some(k)) => !evdev::has_bit(&t, EV_ABS as usize) && evdev::has_bit(&k, KEY_POWER as usize),
+        _ => false,
+    }
 }
 
 impl Key {
     pub fn open() -> Key {
-        for p in event_nodes() {
-            let Some(fd) = open_nonblock(&p) else { continue };
-            let raw = fd.as_raw_fd();
-            let mut ev = [0u64; 1];
-            // SAFETY: EVIOCGBIT(0, len) writes at most len bytes
-            if unsafe { libc::ioctl(raw, ioc_read(0x20, size_of_val(&ev)) as _, ev.as_mut_ptr()) } < 0 || test_bit(&ev, EV_ABS as usize) {
-                continue; // skip touchscreens
+        let found = evdev::nodes().into_iter().find_map(|path| {
+            let dev = Device::open(&path)?;
+            is_power_button(&dev).then_some((path, dev))
+        });
+        match found {
+            Some((path, dev)) => {
+                eprintln!("key: power button on {}", path.display());
+                Key { fd: Some(dev.into_fd()), ..Default::default() }
             }
-            let mut key = [0u64; KEY_POWER / 64 + 1];
-            // SAFETY: EVIOCGBIT(EV_KEY, len)
-            if unsafe { libc::ioctl(raw, ioc_read(0x20 + EV_KEY as u64, size_of_val(&key)) as _, key.as_mut_ptr()) } < 0 || !test_bit(&key, KEY_POWER) {
-                continue;
+            None => {
+                eprintln!("key: no KEY_POWER device found");
+                Key::default()
             }
-            eprintln!("key: power button on {}", p.display());
-            return Key { fd: Some(fd), ..Default::default() };
         }
-        eprintln!("key: no KEY_POWER device found");
-        Key::default()
     }
 
     pub fn fd(&self) -> i32 {
         self.fd.as_ref().map_or(-1, |f| f.as_raw_fd())
     }
 
-    /// Drain events; one EV_* edge per call.
+    /// Read what the button sent since last time; at most one EV_* comes back (the latest).
     pub fn poll(&mut self, now_ms: u32) -> i32 {
         let Some(fd) = self.fd.as_ref().map(|f| f.as_raw_fd()) else { return EV_NONE };
-        let mut result = EV_NONE;
-        let mut ev = [0u8; 24];
-        // SAFETY: whole events into a local buffer
-        while unsafe { libc::read(fd, ev.as_mut_ptr().cast(), 24) } == 24 {
-            let kind = u16::from_ne_bytes([ev[16], ev[17]]);
-            let code = u16::from_ne_bytes([ev[18], ev[19]]) as usize;
-            let value = i32::from_ne_bytes([ev[20], ev[21], ev[22], ev[23]]);
-            if kind != EV_KEY || code != KEY_POWER {
-                continue;
+        let mut said = None;
+        evdev::drain(fd, |e| {
+            if e.kind == EV_KEY && e.code == KEY_POWER {
+                said = self.edge(e.value, now_ms).or(said);
             }
-            if value == 1 {
-                self.pressed = true;
-                self.press_ms = now_ms;
-                self.long_emitted = false;
-            } else if value == 0 {
-                if self.pressed && !self.long_emitted {
-                    // held past the threshold but never polled while held: still long
-                    result = if now_ms.wrapping_sub(self.press_ms) < KEY_LONG_MS { EV_SHORT } else { EV_LONG };
-                }
-                self.pressed = false;
+        });
+        self.tick(now_ms).or(said).unwrap_or(EV_NONE)
+    }
+
+    /// The button went down (1) or up (0); 2 is autorepeat and changes nothing.
+    fn edge(&mut self, value: i32, now_ms: u32) -> Option<i32> {
+        match value {
+            1 => {
+                (self.pressed, self.down_at, self.said_long) = (true, now_ms, false);
+                None
             }
+            0 => {
+                let was = std::mem::replace(&mut self.pressed, false);
+                let held = now_ms.wrapping_sub(self.down_at);
+                (was && !self.said_long).then_some(if held >= KEY_LONG_MS { EV_LONG } else { EV_SHORT })
+            }
+            _ => None,
         }
-        if self.pressed && !self.long_emitted && now_ms.wrapping_sub(self.press_ms) >= KEY_LONG_MS {
-            self.long_emitted = true;
-            result = EV_LONG;
-        }
-        result
+    }
+
+    /// A press still going on turns long once it has lasted KEY_LONG_MS.
+    fn tick(&mut self, now_ms: u32) -> Option<i32> {
+        let due = self.pressed && !self.said_long && now_ms.wrapping_sub(self.down_at) >= KEY_LONG_MS;
+        self.said_long |= due;
+        due.then_some(EV_LONG)
     }
 
     pub fn held(&self) -> bool {
         self.fd.is_some() && self.pressed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// what poll() says for one key event at `now` (None = no event, just the clock)
+    fn at(k: &mut Key, value: Option<i32>, now: u32) -> i32 {
+        let mut r = EV_NONE;
+        if let Some(e) = value.and_then(|v| k.edge(v, now)) {
+            r = e;
+        }
+        if let Some(e) = k.tick(now) {
+            r = e;
+        }
+        r
+    }
+
+    #[test]
+    fn a_short_press() {
+        let mut k = Key::default();
+        assert_eq!(at(&mut k, Some(1), 1000), EV_NONE);
+        assert_eq!(at(&mut k, None, 1500), EV_NONE);
+        assert_eq!(at(&mut k, Some(0), 1600), EV_SHORT);
+        assert_eq!(at(&mut k, None, 5000), EV_NONE);
+    }
+
+    #[test]
+    fn a_hold_is_long_once_while_held() {
+        let mut k = Key::default();
+        at(&mut k, Some(1), 1000);
+        assert_eq!(at(&mut k, None, 2199), EV_NONE);
+        assert_eq!(at(&mut k, None, 2200), EV_LONG);
+        assert_eq!(at(&mut k, None, 3000), EV_NONE);
+        assert_eq!(at(&mut k, Some(0), 3100), EV_NONE);
+    }
+
+    #[test]
+    fn a_hold_nobody_polled_is_long_at_release() {
+        let mut k = Key::default();
+        at(&mut k, Some(1), 1000);
+        assert_eq!(at(&mut k, Some(0), 2500), EV_LONG);
+        assert_eq!(at(&mut k, None, 2600), EV_NONE);
+    }
+
+    #[test]
+    fn press_and_release_inside_one_poll() {
+        let mut k = Key::default();
+        assert_eq!(k.edge(1, 100), None);
+        assert_eq!(k.edge(0, 150), Some(EV_SHORT));
+        assert_eq!(k.tick(150), None);
+        assert!(!k.held());
+    }
+
+    #[test]
+    fn the_clock_wraps() {
+        let mut k = Key::default();
+        at(&mut k, Some(1), u32::MAX - 100);
+        assert_eq!(at(&mut k, None, 500), EV_NONE);
+        assert_eq!(at(&mut k, None, 1100), EV_LONG);
+        let mut k = Key::default();
+        at(&mut k, Some(1), u32::MAX - 100);
+        assert_eq!(at(&mut k, Some(0), 200), EV_SHORT);
+    }
+
+    #[test]
+    fn autorepeat_is_ignored() {
+        let mut k = Key::default();
+        at(&mut k, Some(1), 0);
+        assert_eq!(at(&mut k, Some(2), 300), EV_NONE);
+        assert_eq!(at(&mut k, Some(0), 400), EV_SHORT);
     }
 }

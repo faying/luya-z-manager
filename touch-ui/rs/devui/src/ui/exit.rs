@@ -1,7 +1,7 @@
 //! src/ui_parts/exit.c: the 小区信息 page's frame (its values: refresh.rs) and the Tailscale page.
 //! Also the CHILL card (built with Home, shown on the exit tab) with the 手动优先 notice on its
 //! top, the 「在国外 · CHILL 怎么走」 sheet, and the CHILL pages with 家里出口.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::home::fmt_bytes_total;
 use super::network::NH_CELL;
@@ -99,14 +99,14 @@ impl Ui {
         let d = &m.data;
         let sg = self.sg.clone();
         let or_dash = |s: &str| if s.is_empty() { "-".to_string() } else { s.to_string() };
-        self.set(sg.nr[0], crate::cf!("%s  %s MHz", &or_dash(&d.nr_band), &or_dash(&d.nr_bw)));
-        self.set(sg.nr[1], crate::cf!("%ld", d.nr_channel));
+        self.set(sg.nr[0], crate::cf!("%s  %s MHz", &or_dash(&d.nr_band_text), &or_dash(&d.nr_width)));
+        self.set(sg.nr[1], crate::cf!("%ld", d.nr_arfcn));
         self.set(sg.nr[2], crate::cf!("%d", d.nr_pci));
-        self.set(sg.nr[3], crate::cf!("%ld", d.nr_cell_id));
-        self.set(sg.nr[4], crate::cf!("%d-%02d %s", d.mcc, d.mnc, &d.operator_name));
+        self.set(sg.nr[3], crate::cf!("%ld", d.nr_cid));
+        self.set(sg.nr[4], crate::cf!("%d-%02d %s", d.mcc, d.mnc, &d.carrier));
         self.set(sg.nr[5], crate::cf!("%d / %d / %s", d.nr_rsrp, d.nr_rsrq, &or_dash(&d.nr_snr)));
         // the serving cell: lteca's first entry (the primary) when there is one, else net.*'s lte_*
-        let pc = crate::net_view::parse_ca(&d.lteca, 1, b'B');
+        let pc = crate::net_view::parse_ca(&d.lte_ca, 1, b'B');
         let have = !pc.is_empty();
         let mut bs = String::new();
         let bw = if have { pc[0].bw } else { super::atol(&d.bandwidth) as i32 };
@@ -114,10 +114,10 @@ impl Ui {
         let pci = if have { pc[0].pci } else { d.lte_pci };
         if have {
             bs = format!("B{}", pc[0].band);
-        } else if !d.band.is_empty() && d.band.contains("LTE") {
-            bs = logic::band_short(&d.band, false);
+        } else if !d.band_text.is_empty() && d.band_text.contains("LTE") {
+            bs = logic::band_short(&d.band_text, false);
         }
-        let rat = logic::rat(&d.net_type);
+        let rat = logic::rat(&d.radio);
         let in_use = rat == Rat::G4 || rat == Rat::G5Nsa;
         sg.lte_sec.set_text(if in_use { tr("LTE 服务小区") } else { tr("LTE（现在不用，下面是测量值）") });
         sg.nr_sec.set_text(if rat == Rat::G4 { tr("5G（现在不用，下面是测量值）") } else { tr("5G 服务小区") });
@@ -135,9 +135,9 @@ impl Ui {
         );
         self.set(sg.lt[5], if d.lte_rssi != 0 { crate::cf!("%d", d.lte_rssi) } else { "-".into() });
         self.set(sg.net[0], or_dash(mode_word));
-        self.set(sg.net[1], or_dash(&d.wan_status));
-        self.set(sg.net[2], &d.net_type);
-        self.set(sg.net[3], if d.hsr != 0 { tr("开启") } else { tr("关闭") });
+        self.set(sg.net[1], or_dash(&d.wan_state));
+        self.set(sg.net[2], &d.radio);
+        self.set(sg.net[3], if d.rail_mode != 0 { tr("开启") } else { tr("关闭") });
     }
 
     pub(super) fn build_sub_ts(&mut self, p: Obj) {

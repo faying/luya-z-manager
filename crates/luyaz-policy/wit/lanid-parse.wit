@@ -1,0 +1,38 @@
+// LAN client identification (manager docs/designs/lan-client-id.md §4): the boundary between
+// luyaz-core's `lanid` thread and the lanid-parse component. The core hands over whole Ethernet
+// frames (BPF-filtered: UDP 67/5353/1900/137 on br-lan); every byte of them is parsed here, never
+// in the core. The version is the host ABI version in a plugin's manifest entry: change anything
+// here and bump it.
+package luyaz:lanid@0.1.0;
+
+world lanid-parse {
+  /// What one frame says about the device that sent it (the core keys it by the frame's source
+  /// MAC, read at a fixed offset; nothing here names a MAC).
+  enum fact-kind {
+    /// DHCP option 12
+    dhcp-hostname,
+    /// DHCP option 60
+    dhcp-vendor-class,
+    /// DHCP option 55, as decimal codes joined by ","
+    dhcp-params,
+    /// mDNS service instance name (the device's own name, e.g. from `_device-info._tcp`)
+    mdns-instance,
+    /// mDNS `_device-info._tcp` TXT `model=`
+    mdns-model,
+    /// an mDNS service type the device announces, e.g. `_googlecast._tcp`
+    mdns-service,
+    /// SSDP NOTIFY `SERVER:` header
+    ssdp-server,
+    /// NetBIOS name the device registers for itself (unique, workstation or server)
+    netbios-name,
+  }
+
+  record fact {
+    kind: fact-kind,
+    /// at most 64 bytes, no control characters (the core drops the frame's facts otherwise)
+    value: string,
+  }
+
+  /// One list per frame, in the frames' order; at most 8 facts per frame.
+  export parse: func(frames: list<list<u8>>) -> list<list<fact>>;
+}

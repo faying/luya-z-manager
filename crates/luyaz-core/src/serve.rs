@@ -139,6 +139,8 @@ pub async fn main(raw: Vec<String>) -> Result<()> {
     app.resume_loop();
     // X9 (supervise.sh's duties): both listeners are ours, so this is the one core
     crate::svcwatch::start(&argv0);
+    // lan-client-id.md step 0: only with the opt-in flag file
+    crate::lanid_capture::start(&argv0);
     server::write_pid_file();
     let starting = app.clone();
     tokio::spawn(async move { starting.start().await });
