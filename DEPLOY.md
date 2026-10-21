@@ -31,6 +31,7 @@ If the device has an unfinished ship transaction (see [touch-ui/docs/SHIP.md](to
 - The touch program must be the Rust build and the core must be the Rust `luyaz-core` without external update sources; otherwise `build-kit.sh` stops.
 - The eSIM tools are built fresh by `scripts/esim/build-esim-bundle.sh --out`, with Alpine package versions and sha256 pinned in `scripts/esim/alpine.lock`. When an Alpine security update replaces a pinned package, run `python3 scripts/esim/alpine_closure.py --relock`, rebuild, and verify `lpac.sh chip info` on a real device first.
 - Bundled third-party binaries (dropbear, lpac and its libraries) are not in this repo; when you give the kit to someone else, include each one's license.
+- Vendor names for connected devices need an OUI table, which this repo does not ship: build it from an IEEE `oui.txt` you download yourself with `scripts/lanid/make-oui.sh oui.txt oui.tsv`, then pass `OUI_TSV=oui.tsv` to `build-kit.sh` or copy it to `/data/luyaz/lanid/oui.tsv` on the device. Without it only the vendor is missing.
 - After changing `onboard/install.sh` or `onboard/device/install.sh`, rebuild the kit, then run the full install flow in a sandbox on a real device with
   `HOST=<ssh alias> GATEWAY=<device address> SSH_KEY=<key> onboard/test/sandbox.sh run`
   (device-side writes are redirected to `/data/local/tmp/kit-sb`; afterwards it checks that device files and processes are unchanged; the touch UI component is not run in the sandbox).

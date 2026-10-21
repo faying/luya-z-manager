@@ -31,6 +31,7 @@ tar xzf onboard/dist/luyaz-kit-*.tar.gz -C /tmp && cd /tmp/luyaz-kit
 - 触屏程序必须是 Rust 版，核心必须是不带外部更新源的 Rust 版 `luyaz-core`，否则 `build-kit.sh` 会停下。
 - eSIM 工具由 `scripts/esim/build-esim-bundle.sh --out` 现打，Alpine 包的版本和 sha256 固定在 `scripts/esim/alpine.lock`。Alpine 安全更新替换了固定的包时，跑 `python3 scripts/esim/alpine_closure.py --relock`，重编后先在真机上验证 `lpac.sh chip info`。
 - 装机包里的第三方二进制（dropbear、lpac 及其库）不在本仓库里；把装机包给别人时，带上各自的许可证。
+- 已连接设备的厂商名要一张 OUI 表，本仓库不带：自己下载 IEEE 的 `oui.txt`，用 `scripts/lanid/make-oui.sh oui.txt oui.tsv` 生成，打包时给 `build-kit.sh` 加 `OUI_TSV=oui.tsv`，或放到设备的 `/data/luyaz/lanid/oui.tsv`。没有它只是不显示厂商。
 - 改了 `onboard/install.sh` 或 `onboard/device/install.sh` 后，重打装机包，再用
   `HOST=<ssh 别名> GATEWAY=<设备地址> SSH_KEY=<密钥> onboard/test/sandbox.sh run`
   在真机沙盒里跑一遍完整装机流程（设备端写入都重定向到 `/data/local/tmp/kit-sb`；跑完核对设备文件和进程没变；沙盒里不跑触屏组件）。
