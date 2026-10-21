@@ -127,6 +127,10 @@ CORE_BIN=/path/to/luyaz-core ./onboard/build-kit.sh       # 用别处编好的�
 > `python3 scripts/esim/alpine_closure.py --relock` 重新解析，重打后先在一台设备上确认 `/data/esim/lpac.sh chip info` 能读卡，再用。
 > 规则集（CHILL）不钉版本，每次打包取当时的最新版。
 
+> **已连接设备的厂商名（可选）。** 仓库里不带 OUI 表，只有生成它的脚本。自己从 IEEE 下载 `oui.txt`，跑
+> `scripts/lanid/make-oui.sh oui.txt oui.tsv`，然后打装机包时加 `OUI_TSV=oui.tsv`，或者直接把文件放到设备的 `/data/luyaz/lanid/oui.tsv`。
+> 没有这张表，已连接设备照样显示名称和类型，只是不显示厂商。
+
 ## 4. 安装
 
 ```sh

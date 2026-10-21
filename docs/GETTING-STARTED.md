@@ -127,6 +127,10 @@ Other variables: `DEVUI_BIN` (touch binary), `SENTINEL_BIN` (luyaz-sentinel), `E
 > `python3 scripts/esim/alpine_closure.py --relock` to re-resolve, rebuild, then confirm on one device that `/data/esim/lpac.sh chip info` can read the card before using it.
 > Rule sets (CHILL) are not pinned; each build takes the latest version at that time.
 
+> **Vendor names for connected devices (optional).** The repository does not ship an OUI table, only the script that builds one. Download `oui.txt` from the IEEE registry yourself, run
+> `scripts/lanid/make-oui.sh oui.txt oui.tsv`, then either build the kit with `OUI_TSV=oui.tsv` or copy the file to `/data/luyaz/lanid/oui.tsv` on the device.
+> Without it, connected devices still get names and types; only the vendor column stays empty.
+
 ## 4. Install
 
 ```sh
