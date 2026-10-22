@@ -1,0 +1,32 @@
+name: Test
+
+# Host tests (x86_64) for the manager crates, in the same build image as release.yml and the install
+# kit (onboard/build.Dockerfile). Default members only: the touch UI's lvgl-sys needs LVGL_DIR/FT_SRC
+# (touch-ui/rs/build.sh), luyaz-mcp runs on the computer and is tested on its own line.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t luyaz-rust-build -f onboard/build.Dockerfile onboard
+
+      - name: cargo test
+        run: |
+          docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/target \
+            luyaz-rust-build sh -c 'cargo test --locked && cargo test --locked -p luyaz-mcp'
+
+      - name: aarch64 build
+        run: |
+          docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/target \
+            luyaz-rust-build cargo zigbuild --locked --target aarch64-unknown-linux-musl -p luyaz-core -p luyaz-sentinel -p luyaz-web
