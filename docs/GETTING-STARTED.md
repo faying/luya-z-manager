@@ -27,7 +27,7 @@ browser ──▶ luyaz-web :9090 ─┘ (one /v2/events stream + /control)
 ```
 
 luyaz-core is the only service that polls the stock ubus interfaces and the only one that writes settings; luyaz-web and the touch UI read from it and send it their changes.
-`luyaz-sentinel` owns the screen (starts the touch UI, hands the screen back to the stock UI) and is the watchdog. zte-agent, which used to serve the API and a Next.js admin on :9090, was removed on 2026-10-14, as were the `u60-uid` and `u60-guard` daemons.
+`luyaz-sentinel` owns the screen (starts the touch UI, hands the screen back to the stock UI) and is the watchdog.
 
 The install kit is built in manager, which builds luyaz-core, luyaz-web and luyaz-sentinel itself and pulls the touch program and scripts from touch-ui.
 
@@ -59,12 +59,12 @@ What it looks like once installed (screenshots use fake data):
 
 What survives the upgrade: every program and all data under `/data`, the SSH program and keys (`/data/ssh`), the network address, the web password and your settings; firmware auto-update stays off.
 To recover, the key step is adding the line that starts SSH back to `rc.local` without ADB. The maintainer did this ***REMOVED***,
-***REMOVED***, so the steps are not documented here. Once SSH is back, run `./install.sh admin devui` from a freshly built install kit; it puts the services back and fixes `rc.local`.
+***REMOVED***, so the steps are not documented here. Once SSH is back, run `./install.sh admin ui` from a freshly built install kit; it puts the services back and fixes `rc.local`.
 Note: `/data/luyaz/kit/rc.local.orig` holds the stock `rc.local` of the firmware **before** the upgrade. To uninstall after an upgrade, do not copy it over the new one; just remove the lines this project added.
 
 **New device on B28 – B31: ***REMOVED***.** When the stock web UI restores a configuration backup, it unpacks the files in it as root with `tar -C /` and then reboots.
 So: take a backup in the web UI → ***REMOVED*** to `rc.local`, and put an SSH server (for example the dropbear from the install kit) and your public key into the archive → ***REMOVED*** → restore it in the web UI.
-The maintainer did this on a device that came with B31 (2026-10-20): SSH was up about a minute after the restore, and the rest of the install went as on an upgraded device (`./install.sh admin devui` and so on).
+The maintainer did this on a device that came with B31 (2026-10-20): SSH was up about a minute after the restore, and the rest of the install went as on an upgraded device (`./install.sh admin ui` and so on).
 This project does not ship a tool or ***REMOVED***; ***REMOVED***, so look there. Keep the untouched backup to restore if something goes wrong, do not insert a SIM or connect any WAN until SSH works (an automatic firmware download could change the format), and make sure you can recover the device the stock way first.
 
 **Install computer** (macOS / Linux / Git Bash on Windows): `adb`, `ssh`, `curl`.
@@ -111,7 +111,7 @@ The first run downloads Docker images and dependencies and takes about 20–30 m
 | CHILL (optional) | Official mihomo and zashboard release packages (pinned sha256) + rule sets (latest at download time). Add `CHILL=0` to leave it out |
 | Process supervision, health check scripts | touch-ui's `scripts/` |
 
-Before packaging, the script checks: the touch program must be the Rust build (the C/LVGL touch UI was deleted and only survives in the `legacy-c-touch-ui` tag); the core must be the Rust version with no hard-coded external update source. If either check fails, it stops.
+Before packaging, the script checks: the touch program must be the Rust build; the core must be the Rust version with no hard-coded external update source. If either check fails, it stops.
 
 You can also build the pieces separately and point `build-kit.sh` at the existing files:
 
@@ -120,8 +120,8 @@ You can also build the pieces separately and point `build-kit.sh` at the existin
 CORE_BIN=/path/to/luyaz-core ./onboard/build-kit.sh       # a core built elsewhere instead of building luyaz-core
 ```
 
-Other variables: `DEVUI_BIN` (touch binary), `SENTINEL_BIN` (luyaz-sentinel), `ESIM_TGZ` (a prebuilt eSIM bundle), `DEVUI_FONTS_DIR` (a prebuilt font directory), `FONTS=0` (no fonts),
-`DEVUI_REPO` (default `touch-ui/` in this repository), `SHIP_RECORDS` (the local records `u60 ship` keeps: the touch UI, sentinel and core are then taken from what the device is running, matched by md5, and only built when not found; `FRESH=1` builds anyway). Settings you use often can go in `onboard/kit.local.env` (one `KEY=value` per line, not tracked by git).
+Other variables: `TOUCH_BIN` (touch binary), `SENTINEL_BIN` (luyaz-sentinel), `ESIM_TGZ` (a prebuilt eSIM bundle), `UI_FONTS_DIR` (a prebuilt font directory), `FONTS=0` (no fonts),
+`TOUCH_REPO` (default `touch-ui/` in this repository), `SHIP_RECORDS` (the local records `u60 ship` keeps: the touch UI, sentinel and core are then taken from what the device is running, matched by md5, and only built when not found; `FRESH=1` builds anyway). Settings you use often can go in `onboard/kit.local.env` (one `KEY=value` per line, not tracked by git).
 
 > **eSIM bundle fails to build?** When Alpine 3.24 ships a security update, it replaces the pinned packages and the old files disappear from the mirrors. Run
 > `python3 scripts/esim/alpine_closure.py --relock` to re-resolve, rebuild, then confirm on one device that `/data/esim/lpac.sh chip info` can read the card before using it.
@@ -147,11 +147,11 @@ Follow the prompts:
 4. Push, install and verify run automatically, in a minute or two. The screen flickers once and switches to the new UI.
 5. When asked whether to reboot to verify, answering yes is recommended; the script confirms that SSH, the admin web and the screen all come back on their own after the reboot.
 
-The full set is the four components `ssh admin devui esim`. You can also install only some of them:
+The full set is the four components `ssh admin ui esim`. You can also install only some of them:
 
 ```sh
 ./install.sh ssh               # only enable ADB + install persistent SSH
-./install.sh ssh admin devui   # without eSIM
+./install.sh ssh admin ui   # without eSIM
 ./install.sh chill             # CHILL proxy, not part of the full set, must be named explicitly (see section 7)
 ```
 
@@ -183,14 +183,14 @@ Then:
 
 ```sh
 ./install.sh admin      # luyaz-web (admin web)
-./install.sh devui      # touch UI + core (luyaz-core)
+./install.sh ui      # touch UI + core (luyaz-core)
 ./install.sh esim       # eSIM tools
 ./install.sh reboot     # optional: reboot once to confirm everything comes up on boot
 ./install.sh recover    # optional, not part of the full set: boot-time clean-up used by luyaz-ship.sh
                         #   (adds one line to rc.local; run it only if you use luyaz-ship.sh)
 ```
 
-If the device has an unfinished `luyaz-ship.sh` transaction (see touch-ui [docs/SHIP.md](https://github.com/faying/luya-z-touch-ui/blob/main/docs/SHIP.md)), `admin`, `devui` and `recover` refuse to install until it is finished or rolled back.
+If the device has an unfinished `luyaz-ship.sh` transaction (see touch-ui [docs/SHIP.md](https://github.com/faying/luya-z-touch-ui/blob/main/docs/SHIP.md)), `admin`, `ui` and `recover` refuse to install until it is finished or rolled back.
 
 **Back up and restore configuration** (configuration only, no programs; backups contain passwords, do not share them):
 
@@ -232,7 +232,7 @@ After that, use the admin web's 「CHILL」 page to turn it on or off, change th
 - Programs and data go in `/data`. `/tmp` is a RAM disk and is cleared on reboot. Do not write partitions, do not `dd`.
 - **There must always be a UI on the screen.** If no UI is shown for a few minutes, the firmware reboots the whole device. Any step that stops one UI must start another in the same step.
 - **Test a newly built touch program under a different file name first.** If you overwrite the live location `/data/luyaz/ui/luyaz-ui` directly and it crashes on start,
-  the firmware escalates that into a whole-device reboot loop. Always keep a working backup next to the live location. Regular users should just update with `./install.sh devui`.
+  the firmware escalates that into a whole-device reboot loop. Always keep a working backup next to the live location. Regular users should just update with `./install.sh ui`.
 - If you are connected remotely through this U60's own network, do not switch to an eSIM profile without data, and do not change the APN, network mode or Wi-Fi carelessly: once switched, you cannot get back in.
 
 ## 9. FAQ
@@ -244,6 +244,6 @@ After that, use the admin web's 「CHILL」 page to turn it on or off, change th
 - **SSH occasionally refuses connections**: dropbear refuses reconnects that come too quickly; wait a few seconds and try again. Combine multiple commands into one `ssh` where possible.
 - **No data on the screen**: `/etc/init.d/luyaz-core restart`, then check `/tmp/luyaz-core.log`.
 - **Web login locked**: the stock web UI locks for a while after 5 wrong passwords in a row. The script shows the remaining attempts and a countdown; do not keep retrying.
-- **`admin` / `devui` refuse to install, saying there is an unfinished transaction**: a `luyaz-ship.sh` update did not finish. Finish it or roll it back first (touch-ui `docs/SHIP.md`); do not delete the transaction log by hand.
+- **`admin` / `ui` refuse to install, saying there is an unfinished transaction**: a `luyaz-ship.sh` update did not finish. Finish it or roll it back first (touch-ui `docs/SHIP.md`); do not delete the transaction log by hand.
 - **Install failed halfway**: `install.sh` can be rerun; parts already installed are skipped or overwritten.
 - **Device time looks off by several hours**: the firmware stores local time as UTC, and both the admin web and the touch UI display local time. This is expected.

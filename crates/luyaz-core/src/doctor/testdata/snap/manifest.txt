@@ -1455,7 +1455,7 @@ unrecorded	record:ui-logos	/data/luyaz/ui/operator-logos	-	-
 unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
 state	warn	不一致的是 core（清单 566c1edd，实际 4d91e5fc）
 === scenario
-printf 'core build B\n' >"$T/core"; mship datad "$T/core" "$DM"; mship core "$T/core" "$(md5sum $T/core | cut -d' ' -f1)"; mrec u60-recover.sh "$T/rc" "$RM"; mrec luyaz-recover.sh "$T/rc" "$RM"
+printf 'core build B\n' >"$T/core"; mship datad "$T/core" "$DM"; mship core "$T/core" "$(md5sum $T/core | cut -d' ' -f1)"; mrec luyaz-recover.sh "$T/rc" "$RM"
 --- --tsv rc=0
 ok	boot-sync	开机同步	sync success
 ok	fota	ZTE 自动升级	已关闭
@@ -1609,7 +1609,7 @@ unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
 state	warn	上次上机停在半路：core（试跑中），guard 或 u60 status 会收尾
 === scenario
 printf '{"v":1,"kind":"ship","comp":"web","txn":"t","commit":"a","format":1,"files":[{"path":"%s","tree":"%s","prev":"%s.prev"}],"state":[]}\n' "$T/admin" "$AF" "$T/admin" >>"$T/m.jsonl"
-printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/devui/fonts" "$FF" >>"$T/m.jsonl"
+printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/ui/fonts" "$FF" >>"$T/m.jsonl"
 --- --tsv rc=0
 ok	boot-sync	开机同步	sync success
 ok	fota	ZTE 自动升级	已关闭
@@ -1671,7 +1671,7 @@ ok	manifest	清单	一致（2 项）	Manifest	All match (2)
 
 --- --manifest
 same	comp:web	$T/admin	1f9f9bbcc409a1475483692236ac71ba	1f9f9bbcc409a1475483692236ac71ba
-same	record:ui-fonts	$T/devui/fonts	4db253b72f580aef74bc6e77e4e6bf4a	4db253b72f580aef74bc6e77e4e6bf4a
+same	record:ui-fonts	$T/ui/fonts	4db253b72f580aef74bc6e77e4e6bf4a	4db253b72f580aef74bc6e77e4e6bf4a
 unrecorded	record:chill.sh	$T/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
 unrecorded	record:tailscale-start.sh	$T/ts/start.sh	-	-
@@ -1687,7 +1687,7 @@ unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
 state	ok	一致（2 项）
 === scenario
 printf '{"v":1,"kind":"ship","comp":"web","txn":"t","commit":"a","format":1,"files":[{"path":"%s","tree":"%s","prev":"%s.prev"}],"state":[]}\n' "$T/admin" "$AF" "$T/admin" >>"$T/m.jsonl"
-printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/devui/fonts" "$FF" >>"$T/m.jsonl"
+printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/ui/fonts" "$FF" >>"$T/m.jsonl"
 ln -s index.html "$T/admin/link"
 --- --tsv rc=0
 ok	boot-sync	开机同步	sync success
@@ -1750,7 +1750,7 @@ warn	manifest	清单	不一致的是 admin（清单 1f9f9bbc，实际 unreadab�
 
 --- --manifest
 differs	comp:web	$T/admin	1f9f9bbcc409a1475483692236ac71ba	unreadable
-same	record:ui-fonts	$T/devui/fonts	4db253b72f580aef74bc6e77e4e6bf4a	4db253b72f580aef74bc6e77e4e6bf4a
+same	record:ui-fonts	$T/ui/fonts	4db253b72f580aef74bc6e77e4e6bf4a	4db253b72f580aef74bc6e77e4e6bf4a
 unrecorded	record:chill.sh	$T/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
 unrecorded	record:tailscale-start.sh	$T/ts/start.sh	-	-
@@ -1766,8 +1766,8 @@ unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
 state	warn	不一致的是 admin（清单 1f9f9bbc，实际 unreadab）
 === scenario
 printf '{"v":1,"kind":"ship","comp":"web","txn":"t","commit":"a","format":1,"files":[{"path":"%s","tree":"%s","prev":"%s.prev"}],"state":[]}\n' "$T/admin" "$AF" "$T/admin" >>"$T/m.jsonl"
-printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/devui/fonts" "$FF" >>"$T/m.jsonl"
-rm -rf "$T/devui/fonts"
+printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/ui/fonts" "$FF" >>"$T/m.jsonl"
+rm -rf "$T/ui/fonts"
 --- --tsv rc=0
 ok	boot-sync	开机同步	sync success
 ok	fota	ZTE 自动升级	已关闭
@@ -1829,7 +1829,7 @@ warn	manifest	清单	不一致的是 fonts（清单 4db253b7，实际 -）	Manif
 
 --- --manifest
 same	comp:web	$T/admin	1f9f9bbcc409a1475483692236ac71ba	1f9f9bbcc409a1475483692236ac71ba
-differs	record:ui-fonts	$T/devui/fonts	4db253b72f580aef74bc6e77e4e6bf4a	-
+differs	record:ui-fonts	$T/ui/fonts	4db253b72f580aef74bc6e77e4e6bf4a	-
 unrecorded	record:chill.sh	$T/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
 unrecorded	record:tailscale-start.sh	$T/ts/start.sh	-	-
@@ -1845,7 +1845,7 @@ unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
 state	warn	不一致的是 fonts（清单 4db253b7，实际 -）
 === scenario
 printf '{"v":1,"kind":"ship","comp":"web","txn":"t","commit":"a","format":1,"files":[{"path":"%s","tree":"%s","prev":"%s.prev"}],"state":[]}\n' "$T/admin" "$AF" "$T/admin" >>"$T/m.jsonl"
-printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/devui/fonts" "$FF" >>"$T/m.jsonl"
+printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/ui/fonts" "$FF" >>"$T/m.jsonl"
 printf 'new js\n' >"$T/admin/_next/static/c.js"
 --- --tsv rc=0
 ok	boot-sync	开机同步	sync success
@@ -1908,7 +1908,7 @@ warn	manifest	清单	不一致的是 admin（清单 1f9f9bbc，实际 c39ad642�
 
 --- --manifest
 differs	comp:web	$T/admin	1f9f9bbcc409a1475483692236ac71ba	c39ad64271df21e0a36ba87cbd757291
-same	record:ui-fonts	$T/devui/fonts	4db253b72f580aef74bc6e77e4e6bf4a	4db253b72f580aef74bc6e77e4e6bf4a
+same	record:ui-fonts	$T/ui/fonts	4db253b72f580aef74bc6e77e4e6bf4a	4db253b72f580aef74bc6e77e4e6bf4a
 unrecorded	record:chill.sh	$T/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
 unrecorded	record:tailscale-start.sh	$T/ts/start.sh	-	-
@@ -1924,7 +1924,7 @@ unrecorded	record:core-plugins	/data/luyaz/core/plugins	-	-
 state	warn	不一致的是 admin（清单 1f9f9bbc，实际 c39ad642）
 === scenario
 printf '{"v":1,"kind":"ship","comp":"web","txn":"t","commit":"a","format":1,"files":[{"path":"%s","tree":"%s","prev":"%s.prev"}],"state":[]}\n' "$T/admin" "$AF" "$T/admin" >>"$T/m.jsonl"
-printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/devui/fonts" "$FF" >>"$T/m.jsonl"
+printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/ui/fonts" "$FF" >>"$T/m.jsonl"
 export DOC_MD5SUM=md5sum; dd if=/dev/zero of="$T/big" bs=1024 count=300 2>/dev/null; mship lweb "$T/big" "$(md5sum $T/big | cut -d' ' -f1)"
 --- --tsv rc=0
 ok	boot-sync	开机同步	sync success
@@ -1988,7 +1988,7 @@ ok	manifest	清单	一致（3 项）	Manifest	All match (3)
 --- --manifest
 same	comp:lweb	$T/big	90aeded9922cf8946ea7858635493724	90aeded9922cf8946ea7858635493724
 same	comp:web	$T/admin	1f9f9bbcc409a1475483692236ac71ba	1f9f9bbcc409a1475483692236ac71ba
-same	record:ui-fonts	$T/devui/fonts	4db253b72f580aef74bc6e77e4e6bf4a	4db253b72f580aef74bc6e77e4e6bf4a
+same	record:ui-fonts	$T/ui/fonts	4db253b72f580aef74bc6e77e4e6bf4a	4db253b72f580aef74bc6e77e4e6bf4a
 unrecorded	record:chill.sh	$T/chill/chill.sh	-	-
 unrecorded	record:template.yaml	$T/tpl	-	-
 unrecorded	record:tailscale-start.sh	$T/ts/start.sh	-	-

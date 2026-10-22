@@ -31,14 +31,14 @@
 | 组件 | 装上什么 |
 |---|---|
 | `ssh` | dropbear，端口 2222，只认密钥，开机自启。脚本先起 dropbear，10 秒内确认进程在、2222 在监听，才往 rc.local 写那一行；没起来就不碰 rc.local。电脑端 SSH 检查失败时会分清是：没有密钥 / 连接被拒 / 认证失败 / 超时。顺带关闭固件自动升级（见第零节） |
-| `admin` | 只有高级后台 = 管理网页 luyaz-web，地址 `http://<设备>:9090/`。它的数据和改动都经过核心 luyaz-core，核心随 `devui` 装 |
-| `devui` | 前面板触屏界面 + 核心 luyaz-core（`/data/luyaz/luyaz-core`，procd 服务 `/etc/init.d/luyaz-core`）+ 哨兵 luyaz-sentinel（管屏幕和看门狗）。rc.local 里 `/etc/init.d/luyaz-core start` 之后只留一行 `/etc/init.d/luyaz-sentinel start   # u60 ship sentinel: …`。起哨兵后最多等 60 秒，核对三点：哨兵在 procd 下、心跳第 3 栏是 `ours`、界面进程的 exe md5 等于刚装的文件 |
+| `admin` | 只有高级后台 = 管理网页 luyaz-web，地址 `http://<设备>:9090/`。它的数据和改动都经过核心 luyaz-core，核心随 `ui` 装 |
+| `ui` | 前面板触屏界面 + 核心 luyaz-core（`/data/luyaz/luyaz-core`，procd 服务 `/etc/init.d/luyaz-core`）+ 哨兵 luyaz-sentinel（管屏幕和看门狗）。rc.local 里 `/etc/init.d/luyaz-core start` 之后只留一行 `/etc/init.d/luyaz-sentinel start   # u60 ship sentinel: …`。起哨兵后最多等 60 秒，核对三点：哨兵在 procd 下、心跳第 3 栏是 `ours`、界面进程的 exe md5 等于刚装的文件 |
 | `esim` | lpac，配可插拔 eUICC 卡管理和切换 profile |
-| `recover`（可选，不在全套里） | u60 ship 的开机收尾：设备上自检通过后放上 `/data/luyaz/ship/luyaz-recover.sh`，并在 `/etc/rc.local` 的各服务启动行之前加一行调用它。**会改 rc.local，先问用户**。`admin`/`devui` 只在设备上还没有这个脚本时放一份，不碰 rc.local |
+| `recover`（可选，不在全套里） | u60 ship 的开机收尾：设备上自检通过后放上 `/data/luyaz/ship/luyaz-recover.sh`，并在 `/etc/rc.local` 的各服务启动行之前加一行调用它。**会改 rc.local，先问用户**。`admin`/`ui` 只在设备上还没有这个脚本时放一份，不碰 rc.local |
 | `chill`（可选，不在全套里） | CHILL 透明代理：mihomo + 规则集 + zashboard 面板，装在 `/data/chill`。第一次装**不启动**：订阅地址要用户自己写进 `/data/chill/chill.env`（你别替他填、也别读出来），然后 `chill.sh safe-start`，5 分钟内 `confirm` |
 
-- 不带参数的 `./install.sh` = `ssh admin devui esim`；`recover`、`chill` 要单独点名。
-- `admin` 在设备清单里记 lweb 一条；`devui` 记 touch、sentinel、core 三条。
+- 不带参数的 `./install.sh` = `ssh admin ui esim`；`recover`、`chill` 要单独点名。
+- `admin` 在设备清单里记 lweb 一条；`ui` 记 touch、sentinel、core 三条。
 - 只装现在的布局：设备上还有 `/data/u60d`、`/data/u60-uid`、`/data/u60-ship`、`/data/plugins/u60pro-devui`、`/data/plugins/zwrt-datad` 任何一个时拒装，要先用旧版装机包升级。
 
 ## 二、动手前检查（不满足就停下来告诉用户）
@@ -153,11 +153,11 @@ adb shell '<命令>'        # 仅限 ADB 还通的时候（重启后 ADB 就没�
 | `/data/ssh/` | dropbear、host key、`authorized_keys` 正本（开机同步到 `/etc/dropbear/`） |
 | `/data/local/tmp/start_dropbear.sh` | SSH 的开机启动脚本 |
 | `/data/luyaz/web.env` | 后台密码（`LUYAZ_WEB_PASSWORD=…`，权限 600；luyaz-web 每次登录现读，命令行里只出现路径） |
-| `/data/luyaz/luyaz-sentinel`、`/etc/init.d/luyaz-sentinel` | 哨兵，触屏界面唯一的主人：负责拉起/接管界面；连续 2 次没稳住就交还原厂界面并告警；长按右下角 3 秒回来。兼任 Wi-Fi 兜底看门狗和告警短信。状态在 `/data/luyaz/screen/`；控制 FIFO `/tmp/luyaz-screen.ctl` 接受 `vendor` / `devui` / `hold` / `release`（只在哨兵运行时用；10-15 之前的 `/tmp/u60-uid.ctl` 已经不听了）；心跳 `/tmp/luyaz-sentinel.hb` 第 3 栏表示屏幕上是谁（ours/vendor/none/held） |
+| `/data/luyaz/luyaz-sentinel`、`/etc/init.d/luyaz-sentinel` | 哨兵，触屏界面唯一的主人：负责拉起/接管界面；连续 2 次没稳住就交还原厂界面并告警；长按右下角 3 秒回来。兼任 Wi-Fi 兜底看门狗和告警短信。状态在 `/data/luyaz/screen/`；控制 FIFO `/tmp/luyaz-screen.ctl` 接受 `vendor` / `ui` / `hold` / `release`（只在哨兵运行时用；10-15 之前的 `/tmp/u60-uid.ctl` 已经不听了）；心跳 `/tmp/luyaz-sentinel.hb` 第 3 栏表示屏幕上是谁（ours/vendor/none/held） |
 | `/data/luyaz/scripts/`、`/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}` | 设备脚本：`doctor.sh`（`<core> doctor` 的薄壳）、`alert-lib.sh` 等，执行器 `luyaz-ship.sh`、`core-trial.sh` 也在这里（已经没有 `u60-guard.sh`、`supervise.sh`）。init 脚本是 procd 监督（崩了拉起）；**别 `enable`/`disable`**（会在 overlay 里留 whiteout），开机靠 rc.local 里的 `start` 行 |
 | `/data/alerts/`、`/data/crashlog/` | 告警事件和短信记录、崩溃日志 |
 | `/data/luyaz/luyaz-web`、`/data/luyaz/operator-logos/` | 高级后台。`/data/luyaz/core/` 是核心 luyaz-core 的状态（设置在 `core.env`），`/data/luyaz/screen/` 是哨兵的 |
-| `/data/luyaz/ui/` | 触屏界面 `luyaz-ui`（进程名相同）、字体、`touchsim`、`devui.conf`、`operator-logos/`、开机记录 `boot-trace.log`、原厂界面备份 `vendor-devui.orig-backup` |
+| `/data/luyaz/ui/` | 触屏界面 `luyaz-ui`（进程名相同）、字体、`touchsim`、`ui.conf`、`operator-logos/`、开机记录 `boot-trace.log`、原厂界面备份 `vendor-devui.orig-backup` |
 | `/data/esim/` | lpac（`/data/esim/lpac.sh chip info` / `profile list`） |
 | `/data/chill/`、`/etc/init.d/chill` | CHILL（`sh /data/chill/chill.sh status`）。它改的是全屋网络：启动、停止、`CHILL_API_LAN`、防火墙区 `chill` 都**先问用户**。要停就用 `chill.sh stop`（会把 dnsmasq 恢复原样），别 kill mihomo |
 | `/etc/rc.local` | 只加了几行自启；原厂版本备份在 `/data/luyaz/kit/rc.local.orig` |
@@ -191,7 +191,7 @@ authorized_keys、start_dropbear.sh），供升固件前参考，`restore` 不�
 ## 六、退回与恢复
 
 **只在这次开机换回原厂界面**：`echo vendor > /tmp/luyaz-screen.ctl`。哨兵会停掉触屏界面、起原厂界面；
-长按右下角 3 秒或 `echo devui > /tmp/luyaz-screen.ctl` 换回来，重启后也会自动回来。
+长按右下角 3 秒或 `echo ui > /tmp/luyaz-screen.ctl` 换回来，重启后也会自动回来。
 
 **永久用原厂屏幕界面**（其他组件保留）：
 

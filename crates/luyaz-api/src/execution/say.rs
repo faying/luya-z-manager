@@ -4,7 +4,7 @@
 
 use serde::Serialize;
 
-use super::{hot_drain, long_idle, slow_signal};
+use super::{hot_drain, long_idle, network_health, slow_signal};
 
 /// One notice: a short label (health row) and one or two sentences under it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -107,6 +107,78 @@ pub fn slow(a: &slow_signal::Advice) -> Option<Say> {
         detail,
         detail_en,
     })
+}
+
+/// `network.health`: the bearer down, an open finding (its own sentence plus what is paused and
+/// what to do), or just recovered. The web shows `detail`, the touch screen `label` + `detail`.
+pub fn health(i: &network_health::Input) -> Option<Say> {
+    let paused = network_health::held(i);
+    let (pz, pe) = if paused {
+        ("，已暂停代理重连", ", proxy reconnects paused")
+    } else {
+        ("", "")
+    };
+    if i.bearer == Some(false) {
+        // the sentence explains a pause; data off on purpose says nothing here
+        if !paused {
+            return None;
+        }
+        return Some(Say {
+            id: "network.no_bearer",
+            label: "移动网络暂时不可用",
+            label_en: "Mobile data down for now",
+            detail: format!("移动网络暂时不可用{pz}。恢复后会自动检查。"),
+            detail_en: format!("Mobile data is down for now{pe}. It is checked again once it is back."),
+        });
+    }
+    if let Some(f) = &i.finding {
+        // the touch home card's headlines for the same layers (project/screen.rs `with_finding`)
+        let (id, label, label_en) = match f.layer.as_str() {
+            "signal" => ("network.signal", "没注册上", "No service"),
+            "data" => ("network.data", "数据没连上", "No data"),
+            "dns" => ("network.dns", "域名解析不了", "DNS down"),
+            _ => ("network.internet", "外网不通", "No access"),
+        };
+        let (dz, de) = if f.layer == "dns" {
+            ("；移动数据正常", "; mobile data is fine")
+        } else {
+            ("", "")
+        };
+        let (tz, te) = match network_health::next(i) {
+            Some(network_health::Next::CheckApn) => (
+                "。自动恢复没有成功，建议检查 APN。",
+                ". Automatic recovery did not help; check the APN.",
+            ),
+            _ => ("。", "."),
+        };
+        let sz = f.symptom.trim_end_matches(['。', '.']);
+        let se = f.symptom_en.trim_end_matches('.');
+        return Some(Say {
+            id,
+            label,
+            label_en,
+            detail: format!("{sz}{dz}{pz}{tz}"),
+            detail_en: format!("{se}{de}{pe}{te}"),
+        });
+    }
+    match i.recovered_secs {
+        Some(s) if s < network_health::RECOVERED_SECS => Some(Say {
+            id: "network.recovered",
+            label: "移动网络已恢复",
+            label_en: "Mobile data back",
+            detail: "移动网络已恢复，正在检查代理。".into(),
+            detail_en: "Mobile data is back; checking the proxy.".into(),
+        }),
+        // below the proxy all fine (no finding, data up): only then is it CHILL's own fault
+        _ if i.proxy == Some(false) && i.bearer == Some(true) => Some(Say {
+            id: "network.proxy",
+            label: "代理转发不通",
+            label_en: "Proxy not getting through",
+            detail: "移动网络正常，但经 CHILL 访问外网失败；可以换节点或重启 CHILL。".into(),
+            detail_en: "Mobile data is fine, but traffic through CHILL does not get out; try another node or restart CHILL.".into(),
+        }),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

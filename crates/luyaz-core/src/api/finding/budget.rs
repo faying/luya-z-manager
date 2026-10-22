@@ -90,7 +90,16 @@ impl Budget {
             .read(true)
             .write(true)
             .open(lock_path)?;
-        lock.try_lock_exclusive()?;
+        // nonblocking, but a fork elsewhere in the process holds a copy of this fd until its exec:
+        // a few short tries ride that out; a lock really held by another core still fails fast
+        let mut tries = 0;
+        while let Err(e) = lock.try_lock_exclusive() {
+            tries += 1;
+            if tries >= 4 {
+                return Err(e);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         // Another core may have claimed since this instance started. Never overwrite its budget.
         if let Some(r) = Self::read(&self.path).filter(|r| r.version == 1)
             && r.last.boot_id == now.boot_id

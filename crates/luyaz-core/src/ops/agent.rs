@@ -436,7 +436,7 @@ pub fn gate() -> &'static Gate {
 /// D6：现在改 APN 敏不敏感；不敏感时回读到的卡号（原样的 `sim_iccid`，交给事务再核对，O9）。
 pub async fn apn_sensitivity() -> Result<String, String> {
     let net = crate::state::ubus("zte_nwinfo_api", "nwinfo_get_netinfo", json!({})).await;
-    let sim = crate::state::ubus("zwrt_zte_mdm.api", "get_sim_info", json!({})).await;
+    let sim = crate::state::sim_info().await;
     let roaming = net.as_ref().ok().and_then(super::roaming);
     let iccid = sim
         .as_ref()

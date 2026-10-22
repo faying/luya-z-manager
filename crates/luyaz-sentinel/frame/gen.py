@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-render the hand-back explanation frame's text lines (u60-sentinel.md §5 new 1, DR8, C-R8).
+"""Pre-render the hand-back explanation frame's text lines (u60-sentinel.md §5 new 1, DR8).
 
 The sentinel carries no font engine: each line is rendered here once, as 4-bit alpha, run-length
 coded, and written as Rust source (src/frame_text.rs). The font is the touch screen's CJK fallback,
@@ -18,7 +18,7 @@ import sys
 from PIL import Image, ImageDraw, ImageFont
 
 # (size class, text). Size classes: 0 = title, 1 = body. Words from docs/ui-glossary.md
-# (触屏界面 / Screen UI, 原厂界面 / stock UI) and the devui-gave-up SMS.
+# (触屏界面 / Screen UI, 原厂界面 / stock UI) and the ui-gave-up SMS.
 LINES = {
     "ZH": [
         (0, "屏幕界面连续打不开"),

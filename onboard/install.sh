@@ -3,8 +3,8 @@
 # Luya-Z 装机包：电脑端入口。macOS、Linux、Windows（Git Bash）都能跑。
 #
 # 用法（包目录里）：
-#   ./install.sh                         装全套：ssh admin devui esim（没通道时先经网页后台开 ADB）
-#   ./install.sh <组件>…                 只装点名的组件：ssh admin devui esim chill recover
+#   ./install.sh                         装全套：ssh admin ui esim（没通道时先经网页后台开 ADB）
+#   ./install.sh <组件>…                 只装点名的组件：ssh admin ui esim chill recover
 #        chill    CHILL 代理（mihomo + 面板），全套不含它。第一次装完不启动：先写订阅地址，再 safe-start
 #        recover  u60 ship 的开机收尾：把 /data/luyaz/ship/luyaz-recover.sh 换成包里的（设备上自检通过才换），
 #                 并在 rc.local 的服务启动行前面加一行调用它。全套不含它
@@ -64,7 +64,7 @@ GATEWAY="${GATEWAY:-192.168.0.1}"
 SSH_PORT=2222
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519}"
 STAGE=/data/local/tmp/u60-kit          # 设备上解包的位置（装完就删，里面有密码）
-FULL_SET="ssh admin devui esim"
+FULL_SET="ssh admin ui esim"
 HAVE_TTY=false
 [ -t 0 ] && HAVE_TTY=true
 TTY=$HAVE_TTY
@@ -90,8 +90,8 @@ case "$COMPONENTS" in
     for c in $COMPONENTS; do
       case "$c" in
         status|doctor|reboot) fail "status / doctor / reboot 要单独跑，不能和组件混在一起" ;;
-        ssh|admin|devui|esim|chill|recover) ;;
-        *) fail "不认识的组件: ${c}（可选 ssh admin devui esim chill recover，或 status / doctor / reboot）" ;;
+        ssh|admin|ui|esim|chill|recover) ;;
+        *) fail "不认识的组件: ${c}（可选 ssh admin ui esim chill recover，或 status / doctor / reboot）" ;;
       esac
     done ;;
 esac
@@ -375,7 +375,7 @@ reboot_verify() {
 }
 
 # ── 装机：密码 → 组装 → 推送 → 设备端安装 ───────────────────────────────────
-# 高级后台密码。拿不到、设备上又没装过后台：推送之前就停（不然到设备端才失败，devui/esim 也跟着没装）。
+# 高级后台密码。拿不到、设备上又没装过后台：推送之前就停（不然到设备端才失败，ui/esim 也跟着没装）。
 admin_password() { # <暂存目录>
   local pw
   if [ "${AGENT_PASSWORD+set}" = set ]; then
@@ -416,9 +416,9 @@ stage_payload() { # <暂存目录>
         cp "$from/luyaz-web" "$out/"
         with_scripts
         [ ! -d "$from/operator-logos" ] || cp -R "$from/operator-logos" "$out/" ;;
-      devui)
+      ui)
         [ -f "$from/luyaz-sentinel" ] || fail "这个装机包没带 luyaz-sentinel（装机包太旧？）"
-        cp -R "$from/devui" "$out/"
+        cp -R "$from/ui" "$out/"
         cp "$from/luyaz-sentinel" "$out/"
         with_scripts ;;
       esim)

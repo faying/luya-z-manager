@@ -26,10 +26,10 @@ use crate::screen::{self, Act, Input, Persist, Screen};
 use crate::sys;
 use crate::worker::{Health, Paths, Worker, WorkerIo};
 
-/// Its home since R5: the only program the sentinel starts (round ③).
+/// The touch UI's directory: the only program the sentinel starts.
 pub const UI_DIR: &str = "/data/luyaz/ui";
 pub const UI_BIN: &str = "/data/luyaz/ui/luyaz-ui";
-pub const DEVUI_LOG: &str = "/tmp/luyaz-ui.log";
+pub const UI_LOG: &str = "/tmp/luyaz-ui.log";
 /// The screen's state (Phase 10 R4).
 pub const STATE_DIR: &str = "/data/luyaz/screen";
 pub const F_ATTEMPTS: &str = "/data/luyaz/screen/attempts";
@@ -55,7 +55,7 @@ const STOP_GRACE_MS: i64 = 5000;
 
 // ── shadow: the real device, read; every change recorded ───────────────────
 
-/// Lines recorded in the last 10 s, so a decision that repeats until u60-uid/the guard acts on it is
+/// Lines recorded in the last 10 s, so a decision that repeats until the screen thread/the guard acts on it is
 /// written once.
 #[derive(Default)]
 struct Dedup(HashMap<String, i64>);
@@ -218,7 +218,7 @@ pub fn worker_thread(shadow: bool, last_round: Arc<AtomicI64>) {
     }
 }
 
-// ── the events thread (§6 C-R9) ─────────────────────────────────────────────
+// ── the events thread (§6) ─────────────────────────────────────────────────
 
 /// Real mode only: from here on every alert of this process is an event with an id, delivered to
 /// the core (or queued here when it does not answer). A POST may wait 5 s, so neither the screen
@@ -259,11 +259,11 @@ pub fn state_dir_at_start() {
 pub fn load_persist() -> Persist {
     let attempts = screen::parse_attempts(sys::read(F_ATTEMPTS).as_deref());
     let gave_up = std::path::Path::new(F_GAVE_UP).exists();
-    let want_devui = !sys::read(F_WANT)
+    let want_ui = !sys::read(F_WANT)
         .map(|w| w.starts_with("vendor"))
         .unwrap_or(false);
     Persist {
-        want_devui,
+        want_ui,
         gave_up,
         attempts,
     }
@@ -307,12 +307,12 @@ fn record_crash(why: &str) {
         sys::uptime_s()
     );
     let tail: String = {
-        let t = sys::read(DEVUI_LOG).unwrap_or_default();
+        let t = sys::read(UI_LOG).unwrap_or_default();
         let lines: Vec<&str> = t.lines().collect();
         lines[lines.len().saturating_sub(200)..].join("\n")
     };
     let body = format!(
-        "program: luyaz-ui\nstatus:  {why}\ntime:    {} device local\n--- last 200 lines of {DEVUI_LOG} ---\n{tail}\n",
+        "program: luyaz-ui\nstatus:  {why}\ntime:    {} device local\n--- last 200 lines of {UI_LOG} ---\n{tail}\n",
         st.replace('T', " ")
     );
     let _ = fs::write(&name, body);
@@ -330,21 +330,21 @@ fn record_crash(why: &str) {
     }
 }
 
-fn spawn_devui() -> Result<i32, String> {
-    if fs::metadata(DEVUI_LOG)
+fn spawn_ui() -> Result<i32, String> {
+    if fs::metadata(UI_LOG)
         .map(|m| m.len() > 1024 * 1024)
         .unwrap_or(false)
     {
         let _ = OpenOptions::new()
             .write(true)
             .truncate(true)
-            .open(DEVUI_LOG);
+            .open(UI_LOG);
     }
     let out = OpenOptions::new()
         .create(true)
         .append(true)
         .mode(0o644)
-        .open(DEVUI_LOG)
+        .open(UI_LOG)
         .map_err(|e| e.to_string())?;
     let err = out.try_clone().map_err(|e| e.to_string())?;
     let (bin, dir) = pick_ui(std::path::Path::new(UI_BIN).exists());
@@ -358,7 +358,7 @@ fn spawn_devui() -> Result<i32, String> {
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
-            // As under u60-uid, whose children inherited its SIG_IGN (std resets it to default).
+            // The UI runs with SIGPIPE ignored (std resets it to default in the child).
             libc::signal(libc::SIGPIPE, libc::SIG_IGN);
             Ok(())
         });
@@ -384,7 +384,7 @@ fn reap(pid: i32) -> Option<Option<i32>> {
     }
 }
 
-/// TERM, up to 5 s, then KILL (u60-uid's stop_devui). What ended, as for [`Input::ui_exit`].
+/// TERM, up to 5 s, then KILL. What ended, as for [`Input::ui_exit`].
 fn stop_ui(ui: &screen::Ui) -> Option<Option<i32>> {
     // SAFETY: signals to a pid we track.
     unsafe { libc::kill(ui.pid, libc::SIGTERM) };
@@ -417,7 +417,8 @@ fn stop_ui(ui: &screen::Ui) -> Option<Option<i32>> {
 
 struct Rt {
     shadow: bool,
-    ctl: Vec<(fs::File, fs::File)>,
+    /// Each control FIFO: its path, our reader, the writer we hold (so it never reports EOF).
+    ctl: Vec<(&'static str, fs::File, fs::File)>,
     touch: Option<sys::Touch>,
     ui_fd: Option<(i32, OwnedFd)>,
     /// UIs dropped by a hold while still running, with their pidfd (None: no pidfd), polled so
@@ -493,7 +494,7 @@ impl Rt {
                 }
                 Act::Explain => {
                     wait_drm_free(&|m| sys::uid_log(m));
-                    let en = sys::read(sys::DEVUI_CONF).is_some_and(|c| {
+                    let en = sys::ui_conf().is_some_and(|c| {
                         c.lines()
                             .filter_map(|l| l.strip_prefix("lang="))
                             .next_back()
@@ -510,7 +511,7 @@ impl Rt {
                     sh(&format!("{VENDOR_INIT} start >/dev/null 2>&1"));
                 }
                 Act::Spawn => {
-                    let r = spawn_devui();
+                    let r = spawn_ui();
                     queue.extend(s.spawned(sys::mono_ms(), r, self.attempts_set));
                 }
                 Act::Stop(pid) => {
@@ -628,7 +629,7 @@ pub fn screen_thread(shadow: bool, worker_round: Arc<AtomicI64>, sig: Option<Own
         sys::boot_trace(sys::BOOT_TRACE);
         rt.ctl = screen::CTL_FIFOS
             .iter()
-            .filter_map(|p| sys::ctl_open(p))
+            .filter_map(|p| sys::ctl_open(p).map(|(r, w)| (*p, r, w)))
             .collect();
     }
     let (mut s, acts) = Screen::new(sys::mono_ms(), sys::find_ui());
@@ -673,7 +674,7 @@ pub fn screen_thread(shadow: bool, worker_round: Arc<AtomicI64>, sig: Option<Own
         if let Some(f) = &sig {
             push(f.as_raw_fd());
         }
-        for (r, _) in &rt.ctl {
+        for (_, r, _) in &rt.ctl {
             push(r.as_raw_fd());
         }
         if let Some((_, fd)) = &rt.ui_fd {
@@ -711,10 +712,38 @@ pub fn screen_thread(shadow: bool, worker_round: Arc<AtomicI64>, sig: Option<Own
             }
         }
         let mut cmds = Vec::new();
-        for (r, _) in rt.ctl.iter_mut() {
+        let mut notes = Vec::new();
+        for (p, r, w) in rt.ctl.iter_mut() {
             let mut b = String::new();
-            let _ = std::io::Read::read_to_string(r, &mut b);
+            // Ok = end of file: cannot happen while we hold a writer
+            let eof = match std::io::Read::read_to_string(r, &mut b) {
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => false,
+                Err(e) => {
+                    notes.push(format!("reading {p}: {e} ({} bytes kept)", b.len()));
+                    false
+                }
+                Ok(_) => true,
+            };
             cmds.extend(screen::parse_cmds(&b));
+            // 10-22: ship's holds went into the FIFO at this path and never reached this reader
+            // (cause unknown, gone after a restart). Not our FIFO any more, or at its end: a new one.
+            let why = if eof {
+                "came to its end"
+            } else if !sys::ctl_current(p, r) {
+                "is not the FIFO we read any more"
+            } else {
+                continue;
+            };
+            match sys::ctl_open(p) {
+                Some((nr, nw)) => {
+                    notes.push(format!("{p} {why}: made a new one"));
+                    (*r, *w) = (nr, nw);
+                }
+                None => notes.push(format!("{p} {why}; making a new one failed")),
+            }
+        }
+        for n in notes {
+            rt.log(&n);
         }
         let now = sys::mono_ms();
         let mut fired = false;
@@ -739,7 +768,7 @@ pub fn screen_thread(shadow: bool, worker_round: Arc<AtomicI64>, sig: Option<Own
             now_ms: now,
             persist: load_persist(),
             ui_exit: ui_exit.take(),
-            found_devui: if s.wants_scan() { sys::find_ui() } else { None },
+            found_ui: if s.wants_scan() { sys::find_ui() } else { None },
             vendor_alive: sys::find_comm(VENDOR_COMM).is_some(),
             card0_held: s.needs_card0() && sys::held_open(DRM_DEV),
             cmds,

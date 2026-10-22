@@ -530,6 +530,39 @@ fn ids_are_not_names() {
     assert!(readable_name("Test-MBP"));
     assert!(readable_name("living-room-tv"));
     assert!(readable_name("cafe"));
+    // Android adb / cast ids (seen 10-22 on a Xiaomi phone, hiding its DHCP name)
+    assert!(!readable_name("5215BBA9"));
+    assert!(readable_name("deadbeef"));
+    assert!(!readable_name("nearby-presence-nsd-bb9fbae7-9710-47b6-b012-3c5c5443f1eb"));
+    assert!(readable_name("OnePlus-Ace-3-Pro"));
+    assert!(!readable_name("02:00:5e:00:53:01@fe80::5eff:fe00:5301"));
+    assert!(readable_name("Yves iPhone @ home"));
+}
+
+#[test]
+fn a_mac_with_airplay_is_a_computer() {
+    // seen 10-22: a MacBook announcing AirPlay receiver, workstation and ssh
+    let mut r = Record::default();
+    for s in ["_airplay._tcp", "_raop._tcp", "_workstation._tcp", "_ssh._tcp"] {
+        r.services.push(s.into());
+    }
+    assert_eq!(classify::kinds(Some(&r))[0], ("mdns", "computer"));
+    let mut r = rec(&[(Kind::MdnsModel, "MacBookPro18,4")]);
+    r.services.push("_raop._tcp".into());
+    assert_eq!(classify::kinds(Some(&r))[0], ("mdns", "laptop"));
+    assert_eq!(classify::model_name(Some(&r)).as_deref(), Some("MacBook Pro"));
+    let mut r = Record::default();
+    r.services.push("_raop._tcp".into());
+    assert_eq!(classify::kinds(Some(&r)), [("mdns", "speaker")]);
+}
+
+#[test]
+fn vendor_names_lose_legal_tails() {
+    use super::classify::short_vendor;
+    assert_eq!(short_vendor("Xiaomi Communications Co Ltd"), "Xiaomi");
+    assert_eq!(short_vendor("Apple, Inc."), "Apple");
+    assert_eq!(short_vendor("Texas Instruments"), "Texas Instruments");
+    assert_eq!(short_vendor("Ltd"), "Ltd");
 }
 
 // ── watch.rs: alias takeover and strangers ──────────────────────────────────
@@ -720,4 +753,63 @@ fn alert_ids_and_text() {
     );
     assert_eq!(watch::alert_text(&mac, "小米"), mac);
     assert_eq!(watch::alert_text(&mac, &mac), mac);
+}
+
+#[test]
+fn a_readable_name_sticks() {
+    // seen 10-22: a Mac's AirPlay name was later replaced by a UUID instance, and the screen
+    // fell back to its NetBIOS name
+    let d = tmp("sticky");
+    let mut s = Shared::open(&d, true);
+    s.loaded = true;
+    let m = mac(2);
+    let f = |k: Kind, v: &str| Fact {
+        kind: k,
+        value: v.into(),
+    };
+    s.learn(&m, &[f(Kind::MdnsInstance, "97348DC8-FDA7-4A35-A608-EC8CF4230AF6")], 1);
+    s.learn(&m, &[f(Kind::MdnsInstance, "JIANG-KQ13WDGH7Q")], 2);
+    s.learn(&m, &[f(Kind::MdnsInstance, "F931BF63-2B4B-4E7B-A1D0-540DFA1BF142")], 3);
+    s.learn(&m, &[f(Kind::MdnsInstance, "Other Name")], 4);
+    let mut cl = client(&mac_str(&m), &mac_str(&m));
+    s.enrich(&mut cl);
+    assert_eq!(cl.name, "JIANG-KQ13WDGH7Q");
+}
+
+#[test]
+fn android_dhcp_name_beats_mdns() {
+    // seen 10-22: a OnePlus showed an app's mDNS name instead of its DHCP name
+    let d = tmp("android");
+    let mut s = Shared::open(&d, true);
+    s.loaded = true;
+    let f = |k: Kind, v: &str| Fact {
+        kind: k,
+        value: v.into(),
+    };
+    let phone = mac(3);
+    s.learn(
+        &phone,
+        &[
+            f(Kind::DhcpHostname, "Test-Phone-3-Pro"),
+            f(Kind::DhcpVendorClass, "android-dhcp-16"),
+            f(Kind::MdnsInstance, "Test Cast Name"),
+        ],
+        1,
+    );
+    let mut cl = client(&mac_str(&phone), &mac_str(&phone));
+    s.enrich(&mut cl);
+    assert_eq!(cl.name, "Test-Phone-3-Pro");
+    // an iPhone's bare DHCP name still loses to its mDNS name
+    let ios = mac(4);
+    s.learn(
+        &ios,
+        &[
+            f(Kind::DhcpHostname, "iPhone"),
+            f(Kind::MdnsInstance, "Test iPhone 16"),
+        ],
+        1,
+    );
+    let mut cl = client(&mac_str(&ios), &mac_str(&ios));
+    s.enrich(&mut cl);
+    assert_eq!(cl.name, "Test iPhone 16");
 }

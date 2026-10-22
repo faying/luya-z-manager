@@ -4,7 +4,7 @@
 #
 # 用法
 #   onboard/test/sandbox.sh dry                                      只在本机解包、改写、做防呆检查；不连设备
-#   HOST=<ssh 别名> GATEWAY=<设备地址> SSH_KEY=<私钥> onboard/test/sandbox.sh run     dry + 在设备上跑各场景
+#   HOST=<root@设备地址 或 ssh 别名> GATEWAY=<设备地址> SSH_KEY=<私钥> onboard/test/sandbox.sh run     dry + 在设备上跑各场景
 #   HOST=… GATEWAY=… SSH_KEY=… onboard/test/sandbox.sh clean                          停掉沙盒进程、删沙盒目录
 #
 # run/clean 的三个变量没有默认值，必须显式给；HOST 经 `ssh -G` 解析出来的地址必须等于 GATEWAY。
@@ -15,7 +15,7 @@
 #   - 设备端脚本的所有落盘路径改到 /data/local/tmp/kit-sb；沙盒 dropbear 用 2223 端口
 #   - 关自动升级的两条命令换成空操作（设备上本来就是关的，测试前后会核对）
 #   - admin（luyaz-web）装进沙盒目录、只听 127.0.0.1:19090，不装 init 脚本和设备脚本，不写设备清单
-#   - devui、recover、chill 在沙盒里直接报错退出（它们会换掉设备上正在用的哨兵、屏幕、开机收尾、代理）
+#   - ui、recover、chill 在沙盒里直接报错退出（它们会换掉设备上正在用的哨兵、屏幕、开机收尾、代理）
 #   - 改写后只要还能找到写真实位置的语句，就中止，不连设备
 set -euo pipefail
 
@@ -43,14 +43,15 @@ check_target() {
   local v missing="" resolved
   for v in HOST GATEWAY SSH_KEY; do [ -n "${!v}" ] || missing="$missing $v"; done
   if [ -n "$missing" ]; then
-    echo "✗ 缺少:$missing（例：HOST=u60 GATEWAY=192.168.0.1 SSH_KEY=~/.ssh/id_ed25519）" >&2; exit 2
+    echo "✗ 缺少:$missing（例：HOST=root@192.168.0.1 GATEWAY=192.168.0.1 SSH_KEY=~/.ssh/id_ed25519）" >&2; exit 2
   fi
   if [ ! -f "$SSH_KEY" ] || [ ! -f "$SSH_KEY.pub" ]; then
     echo "✗ 找不到 $SSH_KEY 或 $SSH_KEY.pub" >&2; exit 2
   fi
   resolved=$(ssh -G "$HOST" 2>/dev/null | awk '$1 == "hostname" { print $2; exit }')
   if [ "$resolved" != "$GATEWAY" ]; then
-    echo "✗ ssh $HOST 实际连到 ${resolved:-?}，和 GATEWAY=$GATEWAY 对不上" >&2; exit 2
+    echo "✗ ssh $HOST 实际连到 ${resolved:-?}，和 GATEWAY=$GATEWAY 对不上" >&2
+    echo "  HOST 写 root@$GATEWAY，或 ~/.ssh/config 里 HostName 是 $GATEWAY 的别名（不认域名）" >&2; exit 2
   fi
 }
 
@@ -121,7 +122,7 @@ rewrite_paths() {
     -e "s#127.0.0.1:9090#127.0.0.1:19090#g"
     -e "s#put_tree \"\$P/esim.tgz\" /data/esim#put_tree \"\$P/esim.tgz\" $SB/esim; sed -i \"s,/data/esim,$SB/esim,g\" $SB/esim/lpac.sh#"
     -e "s#/data/esim/lpac.sh chip info#$SB/esim/lpac.sh chip info#"
-    -e 's#^do_devui() {#do_devui() { die "sandbox: devui disabled";#'
+    -e 's#^do_ui() {#do_ui() { die "sandbox: ui disabled";#'
     -e 's#^do_recover() {#do_recover() { die "sandbox: recover disabled";#'
     -e 's#^do_chill() {#do_chill() { die "sandbox: chill disabled";#'
   )
@@ -132,7 +133,7 @@ rewrite_paths() {
 # 不看：注释、p "…" 输出行，以及沙盒里禁用/不会调用的函数（从「名字() {」到下一个行首「}」整段跳过）。
 guard_device_script() {
   local f="$KIT/device/install.sh"
-  local skipped='^(do_admin|do_devui|do_recover|install_scripts|place_recover|recover_put|rc_owner|owners_stop|sentinel_start|kit_record|do_chill|do_status)\(\) \{'
+  local skipped='^(do_admin|do_ui|do_recover|install_scripts|place_recover|recover_put|rc_owner|owners_stop|sentinel_start|kit_record|do_chill|do_status)\(\) \{'
   local real='(^|[^b])/etc/rc\.local|/data/ssh|/data/luyaz|/data/plugins|/etc/init\.d/|put_tree "\$P/esim.tgz" /data/esim|set_update_mode|uci -q (set|commit)| -p 2222|127\.0\.0\.1:9090'
   local allowed='^[0-9]+:(SENT_LINE|LW)=|^[0-9]+:[[:space:]]*\[ -x "/etc/init.d/\$s" \]|svc_running|/etc/init.d/zte_topsw'
   if grep -n '\${KIT_[A-Z0-9_]*:-/' "$f"; then

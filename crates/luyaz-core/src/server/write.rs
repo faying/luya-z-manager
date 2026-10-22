@@ -254,9 +254,9 @@ async fn gated(
         // 执行者队列满（V2-25）。关数据（新旧客户端一样，D14）作为内部任务马上做；
         // 旧请求不回 503：描述表里的动作回成功、排队。
         Err(executor::Busy) if safety => {
-            let exec = app.inner.exec.clone();
-            exec.task(control_job(app, action, body, None))
+            locked_job(app, action, body, None, true)
                 .await
+                .expect("internal tasks are unbounded")
                 .expect("no Wi-Fi lock asked for")
         }
         Err(executor::Busy) => match legacy_item {
@@ -323,14 +323,14 @@ pub(super) async fn run_control_from(
     body: Value,
     peer: Option<std::net::SocketAddr>,
 ) -> Result<Response, executor::Busy> {
-    let exec = app.inner.exec.clone();
     let cfg = crate::ops::wifi_lock::Cfg::from_env();
     let path = match &cfg.path {
         Some(p) if crate::ops::wifi_lock::covers_action(&action) => p.clone(),
         _ => {
-            return exec
-                .control(control_job(app, action, body, None))
+            // 等写锁在执行者外（D7）；请求方断开了也要做完或回绝，和 Wi-Fi 那条一样另起任务
+            return tokio::spawn(locked_job(app, action, body, None, false))
                 .await
+                .expect("control task panicked")
                 .map(|r| r.expect("no Wi-Fi lock asked for"));
         }
     };
@@ -350,7 +350,6 @@ async fn wifi_control(
     cfg: crate::ops::wifi_lock::Cfg,
     path: String,
 ) -> Result<Response, executor::Busy> {
-    let exec = app.inner.exec.clone();
     let who = who_of(&body).unwrap_or_else(|| Source::Legacy.into());
     let record = |t: &crate::ops::wifi_lock::Timeout| {
         eprintln!(
@@ -377,18 +376,10 @@ async fn wifi_control(
         &path,
         caller_of(peer),
         |mode| {
-            let (app, action, body, exec, path) = (
-                app.clone(),
-                action.clone(),
-                body.clone(),
-                exec.clone(),
-                path.clone(),
-            );
+            let (app, action, body, path) =
+                (app.clone(), action.clone(), body.clone(), path.clone());
             async move {
-                match exec
-                    .control(control_job(app, action, body, Some((path, mode))))
-                    .await
-                {
+                match locked_job(app, action, body, Some((path, mode)), false).await {
                     Err(busy) => Some(Err(busy)),
                     Ok(None) => None,
                     Ok(Some(r)) => Some(Ok(r)),
@@ -398,33 +389,94 @@ async fn wifi_control(
         record,
     )
     .await;
-    if let Some(r) = done {
-        return r;
-    }
+    let class = match done {
+        Ok(r) => return r,
+        Err(crate::ops::wifi_lock::Gave::TimedOut) => "contended",
+        Err(crate::ops::wifi_lock::Gave::Open(_)) => "open_failed",
+    };
+    Ok(lock_refused(&app, &action, &body, "wifi_lock", class))
+}
+
+/// 写锁或 Wi-Fi 锁没拿到（D7/D8）：记一行流水账、回 503，什么都没写。
+/// `class`：`contended`（被占，回 `busy`，可以稍后再试）或 `open_failed`（锁文件打不开，回 `lock_error`）。
+fn lock_refused(app: &App, action: &str, body: &Value, reason: &str, class: &str) -> Response {
+    let who = who_of(body).unwrap_or_else(|| Source::Legacy.into());
     let mut line = json!({
         "action": action,
         "source": who.source,
         "result": "failed",
-        "reason": "wifi_lock",
+        "reason": reason,
+        "lock": class,
         "status": 503,
     });
     who.tag(&mut line);
     app.inner.ops.record().append(line);
-    Ok((
+    let (code, message) = match (reason, class) {
+        ("wifi_lock", "contended") => (
+            "busy",
+            "Wi-Fi is being changed by another writer; try again",
+        ),
+        (_, "contended") => (
+            "busy",
+            "another writer is changing the device; nothing written, try again",
+        ),
+        ("wifi_lock", _) => (
+            "lock_error",
+            "the Wi-Fi lock cannot be opened; nothing written",
+        ),
+        _ => (
+            "lock_error",
+            "the write lock cannot be opened; nothing written",
+        ),
+    };
+    (
         StatusCode::SERVICE_UNAVAILABLE,
-        Json(json!({"ok":false,"action":action,"error":{
-            "code":"busy",
-            "message":"Wi-Fi is being changed by another writer; try again",
-        }})),
+        Json(json!({"ok":false,"action":action,"error":{"code":code,"message":message}})),
     )
-        .into_response())
+        .into_response()
+}
+
+/// 会改设备的动作（拿写锁的那些）。
+fn writes(action: &str) -> bool {
+    (crate::control::ACTIONS.contains(&action) || crate::control::E4_ACTIONS.contains(&action))
+        && !read_only(action)
+}
+
+/// 一次控制尝试（D29/D7）：会改设备的先拿跨进程写锁，等锁在执行者外（`write_lock::run`），拿到后在
+/// 同一个执行者任务里做 [`control_job`]；拿不到回 503、什么都没做。`internal` = 内部任务（不计控制队列上限）。
+/// `Ok(None)` = Wi-Fi 锁被别人拿着（见 [`control_job`]）。
+async fn locked_job(
+    app: App,
+    action: String,
+    body: Value,
+    wifi: Option<(String, crate::ops::wifi_lock::Mode)>,
+    internal: bool,
+) -> Result<Option<Response>, executor::Busy> {
+    let exec = app.inner.exec.clone();
+    let job = control_job(app.clone(), action.clone(), body.clone(), wifi);
+    if !writes(&action) {
+        return if internal {
+            Ok(exec.task(job).await)
+        } else {
+            exec.control(job).await
+        };
+    }
+    let r = if internal {
+        crate::ops::write_lock::run(&exec, job).await
+    } else {
+        crate::ops::write_lock::run_control(&exec, job).await?
+    };
+    Ok(match r {
+        Ok(r) => r,
+        Err(e) => Some(lock_refused(&app, &action, &body, "write_lock", e.class())),
+    })
 }
 
 /// 调用方是谁（只在 Wi-Fi 锁被占时查）：本机连接按端口在 /proc 里找进程（`peer_pid::find_pid`）。
 async fn caller_of(peer: Option<std::net::SocketAddr>) -> crate::ops::wifi_lock::Caller {
     use crate::ops::wifi_lock::Caller;
     let Some(peer) = peer else {
-        return Caller::Unknown;
+        return Caller::Internal;
     };
     let ip = match peer.ip() {
         std::net::IpAddr::V6(v6) => v6
@@ -442,8 +494,9 @@ async fn caller_of(peer: Option<std::net::SocketAddr>) -> crate::ops::wifi_lock:
     }
 }
 
-/// 一个控制任务。`wifi` = 写 `wireless` 的动作要的 Wi-Fi 锁（路径、怎么拿）：拿着写锁之后再拿；
-/// 别人拿着（`Mode::Own`）就两把都放、返回 None（什么都没做，调用方在执行者外等一会再来）。
+/// 一个控制任务（写的已经拿着写锁，见 [`locked_job`]）。`wifi` = 写 `wireless` 的动作要的 Wi-Fi 锁
+/// （路径、怎么拿）：拿着写锁之后再拿；别人拿着（`Mode::Own`）就两把都放、返回 None（什么都没做，
+/// 调用方在执行者外等一会再来）；锁文件打不开回 503（D8）。
 async fn control_job(
     app: App,
     action: String,
@@ -451,24 +504,25 @@ async fn control_job(
     wifi: Option<(String, crate::ops::wifi_lock::Mode)>,
 ) -> Option<Response> {
     let marker = app.inner.exec.clone();
-    let writes = (crate::control::ACTIONS.contains(&action.as_str())
-        || crate::control::E4_ACTIONS.contains(&action.as_str()))
-        && !read_only(&action);
+    let writes = writes(&action);
     if writes && let Some(response) = other_write_gate(&app, &action, &body) {
         return Some(response);
     }
-    // D29：会改设备的动作在执行者里拿着跨进程写锁做（和应急直写脚本互斥）。
-    let _lock = if writes {
-        Some(crate::ops::write_lock::acquire().await)
-    } else {
-        None
-    };
-    // D3：第二把（Wi-Fi 锁）在写锁之后拿，先于写锁放（变量后声明、先丢）。
+    // D3：第二把（Wi-Fi 锁）在写锁之后拿（写锁在 locked_job 里），先于写锁放。
     let _wifi = match &wifi {
-        Some((path, mode)) => {
-            let write_held = _lock.as_ref().is_none_or(|l| l.held());
-            crate::ops::wifi_lock::second(path, *mode, write_held).ok()?
-        }
+        Some((path, mode)) => match crate::ops::wifi_lock::second(path, *mode) {
+            Ok(l) => l,
+            Err(crate::ops::wifi_lock::Second::Held) => return None,
+            Err(crate::ops::wifi_lock::Second::Open(_)) => {
+                return Some(lock_refused(
+                    &app,
+                    &action,
+                    &body,
+                    "wifi_lock",
+                    "open_failed",
+                ));
+            }
+        },
         None => None,
     };
     let journal = writes.then(|| JournalWrite::new(&action, &body)).flatten();
@@ -1021,6 +1075,16 @@ async fn control_task(app: App, action: &str, body: Value) -> Response {
     if !read_only(action) {
         crate::state::invalidate_cache();
     }
+    // a bare redial would cut a diagnosis / Finding probe mid-run: queue behind it on the
+    // same gate, busy while a network transaction holds it (held until the dial calls return)
+    let _gate = if action == "cellular.redial" {
+        match crate::ops::engine::admit_bare("control.redial").await {
+            Ok(h) => h,
+            Err(busy) => return (StatusCode::CONFLICT, Json(busy)).into_response(),
+        }
+    } else {
+        None
+    };
     match crate::control::execute(action, body.get("params").unwrap_or(&json!({}))).await {
         crate::control::Outcome::Ok(value) => {
             return control_ok(action, value);

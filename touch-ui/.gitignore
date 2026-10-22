@@ -2,16 +2,7 @@
 *.o
 *.a
 *.stripped
-/u60pro-devui
-/u60pro-devui.stripped
-/u60pro-devui.*
 /corner-wake
-/u60pro-devui-aarch64
-/u60pro-devui.sse
-/html-poc
-/html-poc.stripped
-/html-poc.zig
-/html-poc.zig.stripped
 /touchsim
 /.zig-build/
 /zig-build-obj/
@@ -30,7 +21,6 @@ screenshot.png
 /label-*.png
 /lockscreen-*.png
 /screen-*.png
-/u60pro-devui.new
 /previews/
 /-S
 
@@ -61,7 +51,6 @@ drm_text
 /.review-shots/
 /scripts/test/uid/uid_core_test
 /scripts/test/ui_logic/ui_logic_test
-/u60-uid
 scripts/test/ui_exec/ui_exec_test
 scripts/test/render/render_test
 .cache/

@@ -9,7 +9,7 @@ must be migrated or several components have to be updated together.
 | `core` | `luyaz-core`, the core service (`:9460`) | `crates/luyaz-core/Cargo.toml` |
 | `lweb` | `luyaz-web`, the admin web (`:9090`) | `crates/luyaz-web/Cargo.toml` |
 | `sentinel` | `luyaz-sentinel`, screen owner and watchdog | `crates/luyaz-sentinel/Cargo.toml` |
-| `touch` | `luyaz-ui`, the touch screen UI | `touch-ui/rs/devui/Cargo.toml` |
+| `touch` | `luyaz-ui`, the touch screen UI | `touch-ui/rs/ui/Cargo.toml` |
 | `scripts` | device scripts (doctor, init scripts, …) | `touch-ui/scripts/VERSION` |
 
 Each program prints its version with `--version`, e.g. `luyaz-core 1.0.0 (6e606ec)`.
@@ -18,6 +18,186 @@ Entries are written under **Unreleased** as `- <component>: text` (e.g. `- touch
 of other components.
 
 A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
+
+## Unreleased
+
+- kit: `OUI_TSV=` (a table from `scripts/lanid/make-oui.sh`) is installed to `/data/luyaz/lanid/oui.tsv` for vendor names; the public build has none.
+
+- kit: carries the lanid-parse component (LAN client identification) and installs it to `/data/luyaz/core/plugins/` as the only component; without it the core runs with identification off. `LANID_CWASM=` uses a ready-made one.
+
+## core 1.33.7 — 2026-10-22
+
+- doctor reads ship-manifest record names as written; the pre-rename names (`devui-fonts`, `devui-logos`, `u60d-plugins`, `u60-recover.sh`) are no longer mapped (neither device has them).
+
+## core 1.33.6, sentinel 1.0.11, touch 1.10.7, scripts 1.0.9 — 2026-10-22
+
+The old "devui" names are no longer read (devui cleanup B5); both devices were migrated with the previous round.
+- touch: reads only `ui.conf`; no copy from `devui.conf`.
+- sentinel: the control FIFO takes `ui` only; the language comes from ui.conf only.
+- core: alerts are read under their recorded name only (no `devui-*` mapping); the SMS language from ui.conf only.
+- scripts: ship and config-backup no longer carry devui.conf.
+
+## core 1.33.5, lweb 1.24.1, sentinel 1.0.10, touch 1.10.6, scripts 1.0.8 — 2026-10-22
+
+Device names without "devui" (devui cleanup B2); the old names are still read until the next round.
+- touch: settings are `/data/luyaz/ui/ui.conf`; the first start copies `devui.conf` over and leaves it for a rollback. The theme alert is `ui-theme-paused`.
+- sentinel: the control FIFO takes `ui` (`devui` still works); alerts are `ui-crash` and `ui-gave-up`; the language comes from ui.conf, else devui.conf.
+- core: the SMS language from ui.conf, else devui.conf; doctor says `echo ui > /tmp/luyaz-screen.ctl`.
+- core, lweb, sentinel: an alert recorded as `devui-*` reads as its `ui-*` name (labels, SMS text, never-SMS list).
+- scripts: ship backs up both ui.conf and devui.conf with a touch trial; config-backup takes ui.conf.
+- touch, kit (devui cleanup B3): the crates are `touch-ui/rs/ui` (package `luyaz-ui`) and `touch-ui/rs/ui-model`; the install kit's component and payload directory are `ui` (`./install.sh ssh admin ui esim`); kit variables `TOUCH_REPO`, `TOUCH_BIN`, `UI_FONTS_DIR`; the touch log says `ui:`; debug variable `LUYAZ_UI_FORCE_HSR`; build volume `u60-ui-rs-target`.
+
+## core 1.33.4 — 2026-10-22
+
+- SIM info reads outside the snapshot (write checks, SMS slot wait, web SIM page) go through one entry; a good read is reused by the next snapshot round instead of asking the modem again.
+- LAN client names: an mDNS name only counts from services that name the whole device (AirPlay, SMB, SSH, printers, …), not from any app's own service; an Android phone's DHCP name comes before its mDNS name (needs the new lanid-parse plugin).
+
+## touch 1.10.5 — 2026-10-22
+
+- touch: no font directory fallback to the retired /data/plugins/u60pro-devui.
+- recover: luyaz-recover.sh refuses to delete luyaz-ui, or to restore an rc.local that starts u60-uid/u60-guard, whatever stray old files exist (it used to look for the retired programs first).
+
+## sentinel 1.0.9, scripts 1.0.7 — 2026-10-22
+
+- sentinel: on 10-22 ship's `hold` went into `/tmp/luyaz-screen.ctl` for three hours and never reached the sentinel (its heartbeat kept going; a restart cured it; cause not found). Every pass it now checks that the path is still the FIFO it reads and makes a new one if not (or if its reader hits end of file), and logs read errors other than "nothing there".
+- scripts: when the sentinel does not put the screen down within 10 s, `luyaz-ship.sh` logs what is left to look at (heartbeat and its age, the FIFO's inode against the sentinel's fds, each thread's state/wchan/syscall) and leaves the sentinel running so that evidence survives.
+
+## core 1.33.3, touch 1.10.4 — 2026-10-22
+
+- core: the 网络 page's APN reads (`/api/netinfo?apn=1`) are reused for 60 s and dropped at once by an APN switch: the touch 蜂窝 tab read them every 5 s, each read logs about 8 lines to key.log, and within hours the connection's bearer lines (QCI/AMBR) rolled out of the log, taking the carrier card's ceiling with them.
+- core: with no bearer at all in the logs, `qos.bearer` is the current core's (SA = `nr_pdu`) instead of empty, so the screen and the web no longer call an SA 5QI a QCI.
+- touch: the carrier card says 「上限 未知」 (ceiling unknown) when it has the QCI/5QI but no AMBR, instead of half a line.
+
+## core 1.33.2 — 2026-10-22
+
+- LAN client names: an iOS `<MAC>@fe80::…` mDNS instance is an id, not a name; the phone shows as `iPhone` again.
+
+## core 1.33.1 — 2026-10-22
+
+- the diagnosis probe budget tries its lock a few times (10 ms apart) before giving up: a fork elsewhere in the process briefly holds a copy of the lock. Tests: two flaky ones fixed (budget lock, ETXTBSY on a freshly written test script).
+
+## core 1.33.0, lweb 1.24.0, mcp 0.4.0 — 2026-10-22
+
+- core: "data is up" no longer trusts the firmware's `connect_status` alone (B31 can say connected with no bearer): the register guard, the data-up wait and SMS forwarding also want a default route out of `rmnet_data0` (`/proc/net/route`, IPv6 too).
+- core: `network.health` in `/api/public/status`: the bearer, the open finding, the repairs the underlay gate is holding, what to do next (wait / check the APN) and one sentence for web and touch. Data off on purpose says nothing; held repairs clear once their reason is gone.
+- core: CHILL end to end: with CHILL on and clients present, at most every 10 min (own budget, not the diagnosis's) one request through mihomo; two misses while its API answers show "proxy not getting through" in `network.health`. Detection only, no restart. `LUYAZ_CHILL_PROBE=0` turns it off.
+- lweb: the home notice reads `network.health`'s sentence (APN link after a failed automatic recovery, CHILL link when only the proxy fails); older cores keep the finding's symptom. Agent API `/agent-api/network-health`.
+- mcp: read-only tool `get_network_health`.
+- kit: `onboard/README` says B27–B31 (B28 on: open SSH first); `sandbox.sh`'s example uses `HOST=root@<gateway>`. CI: `.github/workflows/test.yml` (cargo test + aarch64 build).
+
+## core 1.32.6 — 2026-10-22
+
+- a LAN client name with a UUID in it (Android Quick Share `nearby-presence-nsd-<uuid>`) is no longer shown as the device name; the DHCP name (e.g. `OnePlus-Ace-3-Pro`) wins again.
+
+## core 1.32.5 — 2026-10-22
+
+- eSIM switch: identity a little slower than 45 s no longer reboots the device. Past 45 s the switch waits up to 75 s more and reboots only if both the identity and the data call are still missing (u60g 10-22: identity came back a few seconds late with data fine, and the device had rebooted for it).
+
+## touch 1.10.0 — 2026-10-22
+
+- the eSIM switch status line uses the core's shared short word (`say_short`) while running and when it ends, the same words as the admin web; with no switch of its own the eSIM page shows the `sim` block's word during any SIM change; reads up to 2 KB of the job. Older cores: as before. Requires: core 1.32.0 for the new words.
+
+## lweb 1.23.0 — 2026-10-22
+
+- an eSIM switch's result starts with the core's shared word (`say`); a known failure cause shows that word and what to do instead of the raw lpac message (logged); the eSIM page's status shows the job's word while a switch runs (e.g. Retrying safely) and the `sim` block's word during any SIM change. Older cores: as before.
+
+## touch 1.10.3 — 2026-10-22
+
+- dual SIM: the standby card says where it roams to (e.g. Roaming on China Mobile), in the core's words, on Home and Cellular. Requires: core 1.32.4.
+
+## lweb 1.23.1 — 2026-10-22
+
+- dual SIM: the Home card rows show where each card is (e.g. 4G · Roaming on China Mobile) and use the core's logo pick (CMLink); the Dual SIM page adds it after the carrier. Requires: core 1.32.4.
+
+## core 1.32.4 — 2026-10-22
+
+- dual SIM: each slot carries `place`/`place_en`, where the card is in the data card's words (Local / Roaming on China Mobile / Roaming); the standby slot's network name comes from its QMI serving-system read.
+
+## touch 1.10.2 — 2026-10-22
+
+- dual SIM: the standby card's line on Home and both card rows on Cellular say Local or Roaming, like the data card's line. Requires: core 1.32.3.
+
+## core 1.32.3 — 2026-10-22
+
+- dual SIM: each slot carries `serving_mcc` and `true_roaming` (the same country rule as `signal.true_roaming`); the standby slot's network comes from a QMI NAS Get Serving System read next to its signal read.
+
+## touch 1.10.1 — 2026-10-22
+
+- dual SIM: each slot row uses the core's per-slot `logo`, the same logos as single SIM (e.g. CMLink, CMHK); older cores: mainland three only, as before. Requires: core 1.32.2.
+
+## core 1.32.2 — 2026-10-22
+
+- dual SIM: each slot carries a `logo`, picked the same way as the single-card logo (SPN, then PLMN), so Hong Kong, Macau, Taiwan and other cards get their logo too, not only the mainland three.
+
+## core 1.32.1 — 2026-10-22
+
+- dual SIM: when the firmware leaves slot 1's operator empty (seen on B31 with a 454-12 card on standby), slot 1 shows its SPN name instead of nothing.
+
+## core 1.32.0 — 2026-10-22
+
+- one table of words for a SIM/eSIM switch (`sim_say`): the `sim` block (by SIM identity phase) and `/api/esim/job` (switch jobs, by status/reason) carry `say`/`say_en` (full), `say_short`/`say_short_en` (fits the touch screen) and `say_id`: Switching / Retrying safely / Back online / May need an APN check / Auto-recovery failed; settings left as they were. Old fields unchanged.
+
+## lweb 1.22.0 — 2026-10-22
+
+- the eSIM page no longer reads the card every 10 s (profiles) and 30 s (notifications); it reads on opening (the stream closes while the tab is hidden), on Refresh/Retry or a finished write, when the SIM identity epoch/phase changes, and every 10 s only while a job runs or the list is settling, plus 40 s after.
+
+## core 1.31.0 — 2026-10-22
+
+- SMS forwarding waits out a SIM switch (identity phase not online): sends resume once the phase has been online 30 s, or after 10 min if it stays stuck; nothing is dropped.
+
+## core 1.30.0 — 2026-10-22
+
+- the APN watch now looks when the SIM identity epoch/phase moves, with a 60 s fallback poll (was 10 s); no reconnect proposal while a SIM switch is leaving/changed.
+
+## core 1.29.0 — 2026-10-22
+
+- new alert kinds `sim-changed`, `sim-stalled`, `esim-failed` and `esim-rebooted` (the reboot an eSIM switch asked for, told on the next boot), each once per SIM identity epoch and boot.
+- on a SIM change with CHILL off or idle-paused, the log says it is not reloaded.
+
+## core 1.28.0 — 2026-10-22
+
+- the eSIM identity-timeout reboot can be switched off: with `/data/luyaz/core/esim-auto-reboot-off` present a stuck switch ends `identity_stuck` (restart by hand) instead of rebooting; on by default.
+
+## core 1.27.7 — 2026-10-22
+
+- eSIM switch, corrected: 1.27.6 compared against the wrong field (`get_sim_info`'s `sim_*` fields are always slot 1, the eSIM card's). Now the card-only switch (`reason: "inactive_slot"`) happens when slot 1 is switched off or data is on slot 2.
+
+## core 1.27.6 — 2026-10-22
+
+- eSIM switch on a dual-SIM device: when the modem is on another SIM than the eSIM card, the switch only changes the card's profile and ends `reason: "inactive_slot"` — no modem restart, no identity wait and no automatic reboot (the identity would never change, so it used to reboot for nothing).
+
+## core 1.25.0 — 2026-10-22
+
+- Writes never go ahead without the cross-process write lock: when another writer holds it for 15 s, or the lock file cannot be opened, the write is refused (HTTP 503, `busy` or `lock_error`) and nothing is sent to the device. Waiting for the lock no longer holds up data collection.
+- Wi-Fi writes: only a caller that provably holds the Wi-Fi lock (its process, or a parent of it) skips waiting for it; anything else waits, and is refused if the lock stays busy or cannot be opened.
+- At start, pending changes wait for the write lock as long as it takes instead of going ahead without it.
+- Queued legacy requests refused for the lock go back to the queue instead of counting as done.
+
+## scripts 1.0.6 — 2026-10-22
+
+- `luyaz-fallback.sh`: a write lock that cannot be opened exits 5 and writes nothing (it used to write without the lock).
+
+## core 1.24.0 — 2026-10-22
+
+- eSIM switch: "data is back" now means an address on the cellular interface and the internet route through it (IPv4 or IPv6), not the firmware's own data-call flag.
+- eSIM switch: a card that answers "busy" is tried again for up to 4 minutes (the card's list re-read before each try); `POST /api/esim/cancel` stops the waiting. Jobs report `attempts` and `deadline_s`.
+- eSIM switch: the reboot after the modem never picks up the new profile happens at most once per 24 hours, marked as planned first; after that the job ends `identity_stuck` and asks for a manual restart.
+- The `sim` block has `epoch` and `phase` (online / leaving / changed / reloaded / stalled): where a change of SIM identity stands.
+
+## lweb 1.21.0 — 2026-10-22
+
+- eSIM: waits as long as the switch says it may take; tells apart "card busy after the retries", "retries stopped" and "card switched, restart the device to finish".
+
+Requires: core 1.24.0 for the longer wait (older cores: 240 s as before).
+
+## touch 1.9.0 — 2026-10-22
+
+- eSIM: shows 「卡忙，自动重试中」 while the card is retried, waits as long as the switch says it may take, and says when a restart is needed to finish.
+
+## core 1.23.0 — 2026-10-22
+
+- Home exit: a probe home that fails while the cellular link itself is down no longer counts toward the 15 minutes that turn 「Everything else via home」 off.
+- CHILL (`chill.sh`, record-only file): while running, checks its routing rules once a minute and restarts the proxy core when they were deleted (more than 3 times in 10 minutes: direct, with backoff); the WAN moving to another interface switches to direct, a redial does not.
 
 ## lweb 1.20.0 — 2026-10-22
 
@@ -39,11 +219,42 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 - SIM page: with data on SIM 2 an empty number reads 「SIM 2 reports no number」; PLMN 460-13 counts as China Mobile.
 
-## Unreleased
+## core 1.27.5 — 2026-10-22
 
-- kit: `OUI_TSV=` (a table from `scripts/lanid/make-oui.sh`) is installed to `/data/luyaz/lanid/oui.tsv` for vendor names; the public build has none.
+- the APN block is read every 10 minutes instead of every minute, and at once after a write or when the data SIM changes (ICCID): each read made the vendor log about 30 lines to key.log.
 
-- kit: carries the lanid-parse component (LAN client identification) and installs it to `/data/luyaz/core/plugins/` as the only component; without it the core runs with identification off. `LANID_CWASM=` uses a ready-made one.
+## core 1.27.4 — 2026-10-22
+
+- the QCI/5QI and AMBR no longer go blank after a SIM or core change: the vendor's key.log fills with other chatter within hours, so the core now keeps its own copy of the newest 400 `[DATA]` lines (`/data/luyaz/core/qos-lines.log`, written only when new ones appear). Values from that copy are still marked stale when the address or core moved.
+
+## core 1.27.3 — 2026-10-22
+
+- a learned device name, once readable, sticks: a later UUID or NetBIOS name from the same device no longer replaces it (a Mac flipped from its AirPlay name to `MAC-…`).
+- after a SIM change with CHILL off or paused while idle, the log says the reload was skipped.
+
+## touch 1.9.1 — 2026-10-22
+
+- connected devices show vendor and type on their own line, so the totals are no longer cut off.
+
+## core 1.27.2 — 2026-10-22
+
+- LAN client names: hex ids of 8+ digits (Android adb/cast) no longer hide the DHCP hostname; a Mac's mDNS model names it when nothing else does; computer services beat AirPlay/cast receiver types (a Mac was shown as a speaker); OUI vendors lose legal tails (`Xiaomi Communications Co Ltd` → `Xiaomi`).
+
+## core 1.27.1 — 2026-10-22
+
+- Fix (1.25.0): the scenario engine's own Wi-Fi switches were refused. It holds the Wi-Fi lock inside the core and calls the core's `/control` over loopback; the core now recognises itself as that caller instead of waiting for its own lock for 5 minutes.
+
+## core 1.27.0 — 2026-10-22
+
+- after a SIM change (eSIM switch or the firmware's own slot switch) is back online, CHILL is reloaded once (only when it runs, and not on top of a CHILL job already running), and home-exit starts its missed-probe count over and probes home at once, so misses on the old card can no longer turn off "rest via home".
+
+## core 1.26.1 — 2026-10-22
+
+- a manual redial (`/control` `cellular.redial`, web and touch screen) waits for a running diagnosis or Finding probe to finish (at most 4 s) instead of cutting it off, and answers 409 busy while a network setting is being applied.
+
+## core 1.26.0 — 2026-10-22
+
+- underlay gate: home-exit no longer counts a missed home probe, and manual-first no longer leaves the hand-picked node, while the layer below the proxy is down (no address on the data interface: for as long as it lasts; a lower sure finding: at most 15 min). Repairs of known breakage (process died, rule lost) are never held.
 
 ## lweb 1.19.0 — 2026-10-21
 

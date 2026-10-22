@@ -9,7 +9,7 @@ Where: 「蜂窝 → SIM 与 eSIM」 (Cellular → SIM & eSIM). The page lists t
 The screen never runs lpac. It talks to the core, and the core (`crates/luyaz-esim`) drives lpac:
 
 ```
-UI (rs/devui/src/data/esim.rs) ──HTTP 127.0.0.1:9460/v2/api──▶ luyaz-core ──▶ lpac (qmi_qrtr) ──▶ eUICC card
+UI (rs/ui/src/data/esim.rs) ──HTTP 127.0.0.1:9460/v2/api──▶ luyaz-core ──▶ lpac (qmi_qrtr) ──▶ eUICC card
 ```
 
 | Request (under `/v2`, no token) | Use |

@@ -1,7 +1,7 @@
 # CHILL：触屏上的代理面板
 
 CHILL 是触屏上管 mihomo 的那一块：「出口」标签页加上它的 CHILL 二级页。
-代码分两层：`rs/devui/src/data/chill.rs` 取数据、发操作，`rs/devui/src/ui/exit.rs` 画界面。
+代码分两层：`rs/ui/src/data/chill.rs` 取数据、发操作，`rs/ui/src/ui/exit.rs` 画界面。
 设备上跑的是原生 mihomo，没有装 ShellCrash。
 
 能看到、能做的：内核是否在线、当前出口、档位、实时上下行速率、代理组和组里的节点、
@@ -56,7 +56,7 @@ CHILL 是 Rust 触屏的一部分，没有单独的构建：`rs/build.sh device`
 ## 不在屏幕前也能验证
 
 - **先确认屏幕亮着。** `/sys/class/leds/led:lcd/brightness` 为 0 就是息屏；息屏时界面会丢掉所有触摸，
-  只认电源键。自动息屏的时长看 `devui.conf` 的 `autooff`，所以一连串操作最好放进同一次 ssh 做完。
+  只认电源键。自动息屏的时长看 `ui.conf` 的 `autooff`，所以一连串操作最好放进同一次 ssh 做完。
   点亮就往电源键所在的输入节点（U60 上是 `/dev/input/event0`）发一次短按：`touchsim /dev/input/event0 key 116`。短按是开关，屏幕本来亮着会被关掉，先看背光再按。
 - **模拟触摸。** `tools/touchsim.c` 往输入设备写 evdev 事件。设备上已有 `/data/luyaz/ui/touchsim`；
   自己编：`zig cc -target aarch64-linux-musl -static -Os -o touchsim tools/touchsim.c`（构建镜像里有 zig）。

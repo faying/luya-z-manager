@@ -514,7 +514,7 @@ async fn send_external(
 
 /// Active SIM slot as the MDM reports it (0 if unknown).
 async fn current_slot() -> i64 {
-    let Ok(info) = state::ubus("zwrt_zte_mdm.api", "get_sim_info", json!({})).await else {
+    let Ok(info) = state::sim_info().await else {
         return 0;
     };
     ["current_sim_slot", "sim_slot"]

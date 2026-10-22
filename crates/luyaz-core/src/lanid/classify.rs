@@ -38,8 +38,15 @@ pub const SERVICES: &[(&str, &str)] = &[
     ("_hap._tcp", "iot"),
     ("_matter._tcp", "iot"),
     ("_ssh._tcp", "computer"),
+    ("_sftp-ssh._tcp", "computer"),
     ("_smb._tcp", "computer"),
+    ("_rfb._tcp", "computer"),
+    ("_workstation._tcp", "computer"),
 ];
+
+/// Types a computer can also play (a Mac is an AirPlay receiver, a PC a cast target): a
+/// computer service beats them, a speaker never runs ssh/smb/screen sharing.
+const RECEIVER_KINDS: &[&str] = &["speaker", "tv"];
 
 /// DHCP option 60 prefix → type.
 pub const VENDOR_CLASSES: &[(&str, &str)] = &[("android-dhcp", "phone"), ("MSFT", "computer")];
@@ -74,6 +81,43 @@ fn ssdp_vendor(server: &str) -> Option<String> {
     )
 }
 
+/// A name from the mDNS model when nothing better is known: `MacBookPro18,4` → `MacBook Pro`.
+pub fn model_name(rec: Option<&Record>) -> Option<String> {
+    let m = rec?.facts.get(&Kind::MdnsModel)?;
+    const NAMES: &[(&str, &str)] = &[
+        ("MacBookPro", "MacBook Pro"),
+        ("MacBookAir", "MacBook Air"),
+        ("MacBook", "MacBook"),
+        ("Macmini", "Mac mini"),
+        ("MacStudio", "Mac Studio"),
+        ("MacPro", "Mac Pro"),
+        ("iMac", "iMac"),
+    ];
+    NAMES
+        .iter()
+        .find(|(p, _)| m.starts_with(p))
+        .map(|(_, n)| (*n).to_owned())
+}
+
+/// `Xiaomi Communications Co Ltd` → `Xiaomi`: IEEE registrant names carry legal suffixes no one
+/// reads on a 320 px screen. The first word, unless that leaves too little.
+pub fn short_vendor(v: &str) -> String {
+    const TAIL: &[&str] = &[
+        "communications", "communication", "technologies", "technology", "electronics",
+        "mobile", "telecommunications", "co", "co.", "co.,", "corp", "corp.", "corporation",
+        "inc", "inc.", "ltd", "ltd.", "limited", "llc", "gmbh", "international", "device",
+        "devices", "computer", "&",
+    ];
+    let words: Vec<&str> = v.split_whitespace().collect();
+    let mut keep = words.len();
+    while keep > 1
+        && TAIL.contains(&words[keep - 1].trim_end_matches(',').to_ascii_lowercase().as_str())
+    {
+        keep -= 1;
+    }
+    words[..keep].join(" ").trim_end_matches([',', '.']).to_owned()
+}
+
 fn model(rec: Option<&Record>) -> Option<(&'static str, &'static str)> {
     let m = rec?.facts.get(&Kind::MdnsModel)?;
     MODELS
@@ -97,8 +141,31 @@ pub fn readable_name(v: &str) -> bool {
         .chars()
         .filter(|c| !matches!(c, '-' | ':' | '_' | '.'))
         .collect();
-    let hexish = core.len() >= 12 && core.chars().all(|c| c.is_ascii_hexdigit());
-    !v.trim().is_empty() && !hexish
+    // ids like `5215BBA9` (Android adb/cast): 8+ hex digits with a digit in them
+    let hexish = core.len() >= 8
+        && core.chars().all(|c| c.is_ascii_hexdigit())
+        && core.chars().any(|c| c.is_ascii_digit());
+    !v.trim().is_empty() && !hexish && !has_uuid(v) && !mac_at(v)
+}
+
+/// `02:00:5e:00:53:01@fe80::…` (iOS `_apple-mobdev2`): a random MAC and a link-local
+/// address, not a name.
+fn mac_at(v: &str) -> bool {
+    v.split_once('@').is_some_and(|(m, _)| {
+        let hex: String = m.chars().filter(|c| *c != ':' && *c != '-').collect();
+        hex.len() == 12 && hex.chars().all(|c| c.is_ascii_hexdigit())
+    })
+}
+
+/// A UUID anywhere in the name (`nearby-presence-nsd-bb9fbae7-9710-…`, Android Quick
+/// Share): an id with a prefix, not a name.
+fn has_uuid(v: &str) -> bool {
+    let parts: Vec<&str> = v.split('-').collect();
+    parts.windows(5).any(|w| {
+        w.iter()
+            .zip([8, 4, 4, 4, 12])
+            .all(|(p, n)| p.len() == n && p.chars().all(|c| c.is_ascii_hexdigit()))
+    })
 }
 
 /// Every vendor candidate with its source, the winner first.
@@ -123,7 +190,7 @@ pub fn vendors(rec: Option<&Record>, mac: &Mac, oui: Option<&Oui>) -> Vec<(&'sta
         out.push(("ssdp", v));
     }
     if let Some(v) = oui.and_then(|o| o.get(mac)) {
-        out.push(("oui", v.to_owned()));
+        out.push(("oui", short_vendor(v)));
     }
     out
 }
@@ -139,6 +206,11 @@ pub fn kinds(rec: Option<&Record>) -> Vec<(&'static str, &'static str)> {
             if let Some((_, k)) = SERVICES.iter().find(|(n, _)| n == s) {
                 out.push(("mdns", *k));
             }
+        }
+        // the model already decided first place; among services, computer before receiver
+        let from = usize::from(model(rec).is_some());
+        if out.len() > from {
+            out[from..].sort_by_key(|(_, k)| RECEIVER_KINDS.contains(k));
         }
         if let Some(vc) = r.facts.get(&Kind::DhcpVendorClass)
             && let Some((_, k)) = VENDOR_CLASSES.iter().find(|(p, _)| vc.starts_with(p))

@@ -108,13 +108,15 @@ impl luyaz_wifi::Host for ReloadHost {
         let exec = self.exec.clone();
         self.handle
             .block_on(self.handle.spawn(async move {
-                exec.task(async {
-                    let _w = write_lock::acquire().await;
+                // D7：拿不到写锁就不重载
+                write_lock::run(&exec, async {
                     crate::state::ubus("zwrt_wlan", "reload", json!({})).await
                 })
                 .await
+                .map_err(|e| e.to_string())
             }))
             .map_err(|e| e.to_string())?
+            .and_then(|r| r)
     }
 }
 
@@ -279,37 +281,38 @@ impl WifiDev {
         }
         let hot = plan.hot_txpower();
         let (set, vendor_on, guest) = (plan.set_json(), plan.vendor_on, kind == Kind::Guest);
-        let r = exec
-            .task(async move {
-                let _w = write_lock::acquire().await;
-                let mut out = json!({"status": "ok"});
-                if vendor_on {
-                    match crate::control::execute("wifi.set_module", &json!({"enabled": 1})).await {
-                        Outcome::Ok(_) => out["vendor_switch"] = json!("turned_on"),
-                        Outcome::Failed(e) | Outcome::Invalid(e) => {
-                            eprintln!("ops: vendor Wi-Fi switch: {e}; writing the APs anyway");
-                            out["vendor_switch"] = json!("failed");
-                            out["vendor_switch_error"] = json!(e);
-                        }
-                        Outcome::CapabilityDenied(e) => return Err(e.to_string()),
-                        Outcome::NotHandled => {}
+        // D7：拿不到写锁就什么都不写（Wi-Fi 锁已经拿着，lk 随返回放掉）
+        let r = write_lock::run(exec, async move {
+            let mut out = json!({"status": "ok"});
+            if vendor_on {
+                match crate::control::execute("wifi.set_module", &json!({"enabled": 1})).await {
+                    Outcome::Ok(_) => out["vendor_switch"] = json!("turned_on"),
+                    Outcome::Failed(e) | Outcome::Invalid(e) => {
+                        eprintln!("ops: vendor Wi-Fi switch: {e}; writing the APs anyway");
+                        out["vendor_switch"] = json!("failed");
+                        out["vendor_switch_error"] = json!(e);
                     }
+                    Outcome::CapabilityDenied(e) => return Err(e.to_string()),
+                    Outcome::NotHandled => {}
                 }
-                if set.as_object().is_some_and(|s| !s.is_empty()) {
-                    let params = json!({"set": set, "reload": false, "best_effort": guest});
-                    match crate::control::execute("wifi.apply", &params).await {
-                        Outcome::Ok(v) => {
-                            out["committed"] = v["committed"].clone();
-                            out["skipped"] = v["skipped"].clone();
-                        }
-                        Outcome::Failed(e) | Outcome::Invalid(e) => return Err(e),
-                        Outcome::CapabilityDenied(e) => return Err(e.to_string()),
-                        Outcome::NotHandled => return Err("wifi.apply not handled".into()),
+            }
+            if set.as_object().is_some_and(|s| !s.is_empty()) {
+                let params = json!({"set": set, "reload": false, "best_effort": guest});
+                match crate::control::execute("wifi.apply", &params).await {
+                    Outcome::Ok(v) => {
+                        out["committed"] = v["committed"].clone();
+                        out["skipped"] = v["skipped"].clone();
                     }
+                    Outcome::Failed(e) | Outcome::Invalid(e) => return Err(e),
+                    Outcome::CapabilityDenied(e) => return Err(e.to_string()),
+                    Outcome::NotHandled => return Err("wifi.apply not handled".into()),
                 }
-                Ok(out)
-            })
-            .await;
+            }
+            Ok(out)
+        })
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
         crate::state::invalidate_cache();
         exec.mark_immediate(None);
         let mut out = r.map_err(fail)?;

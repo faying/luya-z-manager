@@ -4,7 +4,7 @@
 #
 # 由电脑端 install.sh 调用，不用手动跑：它先把包解到 /data/local/tmp/u60-kit，
 # 再经 ssh 或 adb shell 执行
-#   sh device/install.sh ssh admin devui esim     按给的顺序装这些组件（chill、recover 要单独点名）
+#   sh device/install.sh ssh admin ui esim     按给的顺序装这些组件（chill、recover 要单独点名）
 #   sh device/install.sh status                   只读，打印各组件现状
 #
 # 守则（和项目 CLAUDE.md 一致，不要放宽）：
@@ -85,7 +85,7 @@ rc_add() { # <要加的行> <标记>
 }
 
 # ── 设备脚本：/data/luyaz/scripts + /etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}
-# 和 u60 ship scripts 同一套（luyaz-ship.sh 的 SCRIPTS_FILES/SCRIPTS_INITS）。admin 和 devui 都要用到
+# 和 u60 ship scripts 同一套（luyaz-ship.sh 的 SCRIPTS_FILES/SCRIPTS_INITS）。admin 和 ui 都要用到
 # （核心的 init 也在这里）。执行器 luyaz-ship.sh 和 core-trial.sh 也放在 S。
 # 只装 Luya-Z 布局（核心 /data/luyaz/luyaz-core、状态 /data/luyaz/core、屏幕状态 /data/luyaz/screen）；
 # 更早布局的设备（/data/u60d、/data/u60-uid、/data/u60-ship、/data/plugins/{u60pro-devui,zwrt-datad} 还在）这个装机包不认，要先用旧版装机包升级。
@@ -114,7 +114,7 @@ install_scripts() {
 }
 
 # ── u60 ship 的开机收尾脚本 /data/luyaz/ship/luyaz-recover.sh（touch-ui docs/SHIP.md）──
-# 它不随 u60 ship 更新，换它要单独一步（sh -n + 设备上自检 + 用户同意）。所以 admin/devui
+# 它不随 u60 ship 更新，换它要单独一步（sh -n + 设备上自检 + 用户同意）。所以 admin/ui
 # 只在设备上还没有时放一份（先 sh -n、selftest）；已有且不同就不换，提示用 recover 组件。
 # rc.local 里调用它的那一行只由 recover 组件加（不在全套里，要单独点名，算用户同意）。
 recover_check() { # <file>：sh -n + selftest 都过 = 0
@@ -160,7 +160,7 @@ do_recover() {
     log "rc.local 加入（在服务启动行之前）: $line"
 }
 
-# 设备上有没结束的 u60 ship 事务时，不装会停/换我们组件的东西（admin、devui、recover）：
+# 设备上有没结束的 u60 ship 事务时，不装会停/换我们组件的东西（admin、ui、recover）：
 # 执行器、guard 的兜底和开机收尾都按事务日志里的旧版 md5 干活，装机包插进来会把它们搞乱。
 # 读事务日志判断；读不懂（v 不是 1 或 2、没有 end=1、阶段不认识）也算有事务。
 # v=2 是 web、guard 的事务日志（目录、/etc 下的文件；touch-ui docs/SHIP.md），阶段的规则和 v=1 一样。
@@ -233,7 +233,7 @@ owners_stop() {
 }
 
 # 起哨兵，等它把刚装的界面放上屏：哨兵在 procd 下、心跳说 ours、界面进程的 /proc/<pid>/exe 就是刚装的。
-# 最多 60 秒；没确认只提醒，之后 do_devui 照旧检查界面进程在不在。
+# 最多 60 秒；没确认只提醒，之后 do_ui 照旧检查界面进程在不在。
 sentinel_start() { # <界面程序>
     _um=$(md5sum <"$1" | cut -d' ' -f1)
     # 这是一次有人主动做的安装，不是崩溃：清掉启动计数（哨兵的 /data/luyaz/screen）。否则 10 分钟内装两三次，
@@ -338,7 +338,7 @@ fota_off() {
 }
 
 # ── 高级后台：luyaz-web（:9090 网页，数据和写操作都经核心 127.0.0.1:9460）───────────
-# 只连本机 /login，不碰核心：全套里 admin 在 devui（装核心）之前。
+# 只连本机 /login，不碰核心：全套里 admin 在 ui（装核心）之前。
 WEB_ENV=/data/luyaz/web.env
 LW=/data/luyaz
 web_code() { # <curl 参数…> → HTTP 状态码（连不上 = 000）
@@ -405,13 +405,13 @@ do_admin() {
     [ "$(web_code http://127.0.0.1:9090/login)" = 200 ] || die "管理网页打不开（http://127.0.0.1:9090/login），看 /tmp/luyaz-web.log"
     web_verify || die "后台鉴权检查没过（见上）——不要让设备带着开放的后台运行"
     log "高级后台: luyaz-web 已启动（:9090，procd 监督，鉴权三项已验证）"
-    # Wi-Fi 兜底看门狗和告警归哨兵，随 devui 装
+    # Wi-Fi 兜底看门狗和告警归哨兵，随 ui 装
     kit_record lweb
 }
 
-# ── devui 触屏界面 + 核心 luyaz-core + 哨兵 ──────────────────────────────
-do_devui() {
-    # the program, its fonts, devui.conf, the logos, the boot trace and the vendor UI's backup
+# ── ui 触屏界面 + 核心 luyaz-core + 哨兵 ──────────────────────────────
+do_ui() {
+    # the program, its fonts, ui.conf, the logos, the boot trace and the vendor UI's backup
     UI=/data/luyaz/ui
     mkdir -p "$UI"
     [ -f "$P/luyaz-sentinel" ] || die "包里没有 luyaz-sentinel（装机包太旧？）"
@@ -423,35 +423,35 @@ do_devui() {
     [ -x /etc/init.d/luyaz-core ] && /etc/init.d/luyaz-core stop >/dev/null 2>&1
     killall -9 luyaz-ui luyaz-core 2>/dev/null
     sleep 1
-    put "$P/devui/luyaz-ui" "$UI/luyaz-ui" 755
+    put "$P/ui/luyaz-ui" "$UI/luyaz-ui" 755
     mkdir -p /data/luyaz
     put "$P/luyaz-sentinel" /data/luyaz/luyaz-sentinel 755
-    put "$P/devui/luyaz-core" /data/luyaz/luyaz-core 755
+    put "$P/ui/luyaz-core" /data/luyaz/luyaz-core 755
     # 已连设备识别的解析组件：包里有才装，整个目录换新（只有这一个组件，其他策略用内置实现）；
     # 没有时核心照常跑，识别关着
-    if [ -f "$P/devui/plugins/plugins.json" ]; then
+    if [ -f "$P/ui/plugins/plugins.json" ]; then
         _pd=/data/luyaz/core/plugins
         mkdir -p /data/luyaz/core
         rm -rf "$_pd.new"
-        { mkdir -p "$_pd.new" && cp "$P"/devui/plugins/* "$_pd.new/"; } || die "写入 $_pd 失败"
+        { mkdir -p "$_pd.new" && cp "$P"/ui/plugins/* "$_pd.new/"; } || die "写入 $_pd 失败"
         chown -R 0:0 "$_pd.new" 2>/dev/null
         chmod 700 "$_pd.new"; chmod 600 "$_pd.new"/*
         { rm -rf "$_pd" && mv "$_pd.new" "$_pd"; } || die "替换 $_pd 失败"
     fi
     # OUI 厂商表：包里有才装（公开构建没有）
-    if [ -f "$P/devui/lanid/oui.tsv" ]; then
+    if [ -f "$P/ui/lanid/oui.tsv" ]; then
         mkdir -p /data/luyaz/lanid
-        put "$P/devui/lanid/oui.tsv" /data/luyaz/lanid/oui.tsv 644
+        put "$P/ui/lanid/oui.tsv" /data/luyaz/lanid/oui.tsv 644
     fi
     # 数字字体（Nunito，OFL）：装机包里有才装；没有时触屏退回 /usr/ui/fonts/Roboto.ttf
-    if [ -d "$P/devui/fonts" ]; then
+    if [ -d "$P/ui/fonts" ]; then
         mkdir -p "$UI/fonts"
-        for f in "$P"/devui/fonts/*; do put "$f" "$UI/fonts/$(basename "$f")" 644; done
+        for f in "$P"/ui/fonts/*; do put "$f" "$UI/fonts/$(basename "$f")" 644; done
     fi
     # 首页运营商 logo：装机包里有才装；没有时首页不显示 logo
-    if [ -d "$P/devui/operator-logos" ]; then
+    if [ -d "$P/ui/operator-logos" ]; then
         mkdir -p "$UI/operator-logos"
-        for f in "$P"/devui/operator-logos/*.png; do put "$f" "$UI/operator-logos/$(basename "$f")" 644; done
+        for f in "$P"/ui/operator-logos/*.png; do put "$f" "$UI/operator-logos/$(basename "$f")" 644; done
     fi
 
     # 原厂 zte_topsw_devui 做开机早期的屏幕/触摸初始化：只 start，绝不 enable/disable
@@ -471,12 +471,12 @@ do_devui() {
         pidof luyaz-ui >/dev/null && pidof luyaz-core >/dev/null && break
         sleep 1; i=$((i + 1))
     done
-    pidof luyaz-ui >/dev/null || die "devui 没起来，看 /tmp/luyaz-ui.log 和 /tmp/luyaz-sentinel.log"
+    pidof luyaz-ui >/dev/null || die "ui 没起来，看 /tmp/luyaz-ui.log 和 /tmp/luyaz-sentinel.log"
     [ "$(pidof luyaz-ui | wc -w)" -le 1 ] || warn "有不止一个触屏界面在跑"
     svc_running luyaz-sentinel || warn "哨兵没在 procd 下运行，看 /tmp/luyaz-sentinel.log 和 logread"
     pidof luyaz-core >/dev/null || warn "核心 luyaz-core 没起来，屏幕会没有数据，看 /tmp/luyaz-core.log 和 logread"
     [ "$(pidof luyaz-core | wc -w)" -le 1 ] || warn "有不止一个核心在跑"
-    log "devui: 屏幕界面已接管"
+    log "ui: 屏幕界面已接管"
     kit_record touch
     kit_record sentinel
     kit_record core
@@ -488,7 +488,9 @@ do_devui() {
 do_esim() {
     put_tree "$P/esim.tgz" /data/esim
     # 装完顺手读一次卡：插的是普通 SIM 时读不到，不算失败
-    _eid=$(/data/esim/lpac.sh chip info 2>&1 | sed -n 's/.*"eidValue":"\([0-9A-Fa-f]*\)".*/\1/p')
+    # 和核心共用一把卡锁（luyaz-esim CARD_FLOCK），免得两边同时动卡；没有 flock 就直接读
+    _flock=; command -v flock >/dev/null 2>&1 && _flock="flock -w 60 /var/run/luyaz-esim.lock"
+    _eid=$($_flock /data/esim/lpac.sh chip info 2>&1 | sed -n 's/.*"eidValue":"\([0-9A-Fa-f]*\)".*/\1/p')
     if [ -z "$_eid" ]; then
         log "eSIM: 组件已装，但没读到 eUICC 卡（现在插的是普通 SIM 的话这是正常的）"
     else
@@ -607,7 +609,7 @@ do_status() {
     p "固件" "${_fw:-未知}"
     p "SSH" "$(netstat -ltn 2>/dev/null | grep -q ':2222 ' && echo '运行中 (:2222)' || echo 未运行)"
     p "高级后台" "$(pidof luyaz-web >/dev/null && echo '运行中 (:9090)' || echo 未运行)$(svc luyaz-web)"
-    p "devui" "$(pidof luyaz-ui >/dev/null && echo 运行中 || echo 未运行)$([ -f "$SCREEN_DIR/gave-up" ] && echo '，已放弃重试（长按右下角 3 秒恢复）')"
+    p "ui" "$(pidof luyaz-ui >/dev/null && echo 运行中 || echo 未运行)$([ -f "$SCREEN_DIR/gave-up" ] && echo '，已放弃重试（长按右下角 3 秒恢复）')"
     p "哨兵" "$(pidof luyaz-sentinel >/dev/null && echo 运行中 || echo 未运行)$(svc luyaz-sentinel)$(h=$(cut -d' ' -f3 /tmp/luyaz-sentinel.hb 2>/dev/null) && [ -n "$h" ] && echo "，屏幕：$h")"
     p "核心" "$(pidof luyaz-core >/dev/null && echo 运行中 || echo 未运行)$(svc luyaz-core)"
     p "eSIM 组件" "$(yes_no '[ -x /data/esim/lpac ]' 已装 未装)"
@@ -622,10 +624,10 @@ do_status() {
 # 测试（onboard/test/kit-rc.sh）只要上面的函数
 [ -n "${KIT_LIB_ONLY:-}" ] && return 0
 
-[ $# -gt 0 ] || die "用法: sh device/install.sh {ssh|admin|devui|esim|chill|recover|status}..."
+[ $# -gt 0 ] || die "用法: sh device/install.sh {ssh|admin|ui|esim|chill|recover|status}..."
 COMPONENTS="$*"
 case " $COMPONENTS " in
-    *" admin "* | *" devui "* | *" recover "*)
+    *" admin "* | *" ui "* | *" recover "*)
         busy=$(ship_busy)
         [ -n "$busy" ] && die "$busy：先等它结束（电脑上 tools/luyaz status 看；sh $S/luyaz-ship.sh status），这次什么都没装"
         ;;
@@ -634,7 +636,7 @@ for c in "$@"; do
     case "$c" in
         ssh)     do_ssh ;;
         admin)   do_admin ;;
-        devui)   do_devui ;;
+        ui)   do_ui ;;
         esim)    do_esim ;;
         recover) do_recover ;;
         chill)   do_chill ;;

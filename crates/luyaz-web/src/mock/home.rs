@@ -65,6 +65,17 @@ pub(crate) fn public_extra(d: &mut Value) {
     } else {
         Value::Null
     };
+    // network.health as the core builds it for the same finding (home-exit held under it)
+    d["network"]["health"] = if h.finding {
+        json!({"state": "down", "layers": {"bearer": "up", "finding": "data"}, "finding": "data.no_internet",
+               "paused": [{"who": "home-exit", "reason": "lower", "layer": "data", "since": 1_760_000_000_u64, "released": false}],
+               "next": "wait", "say": {"id": "network.data", "label": "数据没连上", "label_en": "No data",
+               "detail": "已注册，但数据连接没建立，已暂停代理重连。",
+               "detail_en": "Registered, but the data connection is down, proxy reconnects paused."}})
+    } else {
+        json!({"state": "ok", "layers": {"bearer": "up", "finding": null}, "finding": null,
+               "paused": [], "next": null, "say": null})
+    };
     d["scenario"] = match h.scenario.as_str() {
         "none" => json!({"configured": false, "enabled": true, "current": null, "pin": null}),
         s => json!({"configured": true, "enabled": s != "off", "current": "abroad", "name": "国外",

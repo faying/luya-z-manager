@@ -34,8 +34,7 @@ not by a script, not by a UI toggle, not "just to test".
 - **Filesystem**: Read-only rootfs, writable overlay at `/zteoverlay/`, writable `/data`
 
 ## Architecture
-One Cargo workspace (Phase 10, 2026-10-15; zte-agent, u60-guard, u60-uid,
-Next.js `web/`, supervise.sh and the C touch UI are retired — C UI in tag `legacy-c-touch-ui`):
+One Cargo workspace:
 - `crates/luyaz-core` — the core: `/data/luyaz/luyaz-core`, `/etc/init.d/luyaz-core`,
   state `/data/luyaz/core/`, API on `:9460`; `<core> doctor` is the health check
   (`/data/luyaz/scripts/doctor.sh` is a shim over it)

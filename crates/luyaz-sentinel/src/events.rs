@@ -1,6 +1,6 @@
-//! The sentinel's events (u60-sentinel.md §6, D21, C-R9): every alert the sentinel raises — a
+//! The sentinel's events (u60-sentinel.md §6, D21): every alert the sentinel raises — a
 //! hand-back to the vendor UI, a crash of our UI, a Wi-Fi takeover — gets an id (the boot id's
-//! first 8 hex digits, `-`, a sequence number kept in `/data/luyaz/screen/events.seq` (Phase 10 R4; was `/data/u60-uid/`) across sentinel
+//! first 8 hex digits, `-`, a sequence number kept in `/data/luyaz/screen/events.seq` across sentinel
 //! restarts), is written to `/data/luyaz/screen/events` (synced) before anything else, and then:
 //!
 //! 1. POSTed to the core (`/v2/sentinel/event`), which queues it as an alert once per id;

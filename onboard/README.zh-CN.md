@@ -10,7 +10,7 @@
 |---|---|
 | **SSH** | 用 `ssh -p 2222 root@192.168.0.1` 凭密钥登录（密码登录一直关着），重启后照样能连 |
 | **高级后台** | 浏览器开 `http://192.168.0.1:9090/`：锁频锁小区、短信、APN、防火墙、Wi-Fi 等 |
-| **devui 触屏界面** | 前面板换成新界面，按任务分 5 个标签（首页 · 蜂窝 · Wi-Fi · 出口 · 系统）：信号结论和载波、Wi-Fi 和连着的设备、CHILL/Tailscale 出口、eSIM 切换 |
+| **ui 触屏界面** | 前面板换成新界面，按任务分 5 个标签（首页 · 蜂窝 · Wi-Fi · 出口 · 系统）：信号结论和载波、Wi-Fi 和连着的设备、CHILL/Tailscale 出口、eSIM 切换 |
 | **eSIM** | 插可插拔 eUICC 卡（5ber、eSTK.me 之类）后，在后台下载、切换、删除 profile；屏幕上也能切 |
 | **CHILL**（可选，点名才装） | 设备上的透明代理（mihomo），带 zashboard 面板，按规则分流；订阅地址要你自己的 |
 
@@ -21,7 +21,7 @@
 
 ## 需要准备
 
-1. **固件 B27 或更老。** 版本号在网页后台首页或「设备信息」里，结尾类似 `…MU5250V1.0.0B27`。新固件拿掉了装机包开 ADB 用的接口（`zwrt_bsp.usb set`：CN B31 上没有，据报 B28 起就没了），装机包在那上面进不去。**装之前别升级。**
+1. **固件 B27～B31。** 版本号在网页后台首页或「设备信息」里，结尾类似 `…MU5250V1.0.0B31`。B27 及更老，装机包经 USB 调试（ADB）开 SSH；B28 起装机包开 ADB 用的接口（`zwrt_bsp.usb set`）没了，要先自己开好 SSH（见 [GETTING-STARTED](../docs/GETTING-STARTED.zh-CN.md) 第 2 节），之后装机包照常用。B31 之后的版本没测过：**装之前别升级。**
 2. **路由器管理密码**，也就是在 `http://192.168.0.1` 登录用的那个。
 3. 一根**能传数据的 USB-C 线**。有些线只能充电。
 4. 电脑上有 **adb**：
@@ -64,7 +64,7 @@ claude
 
 ```sh
 ./install.sh ssh               # 只开 ADB 并装上重启不丢的 SSH
-./install.sh ssh admin devui   # 除了 eSIM 都装
+./install.sh ssh admin ui   # 除了 eSIM 都装
 ./install.sh chill             # CHILL 代理（不在默认组件里；第一次装完不启动，见「日常用法」）
 ./install.sh recover           # u60 ship 的开机收尾：在设备上自检通过后放上 /data/luyaz/ship/luyaz-recover.sh，
                                #   并在 rc.local 的各服务行前面加一行调用它。
@@ -78,7 +78,7 @@ claude
 ./install.sh reboot            # 重启一次，确认各组件都能自己起来
 ```
 
-以后要更新或重装某个组件，解开新的装机包跑 `./install.sh admin`（或 `devui` / `esim`）即可，走 SSH，不用插线。
+以后要更新或重装某个组件，解开新的装机包跑 `./install.sh admin`（或 `ui` / `esim`）即可，走 SSH，不用插线。
 
 U60 不在默认地址时：`GATEWAY=192.168.x.1 ./install.sh`。
 
@@ -87,8 +87,8 @@ U60 不在默认地址时：`GATEWAY=192.168.x.1 ./install.sh`。
 东西全放在 `/data`，升级固件不会清掉它。开机自启只是 `/etc/rc.local` 里的几行，原厂服务一个没改。
 
 - 核心 luyaz-core、高级后台 luyaz-web、哨兵 luyaz-sentinel 都在 procd 下运行：崩了会被拉起，并留一条告警（短信通知在后台「系统 → 告警」里开）。
-- `admin` 只装 luyaz-web。`devui` 装触屏界面、luyaz-core 和 luyaz-sentinel；`rc.local` 里 `/etc/init.d/luyaz-core start` 后面紧跟 `/etc/init.d/luyaz-sentinel start`。起哨兵后脚本最多等 60 秒，确认三件事：哨兵在 procd 下运行、心跳显示 `ours`、正在运行的触屏界面就是刚装的那个文件。
-- `admin` 和 `devui` 都会把装了什么（装机包日期、提交号）记进设备清单 `/data/luyaz/ship/manifest.jsonl`，每个组件一行（lweb；touch、sentinel、core），`doctor` 拿它和文件核对。
+- `admin` 只装 luyaz-web。`ui` 装触屏界面、luyaz-core 和 luyaz-sentinel；`rc.local` 里 `/etc/init.d/luyaz-core start` 后面紧跟 `/etc/init.d/luyaz-sentinel start`。起哨兵后脚本最多等 60 秒，确认三件事：哨兵在 procd 下运行、心跳显示 `ours`、正在运行的触屏界面就是刚装的那个文件。
+- `admin` 和 `ui` 都会把装了什么（装机包日期、提交号）记进设备清单 `/data/luyaz/ship/manifest.jsonl`，每个组件一行（lweb；touch、sentinel、core），`doctor` 拿它和文件核对。
 - 只支持现在的目录布局。设备上还有 `/data/u60d`、`/data/u60-uid`、`/data/u60-ship`、`/data/plugins/u60pro-devui` 或 `/data/plugins/zwrt-datad` 时拒绝安装，先用旧版装机包升级。
 
 | 路径 | 是什么 |

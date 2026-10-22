@@ -71,6 +71,9 @@ pub struct Slot {
     pub mcc: String,
     pub mnc: String,
     pub tail: String,
+    /// 本地 / 漫游到X in the core's words ("" unknown)
+    pub place: String,
+    pub place_en: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -115,6 +118,8 @@ pub fn parse(d: &Value) -> Option<Dual> {
                         mcc: s(v, "mcc"),
                         mnc: s(v, "mnc"),
                         tail: s(v, "iccid_tail"),
+                        place: s(v, "place"),
+                        place_en: s(v, "place_en"),
                     })
                     .collect()
             })
@@ -202,11 +207,15 @@ pub fn view(st: &St, l: Lang) -> View {
                         (_, true, _) => l.pick("On · not ready", "已启用 · 未就绪"),
                     }
                     .into(),
-                    carrier: match (s.operator.is_empty(), s.mcc.is_empty()) {
-                        (true, true) => dash(),
-                        (false, true) => s.operator.clone(),
-                        (true, false) => format!("{}-{}", s.mcc, s.mnc),
-                        (false, false) => format!("{} · {}-{}", s.operator, s.mcc, s.mnc),
+                    carrier: {
+                        let c = match (s.operator.is_empty(), s.mcc.is_empty()) {
+                            (true, true) => dash(),
+                            (false, true) => s.operator.clone(),
+                            (true, false) => format!("{}-{}", s.mcc, s.mnc),
+                            (false, false) => format!("{} · {}-{}", s.operator, s.mcc, s.mnc),
+                        };
+                        let place = if matches!(l, Lang::En) { &s.place_en } else { &s.place };
+                        if place.is_empty() { c } else { format!("{c} · {place}") }
                     },
                     tail: if s.tail.is_empty() { dash() } else { format!("…{}", s.tail) },
                 })

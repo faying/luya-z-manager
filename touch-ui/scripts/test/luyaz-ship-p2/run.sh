@@ -649,7 +649,7 @@ check "$CASE: exit 1 at once, says the sentinel is down" '[ $RC = 1 ] && grep -q
 teardown
 
 setup
-CASE="record-kit touch (the install kit's do_devui)"
+CASE="record-kit touch (the install kit's do_ui)"
 sh "$SHIP" record-kit touch 20261001 abc1234 1 1790000000 >"$T/out" 2>&1
 RC=$?
 check "$CASE: touch: luyaz-ui only" "[ \$RC = 0 ] && grep -q '\"comp\":\"touch\".*\"files\":\[{\"path\":\"$UD/luyaz-ui\",\"md5\":\"$UI_OLD\"}\]' '$U60S_MANIFEST'"

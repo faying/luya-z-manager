@@ -85,6 +85,15 @@ pub fn evidence(
     }
 }
 
+/// A SIM switch in progress (`sim_identity` phase leaving/changed) is an expected outage: no
+/// reconnect proposal while the new card comes up (TODOS P1, 10-22).
+pub fn sim_switching(e: &mut Evidence, phase: crate::sim_identity::Phase) {
+    use crate::sim_identity::Phase;
+    if matches!(phase, Phase::Leaving | Phase::Changed) {
+        e.expected_outage = Some(true);
+    }
+}
+
 /// What a proposal binds to, gathered by the caller.
 pub struct Binding<'a> {
     pub finding_epoch: &'a str,
@@ -312,7 +321,7 @@ pub fn after_round(
     let down = findings.down_secs(Some(r), boot.as_ref());
     let same_sim =
         super::finding::sampling::Readings::capture(hub).map(|c| c.connection.iccid == iccid);
-    let e = evidence(
+    let mut e = evidence(
         &i.premises(),
         i.registration(),
         same_sim,
@@ -320,6 +329,11 @@ pub fn after_round(
         age,
         rmnet_up(),
     );
+    let phase = crate::sim_identity::global()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .phase();
+    sim_switching(&mut e, phase);
     let advice = replay(&e);
     if advice.action().is_none() {
         return prod.clear();

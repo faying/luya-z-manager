@@ -118,6 +118,16 @@ impl Compat {
         .await
     }
 
+    /// The bearer from `/proc` (under the test root); `None` when it cannot be read.
+    pub(crate) fn bearer(&self) -> Option<bool> {
+        crate::ops::reconnect::proc_bearer(&self.root)
+    }
+
+    /// The data call is really up ([`ni::data_up`]): B31's `connect_status` alone is not enough.
+    async fn data_up(&self) -> bool {
+        ni::data_up(&self.wwan().await, self.bearer())
+    }
+
     pub(super) fn writer(&self, source: &'static str) -> Writer {
         Writer::new(self.src.control.clone(), source)
     }
@@ -269,7 +279,7 @@ async fn guard_run(c: &Compat, w: &Writer, target: &str, started: i64, before: &
                 .await,
         );
         let serving = ni::serving_plmn(&c.netinfo().await);
-        let connected = ni::data_connected(&c.wwan().await);
+        let connected = c.data_up().await;
         if !result.is_empty() {
             c.ops().guard.last_result = result.clone();
         }
@@ -409,7 +419,7 @@ async fn ensure_data_up(c: &Compat, w: &Writer) -> bool {
     let wait = |secs: u64| async move {
         let mut streak = 0;
         for _ in 0..secs / 2 {
-            if ni::data_connected(&c.wwan().await) {
+            if c.data_up().await {
                 streak += 1;
                 if streak >= 2 {
                     return true;
@@ -433,7 +443,7 @@ async fn ensure_data_up(c: &Compat, w: &Writer) -> bool {
         }
         c.clock.sleep(pause.as_secs()).await;
         held += pause.as_secs();
-        if ni::data_connected(&c.wwan().await) {
+        if c.data_up().await {
             return true;
         }
         sent = w.send("cellular.redial", &json!({})).await.into_result();
@@ -782,6 +792,7 @@ pub async fn apn_use(State(c): State<Compat>, req: axum::extract::Request) -> Re
         return err(409, "上一次 APN 切换还没做完");
     }
     c.net.apn_error("");
+    c.net.apn_changed();
     let op_id = format!("apn-{:016x}", rand::random::<u64>());
     *c.net.apn_current.lock().unwrap_or_else(|e| e.into_inner()) = op_id.clone();
     let c2 = c.clone();
@@ -826,6 +837,7 @@ pub async fn apn_use(State(c): State<Compat>, req: axum::extract::Request) -> Re
         let trial = sent.as_ref().is_ok_and(|(t, _)| *t);
         c2.net.apn_trial.store(trial, Ordering::SeqCst);
         c2.net.apn_switching.store(false, Ordering::SeqCst);
+        c2.net.apn_changed();
         let current = |c: &Compat| *c.net.apn_current.lock().unwrap_or_else(|e| e.into_inner()) == op;
         if let Ok((_, pick)) = sent {
             // O4: the pick is the card's only once the switch came through

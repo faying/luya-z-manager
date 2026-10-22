@@ -15,7 +15,7 @@
 <!--leaf-->
 {{ v.status|safe }}
 <!--leaf-->
-<div id="hm-why" class="hm-o1 hm-why"{% if !v.why && v.finding.is_none() %} hidden{% endif %}>{% if let Some(f) = v.finding %}<span class="nd-mark nd-mark--bad"><span class="nd-mark__sym" aria-hidden="true">■</span><span>{{ f }}</span></span> <a class="t-link" href="/tools/diagnose">{{ v.l.pick("See evidence →", "看证据 →") }}</a>{% elif v.why %}<a class="t-link" href="/tools/diagnose?start=1">{{ v.l.pick("Diagnose →", "查原因 →") }}</a>{% endif %}</div>
+<div id="hm-why" class="hm-o1 hm-why"{% if !v.why && v.finding.is_none() %} hidden{% endif %}>{% if let Some(f) = v.finding %}<span class="nd-mark nd-mark--{{ f.mark }}"><span class="nd-mark__sym" aria-hidden="true">{% if f.mark == "ok" %}●{% else %}■{% endif %}</span><span>{{ f.text }}</span></span>{% if let Some((href, label)) = f.link %} <a class="t-link" href="{{ href }}">{{ label }}</a>{% endif %}{% elif v.why %}<a class="t-link" href="/tools/diagnose?start=1">{{ v.l.pick("Diagnose →", "查原因 →") }}</a>{% endif %}</div>
 <!--leaf-->
 <i id="hm-fl-ro" class="hm-flag" hidden{% if v.ro_stale %} data-stale{% endif %}></i>
 <!--leaf-->

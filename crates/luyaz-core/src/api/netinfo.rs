@@ -67,6 +67,10 @@ pub struct NetCache {
     /// the op_id of the latest `apn_use` switch (an older task ending later leaves its state alone)
     pub(super) apn_current: Mutex<String>,
     apn_err: Mutex<String>,
+    /// the last good `zwrt_apn_object` reads (mode, at_cid, auto, manual) and when: each read
+    /// logs about 8 lines to key.log, and the 蜂窝 tab polled them every 5 s, which rolled the
+    /// bearer lines (QCI/AMBR) out of the log within hours (10-22)
+    apn_reads: Mutex<Option<(i64, [Value; 4])>>,
     /// one redial at a time
     pub(super) dial: tokio::sync::Mutex<()>,
 }
@@ -88,7 +92,15 @@ impl NetCache {
     pub(super) fn apn_error(&self, e: &str) {
         *self.apn_err.lock().unwrap_or_else(|e| e.into_inner()) = e.to_string();
     }
+
+    /// Drops the cached APN reads: an APN switch started or ended.
+    pub(super) fn apn_changed(&self) {
+        self.apn_reads.lock().unwrap_or_else(|e| e.into_inner()).take();
+    }
 }
+
+/// How long the APN reads are reused; a switch drops them at once.
+const APN_READS_TTL: i64 = 60;
 
 /// `iw` on every AP interface (the agent's `wifi_stations`): bounded per call and single-flight
 /// (resilience audit R6, see `luyaz_api::netinfo::iw`). Blocking.
@@ -239,10 +251,10 @@ fn scenes(c: &Compat) -> Value {
     )
 }
 
-/// The `apn` block (the agent's `apn_read`); nothing switches here yet (8d).
-async fn apn(c: &Compat) -> Value {
+/// The four `zwrt_apn_object` reads.
+async fn read_apn(c: &Compat) -> Result<(Value, Value, Value, Value), String> {
     let call = |m: &'static str, a: Value| (c.src.ubus)("zwrt_apn_object", m, a);
-    let reads = match call("get_apn_mode", json!({})).await {
+    match call("get_apn_mode", json!({})).await {
         Err(e) => Err(e),
         Ok(mode) => Ok((
             mode,
@@ -256,6 +268,28 @@ async fn apn(c: &Compat) -> Value {
                 .await
                 .unwrap_or(Value::Null),
         )),
+    }
+}
+
+/// The `apn` block (the agent's `apn_read`); nothing switches here yet (8d).
+async fn apn(c: &Compat) -> Value {
+    let switching = c.net.apn_switching.load(Ordering::SeqCst);
+    let t = now();
+    let hit = (!switching)
+        .then(|| c.net.apn_reads.lock().unwrap_or_else(|e| e.into_inner()).clone())
+        .flatten()
+        .filter(|(at, _)| t - *at >= 0 && t - *at < APN_READS_TTL)
+        .map(|(_, r)| r);
+    let reads = match hit {
+        Some([mode, at, auto, manu]) => Ok((mode, at, auto, manu)),
+        None => {
+            let reads = read_apn(c).await;
+            if let Ok((m, a, au, ma)) = &reads {
+                *c.net.apn_reads.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some((t, [m.clone(), a.clone(), au.clone(), ma.clone()]));
+            }
+            reads
+        }
     };
     let iccid = match c
         .src

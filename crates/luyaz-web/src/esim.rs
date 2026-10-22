@@ -4,8 +4,11 @@
 //!
 //! Where each value comes from: the agent's `/api/esim/*` with the tab's own session (agent.rs asks
 //! u60d first; it answers "not mine" until eSIM is handed over), polled like the old page: the
-//! chip (`/api/esim/status`) on load, Retry and after a write; profiles every 10 s; notifications
-//! every 30 s. Every one of those runs lpac against the card. While a job runs the agent answers
+//! chip (`/api/esim/status`) on load, Retry and after a write; profiles and notifications only
+//! when something may have changed: the tab's stream opened (it closes while the tab is hidden),
+//! Refresh/Retry or a write ended, the `sim` block's epoch/phase moved, and every 10 s while a job
+//! runs or the core serves its last list, and for `SETTLE_WINDOW` after. Every one of those runs
+//! lpac against the card. While a job runs the agent answers
 //! profiles with `busy:true, profiles:null`: the last list stays, and `/api/esim/job` (no card
 //! access) says what the card is doing.
 //!
@@ -51,16 +54,20 @@ use crate::write;
 
 const PATH: &str = "/router/esim";
 const PROFILES_EVERY: Duration = Duration::from_secs(10);
-const NOTIF_EVERY: Duration = Duration::from_secs(30);
+/// After the card stops reading busy/settling: keep re-reading this long
+/// (`luyaz_esim::LIST_STALE_WINDOW`, 30 s, plus a poll).
+const SETTLE_WINDOW: Duration = Duration::from_secs(40);
 /// A chip read that failed is tried again this often (the old page's SWR retried too).
 const CHIP_RETRY: Duration = Duration::from_secs(30);
 const JOB_EVERY: Duration = Duration::from_millis(1500);
 const NOTIF_JOB_EVERY: Duration = Duration::from_secs(2);
 const JOB_LIMIT: Duration = Duration::from_secs(120);
-/// A switch is checked card → identity → data in the engine (`luyaz-esim`: enable 30 s,
-/// simreset 15 s, mdm restart 30 s, `IDENTITY_WAIT` 45 s, `DATA_WAIT` 60 s, plus the reads):
-/// must stay above their sum, or a slow-but-fine switch reads as timed out.
+/// A switch is checked card → identity → data in the engine. Its job carries `deadline_s`
+/// (`luyaz_esim::SWITCH_DEADLINE`: busy retries, enable, resync, identity, data, notifications)
+/// and the wait follows it; this is the floor, for a core that predates the field.
 const SWITCH_LIMIT: Duration = Duration::from_secs(240);
+/// Past the job's own `deadline_s`: the polls' slack.
+const DEADLINE_SLACK: Duration = Duration::from_secs(15);
 /// Downloads go over the mobile link to the SM-DP+ and can take minutes.
 const DOWNLOAD_LIMIT: Duration = Duration::from_secs(600);
 /// A switch re-attaches the modem (~40 s); the list may read busy meanwhile.
@@ -250,7 +257,24 @@ pub struct Card {
     pub settling: Option<u64>,
     /// The running job's kind while busy ("switch", "download", …).
     pub job: Option<String>,
+    /// The core's shared word (`say`, `say_en`; core 1.32.0 on) for the running switch job
+    pub job_say: Option<(String, String)>,
+    /// The same for a SIM identity transition, from the `sim` block (any card change)
+    pub sim_say: Option<(String, String)>,
     pub notifs: Option<Vec<Notif>>,
+}
+
+/// `say` / `say_en` of a job or the `sim` block; None when empty or absent (older core).
+pub fn say_of(v: &Value) -> Option<(String, String)> {
+    let zh = v["say"].as_str().filter(|s| !s.is_empty())?;
+    Some((zh.to_owned(), v["say_en"].as_str().unwrap_or(zh).to_owned()))
+}
+
+fn said(s: &Option<(String, String)>, l: Lang) -> Option<String> {
+    s.as_ref().map(|(zh, en)| match l {
+        Lang::En => en.clone(),
+        Lang::Zh => zh.clone(),
+    })
 }
 
 impl Card {
@@ -421,7 +445,7 @@ pub fn view(c: &Card, reboot: bool, l: Lang) -> View {
             reason = Some(reboot_banner(l).into());
         }
         (Some(_), _) if c.busy => {
-            state = job_word(c.job.as_deref(), l).into();
+            state = said(&c.job_say, l).unwrap_or_else(|| job_word(c.job.as_deref(), l).into());
             reason = Some(
                 l.pick(
                     "The card handles one operation at a time; the other actions wait until this one ends.",
@@ -490,6 +514,15 @@ pub fn view(c: &Card, reboot: bool, l: Lang) -> View {
             }
             Lang::Zh => format!("卡片还在稳定——这是 {age} 秒前的列表，正在更新…"),
         });
+        meta_data = false;
+    }
+    // a SIM identity transition (also the firmware's own slot switch): the core's shared word
+    if let Some(w) = said(&c.sim_say, l)
+        && installed
+        && !c.busy
+        && !reboot
+    {
+        meta = Some(w);
         meta_data = false;
     }
     if installed && stale && !c.busy && !reboot {
@@ -609,8 +642,20 @@ pub struct Poll {
     seen_gen: u64,
     first: bool,
     next_chip: Option<Instant>,
-    next_prof: Instant,
-    next_notif: Instant,
+    /// The next profile read; None = only on a trigger (see the module doc).
+    next_prof: Option<Instant>,
+    /// Re-read until then (the card was busy or settling).
+    settle_until: Option<Instant>,
+    /// The `sim` block's (epoch, phase) the last read saw.
+    seen_sim: Option<(u64, String)>,
+}
+
+/// The `sim` block's identity epoch and phase (u60d stamps them every round).
+fn sim_mark(app: &Shared) -> Option<(u64, String)> {
+    app.hub.read(|st| {
+        let d = &st.blocks.get("sim")?.data;
+        Some((d["epoch"].as_u64()?, d["phase"].as_str().unwrap_or("").to_owned()))
+    })
 }
 
 impl Poll {
@@ -630,13 +675,21 @@ impl Poll {
     async fn list(&mut self, app: &Shared) {
         self.card.take_list(read_list(app, &self.who).await);
         if self.card.busy {
-            self.card.job = crate::agent::get(app, &self.who, "/api/esim/job")
+            let j = crate::agent::get(app, &self.who, "/api/esim/job")
                 .await
                 .ok()
-                .filter(|j| j["status"] == "running")
-                .and_then(|j| text(&j["kind"]));
+                .filter(|j| j["status"] == "running");
+            self.card.job = j.as_ref().and_then(|j| text(&j["kind"]));
+            self.card.job_say = j.as_ref().and_then(say_of);
         }
-        self.next_prof = Instant::now() + PROFILES_EVERY;
+        let now = Instant::now();
+        if self.card.busy || self.card.settling.is_some() {
+            self.settle_until = Some(now + SETTLE_WINDOW);
+        }
+        self.next_prof = self
+            .settle_until
+            .filter(|t| now < *t)
+            .map(|_| now + PROFILES_EVERY);
     }
     async fn notifs(&mut self, app: &Shared) {
         // null while a job runs: keep the last list
@@ -645,35 +698,48 @@ impl Poll {
         {
             self.card.notifs = Some(n);
         }
-        self.next_notif = Instant::now() + NOTIF_EVERY;
     }
 }
 
 impl Polled for Poll {
+    fn watches(&self, block: &str) -> bool {
+        block == "sim"
+    }
+
+    /// The card may have changed under us: every tab on this page reads it again.
+    fn render(&mut self, app: &Shared) -> Option<Vec<(String, String)>> {
+        if sim_mark(app) != self.seen_sim {
+            let _ = app.kick.send(PATH);
+        }
+        None
+    }
+
     async fn step(&mut self, app: &Shared) -> (Vec<(String, String)>, Duration) {
         let g = GEN.load(Ordering::Relaxed);
+        let sim = sim_mark(app);
+        let moved = sim != self.seen_sim;
         let all = self.first || g != self.seen_gen;
         self.first = false;
         self.seen_gen = g;
+        self.seen_sim = sim;
+        self.card.sim_say = app
+            .hub
+            .read(|st| st.blocks.get("sim").and_then(|b| say_of(&b.data)));
         let now = Instant::now();
         if all || self.next_chip.is_some_and(|t| now >= t) {
             self.chip(app).await;
         }
-        if self.card.installed() {
-            if all || now >= self.next_prof {
-                self.list(app).await;
-            }
-            if all || now >= self.next_notif {
+        if self.card.installed() && (all || moved || self.next_prof.is_some_and(|t| now >= t)) {
+            self.list(app).await;
+            // null while busy, so only worth asking when the list is real
+            if !self.card.busy {
                 self.notifs(app).await;
             }
         }
-        let mut next = self.next_chip;
-        if self.card.installed() {
-            next = Some(
-                next.map_or(self.next_prof, |t| t.min(self.next_prof))
-                    .min(self.next_notif),
-            );
-        }
+        let next = match (self.next_chip, self.next_prof.filter(|_| self.card.installed())) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         let wait = next.map_or(Duration::from_secs(3600), |t| {
             t.saturating_duration_since(Instant::now())
                 .max(Duration::from_millis(200))
@@ -764,8 +830,8 @@ fn job_clash(l: Lang) -> &'static str {
 
 fn card_busy_note(l: Lang) -> &'static str {
     l.pick(
-        "The card answered “busy” (catBusy) and kept the old profile. Waiting or retrying won't clear it: restart the device (or take the card out and put it back), then switch again.",
-        "卡回了「忙」（catBusy），还是原来的配置。等或重试都清不掉：重启设备（或把卡拔出来再插回去）后再切。",
+        "The card kept answering “busy” (catBusy) through the automatic retries and kept the old profile: restart the device (or take the card out and put it back), then switch again.",
+        "卡一直回「忙」（catBusy），自动重试几分钟后还是原来的配置。重启设备（或把卡拔出来再插回去）后再切。",
     )
 }
 
@@ -881,6 +947,9 @@ pub enum JobEnd {
         /// A switch whose data call did not come back in time (the agent's `reason: "no_data"`):
         /// the card and the modem are on the new profile, no reboot was done.
         no_data: bool,
+        /// The card took the profile but the modem stack never did, and the engine's one
+        /// automatic reboot a day was already used (`reason: "identity_stuck"`).
+        stuck: bool,
     },
     Error {
         message: String,
@@ -890,6 +959,15 @@ pub enum JobEnd {
     /// ended unseen; the readback decides.
     Moved,
     TimedOut,
+}
+
+/// Job `ours`'s `deadline_s`, when it has one.
+pub fn job_deadline(ours: u64, j: &Value) -> Option<Duration> {
+    (j["id"].as_u64()? == ours)
+        .then(|| j["deadline_s"].as_u64())
+        .flatten()
+        .filter(|s| *s > 0)
+        .map(Duration::from_secs)
 }
 
 /// `/api/esim/job` for job `ours`: None = still running.
@@ -905,6 +983,7 @@ pub fn job_end(ours: u64, j: &Value) -> Option<JobEnd> {
         Some("done") => Some(JobEnd::Done {
             rebooting: j["rebooting"].as_bool() == Some(true),
             no_data: j["reason"].as_str() == Some("no_data"),
+            stuck: j["reason"].as_str() == Some("identity_stuck"),
         }),
         Some("error") => Some(JobEnd::Error {
             message: j["message"].as_str().unwrap_or("").to_owned(),
@@ -922,6 +1001,18 @@ pub fn refusal(code: u16, v: &Value, l: Lang) -> write::Outcome {
     write::Outcome::Failed(crate::agent::refused(code, v).text(l))
 }
 
+/// What to do about a job error with a known `reason`.
+fn reason_note(reason: &str, l: Lang) -> Option<&'static str> {
+    match reason {
+        "card_busy" => Some(card_busy_note(l)),
+        "cancelled" => Some(l.pick(
+            "The retries were stopped; the card still has the old profile.",
+            "已停止重试，卡上还是原来的配置。",
+        )),
+        _ => None,
+    }
+}
+
 /// A job that ended in error: its message, and what to do about it.
 pub fn job_failed(message: &str, reason: &str, l: Lang) -> write::Outcome {
     let m = if message.is_empty() {
@@ -929,8 +1020,8 @@ pub fn job_failed(message: &str, reason: &str, l: Lang) -> write::Outcome {
     } else {
         message.to_owned()
     };
-    let extra = if reason == "card_busy" {
-        Some(card_busy_note(l))
+    let extra = if let Some(n) = reason_note(reason, l) {
+        Some(n)
     } else if m.to_ascii_lowercase().contains("in progress") {
         Some(job_clash(l))
     } else {
@@ -955,6 +1046,23 @@ pub fn applied(act: Act, r: &Req, l: Lang) -> String {
         (Act::Notif, Lang::En) => "Notifications sent".into(),
         (Act::Notif, Lang::Zh) => "通知已发送".into(),
     }
+}
+
+/// The card took the profile but the modem never picked it up, and no automatic reboot was left.
+pub fn identity_stuck(r: &Req, l: Lang) -> write::Outcome {
+    write::Outcome::Ended(
+        match l {
+            Lang::En => format!(
+                "The card is on “{}”, but the modem has not picked it up. Restart the device to finish (it already restarted once by itself in the last 24 h, so it won't again).",
+                r.name
+            ),
+            Lang::Zh => format!(
+                "卡已经换到「{}」，但调制解调器还没认出来。重启设备完成切换（24 小时内已自动重启过一次，不会再自己重启）。",
+                r.name
+            ),
+        },
+        "warn",
+    )
 }
 
 /// The switch took (card and modem) but the data call did not come back: never plain success.
@@ -1052,7 +1160,36 @@ async fn readback(app: &Shared, who: &Caller, act: Act, r: &Req) -> bool {
 }
 
 /// Poll the job slot (no card access) until our job ends.
-async fn wait_job(app: &Shared, who: &Caller, ours: u64, act: Act) -> JobEnd {
+/// The core's shared words for job `ours` (`say` / `say_en`, cores from 1.32.0 on), in `l`.
+pub fn job_say(ours: u64, j: &Value, l: Lang) -> Option<String> {
+    if j["id"].as_u64()? != ours {
+        return None;
+    }
+    let k = match l {
+        Lang::En => "say_en",
+        Lang::Zh => "say",
+    };
+    j[k].as_str().filter(|s| !s.is_empty()).map(str::to_owned)
+}
+
+/// The core's word for the switch first, then the page's own sentence (older cores: as before).
+pub fn with_say(o: write::Outcome, say: Option<&str>, l: Lang) -> write::Outcome {
+    use write::Outcome as O;
+    let Some(h) = say else { return o };
+    let join = |t: String| match l {
+        _ if t.is_empty() => h.to_owned(),
+        Lang::En => format!("{h}. {t}"),
+        Lang::Zh => format!("{h}。{t}"),
+    };
+    match o {
+        O::Applied(t) => O::Applied(join(t)),
+        O::Ended(t, tone) => O::Ended(join(t), tone),
+        O::Failed(t) => O::Failed(join(t)),
+        o => o,
+    }
+}
+
+async fn wait_job(app: &Shared, who: &Caller, ours: u64, act: Act, say: &mut Option<String>, l: Lang) -> JobEnd {
     let every = if act == Act::Notif {
         NOTIF_JOB_EVERY
     } else {
@@ -1063,8 +1200,9 @@ async fn wait_job(app: &Shared, who: &Caller, ours: u64, act: Act) -> JobEnd {
         Act::Switch => SWITCH_LIMIT,
         _ => JOB_LIMIT,
     };
-    let deadline = tokio::time::Instant::now() + limit;
-    let mut tick = tokio::time::Instant::now();
+    let start = tokio::time::Instant::now();
+    let mut deadline = start + limit;
+    let mut tick = start;
     loop {
         tick += every;
         if tick > deadline {
@@ -1072,10 +1210,15 @@ async fn wait_job(app: &Shared, who: &Caller, ours: u64, act: Act) -> JobEnd {
         }
         tokio::time::sleep_until(tick).await;
         // a failed read is not an answer: keep polling until the deadline
-        if let Ok(j) = crate::agent::get(app, who, "/api/esim/job").await
-            && let Some(e) = job_end(ours, &j)
-        {
-            return e;
+        if let Ok(j) = crate::agent::get(app, who, "/api/esim/job").await {
+            *say = job_say(ours, &j, l);
+            if let Some(e) = job_end(ours, &j) {
+                return e;
+            }
+            // the job's own bound (switch), never below ours
+            if let Some(s) = job_deadline(ours, &j) {
+                deadline = deadline.max(start + s + DEADLINE_SLACK);
+            }
         }
     }
 }
@@ -1185,50 +1328,66 @@ async fn run(
         }
         Ok((_, v)) => match v["data"]["job_id"].as_u64() {
             None => write::Outcome::Unknown,
-            Some(id) => match wait_job(&app, &who, id, act).await {
-                JobEnd::Error { message, reason } => job_failed(&message, &reason, l),
-                JobEnd::TimedOut => timed_out(l),
-                JobEnd::Done {
-                    rebooting: true, ..
-                } if act == Act::Switch => {
-                    *reboot_mark().lock().unwrap() = Some(Instant::now());
-                    bump(&app);
-                    let html = format!(
-                        "{}\n{}",
-                        area(
-                            act,
-                            l,
-                            Via::Local,
-                            &write::Phase::Pending(format!(
-                                "{} {}",
-                                reboot_banner(l),
-                                l.pick(
-                                    "Sign in again once it is back: the status above then shows which profile is in use.",
-                                    "回来后重新登录，上面的状态会显示用的是哪个配置。"
-                                )
-                            ))
-                        ),
-                        after_html(&r.key)
-                    );
-                    // close the reply now: the reboot must not cut it (a cut reply reads as lost)
-                    let _ = tx.send(patch(&html)).await;
-                    return;
-                }
-                JobEnd::Done { no_data: true, .. } if act == Act::Switch => {
-                    if readback(&app, &who, act, &r).await {
-                        no_data(&r, l)
-                    } else {
-                        not_read(act, &r, l)
+            Some(id) => {
+                let mut say = None;
+                let end = wait_job(&app, &who, id, act, &mut say, l).await;
+                // the core's shared word for a switch (`sim_say`); only on outcomes it describes
+                let say = say.filter(|_| act == Act::Switch);
+                let said = |o| with_say(o, say.as_deref(), l);
+                match end {
+                    JobEnd::Error { message, reason } if say.is_some() && !reason.is_empty() => {
+                        // a known cause: the core's word plus what to do; the raw message is technical
+                        eprintln!("[esim] switch {id}: {reason}: {message}");
+                        said(write::Outcome::Failed(reason_note(&reason, l).unwrap_or("").into()))
+                    }
+                    JobEnd::Error { message, reason } => said(job_failed(&message, &reason, l)),
+                    JobEnd::TimedOut => timed_out(l),
+                    JobEnd::Done {
+                        rebooting: true, ..
+                    } if act == Act::Switch => {
+                        *reboot_mark().lock().unwrap() = Some(Instant::now());
+                        bump(&app);
+                        let html = format!(
+                            "{}\n{}",
+                            area(
+                                act,
+                                l,
+                                Via::Local,
+                                &write::Phase::Pending(format!(
+                                    "{} {}",
+                                    reboot_banner(l),
+                                    l.pick(
+                                        "Sign in again once it is back: the status above then shows which profile is in use.",
+                                        "回来后重新登录，上面的状态会显示用的是哪个配置。"
+                                    )
+                                ))
+                            ),
+                            after_html(&r.key)
+                        );
+                        // close the reply now: the reboot must not cut it (a cut reply reads as lost)
+                        let _ = tx.send(patch(&html)).await;
+                        return;
+                    }
+                    JobEnd::Done { stuck: true, .. } if act == Act::Switch => said(identity_stuck(&r, l)),
+                    JobEnd::Done { no_data: true, .. } if act == Act::Switch => {
+                        if readback(&app, &who, act, &r).await {
+                            said(no_data(&r, l))
+                        } else {
+                            not_read(act, &r, l)
+                        }
+                    }
+                    JobEnd::Done { .. } | JobEnd::Moved => {
+                        // Moved: ours ended unseen, its last word (still running) is stale
+                        let moved = matches!(end, JobEnd::Moved);
+                        if readback(&app, &who, act, &r).await {
+                            let o = write::Outcome::Applied(applied(act, &r, l));
+                            if moved { o } else { said(o) }
+                        } else {
+                            not_read(act, &r, l)
+                        }
                     }
                 }
-                JobEnd::Done { .. } | JobEnd::Moved => {
-                    if readback(&app, &who, act, &r).await {
-                        write::Outcome::Applied(applied(act, &r, l))
-                    } else {
-                        not_read(act, &r, l)
-                    }
-                }
-            },
+            }
         },
     };
     let ok = matches!(o, write::Outcome::Applied(_));
@@ -1310,7 +1469,6 @@ pub async fn events(
     req: axum::extract::Request,
 ) -> impl IntoResponse {
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
-    let now = Instant::now();
     let p = Poll {
         l: ctx.lang,
         who: Caller::of(&app, &req),
@@ -1318,8 +1476,9 @@ pub async fn events(
         seen_gen: GEN.load(Ordering::Relaxed),
         first: true,
         next_chip: None,
-        next_prof: now,
-        next_notif: now,
+        next_prof: None,
+        settle_until: None,
+        seen_sim: None,
     };
     crate::agent::stream(app, ctx, q.g, PATH, p)
 }

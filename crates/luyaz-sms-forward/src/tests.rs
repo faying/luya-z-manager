@@ -956,6 +956,8 @@ struct FakeHost {
     sends: Mutex<Vec<String>>,
     controls: Mutex<Vec<String>>,
     sleeps: AtomicUsize,
+    /// A SIM switch holds the checks.
+    hold: AtomicBool,
 }
 
 impl Host for FakeHost {
@@ -1001,6 +1003,9 @@ impl Host for FakeHost {
     }
     fn sleep(&self, _: Duration) {
         self.sleeps.fetch_add(1, Ordering::SeqCst);
+    }
+    fn hold(&self) -> bool {
+        self.hold.load(Ordering::SeqCst)
     }
 }
 
@@ -1128,5 +1133,23 @@ fn lease_waits_only_for_another_live_owner() {
     write_lease(&path, "test").unwrap();
     remove_lease(&path);
     assert!(!path.exists());
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// Held by the host (a SIM switch): nothing sent, read or deleted, the watermark stays; the next
+/// check after the hold sends it.
+#[test]
+fn host_hold_defers_then_sends() {
+    let (fwd, host, d) = forwarder("hold", Some(sms_rules(&["111"])), Some(json!({"last_forwarded_id": 10})));
+    host.rows.lock().unwrap().push(sms_row(11));
+    host.hold.store(true, Ordering::SeqCst);
+    fwd.check(host.sms_summary());
+    assert!(host.sends.lock().unwrap().is_empty());
+    assert!(host.controls.lock().unwrap().is_empty());
+    assert_eq!(read_back(&d).last_forwarded_id, 10);
+    host.hold.store(false, Ordering::SeqCst);
+    fwd.check(host.sms_summary());
+    assert_eq!(*host.sends.lock().unwrap(), vec!["111"]);
+    assert_eq!(read_back(&d).last_forwarded_id, 11);
     let _ = fs::remove_dir_all(&d);
 }

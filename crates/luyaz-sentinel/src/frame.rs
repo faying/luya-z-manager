@@ -1,9 +1,9 @@
-//! The hand-back explanation frame (u60-sentinel.md §5 new 1; u60-platform.md DR8, C-R8, T16/T24):
+//! The hand-back explanation frame (u60-sentinel.md §5 new 1; u60-platform.md DR8, T16/T24):
 //! when the sentinel gives up on our UI it shows one frame for 3 s — what happened, that the
 //! internet is fine, how to come back — before starting the vendor UI. The text is pre-rendered
 //! (`frame/gen.py` → `frame_text.rs`, 4-bit alpha, run-length coded); this composes it into an
-//! RGB565 picture the size of the panel, rotated for its 180° mounting like the touch UI does
-//! (touch-ui `DEVUI_ROTATE_180`). Drawing it (`sys::show_frame`) takes DRM master or skips.
+//! RGB565 picture the size of the panel, rotated for its 180° mounting like the touch UI does.
+//! Drawing it (`sys::show_frame`) takes DRM master or skips.
 
 /// One pre-rendered line: `w` × `h` alpha values, as (alpha 0–15, run 1–255) byte pairs.
 pub struct Line {

@@ -1122,9 +1122,9 @@ fn screen(c: &Cfg) -> Row {
             "bad",
             "screen",
             "触屏界面",
-            "反复启动失败，已换回原厂界面（长按屏幕右下角 3 秒，或 echo devui > /tmp/luyaz-screen.ctl）".into(),
+            "反复启动失败，已换回原厂界面（长按屏幕右下角 3 秒，或 echo ui > /tmp/luyaz-screen.ctl）".into(),
             "Screen UI",
-            "Kept failing to start; stock UI on (hold bottom-right 3 s, or echo devui > /tmp/luyaz-screen.ctl)".into(),
+            "Kept failing to start; stock UI on (hold bottom-right 3 s, or echo ui > /tmp/luyaz-screen.ctl)".into(),
         )
     } else if cat(&c.uid_want).as_deref() == Some("vendor") {
         row(

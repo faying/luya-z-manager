@@ -56,40 +56,15 @@ This history is also the basis for calibrating thermal thresholds — run a few 
 
 ---
 
-## 3. Touch UI · phase 1 (litehtml, legacy, not the default build)
+## 4. Touch UI (LVGL, new design)
 
-> The live touch UI is the Rust one in section 4. This section is history: the litehtml renderer (`src/htmlmain.c` + `ui/*.html`) has been removed from touch-ui and survives only in tag `legacy-litehtml`.
+Rust (`touch-ui/rs/`, LVGL 9.5 via `lvgl-sys`), 320×480, FreeType for CJK. Inherits section 2's state semantics (values changed, meanings map one-to-one: normal → okT / green, warning → warnT / orange, stopped → badT / red, neutral → t3) and section 1's principles. The full spec (palette and contrast, type scale, every component's size, every page layout, state table) is in the new design doc; the only implementation in code is touch-ui's `rs/ui/src/kit.rs` (components) and `rs/ui/src/theme.rs` (palette, font roles). Pages may only use these; they don't set their own colors, radii or font sizes.
 
-**Hard constraints** (break them and it either won't draw or shows tofu boxes):
-
-| Allowed | Not allowed |
-|---|---|
-| `block` / `inline-block` / `float` / `table` layout | CSS Grid, JavaScript, CSS animations and transitions |
-| colors, border radius, borders, padding, margin | images (neither `<img>` nor `background-image` draws) |
-| `position: absolute / relative` | `var()` custom properties (unreliable) |
-| whole-page vertical scrolling | scroll containers inside elements |
-
-- Screen 320×480. Pages live in `ui/functions/`, hot-reloaded, no compile.
-- **Symbol whitelist** (confirmed to render in the device font): `● · ↑ ↓ ▲ ▼ ℃ •`. Verify any other symbol on the device first; when unsure, use Chinese text or draw it in CSS.
-- **Copy length cap 14 CJK characters** (decision 2A) — the limit for a single 320px line; longer truncates or wraps and breaks hierarchy. Every touch string in the state table is written to this.
-- **Tile copy** (decision 7C): `chill.html` keeps `<title>` as `CHILL`, `<meta name="description">` is `线路与出口` ("routes and exit"). It's the subtitle on the tile wall, same style as 「网络测速」 ("Speed Test") and 「eSIM」; no English slogans.
-- Themes are two rule sets, `body.dark` / `body.light`; every new color class is written twice.
-- Pages contain only the inner `<body>`: no `<style>`, no shell besides `{{STATUSBAR}}`, no home-made back bar.
-- Polling: only call the API while the CHILL page is visible and the screen is on; the home card reads only `/tmp/chill.state`, never the API; rates use cumulative fields, the full connection list isn't fetched by default; latency tests only on tap.
-
-**CHILL page hierarchy** (top to bottom): status line (state + exit region + latency, large) → mode buttons → groups → node list → bottom line with traffic and connection count → bottom line with latest event (not rendered when there are none).
-
----
-
-## 4. Touch UI · phase 3 (LVGL, new design since 2026-09-24)
-
-Rust (`touch-ui/rs/`, LVGL 9.5 via `lvgl-sys`; the old C version is deleted, tag `legacy-c-touch-ui`), 320×480, FreeType for CJK. Inherits section 2's state semantics (values changed, meanings map one-to-one: normal → okT / green, warning → warnT / orange, stopped → badT / red, neutral → t3) and section 1's principles. The full spec (palette and contrast, type scale, every component's size, every page layout, state table) is in the new design doc; the only implementation in code is touch-ui's `include/ui_kit.h` (components) and `include/ui_theme.h` (palette, font roles). Pages may only use these; they don't set their own colors, radii or font sizes.
-
-**Theme**: light / dark / auto (`appearance` in `devui.conf`; auto = dark 19:00–07:00 device local time, switched only while the screen is off). One process uses one theme; switching = exec itself (same pid, same name). All colors are quantized to 565 and contrast-checked one by one; dim things with t3, never with lower opacity; vivid colors (green / orange / red / blue) only where there's no text, white text sits on fill colors. **Switch exception**: an on switch's vivid green track is only 2.2:1 on white; on/off is carried by the knob position (common practice), color is only a hint.
+**Theme**: light / dark / auto (`appearance` in `ui.conf`; auto = dark 19:00–07:00 device local time, switched only while the screen is off). One process uses one theme; switching = exec itself (same pid, same name). All colors are quantized to 565 and contrast-checked one by one; dim things with t3, never with lower opacity; vivid colors (green / orange / red / blue) only where there's no text, white text sits on fill colors. **Switch exception**: an on switch's vivid green track is only 2.2:1 on white; on/off is carried by the knob position (common practice), color is only a hint.
 
 **Fonts**: digits Nunito (600/700/800, with CJK fallback attached; falls back to device Roboto if missing); Chinese uses the device's ZTEZhengYuan (regular 11–15, synthetic bold 15/17/20/22/24, needs an LVGL patch). Largest size 36 (speed test result); the home status card's verdict uses cj24b. Smallest: battery digits 10, value labels 11, secondary info 12.
 
-**Components** (sizes per `ui_kit.h`): top bar 26 (time · 5 signal dots · RAT · rate · ▲ · battery; when the rate doesn't fit, step through shorter forms); floating tab bar 44 (only on the five top-level pages); sub-page title bar 62 (includes top bar, solid, round ‹ back); card radius 20, outer margin 10; list row 40 / two-line 50, divider starting at x=14; segmented button 30; switch 44×26; tile 145×78, always white, "on" (CHILL running, WiFi on) = a green dot before the subtitle + green text, never a full fill (a full blue tile looks permanently selected); status block 72 (top of a card, radius 20 plus a square patch underneath); bottom sheet radius 22. Press: one step darker (one step lighter in dark theme), restore on release; transparent list rows lay a `track` background while pressed (darkening a transparent background shows nothing, 2026-09-25). Only two animations: bottom sheet rises in 180 ms, sub-page pushes in 150 ms; `UI_ANIM=0` turns both off. Hit areas no smaller than 40×40.
+**Components** (sizes per `rs/ui/src/kit.rs`): top bar 26 (time · 5 signal dots · RAT · rate · ▲ · battery; when the rate doesn't fit, step through shorter forms); floating tab bar 44 (only on the five top-level pages); sub-page title bar 62 (includes top bar, solid, round ‹ back); card radius 20, outer margin 10; list row 40 / two-line 50, divider starting at x=14; segmented button 30; switch 44×26; tile 145×78, always white, "on" (CHILL running, WiFi on) = a green dot before the subtitle + green text, never a full fill (a full blue tile looks permanently selected); status block 72 (top of a card, radius 20 plus a square patch underneath); bottom sheet radius 22. Press: one step darker (one step lighter in dark theme), restore on release; transparent list rows lay a `track` background while pressed (darkening a transparent background shows nothing, 2026-09-25). Only two animations: bottom sheet rises in 180 ms, sub-page pushes in 150 ms; `UI_ANIM=0` turns both off. Hit areas no smaller than 40×40.
 
 **While the screen is dark, a finger hits nothing**: if the power key turned it off, touch does nothing and only the power key wakes it; if it auto-dimmed, a double tap wakes it (single taps, swipes, or two taps too far apart don't count — pocket protection). The waking gesture (the double tap, or a finger already down when the power key is pressed) is not a tap, and taps are ignored for 300 ms after wake. Rule lives in touch-ui `ui_logic.c` `ui_tgate_step`, with unit and render tests.
 

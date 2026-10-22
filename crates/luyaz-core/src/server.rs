@@ -202,6 +202,10 @@ impl App {
         if crate::engines::chill_idle::enabled() {
             crate::engines::chill_idle::spawn(app.inner.exec.hub().clone());
         }
+        // CHILL end to end: a generate_204 through mihomo, budgeted, only with clients; LUYAZ_CHILL_PROBE=0 off
+        if std::env::var("LUYAZ_CHILL_PROBE").map_or(true, |v| v != "0") {
+            crate::engines::chill_probe::spawn(app.inner.exec.hub().clone());
+        }
         // component versions: the daily look at the public repo's versions.json; LUYAZ_VERSION_CHECK=0
         if crate::versions::enabled() {
             crate::versions::spawn(app.clone());
@@ -210,7 +214,8 @@ impl App {
         if crate::longterm::enabled() {
             tokio::spawn(crate::longterm::boot_task());
         }
-        // 排队的旧请求锁空出来后照原来的 /control 处理执行（返回 false = 执行者队列满）。
+        // 排队的旧请求锁空出来后照原来的 /control 处理执行（返回 false = 执行者队列满，或跨进程写锁
+        // 没拿到回了 503（D7：什么都没写）：放回队头稍后再来，过期照旧丢掉并记账）。
         let runner_app = app.clone();
         app.inner
             .ops
@@ -218,11 +223,15 @@ impl App {
                 let app = runner_app.clone();
                 Box::pin(async move {
                     let body = json!({"action": action, "params": params});
-                    write::run_control(app, action, body).await.is_ok()
+                    write::run_control(app, action, body)
+                        .await
+                        .is_ok_and(|r| r.status() != StatusCode::SERVICE_UNAVAILABLE)
                 })
             }));
-        // 有落盘的事务就接着确认（没有就不读设备）。
-        app.inner.ops.start().await;
+        // 有落盘的事务就接着确认（没有就不读设备）。要等跨进程写锁（D7：拿到才动，可能一直等），
+        // 另起任务：不挡后面的事件监听；状态变了照样经观察者交 op 块。
+        let starting = app.clone();
+        tokio::spawn(async move { starting.inner.ops.start().await });
         // V2-34：引擎每次状态变化都交 op 块（在引擎的锁里），接上时先交一次。
         let hub_exec = app.inner.exec.clone();
         app.inner.ops.set_observer(Arc::new(move |v| {
@@ -335,9 +344,11 @@ impl App {
             crate::cell_window::current(),
             screen_op.as_ref(),
         );
-        // T6: the open "sure" finding over the network verdict (not over `story`)
-        if let Some(h) = crate::api::finding::home_now() {
-            crate::project::screen::with_finding(&mut net, &h.layer, (&h.symptom, &h.symptom_en));
+        // T6: the open "sure" finding over the network verdict (not over `story`), in
+        // `network.health`'s words (the same the web shows)
+        let health = crate::api::underlay::health_input("");
+        if let (Some(f), Some(say)) = (&health.finding, luyaz_api::execution::say::health(&health)) {
+            crate::project::screen::with_finding(&mut net, &f.layer, (&say.detail, &say.detail_en));
         }
         screen_json(ts, net, op, self.inner.exec.exec_age_ms())
     }
@@ -750,7 +761,7 @@ async fn health(State(app): State<App>) -> Response {
     )
         .into_response()
 }
-/// POST /v2/sentinel/event (u60-sentinel.md §6 C-R9): an event from luyaz-sentinel (a hand-back,
+/// POST /v2/sentinel/event (u60-sentinel.md §6): an event from luyaz-sentinel (a hand-back,
 /// a crash of the screen UI, a Wi-Fi takeover …), `{"id","kind","text","wall","uptime"}`. Queued as
 /// an alert once per id (`u60-alerts` `add_once`): the sentinel queues it itself when this did not
 /// answer within 5 s, and then this only says it is there. Loopback only.
@@ -1082,6 +1093,10 @@ async fn shutdown(app: App) {
 #[cfg(test)]
 #[path = "server/device_capabilities_tests.rs"]
 mod device_capabilities_tests;
+
+#[cfg(test)]
+#[path = "server/write_lock_tests.rs"]
+mod write_lock_tests;
 
 #[cfg(test)]
 mod tests {

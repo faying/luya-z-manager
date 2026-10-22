@@ -10,18 +10,20 @@
 //!
 //! 和 D3 原文不同的两处（都是为了不卡住、不死锁）：
 //! - **等 Wi-Fi 锁时不拿着写锁、也不占执行者。** `/control` 的处理在单一执行者里跑，在里面等 150 秒会停掉
-//!   采集轮、让看门狗退出；拿着写锁等 150 秒又会让别的写（等写锁 15 秒就照做）不拿锁硬写。所以每一次
+//!   采集轮、让看门狗退出；拿着写锁等 150 秒又会让别的写等满 15 秒、回绝（D7）。所以每一次
 //!   尝试是一个执行者任务：拿写锁 → 试一次 Wi-Fi 锁（不等）→ 拿到就做，拿不到就两把都放、在执行者外
 //!   隔 `poll` 再试。放开的这段空当就是让反过来拿锁的一方（先 Wi-Fi 再写）过去的地方，不会死锁。
 //!   累计 `wait`（默认 150 秒）还拿不到算这一轮超时：记一行流水账（`lock_wait`）、整次重来；
 //!   `tries` 轮都超时就不写，回 503 `busy`。
 //! - **调用方自己拿着 Wi-Fi 锁时不再拿。** guard（`restore_wifi`）和 agent（`apply_locked`、`wifi_set`……）
 //!   都是拿着 Wi-Fi 锁再经 u60d 写的；u60d 再去拿就是等自己的调用方，只能等到对方超时。所以锁被占时看
-//!   锁文件里的进程号：是本机调用方自己或它的祖先进程，就只拿写锁照做（和 D3 之前一样，互斥由调用方的锁保证）。
-//!   查不到调用方进程（本机连接但 /proc 里找不到）也照旧做；局域网来的调用方不可能拿着这把锁，照常等。
+//!   锁文件里的进程号：是本机调用方自己或它的祖先进程（**能验证的**持锁者：哨兵，以及核心里拿着锁经回环
+//!   调 `/control` 的情景引擎——`peer_pid::find_pid` 最后也认核心自己），就只拿写锁照做
+//!   （互斥由调用方的锁保证）。查不到调用方进程（[`Caller::Unknown`]）、核心自己内部的请求
+//!   （[`Caller::Internal`]）和局域网来的（[`Caller::Remote`]）都不算拿着，照常等，等不到就不写（D8，10-14）。
 //!
-//! 写锁等满 15 秒没拿到（照做）时也不单独拿 Wi-Fi 锁，照 D3 之前的做法写（不另外等，免得执行者被
-//! 一次次 15 秒卡住）。
+//! 拿不到就不写（D7/D8）：写锁拿不到（`write_lock::Refused`）、Wi-Fi 锁文件打不开，都在写之前停下、回错；
+//! 不会只拿一把就写。
 //!
 //! 环境变量：`LUYAZ_WIFI_LOCK`（路径，空 = 不用 Wi-Fi 锁）、`LUYAZ_WIFI_LOCK_WAIT_MS`
 //! （150000）、`LUYAZ_WIFI_LOCK_POLL_MS`（1000）、`LUYAZ_WIFI_LOCK_TRIES`（2）。
@@ -54,8 +56,18 @@ pub struct Cfg {
     pub tries: u32,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// 测试用（同 `write_lock::TEST`）。
+    pub(crate) static TEST: std::cell::RefCell<Option<Cfg>> = const { std::cell::RefCell::new(None) };
+}
+
 impl Cfg {
     pub fn from_env() -> Self {
+        #[cfg(test)]
+        if let Some(c) = TEST.with(|t| t.borrow().clone()) {
+            return c;
+        }
         let ms = |name: &str, default: u64| {
             std::env::var(name)
                 .ok()
@@ -120,16 +132,14 @@ enum Peek {
     Held(Option<u32>),
 }
 
-/// 看一眼锁空不空（空的话马上放掉，不写进程号）。文件打不开当空：做的时候再打不开就不拿锁照做。
-fn peek(path: &str) -> Peek {
-    let Ok(file) = open(path) else {
-        return Peek::Free;
-    };
+/// 看一眼锁空不空（空的话马上放掉，不写进程号）。文件打不开回错：不拿 Wi-Fi 锁就不写（D8）。
+fn peek(path: &str) -> std::io::Result<Peek> {
+    let file = open(path)?;
     if file.try_lock_exclusive().is_ok() {
         let _ = FileExt::unlock(&file);
-        return Peek::Free;
+        return Ok(Peek::Free);
     }
-    Peek::Held(holder(path))
+    Ok(Peek::Held(holder(path)))
 }
 
 /// 发这个 `/control` 请求的是谁。
@@ -137,8 +147,11 @@ fn peek(path: &str) -> Peek {
 pub enum Caller {
     /// 局域网来的：不可能拿着设备上的锁。
     Remote,
-    /// 本机的，但找不到进程（或者是 u60d 自己内部的请求）：照 D3 之前的做法，不等。
+    /// 本机连接，但 /proc 里找不到进程：不能证明拿着锁，照常等（D8）。
     Unknown,
+    /// 核心自己内部的请求（旧请求队列等，没有连接）：核心从不拿着 Wi-Fi 锁发 `/control`，照常等。
+    Internal,
+    /// 本机连接、找到了进程：持锁者是它或它的祖先才算拿着。
     Pid(u32),
 }
 
@@ -172,21 +185,24 @@ pub enum Mode {
     Covered,
 }
 
-/// 执行者任务里、已经拿着写锁之后：按 `mode` 拿 Wi-Fi 锁。`Err(())` = 别人拿着，这次不做。
-/// 写锁没真拿到（等满 15 秒照做）时不单独拿 Wi-Fi 锁。
-#[allow(clippy::result_unit_err)]
-pub fn second(path: &str, mode: Mode, write_held: bool) -> Result<Option<WifiLock>, ()> {
-    if !write_held {
-        eprintln!("ops: write lock not held; Wi-Fi write goes ahead without the Wi-Fi lock");
-        return Ok(None);
-    }
+/// 第二把没拿到。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Second {
+    /// 别人拿着（`Mode::Own`）：这次不做，在执行者外等一会再来。
+    Held,
+    /// 锁文件打不开：不写，回错（D8）。
+    Open(String),
+}
+
+/// 执行者任务里、已经拿着写锁之后：按 `mode` 拿 Wi-Fi 锁。`Ok(None)` = 调用方拿着（`Covered`）。
+pub fn second(path: &str, mode: Mode) -> Result<Option<WifiLock>, Second> {
     match (try_take(path), mode) {
         (Ok(Some(l)), _) => Ok(Some(l)),
-        (Ok(None), Mode::Own) => Err(()),
+        (Ok(None), Mode::Own) => Err(Second::Held),
         (Ok(None), Mode::Covered) => Ok(None),
         (Err(e), _) => {
-            eprintln!("ops: cannot open Wi-Fi lock {path}: {e}; writing without it");
-            Ok(None)
+            eprintln!("ops: cannot open Wi-Fi lock {path}: {e}; not written");
+            Err(Second::Open(e.kind().to_string()))
         }
     }
 }
@@ -201,16 +217,25 @@ pub struct Timeout {
     pub last: bool,
 }
 
+/// [`run`] 没做。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Gave {
+    /// `tries` 轮都超时。
+    TimedOut,
+    /// 锁文件打不开。
+    Open(String),
+}
+
 /// 在执行者外跑整个过程。`job(mode)` 是一次尝试（一个执行者任务：写锁 → [`second`] → 做），
 /// 返回 None = 这次没拿到 Wi-Fi 锁、什么都没做。`caller` 只在锁被占时才查（查 /proc 有成本）。
-/// 返回 None = `tries` 轮都超时，没做。
+/// 返回 Err = 没做（超时或锁文件打不开）。
 pub async fn run<T, J, F, C>(
     cfg: &Cfg,
     path: &str,
     caller: C,
     mut job: J,
     mut timed_out: impl FnMut(&Timeout),
-) -> Option<T>
+) -> Result<T, Gave>
 where
     J: FnMut(Mode) -> F,
     F: Future<Output = Option<T>>,
@@ -223,7 +248,14 @@ where
         let start = tokio::time::Instant::now();
         let mut last_holder = None;
         loop {
-            let mode = match peek(path) {
+            let peeked = match peek(path) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("ops: cannot open Wi-Fi lock {path}: {e}; not written");
+                    return Err(Gave::Open(e.kind().to_string()));
+                }
+            };
+            let mode = match peeked {
                 Peek::Free => Some(Mode::Own),
                 Peek::Held(h) => {
                     last_holder = h;
@@ -232,9 +264,9 @@ where
                     {
                         known = Some(c.await);
                     }
+                    // D8：只有能验证的持锁者（进程号对得上它或它的祖先）才算拿着
                     let covered = match known.unwrap_or(Caller::Unknown) {
-                        Caller::Unknown => true,
-                        Caller::Remote => false,
+                        Caller::Unknown | Caller::Internal | Caller::Remote => false,
                         Caller::Pid(p) => h.is_some_and(|h| covers(h, p, parent_of)),
                     };
                     covered.then_some(Mode::Covered)
@@ -243,7 +275,7 @@ where
             if let Some(mode) = mode
                 && let Some(out) = job(mode).await
             {
-                return Some(out);
+                return Ok(out);
             }
             if start.elapsed() >= cfg.wait {
                 break;
@@ -257,7 +289,7 @@ where
             last: attempt == tries,
         });
     }
-    None
+    Err(Gave::TimedOut)
 }
 
 #[cfg(test)]

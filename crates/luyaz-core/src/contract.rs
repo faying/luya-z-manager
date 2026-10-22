@@ -557,11 +557,30 @@ contract! {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         nested dual: Option<SimDual>,
         normal dual_sim: i64,
+        /// SIM identity transitions so far (`sim_identity`, P0-2); keys "did the card change"
+        #[serde(default)]
+        normal epoch: u64,
         personal iccid: String,
         personal imsi: String,
         normal modem_state: String,
         personal msisdn: String,
+        /// "online" | "leaving" | "changed" | "reloaded" | "stalled" (`sim_identity`)
+        #[serde(default)]
+        normal phase: String,
         normal pin_status: String,
+        /// The shared words for `phase` (`sim_say`): "" when nothing to say
+        #[serde(default)]
+        normal say: String,
+        #[serde(default)]
+        normal say_en: String,
+        /// "switching" | "retrying" | "recovered" | "check_apn" | "gave_up" | ""
+        #[serde(default)]
+        normal say_id: String,
+        /// `say` cut to fit the touch screen (`sim_say::Say::short`)
+        #[serde(default)]
+        normal say_short: String,
+        #[serde(default)]
+        normal say_short_en: String,
         normal sim1_provision: i64,
         normal sim2_provision: i64,
         normal spn: String,
@@ -631,6 +650,22 @@ contract! {
         normal operator: String,
         normal mcc: String,
         normal mnc: String,
+        /// operator-logos/<stem> picked the same way as the single-card logo (SPN, then
+        /// PLMN); empty when none is known (core 1.32.1+).
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        normal logo: String,
+        /// MCC of the network this slot is registered on (data slot: nwinfo; standby slot:
+        /// the QMI reading); null when unknown (core 1.32.3+)
+        normal serving_mcc: Option<i64>,
+        /// serving and SIM country differ, the same rule as `signal.true_roaming`; null
+        /// when either is unknown (core 1.32.3+)
+        normal true_roaming: Option<bool>,
+        /// Where the card is, in the data card's words (`screen.where`): 「本地」,
+        /// 「漫游到中国移动」, 「漫游」 when the network has no name; empty when unknown (core 1.32.4+)
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        normal place: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        normal place_en: String,
         personal iccid_tail: String,
     }
 }

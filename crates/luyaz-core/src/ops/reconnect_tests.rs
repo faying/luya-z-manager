@@ -100,3 +100,23 @@ fn only_the_engine_can_find_it_never_control_screen_web_or_mcp() {
     assert_eq!(s.rollback_capability, spec::RollbackCapability::Unsupported);
     assert_eq!(s.target(&json!({"anything": 1})), Ok(json!("up")));
 }
+
+#[test]
+fn bearer_needs_an_address_and_the_route() {
+    // the shape of B31's output (10-22), documentation-range addresses
+    let v4 = "17: rmnet_data0    inet 192.0.2.244/29 scope global rmnet_data0\\       valid_lft forever preferred_lft forever\n";
+    let v6 = "fe80000000000000c8d51dfffe000001 11 40 20 80 rmnet_data0\n20010db8000007590000000000000064 11 40 00 80 rmnet_data0\n";
+    let r4 = "1.1.1.1 via 192.0.2.245 dev rmnet_data0 src 192.0.2.244 uid 0 \n    cache mtu 1500 \n";
+    let r6 = "2001:4860:4860::8888 via fe80::1 dev rmnet_data0 proto static src 2001:db8:0:759::64 metric 1024 mtu 1500 pref medium\n";
+    assert!(bearer_up(v4, v6, r4, r6));
+    // v6-only (a roaming profile)
+    assert!(bearer_up("", v6, "", r6));
+    // an address but the route goes elsewhere (or nowhere)
+    assert!(!bearer_up(v4, "", "1.1.1.1 dev wlan0 src 192.0.2.1\n", ""));
+    assert!(!bearer_up(v4, "", "", ""));
+    // a route but only a link-local v6 address
+    let ll = "fe80000000000000c8d51dfffe000001 11 40 20 80 rmnet_data0\n";
+    assert!(!bearer_up("", ll, "", r6));
+    // another rmnet does not count
+    assert!(!bearer_up(v4, "", "1.1.1.1 via 192.0.2.1 dev rmnet_data9 src 192.0.2.2\n", ""));
+}

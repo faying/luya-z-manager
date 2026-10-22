@@ -141,6 +141,8 @@ pub async fn main(raw: Vec<String>) -> Result<()> {
     crate::svcwatch::start(&argv0);
     // lan-client-id.md step 0: only with the opt-in flag file
     crate::lanid_capture::start(&argv0);
+    // before the ledger's boot line (~60 s) takes the planned-reboot marker away
+    crate::sim_alerts::boot();
     server::write_pid_file();
     let starting = app.clone();
     tokio::spawn(async move { starting.start().await });

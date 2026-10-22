@@ -81,6 +81,21 @@ fn status() -> Value {
 }
 
 #[test]
+fn network_health_is_whitelisted_and_english() {
+    let s = json!({"network": {"health": {
+        "state": "down", "layers": {"bearer": "up", "finding": "internet", "iface": "x"},
+        "finding": "no_internet", "next": "wait", "new_field": 1,
+        "paused": [{"who": "home-exit", "reason": "lower", "layer": "internet", "since": 5, "released": false, "x": 1}],
+        "say": {"id": "network.internet", "detail": "外网不通。", "detail_en": "No internet."}}}});
+    let v = shape_network_health(&s);
+    assert_eq!(v["layers"], json!({"bearer": "up", "finding": "internet"}));
+    assert_eq!(v["paused"][0].as_object().unwrap().len(), 5);
+    assert!(v.get("new_field").is_none());
+    assert!(v["say"].to_string().contains("No internet."));
+    assert_eq!(shape_network_health(&json!({"network": {}}))["state"], "unsupported");
+}
+
+#[test]
 fn whitelists_drop_unknown_and_secret_fields() {
     let h = json!({"checks": [{"level": "warn", "id": "x", "label": "标签", "label_en": "Label",
                                "detail": "d", "detail_en": "d en", "new_field": 1}],
@@ -275,7 +290,7 @@ async fn through_the_gate() {
         let m = std::fs::metadata(dir.join("agent.id")).unwrap().permissions().mode();
         assert_eq!(m & 0o777, 0o600);
     }
-    for path in ["/agent-api/diagnose", "/agent-api/power", "/agent-api/events?since=59", "/agent-api/action-url?for=apn"] {
+    for path in ["/agent-api/diagnose", "/agent-api/network-health", "/agent-api/power", "/agent-api/events?since=59", "/agent-api/action-url?for=apn"] {
         let (st, v) = call(path, Some(T2)).await;
         assert_eq!((st, v["device_id"].as_str()), (200, Some(id.as_str())), "{path}: {v}");
     }

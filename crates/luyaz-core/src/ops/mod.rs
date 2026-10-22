@@ -450,7 +450,7 @@ pub struct Current {
 
 pub async fn current() -> Result<Current, String> {
     let net = crate::state::ubus("zte_nwinfo_api", "nwinfo_get_netinfo", json!({})).await?;
-    let sim = crate::state::ubus("zwrt_zte_mdm.api", "get_sim_info", json!({})).await?;
+    let sim = crate::state::sim_info().await?;
     let mut items = std::collections::BTreeMap::new();
     for item in [CELL_LTE, CELL_NR, BAND_LTE, BAND_NR, NETWORK_MODE] {
         if let Some(v) = readback(item, &net) {
@@ -589,7 +589,7 @@ impl engine::Device for UbusDevice {
         }
         if spec.item == DUAL_SIM {
             let net = crate::state::ubus("zte_nwinfo_api", "nwinfo_get_netinfo", json!({})).await?;
-            let sim = crate::state::ubus("zwrt_zte_mdm.api", "get_sim_info", json!({})).await?;
+            let sim = crate::state::sim_info().await?;
             let smart = crate::state::uci_value(dual_sim::SMART_UCI).await;
             return Ok(Reading {
                 value: dual_sim::readback(&sim, &smart),
@@ -610,7 +610,7 @@ impl engine::Device for UbusDevice {
             return Err(format!("no reader for {}", spec.item));
         }
         let net = crate::state::ubus("zte_nwinfo_api", "nwinfo_get_netinfo", json!({})).await?;
-        let sim = crate::state::ubus("zwrt_zte_mdm.api", "get_sim_info", json!({})).await?;
+        let sim = crate::state::sim_info().await?;
         let value = match spec.item {
             APN => apn_now().await?.map(|n| n.value(&self.vault)),
             DATA_SESSION => Some(Value::from(reconnect::read_session().await?)),
@@ -638,7 +638,7 @@ impl engine::Device for UbusDevice {
             return self.resolve_apn(spec, target, params).await;
         }
         if spec.item == DUAL_SIM {
-            let sim = crate::state::ubus("zwrt_zte_mdm.api", "get_sim_info", json!({})).await?;
+            let sim = crate::state::sim_info().await?;
             let i1 = crate::state::uci_value("zwrt_zte_mdm.sim_info.simcard_0_iccid").await;
             let i2 = crate::state::uci_value("zwrt_zte_mdm.sim_info.simcard_1_iccid").await;
             dual_sim::precheck(&sim, [&i1, &i2], &target)?;
@@ -659,9 +659,9 @@ impl engine::Device for UbusDevice {
         spec: &'static Spec,
         value: &Value,
         params: &Value,
-        strict: bool,
+        _strict: bool,
     ) -> Result<Value, WriteError> {
-        // Wi-Fi、CHILL 各走自己的锁，严格写锁（§4.3 E2）只管下面这条 ubus 写路径
+        // Wi-Fi、CHILL 各走自己的锁；下面的 ubus 写一律拿不到写锁就不写（D7，闭环、人手动一样）
         if let Some(kind) = wifi::Kind::of(spec.item) {
             return self.wifi.write(&self.exec, kind, value, params).await;
         }
@@ -678,143 +678,124 @@ impl engine::Device for UbusDevice {
             });
         }
         if spec.item == DATA_SESSION {
-            // 闭环专用（`ops::reconnect`）：同样在执行者里拿写锁，闭环的拿不到就不写
-            let r = self
-                .exec
-                .task(async move {
-                    let _lock = if strict {
-                        write_lock::acquire_strict().await?
-                    } else {
-                        write_lock::acquire().await
-                    };
-                    Ok::<_, write_lock::Busy>(
-                        reconnect::redial(|a| async move {
-                            crate::executor::call("zwrt_qcmap_cli", "set_qcliiface", &a)
-                                .await
-                                .map_err(|e| e.to_string())
-                        })
-                        .await,
-                    )
-                })
-                .await;
-            crate::state::invalidate_cache();
-            return match r {
-                Ok(Ok(v)) => {
-                    self.exec.mark_immediate(None);
-                    Ok(v)
-                }
-                Ok(Err(message)) => Err(WriteError {
-                    message,
-                    timed_out: false,
-                }),
-                Err(_) => Err(WriteError {
-                    message: "write lock busy; nothing written".into(),
-                    timed_out: false,
-                }),
-            };
-        }
-        let apn = if spec.item == APN {
-            let now = apn_now()
-                .await
-                .and_then(|n| n.ok_or_else(|| "cannot read APN settings".to_owned()))
-                .map_err(|message| WriteError {
-                    message,
-                    timed_out: false,
-                })?;
-            // 新写的内容只在这次 apn.modify 的原始参数里；退回、撤销（{restore}）从保管箱取
-            let new = (spec.action == "apn.modify" && params.get("restore").is_none()).then(|| {
-                let id = value.get("manual").and_then(Value::as_str).unwrap_or("");
-                let base = now.content_of(id).cloned().unwrap_or(Value::Null);
-                apn::content_from_params(params, &base)
-            });
-            Some(
-                apn::steps(value, &now, new.as_ref(), &self.vault).map_err(|message| {
-                    WriteError {
-                        message,
-                        timed_out: false,
-                    }
-                })?,
-            )
-        } else {
-            None
-        };
-        let apn = if spec.item == DUAL_SIM {
-            let sim = crate::state::ubus("zwrt_zte_mdm.api", "get_sim_info", json!({}))
-                .await
-                .and_then(|sim| dual_sim::steps(value, &sim))
-                .map_err(|message| WriteError {
-                    message,
-                    timed_out: false,
-                })?;
-            Some(sim)
-        } else {
-            apn
-        };
-        let state = if apn.is_none() && needs_state(spec.item, value, params) {
-            let net = crate::state::ubus("zte_nwinfo_api", "nwinfo_get_netinfo", json!({}))
-                .await
-                .map_err(|message| WriteError {
-                    message,
-                    timed_out: false,
-                })?;
-            let now = readback(BAND_ALL, &net).ok_or_else(|| WriteError {
-                message: "cannot read current bands and cell locks".into(),
+            // 闭环专用（`ops::reconnect`）：同样拿着写锁写，拿不到就不写
+            let r = write_lock::run(&self.exec, async move {
+            reconnect::redial(|a| async move {
+                crate::executor::call("zwrt_qcmap_cli", "set_qcliiface", &a)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+        })
+        .await;
+        crate::state::invalidate_cache();
+        return match r {
+            Ok(Ok(v)) => {
+                self.exec.mark_immediate(None);
+                Ok(v)
+            }
+            Ok(Err(message)) => Err(WriteError {
+                message,
                 timed_out: false,
-            })?;
-            let defaults = default_bands().await.map_err(|message| WriteError {
+            }),
+            Err(e) => Err(WriteError {
+                message: e.to_string(),
+                timed_out: false,
+            }),
+        };
+    }
+    let apn = if spec.item == APN {
+        let now = apn_now()
+            .await
+            .and_then(|n| n.ok_or_else(|| "cannot read APN settings".to_owned()))
+            .map_err(|message| WriteError {
                 message,
                 timed_out: false,
             })?;
-            Some((now, defaults))
-        } else {
-            None
-        };
-        let steps = match apn.map(Ok).unwrap_or_else(|| {
-            write_steps(
-                spec.item,
-                value,
-                params,
-                state.as_ref().map(|(n, d)| (n, d)),
-            )
-        }) {
-            Ok(v) => v,
-            Err(message) => {
-                return Err(WriteError {
+        // 新写的内容只在这次 apn.modify 的原始参数里；退回、撤销（{restore}）从保管箱取
+        let new = (spec.action == "apn.modify" && params.get("restore").is_none()).then(|| {
+            let id = value.get("manual").and_then(Value::as_str).unwrap_or("");
+            let base = now.content_of(id).cloned().unwrap_or(Value::Null);
+            apn::content_from_params(params, &base)
+        });
+        Some(
+            apn::steps(value, &now, new.as_ref(), &self.vault).map_err(|message| {
+                WriteError {
                     message,
                     timed_out: false,
-                });
-            }
-        };
-        // 一个执行者任务：在执行者里拿跨进程写锁（D29）再依次调，锁不会和别的任务互等；
-        // 几步的（5G 锁频、恢复默认的撤销）中途失败就停，结果交给读回判断。
-        let r = self
-            .exec
-            .task(async move {
-                // 闭环发起的（strict）拿不到就什么都不调；人手动的照旧等满照做
-                let _lock = if strict {
-                    write_lock::acquire_strict().await?
-                } else {
-                    write_lock::acquire().await
-                };
-                let mut last = Ok(Value::Null);
-                for (object, method, args) in steps {
-                    // nwinfo_set_netselect 成功时什么都不回（T11 真机，B31）
-                    last = crate::control::write_reply(
-                        crate::executor::call(object, method, &args).await,
-                    );
-                    if last.is_err() {
-                        break;
-                    }
                 }
-                Ok::<_, write_lock::Busy>(last)
-            })
-            .await;
-        let Ok(r) = r else {
+            })?,
+        )
+    } else {
+        None
+    };
+    let apn = if spec.item == DUAL_SIM {
+        let sim = crate::state::sim_info()
+            .await
+            .and_then(|sim| dual_sim::steps(value, &sim))
+            .map_err(|message| WriteError {
+                message,
+                timed_out: false,
+            })?;
+        Some(sim)
+    } else {
+        apn
+    };
+    let state = if apn.is_none() && needs_state(spec.item, value, params) {
+        let net = crate::state::ubus("zte_nwinfo_api", "nwinfo_get_netinfo", json!({}))
+            .await
+            .map_err(|message| WriteError {
+                message,
+                timed_out: false,
+            })?;
+        let now = readback(BAND_ALL, &net).ok_or_else(|| WriteError {
+            message: "cannot read current bands and cell locks".into(),
+            timed_out: false,
+        })?;
+        let defaults = default_bands().await.map_err(|message| WriteError {
+            message,
+            timed_out: false,
+        })?;
+        Some((now, defaults))
+    } else {
+        None
+    };
+    let steps = match apn.map(Ok).unwrap_or_else(|| {
+        write_steps(
+            spec.item,
+            value,
+            params,
+            state.as_ref().map(|(n, d)| (n, d)),
+        )
+    }) {
+        Ok(v) => v,
+        Err(message) => {
             return Err(WriteError {
-                message: "write lock busy; nothing written".into(),
+                message,
                 timed_out: false,
             });
-        };
+        }
+    };
+    // 一个执行者任务：在执行者里拿跨进程写锁（D29）再依次调，锁不会和别的任务互等；
+    // 几步的（5G 锁频、恢复默认的撤销）中途失败就停，结果交给读回判断。
+    // 拿不到写锁（被占满 15 秒或打不开）就什么都不调（D7：人手动的、闭环的一样）
+    let r = write_lock::run(&self.exec, async move {
+            let mut last = Ok(Value::Null);
+            for (object, method, args) in steps {
+                // nwinfo_set_netselect 成功时什么都不回（T11 真机，B31）
+                last =
+                    crate::control::write_reply(crate::executor::call(object, method, &args).await);
+                if last.is_err() {
+                    break;
+                }
+            }
+            last
+        })
+        .await;
+        let r = r.map_err(|e| WriteError {
+            message: e.to_string(),
+            timed_out: false,
+        })?;
         // 和 `/control` 一样：写过之后慢数据缓存作废，全部块下一轮立即读。
         crate::state::invalidate_cache();
         match r {
@@ -841,22 +822,33 @@ impl engine::Device for UbusDevice {
     }
 
     fn now_ms(&self) -> u64 {
-        let path =
-            std::env::var("LUYAZ_UPTIME_PATH").unwrap_or_else(|_| "/proc/uptime".into());
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())
-            .map(|secs| (secs * 1000.0) as u64)
-            .unwrap_or_else(|| self.started.elapsed().as_millis() as u64)
+        uptime_read().unwrap_or_else(|| self.started.elapsed().as_millis() as u64)
     }
 
     fn boot_id(&self) -> String {
-        let path = std::env::var("LUYAZ_BOOT_ID_PATH")
-            .unwrap_or_else(|_| "/proc/sys/kernel/random/boot_id".into());
-        std::fs::read_to_string(path)
-            .map(|s| s.trim().to_owned())
-            .unwrap_or_default()
+        boot_id()
     }
+}
+
+fn uptime_read() -> Option<u64> {
+    let path = std::env::var("LUYAZ_UPTIME_PATH").unwrap_or_else(|_| "/proc/uptime".into());
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())
+        .map(|secs| (secs * 1000.0) as u64)
+}
+
+/// BOOTTIME ms as the engine reads it (0 = unreadable; the gate then sees an old hold).
+pub(crate) fn uptime_ms() -> u64 {
+    uptime_read().unwrap_or(0)
+}
+
+pub(crate) fn boot_id() -> String {
+    let path = std::env::var("LUYAZ_BOOT_ID_PATH")
+        .unwrap_or_else(|_| "/proc/sys/kernel/random/boot_id".into());
+    std::fs::read_to_string(path)
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

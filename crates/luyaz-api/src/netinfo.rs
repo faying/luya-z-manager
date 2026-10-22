@@ -753,10 +753,45 @@ pub fn selection_from_netinfo(net: &Value) -> Option<&'static str> {
 }
 
 /// `connect_status` is e.g. "ipv4_ipv6_connected"; "disconnected" also
-/// contains "connected".
+/// contains "connected". B31 can say connected while the bearer is gone: anything that acts on
+/// it goes through [`data_up`].
 pub fn data_connected(wwan: &Value) -> bool {
     let s = js(wwan, "connect_status");
     s.ends_with("connected") && !s.contains("disconnect")
+}
+
+/// The bearer from `/proc` alone (no `ip` fork): a default IPv4 route out of `iface`
+/// (`/proc/net/route`), or a global IPv6 address on it (`/proc/net/if_inet6`) with a default
+/// IPv6 route out of it (`/proc/net/ipv6_route`). `None` when `/proc/net/route` could not be
+/// read (unknown, not down).
+pub fn bearer_from_proc(
+    route: Option<&str>,
+    if_inet6: &str,
+    ipv6_route: &str,
+    iface: &str,
+) -> Option<bool> {
+    let up = |flags: &str| u32::from_str_radix(flags, 16).is_ok_and(|x| x & 1 != 0);
+    // Iface Destination Gateway Flags RefCnt Use Metric Mask …
+    let v4 = route?.lines().skip(1).any(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        f.len() >= 8 && f[0] == iface && f[1] == "00000000" && f[7] == "00000000" && up(f[3])
+    });
+    // address, index, prefix length, scope (00 = global), flags, name
+    let addr6 = if_inet6.lines().any(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        f.len() == 6 && f[3] == "00" && f[5] == iface
+    });
+    // dest, dest prefix, src, src prefix, next hop, metric, refcnt, use, flags, name
+    let route6 = ipv6_route.lines().any(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        f.len() == 10 && f[0].bytes().all(|b| b == b'0') && f[1] == "00" && f[9] == iface && up(f[8])
+    });
+    Some(v4 || (addr6 && route6))
+}
+
+/// The data call is up: the vendor says connected and the bearer (when it could be read) agrees.
+pub fn data_up(wwan: &Value, bearer: Option<bool>) -> bool {
+    data_connected(wwan) && bearer != Some(false)
 }
 
 /// `+COPS: 0,0,"CHN-UNICOM",7` → "auto"; 1 → "manual"; 4 → manual with

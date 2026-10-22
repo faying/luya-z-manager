@@ -18,10 +18,9 @@
 #             stays dark
 #   restart   the UI first, core 4 s later, then core killed and started again: Home recovers
 #             (verdict, battery), the stream and the pace come back, no banner at the end
-#   sentinel  launched as the sentinel does (src/uid.c: cwd /data/plugins/u60pro-devui, no
-#             variables but the backlight's, stdin /dev/null, output appended to the log, its
-#             own session; one argument, --offscreen: there is no panel here), as
-#             u60pro-devui.test, with devui.conf and the fonts at the device's own paths: the
+#   sentinel  launched as luyaz-sentinel does (cwd /data/luyaz/ui, no variables but the
+#             backlight's, stdin /dev/null, output appended to the log, its own session; one
+#             argument, --offscreen: there is no panel here), as luyaz-ui.test, with ui.conf and the fonts at the device's own paths: the
 #             conf is read, the fonts found, the comm, it ends on SIGTERM
 #   exec      tests/ui_exec_test.c's checks on the binary (same pid and comm, no fd kept, the
 #             launch arguments; a binary replaced on disk refused); the static one also runs
@@ -39,7 +38,7 @@ mkdir -p "$out"; out=$(cd "$out" && pwd)
 rm -f "$out"/*.texts "$out"/*.png "$out"/*.core "$out"/*.agent "$out"/*.ui "$out"/*.out "$out"/*.bl "$out"/exec.log
 bin=/t/aarch64-unknown-linux-musl/release-device/luyaz-ui
 [ "${SMOKE_BIN:-}" = native ] && bin=/t/release-device/luyaz-ui
-docker run --rm -v u60-devui-rs-target:/t:ro -v "$here/smoke":/smoke:ro -v "$out":/o \
+docker run --rm -v u60-ui-rs-target:/t:ro -v "$here/smoke":/smoke:ro -v "$out":/o \
     -v "$LUYAZ_DEVICE_FONTS":/fonts/dev:ro -v "$LUYAZ_NUNITO_DIR":/fonts/nunito:ro u60-rust-ci:1.99.0 sh -c '
 bin=$1
 fonts="LUYAZ_UI_CJK_FONT=/fonts/dev/ZTEZhengYuan.ttf LUYAZ_UI_ROBOTO=/fonts/dev/Roboto.ttf LUYAZ_UI_FONT_DIR=/fonts/nunito"
@@ -76,10 +75,10 @@ sleep 5
 kill -TERM $ui; wait $ui; echo "exit $?" >>/o/restart.ui
 sleep 1.2
 kill $d; wait $d 2>/dev/null
-# sentinel: as src/uid.c starts it, with the device paths populated
-mkdir -p /data/plugins/u60pro-devui /data/luyaz/ui/fonts /usr/ui/fonts
+# sentinel: as luyaz-sentinel starts it, with the device paths populated
+mkdir -p /data/luyaz/ui/fonts /usr/ui/fonts
 cp /fonts/nunito/Nunito-*.ttf /data/luyaz/ui/fonts/ && cp /fonts/dev/ZTEZhengYuan.ttf /fonts/dev/Roboto.ttf /usr/ui/fonts/
-printf "speed_bits=1\nautooff=0\nbright=200\nappearance=dark\nappearance_dark_from=19:00\nappearance_dark_to=07:00\nlang=zh\nusb_attach=ask\n" >/data/luyaz/ui/devui.conf
+printf "speed_bits=1\nautooff=0\nbright=200\nappearance=dark\nappearance_dark_from=19:00\nappearance_dark_to=07:00\nlang=zh\nusb_attach=ask\n" >/data/luyaz/ui/ui.conf
 cp $bin /data/luyaz/ui/luyaz-ui.test
 python3 -I /smoke/fake_core.py /o/sentinel.core & d=$!
 sleep 0.5
@@ -128,7 +127,7 @@ check "the pace again after each reconnect" "[ \$(grep -c 'state.set_interval' '
 check "Home current at the end (顺畅, 66), no banner" "grep -qx '顺畅' '$o/restart.texts' && grep -qx '66' '$o/restart.texts' && ! grep -q '后台数据服务不可用' '$o/restart.texts'"
 check "exit 0" "grep -q '^exit 0$' '$o/restart.ui'"
 echo "## sentinel"
-check "devui.conf read from /data/luyaz/ui (appearance=dark)" "grep -q 'appearance=dark dark=1' '$o/sentinel.ui'"
+check "ui.conf read from /data/luyaz/ui (appearance=dark)" "grep -q 'appearance=dark dark=1' '$o/sentinel.ui'"
 check "fonts at the device's own paths" "grep -q 'fonts cjk=device numerals=nunito' '$o/sentinel.ui'"
 check "comm luyaz-ui.test, cwd the UI dir (R5)" "grep -q 'comm=luyaz-ui.test cwd=/data/luyaz/ui' '$o/sentinel.ui'"
 check "core read, the pace sent" "grep -q 'GET /v2/events' '$o/sentinel.core' && grep -q 'state.set_interval' '$o/sentinel.core'"
@@ -136,7 +135,7 @@ check "ended on SIGTERM" "grep -q 'first refresh done' '$o/sentinel.ui' && grep 
 echo "## exec"
 check "exec self-test (pid, comm, fds, arguments; a replaced binary refused)" "! grep -q FAIL '$o/exec.log' && [ \$(grep -c '^exit 0$' '$o/exec.log') = 2 ]"
 if [ "${SMOKE_BIN:-}" != native ]; then
-    check "static: runs in a bare busybox container" "docker run --rm -v u60-devui-rs-target:/t:ro -e LUYAZ_UI_EXEC_SELFTEST=1 busybox:latest $bin 2>&1 | grep -q 'exec selftest: failed 0'"
+    check "static: runs in a bare busybox container" "docker run --rm -v u60-ui-rs-target:/t:ro -e LUYAZ_UI_EXEC_SELFTEST=1 busybox:latest $bin 2>&1 | grep -q 'exec selftest: failed 0'"
 fi
 echo "lit texts: $(tr '\n' '|' <"$o/lit.texts" | cut -c1-300)"
 exit $fail

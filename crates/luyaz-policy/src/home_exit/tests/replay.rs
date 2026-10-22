@@ -39,6 +39,11 @@ impl Io for Rec<'_> {
         self.inner.save(p);
         self.events.push(Event::Save);
     }
+    fn cell_up(&mut self) -> Option<bool> {
+        let up = self.inner.cell_up();
+        self.events.push(Event::CellUp { up });
+        up
+    }
 }
 
 struct Rng(u64);
@@ -80,6 +85,9 @@ impl Io for Random<'_> {
     }
     fn alert(&mut self, _kind: &str, _text: &str) {}
     fn save(&mut self, _p: &Persist) {}
+    fn cell_up(&mut self) -> Option<bool> {
+        self.0.pick(&[Some(true), Some(false), None])
+    }
 }
 
 fn items(r: &mut Rng) -> Items {
@@ -161,7 +169,7 @@ fn random_steps_replay_exactly() {
             assert_eq!(out.after, m);
         }
     }
-    for c in ["probe_home", "apply", "alert", "save"] {
+    for c in ["probe_home", "apply", "alert", "save", "cell_up"] {
         assert!(calls.contains(c), "{c}: {calls:?}");
     }
     for k in ["stale", "expired", "back_home", "home_down"] {

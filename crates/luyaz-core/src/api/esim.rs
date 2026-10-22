@@ -16,24 +16,36 @@ fn answer(r: Result<(u16, Value), tokio::task::JoinError>) -> Response {
     }
 }
 
-/// The device's host: lpac, the shell and the reboot as the agent's; the data check through u60d's
-/// ubus (from the engine's own threads, so it blocks on the runtime handle).
-pub fn real_host(
-    ubus: std::sync::Arc<
-        dyn Fn(&'static str, &'static str, Value) -> super::UbusReply + Send + Sync,
-    >,
-) -> std::sync::Arc<dyn luyaz_esim::Host> {
-    let handle = tokio::runtime::Handle::current();
+/// The device's host: lpac, the shell and the reboot as the agent's; the data check is the
+/// bearer itself (rmnet address + route, P0-1: B31's `get_wwaniface` says connected when it is
+/// not); a switch's steps go to the SIM identity tracking and drop the cached `get_sim_info`.
+pub fn real_host() -> std::sync::Arc<dyn luyaz_esim::Host> {
     std::sync::Arc::new(luyaz_esim::RealHost {
-        data_up: Box::new(move || {
-            let w = handle
-                .block_on(ubus(
-                    "zwrt_data",
-                    "get_wwaniface",
-                    json!({"source_module": "zte_topsw_data", "cid": 1}),
-                ))
-                .unwrap_or(Value::Null);
-            luyaz_api::netinfo::data_connected(&w)
+        data_up: Box::new(crate::ops::reconnect::read_bearer_up),
+        planned_reboot: Box::new(|| {
+            if let Err(e) = crate::longterm::boot::plan("esim-identity") {
+                eprintln!("[esim] planned-reboot marker: {e}");
+            }
+        }),
+        switch_event: Box::new(|ev| {
+            let now = std::time::Instant::now();
+            let mut s = crate::sim_identity::global()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let mut ended = None;
+            match ev {
+                luyaz_esim::SwitchEvent::Leaving { .. } => s.intent(now),
+                luyaz_esim::SwitchEvent::CardSwitched => {}
+                luyaz_esim::SwitchEvent::Ended { reason, rebooting } => {
+                    s.job_ended(now);
+                    ended = Some((s.epoch(), reason, rebooting));
+                }
+            }
+            drop(s);
+            if let Some((epoch, reason, rebooting)) = ended {
+                crate::sim_alerts::switch_ended(epoch, &reason, rebooting);
+            }
+            crate::state::invalidate_cache();
         }),
     })
 }
@@ -45,7 +57,18 @@ pub async fn profiles(State(c): State<Compat>) -> Response {
 
 /// GET /api/esim/job
 pub async fn job(State(c): State<Compat>) -> Response {
-    let (s, v) = c.esim.job();
+    let (s, mut v) = c.esim.job();
+    // the shared words for a switch (`sim_say`): the UIs show these, not the reason codes
+    let say = crate::sim_say::for_job(&v["data"]);
+    if let Some(o) = v["data"].as_object_mut() {
+        crate::sim_say::stamp(o, say);
+    }
+    reply(s, v)
+}
+
+/// POST /api/esim/cancel — stop a switch's busy-card retries
+pub async fn cancel(State(c): State<Compat>) -> Response {
+    let (s, v) = c.esim.cancel();
     reply(s, v)
 }
 

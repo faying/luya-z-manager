@@ -12,12 +12,12 @@
 #   operator-logos/   网页首页的运营商 logo（assets/operator-logos 原样；开源版没有，就不带）
 #   luyaz-sentinel    哨兵（屏幕主人 + 看门狗），本仓库 HEAD 的 crates/luyaz-sentinel
 #                     现编（profile release-device，同 tools/luyaz ship sentinel）；SENTINEL_BIN 给了就用那个
-#   devui/            触屏界面：DEVUI_BIN 没给、且 touch-ui/out/ 里没有时，
+#   ui/               触屏界面：TOUCH_BIN 没给、且 touch-ui/out/ 里没有时，
 #                     自动跑 touch-ui/rs/build.sh device 现编（Rust 版）；启动/自启脚本
 #                     （界面文字编进二进制，不再带 ui/ 目录）
-#   devui/fonts/      Nunito 600/700/800 + 中文兜底字体（都是 OFL，按 sha256 钉死的公开下载，Docker 里生成，
+#   ui/fonts/         Nunito 600/700/800 + 中文兜底字体（都是 OFL，按 sha256 钉死的公开下载，Docker 里生成，
 #                     缓存 onboard/cache/fonts）。设备自带的 ZTE 字体（/usr/ui/fonts）不打包，触屏直接读设备上的
-#   devui/luyaz-core  核心 = 本仓库 HEAD 的 crates/luyaz-core（cargo zigbuild --profile release-device，同
+#   ui/luyaz-core     核心 = 本仓库 HEAD 的 crates/luyaz-core（cargo zigbuild --profile release-device，同
 #                     tools/luyaz ship core），装成 /data/luyaz/luyaz-core；CORE_BIN 给了就用那个
 #   esim.tgz          scripts/esim/build-esim-bundle.sh --out 现打：Alpine 的 lpac + 依赖库（alpine.lock 钉版本和
 #                     sha256）+ statx 兼容垫片 + qmi_uim_probe
@@ -29,25 +29,24 @@
 # 另外：install.sh、device/install.sh、README、u60.env.example、CLAUDE.md（kit-CLAUDE.md）、
 #       MANIFEST.txt（来源 + 每个文件的 sha256，install.sh 先核对）、versions.json（各组件版本）。
 #
-# 环境变量：DEVUI_REPO（默认本仓库的 touch-ui/）、CHILL=0（不打 CHILL）、
-#           DEVUI_BIN=路径（触屏二进制，默认 $DEVUI_REPO/out/luyaz-ui，没有就现编）、
+# 环境变量：TOUCH_REPO（默认本仓库的 touch-ui/）、CHILL=0（不打 CHILL）、
+#           TOUCH_BIN=路径（触屏二进制，默认 $TOUCH_REPO/out/luyaz-ui，没有就现编）、
 #           SENTINEL_BIN=路径（用这个 luyaz-sentinel，不现编）、
 #           CORE_BIN=路径（用这个核心，不现编 luyaz-core）、
 #           SHIP_RECORDS=目录（u60 ship 存在本机的上机记录：每次事务一个子目录，放着上机的文件和清单副本。
 #           给了它，触屏、哨兵、数据服务就先用设备上正在跑的那份（按最新清单的 md5 在记录里找），
 #           找不到才走默认；上面三个 *_BIN 显式给了的优先。FRESH=1 不用记录、照常现编）、
 #           ESIM_TGZ=路径（用现成的 eSIM 包，不现打）、
-#           DEVUI_FONTS_DIR=目录（现成的字体目录，要有 Nunito-600/700/800.ttf、OFL-Nunito.txt、
+#           UI_FONTS_DIR=目录（现成的字体目录，要有 Nunito-600/700/800.ttf、OFL-Nunito.txt、
 #           u60-cjk-fallback.ttf、OFL-ResourceHanRounded.txt；不给就自动生成到 onboard/cache/fonts）、
 #           FONTS=0（不打字体：触屏数字退回设备自带 Roboto，中文用设备自带字体）、
 #           KIT_ZIGBUILD=命令（Rust 程序换个地方编，见下面 zigbuild）、ZIGBUILD_IMAGE=镜像（本机 Docker 编时用）
 #           这些也可以写进 onboard/kit.local.env（不进 git），每次打包自动读取。
 #
 # 打包前会检查两样最容易装错、装错了又看不出来的东西，不对就停：
-#   触屏二进制必须是 LVGL 版（make 编的）。touch-ui 的 scripts/build.sh 编的是旧 litehtml 版，
-#     而且会写到同一个 u60pro-devui.stripped，默认路径下一不留神就打进旧界面。
+#   触屏二进制必须是 touch-ui/rs/build.sh device 编的 luyaz-ui。
 #   核心必须是 Rust 版（luyaz-core），且没有写死的外部更新源（releases/latest/download）。
-#     用 CORE_BIN 指定的文件可能是更早的 C 版或带上游更新源的版本。
+#     用 CORE_BIN 指定的文件可能是带上游更新源的版本。
 # ═════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -60,7 +59,7 @@ if [ -f "$ONB/kit.local.env" ]; then
     [ -n "${!k:-}" ] || export "$k=$v"
   done < "$ONB/kit.local.env"
 fi
-DEVUI_REPO="${DEVUI_REPO:-$ROOT/touch-ui}"
+TOUCH_REPO="${TOUCH_REPO:-$ROOT/touch-ui}"
 # Rust 构建镜像：没指定就按 onboard/build.Dockerfile 现建（和 data-service scripts/build.Dockerfile 同一份，
 # 标签取文件哈希，所以两个仓库共用同一个镜像）。给了 KIT_ZIGBUILD 就不在本机建。
 if [ -z "${ZIGBUILD_IMAGE:-}" ] && [ -z "${KIT_ZIGBUILD:-}" ]; then
@@ -121,14 +120,14 @@ core_bin_check() {
   return 0
 }
 
-[ -d "$DEVUI_REPO" ] || die "找不到 devui 仓库: ${DEVUI_REPO}（用 DEVUI_REPO=… 指定）"
+[ -d "$TOUCH_REPO" ] || die "找不到触屏仓库: ${TOUCH_REPO}（用 TOUCH_REPO=… 指定）"
 mkdir -p "$CACHE" "$DIST"
 STAMP=$(date +%Y%m%d)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 KIT="$WORK/luyaz-kit"       # 包的根目录
 PL="$KIT/payload"           # 推到设备上的东西
-mkdir -p "$PL/devui"
+mkdir -p "$PL/ui"
 
 # ── dropbear：从 ipk 里取出 usr/sbin/dropbear ─────────────────────────────────
 # ipk 是 tar.gz 套 tar.gz：外层的 data.tar.gz 里才是文件
@@ -147,7 +146,7 @@ cp "$WORK/dropbear/usr/sbin/dropbear" "$PL/dropbear"
 # zigbuild <profile> <包>：本仓库现编一个 aarch64-musl 程序，打印产物路径。有 cargo-zigbuild 就本机编，
 # 没有走 Docker（同 tools/luyaz ship）。LUYAZ_COMMIT：核心把它当版本号写进长期记录（u60-sentinel.md §17）
 # KIT_ZIGBUILD=<命令>：换个地方编（比如另一台构建机），调用 <命令> <profile> <包> <commit> <产物路径>，
-# 它要把本仓库工作区编出的 aarch64-musl 程序放到 <产物路径>（包 devui = 触屏界面，见下面 devui 一节）
+# 它要把本仓库工作区编出的 aarch64-musl 程序放到 <产物路径>（包 ui = 触屏界面，见下面 ui 一节）
 zigbuild() {
   local head; head=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo 0000000)
   local out="$ROOT/target/aarch64-unknown-linux-musl/$1/$2" log="$WORK/build-$2.log"
@@ -180,13 +179,13 @@ if ls "$ROOT"/assets/operator-logos/*.svg >/dev/null 2>&1; then
   done
 fi
 
-# ── 触屏界面（devui）：程序、字体、logo ─────────────────────────────────────
-step "devui（${DEVUI_REPO}）"
+# ── 触屏界面（ui）：程序、字体、logo ─────────────────────────────────────
+step "ui（${TOUCH_REPO}）"
 # 设备现行版（SHIP_RECORDS）：只替代没显式给的；SHIP_<组件> 记编它的提交，写进 kit-source
 SHIP_touch= SHIP_sentinel= SHIP_core=
-if [ -z "${DEVUI_BIN:-}" ] && shipped /data/luyaz/ui/luyaz-ui; then
-  DEVUI_BIN=$SHIP_FILE SHIP_touch=${SHIP_COMMIT:-0000000}
-  step "  触屏用设备现行版：$DEVUI_BIN（${SHIP_touch:0:7}）"
+if [ -z "${TOUCH_BIN:-}" ] && shipped /data/luyaz/ui/luyaz-ui; then
+  TOUCH_BIN=$SHIP_FILE SHIP_touch=${SHIP_COMMIT:-0000000}
+  step "  触屏用设备现行版：$TOUCH_BIN（${SHIP_touch:0:7}）"
 fi
 if [ -z "${SENTINEL_BIN:-}" ] && shipped /data/luyaz/luyaz-sentinel; then
   SENTINEL_BIN=$SHIP_FILE SHIP_sentinel=${SHIP_COMMIT:-0000000}
@@ -195,40 +194,40 @@ fi
 if [ -z "${CORE_BIN:-}" ] && shipped /data/luyaz/luyaz-core; then
   CORE_BIN=$SHIP_FILE SHIP_core=${SHIP_COMMIT:-0000000}
 fi
-DEVUI_BIN="${DEVUI_BIN:-$DEVUI_REPO/out/luyaz-ui}"
-DEVUI_PREBUILT=1
-if [ ! -f "$DEVUI_BIN" ]; then
-  DEVUI_PREBUILT=0
-  case "$DEVUI_BIN" in "$DEVUI_REPO"/out/*) ;; *) die "没有 $DEVUI_BIN" ;; esac
-  step "触屏界面还没编：跑 ${DEVUI_REPO}/rs/build.sh device（Docker；源码卷没有就先 rs/setup-src.sh）"
+TOUCH_BIN="${TOUCH_BIN:-$TOUCH_REPO/out/luyaz-ui}"
+UI_PREBUILT=1
+if [ ! -f "$TOUCH_BIN" ]; then
+  UI_PREBUILT=0
+  case "$TOUCH_BIN" in "$TOUCH_REPO"/out/*) ;; *) die "没有 $TOUCH_BIN" ;; esac
+  step "触屏界面还没编：跑 ${TOUCH_REPO}/rs/build.sh device（Docker；源码卷没有就先 rs/setup-src.sh）"
   if [ -n "${KIT_ZIGBUILD:-}" ]; then
-    mkdir -p "$(dirname "$DEVUI_BIN")"
-    $KIT_ZIGBUILD release-device devui "$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo 0000000)" "$DEVUI_BIN" >"$WORK/build-devui.log" 2>&1
+    mkdir -p "$(dirname "$TOUCH_BIN")"
+    $KIT_ZIGBUILD release-device luyaz-ui "$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo 0000000)" "$TOUCH_BIN" >"$WORK/build-ui.log" 2>&1
   else
-    { export LUYAZ_RS_IMAGE="${LUYAZ_RS_IMAGE:-$ZIGBUILD_IMAGE}"; "$DEVUI_REPO/rs/setup-src.sh" && "$DEVUI_REPO/rs/build.sh" device "$DEVUI_BIN"; } >/dev/null
-  fi || die "触屏界面构建失败（单独跑 ${DEVUI_REPO}/rs/build.sh device 看原因）"
+    { export LUYAZ_RS_IMAGE="${LUYAZ_RS_IMAGE:-$ZIGBUILD_IMAGE}"; "$TOUCH_REPO/rs/setup-src.sh" && "$TOUCH_REPO/rs/build.sh" device "$TOUCH_BIN"; } >/dev/null
+  fi || die "触屏界面构建失败（单独跑 ${TOUCH_REPO}/rs/build.sh device 看原因）"
 fi
-# 触屏界面只有 Rust 版（Phase 10 X5 删了 C 版）：两版启动都打印 pages+chrome built，Rust 版才有 devui/src/
-grep -a -q 'pages+chrome built' "$DEVUI_BIN" || die "$(basename "$DEVUI_BIN") 不是触屏界面"
-grep -a -q 'devui/src/' "$DEVUI_BIN" || die "$(basename "$DEVUI_BIN") 是已删的 C 版触屏（Phase 10 X5 起只打 Rust 版：touch-ui/rs/build.sh device 编）"
-cp "$DEVUI_BIN" "$PL/devui/luyaz-ui"  # Phase 10 R5: installed as /data/luyaz/ui/luyaz-ui
+# 触屏二进制要同时有 pages+chrome built 和 ui/src/ 两个标记
+grep -a -q 'pages+chrome built' "$TOUCH_BIN" || die "$(basename "$TOUCH_BIN") 不是触屏界面"
+grep -a -q 'ui/src/' "$TOUCH_BIN" || die "$(basename "$TOUCH_BIN") 是已删的 C 版触屏（Phase 10 X5 起只打 Rust 版：touch-ui/rs/build.sh device 编）"
+cp "$TOUCH_BIN" "$PL/ui/luyaz-ui"  # Phase 10 R5: installed as /data/luyaz/ui/luyaz-ui
 # 触屏字体：Nunito（数字）+ 中文兜底（设备自带 ZTE 字体缺失时用），都是 OFL。
 # 字体文件是二进制，不进任何 git，只随装机包走；设备自带的 /usr/ui/fonts 不打包。
 FONT_FILES="Nunito-600.ttf Nunito-700.ttf Nunito-800.ttf OFL-Nunito.txt u60-cjk-fallback.ttf OFL-ResourceHanRounded.txt"
 if [ "${FONTS:-1}" != 0 ]; then
-  if [ -z "${DEVUI_FONTS_DIR:-}" ]; then
-    DEVUI_FONTS_DIR="$CACHE/fonts"
-    have=1; for f in $FONT_FILES; do [ -f "$DEVUI_FONTS_DIR/$f" ] || have=0; done
+  if [ -z "${UI_FONTS_DIR:-}" ]; then
+    UI_FONTS_DIR="$CACHE/fonts"
+    have=1; for f in $FONT_FILES; do [ -f "$UI_FONTS_DIR/$f" ] || have=0; done
     if [ "$have" = 0 ]; then
       step "生成字体（Nunito + 中文兜底，Docker 里做，缓存 onboard/cache/fonts）"
-      "$DEVUI_REPO/scripts/fonts/build-nunito.sh" "$DEVUI_FONTS_DIR" "$CACHE/fonts-src" >/dev/null || die "Nunito 生成失败"
-      "$DEVUI_REPO/scripts/fonts/build-cjk-fallback.sh" "$DEVUI_FONTS_DIR" "$CACHE/fonts-src" >/dev/null || die "中文兜底字体生成失败"
+      "$TOUCH_REPO/scripts/fonts/build-nunito.sh" "$UI_FONTS_DIR" "$CACHE/fonts-src" >/dev/null || die "Nunito 生成失败"
+      "$TOUCH_REPO/scripts/fonts/build-cjk-fallback.sh" "$UI_FONTS_DIR" "$CACHE/fonts-src" >/dev/null || die "中文兜底字体生成失败"
     fi
   fi
-  mkdir -p "$PL/devui/fonts"
+  mkdir -p "$PL/ui/fonts"
   for f in $FONT_FILES; do
-    [ -f "$DEVUI_FONTS_DIR/$f" ] || die "DEVUI_FONTS_DIR=${DEVUI_FONTS_DIR} 里缺 $f"
-    cp "$DEVUI_FONTS_DIR/$f" "$PL/devui/fonts/"
+    [ -f "$UI_FONTS_DIR/$f" ] || die "UI_FONTS_DIR=${UI_FONTS_DIR} 里缺 $f"
+    cp "$UI_FONTS_DIR/$f" "$PL/ui/fonts/"
   done
 else
   printf '\033[0;33m!\033[0m %s\n' "FONTS=0：不打字体，触屏数字用设备自带的 Roboto，设备字体缺失时中文不显示"
@@ -239,13 +238,13 @@ fi
 LOGO_SVG_DIR="$ROOT/assets/operator-logos"
 if ls "$LOGO_SVG_DIR"/*.svg >/dev/null 2>&1; then
   step "运营商 logo（Docker 里生成）"
-  "$DEVUI_REPO/scripts/logos/build-operator-logos.sh" "$LOGO_SVG_DIR" "$CACHE/operator-logos" >/dev/null || die "运营商 logo 生成失败"
-  mkdir -p "$PL/devui/operator-logos"
-  cp "$CACHE"/operator-logos/*.png "$PL/devui/operator-logos/"
+  "$TOUCH_REPO/scripts/logos/build-operator-logos.sh" "$LOGO_SVG_DIR" "$CACHE/operator-logos" >/dev/null || die "运营商 logo 生成失败"
+  mkdir -p "$PL/ui/operator-logos"
+  cp "$CACHE"/operator-logos/*.png "$PL/ui/operator-logos/"
 fi
 
 # ── 进程监督与 Wi-Fi 兜底 ─────────────────────────────────────────────────────
-step "设备脚本（${DEVUI_REPO}/scripts）"
+step "设备脚本（${TOUCH_REPO}/scripts）"
 mkdir -p "$PL/scripts"
 # luyaz-ship.sh、core-trial.sh（它的壳，要和它放一起）也进 /data/luyaz/scripts；
 # luyaz-recover.sh 由设备端放成 /data/luyaz/ship/luyaz-recover.sh（自检过才放，已有就不换；rc.local 那一行只由 recover 组件加）
@@ -254,11 +253,11 @@ mkdir -p "$PL/scripts"
 for f in alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION \
          luyaz-ship.sh core-trial.sh luyaz-recover.sh \
          luyaz-core.init luyaz-sentinel.init luyaz-web.init; do
-  [ -f "$DEVUI_REPO/scripts/$f" ] || die "缺 $DEVUI_REPO/scripts/$f"
-  cp "$DEVUI_REPO/scripts/$f" "$PL/scripts/"
+  [ -f "$TOUCH_REPO/scripts/$f" ] || die "缺 $TOUCH_REPO/scripts/$f"
+  cp "$TOUCH_REPO/scripts/$f" "$PL/scripts/"
 done
 # 设备清单（kind=kit）的来源：装机包日期、各组件编的提交、数据格式版本、有没有未提交改动。
-# touch 记 touch-ui 当前的提交；用 DEVUI_BIN 指定现成程序时，程序未必是这个提交编的，记成有改动。
+# touch 记 touch-ui 当前的提交；用 TOUCH_BIN 指定现成程序时，程序未必是这个提交编的，记成有改动。
 # 用了设备现行版（SHIP_<组件>）时记上机时的提交、没有改动；只记录过、不知道提交的（0000000）记成有改动。
 kit_format() { sed 's/#.*//' "$1" 2>/dev/null | awk 'NF { print $1; exit }'; }
 {
@@ -270,13 +269,13 @@ kit_format() { sed 's/#.*//' "$1" 2>/dev/null | awk 'NF { print $1; exit }'; }
     v=SHIP_$c sc=${!v}
     if [ -n "$sc" ]; then
       echo "${c}_commit=$sc"
-      echo "${c}_format=$(kit_format "$DEVUI_REPO/ship/$c/format")"
+      echo "${c}_format=$(kit_format "$TOUCH_REPO/ship/$c/format")"
       echo "${c}_dirty=$([ "$sc" = 0000000 ] && echo 1 || echo 0)"
       continue
     fi
-    echo "${c}_commit=$(git -C "$DEVUI_REPO" rev-parse HEAD 2>/dev/null || echo 0000000)"
-    echo "${c}_format=$(kit_format "$DEVUI_REPO/ship/$c/format")"
-    echo "${c}_dirty=$([ -n "$(dirty "$DEVUI_REPO" src scripts)" ] || [ "$DEVUI_PREBUILT" = 1 ] && echo 1 || echo 0)"
+    echo "${c}_commit=$(git -C "$TOUCH_REPO" rev-parse HEAD 2>/dev/null || echo 0000000)"
+    echo "${c}_format=$(kit_format "$TOUCH_REPO/ship/$c/format")"
+    echo "${c}_dirty=$([ -n "$(dirty "$TOUCH_REPO" src scripts)" ] || [ "$UI_PREBUILT" = 1 ] && echo 1 || echo 0)"
   done
   # core：本仓库当前的提交编的 luyaz-core（u60 ship core 一样记 manager 的提交，格式在
   # crates/luyaz-core/ship/core）；用 CORE_BIN 指定现成程序（下面不现编）时记成有改动
@@ -322,10 +321,10 @@ else
   CORE_SRC="$(basename "$CORE_BIN")"
   [ -z "$SHIP_core" ] || CORE_SRC="设备现行版 ${SHIP_core:0:7}（$CORE_BIN）"
 fi
-cp "$CORE_BIN" "$PL/devui/luyaz-core"
+cp "$CORE_BIN" "$PL/ui/luyaz-core"
 # D3 起的核心（标记 LUYAZ_CORE_BUILD_SELF_CONTAINED）；
 # 装机包要完全自主：不能带上游写死的更新源。规则见上面 core_bin_check。
-core_rc=0; core_bin_check "$PL/devui/luyaz-core" || core_rc=$?
+core_rc=0; core_bin_check "$PL/ui/luyaz-core" || core_rc=$?
 case $core_rc in
   0) ;;
   1) die "包里的核心不是 Luya-Z 改名 D3 起的核心（${CORE_BIN}；二进制里没有 LUYAZ_CORE_BUILD_SELF_CONTAINED）。
@@ -350,10 +349,10 @@ else
 fi
 if [ -f "$LANID_CWASM" ]; then
   LANID_ABI=$(sed -n 's/^package \(.*\);$/\1/p' "$ROOT/crates/luyaz-policy/wit/lanid-parse.wit")
-  mkdir -p "$PL/devui/plugins"
-  cp "$LANID_CWASM" "$PL/devui/plugins/lanid-parse.cwasm"
+  mkdir -p "$PL/ui/plugins"
+  cp "$LANID_CWASM" "$PL/ui/plugins/lanid-parse.cwasm"
   printf '{"plugins":[{"name":"lanid-parse","abi":"%s","file":"lanid-parse.cwasm","sha256":"%s"}]}\n' \
-    "$LANID_ABI" "$(sha256 "$LANID_CWASM")" >"$PL/devui/plugins/plugins.json"
+    "$LANID_ABI" "$(sha256 "$LANID_CWASM")" >"$PL/ui/plugins/plugins.json"
 else
   printf '\033[0;33m!\033[0m 没编出 lanid-parse.cwasm：装上后已连设备识别关着（只有 DHCP 名字）\n' >&2
   LANID_SRC="没带（识别关着）"
@@ -363,8 +362,8 @@ fi
 # 公开仓库不带这张表，没有时厂商只来自 mDNS/SSDP
 if [ -n "${OUI_TSV:-}" ]; then
   [ -f "$OUI_TSV" ] || die "OUI_TSV 不存在: $OUI_TSV"
-  mkdir -p "$PL/devui/lanid"
-  cp "$OUI_TSV" "$PL/devui/lanid/oui.tsv"
+  mkdir -p "$PL/ui/lanid"
+  cp "$OUI_TSV" "$PL/ui/lanid/oui.tsv"
 fi
 
 # ── eSIM（lpac 包，本机现打）────────────────────────────────────────────────
@@ -409,12 +408,12 @@ kit_hashes() {
   printf 'U60 装机包 %s\n\n来源：\n' "$STAMP"
   echo "  manager       $(rev "$ROOT")$(dirty "$ROOT" crates Cargo.toml Cargo.lock assets/operator-logos onboard)"
   echo "  luyaz-web     二进制 $(sha256 "$PL/luyaz-web" | cut -c1-12)$([ -d "$PL/operator-logos" ] && echo "，运营商 logo $(ls "$PL/operator-logos" | wc -l | tr -d ' ') 个")"
-  echo "  luyaz-ui      $(rev "$DEVUI_REPO")$(dirty "$DEVUI_REPO" rs scripts)（scripts/ 同源）"
-  echo "  luyaz-ui      二进制 $(basename "$DEVUI_BIN") $(sha256 "$DEVUI_BIN" | cut -c1-12)"
+  echo "  luyaz-ui      $(rev "$TOUCH_REPO")$(dirty "$TOUCH_REPO" rs scripts)（scripts/ 同源）"
+  echo "  luyaz-ui      二进制 $(basename "$TOUCH_BIN") $(sha256 "$TOUCH_BIN" | cut -c1-12)"
   echo "  luyaz-sentinel ${SENTINEL_SRC} $(sha256 "$SENTINEL_BIN" | cut -c1-12)"
   echo "  luyaz-core    ${CORE_SRC} $(sha256 "$CORE_BIN" | cut -c1-12)"
-  echo "  lanid-parse   ${LANID_SRC}$([ -f "$PL/devui/plugins/lanid-parse.cwasm" ] && echo " $(sha256 "$PL/devui/plugins/lanid-parse.cwasm" | cut -c1-12)")"
-  [ -f "$PL/devui/lanid/oui.tsv" ] && echo "  OUI 表        $(wc -l <"$PL/devui/lanid/oui.tsv" | tr -d ' ') 条 $(sha256 "$PL/devui/lanid/oui.tsv" | cut -c1-12)"
+  echo "  lanid-parse   ${LANID_SRC}$([ -f "$PL/ui/plugins/lanid-parse.cwasm" ] && echo " $(sha256 "$PL/ui/plugins/lanid-parse.cwasm" | cut -c1-12)")"
+  [ -f "$PL/ui/lanid/oui.tsv" ] && echo "  OUI 表        $(wc -l <"$PL/ui/lanid/oui.tsv" | tr -d ' ') 条 $(sha256 "$PL/ui/lanid/oui.tsv" | cut -c1-12)"
   echo "  eSIM          ${ESIM_SRC}"
   echo "  dropbear      ${DROPBEAR_URL##*/}"
   [ -d "$PL/chill" ] && echo "  CHILL         mihomo ${MIHOMO_VER:-v1.19.31}、zashboard ${ZASHBOARD_VER:-v3.27.0}（规则集下载于 $(date -r "$CACHE/chill/ruleset/cn.list" '+%Y-%m-%d')）"
@@ -427,7 +426,7 @@ kit_hashes() {
 kver() { v=$(grep -a -o 'LUYAZ_VERSION=[0-9]*\.[0-9]*\.[0-9]*;' "$1" 2>/dev/null | head -n 1); v=${v#LUYAZ_VERSION=}; v=${v%;}; if [ -n "$v" ]; then echo "\"$v\""; else echo null; fi; }
 _sv=$(cat "$PL/scripts/VERSION" 2>/dev/null)
 printf '{\n  "v": 1,\n  "kit": "%s",\n  "components": {\n    "core": %s,\n    "lweb": %s,\n    "sentinel": %s,\n    "touch": %s,\n    "scripts": %s\n  }\n}\n' \
-  "$STAMP" "$(kver "$CORE_BIN")" "$(kver "$PL/luyaz-web")" "$(kver "$SENTINEL_BIN")" "$(kver "$DEVUI_BIN")" \
+  "$STAMP" "$(kver "$CORE_BIN")" "$(kver "$PL/luyaz-web")" "$(kver "$SENTINEL_BIN")" "$(kver "$TOUCH_BIN")" \
   "$(if [ -n "$_sv" ]; then echo "\"$_sv\""; else echo null; fi)" >"$KIT/versions.json"
 
 OUT="$DIST/luyaz-kit-$STAMP.tar.gz"

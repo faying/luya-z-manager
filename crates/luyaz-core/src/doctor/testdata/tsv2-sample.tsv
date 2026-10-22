@@ -11,7 +11,7 @@ ok	web-http	管理网页 :9090	能访问	Web admin :9090	Reachable
 ok	core-http	数据服务 :9460	能访问	Data service :9460	Reachable
 bad	heartbeat	后台心跳	500 秒没更新（情景引擎卡住了？看门狗 5 分钟后会接管 Wi-Fi）	Admin heartbeat	No update for 500 s (scenario engine stuck? The watchdog takes over Wi-Fi after 5 min)
 warn	wifi	Wi-Fi	没有在广播，当前情景也没要求关	Wi-Fi	Not broadcasting, and the current scenario doesn't turn it off
-bad	screen	触屏界面	反复启动失败，已换回原厂界面（长按屏幕右下角 3 秒，或 echo devui > /tmp/luyaz-screen.ctl）	Screen UI	Kept failing to start; stock UI on (hold bottom-right 3 s, or echo devui > /tmp/luyaz-screen.ctl)
+bad	screen	触屏界面	反复启动失败，已换回原厂界面（长按屏幕右下角 3 秒，或 echo ui > /tmp/luyaz-screen.ctl）	Screen UI	Kept failing to start; stock UI on (hold bottom-right 3 s, or echo ui > /tmp/luyaz-screen.ctl)
 warn	alerts	告警	1 条未读（管理网页「系统 → 告警」）	Alerts	1 unread (Alerts in web admin)
 warn	sms	短信告警	没配置号码：后台挂了你不会知道	Alert SMS	No number set: you won't hear if the admin backend dies
 ok	crashes	崩溃记录	最近 24 小时没有	Crash logs	None in the last 24h

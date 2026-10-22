@@ -118,7 +118,7 @@ async function own(p) {
   // T6: the core's open "sure" finding — its sentence + a link to the evidence, over an ok verdict
   await hook({ finding: true });
   await until(p, "#hm-why", /数据连接没建立/, 15000);
-  ok(!(await p.locator("#hm-why").isHidden()) && await p.locator("#hm-why a").getAttribute("href") === "/tools/diagnose" && /看证据/.test(await txt(p, "#hm-why")), `finding → 「${await txt(p, "#hm-why")}」`);
+  ok(!(await p.locator("#hm-why").isHidden()) && await p.locator("#hm-why a").getAttribute("href") === "/tools/diagnose" && /看证据/.test(await txt(p, "#hm-why")) && /已暂停代理重连/.test(await txt(p, "#hm-why")), `finding (network.health words) → 「${await txt(p, "#hm-why")}」`);
   await hook({ finding: false });
   await p.waitForFunction(() => document.querySelector("#hm-why")?.hidden, null, { timeout: 15000 }).catch(() => {});
   ok(await p.locator("#hm-why").isHidden(), "finding closed: line gone");

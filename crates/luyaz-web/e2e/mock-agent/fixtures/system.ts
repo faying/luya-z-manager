@@ -171,7 +171,7 @@ function killBloat(pids: number[] | null): KillBloatResult {
 
 const BOOT = deviceBootAt();
 const PREV_BOOT_TIME = T0 - 9 * 86400 - 4 * 3600;
-const DEVUI_CRASH_AT = T0 - 31 * 3600 - 12 * 60;
+const UI_CRASH_AT = T0 - 31 * 3600 - 12 * 60;
 
 /** /data/alerts/queue, oldest first. */
 const EVENTS: Omit<AlertEvent, "unread">[] = [
@@ -179,7 +179,7 @@ const EVENTS: Omit<AlertEvent, "unread">[] = [
   { seq: 8, time: PREV_BOOT_TIME + 312, uptime: 51_546, kind: "wifi-takeover", text: "agent silent 300s, AP off; forcing Wi-Fi on" },
   // Current boot, before SNTP set the clock → time null.
   { seq: 9, time: null, uptime: 41, kind: "core-crash", text: "luyaz-core exit 1" },
-  { seq: 10, time: DEVUI_CRASH_AT, uptime: DEVUI_CRASH_AT - BOOT, kind: "devui-crash", text: "luyaz-ui killed by SIGSEGV" },
+  { seq: 10, time: UI_CRASH_AT, uptime: UI_CRASH_AT - BOOT, kind: "ui-crash", text: "luyaz-ui killed by SIGSEGV" },
 ];
 
 /** /data/alerts/sms-log, oldest first. */
@@ -187,7 +187,7 @@ const SMS_LOG: AlertSmsRecord[] = [
   { time: PREV_BOOT_TIME + 45, seq: 7, kind: "web-crash", result: "sent" },
   { time: PREV_BOOT_TIME + 350, seq: 8, kind: "wifi-takeover", result: "suppressed-rate" },
   { time: BOOT + 180, seq: 9, kind: "core-crash", result: "suppressed-abroad" },
-  { time: DEVUI_CRASH_AT + 40, seq: 10, kind: "devui-crash", result: "suppressed-abroad" },
+  { time: UI_CRASH_AT + 40, seq: 10, kind: "ui-crash", result: "suppressed-abroad" },
 ];
 
 const smsCfg = {
@@ -232,9 +232,9 @@ function smsBlock(): AlertsSms {
 const KIND_LABELS: Record<string, [string, string]> = {
   "core-crash": ["数据服务意外退出，已自动重启", "Data service exited unexpectedly"],
   "web-crash": ["管理网页意外退出，已自动重启", "Admin pages (luyaz-web) exited unexpectedly"],
-  "devui-crash": ["触屏界面闪退，已自动重新打开", "Screen UI exited unexpectedly"],
-  "devui-gave-up": ["触屏界面反复打不开，已换回原厂界面（长按屏幕右下角 3 秒重试）", "Screen UI kept failing; stock UI is on screen (hold the bottom-right corner 3 s to retry)"],
-  "devui-theme-paused": ["自动切换深浅色已暂停，重启后恢复", "Automatic light/dark switching on the screen paused until reboot"],
+  "ui-crash": ["触屏界面闪退，已自动重新打开", "Screen UI exited unexpectedly"],
+  "ui-gave-up": ["触屏界面反复打不开，已换回原厂界面（长按屏幕右下角 3 秒重试）", "Screen UI kept failing; stock UI is on screen (hold the bottom-right corner 3 s to retry)"],
+  "ui-theme-paused": ["自动切换深浅色已暂停，重启后恢复", "Automatic light/dark switching on the screen paused until reboot"],
   "wifi-takeover": ["Wi-Fi 看门狗重新打开了 Wi-Fi", "Wi-Fi watchdog turned Wi-Fi back on"],
   "wifi-restore-failed": ["Wi-Fi 看门狗没能打开 Wi-Fi", "Wi-Fi watchdog could not turn Wi-Fi on"],
   "sms-failed": ["告警短信发送失败", "Alert SMS could not be sent"],
@@ -292,10 +292,10 @@ function crashFile(program: string, at: number, uptime: number, status: string, 
 
 /** /data/crashlog/<program>/*.log — all older than 24 h. */
 const CRASH_FILES: CrashFile[] = [
-  crashFile("luyaz-ui", DEVUI_CRASH_AT, DEVUI_CRASH_AT - BOOT, "killed by SIGSEGV", [
-    `${stamp(DEVUI_CRASH_AT - 2)} devui: page functions/chill.html -> home`,
-    `${stamp(DEVUI_CRASH_AT - 1)} devui: core sse reconnect`,
-    `${stamp(DEVUI_CRASH_AT)} sentinel: luyaz-ui ended: killed by SIGSEGV`,
+  crashFile("luyaz-ui", UI_CRASH_AT, UI_CRASH_AT - BOOT, "killed by SIGSEGV", [
+    `${stamp(UI_CRASH_AT - 2)} ui: page functions/chill.html -> home`,
+    `${stamp(UI_CRASH_AT - 1)} ui: core sse reconnect`,
+    `${stamp(UI_CRASH_AT)} sentinel: luyaz-ui ended: killed by SIGSEGV`,
   ]),
   // Written before SNTP: the RTC was still around 1971, so the name and mtime say so.
   crashFile("luyaz-core", 31_536_000 + 41, 41, "exit 1", [

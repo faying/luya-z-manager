@@ -84,6 +84,23 @@ fn mdns_over_ipv6_without_addresses() {
 }
 
 #[test]
+fn app_services_do_not_name_the_device() {
+    // Android Quick Share: an app's own service, its instance is an id
+    let inst = name(&[
+        "nearby-presence-nsd-bb9fbae7-9710-47b6-b012-3c5c5443f1eb",
+        "_nearbypresence",
+        "_tcp",
+        "local",
+    ]);
+    let p = mdns_response(&[rr(&name(&["_nearbypresence", "_tcp", "local"]), 12, &inst)]);
+    let f = ipv4_udp(MAC_B, IP_A, MDNS4, 5353, 5353, &p);
+    assert_eq!(
+        kinds(&parse(&f)),
+        [(Kind::MdnsService, "_nearbypresence._tcp")]
+    );
+}
+
+#[test]
 fn mdns_queries_give_nothing() {
     let mut f = crate::fixtures::mdns_laptop(MAC_B, IP_A, "Test Laptop", "Mac14,2");
     // clear QR

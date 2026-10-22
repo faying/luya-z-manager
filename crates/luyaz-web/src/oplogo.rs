@@ -44,8 +44,8 @@ fn slug_of(plmn: &str) -> Option<&'static str> {
 }
 
 /// Every slug the table can give (the only names `/oplogo/<slug>` answers for).
-const SLUGS: [&str; 25] = [
-    "att", "au", "china-broadnet", "china-mobile", "china-telecom", "china-unicom", "chunghwa", "cmhk", "csl",
+const SLUGS: [&str; 26] = [
+    "att", "au", "china-broadnet", "china-mobile", "china-telecom", "china-unicom", "chunghwa", "cmhk", "cmlink", "csl",
     "ctm", "docomo", "fetnet", "kt", "lguplus", "m1", "rakuten", "singtel", "skt", "smartone", "softbank",
     "starhub", "t-mobile-us", "taiwan-mobile", "three-hk", "verizon",
 ];
@@ -87,7 +87,14 @@ fn esc(s: &str) -> String {
 /// The mark in front of an operator name: a white chip with the image (wide marks up to 4x the
 /// height), else a round badge with the first character.
 pub fn html(dir: &Path, mcc: &str, mnc: &str, name: &str, size: u32) -> String {
-    if let Some(s) = slug(mcc, mnc).filter(|s| file(dir, s).is_some()) {
+    html_with(dir, "", mcc, mnc, name, size)
+}
+
+/// [`html`] trying the core's own pick first (`sim.dual.slots[].logo`, SPN before PLMN,
+/// e.g. cmlink), so a slot shows the same mark as on the touch screen.
+pub fn html_with(dir: &Path, logo: &str, mcc: &str, mnc: &str, name: &str, size: u32) -> String {
+    let core = SLUGS.iter().copied().find(|s| *s == logo);
+    if let Some(s) = core.or_else(|| slug(mcc, mnc)).filter(|s| file(dir, s).is_some()) {
         return format!(
             "<span class=\"op-logo\" style=\"height:{size}px;max-width:{}px\"><img src=\"/oplogo/{s}\" alt=\"\" loading=\"lazy\" height=\"{}\"></span>",
             size * 4,

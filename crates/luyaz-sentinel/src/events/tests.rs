@@ -1,4 +1,4 @@
-//! The four timings of C-R9 (D15) against the real alert queue in a temp dir.
+//! The four event timings (D15) against the real alert queue in a temp dir.
 
 use std::collections::HashMap;
 
@@ -90,10 +90,10 @@ impl EventIo for Fake {
 fn core_acks_one_alert_ids_count_on() {
     let mut io = Fake::new("ack");
     let mut e = Events::default();
-    let ev = e.raise(&mut io, "devui-gave-up", "gave up after 2");
+    let ev = e.raise(&mut io, "ui-gave-up", "gave up after 2");
     assert_eq!(ev.id, "8559f5dc-1");
     e.deliver(&mut io);
-    let ev2 = e.raise(&mut io, "devui-crash", "x");
+    let ev2 = e.raise(&mut io, "ui-crash", "x");
     e.deliver(&mut io);
     assert_eq!(ev2.id, "8559f5dc-2");
     assert_eq!(
@@ -108,7 +108,7 @@ fn post_without_answer_the_sentinel_queues_it() {
     let mut io = Fake::new("noack");
     io.core_up = false;
     let mut e = Events::default();
-    e.raise(&mut io, "devui-gave-up", "g");
+    e.raise(&mut io, "ui-gave-up", "g");
     e.deliver(&mut io);
     assert_eq!(io.queue(), vec!["[8559f5dc-1] g"]);
     assert!(io.logs.iter().any(|l| l.contains("queued here")));
@@ -119,7 +119,7 @@ fn core_answers_after_5_s_still_once() {
     let mut io = Fake::new("late");
     io.core_late = true;
     let mut e = Events::default();
-    e.raise(&mut io, "devui-gave-up", "g");
+    e.raise(&mut io, "ui-gave-up", "g");
     e.deliver(&mut io);
     assert_eq!(io.queue().len(), 1);
 }
@@ -129,19 +129,19 @@ fn sentinel_dies_before_delivering_the_next_run_delivers_once() {
     let mut io = Fake::new("restart");
     let mut e = Events::default();
     // recorded, then the process died before the POST
-    e.raise(&mut io, "devui-gave-up", "g");
+    e.raise(&mut io, "ui-gave-up", "g");
     drop(e);
     // and a POST that got through but died before writing D: queued already
     let mut e = Events::default();
     e.load(&mut io);
     assert_eq!(e.pending(), 1);
     io.alerts
-        .add_once("8559f5dc-1", "devui-gave-up", "g", 1, 1)
+        .add_once("8559f5dc-1", "ui-gave-up", "g", 1, 1)
         .unwrap();
     e.deliver(&mut io);
     assert_eq!(io.queue(), vec!["[8559f5dc-1] g"]);
     // the sequence goes on from the file across restarts
-    let ev = Events::default().raise(&mut io, "devui-crash", "c");
+    let ev = Events::default().raise(&mut io, "ui-crash", "c");
     assert_eq!(ev.id, "8559f5dc-2");
 }
 
@@ -150,7 +150,7 @@ fn waits_while_the_core_is_replaced() {
     let mut io = Fake::new("yield");
     io.replacing = true;
     let mut e = Events::default();
-    e.raise(&mut io, "devui-gave-up", "g");
+    e.raise(&mut io, "ui-gave-up", "g");
     e.deliver(&mut io);
     assert_eq!((io.posts, e.pending()), (0, 1));
     assert!(io.queue().is_empty());

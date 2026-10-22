@@ -29,6 +29,7 @@
 
 pub mod classify;
 mod watch;
+pub mod selftest;
 
 use crate::contract as c;
 use serde::{Deserialize, Serialize};
@@ -585,6 +586,16 @@ impl Shared {
                     changed = true;
                 }
             } else if r.facts.get(&f.kind) != Some(&f.value) {
+                // a name, once readable, sticks: a Mac announces several services under
+                // different names (a UUID, a NetBIOS name) and the last one heard must not
+                // replace the one already shown
+                let sticky = matches!(
+                    f.kind,
+                    Kind::MdnsInstance | Kind::DhcpHostname | Kind::NetbiosName | Kind::MdnsModel
+                ) && r.facts.get(&f.kind).is_some_and(|v| classify::readable_name(v));
+                if sticky {
+                    continue;
+                }
                 r.facts.insert(f.kind, f.value.clone());
                 changed = true;
             }
@@ -752,7 +763,13 @@ impl Shared {
         if let Some(a) = alias {
             push("name", "alias", a);
         }
-        if let Some(v) = fact(Kind::MdnsInstance).filter(|v| classify::readable_name(v)) {
+        let mdns = fact(Kind::MdnsInstance).filter(|v| classify::readable_name(v));
+        // Android sends its device name (`OnePlus-Ace-3-Pro`) as the DHCP hostname, while an
+        // iPhone sends a bare `iPhone`: for Android the DHCP name goes first
+        let dhcp_first = fact(Kind::DhcpVendorClass).is_some_and(|v| v.starts_with("android"))
+            && fact(Kind::DhcpHostname)
+                .is_some_and(|v| classify::readable_name(v) && !v.starts_with("android"));
+        if let Some(v) = mdns.filter(|_| !dhcp_first) {
             push("name", "mdns", v);
         }
         // the router's own lists (vendor access list, dnsmasq leases) are DHCP names too
@@ -762,8 +779,14 @@ impl Shared {
         if let Some(v) = fact(Kind::DhcpHostname).filter(|v| classify::readable_name(v)) {
             push("name", "dhcp", v);
         }
+        if let Some(v) = mdns.filter(|_| dhcp_first) {
+            push("name", "mdns", v);
+        }
         if let Some(v) = fact(Kind::NetbiosName).filter(|v| classify::readable_name(v)) {
             push("name", "netbios", v);
+        }
+        if let Some(v) = classify::model_name(rec) {
+            push("name", "mdns", &v);
         }
         let private = is_private(&m);
         if self.loaded {

@@ -4,6 +4,7 @@
 //! the API's state, [`crate::api::Compat`], and are started by [`crate::api::Compat::resume`].
 
 pub(crate) mod chill_idle;
+pub(crate) mod chill_probe;
 pub(crate) mod guard_duties;
 pub(crate) mod home_exit;
 pub(crate) mod manual_first;

@@ -596,24 +596,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "devui"
-version = "1.8.2"
-dependencies = [
- "devui-model",
- "libc",
- "lvgl-sys",
- "plat",
-]
-
-[[package]]
-name = "devui-model"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1251,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-core"
-version = "1.22.0"
+version = "1.33.7"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1323,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-mcp"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde_json",
 ]
@@ -1361,7 +1343,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-sentinel"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "libc",
  "luyaz-alerts",
@@ -1393,8 +1375,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "luyaz-ui"
+version = "1.10.7"
+dependencies = [
+ "libc",
+ "lvgl-sys",
+ "plat",
+ "ui-model",
+]
+
+[[package]]
 name = "luyaz-web"
-version = "1.20.0"
+version = "1.24.1"
 dependencies = [
  "askama",
  "axum",
@@ -2510,6 +2502,14 @@ name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
+
+[[package]]
+name = "ui-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "unicode-ident"

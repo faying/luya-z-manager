@@ -9,7 +9,7 @@
 屏幕从不自己跑 lpac。它找 core，由 core（`crates/luyaz-esim`）去调 lpac：
 
 ```
-界面（rs/devui/src/data/esim.rs）──HTTP 127.0.0.1:9460/v2/api──▶ luyaz-core ──▶ lpac（qmi_qrtr）──▶ eUICC 卡
+界面（rs/ui/src/data/esim.rs）──HTTP 127.0.0.1:9460/v2/api──▶ luyaz-core ──▶ lpac（qmi_qrtr）──▶ eUICC 卡
 ```
 
 | 请求（前缀 `/v2`，不带 token） | 用途 |

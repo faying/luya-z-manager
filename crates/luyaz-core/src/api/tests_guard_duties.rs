@@ -52,7 +52,7 @@ async fn u60d_sends_alert_sms_and_keeps_lan_v6_off_once_the_guard_hands_over() {
         )
         .encode(),
     );
-    put(&root, "/data/luyaz/ui/devui.conf", "lang=en\n");
+    put(&root, "/data/luyaz/ui/ui.conf", "lang=en\n");
     put(&root, "/data/luyaz/scripts/lan-ipv6-off", "");
     put(&root, "/proc/sys/net/ipv6/conf/br-lan/disable_ipv6", "0\n");
     let a = luyaz_api::alerts::Alerts::at(&root.join("data/alerts"));
@@ -120,7 +120,7 @@ async fn u60d_sends_alert_sms_and_keeps_lan_v6_off_once_the_guard_hands_over() {
     // taken back: a new alert stays for the guard
     put(&root, crate::engines::guard_duties::FILE, "");
     tokio::time::sleep(Duration::from_millis(50)).await;
-    a.add("devui-crash", "x", luyaz_api::alerts::now(), 4001)
+    a.add("ui-crash", "x", luyaz_api::alerts::now(), 4001)
         .unwrap();
     put(&root, "/proc/sys/net/ipv6/conf/br-lan/disable_ipv6", "0\n");
     tokio::time::sleep(Duration::from_millis(100)).await;

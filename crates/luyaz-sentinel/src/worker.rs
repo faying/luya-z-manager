@@ -330,7 +330,7 @@ impl Worker {
     pub fn round(&mut self, io: &mut dyn WorkerIo) {
         self.last_round_mono = io.mono_s();
         // Power-off charging: the device is "off" to its owner. The screen thread still shows the
-        // UI's charging screen (u60-uid ran there too), but none of the guard's duties apply — the
+        // UI's charging screen, but none of the guard's duties apply — the
         // guard was not started then (u60-guard.init): no Wi-Fi switched on in an "off" device, no
         // SMS because the core is (rightly) not running.
         if !self.boot_checked {

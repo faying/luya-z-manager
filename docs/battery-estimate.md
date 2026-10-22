@@ -4,7 +4,6 @@
 
 There is one implementation: `crates/luyaz-policy/src/battery_eta.rs` (moved from zte-agent). The core, luyaz-core (`crates/luyaz-core/src/plugin/battery_eta.rs`), feeds it a sample every 5 seconds when it reads the battery (whether or not anyone is watching).
 The result is in `estimate` of `GET /api/battery` and `battery` of `GET /api/screen`; the admin web UI and the touch screen only turn it into text.
-(Before 2026-09-26 the web UI and touch screen each computed their own and had drifted apart; see `docs/archive/screen-logic-move.md` #21.)
 
 `battery-estimate/fixtures.json` holds examples of these rules and is run by the `battery_eta.rs` tests. When changing the rules, change this doc (both languages), the fixtures and `battery_eta.rs` together.
 

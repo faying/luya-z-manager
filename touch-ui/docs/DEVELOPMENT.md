@@ -2,7 +2,7 @@
 
 **English** · [中文](DEVELOPMENT.zh-CN.md)
 
-The touch UI is written in Rust on top of LVGL 9.5 and FreeType; it all lives in `rs/` and builds into one static program, `luyaz-ui`. Earlier C and litehtml versions exist only as git tags (`legacy-c-touch-ui`, `legacy-litehtml`).
+The touch UI is written in Rust on top of LVGL 9.5 and FreeType; it all lives in `rs/` and builds into one static program, `luyaz-ui`.
 
 ## Where things are
 
@@ -10,12 +10,12 @@ The touch UI is written in Rust on top of LVGL 9.5 and FreeType; it all lives in
 
 | Path | What it is |
 |---|---|
-| `rs/devui/` | The UI program |
+| `rs/ui/` | The UI program |
 | `rs/plat/` | Hardware access: DRM scanout, touch, power key, backlight ([HARDWARE.md](HARDWARE.md)) |
 | `rs/lvgl-sys/` | LVGL and FreeType compiled from source plus generated bindings; settings in `../lv_conf.h` |
-| `rs/devui-model/` | Plain data types that the pages render |
+| `rs/ui-model/` | Plain data types that the pages render |
 
-**Inside `rs/devui/src/`**
+**Inside `rs/ui/src/`**
 
 | Path | What it is |
 |---|---|
@@ -24,7 +24,7 @@ The touch UI is written in Rust on top of LVGL 9.5 and FreeType; it all lives in
 | `kit.rs`, `theme.rs` | Shared widgets; light and dark themes; font loading |
 | `logic.rs` | Decisions that do not touch LVGL, so they can be unit-tested |
 | `exec.rs` | Restarts the program in place after a theme or language change |
-| `conf.rs` | Reads and writes `/data/luyaz/ui/devui.conf` |
+| `conf.rs` | Reads and writes `/data/luyaz/ui/ui.conf` |
 | `data/core_link.rs` | Live state from the core: `/v2/state` and the `/v2/events` stream on `127.0.0.1:9460` |
 | `data/screen_feed.rs`, `net_view.rs`, `op_view.rs` | Parse `GET /v2/screen`, where the core hands over finished conclusions for the home card, status bar and write-in-progress row |
 | `data/core_api.rs` | Requests to the core's loopback API (`/v2/api/...`, no token); every feature module goes through it |
@@ -52,14 +52,14 @@ Details in the [README](../README.md#构建); in short:
 
 ## Fonts
 
-Chosen at start-up in `rs/devui/src/theme.rs`:
+Chosen at start-up in `rs/ui/src/theme.rs`:
 
 | For | Tried first | Then |
 |---|---|---|
-| Chinese and body text | The device's `/usr/ui/fonts/ZTEZhengYuan.ttf` | `/data/luyaz/ui/fonts/u60-cjk-fallback.ttf` (or the same file in the pre-rename `/data/plugins/u60pro-devui/fonts/`), then LVGL's built-in Montserrat, which has no Chinese |
+| Chinese and body text | The device's `/usr/ui/fonts/ZTEZhengYuan.ttf` | `/data/luyaz/ui/fonts/u60-cjk-fallback.ttf`, then LVGL's built-in Montserrat, which has no Chinese |
 | Numerals | `Nunito-600/700/800.ttf` in the font directory (OFL) | The device's Roboto, then the Chinese font |
 
-Bold is always synthesised. The log line `ui: fonts cjk=… numerals=…` tells you what was picked. `scripts/fonts/build-cjk-fallback.sh <output dir>` cuts the fallback from Resource Han Rounded (OFL). Font files are never committed; the install kit (`DEVUI_FONTS_DIR`) brings them to the device.
+Bold is always synthesised. The log line `ui: fonts cjk=… numerals=…` tells you what was picked. `scripts/fonts/build-cjk-fallback.sh <output dir>` cuts the fallback from Resource Han Rounded (OFL). Font files are never committed; the install kit (`UI_FONTS_DIR`) brings them to the device.
 
 ## Tests
 
@@ -67,7 +67,6 @@ Bold is always synthesised. The log line `ui: fonts cjk=… numerals=…` tells 
 scripts/test/docker.sh                 # device shell scripts in a busybox container, every command stubbed
 rs/build.sh test                       # Rust unit tests: logic, parsing, render checks
 rs/smoke.sh                            # runs the device binary off-screen against a fake core
-rs/parity.sh MODEL_DIR REF_DIR OUT_DIR # pixel comparison with renders from tag legacy-c-touch-ui
 ```
 
 Tests that need the device fonts expect you to copy them from `/usr/ui/fonts/` on your own device.
@@ -76,14 +75,14 @@ Tests that need the device fonts expect you to copy them from `/usr/ui/fonts/` o
 
 | Path | Contents |
 |---|---|
-| `/data/luyaz/ui/` | `luyaz-ui` (process name `luyaz-ui`), `fonts/`, `touchsim`, `devui.conf`, `chill.conf`, `operator-logos/`, `boot-trace.log`, `vendor-devui.orig-backup` (the stock UI, kept) |
+| `/data/luyaz/ui/` | `luyaz-ui` (process name `luyaz-ui`), `fonts/`, `touchsim`, `ui.conf`, `chill.conf`, `operator-logos/`, `boot-trace.log`, `vendor-devui.orig-backup` (the stock UI, kept) |
 | `/data/luyaz/luyaz-sentinel` | Screen owner and watchdog (`/etc/init.d/luyaz-sentinel`; state in `/data/luyaz/screen/`) |
 | `/data/luyaz/luyaz-core` | The core (`/etc/init.d/luyaz-core`; state in `/data/luyaz/core/`) |
 | `/data/luyaz/scripts/` | `doctor.sh`, `luyaz-ship.sh`, `core-trial.sh`, `luyaz-fallback.sh`, … |
 
-The old `/data/plugins/u60pro-devui/` directory is retired. Services start from `/etc/init.d/<name> start` lines in `/etc/rc.local`; nothing uses `enable`.
+Services start from `/etc/init.d/<name> start` lines in `/etc/rc.local`; nothing uses `enable`.
 
-The sentinel decides which UI is on screen. `echo vendor > /tmp/luyaz-screen.ctl` gives the screen to the stock UI, `echo devui > /tmp/luyaz-screen.ctl` takes it back. If `luyaz-ui` fails to come up twice in a row, the sentinel gives up and returns the screen to the stock UI; see `/data/luyaz/screen/attempts` and `/data/luyaz/screen/gave-up`.
+The sentinel decides which UI is on screen. `echo vendor > /tmp/luyaz-screen.ctl` gives the screen to the stock UI, `echo ui > /tmp/luyaz-screen.ctl` takes it back. If `luyaz-ui` fails to come up twice in a row, the sentinel gives up and returns the screen to the stock UI; see `/data/luyaz/screen/attempts` and `/data/luyaz/screen/gave-up`.
 
 ## Trying a new build on real hardware
 
@@ -94,7 +93,7 @@ Two firmware behaviours make this risky:
 
 So a new build first runs under a different file name, and only moves to the live slot once it has proven stable. Two UIs must never hold `/dev/dri/card0` at the same time.
 
-`luyaz ship touch` does all of this ([SHIP.md](SHIP.md)): sentinel `hold`, start `luyaz-ui.test` beside the live one, check, replace atomically, `release`, roll back on failure. Users of the install kit run `./install.sh devui`.
+`luyaz ship touch` does all of this ([SHIP.md](SHIP.md)): sentinel `hold`, start `luyaz-ui.test` beside the live one, check, replace atomically, `release`, roll back on failure. Users of the install kit run `./install.sh ui`.
 
 Pitfalls:
 

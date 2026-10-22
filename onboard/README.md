@@ -10,7 +10,7 @@ This kit turns a **ZTE U60 Pro (MU5250) straight out of the box** into a Luya-Z 
 |---|---|
 | **SSH** | Key-only login with `ssh -p 2222 root@192.168.0.1` (password login stays off). Survives reboots |
 | **Advanced admin web** | `http://192.168.0.1:9090/` in a browser: band and cell locking, SMS, APN, firewall, Wi-Fi and more |
-| **devui touch UI** | A new front-panel interface with 5 task tabs (Home · Cellular · Wi-Fi · Exit · System): signal verdict and carriers, Wi-Fi and clients, CHILL/Tailscale exit, eSIM switching |
+| **ui touch UI** | A new front-panel interface with 5 task tabs (Home · Cellular · Wi-Fi · Exit · System): signal verdict and carriers, Wi-Fi and clients, CHILL/Tailscale exit, eSIM switching |
 | **eSIM** | Download, switch and delete profiles on a removable eUICC card (5ber, eSTK.me and the like) from the admin web; switching works on the screen too |
 | **CHILL** (optional; only when you name it) | A transparent proxy on the device (mihomo) with the zashboard panel and rule-based routing. Bring your own subscription URL |
 
@@ -21,7 +21,7 @@ Two things happen as part of **SSH**:
 
 ## What you need
 
-1. **Firmware B27 or older.** The version is on the web admin home page or under 「设备信息」 (Device information) and ends in something like `…MU5250V1.0.0B27`. Later firmware removed the call the kit uses to switch on ADB (`zwrt_bsp.usb set`: missing on CN B31, reported missing from B28 on), so the kit cannot get in there. **Do not upgrade before installing.**
+1. **Firmware B27–B31.** The version is on the web admin home page or under 「设备信息」 (Device information) and ends in something like `…MU5250V1.0.0B31`. On B27 or older the kit opens SSH over USB debugging (ADB). From B28 on the call the kit uses to switch on ADB (`zwrt_bsp.usb set`) is gone, so open SSH yourself first (see [GETTING-STARTED](../docs/GETTING-STARTED.md), section 2); after that the kit works the same. Versions after B31 have not been tested: **do not upgrade before installing.**
 2. The **router admin password**, i.e. what you type at `http://192.168.0.1`.
 3. A **USB-C cable that carries data**. Some cables only charge.
 4. **adb** on the computer:
@@ -64,7 +64,7 @@ Ask it to "set up my U60". It checks adb, the network and the firmware before as
 
 ```sh
 ./install.sh ssh               # ADB, then SSH that survives reboots; nothing else
-./install.sh ssh admin devui   # everything except eSIM
+./install.sh ssh admin ui   # everything except eSIM
 ./install.sh chill             # CHILL proxy (not in the default set; first install does not start it, see Everyday use)
 ./install.sh recover           # boot-time clean-up for `u60 ship`: installs /data/luyaz/ship/luyaz-recover.sh once it passes
                                #   a self-test on the device, and adds a line calling it to rc.local ahead of the service lines.
@@ -78,7 +78,7 @@ Ask it to "set up my U60". It checks adb, the network and the firmware before as
 ./install.sh reboot            # restart once and confirm everything comes back on its own
 ```
 
-To update or reinstall a component later, unpack the newer kit and run e.g. `./install.sh admin` (or `devui` / `esim`). That goes over SSH; no cable needed.
+To update or reinstall a component later, unpack the newer kit and run e.g. `./install.sh admin` (or `ui` / `esim`). That goes over SSH; no cable needed.
 
 U60 at a different address: `GATEWAY=192.168.x.1 ./install.sh`.
 
@@ -87,8 +87,8 @@ U60 at a different address: `GATEWAY=192.168.x.1 ./install.sh`.
 Everything lives under `/data`, which firmware upgrades leave alone. Autostart is a handful of lines in `/etc/rc.local`; stock services are not changed.
 
 - The core luyaz-core, the admin web luyaz-web and the sentinel luyaz-sentinel run under procd. A crash gets them restarted and leaves an alert (SMS notification can be turned on in the admin web under 「系统 → 告警」 (System → Alerts)).
-- `admin` installs luyaz-web only. `devui` installs the touch UI, luyaz-core and luyaz-sentinel; in `rc.local`, `/etc/init.d/luyaz-sentinel start` comes right after `/etc/init.d/luyaz-core start`. Once the sentinel is started the script waits up to 60 s for three things: the sentinel runs under procd, its heartbeat says `ours`, and the touch UI that is running is the file just installed.
-- Both `admin` and `devui` record what they installed (kit date, commit) in the device manifest `/data/luyaz/ship/manifest.jsonl`, one line per component (lweb; touch, sentinel, core). `doctor` checks the files against it.
+- `admin` installs luyaz-web only. `ui` installs the touch UI, luyaz-core and luyaz-sentinel; in `rc.local`, `/etc/init.d/luyaz-sentinel start` comes right after `/etc/init.d/luyaz-core start`. Once the sentinel is started the script waits up to 60 s for three things: the sentinel runs under procd, its heartbeat says `ours`, and the touch UI that is running is the file just installed.
+- Both `admin` and `ui` record what they installed (kit date, commit) in the device manifest `/data/luyaz/ship/manifest.jsonl`, one line per component (lweb; touch, sentinel, core). `doctor` checks the files against it.
 - Only the current layout is supported. If `/data/u60d`, `/data/u60-uid`, `/data/u60-ship`, `/data/plugins/u60pro-devui` or `/data/plugins/zwrt-datad` still exists, the kit refuses to install; bring the device forward with an older kit first.
 
 | Path | What it is |

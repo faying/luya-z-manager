@@ -1,6 +1,6 @@
 #!/bin/sh
 # 装机包改 rc.local 的离线测试（不碰设备）：两种起点（原厂、已是哨兵）
-# 走一遍 do_devui 改 rc.local 的那几步（核心那一行 → rc_owner）；
+# 走一遍 do_ui 改 rc.local 的那几步（核心那一行 → rc_owner）；
 # 结果必须过 luyaz-ship.sh 的 rc_mode = sentinel，已是哨兵的那份要原样不变，再跑一遍也不变。
 #   sh onboard/test/kit-rc.sh      # 用本仓库的 touch-ui/（Phase 10 10f）
 set -u
@@ -18,7 +18,7 @@ printf '%s\n' '#!/bin/sh' '# vendor' "$REC" 'exit 0' > "$T/vendor"
 printf '%s\n' '#!/bin/sh' 'sh /data/local/tmp/start_dropbear.sh' "$REC" '/etc/init.d/luyaz-core start' \
     "$SENT" 'sh /data/tailscale/start.sh' '[ -f /data/chill/disabled ] || /etc/init.d/chill start' 'exit 0' > "$T/sentinel"
 
-steps() { # 同 do_devui：核心行 → rc_owner
+steps() { # 同 do_ui：核心行 → rc_owner
     rc_add "/etc/init.d/luyaz-core start" "/etc/init.d/luyaz-core start" >/dev/null
     rc_owner >/dev/null
 }

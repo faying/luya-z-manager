@@ -1,10 +1,6 @@
-//! Phase 10 (manager docs/designs/u60-phase10.md): the core's state is under luyaz names on every
-//! device (`/data/luyaz/core`, `/tmp/luyaz`, `/data/luyaz/screen`); callers use those paths directly.
-//! Luya-Z rename E3 removed the old-to-new mapping (`/data/u60d`, `/tmp/u60-guard`,
-//! `/tmp/u60-guard.handover`, `/data/u60-uid`): the install kit writes only the new layout (E1)
-//! and refuses an old one, and so does the ship executor.
-//! The core layout's switch (`live`, `.migrated`) went with doctor's core-move row (Luya-Z
-//! rename F4).
+//! The core's state is under luyaz names on every device (`/data/luyaz/core`, `/tmp/luyaz`,
+//! `/data/luyaz/screen`); callers use those paths directly. The install kit and the ship executor
+//! refuse a device with an older layout.
 
 pub const MANIFEST: &str = "/data/luyaz/ship/manifest.jsonl";
 

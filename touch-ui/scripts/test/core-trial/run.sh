@@ -219,7 +219,7 @@ rm -rf "$T"
 setup
 hook_at 1030 "rm -f $T/pids/luyaz-ui"
 trial
-aborted "devui gone" "界面异常（luyaz-ui 进程消失）"
+aborted "ui gone" "界面异常（luyaz-ui 进程消失）"
 rm -rf "$T"
 
 # ── no netwatch check (zte-agent's counter, gone in 8d-2c) ──────────────────
@@ -236,7 +236,7 @@ export DT_WINDOW=3600
 # ── window ends: pass and restore ───────────────────────────────────────────
 setup
 export DT_WINDOW=120
-# a requested devui stop and an old baseline line are not trouble
+# a requested UI stop and an old baseline line are not trouble
 echo "giving up: old" >"$T/logread"
 hook_at 1030 "grep -q requested $T/logread || echo 'luyaz-ui pid 3131 ended: exit 0 (requested)' >>$T/logread"
 trial

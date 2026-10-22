@@ -72,6 +72,12 @@ fn tools() -> Value {
             "annotations": {"readOnlyHint": true, "openWorldHint": false},
         },
         {
+            "name": "get_network_health",
+            "description": format!("Network health by layer: whether the mobile data bearer is up, the open finding's layer, which automatic repairs (proxy reconnects) are paused because a lower layer is down, and the next step (\"wait\" or \"check_apn\"). Stored state only, no new test. {UNTRUSTED_NOTE}"),
+            "inputSchema": none,
+            "annotations": {"readOnlyHint": true, "openWorldHint": false},
+        },
+        {
             "name": "get_power_profile",
             "description": format!("Battery level, charging state, time estimate, charger, modem operating mode and Wi-Fi power saving. No power measurement. {UNTRUSTED_NOTE}"),
             "inputSchema": none,
@@ -403,6 +409,7 @@ fn route(name: &str, args: &Value) -> Result<String, String> {
     match name {
         "get_device_health" => Ok("/agent-api/health".into()),
         "diagnose_connectivity" => Ok("/agent-api/diagnose".into()),
+        "get_network_health" => Ok("/agent-api/network-health".into()),
         "get_power_profile" => Ok("/agent-api/power".into()),
         "get_recent_events" => {
             let mut q = Vec::new();
@@ -774,6 +781,12 @@ pub fn parse_response(raw: &[u8]) -> Result<(u16, String), String> {
     Ok((code, String::from_utf8_lossy(&body).into_owned()))
 }
 
+/// `Host:` value: `host:port` unless the port is 80; a bare IPv6 address gets brackets.
+fn host_header(host: &str, port: u16) -> String {
+    let h = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host.to_string() };
+    if port == 80 { h } else { format!("{h}:{port}") }
+}
+
 fn get(host: &str, port: u16, c: &Call, token: &str) -> Got {
     let path = &c.path;
     let addr = match (host, port).to_socket_addrs().map(|mut a| a.next()) {
@@ -786,6 +799,8 @@ fn get(host: &str, port: u16, c: &Call, token: &str) -> Got {
     };
     let _ = s.set_read_timeout(Some(if c.body.is_some() { ACT_TIMEOUT } else { TIMEOUT }));
     let _ = s.set_write_timeout(Some(TIMEOUT));
+    // The port goes in Host too: the device builds the owner's page link from it.
+    let host = host_header(host, port);
     let req = match &c.body {
         None => format!(
             "GET {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"

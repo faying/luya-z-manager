@@ -27,7 +27,7 @@ ubus / uci / sysfs ──▶ luyaz-core 127.0.0.1:9460 ◀──（/v2/screen、
 ```
 
 轮询原厂 ubus 接口、改设置的都只有 luyaz-core；luyaz-web 和触屏从它拿数据、把改动交给它。
-屏幕归 `luyaz-sentinel`（拉起触屏、交还原厂界面），它也是看门狗。原来在 :9090 提供 API 和 Next.js 管理网页的 zte-agent 2026-10-14 已删，`u60-uid`、`u60-guard` 两个守护进程也已退役。
+屏幕归 `luyaz-sentinel`（拉起触屏、交还原厂界面），它也是看门狗。
 
 装机包在 manager 里打：luyaz-core、luyaz-web、luyaz-sentinel 本仓库现编，触屏程序和脚本从 touch-ui 取。
 
@@ -59,12 +59,12 @@ ubus / uci / sysfs ──▶ luyaz-core 127.0.0.1:9460 ◀──（/v2/screen、
 
 升级后还在的：`/data` 下的全部程序和数据、SSH 的程序和密钥（`/data/ssh`）、网络地址、网页密码、各项设置；固件自动升级仍是关的。
 要恢复，关键是在没有 ADB 的情况下把启动 SSH 的那一行加回 `rc.local`。维护者用的是***REMOVED***，
-但这要一把***REMOVED***，所以这里不写步骤。SSH 回来以后，用新编的装机包 `./install.sh admin devui` 再装一次，就会放回服务、改好 `rc.local`。
+但这要一把***REMOVED***，所以这里不写步骤。SSH 回来以后，用新编的装机包 `./install.sh admin ui` 再装一次，就会放回服务、改好 `rc.local`。
 注意：`/data/luyaz/kit/rc.local.orig` 存的是**升级前**固件的原厂 `rc.local`，升级后要卸载时别拿它去覆盖，只删掉我们加的那几行。
 
 **新设备是 B28～B31：***REMOVED***。** ***REMOVED***在还原时会以 root 身份把备份里的文件 `tar -C /` 解开，然后重启。
 所以：先在设备网页上***REMOVED*** `rc.local` 里加一行启动 SSH，并把 SSH 程序（比如装机包里的 dropbear）、公钥一起放进包里 → ***REMOVED*** → 在网页上还原。
-维护者 2026-10-20 在一台出厂 B31 的设备上走通：还原后约一分钟 SSH 就通，之后和「已经装好再升级」一样用 `./install.sh admin devui` 等装完。
+维护者 2026-10-20 在一台出厂 B31 的设备上走通：还原后约一分钟 SSH 就通，之后和「已经装好再升级」一样用 `./install.sh admin ui` 等装完。
 本项目不提供这一步的工具和***REMOVED***；GitHub 上有***REMOVED***，请自行参考。原样的备份留着出问题时还原；SSH 通之前不插 SIM、不接任何外网（自动下载新固件后格式可能变）；先确认自己能用原厂方式救回设备。
 
 **装机的电脑**（macOS / Linux / Windows 的 Git Bash 都行）：`adb`、`ssh`、`curl`。
@@ -111,7 +111,7 @@ cd luya-z-manager
 | CHILL（可选） | mihomo、zashboard 官方发布包（sha256 固定）+ 规则集（下载当时的最新版）。不要就加 `CHILL=0` |
 | 进程监督、体检脚本 | touch-ui 的 `scripts/` |
 
-打包前会检查：触屏程序必须是 Rust 版（C/LVGL 版触屏已删，只留在 tag `legacy-c-touch-ui`）；核心必须是 Rust 版、没有写死的外部更新源。不对就停。
+打包前会检查：触屏程序必须是 Rust 版；核心必须是 Rust 版、没有写死的外部更新源。不对就停。
 
 也可以分开编，再告诉 `build-kit.sh` 用现成的文件：
 
@@ -120,8 +120,8 @@ cd luya-z-manager
 CORE_BIN=/path/to/luyaz-core ./onboard/build-kit.sh       # 用别处编好的核心，不现编 luyaz-core
 ```
 
-其他变量：`DEVUI_BIN`（触屏二进制）、`SENTINEL_BIN`（luyaz-sentinel）、`ESIM_TGZ`（现成的 eSIM 包）、`DEVUI_FONTS_DIR`（现成的字体目录）、`FONTS=0`（不带字体）、
-`DEVUI_REPO`（默认本仓库的 `touch-ui/`）、`SHIP_RECORDS`（`u60 ship` 存在本机的上机记录：触屏、哨兵、核心改用设备正在跑的那份，按 md5 找，找不到才现编；`FRESH=1` 照常现编）。常用的可以写进 `onboard/kit.local.env`（一行一个 `KEY=值`，不进 git）。
+其他变量：`TOUCH_BIN`（触屏二进制）、`SENTINEL_BIN`（luyaz-sentinel）、`ESIM_TGZ`（现成的 eSIM 包）、`UI_FONTS_DIR`（现成的字体目录）、`FONTS=0`（不带字体）、
+`TOUCH_REPO`（默认本仓库的 `touch-ui/`）、`SHIP_RECORDS`（`u60 ship` 存在本机的上机记录：触屏、哨兵、核心改用设备正在跑的那份，按 md5 找，找不到才现编；`FRESH=1` 照常现编）。常用的可以写进 `onboard/kit.local.env`（一行一个 `KEY=值`，不进 git）。
 
 > **eSIM 包打不出来？** Alpine 3.24 出安全更新时会替换钉住的包，旧文件从镜像上消失。这时跑
 > `python3 scripts/esim/alpine_closure.py --relock` 重新解析，重打后先在一台设备上确认 `/data/esim/lpac.sh chip info` 能读卡，再用。
@@ -147,11 +147,11 @@ cd luyaz-kit
 4. 自动推送、安装、验证，一两分钟。屏幕会闪一下，换成新界面。
 5. 问要不要重启验证时建议选是，脚本会确认 SSH、后台、屏幕在重启后都自己起来了。
 
-全套是 `ssh admin devui esim` 四个组件。也可以只装其中几样：
+全套是 `ssh admin ui esim` 四个组件。也可以只装其中几样：
 
 ```sh
 ./install.sh ssh               # 只开 ADB + 装持久化 SSH
-./install.sh ssh admin devui   # 不要 eSIM
+./install.sh ssh admin ui   # 不要 eSIM
 ./install.sh chill             # CHILL 代理，不在全套里，要单独点名（见第 7 节）
 ```
 
@@ -183,14 +183,14 @@ cd luyaz-kit
 
 ```sh
 ./install.sh admin      # luyaz-web（管理网页）
-./install.sh devui      # 触屏界面 + 核心（luyaz-core）
+./install.sh ui      # 触屏界面 + 核心（luyaz-core）
 ./install.sh esim       # eSIM 工具
 ./install.sh reboot     # 可选：重启一次，确认开机都能自己起来
 ./install.sh recover    # 可选，不在全套里：luyaz-ship.sh 用的开机收尾
                         #   （会在 rc.local 加一行；只在用 luyaz-ship.sh 时才装）
 ```
 
-设备上有没结束的 `luyaz-ship.sh` 事务时（见 touch-ui [docs/SHIP.md](https://github.com/faying/luya-z-touch-ui/blob/main/docs/SHIP.md)），`admin`、`devui`、`recover` 会拒绝安装，要先把事务做完或退回。
+设备上有没结束的 `luyaz-ship.sh` 事务时（见 touch-ui [docs/SHIP.md](https://github.com/faying/luya-z-touch-ui/blob/main/docs/SHIP.md)），`admin`、`ui`、`recover` 会拒绝安装，要先把事务做完或退回。
 
 **备份和恢复配置**（只有配置，不含程序；备份里有密码，别外传）：
 
@@ -232,7 +232,7 @@ sh /data/chill/chill.sh confirm        # 不确认会自动停掉，免得把自
 - 程序和数据放 `/data`。`/tmp` 是内存盘，重启就没了。不写分区、不 `dd`。
 - **屏幕上必须一直有界面。** 几分钟没有任何界面，固件会整机重启。任何停掉一个界面的操作，都要在同一步里起另一个。
 - **新编的触屏程序先用别的文件名试跑。** 直接覆盖正式位置 `/data/luyaz/ui/luyaz-ui`，如果它一启动就崩，
-  会被固件升级成整机重启循环。正式位置旁边始终留一份能用的备份。普通用户用 `./install.sh devui` 更新即可。
+  会被固件升级成整机重启循环。正式位置旁边始终留一份能用的备份。普通用户用 `./install.sh ui` 更新即可。
 - 如果你是通过这台 U60 自己的网络远程连进来的，别切到没流量的 eSIM profile，别乱改 APN、网络模式、Wi-Fi，切过去就连不回来了。
 
 ## 9. 常见问题
@@ -244,6 +244,6 @@ sh /data/chill/chill.sh confirm        # 不确认会自动停掉，免得把自
 - **SSH 偶尔拒绝连接**：dropbear 对太快的重连会拒绝，等几秒再连；多条命令尽量合并到一次 `ssh` 里。
 - **屏幕没数据**：`/etc/init.d/luyaz-core restart`，看 `/tmp/luyaz-core.log`。
 - **网页登录被锁**：原厂网页连续输错 5 次会锁一段时间，脚本会显示剩余次数和倒计时，别连着试。
-- **`admin` / `devui` 拒绝安装，说有没结束的事务**：之前一次 `luyaz-ship.sh` 更新没做完。先把它做完或退回（touch-ui `docs/SHIP.md`），别手工删事务日志。
+- **`admin` / `ui` 拒绝安装，说有没结束的事务**：之前一次 `luyaz-ship.sh` 更新没做完。先把它做完或退回（touch-ui `docs/SHIP.md`），别手工删事务日志。
 - **装到一半失败**：`install.sh` 可以反复跑，装好的部分会跳过或覆盖。
 - **设备时间看着差几个小时**：固件把当地时间当 UTC 存，后台和触屏都按当地时间显示，这是正常的。

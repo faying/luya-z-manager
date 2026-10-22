@@ -28,8 +28,6 @@ const LOOK_SECS: u64 = 30;
 const LAN_V6_FLAG: &str = "/data/luyaz/scripts/lan-ipv6-off";
 const LAN_V6_SYSCTL: &str = "/proc/sys/net/ipv6/conf/br-lan/disable_ipv6";
 const CLOCK_OK: &str = "/tmp/luyaz/clock-ok";
-/// With the touch UI
-const DEVUI_CONF: &str = "/data/luyaz/ui/devui.conf";
 const BOOT_ID: &str = "/proc/sys/kernel/random/boot_id";
 /// The sender's name in the claim file.
 pub const SENDER: &str = "core";
@@ -148,7 +146,7 @@ impl sms::SmsIo for Host {
         .wall_usable()
     }
     fn lang_en(&mut self) -> bool {
-        sms::lang_en(&self.read(DEVUI_CONF))
+        sms::lang_en(&self.read(sms::UI_CONF))
     }
     fn tz_hours(&mut self) -> i32 {
         let v = self.handle.block_on(crate::state::uci_value(

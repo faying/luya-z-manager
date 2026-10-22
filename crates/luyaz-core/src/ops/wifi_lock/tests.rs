@@ -64,8 +64,10 @@ fn free(path: &str) -> bool {
 /// 一次尝试，和 `server/write.rs` 的控制任务同样的顺序：写锁 → `second` → 做。
 /// 做的时候记下两把锁是不是都在自己手里。
 async fn attempt(p: &Paths, mode: Mode, seen: &Seen) -> Option<()> {
-    let wl = write_lock::acquire_path(Some(p.write.clone())).await;
-    let _wifi = second(&p.wifi, mode, wl.held()).ok()?;
+    let Ok(Some(_wl)) = write_lock::try_take(Some(&p.write)) else {
+        return None;
+    };
+    let _wifi = second(&p.wifi, mode).ok()?;
     seen.lock()
         .unwrap()
         .push((mode, !free(&p.write), !free(&p.wifi)));
@@ -76,7 +78,7 @@ async fn go(
     p: &Paths,
     c: &Cfg,
     caller: Caller,
-) -> (Option<()>, Vec<Timeout>, Vec<(Mode, bool, bool)>) {
+) -> (Result<(), Gave>, Vec<Timeout>, Vec<(Mode, bool, bool)>) {
     let seen = Arc::new(Mutex::new(vec![]));
     let mut timeouts = vec![];
     let out = run(
@@ -109,7 +111,7 @@ async fn waits_for_the_wifi_lock_then_writes_holding_both() {
     let t0 = Instant::now();
     let (out, timeouts, seen) = go(&p, &cfg(&p, 5_000, 2), Caller::Remote).await;
     holder.join().unwrap();
-    assert_eq!(out, Some(()));
+    assert_eq!(out, Ok(()));
     assert!(t0.elapsed() >= std::time::Duration::from_millis(250));
     assert!(timeouts.is_empty(), "{timeouts:?}");
     // 只做了一次，做的时候两把都在手里，进程号写进了 Wi-Fi 锁
@@ -156,7 +158,7 @@ async fn reverse_order_holder_gets_the_write_lock_in_the_gap_and_nobody_deadlock
         holder.join().unwrap(),
         "reverse-order holder never got the write lock"
     );
-    assert_eq!(out, Some(()));
+    assert_eq!(out, Ok(()));
     assert_eq!(seen, [(Mode::Own, true, true)]);
     // 第一轮 300 ms 超时：记了一行，带拿着的一方的进程号，不是最后一轮
     assert_eq!(timeouts.len(), 1, "{timeouts:?}");
@@ -180,7 +182,7 @@ async fn gives_up_after_the_last_try_without_writing() {
     rx.recv().unwrap();
     let (out, timeouts, seen) = go(&p, &cfg(&p, 100, 2), Caller::Remote).await;
     holder.join().unwrap();
-    assert_eq!(out, None);
+    assert_eq!(out, Err(Gave::TimedOut));
     assert!(seen.is_empty());
     assert_eq!(
         timeouts
@@ -211,7 +213,7 @@ async fn caller_holding_the_wifi_lock_is_not_waited_for() {
     let (out, timeouts, seen) = go(&p, &cfg(&p, 10_000, 2), Caller::Pid(std::process::id())).await;
     done_tx.send(()).unwrap();
     holder.join().unwrap();
-    assert_eq!(out, Some(()));
+    assert_eq!(out, Ok(()));
     assert!(t0.elapsed() < std::time::Duration::from_secs(2));
     assert!(timeouts.is_empty());
     // 写锁在手，Wi-Fi 锁在调用方手里
@@ -229,7 +231,7 @@ async fn caller_holding_the_wifi_lock_is_not_waited_for() {
     rx.recv().unwrap();
     let (out, timeouts, _) = go(&p, &cfg(&p, 100, 1), Caller::Pid(std::process::id())).await;
     holder.join().unwrap();
-    assert_eq!(out, None);
+    assert_eq!(out, Err(Gave::TimedOut));
     assert_eq!(timeouts.len(), 1);
 }
 
@@ -253,12 +255,9 @@ fn ancestry() {
 #[test]
 fn second_lock_rules() {
     let p = paths();
-    // 写锁没真拿到：不单独拿 Wi-Fi 锁、也不碰它
-    assert!(matches!(second(&p.wifi, Mode::Own, false), Ok(None)));
-    assert!(!std::path::Path::new(&p.wifi).exists());
     let f = lock_file(&p.wifi, 5);
-    assert!(second(&p.wifi, Mode::Own, true).is_err());
-    assert!(matches!(second(&p.wifi, Mode::Covered, true), Ok(None)));
+    assert_eq!(second(&p.wifi, Mode::Own).err(), Some(Second::Held));
+    assert!(matches!(second(&p.wifi, Mode::Covered), Ok(None)));
     drop(f);
     // a child another test thread is forking holds a copy of the descriptor until its exec
     for _ in 0..100 {
@@ -267,13 +266,44 @@ fn second_lock_rules() {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    let l = second(&p.wifi, Mode::Covered, true).unwrap();
+    let l = second(&p.wifi, Mode::Covered).unwrap();
     assert!(l.is_some() && !free(&p.wifi));
     drop(l);
     assert!(free(&p.wifi));
+    // D8：锁文件打不开，两种拿法都不写
+    let bad = format!("{}/no-such-dir/lock", p.wifi);
+    assert!(matches!(second(&bad, Mode::Own), Err(Second::Open(_))));
+    assert!(matches!(second(&bad, Mode::Covered), Err(Second::Open(_))));
 }
 
-/// 只有写 `wireless` 的三个动作拿 Wi-Fi 锁（`run_control_from` 按它分）：其余写一律不碰。
+/// D8：查不到调用方（Unknown）、核心内部（Internal）、局域网（Remote）都不算拿着：等满就不写。
+#[tokio::test]
+async fn unverified_callers_wait_and_give_up_without_writing() {
+    for caller in [Caller::Unknown, Caller::Internal, Caller::Remote] {
+        let p = paths();
+        let f = lock_file(&p.wifi, std::process::id());
+        let (out, timeouts, seen) = go(&p, &cfg(&p, 100, 1), caller).await;
+        drop(f);
+        assert_eq!(out, Err(Gave::TimedOut), "{caller:?}");
+        assert_eq!(timeouts.len(), 1, "{caller:?}");
+        assert!(seen.is_empty(), "{caller:?} wrote");
+    }
+}
+
+/// D8：Wi-Fi 锁文件打不开，马上不写（不等、不重试）。
+#[tokio::test]
+async fn unopenable_wifi_lock_is_not_written_through() {
+    let p = paths();
+    let p = Paths {
+        write: p.write,
+        wifi: format!("{}/no-such-dir/lock", p.wifi),
+    };
+    let (out, timeouts, seen) = go(&p, &cfg(&p, 10_000, 2), Caller::Unknown).await;
+    assert!(matches!(out, Err(Gave::Open(_))), "{out:?}");
+    assert!(timeouts.is_empty());
+    assert!(seen.is_empty());
+}
+
 #[test]
 fn only_wireless_writes_take_the_wifi_lock() {
     let covered: Vec<&str> = crate::control::ACTIONS

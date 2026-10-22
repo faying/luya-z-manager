@@ -21,6 +21,7 @@ pub mod band_flap;
 pub mod hot_drain;
 pub mod https;
 pub mod long_idle;
+pub mod network_health;
 pub mod no_internet;
 pub mod say;
 pub mod slow_signal;

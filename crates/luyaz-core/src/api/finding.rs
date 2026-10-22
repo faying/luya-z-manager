@@ -33,7 +33,7 @@ pub const FILE: &str = "/data/luyaz/core/findings.json";
 /// Sampler rounds (5 s) between checks.
 pub const EVERY_ROUNDS: u32 = 6;
 pub const RECHECK_SECS: u64 = 600;
-mod budget;
+pub(crate) mod budget;
 pub(super) mod sampling;
 /// How long the passive reading must say down, without a break, before a probe may run (design
 /// Open Question 2, owner 2026-10-17). Why 60 s: the signal log 2026-10-10..10-17 (7.5 days)
@@ -54,6 +54,8 @@ pub struct Home {
     pub layer: String,
     pub symptom: String,
     pub symptom_en: String,
+    /// first seen, unix seconds (the underlay gate's hold limit; not shown)
+    pub first: u64,
 }
 
 impl Home {
@@ -367,6 +369,7 @@ impl Findings {
             layer: t("layer"),
             symptom: t("symptom"),
             symptom_en: t("symptom_en"),
+            first: e.first,
         })
     }
 

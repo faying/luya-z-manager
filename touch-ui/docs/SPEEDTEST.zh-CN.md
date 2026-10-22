@@ -2,7 +2,7 @@
 
 [English](SPEEDTEST.md) · **中文**
 
-测速页自己不带测速引擎，只是请 core 测、把 core 报回来的结果画出来；引擎是 `crates/luyaz-speedtest`，和管理网页共用。屏幕这边的代码：`rs/devui/src/data/speedtest.rs`（发请求）和 `rs/devui/src/ui/speed.rs`（页面）。设备上不用另装东西。
+测速页自己不带测速引擎，只是请 core 测、把 core 报回来的结果画出来；引擎是 `crates/luyaz-speedtest`，和管理网页共用。屏幕这边的代码：`rs/ui/src/data/speedtest.rs`（发请求）和 `rs/ui/src/ui/speed.rs`（页面）。设备上不用另装东西。
 
 | 做什么 | 请求（core 本机端口 `127.0.0.1:9460/v2/api/...`，不带 token） |
 |---|---|

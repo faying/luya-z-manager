@@ -4,7 +4,7 @@
 //
 // As manual-first: the machine calls out for every outside answer; across this boundary that is a
 // replay against the answers the step got, so the guest needs no imports.
-package luyaz:home-exit@0.2.0;
+package luyaz:home-exit@0.3.0;
 
 world home-exit {
   record items {
@@ -81,6 +81,7 @@ world home-exit {
     precheck(option<fail>),
     alert(string),
     save,
+    cell-up(option<bool>),
   }
 
   record outcome {

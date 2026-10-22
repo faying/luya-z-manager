@@ -6,7 +6,7 @@
 #      luyaz-ship.sh, core-trial.sh, luyaz-recover.sh, or the init of a SCRIPTS_INITS
 #      service. (The retired guard's GUARD_FILES table is gone.)
 #   2. the touch trial starts the test build the way the sentinel starts the UI
-#      (src/uid.c: chdir(DEVUI_DIR), execl(DEVUI_BIN)).
+#      (chdir to the UI directory, then exec the program).
 #   3. every ship/<comp>/state-files (three repos) is within luyaz-ship.sh's
 #      C_STATE_ALLOW for it, or the device refuses to stage (touch, 10-01).
 # English words that must agree (manager docs/designs/ui-english.md 更正 15, DT6/ET5):
@@ -14,7 +14,7 @@
 #      HEADLINES, pinned to screen.rs by the core's own test; each 中文/English
 #      pair also as written in screen.rs); glossary §4 gives the same English;
 #      the two rows the screen writes itself = en.tsv.
-#   5. page names: glossary §1–2 = rs/devui/lang/en.tsv (+ en.inc) for the
+#   5. page names: glossary §1–2 = rs/ui/lang/en.tsv (+ en.inc) for the
 #      screen, = web src/lib/i18n/en.ts nav for the web menu column.
 #   6. operator English: glossary §8 = u60-api operator_en(); the core's 4
 #      mainland carriers are in both, word for word.
@@ -103,8 +103,8 @@ done
 # ---- English words (4–7) ----------------------------------------------------
 DESIGN=$MANAGER/docs/DESIGN.md
 GLOSS=$MANAGER/docs/ui-glossary.md
-TSV=$REPO/rs/devui/lang/en.tsv
-INC=$REPO/rs/devui/lang/en.inc
+TSV=$REPO/rs/ui/lang/en.tsv
+INC=$REPO/rs/ui/lang/en.inc
 SCREEN_RS=$DATAD/rust/src/project/screen.rs
 SCREEN_T=$DATAD/rust/src/project/screen/tests.rs
 OPS_UI=$DATAD/rust/src/ops/ui.rs
@@ -196,7 +196,7 @@ if [ -f "$GLOSS" ] && [ -f "$TSV" ]; then
         have=$(tsv_en "$z")
         if [ -n "$have" ]; then
             [ "$have" = "$e" ] || echo "$z: glossary $e, en.tsv $have"
-            grep -qF "{ \"$z\", \"$e\", NULL }," "$INC" || echo "$z: not \"$e\" in rs/devui/lang/en.inc (scripts/lang-gen.sh)"
+            grep -qF "{ \"$z\", \"$e\", NULL }," "$INC" || echo "$z: not \"$e\" in rs/ui/lang/en.inc (scripts/lang-gen.sh)"
         else
             # no row of its own (管理网页 = web admin, only inside sentences)
             awk -F '\t' -v e="$e" '!/^#/ && NF == 2 && index($2, e) { f = 1 } END { exit !f }' "$TSV" ||

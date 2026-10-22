@@ -129,6 +129,11 @@ pub trait Io {
     fn precheck(&mut self) -> Result<(), Fail>;
     fn alert(&mut self, kind: &str, text: &str);
     fn save(&mut self, p: &Persist);
+    /// The cellular bearer has an address (asked only after home did not answer);
+    /// `None` = unknown, which counts the miss as before.
+    fn cell_up(&mut self) -> Option<bool> {
+        None
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -321,6 +326,12 @@ impl Machine {
                 self.home_ms = Some(ms);
                 self.probed_at = now;
             }
+            // The cell itself is down: says nothing about home; hold the count.
+            Some(None) if io.cell_up() == Some(false) => {
+                self.home_ok = Some(false);
+                self.home_ms = None;
+                self.probed_at = now;
+            }
             Some(None) => {
                 self.fails += 1;
                 self.home_ok = Some(false);
@@ -388,6 +399,9 @@ pub enum Event {
         kind: String,
     },
     Save,
+    CellUp {
+        up: Option<bool>,
+    },
 }
 
 impl Event {
@@ -399,6 +413,7 @@ impl Event {
             Event::Precheck { .. } => "precheck",
             Event::Alert { .. } => "alert",
             Event::Save => "save",
+            Event::CellUp { .. } => "cell_up",
         }
     }
 }
@@ -511,6 +526,14 @@ impl Io for Replay {
     fn save(&mut self, _p: &Persist) {
         self.next(&Event::Save);
         self.calls.push(Event::Save);
+    }
+    fn cell_up(&mut self) -> Option<bool> {
+        let up = match self.next(&Event::CellUp { up: None }) {
+            Some(Event::CellUp { up }) => up,
+            _ => None,
+        };
+        self.calls.push(Event::CellUp { up });
+        up
     }
 }
 

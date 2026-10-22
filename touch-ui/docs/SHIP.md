@@ -45,7 +45,7 @@
 | 组件 | 期 | 状态 | 正式文件 | 状态文件（精确清单，不按目录） | 试跑 / 转正后检查 |
 |---|---|---|---|---|---|
 | `core` | 一 | 可用 | `/data/luyaz/luyaz-core` | 无（下面格式示例里的 cooling.conf 只是举例） | 旁路顶替 180 s / 120 s（core-trial 的全部检查） |
-| `touch` | 二 | 可用（10-15 起只编 `rs/`） | `/data/luyaz/ui/luyaz-ui`（改名 F3 起不带 `start.sh`） | `/data/luyaz/ui/devui.conf` | 旁路顶替 60 s / 120 s（下面「第二期」的 touch 检查） |
+| `touch` | 二 | 可用（只编 `rs/`） | `/data/luyaz/ui/luyaz-ui` | `/data/luyaz/ui/ui.conf` | 旁路顶替 60 s / 120 s（下面「第二期」的 touch 检查） |
 | `scripts` | 五 | 可用（带 luyaz-web、luyaz-core 的 init：txn v=5，设备上的 luyaz-recover.sh 要有 formats 5） | `/data/luyaz/scripts/` 下 `SCRIPTS_FILES`（`alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION`，和 Mac 端 `luyaz` 的同名表一致；`luyaz-fallback.sh` 不在时 `touch` 拒绝）+ `/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}`（`SCRIPTS_INITS`）。改名留下的旧文件（`agent-auth.sh`、`datad-trial.sh`、`u60-fallback.sh` 等）不在表里，ship 不管 | — | direct，— / 60 s（md5 + sh -n） |
 | `sentinel` | 五 | 可用 | `/data/luyaz/luyaz-sentinel`（只换程序，rc.local 不动） | — | direct，— / 300 s（下面「哨兵」的检查 + 核心的判定，两者都要过） |
 | `lweb` | 8c | 可用（10-13 上机；第一次要先 install-recover、ship scripts，rc.local 加一行都问用户） | `/data/luyaz/luyaz-web`（manager crates/luyaz-web，`release`：unwind；8d-2c 起 `0.0.0.0:9090`） | — | 旁路顶替 120 s / 120 s（下面「luyaz-web」的检查） |
@@ -247,8 +247,8 @@ init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来
   {"v":1,"kind":"record","name":"rc.local","path":"/etc/rc.local","md5":"…","mac_time":1790000000,"boot_id":"…","uptime":5600,"why":"手工改了"}
   ```
   名字固定：`tailscale-start.sh`、`tuning.env`、`tailscaled`、`tailscaled-nofight`；
-  `init.d/luyaz-core`、`init.d/tailscale`；`rc.local`；`luyaz-recover.sh`；目录 `ui-fonts`（`/data/luyaz/ui/fonts`）、`ui-logos`、`core-plugins`（D4c 前叫 `u60-recover.sh`、`devui-fonts`、`devui-logos`、`u60d-plugins`：清单里的旧名照样算，`record` 也认旧名、写新名）。
-  退役程序的 init（zte-agent、u60-guard、u60-uid、zwrt-datad）不再是记录名，设备清单里的旧记录改名 F5/6 时已删。文件不存在记 `"md5":"-"`。
+  `init.d/luyaz-core`、`init.d/tailscale`；`rc.local`；`luyaz-recover.sh`；目录 `ui-fonts`（`/data/luyaz/ui/fonts`）、`ui-logos`、`core-plugins`。
+  文件不存在记 `"md5":"-"`。
   私有版另有 CHILL 的 `chill.sh`、`template.yaml`；`chill.env` 是设置文件，不进清单。
   运行中会被正常改写的设置文件不进清单。原因去掉引号、反斜杠和控制字符，最长 120 字节。有事务在进行时拒绝。
   doctor.sh 里有同一张名字表，测试检查两边一致。
@@ -280,7 +280,7 @@ init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来
 
 | 组件 | 正式内容 | 来源（luyaz 在提交 X 的 worktree 里） | 方式 | 试跑 / 检查 | txn `v` |
 |---|---|---|---|---|---|
-| `touch` | `/data/luyaz/ui/luyaz-ui` | `rs/build.sh device` 编的 `luyaz-ui`（C 版和 `scripts/build-docker.sh` 10-15 删除，tag `legacy-c-touch-ui`；没有 `rs/` 的提交 luyaz 拒绝；`scripts/start.sh` 改名 F3 退役） | 旁路顶替 | 60 s / 120 s | 1 |
+| `touch` | `/data/luyaz/ui/luyaz-ui` | `rs/build.sh device` 编的 `luyaz-ui`（没有 `rs/` 的提交 luyaz 拒绝） | 旁路顶替 | 60 s / 120 s | 1 |
 | `scripts` | `/data/luyaz/scripts/` 下 `SCRIPTS_FILES` + `/etc/init.d/<名>`（`SCRIPTS_INITS`） | `git show X:scripts/<名>`；init.d 的 = `scripts/<名>.init` | direct | — / 60 s | 4 或 5（有 `/etc/init.d/luyaz-web` / `luyaz-core`） |
 
 - `uid`、`guard`（第二期原有）10c 退役，见上面的组件表。

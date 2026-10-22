@@ -61,6 +61,7 @@ mod speed;
 mod status;
 mod sys_reads;
 mod ts_reads;
+pub(crate) mod underlay;
 mod watch;
 mod wifi_reads;
 
@@ -157,18 +158,24 @@ impl Sources {
         control: (String, Option<String>),
         screen: Arc<dyn Fn() -> ScreenReply + Send + Sync>,
     ) -> Self {
-        let ubus: Arc<dyn Fn(&'static str, &'static str, Value) -> UbusReply + Send + Sync> =
-            Arc::new(|s, m, a| Box::pin(async move { crate::state::ubus(s, m, a).await }));
         Sources {
             hub,
             mihomo: std::env::var("LUYAZ_MIHOMO_API")
                 .unwrap_or_else(|_| "http://127.0.0.1:9999".into()),
             tailscale: Arc::new(home::tailscale_status),
-            ubus: Arc::new(|s, m, a| Box::pin(async move { crate::state::ubus(s, m, a).await })),
+            // get_sim_info 走 `state::sim_info`：读到的给采集下一轮用
+            ubus: Arc::new(|s, m, a| {
+                Box::pin(async move {
+                    match (s, m) {
+                        ("zwrt_zte_mdm.api", "get_sim_info") => crate::state::sim_info().await,
+                        _ => crate::state::ubus(s, m, a).await,
+                    }
+                })
+            }),
             stations: Arc::new(netinfo::wifi_stations),
             control: Arc::new(control::Client::new(control.0, control.1)),
             speed_servers: luyaz_speedtest::SERVERS_URL.into(),
-            esim: esim::real_host(ubus),
+            esim: esim::real_host(),
             screen,
         }
     }
@@ -282,6 +289,9 @@ impl Compat {
                 tailscale: self.src.tailscale.clone(),
             })))
         });
+        if let Some(e) = &self.home_exit {
+            crate::engines::home_exit::register(e);
+        }
         self
     }
 
@@ -480,6 +490,7 @@ impl Compat {
                 .route("/api/esim/notifications", get(esim::notifications))
                 .route("/api/esim/job", get(esim::job))
                 .route("/api/esim/switch", post(esim::switch))
+                .route("/api/esim/cancel", post(esim::cancel))
                 .route("/api/esim/download", post(esim::download))
                 .route("/api/esim/nickname", post(esim::nickname))
                 .route("/api/esim/delete", post(esim::delete))

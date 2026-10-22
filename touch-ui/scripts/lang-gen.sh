@@ -1,7 +1,7 @@
 #!/bin/sh
-# rs/devui/lang/en.tsv → rs/devui/lang/en.inc (the screen's English rows; rs/devui/build.rs).
+# rs/ui/lang/en.tsv → rs/ui/lang/en.inc (the screen's English rows; rs/ui/build.rs).
 #
-#   sh scripts/lang-gen.sh rs/devui/lang/en.tsv > rs/devui/lang/en.inc
+#   sh scripts/lang-gen.sh rs/ui/lang/en.tsv > rs/ui/lang/en.inc
 #
 # en.tsv: one line per text, <中文><TAB><English>; # starts a comment line,
 # blank lines are skipped. Both columns are written exactly as they would sit

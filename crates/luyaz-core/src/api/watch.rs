@@ -30,10 +30,10 @@ use std::time::Duration;
 use super::{Compat, reply};
 
 const SAMPLE_SECS: u64 = 5;
-/// The APN monitor looks this often while confirming or retrying, and reads the card this often.
+/// The APN monitor looks this often while confirming or retrying.
 const QUICK: Duration = Duration::from_secs(10);
-/// Without the hub's sim block (an ubus read per look), look at most this often when quiet.
-const SLOW_LOOKS: u32 = 6;
+/// When quiet it looks on a SIM identity move (`sim_follow::moved`), else this often.
+const FALLBACK: Duration = Duration::from_secs(60);
 const MAX_FAILS: u8 = 3;
 
 /// The group's state in u60d.
@@ -635,16 +635,12 @@ fn set_notice(c: &Compat, text: String, text_en: String, sticky: bool) {
 /// `auto`, through u60d's own `/control`.
 pub async fn apn_watch(c: Compat) {
     let mut w = ap::Watch::default();
-    let mut quiet = 0u32;
     loop {
-        c.clock.sleep(QUICK.as_secs()).await;
-        // the hub's sim block costs nothing; without it, an ubus read: then only every minute
-        let from_hub = fresh(c.src.hub.as_ref(), "sim").is_some();
-        quiet += 1;
-        if !w.eager() && !from_hub && quiet < SLOW_LOOKS {
-            continue;
+        let wait = if w.eager() { QUICK } else { FALLBACK };
+        tokio::select! {
+            _ = c.clock.sleep(wait.as_secs()) => {}
+            _ = crate::sim_follow::moved().notified() => {}
         }
-        quiet = 0;
         let iccid = super::ops::current_iccid(&c).await;
         let store = read_store(&c);
         let busy = c.net.apn_switching.load(Ordering::SeqCst)
@@ -677,6 +673,7 @@ pub async fn apn_watch(c: Compat) {
         if let Some(pause) = luyaz_api::control::retry_after(&res) {
             // a network-mode change is confirming (D40): not a failed try, again after the pause
             c.net.apn_switching.store(false, Ordering::SeqCst);
+            c.net.apn_changed();
             eprintln!(
                 "[compat] apn_pick: SIM …{} → {:?}: held off, again in {}s",
                 ap::tail4(&card),
@@ -689,6 +686,7 @@ pub async fn apn_watch(c: Compat) {
         c.net
             .apn_error(res.as_ref().err().map(String::as_str).unwrap_or(""));
         c.net.apn_switching.store(false, Ordering::SeqCst);
+        c.net.apn_changed();
         eprintln!(
             "[compat] apn_pick: SIM …{} → {:?}: {:?}",
             ap::tail4(&card),

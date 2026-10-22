@@ -49,7 +49,7 @@ pub fn wall_s() -> i64 {
 }
 
 /// `YYYY-MM-DDTHH:MM:SS` of a wall clock that is local time labelled UTC (the device's): formatted as
-/// UTC, which gives the local digits — what u60-uid's `localtime_r` under TZ=UTC printed.
+/// UTC, which gives the local digits (`localtime_r` under TZ=UTC prints the same).
 pub fn stamp(wall: i64) -> String {
     let days = wall.div_euclid(86_400);
     let secs = wall.rem_euclid(86_400);
@@ -95,14 +95,14 @@ pub fn write_atomic(path: &str, content: &str) -> std::io::Result<()> {
     fs::rename(&tmp, path)
 }
 
-/// Whole file + fsync + rename + fsync of the directory: u60-uid's `write_synced` (the attempts
+/// Whole file + fsync + rename + fsync of the directory (the attempts
 /// count must survive a crash that takes the device down right after the launch).
 pub fn write_synced(path: &str, content: &str) -> std::io::Result<()> {
     write_synced_bytes(path, content.as_bytes())
 }
 
 pub fn write_synced_bytes(path: &str, content: &[u8]) -> std::io::Result<()> {
-    // The directory is the caller's (u60-uid only ever made /data/u60-uid itself, 0700): never
+    // The directory is the caller's: never
     // change the mode of one that exists — this is also called for files right under /tmp.
     let dir = parent(path);
     let _ = fs::create_dir_all(dir);
@@ -148,10 +148,10 @@ pub fn pid_is(pid: i32, prefix: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Is `pid` our touch UI (either name, [`crate::screen::is_devui_comm`])?
+/// Is `pid` our touch UI (either name, [`crate::screen::is_ui_comm`])?
 pub fn pid_is_ui(pid: i32) -> bool {
     comm(&pid.to_string())
-        .map(|c| crate::screen::is_devui_comm(&c))
+        .map(|c| crate::screen::is_ui_comm(&c))
         .unwrap_or(false)
 }
 
@@ -165,7 +165,7 @@ pub fn find_ui() -> Option<i32> {
         let Ok(pid) = n.parse::<i32>() else { continue };
         if pid != me
             && comm(n)
-                .map(|c| crate::screen::is_devui_comm(&c))
+                .map(|c| crate::screen::is_ui_comm(&c))
                 .unwrap_or(false)
         {
             return Some(pid);
@@ -432,7 +432,7 @@ const SHADOW_CAP: u64 = 512 * 1024;
 
 static LOG_LOCK: Mutex<()> = Mutex::new(());
 
-/// Append one line (opened O_APPEND per line, as u60-uid: the guard's log cap may truncate it).
+/// Append one line (opened O_APPEND per line: the guard's log cap may truncate it).
 pub fn append(path: &str, line: &str) {
     let _g = LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if path == SHADOW_LOG
@@ -452,7 +452,7 @@ pub fn append(path: &str, line: &str) {
     }
 }
 
-/// u60-uid's log line: `<stamp> <msg>` (no prefix: ship's UID_BAD matches the bare message).
+/// The screen log line: `<stamp> <msg>` (no prefix: ship's UID_BAD matches the bare message).
 pub fn uid_log(msg: &str) {
     eprintln!("luyaz-sentinel: {msg}");
     append(UID_LOG, &format!("{} {msg}", stamp(wall_s())));
@@ -478,7 +478,7 @@ pub fn shadow_log(who: &str, msg: &str) {
     );
 }
 
-// ── events (u60-sentinel.md §6 C-R9) ───────────────────────────────────────
+// ── events (u60-sentinel.md §6) ────────────────────────────────────────────
 
 type EventTx = std::sync::mpsc::Sender<(String, String)>;
 static EVENTS: OnceLock<Mutex<EventTx>> = OnceLock::new();
@@ -977,9 +977,12 @@ impl crate::events::EventIo for RealEvents {
 
 // ── alert SMS while the core is unhealthy (§6, D15) ─────────────────────────
 
-/// The touch UI's settings (with the program).
-pub const DEVUI_CONF: &str = "/data/luyaz/ui/devui.conf";
 const CLOCK_OK: &str = "/tmp/luyaz/clock-ok";
+
+/// The touch UI's settings: ui.conf.
+pub fn ui_conf() -> Option<String> {
+    read(luyaz_alerts::sms::UI_CONF)
+}
 
 /// The sentinel as an alert SMS sender: straight over ubus (the core is the thing that is down).
 #[derive(Default)]
@@ -1024,7 +1027,7 @@ impl luyaz_alerts::sms::SmsIo for SentinelSms {
         .wall_usable()
     }
     fn lang_en(&mut self) -> bool {
-        read(DEVUI_CONF).is_some_and(|c| luyaz_alerts::sms::lang_en(&c))
+        ui_conf().is_some_and(|c| luyaz_alerts::sms::lang_en(&c))
     }
     fn tz_hours(&mut self) -> i32 {
         let v = run(
@@ -1076,7 +1079,7 @@ impl luyaz_alerts::sms::SmsIo for SentinelSms {
     }
 }
 
-// ── the touch device (touch-ui src/touch_input.c, what u60-uid needs of it) ──
+// ── the touch device (what the corner gesture needs of it) ──
 
 const EV_SYN: u16 = 0x00;
 const EV_KEY: u16 = 0x01;
@@ -1236,7 +1239,7 @@ impl Touch {
     }
 
     /// Drain pending events; every SYN_REPORT gives one (x, y, pressed) sample in display pixels,
-    /// after the panel's 180° turn (DEVUI_TOUCH_ROTATE_180 = 1 on the U60 Pro).
+    /// after the panel's 180° turn (the U60 Pro mounts it upside down).
     pub fn read(&mut self) -> Vec<(i32, i32, bool)> {
         let mut out = Vec::new();
         let mut buf = [0u8; EVENT_SIZE * 32];
@@ -1278,6 +1281,15 @@ impl Touch {
     }
 }
 
+/// Whether `path` is still the FIFO `reader` reads (same device and inode).
+pub fn ctl_current(path: &str, reader: &File) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (fs::metadata(path), reader.metadata()) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
 pub fn ctl_open(path: &str) -> Option<(File, File)> {
     let _ = fs::remove_file(path);
     let c = std::ffi::CString::new(path).ok()?;
@@ -1303,9 +1315,9 @@ pub fn ctl_open(path: &str) -> Option<(File, File)> {
     Some((r, w))
 }
 
-// ── the explanation frame on DRM (C-R8) ─────────────────────────────────────
-// The kernel's drm_mode.h structs (aarch64 layout = the C one, repr(C)), what touch-ui
-// src/drm_disp.c uses, plus SET_MASTER/DROP_MASTER: the frame is drawn only when this process
+// ── the explanation frame on DRM ───────────────────────────────────────────
+// The kernel's drm_mode.h structs (aarch64 layout, repr(C)) for a dumb buffer,
+// plus SET_MASTER/DROP_MASTER: the frame is drawn only when this process
 // gets master; a UI that still holds card0 (hung, not yet exited) makes SET_MASTER fail and the
 // frame is skipped.
 

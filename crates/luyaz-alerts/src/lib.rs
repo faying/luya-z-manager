@@ -274,7 +274,7 @@ impl Alerts {
         self.append_locked(kind, text, wall, uptime)
     }
 
-    /// An event with an id (the sentinel's, u60-sentinel.md §6 C-R9): queued once whoever adds it
+    /// An event with an id (the sentinel's, u60-sentinel.md §6): queued once whoever adds it
     /// first, the core on the sentinel's POST or the sentinel itself when the core did not answer.
     /// The text starts with `[<id>] `. Returns the queue seq and whether this call added it.
     pub fn add_once(
@@ -538,15 +538,15 @@ impl Alerts {
 pub fn kind_label(kind: &str) -> String {
     const T: &[(&str, &str)] = &[
         ("core-crash", "数据服务意外退出，已自动重启"),
-        ("devui-crash", "触屏界面闪退，已自动重新打开"),
+        ("ui-crash", "触屏界面闪退，已自动重新打开"),
         // Phase 10 X9: the core watches these two procd services
         ("web-crash", "管理网页意外退出，已自动重启"),
         ("sentinel-crash", "哨兵意外退出，已自动重启"),
         (
-            "devui-gave-up",
+            "ui-gave-up",
             "触屏界面反复打不开，已换回原厂界面（长按屏幕右下角 3 秒重试）",
         ),
-        ("devui-theme-paused", "自动切换深浅色已暂停，重启后恢复"),
+        ("ui-theme-paused", "自动切换深浅色已暂停，重启后恢复"),
         ("wifi-takeover", "Wi-Fi 看门狗重新打开了 Wi-Fi"),
         ("wifi-restore-failed", "Wi-Fi 看门狗没能打开 Wi-Fi"),
         ("sms-failed", "告警短信发送失败"),
@@ -582,6 +582,11 @@ pub fn kind_label(kind: &str) -> String {
         ),
         // luyaz-core lanid/watch.rs (lan-client-id.md §2)
         ("lan-new-device", "新设备连上了热点"),
+        // luyaz-core sim_alerts.rs (once per SIM identity epoch)
+        ("sim-changed", "SIM 卡换了（卡号/IMSI 变了）"),
+        ("sim-stalled", "换卡后 3 分钟还没恢复数据"),
+        ("esim-failed", "eSIM 切换没成功"),
+        ("esim-rebooted", "eSIM 切换后已自动重启设备"),
     ];
     T.iter()
         .find(|t| t.0 == kind)
@@ -595,18 +600,18 @@ pub fn kind_label(kind: &str) -> String {
 pub fn kind_label_en(kind: &str) -> String {
     const T: &[(&str, &str)] = &[
         ("core-crash", "Data service exited unexpectedly"),
-        ("devui-crash", "Screen UI exited unexpectedly"),
+        ("ui-crash", "Screen UI exited unexpectedly"),
         ("web-crash", "Admin pages (luyaz-web) exited unexpectedly"),
         (
             "sentinel-crash",
             "Sentinel (luyaz-sentinel) exited unexpectedly",
         ),
         (
-            "devui-gave-up",
+            "ui-gave-up",
             "Screen UI kept failing; stock UI is on screen (hold the bottom-right corner 3 s to retry)",
         ),
         (
-            "devui-theme-paused",
+            "ui-theme-paused",
             "Automatic light/dark switching on the screen paused until reboot",
         ),
         ("wifi-takeover", "Wi-Fi watchdog turned Wi-Fi back on"),
@@ -654,6 +659,13 @@ pub fn kind_label_en(kind: &str) -> String {
             "A device keeps polling the admin ports over Tailscale (more drain with the screen off)",
         ),
         ("lan-new-device", "A new device joined the hotspot"),
+        ("sim-changed", "SIM card changed (ICCID/IMSI)"),
+        ("sim-stalled", "No data 3 min after a SIM change"),
+        ("esim-failed", "eSIM switch did not succeed"),
+        (
+            "esim-rebooted",
+            "Rebooted automatically to finish an eSIM switch",
+        ),
     ];
     T.iter()
         .find(|t| t.0 == kind)
@@ -673,12 +685,12 @@ mod tests {
                 && !valid_event_id("8559f5d-1")
                 && !valid_event_id("8559f5dc-")
         );
-        assert!(a.add_once("x", "devui-gave-up", "t", 1, 1).is_err());
+        assert!(a.add_once("x", "ui-gave-up", "t", 1, 1).is_err());
         let (s1, new1) = a
-            .add_once("8559f5dc-1", "devui-gave-up", "gave up", 100, 5)
+            .add_once("8559f5dc-1", "ui-gave-up", "gave up", 100, 5)
             .unwrap();
         let (s2, new2) = a
-            .add_once("8559f5dc-1", "devui-gave-up", "gave up", 101, 6)
+            .add_once("8559f5dc-1", "ui-gave-up", "gave up", 101, 6)
             .unwrap();
         assert_eq!((s1, new1, s2, new2), (1, true, 1, false));
         assert_eq!(a.events()[0].text, "[8559f5dc-1] gave up");
@@ -689,10 +701,10 @@ mod tests {
 
     #[test]
     fn kind_labels_as_the_screen_had_them() {
-        use super::kind_label;
+        use super::{kind_label, kind_label_en};
         assert_eq!(kind_label("core-crash"), "数据服务意外退出，已自动重启");
         assert_eq!(
-            kind_label("devui-gave-up"),
+            kind_label("ui-gave-up"),
             "触屏界面反复打不开，已换回原厂界面（长按屏幕右下角 3 秒重试）"
         );
         assert_eq!(kind_label("sms-test"), "测试短信");
@@ -708,15 +720,19 @@ mod tests {
 
         let kinds = [
             "core-crash",
-            "devui-crash",
+            "ui-crash",
             "web-crash",
             "sentinel-crash",
-            "devui-gave-up",
-            "devui-theme-paused",
+            "ui-gave-up",
+            "ui-theme-paused",
             "wifi-takeover",
             "wifi-restore-failed",
             "sms-failed",
             "sms-test",
+            "sim-changed",
+            "sim-stalled",
+            "esim-failed",
+            "esim-rebooted",
         ];
         for k in kinds {
             let en = kind_label_en(k);
@@ -750,13 +766,13 @@ mod tests {
         let mut q = String::new();
         for i in 1..=60u64 {
             q.push_str(&format!(
-                "{i}\t1758600000\t4294967295\tdevui-gave-up\t{text}\n"
+                "{i}\t1758600000\t4294967295\tui-gave-up\t{text}\n"
             ));
         }
         fs::write(a.path("queue"), q).unwrap();
         a.write_whole("sms-to", "+12345678901234567890\n").unwrap();
         let sms: String = (1..=20u64)
-            .map(|i| format!("1758600000\t{i}\tdevui-gave-up\tsuppressed-abroad\n"))
+            .map(|i| format!("1758600000\t{i}\tui-gave-up\tsuppressed-abroad\n"))
             .collect();
         fs::write(a.path("sms-log"), sms).unwrap();
         let body =

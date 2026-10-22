@@ -55,6 +55,8 @@ pub(super) fn gather(c: &Compat) -> Value {
     });
     // T6: the open "sure" finding for the home page (null when none)
     data["network"]["finding"] = super::finding::home_now().map_or(Value::Null, |h| h.to_value());
+    data["network"]["health"] =
+        luyaz_api::execution::network_health::build(&super::underlay::health_input(&c.root));
     data["services"] = json!({"tailscale": tailscale(c)});
     data["services"]["chill"] = chill(c);
     data

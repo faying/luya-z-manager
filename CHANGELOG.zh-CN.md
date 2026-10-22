@@ -8,13 +8,193 @@
 | `core` | `luyaz-core`，核心服务（`:9460`） | `crates/luyaz-core/Cargo.toml` |
 | `lweb` | `luyaz-web`，管理网页（`:9090`） | `crates/luyaz-web/Cargo.toml` |
 | `sentinel` | `luyaz-sentinel`，屏幕主人和看门狗 | `crates/luyaz-sentinel/Cargo.toml` |
-| `touch` | `luyaz-ui`，触屏界面 | `touch-ui/rs/devui/Cargo.toml` |
+| `touch` | `luyaz-ui`，触屏界面 | `touch-ui/rs/ui/Cargo.toml` |
 | `scripts` | 设备脚本（体检、启动脚本等） | `touch-ui/scripts/VERSION` |
 
 每个程序用 `--version` 报版本，例如 `luyaz-core 1.0.0 (6e606ec)`。
 平时写在 **Unreleased** 下，格式 `- <组件>: 内容`（例如 `- touch: …`）；`tools/luyaz bump <组件> <patch|minor|major>` 会把它们挪成新的版本段。`Requires:` 写需要的其他组件最低版本。
 
 英文版是 [CHANGELOG.md](CHANGELOG.md)。
+
+## Unreleased
+
+- core：采集以外读 SIM 信息（写前检查、短信切槽等待、网页 SIM 页）都走同一个入口；读到的结果给下一轮采集直接用，不再多问一次 modem。
+- kit: 给了 `OUI_TSV=`（`scripts/lanid/make-oui.sh` 生成的表）就装到 `/data/luyaz/lanid/oui.tsv`，用来显示厂商；公开构建没有这张表。
+
+- kit: 装机包带上 lanid-parse 组件（已连设备识别），装到 `/data/luyaz/core/plugins/`，只有这一个组件；没有时核心照常跑、识别关着。`LANID_CWASM=` 指定现成的。
+
+## core 1.33.7 — 2026-10-22
+
+- doctor 按清单里写的名字读记录项；改名前的旧名（`devui-fonts`、`devui-logos`、`u60d-plugins`、`u60-recover.sh`）不再对应（两台都没有了）。
+
+## core 1.33.6, sentinel 1.0.11, touch 1.10.7, scripts 1.0.9 — 2026-10-22
+
+不再认旧的 devui 名字（devui 清理 B5）；两台设备上一轮已迁移。
+- touch：只读 `ui.conf`，不再从 `devui.conf` 拷。
+- sentinel：控制 FIFO 只认 `ui`；语言只看 ui.conf。
+- core：告警按记录的名字读（不再把 `devui-*` 对应到新名）；短信语言只看 ui.conf。
+- scripts：ship 和 config-backup 不再带 devui.conf。
+
+## core 1.33.5, lweb 1.24.1, sentinel 1.0.10, touch 1.10.6, scripts 1.0.8 — 2026-10-22
+
+设备上的名字去掉 devui（devui 清理 B2）；旧名字下一轮之前照认。
+- 触屏：设置改叫 `/data/luyaz/ui/ui.conf`；第一次启动把 `devui.conf` 拷过去，旧文件留着备退回。深浅色告警叫 `ui-theme-paused`。
+- 哨兵：控制 FIFO 认 `ui`（`devui` 照认）；告警叫 `ui-crash`、`ui-gave-up`；语言先读 ui.conf，没有再读 devui.conf。
+- 核心：短信语言先读 ui.conf，没有再读 devui.conf；体检提示改成 `echo ui > /tmp/luyaz-screen.ctl`。
+- 核心、网页、哨兵：记成 `devui-*` 的旧告警按新名 `ui-*` 显示（说明、短信内容、不发短信的名单）。
+- 脚本：上机试跑触屏时 ui.conf、devui.conf 都备份；配置备份加上 ui.conf。
+- 触屏、装机包（devui 清理 B3）：crate 改为 `touch-ui/rs/ui`（包名 `luyaz-ui`）、`touch-ui/rs/ui-model`；装机包组件和包内目录叫 `ui`（`./install.sh ssh admin ui esim`）；装机包变量 `TOUCH_REPO`、`TOUCH_BIN`、`UI_FONTS_DIR`；触屏日志前缀 `ui:`；调试变量 `LUYAZ_UI_FORCE_HSR`；编译卷 `u60-ui-rs-target`。
+
+## core 1.33.4 — 2026-10-22
+
+- 局域网设备名：mDNS 名字只认代表整台设备的服务（AirPlay、SMB、SSH、打印机等），App 自己广播的服务不算；安卓手机 DHCP 名字排在 mDNS 名字前面（要配新版 lanid-parse 插件）。
+
+## touch 1.10.5 — 2026-10-22
+
+- 触屏：不再到已退役的 /data/plugins/u60pro-devui 找字体。
+- 恢复脚本：luyaz-recover.sh 不管有没有残留旧文件，一律不删 luyaz-ui、不还原起 u60-uid/u60-guard 的 rc.local（以前先看旧程序在不在）。
+
+## sentinel 1.0.9, scripts 1.0.7 — 2026-10-22
+
+- 哨兵：10-22 ship 写进 `/tmp/luyaz-screen.ctl` 的 `hold` 有三个小时没到哨兵手里（心跳照常，重启后好了，原因没查到）。现在每一轮都核对这个路径还是不是自己在读的那个 FIFO，不是就新建一个（读到文件结尾也新建），读出错（不是「没东西」）就记日志。
+- 脚本：哨兵 10 秒内没放下屏幕时，`luyaz-ship.sh` 把现场记进日志（心跳和它多久前写的、FIFO 的 inode 和哨兵打开的 fd 对比、每个线程的状态/wchan/syscall），不重启哨兵，留住现场。
+
+## core 1.33.3, touch 1.10.4 — 2026-10-22
+
+- core: 网络页的 APN 读取（`/api/netinfo?apn=1`）重用 60 秒，切换 APN 时立刻作废：触屏蜂窝页每 5 秒读一次，固件每次往 key.log 写约 8 行，几小时就把拨号时那几行（QCI/AMBR）挤出日志，载波卡的「上限」随之消失。
+- core: 日志里一条承载都没有时，`qos.bearer` 按当前制式填（SA = `nr_pdu`），不再留空让屏幕和网页把 SA 的 5QI 写成 QCI。
+- touch: 载波卡有 QCI/5QI 但不知道 AMBR 时写「上限 未知」，不再只剩半句。
+
+## core 1.33.2 — 2026-10-22
+
+- 局域网设备名：iOS 的 `<MAC>@fe80::…` mDNS 实例名是 id 不是名字，手机重新显示为 `iPhone`。
+
+## core 1.33.1 — 2026-10-22
+
+- 诊断探测预算拿锁失败时隔 10 ms 再试几次才放弃：进程里别处 fork 时子进程会短暂拿着锁的副本。测试：修掉两个偶发失败（预算锁、刚写好的测试脚本 ETXTBSY）。
+
+## core 1.33.0, lweb 1.24.0, mcp 0.4.0 — 2026-10-22
+
+- core: 判断「数据通」不再只看固件的 `connect_status`（B31 上没有承载也会说已连接）：注册守卫、等数据、短信转发都要求有经 `rmnet_data0` 的默认路由（`/proc/net/route`，IPv6 也算）。
+- core: `/api/public/status` 新增 `network.health`：承载、当前问题、被底层闸门暂停的修复、下一步（等待 / 检查 APN）和一句给网页、触屏共用的话。故意关数据时不说话；暂停的原因不在了就清掉。
+- core: CHILL 端到端探测：CHILL 开着且有客户端时，最多 10 分钟一次（独立预算，不占网络诊断的）经 mihomo 请求一次；API 活着却连两次不通，`network.health` 提示「代理转发不通」。只提示、不重启。`LUYAZ_CHILL_PROBE=0` 关闭。
+- lweb: 首页提示改读 `network.health` 的那句话（自动恢复失败时链到 APN，只有代理不通时链到 CHILL）；旧核心照旧显示问题描述。Agent API `/agent-api/network-health`。
+- mcp: 只读工具 `get_network_health`。
+- kit: `onboard/README` 改成 B27～B31（B28 起先自己开 SSH）；`sandbox.sh` 示例改用 `HOST=root@<网关>`。CI：`.github/workflows/test.yml`（cargo test + aarch64 构建）。
+
+## core 1.32.6 — 2026-10-22
+
+- 带 UUID 的局域网设备名（安卓「快速分享」的 `nearby-presence-nsd-<uuid>`）不再当设备名显示，回到 DHCP 名字（如 `OnePlus-Ace-3-Pro`）。
+
+## core 1.32.5 — 2026-10-22
+
+- eSIM 切换：SIM 身份比 45 秒稍慢不再重启设备。超过 45 秒后再等最多 75 秒，身份和数据连接都还没回来才重启（u60g 10-22：身份晚几秒回来、数据正常，却已经因此重启了一次）。
+
+## touch 1.10.0 — 2026-10-22
+
+- eSIM 切换的状态行在进行中和结束时都用核心给的共用短文案（`say_short`），和管理网页一样；自己没在切换时，任何 SIM 变化期间 eSIM 页显示 `sim` 块的文案；任务最多读 2 KB。旧核心照旧。Requires: core 1.32.0（新文案）。
+
+## lweb 1.23.0 — 2026-10-22
+
+- eSIM 切换结果开头是核心给的共用文案（`say`）；已知原因的失败显示这句和该怎么做，不再显示 lpac 原始消息（写进日志）；切换进行中 eSIM 页状态显示任务的文案（如「安全重试中」），任何 SIM 变化期间显示 `sim` 块的文案。旧核心照旧。
+
+## touch 1.10.3 — 2026-10-22
+
+- 双卡：待机卡写出漫游到哪（如「漫游到中国移动」），用核心给的说法，首页和蜂窝页都有。Requires: core 1.32.4。
+
+## lweb 1.23.1 — 2026-10-22
+
+- 双卡：首页两张卡显示在哪（如「4G · 漫游到中国移动」），logo 用核心的选法（CMLink）；双卡页在运营商后面加上同一句。Requires: core 1.32.4。
+
+## core 1.32.4 — 2026-10-22
+
+- 双卡：每个卡槽带 `place`/`place_en`，用上网卡同样的说法说卡在哪（本地 / 漫游到中国移动 / 漫游）；待机卡的网络名称来自它的 QMI 服务网络读取。
+
+## touch 1.10.2 — 2026-10-22
+
+- 双卡：首页待机卡那一行、蜂窝页两张卡都显示「本地」或「漫游」，和上网卡那一行一样。Requires: core 1.32.3。
+
+## core 1.32.3 — 2026-10-22
+
+- 双卡：每个卡槽带 `serving_mcc` 和 `true_roaming`（和 `signal.true_roaming` 同一条国家规则）；待机卡所在的网络在读信号时顺带用 QMI NAS Get Serving System 读。
+
+## touch 1.10.1 — 2026-10-22
+
+- 双卡：每个卡槽一行用核心给的 `logo`，和单卡同一套（如 CMLink、CMHK）；旧核心照旧只认大陆三家。Requires: core 1.32.2。
+
+## core 1.32.2 — 2026-10-22
+
+- 双卡：每个卡槽带 `logo`，和单卡同一套选法（先 SPN、再 PLMN），港澳台和其他地方的卡也有 logo，不再只有大陆三家。
+
+## core 1.32.1 — 2026-10-22
+
+- 双卡：固件把卡槽 1 的运营商留空时（B31、454-12 卡待机时见到），卡槽 1 改显示卡的 SPN 名称，不再空着。
+
+## core 1.32.0 — 2026-10-22
+
+- SIM/eSIM 切换的文案只有一张表（`sim_say`）：`sim` 块（按 SIM 身份 phase）和 `/api/esim/job`（切换任务，按 status/reason）带 `say`/`say_en`（全文）、`say_short`/`say_short_en`（触屏放得下）和 `say_id`：正在切换 / 安全重试中 / 已恢复 / 可能要查 APN / 自动恢复未成功、设置没被再改。旧字段不变。
+
+## lweb 1.22.0 — 2026-10-22
+
+- eSIM 页不再每 10 秒读配置列表、每 30 秒读通知（每次都跑 lpac 读卡）；改为只在打开页面（标签页隐藏时流会断开）、点刷新/重试或操作结束、SIM 身份 epoch/phase 变化时读，任务进行中或列表还在稳定时每 10 秒读一次，结束后再读 40 秒。
+
+## core 1.31.0 — 2026-10-22
+
+- 短信转发等换卡结束再发（SIM 身份 phase 不是 online 时暂停）：online 满 30 秒后接着发，卡住超过 10 分钟也照发；不丢任何短信。
+
+## core 1.30.0 — 2026-10-22
+
+- APN 监视改为在 SIM 身份 epoch/phase 变化时立即查看，兜底轮询 60 秒（原 10 秒）；SIM 切换处于 leaving/changed 时不再提议重连。
+
+## core 1.29.0 — 2026-10-22
+
+- 新警报种类 `sim-changed`、`sim-stalled`、`esim-failed`、`esim-rebooted`（eSIM 切换要求的自动重启，下次开机再报），每个 SIM 身份 epoch、每次开机只报一次。
+- 换卡时 CHILL 关着或空闲暂停，日志写明不重载。
+
+## core 1.28.0 — 2026-10-22
+
+- eSIM 身份逾时自动重启可以关掉：有 `/data/luyaz/core/esim-auto-reboot-off` 这个文件时，卡住的切换以 `identity_stuck` 结束（手动重启），不再自动重启；默认开着。
+
+## core 1.27.7 — 2026-10-22
+
+- 更正 eSIM 切换：1.27.6 比对错了字段（`get_sim_info` 的 `sim_*` 固定是卡槽 1，也就是 eSIM 卡）。现在改成：卡槽 1 关着、或数据在卡槽 2 时，只在卡上切换（`reason: "inactive_slot"`）。
+
+## core 1.27.6 — 2026-10-22
+
+- 双卡设备上的 eSIM 切换：数据机用的是另一张卡（不是 eSIM 卡）时，只在卡上切换设定，任务以 `reason: "inactive_slot"` 结束——不重启数据机、不等身分、不自动重开（身分永远不会变，以前会白白重开）。
+
+## core 1.25.0 — 2026-10-22
+
+- 没拿到跨进程写锁就不写：别的写者占着满 15 秒、或锁文件打不开，回绝这次写（HTTP 503，`busy` 或 `lock_error`），设备上什么都不动。等锁不再拖住数据采集。
+- Wi-Fi 写：只有能证明自己拿着 Wi-Fi 锁的调用方（它自己或它的父进程）不用等；其余的都要等，锁一直被占或打不开就回绝。
+- 启动时待确认的改动一直等到拿到写锁才动，不再不拿锁就做。
+- 排队的旧请求因为锁被回绝时放回队列，不再当成已做完。
+
+## scripts 1.0.6 — 2026-10-22
+
+- `luyaz-fallback.sh`：写锁文件打不开时 exit 5，什么都不写（以前是不拿锁照写）。
+
+## core 1.24.0 — 2026-10-22
+
+- eSIM 切换：「数据回来」改看蜂窝接口有地址、且上网路由从它出去（IPv4 或 IPv6 任一），不再看固件自己的拨号状态。
+- eSIM 切换：卡回「忙」时自动重试最多 4 分钟（每次前先重读卡上列表），`POST /api/esim/cancel` 可停；任务多了 `attempts`、`deadline_s`。
+- eSIM 切换：调制解调器一直认不出新配置时的自动重启，24 小时内最多一次，重启前先记成「有人要的」；之后任务以 `identity_stuck` 结束，请用户手动重启。
+- `sim` 块多了 `epoch`、`phase`（online / leaving / changed / reloaded / stalled）：SIM 身份变化走到哪一步。
+
+## lweb 1.21.0 — 2026-10-22
+
+- eSIM：按切换任务自己报的时长等；分得清「重试后卡还是忙」「已停止重试」「卡已换，重启设备完成切换」。
+
+Requires: core 1.24.0（更早的 core 照旧等 240 秒）。
+
+## touch 1.9.0 — 2026-10-22
+
+- eSIM：自动重试时显示「卡忙，自动重试中」，按切换任务报的时长等，需要重启才能完成时会说。
+
+## core 1.23.0 — 2026-10-22
+
+- 家里出口：蜂窝本身断了时探测家里失败不再计入，不会因为断网 15 分钟就关掉「其余都走家里」。
+- CHILL（`chill.sh`，只记录的文件）：运行中每分钟查一次自己的路由规则，被删了就重启代理核心重建（10 分钟内超过 3 次就回直连并退避）；WAN 换到别的口才回直连，重拨不会。
 
 ## lweb 1.20.0 — 2026-10-22
 
@@ -36,11 +216,41 @@
 
 - SIM 页：上网卡在卡 2、号码为空时显示「卡 2 不提供号码」；PLMN 460-13 算中国移动。
 
-## Unreleased
+## core 1.27.5 — 2026-10-22
 
-- kit: 给了 `OUI_TSV=`（`scripts/lanid/make-oui.sh` 生成的表）就装到 `/data/luyaz/lanid/oui.tsv`，用来显示厂商；公开构建没有这张表。
+- APN 块从每分钟读一次改成 10 分钟一次，写过之后、数据卡换了（ICCID 变）都立即重读：厂商每读一次往 key.log 写约 30 行。
 
-- kit: 装机包带上 lanid-parse 组件（已连设备识别），装到 `/data/luyaz/core/plugins/`，只有这一个组件；没有时核心照常跑、识别关着。`LANID_CWASM=` 指定现成的。
+## core 1.27.4 — 2026-10-22
+
+- 换卡或换核心网后 QCI/5QI 和 AMBR 不再变空：厂商的 key.log 几小时就被别的日志冲掉，核心现在自己保留最近 400 条 `[DATA]` 行（`/data/luyaz/core/qos-lines.log`，有新行才写）。地址或核心网变了，这些旧值照样标成过时。
+
+## core 1.27.3 — 2026-10-22
+
+- 已连设备的名字一旦学到可读的就固定下来，同一台设备后来广播的 UUID 或 NetBIOS 名不再覆盖它（曾有 Mac 从 AirPlay 名变成 `MAC-…`）。
+
+## touch 1.9.1 — 2026-10-22
+
+- 已连接设备的厂商和类型单独一行，「连上以来」总流量不再被截掉。
+
+## core 1.27.2 — 2026-10-22
+
+- 已连设备取名：8 位以上的十六进制编号（安卓 adb/投屏）不再盖掉 DHCP 主机名；Mac 没有别的名字时用 mDNS 型号；电脑类服务优先于 AirPlay/投屏接收（Mac 曾被认成音箱）；OUI 厂商名去掉公司后缀（`Xiaomi Communications Co Ltd` → `Xiaomi`）。
+
+## core 1.27.1 — 2026-10-22
+
+- 修正（1.25.0 起）：情景引擎自己的 Wi-Fi 切换被回绝。它在核心里拿着 Wi-Fi 锁、经回环调核心的 `/control`；现在核心认得调用方是自己，不再等自己的锁 5 分钟。
+
+## core 1.27.0 — 2026-10-22
+
+- 换卡（eSIM 切换或固件自己切卡槽）后数据回来时，CHILL 重载一次（只在它开着时，已有 CHILL 工作在跑就不再叠一次），家里出口的探测失败数清零并马上探一次，旧卡上的失败不会再把「其余都走家里」关掉。
+
+## core 1.26.1 — 2026-10-22
+
+- 手动重拨（`/control` 的 `cellular.redial`，网页和触屏）先等正在跑的诊断或 Finding 探测结束（最多 4 秒），不再把它打断；正在改网络设置时回 409 忙。
+
+## core 1.26.0 — 2026-10-22
+
+- 下层闸门：代理以下的层坏着时（数据口没地址：一直；有更低层的确定诊断：最多 15 分钟），home-exit 不再累计家里探测失败，manual-first 也不再换走手选节点。已知故障的修复（进程死、规则丢）不受影响。
 
 ## lweb 1.19.0 — 2026-10-21
 

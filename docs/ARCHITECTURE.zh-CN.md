@@ -35,7 +35,7 @@ luyaz-sentinel：屏幕主人 + 看门狗
 
 ## 触屏紧急兜底边界
 
-正常运行时 `luyaz-ui` 从 `127.0.0.1:9460` 读 `/v2/screen`（`/v2/state` + `/v2/events`），所有写操作发往 `POST /control`。为保证 `luyaz-core` 挂掉或卡死时拿在手里的设备仍能自救，`luyaz-ui` 保留四条有界的本地兜底路径（`touch-ui/rs/devui/src/ui/power.rs`、`src/data/live.rs`、`src/data/core.rs`）：
+正常运行时 `luyaz-ui` 从 `127.0.0.1:9460` 读 `/v2/screen`（`/v2/state` + `/v2/events`），所有写操作发往 `POST /control`。为保证 `luyaz-core` 挂掉或卡死时拿在手里的设备仍能自救，`luyaz-ui` 保留四条有界的本地兜底路径（`touch-ui/rs/ui/src/ui/power.rs`、`src/data/live.rs`、`src/data/core.rs`）：
 
 - **电源菜单兜底**（`power_fallback` / `power_last_resort`）：重启、关机先调 `POST /control`（`device.reboot` / `device.poweroff`）。核心连不上时，触屏直接 `sync` 并调 `ubus -t 10 call zwrt_mc.device.manager device_reboot|device_poweroff '{"moduleName":"zte_topsw_devui"}'`，失败退回 `reboot`/`poweroff`；确认后 40 秒仍未关机/重启，则由 `power_last_resort` 直接调系统 `reboot`/`poweroff`。
 - **核心不在线时的控制兜底**（`core.rs::control_fb` → `/data/luyaz/scripts/luyaz-fallback.sh`）：只在 `127.0.0.1:9460` TCP 连接失败时触发（核心回 409/503 或请求超时绝不触发，以免核心其实在执行却被绕过）。脚本先用 `pidof` 再次确认 `luyaz-core` 没在跑，再直接执行断网自救必需的开关（`wifi.radio`、`cellular.data`、`cellular.roaming`、`cellular.rat`、`apn.mode`、`sim.slot`、`usb.mode`、`charge.inhibit`、`fast.boot`）。

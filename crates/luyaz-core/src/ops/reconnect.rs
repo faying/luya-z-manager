@@ -39,6 +39,46 @@ pub fn session(v4: &str, if_inet6: &str) -> &'static str {
     if has_v4 || has_v6 { "up" } else { "down" }
 }
 
+/// The bearer is really up (eSIM switch, P0-1): a global address on the data interface *and*
+/// the route the kernel picks for the internet leaving through it, per family. B31's
+/// `get_wwaniface` can say connected while neither holds. `route4`/`route6` =
+/// `ip route get 1.1.1.1` / `ip -6 route get 2001:4860:4860::8888` (empty when unreachable).
+pub fn bearer_up(v4: &str, if_inet6: &str, route4: &str, route6: &str) -> bool {
+    let via = |r: &str| r.split_whitespace().skip_while(|w| *w != "dev").nth(1) == Some(IFACE);
+    let has_v4 = v4.lines().any(|l| l.contains(" inet "));
+    let has_v6 = session("", if_inet6) == "up";
+    (has_v4 && via(route4)) || (has_v6 && via(route6))
+}
+
+/// The bearer from `/proc` under `root` (no fork; `luyaz_api::netinfo::bearer_from_proc`):
+/// a default route out of the data interface. None when `/proc/net/route` cannot be read.
+pub fn proc_bearer(root: &str) -> Option<bool> {
+    let read = |p: &str| std::fs::read_to_string(format!("{root}{p}")).ok();
+    luyaz_api::netinfo::bearer_from_proc(
+        read("/proc/net/route").as_deref(),
+        &read("/proc/net/if_inet6").unwrap_or_default(),
+        &read("/proc/net/ipv6_route").unwrap_or_default(),
+        IFACE,
+    )
+}
+
+/// [`bearer_up`] read now, blocking (the eSIM engine's own threads).
+pub fn read_bearer_up() -> bool {
+    let run = |args: &[&str]| {
+        std::process::Command::new("ip")
+            .args(args)
+            .stderr(std::process::Stdio::null())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
+    let v4 = run(&["-4", "-o", "addr", "show", "dev", IFACE]);
+    let v6 = std::fs::read_to_string("/proc/net/if_inet6").unwrap_or_default();
+    let r4 = run(&["route", "get", "1.1.1.1"]);
+    let r6 = run(&["-6", "route", "get", "2001:4860:4860::8888"]);
+    bearer_up(&v4, &v6, &r4, &r6)
+}
+
 pub async fn read_session() -> Result<&'static str, String> {
     let out = tokio::process::Command::new("ip")
         .args(["-4", "-o", "addr", "show", "dev", IFACE])

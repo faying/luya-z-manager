@@ -1896,3 +1896,54 @@ async fn a_person_never_waits_for_an_agent_trial() {
 mod gate;
 mod from_loop;
 mod loop_exec;
+
+fn bare_gate() -> TxnGate {
+    TxnGate {
+        gate: Arc::new(Mutex::new(Gate::default())),
+        others: Arc::new(|| false),
+        wait_ms: admit::TXN_WAIT_MAX_MS,
+    }
+}
+
+/// 手动重拨（`/control` cellular.redial）等正在跑的探测结束再写，写完就放。
+#[tokio::test(start_paused = true)]
+async fn bare_redial_waits_for_a_running_probe() {
+    let g = bare_gate();
+    g.gate.lock().unwrap().probe_enter(admit::Probe::Finding, 1_000).unwrap();
+    let g2 = g.gate.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(1_000)).await;
+        g2.lock().unwrap().probe_exit(admit::Probe::Finding);
+    });
+    let h = admit_bare_with(&g, "control.redial", 4_000, || "b".into(), || 2_000).await;
+    let h = h.expect("granted once the probe ended");
+    // held: no new probe starts while the dial runs
+    assert_eq!(g.gate.lock().unwrap().probe_enter(admit::Probe::Diagnose, 3_000), Err("txn"));
+    drop(h);
+    assert!(g.gate.lock().unwrap().probe_enter(admit::Probe::Diagnose, 3_000).is_ok());
+}
+
+#[tokio::test(start_paused = true)]
+async fn bare_redial_gives_up_before_the_screen_does() {
+    let g = bare_gate();
+    g.gate.lock().unwrap().probe_enter(admit::Probe::Diagnose, 1_000).unwrap();
+    let t0 = Instant::now();
+    let r = admit_bare_with(&g, "control.redial", 4_000, || "b".into(), || 2_000).await;
+    assert_eq!(r.err().unwrap()["busy"], "txn");
+    assert!(t0.elapsed() <= Duration::from_millis(4_500));
+    // nothing left behind: the probe can finish and a new one start
+    g.gate.lock().unwrap().probe_exit(admit::Probe::Diagnose);
+    assert!(g.gate.lock().unwrap().probe_enter(admit::Probe::Finding, 9_000).is_ok());
+}
+
+#[tokio::test(start_paused = true)]
+async fn bare_redial_is_busy_while_a_network_transaction_holds_the_gate() {
+    let g = bare_gate();
+    assert_eq!(g.gate.lock().unwrap().txn_reserve(GATE_OWNER, "b", 1_000, 1_000, false), Admit::Granted);
+    let t0 = Instant::now();
+    let r = admit_bare_with(&g, "control.redial", 4_000, || "b".into(), || 2_000).await;
+    assert!(r.is_err());
+    assert!(t0.elapsed() < Duration::from_millis(100), "no wait behind a transaction");
+    // the engine's hold is untouched
+    assert!(g.gate.lock().unwrap().txn_release(GATE_OWNER));
+}

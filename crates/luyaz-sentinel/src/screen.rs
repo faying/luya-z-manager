@@ -1,21 +1,20 @@
 //! The screen owner (u60-sentinel.md §5): who is on the panel, ours (luyaz-ui) or the vendor's
-//! (zte_topsw_devui). A port of u60-uid (touch-ui `src/uid.c` + `src/uid_core.c`) with the review's
-//! additions: the three launch gates (D14), `hold`/`release` for ship (§5 item 4) and the empty-screen
+//! (zte_topsw_devui), with the three launch gates (D14), `hold`/`release` for ship (§5 item 4) and the empty-screen
 //! self-check (§5 item 2). No I/O here: [`Screen::step`] turns what the caller observed into
 //! [`Act`]s, and `run.rs` / the tests' fake world carry them out.
 //!
-//! Why the counting is shaped the way it is (unchanged from u60-uid): on this firmware a UI that dies
+//! Why the counting is shaped the way it is: on this firmware a UI that dies
 //! again and again gets escalated into a whole-device reboot (2026-09-16), and that reboot can come
 //! before we get to record "it crashed". So the count is of *launch attempts*, written to /data and
 //! synced before each launch, and cleared only after the UI has run steadily for [`STABLE_MS`]. When a
 //! launch would be attempt number [`MAX_ATTEMPTS`] + 1 we stop and give the screen to the vendor UI;
-//! only a corner long-press or `echo devui > /tmp/luyaz-screen.ctl` resets it.
+//! only a corner long-press or `echo ui > /tmp/luyaz-screen.ctl` resets it.
 //!
 //! Never leave the panel without a UI: on 2026-09-23 the device rebooted itself (reboot_reason_code
 //! 1185) a few minutes after our UI was stopped with nothing in its place. Every path that stops one
 //! UI starts the other in the same step; the empty-screen check is the backstop.
 //!
-//! The log lines are u60-uid's, word for word (D13: ship's `UID_BAD`, the ledger's `ledger_uid` and
+//! The log lines are fixed word for word (D13: ship's `UID_BAD`, the ledger's `ledger_uid` and
 //! doctor read them); `tests.rs` pins the ones they match.
 
 /// Unsteady launches before giving up.
@@ -43,12 +42,11 @@ pub const SCREEN_H: i32 = 480;
 /// Longest the screen thread sleeps: the heartbeat is written at least this often.
 pub const HEARTBEAT_MS: i64 = 60_000;
 /// While our UI is not on screen (vendor's, or none): look at /proc this often, for a UI started by
-/// hand and for the vendor UI going away (the only polling left; u60-uid did it every second).
+/// hand and for the vendor UI going away (the only polling left).
 pub const OFF_SCREEN_SCAN_MS: i64 = 5000;
 
 pub const CTL_FIFO: &str = "/tmp/luyaz-screen.ctl";
-/// Every FIFO the sentinel listens on: only the new one since Phase 10 R4 round ③ (the old
-/// /tmp/u60-uid.ctl went with the last touch UI that wrote it).
+/// Every FIFO the sentinel listens on.
 pub const CTL_FIFOS: [&str; 1] = [CTL_FIFO];
 
 /// Persisted state (`/data/luyaz/screen/{attempts,gave-up}`, `/tmp/luyaz/screen.want`), read again before
@@ -56,14 +54,14 @@ pub const CTL_FIFOS: [&str; 1] = [CTL_FIFO];
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Persist {
     /// Our UI should own the screen; false = the owner chose the vendor UI.
-    pub want_devui: bool,
+    pub want_ui: bool,
     /// Stopped relaunching after repeated failures.
     pub gave_up: bool,
     /// Launches not yet confirmed steady.
     pub attempts: u32,
 }
 
-/// The one decision per step (u60-uid's `uid_decide`, unchanged).
+/// The one decision per step.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Decision {
     Nothing,
@@ -76,13 +74,13 @@ pub enum Decision {
     /// Ours is not wanted/allowed and the vendor UI is not up.
     StartVendor,
     /// The owner chose the vendor UI but ours is still up.
-    StopDevui,
+    StopUi,
 }
 
-pub fn decide(s: &Persist, devui_alive: bool, alive_ms: i64, vendor_alive: bool) -> Decision {
-    if !s.want_devui {
-        if devui_alive {
-            return Decision::StopDevui;
+pub fn decide(s: &Persist, ui_alive: bool, alive_ms: i64, vendor_alive: bool) -> Decision {
+    if !s.want_ui {
+        if ui_alive {
+            return Decision::StopUi;
         }
         return if vendor_alive {
             Decision::Nothing
@@ -91,9 +89,9 @@ pub fn decide(s: &Persist, devui_alive: bool, alive_ms: i64, vendor_alive: bool)
         };
     }
     if s.gave_up {
-        // A devui that is up anyway was started by hand: leave it be. Only the corner gesture or SSH
+        // Our UI up anyway was started by hand: leave it be. Only the corner gesture or SSH
         // clears gave_up and resumes launching.
-        if devui_alive {
+        if ui_alive {
             return Decision::Nothing;
         }
         return if vendor_alive {
@@ -102,7 +100,7 @@ pub fn decide(s: &Persist, devui_alive: bool, alive_ms: i64, vendor_alive: bool)
             Decision::StartVendor
         };
     }
-    if devui_alive {
+    if ui_alive {
         return if s.attempts > 0 && alive_ms >= STABLE_MS {
             Decision::MarkSteady
         } else {
@@ -115,7 +113,7 @@ pub fn decide(s: &Persist, devui_alive: bool, alive_ms: i64, vendor_alive: bool)
     Decision::Launch
 }
 
-/// How a devui exit counts. `status` is the raw waitpid status, `None` when unknown (an adopted
+/// How an exit of our UI counts. `status` is the raw waitpid status, `None` when unknown (an adopted
 /// process is not our child). Attempts are not changed here: the launch already counted.
 pub fn exit_is_failure(requested: bool, status: Option<i32>) -> bool {
     if requested {
@@ -128,7 +126,7 @@ pub fn exit_is_failure(requested: bool, status: Option<i32>) -> bool {
     }
 }
 
-/// "exit 1" / "killed by signal 11", as u60-uid words it.
+/// "exit 1" / "killed by signal 11".
 pub fn exit_words(status: i32) -> String {
     if libc::WIFEXITED(status) {
         format!("exit {}", libc::WEXITSTATUS(status))
@@ -192,9 +190,8 @@ impl Corner {
     }
 }
 
-/// Our UI, by comm prefix: `luyaz-ui`, side-by-side builds `luyaz-ui.<something>` (Phase 10 R5;
-/// the old name u60pro-devui is gone since round ③, its program deleted from the device).
-pub fn is_devui_comm(comm: &str) -> bool {
+/// Our UI, by comm prefix: `luyaz-ui`, side-by-side builds `luyaz-ui.<something>`.
+pub fn is_ui_comm(comm: &str) -> bool {
     comm.starts_with("luyaz-ui")
 }
 
@@ -202,12 +199,11 @@ pub fn in_corner_box(x: i32, y: i32) -> bool {
     x >= SCREEN_W - CORNER_BOX && y >= SCREEN_H - CORNER_BOX
 }
 
-/// A command on the control FIFO. `vendor`/`devui` as u60-uid (substring match); `hold [s]` and
-/// `release` are new (ship's touch trial, §5 item 4).
+/// A command on the control FIFO: `vendor`, `ui` (our touch UI), `hold [s]` (ship's touch trial, §5 item 4) and `release`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Cmd {
     Vendor,
-    Devui,
+    Ui,
     Hold(i64),
     Release,
 }
@@ -218,8 +214,8 @@ pub fn parse_cmds(text: &str) -> Vec<Cmd> {
         let l = line.trim();
         if l.contains("vendor") {
             out.push(Cmd::Vendor);
-        } else if l.contains("devui") {
-            out.push(Cmd::Devui);
+        } else if l == "ui" {
+            out.push(Cmd::Ui);
         } else if let Some(rest) = l.strip_prefix("hold") {
             let secs = rest.trim().parse::<i64>().unwrap_or(HOLD_DEFAULT_S);
             out.push(Cmd::Hold(secs.clamp(10, HOLD_MAX_S)));
@@ -266,7 +262,7 @@ pub enum Act {
     RecordCrash(String),
     /// `/etc/init.d/zte_topsw_devui stop` + `killall -9`.
     StopVendor,
-    /// Show the explanation frame for 3 s if the panel is free (`frame.rs`, C-R8); always followed
+    /// Show the explanation frame for 3 s if the panel is free (`frame.rs`); always followed
     /// by [`Act::StartVendor`].
     Explain,
     /// Waits for card0 (≤ 5 s), then `/etc/init.d/zte_topsw_devui start`.
@@ -296,7 +292,7 @@ pub struct Input {
     /// The current UI ended: `Some(status)` for our child, `None` = unknown (adopted).
     pub ui_exit: Option<Option<i32>>,
     /// A process whose comm starts with `luyaz-ui` (`.test` too), from a /proc scan ([`Screen::wants_scan`]).
-    pub found_devui: Option<i32>,
+    pub found_ui: Option<i32>,
     pub vendor_alive: bool,
     /// Only looked at while a launch waits ([`Screen::needs_card0`]).
     pub card0_held: bool,
@@ -347,7 +343,7 @@ pub struct Screen {
 
 impl Screen {
     /// Start-up: adopt a UI that is already running (C10: never start a second one).
-    pub fn new(now_ms: i64, found_devui: Option<i32>) -> (Screen, Vec<Act>) {
+    pub fn new(now_ms: i64, found_ui: Option<i32>) -> (Screen, Vec<Act>) {
         let mut s = Screen {
             cur: None,
             launch: Launch::Idle,
@@ -362,7 +358,7 @@ impl Screen {
             launches: 0,
         };
         let mut acts = Vec::new();
-        if let Some(pid) = found_devui {
+        if let Some(pid) = found_ui {
             s.cur = Some(Ui {
                 pid,
                 kind: Kind::Adopted,
@@ -395,7 +391,7 @@ impl Screen {
         self.touch_open
     }
 
-    /// Whether the caller should scan /proc for a devui before the next step (only when we track none:
+    /// Whether the caller should scan /proc for our UI before the next step (only when we track none:
     /// a tracked one is watched through its pidfd).
     pub fn wants_scan(&self) -> bool {
         self.cur.is_none()
@@ -485,7 +481,7 @@ impl Screen {
                 )));
                 if exit_is_failure(ui.requested, Some(st)) {
                     acts.push(Act::RecordCrash(why.clone()));
-                    acts.push(Act::Alert("devui-crash", format!("luyaz-ui {why}")));
+                    acts.push(Act::Alert("ui-crash", format!("luyaz-ui {why}")));
                 }
             }
             (Kind::Child, None) => {
@@ -525,15 +521,15 @@ impl Screen {
                 Cmd::Vendor => {
                     acts.push(Act::Log("request: vendor UI".into()));
                     acts.push(Act::WantVendor);
-                    p.want_devui = false;
+                    p.want_ui = false;
                 }
-                Cmd::Devui => {
+                Cmd::Ui => {
                     acts.push(Act::Log(
                         "request: our UI (clears give-up and the attempt count)".into(),
                     ));
                     acts.extend([Act::ClearWant, Act::ClearGaveUp, Act::SetAttempts(0)]);
                     p = Persist {
-                        want_devui: true,
+                        want_ui: true,
                         gave_up: false,
                         attempts: 0,
                     };
@@ -586,7 +582,7 @@ impl Screen {
             ));
             acts.extend([Act::ClearWant, Act::ClearGaveUp, Act::SetAttempts(0)]);
             p = Persist {
-                want_devui: true,
+                want_ui: true,
                 gave_up: false,
                 attempts: 0,
             };
@@ -594,7 +590,7 @@ impl Screen {
         }
 
         if self.cur.is_none()
-            && let Some(pid) = inp.found_devui
+            && let Some(pid) = inp.found_ui
         {
             // started by hand, or by ship
             self.cur = Some(Ui {
@@ -661,10 +657,10 @@ impl Screen {
                     p.attempts
                 );
                 acts.push(Act::Log(format!(
-                    "giving up: {text}. Corner long-press or 'echo devui > {CTL_FIFO}' to retry"
+                    "giving up: {text}. Corner long-press or 'echo ui > {CTL_FIFO}' to retry"
                 )));
                 acts.push(Act::SetGaveUp);
-                acts.push(Act::Alert("devui-gave-up", text));
+                acts.push(Act::Alert("ui-gave-up", text));
                 acts.push(Act::Explain);
                 self.start_vendor(now, &mut acts);
             }
@@ -673,7 +669,7 @@ impl Screen {
                     self.start_vendor(now, &mut acts);
                 }
             }
-            Decision::StopDevui => {
+            Decision::StopUi => {
                 if let Some(u) = self.cur.as_mut() {
                     u.requested = true;
                     acts.push(Act::Log(format!(
@@ -710,7 +706,7 @@ impl Screen {
         }
 
         // Listen for the corner only while our UI is not on screen.
-        let listen = self.cur.is_none() && (!p.want_devui || p.gave_up);
+        let listen = self.cur.is_none() && (!p.want_ui || p.gave_up);
         if listen != self.touch_open {
             self.touch_open = listen;
             if listen {

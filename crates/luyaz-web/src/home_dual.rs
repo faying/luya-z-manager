@@ -66,7 +66,7 @@ fn row(v: &Value, net: &str, smart: bool, switching: bool, l: Lang, logo_dir: &P
     let logo = if op.is_empty() && s("mcc").is_empty() {
         String::new()
     } else {
-        crate::oplogo::html(logo_dir, s("mcc"), s("mnc"), name, 16)
+        crate::oplogo::html_with(logo_dir, s("logo"), s("mcc"), s("mnc"), name, 16)
     };
     let data = s("role") == "data";
     let sig = &v["signal"];
@@ -77,6 +77,16 @@ fn row(v: &Value, net: &str, smart: bool, switching: bool, l: Lang, logo_dir: &P
         (true, "LTE" | "LTE-A" | "LTE_A") => "4G",
         _ => rat_word(sig["rat"].as_str().unwrap_or("")),
     };
+    // where, as on the touch Home: 本地 / 漫游到中国移动 (the core's words)
+    let place = if matches!(l, Lang::En) { s("place_en") } else { s("place") };
+    let rat = if place.is_empty() {
+        rat.to_string()
+    } else if rat.is_empty() {
+        place.to_string()
+    } else {
+        format!("{rat} · {place}")
+    };
+    let rat = esc(&rat);
     // the core's bars tier: 1–2 = weak
     let weak = !data && sig["bars"].as_i64().is_some_and(|b| (1..=2).contains(&b));
     let (value, warn) = if switching && data {

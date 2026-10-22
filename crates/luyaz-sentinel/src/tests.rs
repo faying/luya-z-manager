@@ -1,5 +1,5 @@
 //! Fake-device tests (D10). Sections:
-//!  1. u60-uid's unit tests (touch-ui `tests/uid_core_test.c`), every check carried over as it was;
+//!  1. the screen decision's unit tests;
 //!  2. the screen against a fake world: C10, D14, hold, the empty-screen check, log wording;
 //!  3. the worker against a fake device: the u60-guard cases (`scripts/test/u60-guard/run.sh`) for
 //!     G1/G2/G3/G4/G7, plus dropbear and the core verdict;
@@ -12,7 +12,7 @@ use crate::screen::*;
 use crate::wifi::{self, Core, WifiOps};
 use crate::worker::*;
 
-// ── 1. u60-uid's unit tests ─────────────────────────────────────────────────
+// ── 1. the decision's unit tests────────────────────────────────────────────
 
 fn d(
     want: bool,
@@ -24,7 +24,7 @@ fn d(
 ) -> Decision {
     decide(
         &Persist {
-            want_devui: want,
+            want_ui: want,
             gave_up,
             attempts,
         },
@@ -98,7 +98,7 @@ fn uid_after_giving_up() {
     assert_eq!(
         d(true, true, 2, true, 5000, false),
         Decision::Nothing,
-        "gave up but devui started by hand: leave it"
+        "gave up but our UI started by hand: leave it"
     );
 }
 
@@ -106,23 +106,23 @@ fn uid_after_giving_up() {
 fn uid_owner_chose_vendor() {
     assert_eq!(
         d(false, false, 0, true, 99999, false),
-        Decision::StopDevui,
-        "devui still up: stop it"
+        Decision::StopUi,
+        "our UI still up: stop it"
     );
     assert_eq!(
         d(false, false, 0, false, 0, false),
         Decision::StartVendor,
-        "devui gone, vendor down: start vendor"
+        "our UI gone, vendor down: start vendor"
     );
     assert_eq!(
         d(false, false, 0, false, 0, true),
         Decision::Nothing,
-        "devui gone, vendor up: nothing"
+        "our UI gone, vendor up: nothing"
     );
     assert_ne!(
         d(false, false, 0, false, 0, true),
         Decision::Launch,
-        "vendor chosen never relaunches devui"
+        "vendor chosen never relaunches our UI"
     );
 }
 
@@ -217,20 +217,20 @@ fn uid_corner_long_press() {
 fn corner_box_and_comm_prefix() {
     assert!(in_corner_box(319, 479) && in_corner_box(256, 416));
     assert!(!in_corner_box(255, 479) && !in_corner_box(319, 415));
-    assert!(!is_devui_comm("zte_topsw_devui") && !is_devui_comm("luyaz-sentinel"));
-    // Phase 10 R5: luyaz-ui and its side-by-side build; the old name no longer (round ③)
+    assert!(!is_ui_comm("zte_topsw_devui") && !is_ui_comm("luyaz-sentinel"));
+    // luyaz-ui and its side-by-side build; the old name never
     assert!(
-        is_devui_comm("luyaz-ui") && is_devui_comm("luyaz-ui.test") && is_devui_comm("luyaz-ui.te")
+        is_ui_comm("luyaz-ui") && is_ui_comm("luyaz-ui.test") && is_ui_comm("luyaz-ui.te")
     );
-    assert!(!is_devui_comm("u60pro-devui") && !is_devui_comm("u60pro-devui.te"));
+    assert!(!is_ui_comm("u60pro-devui") && !is_ui_comm("u60pro-devui.te"));
     assert!(
-        !is_devui_comm("luyaz-core") && !is_devui_comm("luyaz-web") && !is_devui_comm("luyaz-u")
+        !is_ui_comm("luyaz-core") && !is_ui_comm("luyaz-web") && !is_ui_comm("luyaz-u")
     );
 }
 
 #[test]
 fn both_fifos_listened_to() {
-    // R4 round ③: the new FIFO only, also in the give-up hint
+    // the one FIFO, also in the give-up hint
     assert_eq!(CTL_FIFOS, ["/tmp/luyaz-screen.ctl"]);
     assert_eq!(CTL_FIFO, "/tmp/luyaz-screen.ctl");
 }
@@ -243,14 +243,15 @@ fn ui_path_new_when_there_else_old() {
     assert_eq!(
         pick_ui(false),
         ("/data/luyaz/ui/luyaz-ui", "/data/luyaz/ui"),
-        "round ③: never the old one"
+        "never the old one"
     );
 }
 
 #[test]
 fn ctl_commands() {
     assert_eq!(parse_cmds("vendor\n"), vec![Cmd::Vendor]);
-    assert_eq!(parse_cmds("devui\n"), vec![Cmd::Devui]);
+    assert_eq!(parse_cmds("ui\n"), vec![Cmd::Ui]);
+    assert_eq!(parse_cmds("quit\nbuild\n"), vec![]);
     assert_eq!(parse_cmds("hold\n"), vec![Cmd::Hold(HOLD_DEFAULT_S)]);
     assert_eq!(
         parse_cmds("hold 120\nrelease\n"),
@@ -267,8 +268,8 @@ fn ctl_commands() {
 struct World {
     now: i64,
     p: Persist,
-    devui: Option<i32>,
-    /// The current devui is our child (status readable).
+    ui: Option<i32>,
+    /// The current UI is our child (status readable).
     child: bool,
     vendor: bool,
     /// card0 held by something other than the two UIs (for D14).
@@ -293,11 +294,11 @@ impl World {
         World {
             now: 1_000_000,
             p: Persist {
-                want_devui: true,
+                want_ui: true,
                 gave_up: false,
                 attempts: 0,
             },
-            devui: None,
+            ui: None,
             child: false,
             vendor: false,
             card0_stuck: false,
@@ -317,7 +318,7 @@ impl World {
     }
 
     fn card0(&self) -> bool {
-        self.card0_stuck || self.devui.is_some() || self.vendor
+        self.card0_stuck || self.ui.is_some() || self.vendor
     }
 
     fn apply(&mut self, s: &mut Screen, acts: Vec<Act>) {
@@ -329,8 +330,8 @@ impl World {
                 Act::SetAttempts(n) => self.p.attempts = n,
                 Act::SetGaveUp => self.p.gave_up = true,
                 Act::ClearGaveUp => self.p.gave_up = false,
-                Act::WantVendor => self.p.want_devui = false,
-                Act::ClearWant => self.p.want_devui = true,
+                Act::WantVendor => self.p.want_ui = false,
+                Act::ClearWant => self.p.want_ui = true,
                 Act::RecordCrash(_) => {}
                 Act::Explain => {
                     assert!(!self.vendor, "the frame only before the vendor UI");
@@ -351,14 +352,14 @@ impl World {
                     );
                     self.spawns += 1;
                     self.next_pid += 1;
-                    self.devui = Some(self.next_pid);
+                    self.ui = Some(self.next_pid);
                     self.child = true;
                     let n = self.p.attempts;
                     q.extend(s.spawned(self.now, Ok(self.next_pid), n));
                 }
                 Act::Stop(pid) => {
-                    if self.devui == Some(pid) {
-                        self.devui = None;
+                    if self.ui == Some(pid) {
+                        self.ui = None;
                         let st = if self.child {
                             Some(Some(w_sig(libc::SIGTERM)))
                         } else {
@@ -370,10 +371,10 @@ impl World {
                 Act::Touch(_) => {}
             }
         }
-        if self.devui.is_some() && self.vendor {
+        if self.ui.is_some() && self.vendor {
             self.two_uis += 1;
         }
-        if self.devui.is_none() && !self.vendor {
+        if self.ui.is_none() && !self.vendor {
             let since = *self.empty_since.get_or_insert(self.now);
             self.longest_empty = self.longest_empty.max(self.now - since);
         } else {
@@ -383,7 +384,7 @@ impl World {
 
     fn step_with(&mut self, s: &mut Screen, cmds: Vec<Cmd>, corner: bool) {
         let ui_exit = match s.cur {
-            Some(ui) if self.devui != Some(ui.pid) => Some(if ui.kind == Kind::Child {
+            Some(ui) if self.ui != Some(ui.pid) => Some(if ui.kind == Kind::Child {
                 self.exit_status.take()
             } else {
                 None
@@ -394,7 +395,7 @@ impl World {
             now_ms: self.now,
             persist: self.p,
             ui_exit,
-            found_devui: if s.wants_scan() { self.devui } else { None },
+            found_ui: if s.wants_scan() { self.ui } else { None },
             vendor_alive: self.vendor,
             card0_held: s.needs_card0() && self.card0(),
             cmds,
@@ -424,13 +425,13 @@ impl World {
 
     /// Our UI dies by itself.
     fn crash(&mut self, status: i32) {
-        self.devui = None;
+        self.ui = None;
         self.exit_status = Some(status);
     }
 
     fn start(&mut self) -> Screen {
-        let (mut s, acts) = Screen::new(self.now, self.devui);
-        if self.devui.is_some() {
+        let (mut s, acts) = Screen::new(self.now, self.ui);
+        if self.ui.is_some() {
             self.child = false;
         }
         self.apply(&mut s, acts);
@@ -446,7 +447,7 @@ fn cold_start_launches_ours() {
     w.run(&mut s, 10_000);
     assert_eq!(w.spawns, 1);
     assert_eq!(w.p.attempts, 1, "counted before the launch");
-    assert!(w.devui.is_some() && !w.vendor);
+    assert!(w.ui.is_some() && !w.vendor);
     assert_eq!(w.two_uis, 0);
     assert!(
         w.logs
@@ -470,7 +471,7 @@ fn cold_start_launches_ours() {
 fn c10_restart_ten_times_one_ui() {
     // Phase 5 acceptance: the sentinel restarted 10 times over a running UI adopts it every time.
     let mut w = World::new();
-    w.devui = Some(4242);
+    w.ui = Some(4242);
     for i in 0..10 {
         let mut s = w.start();
         assert_eq!(s.cur.map(|u| u.pid), Some(4242), "restart {i}: adopted");
@@ -496,7 +497,7 @@ fn crash_twice_gives_up_to_vendor_once() {
     w.crash(w_sig(libc::SIGSEGV));
     w.run(&mut s, 5000);
     assert_eq!(w.spawns, 2, "relaunched once");
-    assert_eq!(w.alerts, vec!["devui-crash"]);
+    assert_eq!(w.alerts, vec!["ui-crash"]);
     w.crash(w_exit(1));
     w.run(&mut s, 60_000);
     assert_eq!(w.spawns, 2, "never a third launch");
@@ -507,9 +508,9 @@ fn crash_twice_gives_up_to_vendor_once() {
     );
     assert_eq!(
         w.alerts,
-        vec!["devui-crash", "devui-crash", "devui-gave-up"]
+        vec!["ui-crash", "ui-crash", "ui-gave-up"]
     );
-    assert!(w.logs.iter().any(|l| l == "giving up: 2 launches did not stay up; vendor UI on screen. Corner long-press or 'echo devui > /tmp/luyaz-screen.ctl' to retry"));
+    assert!(w.logs.iter().any(|l| l == "giving up: 2 launches did not stay up; vendor UI on screen. Corner long-press or 'echo ui > /tmp/luyaz-screen.ctl' to retry"));
     assert!(
         s.touch_open(),
         "corner listener on while the vendor UI is up"
@@ -518,7 +519,7 @@ fn crash_twice_gives_up_to_vendor_once() {
     // corner long-press brings ours back and clears everything
     w.step_with(&mut s, vec![], true);
     w.run(&mut s, 10_000);
-    assert!(!w.p.gave_up && w.devui.is_some() && !w.vendor && w.spawns == 3);
+    assert!(!w.p.gave_up && w.ui.is_some() && !w.vendor && w.spawns == 3);
     assert_eq!(w.p.attempts, 1);
 }
 
@@ -528,7 +529,7 @@ fn log_wording_is_u60_uids() {
     let mut w = World::new();
     let mut s = w.start();
     w.run(&mut s, 2000);
-    let pid = w.devui.unwrap();
+    let pid = w.ui.unwrap();
     w.crash(w_sig(11));
     w.run(&mut s, 5000);
     assert!(
@@ -549,7 +550,7 @@ fn log_wording_is_u60_uids() {
             .any(|l| l.ends_with("ended: killed by signal 15 (requested)")),
         "requested stops say so (UID_BAD skips them)"
     );
-    w.step_with(&mut s, vec![Cmd::Devui], false);
+    w.step_with(&mut s, vec![Cmd::Ui], false);
     assert!(
         w.logs
             .contains(&"request: our UI (clears give-up and the attempt count)".to_string())
@@ -614,12 +615,12 @@ fn d14_vendor_turns_up_right_after_our_launch() {
     w.vendor = true; // someone (the core's rescue, SSH) started the vendor UI too
     w.step(&mut s);
     assert!(
-        w.devui.is_none() && w.vendor,
+        w.ui.is_none() && w.vendor,
         "ours stopped, the vendor's kept"
     );
     assert!(w.alerts.contains(&"screen-two-uis".to_string()));
     assert!(
-        !w.alerts.contains(&"devui-crash".to_string()),
+        !w.alerts.contains(&"ui-crash".to_string()),
         "our requested stop is not a crash"
     );
 }
@@ -627,7 +628,7 @@ fn d14_vendor_turns_up_right_after_our_launch() {
 #[test]
 fn empty_screen_backstop_and_ship_yield() {
     let mut w = World::new();
-    w.p.want_devui = false; // vendor chosen…
+    w.p.want_ui = false; // vendor chosen…
     let mut s = w.start();
     w.run(&mut s, 1000);
     assert!(w.vendor);
@@ -641,7 +642,7 @@ fn empty_screen_backstop_and_ship_yield() {
     let mut s = w.start();
     w.run(&mut s, 500);
     w.step_with(&mut s, vec![Cmd::Hold(30)], false);
-    w.devui = None; // ship stopped ours
+    w.ui = None; // ship stopped ours
     w.ship_yield = false;
     w.run(&mut s, 25_000);
     assert_eq!(w.vendor_starts, 0, "held: the screen is ship's");
@@ -650,17 +651,17 @@ fn empty_screen_backstop_and_ship_yield() {
         w.alerts.contains(&"screen-hold-expired".to_string()),
         "hold ran out"
     );
-    assert!(w.devui.is_some(), "taken back: ours launched again");
+    assert!(w.ui.is_some(), "taken back: ours launched again");
 }
 
 #[test]
 fn hold_and_release() {
     let mut w = World::new();
-    w.devui = Some(77);
+    w.ui = Some(77);
     let mut s = w.start();
     w.step_with(&mut s, vec![Cmd::Hold(600)], false);
     assert_eq!(s.on_screen(), OnScreen::Held);
-    w.devui = Some(88); // ship's side-by-side luyaz-ui.test
+    w.ui = Some(88); // ship's side-by-side luyaz-ui.test
     w.run(&mut s, 60_000);
     assert!(s.cur.is_none(), "held: not adopted");
     assert_eq!(w.spawns, 0);
@@ -688,10 +689,10 @@ fn hold_and_release() {
 #[test]
 fn sleeps_long_when_all_is_well() {
     let mut w = World::new();
-    w.devui = Some(5);
+    w.ui = Some(5);
     let s = w.start();
     let p = Persist {
-        want_devui: true,
+        want_ui: true,
         gave_up: false,
         attempts: 0,
     };
@@ -1434,7 +1435,7 @@ fn logcap() {
     let mut w = wk();
     w.paths.cap_logs = vec!["/t/ts.log".into()];
     w.paths.cap_bytes = 100;
-    w.paths.cap_tmp_logs = vec!["/t/agent.log".into(), "/t/devui.log".into()];
+    w.paths.cap_tmp_logs = vec!["/t/agent.log".into(), "/t/ui.log".into()];
     w.paths.cap_tmp_bytes = 60;
     let mut d = Dev::new();
     d.up = 1000;
@@ -1446,10 +1447,10 @@ fn logcap() {
     d.files.insert("/t/ts.log".into(), "c".repeat(150));
     d.non_append = vec!["/t/ts.log".into()];
     w.logcap_round(&mut d);
-    d.files.insert("/t/devui.log".into(), "d".repeat(70));
+    d.files.insert("/t/ui.log".into(), "d".repeat(70));
     w.logcap_round(&mut d);
     assert!(
-        d.files["/t/devui.log"].is_empty(),
+        d.files["/t/ui.log"].is_empty(),
         "within the hour of another log's refusal: this one still capped"
     );
     assert_eq!(d.files["/t/ts.log"].len(), 150);

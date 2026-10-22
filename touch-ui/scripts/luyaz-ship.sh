@@ -134,7 +134,7 @@ if [ "$ENTRY" != core-trial ]; then
 fi
 
 # phase-two components (docs/SHIP.md「第二期」)
-# The touch UI is luyaz-ui in /data/luyaz/ui (program, fonts, touchsim, devui.conf, chill.conf,
+# The touch UI is luyaz-ui in /data/luyaz/ui (program, fonts, touchsim, ui.conf, chill.conf,
 # operator-logos, vendor-devui.orig-backup)
 UI_DIR=${U60S_UI_DIR:-$ROOT/data/luyaz/ui}
 UI_BIN=$UI_DIR/luyaz-ui
@@ -821,6 +821,24 @@ ctl_send() {
     wait "$_cw"
 }
 
+# sent_snapshot: into the log, what a hold that went unanswered leaves to look at (10-22: holds
+# written into the FIFO never reached the sentinel; a restart cured it and took the evidence along).
+# Leaves the sentinel alone: restarting it is the owner's call, after reading this.
+sent_snapshot() {
+    _sp=$(sent_pids | awk '{ print $1; exit }')
+    log "哨兵现场：心跳「$(head -n 1 "$SENT_HB" 2>/dev/null)」，文件 $(( $($DATE +%s) - $(stat -c %Y "$SENT_HB" 2>/dev/null || echo 0) ))s 前写的"
+    log "哨兵现场：$UID_CTL inode $(stat -c %i "$UID_CTL" 2>/dev/null || echo 无)"
+    [ -n "$_sp" ] || return 0
+    for _f in /proc/"$_sp"/fd/*; do
+        case "$(readlink "$_f" 2>/dev/null)" in
+        *luyaz-screen.ctl*) log "哨兵现场：fd ${_f##*/} → $(readlink "$_f") inode $(stat -L -c %i "$_f" 2>/dev/null)" ;;
+        esac
+    done
+    for _t in /proc/"$_sp"/task/*; do
+        log "哨兵现场：线程 ${_t##*/} $(cat "$_t/comm" 2>/dev/null) 状态 $(awk '{ print $3 }' "$_t/stat" 2>/dev/null) wchan $(cat "$_t/wchan" 2>/dev/null) syscall $(cut -d' ' -f1 "$_t/syscall" 2>/dev/null)"
+    done
+}
+
 # sent_hold: the sentinel puts the screen down (no adopting, no launching)
 # for the whole transaction plus a margin; ≤ 10 s until its heartbeat says held.
 sent_hold() {
@@ -833,6 +851,7 @@ sent_hold() {
     while [ "$(sent_hb 3)" != held ]; do
         if [ $_i -ge 10 ]; then
             REASON="哨兵 10s 内没有放下屏幕（心跳说 $(sent_hb 3)）"
+            sent_snapshot
             return 1
         fi
         $SLEEP 1
@@ -1095,7 +1114,7 @@ comp_load() {
             C_FILES="$UI_BIN"
             C_ALLOW_NEW=1
             C_TRIAL=60
-            C_STATE_ALLOW="$UI_DIR/devui.conf"
+            C_STATE_ALLOW="$UI_DIR/ui.conf"
             TEST_BIN=$UI_BIN.test
             TEST_NAME=luyaz-ui.test
             WRAPPER=

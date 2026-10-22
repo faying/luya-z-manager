@@ -119,8 +119,7 @@ fn c_scalar_reads() {
     assert_eq!(cstr("中国移动".into(), 5), "中");
 }
 
-// ---- the named cases the screen's C tests had (touch-ui tests/ui_logic_test.c,
-// parity-net-v1), moved with the rules ----
+// ---- named cases ----
 
 fn base() -> NetIn<'static> {
     NetIn {

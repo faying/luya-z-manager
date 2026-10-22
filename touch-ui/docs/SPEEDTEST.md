@@ -2,7 +2,7 @@
 
 **English** · [中文](SPEEDTEST.zh-CN.md)
 
-The speed test page has no engine of its own. It asks the core to run a test and shows what the core reports; the engine is `crates/luyaz-speedtest`, shared with the admin web. Screen code: `rs/devui/src/data/speedtest.rs` (requests) and `rs/devui/src/ui/speed.rs` (page). Nothing extra needs to be installed on the device.
+The speed test page has no engine of its own. It asks the core to run a test and shows what the core reports; the engine is `crates/luyaz-speedtest`, shared with the admin web. Screen code: `rs/ui/src/data/speedtest.rs` (requests) and `rs/ui/src/ui/speed.rs` (page). Nothing extra needs to be installed on the device.
 
 | What | Request (core loopback, `127.0.0.1:9460/v2/api/...`, no token) |
 |---|---|

@@ -3,7 +3,7 @@
 # A fake-device test of the kit's u60 ship pieces (onboard/device/install.sh):
 # the `recover` component (luyaz-recover.sh into /data/luyaz/ship as luyaz-recover.sh after its own
 # selftest, and the rc.local line before the service start lines) and
-# place_recover (what admin/devui do: put it there only when it is missing),
+# place_recover (what admin/ui do: put it there only when it is missing),
 # kit_record (lweb; touch, sentinel, core) and the check for an
 # unfinished u60 ship transaction (txn v=1 and v=2).
 # Every path is moved into a temp dir (KIT_RC, KIT_STATE, KIT_SHIP_DIR,
@@ -90,7 +90,7 @@ inst recover
 check "recover replaces an older one, keeps it aside" '[ $RC = 0 ] && [ "$(md5 "$T/data/luyaz/ship/luyaz-recover.sh")" = "$(md5 "$K/payload/scripts/luyaz-recover.sh")" ] && grep -q "older one" "$T/data/luyaz/ship/luyaz-recover.sh.prev-kit"'
 rm -rf "$T"
 
-# place_recover (admin / devui): only when missing; never touches rc.local
+# place_recover (admin / ui): only when missing; never touches rc.local
 setup
 sed -n '/^recover_check() {/,/^do_recover() {/p' "$K/device/install.sh" | sed '$d' >"$T/fns.sh"
 place() { (
@@ -103,10 +103,10 @@ place() { (
 ) >"$T/out" 2>&1; RC=$?; }
 cp "$T/rc.local" "$T/rc.0"
 place
-check "admin/devui: missing → put there, rc.local untouched" '[ $RC = 0 ] && [ -f "$T/data/luyaz/ship/luyaz-recover.sh" ] && cmp -s "$T/rc.local" "$T/rc.0" && grep -q "install.sh recover 才加" "$T/out"'
+check "admin/ui: missing → put there, rc.local untouched" '[ $RC = 0 ] && [ -f "$T/data/luyaz/ship/luyaz-recover.sh" ] && cmp -s "$T/rc.local" "$T/rc.0" && grep -q "install.sh recover 才加" "$T/out"'
 echo 'a different one' >"$T/data/luyaz/ship/luyaz-recover.sh"
 place
-check "admin/devui: a different one already there → not replaced, said so" '[ $RC = 0 ] && grep -q "a different one" "$T/data/luyaz/ship/luyaz-recover.sh" && grep -q "没换" "$T/out"'
+check "admin/ui: a different one already there → not replaced, said so" '[ $RC = 0 ] && grep -q "a different one" "$T/data/luyaz/ship/luyaz-recover.sh" && grep -q "没换" "$T/out"'
 rm -rf "$T"
 
 # kit_record (after admin, which installs luyaz-web since 8d-2c): kit-source → one kind=kit line through luyaz-ship.sh
@@ -132,7 +132,7 @@ rec
 check "kit_record: an old kit without kit-source: warned, install goes on" '[ $RC = 0 ] && grep -q "没记进设备清单" "$T/out" && [ "$(wc -l <"$T/root/data/luyaz/ship/manifest.jsonl")" = 1 ]'
 rm -rf "$T"
 
-# kit_record core (after devui) through the real luyaz-ship.sh: its own keys in
+# kit_record core (after ui) through the real luyaz-ship.sh: its own keys in
 # kit-source; a kit-source without core_* keys still records it, as commit 0000000 and dirty
 setup
 mkdir -p "$T/root/data/luyaz/ship" "$T/data/luyaz/scripts"
@@ -154,12 +154,12 @@ check "kit_record core, kit-source without core_* keys: recorded as 0000000, dir
 printf 'stamp=20261004\nlweb_commit=abc1234\nlweb_format=1\nlweb_dirty=0\ncore_commit=fed9876\ncore_format=1\ncore_dirty=0\n' >"$K/payload/scripts/kit-source"
 recd
 check "kit_record core with its keys: its commit, not dirty" "[ \$RC = 0 ] && grep -q '\"comp\":\"core\",\"kit\":\"20261004\",\"commit\":\"fed9876\",\"format\":1,' '$T/root/data/luyaz/ship/manifest.jsonl' && ! grep -q 'kit-dirty' '$T/root/data/luyaz/ship/manifest.jsonl'"
-check "do_devui records core" "sed -n '/^do_devui() {/,/^}/p' '$K/device/install.sh' | grep -q '^ *kit_record core\$'"
+check "do_ui records core" "sed -n '/^do_ui() {/,/^}/p' '$K/device/install.sh' | grep -q '^ *kit_record core\$'"
 rm -rf "$T"
 
-# an unfinished ship transaction on the device: admin / devui / recover refuse
+# an unfinished ship transaction on the device: admin / ui / recover refuse
 for case_ in "check:有没结束的上机事务" "trial:有没结束的上机事务" "staged:有没结束的上机事务" "failed:停在 failed" "weird:阶段看不懂"; do
-    for comp in admin devui recover; do
+    for comp in admin ui recover; do
         setup
         mkdir -p "$T/data/luyaz/ship"
         printf 'v=1\ntxn=20261001-120000-core\ncomp=core\nphase=%s\nend=1\n' "${case_%%:*}" >"$T/data/luyaz/ship/txn"
@@ -199,7 +199,7 @@ for case_ in done:0 check:1; do
     rm -rf "$T"
 done
 
-# kit_record touch / sentinel (after devui): their own keys in kit-source
+# kit_record touch / sentinel (after ui): their own keys in kit-source
 setup
 mkdir -p "$T/data/luyaz/scripts"
 printf '#!/bin/sh\necho "$*" >>%s/ship.calls\n' "$T" >"$T/data/luyaz/scripts/luyaz-ship.sh"
@@ -215,7 +215,7 @@ sed -n '/^kit_record() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
 ) >"$T/out" 2>&1
 check "kit_record touch, sentinel: each with its own commit, format, dirty" "[ \"\$(cat '$T/ship.calls')\" = 'record-kit touch 20261001 def5678 1 1790000000
 record-kit sentinel 20261001 def5678 2 1790000000 dirty' ]"
-check "do_devui records touch and sentinel after the screen is up" "sed -n '/^do_devui() {/,/^}/p' '$K/device/install.sh' | tail -n 4 | tr -d ' ' | grep -qx 'kit_recordtouch' && sed -n '/^do_devui() {/,/^}/p' '$K/device/install.sh' | grep -q '^ *kit_record sentinel\$'"
+check "do_ui records touch and sentinel after the screen is up" "sed -n '/^do_ui() {/,/^}/p' '$K/device/install.sh' | tail -n 4 | tr -d ' ' | grep -qx 'kit_recordtouch' && sed -n '/^do_ui() {/,/^}/p' '$K/device/install.sh' | grep -q '^ *kit_record sentinel\$'"
 rm -rf "$T"
 
 # rc.local writers (rc_add, do_recover): a candidate,

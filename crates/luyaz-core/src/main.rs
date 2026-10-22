@@ -40,6 +40,10 @@ mod sample;
 mod scorecard;
 #[allow(dead_code)]
 mod sens;
+mod sim_follow;
+mod sim_alerts;
+mod sim_identity;
+mod sim_say;
 
 // Phase 3: HTTP and the write path moved from data-service (serve.rs)
 mod at;
@@ -331,6 +335,10 @@ fn main() {
     // `<core> o2-check <iface> <source-ip>`: one read-only bound HTTPS run (O2)
     if raw.get(1).map(String::as_str) == Some("o2-check") {
         std::process::exit(o2::main(&raw[2..]));
+    }
+    // `<core> lanid-selftest real|hostile <plugins-dir>`: the component checks on the device build
+    if raw.get(1).map(String::as_str) == Some("lanid-selftest") {
+        std::process::exit(lanid::selftest::main(&raw[2..]));
     }
     // `<core> plan-reboot [why]`: mark the coming shell `reboot` as asked for (ledger S1)
     if raw.get(1).map(String::as_str) == Some("plan-reboot") {

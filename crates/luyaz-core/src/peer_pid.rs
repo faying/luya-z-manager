@@ -8,13 +8,22 @@ pub(crate) fn parse_ppid(stat: &str) -> Option<u32> {
     rest.split_whitespace().nth(1)?.parse().ok()
 }
 
-/// 本机这一端用 `port` 的 TCP 连接属于哪个进程。
+/// 本机这一端用 `port` 的 TCP 连接属于哪个进程。先找别的进程，找不到再看自己：核心里的情景引擎
+/// 拿着 Wi-Fi 锁经回环调自己的 `/control`，这时调用方就是核心自己（D8：可验证的内部身份）。
 pub(crate) fn find_pid(port: u16) -> Option<u32> {
     let inode = ["/proc/net/tcp", "/proc/net/tcp6"]
         .iter()
         .filter_map(|p| std::fs::read_to_string(p).ok())
         .find_map(|table| socket_inode(&table, port))?;
     let wanted = format!("socket:[{inode}]");
+    let me = std::process::id();
+    let owns = |pid: u32| {
+        std::fs::read_dir(format!("/proc/{pid}/fd")).is_ok_and(|fds| {
+            fds.flatten().any(|fd| {
+                std::fs::read_link(fd.path()).is_ok_and(|l| l.as_os_str() == wanted.as_str())
+            })
+        })
+    };
     for entry in std::fs::read_dir("/proc").ok()?.flatten() {
         let Some(pid) = entry
             .file_name()
@@ -23,19 +32,11 @@ pub(crate) fn find_pid(port: u16) -> Option<u32> {
         else {
             continue;
         };
-        if pid == std::process::id() {
-            continue;
-        }
-        let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
-            continue;
-        };
-        for fd in fds.flatten() {
-            if std::fs::read_link(fd.path()).is_ok_and(|l| l.as_os_str() == wanted.as_str()) {
-                return Some(pid);
-            }
+        if pid != me && owns(pid) {
+            return Some(pid);
         }
     }
-    None
+    owns(me).then_some(me)
 }
 
 /// `/proc/net/tcp*` 里本地端口是 `port` 的那一行的 inode（第 10 列）。

@@ -13,8 +13,6 @@ Current programs (all under procd, one `/etc/init.d/<name> start` line each in r
 | web | luyaz-web :9090, password `/data/luyaz/web.env` | admin pages; talks only to the core |
 | touch UI | `/data/luyaz/ui/luyaz-ui` (comm `luyaz-ui`) | started and adopted only by the sentinel |
 
-The contract as written for the retired zte-agent, u60-guard, u60-uid and supervise.sh is in [`archive/RELIABILITY-pre-phase10.md`](archive/RELIABILITY-pre-phase10.md) (record only).
-
 ## 1. Wi-Fi lock `/tmp/luyaz-wifi.lock`
 
 Every program that writes the `wireless` uci package holds it (exclusive `flock`) from the first `uci set` until the reload has been verified.
@@ -60,11 +58,11 @@ On `/data`, mode 700: a reboot loop must neither wipe alerts nor reset the SMS q
 - Wall-clock under `1704067200` (2024-01-01) means "not calibrated"; the web shows 「开机后 N 秒」.
 - Text: printable ASCII, ≤ 120 characters, never any configuration (numbers, passwords, SSIDs). Malformed lines are skipped.
 - Kinds emitted now:
-  - sentinel: `agent-silent`, `wifi-takeover`, `wifi-restore-failed`, `dropbear-down`, `dropbear-restarted`, `devui-crash`, `devui-gave-up`
+  - sentinel: `agent-silent`, `wifi-takeover`, `wifi-restore-failed`, `dropbear-down`, `dropbear-restarted`, `ui-crash`, `ui-gave-up`
   - core svcwatch: `core-crash` (the core itself; `core-crash` before rename F4, old rows still read), `web-crash`, `sentinel-crash`
   - core sentinel watch: `sentinel-silent`, `screen-empty` (only if the screen-guard switch is on)
   - core engines: `home-exit-down`, `home-exit-check-failed`, `sms-forward-stuck`
-  - touch UI: `devui-theme-paused`
+  - touch UI: `ui-theme-paused`
 
 ### SMS
 
@@ -72,7 +70,7 @@ On `/data`, mode 700: a reboot loop must neither wipe alerts nor reset the SMS q
   - **core** (`engines/guard_duties.rs`, every 30 s) when `/tmp/luyaz/handover` names `sms` and writes are on — the normal case;
   - **sentinel** only while the core is unhealthy (2 bad `/healthz` rounds) and not being replaced by ship.
   The `sms-sending` claim keeps a handover between them from sending twice.
-- Rules: `sms-failed` and `devui-theme-paused` are never sent; no number → `no-number`; `abroad` without `sms-abroad` → `suppressed-abroad`; at most 1 per kind per hour and 5 per 24 h → else `suppressed-rate`. Nothing is sent and the cursor does not advance until the clock verdict (section 9) is trusted.
+- Rules: `sms-failed` and `ui-theme-paused` are never sent; no number → `no-number`; `abroad` without `sms-abroad` → `suppressed-abroad`; at most 1 per kind per hour and 5 per 24 h → else `suppressed-rate`. Nothing is sent and the cursor does not advance until the clock verdict (section 9) is trusted.
 - Send: `ubus call zwrt_wms zte_libwms_send_sms` (`number`, `message_body` uppercase UCS-2 hex, `encode_type` `UNICODE`, `sms_time` `YY;MM;DD;HH;MM;SS;+TZ`, `id` `-1`). Success if `result` is 3 or missing; the sent copy is then deleted from the SMS store. Failure logs `failed` and appends `sms-failed`; no retry.
 - Text: one plain-Chinese sentence per kind, `【Luya-Z】…（MM-DD HH:MM）`, ≤ 70 characters; unknown kinds point to the web.
 
@@ -89,10 +87,10 @@ Served by the core on loopback as `/v2/api/…`; luyaz-web (`alerts_page.rs`) is
 ## 6. Screen (sentinel, `crates/luyaz-sentinel/src/screen.rs`, `run.rs`)
 
 - The sentinel is the only owner of the touch UI: starts it, adopts a running one by comm `luyaz-ui` (never starts a second), switches to the stock UI (`zte_topsw_devui`), and while the stock UI is up detects a 3 s long press in the bottom-right corner to come back.
-- `/data/luyaz/screen/attempts`: incremented and fsynced before each start, reset after 10 min of stable running; at 2 it writes `/data/luyaz/screen/gave-up`, alerts `devui-gave-up` and hands back to the stock UI. Gave-up survives reboots; cleared by the long press or `devui`. A corrupt file counts as 2.
+- `/data/luyaz/screen/attempts`: incremented and fsynced before each start, reset after 10 min of stable running; at 2 it writes `/data/luyaz/screen/gave-up`, alerts `ui-gave-up` and hands back to the stock UI. Gave-up survives reboots; cleared by the long press or `ui`. A corrupt file counts as 2.
 - `/tmp/luyaz/screen.want` starting with `vendor` = stock UI chosen; a reboot restores ours.
-- `/tmp/luyaz-screen.ctl` (FIFO, only while the sentinel runs): `vendor`, `devui`, `hold [s]` (10–3600, default 600), `release` (the last two for ship).
-- Unexpected exits of a UI it started go to `/data/crashlog/u60pro-devui/` (5 kept) and alert `devui-crash`; adopted processes give no exit code and are not counted.
+- `/tmp/luyaz-screen.ctl` (FIFO, only while the sentinel runs): `vendor`, `ui`, `hold [s]` (10–3600, default 600), `release` (the last two for ship).
+- Unexpected exits of a UI it started go to `/data/crashlog/luyaz-ui/` (5 kept) and alert `ui-crash`; adopted processes give no exit code and are not counted.
 - Sentinel heartbeat `/tmp/luyaz-sentinel.hb`, events `/data/luyaz/screen/events{,.seq}` (200 kept), log `/tmp/luyaz-sentinel.log`.
 - **If the screen shows no UI for a few minutes, the firmware reboots the whole device** (reason code 1185). Any path that stops one UI must start the other in the same step.
 
@@ -106,7 +104,7 @@ Served by the core on loopback as `/v2/api/…`; luyaz-web (`alerts_page.rs`) is
 ## 8. Standby records
 
 - Writer: core `longterm/standby.rs`, only while `/tmp/luyaz/handover` names `standby`. While the backlight is off, one line per round to `/tmp/standby.stat`: `<uptime> <cellular pkts/min> <Tailscale tunnel pkts/min> <wakeups/s per program>`, last 60 kept; a program whose pid changed is `-`; no line if the previous round is more than 150 s ago.
-- The program columns are fixed by position (doctor reads by position) and still carry the pre-rename labels `tailscaled mihomo u60pro-devui zwrt-datad zte-agent`.
+- The program columns are fixed by position (doctor reads by position) : `tailscaled mihomo luyaz-ui luyaz-core`.
 - Fingerprints `/tmp/luyaz/ledger/fp`, `fp-changed`. Baseline `/data/luyaz/scripts/standby.baseline` (v2 with `fp` lines); written by `luyaz-core doctor --calibrate-standby` (≥ 30 records; per column median and MAD, then the fingerprints; one `calib` event via `POST /v2/longterm/calib`), judged by doctor's 「待机」 row.
 
 ## 9. Clock verdict, crash records, `.migrated`

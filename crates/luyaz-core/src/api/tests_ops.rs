@@ -310,8 +310,13 @@ async fn a_register_that_takes_is_kept() {
     assert_eq!(g["guard"]["target"], "44010");
     assert_eq!(g["selection"]["mode"], "manual");
     let s1 = json!("s1");
+    // a renew comes by the wall clock (every SESSION_RENEW): a slow run gets one, a fast one not
+    let seen: Vec<_> = brief(&d)
+        .into_iter()
+        .filter(|(a, _, _)| a != "netselect.session.renew")
+        .collect();
     assert_eq!(
-        brief(&d),
+        seen,
         vec![
             (
                 "netselect.session.open".into(),
@@ -358,6 +363,37 @@ async fn the_diagnosis_gate_refuses_search_and_register() {
         actions(&d),
         ["netselect.session.open", "netselect.session.close"]
     );
+}
+
+/// B31 says connected but the bearer is gone (no default route out of rmnet): not kept.
+#[tokio::test]
+async fn connected_without_a_bearer_is_not_kept() {
+    let dev = Dev {
+        serving: (440, 20),
+        connected: true,
+        register_takes: Some(true),
+        ..Dev::default()
+    };
+    let (root, _d, c) = setup("reg-nobearer", dev).await;
+    fs::create_dir_all(root.join("proc/net")).unwrap();
+    fs::write(
+        root.join("proc/net/route"),
+        "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\n",
+    )
+    .unwrap();
+    let addr = start(c).await;
+    let (st, _) = call(
+        addr,
+        "POST",
+        "/api/modem/register",
+        r#"{"m_mcc_mnc":"44010","m_rat":"7"}"#,
+    )
+    .await;
+    assert_eq!(st, 202);
+    let g = until(addr, |d| d["guard"]["phase"] == "reverted").await;
+    // the revert's redial cannot bring the bearer back either
+    assert_eq!(g["guard"]["reason_code"], "auto_no_data", "{}", g["guard"]);
+    assert!(g["guard"]["reason"].as_str().unwrap().starts_with("已注册但数据没通"));
 }
 
 /// It fails: back to automatic and the data call redialled, all in the session; reason coded.

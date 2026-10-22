@@ -734,7 +734,7 @@ mod tests {
             ],
             "bad": 0, "warn": 1, "checked_at": 1_791_000_000, "error": null,
             "crashlogs": [
-                {"program": "u60pro-devui", "file": "20261012-101112-up345.log", "time": 1_790_900_000, "size": 100, "status": "killed by SIGSEGV"},
+                {"program": "luyaz-ui", "file": "20261012-101112-up345.log", "time": 1_790_900_000, "size": 100, "status": "killed by SIGSEGV"},
                 {"program": "../x", "file": "a.log", "time": 1_790_800_000, "size": 1, "status": ""},
             ],
         })
@@ -818,19 +818,19 @@ mod tests {
         let p = poll(Lang::En, Some(parse(&sample())), None);
         let c = leaf(&p, "hl-crashes");
         assert!(
-            c.contains("u60pro-devui") && c.contains("killed by SIGSEGV"),
+            c.contains("luyaz-ui") && c.contains("killed by SIGSEGV"),
             "{c}"
         );
         assert!(
-            c.contains("@post('/health/log?program=u60pro-devui&file=20261012-101112-up345.log')"),
+            c.contains("@post('/health/log?program=luyaz-ui&file=20261012-101112-up345.log')"),
             "{c}"
         );
         assert!(
-            c.contains("Show the crash log of u60pro-devui at 10-"),
+            c.contains("Show the crash log of luyaz-ui at 10-"),
             "{c}"
         );
         assert!(
-            c.contains("$_hlopen === 'u60pro-devui/20261012-101112-up345.log'"),
+            c.contains("$_hlopen === 'luyaz-ui/20261012-101112-up345.log'"),
             "{c}"
         );
         // an unsafe name is listed but cannot be opened

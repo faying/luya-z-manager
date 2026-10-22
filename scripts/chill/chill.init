@@ -9,7 +9,7 @@
 #   自启统一只走 /etc/rc.local 里的一行：
 #       [ -f /data/chill/disabled ] || /etc/init.d/chill start
 #
-# 结构照搬当年 touch-ui 的 procd 模板 u60pro-devui.init（已删；现在的 procd 写法见 touch-ui/scripts/luyaz-core.init）。
+# procd 写法同 touch-ui/scripts/luyaz-core.init。
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -53,7 +53,7 @@
 | 数据服务 | Data service | 网页已在用 |
 | 触屏界面 | Screen UI | 网页现写 Touch screen UI，R8 合并时改齐 |
 | 原厂界面 | stock UI | |
-| 屏幕守护（luyaz-sentinel；原 u60-uid） | Screen supervisor | doctor 用 |
+| 屏幕守护（luyaz-sentinel） | Screen supervisor | doctor 用 |
 | 看门狗 | watchdog | Wi-Fi watchdog |
 | 网络模式 | Network mode | 设置值 Auto / 5G only… 见 §7 |
 | 移动数据 | Mobile data | |
@@ -185,12 +185,12 @@
 | agent-crash | 管理后台意外退出，已自动重启。不用管。 | [Luya-Z] Admin crashed; restarted; no action needed (01 Oct 14:32) | 70 |
 | core-crash（旧 core-crash） | 屏幕的数据服务意外退出，已自动重启。不用管。 | [Luya-Z] Data service crashed; restarted; no action (01 Oct 14:32) | 70 |
 | core-degraded | 屏幕的数据服务超过5分钟不正常，管理后台已改用备用方式读数据。上网不受影响。 | [Luya-Z] Data service down 5+ min; fallback; net OK (01 Oct 14:32) | 70 |
-| devui-crash | 屏幕界面闪退了，已自动重新打开。不用管。 | [Luya-Z] Screen UI crashed; reopened; no action (01 Oct 14:32) | 66 |
-| devui-gave-up | 屏幕界面连续打不开，已换成原厂界面，上网不受影响。长按屏幕右下角3秒可换回。 | [Luya-Z] Stock UI on; hold bottom-right 3s to undo (01 Oct 14:32) | 69 |
+| ui-crash | 屏幕界面闪退了，已自动重新打开。不用管。 | [Luya-Z] Screen UI crashed; reopened; no action (01 Oct 14:32) | 66 |
+| ui-gave-up | 屏幕界面连续打不开，已换成原厂界面，上网不受影响。长按屏幕右下角3秒可换回。 | [Luya-Z] Stock UI on; hold bottom-right 3s to undo (01 Oct 14:32) | 69 |
 | sms-test | 这是测试短信。收到了，说明告警短信能正常发到你手机。 | [Luya-Z] Test SMS: alert texts reach your phone (01 Oct 14:32) | 66 |
 | 其他 | 有新告警（kind），请到管理网页「系统→告警」查看。 | [Luya-Z] Alert <kind>; see Alerts on web (01 Oct 14:32) | kind 截到 17 字，最长 70（含 `#999`） |
 
-为了压进 70 字，英文比中文少说了的：agent-silent 没写「Wi-Fi 关着会自动打开」（真打开时另有 wifi-takeover 短信）；devui-gave-up 没写「上网不受影响」，「屏幕界面打不开」由 Stock UI on 带出。
+为了压进 70 字，英文比中文少说了的：agent-silent 没写「Wi-Fi 关着会自动打开」（真打开时另有 wifi-takeover 短信）；ui-gave-up 没写「上网不受影响」，「屏幕界面打不开」由 Stock UI on 带出。
 
 ## 10. 网络诊断（原 agent `deep_diag.rs`，现 `crates/luyaz-netwatch` 的 `diagnose.rs`；10-02 ER4；触屏 T4 10-02 已做，网页 T5 用同一套词）
 
@@ -401,7 +401,7 @@ DESIGN.zh-CN.md §5 用来描述网页、跟框架无关的词。只在文档和
 
 ## 外部评审（10-01，独立子代理；Codex 卡死没跑成）
 
-15 条采纳 14 条：漫游写成找运营商/套餐而非 SIM；RSRP/SINR/RSRQ 带单位；no action needed 代替 nothing to do；devui-gave-up 说清长按是换回；on backup 易被当成电池，改 using fallback；Airplane 代替 Cell off（和提示一致）；核心掉线照实写 Data service offline；web admin；干扰统一叫 Noise；提示行一句话用 `;`；带宽 Wide、No cell、Cell busy、Restricted 等小改。
+15 条采纳 14 条：漫游写成找运营商/套餐而非 SIM；RSRP/SINR/RSRQ 带单位；no action needed 代替 nothing to do；ui-gave-up 说清长按是换回；on backup 易被当成电池，改 using fallback；Airplane 代替 Cell off（和提示一致）；核心掉线照实写 Data service offline；web admin；干扰统一叫 Noise；提示行一句话用 `;`；带宽 Wide、No cell、Cell busy、Restricted 等小改。
 不采纳 1 条：「运营商选择」和网页 Mobile Network 不是同一页（网页那页还管飞行模式），名字不必一样。
 
 ## 10-01 用户定的 4 条

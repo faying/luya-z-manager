@@ -145,7 +145,7 @@ fn verdicts_in_the_guards_order() {
     );
     assert_eq!(
         verdict(&Facts {
-            kind: "devui-theme-paused",
+            kind: "ui-theme-paused",
             number: None,
             ..base
         }),
@@ -229,8 +229,8 @@ const KINDS: &[&str] = &[
     "sentinel-silent",
     "web-crash",
     "core-crash",
-    "devui-crash",
-    "devui-gave-up",
+    "ui-crash",
+    "ui-gave-up",
     "sms-test",
     "screen-two-uis",
     "screen-hold-expired",
@@ -320,7 +320,7 @@ fn ucs2_time_and_dates() {
 
 #[test]
 fn a_round_sends_logs_moves_the_cursor_and_deletes_the_copy() {
-    let a = setup("happy", &["web-crash", "sms-failed", "devui-crash"]);
+    let a = setup("happy", &["web-crash", "sms-failed", "ui-crash"]);
     let mut io = Fake::new();
     assert_eq!(a.sms_round("core", 10, &mut io), Round::Done(3));
     let sent = io.sent();
@@ -334,7 +334,7 @@ fn a_round_sends_logs_moves_the_cursor_and_deletes_the_copy() {
         log_results(&a),
         vec![
             (1, "web-crash".into(), "sent".into()),
-            (3, "devui-crash".into(), "sent".into())
+            (3, "ui-crash".into(), "sent".into())
         ]
     );
     assert_eq!(a.read_u64("sms-done"), 3);
@@ -475,7 +475,7 @@ fn no_number_and_abroad_are_recorded() {
 
 #[test]
 fn english_follows_the_screen() {
-    let a = setup("en", &["devui-crash"]);
+    let a = setup("en", &["ui-crash"]);
     let mut io = Fake::new();
     io.en = true;
     a.sms_round("core", 10, &mut io);
@@ -506,7 +506,7 @@ fn two_senders_at_once_send_each_alert_once() {
         "two",
         &[
             "web-crash",
-            "devui-crash",
+            "ui-crash",
             "core-crash",
             "dropbear-down",
             "sentinel-silent",
@@ -584,7 +584,7 @@ fn not_reaching_the_device_keeps_the_alert_pending() {
 
 #[test]
 fn screen_language_as_the_guard_and_the_screen_read_it() {
-    assert!(!lang_en(""), "no devui.conf / empty: Chinese");
+    assert!(!lang_en(""), "no ui.conf / empty: Chinese");
     assert!(!lang_en("lang=zh\n"));
     for v in [
         "", "fr", "1", "EN", "en ", " en", "en_US", "$((x+1))", "`reboot`", "zh;en",

@@ -39,7 +39,7 @@ pub const PLANNED: &str = "/data/luyaz/core/planned-reboot";
 /// A marker older than this in the boot that wrote it is stale (the reboot did not happen).
 pub const PLANNED_TTL_S: f64 = 600.0;
 
-fn proc_boot_id() -> String {
+pub fn proc_boot_id() -> String {
     std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
         .map(|s| s.trim().to_string())
         .unwrap_or_default()

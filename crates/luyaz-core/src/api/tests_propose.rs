@@ -128,6 +128,22 @@ fn expected_outage_short_down_other_card_or_stale_propose_nothing() {
 }
 
 #[test]
+fn a_sim_switch_leaving_or_changed_proposes_nothing() {
+    use crate::sim_identity::Phase;
+    for (phase, want) in [
+        (Phase::Leaving, false),
+        (Phase::Changed, false),
+        (Phase::Online, true),
+        (Phase::Stalled, true),
+    ] {
+        let mut e = ev(Some(false));
+        sim_switching(&mut e, phase);
+        let p = build(&replay(&e), &binding(epochs()));
+        assert_eq!(p.is_some(), want, "{phase:?}");
+    }
+}
+
+#[test]
 fn any_unknown_epoch_or_binding_proposes_nothing() {
     let a = replay(&ev(Some(false)));
     for f in [

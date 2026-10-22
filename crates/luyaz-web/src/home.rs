@@ -244,8 +244,9 @@ struct View {
     alerts_label: String,
     status: String,
     why: bool,
-    /// The core's open "sure" finding (T6), one sentence; links to its evidence.
-    finding: Option<String>,
+    /// The core's `network.health` notice (the open "sure" finding in its words, mobile data
+    /// down, just recovered); falls back to the finding's symptom on an older core.
+    finding: Option<Notice>,
     ro_stale: bool,
     bw: Readout,
     rsrp: Readout,
@@ -419,22 +420,8 @@ impl Poll {
             .as_ref()
             .and_then(|p| p["network"]["verdict"].as_str())
             .filter(|s| !s.is_empty());
-        // T6: the core's open "sure" finding (registered but no internet)
-        let finding = st
-            .side
-            .public
-            .as_ref()
-            .map(|p| &p["network"]["finding"])
-            .filter(|f| seen && f.is_object())
-            .map(|f| {
-                let zh = f["symptom"].as_str().unwrap_or("");
-                let en = f["symptom_en"].as_str().unwrap_or("");
-                match l {
-                    Lang::En if !en.is_empty() => en.to_string(),
-                    _ => zh.to_string(),
-                }
-            })
-            .filter(|s| !s.is_empty());
+        // T6 + network.health: the core's words, one notice
+        let finding = st.side.public.as_ref().filter(|_| seen).and_then(|p| notice(&p["network"], l));
         let why = seen
             && !sv.stale
             && match verdict {
@@ -1046,6 +1033,50 @@ fn ts_html(l: Lang, ts: &Src<Ts>, now: Instant) -> String {
 #[allow(dead_code)]
 fn _unused(_: SystemTime) {}
 
+/// The home page's one network notice (`network.health.say`).
+#[derive(Debug, PartialEq)]
+pub struct Notice {
+    pub text: String,
+    /// "bad" or "ok" (`nd-mark--…`)
+    pub mark: &'static str,
+    /// where the next step is, with its label
+    pub link: Option<(&'static str, &'static str)>,
+}
+
+fn notice(net: &Value, l: Lang) -> Option<Notice> {
+    let pick = |v: &Value, k: &str| {
+        let zh = v[k].as_str().unwrap_or("");
+        let en = v[&format!("{k}_en")].as_str().unwrap_or("");
+        match l {
+            Lang::En if !en.is_empty() => en.to_string(),
+            _ => zh.to_string(),
+        }
+    };
+    let h = &net["health"];
+    let say = &h["say"];
+    let (text, id) = if say.is_object() {
+        (pick(say, "detail"), say["id"].as_str().unwrap_or(""))
+    } else if h.is_object() {
+        // a core with network.health that says nothing: healthy, no notice
+        return None;
+    } else {
+        // older core: the finding's symptom
+        (pick(&net["finding"], "symptom"), "network.finding")
+    };
+    if text.is_empty() {
+        return None;
+    }
+    let evidence = (l.pick("See evidence →", "看证据 →"), "/tools/diagnose");
+    let link = match h["next"].as_str() {
+        Some("check_apn") => Some((l.pick("APN →", "APN →"), "/router/apn")),
+        _ if id == "network.recovered" || id == "network.no_bearer" => None,
+        _ if id == "network.proxy" => Some((l.pick("CHILL →", "CHILL →"), "/services/chill")),
+        _ => Some(evidence),
+    };
+    let mark = if id == "network.recovered" { "ok" } else { "bad" };
+    Some(Notice { text, mark, link: link.map(|(t, u)| (u, t)) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1188,8 +1219,26 @@ mod tests {
                 "symptom":"已注册，但数据连接没建立",
                 "symptom_en":"Registered, but the data connection is down"}}}))
         });
-        let f = hub.read(|st| p.view(st, Instant::now())).finding;
-        assert!(f.is_some_and(|f| f.contains("data connection") || f.contains("数据连接")));
+        let f = hub.read(|st| p.view(st, Instant::now())).finding.unwrap();
+        assert!(f.text.contains("data connection") || f.text.contains("数据连接"));
+        assert_eq!(f.link.unwrap().0, "/tools/diagnose");
+    }
+
+    #[test]
+    fn network_health_words_win_and_healthy_is_quiet() {
+        let zh = Lang::Zh;
+        let net = json!({"finding": {"symptom": "旧"}, "health": {"say": null, "next": null}});
+        assert_eq!(notice(&net, zh), None);
+        let net = json!({"finding": {"symptom": "旧"}, "health": {"next": "check_apn", "say": {
+            "id": "network.data", "detail": "已注册，但数据连接没建立。自动恢复没有成功，建议检查 APN。",
+            "detail_en": "x"}}});
+        let n = notice(&net, zh).unwrap();
+        assert!(n.text.ends_with("建议检查 APN。"));
+        assert_eq!((n.mark, n.link.unwrap().0), ("bad", "/router/apn"));
+        let net = json!({"health": {"next": null, "say": {"id": "network.recovered",
+            "detail": "移动网络已恢复，正在检查代理。", "detail_en": "Mobile data is back; checking the proxy."}}});
+        let n = notice(&net, Lang::En).unwrap();
+        assert_eq!((n.text.as_str(), n.mark, n.link), ("Mobile data is back; checking the proxy.", "ok", None));
     }
 
     #[test]
@@ -1258,5 +1307,14 @@ mod tests {
     fn carriers_summary_words() {
         assert_eq!(carrier_summary(Lang::Zh, 1, 2), "2 个 LTE + 1 个 NR 载波");
         assert_eq!(carrier_summary(Lang::En, 0, 0), "No active carriers");
+    }
+
+    #[test]
+    fn a_proxy_notice_links_to_chill() {
+        let net = json!({"health": {"next": null, "say": {"id": "network.proxy",
+            "detail": "移动网络正常，但经 CHILL 访问外网失败；可以换节点或重启 CHILL。"}}});
+        let n = notice(&net, Lang::Zh).unwrap();
+        assert_eq!(n.mark, "bad");
+        assert_eq!(n.link.map(|(u, _)| u), Some("/services/chill"));
     }
 }

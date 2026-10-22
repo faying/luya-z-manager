@@ -32,8 +32,11 @@ impl Host for U60dHost {
             .is_some_and(|v| v["state"] == "running")
     }
 
+    /// The cell answers and the underlay gate lets the proxy layer act.
     fn cell_alive(&self) -> bool {
+        use crate::api::underlay::{ask, Kind, Layer};
         self.watch.cell_alive(luyaz_api::clock::BootTime::read().as_ref())
+            && !ask("manual-first", Layer::Proxy, Kind::Inferential).holds()
     }
 
     fn direct_dns_ms(&self) -> Option<u32> {

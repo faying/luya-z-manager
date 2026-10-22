@@ -19,10 +19,11 @@
 //! `zte_topsw_mdm` (userspace re-reads; nwinfo/data re-dial off its signal).
 //! This keeps the daemon sync barrier healthy and reattaches data in under a
 //! minute. If identity doesn't converge or the barrier breaks, it falls back to
-//! a reboot, which is always safe. APN auto-selects by the new profile's PLMN.
+//! a reboot — at most one per 24 h (`AUTO_REBOOT_EVERY`); past that the job ends
+//! `identity_stuck` and the user restarts. APN auto-selects by the new profile's PLMN.
 //! Whether the card switched at all is read back from its own profile list,
-//! not taken from lpac's exit; a card that answers catBusy is reported as
-//! needing a device restart (or reinsert), with no retries and no cooldown.
+//! not taken from lpac's exit; a card that answers catBusy is tried again within
+//! `BUSY_TOTAL` (cancellable), then reported as needing a device restart (or reinsert).
 //! On success, superseded enable/disable notifications are removed and the
 //! switch's own are sent once data is back (rules above `plan_notifications`).
 //!
@@ -37,7 +38,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 const LPAC_BIN: &str = "/data/esim/lpac";
 const LIB_DIR: &str = "/data/esim/lib";
@@ -69,13 +70,19 @@ const LPAC_TIMEOUT_NOTIF: Duration = Duration::from_secs(45);
 /// The switch is checked in three timed steps (resilience audit R5): the card
 /// (`read_profiles_retry`), then the ZTE stack's identity, then the data call.
 /// Identity: upstream measured up to 28 s on B27; past `IDENTITY_WAIT` (polled
-/// every `IDENTITY_POLL`) the stack is taken as stuck and the device reboots.
+/// every `IDENTITY_POLL`) plus `IDENTITY_GRACE` with neither identity nor data
+/// back, the stack is taken as stuck and the device reboots.
 /// Data: past `DATA_WAIT` (polled every `NOTIF_DATA_POLL`) the job ends
 /// "switched, data not back" (`reason: "no_data"`), with no reboot. B31, 10-20
 /// (eUICC, CMLink ⇄ CTM roaming): card 0 s, identity 3 s, data 10 s and 55–60 s —
 /// the roaming profile only just made 60 s, so data waits 90 s (identity keeps
 /// 45 s: it is the reboot trigger and 3 s is far inside it).
 const IDENTITY_WAIT: Duration = Duration::from_secs(45);
+/// Slow is not stuck: past `IDENTITY_WAIT` the switch gets this much longer,
+/// and the reboot only happens if both identity and the data call are still
+/// missing at the end. u60g 10-22: identity came back a few seconds past 45 s
+/// with data fine, and the 45 s rule had already rebooted the device for it.
+const IDENTITY_GRACE: Duration = Duration::from_secs(75);
 const IDENTITY_POLL: Duration = Duration::from_secs(2);
 const DATA_WAIT: Duration = Duration::from_secs(90);
 /// After a switch the card answers `profile list` with transitional errors for
@@ -84,10 +91,48 @@ const DATA_WAIT: Duration = Duration::from_secs(90);
 /// returns the last good list marked `stale`/`updating` instead of a 502 (R4).
 /// B31, 10-20 (eUICC, four CMLink ⇄ CTM switches): the list read fine
 /// throughout and no transitional error was logged, so 30 s is headroom only.
-/// There is no retry thread: lpac calls are not yet
-/// serialised (R2), so the UIs' own 1–1.5 s polls are the retry and the window
-/// is its bound.
+/// There is no retry thread: the UIs' own 1–1.5 s polls are the retry (their
+/// reads never queue behind the card lock, see [`Card`]) and the window is its
+/// bound.
 const LIST_STALE_WINDOW: Duration = Duration::from_secs(30);
+/// catBusy (P0-3, 10-22): the enable is retried, the card's list re-read before
+/// each try (it may have switched after all). Gaps grow from `BUSY_FIRST` by half
+/// up to `BUSY_MAX_GAP`, each ±20 %, and no try starts past `BUSY_TOTAL` from the
+/// first; `POST /api/esim/cancel` stops the waiting. Upstream (B27) saw catBusy
+/// clear after up to 131 s / 13 tries. lpac 2.3.0 prints catBusy (5) and
+/// undefinedError (127) both as "unknown", so both are retried: each retry is
+/// one more enable on a card that refused, nothing else is touched.
+const BUSY_FIRST: Duration = Duration::from_secs(10);
+const BUSY_MAX_GAP: Duration = Duration::from_secs(30);
+const BUSY_TOTAL: Duration = Duration::from_secs(240);
+/// The identity-timeout reboot (the only reboot on the eSIM path, owner's
+/// decision 10-22): at most one per `AUTO_REBOOT_EVERY`, the time kept in
+/// `AUTO_REBOOT_STAMP` on /data so it survives the reboot. Past the cap the
+/// switch ends `reason: "identity_stuck"` and the user restarts by hand: a
+/// second loop would also leave the screen without the touch UI (the sentinel
+/// gives it up after reboots < 10 min apart).
+const AUTO_REBOOT_EVERY: u64 = 24 * 3600;
+pub const AUTO_REBOOT_STAMP: &str = "/data/luyaz/core/esim-auto-reboot";
+/// With this file present the identity-timeout reboot is off (owner, 10-22: kept,
+/// on by default, but switchable): the switch ends `identity_stuck` as past the cap.
+pub const AUTO_REBOOT_OFF: &str = "/data/luyaz/core/esim-auto-reboot-off";
+/// The card lock across processes: the core's lpac runs and any script's (the
+/// kit's `install.sh` takes it with `flock`). tmpfs, so a reboot frees it.
+pub const CARD_FLOCK: &str = "/var/run/luyaz-esim.lock";
+/// How long the UIs should wait for a switch job before calling it lost: every
+/// step's bound (busy retries + the last enable, readback, simreset + mdm
+/// restart, identity, data, the notifications). The job carries it as
+/// `deadline_s`; UIs that predate it keep their own 240 s.
+pub const SWITCH_DEADLINE: Duration = Duration::from_secs(
+    BUSY_TOTAL.as_secs()
+        + LPAC_TIMEOUT_FAST.as_secs()
+        + 10
+        + 15 // SIMRESET_TIMEOUT
+        + 30 // MDM_RESTART_TIMEOUT
+        + IDENTITY_WAIT.as_secs()
+        + DATA_WAIT.as_secs()
+        + LPAC_TIMEOUT_NOTIF.as_secs(),
+);
 
 /* -------------------------------------------------------------- *
  *  State
@@ -110,13 +155,23 @@ pub struct JobState {
     /// "not_switched" (lpac or the card refused; the card still has the old
     /// profile), "no_data" (a `done` switch: the card and the modem are on the
     /// new profile but the data call did not come back in time; no reboot),
+    /// "identity_stuck" (`done` with no reboot: the card is on the new
+    /// profile, the ZTE stack never picked it up and the 24 h reboot cap was
+    /// used — restart by hand), "cancelled" (the busy retries were stopped),
     /// "" otherwise.
     reason: String,
+    /// Seconds from `started_unix` the UIs wait before calling the job lost
+    /// (switch: `SWITCH_DEADLINE`; 0 = their own default).
+    deadline_s: u64,
+    /// Enable tries so far (switch; > 1 = the card answered busy and was retried).
+    attempts: u32,
 }
 
 pub struct Esim {
     job: Arc<Mutex<JobState>>,
     running: Arc<AtomicBool>,
+    /// Set by `cancel`: a switch waiting out a busy card stops at its next check.
+    cancel: Arc<AtomicBool>,
     host: Arc<Card>,
     list: Arc<Mutex<ListCache>>,
 }
@@ -132,19 +187,29 @@ pub struct Card {
 }
 
 impl Card {
-    fn hold(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.lock.lock().unwrap_or_else(|e| e.into_inner())
+    /// The card for this process (the mutex) and against other processes (the
+    /// host's file lock, see `CARD_FLOCK`), released together on drop.
+    fn hold(&self) -> Held<'_> {
+        let g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        Held(g, self.inner.lock_card(true).unwrap_or(None))
     }
-    /// `None` while another call has the card.
+    /// `None` while another call (or another process) has the card.
     fn try_lpac(&self, args: &[&str], timeout: Duration) -> Option<Result<Value, String>> {
-        let _g = match self.lock.try_lock() {
+        let g = match self.lock.try_lock() {
             Ok(g) => g,
             Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
             Err(std::sync::TryLockError::WouldBlock) => return None,
         };
+        let _h = Held(g, self.inner.lock_card(false).ok()?);
         Some(self.inner.lpac(args, timeout))
     }
 }
+
+/// Both card locks; the file lock goes when its file closes.
+struct Held<'a>(
+    #[allow(dead_code)] std::sync::MutexGuard<'a, ()>,
+    #[allow(dead_code)] Option<std::fs::File>,
+);
 
 impl Host for Card {
     fn installed(&self) -> bool {
@@ -179,6 +244,21 @@ impl Host for Card {
     fn now(&self) -> Instant {
         self.inner.now()
     }
+    fn lock_card(&self, wait: bool) -> Result<Option<std::fs::File>, ()> {
+        self.inner.lock_card(wait)
+    }
+    fn last_auto_reboot(&self) -> Option<u64> {
+        self.inner.last_auto_reboot()
+    }
+    fn note_auto_reboot(&self, unix: u64) {
+        self.inner.note_auto_reboot(unix)
+    }
+    fn wall_unix(&self) -> u64 {
+        self.inner.wall_unix()
+    }
+    fn switch_event(&self, ev: SwitchEvent) {
+        self.inner.switch_event(ev)
+    }
 }
 
 /// The last profile list the card answered, and when the last switch ended
@@ -206,8 +286,11 @@ impl Esim {
                 finished_unix: 0,
                 rebooting: false,
                 reason: String::new(),
+                deadline_s: 0,
+                attempts: 0,
             })),
             running: Arc::new(AtomicBool::new(false)),
+            cancel: Arc::new(AtomicBool::new(false)),
             list: Arc::new(Mutex::new(ListCache::default())),
         }
     }
@@ -239,11 +322,69 @@ pub trait Host: Send + Sync + 'static {
     fn now(&self) -> Instant {
         Instant::now()
     }
+    /// The card lock other processes see (`CARD_FLOCK`): `Ok(Some)` held until
+    /// the file drops, `Ok(None)` no such lock here, `Err` taken (only when
+    /// `wait` is false).
+    #[allow(clippy::result_unit_err)]
+    fn lock_card(&self, _wait: bool) -> Result<Option<std::fs::File>, ()> {
+        Ok(None)
+    }
+    /// Wall-clock seconds of the last identity-timeout reboot, if any.
+    fn last_auto_reboot(&self) -> Option<u64> {
+        None
+    }
+    /// About to reboot on the identity timeout: keep `unix` for the cap and
+    /// mark the reboot as planned.
+    fn note_auto_reboot(&self, _unix: u64) {}
+    fn wall_unix(&self) -> u64 {
+        now_unix()
+    }
+    /// Where a switch is (the core's SIM identity tracking; its caches).
+    fn switch_event(&self, _ev: SwitchEvent) {}
 }
 
-/// The device. `data_up` comes from the host program (the agent's netinfo read, u60d's ubus).
+/// A switch's steps as the host hears them.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SwitchEvent {
+    /// Starting: the data call is about to go away for a profile `target`.
+    Leaving { target: String },
+    /// The card took the profile; the modem stack is being resynced.
+    CardSwitched,
+    /// The job ended, whichever way (also just before an automatic reboot): its `reason`
+    /// (`JobState::reason`, "" = none) and whether it scheduled the reboot.
+    Ended { reason: String, rebooting: bool },
+}
+
+/// May the identity timeout reboot now? Not within `AUTO_REBOOT_EVERY` of the
+/// last one; a stamp in the future (the clock stepped back at boot) counts as
+/// recent.
+fn auto_reboot_allowed(last: Option<u64>, now: u64) -> bool {
+    match last {
+        None => true,
+        Some(t) => t <= now && now - t >= AUTO_REBOOT_EVERY,
+    }
+}
+
+/// The wait before busy retry `n` (1 = the first): `BUSY_FIRST` growing by half
+/// to `BUSY_MAX_GAP`, ±20 % from `seed`.
+fn busy_gap(n: u32, seed: u64) -> Duration {
+    let mut ms = BUSY_FIRST.as_millis() as u64;
+    for _ in 1..n {
+        ms = (ms * 3 / 2).min(BUSY_MAX_GAP.as_millis() as u64);
+    }
+    let x = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(u64::from(n).wrapping_mul(1442695040888963407));
+    let pct = 80 + (x >> 33) % 41; // 80..=120
+    Duration::from_millis(ms * pct / 100)
+}
+
+/// The device. `data_up` comes from the host program (core: rmnet address + route);
+/// `planned_reboot` marks the coming reboot as asked for (core's boot ledger).
 pub struct RealHost {
     pub data_up: Box<dyn Fn() -> bool + Send + Sync>,
+    pub planned_reboot: Box<dyn Fn() + Send + Sync>,
+    pub switch_event: Box<dyn Fn(SwitchEvent) + Send + Sync>,
 }
 
 impl Host for RealHost {
@@ -270,6 +411,42 @@ impl Host for RealHost {
     }
     fn sleep(&self, d: Duration) {
         std::thread::sleep(d)
+    }
+    fn lock_card(&self, wait: bool) -> Result<Option<std::fs::File>, ()> {
+        let Ok(f) = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(CARD_FLOCK)
+        else {
+            return Ok(None);
+        };
+        if wait {
+            Ok(f.lock().ok().map(|_| f))
+        } else {
+            match f.try_lock() {
+                Ok(()) => Ok(Some(f)),
+                Err(std::fs::TryLockError::WouldBlock) => Err(()),
+                Err(_) => Ok(None),
+            }
+        }
+    }
+    fn last_auto_reboot(&self) -> Option<u64> {
+        std::fs::read_to_string(AUTO_REBOOT_STAMP)
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
+    }
+    fn note_auto_reboot(&self, unix: u64) {
+        let tmp = format!("{AUTO_REBOOT_STAMP}.tmp");
+        if std::fs::write(&tmp, format!("{unix}\n")).is_ok() {
+            let _ = std::fs::rename(&tmp, AUTO_REBOOT_STAMP);
+        }
+        (self.planned_reboot)();
+    }
+    fn switch_event(&self, ev: SwitchEvent) {
+        (self.switch_event)(ev)
     }
 }
 
@@ -624,6 +801,23 @@ fn is_transitional(err: &str) -> bool {
 
 /// ICCIDs compared the way the card and the ZTE stack spell them: lpac and
 /// `sim_iccid` can carry the BCD pad nibble ("…072F").
+/// Is slot 1 (the eSIM card's) out of use on a dual-SIM device: switched off
+/// (`sim1_provision_state` "0") or not the slot data is on (`current_sim_slot`)?
+/// `get_sim_info`'s `sim_*` fields are always slot 1, `sim2_*` slot 2. Missing
+/// fields (a single-slot device, a failed read) mean in use.
+fn esim_slot_idle(h: &dyn Host) -> bool {
+    let v = serde_json::from_str::<Value>(&h.sh(
+        "ubus -t 5 call zwrt_zte_mdm.api get_sim_info '{}' # slots",
+        UBUS_TIMEOUT,
+    ))
+    .unwrap_or(Value::Null);
+    let off = v["sim1_provision_state"].as_str() == Some("0");
+    let elsewhere = v["current_sim_slot"]
+        .as_str()
+        .is_some_and(|s| !s.is_empty() && s != "1");
+    off || elsewhere
+}
+
 fn iccid_eq(a: &str, b: &str) -> bool {
     let a = a.trim().trim_end_matches(['F', 'f']);
     !a.is_empty() && a == b.trim().trim_end_matches(['F', 'f'])
@@ -863,6 +1057,8 @@ fn send_switch_notifications(
             finished_unix: 0,
             rebooting: false,
             reason: String::new(),
+            deadline_s: 0,
+            attempts: 0,
         };
     }
     let strs: Vec<String> = seqs.iter().map(i64::to_string).collect();
@@ -1031,6 +1227,22 @@ impl Esim {
         let j = self.job.lock().unwrap().clone();
         (200, json!({"ok": true, "data": j}))
     }
+    /// POST /api/esim/cancel — stop a switch that is waiting out a busy card.
+    /// Only that wait: once the card took the profile the switch runs to its end.
+    pub fn cancel(&self) -> (u16, Value) {
+        let j = self.job.lock().unwrap();
+        if !self.running.load(Ordering::SeqCst) || j.kind != "switch" || j.attempts == 0 {
+            return (409, json!({"ok": false, "error": "no switch to stop"}));
+        }
+        if !j.message.starts_with("card busy") {
+            return (
+                409,
+                json!({"ok": false, "error": "the switch is past the card step"}),
+            );
+        }
+        self.cancel.store(true, Ordering::SeqCst);
+        (200, json!({"ok": true}))
+    }
     /// POST /api/esim/nickname — { iccid, nickname } (empty nickname clears).
     /// Synchronous: it's a single local APDU exchange.
     pub fn nickname(&self, body: &[u8]) -> (u16, Value) {
@@ -1063,10 +1275,10 @@ impl Esim {
     ///
     /// History: 9-17 every attempt started a 5–10 min cooldown; 9-26 only a real
     /// catBusy did, after 3 retries a second apart. 10-04: no retries and no
-    /// cooldown. Retrying a busy card didn't help in the trials and the wait
-    /// guessed at a timeout nobody measured; what clears catBusy is a power cycle
-    /// of the card (device restart, or taking the card out and back), so the job
-    /// fails with `reason: "card_busy"` and both UIs say exactly that. Whether
+    /// cooldown. 10-22 (P0-3): bounded retries again (`BUSY_TOTAL`, growing gaps,
+    /// the list re-read before each, `cancel` stops them) — upstream saw catBusy
+    /// clear on its own within ~2 min; past the bound the job still fails with
+    /// `reason: "card_busy"` and a restart is what clears it. Whether
     /// the switch happened is read back from the card's profile list — see
     /// `decide_enable` — and on success superseded enable/disable notifications
     /// are removed and this switch's own are sent (see the notifications block).
@@ -1086,137 +1298,281 @@ impl Esim {
             Some(j) => j,
             None => return (409, json!({"ok": false, "error": "operation in progress"})),
         };
+        self.cancel.store(false, Ordering::SeqCst);
+        self.job.lock().unwrap().deadline_s = SWITCH_DEADLINE.as_secs();
         let job = Arc::clone(&self.job);
         let running = Arc::clone(&self.running);
+        let cancel = Arc::clone(&self.cancel);
         let h = Arc::clone(&self.host);
         let list = Arc::clone(&self.list);
         std::thread::spawn(move || {
             let h: &dyn Host = &*h;
             h.wake(true);
-            // The switch (and the simreset / zte_topsw_mdm restart after it) does
-            // not go through core: tell it first, so a network-mode change still
-            // confirming is not rolled back over the new card (D40). Best effort.
-            interrupt();
-            // Record the pre-switch identity so we can detect when the ZTE stack has
-            // actually moved off it (the robust convergence signal).
-            let (old_imsi, _) = ubus_sim_identity(h);
-            // Highest pending notification before the enable: anything above it
-            // afterwards is this switch's own.
-            let seq_before = h
-                .lpac(&["notification", "list"], LPAC_TIMEOUT_FAST)
-                .ok()
-                .and_then(|l| max_notif_seq(&l));
+            let run = || {
+                // The switch (and the simreset / zte_topsw_mdm restart after it) does
+                // not go through core: tell it first, so a network-mode change still
+                // confirming is not rolled back over the new card (D40). Best effort.
+                interrupt();
+                h.switch_event(SwitchEvent::Leaving {
+                    target: iccid.clone(),
+                });
+                // Record the pre-switch identity so we can detect when the ZTE stack has
+                // actually moved off it (the robust convergence signal).
+                let (old_imsi, _) = ubus_sim_identity(h);
+                // Dual-SIM (DSDS, the global device): the eSIM card sits in slot 1 (the
+                // removable slot). When the modem has slot 1 switched off or data on the
+                // other slot, it does not re-read the card, so the identity never moves
+                // and waiting for it ends in a reboot for nothing (10-22, twice).
+                let other_slot = esim_slot_idle(h);
+                // Highest pending notification before the enable: anything above it
+                // afterwards is this switch's own.
+                let seq_before = h
+                    .lpac(&["notification", "list"], LPAC_TIMEOUT_FAST)
+                    .ok()
+                    .and_then(|l| max_notif_seq(&l));
 
-            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                h.lpac(&["profile", "enable", &iccid], LPAC_TIMEOUT_FAST)
-                    .map(|_| ())
-            }))
-            .unwrap_or_else(|_| Err("internal panic".into()));
-            let card_t = h.now();
-            let readback = read_profiles_retry(h);
-            let card = readback
-                .as_ref()
-                .map_or(CardSays::Unknown, |l| target_state(l, &iccid));
-            if let Some(l) = readback {
-                // the list the UIs fall back on while the card settles (R4)
-                list.lock().unwrap().last = Some((l, h.now()));
-            }
-            let card_s = h.now().saturating_duration_since(card_t).as_secs();
-            if let Err(e) = &res {
-                eprintln!("esim: profile enable {iccid}: {e}; card says {card:?}");
-            }
-            if let EnableOutcome::Failed { busy, msg } = decide_enable(&res, card) {
-                h.wake(false);
-                let reason = if busy { "card_busy" } else { "not_switched" };
-                finish_job_with(&job, &running, Err(msg), false, reason);
-                return;
-            }
-
-            // Card-local and quick, so done on both paths below (the reboot one
-            // can't come back to it).
-            let to_send = prune_notifications(h, seq_before);
-
-            // The card is now on the new profile, but the ZTE userspace still holds
-            // the old identity — it only re-reads the SIM at daemon init, not on any
-            // runtime QMI indication. The fast path avoids a full reboot: (1) power-
-            // cycle the UIM session so the *modem* re-reads the new profile, then
-            // (2) restart just zte_topsw_mdm so the *userspace* re-reads; nwinfo and
-            // data re-dial off its signal on their own. Verified on-device to keep
-            // the daemon sync barrier healthy and reattach data in well under a
-            // minute. If identity doesn't converge or the barrier breaks, fall back
-            // to the always-safe reboot.
-            if h.exists(QMI_PROBE) {
-                let _ = h.sh(&format!("{QMI_PROBE} simreset"), SIMRESET_TIMEOUT);
-            }
-            let _ = h.sh(&format!("{MDM_INITD} restart"), MDM_RESTART_TIMEOUT);
-
-            // Step 2, identity: the stack moves off the old IMSI (or onto the ICCID).
-            // Wall time (the ubus reads count too): these are the B31 calibration numbers.
-            let t = h.now();
-            let mut converged = false;
-            while h.now().saturating_duration_since(t) < IDENTITY_WAIT {
-                h.sleep(IDENTITY_POLL);
-                if switch_converged(h, &iccid, &old_imsi) {
-                    converged = true;
-                    break;
+                // Step 1, the card: enable, read the list back; a busy card is tried
+                // again (see `BUSY_TOTAL`), the list re-read first in case it moved.
+                let busy_t = h.now();
+                let mut attempt: u32 = 0;
+                let mut card_s;
+                loop {
+                    attempt += 1;
+                    job.lock().unwrap().attempts = attempt;
+                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        h.lpac(&["profile", "enable", &iccid], LPAC_TIMEOUT_FAST)
+                            .map(|_| ())
+                    }))
+                    .unwrap_or_else(|_| Err("internal panic".into()));
+                    let card_t = h.now();
+                    let readback = read_profiles_retry(h);
+                    let card = readback
+                        .as_ref()
+                        .map_or(CardSays::Unknown, |l| target_state(l, &iccid));
+                    if let Some(l) = readback {
+                        // the list the UIs fall back on while the card settles (R4)
+                        list.lock().unwrap().last = Some((l, h.now()));
+                    }
+                    card_s = h.now().saturating_duration_since(card_t).as_secs();
+                    if let Err(e) = &res {
+                        eprintln!(
+                            "esim: profile enable {iccid} (try {attempt}): {e}; card says {card:?}"
+                        );
+                    }
+                    let EnableOutcome::Failed { busy, msg } = decide_enable(&res, card) else {
+                        break;
+                    };
+                    let gap = busy_gap(attempt, job_id);
+                    let past = h.now().saturating_duration_since(busy_t) + gap >= BUSY_TOTAL;
+                    if !busy || past || cancel.load(Ordering::SeqCst) {
+                        h.wake(false);
+                        let (reason, msg) = match (busy, cancel.load(Ordering::SeqCst)) {
+                            (true, true) => (
+                                "cancelled",
+                                format!("{msg} — retries stopped after {attempt} tries"),
+                            ),
+                            (true, false) => (
+                                "card_busy",
+                                format!("{msg} — still busy after {attempt} tries"),
+                            ),
+                            _ => ("not_switched", msg),
+                        };
+                        finish_job_with(&job, &running, Err(msg), false, reason);
+                        return;
+                    }
+                    job.lock().unwrap().message = format!(
+                        "card busy — retrying (try {} in {} s)",
+                        attempt + 1,
+                        gap.as_secs()
+                    );
+                    // in 1 s steps, so a cancel is seen at once
+                    let until = h.now() + gap;
+                    while h.now() < until && !cancel.load(Ordering::SeqCst) {
+                        h.sleep(
+                            until
+                                .saturating_duration_since(h.now())
+                                .min(Duration::from_secs(1)),
+                        );
+                    }
+                    if cancel.load(Ordering::SeqCst) {
+                        h.wake(false);
+                        finish_job_with(
+                            &job,
+                            &running,
+                            Err(format!(
+                                "card is busy (catBusy) — retries stopped after {attempt} tries"
+                            )),
+                            false,
+                            "cancelled",
+                        );
+                        return;
+                    }
                 }
-            }
-            let ident_s = h.now().saturating_duration_since(t).as_secs();
-            if !converged {
+                job.lock().unwrap().message = "switching".into();
+                h.switch_event(SwitchEvent::CardSwitched);
+
+                // Card-local and quick, so done on both paths below (the reboot one
+                // can't come back to it).
+                let to_send = prune_notifications(h, seq_before);
+
+                if other_slot {
+                    eprintln!(
+                        "esim: switch {iccid}: card {card_s} s; slot 1 is off or data is on the other slot, nothing to wait for"
+                    );
+                    list.lock().unwrap().switched_at = Some(h.now());
+                    finish_job_with(
+                        &job,
+                        &running,
+                        Ok(format!(
+                            "switched on the card ({card_s} s) — the eSIM slot is off or not the data slot, so data stays where it is"
+                        )),
+                        false,
+                        "inactive_slot",
+                    );
+                    send_switch_notifications(h, &job, &running, to_send);
+                    h.wake(false);
+                    return;
+                }
+
+                // The card is now on the new profile, but the ZTE userspace still holds
+                // the old identity — it only re-reads the SIM at daemon init, not on any
+                // runtime QMI indication. The fast path avoids a full reboot: (1) power-
+                // cycle the UIM session so the *modem* re-reads the new profile, then
+                // (2) restart just zte_topsw_mdm so the *userspace* re-reads; nwinfo and
+                // data re-dial off its signal on their own. Verified on-device to keep
+                // the daemon sync barrier healthy and reattach data in well under a
+                // minute. If identity doesn't converge or the barrier breaks, fall back
+                // to the always-safe reboot.
+                if h.exists(QMI_PROBE) {
+                    let _ = h.sh(&format!("{QMI_PROBE} simreset"), SIMRESET_TIMEOUT);
+                }
+                let _ = h.sh(&format!("{MDM_INITD} restart"), MDM_RESTART_TIMEOUT);
+
+                // Step 2, identity: the stack moves off the old IMSI (or onto the ICCID).
+                // Wall time (the ubus reads count too): these are the B31 calibration numbers.
+                let t = h.now();
+                let mut converged = false;
+                while h.now().saturating_duration_since(t) < IDENTITY_WAIT {
+                    h.sleep(IDENTITY_POLL);
+                    if switch_converged(h, &iccid, &old_imsi) {
+                        converged = true;
+                        break;
+                    }
+                }
+                if !converged {
+                    let g = h.now();
+                    while h.now().saturating_duration_since(g) < IDENTITY_GRACE {
+                        if switch_converged(h, &iccid, &old_imsi) {
+                            converged = true;
+                            break;
+                        }
+                        if h.data_up() {
+                            eprintln!(
+                                "esim: switch {iccid}: identity slow but data is up: not rebooting"
+                            );
+                            converged = true;
+                            break;
+                        }
+                        h.sleep(IDENTITY_POLL);
+                    }
+                }
+                let ident_s = h.now().saturating_duration_since(t).as_secs();
+                if !converged {
+                    list.lock().unwrap().switched_at = Some(h.now());
+                    let now = h.wall_unix();
+                    if h.exists(AUTO_REBOOT_OFF) {
+                        eprintln!(
+                            "esim: switch {iccid}: card {card_s} s, identity not back after {ident_s} s: not rebooting (automatic reboot is off: {AUTO_REBOOT_OFF})"
+                        );
+                        h.wake(false);
+                        finish_job_with(
+                            &job,
+                            &running,
+                            Ok(format!(
+                                "switched on the card, but the modem has not picked it up after {ident_s} s — restart the device (automatic reboot is off)"
+                            )),
+                            false,
+                            "identity_stuck",
+                        );
+                        return;
+                    }
+                    if !auto_reboot_allowed(h.last_auto_reboot(), now) {
+                        eprintln!(
+                            "esim: switch {iccid}: card {card_s} s, identity not back after {ident_s} s: not rebooting (one automatic reboot per 24 h, already used)"
+                        );
+                        h.wake(false);
+                        finish_job_with(
+                            &job,
+                            &running,
+                            Ok(format!(
+                                "switched on the card, but the modem has not picked it up after {ident_s} s — restart the device (no automatic reboot: one already in the last 24 h)"
+                            )),
+                            false,
+                            "identity_stuck",
+                        );
+                        return;
+                    }
+                    eprintln!(
+                        "esim: switch {iccid}: card {card_s} s, identity not back after {ident_s} s: rebooting"
+                    );
+                    // Fast path didn't take; reboot recovers cleanly. Keep the wake lock
+                    // held so the device can't doze before it reboots.
+                    h.note_auto_reboot(now);
+                    finish_job(
+                        &job,
+                        &running,
+                        Ok("switched — rebooting to finish".into()),
+                        true,
+                    );
+                    h.reboot();
+                    return;
+                }
+
+                // Step 3, data: the switch is only done once the data call is back.
+                // No reboot when it isn't — that is the user's call (or a later rule).
+                let t = h.now();
+                let data = loop {
+                    if h.data_up() {
+                        break true;
+                    }
+                    if h.now().saturating_duration_since(t) >= DATA_WAIT {
+                        break false;
+                    }
+                    h.sleep(NOTIF_DATA_POLL);
+                };
+                let data_s = h.now().saturating_duration_since(t).as_secs();
+                let steps = format!("card {card_s} s, identity {ident_s} s, data {data_s} s");
                 eprintln!(
-                    "esim: switch {iccid}: card {card_s} s, identity not back after {ident_s} s: rebooting"
+                    "esim: switch {iccid}: {steps}{}",
+                    if data { "" } else { " (not back)" }
                 );
-                // Fast path didn't take; reboot recovers cleanly. Keep the wake lock
-                // held so the device can't doze before it reboots.
                 list.lock().unwrap().switched_at = Some(h.now());
-                finish_job(
-                    &job,
-                    &running,
-                    Ok("switched — rebooting to finish".into()),
-                    true,
-                );
-                h.reboot();
-                return;
-            }
-
-            // Step 3, data: the switch is only done once the data call is back.
-            // No reboot when it isn't — that is the user's call (or a later rule).
-            let t = h.now();
-            let data = loop {
-                if h.data_up() {
-                    break true;
+                if data {
+                    finish_job(
+                        &job,
+                        &running,
+                        Ok(format!("switched — no reboot needed ({steps})")),
+                        false,
+                    );
+                    send_switch_notifications(h, &job, &running, to_send);
+                } else {
+                    // this switch's notifications stay pending (the eSIM page can send them)
+                    finish_job_with(
+                        &job,
+                        &running,
+                        Ok(format!("switched — data not back yet ({steps})")),
+                        false,
+                        "no_data",
+                    );
                 }
-                if h.now().saturating_duration_since(t) >= DATA_WAIT {
-                    break false;
-                }
-                h.sleep(NOTIF_DATA_POLL);
+                h.wake(false);
             };
-            let data_s = h.now().saturating_duration_since(t).as_secs();
-            let steps = format!("card {card_s} s, identity {ident_s} s, data {data_s} s");
-            eprintln!(
-                "esim: switch {iccid}: {steps}{}",
-                if data { "" } else { " (not back)" }
-            );
-            list.lock().unwrap().switched_at = Some(h.now());
-            if data {
-                finish_job(
-                    &job,
-                    &running,
-                    Ok(format!("switched — no reboot needed ({steps})")),
-                    false,
-                );
-                send_switch_notifications(h, &job, &running, to_send);
-            } else {
-                // this switch's notifications stay pending (the eSIM page can send them)
-                finish_job_with(
-                    &job,
-                    &running,
-                    Ok(format!("switched — data not back yet ({steps})")),
-                    false,
-                    "no_data",
-                );
-            }
-            h.wake(false);
+            run();
+            let (reason, rebooting) = {
+                let j = job.lock().unwrap();
+                (j.reason.clone(), j.rebooting)
+            };
+            h.switch_event(SwitchEvent::Ended { reason, rebooting });
         });
         (
             200,
@@ -1403,6 +1759,8 @@ impl Esim {
             finished_unix: 0,
             rebooting: false,
             reason: String::new(),
+            deadline_s: 0,
+            attempts: 0,
         };
         Some(next)
     }
@@ -1589,11 +1947,9 @@ mod tests {
             parse_lpac_output("{\"type\":\"progress\"}\n", false),
             Err(String::new())
         );
-        assert!(
-            parse_lpac_output("", true)
-                .unwrap_err()
-                .contains("no result line")
-        );
+        assert!(parse_lpac_output("", true)
+            .unwrap_err()
+            .contains("no result line"));
     }
 
     #[test]
@@ -1783,12 +2139,21 @@ mod tests {
         enable_works: bool,
         /// lpac's enable answers catBusy (and the card stays put)
         busy: bool,
+        /// …only for the first this many enables (0 = always)
+        busy_for: u32,
+        /// the last automatic reboot's wall time
+        stamp: Option<u64>,
+        /// `AUTO_REBOOT_OFF` is present
+        reboot_off: bool,
         /// the ZTE stack picks up the new card (IMSI changes, sync ok)
         converges: bool,
         /// …but only from this identity read on (0 = the first after the switch)
         converge_at: u32,
         /// the data call never comes back
         no_data: bool,
+        /// `get_sim_info`'s `sim1_provision_state` / `current_sim_slot` ("" = absent)
+        sim1_provision: &'static str,
+        data_slot: &'static str,
         /// each lpac run takes this long (real time), to make calls overlap
         lpac_ms: u64,
         /// lpac runs and probe calls going on right now, and the most seen at once
@@ -1808,6 +2173,8 @@ mod tests {
         list_fails: u32,
         /// fake clock: what `sleep` was asked for
         slept: Duration,
+        enables: u32,
+        noted_reboot: Option<u64>,
     }
 
     pub(super) struct OnCard<'a>(&'a Fake);
@@ -1851,7 +2218,8 @@ mod tests {
                     {"iccid": "89852000000000000002", "profileState": if s.enabled == "89852000000000000002" { "enabled" } else { "disabled" }},
                 ])),
                 ["profile", "enable", iccid] => {
-                    if self.busy {
+                    s.enables += 1;
+                    if self.busy && (self.busy_for == 0 || s.enables <= self.busy_for) {
                         return Err("lpac: es10c_enable_profile: unknown (code -1)".into());
                     }
                     if self.enable_works {
@@ -1871,19 +2239,29 @@ mod tests {
                 return r#"{"noSyncModuleName":"sync success"}"#.into();
             }
             if cmd.contains("get_sim_info") {
-                s.imsi_reads += 1;
+                // the slot read before the switch is not an identity read
+                if !cmd.ends_with("# slots") {
+                    s.imsi_reads += 1;
+                }
                 // read 1 is the pre-switch identity
                 let imsi = if self.converges && s.imsi_reads > 1 + self.converge_at {
                     "440100000000002"
                 } else {
                     "440100000000001"
                 };
-                return json!({"sim_imsi": imsi, "sim_iccid": ""}).to_string();
+                let mut v = json!({"sim_imsi": imsi, "sim_iccid": ""});
+                if !self.sim1_provision.is_empty() {
+                    v["sim1_provision_state"] = self.sim1_provision.into();
+                }
+                if !self.data_slot.is_empty() {
+                    v["current_sim_slot"] = self.data_slot.into();
+                }
+                return v.to_string();
             }
             String::new()
         }
-        fn exists(&self, _p: &str) -> bool {
-            true
+        fn exists(&self, p: &str) -> bool {
+            p != AUTO_REBOOT_OFF || self.reboot_off
         }
         fn reboot(&self) {
             self.state.lock().unwrap().rebooted = true;
@@ -1900,6 +2278,15 @@ mod tests {
         fn now(&self) -> Instant {
             fake_epoch() + self.state.lock().unwrap().slept
         }
+        fn last_auto_reboot(&self) -> Option<u64> {
+            self.stamp
+        }
+        fn note_auto_reboot(&self, unix: u64) {
+            self.state.lock().unwrap().noted_reboot = Some(unix);
+        }
+        fn wall_unix(&self) -> u64 {
+            1_000_000
+        }
     }
 
     #[test]
@@ -1909,14 +2296,13 @@ mod tests {
         // the fake's probe says nothing it knows: unknown, slot freed again
         assert_eq!(e.channel_check(), ChannelCheck::Unknown);
         assert!(!e.busy());
-        assert!(
-            fake.state
-                .lock()
-                .unwrap()
-                .log
-                .iter()
-                .any(|l| l.contains("qmi_uim_probe open"))
-        );
+        assert!(fake
+            .state
+            .lock()
+            .unwrap()
+            .log
+            .iter()
+            .any(|l| l.contains("qmi_uim_probe open")));
         e.running.store(true, Ordering::SeqCst);
         let before = fake.state.lock().unwrap().log.len();
         assert_eq!(e.channel_check(), ChannelCheck::Busy);
@@ -1973,10 +2359,26 @@ mod tests {
     }
 
     #[test]
+    fn a_slow_identity_with_data_up_does_not_reboot() {
+        let (j, fake) = switch_with(Fake {
+            enable_works: true,
+            converges: false,
+            ..Fake::default()
+        });
+        assert_eq!(
+            (j["status"].as_str(), j["rebooting"].as_bool()),
+            (Some("done"), Some(false)),
+            "{j}"
+        );
+        assert!(!fake.state.lock().unwrap().rebooted);
+    }
+
+    #[test]
     fn a_switch_that_does_not_converge_reboots() {
         let (j, fake) = switch_with(Fake {
             enable_works: true,
             converges: false,
+            no_data: true,
             ..Fake::default()
         });
         assert_eq!(
@@ -2000,6 +2402,178 @@ mod tests {
         );
         let s = fake.state.lock().unwrap();
         assert!(!s.rebooted && !s.log.iter().any(|l| l.contains("zte_topsw_mdm restart")));
+    }
+
+    #[test]
+    fn a_busy_card_is_retried_within_the_bound() {
+        let (j, fake) = switch_with(Fake {
+            busy: true,
+            ..Fake::default()
+        });
+        let s = fake.state.lock().unwrap();
+        let tries = s.enables;
+        assert!(tries > 3, "{tries}");
+        assert_eq!(j["attempts"].as_u64(), Some(u64::from(tries)));
+        assert!(s.slept < BUSY_TOTAL + LPAC_TIMEOUT_FAST, "{:?}", s.slept);
+        // the message touch builds match on before `reason`
+        assert!(
+            j["message"].as_str().unwrap().contains("card is busy"),
+            "{j}"
+        );
+    }
+
+    #[test]
+    fn a_card_busy_for_a_while_switches_in_the_end() {
+        let (j, fake) = switch_with(Fake {
+            busy: true,
+            busy_for: 2,
+            enable_works: true,
+            converges: true,
+            ..Fake::default()
+        });
+        assert_eq!(
+            (
+                j["status"].as_str(),
+                j["reason"].as_str(),
+                j["attempts"].as_u64()
+            ),
+            (Some("done"), Some(""), Some(3)),
+            "{j}"
+        );
+        let s = fake.state.lock().unwrap();
+        // the list is read back after every try
+        let lists = s.log.iter().filter(|l| *l == "lpac profile list").count();
+        assert!(lists >= 3, "{lists}");
+        assert!(!s.rebooted);
+    }
+
+    #[test]
+    fn busy_retries_can_be_stopped() {
+        let fake = Arc::new(Fake {
+            busy: true,
+            lpac_ms: 20,
+            ..Fake::default()
+        });
+        let e = Esim::new(fake.clone());
+        assert_eq!(e.cancel().0, 409, "nothing to stop yet");
+        let (code, _) = e.switch(br#"{"iccid":"89852000000000000002"}"#, Box::new(|| {}));
+        assert_eq!(code, 200);
+        let mut stopped = false;
+        for _ in 0..2000 {
+            if e.cancel().0 == 200 {
+                stopped = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(stopped);
+        while e.busy() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let j = e.job().1["data"].clone();
+        assert_eq!(
+            (j["status"].as_str(), j["reason"].as_str()),
+            (Some("error"), Some("cancelled")),
+            "{j}"
+        );
+        assert!(fake.state.lock().unwrap().slept < BUSY_TOTAL);
+    }
+
+    #[test]
+    fn busy_gaps_grow_and_stay_in_bounds() {
+        for seed in 0..50 {
+            let g1 = busy_gap(1, seed);
+            assert!(
+                g1 >= BUSY_FIRST * 8 / 10 && g1 <= BUSY_FIRST * 12 / 10,
+                "{g1:?}"
+            );
+            let g9 = busy_gap(9, seed);
+            assert!(
+                g9 >= BUSY_MAX_GAP * 8 / 10 && g9 <= BUSY_MAX_GAP * 12 / 10,
+                "{g9:?}"
+            );
+        }
+        assert_ne!(busy_gap(1, 1), busy_gap(1, 2), "jittered");
+    }
+
+    #[test]
+    fn the_switch_tells_the_uis_how_long_to_wait() {
+        let (j, _) = switch_with(Fake {
+            enable_works: true,
+            converges: true,
+            ..Fake::default()
+        });
+        assert_eq!(j["deadline_s"].as_u64(), Some(SWITCH_DEADLINE.as_secs()));
+        assert!(SWITCH_DEADLINE > Duration::from_secs(240));
+    }
+
+    #[test]
+    fn one_automatic_reboot_per_day() {
+        assert!(auto_reboot_allowed(None, 1_000_000));
+        assert!(!auto_reboot_allowed(Some(1_000_000 - 3600), 1_000_000));
+        assert!(auto_reboot_allowed(
+            Some(1_000_000 - AUTO_REBOOT_EVERY),
+            1_000_000
+        ));
+        // a stamp from the future: the clock stepped back, count it as recent
+        assert!(!auto_reboot_allowed(Some(2_000_000), 1_000_000));
+    }
+
+    #[test]
+    fn identity_stuck_within_a_day_of_the_last_reboot_does_not_reboot() {
+        let (j, fake) = switch_with(Fake {
+            enable_works: true,
+            converges: false,
+            no_data: true,
+            stamp: Some(1_000_000 - 600),
+            ..Fake::default()
+        });
+        assert_eq!(
+            (
+                j["status"].as_str(),
+                j["reason"].as_str(),
+                j["rebooting"].as_bool()
+            ),
+            (Some("done"), Some("identity_stuck"), Some(false)),
+            "{j}"
+        );
+        let s = fake.state.lock().unwrap();
+        assert!(!s.rebooted && s.noted_reboot.is_none());
+    }
+
+    #[test]
+    fn identity_stuck_with_the_reboot_off_does_not_reboot() {
+        let (j, fake) = switch_with(Fake {
+            enable_works: true,
+            converges: false,
+            no_data: true,
+            reboot_off: true,
+            ..Fake::default()
+        });
+        assert_eq!(
+            (
+                j["status"].as_str(),
+                j["reason"].as_str(),
+                j["rebooting"].as_bool()
+            ),
+            (Some("done"), Some("identity_stuck"), Some(false)),
+            "{j}"
+        );
+        let s = fake.state.lock().unwrap();
+        assert!(!s.rebooted && s.noted_reboot.is_none());
+    }
+
+    #[test]
+    fn the_reboot_is_noted_before_it_happens() {
+        let (_, fake) = switch_with(Fake {
+            enable_works: true,
+            converges: false,
+            no_data: true,
+            ..Fake::default()
+        });
+        let s = fake.state.lock().unwrap();
+        assert!(s.rebooted);
+        assert_eq!(s.noted_reboot, Some(1_000_000));
     }
 
     #[test]
@@ -2027,12 +2601,71 @@ mod tests {
         assert!(!fake.state.lock().unwrap().rebooted);
     }
 
+    fn card_only(f: Fake) {
+        let (j, fake) = switch_with(f);
+        assert_eq!(
+            (
+                j["status"].as_str(),
+                j["reason"].as_str(),
+                j["rebooting"].as_bool()
+            ),
+            (Some("done"), Some("inactive_slot"), Some(false)),
+            "{j}"
+        );
+        let s = fake.state.lock().unwrap();
+        assert!(!s.rebooted);
+        assert_eq!(s.enabled, "89852000000000000002");
+        assert!(
+            !s.log
+                .iter()
+                .any(|l| l.contains("restart") || l.contains("simreset")),
+            "{:?}",
+            s.log
+        );
+    }
+
+    #[test]
+    fn a_switch_with_the_esim_slot_off_only_switches_the_card() {
+        card_only(Fake {
+            enable_works: true,
+            sim1_provision: "0",
+            data_slot: "2",
+            ..Fake::default()
+        });
+    }
+
+    #[test]
+    fn a_switch_with_data_on_the_other_slot_only_switches_the_card() {
+        card_only(Fake {
+            enable_works: true,
+            sim1_provision: "1",
+            data_slot: "2",
+            ..Fake::default()
+        });
+    }
+
+    #[test]
+    fn a_switch_on_the_esim_slot_in_use_still_waits_for_identity() {
+        let (j, fake) = switch_with(Fake {
+            enable_works: true,
+            sim1_provision: "1",
+            data_slot: "1",
+            converges: true,
+            converge_at: 100,
+            no_data: true,
+            ..Fake::default()
+        });
+        assert_eq!(j["rebooting"].as_bool(), Some(true), "{j}");
+        assert!(fake.state.lock().unwrap().rebooted);
+    }
+
     #[test]
     fn identity_past_the_deadline_reboots() {
         let (j, fake) = switch_with(Fake {
             enable_works: true,
             converges: true,
-            converge_at: 30,
+            converge_at: 100,
+            no_data: true,
             ..Fake::default()
         });
         assert_eq!(j["rebooting"].as_bool(), Some(true), "{j}");
@@ -2041,7 +2674,8 @@ mod tests {
         let waited =
             Duration::from_secs(2 * s.log.iter().filter(|l| *l == "sleep 2000").count() as u64);
         assert!(
-            waited >= IDENTITY_WAIT && waited < IDENTITY_WAIT + IDENTITY_POLL,
+            waited >= IDENTITY_WAIT + IDENTITY_GRACE
+                && waited < IDENTITY_WAIT + IDENTITY_GRACE + 2 * IDENTITY_POLL,
             "{waited:?}"
         );
     }

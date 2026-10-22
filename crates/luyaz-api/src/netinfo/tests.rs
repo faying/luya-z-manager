@@ -242,6 +242,36 @@ fn connected_is_not_disconnected() {
 }
 
 #[test]
+fn bearer_needs_a_default_route_out_of_the_interface() {
+    let head = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\n";
+    let v4 = format!("{head}rmnet_data0\t00000000\tBD3FAA0A\t0003\t0\t0\t0\t00000000\n");
+    let lan = format!("{head}br-lan\t0058A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\n");
+    let i = "rmnet_data0";
+    assert_eq!(bearer_from_proc(Some(&v4), "", "", i), Some(true));
+    assert_eq!(bearer_from_proc(Some(&lan), "", "", i), Some(false));
+    assert_eq!(bearer_from_proc(Some(head), "", "", i), Some(false));
+    assert_eq!(bearer_from_proc(None, "", "", i), None);
+    // IPv6 only: a global address and a default route, both on the interface
+    let a6 = "240e00000000000000000000000000ab 0c 40 00 80 rmnet_data0\n";
+    let ll = "fe800000000000000000000000000001 0c 40 20 80 rmnet_data0\n";
+    let r6 = "00000000000000000000000000000000 00 00000000000000000000000000000000 00 fe800000000000000000000000000001 00000400 00000001 00000000 00000003 rmnet_data0\n";
+    let r6_other = r6.replace("rmnet_data0", "tailscale0");
+    assert_eq!(bearer_from_proc(Some(head), a6, r6, i), Some(true));
+    assert_eq!(bearer_from_proc(Some(head), ll, r6, i), Some(false));
+    assert_eq!(bearer_from_proc(Some(head), a6, "", i), Some(false));
+    assert_eq!(bearer_from_proc(Some(head), a6, &r6_other, i), Some(false));
+}
+
+#[test]
+fn data_up_needs_the_bearer_to_agree() {
+    let on = json!({"connect_status":"ipv4_connected"});
+    assert!(data_up(&on, Some(true)));
+    assert!(data_up(&on, None));
+    assert!(!data_up(&on, Some(false)));
+    assert!(!data_up(&json!({"connect_status":"disconnected"}), Some(true)));
+}
+
+#[test]
 fn cops_mode() {
     assert_eq!(
         parse_cops_mode("\r\n+COPS: 0,0,\"CHN-UNICOM\",7\r\n\r\nOK\r\n"),

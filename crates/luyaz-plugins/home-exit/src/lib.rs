@@ -79,6 +79,7 @@ fn event_in(e: Event) -> p::Event {
         Event::Precheck(f) => p::Event::Precheck { fail: f.map(fail_in) },
         Event::Alert(kind) => p::Event::Alert { kind },
         Event::Save => p::Event::Save,
+        Event::CellUp(up) => p::Event::CellUp { up },
     }
 }
 
@@ -90,6 +91,7 @@ fn event_out(e: p::Event) -> Event {
         p::Event::Precheck { fail } => Event::Precheck(fail.map(fail_out)),
         p::Event::Alert { kind } => Event::Alert(kind),
         p::Event::Save => Event::Save,
+        p::Event::CellUp { up } => Event::CellUp(up),
     }
 }
 

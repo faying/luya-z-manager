@@ -40,7 +40,7 @@ FILES="
 /data/local/tmp/scheduler.json               json
 /data/local/tmp/sms_forward.json             json-secret
 /data/region/active                          plain
-/data/luyaz/ui/devui.conf                    plain
+/data/luyaz/ui/ui.conf                       plain
 /data/ssh/authorized_keys                    secret
 /data/homemode/ssids                         plain
 /data/homemode/config                        plain

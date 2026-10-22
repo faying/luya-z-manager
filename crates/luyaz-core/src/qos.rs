@@ -5,14 +5,14 @@ use serde::Serialize;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::net::Ipv4Addr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// The tail of each log read. key.log grows about 1 MB a day (B31, b31-community §1), so a
-/// connection older than about two days has its lines rolled out of it; then the current
-/// address's `CONNECTED` line is not found and the values are marked `stale` instead of an
-/// older bearer passing for the current one.
+/// The tail of each log read. key.log grew about 1 MB a day on a quiet B31 (b31-community §1)
+/// but 6–8 MB a day under the core's own APN reads (10-22), so bearer lines roll out of it within
+/// hours; the core keeps its own copy of the `[DATA]` lines (`KEPT`). A connection whose
+/// `CONNECTED` line is in neither is marked `stale` instead of an older bearer passing for it.
 const TAIL_WINDOW: u64 = 2 << 20;
 
 /// Which core the data connection rides on. NSA (EN-DC) still uses EPS
@@ -70,7 +70,8 @@ pub struct Values {
     pub ambr_dl: String,
     /// Uplink ceiling, same format.
     pub ambr_ul: String,
-    /// `eps`, `nr_pdu`, or `""` if the logs held no data bearer at all.
+    /// `eps`, `nr_pdu`; with no data bearer in the logs at all, the current core's (`""` when
+    /// that is unknown too).
     pub bearer: &'static str,
     /// The values are history, not the current limit: the bearer found is of
     /// the other core than the one the device is on now (e.g. an LTE bearer
@@ -154,8 +155,76 @@ fn scan_log_files() -> Parsed {
             bodies.push((body, is_live));
         }
     }
-    let views: Vec<(&str, bool)> = bodies.iter().map(|(b, l)| (b.as_str(), *l)).collect();
-    collect(&views)
+    let kept_path = PathBuf::from(env_or("LUYAZ_QOS_KEPT", KEPT));
+    let kept = read_kept(&kept_path);
+    let (parsed, next) = with_kept(&kept, &bodies);
+    if next != kept {
+        write_kept(&kept_path, &next);
+    }
+    parsed
+}
+
+/// The `[DATA]` lines the core keeps itself (newest last). The vendor's own logs carry far more
+/// than bearer lines (the APN reads alone log about 30 lines a minute, 10-22: 15 MB in under a
+/// day), so a bearer line rolls out of both files long before its connection ends; without a copy
+/// the block went empty — no AMBR, no bearer, nothing marked stale — after a SIM or core change.
+const KEPT: &str = "/data/luyaz/core/qos-lines.log";
+/// Bearer lines are rare (one connection logs a handful); 400 lines hold many connections.
+const KEPT_LINES: usize = 400;
+
+fn read_kept(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .map(|s| s.lines().filter(|l| l.contains("[DATA]")).map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+/// Atomic replace; nothing is written when the directory is missing (tests, a fresh layout).
+fn write_kept(path: &Path, lines: &[String]) {
+    if !path.parent().is_some_and(Path::is_dir) {
+        return;
+    }
+    let tmp = path.with_extension("tmp");
+    let mut body = lines.join("\n");
+    body.push('\n');
+    if std::fs::write(&tmp, body).is_ok() && std::fs::rename(&tmp, path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// Parses the kept lines older than the logs' window (as history: not in the live log) and then
+/// the logs, and returns the kept lines to store next: that history plus the window's `[DATA]`
+/// lines, the newest `KEPT_LINES`.
+fn with_kept(kept: &[String], bodies: &[(String, bool)]) -> (Parsed, Vec<String>) {
+    let window: Vec<&str> = bodies
+        .iter()
+        .flat_map(|(b, _)| b.lines().filter(|l| l.contains("[DATA]")))
+        .collect();
+    let history = &kept[..older_than(kept, &window)];
+    let history_text = history.join("\n");
+    let mut views = vec![(history_text.as_str(), false)];
+    views.extend(bodies.iter().map(|(b, l)| (b.as_str(), *l)));
+    let all: Vec<&str> = history.iter().map(String::as_str).chain(window).collect();
+    let next = all[all.len().saturating_sub(KEPT_LINES)..]
+        .iter()
+        .map(|l| (*l).to_owned())
+        .collect();
+    (collect(&views), next)
+}
+
+/// How many of the kept lines (from the front) are older than the window: those before the
+/// window's first line; none when the window already holds the newest kept line (the start of the
+/// kept copy was trimmed); all of them when the window shares no line with them.
+fn older_than(kept: &[String], window: &[&str]) -> usize {
+    let Some(first) = window.first() else {
+        return kept.len();
+    };
+    if let Some(j) = kept.iter().position(|k| k == first) {
+        return j;
+    }
+    match kept.last() {
+        Some(last) if window.contains(&last.as_str()) => 0,
+        _ => kept.len(),
+    }
 }
 
 /// Reads the "external" log shape: `[DATA] cid1, QCI=[9], DL_AMBR=[150000]kbps, …`.
@@ -481,7 +550,9 @@ pub fn select(parsed: &Parsed, query: Query) -> Values {
         qci: live_qci.or(pick.qci).or(bare).unwrap_or(0),
         ambr_dl: pick.down.map(format_mbps).unwrap_or_default(),
         ambr_ul: pick.up.map(format_mbps).unwrap_or_default(),
-        bearer: if any { pick.core.label() } else { "" },
+        // No bearer line left anywhere (rolled out before the core kept a copy): the QCI is the
+        // vendor's live one, so label it by the core the device is on now, not as LTE by default.
+        bearer: if any { pick.core.label() } else { query.core.label() },
         stale,
     }
 }
@@ -911,6 +982,42 @@ mod tests {
     }
 
     #[test]
+    fn kept_lines_outlive_a_flooded_log() {
+        let lte = at(q(CT, CT, Core::Eps), "10.208.147.50");
+        let noise = "x : getInstance1\n".repeat(50);
+        // first scan: the bearer is in key.log, the copy is empty
+        let (p, kept) = with_kept(&[], &[(String::new(), false), (format!("{noise}{B31_LTE}"), true)]);
+        assert_eq!(got(&select(&p, lte)), (9, "1660.000", "1000.000", "eps", false));
+        assert_eq!(kept.len(), 3);
+        // the same window again: nothing doubles
+        let (_, again) = with_kept(&kept, &[(String::new(), false), (format!("{noise}{B31_LTE}"), true)]);
+        assert_eq!(again, kept);
+        // both logs flooded: the copy still names the current connection, not stale, not proof
+        let flooded = [(noise.clone(), false), (noise.clone(), true)];
+        let (p, next) = with_kept(&kept, &flooded);
+        assert_eq!(got(&select(&p, lte)), (9, "1660.000", "1000.000", "eps", false));
+        assert!(validated_read(&p, lte).is_none(), "history never proves the current values");
+        assert_eq!(next, kept);
+        // another address now (SIM switched, no new bearer line yet): the old values are stale
+        assert!(select(&p, at(q(CT, CT, Core::Eps), "10.1.2.3")).stale);
+    }
+
+    #[test]
+    fn kept_lines_join_the_window_without_gaps_or_doubles() {
+        let k = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(older_than(&k(&["a", "b", "c"]), &["b", "c", "d"]), 1);
+        assert_eq!(older_than(&k(&["a", "b"]), &["c"]), 2);
+        assert_eq!(older_than(&k(&["a", "b"]), &[]), 2);
+        // the copy's start was trimmed, the window reaches further back
+        assert_eq!(older_than(&k(&["c", "d"]), &["a", "b", "c", "d"]), 0);
+        let many: Vec<String> = (0..KEPT_LINES + 5).map(|i| format!("[DATA] {i}")).collect();
+        let body = many.join("\n");
+        let (_, next) = with_kept(&[], &[(body, true)]);
+        assert_eq!(next.len(), KEPT_LINES);
+        assert_eq!(next.last().unwrap(), &format!("[DATA] {}", KEPT_LINES + 4));
+    }
+
+    #[test]
     fn rotation_just_happened() {
         // the bearer and its CONNECTED line in key.log.0, key.log new and empty
         let lte = at(q(CT, CT, Core::Eps), "10.208.147.50");
@@ -966,8 +1073,11 @@ mod tests {
         // out of range or not read: the logs' value
         assert_eq!(parse_texts(&[(two, true)], now(0)).qci, 9);
         assert_eq!(parse_texts(&[(two, true)], sa).qci, 9);
-        // no bearer line at all: still the value now, with no label
+        // no bearer line at all: still the value now, labelled by the current core (10-22: SA
+        // showed "QCI 9"); with the core unknown too, no label
         let v = parse_texts(&[("", true)], now(9));
+        assert_eq!((v.qci, v.bearer, v.stale), (9, "nr_pdu", false));
+        let v = parse_texts(&[("", true)], Query { core: Core::Unknown, ..now(9) });
         assert_eq!((v.qci, v.bearer), (9, ""));
     }
 

@@ -193,9 +193,9 @@ dir_ok() {
 restore_one() {
     if [ "$2" = - ]; then
         [ -e "$1" ] || [ -L "$1" ] || return 0
-        # round ③: luyaz-ui is the only touch UI; deleting it would leave the screen empty
-        if [ "$1" = "$ROOT/data/luyaz/ui/luyaz-ui" ] && [ ! -f "$ROOT/data/plugins/u60pro-devui/u60pro-devui" ]; then
-            log "！！不删 $1：旧界面已经删了（Phase 10 R5），删了屏幕上就没有界面，正式文件没动"
+        # luyaz-ui is the only touch UI; deleting it would leave the screen empty
+        if [ "$1" = "$ROOT/data/luyaz/ui/luyaz-ui" ]; then
+            log "！！不删 $1：它是唯一的触屏界面，删了屏幕上就没有界面，正式文件没动"
             return 1
         fi
         rm -f "$1" || return 1
@@ -205,8 +205,7 @@ restore_one() {
     fi
     [ "$(md5_of "$1")" = "$2" ] && return 0
     _prev=$(prev_of "$1")
-    # Phase 10 R4/R5 round ③: the old touch UI is deleted, so never a sentinel that would start it
-    # (one that does not know /tmp/luyaz-screen.ctl, from before round ①)
+    # never a sentinel that does not know /tmp/luyaz-screen.ctl: it would start a touch UI that is gone
     if [ "$1" = "$ROOT/data/luyaz/luyaz-sentinel" ] && [ -f "$_prev" ] && ! grep -q /tmp/luyaz-screen.ctl "$_prev" 2>/dev/null; then
         log "！！不还原 $1：那一版哨兵是 Phase 10 R4 之前的，会去起已删的旧界面，正式文件没动"
         return 1
@@ -226,10 +225,8 @@ restore_one() {
         log "！！还原不了 $1：$_prev 不在或 md5 不对，正式文件没动"
         return 1
     fi
-    # Phase 10 10c (review D7): never an rc.local that starts u60-uid/u60-guard
-    # once they are deleted: it would start no screen owner, every boot
-    if [ "$1" = "$ROOT/etc/rc.local" ] && rec_rc_retired "$_prev" 'u60-uid|u60-guard' &&
-        ! { [ -x "$ROOT/data/plugins/u60pro-devui/u60-uid" ] && [ -f "$ROOT/data/u60-guard/u60-guard.sh" ]; }; then
+    # never an rc.local that starts u60-uid/u60-guard: they are gone, it would start no screen owner
+    if [ "$1" = "$ROOT/etc/rc.local" ] && rec_rc_retired "$_prev" 'u60-uid|u60-guard'; then
         log "！！不还原 $1：那一份起 u60-uid + u60-guard，它们已经删了，正式文件没动"
         return 1
     fi

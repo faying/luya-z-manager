@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/luyaz-core", "crates/luyaz-policy", "crates/luyaz-api", "crates/luyaz-alerts", "crates/luyaz-sentinel", "crates/luyaz-speedtest", "crates/luyaz-esim", "crates/luyaz-home-exit", "crates/luyaz-netwatch", "crates/luyaz-sms-forward", "crates/luyaz-manual-first", "crates/luyaz-wifi", "crates/luyaz-scenario", "crates/luyaz-web", "crates/luyaz-mcp", "touch-ui/rs/lvgl-sys", "touch-ui/rs/plat", "touch-ui/rs/devui-model", "touch-ui/rs/devui"]
+members = ["crates/luyaz-core", "crates/luyaz-policy", "crates/luyaz-api", "crates/luyaz-alerts", "crates/luyaz-sentinel", "crates/luyaz-speedtest", "crates/luyaz-esim", "crates/luyaz-home-exit", "crates/luyaz-netwatch", "crates/luyaz-sms-forward", "crates/luyaz-manual-first", "crates/luyaz-wifi", "crates/luyaz-scenario", "crates/luyaz-web", "crates/luyaz-mcp", "touch-ui/rs/lvgl-sys", "touch-ui/rs/plat", "touch-ui/rs/ui-model", "touch-ui/rs/ui"]
 # `cargo build/test/clippy` without -p: the manager crates only (lvgl-sys's build script needs
 # LVGL_DIR/FT_SRC, see touch-ui/rs/build.sh)
 # luyaz-mcp (the computer's MCP server) is a member but not a default one: device builds never see it

@@ -73,6 +73,8 @@ MEM_AVAIL_MIN=500           # MB
 DWELL_SECONDS=120           # 进入直连后至少驻留多久才评估恢复
 CRASH_WINDOW=600            # 10 分钟
 CRASH_MAX=3
+HEAL_MAX=3                  # 10 分钟内自愈重启超过这么多次就回直连退避（有东西一直在删规则）
+TUN_SNAP=/tmp/chill.tun.rules         # 核心起来后自管区间里的 ip rule（自愈对照用）
 CORE_READY_MAX=10           # 起核心后最多等这么久（秒）让 API 和 dns.listen 就绪
 # /tmp 是内存盘，日志不截断的话长期运行会把内存吃掉（§2 要求每 60 秒截断）。
 LOG_MAX_BYTES=524288        # 512 KB
@@ -334,7 +336,7 @@ flush() {
   done
 
   ip route del unreachable "$FAKE_IP_NET" 2>/dev/null || true
-  rm -f "$CORE_PID"
+  rm -f "$CORE_PID" "$TUN_SNAP"
   log "flush 完成"
   check_rules_drift
 }
@@ -773,6 +775,62 @@ wan_is_cellular() {
   ip route show default 2>/dev/null | grep -q 'dev rmnet_data0'
 }
 
+# ── 运行中的规则自愈 ────────────────────────────────────────────────────────
+# mihomo 只在 TUN 启动时建 9000 段 ip rule 和 table 2022，被别人删了（重拨、原厂
+# 重刷路由）不会自己补；check_rules_drift 故意不看自管区间，这里单独看。
+# 不写死 sing-tun 规则的样子：核心起来后把自管区间（含 8998/8999）照原样记下来，
+# 之后每分钟比一次「快照里有、现在没有」。只看 v4：局域网 IPv6 关着。
+owned_rules() {
+  ip rule show 2>/dev/null | awk -F: -v lo="$RULE_LO" -v hi="$RULE_HI" '$1+0>=lo && $1+0<=hi'
+}
+# 返回 1 = 缺了（快照里的规则不见了，或 table 2022 里没有 chill0 的路由）。
+# 还没有像样的快照（TUN 规则刚起来）就现在记，这一轮算好。
+tun_rules_ok() {
+  if ! grep -q "lookup $TABLE" "$TUN_SNAP" 2>/dev/null; then
+    owned_rules > "$TUN_SNAP"
+    return 0
+  fi
+  owned_rules > /tmp/chill.tun.now
+  _lost=$(missing_rules "$TUN_SNAP" /tmp/chill.tun.now)
+  rm -f /tmp/chill.tun.now
+  if [ -n "$_lost" ]; then
+    log "TUN 规则不见了："
+    printf '%s\n' "$_lost" | head -5 >> "$LOG" 2>/dev/null
+    return 1
+  fi
+  ip route show table "$TABLE" 2>/dev/null | grep -q 'dev chill0' && return 0
+  log "table $TABLE 里没有 chill0 的路由了"
+  return 1
+}
+# 规则丢了：平稳重启核心重建（结构性修复，不算崩溃）。10 分钟内超过 HEAL_MAX 次
+# 就回直连、走退避，免得每分钟重启一次。返回后调用方要 break。
+tun_heal() {
+  _hn=$(boot_now) || _hn=0
+  if [ "$heal_t0" -lt 0 ] || [ "$_hn" -lt "$heal_t0" ] || [ $((_hn - heal_t0)) -gt "$CRASH_WINDOW" ]; then
+    heal_n=0; heal_t0=$_hn
+  fi
+  heal_n=$((heal_n + 1))
+  if [ "$heal_n" -gt "$HEAL_MAX" ]; then
+    log "10 分钟内第 ${heal_n} 次规则丢失，回直连退避"
+    enter_direct rules_lost
+    direct_since=$_hn
+    next_backoff
+    return 0
+  fi
+  event "rules_lost -> restart"
+  restart_core "$(profile_effective)"
+}
+# 运行中看 WAN（启动前那次 wan_is_cellular 之外）。输出 ok / none / other：
+# none = 没有默认路由（蜂窝断了或正在重拨）：核心留着，回来接着用；
+# other = 默认路由走了别的口（连上了别的 WAN）：调用方连续两次才回直连。
+wan_now() {
+  _w=$(ip route show default 2>/dev/null)
+  if [ -z "$_w" ]; then echo none
+  elif printf '%s\n' "$_w" | grep -q 'dev rmnet_data0'; then echo ok
+  else echo other
+  fi
+}
+
 # 直连状态：装 unreachable 路由，让持有 fake-ip 的客户端立刻失败重解析，
 # 而不是静默超时等到 TTL 过期。
 enter_direct() {
@@ -872,6 +930,7 @@ run() {
   started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   rules_drift=false; mem_pressure=false; bypass_stale_json='[]'
   crash_n=0; crash_t0=-1; backoff=0; direct_since=0; degrade_n=0; state_idle=0
+  heal_n=0; heal_t0=-1
 
   while :; do
     # ---- 不该启动的情形，保持进程存活、停在直连 ----
@@ -923,7 +982,8 @@ run() {
 
     event "started -> running"
     write_state running ""
-    direct_since=0; tick=0
+    direct_since=0; tick=0; wan_other=0; wan_was=$(ip route show default 2>/dev/null)
+    owned_rules > "$TUN_SNAP"
 
     # ---- 监督循环 ----
     while :; do
@@ -998,6 +1058,22 @@ run() {
       else
         mem_pressure=false
       fi
+
+      # 默认路由换了别的口：连续两次（约 2 分钟）才回直连；没有默认路由是蜂窝断了
+      # 或在重拨，核心留着。
+      case $(wan_now) in
+        other)
+          wan_other=$((wan_other + 1))
+          if [ "$wan_other" -ge 2 ]; then enter_direct captive_wan; break; fi ;;
+        *) wan_other=0 ;;
+      esac
+      # 重拨了（默认路由的口或源地址变了）：记一笔；规则下面照常查。
+      _wn=$(ip route show default 2>/dev/null)
+      if [ -n "$_wn" ] && [ "$_wn" != "$wan_was" ]; then
+        [ -n "$wan_was" ] && event "wan_changed -> check"
+        wan_was=$_wn
+      fi
+      if ! tun_rules_ok; then tun_heal; break; fi
 
       # 段外漂移只记录、不自动处理（T3）。注意比的是自管区间**之外**，
       # 用来发现我们是否误删了别人的规则；段内被清空属正常降级，不是漂移。

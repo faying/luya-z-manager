@@ -255,6 +255,32 @@ fn add_service(s: String, services: &mut Vec<String>) {
     }
 }
 
+/// Services whose instance name is the whole device's name (set by its owner or the OS).
+/// Any app can announce its own service under any name (Android Quick Share:
+/// `nearby-presence-nsd-<uuid>`), so only these are taken as a name.
+const DEVICE_NAMED: &[&str] = &[
+    "_companion-link._tcp",
+    "_airplay._tcp",
+    "_raop._tcp",
+    "_smb._tcp",
+    "_afpovertcp._tcp",
+    "_workstation._tcp",
+    "_ssh._tcp",
+    "_sftp-ssh._tcp",
+    "_rfb._tcp",
+    "_hap._tcp",
+    "_hap._udp",
+    "_googlecast._tcp",
+    "_ipp._tcp",
+    "_ipps._tcp",
+    "_printer._tcp",
+    "_pdl-datastream._tcp",
+];
+
+fn names_device(service: &str) -> bool {
+    DEVICE_NAMED.iter().any(|d| d.eq_ignore_ascii_case(service))
+}
+
 /// AirPlay's `<MAC>@<name>` instances: the name.
 fn bare_instance(s: &str) -> String {
     match s.split_once('@') {
@@ -315,6 +341,7 @@ fn mdns(p: &[u8], src_ip: &[u8]) -> Vec<(Kind, String)> {
                 } else if let Some(s) = service_of(&owner) {
                     if let Some((inst, ts)) = instance_of(&target)
                         && ts == s
+                        && names_device(&s)
                     {
                         instances.push(inst);
                     }
@@ -325,7 +352,7 @@ fn mdns(p: &[u8], src_ip: &[u8]) -> Vec<(Kind, String)> {
                 if let Some((inst, s)) = instance_of(&owner) {
                     if s == "_device-info._tcp" {
                         info.get_or_insert(inst);
-                    } else {
+                    } else if names_device(&s) {
                         instances.push(inst);
                     }
                     add_service(s, &mut services);

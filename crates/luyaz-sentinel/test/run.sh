@@ -1,6 +1,6 @@
 #!/bin/sh
 # The device binary against stub UIs in an arm64 container (nothing of the device; no device needed):
-#   real.sh    real mode: launch, vendor/devui requests, crash ×2 → give-up, TERM leaves the UI,
+#   real.sh    real mode: launch, vendor/ui requests, crash ×2 → give-up, TERM leaves the UI,
 #              restart adopts; /tmp keeps 1777; the UI gets a clean signal mask, SIGPIPE ignored
 #   shadow.sh  --shadow changes nothing: the FIFO keeps its inode, state files unchanged, the only
 #              new file is /tmp/luyaz-sentinel.shadow

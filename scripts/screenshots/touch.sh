@@ -4,10 +4,10 @@
 #   LUYAZ_DEVICE_FONTS=<dir with ZTEZhengYuan.ttf, Roboto.ttf> LUYAZ_NUNITO_DIR=<dir with Nunito-*.ttf> \
 #   MODELS=<model dir> scripts/screenshots/touch.sh [OUT_DIR]     (default OUT_DIR: scripts/screenshots/out/touch)
 #
-# Renders the Rust UI off-screen (luyaz-ui --render, touch-ui/rs/devui/src/render/mod.rs) on the
+# Renders the Rust UI off-screen (luyaz-ui --render, touch-ui/rs/ui/src/render/mod.rs) on the
 # view models in MODELS (`index-<scene>.txt` per scene). The old ones came from the C render
 # test and are no longer used; new ones are to be generated from the Rust UI. Needs Docker and
-# `touch-ui/rs/build.sh native` (volume u60-devui-rs-target). The device fonts are not in the
+# `touch-ui/rs/build.sh native` (volume u60-ui-rs-target). The device fonts are not in the
 # repo (ZTEZhengYuan is proprietary): copy them from /usr/ui/fonts on a U60 Pro.
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
@@ -38,7 +38,7 @@ echo "== render → $out"
 raw=$(mktemp -d)
 printf '%s\n' "$shots" | awk '{print $2, $3}' | sort -u | awk '{p[$1] = p[$1] ? p[$1] "," $2 : $2} END {for (s in p) print s, p[s]}' |
 while read -r scene pages; do
-    docker run --rm -v u60-devui-rs-target:/t:ro -v "$models":/m:ro -v "$raw":/o \
+    docker run --rm -v u60-ui-rs-target:/t:ro -v "$models":/m:ro -v "$raw":/o \
         -v "$LUYAZ_DEVICE_FONTS":/fonts/dev:ro -v "$LUYAZ_NUNITO_DIR":/fonts/nunito:ro \
         -e LUYAZ_UI_CJK_FONT=/fonts/dev/ZTEZhengYuan.ttf -e LUYAZ_UI_ROBOTO=/fonts/dev/Roboto.ttf \
         -e LUYAZ_UI_FONT_DIR=/fonts/nunito u60-rust-ci:1.99.0 \

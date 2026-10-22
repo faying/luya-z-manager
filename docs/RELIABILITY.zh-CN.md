@@ -13,8 +13,6 @@
 | 管理网页 | luyaz-web :9090，密码 `/data/luyaz/web.env` | 管理页面；只跟核心说话 |
 | 触屏 | `/data/luyaz/ui/luyaz-ui`（comm `luyaz-ui`） | 只由哨兵拉起和接管 |
 
-为已退役的 zte-agent、u60-guard、u60-uid、supervise.sh 写的旧契约在 [`archive/RELIABILITY-pre-phase10.zh-CN.md`](archive/RELIABILITY-pre-phase10.zh-CN.md)（只作记录）。
-
 ## 1. Wi-Fi 锁 `/tmp/luyaz-wifi.lock`
 
 所有写 `wireless` 这个 uci 包的程序，从第一次 `uci set` 到 reload 回验结束都持有它（`flock` 排他锁）。
@@ -60,11 +58,11 @@
 - 墙钟秒小于 `1704067200`（2024-01-01）表示「时间没校准」，网页显示「开机后 N 秒」。
 - 说明：只用可打印 ASCII，≤ 120 字符，绝不含任何配置（号码、密码、SSID）。格式不对的行跳过。
 - 现在会产生的类别：
-  - 哨兵：`agent-silent`、`wifi-takeover`、`wifi-restore-failed`、`dropbear-down`、`dropbear-restarted`、`devui-crash`、`devui-gave-up`
+  - 哨兵：`agent-silent`、`wifi-takeover`、`wifi-restore-failed`、`dropbear-down`、`dropbear-restarted`、`ui-crash`、`ui-gave-up`
   - core svcwatch：`core-crash`（核心自己；改名 F4 前叫 `core-crash`，旧记录照认）、`web-crash`、`sentinel-crash`
   - 核心哨兵监视：`sentinel-silent`、`screen-empty`（只在空屏兜底开关打开时）
   - 核心引擎：`home-exit-down`、`home-exit-check-failed`、`sms-forward-stuck`
-  - 触屏：`devui-theme-paused`
+  - 触屏：`ui-theme-paused`
 
 ### 短信
 
@@ -72,7 +70,7 @@
   - **核心**（`engines/guard_duties.rs`，每 30 秒）：`/tmp/luyaz/handover` 里列了 `sms` 且写开着时——正常情况；
   - **哨兵**：只在核心不健康（连续 2 轮 `/healthz` 不通）且没在被 ship 替换时。
   `sms-sending` 认领保证两者交接时不重复发。
-- 规则：`sms-failed`、`devui-theme-paused` 永远不发；没有号码记 `no-number`；有 `abroad` 没 `sms-abroad` 记 `suppressed-abroad`；每类每小时最多 1 条、24 小时最多 5 条，超了记 `suppressed-rate`。时钟判定（第 9 节）可信之前什么都不发、游标不前进。
+- 规则：`sms-failed`、`ui-theme-paused` 永远不发；没有号码记 `no-number`；有 `abroad` 没 `sms-abroad` 记 `suppressed-abroad`；每类每小时最多 1 条、24 小时最多 5 条，超了记 `suppressed-rate`。时钟判定（第 9 节）可信之前什么都不发、游标不前进。
 - 发送：`ubus call zwrt_wms zte_libwms_send_sms`（`number`、`message_body` 大写 UCS-2 十六进制、`encode_type` `UNICODE`、`sms_time` `YY;MM;DD;HH;MM;SS;+TZ`、`id` `-1`）。回复里 `result` 为 3 或没有 `result` 算成功，之后把已发副本从短信库删掉。失败记 `failed` 并追加 `sms-failed`，不重试。
 - 正文：每个类别一句大白话，`【Luya-Z】…（MM-DD HH:MM）`，≤ 70 字；未知类别指向网页。
 
@@ -89,10 +87,10 @@
 ## 6. 屏幕（哨兵，`crates/luyaz-sentinel/src/screen.rs`、`run.rs`）
 
 - 哨兵是触屏唯一的主人：拉起它，按 comm `luyaz-ui` 接管已在跑的（绝不起第二份），切到原厂界面（`zte_topsw_devui`），原厂界面在屏上时识别右下角长按 3 秒切回来。
-- `/data/luyaz/screen/attempts`：每次拉起前加一并 fsync，稳定 10 分钟清零；到 2 写 `/data/luyaz/screen/gave-up`、告警 `devui-gave-up`、交还原厂界面。放弃状态跨重启保留，长按或 `devui` 清除。文件坏了按 2 算。
+- `/data/luyaz/screen/attempts`：每次拉起前加一并 fsync，稳定 10 分钟清零；到 2 写 `/data/luyaz/screen/gave-up`、告警 `ui-gave-up`、交还原厂界面。放弃状态跨重启保留，长按或 `ui` 清除。文件坏了按 2 算。
 - `/tmp/luyaz/screen.want` 以 `vendor` 开头 = 选了原厂界面；重启后回到我们的。
-- `/tmp/luyaz-screen.ctl`（FIFO，哨兵运行时才有）：`vendor`、`devui`、`hold [秒]`（10–3600，默认 600）、`release`（后两个给 ship 用）。
-- 自己拉起的界面意外退出写进 `/data/crashlog/u60pro-devui/`（留 5 个）并告警 `devui-crash`；接管来的进程拿不到退出码，不计。
+- `/tmp/luyaz-screen.ctl`（FIFO，哨兵运行时才有）：`vendor`、`ui`、`hold [秒]`（10–3600，默认 600）、`release`（后两个给 ship 用）。
+- 自己拉起的界面意外退出写进 `/data/crashlog/luyaz-ui/`（留 5 个）并告警 `ui-crash`；接管来的进程拿不到退出码，不计。
 - 哨兵心跳 `/tmp/luyaz-sentinel.hb`，事件 `/data/luyaz/screen/events{,.seq}`（留 200 条），日志 `/tmp/luyaz-sentinel.log`。
 - **屏幕上几分钟没有任何界面，固件会整机重启**（原因码 1185）。任何停掉一个界面的路径，必须在同一步里拉起另一个。
 
@@ -106,7 +104,7 @@
 ## 8. 待机记录
 
 - 写者：核心 `longterm/standby.rs`，只在 `/tmp/luyaz/handover` 列了 `standby` 时。背光关着时每轮往 `/tmp/standby.stat` 写一行：`<开机秒> <蜂窝包/分> <Tailscale 隧道包/分> <各程序唤醒/秒>`，留 60 行；中途换了 pid 的程序写 `-`；离上一轮超过 150 秒不写。
-- 程序列按位置固定（doctor 按位置读），列名仍是改名前的 `tailscaled mihomo u60pro-devui zwrt-datad zte-agent`。
+- 程序列按位置固定（doctor 按位置读）：`tailscaled mihomo luyaz-ui luyaz-core`。
 - 指纹 `/tmp/luyaz/ledger/fp`、`fp-changed`。基线 `/data/luyaz/scripts/standby.baseline`（v2，带 `fp` 行），由 `luyaz-core doctor --calibrate-standby` 写（至少 30 行记录；每列中位数和 MAD，再加指纹；经 `POST /v2/longterm/calib` 记一条 `calib` 事件），由 doctor 的「待机」行判定。
 
 ## 9. 时钟判定、崩溃记录、`.migrated`

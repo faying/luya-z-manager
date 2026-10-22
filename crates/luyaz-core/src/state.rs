@@ -96,14 +96,27 @@ fn cache_put<T>(cache: &Cache<T>, key: String, ttl: Duration, value: T) {
 /// `ubus` with a time-to-live. Failures are kept for at most 5 s: a call that
 /// does not exist on this model should not fork every second, but a transient
 /// error must not stick.
-/// APN 块的四个读（60 秒缓存；写过之后 `invalidate_cache` 让下一轮立即读）。任何一个失败整块 stale。
-async fn apn_reads() -> Result<[Value; 4], String> {
-    let o = "zwrt_apn_object";
+/// APN 块的四个读（10 分钟缓存；写过之后 `invalidate_cache`、数据卡换了（ICCID 变）都让这一轮立即读）。
+/// 任何一个失败整块 stale。不再 60 秒一读：厂商每读一次往 key.log 写约 30 行，
+/// 10-22 一天十几 MB，把承载记录（QoS）和别的诊断记录都冲掉了。
+async fn apn_reads(card: &str) -> Result<[Value; 4], String> {
+    const O: &str = "zwrt_apn_object";
+    static CARD: Mutex<String> = Mutex::new(String::new());
+    if let Ok(mut seen) = CARD.lock()
+        && *seen != card
+    {
+        *seen = card.to_owned();
+        if let Ok(mut c) = UBUS_CACHE.lock()
+            && let Some(map) = c.as_mut()
+        {
+            map.retain(|k, _| !k.starts_with(&format!("{O}\u{0}")));
+        }
+    }
     Ok([
-        ubus_ttl(60, o, "get_apn_mode", json!({})).await?,
-        ubus_ttl(60, o, "get_apn_at_cid", json!({"cid": 1})).await?,
-        ubus_ttl(60, o, "get_manu_apn_list", json!({})).await?,
-        ubus_ttl(60, o, "get_auto_apn_list", json!({})).await?,
+        ubus_ttl(600, O, "get_apn_mode", json!({})).await?,
+        ubus_ttl(600, O, "get_apn_at_cid", json!({"cid": 1})).await?,
+        ubus_ttl(600, O, "get_manu_apn_list", json!({})).await?,
+        ubus_ttl(600, O, "get_auto_apn_list", json!({})).await?,
     ])
 }
 
@@ -165,7 +178,7 @@ async fn ubus_ttl_read_inner(
     // 旧采集里的安全点：这里不持有任何锁，排队的 /control 可以先做（V2-24）。
     crate::executor::preempt().await;
     let cached = ttl_s != 0 && cache_enabled();
-    let key = format!("{service}\u{0}{method}\u{0}{args}");
+    let key = ubus_key(service, method, &args);
     if cached && let Some(v) = cache_get(&UBUS_CACHE, &key) {
         return (v, true);
     }
@@ -195,6 +208,10 @@ async fn ubus_ttl_read_inner(
     }
     let fresh = v.is_ok();
     (v, fresh)
+}
+
+fn ubus_key(service: &str, method: &str, args: &Value) -> String {
+    format!("{service}\u{0}{method}\u{0}{args}")
 }
 
 /// 缓存里这个键上一次读成功的值，过期了也给（`ubus_ttl_read` 没发请求时用）。
@@ -820,6 +837,51 @@ fn runtime(runtime_zones: Vec<crate::contract::ThermalZone>) -> (i64, crate::con
 
 /// 旧接口的一轮采集。电池、充电器已迁到块模型（`block::phase1_blocks`），从 `hub` 取；
 /// stale 的块按读失败输出（V2-29）。其余读取仍走 `ubus_ttl`。
+/// SIM identity (P0-2): feed this round's identity + bearer to `sim_identity`, write its
+/// epoch/phase into the `sim` field and block. A round whose `get_sim_info` failed (the `sim`
+/// block is an error) is not fed: an empty read is not a SIM gone. Bearer = netifd's zte_wan /
+/// zte_wan6 up with an address (the eSIM switch itself checks the route too).
+fn sim_identity_stamp(fields: &mut serde_json::Map<String, Value>, blocks: &mut [(&'static str, Result<Value, String>)], now: std::time::Instant) {
+    let Some(sim) = fields.get("sim") else { return };
+    let read = blocks.iter().any(|(n, d)| *n == "sim" && d.is_ok());
+    let iccid = sim["iccid"].as_str().unwrap_or("");
+    let imsi = sim["imsi"].as_str().unwrap_or("");
+    let up = |k: &str, fam: &str| {
+        let i = fields.get("interfaces").map(|i| &i[k]);
+        i.is_some_and(|i| i["up"] == true && i[fam].as_array().is_some_and(|a| !a.is_empty()))
+    };
+    let bearer = up("wan4", "ipv4") || up("wan6", "ipv6");
+    let (epoch, phase, settled, say) = {
+        let mut s = crate::sim_identity::global().lock().unwrap_or_else(|e| e.into_inner());
+        if read {
+            s.observe(crate::sim_identity::Identity::new(iccid, imsi), bearer, now);
+        }
+        (s.epoch(), s.phase().as_str(), s.settled(), crate::sim_say::for_phase(s.phase()))
+    };
+    crate::sim_alerts::phase(epoch, phase);
+    crate::sim_follow::phase(epoch, phase);
+    if let Some(e) = settled {
+        crate::sim_follow::settled(e);
+    }
+    let stamp = |v: &mut Value| {
+        if let Some(o) = v.as_object_mut() {
+            o.insert("epoch".into(), json!(epoch));
+            o.insert("phase".into(), json!(phase));
+            crate::sim_say::stamp(o, say);
+        }
+    };
+    if let Some(v) = fields.get_mut("sim") {
+        stamp(v);
+    }
+    for (name, data) in blocks.iter_mut() {
+        if *name == "sim"
+            && let Ok(v) = data
+        {
+            stamp(v);
+        }
+    }
+}
+
 /// 一轮采集：读（这里）→ 算（`project::snapshot::project`，纯函数）→ MU5252 外挂模组（边读边算）→ 记 `/v2` 块。
 pub async fn collect(sample_interval_ms: u64, hub: &crate::block::Hub) -> Snapshot {
     let projection = snapshot::project(read_inputs(hub).await, sample_interval_ms);
@@ -831,6 +893,8 @@ pub async fn collect(sample_interval_ms: u64, hub: &crate::block::Hub) -> Snapsh
     if let Some(ctx) = mu5252 {
         mu5252_extras(ctx, &mut fields).await;
     }
+    let mut blocks = blocks;
+    sim_identity_stamp(&mut fields, &mut blocks, std::time::Instant::now());
     // dual-SIM standby signal: tell the QMI sampler which slot to read (0 = none)
     let dual = fields.get("sim").and_then(|s| s.get("dual")).cloned();
     let want = dual
@@ -926,9 +990,13 @@ async fn read_inputs(hub: &crate::block::Hub) -> Inputs {
     let battery = hub.legacy("battery");
     let charger = hub.legacy("charger");
     let nfc = ubus_ttl(60, "zwrt_nfc", "zwrt_nfc_wifi_get", json!({})).await;
-    let apn = apn_reads().await;
+    let apn = apn_reads(&{
+        let sim = object(sim.clone());
+        card_field(&sim, data_on_slot2(&sim), "sim_iccid")
+    })
+    .await;
     let router = router_reads().await;
-    // u60d：登记短信会话密钥（`zwrt_web web_http_enstr_set`）会顶掉另一个进程（当年并跑的 data-service）在厂商那里登记的那把，
+    // u60d：登记短信会话密钥（`zwrt_web web_http_enstr_set`）会顶掉另一个进程（比如并跑的 data-service）在厂商那里登记的那把，
     // 它之后就解不开短信（密钥缓存到重启）。所以只在 u60d 就是核心（`luyaz-core` 名字起、serve 模式）
     // 时登记（SMS_SESSION）。见 PORTING.md。
     if SMS_SESSION.load(std::sync::atomic::Ordering::Relaxed)
@@ -1484,6 +1552,21 @@ pub async fn ubus(service: &str, method: &str, args: Value) -> Result<Value, Str
     crate::executor::call(service, method, &args)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// 采集以外读 `get_sim_info` 的唯一入口（写前检查、读回、切槽等待、兼容层的读）。
+/// 照旧新鲜读——这些地方不能用 30 秒前的卡号或槽号；读到了就放进采集那一轮同一个缓存键，
+/// 下一轮 `sim` 块直接用它，不再多读一次。
+pub async fn sim_info() -> Result<Value, String> {
+    const SIM: (&str, &str) = ("zwrt_zte_mdm.api", "get_sim_info");
+    let v = ubus(SIM.0, SIM.1, json!({})).await;
+    if let Ok(sim) = &v
+        && cache_enabled()
+    {
+        let ttl = Duration::from_secs(30);
+        cache_put(&UBUS_CACHE, ubus_key(SIM.0, SIM.1, &json!({})), ttl, Ok(sim.clone()));
+    }
+    v
 }
 
 #[cfg(test)]
@@ -2065,5 +2148,26 @@ mod tests {
         assert_eq!(before.evidence, hub.firmware().report(None).evidence);
         assert_eq!(m.invokes(object), count + 1); // only the existing hang call was sent
         invalidate_cache();
+    }
+}
+
+#[cfg(test)]
+mod sim_identity_stamp_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_sim_read_is_not_fed_to_the_identity_tracking() {
+        let before = {
+            let s = crate::sim_identity::global().lock().unwrap();
+            (s.epoch(), s.phase())
+        };
+        let mut fields = serde_json::Map::new();
+        fields.insert("sim".into(), json!({"iccid": "", "imsi": ""}));
+        let mut blocks: Vec<(&'static str, Result<Value, String>)> =
+            vec![("sim", Err("zwrt_zte_mdm.api get_sim_info failed".into()))];
+        sim_identity_stamp(&mut fields, &mut blocks, std::time::Instant::now());
+        let s = crate::sim_identity::global().lock().unwrap();
+        assert_eq!((s.epoch(), s.phase()), before);
+        assert_eq!(fields["sim"]["epoch"], json!(before.0));
     }
 }

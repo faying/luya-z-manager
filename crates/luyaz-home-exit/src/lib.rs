@@ -228,6 +228,11 @@ pub trait Io {
     fn precheck(&mut self) -> Result<(), Fail>;
     fn alert(&mut self, kind: &str, text: &str);
     fn save(&mut self, p: &Persist);
+    /// The cellular bearer has an address (asked only after home did not answer);
+    /// `None` = unknown, which counts the miss as before.
+    fn cell_up(&mut self) -> Option<bool> {
+        None
+    }
 }
 
 pub trait Clock {
@@ -259,6 +264,15 @@ pub struct Machine {
 impl Machine {
     pub fn new(p: Persist) -> Self {
         Machine { p, ..Default::default() }
+    }
+
+    /// A new SIM is online (core's SIM identity settled on a new epoch): misses counted on the
+    /// old card say nothing about home now, and the next tick probes at once.
+    pub fn sim_changed(&mut self) {
+        self.fails = 0;
+        self.last_probe = 0;
+        self.home_ok = None;
+        self.home_ms = None;
     }
 
     fn clone_for_tick(&self) -> Machine {
@@ -434,6 +448,13 @@ impl Machine {
                 self.home_ms = Some(ms);
                 self.probed_at = now;
             }
+            // The cell itself is down: nothing reaches home, so this says nothing about
+            // home. Hold the count; the groups sit on their fallback meanwhile.
+            Some(None) if io.cell_up() == Some(false) => {
+                self.home_ok = Some(false);
+                self.home_ms = None;
+                self.probed_at = now;
+            }
             Some(None) => {
                 self.fails += 1;
                 self.home_ok = Some(false);
@@ -497,6 +518,10 @@ pub trait Host: Send + Sync {
     }
     /// The cell moved packets in its last ≥ 30 s window; `None` when unknown (no waiting).
     fn cell_busy(&self) -> Option<bool> {
+        None
+    }
+    /// The cellular bearer has an address; `None` when unknown (misses count as before).
+    fn cell_up(&self) -> Option<bool> {
         None
     }
     /// Read a device file (`STATE_FILE`, `HOME_IP_LIST`, `MODE_FILE`).
@@ -732,6 +757,9 @@ impl Real {
 }
 
 impl Io for Real {
+    fn cell_up(&mut self) -> Option<bool> {
+        self.host.cell_up()
+    }
     fn probe_home(&mut self) -> Option<Option<u32>> {
         // An idle path often misses the first try (manual_first's experience).
         match self.delay(HOME_PROXY)? {
@@ -844,6 +872,8 @@ pub struct HomeExit {
     publish: Option<Box<dyn Fn(Value) + Send + Sync>>,
     ts_cache: Mutex<Option<(u64, Option<&'static str>)>>,
     ts_refreshing: std::sync::atomic::AtomicBool,
+    /// [`HomeExit::sim_changed`] waiting for the next tick.
+    sim_pending: std::sync::atomic::AtomicBool,
 }
 
 impl HomeExit {
@@ -856,7 +886,15 @@ impl HomeExit {
             publish: None,
             ts_cache: Mutex::new(None),
             ts_refreshing: std::sync::atomic::AtomicBool::new(false),
+            sim_pending: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// The SIM changed and is online again: the next tick starts its miss count over
+    /// ([`Machine::sim_changed`]). Taken by the tick, not here, so a tick running on its copy
+    /// does not write the old count back over it.
+    pub fn sim_changed(&self) {
+        self.sim_pending.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Publish shadow records (the agent's `/tmp/home-exit.tick.json`).
@@ -981,6 +1019,10 @@ impl HomeExit {
             g.ticking = true;
             g.clone_for_tick()
         };
+        if self.sim_pending.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            eprintln!("[home_exit] SIM changed: miss count reset");
+            copy.sim_changed();
+        }
         let before = copy.clone();
         let mut io = self.io();
         let mut rec = Recorder { inner: &mut *io, events: Vec::new() };
@@ -1176,6 +1218,11 @@ impl Io for Recorder<'_> {
         self.inner.save(p);
         self.events.push(json!({"call": "save"}));
     }
+    fn cell_up(&mut self) -> Option<bool> {
+        let up = self.inner.cell_up();
+        self.events.push(json!({"call": "cell_up", "up": up}));
+        up
+    }
 }
 
 /// The machine without the request bookkeeping (busy, ready, ticking).
@@ -1246,6 +1293,7 @@ mod tests {
         pre: Option<Fail>,
         alerts: Vec<String>,
         saves: usize,
+        cell: Option<bool>,
     }
 
     impl Io for Fake {
@@ -1279,6 +1327,9 @@ mod tests {
         }
         fn save(&mut self, _p: &Persist) {
             self.saves += 1;
+        }
+        fn cell_up(&mut self) -> Option<bool> {
+            self.cell
         }
     }
 
@@ -1509,6 +1560,49 @@ mod tests {
         m.tick(&obs(T0 + 3 * PROBE_EVERY, Some(440), env), &mut io);
         assert_eq!(m.p.items, on(&[Item::Media]));
         assert_eq!(m.p.notice.kind, "home_down");
+        assert_eq!(io.alerts, vec!["home-exit-down"]);
+    }
+
+    #[test]
+    fn a_sim_change_starts_the_count_over_and_probes_at_once() {
+        let mut m = Machine::default();
+        m.p.items = on(&[Item::Rest]);
+        m.p.rest_until = T0 + 10 * REST_SECS;
+        let env = m.p.items;
+        let mut io = Fake { env, probes: vec![Some(None); 4], ..Default::default() };
+        m.tick(&obs(T0, Some(440), env), &mut io);
+        m.tick(&obs(T0 + PROBE_EVERY, Some(440), env), &mut io);
+        assert_eq!(m.fails, 2);
+        m.sim_changed();
+        assert!(m.fails == 0 && m.home_ok.is_none());
+        // probed on the next tick, not a PROBE_EVERY later
+        m.tick(&obs(T0 + PROBE_EVERY + 30, Some(440), env), &mut io);
+        assert_eq!(m.fails, 1);
+        m.tick(&obs(T0 + 2 * PROBE_EVERY + 30, Some(440), env), &mut io);
+        assert!(m.p.items.rest, "two misses on the new card, not three");
+        assert!(io.alerts.is_empty());
+    }
+
+    #[test]
+    fn cell_down_for_30_minutes_does_not_close_rest() {
+        let mut m = Machine::default();
+        m.p.items = on(&[Item::Rest]);
+        m.p.rest_until = T0 + 10 * REST_SECS;
+        let env = m.p.items;
+        let mut io = Fake { env, probes: vec![Some(None); 8], cell: Some(false), ..Default::default() };
+        for i in 0..6 {
+            m.tick(&obs(T0 + i * PROBE_EVERY, Some(440), env), &mut io);
+        }
+        assert!(m.p.items.rest && m.home_ok == Some(false) && m.fails == 0);
+        assert!(io.alerts.is_empty());
+        // the cell is back and home still silent: counting starts from there
+        io.cell = Some(true);
+        m.tick(&obs(T0 + 6 * PROBE_EVERY, Some(440), env), &mut io);
+        m.tick(&obs(T0 + 7 * PROBE_EVERY, Some(440), env), &mut io);
+        assert!(m.p.items.rest);
+        io.probes.push(Some(None));
+        m.tick(&obs(T0 + 8 * PROBE_EVERY, Some(440), env), &mut io);
+        assert!(!m.p.items.rest);
         assert_eq!(io.alerts, vec!["home-exit-down"]);
     }
 

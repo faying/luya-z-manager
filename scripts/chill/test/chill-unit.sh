@@ -135,6 +135,69 @@ case "$(cat "$LOG")" in *5270:*) ng "日志混进了没消失的规则" ;; *) ok
 unset -f ip; rm -f "$RULES_BEFORE"
 
 # ─────────────────────────────────────────────────────────────────────────────
+sec "tun_rules_ok / tun_heal / wan_now：运行中自愈"
+
+TUN_SNAP="$CHILL_DIR/tun.rules"
+TUN_RULES='8998:	from all fwmark 0x1000000/0x1000000 lookup main
+9000:	from all to 172.19.0.0/30 lookup 2022
+9001:	from all iif br-lan lookup 2022
+9002:	from all lookup main suppress_prefixlength 0'
+T2022='default dev chill0 scope link'
+DEF='default via 10.1.1.1 dev rmnet_data0 proto static src 10.1.1.2'
+ip() {
+  case "$*" in
+    "rule show") printf '0:	from all lookup local\n5210:	from all fwmark 0x80000/0xff0000 lookup main\n%s\n32766:	from all lookup main\n' "$RULES_NOW" ;;
+    "route show table 2022") [ -n "$T2022" ] && printf '%s\n' "$T2022" ;;
+    "route show default") [ -n "$DEF" ] && printf '%s\n' "$DEF" ;;
+  esac
+  return 0
+}
+rm -f "$TUN_SNAP"
+RULES_NOW='8998:	from all fwmark 0x1000000/0x1000000 lookup main'
+tun_rules_ok; eq "TUN 规则还没起来：算好" "$?" 0
+eq "没有像样快照：不留 9000 段" "$(grep -c 'lookup 2022' "$TUN_SNAP")" 0
+RULES_NOW=$TUN_RULES
+tun_rules_ok; eq "规则起来：记快照" "$?" 0
+eq "快照只记自管区间" "$(grep -c '^5210:\|^32766:' "$TUN_SNAP")" 0
+tun_rules_ok; eq "没变：好" "$?" 0
+RULES_NOW="$TUN_RULES
+9003:	from all iif wlan9 lookup 2022"
+tun_rules_ok; eq "多了一条：好" "$?" 0
+: > "$LOG"
+RULES_NOW=$(printf '%s\n' "$TUN_RULES" | grep -v '^9001:')
+tun_rules_ok; eq "9001 被删：坏" "$?" 1
+has "日志写出不见的规则" "$(cat "$LOG")" '9001:'
+RULES_NOW=$(printf '%s\n' "$TUN_RULES" | grep -v '^8998:')
+tun_rules_ok; eq "国内直连 8998 被删：坏" "$?" 1
+RULES_NOW=$TUN_RULES; T2022=
+tun_rules_ok; eq "table 2022 清空：坏" "$?" 1
+T2022='default dev chill0 scope link'
+
+# 下面换掉几个真函数：放子 shell 里跑，后面的测试照常用真的（失败数用退出码带出来）
+( PASS=0; FAIL=0
+CALLS=
+restart_core() { CALLS="$CALLS restart"; }
+enter_direct() { CALLS="$CALLS direct:$1"; }
+next_backoff() { CALLS="$CALLS backoff"; }
+profile_effective() { echo standard; }
+boot_now() { echo "$FAKE_NOW"; }
+heal_n=0; heal_t0=-1; FAKE_NOW=1000
+tun_heal; tun_heal; tun_heal
+eq "三次以内：重启重建" "$CALLS" " restart restart restart"
+CALLS=; tun_heal
+eq "10 分钟内第 4 次：回直连退避" "$CALLS" " direct:rules_lost backoff"
+CALLS=; FAKE_NOW=$((1000 + 601)); tun_heal
+eq "过了 10 分钟：重新计数" "$CALLS" " restart"
+has "自愈记一笔事件" "$(cat "$EVENTS")" 'rules_lost -> restart'
+exit "$FAIL" ) || FAIL=$((FAIL + $?))
+PASS=$((PASS + 4))
+
+eq "默认路由走蜂窝" "$(wan_now)" ok
+DEF=; eq "没有默认路由（重拨）" "$(wan_now)" none
+DEF='default via 192.168.8.1 dev wlan1'; eq "走了别的口" "$(wan_now)" other
+unset -f ip; rm -f "$TUN_SNAP"
+
+# ─────────────────────────────────────────────────────────────────────────────
 sec "render：占位符与拒绝渲染"
 
 cat > "$CHILL_DIR/template.yaml" <<'YAML'

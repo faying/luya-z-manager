@@ -33,7 +33,9 @@
 #      (callers pass user input through system(), so this is the boundary).
 #      Anything off → exit 2, nothing touched.
 #   2. lock: flock on $LUYAZ_WRITE_LOCK (/var/run/luyaz-write.lock), tried
-#      once a second for $LUYAZ_FALLBACK_LOCK_WAIT (10) s → else exit 4.
+#      once a second for $LUYAZ_FALLBACK_LOCK_WAIT (10) s → else exit 4; a lock
+#      file that cannot be opened → exit 5. Either way nothing is written and
+#      no marker is left (no lock, no write; same as the core).
 #   3. the core gone? Twice, $LUYAZ_FALLBACK_GAP (1) s apart. Alive when the pid in
 #      $LUYAZ_PID_FILE (/var/run/luyaz-core.pid) has a comm starting with "luyaz-core" (side-by-side
 #      names like luyaz-core.test count), or when its /healthz answers at all,
@@ -51,7 +53,8 @@
 #      Runs in the foreground; callers background the whole script.
 #
 # Exit: 0 written · 1 ubus/marker failed · 2 bad arguments · 3 the core is
-# running, not written · 4 write lock busy (being taken over), not written.
+# running, not written · 4 write lock busy (being taken over), not written ·
+# 5 write lock cannot be opened, not written.
 # One line on stdout says which.
 #
 # AT commands take the AT port's own lock first ($LUYAZ_AT_LOCK,
@@ -318,8 +321,9 @@ if [ -n "$LOCK" ]; then
             sleep 1
         done
     else
-        # same as the core: a lock that cannot be opened does not stop the write
-        echo "luyaz-fallback: cannot open $LOCK, writing without it" >&2
+        # same as the core: no lock, no write
+        echo "luyaz-fallback: cannot open $LOCK, not written" >&2
+        done_ 5 "lock: cannot open the write lock"
     fi
 fi
 

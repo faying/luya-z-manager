@@ -176,7 +176,7 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
     let live_ok = info.is_ok() && traffic.is_ok();
     // 没发请求、沿用上一次值的不算读到（`ubus_ttl_read`）：块照 V2-12 置 stale。
     let sim_ok = sim_read;
-    // 旧 /state 读者迁到 /v2 用的块（u60-features.md §0.1，V2-46）：各看自己的来源。
+    // 旧 /state 读者迁到 /v2 用的块：各看自己的来源。
     let clients_ok = lan_clients.is_ok() && wifi_clients.is_ok();
     let qos_ok = signal_ok && usb.is_ok();
     let interfaces_ok = wan4_if.is_ok() && cellular.is_ok();
@@ -527,6 +527,14 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
         }
     }
     let sim_block = c::Sim {
+        // epoch / phase / say*: stamped by `state::collect` (the identity tracking keeps state)
+        epoch: 0,
+        phase: String::new(),
+        say: String::new(),
+        say_en: String::new(),
+        say_id: String::new(),
+        say_short: String::new(),
+        say_short_en: String::new(),
         iccid: card("sim_iccid"),
         imsi: imsi.clone(),
         msisdn: msisdn.clone(),
@@ -828,9 +836,24 @@ pub(crate) fn sim_dual(sim: &Value, uci_sets: &[BTreeMap<String, String>]) -> Op
                 state: state.into(),
                 role: role.into(),
                 signal: None,
-                operator: string(sim, operator),
+                // B31 leaves `Operator` empty for slot 1 at times (u60g 10-22, 454-12
+                // standby); its SPN (`spn_name_data`, slot 1 only) still names the card.
+                operator: match string(sim, operator) {
+                    o if o.is_empty() && slot == 1 => spn_from_ucs2_hex(&string(sim, "spn_name_data")),
+                    o => o,
+                },
+                // Same pick as the single-card logo; the SPN is slot 1's only.
+                logo: {
+                    let n = |k: &str| string(sim, &format!("{p}{k}")).parse::<i64>().unwrap_or(-1);
+                    let spn = if slot == 1 { spn_from_ucs2_hex(&string(sim, "spn_name_data")) } else { String::new() };
+                    super::screen::sim_logo(n("mdm_mcc"), n("mdm_mnc"), &spn).unwrap_or("").into()
+                },
                 mcc: string(sim, &format!("{p}mdm_mcc")),
                 mnc: string(sim, &format!("{p}mdm_mnc")),
+                serving_mcc: None,
+                true_roaming: None,
+                place: String::new(),
+                place_en: String::new(),
                 iccid_tail: iccid.get(iccid.len().saturating_sub(4)..).unwrap_or("").into(),
             }
         })
@@ -856,7 +879,52 @@ fn dual_signals(
 ) -> c::SimDual {
     let standby = standby_slot(&d);
     let standby_sig = crate::qmi_nas::usable(last, standby, now);
-    attach_signals(d, nwinfo_signal(raw_net, now), standby_sig)
+    let data_net = (integer(raw_net, "rmcc"), integer(raw_net, "rmnc"), string(raw_net, "network_provider_fullname"));
+    let mut d = attach_signals(d, nwinfo_signal(raw_net, now), standby_sig.clone());
+    for s in &mut d.slots {
+        let serving = match s.role.as_str() {
+            "data" => Some(data_net.clone()),
+            "standby" => standby_sig.as_ref().and_then(|(r, _)| r.serving.clone()),
+            _ => None,
+        };
+        (s.serving_mcc, s.true_roaming) = slot_roaming(serving.as_ref().map(|n| n.0), &s.mcc);
+        (s.place, s.place_en) = slot_place(s.true_roaming, serving.as_ref());
+    }
+    d
+}
+
+/// A slot's 「本地」/「漫游到X」 in the same words as the data card's `screen.where`; X is
+/// the mainland name for a 460 network, else the network's own name.
+fn slot_place(roaming: Option<bool>, serving: Option<&(i64, i64, String)>) -> (String, String) {
+    match roaming {
+        Some(false) => ("本地".into(), "Local".into()),
+        Some(true) => {
+            let (zh, en) = serving
+                .map(|(c, n, raw)| match super::screen::mainland_operator(*c, *n, raw) {
+                    Some((zh, en)) => (zh.to_string(), en.to_string()),
+                    None => (raw.clone(), raw.clone()),
+                })
+                .unwrap_or_default();
+            if zh.is_empty() {
+                ("漫游".into(), "Roaming".into())
+            } else {
+                (format!("漫游到{zh}"), format!("Roaming on {en}"))
+            }
+        }
+        None => (String::new(), String::new()),
+    }
+}
+
+/// A slot's (`serving_mcc`, `true_roaming`): the same country rule as [`roaming_fields`],
+/// the home MCC being the slot's own card MCC.
+fn slot_roaming(serving: Option<i64>, card_mcc: &str) -> (Option<i64>, Option<bool>) {
+    let serving = serving.filter(|m| mcc_country(*m).is_some());
+    let home = card_mcc.parse::<i64>().ok().filter(|m| mcc_country(*m).is_some());
+    let roaming = match (serving, home) {
+        (Some(s), Some(h)) => Some(mcc_country(s) != mcc_country(h)),
+        _ => None,
+    };
+    (serving, roaming)
 }
 
 /// The slot the QMI sampler should read: the standby slot in dual mode, else 0 (none), so
@@ -1745,6 +1813,35 @@ mod sim_dual_tests {
         ]
     }
 
+    /// u60g 10-22：港卡在大陆待机 = 漫游；大陆卡在大陆 = 本地；读不到所在网络 = 不知道。
+    #[test]
+    fn slot_roaming_by_country() {
+        assert_eq!(slot_roaming(Some(460), "454"), (Some(460), Some(true)));
+        assert_eq!(slot_roaming(Some(460), "460"), (Some(460), Some(false)));
+        assert_eq!(slot_roaming(None, "454"), (None, None));
+        assert_eq!(slot_roaming(Some(0), "460"), (None, None));
+        let cm = (460, 0, "CMCC".to_string());
+        assert_eq!(slot_place(Some(true), Some(&cm)), ("漫游到中国移动".into(), "Roaming on China Mobile".into()));
+        let far = (440, 10, "NTT DOCOMO".to_string());
+        assert_eq!(slot_place(Some(true), Some(&far)).0, "漫游到NTT DOCOMO");
+        assert_eq!(slot_place(Some(true), Some(&(460, 99, String::new()))).0, "漫游");
+        assert_eq!(slot_place(Some(false), Some(&cm)).0, "本地");
+        assert_eq!(slot_place(None, None).0, "");
+    }
+
+    /// u60g 10-22：槽 1（454-12）待机时固件 `Operator` 是空的，用槽 1 的 SPN 补上。
+    #[test]
+    fn slot1_operator_falls_back_to_spn() {
+        let sim = json!({"sim_states":"sim ready","mdm_mcc":"454","mdm_mnc":"12","Operator":"",
+            "spn_name_data":"0043004D004C0069006E006B","sim2_states":"sim ready","sim2_mdm_mcc":"460",
+            "sim2_mdm_mnc":"13","Operator2":"","support_dual_sim":"1","sim1_provision_state":"1",
+            "sim2_provision_state":"1","current_sim_slot":"2"});
+        let uci = mdm(&[("simcard_0_iccid", "1111"), ("simcard_1_iccid", "2222")]);
+        let d = sim_dual(&sim, &uci).unwrap();
+        assert_eq!((d.slots[0].operator.as_str(), d.slots[1].operator.as_str()), ("CMLink", ""));
+        assert_eq!((d.slots[0].logo.as_str(), d.slots[1].logo.as_str()), ("cmlink", "china-mobile"));
+    }
+
     /// u60g 真机形状（10-20，只读；单卡、槽 1 启用、内置卡未启用；识别码是假的）。
     #[test]
     fn global_single_slot1() {
@@ -1835,7 +1932,7 @@ mod sim_dual_tests {
         let d = sim_dual(&sim, &mdm(&[])).unwrap();
         let net = json!({"nr5g_rsrp":"-85","nr5g_rsrq":"-11","nr5g_snr":"18.6","signalbar":"5"});
         let data = nwinfo_signal(&net, 7);
-        let r = crate::qmi_nas::Reading { rat: "nr", rsrp: -107, rsrq: Some(-15), snr: Some(1.5) };
+        let r = crate::qmi_nas::Reading { rat: "nr", rsrp: -107, rsrq: Some(-15), snr: Some(1.5), serving: None };
         let d = attach_signals(d, data, Some((r, 9)));
         let s1 = d.slots[0].signal.as_ref().unwrap();
         assert_eq!((s1.rat.as_str(), s1.rsrp, s1.rsrq, s1.snr.as_deref(), s1.bars, s1.at), ("nr", -85, Some(-11), Some("18.6"), 5, 7));

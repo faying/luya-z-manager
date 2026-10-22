@@ -52,6 +52,11 @@ pub trait Host: Send + Sync + 'static {
     fn run_worker(&self, f: Box<dyn FnOnce() + '_>) {
         f()
     }
+    /// Hold the loop's checks for now (a SIM switch in progress): nothing is read, sent or
+    /// deleted and the watermark stays; the host wakes the loop when the hold ends.
+    fn hold(&self) -> bool {
+        false
+    }
 }
 const MAX_LOG_ENTRIES: usize = 200;
 const HTTP_TIMEOUT_SECS: u64 = 15;
@@ -1098,6 +1103,10 @@ impl SmsForwarder {
         let config = self.config.lock().unwrap().clone();
         let enabled_rules: Vec<&ForwardRule> = config.rules.iter().filter(|r| r.enabled).collect();
         if !config.enabled || enabled_rules.is_empty() {
+            return;
+        }
+        if self.host.hold() {
+            eprintln!("[sms_forward] held: SIM switch in progress");
             return;
         }
         self.init_watermark();

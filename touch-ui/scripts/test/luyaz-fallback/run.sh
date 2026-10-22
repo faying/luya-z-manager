@@ -288,7 +288,8 @@ teardown
 setup
 export LUYAZ_WRITE_LOCK=$T/no/such/dir/lock
 run band.reset
-check "lock file cannot be opened → writes anyway, says so" '[ "$RC" = 0 ] && grep -q "writing without it" "$T/err"'
+check "lock file cannot be opened → exit 5, says so" '[ "$RC" = 5 ] && [ "$OUT" = "lock: cannot open the write lock" ] && grep -q "not written" "$T/err"'
+check "lock file cannot be opened → nothing written, no marker, core not checked" '[ "$(ncalls)" = 0 ] && [ "$(marks)" = 0 ] && [ ! -e "$T/wget.n" ]'
 teardown
 
 echo "luyaz-fallback: cellular.set reads, then changes only the named fields"

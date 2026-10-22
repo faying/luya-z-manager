@@ -21,6 +21,20 @@ pub fn enabled() -> bool {
     std::env::var(ENV).is_ok_and(|v| v == "1")
 }
 
+/// The engine u60d runs, for [`sim_changed`] (set once at start-up when `LUYAZ_HOME_EXIT=1`).
+static ENGINE: std::sync::OnceLock<std::sync::Weak<luyaz_home_exit::HomeExit>> = std::sync::OnceLock::new();
+
+pub fn register(e: &Arc<luyaz_home_exit::HomeExit>) {
+    let _ = ENGINE.set(Arc::downgrade(e));
+}
+
+/// A new SIM is online (`sim_follow`): the engine's next tick starts its miss count over.
+pub fn sim_changed() {
+    if let Some(e) = ENGINE.get().and_then(std::sync::Weak::upgrade) {
+        e.sim_changed();
+    }
+}
+
 /// u60d as the engine's host: files under the compat root, the signal and clients blocks from
 /// the hub, alerts through the shared queue.
 pub struct U60dHost {
@@ -46,7 +60,7 @@ impl U60dHost {
 
 /// `chill.sh reload` with a deadline: its process group is killed past `limit` and the tick goes
 /// on with an error, so the engine's next tick still runs.
-fn chill_reload_within(cmd: &str, limit: std::time::Duration) -> Result<(), String> {
+pub(crate) fn chill_reload_within(cmd: &str, limit: std::time::Duration) -> Result<(), String> {
     let mut c = std::process::Command::new("sh");
     c.arg("-c").arg(cmd);
     match luyaz_api::health::output_within_group(&mut c, limit) {
@@ -125,6 +139,12 @@ impl Host for U60dHost {
     /// Packets in the cell's last ≥ 30 s window (D8); none yet = unknown, no waiting.
     fn cell_busy(&self) -> Option<bool> {
         crate::cell_window::current().map(|w| w.tx_packets + w.rx_packets > 0)
+    }
+    /// The underlay gate for the proxy layer (forks `ip`; asked only after a missed probe):
+    /// held = the miss is the cell's, not home's.
+    fn cell_up(&self) -> Option<bool> {
+        use crate::api::underlay::{ask, Kind, Layer};
+        Some(!ask("home-exit", Layer::Proxy, Kind::Inferential).holds())
     }
     fn read(&self, path: &str) -> Option<String> {
         std::fs::read_to_string(self.path(path)).ok()

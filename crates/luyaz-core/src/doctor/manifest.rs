@@ -324,10 +324,10 @@ pub fn entries(manifest: &str) -> Vec<String> {
                 files.remove(x);
             }
             for x in fld(l, "records").split_whitespace() {
-                rec.remove(canon_record(x));
+                rec.remove(x);
             }
         } else if k == "record" {
-            let n = canon_record(&fld(l, "name")).to_owned();
+            let n = fld(l, "name").to_owned();
             if n.is_empty() {
                 continue;
             }
@@ -591,29 +591,6 @@ pub fn state(c: &Cfg, fresh: bool) -> State {
     }
 }
 
-/// Record names (new, old) of the Luya-Z rename D4: a manifest has either.
-const RECORD_RENAMED: [(&str, &str); 4] = [
-    ("ui-fonts", "devui-fonts"),
-    ("ui-logos", "devui-logos"),
-    ("core-plugins", "u60d-plugins"),
-    ("luyaz-recover.sh", "u60-recover.sh"),
-];
-
-/// A record name as written before D4c → its new name (as doctor.sh's `canon`).
-fn canon_record(n: &str) -> &str {
-    RECORD_RENAMED
-        .iter()
-        .find(|(_, o)| *o == n)
-        .map_or(n, |(n, _)| n)
-}
-
-fn same_record(recorded: &str, listed: &str) -> bool {
-    recorded == listed
-        || RECORD_RENAMED
-            .iter()
-            .any(|(n, o)| (*n == listed && *o == recorded) || (*o == listed && *n == recorded))
-}
-
 /// The files the manifest only records, as luyaz-ship.sh `record_list` (a test holds them to
 /// the same names): (name, path, tree)
 pub(super) fn record_list(c: &Cfg) -> Vec<(String, String, bool)> {
@@ -642,8 +619,7 @@ pub(super) fn record_list(c: &Cfg) -> Vec<(String, String, bool)> {
         .rsplit_once('/')
         .map(|(d, _)| d)
         .unwrap_or(&c.ship_txn);
-    // the names as doctor.sh lists them (D4c names; older manifest lines are read through
-    // `canon_record`), next to the transaction file (as in doctor.sh).
+    // the names as doctor.sh lists them, next to the transaction file (as in doctor.sh).
     v.push((
         "luyaz-recover.sh".into(),
         format!("{txn_dir}/luyaz-recover.sh"),
@@ -671,7 +647,7 @@ pub fn report(c: &Cfg) -> String {
     for (n, p, tree) in record_list(c) {
         let seen = m.rows.iter().any(|r| {
             let f: Vec<&str> = r.split_whitespace().collect();
-            f.get(1) == Some(&"record") && f.get(2).is_some_and(|r| same_record(r, &n))
+            f.get(1) == Some(&"record") && f.get(2) == Some(&n.as_str())
         });
         if seen {
             continue;

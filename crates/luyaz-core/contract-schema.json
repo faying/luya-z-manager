@@ -2351,6 +2351,11 @@
               "type": "string",
               "x-u60-level": "personal"
             },
+            "logo": {
+              "description": "operator-logos/<stem> picked the same way as the single-card logo (SPN, then\nPLMN); empty when none is known (core 1.32.1+).",
+              "type": "string",
+              "x-u60-level": "normal"
+            },
             "mcc": {
               "type": "string",
               "x-u60-level": "normal"
@@ -2360,6 +2365,15 @@
               "x-u60-level": "normal"
             },
             "operator": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "place": {
+              "description": "Where the card is, in the data card's words (`screen.where`): 「本地」,\n「漫游到中国移动」, 「漫游」 when the network has no name; empty when unknown (core 1.32.4+)",
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "place_en": {
               "type": "string",
               "x-u60-level": "normal"
             },
@@ -2385,6 +2399,15 @@
               "type": "string",
               "x-u60-level": "normal"
             },
+            "serving_mcc": {
+              "description": "MCC of the network this slot is registered on (data slot: nwinfo; standby slot:\nthe QMI reading); null when unknown (core 1.32.3+)",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
             "signal": {
               "anyOf": [
                 {
@@ -2405,6 +2428,14 @@
             "state": {
               "description": "\"ready\" | \"not_ready\" | \"locked\" (PIN/PUK) | \"absent\" | \"off\" (not provisioned)",
               "type": "string",
+              "x-u60-level": "normal"
+            },
+            "true_roaming": {
+              "description": "serving and SIM country differ, the same rule as `signal.true_roaming`; null\nwhen either is unknown (core 1.32.3+)",
+              "type": [
+                "boolean",
+                "null"
+              ],
               "x-u60-level": "normal"
             }
           },
@@ -2480,6 +2511,14 @@
           "type": "integer",
           "x-u60-level": "normal"
         },
+        "epoch": {
+          "default": 0,
+          "description": "SIM identity transitions so far (`sim_identity`, P0-2); keys \"did the card change\"",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-u60-level": "normal"
+        },
         "iccid": {
           "type": "string",
           "x-u60-level": "personal"
@@ -2496,7 +2535,41 @@
           "type": "string",
           "x-u60-level": "personal"
         },
+        "phase": {
+          "default": "",
+          "description": "\"online\" | \"leaving\" | \"changed\" | \"reloaded\" | \"stalled\" (`sim_identity`)",
+          "type": "string",
+          "x-u60-level": "normal"
+        },
         "pin_status": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "say": {
+          "default": "",
+          "description": "The shared words for `phase` (`sim_say`): \"\" when nothing to say",
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "say_en": {
+          "default": "",
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "say_id": {
+          "default": "",
+          "description": "\"switching\" | \"retrying\" | \"recovered\" | \"check_apn\" | \"gave_up\" | \"\"",
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "say_short": {
+          "default": "",
+          "description": "`say` cut to fit the touch screen (`sim_say::Say::short`)",
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "say_short_en": {
+          "default": "",
           "type": "string",
           "x-u60-level": "normal"
         },

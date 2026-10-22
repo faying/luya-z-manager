@@ -389,11 +389,11 @@ txnf() { printf 'v=1\ntxn=20260930-120000-core\ncomp=core\nphase=%s\nreason=%s\n
 #[test]
 fn manifest() {
     // the two trees first, then their fingerprints (computed here) go into the manifest
-    let dirs_pre = r#"export DOC_UI_FONTS=$T/devui/fonts
-mkdir -p "$T/admin/_next/static" "$T/devui/fonts" "$T/admin/empty"
-printf 'page\n' >"$T/admin/index.html"; printf 'js\n' >"$T/admin/_next/static/a b.js"; printf 'font\n' >"$T/devui/fonts/x.ttf""#;
+    let dirs_pre = r#"export DOC_UI_FONTS=$T/ui/fonts
+mkdir -p "$T/admin/_next/static" "$T/ui/fonts" "$T/admin/empty"
+printf 'page\n' >"$T/admin/index.html"; printf 'js\n' >"$T/admin/_next/static/a b.js"; printf 'font\n' >"$T/ui/fonts/x.ttf""#;
     let dirs = r#"printf '{"v":1,"kind":"ship","comp":"web","txn":"t","commit":"a","format":1,"files":[{"path":"%s","tree":"%s","prev":"%s.prev"}],"state":[]}\n' "$T/admin" "$AF" "$T/admin" >>"$T/m.jsonl"
-printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/devui/fonts" "$FF" >>"$T/m.jsonl"
+printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":""}\n' "$T/ui/fonts" "$FF" >>"$T/m.jsonl"
 "#;
     let scenarios = [
         r#"mship core "$T/core" "$DM"; mrec rc.local "$T/rc" "$RM""#,
@@ -415,11 +415,11 @@ printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":"
         r#"mship core "$T/core" "$DM"; txnf done '' cccc-0000 900"#,
         r#"mship core "$T/core" "$DM"; txnf rolledback '开机时已退回（断电时在 check）'"#,
         r#"mship core "$T/core" "$DM"; txnf aborted 'user said stop'; printf 'core build B\n' >"$T/core""#,
-        r#"printf 'core build B\n' >"$T/core"; mship datad "$T/core" "$DM"; mship core "$T/core" "$(md5sum $T/core | cut -d' ' -f1)"; mrec u60-recover.sh "$T/rc" "$RM"; mrec luyaz-recover.sh "$T/rc" "$RM""#,
+        r#"printf 'core build B\n' >"$T/core"; mship datad "$T/core" "$DM"; mship core "$T/core" "$(md5sum $T/core | cut -d' ' -f1)"; mrec luyaz-recover.sh "$T/rc" "$RM""#,
         r#"mship core "$T/core" "$DM"; mship datad "$T/core" "$DM"; txnf trial ''"#,
         dirs,
         &format!(r#"{dirs}ln -s index.html "$T/admin/link""#),
-        &format!(r#"{dirs}rm -rf "$T/devui/fonts""#),
+        &format!(r#"{dirs}rm -rf "$T/ui/fonts""#),
         &format!(r#"{dirs}printf 'new js\n' >"$T/admin/_next/static/c.js""#),
         &format!(
             r#"{dirs}export DOC_MD5SUM=md5sum; dd if=/dev/zero of="$T/big" bs=1024 count=300 2>/dev/null; mship lweb "$T/big" "$(md5sum $T/big | cut -d' ' -f1)""#
@@ -430,7 +430,7 @@ printf '{"v":1,"kind":"record","name":"ui-fonts","path":"%s","tree":"%s","why":"
         let fx = if let Some(rest) = s.strip_prefix(dirs) {
             let mut fx = fixture(&format!("{MS}{dirs_pre}"));
             let fp = |d: &str| manifest::tree_fp(&fx.dir.join(d).to_string_lossy()).unwrap();
-            let extra = [("AF", fp("admin")), ("FF", fp("devui/fonts"))];
+            let extra = [("AF", fp("admin")), ("FF", fp("ui/fonts"))];
             then(&mut fx, &extra, &format!("{MS}{dirs}{rest}"));
             fx
         } else {

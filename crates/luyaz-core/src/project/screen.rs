@@ -1,12 +1,10 @@
 //! `GET /v2/screen`：触屏首页信号卡和状态栏要显示的结论，从这一份 /state 算出来。
 //!
-//! 规则原来在触屏的 C 里（touch-ui `src/net_view.c`、`src/ui_logic.c`），2026-09-26
-//! 起搬到这里，屏幕只负责画（manager `docs/screen-logic-move.md`）。为了保证搬的时候
-//! 一条规则都没变，这里刻意照着 C 的读法：同样的字段长度截断、`atoi`/`atof`/`sscanf`
-//! 的前缀解析、`(int)` 向零取整、`%.0f`/`%.1f` 的写法。`tests/fixtures/screen_net_corpus.jsonl`
-//! 最初是 C 对 1700 多份 /state 算出的结果，测试要求这里逐字段一样
-//! （生成工具在 touch-ui tag `parity-net-v1` 的 `tests/parity/`；那之后 C 里的规则已删除）。
-//! 之后改规则时，样本用 `screen/tests.rs` 里的 bless 测试按这里重录
+//! 规则全在这里，屏幕只负责画（manager `docs/screen-logic-move.md`）。规则按固定语料
+//! `tests/fixtures/screen_net_corpus.jsonl`（1700 多份 /state 和它们的结论）逐字段锁定。
+//! 字段长度截断、`atoi`/`atof`/`sscanf` 式的前缀解析、`(int)` 式向零取整、`%.0f`/`%.1f`
+//! 的写法都是刻意的，别顺手「改对」。
+//! 改规则时，样本用 `screen/tests.rs` 里的 bless 测试按这里重录
 //! （`SCREEN_CORPUS_BLESS=1 cargo test screen::tests::bless_corpus -- --ignored`，
 //! patch 原样保留），再逐条核对变化是不是都来自这次改的规则。
 //!
@@ -221,7 +219,7 @@ struct Data {
 
 /// The 4 mainland carriers as (中文, English); the English must match zte-agent's
 /// operator table word for word (manager docs/ui-glossary.md §8).
-fn mainland_operator(mcc: i64, mnc: i64, raw: &str) -> Option<(&'static str, &'static str)> {
+pub(super) fn mainland_operator(mcc: i64, mnc: i64, raw: &str) -> Option<(&'static str, &'static str)> {
     const CM: (&str, &str) = ("中国移动", "China Mobile");
     const CU: (&str, &str) = ("中国联通", "China Unicom");
     const CT: (&str, &str) = ("中国电信", "China Telecom");
@@ -590,7 +588,7 @@ fn operator_logo(mcc: i64, mnc: i64) -> Option<&'static str> {
     K.iter().find(|k| k.0 == mcc && k.1 == mnc).map(|k| k.2)
 }
 
-fn sim_logo(mcc: i64, mnc: i64, spn: &str) -> Option<&'static str> {
+pub(super) fn sim_logo(mcc: i64, mnc: i64, spn: &str) -> Option<&'static str> {
     let low: String = spn
         .bytes()
         .take(31)
@@ -795,8 +793,10 @@ pub fn with_finding(v: &mut NetView, layer: &str, symptom: (&str, &str)) {
     (o.state, o.tone, o.cause) = (state, Tone::Bad, Cause::None);
     o.headline = cstr(head.into(), 32);
     o.headline_en = head_en.into();
-    o.hint = cstr(format!("{}；网页「网络诊断」有证据", symptom.0), 128);
-    o.hint_en = format!("{}; evidence on the web's Diagnose page", symptom.1);
+    // `network.health`'s detail (the symptom, what is paused, what to do) and where the proof is
+    let (zh, en) = (symptom.0.trim_end_matches('。'), symptom.1.trim_end_matches('.'));
+    o.hint = cstr(format!("{zh}；网页「网络诊断」有证据"), 128);
+    o.hint_en = format!("{en}; evidence on the web's Diagnose page");
     v.home = Some(o.finish_en());
 }
 

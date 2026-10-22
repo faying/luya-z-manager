@@ -2,7 +2,7 @@ use super::*;
 use luyaz_api::firmware::{CapabilityReport, Support};
 
 // No App::new, global executor, collection loop, policy host or disk state in this fixture.
-async fn app() -> (App, crate::ubus::mock_ubusd::MockUbusd) {
+pub(super) async fn app() -> (App, crate::ubus::mock_ubusd::MockUbusd) {
     let m = crate::ubus::mock_ubusd::MockUbusd::start_new().await;
     let hub = Arc::new(Hub::new(vec![], Box::new(block::NoSink)));
     let exec = Executor::spawn(

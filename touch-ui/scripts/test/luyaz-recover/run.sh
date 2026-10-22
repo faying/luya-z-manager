@@ -506,33 +506,21 @@ RC=$?
 check "$CASE: PASS" '[ "$RC" = 0 ] && grep -q "selftest: PASS" "$T/out"'
 teardown
 
-# ── Phase 10 10c (D7): a legacy rc.local is put back only while its programs exist ──
-for have in no yes; do
-    setup
-    CASE="sentinel rc.local, u60-uid + u60-guard.sh present: $have"
-    LEAK0=$(leak_snapshot)
-    mkdir -p "$R/etc" "$R/data/luyaz/ship/prev"
-    printf '#!/bin/sh\n/etc/init.d/luyaz-sentinel start   # luyaz\nexit 0\n' >"$R/etc/rc.local"
-    printf '#!/bin/sh\n/etc/init.d/u60-uid start\n/etc/init.d/u60-guard start\nexit 0\n' >"$R/data/luyaz/ship/prev/etc.rc.local.prev-$TXN"
-    RN=$(md5 "$R/etc/rc.local") RO=$(md5 "$R/data/luyaz/ship/prev/etc.rc.local.prev-$TXN")
-    if [ $have = yes ]; then
-        mkdir -p "$R/data/plugins/u60pro-devui" "$R/data/u60-guard"
-        printf 'uid\n' >"$R/data/plugins/u60pro-devui/u60-uid"
-        chmod 755 "$R/data/plugins/u60pro-devui/u60-uid"
-        printf 'guard\n' >"$R/data/u60-guard/u60-guard.sh"
-    fi
-    printf 'v=3\ntxn=%s\ncomp=sentinel\nphase=check\nreason=\nboot_id=aaaa-1111\nexec_pid=77\nfile=%s|%s|%s\nend=1\n' \
-        "$TXN" "$R/etc/rc.local" "$RO" "$RN" >"$R/data/luyaz/ship/txn"
-    recover
-    if [ $have = yes ]; then
-        check "$CASE: the legacy rc.local back (exit 10)" '[ "$RC" = 10 ] && [ "$(md5 "$R/etc/rc.local")" = "$RO" ]'
-    else
-        check "$CASE: rc.local left as the sentinel one, says so" '[ "$RC" != 10 ] && [ "$(md5 "$R/etc/rc.local")" = "$RN" ] && grep -q "不还原" "$R/data/luyaz/ship/recover.log"'
-    fi
-    teardown
-done
+# ── never an rc.local that starts u60-uid/u60-guard ──
+setup
+CASE="sentinel rc.local, .prev starts u60-uid + u60-guard"
+LEAK0=$(leak_snapshot)
+mkdir -p "$R/etc" "$R/data/luyaz/ship/prev"
+printf '#!/bin/sh\n/etc/init.d/luyaz-sentinel start   # luyaz\nexit 0\n' >"$R/etc/rc.local"
+printf '#!/bin/sh\n/etc/init.d/u60-uid start\n/etc/init.d/u60-guard start\nexit 0\n' >"$R/data/luyaz/ship/prev/etc.rc.local.prev-$TXN"
+RN=$(md5 "$R/etc/rc.local") RO=$(md5 "$R/data/luyaz/ship/prev/etc.rc.local.prev-$TXN")
+printf 'v=3\ntxn=%s\ncomp=sentinel\nphase=check\nreason=\nboot_id=aaaa-1111\nexec_pid=77\nfile=%s|%s|%s\nend=1\n' \
+    "$TXN" "$R/etc/rc.local" "$RO" "$RN" >"$R/data/luyaz/ship/txn"
+recover
+check "$CASE: rc.local left as the sentinel one, says so" '[ "$RC" != 10 ] && [ "$(md5 "$R/etc/rc.local")" = "$RN" ] && grep -q "不还原" "$R/data/luyaz/ship/recover.log"'
+teardown
 
-# ── Phase 10 R4 floor (round ③): never a sentinel that does not know /tmp/luyaz-screen.ctl ──
+# ── never a sentinel that does not know /tmp/luyaz-screen.ctl ──
 for mark in no yes; do
     setup
     CASE="sentinel .prev with the marker: $mark"
@@ -552,29 +540,19 @@ for mark in no yes; do
     fi
     teardown
 done
-# ── round ③: a luyaz-ui new in the transaction is deleted only while the old program exists ──
-for old in no yes; do
-    setup
-    CASE="luyaz-ui new in the transaction, old program present: $old"
-    LEAK0=$(leak_snapshot)
-    UP=$R/data/luyaz/ui/luyaz-ui
-    mkdir -p "${UP%/*}"
-    printf 'NEW-UI\n' >"$UP"
-    UN=$(md5 "$UP")
-    if [ $old = yes ]; then
-        mkdir -p "$R/data/plugins/u60pro-devui"
-        printf 'OLD-UI\n' >"$R/data/plugins/u60pro-devui/u60pro-devui"
-    fi
-    printf 'v=2\ntxn=%s\ncomp=touch\nphase=check\nreason=\nboot_id=aaaa-1111\nexec_pid=77\nfile=%s|-|%s\nend=1\n' \
-        "$TXN" "$UP" "$UN" >"$R/data/luyaz/ship/txn"
-    recover
-    if [ $old = yes ]; then
-        check "$CASE: luyaz-ui deleted (it did not exist before)" '[ ! -e "$UP" ] && [ "$(phase)" = rolledback ]'
-    else
-        check "$CASE: luyaz-ui kept, says so, failed" '[ "$(md5 "$UP")" = "$UN" ] && grep -q "不删" "$R/data/luyaz/ship/recover.log" && [ "$(phase)" = failed ]'
-    fi
-    teardown
-done
+# ── a luyaz-ui new in the transaction is never deleted: it is the only touch UI ──
+setup
+CASE="luyaz-ui new in the transaction"
+LEAK0=$(leak_snapshot)
+UP=$R/data/luyaz/ui/luyaz-ui
+mkdir -p "${UP%/*}"
+printf 'NEW-UI\n' >"$UP"
+UN=$(md5 "$UP")
+printf 'v=2\ntxn=%s\ncomp=touch\nphase=check\nreason=\nboot_id=aaaa-1111\nexec_pid=77\nfile=%s|-|%s\nend=1\n' \
+    "$TXN" "$UP" "$UN" >"$R/data/luyaz/ship/txn"
+recover
+check "$CASE: luyaz-ui kept, says so, failed" '[ "$(md5 "$UP")" = "$UN" ] && grep -q "不删" "$R/data/luyaz/ship/recover.log" && [ "$(phase)" = failed ]'
+teardown
 
 # ── Phase 10 10e (D4/D7): no old-core rc.local or program back (always since rename F5/6:
 # no .migrated mark any more; a stray one changes nothing) ──

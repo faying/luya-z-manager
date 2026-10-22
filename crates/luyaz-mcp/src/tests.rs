@@ -49,6 +49,7 @@ fn initialize_list_ping() {
         [
             "get_device_health",
             "diagnose_connectivity",
+            "get_network_health",
             "get_power_profile",
             "get_recent_events",
             "set_chill_profile",
@@ -91,6 +92,7 @@ fn tools_map_to_device_paths() {
     for (n, p) in [
         ("get_device_health", "/agent-api/health"),
         ("diagnose_connectivity", "/agent-api/diagnose"),
+        ("get_network_health", "/agent-api/network-health"),
         ("get_power_profile", "/agent-api/power"),
         ("get_recent_events", "/agent-api/events"),
     ] {
@@ -503,4 +505,11 @@ fn concurrent_enrolls_both_stay() {
         assert_eq!(dev.id.as_deref(), Some(format!("{i:02x}{:010x}", 19).as_str()), "{}", dev.name);
     }
     let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn host_header_carries_the_port() {
+    assert_eq!(host_header("192.168.0.1", 9090), "192.168.0.1:9090");
+    assert_eq!(host_header("u60.local", 80), "u60.local");
+    assert_eq!(host_header("fd00::1", 9090), "[fd00::1]:9090");
 }

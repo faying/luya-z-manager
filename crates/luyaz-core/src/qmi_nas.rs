@@ -16,6 +16,7 @@ use std::time::Duration;
 pub const SVC_NAS: u32 = 0x03;
 pub const MSG_BIND_SUBSCRIPTION: u16 = 0x0045;
 pub const MSG_GET_SIGNAL_INFO: u16 = 0x004F;
+pub const MSG_GET_SERVING_SYSTEM: u16 = 0x0024;
 /// How often the sampler reads the standby slot.
 pub const EVERY: Duration = Duration::from_secs(30);
 /// A reading older than this is dropped from the snapshot (three missed cycles).
@@ -29,6 +30,9 @@ pub struct Reading {
     pub rsrp: i64,
     pub rsrq: Option<i64>,
     pub snr: Option<f64>,
+    /// (MCC, MNC, network name) the slot is registered on, from Get Serving System; None
+    /// when not registered or not read. The name may be empty.
+    pub serving: Option<(i64, i64, String)>,
 }
 
 /// A QMI request: control flags 0x00, txn, msg id, TLV length, TLVs.
@@ -106,6 +110,7 @@ pub fn decode_signal(body: &[u8]) -> Option<Reading> {
                 rsrp,
                 rsrq: tlv_find(body, 0x18).and_then(|q| i16_at(q, 0)).and_then(rsrq_ok),
                 snr: i16_at(v, 2).and_then(snr_ok),
+                serving: None,
             });
         }
     }
@@ -116,7 +121,22 @@ pub fn decode_signal(body: &[u8]) -> Option<Reading> {
         rsrp,
         rsrq: v.get(1).map(|&b| b as i8 as i64).and_then(rsrq_ok),
         snr: i16_at(v, 4).and_then(snr_ok),
+        serving: None,
     })
+}
+
+/// Get Serving System: TLV 0x01 {u8 registration (1 = registered), …}, TLV 0x12 current
+/// PLMN {u16 mcc, u16 mnc, u8 len, desc}. (MCC, MNC, desc) only when registered.
+pub fn decode_serving(body: &[u8]) -> Option<(i64, i64, String)> {
+    if !result_ok(body) || tlv_find(body, 0x01)?.first() != Some(&1) {
+        return None;
+    }
+    let v = tlv_find(body, 0x12)?;
+    let u = |at: usize| v.get(at..at + 2).map(|b| i64::from(u16::from_le_bytes([b[0], b[1]])));
+    let (mcc, mnc) = (u(0)?, u(2)?);
+    let len = usize::from(*v.get(4).unwrap_or(&0));
+    let desc = v.get(5..5 + len).map_or(String::new(), |d| String::from_utf8_lossy(d).trim().to_string());
+    (200..1000).contains(&mcc).then_some((mcc, mnc, desc))
 }
 
 /// 0..5 bars from RSRP, the same scale as the firmware's `signalbar` (5 at the data slot's
@@ -256,7 +276,9 @@ mod io {
         if !result_ok(&b) {
             return None;
         }
-        decode_signal(&request(&fd, nas, 2, MSG_GET_SIGNAL_INFO, &[])?)
+        let mut r = decode_signal(&request(&fd, nas, 2, MSG_GET_SIGNAL_INFO, &[])?)?;
+        r.serving = request(&fd, nas, 3, MSG_GET_SERVING_SYSTEM, &[]).as_deref().and_then(decode_serving);
+        Some(r)
     }
 }
 
@@ -321,13 +343,14 @@ pub fn main(args: &[String]) -> i32 {
     for sub in subs {
         match read_sub(sub) {
             Some(r) => println!(
-                "sub{sub} slot{} rat={} rsrp={} rsrq={} snr={} bars={}",
+                "sub{sub} slot{} rat={} rsrp={} rsrq={} snr={} bars={} serving={}",
                 sub + 1,
                 r.rat,
                 r.rsrp,
                 r.rsrq.map_or("-".into(), |x| x.to_string()),
                 r.snr.map_or("-".into(), |x| format!("{x:.1}")),
-                bars(r.rsrp)
+                bars(r.rsrp),
+                r.serving.map_or("-".into(), |(c, n, d)| format!("{c}-{n:02} {d:?}"))
             ),
             None => println!("sub{sub} slot{} none", sub + 1),
         }
@@ -376,13 +399,13 @@ mod tests {
         b.extend(tlv(0x14, &[0xb0, 0xf3, le(-110)[0], le(-110)[1], le(30)[0], le(30)[1]]));
         b.extend(tlv(0x17, &[le(-107)[0], le(-107)[1], le(15)[0], le(15)[1]]));
         b.extend(tlv(0x18, &le(-15)));
-        assert_eq!(decode_signal(&b), Some(Reading { rat: "nr", rsrp: -107, rsrq: Some(-15), snr: Some(1.5) }));
+        assert_eq!(decode_signal(&b), Some(Reading { rat: "nr", rsrp: -107, rsrq: Some(-15), snr: Some(1.5), serving: None }));
     }
 
     #[test]
     fn lte_when_nr_missing_or_sentinel() {
         let lte = tlv(0x14, &[0xb0, (-12i8) as u8, le(-95)[0], le(-95)[1], le(-15)[0], le(-15)[1]]);
-        let want = Some(Reading { rat: "lte", rsrp: -95, rsrq: Some(-12), snr: Some(-1.5) });
+        let want = Some(Reading { rat: "lte", rsrp: -95, rsrq: Some(-12), snr: Some(-1.5), serving: None });
         let mut b = ok();
         b.extend(lte.clone());
         assert_eq!(decode_signal(&b), want);
@@ -397,7 +420,7 @@ mod tests {
         let mut b = ok();
         b.extend(tlv(0x17, &[le(-90)[0], le(-90)[1], le(i16::MIN)[0], le(i16::MIN)[1]]));
         b.extend(tlv(0x18, &le(-32768)));
-        assert_eq!(decode_signal(&b), Some(Reading { rat: "nr", rsrp: -90, rsrq: None, snr: None }));
+        assert_eq!(decode_signal(&b), Some(Reading { rat: "nr", rsrp: -90, rsrq: None, snr: None, serving: None }));
         // failure result, no TLVs, truncated TLV
         assert_eq!(decode_signal(&[0x02, 4, 0, 1, 0, 1, 0]), None);
         assert_eq!(decode_signal(&ok()), None);
@@ -408,12 +431,25 @@ mod tests {
 
     #[test]
     fn usable_needs_same_slot_and_fresh() {
-        let r = Reading { rat: "nr", rsrp: -100, rsrq: None, snr: None };
+        let r = Reading { rat: "nr", rsrp: -100, rsrq: None, snr: None, serving: None };
         let l = (2, r.clone(), 1000);
         assert_eq!(usable(Some(&l), 2, 1090), Some((r, 1000)));
         assert_eq!(usable(Some(&l), 2, 1091), None);
         assert_eq!(usable(Some(&l), 1, 1000), None);
         assert_eq!(usable(None, 2, 1000), None);
+    }
+
+    #[test]
+    fn serving_plmn_only_when_registered() {
+        let mut plmn = le(460).to_vec();
+        plmn.extend(le(0));
+        plmn.extend([4]);
+        plmn.extend(b"CMCC");
+        let b = [ok(), tlv(0x01, &[1, 1, 1, 1, 1, 8]), tlv(0x12, &plmn)].concat();
+        assert_eq!(decode_serving(&b), Some((460, 0, "CMCC".into())));
+        let b = [ok(), tlv(0x01, &[2, 1, 1, 1, 0]), tlv(0x12, &plmn)].concat();
+        assert_eq!(decode_serving(&b), None);
+        assert_eq!(decode_serving(&[ok(), tlv(0x01, &[1])].concat()), None);
     }
 
     #[test]

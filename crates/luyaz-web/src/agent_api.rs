@@ -67,6 +67,7 @@ pub fn routes() -> Router<Shared> {
         .merge(crate::agent_act::routes())
         .route("/agent-api/health", get(health))
         .route("/agent-api/diagnose", get(diagnose))
+        .route("/agent-api/network-health", get(network_health))
         .route("/agent-api/power", get(power))
         .route("/agent-api/events", get(events))
 }
@@ -537,6 +538,39 @@ async fn health(State(app): State<Shared>, req: Request) -> Response {
         (Ok(s), Ok(h)) => reply(shape_health(&s, &h)),
         (Err(c), _) => unavailable("status", c),
         (_, Err(c)) => unavailable("health", c),
+    }
+}
+
+/// `network.health` for MCP: layers, held repairs, next step and the English sentence (the
+/// stored state only: no new probe).
+pub fn shape_network_health(status: &Value) -> Value {
+    let h = &status["network"]["health"];
+    if !h.is_object() {
+        return json!({"state": "unsupported"});
+    }
+    let say = &h["say"];
+    json!({
+        "state": h["state"],
+        "layers": pick(&h["layers"], &["bearer", "finding", "proxy"]),
+        "finding": h["finding"],
+        "paused": h["paused"].as_array().map(|a| {
+            a.iter().map(|p| pick(p, &["who", "reason", "layer", "since", "released"])).collect::<Vec<_>>()
+        }),
+        "next": h["next"],
+        "say": if say.is_object() { untrusted(&say["detail_en"]) } else { Value::Null },
+    })
+}
+
+async fn network_health(State(app): State<Shared>, req: Request) -> Response {
+    let name = match admit(&req) {
+        Ok(n) => n,
+        Err(r) => return r,
+    };
+    log(&name, "network-health");
+    match read(&app, "/api/public/status").await {
+        Ok(Ok(s)) => reply(shape_network_health(&s)),
+        Ok(Err(c)) => unavailable("status", c),
+        Err(_) => core_down(),
     }
 }
 

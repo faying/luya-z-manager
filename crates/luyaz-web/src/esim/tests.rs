@@ -181,16 +181,32 @@ fn job_slot_answers() {
         job_end(5, &json!({"id": 5, "status": "done", "rebooting": true})),
         Some(JobEnd::Done {
             rebooting: true,
-            no_data: false
+            no_data: false,
+            stuck: false
         })
     );
     assert_eq!(
         job_end(5, &json!({"id": 5, "status": "done", "reason": "no_data"})),
         Some(JobEnd::Done {
             rebooting: false,
-            no_data: true
+            no_data: true,
+            stuck: false
         })
     );
+    assert_eq!(
+        job_end(5, &json!({"id": 5, "status": "done", "reason": "identity_stuck"})),
+        Some(JobEnd::Done {
+            rebooting: false,
+            no_data: false,
+            stuck: true
+        })
+    );
+    assert_eq!(
+        job_deadline(5, &json!({"id": 5, "status": "running", "deadline_s": 470})),
+        Some(Duration::from_secs(470))
+    );
+    assert_eq!(job_deadline(5, &json!({"id": 5, "status": "running"})), None);
+    assert_eq!(job_deadline(5, &json!({"id": 4, "deadline_s": 470})), None);
     assert_eq!(
         job_end(
             5,
@@ -335,4 +351,31 @@ fn a_settling_list_is_shown_locked_and_proves_nothing() {
     c.take_list(Ok(profiles(&list())));
     let w = view(&c, false, Lang::En);
     assert!(w.tone == "ok" && !w.locked, "a fresh list unlocks");
+}
+
+#[test]
+fn core_say_heads_the_switch_outcome() {
+    let j = json!({"id": 5, "status": "done", "reason": "no_data", "say": "可能要查 APN", "say_en": "May need an APN check"});
+    assert_eq!(job_say(5, &j, Lang::Zh).as_deref(), Some("可能要查 APN"));
+    assert_eq!(job_say(5, &j, Lang::En).as_deref(), Some("May need an APN check"));
+    assert_eq!(job_say(4, &j, Lang::Zh), None, "another job's word is not ours");
+    assert_eq!(job_say(5, &json!({"id": 5, "say": ""}), Lang::Zh), None, "older core / nothing to say");
+    let o = with_say(write::Outcome::Failed(String::new()), Some("自动恢复未成功、设置没被再改"), Lang::Zh);
+    assert_eq!(o, write::Outcome::Failed("自动恢复未成功、设置没被再改".into()));
+    let o = with_say(write::Outcome::Applied("已切换到「B」".into()), Some("已恢复"), Lang::Zh);
+    assert_eq!(o, write::Outcome::Applied("已恢复。已切换到「B」".into()));
+    assert_eq!(with_say(write::Outcome::Unknown, Some("x"), Lang::En), write::Outcome::Unknown);
+}
+
+#[test]
+fn core_say_in_the_card_view() {
+    let mut c = card();
+    c.sim_say = say_of(&json!({"say": "正在切换", "say_en": "Switching"}));
+    assert_eq!(view(&c, false, Lang::Zh).meta.as_deref(), Some("正在切换"));
+    assert_eq!(view(&c, false, Lang::En).meta.as_deref(), Some("Switching"));
+    c.busy = true;
+    c.job = Some("switch".into());
+    c.job_say = say_of(&json!({"say": "安全重试中", "say_en": "Retrying safely"}));
+    assert_eq!(view(&c, false, Lang::Zh).state, "安全重试中");
+    assert_eq!(say_of(&json!({"say": ""})), None, "older core: nothing");
 }

@@ -34,7 +34,7 @@ const SMS_LOG_KEEP: usize = 100;
 /// each cost an SMS; the screen and the web show it).
 const NEVER: &[&str] = &[
     "sms-failed",
-    "devui-theme-paused",
+    "ui-theme-paused",
     "agent-change",
     "tailnet-poller",
     "lan-new-device",
@@ -52,7 +52,7 @@ pub trait SmsIo {
     /// Fresh, same-boot wall estimate with no observed step, as the sentinel computes it.
     /// This preserves local-wall rate limiting; it does not mean verified UTC/NTP.
     fn clock_ok(&mut self) -> bool;
-    /// The screen's language is English (`lang=en`, last line, in devui.conf).
+    /// The screen's language is English (`lang=en`, last line, in ui.conf).
     fn lang_en(&mut self) -> bool;
     /// ZTE's SNTP zone in whole hours (`zwrt_zte_sntp.settings.time_from_utc`).
     fn tz_hours(&mut self) -> i32;
@@ -143,8 +143,8 @@ fn body_zh(kind: &str) -> String {
             "想自动打开U60的Wi-Fi没成功，还在重试。如果手机连不上U60，请重启它。"
         }
         "core-crash" => "屏幕的数据服务意外退出，已自动重启。不用管。",
-        "devui-crash" => "屏幕界面闪退了，已自动重新打开。不用管。",
-        "devui-gave-up" => {
+        "ui-crash" => "屏幕界面闪退了，已自动重新打开。不用管。",
+        "ui-gave-up" => {
             "屏幕界面连续打不开，已换成原厂界面，上网不受影响。长按屏幕右下角3秒可换回。"
         }
         "sms-test" => "这是测试短信。收到了，说明告警短信能正常发到你手机。",
@@ -165,14 +165,14 @@ fn body_zh(kind: &str) -> String {
 
 /// The same in English (guard `sms_body_en`; docs/ui-glossary.md §9): printable ASCII only. Four
 /// are a few words shorter than the guard's so the short code still fits one SMS
-/// (wifi-restore-failed, core-crash, devui-gave-up, dropbear-down).
+/// (wifi-restore-failed, core-crash, ui-gave-up, dropbear-down).
 fn body_en(kind: &str) -> String {
     let m = match kind {
         "wifi-takeover" => "Admin down; Wi-Fi turned on; no action",
         "wifi-restore-failed" => "Wi-Fi won't start; retrying; stuck? Reboot",
         "core-crash" => "Data service crashed; restarted; no action",
-        "devui-crash" => "Screen UI crashed; reopened; no action",
-        "devui-gave-up" => "Stock UI on; hold bottom-right 3s to undo",
+        "ui-crash" => "Screen UI crashed; reopened; no action",
+        "ui-gave-up" => "Stock UI on; hold bottom-right 3s to undo",
         "sms-test" => "Test SMS: alert texts reach your phone",
         "screen-two-uis" => "Two screen UIs; stock UI kept; retry later",
         "screen-hold-expired" => "Screen hold expired; taken back; no action",
@@ -267,7 +267,10 @@ pub fn send_result_ok(result: Option<&serde_json::Value>) -> bool {
     }
 }
 
-/// The screen's language from devui.conf: English only when the last `lang=` line is exactly
+/// The touch UI's settings (with the program).
+pub const UI_CONF: &str = "/data/luyaz/ui/ui.conf";
+
+/// The screen's language from ui.conf: English only when the last `lang=` line is exactly
 /// `lang=en` (guard `sms_lang`, touch-ui `lang_parse`). Split on `\n` only, so `lang=en\r` stays
 /// Chinese as it does on the screen.
 pub fn lang_en(conf: &str) -> bool {

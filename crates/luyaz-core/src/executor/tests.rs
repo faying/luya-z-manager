@@ -1204,11 +1204,16 @@ async fn lock_and_at_waits_count_as_progress() {
     let (at_lock, a) = held_lock("at", stage * 2);
     let (port, sent) = crate::at::tests::fake_modem_after("\r\nOK\r\n", stage);
     let e = exec.clone();
+    // 写锁在执行者外等（D7），拿到后同一个控制任务里等 AT 锁、等基带
     let job = tokio::spawn(async move {
-        e.control(async move {
-            let _w = crate::ops::write_lock::acquire_path(Some(write_lock)).await;
-            crate::at::send_with(crate::at::Cmd::CopsAuto, Some(at_lock), Some(port)).await
-        })
+        crate::ops::write_lock::run_control_path(
+            &e,
+            Some(write_lock),
+            Duration::from_secs(15),
+            async move {
+                crate::at::send_with(crate::at::Cmd::CopsAuto, Some(at_lock), Some(port)).await
+            },
+        )
         .await
     });
     let start = std::time::Instant::now();
@@ -1224,7 +1229,7 @@ async fn lock_and_at_waits_count_as_progress() {
         );
         assert!(start.elapsed() < Duration::from_secs(20), "job never ended");
     }
-    let answer = job.await.unwrap().unwrap().unwrap();
+    let answer = job.await.unwrap().unwrap().unwrap().unwrap();
     assert!(answer.contains("OK"), "{answer:?}");
     assert_eq!(sent.recv().unwrap(), "AT+COPS=0");
     // 一共约 3.6 秒，每段不到 1.5 秒

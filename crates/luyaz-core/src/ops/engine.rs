@@ -65,7 +65,8 @@ pub trait Device: Send + Sync + 'static {
     }
     /// 把这一项写成 `value`（规范化的目标值）。`params` 是这次写的原始 `/control` 参数（只在新写时有，
     /// 不落盘，比如 APN 密码只在这里出现）；退回时是 `Spec::to_params(退回目标)`。
-    /// `strict`：闭环发起的写（decision-execution-loop §4.3 E2）拿不到跨进程写锁就不写、回错。
+    /// `strict`：闭环发起的写（decision-execution-loop §4.3 E2）。D7（10-12）起人手动的写也一样：
+    /// 拿不到跨进程写锁就不写、回错；参数只留着区分来源。
     fn write(
         &self,
         spec: &'static Spec,
@@ -275,6 +276,66 @@ impl Drop for Hold {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .txn_release(GATE_OWNER);
+    }
+}
+
+/// 不走引擎的网络写（`/control` 的 `cellular.redial`）在 Gate 上的预留：名字自己的，丢掉就放。
+pub(crate) struct BareHold {
+    gate: Arc<Mutex<Gate>>,
+    owner: &'static str,
+}
+
+impl Drop for BareHold {
+    fn drop(&mut self) {
+        self.gate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .txn_release(self.owner);
+    }
+}
+
+/// 不走引擎的网络写也先过 Gate（network-reliability §10 P1）：诊断 / Finding 探测在跑就等它结束，
+/// 最多 [`SCREEN_GATE_WAIT_MS`]（触屏对 `/control` 只等 5 秒）；引擎的事务拿着就马上 busy。
+/// 没接 Gate（测试、写入关着）照旧放行。Err = 写入前回 busy，什么都没留下。
+pub(crate) async fn admit_bare(owner: &'static str) -> Result<Option<BareHold>, Value> {
+    let Some(g) = TXN_GATE.get() else {
+        return Ok(None);
+    };
+    admit_bare_with(g, owner, SCREEN_GATE_WAIT_MS, super::boot_id, super::uptime_ms)
+        .await
+        .map(Some)
+}
+
+async fn admit_bare_with(
+    g: &TxnGate,
+    owner: &'static str,
+    wait_ms: u64,
+    boot_id: impl Fn() -> String,
+    now: impl Fn() -> u64,
+) -> Result<BareHold, Value> {
+    let lock = || g.gate.lock().unwrap_or_else(|e| e.into_inner());
+    let wait_ms = wait_ms.min(g.wait_ms).min(admit::TXN_WAIT_MAX_MS);
+    let boot = boot_id();
+    let mut a = lock().txn_reserve(owner, &boot, now(), wait_ms, (g.others)());
+    let hold = matches!(a, Admit::Granted | Admit::Waiting)
+        .then(|| BareHold { gate: g.gate.clone(), owner });
+    let start = tokio::time::Instant::now();
+    while a == Admit::Waiting {
+        tokio::time::sleep(admit::TXN_POLL).await;
+        let t = now();
+        let mut gl = lock();
+        a = gl.txn_poll(owner, &boot, t, (g.others)());
+        if a == Admit::Waiting && start.elapsed() >= Duration::from_millis(wait_ms) {
+            gl.txn_release(owner);
+            a = Admit::TimedOut;
+        }
+    }
+    match (a, hold) {
+        (Admit::Granted, Some(h)) => Ok(h),
+        (a, _) => {
+            eprintln!("ops: gate refused {owner}: {a:?}");
+            Err(admit::busy_json())
+        }
     }
 }
 
@@ -807,7 +868,8 @@ impl<D: Device> Engine<D> {
     /// 核心启动时：有落盘的事务就接着跑（D13、D18、D31）。没有就什么都不读（不多发 ubus）。
     /// 整个过程拿着跨进程写锁（D29）：应急直写正在写时，等它写完再看 takeover 标记。
     pub async fn start(&self) {
-        let _lock = super::write_lock::acquire().await;
+        // D7：拿不到就一直等（不放弃事务和退回），不会不拿锁就动 takeover/pending
+        let _lock = super::write_lock::wait_forever().await;
         let takeover = self.inner.store.take_takeover();
         let Some(mut t) = self.inner.store.load() else {
             if takeover {
@@ -855,7 +917,7 @@ impl<D: Device> Engine<D> {
 
     /// 闭环发起的执行（decision-execution-loop §4.3 E3）：动作的退回能力不是 `CapturedAndProven`
     /// 就不带自动退回（到点没确认记 unverified/no_rollback），全局开关、批准者、`Request::rollback`
-    /// 都不能把它打开；写设备用严格写锁（E2）。现在还没有调用方，闭环入口做好再接。
+    /// 都不能把它打开；写设备拿不到写锁就不写（E2；D7 起人手动的写也一样）。现在还没有调用方，闭环入口做好再接。
     ///
     /// `precheck` 在第二段锁里、Gate 预留已确定之后、建事务之前调用（参数：是否拿着预留），
     /// 回 Err 就什么都不写（§1.1：同一串行边界里重取并比对，`check_execution` 在这里跑）。

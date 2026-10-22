@@ -2,8 +2,9 @@
 //!
 //! With u60d's writes on it runs the agent's engine (`crates/luyaz-sms-forward`) with u60d as its host:
 //! - woken by the hub: the `sms` block's max id / count, service from the `signal` block's `type`,
-//!   the data call from the `interfaces` block's `cellular.connect_status` (looked at every
-//!   [`LOOK_SECS`], passed on only when they change; no `ubus listen` of its own);
+//!   the data call from the `interfaces` block's `cellular.connect_status`, down when the bearer in
+//!   `/proc` is (looked at every [`LOOK_SECS`], passed on only when they change; no `ubus listen`
+//!   of its own);
 //! - `sms.list_after`, mark-read, delete and the SMS sends go through u60d's own `/control`, the
 //!   loop's as `auto`, a web test or retry under the caller's source;
 //! - the engine is blocking (15 s HTTP, 5/15/60 s retries, 1 s between SMS): its loop runs on a
@@ -26,6 +27,10 @@ use crate::api::control::Client;
 const LOOK_SECS: u64 = 2;
 /// The agent's `sms.list_after` timeout.
 const LIST_TIMEOUT: Duration = Duration::from_secs(60);
+/// A SIM switch holds the sends until the phase has been `online` this long (the bearer settles).
+const SIM_SETTLE: Duration = Duration::from_secs(30);
+/// ... but never longer than this from the hold's start: a stuck phase (stalled) sends anyway.
+const SIM_HOLD_CAP: Duration = Duration::from_secs(10 * 60);
 
 thread_local! {
     /// Whose write an SMS send is: `auto` on the forwarder's loop, the caller's on a route.
@@ -43,6 +48,8 @@ pub struct U60dHost {
     active: Arc<AtomicBool>,
     /// Sleeps run `scale` times faster (tests).
     scale: u32,
+    /// A SIM switch holds the checks ([`SimHold`]).
+    held: Arc<AtomicBool>,
 }
 
 impl U60dHost {
@@ -176,6 +183,44 @@ impl Host for U60dHost {
         SOURCE.with(|s| s.set("auto"));
         f()
     }
+
+    fn hold(&self) -> bool {
+        self.held.load(Ordering::SeqCst)
+    }
+}
+
+/// Sends wait out a SIM switch (TODOS P1, 10-22): held from leaving/changed (and the
+/// reloaded/stalled that follow within the hold; boot and no SIM read `online`) until it has been `online` for
+/// [`SIM_SETTLE`], at most [`SIM_HOLD_CAP`] from the hold's start. Nothing is dropped: the
+/// engine only skips its checks, the watermark stays.
+#[derive(Default)]
+struct SimHold {
+    since: Option<Duration>,
+    online_since: Option<Duration>,
+}
+
+impl SimHold {
+    /// `now` = a monotonic clock. True = hold the sends.
+    fn held(&mut self, phase: crate::sim_identity::Phase, now: Duration) -> bool {
+        use crate::sim_identity::Phase;
+        if matches!(phase, Phase::Reloaded | Phase::Stalled) && self.since.is_none() {
+            return false; // only a switch (leaving/changed) starts a hold
+        }
+        if phase != Phase::Online {
+            self.online_since = None;
+            let since = *self.since.get_or_insert(now);
+            return now.saturating_sub(since) < SIM_HOLD_CAP;
+        }
+        let Some(since) = self.since else {
+            return false;
+        };
+        let up = *self.online_since.get_or_insert(now);
+        if now.saturating_sub(up) < SIM_SETTLE && now.saturating_sub(since) < SIM_HOLD_CAP {
+            return true;
+        }
+        *self = Self::default();
+        false
+    }
 }
 
 /// The forwarder u60d runs, if any.
@@ -191,6 +236,8 @@ struct Running {
     service: Option<String>,
     wan: Option<String>,
     sms: Option<(u64, u64)>,
+    sim: SimHold,
+    held: Arc<AtomicBool>,
 }
 
 impl Forwarding {
@@ -221,6 +268,7 @@ pub async fn run(c: Compat) {
 
 fn take_over(c: &Compat) -> Running {
     let active = Arc::new(AtomicBool::new(true));
+    let held = Arc::new(AtomicBool::new(false));
     let host = U60dHost {
         root: c.root.to_string(),
         hub: c.src.hub.clone(),
@@ -229,6 +277,7 @@ fn take_over(c: &Compat) -> Running {
         handle: tokio::runtime::Handle::current(),
         active: active.clone(),
         scale: c.clock.scale() as u32,
+        held: held.clone(),
     };
     let fwd = Arc::new(SmsForwarder::new(
         Arc::new(host),
@@ -251,6 +300,8 @@ fn take_over(c: &Compat) -> Running {
         service: None,
         wan: None,
         sms,
+        sim: SimHold::default(),
+        held,
     }
 }
 
@@ -262,14 +313,29 @@ fn pass_on(c: &Compat, r: &mut Running) {
         r.fwd.set_service(&t);
         r.service = Some(t);
     }
-    if let Some(w) = fresh(hub, "interfaces").and_then(|i| {
-        i.pointer("/cellular/connect_status")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    }) && r.wan.as_deref() != Some(w.as_str())
+    if let Some(w) = fresh(hub, "interfaces")
+        .and_then(|i| {
+            i.pointer("/cellular/connect_status")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        // B31 can say connected with no bearer: then it is down for the forwarder too
+        .map(|w| if c.bearer() == Some(false) { "bearer_down".to_string() } else { w })
+        && r.wan.as_deref() != Some(w.as_str())
     {
         r.fwd.set_wan(&w);
         r.wan = Some(w);
+    }
+    let phase = crate::sim_identity::global()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .phase();
+    let held = r.sim.held(phase, START.elapsed());
+    if r.held.swap(held, Ordering::SeqCst) != held {
+        eprintln!("[compat] sms_forward: SIM switch hold {}", if held { "on" } else { "off" });
+        if !held {
+            r.fwd.wake();
+        }
     }
     let sms = sms_summary(hub);
     if sms != r.sms {
@@ -278,6 +344,9 @@ fn pass_on(c: &Compat, r: &mut Running) {
     }
 }
 
+static START: std::sync::LazyLock<std::time::Instant> =
+    std::sync::LazyLock::new(std::time::Instant::now);
+
 /// The hub's `sms` block: (max id, count).
 fn sms_summary(hub: Option<&Arc<crate::block::Hub>>) -> Option<(u64, u64)> {
     let b = fresh(hub, "sms")?;
@@ -285,4 +354,56 @@ fn sms_summary(hub: Option<&Arc<crate::block::Hub>>) -> Option<(u64, u64)> {
         b.get("max_id")?.as_u64()?,
         b.get("count").and_then(Value::as_u64).unwrap_or(0),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sim_identity::Phase;
+
+    fn s(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
+
+    #[test]
+    fn sim_hold_leaving_changed_then_online_settle() {
+        let mut h = SimHold::default();
+        assert!(!h.held(Phase::Online, s(0)), "no switch: sends");
+        assert!(h.held(Phase::Leaving, s(10)));
+        assert!(h.held(Phase::Changed, s(20)));
+        assert!(h.held(Phase::Online, s(30)), "online, not settled yet");
+        assert!(h.held(Phase::Online, s(59)));
+        assert!(!h.held(Phase::Online, s(60)), "settled: sends");
+        assert!(!h.held(Phase::Online, s(61)));
+    }
+
+    #[test]
+    fn sim_hold_settle_restarts_on_flap() {
+        let mut h = SimHold::default();
+        assert!(h.held(Phase::Changed, s(0)));
+        assert!(h.held(Phase::Online, s(10)));
+        assert!(h.held(Phase::Leaving, s(30)));
+        assert!(h.held(Phase::Online, s(50)), "settle counts from the last online");
+        assert!(!h.held(Phase::Online, s(80)));
+    }
+
+    #[test]
+    fn sim_hold_not_started_by_reloaded_or_stalled() {
+        let mut h = SimHold::default();
+        assert!(!h.held(Phase::Stalled, s(0)));
+        assert!(!h.held(Phase::Reloaded, s(1)));
+        assert!(!h.held(Phase::Online, s(2)));
+    }
+
+    #[test]
+    fn sim_hold_capped_when_stuck() {
+        let mut h = SimHold::default();
+        assert!(h.held(Phase::Leaving, s(0)));
+        assert!(h.held(Phase::Stalled, s(599)));
+        assert!(!h.held(Phase::Stalled, s(600)), "cap: sends anyway");
+        assert!(!h.held(Phase::Stalled, s(3600)), "stays released while stuck");
+        assert!(!h.held(Phase::Online, s(3601)), "past the cap: no settle wait");
+        assert!(!h.held(Phase::Online, s(3700)));
+        assert!(h.held(Phase::Leaving, s(4000)), "a new switch holds again");
+    }
 }
