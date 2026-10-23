@@ -9,7 +9,8 @@
 //!   10-20: a read-only page).
 //! - The scopes, the limit and the rollback words mirror `luyaz-core` `ops/agent.rs` (`Layer`,
 //!   `LIMIT_SECS`), `ops/spec.rs` (every `apn.*` and `chill.*` op is `Unsupported`: no automatic
-//!   rollback) and `agent_act.rs` (`PAGES`).
+//!   rollback; the link scope's band and cell locks are `CapturedAndProven`: the trial rolls back,
+//!   only on the owner's instruction, D-g) and `agent_act.rs` (`PAGES`, `LINK_ACTIONS`).
 
 use std::path::Path;
 use std::time::UNIX_EPOCH;
@@ -50,6 +51,8 @@ pub struct Token {
 pub struct Scope {
     pub label: &'static str,
     pub href: &'static str,
+    /// What the agent may do there and whether it rolls back (en, zh).
+    pub sub: (&'static str, &'static str),
     /// "MM-DD HH:mm" of the agent's last change in this scope.
     pub last: Option<String>,
 }
@@ -100,17 +103,31 @@ pub fn view(f: &Files, l: Lang) -> View {
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(Value::Null);
-    let scopes = [("APN", "apn", "/router/apn"), ("CHILL", "chill", "/services/chill")]
-        .into_iter()
-        .map(|(label, key, href)| Scope {
-            label,
-            href,
-            last: limit[key]
-                .as_i64()
-                .filter(|&t| t > 0)
-                .map(crate::alerts_page::mdhm),
-        })
-        .collect();
+    const NO_UNDO: (&str, &str) = ("no automatic rollback", "不能自动退回");
+    let scopes = [
+        ("APN", "apn", "/router/apn", NO_UNDO),
+        ("CHILL", "chill", "/services/chill", NO_UNDO),
+        (
+            l.pick("Band & cell locks", "锁频 / 锁小区"),
+            "link",
+            "/bandlock",
+            (
+                "only on your instruction · not while roaming or abroad · rolls back unless the device itself sees mobile data and Tailscale working",
+                "只按你的指令 · 漫游或人在国外时不做 · 设备自己测到蜂窝和 Tailscale 都通才保留，否则自动退回",
+            ),
+        ),
+    ]
+    .into_iter()
+    .map(|(label, key, href, sub)| Scope {
+        label,
+        href,
+        sub,
+        last: limit[key]
+            .as_i64()
+            .filter(|&t| t > 0)
+            .map(crate::alerts_page::mdhm),
+    })
+    .collect();
     View {
         l,
         on: !tokens.is_empty(),
@@ -210,6 +227,9 @@ mod tests {
         assert!(!html.contains("0123456789abcdef"), "a token leaked");
         assert!(html.contains("hermes-act") && html.contains("192.168.50.88"));
         assert!(html.contains("不能自动退回") && !html.contains("核对不通过"));
+        // D-g: the link scope says it runs only on the owner's word, and how it rolls back
+        assert!(html.contains("锁频 / 锁小区") && html.contains("只按你的指令"));
+        assert!(html.contains("来源：你的指令（未验证）"));
     }
 
     #[test]

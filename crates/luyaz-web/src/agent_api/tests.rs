@@ -354,6 +354,31 @@ async fn through_the_gate() {
     // only the listed actions
     let (st, _) = act("/agent-api/act/apn", T1, json!({"action": "esim.switch", "params": {}})).await;
     assert_eq!(st, 400);
+    // D-g: a link change goes on only with the owner's instruction, rebuilt as mcp + instruction owner
+    let (st, v) = act(
+        "/agent-api/act/link",
+        T1,
+        json!({"action": "band.set_lte", "params": {"bands": "1,3", "source": "web"},
+               "instruction": "owner", "source": "screen", "approved_by": "screen"}),
+    )
+    .await;
+    assert_eq!((st, v["state"].as_str()), (200, Some("trial")), "{v}");
+    assert_eq!(v["authority"]["layer"], "link");
+    let b = seen.lock().unwrap().last().cloned().unwrap();
+    assert_eq!((b["source"].as_str(), b["approved_by"].as_str()), (Some("mcp"), Some("mcp")));
+    assert_eq!((b["action"].as_str(), b["instruction"].as_str()), (Some("band.set_lte"), Some("owner")));
+    assert_eq!(b["params"], json!({"bands": "1,3"}));
+    let n = seen.lock().unwrap().len();
+    let (st, v) = act("/agent-api/act/link", T1, json!({"action": "band.reset", "params": {}})).await;
+    assert_eq!((st, v["reason"].as_str()), (403, Some("needs_instruction")), "{v}");
+    let (st, _) = act(
+        "/agent-api/act/link",
+        T1,
+        json!({"action": "network.set_mode", "params": {}, "instruction": "owner"}),
+    )
+    .await;
+    assert_eq!(st, 400);
+    assert_eq!(seen.lock().unwrap().len(), n, "refused link changes never reach the core");
     let (st, _) = act("/agent-api/act/chill/exit", T2, json!({"state": "proxy"})).await;
     assert_eq!(st, 403, "hermes stays read-only");
     let (_, v) = call("/agent-api/action-url?for=apn", Some(T2)).await;
@@ -385,7 +410,7 @@ async fn through_the_gate() {
     let (st, _) = act("/agent-api/act/chill/exit", T1, json!({"state": "direct_keep_ai"})).await;
     assert_eq!(st, 401);
     let n = seen.lock().unwrap().len();
-    assert_eq!(n, 1, "no refused act reached the core");
+    assert_eq!(n, 2, "no refused act reached the core (apn.enable + band.set_lte only)");
     // revoked: delete the line
     std::fs::write(&tf, format!("hermes {T2}\n")).unwrap();
     assert_eq!(call("/agent-api/health", Some(T1)).await.0, 401);
@@ -426,4 +451,77 @@ async fn core_down_is_said_not_502() {
     let b = axum::body::to_bytes(r.into_body(), 4096).await.unwrap();
     let v: Value = serde_json::from_slice(&b).unwrap();
     assert_eq!(v["core"], "down");
+}
+
+// ---- /agent-api/sim ----
+
+const ICCID: &str = "89860000000000001234";
+const IMSI: &str = "460110000000777";
+const MSISDN: &str = "+8613800000000";
+
+fn sim_block(dual: bool) -> Value {
+    let mut d = json!({
+        "current_slot": 1, "dual_sim": 0, "epoch": 2, "phase": "reloaded",
+        "iccid": ICCID, "imsi": IMSI, "msisdn": MSISDN,
+        "modem_state": "modem_init_complete", "pin_status": "5",
+        "say": "换卡后重新加载", "say_en": "Reloaded after the card change", "say_id": "recovered",
+        "say_short": "", "say_short_en": "", "sim1_provision": 1, "sim2_provision": 0,
+        "spn": "中国电信", "state": "sim ready", "future_field": "x",
+    });
+    if dual {
+        d["dual"] = json!({
+            "active_slot": 2, "mode": "single", "smart": false, "switching": false,
+            "smart_rule": {"period_s": 120, "rsrp": [-115], "snr": [0]},
+            "slots": [
+                {"slot": 1, "provisioned": false, "present": true, "ready": null, "role": "off",
+                 "state": "off", "operator": "", "mcc": "", "mnc": "", "serving_mcc": null,
+                 "true_roaming": null, "iccid_tail": "1234"},
+                {"slot": 2, "provisioned": true, "present": true, "ready": true, "role": "data",
+                 "state": "ready", "operator": "CMCC", "mcc": "460", "mnc": "13", "logo": "china-mobile",
+                 "serving_mcc": 460, "true_roaming": false, "place": "本地", "place_en": "Local",
+                 "signal": {"at": 1, "bars": 5, "rat": "nr", "rsrp": -92, "rsrq": -11, "snr": "11.0"},
+                 "iccid_tail": "5678"},
+            ],
+        });
+    }
+    json!({"revision": 3, "observed_at": 1000, "stale": false, "data": d})
+}
+
+#[test]
+fn sim_never_says_who_the_card_is() {
+    for dual in [false, true] {
+        let v = shape_sim(Some(&sim_block(dual)), 1030);
+        let s = v.to_string();
+        for secret in [ICCID, IMSI, MSISDN, "1234", "5678", "iccid", "imsi", "msisdn", "future_field"] {
+            assert!(!s.contains(secret), "{secret} in {s}");
+        }
+        assert_eq!(v["state"], "ok");
+        assert_eq!(v["epoch"], 2);
+        assert_eq!(v["phase"], "reloaded");
+        assert_eq!(v["say_id"], "recovered");
+        assert_eq!(v["age_s"], 30);
+        assert_eq!(v["spn"], json!({"untrusted": "中国电信"}));
+    }
+}
+
+#[test]
+fn sim_dual_slots_are_whitelisted() {
+    let v = shape_sim(Some(&sim_block(false)), 1000);
+    assert!(v["dual"].is_null());
+    let v = shape_sim(Some(&sim_block(true)), 1000);
+    let d = &v["dual"];
+    assert_eq!(d["active_slot"], 2);
+    assert!(d.get("smart_rule").is_none());
+    let s2 = &d["slots"][1];
+    assert_eq!(s2["operator"], json!({"untrusted": "CMCC"}));
+    assert_eq!(s2["place"], json!({"untrusted": "Local"}));
+    assert_eq!(s2["signal"], json!({"rat": "nr", "rsrp": -92, "rsrq": -11, "snr": "11.0", "bars": 5}));
+    assert!(s2.get("logo").is_none());
+    assert!(d["slots"][0]["signal"].is_null());
+}
+
+#[test]
+fn sim_missing_block_is_unavailable_not_empty() {
+    assert_eq!(shape_sim(None, 0)["state"], "unavailable");
+    assert_eq!(shape_sim(Some(&json!({"stale": true})), 0)["state"], "unavailable");
 }

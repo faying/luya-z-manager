@@ -329,6 +329,8 @@ fn run(dir: &Path) {
         std::thread::sleep(EVERY);
         let fields = LATEST.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let t = crate::qmi_nas::now() as i64;
+        // R18-P2-01: the stock-anomaly checks ride this tick instead of a poller of their own
+        crate::stock_anomaly::tick(fields.as_ref(), t);
         let Some(r) = fields.as_ref().and_then(|f| reading(f, t)) else {
             continue;
         };

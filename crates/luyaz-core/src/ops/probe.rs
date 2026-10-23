@@ -157,6 +157,7 @@ mod tests {
             dns: dns.iter().map(|s| s.to_string()).collect(),
             v6: false,
             chill: false,
+            tailnet: false,
         };
         let t6 = |iface: &str, dns: &[&str]| ProbeTarget {
             v6: true,
@@ -260,6 +261,7 @@ mod tests {
             dns: vec![addr4.ip().to_string(), "::1".into()],
             v6: true,
             chill: false,
+            tailnet: false,
         };
         // 端口固定 53：没有人在 ::1:53 上听，只确认它试的是 IPv6 的那个
         let err = dns(&target).await.unwrap_err();
@@ -382,6 +384,7 @@ mod tests {
             dns: vec!["192.0.2.53".into(), "192.0.2.54".into()],
             v6: false,
             chill: false,
+            tailnet: false,
         };
         assert!(dns(&target).await.unwrap_err().local);
     }

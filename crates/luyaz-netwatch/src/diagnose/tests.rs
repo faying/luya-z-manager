@@ -58,10 +58,13 @@ struct Fake {
     calls: Mutex<[u32; 4]>,
     /// what `fresh_network` has (a Finding probe's result)
     fresh: Mutex<Option<NetworkEvidence>>,
+    /// what `https_probe` answers; asked how many times
+    https: Option<HttpsEvidence>,
+    https_calls: Mutex<u32>,
 }
 
 fn fake(busy: Option<&'static str>) -> Fake {
-    Fake { busy: Mutex::new(busy), events: Mutex::default(), wan: "ipv4_connected", calls: Mutex::default(), fresh: Mutex::default() }
+    Fake { busy: Mutex::new(busy), events: Mutex::default(), wan: "ipv4_connected", calls: Mutex::default(), fresh: Mutex::default(), https: None, https_calls: Mutex::default() }
 }
 
 fn passed() -> NetworkEvidence {
@@ -106,6 +109,10 @@ impl Host for Fake {
     }
     fn fresh_network(&self) -> Option<NetworkEvidence> {
         self.fresh.lock().unwrap().clone()
+    }
+    fn https_probe(&self, _: Option<&Value>, _: Duration) -> Option<HttpsEvidence> {
+        *self.https_calls.lock().unwrap() += 1;
+        self.https.clone()
     }
     fn local_dns(&self) -> Option<LocalDns> {
         self.calls.lock().unwrap()[2] += 1;
@@ -209,8 +216,9 @@ fn no_probes_past_a_bad_bearer() {
     for id in ["link", "dns", "e2e", "clock", "crowd"] {
         assert_eq!(level_of(&v, id), "blocked", "{id}");
     }
-    // link, path and local DNS probes never called; the card is still read
+    // link, path, local DNS and HTTPS probes never called; the card is still read
     assert_eq!(&host.calls.lock().unwrap()[..3], &[0, 0, 0]);
+    assert_eq!(*host.https_calls.lock().unwrap(), 0);
     assert_eq!((v["main"]["layer"].as_str(), v["main"]["more"].as_u64()), (Some("bearer"), Some(1)));
     assert!(gate.lock().unwrap().diag_since.is_none());
     // the event carries the blocked layers as they are
@@ -257,4 +265,17 @@ br-lan\t0000A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n";
     let b = bearer_base(Some(&st));
     assert_eq!((b.connected, b.has_ip, b.iface.as_str()), (Some(true), Some(true), "rmnet_data0"));
     assert_eq!(bearer_base(None), BearerIn::default());
+}
+
+#[test]
+fn https_that_never_gets_through_warns_beside_a_plain_http_answer() {
+    use luyaz_api::execution::https::{Attempt, Sample, judge};
+    let s: Vec<Sample> = ["apple", "tencent", "baidu"].iter().map(|o| Sample { org: o, attempt: Attempt::Unreachable }).collect();
+    let host = Arc::new(Fake { https: Some(HttpsEvidence::of(&s, judge(&s, Some(0), None))), ..fake(None) });
+    let d = Diagnosis::new(host.clone(), Arc::default());
+    d.start(None);
+    until("done", || d.get().1["data"]["state"] == "done");
+    let v = d.get().1["data"].clone();
+    assert_eq!(level_of(&v, "e2e"), "warn");
+    assert_eq!(*host.https_calls.lock().unwrap(), 1);
 }

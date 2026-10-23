@@ -280,7 +280,7 @@ fn uci_save_dir() -> std::path::PathBuf {
 /// R19：`/tmp/.uci/<包>` 不存在或为 0 字节（设备上 commit 后留下的空文件）且配置文件能解析时，
 /// 核心自己解析 `/etc/config/<包>`，不 fork；否则返回 `None`，调用方退回 `uci` 子进程。
 /// `LUYAZ_UCI_PARSE=0` 一律走子进程（回退开关）。
-fn uci_parsed(package: &str) -> Option<crate::uci::Package> {
+pub(crate) fn uci_parsed(package: &str) -> Option<crate::uci::Package> {
     if std::env::var("LUYAZ_UCI_PARSE").as_deref() == Ok("0") {
         return None;
     }

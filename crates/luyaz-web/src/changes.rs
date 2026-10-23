@@ -336,11 +336,18 @@ pub fn agent_label(e: &Value, l: Lang) -> Option<String> {
     if e["source"].as_str() != Some("mcp") {
         return None;
     }
+    let action = e["action"].as_str().unwrap_or("");
+    let link = crate::agent_act::LINK_ACTIONS.iter().any(|(a, _)| *a == action);
     let who = match (e["approved_by"].as_str(), l) {
         (Some("web"), Lang::En) => "Proposed by the AI agent, approved by you on the web page",
         (Some("web"), _) => "由 AI 代理提议、你在网页批准",
         (Some("screen"), Lang::En) => "Proposed by the AI agent, approved by you on the screen",
         (Some("screen"), _) => "由 AI 代理提议、你在触屏批准",
+        // D-g: a change that can cut the link runs only as the owner's instruction, which the device cannot check
+        _ if link => match l {
+            Lang::En => "Done by the AI agent · source: your instruction (unverified)",
+            _ => "Agent 执行 · 来源：你的指令（未验证）",
+        },
         (_, Lang::En) => "Changed by the AI agent (its own act permission)",
         (_, _) => "由 AI 代理改动（它自己的 act 授权）",
     };

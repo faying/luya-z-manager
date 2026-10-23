@@ -849,6 +849,28 @@ fn split(s: &str) -> Vec<String> {
         .collect()
 }
 
+/// A Telegram chat: a numeric id (groups and channels are negative) or a public `@username`.
+fn is_chat_id(s: &str) -> bool {
+    let d = s.strip_prefix('-').unwrap_or(s);
+    if !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()) {
+        return true;
+    }
+    s.strip_prefix('@').is_some_and(|u| {
+        !u.is_empty() && u.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    })
+}
+
+/// A number to text: digits (short codes too), an optional leading `+`; spaces and dashes allowed.
+fn is_number(s: &str) -> bool {
+    let d: String = s
+        .strip_prefix('+')
+        .unwrap_or(s)
+        .chars()
+        .filter(|c| *c != ' ' && *c != '-')
+        .collect();
+    (1..=20).contains(&d.len()) && d.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn is_url(s: &str) -> bool {
     (s.starts_with("https://") || s.starts_with("http://")) && !host(s).is_empty()
 }
@@ -899,9 +921,11 @@ pub fn rule_check(f: &RuleIn, cur: Option<&Rule>, l: Lang) -> Result<Value, Stri
             t.to_owned()
         }
     };
-    let missing = || -> String {
-        l.pick("Fill in the destination fields.", "把转发目标填完整。")
-            .into()
+    let missing = |en: &str, zh: &str| -> String {
+        match l {
+            Lang::En => format!("Fill in {en}."),
+            _ => format!("把{zh}填上。"),
+        }
     };
     let bad_url = || -> String {
         l.pick(
@@ -914,15 +938,26 @@ pub fn rule_check(f: &RuleIn, cur: Option<&Rule>, l: Lang) -> Result<Value, Stri
         "telegram" => {
             let bt = keep(&f.bot_token, "bot_token");
             let ci = f.chat_id.trim();
-            if bt.is_empty() || ci.is_empty() {
-                return Err(missing());
+            if bt.is_empty() {
+                return Err(missing("the Bot Token", " Bot Token "));
+            }
+            if ci.is_empty() {
+                return Err(missing("the Chat ID", " Chat ID "));
+            }
+            if !is_chat_id(ci) {
+                return Err(l
+                    .pick(
+                        "A Chat ID is a number (like -100123456) or @channel.",
+                        "Chat ID 是数字（像 -100123456）或 @频道名。",
+                    )
+                    .into());
             }
             json!({"type": "telegram", "bot_token": bt, "chat_id": ci, "silent": f.silent})
         }
         "webhook" => {
             let url = keep(&f.url, "url");
             if url.is_empty() {
-                return Err(missing());
+                return Err(missing("the URL", "网址"));
             }
             if !is_url(&url) {
                 return Err(bad_url());
@@ -944,15 +979,26 @@ pub fn rule_check(f: &RuleIn, cur: Option<&Rule>, l: Lang) -> Result<Value, Stri
         "sms" => {
             let n = f.number.trim();
             if n.is_empty() {
-                return Err(missing());
+                return Err(missing("the number to forward to", "转发到的号码"));
+            }
+            if !is_number(n) {
+                return Err(l
+                    .pick(
+                        "A phone number is digits, with an optional + in front.",
+                        "号码只能是数字，前面可以带 +。",
+                    )
+                    .into());
             }
             json!({"type": "sms", "forward_number": n})
         }
         "ntfy" => {
             let u = f.ntfy_url.trim();
             let topic = keep(&f.topic, "topic");
-            if u.is_empty() || topic.is_empty() {
-                return Err(missing());
+            if u.is_empty() {
+                return Err(missing("the server URL", "服务器地址"));
+            }
+            if topic.is_empty() {
+                return Err(missing("the topic", "主题"));
             }
             if !is_url(u) {
                 return Err(bad_url());
@@ -971,7 +1017,7 @@ pub fn rule_check(f: &RuleIn, cur: Option<&Rule>, l: Lang) -> Result<Value, Stri
         t => {
             let w = keep(&f.hook, "webhook_url");
             if w.is_empty() {
-                return Err(missing());
+                return Err(missing("the Webhook URL", " Webhook 地址"));
             }
             if !is_url(&w) {
                 return Err(bad_url());

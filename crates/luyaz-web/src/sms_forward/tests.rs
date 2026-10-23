@@ -366,3 +366,39 @@ fn the_status_says_what_happens() {
         "a push never resets the draft"
     );
 }
+
+#[test]
+fn rule_check_names_the_missing_field_and_checks_formats() {
+    let l = Lang::En;
+    let mut f = rin("telegram");
+    assert!(rule_check(&f, None, l).unwrap_err().contains("Bot Token"));
+    f.bot_token = "9:x".into();
+    assert!(rule_check(&f, None, l).unwrap_err().contains("Chat ID"));
+    for ok in ["5", "-1001", "@my_channel"] {
+        f.chat_id = ok.into();
+        assert!(rule_check(&f, None, l).is_ok(), "{ok}");
+    }
+    for bad in ["-", "@", "12a", "@bad-name", "https://t.me/x"] {
+        f.chat_id = bad.into();
+        assert!(rule_check(&f, None, l).unwrap_err().contains("number"), "{bad}");
+    }
+    let mut f = rin("sms");
+    assert!(rule_check(&f, None, l).unwrap_err().contains("number to forward"));
+    for ok in ["+1", "10086", "+886 912-345-678"] {
+        f.number = ok.into();
+        assert!(rule_check(&f, None, l).is_ok(), "{ok}");
+    }
+    for bad in ["+", "abc", "+86 138x", "123456789012345678901"] {
+        f.number = bad.into();
+        assert!(rule_check(&f, None, l).is_err(), "{bad}");
+    }
+    let mut f = rin("ntfy");
+    assert!(rule_check(&f, None, l).unwrap_err().contains("server URL"));
+    f.ntfy_url = "https://ntfy.sh".into();
+    assert!(rule_check(&f, None, l).unwrap_err().contains("topic"));
+    assert!(rule_check(&rin("discord"), None, l).unwrap_err().contains("Webhook URL"));
+    assert_eq!(
+        rule_check(&rin("slack"), None, Lang::Zh).unwrap_err(),
+        "把 Webhook 地址填上。"
+    );
+}

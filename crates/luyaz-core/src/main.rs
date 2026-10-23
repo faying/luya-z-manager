@@ -44,6 +44,7 @@ mod sim_follow;
 mod sim_alerts;
 mod sim_identity;
 mod sim_say;
+mod stock_anomaly;
 
 // Phase 3: HTTP and the write path moved from data-service (serve.rs)
 mod at;

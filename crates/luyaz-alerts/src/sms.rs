@@ -37,6 +37,9 @@ const NEVER: &[&str] = &[
     "agent-change",
     "tailnet-poller",
     "lan-new-device",
+    // R18-P2-01 stock anomalies (owner 10-23): inbox and MCP only while false alarms are watched
+    "wifi-post-stuck",
+    "no-service-long",
 ];
 
 /// What a sender needs from the device. The core implements `send` through its reconciler, the

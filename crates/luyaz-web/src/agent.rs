@@ -85,6 +85,7 @@ const ON_U60D: &[&str] = &[
     "/usage/landing",
     // the passive firmware capability report and the recovery-action table (R18-P1-07, agent-api)
     "/device/capabilities",
+    "/device/no-service-history",
     "/recovery/actions",
     "/api/netinfo",
     "/api/netinfo/scan",

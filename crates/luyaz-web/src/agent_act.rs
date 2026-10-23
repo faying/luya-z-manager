@@ -10,6 +10,10 @@
 //! - The answer says what happened, never the core's whole reply: `trial` with the `op_id` (the
 //!   result comes later in the events), `done`, `sensitive` with the page to send the owner to,
 //!   `rate_limited` with when, `busy`, `refused`, `failed`.
+//! - Changes that can cut the agent's own link (D-g: band locks, band reset, cell locks — the actions
+//!   whose rollback is proven) go through `/agent-api/act/link`, only as the owner's instruction: the
+//!   caller must send `instruction: "owner"`, passed on to the core as is. The core refuses them while
+//!   roaming, keeps one per half hour for the whole class, and its trial also waits for Tailscale.
 //! - Never here, not even as a page: eSIM profile deletes, factory reset, rc.local, firmware updates.
 
 use axum::Router;
@@ -45,6 +49,7 @@ pub fn routes() -> Router<Shared> {
         .route("/agent-api/act/chill/exit", post(chill_exit))
         .route("/agent-api/act/apn/use", post(apn_use))
         .route("/agent-api/act/apn", post(apn))
+        .route("/agent-api/act/link", post(link))
         .route("/agent-api/act/status", get(status))
         .route("/agent-api/action-url", get(action_url))
 }
@@ -66,8 +71,23 @@ const APN_ACTIONS: &[(&str, &[&str])] = &[
     ("apn.set_pdp_type", &["pdp_type"]),
 ];
 
+/// The changes that can cut the agent's own link (D-g) and their parameter keys. Same list as the
+/// core's (`ops::agent::link`: rollback proven on the device); the core checks it again.
+pub const LINK_ACTIONS: &[(&str, &[&str])] = &[
+    ("band.set_lte", &["bands"]),
+    ("band.set_nr", &["sa", "nsa"]),
+    ("band.reset", &[]),
+    ("cell.lock_lte", &["pci", "earfcn", "off"]),
+    ("cell.lock_nr", &["pci", "arfcn", "band", "off"]),
+];
+
 /// The pages a sensitive change sends the owner to (`get_action_url`).
-const PAGES: &[(&str, &str)] = &[("apn", "/router/apn"), ("chill", "/services/chill")];
+const PAGES: &[(&str, &str)] = &[
+    ("apn", "/router/apn"),
+    ("chill", "/services/chill"),
+    ("band", "/bandlock"),
+    ("cell", "/router/celllock"),
+];
 
 /// The token and the sources for a write: Ok = the client's name.
 fn admit_act(req: &Request) -> Result<String, Response> {
@@ -204,9 +224,12 @@ impl OrNull for Value {
 }
 
 /// A `/control` write as the agent (source = approved_by = mcp, a fresh op_id).
-async fn control(app: &Shared, action: &str, params: Value) -> Result<(u16, Value), ()> {
-    let body = json!({"action": action, "source": "mcp", "approved_by": "mcp",
+async fn control(app: &Shared, action: &str, params: Value, owner: bool) -> Result<(u16, Value), ()> {
+    let mut body = json!({"action": action, "source": "mcp", "approved_by": "mcp",
         "params": params, "op_id": op_id()});
+    if owner {
+        body["instruction"] = json!("owner");
+    }
     let r = app
         .http
         .post(&app.control_url)
@@ -220,10 +243,21 @@ async fn control(app: &Shared, action: &str, params: Value) -> Result<(u16, Valu
 }
 
 async fn act(app: &Shared, name: &str, action: &str, params: Value, url: Option<String>) -> Response {
+    act_as(app, name, action, params, url, false).await
+}
+
+async fn act_as(
+    app: &Shared,
+    name: &str,
+    action: &str,
+    params: Value,
+    url: Option<String>,
+    owner: bool,
+) -> Response {
     eprintln!("[agent-api] {name} act {action}");
-    match control(app, action, params).await {
+    match control(app, action, params, owner).await {
         Ok((code, v)) => {
-            let layer = action.split('.').next().unwrap_or("");
+            let layer = if owner { "link" } else { action.split('.').next().unwrap_or("") };
             reply(shape_as(code, &v, url, Some((name, layer))))
         }
         Err(()) => reply(json!({"core": "down"})),
@@ -269,6 +303,31 @@ async fn apn(State(app): State<Shared>, req: Request) -> Response {
         return refuse(400, "bad_request", "action must be one of apn.set_mode, apn.enable, apn.add, apn.modify, apn.delete, apn.set_pdp_type");
     };
     act(&app, &name, action, pick(&b["params"], keys), url).await
+}
+
+/// A change that can cut the agent's own link (D-g), only as the owner's instruction.
+async fn link(State(app): State<Shared>, req: Request) -> Response {
+    let name = match admit_act(&req) {
+        Ok(n) => n,
+        Err(r) => return r,
+    };
+    let (band_url, cell_url) = (page_url(&req, "band"), page_url(&req, "cell"));
+    let Some(b) = body_of(req).await else {
+        return refuse(400, "bad_request", "a JSON object with action, params and instruction");
+    };
+    let wanted = b["action"].as_str().unwrap_or("");
+    let Some((action, keys)) = LINK_ACTIONS.iter().find(|(a, _)| *a == wanted) else {
+        return refuse(400, "bad_request", "action must be one of band.set_lte, band.set_nr, band.reset, cell.lock_lte, cell.lock_nr");
+    };
+    if b["instruction"] != "owner" {
+        return refuse(
+            403,
+            "needs_instruction",
+            "this change can cut your own link: only on the owner's explicit instruction (instruction: owner)",
+        );
+    }
+    let url = if action.starts_with("cell.") { cell_url } else { band_url };
+    act_as(&app, &name, action, pick(&b["params"], keys), url, true).await
 }
 
 /// Use an APN (`{"id"}`: `auto`, a candidate `autoN`, a manual `manuN`): the core's `apn_use`
@@ -362,7 +421,7 @@ pub struct UrlQ {
 }
 
 /// `get_action_url`: the page to hand the owner for a change the agent may not make. Only for
-/// what has a page here (APN, CHILL); nothing for what is never the agent's (eSIM deletes,
+/// what has a page here (APN, CHILL, bands, cell locks); nothing for what is never the agent's (eSIM deletes,
 /// factory reset, rc.local, firmware updates).
 async fn action_url(Query(q): Query<UrlQ>, req: Request) -> Response {
     if let Err(r) = admit_perm(&req) {

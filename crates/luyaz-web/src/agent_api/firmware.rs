@@ -127,6 +127,7 @@ pub fn shape_capabilities(raw: &Value, prefix: Option<&str>) -> Value {
             "assessments": a,
             "evidence": e,
             "truncated": truncated,
+            "stock_anomalies": raw.get("stock_anomalies").map(stock_anomalies),
             "limitations": LIMITATIONS,
         })
     };
@@ -192,9 +193,105 @@ pub async fn recovery_actions(State(app): State<Shared>, req: Request) -> Respon
     }
 }
 
+/// Stock recovery labels the core's no-service ledger may use.
+const STOCK: &[&str] = &["lpm_cycle", "sim_reset", "redial", "unknown", "ssr", "modem_restart"];
+
+fn labels(v: &Value) -> Value {
+    v.as_array()
+        .map(|a| a.iter().filter(|s| s.as_str().is_some_and(|s| STOCK.contains(&s))).cloned().collect())
+        .unwrap_or_default()
+}
+
+fn ledger_row(r: &Value) -> Value {
+    let mut o = pick(r, &["start", "end", "secs", "verified", "alerted"]);
+    o["seen"] = labels(&r["seen"]);
+    if let Some(s) = r["stock"].as_str().filter(|s| STOCK.contains(s)) {
+        o["stock"] = json!(s);
+    }
+    o
+}
+
+fn rows(v: &Value) -> Value {
+    v.as_array()
+        .map(|a| a.iter().take(50).map(ledger_row).collect())
+        .unwrap_or_default()
+}
+
+/// R18-P2-01: the core's read-only stock-firmware anomalies, field by field. Interface names
+/// come from the device's own uci and process list, so they go out as untrusted text.
+fn stock_anomalies(raw: &Value) -> Value {
+    let names = |v: &Value| -> Value {
+        v.as_array()
+            .map(|a| a.iter().take(16).map(untrusted).collect())
+            .unwrap_or_default()
+    };
+    let w = &raw["wifi_post_stuck"];
+    let wifi = (!w.is_null()).then(|| {
+        let mut o = pick(w, &["alive_s", "enabled_count", "hostapd_cli_count", "forks_per_s"]);
+        o["enabled"] = names(&w["enabled"]);
+        o["hostapd_cli"] = names(&w["hostapd_cli"]);
+        o
+    });
+    let ns = &raw["no_service"];
+    let open = (!ns["open"].is_null()).then(|| ledger_row(&ns["open"]));
+    json!({
+        "wifi_post_stuck": wifi,
+        "no_service": {"open": open, "recent": rows(&ns["recent"])},
+        "unverified": labels(&raw["unverified"]),
+    })
+}
+
+#[derive(serde::Deserialize)]
+pub struct HistQ {
+    limit: Option<u32>,
+}
+
+/// R18-P2-01: the core's no-service ledger, newest first.
+pub async fn no_service_history(
+    State(app): State<Shared>,
+    Query(q): Query<HistQ>,
+    req: Request,
+) -> Response {
+    let name = match admit(&req) {
+        Ok(n) => n,
+        Err(r) => return r,
+    };
+    log(&name, "no-service-history");
+    let n = q.limit.unwrap_or(10).clamp(1, 50);
+    match read(&app, &format!("/device/no-service-history?limit={n}")).await {
+        Ok(Ok(r)) => reply(json!({"state": "ok", "rows": rows(&r["rows"]), "keep": r["keep"]})),
+        Ok(Err(code)) => reply(json!({"core": "up", "state": "not_described",
+            "why": "this core keeps no no-service ledger (too old)", "http": code})),
+        Err(_) => core_down(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stock_anomalies_only_whitelisted_fields_and_labels() {
+        let raw = json!({
+            "wifi_post_stuck": {"alive_s": 90, "enabled_count": 2, "hostapd_cli_count": 1,
+                "forks_per_s": 250.0, "enabled": ["main_2g", "main_5g"], "hostapd_cli": ["ath0"],
+                "secret": "x"},
+            "no_service": {"open": {"start": 1, "secs": 400, "seen": ["redial", "rm -rf"], "x": 1},
+                "recent": [{"start": 1, "end": 2, "secs": 1, "stock": "evil", "seen": [], "verified": false}]},
+            "unverified": ["ssr", "modem_restart", "other"],
+        });
+        let s = stock_anomalies(&raw);
+        let w = &s["wifi_post_stuck"];
+        assert_eq!(w["alive_s"], 90);
+        assert!(w.get("secret").is_none());
+        assert_eq!(w["enabled"][0], json!({"untrusted": "main_2g"}));
+        assert_eq!(s["no_service"]["open"]["seen"], json!(["redial"]));
+        assert!(s["no_service"]["open"].get("x").is_none());
+        assert!(s["no_service"]["recent"][0].get("stock").is_none());
+        assert_eq!(s["unverified"], json!(["ssr", "modem_restart"]));
+        let none = stock_anomalies(&json!({"wifi_post_stuck": null, "no_service": {"open": null, "recent": []}}));
+        assert!(none["wifi_post_stuck"].is_null() && none["no_service"]["open"].is_null());
+    }
 
     fn report() -> Value {
         // the core's own empty-collector shape: everything unknown, coverage not authoritative

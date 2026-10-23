@@ -818,7 +818,12 @@ impl engine::Device for UbusDevice {
                 p => Err(format!("CHILL path {p:?}").into()),
             };
         }
-        probe::dns(target).await
+        probe::dns(target).await?;
+        // D-g：读不到、不在线都算不通（不是 unknown），到点就退回
+        if target.tailnet && !agent::tailnet_up().await {
+            return Err("Tailscale is not online".to_string().into());
+        }
+        Ok(())
     }
 
     fn now_ms(&self) -> u64 {

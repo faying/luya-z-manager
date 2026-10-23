@@ -324,13 +324,21 @@ impl Source for Live {
     }
 
     fn bl_on(&mut self) {
+        crate::device::unblank();
         self.bl.on();
     }
     fn bl_off(&mut self) {
         self.bl.off();
+        crate::device::blank();
     }
     fn bl_set(&mut self, level: i32) {
+        if level > 0 {
+            crate::device::unblank();
+        }
         self.bl.set(level);
+        if level <= 0 {
+            crate::device::blank();
+        }
     }
     fn bl_remember(&mut self, level: i32) {
         self.bl.remember(level);

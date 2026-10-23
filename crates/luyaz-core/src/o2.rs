@@ -201,12 +201,17 @@ fn classify(e: &std::io::Error, full: bool) -> Attempt {
 
 /// Every target in turn, all within [`BUDGET`]; a target with no time left is `NoName`.
 pub fn run(path: &Path) -> Vec<Sample> {
+    run_within(path, BUDGET)
+}
+
+/// [`run`] within `budget` (a deep diagnosis has its own cap).
+pub fn run_within(path: &Path, budget: Duration) -> Vec<Sample> {
     let start = Instant::now();
     TARGETS
         .iter()
         .map(|(host, org)| Sample {
             org,
-            attempt: match BUDGET.checked_sub(start.elapsed()).filter(|d| !d.is_zero()) {
+            attempt: match budget.checked_sub(start.elapsed()).filter(|d| !d.is_zero()) {
                 Some(left) => attempt(path, host, left),
                 None => Attempt::NoName,
             },
@@ -290,6 +295,13 @@ pub fn check(iface: &str) -> Option<(Vec<Sample>, Verdict)> {
     let samples = run(&path);
     let (v, _, _) = judge(&samples);
     Some((samples, v))
+}
+
+/// One run on a path the caller already has (a deep diagnosis: `finding::path::paths`).
+pub fn check_path(path: &Path, budget: Duration) -> (Vec<Sample>, Verdict) {
+    let samples = run_within(path, budget);
+    let (v, _, _) = judge(&samples);
+    (samples, v)
 }
 
 /// `<core> o2-check <iface> <source-ip>`: one read-only run, JSON on stdout. Exit 0 = ran.

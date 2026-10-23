@@ -7,7 +7,8 @@
 //!   refresh and touch-read timers pause, the key poll slows to 1 s, and the loop sleeps in
 //!   poll() on touch, key and core until the next timer that still runs (≤ 1 s); a touch, a
 //!   key, or anything invalidated wakes it at once (LUYAZ_UI_QUIET=0: off);
-//! - dark: the same timers pause, the key poll too, and the loop sleeps on the same fds.
+//! - dark: the same timers pause, the key poll too, refresh() slows to 5 s, and the loop sleeps
+//!   on the same fds (≤ 5 s; a core push is still drawn, but off the panel: it holds a black frame).
 //!
 //! SIGTERM / SIGINT end it cleanly: the core's pace back to 1 s, the backlight off only when we
 //! started a shutdown, the DRM buffer released.
@@ -32,9 +33,34 @@ static FRAMES: AtomicU64 = AtomicU64::new(0);
 /// something asked for a redraw since the last push (cleared by a refresh's last flush)
 static INVAL: AtomicBool = AtomicBool::new(false);
 static PUSHES: AtomicU64 = AtomicU64::new(0);
+/// the panel holds the black frame put up when the backlight went off
+static BLANKED: AtomicBool = AtomicBool::new(false);
 
 pub fn frames() -> u64 {
     FRAMES.load(Ordering::Relaxed)
+}
+
+/// The backlight just went off: a black frame over the panel. The panel keeps showing its last
+/// frame unlit (the backlight is all that goes dark), faintly readable in bright light.
+pub fn blank() {
+    PANEL.with(|p| {
+        if let Some(p) = p.borrow_mut().as_mut()
+            && p.on_device()
+            && !BLANKED.load(Ordering::Relaxed)
+        {
+            p.put(Rect { x: 0, y: 0, w: W, h: H }, &vec![0u16; W * H], W);
+            p.commit();
+            BLANKED.store(true, Ordering::Relaxed);
+        }
+    });
+}
+
+/// Before the backlight comes on: the whole screen drawn again over the black frame.
+pub fn unblank() {
+    if BLANKED.swap(false, Ordering::Relaxed) {
+        Obj::screen_active().invalidate();
+        lv::refr_now();
+    }
 }
 
 thread_local! {
@@ -80,6 +106,10 @@ unsafe extern "C" fn flush_cb(d: *mut sys::lv_display_t, a: *const sys::lv_area_
         let pix = std::slice::from_raw_parts(px as *const u16, w * h);
         let last = sys::lv_display_flush_is_last(d);
         PANEL.with(|p| {
+            // dark: the black frame stays, nothing goes to the panel (unblank draws it all again)
+            if BLANKED.load(Ordering::Relaxed) {
+                return;
+            }
             if let Some(p) = p.borrow_mut().as_mut() {
                 let before = p.pushes;
                 p.put(Rect { x: a.x1 as usize, y: a.y1 as usize, w, h }, pix, w);
@@ -324,6 +354,10 @@ pub fn run(args: &[String]) -> i32 {
         }
 
         let (key_fd, data_fd, wake_fd, lit, held) = ui::with(|u| (u.src.key_fd(), u.src.data_fd(), u.src.wake_fd(), u.bl_is_on(), u.key_held()));
+        // lit by someone else (the vendor key daemon sees the key too): our content back first
+        if BLANKED.load(Ordering::Relaxed) && ui::with(|u| u.src.bl_panel_lit(&u.model)) {
+            unblank();
+        }
         // a power key held on a dark screen keeps being polled, or its long press is lost
         let want_dark = !lit && !held;
         if want_dark != dark {
@@ -336,7 +370,7 @@ pub fn run(args: &[String]) -> i32 {
             pause(dark);
             ui::with(|u| u.idle(dark));
         }
-        let wait_ms = idle.min(1000) as i32;
+        let wait_ms = idle.min(if dark { ui::DARK_REFRESH_MS } else { 1000 }) as i32;
         if dark {
             if wait_fds(&[touch_fd, key_fd], data_fd, wake_fd, wait_ms) {
                 // touch or key: let LVGL and the key poll handle it now

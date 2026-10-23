@@ -650,6 +650,7 @@ fn probe_only_when_everything_else_is_there() {
             dns: vec!["192.0.2.53".into()],
             v6: false,
             chill: false,
+            tailnet: false,
         })
     );
 }
@@ -666,6 +667,7 @@ fn ipv6_only_connection_probes_over_ipv6() {
             dns: vec!["2001:db8::53".into()],
             v6: true,
             chill: false,
+            tailnet: false,
         })
     );
     // 有 IPv4 时照旧走 IPv4，IPv6 地址不算进身份
@@ -1305,4 +1307,30 @@ fn dual_sim_resumes_after_core_restart() {
     let mut t = dual_txn(serde_json::json!({"mode":"dual","smart":true}), single1.clone());
     assert_eq!(t.resume("boot-a", 50_000), Next::Wait);
     assert_eq!(t.on_tick(1_000 + D), Next::Rollback(single1));
+}
+
+/// D-g：Agent 批准的、退回已实测的动作，确认阶段的探测要带 Tailscale；人的写、退回阶段、别的动作都不带。
+#[test]
+fn agent_link_trial_also_checks_tailscale() {
+    let c = conn("10.0.0.1", 500);
+    let tailnet = |t: &Txn| t.wants_probe(&live("Only_LTE", c.clone()), 3_000).map(|p| p.tailnet);
+    let mut t = txn(true);
+    t.action = "band.set_lte".into();
+    assert_eq!(tailnet(&t), Some(false), "a person's write");
+    t.source = Source::Mcp;
+    t.approved_by = None;
+    assert_eq!(tailnet(&t), Some(true), "the agent's write");
+    t.approved_by = Some(Source::Web);
+    assert_eq!(tailnet(&t), Some(false), "a person approved the agent's proposal");
+    t.approved_by = None;
+    t.action = "network.set_mode".into();
+    assert_eq!(tailnet(&t), Some(false), "rollback not proven: not in the class");
+    // 退回阶段只认原来的确认
+    let mut t = txn(true);
+    t.action = "band.set_lte".into();
+    t.source = Source::Mcp;
+    t.on_reading(&read("Only_LTE", false), 1_000 + D);
+    t.rollback_sent(2_000 + D);
+    let r = live("WL_AND_5G", c.clone());
+    assert_eq!(t.wants_probe(&r, 10_000 + D).map(|p| p.tailnet), Some(false));
 }

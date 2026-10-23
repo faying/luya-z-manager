@@ -72,6 +72,8 @@ pub fn routes() -> Router<Shared> {
         .route("/agent-api/events", get(events))
         .route("/agent-api/capabilities", get(firmware::capabilities))
         .route("/agent-api/recovery-actions", get(firmware::recovery_actions))
+        .route("/agent-api/no-service-history", get(firmware::no_service_history))
+        .route("/agent-api/sim", get(sim))
 }
 
 // ---- the gate: token file, source, token ----
@@ -574,6 +576,78 @@ async fn network_health(State(app): State<Shared>, req: Request) -> Response {
         Ok(Err(c)) => unavailable("status", c),
         Err(_) => core_down(),
     }
+}
+
+/// Whitelisted `/agent-api/sim` from the core's `sim` block (`/v2/state`): whether the card
+/// changed (`epoch`, `phase`), its state and, on a dual-SIM unit, each slot. Never the ICCID, the
+/// IMSI, the phone number or the ICCID's tail: `epoch` answers "is it the same card".
+pub fn shape_sim(block: Option<&Value>, now: i64) -> Value {
+    let Some(b) = block.filter(|b| b["data"].is_object()) else {
+        return json!({"core": "up", "state": "unavailable", "source": "sim"});
+    };
+    let d = &b["data"];
+    let dual = &d["dual"];
+    let dual = if dual.is_object() {
+        let slots: Vec<Value> = dual["slots"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|s| {
+                        json!({
+                            "slot": s["slot"], "provisioned": s["provisioned"], "present": s["present"],
+                            "state": s["state"], "ready": s["ready"], "role": s["role"],
+                            "operator": untrusted(&s["operator"]), "mcc": s["mcc"], "mnc": s["mnc"],
+                            "serving_mcc": s["serving_mcc"], "true_roaming": s["true_roaming"],
+                            "place": untrusted(&s["place_en"]),
+                            "signal": if s["signal"].is_object() {
+                                pick(&s["signal"], &["rat", "rsrp", "rsrq", "snr", "bars"])
+                            } else { Value::Null },
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        json!({
+            "mode": dual["mode"], "active_slot": dual["active_slot"],
+            "switching": dual["switching"], "smart": dual["smart"], "slots": slots,
+        })
+    } else {
+        Value::Null
+    };
+    json!({
+        "core": "up",
+        "state": "ok",
+        "stale": b["stale"],
+        "age_s": b["observed_at"].as_i64().map(|t| (now - t).max(0)),
+        "phase": d["phase"],
+        "epoch": d["epoch"],
+        "say_id": d["say_id"],
+        "say": d["say_en"],
+        "sim_state": d["state"],
+        "pin_status": d["pin_status"],
+        "modem_state": d["modem_state"],
+        "spn": untrusted(&d["spn"]),
+        "current_slot": d["current_slot"],
+        "dual": dual,
+    })
+}
+
+async fn sim(State(app): State<Shared>, req: Request) -> Response {
+    let name = match admit(&req) {
+        Ok(n) => n,
+        Err(r) => return r,
+    };
+    log(&name, "sim");
+    // the blocks are not under /v2/api, so not through `read`
+    let Ok(r) = app.http.get(format!("{}/v2/state", app.u60d_url)).send().await else {
+        return core_down();
+    };
+    let code = r.status().as_u16();
+    if !(200..300).contains(&code) {
+        return unavailable("state", code);
+    }
+    let st: Value = r.json().await.unwrap_or(Value::Null);
+    reply(shape_sim(st["blocks"].get("sim"), device_now()))
 }
 
 async fn utc_offset(app: &Shared) -> i64 {

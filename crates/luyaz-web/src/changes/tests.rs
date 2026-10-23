@@ -517,4 +517,9 @@ fn agent_rows_say_who_and_rollback() {
     let s = json!({"source": "mcp", "approved_by": "screen"});
     assert!(agent_label(&s, Lang::En).unwrap().starts_with("Proposed by the AI agent, approved by you on the screen"));
     assert!(row(&json!({"source": "web"}), Lang::Zh).agent.is_none());
+    // D-g: a link change the agent made on the owner's word says so, unverified
+    let k = json!({"source": "mcp", "action": "band.set_lte", "rollback_to": "1,3"});
+    assert_eq!(agent_label(&k, Lang::Zh).as_deref(), Some("Agent 执行 · 来源：你的指令（未验证） · 可自动回滚"));
+    let kw = json!({"source": "mcp", "approved_by": "web", "action": "band.set_lte", "rollback_to": "1,3"});
+    assert!(agent_label(&kw, Lang::Zh).unwrap().starts_with("由 AI 代理提议、你在网页批准"));
 }

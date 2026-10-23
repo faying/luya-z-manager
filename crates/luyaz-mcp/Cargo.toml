@@ -1,6 +1,6 @@
 [package]
 name = "luyaz-mcp"
-version = "0.5.0"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.99"
 description = "MCP server (stdio) for Luya-Z devices (one, or a device list): runs on the computer, calls the device's /agent-api over HTTP with a bearer token (docs/designs/u60-mcp.md phase 1). Not part of the install kit."

@@ -139,6 +139,11 @@ const TAB_NAMES: [&str; TABS] = [n_("首页"), n_("蜂窝"), "Wi-Fi", n_("出口
 /// Where screen_feed_net() is None and why.
 pub const SF_OLD_DATAD: i32 = 2;
 
+/// refresh()'s period with the screen lit.
+const REFRESH_MS: u32 = 1000;
+/// refresh()'s period with the screen dark; the main loop's dark wait matches it.
+pub const DARK_REFRESH_MS: u32 = 5000;
+
 pub struct Ui {
     pub model: Rc<Model>,
     pub conf: Conf,
@@ -240,6 +245,8 @@ pub struct Ui {
     wake_idle_last: u32,
     /// the power key's poll (key_poll_cb): 50 ms, 1 s while the lit screen is quiet, paused dark
     key_timer: lv::Timer,
+    /// refresh(): every second lit, every [`DARK_REFRESH_MS`] dark (the core's pushes still paint at once)
+    refresh_timer: lv::Timer,
     /// automatic appearance switching paused (3 switches within an hour, or the exec failed)
     auto_suspended: bool,
     /// argv[0] for the exec
@@ -378,8 +385,18 @@ impl Ui {
         self.src.bl_is_on(&self.model)
     }
 
-    /// The screen went dark (ui_idle): the key poll pauses, the main loop waits on the key fd.
+    /// The screen went dark (ui_idle): the key poll pauses, the main loop waits on the key fd, and
+    /// refresh() slows to [`DARK_REFRESH_MS`] (R18-P1-04: its background polls are what a dark
+    /// second cost). Lit again: back to 1 s, and one refresh at once so nothing shows stale.
     pub fn idle(&mut self, dark: bool) {
+        if !self.refresh_timer.is_null() {
+            if dark {
+                self.refresh_timer.set_period(DARK_REFRESH_MS);
+            } else {
+                self.refresh_timer.set_period(REFRESH_MS);
+                self.refresh_timer.ready();
+            }
+        }
         if self.key_timer.is_null() {
             return;
         }
@@ -845,6 +862,7 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
         wake_guard,
         wake_idle_last: lv::tick_get(),
         key_timer: lv::Timer::default(),
+        refresh_timer: lv::Timer::default(),
         auto_suspended: false,
         argv0: argv0.to_string(),
         label_cache: HashMap::new(),
@@ -954,7 +972,8 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
 
     UI.with(|c| *c.borrow_mut() = Some(u));
     // SAFETY: LVGL keeps the timer; the callback reaches the screen through with()
-    unsafe { sys::lv_timer_create(Some(refresh_timer_cb), 1000, std::ptr::null_mut()) };
+    let rt = unsafe { sys::lv_timer_create(Some(refresh_timer_cb), REFRESH_MS, std::ptr::null_mut()) };
+    with(|u| u.refresh_timer = lv::Timer(rt));
     with(|u| u.refresh());
     eprintln!("ui: first refresh done");
     // a startup breadcrumb (and the mark tools/luyaz checks a touch build for)

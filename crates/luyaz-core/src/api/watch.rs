@@ -252,6 +252,21 @@ impl Host for DiagHost {
         Some(luyaz_netwatch::diagnose::local_dns_probe())
     }
 
+    fn https_probe(
+        &self,
+        state: Option<&Value>,
+        budget: std::time::Duration,
+    ) -> Option<luyaz_api::diagnose::HttpsEvidence> {
+        // the IPv4 cellular path only: the IPv6 targets are not verified on this firmware
+        let path = state
+            .map(luyaz_netwatch::finding::path::paths)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|p| p.source.is_ipv4())?;
+        let (samples, v) = crate::o2::check_path(&path, budget);
+        Some(luyaz_api::diagnose::HttpsEvidence::of(&samples, v))
+    }
+
     fn clock_skew(&self) -> Option<i64> {
         // plain HTTP by address: no DNS, no TLS (a wrong clock is what breaks TLS)
         const TARGETS: [&str; 2] = ["http://1.1.1.1/", "http://119.29.29.29/"];

@@ -157,6 +157,10 @@ async fn agent_gate(action: &str, body: &Value) -> Result<Option<AgentPass>, Res
     let Some(layer) = agent::layer_of(action) else {
         return refuse(Refusal::NotAllowed);
     };
+    // D-g：会断连接的只按主人的指令做（后续一步也要带着标记）
+    if layer == Layer::Link && !agent::by_instruction(body) {
+        return refuse(Refusal::NeedsInstruction);
+    }
     let g = agent::gate();
     if let Some(id) = body.get("agent_ticket").and_then(Value::as_str) {
         return match g.redeem(id, layer, now) {
@@ -176,6 +180,17 @@ async fn agent_gate(action: &str, body: &Value) -> Result<Option<AgentPass>, Res
             Ok(iccid) => Some(iccid),
             Err(why) => return refuse(Refusal::Sensitive(why)),
         }
+    } else if layer == Layer::Link {
+        if let Err(why) = agent::link_sensitivity().await {
+            return refuse(Refusal::SensitiveLink(why));
+        }
+        // 确认要看到 Tailscale 在线；改之前就不在线，试用必然到点退回、白白断一次
+        if !agent::tailnet_up().await {
+            return refuse(Refusal::Busy(
+                "Tailscale is not online now, so the device could not prove the change keeps it".into(),
+            ));
+        }
+        None
     } else {
         // O10：别的 CHILL 工作在跑（含核心重启前起的 chill.sh）就不动；D10：切之前先真路径测一次
         if crate::ops::chill::busy() {
@@ -1241,6 +1256,16 @@ mod tests {
         // 编的票不算
         let r = agent_gate("apn.add", &json!({"source":"mcp","agent_ticket":"0000"})).await;
         assert!(r.is_err());
+        // D-g：会断连接的没带主人指令标记 → 403 needs_instruction（不读设备、不占位）
+        for action in ["band.set_lte", "band.reset", "cell.lock_nr"] {
+            let Err(r) = agent_gate(action, &json!({"source":"mcp"})).await else {
+                panic!("{action} let through without the owner's instruction");
+            };
+            assert_eq!(r.status(), StatusCode::FORBIDDEN, "{action}");
+            let b = axum::body::to_bytes(r.into_body(), 4096).await.unwrap();
+            let v: Value = serde_json::from_slice(&b).unwrap();
+            assert_eq!(v["error"]["code"], "needs_instruction", "{action}");
+        }
         for (action, body) in [
             ("op.status", json!({"source":"mcp"})),
             ("journal.list", json!({"source":"mcp"})),

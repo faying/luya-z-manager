@@ -108,6 +108,11 @@ pub trait Host: Send + Sync + 'static {
     fn local_dns(&self) -> Option<LocalDns> {
         None
     }
+    /// Bound multi-target HTTPS over the cellular path of this state, within `budget`
+    /// (audit 10-09 P2); None = not probed (no cellular IPv4 path, or the host has none).
+    fn https_probe(&self, _state: Option<&Value>, _budget: Duration) -> Option<HttpsEvidence> {
+        None
+    }
     /// Seconds the device clock (as real UTC) is ahead of an HTTP server's `Date`. None = no answer.
     fn clock_skew(&self) -> Option<i64> {
         None
@@ -422,7 +427,14 @@ impl Diagnosis {
             }
             let h = Arc::clone(&self.host);
             let local = thread::spawn(move || h.local_dns());
-            Some((rx, local))
+            // HTTPS beside them, on its own cap: it holds bound sockets like the path probe
+            let (htx, hrx) = mpsc::channel();
+            let h = Arc::clone(&self.host);
+            let st = state.clone();
+            thread::spawn(move || {
+                let _ = htx.send(h.https_probe(st.as_ref(), PATH_MAX));
+            });
+            Some((rx, local, hrx))
         } else {
             None
         };
@@ -446,28 +458,37 @@ impl Diagnosis {
 
         // dns + e2e: the bound path observation (its own cap) and the local resolver
         let mut net_pending = None;
-        if let Some((rx, local)) = net_rx {
+        let mut https = None;
+        if let Some((rx, local, hrx)) = net_rx {
+            let t = Instant::now();
             let net = rx.recv_timeout(PATH_MAX).ok();
             if net.is_none() {
                 net_pending = Some(rx);
             }
+            https = hrx.recv_timeout(PATH_MAX.saturating_sub(t.elapsed())).ok().flatten();
             let local = local.join().ok().flatten();
             self.update(id, |r| {
                 r.put(judge_dns(local.as_ref(), net.as_ref()));
-                r.put(judge_e2e(net.as_ref()));
+                r.put(judge_e2e_https(net.as_ref(), https.as_ref()));
             });
         }
 
-        // clock: an HTTP Date against the device clock (one HEAD), else the evidence's status
+        // clock: verified HTTPS dates, else an HTTP Date against the device clock (one HEAD), else
+        // the evidence's status
         let by = blocked("clock");
         if let Some(by) = by {
             self.update(id, |r| r.put(Layer::new("clock").blocked(by)));
         } else {
             self.update(id, |r| r.running("clock"));
+            // verified HTTPS dates already judged the clock: no plain HTTP HEAD on top
+            let decided = https.as_ref().is_some_and(|h| {
+                h.verdict.clock == luyaz_api::execution::https::ClockTrust::Trusted
+                    || h.verdict.why == "device_clock_off"
+            });
             let h = Arc::clone(&self.host);
-            let skew = within(left(), move || h.clock_skew()).flatten();
+            let skew = if decided { None } else { within(left(), move || h.clock_skew()).flatten() };
             let st = self.host.clock_status();
-            self.update(id, |r| r.put(judge_clock(st, skew)));
+            self.update(id, |r| r.put(judge_clock_https(st, skew, https.as_ref())));
         }
 
         // cell load, from history

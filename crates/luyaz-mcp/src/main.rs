@@ -108,7 +108,7 @@ fn tools() -> Value {
         },
         {
             "name": "get_firmware_capabilities",
-            "description": format!("The device core's passive firmware capability report: per capability (USB mode setter, QoS/AT reads, LPM recovery, …) status supported/unsupported/unknown, reason, freshness (age_seconds), availability and validation; the firmware identity; context_coverage (authoritative false = the context epochs are not authoritative); limitations. No new probe runs: unknown means no evidence either way, never supported; supported is not a verified write. state \"unverified\" = the core's report could not be read (old core, other schema). `capability` keeps only ids starting with it. `truncated: true` = cut to fit, ask with a `capability` prefix. Answers are reused for 30 s (gateway_cache_age_s). {UNTRUSTED_NOTE}"),
+            "description": format!("The device core's passive firmware capability report: per capability (USB mode setter, QoS/AT reads, LPM recovery, …) status supported/unsupported/unknown, reason, freshness (age_seconds), availability and validation; the firmware identity; context_coverage (authoritative false = the context epochs are not authoritative); limitations; stock_anomalies (read-only checks of the stock firmware: wifi_post_stuck = ZTE's Wi-Fi setup script spinning, no_service = an outage going on and the last few). No new probe runs: unknown means no evidence either way, never supported; supported is not a verified write. state \"unverified\" = the core's report could not be read (old core, other schema). `capability` keeps only ids starting with it. `truncated: true` = cut to fit, ask with a `capability` prefix. Answers are reused for 30 s (gateway_cache_age_s). {UNTRUSTED_NOTE}"),
             "inputSchema": {"type": "object", "properties": {
                 "capability": {"type": "string", "pattern": "^[a-z0-9._]{1,64}$", "description": "Capability id prefix, e.g. usb. or at."}},
                 "additionalProperties": false},
@@ -120,6 +120,20 @@ fn tools() -> Value {
             "inputSchema": {"type": "object", "properties": {
                 "action": {"type": "string", "pattern": "^[a-z0-9._]{1,64}$"}},
                 "additionalProperties": false},
+            "annotations": {"readOnlyHint": true, "openWorldHint": false},
+        },
+        {
+            "name": "get_no_service_history",
+            "description": format!("The device's no-service ledger, newest first (it keeps 200): each loss of registration with start/end (device local time as epoch seconds), length in seconds and what the stock firmware was seen doing meanwhile: `stock` lpm_cycle (radio mode changed), sim_reset (SIM identity changed), redial (only the data connection changed) or unknown (nothing seen; SSR and whole-modem restarts have no verified source yet and also land here, `verified: false`). `alerted: true` = it ran past 5 minutes with nothing seen and raised a no-service-long alert. An outage still going is in get_firmware_capabilities' `stock_anomalies.no_service.open`. Nothing is ever done about it on the device. {UNTRUSTED_NOTE}"),
+            "inputSchema": {"type": "object", "properties": {
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Default 10"}},
+                "additionalProperties": false},
+            "annotations": {"readOnlyHint": true, "openWorldHint": false},
+        },
+        {
+            "name": "get_sim_identity",
+            "description": format!("Whether the SIM card changed and how it is doing, without saying who the card is: it never returns the ICCID, IMSI or phone number. `epoch` counts card changes the device core has seen since it started (same epoch = same card); `phase` online / leaving / changed / reloaded / stalled, with `say_id` and `say` while a change is being handled; sim_state, pin_status, the network name (spn). On a dual-SIM unit `dual` has each slot: state, role (data/standby/off), operator, home and serving MCC, roaming, signal. `stale`/`age_s` = how old the reading is. state \"unavailable\" = no reading, not \"no card\". {UNTRUSTED_NOTE}"),
+            "inputSchema": none,
             "annotations": {"readOnlyHint": true, "openWorldHint": false},
         },
     ]);
@@ -158,6 +172,17 @@ fn tools() -> Value {
             "annotations": act(false, true),
         },
         {
+            "name": "change_band_or_cell",
+            "description": format!("Lock bands or a cell, or put the bands back to default: band.set_lte {{bands: \"1,3\"}}, band.set_nr {{sa, nsa}}, band.reset {{}}, cell.lock_lte {{pci, earfcn}} or {{off: true}}, cell.lock_nr {{pci, arfcn, band}} or {{off: true}}. These can cut your own connection to the device (Tailscale, mobile data), so NEVER decide one yourself: only when the owner explicitly told you to make this change, and then set `owner_instruction: true`. The device cannot check that, and logs it as the owner's instruction (unverified). One change of this kind per 30 minutes; while roaming or abroad it is `sensitive` (hand the URL to the owner). Rollback: automatic — the device tries it for up to 2 minutes and keeps it only if it sees mobile data AND Tailscale working by itself; you may lose contact meanwhile, ask get_change_status afterwards. {ACT_NOTE}"),
+            "inputSchema": {"type": "object", "properties": {
+                "action": {"type": "string", "enum": ["band.set_lte", "band.set_nr", "band.reset", "cell.lock_lte", "cell.lock_nr"]},
+                "params": {"type": "object"},
+                "owner_instruction": {"type": "boolean", "const": true,
+                    "description": "true only when the owner explicitly asked for this change"}},
+                "required": ["action", "params", "owner_instruction"], "additionalProperties": false},
+            "annotations": act(false, false),
+        },
+        {
             "name": "get_change_status",
             "description": "How a change goes: phase (verifying, rolling_back, confirmed, rolled_back, unverified, cancelled, …), reason, time left. Read-only.",
             "inputSchema": {"type": "object", "properties": {
@@ -166,9 +191,9 @@ fn tools() -> Value {
         },
         {
             "name": "get_action_url",
-            "description": "The admin page to hand the owner for a change the agent may not or should not make itself (`for`: apn, chill). There is none for eSIM deletes, factory reset or firmware updates: those are never the agent's. Read-only.",
+            "description": "The admin page to hand the owner for a change the agent may not or should not make itself (`for`: apn, chill, band, cell). There is none for eSIM deletes, factory reset or firmware updates: those are never the agent's. Read-only.",
             "inputSchema": {"type": "object", "properties": {
-                "for": {"type": "string", "enum": ["apn", "chill"]}}, "required": ["for"], "additionalProperties": false},
+                "for": {"type": "string", "enum": ["apn", "chill", "band", "cell"]}}, "required": ["for"], "additionalProperties": false},
             "annotations": {"readOnlyHint": true, "openWorldHint": false},
         },
     ]);
@@ -418,6 +443,23 @@ pub fn call_for(name: &str, args: &Value) -> Result<Call, String> {
             }
             Call::post("/agent-api/act/apn", json!({"action": action, "params": args["params"]}))
         }
+        "change_band_or_cell" => {
+            let action = word(
+                args,
+                "action",
+                &["band.set_lte", "band.set_nr", "band.reset", "cell.lock_lte", "cell.lock_nr"],
+            )?;
+            if !args["params"].is_object() {
+                return Err("`params` must be an object".into());
+            }
+            if args["owner_instruction"] != true {
+                return Err("only on the owner's explicit instruction: set `owner_instruction: true` only when the owner asked for this change".into());
+            }
+            Call::post(
+                "/agent-api/act/link",
+                json!({"action": action, "params": args["params"], "instruction": "owner"}),
+            )
+        }
         "get_change_status" => {
             let id = word(args, "op_id", &[])?;
             if !safe_id(&id) {
@@ -425,7 +467,7 @@ pub fn call_for(name: &str, args: &Value) -> Result<Call, String> {
             }
             Call::get(format!("/agent-api/act/status?op_id={id}"))
         }
-        "get_action_url" => Call::get(format!("/agent-api/action-url?for={}", word(args, "for", &["apn", "chill"])?)),
+        "get_action_url" => Call::get(format!("/agent-api/action-url?for={}", word(args, "for", &["apn", "chill", "band", "cell"])?)),
         other => Call::get(route(other, args)?),
     })
 }
@@ -437,6 +479,7 @@ fn route(name: &str, args: &Value) -> Result<String, String> {
         "diagnose_connectivity" => Ok("/agent-api/diagnose".into()),
         "get_network_health" => Ok("/agent-api/network-health".into()),
         "get_power_profile" => Ok("/agent-api/power".into()),
+        "get_sim_identity" => Ok("/agent-api/sim".into()),
         "get_firmware_capabilities" => match &args["capability"] {
             Value::Null => Ok("/agent-api/capabilities".into()),
             Value::String(p) if cap_prefix(p) => Ok(format!("/agent-api/capabilities?capability={p}")),
@@ -446,6 +489,13 @@ fn route(name: &str, args: &Value) -> Result<String, String> {
             Value::Null => Ok("/agent-api/recovery-actions".into()),
             Value::String(a) if cap_prefix(a) => Ok("/agent-api/recovery-actions".into()),
             _ => Err("`action` must be an action name (a-z, 0-9, '.', '_')".into()),
+        },
+        "get_no_service_history" => match &args["limit"] {
+            Value::Null => Ok("/agent-api/no-service-history".into()),
+            v => match v.as_u64().filter(|n| (1..=50).contains(n)) {
+                Some(n) => Ok(format!("/agent-api/no-service-history?limit={n}")),
+                None => Err("`limit` must be 1-50".into()),
+            },
         },
         "get_recent_events" => {
             let mut q = Vec::new();
@@ -784,7 +834,7 @@ pub fn handle_cached(
             "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or(PROTOCOL),
             "capabilities": {"tools": {"listChanged": false}},
             "serverInfo": {"name": "luyaz-mcp", "version": env!("CARGO_PKG_VERSION")},
-            "instructions": "Luya-Z routers (one, or several in the owner's device list: list_devices names them; pass `device` when there is more than one). The get_*, diagnose and explain_recovery_action tools only read (get_firmware_capabilities and explain_recovery_action answer from what the device already knows; unknown stays unknown). set_chill_profile, set_chill_exit, use_apn and change_apn change the device and need a token the owner marked `act`; the device checks every change itself, tries it for up to 2 minutes and rolls it back when it does not get through. A `sensitive` answer comes with a page URL: hand it to the owner and stop.",
+            "instructions": "Luya-Z routers (one, or several in the owner's device list: list_devices names them; pass `device` when there is more than one). The get_*, diagnose and explain_recovery_action tools only read (get_firmware_capabilities and explain_recovery_action answer from what the device already knows; unknown stays unknown). set_chill_profile, set_chill_exit, use_apn, change_apn and change_band_or_cell change the device and need a token the owner marked `act`; the device checks every change itself, tries it for up to 2 minutes and rolls it back when it does not get through. A `sensitive` answer comes with a page URL: hand it to the owner and stop. change_band_or_cell can cut your own link: use it only when the owner told you to.",
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools": tools()})),

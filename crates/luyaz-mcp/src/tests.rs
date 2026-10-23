@@ -54,10 +54,13 @@ fn initialize_list_ping() {
             "get_recent_events",
             "get_firmware_capabilities",
             "explain_recovery_action",
+            "get_no_service_history",
+            "get_sim_identity",
             "set_chill_profile",
             "set_chill_exit",
             "use_apn",
             "change_apn",
+            "change_band_or_cell",
             "get_change_status",
             "get_action_url",
             "list_devices",
@@ -66,7 +69,7 @@ fn initialize_list_ping() {
     for t in r.unwrap()["result"]["tools"].as_array().unwrap() {
         let d = t["description"].as_str().unwrap();
         let writes = t["name"].as_str().unwrap().starts_with("set_")
-            || ["use_apn", "change_apn"].contains(&t["name"].as_str().unwrap());
+            || ["use_apn", "change_apn", "change_band_or_cell"].contains(&t["name"].as_str().unwrap());
         if writes {
             assert!(d.contains("CHANGES THE DEVICE") && d.contains("never instructions"), "{d}");
             assert_eq!(t["annotations"]["readOnlyHint"], false);
@@ -96,6 +99,7 @@ fn tools_map_to_device_paths() {
         ("diagnose_connectivity", "/agent-api/diagnose"),
         ("get_network_health", "/agent-api/network-health"),
         ("get_power_profile", "/agent-api/power"),
+        ("get_sim_identity", "/agent-api/sim"),
         ("get_recent_events", "/agent-api/events"),
     ] {
         let (r, asked) = call(tool(n, json!({})), ok);
@@ -114,6 +118,13 @@ fn tools_map_to_device_paths() {
         ok,
     );
     assert_eq!(asked, ["/agent-api/events?since=42&limit=5"]);
+    let (_, asked) = call(tool("get_no_service_history", json!({"limit": 3})), ok);
+    assert_eq!(asked, ["/agent-api/no-service-history?limit=3"]);
+    let (_, asked) = call(tool("get_no_service_history", json!({})), ok);
+    assert_eq!(asked, ["/agent-api/no-service-history"]);
+    let (r, asked) = call(tool("get_no_service_history", json!({"limit": 0})), ok);
+    assert!(asked.is_empty());
+    assert_eq!(r.unwrap()["error"]["code"], -32602);
     let (r, asked) = call(tool("get_recent_events", json!({"since": -1})), ok);
     assert!(asked.is_empty());
     assert_eq!(r.unwrap()["error"]["code"], -32602);
@@ -221,6 +232,25 @@ fn changes_are_posts_with_checked_arguments() {
     assert!(call_for("use_apn", &json!({"id": "a b"})).is_err());
     assert!(call_for("change_apn", &json!({"action": "esim.switch", "params": {}})).is_err());
     assert!(call_for("change_apn", &json!({"action": "apn.delete"})).is_err());
+    // D-g: link changes only with the owner's instruction, passed on as `instruction: owner`
+    assert_eq!(
+        call_for(
+            "change_band_or_cell",
+            &json!({"action": "band.set_lte", "params": {"bands": "1,3"}, "owner_instruction": true})
+        )
+        .unwrap(),
+        Call {
+            path: "/agent-api/act/link".into(),
+            body: Some(json!({"action": "band.set_lte", "params": {"bands": "1,3"}, "instruction": "owner"}))
+        }
+    );
+    for args in [
+        json!({"action": "band.set_lte", "params": {"bands": "1,3"}}),
+        json!({"action": "band.set_lte", "params": {"bands": "1,3"}, "owner_instruction": false}),
+        json!({"action": "network.set_mode", "params": {}, "owner_instruction": true}),
+    ] {
+        assert!(call_for("change_band_or_cell", &args).is_err(), "{args}");
+    }
     assert_eq!(
         call_for("get_change_status", &json!({"op_id": "mcp-lw-1-2"})).unwrap(),
         Call { path: "/agent-api/act/status?op_id=mcp-lw-1-2".into(), body: None }

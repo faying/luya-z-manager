@@ -57,6 +57,11 @@ impl Panel {
         Ok(Panel { drm: Some(d), mem: Vec::new(), rotate: true, pushed_px: 0, pushes: 0, rects: 0, pending: None, each: each(), shadow: Vec::new() })
     }
 
+    /// A real panel (not an offscreen run).
+    pub fn on_device(&self) -> bool {
+        self.drm.is_some()
+    }
+
     /// Copy `px` (the rectangle's pixels, row stride `stride`) to the panel and push it.
     pub fn put(&mut self, r: Rect, px: &[u16], stride: usize) {
         if r.w == 0 || r.h == 0 {

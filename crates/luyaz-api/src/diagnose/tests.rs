@@ -912,3 +912,57 @@ fn main_cause_words_for_the_new_layers() {
     ]));
     assert_eq!((m.layer, m.more), ("dns", 1));
 }
+
+fn https(samples: &[(&'static str, crate::execution::https::Attempt)], device_utc: Option<i64>) -> HttpsEvidence {
+    use crate::execution::https::{Sample, judge};
+    let s: Vec<Sample> = samples.iter().map(|(org, a)| Sample { org, attempt: a.clone() }).collect();
+    HttpsEvidence::of(&s, judge(&s, device_utc, None))
+}
+
+#[test]
+fn e2e_with_https() {
+    use crate::execution::https::Attempt::*;
+    use ResultState::*;
+    let now = 1_800_000_000;
+    let good = https(&[("apple", Verified { date: Some(now) }), ("tencent", Verified { date: Some(now) })], Some(now));
+    assert_eq!((good.verified_orgs, good.tls_rejected), (2, false));
+    let l = judge_e2e_https(Some(&net(Passed, Unknown)), Some(&good));
+    assert_eq!((l.level, l.detail.as_str()), (Level::Ok, "能上网 · HTTPS 已验证 2 家"));
+    // plain HTTP targets silent, verified TLS fine: online
+    assert_eq!(judge_e2e_https(Some(&net(Failed, Unknown)), Some(&good)).level, Level::Ok);
+    // HTTP answers, every HTTPS target unreachable: a sign-in page or interception
+    let down = https(&[("apple", Unreachable), ("tencent", Unreachable), ("baidu", Unreachable)], Some(now));
+    let l = judge_e2e_https(Some(&net(Passed, Unknown)), Some(&down));
+    assert_eq!(l.level, Level::Warn);
+    assert!(l.detail.contains("网页登录"), "{}", l.detail);
+    // ...and both down stays the plain HTTP verdict
+    assert_eq!(judge_e2e_https(Some(&net(Failed, Unknown)), Some(&down)).level, Level::Bad);
+    // a certificate that does not verify while HTTP answers
+    let bad_cert = https(&[("apple", TlsRejected), ("tencent", Unreachable)], Some(now));
+    assert!(bad_cert.tls_rejected);
+    let l = judge_e2e_https(Some(&net(Passed, Unknown)), Some(&bad_cert));
+    assert!(l.level == Level::Warn && l.detail.contains("证书"), "{}", l.detail);
+    // no HTTPS run, or one that said nothing: unchanged
+    assert_eq!(judge_e2e_https(Some(&net(Passed, Unknown)), None), judge_e2e(Some(&net(Passed, Unknown))));
+    let quiet = https(&[("apple", NoBind)], Some(now));
+    assert_eq!(judge_e2e_https(Some(&net(Passed, Unknown)), Some(&quiet)), judge_e2e(Some(&net(Passed, Unknown))));
+}
+
+#[test]
+fn clock_with_https() {
+    use crate::clock::EvidenceStatus as E;
+    use crate::execution::https::Attempt::*;
+    let now = 1_800_000_000;
+    let at = |d: i64| https(&[("apple", Verified { date: Some(d) }), ("tencent", Verified { date: Some(d) })], Some(now));
+    let l = judge_clock_https(Some(E::Unknown), None, Some(&at(now)));
+    assert_eq!((l.level, l.detail.as_str()), (Level::Ok, "和网络时间一致"));
+    assert_eq!(judge_clock_https(None, None, Some(&at(now - 45))).level, Level::Warn);
+    // two sites agree with each other, not with the device: off by 2 h → HTTPS breaks
+    let off = judge_clock_https(Some(E::Verified), None, Some(&at(now - 7_200)));
+    assert_eq!(off.level, Level::Bad);
+    assert!(off.detail.contains("7200") && off.detail.contains("HTTPS 会失败"), "{}", off.detail);
+    // too few dated sites: the old rules (HTTP Date, then the status)
+    let one = https(&[("apple", Verified { date: Some(now) })], Some(now));
+    assert_eq!(judge_clock_https(None, Some(400), Some(&one)), judge_clock(None, Some(400)));
+    assert_eq!(judge_clock_https(Some(E::Verified), None, None), judge_clock(Some(E::Verified), None));
+}

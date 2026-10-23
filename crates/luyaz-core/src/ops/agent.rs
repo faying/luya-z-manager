@@ -11,6 +11,14 @@
 //! - 敏感（D6、O9）：只看 APN 层。漫游中、且这张卡没被人标成「漫游不算贵」→ 敏感，只给网页地址；
 //!   漫游状态或卡号读不到也算敏感。按卡设置存在 ops 目录的 `roam-cheap.json`，只有人能改（网页）。
 //!   判定时读到的卡号交给事务（`Request::expect_iccid`），写之前再核对一次。
+//! - 会断连接的一层（D-g，10-23）：描述表里退回已实测（`RollbackCapability::CapturedAndProven`：锁频、
+//!   恢复默认频段、锁小区）的动作。Agent 不能自己决定，只能转达主人的指令：请求要带
+//!   `instruction: "owner"`，没带就拒绝（[`Refusal::NeedsInstruction`]）。设备分不出指令真假，所以靠三道
+//!   防线限制损害：试用 + 退回，确认时除了蜂窝 DNS 还要设备自己看到 Tailscale 在线（[`tailnet_up`]，Agent
+//!   自己的连接会一起断，看不到结果）；这一层整体 30 分钟一次；改动记录写「来源：你的指令（未验证）」。
+//!   漫游中、人在国外（注册网络的国家码 `rmcc` 不是 460，插当地卡也算）、或这两样读不到，一律敏感
+//!   （只给网页地址：国外开 NR 曾让基带断言、整机重启循环）；
+//!   改之前 Tailscale 本来就不在线也不做（确认必然失败、白白断一次）。
 
 use luyaz_api::clock::BootTime;
 use serde::{Deserialize, Serialize};
@@ -37,6 +45,8 @@ const TICKET_SECS: u64 = 10 * 60;
 pub enum Layer {
     Apn,
     Chill,
+    /// 会断 Tailscale / 改 WAN 的（D-g）：只按主人的指令做。
+    Link,
 }
 
 impl Layer {
@@ -44,6 +54,7 @@ impl Layer {
         match self {
             Self::Apn => "apn",
             Self::Chill => "chill",
+            Self::Link => "link",
         }
     }
 }
@@ -56,7 +67,63 @@ pub fn layer_of(action: &str) -> Option<Layer> {
     if action.starts_with("apn.") {
         return Some(Layer::Apn);
     }
-    CHILL_ACTIONS.contains(&action).then_some(Layer::Chill)
+    if CHILL_ACTIONS.contains(&action) {
+        return Some(Layer::Chill);
+    }
+    link(action).then_some(Layer::Link)
+}
+
+/// D-g 那一层：描述表里退回已实测的动作（D42 逐项实测过才改成 `CapturedAndProven`，改了自动进来）。
+pub fn link(action: &str) -> bool {
+    super::spec::find(action).is_some_and(|s| {
+        s.rollback_capability == super::spec::RollbackCapability::CapturedAndProven
+    })
+}
+
+/// 请求里「这是主人的指令」的标记（D-g）。设备核实不了，只记成「未验证」。
+pub fn by_instruction(body: &Value) -> bool {
+    body.get("instruction").and_then(Value::as_str) == Some("owner")
+}
+
+/// 主人的本国（中国）的国家码；和情景引擎默认的 `home_mcc` 一样。
+const HOME_MCC: i64 = 460;
+
+/// D-g 的判定：漫游中、注册在外国网络（插当地卡也算，用户 10-23 定）、或读不到，都算敏感；
+/// 不看「漫游不算贵」。
+pub fn link_sensitive(roaming: Option<bool>, rmcc: Option<i64>) -> Result<(), String> {
+    match (roaming, rmcc) {
+        (Some(true), _) => Err("roaming: band and cell changes go to the owner on the web page".into()),
+        (None, _) => Err("cannot read whether the device is roaming".into()),
+        (_, Some(HOME_MCC)) => Ok(()),
+        (_, Some(m)) if m > 0 => Err("abroad: band and cell changes go to the owner on the web page".into()),
+        _ => Err("cannot read which country's network the device is on".into()),
+    }
+}
+
+/// 现在漫游不漫游、在哪国的网络上（读原厂 netinfo 的 `simcard_roam`、`rmcc`）。
+pub async fn link_sensitivity() -> Result<(), String> {
+    let net = crate::state::ubus("zte_nwinfo_api", "nwinfo_get_netinfo", json!({})).await;
+    let net = net.as_ref().ok();
+    let rmcc = net.and_then(|n| match &n["rmcc"] {
+        Value::Number(m) => m.as_i64(),
+        Value::String(m) => m.trim().parse().ok(),
+        _ => None,
+    });
+    link_sensitive(net.and_then(super::roaming), rmcc)
+}
+
+/// `tailscale status --json` 说本机在线：后台在跑、本节点连着控制面。读不到、不认识都算不在线。
+pub fn tailnet_online(status: &Value) -> bool {
+    status["BackendState"] == "Running" && status["Self"]["Online"] == true
+}
+
+/// 设备自己看 Tailscale 在不在线（阻塞，最多约 5 秒）。
+pub async fn tailnet_up() -> bool {
+    tokio::task::spawn_blocking(crate::api::home::tailscale_status)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|v| tailnet_online(&v))
 }
 
 /// Agent 不用过关就能调的只读动作。
@@ -69,10 +136,14 @@ pub fn read_only(action: &str) -> bool {
 pub enum Refusal {
     /// 不在白名单里。
     NotAllowed,
+    /// 会断连接的动作没带「主人的指令」标记（D-g）。
+    NeedsInstruction,
     /// 这一层 30 分钟里做过了：下次可做的时刻（Unix 秒）。
     Limited { next_unix: u64 },
     /// 敏感：只给网页地址，交给人。
     Sensitive(String),
+    /// D-g 那一层的敏感（漫游）：给频段页的地址。
+    SensitiveLink(String),
     /// 落不了盘（O6）。
     Store(String),
     /// 无法安全计算期限，拒绝自动写。
@@ -93,6 +164,14 @@ impl Refusal {
                 "this action is not open to the agent".into(),
                 json!({}),
             ),
+            Self::NeedsInstruction => (
+                403,
+                "needs_instruction",
+                "this change can cut the agent's own link; it runs only on the owner's instruction \
+                 (instruction: owner)"
+                    .into(),
+                json!({}),
+            ),
             Self::Limited { next_unix } => (
                 429,
                 "rate_limited",
@@ -100,6 +179,7 @@ impl Refusal {
                 json!({"next_unix": next_unix, "retry_after_s": next_unix.saturating_sub(now_unix)}),
             ),
             Self::Sensitive(why) => (403, "sensitive", why.clone(), json!({"page": "apn"})),
+            Self::SensitiveLink(why) => (403, "sensitive", why.clone(), json!({"page": "band"})),
             Self::Store(why) => (503, "store_failed", why.clone(), json!({})),
             Self::Clock => (
                 503,
@@ -494,6 +574,9 @@ pub fn txn_text(t: &super::txn::Txn) -> String {
     if !t.rollback_enabled {
         s.push_str("; no automatic rollback");
     }
+    if link(&t.action) {
+        s.push_str("; 来源：你的指令（未验证）");
+    }
     s
 }
 
@@ -533,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn whitelist_is_apn_and_chill_only() {
+    fn whitelist_is_apn_chill_and_proven_link() {
         for a in [
             "apn.set_mode",
             "apn.enable",
@@ -548,11 +631,23 @@ mod tests {
         for a in CHILL_ACTIONS {
             assert_eq!(layer_of(a), Some(Layer::Chill));
         }
+        // D-g：退回已实测的锁频、锁小区（只按主人的指令）
+        for a in [
+            "band.set_lte",
+            "band.set_nr",
+            "band.reset",
+            "cell.lock_lte",
+            "cell.lock_nr",
+        ] {
+            assert_eq!(layer_of(a), Some(Layer::Link), "{a}");
+        }
         for a in [
             "esim.switch",
             "sim.set_slot",
             "network.set_mode",
-            "band.reset",
+            "sim.dual",
+            "wifi.guest",
+            "data.reconnect",
             "op.keep",
             "op.revert",
             "device.reboot",
@@ -562,6 +657,37 @@ mod tests {
         ] {
             assert_eq!(layer_of(a), None, "{a}");
         }
+    }
+
+    #[test]
+    fn link_needs_the_owner_marker_home_network_and_tailnet() {
+        assert!(by_instruction(&json!({"instruction": "owner"})));
+        assert!(!by_instruction(&json!({})));
+        assert!(!by_instruction(&json!({"instruction": "agent"})));
+        assert!(!by_instruction(&json!({"instruction": true})));
+        assert_eq!(link_sensitive(Some(false), Some(460)), Ok(()));
+        assert!(link_sensitive(Some(true), Some(460)).is_err());
+        assert!(link_sensitive(None, Some(460)).is_err());
+        // 国外插当地卡：不漫游，但注册在外国网络
+        assert!(link_sensitive(Some(false), Some(440)).is_err());
+        assert!(link_sensitive(Some(false), Some(0)).is_err());
+        assert!(link_sensitive(Some(false), None).is_err());
+        assert!(tailnet_online(&json!({"BackendState": "Running", "Self": {"Online": true}})));
+        assert!(!tailnet_online(&json!({"BackendState": "Running", "Self": {"Online": false}})));
+        assert!(!tailnet_online(&json!({"BackendState": "NeedsLogin", "Self": {"Online": true}})));
+        assert!(!tailnet_online(&json!({"BackendState": "Running"})));
+        assert!(!tailnet_online(&Value::Null));
+    }
+
+    #[test]
+    fn link_is_one_shared_layer() {
+        let g = open(None);
+        reserve(&g, Layer::Link, 1_000).unwrap();
+        assert!(matches!(
+            reserve(&g, Layer::Link, 1_100),
+            Err(Refusal::Limited { .. })
+        ));
+        reserve(&g, Layer::Apn, 1_100).unwrap();
     }
 
     #[test]

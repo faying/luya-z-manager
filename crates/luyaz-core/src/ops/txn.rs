@@ -276,6 +276,9 @@ pub struct ProbeTarget {
     pub v6: bool,
     /// CHILL 的真路径探测（[`Confirm::Chill`]）：不问 DNS，经 mihomo 取一次 generate_204。
     pub chill: bool,
+    /// D-g：Agent 按主人指令做的会断连接的改动，试用中 DNS 通了还要设备自己看到 Tailscale 在线才算通
+    /// （Agent 自己的连接会一起断，看不到结果）。退回时不要求（退回只认原来的确认）。
+    pub tailnet: bool,
 }
 
 /// 探测没成（R18-P0-02）。`local` = 本机建 socket、绑定接口就失败了，什么也没发出去：结果是 unknown，
@@ -688,6 +691,7 @@ impl Txn {
                 dns: vec![],
                 v6: false,
                 chill: true,
+                tailnet: false,
             }));
         }
         let Some(d) = &r.data else {
@@ -714,7 +718,15 @@ impl Txn {
             dns: d.dns.clone(),
             v6: d.conn.v6_only(),
             chill: false,
+            tailnet: self.wants_tailnet(),
         }))
+    }
+
+    /// D-g：这次试用的确认要不要看 Tailscale（Agent 批准的、会断连接的动作，只在确认阶段）。
+    fn wants_tailnet(&self) -> bool {
+        self.phase == Phase::Verifying
+            && self.who().approved_by == Source::Mcp
+            && super::agent::link(&self.action)
     }
 
     /// 这个读数要不要先做一次 DNS 探测（驱动在锁外做，结果填进 `Reading::probe` 再喂进来）。

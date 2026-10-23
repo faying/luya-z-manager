@@ -1082,6 +1082,106 @@ pub fn judge_clock(status: Option<crate::clock::EvidenceStatus>, skew: Option<i6
     }
 }
 
+/// The bound multi-target HTTPS run of a diagnosis (the O2 transport, `execution::https`): one
+/// set of attempts read twice, by the e2e layer (does verified TLS get through?) and by the clock
+/// layer (do verified `Date` headers agree with the device clock?).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HttpsEvidence {
+    pub verdict: crate::execution::https::Verdict,
+    /// Organisations that answered over verified TLS.
+    pub verified_orgs: usize,
+    /// At least one certificate did not verify.
+    pub tls_rejected: bool,
+}
+
+impl HttpsEvidence {
+    pub fn of(samples: &[crate::execution::https::Sample], verdict: crate::execution::https::Verdict) -> Self {
+        use crate::execution::https::Attempt;
+        let mut orgs: Vec<&str> = Vec::new();
+        for s in samples {
+            if matches!(s.attempt, Attempt::Verified { .. }) && !orgs.contains(&s.org) {
+                orgs.push(s.org);
+            }
+        }
+        Self {
+            verdict,
+            verified_orgs: orgs.len(),
+            tls_rejected: samples.iter().any(|s| s.attempt == Attempt::TlsRejected),
+        }
+    }
+}
+
+/// e2e with the HTTPS run beside the bound HTTP/DNS observation. Plain HTTP answering while no
+/// HTTPS site does is what a sign-in page or an interception looks like: warn, not ok. Verified
+/// TLS from two organisations is online even when the plain HTTP targets did not answer.
+/// No HTTPS run (not probed, or it said nothing) = [`judge_e2e`] unchanged.
+pub fn judge_e2e_https(net: Option<&NetworkEvidence>, https: Option<&HttpsEvidence>) -> Layer {
+    use crate::execution::Check;
+    let base = judge_e2e(net);
+    let Some(h) = https else {
+        return base;
+    };
+    let http = net.map(|n| n.path_reachable);
+    match (h.verdict.app, http) {
+        (Check::Pass, _) => Layer::new("e2e").set(
+            Level::Ok,
+            format!("能上网 · HTTPS 已验证 {} 家", h.verified_orgs),
+            format!("Online · HTTPS verified with {}", h.verified_orgs),
+        ),
+        (Check::Fail, Some(ResultState::Passed)) => Layer::new("e2e").set(
+            Level::Warn,
+            "能连上，但加密网站都打不开（可能要网页登录或被拦截）",
+            "Reachable, but no HTTPS site opens (a sign-in page or interception?)",
+        ),
+        (Check::Unknown, Some(ResultState::Passed)) if h.tls_rejected => Layer::new("e2e").set(
+            Level::Warn,
+            "能连上，但网站证书校验不过（设备时间不对或被拦截）",
+            "Reachable, but site certificates do not verify (wrong clock or interception?)",
+        ),
+        _ => base,
+    }
+}
+
+/// clock with the HTTPS run: `Date` headers that arrived over verified TLS from two
+/// organisations judge the clock first (they cannot be a cached or forged plain-HTTP answer);
+/// otherwise [`judge_clock`] on the plain HTTP `Date` / the evidence status, unchanged.
+pub fn judge_clock_https(
+    status: Option<crate::clock::EvidenceStatus>,
+    skew: Option<i64>,
+    https: Option<&HttpsEvidence>,
+) -> Layer {
+    use crate::execution::https::ClockTrust;
+    let l = Layer::new("clock");
+    match https.map(|h| (h.verdict.clock, h.verdict.why, h.verdict.skew_s)) {
+        Some((ClockTrust::Trusted, _, d)) => {
+            let d = d.unwrap_or(0);
+            let (zh, en) = if d <= 1 {
+                ("和网络时间一致".to_string(), "Matches network time".to_string())
+            } else {
+                (format!("和网络时间差 {d} 秒"), format!("{d} s off network time"))
+            };
+            if d <= CLOCK_OK_S {
+                l.set(Level::Ok, zh, en)
+            } else {
+                l.set(Level::Warn, zh, en)
+            }
+        }
+        Some((_, "device_clock_off", d)) => {
+            let (zh, en) = match d {
+                Some(d) => (format!("和网络时间差 {d} 秒"), format!("{d} s off network time")),
+                None => ("和网络时间对不上".to_string(), "Does not match network time".to_string()),
+            };
+            let bad = d.is_none_or(|d| d > CLOCK_BAD_S);
+            if bad {
+                l.set(Level::Bad, format!("{zh}，HTTPS 会失败"), format!("{en}; HTTPS will fail"))
+            } else {
+                l.set(Level::Warn, zh, en)
+            }
+        }
+        _ => judge_clock(status, skew),
+    }
+}
+
 /// §12.3: first bad in layer order, else first warn; na never.
 pub fn pick_main(layers: &[Layer]) -> Main {
     let pick = layers

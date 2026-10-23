@@ -23,6 +23,59 @@
 
 - kit: 装机包带上 lanid-parse 组件（已连设备识别），装到 `/data/luyaz/core/plugins/`，只有这一个组件；没有时核心照常跑、识别关着。`LANID_CWASM=` 指定现成的。
 
+## touch 1.10.10 — 2026-10-23
+
+- 熄屏：熄屏期间的重画不再送到面板，1.10.9 的黑帧一直保持到亮屏。
+
+## touch 1.10.9 — 2026-10-23
+
+- 熄屏：关背光后给面板送一帧全黑（以前只关背光，上一屏内容在强光下还隐约看得见）；亮屏时先整屏重画再开背光，原厂按键守护进程点亮的也一样。
+
+## lweb 1.29.0 — 2026-10-23
+
+- `/agent-api/sim`（MCP `get_sim_identity`，luyaz-mcp 0.8.0）：卡换没换（`epoch`、`phase`）、卡状态、PIN 状态、网络名，双卡机还有每个卡槽；绝不给 ICCID、IMSI、手机号和 ICCID 尾号。
+
+## core 1.37.0 — 2026-10-23
+
+- 深度诊断加一次绑定蜂窝 IPv4 的多目标 HTTPS（校验证书，和路径探测并行，上限 16 秒）。「外网」在 HTTP 通、加密网站都打不开（要网页登录或被拦截）或证书校验不过时给 warn；「设备时间」先用两家 HTTPS 网站的 `Date` 判断。
+
+## lweb 1.28.1 — 2026-10-23
+
+- /tools/agent 写明锁频、锁小区在漫游或人在国外时不做。
+
+## core 1.36.1 — 2026-10-23
+
+- AI 代理的锁频、锁小区在人在国外（注册网络国家码 `rmcc` 不是 460，插当地卡也算）或读不到时也算敏感。
+
+## lweb 1.28.0 — 2026-10-23
+
+- `/agent-api/act/link`：AI 代理的锁频、锁小区改动，带着「主人的指令」标记转给核心；改动记录里这类改动标「Agent 执行 · 来源：你的指令（未验证）」；/tools/agent 列出「锁频 / 锁小区」范围和怎么退回。
+
+## core 1.36.0 — 2026-10-23
+
+- AI 代理按主人的指令（`instruction: "owner"`，没带回 403 `needs_instruction`）可以做锁频、恢复默认频段、锁小区（设备上退回已实测的动作）；漫游中或读不到漫游状态不做（敏感，给网页地址），改之前 Tailscale 不在线不做，这一类整体 30 分钟一次（层 `link`），一律试用，设备自己测到蜂窝（DNS）和 Tailscale 都在线才保留；改动记录写「来源：你的指令（未验证）」（u60-mcp.md D-g）。
+
+## lweb 1.27.1 — 2026-10-23
+
+- `/agent-api/no-service-history` 能到达 core 了（路径没进 core 白名单，之前回「core 没回应」）。
+
+## core 1.35.0、lweb 1.27.0、mcp 0.6.0 — 2026-10-23
+
+- core：原厂异常只读检测，挂在已有的分钟采样上（R18-P2-01，docs/designs/stock-anomaly-recovery.md）。`wifi-post-stuck`：ZTE 的 `zte_post_wifi.sh` 活过 30 秒且启用的 main*/guest* 数 ≠ 在跑的 wps `hostapd_cli` 数，连续两次（从不杀它）。无服务账本 `/data/luyaz/core/no-service.jsonl`（200 行）：每次失去服务记一行和期间看到的原厂动作（lpm_cycle / sim_reset / redial / unknown）；超过 5 分钟且没看到任何动作时开 `no-service-long`。两个告警都只进收件箱，不发短信。`/v2/device/capabilities` 加 `stock_anomalies`；新增 `/v2/device/no-service-history`。
+- lweb：`/agent-api/capabilities` 逐字段带出 `stock_anomalies`；新增 `/agent-api/no-service-history`。需要 core 1.35.0。
+- mcp：新只读工具 `get_no_service_history`。需要 lweb 1.27.0、core 1.35.0。
+
+## lweb 1.26.1 — 2026-10-23
+
+- 短信转发规则表单缺什么就说哪一栏（不再只说「把转发目标填完整」）；Telegram Chat ID 要是数字或 @频道名，转发号码只能是数字、前面可带 +；ntfy 服务器地址栏弹网址键盘。
+
+## touch 1.10.8 — 2026-10-23
+
+- 暗屏：定时刷新（和它带起的后台读取）从每秒一次改成每 5 秒一次；亮屏后回到每秒一次并马上刷新一次。core 推来的数据照样马上画（R18-P1-04）。
+- 定时读取和重连 core 放到有上限的后台线程；读完有变化就叫醒界面；HTTP 读取有总时限。
+- CHILL：空状态、不可用状态、长标签和点按反馈打磨。
+- 主题：测试保证每种文字颜色在它所在的底色上、两种主题下对比度都 ≥ 4.5:1；玻璃描边统一由一个函数画（外观不变）。
+
 ## core 1.34.1 — 2026-10-23
 
 R18-P1-04：core 空闲时少醒（每秒约少 2.6 次定时唤醒）；行为不变。

@@ -251,6 +251,8 @@ impl App {
         tokio::task::spawn_blocking(crate::ops::reconnect::recover);
         // R18-P1-01：数据网卡（rmnet）的内核事件产生连接代次；见 device_profile/netlink.rs。
         crate::device_profile::netlink::spawn(context_hub.clone());
+        // R18-P2-01: the stock-anomaly ledger reads the radio mark and connection epoch.
+        crate::stock_anomaly::set_hub(context_hub.clone());
         listen::spawn_if_enabled(
             std::env::var(listen::ENV_ENABLE).ok().as_deref(),
             listen::Options::from_env(),
@@ -438,6 +440,7 @@ impl App {
             .route("/v2/screen", get(v2_screen))
             .route("/capabilities", get(capabilities))
             .route("/v2/device/capabilities", get(device_capabilities))
+            .route("/v2/device/no-service-history", get(no_service_history))
             .route("/v2/recovery/actions", get(recovery::actions))
             .route("/control", post(control))
             .route("/v2/sentinel/event", post(sentinel_event))
@@ -959,9 +962,30 @@ async fn device_capabilities(State(app): State<App>) -> impl IntoResponse {
         .hub()
         .firmware()
         .report(luyaz_api::clock::BootTime::read().as_ref());
+    let mut v = serde_json::to_value(report).unwrap_or_default();
+    if let Some(m) = v.as_object_mut() {
+        m.insert("stock_anomalies".into(), crate::stock_anomaly::report());
+    }
     (
         [(axum::http::header::CACHE_CONTROL, "private, no-store")],
-        Json(report),
+        Json(v),
+    )
+}
+
+#[derive(serde::Deserialize)]
+struct HistoryQ {
+    limit: Option<usize>,
+}
+
+/// R18-P2-01: the no-service ledger, newest first (`limit` 1–50, default 10).
+async fn no_service_history(axum::extract::Query(q): axum::extract::Query<HistoryQ>) -> impl IntoResponse {
+    let n = q.limit.unwrap_or(10).clamp(1, 50);
+    let rows = tokio::task::spawn_blocking(move || crate::stock_anomaly::history(n))
+        .await
+        .unwrap_or_default();
+    (
+        [(axum::http::header::CACHE_CONTROL, "private, no-store")],
+        Json(json!({"rows": rows, "keep": crate::stock_anomaly::LEDGER_KEEP})),
     )
 }
 

@@ -586,6 +586,9 @@ pub fn kind_label(kind: &str) -> String {
         ("sim-stalled", "换卡后 3 分钟还没恢复数据"),
         ("esim-failed", "eSIM 切换没成功"),
         ("esim-rebooted", "eSIM 切换后已自动重启设备"),
+        // R18-P2-01 stock anomalies (read-only)
+        ("wifi-post-stuck", "原厂 Wi-Fi 后台脚本卡住，在空转"),
+        ("no-service-long", "无服务超过 5 分钟，原厂没有恢复动作"),
     ];
     T.iter()
         .find(|t| t.0 == kind)
@@ -664,6 +667,14 @@ pub fn kind_label_en(kind: &str) -> String {
             "esim-rebooted",
             "Rebooted automatically to finish an eSIM switch",
         ),
+        (
+            "wifi-post-stuck",
+            "Stock Wi-Fi setup script is stuck, spinning",
+        ),
+        (
+            "no-service-long",
+            "No service for 5+ min and the stock firmware did nothing",
+        ),
     ];
     T.iter()
         .find(|t| t.0 == kind)
@@ -731,6 +742,8 @@ mod tests {
             "sim-stalled",
             "esim-failed",
             "esim-rebooted",
+            "wifi-post-stuck",
+            "no-service-long",
         ];
         for k in kinds {
             let en = kind_label_en(k);

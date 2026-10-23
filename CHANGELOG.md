@@ -25,6 +25,59 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 - kit: carries the lanid-parse component (LAN client identification) and installs it to `/data/luyaz/core/plugins/` as the only component; without it the core runs with identification off. `LANID_CWASM=` uses a ready-made one.
 
+## touch 1.10.10 — 2026-10-23
+
+- Screen off: redraws while dark no longer go to the panel; the black frame from 1.10.9 stays until the screen lights up.
+
+## touch 1.10.9 — 2026-10-23
+
+- Screen off: the panel gets one black frame after the backlight goes off (before, only the backlight went dark and the last screen stayed faintly readable in bright light); lighting up redraws the whole screen before the backlight comes on, also when the vendor key daemon lit it.
+
+## lweb 1.29.0 — 2026-10-23
+
+- `/agent-api/sim` (MCP `get_sim_identity`, luyaz-mcp 0.8.0): whether the SIM card changed (`epoch`, `phase`), its state, PIN status, network name and, on a dual-SIM unit, each slot; never the ICCID, IMSI, phone number or ICCID tail.
+
+## core 1.37.0 — 2026-10-23
+
+- the deep diagnosis also runs bound multi-target HTTPS (verified TLS over the cellular IPv4 path, beside the path probe, 16 s cap). Internet warns when plain HTTP answers but no HTTPS site opens (a sign-in page or interception) or certificates do not verify; Device clock first uses the verified `Date` headers of two sites.
+
+## lweb 1.28.1 — 2026-10-23
+
+- /tools/agent says band and cell locks are not done while roaming or abroad.
+
+## core 1.36.1 — 2026-10-23
+
+- band and cell lock changes by the AI agent are also sensitive abroad (the registered network's MCC `rmcc` is not 460, a local SIM included) or when it cannot be read.
+
+## lweb 1.28.0 — 2026-10-23
+
+- `/agent-api/act/link`: band and cell lock changes from the AI agent, passed to the core with the owner's-instruction marker; change rows label them 「Agent 执行 · 来源：你的指令（未验证）」; /tools/agent lists the band & cell lock scope and how it rolls back.
+
+## core 1.36.0 — 2026-10-23
+
+- the AI agent may run band locks, band reset and cell locks (the actions whose rollback is proven on the device) only on the owner's instruction (`instruction: "owner"`, otherwise 403 `needs_instruction`); refused while roaming or when roaming cannot be read (sensitive, web page), refused when Tailscale is not online beforehand, one per 30 minutes for the whole class (layer `link`), always a trial that is kept only when the device itself sees mobile data (DNS) and Tailscale online; the agent-change event says 「来源：你的指令（未验证）」 (u60-mcp.md D-g).
+
+## lweb 1.27.1 — 2026-10-23
+
+- `/agent-api/no-service-history` reaches the core (the path was missing from the core allow-list, so it answered "core down").
+
+## core 1.35.0, lweb 1.27.0, mcp 0.6.0 — 2026-10-23
+
+- core: read-only stock-firmware anomaly checks on the existing minute tick (R18-P2-01, docs/designs/stock-anomaly-recovery.md). `wifi-post-stuck`: ZTE's `zte_post_wifi.sh` alive over 30 s with enabled main*/guest* ≠ running wps `hostapd_cli`, two ticks in a row (never killed). No-service ledger `/data/luyaz/core/no-service.jsonl` (200 rows): each outage with what the stock firmware was seen doing (lpm_cycle / sim_reset / redial / unknown); `no-service-long` when an outage passes 5 min with nothing seen. Both alerts go to the inbox only, no SMS. `/v2/device/capabilities` gains `stock_anomalies`; new `/v2/device/no-service-history`.
+- lweb: `/agent-api/capabilities` passes `stock_anomalies` field by field; new `/agent-api/no-service-history`. Requires core 1.35.0.
+- mcp: new read-only tool `get_no_service_history`. Requires lweb 1.27.0, core 1.35.0.
+
+## lweb 1.26.1 — 2026-10-23
+
+- SMS forwarding rule form names the missing field instead of "fill in the destination fields"; a Telegram Chat ID must be a number or @channel and a forward number digits with an optional +; the ntfy server field opens the URL keyboard.
+
+## touch 1.10.8 — 2026-10-23
+
+- Dark screen: the periodic refresh (and the background reads it starts) runs every 5 s instead of every second; lit again, it goes back to 1 s and refreshes at once. The core's pushes still paint at once (R18-P1-04).
+- Periodic reads and core reconnects run on bounded background workers; a finished change wakes the UI; HTTP reads have a total deadline.
+- CHILL: empty and unavailable states, long labels and touch feedback polished.
+- Theme: every text colour is checked for 4.5:1 contrast on its surfaces in both themes (test); glass rims drawn by one helper (no visible change).
+
 ## core 1.34.1 — 2026-10-23
 
 R18-P1-04: fewer idle wakeups in the core (about 2.6 timer wakeups/s less); no behaviour change.
