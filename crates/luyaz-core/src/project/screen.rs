@@ -21,7 +21,7 @@ use serde_json::Value;
 pub const SCREEN_VERSION: u32 = 1;
 const CA_MAX: usize = 5;
 
-// ---- C-compatible scalar reads (touch-ui json.c + libc) -------------------
+// ---- scalar reads matching luyaz-ui's json.rs ------------------------------
 
 /// What C's `json_get` copies for a value: strings unescaped, everything else
 /// as its JSON text (`null` → "null", numbers as written). `None` = key absent.
@@ -217,8 +217,8 @@ struct Data {
     thermal_limited: bool,
 }
 
-/// The 4 mainland carriers as (中文, English); the English must match zte-agent's
-/// operator table word for word (manager docs/ui-glossary.md §8).
+/// The 4 mainland carriers as (中文, English); the English must match the
+/// netinfo operator table word for word (manager docs/ui-glossary.md §8).
 pub(super) fn mainland_operator(mcc: i64, mnc: i64, raw: &str) -> Option<(&'static str, &'static str)> {
     const CM: (&str, &str) = ("中国移动", "China Mobile");
     const CU: (&str, &str) = ("中国联通", "China Unicom");
@@ -333,7 +333,7 @@ fn parse(state: &Value) -> Data {
     d
 }
 
-// ---- ui_logic.c ------------------------------------------------------------
+// ---- screen decisions (luyaz-ui: touch-ui/rs/ui/src/logic.rs) ---------------
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Rat {
@@ -1406,7 +1406,7 @@ fn fmt0(x: f64) -> String {
     format!("{x:.0}")
 }
 
-// ---- net_view.c -------------------------------------------------------------
+// ---- the "net" block (luyaz-ui: touch-ui/rs/ui/src/net_view.rs) ------------
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Carrier {

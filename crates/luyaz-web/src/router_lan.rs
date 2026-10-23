@@ -1,4 +1,4 @@
-//! /router/lan (局域网 / DHCP), the old `router/lan/page.tsx`: the U60's LAN address and netmask,
+//! /router/lan (局域网 / DHCP): the U60's LAN address and netmask,
 //! the DHCP server switch, the address range it hands out and the lease. Batch 4 (u60-web.md).
 //!
 //! Where each value comes from (the old page read `GET /api/router/lan`, six `uci get`s):

@@ -1233,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-core"
-version = "1.33.7"
+version = "1.34.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1305,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-mcp"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "serde_json",
 ]
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-web"
-version = "1.24.1"
+version = "1.26.0"
 dependencies = [
  "askama",
  "axum",

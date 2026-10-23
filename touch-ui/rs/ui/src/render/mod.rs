@@ -1,4 +1,4 @@
-//! Offscreen render (--render): replay one run of the C render test (tests/render/render_test.c)
+//! Offscreen render (--render): replay one run of the C render test
 //! on the Rust screen, so the two can be compared shot for shot (manager
 //! docs/designs/u60-touch-rewrite.md §4).
 //!
@@ -131,6 +131,10 @@ fn resolve(path: &str) -> Option<Obj> {
         "scr" => Obj::screen_active(),
         "top" => Obj::layer_top(),
         "sys" => Obj(unsafe { sys::lv_display_get_layer_sys(std::ptr::null_mut()) }),
+        // Stable overlay roots for motion replays; children are panel (0), cancel (1).
+        "power" => ui::with(|u| u.pw.sheet.scrim),
+        "usb" => ui::with(|u| u.um.sheet.scrim),
+        "exit" => ui::with(|u| u.ex.xm.scrim),
         _ => return None,
     };
     for k in it {
@@ -160,7 +164,7 @@ fn find_scroller(o: Obj) -> Option<Obj> {
 /// The model an action in the current step leaves, by hash.
 type Pending = Rc<RefCell<Option<(String, Rc<Model>)>>>;
 
-/// The data side as the C render test's fixtures answer (tests/render/fixtures.c): every model
+/// The data side as the C render test's fixtures answer: every model
 /// comes from the run log (one per refresh where it changed, one after each step that changed
 /// it), the polls say what the fixtures' polls say, the actions answer what theirs answer, and
 /// what C reads live is read from the model.
@@ -443,12 +447,19 @@ impl Run {
     }
 
     fn shot(&mut self, page: &str, k: usize) {
+        self.capture(page, k, true);
+    }
+
+    /// Motion frames intentionally clip moving content. Check geometry on settled shots.
+    fn capture(&mut self, page: &str, k: usize, check_geometry: bool) {
         Obj::screen_active().invalidate();
         Obj::layer_top().invalidate();
         // SAFETY: the display this harness created
         unsafe { sys::lv_refr_now(self.disp) };
-        self.checks.geo_walk(Obj::screen_active());
-        self.checks.geo_walk(Obj::layer_top());
+        if check_geometry {
+            self.checks.geo_walk(Obj::screen_active());
+            self.checks.geo_walk(Obj::layer_top());
+        }
         // SAFETY: rendering is done; FB is not touched until the next lv call
         let fb = unsafe { std::slice::from_raw_parts((&raw const FB).cast::<u16>(), W * H) };
         // SAFETY: the same memory as bytes
@@ -732,6 +743,29 @@ pub fn run(args: &[String]) -> i32 {
                 }
             },
             "settle" => num(1).map(|ms| settle(ms as u32)).is_some(),
+            // Deterministic motion evidence: no tick advance and no production UI hooks.
+            "motion_probe" => match (f.get(1), f.get(2).and_then(|p| resolve(p))) {
+                (Some(name), Some(o)) => {
+                    // SAFETY: resolve returned a live LVGL object, on the render thread.
+                    let (active, x, y) = unsafe {
+                        (sys::lv_anim_count_running(),
+                         sys::lv_obj_get_style_translate_x(o.0, lv::LV_PART_MAIN),
+                         sys::lv_obj_get_style_translate_y(o.0, lv::LV_PART_MAIN))
+                    };
+                    println!("MOTION {name} active={active} x={x} y={y} hidden={} pressed={}",
+                             o.hidden(), o.has_state(lv::LV_STATE_PRESSED));
+                    true
+                }
+                _ => false,
+            },
+            "motion_frame" => match f.get(1) {
+                Some(name) => {
+                    r.unmatched();
+                    r.capture(name, 0, false);
+                    true
+                }
+                None => false,
+            },
             "to_tab" => num(1).filter(|&t| (0..TABS as i32).contains(&t)).map(|t| ui::with(|u| u.to_tab(t as usize))).is_some(),
             "sub_open" => f.get(1).and_then(|n| sub_by_name(n)).map(|s| ui::with(|u| u.sub_open(s))).is_some(),
             "sub_open_child" => match (f.get(1).and_then(|n| sub_by_name(n)), f.get(2).and_then(|n| sub_by_name(n))) {

@@ -1,4 +1,4 @@
-//! 首页 (src/ui_parts/home.c + the Home parts of src/ui_parts/refresh.c): the status card (a
+//! 首页: the status card (a
 //! conclusion, then 载波 · Wi-Fi · 出口 · 流量), 情景, Tailscale, and the net-speed chart
 //! (ui/system.rs, built with the charts). Cards are stacked by home_reflow under whatever the
 //! status card shows.
@@ -252,7 +252,7 @@ fn hold_key(v: &net_view_t) -> u32 {
     v.story.headline.bytes().fold(5381u32, |k, c| k.wrapping_mul(33).wrapping_add(c as u32))
 }
 
-/// CHILL 手动优先的提示 (src/ui_parts/exit.c mf_view): what luyaz-core says, with a mark and a
+/// CHILL 手动优先的提示: what luyaz-core says, with a mark and a
 /// colour by its kind; a stale one dimmed with the time it stopped.
 pub struct MfView {
     pub on: bool,
@@ -882,7 +882,7 @@ impl Ui {
         self.home_reflow();
     }
 
-    /// The status card (refresh.c 「Home: signal card」), from the core's view of the network.
+    /// The status card, from the core's view of the network.
     pub(super) fn home_signal_paint(&mut self, v: &net_view_t, core_silent: bool) {
         let th = t();
         let f = uf();
@@ -1537,8 +1537,17 @@ impl Ui {
                 kit::show(o, i < rows);
             }
         }
-        h.ts_val[4].set_width(lv::SIZE_CONTENT);
-        h.ts_card.set_height(rows as i32 * ROW_H);
+        let mut y = 0;
+        for i in 0..rows {
+            if i > 0 {
+                h.ts_sep[i].set_y(y);
+            }
+            y += kit::pair_reflow(h.ts_key[i], h.ts_val[i], y, CARD_W - PAD - if i == 0 { 16 } else { 0 });
+        }
+        // The status dot follows the state value even if a long state wraps.
+        h.ts_val[0].update_layout();
+        h.ts_dot.set_pos(h.ts_val[0].x() - 12, h.ts_val[0].y() + 6);
+        h.ts_card.set_height(y);
         // the exit tab's 「Tailscale ›」 small line
         let tsl = self.tile_sub[Sub::Ts as usize];
         if running && ts.peers != 0 {
@@ -1550,7 +1559,7 @@ impl Ui {
         self.ts_page_paint();
     }
 
-    /// The view the status card and status bar draw (refresh.c: /v2/screen, or a placeholder
+    /// The view the status card and status bar draw (/v2/screen, or a placeholder
     /// that says why there is none).
     pub(super) fn screen_view(&self) -> net_view_t {
         match &self.model.screen_net {
@@ -1576,7 +1585,7 @@ pub fn wifi_sig_word(tier: &str) -> Option<&'static str> {
 /// same value, so it does not snap back while the core's next read is on its way.
 const AUX_HOLD_MS: u32 = 30000;
 
-/// Device state the main snapshot fields don't cover (home.c 「auxiliary device state」): the
+/// Device state the main snapshot fields don't cover: the
 /// DHCP pool, direct power supply and the cellular data / roaming switches come from core;
 /// the radios (/sys) and Wi-Fi power save (iw) are read on the device while a page that shows
 /// them is up, at most every 5 s.
@@ -1630,7 +1639,7 @@ fn aux_take(cur: &mut i32, hold: &mut u32, from_core: i32, now: u32) {
 }
 
 impl Ui {
-    /// home.c aux_refresh: the core's values; the radios and power save from the device.
+    /// the core's values; the radios and power save from the device.
     pub(super) fn aux_refresh(&mut self, active: bool, d: &ui_model::core_snapshot_t) {
         let now = lv::tick_get();
         let a = &mut self.aux;

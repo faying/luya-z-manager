@@ -139,7 +139,7 @@ fn what_is_sent_is_checked_again() {
     let b = Bands::of(&sig(ALL_LTE, ALL_NR, ALL_NR));
     let l = Lang::Zh;
     assert_eq!(check(Which::Lte, "3,1,3", Some(&b), false, l), Ok(vec![1, 3]));
-    assert!(matches!(check(Which::Lte, "", Some(&b), false, l), Err(write::Outcome::NotYet(s)) if s == "请至少选择一个 LTE 频段"));
+    assert!(matches!(check(Which::Lte, "", Some(&b), false, l), Err(write::Outcome::NotYet(s)) if s == "至少勾一个 LTE 频段"));
     assert!(matches!(check(Which::Lte, "1;3", Some(&b), false, l), Err(write::Outcome::Failed(_))));
     assert!(matches!(check(Which::Lte, "6", Some(&b), false, l), Err(write::Outcome::Failed(s)) if s.contains("频段 6")));
     assert!(matches!(check(Which::Nr, "4", Some(&b), false, l), Err(write::Outcome::Failed(_))));

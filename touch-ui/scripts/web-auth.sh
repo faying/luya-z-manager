@@ -7,7 +7,7 @@
 #   web-auth.sh migrate   $WEB_AUTH_OLD (the install kit's web-password.env) → the password file
 #   web-auth.sh verify    the three checks, against http://127.0.0.1:9090
 #
-# Why this matters (first seen with the retired zte-agent): an admin
+# Why this matters: an admin
 # backend with no password set answers EVERY request
 # unauthenticated. The old launcher carried the password as an `export`; the
 # procd service does not run that launcher, so moving to procd without this

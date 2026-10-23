@@ -1,4 +1,4 @@
-//! /tools/speedtest (测速), the old `tools/speedtest/page.tsx`: status (phase · reason, start /
+//! /tools/speedtest (测速): status (phase · reason, start /
 //! stop) → readings (download as hero, upload, ping, jitter) → server choice → details.
 //!
 //! ```text
@@ -67,9 +67,9 @@ fn mb(bytes: f64) -> String {
 fn phase_word(p: &str, l: Lang) -> &'static str {
     match p {
         "discovering" => l.pick("Finding a test server…", "正在寻找测速节点…"),
-        "latency" => l.pick("Measuring latency…", "正在测量延迟…"),
-        "download" => l.pick("Testing download…", "正在测试下载…"),
-        "upload" => l.pick("Testing upload…", "正在测试上传…"),
+        "latency" => l.pick("Latency…", "测延迟…"),
+        "download" => l.pick("Download…", "测下载…"),
+        "upload" => l.pick("Upload…", "测上传…"),
         "complete" => l.pick("Complete", "完成"),
         "cancelled" => l.pick("Cancelled", "已取消"),
         "error" => l.pick("Error", "错误"),
@@ -749,7 +749,7 @@ mod tests {
         );
         let v = view(&g, false, Lang::Zh);
         assert!(v.running);
-        assert_eq!(v.word, "正在测试下载… · 42%");
+        assert_eq!(v.word, "测下载… · 42%");
         assert_eq!(v.reason.as_deref(), Some("实时：87.2 Mbps"));
         assert_eq!(v.dl.value.as_deref(), Some("87.2"));
         assert_eq!(v.dl.word, "实时");

@@ -83,6 +83,9 @@ const ON_U60D: &[&str] = &[
     "/usage/days",
     // the last landing in a country (u60d usage_log.rs)
     "/usage/landing",
+    // the passive firmware capability report and the recovery-action table (R18-P1-07, agent-api)
+    "/device/capabilities",
+    "/recovery/actions",
     "/api/netinfo",
     "/api/netinfo/scan",
     // 8d-2: "use for this SIM" on /router/apn (compat ops::apn_use)

@@ -8,7 +8,7 @@ use std::fs;
 use serde_json::{json, Value};
 use luyaz_policy::scenario::{self as sc, Config};
 
-use crate::{atomic_write, lk, Engine, CONFIG_FILE, DIR, DISABLED_FLAG, LOG_FILE, LOG_TAIL_LINES, PIN_FILE};
+use crate::{atomic_write, lk, Engine, CONFIG_FILE, DIR, DISABLED_FLAG, LOG_FILE, PIN_FILE};
 
 fn bad_json() -> (u16, Value) {
     (400, json!({"ok": false, "error": "invalid JSON"}))
@@ -108,8 +108,6 @@ impl Engine {
     /// GET /api/scenario/log
     pub fn http_log(&self) -> (u16, Value) {
         let text = fs::read_to_string(self.p(LOG_FILE)).unwrap_or_default();
-        let lines: Vec<&str> = text.lines().collect();
-        let start = lines.len().saturating_sub(LOG_TAIL_LINES);
-        (200, json!({"ok": true, "data": {"log": lines[start..].join("\n")}}))
+        (200, json!({"ok": true, "data": {"log": crate::log_tail(&text)}}))
     }
 }

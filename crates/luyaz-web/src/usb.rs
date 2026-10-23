@@ -1,4 +1,4 @@
-//! /usb (USB 模式), the old `usb/page.tsx`: the USB state, the mode switch (tier 3), fast
+//! /usb (USB 模式): the USB state, the mode switch (tier 3), fast
 //! charging (tier 2), the port and charger details. Not `/tools/enable-adb` (still the old page).
 //!
 //! Where each value comes from (the old page read `/api/usb/status` every 3 s and

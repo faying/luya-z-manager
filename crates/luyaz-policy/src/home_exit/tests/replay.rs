@@ -1,4 +1,4 @@
-//! Replaying recorded ticks and start-ups (the agent's recorder wraps its real `Io` like `Rec`).
+//! Replaying recorded ticks and start-ups (the host's recorder wraps its real `Io` like `Rec`).
 
 use super::*;
 
@@ -194,7 +194,7 @@ fn a_different_apply_is_a_divergence() {
             ..Default::default()
         },
     };
-    // the agent turned media off instead of rest
+    // the recorded tick turned media off instead of rest
     let rec = vec![Event::Apply {
         items: Items {
             media: false,

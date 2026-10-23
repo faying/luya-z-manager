@@ -1,8 +1,8 @@
-//! Replaying a recorded tick (the agent's recorder wraps its real `Io` the same way as `Rec`).
+//! Replaying a recorded tick (the host's recorder wraps its real `Io` the same way as `Rec`).
 
 use super::*;
 
-/// Records every call and answer of the wrapped `Io`, as the agent's recorder does.
+/// Records every call and answer of the wrapped `Io`, as the host's recorder does.
 struct Rec<'a> {
     inner: &'a mut dyn Io,
     events: Vec<Event>,
@@ -234,7 +234,7 @@ fn random_ticks_replay_exactly() {
     }
 }
 
-/// The record says the agent asked something else: that is reported, and nothing more is
+/// The record says the recorded tick asked something else: that is reported, and nothing more is
 /// answered (the tick goes inert instead of acting on made-up answers).
 #[test]
 fn a_different_call_is_a_divergence() {

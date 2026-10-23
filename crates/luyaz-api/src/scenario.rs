@@ -1,6 +1,5 @@
-//! The scenario slice of `/api/public/status` (moved from zte-agent `scenario.rs`, Phase 4 step
-//! 8b). The caller reads the engine's state (the agent from memory, u60d from the engine's files)
-//! and this renders it, so both reply alike. The picker on the network page ([`picker`], step 8c)
+//! The scenario slice of `/api/public/status`. The caller reads the engine's state (the agent from memory, u60d from the engine's files)
+//! and this renders it, so both reply alike. The picker on the network page ([`picker`])
 //! likewise.
 
 use serde_json::{Value, json};

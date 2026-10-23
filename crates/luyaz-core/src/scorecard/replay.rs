@@ -1,5 +1,5 @@
 //! `u60d --scorecard-replay <dir>`: one fixture left by doctor (`DOC_REPORT_KEEP=<dir>`,
-//! touch-ui scripts/doctor.sh): `vars` (W, LABEL, RECOV, UIDTK, SUMMARY, LEDGER_DIR, GAVEUP,
+//! touch-ui scripts/doctor.sh): `vars` (W, LABEL, RECOV, SUMMARY, LEDGER_DIR, GAVEUP,
 //! THR), `ledger/boot-*.jsonl`, `cap`, `warn`, `standby`, `alerts`; doctor's own answer is in
 //! `out` and `rc`, which tools/scorecard-parity.sh compares with what this prints.
 //!
@@ -39,7 +39,6 @@ pub fn inputs(dir: &Path) -> (Inputs, String) {
         w: super::awk::num(&v("W")),
         label: v("LABEL"),
         recov: n("RECOV"),
-        uidtk: n("UIDTK"),
         cap: read(dir, "cap"),
         warn: Some(read(dir, "warn")),
         standby: Some(read(dir, "standby")),

@@ -3,7 +3,7 @@
 {% block main %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
 <div class="stk-col" data-signals="{_tab: 'ussd', code: '', reply: '', stk: []}">
-<p class="nd-body stk-t2">{{ l.pick("Send USSD codes and navigate your SIM's STK menu. Nothing is read when you open this page.", "发送 USSD 代码，浏览 SIM 卡的 STK 菜单。打开这一页不会读任何东西。") }}</p>
+<p class="nd-body stk-t2">{{ l.pick("USSD codes and the SIM's STK menu. Nothing is read when you open this page.", "USSD 代码和 SIM 的 STK 菜单。打开这一页不会读任何东西。") }}</p>
 <div class="nd-seg nd-seg--block" role="tablist" aria-label="{{ l.pick("USSD or STK", "USSD 或 STK") }}"><div class="nd-seg__track">
 {% for (k, label, sel) in self.tabs() %}<button type="button" role="tab" id="stk-tab-{{ k }}" class="nd-seg__item" aria-controls="stk-p-{{ k }}" aria-selected="{{ sel }}"{% if sel %} data-selected="true"{% endif %} data-attr:aria-selected="$_tab === '{{ k }}' ? 'true' : 'false'" data-attr:data-selected="$_tab === '{{ k }}'" data-on:click="$_tab = '{{ k }}'">{{ label }}</button>{% endfor %}
 </div></div>

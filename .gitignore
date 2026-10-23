@@ -1,22 +1,22 @@
-# build output
-/target/
+# --- generated (builds, kit output, caches) ---
+/target
 crates/luyaz-plugins/out/
 crates/luyaz-plugins/target/
-onboard/dist/
+onboard/dist
 onboard/cache/
 scripts/esim/alpine-pkgs/
 
-# local settings and secrets
-onboard/u60.env
+# --- per-machine settings, may hold secrets ---
+/onboard/u60.env
 onboard/kit.local.env
 
-# luyaz-web e2e (npm)
+# --- npm, for the luyaz-web browser checks ---
 crates/luyaz-web/node_modules/
 crates/luyaz-web/test-results/
 
-# tooling
-.claude/
-.agents/
-skills-lock.json
-logs/
-.DS_Store
+# --- editor / agent / OS clutter ---
+/.claude
+/.agents
+/skills-lock.json
+/logs
+**/.DS_Store

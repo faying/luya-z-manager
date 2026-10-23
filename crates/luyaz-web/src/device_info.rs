@@ -1,4 +1,4 @@
-//! /device-info (设备信息), the old `device-info/page.tsx`: identity, network addresses and
+//! /device-info (设备信息): identity, network addresses and
 //! system facts in three groups, read-only, and a fourth: the component versions and whether
 //! the public repo has newer ones (u60d `/v2/versions`, docs/designs/component-versions.md). The old page read nine agent endpoints once; here
 //! almost everything is a u60d block on the one upstream connection (and so live), checked field

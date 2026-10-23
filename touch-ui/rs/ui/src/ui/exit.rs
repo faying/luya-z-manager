@@ -1,4 +1,4 @@
-//! src/ui_parts/exit.c: the 小区信息 page's frame (its values: refresh.rs) and the Tailscale page.
+//! the 小区信息 page's frame (its values: refresh.rs) and the Tailscale page.
 //! Also the CHILL card (built with Home, shown on the exit tab) with the 手动优先 notice on its
 //! top, the 「在国外 · CHILL 怎么走」 sheet, and the CHILL pages with 家里出口.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
@@ -21,7 +21,7 @@ pub struct SigPage {
     lte_sec: Obj,
 }
 
-/// tailscale.h TS_PEER_MAX
+/// TS_PEER_MAX
 pub const TS_PEER_MAX: usize = 12;
 const TS_SELF_ROWS: usize = 8;
 const TS_PEER_H: i32 = 70;
@@ -31,7 +31,12 @@ const TS_PEER_H: i32 = 70;
 /// last handshake, how much went each way).
 #[derive(Default)]
 pub struct TsPage {
+    scroll: Obj,
+    self_card: Obj,
+    self_key: [Obj; TS_SELF_ROWS],
+    self_sep: [Obj; TS_SELF_ROWS],
     self_v: [Obj; TS_SELF_ROWS],
+    peers_sec: Obj,
     card: Obj,
     row: [Obj; TS_PEER_MAX],
     name: [Obj; TS_PEER_MAX],
@@ -92,7 +97,7 @@ impl Ui {
         sc.scroll_to_y(0);
     }
 
-    /// 小区信息's values (refresh.c 「信令读取 subpage」), every refresh.
+    /// 小区信息's values, every refresh.
     pub(super) fn sig_paint(&mut self, mode_word: &str) {
         use crate::logic::{self, Rat};
         let m = self.model.clone();
@@ -150,14 +155,21 @@ impl Ui {
         kit::section(sc, 4, tr("本机"));
         let me = kit::card(sc, MARGIN, 24, CARD_W, TS_SELF_ROWS as i32 * ROW_H);
         let tp = &mut self.ts;
+        tp.scroll = sc;
+        tp.self_card = me;
         for (i, cap) in SELF_CAP.iter().enumerate() {
-            tp.self_v[i] = kit::row(me, i as i32 * ROW_H, tr(cap), i == 0);
+            let y = i as i32 * ROW_H;
+            if i > 0 {
+                tp.self_sep[i] = kit::sep(me, y);
+            }
+            tp.self_key[i] = kit::label(me, f.cj14, th.t2, pad, y + 11, tr(cap));
+            tp.self_v[i] = kit::label_r(me, f.n15, th.t1, CARD_W - pad, y + 10, "");
         }
         for i in [0, 5, 7] {
             tp.self_v[i].set_style_text_font(f.cj14, 0);
         }
         let y = 24 + TS_SELF_ROWS as i32 * ROW_H + 10;
-        kit::section(sc, y, tr("节点（和本机之间）"));
+        tp.peers_sec = kit::section(sc, y, tr("节点（和本机之间）"));
         tp.card = kit::card(sc, MARGIN, y + 20, CARD_W, TS_PEER_MAX as i32 * TS_PEER_H);
         for i in 0..TS_PEER_MAX {
             let r = kit::bx(tp.card, 0, i as i32 * TS_PEER_H, CARD_W, TS_PEER_H, th.card, 0);
@@ -179,7 +191,7 @@ impl Ui {
         sc.scroll_to_y(0);
     }
 
-    /// The Tailscale page (refresh.c 「Tailscale」, the subpage part): own identity and the
+    /// The Tailscale page: own identity and the
     /// peer list. Drawn with Home's card, when Tailscale is there.
     pub(super) fn ts_page_paint(&mut self) {
         let th = crate::theme::t();
@@ -200,6 +212,17 @@ impl Ui {
             &ts.os
         ));
         tp.self_v[7].set_text(if ts.key_expiry.is_empty() { tr("不过期") } else { ts.key_expiry.as_str() });
+        let mut y = 0;
+        for i in 0..TS_SELF_ROWS {
+            if i > 0 {
+                tp.self_sep[i].set_y(y);
+            }
+            y += kit::pair_reflow(tp.self_key[i], tp.self_v[i], y, CARD_W - kit::PAD);
+        }
+        tp.self_card.set_height(y);
+        let peers_y = 24 + y + 10;
+        tp.peers_sec.set_y(peers_y);
+        tp.card.set_y(peers_y + 20);
         let pn = m.tailscale_peers.len().min(TS_PEER_MAX);
         for i in 0..TS_PEER_MAX {
             if i >= pn {
@@ -257,6 +280,7 @@ impl Ui {
             kit::text_color(tp.name[i], if pe.online != 0 { th.t1 } else { th.t3 });
         }
         tp.card.set_height(pn.max(1) as i32 * TS_PEER_H);
+        kit::scroll_extent(tp.scroll, peers_y + 20 + pn.max(1) as i32 * TS_PEER_H + 16);
     }
 }
 
@@ -387,7 +411,7 @@ impl Ui {
         kit::show(h, false);
     }
 
-    /// The CHILL card (refresh.c 「CHILL (Home card + subpage)」, the card part): repainted
+    /// The CHILL card on Home: repainted
     /// when what it shows changed.
     pub(super) fn chill_card_paint(&mut self) {
         let th = t();
@@ -693,10 +717,10 @@ impl Ui {
 // ---- the CHILL pages ----
 const EXIT_STATE: [&str; 4] = ["proxy", "global", "direct_keep_ai", "direct_all"];
 const PROFILE: [&str; 3] = ["eco", "standard", "perf"];
-/// chill.c SC_MAX_NODE (a manual group can have 168 nodes)
+/// SC_MAX_NODE (a manual group can have 168 nodes)
 pub const CHILL_MAX_NODES: usize = 200;
 pub const CHILL_MAX_GROUPS: usize = 32;
-/// chill.c SC_TOP_SHOW
+/// SC_TOP_SHOW
 const CHILL_TRAF_ROWS: usize = 6;
 const CHILL_NAV_ROWS: usize = 2;
 const CHILL_NAV_NODES: usize = 0;
@@ -1422,8 +1446,7 @@ impl Ui {
         sc.scroll_to_y(0);
     }
 
-    /// The CHILL pages (refresh.c 「CHILL (Home card + subpage)」, the page part; M5: on
-    /// chill_poll, the C test's every second).
+    /// The CHILL pages (M5: on chill_poll, every second).
     #[allow(clippy::needless_range_loop)]
     pub(super) fn chill_page_paint(&mut self) {
         let th = t();
@@ -1504,7 +1527,7 @@ impl Ui {
             let ni = &m.chill_nodes[i];
             cp.node_row[i].remove_flag(lv::LV_OBJ_FLAG_HIDDEN);
             self.set(cp.node_name[i], &ni.name);
-            // chill.c: >0 = ms, 0 = timed out, -1 = not measured yet; the 150/400 ms tiers
+            // >0 = ms, 0 = timed out, -1 = not measured yet; the 150/400 ms tiers
             if ni.delay > 0 {
                 self.set(cp.node_dl[i], cf!("%d ms", ni.delay));
             } else {

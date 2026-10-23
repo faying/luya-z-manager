@@ -50,8 +50,8 @@ struct Args {
 }
 
 /// 构建标记：给打包脚本认「这是 Luya-Z 核心、不带外部更新源」用
-/// （onboard/build-kit.sh、tools/luyaz、luyaz-ship.sh 用 `grep -a` 查；D3 前叫 `ZWRT_DATAD_FORK_RUST_SELF_CONTAINED`：
-/// tools/luyaz 按提交编老版本时新旧都认，装机包和设备上的 luyaz-ship.sh 只认新的）。
+/// （onboard/build-kit.sh、tools/luyaz、luyaz-ship.sh 用 `grep -a` 查；
+/// tools/luyaz 按提交编老版本时也认改名前的标记，装机包和设备上的 luyaz-ship.sh 只认这个）。
 /// 不参与任何 HTTP 输出；`#[used]` + main 里的 black_box 保证 LTO/strip 后仍在二进制里。
 #[used]
 static BUILD_MARKER: [u8; 31] = *b"LUYAZ_CORE_BUILD_SELF_CONTAINED";
@@ -199,12 +199,10 @@ mod tests {
             assert!(invoked_as_core(yes), "{yes}");
         }
         for no in [
-            "u60d",
-            "/data/u60d/u60d",
-            "zwrt-datad",
-            "/data/plugins/zwrt-datad/zwrt-datad",
-            "/tmp/u60d.test",
-            "/data/luyaz/core/u60d",
+            "otherd",
+            "/data/other/otherd",
+            "/tmp/otherd.test",
+            "/data/luyaz/core/otherd",
             "luyaz-web",
             "",
         ] {

@@ -407,7 +407,7 @@ type Reader = fn(&[u8], &mut core_snapshot_t);
 
 /// A snapshot in the old /state shape, as the screen's struct. None for empty text. Sections
 /// that are missing (stale blocks are left out) keep their defaults.
-pub fn parse_snapshot(buf: &[u8]) -> Option<core_snapshot_t> {
+pub fn decode_snapshot(buf: &[u8]) -> Option<core_snapshot_t> {
     if matches!(buf.first(), None | Some(0)) {
         return None;
     }
@@ -787,7 +787,7 @@ impl CoreLink {
         if text == self.latest_raw.as_slice() && !text.is_empty() {
             return 0;
         }
-        match Some(text).filter(|t| !t.is_empty() && t.len() < SNAPSHOT_CAP).and_then(parse_snapshot) {
+        match Some(text).filter(|t| !t.is_empty() && t.len() < SNAPSHOT_CAP).and_then(decode_snapshot) {
             None => -1,
             Some(d) => {
                 (self.latest_raw, self.fresh_snap, self.latest_ok) = (text.to_vec(), d, true);

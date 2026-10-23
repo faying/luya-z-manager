@@ -1,5 +1,5 @@
-/* luyaz-web: the utilities the Next.js pages get from Tailwind, and the few page bits
- * that were Tailwind class strings there (help button, trend card). Tokens only, no colours. */
+/* luyaz-web: the small utility classes the pages use, and a few page bits
+ * (help button, trend card). Tokens only, no colours. */
 @layer base {
 *,
 ::before,
@@ -96,7 +96,7 @@ svg { display: block; flex-shrink: 0; }
 .t-login__label { display: block; margin-bottom: -8px; font-size: 14px; font-weight: 600; color: var(--nd-t2); }
 .t-login__err { border-radius: var(--nd-r-field, 8px); background: var(--nd-washB); padding: 12px 16px; font-size: 15px; font-weight: 500; color: var(--nd-badT); }
 @media (min-width: 640px) { .t-login { padding-top: 80px; } }
-/* top-bar status (StatusIcons.tsx) and the alert bar's error line */
+/* top-bar status icons and the alert bar's error line */
 @layer utilities {
 .font-semibold { font-weight: 600; }
 @media (min-width: 640px) { .sm\:inline { display: inline; } }

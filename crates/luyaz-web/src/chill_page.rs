@@ -1,4 +1,4 @@
-//! /services/chill (batch 5b), the old `services/chill/page.tsx` + `lib/chill.ts`.
+//! /services/chill (batch 5b).
 //!
 //! ```text
 //!  agent (tab's own session; u60d first once it has them)        one push stream per tab

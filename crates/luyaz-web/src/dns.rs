@@ -1,4 +1,4 @@
-//! /router/dns (DNS 设置), the upstream-DNS part of the old `router/dns/page.tsx`: auto (the
+//! /router/dns (DNS 设置), the upstream servers: auto (the
 //! operator's servers) or manual (a primary and an optional secondary IPv4 server), the agent's
 //! `/api/router/dns` GET / PUT.
 //!
@@ -131,13 +131,13 @@ pub fn check(d: &Draft, l: Lang) -> Result<Plan, write::Outcome> {
         "manual" => {
             let (p, s) = (d.primary.trim(), d.secondary.trim());
             if p.is_empty() {
-                return no("Primary DNS cannot be empty", "主 DNS 不能为空");
+                return no("Fill in the primary DNS", "主 DNS 要填");
             }
             if !valid_ipv4(p) {
-                return no("Invalid primary DNS address", "主 DNS 地址无效");
+                return no("The primary DNS isn't an IPv4 address", "主 DNS 不是 IPv4 地址");
             }
             if !s.is_empty() && !valid_ipv4(s) {
-                return no("Invalid secondary DNS address", "备用 DNS 地址无效");
+                return no("The second DNS isn't an IPv4 address", "第二个 DNS 不是 IPv4 地址");
             }
             Ok(Plan { manual: true, primary: p.into(), secondary: s.into() })
         }
@@ -191,7 +191,7 @@ pub fn view(got: &Got, l: Lang) -> View {
         ),
         (Some(d), _) => (
             "ok",
-            l.pick("Automatic (from the operator)", "自动（运营商分配）").to_owned(),
+            l.pick("Auto (the carrier's servers)", "自动（用运营商的服务器）").to_owned(),
             join(&d.auto1, &d.auto2),
         ),
     };
@@ -486,9 +486,9 @@ mod tests {
             Err(write::Outcome::NotYet(s)) => s,
             o => panic!("{o:?}"),
         };
-        assert_eq!(msg(check(&d("manual", "", ""), Lang::En)), "Primary DNS cannot be empty");
-        assert_eq!(msg(check(&d("manual", "1.1.1", ""), Lang::En)), "Invalid primary DNS address");
-        assert_eq!(msg(check(&d("manual", "1.1.1.1", "x"), Lang::En)), "Invalid secondary DNS address");
+        assert_eq!(msg(check(&d("manual", "", ""), Lang::En)), "Fill in the primary DNS");
+        assert_eq!(msg(check(&d("manual", "1.1.1", ""), Lang::En)), "The primary DNS isn't an IPv4 address");
+        assert_eq!(msg(check(&d("manual", "1.1.1.1", "x"), Lang::En)), "The second DNS isn't an IPv4 address");
         assert_eq!(msg(check(&d("doh", "1.1.1.1", ""), Lang::En)), "Choose a DNS mode");
         let p = check(&d("manual", " 1.1.1.1 ", ""), Lang::En).unwrap();
         assert_eq!(p.body(), json!({"dns_mode":"manual","prefer_dns_manual":"1.1.1.1","standby_dns_manual":""}));

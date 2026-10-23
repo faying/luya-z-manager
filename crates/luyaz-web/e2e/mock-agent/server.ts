@@ -3,7 +3,7 @@
 //
 //   node crates/luyaz-web/e2e/mock-agent/server.ts
 //
-// then in the browser: localStorage.setItem("u60.agent_url", "http://localhost:9199")
+// then point a local luyaz-web at http://127.0.0.1:9199 instead of the core.
 // See README.md for scenarios.
 //
 // Backs luyaz-web's browser checks (../fake-agent.mjs) since the old web went (X13).
@@ -33,7 +33,7 @@ const REBOOT_MS = envInt("MOCK_REBOOT_MS", 20_000);
 const STEP2_MS = envInt("MOCK_STEP2_MS", 20_000);
 /** A write arriving within this window after the previous write finished counts as step 2. */
 const STEP_WINDOW_MS = envInt("MOCK_STEP_WINDOW_MS", 3_000);
-/** Token lifetime (agent: 3600 s, auth.rs TOKEN_TTL_SECS). */
+/** Session token lifetime in seconds; one hour unless MOCK_TOKEN_TTL says otherwise. */
 const TOKEN_TTL_MS = envInt("MOCK_TOKEN_TTL", 3600) * 1000;
 const QUIET = process.env.MOCK_QUIET === "1";
 
@@ -204,7 +204,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const header = req.headers["x-mock-scenario"];
   const scen = typeof header === "string" && header.trim() ? parseScenarios(header).set : runtimeScenarios;
 
-  // "down": the agent is unreachable.
+  // "down": nothing answers on the device port.
   if (scen.has("down")) {
     log(method, path, "RESET(down)", t0, scen);
     drop(req);
@@ -234,7 +234,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
   }
 
-  // Login (handlers.rs:51): 400 on bad JSON / missing field, 401 on wrong password.
+  // Mock-only login (the core signs in on /auth/login with Basic auth instead):
+  // bad JSON or no password string -> 400, empty password -> 401, anything else -> a new token.
   if (method === "POST" && path === "/api/auth/login") {
     if (raw.trim() && body === undefined) {
       sendJson(req, res, 400, { ok: false, error: "invalid JSON" });
@@ -243,7 +244,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
     const pw = body && typeof body === "object" ? (body as Record<string, unknown>).password : undefined;
     if (typeof pw !== "string") {
-      sendJson(req, res, 400, { ok: false, error: "missing 'password' field" });
+      sendJson(req, res, 400, { ok: false, error: "password must be a string" });
       log(method, path, 400, t0, scen);
       return;
     }
@@ -259,7 +260,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return;
   }
 
-  // Auth (server.rs:97-113): everything except login and public status.
+  // Every path needs the current token, except login and the public status.
   if (path !== "/api/public/status" && !tokenValid(req)) {
     sendJson(req, res, 401, { ok: false, error: "unauthorized" });
     log(method, path, 401, t0, scen);
@@ -332,8 +333,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   // reboot-token: the device goes away right after acknowledging the reboot,
-  // and every token issued before it is gone when it comes back (auth.rs keeps
-  // tokens in memory only — Decision ledger R1).
+  // and every token issued before it is gone when it comes back: the core holds
+  // sessions in memory, so a restart forgets them (Decision ledger R1).
   if (method === "POST" && path === "/api/device/reboot" && status < 400 && scen.has("reboot-token")) {
     offlineUntil = Date.now() + REBOOT_MS;
     currentToken = null;
@@ -354,5 +355,4 @@ server.on("clientError", (_err, socket) => socket.destroy());
 
 server.listen(PORT, HOST, () => {
   console.log(`[mock] device API mock on http://${HOST}:${PORT}  (${routeTable.size} routes, scenario: ${scenarioList(runtimeScenarios)})`);
-  console.log(`[mock] browser: localStorage.setItem("u60.agent_url", "http://localhost:${PORT}")`);
 });

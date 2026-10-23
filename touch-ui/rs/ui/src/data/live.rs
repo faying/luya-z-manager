@@ -1,6 +1,5 @@
-//! The data side on the device as the screen's Source: each poll where refresh.c calls it, each
-//! action as the C page calls it, and the view model built from the getters as
-//! tests/render/vm_model.c builds it.
+//! The data side on the device as the screen's Source: each poll when the 1 s refresh asks,
+//! each action when a page sends it, and the view model built from the getters.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::core_api::CoreApi;
@@ -26,7 +25,7 @@ use plat::backlight::Backlight;
 use plat::key::Key;
 use std::rc::Rc;
 
-/// data_control_notice's age everywhere the screen asks (refresh.c, usbmode.c): 4 s
+/// data_control_notice's age everywhere the screen asks: 4 s
 const NOTICE_MS: u32 = 4000;
 /// UI_LANG_HOLD_MS: the 「正在切换」 frame stays this long before the exec
 const LANG_HOLD_MS: u64 = 400;
@@ -78,7 +77,7 @@ impl Live {
         self.core.poll(now_ms) && self.core.commit_latest()
     }
 
-    /// The view model from the getters (vm_model.c's order and meaning).
+    /// The view model from the getters.
     pub fn build(&mut self) -> Model {
         let (data_ok, data) = self.core.refresh();
         let (live_ok, live) = self.core.refresh_live();
@@ -191,7 +190,7 @@ impl Live {
         }
     }
 
-    /// op.c op_log_fetch: POST /control journal.list, read at once.
+    /// POST /control journal.list, read at once.
     fn journal(&self) -> Option<String> {
         let body = r#"{"action":"journal.list","source":"screen","params":{"limit":30}}"#;
         let req = http::build("POST", "/control", "127.0.0.1", "", Some(body), 256)?;

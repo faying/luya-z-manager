@@ -3,7 +3,7 @@
 {% block main %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
 <div class="pg-col">
-<p class="nd-body">{{ l.pick("Configure the guest network for temporary access.", "配置供临时访问的访客网络。") }}</p>
+<p class="nd-body">{{ l.pick("A separate Wi-Fi for visitors.", "给访客用的独立 Wi-Fi。") }}</p>
 {{ self.leaf("wg-status")|safe }}
 <section aria-labelledby="wg-t"><div class="flex items-center gap-3"><h2 id="wg-t" class="nd-group-title flex-1">{{ l.pick("Guest Network", "访客网络") }}</h2>{{ self.leaf("wg-btn")|safe }}</div>
 {{ self.leaf("wg-rows")|safe }}

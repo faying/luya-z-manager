@@ -152,7 +152,7 @@ fn mobile_data_switch_reads_like_core() {
         (r#"{"enable":1,"connect_status":"disconnected"}"#, 1),
     ];
     for (cell, want) in c {
-        let d = parse_snapshot(format!(r#"{{"interfaces":{{"cellular":{cell}}},"ts":1}}"#).as_bytes()).unwrap();
+        let d = decode_snapshot(format!(r#"{{"interfaces":{{"cellular":{cell}}},"ts":1}}"#).as_bytes()).unwrap();
         assert_eq!(d.cell_data, want, "{cell}");
     }
 }
@@ -180,7 +180,7 @@ fn v2_matches_legacy() {
         blk("typec", L_TYPEC),
         blk("powerbank", r#"{"state":0}"#),
     );
-    let want = parse_snapshot(legacy.as_bytes()).unwrap();
+    let want = decode_snapshot(legacy.as_bytes()).unwrap();
     assert!(want.inbox_n == 2 && want.batt_pct == 77 && want.lan_total == 2);
     assert!(want.usb_cc == 1 && want.powerbank == 0 && want.usb_power_role == "source" && want.usb_data_role == "host");
     assert_eq!(want.inbox[0].text, "测试 \"q\"");
@@ -193,7 +193,7 @@ fn v2_matches_legacy() {
     // the snapshot event: every field the screen reads, byte for byte
     assert_eq!(feed(&mut d, "snapshot", &snap), 1);
     assert!(d.have_seq && d.seq == 41 && d.epoch == "e7");
-    assert_eq!(parse_snapshot(&d.latest_raw).unwrap(), want);
+    assert_eq!(decode_snapshot(&d.latest_raw).unwrap(), want);
     // GET /v2/state carries the same: same result, the stream position untouched
     assert_eq!(d.v2_apply_snapshot(snap.as_bytes(), false), 0);
     assert_eq!(d.seq, 41);
@@ -379,7 +379,7 @@ fn pace_only_on_a_change() {
 #[test]
 fn sms_delete_needs_two_steps() {
     let mut d = CoreLink::new(cfg(1));
-    d.shown_snap = parse_snapshot(format!(r#"{{"sms":{{"unread":1,"list":{L_LIST}}}}}"#).as_bytes()).unwrap();
+    d.shown_snap = decode_snapshot(format!(r#"{{"sms":{{"unread":1,"list":{L_LIST}}}}}"#).as_bytes()).unwrap();
     d.shown_ok = true;
     assert!(!d.sms_delete_tap(0), "not armed");
     assert!(d.sms_delete_arm(1));
@@ -421,7 +421,7 @@ fn sim_dual_parse_signal() {
 fn full_snapshot_golden() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/");
     let src = std::fs::read(format!("{dir}snapshot-full.json")).unwrap();
-    let got = format!("{:#?}\n", parse_snapshot(&src).unwrap());
+    let got = format!("{:#?}\n", decode_snapshot(&src).unwrap());
     let path = format!("{dir}snapshot-full.golden");
     if std::env::var("LUYAZ_GOLDEN").as_deref() == Ok("write") {
         std::fs::write(&path, &got).unwrap();

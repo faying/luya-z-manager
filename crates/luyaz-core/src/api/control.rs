@@ -1,5 +1,5 @@
-//! The touch layer's writes (Phase 4 step 8d): to u60d's own `/control`, over loopback, as the agent
-//! sends them to core (`zte-agent/src/core_write.rs`). Going through `/control` keeps everything
+//! The touch layer's writes: to u60d's own `/control`, over loopback, as
+//! every other writer sends them. Going through `/control` keeps everything
 //! the agent's writes get there: the source on every write, the journal, the search session's gate
 //! (D17) and `op_busy` while a network-mode change confirms (D40). The answers are mapped by
 //! u60-api's `control::Reply`, the agent's own mapping.

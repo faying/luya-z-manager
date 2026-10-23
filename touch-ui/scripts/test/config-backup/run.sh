@@ -52,7 +52,7 @@ check "previous copy kept" '[ "$(cat $R/data/scenario/scenarios.json.pre-restore
 check "wireless written to etc/config under the root" 'grep -q "main_2g" $R/etc/config/wireless'
 
 # An archive from before F7: the password under the old key, restored under the new one
-echo 'ZTE_AGENT_PASSWORD=pw123' >$D/data/luyaz/web.env
+echo 'ZTE_AGENT_PASSWORD=pw123' >$D/data/luyaz/web.env  # RESIDUE-OK: key of pre-F7 archives
 sh $CB export >$T/bold.tgz
 check "verify passes on an archive with the old key" 'sh $CB verify $T/bold.tgz >/dev/null'
 R2=$T/root2; mkdir -p $R2

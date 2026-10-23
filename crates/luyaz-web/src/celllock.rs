@@ -1,4 +1,4 @@
-//! /router/celllock (小区锁定), the old `router/celllock/page.tsx`: the cell the modem is on, the
+//! /router/celllock (小区锁定): the cell the modem is on, the
 //! cell locks the firmware keeps (new: the old page could not read them), NR / LTE lock forms and
 //! "unlock all". Batch 3, step 3-2 (u60-web.md).
 //!
@@ -353,7 +353,7 @@ pub fn confirm(w: Which, k: &Lock, l: Lang) -> write::Confirm {
             "锁定 LTE",
         ),
         (Which::Reset, _) => (
-            l.pick("Reset all cell locks?", "重置所有小区锁定？").into(),
+            l.pick("Clear every cell lock?", "清除全部小区锁定？").into(),
             l.pick(
                 "Bands and cell lock are both reset: every cell lock and every band lock is removed.",
                 "频段和小区锁一起恢复：所有小区锁定和频段锁定都会去掉。",

@@ -1,6 +1,6 @@
-//! /router/stc (STC), the old `router/stc/page.tsx`. Behind the agent this is the firmware's
+//! /router/stc (STC). Behind the core this is the firmware's
 //! whitelist cell lock (`nwinfo_stc_cell_lock_*`, `nwinfo_*_stc_white_list_*`): once on, the modem
-//! only camps on cells it has collected into the whitelist. Batch 5c.
+//! only camps on cells it has collected into the whitelist.
 //!
 //! Where each value comes from (the old page read these once and again after a write; neither
 //! poll nor push: the stream re-reads on load, on 「刷新」/「重试」 and after every write):
@@ -237,8 +237,8 @@ impl Poll {
                 l.pick("STC service unavailable", "STC 服务不可用").into(),
                 Some(
                     l.pick(
-                        "STC service is currently unavailable (503). Controls are disabled.",
-                        "STC 服务当前不可用（503）。控件已禁用。",
+                        "STC can't be reached right now (503), so the controls are off.",
+                        "现在连不上 STC（503），所以控件先关掉。",
                     )
                     .into(),
                 ),
@@ -882,8 +882,8 @@ pub fn reset_confirm(l: Lang) -> Confirm {
         title: l.pick("Reset the STC whitelist?", "重置 STC 白名单？").into(),
         what: l
             .pick(
-                "Reset STC whitelist? This cannot be undone.",
-                "重置 STC 白名单？此操作无法撤销。",
+                "Clear the STC whitelist? The collected cells are gone for good.",
+                "清空 STC 白名单？收集到的小区会全部丢掉，找不回来。",
             )
             .into(),
         downtime: Some(downtime(l).into()),

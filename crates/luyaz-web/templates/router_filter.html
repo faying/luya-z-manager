@@ -2,7 +2,7 @@
 {% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("router.css") }}">{% endblock %}
 {% block main %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
-<p class="nd-body mb-4">{{ l.pick("Block ZTE telemetry and other unwanted domains.", "拦截 ZTE 遥测和其他不想要的域名。") }}</p>
+<p class="nd-body mb-4">{{ l.pick("Stop the device calling ZTE home, and block any other domain you name.", "不让设备回连 ZTE，也可以拦你指定的其他域名。") }}</p>
 <div class="grid gap-6 tf">
 {{ self.leaf("tf-status")|safe }}{{ self.leaf("tf-cur")|safe }}
 <section aria-labelledby="tf-q-t"><h2 id="tf-q-t" class="nd-group-title">{{ l.pick("Quick Block", "快速拦截") }}</h2>

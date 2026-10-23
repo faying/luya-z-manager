@@ -1,8 +1,8 @@
 {
   "v": 1,
   "components": {
-    "core": "1.33.7",
-    "lweb": "1.24.1",
+    "core": "1.34.1",
+    "lweb": "1.26.0",
     "sentinel": "1.0.11",
     "touch": "1.10.7",
     "scripts": "1.0.9"

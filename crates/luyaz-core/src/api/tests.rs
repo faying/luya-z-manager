@@ -276,7 +276,7 @@ async fn public_status_has_what_the_screen_reads_without_a_login() {
     );
     assert_eq!(ch["home_exit"]["ip"], true);
     assert_eq!(ch["home_exit"]["fallback"], false);
-    // the screen's buffers (touch-ui scenario.c): services 4096, chill 2048, home_exit 256, health 128
+    // luyaz-ui's read caps (touch-ui/rs/ui/src/data/scenario.rs): services 4096, chill 2048, home_exit 256, health 128
     for (v, cap) in [
         (&d["services"], 4096),
         (ch, 2048),
@@ -417,7 +417,7 @@ async fn chill_home_as_the_agent_renders_it() {
         }
     }
     assert_eq!(ts, "relay");
-    // touch-ui chill.c: data into 3072, the whole reply into 4096
+    // luyaz-ui's CHILL read: data into 3072, the whole reply into 4096
     let (_, body) = call(addr, "GET", "/api/services/chill/home", None, "").await;
     assert!(body["data"].to_string().len() < 3072 && body.to_string().len() < 4096);
     // CHILL in global mode: blocked, no fallback asked
@@ -618,7 +618,7 @@ async fn netinfo_as_the_agent_assembles_it() {
         ),
         "{a}"
     );
-    // touch-ui netinfo.c's buffers
+    // luyaz-ui data/netinfo.rs read caps
     let len = |v: &Value| v.to_string().len();
     assert!(len(d) < 32768);
     for k in ["scan", "scenes", "clients", "apn", "neighbors"] {
@@ -645,7 +645,7 @@ async fn netinfo_as_the_agent_assembles_it() {
     );
 }
 
-/// The home exit run by u60d (step 9a): the agent's engine with u60d as host. mihomo is a fake
+/// The home exit run by u60d: the agent's engine with u60d as host. mihomo is a fake
 /// `Io` that writes chill.env and the state file through u60d's host, so what the host does is
 /// what is checked; the clock runs virtual seconds.
 mod home_exit_engine {

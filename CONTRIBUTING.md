@@ -1,41 +1,39 @@
-# Contributing
+# How to contribute
 
-**English** · [中文](CONTRIBUTING.zh-CN.md)
+[中文版](CONTRIBUTING.zh-CN.md) | English
 
-Bug reports and pull requests are welcome.
+Issues and pull requests are both fine.
 
-Read [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) for the layout of the
-workspace, and the device rules in [CLAUDE.md](CLAUDE.md) before running
-anything on a U60: some mistakes there (disabling stock daemons, writing
-partitions) can stop the device from booting.
+## Before you touch a device
 
-## Building
+Two documents first: [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) explains how the
+workspace is laid out, and the device rules in [CLAUDE.md](CLAUDE.md) list the mistakes that can
+leave a U60 unable to boot (for example disabling a stock daemon or writing a partition).
 
-Everything targets `aarch64-unknown-linux-musl` and is built with
-`cargo-zigbuild`, either installed locally or through the image in
-`onboard/build.Dockerfile`.
+## Build
+
+All binaries are `aarch64-unknown-linux-musl`, built with `cargo-zigbuild` (installed on your
+machine, or from the image `onboard/build.Dockerfile` describes):
 
 ```sh
-cargo zigbuild --profile release-device --target aarch64-unknown-linux-musl -p luyaz-core
-cargo zigbuild --release --target aarch64-unknown-linux-musl -p luyaz-web
+cargo zigbuild --target aarch64-unknown-linux-musl --profile release-device -p luyaz-core
+cargo zigbuild --target aarch64-unknown-linux-musl --release -p luyaz-web
 ```
 
-The touch UI has its own script: `touch-ui/rs/build.sh device`.
-Getting a build onto a device is described in [DEPLOY.md](DEPLOY.md).
+The touch UI builds with `touch-ui/rs/build.sh device`. [DEPLOY.md](DEPLOY.md) covers putting a
+build on a device.
 
-## Checks before a pull request
+## Pull request checklist
 
-- `cargo fmt` and `cargo clippy` are clean for the crates you touched.
-- `cargo test -p <crate>`; for luyaz-web page changes also `crates/luyaz-web/e2e`.
-- Changes to the install scripts: run `onboard/test/sandbox.sh run` against
-  your own device.
-- Say in the pull request what changed and how you tested it (on a device if
-  you could).
+1. No `cargo fmt` or `cargo clippy` complaints in the crates you changed.
+2. `cargo test -p <crate>` passes; web page changes also run the browser checks in `crates/luyaz-web/e2e`.
+3. Install script changes: `onboard/test/sandbox.sh run` against a device of your own.
+4. The description says what changed and how you tested it, on real hardware if possible.
 
-## Issues
+## Reporting a problem
 
-Fill in the template: firmware version (for example `B31`), the component
-versions, and logs or `./install.sh doctor` output.
-**Remove IMEI, ICCID, phone numbers and public IPs from anything you paste.**
+Use the issue template: firmware version (such as `B31`), component versions, and logs or the
+output of `./install.sh doctor`. **Strip IMEI, ICCID, phone numbers and public IP addresses before
+pasting.**
 
-See also the [code of conduct](CODE_OF_CONDUCT.md).
+Please also follow the [code of conduct](CODE_OF_CONDUCT.md).

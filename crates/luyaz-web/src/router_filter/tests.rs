@@ -107,7 +107,7 @@ fn null_is_unreadable_not_empty_and_locks_changes() {
     hub.read(|st| {
         let v = view(st, Lang::Zh);
         assert!(!v.dis && v.rows.is_empty());
-        assert!(v.note.as_deref().unwrap().contains("还没有拦截"));
+        assert!(v.note.as_deref().unwrap().contains("目前什么都没拦"));
         assert_eq!(v.state, "已知遥测域名拦截了 0 / 4 个");
     });
 }

@@ -49,7 +49,7 @@ mod tests {
             assert!(is_core(n), "{n}");
         }
         for n in [
-            "zwrt-datad",
+            "otherd",
             "luyaz-sentinel",
             "luyaz-cor",
             "",
@@ -78,7 +78,7 @@ mod tests {
 
     #[test]
     fn ship_cmdline() {
-        assert!(!is_ship_cmdline("sh\0/data/u60-guard/u60-ship.sh\0run"));
+        assert!(!is_ship_cmdline("sh\0/data/other/ship.sh\0run"));
         assert!(is_ship_cmdline("sh /data/luyaz/scripts/luyaz-ship.sh run"));
         assert!(!is_ship_cmdline("sh /data/luyaz/scripts/doctor.sh"));
     }

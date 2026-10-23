@@ -22,7 +22,7 @@
 #             backlight's, stdin /dev/null, output appended to the log, its own session; one
 #             argument, --offscreen: there is no panel here), as luyaz-ui.test, with ui.conf and the fonts at the device's own paths: the
 #             conf is read, the fonts found, the comm, it ends on SIGTERM
-#   exec      tests/ui_exec_test.c's checks on the binary (same pid and comm, no fd kept, the
+#   exec      exec_self's checks on the binary (same pid and comm, no fd kept, the
 #             launch arguments; a binary replaced on disk refused); the static one also runs
 #             in a bare busybox container
 #

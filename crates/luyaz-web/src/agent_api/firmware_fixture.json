@@ -1,0 +1,697 @@
+{
+ "context_coverage": {
+  "connection_epoch": {
+   "source": "rtnetlink_rmnet_link_addr_route",
+   "authoritative": false,
+   "reason": "redial_ipv6_dual_observed_ssr_sim_unverified"
+  },
+  "radio_epoch": {
+   "source": "derived_rtnetlink_ubus_card_power_mode",
+   "authoritative": false,
+   "reason": "lpm_and_ssr_unobserved_no_mode_event"
+  },
+  "sim_epoch": {
+   "source": "ubus_card_state_event_probe_confirmed",
+   "authoritative": false,
+   "reason": "single_hotswap_observed_ubusd_loss_contract_unverified"
+  },
+  "ubus_epoch": {
+   "source": "ubus_cli_and_socket",
+   "authoritative": false,
+   "reason": "no_acknowledged_object_lifecycle_stream"
+  },
+  "usb_epoch": {
+   "source": "BSP_TYPEC_EVENT/BSP_POWERBANK_EVENT",
+   "authoritative": false,
+   "reason": "no_subscription_ack_or_sequence_loss_contract"
+  }
+ },
+ "schema_version": 1,
+ "profile": {
+  "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+  "vendor": "ZTE",
+  "model": "MU5250",
+  "hardware_revision": null,
+  "board_name": null,
+  "identity_evidence_ids": [
+   "5d270b68d5d9a71a744192c3db4bbca4:1"
+  ],
+  "firmware": {
+   "raw_versions": [
+    {
+     "namespace": "zte.external",
+     "source": "common:integrate_version",
+     "value": "CN_ZTE_MU5250V1.0.0B31",
+     "evidence_id": "5d270b68d5d9a71a744192c3db4bbca4:1",
+     "full": true
+    }
+   ],
+   "product_line": "CN_ZTE",
+   "region": "CN",
+   "version": "CN_ZTE_MU5250V1.0.0B31",
+   "build": null,
+   "modem_build": null,
+   "active_slot": null,
+   "completeness": "complete"
+  },
+  "provenance": {
+   "cohort": "unknown",
+   "previous_firmware": null,
+   "evidence_ids": []
+  },
+  "components": [
+   {
+    "name": "core",
+    "version": "1.33.7",
+    "commit": null,
+    "hash": null
+   }
+  ],
+  "adapter_id": "model.mu5250.v1",
+  "adapter_revision": 1,
+  "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+  "identity_status": "complete"
+ },
+ "assessments": [
+  {
+   "capability_id": "usb.mode.setter.surface",
+   "status": "unknown",
+   "reason": "context_changed",
+   "evidence_ids": [
+    "5d270b68d5d9a71a744192c3db4bbca4:2"
+   ],
+   "contradicting_evidence_ids": [],
+   "availability": {
+    "state": "unknown",
+    "reason": "passive_report_only"
+   },
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 1,
+    "rule_revision": 2,
+    "adapter_revision": 1,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "freshness": {
+    "fresh": false,
+    "max_age_seconds": 60,
+    "age_seconds": null
+   },
+   "validation": null,
+   "last_attempt_evidence_id": null,
+   "selected_dialect": null
+  },
+  {
+   "capability_id": "usb.typec.setter.surface",
+   "status": "unknown",
+   "reason": "no_evidence",
+   "evidence_ids": [],
+   "contradicting_evidence_ids": [],
+   "availability": {
+    "state": "unknown",
+    "reason": "passive_report_only"
+   },
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 1,
+    "rule_revision": 2,
+    "adapter_revision": 1,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "freshness": {
+    "fresh": false,
+    "max_age_seconds": 60,
+    "age_seconds": null
+   },
+   "validation": null,
+   "last_attempt_evidence_id": null,
+   "selected_dialect": null
+  },
+  {
+   "capability_id": "usb.powerbank.setter.surface",
+   "status": "unknown",
+   "reason": "no_evidence",
+   "evidence_ids": [],
+   "contradicting_evidence_ids": [],
+   "availability": {
+    "state": "unknown",
+    "reason": "passive_report_only"
+   },
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 1,
+    "rule_revision": 2,
+    "adapter_revision": 1,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "freshness": {
+    "fresh": false,
+    "max_age_seconds": 60,
+    "age_seconds": null
+   },
+   "validation": null,
+   "last_attempt_evidence_id": null,
+   "selected_dialect": null
+  },
+  {
+   "capability_id": "usb.mode.set",
+   "status": "unknown",
+   "reason": "dependency_unknown",
+   "evidence_ids": [
+    "5d270b68d5d9a71a744192c3db4bbca4:2"
+   ],
+   "contradicting_evidence_ids": [],
+   "availability": {
+    "state": "unknown",
+    "reason": "passive_report_only"
+   },
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 1,
+    "rule_revision": 2,
+    "adapter_revision": 1,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "freshness": {
+    "fresh": false,
+    "max_age_seconds": 60,
+    "age_seconds": null
+   },
+   "validation": null,
+   "last_attempt_evidence_id": null,
+   "selected_dialect": null
+  },
+  {
+   "capability_id": "usb.attach.share",
+   "status": "unknown",
+   "reason": "dependency_unknown",
+   "evidence_ids": [],
+   "contradicting_evidence_ids": [],
+   "availability": {
+    "state": "unknown",
+    "reason": "passive_report_only"
+   },
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 1,
+    "rule_revision": 2,
+    "adapter_revision": 1,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "freshness": {
+    "fresh": false,
+    "max_age_seconds": 60,
+    "age_seconds": null
+   },
+   "validation": null,
+   "last_attempt_evidence_id": null,
+   "selected_dialect": null
+  },
+  {
+   "capability_id": "usb.attach.fast_charge",
+   "status": "unknown",
+   "reason": "dependency_unknown",
+   "evidence_ids": [],
+   "contradicting_evidence_ids": [],
+   "availability": {
+    "state": "unknown",
+    "reason": "passive_report_only"
+   },
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 1,
+    "rule_revision": 2,
+    "adapter_revision": 1,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "freshness": {
+    "fresh": false,
+    "max_age_seconds": 60,
+    "age_seconds": null
+   },
+   "validation": null,
+   "last_attempt_evidence_id": null,
+   "selected_dialect": null
+  },
+  {
+   "capability_id": "usb.status.read",
+   "status": "unknown",
+   "reason": "no_evidence",
+   "evidence_ids": [],
+   "contradicting_evidence_ids": [],
+   "availability": {
+    "state": "unknown",
+    "reason": "passive_report_only"
+   },
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 1,
+    "rule_revision": 2,
+    "adapter_revision": 1,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "freshness": {
+    "fresh": false,
+    "max_age_seconds": 60,
+    "age_seconds": null
+   },
+   "validation": null,
+   "last_attempt_evidence_id": null,
+   "selected_dialect": null
+  },
+  {
+   "capability_id": "qos.eps.log.read",
+   "status": "unknown",
+   "reason": "no_evidence",
+   "evidence_ids": [],
+   "contradicting_evidence_ids": [],
+   "availability": {
+    "state": "unknown",
+    "reason": "passive_report_only"
+   },
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 1,
+    "rule_revision": 2,
+    "adapter_revision": 1,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "freshness": {
+    "fresh": false,
+    "max_age_seconds": 60,
+    "age_seconds": null
+   },
+   "validation": null,
+   "last_attempt_evidence_id": null,
+   "selected_dialect": null
+  },
+  {
+   "capability_id": "qos.nr_pdu.log.read",
+   "status": "unknown",
+   "reason": "no_evidence",
+   "evidence_ids": [],
+   "contradicting_evidence_ids": [],
+   "availability": {
+    "state": "unknown",
+    "reason": "passive_report_only"
+   },
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 1,
+    "rule_revision": 2,
+    "adapter_revision": 1,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "freshness": {
+    "fresh": false,
+    "max_age_seconds": 60,
+    "age_seconds": null
+   },
+   "validation": null,
+   "last_attempt_evidence_id": null,
+   "selected_dialect": null
+  },
+  {
+   "capability_id": "at.transport.read",
+   "status": "unknown",
+   "reason": "no_evidence",
+   "evidence_ids": [],
+   "contradicting_evidence_ids": [],
+   "availability": {
+    "state": "unknown",
+    "reason": "radio_not_observed"
+   },
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 1,
+    "rule_revision": 2,
+    "adapter_revision": 1,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "freshness": {
+    "fresh": false,
+    "max_age_seconds": 60,
+    "age_seconds": null
+   },
+   "validation": null,
+   "last_attempt_evidence_id": null,
+   "selected_dialect": null
+  },
+  {
+   "capability_id": "at.pdp_contexts.read",
+   "status": "unknown",
+   "reason": "no_evidence",
+   "evidence_ids": [],
+   "contradicting_evidence_ids": [],
+   "availability": {
+    "state": "unknown",
+    "reason": "radio_not_observed"
+   },
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 1,
+    "rule_revision": 2,
+    "adapter_revision": 1,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "freshness": {
+    "fresh": false,
+    "max_age_seconds": 60,
+    "age_seconds": null
+   },
+   "validation": null,
+   "last_attempt_evidence_id": null,
+   "selected_dialect": null
+  },
+  {
+   "capability_id": "at.eps_qos.read",
+   "status": "unknown",
+   "reason": "no_evidence",
+   "evidence_ids": [],
+   "contradicting_evidence_ids": [],
+   "availability": {
+    "state": "unknown",
+    "reason": "radio_not_observed"
+   },
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 1,
+    "rule_revision": 2,
+    "adapter_revision": 1,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "freshness": {
+    "fresh": false,
+    "max_age_seconds": 60,
+    "age_seconds": null
+   },
+   "validation": null,
+   "last_attempt_evidence_id": null,
+   "selected_dialect": null
+  },
+  {
+   "capability_id": "modem.recover_from_lpm",
+   "status": "unknown",
+   "reason": "no_evidence",
+   "evidence_ids": [],
+   "contradicting_evidence_ids": [],
+   "availability": {
+    "state": "blocked",
+    "reason": "lpm_recovery_forbidden"
+   },
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 1,
+    "rule_revision": 2,
+    "adapter_revision": 1,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "freshness": {
+    "fresh": false,
+    "max_age_seconds": 60,
+    "age_seconds": null
+   },
+   "validation": null,
+   "last_attempt_evidence_id": null,
+   "selected_dialect": null
+  }
+ ],
+ "evidence": [
+  {
+   "id": "5d270b68d5d9a71a744192c3db4bbca4:1",
+   "capability_id": "device.identity",
+   "facet": "read",
+   "origin": "live",
+   "source_kind": "device_capture",
+   "verification": "captured",
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": null,
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 0,
+    "rule_revision": 2,
+    "adapter_revision": 0,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "observed_on": null,
+   "recorded_on": "",
+   "time": {
+    "observed_at": {
+     "boot_id": "synthetic-boot",
+     "seconds": 1
+    },
+    "utc": null,
+    "utc_quality": "unknown"
+   },
+   "operation": {
+    "probe_id": "identity.passive.v1",
+    "target": "common",
+    "verifier_id": null,
+    "args": null
+   },
+   "result": {
+    "outcome": "success",
+    "exit_code": null,
+    "vendor_code": null,
+    "value": {
+     "integrate_version": "CN_ZTE_MU5250V1.0.0B31",
+     "manufacturer": "ZTE",
+     "model_name": "MU5250"
+    },
+    "proof": null,
+    "complete": true,
+    "truncated": false,
+    "duration_ms": 0
+   },
+   "source_ref": "common",
+   "locator": null,
+   "artifact": {
+    "sha256": null,
+    "parser_revision": "passive-v1",
+    "redacted": true
+   },
+   "summary": "passive observation of an existing read",
+   "limitations": [
+    "No installation provenance or unobserved context epochs inferred"
+   ]
+  },
+  {
+   "id": "5d270b68d5d9a71a744192c3db4bbca4:2",
+   "capability_id": "usb.mode.setter.surface",
+   "facet": "surface",
+   "origin": "live",
+   "source_kind": "device_capture",
+   "verification": "captured",
+   "scope": {
+    "device_id": "9f34d88c0719bb740ffe2e476d0a52fd",
+    "fingerprint": "cd3e033150cade32c07d7004559c9c1afd0bf98c2e4eb8dd2996c198f90948f3",
+    "collector_id": "5d270b68d5d9a71a744192c3db4bbca4",
+    "generation": 1,
+    "rule_revision": 2,
+    "adapter_revision": 1,
+    "component_revision": "core:1.33.7:unmarked:passive-v1",
+    "cohort": "unknown",
+    "context": {
+     "sim_epoch": null,
+     "connection_epoch": null,
+     "usb_epoch": null,
+     "ubus_epoch": null,
+     "radio_mode": null,
+     "radio_epoch": null
+    }
+   },
+   "observed_on": null,
+   "recorded_on": "",
+   "time": {
+    "observed_at": {
+     "boot_id": "synthetic-boot",
+     "seconds": 1
+    },
+    "utc": null,
+    "utc_quality": "unknown"
+   },
+   "operation": {
+    "probe_id": "ubus.usb_methods.v1",
+    "target": "zwrt_bsp.usb:set",
+    "verifier_id": null,
+    "args": null
+   },
+   "result": {
+    "outcome": "success",
+    "exit_code": 0,
+    "vendor_code": null,
+    "value": {
+     "method": "set",
+     "object": "zwrt_bsp.usb"
+    },
+    "proof": "method_present",
+    "complete": true,
+    "truncated": false,
+    "duration_ms": 2
+   },
+   "source_ref": "ubus:-v:list:zwrt_bsp.usb",
+   "locator": null,
+   "artifact": {
+    "sha256": null,
+    "parser_revision": "passive-v1",
+    "redacted": true
+   },
+   "summary": "passive observation of an existing read",
+   "limitations": [
+    "No installation provenance or unobserved context epochs inferred"
+   ]
+  }
+ ]
+}

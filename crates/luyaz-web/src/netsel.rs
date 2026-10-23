@@ -1,6 +1,5 @@
-//! /router/network-mode (网络模式) and /router/mobile-network (移动网络), the old
-//! `router/network-mode/page.tsx` and `router/mobile-network/page.tsx`. Batch 3, step 3-4
-//! (u60-web.md).
+//! /router/network-mode (网络模式) and /router/mobile-network (移动网络): the radio
+//! technology preference, operator choice, data and roaming. Batch 3, step 3-4 (u60-web.md).
 //!
 //! Network mode — u60d only: the reported mode is the `signal` block's `net_select` (radio
 //! preference; "TCHGWL_5G" / "NETWORK_auto" count as Auto like the old page), `net_select_mode`
@@ -384,7 +383,7 @@ pub async fn mode_events(State(app): State<Shared>, Query(q): Query<StreamQuery>
 
 // ================= mobile network =================
 
-/// connected / connecting / disconnected / unknown (connectState.ts `connectKind`).
+/// connected / connecting / disconnected / unknown.
 pub fn connect_kind(s: &str) -> &'static str {
     let v = s.to_lowercase();
     if v.is_empty() {
@@ -758,7 +757,7 @@ pub fn net_confirm(act: &Act, remote: Via, name: &str, l: Lang) -> write::Confir
         Act::Reboot => write::Confirm {
             tier: write::Tier::Dialog,
             title: l.pick("Reboot the U60?", "重启 U60？").into(),
-            what: l.pick("Reboot the router now?", "现在重启路由器？").into(),
+            what: l.pick("Restart it now?", "现在就重启？").into(),
             downtime: Some(l.pick("About 90 seconds: Wi-Fi, the mobile connection and this page all go away.", "约 90 秒：Wi-Fi、移动网络和这个页面都会断开。").into()),
             recovery: Some(l.pick("Wait another minute, then reconnect to the U60's Wi-Fi. If the screen stays dark, hold the power button to start it.", "再等一分钟，然后重新连上 U60 的 Wi-Fi。如果屏幕一直不亮，长按电源键开机。").into()),
             action: l.pick("Reboot", "重启").into(),

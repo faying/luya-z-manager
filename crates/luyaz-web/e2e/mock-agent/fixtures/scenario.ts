@@ -1,9 +1,10 @@
-// Scenario engine — mirrors zte-agent/src/scenario.rs (HTTP surface + the
-// parts of switch_to / run_restores / service hooks the pages can observe).
+// Scenario engine — stands in for the core's /api/scenario* (luyaz-core
+// engines/scenario.rs, rules in luyaz-policy scenario.rs): the HTTP surface plus
+// the parts of a switch, its restores and the service hooks the pages can see.
 //
 // Persona: travelling in Taiwan. The engine is on, the config is the shipped
 // template with two home networks filled in, and the device is in the
-// "abroad" scenario. NOTE: scenario.rs judges "abroad" by the SIM's own home
+// "abroad" scenario. NOTE: the engine judges "abroad" by the SIM's own home
 // MCC (IMSI), not the serving cell, so this requires a local SIM / eSIM
 // profile reporting MCC 466; a Chinese SIM roaming on 中華電信 would report
 // 460 and stay in "away". The mock uses sim_mcc "466".
@@ -31,12 +32,12 @@ import type {
 
 const DEVICE_OFFSET = 8 * 3600;
 const deviceNow = (): number => unixNow() + DEVICE_OFFSET;
-/** scenario.rs log_line stamp: "2026-09-24T14:02:11" (localtime_r, no zone). */
+/** Scenario log stamp: "2026-09-24T14:02:11" (localtime_r, no zone). */
 const stamp = (devSec: number): string => new Date(devSec * 1000).toISOString().slice(0, 19);
 
 const BOOT = deviceNow();
 
-// ── template (scenario.rs:354 template()) ───────────────────────────────────
+// ── template (luyaz-policy scenario.rs template()) ─────────────────────────────
 
 const CHILL_MAIN_GROUP = "🚀 节点选择";
 const CHILL_STATUS = "/api/services/chill";
@@ -110,7 +111,7 @@ interface PendingRestore {
 
 const ARRIVED = BOOT - (1 * 86400 + 6 * 3600 + 23 * 60); // arrived in Taipei ~30 h ago
 
-/** scenario.rs names_en: English only for a built-in scenario still under its factory name. */
+/** English names: only for a built-in scenario still under its factory name. */
 const BUILTIN_EN: Record<string, [string, string]> = { home: ["在家", "Home"], away: ["外出", "Away"], abroad: ["国外", "Abroad"] };
 function namesEn(): Record<string, string> {
   const out: Record<string, string> = {};
@@ -312,7 +313,7 @@ function rememberForRestore(a: ScenarioAction): void {
   pending.push({ key, action: restoreAction(a, current), saved_at: deviceNow() });
 }
 
-/** scenario.rs switch_to. */
+/** A scenario switch, as the engine does it. */
 function switchTo(id: string): void {
   const scen = findScenario(id);
   if (!scen) return;
@@ -350,9 +351,9 @@ function switchTo(id: string): void {
   run.misses = 0;
 }
 
-// ── hooks called from fixtures/services.ts (server.rs:389-412) ───────────────
+// ── hooks called from fixtures/services.ts ──────────────────────────────────
 
-/** scenario.rs:1475 chill_toggled. */
+/** Hook: CHILL turned on or off. */
 export function scenarioChillToggled(on: boolean, wasOn: boolean): void {
   if (on) {
     const before = pending.length;
@@ -370,7 +371,7 @@ export function scenarioChillToggled(on: boolean, wasOn: boolean): void {
   logLine("CHILL switched off abroad; will switch it back on when home");
 }
 
-/** scenario.rs:1500 chill_exit_changed. */
+/** Hook: CHILL's exit changed. */
 export function scenarioChillExitChanged(): void {
   if (!inAbroadScenario() || pending.some((p) => p.key === CHILL_EXIT_KEY)) return;
   pending.push({
@@ -388,7 +389,7 @@ export function scenarioChillExitChanged(): void {
   logLine("CHILL exit changed abroad; will go back to proxy when home");
 }
 
-// ── validation (scenario.rs:374 validate) ───────────────────────────────────
+// ── validation (luyaz-policy scenario.rs validate) ──────────────────────────────
 
 const isMcc = (v: unknown) => typeof v === "string" && /^\d{3}$/.test(v);
 
@@ -514,7 +515,7 @@ function scenarioEnabled(ctx: Ctx): Reply {
     runRestores(undefined);
     // bootsafe sleeps 5 s + 4 s before checking beaconing, then the restores
     // poll verify_field — the real call takes 9-20 s (client override: 120 s).
-    // Next engine tick (scenario.rs:1199) lands on away.
+    // The engine's next tick lands on away.
     const t = setTimeout(() => {
       if (!enabled && run.current !== "away") {
         logLine("engine disabled while away from the away scenario — restoring it");

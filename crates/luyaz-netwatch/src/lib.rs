@@ -1,6 +1,5 @@
 //! The cellular link watcher's judgements and its signal history (`docs/designs/slow-diagnosis.md`
-//! step 1), run by the core (u60-platform.md Phase 4 step 9b). Moved from zte-agent's
-//! `netwatch.rs` so the two cannot drift: what one sample says ([`sample`], [`alive_without_probe`]),
+//! step 1), run by the core: what one sample says ([`sample`], [`alive_without_probe`]),
 //! where core puts the operator's resolvers ([`operator_dns`]), the one-packet DNS probe, the count
 //! of failed core reads ([`ErrorCounter`]), and the minute records and events of
 //! `/data/signal-log` ([`record`]). Who samples, and how often, stays with the caller.
@@ -32,7 +31,7 @@ use passive::fresh;
 /// Received something this recently ⇒ the link is alive, no probe needed.
 pub const RX_FRESH_SECS: u64 = 30;
 const DNS_TIMEOUT: Duration = Duration::from_secs(2);
-/// Error count for readers outside the agent; format is fixed (see module comment).
+/// Error count for outside readers; format is fixed (see module comment).
 pub const ERRORS_FILE: &str = "/tmp/netwatch.errors";
 /// After the first error, log one line per this many (5 s samples ⇒ ~5 min).
 pub const LOG_EVERY: u64 = 60;
@@ -150,7 +149,7 @@ pub fn parse_dns(s: &str) -> Vec<String> {
 }
 
 /// A `GET /v2/state` reply as the old `/state` shape, for the reads that run
-/// when the caller is not subscribed (the agent's deep diagnosis, `/api/cell/extra`):
+/// when the caller is not subscribed (deep diagnosis, `/api/cell/extra`):
 /// `signal` → `net`, `live.traffic` → `traffic`, and `qos`, `sim`,
 /// `uci_device_info`, `interfaces` as they are. A stale block is left out,
 /// the way the old `/state` renders a failed read (STATE_V2.md V2-29), so
@@ -250,8 +249,8 @@ pub const VERDICT_FRESH: u64 = 30;
 
 /// One watcher, fed every 5 s: the latest [`Snapshot`], the core's home verdict, the signal log while
 /// this process owns it, and the core error count where asked. `/data/signal-log` has one writer:
-/// the agent until netwatch is handed to u60d, then u60d (u60-platform.md step 9b); the other
-/// side's watcher samples without writing it. [`ERRORS_FILE`] stays the agent's (its own reads).
+/// whichever watcher was given it; any other watcher samples without writing it. [`ERRORS_FILE`]
+/// belongs to the watcher that counts its own core reads.
 pub struct Watch {
     snap: Mutex<Snapshot>,
     verdict: Mutex<Option<(String, BootTime)>>,
@@ -292,8 +291,8 @@ impl Watch {
         }
     }
 
-    /// Count failed core reads into `path` (reset to 0 now). Only the agent does: the count is
-    /// about its own reads of core, whoever writes the log.
+    /// Count failed core reads into `path` (reset to 0 now). The count is
+    /// about this watcher's own reads of core, whoever writes the log.
     pub fn count_errors(&self, path: impl Into<PathBuf>) {
         *lock(&self.errors) = Some(ErrorCounter::new(path));
     }

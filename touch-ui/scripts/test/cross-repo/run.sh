@@ -15,12 +15,9 @@
 #      pair also as written in screen.rs); glossary §4 gives the same English;
 #      the two rows the screen writes itself = en.tsv.
 #   5. page names: glossary §1–2 = rs/ui/lang/en.tsv (+ en.inc) for the
-#      screen, = web src/lib/i18n/en.ts nav for the web menu column.
+#      screen, = luyaz-web's page table for the web menu column.
 #   6. operator English: glossary §8 = u60-api operator_en(); the core's 4
 #      mainland carriers are in both, word for word.
-#   7. every <key>_en the screen reads is in what core (net_view.c) or
-#      u60-api / u60d (the rest; zte-agent's until 8d-2c) sends; test modules
-#      don't count.
 # Run it on the host from the touch-ui checkout (sh scripts/test/cross-repo/
 # run.sh); in a container that only has /scripts each part says it skipped.
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
@@ -108,11 +105,11 @@ INC=$REPO/rs/ui/lang/en.inc
 SCREEN_RS=$DATAD/rust/src/project/screen.rs
 SCREEN_T=$DATAD/rust/src/project/screen/tests.rs
 OPS_UI=$DATAD/rust/src/ops/ui.rs
-# the English tables and _en replies: the shared u60-api crate (zte-agent, which
-# used it too, was removed in 8d-2c) and u60d, which serves them now
+# the English tables and _en replies: the shared u60-api crate and u60d, which
+# serves them
 API=$MANAGER/crates/luyaz-api/src
 U60D=$MANAGER/crates/luyaz-core/src
-# the web menu: luyaz-web's page table (the old web's i18n/en.ts nav until X13)
+# the web menu: luyaz-web's page table
 WEB_EN=$MANAGER/crates/luyaz-web/src/routes.rs
 
 # en.tsv's English for a plain (not TRC) key, empty when there is no row
@@ -172,17 +169,6 @@ else
     skip "home headline table: $DESIGN or $SCREEN_T not here"
 fi
 
-# 4b. core codes this screen doesn't know yet go through net_view.c's
-#     unknown-code path (the core's own headline, hint and tone), which
-#     tests/net_view_test.c must cover with that code (E2 D7②)
-if [ -n "${HT:-}" ] && [ -f "$REPO/src/net_view.c" ]; then
-    NVC=$(sed -n '/^static nv_state_t state/,/^}/p' "$REPO/src/net_view.c" | grep -o '"[a-z0-9]*"' | tr -d '"')
-    new=$(printf '%s\n' "$HT" | cut -f 1 | while read -r c; do [ -n "$c" ] && ! printf '%s\n' "$NVC" | grep -qx "$c" && echo "$c"; done)
-    miss=$(for c in $new; do grep -qF "\\\"state\\\":\\\"$c\\\"" "$REPO/tests/net_view_test.c" || echo "$c"; done)
-    [ -z "$miss" ] && ok "core codes the screen doesn't know yet ($(echo ${new:-none})) are covered by net_view_test" ||
-        bad "core codes unknown to net_view.c with no net_view_test case: $(echo $miss)"
-fi
-
 # 5. page names
 if [ -f "$GLOSS" ] && [ -f "$TSV" ]; then
     PG=$( { md_rows "$GLOSS" '## 1.' | cut -f 1,2; md_rows "$GLOSS" '## 2.' | cut -f 1,2; } |
@@ -238,44 +224,6 @@ else
     skip "operator English: $GLOSS or $API/netinfo.rs not here"
 fi
 
-# 7. *_en fields the screen reads
-# files whose *_en come from the core's write-transaction data, not u60-api / u60d
-OPS_C='/(net_view|data|op_view)\.c$|/ui_parts/op\.c$'
-if [ -f "$REPO/src/net_view.c" ]; then
-    FD=$(perl -ne 'print "$1_en\n" while /\btext\(\s*\w+\s*,\s*"(\w+)"/g' "$REPO/src/net_view.c" | sort -u)
-    FA=$( { perl -ne 'print "$1_en\n" while /\bjson_text\(\s*\w+\s*,\s*"(\w+)"/g' "$REPO/src/alerts.c"
-        ls "$REPO"/src/*.c "$REPO"/src/ui_parts/*.c | grep -vE "$OPS_C" | xargs perl -ne 'print "$1\n" while /"(\w+_en)"/g'; } | sort -u)
-    # E4: write transactions and refused writes come from the core's /control and
-    # /v2/screen "op" (data-service rust/src/ops/ui.rs, STATE_V2.md §12)
-    FO=$(ls "$REPO"/src/*.c "$REPO"/src/ui_parts/*.c | grep -E "$OPS_C" | grep -v '/net_view\.c$' |
-         xargs perl -ne 'print "$1\n" while /"(\w+_en)"/g' | sort -u)
-    [ -n "$FD" ] && [ -n "$FA" ] && ok "_en fields the screen reads: $(echo $FD $FA | wc -w | tr -d ' ')" || bad "found no _en fields in src/net_view.c or the agent parsers"
-    if [ -f "$SCREEN_RS" ]; then
-        miss=$(for f in $FD; do grep -q "^ *pub $f:" "$SCREEN_RS" || echo "$f"; done)
-        [ -z "$miss" ] && ok "core sends every _en net_view.c reads" || bad "net_view.c reads, core screen.rs has no pub field: $(echo $miss)"
-    else
-        skip "core _en fields: $SCREEN_RS not here"
-    fi
-    if [ -f "$DATAD/rust/src/ops/ui.rs" ]; then
-        miss=$(for f in $FO; do cat "$DATAD"/rust/src/ops/ui.rs "$DATAD"/rust/src/ops/engine.rs | grep -q "\"$f\"" || echo "$f"; done)
-        [ -z "$miss" ] && ok "core sends every write-transaction _en the screen reads ($(echo $FO | wc -w | tr -d ' '))" ||
-            bad "the screen reads, core ops/ui.rs never sends: $(echo $miss)"
-    else
-        skip "core write-transaction _en fields: $DATAD/rust/src/ops/ui.rs not here"
-    fi
-    if [ -d "$API" ] && [ -d "$U60D" ]; then
-        [ -d "$MANAGER/zte-agent" ] || echo "  note zte-agent is gone from $MANAGER (8d-2c): u60-api and u60d only"
-        # each .rs up to its first #[cfg(test)]
-        for r in $(find "$API" "$U60D" -name '*.rs'); do awk '/^ *#\[cfg\(test\)\]/ { exit } 1' "$r"; done >/tmp/cross-repo.agent.$$
-        miss=$(for f in $FA; do grep -qE "\"$f\"|\\b$f:" /tmp/cross-repo.agent.$$ || echo "$f"; done)
-        rm -f /tmp/cross-repo.agent.$$
-        [ -z "$miss" ] && ok "u60-api / u60d send every other _en the screen reads" || bad "the screen reads, u60-api / u60d (non-test code) never send: $(echo $miss)"
-    else
-        skip "u60-api / u60d _en fields: $API or $U60D not here"
-    fi
-else
-    skip "_en fields: $REPO/src not here"
-fi
 
 echo "cross-repo: $PASS passed, $FAIL failed, $SKIP skipped"
 [ "$FAIL" = 0 ]

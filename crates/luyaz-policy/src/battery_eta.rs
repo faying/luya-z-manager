@@ -1,11 +1,10 @@
-//! Battery time estimate (manager docs/battery-estimate.md), moved from zte-agent
-//! `src/battery_eta.rs` (manager 7d2ca07). `average`/`estimate` are the policy (what the
+//! Battery time estimate (manager docs/battery-estimate.md), .
+//! `average`/`estimate` are the policy (what the
 //! battery-eta component exports, `wit/battery-eta.wit`); `Tracker` is the host's sample buffer
-//! and report, the agent's `BatteryEta` without its own sampler thread: u60d feeds it on the
-//! battery block's read (every 5 s, the agent's `SAMPLE_EVERY`), so no new wakeup.
+//! and report, with no sampler thread of its own: u60d feeds it on the battery block's read
+//! (every 5 s), so no new wakeup.
 //!
-//! Deliberate differences from the agent: time is seconds on the host's monotonic clock (`f64`)
-//! instead of `Instant`, and the estimate is a parameter of `feed` so the host can pass the
+//! Time is seconds on the host's monotonic clock (`f64`), and the estimate is a parameter of `feed` so the host can pass the
 //! component's. Outputs are the same.
 
 use std::collections::VecDeque;

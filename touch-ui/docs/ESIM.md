@@ -13,12 +13,16 @@ UI (rs/ui/src/data/esim.rs) ──HTTP 127.0.0.1:9460/v2/api──▶ luyaz-core
 ```
 
 | Request (under `/v2`, no token) | Use |
-|---|---|
+|:--|:--|
 | `GET /api/esim/profiles` | The list on the card |
 | `POST /api/esim/switch` | Start a switch |
 | `GET /api/esim/job` | Progress of the running switch |
 
+### Why a switch takes a few seconds
+
 Enabling a profile is one lpac call. Getting the modem to use it is the slow part: ZTE's stack reads the SIM once, when its daemon starts. So after enabling, the core power-cycles the UIM, restarts `zte_topsw_mdm` and waits until the IMSI changes, which normally takes under 10 seconds. The screen only shows the progress and the outcome.
+
+### What must be installed
 
 The page needs the eSIM component on the device (lpac under `/data/esim`, installed with the kit's `./install.sh esim`). Without it the page says it is missing.
 

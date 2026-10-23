@@ -1,19 +1,18 @@
-//! CHILL home exit's background part, moved from zte-agent `src/home_exit.rs` (Phase 4 step 7a).
+//! CHILL home exit's background part.
 //!
 //! The 30 s tick (follow a hand-edited chill.env, end `rest` after 2 hours, turn media/rest off
 //! after 10 minutes back in China, probe home every 5 minutes while a client is connected and end
 //! `rest` after 3 misses) and the start-up reconcile. [`Machine::tick`], [`Machine::startup`] and
-//! [`Machine::extend`] are the agent's, unchanged, over the same [`Io`] trait, so its tests run
-//! here as they are.
+//! [`Machine::extend`] work over the [`Io`] trait, so they are tested with a fake.
 //!
-//! Deliberate differences from the agent:
-//! - [`Machine`] has no `busy`/`ready`/`ticking` (the host's request bookkeeping: the agent never
+//! Notes:
+//! - [`Machine`] has no `busy`/`ready`/`ticking` (the host's request bookkeeping: the host never
 //!   ticks while a request runs) and its fields are public and serialisable, for the shadow
 //!   records.
 //! - `say` does not log.
-//! - [`Replay`] is new, as in `manual_first`: an `Io` that answers from a recorded tick.
+//! - [`Replay`], as in `manual_first`, is an `Io` that answers from a recorded tick.
 //! - The requests (`run_job`: precheck, apply, the 30 s self-check), the reason codes, chill.env
-//!   and Tailscale parsing stay in the host (Phase 4 step 8).
+//!   and Tailscale parsing stay in the host.
 
 pub const REST_SECS: u64 = 2 * 3600;
 pub const PROBE_EVERY: u64 = 300;
@@ -68,7 +67,7 @@ impl Items {
     }
 }
 
-/// A line for the screens, Chinese and English together (see the agent for the kinds).
+/// A line for the screens, Chinese and English together (the host words each kind).
 #[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Notice {
@@ -83,7 +82,7 @@ pub struct Notice {
     pub detail: String,
 }
 
-/// `/data/chill/home-exit.json`, same shape as the agent's.
+/// `/data/chill/home-exit.json`, the file's shape.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Persist {
@@ -120,7 +119,7 @@ pub enum Fail {
     Direct,
 }
 
-/// Everything that talks to the outside (the agent's trait).
+/// Everything that talks to the outside (faked in tests, replayed in shadow runs).
 pub trait Io {
     /// `None` = mihomo did not answer; `Some(None)` = home did not answer.
     fn probe_home(&mut self) -> Option<Option<u32>>;
@@ -182,7 +181,7 @@ impl Machine {
         }
     }
 
-    /// What was on before the agent (re)started (the agent's, unchanged).
+    /// What was on before the core (re)started.
     pub fn startup(&mut self, had_file: bool, env: Items, now: u64, io: &mut dyn Io) {
         let before = self.p.clone();
         let mut want = env;
@@ -220,7 +219,7 @@ impl Machine {
         }
     }
 
-    /// One 30 s tick (the agent's, unchanged; the agent only ticks with no request running).
+    /// One 30 s tick (the host only ticks with no request running).
     pub fn tick(&mut self, o: &Obs, io: &mut dyn Io) {
         let before = self.p.clone();
         let now = o.now;

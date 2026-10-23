@@ -135,7 +135,7 @@ async function own(p, ctx) {
   await mock("/mock/filter?list=null");
   await p.waitForFunction(() => /读不出来/.test(document.querySelector("#tf-status")?.textContent ?? ""), null, { timeout: 10000 }).catch(() => {});
   ok(/拦截列表读不出来/.test(await txt(p, "#tf-status")), `unreadable: ${await txt(p, "#tf-status")}`);
-  ok(await p.isDisabled("#tf-dom") && await p.isDisabled("#tf-quickbtn button") && !/还没有拦截/.test(await txt(p, "#tf-list")), "unreadable locks changes, not shown as empty");
+  ok(await p.isDisabled("#tf-dom") && await p.isDisabled("#tf-quickbtn button") && !/目前什么都没拦/.test(await txt(p, "#tf-list")), "unreadable locks changes, not shown as empty");
   await p.screenshot({ path: `${OUT}/tf-unreadable.png`, fullPage: true });
   await mock("/mock/filter");
 

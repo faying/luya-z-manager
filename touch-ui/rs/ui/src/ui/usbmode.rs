@@ -1,4 +1,4 @@
-//! 插线时的 USB 用法 (src/ui_parts/usbmode.c): what a phone plugged into the U60 is for. A
+//! 插线时的 USB 用法: what a phone plugged into the U60 is for. A
 //! sheet that asks (or the remembered choice, 3 s after the plug-in), and the 系统 card with
 //! what is in effect and the remembered choice. the core's usb.attach_mode does it.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0

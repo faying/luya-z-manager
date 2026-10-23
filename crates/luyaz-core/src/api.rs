@@ -1,12 +1,11 @@
-//! The touch screen's and luyaz-web's API in u60d (u60-platform.md Phase 4 step 8,
-//! u60-touch-rewrite.md M6): the routes in the retired agent's shape (`{"ok","data"}`,
+//! The touch screen's and luyaz-web's API in u60d (u60-touch-rewrite.md M6): the routes in the retired agent's shape (`{"ok","data"}`,
 //! `{"ok":false,"error"}`), served at `/v2/api/...` on u60d's own loopback listener (the same
 //! auth as `/control`: none on loopback). luyaz-web and the screen call it directly.
 //!
 //! Named `compat` until Phase 10 (§4), when the agent-era name went; the paths did not change.
 //!
-//! Until Phase 10 (X1) the agent handed these over part by part (`/tmp/zte-agent.handover`, the
-//! `agent-retired` marker) behind `U60D_COMPAT` and `U60D_COMPAT_WRITES`; u60d now owns them all.
+//! Until Phase 10 (X1) the agent handed these over part by part (a handover file and a
+//! retired marker) behind `U60D_COMPAT` and `U60D_COMPAT_WRITES`; u60d now owns them all.
 //!
 //! Until M6c this was its own listener, 127.0.0.1:9462, with the agent's login; the background
 //! duties (`resume`) started only when that port bound. Both are gone.
@@ -212,7 +211,7 @@ pub struct Compat {
     chill: Arc<chill_jobs::ChillJobs>,
     /// manual-first's engine (9g)
     pub(crate) manual_first: Arc<crate::engines::manual_first::Running>,
-    /// the home exit, when u60d runs it (`LUYAZ_HOME_EXIT=1`, step 9)
+    /// the home exit, when u60d runs it (`LUYAZ_HOME_EXIT=1`)
     home_exit: Option<Arc<luyaz_home_exit::HomeExit>>,
     /// the writes and the background duties (on the device: [`Compat::from_host`]; tests without
     /// them look at the reads alone)
@@ -279,7 +278,7 @@ impl Compat {
         self
     }
 
-    /// u60d runs the home exit (step 9): its own machine, loop and switches.
+    /// u60d runs the home exit: its own machine, loop and switches.
     pub fn with_home_exit(mut self, on: bool) -> Self {
         self.home_exit = on.then(|| {
             Arc::new(luyaz_home_exit::HomeExit::new(Arc::new(crate::engines::home_exit::U60dHost {
@@ -302,7 +301,7 @@ impl Compat {
         self
     }
 
-    /// The scenario engine reaches the device this way (step 9h).
+    /// The scenario engine reaches the device this way.
     pub fn with_scenario_io(mut self, make: crate::engines::scenario::MakeIo) -> Self {
         self.scenario_io = Some(make);
         self

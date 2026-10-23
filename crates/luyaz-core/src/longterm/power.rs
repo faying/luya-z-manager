@@ -40,8 +40,7 @@ const THERMAL_ECO: &str = "/tmp/chill.thermal-eco";
 pub const CHILL_IDLE: &str = "/tmp/chill.idle.v2";
 const DUMP_DIR: &str = "/data/vendor/ramdump";
 /// Programs whose RSS `hour_proc` keeps, by the card's names.
-pub const RSS: [(&str, &str); 5] = [
-    ("agent", "zte-agent"),
+pub const RSS: [(&str, &str); 4] = [
     ("core", crate::paths::CORE),
     ("ui", crate::paths::UI),
     ("mihomo", "mihomo"),

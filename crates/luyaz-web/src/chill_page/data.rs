@@ -1,5 +1,5 @@
-//! /services/chill: the pure parts (words, clock sums, the home-exit rows, name lookups), the
-//! old `lib/chill.ts` plus the helpers at the bottom of the old page. Nothing here talks to the
+//! /services/chill: the pure parts (words, clock sums, the home-exit rows, name lookups).
+//! Nothing here talks to the
 //! agent, so it is all unit-tested.
 
 use serde_json::Value;

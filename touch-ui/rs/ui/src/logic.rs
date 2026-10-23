@@ -1,5 +1,5 @@
-//! The touch UI's pure decisions (src/ui_logic.c, include/ui_logic.h): no LVGL, no I/O.
-//! Tests: tests/ui_logic_test.c, case for case (the power-key cases go with key_input).
+//! The touch UI's pure decisions: no LVGL, no I/O.
+//! The power-key cases' tests go with key_input.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 const DARK_FROM_DEFAULT: i32 = 19 * 60;

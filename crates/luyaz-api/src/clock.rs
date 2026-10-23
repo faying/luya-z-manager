@@ -1,6 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// clock (the pure part, moved from zte-agent `src/clock.rs`, Phase 4 step 8a; reading uci and
-// caching stay with each caller: see [`utc_offset`]) — what the device's clock actually means.
+// clock (the pure part; reading uci and caching stay with each caller: see [`utc_offset`]) — what the device's clock actually means.
 //
 // ZTE's SNTP client (zwrt_zte_sntp) sets the system clock to *local wall time*
 // and leaves the system time zone at UTC. So `date` prints "14:34 UTC" at
@@ -31,12 +30,16 @@ pub fn parse_hours(s: &str) -> Option<i64> {
 
 /// The zone the system clock itself is in (0 on this firmware: TZ=UTC).
 pub fn system_gmtoff() -> i64 {
+    let mut now: libc::time_t = 0;
+    // SAFETY: `broken` is plain data that localtime_r fills; both pointers live for the call.
+    let mut broken = unsafe { std::mem::MaybeUninit::<libc::tm>::zeroed().assume_init() };
     unsafe {
-        let t = libc::time(std::ptr::null_mut());
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_r(&t, &mut tm);
-        tm.tm_gmtoff as i64
+        libc::time(&mut now);
+        libc::localtime_r(&now, &mut broken);
     }
+    #[allow(clippy::unnecessary_cast)] // `c_long` is narrower on 32-bit hosts
+    let off = broken.tm_gmtoff as i64;
+    off
 }
 
 /// `sntp_zone`: ZTE's configured zone in seconds; `_gmtoff`: the system TZ's.

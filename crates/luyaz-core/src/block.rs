@@ -326,6 +326,34 @@ pub trait EventSink: Send + Sync {
     fn emit(&self, event: &Event);
 }
 
+/// 等某几块发布的通知（`Hub::watch`）：块名表 + 唤醒。
+type Watchers =
+    std::sync::Arc<Mutex<Vec<(&'static [&'static str], std::sync::Arc<tokio::sync::Notify>)>>>;
+
+/// 套在真正的出口外面：块事件先叫醒等这块的 `Hub::watch`（R18-P1-04：引擎不必自己定时看块）。
+struct Tee {
+    inner: Box<dyn EventSink>,
+    watchers: Watchers,
+}
+
+impl EventSink for Tee {
+    fn emit(&self, event: &Event) {
+        if let Event::Block(b) = event {
+            for (names, n) in self
+                .watchers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+            {
+                if names.contains(&b.name) {
+                    n.notify_one();
+                }
+            }
+        }
+        self.inner.emit(event);
+    }
+}
+
 /// 丢掉全部事件（测试和 u60d `--once` 用）。
 pub struct NoSink;
 impl EventSink for NoSink {
@@ -435,6 +463,7 @@ pub type AfterRead = Box<dyn Fn(&Hub, &'static str) + Send + Sync>;
 pub struct Hub {
     inner: Mutex<Inner>,
     sink: Box<dyn EventSink>,
+    watchers: Watchers,
     after_read: std::sync::OnceLock<AfterRead>,
     /// Shared by background collection, compat reads and the capability HTTP report.
     firmware: crate::device_profile::collect::Collector,
@@ -449,6 +478,11 @@ fn wall_secs() -> u64 {
 
 impl Hub {
     pub fn new(specs: Vec<BlockSpec>, sink: Box<dyn EventSink>) -> Self {
+        let watchers = Watchers::default();
+        let sink = Box::new(Tee {
+            inner: sink,
+            watchers: watchers.clone(),
+        });
         Self {
             inner: Mutex::new(Inner {
                 seq: 0,
@@ -456,6 +490,7 @@ impl Hub {
                 last_heartbeat: None,
             }),
             sink,
+            watchers,
             after_read: std::sync::OnceLock::new(),
             firmware: crate::device_profile::collect::Collector::new(),
         }
@@ -463,6 +498,16 @@ impl Hub {
 
     pub(crate) fn firmware(&self) -> &crate::device_profile::collect::Collector {
         &self.firmware
+    }
+
+    /// 这几块有发布（数据变了或 stale 翻转）时叫醒返回的 `Notify`；没人在等时留一次许可，不会漏。
+    pub fn watch(&self, names: &'static [&'static str]) -> std::sync::Arc<tokio::sync::Notify> {
+        let n = std::sync::Arc::new(tokio::sync::Notify::new());
+        self.watchers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((names, n.clone()));
+        n
     }
 
     /// 装上「读成功后」回调；只能装一次（再装返回 false）。
@@ -873,6 +918,30 @@ pub(crate) mod tests {
         assert_eq!(ev.len(), 1);
         assert_eq!((ev[0].revision, ev[0].stale), (1, false));
         assert!(ev[0].observed_at > 0);
+    }
+
+    /// R18-P1-04：`watch` 只在它等的块发布时醒，同值重读不醒；没人在等时留一次许可。
+    #[tokio::test]
+    async fn watch_wakes_on_publish_only() {
+        let (hub, _rec) = make_hub(5);
+        let n = hub.watch(&["battery"]);
+        let other = hub.watch(&["sms"]);
+        let now = Instant::now();
+        let woke = |n: &Arc<tokio::sync::Notify>| {
+            let n = n.clone();
+            async move {
+                tokio::time::timeout(Duration::from_millis(20), n.notified())
+                    .await
+                    .is_ok()
+            }
+        };
+        hub.record_read(0, Ok(json!({"a":1})), now);
+        assert!(woke(&n).await, "first publish: permit kept");
+        assert!(!woke(&other).await, "another block: not woken");
+        hub.record_read(0, Ok(json!({"a":1})), now);
+        assert!(!woke(&n).await, "same data: no publish, not woken");
+        hub.record_read(0, Err("x".into()), now);
+        assert!(woke(&n).await, "stale flip: woken");
     }
 
     #[test]

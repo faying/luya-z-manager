@@ -1,4 +1,4 @@
-//! /router/device (设备控制), the old `router/device/page.tsx` + `BatteryDetails.tsx`: battery state,
+//! /router/device (设备控制): battery state,
 //! battery details, the charge limit, "stop charging" / power-save / fast boot, reboot, power off
 //! and factory reset.
 //!
@@ -251,13 +251,13 @@ fn status(g: &Got, l: Lang) -> (&'static str, String, Option<String>, Option<Str
             },
             if limit_on {
                 match l {
-                    Lang::En => format!("Charging is currently stopped (hardware-enforced). The limit resumes charging below {}%.", (limit - hyst).max(0)),
-                    Lang::Zh => format!("当前已停止充电（硬件强制）。电量降到 {}% 以下时充电限制会重新开始充电。", (limit - hyst).max(0)),
+                    Lang::En => format!("The hardware has paused charging. The limit starts it again below {}%.", (limit - hyst).max(0)),
+                    Lang::Zh => format!("硬件已暂停充电。电量低于 {}% 时按上限重新开始充。", (limit - hyst).max(0)),
                 }
             } else {
                 l.pick(
-                    "Charging is currently stopped (hardware-enforced).",
-                    "当前已停止充电（硬件强制）。",
+                    "The hardware has paused charging.",
+                    "硬件已暂停充电。",
                 )
                 .into()
             },
@@ -500,7 +500,7 @@ fn mode_rows(g: &Got, l: Lang) -> (Vec<ModeRow>, Option<String>) {
                     .pick("The device didn't report this setting.", "设备没有返回这项设置。")
                     .into(),
                 _ => l
-                    .pick("Skips some init steps on reboot", "重启时跳过部分初始化步骤")
+                    .pick("Restarts faster by leaving out some startup steps", "重启时省掉一些启动步骤，开得更快")
                     .into(),
             },
             on: fb.flatten(),
@@ -1347,8 +1347,8 @@ fn rst_confirm(k: Rst, l: Lang) -> write::Confirm {
                 tier: write::Tier::Dialog,
                 title: l
                     .pick(
-                        "Erase everything and restore factory settings?",
-                        "清除全部内容，恢复出厂设置？",
+                        "Wipe everything back to the factory state?",
+                        "全部清空，恢复出厂？",
                     )
                     .into(),
                 what: what.into(),

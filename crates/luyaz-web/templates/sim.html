@@ -3,7 +3,7 @@
 {% block main %}
 <div class="sim-col" data-signals="{_panel: '', _x: '', pin: '', oldpin: '', newpin: '', puk: '', nck: ''}">
 <div class="sim-head"><h1 class="nd-title">{{ shell.title() }}</h1><button type="button" class="nd-btn nd-btn--ghost nd-btn--icon" aria-label="{{ l.pick("Refresh", "刷新") }}" data-on:click="@post('/router/sim/refresh')">{{ crate::shell::icon("ArrowClockwise", false, 20, "")|safe }}</button></div>
-<p class="nd-body sim-desc">{{ l.pick("SIM status and PIN management.", "SIM 状态与 PIN 管理。") }}</p>
+<p class="nd-body sim-desc">{{ l.pick("The card's state, and its PIN.", "SIM 卡的状态和 PIN。") }}</p>
 {{ self.leaf("sim-status")|safe }}
 <div>
 {{ self.leaf("sim-info")|safe }}

@@ -1,5 +1,6 @@
-// Mock fixtures: processes (handlers.rs + system.rs), alerts (alerts.rs),
-// health (health.rs + touch-ui scripts/doctor.sh), scheduler (scheduler.rs).
+// Mock fixtures for the core's processes (api/device_admin/procs.rs), alerts
+// (api.rs alerts_*, luyaz-alerts), health (api/health.rs + scripts/doctor.sh) and
+// scheduler (api/scheduler.rs, rules in luyaz-policy scheduler.rs).
 //
 // Persona: 1 unread alert (a touch-screen crash ~31 h ago, kept in
 // shared.alertsUnread — public/status reads the same number), SMS alerts
@@ -56,20 +57,13 @@ function asU64(v: unknown): number | undefined {
 
 // ── Processes ───────────────────────────────────────────────────────────────
 
-/** system.rs:412 BLOAT_DAEMONS (current list, after fb4aedc). */
-const BLOAT_DAEMONS = [
-  "zte_topsw_tr069",
-  "zte_topsw_tr069_sub",
-  "zte_mqtt_sdk_st",
-  "zte_topsw_diag",
-  "zte_topsw_samba",
-  "zte_topsw_nfc",
-  "zte_topsw_get_brand",
-  "zte_topsw_jwxk_query",
-  "zte-topsw-tunnel",
-  "zte_dua",
+/** The stock daemons the kill-bloat action stops (same set as the device's list), by job. */
+const BLOAT_DAEMONS: readonly string[] = [
+  // remote management and telemetry
+  ...["zte_topsw_tr069", "zte_topsw_tr069_sub", "zte_mqtt_sdk_st", "zte-topsw-tunnel", "zte_dua"],
+  // diagnostics, file sharing, NFC, branding, query helper
+  ...["zte_topsw_diag", "zte_topsw_samba", "zte_topsw_nfc", "zte_topsw_get_brand", "zte_topsw_jwxk_query"],
 ];
-
 interface ProcSeed {
   pid: number;
   name: string;
@@ -129,7 +123,7 @@ function sampleTop(now: number): SystemTop {
     return {
       pid: p.pid,
       name: p.name,
-      // First sample after start: no previous ticks → 0 for everyone (system.rs:521-528).
+      // First sample after start: no previous ticks → 0 for everyone (procs.rs).
       cpu_pct: first ? 0 : Math.round(wob * 10) / 10,
       rss_kb: p.rss_kb,
       state: p.name === "luyaz-web" ? "running" : "sleeping",
@@ -228,7 +222,7 @@ function smsBlock(): AlertsSms {
   } satisfies AlertsSms;
 }
 
-/** alerts.rs kind_label / kind_label_en: the agent words every kind, in both languages. */
+/** luyaz-alerts kind_label / kind_label_en: every kind has a Chinese and an English label. */
 const KIND_LABELS: Record<string, [string, string]> = {
   "core-crash": ["数据服务意外退出，已自动重启", "Data service exited unexpectedly"],
   "web-crash": ["管理网页意外退出，已自动重启", "Admin pages (luyaz-web) exited unexpectedly"],
@@ -348,7 +342,7 @@ function doctorChecks(now: number): HealthCheck[] {
   ];
 }
 
-/** Cached doctor snapshot (health.rs LAST). The agent refreshes it every 60 s. */
+/** Cached doctor snapshot. The core refreshes it every 60 s. */
 const snapshot = { checks: [] as HealthCheck[], at: 0 };
 
 function runDoctor(): void {
@@ -371,7 +365,7 @@ function healthData(): Health {
   } satisfies Health;
 }
 
-/** health.rs:140 safe_name. */
+/** luyaz-api health.rs safe_name. */
 function safeName(n: string): boolean {
   return n.length > 0 && n.length <= 96 && !n.startsWith(".") && /^[A-Za-z0-9._-]+$/.test(n);
 }
@@ -427,7 +421,7 @@ function bad<T>(error: string): Parsed<T> {
   return { ok: false, error };
 }
 
-/** serde of scheduler.rs Schedule (tag "type"). Errors are "invalid JSON: …" like the agent's. */
+/** serde of luyaz-policy scheduler.rs Schedule (tag "type"). Errors read "invalid JSON: …" as the core's do. */
 function parseSchedule(v: unknown): Parsed<SchedulerSchedule> {
   if (v === undefined) return bad("invalid JSON: missing field `schedule`");
   if (!isObject(v) || typeof v.type !== "string") return bad("invalid JSON: missing field `type`");
@@ -467,7 +461,7 @@ function parseRestore(v: unknown): Parsed<SchedulerRestore | undefined> {
   return { ok: true, value: r };
 }
 
-/** scheduler.rs:93 validate_time. */
+/** luyaz-policy scheduler.rs validate_time. */
 function validateTime(s: string): string | null {
   const parts = s.split(":");
   if (parts.length !== 2) return "time must be HH:MM";
@@ -481,19 +475,19 @@ function validateTime(s: string): string | null {
   return null;
 }
 
-/** scheduler.rs:113 validate_job. */
+/** luyaz-policy scheduler.rs validate_job (messages are the core's current text). */
 function validateJob(action: SchedulerAction, schedule: SchedulerSchedule, restore: SchedulerRestore | undefined): string | null {
-  if (!action.path.startsWith("/api/")) return "action.path must start with /api/";
-  if (action.path.startsWith("/api/scheduler/")) return "cannot schedule scheduler endpoints";
-  if (action.path.startsWith("/api/auth/")) return "cannot schedule auth endpoints";
-  if (!["GET", "POST", "PUT", "DELETE"].includes(action.method)) return "action.method must be GET, POST, PUT, or DELETE";
+  if (!action.path.startsWith("/api/")) return "action.path: only /api/ paths can be scheduled";
+  if (action.path.startsWith("/api/scheduler/")) return "jobs may not call the scheduler API";
+  if (action.path.startsWith("/api/auth/")) return "jobs may not call the login API";
+  if (!["GET", "POST", "PUT", "DELETE"].includes(action.method)) return "action.method: use GET, POST, PUT or DELETE";
   if (schedule.type === "recurring") {
     const e = validateTime(schedule.time);
     if (e) return e;
     if (schedule.days.length === 0) return "days must not be empty";
-    if (schedule.days.some((d) => d > 6)) return "days must be 0-6 (Mon-Sun)";
+    if (schedule.days.some((d) => d > 6)) return "days: each day is 0 (Monday) to 6 (Sunday)";
   } else if (schedule.at <= 1_000_000_000) {
-    return "once.at must be a valid unix timestamp";
+    return "once.at: not a unix time in seconds";
   }
   if (restore) {
     const e = validateTime(restore.time);
@@ -502,12 +496,8 @@ function validateJob(action: SchedulerAction, schedule: SchedulerSchedule, resto
   return null;
 }
 
-interface JobInput {
-  name: string;
-  schedule: SchedulerSchedule;
-  action: SchedulerAction;
-  restore: SchedulerRestore | undefined;
-}
+/** What a create/update body carries: the job without its id and run state. */
+type JobInput = Pick<SchedulerJob, "name" | "schedule" | "action" | "restore">;
 
 function parseJobInput(body: unknown): Parsed<JobInput> {
   if (!isObject(body)) return bad("invalid JSON: expected value");
@@ -547,7 +537,7 @@ export const routes: Route[] = [
     handler: (ctx: Ctx) => ok(sampleTop(ctx.now)),
   },
   {
-    // handlers.rs:187
+    // api/device_admin/procs.rs kill_bloat
     method: "POST",
     path: "/api/system/kill-bloat",
     handler: (ctx: Ctx) => {
@@ -559,7 +549,7 @@ export const routes: Route[] = [
         if (ids.length === 0) return fail("pids array is empty", 400);
         return ok(killBloat(ids));
       }
-      return fail("expected 'all' or 'pids'", 400);
+      return fail("say which: all, or a pids list", 400);
     },
   },
   {
@@ -568,7 +558,7 @@ export const routes: Route[] = [
     handler: () => ok(alertsSummary()),
   },
   {
-    // alerts.rs:268 — body parse failure falls through to the same 400.
+    // POST /api/alerts/read — body parse failure falls through to the same 400.
     method: "POST",
     path: "/api/alerts/read",
     handler: (ctx: Ctx) => {
@@ -581,7 +571,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // alerts.rs:284
+    // PUT /api/alerts/sms
     method: "PUT",
     path: "/api/alerts/sms",
     handler: (ctx: Ctx) => {
@@ -602,7 +592,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // health.rs:184 — refresh=1 runs doctor.sh synchronously (a few seconds on the device).
+    // api/health.rs get — refresh=1 runs doctor.sh synchronously (a few seconds on the device).
     method: "GET",
     path: "/api/health",
     handler: (ctx: Ctx) => {
@@ -614,7 +604,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // health.rs:209
+    // api/health.rs crashlog
     method: "GET",
     path: "/api/health/crashlog",
     handler: (ctx: Ctx) => {
@@ -633,7 +623,7 @@ export const routes: Route[] = [
     handler: () => ok(jobs.map(jobOut)),
   },
   {
-    // scheduler.rs:324 — 201 Created.
+    // api/scheduler.rs create — 201 Created.
     method: "POST",
     path: "/api/scheduler/jobs",
     handler: (ctx: Ctx) => {
@@ -660,7 +650,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // scheduler.rs:371 — full replace; absent restore clears it.
+    // api/scheduler.rs update — full replace; absent restore clears it.
     method: "PUT",
     path: "/api/scheduler/jobs",
     handler: (ctx: Ctx) => {
@@ -685,7 +675,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // scheduler.rs:398
+    // api/scheduler.rs delete
     method: "DELETE",
     path: "/api/scheduler/jobs",
     handler: (ctx: Ctx) => {
@@ -698,7 +688,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // scheduler.rs:420
+    // api/scheduler.rs toggle
     method: "PUT",
     path: "/api/scheduler/jobs/toggle",
     handler: (ctx: Ctx) => {

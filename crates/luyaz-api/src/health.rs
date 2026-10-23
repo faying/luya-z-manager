@@ -1,8 +1,8 @@
-//! The device check's pure parts (moved from zte-agent `health.rs`, Phase 4 step 8b): reading
+//! The device check's pure parts : reading
 //! `doctor.sh --tsv` / `--tsv2`, the `/api/health` reply, the counts for `/api/public/status`, the
 //! crash-log list.
 //!
-//! Running the doctor ([`Runner`], step 9d) belongs to whoever owns the `health` part: the agent,
+//! Running the doctor ([`Runner`]) belongs to whoever owns the `health` part: the agent,
 //! every 60 s, until it hands the part to u60d. After each run the owner writes its [`Snapshot`]
 //! to [`SNAPSHOT_FILE`]; whoever does not own it answers from that file, so the doctor never runs
 //! twice.

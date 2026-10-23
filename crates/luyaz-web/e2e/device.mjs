@@ -187,7 +187,7 @@ async function own(p) {
   ok(/设备已接受关机。只能在设备上按电源键开机。/.test(await area(p, "dc-rst")), `power-off result: ${await area(p, "dc-rst")}`);
   ok((await counts())["/api/device/poweroff"] === 1, "exactly one POST /api/device/poweroff");
   // factory reset: the word gates it, in the page and on the server
-  await p.click("button.nd-btn--danger:has-text('恢复出厂设置')");
+  await p.click("button.nd-btn--danger:has-text('恢复出厂')");
   await p.waitForSelector(dlg);
   const btn = p.locator(`${dlg} .nd-btn--danger`);
   ok(await btn.isDisabled(), "reset: the button is off until the word is typed");
@@ -202,7 +202,7 @@ async function own(p) {
   await p.click(`${dlg} .nd-btn--secondary`);
   await p.waitForFunction(() => !document.querySelector("#dc-rst-op dialog[open]"), null, { timeout: 4000 });
   ok((await counts())["/api/device/factory-reset"] === undefined, "Cancel: no factory-reset POST");
-  await p.click("button.nd-btn--danger:has-text('恢复出厂设置')");
+  await p.click("button.nd-btn--danger:has-text('恢复出厂')");
   await p.waitForSelector(dlg);
   await p.fill(`${dlg} input`, "恢复出厂");
   ok(!(await btn.isDisabled()), "the right word turns it on");

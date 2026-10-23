@@ -1,4 +1,4 @@
-//! /router/qos (QoS), the old `router/qos/page.tsx`: which vendor 带宽分配 mode the device is in and
+//! /router/qos (QoS): which vendor 带宽分配 mode the device is in and
 //! whether app recognition (xdpi) is on. Read-only since 2026-09-25 (owner's call,
 //! `docs/designs/touch-menu-tabs.md`「不做」): every mode but Nomal (极速) sorts traffic by app,
 //! which needs xdpi, and xdpi is off on purpose (about 25 % CPU).

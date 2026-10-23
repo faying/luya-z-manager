@@ -1,7 +1,7 @@
 //! Where the screen's data comes from and where its actions go: the C getters, polls and
-//! actions the pages call, one method each (src/data.c, esim.c, netinfo.c …). Two of them:
+//! actions the pages call, one method each. Two of them:
 //! the data side on the device (data::Live) and the offscreen harness's replay of the C render
-//! test (render::Replay), which answers as the test's fixtures do (tests/render/fixtures.c).
+//! test (render::Replay), which answers as the test's fixtures do.
 //!
 //! Values that C reads live (the backlight, the clock, the frame and touch counters) are asked
 //! with the model at hand: the replay reads them from it, the device from the device.
@@ -14,7 +14,7 @@ use crate::logic::Launch;
 use ui_model::Model;
 use std::rc::Rc;
 
-/// netinfo_poll's modes (include/netinfo.h): how much of /api/netinfo the page on screen needs.
+/// netinfo_poll's modes: how much of /api/netinfo the page on screen needs.
 pub const NI_OFF: i32 = 0;
 pub const NI_PAGE: i32 = 1;
 pub const NI_HOME: i32 = 2;
@@ -22,7 +22,7 @@ pub const NI_LITE: i32 = 3;
 pub const NI_APN: i32 = 4;
 pub const NI_CLIENTS: i32 = 5;
 
-/// What is on screen at a refresh: the `active` argument of each poll, as refresh.c computes it.
+/// What is on screen at a refresh: the `active` argument of each poll, as ui::refresh computes it.
 #[derive(Clone, Debug, Default)]
 pub struct Activity {
     /// backlight_panel_lit(): the core's pace
@@ -57,7 +57,7 @@ pub struct Activity {
     pub diag: bool,
 }
 
-/// What each poll said this refresh (1 = what it shows changed; refresh.c repaints on it).
+/// What each poll said this refresh.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Polled {
     pub scenario: bool,
@@ -77,7 +77,7 @@ pub struct Polled {
     pub diagnose: bool,
 }
 
-/// The netinfo actions sent with 已发送 first (network.c net_send).
+/// The netinfo actions sent with 已发送 first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NiAct {
     Scan,
@@ -86,7 +86,7 @@ pub enum NiAct {
     NbrScan,
 }
 
-/// esim_select's answers (include/esim.h ESIM_SEL_*).
+/// esim_select's answers.
 pub const ESIM_SEL_FAIL: i32 = -1;
 pub const ESIM_SEL_ARMED: i32 = 0;
 pub const ESIM_SEL_STARTED: i32 = 1;
@@ -94,7 +94,7 @@ pub const ESIM_SEL_CURRENT: i32 = 2;
 pub const ESIM_SEL_BUSY: i32 = 3;
 pub const ESIM_SEL_COOLDOWN: i32 = 4;
 
-/// The power key (include/key_input.h KEY_EV_*).
+/// The power key.
 pub const KEY_EV_NONE: i32 = 0;
 pub const KEY_EV_SHORT: i32 = 1;
 pub const KEY_EV_LONG: i32 = 2;
@@ -107,7 +107,7 @@ pub trait Source {
     fn data_fd(&self) -> i32;
 
     // ---- the refresh ----
-    /// The polls refresh n runs, in refresh.c's order; what each said.
+    /// The polls refresh n runs, in ui::refresh's order; what each said.
     fn poll(&mut self, n: u32, a: &Activity) -> Polled;
     /// The model as the getters see it now (after a poll or an action); None = unchanged.
     fn take_model(&mut self) -> Option<Rc<Model>>;
@@ -148,7 +148,7 @@ pub trait Source {
     /// /control; fb_args None = no emergency write (fb_action: the script's name for it)
     fn data_control_fb(&mut self, action: &str, params: &str, fb_action: &str, fb_args: Option<&str>) -> bool;
     fn data_control_undo(&mut self, action: &str, params: &str) -> bool;
-    /// journal.list's answer (op.c op_log_fetch)
+    /// journal.list's answer
     fn journal_list(&mut self, m: &Model) -> Option<String>;
     fn sms_mark_read_id(&mut self, id: i64);
     fn sms_mark_all_read(&mut self);

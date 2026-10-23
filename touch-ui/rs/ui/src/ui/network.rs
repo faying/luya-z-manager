@@ -1,4 +1,4 @@
-//! 网络 (src/ui_parts/network.c): luyaz-core's /api/netinfo on four pages. 情景 → the 情景 page,
+//! 网络: luyaz-core's /api/netinfo on four pages. 情景 → the 情景 page,
 //! 出口 IP → the exit tab, 运营商 + 手动选网 → 运营商选择, 邻小区 → 小区信息; net_reflow lays
 //! each page out from its base. Drawn by net_paint (apn.rs, as in C). What touches the modem
 //! (scan, register, back to automatic) and pinning a scene take two taps: the first colours the
@@ -24,7 +24,7 @@ pub const NET_SC_NOTE_H: i32 = 44;
 /// a 情景 pin waits this long for the agent to read back
 pub const SC_PEND_MS: u32 = 45000;
 
-/// agent caps (netinfo.h NI_MAX_*)
+/// agent caps
 pub const NI_MAX_SCENES: usize = 6;
 pub const NI_MAX_OPS: usize = 8;
 pub const NI_MAX_CELLS: usize = 8;
@@ -40,7 +40,7 @@ pub const NH_WIFI: usize = 4;
 pub const NH_N: usize = 5;
 const NET_HOST: [usize; 5] = [NH_SCENE, NH_EXIT, NH_OPER, NH_OPER, NH_CELL];
 
-/// A line that goes away after a few seconds (esim.c net_flash_t).
+/// A line that goes away after a few seconds.
 #[derive(Default, Clone)]
 pub struct NetFlash {
     pub txt: Vec<u8>,

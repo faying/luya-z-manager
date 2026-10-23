@@ -28,11 +28,7 @@ impl<T: Clone + Default> SingleFlight<T> {
     }
     /// `f()` if nothing is running (its result is kept), else the last kept result.
     pub fn run(&self, f: impl FnOnce() -> T) -> T {
-        if self
-            .busy
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-            .is_err()
-        {
+        if self.busy.swap(true, Ordering::SeqCst) {
             return self.last.lock().unwrap_or_else(|e| e.into_inner()).clone();
         }
         /// Frees the slot even if `f` panics.

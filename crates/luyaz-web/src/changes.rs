@@ -1,4 +1,4 @@
-//! /changes (改动记录), the old `changes/page.tsx` (E4 T9b; write-op-layer.md DD5, DD10, DD11):
+//! /changes (改动记录) (E4 T9b; write-op-layer.md DD5, DD10, DD11):
 //! every setting changed through u60d, newest first, two lines each, all words u60d's
 //! (`journal.list` decorates every row: `what_*`, `change_*`, `result_*`, `source_*`, `mark`,
 //! `hide`, `undo_view`). A row opens its detail (`?op=<op_id>`, or `?row=<key>` for a row without
@@ -559,8 +559,8 @@ pub fn confirm(e: &Value, l: Lang) -> write::Confirm {
                     )
                 } else if action.starts_with("band.") {
                     l.pick(
-                        "Press “Reset / unlock all” on the Band lock page. If the page can't be reached, open band lock on the device's touchscreen and restore the default.",
-                        "在「频段锁定」页点「重置 / 全部解锁」。如果打不开页面，到设备触屏的「锁频」页恢复默认。",
+                        "Press “Clear all locks” on the Band Lock page. If the page can't be reached, open band lock on the device's touchscreen and restore the default.",
+                        "到「频段锁定」页点「清除全部锁定」。如果打不开页面，到设备触屏的「锁频」页恢复默认。",
                     )
                 } else {
                     l.pick(

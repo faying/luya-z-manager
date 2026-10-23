@@ -1,4 +1,4 @@
-//! /router/wifi (Wi-Fi 设置), the old `router/wifi/page.tsx` + `Extras.tsx`: the status (on,
+//! /router/wifi (Wi-Fi 设置): the status (on,
 //! broadcasting, per band channel · width · devices), the guest summary row, the master switch,
 //! Wi-Fi 6, region, per band radio / SSID / password / encryption / channel / bandwidth / transmit
 //! power / hidden, and the power save and NFC switches. Batch 4 (u60-web.md).

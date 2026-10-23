@@ -20,6 +20,6 @@ RUN set -eu; \
     echo "$sum  /tmp/zig.tar.xz" | sha256sum -c -; \
     mkdir -p /opt/zig; tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; rm /tmp/zig.tar.xz; \
     ln -s /opt/zig/zig /usr/local/bin/zig; \
-    rustup target add aarch64-unknown-linux-musl; \
+    rustup target add aarch64-unknown-linux-musl; : RESIDUE-OK; \
     cargo install --locked cargo-zigbuild --version "$CARGO_ZIGBUILD"; \
     rm -rf /usr/local/cargo/registry

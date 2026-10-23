@@ -3,7 +3,8 @@
 // screenshots) and each write path once against the typed mock agent (fixtures/esim.ts) behind
 // e2e/fake-agent.mjs (`/__lw/esim`: POST counts, a fresh mock): rename, send notifications,
 // download, delete (typed word), switch (read back on the card), the 300 s cooldown refusal, and
-// the "fakesuccess" switch (job done + rebooting, card unchanged: never success). No ICCID or
+// the "fakesuccess" switch (job done + rebooting, card unchanged: never success), the
+// "esim-busy" switch (retry progress, Stop retrying → "retries stopped"). No ICCID or
 // activation code may appear in any request URL.
 //   WEB=http://127.0.0.1:18254 AGENT=http://127.0.0.1:19280 OUT=/tmp/lw-esim \
 //     crates/luyaz-web/e2e/run.sh router-esim
@@ -110,7 +111,7 @@ async function own(p, ctx) {
   await p.fill("#es-code", "not-a-code");
   await p.click("#es-dlgo button");
   await until(p, "#es-dl-op", /LPA:1/);
-  ok(/请输入形如 LPA:1/.test(await txt(p, "#es-dl-op")) && await nPost("/api/esim/download") === 0, "bad code: said, not sent");
+  ok(/激活码的样子是 LPA:1/.test(await txt(p, "#es-dl-op")) && await nPost("/api/esim/download") === 0, "bad code: said, not sent");
   await scenario("nosignal");
   await p.fill("#es-code", CODE);
   await p.click("#es-dlgo button");
@@ -125,7 +126,7 @@ async function own(p, ctx) {
   await p.waitForSelector("#es-dl-confirm", { timeout: 8000 });
   await p.click("#es-dl-confirm .nd-btn--confirm");
   await until(p, "#es-status", /下载中|正在下载/, 8000);
-  ok(/正在下载配置/.test(await txt(p, "#es-status")) || /正在下载/.test(await txt(p, "#es-dl-op")), "busy while downloading");
+  ok(/配置下载中/.test(await txt(p, "#es-status")) || /下载中/.test(await txt(p, "#es-dl-op")), "busy while downloading");
   await until(p, "#es-dl-op", /已下载|没有生效|还没读回/, 40000);
   ok(/配置已下载到卡上/.test(await txt(p, "#es-dl-op")), `download ok: ${await txt(p, "#es-dl-op")}`);
   await p.waitForFunction(() => document.querySelectorAll("#es-list .es-row").length === 4, null, { timeout: 15000 }).catch(() => {});
@@ -191,6 +192,35 @@ async function own(p, ctx) {
   await until(p, "#es-status", /使用中：国内主号/);
   ok(/使用中：国内主号/.test(await txt(p, "#es-status")), "status reads the new profile");
   ok(await nPost("/api/esim/switch") === 1, "switch: one POST");
+
+  // ---- a busy card (esim-busy): the retries show with the next try's time; Stop retrying ends them
+  await fetch(`${AGENT}/__lw/esim/reset`, { method: "POST" });
+  await scenario("esim-busy");
+  sid = await login();
+  await ctx.addCookies([{ name: "lw_sid", value: sid, url: WEB }]);
+  await p.reload({ waitUntil: "load" });
+  await ready(p).catch(() => {});
+  await row(p, "Pacific Roam").locator("button[id^=es-sw]").click();
+  await dialog(p).waitFor({ timeout: 8000 });
+  await dialog(p).locator(".nd-btn--confirm").click();
+  await until(p, "#es-retry", /已试 \d+ 次/, 15000);
+  const rt = await txt(p, "#es-retry");
+  ok(/卡忙，还没换过去（已试 \d+ 次）。\d\d:\d\d:\d\d 再试，约 \d\d:\d\d:\d\d 放弃/.test(rt), `retry progress: ${rt}`);
+  const [tn, tu] = [...rt.matchAll(/(\d\d):(\d\d):(\d\d)/g)].map((m) => (+m[1] * 60 + +m[2]) * 60 + +m[3]);
+  ok(tn < tu && tu - tn < 300, `next try before the give-up, on one clock (${tn}, ${tu})`);
+  await until(p, "#es-retry", /已试 [2-9] 次/, 15000);
+  ok(/已试 [2-9] 次/.test(await txt(p, "#es-retry")), "the try count moves on");
+  const stopBtn = p.locator("#es-retry button", { hasText: "停止重试" });
+  ok(await stopBtn.count() === 1, "Stop retrying button");
+  await stopBtn.click();
+  await until(p, "#es-retry", /正在停止重试/, 3000);
+  ok(/正在停止重试/.test(await txt(p, "#es-retry")) || /已停止重试/.test(await txt(p, "#es-prof-op")), `the press answers at once: ${await txt(p, "#es-retry")}`);
+  await until(p, "#es-prof-op", /已停止重试/, 15000);
+  const st = await txt(p, "#es-prof-op");
+  ok(/已停止重试，卡上还是原来的配置/.test(st), `stopped: ${st}`);
+  ok((await txt(p, "#es-retry")) === "", "the retry line is gone once the switch ended");
+  ok(await nPost("/api/esim/cancel") === 1, "stop: one POST");
+  await scenario("normal");
 }
 
 const browser = await chromium.launch({ channel: "chrome" });

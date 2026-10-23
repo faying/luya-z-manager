@@ -100,7 +100,7 @@ async function own(p) {
   // reset
   await p.click("#stc-resetbtn button");
   await p.waitForSelector("#stc-rs-confirm", { state: "visible" });
-  ok(/nd-btn--danger/.test(await p.getAttribute("#stc-rs-confirm button[data-write]", "class")) && /无法撤销/.test(await txt(p, "#stc-rs-confirm")), "reset dialog: danger, cannot be undone");
+  ok(/nd-btn--danger/.test(await p.getAttribute("#stc-rs-confirm button[data-write]", "class")) && /找不回来/.test(await txt(p, "#stc-rs-confirm")), "reset dialog: danger, cannot be undone");
   await p.click("#stc-rs-confirm .nd-btn--secondary");
   await p.waitForFunction(() => !document.querySelector("#stc-rs-confirm"), null, { timeout: 5000 });
   ok(!/设备已接受/.test(await txt(p, "#stc-rs-op")), "Cancel: nothing sent");

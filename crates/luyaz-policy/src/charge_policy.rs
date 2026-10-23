@@ -1,4 +1,4 @@
-//! Charge limit policy, moved from zte-agent `src/charge_policy.rs` (manager 7d2ca07).
+//! Charge limit policy.
 //!
 //! `enforce` and `on_unplug` are the policy (what the charge-policy component exports,
 //! `wit/charge-policy.wit`): given the battery and the limit, whether to stop or resume charging.
@@ -6,15 +6,14 @@
 //! host. An answer is `Some(allow)`: `false` = stop charging, `true` = resume; the host turns it
 //! into `power.direct_supply.set {enabled: !allow}` (direct supply on = charging stopped).
 //!
-//! Deliberate differences from the agent: none in the decisions. The agent re-reads the charger
-//! over ubus right before writing; the host does that when it writes (the shadow never writes).
+//! The host re-reads the charger over ubus right before it writes (the shadow never writes).
 
 use std::time::Duration;
 
 pub const POLL_ACTIVE_SECS: u64 = 60;
 pub const POLL_IDLE_SECS: u64 = 300;
 pub const DEFAULT_HYSTERESIS: u8 = 5;
-/// The agent's core feed fallback: a direct read at most this often (`core_feed::FALLBACK_POLL`).
+/// The core feed fallback: a direct read at most this often (`core_feed::FALLBACK_POLL`).
 pub const FALLBACK_POLL: Duration = Duration::from_secs(30);
 /// Longest wait between passes (`core_feed::MAX_WAIT`).
 pub const MAX_WAIT: Duration = Duration::from_secs(60);
@@ -22,7 +21,7 @@ pub const MAX_WAIT: Duration = Duration::from_secs(60);
 /// What `enforce` looks at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Battery {
-    /// sysfs `capacity`; 0 when unreadable (as the agent).
+    /// sysfs `capacity`; 0 when unreadable.
     pub capacity: u8,
     /// sysfs `status` is `Discharging`.
     pub discharging: bool,

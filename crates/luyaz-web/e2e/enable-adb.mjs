@@ -89,7 +89,7 @@ for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [12
     ok(await p.locator("main a[href='/usb']").count() === 1, "link to the USB mode page");
   }
   if (lang === "en") {
-    ok(/Enable ADB/.test(await txt(p, "h1")) && /Enable ADB Debug USB Mode/.test(await txt(p, "#adb-btn")), "English page");
+    ok(/Enable ADB/.test(await txt(p, "h1")) && /Turn On ADB over USB/.test(await txt(p, "#adb-btn")), "English page");
     const left = (await mainText(p)).match(CJK) ?? [];
     ok(left.length === 0, `English body without Chinese (${[...new Set(left)].join("") || "none"})`);
     ok(await p.getAttribute("html", "lang") === "en", "html lang=en");
@@ -116,7 +116,7 @@ await settable("true");
   await p.click("#adb-btn button");
   await p.waitForSelector("#adb-op dialog[open]", { timeout: 8000 });
   const d = await txt(p, "#adb-op dialog");
-  ok(/启用 ADB 调试 USB 模式？/.test(d) && /root shell/.test(d) && /断开多久/.test(d) && /怎么恢复/.test(d) && /USB 模式」页面/.test(d), `dialog: ${d.slice(0, 120)}`);
+  ok(/打开 USB 的 ADB 调试？/.test(d) && /root shell/.test(d) && /断开多久/.test(d) && /怎么恢复/.test(d) && /USB 模式」页面/.test(d), `dialog: ${d.slice(0, 120)}`);
   await p.screenshot({ path: `${OUT}/adb-dialog.png` });
   await p.click("#adb-op dialog .nd-btn--secondary");
   await p.waitForFunction(() => !document.querySelector("#adb-op dialog[open]"), null, { timeout: 5000 });
@@ -124,9 +124,9 @@ await settable("true");
   await p.click("#adb-btn button");
   await p.waitForSelector("#adb-op dialog[open]");
   await p.click("#adb-op dialog .nd-btn--danger");
-  await until(p, "#adb-op", /ADB 调试模式已启用|设备已接受|没有生效/, 40000);
+  await until(p, "#adb-op", /ADB 已打开|设备已接受|没有生效/, 40000);
   const res = await txt(p, "#adb-op");
-  ok(/^ADB 调试模式已启用。通过 USB 连接并运行 adb devices。$/.test(res), `result (read back): ${res}`);
+  ok(/^ADB 已打开。插上 USB 线，运行 adb devices 看看。$/.test(res), `result (read back): ${res}`);
   ok(await usbOps() === base + 1, "exactly one usb.set");
   await until(p, "#adb-status", /ADB 已开启/, 8000);
   ok(/ADB 已开启/.test(await txt(p, "#adb-status")), `status: ${await txt(p, "#adb-status")}`);

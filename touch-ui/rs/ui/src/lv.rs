@@ -1,5 +1,5 @@
 //! A thin layer over lvgl-sys: object and font handles, and the calls the pages make, named as
-//! in LVGL so ui_kit.c and the pages can be compared line by line.
+//! in LVGL.
 //!
 //! Safety: LVGL runs on one thread; an [`Obj`] is a live LVGL object (pages never delete
 //! objects: everything is built once and shown/hidden), a [`Font`] lives for the process.

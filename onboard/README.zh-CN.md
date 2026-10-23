@@ -1,13 +1,11 @@
 # Luya-Z 装机包（ZTE U60 Pro / MU5250）
 
-[English](README.md) · **中文**
-
-把一台**刚开箱的 ZTE U60 Pro（MU5250）**变成 Luya-Z 设备，只要跑一次 `./install.sh`。
+*[English](README.md) · 中文*。把一台**刚开箱的 ZTE U60 Pro（MU5250）**变成 Luya-Z 设备，只要跑一次 `./install.sh`。
 
 ## 会装上什么
 
 | 组件 | 装好以后 |
-|---|---|
+|:--|:--|
 | **SSH** | 用 `ssh -p 2222 root@192.168.0.1` 凭密钥登录（密码登录一直关着），重启后照样能连 |
 | **高级后台** | 浏览器开 `http://192.168.0.1:9090/`：锁频锁小区、短信、APN、防火墙、Wi-Fi 等 |
 | **ui 触屏界面** | 前面板换成新界面，按任务分 5 个标签（首页 · 蜂窝 · Wi-Fi · 出口 · 系统）：信号结论和载波、Wi-Fi 和连着的设备、CHILL/Tailscale 出口、eSIM 切换 |
@@ -25,9 +23,9 @@
 2. **路由器管理密码**，也就是在 `http://192.168.0.1` 登录用的那个。
 3. 一根**能传数据的 USB-C 线**。有些线只能充电。
 4. 电脑上有 **adb**：
-   - macOS：`brew install android-platform-tools`
-   - Linux：`sudo apt install adb`
-   - Windows：下载 Google 的 [SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools)，解压后把目录加进 PATH；
+   - Mac 电脑：`brew install android-platform-tools`
+   - Linux 电脑：`sudo apt install adb`
+   - Windows 电脑：下载 Google 的 [SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools)，解压后把目录加进 PATH；
      再装 [Git for Windows](https://git-scm.com/download/win)，下面的命令都在 **Git Bash** 里输入
 5. 要用 eSIM 就准备一张可插拔 eUICC 卡。普通 SIM 卡也能完成安装，只是 eSIM 页面会显示没有卡。
 
@@ -36,7 +34,7 @@
 ```sh
 tar xzf luyaz-kit-*.tar.gz
 cd luyaz-kit
-./install.sh
+./install.sh        # 开始引导式安装
 ```
 
 脚本会一步步带你：
@@ -47,6 +45,8 @@ cd luyaz-kit
 4. 接下来上传、安装、检查自动进行，约 1～2 分钟；屏幕闪一下，回来就是新界面。
 5. 问要不要**重启验证**时选是：重启后脚本会确认 SSH、高级后台和屏幕都自己起来了。
 
+### 装完以后
+
 最后会打印一段 `~/.ssh/config`，加进去以后 `ssh u60` 就能登录。
 
 ### 让 Claude Code 代装
@@ -55,7 +55,7 @@ cd luyaz-kit
 
 ```sh
 cd luyaz-kit
-claude
+claude              # Claude Code 会读这里的 CLAUDE.md
 ```
 
 跟它说「帮我装 U60」。它会先查 adb、网络和固件，再问密码。不想把密码交给它，就 `cp u60.env.example u60.env`，自己填好，然后告诉它「密码在 u60.env 里」。需要人动手的地方（插线、同不同意重启等）它会停下来问你。
@@ -89,25 +89,23 @@ U60 不在默认地址时：`GATEWAY=192.168.x.1 ./install.sh`。
 - 核心 luyaz-core、高级后台 luyaz-web、哨兵 luyaz-sentinel 都在 procd 下运行：崩了会被拉起，并留一条告警（短信通知在后台「系统 → 告警」里开）。
 - `admin` 只装 luyaz-web。`ui` 装触屏界面、luyaz-core 和 luyaz-sentinel；`rc.local` 里 `/etc/init.d/luyaz-core start` 后面紧跟 `/etc/init.d/luyaz-sentinel start`。起哨兵后脚本最多等 60 秒，确认三件事：哨兵在 procd 下运行、心跳显示 `ours`、正在运行的触屏界面就是刚装的那个文件。
 - `admin` 和 `ui` 都会把装了什么（装机包日期、提交号）记进设备清单 `/data/luyaz/ship/manifest.jsonl`，每个组件一行（lweb；touch、sentinel、core），`doctor` 拿它和文件核对。
-- 只支持现在的目录布局。设备上还有 `/data/u60d`、`/data/u60-uid`、`/data/u60-ship`、`/data/plugins/u60pro-devui` 或 `/data/plugins/zwrt-datad` 时拒绝安装，先用旧版装机包升级。
+- 只支持现在的目录布局；设备上还是旧布局时拒绝安装，先用旧版装机包升级。
 
 | 路径 | 是什么 |
-|---|---|
+|:--|:--|
 | `/data/ssh/` | dropbear、host key、`authorized_keys`（**以它为准的公钥清单**） |
 | `/data/local/tmp/start_dropbear.sh` | 开机时运行：把公钥复制到 `/etc/dropbear/`，在 :2222 起 dropbear |
 | `/data/luyaz/luyaz-core`、`/data/luyaz/core/` | 核心（:9460，只对本机）。触屏界面和高级后台的读数、改动都经过它。状态在 `/data/luyaz/core/`，日志 `/tmp/luyaz-core.log` |
 | `/data/luyaz/luyaz-web`、`/data/luyaz/operator-logos/` | 高级后台（luyaz-web，:9090） |
 | `/data/luyaz/web.env` | **高级后台密码**，只有 root 能读 |
 | `/data/luyaz/luyaz-sentinel`、`/data/luyaz/screen/` | 哨兵。屏幕归它管：触屏界面崩了它重启；连续两次起不来就换回原厂界面并告警（按住右下角 3 秒回来）。它也是 Wi-Fi 兜底看门狗、负责发告警短信。控制 FIFO `/tmp/luyaz-screen.ctl`，日志 `/tmp/luyaz-sentinel.log`，心跳 `/tmp/luyaz-sentinel.hb` |
-| `/data/luyaz/ui/` | 触屏界面 `luyaz-ui` 及其字体和运营商 logo、开机记录 `boot-trace.log`、原厂界面副本 `vendor-devui.orig-backup` |
+| `/data/luyaz/ui/` | 触屏界面 `luyaz-ui` 及其字体和运营商 logo、开机记录 `boot-trace.log`、原厂界面副本 `vendor-*.orig-backup` |
 | `/data/luyaz/scripts/`、`/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}` | 设备脚本（doctor.sh，转给 `luyaz-core doctor`；alert-lib.sh……；ship 执行器 luyaz-ship.sh 和 core-trial.sh）和 procd 服务。开机靠 `rc.local` 里的 `/etc/init.d/… start` 行起，不用 `enable` |
 | `/data/luyaz/ship/` | `u60 ship` 事务、清单 `manifest.jsonl`、开机收尾 `luyaz-recover.sh` |
 | `/data/alerts/`、`/data/crashlog/` | 告警记录、崩溃日志 |
 | `/data/esim/` | lpac，读写 eSIM 卡的工具 |
 | `/data/chill/`、`/etc/init.d/chill` | CHILL：mihomo、规则集、zashboard、`chill.sh`。订阅地址写在 `/data/chill/chill.env`（你自己写，只有 root 能读） |
 | `/data/luyaz/kit/rc.local.orig` | 第一次安装前的原厂 `rc.local` |
-
-旧版装机包留下的 `/data/zte-agent*`、`/data/admin/`、`/data/plugins/zwrt-datad/`、`/data/u60-guard/`、`/data/u60-uid/` 已经没人用，可以删。后两种布局的目录还在时，本装机包不会安装。
 
 ## 日常用法
 
@@ -136,25 +134,20 @@ SSH 登录后：
 ```sh
 echo vendor > /tmp/luyaz-screen.ctl; sleep 8     # 先让原厂界面接管屏幕
 [ -x /data/chill/chill.sh ] && /data/chill/chill.sh stop; rm -f /etc/init.d/chill   # 停 CHILL 时会把 DNS 设置换回原样
-for s in luyaz-sentinel luyaz-web luyaz-core u60-uid u60-guard zte-agent zwrt-datad; do [ -x /etc/init.d/$s ] && /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
+for s in luyaz-sentinel luyaz-web luyaz-core; do [ -x /etc/init.d/$s ] && /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
 for f in /data/luyaz/kit/rc.local.orig /data/u60-kit/rc.local.orig; do [ -s $f ] && cp $f /etc/rc.local && break; done
-rm -rf /data/luyaz /data/plugins/u60pro-devui /data/esim /data/chill /data/alerts /data/crashlog /data/power \
-       /data/u60d /data/u60-kit /data/u60-ship /data/u60-guard /data/u60-uid /data/zte-agent /data/zte-agent.env /data/admin \
-       /data/plugins/zwrt-datad /data/local/tmp/start_zte_agent.sh    # 第二行起是旧版装机包留下的
+rm -rf /data/luyaz /data/esim /data/chill /data/alerts /data/crashlog /data/power \
+       /data/u60d /data/u60-kit /data/u60-ship /data/admin    # 第二行起是旧布局的残留
 # SSH 也不要的话再加：rm -rf /data/ssh /data/local/tmp/start_dropbear.sh
-reboot
+reboot   # 重启后生效
 ```
 
 重启后屏幕就是原厂界面。需要自动升级的话，自己到网页后台打开。
 
 ## 出问题时
 
-**登录失败、被锁**：网页后台连续输错 5 次会锁一段时间。脚本会显示还能试几次、多久解锁；别再猜，先核对密码。
-
-**一直等不到 ADB 设备**：换根线，插电脑本身的 USB 口（别用扩展坞、Hub）。Windows 上打开设备管理器，看到带黄色感叹号的设备时：先装 Google USB Driver，再右键 → 更新驱动程序 → 浏览我的电脑 → 选「Android ADB Interface」。`adb devices` 出现以 `device` 结尾的一行就通了，重跑 `./install.sh` 会接着装。
-
-**提示 SSH 连不上**：设备那边已经装好了，提示会说是没有密钥、连接被拒、认证失败还是超时。常见原因是电脑没连 U60 的 Wi-Fi，或者代理软件的 TUN/增强模式劫持了 `192.168.0.1`（在代理里把 `192.168.0.0/16` 设成直连，不用整个关掉）。然后再试 `ssh -p 2222 -i ~/.ssh/id_ed25519 root@192.168.0.1`。
-
-**屏幕上没数据**：SSH 进去看 `tail -n 50 /tmp/luyaz-core.log`（屏幕本身不对再看 `/tmp/luyaz-sentinel.log`），或者跑 `./install.sh doctor`。重启一次一般就好。
-
-**装到一半失败**：直接再跑一遍，装好的部分会跳过或覆盖。一直失败的话，把终端的完整输出发给给你装机包的人。
+- **登录失败、被锁**：网页后台连续输错 5 次会锁一段时间。脚本会显示还能试几次、多久解锁；别再猜，先核对密码。
+- **一直等不到 ADB 设备**：换根线，插电脑本身的 USB 口（别用扩展坞、Hub）。Windows 上打开设备管理器，看到带黄色感叹号的设备时：先装 Google USB Driver，再右键 → 更新驱动程序 → 浏览我的电脑 → 选「Android ADB Interface」。`adb devices` 出现以 `device` 结尾的一行就通了，重跑 `./install.sh` 会接着装。
+- **提示 SSH 连不上**：设备那边已经装好了，提示会说是没有密钥、连接被拒、认证失败还是超时。常见原因是电脑没连 U60 的 Wi-Fi，或者代理软件的 TUN/增强模式劫持了 `192.168.0.1`（在代理里把 `192.168.0.0/16` 设成直连，不用整个关掉）。然后再试 `ssh -p 2222 -i ~/.ssh/id_ed25519 root@192.168.0.1`。
+- **屏幕上没数据**：SSH 进去看 `tail -n 50 /tmp/luyaz-core.log`（屏幕本身不对再看 `/tmp/luyaz-sentinel.log`），或者跑 `./install.sh doctor`。重启一次一般就好。
+- **装到一半失败**：直接再跑一遍，装好的部分会跳过或覆盖。一直失败的话，把终端的完整输出发给给你装机包的人。

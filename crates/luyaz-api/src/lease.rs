@@ -1,4 +1,4 @@
-//! One owner of a loop across the agent and u60d (u60-platform.md Phase 4 step 9): the owner writes
+//! One owner of a loop across the agent and u60d: the owner writes
 //! a lease (`<pid> <who>`) while its loop runs, and a loop starting up waits for another live
 //! owner's lease to go before it reads its state, so the two never run at once. No file (or a dead
 //! pid, or one that cannot be read) = free. Moved from u60-sms-forward (9e) for manual-first (9g).

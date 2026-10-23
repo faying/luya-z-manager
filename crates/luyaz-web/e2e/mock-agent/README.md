@@ -1,11 +1,11 @@
-# mock-agent — a stand-in for the device API (formerly zte-agent, now served by luyaz-core)
+# mock-agent — a stand-in for the device API (served by luyaz-core on the device)
 
 A zero-dependency Node HTTP server that answers the admin web's `/api/*`
 calls with fixed data, so pages can be built and tested without touching the
-U60 Pro (MU5250). Since X13 (the old Next.js `web/` removed) it lives here and
-only backs luyaz-web's browser checks (`../fake-agent.mjs`, `../core-front.mjs`).
-The fixtures' `import type … from "../../../src/lib/api/schemas/…"` point at the
-removed web; Node erases type-only imports, so they cost nothing at run time.
+U60 Pro (MU5250). It backs luyaz-web's browser checks (`../fake-agent.mjs`, `../core-front.mjs`).
+Reply shapes follow what luyaz-core sends today. Some fixtures still carry
+`import type … from "../../../src/lib/api/schemas/…"` lines whose target is gone; Node drops
+type-only imports, so nothing breaks at run time.
 
 Data describes a user travelling in Taiwan: NR SA n78 with NR CA plus LTE CA,
 RSRP −95 / SINR 18, battery 76 % charging,
@@ -16,30 +16,24 @@ Tailscale running with 5 peers (3 online), 2 unread SMS.
 Node 26 runs the `.ts` files directly (type stripping), no install step:
 
 ```sh
-cd web
-node crates/luyaz-web/e2e/mock-agent/server.ts                  # port 9199 on 127.0.0.1
+# from source/manager
+node crates/luyaz-web/e2e/mock-agent/server.ts                  # 127.0.0.1:9199 (MOCK_PORT to change)
 MOCK_SCENARIO=weak,cmdfail node crates/luyaz-web/e2e/mock-agent/server.ts
 ```
 
-In the browser (dev server on `localhost:3000`), open the console once:
-
-```js
-localStorage.setItem("u60.agent_url", "http://localhost:9199")
-```
-
-(Use `http://127.0.0.1:9199` if your browser resolves `localhost` to `::1`
-first; the server binds IPv4 loopback only.) Log in with any non-empty
-password. Remove the key to go back to the device:
-`localStorage.removeItem("u60.agent_url")`.
+The browser checks normally start it for you through `../fake-agent.mjs`; point a
+local luyaz-web at that port instead of the core's `127.0.0.1:9460` to click
+around by hand. It listens on IPv4 loopback only.
 
 ## Auth
 
-- `POST /api/auth/login` with any non-empty password → `{ok:true,data:{token:"mock-token-<n>"}}`;
-  each login issues a new token and **invalidates the previous one**.
-  Empty password → 401 `invalid password`; missing field → 400.
+- `POST /api/auth/login` (a mock-only shortcut; the core itself signs in on `/auth/login`
+  with Basic auth) takes any non-empty password and answers `{ok:true,data:{token:"mock-token-<n>"}}`.
+  A new login **voids the token before it**. Empty password → 401 `invalid password`;
+  no password string → 400.
 - Every other `/api/*` call except `GET /api/public/status` needs
   `Authorization: Bearer <current token>`, else 401 `{ok:false,error:"unauthorized"}`.
-- Tokens expire after `MOCK_TOKEN_TTL` seconds (default 3600, same as the agent).
+- Tokens expire after `MOCK_TOKEN_TTL` seconds (default 3600, one hour).
 
 ## Scenarios
 
@@ -68,7 +62,7 @@ curl  http://127.0.0.1:9199/__mock/state                  # shared state + route
 | `down` | Every socket is destroyed (connection reset). Only `/__mock/*` still answers, so you can switch back. |
 | `carriers8` | The signal payload carries 8 carriers for the carrier table. |
 | `firmware-b27` | Shapes recorded from a real U60 Pro (MU5250) on firmware B27 (2026-09-25; values are fake): UPnP as `router_get_upnp` answers it (`enable_upnp`…), QoS `{}` (unconfigured; the QoS PUT still 503s — its setter is `router_set_qos` with rate limits), `/api/cell/stc/params`, `/api/cell/stc/status` → 503 `… (Method not found)`; port-forward / filter-rules / domain-filter → `{}` when empty (rules or domains added while the scenario is on come back as `{rule_list}` / `{blocked_domains}` — the real non-empty shape is unconfirmed); `/api/router/vpn` → `{alg_sip_enable}` only; APN profiles with integer `pdpType` / `pppAuthMode` / `roamingPdpType` + `extraInt1`; SMS capacity with per-box `sms_{sim,nv}_{rev,send,draftbox}_total`, no `sms_simused_total` and `sms_nvused_total: 0`; signal-detect progress as strings (`""` idle) and results `{}` when none; SA signal without `lte_pci` / `cell_id` / `wan_active_channel`, numeric `rmcc` / `rmnc`; public status `scenario.last_switch: null`. The default persona keeps the richer shapes. |
-| `old-agent-names` | The agent before 2026-09-25 called `router_get_upnp_switch` / `router_get_qos_switch`, which B27 doesn't have: those GETs answer 503 `… (Method not found)`. Combine with `firmware-b27`. |
+| `old-agent-names` | Builds before 2026-09-25 asked for `router_get_upnp_switch` / `router_get_qos_switch`, which B27 doesn't have: those GETs answer 503 `… (Method not found)`. Combine with `firmware-b27`. |
 | `nbrscan` | `POST /api/cell/neighbors/scan` runs the old simulated neighbour scan instead of the real device's 410 (the stock scan drops mobile data and returns no cells). Used by the cell-lock page tests. |
 | `diag-waiting` | `POST /api/diagnose` first waits 3 s (`state: "waiting"`, `waiting_for: "speedtest"`), then runs. |
 | `diag-slow` | `POST /api/diagnose` takes 4 s per layer instead of 0.8 s, so a run stays going long enough to see the busy 409 elsewhere. |
@@ -82,13 +76,13 @@ Scenarios combine, e.g. `weak,missing` or `carriers8,stale`.
 
 ## Diagnosis
 
-`fixtures/diagnose.ts` plays deep_diag.rs: a run fills one layer every
+`fixtures/diagnose.ts` stands in for the core's deep diagnosis (`/api/diagnose`): a run fills one layer every
 0.8 s (Wi-Fi, signal, speed cap, cellular link, cell load, plus proxy while
 the proxy service runs). With `weak` active when the run starts, signal comes out bad and
 the link suspect (main cause "Weak signal", +1 more); otherwise nothing is
 found. `/api/diagnose/speed` measures for 3 s, then gives a "Direct ↓ … Mbps"
 row; feedback is taken once per run. While a run is going, the speed test,
-network search and manual register answer the agent's busy 409
+network search and manual register get a busy 409
 (`busy: "diagnose"`, 正在诊断，约 N 秒后再试).
 
 ## Writes
@@ -107,11 +101,11 @@ Restart the server to reset everything.
 | `routes.ts` | All fixture routes in one list (used by server and recorder). |
 | `lib.ts` | `Route` / `Ctx` / `Reply` types, scenario names, helpers. |
 | `shared.ts` | Cross-area state. |
-| `fixtures/<area>.ts` | Routes + data per area, typed with `satisfies` against `src/lib/api/schemas/<area>.ts`. |
+| `fixtures/<area>.ts` | Routes + data per area. |
 | `record.ts` | Read-only recorder for the real device (see below). |
 
-Type-check: no longer possible as it stands (the schemas it checked against went
-with the old web, X13).
+There is no type-check step: the schema files the fixtures were once checked
+against are gone (X13).
 
 ## CORS
 
@@ -122,14 +116,14 @@ allowed headers `Authorization, Content-Type, X-Mock-Scenario`, methods
 
 ## record.ts (for later, on the real device — needs the user's OK)
 
-Saves real agent responses for an audited allowlist of side-effect-free GET
-endpoints and prints a key diff against the mock fixtures. Every allowlist
-entry names the handler `file:line` that was checked; everything that scans,
-writes uci, reloads, spawns state-changing processes, sends AT commands or
-talks to the eUICC is excluded, with the reason in the file.
+Fetches a short list of GET endpoints from the real core, saves the replies and
+prints which keys differ from the mock. Each entry on the list names the core
+handler that was read to make sure it changes nothing; anything that scans,
+writes uci, reloads, starts processes that change state, sends AT commands or
+talks to the eUICC stays off the list, and the file says why.
 
 ```sh
-RECORD_CONFIRM=yes AGENT_URL=http://192.168.0.1:9090 TOKEN=<bearer> node crates/luyaz-web/e2e/mock-agent/record.ts
+RECORD_CONFIRM=yes AGENT_URL=http://127.0.0.1:9460 TOKEN=<bearer> node crates/luyaz-web/e2e/mock-agent/record.ts
 ```
 
 Output goes to `crates/luyaz-web/e2e/mock-agent/recorded/<path>.json` (not meant to be

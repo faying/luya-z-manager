@@ -1,4 +1,4 @@
-# What u60d took from zwrt-datad
+# What u60d took from datad
 
 Base: data-service `68416eb` (the datad build on the device since 2026-10-07; MIT). The files listed here were rewritten on 2026-10-21 (`b8268904`); this page is kept as history.
 
@@ -6,7 +6,7 @@ Moved in three steps: `8605c28` first (Phase 2 step 1), then `68416eb` on top (U
 the `typec` and `powerbank` blocks in `block.rs`, the multi-event listener in `ubus/listen.rs`,
 `tests/mock_ubus.sh`). Phase 3 step 1 (2026-10-08) moved the rest, HTTP and the write path,
 from the same `68416eb`: every module datad's `main.rs` declares is now in u60d, and u60d can
-stand in for zwrt-datad (serve mode, below).
+stand in for datad (serve mode, below).
 
 u60 platform Phase 2 (`docs/designs/u60-platform.md`) moves the datad read path into u60d.
 datad keeps running until Phase 3; in between u60d reads in shadow mode and
@@ -27,14 +27,14 @@ Read path (Phase 2): `block.rs`, `cell_window.rs`, `command.rs`, `executor.rs` (
 `model.rs`, `project.rs` + `project/` (snapshot and screen projections, pure),
 `qos.rs`, `sms.rs`, `state.rs`, `uci.rs`, `ubus/` (client, socket and CLI
 backends, compare, SMS event listener). Test fixtures are under `tests/`.
-Entry point: `read.rs` (`u60d --once`, the same output as `zwrt-datad --once`).
+Entry point: `read.rs` (`u60d --once`, the same output as `datad --once`).
 
 HTTP and write path (Phase 3 step 1, base `68416eb`): `server.rs` + `server/write.rs`,
 `conn.rs`, `auth.rs`, `v2.rs` (+ `v2/tests.rs`), `legacy_hits.rs` (removed in Phase 10, X3; its
 `/proc` caller lookup is `peer_pid.rs`), `control.rs`, `wifi.rs`,
 `ops/` (all of it, with the `tests.rs` subdirectories), `at.rs`, `watchdog.rs`. Entry point:
 `serve.rs` (datad's `main.rs`). All 345 of datad's unit tests run in u60d.
-Not moved: `rust/tests/legacy_golden.rs` (it needs `CARGO_BIN_EXE_zwrt-datad` and data-service's
+Not moved: `rust/tests/legacy_golden.rs` (it needs `CARGO_BIN_EXE_datad` and data-service's
 `tests/`); a local parity script (workspace tooling, not in this repo) runs those harnesses instead.
 
 Changes against the base, all deliberate:
@@ -57,7 +57,7 @@ Changes against the base, all deliberate:
   chmod, rename, remove the old `psm`) goes through `blocking()`; same order, same errors.
 - `serve.rs` against datad's `main.rs`: `current_thread` runtime (built in `main.rs`) instead of
   `#[tokio::main]`; `Args::parse_from(argv)`; `--version` prints u60d's version
-  (`zwrt-datad 0.1.0`; nothing calls it); the listener test moved here, plus argv[0] and
+  (`datad 0.1.0`; nothing calls it); the listener test moved here, plus argv[0] and
   `Args` tests.
 - `state.rs`: synchronous file reads in the collection round (E2 item 1: `/etc/config`
   parsing, thermal zones, `/proc` and `/sys` runtime, `key.log` tails, leases, power
@@ -103,20 +103,20 @@ Changes against the base, all deliberate:
   without a txn; Wi-Fi 6 change → 409 `refused`; Wi-Fi lock taken before submit (5 s, else 503
   `busy`), held until the background `reload_and_verify` ends; `Confirm::Wifi` = readback + APs up,
   no data/DNS check, deadline `LUYAZ_DEADLINE_WIFI_MS` (90000). datad has neither action.
-- Env names were datad's `ZWRT_DATAD_*` so one mock harness drove both programs; since the Luya-Z
+- Env names were datad's `DATAD_*` so one mock harness drove both programs; since the Luya-Z
   rename D3 they are `LUYAZ_*`, old names read as a fallback (`src/env.rs`).
 
 ## Serve mode (`serve.rs`)
 
-`u60d serve <datad arguments>`, or any argv[0] whose file name starts with `zwrt-datad` or
+`u60d serve <datad arguments>`, or any argv[0] whose file name starts with `datad` or
 `luyaz-core` (since Phase 10 the device runs it as `/data/luyaz/luyaz-core`, init
-`/etc/init.d/luyaz-core`, state `/data/luyaz/core/`; before that `/data/plugins/zwrt-datad/zwrt-datad`;
+`/etc/init.d/luyaz-core`, state `/data/luyaz/core/`; before that `/data/plugins/datad/datad`;
 the side-by-side `.test` names that `luyaz ship` (the maintainer's Mac-side workspace tool, not part of this repo; it drives `touch-ui/scripts/u60-ship.sh`, installed as `/data/luyaz/scripts/luyaz-ship.sh`, format in `touch-ui/docs/SHIP.md`; without it, use the install kit `onboard/`) and `luyaz-fallback.sh` recognise by prefix): the whole command line is datad's, parsed by
 datad's `Args` (clap; `-i`, `-b/--bind`, `-p/--port`, `--lan-bind`, `--lan-port`,
-`--auth-token-file`, `--data-dir`/`LUYAZ_DATA_DIR` default `/data/zwrt-datad`, `--once`, hidden
+`--auth-token-file`, `--data-dir`/`LUYAZ_DATA_DIR` default `/data/datad`, `--once`, hidden
 `--webshell`/`--neighbor`, raw `--ubus-compare` and `--compare-state-shape`). Same ports, pid file
-(`/var/run/zwrt-datad.pid`), data directory, ops directory, write lock; `BUILD_MARKER`
-(`LUYAZ_CORE_BUILD_SELF_CONTAINED`; `ZWRT_DATAD_FORK_RUST_SELF_CONTAINED` before D3) is kept for `build-kit.sh`. `zwrt-datad --once` here goes
+(`/var/run/datad.pid`), data directory, ops directory, write lock; `BUILD_MARKER`
+(`LUYAZ_CORE_BUILD_SELF_CONTAINED`; `DATAD_FORK_RUST_SELF_CONTAINED` before D3) is kept for `build-kit.sh`. `datad --once` here goes
 through datad's `App` like datad; `u60d --once` keeps using `read.rs`. The other u60d modes
 (ledger, `--probe`, `--once`, `--evlog-stats`, `--ubus-compare`) are unchanged. When serving ends the process exits (P2-4), as in datad.
 
@@ -144,12 +144,12 @@ Sync fs left on the runtime thread, small or rare:
 
 Release build: `cargo zigbuild --profile release-device --target aarch64-unknown-linux-musl -p luyaz-core`
 (workspace root profile `release-device`: datad's settings, opt-level "s", panic=abort, lto,
-codegen-units 1, strip; zte-agent's `release` is unchanged). 2026-10-08: 4.22 MB
+codegen-units 1, strip; other crates keep the default `release`). 2026-10-08: 4.22 MB
 (datad 68416eb 3.50 MB).
 
 ## Phase 4: policies (`plugin.rs`, `plugin/`)
 
-Not from datad: the policy host and the policies moved from zte-agent (u60-platform.md Phase 4).
+Not from datad: the policy host and the policies moved from the old agent (u60-platform.md Phase 4).
 Shadow only while the agent runs: computed and shown on `GET /debug/policy`, never acted on;
 `/v2` and every other endpoint are unchanged (the parity gate's 171 GET replies still match datad).
 `LUYAZ_POLICIES=0` turns them off.
@@ -195,7 +195,7 @@ u60d, runs every mock case (80 at 68416eb) through both `--once`, and requires b
 snapshots and line-identical ubus/uci call logs. Then the contract check, the shadow cases, and
 serve mode: the base commit's own harnesses (`golden.sh check`, `control_golden.sh check` with
 `control_contract.py`, SSE limit and lifecycle, legacy hits, direct supply, listen orphan,
-control integration, version test) on datad and on u60d copied as `zwrt-datad`, and every GET
+control integration, version test) on datad and on u60d copied as `datad`, and every GET
 reply (`/v2/screen` included) per case, byte for byte. Masked: `{name,version}` and the caller
 pids/times in `/debug/legacy-hits`; golden files are not edited.
 

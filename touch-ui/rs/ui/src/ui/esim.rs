@@ -1,4 +1,4 @@
-//! src/ui_parts/esim.c and refresh.c's esim_paint: SIM 与 eSIM (the card in use, its numbers,
+//! SIM 与 eSIM (the card in use, its numbers,
 //! the eSIM profiles; a tap on one switches to it, two taps).
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
@@ -273,7 +273,7 @@ impl Ui {
         es.list_card.set_height(if n > 0 { n as i32 * ESIM_ROW_H } else { ROW_H });
     }
 
-    /// refresh.c 「eSIM subpage」: repaint when esim_poll (or the prefetch) read something new,
+    /// repaint when esim_poll (or the prefetch) read something new,
     /// the card changed, or a tap or an ended flash asks for it.
     pub(super) fn esim_refresh(&mut self, sim_changed: bool) {
         let changed = self.polled.esim || sim_changed;

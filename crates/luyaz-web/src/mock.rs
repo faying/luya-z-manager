@@ -16,7 +16,7 @@
 //! replaces the inbox with N made-up rows (`count=0`: the default six); `GET /mock/stats` has
 //! `sms_ops` (actions in order), `sms_sends` (the send params) and `sms_ids`.
 //!
-//! Change log (/changes): a made-up `journal.list` (the old web's mock rows, fixtures/ops.ts; the
+//! Change log (/changes): a made-up `journal.list` (made-up rows; the
 //! network-mode row `web-20` is the one its "last changed" link opens) and `network.set_mode` as a
 //! transaction: `op.active` (applying → verifying, 1 s) then `op.last` 2 s later, ended as
 //! `POST /mock/txn?end=confirmed|rolled_back|live` says (live: never ends), with a row prepended
@@ -814,7 +814,7 @@ fn undo_view(ok: bool, redo: bool, why: Option<(&str, &str)>, back_to: &str) -> 
            "request": {"action": "network.set_mode", "undo": true, "params": {"mode": back_to}}})
 }
 
-/// The old web's mock rows (fixtures/ops.ts ENTRIES): made up, never the recording's.
+/// Made-up change-log rows, never the recording's.
 fn default_journal() -> Vec<Value> {
     vec![
         json!({"source": "screen", "action": "op.ack", "result": "ok", "hide": true, "what_zh": "op.ack", "what_en": "op.ack"}),

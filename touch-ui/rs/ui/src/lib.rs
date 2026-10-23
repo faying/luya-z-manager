@@ -4,7 +4,7 @@
 //! (device). The offscreen harness (render) replays the C render test through the same pages.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-// the kit mirrors ui_kit.c's signatures (positions, sizes, colours, callbacks)
+// kit functions take every position, size, colour and callback as its own argument
 #![allow(clippy::too_many_arguments)]
 
 pub mod cfmt;

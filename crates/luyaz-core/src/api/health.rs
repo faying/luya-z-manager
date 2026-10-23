@@ -1,4 +1,4 @@
-//! The health check (u60-platform.md Phase 4 step 9d; the agent's until Phase 10).
+//! The health check.
 //!
 //! With u60d's writes on it runs the doctor itself (u60-api `health::Runner`): 20 s after start,
 //! then every 60 s, and again in the background after alerts are marked read or the alert SMS
@@ -14,9 +14,6 @@ use std::sync::Arc;
 use luyaz_api::health::{self as h, Runner, Snapshot};
 
 use super::{Compat, reply};
-
-/// How often a due run is looked for.
-const LOOK_SECS: u64 = 1;
 
 pub(super) fn runner(root: &str) -> Arc<Runner> {
     let r = Runner::new(
@@ -35,17 +32,15 @@ pub(super) fn runner(root: &str) -> Arc<Runner> {
 
 /// The background runs: the first [`h::FIRST_WAIT`] after start (until then the last snapshot
 /// stands), then every [`h::EVERY`].
+/// It sleeps until a run is due: no wakeup in between (R18-P1-04).
 pub async fn run(c: Compat) {
-    let mut look = tokio::time::interval(c.clock.secs(LOOK_SECS));
     c.health.seed(Snapshot::read(&c.path(h::SNAPSHOT_FILE)));
     let mut due = tokio::time::Instant::now() + scaled(&c, h::FIRST_WAIT);
     loop {
-        look.tick().await;
-        if tokio::time::Instant::now() >= due {
-            let r = c.health.clone();
-            let _ = tokio::task::spawn_blocking(move || r.refresh()).await;
-            due = tokio::time::Instant::now() + scaled(&c, h::EVERY);
-        }
+        tokio::time::sleep_until(due).await;
+        let r = c.health.clone();
+        let _ = tokio::task::spawn_blocking(move || r.refresh()).await;
+        due = tokio::time::Instant::now() + scaled(&c, h::EVERY);
     }
 }
 

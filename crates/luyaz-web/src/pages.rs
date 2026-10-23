@@ -547,7 +547,7 @@ impl Trend {
     }
 }
 
-/// Band rectangles and gridline labels of TrendChart.tsx: (y, height, fill).
+/// Band rectangles and gridline labels of the trend chart: (y, height, fill).
 pub fn trend_bands() -> [(String, String, &'static str); 3] {
     let r = |a: f64, b: f64, fill| {
         (

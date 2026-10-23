@@ -30,14 +30,14 @@
 
 所有设备路径在测试里都可以整体加前缀（`U60S_ROOT`、`U60S_TMP`、`U60R_ROOT`），测试不会碰容器里真的 `/data`、`/tmp/luyaz/ship`。
 
-这些路径只有新的一套（Luya-Z 布局）；旧布局（`/data/u60-guard`、`/data/u60-ship`、`/data/u60d`）的设备装机包和 ship 都不认，要先用旧版装机包升级。
+这些路径只有新的一套（Luya-Z 布局）；旧布局（`/data/luyaz-sentinel`、`/data/u60-ship`、`/data/u60d`）的设备装机包和 ship 都不认，要先用旧版装机包升级。
 
 ## 事务号
 
 `YYYYMMDD-HHMMSS-<组件>`（Mac 上的 **UTC** 时间——设备全球用、Mac 跟着换时区，当地时间会往回走，而清理 `.prev` 靠字典序排新旧；组件名小写字母数字，1–12 个字符），例如 `20260930-143000-core`。
 正则：`^[0-9]{8}-[0-9]{6}-[a-z0-9]{1,12}$`。
 
-`.prev-<事务号>` 因此一定以 8 位数字开头；手工留的备份（`zte-agent.prev-esim-20260926`、`zwrt-datad.prev-cache-20260923`、
+`.prev-<事务号>` 因此一定以 8 位数字开头；手工留的备份（`luyaz-core.prev-esim-20260926`、`luyaz-core.prev-cache-20260923`、
 `*.orig-backup`、`admin.prev-*.tgz` 等）都不符合这个格式，清理时一律不碰。按事务号的字典序排新旧（前面是时间）。
 
 ## 组件
@@ -203,7 +203,7 @@ luyaz-recover.sh 只在「日志里的开机号 ≠ 现在的开机号」时动�
 init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来 / 起不来」处理）。sync 不设超时、只保持心跳——放弃一个没做完的 sync
 会破坏「先落盘再改名」的顺序。curl 自带 `-m`，等端口、等进程退出的循环都用带心跳的 sleep。所以执行器正常干活时心跳不会超过 30 秒。
 
-**哨兵兜底（luyaz-sentinel `worker.rs` 的 `ship_round`，G2；10c 前是 `u60-guard.sh` 的同名函数）**：事务日志在 staged/trial/promote/check/manifest/rollback，
+**哨兵兜底（luyaz-sentinel `worker.rs` 的 `ship_round`，G2；10c 前是 `luyaz-sentinel` 的同名函数）**：事务日志在 staged/trial/promote/check/manifest/rollback，
 而且心跳超过 30 秒、或心跳里的 pid 的 cmdline 不含 `-ship.sh`、或没有心跳 → 在后台起 `/data/luyaz/scripts/luyaz-ship.sh recover-live`。
 例外：组件是 sentinel 自己时不管；`staged` 且还没有心跳、暂存不到 300 秒时不管（Mac 马上会 start）；设备上没有 luyaz-ship.sh 时不管；
 上一次起的 recover-live 还在跑时不再起。
@@ -374,7 +374,7 @@ v=3 的所有规则不变，另外只有 v=4 的日志可以写 `/etc/init.d/luy
 ### 事务日志 v=5（核心的 init，manager docs/designs/u60-phase10.md 10e）
 
 v=4 的所有规则不变，另外只有 v=5 的日志可以写 `/etc/init.d/luyaz-core`；`formats` 要含 `5`（打印 `1 2 3 4 5`）。
-所以现在每一次 `ship scripts` 都是 v=5。recover 绝不放回旧路径的核心程序和起 `/etc/init.d/zwrt-datad` 的 rc.local（10e 起；原来只在有 `/data/luyaz/core/.migrated` 时，F5/6 删了这个标记，F7 收尾改成无条件）。
+所以现在每一次 `ship scripts` 都是 v=5。recover 绝不放回旧路径的核心程序和起 `/etc/init.d/luyaz-core` 的 rc.local（10e 起；原来只在有 `/data/luyaz/core/.migrated` 时，F5/6 删了这个标记，F7 收尾改成无条件）。
 
 ### luyaz-web（`lweb`，manager docs/designs/u60-web.md 第 6 步）
 

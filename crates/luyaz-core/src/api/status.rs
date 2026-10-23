@@ -1,6 +1,6 @@
-//! `/api/public/status` and `/api/health` for the touch screen (Phase 4 step 8b).
+//! `/api/public/status` and `/api/health` for the touch screen.
 //!
-//! public/status carries only what touch-ui reads (scenario.c): `alerts.unread`,
+//! public/status carries only what luyaz-ui reads (touch-ui/rs/ui/src/data/scenario.rs): `alerts.unread`,
 //! `health.{checked,bad,warn}`, `services.chill` (on, the manual-first notice, the home exit's line),
 //! `scenario`, plus `clock.utc_offset`; and `services.tailscale` for luyaz-web's top bar (8d-1c).
 //! Network, Wi-Fi, battery, SMS and device are the admin web's, which stays on the agent.

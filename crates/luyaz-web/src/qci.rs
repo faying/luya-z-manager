@@ -1,4 +1,4 @@
-//! /router/qci (QCI / 承载), the old `router/qci/page.tsx`: status (how many bearers are up), the
+//! /router/qci (QCI / 承载): status (how many bearers are up), the
 //! bearer table, the note, and the raw `AT+CGCONTRDP` output behind a toggle. Read-only.
 //!
 //! Two sources:
@@ -53,26 +53,26 @@ static CACHE: Mutex<Got> = Mutex::new(Got {
 
 pub fn label(q: i64, l: Lang) -> Option<&'static str> {
     Some(match q {
-        1 => l.pick("VoNR / VoLTE conversational voice", "VoNR / VoLTE 会话语音"),
+        1 => l.pick("Voice calls (VoNR / VoLTE)", "语音通话（VoNR / VoLTE）"),
         2 => l.pick("Conversational video", "会话视频"),
         3 => l.pick("Real-time gaming, V2X", "实时游戏、V2X"),
-        4 => l.pick("Non-conversational video buffered", "非会话视频缓冲"),
+        4 => l.pick("Buffered video streaming", "缓冲播放的视频"),
         5 => l.pick("IMS signaling", "IMS 信令"),
-        6 | 8 => l.pick("TCP-based (web, email, FTP)", "基于 TCP（网页、邮件、FTP）"),
-        7 => l.pick("Voice, video, interactive gaming", "语音、视频、交互式游戏"),
+        6 | 8 => l.pick("TCP traffic: web, mail, FTP", "TCP 流量：网页、邮件、FTP"),
+        7 => l.pick("Live voice and video, games", "实时语音视频、游戏"),
         9 => l.pick(
-            "TCP-based default (best-effort internet)",
-            "基于 TCP 的默认承载（尽力而为互联网）",
+            "Default internet, no guarantee (TCP)",
+            "默认上网，不保证带宽（TCP）",
         ),
         65 => l.pick(
-            "Mission-critical user plane push-to-talk",
-            "关键任务用户面一键通",
+            "Push-to-talk voice, mission-critical",
+            "一键通话语音（关键业务）",
         ),
-        66 => l.pick("Non-mission-critical push-to-talk", "非关键任务一键通"),
-        69 => l.pick("Mission-critical signaling", "关键任务信令"),
-        70 => l.pick("Mission-critical data", "关键任务数据"),
+        66 => l.pick("Push-to-talk, not mission-critical", "一键通话（非关键业务）"),
+        69 => l.pick("Signaling of mission-critical services", "关键业务的信令"),
+        70 => l.pick("Data of mission-critical services", "关键业务的数据"),
         79 => l.pick("V2X messages", "V2X 消息"),
-        80 => l.pick("Low-latency eMBB applications", "低时延 eMBB 应用"),
+        80 => l.pick("eMBB apps that need low latency", "要低时延的 eMBB 应用"),
         _ => return None,
     })
 }
@@ -198,7 +198,7 @@ fn bearer(c: &Value, l: Lang) -> Bearer {
     let (source_tone, source) = if measured.is_some() {
         ("ok", l.pick("measured", "实测"))
     } else if device.is_some() {
-        ("ok", l.pick("from modem", "来自调制解调器"))
+        ("ok", l.pick("modem reported", "基带报告"))
     } else {
         ("warn", l.pick("inferred from APN", "根据 APN 推断"))
     };
@@ -270,7 +270,7 @@ pub fn view(g: &Got, qos: Option<(&Value, bool)>, now_at: Instant, l: Lang) -> V
     let (tone, state, reason) = if contexts.is_empty() {
         (
             "warn",
-            l.pick("No PDP contexts active.", "没有活动的 PDP 上下文。")
+            l.pick("No PDP context is up", "没有建立的 PDP 上下文")
                 .to_string(),
             Some(
                 l.pick(
@@ -505,7 +505,7 @@ mod tests {
             {"cid":3,"bearer_id":7,"apn":"ims","qci":1,"qci_device":null,"qci_inferred":5,
              "dl_gbr_kbps":128,"ul_gbr_kbps":64}],
             "raw_cgcontrdp":"AT+CGCONTRDP\n+CGCONTRDP: 1,5,\"internet.example\"",
-            "note":"QCI is read from the modem when available."})
+            "note":"QCI comes from the modem's qci_device (the number the stock About screen shows); a dedicated bearer can add a 5QI measured over AT; with neither, it is guessed from the APN."})
     }
 
     fn got(last: Option<Result<Value, Fail>>, ok: bool) -> Got {
@@ -529,7 +529,7 @@ mod tests {
         let Table::Rows(r) = &v.table else { panic!() };
         assert_eq!(
             (r[0].q.as_str(), r[0].q_label, r[0].source),
-            ("6", "基于 TCP（网页、邮件、FTP）", "来自调制解调器")
+            ("6", "TCP 流量：网页、邮件、FTP", "基带报告")
         );
         assert_eq!((r[1].q.as_str(), r[1].source_tone), ("5", "warn"));
         assert_eq!(r[1].source, "根据 APN 推断");
@@ -581,7 +581,7 @@ mod tests {
         let v = view(&g, None, Instant::now(), Lang::Zh);
         assert_eq!(
             (v.tone, v.state.as_str()),
-            ("warn", "没有活动的 PDP 上下文。")
+            ("warn", "没有建立的 PDP 上下文")
         );
         assert_eq!(v.raw.as_deref(), Some("—"));
         // signed out: no retry, a login link

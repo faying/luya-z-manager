@@ -3,15 +3,16 @@ name = "luyaz-home-exit"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.99"
-description = "U60 Pro (MU5250) home exit engine (machine, requests, 30 s loop) run by u60d (u60-platform.md Phase 4 step 9a). Moved out of zte-agent (removed 2026-10-14); every side effect goes through a Host."
+description = "U60 Pro (MU5250) home exit engine (machine, requests, 30 s loop) run by u60d ; every side effect goes through a Host."
 license = "PolyForm-Noncommercial-1.0.0"
 publish = false
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-ureq = { version = "3", features = ["json"] }
 luyaz-api = { path = "../luyaz-api" }
+# state files and records are JSON
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+ureq = { version = "3", features = ["json"] }
 
 [dev-dependencies]
 luyaz-policy = { path = "../luyaz-policy", features = ["serde"] }

@@ -128,10 +128,10 @@ fn boot_code(e: &Value) -> Option<i64> {
 
 impl Places {
     pub fn load(dir: &Path) -> Places {
-        std::fs::read_to_string(dir.join(FILE))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        match std::fs::read_to_string(dir.join(FILE)) {
+            Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+            Err(_) => Default::default(),
+        }
     }
 
     fn stat(&mut self, net: &str, pref: &str) -> &mut Stat {

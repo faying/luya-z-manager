@@ -45,20 +45,23 @@ fn main() {
         .file("csrc/static_fns.c")
         .compile("lvgl");
 
+    // FreeType's module list (ftmodule.h), cut down to what the UI's TTF fonts need; order kept.
+    const FT_MODULES: [(&str, &str); 8] = [
+        ("FT_Module_Class", "autofit_module_class"),
+        ("FT_Driver_ClassRec", "tt_driver_class"),
+        ("FT_Driver_ClassRec", "cff_driver_class"),
+        ("FT_Module_Class", "psaux_module_class"),
+        ("FT_Module_Class", "psnames_module_class"),
+        ("FT_Module_Class", "pshinter_module_class"),
+        ("FT_Module_Class", "sfnt_module_class"),
+        ("FT_Renderer_Class", "ft_smooth_renderer_class"),
+    ];
+    let module_list: String = FT_MODULES
+        .iter()
+        .map(|(class, name)| format!("FT_USE_MODULE( {class}, {name} )\n"))
+        .collect();
+    std::fs::write(out.join("ftmodule_min.h"), module_list).unwrap();
     // after lvgl: the linker resolves lvgl's FreeType calls from what comes later
-    std::fs::write(
-        out.join("ftmodule_min.h"),
-        "FT_USE_MODULE( FT_Module_Class, autofit_module_class )
-FT_USE_MODULE( FT_Driver_ClassRec, tt_driver_class )
-FT_USE_MODULE( FT_Driver_ClassRec, cff_driver_class )
-FT_USE_MODULE( FT_Module_Class, psaux_module_class )
-FT_USE_MODULE( FT_Module_Class, psnames_module_class )
-FT_USE_MODULE( FT_Module_Class, pshinter_module_class )
-FT_USE_MODULE( FT_Module_Class, sfnt_module_class )
-FT_USE_MODULE( FT_Renderer_Class, ft_smooth_renderer_class )
-",
-    )
-    .unwrap();
     let mut b = cc::Build::new();
     b.include(ft.join("include"))
         .include(&out)

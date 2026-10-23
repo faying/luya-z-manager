@@ -1,5 +1,5 @@
-//! src/ui_parts/speedtest.c and refresh.c's 「Speedtest subpage」: 测速 on luyaz-core's own speed
-//! test. Also 性能测试 (system.c build_sub_perf, cellular.c bench_cb).
+//! 测速 on luyaz-core's own speed
+//! test. Also 性能测试.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::{Sub, Ui, SUB_VIEW};
@@ -16,9 +16,15 @@ const ST_DOWNLOAD: i32 = 2;
 const ST_UPLOAD: i32 = 3;
 pub const ST_COMPLETE: i32 = 4;
 const ST_ERROR: i32 = 6;
+const ST_ACTION_Y: i32 = 160;
+const ST_ACTION_H: i32 = 42;
+/// Same heading-to-content interval as the other touch pages.
+const ST_SECTION_H: i32 = 20;
 
 #[derive(Default)]
 pub struct Speed {
+    scroll: Obj,
+    result_card: Obj,
     phase: Obj,
     live: Obj,
     unit: Obj,
@@ -28,6 +34,7 @@ pub struct Speed {
     btn: Obj,
     btn_lbl: Obj,
     offline: Obj,
+    srv_section: Obj,
     srv_card: Obj,
     srv_hint: Obj,
     srv_row: Vec<Obj>,
@@ -64,9 +71,11 @@ impl Ui {
     pub(super) fn build_sub_speed(&mut self, p: Obj) {
         let th = t();
         let f = uf();
-        let sc = kit::scroll(p, 0, SUB_VIEW, 4 + 280 + 10 + 20 + ST_SRV_ROWS as i32 * ROW_H + 86);
-        let c = kit::card(sc, MARGIN, 4, CARD_W, 280);
+        let sc = kit::scroll(p, 0, SUB_VIEW, SUB_VIEW);
+        let c = kit::card(sc, MARGIN, 4, CARD_W, ST_ACTION_Y + ST_ACTION_H + PAD);
         let s = &mut self.st;
+        s.scroll = sc;
+        s.result_card = c;
         kit::label(c, f.cj12, th.t3, PAD, 10, tr("网络测速"));
         s.phase = kit::label_r(c, f.cj12, th.t2, CARD_W - PAD, 10, "");
         s.live = kit::label(c, f.n36, th.t1, PAD, 30, "--");
@@ -74,13 +83,13 @@ impl Ui {
         s.detail = kit::label_w(c, f.cj13, th.t2, PAD, 82, CARD_W - 2 * PAD, false, "");
         s.result = kit::label_w(c, f.n15, th.t1, PAD, 104, CARD_W - 2 * PAD, false, "");
         s.server = kit::label_w(c, f.cj12, th.t3, PAD, 128, CARD_W - 2 * PAD, false, "");
-        (s.btn, s.btn_lbl) = kit::button(c, PAD, 160, CARD_W - 2 * PAD, 42, tr("开始测速"), BtnKind::Primary, Some(speedtest_btn_cb), 0);
-        s.offline = kit::label_w(c, f.cj13, th.bad_t, PAD, 190, CARD_W - 2 * PAD, true, "");
+        (s.btn, s.btn_lbl) = kit::button(c, PAD, ST_ACTION_Y, CARD_W - 2 * PAD, ST_ACTION_H, tr("开始测速"), BtnKind::Primary, Some(speedtest_btn_cb), 0);
+        s.offline = kit::label_w(c, f.cj13, th.bad_t, PAD, ST_ACTION_Y + ST_ACTION_H + MARGIN, CARD_W - 2 * PAD, true, "");
         kit::show(s.offline, false);
 
-        kit::section(sc, 4 + 280 + 10, tr("服务器"));
-        s.srv_hint = kit::label_w(sc, f.cj12, th.t3, MARGIN + PAD, 4 + 280 + 10 + 20, CARD_W - 2 * PAD, true, "");
-        s.srv_card = kit::card(sc, MARGIN, 4 + 280 + 10 + 90, CARD_W, ST_SRV_ROWS as i32 * ROW_H);
+        s.srv_section = kit::section(sc, 0, tr("服务器"));
+        s.srv_hint = kit::label_w(sc, f.cj12, th.t3, MARGIN + PAD, 0, CARD_W - 2 * PAD, true, "");
+        s.srv_card = kit::card(sc, MARGIN, 0, CARD_W, 3 * ROW_H);
         for i in 0..ST_SRV_ROWS {
             let row = kit::bx(s.srv_card, 0, i as i32 * ROW_H, CARD_W, ROW_H, th.card, 0);
             row.set_style_bg_opa(lv::OPA_TRANSP, 0);
@@ -98,7 +107,34 @@ impl Ui {
         s.srv_name[0].set_text(tr("自动（含备用来源）"));
         s.srv_name[1].set_text("Ookla");
         s.srv_name[2].set_text("LibreSpeed");
+        self.speed_reflow();
         sc.scroll_to_y(0);
+    }
+
+    /// Result → action/recovery → server choices. Empty hints reserve no space;
+    /// wrapped recovery text and the actual list height determine the scroll end.
+    fn speed_reflow(&self) {
+        let s = &self.st;
+        let mut bottom = if s.btn.hidden() { 32 } else { ST_ACTION_Y + ST_ACTION_H };
+        if !s.offline.hidden() && !s.offline.text().is_empty() {
+            let y = if s.btn.hidden() { 32 } else { bottom + MARGIN };
+            s.offline.set_y(y);
+            s.offline.update_layout();
+            bottom = y + s.offline.height();
+        }
+        s.result_card.set_height(bottom + PAD);
+        let mut y = 4 + bottom + PAD + MARGIN;
+        s.srv_section.set_y(y);
+        y += ST_SECTION_H;
+        let hint = !s.srv_hint.text().is_empty();
+        kit::show(s.srv_hint, hint);
+        if hint {
+            s.srv_hint.set_y(y);
+            s.srv_hint.update_layout();
+            y += s.srv_hint.height() + MARGIN;
+        }
+        s.srv_card.set_y(y);
+        kit::scroll_extent(s.scroll, y + s.srv_card.style_height(0) + PAD);
     }
 
     pub(super) fn build_sub_perf(&mut self, p: Obj) {
@@ -162,8 +198,8 @@ impl Ui {
         let off = self.st.offline;
         off.set_text(self.model.st_start_error.as_deref().unwrap_or(""));
         kit::text_color(off, th.warn_t);
-        off.set_pos(PAD, 206);
         kit::show(off, true);
+        self.speed_reflow();
     }
 
     fn speedtest_srv(&mut self, i: usize) {
@@ -175,7 +211,7 @@ impl Ui {
         }
     }
 
-    /// refresh.c 「Speedtest subpage」: the progress when speedtest_poll read it, the server
+    /// the progress when speedtest_poll read it, the server
     /// list when speedtest_servers_poll did, the tick every time.
     pub(super) fn speed_paint(&mut self) {
         let th = t();
@@ -189,7 +225,6 @@ impl Ui {
                 kit::show(o, false);
             }
             kit::show(offline, true);
-            offline.set_pos(PAD, 32);
             kit::show(unit, false);
             phase_l.set_text("");
             offline.set_text(tr("设备服务没有回应，请稍后重试。"));
@@ -240,7 +275,6 @@ impl Ui {
             } else if ph == ST_ERROR && !err.is_empty() {
                 self.st.refused_at = 0;
                 kit::show(offline, true);
-                offline.set_pos(PAD, 206);
                 kit::text_color(offline, th.bad_t);
                 offline.set_text(err);
             } else {
@@ -251,7 +285,7 @@ impl Ui {
 
         // the server list (only while the page is up)
         if self.polled.servers {
-            let n = m.st_servers.len();
+            let n = m.st_servers.len().min(ST_SRV_ROWS - 3);
             self.set(self.st.srv_hint, m.st_servers_error.as_deref().unwrap_or(""));
             for i in 3..ST_SRV_ROWS {
                 let (row, name) = (self.st.srv_row[i], self.st.srv_name[i]);
@@ -270,5 +304,6 @@ impl Ui {
             let is_sel = (sel < 0 && i as i32 == -sel - 1) || (sel >= 0 && i as i32 == sel + 3);
             kit::show(ok, is_sel);
         }
+        self.speed_reflow();
     }
 }

@@ -57,9 +57,9 @@ async function own(p, ctx) {
   await p.setInputFiles("#cf-file", `${dir}/plain.txt`);
   await p.getByRole("button", { name: "查看" }).click();
   await p.waitForSelector("[role=alert]");
-  ok(/不是能识别的 ZXHN/.test(await p.textContent("[role=alert]")) && (await p.locator("#cf-h-t").count()) === 0 && (await p.locator(".cf-hex").count()) === 1, "not a config: error, no header, hex still shown");
+  ok(/没找到 ZXHN 文件头标记/.test(await p.textContent("[role=alert]")) && (await p.locator("#cf-h-t").count()) === 0 && (await p.locator(".cf-hex").count()) === 1, "not a config: error, no header, hex still shown");
   // download through the same form
-  const [dl] = await Promise.all([p.waitForEvent("download"), (async () => { await p.setInputFiles("#cf-file", `${dir}/good.zxhn`); await p.getByRole("button", { name: "下载十六进制转储" }).click(); })()]);
+  const [dl] = await Promise.all([p.waitForEvent("download"), (async () => { await p.setInputFiles("#cf-file", `${dir}/good.zxhn`); await p.getByRole("button", { name: "存成十六进制" }).click(); })()]);
   ok(dl.suggestedFilename() === "good.zxhn.hex.txt", `download name ${dl.suggestedFilename()}`);
   const body = (await import("node:fs")).readFileSync(await dl.path(), "utf8");
   ok(body.split("\n").filter(Boolean).length === 38 && body.startsWith("000000  5a 58 48 4e 02") && !body.includes("more bytes"), `full dump: ${body.split("\n").filter(Boolean).length} lines`);
@@ -72,7 +72,7 @@ async function own(p, ctx) {
   ok(/ZXWL/.test(h) && /unknown\(9\)/.test(h) && /64 bytes/.test(h) && />—</.test(h), "ZXWL, unknown(9), offset 64, signature —");
   // short file
   res = await post("/config", "s", Buffer.from("ZXHN"));
-  ok(/Not a recognized ZXHN/.test(await res.text()), "under 16 bytes: not recognised");
+  ok(/No ZXHN header marker found/.test(await res.text()), "under 16 bytes: not recognised");
   // size cap
   res = await post("/config", "big.bin", Buffer.alloc(4 * 1024 * 1024));
   ok(res.status === 200 || res.status === 413, `exactly 4 MiB: ${res.status}`);

@@ -1,4 +1,4 @@
-//! Phase 4: the policy host (u60-platform.md §1, Phase 4 step 1).
+//! The policy host (u60-platform.md §1).
 //!
 //! A policy is plain Rust in `u60-policy`, built into u60d as the built-in default. A wasm
 //! component of the same policy (crates/luyaz-plugins, precompiled to `.cwasm` by `plugc`) replaces

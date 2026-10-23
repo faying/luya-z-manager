@@ -1,5 +1,5 @@
-//! The signal page's view model, ported from web/src/lib/home.ts (`carriers`, `sigState`,
-//! `lteAnchor`, …) and lib/signalWords.ts, reading u60d's `signal` / `qos` / `interfaces` blocks
+//! The signal page's view model, (carrier list, signal state,
+//! LTE anchor, signal words), reading u60d's `signal` / `qos` / `interfaces` blocks
 //! instead of the vendor reply behind /api/network/signal. Field map (vendor → block):
 //! nr5g_rsrp→nr_rsrp, nr5g_action_band→nr_band, nr5g_action_channel→nr_channel, nr5g_bandwidth→nr_bw,
 //! wan_active_channel→lte_channel, wan_active_band→band, signalbar→bars, network_type→type,
@@ -94,7 +94,7 @@ fn strip(s: &Value, prefix: char) -> String {
         .unwrap_or(s)
 }
 
-/// Serving cell first, then the CA records (home.ts `carriers`).
+/// Serving cell first, then the CA records.
 pub fn carriers(sig: &Value) -> Vec<Carrier> {
     let mut out = Vec::new();
     if nonzero(&sig["nr_rsrp"]) {
@@ -153,7 +153,7 @@ pub enum SigState {
     Good,
 }
 
-/// home.ts `sigState` without the SIM branch (the signal page passes no SIM state).
+/// Overall signal state, without the SIM branch (the signal page passes no SIM state).
 pub fn sig_state(ever_valid: bool, valid: bool, bars: Option<i64>, sinr: Option<f64>) -> SigState {
     if !ever_valid {
         return SigState::Loading;
@@ -169,7 +169,7 @@ pub fn sig_state(ever_valid: bool, valid: bool, bars: Option<i64>, sinr: Option<
     }
 }
 
-/// lib/signalWords.ts `rsrpWord` & co.
+/// One word per reading (RSRP and the others).
 fn level(v: Option<f64>, good: f64, fair: f64, l: Lang) -> &'static str {
     match v {
         None => l.pick("No signal", "没有信号"),
@@ -259,7 +259,7 @@ pub struct Trend {
     pub hi: i64,
 }
 
-/// SVG geometry of web/src/components/signal/TrendChart.tsx.
+/// SVG geometry of the signal trend chart.
 const W: f64 = 600.0;
 const H: f64 = 160.0;
 const TOP: f64 = -70.0;
@@ -267,7 +267,7 @@ const BOTTOM: f64 = -130.0;
 const PAD_L: f64 = 40.0;
 const PAD_R: f64 = 8.0;
 const PAD_Y: f64 = 8.0;
-/// The Next.js page waits for 30 samples at 2 s (one minute); u60d's signal block comes about
+/// Wait for about one minute of data; u60d's signal block comes about
 /// every ~6 s (device recording 10-11: 105 in 594 s), so one minute is 10 samples.
 const MIN_SAMPLES: usize = 10;
 
@@ -296,7 +296,7 @@ fn trend(st: &St, l: Lang) -> Option<Trend> {
     Some(Trend { l, points, lo, hi })
 }
 
-/// `net_select_mode` in words (web/src/lib/home.ts selectionWord); other values as they are.
+/// `net_select_mode` in words; other values as they are.
 pub(crate) fn selection_word(v: &Value, l: Lang) -> String {
     match v.as_str().unwrap_or("") {
         "auto_select" => l.pick("Automatic", "自动").into(),
@@ -456,8 +456,8 @@ pub fn signal_view(st: &St, now: Instant, l: Lang) -> SignalView {
         (
             "Cell ID",
             l.pick(
-                "Unique ID of the tower sector serving you.",
-                "为你服务的基站扇区唯一 ID。",
+                "Which sector of which tower you are on.",
+                "你现在连着的是哪个基站的哪个扇区。",
             ),
             dash(cell_id.map(|v| v.to_string())),
             true,
@@ -465,8 +465,8 @@ pub fn signal_view(st: &St, now: Instant, l: Lang) -> SignalView {
         (
             "PCI",
             l.pick(
-                "Physical Cell ID — tells nearby towers apart.",
-                "物理小区标识 —— 用于区分邻近基站。",
+                "Short number that keeps neighbouring cells apart.",
+                "用来区分相邻小区的短编号。",
             ),
             dash(serving.and_then(|c| c.pci).map(|v| v.to_string())),
             true,
@@ -474,23 +474,23 @@ pub fn signal_view(st: &St, now: Instant, l: Lang) -> SignalView {
         (
             "ARFCN",
             l.pick(
-                "The radio channel number your device is tuned to.",
-                "你的设备所调谐到的无线信道号。",
+                "Number of the radio channel in use.",
+                "正在用的无线信道编号。",
             ),
             dash(serving.and_then(|c| c.arfcn).map(|v| v.to_string())),
             true,
         ),
         (
             l.pick("Band", "频段"),
-            l.pick("The frequency band currently in use.", "当前使用的频段。"),
+            l.pick("Band of the serving cell.", "服务小区所在的频段。"),
             dash(band),
             true,
         ),
         (
             l.pick("Bandwidth", "带宽"),
             l.pick(
-                "Channel width — wider generally means faster.",
-                "信道带宽 —— 越宽通常越快。",
+                "How wide the channel is; wider is usually faster.",
+                "信道有多宽，一般越宽越快。",
             ),
             dash(
                 serving
@@ -549,8 +549,8 @@ pub fn signal_view(st: &St, now: Instant, l: Lang) -> SignalView {
     cell.push((
         l.pick("Network selection", "选网方式"),
         l.pick(
-            "Whether the network is chosen automatically or manually.",
-            "网络是自动还是手动选择。",
+            "Automatic, or a network you picked by hand.",
+            "自动选网，还是你手动选的。",
         ),
         selection_word(&sig["net_select_mode"], l),
         false,

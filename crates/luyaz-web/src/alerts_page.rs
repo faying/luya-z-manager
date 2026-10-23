@@ -1,4 +1,4 @@
-//! /alerts (告警), the old `alerts/page.tsx`: what failed while nobody was watching, and where the
+//! /alerts (告警): what failed while nobody was watching, and where the
 //! alert SMS goes. The events come from the core and the sentinel (process supervisor and
 //! Wi-Fi watchdog); the core sends the SMS (the sentinel while the core is unhealthy).
 //!

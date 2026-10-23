@@ -430,10 +430,13 @@ fn journal_undo_request_is_projected() {
 
 #[test]
 fn layouts_the_firmware_cannot_run_are_seen_on_the_plan() {
-    use luyaz_wifi::layout::{refusal, NO_2G, THREE_APS};
+    use luyaz_wifi::layout::{NO_2G, THREE_APS, refusal};
     let m = uci();
     // 只关 2.4G，5G 开着：Wi-Fi 全断
-    for b in [json!({"radio2_disabled": "1"}), json!({"radio2_disabled": true})] {
+    for b in [
+        json!({"radio2_disabled": "1"}),
+        json!({"radio2_disabled": true}),
+    ] {
         let p = main_plan(&body(b), &m).unwrap();
         assert_eq!(refusal(&m, &simulate(&m, &p)), Some(NO_2G));
     }
@@ -452,8 +455,14 @@ fn layouts_the_firmware_cannot_run_are_seen_on_the_plan() {
         g.insert(k.into(), v.into());
     }
     let p = main_plan(&body(json!({"wifi_onoff": "0"})), &g).unwrap();
-    assert!(p.set.contains(&("wireless.guest_2g.disabled".into(), "1".into())));
-    assert!(p.set.contains(&("wireless.guest_5g.disabled".into(), "1".into())));
+    assert!(
+        p.set
+            .contains(&("wireless.guest_2g.disabled".into(), "1".into()))
+    );
+    assert!(
+        p.set
+            .contains(&("wireless.guest_5g.disabled".into(), "1".into()))
+    );
     assert_eq!(refusal(&g, &simulate(&g, &p)), None);
     let want = body(json!({"on": false}));
     let now = value(Kind::Main, &g, &vault()).unwrap();

@@ -1,4 +1,4 @@
-//! / (home), the old `(panel)/page.tsx` + `useBatteryEstimate.ts` (batch 5b).
+//! / (home) (batch 5b).
 //!
 //! ```text
 //!  GET /  ─▶ frame: labels, skeletons, the signal status (rows come with the first push)
@@ -142,7 +142,7 @@ impl<T> Src<T> {
         }
     }
     /// Two failures in a row, or nothing good for three intervals (at least 10 s): the old
-    /// freshness rule (lib/api/freshness.ts).
+    /// freshness rule.
     pub(crate) fn stale(&self, now: Instant) -> bool {
         self.val.is_some()
             && (self.fails >= 2
@@ -174,7 +174,7 @@ pub(crate) async fn fetch(
 struct Ts {
     installed: bool,
     running: bool,
-    /// Running but the daemon did not answer (services.rs "fake success").
+    /// Running but the daemon did not answer (a "fake success").
     error: bool,
     online: Option<bool>,
     relay: Option<String>,
@@ -856,7 +856,7 @@ impl Polled for Poll {
             self.screen.set(at, r);
         }
         if let Some(r) = ts {
-            // running but the daemon does not answer = not a valid read (freshness.ts tailscaleValid)
+            // running but the daemon does not answer = not a valid read
             self.ts.set(at, r.map(|v| ts_of(&v)).filter(|t| !(t.running && t.error)));
         }
         if let Some(r) = ni {
@@ -968,7 +968,7 @@ pub(crate) fn estimate_text(rep: &Value, l: Lang) -> Option<String> {
     })
 }
 
-/// "460-001" from mcc / mnc (lib/operatorLogo.ts normalizePlmn).
+/// "460-001" from mcc / mnc.
 fn plmn_of(o: Option<&Value>) -> Option<String> {
     let o = o?;
     let (c, n) = (o["mcc"].as_str()?.trim(), o["mnc"].as_str()?.trim());

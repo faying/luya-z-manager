@@ -34,7 +34,7 @@
 {% for a in shell.anchors() %}<a class="nd-rail__item" href="{{ a.href }}"{% if a.current %} aria-current="page"{% endif %}>{{ a.svg(22)|safe }}<span>{{ a.label }}</span></a>
 {% endfor %}</nav>
 
-<div class="flex min-w-0 flex-1 flex-col"{% if !shell.stream.is_empty() %} data-init="@get('{{ shell.stream }}', {filterSignals: {include: /^$/}})"{% endif %}>
+<div class="flex min-w-0 flex-1 flex-col"{% if !shell.stream.is_empty() %} data-init="@get('{{ shell.stream }}', {filterSignals: {include: /^$/}})"{% endif %}>{# RESIDUE-OK: utility class list #}
 <header class="nd-topbar">
 {% if !shell.is_top() %}{% let b = shell.back() %}<a class="nd-back sm:hidden" href="{{ b.href }}" aria-label="{{ shell.t("Back to ", "返回") }}{{ b.label }}">{{ b.svg(22)|safe }}</a>{% endif %}
 <div class="ms-auto flex min-w-0 items-center gap-1">

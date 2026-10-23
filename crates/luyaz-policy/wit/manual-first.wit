@@ -3,7 +3,7 @@
 // entry: change anything here and bump it.
 //
 // The machine calls out for every outside answer (`Io` in u60-policy). Across this boundary that
-// is a replay: the host passes the answers a tick got (recorded by the agent, or later by u60d
+// is a replay: the host passes the answers a tick got (recorded by u60d
 // itself) and the guest runs the tick against them, so the guest needs no imports. `replay`
 // returns the machine after, the calls the guest made with the answers it got, and the first call
 // that was not the next recorded one.

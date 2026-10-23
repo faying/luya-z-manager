@@ -146,7 +146,7 @@ do_verify() {
         esac
         case "$p" in
             /data/luyaz/web.env)
-                grep -q -e '^LUYAZ_WEB_PASSWORD=.' -e '^ZTE_AGENT_PASSWORD=.' "$B/$f" || { echo "  FAIL $p has no password line"; echo x >> "$X/bad"; } ;;
+                grep -q -e '^LUYAZ_WEB_PASSWORD=.' -e '^ZTE_AGENT_PASSWORD=.' "$B/$f" || { echo "  FAIL $p has no password line"; echo x >> "$X/bad"; } ;;  # RESIDUE-OK: key of pre-F7 archives
         esac
     done
     if [ -f "$B/wireless.uci" ]; then
@@ -189,7 +189,7 @@ do_restore() { # <archive> <root>
         cp "$X/u60-backup/$f" "$t.restore-tmp" || { echo "  FAIL $p"; continue; }
         # an archive from before F7 has the password under the old key: written under the new one
         if [ "$p" = /data/luyaz/web.env ] && ! grep -q '^LUYAZ_WEB_PASSWORD=' "$t.restore-tmp"; then
-            sed -i 's/^ZTE_AGENT_PASSWORD=/LUYAZ_WEB_PASSWORD=/' "$t.restore-tmp"
+            sed -i 's/^ZTE_AGENT_PASSWORD=/LUYAZ_WEB_PASSWORD=/' "$t.restore-tmp"  # RESIDUE-OK: key of pre-F7 archives
         fi
         mv -f "$t.restore-tmp" "$t" || { echo "  FAIL $p"; continue; }
         case "$(kind_of "$p")" in secret | json-secret | tailscale) chmod 600 "$t" ;; *) chmod 644 "$t" ;; esac

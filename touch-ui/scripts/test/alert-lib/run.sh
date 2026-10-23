@@ -4,9 +4,8 @@
 # Runs in a plain busybox container (same applets as the device):
 #   docker run --rm -v "$PWD/scripts":/scripts:ro busybox:latest sh /scripts/test/alert-lib/run.sh
 #   scripts/test/docker.sh        (runs every suite under scripts/test/)
-# The cases came from scripts/test/u60-guard/run.sh, removed with the guard
-# (manager docs/designs/u60-sentinel.md 5f; its other cases are the
-# sentinel's and the core's Rust tests now, §21).
+# Related cases live in the sentinel's and the core's Rust tests
+# (manager docs/designs/u60-sentinel.md §21).
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # ─────────────────────────────────────────────────────────────────────────────
 SCRIPTS=${SCRIPTS:-/scripts}

@@ -4,7 +4,7 @@
 //!
 //! The stateless reads are on demand, with a timeout, as `sys_reads.rs`; the writes and the AT
 //! port's routes only with u60d's writes on. The writes go through u60d's own `/control` as the caller's
-//! source, the actions the agent sends core (`zte-agent/src/core_write.rs`): `device.poweroff`,
+//! source, with these actions: `device.poweroff`,
 //! `usb.set`, and `vendor.call` for the rest. The process monitor's kill is a signal, as in the agent.
 //!
 //! The scheduler's forbidden list and the scenario's allow-list keep refusing factory reset, power

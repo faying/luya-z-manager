@@ -56,25 +56,29 @@ const GUEST_FIELDS: &[&str] = &[
     "key_fp",
 ];
 
-/// agent `wifi_set` 的 uci_map（请求体的键 → uci 路径）。
-const MAIN_MAP: &[(&str, &str)] = &[
-    ("ssid_2g", "wireless.main_2g.ssid"),
-    ("ssid_5g", "wireless.main_5g.ssid"),
-    ("key_2g", "wireless.main_2g.key"),
-    ("key_5g", "wireless.main_5g.key"),
-    ("encryption_2g", "wireless.main_2g.encryption"),
-    ("encryption_5g", "wireless.main_5g.encryption"),
-    ("hidden_2g", "wireless.main_2g.hidden"),
-    ("hidden_5g", "wireless.main_5g.hidden"),
-    ("channel_2g", "wireless.wifi0.channel"),
-    ("channel_5g", "wireless.wifi1.channel"),
-    ("txpower_2g", "wireless.wifi0.txpowerpercent"),
-    ("txpower_5g", "wireless.wifi1.txpowerpercent"),
-    ("htmode_2g", "wireless.wifi0.htmode"),
-    ("htmode_5g", "wireless.wifi1.htmode"),
-    ("radio2_disabled", "wireless.wifi0.disabled"),
-    ("radio5_disabled", "wireless.wifi1.disabled"),
-];
+/// 主 Wi-Fi 请求体的键 → uci 路径：`<项>_2g|_5g` 落到 `main_<频段>`（SSID、密码、加密、隐藏）
+/// 或 radio 节 `wifi0`/`wifi1`（信道、功率、带宽），`radio2_disabled`/`radio5_disabled` 是 radio 开关。
+/// 不认得的键 = `None`。
+fn main_path(key: &str) -> Option<String> {
+    match key {
+        "radio2_disabled" => return Some("wireless.wifi0.disabled".into()),
+        "radio5_disabled" => return Some("wireless.wifi1.disabled".into()),
+        _ => {}
+    }
+    let (item, band) = key.rsplit_once('_')?;
+    let (main, radio) = match band {
+        "2g" => ("main_2g", "wifi0"),
+        "5g" => ("main_5g", "wifi1"),
+        _ => return None,
+    };
+    let path = match item {
+        "ssid" | "key" | "encryption" | "hidden" => format!("wireless.{main}.{item}"),
+        "channel" | "htmode" => format!("wireless.{radio}.{item}"),
+        "txpower" => format!("wireless.{radio}.txpowerpercent"),
+        _ => return None,
+    };
+    Some(path)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -267,7 +271,7 @@ pub fn check_main(params: &Value) -> Result<Value, String> {
     }
     let body = params.as_object().ok_or("params must be an object")?;
     for (k, v) in body {
-        let known = MAIN_MAP.iter().any(|(b, _)| b == k)
+        let known = main_path(k).is_some()
             || matches!(k.as_str(), "country" | "wifi_onoff" | "wifi6_switch");
         let Some(s) = known.then(|| body_str(v)).flatten() else {
             continue;
@@ -300,7 +304,7 @@ pub fn check_guest(params: &Value) -> Result<Value, String> {
     Ok(pending())
 }
 
-/// agent `wifi_set` 的写：国家码（两个 radio）、逐键、总开关最后（压过 radio 开关）；只写和现状不同的。
+/// 主 Wi-Fi 的写：国家码（两个 radio）、逐键、总开关最后（压过 radio 开关）；只写和现状不同的。
 pub fn main_plan(body: &Map<String, Value>, cur: &Uci) -> Result<Plan, String> {
     if let Some(v) = body.get("wifi6_switch").and_then(body_str)
         && wifi6(&v) != wifi6(get(cur, "wireless.zte_mbb.wifi6_switch"))
@@ -317,10 +321,8 @@ pub fn main_plan(body: &Map<String, Value>, cur: &Uci) -> Result<Plan, String> {
         }
     }
     for (key, value) in body {
-        if let (Some((_, path)), Some(v)) =
-            (MAIN_MAP.iter().find(|(k, _)| k == key), body_str(value))
-        {
-            plan.put(cur, path, &v);
+        if let (Some(path), Some(v)) = (main_path(key), body_str(value)) {
+            plan.put(cur, &path, &v);
         }
     }
     if let Some(want) = body.get("wifi_onoff").and_then(body_str) {
@@ -334,7 +336,7 @@ pub fn main_plan(body: &Map<String, Value>, cur: &Uci) -> Result<Plan, String> {
     Ok(plan)
 }
 
-/// agent `guest_set` 的写（`luyaz_api::wifi::guest_set`），只写有的节（agent 用 best_effort 跳过没有的）、
+/// 访客 Wi-Fi 的写（`luyaz_api::wifi::guest_set`），只写有的节、
 /// 和现状不同的。
 pub fn guest_plan(body: &Map<String, Value>, cur: &Uci) -> Result<Plan, String> {
     let set = luyaz_api::wifi::guest_set(&serde_json::to_vec(body).expect("params serialize"))

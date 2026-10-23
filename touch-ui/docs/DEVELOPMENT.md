@@ -1,15 +1,13 @@
 # Development notes
 
-**English** · [中文](DEVELOPMENT.zh-CN.md)
-
-The touch UI is written in Rust on top of LVGL 9.5 and FreeType; it all lives in `rs/` and builds into one static program, `luyaz-ui`.
+*English · [中文](DEVELOPMENT.zh-CN.md)*. Language: Rust, with LVGL 9.5 and FreeType underneath. Everything is in `rs/`, and the result is a single static program, `luyaz-ui`.
 
 ## Where things are
 
 **Crates**
 
 | Path | What it is |
-|---|---|
+|:--|:--|
 | `rs/ui/` | The UI program |
 | `rs/plat/` | Hardware access: DRM scanout, touch, power key, backlight ([HARDWARE.md](HARDWARE.md)) |
 | `rs/lvgl-sys/` | LVGL and FreeType compiled from source plus generated bindings; settings in `../lv_conf.h` |
@@ -18,7 +16,7 @@ The touch UI is written in Rust on top of LVGL 9.5 and FreeType; it all lives in
 **Inside `rs/ui/src/`**
 
 | Path | What it is |
-|---|---|
+|:--|:--|
 | `main.rs`, `lib.rs` | Start-up and the main loop |
 | `ui/` | One file per page: five tabs (home, cellular, Wi-Fi, exit, system) and their subpages |
 | `kit.rs`, `theme.rs` | Shared widgets; light and dark themes; font loading |
@@ -35,7 +33,7 @@ If the core cannot be reached for a write, the UI falls back to the device scrip
 **Elsewhere in `touch-ui/`**
 
 | Path | What it is |
-|---|---|
+|:--|:--|
 | `patches/` | One LVGL 9.5.0 patch (synthetic bold for FreeType bitmap fonts), applied by `rs/setup-src.sh` |
 | `scripts/` | Device-side scripts: procd `*.init` files, `luyaz-ship.sh` ([SHIP.md](SHIP.md)), `luyaz-recover.sh`, `luyaz-fallback.sh`, `alert-lib.sh`, `doctor.sh` (forwards to `luyaz-core doctor`), `config-backup.sh`, `chaos.sh` and others |
 | `tools/touchsim.c` | Injects taps, swipes and key presses for remote testing ([CHILL.md](CHILL.md#不在屏幕前也能验证)) |
@@ -55,7 +53,7 @@ Details in the [README](../README.md#构建); in short:
 Chosen at start-up in `rs/ui/src/theme.rs`:
 
 | For | Tried first | Then |
-|---|---|---|
+|:--|:--|:--|
 | Chinese and body text | The device's `/usr/ui/fonts/ZTEZhengYuan.ttf` | `/data/luyaz/ui/fonts/u60-cjk-fallback.ttf`, then LVGL's built-in Montserrat, which has no Chinese |
 | Numerals | `Nunito-600/700/800.ttf` in the font directory (OFL) | The device's Roboto, then the Chinese font |
 
@@ -74,7 +72,7 @@ Tests that need the device fonts expect you to copy them from `/usr/ui/fonts/` o
 ## On the device
 
 | Path | Contents |
-|---|---|
+|:--|:--|
 | `/data/luyaz/ui/` | `luyaz-ui` (process name `luyaz-ui`), `fonts/`, `touchsim`, `ui.conf`, `chill.conf`, `operator-logos/`, `boot-trace.log`, `vendor-devui.orig-backup` (the stock UI, kept) |
 | `/data/luyaz/luyaz-sentinel` | Screen owner and watchdog (`/etc/init.d/luyaz-sentinel`; state in `/data/luyaz/screen/`) |
 | `/data/luyaz/luyaz-core` | The core (`/etc/init.d/luyaz-core`; state in `/data/luyaz/core/`) |
@@ -91,11 +89,15 @@ Two firmware behaviours make this risky:
 - a UI that crashes at start-up is escalated by the firmware into a reboot loop of the whole device;
 - a screen with no UI for a few minutes also gets the whole device rebooted.
 
-So a new build first runs under a different file name, and only moves to the live slot once it has proven stable. Two UIs must never hold `/dev/dri/card0` at the same time.
+### Side by side first
 
-`luyaz ship touch` does all of this ([SHIP.md](SHIP.md)): sentinel `hold`, start `luyaz-ui.test` beside the live one, check, replace atomically, `release`, roll back on failure. Users of the install kit run `./install.sh ui`.
+Hence every new build is first started under another file name and is moved into the live slot only after it has stayed up. At no moment may two UIs both hold `/dev/dri/card0`.
 
-Pitfalls:
+### The tool that does it
+
+`luyaz ship touch` automates the whole sequence ([SHIP.md](SHIP.md)): sentinel `hold`, start `luyaz-ui.test` beside the live one, check, replace atomically, `release`, roll back on failure. Users of the install kit run `./install.sh ui`.
+
+Traps to avoid:
 
 - Find the test process with `pidof` (it matches the process name). `pgrep -f` also matches the SSH shell running your command and kills it, so the remaining steps never run and the screen stays empty.
 - Writing to `/tmp/luyaz-screen.ctl` blocks if the sentinel is not running.

@@ -1,31 +1,40 @@
-//! Scheduled jobs, moved from zte-agent `src/scheduler.rs` (manager 84f3404): the job types
-//! (the shape of `scheduler.json`), `validate_job`, `forbidden`, `disable_forbidden`, and the
-//! due-job choice the agent's `tick` makes every 30 s, as `due`. Running the actions (and
-//! refusing a forbidden path again at that moment), saving the file and the journal stay in the
-//! host; [`record`] is the bookkeeping `tick` does with each result.
+//! Scheduled jobs: the record kept in `scheduler.json`, the checks a new or edited job must
+//! pass (`validate_job`, `forbidden`, `disable_forbidden`), the 30 s tick's choice of what is due
+//! ([`due`]) and what the tick writes back afterwards ([`record`]). Running an action (and
+//! refusing a forbidden path once more at that moment), saving the file and the journal are the
+//! host's job.
 //!
-//! Deliberate differences from the agent: `due` takes the local time (`hh`, `mm`, `dow`) as
-//! inputs; the host computes it with `localtime_r` (the device clock is local time labelled
-//! UTC, so the digits are right). Decisions are the same, except that `HH:MM` is compared as
-//! numbers ([`at_minute`]): the agent used to compare it as text against the zero-padded local
-//! time, so a job saved as `9:05` (which `validate_time` accepts) never fired.
+//! `due` is handed the local wall time (`hh`, `mm`, `dow`); the host gets it from
+//! `localtime_r` (the device keeps local time labelled UTC, so the digits are right). `HH:MM` is
+//! matched as numbers ([`at_minute`]), so `9:05` (which `validate_time` accepts) fires at 09:05.
 
 pub use crate::action::{Action, Json, is_method};
 
+/// One saved job. Field names are the keys of `scheduler.json`.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Job {
+    /// Stable number handed out on create.
     pub id: u32,
+    /// Label shown in the UI.
     pub name: String,
+    /// Off = kept but never fired.
     pub enabled: bool,
+    /// When the action fires.
     pub schedule: Schedule,
+    /// The local API call made when it fires.
     pub action: Action,
+    /// Optional second call that undoes the action later the same day.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub restore: Option<Restore>,
+    /// Device-clock second of the latest firing.
     pub last_run: Option<i64>,
+    /// HTTP status of that firing (`None` = it never got an answer).
     pub last_status: Option<u16>,
+    /// Why the latest firing failed, or why the job was switched off.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub last_error: Option<String>,
+    /// Device-clock second of the latest restore.
     pub last_restore: Option<i64>,
     #[cfg_attr(feature = "serde", serde(default))]
     pub last_restore_status: Option<u16>,
@@ -34,6 +43,7 @@ pub struct Job {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub last_restore_error: Option<String>,
+    /// Device-clock second the job was saved.
     pub created_at: i64,
 }
 
@@ -57,20 +67,18 @@ pub struct Restore {
     pub body: Option<Json>,
 }
 
+/// `H:MM` / `HH:MM`, hour 0–23, minute 0–59.
 pub fn validate_time(s: &str) -> Result<(), String> {
-    let parts: Vec<&str> = s.split(':').collect();
-    if parts.len() != 2 {
+    let Some((hour, minute)) = s.split_once(':').filter(|(_, m)| !m.contains(':')) else {
         return Err("time must be HH:MM".into());
+    };
+    let hour: u8 = hour.parse().map_err(|_| String::from("invalid hour"))?;
+    let minute: u8 = minute.parse().map_err(|_| String::from("invalid minute"))?;
+    match (hour, minute) {
+        (24.., _) => Err("hour must be 0-23".into()),
+        (_, 60..) => Err("minute must be 0-59".into()),
+        _ => Ok(()),
     }
-    let h: u8 = parts[0].parse().map_err(|_| "invalid hour".to_string())?;
-    let m: u8 = parts[1].parse().map_err(|_| "invalid minute".to_string())?;
-    if h > 23 {
-        return Err("hour must be 0-23".into());
-    }
-    if m > 59 {
-        return Err("minute must be 0-59".into());
-    }
-    Ok(())
 }
 
 /// Whether a saved `HH:MM` (with or without leading zeros, as `validate_time` accepts) is the
@@ -123,46 +131,52 @@ pub fn forbidden_msg(what: &str) -> (String, String) {
     )
 }
 
-pub fn validate_job(
-    action: &Action,
-    schedule: &Schedule,
-    restore: &Option<Restore>,
-) -> Result<(), String> {
-    if !action.path.starts_with("/api/") {
-        return Err("action.path must start with /api/".into());
+/// Path prefixes a job may not target at all, with the refusal text.
+const OFF_LIMITS: [(&str, &str); 2] = [
+    ("/api/scheduler/", "jobs may not call the scheduler API"),
+    ("/api/auth/", "jobs may not call the login API"),
+];
+
+/// Checks a job before it is saved; the `Err` text goes back to the caller as is.
+pub fn validate_job(act: &Action, when: &Schedule, undo: &Option<Restore>) -> Result<(), String> {
+    let path = act.path.as_str();
+    if !path.starts_with("/api/") {
+        return Err("action.path: only /api/ paths can be scheduled".into());
     }
-    if action.path.starts_with("/api/scheduler/") {
-        return Err("cannot schedule scheduler endpoints".into());
+    if let Some((_, why)) = OFF_LIMITS.iter().find(|(pre, _)| path.starts_with(pre)) {
+        return Err((*why).to_string());
     }
-    if action.path.starts_with("/api/auth/") {
-        return Err("cannot schedule auth endpoints".into());
-    }
-    if let Some(what) = forbidden(&action.path) {
+    if let Some(what) = forbidden(path) {
         return Err(forbidden_msg(what).0);
     }
-    if !is_method(&action.method) {
-        return Err("action.method must be GET, POST, PUT, or DELETE".into());
-    }
-    match schedule {
-        Schedule::Recurring { time, days } => {
-            validate_time(time)?;
-            if days.is_empty() {
-                return Err("days must not be empty".into());
+    let bad_when: Option<&str> = if !is_method(&act.method) {
+        Some("action.method: use GET, POST, PUT or DELETE")
+    } else {
+        match when {
+            Schedule::Recurring {
+                time: hhmm,
+                days: weekdays,
+            } => {
+                validate_time(hhmm)?;
+                if weekdays.is_empty() {
+                    Some("days must not be empty")
+                } else if weekdays.iter().any(|&d| d > 6) {
+                    Some("days: each day is 0 (Monday) to 6 (Sunday)")
+                } else {
+                    None
+                }
             }
-            if days.iter().any(|&d| d > 6) {
-                return Err("days must be 0-6 (Mon-Sun)".into());
+            // at or before 2001-09-09 is a typo or a seconds/ms mix-up, not a moment
+            Schedule::Once { at } if *at <= 1_000_000_000 => {
+                Some("once.at: not a unix time in seconds")
             }
+            Schedule::Once { .. } => None,
         }
-        Schedule::Once { at } => {
-            if *at <= 1_000_000_000 {
-                return Err("once.at must be a valid unix timestamp".into());
-            }
-        }
+    };
+    if let Some(why) = bad_when {
+        return Err(why.to_string());
     }
-    if let Some(r) = restore {
-        validate_time(&r.time)?;
-    }
-    Ok(())
+    undo.as_ref().map_or(Ok(()), |r| validate_time(&r.time))
 }
 
 /// Jobs saved before D20 that call a forbidden path: switched off, with the reason in
@@ -217,13 +231,12 @@ pub fn due(jobs: &[Job], now_ts: i64, hh: u8, mm: u8, dow: u8) -> Vec<(u32, bool
         if let Some(restore) = &job.restore
             && at_minute(&restore.time, hh, mm)
         {
-            let should_restore = match (job.last_run, job.last_restore) {
-                (Some(lr), Some(lrest)) => lr > lrest,
-                (Some(_), None) => true,
-                _ => false,
-            };
+            // pending = the action has fired and no restore has followed it yet
+            let pending = job
+                .last_run
+                .is_some_and(|ran| job.last_restore.is_none_or(|undone| ran > undone));
             let guard = job.last_restore.is_none_or(|lr| now_ts.abs_diff(lr) > 60);
-            if should_restore && guard {
+            if pending && guard {
                 out.push((job.id, true));
             }
         }

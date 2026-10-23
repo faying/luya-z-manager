@@ -1,6 +1,6 @@
 # Controls inventory, made executable: every line must be a visible label
 # (substring match) on that page, or render_test fails.
-#   <scenes>\t<page>\t<text>     scenes: *  |  a,b  |  !a,b   (tests/render/fixtures.c)
+#   <scenes>\t<page>\t<text>     scenes: *  |  a,b  |  !a,b
 # The status bar and tab bar are collected with every page.
 # Changing a format on purpose: change it here in the same commit, and say why.
 *	home	首页
@@ -166,7 +166,7 @@ good	alerts	体检
 good	alerts	短信告警
 good	alerts	没配置号码：后台挂了你不会知道
 full-charging	alerts	只剩 12 MB
-full-charging	alerts	不一致的是 zwrt-datad
+full-charging	alerts	不一致的是 core
 empty	alerts	27 项检查都正常
 good	alerts	Wi-Fi 看门狗重新打开了 Wi-Fi
 good	alerts	触屏界面闪退，已自动重新打开
@@ -236,7 +236,7 @@ good	speed	↓ 812.4 Mbps  ↑ 96.2 Mbps
 good	speed	China Telecom (Shanghai)
 good	speed	重新测速
 good	speed	服务器
-good	speed	自动（最佳服务器）
+good	speed	自动（含备用来源）
 good	speed	China Unicom · Shanghai, China
 empty	speed	连不上测速服务
 *	chill	连接
@@ -490,7 +490,7 @@ abroad	home	中華電信 · 5G SA · 漫游
 nosignal	home	SOS
 nosvc	home	无服务
 nosvc	home	正在搜网，换个位置试试
-# 电池预估（estimate.c 的文案，fixtures.c battery_est_text）
+# 电池预估
 good	system	约可用 14 小时 51 分
 lowbat	system	约可用 1 小时 32 分
 full-charging	system	已充满
@@ -618,7 +618,7 @@ home-fallback	chill	试运行 0:17
 home-fallback	chill	■ 没开成：家里 Mac 没回应
 home-nocountry	chill	读不到所在国家，版权和其余暂不显示
 home-nocountry	chill	表里还没有网站
-# USB attach mode (usbmode.c, 10-07)
+# USB attach mode
 *	system	插入手机等设备时
 *	system	每次询问
 *	usb-attach	插入的设备怎么用

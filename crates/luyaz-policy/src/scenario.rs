@@ -1,22 +1,22 @@
-//! Scenario engine decisions, moved from zte-agent `src/scenario.rs` (manager 20c3e35).
+//! Scenario engine decisions.
 //!
-//! The agent samples the surroundings (a Wi-Fi scan through a throwaway vdev, the SIM's MCC),
+//! The host samples the surroundings (a Wi-Fi scan through a throwaway vdev, the SIM's MCC),
 //! decides which scenario holds, and applies its actions on entry. This module is the deciding
 //! part: the config types, `validate`, `detect`, `decide` (hysteresis), `scan_interval`, the
 //! restore-on-exit bookkeeping (`restore_key`, `restore_action`, `due_restores`), the MCC rule,
-//! the Wi-Fi guard takeover clock, and `step`, which is one tick of the agent's `Engine::tick`
+//! the Wi-Fi guard takeover clock, and `step`, which is one tick of the engine
 //! after its inputs have been read. Applying (uci snapshots, `wifi_radio::apply`, routed HTTP
 //! actions, rollback, the sleep daemon, the RTC alarm, files) stays in the host.
 //!
-//! Deliberate differences from the agent:
-//! - Action bodies are [`Json`] instead of `serde_json::Value`; same text, same serde shape.
-//! - `takeover_state` takes monotonic seconds (`f64`) instead of `Instant`.
-//! - `scan_interval` takes `charging` instead of reading the charger itself.
-//! - `step` returns what the tick decides instead of doing it; see its doc for what the host
+//! Notes:
+//! - Action bodies are [`Json`]; same text and serde shape as `serde_json::Value`.
+//! - `takeover_state` takes monotonic seconds (`f64`).
+//! - `scan_interval` takes `charging`; it does not read the charger.
+//! - `step` returns what the tick decides; it does not do it; see its doc for what the host
 //!   does at each point. The state change `switch_to` makes once `apply` has run is
 //!   [`after_switch`], since only the host knows whether apply succeeded.
 //! - The picker/description text (`describe_*`, `picker_*`, `name_en`) is presentation and
-//!   stayed in the agent.
+//!   lives elsewhere.
 
 use std::collections::BTreeMap;
 
@@ -35,8 +35,8 @@ pub const MISS_RECHECK_DELAY_SECS: u64 = 3;
 pub const SCAN_FAILURES_BEFORE_FAIL_OPEN: u32 = 3;
 
 /// Paths a scenario is allowed to drive. An allow-list: eSIM, reboot, factory reset and
-/// everything about the cellular network itself are absent on purpose (see the agent).
-/// `/api/device/thermal` was here until step 9h (10-09, the owner's decision): a read, not an
+/// everything about the cellular network itself are absent on purpose.
+/// `/api/device/thermal` is not here (the owner's decision): a read, not an
 /// action, and u60d has no route for it; a config that still names it fails `validate`.
 pub const ALLOWED_PATHS: &[&str] = &[
     "/api/wifi/radio",
@@ -459,7 +459,7 @@ pub fn is_abroad(s: &Scenario) -> bool {
     matches!(s.detect, Detect::Mcc { .. } | Detect::Abroad)
 }
 
-/// The agent's `in_abroad_scenario`: whether a change the owner makes by hand now
+/// `in_abroad_scenario`: whether a change the owner makes by hand now
 /// (a service switched off, say) is recorded to be undone when home.
 pub fn in_abroad_scenario(cfg: &Config, enabled: bool, current: &str) -> bool {
     enabled
@@ -524,7 +524,7 @@ pub fn due_restores(pending: &[PendingRestore], next: Option<&Scenario>) -> Vec<
 
 // ── runtime state ───────────────────────────────────────────────────────────
 
-/// The agent's `state.json`.
+/// The engine's `state.json`.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RunState {
@@ -620,7 +620,7 @@ pub fn takeover_state(
 
 // ── detection ───────────────────────────────────────────────────────────────
 
-/// One network from a scan (the agent's `wifi_scan::Network`).
+/// One network from a scan (as the host's Wi-Fi scan reports it).
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Network {
@@ -738,7 +738,7 @@ pub fn decide(st: &mut RunState, detected: &str, p: &Params) -> Option<String> {
     }
 }
 
-/// Seconds between scans (the agent's `Engine::scan_interval`). `charging` is only looked at
+/// Seconds between scans (the engine's `scan_interval`). `charging` is only looked at
 /// on the away-on-battery/charger branch.
 pub fn scan_interval(cfg: &Config, current: &str, candidate: &str, charging: bool) -> u64 {
     // APs down and nobody connected (what inhibit_sleep marks): scanning is free.
@@ -762,7 +762,7 @@ pub fn scan_interval(cfg: &Config, current: &str, candidate: &str, charging: boo
 
 // ── one tick ────────────────────────────────────────────────────────────────
 
-/// What the host's scan returned. `at` is the wall-clock second the agent stamps into
+/// What the host's scan returned. `at` is the wall-clock second the host stamps into
 /// `last_scan` (its `now()` right after the scan).
 #[derive(Clone, Copy, Debug)]
 pub enum Scan<'a> {
@@ -780,7 +780,7 @@ pub enum Scan<'a> {
 
 /// The second look when the first scan missed the current Wi-Fi-detected scenario, taken
 /// [`MISS_RECHECK_DELAY_SECS`] later. A failed recheck scan adds no networks: pass an empty
-/// slice (the agent ignores the error). `at` replaces the first scan's time in `last_scan`.
+/// slice (the host ignores the error). `at` replaces the first scan's time in `last_scan`.
 #[derive(Clone, Copy, Debug)]
 pub struct Recheck<'a> {
     pub at: i64,
@@ -802,7 +802,7 @@ pub struct TickInput<'a> {
     /// Wall-clock seconds at the start of the tick (same clock as `last_scan`; real seconds
     /// keep passing across suspend, which a sleep counter would not).
     pub now: i64,
-    /// Last restore retry while pinned (wall-clock seconds; the agent's `pin_retry_at`).
+    /// Last restore retry while pinned (wall-clock seconds).
     pub pin_retry_at: i64,
     /// Charger connected (only read for the away scan interval).
     pub charging: bool,
@@ -866,7 +866,7 @@ pub struct TickOutcome {
     pub pin_retry_at: i64,
 }
 
-/// One tick of the agent's `Engine::tick` (its busy flag, file reads and logging stay in the
+/// One tick of the engine (its busy flag, file reads and logging stay in the
 /// host). Called with `Scan::NotScanned` it answers up to the scan; called with the scan (and
 /// the recheck, when asked for) it describes the whole tick, restores included.
 pub fn step(i: &TickInput) -> TickOutcome {

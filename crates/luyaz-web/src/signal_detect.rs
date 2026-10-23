@@ -1,4 +1,4 @@
-//! /router/signal-detect (信号检测), the old `router/signal-detect/page.tsx`. Loads nothing from
+//! /router/signal-detect (信号检测). Loads nothing from
 //! the device on entry (as before); Start and Stop are tier 2 (inline confirm).
 //!
 //! ```text
@@ -263,8 +263,8 @@ fn view(run: &Run, l: Lang) -> View {
             Vec::new(),
             Some(
                 l.pick(
-                    "No results available. Try detecting again.",
-                    "暂无可用结果。可以再检测一次。",
+                    "Nothing came back. Run the check again.",
+                    "这次没拿到结果，再检测一次试试。",
                 )
                 .into(),
             ),

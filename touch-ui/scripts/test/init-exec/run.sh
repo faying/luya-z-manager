@@ -22,7 +22,7 @@ for init in luyaz-core luyaz-web luyaz-sentinel; do
     check "$init: no supervise.sh" '! grep -q supervise "$F"'
     CMD=$(sed -n '/procd_set_param command/,/[^\\]$/p' "$F" | sed 's/\\$//' | tr '\n' ' ')
     LOG=$(printf '%s' "$CMD" | sed -n 's/.*exec >>\([^ ]*\) 2>&1.*/\1/p')
-    case $init in luyaz-web) want=/tmp/luyaz-web.log ;; luyaz-sentinel) want=/tmp/luyaz-sentinel.out ;; luyaz-core) want=/tmp/luyaz-core.log ;; *) want=/tmp/zwrt-datad.log ;; esac
+    case $init in luyaz-web) want=/tmp/luyaz-web.log ;; luyaz-sentinel) want=/tmp/luyaz-sentinel.out ;; luyaz-core) want=/tmp/luyaz-core.log ;; *) want=unknown ;; esac
     check "$init: output appended to $want" '[ "$LOG" = "$want" ]'
     # the same command, the log and the program swapped for the test's
     CMD=$(printf '%s' "$CMD" | sed "s#$LOG#$T/$init.log#; s/^[[:space:]]*procd_set_param command //")

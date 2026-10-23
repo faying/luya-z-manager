@@ -1,4 +1,4 @@
-//! API pieces (moved from the retired zte-agent, u60-platform.md Phase 4 step 8) shared by the
+//! API pieces shared by the
 //! core's touch compatibility layer and luyaz-web.
 
 /// Moved to its own crate (u60-sentinel.md D9); re-exported so callers keep `luyaz_api::alerts`.

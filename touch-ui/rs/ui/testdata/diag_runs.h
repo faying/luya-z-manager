@@ -1,7 +1,7 @@
 /*
  * diag_runs.h - luyaz-core diagnosis runs (GET /api/diagnose "data") in the
- * shape deep_diag.rs sends them, texts as its judge_* functions write them.
- * Used by the render fixtures (diagnose-* scenes) and tests/diag_view_test.c.
+ * shape luyaz-core sends them, texts as its judge step writes them.
+ * Used by the render fixtures (diagnose-* scenes) and diag_view.rs's tests.
  *
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */

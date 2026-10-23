@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A fake zwrt-datad for rs/smoke.sh: the device-mode binary talks to it on 127.0.0.1:9460.
+"""A stand-in luyaz-core for rs/smoke.sh: the device-mode binary talks to it on 127.0.0.1:9460.
 
   GET  /v2/state   one snapshot (signal, battery 77 %, live, sim, sms, wlan, clients …)
   GET  /v2/events  that snapshot, then heartbeats every 0.5 s, and at 1.5 s a battery block

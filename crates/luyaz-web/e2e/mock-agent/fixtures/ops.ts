@@ -1,6 +1,6 @@
 // The write-op layer (E4 T9): GET /api/ops, POST /api/ops/act, POST
 // /api/ops/write, GET /api/ops/journal. Shapes copied from the core's real view
-// (STATE_V2.md §12; touch-ui tests/op_view_test.c) and journal (V2-41).
+// (STATE_V2.md §12) and journal (V2-41).
 //
 // Off by default ("supported": false, like an older core) so the network-mode
 // page keeps its own readback in the other specs. Tests pick a state with

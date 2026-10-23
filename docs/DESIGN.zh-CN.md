@@ -66,7 +66,7 @@ Rust（`touch-ui/rs/`，经 `lvgl-sys` 用 LVGL 9.5），320×480，FreeType 渲
 
 **组件**（尺寸以 `rs/ui/src/kit.rs` 为准）：顶栏 26（时间 · 5 个信号点 · 制式 · 速率 · ▲ · 电池，速率放不下时依次换更短的写法）；浮动 tab 44（只在五个顶层页显示）；二级页标题栏 62（含顶栏，实底，圆形 ‹ 返回）；卡片圆角 20、外边距 10；列表行 40 / 两行 50，分隔线从 x=14 开始；分段按钮 30；开关 44×26；磁贴 145×78，一律白底，「开着」（CHILL 运行中、WiFi 开）= 副标题前一个绿点 + 绿字，不整块填色（整块蓝看起来像一直被选中）；状态块 72（卡片顶部，圆角 20 加一块方形补底）；底部面板圆角 22。按下：一档加深（深色主题一档变亮），松手恢复；透明底的列表行按下时铺一层 `track` 底色（只加深透明底等于没反应，2026-09-25）。动画只有两处：底部面板 180 ms 升起、二级页 150 ms 推入，`UI_ANIM=0` 全关。热区不小于 40×40。
 
-**屏幕黑着时，手指点不到任何东西**：按电源键关的屏，触摸完全无效，只有电源键能亮；自动息屏的，双击亮屏（单击、滑动、两下离得太远都不算，防口袋误触）。叫醒屏幕的那个动作（双击，或按电源键时手指正按着）不算点击，亮屏后 300 ms 内也不接收点击。规则在 touch-ui 的 `ui_logic.c` `ui_tgate_step`，有单测和渲染测试。
+**屏幕黑着时，手指点不到任何东西**：按电源键关的屏，触摸完全无效，只有电源键能亮；自动息屏的，双击亮屏（单击、滑动、两下离得太远都不算，防口袋误触）。叫醒屏幕的那个动作（双击，或按电源键时手指正按着）不算点击，亮屏后 300 ms 内也不接收点击。规则在 `touch-ui/rs/ui/src/logic.rs` `ui_tgate_step`，有单测和渲染测试。
 
 **长文本**：数值完整显示，名字用剩下的宽度并在末尾 `…`；IP、ICCID、IMEI 不截断。注意 LVGL 9 的 `…` 模式需要固定高度（`uk_label_w` 已处理），否则会换行。
 
@@ -178,7 +178,7 @@ changing、revert_fail 是写操作叠上去的（E4，核心 `screen.rs` `with_
 **回归测试**：`touch-ui/rs/build.sh test`（单测，含渲染的文字/字形/几何检查）；改页面后用 `touch-ui/rs/still.sh` / `scripts/screenshots/touch.sh` 在视图模型上看，并在设备屏幕上确认。和 C 版渲染测试逐像素比对的 `parity.sh` 及其视图模型 2026-10-21 已退役，新的视图模型以后从 Rust 触屏生成。
 
 **已知踩过的坑**：
-- `LV_USE_STDLIB_MALLOC` 曾经设成 `LV_STDLIB_BUILTIN`（LVGL 自己划一块跟系统内存完全隔离的小内存池，从 128KB 一路加到 2MB 都还在崩），根因是这个隔离本身——litehtml 版（`htmlmain.c`）直接用系统 `malloc()`，面对的是整机 690MB+ 可用内存，从不出这个问题。已经改成 `LV_STDLIB_CLIB`（真正的系统 malloc/string/sprintf），跟 litehtml 版走同一条路，`LV_MEM_SIZE` 相关配置全部移除（只对 BUILTIN 模式有效）。**这条是真正修复，之前"减少不必要的 `lv_label_set_text` 调用"那版只是缓解，不是根治**——但那个优化本身仍然保留，两个问题不是互斥的。
+- `LV_USE_STDLIB_MALLOC` 曾经设成 `LV_STDLIB_BUILTIN`（LVGL 自己划一块跟系统内存完全隔离的小内存池，从 128KB 一路加到 2MB 都还在崩），根因是这个隔离本身——litehtml 版（旧 C 触屏）直接用系统 `malloc()`，面对的是整机 690MB+ 可用内存，从不出这个问题。已经改成 `LV_STDLIB_CLIB`（真正的系统 malloc/string/sprintf），跟 litehtml 版走同一条路，`LV_MEM_SIZE` 相关配置全部移除（只对 BUILTIN 模式有效）。**这条是真正修复，之前"减少不必要的 `lv_label_set_text` 调用"那版只是缓解，不是根治**——但那个优化本身仍然保留，两个问题不是互斥的。
 - `lv_label_set_text()`/`_fmt()` 无论新文字是否跟旧文字完全相同都会整个释放再重新申请一次文字缓冲区——每次 `refresh_cb` 刷新前先跟缓存对比，值没变就跳过调用，不要无条件每秒重设几十个标签的文字。
 - 验证真机稳定性只能用"真的去读一次 `/tmp/luyaz/dumpfb` → `/tmp/fb.dump`，确认字节数正确"这种功能性检查，`pidof` 查得到进程不代表进程真的还在正常跑主循环（LVGL 断言失败是死循环不是真的退出，`pidof` 会一直查到它）。
 - `lv_slider`/`lv_button`/`lv_switch` 的构造函数默认都打开 `LV_OBJ_FLAG_SCROLL_ON_FOCUS`（配合 `lv_obj.c` 里 `LV_EVENT_FOCUSED` 的处理），某个控件在页面构建期间一旦被 focus，会自动把自己滚动进可视区域——这个项目从头到尾只用触屏，没有 group/keypad 场景，focus 驱动的滚动毫无意义，但默认值就是开着的。表现是某个页面第一次构建时莫名其妙停在滚动到一半的位置（首次访问「系统」tab 看到的第一张卡是「电池与负载」而不是最上面的「屏幕」），之后再切进来又正常，容易被当成偶发问题。凡是用 `uk_scroll` 的页面，构建函数末尾都加一行 `lv_obj_scroll_to_y(t, 0, LV_ANIM_OFF)` 钉回顶部——这行只在页面构建时跑一次，不影响用户之后自己滚动的位置。
@@ -195,7 +195,7 @@ changing、revert_fail 是写操作叠上去的（E4，核心 `screen.rs` `with_
 
 本节只写**行为和视觉**，跟用什么框架无关（Phase 8，T19）：现在的 luyaz-web 和以后的重写都照这一节。用词「页族」「三档写操作」见 `docs/ui-glossary.md` §15。现在这版的文件和组件名集中在本节末尾「当前实现」。
 
-2026-09-24 整体改版，视觉语言取 **Cohere + Figma**（参考文件和设计、工程评审记录放在仓库外，是维护者的工作笔记）。触屏仍用第 4 节自己的配色，网页**不再镜像** `ui_theme.c`。旧的 Cool Tech（`admin.css`、Outfit/DM Sans）已删除。
+2026-09-24 整体改版，视觉语言取 **Cohere + Figma**（参考文件和设计、工程评审记录放在仓库外，是维护者的工作笔记）。触屏仍用第 4 节自己的配色，网页**不再镜像** `touch-ui/rs/ui/src/theme.rs`。旧的 Cool Tech（`admin.css`、Outfit/DM Sans）已删除。
 
 **颜色只经 token**：一律用 `--nd-*` 这套 CSS 变量（名字不随框架变），页面里出现十六进制色值视为缺陷。token 只在一处定义；改了 token 必须重跑对比度检查，要求全部通过（文字 ≥4.5:1，非文字 ≥3:1）。
 
@@ -244,7 +244,7 @@ changing、revert_fail 是写操作叠上去的（E4，核心 `screen.rs` `with_
 
 **实时数据**（换成推送以后也一样）：数字变了只换数字，不重排、不闪；正在输入的框、展开的详情、待确认的操作不被新数据冲掉（DR12）；读屏只念结论和告警的变化，不念每次刷新的读数（DR13）。
 
-**当前实现（luyaz-web，Next.js 旧网页 10-15 删了，Phase 10 X13）**：token `crates/luyaz-web/static/nd/newdesign.css`；组件样式同目录 `nd.css`、`shell.css`（`src/assets.rs` 拼成一份）；对比度 `node crates/luyaz-web/tools/contrast.ts > docs/web/contrast.md`；页面表 `crates/luyaz-web/src/routes.rs`；事务条与写确认 `crates/luyaz-web/src/opbar.rs`、`crates/luyaz-web/templates/components/write.html` 及核心事务表 `crates/luyaz-core/src/ops/spec.rs`；e2e 测试 `crates/luyaz-web/e2e/`；档位清单 `docs/web/controls-inventory.md`（2026-09-24 旧网页/`zte-agent` 历史基线，其中三档分级规则继续有效）。换实现时改这一段，上面的规则不动。
+**当前实现（luyaz-web）**：token `crates/luyaz-web/static/nd/newdesign.css`；组件样式同目录 `nd.css`、`shell.css`（`src/assets.rs` 拼成一份）；对比度 `node crates/luyaz-web/tools/contrast.ts > docs/web/contrast.md`；页面表 `crates/luyaz-web/src/routes.rs`；事务条与写确认 `crates/luyaz-web/src/opbar.rs`、`crates/luyaz-web/templates/components/write.html` 及核心事务表 `crates/luyaz-core/src/ops/spec.rs`；e2e 测试 `crates/luyaz-web/e2e/`；档位清单 `docs/web/controls-inventory.md`（其中三档分级规则有效）。换实现时改这一段，上面的规则不动。
 
 ---
 

@@ -1,2 +1,2 @@
-[target.aarch64-unknown-linux-musl]
-linker = "aarch64-linux-musl-gcc"
+# A plain `cargo build --target aarch64-unknown-linux-musl` (no zigbuild) links with the musl cross gcc.
+target.aarch64-unknown-linux-musl.linker = "aarch64-linux-musl-gcc"

@@ -1,10 +1,10 @@
-//! GET `/api/netinfo[?lite=1[&apn=1][&clients=1]]` for the touch screen (Phase 4 step 8c),
+//! GET `/api/netinfo[?lite=1[&apn=1][&clients=1]]` for the touch screen,
 //! assembled by u60-api's `netinfo::page` as the agent assembles it.
 //!
 //! Where each piece comes from while the agent still runs everything (the shadow period):
 //! - the exits (`direct`, and `proxy` while CHILL runs): the agent's lookups, from the file it
 //!   writes after every refresh pass (`/tmp/netinfo-exits.json`); u60d never asks the outside
-//!   services itself until step 9
+//!   services itself
 //! - operators, roaming, network type, data: `nwinfo_get_netinfo`, the SIM (u60d's own `sim`
 //!   block, one `get_sim_info` read when it is not fresh) and `get_wwaniface`, read in a refresh
 //!   pass at most every 10 s and only because someone asked (the agent's `local_snapshot`)
@@ -14,7 +14,7 @@
 //!   the last minute
 //! - scenes: the engine's files, rendered by the shared picker
 //! - apn (full read or `apn=1`): the four `zwrt_apn_object` reads and the agent's pick file
-//! - guard, scan, `apn.switching`/`switch_error`: u60d's own writes (super::ops, step 8d), idle
+//! - guard, scan, `apn.switching`/`switch_error`: u60d's own writes (super::ops), idle
 //!   while the writes are off; while the agent registers or searches, the two replies differ there
 //! - neighbors: the fixed `unsupported` block (the vendor scan drops data)
 

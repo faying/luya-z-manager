@@ -1,7 +1,6 @@
-//! Alert SMS: the rules, the texts and the send states (u60-sentinel.md §6, D9, D15), moved from
-//! touch-ui `scripts/u60-guard.sh` (`sms_round` and its helpers). Two senders use this one copy:
-//! the core (normally) and the sentinel (only while the core is unhealthy); until the core takes
-//! the `sms` duty over, the guard keeps sending with its shell copy, so the files stay the guard's:
+//! Alert SMS: the rules, the texts and the send states (u60-sentinel.md §6, D9, D15), the one
+//! copy both senders use: the core (normally) and the sentinel (only while the core is
+//! unhealthy). The files, all under the alert directory:
 //!
 //! - `sms-done`: the highest queue seq that is finished (sent, failed, suppressed, skipped).
 //! - `sms-log`: `wall \t seq \t kind \t result`, last 100 lines (the web shows the last 10).
@@ -28,7 +27,7 @@ const RATE_KIND_S: i64 = 3600;
 const RATE_DAY_S: i64 = 86400;
 const RATE_DAY_MAX: usize = 5;
 const SMS_LOG_KEEP: usize = 100;
-/// Kinds never sent as an SMS: a failed SMS, the screen's colours, what the agent changed (MCP
+/// Kinds never sent as an SMS: a failed SMS, the screen's colours, what an MCP agent changed (MCP
 /// second phase: the agent reads it back, the owner's alert forwarding shows it), the tailnet
 /// poller (owner 10-21: web and Hermes only), a new device on the LAN (guests on the hotspot would
 /// each cost an SMS; the screen and the web show it).

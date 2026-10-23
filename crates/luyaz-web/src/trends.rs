@@ -1,6 +1,5 @@
-//! /trends (近 5 分钟): mobile speed, CPU, memory and battery as four small line charts, like the
-//! old page (`trends/page.tsx` + `MiniChart.tsx`). The old page sampled four agent endpoints every
-//! 3 s in the tab; here every value is already in u60d's `live` and `battery` blocks on the one
+//! /trends (近 5 分钟): mobile speed, CPU, memory and battery as four small line charts, drawn
+//! server-side. Every value is already in u60d's `live` and `battery` blocks on the one
 //! upstream connection, so the hub keeps one sample per `live` block for 5 minutes and the page
 //! just draws them.
 //!

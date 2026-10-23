@@ -2,12 +2,12 @@
 {% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
 {% block main %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
-<p class="nd-body mb-4">{{ l.pick("USB connection status and mode control.", "USB 连接状态与模式控制。") }}</p>
+<p class="nd-body mb-4">{{ l.pick("What the USB port is doing, and which mode it is in.", "USB 口现在的状态和模式。") }}</p>
 <div class="grid gap-6 pg-cols">
 <div class="grid content-start gap-6">
 {{ self.leaf("usb-status")|safe }}
 <section aria-labelledby="usb-mode-t"><h2 id="usb-mode-t" class="nd-group-title">{{ l.pick("USB Mode", "USB 模式") }}</h2>
-<div class="nd-group grid gap-3 p-4"><p class="nd-body">{{ l.pick("Select the USB connection mode. Changing mode will reconnect the USB interface.", "选择 USB 连接模式。更改模式将重新连接 USB 接口。") }}</p>
+<div class="nd-group grid gap-3 p-4"><p class="nd-body">{{ l.pick("Pick a mode. Switching drops the USB link for a moment while it comes back up.", "选一种模式。切换时 USB 会断开一下再重连。") }}</p>
 {{ self.leaf("usb-modes")|safe }}
 {{ mode_op|safe }}</div>
 </section>

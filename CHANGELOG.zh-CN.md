@@ -23,6 +23,25 @@
 
 - kit: 装机包带上 lanid-parse 组件（已连设备识别），装到 `/data/luyaz/core/plugins/`，只有这一个组件；没有时核心照常跑、识别关着。`LANID_CWASM=` 指定现成的。
 
+## core 1.34.1 — 2026-10-23
+
+R18-P1-04：core 空闲时少醒（每秒约少 2.6 次定时唤醒）；行为不变。
+- 计划任务、体检：一觉睡到下次该跑，不再每 2 秒 / 1 秒看一眼。
+- 充电策略：开关启动时定一次（core 运行期间不会变）。
+- 情景引擎看门狗：30 秒看一次，原来 2 秒（卡死判定是 15 分钟）。
+- 短信转发：`sms`、`signal`、`interfaces` 块有变化时马上醒；其余每 10 秒看一次（数据承载、换卡等待），原来 2 秒。
+
+## lweb 1.26.0 — 2026-10-23
+
+- lweb：/router/esim 上，切换遇到 eUICC 卡忙在重试时（core P0-3 的 catBusy 重试）显示已试几次、下次重试的时间和大约什么时候放弃（设备当地时间），并有「停止重试」按钮（第一档：只是不再等，卡上保持原来的配置；`POST /api/esim/cancel`）。按下当场回应「正在停止重试…」，随后切换的结果显示「已停止重试」。来不及（卡已经换上）或没有可停的重试都会照实说。需要：core 1.24.0（`attempts`、`/api/esim/cancel`）。
+
+## core 1.34.0, lweb 1.25.0, mcp 0.5.0 — 2026-10-22
+
+R18-P1-07：MCP 多两个只读工具，只用设备已有的数据（不新探测）。
+- core：`GET /v2/recovery/actions`，动作表自己说：每个动作的确认规则、完成证据、退回能力和什么时候退回（闭环执行、Agent 写、人写）、谁能批准（人、Agent 的层和 30 分钟限制、闭环白名单），其余 `/control` 写记为 `direct`（不走事务、不退回），`limitations`（网页确认档位按页面定，不在表里），以及白名单本身（空）和闭环还缺的进入条件。由 `ops::spec`、`api::execute::ALLOW`、`ops::agent` 生成，静态。
+- lweb：Agent 接口 `/agent-api/capabilities[?capability=<前缀>]`（被动固件能力报告按字段白名单裁剪，16 KB 以内，超了带 `truncated`；解不开的报告是 `unverified`）和 `/agent-api/recovery-actions`（旧 core：`not_described`）。
+- mcp：工具 `get_firmware_capabilities`、`explain_recovery_action`；正常回答（state ok）在网关按设备复用 30 秒（`gateway_cache_age_s`）；core 挂了、unverified、not_described 每次重新问。需要：lweb 1.25.0、core 1.34.0。
+
 ## core 1.33.7 — 2026-10-22
 
 - doctor 按清单里写的名字读记录项；改名前的旧名（`devui-fonts`、`devui-logos`、`u60d-plugins`、`u60-recover.sh`）不再对应（两台都没有了）。

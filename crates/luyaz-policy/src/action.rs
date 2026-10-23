@@ -1,11 +1,11 @@
-//! The action a scenario or a scheduled job sends (zte-agent `src/action.rs`, manager 20c3e35),
+//! The action a scenario or a scheduled job sends (stored in scenarios.json and scheduler.json),
 //! and the JSON value its body is, without serde_json so the wasm guest builds without it.
 //!
 //! `Json` only carries a body from the config to the decisions that look into it (`validate`
 //! reads `ap_2g`/`ap_5g`, `restore_key` prints the body, `restore_action` puts a saved value
 //! back). Its `Display` is serde_json's compact output byte for byte (sorted keys, raw UTF-8,
-//! the same escapes), because restore keys built from it are compared with the ones the agent
-//! wrote into `restore.json`. Numbers keep their JSON text, so `1` and `1.0` stay what they were.
+//! the same escapes), because restore keys built from it are compared with the ones already
+//! saved in `restore.json`. Numbers keep their JSON text, so `1` and `1.0` stay what they were.
 //! With the `serde` feature it (de)serialises through `serde_json::Value`.
 
 use std::collections::BTreeMap;
@@ -187,17 +187,20 @@ impl<'de> serde::Deserialize<'de> for Json {
     }
 }
 
-/// An HTTP call routed inside the agent; the shape scenarios.json and scheduler.json store.
+/// An HTTP call routed inside the core; the shape scenarios.json and scheduler.json store.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Action {
+    /// `GET`, `POST`, `PUT` or `DELETE` ([`is_method`]).
     pub method: String,
+    /// A local `/api/…` path.
     pub path: String,
+    /// Request body; none = no body.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub body: Option<Json>,
 }
 
-/// The agent's `parse_method(..).is_some()`.
+/// Whether `m` is one of the methods a job may use.
 pub fn is_method(s: &str) -> bool {
     matches!(s, "GET" | "POST" | "PUT" | "DELETE")
 }

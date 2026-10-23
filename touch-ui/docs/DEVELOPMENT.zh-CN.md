@@ -1,15 +1,13 @@
 # 开发说明
 
-[English](DEVELOPMENT.md) · **中文**
-
-触屏界面用 Rust 写，基于 LVGL 9.5 和 FreeType，全部在 `rs/` 里，编出一个静态程序 `luyaz-ui`。
+*[English](DEVELOPMENT.md) · 中文*。语言是 Rust，底下是 LVGL 9.5 和 FreeType；代码都在 `rs/`，产物是一个静态程序 `luyaz-ui`。
 
 ## 东西在哪
 
 **crate**
 
 | 路径 | 是什么 |
-|---|---|
+|:--|:--|
 | `rs/ui/` | 界面程序本身 |
 | `rs/plat/` | 硬件：DRM 显示、触摸、电源键、背光（[HARDWARE.zh-CN.md](HARDWARE.zh-CN.md)） |
 | `rs/lvgl-sys/` | 从源码编 LVGL 和 FreeType，加上生成的绑定；配置在 `../lv_conf.h` |
@@ -18,7 +16,7 @@
 **`rs/ui/src/` 里面**
 
 | 路径 | 是什么 |
-|---|---|
+|:--|:--|
 | `main.rs`、`lib.rs` | 启动和主循环 |
 | `ui/` | 一页一个文件：五个标签页（首页、蜂窝、Wi-Fi、出口、系统）和它们的二级页 |
 | `kit.rs`、`theme.rs` | 共用控件；浅色和深色主题；加载字体 |
@@ -35,7 +33,7 @@
 **`touch-ui/` 的其他部分**
 
 | 路径 | 是什么 |
-|---|---|
+|:--|:--|
 | `patches/` | 一个 LVGL 9.5.0 补丁（FreeType 位图模式下的合成粗体），由 `rs/setup-src.sh` 打上 |
 | `scripts/` | 设备端脚本：procd 的 `*.init`、`luyaz-ship.sh`（[SHIP.md](SHIP.md)）、`luyaz-recover.sh`、`luyaz-fallback.sh`、`alert-lib.sh`、`doctor.sh`（转给 `luyaz-core doctor`）、`config-backup.sh`、`chaos.sh` 等 |
 | `tools/touchsim.c` | 远程测试时注入点按、滑动和按键（[CHILL.md](CHILL.md#不在屏幕前也能验证)） |
@@ -55,7 +53,7 @@
 启动时在 `rs/ui/src/theme.rs` 里选：
 
 | 用途 | 先试 | 再退到 |
-|---|---|---|
+|:--|:--|:--|
 | 中文和正文 | 设备自带的 `/usr/ui/fonts/ZTEZhengYuan.ttf` | `/data/luyaz/ui/fonts/u60-cjk-fallback.ttf`，最后是 LVGL 内置的 Montserrat（没有中文） |
 | 数字 | 字体目录里的 `Nunito-600/700/800.ttf`（OFL） | 设备自带的 Roboto，再退到中文字体 |
 
@@ -74,7 +72,7 @@ rs/smoke.sh                            # 离屏运行设备程序，对接一个
 ## 设备上
 
 | 路径 | 内容 |
-|---|---|
+|:--|:--|
 | `/data/luyaz/ui/` | `luyaz-ui`（进程名 `luyaz-ui`）、`fonts/`、`touchsim`、`ui.conf`、`chill.conf`、`operator-logos/`、`boot-trace.log`、`vendor-devui.orig-backup`（原厂界面，保留） |
 | `/data/luyaz/luyaz-sentinel` | 屏幕主人和看门狗（`/etc/init.d/luyaz-sentinel`；状态在 `/data/luyaz/screen/`） |
 | `/data/luyaz/luyaz-core` | core（`/etc/init.d/luyaz-core`；状态在 `/data/luyaz/core/`） |
@@ -91,7 +89,11 @@ rs/smoke.sh                            # 离屏运行设备程序，对接一个
 - 界面一启动就崩溃，固件会把它升级成整机反复重启；
 - 屏幕上几分钟没有任何界面，固件也会重启整机。
 
+### 先旁路跑
+
 所以新构建先用另一个文件名跑，确认稳定后才换到正式位置。两个界面绝不能同时占着 `/dev/dri/card0`。
+
+### 由工具来做
 
 `luyaz ship touch` 把这些都做了（[SHIP.md](SHIP.md)）：哨兵 `hold`、在正式版旁边起 `luyaz-ui.test`、检查、原子替换、`release`、失败就回滚。用装机包的人跑 `./install.sh ui`。
 

@@ -507,7 +507,7 @@ fn sms_rollback_pages_whole_list() {
 
 /// u60-policy's `run_pass` (over ids and time keys only) does what this one does: random
 /// device lists, watermarks, last times, page outcomes and delivery outcomes; the same calls,
-/// commits and result (Phase 4 step 6a contract).
+/// commits and result (the policy contract).
 #[test]
 fn u60_policy_run_pass_matches() {
     use luyaz_policy::sms_forward as pol;
@@ -566,7 +566,7 @@ fn u60_policy_run_pass_matches() {
             1 => pol::Delivery::Skipped("HTTP 404 (permanent error)".into()),
             _ => pol::Delivery::Delivered,
         };
-        // the agent's
+        // this crate's
         let (mut calls, mut fwd, mut commits) = (0, Vec::new(), Vec::new());
         let a = run_pass(
             watermark,
@@ -613,7 +613,7 @@ fn u60_policy_run_pass_matches() {
 }
 
 /// Pass records as u60d gets them: pages, forwards and commits parse into u60-policy's types,
-/// and its run_pass answered from the record makes the same commits (Phase 4 step 6b).
+/// and its run_pass answered from the record makes the same commits (the replay contract).
 #[test]
 fn pass_records_replay_in_u60_policy() {
     use luyaz_policy::sms_forward as pol;

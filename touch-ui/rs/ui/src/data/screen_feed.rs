@@ -1,4 +1,4 @@
-//! luyaz-core's GET /v2/screen (src/screen_feed.c): the home signal card's and the status
+//! luyaz-core's GET /v2/screen: the home signal card's and the status
 //! bar's conclusions, computed by core from the snapshot the screen shows; read once per new
 //! snapshot (at most every 300 ms; after a failure every 5 s), and every 5 s anyway (a stuck
 //! executor never moves the snapshot, and exec_age_ms is how the screen sees that, E4).
@@ -18,7 +18,7 @@ pub const SF_FAILING: i32 = 3;
 pub const SF_STUCK_MS: i64 = 20000;
 const SF_IO_MS: i32 = 300;
 
-/// The timings (screen_feed.c's defines; tests shorten them).
+/// The timings.
 #[derive(Clone, Debug)]
 pub struct SfCfg {
     pub port: u16,
@@ -196,7 +196,6 @@ mod tests {
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    // tests/screen_feed_test.c
     #[test]
     fn one_fetch_per_snapshot_and_the_stale_limit() {
         crate::lang::set_en(false);

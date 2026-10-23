@@ -4,7 +4,7 @@
 //!
 //! Fed by the netwatch thread every 5 s with what it already read: the core's
 //! `/state`, the verdict from `/v2/screen` (`net.story.state`; core decides,
-//! the agent does not) and the modem's receive counter. Nothing here
+//! the watcher does not) and the modem's receive counter. Nothing here
 //! sends a packet.
 //!
 //! On disk, in [`DIR`] (`LUYAZ_SIGNAL_LOG` overrides), one pair of files
@@ -23,13 +23,14 @@
 //! `traffic.rx_bytes`, which (unlike `rmnet_data0`) includes client traffic
 //! that goes through IPA hardware offload (checked on the device, ER1).
 
+// (de)serialised state and records
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 
 pub const DIR: &str = "/data/signal-log";
 /// 2024-01-01 00:00 — earlier means the clock was never set.

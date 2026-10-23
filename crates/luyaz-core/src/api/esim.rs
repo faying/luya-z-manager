@@ -1,4 +1,4 @@
-//! eSIM for the touch screen and luyaz-web (Phase 4 steps 8e, 9b): `u60-esim`, the agent's own
+//! eSIM for the touch screen and luyaz-web: `u60-esim`, the agent's own
 //! engine. Only with u60d's writes on, every route included: even the profile list runs lpac on
 //! the card, and two lpac processes on one eUICC conflict. Before a switch, u60d's own `/control` is
 //! told as `screen` (D40 `op.interrupt`), as the agent tells core.

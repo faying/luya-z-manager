@@ -1,4 +1,4 @@
-//! Wi-Fi (src/ui_parts/wifi.c): the hotspot, its switches, the connected devices and DHCP.
+//! Wi-Fi: the hotspot, its switches, the connected devices and DHCP.
 //! The list and the values are drawn by refresh_wifi (cellular.rs, as in C).
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 

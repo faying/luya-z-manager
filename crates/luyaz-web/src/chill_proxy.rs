@@ -1,4 +1,4 @@
-//! CHILL dashboard (zashboard) served here, ported from the agent's `chill_proxy.rs` (8d-2):
+//! CHILL dashboard (zashboard) served by luyaz-web (8d-2):
 //! `/chill-ui/…` serves the files in `/data/chill/ui` (`--chill-ui-dir`; index.html for the
 //! root), `/chill-api/…` forwards REST and WebSocket to mihomo's controller on `127.0.0.1:9999`
 //! (chill.sh binds it there, or on 0.0.0.0 with `CHILL_API_LAN=1`; loopback reaches both).
@@ -170,11 +170,12 @@ fn mime(file: &Path) -> &'static str {
         "css" => "text/css; charset=utf-8",
         "json" => "application/json",
         "webmanifest" => "application/manifest+json",
-        "svg" => "image/svg+xml",
+        // images
+        "jpeg" | "jpg" => "image/jpeg",
         "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "ico" => "image/x-icon",
         "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
         "woff2" => "font/woff2",
         "woff" => "font/woff",
         "ttf" => "font/ttf",
@@ -198,7 +199,7 @@ fn ui(root: &Path, rest: &str) -> Response {
         data
     };
     let cache = if rest.trim_start_matches('/').starts_with("assets/") {
-        "public, max-age=31536000, immutable"
+        "public, max-age=31536000, immutable" // RESIDUE-OK: standard Cache-Control value
     } else {
         "no-cache"
     };

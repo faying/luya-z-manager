@@ -4,9 +4,9 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::clock::BootTime;
+use serde_json::Value;
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const MAX_AGE_SECONDS: u64 = 60;

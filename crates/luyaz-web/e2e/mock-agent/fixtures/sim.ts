@@ -1,6 +1,6 @@
-// SIM endpoints (sim.rs): info, IMEI, NCK trials, PIN verify / change / mode,
+// SIM endpoints (luyaz-core api/device_admin.rs sim_*/pin_*): info, IMEI, NCK trials, PIN verify / change / mode,
 // NCK unlock. All are ubus passthroughs to zwrt_zte_mdm.api; payloads follow
-// the page types (see schemas/sim.ts for what is unconfirmed).
+// what the SIM page reads (a few shapes are unconfirmed).
 //
 // Persona: a China Mobile (46000) home SIM roaming in Taiwan, PIN lock off,
 // 3 PIN / 10 PUK attempts left. IMSI / ICCID / IMEI are synthetic.

@@ -141,7 +141,7 @@ pub async fn gate(State(app): State<Shared>, req: Request, next: Next) -> Respon
         return next.run(req).await;
     }
 
-    // the old web links with a trailing slash (next.config trailingSlash): /signal/ → /signal
+    // links with a trailing slash still land: /signal/ → /signal
     if path.len() > 1
         && path.ends_with('/')
         && (own(path.trim_end_matches('/'), &app.pages)
@@ -254,7 +254,7 @@ fn login_url(next: &str) -> String {
 //
 // The session lasts 1 h, not sliding (auth.rs). A page already open keeps its push stream and its
 // buttons; without this, a reconnecting stream got a 303 to /login (Datastar drops it silently)
-// and a button a 401, and the page just stopped. Now both get one Datastar patch: the old web's
+// and a button a 401, and the page just stopped. Now both get one Datastar patch: a
 // "session expired" dialog with a link to log in and come back to this page. An open stream also
 // ends with it when its session goes (expiry or logout elsewhere), checked every few seconds.
 // Plain page loads still redirect to /login.

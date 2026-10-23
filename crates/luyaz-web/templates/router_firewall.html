@@ -3,7 +3,7 @@
 {% block main %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
 <div class="pg-col">
-<p class="nd-body">{{ l.pick("Manage firewall, NAT, DMZ, UPnP and port forwarding.", "管理防火墙、NAT、DMZ、UPnP 和端口转发。") }}</p>
+<p class="nd-body">{{ l.pick("Firewall, NAT, DMZ, UPnP and port forwards in one place.", "防火墙、NAT、DMZ、UPnP 和端口转发都在这里。") }}</p>
 {{ self.leaf("fw-status")|safe }}
 <section aria-labelledby="fw-sw-t"><h2 id="fw-sw-t" class="nd-group-title">{{ l.pick("Switches", "开关") }}</h2>
 {{ self.leaf("fw-sws")|safe }}
@@ -18,7 +18,7 @@
 {{ pf_op|safe }}
 {{ self.leaf("fw-pf")|safe }}
 {{ del_op|safe }}</section>
-<section aria-labelledby="fw-fl-t"><h2 id="fw-fl-t" class="nd-group-title">{{ l.pick("Filter Rules (read-only)", "过滤规则（只读）") }}</h2>
+<section aria-labelledby="fw-fl-t"><h2 id="fw-fl-t" class="nd-group-title">{{ l.pick("Filter rules (view only)", "过滤规则（只能看）") }}</h2>
 {{ self.leaf("fw-filter")|safe }}</section>
 </div>
 {% endblock %}

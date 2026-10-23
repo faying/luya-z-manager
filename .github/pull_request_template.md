@@ -1,10 +1,10 @@
-## What and why
+### Change
 
-<!-- What does this change, and what problem does it solve? -->
+<!-- What it does and which problem it solves. -->
 
-## How it was tested
+### Testing
 
-<!-- Unit tests, e2e, sandbox install, real device (firmware version)… -->
+<!-- Unit tests, e2e, sandbox install, real device (with firmware version)… -->
 
-- [ ] `cargo fmt` / `cargo clippy` clean
-- [ ] Docs updated where behaviour changed
+- [ ] fmt and clippy clean for the touched crates
+- [ ] docs follow behaviour changes

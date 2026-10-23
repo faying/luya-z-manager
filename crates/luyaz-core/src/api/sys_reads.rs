@@ -284,7 +284,7 @@ pub(super) async fn battery_reply(c: &Compat) -> (u16, Value) {
         }
         _ => (
             503,
-            json!({"ok": false, "error": "battery info not available"}),
+            json!({"ok": false, "error": "no battery reading yet"}),
         ),
     }
 }

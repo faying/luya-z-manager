@@ -1,22 +1,22 @@
-//! CHILL "manual first", moved from zte-agent `src/manual_first.rs` (Phase 4 step 5a).
+//! CHILL "manual first".
 //!
 //! When 🚀 节点选择 points at 🎯 手动节点 and the hand-picked node stops working while the
 //! proxy is in use, switch 🚀 to that node's region group and say so; once the node has been
-//! fine for 10 minutes, switch back. [`Machine`] and [`Io`] are the agent's, unchanged: the
-//! decisions call `Io` for every outside answer, so the agent's tests run here as they are.
+//! fine for 10 minutes, switch back. [`Machine`] calls [`Io`] for every outside
+//! answer, so the decisions are tested with a fake.
 //!
-//! Deliberate differences from the agent:
+//! Notes:
 //! - [`Machine`]'s fields are public (and serialisable with the `serde` feature): a shadow record
 //!   carries the whole machine before and after a tick, since `manual`, the counts and
 //!   `last_probe` live only in memory.
 //! - `say` does not log (the host logs from the notice).
-//! - [`Replay`] is new: an `Io` that answers from what the agent's tick got, in order, and notes
+//! - [`Replay`] is an `Io` that answers from what a recorded tick got, in order, and notes
 //!   where this copy asked something else. That is how u60d replays a tick (it must not probe
 //!   nodes itself), and how a component runs without host imports: input = machine before +
 //!   [`Obs`] + recorded answers, output = machine after + the calls made.
 //! - The mihomo helpers (connection filters, provider map), the runtime thread and the status
-//!   for the screens (`summary`, `main_to_remember`) are I/O: `crates/luyaz-manual-first` (step 9g,
-//!   moved there from the agent, which now uses this `Machine` too).
+//!   for the screens (`summary`, `main_to_remember`) are I/O: `crates/luyaz-manual-first`, which
+//!   runs this `Machine`.
 
 pub const MAIN_GROUP: &str = "🚀 节点选择";
 pub const MANUAL_GROUP: &str = "🎯 手动节点";
@@ -66,8 +66,8 @@ pub trait Io {
     fn save(&mut self, p: &Persist);
 }
 
-/// Survives an agent restart (written only on switch / return / clear). Same file shape as the
-/// agent's `/data/chill/manual-first.json`.
+/// Survives a core restart (written only on switch / return / clear). The file is
+/// `/data/chill/manual-first.json`.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Persist {
@@ -295,7 +295,7 @@ impl Machine {
  *  Replay: one recorded tick through this copy
  * -------------------------------------------------------------- */
 
-/// One `Io` call and what it answered. The agent records these in order (JSON tag `call`);
+/// One `Io` call and what it answered. The recorder keeps these in order (JSON tag `call`);
 /// [`Replay`] answers from them.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -367,7 +367,7 @@ impl Replay {
         }
     }
 
-    /// Recorded calls this copy never made (the agent asked more).
+    /// Recorded calls this copy never made (the recorded tick asked more).
     pub fn unused(&self) -> usize {
         if self.diverged.is_some() {
             0
@@ -490,8 +490,8 @@ pub struct Outcome {
     pub unused: usize,
 }
 
-/// Run one recorded tick: `before` (the agent's machine before it), the tick's [`Obs`] and the
-/// answers it got. The host compares `after` with the agent's machine after the tick.
+/// Run one recorded tick: `before` (the recorded machine before it), the tick's [`Obs`] and the
+/// answers it got. The host compares `after` with the recorded machine after the tick.
 pub fn replay(before: &Machine, obs: &Obs, recorded: Vec<Event>) -> Outcome {
     let mut m = before.clone();
     let mut io = Replay::new(recorded);

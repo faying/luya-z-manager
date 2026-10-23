@@ -1,4 +1,4 @@
-//! the core's E4 transaction view (src/op_view.c): the /v2/screen "op" object, the change log
+//! the core's E4 transaction view: the /v2/screen "op" object, the change log
 //! (journal.list) and who last changed a setting, read into plain fields. Texts come in both
 //! languages (<key>_zh / <key>_en); the screen's language picks. Field sizes as in C (a longer
 //! value is cut where C cuts it).
@@ -309,7 +309,7 @@ pub fn owner_parse(reply: &str, item: &str) -> Option<OpOwner> {
 mod tests {
     use super::*;
 
-    // tests/op_view_test.c: active verifying with rollback on; last rolled back, not acked
+    // active verifying with rollback on; last rolled back, not acked
     const OP: &str = concat!(
         "{\"rollback_enabled\":true,",
         "\"active\":{\"action\":\"network.set_mode\",\"can_keep\":true,\"can_revert\":true,\"data_ok\":false,",

@@ -1,12 +1,12 @@
-//! The alert files under `/data/alerts` (moved from zte-agent `src/alerts.rs`, Phase 4 step 8a):
+//! The alert files under `/data/alerts`:
 //! reading the queue and SMS log, the read cursor, the flags, appending an event the way
 //! `alert-lib.sh` does, the summary the web and the touch screen show, and the kind labels.
 //! luyaz-web, the core (touch compatibility layer) and luyaz-sentinel all use this one
 //! copy; its own crate since Phase 5 (u60-sentinel.md D9, was `luyaz_api::alerts`, still re-exported
 //! there).
 //!
-//! The only change from the agent: [`Alerts::summary`] takes the clock offset as an argument
-//! (the agent reads it from uci; u60d the same way through its own ubus).
+//! [`Alerts::summary`] takes the clock offset as an argument; the caller reads it from uci
+//! (u60d through its own ubus).
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -145,7 +145,7 @@ pub fn clean_name(n: &str) -> Option<String> {
         .then(|| n.to_string())
 }
 
-/// `PUT /api/alerts/sms` (the agent's, and u60d's since 8d-1c): `{"number": "+86…" | "",
+/// `PUT /api/alerts/sms` (served by u60d): `{"number": "+86…" | "",
 /// "abroad": bool, "name": "…" | ""}`, any field may be omitted; an empty number turns SMS
 /// alerts off, an empty name drops the device name from the texts.
 /// Err = (HTTP status, message).
@@ -532,9 +532,8 @@ impl Alerts {
     }
 }
 
-/// What each kind means, as the touch screen words it (moved from touch-ui
-/// alerts.c, 2026-09-26). The admin web shows these too (with
-/// [`kind_label_en`]); it no longer keeps its own copy (L2 review R8).
+/// What each kind means, as the touch screen words it. The admin web shows these too (with
+/// [`kind_label_en`]), from this one copy (L2 review R8).
 pub fn kind_label(kind: &str) -> String {
     const T: &[(&str, &str)] = &[
         ("core-crash", "数据服务意外退出，已自动重启"),
@@ -593,8 +592,7 @@ pub fn kind_label(kind: &str) -> String {
         .map_or_else(|| format!("其他告警（{kind}）"), |t| t.1.to_string())
 }
 
-/// English for [`kind_label`]. Taken from the admin web's labels
-/// (web/src/lib/alerts.ts kindLabel), with the glossary's name for the touch
+/// English for [`kind_label`]: the admin web's alert labels, with the glossary's name for the touch
 /// screen (docs/ui-glossary.md §3: Screen UI): the web is to read these
 /// instead of keeping its own copy (L2 review R8).
 pub fn kind_label_en(kind: &str) -> String {
@@ -756,8 +754,8 @@ mod tests {
         );
     }
 
-    /// The touch screen reads /api/alerts into a 32 KB buffer (touch-ui
-    /// alerts.c AL_RESP_MAX) and truncates silently; 50 events of the longest
+    /// The touch screen reads /api/alerts into a 32 KB buffer (luyaz-ui
+    /// data/alerts.rs) and truncates silently; 50 events of the longest
     /// label with a full 120-character text must still fit with room to spare.
     #[test]
     fn fifty_longest_events_fit_the_screen_buffer() {
@@ -942,7 +940,7 @@ mod tests {
         let _ = fs::remove_dir_all(&a.dir);
     }
 
-    /// zte-agent `health.rs`'s.
+    /// Same test as the core's health checks.
     fn has_cjk(s: &str) -> bool {
         s.chars().any(|c| {
             matches!(c as u32,

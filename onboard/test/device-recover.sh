@@ -95,9 +95,8 @@ setup
 sed -n '/^recover_check() {/,/^do_recover() {/p' "$K/device/install.sh" | sed '$d' >"$T/fns.sh"
 place() { (
     P=$K/payload SHIPD=$KIT_SHIP_DIR
-    log() { echo "[device] $*"; }
-    warn() { echo "[device] 注意: $*"; }
-    die() { echo "[device] 失败: $*"; exit 1; }
+    # the three helpers device/install.sh defines before these functions
+    log() { echo "[device] $*"; }; warn() { echo "[device] 注意: $*"; }; die() { echo "[device] 失败: $*"; exit 1; }
     . "$T/fns.sh"
     place_recover
 ) >"$T/out" 2>&1; RC=$?; }

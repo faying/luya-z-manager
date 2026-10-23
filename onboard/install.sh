@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ═════════════════════════════════════════════════════════════════════════════
 # Luya-Z 装机包：电脑端入口。macOS、Linux、Windows（Git Bash）都能跑。
-#
+
 # 用法（包目录里）：
 #   ./install.sh                         装全套：ssh admin ui esim（没通道时先经网页后台开 ADB）
 #   ./install.sh <组件>…                 只装点名的组件：ssh admin ui esim chill recover
@@ -13,40 +13,46 @@
 #   ./install.sh reboot                  重启设备，等它回来再看各组件是不是自己起来了（要 SSH 已通）
 #   ./install.sh backup [--with-tailscale]   配置备份到这台电脑（目录 BACKUP_DIR，默认 ./backups）
 #   ./install.sh restore <备份.tgz>          先列出会动哪些文件，输入 yes 才写（没终端时设 RESTORE_YES=1）
-#
+
 # 输入：有终端就当场问；没有终端（比如 Claude Code 代跑）就只看环境变量：
 #   ROUTER_PASSWORD   路由器管理密码，只有要经网页后台开 ADB 时才用
 #   AGENT_PASSWORD    高级后台密码；没设 = 跟路由器密码相同，设成空串 = 保留设备上现有的
 #   REBOOT=1          装完自动重启验证；REBOOT=0 或 NO_REBOOT=1 不重启（都没设时有终端才问）
 # 这几项和 GATEWAY、SSH_KEY 也能写进包目录的 u60.env（样例 u60.env.example）；环境变量里给了的优先。
 # GATEWAY 默认 192.168.0.1，SSH_KEY 默认 ~/.ssh/id_ed25519。
-#
+
 # 经网页后台开 ADB 靠固件里的 zwrt_bsp.usb set：CN B27 及更早有；国行 B31 实测没有（据说 B28 就拿掉了）。
 # ═════════════════════════════════════════════════════════════════════════════
-set -euo pipefail
+set -euo pipefail   # 出错即停、未定义变量算错、管道任一段失败都算失败
 
 # Git Bash 默认会把 /data/... 这样的参数当成 Windows 路径改写，传给 adb 就错了。整体关掉，
 # 真要给 adb.exe 本地路径时用 win_path 转（没有 cygpath 的系统原样返回）。
-export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'   # 只对 Git Bash（MSYS）有效，其他系统无影响
+
 win_path() {
   if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
 }
 
 # ── 输出 ─────────────────────────────────────────────────────────────────────
 C_RED= C_GRN= C_YLW= C_CYN= C_B= C_0=
-if [ -t 1 ]; then
+if [ -t 1 ]; then   # 输出是终端才上色
   C_RED=$'\033[0;31m' C_GRN=$'\033[0;32m' C_YLW=$'\033[1;33m' C_CYN=$'\033[0;36m' C_B=$'\033[1m' C_0=$'\033[0m'
-fi
+fi  # win_path
+
 info() { printf '%s[*]%s %s\n' "$C_CYN" "$C_0" "$1"; }
+
 ok()   { printf '%s[+]%s %s\n' "$C_GRN" "$C_0" "$1"; }
+
 warn() { printf '%s[!]%s %s\n' "$C_YLW" "$C_0" "$1"; }
+
 fail() { printf '%s[-]%s %s\n' "$C_RED" "$C_0" "$1" >&2; exit 1; }
+
 ask()  { printf '%s%s%s' "$C_CYN" "$1" "$C_0"; }   # 提示语，不换行
 
 # ── 设置：u60.env 只补没给的项 ───────────────────────────────────────────────
-KIT="$(cd "$(dirname "$0")" && pwd)"
+KIT="$(cd "$(dirname "$0")" && pwd)"   # 包目录（install.sh 所在处）
 ENV_KEYS="ROUTER_PASSWORD AGENT_PASSWORD GATEWAY REBOOT SSH_KEY"
-if [ -f "$KIT/u60.env" ]; then
+if [ -f "$KIT/u60.env" ]; then   # 有设置文件才读
   # 先记下调用方已经给了的（空串也算给了），读完文件再放回去
   keep=""
   for k in $ENV_KEYS; do
@@ -58,17 +64,17 @@ if [ -f "$KIT/u60.env" ]; then
   set +a
   eval "$keep"
   unset keep k
-fi
+fi  # ask
 
-GATEWAY="${GATEWAY:-192.168.0.1}"
-SSH_PORT=2222
-SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519}"
+GATEWAY="${GATEWAY:-192.168.0.1}"   # 设备地址
+SSH_PORT=2222   # dropbear 端口
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519}"   # 登录用的私钥
 STAGE=/data/local/tmp/u60-kit          # 设备上解包的位置（装完就删，里面有密码）
 FULL_SET="ssh admin ui esim"
 HAVE_TTY=false
 [ -t 0 ] && HAVE_TTY=true
 TTY=$HAVE_TTY
-ROUTER_PW="${ROUTER_PASSWORD:-}"
+ROUTER_PW="${ROUTER_PASSWORD:-}"   # 网页后台密码，开 ADB 时才用
 
 # ── 命令行 ───────────────────────────────────────────────────────────────────
 WITH_TS=""          # backup 的 --with-tailscale
@@ -84,29 +90,32 @@ fi
 COMPONENTS="${*:-$FULL_SET}"
 
 MODE=install        # install | status | doctor | reboot | backup | restore
-case "$COMPONENTS" in
+case "$COMPONENTS" in   # 先分出模式，再逐个校验组件名
   status|doctor|reboot|backup|restore) MODE=$COMPONENTS ;;
   *)
-    for c in $COMPONENTS; do
-      case "$c" in
+    for c in $COMPONENTS; do   # 每个名字都要认识
+      case "$c" in   # 组件名
         status|doctor|reboot) fail "status / doctor / reboot 要单独跑，不能和组件混在一起" ;;
         ssh|admin|ui|esim|chill|recover) ;;
         *) fail "不认识的组件: ${c}（可选 ssh admin ui esim chill recover，或 status / doctor / reboot）" ;;
       esac
-    done ;;
-esac
+    done ;;  # ask
+esac  # ask
 INSTALLING=false
 [ "$MODE" != install ] || INSTALLING=true
+
 picked() { case " $COMPONENTS " in *" $1 "*) return 0 ;; esac; return 1; }
 
 # ── 电脑上的工具 ─────────────────────────────────────────────────────────────
 require() { # <命令> <去哪弄>
   command -v "$1" >/dev/null 2>&1 || fail "缺少 $1 —— $2"
 }
+
 require ssh "Windows 用 Git Bash 自带的；Linux: apt install openssh-client"
 require ssh-keygen "同 ssh"
 require curl "系统一般自带"
 require tar "系统一般自带"
+
 require_adb() {
   require adb "macOS: brew install android-platform-tools；Windows: 下载 Google platform-tools 并加进 PATH；Linux: apt install adb"
 }
@@ -115,37 +124,39 @@ sha256() { # 标准输入 → 十六进制摘要
   local line
   if command -v sha256sum >/dev/null 2>&1; then line=$(sha256sum); else line=$(shasum -a 256); fi
   printf '%s\n' "${line%% *}"
-}
+}  # sha256
 
 # ── 包完整性：MANIFEST.txt 里每一行「摘要  路径」都要对得上 ──────────────────
 check_kit() {
-  info "校验装机包文件…"
+  info "校验装机包文件…"   # MANIFEST.txt 逐行比 sha256
   local want path got
   while read -r want path; do
     [ -f "$KIT/$path" ] || fail "包里缺文件: ${path}（包不完整，重新解压一次）"
     got=$(sha256 < "$KIT/$path")
     [ "$got" = "$want" ] || fail "文件损坏: ${path}（重新下载装机包）"
   done < <(grep -E '^[0-9a-f]{64}  ' "$KIT/MANIFEST.txt")
-  ok "装机包完整。"
+  ok "装机包完整。"   # 全部对上
 }
 
 # ── SSH ──────────────────────────────────────────────────────────────────────
 # 192.168.0.1 这个地址很多路由器都用，host key 单独存一个文件，不和 ~/.ssh/known_hosts 打架
-KNOWN="$HOME/.ssh/known_hosts_u60"
+KNOWN="$HOME/.ssh/known_hosts_u60"   # U60 专用 known_hosts
 SSH_OPTS=(-p "$SSH_PORT" -i "$SSH_KEY"
           -o IdentitiesOnly=yes -o ConnectTimeout=6 -o LogLevel=ERROR
-          -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$KNOWN"
+          -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$KNOWN"   # 第一次见到就记下
           -o ServerAliveInterval=5 -o ServerAliveCountMax=3)
+
 ssh_ok() {
   [ -f "$SSH_KEY" ] || return 1
   ssh "${SSH_OPTS[@]}" -o BatchMode=yes "root@$GATEWAY" true </dev/null >/dev/null 2>&1
 }
+
 ensure_key() { # 装机时才需要公钥；没有就新建一把无密码短语的
   if [ ! -f "$SSH_KEY" ]; then
-    info "生成 SSH 密钥 $SSH_KEY …"
-    mkdir -p "$(dirname "$SSH_KEY")"
+    info "生成 SSH 密钥 $SSH_KEY …"   # ed25519，无密码短语
+    mkdir -p "$(dirname "$SSH_KEY")"   # 目录可能还不存在
     ssh-keygen -q -t ed25519 -N "" -C "u60-$(whoami)" -f "$SSH_KEY" >/dev/null
-  fi
+  fi  # ensure_key
   [ -f "$SSH_KEY.pub" ] || fail "找不到公钥 $SSH_KEY.pub"
 }
 
@@ -155,9 +166,11 @@ adb_ready() { # 至少一台处于 device 状态
   n=$(adb devices 2>/dev/null | grep -c 'device$' || true)
   [ "${n:-0}" -ge 1 ]
 }
+
 adb_listed() { # 列表里的所有设备，未授权、离线的也算（它们一样会让 adb shell 不知道选哪台）
   adb devices 2>/dev/null | awk 'NR > 1 && NF >= 2 { n++ } END { print n + 0 }'
 }
+
 adb_is_u60() { # root，而且有中兴的 ubus 对象：别把 root 脚本推到手机上
   adb shell '[ "$(id -u)" = 0 ] && ubus list zwrt_bsp.usb >/dev/null 2>&1 && echo U60_OK' 2>/dev/null | grep -q U60_OK
 }
@@ -171,9 +184,11 @@ rpc() { # <session> <object> <method> <参数 JSON>
        -H "Origin: http://$GATEWAY" -H "Referer: http://$GATEWAY/" \
        -d "$body" "http://$GATEWAY/ubus/?t=$(date +%s)"
 }
+
 json_get() { # <键>：从标准输入的 JSON 里取第一个同名标量（字符串或数字）
   sed -n "s/.*\"$1\":\"\\{0,1\\}\\([^\",}]*\\).*/\\1/p"
 }
+
 login_hash() { # <密码> <salt> → 网页后台要的 SHA256(SHA256(密码) 大写十六进制 + salt)，大写
   local h
   h=$(printf '%s' "$1" | sha256 | tr 'a-f' 'A-F')
@@ -182,9 +197,9 @@ login_hash() { # <密码> <salt> → 网页后台要的 SHA256(SHA256(密码) �
 
 adb_via_web() {
   local nobody=00000000000000000000000000000000 reply salt tries locked sid ver waited
-  info "通过网页后台开启 ADB（电脑要连着 U60 的 Wi-Fi）…"
+  info "通过网页后台开启 ADB（电脑要连着 U60 的 Wi-Fi）…"   # 步骤：登录信息 → 登录 → 切 USB 调试
   reply=$(rpc "$nobody" zwrt_web web_login_info '{}') \
-    || fail "连不上 http://$GATEWAY —— 电脑连的是这台 U60 的 Wi-Fi 吗？代理/VPN 开着 TUN/增强模式的话，把 192.168.0.0/16 设成直连；地址不是 $GATEWAY 的话用 GATEWAY=… ./install.sh"
+    || fail "连不上 http://$GATEWAY —— 电脑连的是这台 U60 的 Wi-Fi 吗？代理/VPN 开着 TUN/增强模式的话，把 192.168.0.0/16 设成直连；地址不是 $GATEWAY 的话用 GATEWAY=… ./install.sh"   # 网页后台都连不上
   salt=$(json_get zte_web_sault <<<"$reply")
   tries=$(json_get login_fail_num <<<"$reply")
   locked=$(json_get login_fail_lock_lefttime <<<"$reply")
@@ -194,61 +209,57 @@ adb_via_web() {
   fi
 
   # 密码要在真正登录之前拿到；没有就停，不浪费一次登录机会
-  if [ -z "$ROUTER_PW" ]; then
+  if [ -z "$ROUTER_PW" ]; then   # 环境变量/u60.env 都没给
     $HAVE_TTY || fail "需要路由器管理密码：设置 ROUTER_PASSWORD 环境变量或写进 u60.env（剩余可试 ${tries:-?} 次）"
     ask "路由器管理密码（机身背面/网页登录用的那个，剩余可试 ${tries:-?} 次）: "
-    read -rs ROUTER_PW; echo
-    [ -n "$ROUTER_PW" ] || fail "密码不能为空"
-  fi
-
+    read -rs ROUTER_PW; echo   # 不回显，读完补一个换行
+    [ -n "$ROUTER_PW" ] || fail "密码不能为空"   # 空回车不算
+  fi  # adb_via_web
   sid=$(rpc "$nobody" zwrt_web web_login "{\"password\":\"$(login_hash "$ROUTER_PW" "$salt")\"}" | json_get ubus_rpc_session)
   if [ -z "$sid" ]; then
     tries=$(rpc "$nobody" zwrt_web web_login_info '{}' | json_get login_fail_num)
     fail "登录失败，路由器管理密码不对（还能试 ${tries:-?} 次，用完会锁一段时间；别盲目重试）"
-  fi
-  ok "已登录网页后台。"
-
+  fi  # adb_via_web
+  ok "已登录网页后台。"   # 拿到 session
   ver=$(rpc "$sid" zwrt_web device_info '{}' | json_get wa_inner_version)
   [ -z "$ver" ] || info "固件版本: $ver"
-
   reply=$(rpc "$sid" zwrt_bsp.usb set '{"mode":"debug"}')
   case "$reply" in
-    *'"result":[0'*) ok "已切到 USB 调试模式。" ;;
+    *'"result":[0'*) ok "已切到 USB 调试模式。" ;;   # ubus 返回 0 = 成功
     *) fail "开 ADB 被拒绝：这版固件的 zwrt_bsp.usb 可能没有 set 方法（国行 B31 实测没有；B28 起据称就删了），本包不适用：$reply" ;;
-  esac
-
-  info "等 ADB 设备出现（用 USB-C 数据线把 U60 接到这台电脑；最多等 90 秒）…"
+  esac  # adb_via_web
+  info "等 ADB 设备出现（用 USB-C 数据线把 U60 接到这台电脑；最多等 90 秒）…"   # 每 3 秒看一次
   waited=0
   until adb_ready; do
     [ "$waited" -lt 90 ] || fail "90 秒内没看到 ADB 设备。换根能传数据的线/换个 USB 口；Windows 可能要装 ADB 驱动（见 README）"
     sleep 3; waited=$((waited + 3))
-  done
-  ok "ADB 已连接。"
-}
+  done  # adb_via_web
+  ok "ADB 已连接。"   # adb devices 里出现了
+}  # adb_via_web
 
 # ── 选通道：先 SSH，再 ADB；装机时两样都没有就经网页后台开 ADB ──────────────
 pick_channel() {
-  if ssh_ok; then
-    CH=ssh; ok "SSH 已经能登录，走 SSH。"
+  if ssh_ok; then   # SSH 优先
+    CH=ssh; ok "SSH 已经能登录，走 SSH。"   # 不需要 ADB
     return
   fi
   [ "$MODE" != reboot ] || fail "SSH 不通，没法做重启验证（先跑 ./install.sh，或确认电脑连着 U60 的 Wi-Fi）"
   if ! $INSTALLING && ! command -v adb >/dev/null 2>&1; then
-    fail "SSH 不通（电脑连着 U60 的 Wi-Fi 吗？），这台电脑也没装 adb"
-  fi
+    fail "SSH 不通（电脑连着 U60 的 Wi-Fi 吗？），这台电脑也没装 adb"   # 非装机模式不去开 ADB
+  fi  # pick_channel
   require_adb
   if adb_ready; then
     ok "检测到 ADB 设备，走 ADB。"
   elif $INSTALLING; then
     adb_via_web
-  else
+  else  # pick_channel
     fail "SSH 和 ADB 都不通，先跑一次 ./install.sh"
-  fi
+  fi  # pick_channel
   CH=adb
   if [ "$(adb_listed)" -gt 1 ] && [ -z "${ANDROID_SERIAL:-}" ]; then
-    fail "电脑上接了不止一个 ADB 设备（含未授权/离线的），拔掉别的（或设置 ANDROID_SERIAL）再试"
-  fi
-  adb_is_u60 || fail "ADB 连着的设备不是 U60（或者没有 root）。拔掉手机等其他安卓设备再试"
+    fail "电脑上接了不止一个 ADB 设备（含未授权/离线的），拔掉别的（或设置 ANDROID_SERIAL）再试"   # 免得推到别的设备
+  fi  # pick_channel
+  adb_is_u60 || fail "ADB 连着的设备不是 U60（或者没有 root）。拔掉手机等其他安卓设备再试"   # 最后确认是 U60
 }
 
 # ── 和设备打交道（两种通道一个样）────────────────────────────────────────────
@@ -257,7 +268,7 @@ dev_run() { # <命令>：在设备上跑，输出原样
     ssh) ssh "${SSH_OPTS[@]}" "root@$GATEWAY" "$1" </dev/null ;;
     *)   adb shell "$1" ;;
   esac
-}
+}  # dev_run
 
 push_file() { # <本机文件> <设备路径>
   case "$CH" in
@@ -268,15 +279,15 @@ push_file() { # <本机文件> <设备路径>
 
 show_status() { # 只把设备端脚本放到 /tmp 跑 status，不推整个包
   local tmp=/tmp/u60-kit-status.sh
-  if [ "$CH" = ssh ]; then
+  if [ "$CH" = ssh ]; then   # 两种通道各自推送
     push_file "$KIT/device/install.sh" "$tmp" \
-      || fail "读状态失败：SSH 推送状态脚本没成功（刚连过的话等 20 秒再试）"
-  else
+      || fail "读状态失败：SSH 推送状态脚本没成功（刚连过的话等 20 秒再试）"   # dropbear 限速时常见
+  else  # show_status
     push_file "$KIT/device/install.sh" "$tmp" || fail "读状态失败：adb push 没成功"
-  fi
+  fi  # show_status
   dev_run "sh $tmp status; rm -f $tmp" | tr -d '\r' \
-    || fail "读状态失败：设备上执行状态脚本没成功"
-}
+    || fail "读状态失败：设备上执行状态脚本没成功"   # 运行这一步失败
+}  # show_status
 
 show_doctor() { # 体检脚本是独立的：推包里那份到 /tmp 直接跑，没装过 guard 的设备也能查
   # doctor.sh 是薄壳：转给设备上 /data/luyaz/luyaz-core 的 doctor（没装核心就报错退出）
@@ -355,24 +366,24 @@ do_restore() {
 }
 
 # 重启并等 SSH 回来。等待按经过的秒数算（每次 ssh_ok 自己最多还要 6 秒），总共约 4 分钟。
-reboot_verify() {
+reboot_verify() {   # 重启 → 等 SSH → 看状态和体检
   local give_up
-  dev_run "reboot" >/dev/null 2>&1 || true
-  info "已发出重启，等它回来（最多 4 分钟）…"
-  sleep 30
+  dev_run "reboot" >/dev/null 2>&1 || true   # 连接会被断开，退出码不算数
+  info "已发出重启，等它回来（最多 4 分钟）…"   # 先睡 30 秒再开始探
+  sleep 30   # 关机本身要一会儿，太早探会误以为还活着
   give_up=$((SECONDS + 210))
   while ! ssh_ok; do
     [ "$SECONDS" -lt "$give_up" ] || fail "4 分钟没连回来。等屏幕亮起、电脑重新连上 U60 的 Wi-Fi 后跑 ./install.sh status 看看"
-    sleep 5
-  done
-  ok "重启后 SSH 自动恢复。"
+    sleep 5   # 探测间隔
+  done  # reboot_verify
+  ok "重启后 SSH 自动恢复。"   # 开机自启的 dropbear 正常
   sleep 15            # rc.local 里界面和后台排在最后，给它们一点时间
-  CH=ssh
-  show_status
+  CH=ssh   # 重启后一律走 SSH
+  show_status   # 各组件现状
   echo
   info "体检："
   show_doctor || true
-}
+}  # reboot_verify
 
 # ── 装机：密码 → 组装 → 推送 → 设备端安装 ───────────────────────────────────
 # 高级后台密码。拿不到、设备上又没装过后台：推送之前就停（不然到设备端才失败，ui/esim 也跟着没装）。
@@ -381,24 +392,24 @@ admin_password() { # <暂存目录>
   if [ "${AGENT_PASSWORD+set}" = set ]; then
     pw=$AGENT_PASSWORD
   elif $HAVE_TTY; then
-    echo
+    echo ""   # 和上面的输出隔开
     ask "高级后台（http://$GATEWAY:9090）登录密码"
     [ -z "$ROUTER_PW" ] || ask "（直接回车 = 和路由器管理密码一样）"
     ask ": "
     read -rs pw; echo
     pw=${pw:-$ROUTER_PW}
-  else
+  else  # admin_password
     pw=$ROUTER_PW
-  fi
+  fi  # admin_password
   if [ -z "$pw" ]; then
     dev_run '[ -s /data/luyaz/web.env ] && echo AGENT_INSTALLED' 2>/dev/null | grep -q AGENT_INSTALLED \
-      || fail "需要高级后台密码：设备上还没装过后台。设置 AGENT_PASSWORD（或 ROUTER_PASSWORD，两者相同时）再跑"
-    warn "没有后台密码：沿用设备上已有的。"
+      || fail "需要高级后台密码：设备上还没装过后台。设置 AGENT_PASSWORD（或 ROUTER_PASSWORD，两者相同时）再跑"   # 推送前就停
+    warn "没有后台密码：沿用设备上已有的。"   # web.env 已经有了
     return 0
   fi
   case "$pw" in
     *[\'\"\\\ ]*) fail "后台密码不能含引号、反斜杠或空格（设备上的 /data/luyaz/web.env 按原样存它，管理网页 luyaz-web 按原样读）" ;;
-  esac
+  esac  # admin_password
   # 设备端 web-auth.sh migrate 把它写成 /data/luyaz/web.env（600）
   printf "export LUYAZ_WEB_PASSWORD='%s'\n" "$pw" > "$1/web-password.env"
 }
@@ -407,8 +418,8 @@ admin_password() { # <暂存目录>
 stage_payload() { # <暂存目录>
   local out=$1 from="$KIT/payload" c
   with_scripts() { [ -d "$out/scripts" ] || cp -R "$from/scripts" "$out/"; }
-  for c in $COMPONENTS; do
-    case "$c" in
+  for c in $COMPONENTS; do   # 按选中的组件逐个放
+    case "$c" in   # 每个组件要的文件
       ssh)
         cp "$from/dropbear" "$out/"
         cp "$SSH_KEY.pub" "$out/authorized_keys" ;;
@@ -429,32 +440,32 @@ stage_payload() { # <暂存目录>
       chill)
         [ -d "$from/chill" ] || fail "这个装机包没带 CHILL（打包时 CHILL=0？）"
         cp -R "$from/chill" "$out/" ;;
-    esac
-  done
+    esac  # stage_payload
+  done  # stage_payload
 }
 
 ship_to_device() { # <含 u60-kit/ 的目录>
-  info "推送到设备（${CH}）…"
-  if [ "$CH" = ssh ]; then
+  info "推送到设备（${CH}）…"   # 整个 u60-kit/ 目录
+  if [ "$CH" = ssh ]; then   # ssh：tar 流直接解到设备
     tar czf - -C "$1" u60-kit | ssh "${SSH_OPTS[@]}" "root@$GATEWAY" \
-      "rm -rf $STAGE && mkdir -p /data/local/tmp && tar xzf - -C /data/local/tmp"
-  else
-    adb shell "rm -rf $STAGE && mkdir -p /data/local/tmp" >/dev/null
+      "rm -rf $STAGE && mkdir -p /data/local/tmp && tar xzf - -C /data/local/tmp"   # 设备上先清掉旧的暂存
+  else  # ship_to_device
+    adb shell "rm -rf $STAGE && mkdir -p /data/local/tmp" >/dev/null   # adb：先清暂存再 push 目录
     adb push "$(win_path "$1/u60-kit")" /data/local/tmp/ >/dev/null || fail "adb push 失败"
-  fi
-  ok "已推送。"
+  fi  # ship_to_device
+  ok "已推送。"   # 文件都在 $STAGE 了
 }
 
 # adb shell 的退出码靠不住：设备端成功时最后打印一行 __U60_KIT_OK__，看有没有这一行。
 # 不管成败都删掉设备上的暂存包（里面有密码）。KIT_MAC_TIME：设备清单用电脑的时间（刚开机的设备时钟可能不对）。
 run_on_device() { # <日志文件>
-  echo
+  echo ""   # 空一行
   printf '%s── 设备端安装：%s ──%s\n' "$C_B" "$COMPONENTS" "$C_0"
   dev_run "KIT_MAC_TIME=$(date +%s) sh $STAGE/device/install.sh $COMPONENTS; rc=\$?; rm -rf $STAGE; [ \$rc = 0 ] && echo __U60_KIT_OK__" \
     2>&1 | tr -d '\r' | tee "$1" | grep -v '^__U60_KIT_OK__$' || true
   grep -q '^__U60_KIT_OK__$' "$1" || fail "设备端安装没有完成，看上面的报错"
-  echo
-  ok "设备端安装完成。"
+  echo ""   # 空一行
+  ok "设备端安装完成。"   # 看到了成功标记
 }
 
 # ── 从电脑验证 SSH ────────────────────────────────────────────────────────
@@ -463,6 +474,7 @@ run_on_device() { # <日志文件>
 # 拒绝连接 / 认证失败 / 超时（看 ssh 的报错）、成功。分类函数 ssh_err_class 有离线测试 onboard/test/ssh-classify.sh。
 # 失败只警告、不中止：设备那边已经装好，别的进入方式（adb）也还在。
 SSH_WHY=
+
 ssh_err_class() { # <ssh 的 stderr> → refused | auth | timeout | other:<最后一行>
   case "$1" in
     *"Connection refused"*) echo refused ;;
@@ -471,13 +483,15 @@ ssh_err_class() { # <ssh 的 stderr> → refused | auth | timeout | other:<最�
     *) echo "other:$(printf '%s' "$1" | tail -n 1)" ;;
   esac
 }
+
 ssh_dev_class() { # 设备端探针的输出 → noproc | nolisten | 空（进程在、端口在听）
   case "$1" in
     *__NOPROC__*) echo noproc ;;
     *__NOLISTEN__*) echo nolisten ;;
   esac
 }
-verify_ssh() {
+
+verify_ssh() {   # 成功返回 0；失败把原因写进 SSH_WHY
   local i err
   [ -f "$SSH_KEY" ] || { SSH_WHY=nokey; return 1; }
   for i in 1 2 3 4 5; do
@@ -493,11 +507,12 @@ verify_ssh() {
     d=$(ssh_dev_class "$d")
     [ -n "$d" ] && SSH_WHY=$d
   fi
-  return 1
-}
+  return 1   # 走到这里就是没登上
+}  # verify_ssh
+
 report_ssh() {
-  if verify_ssh; then
-    ok "SSH 公钥登录验证通过。"
+  if verify_ssh; then   # 一切正常就只说一句
+    ok "SSH 公钥登录验证通过。"   # 用的是包里那把公钥
     return
   fi
   warn "这台电脑登不上 $GATEWAY:${SSH_PORT}："
@@ -517,21 +532,21 @@ report_ssh() {
 maybe_reboot() {
   [ "${NO_REBOOT:-0}" != 1 ] && [ "${REBOOT:-}" != 0 ] || return 0
   picked ssh && ssh_ok || return 0
-  if [ "${REBOOT:-}" = 1 ]; then
-    reboot_verify
+  if [ "${REBOOT:-}" = 1 ]; then   # 明确要求重启
+    reboot_verify   # 不再问
   elif $HAVE_TTY; then
     local yn
-    echo
+    echo ""   # 和上面的输出隔开
     ask "现在重启 U60 验证开机自启吗？（约 2 分钟，会断网）[Y/n]: "
     read -r yn
     case "$yn" in [Nn]*) ;; *) reboot_verify ;; esac
-  else
-    info "没有重启验证。要确认开机自启，跑: ./install.sh reboot（会断网约 2 分钟）"
-  fi
+  else  # maybe_reboot
+    info "没有重启验证。要确认开机自启，跑: ./install.sh reboot（会断网约 2 分钟）"   # 没终端又没设 REBOOT
+  fi  # maybe_reboot
 }
 
 summary() {
-  echo
+  echo ""   # 摘要前空一行
   printf '%s%s装好了。%s\n' "$C_GRN" "$C_B" "$C_0"
   if picked ssh; then
     printf '\n  SSH 登录:   ssh -p %s -i %s -o UserKnownHostsFile=%s root@%s\n' "$SSH_PORT" "$SSH_KEY" "$KNOWN" "$GATEWAY"
@@ -539,11 +554,11 @@ summary() {
     printf '    %s\n' "Host u60" \
       "    HostName $GATEWAY" "    Port $SSH_PORT" "    User root" \
       "    IdentityFile $SSH_KEY" "    IdentitiesOnly yes" "    UserKnownHostsFile $KNOWN"
-  fi
+  fi  # summary
   if picked admin; then printf '\n  高级后台:   http://%s:9090/\n' "$GATEWAY"; fi
   if picked chill; then printf '  CHILL:      高级后台 → 服务 → CHILL（面板在 http://%s:9090/chill-ui/，从后台的按钮进）\n' "$GATEWAY"; fi
   if picked esim; then printf '  eSIM:       高级后台 → 移动网络 → eSIM；屏幕上「更多功能 → eSIM」可切换\n'; fi
-  echo
+  echo ""   # 结尾空一行
 }
 
 install_kit() {

@@ -1,57 +1,21 @@
-# Build artifacts (binaries are published as GitHub Releases, not committed)
+# The touch UI builds into the workspace target/ (touch-ui/rs). Nothing built is committed.
 *.o
 *.a
-*.stripped
-/corner-wake
-/touchsim
-/.zig-build/
-/zig-build-obj/
+/tools/touchsim
 
-# Release packaging
-/ui.tar.gz
-
-# Debug / capture artifacts
-/fb.dump
-/*.dump
-/*.b64txt
+# Framebuffer grabs and screenshots taken while debugging on a device
+*.dump
 *.ppm
-after_swipe.png
-frame_*.png
-screenshot.png
-/label-*.png
-/lockscreen-*.png
 /screen-*.png
 /previews/
-/-S
 
-# --- Do NOT commit vendor blobs (analysis only, proprietary) ---
-# These belong to ZTE and must never enter this open-source repo.
+# ZTE's own files pulled from a device for study stay local: they are not ours to publish
 zte_topsw_devui
 zte_topsw_devui*.txt
 libzte_*.so
-*.strings.txt
-*.llvm-readobj.txt
 usr_ui/
-drm_text
 *.ttf
 
-# Editor / OS
-.vscode/
-.idea/
-*.swp
-.DS_Store
-
-# Local-only operational notes (do not publish to github)
+# Notes kept on this machine only
 /.local-notes/
-/agents.md
-/docs/LOCAL-CHANGES.md
-/docs/WORKFLOW-LOCAL.md
-/docs/WORKFLOW-LOCAL-U60.md
-/docs/WORKFLOW-PRIVATE.md
-/.review-shots/
-/scripts/test/uid/uid_core_test
-/scripts/test/ui_logic/ui_logic_test
-scripts/test/ui_exec/ui_exec_test
-scripts/test/render/render_test
 .cache/
-/out/

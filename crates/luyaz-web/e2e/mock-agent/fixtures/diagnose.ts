@@ -1,15 +1,16 @@
-// Deep diagnosis — deep_diag.rs (`POST/GET /api/diagnose`, `/speed`,
+// Deep diagnosis — the core's /api/diagnose (luyaz-api diagnose.rs, served via
+// luyaz-core api/watch.rs; `POST/GET /api/diagnose`, `/speed`,
 // `/feedback`; slow-diagnosis.md §4.2). A run here is a timeline: an
 // optional wait (scenario diag-waiting), then one layer every STEP_MS, then
 // done. The judgement follows the persona: normal → nothing found; weak →
 // weak signal (bad) + a slow cellular link (warn), i.e. "+1 more". The proxy
-// layer is there while the proxy service runs, like the agent's `proxy_on()`.
+// layer is there while the proxy service runs, as the core's `proxy_on()` decides.
 // v2 layers (deep-diag-v2.md): scenario `diag-sim-warn` = eSIM channels all
 // taken (warn); `diag-bearer-bad` = not connected, so every layer that needs
 // the bearer is `blocked` (grey, not counted, sends nothing).
 //
 // While a run is going, the speed test, the network search and manual
-// register answer the agent's 409 (`refusal`): 正在诊断，约 N 秒后再试.
+// register get a 409 back: 正在诊断，约 N 秒后再试.
 
 import type { Ctx, Reply, Route } from "../lib.ts";
 import { bodyField, fail, ok } from "../lib.ts";
@@ -113,7 +114,7 @@ function live(now: number): boolean {
   return current !== null && now < doneAt(current);
 }
 
-/** deep_diag.rs `pick_main`, for the two personas the mock has. */
+/** luyaz-api diagnose.rs `pick_main`, for the two personas the mock has. */
 function pickMain(layers: DiagLayer[]): DiagMain {
   const m = layers.find((l) => l.level === "bad") ?? layers.find((l) => l.level === "warn");
   if (!m) {
@@ -181,7 +182,7 @@ function view(r: MockRun, now: number): DiagRun {
 
 /**
  * The 409 a speed test, network search or manual register gets while a
- * diagnosis runs (deep_diag.rs `refusal`), or null when none runs.
+ * diagnosis runs (the core's busy reply), or null when none runs.
  */
 export function diagRefusal(now: number): Reply | null {
   if (!current || !live(now)) return null;

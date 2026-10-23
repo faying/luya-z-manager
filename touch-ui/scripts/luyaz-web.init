@@ -3,7 +3,7 @@
 # docs/designs/u60-web.md): the admin pages on :9090 (8d-2c: the agent is
 # retired, :8080 is gone; a busy bind is still retried every 10 s). Live data
 # and the API come from u60d on 127.0.0.1:9460. Logins are checked here against the admin
-# password file (path only, like the retired zte-agent.init did: procd shows the
+# password file (path only: procd shows the
 # env and command line in `ubus call service list`). Installed by
 # `u60 ship scripts` (this file) and `u60 ship lweb` (the program); started
 # from /etc/rc.local with `/etc/init.d/luyaz-web start`, after the luyaz-recover.sh

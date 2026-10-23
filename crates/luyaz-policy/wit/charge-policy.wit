@@ -1,4 +1,4 @@
-// Charge limit (manager zte-agent charge_policy), the policy boundary between u60d and a
+// Charge limit, the policy boundary between u60d and a
 // charge-policy component. The types mirror luyaz_policy::charge_policy; the version is the host ABI
 // version in a plugin's manifest entry: change anything here and bump it.
 package luyaz:charge-policy@0.1.0;

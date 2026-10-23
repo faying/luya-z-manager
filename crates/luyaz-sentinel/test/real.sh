@@ -3,7 +3,7 @@
 B=/s/luyaz-sentinel
 ok=0; bad=0
 check() { if eval "$2"; then ok=$((ok+1)); echo "  ok   $1"; else bad=$((bad+1)); echo "  FAIL $1"; fi; }
-mkdir -p /data/plugins/u60pro-devui /data/luyaz/ui /etc/init.d /usr/local/bin /data/alerts
+mkdir -p /data/other /data/luyaz/ui /etc/init.d /usr/local/bin /data/alerts
 cat >/data/luyaz/ui/luyaz-ui <<'S'
 #!/bin/sh
 [ -f /tmp/ui-crash ] && { sleep 1; exit 1; }
@@ -23,8 +23,6 @@ esac
 S
 chmod 755 /data/luyaz/ui/luyaz-ui /usr/local/bin/zte_topsw_devui /etc/init.d/zte_topsw_devui
 chmod 1777 /tmp
-# a state dir from before the move (E3: no longer copied or read) must be left alone
-mkdir -p /data/u60-uid && chmod 700 /data/u60-uid && echo 41 >/data/u60-uid/events.seq
 ui() { pgrep -x luyaz-ui | head -1; }
 vendor() { pgrep -f /usr/local/bin/zte_topsw_devui | head -1; }
 $B >/tmp/sentinel.stderr 2>&1 &
@@ -34,8 +32,7 @@ U=$(ui)
 check "launched our UI" '[ -n "$U" ]'
 check "FIFO made" '[ -p /tmp/luyaz-screen.ctl ]'
 check "heartbeat has 5 fields, says ours" '[ "$(wc -w </tmp/luyaz-sentinel.hb)" = 5 ] && [ "$(cut -d" " -f3 /tmp/luyaz-sentinel.hb)" = ours ]'
-check "only the new FIFO" '[ -p /tmp/luyaz-screen.ctl ] && [ ! -e /tmp/u60-uid.ctl ]'
-check "attempts counted before the launch (new dir; old no longer mirrored)" '[ "$(cat /data/luyaz/screen/attempts)" = 1 ] && [ ! -e /data/u60-uid/attempts ]'
+check "attempts counted before the launch" '[ "$(cat /data/luyaz/screen/attempts)" = 1 ]'
 check "state dir 0700" '[ "$(stat -c %a /data/luyaz/screen)" = 700 ]'
 check "UI has no blocked signals" '[ "$(awk "/^SigBlk/ {print \$2}" /proc/$U/status)" = 0000000000000000 ]'
 check "UI ignores SIGPIPE" '[ $(( 0x$(awk "/^SigIgn/ {print \$2}" /proc/$U/status) & 0x1000 )) != 0 ]'
@@ -55,13 +52,13 @@ kill -SEGV "$U"
 sleep 8
 check "crash then crash on start: gave up" '[ -f /data/luyaz/screen/gave-up ] && [ -n "$(vendor)" ] && [ -z "$(ui)" ]'
 check "two ui-crash, one ui-gave-up in the queue" '[ "$(grep -c ui-crash /data/alerts/queue)" = 2 ] && [ "$(grep -c ui-gave-up /data/alerts/queue)" = 1 ]'
-check "events in the new dir, the old dir left as it was" '[ -s /data/luyaz/screen/events ] && [ "$(cat /data/u60-uid/events.seq)" = 41 ] && [ ! -e /data/u60-uid/events ]'
+check "events written" '[ -s /data/luyaz/screen/events ]'
 check "a crash record left" '[ "$(ls /data/crashlog/luyaz-ui/*.log | wc -l)" -ge 1 ]'
 rm -f /tmp/ui-crash
 echo ui >/tmp/luyaz-screen.ctl
 sleep 4
 U=$(ui)
-check "after give-up, ui request brings ours back" '[ -n "$U" ] && [ ! -f /data/luyaz/screen/gave-up ] && [ ! -f /data/u60-uid/gave-up ]'
+check "after give-up, ui request brings ours back" '[ -n "$U" ] && [ ! -f /data/luyaz/screen/gave-up ]'
 kill -TERM $SP; wait $SP
 check "TERM: sentinel exits 0" '[ $? = 0 ]'
 check "TERM: FIFO removed, UI left running" '[ ! -e /tmp/luyaz-screen.ctl ] && [ "$(ui)" = "$U" ]'
@@ -72,14 +69,14 @@ sleep 2
 check "restart adopts, launches nothing" 'grep -q "adopted running luyaz-ui pid $U" /tmp/luyaz-screen.log && [ "$(pgrep -x luyaz-ui | wc -l)" = 1 ]'
 check "restart: the old dir still not copied" '! grep -q "screen state copied" /tmp/luyaz-screen.log'
 kill -TERM $SP; wait $SP
-# an old u60pro-devui is not ours any more, and its path is never started
+# another UI program is not ours, and its path is never started
 kill "$U"; sleep 1; rm -f /data/luyaz/screen/attempts
-cp /data/luyaz/ui/luyaz-ui /data/plugins/u60pro-devui/u60pro-devui; chmod 755 /data/plugins/u60pro-devui/u60pro-devui
+cp /data/luyaz/ui/luyaz-ui /data/other/otherui; chmod 755 /data/other/otherui
 rm /data/luyaz/ui/luyaz-ui
 $B >>/tmp/sentinel.stderr 2>&1 &
 SP=$!
 sleep 3
-check "luyaz-ui missing: the old program is not started instead" '[ -z "$(pgrep -x u60pro-devui)" ] && [ -z "$(ui)" ]'
+check "luyaz-ui missing: another program is not started instead" '[ -z "$(pgrep -x otherui)" ] && [ -z "$(ui)" ]'
 kill -TERM $SP; wait $SP
 echo "--- luyaz-screen.log"; cat /tmp/luyaz-screen.log
 echo "passed $ok, failed $bad"

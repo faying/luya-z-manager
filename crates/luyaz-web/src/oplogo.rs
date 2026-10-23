@@ -1,4 +1,4 @@
-//! Operator logos (web/src/lib/operatorLogo.ts): PLMN → slug, the file read from `--logo-dir` at
+//! Operator logos: PLMN → slug, the file read from `--logo-dir` at
 //! request time (they are trademarks: never embedded, never in a public tree), and a first-letter
 //! badge when the PLMN is unknown or the file is not there. File existence is decided here, when
 //! the leaf is rendered, so the page never shows a broken image.

@@ -1,6 +1,5 @@
-// GET /api/public/status — public.rs:29. Unauthenticated summary for the
-// login screen, the header status strip, the dashboard services card and
-// lib/deviceClock.ts. Built from the same nwinfo payload as
+// GET /api/public/status — luyaz-core api/status.rs public_status. Summary that
+// needs no login (top bar, touch screen, device clock). Built from the same nwinfo payload as
 // /api/network/signal (fixtures/network.ts) plus cross-area shared state.
 
 import type { Ctx, Route } from "../lib.ts";
@@ -17,7 +16,7 @@ const TS_IP = "100.101.7.23";
 /** Last scenario switch: 2026-09-22 18:40 on the device clock (local time labelled UTC). */
 const LAST_SWITCH = Date.UTC(2026, 8, 22, 18, 40, 12) / 1000;
 
-/** manual_first.rs `summary` under scenario mf-alldown: the hand-picked node and the backup are both down. */
+/** CHILL's manual-first summary (luyaz-core engines/manual_first.rs) under scenario mf-alldown: the hand-picked node and the backup are both down. */
 export const MF_ALLDOWN = {
   notice: "JP 03 和 🇯🇵 日本 备用都不通",
   notice_en: "JP 03 and the 🇯🇵 日本 fallback are both down",
@@ -25,7 +24,7 @@ export const MF_ALLDOWN = {
   notice_kind: "alldown" as const,
 };
 
-/** the core's home verdict as netwatch.rs passes it on (story.state). */
+/** the core's home verdict as the netwatch engine passes it on (story.state). */
 function verdict(ctx: Ctx): string {
   if (ctx.has("verdict-stall")) return "stall";
   if (ctx.has("verdict-crowd")) return "crowd";

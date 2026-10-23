@@ -15,7 +15,7 @@ use ui_model::{chill_group_info_t, chill_home_t, chill_node_info_t, chill_traffi
 use std::fmt::Write as _;
 use std::os::fd::{AsRawFd, OwnedFd};
 
-/// beside the program (Luya-Z D5; it used to live in /data/plugins/u60pro-devui)
+/// beside the program (Luya-Z D5)
 const SC_CONF: &str = "/data/luyaz/ui/chill.conf";
 const SC_IO_MS: i32 = 1500;
 const SC_TTL_MS: i64 = 2000;

@@ -121,7 +121,7 @@ fn not_installed_failing_and_unparsable() {
     assert_eq!(
         status_blocking(&bin, &sock, &proc, t),
         json!({"installed": true, "running": true,
-            "error": "could not parse tailscale status output"})
+            "error": "tailscale status gave output we cannot read"})
     );
     fake_cli(
         &root,

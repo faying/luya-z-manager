@@ -222,7 +222,7 @@ trial
 aborted "ui gone" "界面异常（luyaz-ui 进程消失）"
 rm -rf "$T"
 
-# ── no netwatch check (zte-agent's counter, gone in 8d-2c) ──────────────────
+# ── a netwatch counter is not a trial check ─────────────────────────────────
 # a rising counter file or a reply without wan_status is no abort
 setup
 echo 7 >"$T/netwatch.errors"

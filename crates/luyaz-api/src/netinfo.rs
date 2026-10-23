@@ -1,4 +1,4 @@
-//! `/api/netinfo`'s pure parts (moved from zte-agent `netinfo.rs`, Phase 4 step 8c): the operator
+//! `/api/netinfo`'s pure parts : the operator
 //! and country tables, PLMN strings, the exit lookups' parsing and English, the register guard's and
 //! the operator search's JSON, the Wi-Fi station and lease parsers, the APN view, and the page
 //! itself ([`page`]). The agent (which keeps serving the admin web) and u60d's touch compatibility
@@ -14,7 +14,7 @@ use std::fs;
 /// The agent's two exit lookups as the page shows them (`{"direct": …, "proxy": …}`, each
 /// [`Lookup::json`] or null), written after every refresh pass (tmpfs).
 pub const EXITS_FILE: &str = "/tmp/netinfo-exits.json";
-/// Once the agent has handed netselect to u60d (step 9b) it no longer gets the `/api/netinfo`
+/// Once the agent has handed netselect to u60d it no longer gets the `/api/netinfo`
 /// reads that start its lookups: u60d touches this file on every refresh pass instead, and the
 /// agent looks the exits up while it is fresh ([`EXITS_WANTED_SECS`]).
 pub const EXITS_WANTED: &str = "/tmp/netinfo-exits.wanted";
@@ -1775,7 +1775,7 @@ pub fn neighbors_json(scanned_at: i64, cells: &[Value]) -> Value {
     })
 }
 
-/// The APN choices remembered per SIM (zte-agent `apn_pick`; `{"picks": {iccid: {"manual_id",
+/// The APN choices remembered per SIM (`{"picks": {iccid: {"manual_id",
 /// "apn"}}, "last_iccid", "notice"}`).
 pub const APN_PICK_STORE: &str = "/data/apn-pick.json";
 

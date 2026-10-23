@@ -25,7 +25,7 @@
 //! side effects, so the engine can never mistake its own scan for the user
 //! having changed something by hand.
 //!
-//! Moved from zte-agent `wifi_scan.rs` (step 9h). One scan at a time in a process: the engine's
+//! One scan at a time in a process: the engine's
 //! tick and the web's `GET /api/scenario/scan` would otherwise both add and remove `scen-scan0`.
 
 use std::process::Command;

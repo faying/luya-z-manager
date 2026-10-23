@@ -1,16 +1,16 @@
-// Mock fixtures: WAN speed test (speedtest.rs), AT terminal (at_terminal.rs +
-// at_cmd.rs).
+// Mock fixtures: WAN speed test (the core's /api/speedtest/*, crate luyaz-speedtest)
+// and AT terminal (/api/at/*, luyaz-core api/device_admin/phone.rs).
 //
 // Speed test: progress is computed lazily from the time since start (no
 // timers), ~15 s end to end: latency 0-1.5 s, download 1.5-11.5 s, upload
-// 11.5-15 s, with the same progress bands as the agent (0-20 / 20-60 / 60-100).
+// 11.5-15 s, with luyaz-speedtest's progress bands (0-20 / 20-60 / 60-100).
 // The server list comes from speedtest.net on the real device (geolocated to
 // the device's public IP), so here it is a Taiwan list; the hosts are made up.
 // Offline (nosignal, airplane, mobile data off): the list fetch fails with 503
 // unless a list is still cached (5 min), in which case start works and the test
-// ends in phase "error" after the latency phase — like the agent.
+// ends in phase "error" after the latency phase, as on the device.
 //
-// AT terminal: every send takes `timeout` seconds + 0.3 s (the agent reads the
+// AT terminal: every send takes `timeout` seconds + 0.3 s (the core reads the
 // port for exactly that long). A few common commands get plausible replies;
 // anything else answers OK. The reply text format (no echo, CRLFs) and the
 // ZTE-specific commands are invented, not recorded.
@@ -65,7 +65,7 @@ function offline(ctx: Ctx): boolean {
   return ctx.has("nosignal") || shared.airplane || !shared.mobileData;
 }
 
-/** speedtest.rs:131 get_servers — cached 5 min, else fetched (fails offline). */
+/** luyaz-speedtest `servers` — cached 5 min, else fetched (fails offline). */
 function getServers(ctx: Ctx): { list: SpeedServer[]; fetched: boolean } | { error: string } {
   if (serversCachedAt !== null && ctx.now - serversCachedAt < CACHE_TTL_MS) return { list: SERVERS, fetched: false };
   if (offline(ctx)) return { error: "fetch servers: io: Network is unreachable (os error 101)" };
@@ -91,7 +91,7 @@ function idleProgress(server = ""): SpeedProgress {
   };
 }
 
-/** The agent's progress struct `t` ms after start. */
+/** luyaz-speedtest's progress reply `t` ms after start. */
 function progressAt(s: RunState, t: number): SpeedProgress {
   const p = idleProgress(`${s.server.sponsor} (${s.server.name})`);
   if (t < LAT_MS) {
@@ -212,7 +212,7 @@ function atReply(cmdUpper: string, ctx: Ctx): string {
 
 export const routes: Route[] = [
   {
-    // speedtest.rs:355 — outbound fetch on the device when the cache is cold.
+    // luyaz-speedtest servers — outbound fetch on the device when the cache is cold.
     method: "GET",
     path: "/api/speedtest/servers",
     handler: (ctx: Ctx) => {
@@ -222,7 +222,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // speedtest.rs:362
+    // luyaz-speedtest start
     method: "POST",
     path: "/api/speedtest/start",
     handler: (ctx: Ctx) => {
@@ -261,7 +261,7 @@ export const routes: Route[] = [
     handler: (ctx: Ctx) => ok(currentProgress(ctx.now)),
   },
   {
-    // speedtest.rs:430
+    // luyaz-speedtest stop
     method: "POST",
     path: "/api/speedtest/stop",
     handler: (ctx: Ctx) => {
@@ -271,7 +271,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // at_terminal.rs:63 — first call probes the serial ports (~1.3 s each), then cached.
+    // phone.rs at_port — first call probes the serial ports (~1.3 s each), then cached.
     method: "GET",
     path: "/api/at/port",
     handler: () => {
@@ -281,18 +281,18 @@ export const routes: Route[] = [
     },
   },
   {
-    // at_terminal.rs:10
+    // phone.rs at_send
     method: "POST",
     path: "/api/at/send",
     handler: (ctx: Ctx) => {
       if (ctx.body === undefined) return fail("invalid JSON", 400);
       const command = bodyField(ctx.body, "command");
       if (typeof command !== "string") return fail("missing 'command' field", 400);
-      if (!command.toUpperCase().startsWith("AT")) return fail("command must start with 'AT'", 400);
+      if (!command.toUpperCase().startsWith("AT")) return fail("not an AT command (it has to begin with AT)", 400);
       const t = bodyField(ctx.body, "timeout");
       const timeout = Math.min(30, Math.max(1, typeof t === "number" && Number.isInteger(t) && t >= 0 ? t : 3));
       const sanitized = command.replace(/['`$;|&]/g, "");
-      if (sanitized === "") return fail("command is empty after sanitization", 400);
+      if (sanitized === "") return fail("nothing left to send once unsafe characters are removed", 400);
       const probe = atPortDetected ? 0 : 1_300;
       atPortDetected = true;
       const elapsed = timeout * 1000 + 300 + probe;

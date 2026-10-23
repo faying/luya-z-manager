@@ -18,8 +18,10 @@
 
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use luyaz_api::clock::BootTime;
 use luyaz_api::diagnose::Gate;
@@ -469,7 +471,11 @@ impl Findings {
     }
 
     /// The open finding's binding (store epoch + revision), or None.
-    pub fn identity(&self, kind: &str, iccid: &str) -> Option<luyaz_netwatch::finding::store::Identity> {
+    pub fn identity(
+        &self,
+        kind: &str,
+        iccid: &str,
+    ) -> Option<luyaz_netwatch::finding::store::Identity> {
         lock(&self.store).identity(kind, iccid)
     }
 

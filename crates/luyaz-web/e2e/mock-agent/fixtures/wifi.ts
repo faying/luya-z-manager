@@ -1,5 +1,7 @@
-// Wi-Fi, guest Wi-Fi and AP radio — mirrors zte-agent/src/wifi.rs and
-// wifi_radio.rs.
+// Wi-Fi, guest Wi-Fi and AP radio. The core serves GET /api/wifi/status and
+// /power-save (api/wifi_reads.rs) and PUT /api/wifi/guest (api/scenario.rs guest,
+// shape in luyaz-api wifi.rs); the main Wi-Fi and radio writes here keep the
+// behaviour the device API had.
 //
 // Model: `uci` holds what the handlers read back with `uci get` (config);
 // what is actually broadcasting (`live()`) is derived from it, plus the Wi-Fi
@@ -25,7 +27,7 @@ import type {
 // ── uci state ───────────────────────────────────────────────────────────────
 
 interface WifiUci {
-  // keys of wifi.rs uci_map (the PUT body names)
+  // uci keys the Wi-Fi PUT accepts (the body names)
   ssid_2g: string;
   ssid_5g: string;
   key_2g: string;
@@ -74,7 +76,7 @@ const uci: WifiUci = {
   ap5g_disabled: "0",
 };
 
-/** wifi.rs uci_map keys, in handler order. */
+/** The Wi-Fi PUT's uci keys, in the order they are written. */
 const UCI_KEYS = [
   "ssid_2g",
   "ssid_5g",
@@ -120,12 +122,12 @@ let guestTimerStart: number | null = null;
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
-/** wifi.rs:70 sanitize_uci_value */
+/** luyaz-api wifi.rs sanitize_uci_value */
 function sanitize(v: string): string {
   return v.replace(/['";$`\\|<>&]/g, "");
 }
 
-/** wifi.rs:223-228 — string / number / bool → uci string; anything else skipped. */
+/** luyaz-api wifi.rs uci_text — string / number / bool → uci string; anything else skipped. */
 function uciValue(v: unknown): string | null {
   if (typeof v === "string") return sanitize(v);
   if (typeof v === "number") return sanitize(String(v));
@@ -248,7 +250,7 @@ function wifiStatus(): WifiStatus {
   return s;
 }
 
-/** wifi.rs:155 wifi_set — diff against uci, commit, hot txpower or background reload. */
+/** PUT /api/wifi — diff against uci, commit, hot txpower or background reload. */
 function wifiSet(ctx: Ctx): Reply {
   const obj = objectBody(ctx);
   if (isReply(obj)) return obj;
@@ -312,7 +314,7 @@ function wifiSet(ctx: Ctx): Reply {
 
 // ── /api/wifi/radio ─────────────────────────────────────────────────────────
 
-/** wifi_radio.rs:339 radio_set → apply_locked: unconditional write + reload + poll. */
+/** PUT /api/wifi/radio: unconditional write + reload + poll. */
 function radioSet(ctx: Ctx): Reply {
   if (ctx.body === undefined) return fail("invalid JSON", 400);
   const cur = observe().configured;
@@ -361,7 +363,7 @@ function guestStatus(ctx: Ctx): GuestWifi {
   } satisfies GuestWifi;
 }
 
-/** wifi.rs:343 guest_map: body key → guest fields (both bands share one mock field for ssid/key/…). */
+/** luyaz-api wifi.rs GUEST_FIELDS: body key → guest fields (both bands share one mock field for ssid/key/…). */
 const GUEST_MAP: Record<string, (keyof GuestUci)[]> = {
   guest_ssid: ["ssid"],
   guest_key: ["key"],
@@ -374,7 +376,7 @@ const GUEST_MAP: Record<string, (keyof GuestUci)[]> = {
   guest_active_time: ["guest_active_time"],
 };
 
-/** wifi.rs:333 guest_set — no diffing: any known key counts as a change. */
+/** luyaz-api wifi.rs guest_set — no diffing: any known key counts as a change. */
 function guestSet(ctx: Ctx): Reply {
   const obj = objectBody(ctx);
   if (isReply(obj)) return obj;
@@ -406,7 +408,7 @@ function guestSet(ctx: Ctx): Reply {
 
 // ── routes ──────────────────────────────────────────────────────────────────
 
-// wifi.rs power_save_* / nfc_* (audit C, 10-04): both start off.
+// Wi-Fi power save and NFC (audit C, 10-04): both start off.
 let psmOn = false;
 let nfcOn = false;
 function onOff(ctx: Ctx, set: (on: boolean) => void): Reply {

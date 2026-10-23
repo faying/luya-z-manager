@@ -1,4 +1,4 @@
-//! 测速 (src/speedtest.c): luyaz-core's own speed test engine (/api/speedtest/*), its progress
+//! 测速: luyaz-core's own speed test engine (/api/speedtest/*), its progress
 //! every second while the page or 出口 is up, the server list once.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 

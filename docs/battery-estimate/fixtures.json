@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "Examples of docs/battery-estimate.md, run by zte-agent/src/battery_eta.rs (the only implementation).",
+  "note": "Examples of docs/battery-estimate.md, checked by crates/luyaz-policy/src/battery_eta/tests.rs.",
   "cases": [
     { "name": "charging steady to 100",
       "input": { "samples": [[0, 1000000, true], [60, 1000000, true], [120, 1000000, true], [180, 1000000, true]],

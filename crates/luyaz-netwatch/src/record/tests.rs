@@ -438,7 +438,7 @@ fn bad_dir_counts_errors_and_keeps_recording() {
 }
 
 /// The bytes on disk are the contract with every reader of `/data/signal-log` (the web's history,
-/// deep diagnosis, the agent and u60d each writing it in turn): a fixed run of readings gives
+/// deep diagnosis, the core writing it): a fixed run of readings gives
 /// exactly these files. Regenerate only for a deliberate format change:
 /// `NETWATCH_GOLDEN_WRITE=1 cargo test -p luyaz-netwatch golden`.
 #[test]

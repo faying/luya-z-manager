@@ -782,8 +782,8 @@ fn user_facing_errors_have_english() {
     assert!(Lookup::default().json()["error_en"].is_null());
 }
 
-/// Old touch screens read these with fixed buffers that truncate silently
-/// (touch-ui netinfo.c: operator `o[256]`, guard `obj[768]`, scan list
+/// The touch screen reads these with fixed caps that truncate silently
+/// (luyaz-ui data/netinfo.rs: operator `o[256]`, guard `obj[768]`, scan list
 /// `arr[6144]`; L2 review O1). Worst cases must leave a quarter spare.
 #[test]
 fn new_fields_fit_the_old_touch_screen() {

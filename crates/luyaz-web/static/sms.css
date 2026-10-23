@@ -1,4 +1,4 @@
-/* luyaz-web: /sms and /sms/compose (the old sms/page.tsx, sms/compose/page.tsx). Tokens only;
+/* luyaz-web: /sms and /sms/compose. Tokens only;
  * loaded by those two pages after pages.css. */
 .sm-page { max-width: 960px; }
 .sm-bar { margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

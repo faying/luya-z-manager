@@ -1,6 +1,5 @@
-//! zte-agent `sms_forward.rs`'s plan and outcome tests, moved as they are (the two error
-//! constants written out). `run_pass` is compared with the agent's own on random lists in
-//! zte-agent (contract test); the hold has its own cases below.
+//! Plan and outcome tests (the two error constants written out); the hold has its own cases
+//! below.
 
 use super::*;
 

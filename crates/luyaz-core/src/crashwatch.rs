@@ -1,6 +1,4 @@
-//! Crash watcher (u60-sentinel.md §8 D11, T10): the guard's watcher loop (touch-ui
-//! scripts/u60-guard.sh `watch_*`, docs/LEDGER.md §8–9) moved into the core, woken by events
-//! instead of every 2 s.
+//! Crash watcher (u60-sentinel.md §8 D11, T10; docs/LEDGER.md §8–9), woken by events.
 //!
 //! Same events, same ids, same merge/timeout rules as the guard: `ssr`, `ssr_result`, `ssr_dump`,
 //! `oom`, `thermal`, `sleep`, `link`. What changed with the way it wakes (the IO edge in

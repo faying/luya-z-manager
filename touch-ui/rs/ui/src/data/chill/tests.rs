@@ -1,4 +1,4 @@
-//! tests/chill_test.c: how often /configs is read (170 KB on the device, only `mode` used),
+//! how often /configs is read (170 KB on the device, only `mode` used),
 //! the last mode kept when it comes back cut or not at all, a stopped core noticed from the
 //! small per-round request; and 家里出口 (parse, poll, switch). A fake mihomo on a thread
 //! counts each request; time is stepped by editing the timestamps.

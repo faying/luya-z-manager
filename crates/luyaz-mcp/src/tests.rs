@@ -52,6 +52,8 @@ fn initialize_list_ping() {
             "get_network_health",
             "get_power_profile",
             "get_recent_events",
+            "get_firmware_capabilities",
+            "explain_recovery_action",
             "set_chill_profile",
             "set_chill_exit",
             "use_apn",
@@ -512,4 +514,154 @@ fn host_header_carries_the_port() {
     assert_eq!(host_header("192.168.0.1", 9090), "192.168.0.1:9090");
     assert_eq!(host_header("u60.local", 80), "u60.local");
     assert_eq!(host_header("fd00::1", 9090), "[fd00::1]:9090");
+}
+
+// ---- R18-P1-07: get_firmware_capabilities, explain_recovery_action ----
+
+const CAPS: &str = r#"{"state":"ok","device_id":"a1b2c3d4e5f6","schema_version":1,
+  "identity":{"identity_status":"partial","model":"MU5250"},
+  "context_coverage":{"sim_epoch":{"authoritative":false,"reason":"unverified"}},
+  "assessments":[{"capability_id":"usb.mode.set","status":"unknown","reason":"no_evidence",
+    "freshness":{"fresh":false,"age_seconds":null,"max_age_seconds":300}}],
+  "truncated":false,"limitations":["passive report: reading it ran no new probe"]}"#;
+
+const ACTIONS: &str = r#"{"state":"ok","device_id":"a1b2c3d4e5f6","schema_version":1,
+  "allow_list":{"actions":[],"empty":true,"note":"empty"},"loop_missing_conditions":[],
+  "actions":[
+   {"action":"data.reconnect","kind":"loop_only","rollback":{"capability":"unsupported","on_loop_execution":false},
+    "approval":{"person":"loop","agent_mcp":null,"auto_allow_list":false}},
+   {"action":"apn.use","kind":"transaction","rollback":{"capability":"unsupported","on_agent_write":true},
+    "approval":{"person":"screen or web","agent_mcp":{"layer":"apn"},"auto_allow_list":false}}]}"#;
+
+#[test]
+fn new_tools_are_read_only_with_strict_schemas() {
+    let (r, _) = call(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}), never);
+    let r = r.unwrap();
+    for n in ["get_firmware_capabilities", "explain_recovery_action"] {
+        let t = r["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == n).unwrap();
+        assert_eq!(t["annotations"]["readOnlyHint"], true, "{n}");
+        assert_eq!(t["inputSchema"]["additionalProperties"], false, "{n}");
+        assert!(t["inputSchema"]["properties"]["device"].is_object(), "{n}");
+        assert!(t["inputSchema"].get("required").is_none(), "{n}");
+    }
+    for (n, a) in [("get_firmware_capabilities", json!({"capability": "usb."})), ("explain_recovery_action", json!({"action": "data.reconnect"}))] {
+        let c = call_for(n, &a).unwrap();
+        assert!(c.body.is_none(), "{n} must be a GET");
+    }
+}
+
+#[test]
+fn capabilities_path_filter_and_bad_arguments() {
+    let ok = |_: &str| Got::Answer(200, CAPS.into());
+    let (_, asked) = call(tool("get_firmware_capabilities", json!({})), ok);
+    assert_eq!(asked, ["/agent-api/capabilities"]);
+    let (r, asked) = call(tool("get_firmware_capabilities", json!({"capability": "usb."})), ok);
+    assert_eq!(asked, ["/agent-api/capabilities?capability=usb."]);
+    let t = r.unwrap()["result"]["content"][0]["text"].as_str().unwrap().to_string();
+    // unknown, age, coverage and device_id pass through as the device said
+    for k in ["\"unknown\"", "\"age_seconds\": null", "\"authoritative\": false", "a1b2c3d4e5f6", "gateway_cache_age_s"] {
+        assert!(t.contains(k), "{k} in {t}");
+    }
+    for bad in [json!({"capability": "a&b=c"}), json!({"capability": 3}), json!({"capability": ""})] {
+        let (r, asked) = call(tool("get_firmware_capabilities", bad), ok);
+        assert!(asked.is_empty());
+        assert_eq!(r.unwrap()["error"]["code"], -32602);
+    }
+    let (r, asked) = call(tool("explain_recovery_action", json!({"action": "x y"})), ok);
+    assert!(asked.is_empty());
+    assert_eq!(r.unwrap()["error"]["code"], -32602);
+}
+
+#[test]
+fn explain_picks_one_action_or_lists_them() {
+    let ok = |_: &str| Got::Answer(200, ACTIONS.into());
+    let (r, asked) = call(tool("explain_recovery_action", json!({"action": "data.reconnect"})), ok);
+    assert_eq!(asked, ["/agent-api/recovery-actions"]);
+    let r = r.unwrap();
+    assert_eq!(r["result"]["isError"], false);
+    let v: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(v["action"]["kind"], "loop_only");
+    assert_eq!(v["action"]["rollback"]["capability"], "unsupported");
+    assert_eq!(v["allow_list"]["empty"], true);
+    assert_eq!(v["device_id"], "a1b2c3d4e5f6");
+    assert!(v.get("actions").is_none());
+    let (r, _) = call(tool("explain_recovery_action", json!({})), ok);
+    let v: Value = serde_json::from_str(r.unwrap()["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(v["actions"].as_array().unwrap().len(), 2);
+    assert_eq!(v["actions"][1]["agent_layer"], "apn");
+}
+
+#[test]
+fn explain_errors_are_explicit() {
+    let ok = |_: &str| Got::Answer(200, ACTIONS.into());
+    let (r, _) = call(tool("explain_recovery_action", json!({"action": "device.reboot"})), ok);
+    let r = r.unwrap()["result"].clone();
+    assert_eq!(r["isError"], true);
+    assert_eq!(r["structuredContent"]["error"], "unknown_action");
+    assert!(text(&r).contains("data.reconnect") && text(&r).contains("apn.use"));
+    let old = |_: &str| Got::Answer(200, r#"{"core":"up","state":"not_described","http":404}"#.into());
+    let (r, _) = call(tool("explain_recovery_action", json!({"action": "data.reconnect"})), old);
+    let r = r.unwrap()["result"].clone();
+    assert_eq!(r["isError"], true);
+    assert_eq!(r["structuredContent"]["error"], "not_described");
+    let down = |_: &str| Got::Unreachable("connect: refused".into());
+    let (r, _) = call(tool("explain_recovery_action", json!({"action": "data.reconnect"})), down);
+    assert!(text(&r.unwrap()["result"]).contains("cannot be reached"));
+    let old = |_: &str| Got::Answer(404, String::new());
+    let (r, _) = call(tool("get_firmware_capabilities", json!({})), old);
+    assert_eq!(r.unwrap()["result"]["isError"], true);
+}
+
+#[test]
+fn new_reads_respect_the_pin() {
+    let msg = tool("get_firmware_capabilities", json!({}));
+    let mut f = |_: &Call| Got::Answer(200, CAPS.replace("a1b2c3d4e5f6", "ffffffffffff"));
+    let r = handle_pinned(&msg, Some("a1b2c3d4e5f6"), &mut f).unwrap();
+    assert_eq!(r["result"]["isError"], true);
+    assert_eq!(r["result"]["structuredContent"]["error"], "wrong_device");
+}
+
+#[test]
+fn gateway_throttles_only_the_new_reads() {
+    let setup = Setup::Single { url: DEFAULT_URL.into(), pin: None };
+    let mut cache = Cache::default();
+    let t0 = Instant::now();
+    let mut n = 0;
+    let ask = |cache: &mut Cache, msg: Value, at: Instant, n: &mut usize, got: Got| {
+        let mut got = Some(got);
+        let mut f = |_: Option<&Device>, _: &Call| {
+            *n += 1;
+            got.take().unwrap_or(Got::Unreachable("again".into()))
+        };
+        handle_cached(&msg, &setup, cache, at, &mut f).unwrap()["result"].clone()
+    };
+    let caps = || Got::Answer(200, CAPS.into());
+    let m = tool("get_firmware_capabilities", json!({}));
+    ask(&mut cache, m.clone(), t0, &mut n, caps());
+    let r = ask(&mut cache, m.clone(), t0 + Duration::from_secs(10), &mut n, caps());
+    assert_eq!(n, 1, "second ask within the TTL is served by the gateway");
+    assert!(text(&r).contains("\"gateway_cache_age_s\": 10"));
+    ask(&mut cache, m.clone(), t0 + CACHE_TTL + Duration::from_secs(1), &mut n, caps());
+    assert_eq!(n, 2, "after the TTL the device is asked again");
+    // a failure is never kept
+    let mut c2 = Cache::default();
+    let mut n2 = 0;
+    ask(&mut c2, m.clone(), t0, &mut n2, Got::Answer(503, String::new()));
+    ask(&mut c2, m.clone(), t0, &mut n2, caps());
+    assert_eq!(n2, 2);
+    // neither is "core down" or "not described" (lweb says those with a 200)
+    let mut c3 = Cache::default();
+    let mut n4 = 0;
+    let ex = tool("explain_recovery_action", json!({}));
+    ask(&mut c3, ex.clone(), t0, &mut n4, Got::Answer(200, r#"{"core":"down"}"#.into()));
+    ask(&mut c3, ex.clone(), t0, &mut n4, Got::Answer(200, r#"{"core":"up","state":"not_described"}"#.into()));
+    ask(&mut c3, ex.clone(), t0, &mut n4, Got::Answer(200, ACTIONS.into()));
+    ask(&mut c3, ex, t0, &mut n4, Got::Answer(200, ACTIONS.into()));
+    assert_eq!(n4, 3);
+    // the other reads always reach the device
+    let mut n3 = 0;
+    let ev = tool("get_recent_events", json!({}));
+    ask(&mut cache, ev.clone(), t0, &mut n3, Got::Answer(200, "{}".into()));
+    ask(&mut cache, ev, t0, &mut n3, Got::Answer(200, "{}".into()));
+    assert_eq!(n3, 2);
 }

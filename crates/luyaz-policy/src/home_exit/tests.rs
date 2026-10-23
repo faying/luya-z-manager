@@ -1,8 +1,5 @@
-//! zte-agent `home_exit.rs`'s tick, start-up and extend tests, moved as they are (only the end of
-//! `back_home`, which gets its state through the host's `run_job`, starts from that state). Left in
-//! the agent: the request tests (`requests_are_gated`, `turning_on_passes_the_trial`,
-//! `each_failed_check_undoes`, `precheck_stops_before_applying`, `failed_reload_keeps_state`,
-//! `turning_off`) and the parsing ones.
+//! Tick, start-up and extend tests (`back_home` starts from the state the host's `run_job`
+//! leaves). The request and parsing tests live with the host.
 
 use super::*;
 
@@ -214,7 +211,7 @@ fn back_home() {
     m.tick(&obs(T0 + 1200, Some(460), env), &mut io);
     assert_eq!(m.p.items, on(&[Item::Ip]));
 
-    // opened by hand in China: left alone (the agent's test gets here through run_job;
+    // opened by hand in China: left alone (the host gets here through run_job;
     // this is the state it leaves)
     let mut io = Fake::default();
     let mut m = Machine::default();
@@ -228,7 +225,7 @@ fn back_home() {
     assert!(!m.p.reopened_in_china.media);
 }
 
-/// A2: what was on when the agent was not watching.
+/// A2: what was on when nothing was watching.
 #[test]
 fn startup_reconcile() {
     // no saved state but env on → off

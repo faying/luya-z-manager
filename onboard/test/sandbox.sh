@@ -1,24 +1,21 @@
 #!/usr/bin/env bash
 # 装机包回归测试：把最新的装机包改写成「沙盒版」，在一台正在使用的 U60 上把 install.sh 走一遍，
 # 最后核对设备原有的文件和进程没有被动过。
-#
-# 用法
+# ── 用法
 #   onboard/test/sandbox.sh dry                                      只在本机解包、改写、做防呆检查；不连设备
 #   HOST=<root@设备地址 或 ssh 别名> GATEWAY=<设备地址> SSH_KEY=<私钥> onboard/test/sandbox.sh run     dry + 在设备上跑各场景
 #   HOST=… GATEWAY=… SSH_KEY=… onboard/test/sandbox.sh clean                          停掉沙盒进程、删沙盒目录
-#
+# ── 前提
 # run/clean 的三个变量没有默认值，必须显式给；HOST 经 `ssh -G` 解析出来的地址必须等于 GATEWAY。
 # SSH_KEY 要是这台设备 authorized_keys 里已有的那把（沙盒里的 dropbear 仍然认 /etc/dropbear/authorized_keys）。
-#
-# 隔离手段
+# ── 隔离手段
 #   - 假 adb：shell/push 走 ssh 到 HOST；命令里带 reboot 的一律拒绝
 #   - 设备端脚本的所有落盘路径改到 /data/local/tmp/kit-sb；沙盒 dropbear 用 2223 端口
 #   - 关自动升级的两条命令换成空操作（设备上本来就是关的，测试前后会核对）
 #   - admin（luyaz-web）装进沙盒目录、只听 127.0.0.1:19090，不装 init 脚本和设备脚本，不写设备清单
 #   - ui、recover、chill 在沙盒里直接报错退出（它们会换掉设备上正在用的哨兵、屏幕、开机收尾、代理）
 #   - 改写后只要还能找到写真实位置的语句，就中止，不连设备
-set -euo pipefail
-
+set -euo pipefail   # 出错即停
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOST="${HOST:-}"
 GATEWAY="${GATEWAY:-}"
@@ -34,8 +31,11 @@ SSH_OPTS=(-o ControlMaster=auto -o ControlPath=$MUX -o ControlPersist=300 -o Log
 SNAP='md5sum /etc/rc.local /etc/dropbear/authorized_keys /data/local/tmp/start_*.sh /data/luyaz/web.env /data/luyaz/luyaz-web /etc/init.d/*; uci get zwrt_zte_dm.dm_update.dm_update_mode; uci get zwrt_zte_dm.dm_update.TURNOFFPOLLING; pidof luyaz-web luyaz-sentinel luyaz-ui luyaz-core'
 
 say()   { echo "=== $*"; }
+
 abort() { echo "✗ $*" >&2; exit 1; }
+
 on_device() { ssh "${SSH_OPTS[@]}" "$HOST" "$@"; }
+
 close_mux() { ssh -O exit -o ControlPath=$MUX "$HOST" 2>/dev/null || true; }
 
 # ── 目标检查（只在要连设备时做）────────────────────────────────────────────
@@ -56,27 +56,33 @@ check_target() {
 }
 
 # ── 清理设备上的沙盒 ──────────────────────────────────────────────────────
-clean() {
+clean() { # 停沙盒进程、删沙盒文件
   on_device "kill \$(cat /tmp/kitsb-dropbear.pid /tmp/kitsb-agent.pid /tmp/kitsb-lweb.pid 2>/dev/null) 2>/dev/null; sleep 1
-       rm -rf $SB /data/local/tmp/u60-kit /tmp/kitsb-* /tmp/u60-kit-status.sh"
+       rm -rf $SB /data/local/tmp/u60-kit /tmp/kitsb-* /tmp/u60-kit-status.sh"   # 沙盒目录、推送目录、临时文件
   close_mux
-  echo "sandbox cleaned on $HOST"
-}
+  echo "sandbox cleaned on $HOST"   # 完成
+}   # clean
 
 # ── 本机准备：解包 → 假 adb → 改写 → 防呆 → 重算 MANIFEST ─────────────────
 write_fake_adb() {
-  cat > "$WORK/bin/adb" <<EOF
+  # 生成的假 adb：devices 报一台 SANDBOX；shell 经 ssh 执行（含 reboot 的拒绝）；push 用 cat 或 tar 管道
+  cat >"$WORK/bin/adb" <<FAKE_ADB
 #!/usr/bin/env bash
 SSH=(ssh ${SSH_OPTS[*]} $HOST)
-case "\$1" in
-  devices) printf 'List of devices attached\nSANDBOX\tdevice\n' ;;
-  shell) shift; case "\$*" in *reboot*) echo "fake-adb: refusing reboot" >&2; exit 1;; esac
-         "\${SSH[@]}" "\$*" ;;
-  push) if [ -d "\$2" ]; then tar czf - -C "\$(dirname "\$2")" "\$(basename "\$2")" | "\${SSH[@]}" "mkdir -p '\$3' && tar xzf - -C '\$3'"
-        else "\${SSH[@]}" "cat > '\$3'" < "\$2"; fi ;;
-  *) echo "fake-adb: unsupported \$*" >&2; exit 1 ;;
-esac
-EOF
+cmd=\$1; shift
+if [ "\$cmd" = devices ]; then
+    printf 'List of devices attached\nSANDBOX\tdevice\n'
+elif [ "\$cmd" = shell ]; then
+    case "\$*" in *reboot*) echo "fake-adb: refusing reboot" >&2; exit 1 ;; esac
+    "\${SSH[@]}" "\$*"
+elif [ "\$cmd" = push ] && [ -d "\$1" ]; then
+    tar czf - -C "\$(dirname "\$1")" "\$(basename "\$1")" | "\${SSH[@]}" "mkdir -p '\$2' && tar xzf - -C '\$2'"
+elif [ "\$cmd" = push ]; then
+    "\${SSH[@]}" "cat > '\$2'" <"\$1"
+else
+    echo "fake-adb: unsupported \$cmd \$*" >&2; exit 1
+fi
+FAKE_ADB
   chmod +x "$WORK/bin/adb"
 }
 
@@ -144,23 +150,27 @@ guard_device_script() {
        | grep -nE "$real" \
        | grep -vE "$allowed"; then
     abort "设备端脚本有上面这些新语句，沙盒改写没覆盖到，先更新本脚本"
-  fi
+  fi   # 没有漏网的真实写入
 }
 
 # 电脑端 install.sh：ssh 端口换成 2223，重启换成空操作，web.env 指到沙盒
 rewrite_host_script() {
-  sed -i '' -e 's#^SSH_PORT=2222#SSH_PORT=2223#' -e 's#dev_run "reboot"#dev_run "echo sandbox-no-reboot"#' \
-            -e "s#/data/luyaz/web.env#$SB/web.env#g" "$KIT/install.sh"
+  # 端口 2222→2223；dev_run "reboot" 变成 echo；设备上的 web.env 指到沙盒
+  sed -i '' \
+      -e 's#^SSH_PORT=2222#SSH_PORT=2223#' \
+      -e 's#dev_run "reboot"#dev_run "echo sandbox-no-reboot"#' \
+      -e "s#/data/luyaz/web.env#$SB/web.env#g" \
+      "$KIT/install.sh"
   if grep -n '"reboot"\|/data/luyaz/web.env' "$KIT/install.sh" | grep -v '"reboot")'; then
     abort "电脑端脚本里还有真实的 reboot 调用或设备真实路径，先更新本脚本"
-  fi
+  fi   # 改写完整
 }
 
 # 改过的文件要重算 sha256，不然 install.sh 的完整性检查会拒绝
 refresh_manifest() {
   ( cd "$KIT"
     { sed -n '1,/^sha256/p' MANIFEST.txt
-      find install.sh device payload -type f | LC_ALL=C sort | while read -r f; do
+      find install.sh device payload -type f | LC_ALL=C sort | while read -r f; do   # 和 build-kit 同样的顺序和格式
         printf '%s  %s\n' "$(shasum -a 256 "$f" | awk '{print $1}')" "$f"
       done; } > MANIFEST.new && mv MANIFEST.new MANIFEST.txt )
 }
@@ -188,10 +198,11 @@ kit() {
   ( cd "$KIT" && env HOME="$WORK/home" PATH="$WORK/bin:$PATH" GATEWAY="$GATEWAY" SSH_KEY="$(KEY_IN_HOME)" \
       NO_REBOOT=1 bash ./install.sh "$@" )
 }
+
 expect_fail() { "$@" </dev/null && abort "应该失败：$*" || true; }
 
 stage_device() {
-  clean >/dev/null
+  clean >/dev/null   # 从干净的沙盒开始
   # 沙盒版 luyaz-web 的启动脚本，代替 /etc/init.d/luyaz-web start
   on_device "mkdir -p $SB && cat > $SB/lweb-start.sh" <<LWS
 nohup $SB/luyaz/luyaz-web serve --bind 127.0.0.1:19090 --upstream http://127.0.0.1:9460 --password-file $SB/web.env \\
@@ -254,7 +265,7 @@ scenario_bad_input() {
   log=$(AGENT_PASSWORD='a b' kit admin </dev/null 2>&1) && abort "环境变量没有优先"
   rm -f "$KIT/u60.env"
   echo "$log" | grep -q '不能含引号' || abort "环境变量没有优先于 u60.env"
-  echo "[env>u60.env] 命令行的 AGENT_PASSWORD 优先 ✓"
+  echo "[env>u60.env] AGENT_PASSWORD：命令行优先 ✓"
   expect_fail kit foo
   expect_fail kit ssh status
 }
@@ -274,8 +285,7 @@ run() {
   scenario_reboot_noop
   scenario_bad_input
   say "status"; kit status </dev/null
-
-  clean
+  clean   # 收尾，再拍一次快照比较
   after=$(on_device "$SNAP")
   close_mux
   if [ "$before" = "$after" ]; then
@@ -283,11 +293,12 @@ run() {
   else
     echo "✗ $HOST 状态有变化:"; diff <(echo "$before") <(echo "$after"); exit 1
   fi
-}
+}   # run
 
-case "${1:-}" in
-  dry)   prepare ;;
-  run)   run ;;
-  clean) check_target; clean ;;
-  *)     echo "usage: $0 {dry|run|clean}"; exit 1 ;;
-esac
+# ── 入口
+mode=${1:-}
+if [ "$mode" = dry ]; then prepare
+elif [ "$mode" = run ]; then run
+elif [ "$mode" = clean ]; then check_target; clean
+else echo "usage: $0 {dry|run|clean}"; exit 1
+fi

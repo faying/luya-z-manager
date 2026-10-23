@@ -1,4 +1,4 @@
-//! /tools/cpu (CPU 与内存), the old `tools/cpu/page.tsx`: overall CPU and memory, a 5-minute CPU
+//! /tools/cpu (CPU 与内存): overall CPU and memory, a 5-minute CPU
 //! trend, per-core use and clock, and the memory breakdown. Read-only.
 //!
 //! The old page polled the agent's `/api/cpu` and `/api/memory` every 5 s. Here the numbers are

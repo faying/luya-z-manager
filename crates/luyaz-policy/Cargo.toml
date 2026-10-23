@@ -3,16 +3,16 @@ name = "luyaz-policy"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
-description = "U60 Pro (MU5250) policies as plain Rust (u60-platform.md Phase 4). The same code is built twice: into u60d as the built-in default, and into a wasm32 component (crates/luyaz-plugins) that u60d's host loads instead when one is installed."
+description = "U60 Pro (MU5250) policies as plain Rust. The same code is built twice: into u60d as the built-in default, and into a wasm32 component (crates/luyaz-plugins) that u60d's host loads instead when one is installed."
 license = "PolyForm-Noncommercial-1.0.0"
 
 [features]
-# u60d serialises reports and reads the agent's files; the wasm guest leaves it off
+# u60d serialises reports and reads the saved JSON files; the wasm guest leaves it off
 serde = ["dep:serde", "dep:serde_json"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
-# action bodies (`action::Json`) go through serde_json::Value so their text matches the agent's
+# action bodies (`action::Json`) go through serde_json::Value so their text matches what is saved
 serde_json = { version = "1", optional = true }
 
 [dev-dependencies]

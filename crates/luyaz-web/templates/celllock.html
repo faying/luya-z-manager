@@ -22,7 +22,7 @@
 <label class="grid gap-1"><span class="nd-aux">LTE PCI</span><input class="nd-field nd-mono" inputmode="numeric" autocomplete="off" placeholder="{{ l.pick("e.g. 456", "例如 456") }}" data-bind="_lpci" data-attr:disabled="$_dis"></label>
 <label class="grid gap-1"><span class="nd-aux">LTE EARFCN</span><input class="nd-field nd-mono" inputmode="numeric" autocomplete="off" placeholder="{{ l.pick("e.g. 1300", "例如 1300") }}" data-bind="_learfcn" data-attr:disabled="$_dis"></label>
 <div class="flex flex-wrap items-center gap-3"><button type="button" class="nd-btn nd-btn--primary" disabled data-attr:disabled="$_dis || !$_lpci.trim() || !$_learfcn.trim()" data-on:click="@post('{{ crate::celllock::PATH }}/lte/ask?pci=' + encodeURIComponent($_lpci) + '&amp;arfcn=' + encodeURIComponent($_learfcn))">{{ l.pick("Lock LTE", "锁定 LTE") }}</button>
-<span class="nd-aux" data-show="!$_lpci.trim() || !$_learfcn.trim()">{{ l.pick("PCI and EARFCN are required", "PCI 和 EARFCN 都要填") }}</span></div>
+<span class="nd-aux" data-show="!$_lpci.trim() || !$_learfcn.trim()">{{ l.pick("Fill in both PCI and EARFCN", "PCI 和 EARFCN 都要填") }}</span></div>
 {{ lte_op|safe }}</div>
 </section>
 </div>

@@ -37,11 +37,11 @@ echo "LUYAZ_WEB_PASSWORD=other" >"$T/env"
 sh "$SCRIPTS/web-auth.sh" migrate >/dev/null 2>&1; rc=$?
 check "different password there: not overwritten" '[ $rc != 0 ] && [ "$(cat $T/env)" = "LUYAZ_WEB_PASSWORD=other" ]'
 # the old key (kits before F7) is not read any more: refused, web.env left alone
-mig "export ZTE_AGENT_PASSWORD='old1'"
+mig "export ZTE_AGENT_PASSWORD='old1'"  # RESIDUE-OK: key of pre-F7 archives
 check "old key in the kit file: refused" '[ ! -f $T/env ]'
 printf '#!/bin/sh\nexport LUYAZ_WEB_PASSWORD=same\n' >"$T/start.sh"
-echo "ZTE_AGENT_PASSWORD=same" >"$T/env"
+echo "ZTE_AGENT_PASSWORD=same" >"$T/env"  # RESIDUE-OK: key of pre-F7 archives
 sh "$SCRIPTS/web-auth.sh" migrate >/dev/null 2>&1; rc=$?
-check "old key in web.env: not overwritten" '[ $rc != 0 ] && [ "$(cat $T/env)" = "ZTE_AGENT_PASSWORD=same" ]'
+check "old key in web.env: not overwritten" '[ $rc != 0 ] && [ "$(cat $T/env)" = "ZTE_AGENT_PASSWORD=same" ]'  # RESIDUE-OK: key of pre-F7 archives
 rm -rf "$T"
 echo; echo "passed $PASS, failed $FAIL"; [ "$FAIL" = 0 ]

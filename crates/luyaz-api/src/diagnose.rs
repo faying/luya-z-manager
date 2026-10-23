@@ -1,8 +1,8 @@
-//! Deep diagnosis' pure parts (moved from zte-agent `deep_diag.rs`, Phase 4 step 8e): the gate
+//! Deep diagnosis' pure parts : the gate
 //! shared by diagnosis, speed tests and network search/register (D10), the result shapes, every
 //! layer's judgement and the main cause, and the cell-load history from past events. The runner
 //! (gathering the inputs) stays with the agent until netwatch, whose history it reads, moves too
-//! (step 9); u60d's speed test and search/register take this same gate meanwhile.
+//!; u60d's speed test and search/register take this same gate meanwhile.
 
 use serde::Serialize;
 use serde_json::{Value, json};

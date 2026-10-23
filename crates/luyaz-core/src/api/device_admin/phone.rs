@@ -1,12 +1,12 @@
-//! The AT port's routes (the agent's `at_terminal.rs` and `telephony.rs`): the AT terminal, USSD
-//! and the SIM toolkit, through u60d's `at.rs` (one owner of the port: its lock, its port pick).
-//! The terminal's line is typed by a person ([`crate::at::raw`]); USSD and STK are built from
-//! checked parts ([`crate::at::Phone`]). The decoders and parsers are the agent's, as they were.
+//! The AT port's routes: the AT terminal, USSD and the SIM toolkit, all through `crate::at` (the
+//! port's one owner: its lock, its port pick). The terminal sends a line a person typed
+//! ([`crate::at::raw`]); USSD and STK send commands built from checked parts
+//! ([`crate::at::Phone`]), and their hex answers are decoded below.
 //!
-//! Differences from the agent: the terminal stops at OK or ERROR instead of always waiting the
-//! whole `timeout` (an unsolicited line after the answer is not shown); a line with a control
-//! character in it is refused (the agent's `echo -e` would have sent two commands); a `+CFUN=` set
-//! is refused ([`radio_set`]).
+//! The terminal returns at OK or ERROR rather than waiting out the whole `timeout` (a line the
+//! modem volunteers after the answer is not shown), refuses a line with a control character in it
+//! (it would reach the modem as two commands), and refuses `+CFUN=` sets ([`radio_set`]) and call
+//! control ([`call_control`]).
 
 use std::time::{Duration, Instant};
 
@@ -28,7 +28,7 @@ fn target(c: &Compat) -> at::Target {
 
 /// A `+CFUN=` set (anything but the `=?` test form): refused (owner, 10-13). The vendor's ONLINE
 /// does not bring the modem back from LPM and `AT+CFUN=1` blocks on the port (CLAUDE.md, B31):
-/// only a restart does, and this device is someone's only uplink abroad. Unlike the agent.
+/// only a restart does, and this device is someone's only uplink abroad.
 pub(crate) fn radio_set(cmd: &str) -> bool {
     crate::device_profile::policy::radio_set(cmd)
 }
@@ -55,7 +55,8 @@ pub(crate) fn call_control(cmd: &str) -> bool {
         }
         after_amp = c == '&';
     }
-    s.match_indices("+CHUP").any(|(i, _)| !s[i + 5..].starts_with("=?"))
+    s.match_indices("+CHUP")
+        .any(|(i, _)| !s[i + 5..].starts_with("=?"))
 }
 
 /// POST /api/at/send `{"command": "AT+CSQ", "timeout": 3}`
@@ -76,19 +77,18 @@ pub async fn at_send(State(c): State<Compat>, req: Request) -> Response {
     if !command.to_ascii_uppercase().starts_with("AT") {
         return reply(
             400,
-            json!({"ok": false, "error": "command must start with 'AT'"}),
+            json!({"ok": false, "error": "not an AT command (it has to begin with AT)"}),
         );
     }
     let timeout = parsed["timeout"].as_u64().unwrap_or(3).clamp(1, 30);
-    // the agent's filter (it went through a shell); kept, so the same line sends the same command
-    let sanitized: String = command
-        .chars()
-        .filter(|c| !matches!(c, '\'' | '`' | '$' | ';' | '|' | '&'))
-        .collect();
+    // Shell metacharacters are dropped before sending, as the terminal always has; the checks
+    // below look at both forms, since dropping `&` can turn `AT&D2` into `ATD2`.
+    const DROPPED: [char; 6] = ['\'', '`', '$', ';', '|', '&'];
+    let sanitized = command.replace(DROPPED, "");
     if sanitized.is_empty() {
         return reply(
             400,
-            json!({"ok": false, "error": "command is empty after sanitization"}),
+            json!({"ok": false, "error": "nothing left to send once unsafe characters are removed"}),
         );
     }
     if radio_set(command) || radio_set(&sanitized) {
@@ -109,7 +109,7 @@ pub async fn at_send(State(c): State<Compat>, req: Request) -> Response {
     }
     // Any AT command may change the network behind u60d's back: a network-mode change still
     // confirming is cancelled, not rolled back over this one (D40). Best effort. A person's
-    // command: the agent's forward says `web`, luyaz-web's direct call nothing (`screen`); the
+    // command: luyaz-web's call carries no source (`screen`); the
     // scheduler and the scenario never reach this route.
     if !matches!(source, "scheduler" | "scenario") {
         let r = c
@@ -134,7 +134,10 @@ pub async fn at_send(State(c): State<Compat>, req: Request) -> Response {
             json!({"ok": true, "data": {"command": sanitized, "response": a.text, "port": a.port,
                 "elapsed_ms": start.elapsed().as_millis() as u64}}),
         ),
-        Err(e) => reply(503, json!({"ok": false, "error": e, "kind": at::error_kind(&e).name()})),
+        Err(e) => reply(
+            503,
+            json!({"ok": false, "error": e, "kind": at::error_kind(&e).name()}),
+        ),
     }
 }
 
@@ -148,467 +151,585 @@ pub async fn at_port(State(c): State<Compat>) -> Response {
     reply(200, json!({"ok": true, "data": data}))
 }
 
-// ---- USSD: the agent's decoders and parsers ----
+// ---- USSD and STK text: how the modem's hex comes back as words ----
 //
-// u60d's `sms.rs` has a UCS-2 decoder (surrogate pairs joined) and no GSM 7-bit one; these are the
-// agent's, copied as they were, so a USSD answer or an STK menu reads the same.
+// `sms.rs` only knows UCS-2; a USSD answer can also arrive packed as GSM 03.38 septets, and an STK
+// menu as a TLV list. Everything here is pure and has its tests at the bottom of the file.
 
-// GSM 7-bit default alphabet → UTF-8
+mod text {
+    /// GSM 03.38 default alphabet, by septet value. 0x1B is the escape to [`extension`].
+    const GSM_DEFAULT: [char; 128] = [
+        '@', '£', '$', '¥', 'è', 'é', 'ù', 'ì', 'ò', 'Ç', '\n', 'Ø', 'ø', '\r', 'Å',
+        'å', // 0x00
+        'Δ', '_', 'Φ', 'Γ', 'Λ', 'Ω', 'Π', 'Ψ', 'Σ', 'Θ', 'Ξ', '\u{1b}', 'Æ', 'æ', 'ß',
+        'É', // 0x10
+        ' ', '!', '"', '#', '¤', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.',
+        '/', // 0x20
+        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', ';', '<', '=', '>',
+        '?', // 0x30
+        '¡', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N',
+        'O', // 0x40
+        'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'Ä', 'Ö', 'Ñ', 'Ü',
+        '§', // 0x50
+        '¿', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
+        'o', // 0x60
+        'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'ä', 'ö', 'ñ', 'ü',
+        'à', // 0x70
+    ];
 
-const GSM7_TABLE: &[&str] = &[
-    "@", "\u{00A3}", "$", "\u{00A5}", "\u{00E8}", "\u{00E9}", "\u{00F9}", "\u{00EC}", "\u{00F2}",
-    "\u{00C7}", "\n", "\u{00D8}", "\u{00F8}", "\r", "\u{00C5}", "\u{00E5}", "_", "_", " ", "!",
-    "\"", "#", "\u{00A4}", "%", "&", "'", "(", ")", "*", "+", ",", "-", ".", "/", "0", "1", "2",
-    "3", "4", "5", "6", "7", "8", "9", ":", ";", "<", "=", ">", "?", "\u{00A1}", "A", "B", "C",
-    "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V",
-    "W", "X", "Y", "Z", "\u{00C4}", "\u{00D6}", "\u{00D1}", "\u{00DC}", "\u{00A7}", "\u{00BF}",
-    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s",
-    "t", "u", "v", "w", "x", "y", "z", "\u{00E4}", "\u{00F6}", "\u{00F1}", "\u{00FC}", "\u{00E0}",
-];
-
-fn hex_to_bytes(hex: &str) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(hex.len() / 2);
-    let mut i = 0;
-    while i + 1 < hex.len() {
-        if let Ok(b) = u8::from_str_radix(&hex[i..i + 2], 16) {
-            bytes.push(b);
-        }
-        i += 2;
+    /// The default alphabet's character for a septet value.
+    pub fn default_char(septet: u8) -> char {
+        GSM_DEFAULT[usize::from(septet & 0x7f)]
     }
-    bytes
-}
 
-fn decode_gsm7(hex_str: &str) -> String {
-    if hex_str.is_empty() {
-        return String::new();
-    }
-    let bytes = hex_to_bytes(hex_str);
-    // Unpack 7-bit septets from 8-bit octets
-    let mut septets = Vec::new();
-    let mut shift: u32 = 0;
-    for (bi, &byte) in bytes.iter().enumerate() {
-        let val = if bi > 0 {
-            ((byte as u32) << shift) + ((bytes[bi - 1] as u32) >> (8 - shift))
-        } else {
-            byte as u32
-        };
-        septets.push((val % 128) as usize);
-        shift += 1;
-        if shift == 7 {
-            septets.push((byte as u32 >> 1) as usize);
-            shift = 0;
+    /// The default extension table (the septet after 0x1B). A code it does not define reads as
+    /// the default table's character, as GSM 03.38 asks of a receiver.
+    pub fn extension(septet: u8) -> char {
+        match septet {
+            0x0A => '\u{0c}',
+            0x14 => '^',
+            0x28 => '{',
+            0x29 => '}',
+            0x2F => '\\',
+            0x3C => '[',
+            0x3D => '~',
+            0x3E => ']',
+            0x40 => '|',
+            0x65 => '€',
+            other => default_char(other),
         }
     }
-    let mut out = String::new();
-    for s in septets {
-        if let Some(&ch) = GSM7_TABLE.get(s) {
-            out.push_str(ch);
-        }
-    }
-    out
-}
 
-fn decode_ucs2(hex_str: &str) -> String {
-    if hex_str.is_empty() {
-        return String::new();
-    }
-    let mut out = String::new();
-    let mut i = 0;
-    while i + 3 < hex_str.len() {
-        if let Ok(cp) = u32::from_str_radix(&hex_str[i..i + 4], 16) {
-            if let Some(ch) = char::from_u32(cp) {
-                out.push(ch);
+    /// Septet values packed low bit first (GSM 03.38 §6.1.2.1). When the octets end exactly on
+    /// a septet boundary with 7 spare bits, a final 0x00 or CR is padding (GSM 03.38 §6.1.2.3.1)
+    /// and dropped.
+    pub fn septets(hex: &str) -> Vec<u8> {
+        let raw = octets(hex);
+        let mut out = Vec::with_capacity(raw.len() * 8 / 7);
+        let (mut bits, mut held) = (0u32, 0u32);
+        for o in &raw {
+            bits |= u32::from(*o) << held;
+            held += 8;
+            while held >= 7 {
+                out.push((bits & 0x7f) as u8);
+                bits >>= 7;
+                held -= 7;
             }
         }
-        i += 4;
-    }
-    out
-}
-
-fn decode_ussd_response(hex_str: &str, dcs: u32) -> String {
-    if hex_str.is_empty() {
-        return String::new();
-    }
-    let coding = dcs % 16;
-    if coding == 8 {
-        return decode_ucs2(hex_str);
-    }
-    if coding == 0 || coding == 15 {
-        let decoded = decode_gsm7(hex_str);
-        if !decoded.is_empty() {
-            return decoded;
+        if raw.len().is_multiple_of(7) && matches!(out.last(), Some(0x00 | 0x0D)) {
+            out.pop();
         }
+        out
     }
-    // Fallback: plain ASCII hex
-    let mut out = String::new();
-    let bytes = hex_to_bytes(hex_str);
-    for b in &bytes {
-        if *b >= 32 && *b < 127 {
-            out.push(*b as char);
+
+    /// Hex digits two at a time; a pair that is not hex is skipped, an odd last digit dropped.
+    pub fn octets(hex: &str) -> Vec<u8> {
+        hex.as_bytes()
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .filter_map(|pair| std::str::from_utf8(pair).ok())
+            .filter_map(|pair| u8::from_str_radix(pair, 16).ok())
+            .collect()
+    }
+
+    /// GSM 7-bit text: the default alphabet with its extension table. A lone escape at the
+    /// end is dropped.
+    pub fn gsm7(hex: &str) -> String {
+        let mut out = String::new();
+        let mut it = septets(hex).into_iter();
+        while let Some(s) = it.next() {
+            match s {
+                0x1B => out.extend(it.next().map(extension)),
+                _ => out.push(default_char(s)),
+            }
         }
+        out
     }
-    if !out.is_empty() {
-        return out;
+
+    /// Big-endian UTF-16 units, four hex digits each, decoded one unit at a time (a lone surrogate
+    /// half is dropped, not joined).
+    pub fn ucs2(hex: &str) -> String {
+        hex.as_bytes()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter_map(|quad| std::str::from_utf8(quad).ok())
+            .filter_map(|quad| u32::from_str_radix(quad, 16).ok())
+            .filter_map(char::from_u32)
+            .collect()
     }
-    hex_str.to_string()
-}
 
-// ---------------------------------------------------------------------------
-// Parsers
-// ---------------------------------------------------------------------------
+    /// Octets as Latin-1, control codes left out.
+    pub fn latin1(hex: &str) -> String {
+        octets(hex)
+            .into_iter()
+            .filter(|&b| b >= 0x20)
+            .map(char::from)
+            .collect()
+    }
 
-fn parse_cusd(raw: &str) -> Option<(i64, String, u32)> {
-    // Look for +CUSD: status[,"body"[,dcs]]
-    for line in raw.lines() {
-        let Some(rest) = line.strip_prefix("+CUSD:") else {
-            continue;
-        };
-        let rest = rest.trim();
-        // Parse status
-        let status_end = rest
-            .find(|c: char| !c.is_ascii_digit())
-            .unwrap_or(rest.len());
-        let status: i64 = rest[..status_end].parse().unwrap_or(-1);
-        let after_status = &rest[status_end..];
-
-        // Try to extract body between quotes
-        let mut body = String::new();
-        let mut dcs: u32 = 15;
-        if let Some(q1) = after_status.find('"') {
-            let after_q1 = &after_status[q1 + 1..];
-            if let Some(q2) = after_q1.find('"') {
-                body = after_q1[..q2].to_string();
-                // Look for dcs after closing quote
-                let after_body = &after_q1[q2 + 1..];
-                if let Some(comma) = after_body.find(',') {
-                    let dcs_str = after_body[comma + 1..].trim();
-                    let dcs_end = dcs_str
-                        .find(|c: char| !c.is_ascii_digit())
-                        .unwrap_or(dcs_str.len());
-                    dcs = dcs_str[..dcs_end].parse().unwrap_or(15);
+    /// A USSD string by its data coding scheme's low nibble: 8 = UCS-2; 0 and 15 = GSM 7-bit
+    /// (when that yields anything); otherwise, or as the fallback, printable ASCII; and when even
+    /// that is empty, the hex as it came.
+    pub fn ussd(hex: &str, dcs: u32) -> String {
+        if hex.is_empty() {
+            return String::new();
+        }
+        match dcs & 0x0f {
+            8 => return ucs2(hex),
+            0 | 15 => {
+                let s = gsm7(hex);
+                if !s.is_empty() {
+                    return s;
                 }
             }
+            _ => {}
         }
-        return Some((status, body, dcs));
+        let printable: String = octets(hex)
+            .into_iter()
+            .filter(|b| (0x20..0x7f).contains(b))
+            .map(char::from)
+            .collect();
+        if printable.is_empty() {
+            hex.to_string()
+        } else {
+            printable
+        }
     }
-    None
+
+    /// The leading run of ASCII digits of `s`.
+    pub fn digits(s: &str) -> &str {
+        let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+        &s[..end]
+    }
 }
 
-// ---------------------------------------------------------------------------
-// STK TLV parser
-// ---------------------------------------------------------------------------
+/// One `+CUSD: <m>[,"<str>"[,<dcs>]]` line: status (-1 when unreadable), the quoted string as
+/// sent, and its coding scheme (15 when absent).
+struct Cusd {
+    status: i64,
+    body: String,
+    dcs: u32,
+}
 
+impl Cusd {
+    fn find(answer: &str) -> Option<Cusd> {
+        let rest = answer
+            .lines()
+            .find_map(|l| l.strip_prefix("+CUSD:"))?
+            .trim();
+        let status_txt = text::digits(rest);
+        let mut cusd = Cusd {
+            status: status_txt.parse().unwrap_or(-1),
+            body: String::new(),
+            dcs: 15,
+        };
+        let tail = &rest[status_txt.len()..];
+        let quoted = tail
+            .split_once('"')
+            .and_then(|(_, after_open)| after_open.split_once('"'));
+        if let Some((body, after_close)) = quoted {
+            cusd.body = body.to_string();
+            if let Some((_, dcs_txt)) = after_close.split_once(',') {
+                cusd.dcs = text::digits(dcs_txt.trim()).parse().unwrap_or(15);
+            }
+        }
+        Some(cusd)
+    }
+
+    fn to_json(&self) -> Value {
+        let decoded = text::ussd(&self.body, self.dcs);
+        json!({
+            "response": if decoded.is_empty() { self.body.as_str() } else { decoded.as_str() },
+            "raw_response": self.body,
+            "status": self.status,
+            "dcs": self.dcs,
+            "session_active": self.status == 1,
+        })
+    }
+}
+
+/// A SIM toolkit menu: its title and `{"id","label"}` items.
 struct StkMenu {
     title: String,
     items: Vec<Value>,
 }
 
-fn parse_stk_menu_tlv(hex: &str) -> Option<StkMenu> {
-    if hex.is_empty() {
-        return None;
-    }
-    let mut title = String::new();
-    let mut items = Vec::new();
-    let mut i = 0;
-    while i + 4 <= hex.len() {
-        let tag = u8::from_str_radix(&hex[i..i + 2], 16).ok()?;
-        let len = usize::from_str_radix(&hex[i + 2..i + 4], 16).ok()?;
-        let val_start = i + 4;
-        let val_end = val_start + len * 2;
-        if val_end > hex.len() {
-            break;
-        }
-        let val_hex = &hex[val_start..val_end];
-        match tag {
-            0x85 => {
-                // Alpha identifier (title)
-                title = decode_ucs2(val_hex);
-                if title.is_empty() {
-                    title = decode_hex_ascii(val_hex);
-                }
+/// UCS-2 first, Latin-1 when that gives nothing.
+fn stk_text(hex: &str) -> String {
+    let s = text::ucs2(hex);
+    if s.is_empty() { text::latin1(hex) } else { s }
+}
+
+impl StkMenu {
+    /// SET UP MENU's simple-TLV list in hex: tag 0x85 (alpha identifier) is the title, each 0x8F
+    /// (item: one id octet, then the text) an entry. A header that is not hex gives `None`; a
+    /// length running past the end stops the walk. `None` too when neither part was found.
+    fn from_tlv(hex: &str) -> Option<StkMenu> {
+        let mut menu = StkMenu {
+            title: String::new(),
+            items: Vec::new(),
+        };
+        let mut rest = hex;
+        while rest.len() >= 4 {
+            let tag = u8::from_str_radix(&rest[..2], 16).ok()?;
+            let octets = usize::from_str_radix(&rest[2..4], 16).ok()?;
+            let Some(value) = rest.get(4..4 + octets * 2) else {
+                break;
+            };
+            if tag == 0x85 {
+                menu.title = stk_text(value);
+            } else if tag == 0x8F && value.len() >= 4 {
+                let id = u8::from_str_radix(&value[..2], 16).unwrap_or(0);
+                menu.items
+                    .push(json!({"id": id, "label": stk_text(&value[2..])}));
             }
-            0x8F => {
-                // Item: first byte = item ID, rest = text
-                if val_hex.len() >= 4 {
-                    let item_id = u8::from_str_radix(&val_hex[..2], 16).unwrap_or(0);
-                    let text_hex = &val_hex[2..];
-                    let mut label = decode_ucs2(text_hex);
-                    if label.is_empty() {
-                        label = decode_hex_ascii(text_hex);
-                    }
-                    items.push(json!({"id": item_id, "label": label}));
-                }
-            }
-            _ => {}
+            rest = &rest[4 + octets * 2..];
         }
-        i = val_end;
+        (!menu.title.is_empty() || !menu.items.is_empty()).then_some(menu)
     }
-    if !items.is_empty() || !title.is_empty() {
-        Some(StkMenu { title, items })
-    } else {
-        None
+
+    /// The `+STGI` listing: the first `STGI:` line is the quoted title, every later one
+    /// `id,type,"label"`.
+    fn from_stgi(answer: &str) -> (String, Vec<Value>) {
+        let mut lines = answer
+            .lines()
+            .filter_map(|l| l.strip_prefix("STGI:"))
+            .map(str::trim);
+        let title = lines
+            .next()
+            .and_then(|t| t.strip_prefix('"')?.strip_suffix('"'))
+            .unwrap_or("SIM Menu")
+            .to_string();
+        let items = lines
+            .filter_map(|l| {
+                let mut f = l.splitn(3, ',');
+                let id = f.next()?.trim().parse::<u64>().unwrap_or(0);
+                let label = f.nth(1)?.trim().trim_matches('"');
+                Some(json!({"id": id, "label": label}))
+            })
+            .collect();
+        (title, items)
     }
 }
 
-fn decode_hex_ascii(hex: &str) -> String {
-    let bytes = hex_to_bytes(hex);
-    let mut out = String::new();
-    for b in bytes {
-        if b >= 32 {
-            out.push(b as char);
-        }
-    }
-    out
-}
-
-fn format_ussd_response(parsed: (i64, String, u32)) -> Value {
-    let (status, body, dcs) = parsed;
-    let decoded = decode_ussd_response(&body, dcs);
-    let response = if decoded.is_empty() { &body } else { &decoded };
-    let session_active = status == 1;
-    json!({
-        "response": response,
-        "raw_response": body,
-        "status": status,
-        "dcs": dcs,
-        "session_active": session_active,
+/// The hex payload after `prefix` (at least two octets of it), else the first bare line of at
+/// least eight hex digits.
+fn hex_payload(answer: &str, prefix: &str) -> Option<String> {
+    let after_prefix = answer
+        .lines()
+        .filter_map(|l| l.strip_prefix(prefix))
+        .find_map(|rest| {
+            let h: String = rest.chars().filter(char::is_ascii_hexdigit).collect();
+            (h.len() >= 4).then_some(h)
+        });
+    after_prefix.or_else(|| {
+        answer
+            .lines()
+            .map(str::trim)
+            .find(|l| l.len() >= 8 && l.chars().all(|c| c.is_ascii_hexdigit()))
+            .map(String::from)
     })
 }
 
-fn ussd_reply(r: Result<String, String>, error_too: bool) -> Response {
-    match r {
-        Ok(resp) => {
-            if error_too && resp.contains("ERROR") {
-                return reply(500, json!({"ok": false, "error": "USSD failed"}));
-            }
-            match parse_cusd(&resp) {
-                Some(parsed) => reply(
-                    200,
-                    json!({"ok": true, "data": format_ussd_response(parsed)}),
-                ),
-                None => {
-                    let clean: String = resp.chars().filter(|c| !c.is_control()).collect();
-                    reply(
-                        200,
-                        json!({"ok": true, "data": {"response": clean, "raw_response": clean,
-                            "status": -1, "dcs": 15, "session_active": false}}),
-                    )
-                }
-            }
-        }
-        Err(e) => reply(503, json!({"ok": false, "error": e, "kind": at::error_kind(&e).name()})),
-    }
+/// The number at the start of the first line beginning with `prefix`.
+fn number_after(answer: &str, prefix: &str) -> Option<i64> {
+    let rest = answer.lines().find_map(|l| l.strip_prefix(prefix))?;
+    text::digits(rest.trim()).parse().ok()
 }
 
-fn field<'a>(parsed: &'a Value, name: &str) -> Option<&'a str> {
-    parsed[name].as_str().filter(|s| !s.is_empty())
+fn printable(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).collect()
+}
+
+fn port_error(e: String) -> Response {
+    let kind = at::error_kind(&e).name();
+    reply(503, json!({"ok": false, "error": e, "kind": kind}))
+}
+
+/// A USSD exchange's answer: the decoded `+CUSD`, or the text as it came when there is none.
+/// `fail_on_error`: a fresh request answered with ERROR is a 500 (a reply inside a session is not
+/// checked, as before).
+fn ussd_answer(r: Result<String, String>, fail_on_error: bool) -> Response {
+    let answer = match r {
+        Ok(a) => a,
+        Err(e) => return port_error(e),
+    };
+    if fail_on_error && answer.contains("ERROR") {
+        return reply(500, json!({"ok": false, "error": "USSD failed"}));
+    }
+    let data = match Cusd::find(&answer) {
+        Some(cusd) => cusd.to_json(),
+        None => {
+            let flat = printable(&answer);
+            json!({"response": flat, "raw_response": flat, "status": -1, "dcs": 15,
+                "session_active": false})
+        }
+    };
+    reply(200, json!({"ok": true, "data": data}))
+}
+
+fn bad_request(msg: &str) -> Response {
+    reply(400, json!({"ok": false, "error": msg}))
+}
+
+/// The body's non-empty string field `name`; `Err` = the 400's message.
+fn string_field(body: &[u8], name: &str) -> Result<String, String> {
+    let v: Value = serde_json::from_slice(body).map_err(|_| "invalid JSON".to_string())?;
+    v[name]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .ok_or_else(|| format!("missing {name}"))
 }
 
 /// POST /api/ussd/send `{"code": "*123#"}`
 pub async fn ussd_send(State(c): State<Compat>, body: Bytes) -> Response {
-    let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
-        return reply(400, json!({"ok": false, "error": "invalid JSON"}));
-    };
-    let Some(code) = field(&parsed, "code") else {
-        return reply(400, json!({"ok": false, "error": "missing code"}));
-    };
-    ussd_reply(at::phone(target(&c), Phone::ussd(code)).await, true)
+    match string_field(&body, "code") {
+        Ok(code) => ussd_answer(at::phone(target(&c), Phone::ussd(&code)).await, true),
+        Err(msg) => bad_request(&msg),
+    }
 }
 
 /// POST /api/ussd/respond `{"reply": "1"}`
 pub async fn ussd_respond(State(c): State<Compat>, body: Bytes) -> Response {
-    let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
-        return reply(400, json!({"ok": false, "error": "invalid JSON"}));
-    };
-    let Some(answer) = field(&parsed, "reply") else {
-        return reply(400, json!({"ok": false, "error": "missing reply"}));
-    };
-    ussd_reply(at::phone(target(&c), Phone::ussd(answer)).await, false)
+    match string_field(&body, "reply") {
+        Ok(answer) => ussd_answer(at::phone(target(&c), Phone::ussd(&answer)).await, false),
+        Err(msg) => bad_request(&msg),
+    }
 }
 
 /// POST /api/ussd/cancel
 pub async fn ussd_cancel(State(c): State<Compat>) -> Response {
     match at::phone(target(&c), Phone::UssdCancel).await {
         Ok(_) => reply(200, json!({"ok": true, "data": {"status": "ok"}})),
-        Err(e) => reply(503, json!({"ok": false, "error": e, "kind": at::error_kind(&e).name()})),
+        Err(e) => port_error(e),
     }
 }
 
-// ---- STK ----
+// ---- SIM toolkit ----
 
-/// The SIM supports STK: an STK/USAT AID in EF_DIR (AT+CUAD), else any AT+STIN? answer.
+/// USAT's registered application id prefix, looked for in `AT+CUAD`'s EF_DIR listing.
+const USAT_AID: &str = "A000000009";
+
+// The reasons `stk_support` gives, as the page shows them.
+const WHY_AID: &str = "the SIM lists a USAT application (AT+CUAD)";
+const WHY_STIN: &str = "the SIM answered AT+STIN?";
+
+/// Whether the SIM speaks STK, and the line saying why: a USAT AID in EF_DIR, failing that any
+/// `+STIN?` answer.
 async fn stk_support(t: &at::Target) -> (bool, String) {
-    if let Ok(resp) = at::phone(t.clone(), Phone::Cuad).await
-        && !resp.contains("ERROR")
-        && resp.to_uppercase().contains("A000000009")
+    let ok = |r: &Result<String, String>| matches!(r, Ok(a) if !a.contains("ERROR"));
+    let cuad = at::phone(t.clone(), Phone::Cuad).await;
+    if ok(&cuad)
+        && cuad
+            .as_deref()
+            .unwrap_or("")
+            .to_uppercase()
+            .contains(USAT_AID)
     {
-        return (true, "STK AID found in EF_DIR (AT+CUAD)".into());
+        return (true, WHY_AID.into());
     }
-    if let Ok(resp) = at::phone(t.clone(), Phone::Stin(2)).await
-        && resp.contains("STIN")
-        && !resp.contains("ERROR")
-    {
-        return (true, "STK indicated by AT+STIN? response".into());
+    let stin = at::phone(t.clone(), Phone::Stin(2)).await;
+    if ok(&stin) && stin.as_deref().unwrap_or("").contains("STIN") {
+        return (true, WHY_STIN.into());
     }
     (
         false,
-        "No STK AID in EF_DIR and no STIN response — SIM does not support STK".into(),
+        "this SIM has no SIM menu: no USAT application listed, no AT+STIN? answer".into(),
     )
 }
 
-/// GET /api/stk/menu
+fn menu_reply(kind: Option<&str>, title: &str, items: Vec<Value>, source: &str) -> Response {
+    let mut data = json!({"title": title, "items": items, "source": source});
+    match kind {
+        Some(k) => data["type"] = json!(k),
+        None => data["supported"] = json!(true),
+    }
+    reply(200, json!({"ok": true, "data": data}))
+}
+
+/// GET /api/stk/menu: the menu from `+CUSATD`, else from `+STIN?`/`+STGI` (a pending SET UP MENU
+/// or SELECT ITEM), else an empty list with what each try said.
 pub async fn stk_menu(State(c): State<Compat>) -> Response {
     let t = target(&c);
-    let (supported, diag) = stk_support(&t).await;
+    let (supported, why) = stk_support(&t).await;
     if !supported {
         return reply(
             200,
-            json!({"ok": true, "data": {"supported": false, "items": [], "reason": diag}}),
+            json!({"ok": true, "data": {"supported": false, "items": [], "reason": why}}),
         );
     }
-    let mut diagnostics = vec![diag];
-    if let Ok(resp) = at::phone(t.clone(), Phone::Cusatd).await {
-        if !resp.contains("ERROR") {
-            if let Some(menu) = extract_hex(&resp, "CUSATD:").and_then(|h| parse_stk_menu_tlv(&h)) {
-                return reply(
-                    200,
-                    json!({"ok": true, "data": {"supported": true, "title": menu.title,
-                        "items": menu.items, "source": "at_cusatd"}}),
-                );
-            }
-            diagnostics.push("AT+CUSATD=1 responded but no parseable menu".into());
+    let mut notes = vec![why];
+
+    if let Ok(a) = at::phone(t.clone(), Phone::Cusatd).await {
+        if a.contains("ERROR") {
+            notes.push("AT+CUSATD=1: modem said ERROR".into());
+        } else if let Some(m) = hex_payload(&a, "CUSATD:").and_then(|h| StkMenu::from_tlv(&h)) {
+            return menu_reply(None, &m.title, m.items, "at_cusatd");
         } else {
-            diagnostics.push("AT+CUSATD=1 returned ERROR".into());
+            notes.push("AT+CUSATD=1: answered, but no menu could be read from it".into());
         }
     }
-    if let Ok(resp) = at::phone(t.clone(), Phone::Stin(3)).await
-        && resp.contains("STIN")
+
+    if let Ok(a) = at::phone(t.clone(), Phone::Stin(3)).await
+        && a.contains("STIN")
     {
-        let stin = extract_number_after(&resp, "STIN:");
-        if let Some(n @ (37 | 25)) = stin
-            && let Ok(stgi) = at::phone(t.clone(), Phone::Stgi(n as u8)).await
-            && !stgi.contains("ERROR")
+        // 37 = SET UP MENU, 25 = SELECT ITEM: the two proactive commands that carry a list
+        let pending = number_after(&a, "STIN:");
+        if let Some(cmd @ (37 | 25)) = pending
+            && let Ok(listing) = at::phone(t.clone(), Phone::Stgi(cmd as u8)).await
+            && !listing.contains("ERROR")
         {
-            let (title, items) = parse_stgi_response(&stgi);
+            let (title, items) = StkMenu::from_stgi(&listing);
             if !items.is_empty() {
-                return reply(
-                    200,
-                    json!({"ok": true, "data": {"supported": true, "title": title,
-                        "items": items, "source": "at_stgi"}}),
-                );
+                return menu_reply(None, &title, items, "at_stgi");
             }
         }
-        diagnostics.push(format!(
-            "AT+STIN? returned type {stin:?}, no menu from STGI"
+        notes.push(format!(
+            "AT+STIN? returned type {pending:?}, no menu from STGI"
         ));
     }
+
     reply(
         200,
         json!({"ok": true, "data": {"supported": true, "items": [],
-            "reason": "no proactive command pending", "diagnostics": diagnostics}}),
+            "reason": "the SIM has no menu waiting right now", "diagnostics": notes}}),
     )
 }
 
-/// POST /api/stk/select `{"item_id": 1}`
+/// POST /api/stk/select `{"item_id": 1}`: a sub-menu when the SIM answers with one, else the
+/// answer as text.
 pub async fn stk_select(State(c): State<Compat>, body: Bytes) -> Response {
     let t = target(&c);
-    let (supported, diag) = stk_support(&t).await;
+    let (supported, why) = stk_support(&t).await;
     if !supported {
         return reply(
             200,
-            json!({"ok": true, "data": {"supported": false, "reason": diag}}),
+            json!({"ok": true, "data": {"supported": false, "reason": why}}),
         );
     }
-    let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
-        return reply(400, json!({"ok": false, "error": "invalid JSON"}));
+    let Ok(v) = serde_json::from_slice::<Value>(&body) else {
+        return bad_request("invalid JSON");
     };
-    let Some(item) = parsed["item_id"].as_u64() else {
-        return reply(400, json!({"ok": false, "error": "missing item_id"}));
+    let Some(item) = v["item_id"].as_u64() else {
+        return bad_request("missing item_id");
     };
-    if let Ok(resp) = at::phone(t, Phone::Cusate(item as u8)).await
-        && !resp.contains("ERROR")
-    {
-        if let Some(menu) = extract_hex(&resp, "CUSATE:").and_then(|h| parse_stk_menu_tlv(&h))
-            && !menu.items.is_empty()
-        {
-            return reply(
-                200,
-                json!({"ok": true, "data": {"type": "menu", "title": menu.title,
-                    "items": menu.items, "source": "at_cusate"}}),
-            );
-        }
-        let text: String = resp.chars().filter(|c| !c.is_control()).collect();
-        return reply(
+    let answer = match at::phone(t, Phone::Cusate(item as u8)).await {
+        Ok(a) if !a.contains("ERROR") => a,
+        _ => return reply(500, json!({"ok": false, "error": "item selection failed"})),
+    };
+    match hex_payload(&answer, "CUSATE:").and_then(|h| StkMenu::from_tlv(&h)) {
+        Some(m) if !m.items.is_empty() => menu_reply(Some("menu"), &m.title, m.items, "at_cusate"),
+        _ => reply(
             200,
-            json!({"ok": true, "data": {"type": "display", "data": text}}),
+            json!({"ok": true, "data": {"type": "display", "data": printable(&answer)}}),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test-only encoder: text → septets (default table, else escape + extension) → packed hex.
+    fn pack(t: &str) -> String {
+        let mut sept = Vec::new();
+        for ch in t.chars() {
+            let default = (0u8..128).find(|&i| i != 0x1B && text::default_char(i) == ch);
+            match default {
+                Some(i) => sept.push(i),
+                None => {
+                    let e = (0u8..128)
+                        .find(|&i| text::extension(i) == ch && text::default_char(i) != ch)
+                        .unwrap_or_else(|| panic!("{ch:?} has no GSM 7-bit code"));
+                    sept.extend([0x1B, e]);
+                }
+            }
+        }
+        let (mut bits, mut held, mut hex) = (0u32, 0u32, String::new());
+        for s in sept {
+            bits |= u32::from(s) << held;
+            held += 7;
+            while held >= 8 {
+                hex += &format!("{:02X}", bits & 0xff);
+                bits >>= 8;
+                held -= 8;
+            }
+        }
+        if held > 0 {
+            hex += &format!("{:02X}", bits & 0xff);
+        }
+        hex
+    }
+
+    #[test]
+    fn gsm7_known_vectors() {
+        assert_eq!(text::gsm7("C8329BFD06"), "Hello");
+        assert_eq!(text::gsm7("E8329BFD4697D9EC37"), "hellohello");
+        assert_eq!(text::ussd("C8329BFD06", 15), "Hello");
+        // 7 octets with a zero last septet: padding, not '@'
+        assert_eq!(text::gsm7(&pack("1234567")), "1234567");
+        // escape sequences: ESC 0x65 = €, ESC 0x0A = form feed
+        assert_eq!(text::gsm7(&pack("5 €")), "5 €");
+        assert_eq!(text::gsm7(&pack("a\u{0c}b")), "a\u{0c}b");
+        assert_eq!(text::gsm7(&pack("{[~]}|^\\")), "{[~]}|^\\");
+        // a balance reply as a carrier sends it
+        let reply = "Your balance is $12.50, valid until 2026-12-31. Reply 1 for offers [Δ]";
+        assert_eq!(text::ussd(&pack(reply), 15), reply);
+    }
+
+    #[test]
+    fn gsm7_round_trips_printable_ascii() {
+        // every printable ASCII character GSM 7-bit defines (all but the backtick)
+        let all: String = (0x20u8..0x7f)
+            .map(char::from)
+            .filter(|&c| c != '`')
+            .collect();
+        assert_eq!(text::gsm7(&pack(&all)), all);
+    }
+
+    #[test]
+    fn ucs2_and_fallbacks() {
+        assert_eq!(text::ussd("4F60597D", 72), "你好");
+        assert_eq!(text::ussd("414243", 4), "ABC");
+        assert_eq!(text::ussd("0102", 4), "0102");
+        assert_eq!(text::ussd("", 8), "");
+    }
+
+    #[test]
+    fn cusd_line() {
+        let c = Cusd::find("OK\n+CUSD: 1,\"4F60\",72\n").unwrap();
+        assert_eq!((c.status, c.body.as_str(), c.dcs), (1, "4F60", 72));
+        assert_eq!(c.to_json()["response"], "你");
+        assert_eq!(c.to_json()["session_active"], true);
+        let bare = Cusd::find("+CUSD: 2").unwrap();
+        assert_eq!((bare.status, bare.body.as_str(), bare.dcs), (2, "", 15));
+        assert!(Cusd::find("OK").is_none());
+    }
+
+    #[test]
+    fn stk_tlv_and_stgi() {
+        let m = StkMenu::from_tlv("850200418F03010042").unwrap();
+        assert_eq!(m.title, "A");
+        assert_eq!(m.items, vec![json!({"id": 1, "label": "B"})]);
+        assert!(StkMenu::from_tlv("").is_none());
+        assert!(StkMenu::from_tlv("ZZ01").is_none());
+        let (t, items) =
+            StkMenu::from_stgi("STGI: \"Menu\"\nSTGI: 1,0,\"One\"\nSTGI: 2,0,\"Two\"\nOK");
+        assert_eq!(t, "Menu");
+        assert_eq!(items[1], json!({"id": 2, "label": "Two"}));
+        assert_eq!(StkMenu::from_stgi("OK").0, "SIM Menu");
+        assert_eq!(number_after("STIN: 37\nOK", "STIN:"), Some(37));
+        assert_eq!(
+            hex_payload("CUSATD: 0,\"D00A\"", "CUSATD:").as_deref(),
+            // every hex digit after the prefix counts, the status digit too
+            Some("0D00A")
+        );
+        assert_eq!(
+            hex_payload("x\nD0112233\n", "CUSATD:").as_deref(),
+            Some("D0112233")
         );
     }
-    reply(500, json!({"ok": false, "error": "item selection failed"}))
-}
-
-// ---- STK helpers (the agent's) ----
-
-fn extract_hex(resp: &str, prefix: &str) -> Option<String> {
-    for line in resp.lines() {
-        if let Some(rest) = line.strip_prefix(prefix) {
-            let hex: String = rest
-                .trim()
-                .chars()
-                .filter(|c| c.is_ascii_hexdigit())
-                .collect();
-            if hex.len() >= 4 {
-                return Some(hex);
-            }
-        }
-    }
-    // Fallback: find any long hex string in response
-    for line in resp.lines() {
-        let trimmed = line.trim();
-        if trimmed.len() >= 8 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Some(trimmed.to_string());
-        }
-    }
-    None
-}
-
-fn extract_number_after(resp: &str, prefix: &str) -> Option<i64> {
-    for line in resp.lines() {
-        if let Some(rest) = line.strip_prefix(prefix) {
-            let num_str: String = rest
-                .trim()
-                .chars()
-                .take_while(|c| c.is_ascii_digit())
-                .collect();
-            return num_str.parse().ok();
-        }
-    }
-    None
-}
-
-fn parse_stgi_response(stgi: &str) -> (String, Vec<Value>) {
-    let mut title = "SIM Menu".to_string();
-    let mut items = Vec::new();
-    let mut first = true;
-    for line in stgi.lines() {
-        let Some(rest) = line.strip_prefix("STGI:") else {
-            continue;
-        };
-        let rest = rest.trim();
-        if first {
-            // First STGI line is the title
-            if let Some(t) = rest.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-                title = t.to_string();
-            }
-            first = false;
-            continue;
-        }
-        // Item lines: id,type,"label"
-        let parts: Vec<&str> = rest.splitn(3, ',').collect();
-        if parts.len() >= 3 {
-            let id: u64 = parts[0].trim().parse().unwrap_or(0);
-            let label = parts[2].trim().trim_matches('"').to_string();
-            items.push(json!({"id": id, "label": label}));
-        }
-    }
-    (title, items)
 }

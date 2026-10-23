@@ -1,15 +1,15 @@
-//! The APN candidate pick's card-change decision, moved from zte-agent `src/apn_pick.rs`
-//! (Phase 4 step 5a; D39: the one automatic APN write the owner authorised).
+//! The APN candidate pick's card-change decision, (D39: the one automatic
+//! APN write the owner authorised).
 //!
 //! When the card changes while our copy of a candidate is the active manual APN, go back to auto
 //! (or straight to the new card's own pick); when the card that made a pick comes back while the
 //! device is on auto or another card's copy, use its pick again. A manual APN the owner made is
-//! never touched. [`decide`] is the agent's, unchanged; the watcher thread, the ubus reads, the
+//! never touched. [`decide`] is the policy; the watcher thread, the ubus reads, the
 //! writes, the notice and the profile matching (`find_same`, on vendor JSON) stay in the host.
 //!
-//! Deliberate differences from the agent:
+//! Notes:
 //! - [`Store`] has no `notice` (the decision never reads it; serde skips it when reading the
-//!   agent's file).
+//!   file).
 //! - [`Watch`]'s fields are public, so a shadow record can carry it before and after a look.
 
 use std::collections::BTreeMap;
@@ -146,7 +146,7 @@ pub fn decide(
     Decision { action, card }
 }
 
-/// What the agent's `apn()` closure gave on a look: not asked, could not read, or the state.
+/// What the host's APN read gave on a look: not asked, could not read, or the state.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
@@ -161,7 +161,7 @@ pub enum ApnRead {
 
 /// Replay one recorded look: the same `decide` with the recorded inputs. Returns the decision,
 /// the watch after, and whether this copy asked for the APN state (the record says whether the
-/// agent did; asking when the agent did not, or the reverse, is a difference on its own).
+/// recorder did; asking when it did not, or the reverse, is a difference on its own).
 pub fn replay(
     store: &Store,
     before: &Watch,

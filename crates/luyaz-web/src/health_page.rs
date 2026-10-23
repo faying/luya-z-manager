@@ -1,4 +1,4 @@
-//! /health (健康; curl keeps the JSON link status), the old `health/page.tsx`: the device check
+//! /health (健康; curl keeps the JSON link status): the device check
 //! (doctor.sh on the device, run by u60d/the agent every minute) and the crash logs kept by the
 //! process supervisor.
 //!

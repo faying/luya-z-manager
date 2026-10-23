@@ -215,7 +215,7 @@ fn only_the_installed_core_keeps_a_marker() {
     for y in ["luyaz-core", "/data/luyaz/luyaz-core"] {
         assert!(marks(y), "{y}");
     }
-    for n in ["zwrt-datad", "/data/luyaz/luyaz-core.test", "u60d", ""] {
+    for n in ["otherd", "/data/luyaz/luyaz-core.test", "/data/otherd", ""] {
         assert!(!marks(n), "{n}");
     }
 }

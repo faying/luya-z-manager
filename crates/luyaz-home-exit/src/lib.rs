@@ -1,5 +1,5 @@
-//! CHILL home exit, the engine run by the core (moved from zte-agent `src/home_exit.rs`,
-//! u60-platform.md Phase 4 step 9a). Every side effect outside mihomo goes through [`Host`].
+//! CHILL home exit, the engine run by the core. Every side effect outside mihomo goes through
+//! [`Host`].
 //!
 //! CHILL home exit (`docs/designs/home-exit.md`, E3): send part of the traffic
 //! out through the home network — a SOCKS5 at home (`CHILL_HOME_EXIT`),
@@ -24,13 +24,14 @@
 //! The decision logic is [`Machine`] and [`run_job`], with all I/O behind
 //! [`Io`] and time passed in, so the flows are unit-tested without a device.
 
+// (de)serialised state and records
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 
 const STATE_FILE: &str = "/data/chill/home-exit.json";
 const HOME_IP_LIST: &str = "/data/chill/home_ip.list";
@@ -169,7 +170,7 @@ pub struct Obs {
     /// LAN clients (Wi-Fi + wired) from the core's `clients` block; `None` =
     /// unknown, which probes as before.
     pub clients: Option<i64>,
-    /// The screen's backlight; `None` = unknown (the agent), the old rule.
+    /// The screen's backlight; `None` = unknown, the old rule.
     pub screen_on: Option<bool>,
     /// The cell moved packets in its last ≥ 30 s window (u60d's `cell_window`); `None` =
     /// unknown, no waiting.
@@ -310,7 +311,7 @@ impl Machine {
         }
     }
 
-    /// A2: what was on before the agent (re)started. No saved state but env
+    /// A2: what was on before the core (re)started. No saved state but env
     /// switches on = nobody knows when they end: off. `rest` past its time:
     /// off. Otherwise adopt the env.
     pub fn startup(&mut self, had_file: bool, env: Items, now: u64, io: &mut dyn Io) {
@@ -534,7 +535,7 @@ pub trait Host: Send + Sync {
     }
     /// Whether this program owns the home exit now. One machine, one loop, one writer of
     /// chill.env's `CHILL_HOME_*`; while not, the loop waits and requests are refused. (u60d's host
-    /// said no until the agent handed `home_exit` over; since Phase 10 it always owns it.)
+    /// always owns it now.)
     fn owner(&self) -> bool {
         true
     }
@@ -868,7 +869,7 @@ pub struct HomeExit {
     host: Arc<dyn Host>,
     clock: Arc<dyn Clock + Send + Sync>,
     make_io: Box<MakeIo>,
-    /// Where u60d's shadow learns each tick (zte-agent only; the step 7b records).
+    /// Where u60d's shadow learns each tick (the shadow records).
     publish: Option<Box<dyn Fn(Value) + Send + Sync>>,
     ts_cache: Mutex<Option<(u64, Option<&'static str>)>>,
     ts_refreshing: std::sync::atomic::AtomicBool,
@@ -897,7 +898,7 @@ impl HomeExit {
         self.sim_pending.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// Publish shadow records (the agent's `/tmp/home-exit.tick.json`).
+    /// Publish shadow records (`/tmp/home-exit.tick.json`).
     pub fn with_publish(mut self, f: impl Fn(Value) + Send + Sync + 'static) -> Self {
         self.publish = Some(Box::new(f));
         self
@@ -1167,7 +1168,7 @@ impl HomeExit {
 }
 
 /* -------------------------------------------------------------- *
- *  Shadow records for u60d (u60-platform.md Phase 4 step 7b)
+ *  Shadow records for u60d
  * -------------------------------------------------------------- */
 
 /// u60d replays each tick and the start-up through its copy of the machine (it must not probe home
@@ -1454,7 +1455,7 @@ mod tests {
     }
 
     /// Records as u60d gets them: ticks and a start-up through the recorder parse into
-    /// u60-policy's types, and replaying them there gives the agent's machine after.
+    /// u60-policy's types, and replaying them there gives the machine after.
     #[test]
     fn shadow_records_replay_in_u60_policy() {
         use luyaz_policy::home_exit as pol;
@@ -1794,7 +1795,7 @@ mod tests {
         assert!(!m.p.reopened_in_china.media);
     }
 
-    /// A2: what was on when the agent was not watching.
+    /// A2: what was on when nothing was watching.
     #[test]
     fn startup_reconcile() {
         // no saved state but env on → off

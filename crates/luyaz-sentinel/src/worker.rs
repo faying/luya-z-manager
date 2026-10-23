@@ -1,12 +1,10 @@
-//! The worker thread (u60-sentinel.md §3, §4): what u60-guard does today that must go on when the
+//! The worker thread (u60-sentinel.md §3, §4): what must go on when the
 //! core is dead — G1 modem crash recovery, G2 ship recover-live, G3 the clock verdict, G4 the Wi-Fi
 //! fallback (+ the RTC alarm), G7 log caps — plus F5 (dropbear) and the core health verdict (§4). One
-//! round every 60 s, like the guard; everything that may block (locks, the Wi-Fi restore) is here,
+//! round every 60 s; everything that may block (locks, the Wi-Fi restore) is here,
 //! never in the screen thread (O3).
 //!
-//! Each round is a port of the guard function of the same name (touch-ui `scripts/u60-guard.sh`),
-//! with the same tunables, file formats and alert kinds; `tests.rs` carries over the guard test
-//! cases (`scripts/test/u60-guard/run.sh`). All device access is through [`WorkerIo`], so the tests
+//! All device access is through [`WorkerIo`], so the tests
 //! run on a fake and shadow mode ([`crate::shadow`]) can record instead of act. The deliberate
 //! changes (approved in the eng review): D3 — the direct Wi-Fi write takes the write lock before the
 //! Wi-Fi lock and never kills a lock holder (`wifi.rs`); a ship transaction of the sentinel itself is
@@ -160,10 +158,9 @@ pub trait WorkerIo {
     fn core_being_replaced(&mut self) -> bool;
     /// One alert SMS round as the sender `sentinel` (`u60-alerts::sms`).
     fn alert_sms(&mut self);
-    /// `/proc` cannot be read, so no process can be told alive (u60-guard is gone since 10c;
-    /// this is all that is left of its check).
+    /// `/proc` cannot be read, so no process can be told alive.
     fn proc_blind(&mut self) -> bool;
-    /// A normal boot, not power-off charging (u60-guard.init `boot_is_normal`).
+    /// A normal boot, not power-off charging.
     fn boot_is_normal(&mut self) -> bool;
 }
 
@@ -330,8 +327,7 @@ impl Worker {
     pub fn round(&mut self, io: &mut dyn WorkerIo) {
         self.last_round_mono = io.mono_s();
         // Power-off charging: the device is "off" to its owner. The screen thread still shows the
-        // UI's charging screen, but none of the guard's duties apply — the
-        // guard was not started then (u60-guard.init): no Wi-Fi switched on in an "off" device, no
+        // UI's charging screen, but none of the worker's duties apply: no Wi-Fi switched on in an "off" device, no
         // SMS because the core is (rightly) not running.
         if !self.boot_checked {
             self.boot_checked = true;

@@ -16,7 +16,6 @@
 |---|---|---|
 | [luya-z-manager](https://github.com/faying/luya-z-manager)（本仓库） | `luyaz-core`（由 `crates/luyaz-core` 编，`/data/luyaz/luyaz-core`，`127.0.0.1:9460`）+ `luyaz-web`（:9090）+ `luyaz-sentinel` | 数据服务和设备 API、浏览器里的高级后台、eSIM、CHILL 代理控制，**以及装机包（`onboard/`）** |
 | [luya-z-touch-ui](https://github.com/faying/luya-z-touch-ui) | `/data/luyaz/ui/`（`luyaz-ui`） | 前面板触屏界面（Rust，`touch-ui/rs/`；源码现在在本仓库的 `touch-ui/` 里），以及 `/data/luyaz/scripts/` 下的体检和兜底脚本 |
-| [luya-z-data-service](https://github.com/faying/luya-z-data-service) | （不再安装） | 原来的 Rust 版 `zwrt-datad`；已由本仓库的 luyaz-core 取代，装机包不再用它 |
 
 它们在设备上这样连起来：
 
@@ -69,8 +68,8 @@ ubus / uci / sysfs ──▶ luyaz-core 127.0.0.1:9460 ◀──（/v2/screen、
 
 **装机的电脑**（macOS / Linux / Windows 的 Git Bash 都行）：`adb`、`ssh`、`curl`。
 
-- macOS：`brew install android-platform-tools`
-- Linux：`sudo apt install adb`
+- macOS：用 Homebrew 装 `android-platform-tools` 这个包
+- Linux：装发行版自带的 adb 包（Debian、Ubuntu 上包名就叫 `adb`）
 - Windows：Google SDK Platform-Tools（加进 PATH）+ Git for Windows
 
 **打包的电脑**（编译用，可以是同一台）：

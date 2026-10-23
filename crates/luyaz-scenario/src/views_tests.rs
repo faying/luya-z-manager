@@ -208,9 +208,8 @@ fn scene_list_is_byte_for_byte_what_it_was() {
     }
 }
 
-/// The old touch screen (touch-ui netinfo.c) reads `scenes` into
-/// `static char sub[8192]`, then `list` into `char arr[2048]` and each
-/// scene into `char obj[768]`, truncating silently (L2 review O1). The
+/// A reader may keep `scenes` in fixed buffers (8192 bytes overall,
+/// 2048 for `list`, 768 per scene) and truncate silently (L2 review O1). The
 /// English is a separate `list_en`, after `list`, so it only uses what
 /// `sub` has spare.
 #[test]

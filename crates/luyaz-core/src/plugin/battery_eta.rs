@@ -1,6 +1,6 @@
-//! battery_eta in u60d (Phase 4 step 1, shadow): fed on every successful read of the `battery`
+//! battery_eta in u60d: fed on every successful read of the `battery`
 //! block (5 s, the agent's sampler interval), so it adds no timer of its own. Readings come from
-//! the same places the agent reads them (`zte-agent/src/battery_eta.rs` `read_now`):
+//! the same places the charge limit reads them:
 //!
 //! - soc, current, charge_full, charge_counter: sysfs `/sys/class/power_supply/battery`;
 //! - charger plugged: the battery block's `charger_connect`; charging stopped: the charger block's
@@ -182,7 +182,7 @@ fn read_num(path: &str) -> Option<i64> {
 }
 
 /// The estimate as the agent's `/api/screen` and `/api/battery` give it (the touch compatibility
-/// layer, Phase 4 step 8a).
+/// layer).
 pub fn report() -> Value {
     let g = state().lock().unwrap_or_else(|e| e.into_inner());
     let now = g.t0.elapsed().as_secs_f64();

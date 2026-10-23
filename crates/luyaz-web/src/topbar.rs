@@ -1,5 +1,5 @@
 //! The frame's live parts on every migrated page (8c-A step 4): the top-bar status icons
-//! (StatusIcons.tsx) and the alert bar (AlertBanner.tsx).
+//! and the alert bar under them.
 //!
 //! ```text
 //!  u60d blocks (one SSE, hub.rs): signal, interfaces → network · wlan → Wi-Fi · sms → SMS
@@ -474,9 +474,9 @@ pub fn icons(st: &St, l: Lang) -> Vec<Icon> {
         .unwrap_or(0);
     let weak = rsrp != 0 && rsrp <= -110;
     let mut label = if up {
-        t("Mobile data connected", "移动数据已连接")
+        t("Mobile data on", "移动数据已通")
     } else {
-        t("No mobile data — WAN down", "无移动数据 — WAN 断开")
+        t("Mobile data down", "移动数据断了")
     };
     if up && !ty.is_empty() {
         label = format!("{label} · {ty}");
@@ -945,7 +945,7 @@ mod tests {
         let ic = hub.read(|st| icons(st, Lang::Zh));
         let net = &ic[0];
         assert_eq!(net.tone, Tone::Warn, "SA reads nr_rsrp, -112 is weak");
-        assert_eq!(net.label, "移动数据已连接 · SA · 信号弱");
+        assert_eq!(net.label, "移动数据已通 · SA · 信号弱");
         assert_eq!(ic[1].tone, Tone::Off);
         assert_eq!(ic[4].badge_text(), "9+");
         assert!(!ic[2].known && !ic[3].known, "no side data yet");
@@ -961,7 +961,7 @@ mod tests {
         }));
         let ic = hub.read(|st| icons(st, Lang::En));
         assert_eq!(ic[0].tone, Tone::Bad);
-        assert_eq!(ic[0].label, "No mobile data — WAN down");
+        assert_eq!(ic[0].label, "Mobile data down");
     }
 
     fn alerts(unread: u64, configured: bool) -> Value {

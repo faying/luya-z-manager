@@ -1,5 +1,4 @@
-//! the core's `/control` answers as the agent's HTTP replies (moved from zte-agent `core_write.rs`,
-//! Phase 4 step 8d): what a write came back with ([`Reply`]), how the agent answers the page for it
+//! The core's `/control` answers as HTTP replies: what a write came back with ([`Reply`]), how the agent answers the page for it
 //! ([`Reply::into_http`]) and how its own loops read it ([`Reply::into_result`], [`retry_after`]).
 //! u60d's touch compatibility layer sends its writes to its own `/control` and answers the screen
 //! with the same mapping, so the screen sees the same status and words from either.

@@ -1,18 +1,18 @@
 // Read-only recorder: fetch an audited allowlist of GET endpoints from the
 // REAL device API (luyaz-core), save the responses, and print a key diff against the mock
-// fixtures. For later use on the device, with the owner's OK (Decision
-// ledger R5 / D11). Do not run it during the power test.
+// fixtures. Only with the owner's OK (Decision ledger R5 / D11), and never
+// during a power measurement. The core listens on 127.0.0.1:9460 on the device;
+// reach it through an SSH tunnel.
 //
-//   RECORD_CONFIRM=yes AGENT_URL=http://192.168.0.1:9090 TOKEN=<bearer> \
+//   RECORD_CONFIRM=yes AGENT_URL=http://127.0.0.1:9460 TOKEN=<bearer> \
 //     node crates/luyaz-web/e2e/mock-agent/record.ts
 //
 // Output: crates/luyaz-web/e2e/mock-agent/recorded/<path>.json (git-ignored; contains real
 // device data — IMEI, ICCID, numbers — never commit or publish it).
 //
-// SAFETY: "GET" does not mean "read-only" on this agent (scenario/scan
-// adds and deletes a scan interface on the Wi-Fi phy). Only the endpoints in ALLOWLIST below are
-// requested; each entry names the handler that was read to confirm it has no
-// side effects. Anything not on the list is never requested.
+// SAFETY: some core GETs do change things (scenario/scan scans on a live
+// Wi-Fi radio). Only the ALLOWLIST paths below are fetched, each naming the
+// core handler that was read to confirm it only reads; nothing else is asked for.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -21,129 +21,82 @@ import { ALL_ROUTES } from "./routes.ts";
 
 interface Entry {
   path: string;
-  /** Handler file:line checked, and what it does. */
+  /** Core handler that was read (file + fn), and what it touches. */
   checked: string;
 }
 
 // ------------------------------------------------------------------ allowlist
-// Every entry: GET only, handler audited (zte-agent/src, 2026-09-24 tree).
+// Every entry: GET only; the luyaz-core handler (crates/luyaz-core/src/api/…) was read
+// to confirm it only reads (re-audited 2026-10-23).
 const ALLOWLIST: Entry[] = [
-  // public.rs:29 — ubus reads (nwinfo_get_netinfo, get_wwaniface, zwrt_wlan report,
-  // wms capacity), sysfs battery, pidof + `tailscale status` (read), local files.
-  { path: "/api/public/status", checked: "public.rs:29" },
-  // handlers.rs:109 — ubus zte_nwinfo_api nwinfo_get_netinfo (read).
-  { path: "/api/network/signal", checked: "handlers.rs:109" },
-  // handlers.rs:123 — in-memory ring buffer snapshot.
-  { path: "/api/network/speed", checked: "handlers.rs:123 → system.rs:351" },
-  // network_ext.rs — ubus network.interface.* status (netifd read).
-  { path: "/api/network/wan", checked: "network_ext.rs:16" },
-  { path: "/api/network/wan6", checked: "network_ext.rs:23" },
-  { path: "/api/network/lan-status", checked: "network_ext.rs:30" },
-  // network_ext.rs:37 — luci-rpc getHostHints + getDHCPLeases (read).
-  { path: "/api/network/clients", checked: "network_ext.rs:37" },
-  // handlers.rs:137 — uci get zwrt_data_commit.wwancid1dst.* only.
-  { path: "/api/data-usage", checked: "handlers.rs:137" },
-  // handlers.rs:92 — /proc/stat delta in memory.
-  { path: "/api/cpu", checked: "handlers.rs:92 → system.rs:46 (+ sysfs cpufreq)" },
-  // handlers.rs battery / memory — sysfs power_supply, /proc/meminfo.
-  { path: "/api/battery", checked: "handlers.rs battery → system.rs read_battery_at" },
-  { path: "/api/memory", checked: "handlers.rs memory → system.rs read_meminfo" },
-  // wifi.rs:80 — ~25 uci get, zwrt_wlan report (fallback), iw info / station dump.
-  { path: "/api/wifi/status", checked: "wifi.rs:80" },
-  // wifi_radio.rs:329 → observe :268 — uci get ×2, ps w, hostapd_cli status.
-  { path: "/api/wifi/radio", checked: "wifi_radio.rs:329" },
-  // wifi.rs:307 — uci get ×8 + ubus wlan_get_guest_access_left_time (read).
-  { path: "/api/wifi/guest", checked: "wifi.rs:307" },
-  // --- router (audited by router pass; ZTE get_* methods assumed read-only by name)
-  { path: "/api/router/dns", checked: "router.rs:6 — ubus router_get_dns_para (+ uci get network.wan.dns)" },
-  { path: "/api/router/lan", checked: "router.rs:54 — 6× uci get" },
-  { path: "/api/router/firewall", checked: "router.rs:93 — ubus router_get_firewall_para" },
-  { path: "/api/router/firewall/upnp", checked: "router.rs:144 — ubus router_get_upnp_switch" },
-  { path: "/api/router/firewall/port-forward", checked: "router.rs:162 — ubus router_get_portforward_rule" },
-  { path: "/api/router/firewall/filter-rules", checked: "router.rs:191 — ubus router_get_macipport_filter_rule" },
-  { path: "/api/router/vpn", checked: "router.rs:198 — ubus router_get_alg_para" },
-  { path: "/api/router/qos", checked: "router.rs:216 — ubus router_get_qos_switch" },
-  { path: "/api/router/domain-filter", checked: "router.rs:234 — ubus router_get_domainfilter_rule" },
-  { path: "/api/router/apn/mode", checked: "router.rs:252 — ubus zwrt_apn_object get_apn_mode" },
-  { path: "/api/router/apn/profiles", checked: "router.rs:270 — ubus get_manu_apn_list" },
-  { path: "/api/router/apn/auto-profiles", checked: "router.rs:299 — ubus get_auto_apn_list" },
-  { path: "/api/router/wan-ipv6", checked: "router.rs:332 — ubus get_apn_at_cid {cid:1} + zwrt_data get_wwaniface" },
-  { path: "/api/doh/status", checked: "server.rs:432 → doh/mod.rs:68 — in-memory" },
-  { path: "/api/doh/cache", checked: "server.rs:473 → doh/mod.rs:101 — in-memory" },
-  // --- modem / cell / sim (ubus getters only; the agent sends no AT and writes no uci for these.
-  //     Firmware daemons may still query the modem internally — not visible from this repo.)
-  { path: "/api/modem/status", checked: "handlers.rs:129 — uci get zte_nwinfo.sys_info.operate_mode" },
-  { path: "/api/modem/data", checked: "modem_ext.rs:6 — ubus zwrt_data get_wwaniface {cid:1}" },
-  { path: "/api/cell/neighbors/nr", checked: "cell.rs:42 — ubus nwinfo_get_nr5g_nbr_contents (scan itself is the POST)" },
-  { path: "/api/cell/neighbors/lte", checked: "cell.rs:49 — ubus nwinfo_get_lte_nbr_contents" },
-  { path: "/api/cell/stc/params", checked: "cell.rs:85 — ubus nwinfo_get_stc_white_list_par (may 503)" },
-  { path: "/api/cell/stc/status", checked: "cell.rs:103 — ubus nwinfo_get_stc_white_list_status (may 503)" },
-  { path: "/api/cell/signal-detect/results", checked: "cell.rs:145 — ubus nwinfo_get_detect_quality_recorder" },
-  { path: "/api/cell/signal-detect/progress", checked: "cell.rs:152 — ubus nwinfo_get_progress_and_quality" },
-  { path: "/api/sim/info", checked: "sim.rs:6 — ubus zwrt_zte_mdm.api get_sim_info" },
-  { path: "/api/sim/imei", checked: "sim.rs:13 — ubus get_imei" },
-  { path: "/api/sim/lock-trials", checked: "sim.rs:64 — ubus get_simlock_available_trials (getter)" },
-  // --- sms
-  { path: "/api/sms/capacity", checked: "sms.rs:42 — ubus zwrt_wms zwrt_wms_get_wms_capacity (read)" },
+  // ubus reads, the doctor snapshot, the scenario engine's files; no writes.
+  { path: "/api/public/status", checked: "status.rs public_status — ubus reads + snapshot/state files" },
+  // --- system reads (sys_reads.rs)
+  { path: "/api/cpu", checked: "sys_reads.rs cpu — /proc/stat against the last sample kept in memory" },
+  { path: "/api/device", checked: "sys_reads.rs device — /proc hostname, uptime, loadavg, version" },
+  { path: "/api/battery", checked: "sys_reads.rs battery — sysfs power_supply + the core's own estimate" },
+  { path: "/api/modem/status", checked: "sys_reads.rs modem_status — uci/ubus getters" },
+  { path: "/api/usb/status", checked: "sys_reads.rs usb_status — ubus zwrt_bsp.usb list" },
+  { path: "/api/sms/capacity", checked: "sys_reads.rs sms_capacity — ubus zwrt_wms capacity getter" },
+  { path: "/api/router/wan-ipv6", checked: "sys_reads.rs wan_ipv6 — ubus get_apn_at_cid {cid:1} + get_wwaniface" },
+  // --- network / Wi-Fi / cell
+  { path: "/api/network/clients", checked: "net_reads.rs clients — host hints + DHCP leases (read)" },
+  { path: "/api/wifi/status", checked: "wifi_reads.rs status — `iw … info` / `station dump`" },
+  { path: "/api/wifi/power-save", checked: "wifi_reads.rs power_save — `iw dev … get power_save` + saved flag" },
+  { path: "/api/cell/signal-detect/results", checked: "cell_detect.rs results — ubus nwinfo_get_detect_quality_recorder" },
+  { path: "/api/cell/stc/params", checked: "device_admin.rs stc_params — ubus nwinfo_get_stc_white_list_par (may 503)" },
+  { path: "/api/cell/stc/status", checked: "device_admin.rs stc_status — ubus nwinfo_get_stc_white_list_status (may 503)" },
+  { path: "/api/sim/info", checked: "device_admin.rs sim_info — ubus zwrt_zte_mdm.api get_sim_info" },
+  { path: "/api/sim/lock-trials", checked: "device_admin.rs sim_lock_trials — ubus get_simlock_available_trials (getter)" },
+  { path: "/api/router/dns", checked: "device_admin.rs dns_get — ubus DNS getter" },
   // --- device / system / tools
-  { path: "/api/device/battery-info", checked: "network_ext.rs:55 — ubus zwrt_bsp.battery list" },
-  { path: "/api/device/thermal", checked: "device_ext.rs:8 — ubus zwrt_bsp.thermal get_cpu_temp (getter)" },
-  { path: "/api/device/charger", checked: "device_ext.rs:15 — ubus zwrt_bsp.charger list" },
-  { path: "/api/device/system", checked: "device_ext.rs:22 — ubus system info" },
-  { path: "/api/device", checked: "handlers.rs:67 — /proc hostname, uptime, loadavg, version" },
-  { path: "/api/device/charge-control", checked: "device_ext.rs:44 — sysfs battery + ubus charger list + in-memory limit" },
-  { path: "/api/device/fast-boot", checked: "device_ext.rs:156 — ubus zwrt_mc.device.manager get_device_info quicken_power_on" },
-  { path: "/api/usb/status", checked: "usb.rs:6 — ubus zwrt_bsp.usb list" },
-  // system/top only moves the agent's in-memory CPU-tick baseline (skews a watching page's CPU% for one tick).
-  { path: "/api/system/top", checked: "handlers.rs:181 → system.rs:468 — /proc reads" },
+  { path: "/api/device/fast-boot", checked: "device_admin.rs fast_boot_get — ubus get_device_info quicken_power_on" },
+  { path: "/api/device/charge-control", checked: "charge.rs get — sysfs battery + the limit kept in memory" },
+  // system/top keeps the last CPU-tick sample, so a page watching it sees one odd CPU% after this read.
+  { path: "/api/system/top", checked: "device_admin/procs.rs top — /proc reads" },
   // alerts includes the alert-SMS phone number: recorded/ is git-ignored, don't share it.
-  { path: "/api/alerts", checked: "alerts.rs:262 — /data/alerts/* files, /proc/uptime, cached uci get" },
-  // plain /api/health only (no refresh=1): cached snapshot + /data/crashlog listing.
-  { path: "/api/health", checked: "health.rs:184 — cached snapshot, reads /data/crashlog" },
-  { path: "/api/scheduler/jobs", checked: "scheduler.rs:311 — in-memory jobs" },
-  { path: "/api/speedtest/progress", checked: "speedtest.rs:425 — in-memory state" },
+  { path: "/api/alerts", checked: "api.rs alerts_get — the alert files, read only" },
+  // plain /api/health only (no refresh=1): the stored doctor snapshot.
+  { path: "/api/health", checked: "health.rs get — snapshot file (refresh=1 would run the doctor)" },
+  { path: "/api/scheduler/jobs", checked: "scheduler.rs list — jobs held in memory" },
+  { path: "/api/speedtest/progress", checked: "speed.rs progress — state held in memory" },
   // --- services / scenario
-  { path: "/api/services/tailscale", checked: "services.rs:34 — pidof + `tailscale status --json` (read; no agent timeout)" },
-  { path: "/api/services/tailscale/log", checked: "services.rs:182 — tails /data/tailscaled.log" },
-  // chill: 3 HTTP GETs to mihomo on loopback (/version, /proxies, /configs), 3 s timeout each — read-only.
-  { path: "/api/services/chill", checked: "chill.rs:114 — /tmp/chill.state, chill.env, mihomo GETs" },
-  { path: "/api/services/chill/providers", checked: "chill.rs:160 — mihomo GET /providers/proxies" },
-  { path: "/api/services/chill/bypass", checked: "chill.rs:417 — reads chill.env + chill.state" },
-  { path: "/api/services/chill/job", checked: "chill.rs:542 — in-memory" },
-  { path: "/api/services/chill/log", checked: "chill.rs:146 — tails /tmp/chill.log" },
+  { path: "/api/services/tailscale", checked: "ts_reads.rs status — pidof + `tailscale status --json` (read, with a timeout)" },
+  { path: "/api/services/tailscale/log", checked: "ts_reads.rs log — tail of /data/tailscaled.log" },
+  // chill: up to 3 loopback GETs to mihomo (/version, /proxies, /configs), 3 s each — read-only.
+  { path: "/api/services/chill", checked: "chill_page.rs status — CHILL state file + mihomo GETs" },
+  { path: "/api/services/chill/providers", checked: "chill_page.rs providers_list — mihomo GET /providers/proxies" },
+  { path: "/api/services/chill/bypass", checked: "chill_page.rs bypass_get — reads the CHILL env + state files" },
+  { path: "/api/services/chill/job", checked: "chill_jobs.rs job — state held in memory" },
+  { path: "/api/services/chill/log", checked: "chill_page.rs log — tail of the CHILL log" },
   // scenario config holds real home SSIDs/BSSIDs: recorded/ is git-ignored, don't share it.
-  { path: "/api/scenario", checked: "scenario.rs:1614 — ubus get_sim_info (read) + /data/scenario files" },
-  { path: "/api/scenario/template", checked: "scenario.rs:1638 — pure" },
-  { path: "/api/scenario/log", checked: "scenario.rs:1742 — reads /data/scenario/log" },
+  { path: "/api/scenario", checked: "scenario.rs get → engines/scenario.rs http_get — engine files + SIM info getter" },
+  { path: "/api/scenario/template", checked: "scenario.rs template — built from constants" },
+  { path: "/api/scenario/log", checked: "scenario.rs log — reads the scenario log file" },
 ];
+// Dropped on 2026-10-23 because the core no longer serves them: network/signal, network/speed,
+// network/wan, network/wan6, network/lan-status, data-usage, memory, wifi/radio, GET wifi/guest,
+// router/lan, router/firewall/*, router/vpn, router/qos, router/domain-filter, router/apn/*,
+// doh/*, modem/data, cell/neighbors/*, cell/signal-detect/progress, sim/imei,
+// device/battery-info, device/thermal, device/charger, device/system.
 
 // ------------------------------------------------------------------ excluded
 // Never requested, and refused below even if someone adds them to ALLOWLIST:
-// - /api/scenario/scan        scenario.rs — adds/deletes a scan interface on the phy (wifi_scan.rs).
-// - /api/services/chill/dashboard  chill_proxy.rs — dashboard info incl. the proxy secret; not needed.
-// - /api/health?refresh=1     health.rs — forces a fresh run of every health check.
-// - /api/stk/menu             telephony.rs — talks to the SIM toolkit (AT/STK session).
-// - /chill-api/*              chill_proxy.rs — reverse proxy into mihomo's controller.
-// - /api/at/port              at_terminal.rs — AT port probe.
-// - /api/network/qos          qos.rs:18 — sends AT+CGCONTRDP / AT+CGEQOSRDP on the serial AT port.
-// - /api/speedtest/servers    speedtest.rs — fetches the server list from the internet (cellular traffic).
-// - /api/esim/*               esim.rs — every call runs lpac against the eUICC card.
-// - POST-served reads (POST /api/sms/list, POST /api/device/power-save): this
-//   recorder is GET-only by design.
-// - /api/stk/menu (again)     telephony.rs:457 — AT+CUAD, AT+STIN?, AT+CUSATD=1 (USAT activation), AT+STGI; 6–20 s.
-// - /api/sms/forward/config  sms_forward.rs:1079 — side-effect free (in-memory) but returns secrets
-//                              (Telegram bot token, webhook URLs/headers, ntfy token). Excluded until a scrubber exists.
-// - /api/sms/forward/log     sms_forward.rs:1283 — side-effect free but holds full SMS bodies, senders and codes.
-// - /api/esim/job            esim.rs:317 — in-memory only, but reveals ICCIDs and is meaningless outside a job;
-//                              kept out with the rest of /api/esim/* (status/profiles/notifications spawn lpac → eUICC APDUs).
-// - /api/health/crashlog      health.rs:209 — read-only, but needs program/file params and returns raw logs; not needed for shape.
-// - /api/at/port (detail)     at_terminal.rs:63 → at_cmd.rs:23 — uncached: writes AT\r to up to 5 serial ports (~1.3 s each).
-// - /api/speedtest/servers    speedtest.rs:355 — cold cache: HTTPS to www.speedtest.net over cellular (roaming data,
-//                              leaks public IP/location, primes the /start cache).
-// - /api/services/chill/dashboard (detail) chill_proxy.rs:44/68 — first call CREATES /data/chill/dashboard.secret
-//                              and the reply is a live /chill-api credential.
-// - /api/scenario/scan (detail) scenario.rs:1731 → wifi_scan.rs:187 — off-channel `iw scan` on a live AP, or adds/deletes
-//                              a scen-scan0 vdev; output holds nearby SSIDs/BSSIDs.
+// - /api/scenario/scan        engines/scenario.rs http_scan — runs a Wi-Fi scan on a live radio; output holds
+//                              nearby SSIDs/BSSIDs.
+// - /api/health?refresh=1     health.rs get — runs every doctor check first.
+// - /api/stk/menu             device_admin/phone.rs stk_menu — opens a SIM toolkit session over AT (6–20 s).
+// - /api/at/port              device_admin/phone.rs at_port — may probe the serial ports with AT.
+// - /api/network/qos          net_reads.rs qos — sends AT+CGCONTRDP / AT+CGEQOSRDP on the AT port.
+// - /api/speedtest/servers    speed.rs servers — cold cache fetches the server list over cellular
+//                              (roaming data, shows the public IP, primes the /start cache).
+// - /api/esim/*               esim.rs — status/profiles/notifications run lpac against the eUICC; job
+//                              shows ICCIDs and means nothing outside a job.
+// - /api/sms/forward/*        sms_forward.rs — config holds secrets (bot tokens, webhook URLs/headers),
+//                              the log holds whole SMS bodies and codes. Out until a scrubber exists.
+// - /api/health/crashlog      health.rs crashlog — read-only, but returns raw logs; not needed for shapes.
+// - /chill-api/*, /api/services/chill/dashboard — no longer in the core; kept on the deny list.
+// - POST-served reads (POST /api/device/power-save): this recorder is GET-only by design.
 const DENY = [
   /^\/api\/scenario\/scan$/,
   /^\/api\/services\/chill\/dashboard$/,
@@ -172,10 +125,10 @@ if (process.env.RECORD_CONFIRM !== "yes") {
 }
 const AGENT_URL = (process.env.AGENT_URL ?? "").replace(/\/$/, "");
 if (!/^https?:\/\/[^/]+$/.test(AGENT_URL)) {
-  die("set AGENT_URL explicitly, e.g. AGENT_URL=http://192.168.0.1:9090 (no default on purpose).");
+  die("set AGENT_URL explicitly, e.g. AGENT_URL=http://127.0.0.1:9460 (no default on purpose).");
 }
 const TOKEN = process.env.TOKEN ?? "";
-if (!TOKEN) die("set TOKEN to a bearer token from POST /api/auth/login.");
+if (!TOKEN) die("set TOKEN to a bearer token from the core (POST /auth/login).");
 
 for (const e of ALLOWLIST) {
   if (DENY.some((re) => re.test(e.path))) die(`allowlist entry ${e.path} matches the deny list — remove it.`);

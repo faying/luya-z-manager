@@ -1,4 +1,4 @@
-//! The render test's cheap checks (tests/render/render_test.c), line for line, so the Rust
+//! The render test's cheap checks, line for line, so the Rust
 //! screen gets the same pass/fail lines as the C one:
 //!   - expect*.txt: every line that applies to this scene must be in a visible label of its page;
 //!   - missing glyphs: characters a label shows that its font chain cannot draw;
@@ -103,7 +103,7 @@ struct Expect {
     text: Vec<u8>,
 }
 
-/// The checks' state, as render_test.c's globals.
+/// The checks' state across one render run.
 #[derive(Default)]
 pub struct Checks {
     pub texts: Vec<Vec<u8>>,

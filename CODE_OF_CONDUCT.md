@@ -1,17 +1,16 @@
-# Code of Conduct
+# Code of conduct
 
-Luya-Z is a small hobby project. Everyone who takes part (issues, pull requests,
-discussions) is expected to:
+Luya-Z is one person's hobby project. In issues, pull requests and
+discussions, please:
 
-- treat other people with respect, whatever their background or experience;
-- keep criticism about the work, not the person;
-- not harass, insult or threaten anyone, in public or in private;
-- not post anyone's personal data (IMEI, ICCID, phone numbers, addresses, IPs)
-  without their consent.
+- be respectful to everyone, whatever their background or level of
+  experience;
+- criticise the work, never the person;
+- never harass, insult or threaten anyone, publicly or privately;
+- never post someone else's personal data (IMEI, ICCID, phone number,
+  address, IP) without their consent.
 
-The maintainer may edit or remove comments, close threads, or block accounts
-that break these rules.
-
-To report a problem privately, use GitHub's private vulnerability reporting on
-this repository (Security → Report a vulnerability) and say it is a conduct
-report.
+Comments that break these rules may be edited or removed, threads closed
+and accounts blocked. To raise a conduct problem privately, file it through this repository's
+private vulnerability reporting (Security → Report a vulnerability) and mark
+it as a conduct report.

@@ -716,7 +716,7 @@ ln -s u60-cjk-fallback.ttf "$UD/fonts/link.ttf"
 sh "$SHIP" record ui-fonts 1790000000 >"$T/out" 2>&1
 RC=$?
 check "$CASE: a symlink inside: refused" '[ $RC = 1 ] && grep -q "算不了指纹" "$T/out" && [ "$(mlines)" = 2 ]'
-sh "$SHIP" record devui-fonts 1790000000 >"$T/out" 2>&1
+sh "$SHIP" record devui-fonts 1790000000 >"$T/out" 2>&1  # RESIDUE-OK: retired component name must stay refused
 RC=$?
 check "$CASE: the old name is not known" '[ $RC = 1 ] && grep -q "不认识" "$T/out"'
 teardown

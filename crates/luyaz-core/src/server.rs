@@ -23,6 +23,7 @@ use tokio::{
 };
 use tower_http::limit::RequestBodyLimitLayer;
 
+mod recovery;
 mod write;
 #[cfg(test)]
 pub(crate) use write::control_busy;
@@ -86,8 +87,7 @@ const HEALTH_STALL_MS: u64 = 20_000;
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(5);
 
 /// D18：应急直写脚本据此判断核心在不在（pid + /proc/<pid>/comm 前缀）。
-/// `LUYAZ_PID_FILE`，默认 `/var/run/luyaz-core.pid`（Luya-Z 改名 D2；之前 `/var/run/zwrt-datad.pid`，
-/// `luyaz-fallback.sh` 两个都看、认活着的那个），空串 = 不写。
+/// `LUYAZ_PID_FILE`，默认 `/var/run/luyaz-core.pid`（`luyaz-fallback.sh` 认它），空串 = 不写。
 pub fn write_pid_file() {
     let path = match std::env::var("LUYAZ_PID_FILE") {
         Ok(v) if v.is_empty() => return,
@@ -332,7 +332,7 @@ impl App {
     pub async fn snapshot(&self) -> Snapshot {
         self.inner.snapshot.read().await.clone()
     }
-    /// `/v2/screen`'s reply (the touch layer's netwatch reads it in-process, step 9b).
+    /// `/v2/screen`'s reply (the touch layer's netwatch reads it in-process).
     pub async fn screen_json(&self) -> Value {
         let snap = self.snapshot().await;
         let ts = snap.ts;
@@ -438,6 +438,7 @@ impl App {
             .route("/v2/screen", get(v2_screen))
             .route("/capabilities", get(capabilities))
             .route("/v2/device/capabilities", get(device_capabilities))
+            .route("/v2/recovery/actions", get(recovery::actions))
             .route("/control", post(control))
             .route("/v2/sentinel/event", post(sentinel_event))
             .route("/v2/scorecard", get(scorecard).post(scorecard))
@@ -477,6 +478,7 @@ async fn starting_gate(State(app): State<App>, request: Request, next: Next) -> 
             | "/version"
             | "/capabilities"
             | "/v2/device/capabilities"
+            | "/v2/recovery/actions"
             | "/control"
             | "/v2/scorecard"
             | "/v2/dual/switches"
@@ -669,7 +671,7 @@ async fn auth_exchange(
         return auth_failure(StatusCode::BAD_REQUEST, "missing_webtoken");
     }
     let zmode: i64 = text("x-z-mode").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let ztag = text("x-z-tag").unwrap_or("zwrt-datad");
+    let ztag = text("x-z-tag").unwrap_or("luyaz-core");
     let remote = peer.ip().to_string();
     if auth::verify_webtoken(web_token, zmode, &remote, ztag).await {
         open_session(&app).await

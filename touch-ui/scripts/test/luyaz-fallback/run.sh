@@ -172,7 +172,7 @@ check "no ops dir (core keeps no state) → writes without a marker" '[ "$RC" = 
 teardown
 
 echo "luyaz-fallback: is the core gone? (D18)"
-for c in 'luyaz-core|3' 'luyaz-core.test|3' 'sh|0' 'luyaz-cor|0' 'zwrt-datad|0'; do
+for c in 'luyaz-core|3' 'luyaz-core.test|3' 'sh|0' 'luyaz-cor|0' 'other-daemon|0'; do
     setup
     echo 4242 >"$T/pid"
     mkdir -p "$T/proc/4242"

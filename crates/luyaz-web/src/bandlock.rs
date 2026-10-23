@@ -1,4 +1,4 @@
-//! /bandlock (频段锁定), the old `bandlock/page.tsx`: the bands in use, the locks the firmware
+//! /bandlock (频段锁定): the bands in use, the locks the firmware
 //! keeps, NR and LTE band choices, and reset. Batch 3, step 3-1 (u60-web.md).
 //!
 //! Where each value comes from (all u60d's `signal` block; the agent is not asked):
@@ -398,8 +398,8 @@ fn downtime(l: Lang) -> String {
 
 fn recovery(l: Lang) -> String {
     l.pick(
-        "Press “Reset / unlock all” on this page. If the page can't be reached, open band lock on the device's touchscreen and restore the default.",
-        "在本页点「重置 / 全部解锁」。如果打不开本页，到设备触屏的「锁频」页恢复默认。",
+        "Press “Clear all locks” on this page. If the page can't be reached, open band lock on the device's touchscreen and restore the default.",
+        "在本页点「清除全部锁定」。如果打不开本页，到设备触屏的「锁频」页恢复默认。",
     )
     .into()
 }
@@ -435,12 +435,12 @@ pub fn confirm(w: Which, list: &[u32], l: Lang) -> write::Confirm {
             )
         }
         Which::Reset => (
-            l.pick("Reset all band locks?", "重置所有频段锁定？").into(),
+            l.pick("Clear every band and cell lock?", "清除全部频段和小区锁定？").into(),
             l.pick(
                 "Bands and cell lock are both reset: every band lock and every cell lock is removed, and the device picks automatically again.",
                 "频段和小区锁一起恢复：所有频段锁定和小区锁定都会去掉，设备改回自动选择。",
             ),
-            l.pick("Reset / unlock all", "重置 / 全部解锁"),
+            l.pick("Clear all locks", "清除全部锁定"),
         ),
     };
     write::Confirm {
@@ -480,8 +480,8 @@ pub fn check(w: Which, raw: &str, b: Option<&Bands>, stuck: bool, l: Lang) -> Re
     if list.is_empty() {
         return Err(write::Outcome::NotYet(
             match w {
-                Which::Nr => l.pick("Select at least one NR band", "请至少选择一个 NR 频段"),
-                _ => l.pick("Select at least one LTE band", "请至少选择一个 LTE 频段"),
+                Which::Nr => l.pick("Tick one NR band or more", "至少勾一个 NR 频段"),
+                _ => l.pick("Tick one LTE band or more", "至少勾一个 LTE 频段"),
             }
             .into(),
         ));
@@ -525,7 +525,7 @@ fn applied(w: Which, list: &[u32], l: Lang) -> String {
         (Which::Lte, Lang::Zh) => format!("LTE 已锁定到 {}", words("B", list)),
         (Which::Nr, Lang::En) => format!("NR locked to {}", words("n", list)),
         (Which::Nr, Lang::Zh) => format!("NR 已锁定到 {}", words("n", list)),
-        (Which::Reset, _) => l.pick("All bands unlocked", "已解锁所有频段").into(),
+        (Which::Reset, _) => l.pick("Band and cell locks all cleared", "频段和小区锁定已全部清除").into(),
     }
 }
 

@@ -1,4 +1,4 @@
-//! /config (配置工具), the old `config/page.tsx`: look into a ZXHN/ZXWL router config file.
+//! /config (配置工具): look into a ZXHN/ZXWL router config file.
 //! The old page did it all in the browser; here the file goes to this server in a plain
 //! multipart form POST, is read in memory and dropped with the response. It is never written to
 //! disk, never logged, never forwarded (no device or agent call); the cap is [`MAX_FILE`].
@@ -24,11 +24,11 @@ pub const MAX_FILE: usize = 4 * 1024 * 1024;
 const SLACK: usize = 64 * 1024;
 const PREVIEW: usize = 256;
 
-/// The old page's table, as it was (description EN, ZH, key hex).
+/// Known AES keys: label EN, label ZH, key hex.
 const KNOWN_KEYS: [(&str, &str, &str); 5] = [
     (
-        "Default (Telstra/generic)",
-        "默认（Telstra / 通用）",
+        "Generic default (Telstra and others)",
+        "通用默认（Telstra 等）",
         "***REMOVED***",
     ),
     (
@@ -285,8 +285,8 @@ async fn inspect(State(app): State<Shared>, req: axum::extract::Request) -> Resp
             let header = parse_header(&data);
             let err = header.is_none().then(|| {
                 l.pick(
-                    "Not a recognized ZXHN config file (magic header not found).",
-                    "不是能识别的 ZXHN 配置文件（没找到文件头标记）。",
+                    "No ZXHN header marker found: this page can't read the file",
+                    "没找到 ZXHN 文件头标记，这个页面读不了这个文件",
                 )
                 .to_owned()
             });

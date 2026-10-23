@@ -7,11 +7,9 @@
 //! slot: CHILL's main group goes DIRECT, and whatever it was before comes back
 //! when you return — see `restore_on_exit`).
 //!
-//! Moved from zte-agent `scenario.rs` (u60-platform.md Phase 4 step 9h) so the agent and u60d run
-//! the same engine; whichever owns it runs it (the handover list, the lease
-//! [`LEASE_FILE`]). The decisions are u60-policy's `scenario::step` — the one the shadow compared
-//! with the agent's own tick for weeks — called through [`Io::step`], so u60d can hand it to its
-//! policy component. Everything that touches the device goes through the host's [`Io`].
+//! The core runs this engine; whichever process owns it runs it (the handover list, the lease
+//! [`LEASE_FILE`]). The decisions are u60-policy's `scenario::step`, called through
+//! [`Io::step`] so the core can hand it to its policy component. Everything that touches the device goes through the host's [`Io`].
 //!
 //! Design notes that are easy to get wrong and expensive to rediscover:
 //!
@@ -263,13 +261,13 @@ pub fn uptime_secs(text: &str) -> Option<u64> {
 
 // ── files ───────────────────────────────────────────────────────────────────
 
+/// Missing or unparsable file → the type's default.
 fn read_json<T: DeserializeOwned + Default>(path: &str) -> T {
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    match fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Err(_) => T::default(),
+    }
 }
-
 /// Write `path.tmp`, then rename it over `path`: a crash mid-write leaves the old file whole.
 /// The old file's mode is kept (the agent's `fsutil::atomic_write`).
 pub(crate) fn atomic_write(path: &str, data: &[u8]) -> std::io::Result<()> {
@@ -1220,14 +1218,19 @@ impl Engine {
     }
 }
 
+/// The last `LOG_TAIL_LINES` lines of a log, newline-joined (what is kept on trim and served).
+pub(crate) fn log_tail(text: &str) -> String {
+    let all: Vec<&str> = text.lines().collect();
+    let keep_from = all.len() - all.len().min(LOG_TAIL_LINES);
+    all[keep_from..].join("\n")
+}
+
 /// Append one line to the scenario log, trimming it to its last lines once it passes 1 MiB.
 fn log_line(dir: &str, file: &str, msg: &str) {
     let _ = fs::create_dir_all(dir);
     if fs::metadata(file).map(|m| m.len()).unwrap_or(0) > LOG_MAX_BYTES {
         let keep = fs::read_to_string(file).unwrap_or_default();
-        let lines: Vec<&str> = keep.lines().collect();
-        let start = lines.len().saturating_sub(LOG_TAIL_LINES);
-        let _ = fs::write(file, lines[start..].join("\n"));
+        let _ = fs::write(file, log_tail(&keep));
     }
     // Local time, as the rest of the device's logs (the clock is local time marked UTC).
     let stamp = {

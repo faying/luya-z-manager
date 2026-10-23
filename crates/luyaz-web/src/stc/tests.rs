@@ -110,7 +110,7 @@ fn the_dialogs_keep_their_tiers() {
     let r = reset_confirm(l);
     assert_eq!(r.tier, Tier::Dialog);
     assert!(r.danger && r.cuts_uplink);
-    assert_eq!(r.what, "Reset STC whitelist? This cannot be undone.");
+    assert_eq!(r.what, "Clear the STC whitelist? The collected cells are gone for good.");
     let f = Four { lt: "60".into(), nt: "70".into(), lm: "8".into(), nm: "9".into() };
     let c = params_confirm(&f, l);
     assert_eq!(c.tier, Tier::Inline);

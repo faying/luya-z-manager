@@ -1,4 +1,4 @@
-//! /router/apn (APN 设置), the old `router/apn/page.tsx`: which APN the data call dials with, APN
+//! /router/apn (APN 设置): which APN the data call dials with, APN
 //! mode, operator IPv6, the manual profiles (enable / edit / delete / add) and the carrier's
 //! auto-detected ones. Batch 3, step 3-3 (u60-web.md).
 //!
@@ -320,9 +320,9 @@ pub fn view(st: &St, marks: Option<&Marks>, wan: Option<&Result<Wan, Fail>>, l: 
             let reason = if d.is_none() && a.manual_mode() {
                 l.pick("Activate one of the manual profiles below, or switch back to Auto.", "在下面启用一个手动配置，或改回「自动」。")
             } else if a.manual_mode() {
-                l.pick("Using manually configured APN profile", "使用手动配置的 APN 配置")
+                l.pick("A manual profile you set is in use", "正在用你手动设的配置")
             } else {
-                l.pick("Carrier APN detected automatically", "自动检测运营商 APN")
+                l.pick("Picked from the carrier's list", "按运营商库自动选")
             };
             (state, reason.into(), d.is_none() && a.manual_mode())
         }
@@ -407,7 +407,7 @@ pub fn view(st: &St, marks: Option<&Marks>, wan: Option<&Result<Wan, Fail>>, l: 
         v6: wan.and_then(|w| w.as_ref().ok().copied()),
         v6_err: wan.and_then(|w| w.as_ref().err()).map(|e| match e {
             Fail::SignedOut => e.text(l),
-            _ => l.pick("Couldn't read WAN IPv6 state.", "读取 WAN IPv6 状态失败。").into(),
+            _ => l.pick("WAN IPv6 state unreadable", "读不到 WAN IPv6 状态").into(),
         }),
         manual,
         auto,
@@ -487,7 +487,7 @@ pub fn check_save(f: &FormIn, a: Option<&Apn>, stuck: bool, l: Lang) -> Result<S
     let name = f.name.trim().to_string();
     let apn = f.apn.trim().to_string();
     if name.is_empty() || apn.is_empty() {
-        return Err(write::Outcome::NotYet(l.pick("Name and APN are required", "名称和 APN 为必填项").into()));
+        return Err(write::Outcome::NotYet(l.pick("Fill in both the name and the APN", "名称和 APN 都要填").into()));
     }
     let edit = (!f.id.is_empty()).then(|| f.id.clone());
     let editing = match &edit {
@@ -495,7 +495,7 @@ pub fn check_save(f: &FormIn, a: Option<&Apn>, stuck: bool, l: Lang) -> Result<S
         None => None,
     };
     if a.manual.iter().any(|p| p.name == name && Some(&p.id) != edit.as_ref()) {
-        return Err(write::Outcome::NotYet(l.pick("An APN with this name already exists", "已存在同名 APN").into()));
+        return Err(write::Outcome::NotYet(l.pick("Another profile already has this name", "已有配置叫这个名字").into()));
     }
     let pdp = int(&f.pdp).filter(|n| (1..=3).contains(n)).unwrap_or(1);
     let auth = int(&f.auth).filter(|n| (0..=2).contains(n)).unwrap_or(0);
@@ -692,7 +692,7 @@ pub fn confirm(act: &Act, a: Option<&Apn>, save: Option<&Save>, l: Lang) -> Resu
             }
         }
         Act::V6(on) => dialog(
-            if *on { l.pick("Request IPv6 from the carrier?", "向运营商请求 IPv6？") } else { l.pick("Stop requesting IPv6?", "不再请求 IPv6？") }.into(),
+            if *on { l.pick("Ask the carrier for IPv6?", "让运营商分配 IPv6？") } else { l.pick("Stop requesting IPv6?", "不再请求 IPv6？") }.into(),
             if *on {
                 l.pick("The dialing APN changes to IPv4v6 and the IPv6 leg of the data call comes up. Devices may start using IPv6 past an IPv4-only proxy.", "拨号 APN 改成 IPv4v6，数据连接的 IPv6 支路会建立。设备可能开始用 IPv6，绕过只支持 IPv4 的代理。")
             } else {
@@ -729,7 +729,7 @@ pub fn confirm(act: &Act, a: Option<&Apn>, save: Option<&Save>, l: Lang) -> Resu
             let a = a.ok_or_else(not_read)?;
             let p = a.find(id).ok_or_else(gone)?;
             if a.in_use(id) {
-                return Err(write::Outcome::NotYet(l.pick("Cannot delete the active APN", "无法删除正在使用的 APN").into()));
+                return Err(write::Outcome::NotYet(l.pick("The APN in use can't be deleted", "正在用的 APN 删不了").into()));
             }
             dialog(
                 match l {
@@ -829,8 +829,8 @@ pub fn read_back(action: &str, p: &Value, save: Option<&Save>, a: &Apn) -> bool 
 
 fn applied(act: &Act, l: Lang) -> String {
     match act {
-        Act::Mode(true) => l.pick("APN mode set to Manual", "APN 模式已设为手动"),
-        Act::Mode(false) => l.pick("APN mode set to Auto", "APN 模式已设为自动"),
+        Act::Mode(true) => l.pick("APN mode is now Manual", "APN 模式改成了手动"),
+        Act::Mode(false) => l.pick("APN mode is now Auto", "APN 模式改成了自动"),
         Act::V6(true) => l.pick("Operator IPv6 enabled", "已启用运营商 IPv6"),
         Act::V6(false) => l.pick("Operator IPv6 disabled; IPv4 stays connected", "已禁用运营商 IPv6，IPv4 保持连接"),
         Act::Enable(_) => l.pick("APN activated", "APN 已启用"),

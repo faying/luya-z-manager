@@ -1,4 +1,4 @@
-//! E4 write transactions on the screen (src/ui_parts/op.c): the 事务行 under the status bar,
+//! E4 write transactions on the screen: the 事务行 under the status bar,
 //! Home's one-time 「自动退回已打开」 line, the 网络模式 segment's line while core has a
 //! transaction for it, 「上次改动」 under 网络模式, and the write controls greyed while core is
 //! stuck; the 事务页 (conclusion → 旧 → 新 · 来源 → three steps → countdown → buttons) and

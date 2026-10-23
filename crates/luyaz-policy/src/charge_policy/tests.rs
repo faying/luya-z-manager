@@ -1,7 +1,4 @@
-//! Moved from zte-agent `src/charge_policy.rs` (D7): `plug_in_during_fallback_enforced_once`,
-//! `unknown_never_counts_as_unplugged`, `periodic_enforce_while_connected_and_waits_capped`, as
-//! they were. `enforce` had no unit tests in the agent (it read sysfs and ubus inline); the cases
-//! below follow its code.
+//! Charge limit cases (D7): the driver's timing, and `enforce` / `on_unplug` decisions.
 
 use super::*;
 
@@ -130,7 +127,7 @@ fn enforce_stops_at_the_limit_and_resumes_below_the_band() {
     assert_eq!(enforce(&b(40, true, true)), Some(true));
     // discharging by itself (not stopped by us): leave it, even over the limit
     assert_eq!(enforce(&b(90, true, false)), None);
-    // unreadable capacity (0) while stopped: resume, as the agent did
+    // unreadable capacity (0) while stopped: resume
     assert_eq!(enforce(&b(0, false, true)), Some(true));
     // limit below the hysteresis band does not wrap
     assert_eq!(

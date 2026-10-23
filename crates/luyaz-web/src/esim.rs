@@ -1,4 +1,4 @@
-//! /router/esim (eSIM), the old `router/esim/page.tsx`: a removable eUICC card (eSTK.me / 5ber)
+//! /router/esim (eSIM): a removable eUICC card (eSTK.me / 5ber)
 //! managed through lpac on the device. Status first (the profile in use, or what the card is busy
 //! with), then the profiles and their actions, adding a profile, pending notifications, the chip.
 //!
@@ -93,6 +93,7 @@ pub fn routes() -> Router<Shared> {
         .route("/router/esim/notif/ask", post(notif_ask))
         .route("/router/esim/set", post(set))
         .route("/router/esim/cancel", post(cancel))
+        .route("/router/esim/stop", post(stop))
         .route("/router/esim/after", post(after))
 }
 
@@ -398,7 +399,7 @@ fn job_word(kind: Option<&str>, l: Lang) -> &'static str {
     match kind {
         Some("switch") => l.pick("Switching…", "切换中…"),
         Some("delete") => l.pick("Deleting…", "删除中…"),
-        Some("download") => l.pick("Downloading profile…", "正在下载配置…"),
+        Some("download") => l.pick("Fetching the profile…", "配置下载中…"),
         _ => l.pick("Working…", "处理中…"),
     }
 }
@@ -433,11 +434,11 @@ pub fn view(c: &Card, reboot: bool, l: Lang) -> View {
         (None, None) => {}
         (Some(ch), _) if !ch.installed => {
             state = l
-                .pick("lpac isn't deployed on the device", "设备上未部署 lpac")
+                .pick("lpac is missing on the device", "设备上没有 lpac")
                 .into();
             reason = Some(l.pick(
-                "The eSIM manager needs the lpac bundle under /data/esim. Run scripts/esim/build-esim-bundle.sh from the repo, then refresh.",
-                "eSIM 管理需要 /data/esim 下的 lpac 套件。在仓库运行 scripts/esim/build-esim-bundle.sh 后刷新。",
+                "eSIM needs the lpac bundle in /data/esim. Build it with scripts/esim/build-esim-bundle.sh in the repo, put it there and refresh.",
+                "eSIM 要用 /data/esim 里的 lpac 套件。在仓库用 scripts/esim/build-esim-bundle.sh 打包，放上去后刷新。",
             ).into());
         }
         (Some(_), _) if reboot => {
@@ -486,8 +487,8 @@ pub fn view(c: &Card, reboot: bool, l: Lang) -> View {
                     reason = Some(
                         if ps.is_empty() {
                             l.pick(
-                                "No profiles on the card yet — add one below.",
-                                "卡上还没有配置文件——在下方添加。",
+                                "The card has no profiles; add one below",
+                                "卡里还没有配置，在下面添加",
                             )
                         } else {
                             l.pick(
@@ -564,7 +565,7 @@ pub fn view(c: &Card, reboot: bool, l: Lang) -> View {
             },
             ChipRow {
                 label: l.pick("Free space", "剩余空间"),
-                sub: Some(l.pick("for new profiles", "可用于新配置")),
+                sub: Some(l.pick("room for new profiles", "还能装新配置的空间")),
                 value: ch.free.map_or_else(dash, fmt_bytes),
             },
             ChipRow {
@@ -1189,7 +1190,26 @@ pub fn with_say(o: write::Outcome, say: Option<&str>, l: Lang) -> write::Outcome
     }
 }
 
-async fn wait_job(app: &Shared, who: &Caller, ours: u64, act: Act, say: &mut Option<String>, l: Lang) -> JobEnd {
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Poll the job slot until job `ours` ends; a switch waiting out a busy card shows its retries
+/// (and Stop retrying) in `#es-retry`, cleared when the wait ends.
+async fn wait_job(
+    app: &Shared,
+    who: &Caller,
+    ours: u64,
+    act: Act,
+    say: &mut Option<String>,
+    l: Lang,
+    tx: &tokio::sync::mpsc::Sender<Event>,
+) -> JobEnd {
+    let mut seen = None;
+    let mut shown = RETRY_EMPTY.to_string();
+    let since = now_unix();
     let every = if act == Act::Notif {
         NOTIF_JOB_EVERY
     } else {
@@ -1203,24 +1223,181 @@ async fn wait_job(app: &Shared, who: &Caller, ours: u64, act: Act, say: &mut Opt
     let start = tokio::time::Instant::now();
     let mut deadline = start + limit;
     let mut tick = start;
-    loop {
+    let end = loop {
         tick += every;
         if tick > deadline {
-            return JobEnd::TimedOut;
+            break JobEnd::TimedOut;
         }
         tokio::time::sleep_until(tick).await;
         // a failed read is not an answer: keep polling until the deadline
         if let Ok(j) = crate::agent::get(app, who, "/api/esim/job").await {
             *say = job_say(ours, &j, l);
+            if act == Act::Switch {
+                let r = busy_retry(ours, &j, since, now_unix(), &mut seen);
+                let html = retry_html(r.as_ref(), r.is_some() && stopping(), l);
+                if html != shown {
+                    let _ = tx.send(patch(&html)).await;
+                    shown = html;
+                }
+            }
             if let Some(e) = job_end(ours, &j) {
-                return e;
+                break e;
             }
             // the job's own bound (switch), never below ours
             if let Some(s) = job_deadline(ours, &j) {
                 deadline = deadline.max(start + s + DEADLINE_SLACK);
             }
         }
+    };
+    if shown != RETRY_EMPTY {
+        let _ = tx.send(patch(RETRY_EMPTY)).await;
     }
+    end
+}
+
+// ---- a busy card's retries (core's catBusy retries, luyaz-esim P0-3) ----
+
+/// `luyaz_esim::BUSY_TOTAL`: no retry starts past this from the switch's start; plus the last
+/// try's enable and readback.
+const BUSY_TOTAL_S: u64 = 240 + 15;
+const STOP: &str = "/router/esim/stop";
+const RETRY_EMPTY: &str = "<div id=\"es-retry\"></div>";
+
+/// A switch waiting out a busy card: enable tries so far, when the next one starts, when the
+/// waiting gives up (device-clock unix seconds).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Retry {
+    pub tries: u32,
+    pub next_unix: u64,
+    pub until_unix: u64,
+}
+
+/// Switch `ours` is between busy-card tries (`message` "card busy — retrying (try N in G s)",
+/// `attempts`). The job says "in G s" once per try, so `seen` keeps that try's start time.
+/// `since_unix`: when this page sent the switch. Every time here is on luyaz-web's own clock (the
+/// device's, local wall time labelled UTC), never the job's `started_unix`, so the two shown
+/// times agree even where the core's clock differs (the e2e mock).
+pub fn busy_retry(
+    ours: u64,
+    j: &Value,
+    since_unix: u64,
+    now_unix: u64,
+    seen: &mut Option<(u32, u64)>,
+) -> Option<Retry> {
+    if j["id"].as_u64()? != ours || j["status"].as_str() != Some("running") {
+        return None;
+    }
+    let m = j["message"].as_str()?;
+    if !m.starts_with("card busy") {
+        return None;
+    }
+    let tries = u32::try_from(j["attempts"].as_u64()?).ok().filter(|t| *t > 0)?;
+    let gap = m
+        .rsplit_once(" in ")
+        .and_then(|(_, t)| t.split(' ').next())
+        .and_then(|g| g.parse::<u64>().ok())
+        .unwrap_or(0);
+    let next_unix = match *seen {
+        Some((t, at)) if t == tries => at,
+        _ => {
+            *seen = Some((tries, now_unix + gap));
+            now_unix + gap
+        }
+    };
+    let until_unix = (since_unix + BUSY_TOTAL_S).max(next_unix);
+    Some(Retry { tries, next_unix, until_unix })
+}
+
+/// "hh:mm:ss" of a device-clock unix second: local wall time labelled UTC, so the UTC digits.
+fn hms(unix: u64) -> String {
+    format!("{:02}:{:02}:{:02}", unix / 3600 % 24, unix / 60 % 60, unix % 60)
+}
+
+/// The Stop retrying button was pressed this recently: the next polls say "stopping".
+fn stop_mark() -> &'static Mutex<Option<Instant>> {
+    static M: Mutex<Option<Instant>> = Mutex::new(None);
+    &M
+}
+
+fn stopping() -> bool {
+    stop_mark()
+        .lock()
+        .unwrap()
+        .is_some_and(|t| t.elapsed() < Duration::from_secs(10))
+}
+
+fn retry_note(t: &str, alert: bool) -> String {
+    format!(
+        "<div id=\"es-retry\"><p class=\"t-note{}\" role=\"{}\">{}</p></div>",
+        if alert { " t-note--warn" } else { "" },
+        if alert { "alert" } else { "status" },
+        crate::agent::esc(t)
+    )
+}
+
+/// The retry progress under the profiles, with Stop retrying (tier 1: it only ends the waiting;
+/// the card keeps the profile it has). Empty when there is nothing to show.
+pub fn retry_html(r: Option<&Retry>, stopping: bool, l: Lang) -> String {
+    let Some(r) = r else {
+        return RETRY_EMPTY.into();
+    };
+    if stopping {
+        return retry_note(l.pick("Stopping the retries…", "正在停止重试…"), false);
+    }
+    let (next, until) = (hms(r.next_unix), hms(r.until_unix));
+    let t = match l {
+        Lang::En => format!(
+            "The card is busy and hasn't taken the profile ({} {} so far). Next try at {next}; it gives up around {until} and the card keeps its old profile.",
+            r.tries,
+            if r.tries == 1 { "try" } else { "tries" }
+        ),
+        Lang::Zh => format!(
+            "卡忙，还没换过去（已试 {} 次）。{next} 再试，约 {until} 放弃，放弃后卡上还是原来的配置。",
+            r.tries
+        ),
+    };
+    format!(
+        "<div id=\"es-retry\" role=\"group\" class=\"nd-confirm\" aria-label=\"{}\"><p class=\"nd-confirm__text\" role=\"status\" aria-live=\"polite\">{}</p><div class=\"nd-confirm__actions\"><button type=\"button\" class=\"nd-btn nd-btn--secondary\" data-on:click=\"{}\">{}<span>{}</span></button></div></div>",
+        l.pick("Retrying the switch", "切换重试中"),
+        crate::agent::esc(&t),
+        write::post_once(STOP),
+        crate::shell::icon("Stop", false, 18, ""),
+        l.pick("Stop retrying", "停止重试")
+    )
+}
+
+/// What the Stop retrying press got from the core (`POST /api/esim/cancel`).
+pub fn stop_reply(r: Result<(u16, &Value), &Fail>, l: Lang) -> String {
+    match r {
+        Ok((c, v)) if (200..300).contains(&c) && v["ok"] != false => {
+            retry_html(Some(&Retry { tries: 0, next_unix: 0, until_unix: 0 }), true, l)
+        }
+        Ok((409, v)) if v["error"].as_str().is_some_and(|e| e.contains("past the card")) => retry_note(
+            l.pick(
+                "Too late to stop: the card has taken the profile and the switch is finishing.",
+                "停不了了：卡已经换上新配置，切换正在收尾。",
+            ),
+            false,
+        ),
+        Ok((409, _)) => retry_note(
+            l.pick("There is no retry to stop now.", "现在没有在重试的切换。"),
+            false,
+        ),
+        Ok((c, v)) => retry_note(&crate::agent::refused(c, v).text(l), true),
+        Err(f) => retry_note(&f.text(l), true),
+    }
+}
+
+/// POST /router/esim/stop: stop a switch's busy-card retries. Answers at once; the switch's own
+/// reply then ends with "retries stopped".
+pub async fn stop(State(app): State<Shared>, req: axum::extract::Request) -> impl IntoResponse {
+    let l = crate::topbar::Ctx::of_request(&req, PATH).lang;
+    let who = Caller::of(&app, &req);
+    let r = crate::agent::post_raw(&app, &who, "/api/esim/cancel", &json!({})).await;
+    if matches!(&r, Ok((c, v)) if (200..300).contains(c) && v["ok"] != false) {
+        *stop_mark().lock().unwrap() = Some(Instant::now());
+    }
+    one(stop_reply(r.as_ref().map(|(c, v)| (*c, v)), l))
 }
 
 fn area_html(
@@ -1284,8 +1461,8 @@ async fn run(
         (Act::Nick, _) => l.pick("Saving the nickname…", "正在保存昵称…").into(),
         (Act::Download, _) => l
             .pick(
-                "Downloading the profile… this can take a few minutes.",
-                "正在下载配置…可能要几分钟。",
+                "Fetching the profile… a few minutes is normal.",
+                "配置下载中…要几分钟是正常的。",
             )
             .into(),
         (Act::Notif, _) => l.pick("Sending the notifications…", "正在发送通知…").into(),
@@ -1330,7 +1507,7 @@ async fn run(
             None => write::Outcome::Unknown,
             Some(id) => {
                 let mut say = None;
-                let end = wait_job(&app, &who, id, act, &mut say, l).await;
+                let end = wait_job(&app, &who, id, act, &mut say, l, &tx).await;
                 // the core's shared word for a switch (`sim_say`); only on outcomes it describes
                 let say = say.filter(|_| act == Act::Switch);
                 let said = |o| with_say(o, say.as_deref(), l);
@@ -1701,8 +1878,8 @@ pub async fn download_ask(
     if !code_ok(&code) {
         let o = write::Outcome::NotYet(
             l.pick(
-                "Enter an activation code like LPA:1$smdp.example.com$XXXX-XXXX",
-                "请输入形如 LPA:1$smdp.example.com$XXXX-XXXX 的激活码",
+                "The activation code looks like LPA:1$smdp.example.com$XXXX-XXXX",
+                "激活码的样子是 LPA:1$smdp.example.com$XXXX-XXXX",
             )
             .into(),
         );

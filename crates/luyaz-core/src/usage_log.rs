@@ -295,10 +295,10 @@ pub fn offer(fields: &serde_json::Map<String, Value>) {
 }
 
 fn load(dir: &Path) -> Today {
-    std::fs::read_to_string(dir.join("today.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    match std::fs::read_to_string(dir.join("today.json")) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Err(_) => Default::default(),
+    }
 }
 
 fn save(dir: &Path, today: &Today) -> std::io::Result<()> {
@@ -364,10 +364,10 @@ static TODAY: Mutex<Option<Today>> = Mutex::new(None);
 static LANDING: Mutex<Option<Landing>> = Mutex::new(None);
 
 fn load_landing(dir: &Path) -> Landing {
-    std::fs::read_to_string(dir.join("landing.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    match std::fs::read_to_string(dir.join("landing.json")) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Err(_) => Default::default(),
+    }
 }
 
 fn save_landing(dir: &Path, l: &Landing) -> std::io::Result<()> {

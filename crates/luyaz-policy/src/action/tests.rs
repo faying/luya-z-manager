@@ -1,5 +1,5 @@
 //! `Json`'s text must be serde_json's: restore keys built from it are compared with the ones
-//! the agent wrote.
+//! already saved.
 
 use super::*;
 use serde_json::json;

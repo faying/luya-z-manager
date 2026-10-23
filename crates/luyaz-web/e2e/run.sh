@@ -1,7 +1,6 @@
 #!/bin/sh
 # Run one browser check in place: e2e/<name>.mjs resolves @playwright/test and axe from
-# crates/luyaz-web/node_modules (crates/luyaz-web/package.json; `npm ci` there once). Until X13
-# the checks were copied into the old Next.js web/ to borrow its node_modules.
+# crates/luyaz-web/node_modules (crates/luyaz-web/package.json; `npm ci` there once).
 #   WEB=http://127.0.0.1:18081 MOCK=http://127.0.0.1:19461 AGENT=http://127.0.0.1:19090 \
 #     OUT=/tmp/lw crates/luyaz-web/e2e/run.sh step5
 set -eu

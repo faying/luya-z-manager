@@ -4,7 +4,7 @@
 <h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
 {{ self.leaf("ap-cur")|safe }}
 <div class="pg-col">
-<p class="nd-body">{{ l.pick("Manage Access Point Name profiles for mobile data.", "管理移动数据的接入点名称(APN)配置。") }}</p>
+<p class="nd-body">{{ l.pick("Which APN mobile data dials with, and the profiles to choose from.", "移动数据用哪个 APN 拨号，以及可选的配置。") }}</p>
 {{ self.leaf("ap-status")|safe }}
 <section aria-labelledby="ap-mode-t"><h2 id="ap-mode-t" class="nd-group-title">{{ l.pick("APN Mode", "APN 模式") }}</h2>
 <div class="nd-group">{{ self.leaf("ap-mode")|safe }}{{ self.leaf("ap-v6")|safe }}</div>
@@ -16,7 +16,7 @@
 <div id="ap-form"></div>
 {{ save_op|safe }}
 </section>
-<section aria-labelledby="ap-auto-t"><h2 id="ap-auto-t" class="nd-group-title">{{ l.pick("Auto-detected Profiles", "自动检测的配置") }}</h2>
+<section aria-labelledby="ap-auto-t"><h2 id="ap-auto-t" class="nd-group-title">{{ l.pick("Carrier Profiles", "运营商库里的配置") }}</h2>
 {{ self.leaf("ap-auto")|safe }}
 {{ pick_op|safe }}
 </section>

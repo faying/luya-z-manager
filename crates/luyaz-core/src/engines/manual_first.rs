@@ -1,17 +1,18 @@
-//! CHILL's manual-first (u60-platform.md Phase 4 step 9g; the agent's until Phase 10).
+//! CHILL's manual-first.
 //!
 //! With u60d's writes on it runs the loop (`crates/luyaz-manual-first`) on a thread of its own, with
 //! u60d's netwatch (it asks whether the cell itself is alive) and the same mihomo, saving the state
 //! file on every change. The status page and the exit here read the live engine. It holds the
 //! lease `/tmp/manual-first.owner` while its engine runs.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use luyaz_manual_first::{Host, ManualFirst};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::Duration;
 
 use crate::api::Compat;
-
 
 struct U60dHost {
     root: String,
@@ -34,13 +35,15 @@ impl Host for U60dHost {
 
     /// The cell answers and the underlay gate lets the proxy layer act.
     fn cell_alive(&self) -> bool {
-        use crate::api::underlay::{ask, Kind, Layer};
-        self.watch.cell_alive(luyaz_api::clock::BootTime::read().as_ref())
+        use crate::api::underlay::{Kind, Layer, ask};
+        self.watch
+            .cell_alive(luyaz_api::clock::BootTime::read().as_ref())
             && !ask("manual-first", Layer::Proxy, Kind::Inferential).holds()
     }
 
     fn direct_dns_ms(&self) -> Option<u32> {
-        self.watch.direct_dns_ms(luyaz_api::clock::BootTime::read().as_ref())
+        self.watch
+            .direct_dns_ms(luyaz_api::clock::BootTime::read().as_ref())
     }
 
     /// The shadow records are the agent's.
@@ -105,6 +108,10 @@ pub async fn run(c: Compat) {
     }
     let m2 = mf.clone();
     let thread = std::thread::spawn(move || m2.run());
-    *c.manual_first.now.lock().unwrap_or_else(|e| e.into_inner()) = Some(Engine { mf, active, _thread: thread });
+    *c.manual_first.now.lock().unwrap_or_else(|e| e.into_inner()) = Some(Engine {
+        mf,
+        active,
+        _thread: thread,
+    });
     eprintln!("[compat] manual_first: u60d runs it");
 }

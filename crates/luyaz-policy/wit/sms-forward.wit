@@ -3,7 +3,7 @@
 // manifest entry: change anything here and bump it.
 //
 // Ids and date time keys only: sender and body never cross. A pass is replayed against the pages
-// and outcomes the agent got (no imports); the host compares what the guest asked with what was
+// and outcomes the host got (no imports); the host compares what the guest asked with what was
 // recorded.
 package luyaz:sms-forward@0.1.0;
 

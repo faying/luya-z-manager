@@ -1,4 +1,4 @@
-//! The screen (src/ui.c): settings, the tileview with five tabs, the subpage layer, and the
+//! The screen: settings, the tileview with five tabs, the subpage layer, and the
 //! shared chrome on lv_layer_top() (status bar, floating tab capsule, banner, 事务行). Pages are
 //! in the submodules, one per C file in src/ui_parts/. Data comes only from the view model
 //! (ui_model::Model): the page code does not know where it came from.
@@ -136,7 +136,7 @@ const TOP_LEFT_END: i32 = 150;
 /// Five top-level pages, text only.
 const TAB_NAMES: [&str; TABS] = [n_("首页"), n_("蜂窝"), "Wi-Fi", n_("出口"), n_("系统")];
 
-/// Where screen_feed_net() is None and why (screen_feed.h SF_*).
+/// Where screen_feed_net() is None and why.
 pub const SF_OLD_DATAD: i32 = 2;
 
 pub struct Ui {
@@ -161,12 +161,14 @@ pub struct Ui {
     top_time: Obj,
     top_net: Obj,
     top_updown: Obj,
+    top_rate_hit: Obj,
     top_sig: [Obj; 5],
     /// dual standby: two rows of 5 (data slot on top, standby below)
     top_sig2: [Obj; 10],
     /// dual rows shown (None = not yet decided)
     sig_dual: Option<bool>,
     top_alert: Obj,
+    top_alert_hit: Obj,
     top_batt: Battery,
     /// 0 none, 1 unread, 2 agent lost
     alert_st: i32,
@@ -402,13 +404,19 @@ impl Ui {
     }
 
     // ---- subpage layer ----
-    fn sub_show(&mut self, id: Sub) {
+    fn sub_show(&mut self, id: Sub, forward: bool) {
+        let changed = self.sub_cur != Some(id);
         for (i, &pg) in self.sub_page.iter().enumerate() {
             kit::show(pg, i == id as usize);
         }
         self.sub_title.set_text(tr(sub_title(id)));
         self.sub_layer.remove_flag(lv::LV_OBJ_FLAG_HIDDEN);
-        kit::anim_push(self.sub_layer);
+        if !forward {
+            // Returning reveals the parent immediately; it must not look like another push.
+            kit::anim_stop(self.sub_layer);
+        } else if changed {
+            kit::anim_push(self.sub_layer);
+        }
         self.sub_cur = Some(id);
         self.sub_parent = None;
         self.bench_gate();
@@ -426,7 +434,7 @@ impl Ui {
 
     /// Open a subpage fresh: always from its top.
     pub fn sub_open(&mut self, id: Sub) {
-        self.sub_show(id);
+        self.sub_show(id, true);
         if let Some(sc) = obj_scroller(self.sub_page[id as usize]) {
             sc.scroll_to_y(0);
         }
@@ -434,6 +442,7 @@ impl Ui {
 
     pub fn sub_close(&mut self) {
         self.sub_layer.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
+        kit::anim_stop(self.sub_layer);
         self.sub_cur = None;
         self.sub_parent = None;
         self.bench_gate();
@@ -461,7 +470,7 @@ impl Ui {
 
     pub fn sub_back(&mut self) {
         match self.sub_parent {
-            Some(p) => self.sub_show(p),
+            Some(p) => self.sub_show(p, false),
             None => self.sub_close(),
         }
     }
@@ -609,15 +618,17 @@ impl Ui {
         self.top_net = kit::label(bar, uf().n12, th.t1, 104, 6, "");
         self.top_net.set_width(TOP_LEFT_END - 104 - 2);
         self.top_net.set_long_mode(lv::LV_LABEL_LONG_MODE_CLIP);
-        self.top_updown = kit::label(bar, uf().n12, th.t2, 200, 6, "");
-        self.top_updown.add_flag(lv::LV_OBJ_FLAG_CLICKABLE);
-        self.top_updown.set_ext_click_area(10);
-        self.top_updown.add_event_cb(speed_unit_cb, lv::LV_EVENT_CLICKED, 0);
-        self.top_alert = kit::label(bar, uf().cj12, th.warn_t, 260, 5, "▲");
-        self.top_alert.add_flag(lv::LV_OBJ_FLAG_CLICKABLE);
-        self.top_alert.set_ext_click_area(14);
-        self.top_alert.add_event_cb(open_alerts_cb, lv::LV_EVENT_CLICKED, 0);
-        kit::show(self.top_alert, false);
+        // Real hit containers live directly on layer_top: the 26 px visual bar must
+        // not clip their 40 px touch height. Their horizontal bounds never overlap.
+        self.top_rate_hit = kit::bx(Obj::layer_top(), 200, 0, 40, 40, th.bg, 0);
+        self.top_rate_hit.set_style_bg_opa(lv::OPA_TRANSP, 0);
+        kit::tappable(self.top_rate_hit, Some(speed_unit_cb), 0);
+        self.top_updown = kit::label(self.top_rate_hit, uf().n12, th.t2, 0, 6, "");
+        self.top_alert_hit = kit::bx(Obj::layer_top(), 246, 0, 40, 40, th.bg, 0);
+        self.top_alert_hit.set_style_bg_opa(lv::OPA_TRANSP, 0);
+        kit::tappable(self.top_alert_hit, Some(open_alerts_cb), 0);
+        self.top_alert = kit::label(self.top_alert_hit, uf().cj12, th.warn_t, 0, 5, "▲");
+        kit::show(self.top_alert_hit, false);
         self.top_batt = kit::battery(bar, TOP_BATT_XR, 6);
         kit::battery_set(&self.top_batt, 0, false);
         kit::show(self.top_batt.body, false); // no fake "0" before the first snapshot
@@ -628,12 +639,13 @@ impl Ui {
     #[allow(clippy::too_many_arguments)]
     fn statusbar_layout(&mut self, full: &[u8], shrt: &[u8], down: &[u8], pct: i32, chg: bool, alert: bool, alert_col: u32) {
         let mut right = TOP_BATT_XR - kit::battery_w(pct, chg) - 6;
-        kit::show(self.top_alert, alert);
+        kit::show(self.top_alert_hit, alert);
         if alert {
             kit::text_color(self.top_alert, alert_col);
             let aw = lv::text_w("▲".as_bytes(), uf().cj12);
-            self.top_alert.set_x(right - aw);
-            right -= aw + 4;
+            self.top_alert_hit.set_x(right - 40);
+            self.top_alert.set_x((40 - aw) / 2);
+            right -= 40;
         }
         let f = [full, shrt, down];
         let w = f.map(|s| lv::text_w(s, uf().n12));
@@ -642,7 +654,10 @@ impl Ui {
             self.rate_shown = f[k].to_vec();
             self.top_updown.set_text(f[k]);
         }
-        self.top_updown.set_x(right - w[k]);
+        let hit_w = w[k].max(40);
+        self.top_rate_hit.set_x(right - hit_w);
+        self.top_rate_hit.set_width(hit_w);
+        self.top_updown.set_x(hit_w - w[k]);
     }
 
     fn build_banner(&mut self) {
@@ -777,10 +792,12 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
         top_time: Obj::NULL,
         top_net: Obj::NULL,
         top_updown: Obj::NULL,
+        top_rate_hit: Obj::NULL,
         top_sig: [Obj::NULL; 5],
         top_sig2: [Obj::NULL; 10],
         sig_dual: None,
         top_alert: Obj::NULL,
+        top_alert_hit: Obj::NULL,
         top_batt: Battery::default(),
         alert_st: 0,
         top_label: String::new(),

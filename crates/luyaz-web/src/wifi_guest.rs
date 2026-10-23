@@ -1,4 +1,4 @@
-//! /router/wifi-guest (访客 Wi-Fi), the old `router/wifi-guest/page.tsx`: whether the guest
+//! /router/wifi-guest (访客 Wi-Fi): whether the guest
 //! network is on (2.4 / 5 GHz), its name, security, whether a password is set, hidden SSID, AP
 //! isolation, the active time and the time left. Batch 4 (u60-web.md).
 //!

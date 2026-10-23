@@ -8,7 +8,7 @@
 {{ self.leaf("qc-now")|safe }}
 </section>
 <section aria-labelledby="qc-bearers-t"><h2 id="qc-bearers-t" class="nd-group-title">{{ l.pick("Active bearers", "活动承载") }}</h2>
-<p class="nd-aux mb-3 px-1">{{ l.pick("PDP contexts and (where exposed) QoS Class Identifier.", "PDP 上下文以及（在可获取时）QoS 等级标识符。") }}</p>
+<p class="nd-aux mb-3 px-1">{{ l.pick("Each PDP context, with its QCI when the modem gives one", "每个 PDP 上下文，以及基带给出的 QCI") }}</p>
 {{ self.leaf("qc-bearers")|safe }}
 </section>
 <section aria-labelledby="qc-raw-t"><h2 id="qc-raw-t" class="nd-group-title">AT+CGCONTRDP</h2>

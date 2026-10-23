@@ -1,9 +1,9 @@
 //! The charge limit's settings and `/api/device/charge-control`, shared by the agent and u60d
-//! (u60-platform.md Phase 4 step 9c). Whoever owns the `charge` part keeps the settings and the
-//! manual override and writes the file; this is only the format and the route's shapes, moved from
-//! `zte-agent/src/charge_policy.rs` and `device_ext.rs` as they were.
+//!. Whoever owns the `charge` part keeps the settings and the
+//! manual override and writes the file; this is only the file format and the route's request and
+//! reply shapes.
 //!
-//! Naming trap: the vendor's `direct_power_supply_mode: "enable"` (and `/control`'s
+//! Naming trap (RESIDUE-OK: vendor literal): the vendor's `direct_power_supply_mode: "enable"` (and `/control`'s
 //! `power.direct_supply.set` `enabled: true`) means charging is STOPPED.
 
 use serde_json::{Value, json};
@@ -131,18 +131,16 @@ pub fn reply(
     s: &Settings,
     manual_override: bool,
 ) -> Value {
-    json!({
-        "ok": true,
-        "data": {
-            "charging_stopped": charging_stopped,
-            "battery_status": battery_status,
-            "capacity": capacity,
-            "charge_limit_enabled": s.enabled,
-            "charge_limit": s.limit,
-            "hysteresis": s.hysteresis,
-            "manual_override": manual_override,
-        }
-    })
+    let data = json!({
+        "capacity": capacity,
+        "battery_status": battery_status,
+        "charging_stopped": charging_stopped,
+        "manual_override": manual_override,
+        "charge_limit": s.limit,
+        "charge_limit_enabled": s.enabled,
+        "hysteresis": s.hysteresis,
+    });
+    json!({"ok": true, "data": data})
 }
 
 #[cfg(test)]

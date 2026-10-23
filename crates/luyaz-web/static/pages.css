@@ -3,7 +3,7 @@
 .px-1 { padding-inline: 4px; }
 .mb-2 { margin-bottom: 8px; }
 
-/* /trends: MiniChart.tsx */
+/* /trends: mini charts */
 .tr-grid { display: grid; max-width: 1100px; gap: 16px; }
 @media (min-width: 1024px) { .tr-grid { grid-template-columns: 1fr 1fr; } .tr-card { padding: 16px; } }
 .tr-card { padding: 12px; }

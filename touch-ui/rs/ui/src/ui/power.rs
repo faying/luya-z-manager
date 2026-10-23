@@ -1,4 +1,4 @@
-//! The power menu (src/ui_parts/power.c): a bottom sheet from a long press on the power key,
+//! The power menu: a bottom sheet from a long press on the power key,
 //! 关机 / 重启 two taps each, then a full-screen 「正在关机…」; and the key's poll (key_poll_cb):
 //! short = screen on/off, long = the menu, and the screen going off by itself.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0

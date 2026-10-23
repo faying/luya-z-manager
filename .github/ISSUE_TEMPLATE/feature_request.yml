@@ -1,0 +1,7 @@
+name: Feature request
+description: Suggest something new or an improvement
+labels: [enhancement]
+body:
+  - {type: textarea, id: goal, attributes: {label: Your goal}, validations: {required: true}}
+  - {type: textarea, id: blocker, attributes: {label: What stops you today}}
+  - {type: textarea, id: idea, attributes: {label: What would help (optional)}}

@@ -1,30 +1,30 @@
-//! charge_policy in u60d (Phase 4 step 3, shadow): decides on every successful read of the
+//! charge_policy in u60d: decides on every successful read of the
 //! `battery` and `charger` blocks (5 s each) what the agent's charge limit thread would write, and
 //! records it as a proposal instead of writing. The agent's real writes (source auto, seen in
 //! `/control`, `charge::observe_control`) are recorded next to them; `GET /debug/policy` pairs the
 //! two (same direction within [`MATCH_WINDOW_SECS`]).
 //!
-//! Inputs as the agent reads them (`zte-agent/src/charge_policy.rs` `event_loop`/`enforce`):
+//! Inputs, the same as the charge limit's own loop reads:
 //! plugged = the battery block's `charger_connect` while the charger block is fresh; stopped = the
 //! charger block's `direct_supply.enabled`; capacity and status from sysfs; the limit and the
 //! manual override from `charge.rs`. The agent passes on every core feed change (about every
 //! second); here it is every battery/charger read, so a decision can come up to 5 s later.
 //! (That second is only the agent being woken by other blocks: its feed is these same 5 s reads.)
 //!
-//! Once u60d owns the part (step 9c, [`set_owned`]), the same loop hands what it would have
+//! Once u60d owns the part ([`set_owned`]), the same loop hands what it would have
 //! proposed to the touch layer's executor ([`Job`], `compat/charge.rs`), which reads the stop flag
 //! from ubus and writes under source auto; the decisions it carried out are kept in `writes`.
 
 use super::Slot;
 use super::charge;
 use crate::block::Hub;
+use luyaz_policy::charge_policy::{self as p, Battery, Driver, PlugStep};
 use serde::Serialize;
 #[cfg(test)]
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use luyaz_policy::charge_policy::{self as p, Battery, Driver, PlugStep};
 
 /// The WIT package this u60d was built against (`plugins.json` `abi`).
 pub const ABI: &str = "luyaz:charge-policy@0.1.0";
@@ -177,8 +177,7 @@ fn load(dir: &std::path::Path) -> State {
 fn wall_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// What one tick saw.

@@ -1,27 +1,43 @@
-//! SMS forwarding (moved from zte-agent `sms_forward.rs`, Phase 4 step 9e), run by
-//! the core. Every side effect (the core's SMS feed and pages, ubus reads, the vendor send, core
-//! actions, alerts, shadow records, sleeping) goes through [`Host`]; the HTTP destinations are
-//! sent from here. The agent's host is the device; tests use a fake.
+//! SMS forwarding, run by the core: new received SMS are matched against the user's rules and
+//! sent on (Telegram, webhook, SMS, ntfy, Discord, Slack). Everything that touches the device
+//! (the core's SMS feed and pages, ubus reads, the vendor send, core actions, alerts, shadow
+//! records, sleeping) goes through [`Host`]; HTTP destinations are called from here. Tests
+//! use a fake host.
 //!
 //! One owner at a time: the event loop waits for another live owner's lease
 //! ([`wait_lease_free`]), re-reads the state file when it starts, and stops (holding the current
 //! SMS, as a transient failure) once [`Host::active`] says the host no longer owns forwarding.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, atomic::Ordering, mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+// derive macros for the state file types below
+use serde::{Deserialize, Serialize};
 
 mod api;
 mod lease;
+mod model;
+mod send;
+mod text;
 
 pub use lease::{remove_lease, wait_lease_free, write_lease, LEASE_FILE, LEASE_WAIT};
+pub use model::{ForwardDestination, ForwardLogEntry, ForwardRule, HttpHeader, SmsFilter, SmsForwardConfig};
+pub(crate) use model::DecodedSms;
+use send::{
+    destination_type_name, forward_to, forward_with_retry, http_agent, is_forward_loop, is_garbled_echo,
+    is_transient_error, matches_filter,
+};
+use text::{decode_ucs2_hex, is_ucs2_hex, now_ts, preview};
+
+/// Log lines kept in the state file (oldest dropped first).
+const MAX_LOG_ENTRIES: usize = 200;
+/// Pause between two rules of the same SMS, and between two SMS.
+const RULE_GAP: Duration = Duration::from_millis(500);
+const SMS_GAP: Duration = Duration::from_secs(1);
 
 pub const CONFIG_PATH: &str = "/data/local/tmp/sms_forward.json";
 pub const STATE_PATH: &str = "/data/local/tmp/sms_forward_state.json";
@@ -47,7 +63,7 @@ pub trait Host: Send + Sync + 'static {
     /// The host still owns forwarding; false = handed over (the loop stops).
     fn active(&self) -> bool;
     fn sleep(&self, d: Duration);
-    /// Runs the event loop on its thread (the agent attributes that thread's writes to source
+    /// Runs the event loop on its thread (the host attributes that thread's writes to source
     /// auto here).
     fn run_worker(&self, f: Box<dyn FnOnce() + '_>) {
         f()
@@ -58,115 +74,10 @@ pub trait Host: Send + Sync + 'static {
         false
     }
 }
-const MAX_LOG_ENTRIES: usize = 200;
-const HTTP_TIMEOUT_SECS: u64 = 15;
-const MAX_RETRIES: u32 = 3;
-const RETRY_DELAYS: [u64; 3] = [5, 15, 60];
-const INTER_RULE_DELAY_MS: u64 = 500;
-const INTER_SMS_DELAY_MS: u64 = 1000;
-
-// ── Data types ──────────────────────────────────────────────────────
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct SmsForwardConfig {
-    pub enabled: bool,
-    #[serde(default = "default_poll_interval")]
-    pub poll_interval_secs: u64,
-    #[serde(default)]
-    pub mark_read_after_forward: bool,
-    #[serde(default)]
-    pub delete_after_forward: bool,
-    #[serde(default)]
-    pub rules: Vec<ForwardRule>,
-}
-
-fn default_poll_interval() -> u64 {
-    30
-}
-
-impl Default for SmsForwardConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            poll_interval_secs: 30,
-            mark_read_after_forward: false,
-            delete_after_forward: false,
-            rules: Vec::new(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct ForwardRule {
-    pub id: u32,
-    pub name: String,
-    pub enabled: bool,
-    pub filter: SmsFilter,
-    pub destination: ForwardDestination,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(tag = "type")]
-pub enum SmsFilter {
-    #[serde(rename = "all")]
-    All,
-    #[serde(rename = "sender")]
-    Sender { patterns: Vec<String> },
-    #[serde(rename = "content")]
-    Content { keywords: Vec<String> },
-    #[serde(rename = "sender_and_content")]
-    SenderAndContent {
-        patterns: Vec<String>,
-        keywords: Vec<String>,
-    },
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(tag = "type")]
-pub enum ForwardDestination {
-    #[serde(rename = "telegram")]
-    Telegram {
-        bot_token: String,
-        chat_id: String,
-        #[serde(default)]
-        silent: bool,
-    },
-    #[serde(rename = "webhook")]
-    Webhook {
-        url: String,
-        #[serde(default = "default_method")]
-        method: String,
-        #[serde(default)]
-        headers: Vec<HttpHeader>,
-    },
-    #[serde(rename = "sms")]
-    Sms { forward_number: String },
-    #[serde(rename = "ntfy")]
-    Ntfy {
-        url: String,
-        topic: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        token: Option<String>,
-    },
-    #[serde(rename = "discord")]
-    Discord { webhook_url: String },
-    #[serde(rename = "slack")]
-    Slack { webhook_url: String },
-}
-
-fn default_method() -> String {
-    "POST".into()
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct HttpHeader {
-    pub name: String,
-    pub value: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Default)]
+/// The state file: how far forwarding got, what it did, and what it is waiting on.
+#[derive(Clone, Default, Deserialize, Serialize)]
 pub struct ForwardState {
-    pub last_forwarded_id: u64,
+    pub last_forwarded_id: u64, // watermark: highest device SMS id handled, 0 = not set yet
     /// Time of the newest SMS the forwarder has handled, as parsed from the
     /// SMS's own `date` field by `sms_time_key` (seconds, UTC-normalised with
     /// the SMS's zone). Both sides of every comparison come from that same
@@ -174,8 +85,9 @@ pub struct ForwardState {
     /// written before this field existed; see `plan_forward`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_forwarded_time: Option<i64>,
-    #[serde(default)]
-    pub log: Vec<ForwardLogEntry>,
+    /// Delivery attempts, oldest first, at most [`MAX_LOG_ENTRIES`].
+    #[serde(default = "Vec::new")]
+    pub log: Vec<model::ForwardLogEntry>,
     /// The SMS the watermark is held at by a transient failure, if any.
     /// Missing in older state files (= nothing held).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -249,29 +161,12 @@ fn settle_hold(held: &mut Option<HeldSms>, sms_id: u64, outcome: Delivery, deliv
     (Delivery::Skipped(format!("{HOLD_TIMEOUT_NOTE}: {err}")), Some(alert))
 }
 
+/// Whole seconds of `CLOCK_MONOTONIC` (immune to wall-clock steps).
 fn mono_secs() -> u64 {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
-    ts.tv_sec as u64
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct ForwardLogEntry {
-    pub timestamp: i64,
-    pub sms_id: u64,
-    pub sender: String,
-    pub content_preview: String,
-    pub rule_name: String,
-    pub destination_type: String,
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    #[serde(default)]
-    pub rule_id: u32,
-    #[serde(default)]
-    pub content: String,
-    #[serde(default)]
-    pub date: String,
+    let mut now = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: fills the struct we own.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
+    now.tv_sec as u64
 }
 
 // ── wake-ups ─────────────────────────────────────────────────────────
@@ -332,15 +227,6 @@ impl PollSchedule {
     }
 }
 
-// ── SMS message from ubus ───────────────────────────────────────────
-
-struct DecodedSms {
-    id: u64,
-    sender: String,
-    content: String,
-    date: String,
-}
-
 /// What one complete (both stores OK) read of the device's SMS list gave us.
 #[derive(Debug, Clone, Default)]
 struct DeviceSnapshot {
@@ -360,7 +246,7 @@ struct ForwardPlan {
     rollback: bool,
 }
 
-/// Decide what to forward. Pure; see R4/R15 in the data-service plan.
+/// Decide what to forward. Pure (R4/R15).
 ///
 /// * Read failed (either store errored) → nothing forwarded, nothing moves.
 /// * Normal: forward received ids > watermark; watermark = max of those.
@@ -432,68 +318,6 @@ fn plan_forward(watermark: u64, last_time: Option<i64>, snapshot: Result<&Device
     }
 }
 
-// ── UCS-2 hex decoding ──────────────────────────────────────────────
-
-fn decode_ucs2_hex(hex: &str) -> String {
-    let hex = hex.trim();
-    if hex.is_empty() {
-        return String::new();
-    }
-    let mut chars = Vec::new();
-    let mut i = 0;
-    let bytes = hex.as_bytes();
-    while i + 4 <= bytes.len() {
-        if let Ok(code) = u16::from_str_radix(&hex[i..i + 4], 16) {
-            if let Some(ch) = char::from_u32(code as u32) {
-                chars.push(ch);
-            }
-        }
-        i += 4;
-    }
-    chars.into_iter().collect()
-}
-
-/// Check if a string looks like UCS-2 hex (all hex chars, length multiple of 4).
-fn is_ucs2_hex(s: &str) -> bool {
-    let s = s.trim();
-    !s.is_empty() && s.len().is_multiple_of(4) && s.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-/// Parse ZTE timestamp `YY,MM,DD,HH,MM,SS,+TZ` (or `;` separators) into human-readable string.
-fn humanize_zte_date(raw: &str) -> String {
-    let parts: Vec<&str> = raw.split([',', ';']).collect();
-    if parts.len() < 6 {
-        return raw.to_string();
-    }
-    let ok = || -> Option<String> {
-        let yy: u32 = parts[0].trim().parse().ok()?;
-        let mm: u32 = parts[1].trim().parse().ok()?;
-        let dd: u32 = parts[2].trim().parse().ok()?;
-        let hh: u32 = parts[3].trim().parse().ok()?;
-        let min: u32 = parts[4].trim().parse().ok()?;
-        let month = [
-            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-        ]
-        .get((mm as usize).wrapping_sub(1))?;
-        let (h12, ampm) = match hh {
-            0 => (12, "AM"),
-            1..=11 => (hh, "AM"),
-            12 => (12, "PM"),
-            _ => (hh - 12, "PM"),
-        };
-        let tz = parts.get(6).map(|s| s.trim()).unwrap_or("");
-        let tz_str = if tz.is_empty() {
-            String::new()
-        } else {
-            format!(" UTC{tz}")
-        };
-        Some(format!(
-            "{month} {dd}, 20{yy:02} {h12}:{min:02} {ampm}{tz_str}"
-        ))
-    }();
-    ok.unwrap_or_else(|| raw.to_string())
-}
-
 /// Parse the ZTE SMS `date` field (`YY,MM,DD,HH,MM,SS,+TZ`, `;` also
 /// accepted) into seconds since 2000-01-01 UTC, using the zone the SMS
 /// carries (hours; values beyond ±14 are read as GSM quarter-hours). Only ever
@@ -529,333 +353,22 @@ fn sms_time_key(raw: &str) -> Option<i64> {
     Some(days * 86_400 + hh * 3600 + mi * 60 + ss - tz_secs)
 }
 
-/// Encode text as UTF-16BE hex (UCS-2), matching the apps' `encodeUCS2Hex`.
-fn encode_ucs2_hex(text: &str) -> String {
-    text.encode_utf16()
-        .map(|c| format!("{c:04X}"))
-        .collect()
-}
+// ── the forwarder ──
 
-/// Generate ZTE-format SMS timestamp "YY;MM;DD;HH;MM;SS;+TZ".
-fn format_sms_time(tz_offset: i64) -> String {
-    let mut t: i64 = 0;
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe {
-        libc::time(&mut t);
-        libc::localtime_r(&t, &mut tm);
-    }
-    // tm_gmtoff is 0 on this firmware (TZ=UTC over a local-time clock); the
-    // real zone comes from ZTE's SNTP settings (the agent's clock.rs).
-    let tz_sign = if tz_offset >= 0 { "+" } else { "" };
-    format!(
-        "{:02};{:02};{:02};{:02};{:02};{:02};{}{}",
-        tm.tm_year % 100,
-        tm.tm_mon + 1,
-        tm.tm_mday,
-        tm.tm_hour,
-        tm.tm_min,
-        tm.tm_sec,
-        tz_sign,
-        tz_offset,
-    )
-}
-
-// ── Filter matching ─────────────────────────────────────────────────
-
-fn normalize_phone(num: &str) -> String {
-    let num = num.trim();
-    if let Some(rest) = num.strip_prefix("+63") {
-        return format!("0{rest}");
-    }
-    num.to_string()
-}
-
-fn is_forward_loop(dest: &ForwardDestination, sender: &str) -> bool {
-    match dest {
-        ForwardDestination::Sms { forward_number } => {
-            normalize_phone(sender) == normalize_phone(forward_number)
-        }
-        _ => false,
-    }
-}
-
-/// Detect garbled echo content (firmware artifact: mostly `@` / NUL chars).
-fn is_garbled_echo(content: &str) -> bool {
-    if content.is_empty() {
-        return true;
-    }
-    let junk = content.chars().filter(|&c| c == '@' || c == '\0').count();
-    junk * 2 > content.len() // >50% junk chars
-}
-
-fn matches_filter(filter: &SmsFilter, sender: &str, content: &str) -> bool {
-    match filter {
-        SmsFilter::All => true,
-        SmsFilter::Sender { patterns } => sender_matches(sender, patterns),
-        SmsFilter::Content { keywords } => content_matches(content, keywords),
-        SmsFilter::SenderAndContent { patterns, keywords } => {
-            sender_matches(sender, patterns) && content_matches(content, keywords)
-        }
-    }
-}
-
-fn sender_matches(sender: &str, patterns: &[String]) -> bool {
-    if patterns.is_empty() {
-        return true;
-    }
-    let sender_lower = sender.to_lowercase();
-    patterns.iter().any(|p| {
-        let p_lower = p.to_lowercase();
-        if p_lower.ends_with('*') {
-            sender_lower.starts_with(&p_lower[..p_lower.len() - 1])
-        } else if let Some(suffix) = p_lower.strip_prefix('*') {
-            sender_lower.ends_with(suffix)
-        } else {
-            sender_lower == p_lower
-        }
-    })
-}
-
-fn content_matches(content: &str, keywords: &[String]) -> bool {
-    if keywords.is_empty() {
-        return true;
-    }
-    let content_lower = content.to_lowercase();
-    keywords
-        .iter()
-        .any(|kw| content_lower.contains(&kw.to_lowercase()))
-}
-
-// ── Destination formatting + dispatch ───────────────────────────────
-
-fn destination_type_name(dest: &ForwardDestination) -> &'static str {
-    match dest {
-        ForwardDestination::Telegram { .. } => "telegram",
-        ForwardDestination::Webhook { .. } => "webhook",
-        ForwardDestination::Sms { .. } => "sms",
-        ForwardDestination::Ntfy { .. } => "ntfy",
-        ForwardDestination::Discord { .. } => "discord",
-        ForwardDestination::Slack { .. } => "slack",
-    }
-}
-
-fn format_message(sms: &DecodedSms) -> String {
-    format!(
-        "SMS from {}\n{}\n\n{}",
-        sms.sender,
-        humanize_zte_date(&sms.date),
-        sms.content
-    )
-}
-
-fn http_agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(HTTP_TIMEOUT_SECS)))
-        .build()
-        .into()
-}
-
-fn forward_to(
-    host: &dyn Host,
-    dest: &ForwardDestination,
-    sms: &DecodedSms,
-    agent: &ureq::Agent,
-) -> Result<(), String> {
-    match dest {
-        ForwardDestination::Telegram {
-            bot_token,
-            chat_id,
-            silent,
-        } => {
-            let url = format!("https://api.telegram.org/bot{bot_token}/sendMessage");
-            let body = json!({
-                "chat_id": chat_id,
-                "text": format_message(sms),
-                "disable_notification": silent,
-            });
-            let resp = agent
-                .post(&url)
-                .header("Content-Type", "application/json")
-                .send(body.to_string().as_bytes())
-                .map_err(|e| format!("telegram: {e}"))?;
-            check_http_status(resp.status().into(), "telegram")
-        }
-        ForwardDestination::Webhook {
-            url,
-            method,
-            headers,
-        } => {
-            let body = json!({
-                "event": "sms_received",
-                "sms": {
-                    "id": sms.id,
-                    "sender": sms.sender,
-                    "content": sms.content,
-                    "date": sms.date,
-                },
-                "timestamp": now_ts(),
-            });
-            let body_bytes = body.to_string();
-            let mut req = match method.to_uppercase().as_str() {
-                "PUT" => agent.put(url),
-                _ => agent.post(url),
-            };
-            req = req.header("Content-Type", "application/json");
-            for h in headers {
-                req = req.header(&h.name, &h.value);
-            }
-            let resp = req
-                .send(body_bytes.as_bytes())
-                .map_err(|e| format!("webhook: {e}"))?;
-            check_http_status(resp.status().into(), "webhook")
-        }
-        ForwardDestination::Sms { forward_number } => {
-            let text = format_message(sms);
-            let encode_type = "UNICODE";
-            let message_body = encode_ucs2_hex(&text);
-            let params = json!({
-                "number": forward_number,
-                "message_body": message_body,
-                "encode_type": encode_type,
-                "sms_time": format_sms_time(host.sms_zone_hours()),
-                "id": "-1",
-            });
-            let resp = host.vendor("zwrt_wms", "zte_libwms_send_sms",
-                Some(&params.to_string()),
-            )
-            .map_err(|e| format!("sms forward: {e}"))?;
-            check_sms_send_result(&resp)?;
-
-            // Auto-delete the forwarded outgoing SMS to prevent conversation clutter
-            cleanup_forwarded_sms(host, forward_number);
-
-            Ok(())
-        }
-        ForwardDestination::Ntfy { url, topic, token } => {
-            let full_url = format!("{}/{}", url.trim_end_matches('/'), topic);
-            let mut req = agent.post(&full_url);
-            req = req.header("Title", &format!("SMS from {}", sms.sender));
-            if let Some(t) = token {
-                req = req.header("Authorization", &format!("Bearer {t}"));
-            }
-            let resp = req
-                .send(sms.content.as_bytes())
-                .map_err(|e| format!("ntfy: {e}"))?;
-            check_http_status(resp.status().into(), "ntfy")
-        }
-        ForwardDestination::Discord { webhook_url } => {
-            let text = format_message(sms);
-            // Discord has 2000 char limit
-            let text = if text.len() > 2000 {
-                format!("{}...", &text[..text.floor_char_boundary(1997)])
-            } else {
-                text
-            };
-            let body = json!({ "content": text });
-            let resp = agent
-                .post(webhook_url)
-                .header("Content-Type", "application/json")
-                .send(body.to_string().as_bytes())
-                .map_err(|e| format!("discord: {e}"))?;
-            check_http_status(resp.status().into(), "discord")
-        }
-        ForwardDestination::Slack { webhook_url } => {
-            let body = json!({ "text": format_message(sms) });
-            let resp = agent
-                .post(webhook_url)
-                .header("Content-Type", "application/json")
-                .send(body.to_string().as_bytes())
-                .map_err(|e| format!("slack: {e}"))?;
-            check_http_status(resp.status().into(), "slack")
-        }
-    }
-}
-
-fn check_http_status(status: u16, dest: &str) -> Result<(), String> {
-    if (200..300).contains(&status) {
-        Ok(())
-    } else if status == 429 {
-        Err(format!("{dest}: HTTP 429 rate limited"))
-    } else if (400..500).contains(&status) {
-        Err(format!("{dest}: HTTP {status} (permanent error)"))
-    } else {
-        Err(format!("{dest}: HTTP {status}"))
-    }
-}
-
-/// Check ZTE SMS send response. result=3 means success, anything else is failure.
-fn check_sms_send_result(resp: &Value) -> Result<(), String> {
-    let result = resp
-        .get("result")
-        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())));
-    match result {
-        Some(3) | None => Ok(()),
-        Some(code) => Err(format!("sms forward: device rejected (result={code})")),
-    }
-}
-
-/// Best-effort cleanup of forwarded outgoing SMS.
-/// The firmware stores sent SMS on the device; we delete it so it doesn't appear
-/// in the conversation list. Only appears in the forward log.
-fn cleanup_forwarded_sms(host: &dyn Host, forward_number: &str) {
-    // Small delay to let firmware store the outgoing SMS
-    host.sleep(Duration::from_millis(200));
-
-    // Fetch latest sent messages (tag=2)
-    let messages = match fetch_sms_both_stores(host, 2, 0, 5, "order by id desc") {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("[sms_forward] cleanup: failed to list sent SMS: {e}");
-            return;
-        }
-    };
-
-    // Find the most recent sent SMS to the forward number
-    let normalized_dest = normalize_phone(forward_number);
-    for item in &messages {
-        let number = item["number"].as_str().unwrap_or("");
-        let decoded_number = if is_ucs2_hex(number) {
-            decode_ucs2_hex(number)
-        } else {
-            number.to_string()
-        };
-
-        if normalize_phone(&decoded_number) == normalized_dest {
-            let id = item["id"].as_u64()
-                .or_else(|| item["id"].as_str().and_then(|s| s.parse().ok()))
-                .unwrap_or(0);
-            if id > 0 {
-                match host.control("sms.delete", &json!({"ids": id.to_string()})) {
-                    Ok(_) => eprintln!("[sms_forward] cleanup: deleted forwarded outgoing SMS id={id}"),
-                    Err(e) => eprintln!("[sms_forward] cleanup: failed to delete SMS id={id}: {e}"),
-                }
-            }
-            break; // Only delete the most recent match
-        }
-    }
-}
-
-fn is_transient_error(err: &str) -> bool {
-    // HTTP 4xx are permanent — everything else is transient
-    !err.contains("(permanent error)")
-}
-
-// ── Time helper ─────────────────────────────────────────────────────
-
-fn now_ts() -> i64 {
-    unsafe { libc::time(std::ptr::null_mut()) as i64 }
-}
-
-// ── Core forwarder ──────────────────────────────────────────────────
-
+/// The running engine: settings, state, link status and the wake channel, shared between the
+/// event loop thread and the API handlers.
 pub struct SmsForwarder {
     host: Arc<dyn Host>,
+    /// Where settings and state are saved.
     config_path: PathBuf,
     state_path: PathBuf,
+    /// Settings and rules as last saved.
     config: Mutex<SmsForwardConfig>,
+    /// Watermark, log and held SMS as last saved (plus unsaved online time).
     state: Mutex<ForwardState>,
-    has_service: AtomicBool,
-    wan_connected: AtomicBool,
+    /// Link status as last reported: cellular service (needed by SMS targets) and WAN (needed
+    /// by the HTTP ones).
+    link: Link,
     /// `(sms_id, rule_id)` already delivered for the SMS the watermark is
     /// held at (a deferred SMS is tried again later: rules that already got
     /// it, automatically or by a manual retry, are not sent it twice).
@@ -866,47 +379,96 @@ pub struct SmsForwarder {
     wake: Mutex<Option<mpsc::Sender<Wake>>>,
 }
 
+/// Two link flags, both down until something says otherwise.
+#[derive(Default)]
+struct Link {
+    service: AtomicBool,
+    wan: AtomicBool,
+}
+
+impl Link {
+    fn service(&self) -> bool {
+        self.service.load(Ordering::Relaxed)
+    }
+    fn wan(&self) -> bool {
+        self.wan.load(Ordering::Relaxed)
+    }
+}
+
 /// A `network_type` with cellular service.
 fn in_service(network_type: &str) -> bool {
     !network_type.is_empty() && network_type != "NO_SERVICE" && !network_type.starts_with("LIMITED_SERVICE")
 }
 
+/// A WAN status (`connect_status` / `wan_status`) that means an IPv4 connection is up.
+fn wan_up(status: &str) -> bool {
+    status.starts_with("ipv4")
+}
+
+/// A JSON file parsed as `T`; missing or unreadable = `T::default()`.
+fn load_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
+    match fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Err(_) => T::default(),
+    }
+}
+
 fn read_state(path: &Path) -> ForwardState {
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<ForwardState>(&s).ok())
-        .unwrap_or_default()
+    load_json(path)
 }
 
 fn delivered_of(state: &ForwardState) -> HashSet<(u64, u32)> {
     state.held.iter().flat_map(|h| h.delivered_rules.iter().map(move |r| (h.sms_id, *r))).collect()
 }
 
+/// Seed attempts at start (the vendor services may not be registered yet), 2 s apart.
+const SEED_TRIES: u32 = 5;
+
 impl SmsForwarder {
-    /// The config and state files: [`CONFIG_PATH`] and [`STATE_PATH`] on the device (u60d may
-    /// put them under its compat root).
+    /// The config and state files: [`CONFIG_PATH`] and [`STATE_PATH`] on the device (the core
+    /// may put them under its compat root).
     pub fn new(host: Arc<dyn Host>, config_path: impl Into<PathBuf>, state_path: impl Into<PathBuf>) -> Self {
-        let (config_path, state_path) = (config_path.into(), state_path.into());
-        let config = fs::read_to_string(&config_path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<SmsForwardConfig>(&s).ok())
-            .unwrap_or_default();
-
-        let state = read_state(&state_path);
-
-        let delivered = delivered_of(&state);
+        let config_path: PathBuf = config_path.into();
+        let state_path: PathBuf = state_path.into();
+        let saved: ForwardState = read_state(&state_path);
         SmsForwarder {
-            host,
+            delivered: Mutex::new(delivered_of(&saved)),
+            state: Mutex::new(saved),
+            config: Mutex::new(load_json(&config_path)),
+            link: Link::default(),
+            online_clock: Mutex::default(),
+            wake: Mutex::new(None),
             config_path,
             state_path,
-            config: Mutex::new(config),
-            state: Mutex::new(state),
-            has_service: AtomicBool::new(false),
-            wan_connected: AtomicBool::new(false),
-            delivered: Mutex::new(delivered),
-            online_clock: Mutex::new(OnlineClock::default()),
-            wake: Mutex::new(None),
+            host,
         }
+    }
+
+    /// One try at whichever link flag is still down; true when both are known up.
+    fn seed_link(&self) -> (bool, bool) {
+        let service = self.link.service()
+            || match self.host.ubus_read("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}"), false) {
+                Err(_) => false,
+                Ok(info) => {
+                    let kind = info["network_type"].as_str().unwrap_or_default();
+                    let up = in_service(kind);
+                    self.link.service.store(up, Ordering::Relaxed);
+                    eprintln!("[sms_forward] initial service state: {kind} (has_service={up})");
+                    up
+                }
+            };
+        let wan_args = r#"{"source_module":"zte_topsw_data","cid":1}"#;
+        let wan = self.link.wan()
+            || match self.host.ubus_read("zwrt_data", "get_wwaniface", Some(wan_args), false) {
+                Err(_) => false,
+                Ok(info) => {
+                    let up = info["connect_status"].as_str().is_some_and(wan_up);
+                    self.link.wan.store(up, Ordering::Relaxed);
+                    eprintln!("[sms_forward] initial WAN state: connected={up}");
+                    up
+                }
+            };
+        (service, wan)
     }
 
     /// Seed the connectivity state (retried while the services are not registered yet), then
@@ -915,42 +477,17 @@ impl SmsForwarder {
     /// wakes only its timer checks. `lease`: wait for another live owner's lease before the
     /// first pass ([`wait_lease_free`]).
     pub fn start(self: &Arc<Self>, lease: Option<PathBuf>) {
-        // Seed initial connectivity state (retry if services aren't registered yet)
-        for attempt in 1..=5 {
-            let got_service = if !self.has_service.load(Ordering::Relaxed) {
-                if let Ok(data) = self.host.ubus_read("zte_nwinfo_api", "nwinfo_get_netinfo", Some("{}"), false) {
-                    let network_type = data["network_type"].as_str().unwrap_or("");
-                    let has = in_service(network_type);
-                    self.has_service.store(has, Ordering::Relaxed);
-                    eprintln!("[sms_forward] initial service state: {network_type} (has_service={has})");
-                    has
-                } else {
-                    false
-                }
-            } else {
-                true
-            };
-
-            let got_wan = if !self.wan_connected.load(Ordering::Relaxed) {
-                if let Ok(data) = self.host.ubus_read("zwrt_data", "get_wwaniface", Some(r#"{"source_module":"zte_topsw_data","cid":1}"#), false) {
-                    let connected = data["connect_status"].as_str().map(|s| s.starts_with("ipv4")).unwrap_or(false);
-                    self.wan_connected.store(connected, Ordering::Relaxed);
-                    eprintln!("[sms_forward] initial WAN state: connected={connected}");
-                    connected
-                } else {
-                    false
-                }
-            } else {
-                true
-            };
-
-            if got_service && got_wan {
+        let mut tries = 0;
+        loop {
+            tries += 1;
+            let (service, wan) = self.seed_link();
+            if (service && wan) || tries == SEED_TRIES {
                 break;
             }
-            if attempt < 5 {
-                eprintln!("[sms_forward] connectivity seed attempt {attempt}/5 incomplete (service={got_service}, wan={got_wan}), retrying in 2s");
-                self.host.sleep(Duration::from_secs(2));
-            }
+            eprintln!(
+                "[sms_forward] connectivity seed attempt {tries}/{SEED_TRIES} incomplete (service={service}, wan={wan}), retrying in 2s"
+            );
+            self.host.sleep(Duration::from_secs(2));
         }
 
         // The sender kept here keeps the channel open: with no other waker
@@ -958,61 +495,57 @@ impl SmsForwarder {
         let (tx, rx) = mpsc::channel();
         *self.wake.lock().unwrap() = Some(tx);
 
-        let forwarder = Arc::clone(self);
+        let me = Arc::clone(self);
         std::thread::spawn(move || {
-            let host = Arc::clone(&forwarder.host);
-            host.run_worker(Box::new(|| forwarder.event_loop(rx, lease.as_deref())));
+            let host = me.host.clone();
+            host.run_worker(Box::new(|| me.event_loop(rx, lease.as_deref())));
         });
+    }
+
+    /// Stores a new link flag; the online clock closes its interval under the old state first.
+    /// A flag that comes up wakes the loop (once per transition, so no storm).
+    fn set_link(&self, flag: &AtomicBool, up: bool, what: &str, raw: &str) {
+        let was = flag.swap(up, Ordering::Relaxed);
+        self.tick_online();
+        if was == up {
+            return;
+        }
+        eprintln!("[sms_forward] {what} state changed: {raw} ({}={up})", if what == "WAN" { "connected" } else { "has_service" });
+        if up {
+            self.wake();
+        }
     }
 
     /// A `zwrt_servicestatus` event's `network_type`.
     pub fn set_service(&self, network_type: &str) {
-        let has = in_service(network_type);
-        let prev = self.has_service.swap(has, Ordering::Relaxed);
-        self.tick_online(); // closes the interval under the old state
-        if prev != has {
-            eprintln!("[sms_forward] service state changed: {network_type} (has_service={has})");
-            if has {
-                self.wake();
-            }
-        }
+        self.set_link(&self.link.service, in_service(network_type), "service", network_type);
     }
 
     /// A `router_event_wan_connect_status` event's `wan_status`.
     pub fn set_wan(&self, wan_status: &str) {
-        let connected = wan_status.starts_with("ipv4");
-        let prev = self.wan_connected.swap(connected, Ordering::Relaxed);
-        self.tick_online(); // closes the interval under the old state
-        if prev != connected {
-            eprintln!("[sms_forward] WAN state changed: {wan_status} (connected={connected})");
-            if connected {
-                self.wake();
-            }
-        }
+        self.set_link(&self.link.wan, wan_up(wan_status), "WAN", wan_status);
     }
 
     fn online(&self) -> bool {
-        self.has_service.load(Ordering::Relaxed) && self.wan_connected.load(Ordering::Relaxed)
+        self.link.service() && self.link.wan()
     }
 
     /// Add the online time since the last tick to the held SMS (in memory;
     /// persisted with the next save).
     fn tick_online(&self) {
-        let add = self.online_clock.lock().unwrap().observe(mono_secs(), self.online());
-        if add > 0 {
-            if let Some(h) = self.state.lock().unwrap().held.as_mut() {
-                h.online_secs += add;
-            }
+        let gained = self.online_clock.lock().unwrap().observe(mono_secs(), self.online());
+        if gained == 0 {
+            return;
+        }
+        if let Some(h) = self.state.lock().unwrap().held.as_mut() {
+            h.online_secs += gained;
         }
     }
 
     /// Check now (new SMS; connectivity came back: one wake per transition, so no storm).
     /// False once the loop has stopped (or before [`start`](Self::start)).
     pub fn wake(&self) -> bool {
-        match self.wake.lock().unwrap().as_ref() {
-            Some(tx) => tx.send(Wake).is_ok(),
-            None => false,
-        }
+        self.wake.lock().unwrap().as_ref().is_some_and(|tx| tx.send(Wake).is_ok())
     }
 
     /// The state file as the loop starts: another owner may have moved the watermark or the
@@ -1030,134 +563,121 @@ impl SmsForwarder {
         *state = fresh;
     }
 
+    /// No watermark yet (first run, or forwarding just switched on): start from the newest SMS
+    /// on the device, so only later ones go out.
     fn init_watermark(&self) {
-        let last_id = self.state.lock().unwrap().last_forwarded_id;
-        if last_id == 0 {
-            match fetch_baseline(&*self.host) {
-                Ok((max_id, newest)) if max_id > 0 => {
-                    let mut state = self.state.lock().unwrap();
-                    state.last_forwarded_id = max_id;
-                    state.last_forwarded_time = max_time(state.last_forwarded_time, newest);
-                    self.save_state(&state);
-                    eprintln!("[sms_forward] watermark initialized to {max_id}");
-                }
-                Ok(_) => eprintln!("[sms_forward] no SMS on device, watermark stays at 0"),
-                Err(e) => eprintln!("[sms_forward] watermark init failed: {e}"),
-            }
+        if self.state.lock().unwrap().last_forwarded_id != 0 {
+            return;
         }
+        let (top, newest) = match fetch_baseline(&*self.host) {
+            Err(e) => return eprintln!("[sms_forward] watermark init failed: {e}"),
+            Ok((0, _)) => return eprintln!("[sms_forward] no SMS on device, watermark stays at 0"),
+            Ok(found) => found,
+        };
+        let mut st = self.state.lock().unwrap();
+        st.last_forwarded_id = top;
+        st.last_forwarded_time = max_time(st.last_forwarded_time, newest);
+        self.save_state(&st);
+        eprintln!("[sms_forward] watermark initialized to {top}");
     }
 
+    /// The loop thread: wait for the lease, pick up the saved state, check once at once (a
+    /// restart mid-burst resumes from the watermark straight away), then check on every wake
+    /// and whenever the poll timer says so. Ends when ownership moves away.
     fn event_loop(&self, rx: mpsc::Receiver<Wake>, lease: Option<&Path>) {
         if let Some(path) = lease {
             wait_lease_free(path, &*self.host, LEASE_WAIT);
         }
         self.reload_state();
         if !self.host.active() {
-            eprintln!("[sms_forward] not the owner: forwarder stopped");
-            return;
+            return eprintln!("[sms_forward] not the owner: forwarder stopped");
         }
         self.init_watermark();
 
-        let t0 = Instant::now();
-        // Check once at start: a restart in the middle of a burst resumes
-        // from the watermark at once, not after a whole poll period.
-        let summary = self.host.sms_summary();
-        let mut sched = PollSchedule::new(Duration::ZERO, summary.is_some());
-        self.check(summary);
-        sched.polled(t0.elapsed());
-        loop {
-            match rx.recv_timeout(sched.wait(t0.elapsed())) {
-                Ok(Wake) => {
-                    // A burst queues many wakes; one pass pages through all.
-                    while rx.try_recv().is_ok() {}
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if !sched.due(t0.elapsed()) {
-                        continue;
-                    }
-                }
+        let started = Instant::now();
+        let first = self.host.sms_summary();
+        let mut sched = PollSchedule::new(Duration::ZERO, first.is_some());
+        self.check(first);
+        sched.polled(started.elapsed());
+        'wakes: loop {
+            let woke = rx.recv_timeout(sched.wait(started.elapsed()));
+            match woke {
+                // a burst queues many wakes; one pass pages through all of them
+                Ok(Wake) => while rx.try_recv().is_ok() {},
+                Err(mpsc::RecvTimeoutError::Timeout) if !sched.due(started.elapsed()) => continue 'wakes,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    eprintln!("[sms_forward] wake channel closed");
-                    return;
+                    return eprintln!("[sms_forward] wake channel closed");
                 }
             }
             if !self.host.active() {
-                eprintln!("[sms_forward] handed over: forwarder stopped");
-                return;
+                return eprintln!("[sms_forward] handed over: forwarder stopped");
             }
             let summary = self.host.sms_summary();
             if sched.source_changed(summary.is_some()) {
-                eprintln!(
-                    "[sms_forward] SMS source now {}: checking SMS",
-                    if summary.is_some() { "core" } else { "direct ubus" }
-                );
+                let via = if summary.is_some() { "core" } else { "direct ubus" };
+                eprintln!("[sms_forward] SMS source now {via}: checking SMS");
             }
             self.check(summary);
-            sched.polled(t0.elapsed());
-        }
+            sched.polled(started.elapsed());
+        } // 'wakes
     }
 
-    /// One check: page through everything above the watermark. `summary` =
-    /// the core's `sms` block (subscribed, fresh); `None` = read ubus directly.
+    /// One check: everything above the watermark, paged. `summary` is the core's `sms` block
+    /// when that is subscribed and fresh; `None` means ubus is read directly.
     fn check(&self, summary: Option<(u64, u64)>) {
-        let config = self.config.lock().unwrap().clone();
-        let enabled_rules: Vec<&ForwardRule> = config.rules.iter().filter(|r| r.enabled).collect();
-        if !config.enabled || enabled_rules.is_empty() {
+        let cfg = self.config.lock().unwrap().clone();
+        let live: Vec<&ForwardRule> = cfg.rules.iter().filter(|r| r.enabled).collect();
+        if live.is_empty() || !cfg.enabled {
             return;
         }
         if self.host.hold() {
-            eprintln!("[sms_forward] held: SIM switch in progress");
-            return;
+            return eprintln!("[sms_forward] held: SIM switch in progress");
         }
         self.init_watermark();
 
         let agent = http_agent();
-        let mut forward = |sms: &DecodedSms| self.deliver(sms, &config, &enabled_rules, &agent);
-        let mut commit = |wm: u64, lt: Option<i64>| {
-            let mut state = self.state.lock().unwrap();
-            state.last_forwarded_id = wm;
-            state.last_forwarded_time = lt;
-            self.save_state(&state);
+        let host = &*self.host;
+        let mut forward = |sms: &DecodedSms| self.deliver(sms, &cfg, &live, &agent);
+        let mut commit = |watermark: u64, last_time: Option<i64>| {
+            let mut st = self.state.lock().unwrap();
+            (st.last_forwarded_id, st.last_forwarded_time) = (watermark, last_time);
+            self.save_state(&st);
         };
-        let load = || {
+        let position = || {
             let st = self.state.lock().unwrap();
             (st.last_forwarded_id, st.last_forwarded_time)
         };
 
-        if let Some((max_id, _)) = summary {
-            let (wm, lt) = load();
-            let mut fetch = |after: u64, limit: u64| self.host.list_after(after, limit);
-            match recorded_pass(&*self.host, "core", wm, lt, max_id, &mut fetch, &mut forward, &mut commit) {
-                Ok(n) => {
-                    if n > 0 {
-                        eprintln!("[sms_forward] forwarded {n} message(s) after id {wm} (via core)");
-                    }
-                    return;
-                }
-                // Progress so far is committed; finish by reading ubus (D2's 退路).
+        if let Some((top, _)) = summary {
+            let (from, since) = position();
+            let mut via_core = |after: u64, limit: u64| host.list_after(after, limit);
+            let res = recorded_pass(host, "core", from, since, top, &mut via_core, &mut forward, &mut commit);
+            match res {
+                Ok(0) => return,
+                Ok(n) => return eprintln!("[sms_forward] forwarded {n} message(s) after id {from} (via core)"),
+                // whatever got through is committed; the direct read below finishes the job (D2)
                 Err(e) => eprintln!("[sms_forward] core sms.list_after failed: {e}; reading ubus directly"),
             }
         }
 
-        // Direct: both stores must read OK to know the device max id (R15).
-        let max_id = match fetch_baseline(&*self.host) {
-            Ok((m, _)) => m,
-            Err(e) => {
-                eprintln!("[sms_forward] failed to read SMS max id: {e}");
-                return;
-            }
+        // direct: the device max id needs both stores read OK (R15)
+        let top = match fetch_baseline(host) {
+            Ok((top, _)) => top,
+            Err(e) => return eprintln!("[sms_forward] failed to read SMS max id: {e}"),
         };
-        let (wm, lt) = load();
-        let mut fetch = |after: u64, limit: u64| list_after_direct(after, limit, &mut |store, page| ubus_sms_page(&*self.host, store, page));
-        match recorded_pass(&*self.host, "direct", wm, lt, max_id, &mut fetch, &mut forward, &mut commit) {
-            Ok(n) if n > 0 => eprintln!("[sms_forward] forwarded {n} message(s) after id {wm} (direct)"),
-            Ok(_) => {}
-            Err(e) => eprintln!("[sms_forward] failed to read SMS after id {wm}: {e}"),
+        let (from, since) = position();
+        let mut direct =
+            |after: u64, limit: u64| list_after_direct(after, limit, &mut |store, page| ubus_sms_page(host, store, page));
+        match recorded_pass(host, "direct", from, since, top, &mut direct, &mut forward, &mut commit) {
+            Err(e) => eprintln!("[sms_forward] failed to read SMS after id {from}: {e}"),
+            Ok(0) => {}
+            Ok(n) => eprintln!("[sms_forward] forwarded {n} message(s) after id {from} (direct)"),
         }
     }
 
-    /// Forward one SMS through every matching rule, log, then mark-read /
-    /// delete if all succeeded. [`Delivery::Deferred`] (a transient failure
+    /// Sends one SMS through every matching rule and logs each try; when all succeeded the
+    /// device copy is marked read / deleted as configured. [`Delivery::Deferred`] (a transient failure
     /// on some rule) holds the watermark at this SMS; rules that already got
     /// it are remembered and skipped next time.
     fn deliver(&self, sms: &DecodedSms, config: &SmsForwardConfig, enabled_rules: &[&ForwardRule], agent: &ureq::Agent) -> Delivery {
@@ -1165,64 +685,49 @@ impl SmsForwarder {
         self.tick_online();
         let held_before = self.state.lock().unwrap().held.clone();
         let mut steps: Vec<Value> = Vec::new();
-
-        for (i, rule) in enabled_rules.iter().enumerate() {
-            // Skip firmware echo: sender matches destination AND content is garbled
+        let last = enabled_rules.len().saturating_sub(1);
+        for (n, rule) in enabled_rules.iter().enumerate() {
             let dest = destination_type_name(&rule.destination);
-            if is_forward_loop(&rule.destination, &sms.sender) && is_garbled_echo(&sms.content) {
-                steps.push(json!({"rule": rule.id, "dest": dest, "step": "echo"}));
+            let mut note = |step: &str| steps.push(json!({"rule": rule.id, "dest": dest, "step": step}));
+            // the firmware's garbled echo of our own SMS forward, a non-match, or a rule that
+            // already got this held SMS: nothing to send
+            let pass = if is_forward_loop(&rule.destination, &sms.sender) && is_garbled_echo(&sms.content) {
+                Some("echo")
+            } else if !matches_filter(&rule.filter, &sms.sender, &sms.content) {
+                Some("no_match")
+            } else if self.delivered.lock().unwrap().contains(&(sms.id, rule.id)) {
+                Some("already")
+            } else {
+                None
+            };
+            if let Some(why) = pass {
+                note(why);
                 continue;
             }
-
-            if !matches_filter(&rule.filter, &sms.sender, &sms.content) {
-                steps.push(json!({"rule": rule.id, "dest": dest, "step": "no_match"}));
-                continue;
-            }
-            if self.delivered.lock().unwrap().contains(&(sms.id, rule.id)) {
-                steps.push(json!({"rule": rule.id, "dest": dest, "step": "already"}));
-                continue;
-            }
-
-            // Handed over: hold this SMS here (a transient failure), try no further rule.
+            // no longer the owner: this SMS stays held (transient), later rules are not tried
             if !self.host.active() {
-                steps.push(json!({"rule": rule.id, "dest": dest, "step": "transient"}));
-                errors.push(HANDED_OVER.to_string());
+                note("transient");
+                errors.push(HANDED_OVER.into());
                 break;
             }
-
-            // Pre-forward connectivity check
-            let connectivity_err = match &rule.destination {
-                ForwardDestination::Sms { .. } => {
-                    if !self.has_service.load(Ordering::Relaxed) {
-                        Some(NO_SERVICE_ERR.to_string())
-                    } else {
-                        None
-                    }
-                }
-                _ => {
-                    if !self.wan_connected.load(Ordering::Relaxed) {
-                        Some(NO_WAN_ERR.to_string())
-                    } else {
-                        None
-                    }
-                }
+            // an SMS target needs cellular service, every other one the WAN
+            let blocked = match rule.destination {
+                ForwardDestination::Sms { .. } => (!self.link.service()).then_some(NO_SERVICE_ERR),
+                _ => (!self.link.wan()).then_some(NO_WAN_ERR),
             };
-
-            let result = match connectivity_err {
-                Some(err) => {
-                    eprintln!("[sms_forward] skipping forward for SMS {} -> {}: {err}", sms.id, destination_type_name(&rule.destination));
-                    Err(err)
-                }
-                None => forward_with_retry(&*self.host, &rule.destination, sms, agent),
+            let result = if let Some(why) = blocked {
+                eprintln!("[sms_forward] skipping forward for SMS {} -> {dest}: {why}", sms.id);
+                Err(why.to_string())
+            } else {
+                forward_with_retry(&*self.host, &rule.destination, sms, agent)
             };
             let handed_over = matches!(&result, Err(e) if e == HANDED_OVER);
-
             let step = match &result {
                 Ok(()) => "ok",
                 Err(e) if is_transient_error(e) => "transient",
                 Err(_) => "permanent",
             };
-            steps.push(json!({"rule": rule.id, "dest": dest, "step": step}));
+            note(step);
             match &result {
                 Ok(()) => {
                     self.delivered.lock().unwrap().insert((sms.id, rule.id));
@@ -1256,8 +761,8 @@ impl SmsForwarder {
             }
 
             // Delay between rules for the same SMS
-            if i + 1 < enabled_rules.len() {
-                self.host.sleep(Duration::from_millis(INTER_RULE_DELAY_MS));
+            if n < last {
+                self.host.sleep(RULE_GAP);
             }
         }
 
@@ -1299,7 +804,7 @@ impl SmsForwarder {
         match &outcome {
             Delivery::Deferred(e) => {
                 eprintln!("[sms_forward] SMS {} deferred ({e}); will resume from it on the next wake-up", sms.id);
-                self.host.sleep(Duration::from_millis(INTER_SMS_DELAY_MS));
+                self.host.sleep(SMS_GAP);
                 return outcome;
             }
             Delivery::Skipped(e) => eprintln!("[sms_forward] SMS {} skipped after a permanent error: {e}", sms.id),
@@ -1321,17 +826,17 @@ impl SmsForwarder {
         }
 
         // Delay between different SMS messages
-        self.host.sleep(Duration::from_millis(INTER_SMS_DELAY_MS));
+        self.host.sleep(SMS_GAP);
         outcome
     }
 }
 
-// ── shadow records for u60d (u60-platform.md Phase 4 step 6b) ───────
+// ── shadow records ──
 
-// u60d replays each pass and each delivery through u60-policy's copy. Ids, time keys and outcome
+// A host may replay each pass and each delivery through luyaz-policy's copy. Ids, time keys and outcome
 // classes only: sender and body are secret and never written here, so the rule matching (which
 // reads them) is not replayed. Only while forwarding is on (`check` returns before otherwise).
-// Published through `Host::tick` (the agent's ring is `/tmp/sms-forward.tick.json`).
+// Published through `Host::tick`; what the host does with them is its own business.
 
 fn delivery_kind(d: &Delivery) -> &'static str {
     match d {
@@ -1470,7 +975,7 @@ pub struct Page {
 /// `zte_libwms_get_sms_data` (core returns the same, with plaintext).
 fn decode_item(item: &Value) -> (u64, Option<DecodedSms>) {
     let id = item_id(item);
-    // tag: 0=unread, 1=read, 2=sent, 3=draft — only forward received (0/1)
+    // tags 0 (unread) and 1 (read) are received; 2 (sent) and 3 (draft) are not forwarded
     let tag_num = item["tag"]
         .as_u64()
         .or_else(|| item["tag"].as_str().and_then(|s| s.parse().ok()))
@@ -1510,12 +1015,9 @@ fn is_reimported(sms: &DecodedSms, last_time: Option<i64>) -> bool {
     skip
 }
 
+/// The later of two optional times; a missing one never wins.
 fn max_time(a: Option<i64>, b: Option<i64>) -> Option<i64> {
-    match (a, b) {
-        (Some(x), Some(y)) => Some(x.max(y)),
-        (x, None) => x,
-        (None, y) => y,
-    }
+    a.into_iter().chain(b).max()
 }
 
 /// Page through the device's SMS above the watermark and forward them. Pure:
@@ -1549,7 +1051,7 @@ fn run_pass(
     let mut sent = 0;
     if max_id < watermark {
         let mut after = 0;
-        let mut all: Vec<Value> = Vec::new();
+        let mut all = Vec::<Value>::new();
         loop {
             let page = fetch(after, LIST_PAGE)?;
             let last = page.items.iter().map(item_id).max().unwrap_or(after);
@@ -1623,13 +1125,13 @@ fn run_pass(
 /// counter) is read page by page from the top until an id ≤ `after_id`, a
 /// short page, or a page with nothing new; merged, deduplicated, ascending,
 /// first `limit`. Either store failing fails the whole read (R15). Same
-/// rules as the core's (`data-service` `sms::list_after_with`).
+/// rules as the core's own `sms.list_after`.
 fn list_after_direct(
     after_id: u64,
     limit: u64,
     fetch: &mut dyn FnMut(u64, u64) -> Result<Value, String>,
 ) -> Result<Page, String> {
-    let mut found: std::collections::BTreeMap<u64, Value> = std::collections::BTreeMap::new();
+    let mut found: BTreeMap<u64, Value> = BTreeMap::new();
     for store in [1u64, 0] {
         let mut page = 0;
         loop {
@@ -1658,141 +1160,89 @@ fn list_after_direct(
     Ok(Page { items: found.into_values().take(limit as usize).collect(), has_more })
 }
 
-/// One direct `zte_libwms_get_sms_data` page (descending; ascending is rejected).
+/// One `zte_libwms_get_sms_data` read of one store (NV = 1, SIM = 0); `tags` 10 = every kind,
+/// 2 = sent only. Long timeout: big lists are slow.
+fn sms_query(host: &dyn Host, store: u64, tags: u64, page: u64, per_page: u64, order: &str) -> Result<Value, String> {
+    let mut q = serde_json::Map::new();
+    q.insert("mem_store".into(), store.into());
+    q.insert("tags".into(), tags.into());
+    q.insert("page".into(), page.into());
+    q.insert("data_per_page".into(), per_page.into());
+    q.insert("order_by".into(), order.into());
+    host.ubus_read("zwrt_wms", "zte_libwms_get_sms_data", Some(&Value::Object(q).to_string()), true)
+}
+
+/// One direct page for [`list_after_direct`] (descending; the firmware rejects ascending).
 fn ubus_sms_page(host: &dyn Host, store: u64, page: u64) -> Result<Value, String> {
-    let params = json!({
-        "tags": 10,
-        "page": page,
-        "data_per_page": LIST_PAGE,
-        "mem_store": store,
-        "order_by": "order by id desc",
-    });
-    host.ubus_read("zwrt_wms", "zte_libwms_get_sms_data", Some(&params.to_string()), true)
+    sms_query(host, store, 10, page, LIST_PAGE, "order by id desc")
 }
 
-fn preview(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..s.floor_char_boundary(max)])
-    }
-}
+// ── both stores ──
 
-fn forward_with_retry(
-    host: &dyn Host,
-    dest: &ForwardDestination,
-    sms: &DecodedSms,
-    agent: &ureq::Agent,
-) -> Result<(), String> {
-    let mut last_err = String::new();
-
-    for attempt in 0..MAX_RETRIES {
-        match forward_to(host, dest, sms, agent) {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                eprintln!(
-                    "[sms_forward] attempt {}/{MAX_RETRIES} failed for SMS {} -> {}: {e}",
-                    attempt + 1,
-                    sms.id,
-                    destination_type_name(dest),
-                );
-                if !is_transient_error(&e) {
-                    return Err(e);
-                }
-                last_err = e;
-                if attempt + 1 < MAX_RETRIES {
-                    host.sleep(Duration::from_secs(RETRY_DELAYS[attempt as usize]));
-                    if !host.active() {
-                        return Err(HANDED_OVER.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    Err(format!("{last_err} (failed after {MAX_RETRIES} retries)"))
-}
-
-// ── ubus helpers ────────────────────────────────────────────────────
-
-/// Query SMS from both NV and SIM storage, merged and deduplicated by ID.
-/// ZTE firmware bug: mem_store=2 ("all") silently omits SIM messages.
-/// Either store failing fails the whole read — a half list must never be
-/// mistaken for "the device's ids went backwards" (R15).
+/// Rows from the NV store and then the SIM store, one id once (the firmware's "all" store, 2,
+/// leaves the SIM rows out, hence two reads). One store failing fails the read: half a list
+/// could look like the ids went backwards (R15).
 fn fetch_sms_both_stores(host: &dyn Host, tags: u64, page: u64, count: u64, order: &str) -> Result<Vec<Value>, String> {
-    // NV (1) first — more common, then SIM (0)
-    let results: Vec<(u64, Result<Value, String>)> = [1u64, 0]
-        .into_iter()
-        .map(|store| {
-            let params = json!({
-                "tags": tags,
-                "page": page,
-                "data_per_page": count,
-                "mem_store": store,
-                "order_by": order,
-            });
-            (store, host.ubus_read("zwrt_wms", "zte_libwms_get_sms_data", Some(&params.to_string()), true))
-        })
-        .collect();
-    merge_store_results(results)
+    let nv = (1, sms_query(host, 1, tags, page, count, order));
+    let sim = (0, sms_query(host, 0, tags, page, count, order));
+    merge_store_results(vec![nv, sim])
 }
 
-/// An SMS row's id (number or string; 0 if neither).
+/// An SMS row's id, given as a number or a numeric string; 0 when it is neither.
 pub fn item_id(item: &Value) -> u64 {
-    item["id"]
-        .as_u64()
-        .or_else(|| item["id"].as_str().and_then(|s| s.parse().ok()))
-        .unwrap_or(0)
-}
-
-/// Pure half of `fetch_sms_both_stores`.
-fn merge_store_results(results: Vec<(u64, Result<Value, String>)>) -> Result<Vec<Value>, String> {
-    let mut all: Vec<Value> = Vec::new();
-    let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    for (store, res) in results {
-        let data = res.map_err(|e| format!("mem_store {store}: {e}"))?;
-        if let Some(arr) = data["messages"].as_array() {
-            for item in arr {
-                if seen.insert(item_id(item)) {
-                    all.push(item.clone());
-                }
-            }
-        }
+    let raw = &item["id"];
+    match raw.as_str() {
+        Some(text) => text.parse().unwrap_or(0),
+        None => raw.as_u64().unwrap_or(0),
     }
-    Ok(all)
 }
 
-/// Get the maximum SMS id currently on the device.
-/// Baseline from the newest rows of both stores: the highest id (any tag)
-/// and the newest received SMS's own time.
+/// The merge behind [`fetch_sms_both_stores`], given each store's reply in order.
+fn merge_store_results(results: Vec<(u64, Result<Value, String>)>) -> Result<Vec<Value>, String> {
+    let mut ids = HashSet::new();
+    let mut rows = Vec::new();
+    for (store, reply) in results {
+        let reply = reply.map_err(|e| format!("mem_store {store}: {e}"))?;
+        let listed = reply["messages"].as_array().map(Vec::as_slice).unwrap_or_default();
+        rows.extend(listed.iter().filter(|row| ids.insert(item_id(row))).cloned());
+    }
+    Ok(rows)
+}
+
+/// Where a fresh watermark starts: the highest id among the newest rows of both stores (any
+/// kind) and the newest received SMS's own time.
 fn fetch_baseline(host: &dyn Host) -> Result<(u64, Option<i64>), String> {
-    let all = fetch_sms_both_stores(host, 10, 0, 5, "order by id desc")?;
-    Ok(baseline_of(&all))
+    fetch_sms_both_stores(host, 10, 0, 5, "order by id desc").map(|rows| baseline_of(&rows))
 }
 
 fn baseline_of(items: &[Value]) -> (u64, Option<i64>) {
-    items.iter().fold((0, None), |(max_id, lt), item| {
-        let (id, sms) = decode_item(item);
-        let t = sms.and_then(|m| sms_time_key(&m.date));
-        (max_id.max(id), max_time(lt, t))
-    })
+    let mut top = (0, None);
+    for row in items {
+        let (id, sms) = decode_item(row);
+        top.0 = top.0.max(id);
+        top.1 = max_time(top.1, sms.and_then(|m| sms_time_key(&m.date)));
+    }
+    top
 }
 
 // ── Persistence ─────────────────────────────────────────────────────
 
 impl SmsForwarder {
+    /// Settings are saved indented (people read that file); failures are ignored, the next save
+    /// tries again.
     fn save_config(&self, config: &SmsForwardConfig) {
-        if let Ok(json) = serde_json::to_string_pretty(config) {
-            let _ = atomic_write(&self.config_path, json.as_bytes());
-        }
+        let Ok(text) = serde_json::to_string_pretty(config) else { return };
+        let _ = atomic_write(&self.config_path, text.as_bytes());
     }
 
+    /// State is saved compact, often.
     fn save_state(&self, state: &ForwardState) {
-        if let Ok(json) = serde_json::to_string(state) {
-            let _ = atomic_write(&self.state_path, json.as_bytes());
+        if let Ok(text) = serde_json::to_string(state) {
+            let _ = atomic_write(&self.state_path, text.as_bytes());
         }
     }
 }
+
 
 /// Forwarding actually runs: master switch on and at least one rule on.
 fn is_active(config: &SmsForwardConfig) -> bool {
@@ -1817,8 +1267,7 @@ fn commit_config(fwd: &SmsForwarder, was_active: bool, config: &SmsForwardConfig
 }
 
 /// Write `path.tmp`, then rename it over `path` (a crash mid-write leaves the old file whole);
-/// the old file's mode is carried over, a new file gets the default. As the agent's
-/// `fsutil::atomic_write`.
+/// the old file's mode is carried over, a new file gets the default.
 fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;

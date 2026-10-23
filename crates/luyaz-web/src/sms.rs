@@ -1,4 +1,4 @@
-//! /sms (短信收件箱), the old `sms/page.tsx`: status (unread, storage use), the SIM / device filter,
+//! /sms (短信收件箱): status (unread, storage use), the SIM / device filter,
 //! mark read and delete on a selection, the list, and a message opened in a dialog. The compose
 //! page is `sms_compose.rs`; /sms/forward stays with the agent until 8d.
 //!

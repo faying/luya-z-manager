@@ -178,7 +178,7 @@ where
             "data": {
                 "contexts": contexts,
                 "raw_cgcontrdp": cgcontrdp.trim(),
-                "note": "QCI is read from the modem (qci_device, same value as the device's About screen) when available; dedicated bearers may also report a measured 5QI via AT; otherwise it is inferred from the APN.",
+                "note": "QCI comes from the modem's qci_device (the number the stock About screen shows); a dedicated bearer can add a 5QI measured over AT; with neither, it is guessed from the APN.",
             }
         }),
     )

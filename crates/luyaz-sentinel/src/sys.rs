@@ -791,7 +791,7 @@ pub fn txn_live(comps: &[&str]) -> bool {
         && cmdline_has(hp, crate::worker::SHIP_CMDLINE)
 }
 
-/// u60-guard.init's test: power-off charging is `mode_power_off_*` in zwrt_zte_mc_tmp; power-on
+/// Power-off charging is `mode_power_off_*` in zwrt_zte_mc_tmp; power-on
 /// modes are normal; with neither, a non-silent boot on the kernel command line is.
 pub fn boot_is_normal() -> bool {
     boot_mode_normal(

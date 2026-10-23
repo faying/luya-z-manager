@@ -1,26 +1,26 @@
-//! CHILL's on/off switch and profile for the touch screen (Phase 4 step 8e), ported from the
+//! CHILL's on/off switch and profile for the touch screen, ported from the
 //! agent's `chill.rs`: `chill.sh start|stop|profile X` as one job at a time, run as a child process
 //! off the request; then, abroad, the scenario engine's restore entries (the agent's
 //! `chill_toggled`). Only with u60d's writes on, like every write.
 //!
-//! The screen's, luyaz-web's, the scheduler's and the scenario's calls all come here (step 9f), so
+//! The screen's, luyaz-web's, the scheduler's and the scenario's calls all come here, so
 //! the device has one job slot. A scenario restore's own "on" comes with
 //! [`luyaz_api::headers::RESTORE_HEADER`]: it keeps its restore entry (the restore drops it).
 //!
 //! The home exit's switches (PUT `/api/services/chill/home`) are not here: they need the home exit's
-//! machine and its 30 s loop, which stay with the agent until the whole of it moves (step 9).
+//! machine and its 30 s loop, which stay with the agent until the whole of it moves.
 
 use axum::{
     body::Bytes,
     extract::{ConnectInfo, Request, State},
     response::Response,
 };
-use serde_json::{Value, json};
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 use luyaz_api::chill as ch;
 use luyaz_policy::scenario as sc;
+use serde_json::{Value, json};
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use super::{Compat, reply};
 
@@ -82,11 +82,7 @@ async fn chill_sh(c: &Compat, args: &str, limit: std::time::Duration) -> (bool, 
 
 /// Start `args` as the job; 409 while one runs. `ok` words the success from the output.
 fn start_job(c: &Compat, kind: &str, args: String, ok: fn(&str, &str) -> String) -> Option<u64> {
-    if c.chill
-        .running
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-        .is_err()
-    {
+    if c.chill.running.swap(true, Ordering::SeqCst) {
         return None;
     }
     let id = {

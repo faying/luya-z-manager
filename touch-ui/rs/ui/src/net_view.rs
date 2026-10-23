@@ -1,4 +1,4 @@
-//! src/net_view.c: luyaz-core's /v2/screen "net" parsed (the rules are the core's), its verdict
+//! luyaz-core's /v2/screen "net" parsed (the rules are the core's), its verdict
 //! codes, "is this a verdict 网络诊断 can say more about", and the placeholder view.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
@@ -176,7 +176,7 @@ mod tests {
     use super::*;
     use crate::logic::*;
 
-    // tests/net_view_test.c: the abnormal and placeholder cases (parsing is the data side's)
+    // the abnormal and placeholder cases (parsing is the data side's)
     #[test]
     fn abnormal_verdicts() {
         for s in [ST_LIMIT, ST_WEAK, ST_NOISE, ST_CROWD, ST_NARROW, ST_NODATA, ST_STALL] {
@@ -198,7 +198,7 @@ mod tests {
     }
 }
 
-/// One carrier of an nrca / lteca string (net_view.c nv_carrier_t, the fields the screen uses).
+/// One carrier of an nrca / lteca string.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Carrier {
     pub kind: u8,
@@ -273,7 +273,7 @@ fn scan_numbers(rec: &[u8], max: usize) -> Vec<f64> {
 
 /// nrca / lteca: "idx,pci,?,band,arfcn,bw,?,rsrp,rsrq,sinr,rssi;…" (a carrier at the -140
 /// floor is configured but not active); B27's lteca has five fields "PCI,band,?,EARFCN,bw".
-/// At most `max` carriers (net_view.c nv_parse_ca).
+/// At most `max` carriers.
 pub fn parse_ca(s: &str, max: usize, kind: u8) -> Vec<Carrier> {
     let b = s.as_bytes();
     let b = &b[..b.len().min(255)];
@@ -379,7 +379,6 @@ mod parse_tests {
         parse(s.as_bytes())
     }
 
-    // tests/net_view_test.c
     #[test]
     fn parses_core_net() {
         lang::set_en(false);

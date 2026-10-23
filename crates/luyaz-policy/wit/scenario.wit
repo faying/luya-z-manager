@@ -128,7 +128,7 @@ world scenario-policy {
     pin-retry-at: s64,
   }
 
-  /// One tick of the agent's engine (luyaz_policy::scenario::step).
+  /// One tick of the engine (luyaz_policy::scenario::step).
   export step: func(input: tick-input) -> tick-outcome;
   /// Which scenario the surroundings say we are in.
   export detect: func(config: config, networks: list<network>, mcc: option<string>) -> option<string>;

@@ -1,13 +1,12 @@
-// Tailscale + CHILL — mirrors zte-agent/src/services.rs, chill.rs and
-// chill_proxy.rs (dashboard info only; the /chill-api/* mihomo reverse proxy
-// and /chill-ui/ static files are NOT mocked — the only consumer is the
-// zashboard iframe in services/chill/page.tsx DashboardEmbed).
+// Tailscale + CHILL — stands in for the core's /api/services/tailscale* (api/ts_reads.rs)
+// and /api/services/chill* (api/chill_page.rs, api/chill_jobs.rs, luyaz-api chill.rs).
+// mihomo's own controller and dashboard are not mocked.
 //
 // Model:
 //  * `stateFile` is /tmp/chill.state as chill.sh write_state() leaves it.
 //  * `mihomo` is what the controller on 127.0.0.1:9999 would answer (mode +
 //    the select groups). It is only reachable while CHILL is running, and
-//    never under the "fakesuccess" scenario (mihomo wedged: the agent still
+//    never under the "fakesuccess" scenario (mihomo wedged: the core still
 //    answers ok:true with version/region null and groups []).
 //  * enable / disable / profile / provider-URL go through the single job slot
 //    (409 "operation in progress" while one runs); the job finishes ~3 s later
@@ -155,7 +154,7 @@ function tailscaleStatus(ctx: Ctx): Reply {
     return ok(data);
   }
   if (ctx.has("fakesuccess")) {
-    // services.rs:50-62: `tailscale status --json` exited non-zero.
+    // api/ts_reads.rs status: `tailscale status --json` exited non-zero.
     const data: TailscaleStatus = {
       installed: true,
       running: true,
@@ -177,7 +176,7 @@ function tailscaleStatus(ctx: Ctx): Reply {
   });
   if (ctx.has("missing")) {
     // Realistic absences: fields tailscale leaves out (older build, no DERP
-    // home yet, peers never talked to); the flags services.rs always sends stay.
+    // home yet, peers never talked to); the flags the core always sends stay.
     for (const p of peers) {
       p.rx_bytes = null;
       p.tx_bytes = null;
@@ -247,7 +246,7 @@ function tailscaleLogLines(): string[] {
 
 const MAIN_GROUP = "🚀 节点选择";
 const AI_GROUP = "🤖 AI";
-// chill.rs:44 REGION_GROUPS, in order.
+// luyaz-api chill.rs REGION_GROUPS, in order.
 const REGION_GROUPS = [MAIN_GROUP, AI_GROUP, "📺 流媒体", "🍎 Apple", "🐟 漏网之鱼"] as const;
 
 interface MihomoGroup {
@@ -270,7 +269,7 @@ const mihomo = {
 
 /** /data/chill/last-main */
 let lastMain = "🇯🇵 日本";
-/** Owner's on/off flag: !/data/chill/disabled (chill.rs:492). */
+/** Owner's on/off flag: !/data/chill/disabled (luyaz-api chill.rs CHILL_DISABLED). */
 let switchedOn = true;
 /** chill.env CHILL_BYPASS_IP */
 let bypassIps: string[] = ["192.168.0.105"];
@@ -316,7 +315,7 @@ function mihomoUp(ctx?: Ctx): boolean {
   return stateFile.state === "running";
 }
 
-// chill.rs:325 exit_state
+// luyaz-api chill.rs exit_state
 function exitState(mode: string, mainNow: string): ChillExit {
   if (mode === "direct") return "direct_all";
   if (mode === "global") return "global";
@@ -391,7 +390,7 @@ function chillStatus(ctx: Ctx): Reply {
         data.manual_first = { on_backup: true, manual: "JP 03", backup: "🇯🇵 日本", ...MF_ALLDOWN };
       }
     } else {
-      // chill.rs:122-140 with every mihomo call failing.
+      // api/chill_page.rs status with every mihomo call failing.
       data.version = null;
       data.groups = [];
       data.region = null;
@@ -461,7 +460,7 @@ const job: ChillJob = {
 
 const JOB_MS = 3000;
 
-/** chill.rs:553 start_job. `work` runs when the job finishes and returns Ok message or throws Err message. */
+/** The CHILL job slot (api/chill_jobs.rs). `work` runs when the job finishes and returns Ok message or throws Err message. */
 function startJob(kind: string, work: () => string): Reply {
   if (job.status === "running") return fail("operation in progress", 409);
   job.id += 1;
@@ -580,7 +579,7 @@ function providersSetUrl(ctx: Ctx): Reply {
   const url = String(bodyField(ctx.body, "url") ?? "").trim();
   const valid =
     /^https?:\/\//.test(url) && url.length <= 4096 && !/['"]/.test(url) && !/[\s\u0000-\u001f\u007f]/.test(url);
-  if (!valid) return fail("invalid URL (http(s) only, no quotes/spaces)", 400);
+  if (!valid) return fail("bad URL: use http:// or https://, without spaces or quotes", 400);
   const e = precheck();
   if (e) return fail(e, 409);
   return startJob("reload", () => {
@@ -606,7 +605,7 @@ function providersRefresh(ctx: Ctx): Reply {
 
 // ── regions / exit (exported for the scenario engine) ────────────────────────
 
-/** chill.rs:270 regions_set core. Returns null on success or [status, error]. */
+/** PUT /api/services/chill/regions (api/chill_page.rs regions). Returns null on success or [status, error]. */
 export function chillSetGroup(group: string, member: string, ctx?: Ctx): [number, string] | null {
   if (!(REGION_GROUPS as readonly string[]).includes(group)) return [400, "unknown group"];
   if (!member) return [400, "missing 'member'"];
@@ -624,7 +623,7 @@ export function chillMainGroupNow(): string | null {
   return mihomoUp() ? mihomo.groups[MAIN_GROUP].now : null;
 }
 
-/** chill.rs:354 exit_set core. */
+/** PUT /api/services/chill/exit (luyaz-api chill.rs). */
 export function chillSetExit(want: string, ctx?: Ctx): [number, string] | null {
   if (want !== "proxy" && want !== "direct_keep_ai" && want !== "direct_all" && want !== "global") {
     return [400, "state must be proxy, direct_keep_ai, direct_all or global"];
@@ -675,7 +674,7 @@ function exitSet(ctx: Ctx): Reply {
   return ok({ exit: want as ChillExit });
 }
 
-// ── home exit (E3, home_exit.rs) ────────────────────────────────────────────
+// ── home exit (E3, api/home_exit.rs) ────────────────────────────────────────
 // Configured, abroad and roaming, home answering over a direct path. A switch
 // takes effect at once here (the device runs it in the background: 202).
 const homeExit = { media: false, ip: false, rest: false, until: 0 };

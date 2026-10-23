@@ -1,4 +1,4 @@
-//! /sms/forward (短信转发), the old `sms/forward/page.tsx`: status, then three tabs — settings,
+//! /sms/forward (短信转发): status, then three tabs — settings,
 //! rules (add / edit / on-off / test / delete), log (retry the failed ones, clear). Batch 5a.
 //!
 //! Where each value comes from: the agent's `/api/sms/forward/config` and `/api/sms/forward/log`

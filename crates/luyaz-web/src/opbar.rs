@@ -1,4 +1,4 @@
-//! The change in progress, on every migrated page (OpBanner.tsx + lib/ops.ts; write-op-layer.md
+//! The change in progress, on every page (write-op-layer.md
 //! DD4, DD8, DD15, DD16, DD18): one strip above the alert bar, "正在改网络模式 · 1:42 ›" while it
 //! runs, then the result until someone presses "Got it" on the item's page or the touch screen.
 //! Also says when u60d is stuck (writes are off) and when we lost u60d while a change ran.
@@ -56,7 +56,7 @@ fn also_on(item: &str, path: &str) -> bool {
     item == "band.all" && path == "/router/celllock"
 }
 
-/// What this tab's stream has seen (lib/ops.ts `observeOps`).
+/// What this tab's stream has seen of each change.
 #[derive(Default)]
 pub struct Seen {
     active: HashSet<String>,

@@ -71,7 +71,7 @@ fn reads_the_router_block_and_says_dash_for_null() {
     // a rule without an id has no delete button
     assert_eq!(s.matches("/router/firewall/del/ask?id=").count(), 1);
     assert!(s.contains("删除规则「NAS」"));
-    assert!(s.contains("未配置过滤规则"));
+    assert!(s.contains("设备上没有过滤规则"));
 
     let mut d = router_data();
     d["firewall"]["nat"] = Value::Null;

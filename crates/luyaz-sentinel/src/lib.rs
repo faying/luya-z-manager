@@ -4,7 +4,7 @@
 //!  * the screen owner ([`screen`]): the only thing that starts or stops our touch UI and the only
 //!    thing that hands the panel to the vendor UI;
 //!  * [`worker`]: Wi-Fi fallback, modem crash recovery, the clock verdict, log caps, ship
-//!    recover-live, dropbear, and the core's health (from u60-guard).
+//!    recover-live, dropbear, and the core's health.
 //!
 //! Decisions are pure ([`screen::Screen::step`]) or written against a device trait
 //! ([`worker::WorkerIo`], [`wifi::WifiOps`]), so the tests run on a fake device (D10); `sys` is the

@@ -55,10 +55,11 @@ use crate::envelope::{self, HEADER, KIND_NAMES, Media, Raw, Store};
 use crate::record::{KIND_BLOCK, KIND_CHECKPOINT, KIND_DELTA};
 use crate::sens::{Ctx, To};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::time::Duration;
+
+use serde_json::Value;
 
 /// Schema of the event-log records this build writes and fully understands.
 pub const SCHEMA: u16 = 1;

@@ -51,11 +51,7 @@ fn chill_reload(epoch: u64) {
         return;
     }
     let slot = crate::ops::chill::slot();
-    if crate::ops::chill::sh_running()
-        || slot
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-            .is_err()
-    {
+    if crate::ops::chill::sh_running() || slot.swap(true, Ordering::SeqCst) {
         eprintln!("[sim_follow] epoch {epoch}: a CHILL job is running, no extra reload");
         return;
     }

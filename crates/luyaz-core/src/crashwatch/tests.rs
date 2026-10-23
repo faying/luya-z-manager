@@ -1,5 +1,4 @@
-//! The guard's watcher cases (touch-ui scripts/test/u60-guard/run.sh, "crash watcher"), as
-//! timelines through the replay; plus the parts only the event-driven watcher has.
+//! The crash watcher's cases as timelines through the replay, plus the event-driven parts.
 
 use super::replay::{parse, run};
 use super::*;

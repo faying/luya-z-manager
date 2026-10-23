@@ -120,15 +120,15 @@ async function dnsOwn(p) {
   ok(await p.locator(".dns-fields").isVisible(), "fields shown in manual");
   const apply = p.getByRole("button", { name: "应用", exact: true });
   await apply.click();
-  ok(await until(p, "#dns-w-op", /主 DNS 不能为空/, 5000), `empty primary: ${await txt(p, "#dns-w-op")}`);
+  ok(await until(p, "#dns-w-op", /主 DNS 要填/, 5000), `empty primary: ${await txt(p, "#dns-w-op")}`);
   await p.getByLabel("主 DNS").fill("1.1.1");
   await apply.click();
-  ok(await until(p, "#dns-w-op", /主 DNS 地址无效/, 5000), "bad primary");
+  ok(await until(p, "#dns-w-op", /主 DNS 不是 IPv4 地址/, 5000), "bad primary");
   await p.getByLabel("主 DNS").fill("1.1.1.1");
-  await p.getByLabel("备用 DNS").fill("1.0.0");
+  await p.getByLabel("第二个 DNS").fill("1.0.0");
   await apply.click();
-  ok(await until(p, "#dns-w-op", /备用 DNS 地址无效/, 5000), "bad secondary");
-  await p.getByLabel("备用 DNS").fill("1.0.0.1");
+  ok(await until(p, "#dns-w-op", /第二个 DNS 不是 IPv4 地址/, 5000), "bad secondary");
+  await p.getByLabel("第二个 DNS").fill("1.0.0.1");
   await apply.click();
   await p.locator("#dns-w-confirm").waitFor({ timeout: 8000 });
   ok(/1\.1\.1\.1 · 1\.0\.0\.1/.test(await txt(p, "#dns-w-confirm")) && /几秒/.test(await txt(p, "#dns-w-confirm")), `inline confirm: ${await txt(p, "#dns-w-confirm")}`);
@@ -157,7 +157,7 @@ async function dnsOwn(p) {
   await p.screenshot({ path: `${OUT}/dns-done.png`, fullPage: true });
   const dev = await (await fetch(`${AGENT}/api/router/dns`, { headers: {} })).json().catch(() => null);
   // back to auto (readback)
-  await p.getByRole("radio", { name: "自动（运营商分配）" }).click();
+  await p.getByRole("radio", { name: "自动（用运营商的服务器）" }).click();
   await apply.click();
   await p.locator("#dns-w-confirm").waitFor();
   await p.locator("#dns-w-confirm button:has-text('确认：应用')").click();

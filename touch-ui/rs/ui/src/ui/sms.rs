@@ -1,5 +1,5 @@
-//! src/ui_parts/sms.c (and the SMS taps in system.c): 短信 and 短信详情, 健康与告警 and its
-//! 详情. The lists are drawn by refresh (refresh.c 「SMS subpage」, 「Alerts subpage」).
+//! 短信 and 短信详情, 健康与告警 and its
+//! 详情. The lists are drawn by refresh.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::{Sub, Ui, SUB_VIEW, W};
@@ -387,7 +387,7 @@ impl Ui {
     }
 
     // ---- the refresh ----
-    /// refresh.c 「SMS subpage」 and 「SMS detail subpage」.
+    /// 短信 and 短信详情.
     pub(super) fn sms_paint(&mut self) {
         let th = t();
         let m = self.model.clone();
@@ -461,7 +461,7 @@ impl Ui {
         }
     }
 
-    /// refresh.c 「Alerts subpage」: the health checks that are not fine, then the alert log.
+    /// the health checks that are not fine, then the alert log.
     pub(super) fn alerts_paint(&mut self) {
         let th = t();
         let m = self.model.clone();
@@ -547,7 +547,7 @@ impl Ui {
 mod tests {
     use super::utf8_prefix;
 
-    /// ui.c utf8_prefix: never a split character
+    /// utf8_prefix: never a split character
     #[test]
     fn prefix_keeps_whole_characters() {
         assert_eq!(utf8_prefix("abc", 150), "abc");

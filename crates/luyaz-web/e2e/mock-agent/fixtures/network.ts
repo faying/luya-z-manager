@@ -1,14 +1,14 @@
 // Network area: signal (nwinfo_get_netinfo), speed,
 // netifd WAN/WAN6/LAN status, LAN clients (luci-rpc), QoS/QCI (AT port),
-// data usage (uci), CPU — handlers.rs, network_ext.rs, qos.rs.
+// data usage (uci), CPU — the core's api/netinfo.rs, api/net_reads.rs, qos.rs.
 //
 // All endpoints here are reads. The nwinfo payload is built in one place
 // (`buildNetinfo`) and shared with fixtures/public.ts, which derives its
-// `network` block from it exactly like public.rs does. Scenario / shared
+// `network` block from it the way api/status.rs does. Scenario / shared
 // state handled here:
 //   weak      RSRP -115 / RSRQ -17 / SINR -2, 1 bar, CA dropped, slow speeds
 //   nosignal  network_type NO_SERVICE, radio numbers absent, no WAN address
-//   carriers8 serving cell + nrca + lteca = 8 carriers (touch-ui ui.c counting)
+//   carriers8 serving cell + nrca + lteca = 8 carriers (counted the way the touch screen counts them)
 //   shared.airplane    looks like nosignal
 //   shared.mobileData  false → signal normal, WAN down, no traffic
 //   shared.bandLock    band lists + serving band (falls back to LTE when no
@@ -35,7 +35,7 @@ import type {
   WifiStation,
 } from "../../../src/lib/api/schemas/network.ts";
 
-/** Device clock = local wall time labelled UTC; Taiwan is UTC+8 (clock.rs utc_offset). */
+/** Device clock = local wall time labelled UTC; Taiwan is UTC+8 (luyaz-api clock.rs utc_offset). */
 export const DEVICE_UTC_OFFSET = 8 * 3600;
 
 /** Device-clock unix seconds for a request. */
@@ -96,7 +96,7 @@ export function radioDown(ctx: Ctx): boolean {
   return shared.airplane || ctx.has("nosignal");
 }
 
-/** wwan data bearer up (public.rs:50 connect_status contains "connected"). */
+/** wwan data bearer up (connect_status contains "connected"). */
 export function wwanConnected(ctx: Ctx): boolean {
   if (!shared.mobileData || radioDown(ctx)) return false;
   return servingRat() !== "none";
@@ -150,7 +150,7 @@ export function buildNetinfo(ctx: Ctx): NetworkSignal {
 
   const rat = servingRat();
   if (radioDown(ctx) || rat === "none") {
-    // No service: type NO_SERVICE (sms_forward.rs:572), operator empty, radio
+    // No service: type NO_SERVICE, operator empty, radio
     // numbers absent.
     return {
       network_type: "NO_SERVICE",
@@ -445,7 +445,7 @@ function clients(): NetworkClients {
   return { hosts, dhcp_leases: leases, wifi };
 }
 
-// ─── LAN client identification (u60d lanid.rs, GET /api/lanid + POST /api/lanid/alias) ────
+// ─── LAN client identification (luyaz-core lanid.rs, GET /api/lanid + POST /api/lanid/alias) ────
 // The core's report, cut to what the page reads: per MAC the merged client and every source
 // (winner first); aliases kept in memory with the core's checks (trim, ≤64 bytes, no control
 // characters, "" removes). The MacBook has a real (Apple) MAC, the rest are random ones.
@@ -513,7 +513,7 @@ function lanidAlias(ctx: Ctx): Reply {
 // ─── QoS / QCI ───────────────────────────────────────────────────────────────
 
 const QOS_NOTE =
-  "QCI is read from the modem (qci_device, same value as the device's About screen) when available; dedicated bearers may also report a measured 5QI via AT; otherwise it is inferred from the APN.";
+  "QCI comes from the modem's qci_device (the number the stock About screen shows); a dedicated bearer can add a 5QI measured over AT; with neither, it is guessed from the APN.";
 
 function qos(ctx: Ctx): NetworkQos {
   const lines: string[] = ["AT+CGCONTRDP"];
@@ -595,16 +595,16 @@ function cpu(ctx: Ctx): CpuUsage {
   return { cores: cores.filter((_, i) => i !== offline), overall, per_core };
 }
 
-/** system.rs read_meminfo (/proc/meminfo). */
+/** /proc/meminfo, as /api/memory used to read it. */
 function memory(): MemInfo {
   return { total_kb: 1_852_000, free_kb: 402_000, available_kb: 1_010_000, buffers_kb: 12_000, cached_kb: 560_000, used_kb: 842_000, usage_pct: 45.5 };
 }
 
-/** netinfo.rs `get`: a mainland SIM roaming in Taiwan, proxy exit in Japan. Documentation-range IPs. */
+/** luyaz-core api/netinfo.rs `get`: a mainland SIM roaming in Taiwan, proxy exit in Japan. Documentation-range IPs. */
 function netinfo(ctx: Ctx) {
   const now = Math.floor(ctx.now / 1000);
   return {
-    // netinfo.rs `now()` is the device clock (local time labelled UTC), the clock DHCP lease
+    // api/netinfo.rs `now()` is the device clock (local time labelled UTC), the clock DHCP lease
     // `expires` is on; luyaz-web's /clients compares the two
     now: now + DEVICE_UTC_OFFSET,
     apn: candidateApnBlock(ctx),
@@ -671,7 +671,7 @@ export const routes: Route[] = [
   { method: "GET", path: "/api/network/clients", handler: () => ok(clients()) },
   { method: "GET", path: "/api/lanid", handler: () => ok(lanid()) },
   { method: "POST", path: "/api/lanid/alias", handler: lanidAlias },
-  // Real handler: ≥ 5.3 s + 3.3 s per PDP context on the AT port (qos.rs:19,52).
+  // Real handler: ≥ 5.3 s + 3.3 s per PDP context on the AT port (luyaz-core qos.rs).
   // A short delay keeps the loading state visible without tripping the 9 s timeout.
   { method: "GET", path: "/api/network/qos", handler: (ctx) => ({ data: qos(ctx), delayMs: 1200 }) },
   { method: "GET", path: "/api/data-usage", handler: (ctx) => ok(dataUsage(ctx)) },

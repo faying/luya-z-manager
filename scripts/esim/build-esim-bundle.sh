@@ -1,28 +1,24 @@
 #!/usr/bin/env bash
-#
-# Package lpac for the U60 Pro / MU5250 (aarch64, musl) as the /data/esim bundle.
-#
-#   build-esim-bundle.sh --out FILE           write the bundle as a .tgz, no device involved
-#                                             (this is what onboard/build-kit.sh uses)
-#   build-esim-bundle.sh <gateway>            build, then install to /data/esim over ssh
-#   GATEWAY=<gateway> build-esim-bundle.sh    same; SSH_PORT defaults to 2222
-#
-# Why Alpine's lpac: the modem in this device (SDX75) has no /dev/cdc-wdm, so the
-# OpenWrt lpac (AT / uqmi backends only) cannot reach the card. Alpine builds lpac
-# with the qmi_qrtr backend, which speaks QMI UIM over a QRTR socket, the route
-# that works here. Its libcurl looks for /etc/ssl/certs/ca-certificates.crt, which
-# the device already has.
-#
-# Bundle layout (paths inside the tarball start with ./):
-#   lpac               Alpine binary
-#   lpac.sh            wrapper: library path, statx shim preload, driver selection
-#   lib/               lpac's shared-library closure + libmusl-compat.so
-#   qmi_uim_probe      static helper that power-cycles the UIM (switch without reboot)
-#
-# Package versions and hashes come from alpine.lock (fetched by alpine_closure.py,
-# cache dir ALPINE_PKGS_DIR). Needs python3 and zig; without a local zig the
-# compiler runs in the messense/cargo-zigbuild Docker image.
-set -euo pipefail
+# build-esim-bundle.sh: package lpac for the U60 Pro / MU5250 (aarch64, musl) as the
+# /data/esim bundle.
+# Usage:
+#   build-esim-bundle.sh --out FILE           only write the bundle (.tgz); no device needed.
+#                                             onboard/build-kit.sh calls it this way.
+#   build-esim-bundle.sh <gateway>            build it, then install it to /data/esim over ssh
+#   GATEWAY=<gateway> build-esim-bundle.sh    the same (SSH_PORT, default 2222)
+# Why Alpine's lpac: the SDX75 modem exposes no /dev/cdc-wdm, so OpenWrt's lpac (AT and
+# uqmi backends only) never reaches the card. Alpine ships lpac with the qmi_qrtr backend,
+# QMI UIM over a QRTR socket, which is what works on this device. Its libcurl reads
+# /etc/ssl/certs/ca-certificates.crt, already present on the device.
+# What the tarball holds (paths start with ./):
+#   lpac               the Alpine binary
+#   lpac.sh            launcher: library path, statx shim preload, backend choice
+#   lib/               every shared library lpac loads, plus libmusl-compat.so
+#   qmi_uim_probe      static UIM helper (power cycle after a switch, channel cleanup)
+# Inputs: package versions and hashes are pinned in alpine.lock and fetched by
+# alpine_closure.py into ALPINE_PKGS_DIR. Needs python3 and zig; with no zig installed
+# the compiler runs inside the messense/cargo-zigbuild Docker image.
+set -eu -o pipefail
 
 ESIM_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPTS_DIR="$(cd "$ESIM_DIR/.." && pwd)"
@@ -43,7 +39,6 @@ case "${1:-}" in
     fi
     ;;
 esac
-
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 unpack="$tmp/unpack"
@@ -83,7 +78,7 @@ done < "$ESIM_DIR/alpine.lock"
 for libdir in "$unpack/usr/lib" "$unpack/lib"; do
   [ -d "$libdir" ] || continue
   find "$libdir" -maxdepth 1 -name '*.so*' -exec cp -a {} "$bundle/lib/" \;
-done
+done # both library dirs
 install -m 755 "$unpack/usr/bin/lpac" "$bundle/lpac"
 
 echo "==> Compiling libmusl-compat.so (statx shim)"
@@ -116,5 +111,6 @@ COPYFILE_DISABLE=1 tar czf - -C "$bundle" . \
 
 echo "==> Checking the card (lpac chip info)"
 to_device '/data/esim/lpac.sh chip info' | head -c 400
-echo
+printf '\n'
+
 echo "==> Done: the eSIM page in the admin web (Mobile network -> eSIM) can use the card now."

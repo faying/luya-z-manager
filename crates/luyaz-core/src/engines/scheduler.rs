@@ -26,8 +26,6 @@ use crate::api::Compat;
 pub const JOBS_FILE: &str = "/data/local/tmp/scheduler.json";
 pub const CLOCK_OK: &str = "/tmp/luyaz/clock-ok";
 const TICK_SECS: u64 = 30;
-/// How often the thread looks whether a tick is due.
-const LOOK_SECS: u64 = 2;
 /// One job's call (a reboot answers at once; a Wi-Fi change waits for its lock and readback).
 const CALL_SECS: u64 = 240;
 /// What a run says until its call has come back.
@@ -284,20 +282,15 @@ pub(crate) fn tick_at(
 }
 
 /// The thread: while u60d owns the jobs, a tick every [`TICK_SECS`] (blocking calls, so never on
-/// the runtime's thread).
+/// the runtime's thread). It sleeps the whole gap: no wakeup in between (R18-P1-04).
 pub fn spawn(c: Compat, io: std::sync::Arc<dyn Caller>) {
     let _ = std::thread::Builder::new()
         .name("u60d-scheduler".into())
         .spawn(move || {
-            let mut last: Option<std::time::Instant> = None;
             let mut cooldown: HashMap<(u32, bool), BootTime> = HashMap::new();
             let clock_path = c.path(CLOCK_OK);
             loop {
-                std::thread::sleep(Duration::from_secs(LOOK_SECS));
-                if last.is_some_and(|t| t.elapsed() < Duration::from_secs(TICK_SECS)) {
-                    continue;
-                }
-                last = Some(std::time::Instant::now());
+                std::thread::sleep(Duration::from_secs(TICK_SECS));
                 let now = now_local();
                 let boot = BootTime::read();
                 let evidence = std::fs::read_to_string(&clock_path).unwrap_or_default();

@@ -1,10 +1,10 @@
-//! SMS forwarding (u60-platform.md Phase 4 step 9e; the agent's until Phase 10).
+//! SMS forwarding.
 //!
-//! With u60d's writes on it runs the agent's engine (`crates/luyaz-sms-forward`) with u60d as its host:
+//! With the core's writes on it runs the engine in `crates/luyaz-sms-forward` with the core as its host:
 //! - woken by the hub: the `sms` block's max id / count, service from the `signal` block's `type`,
 //!   the data call from the `interfaces` block's `cellular.connect_status`, down when the bearer in
-//!   `/proc` is (looked at every [`LOOK_SECS`], passed on only when they change; no `ubus listen`
-//!   of its own);
+//!   `/proc` is (looked at when one of those blocks publishes, else every [`LOOK_SECS`] for the
+//!   bearer and the SIM switch hold; passed on only when they change; no `ubus listen` of its own);
 //! - `sms.list_after`, mark-read, delete and the SMS sends go through u60d's own `/control`, the
 //!   loop's as `auto`, a web test or retry under the caller's source;
 //! - the engine is blocking (15 s HTTP, 5/15/60 s retries, 1 s between SMS): its loop runs on a
@@ -16,16 +16,21 @@
 use luyaz_sms_forward::{self as sf, Host, Page, SmsForwarder};
 use serde_json::{Value, json};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use crate::api::Compat;
 use crate::api::control::Client;
 
-/// How often the hub's blocks are looked at.
-const LOOK_SECS: u64 = 2;
-/// The agent's `sms.list_after` timeout.
+/// The blocks whose publish wakes the loop at once.
+const WOKEN_BY: &[&str] = &["sms", "signal", "interfaces"];
+/// The look without a publish: the bearer in `/proc` and the SIM switch hold are not blocks
+/// (R18-P1-04: was 2 s for everything).
+const LOOK_SECS: u64 = 10;
+/// Timeout for one `sms.list_after` page.
 const LIST_TIMEOUT: Duration = Duration::from_secs(60);
 /// A SIM switch holds the sends until the phase has been `online` this long (the bearer settles).
 const SIM_SETTLE: Duration = Duration::from_secs(30);
@@ -87,7 +92,7 @@ impl Host for U60dHost {
     fn sms_summary(&self) -> Option<(u64, u64)> {
         sms_summary(self.hub.as_ref())
     }
-
+    /// One `sms.list_after` page through `/control`, as source `auto`.
     fn list_after(&self, after: u64, limit: u64) -> Result<Page, String> {
         let r = self.send(
             "auto",
@@ -123,7 +128,7 @@ impl Host for U60dHost {
         self.handle.block_on((self.ubus)(o, m, args))
     }
 
-    /// The agent's `core_write::vendor`, under the thread's source.
+    /// A vendor setter through `/control` (`vendor.call`), under the thread's source.
     fn vendor(&self, obj: &str, method: &str, params: Option<&str>) -> Result<Value, String> {
         let args: Value = match params {
             None => json!({}),
@@ -142,7 +147,7 @@ impl Host for U60dHost {
             crate::api::control::TIMEOUT,
         )
     }
-
+    /// A core action (`sms.delete`, `sms.mark_read`) as source `auto`.
     fn control(&self, action: &str, params: &Value) -> Result<Value, String> {
         self.send("auto", action, params, crate::api::control::TIMEOUT)
     }
@@ -162,7 +167,7 @@ impl Host for U60dHost {
         }
     }
 
-    /// The shadow records are the agent's; u60d replays nothing of its own.
+    /// Shadow records are not kept: nothing replays them here.
     fn tick(&self, _record: Value) {}
 
     fn sms_zone_hours(&self) -> i64 {
@@ -255,13 +260,22 @@ fn lease(c: &Compat) -> PathBuf {
 
 /// Starting, then passing on the hub.
 pub async fn run(c: Compat) {
-    let mut look = tokio::time::interval(c.clock.secs(LOOK_SECS));
+    let woken = c.src.hub.as_ref().map(|h| h.watch(WOKEN_BY));
     loop {
-        look.tick().await;
-        let mut g = c.sms.now.lock().unwrap_or_else(|e| e.into_inner());
-        match g.as_mut() {
-            None => *g = Some(take_over(&c)),
-            Some(r) => pass_on(&c, r),
+        {
+            let mut g = c.sms.now.lock().unwrap_or_else(|e| e.into_inner());
+            match g.as_mut() {
+                None => *g = Some(take_over(&c)),
+                Some(r) => pass_on(&c, r),
+            }
+        }
+        let look = c.clock.sleep(LOOK_SECS);
+        match &woken {
+            Some(n) => tokio::select! {
+                _ = n.notified() => {}
+                _ = look => {}
+            },
+            None => look.await,
         }
     }
 }

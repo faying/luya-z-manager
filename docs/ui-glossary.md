@@ -192,7 +192,7 @@
 
 为了压进 70 字，英文比中文少说了的：agent-silent 没写「Wi-Fi 关着会自动打开」（真打开时另有 wifi-takeover 短信）；ui-gave-up 没写「上网不受影响」，「屏幕界面打不开」由 Stock UI on 带出。
 
-## 10. 网络诊断（原 agent `deep_diag.rs`，现 `crates/luyaz-netwatch` 的 `diagnose.rs`；10-02 ER4；触屏 T4 10-02 已做，网页 T5 用同一套词）
+## 10. 网络诊断（原 `crates/luyaz-netwatch`，现 `crates/luyaz-netwatch` 的 `diagnose.rs`；10-02 ER4；触屏 T4 10-02 已做，网页 T5 用同一套词）
 
 主句（状态块大字）和一个动作，按层序取第一个「差」，没有就取第一个「疑点」；推断类写「疑似」。
 
@@ -281,7 +281,7 @@
 
 ## 13. 写操作（事务，E4；核心 `ops/ui.rs`，设计 `docs/designs/write-op-layer.md` 状态文案表）
 
-句子由核心写（op 块和改动记录的 `*_zh/_en`），触屏和网页照着显示；下面只是对照。触屏和网页自己写的几句英文两边相同（触屏 `lang_test.c`、网页 `tests/unit/opsWords.test.ts` 查：不含中文、不写 Please、状态短句不带句号）。中文拼接：中文挨中文不空格、挨数字和英文空一格（「已退回自动」「退回到 4G + 5G」）。X = 退回目标，Y = 目标，「旧」= 写之前的值。
+句子由核心写（op 块和改动记录的 `*_zh/_en`），触屏和网页照着显示；下面只是对照。触屏和网页自己写的几句英文两边相同（触屏 `touch-ui/rs/ui/src/lang.rs`、网页 `tests/unit/opsWords.test.ts` 查：不含中文、不写 Please、状态短句不带句号）。中文拼接：中文挨中文不空格、挨数字和英文空一格（「已退回自动」「退回到 4G + 5G」）。X = 退回目标，Y = 目标，「旧」= 写之前的值。
 
 **来源**（DD14）
 

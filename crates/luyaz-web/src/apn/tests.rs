@@ -86,7 +86,7 @@ fn save_checks_and_steps() {
     // empty password = keep (not sent)
     let s = check_save(&form("manu1", "CM", "cmnet", "", false), Some(&a), false, Lang::Zh).unwrap();
     assert!(s.steps[0].1.get("password").is_none() && s.redials);
-    assert!(matches!(check_save(&form("", "CM", "y", "", false), Some(&a), false, Lang::Zh), Err(write::Outcome::NotYet(t)) if t == "已存在同名 APN"));
+    assert!(matches!(check_save(&form("", "CM", "y", "", false), Some(&a), false, Lang::Zh), Err(write::Outcome::NotYet(t)) if t == "已有配置叫这个名字"));
     assert!(check_save(&form("", "a", " ", "", false), Some(&a), false, Lang::Zh).is_err());
     assert!(check_save(&form("manu9", "a", "b", "", false), Some(&a), false, Lang::Zh).is_err());
     assert!(check_save(&form("", "a", "b", "", false), Some(&a), true, Lang::Zh).is_err());

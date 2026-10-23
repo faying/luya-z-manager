@@ -7,9 +7,11 @@
 //! ```
 //! u60d allows 16 SSE clients and the touchscreen needs one, so the browser never talks to it directly.
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use futures_util::StreamExt;
 use serde_json::Value;

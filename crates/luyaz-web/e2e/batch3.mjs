@@ -59,7 +59,7 @@ const PAGES = {
     async own(p) {
       const lteApply = p.locator("button:has-text('应用 LTE 锁定')");
       const nrApply = p.locator("button:has-text('应用 NR 锁定')");
-      const resetBtn = p.locator("section[aria-labelledby=bl-reset-t] button:has-text('重置 / 全部解锁')");
+      const resetBtn = p.locator("section[aria-labelledby=bl-reset-t] button:has-text('清除全部锁定')");
       const chip = (id, b) => p.locator(`#${id} .nd-chip:text-is('${b}')`);
       const pressed = async (id) => p.locator(`#${id} .nd-chip[aria-pressed=true]`).allTextContents();
 
@@ -92,7 +92,7 @@ const PAGES = {
       await lteApply.click();
       await p.waitForSelector("dialog#bl-lte-confirm[open]", { timeout: 8000 }).catch(() => {});
       const dlg = await txt(p, "#bl-lte-confirm");
-      ok(/把 LTE 锁定到 B1 B3 B7？/.test(dlg) && /4G 只用这些频段/.test(dlg) && /断开约 30 秒/.test(dlg) && /重置 \/ 全部解锁/.test(dlg), `dialog: ${dlg.slice(0, 80)}`);
+      ok(/把 LTE 锁定到 B1 B3 B7？/.test(dlg) && /4G 只用这些频段/.test(dlg) && /断开约 30 秒/.test(dlg) && /清除全部锁定/.test(dlg), `dialog: ${dlg.slice(0, 80)}`);
       ok(await p.evaluate(() => document.activeElement?.textContent?.trim()) === "取消", "focus on Cancel");
       ok(/retryMaxCount: 0/.test(await p.getAttribute("#bl-lte-confirm .nd-btn--confirm", "data-on:click")), "the confirm is never retried");
       const ax = await new AxeBuilder({ page: p }).analyze();
@@ -140,7 +140,7 @@ const PAGES = {
       await resetBtn.click();
       await p.waitForSelector("dialog#bl-reset-confirm[open]", { timeout: 8000 }).catch(() => {});
       const rd = await txt(p, "#bl-reset-confirm");
-      ok(/重置所有频段锁定？/.test(rd) && /频段和小区锁一起恢复/.test(rd), `reset dialog: ${rd.slice(0, 60)}`);
+      ok(/清除全部频段和小区锁定？/.test(rd) && /频段和小区锁一起恢复/.test(rd), `reset dialog: ${rd.slice(0, 60)}`);
       await p.click("#bl-reset-confirm .nd-btn--confirm");
       await until(p, (id) => /没有生效/.test(document.querySelector(`#${id}-op`)?.textContent ?? ""), "bl-reset", 10000);
       ok(await txt(p, "#bl-reset-op") === "没有生效：另一项改动正在进行，等它结束再试", `busy: ${await txt(p, "#bl-reset-op")}`);
@@ -343,7 +343,7 @@ const PAGES = {
       ok(sent.length === 1 && sent[0].action === "apn.set_mode" && sent[0].params.mode === 1 && /^lw-/.test(sent[0].op_id), `apn.set_mode {mode: 1} (${JSON.stringify(sent)})`);
       await until(p, () => /China Mobile/.test(document.querySelector("#ap-status strong")?.textContent ?? ""));
       ok(await txt(p, "#ap-status strong") === "数据连接用的是「China Mobile」" && await rowBtn("China Mobile", "删除").count() === 0, "manual: China Mobile in use, can't be deleted");
-      ok(await p.locator("#ap-manual button[aria-label='无法删除正在使用的 APN']").isDisabled(), "delete of the one in use: off, said why");
+      ok(await p.locator("#ap-manual button[aria-label='正在用的 APN 删不了']").isDisabled(), "delete of the one in use: off, said why");
 
       // activate Work (manual mode: a transaction)
       s0 = await stats();
@@ -392,8 +392,8 @@ const PAGES = {
       await f(1).fill("e2e.apn");
       s0 = await stats();
       await p.click("#ap-form button:has-text('保存配置')");
-      await until(p, () => /同名/.test(document.querySelector("#ap-save-op")?.textContent ?? ""), null, 5000);
-      ok(await txt(p, "#ap-save-op") === "已存在同名 APN" && (await stats()).apn_ops.length === s0.apn_ops.length, "duplicate: said, nothing sent");
+      await until(p, () => /这个名字/.test(document.querySelector("#ap-save-op")?.textContent ?? ""), null, 5000);
+      ok(await txt(p, "#ap-save-op") === "已有配置叫这个名字" && (await stats()).apn_ops.length === s0.apn_ops.length, "duplicate: said, nothing sent");
       await f(0).fill("E2E");
       await p.click("#ap-form button:has-text('保存配置')");
       await confirmDlg("ap-save");

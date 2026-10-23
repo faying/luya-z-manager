@@ -102,10 +102,10 @@ const PAGES = {
       ok(/\d+ 个承载在用/.test(await txt(p, "#qc-status")), `status: ${await txt(p, "#qc-status .nd-status__state")}`);
       const rows = await p.locator("#qc-bearers tbody tr").count();
       ok(rows >= 1, `bearer rows: ${rows}`);
-      ok(/来自调制解调器|实测|根据 APN 推断/.test(await txt(p, "#qc-bearers tbody")), "source column worded");
+      ok(/基带报告|实测|根据 APN 推断/.test(await txt(p, "#qc-bearers tbody")), "source column worded");
       ok(/IMS 信令|基于 TCP/.test(await txt(p, "#qc-bearers tbody")), "QCI labels");
       ok(/(?:QCI|5QI) \d+ · ↓ [\d.]+ ↑ [\d.—]+ Mbps/.test(await txt(p, "#qc-now")), `u60d summary: ${await txt(p, "#qc-now .nd-row__value")}`);
-      ok(/与设备“关于”界面上显示的值一致/.test(await txt(p, "#qc-bearers")), "the note");
+      ok(/和设备「关于」页显示的是同一个值/.test(await txt(p, "#qc-bearers")), "the note");
       // raw toggle
       const btn = p.locator("button[aria-controls=qc-raw-out]");
       ok(await btn.getAttribute("aria-expanded") === "false" && !(await p.isVisible("#qc-raw-out")), "raw output hidden at first");

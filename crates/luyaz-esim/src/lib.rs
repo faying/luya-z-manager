@@ -1,60 +1,71 @@
-//! The eSIM engine (moved from zte-agent `esim.rs`, Phase 4 step 8e), used by the
+//! The eSIM engine, used by the
 //! core's touch compatibility layer. Every side effect (lpac, the shell, the reboot, the
 //! data check, the wake lock, sleeping) goes through [`Host`] (the write layer's interrupt before a
 //! switch is the caller's, passed to [`Esim::switch`]): the device is
 //! [`RealHost`], tests use a fake that never touches a card or reboots.
 //!
-//! eSIM (removable eUICC) manager — wraps lpac to manage profiles on an
-//! eSTK.me / 5ber-style eUICC card in the physical SIM slot.
+//! What it manages: the profiles on a removable eUICC (eSTK.me, 5ber and the like) sitting in
+//! the physical SIM slot, through lpac.
 //!
-//! lpac lives under `/data/esim/` (Alpine musl build with the `qmi_qrtr` APDU
-//! driver compiled in, plus its shared-lib closure and a `statx` compat shim
-//! for the device's older musl — see scripts/esim/). It talks straight to the
-//! modem's QMI UIM service over QRTR, coexisting with the ZTE daemons.
+//! Where lpac comes from: `/data/esim/` holds an Alpine (musl) lpac built with the `qmi_qrtr`
+//! APDU backend, the shared libraries it needs, and a one-symbol `statx` shim because the
+//! firmware's musl is older (build recipe in scripts/esim/). lpac reaches the card through the
+//! modem's UIM service over QRTR, side by side with the stock daemons.
 //!
-//! The platform quirk (verified on-device): `profile enable` switches the CARD
-//! immediately, but the ZTE userspace only reads the SIM at daemon init — no
-//! runtime QMI/ubus poke makes it re-read. The switch path resyncs it without a
-//! full reboot: power-cycle the UIM session (modem re-reads), then restart just
-//! `zte_topsw_mdm` (userspace re-reads; nwinfo/data re-dial off its signal).
-//! This keeps the daemon sync barrier healthy and reattaches data in under a
-//! minute. If identity doesn't converge or the barrier breaks, it falls back to
-//! a reboot — at most one per 24 h (`AUTO_REBOOT_EVERY`); past that the job ends
-//! `identity_stuck` and the user restarts. APN auto-selects by the new profile's PLMN.
-//! Whether the card switched at all is read back from its own profile list,
-//! not taken from lpac's exit; a card that answers catBusy is tried again within
-//! `BUSY_TOTAL` (cancellable), then reported as needing a device restart (or reinsert).
-//! On success, superseded enable/disable notifications are removed and the
-//! switch's own are sent once data is back (rules above `plan_notifications`).
+//! Why a switch needs more than `profile enable`: the card changes profile at once, yet the
+//! stock userspace reads SIM identity only when its daemons start, and nothing over QMI or ubus
+//! makes it look again (checked on the device). So after the enable we
+//!   1. power-cycle the UIM session so the modem reads the card again, then
+//!   2. restart only `zte_topsw_mdm`, whose restart makes the rest of the stack (nwinfo, the
+//!      data call) follow on its own.
 //!
-//! Slow / network-touching operations (download, delete, notification
-//! processing, switch) run on a detached thread guarded by a single-slot job,
-//! mirroring the ShellCrash profile manager; the UI polls `/api/esim/job`.
+//! That keeps the daemon sync barrier intact and data is back within a minute. When the new
+//! identity never shows up, or the barrier breaks, the fallback is a reboot, capped at one per
+//! `AUTO_REBOOT_EVERY` (24 h); beyond the cap the job finishes as `identity_stuck` and the user
+//! restarts by hand. The APN follows the new profile's PLMN automatically.
+//!
+//! Success is judged by the card: its own profile list is read back, lpac's exit code is not
+//! trusted. A catBusy answer is retried for up to `BUSY_TOTAL` (the user may cancel), after
+//! which the job says a restart or a reinsert is needed. After a good switch the stale
+//! enable/disable notifications are dropped and the new ones are sent once data works (see
+//! `plan_notifications`).
+//!
+//! Anything slow or networked (download, delete, notifications, switch) runs on a detached
+//! thread behind a one-slot job, the same shape as the ShellCrash profile manager; clients poll
+//! `/api/esim/job`.
 
-use std::path::Path;
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{
+    path::Path,
+    process::{Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 
 use serde::Serialize;
 use serde_json::{json, Value};
 
-const LPAC_BIN: &str = "/data/esim/lpac";
+// The installed bundle (see scripts/esim/build-esim-bundle.sh).
 const LIB_DIR: &str = "/data/esim/lib";
-const COMPAT_SHIM: &str = "/data/esim/lib/libmusl-compat.so";
-const WAKE_LOCK: &str = "/sys/power/wake_lock";
-const WAKE_UNLOCK: &str = "/sys/power/wake_unlock";
+const LPAC_BIN: &str = "/data/esim/lpac";
+const COMPAT_SHIM: &str = "/data/esim/lib/libmusl-compat.so"; // LD_PRELOADed
+
+// Kernel wake lock held while an operation runs, so the SoC does not suspend mid-switch.
 const WAKE_TAG: &str = "esim_op";
+const WAKE_LOCK: &str = "/sys/power/wake_lock"; // write the tag to take it
+const WAKE_UNLOCK: &str = "/sys/power/wake_unlock"; // and here to drop it
 
-/// Quick card-local ops (chip info, profile list) — no network involved.
-const LPAC_TIMEOUT_FAST: Duration = Duration::from_secs(30);
-/// Ops that talk to SM-DP+ servers (download, notifications).
-const LPAC_TIMEOUT_NET: Duration = Duration::from_secs(240);
+/// Limit for lpac calls that stay on the card (chip info, list).
+const LPAC_TIMEOUT_FAST: Duration = Duration::from_secs(30); // half a minute
+/// Limit for lpac calls that reach an SM-DP+ (download, notifications): four minutes.
+const LPAC_TIMEOUT_NET: Duration = Duration::from_secs(4 * 60);
 
-const MAX_CODE_LEN: usize = 512;
+// Input bounds for the web routes.
 const MAX_NICKNAME_LEN: usize = 64;
-
+const MAX_CODE_LEN: usize = 512;
+// ---- reading the card back ----
 /// Reading the profile list back after `profile enable` (the card is the judge
 /// of whether the switch happened, not lpac's exit): a few tries, because a
 /// timed-out enable can leave the card answering slowly for a moment.
@@ -138,17 +149,17 @@ pub const SWITCH_DEADLINE: Duration = Duration::from_secs(
  *  State
  * -------------------------------------------------------------- */
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct JobState {
-    id: u64,
-    kind: String,   // "switch" | "download" | "delete" | "notifications"
-    status: String, // "idle" | "running" | "done" | "error"
-    message: String,
-    iccid: String,
-    started_unix: u64,
-    finished_unix: u64,
-    /// Set when the finished job scheduled a device reboot (switch).
-    rebooting: bool,
+    id: u64,            // bumps with every job started
+    kind: String,       // switch / download / delete / notifications
+    status: String,     // idle -> running -> done or error
+    message: String,    // human text for the UIs
+    iccid: String,      // the profile the job is about, if any
+    started_unix: u64,  // wall clock at start
+    finished_unix: u64, // 0 while running
+    /// A switch that ended by scheduling a reboot.
+    rebooting: bool, // the UIs show "restarting" instead of an error
     /// Machine-readable cause of an error, so the UIs need not parse
     /// `message`: "card_busy" (the card answered catBusy and the profile did
     /// not change — only a device restart or reinserting the card clears it),
@@ -165,6 +176,16 @@ pub struct JobState {
     deadline_s: u64,
     /// Enable tries so far (switch; > 1 = the card answered busy and was retried).
     attempts: u32,
+}
+
+impl JobState {
+    /// Before the first job: everything empty except the status word.
+    fn idle() -> Self {
+        Self {
+            status: "idle".to_string(),
+            ..Self::default()
+        }
+    }
 }
 
 pub struct Esim {
@@ -276,19 +297,7 @@ impl Esim {
                 inner: host,
                 lock: Mutex::new(()),
             }),
-            job: Arc::new(Mutex::new(JobState {
-                id: 0,
-                kind: String::new(),
-                status: "idle".into(),
-                message: String::new(),
-                iccid: String::new(),
-                started_unix: 0,
-                finished_unix: 0,
-                rebooting: false,
-                reason: String::new(),
-                deadline_s: 0,
-                attempts: 0,
-            })),
+            job: Arc::new(Mutex::new(JobState::idle())),
             running: Arc::new(AtomicBool::new(false)),
             cancel: Arc::new(AtomicBool::new(false)),
             list: Arc::new(Mutex::new(ListCache::default())),
@@ -454,16 +463,19 @@ impl Host for RealHost {
  *  lpac invocation
  * -------------------------------------------------------------- */
 
+/// The bundle is usable when both the binary and its library directory are present.
 fn installed() -> bool {
-    Path::new(LPAC_BIN).exists() && Path::new(LIB_DIR).is_dir()
+    let bin = Path::new(LPAC_BIN);
+    let libs = Path::new(LIB_DIR);
+    bin.exists() && libs.is_dir()
 }
 
-/// Run lpac and return the `data` field of its final `{"type":"lpa"}` line.
-/// lpac emits one JSON object per stdout line: progress lines first, then the
-/// lpa result line with code / message / data.
-fn run_lpac(args: &[&str], timeout: Duration) -> Result<Value, String> {
-    if !installed() {
-        return Err("lpac not installed under /data/esim".into());
+/// One lpac call. lpac prints a JSON object per line (progress records, then one
+/// `{"type":"lpa"}` result); the answer is that result's `data`.
+fn run_lpac(args: &[&str], deadline: Duration) -> Result<Value, String> {
+    let bundle_ready = installed();
+    if !bundle_ready {
+        return Err(String::from("lpac not installed under /data/esim"));
     }
     // The channel lpac is about to get (the lowest free one). If lpac is
     // killed, the modem keeps that channel open for good (measured 10-18: not
@@ -471,16 +483,18 @@ fn run_lpac(args: &[&str], timeout: Duration) -> Result<Value, String> {
     // watchdog closes it after the kill.
     let chan = free_channel();
     let ran = run_group(
-        Command::new(LPAC_BIN)
-            .args(args)
-            .env("LD_LIBRARY_PATH", LIB_DIR)
-            .env("LD_PRELOAD", COMPAT_SHIM)
-            .env("LPAC_APDU", "qmi_qrtr")
-            .env("LPAC_HTTP", "curl"),
-        timeout,
+        Command::new(LPAC_BIN).args(args).envs([
+            // APDUs over QRTR to the modem; HTTP to the SM-DP+ through curl.
+            ("LPAC_APDU", "qmi_qrtr"),
+            ("LPAC_HTTP", "curl"),
+            // The bundle's own libraries, plus the statx shim.
+            ("LD_LIBRARY_PATH", LIB_DIR),
+            ("LD_PRELOAD", COMPAT_SHIM),
+        ]),
+        deadline,
     )
-    .map_err(|e| format!("spawn lpac failed: {e}"))?;
-    lpac_result(ran, timeout, || {
+    .map_err(|err| format!("spawn lpac failed: {err}"))?;
+    lpac_result(ran, deadline, || {
         if let Some(c) = chan {
             run_cmd(&format!("{QMI_PROBE} close {c} 2>/dev/null"), PROBE_TIMEOUT);
         }
@@ -552,44 +566,40 @@ fn channel_of(probe_out: &str) -> Option<u8> {
 /// text. `Err("")` = no result line and lpac did not exit cleanly (the caller
 /// words that, it knows the exit status).
 fn parse_lpac_output(stdout: &str, exited_ok: bool) -> Result<Value, String> {
-    for line in stdout.lines() {
-        let v: Value = match serde_json::from_str(line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        if v["type"].as_str() != Some("lpa") {
-            continue;
-        }
-        let payload = &v["payload"];
-        let code = payload["code"].as_i64().unwrap_or(-1);
-        if code == 0 {
-            return Ok(payload["data"].clone());
-        }
-        let msg = payload["message"].as_str().unwrap_or("unknown");
-        let detail = payload["data"].as_str().unwrap_or("");
-        return Err(if detail.is_empty() {
-            format!("lpac: {msg} (code {code})")
+    let result = stdout
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find(|rec| rec["type"] == "lpa");
+    let Some(rec) = result else {
+        // No result record: say so only if lpac at least exited cleanly.
+        return Err(if exited_ok {
+            "lpac produced no result line".to_string()
         } else {
-            format!("lpac: {msg}: {detail} (code {code})")
+            String::new()
         });
+    };
+    let body = &rec["payload"];
+    let code = body["code"].as_i64().unwrap_or(-1);
+    if code == 0 {
+        return Ok(body["data"].clone());
     }
-    if !exited_ok {
-        return Err(String::new());
-    }
-    Err("lpac produced no result line".into())
+    let what = body["message"].as_str().unwrap_or("unknown");
+    Err(match body["data"].as_str().filter(|d| !d.is_empty()) {
+        Some(extra) => format!("lpac: {what}: {extra} (code {code})"),
+        None => format!("lpac: {what} (code {code})"),
+    })
 }
 
 /* -------------------------------------------------------------- *
  *  ZTE stack resync (the no-reboot switch path)
  * -------------------------------------------------------------- */
 
-/// QMI UIM power-cycle helper, deployed alongside lpac. Used to make the modem
-/// re-read the card after a profile switch (see qmi_uim_probe.c `simreset`).
+/// Small QMI UIM client shipped in the bundle; its `simreset` makes the modem read
+/// the card again after an enable, and `open`/`close` manage logical channels.
 const QMI_PROBE: &str = "/data/esim/qmi_uim_probe";
-/// The one daemon.conf daemon we restart on a switch. It caches the SIM
-/// identity; restarting it makes the ZTE userspace re-read, and nwinfo/data
-/// re-dial off its signal on their own — verified on-device to keep the daemon
-/// sync barrier healthy. Restarting the whole set is unnecessary.
+/// The only stock daemon a switch restarts: it holds the cached SIM identity, and the
+/// rest of the stack (nwinfo, the data call) follows its restart by itself. Tested on
+/// the device: the sync barrier stays healthy, so the full daemon set is left alone.
 const MDM_INITD: &str = "/etc/init.d/zte_topsw_mdm";
 
 /* Deadlines for the side commands (resilience audit R1). Each is killed as a process group past
@@ -729,60 +739,64 @@ fn kill_group(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
-/// (imsi, iccid) the ZTE modem stack currently believes is active — its cached
-/// identity, which lags the card's enabled profile until the stack re-reads.
-/// The ZTE `sim_iccid` carries a trailing BCD pad nibble ("…072F") and reads
-/// empty for a beat right after a re-read, so callers lean on the IMSI.
+/// The identity the stock modem stack has cached, as (imsi, iccid). It trails the card
+/// until the stack reads it again. `sim_iccid` ends in a BCD filler nibble ("...072F")
+/// and is briefly empty after a re-read, which is why callers go by the IMSI first.
 fn ubus_sim_identity(h: &dyn Host) -> (String, String) {
-    let v = serde_json::from_str::<Value>(&h.sh(
+    let raw = h.sh(
         "ubus -t 5 call zwrt_zte_mdm.api get_sim_info '{}'",
         UBUS_TIMEOUT,
-    ))
-    .unwrap_or(Value::Null);
-    let imsi = v["sim_imsi"].as_str().unwrap_or("").to_string();
-    let iccid = v["sim_iccid"].as_str().unwrap_or("").to_string();
-    (imsi, iccid)
+    );
+    let info: Value = serde_json::from_str(&raw).unwrap_or_default();
+    let field = |k: &str| info[k].as_str().map(str::to_owned).unwrap_or_default();
+    (field("sim_imsi"), field("sim_iccid"))
 }
 
-/// Has the ZTE stack converged onto the switched-in profile? Primary signal is
-/// the IMSI changing away from the pre-switch value (IMSI always populates);
-/// a normalized ICCID match is accepted too once `sim_iccid` fills in.
+/// True once the stock stack is on the profile we switched to: the barrier is healthy
+/// and either the IMSI moved off the one read before the switch, or the ICCID (once it
+/// is filled in) matches the target.
 fn switch_converged(h: &dyn Host, target_iccid: &str, old_imsi: &str) -> bool {
     if !ubus_sync_ok(h) {
         return false;
     }
-    let (imsi, iccid) = ubus_sim_identity(h);
-    // An empty pre-switch IMSI read would make any IMSI look "changed": then
-    // only the ICCID counts.
-    let imsi_changed = !imsi.is_empty() && !old_imsi.is_empty() && imsi != old_imsi;
-    let iccid_matches = iccid_eq(&iccid, target_iccid);
-    imsi_changed || iccid_matches
+    let (now_imsi, now_iccid) = ubus_sim_identity(h);
+    // With no IMSI from before the switch, "changed" means nothing; fall back to the ICCID.
+    let moved = match (now_imsi.is_empty(), old_imsi.is_empty()) {
+        (false, false) => now_imsi != old_imsi,
+        _ => false,
+    };
+    moved || iccid_eq(&now_iccid, target_iccid)
 }
 
-/// Is the ZTE daemon sync barrier healthy? A broken barrier after the mdm
-/// restart means the stack is wedged and we must fall back to a reboot.
+/// The stock daemons' sync barrier. Broken after the mdm restart = the stack is stuck
+/// and only a reboot recovers it.
 fn ubus_sync_ok(h: &dyn Host) -> bool {
-    serde_json::from_str::<Value>(&h.sh(
+    let raw = h.sh(
         "ubus -t 5 call zwrt_topsw_daemon.sync get_sync_info '{}'",
         UBUS_TIMEOUT,
-    ))
-    .ok()
-    .and_then(|v| v["noSyncModuleName"].as_str().map(|s| s == "sync success"))
-    .unwrap_or(false)
+    );
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(info) => info["noSyncModuleName"] == "sync success",
+        Err(_) => false,
+    }
 }
 
 /* -------------------------------------------------------------- *
  *  Checks and the card's answers (the routes are `impl Esim` below)
  * -------------------------------------------------------------- */
 
+/// An ICCID as the routes accept it: 18 to 20 decimal digits.
 fn valid_iccid(s: &str) -> bool {
-    (18..=20).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit())
+    let len_ok = matches!(s.len(), 18..=20);
+    len_ok && s.chars().all(|c| c.is_ascii_digit())
 }
 
+/// A request field as trimmed, non-empty text.
 fn body_str<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
-    v[key].as_str().map(str::trim).filter(|s| !s.is_empty())
+    let text = v.get(key)?.as_str()?.trim();
+    (!text.is_empty()).then_some(text)
 }
-
+// ---- the card's answers ----
 /// lpac 2.3.0 maps enableResult 1–4 to names and everything else (5 = catBusy,
 /// 127 = undefinedError) to "unknown"; newer builds may spell it out.
 fn is_card_busy(err: &str) -> bool {
@@ -1038,70 +1052,85 @@ fn send_switch_notifications(
         eprintln!("esim: data dropped after the switch; notifications {seqs:?} left pending");
         return;
     }
-    if running
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-        .is_err()
-    {
+    if claim_slot(job, running, "notifications", "").is_none() {
         return;
-    }
-    {
-        let mut j = job.lock().unwrap();
-        let next = j.id.wrapping_add(1);
-        *j = JobState {
-            id: next,
-            kind: "notifications".into(),
-            status: "running".into(),
-            message: String::new(),
-            iccid: String::new(),
-            started_unix: now_unix(),
-            finished_unix: 0,
-            rebooting: false,
-            reason: String::new(),
-            deadline_s: 0,
-            attempts: 0,
-        };
     }
     let strs: Vec<String> = seqs.iter().map(i64::to_string).collect();
     let mut args = vec!["notification", "process", "-r"];
     args.extend(strs.iter().map(String::as_str));
     let n = seqs.len();
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let res = contained(|| {
         h.lpac(&args, LPAC_TIMEOUT_NOTIF)
             .map(|_| format!("sent {n} notification(s) for the switch"))
-    }))
-    .unwrap_or_else(|_| Err("internal panic".into()));
+    });
     if let Err(e) = &res {
         eprintln!("esim: sending switch notifications {strs:?} failed: {e}");
     }
     finish_job(job, running, res, false);
 }
 
-/* -------------------------------------------------------------- *
- *  Routes
- * -------------------------------------------------------------- */
+// ---- route plumbing ----
+
+type Reply = (u16, Value);
+
+fn refuse(status: u16, error: &str) -> Reply {
+    (status, json!({"ok": false, "error": error}))
+}
+
+/// 409 for any route that needs the job slot while a job holds it.
+fn busy_reply() -> Reply {
+    refuse(409, "operation in progress")
+}
+
+/// 200 for a route that handed its work to a background job.
+fn started_reply(job_id: u64) -> Reply {
+    (
+        200,
+        json!({"ok": true, "data": {"job_id": job_id, "status": "running"}}),
+    )
+}
+
+fn json_body(body: &[u8]) -> Result<Value, Reply> {
+    serde_json::from_slice(body).map_err(|_| refuse(400, "invalid JSON"))
+}
+
+/// The request's `iccid`, which must look like one.
+fn iccid_of(v: &Value) -> Result<String, Reply> {
+    match body_str(v, "iccid") {
+        Some(id) if valid_iccid(id) => Ok(id.to_owned()),
+        _ => Err(refuse(400, "invalid iccid")),
+    }
+}
+
+/// Run a job step, turning a panic into an ordinary error so the slot is always freed.
+fn contained<T>(step: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(step))
+        .unwrap_or_else(|_| Err(String::from("internal panic")))
+}
+
+// ---- routes ----
 
 impl Esim {
-    /// GET /api/esim/status — chip identity + storage. `installed:false` means the
-    /// lpac bundle isn't deployed (UI shows setup instructions).
+    /// GET /api/esim/status: who the chip is and how much room it has. With no
+    /// bundle on the device the answer is `installed: false` and the UIs explain setup.
     pub fn status(&self) -> (u16, Value) {
         if !self.host.installed() {
             return (200, json!({"ok": true, "data": {"installed": false}}));
         }
         match self.host.lpac(&["chip", "info"], LPAC_TIMEOUT_FAST) {
-            Ok(d) => {
-                let info2 = &d["EUICCInfo2"];
-                (
-                    200,
-                    json!({"ok": true, "data": {
-                        "installed": true,
-                        "eid": d["eidValue"],
-                        "default_smdp": d["EuiccConfiguredAddresses"]["defaultDpAddress"],
-                        "root_smds": d["EuiccConfiguredAddresses"]["rootDsAddress"],
-                        "sgp22_version": info2["profileVersion"],
-                        "firmware_version": info2["euiccFirmwareVer"],
-                        "free_nvm": info2["extCardResource"]["freeNonVolatileMemory"],
-                    }}),
-                )
+            Ok(chip) => {
+                let addrs = &chip["EuiccConfiguredAddresses"];
+                let info = &chip["EUICCInfo2"];
+                let data = json!({
+                    "installed": true,
+                    "eid": chip["eidValue"],
+                    "default_smdp": addrs["defaultDpAddress"],
+                    "root_smds": addrs["rootDsAddress"],
+                    "sgp22_version": info["profileVersion"],
+                    "firmware_version": info["euiccFirmwareVer"],
+                    "free_nvm": info["extCardResource"]["freeNonVolatileMemory"],
+                });
+                (200, json!({"ok": true, "data": data}))
             }
             Err(e) => (502, json!({"ok": false, "error": e})),
         }
@@ -1114,8 +1143,8 @@ impl Esim {
                 json!({"ok": true, "data": {"installed": false, "profiles": []}}),
             );
         }
-        // While a job runs the card may be mid-operation (or the device about to
-        // reboot); skip the APDU round-trip and let the UI keep its last list.
+        // Under a job the card can be mid-change and the device may be about to restart:
+        // answer "busy" without touching the card; the UIs keep what they showed.
         if self.running.load(Ordering::Relaxed) {
             return (
                 200,
@@ -1190,10 +1219,10 @@ impl Esim {
         else {
             return (200, json!({"ok": true, "data": Value::Null}));
         };
-        match res {
-            Ok(d) => (200, json!({"ok": true, "data": d})),
-            Err(e) => (502, json!({"ok": false, "error": e})),
-        }
+        res.map_or_else(
+            |why| (502, json!({"ok": false, "error": why})),
+            |list| (200, json!({"ok": true, "data": list})),
+        )
     }
     /// An eSIM job (switch, download, …) is running: the ICCID may flip mid-way.
     pub fn busy(&self) -> bool {
@@ -1206,19 +1235,15 @@ impl Esim {
         if !self.host.installed() || !self.host.exists(QMI_PROBE) {
             return ChannelCheck::Unknown;
         }
-        if self
+        let slot = self
             .running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-            .is_err()
-        {
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed);
+        if slot.is_err() {
             return ChannelCheck::Busy;
         }
-        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // bounded: a hung probe would keep the job slot (killed past PROBE_TIMEOUT).
-            self.host
-                .sh(&format!("{QMI_PROBE} open 2>&1"), PROBE_TIMEOUT)
-        }))
-        .unwrap_or_default();
+        // PROBE_TIMEOUT kills a hung probe, so the slot cannot stay taken.
+        let probe = format!("{QMI_PROBE} open 2>&1");
+        let out = contained(|| Ok(self.host.sh(&probe, PROBE_TIMEOUT))).unwrap_or_default();
         self.running.store(false, Ordering::SeqCst);
         channel_check_of(&out)
     }
@@ -1243,33 +1268,37 @@ impl Esim {
         self.cancel.store(true, Ordering::SeqCst);
         (200, json!({"ok": true}))
     }
-    /// POST /api/esim/nickname — { iccid, nickname } (empty nickname clears).
-    /// Synchronous: it's a single local APDU exchange.
+    /// POST /api/esim/nickname with `{iccid, nickname}`; an empty nickname removes it.
+    /// Answered inline, since it is one quick exchange with the card.
     pub fn nickname(&self, body: &[u8]) -> (u16, Value) {
-        if self.running.load(Ordering::Relaxed) {
-            return (409, json!({"ok": false, "error": "operation in progress"}));
+        if self.busy() {
+            return busy_reply();
         }
-        let v: Value = match serde_json::from_slice(body) {
-            Ok(v) => v,
-            Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
+        let v = match json_body(body) {
+            Ok(parsed) => parsed,
+            Err(reply) => return reply,
         };
-        let iccid = match body_str(&v, "iccid") {
-            Some(i) if valid_iccid(i) => i.to_string(),
-            _ => return (400, json!({"ok": false, "error": "invalid iccid"})),
+        let iccid = match iccid_of(&v) {
+            Ok(id) => id,
+            Err(reply) => return reply,
         };
-        let nickname = v["nickname"].as_str().unwrap_or("").trim().to_string();
+        let nickname = v
+            .get("nickname")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
         if nickname.len() > MAX_NICKNAME_LEN {
-            return (400, json!({"ok": false, "error": "nickname too long"}));
+            return refuse(400, "nickname too long");
         }
         match self.host.lpac(
-            &["profile", "nickname", &iccid, &nickname],
+            &["profile", "nickname", &iccid, nickname],
             LPAC_TIMEOUT_FAST,
         ) {
             Ok(_) => (200, json!({"ok": true})),
             Err(e) => (502, json!({"ok": false, "error": e})),
         }
     }
-    /// POST /api/esim/switch — { iccid }. Enables the profile on the card, then
+    /// POST /api/esim/switch with `{iccid}`. Enables the profile on the card, then
     /// moves the ZTE stack onto it (see module docs), rebooting only if that
     /// doesn't converge. The UI warns about the outage before calling.
     ///
@@ -1286,17 +1315,16 @@ impl Esim {
     /// `interrupt` runs first on the switch's thread: the caller's D40 `op.interrupt` (only for a
     /// user's switch; the switch and the resync after it do not go through the write layer).
     pub fn switch(&self, body: &[u8], interrupt: Box<dyn FnOnce() + Send>) -> (u16, Value) {
-        let v: Value = match serde_json::from_slice(body) {
-            Ok(v) => v,
-            Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
+        let v = match json_body(body) {
+            Ok(parsed) => parsed,
+            Err(reply) => return reply,
         };
-        let iccid = match body_str(&v, "iccid") {
-            Some(i) if valid_iccid(i) => i.to_string(),
-            _ => return (400, json!({"ok": false, "error": "invalid iccid"})),
+        let iccid = match iccid_of(&v) {
+            Ok(id) => id,
+            Err(reply) => return reply,
         };
-        let job_id = match self.try_start_job("switch", &iccid) {
-            Some(j) => j,
-            None => return (409, json!({"ok": false, "error": "operation in progress"})),
+        let Some(job_id) = self.try_start_job("switch", &iccid) else {
+            return busy_reply();
         };
         self.cancel.store(false, Ordering::SeqCst);
         self.job.lock().unwrap().deadline_s = SWITCH_DEADLINE.as_secs();
@@ -1316,8 +1344,7 @@ impl Esim {
                 h.switch_event(SwitchEvent::Leaving {
                     target: iccid.clone(),
                 });
-                // Record the pre-switch identity so we can detect when the ZTE stack has
-                // actually moved off it (the robust convergence signal).
+                // The IMSI the stock stack reports now; the switch has landed once it changes.
                 let (old_imsi, _) = ubus_sim_identity(h);
                 // Dual-SIM (DSDS, the global device): the eSIM card sits in slot 1 (the
                 // removable slot). When the modem has slot 1 switched off or data on the
@@ -1339,11 +1366,10 @@ impl Esim {
                 loop {
                     attempt += 1;
                     job.lock().unwrap().attempts = attempt;
-                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let res = contained(|| {
                         h.lpac(&["profile", "enable", &iccid], LPAC_TIMEOUT_FAST)
                             .map(|_| ())
-                    }))
-                    .unwrap_or_else(|_| Err("internal panic".into()));
+                    });
                     let card_t = h.now();
                     let readback = read_profiles_retry(h);
                     let card = readback
@@ -1377,8 +1403,7 @@ impl Esim {
                             ),
                             _ => ("not_switched", msg),
                         };
-                        finish_job_with(&job, &running, Err(msg), false, reason);
-                        return;
+                        return finish_job_with(&job, &running, Err(msg), false, reason);
                     }
                     job.lock().unwrap().message = format!(
                         "card busy — retrying (try {} in {} s)",
@@ -1410,7 +1435,6 @@ impl Esim {
                 }
                 job.lock().unwrap().message = "switching".into();
                 h.switch_event(SwitchEvent::CardSwitched);
-
                 // Card-local and quick, so done on both paths below (the reboot one
                 // can't come back to it).
                 let to_send = prune_notifications(h, seq_before);
@@ -1434,15 +1458,9 @@ impl Esim {
                     return;
                 }
 
-                // The card is now on the new profile, but the ZTE userspace still holds
-                // the old identity — it only re-reads the SIM at daemon init, not on any
-                // runtime QMI indication. The fast path avoids a full reboot: (1) power-
-                // cycle the UIM session so the *modem* re-reads the new profile, then
-                // (2) restart just zte_topsw_mdm so the *userspace* re-reads; nwinfo and
-                // data re-dial off its signal on their own. Verified on-device to keep
-                // the daemon sync barrier healthy and reattach data in well under a
-                // minute. If identity doesn't converge or the barrier breaks, fall back
-                // to the always-safe reboot.
+                // Step 2, the stock stack (module docs): UIM power cycle so the modem reads
+                // the card again, then restart only zte_topsw_mdm so userspace does too; the
+                // data call follows by itself. A reboot remains the fallback below.
                 if h.exists(QMI_PROBE) {
                     let _ = h.sh(&format!("{QMI_PROBE} simreset"), SIMRESET_TIMEOUT);
                 }
@@ -1515,15 +1533,11 @@ impl Esim {
                     eprintln!(
                         "esim: switch {iccid}: card {card_s} s, identity not back after {ident_s} s: rebooting"
                     );
-                    // Fast path didn't take; reboot recovers cleanly. Keep the wake lock
-                    // held so the device can't doze before it reboots.
+                    // The resync did not take: a reboot settles it. The wake lock stays taken
+                    // on purpose, the device must not suspend first.
                     h.note_auto_reboot(now);
-                    finish_job(
-                        &job,
-                        &running,
-                        Ok("switched — rebooting to finish".into()),
-                        true,
-                    );
+                    let done = String::from("switched — rebooting to finish");
+                    finish_job(&job, &running, Ok(done), true);
                     h.reboot();
                     return;
                 }
@@ -1574,48 +1588,35 @@ impl Esim {
             };
             h.switch_event(SwitchEvent::Ended { reason, rebooting });
         });
-        (
-            200,
-            json!({"ok": true, "data": {"job_id": job_id, "status": "running"}}),
-        )
+        started_reply(job_id)
     }
-    /// POST /api/esim/download — { code, confirmation_code? }. Downloads a new
-    /// profile via the activation code (LPA:1$…), then delivers the install
-    /// notification. Does NOT enable it — switching stays an explicit step.
+    /// POST /api/esim/download with `{code, confirmation_code?}`: fetch a profile with its
+    /// activation code (`LPA:1$...`) and send the install notification. The new profile is
+    /// left disabled; switching to it is a separate request.
     pub fn download(&self, body: &[u8]) -> (u16, Value) {
-        let v: Value = match serde_json::from_slice(body) {
-            Ok(v) => v,
-            Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
+        let v = match json_body(body) {
+            Ok(parsed) => parsed,
+            Err(reply) => return reply,
         };
-        let code = match body_str(&v, "code") {
-            Some(c) => c.to_string(),
-            None => {
-                return (
-                    400,
-                    json!({"ok": false, "error": "missing activation code"}),
-                );
-            }
+        // Both codes go on lpac's command line: bounded, no control characters.
+        let acceptable = |c: &str| c.len() <= MAX_CODE_LEN && !c.chars().any(char::is_control);
+        let Some(code) = body_str(&v, "code").map(str::to_owned) else {
+            return refuse(400, "missing activation code");
         };
-        if code.len() > MAX_CODE_LEN || code.chars().any(|c| c.is_control()) {
-            return (
-                400,
-                json!({"ok": false, "error": "invalid activation code"}),
-            );
+        if !acceptable(&code) {
+            return refuse(400, "invalid activation code");
         }
-        let conf = v["confirmation_code"]
-            .as_str()
+        let conf: String = v
+            .get("confirmation_code")
+            .and_then(Value::as_str)
             .unwrap_or("")
             .trim()
-            .to_string();
-        if conf.len() > MAX_CODE_LEN || conf.chars().any(|c| c.is_control()) {
-            return (
-                400,
-                json!({"ok": false, "error": "invalid confirmation code"}),
-            );
+            .into();
+        if !acceptable(&conf) {
+            return refuse(400, "invalid confirmation code");
         }
-        let job_id = match self.try_start_job("download", "") {
-            Some(j) => j,
-            None => return (409, json!({"ok": false, "error": "operation in progress"})),
+        let Some(job_id) = self.try_start_job("download", "") else {
+            return busy_reply();
         };
         let job = Arc::clone(&self.job);
         let running = Arc::clone(&self.running);
@@ -1623,69 +1624,56 @@ impl Esim {
         std::thread::spawn(move || {
             let h: &dyn Host = &*h;
             h.wake(true);
-            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut args = vec!["profile", "download", "-a", code.as_str()];
+            let res = contained(|| {
+                let mut args = vec!["profile", "download", "-a", &code];
                 if !conf.is_empty() {
-                    args.push("-c");
-                    args.push(conf.as_str());
+                    args.extend(["-c", &conf]);
                 }
                 h.lpac(&args, LPAC_TIMEOUT_NET)?;
-                // Deliver the install notification (spec-required). Best effort:
-                // the profile is already on the card even if this leg fails.
+                // SGP.22 wants the install notification sent. If that part fails the
+                // download still stands, so its result is ignored.
                 // Superseded enable/disable ones go first, so `-a` doesn't send
                 // stale state changes late.
                 let _ = prune_notifications(h, None);
                 let _ = h.lpac(&["notification", "process", "-a", "-r"], LPAC_TIMEOUT_NET);
                 Ok("profile downloaded".to_string())
-            }))
-            .unwrap_or_else(|_| Err("internal panic".into()));
+            });
             h.wake(false);
             finish_job(&job, &running, res, false);
         });
-        (
-            200,
-            json!({"ok": true, "data": {"job_id": job_id, "status": "running"}}),
-        )
+        started_reply(job_id)
     }
-    /// POST /api/esim/delete — { iccid }. Refuses to delete the enabled profile.
+    /// POST /api/esim/delete with `{iccid}`; the enabled profile is never deleted.
     pub fn delete(&self, body: &[u8]) -> (u16, Value) {
-        let v: Value = match serde_json::from_slice(body) {
-            Ok(v) => v,
-            Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
+        let v = match json_body(body) {
+            Ok(parsed) => parsed,
+            Err(reply) => return reply,
         };
-        let iccid = match body_str(&v, "iccid") {
-            Some(i) if valid_iccid(i) => i.to_string(),
-            _ => return (400, json!({"ok": false, "error": "invalid iccid"})),
+        let iccid = match iccid_of(&v) {
+            Ok(id) => id,
+            Err(reply) => return reply,
         };
-        // Check profile state up-front (also serializes against concurrent jobs).
-        if self.running.load(Ordering::Relaxed) {
-            return (409, json!({"ok": false, "error": "operation in progress"}));
+        // Look the profile up first; also refuses while another job holds the card.
+        if self.busy() {
+            return busy_reply();
         }
-        match self.host.lpac(&["profile", "list"], LPAC_TIMEOUT_FAST) {
-            Ok(list) => {
-                let found = list
-                    .as_array()
-                    .and_then(|a| {
-                        a.iter()
-                            .find(|p| p["iccid"].as_str() == Some(iccid.as_str()))
-                    })
-                    .cloned();
-                match found {
-                    None => return (404, json!({"ok": false, "error": "profile not found"})),
-                    Some(p) if p["profileState"].as_str() == Some("enabled") => {
-                        return (
-                            400,
-                            json!({"ok": false, "error": "cannot delete the active profile — switch away first"}),
-                        );
-                    }
-                    Some(_) => {}
-                }
-            }
-            Err(e) => return (502, json!({"ok": false, "error": e})),
+        let list = match self.host.lpac(&["profile", "list"], LPAC_TIMEOUT_FAST) {
+            Ok(list) => list,
+            Err(why) => return (502, json!({"ok": false, "error": why})),
+        };
+        let entry = list
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|p| p["iccid"] == iccid.as_str());
+        let Some(entry) = entry else {
+            return refuse(404, "profile not found");
+        };
+        if entry["profileState"] == "enabled" {
+            return refuse(400, "this profile is in use: switch to another one, then delete it");
         }
-        let job_id = match self.try_start_job("delete", &iccid) {
-            Some(j) => j,
-            None => return (409, json!({"ok": false, "error": "operation in progress"})),
+        let Some(job_id) = self.try_start_job("delete", &iccid) else {
+            return busy_reply();
         };
         let job = Arc::clone(&self.job);
         let running = Arc::clone(&self.running);
@@ -1693,44 +1681,35 @@ impl Esim {
         std::thread::spawn(move || {
             let h: &dyn Host = &*h;
             h.wake(true);
-            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let res = contained(|| {
                 h.lpac(&["profile", "delete", &iccid], LPAC_TIMEOUT_FAST)?;
                 let _ = prune_notifications(h, None);
                 let _ = h.lpac(&["notification", "process", "-a", "-r"], LPAC_TIMEOUT_NET);
                 Ok("profile deleted".to_string())
-            }))
-            .unwrap_or_else(|_| Err("internal panic".into()));
+            });
             h.wake(false);
             finish_job(&job, &running, res, false);
         });
-        (
-            200,
-            json!({"ok": true, "data": {"job_id": job_id, "status": "running"}}),
-        )
+        started_reply(job_id)
     }
-    /// POST /api/esim/notifications/process — deliver all pending notifications to
-    /// their SM-DP+ servers and remove them from the card.
+    /// POST /api/esim/notifications/process: send every pending notification to its
+    /// SM-DP+ and clear it from the card.
     pub fn notifications_process(&self, _body: &[u8]) -> (u16, Value) {
-        let job_id = match self.try_start_job("notifications", "") {
-            Some(j) => j,
-            None => return (409, json!({"ok": false, "error": "operation in progress"})),
+        let Some(job_id) = self.try_start_job("notifications", "") else {
+            return busy_reply();
         };
         let job = Arc::clone(&self.job);
         let running = Arc::clone(&self.running);
         let h = Arc::clone(&self.host);
         std::thread::spawn(move || {
             let h: &dyn Host = &*h;
-            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let res = contained(|| {
                 h.lpac(&["notification", "process", "-a", "-r"], LPAC_TIMEOUT_NET)
                     .map(|_| "notifications processed".to_string())
-            }))
-            .unwrap_or_else(|_| Err("internal panic".into()));
+            });
             finish_job(&job, &running, res, false);
         });
-        (
-            200,
-            json!({"ok": true, "data": {"job_id": job_id, "status": "running"}}),
-        )
+        started_reply(job_id)
     }
 }
 
@@ -1740,72 +1719,62 @@ impl Esim {
 
 impl Esim {
     fn try_start_job(&self, kind: &str, iccid: &str) -> Option<u64> {
-        if self
-            .running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-            .is_err()
-        {
-            return None;
-        }
-        let mut j = self.job.lock().unwrap();
-        let next = j.id.wrapping_add(1);
-        *j = JobState {
-            id: next,
-            kind: kind.to_string(),
-            status: "running".into(),
-            message: String::new(),
-            iccid: iccid.to_string(),
-            started_unix: now_unix(),
-            finished_unix: 0,
-            rebooting: false,
-            reason: String::new(),
-            deadline_s: 0,
-            attempts: 0,
-        };
-        Some(next)
+        claim_slot(&self.job, &self.running, kind, iccid)
     }
 }
 
-fn finish_job(
-    job: &Arc<Mutex<JobState>>,
-    running: &Arc<AtomicBool>,
-    res: Result<String, String>,
-    rebooting: bool,
-) {
-    finish_job_with(job, running, res, rebooting, "");
+/// Take the single job slot for `kind`, resetting the job record; `None` when another
+/// job holds it. Returns the new job id.
+fn claim_slot(job: &Mutex<JobState>, running: &AtomicBool, kind: &str, iccid: &str) -> Option<u64> {
+    let free = running.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed);
+    if free.is_err() {
+        return None;
+    }
+    let mut state = job.lock().unwrap();
+    let id = state.id.wrapping_add(1);
+    *state = JobState {
+        id,
+        kind: kind.to_owned(),
+        iccid: iccid.to_owned(),
+        status: "running".to_owned(),
+        started_unix: now_unix(),
+        ..JobState::default()
+    };
+    Some(id)
 }
 
+/// End the current job with no machine-readable reason.
+fn finish_job(
+    job: &Mutex<JobState>,
+    running: &AtomicBool,
+    outcome: Result<String, String>,
+    reboots: bool,
+) {
+    finish_job_with(job, running, outcome, reboots, "");
+}
+
+/// End the current job: record the outcome, then free the slot.
 fn finish_job_with(
-    job: &Arc<Mutex<JobState>>,
-    running: &Arc<AtomicBool>,
-    res: Result<String, String>,
-    rebooting: bool,
+    job: &Mutex<JobState>,
+    running: &AtomicBool,
+    outcome: Result<String, String>,
+    reboots: bool,
     reason: &str,
 ) {
-    {
-        let mut j = job.lock().unwrap();
-        match res {
-            Ok(m) => {
-                j.status = "done".into();
-                j.message = m;
-            }
-            Err(e) => {
-                j.status = "error".into();
-                j.message = e;
-            }
-        }
-        j.rebooting = rebooting;
-        j.reason = reason.to_string();
-        j.finished_unix = now_unix();
-    }
+    let mut state = job.lock().unwrap();
+    state.status = if outcome.is_ok() { "done" } else { "error" }.to_owned();
+    state.message = outcome.unwrap_or_else(|why| why);
+    state.rebooting = reboots;
+    state.reason = reason.to_owned();
+    state.finished_unix = now_unix();
+    drop(state); // the record is complete before the slot opens
     running.store(false, Ordering::Relaxed);
 }
 
+/// Seconds since the epoch (device clock; 0 if it is before 1970).
 fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    let since = SystemTime::now().duration_since(UNIX_EPOCH);
+    since.map_or(0, |d| d.as_secs())
 }
 
 #[cfg(test)]

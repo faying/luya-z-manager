@@ -366,7 +366,6 @@
     { "自动息屏", "Screen off", NULL },
     { "自动模式", "Auto mode", NULL },
     { "自动选择", "Chosen automatically", NULL },
-    { "自动（最佳服务器）", "Auto (best server)", NULL },
     { "节点（和本机之间）", "Peers (link to this device)", NULL },
     { "节能模式", "Power saving", NULL },
     { "蜂窝", "Cellular", NULL },

@@ -1,4 +1,4 @@
-//! Netwatch, deep diagnosis and the APN SIM-change monitor in u60d (Phase 4 step 9b), with the
+//! Netwatch, deep diagnosis and the APN SIM-change monitor in u60d, with the
 //! search/register, speed test and eSIM routes they share a gate or a file with. They move as one
 //! group (the agent's `TOGETHER`): `/data/signal-log` has one writer (netwatch's minutes, the
 //! diagnosis' events), the diagnosis gate (D10) must live where search/register and the speed test
@@ -23,8 +23,10 @@ use luyaz_netwatch::{ReadError, Watch, record};
 use luyaz_policy::apn_pick as ap;
 use serde_json::{Value, json};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use super::{Compat, reply};
@@ -604,10 +606,10 @@ async fn apn_state(c: &Compat) -> Option<(bool, Option<String>)> {
 }
 
 fn read_store(c: &Compat) -> ap::Store {
-    std::fs::read_to_string(c.path(ni::APN_PICK_STORE))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    match std::fs::read_to_string(c.path(ni::APN_PICK_STORE)) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Err(_) => Default::default(),
+    }
 }
 
 fn commit(c: &Compat, card: &str) {

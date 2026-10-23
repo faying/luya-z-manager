@@ -3,7 +3,7 @@
 //!
 //! Three layouts take all Wi-Fi down on the U60 Pro, and the device may be reachable only over it:
 //!
-//!  * **No 2.4 GHz AP while a 5 GHz one runs** (upstream zwrt-datad #179): the stock QCMAP then
+//!  * **No 2.4 GHz AP while a 5 GHz one runs** (found on MU5250): the stock QCMAP then
 //!    starts single-AP mode, which only brings an AP up on wlan0; 5 GHz lives on wlan2, so hostapd
 //!    never gets ready. Turning off only 5 GHz, or both, is fine.
 //!  * **A guest AP without its band's main AP**: the main AP is the band's first interface (wlan0 /

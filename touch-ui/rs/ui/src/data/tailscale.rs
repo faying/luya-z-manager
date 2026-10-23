@@ -275,7 +275,6 @@ mod tests {
         format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.123456789Z", secs / 3600, secs / 60 % 60, secs % 60)
     }
 
-    // tests/tailscale_test.c
     #[test]
     fn status_fields() {
         let (hs, seen) = (iso(42), iso(3 * 3600));

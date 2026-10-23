@@ -16,7 +16,6 @@ It is written for people new to this project. Every command comes from scripts a
 |---|---|---|
 | [luya-z-manager](https://github.com/faying/luya-z-manager) (this repository) | `luyaz-core` (built from `crates/luyaz-core`, `/data/luyaz/luyaz-core`, `127.0.0.1:9460`) + `luyaz-web` (:9090) + `luyaz-sentinel` | The data service and device API, the advanced admin web in the browser, eSIM, CHILL proxy control, **and the install kit (`onboard/`)** |
 | [luya-z-touch-ui](https://github.com/faying/luya-z-touch-ui) | `/data/luyaz/ui/` (`luyaz-ui`) | Front-panel touch UI (Rust, `touch-ui/rs/`; its source now lives in this repository under `touch-ui/`), plus the health check and fallback scripts in `/data/luyaz/scripts/` |
-| [luya-z-data-service](https://github.com/faying/luya-z-data-service) | (no longer installed) | The original Rust `zwrt-datad`; luyaz-core in this repository replaced it and the kit no longer uses it |
 
 How they connect on the device:
 
@@ -69,8 +68,8 @@ This project does not ship a tool or ***REMOVED***; ***REMOVED***, so look there
 
 **Install computer** (macOS / Linux / Git Bash on Windows): `adb`, `ssh`, `curl`.
 
-- macOS: `brew install android-platform-tools`
-- Linux: `sudo apt install adb`
+- macOS: the `android-platform-tools` package from Homebrew
+- Linux: your distribution's adb package (on Debian and Ubuntu it is simply `adb`)
 - Windows: Google SDK Platform-Tools (added to PATH) + Git for Windows
 
 **Build computer** (for compiling; can be the same machine):

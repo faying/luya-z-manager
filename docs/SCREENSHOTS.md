@@ -33,7 +33,7 @@ Every device on the router with its IP, MAC and how long it has been connected. 
 
 ### Band lock
 
-Shows the bands in use now and the current locks, then lets you pick LTE bands and NR (5G) bands; one NR choice applies to both SA and NSA. Applying asks for confirmation in a dialog, and the device then checks within about two minutes that it reads the lock back, is registered and has data, reporting the result on the page. "Reset / unlock all" removes every band lock (cell locks too) and lets the modem choose again.
+Shows the bands in use now and the current locks, then lets you pick LTE bands and NR (5G) bands; one NR choice applies to both SA and NSA. Applying asks for confirmation in a dialog, and the device then checks within about two minutes that it reads the lock back, is registered and has data, reporting the result on the page. "Clear all locks" under Automatic bands drops every band and cell lock and hands the choice back to the modem.
 
 <img src="images/web-bandlock.png" width="720" alt="Band lock">
 

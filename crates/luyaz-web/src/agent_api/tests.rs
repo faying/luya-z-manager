@@ -270,6 +270,10 @@ async fn through_the_gate() {
     );
     std::fs::write(&tf, format!("claude {T1}\nhermes {T2}\n")).unwrap();
     assert_eq!(call("/agent-api/health", None).await.0, 401);
+    for path in ["/agent-api/capabilities", "/agent-api/recovery-actions"] {
+        assert_eq!(call(path, None).await.0, 401, "{path}");
+        assert_eq!(call(path, Some("wrong-token-wrong-token")).await.0, 401, "{path}");
+    }
     assert_eq!(
         call("/agent-api/health", Some("wrong-token-wrong-token"))
             .await
@@ -290,7 +294,7 @@ async fn through_the_gate() {
         let m = std::fs::metadata(dir.join("agent.id")).unwrap().permissions().mode();
         assert_eq!(m & 0o777, 0o600);
     }
-    for path in ["/agent-api/diagnose", "/agent-api/network-health", "/agent-api/power", "/agent-api/events?since=59", "/agent-api/action-url?for=apn"] {
+    for path in ["/agent-api/diagnose", "/agent-api/network-health", "/agent-api/power", "/agent-api/events?since=59", "/agent-api/action-url?for=apn", "/agent-api/capabilities", "/agent-api/recovery-actions"] {
         let (st, v) = call(path, Some(T2)).await;
         assert_eq!((st, v["device_id"].as_str()), (200, Some(id.as_str())), "{path}: {v}");
     }

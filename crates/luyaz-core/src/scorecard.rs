@@ -36,7 +36,7 @@ const GS: [&str; 7] = [
 /// The four power cells of `hour_power`.
 const CS: [&str; 4] = ["on_home", "on_abroad", "off_home", "off_abroad"];
 /// The programs `hour_proc` keeps the RSS of.
-const RS: [&str; 5] = ["agent", "core", "ui", "mihomo", "ts"];
+const RS: [&str; 4] = ["core", "ui", "mihomo", "ts"];
 
 /// What doctor passes its awk besides the ledger (`report_ledger`).
 #[derive(Clone, Debug, Default)]
@@ -45,9 +45,8 @@ pub struct Inputs {
     pub w: f64,
     /// "24 小时" / "7 天".
     pub label: String,
-    /// Recovery's first go-live and u60-uid's takeover (wall s): fixed in doctor.
+    /// Recovery's first go-live (wall s): fixed in doctor.
     pub recov: Num,
-    pub uidtk: Num,
     /// `<boot8> <0|1>` lines: does each kept kernel log end in a modem crash line.
     pub cap: String,
     /// The health rows that are not ok, `<label>：<detail>` a line. `None`: no health check
@@ -145,9 +144,7 @@ pub struct Card {
     boots: HashMap<i64, Boot>,
     backfills: Vec<(i64, String, String)>,
     bf_gap: HashSet<i64>,
-    gs_n: HashMap<i64, u32>,
     gs_up: HashMap<i64, f64>,
-    gx: Vec<At>,
     ver_m: HashMap<String, String>,
     ver_c: HashMap<String, (i64, f64)>,
     core_x: String,
@@ -347,13 +344,7 @@ impl Card {
                 }
             }
             "guard_start" => {
-                let n = self.gs_n.entry(s).or_default();
-                *n += 1;
-                let n = *n;
                 self.gs_up.entry(s).or_insert(up);
-                if fld(l, "requested") != "1" && n > 1 {
-                    self.gx.push(at);
-                }
             }
             "ver" => {
                 let (p, m) = (crate::paths::prog_key(&f("prog")).to_string(), f("md5"));
@@ -988,18 +979,16 @@ impl Card {
             sub(&mut out, &format!("国外：{det}"));
         }
         // S4 our programs, each from its last new build
-        const PG: [&str; 5] = [
-            "zte-agent",
+        const PG: [&str; 4] = [
             crate::paths::CORE,
             crate::paths::UI,
-            "u60-uid",
-            "u60-guard.sh",
+            "luyaz-sentinel",
+            "luyaz-web",
         ];
-        const PL: [&str; 5] = ["agent", "core", "触屏", "u60-uid", "guard"];
+        const PL: [&str; 4] = ["core", "触屏", "哨兵", "管理网页"];
         let mut val = String::new();
         let mut worst = "达标";
-        for q in 0..5 {
-            let p = PG[q];
+        for (p, l) in PG.into_iter().zip(PL) {
             let ch = self.ver_c.get(p).and_then(|&(s, u)| self.wall(s, u));
             let ws = wstart(D7, ch);
             let mut n = 0;
@@ -1013,16 +1002,9 @@ impl Card {
                     n += 1;
                 }
             }
-            if p == "u60-guard.sh" {
-                for a in &self.gx {
-                    if inw(self.wall(a.s, a.up), ws) {
-                        n += 1;
-                    }
-                }
-            }
             let cv = c.cov(ws, &["crashlog", "guard"]);
             let t = tier(n > 0, &cv, ws, D7);
-            let _ = write!(val, "{} {n}", PL[q]);
+            let _ = write!(val, "{l} {n}");
             if t != "达标" {
                 let extra = if t == "注意" {
                     format!(" {}", dur(wend - ws))
@@ -1051,7 +1033,7 @@ impl Card {
             "自动；上机事务里的重启不算（10-04 起记）；手工重启仍算；退出码 0 的意外退出第二步才看得到",
         );
         // S5a / S5b the screen
-        let ws = wstart(D7, inp.uidtk);
+        let ws = wstart(D7, None);
         let n = rb
             .iter()
             .filter(|r| inw(r.w, ws) && r.code == "1185")

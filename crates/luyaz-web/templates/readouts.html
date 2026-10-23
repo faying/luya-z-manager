@@ -1,10 +1,10 @@
 {% import "macros.html" as m %}<section id="sig-readouts" class="nd-wall nd-wall--3" aria-label="{{ v.l.pick("Signal readings", "信号读数") }}">
 {% if v.stale %}{% call m::readout(v.l, v.rsrp, " nd-readout--full nd-readout--hero nd-stale", "RSRP", "rsrp", v.l.pick("Received signal power. Closer to 0 is stronger; above −100 dBm is good.", "接收信号功率。越接近 0 越强；高于 −100 dBm 为良好。"), "dBm") %}{% endcall %}
-{% call m::readout(v.l, v.sinr, " nd-stale", "SINR", "sinr", v.l.pick("Signal-to-noise — higher is cleaner. Above 13 dB is good.", "信噪比 —— 越高越干净。13 dB 以上为良好。"), "dB") %}{% endcall %}
+{% call m::readout(v.l, v.sinr, " nd-stale", "SINR", "sinr", v.l.pick("Signal over noise; 13 dB or more is good, higher is better", "信号比噪声高多少；13 dB 以上就好，越高越好"), "dB") %}{% endcall %}
 {% call m::readout(v.l, v.rsrq, " nd-stale", "RSRQ", "rsrq", v.l.pick("Signal quality. Closer to 0 is better; below −15 is poor.", "信号质量。越接近 0 越好；低于 −15 为较差。"), "dB") %}{% endcall %}
-{% call m::readout(v.l, v.bars, " nd-stale", v.l.pick("Bars", "信号格数"), "bars", v.l.pick("The carrier's own 0–5 strength estimate.", "运营商自评的 0–5 信号强度。"), "/5") %}{% endcall %}
+{% call m::readout(v.l, v.bars, " nd-stale", v.l.pick("Bars", "信号格数"), "bars", v.l.pick("Strength on the 0–5 scale the modem reports", "基带报告的 0–5 档信号强度"), "/5") %}{% endcall %}
 {% else %}{% call m::readout(v.l, v.rsrp, " nd-readout--full nd-readout--hero", "RSRP", "rsrp", v.l.pick("Received signal power. Closer to 0 is stronger; above −100 dBm is good.", "接收信号功率。越接近 0 越强；高于 −100 dBm 为良好。"), "dBm") %}{% endcall %}
-{% call m::readout(v.l, v.sinr, "", "SINR", "sinr", v.l.pick("Signal-to-noise — higher is cleaner. Above 13 dB is good.", "信噪比 —— 越高越干净。13 dB 以上为良好。"), "dB") %}{% endcall %}
+{% call m::readout(v.l, v.sinr, "", "SINR", "sinr", v.l.pick("Signal over noise; 13 dB or more is good, higher is better", "信号比噪声高多少；13 dB 以上就好，越高越好"), "dB") %}{% endcall %}
 {% call m::readout(v.l, v.rsrq, "", "RSRQ", "rsrq", v.l.pick("Signal quality. Closer to 0 is better; below −15 is poor.", "信号质量。越接近 0 越好；低于 −15 为较差。"), "dB") %}{% endcall %}
-{% call m::readout(v.l, v.bars, "", v.l.pick("Bars", "信号格数"), "bars", v.l.pick("The carrier's own 0–5 strength estimate.", "运营商自评的 0–5 信号强度。"), "/5") %}{% endcall %}
+{% call m::readout(v.l, v.bars, "", v.l.pick("Bars", "信号格数"), "bars", v.l.pick("Strength on the 0–5 scale the modem reports", "基带报告的 0–5 档信号强度"), "/5") %}{% endcall %}
 {% endif %}</section>

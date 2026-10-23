@@ -15,6 +15,7 @@ export const SCENARIOS = [
   "missing", // GET payloads with fields absent or null
   "cmdfail", // every write returns 500 {ok:false,error:"mock failure"}
   "fakesuccess", // 200 ok:true but downstream failed (e.g. tailscale data.error)
+  "esim-busy", // POST /api/esim/switch: the card answers catBusy; the job retries (attempts +1 every 4 s) until POST /api/esim/cancel or 60 s
   "reboot-token", // POST /api/device/reboot -> 20 s of dropped sockets, then all tokens invalid
   "step2-timeout", // second write of a multi-step op hangs 20 s
   "down", // every socket destroyed (except /__mock/*)
@@ -59,7 +60,7 @@ export interface Reply {
   data?: unknown;
   /** When set, envelope is {ok:false,error}. */
   error?: string;
-  /** The agent's English for `error` (sent as error_en; netinfo.rs words its errors in both). */
+  /** English twin of `error`, sent as error_en (the core's netinfo replies carry both languages). */
   errorEn?: string;
   /** Send this value as the whole JSON body, no envelope (rare). */
   raw?: unknown;
@@ -76,7 +77,7 @@ export interface Route {
   /**
    * "read" routes are exempt from cmdfail / step2-timeout and get the
    * `missing` transform. Default: GET = read, everything else = write.
-   * Set explicitly for POST endpoints the agent uses as reads
+   * Set explicitly for POST endpoints that only read
    * (e.g. POST /api/sms/list, POST /api/device/power-save).
    */
   kind?: "read" | "write";
@@ -93,8 +94,8 @@ export function fail(error: string, status = 500, errorEn?: string): Reply {
 }
 
 /**
- * The agent's reply when the firmware has no such ubus method, as recorded on
- * B27 (router.rs / cell.rs passthrough: 503 + ubus.rs error text).
+ * Reply for a ubus method the firmware lacks: 503 with the ubus error text,
+ * as seen on B27 firmware.
  */
 export function methodNotFound(obj: string, method: string): Reply {
   return fail(`ubus call ${obj} ${method} failed: Command failed: ubus call ${obj} ${method} {} (Method not found)`, 503);

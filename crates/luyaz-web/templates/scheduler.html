@@ -3,7 +3,7 @@
 {% block main %}
 <div class="mb-4 mt-2 flex flex-wrap items-center justify-between gap-3"><h1 class="nd-title">{{ shell.title() }}</h1><button type="button" class="nd-btn nd-btn--primary" data-on:click="@post('/scheduler/form')">{{ l.pick("New Job", "新建任务") }}</button></div>
 <div class="pg-col">
-<p class="nd-body">{{ l.pick("Automate API calls on a schedule. Times are the device's own clock.", "按时间表自动调用接口。时间按设备自己的时钟。") }}</p>
+<p class="nd-body">{{ l.pick("Run device actions at set times. Times are the device's own clock.", "到点自动执行设备操作。时间按设备自己的时钟。") }}</p>
 {{ self.leaf("sch-status")|safe }}
 <div id="sch-form"></div>
 {{ save_op|safe }}

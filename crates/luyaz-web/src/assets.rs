@@ -82,7 +82,7 @@ fn gzip(b: &[u8]) -> Vec<u8> {
     e.finish().unwrap()
 }
 
-/// Comments and indentation out (the sources are the Next.js web's, heavily commented); about
+/// Comments and indentation out (the sources are heavily commented); about
 /// 1 KB of gzip on first load. Not a real minifier: no CSS string here contains `/*`.
 fn minify_css(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
@@ -190,7 +190,7 @@ fn assets() -> &'static [Asset] {
             ),
             mk("shell.js", "text/javascript; charset=utf-8", SHELL_JS.to_vec(), true),
             mk("icons.svg", "image/svg+xml", sprite().into_bytes(), true),
-            // the old web's favicon.ico is 26 KB; this is the signal glyph, ink on transparent
+            // a 26 KB favicon.ico would be wasteful; this is the signal glyph, ink on transparent
             mk("favicon.svg", "image/svg+xml", format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 256 256\"><style>path{{fill:#17171c}}@media(prefers-color-scheme:dark){{path{{fill:#f3f3ef}}}}</style>{}</svg>", crate::icons::path("CellSignalFull", false)).into_bytes(), true),
         ]
     })
@@ -266,7 +266,7 @@ pub async fn serve(Path(name): Path<String>, h: HeaderMap) -> Response {
     hd.insert(header::CONTENT_TYPE, HeaderValue::from_static(a.mime));
     hd.insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=31536000, immutable"),
+        HeaderValue::from_static("public, max-age=31536000, immutable"), // RESIDUE-OK: standard Cache-Control value
     );
     hd.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
     if gz {

@@ -8,9 +8,8 @@ use super::Inputs;
 use super::awk::num;
 use std::path::{Path, PathBuf};
 
-/// Recovery's first go-live and u60-uid's takeover (doctor's `RECOV_LIVE`, `UID_LIVE`).
+/// Recovery's first go-live (doctor's `RECOV_LIVE`).
 pub const RECOV_LIVE: f64 = 1_790_458_980.0;
-pub const UID_LIVE: f64 = 1_790_121_600.0;
 
 /// Where the inputs are (doctor's defaults; the doctor test points each elsewhere).
 #[derive(Clone, Debug)]
@@ -171,7 +170,6 @@ pub fn inputs(paths: &Paths, w: f64, summary: bool) -> Inputs {
         w,
         label: if w == 86_400.0 { "24 小时" } else { "7 天" }.into(),
         recov: Some(RECOV_LIVE),
-        uidtk: Some(UID_LIVE),
         cap: cap(&paths.crashcap),
         warn: None,
         standby: None,

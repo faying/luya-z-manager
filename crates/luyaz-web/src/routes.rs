@@ -1,6 +1,5 @@
 //! The page table: path, page family, titles, search aliases (DESIGN.md §5 "页面表只在一处定义").
-//! Navigation, ⌘K and the colour family all come from here (the old Next.js web's `routes.ts`,
-//! which this table used to match, was removed in Phase 10 X13).
+//! Navigation, ⌘K and the colour family all come from here.
 
 use crate::i18n::Lang;
 
@@ -576,7 +575,6 @@ mod tests {
 
     #[test]
     fn every_route_has_an_icon() {
-        // (it was also checked against the old web's routes.ts until that was removed, X13)
         for r in ROUTES {
             assert!(
                 !crate::icons::path(r.icon, false).is_empty(),

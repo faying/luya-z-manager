@@ -125,7 +125,7 @@ async function own(p) {
   // ---- STK ----
   await p.click("#stk-tab-stk");
   await p.waitForSelector(`${S}`, { state: "visible" });
-  ok(/加载 SIM 卡的 STK 菜单/.test(await txt(p, "#stk-view")), "nothing is read on entry: the load hint");
+  ok(/打开 SIM 的 STK 菜单/.test(await txt(p, "#stk-view")), "nothing is read on entry: the load hint");
   await ask(p, "stk-m", () => p.click("#stk-view .nd-btn--primary"));
   ok(/SIM 卡要它的菜单/.test(await txt(p, "#stk-m-op .nd-confirm")), "load asks first (tier 2)");
   await confirmBtn(p, "stk-m").click();

@@ -198,7 +198,7 @@ good	speed	↓ 812.4 Mbps  ↑ 96.2 Mbps
 good	speed	China Telecom (Shanghai)
 good	speed	Test again
 good	speed	Server
-good	speed	Auto (best server)
+good	speed	Auto (with fallback)
 good	speed	China Unicom · Shanghai, China
 *	chill	Connections
 *	chill	Traffic
@@ -524,7 +524,7 @@ home-fallback	chill	Trial 0:17
 home-fallback	chill	Didn't turn on: home Mac silent
 home-nocountry	chill	Can't tell the country; media and rest hidden
 home-nocountry	chill	No sites yet
-# USB attach mode (usbmode.c, 10-07)
+# USB attach mode
 *	system	When a phone is plugged in
 *	system	Ask every time
 *	usb-attach	Use the plugged-in device for

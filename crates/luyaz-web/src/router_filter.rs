@@ -1,4 +1,4 @@
-//! /router/telemetry (遥测拦截), the old `router/telemetry/page.tsx`: the domain block list, the
+//! /router/telemetry (遥测拦截): the domain block list, the
 //! quick block of the four known ZTE telemetry domains, add, remove.
 //!
 //! Where each value comes from (the old page read `/api/router/domain-filter`, the agent's
@@ -354,8 +354,8 @@ pub fn view(st: &St, l: Lang) -> View {
             let all = KNOWN.iter().all(|k| domains.iter().any(|d| d == k));
             let note = domains.is_empty().then(|| {
                 l.pick(
-                    "No domains blocked. Use “Block Known Telemetry” or add one above.",
-                    "还没有拦截任何域名。可以用「拦截已知遥测」，或在上面添加。",
+                    "Nothing is blocked yet. Add a domain above, or block the whole known telemetry list in one go.",
+                    "目前什么都没拦。可以在上面加域名，或一键拦下整份遥测清单。",
                 )
                 .to_string()
             });
@@ -656,11 +656,11 @@ pub async fn quick_run(
         .collect();
     parts.push(match l {
         Lang::En => format!(
-            "Not blocked: {}. Press “Block Known Telemetry” again to send only the rest.",
+            "Not blocked: {}. Press “Block all telemetry” again to send only the rest.",
             fails.join(", ")
         ),
         Lang::Zh => format!(
-            "没拦截：{}。再按「拦截已知遥测」只补发剩下的。",
+            "没拦截：{}。再按「一键拦截遥测」只补上剩下的。",
             fails.join("、")
         ),
     });
@@ -873,8 +873,8 @@ pub async fn quick_set(
             Err(o) => o,
             Ok(todo) if todo.is_empty() => Outcome::Applied(
                 l.pick(
-                    "All telemetry domains already blocked",
-                    "已知遥测域名都已拦截",
+                    "Every telemetry domain on the list is blocked",
+                    "清单里的遥测域名全都拦了",
                 )
                 .into(),
             ),

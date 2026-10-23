@@ -721,7 +721,7 @@ mod tests {
         apn_ambr(&line.to_ascii_lowercase(), key).map(format_mbps)
     }
 
-    // Line shapes follow upstream zwrt-datad's TopFlow / CMHK samples
+    // Line shapes follow earlier TopFlow / CMHK samples
     // (1ffd943, 75247fc); no raw MU5250 key.log line is in the repo yet.
     // 1668.640 / 1008.640 is the output this parser used to show on the
     // user's U60 Pro (MU5250) B27 (manager docs/designs/slow-diagnosis.md §3);

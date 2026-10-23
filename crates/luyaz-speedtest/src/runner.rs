@@ -74,8 +74,8 @@ fn fresh(url: &str, n: u64) -> String {
     )
 }
 pub(super) fn run(
-    server: &TestServer,
-    progress: &Arc<Mutex<SpeedTestProgress>>,
+    server: &TestServer,                 // the endpoint every phase talks to
+    progress: &Mutex<SpeedTestProgress>, // shared with the status route
     cancel: &AtomicBool,
     lim: Limits,
     budget: &mut Budget,
@@ -203,7 +203,7 @@ pub(super) fn run(
                     if request_start.elapsed() + Duration::from_millis(50) >= request_timeout
                         && bytes > before =>
                 {
-                    break
+                    break;
                 }
                 Err(_) => return Err(transfer(server.provider)),
             }

@@ -262,7 +262,7 @@ pub async fn normalize_lists(replies: &[Value]) -> Vec<crate::contract::SmsItem>
     result
 }
 
-/// `sms.list_after` 每页条数（`data_per_page`）。等于 `limit` 上限，也是 zte-agent 在真机上一直用的页大小。
+/// `sms.list_after` 每页条数（`data_per_page`）。等于 `limit` 上限，也是真机上一直用的页大小。
 pub const LIST_PAGE: u64 = 50;
 /// `sms.list_after` 的 `limit` 上限。
 pub const LIST_LIMIT_MAX: u64 = 50;

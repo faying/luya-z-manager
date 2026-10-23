@@ -379,3 +379,50 @@ fn core_say_in_the_card_view() {
     assert_eq!(view(&c, false, Lang::Zh).state, "安全重试中");
     assert_eq!(say_of(&json!({"say": ""})), None, "older core: nothing");
 }
+
+fn busy_job(tries: u64, gap: u64) -> Value {
+    json!({"id": 7, "kind": "switch", "status": "running", "started_unix": 1000, "attempts": tries,
+           "message": format!("card busy — retrying (try {} in {gap} s)", tries + 1), "deadline_s": 505})
+}
+
+#[test]
+fn busy_retry_reads_tries_next_try_and_give_up() {
+    let mut seen = None;
+    // until: the page's own send time + 240 s + the last try (never the job's started_unix)
+    let r = busy_retry(7, &busy_job(2, 15), 1002, 1030, &mut seen).unwrap();
+    assert_eq!(r, Retry { tries: 2, next_unix: 1045, until_unix: 1257 });
+    // the same try polled later keeps its time; the next try gets a new one
+    assert_eq!(busy_retry(7, &busy_job(2, 15), 1002, 1040, &mut seen).unwrap().next_unix, 1045);
+    assert_eq!(busy_retry(7, &busy_job(3, 22), 1002, 1050, &mut seen).unwrap().next_unix, 1072);
+    // not ours, not waiting on the card, or over
+    assert_eq!(busy_retry(8, &busy_job(2, 15), 1002, 1030, &mut None), None);
+    let mut j = busy_job(2, 15);
+    j["message"] = json!("switching");
+    assert_eq!(busy_retry(7, &j, 1002, 1030, &mut None), None);
+    let mut j = busy_job(2, 15);
+    j["status"] = json!("error");
+    assert_eq!(busy_retry(7, &j, 1002, 1030, &mut None), None);
+}
+
+#[test]
+fn retry_html_shows_local_times_and_a_stop_button() {
+    // device clock: local wall time labelled UTC, so 1045 s = 00:17:25
+    let r = Retry { tries: 1, next_unix: 1045, until_unix: 1240 };
+    let zh = retry_html(Some(&r), false, Lang::Zh);
+    assert!(zh.contains("已试 1 次") && zh.contains("00:17:25 再试") && zh.contains("约 00:20:40 放弃"), "{zh}");
+    assert!(zh.contains("停止重试") && zh.contains("@post('/router/esim/stop', {retryMaxCount: 0})"), "{zh}");
+    let en = retry_html(Some(&r), false, Lang::En);
+    assert!(en.contains("1 try so far") && en.contains("Stop retrying"), "{en}");
+    assert!(retry_html(Some(&r), true, Lang::Zh).contains("正在停止重试"));
+    assert!(!retry_html(Some(&r), true, Lang::Zh).contains("<button"));
+    assert_eq!(retry_html(None, false, Lang::En), RETRY_EMPTY);
+}
+
+#[test]
+fn stop_reply_says_what_the_core_answered() {
+    assert!(stop_reply(Ok((200, &json!({"ok": true}))), Lang::Zh).contains("正在停止重试"));
+    let past = json!({"ok": false, "error": "the switch is past the card step"});
+    assert!(stop_reply(Ok((409, &past)), Lang::Zh).contains("停不了了"));
+    let none = json!({"ok": false, "error": "no switch to stop"});
+    assert!(stop_reply(Ok((409, &none)), Lang::En).contains("no retry to stop"));
+}

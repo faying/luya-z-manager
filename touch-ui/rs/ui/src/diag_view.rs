@@ -1,4 +1,4 @@
-//! src/diag_view.c: luyaz-core's diagnosis run parsed, and the words the 网络诊断 page uses.
+//! luyaz-core's diagnosis run parsed, and the words the 网络诊断 page uses.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use crate::json;
@@ -175,7 +175,6 @@ pub fn level_mark(l: i32) -> &'static str {
 mod tests {
     use super::*;
 
-    /// tests/diag_view_test.c 「words」
     #[test]
     fn words() {
         let _l = crate::lang::TEST_LANG.lock().unwrap_or_else(|e| e.into_inner());
@@ -213,7 +212,6 @@ mod parse_tests {
         r.layer[..r.n as usize].iter().find(|l| l.id == id)
     }
 
-    // tests/diag_view_test.c
     #[test]
     fn parses_runs() {
         // nothing, or not a run

@@ -1,9 +1,6 @@
-//! Moved from zte-agent `src/scenario.rs` (manager 20c3e35), same names and expectations; only
-//! types changed (`serde_json::Value` bodies became `Json`, `Instant` became seconds,
-//! `simulated_trip_abroad_and_back` uses `in_abroad_scenario` instead of an `Engine`). Not moved:
-//! the picker/English/scene-list tests (presentation, stayed in the agent) and
-//! `uptime_is_whole_seconds_of_the_first_field` (heartbeat file). The `step_*` and
-//! `after_switch_*` tests are new.
+//! Scenario decision tests: bodies are `Json`, times are seconds, and
+//! `simulated_trip_abroad_and_back` drives `in_abroad_scenario` directly. Picker and
+//! presentation text is tested where it lives.
 
 use super::*;
 use serde_json::json;
@@ -160,7 +157,7 @@ fn rejects_paths_outside_the_allow_list() {
     c.scenarios[0].actions[0].action.path = "/api/device/reboot".into();
     let err = validate(&c).unwrap_err();
     assert!(err.contains("not allowed"), "{err}");
-    // allowed until step 9h: a config that still has it is reported, not silently run
+    // no longer allowed: a config that still has it is reported, not silently run
     c.scenarios[0].actions[0].action.path = "/api/device/thermal".into();
     assert!(validate(&c).unwrap_err().contains("not allowed"));
 }
@@ -329,7 +326,7 @@ fn same_group_different_member_shares_a_restore_key() {
     assert!(k1.is_some());
     assert_eq!(k1, k2);
     assert_eq!(restore_key(&wifi_action(true)), None);
-    // Byte for byte the key the agent writes into restore.json (serde_json's text).
+    // Byte for byte the key saved in restore.json (serde_json's text).
     let agent = format!(
         "/api/services/chill/regions {}",
         json!({"group": CHILL_MAIN_GROUP})
@@ -506,7 +503,7 @@ fn rejects_an_mcc_scenario_that_includes_home() {
     assert!(validate(&c).unwrap_err().contains("home MCC"));
 }
 
-/// The agent's version also checks the English picker list; that part stayed with the picker.
+/// The English picker list is checked with the picker.
 #[cfg(feature = "serde")]
 #[test]
 fn config_written_before_abroad_support_still_loads() {
@@ -534,7 +531,7 @@ fn config_written_before_abroad_support_still_loads() {
     assert_eq!(cfg.scenarios.len(), 2);
     assert!(!cfg.scenarios[0].actions[0].best_effort);
     assert_eq!(detect(&cfg, &[], Some("440")).as_deref(), Some(AWAY_ID));
-    // and it writes back the shape the agent writes
+    // and it writes back the shape the engine writes
     let again: Config = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
     assert_eq!(again, cfg);
     assert_eq!(cfg.scenarios[0].actions[0], wifi_action(false));

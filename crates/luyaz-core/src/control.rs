@@ -173,10 +173,20 @@ struct Field {
 }
 
 const fn text(from: &'static str, to: &'static str, need: bool) -> Field {
-    Field { from, to, need, kind: Kind::Text }
+    Field {
+        from,
+        to,
+        need,
+        kind: Kind::Text,
+    }
 }
 const fn int(from: &'static str, to: &'static str, need: bool) -> Field {
-    Field { from, to, need, kind: Kind::Int }
+    Field {
+        from,
+        to,
+        need,
+        kind: Kind::Int,
+    }
 }
 
 /// Builds the vendor argument object. Members are visited in table order, so
@@ -311,8 +321,18 @@ const FORWARDS: &[Forward] = &[
 /// Actions that take no client input: (action, object, method, send the
 /// `moduleName:"web"` tag instead of an empty object).
 const FIXED: &[(&str, &str, &str, bool)] = &[
-    ("device.reboot", "zwrt_mc.device.manager", "device_reboot", true),
-    ("device.poweroff", "zwrt_mc.device.manager", "device_poweroff", true),
+    (
+        "device.reboot",
+        "zwrt_mc.device.manager",
+        "device_reboot",
+        true,
+    ),
+    (
+        "device.poweroff",
+        "zwrt_mc.device.manager",
+        "device_poweroff",
+        true,
+    ),
     // D17 scan step; the vendor may only answer once the scan is over.
     ("netselect.scan", NWINFO, "nwinfo_manual_scan", false),
     ("wifi.reload", "zwrt_wlan", "reload", false),
@@ -354,10 +374,21 @@ fn sms_outcome(result: Result<Value, (bool, String)>) -> Outcome {
 
 pub async fn execute(action: &str, params: &Value) -> Outcome {
     if let Some(entry) = FORWARDS.iter().find(|entry| entry.action == action) {
-        return forward(params, entry.object, entry.method, entry.fields, entry.need_some).await;
+        return forward(
+            params,
+            entry.object,
+            entry.method,
+            entry.fields,
+            entry.need_some,
+        )
+        .await;
     }
     if let Some(&(_, object, method, tagged)) = FIXED.iter().find(|entry| entry.0 == action) {
-        let args = if tagged { json!({"moduleName": "web"}) } else { json!({}) };
+        let args = if tagged {
+            json!({"moduleName": "web"})
+        } else {
+            json!({})
+        };
         return call(object, method, args).await;
     }
     match action {
@@ -430,7 +461,12 @@ async fn cellular_set(params: &Value) -> Outcome {
         Ok(Value::Object(profile)) => profile,
         Ok(_) => return Outcome::Failed("invalid get_wwaniface response".into()),
     };
-    call("zwrt_data", "set_wwaniface", cellular_args(current, changes)).await
+    call(
+        "zwrt_data",
+        "set_wwaniface",
+        cellular_args(current, changes),
+    )
+    .await
 }
 
 /// 读回的整份 + 要改的。读回的 `enable` 不带回去：它是最近一次写进去的值，开机后默认 0，
@@ -562,7 +598,11 @@ async fn band(params: &Value, lte: bool, nsa: bool) -> Outcome {
 /// 一个 ubus 写一组频段：`lte` 走 LTE 扩展频段，`sa`/`nsa` 走 5G 锁频（原厂 nr5g_type 0/1）。
 pub(crate) fn band_call(key: &str, bands: &str) -> (&'static str, &'static str, Value) {
     if key == "lte" {
-        return (NWINFO, "nwinfo_set_lte_ext_band", json!({"lte_band": bands}));
+        return (
+            NWINFO,
+            "nwinfo_set_lte_ext_band",
+            json!({"lte_band": bands}),
+        );
     }
     let nr_type = if key == "nsa" { "1" } else { "0" };
     (
@@ -578,7 +618,9 @@ async fn band_steps(params: &Value, keys: &[&str]) -> Outcome {
     for &key in keys {
         match string(params, key, true) {
             Err(error) => return Outcome::Invalid(error),
-            Ok(Some(list)) if !list.is_empty() && bands_ok(&list) => plan.push(band_call(key, &list)),
+            Ok(Some(list)) if !list.is_empty() && bands_ok(&list) => {
+                plan.push(band_call(key, &list))
+            }
             Ok(_) => {
                 return Outcome::Invalid(format!("{key} must contain only numbers and commas"));
             }
@@ -659,12 +701,9 @@ async fn direct_supply(params: &Value) -> Outcome {
     let changed = is_on != want;
     if changed {
         let target = supply_word(want);
-        let reply = crate::executor::call(
-            CHARGER,
-            "set",
-            &json!({"direct_power_supply_mode": target}),
-        )
-        .await;
+        let reply =
+            crate::executor::call(CHARGER, "set", &json!({"direct_power_supply_mode": target}))
+                .await;
         if direct_supply_write_failed(&reply) {
             let why = match reply {
                 Err(error) => error.to_string(),
@@ -780,7 +819,7 @@ async fn usb_attach_mode(params: &Value) -> Outcome {
             }
             let args = json!({"source_module": USB_SOURCE_MODULE, "DR_Swap": "device"});
             match call("zwrt_bsp.typec", "set", args).await {
-                Outcome::Ok(_) => {},
+                Outcome::Ok(_) => {}
                 other => return other,
             }
             if poll_until("zwrt_bsp.typec", "list", json!({}), 15, |v| {
@@ -803,7 +842,7 @@ async fn usb_attach_mode(params: &Value) -> Outcome {
             }
             let args = json!({"source_module": USB_SOURCE_MODULE, "state": 1});
             match call("zwrt_bsp.powerbank", "set", args).await {
-                Outcome::Ok(_) => {},
+                Outcome::Ok(_) => {}
                 other => return other,
             }
             if poll_until("zwrt_bsp.powerbank", "get", get, 10, on).await {
@@ -852,7 +891,10 @@ async fn apn_keep_password(params: &Value) -> Result<Value, String> {
     if params.get("password").is_some() {
         return Ok(params.clone());
     }
-    let id = params.get("profile_id").and_then(Value::as_str).unwrap_or("");
+    let id = params
+        .get("profile_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let o = "zwrt_apn_object";
     let (mode, list) = (
         state::ubus(o, "get_apn_mode", json!({})).await?,
@@ -881,7 +923,14 @@ const fn apn_fields(id_needed: bool) -> [Field; 8] {
 }
 
 async fn apn(params: &Value, method: &str, profile_required: bool) -> Outcome {
-    forward(params, APN_OBJECT, method, &apn_fields(profile_required), false).await
+    forward(
+        params,
+        APN_OBJECT,
+        method,
+        &apn_fields(profile_required),
+        false,
+    )
+    .await
 }
 
 /// `zwrt_wlan set` arguments for the Wi-Fi master switch, as the stock web UI
@@ -925,7 +974,7 @@ async fn wifi_module(params: &Value) -> Outcome {
     .await
 }
 
-/// AP options `wifi.apply` may set (zte-agent's Wi-Fi pages, AP switch, scenario,
+/// AP options `wifi.apply` may set (the Wi-Fi pages, AP switch, scenario,
 /// home-mode scan) on `wireless.{main,guest}_{2g,5g}`.
 const WIFI_APPLY_AP_SECTIONS: &[&str] = &["main_2g", "main_5g", "guest_2g", "guest_5g"];
 const WIFI_APPLY_AP_OPTIONS: &[&str] = &[
@@ -994,9 +1043,9 @@ async fn wifi_apply(params: &Value) -> Outcome {
             return Outcome::Invalid(format!("not a Wi-Fi option this action sets: {path}"));
         }
         let value = match v {
-            Value::String(s) => s.clone(),
+            Value::Bool(on) => String::from(if *on { "1" } else { "0" }),
             Value::Number(n) => n.to_string(),
-            Value::Bool(b) => if *b { "1" } else { "0" }.to_string(),
+            Value::String(text) => text.clone(),
             _ => {
                 return Outcome::Invalid(format!(
                     "{path}: value must be a string, number or boolean"
@@ -1088,7 +1137,8 @@ async fn vendor_call(params: &Value) -> Outcome {
 /// 才 commit，平时不写闪存）。
 const DOH_OFF_SCRIPT: &str = "rm -f /tmp/dnsmasq.d/doh.conf; uci -q get dhcp.lan_dns.server | grep -qF '127.0.0.1#5353' && uci -q del_list dhcp.lan_dns.server='127.0.0.1#5353' && uci commit dhcp; /etc/init.d/dnsmasq restart";
 
-const DOH_GONE: &str = "DoH was removed with zte-agent (2026-10-14): only enabled=false (drop the dnsmasq forward) is accepted";
+const DOH_GONE: &str =
+    "DoH was removed (2026-10-14): only enabled=false (drop the dnsmasq forward) is accepted";
 
 async fn dns_doh(params: &Value) -> Outcome {
     match boolean(params, "enabled") {
@@ -1117,8 +1167,7 @@ async fn wifi_power_save(params: &Value) -> Outcome {
         Ok(v) => v,
         Err(e) => return Outcome::Invalid(e),
     };
-    let dir =
-        std::env::var("LUYAZ_HOTPLUG_DIR").unwrap_or_else(|_| "/etc/hotplug.d/iface".into());
+    let dir = std::env::var("LUYAZ_HOTPLUG_DIR").unwrap_or_else(|_| "/etc/hotplug.d/iface".into());
     power_save_apply(std::path::Path::new(&dir), &iw_bin(), enabled).await
 }
 

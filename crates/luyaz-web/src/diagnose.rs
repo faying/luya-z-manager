@@ -1,9 +1,9 @@
-//! /tools/diagnose (网络诊断), the old `tools/diagnose/page.tsx` + `lib/diagnose.ts`
+//! /tools/diagnose (网络诊断)
 //! (slow-diagnosis.md §4.2, §12): status block (main cause + one action, or 正在检查… N/M,
 //! 等另一个操作做完…, 后台没回应) · 「HH:MM 测」 · 「再查一次」 → one row per layer, then the speed row
 //! → what you can do (「加测速度」, two presses when roaming; 「对 / 不对」).
 //!
-//! The agent (deep_diag.rs) judges and words everything in both languages; the run is the
+//! The device service judges and words everything in both languages; the run is the
 //! readback of every button (start, speed, feedback), so they are plain requests: the stream reads
 //! `GET /api/diagnose` every second while the run or its speed row goes, else every 30 s (the touch
 //! screen may start one). The agent picks the Wi-Fi rules by who asks: the browser's address goes

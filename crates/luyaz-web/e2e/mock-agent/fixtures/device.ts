@@ -1,5 +1,5 @@
-// Mock fixtures: device / battery / charger / USB (zte-agent device_ext.rs,
-// network_ext.rs:55, charge_policy.rs, usb.rs).
+// Mock fixtures: device / battery / charger / USB (the device,
+// charge-policy and USB handlers).
 //
 // Persona: battery 76 % and charging from a wall charger (so the USB data link
 // is down, CC is attached), uptime a little over 2 days, power-save and fast
@@ -21,7 +21,8 @@ import type {
   PowerSave,
   UsbStatus,
 } from "../../../src/lib/api/schemas/device.ts";
-import type { EstimateReport } from "../../../src/lib/batteryEstimate.ts";
+/** The battery estimate block the core adds to GET /api/battery. */
+type EstimateReport = Record<string, unknown>;
 
 // ── Device clock ────────────────────────────────────────────────────────────
 
@@ -67,7 +68,7 @@ const charger: ChargerInfo = {
   otg_powerbank_state: 0,
 } satisfies ChargerInfo;
 
-/** Charge-limit enforcer (charge_policy.rs LimitState). Persisted part = enabled/limit/hysteresis. */
+/** Charge-limit enforcer (luyaz-policy charge_policy.rs + luyaz-core api/charge.rs). Persisted part = enabled/limit/hysteresis. */
 const limit = {
   enabled: false,
   limit: 80,
@@ -100,7 +101,7 @@ function chargingStopped(): boolean {
   return charger.direct_power_supply_mode === "enable";
 }
 
-/** Mirror of charge_policy.rs set_charging (inverted ubus naming) + what the firmware reports after it. */
+/** The charger on/off write (inverted ubus naming, as in luyaz-core's charge policy) + what the firmware reports after it. */
 function setCharging(allow: boolean): void {
   charger.direct_power_supply_mode = allow ? "disable" : "enable";
   const charging = allow && chargerConnected() && (battery.battery_capacity ?? 0) < 100;
@@ -116,7 +117,7 @@ function batteryStatus(): string {
   return "Charging";
 }
 
-/** charge_policy.rs:198 enforce (charger connected; capacity vs limit). */
+/** luyaz-policy charge_policy.rs `enforce` (charger connected; capacity vs limit). */
 function enforce(): void {
   if (batteryStatus() === "Discharging" && !chargingStopped()) return;
   const cap = battery.battery_capacity ?? 0;
@@ -136,9 +137,9 @@ function chargeControl(): ChargeControl {
   } satisfies ChargeControl;
 }
 
-/** system.rs read_battery_at: sysfs battery + usb. Charging stops cut the USB input to 0. */
-// zte-agent battery_eta.rs for a steady current (every sample the same), so
-// the mock shows what the agent would.
+/** luyaz-core api/sys_reads.rs battery: sysfs battery + usb. Charging stops cut the USB input to 0. */
+// The battery ETA for a steady current (every sample the same), so
+// the mock shows what the core would.
 function mockEstimate(soc: number, ua: number, full: number, counter: number): EstimateReport {
   const target = limit.enabled ? limit.limit : 100;
   const plugged = chargerConnected();
@@ -213,7 +214,7 @@ function systemInfo(): DeviceSystem {
   } satisfies DeviceSystem;
 }
 
-/** Common reboot effect: the agent restarts (manual override is in memory only), uptime restarts. */
+/** Common reboot effect: the core restarts (manual override is in memory only), uptime restarts. */
 function rebootEffects(): void {
   bootAt = deviceNow();
   limit.manual_override = false;
@@ -228,7 +229,7 @@ function thermalNow(ctx: Ctx): DeviceThermal {
 }
 
 export const routes: Route[] = [
-  // handlers.rs:67 — /proc/sys/kernel/hostname, /proc/uptime, /proc/loadavg, /proc/version.
+  // GET /api/device (api/sys_reads.rs device) — /proc/sys/kernel/hostname, /proc/uptime, /proc/loadavg, /proc/version.
   {
     method: "GET",
     path: "/api/device",
@@ -240,7 +241,7 @@ export const routes: Route[] = [
         kernel: "Linux version 5.4.210 (builder@buildhost) (gcc version 9.3.0) #1 SMP PREEMPT",
       }),
   },
-  // device_ext.rs:8 — ubus zwrt_bsp.thermal get_cpu_temp. `missing`: the key is absent ({}).
+  // ubus zwrt_bsp.thermal get_cpu_temp (no core route; kept for old pages). `missing`: the key is absent ({}).
   {
     method: "GET",
     path: "/api/device/thermal",
@@ -263,10 +264,10 @@ export const routes: Route[] = [
     handler: () => ok(systemInfo()),
   },
   {
-    // handlers.rs battery → system.rs read_battery_at; "missing" = no battery directory (503).
+    // api/sys_reads.rs battery; "missing" = no battery directory (503).
     method: "GET",
     path: "/api/battery",
-    handler: (ctx) => (ctx.has("missing") ? fail("battery info not available", 503) : ok(sysfsBattery())),
+    handler: (ctx) => (ctx.has("missing") ? fail("no battery reading yet", 503) : ok(sysfsBattery())),
     ownMissing: true,
   },
   {
@@ -275,7 +276,7 @@ export const routes: Route[] = [
     handler: () => ok(chargeControl()),
   },
   {
-    // device_ext.rs:81 charge_control_set
+    // PUT /api/device/charge-control (api/charge.rs put)
     method: "PUT",
     path: "/api/device/charge-control",
     handler: (ctx: Ctx) => {
@@ -305,7 +306,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // device_ext.rs:126 — a read served over POST; body passed to get_device_info.
+    // api/device_admin.rs power_save_read — a read served over POST; body passed to get_device_info.
     method: "POST",
     path: "/api/device/power-save",
     kind: "read",
@@ -322,7 +323,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // device_ext.rs:141 — body passed verbatim to set_device_info.
+    // api/scenario.rs power_save — body passed as it is to set_device_info.
     method: "PUT",
     path: "/api/device/power-save",
     handler: (ctx: Ctx) => {
@@ -345,7 +346,7 @@ export const routes: Route[] = [
     handler: () => ok({ fast_boot: deviceInfo.quicken_power_on ?? "0" } satisfies FastBoot),
   },
   {
-    // device_ext.rs:167
+    // api/device_admin.rs fast_boot_get / fast_boot_set
     method: "PUT",
     path: "/api/device/fast-boot",
     handler: (ctx: Ctx) => {
@@ -357,7 +358,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // device_ext.rs:29 — ubus `system reboot`. The server core implements the
+    // api.rs device_reboot — `device.reboot` (falls back to `system reboot`). server.ts adds the
     // reboot-token downtime; here only the post-boot state changes.
     method: "POST",
     path: "/api/device/reboot",
@@ -367,14 +368,14 @@ export const routes: Route[] = [
     },
   },
   {
-    // device_ext.rs device_poweroff — core device.poweroff. The mock stays up
+    // api/device_admin.rs poweroff — core device.poweroff. The mock stays up
     // (a real device is gone until someone presses its power button).
     method: "POST",
     path: "/api/device/poweroff",
     handler: () => ok({}),
   },
   {
-    // device_ext.rs:37 — ubus `zwrt_bsp.power factory_reset` (wipes settings, reboots).
+    // api/device_admin.rs factory_reset — ubus device_reset (wipes settings, reboots).
     method: "POST",
     path: "/api/device/factory-reset",
     handler: () => {
@@ -395,7 +396,7 @@ export const routes: Route[] = [
     handler: () => ok(clone(usb)),
   },
   {
-    // usb.rs:13 — body passed verbatim to `zwrt_bsp.usb set`; no validation in the agent.
+    // api/device_admin.rs usb_mode — `zwrt_bsp.usb set`.
     method: "PUT",
     path: "/api/usb/mode",
     handler: (ctx: Ctx) => {
@@ -407,7 +408,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // usb.rs:24 — body passed verbatim to `zwrt_bsp.powerbank set`.
+    // `zwrt_bsp.powerbank set` with the body as it is (no core route).
     method: "PUT",
     path: "/api/usb/powerbank",
     handler: (ctx: Ctx) => {

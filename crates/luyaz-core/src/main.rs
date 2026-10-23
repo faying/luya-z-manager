@@ -59,7 +59,7 @@ mod versions;
 mod watchdog;
 mod wifi;
 
-// Phase 4: the policy host and the policies moved from zte-agent (plugin.rs)
+// The policy host and its policies (plugin.rs)
 mod plugin;
 
 // Phase 2: the read path moved from data-service (read.rs)

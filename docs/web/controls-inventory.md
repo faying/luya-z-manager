@@ -1,7 +1,7 @@
 # 管理网页控件与数据清单（改版前基线）
 
 > **这是 2026-09-24 的历史快照（改版前基线）**：
-> - **已删除的旧实现**：文中的 Next.js 网页（`web/src/app/(panel)/**/page.tsx`、`web/tests/e2e/inventory.spec.ts`，2026-10-15 Phase 10 X13 已删）、`zte-agent/src/…`（2026-10-14 Phase 10 8d-2c 已删）与 `/data/u60-guard/doctor.sh` 均已退役。
+> - **已删除的旧实现**：文中说的旧网页（2026-10-15 Phase 10 X13 已删）、旧代理（2026-10-14 Phase 10 8d-2c 已删）与 `/data/luyaz/scripts/doctor.sh` 均已退役。
 > - **仍继续有效的部分**：下文「档位规则」（一/二/三档与「二·远程三」确认分级，`docs/DESIGN.md` §5 引用）以及功能/无障碍控件核对基线（确保改版不丢功能与确认门禁）。
 > - **现行代码对照（`luyaz-web` + `luyaz-core`）**：
 >   - 管理网页路由与页面表：`crates/luyaz-web/src/routes.rs`（模板 `crates/luyaz-web/templates/`，样式 `crates/luyaz-web/static/nd/`）。
@@ -14,11 +14,11 @@
 **用途**：管理网页（`source/manager/web`）要整体改版。动任何页面之前，先把 43 个路由上的每个控件、每项数据列全，改版后对着这份清单逐项核对，保证一样不丢。它也是后面 e2e 测试（按可访问名称找控件）和「安全白名单」（哪些接口可以放心自动调用）的输入。
 
 **怎么来的**：2026-09-24 从代码逐页读出来，没有连设备，也没有跑页面。
-- 页面：`web/src/app/(panel)/**/page.tsx` 共 43 个（`find web/src/app -name page.tsx | wc -l` = 43），外加它们用到的 `web/src/components/admin/*`（AdminShell、AlertBanner、StatusStrip、LangToggle、Button/Toggle/Input、Help）。
-- 中文文案：`web/src/lib/i18n/zh.ts` + `zh-pages.ts`。表里写中文；没有中文翻译的写英文默认值并标「(无中文)」。
-- 接口行为：`zte-agent/src/server.rs` 的路由表，以及各 handler（`handlers.rs`、`router.rs`、`cell.rs`、`modem_ext.rs`、`wifi.rs`、`wifi_radio.rs`、`esim.rs`、`scenario.rs`、`sms.rs`、`sms_forward.rs`、`alerts.rs`、`scheduler.rs`、`services.rs`、`public.rs`、`device_ext.rs`、`usb.rs`、`sim.rs`、`telephony.rs`、`speedtest.rs`、`health.rs`、`at_terminal.rs`、`qos.rs`、`network_ext.rs`、`system.rs`）。
+- 页面：当时旧网页的 43 个页面，外加它们共用的外壳组件（侧栏、告警横幅、状态条、语言切换、按钮/开关/输入框、帮助）。
+- 中文文案：当时旧网页的中文语言包。表里写中文；没有中文翻译的写英文默认值并标「(无中文)」。
+- 接口行为：当时旧代理的路由表和各接口的实现。
   另有 CHILL 的 `chill.rs`、`chill_proxy.rs`。
-- 路径里的 `(panel)` 是 Next.js 路由组，不出现在网址里；下文 URL 一律不带它。
+- 路径里的 `(panel)` 是旧网页的路由组，不出现在网址里；下文 URL 一律不带它。
 
 ### 表格各列怎么读
 
@@ -30,7 +30,7 @@
 - **是**：handler 把下游失败吞掉仍回 `ok:true`（`let _ =`、`unwrap_or(默认值)`、写文件失败不报、先回成功再在后台做事等），后面附 `文件:行`。
 - **否·透传**：handler 只看 `ubus` 进程的退出码，退出码为 0 就把固件返回体原样放进 `data` 回 `ok:true`，**不检查返回体里的 `result` 失败码**。固件确实会这样：`sms.rs:64-67` 注释写明 `zwrt_wms_delete_sms` 返回 `{"result":3}` 却什么都没删。所以「否·透传」不等于可靠。表里会顺带写页面自己有没有检查 `data.result`；没写就是页面也不检查。
 - **否**：handler 自己校验结果，失败时回 4xx/5xx。
-- **不适用（不经 agent）**：请求不走 zte-agent。
+- **不适用（不经 agent）**：请求不走 luyaz-core。
 - **未查**：没追到 handler 的具体行为。
 
 **档位规则**（本次改版定的）：
@@ -55,17 +55,17 @@
 
 ## 全局（每个登录后页面都有）
 
-来源：`components/admin/AdminShell.tsx`、`AlertBanner.tsx`、`StatusStrip.tsx`、`LangToggle.tsx`；`app/(panel)/layout.tsx`（`/login` 不套 AdminShell）。
+来源：`crates/luyaz-web/src/topbar.rs`（顶栏图标和告警条）和 `templates/base.html`（`/login` 不套这层外框）。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 顶栏状态条·移动网络图标（已连接/制式/信号弱/WAN 断开） | `/api/public/status` | `network.connected`、`network.type`、`network.rsrp`（≤ −110 算信号弱） | 10000 | 是：public.rs:31、43 各 ubus 调用失败时 `unwrap_or(json!({}))`，照样回 ok，连接状态会显示成「断开」而不是「读不到」 |
-| 顶栏状态条·Wi-Fi 图标 | `/api/public/status` | `wifi.on` | 10000 | 是：public.rs:53 `zwrt_wlan report` 失败时当作关 |
+| 顶栏状态条·移动网络图标（已连接/制式/信号弱/WAN 断开） | `/api/public/status` | `network.connected`、`network.type`、`network.rsrp`（≤ −110 算信号弱） | 10000 | 是：各 ubus 调用失败时 `unwrap_or(json!({}))`，照样回 ok，连接状态会显示成「断开」而不是「读不到」 |
+| 顶栏状态条·Wi-Fi 图标 | `/api/public/status` | `wifi.on` | 10000 | 是：`zwrt_wlan report` 失败时当作关 |
 | 顶栏状态条·Tailscale 图标 | `/api/public/status` | `services.tailscale.installed`、`services.tailscale.running` | 10000 | 否（本地 `pidof`/文件存在判断） |
 | 顶栏状态条·CHILL 图标 | `/api/public/status` | `services.chill.state`（running/direct/其他） | 10000 | 否（读 `/tmp/chill.state`，读不到为 unknown） |
-| 顶栏状态条·短信图标 + 未读角标 | `/api/public/status` | `sms.unread` | 10000 | 是：public.rs:107 容量查询失败时未读数为 0 |
+| 顶栏状态条·短信图标 + 未读角标 | `/api/public/status` | `sms.unread` | 10000 | 是：容量查询失败时未读数为 0 |
 | 顶栏页面标题 | 无（按当前路由查 NAV 的 `tKey`） | — | — | — |
 | 顶栏 agent 地址（`host:port`，小屏隐藏） | 无（`getApiBase()`，localStorage `u60.agent_url` 或同源） | — | — | — |
 | 事务横条（E4 T9，2026-10-03 加）：进行中「正在确认 · 1:42」（倒计时 aria-hidden），≥640 带「制式 · 自动 → 只用 4G · 触屏」；结束后结果常驻到「知道了」（3 秒类只在本页亲眼看到结束时显示）；退回也没通 role=alert；核心卡住「数据服务没响应」；进行中掉线「和设备断开了 · 操作结果未知」。在该项自己的页不显示 | `/api/ops` | `op.active/last`（文字全是核心的 `say/what/old/target/source_zh/_en`）、`core`、`supported` | 进行中 2000，否则 5000；断线时每 3 秒重试 | 否（agent 透传核心的 op 块） |
@@ -80,7 +80,7 @@
 | 底部标签栏「更多」（小屏，打开侧栏抽屉） | button「更多」 〔现名：link「功能」（原 button「更多」打开侧栏抽屉；现在底部标签栏是 首页 / 图表 / 功能 / 系统，「功能」「系统」枢纽页列出全部页面）〕 | 无 | — | — | 无 | —（本地） |
 | 语言切换「中 / EN」 | group「Language」内 button「中」、button「EN」（`aria-pressed`；建议 group 名改「语言」） 〔现名：radiogroup「语言」内 radio「中」「EN」（按了就切换的单选组；设置页里也有同名的一组）〕 | 无（`setLang`，写 localStorage `u60_lang`） | — | `<html lang>` / localStorage `u60_lang` | 无 | 一（界面设置·语言） |
 | 退出登录 | button「退出登录」（小屏只剩图标，`title`=「退出登录」） | 无（清 localStorage `u60.token`，不调接口） | — | 跳到 `/login` | 无 | —（本地） |
-| 状态条 5 个图标（跳到 信号 / Wi-Fi / Tailscale / CHILL / 短信 页） | link，名称=当前状态文字，如「移动数据已连接 · SA」「Wi-Fi 已开启」「Tailscale 运行中」「CHILL 已停止」「无未读短信」 | 无（导航） | — | — | 无 | —（本地） |
+| 状态条 5 个图标（跳到 信号 / Wi-Fi / Tailscale / CHILL / 短信 页） | link，名称=当前状态文字，如「移动数据已通 · SA」「Wi-Fi 已开启」「Tailscale 运行中」「CHILL 已停止」「无未读短信」 | 无（导航） | — | — | 无 | —（本地） |
 | 事务横条「详情 ›」 | link「详情 ›」 〔交互后：有进行中的改动或没点「知道了」的结果时〕 | 无（导航到该项的页，如 `/router/network-mode`） | — | — | 无 | —（本地） |
 | 告警横幅「知道了」 | button「知道了」 | POST `/api/alerts/read` `{seq: events[0].seq}` | 1 个写请求；之后重拉 `/api/alerts`，并让 `/api/public/status` 失效重拉 | `/api/alerts` `unread` = 0 | 无 | 一（告警标为已读） |
 | 告警横幅「查看」 | link「查看」→ `/alerts` | 无（导航） | — | — | 无 | —（本地） |
@@ -93,20 +93,20 @@
 
 ## /login 登录
 
-文件：`app/(panel)/login/page.tsx`。不套 AdminShell，没有全局状态条和告警横幅。
+不套 AdminShell，没有全局状态条和告警横幅。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 网络·连接（已连接/离线） | `/api/public/status`（`noAuth`，免登录） | `network.connected` | `setInterval` 10000（非 SWR） | 是：public.rs:43 `get_wwaniface` 失败时当作未连接 |
-| 网络·信号（`bar/5` + RSRP dBm） | `/api/public/status` | `network.bar`（<0 显示「—」）、`network.rsrp` | `setInterval` 10000 | 是：public.rs:31 读不到时 bar=−1、rsrp=0 |
-| 网络·网络制式 + 运营商 | `/api/public/status` | `network.type`、`network.operator` | `setInterval` 10000 | 是：public.rs:31 |
-| 设备·Wi-Fi（SSID 或「关」） | `/api/public/status` | `wifi.on`、`wifi.ssid` | `setInterval` 10000 | 是：public.rs:53 |
+| 网络·连接（已连接/离线） | `/api/public/status`（`noAuth`，免登录） | `network.connected` | `setInterval` 10000（非 SWR） | 是：`get_wwaniface` 失败时当作未连接 |
+| 网络·信号（`bar/5` + RSRP dBm） | `/api/public/status` | `network.bar`（<0 显示「—」）、`network.rsrp` | `setInterval` 10000 | 是：读不到时 bar=−1、rsrp=0 |
+| 网络·网络制式 + 运营商 | `/api/public/status` | `network.type`、`network.operator` | `setInterval` 10000 | 是：|
+| 设备·Wi-Fi（SSID 或「关」） | `/api/public/status` | `wifi.on`、`wifi.ssid` | `setInterval` 10000 | 是：|
 | 设备·电池（% + 充电中） | `/api/public/status` | `battery.percent`（<0 显示「—」）、`battery.charging` | `setInterval` 10000 | 否（sysfs，读不到为 −1） |
 | 服务·Tailscale（节点名/已停止/未安装） | `/api/public/status` | `services.tailscale.running/installed/node` | `setInterval` 10000 | 否 |
 | 服务·CHILL（运行中/直连/未启动） | `/api/public/status` | `services.chill.state` | `setInterval` 10000 | 否 |
-| 服务·短信（N 条未读 / 无未读） | `/api/public/status` | `sms.unread` | `setInterval` 10000 | 是：public.rs:107 |
+| 服务·短信（N 条未读 / 无未读） | `/api/public/status` | `sms.unread` | `setInterval` 10000 | 是：|
 | 登录失败提示 | `/api/auth/login` 的错误 | `error`（如 `invalid password`） | — | — |
 
 #### 控件
@@ -122,30 +122,28 @@
 
 ## / 仪表盘
 
-文件：`app/(panel)/page.tsx`。
-
-**关于「今日 / 本月流量」**：当前首页**不显示**任何流量用量。页面只调 `/api/device/system`、`/api/network/signal`、`/api/device/battery-info`、`/api/network/speed`、`/api/wifi/status`、`/api/public/status`，没有调 `/api/data-usage`，也没有调 `/api/network/traffic`。整个 `web/src` 里都没有页面调 `/api/data-usage`。agent 里这个接口是有的（`handlers.rs:136`，读 `zwrt_data_commit.wwancid1dst` 的 `day_* / month_* / total_*`，返回 `data.day / data.month / data.total` 的 `tx_bytes / rx_bytes / time_secs / tx_packets / rx_packets`；读不到的项为 `null`）。改版如果要在首页放今日/本月流量，应接 `/api/data-usage`，不要用 `/api/network/traffic`（那是网卡开机以来的累计计数）。
+**关于「今日 / 本月流量」**：当前首页**不显示**任何流量用量。页面只调 `/api/device/system`、`/api/network/signal`、`/api/device/battery-info`、`/api/network/speed`、`/api/wifi/status`、`/api/public/status`，没有调 `/api/data-usage`，也没有调 `/api/network/traffic`。整个旧网页都没有页面调 `/api/data-usage`。agent 里这个接口是有的（读 `zwrt_data_commit.wwancid1dst` 的 `day_* / month_* / total_*`，返回 `data.day / data.month / data.total` 的 `tx_bytes / rx_bytes / time_secs / tx_packets / rx_packets`；读不到的项为 `null`）。改版如果要在首页放今日/本月流量，应接 `/api/data-usage`，不要用 `/api/network/traffic`（那是网卡开机以来的累计计数）。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 信号柱（0–5 格，按 RSRP 分档） | `/api/network/signal` | NR 时 `nr5g_rsrp`，否则 `lte_rsrp`（`network_type` 含 SA 或 `nr5g_rsrp≠0` 算 NR） | 2000 | 否·透传（handlers.rs:109） |
+| 信号柱（0–5 格，按 RSRP 分档） | `/api/network/signal` | NR 时 `nr5g_rsrp`，否则 `lte_rsrp`（`network_type` 含 SA 或 `nr5g_rsrp≠0` 算 NR） | 2000 | 否·透传 |
 | 链路评价（很好/良好/一般/差/无信号）+ 通俗说明 | `/api/network/signal` | 同上 RSRP | 2000 | 否·透传 |
 | 「实时 / 重连中」小点 | `/api/network/signal` | SWR `error` 是否存在 | 2000 | — |
 | 摘要行：RSRP dBm · 运营商 · 制式 · Band | `/api/network/signal` | `rsrp`、`network_provider_fullname`‖`network_provider`、`network_type`、`nr5g_action_band` | 2000 | 否·透传 |
 | SINR | `/api/network/signal` | NR 时 `nr5g_snr`，否则 `lte_snr` | 2000 | 否·透传 |
 | RSRQ | `/api/network/signal` | NR 时 `nr5g_rsrq`，否则 `lte_rsrq` | 2000 | 否·透传 |
 | Bars `/5` | `/api/network/signal` | `signalbar` | 2000 | 否·透传 |
-| 下载速率 | `/api/network/speed` | `rx_speed`（字节/秒，页面 ×8 显示 bit/s） | 1000 | 否（agent 内部计数，handlers.rs:123） |
+| 下载速率 | `/api/network/speed` | `rx_speed`（字节/秒，页面 ×8 显示 bit/s） | 1000 | 否（agent 内部计数） |
 | 上传速率 | `/api/network/speed` | `tx_speed` | 1000 | 否 |
-| 电池 % + 充电中/已接电源/使用电池 | `/api/device/battery-info` | `battery_capacity`、`battery_online`、`battery_time_to_full`（≥0 且 online=1 算充电） | 5000 | 否·透传（network_ext.rs:55） |
+| 电池 % + 充电中/已接电源/使用电池 | `/api/device/battery-info` | `battery_capacity`、`battery_online`、`battery_time_to_full`（≥0 且 online=1 算充电） | 5000 | 否·透传 |
 | 已连设备数 | `/api/wifi/status` | `clients_total` | 10000 | 是：wifi.rs:55-67 `iw station dump` 失败时计 0 |
 | Wi-Fi 开/关 + 5G 加密方式 | `/api/wifi/status` | `wifi_onoff`（"1" 为开）、`encryption_5g` | 10000 | 是：wifi.rs:84-103 读不到时 `wifi_onoff` 兜底为 "1"（显示为开） |
-| 运行时间 | `/api/device/system` | `uptime` | 5000 | 否·透传（device_ext.rs:22） |
+| 运行时间 | `/api/device/system` | `uptime` | 5000 | 否·透传 |
 | 服务·Tailscale（节点名/已停止/未安装） | `/api/public/status` | `services.tailscale.running/node/installed` | 10000 | 否 |
 | 服务·CHILL（运行中/直连/未启动） | `/api/public/status` | `services.chill.state` | 10000 | 否 |
-| 服务·短信（N 条未读/无，可点） | `/api/public/status` | `sms.unread` | 10000 | 是：public.rs:107 |
+| 服务·短信（N 条未读/无，可点） | `/api/public/status` | `sms.unread` | 10000 | 是：|
 | 小区卡：Cell ID / PCI / EARFCN / Band / Bandwidth / Net Select | `/api/network/signal` | `nr5g_cell_id`、`nr5g_pci`、`nr5g_action_channel`、`nr5g_action_band`、`nr5g_bandwidth`（加 MHz）、`net_select_mode` | 2000 | 否·透传 |
 | Wi-Fi 卡：状态 / 2.4G SSID / 2.4G 信道 / 5G SSID / 5G 信道 / 5G 频宽 / 已连设备 | `/api/wifi/status` | `wifi_onoff`、`ssid_2g`、`actual_channel_2g`、`ssid_5g`、`actual_channel_5g`、`actual_bw_5g`、`clients_total` | 10000 | 是：wifi.rs:12-18 `uci get` 失败一律空串 |
 
@@ -165,14 +163,14 @@
 
 ## /alerts 告警
 
-文件：`app/(panel)/alerts/page.tsx`。本页不显示全局告警横幅。
+本页不显示全局告警横幅。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
 | 记录列表：时间（MM-DD HH:mm，或「开机后 N 分钟」） | `/api/alerts` | `events[].time`（null 时用 `events[].uptime`） | 30000 | 否（alerts.rs:262 读本地文件） |
-| 记录列表：未读标记 ▲ + 种类文字 | `/api/alerts` | `events[].unread`、`events[].kind`（`lib/alerts.ts` `kindLabel` 翻成中文） | 30000 | 否 |
+| 记录列表：未读标记 ▲ + 种类文字 | `/api/alerts` | `events[].unread`、`events[].kind`（翻成中文） | 30000 | 否 |
 | 记录列表：正文 | `/api/alerts` | `events[].text` | 30000 | 否 |
 | 空状态「没有出过问题…」 | `/api/alerts` | `events.length === 0` | 30000 | 否 |
 | 「设备时钟还没校准…」提示 | `/api/alerts` | `clock_set === false` | 30000 | 否 |
@@ -197,8 +195,6 @@
 
 ## /bandlock 频段锁定
 
-文件：`app/(panel)/bandlock/page.tsx`。
-
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
@@ -215,26 +211,24 @@
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| 「重置 / 全部解锁」（页头，红色） | button「重置 / 全部解锁」 | POST `/api/cell/band/reset`（无请求体；T7a 起经核心 `band.reset` = `nwinfo_reset_band_cell_setting`，小区锁定也一起去掉，D22） | 1 | `/api/cell/band/lock` 每项等于默认（T9c） | 「频段和小区锁一起恢复：所有频段锁定和小区锁定都会去掉，设备改回自动选择。」 | 三 |
+| 「清除全部锁定」（页头，红色） | button「清除全部锁定」 | POST `/api/cell/band/reset`（无请求体；T7a 起经核心 `band.reset` = `nwinfo_reset_band_cell_setting`，小区锁定也一起去掉，D22） | 1 | `/api/cell/band/lock` 每项等于默认（T9c） | 「频段和小区锁一起恢复：所有频段锁定和小区锁定都会去掉，设备改回自动选择。」 | 三 |
 | NR 模式单选「NSA」/「SA」 | radio「NSA」、radio「SA」 | 无——**选了也不影响提交**：`applyNR` 固定先发 nsa 再发 sa，`nrMode` 没被用到 | — | — | 无 | —（本地） |
 | NR 频段勾选框 n1 n3 n5 n7 n8 n28 n38 n40 n41 n66 n71 n77 n78 n79（14 个） | checkbox「n1」…「n79」 〔现名：button「n1」「n79」（toolbar「NR (5G) 频段」里的开关按钮，aria-pressed）〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 「应用 NR 锁定」（未选时禁用） | button「应用 NR 锁定」 | POST `/api/cell/band/nr` `{nr5g_type, nr5g_band:"78,41"}`（去掉 n 前缀逗号拼接；ubus `nwinfo_set_nrbandlock`） | **2 步**：① `{nr5g_type:"nsa", nr5g_band}` ② `{nr5g_type:"sa", nr5g_band}`；第 ① 步成功第 ② 步失败时 NSA 已锁、SA 没锁，页面只报错不回滚 | `/api/cell/band/lock` 的 `nr_sa`/`nr_nsa` = 所选（按范围，T9c） | 无 | 三（锁频） |
 | LTE 频段勾选框 B1 B2 B3 B4 B5 B7 B8 B12 B17 B20 B28 B38 B40 B41（14 个） | checkbox「B1」…「B41」 〔现名：button「B1」「B41」（toolbar「LTE 频段」里的开关按钮，aria-pressed）〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 「应用 LTE 锁定」（未选时禁用） | button「应用 LTE 锁定」 | POST `/api/cell/band/lte` `{lte_band:"1,3"}`（ubus `nwinfo_set_lte_ext_band`） | 1 | `/api/cell/band/lock` 的 `lte` = 所选（T9c） | 无 | 三（锁频） |
 
-写接口假成功风险：三个都是「否·透传」（cell.rs:56-83），页面不看 `data.result`。
+写接口假成功风险：三个都是「否·透传」，页面不看 `data.result`。
 
 ---
 
 ## /clients 已连设备
 
-文件：`app/(panel)/clients/page.tsx`。
-
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 「共 N 台 · M 个有效租约」 | `/api/network/clients` | `dhcp_leases.length`；有效 = `dhcp_leases[].expires` > 设备当前时间（`deviceNow(useDeviceOffset())`，偏移来自 `/api/public/status` `clock.utc_offset`） | 5000 | 是：network_ext.rs:28-32 两个 luci-rpc 调用失败时分别给 `null`/省略，照样 ok，页面显示「暂无设备」 |
+| 「共 N 台 · M 个有效租约」 | `/api/network/clients` | `dhcp_leases.length`；有效 = `dhcp_leases[].expires` > 设备当前时间（`deviceNow(useDeviceOffset())`，偏移来自 `/api/public/status` `clock.utc_offset`） | 5000 | 是：两个 luci-rpc 调用失败时分别给 `null`/省略，照样 ok，页面显示「暂无设备」 |
 | 「实时 / 重连中」 | `/api/network/clients` | SWR `error` | 5000 | — |
 | 设备行：名称（租约主机名 → hosts 表按 MAC 查 → 「未知设备」） | `/api/network/clients` | `dhcp_leases[].hostname`、`hosts[mac]` | 5000 | 同上 |
 | 设备行：IP · MAC | `/api/network/clients` | `dhcp_leases[].ipaddr`、`dhcp_leases[].macaddr` | 5000 | 同上 |
@@ -259,7 +253,7 @@
 
 ## /config 配置工具
 
-文件：`app/(panel)/config/page.tsx`。**完全在浏览器里运行，不调任何接口**：读本地选的文件，解析文件头，显示十六进制。
+**完全在浏览器里运行，不调任何接口**：读本地选的文件，解析文件头，显示十六进制。
 
 #### 数据项
 
@@ -267,9 +261,9 @@
 |---|---|---|---|---|
 | 选中的文件名 | 无（浏览器 FileReader） | — | — | 不适用（不经 agent） |
 | 文件头：Magic / 负载类型 / 签名 / 负载偏移 / 文件大小 | 无（`parseHeader` 解析本地文件） | — | — | 不适用 |
-| 十六进制预览（前 256 字节） | 无 | — | — | 不适用 |
+| 前 256 字节（十六进制） | 无 | — | — | 不适用 |
 | 「无法识别的 ZXHN 配置文件」错误 | 无 | — | — | 不适用 |
-| 已知解密密钥表（5 行：描述 + 密钥 hex，写死在页面里） | 无 | — | — | 不适用 |
+| 内置的 5 把 AES 密钥（说明 + 密钥 hex，写在程序里） | 无 | — | — | 不适用 |
 
 #### 控件
 
@@ -277,30 +271,30 @@
 |---|---|---|---|---|---|---|
 | 拖放区（点击打开文件选择，接受 `.zxhn,.bin,.cfg,.conf`） | 无（是个可点的 `div`，键盘无法聚焦）；建议 button「选择配置文件」 | 无 | — | — | 无 | —（本地） |
 | 隐藏的文件输入框 | 无（`className="hidden"`） 〔交互后：隐藏的 input 本来就不可见，由「选择配置文件」按钮打开，无法单独定位〕 | 无 | — | — | 无 | —（本地） |
-| 「下载十六进制转储」 | button「下载十六进制转储」 〔交互后：选了配置文件之后才出现（要上传文件，未自动验证）〕 | 无（浏览器生成 `文件名.hex.txt` 下载） | — | — | 无 | —（本地） |
+| 「存成十六进制」 | button「存成十六进制」 〔交互后：选了配置文件之后才出现（要上传文件，未自动验证）〕 | 无（浏览器生成 `文件名.hex.txt` 下载） | — | — | 无 | —（本地） |
 
 ---
 
 ## /device-info 设备信息
 
-文件：`app/(panel)/device-info/page.tsx`。全部只读，所有请求只在进页面时拉一次。
+全部只读，所有请求只在进页面时拉一次。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| IMEI | `/api/sim/imei` | `imei` | 无 | 否·透传（sim.rs:13） |
-| IMSI | `/api/sim/info` | `sim_imsi` | 无 | 否·透传（sim.rs:6） |
+| IMEI | `/api/sim/imei` | `imei` | 无 | 否·透传 |
+| IMSI | `/api/sim/info` | `sim_imsi` | 无 | 否·透传 |
 | ICCID | `/api/sim/info` | `sim_iccid` | 无 | 否·透传 |
 | SIM 状态 | `/api/sim/info` | `sim_states` | 无 | 否·透传 |
 | 运营商 | `/api/network/signal` | `network_provider_fullname` ?? `network_provider` | 无 | 否·透传 |
 | 网络制式 | `/api/network/signal` | `network_type` | 无 | 否·透传 |
-| IPv4 (WAN) | `/api/network/wan` | `["ipv4-address"][0].address` | 无 | 否·透传（network_ext.rs:6） |
+| IPv4 (WAN) | `/api/network/wan` | `["ipv4-address"][0].address` | 无 | 否·透传 |
 | 网关 | `/api/network/wan` | `route[0].nexthop` | 无 | 否·透传 |
 | DNS | `/api/network/wan` | `["dns-server"][0]` | 无 | 否·透传 |
-| IPv6 (WAN) | `/api/network/wan6` | `["ipv6-address"][0].address` | 无 | 否·透传（network_ext.rs:13） |
-| LAN IP | `/api/network/lan-status` | `["ipv4-address"][0].address` | 无 | 否·透传（network_ext.rs:20） |
-| 主机名 | `/api/device/system` | `hostname`（**未确认**：该接口是 `ubus call system info`，OpenWrt 的 `system info` 通常不含 `hostname`/`kernel`，那两项在 `system board` 里；很可能恒显示「—」） | 无 | 否·透传（device_ext.rs:22） |
+| IPv6 (WAN) | `/api/network/wan6` | `["ipv6-address"][0].address` | 无 | 否·透传 |
+| LAN IP | `/api/network/lan-status` | `["ipv4-address"][0].address` | 无 | 否·透传 |
+| 主机名 | `/api/device/system` | `hostname`（**未确认**：该接口是 `ubus call system info`，OpenWrt 的 `system info` 通常不含 `hostname`/`kernel`，那两项在 `system board` 里；很可能恒显示「—」） | 无 | 否·透传 |
 | 内核 | `/api/device/system` | `kernel`（同上，**未确认**） | 无 | 否·透传 |
 | 运行时间 | `/api/device/system` | `uptime` | 无 | 否·透传 |
 | 内存总量 / 空闲 / 可用 | `/api/device/system` | `memory.total`、`memory.free`、`memory.available`（字节，显示为 MB） | 无 | 否·透传 |
@@ -313,8 +307,6 @@
 ---
 
 ## /health 健康
-
-文件：`app/(panel)/health/page.tsx`。
 
 #### 数据项
 
@@ -332,37 +324,35 @@
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| 「现在检查」（页头） | button「现在检查」 | GET `/api/health?refresh=1`（同步跑一遍设备上的 `/data/u60-guard/doctor.sh --tsv`，最长 20 秒） | 1 | 返回体即新结果（`checked_at` 更新） | 无 | 二（GET 但会在设备上起进程，见汇总「有副作用的 GET」） |
+| 「现在检查」（页头） | button「现在检查」 | GET `/api/health?refresh=1`（同步跑一遍设备上的 `/data/luyaz/scripts/doctor.sh --tsv`，最长 20 秒） | 1 | 返回体即新结果（`checked_at` 更新） | 无 | 二（GET 但会在设备上起进程，见汇总「有副作用的 GET」） |
 | 崩溃记录行（整行是按钮，「查看」/「收起」） | button，名称为整行文字（时间 + 程序 + 状态 +「查看」）；建议加 `aria-label`「查看 {程序} {时间} 的崩溃日志」 | GET `/api/health/crashlog?program=&file=` | — | — | 无 | —（本地，只读） |
 
 ---
 
 ## /router/apn APN 设置
 
-文件：`app/(panel)/router/apn/page.tsx`（含 `WanIpv6Card`）。
-
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| APN 模式（手动/自动 + 说明） | `/api/router/apn/mode` | `apn_mode`（1=手动） | 无 | 否·透传（router.rs:252） |
-| 手动配置列表：名称 +「使用中」（只在手动模式；自动模式下被选中的那条写「手动模式时用这条」，2026-09-25：手动列表的 `isEnable` 只表示手动模式会用哪条） | `/api/router/apn/profiles` + `/api/router/apn/mode` | `apnListArray[].profilename`、`.isEnable`、`apn_mode` | 无 | 否·透传（router.rs:270） |
+| APN 模式（手动/自动 + 说明） | `/api/router/apn/mode` | `apn_mode`（1=手动） | 无 | 否·透传 |
+| 手动配置列表：名称 +「使用中」（只在手动模式；自动模式下被选中的那条写「手动模式时用这条」，2026-09-25：手动列表的 `isEnable` 只表示手动模式会用哪条） | `/api/router/apn/profiles` + `/api/router/apn/mode` | `apnListArray[].profilename`、`.isEnable`、`apn_mode` | 无 | 否·透传 |
 | 手动配置列表：APN · PDP 类型 · 认证方式（none 不显示） | `/api/router/apn/profiles` | `apnListArray[].wanapn`、`.pdpType`、`.pppAuthMode` | 无 | 否·透传 |
 | 手动配置 id（编辑/删除/启用时用） | `/api/router/apn/profiles` | `apnListArray[].cid`（转字符串当 `profileId`；**未确认** `cid` 是否就是固件要的 `profileId`） | 无 | 否·透传 |
-| 「暂无手动配置」空状态 | `/api/router/apn/profiles` | 列表为空 | 无 | 否·透传 |
-| 自动检测的配置列表：名称 +「使用中」（只在自动模式）+ APN · PDP；2 条以上时每行可「只给这张卡用」（2026-10-03） | `/api/router/apn/auto-profiles` | `apnListArray[].profilename/isEnable/wanapn/pdpType` | 无 | 否·透传（router.rs:299） |
+| 「还没有手动配置」空状态 | `/api/router/apn/profiles` | 列表为空 | 无 | 否·透传 |
+| 运营商库里的配置列表：名称 +「使用中」（只在自动模式）+ APN · PDP；2 条以上时每行可「只给这张卡用」（2026-10-03） | `/api/router/apn/auto-profiles` | `apnListArray[].profilename/isEnable/wanapn/pdpType` | 无 | 否·透传 |
 | 自动候选的「物联网」标记、手动列表里的「本卡」、候选行「本卡在用」、换卡自动调整的提示（10 分钟内） | `/api/netinfo?lite=1&apn=1` | `apn.auto[].iot`、`apn.picked_id`、`apn.notice.text/text_en` | 无 | 否（agent 自己判定，apn_pick.rs） |
 | 编辑表单预填：名称/APN/用户名/密码/PDP/认证/设为使用中 | `/api/router/apn/profiles` | 对应条目的 `profilename/wanapn/username/password/pdpType/pppAuthMode/isEnable` | 无 | 否·透传 |
-| 运营商 IPv6(WAN)：向运营商请求 IPv6 / 仅 IPv4 | `/api/router/wan-ipv6` | `ipv6_enabled` | 无 | 否（读 APN 失败回 503，router.rs:333-336） |
-| 运营商 IPv6：PDP 类型 · 当前有/无 IPv6 | `/api/router/wan-ipv6` | `pdp_type`（3=IPv4v6、2=IPv6、其他=IPv4）、`wan_has_ipv6` | 无 | 是：router.rs:338-345 `get_wwaniface` 失败时 `wan_has_ipv6` 为 false，显示「当前无 IPv6」 |
-| 加载错误横幅（模式或列表出错，带 Retry）/「读取 WAN IPv6 状态失败。」 | 上述接口 | SWR `error` | — | — |
+| 运营商 IPv6(WAN)：已让运营商分配 IPv6 / 仅 IPv4 | `/api/router/wan-ipv6` | `ipv6_enabled` | 无 | 否（读 APN 失败回 503） |
+| 运营商 IPv6：PDP 类型 · 当前有/无 IPv6 | `/api/router/wan-ipv6` | `pdp_type`（3=IPv4v6、2=IPv6、其他=IPv4）、`wan_has_ipv6` | 无 | 是：`get_wwaniface` 失败时 `wan_has_ipv6` 为 false，显示「当前无 IPv6」 |
+| 加载错误横幅（模式或列表出错，带 Retry）/「读不到 WAN IPv6 状态」 | 上述接口 | SWR `error` | — | — |
 
 #### 控件
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
 | APN 模式开关「手动」 | switch「手动」 | PUT `/api/router/apn/mode` `{apn_mode: 1 或 0}`（ubus `set_apn_mode`） | 1 | `/api/router/apn/mode` `apn_mode` | 无 | 三（APN 切换） |
-| 运营商 IPv6(WAN) 开关 | switch「运营商 IPv6(WAN)」 | PUT `/api/router/wan-ipv6` `{enabled: bool}` | 1 个 HTTP 请求；agent 内部 3 步：读 cid1 APN → `set_apn_at_cid` 改 `pdpType/roamingPdpType`（开=3，关=1）→ `set_qcliiface` 开/关 IPv6 支路（这一步失败被忽略，router.rs:400） | `/api/router/wan-ipv6` `pdp_type`（配置）；`wan_has_ipv6`（实际是否有 IPv6，可能滞后） | 无 | 三（APN 修改） |
+| 运营商 IPv6(WAN) 开关 | switch「运营商 IPv6(WAN)」 | PUT `/api/router/wan-ipv6` `{enabled: bool}` | 1 个 HTTP 请求；agent 内部 3 步：读 cid1 APN → `set_apn_at_cid` 改 `pdpType/roamingPdpType`（开=3，关=1）→ `set_qcliiface` 开/关 IPv6 支路（这一步失败被忽略） | `/api/router/wan-ipv6` `pdp_type`（配置）；`wan_has_ipv6`（实际是否有 IPv6，可能滞后） | 无 | 三（APN 修改） |
 | 「添加配置」（卡片右上） | button「添加配置」 | 无（打开表单弹层） | — | — | 无 | —（本地） |
 | 条目「启用」（非使用中才有） | button「启用」（每行同名；建议 `aria-label`「启用 {名称}」） | POST `/api/router/apn/profiles/activate` `{profileId}`（ubus `enable_manu_apn_id`） | 1 | `/api/router/apn/profiles` 对应条目 `isEnable` | 无 | 三（APN 切换） |
 | 自动候选「只给这张卡用」（候选 ≥2 条、且不是本卡正在用的那条才有） | button「只给这张卡用 {APN}」 〔交互后：场景 apn-candidates〕 | POST `/api/netinfo/apn` `{id: "auto…"}`（agent 复制成手动 APN 或复用同样的那条 → `enable_manu_apn_id` + `set_apn_mode 1`，按 ICCID 记住） | 1 个 HTTP 请求（202，后台做） | `/api/netinfo?lite=1&apn=1` `apn.mode == "manual"` 且 `apn.in_use.apn` = 该候选 | 「只给这张卡用 {APN}？」 | 三（APN 切换） |
@@ -374,21 +364,19 @@
 | 表单·密码 | 无；建议「密码」 〔交互后：点 button「添加配置」〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 表单·PDP 类型下拉（IPv4 / IPv6 / IPv4v6） | 无；建议 combobox「PDP 类型」 〔交互后：点 button「添加配置」〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 表单·认证方式下拉（none / PAP / CHAP） | 无；建议 combobox「认证方式」 〔交互后：点 button「添加配置」〕 | 无（草稿） | — | — | 无 | —（本地） |
-| 表单·「设为使用中的配置」开关 | 无（`Toggle` 没传 `label`，文字在旁边的 span 里）；建议 switch「设为使用中的配置」 〔交互后：点 button「添加配置」〕 | 无（草稿；只在**编辑**时生效，新增时被忽略） | — | — | 无 | —（本地） |
+| 表单·「保存后改用这条配置」勾选 | 无（`Toggle` 没传 `label`，文字在旁边的 span 里）；建议 checkbox「保存后改用这条配置」 〔交互后：点 button「添加配置」〕 | 无（草稿；只在**编辑**时生效，新增时被忽略） | — | — | 无 | —（本地） |
 | 表单「取消」 | button「取消」 〔交互后：点 button「添加配置」〕 | 无 | — | — | 无 | —（本地） |
 | 表单「添加配置」（新增时） | button「添加配置」（与卡片按钮同名；建议弹层按钮改「保存」或加 dialog 作用域） | POST `/api/router/apn/profiles` `{profilename, wanapn, pdpType, pppAuthMode, username, password}`（ubus `add_manu_apn`） | 1（页面先查同名重复、必填） | `/api/router/apn/profiles` 出现新条目 | 无 | 三（APN 修改） |
 | 表单「保存修改」（编辑时） | button「保存修改」 〔交互后：编辑已有配置时；点 button「编辑 China Mobile」〕 | PUT `/api/router/apn/profiles` `{profileId, profilename, wanapn, pdpType, pppAuthMode, username, password}`（ubus `modify_manu_apn`） | **最多 2 步**：① PUT `/api/router/apn/profiles` ② 若勾了「设为使用中」→ POST `/api/router/apn/profiles/activate` `{profileId}`；① 成功 ② 失败时改动已保存但没切换 | `/api/router/apn/profiles` 条目字段、`isEnable` | 无 | 三（APN 修改/切换） |
 | 错误横幅「Retry」 | button「Retry」 〔现名：button「重试」〕〔交互后：读取失败时（错误状态）；场景 down〕 | 重拉三个 GET | — | — | 无 | —（本地，只读） |
 
-写接口假成功风险：模式、增删改、启用都是「否·透传」（router.rs:259-326），页面不看 `data.result`；`/api/router/wan-ipv6` PUT 为「是」（router.rs:400）。
+写接口假成功风险：模式、增删改、启用都是「否·透传」，页面不看 `data.result`；`/api/router/wan-ipv6` PUT 为「是」。
 
 说明：页面显示的 PDP 类型是字符串（`IPv4`/`IPv6`/`IPv4v6`），而 `/api/router/wan-ipv6` 里 agent 读到的 `pdpType` 是数字（1/2/3）。表单提交的也是字符串。**未确认**固件 `add_manu_apn`/`modify_manu_apn` 接受哪种。
 
 ---
 
 ## /router/celllock 小区锁定
-
-文件：`app/(panel)/router/celllock/page.tsx`。
 
 #### 数据项
 
@@ -398,9 +386,9 @@
 | 当前小区·EARFCN | `/api/network/signal` | NR 时 `nr5g_action_channel`，否则 `lte_earfcn` | 5000 | 否·透传 |
 | 当前小区·Band | `/api/network/signal` | NR 时 `nr5g_action_band`，否则 `lte_band` | 5000 | 否·透传 |
 | 当前小区·Cell ID | `/api/network/signal` | NR 时 `nr5g_cell_id`，否则 `lte_cell_id` | 5000 | 否·透传 |
-| NR 邻区表（列 = 返回对象的所有键，动态生成） | `/api/cell/neighbors/nr` | 页面猜结构：`cells[]` 或 `list[]`，都没有时把整个对象当一行（**未确认**固件真实结构） | 无（扫描后拉一次） | 否·透传（cell.rs:42） |
-| LTE 邻区表 | `/api/cell/neighbors/lte` | 同上 | 无 | 否·透传（cell.rs:49） |
-| 「点击“扫描邻区”以发现附近的小区。」 | — | 两张表都为空 | — | — |
+| NR 邻区表（列 = 返回对象的所有键，动态生成） | `/api/cell/neighbors/nr` | 页面猜结构：`cells[]` 或 `list[]`，都没有时把整个对象当一行（**未确认**固件真实结构） | 无（扫描后拉一次） | 否·透传 |
+| LTE 邻区表 | `/api/cell/neighbors/lte` | 同上 | 无 | 否·透传 |
+| 邻区表空着时的提示（扫描邻区还没做） | — | 两张表都为空 | — | — |
 | 操作结果提示 | 写接口返回 | — | — | — |
 
 页面**不读取当前锁小区配置**，表单初始为空；agent 也没有锁小区状态的 GET。「当前小区」显示的是正在驻留的小区，不是锁定设置。
@@ -420,60 +408,58 @@
 | 「扫描邻区」/「扫描中…」 | button「扫描邻区」（`/api/netinfo` 的 `neighbors.state` 为 `unsupported` 时置灰，下方写原因） | POST `/api/cell/neighbors/scan`（agent 固定回 410「原厂扫描会断网且拿不到数据，已停用」，不再调 ubus `nwinfo_scan_nbr`） | **3 个请求**：① POST 扫描 → 页面等 3 秒 → ② GET `/api/cell/neighbors/nr` ③ GET `/api/cell/neighbors/lte`（②③ 失败被静默忽略，仍提示「扫描完成」） | 邻区表有行 | 无 | 二 |
 | 邻区表每行「选择」 | button「选择」（每行同名；建议 `aria-label`「用 PCI {pci} 填表」） 〔现名：button「用 PCI {pci} 填表」〕〔缺失：2026-09-25 起邻区扫描停用（原厂扫描会断移动数据且拿不到小区，agent 回 410，按钮置灰并说明原因），结果行不会出现〕 | 无（把该行 pci/earfcn/band 填进上面表单） | — | — | 无 | —（本地） |
 
-写接口假成功风险：锁 NR / 锁 LTE / 重置 / 扫描都是「否·透传」（cell.rs:6-40），页面不看 `data.result`。
+写接口假成功风险：锁 NR / 锁 LTE / 重置 / 扫描都是「否·透传」，页面不看 `data.result`。
 
 ---
 
 ## /router/device 设备控制
 
-文件：`app/(panel)/router/device/page.tsx`。重启、恢复出厂用的是页面内的两段式按钮确认（自定义确认，非 `window.confirm`）。
+重启、恢复出厂用的是页面内的两段式按钮确认（自定义确认，非 `window.confirm`）。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 「当前已停止充电（硬件强制）。」 | `/api/device/charge-control` | `charging_stopped` | 无 | 是：device_ext.rs:57-60 `zwrt_bsp.charger list` 失败时当作 false |
+| 「硬件已暂停充电。」 | `/api/device/charge-control` | `charging_stopped` | 无 | 是：`zwrt_bsp.charger list` 失败时当作 false |
 | 充电限制开关初值 | `/api/device/charge-control` | `charge_limit_enabled` | 无 | 否（agent 内存状态） |
 | 充电上限 % 滑块初值 | `/api/device/charge-control` | `charge_limit` | 无 | 否 |
 | 回差 % 滑块初值 | `/api/device/charge-control` | `hysteresis` | 无 | 否 |
-| 「当前电量：N% — 状态」 | `/api/device/charge-control` | `capacity`、`battery_status`（sysfs） | 无 | 是：device_ext.rs:45-55 sysfs 读不到时 capacity=0、status 空 |
-| 省电模式开关初值 | `/api/device/power-save`（**POST** 读取） | 请求 `{deviceInfoList:["power_saver_mode"]}`，读 `power_saver_mode`（"1"=开）；失败被静默吞掉，开关保持禁用 | 无 | 否·透传（device_ext.rs:126） |
-| 快速启动开关初值 | `/api/device/fast-boot` | `fast_boot`（"1"=开） | 无 | 否·透传（device_ext.rs:156，读不到键时当 "0"） |
+| 「当前电量：N% — 状态」 | `/api/device/charge-control` | `capacity`、`battery_status`（sysfs） | 无 | 是：sysfs 读不到时 capacity=0、status 空 |
+| 省电模式开关初值 | `/api/device/power-save`（**POST** 读取） | 请求 `{deviceInfoList:["power_saver_mode"]}`，读 `power_saver_mode`（"1"=开）；失败被静默吞掉，开关保持禁用 | 无 | 否·透传 |
+| 快速启动开关初值 | `/api/device/fast-boot` | `fast_boot`（"1"=开） | 无 | 否·透传（读不到键时当 "0"） |
 | 错误横幅 | charge-control / fast-boot | SWR `error` | — | — |
 
 #### 控件
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| 「启用充电限制」开关 | switch「已启用」/「已禁用」（名称随状态变，**不适合做测试定位**）；建议 switch「启用充电限制」 | 无（草稿，等「应用」） | — | — | 无 | —（本地） |
-| 充电上限 % 滑块（50–100） | 无（文字在 span 里，`<input type=range>` 无标签）；建议 slider「充电上限 %」 〔交互后：打开「启用充电限制」后出现；点 switch「启用充电限制」〕 | 无（草稿） | — | — | 无 | —（本地） |
-| 回差 % 滑块（1–10） | 无；建议 slider「回差 %」 〔交互后：打开「启用充电限制」后出现；点 switch「启用充电限制」〕 | 无（草稿） | — | — | 无 | —（本地） |
+| 「开启充电上限」开关 | switch「已启用」/「已禁用」（名称随状态变，**不适合做测试定位**）；建议 switch「开启充电上限」 | 无（草稿，等「应用」） | — | — | 无 | —（本地） |
+| 充电上限 % 滑块（50–100） | 无（文字在 span 里，`<input type=range>` 无标签）；建议 slider「充电上限 %」 〔交互后：打开「开启充电上限」后出现；点 switch「开启充电上限」〕 | 无（草稿） | — | — | 无 | —（本地） |
+| 回差 % 滑块（1–10） | 无；建议 slider「回差 %」 〔交互后：打开「开启充电上限」后出现；点 switch「开启充电上限」〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 「应用」 | button「应用」 | PUT `/api/device/charge-control` `{charge_limit_enabled, charge_limit, hysteresis}` | 1 | 返回体就是重读的状态；GET `/api/device/charge-control` `charge_limit_enabled/charge_limit/hysteresis` | 无 | 二 |
 | 省电模式开关 | switch「开」/「关」（随状态变）；建议 switch「省电模式」 | PUT `/api/device/power-save` `{deviceInfoList:[{power_saver_mode:"1"/"0"}]}`（ubus `set_device_info`） | 1（先乐观翻转，失败再翻回） | POST `/api/device/power-save` 读 `power_saver_mode` | 无 | 二 |
 | 快速启动开关 | switch「开」/「关」（随状态变）；建议 switch「快速启动」 | PUT `/api/device/fast-boot` `{fast_boot:"1"/"0"}` | 1（乐观翻转） | `/api/device/fast-boot` `fast_boot` | 无 | 二 |
 | 「停止充电」开关（10-04 审计 C） | switch「停止充电」 | PUT `/api/device/charge-control` `{charging_stopped}` → core `power.direct_supply.set`（切断充电输入、改用电池供电） | 1 | GET `/api/device/charge-control` `charging_stopped` | 页内确认，写明「插着电电量也会往下掉」 | 二 |
 | 「重启设备」 | button「重启设备」 | 无（进入确认态） | — | — | 无 | —（本地） |
-| 「确认重启」 | button「确认重启」 〔交互后：确认改为对话框；点 button「重启设备」〕 | POST `/api/device/reboot`（ubus `system reboot`） | 1 | 无读回（设备断线；可观察 `/api/device/system` `uptime` 变小） | 自定义确认（非 window.confirm）：「路由器将重启并暂时无法连接。」 | 三（重启） |
+| 「确认重启」 | button「确认重启」 〔交互后：确认改为对话框；点 button「重启设备」〕 | POST `/api/device/reboot`（ubus `system reboot`） | 1 | 无读回（设备断线；可观察 `/api/device/system` `uptime` 变小） | 自定义确认（非 window.confirm）：「重启设备？」对话框 | 三（重启） |
 | 重启确认态「取消」 | button「取消」 〔交互后：确认对话框里；点 button「重启设备」〕 | 无 | — | — | 无 | —（本地） |
 | 「关机」（10-04 审计 C） | button「关机」 → 对话框 button「关机」 | POST `/api/device/poweroff` → core `device.poweroff`（没有退路直调） | 1 | 无读回（设备关了，不等它回来） | 对话框写「只能在设备上长按电源键开机，这里和远程都开不了」 | 三；定时任务禁止调用 |
-| 「恢复出厂设置」 | button「恢复出厂设置」 | 无（进入第一段确认） | — | — | 无 | —（本地） |
-| 「确定」（第一段） | button「确定」 〔现名：textbox「{前}恢复出厂{后}」（两段确认合成一个对话框：第一段「确定」换成输入确认词「恢复出厂」）〕〔交互后：点 button「恢复出厂设置」〕 | 无（进入第二段确认） | — | — | 自定义确认：「这将清除所有设置。确定吗？」 | —（本地） |
-| 「立即重置」（第二段） | button「立即重置」 〔交互后：确认对话框里，输入确认词前是禁用的；点 button「恢复出厂设置」〕 | POST `/api/device/factory-reset`（ubus `zwrt_bsp.power factory_reset`） | 1 | 无读回 | 自定义两段确认：「这将清除所有设置。确定吗？」→「最终确认——此操作无法撤销。」 | 三（恢复出厂） |
-| 恢复出厂各段「取消」 | button「取消」 〔交互后：确认对话框里；点 button「恢复出厂设置」〕 | 无 | — | — | 无 | —（本地） |
+| 「恢复出厂」 | button「恢复出厂」 | 无（进入第一段确认） | — | — | 无 | —（本地） |
+| 「确定」（第一段） | button「确定」 〔现名：textbox「{前}恢复出厂{后}」（两段确认合成一个对话框：第一段「确定」换成输入确认词「恢复出厂」）〕〔交互后：点 button「恢复出厂」〕 | 无（进入第二段确认） | — | — | 对话框「全部清空，恢复出厂？」 | —（本地） |
+| 「立即重置」（第二段） | button「立即重置」 〔交互后：确认对话框里，输入确认词前是禁用的；点 button「恢复出厂」〕 | POST `/api/device/factory-reset`（ubus `zwrt_bsp.power factory_reset`） | 1 | 无读回 | 一个对话框：「全部清空，恢复出厂？」，输入确认词「恢复出厂」后才能按「立即重置」 | 三（恢复出厂） |
+| 恢复出厂各段「取消」 | button「取消」 〔交互后：确认对话框里；点 button「恢复出厂」〕 | 无 | — | — | 无 | —（本地） |
 
-写接口假成功风险：charge-control PUT 为「否」（ubus 失败回 500，device_ext.rs:91-96）；power-save、fast-boot、reboot、factory-reset 为「否·透传」。
+写接口假成功风险：charge-control PUT 为「否」（ubus 失败回 500）；power-save、fast-boot、reboot、factory-reset 为「否·透传」。
 
 ---
 
 ## /router/dns DNS 设置
 
-文件：`app/(panel)/router/dns/page.tsx`。
-
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| DNS 模式单选初值（自动/手动/DoH） | `/api/router/dns`、`/api/doh/status` | `config.enabled`（DoH 为真时选 DoH）否则 `dns_mode`（agent 已去掉固件的 `wan_` 前缀） | 无（只初始化一次，`initDone`） | 否·透传（router.rs:6-41） |
+| DNS 模式单选初值（自动/手动/DoH） | `/api/router/dns`、`/api/doh/status` | `config.enabled`（DoH 为真时选 DoH）否则 `dns_mode`（agent 已去掉固件的 `wan_` 前缀） | 无（只初始化一次，`initDone`） | 否·透传 |
 | 主 DNS / 备用 DNS 输入框初值 | `/api/router/dns` | `prefer_dns_manual`、`standby_dns_manual`（手动模式下为空时 agent 用 `uci network.wan.dns` 补） | 无 | 否·透传 |
 | DoH 上游 URL 输入框初值 | `/api/doh/status` | `config.upstream_url` | 无 | 否（agent 内存状态） |
 | 「缓存条目：N」「查询次数：N」 | `/api/doh/status` | `stats.cache_entries`、`stats.queries_total` | 无 | 否 |
@@ -486,7 +472,7 @@
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| DNS 模式单选：「自动（运营商分配）」/「手动」/「DNS-over-HTTPS (DoH)」 | radio「自动（运营商分配）」「手动」「DNS-over-HTTPS (DoH)」 | 无（草稿，等「应用」） | — | — | 无 | —（本地） |
+| DNS 模式单选：「自动（用运营商的服务器）」/「手动」/「DNS-over-HTTPS (DoH)」 | radio「自动（用运营商的服务器）」「手动」「DNS-over-HTTPS (DoH)」 | 无（草稿，等「应用」） | — | — | 无 | —（本地） |
 | 主 DNS 输入框（手动时） | 无（label 未关联）；建议 textbox「主 DNS」 〔交互后：DNS 模式选「手动」后；点 radio「手动」〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 备用 DNS（可选）输入框 | 无；建议 textbox「备用 DNS」 〔现名：textbox「备用 DNS（可选）」〕〔交互后：DNS 模式选「手动」后；点 radio「手动」〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 上游 URL 输入框（DoH 时） | 无；建议 textbox「上游 URL」 〔交互后：DNS 模式选 DoH 后；点 radio「DNS-over-HTTPS (DoH)」〕 | 无（草稿） | — | — | 无 | —（本地） |
@@ -496,7 +482,7 @@
 | 「清除缓存」（DoH 开着时） | button「清除缓存」 〔交互后：只在设备上的 DoH 代理正在运行时出现（模拟数据里 DoH 没开，未自动验证）〕 | POST `/api/doh/cache/clear` `{}` | 1 | `/api/doh/status` `stats.cache_entries` = 0 | 无 | 二 |
 
 写接口假成功风险：
-- PUT `/api/router/dns`：否·透传（router.rs:43-52）。
+- PUT `/api/router/dns`：否·透传。
 - PUT `/api/doh/config`：**是**（页面字段名不对，请求等于空补丁，doh/mod.rs:87-95 照样保存回 ok）。
 - POST `/api/doh/enable`：**是**，server.rs:449-452 写 drop-in 和重启 dnsmasq 的结果都被 `let _ =` 丢掉；doh/mod.rs:119 保存 enabled 失败也不报。
 - POST `/api/doh/disable`：**是**，server.rs:458-471 恢复 dnsmasq 的命令结果被丢掉。
@@ -505,13 +491,11 @@
 
 ## /router/esim eSIM
 
-文件：`app/(panel)/router/esim/page.tsx`（`ProfilesSection`、`NotificationsSection`）。
-
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 未部署 lpac 提示（「设备上未部署 lpac」） | `/api/esim/status` | `installed === false` | 无 | 否 |
+| 未部署 lpac 提示（「设备上没有 lpac」） | `/api/esim/status` | `installed === false` | 无 | 否 |
 | EID（显示末 8 位，悬停/副标题显示全文） | `/api/esim/status` | `eid` | 无 | 否（lpac 出错回 502，esim.rs:265-284） |
 | 剩余空间 | `/api/esim/status` | `free_nvm`（字节） | 无 | 否 |
 | SGP.22 规范版本 | `/api/esim/status` | `sgp22_version` | 无 | 否 |
@@ -519,7 +503,7 @@
 | （接口有、页面没显示）默认 SM-DP+ | `/api/esim/status` | `default_smdp` | — | — |
 | 配置列表：名称（昵称 → 运营商名 → 配置名）+「使用中」 | `/api/esim/profiles` | `profiles[].profileNickname/serviceProviderName/profileName`、`profileState === "enabled"` | 10000 | 否（esim.rs:287-300；有任务在跑时回 `busy:true, profiles:null`，页面保留旧列表） |
 | 配置列表：运营商名 · 配置名 · ICCID | `/api/esim/profiles` | `profiles[].serviceProviderName/profileName/iccid` | 10000 | 否 |
-| 「卡上还没有配置文件——在下方添加。」 | `/api/esim/profiles` | 列表空且不忙 | 10000 | 否 |
+| 「卡里还没有配置，在下面添加」 | `/api/esim/profiles` | 列表空且不忙 | 10000 | 否 |
 | 忙碌状态标签（切换中…/下载中…/删除中…/重启中…/处理中…） | `/api/esim/job`（有任务时） + `/api/esim/profiles` `busy` | `status`、本地 `opLabel` | job 1500（仅在有任务时） | 否 |
 | 任务结果提示（完成 / 失败原因） | `/api/esim/job` | `id`（对上本次 `job_id`）、`status`（done/error）、`message`、`rebooting` | 1500 | 是：esim.rs:436-449 切换没收敛时任务标记 `done`（「switched — rebooting to finish」）然后重启，并没有验证新配置已生效 |
 | 重启横幅「设备正在重启并切换到新配置…」+ 自动重连 | `/api/public/status`（`noAuth`、`raw`） | 只看能否连上 | `setInterval` 4000（仅重启中） | — |
@@ -536,6 +520,7 @@
 | 改名输入框（编辑态，回车保存） | 无（只有 placeholder=运营商名）；建议 textbox「昵称」 〔现名：textbox「{名称} 的昵称」〕〔交互后：点 button「给 台湾旅行 改名」〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 「保存」（编辑态） | button「保存」 〔交互后：改名编辑态；点 button「给 台湾旅行 改名」〕 | POST `/api/esim/nickname` `{iccid, nickname}`（空串=清除；同步 lpac） | 1（昵称未变不发） | `/api/esim/profiles` `profiles[].profileNickname` | 无 | 二 |
 | 条目「切换」（非使用中才有） | button「切换」（每行同名；建议 `aria-label`「切换到 {名称}」） | POST `/api/esim/switch` `{iccid}` → 返回 `job_id` | 1 个写请求，之后轮询 `/api/esim/job`；agent 内部：lpac enable → `qmi simreset` → 重启 `zte_topsw_mdm` → 最多 30 秒等身份收敛，否则 **2 秒后重启整机**。距上次切换 5 分钟内会被 429 拒绝 | `/api/esim/job` `status=done` 且 `/api/esim/profiles` 该条 `profileState="enabled"`；重启路径下以设备回来后的 profiles 为准 | 「切换到“{名称}”?\n\n基带将以新配置重新注网——预计短暂断网(通常约 40 秒,无需重启)。」 | 三（eSIM 切换/启用） |
+| 「停止重试」（切换遇到卡忙、在重试时，出现在配置列表下方 `#es-retry`，同时显示已试几次、下次重试时间、约何时放弃） | button「停止重试」 | POST `/router/esim/stop` → core `POST /api/esim/cancel`（只停卡忙重试；卡已换上后回 409「past the card step」） | 1 | 切换任务以 `reason: "cancelled"` 结束（「已停止重试，卡上还是原来的配置」） | 无 | 一（只是不再等，不改卡） |
 | 条目垃圾桶图标（非使用中才有） | 无 aria-label（`title`=「删除」）；建议 button「删除 {名称}」 | POST `/api/esim/delete` `{iccid}` → `job_id`（agent 先查不能删使用中的） | 1，之后轮询 job | `/api/esim/job` `status=done`；`/api/esim/profiles` 该条消失 | 「从卡上永久删除配置“{名称}”?此操作不可撤销。」 | 三（eSIM 删除） |
 | 激活码输入框（占位 `LPA:1$smdp.example.com$XXXX-XXXX-XXXX`） | 无；建议 textbox「激活码」 | 无（草稿；页面校验以 `LPA:1$` 或 `1$` 开头） | — | — | 无 | —（本地） |
 | 确认码(可选) 输入框 | 无（只有 placeholder）；建议 textbox「确认码」 〔现名：textbox「确认码(可选)」〕 | 无（草稿） | — | — | 无 | —（本地） |
@@ -548,22 +533,22 @@
 
 ## /router/firewall 防火墙
 
-文件：`app/(panel)/router/firewall/page.tsx`。所有 GET 都是 ubus 透传，页面对返回结构的假设（端口转发、过滤规则直接当数组）**没有在代码里得到验证**：固件 `router_get_portforward_rule` / `router_get_macipport_filter_rule` 多半返回对象而不是数组，若如此两张表会恒为空。以下字段名均按页面代码记录，标「未确认」。
+文件：`crates/luyaz-web/src/router_firewall.rs`。所有 GET 都是 ubus 透传，页面对返回结构的假设（端口转发、过滤规则直接当数组）**没有在代码里得到验证**：固件 `router_get_portforward_rule` / `router_get_macipport_filter_rule` 多半返回对象而不是数组，若如此两张表会恒为空。以下字段名均按页面代码记录，标「未确认」。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 防火墙开关状态 | `/api/router/firewall` | `firewall_enable`（"1"=开，未确认） | 无 | 否·透传（router.rs:93） |
+| 防火墙开关状态 | `/api/router/firewall` | `firewall_enable`（"1"=开，未确认） | 无 | 否·透传 |
 | 防火墙级别「当前：X」+ 三个级别按钮高亮 | `/api/router/firewall` | `level`（缺省按 medium 显示，未确认） | 无 | 否·透传 |
 | NAT 开关状态 | `/api/router/firewall` | `nat_enable`（未确认） | 无 | 否·透传 |
 | 端口转发总开关状态 | `/api/router/firewall` | `portforward_enable`（未确认） | 无 | 否·透传 |
 | DMZ 开关 + 主机 IP 初值 | `/api/router/firewall` | `dmz_enable`、`dmz_ip` ?? `dmz_hostname`（未确认） | 无 | 否·透传 |
-| UPnP 开关状态 | `/api/router/firewall/upnp` | `upnp_switch`（未确认） | 无 | 否·透传（router.rs:144） |
-| 「N 条规则」+ 端口转发表（名称/协议/WAN/LAN IP/LAN 端口） | `/api/router/firewall/port-forward` | 当数组读：`[].id/name/protocol/wan_port/lan_ip/lan_port`（未确认） | 无 | 否·透传（router.rs:162） |
-| 「暂无端口转发规则。」 | 同上 | 数组为空 | 无 | 否·透传 |
-| 过滤规则（只读）表：名称/协议/源 IP/目标 IP/目标端口/动作 | `/api/router/firewall/filter-rules` | 当数组读：`[].name/protocol/src_ip/dst_ip/dst_port/action`（未确认） | 无 | 否·透传（router.rs:191） |
-| 「未配置过滤规则。」 | 同上 | 为空 | 无 | 否·透传 |
+| UPnP 开关状态 | `/api/router/firewall/upnp` | `upnp_switch`（未确认） | 无 | 否·透传 |
+| 「N 条规则」+ 端口转发表（名称/协议/WAN/LAN IP/LAN 端口） | `/api/router/firewall/port-forward` | 当数组读：`[].id/name/protocol/wan_port/lan_ip/lan_port`（未确认） | 无 | 否·透传 |
+| 「还没转发任何端口。按「添加规则」加第一条。」 | 同上 | 数组为空 | 无 | 否·透传 |
+| 过滤规则（只能看）表：名称/协议/源 IP/目标 IP/目标端口/动作 | `/api/router/firewall/filter-rules` | 当数组读：`[].name/protocol/src_ip/dst_ip/dst_port/action`（未确认） | 无 | 否·透传 |
+| 「设备上没有过滤规则。」 | 同上 | 为空 | 无 | 否·透传 |
 | 接口里有、页面没显示 | `/api/router/firewall` | `wan_ping_enable`、`remote_web_access_enable`（页面声明了类型但没渲染） | — | — |
 
 #### 控件
@@ -576,7 +561,7 @@
 | 「UPnP」开关 | 无；建议 switch「UPnP」 | PUT `/api/router/firewall/upnp` `{upnp_switch:"1"/"0"}` | 1 | `/api/router/firewall/upnp` `upnp_switch` | 无 | 二·远程三 |
 | 「端口转发」总开关 | 无；建议 switch「端口转发」 | PUT `/api/router/firewall/port-forward/switch` `{port_forward_switch:"1"/"0"}` | 1 | `/api/router/firewall` `portforward_enable` | 无 | 二·远程三 |
 | DMZ 开关（打开时弹出页内确认） | switch「已启用」/「已禁用」（随状态变）；建议 switch「DMZ」 | 无（打开只进入确认态；关闭只改草稿，要再点「应用」） | — | — | 无 | —（本地） |
-| DMZ 页内确认「启用 DMZ」 | button「启用 DMZ」 〔现名：button「确认：{动作}」（DMZ 改为开关 +「应用」，页内确认是统一的「确认：…」）〕〔交互后：点 switch「DMZ」，填 textbox「DMZ 主机 IP」=192.168.0.120，点 button「应用」〕 | PUT `/api/router/firewall/dmz` `{dmz_enabled:"1", dmz_ip}` | 1 | `/api/router/firewall` `dmz_enable`、`dmz_ip` | 自定义确认（非 window.confirm）：「通过 DMZ 暴露主机将绕过防火墙保护。是否继续？」 | 二·远程三 |
+| DMZ 页内确认「启用 DMZ」 | button「启用 DMZ」 〔现名：button「确认：{动作}」（DMZ 改为开关 +「应用」，页内确认是统一的「确认：…」）〕〔交互后：点 switch「DMZ」，填 textbox「DMZ 主机 IP」=192.168.0.120，点 button「应用」〕 | PUT `/api/router/firewall/dmz` `{dmz_enabled:"1", dmz_ip}` | 1 | `/api/router/firewall` `dmz_enable`、`dmz_ip` | 自定义确认（非 window.confirm）：提醒 DMZ 会让那台主机绕开防火墙，问要不要继续 | 二·远程三 |
 | DMZ 页内确认「取消」 | button「取消」 〔交互后：DMZ 页内确认里；点 switch「DMZ」，填 textbox「DMZ 主机 IP」=192.168.0.120，点 button「应用」〕 | 无（开关退回关） | — | — | 无 | —（本地） |
 | DMZ 主机 IP 输入框（DMZ 关时禁用） | 无（label 未关联）；建议 textbox「DMZ 主机 IP」 | 无（草稿） | — | — | 无 | —（本地） |
 | DMZ「应用」 | button「应用」 | PUT `/api/router/firewall/dmz` `{dmz_enabled:"1"/"0", dmz_ip}`（开着时页面校验 IPv4） | 1 | `/api/router/firewall` `dmz_enable`、`dmz_ip` | 无 | 二·远程三 |
@@ -589,23 +574,23 @@
 | 删除页内确认「删除」 | button「删除」 〔现名：button「确认：{动作}」〕〔交互后：点 button「删除规则{规则名}」〕 | POST `/api/router/firewall/port-forward` `{action:"delete", id}` | 1 | `/api/router/firewall/port-forward` 该行消失 | 自定义确认：「删除规则 "{名称}"？」 | 二·远程三 |
 | 删除页内确认「取消」 | button「取消」 〔交互后：删除的页内确认里；点 button「删除规则{规则名}」〕 | 无 | — | — | 无 | —（本地） |
 
-写接口假成功风险：全部「否·透传」（router.rs:100-189），页面不看 `data.result`。
+写接口假成功风险：全部「否·透传」，页面不看 `data.result`。
 
 ---
 
 ## /router/lan 局域网 / DHCP
 
-文件：`app/(panel)/router/lan/page.tsx`。
+文件：`crates/luyaz-web/src/router_lan.rs`。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| LAN IP 地址初值 | `/api/router/lan` | `lan_ipaddr`（`uci network.lan.ipaddr`） | 无 | 是：router.rs:55-60 每个 `uci get` 失败都变空串，照样 ok |
+| LAN IP 地址初值 | `/api/router/lan` | `lan_ipaddr`（`uci network.lan.ipaddr`） | 无 | 是：哪个 `uci get` 读不到就给空串，整体照样回 ok |
 | 子网掩码初值 | `/api/router/lan` | `lan_netmask` | 无 | 是：同上 |
 | DHCP 开关初值 | `/api/router/lan` | `dhcp_enable`（`dhcp.lan.ignore` 为 "1" 时为 "0"） | 无 | 是：同上（读不到 ignore 时显示为开） |
 | 起始地址初值 | `/api/router/lan` | `dhcp_start`——agent 返回的是 `uci dhcp.lan.start` **原值（主机号，如 "100"）**，页面占位符却是完整 IP `192.168.0.100` | 无 | 是：同上 |
-| 结束地址初值 | `/api/router/lan` | `dhcp_end`——agent **算出来的完整 IP**（前三段 + start+limit−1，router.rs:70-80） | 无 | 是：读不到时按 start=100、limit=50 算 |
+| 结束地址初值 | `/api/router/lan` | `dhcp_end`——agent **算出来的完整 IP**（前三段 + start+limit−1） | 无 | 是：读不到时按 start=100、limit=50 算 |
 | 租约时间（秒）初值 | `/api/router/lan` | `dhcp_lease_time`——`uci dhcp.lan.leasetime` 原值（OpenWrt 常见 "12h" 这种带单位的写法；若如此页面校验「必须为正整数」会拦住提交，**未确认**设备上的实际值） | 无 | 是：同上 |
 | 加载错误 / 表单校验错误横幅 | — | — | — | — |
 
@@ -618,26 +603,24 @@
 | DHCP 服务器开关 | switch「已启用」/「已禁用」（随状态变）；建议 switch「DHCP 服务器」 | 无（草稿） | — | — | 无 | —（本地） |
 | 起始地址 / 结束地址 / 租约时间（秒）输入框（DHCP 关时禁用） | 无；建议 textbox「起始地址」「结束地址」「租约时间（秒）」 | 无（草稿） | — | — | 无 | —（本地） |
 | 「应用」 | button「应用」 | 无（页面校验 IP/掩码/租约，然后弹出页内确认） | — | — | 无 | —（本地） |
-| 页内确认「仍然应用」 | button「仍然应用」 〔现名：button「确认：应用局域网设置」（统一的页内确认）〕〔交互后：改了设置再按「应用」；填 textbox「租约时间」=12h，点 button「应用」〕 | PUT `/api/router/lan` `{lan_ipaddr, lan_netmask, dhcp_enable:"1"/"0", dhcp_start, dhcp_end, dhcp_lease_time}`（ubus `zwrt_router.api router_set_lan_para`，原样透传） | 1 | `/api/router/lan` 各字段（注意读和写的 `dhcp_start` 格式可能不一致，见上） | 自定义确认（非 window.confirm）：「更改 LAN 设置将断开客户端连接。是否继续？」 | 二·远程三 |
+| 页内确认「仍然应用」 | button「仍然应用」 〔现名：button「确认：应用局域网设置」（统一的页内确认）〕〔交互后：改了设置再按「应用」；填 textbox「租约时间」=12h，点 button「应用」〕 | PUT `/api/router/lan` `{lan_ipaddr, lan_netmask, dhcp_enable:"1"/"0", dhcp_start, dhcp_end, dhcp_lease_time}`（ubus `zwrt_router.api router_set_lan_para`，原样透传） | 1 | `/api/router/lan` 各字段（注意读和写的 `dhcp_start` 格式可能不一致，见上） | 自定义确认（非 window.confirm）：提醒改了会让已连设备断线，问要不要继续 | 二·远程三 |
 | 页内确认「取消」 | button「取消」 〔交互后：页内确认里；填 textbox「租约时间」=12h，点 button「应用」〕 | 无 | — | — | 无 | —（本地） |
 
-写接口假成功风险：PUT `/api/router/lan` 否·透传（router.rs:82-91）。
+写接口假成功风险：PUT `/api/router/lan` 否·透传。
 
 ---
 
 ## /router/mobile-network 移动网络
 
-文件：`app/(panel)/router/mobile-network/page.tsx`。
-
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 连接·状态（含 connected 时绿色） | `/api/modem/data` | `connect_status`（ubus `zwrt_data get_wwaniface {cid:1}`） | 5000 | 否·透传（modem_ext.rs:6） |
+| 连接·状态（含 connected 时绿色） | `/api/modem/data` | `connect_status`（ubus `zwrt_data get_wwaniface {cid:1}`） | 5000 | 否·透传 |
 | 移动数据开关状态 | `/api/modem/data` | `enable` | 5000 | 否·透传 |
 | 漫游开关状态 | `/api/modem/data` | `roam_enable` | 5000 | 否·透传 |
 | （写入时回填用）连接方式 | `/api/modem/data` | `connect_mode` | 5000 | 否·透传 |
-| 飞行模式状态（只读） | `/api/modem/status` | `operate_mode`（不是 `"ONLINE"` 即视为飞行模式开；`uci zte_nwinfo.sys_info.operate_mode`） | 5000 | 否（uci 失败回 503，handlers.rs:129） |
+| 飞行模式状态（只读） | `/api/modem/status` | `operate_mode`（不是 `"ONLINE"` 即视为飞行模式开；`uci zte_nwinfo.sys_info.operate_mode`） | 5000 | 否（uci 失败回 503） |
 | 「蜂窝无线电已关闭，重启设备才能恢复。」 | — | operate_mode 不是 "ONLINE" 时显示 | — | — |
 | 运营商扫描结果表：运营商 / MCC/MNC / 制式 / 当前·禁止 | `/api/netinfo` | `scan.operators[].name/plmn/rat/status`（agent 解析模组字符串 `状态,名字,PLMN,制式;`，2026-09-25 实测：状态 1 可用 2 当前 3 禁止，制式 2/7/11 = 3G/4G/5G） | 扫描进行中每 3000 | 否·agent 任务（netinfo.rs operator_scan） |
 | 扫描进度判断 | `/api/netinfo` | `scan.state`（scanning / done / error；模组状态 `manual_selecting` → `manual_selected`，实测约 110 秒） | 页面循环 3000，最多 80 次 | 否·agent 任务 |
@@ -653,15 +636,13 @@
 | ~~「飞行模式」开关~~ | switch「飞行模式」〔缺失：10-05 已去掉，B31 上进了 LPM 只能重启才回得来〕 | — | — | — | — | B31 上原厂 ONLINE 和 `AT+CFUN=1` 都拉不回 LPM，只能重启（10-05 真机）；原厂界面也没有这个开关。agent 的 `/api/modem/airplane`、`/api/modem/online` 接口 10-06 也删了 |
 | 「扫描运营商」/「扫描中…」 | button「扫描运营商」 | POST `/api/netinfo/scan`（ubus `nwinfo_manual_scan`；旧 `/api/modem/scan` 10-06 已删） | **多请求**：① POST 扫描 → 每 3 秒 GET `/api/netinfo` 看 `scan` 最多 80 次 | 结果表有行 | 无 | 二（搜索期间移动数据断开约 110 秒，实测） |
 | 结果行「选择」（注册到该运营商） | button「选择」（每行同名；`aria-label`「注册到 {运营商}」） 〔现名：button「注册到 {运营商}」〕〔交互后：扫描运营商之后的结果行；点 button「扫描运营商」，点 button「确认：{x}」〕 | POST `/api/modem/register` `{m_mcc_mnc, m_rat}`（202；agent 先写保护标记，再调 ubus `nwinfo_manual_register`） | **多请求**：① POST 注册 → 每 3 秒 GET `/api/modem/register/guard` 最多 40 次 | 保护的 `phase`；注册不上时 agent 用 `AT+COPS=0` 回到自动（实测 44 秒） | 无 | 三（选网方式：手动选网） |
-| 「重启」（设备控制卡） | button「重启」 | POST `/api/device/reboot` | 1 | 无读回 | 「现在重启路由器？」 | 三（重启） |
+| 「重启」（设备控制卡） | button「重启」 | POST `/api/device/reboot` | 1 | 无读回 | 「现在就重启？」 | 三（重启） |
 
 写接口假成功风险：`/api/modem/data` PUT、scan、register、reboot 为「否·透传」。
 
 ---
 
 ## /router/network-mode 网络模式
-
-文件：`app/(panel)/router/network-mode/page.tsx`。
 
 #### 数据项
 
@@ -684,13 +665,13 @@
 | 「重启设备」（退回也没通 / 没切成时，DD9/DD17） | button「重启设备」 〔交互后：退回也没通或没切成时〕 | POST `/api/device/reboot`（同设备控制页） | 1 | uptime 变小 | 页内两段 | 二 |
 | 「上次改动 10-03 14:32 · 触屏 ›」（DD5） | link「上次改动 …」 〔交互后：新核心且这一项被改过〕 | 无（导航到 `/changes/?op=<op_id>`；数据 `/api/ops/journal` 的 `owners["network.mode"]`） | — | — | 无 | —（本地） |
 
-写接口假成功风险：否·透传（modem_ext.rs `modem_network_mode_set`，先校验取值），但页面有自己的读回轮询。
+写接口假成功风险：否·透传（`modem_network_mode_set`，先校验取值），但页面有自己的读回轮询。
 
 ---
 
 ## /router/qci QCI / 承载
 
-文件：`app/(panel)/router/qci/page.tsx`。只读。注意 `/api/network/qos` 每次都会在 AT 口上发 `AT+CGCONTRDP` 以及每个 cid 一条 `AT+CGEQOSRDP=<cid>`（qos.rs:18-70），本页每 5 秒轮询一次，会持续占用 AT 口。
+只读。注意 `/api/network/qos` 每次都会在 AT 口上发 `AT+CGCONTRDP` 以及每个 cid 一条 `AT+CGEQOSRDP=<cid>`（qos.rs:18-70），本页每 5 秒轮询一次，会持续占用 AT 口。
 
 #### 数据项
 
@@ -700,11 +681,11 @@
 | 承载表·承载 | `/api/network/qos` | `contexts[].bearer_id` | 5000 | 否 |
 | 承载表·APN | `/api/network/qos` | `contexts[].apn` | 5000 | 否 |
 | 承载表·QCI / 5QI + 含义 | `/api/network/qos` | `contexts[].qci` ?? `qci_device` ?? `qci_inferred`；含义查页面内置表（1–9、65、66、69、70、79、80） | 5000 | 否 |
-| 承载表·来源（实测 / 来自调制解调器 / 根据 APN 推断） | `/api/network/qos` | `qci != null` → 实测；`qci_device != null` → 来自调制解调器；否则推断 | 5000 | 否 |
+| 承载表·来源（实测 / 基带报告 / 根据 APN 推断） | `/api/network/qos` | `qci != null` → 实测；`qci_device != null` → 基带报告；否则推断 | 5000 | 否 |
 | 承载表·DL · UL GBR | `/api/network/qos` | `contexts[].dl_gbr_kbps`、`ul_gbr_kbps`（MBR 字段有但页面没显示） | 5000 | 否 |
 | 表下说明文字 | `/api/network/qos` | `note`（agent 写死的英文）+ 页面补充说明 | 5000 | 否 |
 | 原始 AT+CGCONTRDP 输出（展开后） | `/api/network/qos` | `raw_cgcontrdp` | 5000 | 否 |
-| 「没有活动的 PDP 上下文。」/ 错误条 | `/api/network/qos` | `contexts` 为空 / SWR `error` | — | — |
+| 「没有建立的 PDP 上下文」/ 错误条 | `/api/network/qos` | `contexts` 为空 / SWR `error` | — | — |
 
 #### 控件
 
@@ -716,7 +697,7 @@
 
 ## /router/qos QoS
 
-文件：`app/(panel)/router/qos/page.tsx`。2026-09-25 起只读：原厂「带宽分配」除极速外都靠 xdpi 识别应用，xdpi 为省 CPU 已关，用户决定不做切换（manager `docs/designs/touch-menu-tabs.md`「不做」）。
+文件：`crates/luyaz-web/src/router_qos.rs`。2026-09-25 起只读：原厂「带宽分配」除极速外都靠 xdpi 识别应用，xdpi 为省 CPU 已关，用户决定不做切换（manager `docs/designs/touch-menu-tabs.md`「不做」）。
 
 #### 数据项
 
@@ -734,9 +715,9 @@
 
 ## /router/scenario 情景模式
 
-文件：`app/(panel)/router/scenario/page.tsx`。
+文件：`crates/luyaz-web/src/scenario.rs`。
 
-> **重要（从代码推断，未在设备上验证）：本页所有写请求都是双重 JSON 编码。** 页面写的是 `apiFetch(path, { body: JSON.stringify(x) })`，而 `apiFetch` 自己又会 `JSON.stringify(opts.body)`（`lib/api/client.ts:66`），所以发出去的请求体是一个 **JSON 字符串字面量**（如 `"{\"id\":\"home\"}"`），不是对象。agent 端的后果：
+> **重要（从代码推断，未在设备上验证）：本页所有写请求都是双重 JSON 编码。** 页面写的是 `apiFetch(path, { body: JSON.stringify(x) })`，而 `apiFetch` 自己又会 `JSON.stringify(opts.body)`，所以发出去的请求体是一个 **JSON 字符串字面量**（如 `"{\"id\":\"home\"}"`），不是对象。agent 端的后果：
 > - PUT `/api/scenario`：`serde_json::from_slice::<Config>` 解析字符串失败 → 回 400 `invalid config: …`。**保存 SSID、参数、每个情景的 Wi-Fi/节点、创建默认情景、添加国外情景都会报错，改不进去。**
 > - POST `/api/scenario/pin`：解析成 `Value::String`，`.get("id")` 为 None → 走「取消固定」分支（scenario.rs:1666）。**点任何「固定」按钮实际效果都是取消固定**，回 ok，页面还提示「已固定」。
 > - PUT `/api/scenario/enabled`：`.get("enabled")` 为 None → `unwrap_or(true)` → **永远是打开引擎**（scenario.rs:1684）。关引擎时页面提示「引擎已关闭 — Wi-Fi 已恢复」，实际引擎仍开着。这是典型假成功。
@@ -778,7 +759,7 @@
 | 固定按钮（每个情景一个，再点一次取消） | button「{情景名}」（图标 + 名称；当前固定的用 primary 样式，无 `aria-pressed`） | POST `/api/scenario/pin` `{id}` 或 `{id:null}`——**双重编码，实际永远取消固定** | 1 | `/api/scenario` `pin` | 无 | 二（情景固定/取消固定） |
 | 在家网络行垃圾桶 | button「移除 {SSID}」 | PUT `/api/scenario` 整份 config（去掉该 entry；双重编码 → 400） | 1 | `/api/scenario` `config.scenarios[home].detect.entries` | 无 | 二 |
 | 附近的网络「扫描」/「扫描中…」 | button「扫描」 | GET `/api/scenario/scan` | 1 | — | 无 | 二（GET 但动网卡） |
-| 附近网络行「+」 | button「添加 {SSID}」 〔交互后：扫描之后的结果行；点 button「扫描」，点 button「确认：{x}」〕 | PUT `/api/scenario` 整份 config（加 `{ssid, bssid}`；双重编码 → 400） | 1 | `/api/scenario` 在家 entries | 无 | 二 |
+| 附近网络行「+」 | button「添加 {SSID}」 〔交互后：扫描之后的结果行；点 button「扫描」，点 button「确认：{x}」〕 | PUT `/api/scenario` 整份 config（加 `{ssid，bssid}`；双重编码 → 400） | 1 | `/api/scenario` 在家 entries | 无 | 二 |
 | 「添加国外情景」（缺国外情景时） | button「添加国外情景」 〔交互后：只在缺国外情景时出现（模拟数据里已有，未自动验证）〕 | 见步骤 | **2 请求**：① GET `/api/scenario/template` ② PUT `/api/scenario`（原 config + 模板里缺的国外情景；双重编码 → 400） | `/api/scenario` 出现 `detect.type=mcc/abroad` 的情景 | 无 | 二 |
 | 每个情景的「Wi-Fi」开关（外出情景没有，显示「始终开」） | switch「开」/「关」（随状态变，且每行同名）；建议 switch「{情景名} 的 Wi-Fi」 〔现名：switch「{前}的 Wi-Fi」（如「「在家」的 Wi-Fi」）〕 | PUT `/api/scenario` 整份 config，把该情景的 `/api/wifi/radio` 动作改成 `{ap_2g:on, ap_5g:on}` 并放到第一位（双重编码 → 400） | 1 | `/api/scenario` 该情景 actions | 无 | 二·远程三（改的是「进入该情景时开/关 Wi-Fi」，不是立即开关；但会导致之后自动关 Wi-Fi） |
 | 每个情景的「CHILL」节点下拉（不动 / 直连 / 各地区组） | combobox「CHILL」（`<label>` 包住，每行同名）；建议 combobox「{情景名} 的 CHILL 节点」 〔现名：combobox「{情景}的 CHILL 节点」（如「「在家」的 CHILL 节点」）〕 | PUT `/api/scenario` 整份 config，改该情景的 regions 动作 `{group:"🚀 节点选择", member}`（选「不动」则删掉该动作；双重编码 → 400） | 1 | `/api/scenario` 该情景 actions | 无 | 二（改的是情景规则，不是立即切节点） |
@@ -796,7 +777,7 @@
 
 ## /router/schedule 定时重启
 
-文件：`app/(panel)/router/schedule/page.tsx`。只是一张说明卡，指向 `/scheduler`；不调任何接口（代码注释：`/api/modem/schedule-reboot` 不存在）。
+文件：`crates/luyaz-web/src/scheduler.rs`。只是一张说明卡，指向 `/scheduler`；不调任何接口（代码注释：`/api/modem/schedule-reboot` 不存在）。
 
 #### 数据项
 
@@ -808,21 +789,21 @@
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| 「打开计划任务」 | link「打开计划任务」→ `/scheduler` | 无（导航） | — | — | 无 | —（本地） |
+| 去计划任务的链接 | link → `/scheduler` | 无（导航） | — | — | 无 | —（本地） |
 
 ---
 
 ## /router/signal-detect 信号检测
 
-文件：`app/(panel)/router/signal-detect/page.tsx`。进页面不拉任何数据。
+文件：`crates/luyaz-web/src/signal_detect.rs`。进页面不拉任何数据。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 进度 N% + 进度条（检测中） | `/api/cell/signal-detect/progress` | `progress`（数字或字符串，≥100 视为完成） | `setInterval` 2000（检测中） | 否·透传（cell.rs:152） |
-| 检测结果表（列 = 返回对象的键，动态生成） | `/api/cell/signal-detect/results` | 页面猜结构：`cells[]`/`results[]`/`list[]`，都没有时整个对象当一行（**未确认**） | 无（完成或停止后拉一次；失败静默） | 否·透传（cell.rs:145） |
-| 「暂无可用结果。」 | 同上 | 为空 | — | — |
+| 进度 N% + 进度条（检测中） | `/api/cell/signal-detect/progress` | `progress`（数字或字符串，≥100 视为完成） | `setInterval` 2000（检测中） | 否·透传 |
+| 检测结果表（列 = 返回对象的键，动态生成） | `/api/cell/signal-detect/results` | 页面猜结构：`cells[]`/`results[]`/`list[]`，都没有时整个对象当一行（**未确认**） | 无（完成或停止后拉一次；失败静默） | 否·透传 |
+| 「这次没拿到结果，再检测一次试试。」 | 同上 | 为空 | — | — |
 | 操作提示（检测已开始/已停止/完成） | 写接口返回 | — | — | — |
 
 #### 控件
@@ -832,24 +813,24 @@
 | 「开始检测」 | button「开始检测」 | POST `/api/cell/signal-detect/start`（ubus `nwinfo_start_detect_signal_quality`） | 1，之后每 2 秒 GET progress | `/api/cell/signal-detect/progress` `progress` 开始变化 | 无 | 二 |
 | 「停止检测」（检测中） | button「停止检测」 〔交互后：检测进行中才有；点 button「开始检测」，点 button「确认：{x}」〕 | POST `/api/cell/signal-detect/stop` | **2 请求**：① POST stop ② GET `/api/cell/signal-detect/results` | 结果表 | 无 | 二 |
 
-写接口假成功风险：start / stop 否·透传（cell.rs:131-143）。
+写接口假成功风险：start / stop 否·透传。
 
 ---
 
 ## /router/sim SIM / PIN
 
-文件：`app/(panel)/router/sim/page.tsx`。
+文件：`crates/luyaz-web/src/sim_page.rs`。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 状态 | `/api/sim/info` | `sim_states` | 无 | 否·透传（sim.rs:6） |
-| 调制解调器状态 | `/api/sim/info` | `modem_main_state` | 无 | 否·透传 |
+| 状态 | `/api/sim/info` | `sim_states` | 无 | 否·透传 |
+| 基带状态 | `/api/sim/info` | `modem_main_state` | 无 | 否·透传 |
 | PIN 锁（已启用/已禁用/原值） | `/api/sim/info` | `pin_status`（"1"/"0"） | 无 | 否·透传 |
 | IMSI / ICCID | `/api/sim/info` | `sim_imsi`、`sim_iccid` | 无 | 否·透传 |
-| PIN 剩余尝试次数 / PUK 剩余尝试次数（有值才显示） | `/api/sim/info` | `pinnumber`、`puknumber` | 无 | 否·透传 |
-| 剩余尝试次数（SIM 锁 / NCK） | `/api/sim/lock-trials` | `available_trials` | 无 | 否·透传（sim.rs:64） |
+| PIN 还能试几次 / PUK 还能试几次（有值才显示） | `/api/sim/info` | `pinnumber`、`puknumber` | 无 | 否·透传 |
+| NCK 解锁还能试几次 | `/api/sim/lock-trials` | `available_trials` | 无 | 否·透传 |
 | 「SIM 已被 PIN 锁定…」/「SIM 已被 PUK 锁定…」警告 | `/api/sim/info` | `sim_states` 或 `modem_main_state` 为 `wait pin`/`modem_waitpin`（PUK 同理） | 无 | 否·透传 |
 | 加载错误横幅 | info / lock-trials | SWR `error` | — | — |
 
@@ -872,44 +853,44 @@
 | NCK 面板「解锁 SIM」 | button「解锁 SIM」 〔交互后：点 button「网络解锁」〕 | POST `/api/sim/unlock` `{nck}`（ubus `set_simlock_nck`） | 1 | `/api/sim/lock-trials` `available_trials` / SIM 状态 | 无（只有面板里的警告文字「此操作不可逆…」） | 二（建议复核升三：页面自己写着不可逆） |
 | 各面板「取消」 | button「取消」 〔交互后：点 button「修改 PIN」〕 | 无 | — | — | 无 | —（本地） |
 
-写接口假成功风险：全部「否·透传」（sim.rs:20-62），页面不看 `data.result`——PIN 输错时固件可能返回失败码而 agent 仍回 ok，页面会提示「PIN 已验证」。
+写接口假成功风险：全部「否·透传」，页面不看 `data.result`——PIN 输错时固件可能返回失败码而 agent 仍回 ok，页面会提示「PIN 已验证」。
 
 ---
 
 ## /router/stc STC
 
-文件：`app/(panel)/router/stc/page.tsx`。页面注释写着「/api/cell/stc/* returns 503 currently」。agent 背后的 ubus 方法名是 `nwinfo_stc_cell_lock_enable/disable/reset`、`nwinfo_*_stc_white_list_*`，即**按白名单锁小区**。
+文件：`crates/luyaz-web/src/stc.rs`。页面注释写着「/api/cell/stc/* returns 503 currently」。agent 背后的 ubus 方法名是 `nwinfo_stc_cell_lock_enable/disable/reset`、`nwinfo_*_stc_white_list_*`，即**按白名单锁小区**。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 「STC 已启用」开关状态 + 当前状态（已启用/已禁用） | `/api/cell/stc/status` | `enabled`（布尔 / "1" / "true" / "enabled" / 非 0 数字都算开，**未确认**固件真实字段名） | 无 | 否·透传（cell.rs:103） |
-| LTE 采集定时器 / NR-SA 采集定时器 / LTE 白名单上限 / NR-SA 白名单上限 初值 | `/api/cell/stc/params` | `lte_collect_timer`、`nrsa_collect_timer`、`lte_whitelist_max`、`nrsa_whitelist_max`（未确认） | 无 | 否·透传（cell.rs:85） |
-| 「STC 服务当前不可用（503）。控件已禁用。」 | status / params | SWR `error` | — | — |
+| 「STC 已启用」开关状态 + 当前状态（已启用/已禁用） | `/api/cell/stc/status` | `enabled`（布尔 / "1" / "true" / "enabled" / 非 0 数字都算开，**未确认**固件真实字段名） | 无 | 否·透传 |
+| LTE 采集定时器 / NR-SA 采集定时器 / LTE 白名单上限 / NR-SA 白名单上限 初值 | `/api/cell/stc/params` | `lte_collect_timer`、`nrsa_collect_timer`、`lte_whitelist_max`、`nrsa_whitelist_max`（未确认） | 无 | 否·透传 |
+| 「现在连不上 STC（503），所以控件先关掉。」 | status / params | SWR `error` | — | — |
 
 #### 控件
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| 「重置白名单」（页头，红色；服务不可用时**不**禁用） | button「重置白名单」 | POST `/api/cell/stc/reset`（ubus `nwinfo_stc_cell_lock_reset`） | 1 | `/api/cell/stc/status`（白名单本身无读取接口） | 「重置 STC 白名单？此操作无法撤销。」 | 三（STC 白名单重置） |
+| 「重置白名单」（页头，红色；服务不可用时**不**禁用） | button「重置白名单」 | POST `/api/cell/stc/reset`（ubus `nwinfo_stc_cell_lock_reset`） | 1 | `/api/cell/stc/status`（白名单本身无读取接口） | 「清空 STC 白名单？收集到的小区会全部丢掉，找不回来。」 | 三（STC 白名单重置） |
 | 「STC 已启用」开关 | 无（`Toggle` 没传 label）；建议 switch「STC」 | POST `/api/cell/stc/enable` 或 `/api/cell/stc/disable`（无请求体） | 1 | `/api/cell/stc/status` `enabled` | 无 | 三（按白名单锁小区） |
 | 4 个参数输入框 | 无（label 未关联）；建议 textbox「LTE 采集定时器」「NR-SA 采集定时器」「LTE 白名单上限」「NR-SA 白名单上限」 | 无（草稿） | — | — | 无 | —（本地） |
 | 「应用参数」 | button「应用参数」 | PUT `/api/cell/stc/params` `{lte_collect_timer, nrsa_collect_timer, lte_whitelist_max, nrsa_whitelist_max}`（字符串） | 1 | `/api/cell/stc/params` 各字段 | 无 | 二 |
 
-写接口假成功风险：全部「否·透传」（cell.rs:92-129）。
+写接口假成功风险：全部「否·透传」。
 
 ---
 
 ## /router/stk USSD 与 SIM 工具包
 
-文件：`app/(panel)/router/stk/page.tsx`（`USSDSection`、`STKSection`）。进页面不拉数据。
+文件：`crates/luyaz-web/src/stk.rs`。进页面不拉数据。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| USSD 回复正文 | `/api/ussd/send`、`/api/ussd/respond` 的返回 | `response`（agent 已按 DCS 解码） | — | send 否（回复含 ERROR 时 500，telephony.rs:395-397）；respond **是**（telephony.rs:430-441 不检查 ERROR，原样当回复返回 ok） |
+| USSD 回复正文 | `/api/ussd/send`、`/api/ussd/respond` 的返回 | `response`（agent 已按 DCS 解码） | — | send 否（回复含 ERROR 时 500）；respond **是**（原样当回复返回 ok） |
 | USSD 状态 + 「会话进行中」 | 同上 | `status`、`session_active` | — | 同上 |
 | STK 菜单标题 + 面包屑 | `/api/stk/menu`、`/api/stk/select` | `title`（选项返回 `type:"menu"` 时是子菜单） | 无（点「加载 STK 菜单」时） | 否 |
 | STK 菜单项列表 | 同上 | `items[].id`、`items[].label` | — | 否 |
@@ -923,7 +904,7 @@
 |---|---|---|---|---|---|---|
 | 标签「USSD」/「STK 菜单」 | button「USSD」、button「STK 菜单」（无 `role=tab`/`aria-selected`；建议改成 tablist） 〔现名：tab「USSD」「STK 菜单」（tablist「USSD 或 STK」）〕 | 无（切标签） | — | — | 无 | —（本地） |
 | USSD 代码输入框（占位 `*#100#`，回车发送） | 无（只有 placeholder）；建议 textbox「USSD 代码」 | 无（草稿） | — | — | 无 | —（本地） |
-| 「发送」 | button「发送」 | POST `/api/ussd/send` `{code}`（agent 只保留数字和 `*#+`，发 `AT+CUSD=1,"…",15`） | 1 | 无读回（回复即结果） | 无 | 二（可能触发运营商计费业务） |
+| 「发送」 | button「发送」 | POST `/api/ussd/send` `{code}`（agent 只保留数字和 `*#+`，发 `AT+CUSD=1，"…"，15`） | 1 | 无读回（回复即结果） | 无 | 二（可能触发运营商计费业务） |
 | 回复输入框（会话进行中，回车回复） | 无；建议 textbox「USSD 回复」 〔交互后：USSD 会话进行中（运营商回了菜单）才有；填 textbox「USSD 代码」=*100#，点 button「发送」，点 button「确认：{x}」〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 「回复」 | button「回复」 〔交互后：USSD 会话进行中才有；填 textbox「USSD 代码」=*100#，点 button「发送」，点 button「确认：{x}」〕 | POST `/api/ussd/respond` `{reply}` | 1 | 无读回 | 无 | 二 |
 | 结束会话（红色 × 图标） | 无（只有图标，无 aria-label）；建议 button「结束 USSD 会话」 〔交互后：USSD 会话进行中才有；填 textbox「USSD 代码」=*100#，点 button「发送」，点 button「确认：{x}」〕 | POST `/api/ussd/cancel` `{}`（`AT+CUSD=2`） | 1 | 无读回 | 无 | 二 |
@@ -937,40 +918,40 @@
 
 ## /router/telemetry 遥测拦截
 
-文件：`app/(panel)/router/telemetry/page.tsx`。
+文件：`crates/luyaz-web/src/router_filter.rs`。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 已拦截域名列表 | `/api/router/domain-filter` | `blocked_domains[]`（页面注释称实际形状为 `{action_response, blocked_domains}`，未在 agent 代码里核对，agent 只是透传 ubus `router_get_domainfilter_rule`） | 无 | 否·透传（router.rs:234） |
-| 「暂无已拦截的域名。」 | 同上 | 为空 | 无 | 否·透传 |
+| 已拦截域名列表 | `/api/router/domain-filter` | `blocked_domains[]`（页面注释称实际形状为 `{action_response，blocked_domains}`，未在 agent 代码里核对，agent 只是透传 ubus `router_get_domainfilter_rule`） | 无 | 否·透传 |
+| 「目前什么都没拦。可以在上面加域名，或一键拦下整份遥测清单。」 | 同上 | 为空 | 无 | 否·透传 |
 | 「已知 ZTE 遥测：iot.zte.com.cn, ztems.com, zte.com.cn, ztemt.com.cn」 | 无（页面写死） | — | — | — |
 
 #### 控件
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| 「拦截已知遥测」 | button「拦截已知遥测」 | PUT `/api/router/domain-filter` `{action:"add", domain}`（ubus `router_set_domain_filter`） | **最多 4 步**：对 4 个写死域名中还没拦截的，逐个 PUT；单个失败被页面吞掉继续下一个，最后照样提示成功（页面层面的假成功） | `/api/router/domain-filter` `blocked_domains` 包含这 4 个 | 无 | 二·远程三（按「防火墙规则增删改」处理） |
+| 「一键拦截遥测」 | button「一键拦截遥测」 | PUT `/api/router/domain-filter` `{action:"add", domain}`（ubus `router_set_domain_filter`） | **最多 4 步**：对 4 个写死域名中还没拦截的，逐个 PUT；单个失败被页面吞掉继续下一个，最后照样提示成功（页面层面的假成功） | `/api/router/domain-filter` `blocked_domains` 包含这 4 个 | 无 | 二·远程三（按「防火墙规则增删改」处理） |
 | 添加域名输入框（占位 `example.com`，回车添加） | 无；建议 textbox「域名」 | 无（草稿） | — | — | 无 | —（本地） |
 | 「添加」 | button「添加」 | PUT `/api/router/domain-filter` `{action:"add", domain}` | 1 | `/api/router/domain-filter` `blocked_domains` | 无 | 二·远程三 |
 | 域名行垃圾桶 | button「移除域名」（每行同名；建议带域名） 〔现名：button「移除 {域名}」〕 | 无（进入页内确认） | — | — | 无 | —（本地） |
 | 页内确认「移除」 | button「移除」 〔现名：button「确认：{动作}」〕〔交互后：点 button「移除 {域名}」〕 | PUT `/api/router/domain-filter` `{action:"delete", domain}` | 1 | `/api/router/domain-filter` `blocked_domains` 不再含该域名 | 自定义确认（非 window.confirm）：「确定移除 "{域名}"？」 | 二·远程三 |
 | 页内确认「取消」 | button「取消」 〔交互后：页内确认里；点 button「移除 {域名}」〕 | 无 | — | — | 无 | —（本地） |
 
-写接口假成功风险：否·透传（router.rs:241-250）。
+写接口假成功风险：否·透传。
 
 ---
 
 ## /router/vpn VPN 穿透
 
-文件：`app/(panel)/router/vpn/page.tsx`。
+文件：`crates/luyaz-web/src/router_vpn.rs`。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| L2TP 穿透开关状态 | `/api/router/vpn` | `l2tp_passthrough`（"1"=开，未确认） | 无 | 否·透传（router.rs:198，ubus `router_get_alg_para`） |
+| L2TP 穿透开关状态 | `/api/router/vpn` | `l2tp_passthrough`（"1"=开，未确认） | 无 | 否·透传（ubus `router_get_alg_para`） |
 | PPTP 穿透开关状态 | `/api/router/vpn` | `pptp_passthrough` | 无 | 否·透传 |
 | IPSec 穿透开关状态 | `/api/router/vpn` | `ipsec_passthrough` | 无 | 否·透传 |
 
@@ -982,15 +963,15 @@
 | 「PPTP 穿透」开关 | 无；建议 switch「PPTP 穿透」 | PUT `/api/router/vpn` `{pptp_passthrough}` | 1 | `/api/router/vpn` `pptp_passthrough` | 无 | 二·远程三 |
 | 「IPSec 穿透」开关 | 无；建议 switch「IPSec 穿透」 | PUT `/api/router/vpn` `{ipsec_passthrough}` | 1 | `/api/router/vpn` `ipsec_passthrough` | 无 | 二·远程三 |
 
-写接口假成功风险：否·透传（router.rs:205-214）。
+写接口假成功风险：否·透传。
 
 ---
 
 ## /router/wifi Wi-Fi 设置
 
-文件：`app/(panel)/router/wifi/page.tsx`。整页是一个大表单：所有控件只改草稿，页头「应用」→ 页内确认「确认」时**一次性**把全部字段 PUT 到 `/api/wifi/settings`。
+文件：`crates/luyaz-web/src/wifi_main.rs`。整页是一个大表单：所有控件只改草稿，页头「应用」→ 页内确认「确认」时**一次性**把全部字段 PUT 到 `/api/wifi/settings`。
 
-**Wi-Fi 总开关走的是 `/api/wifi/settings` 的 `wifi_onoff`，不是 `/api/wifi/radio`。** 这条路径是全站最严重的假成功（见本节末尾）。`/api/wifi/radio`（会等 hostapd 真正起来/停掉才回 ok，wifi_radio.rs:283-326）目前只有情景引擎在用，管理网页没有任何页面调它。
+**Wi-Fi 总开关走的是 `/api/wifi/settings` 的 `wifi_onoff`，不是 `/api/wifi/radio`。** 这条路径是全站最严重的假成功（见本节末尾）。`/api/wifi/radio`（会等 hostapd 真正起来/停掉才回 ok）目前只有情景引擎在用，管理网页没有任何页面调它。
 
 #### 数据项
 
@@ -1016,7 +997,7 @@
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
 | 「应用」（页头） | button「应用」 | 无（弹出页内确认） | — | — | 无 | —（本地） |
-| 页内确认「确认」 | button「确认」 〔现名：button「确认：应用 Wi-Fi 设置」〕〔交互后：改了设置再按「应用」；填 textbox「2.4 GHz SSID(网络名)」=U60-e2e，点 button「应用」〕 | PUT `/api/wifi/settings`，一次带全部字段：`{ssid_2g, ssid_5g, key_2g, key_5g, channel_2g, channel_5g, txpower_2g, txpower_5g, encryption_2g, encryption_5g, hidden_2g, hidden_5g, wifi_onoff, radio2_disabled, radio5_disabled, wifi6_switch, htmode_2g, htmode_5g, country}` | 1 个 HTTP 请求；agent 内部：逐项和 uci 比较，变了才 `uci set` → commit `wireless` / `zte_mbb` → 只改发射功率时 `iw … set txpower` 热生效，否则**另起线程** `zwrt_wlan reload` 并轮询验证（HTTP 已先回 ok） | `/api/wifi/status` 各字段（**只是 uci 配置，不代表已生效**）；是否真在广播要看 `/api/wifi/radio` `beaconing`（本页不读） | 自定义确认（非 window.confirm）：「Wi-Fi 将短暂重启,确认?」 | 二·远程三（含 Wi-Fi 开关、名称/密码） |
+| 页内确认「确认」 | button「确认」 〔现名：button「确认：应用 Wi-Fi 设置」〕〔交互后：改了设置再按「应用」；填 textbox「2.4 GHz SSID(网络名)」=U60-e2e，点 button「应用」〕 | PUT `/api/wifi/settings`，一次带全部字段：`{ssid_2g, ssid_5g, key_2g, key_5g, channel_2g, channel_5g, txpower_2g, txpower_5g, encryption_2g, encryption_5g, hidden_2g, hidden_5g, wifi_onoff, radio2_disabled, radio5_disabled, wifi6_switch, htmode_2g, htmode_5g, country}` | 1 个 HTTP 请求；agent 内部：逐项和 uci 比较，变了才 `uci set` → commit `wireless` / `zte_mbb` → 只改发射功率时 `iw … set txpower` 热生效，否则**另起线程** `zwrt_wlan reload` 并轮询验证（HTTP 已先回 ok） | `/api/wifi/status` 各字段（**只是 uci 配置，不代表已生效**）；是否真在广播要看 `/api/wifi/radio` `beaconing`（本页不读） | 自定义确认（非 window.confirm）：提醒 Wi-Fi 会断开一下再起来，问要不要继续 | 二·远程三（含 Wi-Fi 开关、名称/密码） |
 | 页内确认「取消」 | button「取消」 〔交互后：页内确认里；填 textbox「2.4 GHz SSID(网络名)」=U60-e2e，点 button「应用」〕 | 无 | — | — | 无 | —（本地） |
 | 「Wi-Fi 开关」 | switch「开」/「关」（随状态变，且与下面两个「无线电开启」同名）；建议 switch「Wi-Fi 开关」 | 无（草稿 → `wifi_onoff`） | — | — | 无 | —（本地；随「确认」提交，二·远程三） |
 | 「Wi-Fi 6 (802.11ax)」开关 | switch「已启用」/「已禁用」（随状态变）；建议 switch「Wi-Fi 6」 〔现名：switch「Wi-Fi 6 (802.11ax)」〕 | 无（草稿 → `wifi6_switch`） | — | — | 无 | —（本地；随「确认」提交） |
@@ -1048,7 +1029,7 @@
 
 ---
 
-#### 节能与碰一碰（10-04 审计 C，`router/wifi/Extras.tsx`）
+#### 节能与碰一碰（10-04 审计 C）
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
@@ -1061,7 +1042,7 @@
 
 ## /router/wifi-guest 访客 Wi-Fi
 
-文件：`app/(panel)/router/wifi-guest/page.tsx`。同样是整表提交：页头「应用」一次 PUT 全部字段，**没有**确认。
+文件：`crates/luyaz-web/src/wifi_guest.rs`。同样是整表提交：页头「应用」一次 PUT 全部字段，**没有**确认。
 
 #### 数据项
 
@@ -1090,7 +1071,7 @@
 | 加密方式下拉（WPA2 / WPA3 / WPA2/WPA3 混合 / 开放） | 无；建议 combobox「访客加密方式」 | 无（草稿） | — | — | 无 | —（本地；随「应用」提交） |
 | 隐藏 SSID 开关 | 无（`Toggle` 没传 label）；建议 switch「隐藏访客 SSID」 | 无（草稿） | — | — | 无 | —（本地；随「应用」提交） |
 | AP 隔离开关 | switch「已启用」/「已禁用」（随状态变）；建议 switch「AP 隔离」 | 无（草稿） | — | — | 无 | —（本地；随「应用」提交） |
-| 有效时长（分钟，0 = 不限）数字框（0–1440） | 无；建议 spinbutton「有效时长（分钟）」 | 无（草稿） | — | — | 无 | —（本地；随「应用」提交） |
+| 有效时长（分钟）· 0 = 不限，最多 1440 数字框 | 无；建议 spinbutton「有效时长（分钟）」 | 无（草稿） | — | — | 无 | —（本地；随「应用」提交） |
 
 写接口假成功风险：PUT `/api/wifi/guest` **是**——wifi.rs:370-378 不存在的段写失败静默跳过；wifi.rs:389 reload 在后台，HTTP 先回 ok。
 
@@ -1098,9 +1079,9 @@
 
 ## /scheduler 定时任务（计划任务）
 
-文件：`app/(panel)/scheduler/page.tsx`。可以定时调用**任意** `/api/*`（agent 只拒绝 `/api/scheduler/*` 和 `/api/auth/*`，scheduler.rs:113-129），包括重启、恢复出厂、eSIM 切换等。「定时重启」就是在这里建一个 `POST /api/device/reboot` 的任务。
+文件：`crates/luyaz-web/src/scheduler.rs`。可以定时调用**任意** `/api/*`（agent 只拒绝 `/api/scheduler/*` 和 `/api/auth/*`，scheduler.rs:113-129），包括重启、恢复出厂、eSIM 切换等。「定时重启」就是在这里建一个 `POST /api/device/reboot` 的任务。
 
-> **星期错位（代码确认）**：页面把 0 当周日、6 当周六（`DAYS = ["Sun",…,"Sat"]`）；agent 把 0 当周一、6 当周日（scheduler.rs:88 `dow = (tm_wday + 6) % 7`，校验提示「0-6 (Mon-Sun)」）。页面上勾「周日」，实际在周一执行，整体错一天。
+> **星期错位（代码确认）**：页面把 0 当周日、6 当周六（`DAYS = ["Sun"，…，"Sat"]`）；agent 把 0 当周一、6 当周日（scheduler.rs:88 `dow = (tm_wday + 6) % 7`，校验提示「0-6 (Mon-Sun)」）。页面上勾「周日」，实际在周一执行，整体错一天。
 
 #### 数据项
 
@@ -1108,10 +1089,10 @@
 |---|---|---|---|---|
 | 任务行：启用开关状态 | `/api/scheduler/jobs` | `[].enabled` | 无 | 否（agent 内存） |
 | 任务行：名称 | `/api/scheduler/jobs` | `[].name` | 无 | 否 |
-| 任务行：计划（`HH:mm — 周一, 周二…` / 「于 X 执行一次」/「每天」） | `/api/scheduler/jobs` | `[].schedule.type/time/days/at`（`at` 为设备时钟，`fmtDevice`） | 无 | 否 |
+| 任务行：计划（`HH:mm — 周一，周二…` / 「于 X 执行一次」/「每天」） | `/api/scheduler/jobs` | `[].schedule.type/time/days/at`（`at` 为设备时钟，`fmtDevice`） | 无 | 否 |
 | 任务行：`方法 路径` | `/api/scheduler/jobs` | `[].action.method`、`[].action.path` | 无 | 否 |
 | 任务行：上次错误（红字）/「上次：时间」 | `/api/scheduler/jobs` | `[].last_error`、`[].last_run` | 无 | 否 |
-| 「暂无定时任务。请在上方创建。」 | `/api/scheduler/jobs` | 为空 | 无 | 否 |
+| 「还没有计划任务。按上方的「新建任务」创建一个。」 | `/api/scheduler/jobs` | 为空 | 无 | 否 |
 | 编辑表单预填 | `/api/scheduler/jobs` | `name`、`action.method/path/body`、`schedule.*` | 无 | 否 |
 | （接口有、页面没显示/没编辑）恢复动作 | `/api/scheduler/jobs` | `restore`、`last_status`、`last_restore_*`（表单里 `restoreEnabled/restoreTime` 字段存在但**没有控件**，也不提交） | — | — |
 
@@ -1140,8 +1121,6 @@
 ---
 
 ## /services/chill CHILL
-
-文件：`app/(panel)/services/chill/page.tsx`（`ExitCard`、`ProfileCard`、`RegionCard`×2、`ProvidersCard`、`BypassCard`、`LogSection`、`DashboardEmbed`）。
 
 **缺陷（代码确认）**：页头「启动」按钮在 `state === "unknown"`（开机后从没启动过）时是**禁用**的（`disabled={busy || !known}`），而同一状态下页面中间的卡片却写着「…按上方的启动来启动它」。改版时要修。
 
@@ -1215,21 +1194,21 @@
 
 ## /services/tailscale Tailscale
 
-文件：`app/(panel)/services/tailscale/page.tsx`。**只读**：agent 的 `/api/services/tailscale` 只有 GET（services.rs 注释「Endpoints never mutate state」）。**关 Tailscale：当前无控件**（档位规则里的「关 Tailscale（二·远程三）」在现有页面上没有对应控件，改版若新增要按新功能处理）。
+文件：`crates/luyaz-web/src/tailscale.rs`。**只读**：agent 的 `/api/services/tailscale` 只有 GET。**关 Tailscale：当前无控件**（档位规则里的「关 Tailscale（二·远程三）」在现有页面上没有对应控件，改版若新增要按新功能处理）。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 页头状态（未安装 / 已停止 / 需要认证 / 运行中 / 需要登录 / 原始 backend_state） | `/api/services/tailscale` | `installed`、`running`（socket 存在 + `pidof tailscaled`）、`auth_url`、`backend_state` | 5000 | 是：services.rs:52-86 `tailscale status --json` 执行失败或解析失败时仍回 ok，只多一个 `error` 字段（页面会显示成红条） |
+| 页头状态（未安装 / 已停止 / 需要认证 / 运行中 / 需要登录 / 原始 backend_state） | `/api/services/tailscale` | `installed`、`running`（socket 存在 + `pidof tailscaled`）、`auth_url`、`backend_state` | 5000 | 是：`tailscale status --json` 执行失败或解析失败时仍回 ok，只多一个 `error` 字段（页面会显示成红条） |
 | 「Tailscale 未安装」卡 | 同上 | `installed === false` | 5000 | 否 |
 | 「Tailscale: {错误}」红条 | 同上 | `error` | 5000 | 同上 |
 | 需要登录卡 + 认证链接 | 同上 | `auth_url` | 5000 | 否 |
-| 本节点：主机名 / Tailscale 名称 / 状态 / IP (v4) / IP (v6) / DERP 中继 / 版本 / 可作出口节点 | 同上 | `self.hostname`、`self.dns_name`、`backend_state`、`self.ips[]`（按是否含 `:` 分 v4/v6）、`self.relay`、`version`、`self.exit_node_option` | 5000 | 否 |
+| 本节点：主机名 / Tailscale 名称 / 状态 / IP (v4) / IP (v6) / DERP 中继 / 版本 / 提供出口节点 | 同上 | `self.hostname`、`self.dns_name`、`backend_state`、`self.ips[]`（按是否含 `:` 分 v4/v6）、`self.relay`、`version`、`self.exit_node_option` | 5000 | 否 |
 | 网格：对等节点数 / 在线数 | 同上 | `peer_count`、`peer_online` | 5000 | 否 |
-| 正在使用的出口节点：主机名 · IP · 在线/离线（无则「未选择出口节点。」） | 同上 | `exit_node.hostname/ips[0]/online` | 5000 | 否 |
+| 正在使用的出口节点：主机名 · IP · 在线/离线（无则「没走出口节点，直接上网。」） | 同上 | `exit_node.hostname/ips[0]/online` | 5000 | 否 |
 | 对等节点列表：主机名 +「exit node」标记 · IP · 系统 · ↑发送 ↓接收 · 最近握手（相对时间）· 在线/离线（最多 32 个） | 同上 | `peers[].hostname/exit_node/ips[0]/os/tx_bytes/rx_bytes/last_handshake/online` | 5000 | 否 |
-| 守护进程日志（末 200 行） | `/api/services/tailscale/log?lines=200` | `lines[]`（`/data/tailscaled.log`） | 4000（可暂停） | 否 |
+| tailscaled 日志（末 200 行） | `/api/services/tailscale/log?lines=200` | `lines[]`（`/data/tailscaled.log`） | 4000（可暂停） | 否 |
 | 加载错误横幅 | `/api/services/tailscale` | SWR `error` | — | — |
 
 接口里有、页面没显示：`peers[].dns_name`、`peers[].last_seen`、`peers[].id`（作 key）。
@@ -1248,7 +1227,7 @@
 
 ## /settings 设置
 
-文件：`app/(panel)/settings/page.tsx`。全部是浏览器本地设置，只有「测试连通性」会发请求。
+文件：`crates/luyaz-web/src/settings.rs`。全部是浏览器本地设置，只有「测试连通性」会发请求。
 
 #### 数据项
 
@@ -1264,12 +1243,12 @@
 |---|---|---|---|---|---|---|
 | 代理 URL 输入框 | 无（FieldRow 文字不是 label）；建议 textbox「代理 URL」 | 无（草稿） | — | — | 无 | —（本地） |
 | 「保存」/「已保存！」（代理连接卡） | button「保存」 | 无（写 localStorage `u60.agent_url` 和 `u60.poll_interval`） | — | — | 无 | —（本地） |
-| 「测试连通性」 | button「测试连通性」 | POST `/api/auth/login` `{password:""}`（`noAuth`、`raw`） | 1。**缺陷**：设了密码时 agent 回 401，`apiFetch` 遇 401 会先清掉 token 并派发登出事件（client.ts:77-80），所以点这个按钮会**把自己登出**，页面还显示「不可访问」 | 无读回 | 无 | 二（会产生一次失败登录；建议改成调 `/api/public/status`） |
+| 「测试连通性」 | button「测试连通性」 | POST `/api/auth/login` `{password:""}`（`noAuth`、`raw`） | 1。**缺陷**：设了密码时 agent 回 401，`apiFetch` 遇 401 会先清掉 token 并派发登出事件，所以点这个按钮会**把自己登出**，页面还显示「不可访问」 | 无读回 | 无 | 二（会产生一次失败登录；建议改成调 `/api/public/status`） |
 | 轮询间隔（秒）数字框（1–60） | 无；建议 spinbutton「轮询间隔（秒）」 | 无（草稿） | — | — | 无 | —（本地） |
 | 「保存偏好」/「已保存！」 | button「保存偏好」 | 无（同上，写 localStorage，但没人读） | — | — | 无 | —（本地） |
 | 「退出登录」 | button「退出登录」（与顶栏同名） | 无（清 token，跳 `/login`） | — | — | 无 | —（本地） |
-| 「清除已存储的 Token」 | button「清除已存储的 Token」 | 无（删 localStorage `u60.token`，跳 `/login`） | — | — | 无 | —（本地） |
-| 「清除已存储的代理 URL」 | button「清除已存储的代理 URL」 | 无（删 localStorage `u60.agent_url`） | — | — | 无 | —（本地） |
+| 删掉本机存的登录令牌（旧版按钮，已不在） | button | 无（删 localStorage `u60.token`，跳 `/login`） | — | — | 无 | —（本地） |
+| 删掉本机存的接口地址（旧版按钮，已不在） | button | 无（删 localStorage `u60.agent_url`） | — | — | 无 | —（本地） |
 
 说明：本页没有深浅色切换；语言切换在顶栏（见「全局」）。
 
@@ -1277,7 +1256,7 @@
 
 ## /signal 信号
 
-文件：`app/(panel)/signal/page.tsx`。只读。
+文件：`crates/luyaz-web/src/view.rs`。只读。
 
 #### 数据项
 
@@ -1302,19 +1281,19 @@
 
 ## /sms 短信收件箱
 
-文件：`app/(panel)/sms/page.tsx`。列表是用 **POST** 读的（`useApi` 带 `method:"POST"`），SWR 键是 `/api/sms/list?store=…`；agent 路由去掉查询串后就是 `POST /api/sms/list`。
+文件：`crates/luyaz-web/src/sms.rs`。列表是用 **POST** 读的（`useApi` 带 `method:"POST"`），SWR 键是 `/api/sms/list?store=…`；agent 路由去掉查询串后就是 `POST /api/sms/list`。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| SIM 已用（N / 总数） | `/api/sms/capacity` | `sim_used`、`sim_total`（**未确认**：固件 `zwrt_wms_get_wms_capacity` 的真实键名没在代码里核对；`public.rs` 用的是 `sms_dev_unread_num`/`sms_sim_unread_num` 这类名字，若键名不对这张卡不显示） | 10000 | 否·透传（sms.rs:42） |
+| SIM 已用（N / 总数） | `/api/sms/capacity` | `sim_used`、`sim_total`（**未确认**：固件 `zwrt_wms_get_wms_capacity` 的真实键名没在代码里核对；公开状态接口用的是 `sms_dev_unread_num`/`sms_sim_unread_num` 这类名字，若键名不对这张卡不显示） | 10000 | 否·透传（sms.rs:42） |
 | 设备已用 | `/api/sms/capacity` | `device_used`、`device_total`（未确认） | 10000 | 否·透传 |
 | 总已用 | `/api/sms/capacity` | `used`、`total`（未确认） | 10000 | 否·透传 |
 | 未读（本页列表里 `tag≠0` 的条数） | POST `/api/sms/list` | `messages[].tag` | 10000 | 否·透传（sms.rs:10-40） |
 | 列表：来自（未读加粗） | POST `/api/sms/list` | `messages[].number`、`tag` | 10000 | 否·透传 |
 | 列表：内容（UCS2 解码，两行截断） | 同上 | `messages[].content`（`decodeSms`） | 10000 | 否·透传 |
-| 列表：日期 | 同上 | `messages[].date`（`YY,MM,DD,HH,MM,SS,+TZ` → `formatSmsDate`） | 10000 | 否·透传 |
+| 列表：日期 | 同上 | `messages[].date`（`YY，MM，DD，HH，MM，SS，+TZ` → `formatSmsDate`） | 10000 | 否·透传 |
 | 列表：存储 | 同上 | `messages[].mem_store` | 10000 | 否·透传 |
 | 「暂无短信。」 | 同上 | 为空 | 10000 | 否·透传 |
 | 详情弹层：来自 / 日期 · 存储 /「已读」/ 正文 | 同上（本地已有数据） | 同上字段 | — | — |
@@ -1344,7 +1323,7 @@
 
 ## /sms/compose 写短信
 
-文件：`app/(panel)/sms/compose/page.tsx`。不拉任何数据。
+文件：`crates/luyaz-web/src/sms_compose.rs`。不拉任何数据。
 
 #### 数据项
 
@@ -1359,7 +1338,7 @@
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
 | 「返回」（页头） | button「返回」 | 无（跳 `/sms/`） | — | — | 无 | —（本地） |
-| 收件人（电话号码）输入框 | 无（label 未关联）；建议 textbox「收件人」 〔现名：textbox「收件人（电话号码）」〕 | 无（草稿） | — | — | 无 | —（本地） |
+| 发给（号码）输入框 | 无（label 未关联）；建议 textbox「收件人」 〔现名：textbox「发给（号码）」〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 内容多行框 | 无；建议 textbox「内容」 | 无（草稿） | — | — | 无 | —（本地） |
 | 「发送」（收件人或内容为空时禁用） | button「发送」 | POST `/api/sms/send` `{number, sms_time:"YYYYMMDDHHmmss"（浏览器本地时间）, message_body（UCS2 时为 hex）, id:"-1", encode_type:"ucs2"/"gsm7"}`（ubus `zte_libwms_send_sms`） | 1；成功后跳回 `/sms/` | 无读回（发件箱不在收件箱列表里） | 无 | 二 |
 | 「取消」 | button「取消」 | 无（跳 `/sms/`） | — | — | 无 | —（本地） |
@@ -1370,7 +1349,7 @@
 
 ## /sms/forward 短信转发
 
-文件：`app/(panel)/sms/forward/page.tsx`（`RuleForm`）。三个标签：设置 / 规则 / 日志。
+文件：`crates/luyaz-web/src/sms_forward.rs`。三个标签：设置 / 规则 / 日志。
 
 > **两个按钮必失败（代码确认）**：
 > - 规则行「测试规则」（▶）发的是 `{rule_id}`，agent 要的是 `{destination:{…}}`（sms_forward.rs:1255-1264），serde 解析失败回 400。
@@ -1381,9 +1360,9 @@
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 设置·启用短信转发 | `/api/sms/forward/config` | `config.enabled` | 无 | 否（agent 内存） |
+| 设置·转发短信 | `/api/sms/forward/config` | `config.enabled` | 无 | 否（agent 内存） |
 | 设置·轮询间隔(秒) | 同上 | `config.poll_interval_secs` | 无 | 否 |
-| 设置·转发后标为已读 / 转发后删除 | 同上 | `config.mark_read_after_forward`、`config.delete_after_forward` | 无 | 否 |
+| 设置·转发完就标成已读 / 转发后删除 | 同上 | `config.mark_read_after_forward`、`config.delete_after_forward` | 无 | 否 |
 | 规则·「N 条规则」 | 同上 | `config.rules.length` | 无 | 否 |
 | 规则行：启用开关 / 名称 / 筛选：类型 · 目标：类型 | 同上 | `config.rules[].enabled/name/filter.type/destination.type` | 无 | 否 |
 | 规则编辑表单预填 | 同上 | `rules[].filter.patterns/keywords`、`destination.*` | 无 | 否 |
@@ -1397,9 +1376,9 @@
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
 | 标签「设置」「规则」「日志」 | button「设置」「规则」「日志」（无 tab 角色；建议 tablist） 〔现名：tab「设置」「规则」「日志」（tablist「短信转发分区」）〕 | 无（切标签；日志标签会触发 GET log） | — | — | 无 | —（本地） |
-| 设置·「启用短信转发」开关 | switch「启用短信转发」 | 无（草稿） | — | — | 无 | —（本地） |
+| 设置·「转发短信」开关 | switch「转发短信」 | 无（草稿） | — | — | 无 | —（本地） |
 | 设置·轮询间隔(秒) 数字框 | 无（label 未关联）；建议 spinbutton「轮询间隔(秒)」 | 无（草稿） | — | — | 无 | —（本地） |
-| 设置·「转发后标为已读」开关 | switch「转发后标为已读」 | 无（草稿） | — | — | 无 | —（本地） |
+| 设置·「转发完就标成已读」开关 | switch「转发完就标成已读」 | 无（草稿） | — | — | 无 | —（本地） |
 | 设置·「转发后删除」开关 | switch「转发后删除」 | 无（草稿） | — | — | 无 | —（本地） |
 | 「保存设置」 | button「保存设置」 | PUT `/api/sms/forward/config` `{enabled, poll_interval_secs, mark_read_after_forward, delete_after_forward}` | 1 | `/api/sms/forward/config` `config.*` | 无 | 二（「转发后删除」打开后会自动删短信，建议评审） |
 | 「添加规则」 | button「添加规则」 〔交互后：在「规则」标签里；点 tab「规则」〕 | 无（打开表单） | — | — | 无 | —（本地） |
@@ -1409,8 +1388,8 @@
 | 规则行垃圾桶 | 无（只有图标）；建议 button「删除规则 {名称}」 〔现名：button「删除规则{规则名}」〕〔交互后：在「规则」标签里；点 tab「规则」〕 | DELETE `/api/sms/forward/rules` `{id}` | 1 | `/api/sms/forward/config` 该规则消失 | 「删除此规则?」 | 三（删除短信转发规则） |
 | 规则表单·规则名称 | 无；建议 textbox「规则名称」 〔交互后：规则表单；点 tab「规则」，点 button「添加规则」〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 规则表单·「已启用」开关 | switch「已启用」 〔交互后：规则表单；点 tab「规则」，点 button「添加规则」〕 | 无（草稿） | — | — | 无 | —（本地） |
-| 规则表单·筛选条件下拉（全部短信 / 按发件人(模式) / 按内容(关键词) / 发件人 + 内容） | 无；建议 combobox「筛选条件」 〔交互后：规则表单；点 tab「规则」，点 button「添加规则」〕 | 无（草稿；切换类型会清空模式/关键词，不填就保存会因缺字段被 agent 拒绝） | — | — | 无 | —（本地） |
-| 规则表单·发件人模式(逗号分隔) / 关键词(逗号分隔) | 无；建议 textbox「发件人模式」「关键词」 〔现名：textbox「发件人模式(逗号分隔)」「关键词(逗号分隔)」〕〔交互后：规则表单里、筛选条件选了发件人/内容时（未自动验证）〕 | 无（草稿） | — | — | 无 | —（本地） |
+| 规则表单·筛选条件下拉（全部短信 / 按发件人（模式）/ 按内容（关键词） / 发件人 + 内容） | 无；建议 combobox「筛选条件」 〔交互后：规则表单；点 tab「规则」，点 button「添加规则」〕 | 无（草稿；切换类型会清空模式/关键词，不填就保存会因缺字段被 agent 拒绝） | — | — | 无 | —（本地） |
+| 规则表单·匹配的发件人 / 匹配的词 | 无；建议 textbox「发件人模式」「关键词」 〔现名：textbox「匹配的发件人，用逗号隔开」「匹配的词，用逗号隔开」〕〔交互后：规则表单里、筛选条件选了发件人/内容时（未自动验证）〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 规则表单·转发目标下拉（Telegram / Webhook / 短信转发 / Ntfy / Discord / Slack） | 无；建议 combobox「转发目标」 〔交互后：规则表单；点 tab「规则」，点 button「添加规则」〕 | 无（草稿；切换会清空目标字段） | — | — | 无 | —（本地） |
 | 规则表单·目标字段：Bot Token、Chat ID、「静默通知」开关（Telegram）；URL、方法下拉 POST/PUT/GET（Webhook）；转发到号码（短信）；服务器地址、主题、令牌(可选)（Ntfy）；Webhook 地址（Discord/Slack） | 输入框均无名称（label 未关联）；开关为 switch「静默通知」 〔交互后：规则表单、目标选 Telegram 时；点 tab「规则」，点 button「添加规则」〕 | 无（草稿） | — | — | 无 | —（本地） |
 | 规则表单「创建」（新建时） | button「创建」 〔交互后：规则表单；点 tab「规则」，点 button「添加规则」〕 | POST `/api/sms/forward/rules` `{name, enabled, filter:{type, patterns?, keywords?}, destination:{type, …}}` | 1 | `/api/sms/forward/config` 出现新规则 | 无 | 二 |
@@ -1418,7 +1397,7 @@
 | 规则表单「取消」 | button「取消」 〔交互后：规则表单；点 tab「规则」，点 button「添加规则」〕 | 无 | — | — | 无 | —（本地） |
 | 日志「刷新」 | button「刷新」 〔交互后：在「日志」标签里；点 tab「日志」〕 | GET `/api/sms/forward/log` | — | — | 无 | —（本地，只读） |
 | 日志「重试失败项」 | button「重试失败项」 〔现名：button「重试失败项 (N)」〕〔交互后：在「日志」标签里；点 tab「日志」〕 | POST `/api/sms/forward/retry` `{}`——**缺 `index`，必回 400**（见上） | 1 | 无 | 无 | 二 |
-| 日志「清空日志」 | button「清空日志」 〔交互后：在「日志」标签里；点 tab「日志」〕 | POST `/api/sms/forward/log/clear` `{}` | 1 | `/api/sms/forward/log` 为空 | 「清空所有日志?」 | 三（清空转发日志） |
+| 日志「清空日志」 | button「清空日志」 〔交互后：在「日志」标签里；点 tab「日志」〕 | POST `/api/sms/forward/log/clear` `{}` | 1 | `/api/sms/forward/log` 为空 | 问要不要清空全部日志 | 三（清空转发日志） |
 
 写接口假成功风险：config / rules 增改删 / toggle / log/clear 全部 **是**——sms_forward.rs:1064-1068 `save_config`、1070-1074 `save_state` 写文件失败被 `let _ =` 丢掉，内存已改、回 ok，重启后丢失。test / retry 为「否」（真正发出去才回 ok）。
 
@@ -1426,17 +1405,15 @@
 
 ## /tools/at AT 终端
 
-文件：`app/(panel)/tools/at/page.tsx`。
-
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 页头端口状态（端口名 — 可用/不可用） | `/api/at/port` | `port`、`available` | 无 | 否（at_terminal.rs:63） |
-| 响应区：`> 命令` + 响应原文 + 耗时 ms（本次会话的历史，刷新页面清空） | `/api/at/send` 的返回 | `command`（agent 过滤掉 `'`$;|&` 后的实际命令）、`response`、`elapsed_ms` | — | 否（原样返回调制解调器回复，含 ERROR 也照样显示；at_terminal.rs:43-59） |
+| 页头端口状态（端口名 — 可用/不可用） | `/api/at/port` | `port`、`available` | 无 | 否 |
+| 响应区：`> 命令` + 响应原文 + 耗时 ms（本次会话的历史，刷新页面清空） | `/api/at/send` 的返回 | `command`（agent 过滤掉 `'`$;|&` 后的实际命令）、`response`、`elapsed_ms` | — | 否（原样返回调制解调器回复，含 ERROR 也照样显示；） |
 | 「上次响应耗时 N ms」 | 同上 | `elapsed_ms` | — | — |
 | 历史记录列表（本地） | 无 | — | — | — |
-| 「命令必须以 AT 开头」/ 发送错误横幅 | 本地校验 / `/api/at/send` 错误 | — | — | — |
+| 「命令要以 AT 开头」/ 发送错误横幅 | 本地校验 / `/api/at/send` 错误 | — | — | — |
 
 #### 控件
 
@@ -1453,13 +1430,13 @@
 
 ## /tools/enable-adb 启用 ADB
 
-文件：`app/(panel)/tools/enable-adb/page.tsx`。走 agent 的 `/api/usb/mode`（`web/src/lib/ubus.ts`、`lib/adb.ts`、`lib/crypto.ts` 里那套「直连 `http://网关/ubus` 登录再切 USB」和 WebUSB ADB 客户端**没有任何页面引用**，是死代码）。
+走 agent 的 `/api/usb/mode`（旧网页里另有一套「直连 `http://网关/ubus` 登录再切 USB」和 WebUSB ADB 客户端，**没有任何页面引用**，是死代码）。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 成功提示「ADB 调试模式已启用。通过 USB 连接并运行 adb devices。」 | `/api/usb/mode` 的返回 | 只看有无报错 | — | 否·透传（usb.rs:13-22） |
+| 成功提示「ADB 已打开。插上 USB 线，运行 adb devices 看看。」 | `/api/usb/mode` 的返回 | 只看有无报错 | — | 否·透传（usb.rs:13-22） |
 | 错误横幅 | 同上 | `error` | — | — |
 
 页面**不读取当前 USB 模式**（可以读的 `/api/usb/status` 只在 `/usb` 页用）。
@@ -1468,13 +1445,11 @@
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| 「启用 ADB 调试 USB 模式」/「重新启用 ADB」 | button「启用 ADB 调试 USB 模式」 | PUT `/api/usb/mode` `{mode:"debug"}`（ubus `zwrt_bsp.usb set`；固件没有 `set` 时 `/api/usb/status` 给 `mode_settable:false`，按钮禁用并说明，PUT 回 501） | 1 | 无读回（本页）；可用 `/api/usb/status` 看模式 | 「启用 ADB 调试 USB 模式？\n\n这将通过 USB 暴露 ADB，允许对设备进行完整的 shell 访问。仅在你拥有物理访问权限并信任所处环境时才执行此操作。」 | 三（开 ADB） |
+| 「打开 USB 的 ADB 调试」/「重新启用 ADB」 | button「打开 USB 的 ADB 调试」 | PUT `/api/usb/mode` `{mode:"debug"}`（ubus `zwrt_bsp.usb set`；固件没有 `set` 时 `/api/usb/status` 给 `mode_settable:false`，按钮禁用并说明，PUT 回 501） | 1 | 无读回（本页）；可用 `/api/usb/status` 看模式 | 「打开 USB 的 ADB 调试？」对话框（说明谁能拿到 root shell、断开多久、怎么恢复） | 三（开 ADB） |
 
 ---
 
 ## /tools/processes 进程监控
-
-文件：`app/(panel)/tools/processes/page.tsx`。
 
 > **风险提示（代码确认）**：agent 的「冗余进程」名单（system.rs:389-407 `BLOAT_DAEMONS`）里有 `zte_topsw_mc`、`zte_dm`、`zte_topsw_wms`、`zte_topsw_sleep_faw`、`zte_topsw_tr098db`、`zte_topsw_fota_result`、`zte_smart_manage`——这几个都在 `zte_topsw_daemon.conf` 的开机同步名单里（见 `source/manager/CLAUDE.md`），`zte_topsw_wms` 还是短信服务。「清除全部冗余进程」会对它们发 SIGKILL。改版时建议复核这个名单。
 > **显示缺陷**：agent 返回的 `killed` 是 `[{pid, name}]`，页面当成数字数组 `join(", ")`，成功提示会显示成「[object Object]」。
@@ -1503,15 +1478,15 @@
 
 ## /tools/speedtest 测速
 
-文件：`app/(panel)/tools/speedtest/page.tsx`。只做 WAN 测速（agent 从外网拉 speedtest 服务器列表，在设备上跑下载/上传）。agent 原有的局域网测速接口 `/api/lan/ping|download|upload` 没有调用者，10-06 已删。
+文件：`crates/luyaz-web/src/speedtest.rs`。只做 WAN 测速（agent 从外网拉 speedtest 服务器列表，在设备上跑下载/上传）。agent 原有的局域网测速接口 `/api/lan/ping|download|upload` 没有调用者，10-06 已删。
 
 #### 数据项
 
 | 显示内容 | 接口 | 字段 | 刷新间隔 | 假成功风险 |
 |---|---|---|---|---|
-| 服务器下拉选项（运营方 — 名称, 国家） | `/api/speedtest/servers`（GET，**会从设备访问外网**拉列表，有缓存） | `[].id/sponsor/name/country`（`host`、`url` 不显示） | 无（进页拉一次） | 否（拉取失败回 503，speedtest.rs:355-360） |
+| 服务器下拉选项（运营方 — 名称，国家） | `/api/speedtest/servers`（GET，**会从设备访问外网**拉列表，有缓存） | `[].id/sponsor/name/country`（`host`、`url` 不显示） | 无（进页拉一次） | 否（拉取失败回 503，speedtest.rs:355-360） |
 | 服务器列表加载错误（下拉下方红字） | 同上 | `error` | — | — |
-| 进度：阶段（空闲/正在测量延迟…/正在测试下载…/正在测试上传…/完成/已取消/错误）+ 百分比 + 进度条 | `/api/speedtest/progress` | `phase`、`progress`（0–100 整数） | 页面 `setTimeout` 链 1000（运行中） | 否（agent 内存状态） |
+| 进度：阶段（空闲/测延迟…/测下载…/测上传…/完成/已取消/错误）+ 百分比 + 进度条 | `/api/speedtest/progress` | `phase`、`progress`（0–100 整数） | 页面 `setTimeout` 链 1000（运行中） | 否（agent 内存状态） |
 | 实时速率 Mbps | 同上 | `live_speed_mbps` | 1000 | 否 |
 | 错误原因 | 同上 | `phase=error` 时的 `error` | 1000 | 否 |
 | 结果卡：延迟 / 抖动 / 下载 / 上传 | 同上 | `ping_ms`、`jitter_ms`、`download_mbps`、`upload_mbps`（完成时） | — | 否 |
@@ -1521,7 +1496,7 @@
 
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
-| 服务器下拉（自动（最佳服务器）+ 列表） | 无（label 未关联）；建议 combobox「服务器」 | 无（草稿） | — | — | 无 | —（本地） |
+| 服务器下拉（自动（Ookla → 已配置的 LibreSpeed）+ 列表） | 无（label 未关联）；建议 combobox「服务器」 | 无（草稿） | — | — | 无 | —（本地） |
 | 「开始」 | button「开始」 | POST `/api/speedtest/start` `{}` 或 `{server_id}` | 1，之后每秒 GET progress 直到 complete/cancelled/error | 无读回（结果即进度接口的数值） | 无 | 二（消耗蜂窝流量） |
 | 「停止」（运行中） | button「停止」 〔交互后：测速进行中才有；点 button「开始」，点 button「确认：{x}」〕 | POST `/api/speedtest/stop` `{}`（错误被页面忽略） | 1 | `/api/speedtest/progress` `phase=cancelled` | 无 | 二 |
 
@@ -1529,7 +1504,7 @@
 
 ## /tools/diagnose 网络诊断
 
-文件：`app/(panel)/tools/diagnose/page.tsx`（2026-10-02 新页，设计 `docs/designs/slow-diagnosis.md` §12.3/§12.5/§12.8）。agent `deep_diag.rs` 分层检查（Wi-Fi、信号、限速、蜂窝链路、基站负载，开着代理时另有代理层），主因、动作、各层数值它都给中英两份。从应用里点进来（菜单、⌘K、首页「查原因 →」）且没有 10 分钟内的结果时自动开始；直接打开网址、刷新不自动开始。
+agent 分层检查（Wi-Fi、信号、限速、蜂窝链路、基站负载，开着代理时另有代理层），主因、动作、各层数值它都给中英两份。从应用里点进来（菜单、⌘K、首页「查原因 →」）且没有 10 分钟内的结果时自动开始；直接打开网址、刷新不自动开始。
 
 #### 数据项
 
@@ -1563,7 +1538,7 @@
 
 ## /usb USB 模式
 
-文件：`app/(panel)/usb/page.tsx`。
+文件：`crates/luyaz-web/src/usb.rs`。
 
 #### 数据项
 
@@ -1572,7 +1547,7 @@
 | 线缆（已连接/已断开） | `/api/usb/status` | `connect` | 3000 | 否·透传（usb.rs:6，ubus `zwrt_bsp.usb list`） |
 | USB-C CC | `/api/usb/status` | `typec_cc` | 3000 | 否·透传 |
 | 模式 + 模式按钮高亮 | `/api/usb/status` | `mode`（debug/mtp/rndis） | 3000 | 否·透传 |
-| 充电器类型 | `/api/device/charger` | `charger_type`（原始数字） | 5000 | 否·透传（device_ext.rs:15） |
+| 充电器类型 | `/api/device/charger` | `charger_type`（原始数字） | 5000 | 否·透传 |
 | 直接供电：X | `/api/device/charger` | `direct_power_supply_mode`（注意 CLAUDE.md：enable=停充、disable=充电，反的） | 5000 | 否·透传 |
 | 快速充电宝开关状态 | `/api/device/charger` | `otg_powerbank_state`（是否跟着 `zwrt_bsp.powerbank` 的 state 变，未真机核对） | 5000 | 否·透传 |
 | 接口里有、页面没显示 | `/api/usb/status`、`/api/device/charger` | `usb2rj45`、`charge_status`、`charger_connect` | — | — |
@@ -1592,7 +1567,7 @@
 
 ## /changes 改动记录
 
-文件：`app/(panel)/changes/page.tsx`（E4 T9b，2026-10-03 加；设计 docs/designs/write-op-layer.md DD5、DD10、DD11）。文字全是核心的（`journal.list`，STATE_V2.md V2-41）。旧核心（`/api/ops` 没有 `supported`）写「这版数据服务还没有改动记录」，不去读。
+文字全是核心的（`journal.list`，STATE_V2.md V2-41）。旧核心（`/api/ops` 没有 `supported`）写「这版数据服务还没有改动记录」，不去读。
 
 #### 数据项
 
@@ -1618,7 +1593,7 @@
 
 ### 1. 路由数
 
-`find web/src/app -name page.tsx | wc -l` = **43**，本文 43 个路由各有一节（清单整理时的数；之后新加的页各自补了一节，如 2026-10-03 的 `/changes`）（另加一节「全局」）。已用脚本核对：本文 `## /…` 标题与 `app/(panel)` 下的 `page.tsx` 一一对应，没有遗漏或多出。
+清单整理时共 **43** 个页面，本文 43 个路由各有一节（清单整理时的数；之后新加的页各自补了一节，如 2026-10-03 的 `/changes`）（另加一节「全局」）。清单整理时用脚本核对过：本文 `## /…` 标题和当时的页面一一对应，没有遗漏或多出。
 
 不在侧栏 NAV 里的路由：`/login`（登录页）、`/sms/compose`（从 `/sms` 的「写短信」进）。
 
@@ -1626,22 +1601,22 @@
 
 | # | 页面 | 位置 | 触发的控件 | 确认文案（中文） |
 |---|---|---|---|---|
-| 1 | /bandlock | `bandlock/page.tsx:85` | 「重置 / 全部解锁」 | 重置所有频段锁定？设备将切换为自动选择频段。 |
-| 2 | /router/apn | `router/apn/page.tsx:216` | 条目删除 | 删除 APN "{名称}"? |
-| 3 | /router/celllock | `router/celllock/page.tsx:119` | 「全部解锁」 | 重置所有小区锁定？ |
-| 4 | /router/esim | `router/esim/page.tsx:233` | 条目「切换」 | 切换到“{名称}”?…预计短暂断网(通常约 40 秒,无需重启)。 |
-| 5 | /router/esim | `router/esim/page.tsx:264` | 条目删除 | 从卡上永久删除配置“{名称}”?此操作不可撤销。 |
-| 6 | /router/mobile-network | `router/mobile-network/page.tsx:129` | ~~飞行模式开关（仅打开时）~~（10-05 已去掉） | — |
-| 7 | /router/mobile-network | `router/mobile-network/page.tsx:217` | 「重启」 | 现在重启路由器？ |
-| 8 | /router/stc | `router/stc/page.tsx:98` | 「重置白名单」 | 重置 STC 白名单？此操作无法撤销。 |
-| 9 | /sms | `sms/page.tsx:190` | 「删除 (N)」 | 删除 {N} 条短信? |
-| 10 | /sms/forward | `sms/forward/page.tsx:375` | 规则删除 | 删除此规则? |
-| 11 | /sms/forward | `sms/forward/page.tsx:419` | 「清空日志」 | 清空所有日志? |
-| 12 | /tools/at | `tools/at/page.tsx:79` | 「发送」危险命令 | 警告：{原因}…确定要发送：{命令} 吗？ |
-| 13 | /tools/enable-adb | `tools/enable-adb/page.tsx:19` | 「启用 ADB 调试 USB 模式」 | 启用 ADB 调试 USB 模式？… |
-| 14 | /tools/processes | `tools/processes/page.tsx:78` | 行「终止」 | 终止进程 PID {pid}？ |
-| 15 | /tools/processes | `tools/processes/page.tsx:103` | 「清除全部冗余进程」 | 终止全部 {N} 个冗余进程？ |
-| 16 | /usb | `usb/page.tsx:74` | 模式按钮 | 将 USB 模式更改为“{模式}”？这将断开当前会话。 |
+| 1 | /bandlock | `src/bandlock.rs` | 「清除全部锁定」 | 清除全部频段和小区锁定？ |
+| 2 | /router/apn | `src/apn.rs` | 条目删除 | 删除 APN "{名称}"? |
+| 3 | /router/celllock | `src/celllock.rs` | 「全部解锁」 | 清除全部小区锁定？ |
+| 4 | /router/esim | `src/esim.rs` | 条目「切换」 | 切换到“{名称}”?…预计短暂断网(通常约 40 秒,无需重启)。 |
+| 5 | /router/esim | `src/esim.rs` | 条目删除 | 从卡上永久删除配置“{名称}”?此操作不可撤销。 |
+| 6 | /router/mobile-network | `src/netsel.rs` | ~~飞行模式开关（仅打开时）~~（10-05 已去掉） | — |
+| 7 | /router/mobile-network | `src/netsel.rs` | 「重启」 | 重启 U60？现在就重启？ |
+| 8 | /router/stc | — | 「重置白名单」 | 清空 STC 白名单？收集到的小区会全部丢掉，找不回来。 |
+| 9 | /sms | — | 「删除 (N)」 | 删除 {N} 条短信? |
+| 10 | /sms/forward | — | 规则删除 | 删除此规则? |
+| 11 | /sms/forward | `crates/luyaz-web/src/sms_forward.rs` | 「清空日志」 | 问要不要清空全部日志 |
+| 12 | /tools/at | `src/at_term.rs` | 「发送」危险命令 | 警告：{原因}…确定要发送：{命令} 吗？ |
+| 13 | /tools/enable-adb | `src/enable_adb.rs` | 「打开 USB 的 ADB 调试」 | 打开 USB 的 ADB 调试？… |
+| 14 | /tools/processes | `src/processes.rs` | 行「终止」 | 终止进程 PID {pid}？ |
+| 15 | /tools/processes | `src/processes.rs` | 「清除全部冗余进程」 | 终止全部 {N} 个冗余进程？ |
+| 16 | /usb | — | 模式按钮 | 将 USB 模式更改为“{模式}”？这将断开当前会话。 |
 
 其中 7 处写的是裸 `confirm(`（bandlock、celllock、stc、sms、sms/forward×2、usb），其余是 `window.confirm(`，行为相同。以上 16 处全部定为第三档。没有任何第一档控件带 `window.confirm`，所以不存在「第一档却要第三档确认」的冲突。
 
@@ -1665,7 +1640,7 @@
 | /router/scenario | 创建默认情景 / 添加国外情景 | ① GET `/api/scenario/template` → ② PUT `/api/scenario` |
 | /router/scenario | 引擎开关（关） | 1 个请求；agent 内部还会同步执行 `bootsafe` + `run_restores`（恢复外出情景、开 Wi-Fi 等）——但因双重编码 agent 永远当作「开」 |
 | /router/signal-detect | 开始检测 / 停止检测 | 开始：POST start → 每 2 秒 GET progress；停止：① POST stop → ② GET results |
-| /router/telemetry | 拦截已知遥测 | 最多 4 次 PUT `/api/router/domain-filter`（逐个域名，失败静默） |
+| /router/telemetry | 一键拦截遥测 | 最多 4 次 PUT `/api/router/domain-filter`（逐个域名，失败静默） |
 | /router/wifi | 确认 | 1 个请求；agent 内部：uci set ×N → commit `wireless`/`zte_mbb` → 后台线程 reload + 验证（HTTP 已先回） |
 | /router/wifi-guest | 应用 | 1 个请求；agent 内部同上（后台 reload） |
 | /router/esim | 切换 | POST `/api/esim/switch` → 每 1.5 秒 GET `/api/esim/job`；agent 内部：lpac enable → qmi simreset → 重启 `zte_topsw_mdm` → 最多 30 秒等收敛 → 否则重启整机；重启后每 4 秒 GET `/api/public/status` 直到回来 |
@@ -1684,7 +1659,7 @@
 |---|---|---|
 | PUT `/api/wifi/settings` | wifi.rs:251-259、264-300、280-291、294-298 | `zte_mbb` 键（含 `wifi_onoff` 总开关、`wifi6_switch`）写失败静默跳过；只改这两个键时根本不 reload；需要 reload 时放后台，HTTP 先回 ok；发射功率热生效结果被丢掉 |
 | PUT `/api/wifi/guest` | wifi.rs:370-378、389 | 段不存在时静默跳过；reload 放后台 |
-| PUT `/api/router/wan-ipv6` | router.rs:400 | 实时开关 IPv6 支路 `set_qcliiface` 结果被丢掉 |
+| PUT `/api/router/wan-ipv6` | — | 实时开关 IPv6 支路 `set_qcliiface` 结果被丢掉 |
 | PUT `/api/doh/config` | doh/config.rs:29-35 + doh/mod.rs:87-95 | 页面发 `upstreams`，agent 只认 `upstream_url`，等于空补丁仍回 ok（页面字段 × agent 宽松解析） |
 | POST `/api/doh/enable` | server.rs:449-454、doh/mod.rs:119 | 写 dnsmasq drop-in、重启 dnsmasq、保存 enabled 的结果都被丢掉 |
 | POST `/api/doh/disable` | server.rs:458-471 | 恢复 dnsmasq 的 shell 命令结果被丢掉 |
@@ -1695,29 +1670,29 @@
 | PUT `/api/scenario` | scenario.rs:586-593（调用处 1631） | `write_json` 写盘失败静默 |
 | POST `/api/scenario/pin` | scenario.rs:1662、1666 | pin 文件写/删结果被丢掉 |
 | PUT `/api/scenario/enabled` | scenario.rs:1684、1687、1690 | 标志文件写/删结果被丢掉；缺 `enabled` 字段时默认 true |
-| POST `/api/esim/switch` | esim.rs:436-449 | 身份没收敛时任务照样标 `done` 然后重启整机 |
-| POST `/api/ussd/respond` | telephony.rs:430-441 | 不检查 `ERROR`，原样当回复返回 ok |
+| POST `/api/esim/switch` | — | 身份没收敛时任务照样标 `done` 然后重启整机 |
+| POST `/api/ussd/respond` | — | 不检查 `ERROR`，原样当回复返回 ok |
 
 **读接口（下游读失败时回 ok + 默认值，页面会把「读不到」显示成一个确定的状态）**
 
 | 接口 | 位置 | 表现 |
 |---|---|---|
-| GET `/api/public/status` | public.rs:31、43、53、107 | 读不到时显示为：未连接、Wi-Fi 关、0 条未读 |
+| GET `/api/public/status` | — | 读不到时显示为：未连接、Wi-Fi 关、0 条未读 |
 | GET `/api/wifi/status` | wifi.rs:12-18、55-67、84-103 | uci 读不到为空串；`wifi_onoff` 兜底 "1"（显示为开）；连接数兜底 0 |
 | GET `/api/wifi/guest` | wifi.rs:12-14、320-324 | 同上；剩余时间兜底 −1 |
-| GET `/api/network/clients` | network_ext.rs:28-32 | luci-rpc 失败时列表为空 |
-| GET `/api/router/lan` | router.rs:55-60 | 每项 `uci get` 失败为空串 |
-| GET `/api/router/wan-ipv6` | router.rs:338-345 | `wan_has_ipv6` 读不到当 false |
-| GET `/api/device/charge-control` | device_ext.rs:45-60 | 充电器读不到当「未停充」、电量 0 |
+| GET `/api/network/clients` | — | luci-rpc 失败时列表为空 |
+| GET `/api/router/lan` | — | 每项 `uci get` 失败为空串 |
+| GET `/api/router/wan-ipv6` | — | `wan_has_ipv6` 读不到当 false |
+| GET `/api/device/charge-control` | — | 充电器读不到当「未停充」、电量 0 |
 | GET `/api/services/chill` | chill.rs:122-139 | mihomo 不通时 `version/groups/region/ai_exit/exit` 为空 |
 | GET `/api/services/chill/providers` | chill.rs:160-169 | mihomo 不通时回空列表 |
-| GET `/api/services/tailscale` | services.rs:52-86 | 执行/解析失败时 ok + `error` 字段（页面会显示） |
+| GET `/api/services/tailscale` | — | 执行/解析失败时 ok + `error` 字段（页面会显示） |
 
 **页面层面的假成功（agent 正常报错或没问题，但页面没反映出来）**
 
 - /router/scenario：双重 JSON 编码，「固定」实际永远是取消固定、「关引擎」实际是开引擎，页面都提示成功。
 - /router/dns：DoH 上游改不进去却提示「DoH 已启用」。
-- /router/telemetry「拦截已知遥测」：单个失败被吞，最后照样提示成功。
+- /router/telemetry「一键拦截遥测」：单个失败被吞，最后照样提示成功。
 - /tools/processes：agent 把跳过的进程放 `skipped`，页面不显示。
 - /sms/compose：发送固件失败（ubus 退出码 0）时照样跳回收件箱。
 
@@ -1728,15 +1703,15 @@
 
 | 接口 | 判定 | 依据 |
 |---|---|---|
-| GET `/api/scenario/scan` | **有** | wifi_scan.rs:187-214：没有可用接口时 `iw phy … interface add scen-scan0` + `ip link set … up`，扫完删除；扫描本身占用射频 |
+| GET `/api/scenario/scan` | **有** | 没有可用接口时 `iw phy … interface add scen-scan0` + `ip link set … up`，扫完删除；扫描本身占用射频 |
 | GET `/api/services/chill/dashboard` | **有**（轻微） | chill_proxy.rs:44-64：首次调用在设备上生成 dashboard secret 文件（mode 600） |
-| GET `/api/health?refresh=1` | **可能有** | health.rs:184-188：同步执行 `/data/u60-guard/doctor.sh --tsv`（最长 20 秒，占用 agent 工作线程）；grep 该脚本未见 uci set/commit/restart，但它是外部脚本，不保证 |
-| GET `/api/stk/menu` | **可能有** | telephony.rs:256-278、457-521：发 `AT+CUAD`、`AT+STIN?`、`AT+CUSATD=1`、`AT+STGI=…`；`AT+CUSATD=1` 是 USAT 激活类命令，可能改变调制解调器 STK 状态 |
+| GET `/api/health?refresh=1` | **可能有** | health.rs:184-188：同步执行 `/data/luyaz/scripts/doctor.sh --tsv`（最长 20 秒，占用 agent 工作线程）；grep 该脚本未见 uci set/commit/restart，但它是外部脚本，不保证 |
+| GET `/api/stk/menu` | **可能有** | 发 `AT+CUAD`、`AT+STIN?`、`AT+CUSATD=1`、`AT+STGI=…`；`AT+CUSATD=1` 是 USAT 激活类命令，可能改变调制解调器 STK 状态 |
 | GET `/chill-api/*`（非 `/api/`，经 chill_proxy 转发给 mihomo） | **可能有** | chill_proxy.rs：任意方法原样转发；mihomo 的 GET `/proxies/{name}/delay`、`/group/{name}/delay` 会触发对外测速连接；zashboard 面板会调用 |
 | GET `/api/network/qos` | 可能有（占用 AT 口） | qos.rs:18-70：每次发 `AT+CGCONTRDP` + 每 cid 一条 `AT+CGEQOSRDP`，命令本身只读；/router/qci 每 5 秒轮询 |
 | GET `/api/speedtest/servers` | 可能有（外网请求） | speedtest.rs:131-143：缓存过期时从设备访问外网拉服务器列表，不改设备状态 |
-| GET `/api/esim/status`、`/api/esim/profiles`、`/api/esim/notifications` | 可能有（卡片 APDU） | esim.rs:265-315：跑 lpac 读卡，代码注释称只读、不计入 eSTK.me 的 catBusy 冷却 |
-| GET `/api/at/port` | 可能有（占用 AT 口） | at_cmd.rs:23-53：端口未缓存时，对每个候选串口 `cat` 并写入 `AT\r` 探测（每口约 1.3 秒）；探到后缓存，之后只读缓存。/tools/at 进页时调用 |
+| GET `/api/esim/status`、`/api/esim/profiles`、`/api/esim/notifications` | 可能有（卡片 APDU） | 跑 lpac 读卡，代码注释称只读、不计入 eSTK.me 的 catBusy 冷却 |
+| GET `/api/at/port` | 可能有（占用 AT 口） | 端口未缓存时，对每个候选串口 `cat` 并写入 `AT\r` 探测（每口约 1.3 秒）；探到后缓存，之后只读缓存。/tools/at 进页时调用 |
 
 **名义上是 POST、实际是读取的接口**（按方法做白名单时会被误判为写）：POST `/api/sms/list`（/sms 每 10 秒轮询）、POST `/api/device/power-save`（/router/device 读省电模式）。另：POST `/api/auth/login` 被 /settings「测试连通性」当探活用。
 
@@ -1763,7 +1738,7 @@
 9. /bandlock NSA/SA 单选无效。
 10. /sms「全部」和「设备」筛选结果相同。
 11. Wi-Fi 总开关走 `/api/wifi/settings` 的 `wifi_onoff`（见第 4 节第一行）。
-12. `web/src/lib/ubus.ts`、`lib/adb.ts`、`lib/crypto.ts` 无人引用。
+12. 旧网页里有三个工具库没人引用（已随旧网页删除）。
 13. 大量输入框的 `<label>` 没有和输入框关联（没有 `htmlFor`/包裹），e2e 用 `getByLabel`/`getByRole(name)` 找不到；很多开关的名称随状态变（「开/关」「已启用/已禁用」），不适合做定位。本文「建议」列给了替代名。
 
 ### 8. 建议评审时复核的档位
@@ -1787,7 +1762,7 @@
 
 | 提交 | 位置 | 改了什么 |
 |---|---|---|
-| `fb4aedc` | `zte-agent/src/system.rs` | 「一键结束」列表去掉 daemon.conf 里的 7 个守护进程，另列 `SYNC_BARRIER_DAEMONS`，单元测试保证两份列表不重叠 |
+| `fb4aedc` | `luyaz-core/src/system.rs` | 「一键结束」列表去掉 daemon.conf 里的 7 个守护进程，另列 `SYNC_BARRIER_DAEMONS`，单元测试保证两份列表不重叠 |
 | `7546a4d` | `/router/scenario` | 5 处写请求不再二次 `JSON.stringify` |
 | `c6a7825` | `/router/dns` | DoH 上游发 `upstream_url` |
 | `1a1fc45` | `/scheduler` | 星期按 agent 的 0 = 周一编号 |

@@ -13,12 +13,16 @@
 ```
 
 | 请求（前缀 `/v2`，不带 token） | 用途 |
-|---|---|
+|:--|:--|
 | `GET /api/esim/profiles` | 卡上的列表 |
 | `POST /api/esim/switch` | 发起切换 |
 | `GET /api/esim/job` | 正在进行的切换的进度 |
 
+### 为什么切换要几秒
+
 启用 profile 只是一次 lpac 调用，慢在让基带用上它：中兴的协议栈只在守护进程启动时读一次 SIM。所以启用之后，core 给 UIM 断电再上电、重启 `zte_topsw_mdm`，等到 IMSI 变了为止，通常不到 10 秒。屏幕只显示进度和结果。
+
+### 需要装什么
 
 页面需要设备上有 eSIM 组件（`/data/esim` 下的 lpac，用装机包 `./install.sh esim` 装）；没有的话页面会说缺这个组件。
 

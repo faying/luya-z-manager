@@ -1,6 +1,6 @@
-//! zte-agent `manual_first.rs`'s tests, moved as they are (only `has_cjk` is local here). The
+//! Decision tests for the manual-first machine. The
 //! runtime's (`exit_switch_remembers_manual_while_on_backup`, `provider_map_skips_groups`,
-//! `connection_filters`, the record contract) are in `crates/luyaz-manual-first` (step 9g).
+//! `connection_filters`, the record contract) are in `crates/luyaz-manual-first`.
 use super::*;
 
 mod replay;
@@ -436,7 +436,7 @@ fn restart_resumes_waiting_to_return() {
     assert_eq!(io.selected, vec![MANUAL_GROUP]);
 }
 
-/// zte-agent `health.rs`'s.
+/// Whether the text has any CJK character.
 fn has_cjk(s: &str) -> bool {
     s.chars().any(|c| {
         matches!(c as u32,

@@ -1,10 +1,10 @@
 // Modem (radio, mobile data, carrier scan / manual registration, network mode)
 // and cell (cell lock, band lock, neighbours, STC, signal detection)
-// endpoints — handlers.rs, modem_ext.rs, cell.rs.
+// endpoints the admin web calls.
 //
 // Nearly all of these are ubus passthroughs to zte_nwinfo_api / zwrt_data, so
-// the payloads follow the page types (see schemas/modem.ts for what is
-// unconfirmed). Long-running firmware jobs (scan, register, neighbour scan,
+// the payloads follow what the pages read (some shapes are still
+// unconfirmed on a real device). Long-running firmware jobs (scan, register, neighbour scan,
 // signal detection) are modelled with a start timestamp; status is computed
 // from elapsed time at read time (no timers).
 
@@ -29,7 +29,7 @@ import type {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-/** Same message format as ubus.rs:19-22; the handlers map it to 503. */
+/** The ubus failure text the core passes on; it answers 503 with it. */
 function ubusFail(obj: string, method: string, why: string): Reply {
   return fail(`ubus call ${obj} ${method} failed: ${why}`, 503);
 }
@@ -39,7 +39,7 @@ function needJson(ctx: Ctx): Reply | null {
   return ctx.body === undefined ? fail("invalid JSON", 400) : null;
 }
 
-/** A passthrough write whose ubus method printed nothing → `data: null` (ubus.rs:26-28). */
+/** A passthrough write whose ubus method printed nothing → `data: null`. */
 const UBUS_EMPTY = null;
 
 function str(v: unknown): string | undefined {
@@ -87,7 +87,7 @@ const BAND_DEFAULTS = { nr_sa: "1,3,5,8,28,41,77,78,79", nr_nsa: "1,3,5,8,28,41,
 /** Private: last network-mode write. Readback lives in /api/network/signal net_select (other area). */
 let netSelect = "WL_AND_5G";
 
-/** What the agent accepts (modem_ext.rs NET_SELECT_VALUES = the firmware's list). */
+/** Network-mode values accepted: the firmware's own list. */
 const NET_SELECT_VALUES = [
   "WL_AND_5G", "TCHGWL_5G", "Only_5G", "LTE_AND_5G", "4G_AND_5G", "WL_AND_NSA", "Only_LTE",
   "WCDMA_AND_LTE", "GSM_AND_LTE", "TDSCDMA_AND_LTE", "Only_WCDMA", "Only_GSM_WCDMA", "Only_TDSCDMA", "Only_GSM",
@@ -110,11 +110,11 @@ const TW_OPERATORS: ModemScanOperator[] = [
   { m_oper_name: "T Star", m_mcc_mnc: "46689", m_rat: "7", m_status: "1" },
 ];
 
-/** Private: the agent's guarded register / back-to-auto job (netinfo.rs Guard). */
+/** Private: the guarded register / back-to-auto job (luyaz-api netinfo.rs `Guard`). */
 let guardJob: { kind: "register" | "auto"; at: number; mccMnc: string; rat: string; success: boolean } | null = null;
 const AUTO_MS = 2000;
 
-/** netinfo.rs `Guard::json` as GET /api/modem/register/guard and /api/netinfo `guard` return it. */
+/** luyaz-api netinfo.rs `Guard::json` as GET /api/modem/register/guard and /api/netinfo `guard` return it. */
 function guardNow(now: number) {
   const idle = { phase: "idle", target: "", rat: "", reason: "", reason_code: null as string | null, reason_en: null as string | null, started_at: 0, finished_at: 0, last_result: "" };
   const auto = { reason: "手动恢复自动", reason_code: "manual_auto", reason_en: "Back to automatic on request" };
@@ -136,7 +136,7 @@ function guardNow(now: number) {
   return { ...base, phase: "reverted", reason: "注册失败", reason_code: "register_failed", reason_en: "Registration failed", last_result: "0", finished_at };
 }
 
-/** netinfo.rs `Scan::json`: rat 11 = NR, 7 = LTE (ubus m_rat as the device reports it). */
+/** luyaz-api netinfo.rs `Scan::json`: rat 11 = NR, 7 = LTE (ubus m_rat as the device reports it). */
 function netinfoScanNow(ctx: Ctx) {
   const idle = {
     state: "idle", started_at: 0, finished_at: 0, error: null, error_en: null, last_status: "",
@@ -154,7 +154,7 @@ function netinfoScanNow(ctx: Ctx) {
   return { ...idle, state: "done", started_at, finished_at: started_at + SCAN_MS / 1000, last_status: "manual_selected", operators };
 }
 
-/** netinfo.rs operator_scan: 202, one modem job at a time. */
+/** POST /api/netinfo/scan (luyaz-core api/ops.rs `scan`): 202, one modem job at a time. */
 function startScan(ctx: Ctx): Reply {
   if (shared.airplane) return ubusFail(NW, "nwinfo_manual_scan", "Operation not permitted");
   if (guardJob && guardNow(ctx.now).phase.endsWith("ing")) return fail("正在选网，等它结束", 409, "Registering on a network; wait for it to finish");
@@ -293,7 +293,7 @@ export const routes: Route[] = [
       const v = str(bodyField(ctx.body, "net_select"));
       if (!v || !NET_SELECT_VALUES.includes(v)) return fail(`net_select must be one of ${NET_SELECT_VALUES.join(", ")}`, 400);
       if (!ctx.has("fakesuccess")) netSelect = v;
-      // with the core's write-op layer on, the reply names the transaction (agent core_write.rs)
+      // with the core's write-op layer on, the reply names the transaction
       const op = opsStartNetworkMode(v);
       if (op && opsApplyFails()) return { status: 503, raw: { ok: false, error: "ubus call zte_nwinfo_api nwinfo_set_netselect failed", op } };
       return op ? { raw: { ok: true, data: UBUS_EMPTY, op } } : ok(UBUS_EMPTY);
@@ -386,7 +386,7 @@ export const routes: Route[] = [
     method: "POST",
     path: "/api/cell/neighbors/scan",
     handler: (ctx) => {
-      // netinfo.rs neighbors_scan: 410 on the real device — the stock scan
+      // luyaz-core api.rs `neighbors_scan`: 410 on the real device — the stock scan
       // drops mobile data and returns no cells. Scenario "nbrscan" keeps the
       // old simulated scan for the cell-lock page's own tests.
       if (!ctx.has("nbrscan")) return fail(NBR_UNSUPPORTED, 410, NBR_UNSUPPORTED_EN);
@@ -454,7 +454,7 @@ export const routes: Route[] = [
   {
     method: "GET",
     path: "/api/cell/extra",
-    // cell.rs cell_extra_get: core qos (AMBR in Mbps) and sim.msisdn; missing: a SIM without its number, no AMBR
+    // core qos (AMBR in Mbps) and sim.msisdn; missing: a SIM without its number, no AMBR
     handler: (ctx) =>
       ctx.has("missing")
         ? ok({ qci: null, ambr_dl_mbps: null, ambr_ul_mbps: null, msisdn: null, source: "feed" })

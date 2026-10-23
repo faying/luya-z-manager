@@ -1,4 +1,4 @@
-//! /scheduler (计划任务), the old `scheduler/page.tsx` + `jobs.ts`, with the old
+//! /scheduler (计划任务), with
 //! `/router/schedule` (定时重启) folded in: that page only listed the reboot jobs read-only and
 //! linked here, so it is now the 「定时重启」 section of this page (`#reboot`) and its path
 //! redirects there (user, 10-13).
@@ -100,7 +100,7 @@ pub fn norm(path: &str) -> String {
     p.replace("//", "/")
 }
 
-/// Paths a scheduled job may never call (zte-agent scheduler.rs `forbidden`, u60-policy): eSIM,
+/// Paths a scheduled job may never call (u60-policy): eSIM,
 /// factory reset, kill-bloat, power off, the AT terminal. The English name of what it is.
 pub fn forbidden(path: &str) -> Option<&'static str> {
     let p = norm(path);
@@ -177,7 +177,7 @@ pub fn refusal(path: &str, l: Lang) -> Option<String> {
     })
 }
 
-/// Requests that are tier 3 when done by hand (jobs.ts `TIER3_PREFIXES`): a job that sends one
+/// Requests that are tier 3 when done by hand (`TIER3_PREFIXES` below): a job that sends one
 /// later is as heavy, so creating, editing (while on) or switching on such a job is tier 3.
 const TIER3_PREFIXES: [&str; 16] = [
     "/api/device/reboot",
@@ -385,7 +385,7 @@ pub fn day(l: Lang, i: usize) -> &'static str {
     }
 }
 
-/// "04:30 — Mon, Tue" / "04:30 — daily" / "Once at 2026-10-14 04:30" (jobs.ts `fmtSchedule`).
+/// "04:30 — Mon, Tue" / "04:30 — daily" / "Once at 2026-10-14 04:30".
 pub fn fmt_sched(s: &Sched, l: Lang) -> String {
     match s {
         Sched::Once { at: Some(at) } => match l {

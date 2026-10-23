@@ -1,6 +1,7 @@
-// SMS inbox + SMS forwarding — mirrors zte-agent/src/sms.rs (a ubus
-// passthrough to the firmware's zwrt_wms) and sms_forward.rs (agent-built
-// JSON, config + log kept in agent memory / a JSON file).
+// SMS inbox + SMS forwarding. The inbox is a ubus passthrough to the firmware's
+// zwrt_wms (the core serves only GET /api/sms/capacity of it); forwarding stands
+// in for the core's /api/sms/forward/* (crate luyaz-sms-forward: config and log in
+// memory and a JSON file).
 //
 // Model: `inbox` is the firmware's sms.db. Bodies are UCS2 (UTF-16BE) hex and
 // dates "YY,MM,DD,HH,MM,SS,+TZquarters", exactly as the firmware stores them,
@@ -39,7 +40,7 @@ import type {
 
 // ── Encoding helpers (firmware formats) ─────────────────────────────────────
 
-/** UTF-16BE hex, upper case — how the firmware stores bodies (sms_forward.rs encode_ucs2_hex). */
+/** UTF-16BE hex, upper case — how the firmware stores bodies (luyaz-sms-forward text.rs encode_ucs2_hex). */
 function ucs2(text: string): string {
   let out = "";
   for (let i = 0; i < text.length; i++) {
@@ -85,7 +86,7 @@ function smsDateNow(ctx: Ctx): string {
   return smsDate(t.getUTCFullYear(), t.getUTCMonth() + 1, t.getUTCDate(), t.getUTCHours(), t.getUTCMinutes(), t.getUTCSeconds());
 }
 
-/** sms_forward.rs:901 preview — first `max` UTF-8 bytes on a char boundary, then "...". */
+/** luyaz-sms-forward text.rs preview — first `max` UTF-8 bytes on a char boundary, then "...". */
 function preview(s: string, max: number): string {
   if (Buffer.byteLength(s, "utf8") <= max) return s;
   let out = "";
@@ -188,14 +189,14 @@ function capacity(ctx: Ctx): SmsCapacity {
   } satisfies SmsCapacity;
 }
 
-/** WMS "success" (sms_forward.rs:473-482: result 3 = sent). */
+/** WMS "success" (result 3 = sent). */
 const WMS_OK: SmsWmsResult = { result: 3 };
 
 function isObj(b: unknown): b is Record<string, unknown> {
   return !!b && typeof b === "object" && !Array.isArray(b);
 }
 
-/** sms.rs:109 parse_ids — "3681;3682;". */
+/** Id list as the firmware takes it — "3681;3682;". */
 function parseIds(field: unknown): { ids: number[] } | { error: string } {
   if (field === undefined || field === null) return { error: "missing 'id' field" };
   if (typeof field !== "string") return { error: "'id' must be a string" };
@@ -215,7 +216,7 @@ function wanUp(ctx: Ctx): boolean {
 
 // ── Inbox handlers ──────────────────────────────────────────────────────────
 
-/** POST /api/sms/list — sms.rs:10. */
+/** POST /api/sms/list (firmware passthrough). */
 function smsList(ctx: Ctx): Reply {
   if (!isObj(ctx.body)) return fail("invalid JSON", 400);
   const b = ctx.body;
@@ -238,7 +239,7 @@ function smsList(ctx: Ctx): Reply {
   return ok(data);
 }
 
-/** GET /api/sms/capacity — sms.rs:42. */
+/** GET /api/sms/capacity — luyaz-core api/sys_reads.rs sms_capacity. */
 function smsCapacity(ctx: Ctx): Reply {
   return ok(capacity(ctx));
 }
@@ -252,15 +253,15 @@ function dateFromSmsTime(v: unknown, ctx: Ctx): string {
   return smsDateNow(ctx);
 }
 
-/** POST /api/sms/send — sms.rs:49. The firmware stores the outgoing message (tag 2, or 3 on failure). */
+/** POST /api/sms/send (firmware passthrough). The firmware stores the outgoing message (tag 2, or 3 on failure). */
 function smsSend(ctx: Ctx): Reply {
   if (!isObj(ctx.body)) return fail("invalid JSON", 400);
   const b = ctx.body;
   const number = typeof b.number === "string" ? b.number.trim() : "";
   const raw = typeof b.message_body === "string" ? b.message_body : "";
   const text = b.encode_type === "ucs2" && isUcs2Hex(raw) ? fromUcs2(raw) : raw;
-  // Firmware result on failure is not known; 4 is invented. The agent passes it
-  // through as ok:true either way (no readback of `result`, sms.rs:54-57).
+  // Firmware result on failure is not known; 4 is invented. The reply is
+  // ok:true either way (nobody reads `result` back).
   // SMS needs cellular service, not mobile data. "fakesuccess": ok:true, message stored as failed.
   const sent = !shared.airplane && !ctx.has("nosignal") && !ctx.has("fakesuccess") && number !== "";
   const id = inbox.reduce((m, r) => Math.max(m, r.msg.id), 0) + 1;
@@ -279,7 +280,7 @@ function smsSend(ctx: Ctx): Reply {
   return ok(sent ? WMS_OK : { result: 4 });
 }
 
-/** POST /api/sms/delete — sms.rs:68. NV rows go via ubus; SIM rows survive ubus (firmware bug) and are sqlite-deleted. */
+/** POST /api/sms/delete. NV rows go via ubus; SIM rows survive ubus (firmware bug) and are sqlite-deleted. */
 function smsDelete(ctx: Ctx): Reply {
   if (!isObj(ctx.body)) return fail("invalid JSON", 400);
   const parsed = parseIds(ctx.body.id);
@@ -302,7 +303,7 @@ function smsDelete(ctx: Ctx): Reply {
   return { raw: { ok: true, deleted_via: "sqlite", ids: survivors } };
 }
 
-/** POST /api/sms/read — sms.rs:178, ubus zwrt_wms_modify_tag {id, tag}. */
+/** POST /api/sms/read — ubus zwrt_wms_modify_tag {id, tag}. */
 function smsRead(ctx: Ctx): Reply {
   if (!isObj(ctx.body)) return fail("invalid JSON", 400);
   const parsed = parseIds(ctx.body.id);
@@ -499,13 +500,13 @@ function deliver(dest: ForwardDestination, ctx: Ctx): string | null {
 
 // ── Forwarding handlers ─────────────────────────────────────────────────────
 
-/** GET /api/sms/forward/config — sms_forward.rs:1079. */
+/** GET /api/sms/forward/config — luyaz-sms-forward api.rs config_get. */
 function fwdConfigGet(): Reply {
   const data: SmsForwardConfigResponse = { config: clone(fwdConfig), last_forwarded_id: lastForwardedId };
   return ok(data);
 }
 
-/** PUT /api/sms/forward/config — sms_forward.rs:1095. Fields apply in order; a bad interval returns 400 AFTER `enabled` was already changed in memory (as the Rust does). */
+/** PUT /api/sms/forward/config — luyaz-sms-forward api.rs config_set. Fields apply in order; a bad interval returns 400 AFTER `enabled` was already changed in memory (as the core does). */
 function fwdConfigSet(ctx: Ctx): Reply {
   if (!isObj(ctx.body)) return badJson("EOF while parsing a value at line 1 column 0");
   const b = ctx.body;
@@ -554,7 +555,7 @@ function parseRuleBody(b: Record<string, unknown>, needId: boolean): Parsed<Omit
   return { v: { id, name: name.v, enabled, filter: filter.v, destination: destination.v } };
 }
 
-/** POST /api/sms/forward/rules — sms_forward.rs:1136. 201 + the new rule. */
+/** POST /api/sms/forward/rules — luyaz-sms-forward api.rs rules_create. 201 + the new rule. */
 function rulesCreate(ctx: Ctx): Reply {
   if (!isObj(ctx.body)) return badJson("EOF while parsing a value at line 1 column 0");
   const p = parseRuleBody(ctx.body, false);
@@ -564,7 +565,7 @@ function rulesCreate(ctx: Ctx): Reply {
   return { status: 201, data: clone(rule) };
 }
 
-/** PUT /api/sms/forward/rules — sms_forward.rs:1173. */
+/** PUT /api/sms/forward/rules — luyaz-sms-forward api.rs rules_update. */
 function rulesUpdate(ctx: Ctx): Reply {
   if (!isObj(ctx.body)) return badJson("EOF while parsing a value at line 1 column 0");
   const p = parseRuleBody(ctx.body, true);
@@ -583,7 +584,7 @@ function u64Field(b: unknown, k: string): number | null {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null;
 }
 
-/** DELETE /api/sms/forward/rules — sms_forward.rs:1205. `{ok:true}` with no data. */
+/** DELETE /api/sms/forward/rules — luyaz-sms-forward api.rs rules_delete. `{ok:true}` with no data. */
 function rulesDelete(ctx: Ctx): Reply {
   if (ctx.body === undefined) return fail("invalid JSON", 400);
   const id = u64Field(ctx.body, "id");
@@ -594,7 +595,7 @@ function rulesDelete(ctx: Ctx): Reply {
   return ok();
 }
 
-/** PUT /api/sms/forward/rules/toggle — sms_forward.rs:1228. */
+/** PUT /api/sms/forward/rules/toggle — luyaz-sms-forward api.rs rules_toggle. */
 function rulesToggle(ctx: Ctx): Reply {
   if (ctx.body === undefined) return fail("invalid JSON", 400);
   const id = u64Field(ctx.body, "id");
@@ -607,7 +608,7 @@ function rulesToggle(ctx: Ctx): Reply {
   return ok(clone(rule));
 }
 
-/** POST /api/sms/forward/test — sms_forward.rs:1255. Body `{destination}`; really sends. */
+/** POST /api/sms/forward/test — luyaz-sms-forward api.rs test_forward. Body `{destination}`; really sends. */
 function fwdTest(ctx: Ctx): Reply {
   if (!isObj(ctx.body)) return badJson("EOF while parsing a value at line 1 column 0");
   if (ctx.body.destination === undefined) return badJson("missing field `destination`");
@@ -619,19 +620,19 @@ function fwdTest(ctx: Ctx): Reply {
   return { data, delayMs: 700 };
 }
 
-/** GET /api/sms/forward/log — sms_forward.rs:1283, newest first. */
+/** GET /api/sms/forward/log — luyaz-sms-forward api.rs log_get, newest first. */
 function fwdLogGet(): Reply {
   const data: SmsForwardLog = clone(fwdLog).reverse();
   return ok(data);
 }
 
-/** POST /api/sms/forward/log/clear — sms_forward.rs:1291. */
+/** POST /api/sms/forward/log/clear — luyaz-sms-forward api.rs log_clear. */
 function fwdLogClear(): Reply {
   fwdLog.length = 0;
   return ok();
 }
 
-/** POST /api/sms/forward/retry — sms_forward.rs:1299. `{index}` into the newest-first log. */
+/** POST /api/sms/forward/retry — luyaz-sms-forward api.rs retry_forward. `{index}` into the newest-first log. */
 function fwdRetry(ctx: Ctx): Reply {
   if (!isObj(ctx.body)) return badJson("EOF while parsing a value at line 1 column 0");
   const index = ctx.body.index;

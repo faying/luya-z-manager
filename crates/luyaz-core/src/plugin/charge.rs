@@ -13,7 +13,7 @@
 //!   the same request as new settings comes first, then the save clears it, as in the agent.)
 //! - Restarts: the agent starts with the override off, so does u60d.
 //!
-//! Once u60d owns it (step 9c, [`set_owned`]) nothing is guessed: the touch layer's
+//! Once u60d owns it ([`set_owned`]) nothing is guessed: the touch layer's
 //! `/api/device/charge-control` sets the override ([`set_override`]) and saves the settings
 //! ([`save`]), and `/control` writes are not looked at. Taking it over or giving it back drops the
 //! override, as an agent restart does.
@@ -29,7 +29,7 @@ const SAVE_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 pub type Limit = luyaz_api::charge::Settings;
 
 struct Mirror {
-    /// u60d owns the part (step 9c)
+    /// u60d owns the part
     owned: bool,
     /// owned: the settings, held here as the agent holds them (loaded at takeover, then saved)
     settings: Limit,

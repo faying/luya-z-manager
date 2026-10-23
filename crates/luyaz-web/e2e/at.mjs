@@ -57,7 +57,7 @@ async function own(p, ctx) {
   // not AT: refused, nothing sent
   await typeSend(p, "hello");
   await p.waitForSelector("#at-err p", { timeout: 5000 });
-  ok(/命令必须以 AT 开头/.test(await txt(p, "#at-err")), `must start with AT: ${await txt(p, "#at-err")}`);
+  ok(/命令要以 AT 开头/.test(await txt(p, "#at-err")), `must start with AT: ${await txt(p, "#at-err")}`);
   ok(await p.locator(".at-entry").count() === 0, "nothing in the log");
 
   // a normal command: tier 1, runs at once, no confirm
@@ -97,7 +97,7 @@ async function own(p, ctx) {
   const n0 = await p.locator(".at-entry").count();
   await typeSend(p, "AT+COPS=0");
   await p.waitForSelector("#at-op dialog[open]", { timeout: 8000 });
-  ok(/\+COPS= 会改变网络运营商注册/.test(await txt(p, "#at-op dialog")) && /AT\+COPS=0/.test(await txt(p, "#at-op dialog")), `dialog: ${(await txt(p, "#at-op dialog")).slice(0, 120)}`);
+  ok(/\+COPS= 指定基带注册哪家运营商/.test(await txt(p, "#at-op dialog")) && /AT\+COPS=0/.test(await txt(p, "#at-op dialog")), `dialog: ${(await txt(p, "#at-op dialog")).slice(0, 120)}`);
   ok(/怎么恢复/.test(await txt(p, "#at-op dialog")) && /断开多久/.test(await txt(p, "#at-op dialog")), "what / how long / how to recover");
   await p.screenshot({ path: `${OUT}/at-dialog.png`, fullPage: true });
   await p.click("#at-op dialog .nd-btn--secondary");
@@ -119,7 +119,7 @@ async function own(p, ctx) {
   // what the filter would hide is still judged (AT&F is sent as ATF)
   await typeSend(p, "AT&F");
   await p.waitForSelector("#at-op dialog[open]", { timeout: 8000 });
-  ok(/&F 会把调制解调器设置恢复出厂/.test(await txt(p, "#at-op dialog")), "AT&F asks although the agent would strip the &");
+  ok(/&F 把基带设置退回出厂值/.test(await txt(p, "#at-op dialog")), "AT&F asks although the agent would strip the &");
   await p.click("#at-op dialog .nd-btn--secondary");
   await p.waitForSelector("#at-op dialog", { state: "detached" });
   // a +CFUN= set is refused outright (owner 10-13: low power needs a restart), no dialog, not sent

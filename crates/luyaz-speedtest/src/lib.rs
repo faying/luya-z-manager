@@ -3,23 +3,30 @@
 //! LibreSpeed endpoints, within a single time/data budget. Manual choices never switch provider.
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
 mod config;
 pub use config::{Config, LibreServer};
 mod runner;
 
-#[derive(Serialize, Clone, Debug, PartialEq)]
+/// Where a run stands; serialised in snake_case for the clients.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
-    Idle,
-    Discovering,
-    Latency,
-    Download,
-    Upload,
+    #[default]
+    Idle, // nothing started yet
+    Discovering, // picking a server
+    Latency,     // ping round
+    Download,    // timed download
+    Upload,      // fixed upload rounds
+    // terminal states
     Complete,
     Cancelled,
     Error,
@@ -39,18 +46,19 @@ impl Provider {
         }
     }
 }
-#[derive(Serialize, Clone)]
+/// The snapshot every client polls. Field order is the JSON order.
+#[derive(Serialize, Clone, Default)]
 pub struct SpeedTestProgress {
     phase: Phase,
-    progress: u8,
-    live_speed_mbps: f64,
-    ping_ms: Option<f64>,
-    jitter_ms: Option<f64>,
-    download_mbps: Option<f64>,
-    upload_mbps: Option<f64>,
-    download_bytes: u64,
-    upload_bytes: u64,
-    server: String,
+    progress: u8,               // percent, 0..=100
+    live_speed_mbps: f64,       // the current phase's running rate
+    ping_ms: Option<f64>,       // median RTT
+    jitter_ms: Option<f64>,     // mean RTT spread
+    download_mbps: Option<f64>, // set once the download phase ends
+    upload_mbps: Option<f64>,   // set once the upload phase ends
+    download_bytes: u64,        // counted against the data budget
+    upload_bytes: u64,          // likewise
+    server: String,             // display name of the chosen endpoint
     provider: Option<Provider>,
     error: Option<String>,
     error_en: Option<String>,
@@ -73,24 +81,9 @@ impl SpeedTestProgress {
             ..Self::idle()
         }
     }
+    /// Nothing run yet: every number zero, every option empty.
     fn idle() -> Self {
-        Self {
-            phase: Phase::Idle,
-            progress: 0,
-            live_speed_mbps: 0.0,
-            ping_ms: None,
-            jitter_ms: None,
-            download_mbps: None,
-            upload_mbps: None,
-            download_bytes: 0,
-            upload_bytes: 0,
-            server: String::new(),
-            provider: None,
-            error: None,
-            error_en: None,
-            error_code: None,
-            fallback_reason: None,
-        }
+        Self::default()
     }
     pub fn failure(&self) -> Option<String> {
         match self.phase {
@@ -107,15 +100,16 @@ impl SpeedTestProgress {
 }
 #[derive(Serialize, Clone)]
 pub struct TestServer {
-    pub id: u64,
-    pub name: String,
-    pub sponsor: String,
-    pub country: String,
+    pub id: u64,         // provider's server id (LibreSpeed: config index)
+    pub name: String,    // city or label shown in lists
+    pub sponsor: String, // who runs it
+    pub country: String, // as the provider reports it
     pub provider: Provider,
-    pub host: String,
-    pub url: String,
+    pub host: String, // host[:port], for display
+    pub url: String,  // the provider's own upload URL
+    // Not sent to clients: where the runner actually connects.
     #[serde(skip)]
-    pub base_url: String,
+    pub base_url: String, // scheme://host[:port]/path prefix
     #[serde(skip)]
     ping_url: String,
     #[serde(skip)]
@@ -164,21 +158,23 @@ struct Discovery {
 }
 #[derive(Clone)]
 pub struct SpeedTest {
-    progress: Arc<Mutex<SpeedTestProgress>>,
-    cancel: Arc<AtomicBool>,
-    running: Arc<AtomicBool>,
+    progress: Arc<Mutex<SpeedTestProgress>>, // what the status route returns
+    cancel: Arc<AtomicBool>,                 // set by stop, polled by the runner
+    running: Arc<AtomicBool>,                // one run at a time
     servers_cache: Arc<Mutex<Discovery>>,
     servers_url: String,
     config: Arc<Mutex<Config>>,
     config_path: Option<PathBuf>,
     config_error: Arc<Mutex<Option<String>>>,
 }
-const CACHE_TTL: Duration = Duration::from_secs(300);
-const DOWNLOAD_DURATION: Duration = Duration::from_secs(15);
-const UPLOAD_SIZE: usize = 1_000_000;
-const UPLOAD_ROUNDS: usize = 10;
+// Run shape: ten pings, a 15 s download, ten 1 MB uploads, read in 16 KiB chunks.
 const PING_COUNT: usize = 10;
-const BUF_SIZE: usize = 16384;
+const DOWNLOAD_DURATION: Duration = Duration::from_secs(15); // time-boxed, not size-boxed
+const UPLOAD_ROUNDS: usize = 10;
+const UPLOAD_SIZE: usize = 1_000_000;
+const BUF_SIZE: usize = 16 * 1024;
+/// How long a discovered server list stays fresh.
+const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Limits {
     pub ping: bool,
@@ -248,7 +244,7 @@ impl SpeedTest {
                 return (
                     400,
                     json!({"ok":false,"error":"Invalid LibreSpeed configuration"}),
-                )
+                );
             }
         };
         if let Err(e) = cfg.servers() {
@@ -367,9 +363,8 @@ impl SpeedTest {
             provider: Option<String>,
             server_id: Option<u64>,
         }
-        let req: Request = match serde_json::from_slice(body) {
-            Ok(v) => v,
-            Err(_) => return (400, json!({"ok":false,"error":"invalid JSON"})),
+        let Ok(req) = serde_json::from_slice::<Request>(body) else {
+            return (400, json!({"ok": false, "error": "invalid JSON"}));
         };
         let mode = match req
             .provider
@@ -386,7 +381,7 @@ impl SpeedTest {
                 return (
                     400,
                     json!({"ok":false,"error":"Invalid speed-test provider"}),
-                )
+                );
             }
         };
         self.begin(mode, req.server_id, FULL, None, admit)
@@ -429,7 +424,11 @@ impl SpeedTest {
                 });
             }
             // Capture this run before releasing the slot: a new start can reset progress.
-            let last = st.progress.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let last = st
+                .progress
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
             st.running.store(false, Ordering::SeqCst);
             if let Some(f) = on_done {
                 f(&last);

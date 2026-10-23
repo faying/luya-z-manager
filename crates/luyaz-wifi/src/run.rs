@@ -7,7 +7,6 @@ use std::os::unix::process::CommandExt;
 use std::process::{Command, Output, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-
 /// Each stream keeps at most this much; the rest is read and dropped so the command never blocks on
 /// a full pipe.
 pub const MAX_OUTPUT: usize = 1 << 20;

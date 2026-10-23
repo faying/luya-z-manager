@@ -1,4 +1,4 @@
-//! 蜂窝 (src/ui_parts/cellular.c): the carrier card on top, 排查 / SIM 卡 › rows, 移动数据 and
+//! 蜂窝: the carrier card on top, 排查 / SIM 卡 › rows, 移动数据 and
 //! 数据漫游 (two taps each), 网络模式 (lock.rs), then 网络 / 消息 › rows. Also, as in C: the
 //! exit tab's frame (build_exit) and the Wi-Fi tab's device list (refresh_wifi).
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
@@ -102,7 +102,7 @@ unsafe extern "C" fn md_sw_cb(e: *mut sys::lv_event_t) {
     super::with(|u| u.md_tap(id, sw));
 }
 
-/// A card row with a label, a state word and a switch (wifi.c toggle_row).
+/// A card row with a label, a state word and a switch.
 pub fn toggle_row(c: Obj, y: i32, name: &str, first: bool, state: &mut Obj, cb: Option<lv::EventCb>, user: usize) -> Obj {
     if !first {
         kit::sep(c, y);
@@ -452,10 +452,14 @@ impl Ui {
             self.set(w.cli_name[i], name);
             let desc = client_desc(&c);
             self.set(w.cli_ip[i], &c.ip);
+            let extra = kit::name_address_reflow(w.cli_name[i], w.cli_ip[i], CARD_W - PAD);
+            w.cli_mac[i].set_y(29 + extra);
+            w.cli_tot[i].set_y(47 + extra);
+            w.cli_desc[i].set_y(65 + extra);
             // a Wi-Fi device: 「5 GHz · ↓… ↑… · 信号很好」, then the totals, then what lanid knows
             // on its own line; cable / USB devices keep the MAC
             let st = self.wifi_station_for(&c.mac, &c.ip);
-            let mut rh = WIFI_CLI_H;
+            let mut rh = WIFI_CLI_H + extra;
             if let Some(s) = &st {
                 let line = self.ni_client_line(s);
                 self.set(w.cli_mac[i], &line);

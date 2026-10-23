@@ -1,4 +1,4 @@
-//! /router/vpn (VPN 穿透), the old `router/vpn/page.tsx`: which passthroughs are on, the note on
+//! /router/vpn (VPN 穿透): which passthroughs are on, the note on
 //! what passthrough is, the L2TP / PPTP / IPSec switches, SIP ALG read-only.
 //!
 //! Where each value comes from (the old page read the agent's `/api/router/vpn`, i.e.
@@ -130,9 +130,9 @@ impl View {
 
 fn desc(key: &str, l: Lang) -> &'static str {
     match key {
-        "l2tp" => l.pick("Layer 2 Tunneling Protocol", "第二层隧道协议"),
-        "pptp" => l.pick("Point-to-Point Tunneling Protocol", "点对点隧道协议"),
-        _ => l.pick("Internet Protocol Security", "互联网安全协议"),
+        "l2tp" => l.pick("Layer 2 Tunneling Protocol", "第二层隧道协议"), // RESIDUE-OK: standard protocol name
+        "pptp" => l.pick("Point-to-Point Tunneling Protocol", "点对点隧道协议"), // RESIDUE-OK: standard protocol name
+        _ => l.pick("Internet Protocol Security", "互联网安全协议"), // RESIDUE-OK: standard protocol name
     }
 }
 

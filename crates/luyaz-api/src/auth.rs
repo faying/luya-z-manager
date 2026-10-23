@@ -139,8 +139,8 @@ mod tests {
         assert_eq!(password_from_env_file("X=1\r\nLUYAZ_WEB_PASSWORD=a b\r\n"), Some("a b"));
         assert_eq!(password_from_env_file("LUYAZ_WEB_PASSWORD=\n"), None);
         // the old key went after F7 rewrote the device's web.env
-        assert_eq!(password_from_env_file("ZTE_AGENT_PASSWORD=old\n"), None);
-        assert_eq!(password_from_env_file("ZTE_AGENT_PASSWORD=old\nLUYAZ_WEB_PASSWORD=new\n"), Some("new"));
+        assert_eq!(password_from_env_file("OLD_WEB_PASSWORD=old\n"), None);
+        assert_eq!(password_from_env_file("OLD_WEB_PASSWORD=old\nLUYAZ_WEB_PASSWORD=new\n"), Some("new"));
         assert_eq!(password_from_env_file(""), None);
         assert!(password_matches("secret", "secret"));
         assert!(!password_matches("secret", "Secret") && !password_matches("secret", ""));

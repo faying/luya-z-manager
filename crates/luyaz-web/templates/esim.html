@@ -8,13 +8,13 @@
 <section aria-labelledby="es-prof-t"><h2 id="es-prof-t" class="nd-group-title">{{ l.pick("Profiles", "配置文件") }}</h2>
 <p class="nd-aux -mt-1 mb-3 px-1">{{ l.pick("Switching re-attaches the modem on the new profile: usually about 40 s without a reboot. If the new profile doesn't take, the device reboots (about 90 s).", "切换时基带用新配置重新注网：通常约 40 秒，不用重启。新配置没生效时设备会重启（约 90 秒）。") }}</p>
 {{ self.leaf("es-list")|safe }}
-<div class="mt-2 px-1">{{ prof_op|safe }}<div id="es-after"></div></div>
+<div class="mt-2 px-1">{{ prof_op|safe }}<div id="es-retry"></div><div id="es-after"></div></div>
 </section>
 <section aria-labelledby="es-add-t"><h2 id="es-add-t" class="nd-group-title">{{ l.pick("Add profile", "添加配置") }}</h2>
 <div class="nd-group grid gap-4 p-4">
 <div class="grid gap-1"><label for="es-code" class="font-semibold">{{ l.pick("Activation code", "激活码") }}</label><input id="es-code" class="nd-field nd-mono" data-bind="_esCode" placeholder="LPA:1$smdp.example.com$XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
 <div class="grid gap-1"><label for="es-conf" class="font-semibold">{{ l.pick("Confirmation code (optional)", "确认码（可选）") }}</label><input id="es-conf" class="nd-field" data-bind="_esConf" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-<p class="nd-aux">{{ l.pick("Paste the activation code from your carrier (the text under the QR code). The profile is downloaded to the card but not enabled — switch to it when ready.", "粘贴运营商提供的激活码（二维码下方的文本）。配置只下载到卡上、不会自动启用——需要时再切换。") }}</p>
+<p class="nd-aux">{{ l.pick("Paste the carrier's activation code, the text printed under the QR code. The profile lands on the card switched off; switch to it when you want it.", "贴上运营商给的激活码，就是二维码下面那行字。配置下到卡里先不启用，要用时再切过去。") }}</p>
 {{ self.leaf("es-dlgo")|safe }}
 {{ dl_op|safe }}
 </div>

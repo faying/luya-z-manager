@@ -1,4 +1,4 @@
-//! The 1 s refresh (src/ui_parts/refresh.c refresh_cb): the view model drawn onto every page,
+//! The 1 s refresh: the view model drawn onto every page,
 //! in the C order (the status bar reads the RAT label the signal card wrote a second earlier).
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
@@ -13,7 +13,7 @@ use crate::logic::{self, SimKind, CTL_BUSY, CTL_FULL};
 use crate::theme::{t, uf};
 use crate::trc;
 
-/// The card in the modem, as the 「SIM 与 eSIM」 row says it (refresh.c s_sim).
+/// The card in the modem, as the 「SIM 与 eSIM」 row says it.
 #[derive(Clone, PartialEq)]
 pub struct Sim {
     pub kind: SimKind,
@@ -48,7 +48,7 @@ pub fn fmt_rate_top(bps: i64, bits: bool, shortf: bool) -> Vec<u8> {
 }
 
 impl Ui {
-    /// What is on screen, as each poll's `active` (refresh.c).
+    /// What is on screen, as each poll's `active`.
     fn activity(&self) -> Activity {
         use super::{TAB_EXIT as EXIT, TAB_SYS};
         // only 运营商选择 reads everything (the agent runs AT+COPS?); others what they show

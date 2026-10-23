@@ -188,7 +188,7 @@ fn connection_filters() {
     ]});
     assert_eq!(manual_conn_ids(&c), vec!["a"], "AI connection on the same node is left alone");
     let up = main_uploads(&c);
-    assert_eq!(up.len(), 1, "agent's own 127.0.0.1 lookups don't count");
+    assert_eq!(up.len(), 1, "the device's own 127.0.0.1 lookups don't count");
     assert!(sent_since(&HashMap::new(), &up));
     assert!(!sent_since(&up, &up));
     let mut more = up.clone();

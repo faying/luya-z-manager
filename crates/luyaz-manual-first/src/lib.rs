@@ -1,7 +1,5 @@
-//! CHILL "manual first" runtime (moved from zte-agent `src/manual_first.rs`, u60-platform.md
-//! Phase 4 step 9g), shared by the agent and u60d so the two cannot drift. The decisions are
-//! u60-policy's [`Machine`] (the one copy; the agent's own was the same code, step 5a); this is
-//! everything around it: mihomo as the [`Io`], the 10 s loop, the state file, the status for the
+//! CHILL "manual first" runtime. The decisions are u60-policy's [`Machine`]; this is everything
+//! around it: mihomo as the [`Io`], the 10 s loop, the state file, the status for the
 //! screens and the shadow records. What the host provides goes through [`Host`].
 //!
 //! When 🚀 节点选择 points at 🎯 手动节点 and the hand-picked node stops
@@ -104,7 +102,7 @@ pub fn manual_conn_ids(conns: &Value) -> Vec<String> {
         .collect()
 }
 
-/// Upload bytes of LAN connections through 🚀, by id. The agent's own lookups
+/// Upload bytes of LAN connections through 🚀, by id. The device's own lookups
 /// (127.0.0.1 → :7894) are left out so they cannot keep it "in use".
 pub fn main_uploads(conns: &Value) -> HashMap<String, u64> {
     conn_list(conns)
@@ -151,14 +149,14 @@ impl ManualFirst {
     }
 
     /// Save the state file on every change, not only on switch / return / clear: for a host whose
-    /// state others read from the file (u60d, once the agent reads its summary from there).
+    /// state others read from the file (screens and the web read the summary from there).
     pub fn saving_every_change(mut self) -> Self {
         self.save_changes = true;
         self
     }
 
     /// [`ManualFirst::run`] on its own thread, once no other live process holds `lease` (u60d,
-    /// while it runs the loop: the agent taking it back must not start before u60d's loop ended,
+    /// while it runs the loop: another owner taking it back must not start before u60d's loop ended,
     /// nor read a state file u60d is about to write). At most [`luyaz_api::lease::WAIT`].
     pub fn start_after_lease(self: &Arc<Self>, lease: PathBuf) {
         let me = Arc::clone(self);
@@ -239,7 +237,7 @@ impl ManualFirst {
     }
 }
 
-/// The machine's `say` logged each notice as it was set (the agent's copy did; u60-policy's
+/// The machine's `say` logged each notice as it was set (u60-policy's
 /// leaves it to the host): a tick that set one has a new notice tuple, and a cleared one is not
 /// logged.
 fn log_notice(before: &Persist, after: &Persist) {
@@ -255,7 +253,7 @@ fn notice_set<'a>(before: &Persist, after: &'a Persist) -> Option<&'a str> {
 }
 
 /* -------------------------------------------------------------- *
- *  Shadow records for u60d (u60-platform.md Phase 4 step 5b)
+ *  Shadow records for u60d
  * -------------------------------------------------------------- */
 
 // u60d replays each tick through its copy of [`Machine`] (it must not probe nodes itself), so
@@ -542,7 +540,7 @@ impl Io for Mihomo {
     }
 }
 
-/// zte-agent `fsutil::atomic_write`: write `<path>.tmp`, keeping the old file's mode, then rename.
+/// Atomic write: write `<path>.tmp`, keeping the old file's mode, then rename.
 fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let keep = fs::metadata(path).ok().map(|m| m.permissions().mode() & 0o7777);
     let mut tmp = path.as_os_str().to_owned();

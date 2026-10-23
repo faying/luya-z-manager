@@ -1,4 +1,4 @@
-//! /router/scenario (情景模式), the old `router/scenario/page.tsx` (batch 5b): where the device
+//! /router/scenario (情景模式): where the device
 //! thinks it is, the engine switch, a pin, the home networks (with a scan to pick them from), what
 //! each scenario does, how eagerly it reacts, the run log.
 //!

@@ -1,25 +1,23 @@
-// ROUTER area mock: DNS / DoH, LAN, firewall, VPN passthrough, QoS, domain
+// ROUTER area mock: DNS, LAN, firewall, VPN passthrough, QoS, domain
 // filter, APN and operator (WAN) IPv6.
 //
-// Most real handlers (zte-agent/src/router.rs) are ubus passthroughs whose
-// firmware shapes are unconfirmed; this mock returns the shape the web pages
-// expect so they work, and mirrors the agent's own behaviour where the agent
-// builds the JSON itself (lan, wan-ipv6, doh/*). See
-// src/lib/api/schemas/router.ts for the doubts.
+// Of these, the core serves only GET/PUT /api/router/dns (api/device_admin.rs),
+// GET /api/router/wan-ipv6 (api/sys_reads.rs) and POST /api/netinfo/apn
+// (api/ops.rs); the rest are kept for pages and tests that still call them.
+// Firmware passthrough shapes are partly unconfirmed: the mock answers with what
+// the pages read, and builds lan and wan-ipv6 itself the way the device
+// API did.
 //
-// Passthrough writes: invalid/empty JSON -> 400 "invalid JSON" (router.rs);
+// Passthrough writes: invalid/empty JSON -> 400 "invalid JSON";
 // a value the firmware would reject -> 503 "ubus call <obj> <method> failed:
 // Command failed: Invalid argument" (mock guess at the firmware); under
 // `fakesuccess` -> 200 {result:"failure"} with no state change (mock guess:
-// the agent never inspects the ubus result, inventory marks these 否·透传).
+// nobody reads the ubus result back, inventory marks these 否·透传).
 
 import type { Ctx, Reply, Route } from "../lib.ts";
 import { bodyField, clone, fail, methodNotFound, ok } from "../lib.ts";
 import { shared } from "../shared.ts";
 import type {
-  DohCacheEntry,
-  DohConfig,
-  DohStatus,
   RouterApnList,
   RouterApnMode,
   RouterApnProfile,
@@ -56,7 +54,7 @@ function is01(v: unknown): v is "0" | "1" {
 }
 
 /**
- * Wrap a router.rs ubus passthrough write. `apply` returns false when the
+ * Wrap a router ubus passthrough write. `apply` returns false when the
  * firmware would reject the request (mock guess), true after mutating state.
  */
 function ubusSet(obj: string, method: string, apply: (body: Obj, ctx: Ctx) => boolean) {
@@ -71,7 +69,7 @@ function ubusSet(obj: string, method: string, apply: (body: Obj, ctx: Ctx) => bo
 }
 
 // ---------------------------------------------------------------------------
-// DNS (router.rs:6 / :43)
+// DNS (GET/PUT /api/router/dns)
 
 const dns: RouterDns = {
   dns_mode: "auto",
@@ -84,7 +82,7 @@ const dns: RouterDns = {
   ipv6_standby_dns_manual: "",
 } satisfies RouterDns;
 
-/** uci network.wan.dns — the agent's fallback for empty manual values. */
+/** uci network.wan.dns — used when a manual value is left empty. */
 let uciWanDns = "";
 
 function dnsGet(ctx: Ctx): Reply {
@@ -93,7 +91,7 @@ function dnsGet(ctx: Ctx): Reply {
     out.prefer_dns_auto = "";
     out.standby_dns_auto = "";
   }
-  // router.rs:18-34: manual mode with empty primary -> fill from uci.
+  // manual mode with an empty primary -> fill from uci.
   if (out.dns_mode === "manual" && !out.prefer_dns_manual && uciWanDns) {
     const [a, b] = uciWanDns.split(/\s+/);
     if (a) out.prefer_dns_manual = a;
@@ -119,138 +117,7 @@ const dnsSet = ubusSet("zwrt_router.api", "router_set_wan_dns", (body) => {
 });
 
 // ---------------------------------------------------------------------------
-// DoH (server.rs:432-479, doh/)
-
-const dohConfig: DohConfig = {
-  enabled: false,
-  listen_addr: "127.0.0.1:5353",
-  upstream_url: "https://1.1.1.1/dns-query",
-  timeout_ms: 3000,
-  cache_enabled: true,
-  cache_max_entries: 512,
-} satisfies DohConfig;
-
-const doh = {
-  running: false,
-  stats: { queries_total: 0, cache_hits: 0, cache_misses: 0 },
-  /** qname, qtype, expiry (ms epoch). */
-  cache: [] as { domain: string; type_id: number; expires: number }[],
-};
-
-const QTYPE: Record<number, string> = {
-  1: "A", 2: "NS", 5: "CNAME", 6: "SOA", 12: "PTR", 15: "MX", 16: "TXT", 28: "AAAA",
-  33: "SRV", 43: "DS", 46: "RRSIG", 48: "DNSKEY", 65: "HTTPS", 255: "ANY",
-};
-
-function dohLive(now: number) {
-  return doh.cache.filter((e) => e.expires > now);
-}
-
-/** Simulate LAN clients resolving through the proxy while it runs. */
-function dohTick(now: number) {
-  if (!doh.running || !dohConfig.cache_enabled) return;
-  if (doh.cache.length === 0) {
-    const seed: [string, number, number][] = [
-      ["www.google.com.tw", 1, 280],
-      ["www.google.com.tw", 28, 280],
-      ["line.me", 1, 55],
-      ["api.line.me", 1, 170],
-      ["www.youtube.com", 65, 240],
-      ["github.com", 1, 50],
-      ["news.example.com", 5, 590],
-    ];
-    for (const [domain, type_id, ttl] of seed) doh.cache.push({ domain, type_id, expires: now + ttl * 1000 });
-    doh.stats.cache_misses += seed.length;
-    doh.stats.queries_total += seed.length;
-  }
-  doh.stats.cache_hits += 5;
-  doh.stats.cache_misses += 1;
-  doh.stats.queries_total += 6;
-}
-
-function dohStatus(ctx: Ctx): Reply {
-  dohTick(ctx.now);
-  const s: DohStatus = {
-    running: doh.running,
-    config: clone(dohConfig),
-    stats: { ...doh.stats, cache_entries: doh.cache.length },
-  };
-  return ok(s);
-}
-
-function dohCache(ctx: Ctx): Reply {
-  const list: DohCacheEntry[] = dohLive(ctx.now).map((e) => ({
-    domain: e.domain, // page expects `name` — faithful to doh/mod.rs:106
-    type: QTYPE[e.type_id] ?? "OTHER",
-    type_id: e.type_id,
-    ttl: Math.floor((e.expires - ctx.now) / 1000),
-  }));
-  return ok(list);
-}
-
-function serdeType(v: unknown): string {
-  if (v === null) return "null";
-  if (Array.isArray(v)) return "sequence";
-  if (typeof v === "string") return `string ${JSON.stringify(v)}`;
-  if (typeof v === "boolean") return `boolean \`${v}\``;
-  if (typeof v === "number") return Number.isInteger(v) ? `integer \`${v}\`` : `floating point \`${v}\``;
-  return "map";
-}
-
-/**
- * PUT /api/doh/config — faithful to DohConfigPatch (doh/config.rs:29): only
- * the five known keys are honoured, everything else (`upstreams`, `enabled`,
- * ...) is silently ignored and the reply is still {ok:true} with no data.
- */
-function dohConfigSet(ctx: Ctx): Reply {
-  const b = ctx.body;
-  if (b === undefined) return fail("invalid config JSON: EOF while parsing a value at line 1 column 0", 400);
-  if (!isObj(b)) return fail(`invalid config JSON: invalid type: ${serdeType(b)}, expected struct DohConfigPatch`, 400);
-  const bad = (v: unknown, exp: string) => fail(`invalid config JSON: invalid type: ${serdeType(v)}, expected ${exp}`, 400);
-  const u32 = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 0xffffffff;
-  const patch: Partial<DohConfig> = {};
-  const { listen_addr, upstream_url, timeout_ms, cache_enabled, cache_max_entries } = b;
-  if (listen_addr != null) { if (typeof listen_addr !== "string") return bad(listen_addr, "a string"); patch.listen_addr = listen_addr; }
-  if (upstream_url != null) { if (typeof upstream_url !== "string") return bad(upstream_url, "a string"); patch.upstream_url = upstream_url.trim(); }
-  if (timeout_ms != null) { if (!u32(timeout_ms)) return bad(timeout_ms, "u32"); patch.timeout_ms = timeout_ms as number; }
-  if (cache_enabled != null) { if (typeof cache_enabled !== "boolean") return bad(cache_enabled, "a boolean"); patch.cache_enabled = cache_enabled; }
-  if (cache_max_entries != null) { if (!u32(cache_max_entries)) return bad(cache_max_entries, "usize"); patch.cache_max_entries = cache_max_entries as number; }
-  Object.assign(dohConfig, patch);
-  doh.cache = dohLive(ctx.now); // cache.prune()
-  return ok();
-}
-
-/** POST /api/doh/enable — body ignored. 500 "already running" when running (doh/mod.rs:42). */
-function dohEnable(ctx: Ctx): Reply {
-  if (doh.running) return fail("already running", 500);
-  const addr = dohConfig.listen_addr;
-  if (!/^(\d{1,3}(\.\d{1,3}){3}|\[[0-9a-fA-F:]+\]):\d{1,5}$/.test(addr)) {
-    return fail(`bind ${addr}: invalid socket address`, 500);
-  }
-  doh.running = true;
-  dohConfig.enabled = true;
-  // fakesuccess: the dnsmasq drop-in / restart failed (results dropped,
-  // server.rs:449-452) — agent says enabled but no queries ever arrive.
-  if (ctx.has("fakesuccess")) doh.cache = [];
-  else dohTick(ctx.now);
-  return ok({ status: "enabled" });
-}
-
-/** POST /api/doh/disable — body ignored; never fails (server.rs:458). Cache and counters survive. */
-function dohDisable(): Reply {
-  doh.running = false;
-  dohConfig.enabled = false;
-  return ok({ status: "disabled" });
-}
-
-/** POST /api/doh/cache/clear — body ignored; {ok:true} no data. Counters are not reset. */
-function dohCacheClear(): Reply {
-  doh.cache = [];
-  return ok();
-}
-
-// ---------------------------------------------------------------------------
-// LAN (router.rs:54 / :82) — agent-built from uci
+// LAN — built from uci
 
 const lan = {
   ipaddr: "192.168.0.1",
@@ -262,8 +129,8 @@ const lan = {
 };
 
 function lanGet(ctx: Ctx): Reply {
-  // `missing`: some `uci get`s fail -> "" (router.rs:55-60); dhcp_end then
-  // falls back to limit=50 (router.rs:72).
+  // `missing`: some `uci get`s fail -> ""; dhcp_end then
+  // falls back to limit=50.
   const m = ctx.has("missing");
   const start = lan.start;
   const limit = m ? "" : lan.limit;
@@ -304,7 +171,7 @@ const lanSet = ubusSet("zwrt_router.api", "router_set_lan_para", (b) => {
 });
 
 // ---------------------------------------------------------------------------
-// Firewall (router.rs:93-196)
+// Firewall
 
 const firewall: RouterFirewall = {
   firewall_enable: "1",
@@ -353,7 +220,7 @@ const domainFilter: RouterDomainFilter = {
 } satisfies RouterDomainFilter;
 
 // ---------------------------------------------------------------------------
-// APN (router.rs:252-326) + WAN IPv6 (router.rs:332 / :359)
+// APN + operator (WAN) IPv6
 
 interface ApnRec {
   cid: number;
@@ -416,7 +283,7 @@ let nextProfileId = 102;
 /**
  * Scenario apn-candidates (owner's device 2026-10-03): the carrier list has
  * ctiot (IoT, dialled first) and ctnet. Picking one for this SIM (POST
- * /api/netinfo/apn, apn_pick.rs) switches to manual, dialling that APN.
+ * /api/netinfo/apn, luyaz-policy apn_pick.rs) switches to manual, dialling that APN.
  */
 const candApns: ApnRec[] = [
   { cid: 0, profileId: "auto109590", profilename: "China Telecom", wanapn: "ctiot", username: "", password: "", pdp: 3, roamingPdp: 2, auth: 0, isEnable: true, isValid: 0 },
@@ -529,13 +396,7 @@ export const routes: Route[] = [
   { method: "GET", path: "/api/router/dns", handler: dnsGet },
   { method: "PUT", path: "/api/router/dns", handler: dnsSet },
 
-  // DoH (agent-built, always complete — no generic stripping)
-  { method: "GET", path: "/api/doh/status", handler: dohStatus, ownMissing: true },
-  { method: "PUT", path: "/api/doh/config", handler: dohConfigSet },
-  { method: "POST", path: "/api/doh/enable", handler: dohEnable },
-  { method: "POST", path: "/api/doh/disable", handler: dohDisable },
-  { method: "GET", path: "/api/doh/cache", handler: dohCache, ownMissing: true },
-  { method: "POST", path: "/api/doh/cache/clear", handler: dohCacheClear },
+  // DoH (built here, always complete — no generic stripping)
 
   // LAN
   { method: "GET", path: "/api/router/lan", handler: lanGet, ownMissing: true },
@@ -656,7 +517,7 @@ export const routes: Route[] = [
   // QoS (page comment says the real device returned 503; the mock serves data so the page can be exercised)
   {
     method: "GET", path: "/api/router/qos",
-    // B27 router_get_qos answers {}; the agent adds the vendor bandwidth mode and
+    // B27 router_get_qos answers {}; the reply adds the vendor bandwidth mode and
     // xdpi from uci (owner's device 2026-09-25: Nomal_mode, xdpi_support 0).
     handler: (ctx) =>
       ctx.has("old-agent-names") ? methodNotFound("zwrt_router.api", "router_get_qos_switch") : ok(clone(qos)),
@@ -714,7 +575,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // netinfo.rs apn_use: 202 and switch in the background. Only the
+    // luyaz-core api/ops.rs apn_use: 202 and switch in the background. Only the
     // apn-candidates scenario models the candidate pick.
     method: "POST", path: "/api/netinfo/apn",
     handler: (ctx) => {
@@ -770,11 +631,11 @@ export const routes: Route[] = [
     }),
   },
 
-  // Operator (WAN) IPv6 — agent-built
+  // Operator (WAN) IPv6 — built here
   {
     method: "GET", path: "/api/router/wan-ipv6", ownMissing: true,
     handler: (ctx) => {
-      // `missing`: pdpType absent from get_apn_at_cid -> 0 (router.rs:337),
+      // `missing`: pdpType absent from get_apn_at_cid -> 0,
       // and get_wwaniface read fails -> false.
       const pdp = ctx.has("missing") ? 0 : dialingApn().pdp;
       const out: RouterWanIpv6 = {
@@ -790,13 +651,13 @@ export const routes: Route[] = [
     handler: (ctx) => {
       if (ctx.body === undefined) return fail("invalid JSON", 400);
       const enabled = isObj(ctx.body) ? ctx.body.enabled : undefined;
-      if (typeof enabled !== "boolean") return fail("missing 'enabled' boolean", 400);
+      if (typeof enabled !== "boolean") return fail("enabled must be boolean", 400);
       const pdp = enabled ? 3 : 1;
       const apn = dialingApn();
       apn.pdp = pdp;
       apn.roamingPdp = pdp;
       apn.isEnable = true;
-      // router.rs:400 drops the set_qcliiface result: under fakesuccess the
+      // the set_qcliiface result is dropped: under fakesuccess the
       // PDP type changes but the live IPv6 leg stays as it was.
       if (!ctx.has("fakesuccess")) ipv6LegUp = enabled;
       const out: RouterWanIpv6SetResult = { ipv6_enabled: enabled, pdp_type: pdp };

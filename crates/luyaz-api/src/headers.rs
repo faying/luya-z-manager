@@ -1,5 +1,5 @@
 //! Headers a loopback caller sets on u60d's `/v2/api/...` (believed only from loopback). The
-//! retired agent set them on the calls it forwarded (Phase 4 step 9); luyaz-web, the scheduler and
+//! retired agent set them on the calls it forwarded; luyaz-web, the scheduler and
 //! the scenario engine set them now.
 
 /// The address of the client that asked luyaz-web (deep diagnosis picks the Wi-Fi rule by it).

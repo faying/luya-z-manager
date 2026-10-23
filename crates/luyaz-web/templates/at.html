@@ -3,7 +3,7 @@
 {% block main %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
 <div class="at-col" data-signals="{cmd: ''}">
-<p class="nd-body at-t2">{{ l.pick("Send AT commands directly to the modem. What you send and what comes back stays in this tab only.", "直接给调制解调器发 AT 命令。发过的命令和回复只留在这个页面里，不会和别的会话共用。") }}</p>
+<p class="nd-body at-t2">{{ l.pick("Type an AT command and it goes straight to the modem. The commands and replies live in this tab only.", "直接给调制解调器发 AT 命令。发过的命令和回复只留在这个页面里，不会和别的会话共用。") }}</p>
 <span hidden data-init="@get('/tools/at/port')"></span>
 {{ port|safe }}
 <section aria-labelledby="at-cmd-t" class="at-pane">

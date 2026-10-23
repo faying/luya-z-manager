@@ -113,8 +113,8 @@ fn old_doctor_rows_have_no_english_and_send_null() {
     assert_eq!(j["detail"], "已关闭");
 }
 
-/// The touch screen reads /api/health into 32 KB (touch-ui alerts.c
-/// AL_RESP_MAX). Doctor has ~38 report rows; 40 long ones in both
+/// The touch screen reads /api/health into 32 KB (luyaz-ui
+/// data/alerts.rs). Doctor has ~38 report rows; 40 long ones in both
 /// languages must leave a quarter for the crash-log list after them.
 #[test]
 fn forty_long_rows_fit_the_screen_buffer() {

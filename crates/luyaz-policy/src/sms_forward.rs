@@ -1,18 +1,17 @@
-//! SMS forwarding's bookkeeping, moved from zte-agent `src/sms_forward.rs` (Phase 4 step 6a).
+//! SMS forwarding's bookkeeping.
 //!
 //! Which SMS to forward and how far the watermark moves ([`plan_forward`], [`run_pass`]), what a
 //! set of rule results means for the SMS ([`delivery_outcome`]), and the hold on an SMS a rule
 //! could not get yet ([`settle_hold`], [`OnlineClock`]). Reading the SMS list, matching rules
 //! against sender and body, sending, logging and saving stay in the host.
 //!
-//! Deliberate differences from the agent:
+//! Notes:
 //! - An SMS is an [`Item`]: its id, whether it was received, and the time key of its date (the
-//!   agent's `sms_time_key`). Sender and body are secret and never cross into the policy: every decision
+//!   host's `sms_time_key`). Sender and body are secret and never cross into the policy: every decision
 //!   here reads only ids and times.
-//! - `run_pass`'s `forward` gets the [`Item`] instead of the decoded SMS; `is_reimported` takes
+//! - `run_pass`'s `forward` gets the [`Item`], not the decoded SMS; `is_reimported` takes
 //!   the time key. No logging.
 //!
-//! zte-agent's tests compare its own `run_pass` with this one on random lists (contract test).
 
 /// Page size for `sms.list_after` and the direct reads (the core's limit cap).
 pub const LIST_PAGE: u64 = 50;
@@ -30,13 +29,13 @@ pub struct Item {
     pub id: u64,
     /// Received (tag 0/1), not sent or draft.
     pub received: bool,
-    /// The time key of its date (the agent's `sms_time_key`); `None` when it has none or it does
+    /// The time key of its date (the host's `sms_time_key`); `None` when it has none or it does
     /// not parse. Only read for received ones.
     pub time: Option<i64>,
 }
 
 impl Item {
-    /// `Some(time)` for a received SMS, as the agent's `decode_item` gives one.
+    /// `Some(time)` for a received SMS, as the host's `decode_item` gives one.
     pub fn received_time(&self) -> Option<Option<i64>> {
         self.received.then_some(self.time)
     }
@@ -101,7 +100,7 @@ pub struct HeldSms {
     pub delivered_rules: Vec<u32>,
 }
 
-/// Counts time only while online (see the agent).
+/// Counts time only while online.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OnlineClock {
     pub last: Option<(u64, bool)>,
@@ -118,7 +117,7 @@ impl OnlineClock {
     }
 }
 
-/// Settle the hold after one delivery attempt of `sms_id` (see the agent). Returns the outcome
+/// Settle the hold after one delivery attempt of `sms_id`. Returns the outcome
 /// and the alert text when the hold timed out.
 pub fn settle_hold(
     held: &mut Option<HeldSms>,
@@ -182,7 +181,7 @@ pub fn max_time(a: Option<i64>, b: Option<i64>) -> Option<i64> {
     }
 }
 
-/// Decide what to forward (the agent's, unchanged; see its doc).
+/// Decide what to forward.
 pub fn plan_forward(
     watermark: u64,
     last_time: Option<i64>,
@@ -257,8 +256,8 @@ pub fn is_reimported(time: Option<i64>, last_time: Option<i64>) -> bool {
     matches!((time, last_time), (Some(t), Some(lt)) if t < lt - REIMPORT_MARGIN_SECS)
 }
 
-/// Page through the device's SMS above the watermark and forward them (the agent's `run_pass`,
-/// over [`Item`]s; see its doc). Returns how many SMS were handled.
+/// Page through the device's SMS above the watermark and forward them (over
+/// [`Item`]s). Returns how many SMS were handled.
 pub fn run_pass(
     watermark: u64,
     last_time: Option<i64>,
@@ -359,7 +358,7 @@ pub struct RecordedPage {
     pub answer: PageAnswer,
 }
 
-/// A pass as the agent recorded it: where it started and what each call got.
+/// A pass as the host recorded it: where it started and what each call got.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PassIn {
     pub watermark: u64,

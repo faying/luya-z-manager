@@ -10,9 +10,9 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use super::{Check, Epochs, Recheck};
+use serde_json::Value;
 
 /// The items of a set. Restore order is [`diff`]'s: unlocks, bands, mode, locks, APN.
 pub const ITEMS: [&str; 6] = [

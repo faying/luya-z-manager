@@ -1,4 +1,4 @@
-//! src/ui_parts/diagnose.c: 网络诊断 and 摆放模式 (manager docs/designs/slow-diagnosis.md §4.2,
+//! 网络诊断 and 摆放模式 (manager docs/designs/slow-diagnosis.md §4.2,
 //! §12.2–12.5).
 //!
 //! 网络诊断: luyaz-core runs it (about 10 s, ≤ 20 s); the page starts it, reads it every second

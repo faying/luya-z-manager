@@ -58,8 +58,11 @@ pub async fn sh_within(cmd: &str, limit: Duration) -> Result<(bool, String), Str
     let pid = child.id();
     match tokio::time::timeout(limit, child.wait_with_output()).await {
         Ok(Ok(o)) => {
-            let mut s = String::from_utf8_lossy(&o.stdout).into_owned();
-            s.push_str(&String::from_utf8_lossy(&o.stderr));
+            let s = format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
             Ok((o.status.success(), s))
         }
         Ok(Err(e)) => Err(format!("exec failed: {e}")),
@@ -68,7 +71,10 @@ pub async fn sh_within(cmd: &str, limit: Duration) -> Result<(bool, String), Str
             if let Some(pid) = pid.filter(|p| *p > 0) {
                 unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
             }
-            eprintln!("ops: chill: `{cmd}` timed out after {} s, killed", limit.as_secs());
+            eprintln!(
+                "ops: chill: `{cmd}` timed out after {} s, killed",
+                limit.as_secs()
+            );
             Err(format!("timed out after {} s", limit.as_secs()))
         }
     }
@@ -300,10 +306,7 @@ pub async fn write_exit(want: &str) -> Result<Value, String> {
 /// 写档位：`chill.sh profile X`，占 CHILL 的工作槽（被占着 = 别的 CHILL 工作在跑，不写）。
 pub async fn write_profile(want: &str) -> Result<Value, String> {
     let slot = slot();
-    if slot
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-        .is_err()
-    {
+    if slot.swap(true, Ordering::SeqCst) {
         return Err("another CHILL job is running".into());
     }
     let out = sh_within(&format!("{} profile {want}", ch::CHILL_SH), SH_TIMEOUT).await;
@@ -351,7 +354,10 @@ mod tests {
         assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
         assert!(r.unwrap_err().contains("timed out"));
         tokio::time::sleep(Duration::from_millis(2500)).await;
-        assert!(!std::path::Path::new(&mark).exists(), "the group was not killed");
+        assert!(
+            !std::path::Path::new(&mark).exists(),
+            "the group was not killed"
+        );
         assert_eq!(
             super::sh_within("echo out; echo err >&2; exit 3", Duration::from_secs(5)).await,
             Ok((false, "out\nerr\n".into()))

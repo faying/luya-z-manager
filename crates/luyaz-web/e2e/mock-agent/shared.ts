@@ -14,7 +14,7 @@ export const shared = {
   chill: {
     /** "running" | "direct" | "stopped" | "starting" | "unknown" */
     state: "running" as string,
-    /** "proxy" | "global" | "direct_keep_ai" | "direct_all" (chill.rs exit_set) */
+    /** "proxy" | "global" | "direct_keep_ai" | "direct_all" (the exit choices of PUT /api/services/chill/exit) */
     exit: "proxy" as string,
     region: "TW" as string,
     profile: "standard" as string,

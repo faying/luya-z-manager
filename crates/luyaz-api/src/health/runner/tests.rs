@@ -158,7 +158,9 @@ fn exe(name: &str, body: &str) -> String {
     // its exec (ETXTBSY): wait until it runs before a test relies on it running
     for _ in 0..50 {
         match std::process::Command::new(&p).arg("--probe").spawn() {
-            Err(e) if e.raw_os_error() == Some(26) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(e) if e.raw_os_error() == Some(26) => {
+                std::thread::sleep(std::time::Duration::from_millis(20))
+            }
             Ok(mut c) => {
                 let _ = c.kill();
                 let _ = c.wait();

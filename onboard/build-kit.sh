@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # ═════════════════════════════════════════════════════════════════════════════
-# build-kit.sh：打 Luya-Z 装机包（给 U60 Pro / MU5250 用）。
-#
+# build-kit.sh：生成 Luya-Z 装机包（目标设备 U60 Pro / MU5250）。用法：
 #   ./onboard/build-kit.sh            # → onboard/dist/luyaz-kit-YYYYMMDD.tar.gz
-#
 # 只要 manager 这一个仓库（touch-ui/ 在里面，Phase 10 10f）+ Docker + 网络就能从零打出完整的包，
 # 不需要从任何已装好的设备上拉东西。包里的东西和来源：
 #   dropbear          SSH 服务端：OpenWrt 23.05.4 发布的 aarch64 ipk，下载后按写死的 sha256 核对
@@ -28,7 +26,7 @@
 #                     zashboard（sha256 固定），下载缓存在 onboard/cache/chill。CHILL=0 不打
 # 另外：install.sh、device/install.sh、README、u60.env.example、CLAUDE.md（kit-CLAUDE.md）、
 #       MANIFEST.txt（来源 + 每个文件的 sha256，install.sh 先核对）、versions.json（各组件版本）。
-#
+
 # 环境变量：TOUCH_REPO（默认本仓库的 touch-ui/）、CHILL=0（不打 CHILL）、
 #           TOUCH_BIN=路径（触屏二进制，默认 $TOUCH_REPO/out/luyaz-ui，没有就现编）、
 #           SENTINEL_BIN=路径（用这个 luyaz-sentinel，不现编）、
@@ -48,10 +46,10 @@
 #   核心必须是 Rust 版（luyaz-core），且没有写死的外部更新源（releases/latest/download）。
 #     用 CORE_BIN 指定的文件可能是带上游更新源的版本。
 # ═════════════════════════════════════════════════════════════════════════════
-set -euo pipefail
-
+set -euo pipefail   # 任何一步出错就停
 ONB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$ONB/.." && pwd)"
+
 # 本机的默认值（不进 git）：KEY=值 一行一个，命令行上给的环境变量优先
 if [ -f "$ONB/kit.local.env" ]; then
   while IFS='=' read -r k v; do
@@ -60,6 +58,7 @@ if [ -f "$ONB/kit.local.env" ]; then
   done < "$ONB/kit.local.env"
 fi
 TOUCH_REPO="${TOUCH_REPO:-$ROOT/touch-ui}"
+
 # Rust 构建镜像：没指定就按 onboard/build.Dockerfile 现建（和 data-service scripts/build.Dockerfile 同一份，
 # 标签取文件哈希，所以两个仓库共用同一个镜像）。给了 KIT_ZIGBUILD 就不在本机建。
 if [ -z "${ZIGBUILD_IMAGE:-}" ] && [ -z "${KIT_ZIGBUILD:-}" ]; then
@@ -71,26 +70,37 @@ CACHE="$ONB/cache"          # 下载和生成物的缓存，跨次复用
 DIST="$ONB/dist"            # 打好的包
 
 # SSH 服务端用 OpenWrt 官方发布的二进制，不自己编；换版本时两行一起改
-DROPBEAR_URL="https://downloads.openwrt.org/releases/23.05.4/targets/armsr/armv8/packages/dropbear_2022.82-6_aarch64_generic.ipk"
-DROPBEAR_SHA256="4fadd1b8529f22fb5d64ee27159d11f4feb68224657953d298a1acf85a83a5c0"
+DROPBEAR_SHA256=4fadd1b8529f22fb5d64ee27159d11f4feb68224657953d298a1acf85a83a5c0
+DROPBEAR_URL=https://downloads.openwrt.org/releases/23.05.4/targets/armsr/armv8/packages/dropbear_2022.82-6_aarch64_generic.ipk
 
 # macOS：没装完整 Xcode 时 /usr/bin/git 会弹许可证提示，默认改用 CommandLineTools 里的 git
-export DEVELOPER_DIR="${DEVELOPER_DIR:-/Library/Developer/CommandLineTools}"
-export PATH="$HOME/.cargo/bin:$PATH"
+export DEVELOPER_DIR=${DEVELOPER_DIR:-/Library/Developer/CommandLineTools} PATH=$HOME/.cargo/bin:$PATH
 export COPYFILE_DISABLE=1   # macOS tar 不要夹带 ._* 元数据文件
 
-step() { printf '\033[0;36m▶\033[0m %s\n' "$1"; }
-die()  { printf '\033[0;31m✗\033[0m %s\n' "$1" >&2; exit 1; }
+# 进度（青色 ▶）和致命错误（红色 ✗，退出 1）
+step() {
+  printf '\033[0;36m▶\033[0m %s\n' "$1"
+}
+
+die() {
+  printf '\033[0;31m✗\033[0m %s\n' "$1" >&2
+  exit 1
+}
+
 sha256() { # <文件> → 十六进制摘要
   local s; s=$(shasum -a 256 "$1"); printf '%s\n' "${s%% *}"
 }
+
 rev() { # <仓库> → 「短提交号 日期 标题」
   git -C "$1" log -1 --date=short --format='%h %ad %s' 2>/dev/null || echo unknown
 }
+
 dirty() { # <仓库> [路径…] → 这些路径有未提交改动时打印标注
   if [ -n "$(git -C "$1" status --porcelain -- "${@:2}" 2>/dev/null)" ]; then echo " (有未提交改动)"; fi
 }
+
 md5q() { if command -v md5sum >/dev/null 2>&1; then md5sum "$1" | awk '{print $1}'; else /sbin/md5 -q "$1"; fi; }
+
 # shipped <设备上的路径>：在 SHIP_RECORDS 里找设备上正在跑的那份。最新清单里这个路径的最后一行就是现状
 # （u60 rollback 也是一次 ship，写回旧的 md5）；记录里同名、同 md5 的文件就是它。
 # 找到了设 SHIP_FILE 和 SHIP_COMMIT（编它的提交；只记录过的文件没有提交，留空），找不到返回 1。
@@ -111,6 +121,7 @@ shipped() {
   done
   return 1
 }
+
 # 判断核心二进制能不能进装机包：0 = 能；1 = 不是 Luya-Z 改名 D3 起的核心（没有构建标记
 # LUYAZ_CORE_BUILD_SELF_CONTAINED；包里的 init 只给 LUYAZ_ 环境变量，D3 前的核心只认旧名）；
 # 2 = 带着上游写死的外部更新源。
@@ -121,17 +132,16 @@ core_bin_check() {
 }
 
 [ -d "$TOUCH_REPO" ] || die "找不到触屏仓库: ${TOUCH_REPO}（用 TOUCH_REPO=… 指定）"
-mkdir -p "$CACHE" "$DIST"
-STAMP=$(date +%Y%m%d)
-WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
+mkdir -p "$CACHE" "$DIST"   # 缓存和产物目录
+STAMP=$(date +%Y%m%d) WORK=$(mktemp -d)   # 包名里的日期；临时工作目录
+trap 'rm -rf "$WORK"' EXIT   # 退出时清掉工作目录
 KIT="$WORK/luyaz-kit"       # 包的根目录
 PL="$KIT/payload"           # 推到设备上的东西
 mkdir -p "$PL/ui"
 
 # ── dropbear：从 ipk 里取出 usr/sbin/dropbear ─────────────────────────────────
 # ipk 是 tar.gz 套 tar.gz：外层的 data.tar.gz 里才是文件
-step "dropbear（OpenWrt 23.05.4，sha256 校验）"
+step "dropbear（OpenWrt 23.05.4 官方 ipk，核对 sha256）"
 DB_IPK="$CACHE/${DROPBEAR_URL##*/}"
 if [ ! -f "$DB_IPK" ]; then curl -fsSL -o "$DB_IPK" "$DROPBEAR_URL"; fi
 if [ "$(sha256 "$DB_IPK")" != "$DROPBEAR_SHA256" ]; then
@@ -170,6 +180,7 @@ zigbuild() {
 step "luyaz-web（cargo zigbuild）"
 LW_OUT=$(zigbuild release luyaz-web) || exit 1
 cp "$LW_OUT" "$PL/luyaz-web"
+
 # 首页运营商 logo：luyaz-web 从磁盘目录读（--logo-dir 默认 /data/luyaz/operator-logos），不编进程序。
 # logo 是商标，开源版没有（sync-public 删掉），就不带，网页首页不显示 logo。
 if ls "$ROOT"/assets/operator-logos/*.svg >/dev/null 2>&1; then
@@ -181,6 +192,7 @@ fi
 
 # ── 触屏界面（ui）：程序、字体、logo ─────────────────────────────────────
 step "ui（${TOUCH_REPO}）"
+
 # 设备现行版（SHIP_RECORDS）：只替代没显式给的；SHIP_<组件> 记编它的提交，写进 kit-source
 SHIP_touch= SHIP_sentinel= SHIP_core=
 if [ -z "${TOUCH_BIN:-}" ] && shipped /data/luyaz/ui/luyaz-ui; then
@@ -207,10 +219,12 @@ if [ ! -f "$TOUCH_BIN" ]; then
     { export LUYAZ_RS_IMAGE="${LUYAZ_RS_IMAGE:-$ZIGBUILD_IMAGE}"; "$TOUCH_REPO/rs/setup-src.sh" && "$TOUCH_REPO/rs/build.sh" device "$TOUCH_BIN"; } >/dev/null
   fi || die "触屏界面构建失败（单独跑 ${TOUCH_REPO}/rs/build.sh device 看原因）"
 fi
+
 # 触屏二进制要同时有 pages+chrome built 和 ui/src/ 两个标记
 grep -a -q 'pages+chrome built' "$TOUCH_BIN" || die "$(basename "$TOUCH_BIN") 不是触屏界面"
-grep -a -q 'ui/src/' "$TOUCH_BIN" || die "$(basename "$TOUCH_BIN") 是已删的 C 版触屏（Phase 10 X5 起只打 Rust 版：touch-ui/rs/build.sh device 编）"
+grep -a -q 'ui/src/' "$TOUCH_BIN" || die "$(basename "$TOUCH_BIN") 不是 Rust 版触屏（用 touch-ui/rs/build.sh device 编）"
 cp "$TOUCH_BIN" "$PL/ui/luyaz-ui"  # Phase 10 R5: installed as /data/luyaz/ui/luyaz-ui
+
 # 触屏字体：Nunito（数字）+ 中文兜底（设备自带 ZTE 字体缺失时用），都是 OFL。
 # 字体文件是二进制，不进任何 git，只随装机包走；设备自带的 /usr/ui/fonts 不打包。
 FONT_FILES="Nunito-600.ttf Nunito-700.ttf Nunito-800.ttf OFL-Nunito.txt u60-cjk-fallback.ttf OFL-ResourceHanRounded.txt"
@@ -246,6 +260,7 @@ fi
 # ── 进程监督与 Wi-Fi 兜底 ─────────────────────────────────────────────────────
 step "设备脚本（${TOUCH_REPO}/scripts）"
 mkdir -p "$PL/scripts"
+
 # luyaz-ship.sh、core-trial.sh（它的壳，要和它放一起）也进 /data/luyaz/scripts；
 # luyaz-recover.sh 由设备端放成 /data/luyaz/ship/luyaz-recover.sh（自检过才放，已有就不换；rc.local 那一行只由 recover 组件加）
 # 去掉 luyaz-ship.sh、core-trial.sh、luyaz-recover.sh 以后，这张表要和 luyaz-ship.sh 的 SCRIPTS_FILES + SCRIPTS_INITS
@@ -256,6 +271,7 @@ for f in alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-source
   [ -f "$TOUCH_REPO/scripts/$f" ] || die "缺 $TOUCH_REPO/scripts/$f"
   cp "$TOUCH_REPO/scripts/$f" "$PL/scripts/"
 done
+
 # 设备清单（kind=kit）的来源：装机包日期、各组件编的提交、数据格式版本、有没有未提交改动。
 # touch 记 touch-ui 当前的提交；用 TOUCH_BIN 指定现成程序时，程序未必是这个提交编的，记成有改动。
 # 用了设备现行版（SHIP_<组件>）时记上机时的提交、没有改动；只记录过、不知道提交的（0000000）记成有改动。
@@ -315,13 +331,14 @@ if [ -z "${CORE_BIN:-}" ]; then
   step "核心 luyaz-core（cargo zigbuild --profile release-device）"
   CORE_BIN=$(zigbuild release-device luyaz-core) || exit 1
   CORE_SRC="luyaz-core $(rev "$ROOT")$(dirty "$ROOT" crates Cargo.toml Cargo.lock)"
-else
+else   # 用指定的核心
   step "核心（${CORE_BIN}）"
   [ -f "$CORE_BIN" ] || die "CORE_BIN 不存在: $CORE_BIN"
   CORE_SRC="$(basename "$CORE_BIN")"
   [ -z "$SHIP_core" ] || CORE_SRC="设备现行版 ${SHIP_core:0:7}（$CORE_BIN）"
 fi
 cp "$CORE_BIN" "$PL/ui/luyaz-core"
+
 # D3 起的核心（标记 LUYAZ_CORE_BUILD_SELF_CONTAINED）；
 # 装机包要完全自主：不能带上游写死的更新源。规则见上面 core_bin_check。
 core_rc=0; core_bin_check "$PL/ui/luyaz-core" || core_rc=$?
@@ -390,12 +407,12 @@ if [ "${CHILL:-1}" != 0 ]; then
 fi
 
 # ── 装机脚本、说明、清单 ──────────────────────────────────────────────────────
-step "装机脚本、说明、清单"
+step "装机脚本、说明文档和清单"
 mkdir -p "$KIT/device"
 cp "$ONB/install.sh" "$ONB/README.md" "$ONB/README.zh-CN.md" "$ONB/u60.env.example" "$KIT/"
 cp "$ONB/device/install.sh" "$KIT/device/"
 cp "$ONB/kit-CLAUDE.md" "$KIT/CLAUDE.md"   # 在包目录里开 Claude Code，它会先读这份
-chmod 755 "$KIT/install.sh"
+chmod 755 "$KIT/install.sh"   # 对方直接 ./install.sh
 
 # MANIFEST.txt：前面是给人看的来源（第 3 行起，打完包会印出几行），
 # 「sha256」那一行之后是 install.sh 要逐个核对的「摘要  路径」（两个空格）
@@ -404,7 +421,8 @@ kit_hashes() {
     printf '%s  %s\n' "$(sha256 "$KIT/$rel")" "$rel"
   done
 }
-{
+
+{ # MANIFEST.txt 正文
   printf 'U60 装机包 %s\n\n来源：\n' "$STAMP"
   echo "  manager       $(rev "$ROOT")$(dirty "$ROOT" crates Cargo.toml Cargo.lock assets/operator-logos onboard)"
   echo "  luyaz-web     二进制 $(sha256 "$PL/luyaz-web" | cut -c1-12)$([ -d "$PL/operator-logos" ] && echo "，运营商 logo $(ls "$PL/operator-logos" | wc -l | tr -d ' ') 个")"
@@ -419,7 +437,7 @@ kit_hashes() {
   [ -d "$PL/chill" ] && echo "  CHILL         mihomo ${MIHOMO_VER:-v1.19.31}、zashboard ${ZASHBOARD_VER:-v3.27.0}（规则集下载于 $(date -r "$CACHE/chill/ruleset/cn.list" '+%Y-%m-%d')）"
   printf '\nsha256（install.sh 开头会逐个校验）：\n'
   kit_hashes
-} > "$KIT/MANIFEST.txt"
+} >"$KIT/MANIFEST.txt"   # 写出清单
 
 # each component's version (docs/designs/component-versions.md): from the LUYAZ_VERSION=
 # marker in the binary (not run), the scripts' from scripts/VERSION; null: a build before 1.0.0
@@ -431,5 +449,5 @@ printf '{\n  "v": 1,\n  "kit": "%s",\n  "components": {\n    "core": %s,\n    "l
 
 OUT="$DIST/luyaz-kit-$STAMP.tar.gz"
 tar czf "$OUT" -C "$WORK" luyaz-kit
-printf '\033[0;32m✓\033[0m %s（%s）\n' "$OUT" "$(du -h "$OUT" | cut -f1)"
+printf '\033[0;32m✓\033[0m %s（%s）\n' "$OUT" "$(du -h "$OUT" | cut -f1)"   # 包路径和大小
 sed -n '3,7p' "$KIT/MANIFEST.txt"   # 来源的头几行

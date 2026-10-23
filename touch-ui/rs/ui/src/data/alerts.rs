@@ -1,4 +1,4 @@
-//! 健康与告警 (src/alerts.c): luyaz-core's /api/alerts and /api/health (logged in), read when
+//! 健康与告警: luyaz-core's /api/alerts and /api/health (logged in), read when
 //! the page opens and every 10 s while it is up; 全部已读.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
@@ -240,7 +240,6 @@ impl Alerts {
 mod tests {
     use super::*;
 
-    // tests/alerts_test.c
     #[test]
     fn health_and_events() {
         lang::set_en(false);
@@ -270,9 +269,9 @@ mod tests {
         // English: label_en / detail_en; null or missing → the Chinese
         lang::set_en(true);
         a.parse_events(
-            r#"[{"seq":5,"time":null,"uptime":1,"kind":"agent-crash","label":"管理后台意外退出","label_en":"Admin backend (zte-agent) exited unexpectedly","text":"t","unread":true},{"seq":4,"time":null,"uptime":1,"kind":"y","label":"中文","label_en":"","text":"u","unread":false}]"#.as_bytes(),
+            r#"[{"seq":5,"time":null,"uptime":1,"kind":"agent-crash","label":"管理后台意外退出","label_en":"Admin backend exited unexpectedly","text":"t","unread":true},{"seq":4,"time":null,"uptime":1,"kind":"y","label":"中文","label_en":"","text":"u","unread":false}]"#.as_bytes(),
         );
-        assert_eq!(a.items()[0].label, "Admin backend (zte-agent) exited unexpectedly");
+        assert_eq!(a.items()[0].label, "Admin backend exited unexpectedly");
         assert_eq!(a.items()[1].label, "中文");
         a.parse_checks(
             r#"{"bad":1,"checked_at":1,"checks":[{"detail":"没在运行","detail_en":"Not running","id":"screen","label":"触屏界面","label_en":"Screen UI","level":"bad"},{"detail":"空间不够","detail_en":null,"id":"disk","label":"/data 空间","label_en":null,"level":"warn"}],"crashlogs":[]}"#.as_bytes(),

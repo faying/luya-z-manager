@@ -1,4 +1,4 @@
-//! /tools/at (AT terminal; batch 5c), the old `tools/at/page.tsx`: any AT command can be typed and
+//! /tools/at (AT terminal; batch 5c): any AT command can be typed and
 //! goes straight to the modem; the reply is the result (no readback).
 //!
 //! ```text
@@ -60,7 +60,7 @@ pub fn routes() -> Router<Shared> {
 
 // ---- the command ----
 
-/// The agent's filter (`at_terminal.rs`): these characters are dropped before sending.
+/// The device service's filter: these characters are dropped before sending.
 pub fn sanitize(cmd: &str) -> String {
     cmd.chars().filter(|c| !matches!(c, '\'' | '`' | '$' | ';' | '|' | '&')).collect()
 }
@@ -99,7 +99,7 @@ pub fn danger(raw: &str, sent: &str, l: Lang) -> Option<(&'static str, &'static 
     let hit = |p: &str| a.contains(p) || b.contains(p);
     Some(if hit("CFUN=0") {
         (
-            l.pick("CFUN=0 will shut down the modem radio", "CFUN=0 会关掉调制解调器的射频"),
+            l.pick("CFUN=0 turns the modem's radio off", "CFUN=0 让基带停掉射频"),
             l.pick(
                 "Restart the device. The modem stays in low-power state until then; AT commands do not bring it back.",
                 "重启设备。在那之前调制解调器一直停在低功耗状态，AT 命令救不回来。",
@@ -107,7 +107,7 @@ pub fn danger(raw: &str, sent: &str, l: Lang) -> Option<(&'static str, &'static 
         )
     } else if hit("+CRESET") {
         (
-            l.pick("+CRESET will reset the modem", "+CRESET 会重置调制解调器"),
+            l.pick("+CRESET restarts the modem", "+CRESET 让基带重启"),
             l.pick(
                 "The modem comes back by itself after about a minute. If it doesn't, restart the device.",
                 "调制解调器约一分钟后自己回来。不回来就重启设备。",
@@ -115,7 +115,7 @@ pub fn danger(raw: &str, sent: &str, l: Lang) -> Option<(&'static str, &'static 
         )
     } else if hit("&F") {
         (
-            l.pick("&F will factory-reset modem settings", "&F 会把调制解调器设置恢复出厂"),
+            l.pick("&F puts the modem settings back to factory values", "&F 把基带设置退回出厂值"),
             l.pick(
                 "Modem settings changed with AT commands are lost and can't be restored from this page.",
                 "用 AT 命令改过的调制解调器设置会丢，在这个页面里恢复不了。",
@@ -123,7 +123,7 @@ pub fn danger(raw: &str, sent: &str, l: Lang) -> Option<(&'static str, &'static 
         )
     } else if hit("+NVWR") {
         (
-            l.pick("+NVWR writes to non-volatile memory", "+NVWR 会写入非易失存储"),
+            l.pick("+NVWR changes a value the modem keeps across restarts", "+NVWR 改的是基带断电也保留的值"),
             l.pick(
                 "The old value can't be restored from this page. A wrong value can stop the modem from working until it is written back.",
                 "旧值在这个页面里恢复不了。写错可能让调制解调器不能工作，直到写回去。",
@@ -131,12 +131,12 @@ pub fn danger(raw: &str, sent: &str, l: Lang) -> Option<(&'static str, &'static 
         )
     } else if hit("+QPOWD") {
         (
-            l.pick("+QPOWD will power down the modem", "+QPOWD 会关掉调制解调器电源"),
+            l.pick("+QPOWD cuts power to the modem", "+QPOWD 让基带断电"),
             l.pick("Restart the device to power the modem back up.", "重启设备才能让调制解调器重新上电。"),
         )
     } else if hit("+COPS=") {
         (
-            l.pick("+COPS= will change network operator registration", "+COPS= 会改变网络运营商注册"),
+            l.pick("+COPS= picks which operator the modem registers on", "+COPS= 指定基带注册哪家运营商"),
             l.pick(
                 "Send AT+COPS=0 to go back to automatic operator selection.",
                 "发 AT+COPS=0 回到自动选择运营商。",
@@ -402,7 +402,7 @@ async fn send(State(app): State<Shared>, req: Request) -> axum::response::Respon
     if !starts_with_at(&raw) {
         return one(format!(
             "{}\n{}",
-            err_html(Some(l.pick("Command must start with AT", "命令必须以 AT 开头"))),
+            err_html(Some(l.pick("Start the command with AT", "命令要以 AT 开头"))),
             area(&r, SET, &Phase::Idle)
         ))
         .into_response();
@@ -620,7 +620,7 @@ mod tests {
         let mut all = vec![
             port_html(l, &PortState::Looking),
             port_html(l, &PortState::None),
-            err_html(Some("Command must start with AT")),
+            err_html(Some("Start the command with AT")),
             area(&r, SET, &Phase::Idle),
             area(&r, SET, &Phase::Done(Outcome::Unknown)),
             entry(l, "AT", "OK", 1),

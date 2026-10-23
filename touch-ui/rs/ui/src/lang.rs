@@ -1,4 +1,4 @@
-//! Screen language (the C UI's src/lang.c until Phase 10 X5): Chinese is the key; in English the
+//! Screen language: Chinese is the key; in English the
 //! row of lang/en.inc whose first column is exactly that text (missing → the Chinese). Chosen once
 //! per process, before the first TR().
 //!
@@ -113,7 +113,7 @@ pub static TEST_LANG: std::sync::Mutex<()> = std::sync::Mutex::new(());
 mod tests {
     use super::*;
 
-    // tests/lang_test.c's rules; one test so the process-wide language is not raced
+    // rules; one test so the process-wide language is not raced
     #[test]
     fn lookup_rules() {
         let _l = TEST_LANG.lock().unwrap_or_else(|e| e.into_inner());

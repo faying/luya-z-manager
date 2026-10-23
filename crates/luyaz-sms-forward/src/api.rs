@@ -1,314 +1,336 @@
-//! The `/api/sms/forward/*` handlers: the request body in, `(status, JSON)` out, as the agent
-//! served them.
+//! HTTP face of the forwarder: each `/api/sms/forward/*` route takes the raw request body and
+//! returns `(status, JSON)`; the core's router only wires them up.
 
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::*;
 
+/// `{"ok": false, "error": …}` with a status.
+fn fail(status: u16, why: impl Into<Value>) -> (u16, Value) {
+    (status, json!({ "ok": false, "error": why.into() }))
+}
+
+/// `{"ok": true, "data": …}` with a status.
+fn done(status: u16, data: impl serde::Serialize) -> (u16, Value) {
+    (status, json!({ "ok": true, "data": data }))
+}
+
+/// A typed body, or the 400 that says why it is not one.
+fn typed<T: DeserializeOwned>(body: &[u8]) -> Result<T, (u16, Value)> {
+    serde_json::from_slice(body).map_err(|e| fail(400, format!("invalid JSON: {e}")))
+}
+
+/// A loose body (`{"id": …}` style), or a bare "invalid JSON" 400.
+fn loose(body: &[u8]) -> Result<Value, (u16, Value)> {
+    serde_json::from_slice(body).map_err(|_| fail(400, "invalid JSON"))
+}
+
+/// The rule id a loose body names (truncated to `u32` like every id here).
+fn rule_id_in(v: &Value) -> Result<u32, (u16, Value)> {
+    v.get("id")
+        .and_then(Value::as_u64)
+        .map(|n| n as u32)
+        .ok_or_else(|| fail(400, "missing 'id' field"))
+}
+
+fn no_rule() -> (u16, Value) {
+    fail(404, "rule not found")
+}
+
+fn sent() -> (u16, Value) {
+    done(200, json!({ "status": "sent" }))
+}
+
+/// Settings fields a caller may change; anything left out stays.
+#[derive(Deserialize)]
+struct SettingsPatch {
+    /// master switch
+    enabled: Option<bool>,
+    /// at least 10
+    poll_interval_secs: Option<u64>,
+    /// tidy the device's copy after a full success
+    mark_read_after_forward: Option<bool>,
+    delete_after_forward: Option<bool>,
+}
+
+/// A new rule (the id is handed out here). `enabled` defaults to on.
+#[derive(Deserialize)]
+struct NewRule {
+    destination: ForwardDestination,
+    filter: SmsFilter,
+    name: String,
+    #[serde(default = "on")]
+    enabled: bool,
+}
+
+fn on() -> bool {
+    true
+}
+
+/// A full replacement of an existing rule's editable fields.
+#[derive(Deserialize)]
+struct RuleEdit {
+    id: u32,
+    enabled: bool,
+    name: String,
+    destination: ForwardDestination,
+    filter: SmsFilter,
+}
+
+#[derive(Deserialize)]
+struct TestSend {
+    destination: ForwardDestination,
+}
+
+/// Position in the newest-first log the UI shows.
+#[derive(Deserialize)]
+struct LogPick {
+    index: usize,
+}
+
 impl SmsForwarder {
+    /// Edits the config under its lock and saves it if `edit` says so (`Ok`); a switch from
+    /// idle to running resets the baseline (see [`commit_config`]).
+    fn edit_config(
+        &self,
+        edit: impl FnOnce(&mut SmsForwardConfig) -> Result<(u16, Value), (u16, Value)>,
+    ) -> (u16, Value) {
+        let mut cfg = self.config.lock().unwrap();
+        let running_before = is_active(&cfg);
+        match edit(&mut cfg) {
+            Ok(reply) => {
+                commit_config(self, running_before, &cfg);
+                reply
+            }
+            Err(reply) => reply,
+        }
+    }
+
     /// GET /api/sms/forward/config
     pub fn config_get(&self) -> (u16, Value) {
-        let config = self.config.lock().unwrap();
-        let fwd_state = self.state.lock().unwrap();
-        (
+        let cfg = self.config.lock().unwrap().clone();
+        let watermark = self.state.lock().unwrap().last_forwarded_id;
+        done(
             200,
-            json!({
-                "ok": true,
-                "data": {
-                    "config": *config,
-                    "last_forwarded_id": fwd_state.last_forwarded_id,
-                }
-            }),
+            json!({ "config": cfg, "last_forwarded_id": watermark }),
         )
     }
 
     /// PUT /api/sms/forward/config
     pub fn config_set(&self, body: &[u8]) -> (u16, Value) {
-        #[derive(Deserialize)]
-        struct Req {
-            #[serde(default)]
-            enabled: Option<bool>,
-            #[serde(default)]
-            poll_interval_secs: Option<u64>,
-            #[serde(default)]
-            mark_read_after_forward: Option<bool>,
-            #[serde(default)]
-            delete_after_forward: Option<bool>,
-        }
-
-        let req: Req = match serde_json::from_slice(body) {
-            Ok(v) => v,
-            Err(e) => return (400, json!({"ok": false, "error": format!("invalid JSON: {e}")})),
+        let patch: SettingsPatch = match typed(body) {
+            Ok(p) => p,
+            Err(r) => return r,
         };
-
-        if req.poll_interval_secs.is_some_and(|interval| interval < 10) {
-            return (400, json!({"ok": false, "error": "poll_interval_secs must be >= 10"}));
+        if matches!(patch.poll_interval_secs, Some(s) if s < 10) {
+            return fail(400, "poll_interval_secs must be >= 10");
         }
-
-        let mut config = self.config.lock().unwrap();
-        let was_active = is_active(&config);
-
-        if let Some(enabled) = req.enabled {
-            config.enabled = enabled;
-        }
-        if let Some(interval) = req.poll_interval_secs {
-            config.poll_interval_secs = interval;
-        }
-        if let Some(v) = req.mark_read_after_forward {
-            config.mark_read_after_forward = v;
-        }
-        if let Some(v) = req.delete_after_forward {
-            config.delete_after_forward = v;
-        }
-
-        commit_config(self, was_active, &config);
-        (200, json!({"ok": true, "data": *config}))
+        self.edit_config(|cfg| {
+            cfg.enabled = patch.enabled.unwrap_or(cfg.enabled);
+            cfg.poll_interval_secs = patch.poll_interval_secs.unwrap_or(cfg.poll_interval_secs);
+            cfg.mark_read_after_forward = patch
+                .mark_read_after_forward
+                .unwrap_or(cfg.mark_read_after_forward);
+            cfg.delete_after_forward = patch
+                .delete_after_forward
+                .unwrap_or(cfg.delete_after_forward);
+            Ok(done(200, &*cfg))
+        })
     }
 
-    /// POST /api/sms/forward/rules — Create a new rule
+    /// POST /api/sms/forward/rules
     pub fn rules_create(&self, body: &[u8]) -> (u16, Value) {
-        #[derive(Deserialize)]
-        struct Req {
-            name: String,
-            #[serde(default = "default_true")]
-            enabled: bool,
-            filter: SmsFilter,
-            destination: ForwardDestination,
-        }
-
-        let req: Req = match serde_json::from_slice(body) {
-            Ok(v) => v,
-            Err(e) => return (400, json!({"ok": false, "error": format!("invalid JSON: {e}")})),
+        let new: NewRule = match typed(body) {
+            Ok(n) => n,
+            Err(r) => return r,
         };
-
-        let mut config = self.config.lock().unwrap();
-        let was_active = is_active(&config);
-        let next_id = config.rules.iter().map(|r| r.id).max().unwrap_or(0) + 1;
-
-        let rule = ForwardRule {
-            id: next_id,
-            name: req.name,
-            enabled: req.enabled,
-            filter: req.filter,
-            destination: req.destination,
-        };
-
-        let result = json!({"ok": true, "data": rule});
-        config.rules.push(rule);
-        commit_config(self, was_active, &config);
-        (201, result)
+        self.edit_config(|cfg| {
+            let id = 1 + cfg.rules.iter().map(|r| r.id).max().unwrap_or(0);
+            let NewRule {
+                name,
+                enabled,
+                filter,
+                destination,
+            } = new;
+            let rule = ForwardRule {
+                id,
+                destination,
+                filter,
+                enabled,
+                name,
+            };
+            let reply = done(201, &rule);
+            cfg.rules.push(rule);
+            Ok(reply)
+        })
     }
 
-    /// PUT /api/sms/forward/rules — Update a rule
+    /// PUT /api/sms/forward/rules
     pub fn rules_update(&self, body: &[u8]) -> (u16, Value) {
-        #[derive(Deserialize)]
-        struct Req {
-            id: u32,
-            name: String,
-            enabled: bool,
-            filter: SmsFilter,
-            destination: ForwardDestination,
-        }
-
-        let req: Req = match serde_json::from_slice(body) {
-            Ok(v) => v,
-            Err(e) => return (400, json!({"ok": false, "error": format!("invalid JSON: {e}")})),
+        let edit: RuleEdit = match typed(body) {
+            Ok(e) => e,
+            Err(r) => return r,
         };
-
-        let mut config = self.config.lock().unwrap();
-        let was_active = is_active(&config);
-        let rule = match config.rules.iter_mut().find(|r| r.id == req.id) {
-            Some(r) => r,
-            None => return (404, json!({"ok": false, "error": "rule not found"})),
-        };
-
-        rule.name = req.name;
-        rule.enabled = req.enabled;
-        rule.filter = req.filter;
-        rule.destination = req.destination;
-
-        let result = json!({"ok": true, "data": rule.clone()});
-        commit_config(self, was_active, &config);
-        (200, result)
+        self.edit_config(|cfg| {
+            let rule = cfg
+                .rules
+                .iter_mut()
+                .find(|r| r.id == edit.id)
+                .ok_or_else(no_rule)?;
+            *rule = ForwardRule {
+                id: edit.id,
+                name: edit.name,
+                enabled: edit.enabled,
+                filter: edit.filter,
+                destination: edit.destination,
+            };
+            Ok(done(200, &*rule))
+        })
     }
 
-    /// DELETE /api/sms/forward/rules — Delete a rule
+    /// DELETE /api/sms/forward/rules
     pub fn rules_delete(&self, body: &[u8]) -> (u16, Value) {
-        let parsed: Value = match serde_json::from_slice(body) {
-            Ok(v) => v,
-            Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
+        let id = match loose(body).and_then(|v| rule_id_in(&v)) {
+            Ok(id) => id,
+            Err(r) => return r,
         };
-        let id = match parsed["id"].as_u64() {
-            Some(id) => id as u32,
-            None => return (400, json!({"ok": false, "error": "missing 'id' field"})),
-        };
-
-        let mut config = self.config.lock().unwrap();
-        let was_active = is_active(&config);
-        let len_before = config.rules.len();
-        config.rules.retain(|r| r.id != id);
-
-        if config.rules.len() == len_before {
-            return (404, json!({"ok": false, "error": "rule not found"}));
-        }
-
-        commit_config(self, was_active, &config);
-        (200, json!({"ok": true}))
+        self.edit_config(|cfg| {
+            let before = cfg.rules.len();
+            cfg.rules.retain(|r| r.id != id);
+            if cfg.rules.len() == before {
+                return Err(no_rule());
+            }
+            Ok((200, json!({ "ok": true })))
+        })
     }
 
-    /// PUT /api/sms/forward/rules/toggle — Enable/disable a rule
+    /// PUT /api/sms/forward/rules/toggle
     pub fn rules_toggle(&self, body: &[u8]) -> (u16, Value) {
-        let parsed: Value = match serde_json::from_slice(body) {
-            Ok(v) => v,
-            Err(_) => return (400, json!({"ok": false, "error": "invalid JSON"})),
+        let picked = loose(body).and_then(|v| {
+            let id = rule_id_in(&v)?;
+            let on = v
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| fail(400, "missing 'enabled' field"))?;
+            Ok((id, on))
+        });
+        let (id, on) = match picked {
+            Ok(p) => p,
+            Err(r) => return r,
         };
-        let id = match parsed["id"].as_u64() {
-            Some(id) => id as u32,
-            None => return (400, json!({"ok": false, "error": "missing 'id' field"})),
-        };
-        let enabled = match parsed["enabled"].as_bool() {
-            Some(e) => e,
-            None => return (400, json!({"ok": false, "error": "missing 'enabled' field"})),
-        };
-
-        let mut config = self.config.lock().unwrap();
-        let was_active = is_active(&config);
-        let rule = match config.rules.iter_mut().find(|r| r.id == id) {
-            Some(r) => r,
-            None => return (404, json!({"ok": false, "error": "rule not found"})),
-        };
-
-        rule.enabled = enabled;
-        let result = json!({"ok": true, "data": rule.clone()});
-        commit_config(self, was_active, &config);
-        (200, result)
+        self.edit_config(|cfg| {
+            let rule = cfg
+                .rules
+                .iter_mut()
+                .find(|r| r.id == id)
+                .ok_or_else(no_rule)?;
+            rule.enabled = on;
+            Ok(done(200, &*rule))
+        })
     }
 
-    /// POST /api/sms/forward/test — Send a test message
+    /// POST /api/sms/forward/test: one made-up SMS to the given destination, no retries.
     pub fn test_forward(&self, body: &[u8]) -> (u16, Value) {
-        #[derive(Deserialize)]
-        struct Req {
-            destination: ForwardDestination,
-        }
-
-        let req: Req = match serde_json::from_slice(body) {
-            Ok(v) => v,
-            Err(e) => return (400, json!({"ok": false, "error": format!("invalid JSON: {e}")})),
+        let TestSend { destination } = match typed(body) {
+            Ok(t) => t,
+            Err(r) => return r,
         };
-
-        let test_sms = DecodedSms {
+        let sample = DecodedSms {
             id: 0,
-            sender: "+1234567890".to_string(),
-            content: "This is a test message from the Luya-Z SMS forwarder.".to_string(),
-            date: "2025-01-01 12:00:00".to_string(),
+            date: "2025-01-01 12:00:00".into(),
+            sender: "+1234567890".into(),
+            content: "This is a test message from the Luya-Z SMS forwarder.".into(),
         };
-
-        let agent = http_agent();
-        match forward_to(&*self.host, &req.destination, &test_sms, &agent) {
-            Ok(()) => (200, json!({"ok": true, "data": {"status": "sent"}})),
-            Err(e) => (502, json!({"ok": false, "error": e})),
+        match forward_to(&*self.host, &destination, &sample, &http_agent()) {
+            Ok(()) => sent(),
+            Err(e) => fail(502, e),
         }
     }
 
-    /// GET /api/sms/forward/log — returns newest-first
+    /// GET /api/sms/forward/log (newest first)
     pub fn log_get(&self) -> (u16, Value) {
-        let fwd_state = self.state.lock().unwrap();
-        let mut log = fwd_state.log.clone();
-        log.reverse();
-        (200, json!({"ok": true, "data": log}))
+        let newest_first: Vec<ForwardLogEntry> = self
+            .state
+            .lock()
+            .unwrap()
+            .log
+            .iter()
+            .rev()
+            .cloned()
+            .collect();
+        done(200, newest_first)
     }
 
     /// POST /api/sms/forward/log/clear
     pub fn log_clear(&self) -> (u16, Value) {
-        let mut fwd_state = self.state.lock().unwrap();
-        fwd_state.log.clear();
-        self.save_state(&fwd_state);
-        (200, json!({"ok": true}))
+        let mut st = self.state.lock().unwrap();
+        st.log.clear();
+        self.save_state(&st);
+        (200, json!({ "ok": true }))
     }
 
-    /// POST /api/sms/forward/retry — Retry a failed forward log entry
+    /// POST /api/sms/forward/retry: one manual attempt for a failed log line (`index` counts
+    /// from the newest). Success also marks the rule as done for a held SMS.
     pub fn retry_forward(&self, body: &[u8]) -> (u16, Value) {
-        #[derive(Deserialize)]
-        struct Req {
-            index: usize,
-        }
-
-        let req: Req = match serde_json::from_slice(body) {
-            Ok(v) => v,
-            Err(e) => return (400, json!({"ok": false, "error": format!("invalid JSON: {e}")})),
+        let LogPick { index } = match typed(body) {
+            Ok(p) => p,
+            Err(r) => return r,
         };
-
-        // Convert reversed index (newest-first) to internal chronological index
-        let (entry_clone, rule_id, internal_index) = {
-            let fwd_state = self.state.lock().unwrap();
-            let internal_index = match fwd_state.log.len().checked_sub(1 + req.index) {
-                Some(i) => i,
-                None => return (404, json!({"ok": false, "error": "log entry not found"})),
-            };
-            let entry = match fwd_state.log.get(internal_index) {
-                Some(e) => e,
-                None => return (404, json!({"ok": false, "error": "log entry not found"})),
-            };
-            if entry.success {
-                return (400, json!({"ok": false, "error": "entry already succeeded"}));
-            }
-            (entry.clone(), entry.rule_id, internal_index)
-        };
-
-        // Look up rule by id from current config
-        let dest = {
-            let config = self.config.lock().unwrap();
-            match config.rules.iter().find(|r| r.id == rule_id) {
-                Some(rule) => rule.destination.clone(),
-                None => return (404, json!({"ok": false, "error": "rule no longer exists"})),
+        let (slot, line) = {
+            let st = self.state.lock().unwrap();
+            let found = st
+                .log
+                .len()
+                .checked_sub(index + 1)
+                .and_then(|slot| st.log.get(slot).map(|l| (slot, l.clone())));
+            match found {
+                None => return fail(404, "log entry not found"),
+                Some((_, l)) if l.success => return fail(400, "entry already succeeded"),
+                Some(hit) => hit,
             }
         };
-
-        // Reconstruct the SMS from stored log data
-        let sms = DecodedSms {
-            id: entry_clone.sms_id,
-            sender: entry_clone.sender.clone(),
-            content: entry_clone.content.clone(),
-            date: entry_clone.date.clone(),
+        let rule_id = line.rule_id;
+        let target = self
+            .config
+            .lock()
+            .unwrap()
+            .rules
+            .iter()
+            .find(|r| r.id == rule_id)
+            .map(|r| r.destination.clone());
+        let Some(target) = target else {
+            return fail(404, "rule no longer exists");
         };
+        let again = DecodedSms {
+            id: line.sms_id,
+            sender: line.sender,
+            content: line.content,
+            date: line.date,
+        };
+        let outcome = forward_to(&*self.host, &target, &again, &http_agent());
 
-        // Single attempt — no auto-retry for manual retries
-        let agent = http_agent();
-        let result = forward_to(&*self.host, &dest, &sms, &agent);
-
-        // Update the log entry
-        let mut guard = self.state.lock().unwrap();
-        let fwd_state = &mut *guard;
-        if let Some(entry) = fwd_state.log.get_mut(internal_index) {
-            match &result {
-                Ok(()) => {
-                    entry.success = true;
-                    entry.error = None;
-                    entry.timestamp = now_ts();
-                    // A held SMS must not go to this rule again automatically.
-                    self.delivered.lock().unwrap().insert((entry.sms_id, rule_id));
-                    if let Some(h) = fwd_state.held.as_mut().filter(|h| h.sms_id == entry.sms_id) {
-                        if !h.delivered_rules.contains(&rule_id) {
-                            h.delivered_rules.push(rule_id);
-                        }
+        let mut st = self.state.lock().unwrap();
+        let st = &mut *st;
+        if let Some(l) = st.log.get_mut(slot) {
+            l.timestamp = now_ts();
+            l.error = outcome.as_ref().err().cloned();
+            if outcome.is_ok() {
+                l.success = true;
+                // the held SMS must not be sent to this rule again by the loop
+                self.delivered.lock().unwrap().insert((l.sms_id, rule_id));
+                if let Some(h) = st.held.as_mut() {
+                    if h.sms_id == l.sms_id && !h.delivered_rules.contains(&rule_id) {
+                        h.delivered_rules.push(rule_id);
                     }
                 }
-                Err(e) => {
-                    entry.error = Some(e.clone());
-                    entry.timestamp = now_ts();
-                }
             }
         }
-        self.save_state(fwd_state);
-
-        match result {
-            Ok(()) => (200, json!({"ok": true, "data": {"status": "sent"}})),
-            Err(e) => (502, json!({"ok": false, "error": e})),
+        self.save_state(st);
+        match outcome {
+            Ok(()) => sent(),
+            Err(e) => fail(502, e),
         }
     }
-}
-
-fn default_true() -> bool {
-    true
 }

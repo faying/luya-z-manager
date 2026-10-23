@@ -1,4 +1,4 @@
-//! /tools/processes (进程监控), the old `tools/processes/page.tsx`: the process list, the ones on
+//! /tools/processes (进程监控): the process list, the ones on
 //! the agent's kill list, and the two kill buttons. All data is the agent's `/api/system/top`.
 //!
 //! - Polled every 3 s like the old page, only while a tab's stream is open (`agent::stream` ends
@@ -41,7 +41,7 @@ const REUSE: Duration = Duration::from_secs(2);
 /// `top` returns the 50 busiest.
 const SLOTS: usize = 50;
 
-/// Mirror of the agent's BLOAT_DAEMONS (system.rs), shown in the kill-all confirm.
+/// The kill list the device service uses, repeated here for the kill-all confirm.
 const BLOAT_NAMES: [&str; 10] = [
     "zte_topsw_tr069",
     "zte_topsw_tr069_sub",

@@ -3,7 +3,7 @@
 {% block main %}
 <div class="mb-4 mt-2 pc-head"><h1 class="nd-title">{{ shell.title() }}</h1><button type="button" class="nd-btn nd-btn--ghost pc-refresh" aria-label="{{ l.pick("Refresh", "刷新") }}" data-on:click="@post('/tools/processes/refresh')">{{ shell.icon("ArrowClockwise", 20)|safe }}</button></div>
 <div class="pc-col">
-<p class="nd-body pc-muted">{{ l.pick("Live list of running processes. Refreshes every 3 seconds.", "正在运行的进程，每 3 秒刷新。") }}</p>
+<p class="nd-body pc-muted">{{ l.pick("What is running right now, updated every 3 seconds", "现在在跑的进程，每 3 秒更新") }}</p>
 {{ self.leaf("pc-status")|safe }}
 <section aria-labelledby="pc-bloat-t">
 <div class="pc-bar"><h2 id="pc-bloat-t" class="nd-group-title">{{ l.pick("Can be killed", "可以结束") }}</h2>{{ self.leaf("pc-all")|safe }}</div>

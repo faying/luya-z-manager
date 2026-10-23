@@ -1,5 +1,5 @@
-// USSD and SIM Toolkit endpoints (telephony.rs). The real agent
-// drives all of these with AT commands (fixed sleeps; see the schema file);
+// USSD and SIM Toolkit endpoints (luyaz-core api/device_admin/phone.rs). The core
+// drives all of these with AT commands and fixed waits;
 // the mock keeps short delays so loading states are visible.
 //
 // Persona: China Mobile home SIM roaming in Taiwan. USSD replies are UCS2
@@ -22,7 +22,7 @@ function needJson(ctx: Ctx): Reply | null {
   return ctx.body === undefined ? fail("invalid JSON", 400) : null;
 }
 
-/** Keep digits and `*#+` like the agent (telephony.rs:393, 428). */
+/** Keep digits and `*#+` only, as phone.rs does. */
 function cleanCode(v: unknown): string {
   return typeof v === "string" ? [...v].filter((c) => /[0-9*#+]/.test(c)).join("") : "";
 }
@@ -40,7 +40,7 @@ function ussdReply(text: string, status: 0 | 1 | 2): UssdResponse {
   return { response: text, raw_response: ucs2Hex(text), status, dcs: 72, session_active: status === 1 };
 }
 
-/** The no-+CUSD fallback: AT reply with control chars removed, status -1 (telephony.rs:402-410, 433-441). */
+/** The no-+CUSD fallback: AT reply with control chars removed, status -1 (phone.rs). */
 function ussdFallback(atLine: string, reply: string): UssdResponse {
   const text = `${atLine}${reply}`;
   return { response: text, raw_response: text, status: -1, dcs: 15, session_active: false };
@@ -84,7 +84,7 @@ export const routes: Route[] = [
       const raw = bodyField(ctx.body, "code");
       if (typeof raw !== "string" || raw === "") return fail("missing code", 400);
       const code = cleanCode(raw);
-      // Modem answers ERROR → 500 "USSD failed" (telephony.rs:397-398).
+      // Modem answers ERROR → 500 "USSD failed" (phone.rs).
       if (code === "" || shared.airplane || ctx.has("nosignal")) {
         return { status: 500, error: "USSD failed", delayMs: USSD_DELAY };
       }
@@ -102,7 +102,7 @@ export const routes: Route[] = [
       if (typeof raw !== "string" || raw === "") return fail("missing reply", 400);
       const reply = cleanCode(raw);
       const atLine = `AT+CUSD=1,"${reply}",15`;
-      // respond never checks ERROR (telephony.rs:430-441): no session / radio
+      // respond never checks ERROR (phone.rs ussd_respond): no session / radio
       // off / fakesuccess all come back 200 ok with "ERROR" as the text.
       if (!ussd.active || shared.airplane || ctx.has("nosignal") || ctx.has("fakesuccess")) {
         ussd.active = false;
@@ -126,7 +126,7 @@ export const routes: Route[] = [
     },
   },
   {
-    // Real agent: AT+CUAD (3.3 s) + AT+CUSATD=1 (5.3 s) ≈ 8.6 s, past the
+    // On the device: AT+CUAD (3.3 s) + AT+CUSATD=1 (5.3 s) ≈ 8.6 s, past the
     // client's 8 s GET timeout. The mock answers quickly.
     method: "GET",
     path: "/api/stk/menu",
@@ -136,7 +136,7 @@ export const routes: Route[] = [
     method: "POST",
     path: "/api/stk/select",
     handler: (ctx) => {
-      // STK support is checked before the body is parsed (telephony.rs:525-531);
+      // STK support is checked before the body is parsed (phone.rs stk_select);
       // this SIM supports STK, so body validation follows.
       const bad = needJson(ctx);
       if (bad) return bad;

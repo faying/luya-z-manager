@@ -1,6 +1,5 @@
 //! Deep diagnosis' runner: "why is it slow?" on request (`docs/designs/slow-diagnosis.md` §4.2,
-//! §12.3, §12.5; eng review 10-02 D4/D8/D10/D11/D12). Moved from zte-agent's `deep_diag.rs`
-//! (u60-platform.md Phase 4 step 9b) so the agent and u60d run the same one; the judgements are
+//! §12.3, §12.5; eng review 10-02 D4/D8/D10/D11/D12). The judgements are
 //! u60-api's (`luyaz_api::diagnose`), every device read goes through a [`Host`].
 //!
 //! `start` begins one run (about 10 s, ≤ 5 s per layer, ≤ 20 s in all); `get` reads it. One run
@@ -57,7 +56,7 @@ pub const LOCAL_DNS_MAX: Duration = Duration::from_secs(2);
 /// One domestic name, one foreign one (v2 §2 dns).
 pub const LOCAL_DNS_NAMES: [&str; 2] = ["www.qq.com", "www.google.com"];
 
-/// What a run reads and where it writes, on the agent or in u60d.
+/// What a run reads and where it writes, supplied by the host.
 pub trait Host: Send + Sync + 'static {
     /// the core's state in the old `/state` shape and the home screen (`/v2/screen`), one read each.
     fn radio_inputs(&self) -> (Option<Value>, Option<Value>);

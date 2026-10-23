@@ -1,4 +1,4 @@
-//! /services/tailscale (Tailscale), the old `services/tailscale/page.tsx`: read-only, no device
+//! /services/tailscale (Tailscale): read-only, no device
 //! write on this page.
 //!
 //! Where each value comes from (through `agent.rs` with the tab's own session; u60d first, the
@@ -577,7 +577,7 @@ impl Poll {
             &format!(
                 "{} {}",
                 lab("State", "状态"),
-                help(l, "ts-state", l.pick("State", "状态"), l.pick("Connection state of the Tailscale daemon.", "Tailscale 守护进程的连接状态。"))
+                help(l, "ts-state", l.pick("State", "状态"), l.pick("Whether Tailscale on the device is connected.", "设备上的 Tailscale 连没连上。"))
             ),
             &dash(&d.backend_state),
             false,
@@ -588,7 +588,7 @@ impl Poll {
             &format!(
                 "{} {}",
                 lab("DERP relay", "DERP 中继"),
-                help(l, "ts-derp", l.pick("DERP relay", "DERP 中继"), l.pick("The Tailscale relay region used when a direct peer-to-peer link isn't possible.", "无法建立直连时使用的 Tailscale 中继区域。"))
+                help(l, "ts-derp", l.pick("DERP relay", "DERP 中继"), l.pick("Where Tailscale relays traffic when two devices can't reach each other directly.", "两台设备连不上直连时，Tailscale 经这里中转。"))
             ),
             &dash(&me.and_then(|m| m.relay.clone())),
             true,
@@ -632,8 +632,8 @@ impl Poll {
         rows.push_str(&row(
             &format!(
                 "{} {}",
-                lab("Exit-node available", "可作出口节点"),
-                help(l, "ts-exit", l.pick("Exit-node available", "可作出口节点"), l.pick("Whether other devices can route their internet through this router.", "其他设备能否通过本路由器路由其互联网流量。"))
+                lab("Offers exit node", "提供出口节点"),
+                help(l, "ts-exit", l.pick("Offers exit node", "提供出口节点"), l.pick("Whether your other devices may send their internet traffic out through this device.", "你的其他设备能不能经这台设备上网。"))
             ),
             &match me {
                 Some(m) if m.exit_node_option => esc(l.pick("Yes", "是")),
@@ -645,7 +645,7 @@ impl Poll {
         format!(
             "<section id=\"ts-node\" class=\"ts-sec\" aria-labelledby=\"ts-node-t\"><h2 id=\"ts-node-t\" class=\"nd-group-title\">{}</h2><p class=\"nd-aux ts-sub\">{}</p><div class=\"nd-group{}\">{rows}</div></section>",
             l.pick("This node", "本节点"),
-            l.pick("How the router appears on your Tailscale network.", "路由器在你的 Tailscale 网络中的呈现。"),
+            l.pick("This device as your Tailscale network sees it.", "你的 Tailscale 网络里看到的这台设备。"),
             if stale { " nd-stale" } else { "" },
         )
     }
@@ -761,13 +761,13 @@ impl Poll {
             ),
             None => format!(
                 "<div class=\"nd-row\"><span class=\"nd-row__text\"><span class=\"nd-row__label\">{}</span></span></div>",
-                l.pick("No exit node selected.", "未选择出口节点。")
+                l.pick("Traffic goes out directly, not through an exit node.", "没走出口节点，直接上网。")
             ),
         };
         format!(
             "<div id=\"ts-mesh\" class=\"ts-col\"><section class=\"ts-sec\" aria-labelledby=\"ts-mesh-t\"><h2 id=\"ts-mesh-t\" class=\"nd-group-title\">{}</h2><div class=\"nd-group{st}\">{rows}</div></section><section class=\"ts-sec\" aria-labelledby=\"ts-exit-t\"><h2 id=\"ts-exit-t\" class=\"nd-group-title\">{}</h2><div class=\"nd-group{st}\">{exit}</div></section></div>",
             l.pick("Mesh", "Mesh 网络"),
-            l.pick("Exit node in use", "正在使用出口节点"),
+            l.pick("Going out through exit node", "正经出口节点上网"),
         )
     }
 }
@@ -1018,9 +1018,9 @@ mod tests {
         assert!(pe.contains("↑— ↓2.0 KB") && pe.contains("handshake") && pe.contains(">direct<") && pe.contains("exit node"), "{pe}");
         assert!(pe.contains("Offline") && pe.contains("phone"), "{pe}");
         let m = leaf(&p, "ts-mesh");
-        assert!(m.contains("1 · 1 direct · 0 relay") && m.contains("No exit node selected."), "{m}");
+        assert!(m.contains("1 · 1 direct · 0 relay") && m.contains("Traffic goes out directly, not through an exit node."), "{m}");
         let z = leaf(&poll(Lang::Zh, Some(sample())), "ts-mesh");
-        assert!(z.contains("1 直连") && z.contains("未选择出口节点。"), "{z}");
+        assert!(z.contains("1 直连") && z.contains("没走出口节点，直接上网。"), "{z}");
     }
 
     #[test]

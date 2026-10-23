@@ -1,6 +1,5 @@
 // A stand-in for the agent on one port: /api/* and /__mock/* from the typed mock agent
-// (e2e/mock-agent), anything else 404 (the old Next.js pages it used to serve from web/out are
-// gone, X13). From anywhere:
+// (e2e/mock-agent), anything else 404. From anywhere:
 //   node crates/luyaz-web/e2e/fake-agent.mjs 19090
 import http from "node:http";
 import { spawn } from "node:child_process";

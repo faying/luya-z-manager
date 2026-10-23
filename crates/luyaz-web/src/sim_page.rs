@@ -1,11 +1,11 @@
-//! /router/sim (SIM / PIN), the old `router/sim/page.tsx`: the card's state, its attempts left and
+//! /router/sim (SIM / PIN): the card's state, its attempts left and
 //! the five things that use those attempts up: verify PIN, verify PUK (sets a new PIN), PIN lock
 //! on / off, change PIN, network unlock (NCK). Batch 5c.
 //!
 //! Where each value comes from (the old page read these once and again after a write; neither
 //! poll nor push: the stream re-reads on load, on 「刷新」 and after every write):
 //! - status block (SIM ready / locked by PIN / locked by PUK, the reason, attempts left in the meta
-//!   line, the 「数字停在」 line when a re-read failed), 状态, 调制解调器状态, PIN 锁, IMSI, ICCID,
+//!   line, the 「数字停在」 line when a re-read failed), 状态, 基带状态, PIN 锁, IMSI, ICCID,
 //!   PIN / PUK attempts (each only when the card reports one): `GET /api/sim/info`
 //!   (`sim_states`, `modem_main_state`, `pin_status` "1"/"0", `sim_imsi`, `sim_iccid`,
 //!   `pinnumber`, `puknumber`);
@@ -253,13 +253,13 @@ fn digits(s: &str) -> bool {
     s.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// A PIN field: at least 4 digits (the old words), at most 8.
+/// A PIN field: 4 to 8 digits.
 fn pin_ok(s: &str, what_en: &'static str, what_zh: &'static str, l: Lang) -> Result<(), String> {
     let (en, zh) = (what_en, what_zh);
     if s.len() < 4 {
         return Err(match l {
-            Lang::En => format!("{en} must be at least 4 digits"),
-            Lang::Zh => format!("{zh}至少需要 4 位数字"),
+            Lang::En => format!("{en}: use 4 to 8 digits"),
+            Lang::Zh => format!("{zh}要填 4 到 8 位数字"),
         });
     }
     if !digits(s) {
@@ -295,7 +295,7 @@ pub fn check(kind: Kind, f: &Form, l: Lang) -> Result<Act, String> {
         Kind::VerifyPuk => {
             let p = f.puk.as_str();
             if p.len() < 8 {
-                return Err(l.pick("PUK must be at least 8 digits", "PUK 至少需要 8 位数字").into());
+                return Err(l.pick("PUK: use 8 digits or more", "PUK 要填 8 位或更多数字").into());
             }
             if !digits(p) || p.len() > 20 {
                 return Err(l.pick("PUK can only contain digits", "PUK 只能是数字").into());
@@ -651,12 +651,12 @@ impl Poll {
             (Some(i), _) if i.puk_locked() => (
                 "bad",
                 l.pick("SIM locked by PUK", "SIM 被 PUK 锁定").into(),
-                Some(l.pick("SIM is PUK-locked. Enter PUK to unlock.", "SIM 已被 PUK 锁定。请输入 PUK 解锁。").into()),
+                Some(l.pick("The SIM wants its PUK. Enter it below.", "SIM 要 PUK 才能用，在下面输入。").into()),
             ),
             (Some(i), _) if i.pin_locked() => (
                 "bad",
                 l.pick("SIM locked by PIN", "SIM 被 PIN 锁定").into(),
-                Some(l.pick("SIM is PIN-locked. Enter PIN to unlock.", "SIM 已被 PIN 锁定。请输入 PIN 解锁。").into()),
+                Some(l.pick("The SIM wants its PIN. Enter it below.", "SIM 要 PIN 才能用，在下面输入。").into()),
             ),
             (Some(i), _) => {
                 let raw = i.states.to_lowercase();
@@ -729,7 +729,7 @@ impl Poll {
             None => {
                 for label in [
                     l.pick("Status", "状态"),
-                    l.pick("Modem State", "调制解调器状态"),
+                    l.pick("Modem", "基带状态"),
                     l.pick("PIN Lock", "PIN 锁"),
                     "IMSI",
                     "ICCID",
@@ -739,7 +739,7 @@ impl Poll {
             }
             Some(i) => {
                 out.push_str(&row(l.pick("Status", "状态"), &val(&i.states), true));
-                out.push_str(&row(l.pick("Modem State", "调制解调器状态"), &val(&i.modem), true));
+                out.push_str(&row(l.pick("Modem", "基带状态"), &val(&i.modem), true));
                 out.push_str(&row(
                     l.pick("PIN Lock", "PIN 锁"),
                     &match i.pin_status.as_str() {
@@ -752,10 +752,10 @@ impl Poll {
                 out.push_str(&row("IMSI", &val(&i.imsi), true));
                 out.push_str(&row("ICCID", &val(&i.iccid), true));
                 if !i.pin_left.is_empty() {
-                    out.push_str(&row(l.pick("PIN attempts remaining", "PIN 剩余尝试次数"), &esc(&i.pin_left), true));
+                    out.push_str(&row(l.pick("PIN tries left", "PIN 还能试几次"), &esc(&i.pin_left), true));
                 }
                 if !i.puk_left.is_empty() {
-                    out.push_str(&row(l.pick("PUK attempts remaining", "PUK 剩余尝试次数"), &esc(&i.puk_left), true));
+                    out.push_str(&row(l.pick("PUK tries left", "PUK 还能试几次"), &esc(&i.puk_left), true));
                 }
             }
         }
@@ -765,9 +765,9 @@ impl Poll {
                 (None, Some(_)) => l.pick("Can't read", "读不到").to_owned(),
                 (None, None) => skel.to_owned(),
             };
-            out.push_str(&row(l.pick("Network unlock (NCK) attempts left", "网络解锁（NCK）剩余尝试次数"), &v, true));
+            out.push_str(&row(l.pick("NCK unlock tries left", "NCK 解锁还能试几次"), &v, true));
         } else {
-            out.push_str(&row(l.pick("Network unlock (NCK) attempts left", "网络解锁（NCK）剩余尝试次数"), skel, true));
+            out.push_str(&row(l.pick("NCK unlock tries left", "NCK 解锁还能试几次"), skel, true));
         }
         out.push_str("</div>\n<!--leaf-->\n");
         match (&self.nck_fail, i) {
@@ -926,8 +926,8 @@ fn panels(l: Lang, leaf: &dyn Fn(&str) -> String) -> String {
 <div class=\"sim-field\"><label class=\"sim-label\" for=\"sim-f-nck\">{}</label>\
 <input id=\"sim-f-nck\" type=\"password\" autocomplete=\"off\" autocapitalize=\"off\" spellcheck=\"false\" maxlength=\"64\" class=\"nd-field nd-mono\" data-bind:nck aria-describedby=\"sim-t-nck\" placeholder=\"{}\"></div>",
         l.pick(
-            "This is irreversible. Only proceed if you have a valid unlock code.",
-            "此操作不可逆。仅在你拥有有效解锁码时继续。"
+            "There is no undo. Go on only with an unlock code you know is right.",
+            "做了就退不回来。只有确定解锁码是对的才继续。"
         ),
         l.pick("Unlock code (NCK)", "解锁码 (NCK)"),
         l.pick("Unlock code", "解锁码"),

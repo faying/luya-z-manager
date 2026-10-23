@@ -34,19 +34,37 @@ pub(crate) const SYNC_BARRIER: &[&str] = &[
     "zte_smart_manage",
 ];
 
-/// Daemons that are safe to kill: none of them is in daemon.conf.
+/// Vendor daemons that are safe to kill: none of them is in daemon.conf, so the boot gate does not
+/// wait for them.
 pub(crate) const BLOAT: &[&str] = &[
+    // remote management and phone-home
+    "zte_dua",
+    "zte_mqtt_sdk_st",
+    "zte-topsw-tunnel",
     "zte_topsw_tr069",
     "zte_topsw_tr069_sub",
-    "zte_mqtt_sdk_st",
+    // features this device does not use
     "zte_topsw_diag",
-    "zte_topsw_samba",
-    "zte_topsw_nfc",
     "zte_topsw_get_brand",
     "zte_topsw_jwxk_query",
-    "zte-topsw-tunnel",
-    "zte_dua",
+    "zte_topsw_nfc",
+    "zte_topsw_samba",
 ];
+
+/// `/proc/<pid>/stat`'s one-letter state as the page shows it.
+fn state_word(letter: &str) -> &'static str {
+    const WORDS: [(&str, &str); 5] = [
+        ("D", "disk"),
+        ("R", "running"),
+        ("S", "sleeping"),
+        ("T", "stopped"),
+        ("Z", "zombie"),
+    ];
+    WORDS
+        .iter()
+        .find(|(l, _)| *l == letter)
+        .map_or("other", |(_, w)| w)
+}
 
 fn is_bloat(name: &str) -> bool {
     BLOAT.contains(&name)
@@ -125,14 +143,7 @@ pub(super) fn sample(proc: &Path) -> Value {
         now.insert(pid, ticks);
         let name = cmdline_name(proc, pid).unwrap_or(comm);
         let bloat = is_bloat(&name);
-        let state = match state.as_str() {
-            "R" => "running",
-            "S" => "sleeping",
-            "D" => "disk",
-            "Z" => "zombie",
-            "T" => "stopped",
-            _ => "other",
-        };
+        let state = state_word(&state);
         rows.push((
             cpu,
             json!({"pid": pid, "name": name, "cpu_pct": cpu, "rss_kb": rss_kb, "state": state,
@@ -219,7 +230,7 @@ pub async fn kill_bloat(State(c): State<Compat>, body: Bytes) -> Response {
     } else {
         return reply(
             400,
-            json!({"ok": false, "error": "expected 'all' or 'pids'"}),
+            json!({"ok": false, "error": "say which: all, or a pids list"}),
         );
     };
     let (proc, signal) = (c.path("/proc"), c.admin.kill.clone());

@@ -1,9 +1,9 @@
-//! The touch screen's writes (Phase 4 step 8d), ported from the agent's handlers as they are:
+//! The touch screen's writes, ported from the agent's handlers as they are:
 //! `netinfo.rs` (manual register and its guard, back to automatic, operator search, APN switch),
 //! `scenario.rs` (pin), `chill.rs` (exit). Every device write goes to u60d's own `/control`
 //! ([`super::control`]) as `screen`, a resumed guard as `guard`; the decisions are u60-api's.
 //!
-//! Only with u60d's writes on (step 9; with them off the routes answer 404 like anything not
+//! Only with u60d's writes on (with them off the routes answer 404 like anything not
 //! here). The guard's
 //! marker is u60d's own (`/data/u60d/netinfo.guard`): a restart of u60d must never pick up the
 //! agent's.

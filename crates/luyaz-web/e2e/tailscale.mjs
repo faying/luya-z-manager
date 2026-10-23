@@ -47,13 +47,13 @@ async function own(p) {
   ok(/运行中/.test(await st()) && /共 \d+ 个 · \d+ 在线/.test(await st()), `status: ${await st()}`);
   ok(/\.ts\.net\./.test(await txt(p, "#ts-status .nd-status__meta")), "tailnet name in the status meta");
   const node = await txt(p, "#ts-node");
-  ok(/主机名\s*u60-pro/.test(node) && /IP \(v4\)\s*100\.101\.12\.34/.test(node) && /IP \(v6\)\s*fd7a:/.test(node) && /DERP 中继/.test(node) && /版本\s*1\.88/.test(node) && /子网路由\s*192\.168\.0\.0\/24/.test(node) && /密钥到期/.test(node) && /可作出口节点/.test(node), `node: ${node.slice(0, 200)}`);
+  ok(/主机名\s*u60-pro/.test(node) && /IP \(v4\)\s*100\.101\.12\.34/.test(node) && /IP \(v6\)\s*fd7a:/.test(node) && /DERP 中继/.test(node) && /版本\s*1\.88/.test(node) && /子网路由\s*192\.168\.0\.0\/24/.test(node) && /密钥到期/.test(node) && /提供出口节点/.test(node), `node: ${node.slice(0, 200)}`);
   const peers = p.locator("#ts-peers .ts-peer");
   ok(await peers.count() >= 3, `peer rows: ${await peers.count()}`);
   const first = await txt(p, "#ts-peers .ts-peer >> nth=0");
   ok(/home-nas/.test(first) && /100\.88\.14\.2/.test(first) && /↑.*↓/.test(first) && /在线/.test(first), `first peer: ${first}`);
   ok(/离线/.test(await txt(p, "#ts-peers")), "an offline peer");
-  ok(/节点\s*\d+/.test(await txt(p, "#ts-mesh")) && /未选择出口节点/.test(await txt(p, "#ts-mesh")) && /正在通信/.test(await txt(p, "#ts-mesh")), `mesh: ${await txt(p, "#ts-mesh")}`);
+  ok(/节点\s*\d+/.test(await txt(p, "#ts-mesh")) && /没走出口节点/.test(await txt(p, "#ts-mesh")) && /正在通信/.test(await txt(p, "#ts-mesh")), `mesh: ${await txt(p, "#ts-mesh")}`);
   // help popover
   await p.click("#ts-node .nd-help >> nth=0");
   ok(await p.locator("#h-ts-state").isVisible(), "help popover opens");

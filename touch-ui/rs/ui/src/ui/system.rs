@@ -1,4 +1,4 @@
-//! 系统 (src/ui_parts/system.c): 屏幕 (language, brightness, screen-off, appearance), 电池与负载,
+//! 系统: 屏幕 (language, brightness, screen-off, appearance), 电池与负载,
 //! the charts, 设备, 开关, 插入手机等设备时, 调试 and 切换到原厂界面; and the charts themselves.
 //! The net-speed chart is Home's (2026-09-25); CPU / 内存 / 电池 stay here. 60 points, one per
 //! 5 s (the average of five 1 s readings) = the last 5 minutes.
@@ -236,7 +236,7 @@ impl Ui {
         m.esim_profiles.iter().any(|p| p.going != 0)
     }
 
-    /// Exec a fresh copy of this program on this tab and scroll position (ui_exec.c), which
+    /// Exec a fresh copy of this program on this tab and scroll position, which
     /// takes the new theme or language before its first object. Returns only if that failed.
     fn theme_exec(&mut self, automatic: bool) -> i32 {
         let mut l = self.launch;
@@ -510,7 +510,7 @@ impl Ui {
 
         kit::section(sc, y, tr("电池与负载"));
         y += 20;
-        // 预估: estimate.c's rules (the same as the web page's)
+        // 预估: the core's battery estimate (the same as the web page's)
         let c = kit::card(sc, MARGIN, y, CARD_W, 6 * ROW_H);
         const LOAD: [&str; 6] = [n_("电池"), n_("预估"), n_("充电器"), "CPU", n_("内存"), n_("运行")];
         let v: Vec<Obj> = (0..6).map(|i| kit::row(c, i as i32 * ROW_H, tr(LOAD[i]), i == 0)).collect();
@@ -555,8 +555,9 @@ impl Ui {
         s.vchk.set_style_text_font(f.cj14, 0);
         y += 6 * ROW_H + 6;
         // people sell devices with Luya-Z installed: say plainly that it is free
-        kit::label_w(sc, f.cj12, th.t3, MARGIN + PAD, y, CARD_W - 2 * PAD, true, tr("Luya-Z 免费提供。付钱买了装好的设备，费用和售后归卖家，与 Luya-Z 无关。"));
-        y += 40;
+        let disclosure = kit::label_w(sc, f.cj12, th.t3, MARGIN + PAD, y, CARD_W - 2 * PAD, true, tr("Luya-Z 免费提供。付钱买了装好的设备，费用和售后归卖家，与 Luya-Z 无关。"));
+        disclosure.update_layout();
+        y += disclosure.height() + 12;
 
         kit::section(sc, y, tr("开关"));
         y += 20;
@@ -676,7 +677,7 @@ impl Ui {
         }
     }
 
-    /// The 系统 page's values (refresh.c 「System page」).
+    /// The 系统 page's values.
     pub(super) fn system_paint(&mut self) {
         let m = self.model.clone();
         let d = &m.data;

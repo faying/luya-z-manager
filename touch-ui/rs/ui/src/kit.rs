@@ -1,4 +1,4 @@
-//! The touch UI's components (src/ui_kit.c, include/ui_kit.h; design doc §3), function for
+//! The touch UI's components, function for
 //! function. Every page is built from these and nothing else sets a colour, radius or font on
 //! its own: colours from t(), fonts from uf().
 //!
@@ -35,8 +35,6 @@ pub const HERO_H: i32 = 72;
 pub const R_CARD: i32 = 20;
 pub const R_OPT: i32 = 14;
 pub const R_SHEET: i32 = 22;
-/// false = no animation anywhere (design doc §3)
-pub const ANIM: bool = true;
 /// LV_SYMBOL_OK (✓ in the Montserrat symbol range: the device CJK font has none)
 pub const SYMBOL_OK: &str = "\u{F00C}";
 
@@ -114,11 +112,28 @@ pub fn show(o: Obj, visible: bool) {
     }
 }
 
-/// Pressed = one shade towards the page: darker on light, lighter on dark. A filter rather
-/// than a fixed colour, so it also works on objects whose background refresh recolours.
-unsafe extern "C" fn press_filter_cb(_d: *const sys::lv_color_filter_dsc_t, c: sys::lv_color_t, opa: u8) -> sys::lv_color_t {
+/// Keep a small RGB565 shade step without weakening text contrast. Filled actions have white
+/// text in either theme, so they darken; neutral dark surfaces lighten.
+fn pressed_color(c: sys::lv_color_t, opa: u8, th: &crate::theme::Theme) -> sys::lv_color_t {
     // SAFETY: plain colour arithmetic
-    unsafe { if t().dark { sys::lv_color_lighten(c, opa) } else { sys::lv_color_darken(c, opa) } }
+    unsafe {
+        let fill = [th.fill_blue, th.fill_orange, th.fill_green, th.fill_red]
+            .iter().any(|&rgb| sys::lv_color_eq(c, lv::color(rgb)));
+        let tight = [th.track, th.wash, th.wash_w, th.wash_b]
+            .iter().any(|&rgb| sys::lv_color_eq(c, lv::color(rgb)));
+        if !th.dark || fill {
+            // Status text on the light washes also has limited contrast headroom.
+            sys::lv_color_darken(c, if tight { opa / 2 } else { opa })
+        } else {
+            // Danger text on track has the least headroom in the dark palette.
+            let opa = if sys::lv_color_eq(c, lv::color(th.track)) { opa / 2 } else { opa };
+            sys::lv_color_lighten(c, opa)
+        }
+    }
+}
+
+unsafe extern "C" fn press_filter_cb(_d: *const sys::lv_color_filter_dsc_t, c: sys::lv_color_t, opa: u8) -> sys::lv_color_t {
+    pressed_color(c, opa, t())
 }
 
 static mut PRESS_FILTER: MaybeUninit<sys::lv_color_filter_dsc_t> = MaybeUninit::zeroed();
@@ -133,7 +148,7 @@ pub fn tappable(o: Obj, cb: Option<EventCb>, user: usize) {
     o.add_flag(lv::LV_OBJ_FLAG_CLICKABLE);
     // SAFETY: initialised above
     o.set_style_color_filter_dsc(unsafe { (*f).assume_init_ref() }, lv::LV_STATE_PRESSED);
-    o.set_style_color_filter_opa(40, lv::LV_STATE_PRESSED);
+    o.set_style_color_filter_opa(8, lv::LV_STATE_PRESSED);
     if o.style_bg_opa(MAIN) < lv::OPA_50 {
         o.set_style_bg_color(t().track, lv::LV_STATE_PRESSED);
         o.set_style_bg_opa(lv::OPA_COVER, lv::LV_STATE_PRESSED);
@@ -184,6 +199,55 @@ fn value_fits_beside(v: Obj, key: Obj, right: i32) {
     // dots need a fixed height; callers may switch the value to a 13–15 px CJK font later
     let (h, h2) = (v.style_text_font(0).line_height(), uf().cj15.line_height());
     v.set_height(h.max(h2));
+}
+
+/// Lay out a complete value beside its key when it fits, otherwise below it. Unlike
+/// name/summary rows this never uses dots: addresses and identifiers remain readable.
+/// Returns the row's measured height so following rows can move with the content.
+pub fn pair_reflow(key: Obj, value: Obj, y: i32, right: i32) -> i32 {
+    let left = key.style_x(MAIN);
+    let kw = lv::text_w(&key.text(), key.style_text_font(MAIN));
+    let text = value.text();
+    let vw = lv::text_w(&text, value.style_text_font(MAIN));
+    let inline = !text.contains(&b'\n') && vw <= right - left - kw - 12;
+    key.set_y(y + 11);
+    value.set_style_max_width(right - left, 0);
+    value.set_long_mode(lv::LV_LABEL_LONG_MODE_WRAP);
+    value.set_height(lv::SIZE_CONTENT);
+    if inline {
+        value.set_width(lv::SIZE_CONTENT);
+        value.align(lv::LV_ALIGN_TOP_LEFT, right - vw, y + 10);
+        ROW_H
+    } else {
+        let top = 11 + key.style_text_font(MAIN).line_height() + 6;
+        value.set_width(right - left);
+        value.align(lv::LV_ALIGN_TOP_LEFT, left, y + top);
+        value.update_layout();
+        top + value.height() + 11
+    }
+}
+
+/// Keep the full address and give the device name the remaining width. If that
+/// would leave less than 64 px for the name, put the address on its own line.
+/// Returns the extra height added before the row's secondary lines.
+pub fn name_address_reflow(name: Obj, address: Obj, right: i32) -> i32 {
+    let left = name.style_x(MAIN);
+    let aw = lv::text_w(&address.text(), address.style_text_font(MAIN));
+    let available = right - left - aw - 12;
+    address.set_long_mode(lv::LV_LABEL_LONG_MODE_WRAP);
+    address.set_height(lv::SIZE_CONTENT);
+    if available >= 64 {
+        name.set_width(available);
+        address.set_width(lv::SIZE_CONTENT);
+        address.align(lv::LV_ALIGN_TOP_LEFT, right - aw, 7);
+        0
+    } else {
+        name.set_width(right - left);
+        address.set_width(right - left);
+        address.align(lv::LV_ALIGN_TOP_LEFT, left, 29);
+        address.update_layout();
+        address.height() + 6
+    }
 }
 
 /// A 40 px key/value row at y inside card c; returns the value label (right-aligned, n15).
@@ -728,6 +792,12 @@ pub fn scroll_extent(sc: Obj, content_h: i32) {
 }
 
 // ---------------------------------------------------------------- animation
+/// Process-wide motion preference (DESIGN.md §4). Set before starting the UI.
+pub fn anim_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("UI_ANIM").as_deref() != Some(std::ffi::OsStr::new("0")))
+}
+
 unsafe extern "C" fn anim_tx(o: *mut std::ffi::c_void, v: i32) {
     Obj(o.cast()).set_style_translate_x(v, 0);
 }
@@ -736,7 +806,10 @@ unsafe extern "C" fn anim_ty(o: *mut std::ffi::c_void, v: i32) {
 }
 
 fn anim_run(o: Obj, cb: unsafe extern "C" fn(*mut std::ffi::c_void, i32), from: i32, ms: u32) {
-    if !ANIM {
+    // Replace only this property: never leave an earlier entrance running underneath it.
+    // SAFETY: o is live; the callback is the same one used by lv_anim_start below.
+    unsafe { sys::lv_anim_delete(o.0.cast(), Some(cb)) };
+    if !anim_enabled() {
         // SAFETY: o is live
         unsafe { cb(o.0.cast(), 0) };
         return;
@@ -763,6 +836,20 @@ pub fn anim_push(o: Obj) {
 /// Slide o in from below (180 ms), ease-out.
 pub fn anim_rise(o: Obj, from_dy: i32) {
     anim_run(o, anim_ty, from_dy, 180);
+}
+
+/// Hidden surfaces must not keep ticking or retain an interrupted translation.
+pub fn anim_stop(o: Obj) {
+    if o.is_null() {
+        return;
+    }
+    // SAFETY: o is live; these callbacks belong to our two entrance animations.
+    unsafe {
+        sys::lv_anim_delete(o.0.cast(), Some(anim_tx));
+        sys::lv_anim_delete(o.0.cast(), Some(anim_ty));
+    }
+    o.set_style_translate_x(0, 0);
+    o.set_style_translate_y(0, 0);
 }
 
 // ---------------------------------------------------------------- sheet
@@ -813,6 +900,9 @@ pub fn sheet_show(s: &Sheet, on: bool) {
         s.scrim.move_foreground();
         anim_rise(s.panel, s.panel_h + 62);
         anim_rise(s.cancel, s.panel_h + 62);
+    } else if !on {
+        anim_stop(s.panel);
+        anim_stop(s.cancel);
     }
 }
 
@@ -831,4 +921,50 @@ pub fn sheet_item(s: &Sheet, y: i32, text: &str, col: u32, cb: Option<EventCb>, 
     let l = label(r, uf().cj15, col, 0, 0, text);
     l.center();
     (l, r)
+}
+
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+
+    fn luminance(c: sys::lv_color_t) -> f64 {
+        // Same RGB565 expansion as the framebuffer/PNG path.
+        let (r, g, b) = (c.red >> 3, c.green >> 2, c.blue >> 3);
+        let linear = |v: u8| {
+            let v = f64::from(v) / 255.0;
+            if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * linear(r << 3 | r >> 2)
+            + 0.7152 * linear(g << 2 | g >> 4)
+            + 0.0722 * linear(b << 3 | b >> 2)
+    }
+
+    #[test]
+    fn pressed_feedback_keeps_rgb565_text_contrast() {
+        let mut n = 0;
+        let mut minimum = f64::MAX;
+        for th in [&crate::theme::LIGHT, &crate::theme::DARK] {
+            let check = |fg, bg| {
+                let fg = luminance(lv::color(fg));
+                let bg = luminance(pressed_color(lv::color(bg), 8, th));
+                (fg.max(bg) + 0.05) / (fg.min(bg) + 0.05)
+            };
+            for fg in [th.t1, th.t2, th.t3, th.ok_t, th.warn_t, th.bad_t, th.acc_t] {
+                for bg in [th.card, th.bg, th.track, th.glass, th.wash, th.wash_w, th.wash_b, th.acc_s] {
+                    let ratio = check(fg, bg);
+                    assert!(ratio >= 4.5, "dark={} fg={fg:06x} bg={bg:06x}: {ratio}", th.dark);
+                    minimum = minimum.min(ratio);
+                    n += 1;
+                }
+            }
+            for bg in [th.fill_blue, th.fill_green, th.fill_red, th.fill_orange] {
+                let ratio = check(0xffffff, bg);
+                assert!(ratio >= 4.5, "dark={} fill={bg:06x}: {ratio}", th.dark);
+                minimum = minimum.min(ratio);
+                n += 1;
+            }
+        }
+        assert_eq!(n, 120);
+        println!("pressed RGB565 contrast: {n} pairs, minimum {minimum:.3}:1");
+    }
 }

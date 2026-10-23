@@ -629,7 +629,7 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
             _ => Err("zwrt_wms SMS list read failed".into()),
         },
     ));
-    // sim 块 = 旧 `/state` 的 `sim` 对象（含 iccid）。zte-agent 的换卡监视靠它，
+    // sim 块 = 旧 `/state` 的 `sim` 对象（含 iccid）。换卡监视靠它，
     // 不再自己每 10 秒调 ubus（2026-10-03，apn_pick）。
     blocks.push((
         "sim",
@@ -1074,7 +1074,7 @@ fn number(v: &Value, key: &str) -> Option<i64> {
 }
 
 /// 规则表的几种回复：裸数组、`{rule_list:[…]}`、只有一个数组值的对象、`{}`（B31 没有规则时）。
-/// 别的形状认不出，为 `None`（不是「没有规则」）。和旧网页 `firewall/normalize.ts` 的 `ruleList` 一样。
+/// 别的形状认不出，为 `None`（不是「没有规则」）。
 fn rule_list(v: &Value) -> Option<Vec<&Value>> {
     fn rows(a: &[Value]) -> Vec<&Value> {
         a.iter().filter(|r| r.is_object()).collect()

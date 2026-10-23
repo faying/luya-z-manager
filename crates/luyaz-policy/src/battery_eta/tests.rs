@@ -1,6 +1,4 @@
-//! Moved from zte-agent `src/battery_eta.rs` (D7): `fixtures`, `states_over_time`,
-//! `window_keeps_only_180s`, `charge_limit_and_pause`, `unknown_plug_state_keeps_the_last_one`.
-//! Same cases and expectations; `Instant` offsets became seconds.
+//! Battery estimate cases (D7); times are seconds on the monotonic clock.
 
 use super::*;
 use serde_json::Value;

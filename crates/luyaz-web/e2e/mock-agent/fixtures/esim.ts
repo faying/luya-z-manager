@@ -1,22 +1,25 @@
-// eSIM on a removable eUICC — mirrors zte-agent/src/esim.rs (lpac wrapper).
+// eSIM on a removable eUICC — stands in for the core's /api/esim/* (crate luyaz-esim, which drives lpac).
 //
 // Model: `card` is what lpac would read off the eUICC (chip info, profile
 // list, pending notifications). Slow ops (switch / download / delete /
-// notifications process) go through the agent's single-slot job: the POST
+// notifications process) run as luyaz-esim's one job at a time: the POST
 // returns {job_id, status:"running"} at once, the job finishes after a fixed
 // delay and only then is the card changed. Completion is evaluated lazily on
 // every request (no timers). While a job runs, profiles/notifications return
-// the agent's busy shapes and nickname/delete return 409.
+// the busy replies and nickname/delete return 409.
 //
 // Switch cooldown: 429 within 300 s of the last switch *attempt* (success or
-// failure), exactly like esim.rs:380-390. The mock starts with the last
+// failure), as luyaz-esim `switch` does. The mock starts with the last
 // attempt two days ago.
 //
 // Scenarios: "nosignal" (or airplane / mobile data off) makes the
 // network-touching jobs (download, notifications process) end in error.
 // "fakesuccess" makes a switch end as done + rebooting:true ("switched —
 // rebooting to finish") while the card never actually changed — the
-// unverified-reboot path the inventory flags (esim.rs:440-449).
+// unverified-reboot path the inventory flags (luyaz-esim `finish_job`).
+// "esim-busy" makes a switch wait out a busy card like luyaz-esim's catBusy
+// retries: `attempts` +1 every 4 s, `message` "card busy — retrying (try N in
+// 4 s)", until POST /api/esim/cancel (reason "cancelled") or 60 s ("card_busy").
 //
 // Persona: an eSTK.me-style card in the SIM slot; the enabled profile is a
 // Taiwan travel eSIM (roams on Chunghwa); a China home-number profile and a
@@ -37,11 +40,13 @@ import type {
 } from "../../../src/lib/api/schemas/esim.ts";
 
 const DEVICE_UTC_OFFSET_S = 8 * 3600; // device clock = Taiwan wall time labelled UTC
-const SWITCH_COOLDOWN_SECS = 300; // esim.rs:58
-const MAX_CODE_LEN = 512; // esim.rs:49
-const MAX_NICKNAME_LEN = 64; // esim.rs:50, bytes
+const SWITCH_COOLDOWN_SECS = 300; // luyaz-esim switch cooldown
+const MAX_CODE_LEN = 512; // luyaz-esim MAX_CODE_LEN
+const MAX_NICKNAME_LEN = 64; // luyaz-esim MAX_NICKNAME_LEN, bytes
 
 /** How long each job kind takes in the mock (real: switch ≤ ~35 s, download up to minutes). */
+const BUSY_EVERY_MS = 4000;
+const BUSY_FOR_MS = 60000;
 const JOB_MS: Record<EsimJob["kind"], number> = {
   "": 0,
   switch: 9000,
@@ -127,10 +132,14 @@ const job: EsimJob = {
   finished_unix: 0,
   rebooting: false,
 } satisfies EsimJob;
+/** luyaz-esim fields the old schema lacks: `reason`, `attempts`, `deadline_s`. */
+const jobX = job as EsimJob & { reason?: string; attempts?: number; deadline_s?: number };
 
 interface Pending {
   dueMs: number;
-  run: () => { ok: boolean; message: string; rebooting?: boolean };
+  run: () => { ok: boolean; message: string; rebooting?: boolean; reason?: string };
+  /** esim-busy: when the busy retries started (ms). */
+  busySince?: number;
 }
 let pending: Pending | null = null;
 
@@ -139,8 +148,13 @@ let lastSwitchAttempt = Math.floor(Date.now() / 1000) - 2 * 86400;
 
 const devSecs = (ms: number) => Math.floor(ms / 1000) + DEVICE_UTC_OFFSET_S;
 
-/** Finish the running job if its time has come (esim.rs finish_job). */
+/** Finish the running job if its time has come (luyaz-esim `finish_job`). */
 function tick(ctx: Ctx): void {
+  if (pending?.busySince !== undefined && ctx.now < pending.dueMs) {
+    const tries = 1 + Math.floor((ctx.now - pending.busySince) / BUSY_EVERY_MS);
+    jobX.attempts = tries;
+    job.message = `card busy — retrying (try ${tries + 1} in ${BUSY_EVERY_MS / 1000} s)`;
+  }
   if (!pending || ctx.now < pending.dueMs) return;
   const p = pending;
   pending = null;
@@ -148,6 +162,7 @@ function tick(ctx: Ctx): void {
   job.status = r.ok ? "done" : "error";
   job.message = r.message;
   job.rebooting = r.rebooting ?? false;
+  jobX.reason = r.reason ?? "";
   job.finished_unix = devSecs(p.dueMs);
 }
 
@@ -163,6 +178,9 @@ function startJob(ctx: Ctx, kind: EsimJob["kind"], iccid: string, run: Pending["
   job.started_unix = devSecs(ctx.now);
   job.finished_unix = 0;
   job.rebooting = false;
+  jobX.reason = "";
+  jobX.attempts = 0;
+  jobX.deadline_s = kind === "switch" ? 505 : 0;
   pending = { dueMs: ctx.now + JOB_MS[kind], run };
   return job.id;
 }
@@ -182,7 +200,7 @@ function isObj(b: unknown): b is Record<string, unknown> {
   return !!b && typeof b === "object" && !Array.isArray(b);
 }
 
-/** esim.rs:330 body_str — trimmed, non-empty string. */
+/** luyaz-esim `body_str` — trimmed, non-empty string. */
 function bodyStr(b: unknown, k: string): string | null {
   const v = bodyField(b, k);
   if (typeof v !== "string") return null;
@@ -190,7 +208,7 @@ function bodyStr(b: unknown, k: string): string | null {
   return t ? t : null;
 }
 
-/** esim.rs:326 valid_iccid — 18..=20 ASCII digits. */
+/** luyaz-esim `valid_iccid` — 18..=20 ASCII digits. */
 const validIccid = (s: string) => /^\d{18,20}$/.test(s);
 
 // eslint-disable-next-line no-control-regex
@@ -207,13 +225,13 @@ function pushNotification(op: string, iccid: string): void {
 
 // ── Read handlers ───────────────────────────────────────────────────────────
 
-/** GET /api/esim/status — esim.rs:265 (lpac chip info). */
+/** GET /api/esim/status — luyaz-esim `status` (lpac chip info). */
 function status(ctx: Ctx): Reply {
   tick(ctx);
   return { data: clone(chip), delayMs: 600 };
 }
 
-/** GET /api/esim/profiles — esim.rs:287 (lpac profile list). */
+/** GET /api/esim/profiles — luyaz-esim `profiles` (lpac profile list). */
 function profilesGet(ctx: Ctx): Reply {
   tick(ctx);
   if (running()) {
@@ -224,7 +242,7 @@ function profilesGet(ctx: Ctx): Reply {
   return { data, delayMs: 500 };
 }
 
-/** GET /api/esim/notifications — esim.rs:303 (lpac notification list). */
+/** GET /api/esim/notifications — luyaz-esim `notifications` (lpac notification list). */
 function notificationsGet(ctx: Ctx): Reply {
   tick(ctx);
   if (running()) {
@@ -235,7 +253,7 @@ function notificationsGet(ctx: Ctx): Reply {
   return { data, delayMs: 400 };
 }
 
-/** GET /api/esim/job — esim.rs:317 (in-memory). */
+/** GET /api/esim/job — luyaz-esim `job` (held in memory). */
 function jobGet(ctx: Ctx): Reply {
   tick(ctx);
   return ok(clone(job));
@@ -243,7 +261,7 @@ function jobGet(ctx: Ctx): Reply {
 
 // ── Write handlers ──────────────────────────────────────────────────────────
 
-/** POST /api/esim/nickname — esim.rs:336. Synchronous; `{ok:true}` with no data. */
+/** POST /api/esim/nickname — luyaz-esim `nickname`. Synchronous; `{ok:true}` with no data. */
 function nickname(ctx: Ctx): Reply {
   tick(ctx);
   if (running()) return fail(BUSY, 409);
@@ -259,7 +277,7 @@ function nickname(ctx: Ctx): Reply {
   return { delayMs: 400 };
 }
 
-/** POST /api/esim/switch — esim.rs:371. */
+/** POST /api/esim/switch — luyaz-esim `switch`. */
 function switchProfile(ctx: Ctx): Reply {
   tick(ctx);
   if (!isObj(ctx.body)) return fail("invalid JSON", 400);
@@ -271,13 +289,27 @@ function switchProfile(ctx: Ctx): Reply {
     return fail(`card needs a cooldown after the last switch attempt — wait ${wait}s and retry`, 429);
   }
   const fake = ctx.has("fakesuccess");
+  if (ctx.has("esim-busy")) {
+    const id = startJob(ctx, "switch", iccid, () => ({
+      ok: false,
+      message: `card is busy (catBusy) — still busy after ${jobX.attempts} tries`,
+      reason: "card_busy",
+    }));
+    if (id === null) return fail(BUSY, 409);
+    jobX.attempts = 1;
+    job.message = `card busy — retrying (try 2 in ${BUSY_EVERY_MS / 1000} s)`;
+    pending!.busySince = ctx.now;
+    pending!.dueMs = ctx.now + BUSY_FOR_MS;
+    lastSwitchAttempt = now;
+    return started(id);
+  }
   const id = startJob(ctx, "switch", iccid, () => {
     const target = profiles.find((p) => p.iccid === iccid);
     if (!target) return { ok: false, message: "lpac: es10c_enable_profile: iccidOrAidNotFound (code -1)" };
     if (target.profileState === "enabled") {
       return { ok: false, message: "lpac: es10c_enable_profile: profileNotInDisabledState (code -1)" };
     }
-    // Fast path didn't converge → agent reports done and reboots. Under
+    // Fast path didn't converge → the core reports done and reboots. Under
     // fakesuccess the card is left as it was.
     if (fake) return { ok: true, message: "switched — rebooting to finish", rebooting: true };
     const old = profiles.find((p) => p.profileState === "enabled");
@@ -294,9 +326,25 @@ function switchProfile(ctx: Ctx): Reply {
   return started(id);
 }
 
+/** POST /api/esim/cancel — luyaz-esim `cancel`: stops a switch's busy-card retries only. */
+function cancel(ctx: Ctx): Reply {
+  tick(ctx);
+  if (!pending || job.kind !== "switch") return fail("no switch to stop", 409);
+  if (pending.busySince === undefined) return fail("the switch is past the card step", 409);
+  const tries = jobX.attempts ?? 0;
+  pending.dueMs = ctx.now + 500; // the core sees the cancel within its 1 s sleep step
+  pending.busySince = undefined;
+  pending.run = () => ({
+    ok: false,
+    message: `card is busy (catBusy) — retries stopped after ${tries} tries`,
+    reason: "cancelled",
+  });
+  return ok({});
+}
+
 let downloads = 0;
 
-/** POST /api/esim/download — esim.rs:458. Downloads (never enables), then processes notifications. */
+/** POST /api/esim/download — luyaz-esim `download`. Downloads (never enables), then processes notifications. */
 function download(ctx: Ctx): Reply {
   tick(ctx);
   if (!isObj(ctx.body)) return fail("invalid JSON", 400);
@@ -337,7 +385,7 @@ function download(ctx: Ctx): Reply {
   return started(id);
 }
 
-/** POST /api/esim/delete — esim.rs:502. Checks the card first; refuses the enabled profile. */
+/** POST /api/esim/delete — luyaz-esim `delete`. Checks the card first; refuses the enabled profile. */
 function deleteProfile(ctx: Ctx): Reply {
   tick(ctx);
   if (!isObj(ctx.body)) return fail("invalid JSON", 400);
@@ -346,7 +394,7 @@ function deleteProfile(ctx: Ctx): Reply {
   if (running()) return fail(BUSY, 409);
   const p = profiles.find((x) => x.iccid === iccid);
   if (!p) return fail("profile not found", 404);
-  if (p.profileState === "enabled") return fail("cannot delete the active profile — switch away first", 400);
+  if (p.profileState === "enabled") return fail("this profile is in use: switch to another one, then delete it", 400);
   const online = netUp(ctx);
   const id = startJob(ctx, "delete", iccid, () => {
     const i = profiles.findIndex((x) => x.iccid === iccid);
@@ -362,7 +410,7 @@ function deleteProfile(ctx: Ctx): Reply {
   return started(id);
 }
 
-/** POST /api/esim/notifications/process — esim.rs:552. Body ignored. */
+/** POST /api/esim/notifications/process — luyaz-esim `notifications_process`. Body ignored. */
 function notificationsProcess(ctx: Ctx): Reply {
   tick(ctx);
   const online = netUp(ctx);
@@ -386,6 +434,7 @@ export const routes: Route[] = [
   { method: "GET", path: "/api/esim/notifications", handler: notificationsGet },
   { method: "GET", path: "/api/esim/job", handler: jobGet },
   { method: "POST", path: "/api/esim/switch", handler: switchProfile },
+  { method: "POST", path: "/api/esim/cancel", handler: cancel },
   { method: "POST", path: "/api/esim/download", handler: download },
   { method: "POST", path: "/api/esim/nickname", handler: nickname },
   { method: "POST", path: "/api/esim/delete", handler: deleteProfile },

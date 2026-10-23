@@ -1,7 +1,7 @@
-//! The touch UI's view model (manager docs/designs/u60-touch-rewrite.md §3–4): what the C UI's
-//! data getters return, as one value. `structs.rs` holds the C structs (generated from include/ until
-//! Phase 10 X5 deleted the C UI; maintained by hand since); [`Model`] is tests/render/vm_model.c's object, key for key. The render
-//! test writes one per shot (--dump-model); the Rust UI draws from it.
+//! The touch UI's view model (manager docs/designs/u60-touch-rewrite.md §3–4): everything the
+//! data side reports, as one value. `structs.rs` holds the C-layout structs, maintained by hand;
+//! [`Model`] is the whole object. The render test writes one per shot (--dump-model); the UI
+//! draws from it.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 mod structs;
@@ -29,7 +29,7 @@ pub struct Model {
     pub screen_exec_age: i64,
     pub screen_stuck: i32,
     pub screen_op: Option<String>,
-    /// journal.list as the 改动记录 fetch gets it (op.c op_log_fetch)
+    /// journal.list as the 改动记录 fetch gets it
     pub journal: Option<String>,
 
     pub chill_core: Option<String>,

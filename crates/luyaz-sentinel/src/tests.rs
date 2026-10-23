@@ -1,8 +1,7 @@
 //! Fake-device tests (D10). Sections:
 //!  1. the screen decision's unit tests;
 //!  2. the screen against a fake world: C10, D14, hold, the empty-screen check, log wording;
-//!  3. the worker against a fake device: the u60-guard cases (`scripts/test/u60-guard/run.sh`) for
-//!     G1/G2/G3/G4/G7, plus dropbear and the core verdict;
+//!  3. the worker against a fake device: G1/G2/G3/G4/G7, plus dropbear and the core verdict;
 //!  4. the Wi-Fi restore (D3);
 //!  5. shadow mode changes nothing.
 
@@ -218,11 +217,11 @@ fn corner_box_and_comm_prefix() {
     assert!(in_corner_box(319, 479) && in_corner_box(256, 416));
     assert!(!in_corner_box(255, 479) && !in_corner_box(319, 415));
     assert!(!is_ui_comm("zte_topsw_devui") && !is_ui_comm("luyaz-sentinel"));
-    // luyaz-ui and its side-by-side build; the old name never
+    // luyaz-ui and its side-by-side build; nothing else
     assert!(
         is_ui_comm("luyaz-ui") && is_ui_comm("luyaz-ui.test") && is_ui_comm("luyaz-ui.te")
     );
-    assert!(!is_ui_comm("u60pro-devui") && !is_ui_comm("u60pro-devui.te"));
+    assert!(!is_ui_comm("otherui") && !is_ui_comm("otherui.te"));
     assert!(
         !is_ui_comm("luyaz-core") && !is_ui_comm("luyaz-web") && !is_ui_comm("luyaz-u")
     );

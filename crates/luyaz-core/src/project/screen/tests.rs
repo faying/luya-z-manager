@@ -1142,7 +1142,7 @@ fn check_en(what: &str, en: &str) {
 }
 
 /// (zh, en, C buffer of the zh field on the screen) for every text field the
-/// touch screen reads (touch-ui src/net_view.c, include/net_view.h, ui_logic.h).
+/// touch screen reads (luyaz-ui: touch-ui/rs/ui/src/net_view.rs, logic.rs).
 fn story_pairs(s: &Story) -> Vec<(&'static str, &str, &str, usize)> {
     vec![
         ("headline", s.headline.as_str(), s.headline_en.as_str(), 32),
@@ -1613,12 +1613,12 @@ fn english_on_the_corpus() {
     assert!(states.len() >= 10, "{states:?}");
 }
 
-// ---- size: the old touch screen must still read the bigger /v2/screen ------
+// ---- size: luyaz-ui must still read the bigger /v2/screen -----------------
 
-/// touch-ui's buffers: src/screen_feed.c fetch() `resp[16384]` (whole HTTP reply,
-/// `truncated` → the fetch fails) and `net[8192]`; src/net_view.c
-/// net_view_parse() `st[1024]` (story), `arr[4096]` (carriers), `item[768]`
-/// (one carrier). json_get() copies at most cap-1 bytes and still says found,
+/// luyaz-ui's read caps: data/screen_feed.rs takes at most 16384 bytes of HTTP reply
+/// (cut short → the fetch fails) and 8192 of `net`; net_view.rs parse() reads 1024
+/// of the story, 4096 of the carriers and 768 per carrier. json::get() keeps at
+/// most cap-1 bytes and still says found,
 /// so a value must be < cap or its tail fields silently go missing.
 const RESP_BUF: usize = 16384;
 const HTTP_HEADROOM: usize = 512;

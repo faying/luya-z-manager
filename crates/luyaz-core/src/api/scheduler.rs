@@ -47,11 +47,16 @@ pub async fn list(State(c): State<Compat>) -> Response {
     edit(&c, |jobs| (200, json!({"ok": true, "data": jobs}), false))
 }
 
+/// Body of a create: everything the caller chooses; bookkeeping starts empty.
 #[derive(Deserialize)]
 struct Create {
+    /// label for the list
     name: String,
+    /// once / recurring
     schedule: Schedule,
+    /// the API call to make
     action: Action,
+    /// optional undo call
     restore: Option<Restore>,
 }
 
@@ -65,20 +70,28 @@ pub async fn create(State(c): State<Compat>, body: Bytes) -> Response {
         return reply(400, json!({"ok": false, "error": e}));
     }
     edit(&c, |jobs| {
+        let next_id = 1 + jobs.iter().map(|j| j.id).max().unwrap_or(0);
+        let Create {
+            name,
+            schedule,
+            action,
+            restore,
+        } = req;
         let job = Job {
-            id: jobs.iter().map(|j| j.id).max().unwrap_or(0) + 1,
-            name: req.name,
-            enabled: true,
-            schedule: req.schedule,
-            action: req.action,
-            restore: req.restore,
-            last_run: None,
-            last_status: None,
-            last_error: None,
-            last_restore: None,
-            last_restore_status: None,
-            last_restore_error: None,
+            id: next_id,
             created_at: now_ts(),
+            enabled: true,
+            name,
+            action,
+            schedule,
+            restore,
+            // nothing has fired yet
+            last_run: None,
+            last_restore: None,
+            last_status: None,
+            last_restore_status: None,
+            last_error: None,
+            last_restore_error: None,
         };
         let body = json!({"ok": true, "data": job});
         jobs.push(job);
@@ -86,13 +99,20 @@ pub async fn create(State(c): State<Compat>, body: Bytes) -> Response {
     })
 }
 
+/// Body of an edit: the job to change and its new caller-chosen fields (bookkeeping is kept).
 #[derive(Deserialize)]
 struct Update {
+    /// which job
     id: u32,
-    name: String,
+    /// switched on or off
     enabled: bool,
+    /// new label
+    name: String,
+    /// new timing
     schedule: Schedule,
+    /// new call
     action: Action,
+    /// new undo call, or none
     restore: Option<Restore>,
 }
 
@@ -106,14 +126,19 @@ pub async fn update(State(c): State<Compat>, body: Bytes) -> Response {
         return reply(400, json!({"ok": false, "error": e}));
     }
     edit(&c, |jobs| {
-        let Some(job) = jobs.iter_mut().find(|j| j.id == req.id) else {
+        let Update {
+            id,
+            enabled,
+            name,
+            schedule,
+            action,
+            restore,
+        } = req;
+        let Some(job) = jobs.iter_mut().find(|j| j.id == id) else {
             return not_found();
         };
-        job.name = req.name;
-        job.enabled = req.enabled;
-        job.schedule = req.schedule;
-        job.action = req.action;
-        job.restore = req.restore;
+        (job.enabled, job.name) = (enabled, name);
+        (job.schedule, job.action, job.restore) = (schedule, action, restore);
         (200, json!({"ok": true, "data": job.clone()}), true)
     })
 }

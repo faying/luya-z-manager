@@ -1,4 +1,4 @@
-//! /clients (已连设备), the old `clients/page.tsx`: status first (count · live / "list stopped at
+//! /clients (已连设备): status first (count · live / "list stopped at
 //! hh:mm" · retry), then the lease list, expired leases behind a toggle. Read-only.
 //!
 //! Both reads are the agent's (`/api/network/clients` = luci-rpc host hints + DHCP leases + iw

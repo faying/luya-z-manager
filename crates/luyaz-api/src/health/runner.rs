@@ -1,4 +1,4 @@
-//! Running the doctor (moved from zte-agent `health.rs`, Phase 4 step 9d): whoever owns the
+//! Running the doctor : whoever owns the
 //! `health` part keeps a [`Runner`] — the agent until it hands the part over, then u60d.
 //!
 //! The doctor is a script that starts its own children (ubus, wget, …): on a timeout the whole
@@ -9,12 +9,16 @@ use super::{Check, Snapshot, has_tsv2_marker, parse, parse_tsv2};
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-/// Where the guard installed it; the core maps it to /data/luyaz/scripts once the file is there
+// ---- the script and its schedule ----
+
+/// Where the install puts it; the core maps it to /data/luyaz/scripts once the file is there
 /// (Luya-Z rename D1).
 pub const DOCTOR: &str = "/data/luyaz/scripts/doctor.sh";
 /// The background run's period.

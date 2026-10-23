@@ -1,4 +1,4 @@
-//! The screen's writes (step 8d) against a mock `/control` that also plays the modem: what goes to
+//! The screen's writes against a mock `/control` that also plays the modem: what goes to
 //! `/control` (action, source, session), what the screen gets back, and what GET /api/netinfo shows.
 
 use super::*;

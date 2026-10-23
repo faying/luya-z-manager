@@ -1,5 +1,4 @@
-//! CHILL pieces of the agent's replies (moved from zte-agent `public.rs`, `manual_first.rs`,
-//! `home_exit.rs` and `chill.rs`, Phase 4 step 8b): `services.chill` in `/api/public/status`,
+//! CHILL pieces of the API replies: `services.chill` in `/api/public/status`,
 //! the manual-first notice, the home exit's line and GET `/api/services/chill/home`, and the pure
 //! readers they need. The caller gathers the state (the agent from its threads, u60d from its
 //! shadow and the files) and these render it, so both reply alike.
@@ -29,32 +28,31 @@ pub const EXTEND_WINDOW: u64 = 600;
 pub fn env_with(content: &str, vars: &[(&str, &str)]) -> Result<String, String> {
     for (name, value) in vars {
         if value.contains('\'') || value.contains('\n') {
-            return Err(format!("{name} value cannot contain a single quote or newline"));
+            return Err(format!(
+                "{name} value cannot contain a single quote or newline"
+            ));
         }
     }
-    let prefixes: Vec<String> = vars.iter().map(|(n, _)| format!("{n}=")).collect();
-    let mut out = String::with_capacity(content.len() + 64);
-    for line in content.lines() {
-        if prefixes.iter().any(|p| line.starts_with(p.as_str())) {
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    for (name, value) in vars {
-        out.push_str(&format!("{name}='{value}'\n"));
-    }
-    Ok(out)
+    let replaced = |line: &str| {
+        vars.iter().any(|(n, _)| {
+            line.strip_prefix(n)
+                .is_some_and(|rest| rest.starts_with('='))
+        })
+    };
+    let kept = content
+        .lines()
+        .filter(|l| !replaced(l))
+        .map(|l| format!("{l}\n"));
+    let added = vars.iter().map(|(n, v)| format!("{n}='{v}'\n"));
+    Ok(kept.chain(added).collect())
 }
 
 pub fn env_var(content: &str, name: &str) -> String {
-    let prefix = format!("{name}=");
-    for line in content.lines() {
-        if let Some(rest) = line.strip_prefix(&prefix) {
-            return rest.trim().trim_matches('\'').trim_matches('"').to_string();
-        }
-    }
-    String::new()
+    content
+        .lines()
+        .find_map(|l| l.strip_prefix(name)?.strip_prefix('='))
+        .map(|v| v.trim().trim_matches('\'').trim_matches('"').to_string())
+        .unwrap_or_default()
 }
 
 /// `services.chill`. The manual-first notice is one line for the home screen,
@@ -325,7 +323,9 @@ pub fn enc(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.as_bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -336,12 +336,19 @@ pub fn enc(s: &str) -> String {
 /// providers: mihomo also lists every proxy group as a "Compatible" provider.
 pub fn node_providers(all: &Value) -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();
-    let Some(provs) = all.get("providers").and_then(Value::as_object) else { return map };
+    let Some(provs) = all.get("providers").and_then(Value::as_object) else {
+        return map;
+    };
     for (name, p) in provs {
         if p.get("vehicleType").and_then(Value::as_str) == Some("Compatible") {
             continue;
         }
-        for n in p.get("proxies").and_then(Value::as_array).into_iter().flatten() {
+        for n in p
+            .get("proxies")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             if let Some(n) = n.get("name").and_then(Value::as_str) {
                 map.entry(n.to_string()).or_insert_with(|| name.clone());
             }
@@ -354,7 +361,9 @@ pub fn node_providers(all: &Value) -> std::collections::HashMap<String, String> 
 /// against [`PROBE_URL`] (deep diagnosis' proxy layer, D11). Two tries of 2 s, since an idle node
 /// often needs a moment. `call(path, slow)`: one GET to mihomo's API (`slow`: allow ~15 s).
 /// `None` = mihomo didn't answer; the node is the main group itself when nothing is chosen.
-pub fn probe_exit(call: &dyn Fn(&str, bool) -> Got) -> (String, Option<crate::diagnose::NodeProbe>) {
+pub fn probe_exit(
+    call: &dyn Fn(&str, bool) -> Got,
+) -> (String, Option<crate::diagnose::NodeProbe>) {
     use crate::diagnose::NodeProbe;
     let get = |path: &str| match call(path, false) {
         Got::Json(c, v) if c < 400 => Some(v),
@@ -373,10 +382,20 @@ pub fn probe_exit(call: &dyn Fn(&str, bool) -> Got) -> (String, Option<crate::di
     if node == MAIN_GROUP {
         return (node, None);
     }
-    let provider = get("/providers/proxies").and_then(|all| node_providers(&all).get(&node).cloned());
+    let provider =
+        get("/providers/proxies").and_then(|all| node_providers(&all).get(&node).cloned());
     let path = match provider {
-        Some(prov) => format!("/providers/proxies/{}/{}/healthcheck?url={}&timeout=2000", enc(&prov), enc(&node), enc(PROBE_URL)),
-        None => format!("/proxies/{}/delay?url={}&timeout=2000", enc(&node), enc(PROBE_URL)),
+        Some(prov) => format!(
+            "/providers/proxies/{}/{}/healthcheck?url={}&timeout=2000",
+            enc(&prov),
+            enc(&node),
+            enc(PROBE_URL)
+        ),
+        None => format!(
+            "/proxies/{}/delay?url={}&timeout=2000",
+            enc(&node),
+            enc(PROBE_URL)
+        ),
     };
     let mut answered = false;
     for _ in 0..2 {
@@ -497,26 +516,31 @@ const MAX_URL_LEN: usize = 4096;
 
 /// http(s) only, no quotes, spaces or control characters (chill.env quotes the value with `'`).
 pub fn valid_url(u: &str) -> bool {
-    (u.starts_with("http://") || u.starts_with("https://"))
-        && u.len() <= MAX_URL_LEN
-        && !u.contains('\'')
-        && !u.contains('"')
-        && !u.chars().any(|c| c.is_whitespace() || c.is_control())
+    let scheme_ok = ["http://", "https://"].iter().any(|s| u.starts_with(s));
+    let clean = u
+        .chars()
+        .all(|c| c != '\'' && c != '"' && !c.is_whitespace() && !c.is_control());
+    scheme_ok && clean && u.len() <= MAX_URL_LEN
 }
 
 /// PUT `/api/services/chill/providers` `{"name": "sub", "url": …}`: the new URL, or the 400.
 pub fn provider_url_wanted(body: &[u8]) -> Result<String, (u16, Value)> {
-    let parsed: Value =
-        serde_json::from_slice(body).map_err(|_| (400, json!({"ok": false, "error": "invalid JSON"})))?;
+    let parsed: Value = serde_json::from_slice(body)
+        .map_err(|_| (400, json!({"ok": false, "error": "invalid JSON"})))?;
     let name = parsed["name"].as_str().unwrap_or("").trim();
     if name != EDITABLE_PROVIDER {
-        return Err((400, json!({"ok": false, "error": format!("provider '{name}' has no editable URL")})));
+        return Err((
+            400,
+            json!({"ok": false, "error": format!("provider '{name}' has no editable URL")}),
+        ));
     }
-    let url = parsed["url"].as_str().unwrap_or("").trim().to_string();
-    if !valid_url(&url) {
-        return Err((400, json!({"ok": false, "error": "invalid URL (http(s) only, no quotes/spaces)"})));
+    match parsed["url"].as_str().map(str::trim) {
+        Some(u) if valid_url(u) => Ok(u.to_owned()),
+        _ => Err((
+            400,
+            json!({"ok": false, "error": "bad URL: use http:// or https://, without spaces or quotes"}),
+        )),
     }
-    Ok(url)
 }
 
 /// chill.sh, the CHILL supervisor (start, stop, profile).
@@ -548,9 +572,14 @@ pub fn precheck(state: Option<&Value>) -> Result<(), String> {
 
 /// The last `n` non-empty lines of a command's output, joined with " | ".
 pub fn tail(s: &str, n: usize) -> String {
-    let lines: Vec<&str> = s.lines().filter(|l| !l.trim().is_empty()).collect();
-    let start = lines.len().saturating_sub(n);
-    lines[start..].join(" | ")
+    let mut last: Vec<&str> = s
+        .lines()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(n)
+        .collect();
+    last.reverse();
+    last.join(" | ")
 }
 
 /// The profile a PUT /api/services/chill/profile body asks for; else the 400 reply.
@@ -623,7 +652,7 @@ pub fn scenario_fields<'a>(
     );
 }
 
-// ── the status page, regions and bypass IPs (moved from zte-agent `chill.rs`, step 9h) ──────────
+// ── the status page, regions and bypass IPs ──────────────────────── ──────────
 // The scenario engine reads the status page (`/data/region/active`, `/data/exit`) and drives the
 // regions and the bypass list; u60d serves them once it runs the engine. The checks and the
 // rendering are here so the agent (ureq) and u60d (reqwest) do the same around their own calls.
@@ -631,7 +660,13 @@ pub fn scenario_fields<'a>(
 /// The five `type: select` groups defined in template.yaml — the only groups a
 /// region/AI-exit switch is allowed to touch. Whitelisted so a client can't PUT
 /// an arbitrary mihomo group name.
-pub const REGION_GROUPS: [&str; 5] = ["🚀 节点选择", "🤖 AI", "📺 流媒体", "🍎 Apple", "🐟 漏网之鱼"];
+pub const REGION_GROUPS: [&str; 5] = [
+    "🚀 节点选择",
+    "🤖 AI",
+    "📺 流媒体",
+    "🍎 Apple",
+    "🐟 漏网之鱼",
+];
 pub const AI_GROUP: &str = "🤖 AI";
 /// Must match chill.sh's own $BYPASS_PRIO — the `ip rule` priority its
 /// apply_bypass()/flush() manage. Changing this here without changing chill.sh
@@ -657,7 +692,10 @@ pub fn exit_state(mode: &str, main_now: &str) -> &'static str {
 
 /// The region groups from mihomo's `/proxies`: name, current member, size.
 pub fn summarize_groups(proxies: Option<&Value>) -> Vec<Value> {
-    let Some(proxies) = proxies.and_then(|v| v.get("proxies")).and_then(Value::as_object) else {
+    let Some(proxies) = proxies
+        .and_then(|v| v.get("proxies"))
+        .and_then(Value::as_object)
+    else {
         return Vec::new();
     };
     REGION_GROUPS
@@ -699,7 +737,11 @@ pub fn status_data(
     let running = st.get("state").and_then(Value::as_str) == Some("running");
     let mut data = st;
     if running {
-        data["version"] = json!(version.and_then(|v| v.get("version")).and_then(Value::as_str));
+        data["version"] = json!(
+            version
+                .and_then(|v| v.get("version"))
+                .and_then(Value::as_str)
+        );
         data["groups"] = json!(summarize_groups(proxies));
         data["region"] = json!(group_now(proxies, MAIN_GROUP));
         data["ai_exit"] = json!(group_now(proxies, AI_GROUP));
@@ -717,8 +759,8 @@ pub fn status_data(
 
 /// PUT /api/services/chill/regions's body: `(group, member)`, or the reply refusing it.
 pub fn region_wanted(body: &[u8]) -> Result<(String, String), (u16, Value)> {
-    let parsed: Value =
-        serde_json::from_slice(body).map_err(|_| (400, json!({"ok": false, "error": "invalid JSON"})))?;
+    let parsed: Value = serde_json::from_slice(body)
+        .map_err(|_| (400, json!({"ok": false, "error": "invalid JSON"})))?;
     let group = parsed["group"].as_str().unwrap_or("").trim().to_string();
     let member = parsed["member"].as_str().unwrap_or("").trim().to_string();
     if !REGION_GROUPS.contains(&group.as_str()) {
@@ -751,8 +793,8 @@ pub fn valid_ipv4(s: &str) -> bool {
 /// PUT /api/services/chill/bypass's body (`{ips: [...]}`, the full desired list): sorted and
 /// deduplicated, or the reply refusing it.
 pub fn bypass_wanted(body: &[u8]) -> Result<Vec<String>, (u16, Value)> {
-    let parsed: Value =
-        serde_json::from_slice(body).map_err(|_| (400, json!({"ok": false, "error": "invalid JSON"})))?;
+    let parsed: Value = serde_json::from_slice(body)
+        .map_err(|_| (400, json!({"ok": false, "error": "invalid JSON"})))?;
     let Some(arr) = parsed["ips"].as_array() else {
         return Err((400, json!({"ok": false, "error": "missing 'ips' array"})));
     };
@@ -766,7 +808,10 @@ pub fn bypass_wanted(body: &[u8]) -> Result<Vec<String>, (u16, Value)> {
         return Err((400, json!({"ok": false, "error": "too many IPs"})));
     }
     if let Some(bad) = ips.iter().find(|ip| !valid_ipv4(ip)) {
-        return Err((400, json!({"ok": false, "error": format!("invalid IP: {bad}")})));
+        return Err((
+            400,
+            json!({"ok": false, "error": format!("invalid IP: {bad}")}),
+        ));
     }
     ips.sort();
     ips.dedup();
@@ -775,8 +820,13 @@ pub fn bypass_wanted(body: &[u8]) -> Result<Vec<String>, (u16, Value)> {
 
 /// GET /api/services/chill/bypass's data from chill.env and the state file.
 pub fn bypass_data(env: &str, state: Option<&Value>) -> Value {
-    let ips: Vec<String> = env_var(env, "CHILL_BYPASS_IP").split_whitespace().map(str::to_string).collect();
-    let stale = state.and_then(|v| v.get("bypass_stale").cloned()).unwrap_or(Value::Array(vec![]));
+    let ips: Vec<String> = env_var(env, "CHILL_BYPASS_IP")
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    let stale = state
+        .and_then(|v| v.get("bypass_stale").cloned())
+        .unwrap_or(Value::Array(vec![]));
     json!({"ips": ips, "stale": stale})
 }
 
@@ -795,7 +845,8 @@ mod status_tests {
 
     #[test]
     fn status_shows_the_region_and_exit_while_running() {
-        let proxies = json!({"proxies": {"🚀 节点选择": {"now": "DIRECT", "all": ["JP", "DIRECT"]}}});
+        let proxies =
+            json!({"proxies": {"🚀 节点选择": {"now": "DIRECT", "all": ["JP", "DIRECT"]}}});
         let d = status_data(
             Some(json!({"state": "running"})),
             Some(&json!({"version": "1.19"})),
@@ -808,20 +859,49 @@ mod status_tests {
         assert_eq!(d["exit"], "direct_keep_ai");
         assert_eq!(d["version"], "1.19");
         assert_eq!(d["groups"][0]["size"], 2);
-        let stopped = status_data(Some(json!({"state": "stopped"})), None, None, None, json!(1), json!(2));
+        let stopped = status_data(
+            Some(json!({"state": "stopped"})),
+            None,
+            None,
+            None,
+            json!(1),
+            json!(2),
+        );
         assert!(stopped.get("region").is_none());
         assert_eq!(stopped["manual_first"], 1);
-        assert_eq!(status_data(None, None, None, None, json!(1), json!(2)), json!({"state": "unknown"}));
+        assert_eq!(
+            status_data(None, None, None, None, json!(1), json!(2)),
+            json!({"state": "unknown"})
+        );
     }
 
     #[test]
     fn regions_and_bypass_are_checked() {
-        assert_eq!(region_wanted(r#"{"group":"🚀 节点选择","member":" JP "}"#.as_bytes()).unwrap().1, "JP");
-        assert_eq!(region_wanted(br#"{"group":"x","member":"JP"}"#).unwrap_err().0, 400);
+        assert_eq!(
+            region_wanted(r#"{"group":"🚀 节点选择","member":" JP "}"#.as_bytes())
+                .unwrap()
+                .1,
+            "JP"
+        );
+        assert_eq!(
+            region_wanted(br#"{"group":"x","member":"JP"}"#)
+                .unwrap_err()
+                .0,
+            400
+        );
         assert!(in_group(&json!({"all": ["JP", "DIRECT"]}), "DIRECT"));
         assert!(!in_group(&json!({"all": ["JP"]}), "DIRECT"));
-        assert_eq!(bypass_wanted(br#"{"ips":["10.0.0.2"," 10.0.0.1","10.0.0.2"]}"#).unwrap(), vec!["10.0.0.1", "10.0.0.2"]);
-        assert_eq!(bypass_wanted(br#"{"ips":["10.0.0.256"]}"#).unwrap_err().0, 400);
-        assert_eq!(bypass_data("CHILL_BYPASS_IP=\"10.0.0.1 10.0.0.2\"\n", None)["ips"][1], "10.0.0.2");
+        assert_eq!(
+            bypass_wanted(br#"{"ips":["10.0.0.2"," 10.0.0.1","10.0.0.2"]}"#).unwrap(),
+            vec!["10.0.0.1", "10.0.0.2"]
+        );
+        assert_eq!(
+            bypass_wanted(br#"{"ips":["10.0.0.256"]}"#).unwrap_err().0,
+            400
+        );
+        assert_eq!(
+            bypass_data("CHILL_BYPASS_IP=\"10.0.0.1 10.0.0.2\"\n", None)["ips"][1],
+            "10.0.0.2"
+        );
     }
 }

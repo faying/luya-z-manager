@@ -5,7 +5,7 @@
 //! the AT terminal's one command typed by a person ([`raw`]): the same lock, port pick and
 //! reads, with the wait and the end of the answer each needs.
 //!
-//! This is the AT port's one executor (zte-agent is retired): two readers on one tty take each
+//! This is the AT port's one executor: two readers on one tty take each
 //! other's replies, so every command holds a cross-process lock (`LUYAZ_AT_LOCK`, default
 //! `/var/run/luyaz-at.lock`, flock; `luyaz-fallback.sh` takes it too) for the whole command.
 //! Port: `LUYAZ_AT_PORT`, else the first candidate no other process holds open that answers
@@ -163,8 +163,8 @@ pub enum Until {
     Wait,
 }
 
-/// The USSD and SIM-toolkit pages' commands (the agent's `telephony.rs`): built from checked
-/// parts, read for as long as the agent read them.
+/// The USSD and SIM-toolkit pages' commands: built from checked parts, each read for its own
+/// fixed number of seconds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Phone {
     /// `AT+CUSD=1,"<code>",15`: a code, or a reply inside the session; only digits and `*#+`

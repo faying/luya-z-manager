@@ -1,4 +1,4 @@
-//! /settings (设置), the old `settings/page.tsx`: settings of this browser only, so nothing is
+//! /settings (设置): settings of this browser only, so nothing is
 //! read from the device and nothing is written to it (tier 1, no confirm).
 //!
 //! | old control | now |

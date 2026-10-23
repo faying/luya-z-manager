@@ -1,4 +1,4 @@
-//! The charge limit and the battery estimate (u60-platform.md Phase 4 step 9c; the agent's until
+//! The charge limit and the battery estimate (the agent's until
 //! Phase 10). They go together (the estimate reads the limit's settings and override).
 //!
 //! u60d runs them while its writes and the policies (`LUYAZ_POLICIES`) are on:
@@ -25,9 +25,6 @@ use luyaz_policy::charge_policy::Battery;
 
 use super::{Compat, reply};
 use crate::plugin::{charge, charge_policy as policy};
-
-/// How often the policies' switch is looked at.
-const LOOK_SECS: u64 = 2;
 
 /// Needs the policies on (`LUYAZ_POLICIES=0` installs no loop: serving the route then would never
 /// enforce).
@@ -137,27 +134,16 @@ async fn execute(c: &Compat, job: policy::Job) {
     }
 }
 
-/// Follows the policies' switch (every [`LOOK_SECS`]) and runs the policy loop's actions.
+/// Applies the policies' switch once (the writes and `LUYAZ_POLICIES` are fixed for the process's
+/// life, so no timer looks again: R18-P1-04), then runs the policy loop's actions.
 pub async fn run(c: Compat, mut jobs: tokio::sync::mpsc::UnboundedReceiver<policy::Job>) {
-    let file = c.path(shared::FILE);
-    let mut look = tokio::time::interval(c.clock.secs(LOOK_SECS));
-    // only what this loop saw change is applied (one touch layer per u60d; tests run several)
-    let mut was = false;
-    loop {
-        tokio::select! {
-            _ = look.tick() => {
-                let on = owns(&c);
-                if on != was {
-                    was = on;
-                    policy::set_owned(on, &file);
-                    eprintln!("[compat] charge: {}", if on { "u60d enforces the limit" } else { "the policies are off" });
-                }
-            }
-            Some(job) = jobs.recv() => {
-                if charge::owned() {
-                    execute(&c, job).await;
-                }
-            }
+    if owns(&c) {
+        policy::set_owned(true, &c.path(shared::FILE));
+        eprintln!("[compat] charge: u60d enforces the limit");
+    }
+    while let Some(job) = jobs.recv().await {
+        if charge::owned() {
+            execute(&c, job).await;
         }
     }
 }

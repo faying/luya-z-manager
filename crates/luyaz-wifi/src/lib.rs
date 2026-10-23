@@ -29,9 +29,7 @@
 //! The cost is that the radios stay powered. That trade is deliberate and the
 //! power draw is still unmeasured — see SCENARIO_ENGINE_PLAN.md.
 //!
-//! Moved from zte-agent `wifi_radio.rs` and `wifi_scan.rs` (u60-platform.md Phase 4 step 9h) so the
-//! agent and u60d run the same code. The writes go through the caller's [`Host`]: the agent sends
-//! them to the core's `/control` (with its emergency script behind it), u60d to its own `/control`.
+//! The writes go through the caller's [`Host`]; the core sends them to its own `/control`.
 //! The lock is the same in both processes: an in-process flag here (one per process) and the flock on
 //! [`LOCK_FILE`] that the sentinel and the core's `/control` (D3) take too.
 

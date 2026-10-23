@@ -1,13 +1,11 @@
 # Luya-Z install kit (ZTE U60 Pro / MU5250)
 
-**English** · [中文](README.zh-CN.md)
-
-This kit turns a **ZTE U60 Pro (MU5250) straight out of the box** into a Luya-Z device in one run of `./install.sh`.
+*English · [中文](README.zh-CN.md)*. This kit turns a **ZTE U60 Pro (MU5250) straight out of the box** into a Luya-Z device in one run of `./install.sh`.
 
 ## What it adds
 
 | Component | After installing |
-|---|---|
+|:--|:--|
 | **SSH** | Key-only login with `ssh -p 2222 root@192.168.0.1` (password login stays off). Survives reboots |
 | **Advanced admin web** | `http://192.168.0.1:9090/` in a browser: band and cell locking, SMS, APN, firewall, Wi-Fi and more |
 | **ui touch UI** | A new front-panel interface with 5 task tabs (Home · Cellular · Wi-Fi · Exit · System): signal verdict and carriers, Wi-Fi and clients, CHILL/Tailscale exit, eSIM switching |
@@ -25,9 +23,9 @@ Two things happen as part of **SSH**:
 2. The **router admin password**, i.e. what you type at `http://192.168.0.1`.
 3. A **USB-C cable that carries data**. Some cables only charge.
 4. **adb** on the computer:
-   - macOS: `brew install android-platform-tools`
-   - Linux: `sudo apt install adb`
-   - Windows: get Google's [SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools), unzip, put the folder on PATH.
+   - On a Mac: `brew install android-platform-tools`
+   - On Linux: `sudo apt install adb`
+   - On Windows: get Google's [SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools), unzip, put the folder on PATH.
      Also install [Git for Windows](https://git-scm.com/download/win) and type the commands below into **Git Bash**.
 5. For eSIM, a removable eUICC card. An ordinary SIM is fine for installing; the eSIM screens will simply report that there is no card.
 
@@ -36,7 +34,7 @@ Two things happen as part of **SSH**:
 ```sh
 tar xzf luyaz-kit-*.tar.gz
 cd luyaz-kit
-./install.sh
+./install.sh        # starts the guided install
 ```
 
 What the script walks you through:
@@ -47,6 +45,8 @@ What the script walks you through:
 4. Upload, install and checks then run by themselves for 1–2 minutes. The screen flickers once and comes back with the new interface.
 5. Answer yes to **reboot and verify**. After the restart the script checks that SSH, the admin web and the screen came back without help.
 
+### Afterwards
+
 The last thing it prints is a block for `~/.ssh/config`; with that added, `ssh u60` logs you in.
 
 ### Having Claude Code do it
@@ -55,7 +55,7 @@ There is a `CLAUDE.md` in the kit describing the steps, what to do when somethin
 
 ```sh
 cd luyaz-kit
-claude
+claude              # Claude Code reads CLAUDE.md here
 ```
 
 Ask it to "set up my U60". It checks adb, the network and the firmware before asking for passwords. To keep the passwords out of the chat, run `cp u60.env.example u60.env`, fill the file in yourself and tell it "the passwords are in u60.env". It will pause and ask you whenever a person is needed, e.g. to plug in the cable or to agree to a reboot.
@@ -89,25 +89,23 @@ Everything lives under `/data`, which firmware upgrades leave alone. Autostart i
 - The core luyaz-core, the admin web luyaz-web and the sentinel luyaz-sentinel run under procd. A crash gets them restarted and leaves an alert (SMS notification can be turned on in the admin web under 「系统 → 告警」 (System → Alerts)).
 - `admin` installs luyaz-web only. `ui` installs the touch UI, luyaz-core and luyaz-sentinel; in `rc.local`, `/etc/init.d/luyaz-sentinel start` comes right after `/etc/init.d/luyaz-core start`. Once the sentinel is started the script waits up to 60 s for three things: the sentinel runs under procd, its heartbeat says `ours`, and the touch UI that is running is the file just installed.
 - Both `admin` and `ui` record what they installed (kit date, commit) in the device manifest `/data/luyaz/ship/manifest.jsonl`, one line per component (lweb; touch, sentinel, core). `doctor` checks the files against it.
-- Only the current layout is supported. If `/data/u60d`, `/data/u60-uid`, `/data/u60-ship`, `/data/plugins/u60pro-devui` or `/data/plugins/zwrt-datad` still exists, the kit refuses to install; bring the device forward with an older kit first.
+- Only the current layout is supported; on a device with an older layout the kit refuses to install. Bring it forward with an older kit first.
 
 | Path | What it is |
-|---|---|
+|:--|:--|
 | `/data/ssh/` | dropbear, its host key, and `authorized_keys`: **the copy of your public keys that counts** |
 | `/data/local/tmp/start_dropbear.sh` | Runs at boot: copies the public keys to `/etc/dropbear/`, starts dropbear on :2222 |
 | `/data/luyaz/luyaz-core`, `/data/luyaz/core/` | The core (:9460, local only). Every read and change from the touch UI and the admin web goes through it. State in `/data/luyaz/core/`, log `/tmp/luyaz-core.log` |
 | `/data/luyaz/luyaz-web`, `/data/luyaz/operator-logos/` | The advanced admin web (luyaz-web, :9090) |
 | `/data/luyaz/web.env` | **The admin web password**, readable only by root |
 | `/data/luyaz/luyaz-sentinel`, `/data/luyaz/screen/` | The sentinel. It owns the screen and restarts the touch UI after a crash; after two failed starts in a row it puts the stock interface back and raises an alert (hold the bottom-right corner for 3 s to return). It is also the Wi-Fi fallback watchdog and sends alert SMS. Control FIFO `/tmp/luyaz-screen.ctl`, log `/tmp/luyaz-sentinel.log`, heartbeat `/tmp/luyaz-sentinel.hb` |
-| `/data/luyaz/ui/` | The touch UI `luyaz-ui` with its fonts and operator logos, the boot trace `boot-trace.log`, and `vendor-devui.orig-backup` (copy of the stock UI) |
+| `/data/luyaz/ui/` | The touch UI `luyaz-ui` with its fonts and operator logos, the boot trace `boot-trace.log`, and `vendor-*.orig-backup` (copy of the stock UI) |
 | `/data/luyaz/scripts/`, `/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}` | Device scripts (doctor.sh, which hands over to `luyaz-core doctor`; alert-lib.sh …; the ship executor luyaz-ship.sh and core-trial.sh) and the procd services. They start from `/etc/init.d/… start` lines in `rc.local`, not through `enable` |
 | `/data/luyaz/ship/` | `u60 ship` transactions, the manifest `manifest.jsonl`, the boot clean-up `luyaz-recover.sh` |
 | `/data/alerts/`, `/data/crashlog/` | Alert history, crash logs |
 | `/data/esim/` | lpac, the tool that reads and writes the eSIM card |
 | `/data/chill/`, `/etc/init.d/chill` | CHILL: mihomo, rule sets, zashboard, `chill.sh`. The subscription URL goes in `/data/chill/chill.env` (written by you, readable only by root) |
 | `/data/luyaz/kit/rc.local.orig` | The stock `rc.local` as it was before the first install |
-
-Leftovers from older kits (`/data/zte-agent*`, `/data/admin/`, `/data/plugins/zwrt-datad/`, `/data/u60-guard/`, `/data/u60-uid/`) are no longer used and can be deleted. While the directories of the last two layouts are present, this kit will not install.
 
 ## Everyday use
 
@@ -136,25 +134,20 @@ Log in over SSH, then:
 ```sh
 echo vendor > /tmp/luyaz-screen.ctl; sleep 8     # stock interface takes the screen first
 [ -x /data/chill/chill.sh ] && /data/chill/chill.sh stop; rm -f /etc/init.d/chill   # stopping CHILL restores the DNS settings
-for s in luyaz-sentinel luyaz-web luyaz-core u60-uid u60-guard zte-agent zwrt-datad; do [ -x /etc/init.d/$s ] && /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
+for s in luyaz-sentinel luyaz-web luyaz-core; do [ -x /etc/init.d/$s ] && /etc/init.d/$s stop; rm -f /etc/init.d/$s; done
 for f in /data/luyaz/kit/rc.local.orig /data/u60-kit/rc.local.orig; do [ -s $f ] && cp $f /etc/rc.local && break; done
-rm -rf /data/luyaz /data/plugins/u60pro-devui /data/esim /data/chill /data/alerts /data/crashlog /data/power \
-       /data/u60d /data/u60-kit /data/u60-ship /data/u60-guard /data/u60-uid /data/zte-agent /data/zte-agent.env /data/admin \
-       /data/plugins/zwrt-datad /data/local/tmp/start_zte_agent.sh    # from the second line on: what older kits left behind
+rm -rf /data/luyaz /data/esim /data/chill /data/alerts /data/crashlog /data/power \
+       /data/u60d /data/u60-kit /data/u60-ship /data/admin    # from the second line on: old-layout leftovers
 # To remove SSH as well: rm -rf /data/ssh /data/local/tmp/start_dropbear.sh
-reboot
+reboot   # takes effect after the restart
 ```
 
 The stock interface is back after the restart. If you want auto-update again, turn it on in the web admin.
 
 ## Troubleshooting
 
-**Login fails or is locked**: five wrong passwords in a row lock the web admin for a while. The script prints how many tries are left and when the lock ends; stop guessing and check the password.
-
-**No ADB device appears**: try a different cable and a USB port directly on the computer (no hub or dock). On Windows, look in Device Manager for an entry with a yellow exclamation mark: install the Google USB Driver, then right-click → Update driver → Browse my computer → choose "Android ADB Interface". Once `adb devices` lists a line ending in `device`, run `./install.sh` again and it carries on.
-
-**SSH does not connect**: the device side is already done; the message says whether there was no key, the connection was refused, authentication failed, or it timed out. The usual causes are a computer that is not on the U60's Wi-Fi, or a proxy app in TUN/enhanced mode grabbing `192.168.0.1` (add `192.168.0.0/16` as a direct rule; the proxy can stay on). Then try `ssh -p 2222 -i ~/.ssh/id_ed25519 root@192.168.0.1`.
-
-**No data on the screen**: over SSH, `tail -n 50 /tmp/luyaz-core.log` (and `/tmp/luyaz-sentinel.log` if the screen itself misbehaves), or run `./install.sh doctor`. A reboot usually clears it.
-
-**Install stopped halfway**: just run it again; finished parts are skipped or overwritten. If it keeps failing, send the full terminal output to whoever gave you the kit.
+- **Login fails or is locked**: five wrong passwords in a row lock the web admin for a while. The script prints how many tries are left and when the lock ends; stop guessing and check the password.
+- **No ADB device appears**: try a different cable and a USB port directly on the computer (no hub or dock). On Windows, look in Device Manager for an entry with a yellow exclamation mark: install the Google USB Driver, then right-click → Update driver → Browse my computer → choose "Android ADB Interface". Once `adb devices` lists a line ending in `device`, run `./install.sh` again and it carries on.
+- **SSH does not connect**: the device side is already done; the message says whether there was no key, the connection was refused, authentication failed, or it timed out. The usual causes are a computer that is not on the U60's Wi-Fi, or a proxy app in TUN/enhanced mode grabbing `192.168.0.1` (add `192.168.0.0/16` as a direct rule; the proxy can stay on). Then try `ssh -p 2222 -i ~/.ssh/id_ed25519 root@192.168.0.1`.
+- **No data on the screen**: over SSH, `tail -n 50 /tmp/luyaz-core.log` (and `/tmp/luyaz-sentinel.log` if the screen itself misbehaves), or run `./install.sh doctor`. A reboot usually clears it.
+- **Install stopped halfway**: just run it again; finished parts are skipped or overwritten. If it keeps failing, send the full terminal output to whoever gave you the kit.

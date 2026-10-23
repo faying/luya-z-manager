@@ -1,6 +1,5 @@
-//! Moved from zte-agent `src/scheduler.rs` (manager 84f3404): `forbidden_paths`,
-//! `old_jobs_are_switched_off_with_the_reason`, `creating_one_is_refused`, as they were. The
-//! `due_*` and `record_*` tests are new: `tick` had none (it read the clock and ran actions).
+//! Scheduler policy tests: forbidden paths, switching old jobs off, refusing to create one,
+//! and the `due_*` / `record_*` bookkeeping with the clock passed in.
 
 use super::*;
 
@@ -55,14 +54,15 @@ fn job(id: u32, path: &str, enabled: bool) -> Job {
             path: path.into(),
             body: None,
         },
-        restore: None,
-        last_run: None,
-        last_status: None,
-        last_error: None,
-        last_restore: None,
-        last_restore_status: None,
-        last_restore_error: None,
+        // never fired, never restored
         created_at: 0,
+        last_error: None,
+        last_status: None,
+        last_run: None,
+        restore: None,
+        last_restore_error: None,
+        last_restore_status: None,
+        last_restore: None,
     }
 }
 

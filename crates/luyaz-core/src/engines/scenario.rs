@@ -1,4 +1,4 @@
-//! The scenario engine in u60d (u60-platform.md Phase 4 step 9h; the agent's until Phase 10).
+//! The scenario engine in u60d.
 //!
 //! The engine is the agent's own (`crates/luyaz-scenario`); u60d runs it with its writes on,
 //! on a system thread of its own: an apply can block for minutes (the Wi-Fi lock's 150 s, then
@@ -17,15 +17,19 @@
 //! slept is not wedged) makes u60d exit, so procd starts it again: the Wi-Fi lock is a flock and
 //! goes only with the process.
 
-use serde_json::{Value, json};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use luyaz_scenario::{Engine as ScenarioEngine, Io};
+use serde_json::{Value, json};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::Duration;
 
 use crate::api::Compat;
 
-const LOOK_SECS: u64 = 2;
+/// The watchdog's look: the first one starts the engine; after that only a wedge
+/// ([`luyaz_scenario::WEDGED`], 15 min) or an ended thread is looked for (R18-P1-04: was 2 s).
+const LOOK_SECS: u64 = 30;
 
 // ── how the engine reaches the device from u60d ────────────────────────────
 
@@ -38,9 +42,17 @@ fn http(secs: u64) -> ureq::Agent {
 }
 
 /// One `/control` write as source `scenario`, blocking (the engine's thread).
-fn control(url: &str, token: Option<&str>, action: &str, params: &Value, secs: u64) -> luyaz_api::control::Reply {
+fn control(
+    url: &str,
+    token: Option<&str>,
+    action: &str,
+    params: &Value,
+    secs: u64,
+) -> luyaz_api::control::Reply {
     let body = json!({"action": action, "source": "scenario", "params": params});
-    let mut req = http(secs).post(url).header("Content-Type", "application/json");
+    let mut req = http(secs)
+        .post(url)
+        .header("Content-Type", "application/json");
     if let Some(t) = token {
         req = req.header("Authorization", format!("Bearer {t}"));
     }
@@ -50,7 +62,10 @@ fn control(url: &str, token: Option<&str>, action: &str, params: &Value, secs: u
             let v: Value = r.body_mut().read_json().unwrap_or(Value::Null);
             luyaz_api::control::parse(status, &v)
         }
-        Err(e) => luyaz_api::control::Reply::Unreachable { error: e.to_string(), maybe_done: true },
+        Err(e) => luyaz_api::control::Reply::Unreachable {
+            error: e.to_string(),
+            maybe_done: true,
+        },
     }
 }
 
@@ -67,7 +82,9 @@ impl luyaz_wifi::Host for WifiHost {
             Duration::from_secs(5),
         )
         .ok()?;
-        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
     fn write_aps(&self, ap_2g: bool, ap_5g: bool) -> Result<Option<String>, String> {
@@ -81,20 +98,41 @@ impl luyaz_wifi::Host for WifiHost {
         }
         let params = json!({"set": set, "reload": true, "best_effort": !ap_2g && !ap_5g});
         // the lock's wait (150 s) is outside /control's queue; this covers it and the reload
-        match control(&self.control, self.token.as_deref(), "wifi.apply", &params, 240) {
-            luyaz_api::control::Reply::Done { result, .. } => Ok(result["reload_error"].as_str().map(str::to_string)),
+        match control(
+            &self.control,
+            self.token.as_deref(),
+            "wifi.apply",
+            &params,
+            240,
+        ) {
+            luyaz_api::control::Reply::Done { result, .. } => {
+                Ok(result["reload_error"].as_str().map(str::to_string))
+            }
             r => Err(r.into_result().err().unwrap_or_default()),
         }
     }
 
     fn vendor_on(&self) -> Result<(), String> {
-        control(&self.control, self.token.as_deref(), "wifi.set_module", &json!({"enabled": 1}), 240)
-            .into_result()
-            .map(|_| ())
+        control(
+            &self.control,
+            self.token.as_deref(),
+            "wifi.set_module",
+            &json!({"enabled": 1}),
+            240,
+        )
+        .into_result()
+        .map(|_| ())
     }
 
     fn reload(&self) -> Result<Value, String> {
-        control(&self.control, self.token.as_deref(), "wifi.reload", &json!({}), 240).into_result()
+        control(
+            &self.control,
+            self.token.as_deref(),
+            "wifi.reload",
+            &json!({}),
+            240,
+        )
+        .into_result()
     }
 }
 
@@ -149,7 +187,10 @@ impl U60dIo {
                 resp.status().as_u16(),
                 resp.body_mut().read_json().unwrap_or(Value::Null),
             ),
-            Err(e) => (502, json!({"ok": false, "error": format!("luyaz-core: {e}")})),
+            Err(e) => (
+                502,
+                json!({"ok": false, "error": format!("luyaz-core: {e}")}),
+            ),
         }
     }
 }
@@ -229,7 +270,10 @@ impl Io for U60dIo {
         let hub = self.hub.as_ref()?;
         hub.view("charger").filter(|v| !v.stale)?;
         let b = hub.view("battery").filter(|v| !v.stale)?;
-        b.data.get("charger_connect").and_then(Value::as_i64).map(|v| v != 0)
+        b.data
+            .get("charger_connect")
+            .and_then(Value::as_i64)
+            .map(|v| v != 0)
     }
 
     /// u60d's SIM block (its last value when stale: a SIM does not change its country unseen).
@@ -255,7 +299,11 @@ struct Live {
 impl Running {
     /// The engine once it runs.
     pub(crate) fn engine(&self) -> Option<Arc<ScenarioEngine>> {
-        self.now.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|l| l.engine.clone())
+        self.now
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|l| l.engine.clone())
     }
 }
 
@@ -273,7 +321,10 @@ pub fn device_io(base: String) -> MakeIo {
             base: base.clone(),
             token: control_token.clone(),
             hub: c.src.hub.clone(),
-            wifi: WifiHost { control: control_url, token: control_token },
+            wifi: WifiHost {
+                control: control_url,
+                token: control_token,
+            },
             active,
         }) as Arc<dyn Io>
     })
@@ -302,7 +353,10 @@ pub async fn run(c: Compat, make: MakeIo) {
                 let engine = Arc::new(ScenarioEngine::new(io));
                 engine.log("u60d runs the engine");
                 let e2 = engine.clone();
-                let thread = match std::thread::Builder::new().name("scenario".into()).spawn(move || e2.run()) {
+                let thread = match std::thread::Builder::new()
+                    .name("scenario".into())
+                    .spawn(move || e2.run())
+                {
                     Ok(t) => t,
                     Err(e) => {
                         eprintln!("[compat] scenario: could not start the engine thread: {e}");

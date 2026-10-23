@@ -1,4 +1,4 @@
-//! /sms/compose (写短信, hidden: reached from /sms), the old `sms/compose/page.tsx`: recipient,
+//! /sms/compose (写短信, hidden: reached from /sms): recipient,
 //! text, length, send. Send is tier 2 (DESIGN.md §5; controls-inventory §/sms/compose): it goes
 //! out over the mobile network and the carrier may charge per part, so the inline confirm names
 //! the recipient, the length and the number of parts.
@@ -87,7 +87,7 @@ pub fn check(to: &str, body: &str, l: Lang) -> Result<Draft, String> {
     let text = body.trim().to_owned();
     if number.is_empty() {
         return Err(l
-            .pick("Please enter a phone number.", "请输入电话号码。")
+            .pick("Enter a number to send to.", "先填收件号码。")
             .into());
     }
     if !is_number(&number) {
@@ -100,7 +100,7 @@ pub fn check(to: &str, body: &str, l: Lang) -> Result<Draft, String> {
     }
     if text.is_empty() {
         return Err(l
-            .pick("Message cannot be empty.", "短信内容不能为空。")
+            .pick("Write something to send.", "短信还没写内容。")
             .into());
     }
     if units(&text) > MAX_UNITS {
@@ -435,14 +435,14 @@ mod tests {
     #[test]
     fn numbers_and_text_are_checked_with_the_old_words() {
         let l = Lang::Zh;
-        assert_eq!(check("", "x", l).unwrap_err(), "请输入电话号码。");
+        assert_eq!(check("", "x", l).unwrap_err(), "先填收件号码。");
         assert_eq!(
             check("12a", "x", l).unwrap_err(),
             "号码只能是数字，可以用 + 开头，3 到 20 位。"
         );
         assert_eq!(
             check("+886 912-345 (678)", "  ", l).unwrap_err(),
-            "短信内容不能为空。"
+            "短信还没写内容。"
         );
         let d = check("+886 912-345 (678)", "  hi \n", l).unwrap();
         assert_eq!(

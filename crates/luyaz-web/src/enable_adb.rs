@@ -1,4 +1,4 @@
-//! /tools/enable-adb (启用 ADB), the old `tools/enable-adb/page.tsx`: the current USB mode, the
+//! /tools/enable-adb (启用 ADB): the current USB mode, the
 //! security warning, the one action (tier 3, a dialog).
 //!
 //! ```text
@@ -263,12 +263,12 @@ fn confirm(l: Lang) -> write::Confirm {
     write::Confirm {
         tier: write::Tier::Dialog,
         title: l
-            .pick("Enable ADB debug USB mode?", "启用 ADB 调试 USB 模式？")
+            .pick("Turn on ADB over USB?", "打开 USB 的 ADB 调试？")
             .into(),
         what: l
             .pick(
-                "This will expose ADB over USB, allowing full shell access to the device. Only do this if you have physical access and trust your environment. Anyone with physical access to the USB port will have root shell access. Disable when not in use.",
-                "这将通过 USB 暴露 ADB，允许对设备进行完整的 shell 访问。仅在你拥有物理访问权限并信任所处环境时才执行此操作。任何能接触 USB 口的人都会拿到 root shell；不用时请关掉。",
+                "Whoever plugs a cable into the USB port gets a root shell on the device. Turn it on only with the device in your hands and nobody else around, and switch it off when you are done.",
+                "谁把线插到 USB 口上，谁就拿到设备的 root shell。只在设备在你手上、旁边没有别人时打开，用完就关。",
             )
             .into(),
         downtime: Some(
@@ -298,8 +298,8 @@ fn said(o: write::Outcome, l: Lang) -> write::Outcome {
     match o {
         write::Outcome::Applied(_) => write::Outcome::Applied(
             l.pick(
-                "ADB debug mode enabled. Connect via USB and run adb devices.",
-                "ADB 调试模式已启用。通过 USB 连接并运行 adb devices。",
+                "ADB is on. Plug in the USB cable and run adb devices to check.",
+                "ADB 已打开。插上 USB 线，运行 adb devices 看看。",
             )
             .into(),
         ),
@@ -438,7 +438,7 @@ mod tests {
         let o = said(write::Outcome::Applied("x".into()), Lang::En);
         assert_eq!(
             o.text(Lang::En),
-            "ADB debug mode enabled. Connect via USB and run adb devices."
+            "ADB is on. Plug in the USB cable and run adb devices to check."
         );
     }
 }

@@ -25,6 +25,25 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 - kit: carries the lanid-parse component (LAN client identification) and installs it to `/data/luyaz/core/plugins/` as the only component; without it the core runs with identification off. `LANID_CWASM=` uses a ready-made one.
 
+## core 1.34.1 — 2026-10-23
+
+R18-P1-04: fewer idle wakeups in the core (about 2.6 timer wakeups/s less); no behaviour change.
+- scheduler, health: sleep until the next tick / due run instead of a 2 s / 1 s look.
+- charge: the policies' switch is applied once at start (it cannot change while the core runs).
+- scenario watchdog: looks every 30 s instead of 2 s (a wedge is 15 min).
+- SMS forwarding: woken when the `sms`, `signal` or `interfaces` block changes; otherwise every 10 s (bearer, SIM switch hold) instead of 2 s.
+
+## lweb 1.26.0 — 2026-10-23
+
+- lweb: /router/esim shows a switch that is waiting out a busy eUICC (catBusy retries, core P0-3): tries so far, the next try's time and roughly when it gives up (device local time), with a **Stop retrying** button (tier 1: it only ends the waiting, the card keeps its old profile; `POST /api/esim/cancel`). The press answers at once ("Stopping the retries…"); the switch's reply then ends with "retries stopped". Too late (the card already took the profile) or nothing to stop is said as such. Requires: core 1.24.0 (`attempts`, `/api/esim/cancel`).
+
+## core 1.34.0, lweb 1.25.0, mcp 0.5.0 — 2026-10-22
+
+R18-P1-07: two more read-only MCP tools, from what the device already has (no new probe).
+- core: `GET /v2/recovery/actions`, the action table in its own words: per action the confirm rule, completion evidence, rollback capability and when it rolls back (loop execution, agent write, person write), who may approve it (person, the agent's layer and 30-minute limit, the loop's allow-list), plus every other `/control` write as `direct` (no transaction, no rollback), `limitations` (the web confirm tiers are per page, not here), the allow-list itself (empty) and the loop's missing entry conditions. Built from `ops::spec`, `api::execute::ALLOW` and `ops::agent`; static.
+- lweb: agent API `/agent-api/capabilities[?capability=<prefix>]` (the passive firmware capability report cut to a field whitelist, under 16 KB with `truncated`; an undecodable report is `unverified`) and `/agent-api/recovery-actions` (an older core: `not_described`).
+- mcp: tools `get_firmware_capabilities` and `explain_recovery_action`; a good answer (state ok) is reused for 30 s per device (`gateway_cache_age_s`); core down / unverified / not described always ask again. Requires: lweb 1.25.0, core 1.34.0.
+
 ## core 1.33.7 — 2026-10-22
 
 - doctor reads ship-manifest record names as written; the pre-rename names (`devui-fonts`, `devui-logos`, `u60d-plugins`, `u60-recover.sh`) are no longer mapped (neither device has them).

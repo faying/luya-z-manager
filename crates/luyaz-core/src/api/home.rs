@@ -1,4 +1,4 @@
-//! GET `/api/services/chill/home` for the touch screen (Phase 4 step 8b), rendered by u60-api as
+//! GET `/api/services/chill/home` for the touch screen, rendered by u60-api as
 //! the agent renders it. The machine: on/off, rest and the notice from the agent's file (requests
 //! change them without a record), the probe results from u60d's replay of the agent's records.
 //! `busy` is null and `ready` always true until the requests move here (8e); while the agent runs

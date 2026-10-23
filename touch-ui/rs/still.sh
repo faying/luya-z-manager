@@ -1,9 +1,10 @@
 #!/bin/sh
-# Nothing changes, nothing is redrawn: replay each C run on the Rust screen (render --still), then
+# Nothing changes, nothing is redrawn: replay each saved view model on the screen (render --still), then
 # leave every tab on the last model for 5 refreshes; any invalidated area is a failure (it would
 # wake the device's quiet loop every second; manager docs/designs/u60-touch-rewrite.md §7).
 #
-#   rs/still.sh MODEL_DIR [scene…]     (MODEL_DIR as rs/parity.sh; fonts as rs/parity.sh)
+#   rs/still.sh MODEL_DIR [scene…]     (MODEL_DIR holds index-<scene>.txt view models;
+#                                       fonts from LUYAZ_DEVICE_FONTS and LUYAZ_NUNITO_DIR)
 #
 # Exempt: scenes whose screen shows a running countdown (事务行「正在确认 · 1:26」), which really
 # changes every second.

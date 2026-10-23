@@ -2,7 +2,7 @@ use super::*;
 use crate::sse::Frame;
 use std::sync::Arc;
 
-/// The rows as u60d decorates them (the old web's mock fixture, fixtures/ops.ts).
+/// Made-up rows, shaped the way u60d decorates them.
 fn entries() -> Vec<Value> {
     serde_json::from_value(json!([
         {"source": "screen", "action": "op.ack", "result": "ok", "hide": true, "what_zh": "op.ack", "what_en": "op.ack"},

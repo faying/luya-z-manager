@@ -1,5 +1,5 @@
-//! The speed test for the touch screen (Phase 4 step 8e): `u60-speedtest`, the agent's own engine,
-//! claimed through u60d's deep-diagnosis gate (D10). Only with u60d's writes on (step 9; one
+//! The speed test for the touch screen: `u60-speedtest`, the agent's own engine,
+//! claimed through u60d's deep-diagnosis gate (D10). Only with u60d's writes on (one
 //! engine on the device).
 
 use axum::{body::Bytes, extract::State, response::Response};

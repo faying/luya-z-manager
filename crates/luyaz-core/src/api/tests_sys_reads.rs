@@ -174,7 +174,7 @@ async fn battery_shape() {
         battery_reply(&c).await,
         (
             503,
-            json!({"ok": false, "error": "battery info not available"})
+            json!({"ok": false, "error": "no battery reading yet"})
         )
     );
     fs::create_dir_all(ps.join("battery")).unwrap();

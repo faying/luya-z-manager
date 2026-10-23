@@ -1,4 +1,4 @@
-//! Colour tokens and font roles (src/ui_theme.c, include/ui_theme.h).
+//! Colour tokens and font roles.
 //!
 //! One theme per process, picked before the first object (switching appearance execs a new
 //! process), so pages read t() at build time and never restyle. Every colour is already

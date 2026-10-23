@@ -1,4 +1,4 @@
-//! Replace this process with a fresh copy of itself (src/ui_exec.c): a theme or language switch.
+//! Replace this process with a fresh copy of itself: a theme or language switch.
 //! Same pid, so the screen's owner (the sentinel, which checks /proc/<pid>/comm starts with
 //! luyaz-ui) sees no restart. Exec'd by the binary's real path, not /proc/self/exe: the
 //! kernel names the new image after the path's basename, and "exe" would fail the check and get
@@ -52,7 +52,7 @@ pub fn exec_self(argv0: &str, l: &Launch) -> i32 {
     -1
 }
 
-/// LUYAZ_UI_EXEC_SELFTEST=1 luyaz-ui (tests/ui_exec_test.c as a mode of the real binary;
+/// LUYAZ_UI_EXEC_SELFTEST=1 luyaz-ui (a self-test mode of the real binary;
 /// the variable survives the exec): the first image opens a pipe and execs itself with launch
 /// arguments through exec_self; the second checks it kept the pid and comm, lost every fd above
 /// stderr and got the arguments. =delete: the binary removes itself first and the exec must be

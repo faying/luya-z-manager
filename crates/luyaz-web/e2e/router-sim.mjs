@@ -62,7 +62,7 @@ async function own(p, urls) {
   ok(/IMSI/.test(await txt(p, "#sim-info")) && /460000000000001/.test(await txt(p, "#sim-info")), "IMSI row");
   const acts = await txt(p, "#sim-actions");
   ok(/开启 PIN 锁/.test(acts) && /修改 PIN/.test(acts) && /网络解锁/.test(acts) && !/验证 PIN/.test(acts), `buttons: ${acts}`);
-  ok(/网络解锁（NCK）剩余尝试次数\s*5/.test(await txt(p, "#sim-info")), "NCK attempts row");
+  ok(/NCK 解锁还能试几次\s*5/.test(await txt(p, "#sim-info")), "NCK attempts row");
 
   // PIN lock on: a wrong PIN first. Cancel in the dialog sends nothing.
   await p.click('#sim-actions button:has-text("开启 PIN 锁")');
@@ -70,7 +70,7 @@ async function own(p, urls) {
   ok(await p.getAttribute("#sim-f-on", "type") === "password" && await p.getAttribute("#sim-f-on", "inputmode") === "numeric", "PIN field: password, numeric");
   ok(Number.parseFloat(await p.evaluate(() => getComputedStyle(document.querySelector("#sim-f-on")).fontSize)) >= 16, "PIN field >= 16px");
   await submit(p, "pin-on", { on: "12" });
-  ok(/PIN 至少需要 4 位数字/.test(await txt(p, "#sim-op")) && !(await p.locator("#sim-confirm").count()), `short PIN: ${await txt(p, "#sim-op")}`);
+  ok(/PIN 要填 4 到 8 位数字/.test(await txt(p, "#sim-op")) && !(await p.locator("#sim-confirm").count()), `short PIN: ${await txt(p, "#sim-op")}`);
   await p.fill("#sim-f-on", "00a0");
   ok(await p.inputValue("#sim-f-on") === "000", "non-digits are dropped as typed");
   await submit(p, "pin-on", { on: "0000" });
@@ -80,7 +80,7 @@ async function own(p, urls) {
   await p.click("#sim-confirm .nd-btn--secondary");
   await p.waitForFunction(() => !document.querySelector("#sim-confirm"), null, { timeout: 5000 });
   await p.reload({ waitUntil: "load" });
-  ok(/PIN 剩余尝试次数\s*3/.test(await txt(p, "#sim-info")), "Cancel: nothing was sent (3 left)");
+  ok(/PIN 还能试几次\s*3/.test(await txt(p, "#sim-info")), "Cancel: nothing was sent (3 left)");
   await p.click('#sim-actions button:has-text("开启 PIN 锁")');
   await submit(p, "pin-on", { on: "0000" });
   await confirmBtn(p);
@@ -104,7 +104,7 @@ async function own(p, urls) {
 
   // change PIN: no readback -> accepted, never applied; then a wrong current PIN
   await submit(p, "change-pin", { co: "12", cn: "4321" });
-  ok(/当前 PIN 至少需要 4 位数字/.test(await txt(p, "#sim-op")), `short current PIN: ${await txt(p, "#sim-op")}`);
+  ok(/当前 PIN 要填 4 到 8 位数字/.test(await txt(p, "#sim-op")), `short current PIN: ${await txt(p, "#sim-op")}`);
   await submit(p, "change-pin", { co: "1234", cn: "4321" });
   await confirmBtn(p);
   t = await result(p, /设备已接受/);
@@ -140,7 +140,7 @@ async function own(p, urls) {
 
   // PUK: short, wrong, right
   await submit(p, "verify-puk", { vk: "1234", vkn: "4321" });
-  ok(/PUK 至少需要 8 位数字/.test(await txt(p, "#sim-op")), `short PUK: ${await txt(p, "#sim-op")}`);
+  ok(/PUK 要填 8 位或更多数字/.test(await txt(p, "#sim-op")), `short PUK: ${await txt(p, "#sim-op")}`);
   await submit(p, "verify-puk", { vk: "00000000", vkn: "4321" });
   ok(/nd-btn--danger/.test(await p.getAttribute("#sim-confirm button[data-write]", "class")) && /还剩 10 次 PUK 尝试机会/.test(await txt(p, "#sim-confirm")), "PUK dialog is danger and quotes 10");
   await confirmBtn(p);
@@ -162,8 +162,8 @@ async function own(p, urls) {
   await confirmBtn(p);
   t = await result(p, /没有生效/);
   ok(/解锁码不对，卡没有接受 · 还剩 4 次解锁尝试机会/.test(t), `wrong NCK: ${t}`);
-  await until(p, "#sim-info", /剩余尝试次数\s*4/);
-  ok(/网络解锁（NCK）剩余尝试次数\s*4/.test(await txt(p, "#sim-info")), "NCK row re-read: 4");
+  await until(p, "#sim-info", /还能试几次\s*4/);
+  ok(/NCK 解锁还能试几次\s*4/.test(await txt(p, "#sim-info")), "NCK row re-read: 4");
 
   // fakesuccess: the agent says ok, nothing changed -> accepted, never applied. A second press meanwhile is refused.
   await scenario("fakesuccess");

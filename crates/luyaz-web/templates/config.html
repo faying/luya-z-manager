@@ -3,14 +3,14 @@
 {% block main %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
 <div class="grid max-w-[720px] gap-6">
-<p class="nd-body -mt-2 text-nd-t2">{{ shell.t("Inspect ZTE ZXHN router config files (.zxhn).", "查看中兴 ZXHN 路由器的配置文件（.zxhn）。") }} {{ shell.t("The file is sent to this page's server, read in memory and dropped with the answer: it is not saved, not logged and never sent to the device.", "文件会传到这个页面的服务器，在内存里读完就丢，不保存、不记录，也不会发给设备。") }}</p>
+<p class="nd-body -mt-2 text-nd-t2">{{ shell.t("Look inside a ZXHN router config file (.zxhn).", "看看 ZXHN 路由器配置文件（.zxhn）里有什么。") }} {{ shell.t("The file is sent to this page's server, read in memory and dropped with the answer: it is not saved, not logged and never sent to the device.", "文件会传到这个页面的服务器，在内存里读完就丢，不保存、不记录，也不会发给设备。") }}</p>
 <section aria-labelledby="cf-t"><h2 id="cf-t" class="nd-group-title">{{ shell.t("Config file", "配置文件") }}</h2>
 <form method="post" action="/config" enctype="multipart/form-data" class="nd-group cf-form">
 <label class="nd-body" for="cf-file">{{ shell.t("Choose a config file", "选择配置文件") }}</label>
 <input id="cf-file" class="nd-field cf-file" type="file" name="file" accept=".zxhn,.bin,.cfg,.conf" required>
-<p class="nd-aux">{{ shell.t("Up to ", "最大 ") }}{{ max_mib }} MiB.{% if v.done.is_some() %} {{ shell.t("To get the hex dump of a file, choose it again and press Download.", "要下载十六进制转储，请再选一次文件，再点「下载」。") }}{% endif %}</p>
+<p class="nd-aux">{{ shell.t("Up to ", "最大 ") }}{{ max_mib }} MiB.{% if v.done.is_some() %} {{ shell.t("For the hex text of a file, choose it again and press Save as hex.", "要十六进制文本，再选一次文件，点「存成十六进制」。") }}{% endif %}</p>
 <div class="cf-btns"><button type="submit" class="nd-btn nd-btn--primary">{{ shell.t("Inspect", "查看") }}</button>
-<button type="submit" class="nd-btn nd-btn--secondary" formaction="/config/hex">{{ shell.t("Download hex dump", "下载十六进制转储") }}</button></div>
+<button type="submit" class="nd-btn nd-btn--secondary" formaction="/config/hex">{{ shell.t("Save as hex", "存成十六进制") }}</button></div>
 </form></section>
 {% if let Some(e) = v.err %}<p role="alert"><span class="nd-mark nd-mark--bad"><span class="nd-mark__sym" aria-hidden="true">▲</span><span>{{ e }}</span></span></p>{% endif %}
 {% if let Some(d) = v.done %}
@@ -26,7 +26,7 @@
 <div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("File size", "文件大小") }}</span></span><span class="nd-row__value nd-mono">{{ h.file_size }} {{ shell.t("bytes", "字节") }}</span></div>
 </div></section>
 {% endif %}
-<section aria-labelledby="cf-x-t"><h2 id="cf-x-t" class="nd-group-title">{{ shell.t("Hex Preview (first 256 bytes)", "十六进制预览（前 256 字节）") }}</h2>
+<section aria-labelledby="cf-x-t"><h2 id="cf-x-t" class="nd-group-title">{{ shell.t("First 256 Bytes in Hex", "前 256 字节（十六进制）") }}</h2>
 <div class="nd-group p-4"><pre class="nd-mono cf-hex" tabindex="0" aria-label="{{ shell.t("Hex preview", "十六进制预览") }}">{{ d.hex }}</pre></div></section>
 {% endif %}
 <section aria-labelledby="cf-k-t"><h2 id="cf-k-t" class="nd-group-title">{{ shell.t("***REMOVED***", "***REMOVED***") }}</h2>

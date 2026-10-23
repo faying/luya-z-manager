@@ -1,4 +1,4 @@
-//! /router/firewall (防火墙), the old `router/firewall/page.tsx`: the firewall switch and level,
+//! /router/firewall (防火墙): the firewall switch and level,
 //! NAT, UPnP, the port-forward switch, DMZ, the port-forward rules (add / delete) and the
 //! read-only filter rules. Batch 4 (u60-web.md).
 //!

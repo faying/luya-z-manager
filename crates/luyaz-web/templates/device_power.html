@@ -2,7 +2,7 @@
 {% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("device.css") }}">{% endblock %}
 {% block main %}
 <h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
-<p class="nd-body mb-4 dc-lead">{{ l.pick("Charge limit, power modes, and reboot.", "充电上限、电源模式和重启。") }}</p>
+<p class="nd-body mb-4 dc-lead">{{ l.pick("Battery, charge limit, power modes, restart and reset", "电池、充电上限、电源模式、重启和恢复出厂") }}</p>
 <div class="pg-col">
 {{ self.leaf("dc-status")|safe }}
 {{ self.leaf("dc-battery")|safe }}
@@ -17,9 +17,9 @@
 </section>
 <section aria-labelledby="dc-restart-t"><h2 id="dc-restart-t" class="nd-group-title">{{ l.pick("Restart and reset", "重启与恢复出厂") }}</h2>
 <div class="nd-group">
-<div class="nd-row nd-row--two flex-wrap"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Reboot", "重启") }}</span><span class="nd-row__sub block">{{ l.pick("Router will reboot and be temporarily unreachable.", "路由器会重启，期间暂时连不上。") }}</span></span><button type="button" class="nd-btn nd-btn--secondary" data-on:click="@post('/router/device/rst/ask?k=reboot')">{{ l.pick("Reboot Device", "重启设备") }}</button></div>
+<div class="nd-row nd-row--two flex-wrap"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Reboot", "重启") }}</span><span class="nd-row__sub block">{{ l.pick("The device restarts and can't be reached until it's back", "设备会重启，回来之前连不上") }}</span></span><button type="button" class="nd-btn nd-btn--secondary" data-on:click="@post('/router/device/rst/ask?k=reboot')">{{ l.pick("Reboot Device", "重启设备") }}</button></div>
 <div class="nd-row nd-row--two flex-wrap"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Power off", "关机") }}</span><span class="nd-row__sub block">{{ l.pick("Only the power button on the device turns it back on.", "只能在设备上按电源键开机。") }}</span></span><button type="button" class="nd-btn nd-btn--secondary" data-on:click="@post('/router/device/rst/ask?k=off')">{{ l.pick("Power Off", "关机") }}</button></div>
-<div class="nd-row nd-row--two flex-wrap"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Factory Reset", "恢复出厂设置") }}</span><span class="nd-row__sub block">{{ l.pick("Erases every setting and this project's software. Needs the install kit again.", "清除所有设置和本项目的软件，之后要重新运行装机包。") }}</span></span><button type="button" class="nd-btn nd-btn--danger" data-on:click="@post('/router/device/rst/ask?k=reset')">{{ l.pick("Factory Reset", "恢复出厂设置") }}</button></div>
+<div class="nd-row nd-row--two flex-wrap"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("Factory Reset", "恢复出厂") }}</span><span class="nd-row__sub block">{{ l.pick("Erases every setting and this project's software. Needs the install kit again.", "清除所有设置和本项目的软件，之后要重新运行装机包。") }}</span></span><button type="button" class="nd-btn nd-btn--danger" data-on:click="@post('/router/device/rst/ask?k=reset')">{{ l.pick("Factory Reset", "恢复出厂") }}</button></div>
 </div>
 <div class="mt-2 px-1">{{ rst_op|safe }}</div>
 </section>

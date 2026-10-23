@@ -1,6 +1,6 @@
 use super::*;
 
-// ── moved from the agent (home_exit.rs, public.rs) ──
+// ── home exit and the public status block ──
 
 #[test]
 fn home_exit_value() {
@@ -291,7 +291,7 @@ fn home_get_as_the_screens_read_it() {
     );
 }
 
-/// touch-ui chill.c reads GET's `data` into 3072 bytes and `services.chill.home_exit` into 256:
+/// luyaz-ui reads GET's `data` into 3072 bytes and `services.chill.home_exit` into 256:
 /// the fullest replies must fit.
 #[test]
 fn the_fullest_replies_fit_the_screen_buffers() {
@@ -400,23 +400,40 @@ fn probe_exit_follows_the_main_group_and_checks_the_leaf() {
             return Got::Json(200, json!({"now": "jp-1"}));
         }
         if path == "/providers/proxies" {
-            return Got::Json(200, json!({"providers": {
+            return Got::Json(
+                200,
+                json!({"providers": {
                 "sub": {"vehicleType": "HTTP", "proxies": [{"name": "jp-1"}]},
-                "JP": {"vehicleType": "Compatible", "proxies": [{"name": "jp-1"}]}}}));
+                "JP": {"vehicleType": "Compatible", "proxies": [{"name": "jp-1"}]}}}),
+            );
         }
         if path.starts_with("/providers/proxies/sub/jp-1/healthcheck?") {
             return Got::Json(200, json!({"delay": 180}));
         }
         Got::Status(404)
     };
-    assert_eq!(probe_exit(&mihomo), ("jp-1".to_string(), Some(NodeProbe::Ms(180))));
-    assert!(calls.borrow().iter().any(|(p, slow)| p.contains("healthcheck") && *slow));
+    assert_eq!(
+        probe_exit(&mihomo),
+        ("jp-1".to_string(), Some(NodeProbe::Ms(180)))
+    );
+    assert!(
+        calls
+            .borrow()
+            .iter()
+            .any(|(p, slow)| p.contains("healthcheck") && *slow)
+    );
     // nothing chosen: no probe; mihomo silent on the check: None; a timeout answer: Timeout
-    assert_eq!(probe_exit(&|_, _| Got::Unreachable), (MAIN_GROUP.to_string(), None));
+    assert_eq!(
+        probe_exit(&|_, _| Got::Unreachable),
+        (MAIN_GROUP.to_string(), None)
+    );
     let timeout = |path: &str, _| match path {
         p if p.starts_with("/proxies/%") => Got::Json(200, json!({"now": "DIRECT-ish"})),
         p if p.contains("/delay?") => Got::Status(504),
         _ => Got::Status(404),
     };
-    assert_eq!(probe_exit(&timeout), ("DIRECT-ish".to_string(), Some(NodeProbe::Timeout)));
+    assert_eq!(
+        probe_exit(&timeout),
+        ("DIRECT-ish".to_string(), Some(NodeProbe::Timeout))
+    );
 }

@@ -22,7 +22,7 @@
 </section>
 <section aria-labelledby="bl-reset-t"><h2 id="bl-reset-t" class="nd-group-title">{{ l.pick("Automatic bands", "自动选频") }}</h2>
 <div class="nd-group grid gap-3 p-4"><p class="nd-body">{{ l.pick("Remove every NR and LTE band lock (cell locks go too) and let the modem pick again.", "清除所有 NR 和 LTE 锁定（小区锁定也一起去掉），让调制解调器重新自动选频段。") }}</p>
-<div><button type="button" class="nd-btn nd-btn--secondary" data-attr:disabled="$_dis" data-on:click="@post('/bandlock/reset/ask')">{{ l.pick("Reset / unlock all", "重置 / 全部解锁") }}</button></div>
+<div><button type="button" class="nd-btn nd-btn--secondary" data-attr:disabled="$_dis" data-on:click="@post('/bandlock/reset/ask')">{{ l.pick("Clear all locks", "清除全部锁定") }}</button></div>
 {{ reset_op|safe }}</div>
 </section>
 </div>

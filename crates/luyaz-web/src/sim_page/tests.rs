@@ -25,17 +25,17 @@ fn card(states: &str, pin_status: &str, pin_left: &str, puk_left: &str, nck: Opt
 #[test]
 fn the_old_checks_with_the_old_words() {
     let l = Lang::En;
-    assert_eq!(check(Kind::VerifyPin, &form("12", "", "", "", ""), l).err().unwrap(), "PIN must be at least 4 digits");
+    assert_eq!(check(Kind::VerifyPin, &form("12", "", "", "", ""), l).err().unwrap(), "PIN: use 4 to 8 digits");
     assert_eq!(check(Kind::PinOn, &form("12a4", "", "", "", ""), l).err().unwrap(), "PIN can only contain digits");
     assert_eq!(check(Kind::PinOff, &form("123456789", "", "", "", ""), l).err().unwrap(), "PIN is at most 8 digits");
     assert!(check(Kind::VerifyPin, &form("1234", "", "", "", ""), l).is_ok());
-    assert_eq!(check(Kind::VerifyPuk, &form("", "", "1234", "1234567", ""), l).err().unwrap(), "PUK must be at least 8 digits");
-    assert_eq!(check(Kind::VerifyPuk, &form("", "", "12", "12345678", ""), l).err().unwrap(), "New PIN must be at least 4 digits");
+    assert_eq!(check(Kind::VerifyPuk, &form("", "", "1234", "1234567", ""), l).err().unwrap(), "PUK: use 8 digits or more");
+    assert_eq!(check(Kind::VerifyPuk, &form("", "", "12", "12345678", ""), l).err().unwrap(), "New PIN: use 4 to 8 digits");
     assert!(check(Kind::VerifyPuk, &form("", "", "1234", "12345678", ""), l).is_ok());
-    assert_eq!(check(Kind::ChangePin, &form("", "12", "1234", "", ""), l).err().unwrap(), "Current PIN must be at least 4 digits");
+    assert_eq!(check(Kind::ChangePin, &form("", "12", "1234", "", ""), l).err().unwrap(), "Current PIN: use 4 to 8 digits");
     assert_eq!(check(Kind::Nck, &form("", "", "", "", "  "), l).err().unwrap(), "Unlock code is required");
-    assert_eq!(check(Kind::PinOn, &form("12", "", "", "", ""), Lang::Zh).err().unwrap(), "PIN 至少需要 4 位数字");
-    assert_eq!(check(Kind::VerifyPuk, &form("", "", "1234", "123", ""), Lang::Zh).err().unwrap(), "PUK 至少需要 8 位数字");
+    assert_eq!(check(Kind::PinOn, &form("12", "", "", "", ""), Lang::Zh).err().unwrap(), "PIN 要填 4 到 8 位数字");
+    assert_eq!(check(Kind::VerifyPuk, &form("", "", "1234", "123", ""), Lang::Zh).err().unwrap(), "PUK 要填 8 位或更多数字");
     assert_eq!(check(Kind::Nck, &form("", "", "", "", ""), Lang::Zh).err().unwrap(), "需要解锁码");
 }
 

@@ -300,10 +300,10 @@ fn the_core_is_found_by_prefix() {
     let d = Dev::new("corename");
     d.gone(100);
     d.proc(30, "luyaz-core.test", 700, b"c");
-    d.proc(31, "zwrt-datad", 701, b"u");
+    d.proc(31, "otherd", 701, b"u");
     let got = find_pids(&d.p.proc_, &PROGS);
     assert_eq!(got.get("luyaz-core"), Some(&30));
-    assert!(!got.contains_key("zwrt-datad"));
+    assert!(!got.contains_key("otherd"));
     assert!(!got.contains_key("luyaz-core.test"));
     d.proc(20, "luyaz-core", 650, b"c");
     assert_eq!(find_pids(&d.p.proc_, &RESTARTS)["luyaz-core"], 20);

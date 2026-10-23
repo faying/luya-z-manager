@@ -1,4 +1,4 @@
-//! /router/stk (USSD and SIM Toolkit; batch 5c), the old `router/stk/page.tsx`. Nothing is read on
+//! /router/stk (USSD and SIM Toolkit). Nothing is read on
 //! entry: every request talks AT commands to the modem, so every send is tier 2 (an inline
 //! confirm that names what it does; controls-inventory §/router/stk). There is no readback — the
 //! carrier's / SIM's answer is the result — so a good reply is shown and the confirm area goes
@@ -613,7 +613,7 @@ fn view(l: Lang, path: &[Menu], unsupported: Option<&str>) -> String {
     if let Some(_reason) = unsupported {
         return format!(
             "<div id=\"stk-view\" class=\"nd-group\"><div class=\"nd-row stk-wrap\"><span class=\"stk-grow\">{}</span><button type=\"button\" class=\"nd-btn nd-btn--secondary nd-btn--sm\" data-on:click=\"@post('/router/stk/menu/ask?k=load')\">{}</button></div></div>",
-            mark("neutral", l.pick("STK is not supported by this SIM.", "这张 SIM 卡不支持 STK。")),
+            mark("neutral", l.pick("This SIM has no STK menu.", "这张 SIM 没有 STK 菜单。")),
             l.pick("Try again", "再试一次")
         );
     }
@@ -621,8 +621,8 @@ fn view(l: Lang, path: &[Menu], unsupported: Option<&str>) -> String {
         return format!(
             "<div id=\"stk-view\" class=\"nd-group\"><div class=\"nd-row stk-body\"><p class=\"nd-body stk-t2\">{}</p><div><button type=\"button\" class=\"nd-btn nd-btn--primary\" data-on:click=\"@post('/router/stk/menu/ask?k=load')\">{}</button></div></div></div>",
             l.pick(
-                "Load the SIM Toolkit menu to navigate carrier services.",
-                "加载 SIM 卡的 STK 菜单，浏览运营商的服务。"
+                "Open the SIM's STK menu to reach the carrier's services.",
+                "打开 SIM 的 STK 菜单，进入运营商的服务。"
             ),
             l.pick("Load STK Menu", "加载 STK 菜单")
         );

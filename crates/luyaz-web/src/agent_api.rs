@@ -70,6 +70,8 @@ pub fn routes() -> Router<Shared> {
         .route("/agent-api/network-health", get(network_health))
         .route("/agent-api/power", get(power))
         .route("/agent-api/events", get(events))
+        .route("/agent-api/capabilities", get(firmware::capabilities))
+        .route("/agent-api/recovery-actions", get(firmware::recovery_actions))
 }
 
 // ---- the gate: token file, source, token ----
@@ -691,6 +693,8 @@ async fn events(State(app): State<Shared>, Query(q): Query<EventsQ>, req: Reques
         cut = true;
     }
 }
+
+mod firmware;
 
 #[cfg(test)]
 mod tests;
