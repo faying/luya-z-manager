@@ -155,7 +155,7 @@ The full set is the four components `ssh admin ui esim`. You can also install on
 ```
 
 Installing SSH also **turns off firmware auto-update**. If the U60's address is not `192.168.0.1`, prefix the command with `GATEWAY=your-address`.
-Without a terminal (for example when Claude Code installs it for you), passwords are read from the environment variables `ROUTER_PASSWORD`, `AGENT_PASSWORD`, or from `u60.env` in the kit (template `u60.env.example`).
+Without a terminal (for example when Claude Code installs it for you), passwords are read from the environment variables `ROUTER_PASSWORD`, `AGENT_PASSWORD` (the admin web password; the name is historical), or from `u60.env` in the kit (template `u60.env.example`).
 
 The [README](../onboard/README.md) that ships with the install kit goes into more detail: which paths get installed, day-to-day use, and common problems.
 

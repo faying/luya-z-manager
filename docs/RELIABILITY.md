@@ -55,6 +55,7 @@ On `/data`, mode 700: a reboot loop must neither wipe alerts nor reset the SMS q
 | `sms-log` | `<wall s>\t<seq>\t<kind>\t<result>`, last 100 lines |
 
 - `add` allocates the sequence number under `lock`, appends, and trims past 300 lines to the last 200. `add_once` (sentinel events) prefixes the text with `[<bootid8>-<n>] `. Cursors store sequence numbers, never line numbers.
+- Both writers (`luyaz-alerts`, `alert-lib.sh`) number past the larger of `seq` and the highest seq in the queue, so an empty or lagging `seq` never reuses a number; a last line left without a newline by a killed writer is ended first, so the new event is never glued onto it.
 - Wall-clock under `1704067200` (2024-01-01) means "not calibrated"; the web shows 「开机后 N 秒」.
 - Text: printable ASCII, ≤ 120 characters, never any configuration (numbers, passwords, SSIDs). Malformed lines are skipped.
 - Kinds emitted now:
@@ -122,3 +123,17 @@ Served by the core on loopback as `/v2/api/…`; luyaz-web (`alerts_page.rs`) is
 - The existing five-second sampler feeds Finding's passive admission. A gap over 10 seconds, missing/stale required reads, unknown status/counter, counter reset, or a changed SIM/interfaces generation breaks the 60-second observation window. Suspend counts toward budget expiry but does not prove continuous fault observation. Quiet traffic only admits a bounded probe; it does not prove an internet outage.
 - `Hub::observations` supplies latest internal data with BOOTTIME and change generations under one lock; `/v2` wire timestamps, revision and publication policy remain unchanged. Every request and final result recheck connection identity/freshness. Changes invalidate the entire result; a saved report's `fresh` also becomes false. Observed A→B→A changes invalidate old context. Transitions never seen by the collector remain unverified; this is not a kernel session identity or complete route proof.
 - Only the Finding pilot uses this admission; legacy deep diagnosis, general netwatch status and transaction probes retain their existing behavior. Rolling back to an older binary loses these guards; retaining this file alone does not protect an old binary. Device persistence, suspend and power impact still require separate validation.
+
+## 11. What fault injection covers (offline)
+
+Design and full table: `docs/designs/fault-injection.md`. Each test was checked to fail with its guard removed.
+
+| Fault | Test |
+|---|---|
+| Wi-Fi lock holder killed -9; child left behind by a holder | `crates/luyaz-wifi/src/tests.rs` |
+| Alert queue line torn mid-write; `seq` lost | `crates/luyaz-alerts` tests, `touch-ui/scripts/test/alert-lib/run.sh` |
+| Screen: burst of opposite requests, two writers at once (1185 rule) | `crates/luyaz-sentinel/test/real.sh` |
+| Kit rc.local write: cat / sync / mv fails; stale temp file | `onboard/test/kit-rc.sh` |
+| Ship / update crash at every step, trial and check failure | `touch-ui/scripts/test/luyaz-ship*/` |
+
+Not covered: real power cuts and real Wi-Fi reloads on the device (`touch-ui/scripts/chaos.sh` only kills services, each run with the owner's consent).

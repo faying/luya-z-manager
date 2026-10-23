@@ -9,6 +9,21 @@ use crate::block::{Hub, Observation};
 pub const SAMPLE_GAP: u64 = 10;
 const RX_FRESH: u64 = 30;
 
+/// Real-device test switch for the decision loop (decision-execution-loop §4.10): while this
+/// file exists and is under [`RX_QUIET_MAX_S`] old, moving counters do not count as receiving.
+/// Deleting a data address leaves the counters moving, so a real outage cannot otherwise be
+/// staged. On the RAM disk (gone at reboot) and self-expiring; everything else stays real.
+const RX_QUIET_FILE: &str = "/tmp/luyaz-test-rx-quiet";
+const RX_QUIET_MAX_S: u64 = 600;
+
+fn rx_quiet_test() -> bool {
+    std::fs::metadata(RX_QUIET_FILE)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age.as_secs() <= RX_QUIET_MAX_S)
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct Connection {
     pub iccid: String,
@@ -121,7 +136,8 @@ impl Passive {
             .moved
             .as_ref()
             .and_then(|t| now.elapsed_since(t))
-            .is_some_and(|age| age <= RX_FRESH);
+            .is_some_and(|age| age <= RX_FRESH)
+            && !rx_quiet_test();
         // Quiet counters are a reason to check, never proof of an internet outage.
         // Missing counter/status or a counter reset starts a new observation, not a fault.
         self.known =

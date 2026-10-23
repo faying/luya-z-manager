@@ -25,6 +25,31 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 - kit: carries the lanid-parse component (LAN client identification) and installs it to `/data/luyaz/core/plugins/` as the only component; without it the core runs with identification off. `LANID_CWASM=` uses a ready-made one.
 
+## lweb 1.30.0 — 2026-10-23
+
+- the eSIM page says when pending receipts will be sent again automatically, or that automatic re-sending has stopped and they need sending by hand. Requires: core 1.38.0.
+
+## core 1.38.0 — 2026-10-23
+
+- eSIM receipts (operator notifications) are sent one at a time, so a dead server no longer holds back the others; whatever is left is re-sent on its own 2 min after a trigger (core start, profile switch, download/delete, the page's button), then after 10 min, 30 min, 2 h and 6 h, then it stops until the next trigger. Nothing pending means no timer and no card reads. `GET /api/esim/notifications` adds `resend {next_s, gave_up}`.
+- alerts: a queue line left half-written by a killed writer no longer swallows the next event, and an empty `seq` file no longer restarts numbering at 1 (same fix as sentinel 1.0.12).
+
+## core 1.37.1 — 2026-10-23
+
+- decision loop test switch: while `/tmp/luyaz-test-rx-quiet` exists and is under 10 minutes old, moving receive counters do not count as "still receiving", so a real-device test can stage an outage (deleting the data address alone leaves the counters moving). RAM disk, self-expiring; nothing else changes.
+
+## sentinel 1.0.12 — 2026-10-23
+
+- alerts: a queue line left half-written by a killed writer no longer swallows the next event, and an empty `seq` file no longer restarts numbering at 1 (the SMS and read cursors skipped the new events).
+
+## scripts 1.0.10 — 2026-10-23
+
+- `alert-lib.sh`: same fix as sentinel 1.0.12 (torn last line, lost `seq`).
+
+## lweb 1.29.1 — 2026-10-23
+
+- small buttons keep a 44 px tap area (36 px to look at); reduced motion stops only what moves (switch thumb, progress bars) and keeps colour fades; the ⌘K search field shows focus.
+
 ## touch 1.10.10 — 2026-10-23
 
 - Screen off: redraws while dark no longer go to the panel; the black frame from 1.10.9 stays until the screen lights up.

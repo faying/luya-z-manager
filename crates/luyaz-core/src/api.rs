@@ -351,6 +351,9 @@ impl Compat {
                 exits::spawn(self.clone());
             }
             tokio::spawn(crate::engines::manual_first::run(self.clone()));
+            // eSIM receipts left on the card: re-sent on their own, bounded (SIM P1)
+            let esim = self.esim.clone();
+            std::thread::spawn(move || esim.run_receipts());
             ops::resume(self.clone()).await;
         }
     }

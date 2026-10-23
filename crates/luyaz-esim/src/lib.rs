@@ -78,6 +78,22 @@ const READBACK_GAP: Duration = Duration::from_millis(1500);
 /// has no service — so it is kept short, and skipped when data is not up.
 const NOTIF_DATA_POLL: Duration = Duration::from_secs(5);
 const LPAC_TIMEOUT_NOTIF: Duration = Duration::from_secs(45);
+/// Receipts left on the card are re-sent on their own (bounded, see the
+/// receipts block): the first round this long after a trigger (core start, a
+/// switch, a download/delete, the page's button), then after each failed round
+/// the next gap on `RECEIPT_LADDER`; past its end they wait for a new trigger.
+/// A round stops starting sends past `RECEIPT_ROUND_MAX`, so it can't hold the
+/// job slot long against a switch.
+const RECEIPT_FIRST: Duration = Duration::from_secs(2 * 60);
+const RECEIPT_LADDER: [Duration; 4] = [
+    Duration::from_secs(10 * 60),
+    Duration::from_secs(30 * 60),
+    Duration::from_secs(2 * 3600),
+    Duration::from_secs(6 * 3600),
+];
+const RECEIPT_ROUND_MAX: Duration = Duration::from_secs(90);
+/// A round due while another eSIM job holds the slot comes back this much later.
+const RECEIPT_BUSY_AGAIN: Duration = Duration::from_secs(60);
 /// The switch is checked in three timed steps (resilience audit R5): the card
 /// (`read_profiles_retry`), then the ZTE stack's identity, then the data call.
 /// Identity: upstream measured up to 28 s on B27; past `IDENTITY_WAIT` (polled
@@ -195,6 +211,7 @@ pub struct Esim {
     cancel: Arc<AtomicBool>,
     host: Arc<Card>,
     list: Arc<Mutex<ListCache>>,
+    receipts: Arc<Mutex<Receipts>>,
 }
 
 /// The host with the card behind one lock (resilience audit R2): every lpac run
@@ -301,6 +318,7 @@ impl Esim {
             running: Arc::new(AtomicBool::new(false)),
             cancel: Arc::new(AtomicBool::new(false)),
             list: Arc::new(Mutex::new(ListCache::default())),
+            receipts: Arc::new(Mutex::new(Receipts::default())),
         }
     }
 }
@@ -1033,13 +1051,15 @@ fn prune_notifications(h: &dyn Host, seq_before: Option<i64>) -> Vec<i64> {
     plan.send
 }
 
-/// After a converged switch: once data is back, send this switch's
-/// notifications as a short "notifications" job. Skipped (left pending) when
-/// data doesn't come back in time or another eSIM job holds the slot.
+/// After a converged switch: once data is back, send the pending receipts as a
+/// short "notifications" job. Whatever is left (data dropped, a server failed,
+/// another job had the slot) goes to the bounded re-send.
 fn send_switch_notifications(
     h: &dyn Host,
     job: &Arc<Mutex<JobState>>,
     running: &Arc<AtomicBool>,
+    cancel: &AtomicBool,
+    receipts: &Mutex<Receipts>,
     seqs: Vec<i64>,
 ) {
     if seqs.is_empty() {
@@ -1050,23 +1070,229 @@ fn send_switch_notifications(
     h.sleep(NOTIF_DATA_POLL);
     if !h.data_up() {
         eprintln!("esim: data dropped after the switch; notifications {seqs:?} left pending");
+        arm_receipts(receipts, h.now(), RECEIPT_FIRST);
         return;
     }
     if claim_slot(job, running, "notifications", "").is_none() {
+        arm_receipts(receipts, h.now(), RECEIPT_FIRST);
         return;
     }
-    let strs: Vec<String> = seqs.iter().map(i64::to_string).collect();
-    let mut args = vec!["notification", "process", "-r"];
-    args.extend(strs.iter().map(String::as_str));
-    let n = seqs.len();
-    let res = contained(|| {
-        h.lpac(&args, LPAC_TIMEOUT_NOTIF)
-            .map(|_| format!("sent {n} notification(s) for the switch"))
-    });
-    if let Err(e) = &res {
-        eprintln!("esim: sending switch notifications {strs:?} failed: {e}");
+    cancel.store(false, Ordering::SeqCst);
+    let sent = send_receipts(h, cancel, h.now() + RECEIPT_ROUND_MAX);
+    if sent.left > 0 {
+        arm_receipts(receipts, h.now(), RECEIPT_FIRST);
     }
-    finish_job(job, running, res, false);
+    finish_job(job, running, sent.outcome(), false);
+}
+
+/* ---- re-sending receipts (bounded) ----
+ *
+ * A receipt (SGP.22 notification) is sent one per lpac call, so a dead or slow
+ * SM-DP+ can't hold back the others (`process -r a b c` stops at the first
+ * failure); a server that fails is skipped for the rest of that round. `-r`
+ * removes a receipt only once its server took it: nothing unsent is ever
+ * removed (superseded enable/disable ones excepted, see above).
+ *
+ * Bounded: a round runs `RECEIPT_FIRST` after a trigger, then after each round
+ * that left some, the next gap on `RECEIPT_LADDER`; past the end it stops
+ * (`gave_up`) until the next trigger, and the eSIM page's button still sends.
+ * With nothing pending nothing is scheduled — no card reads on a timer. The
+ * state is in memory: a core start is a trigger.
+ */
+
+#[derive(Default)]
+struct Receipts {
+    /// rounds since the last trigger that still left some
+    failed_rounds: usize,
+    /// when the next round is due (None = nothing scheduled)
+    next: Option<Instant>,
+    /// the ladder ran out with receipts still on the card
+    gave_up: bool,
+    /// the thread in [`Esim::run_receipts`], woken when `next` changes
+    waker: Option<std::thread::Thread>,
+}
+
+/// A trigger: start the ladder over, the first round `delay` from `now`.
+fn arm_receipts(r: &Mutex<Receipts>, now: Instant, delay: Duration) {
+    let mut r = r.lock().unwrap_or_else(|e| e.into_inner());
+    r.failed_rounds = 0;
+    r.gave_up = false;
+    r.next = Some(now + delay);
+    if let Some(t) = &r.waker {
+        t.unpark();
+    }
+}
+
+/// A round's result: `left` still on the card (or unknown, then 1).
+struct Sent {
+    sent: usize,
+    left: usize,
+    error: Option<String>,
+}
+
+impl Sent {
+    fn outcome(&self) -> Result<String, String> {
+        match (&self.error, self.left) {
+            (Some(e), _) if self.sent == 0 => Err(e.clone()),
+            (_, 0) => Ok(format!("sent {} notification(s)", self.sent)),
+            _ => Ok(format!(
+                "sent {} notification(s), {} left for later",
+                self.sent, self.left
+            )),
+        }
+    }
+}
+
+/// The pending receipts after dropping the superseded ones: (seqNumber, server),
+/// oldest first.
+fn pending_receipts(h: &dyn Host) -> Result<Vec<(i64, String)>, String> {
+    let list = h.lpac(&["notification", "list"], LPAC_TIMEOUT_FAST)?;
+    let plan = plan_notifications(&list, None);
+    if !plan.remove.is_empty() {
+        let seqs: Vec<String> = plan.remove.iter().map(i64::to_string).collect();
+        let mut args = vec!["notification", "remove"];
+        args.extend(seqs.iter().map(String::as_str));
+        match h.lpac(&args, LPAC_TIMEOUT_FAST) {
+            Ok(_) => eprintln!("esim: removed superseded notifications {seqs:?}"),
+            Err(e) => eprintln!("esim: removing superseded notifications {seqs:?} failed: {e}"),
+        }
+    }
+    let mut out: Vec<(i64, String)> = list
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|n| {
+                    let seq = notif_seq(n)?;
+                    let server = n["notificationAddress"].as_str().unwrap_or("").to_string();
+                    Some((seq, server))
+                })
+                .filter(|(seq, _)| !plan.remove.contains(seq))
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort_unstable();
+    Ok(out)
+}
+
+/// Send every pending receipt, one lpac call each, until `until`. The caller
+/// holds the job slot.
+fn send_receipts(h: &dyn Host, cancel: &AtomicBool, until: Instant) -> Sent {
+    let pending = match pending_receipts(h) {
+        Ok(p) => p,
+        Err(e) => {
+            return Sent {
+                sent: 0,
+                left: 1,
+                error: Some(e),
+            }
+        }
+    };
+    let mut failed: Vec<String> = Vec::new();
+    let (mut sent, mut error) = (0, None);
+    for (seq, server) in &pending {
+        if failed.contains(server) {
+            continue;
+        }
+        if cancel.load(Ordering::SeqCst) || h.now() >= until || !h.data_up() {
+            break;
+        }
+        let s = seq.to_string();
+        match h.lpac(&["notification", "process", "-r", &s], LPAC_TIMEOUT_NOTIF) {
+            Ok(_) => sent += 1,
+            Err(e) => {
+                eprintln!("esim: notification {seq} to {server} failed: {e}");
+                failed.push(server.clone());
+                error = Some(e);
+            }
+        }
+    }
+    Sent {
+        sent,
+        left: pending.len() - sent,
+        error,
+    }
+}
+
+/// Nothing left: no round scheduled.
+fn idle_receipts(r: &Mutex<Receipts>) {
+    let mut r = r.lock().unwrap_or_else(|e| e.into_inner());
+    r.failed_rounds = 0;
+    r.gave_up = false;
+    r.next = None;
+}
+
+impl Esim {
+    /// The bounded re-send's own thread (the core runs it once, on the device):
+    /// sleeps until a round is due, and with nothing scheduled, until a trigger.
+    /// The core start is a trigger.
+    pub fn run_receipts(&self) -> ! {
+        {
+            let mut r = self.receipts.lock().unwrap_or_else(|e| e.into_inner());
+            r.waker = Some(std::thread::current());
+        }
+        arm_receipts(&self.receipts, self.host.now(), RECEIPT_FIRST);
+        loop {
+            let next = self.receipts.lock().unwrap_or_else(|e| e.into_inner()).next;
+            match next.map(|n| n.saturating_duration_since(self.host.now())) {
+                None => std::thread::park(),
+                Some(d) if !d.is_zero() => std::thread::park_timeout(d),
+                Some(_) => self.receipts_round(),
+            }
+        }
+    }
+
+    /// One due round of the re-send.
+    fn receipts_round(&self) {
+        let h: &dyn Host = &*self.host;
+        if !h.installed() {
+            idle_receipts(&self.receipts);
+            return;
+        }
+        let left = if h.data_up() {
+            if claim_slot(&self.job, &self.running, "notifications", "").is_none() {
+                self.receipts.lock().unwrap_or_else(|e| e.into_inner()).next =
+                    Some(h.now() + RECEIPT_BUSY_AGAIN);
+                return;
+            }
+            h.wake(true);
+            let sent = send_receipts(h, &AtomicBool::new(false), h.now() + RECEIPT_ROUND_MAX);
+            h.wake(false);
+            finish_job(&self.job, &self.running, sent.outcome(), false);
+            sent.left
+        } else {
+            1 // no data: counts as a round that left them
+        };
+        let mut r = self.receipts.lock().unwrap_or_else(|e| e.into_inner());
+        if left == 0 {
+            r.failed_rounds = 0;
+            r.gave_up = false;
+            r.next = None;
+            return;
+        }
+        match RECEIPT_LADDER.get(r.failed_rounds) {
+            Some(gap) => {
+                r.next = Some(h.now() + *gap);
+                r.failed_rounds += 1;
+            }
+            None => {
+                eprintln!(
+                    "esim: notifications still pending after the re-send rounds; left for the page"
+                );
+                r.next = None;
+                r.gave_up = true;
+            }
+        }
+    }
+
+    /// The re-send's state for the page: `next_s` seconds to the next round
+    /// (null = none), `gave_up` = the rounds ran out, send by hand.
+    fn receipts_view(&self) -> Value {
+        let r = self.receipts.lock().unwrap_or_else(|e| e.into_inner());
+        json!({
+            "next_s": r.next.map(|n| n.saturating_duration_since(self.host.now()).as_secs()),
+            "gave_up": r.gave_up,
+        })
+    }
 }
 
 // ---- route plumbing ----
@@ -1221,7 +1447,12 @@ impl Esim {
         };
         res.map_or_else(
             |why| (502, json!({"ok": false, "error": why})),
-            |list| (200, json!({"ok": true, "data": list})),
+            |list| {
+                (
+                    200,
+                    json!({"ok": true, "data": list, "resend": self.receipts_view()}),
+                )
+            },
         )
     }
     /// An eSIM job (switch, download, …) is running: the ICCID may flip mid-way.
@@ -1333,6 +1564,7 @@ impl Esim {
         let cancel = Arc::clone(&self.cancel);
         let h = Arc::clone(&self.host);
         let list = Arc::clone(&self.list);
+        let receipts = Arc::clone(&self.receipts);
         std::thread::spawn(move || {
             let h: &dyn Host = &*h;
             h.wake(true);
@@ -1453,7 +1685,7 @@ impl Esim {
                         false,
                         "inactive_slot",
                     );
-                    send_switch_notifications(h, &job, &running, to_send);
+                    send_switch_notifications(h, &job, &running, &cancel, &receipts, to_send);
                     h.wake(false);
                     return;
                 }
@@ -1568,9 +1800,10 @@ impl Esim {
                         Ok(format!("switched — no reboot needed ({steps})")),
                         false,
                     );
-                    send_switch_notifications(h, &job, &running, to_send);
+                    send_switch_notifications(h, &job, &running, &cancel, &receipts, to_send);
                 } else {
-                    // this switch's notifications stay pending (the eSIM page can send them)
+                    // this switch's notifications stay pending: the bounded re-send has them
+                    arm_receipts(&receipts, h.now(), RECEIPT_FIRST);
                     finish_job_with(
                         &job,
                         &running,
@@ -1621,6 +1854,7 @@ impl Esim {
         let job = Arc::clone(&self.job);
         let running = Arc::clone(&self.running);
         let h = Arc::clone(&self.host);
+        let receipts = Arc::clone(&self.receipts);
         std::thread::spawn(move || {
             let h: &dyn Host = &*h;
             h.wake(true);
@@ -1634,8 +1868,9 @@ impl Esim {
                 // download still stands, so its result is ignored.
                 // Superseded enable/disable ones go first, so `-a` doesn't send
                 // stale state changes late.
-                let _ = prune_notifications(h, None);
-                let _ = h.lpac(&["notification", "process", "-a", "-r"], LPAC_TIMEOUT_NET);
+                if send_receipts(h, &AtomicBool::new(false), h.now() + RECEIPT_ROUND_MAX).left > 0 {
+                    arm_receipts(&receipts, h.now(), RECEIPT_FIRST);
+                }
                 Ok("profile downloaded".to_string())
             });
             h.wake(false);
@@ -1670,7 +1905,10 @@ impl Esim {
             return refuse(404, "profile not found");
         };
         if entry["profileState"] == "enabled" {
-            return refuse(400, "this profile is in use: switch to another one, then delete it");
+            return refuse(
+                400,
+                "this profile is in use: switch to another one, then delete it",
+            );
         }
         let Some(job_id) = self.try_start_job("delete", &iccid) else {
             return busy_reply();
@@ -1678,13 +1916,15 @@ impl Esim {
         let job = Arc::clone(&self.job);
         let running = Arc::clone(&self.running);
         let h = Arc::clone(&self.host);
+        let receipts = Arc::clone(&self.receipts);
         std::thread::spawn(move || {
             let h: &dyn Host = &*h;
             h.wake(true);
             let res = contained(|| {
                 h.lpac(&["profile", "delete", &iccid], LPAC_TIMEOUT_FAST)?;
-                let _ = prune_notifications(h, None);
-                let _ = h.lpac(&["notification", "process", "-a", "-r"], LPAC_TIMEOUT_NET);
+                if send_receipts(h, &AtomicBool::new(false), h.now() + RECEIPT_ROUND_MAX).left > 0 {
+                    arm_receipts(&receipts, h.now(), RECEIPT_FIRST);
+                }
                 Ok("profile deleted".to_string())
             });
             h.wake(false);
@@ -1701,11 +1941,17 @@ impl Esim {
         let job = Arc::clone(&self.job);
         let running = Arc::clone(&self.running);
         let h = Arc::clone(&self.host);
+        let receipts = Arc::clone(&self.receipts);
         std::thread::spawn(move || {
             let h: &dyn Host = &*h;
             let res = contained(|| {
-                h.lpac(&["notification", "process", "-a", "-r"], LPAC_TIMEOUT_NET)
-                    .map(|_| "notifications processed".to_string())
+                let sent = send_receipts(h, &AtomicBool::new(false), h.now() + RECEIPT_ROUND_MAX);
+                if sent.left > 0 {
+                    arm_receipts(&receipts, h.now(), RECEIPT_FIRST);
+                } else {
+                    idle_receipts(&receipts);
+                }
+                sent.outcome()
             });
             finish_job(&job, &running, res, false);
         });
@@ -2144,6 +2390,10 @@ mod tests {
         slept: Duration,
         enables: u32,
         noted_reboot: Option<u64>,
+        /// receipts on the card: (seqNumber, operation, server)
+        notifs: Vec<(i64, &'static str, &'static str)>,
+        /// this server fails every send
+        dead_server: &'static str,
     }
 
     pub(super) struct OnCard<'a>(&'a Fake);
@@ -2196,7 +2446,25 @@ mod tests {
                     }
                     Ok(Value::Null)
                 }
-                ["notification", "list"] => Ok(json!([])),
+                ["notification", "list"] => Ok(s
+                    .notifs
+                    .iter()
+                    .map(|(seq, op, server)| json!({"seqNumber": seq, "profileManagementOperation": op,
+                        "notificationAddress": server, "iccid": format!("8985200000000000{seq:04}")}))
+                    .collect()),
+                ["notification", "process", "-r", seq] => {
+                    let seq: i64 = seq.parse().unwrap();
+                    let i = s.notifs.iter().position(|n| n.0 == seq).ok_or("no such")?;
+                    if s.notifs[i].2 == s.dead_server {
+                        return Err("lpac: es9p: SSL connect error".into());
+                    }
+                    s.notifs.remove(i);
+                    Ok(Value::Null)
+                }
+                ["notification", "remove", seqs @ ..] => {
+                    s.notifs.retain(|n| !seqs.contains(&n.0.to_string().as_str()));
+                    Ok(Value::Null)
+                }
                 _ => Ok(Value::Null),
             }
         }
@@ -2791,5 +3059,122 @@ mod tests {
         assert_eq!(v["data"]["stale"], true, "{v}");
         assert!(v["data"]["profiles"].is_array(), "{v}");
         assert!(e.notifications().1["data"].is_null());
+    }
+
+    fn with_receipts(
+        notifs: Vec<(i64, &'static str, &'static str)>,
+        dead: &'static str,
+    ) -> (Esim, Arc<Fake>) {
+        let fake = Arc::new(Fake::default());
+        {
+            let mut st = fake.state.lock().unwrap();
+            st.notifs = notifs;
+            st.dead_server = dead;
+        }
+        (Esim::new(fake.clone()), fake)
+    }
+
+    fn due(e: &Esim) {
+        e.receipts.lock().unwrap().next = Some(e.host.now());
+        e.receipts_round();
+    }
+
+    #[test]
+    fn receipts_go_one_by_one_past_a_dead_server_and_unsent_ones_stay() {
+        let (e, fake) = with_receipts(
+            vec![
+                (1, "disable", "dead.example"),
+                (2, "enable", "ok.example"),
+                (3, "install", "dead.example"),
+                (4, "delete", "ok.example"),
+            ],
+            "dead.example",
+        );
+        due(&e);
+        let s = fake.state.lock().unwrap();
+        let left: Vec<i64> = s.notifs.iter().map(|n| n.0).collect();
+        assert_eq!(left, vec![1, 3], "the dead server's stay, the others went");
+        // the dead server was tried once, then skipped for the round
+        let tries = s
+            .log
+            .iter()
+            .filter(|l| l.starts_with("lpac notification process"))
+            .count();
+        assert_eq!(tries, 3, "{:?}", s.log);
+        assert!(
+            !s.log
+                .iter()
+                .any(|l| l.starts_with("lpac notification remove")),
+            "nothing unsent removed"
+        );
+        drop(s);
+        assert!(!e.busy(), "slot freed");
+        let r = e.receipts.lock().unwrap();
+        assert_eq!(r.failed_rounds, 1);
+        assert_eq!(r.next, Some(e.host.now() + RECEIPT_LADDER[0]));
+    }
+
+    #[test]
+    fn receipts_stop_after_the_ladder_and_a_trigger_starts_it_over() {
+        let (e, _fake) = with_receipts(vec![(7, "disable", "dead.example")], "dead.example");
+        for gap in RECEIPT_LADDER {
+            due(&e);
+            assert_eq!(e.receipts.lock().unwrap().next, Some(e.host.now() + gap));
+        }
+        due(&e);
+        {
+            let r = e.receipts.lock().unwrap();
+            assert!(r.gave_up && r.next.is_none(), "bounded: no more rounds");
+        }
+        assert_eq!(e.receipts_view()["gave_up"], json!(true));
+        arm_receipts(&e.receipts, e.host.now(), RECEIPT_FIRST);
+        let r = e.receipts.lock().unwrap();
+        assert!(!r.gave_up && r.failed_rounds == 0);
+        assert_eq!(r.next, Some(e.host.now() + RECEIPT_FIRST));
+    }
+
+    #[test]
+    fn receipts_all_sent_leave_nothing_scheduled() {
+        let (e, fake) = with_receipts(vec![(1, "enable", "ok.example")], "");
+        due(&e);
+        assert!(fake.state.lock().unwrap().notifs.is_empty());
+        assert!(
+            e.receipts.lock().unwrap().next.is_none(),
+            "no timer with nothing pending"
+        );
+    }
+
+    #[test]
+    fn receipts_wait_for_a_busy_slot_and_skip_the_card_without_data() {
+        let (e, fake) = with_receipts(vec![(1, "enable", "ok.example")], "");
+        e.running.store(true, Ordering::SeqCst);
+        due(&e);
+        {
+            let r = e.receipts.lock().unwrap();
+            assert_eq!(r.failed_rounds, 0, "a busy slot is not a round");
+            assert_eq!(r.next, Some(e.host.now() + RECEIPT_BUSY_AGAIN));
+        }
+        assert!(
+            fake.state.lock().unwrap().log.is_empty(),
+            "the card untouched"
+        );
+        e.running.store(false, Ordering::SeqCst);
+
+        let fake = Arc::new(Fake {
+            no_data: true,
+            ..Fake::default()
+        });
+        fake.state.lock().unwrap().notifs = vec![(1, "enable", "ok.example")];
+        let e = Esim::new(fake.clone());
+        due(&e);
+        assert!(
+            fake.state.lock().unwrap().log.is_empty(),
+            "no lpac without data"
+        );
+        assert_eq!(
+            e.receipts.lock().unwrap().failed_rounds,
+            1,
+            "counts toward the bound"
+        );
     }
 }

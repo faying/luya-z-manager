@@ -263,6 +263,26 @@ pub struct Card {
     /// The same for a SIM identity transition, from the `sim` block (any card change)
     pub sim_say: Option<(String, String)>,
     pub notifs: Option<Vec<Notif>>,
+    /// The core's re-send of the receipts (`resend`, core 1.38.0 on; None = older core)
+    pub resend: Option<Resend>,
+}
+
+/// Where the core's bounded re-send of the receipts is.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Resend {
+    /// the next round in this many seconds
+    In(u64),
+    /// the rounds ran out: send by hand
+    Stopped,
+}
+
+/// `resend` of `/api/esim/notifications`.
+pub fn resend_of(v: &Value) -> Option<Resend> {
+    let r = v.get("resend")?;
+    if r["gave_up"].as_bool() == Some(true) {
+        return Some(Resend::Stopped);
+    }
+    r["next_s"].as_u64().map(Resend::In)
 }
 
 /// `say` / `say_en` of a job or the `sim` block; None when empty or absent (older core).
@@ -371,6 +391,8 @@ pub struct View {
     pub locked: bool,
     pub notifs: Vec<Notif>,
     pub notif_dis: bool,
+    /// one line on the automatic re-send, when the core runs one
+    pub resend: Option<String>,
     pub chip: Vec<ChipRow>,
 }
 
@@ -606,6 +628,21 @@ pub fn view(c: &Card, reboot: bool, l: Lang) -> View {
         stale,
         locked: c.list.is_none() || stale || busy || c.settling.is_some(),
         notif_dis: busy || notifs.is_empty(),
+        resend: c.resend.as_ref().map(|r| match r {
+            Resend::In(s) => {
+                let m = s.div_ceil(60).max(1);
+                match l {
+                    Lang::En => format!("Sent again automatically in about {m} min"),
+                    Lang::Zh => format!("约 {m} 分钟后自动重发"),
+                }
+            }
+            Resend::Stopped => l
+                .pick(
+                    "Automatic re-sending has stopped: send them by hand",
+                    "自动重发已停止，请手动发送",
+                )
+                .to_owned(),
+        }),
         notifs,
         chip,
     }
@@ -694,10 +731,11 @@ impl Poll {
     }
     async fn notifs(&mut self, app: &Shared) {
         // null while a job runs: keep the last list
-        if let Ok(v) = crate::agent::get(app, &self.who, "/api/esim/notifications").await
-            && let Some(n) = notifs(&v)
+        if let Ok(v) = crate::agent::get_whole(app, &self.who, "/api/esim/notifications").await
+            && let Some(n) = notifs(&v["data"])
         {
             self.card.notifs = Some(n);
+            self.card.resend = resend_of(&v);
         }
     }
 }
@@ -2112,3 +2150,17 @@ pub async fn after(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod resend_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn resend_reads_the_cores_word() {
+        assert_eq!(resend_of(&json!({"data": []})), None, "older core");
+        assert_eq!(resend_of(&json!({"resend": {"next_s": null, "gave_up": false}})), None);
+        assert_eq!(resend_of(&json!({"resend": {"next_s": 90, "gave_up": false}})), Some(Resend::In(90)));
+        assert_eq!(resend_of(&json!({"resend": {"next_s": null, "gave_up": true}})), Some(Resend::Stopped));
+    }
+}

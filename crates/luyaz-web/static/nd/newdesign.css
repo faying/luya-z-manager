@@ -271,7 +271,9 @@ html[data-theme] ::selection {
   color: var(--nd-t1);
 }
 
-/* Reduced motion: transitions and animations finish at once, for every element and pseudo-element. */
+/* Reduced motion: nothing slides or grows (switch thumb here; progress bars in pages.css); colour fades stay,
+ * they carry the state change without movement. */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  *, *::before, *::after { animation-duration: 0.01ms !important; scroll-behavior: auto !important; }
+  .nd-switch__thumb { transition: background-color 150ms var(--nd-ease); }
 }

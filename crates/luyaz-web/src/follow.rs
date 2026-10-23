@@ -119,12 +119,13 @@ pub fn receipt_note(cf: &mut write::Confirm, via: crate::topbar::Via, l: Lang) {
 pub fn remote_risk_note(
     cf: &mut write::Confirm,
     via: crate::topbar::Via,
+    ap: luyaz_api::execution::wifi_change::Ap,
     change: luyaz_api::execution::wifi_change::Change,
     clients: Option<u32>,
     l: Lang,
 ) {
     use crate::topbar::Via;
-    use luyaz_api::execution::wifi_change::{Advice, Evidence, Origin, replay};
+    use luyaz_api::execution::wifi_change::{Advice, Evidence, Origin, replay, revert_measured};
     let origin = match via {
         Via::Local | Via::Tailnet => return,
         Via::SubnetRoute => Some(Origin::Remote),
@@ -138,19 +139,25 @@ pub fn remote_risk_note(
         other_entry: None,
         // the core reads the old values before it writes
         old_values: Some(true),
-        // O3 has not been checked on the device yet (§4.5)
-        revert_measured: Some(false),
+        // O3 measured per kind on the device (§4.5)
+        revert_measured: Some(revert_measured(ap, change)),
     };
     let note = match replay(&e) {
         Advice::OnSiteOnly {
             why: "origin_unknown_revert_unmeasured",
         } => l.pick(
-            "Where this page comes from cannot be told, and reverting from afar has not been tested on this device yet: if you are not on site, this change may lose the device for good.",
-            "看不出这个页面从哪里连过来，远程退回也还没在这台设备上实测过：如果你不在现场，改完可能再也连不上设备。",
+            "Where this page comes from cannot be told, and reverting this kind of change from afar has not been tested: if you are not on site, this change may lose the device for good.",
+            "看不出这个页面从哪里连过来，这类改动的远程退回也还没实测过：如果你不在现场，改完可能再也连不上设备。",
+        ),
+        Advice::OnSiteOnly {
+            why: "no_other_entry",
+        } => l.pick(
+            "This page reaches the device through another device's route, and no other way in is known: after this change, devices may not get back on even when it is reverted. If you can, make it on site.",
+            "这个页面是经别的设备的路由连到设备的，也不知道有没有别的入口：这次改完，即使设置被改回，设备也可能连不回来。能的话，到现场再改。",
         ),
         Advice::OnSiteOnly { .. } => l.pick(
-            "This page reaches the device through another device's route. Reverting from afar has not been tested on this device yet: if you can, make this change on site.",
-            "这个页面是经别的设备的路由连到设备的。远程退回还没在这台设备上实测过：能的话，到现场再改。",
+            "This page reaches the device through another device's route. Reverting this kind of change from afar has not been tested: if you can, make it on site.",
+            "这个页面是经别的设备的路由连到设备的。这类改动的远程退回还没实测过：能的话，到现场再改。",
         ),
         Advice::Unknown { .. } => l.pick(
             "Where this page comes from cannot be told, so it is treated as remote: it may lose the device until the change is reverted.",
@@ -249,31 +256,70 @@ mod receipt_tests {
 
     #[test]
     fn remote_risk_only_for_subnet_routes_and_unknown_origins() {
-        use luyaz_api::execution::wifi_change::Change;
+        use luyaz_api::execution::wifi_change::{Ap, Change};
         for via in [Via::Local, Via::Tailnet] {
             let mut c = cf(None);
-            remote_risk_note(&mut c, via, Change::OnOff, Some(2), Lang::En);
+            remote_risk_note(&mut c, via, Ap::Main, Change::Settings, Some(2), Lang::En);
             assert_eq!(c.recovery, None, "{via:?}");
         }
-        let mut c = cf(Some("Reconnect."));
+        // settings (name, password, band off) are not measured: on site
+        for ap in [Ap::Main, Ap::Guest] {
+            let mut c = cf(Some("Reconnect."));
+            remote_risk_note(
+                &mut c,
+                Via::SubnetRoute,
+                ap,
+                Change::Settings,
+                Some(2),
+                Lang::En,
+            );
+            let r = c.recovery.unwrap();
+            assert!(
+                r.starts_with("Reconnect. ") && r.contains("not been tested"),
+                "{r}"
+            );
+        }
+        // a no-rejoin change on either AP was measured (O3): no line over a subnet route,
+        // even when the guest page reads no client count
+        for (ap, clients) in [(Ap::Main, Some(2)), (Ap::Guest, None)] {
+            let mut c = cf(None);
+            remote_risk_note(
+                &mut c,
+                Via::SubnetRoute,
+                ap,
+                Change::OnOff,
+                clients,
+                Lang::En,
+            );
+            assert_eq!(c.recovery, None, "{ap:?}");
+        }
+        // unknown origin, measured: treated as remote
+        let mut c = cf(None);
         remote_risk_note(
             &mut c,
-            Via::SubnetRoute,
-            Change::Settings,
-            Some(2),
+            Via::Unknown,
+            Ap::Main,
+            Change::OnOff,
+            Some(0),
             Lang::En,
         );
         let r = c.recovery.unwrap();
-        assert!(r.starts_with("Reconnect. ") && r.contains("on site"), "{r}");
-        // the guest page reads no client count: still the on-site line
+        assert!(r.contains("treated as remote"), "{r}");
+        // unknown origin, unmeasured: its own on-site line
         let mut c = cf(None);
-        remote_risk_note(&mut c, Via::SubnetRoute, Change::OnOff, None, Lang::En);
-        assert!(c.recovery.unwrap().contains("another device's route"));
-        // unknown origin, nothing measured: its own on-site line
-        let mut c = cf(None);
-        remote_risk_note(&mut c, Via::Unknown, Change::OnOff, Some(0), Lang::En);
+        remote_risk_note(
+            &mut c,
+            Via::Unknown,
+            Ap::Guest,
+            Change::Settings,
+            None,
+            Lang::En,
+        );
         let r = c.recovery.unwrap();
-        assert!(r.contains("cannot be told") && r.contains("not on site"), "{r}");
+        assert!(
+            r.contains("cannot be told") && r.contains("not on site"),
+            "{r}"
+        );
     }
 
     #[test]

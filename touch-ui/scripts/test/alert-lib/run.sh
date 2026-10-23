@@ -37,6 +37,15 @@ i=0
 while [ $i -lt 300 ]; do alert_add agent-crash "n$i"; i=$((i + 1)); done
 check "trimmed to 200 once past 300" '[ "$(wc -l <$T/alerts/queue)" -le 300 ] && [ "$(wc -l <$T/alerts/queue)" -ge 200 ]'
 check "sequence keeps counting through trims" '[ "$(cat $T/alerts/seq)" = 302 ] && [ "$(tail -n1 $T/alerts/queue | cut -f1)" = 302 ]'
+# killed (or power cut) mid-line: the next event starts a line of its own (fault-injection.md P1)
+printf '303\t1\t1\tcore-cra' >>"$T/alerts/queue"
+echo 303 >"$T/alerts/seq"
+alert_add core-crash "after torn"
+check "torn last line: next event is a whole line" '[ "$(tail -n1 $T/alerts/queue | cut -f1,4,5)" = "$(printf "304\tcore-crash\tafter torn")" ]'
+# seq file lost or emptied: never hand out a number the queue already has (P2)
+: >"$T/alerts/seq"
+alert_add core-crash "after lost seq"
+check "empty seq: numbering continues past the queue" '[ "$(tail -n1 $T/alerts/queue | cut -f1)" = 305 ] && [ "$(cat $T/alerts/seq)" = 305 ]'
 rm -rf "$T"
 
 echo "alert-lib: $PASS passed, $FAIL failed"

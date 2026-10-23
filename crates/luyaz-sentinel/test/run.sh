@@ -9,6 +9,10 @@ set -eu
 cd "$(dirname "$0")/../../.."
 ../../tools/u60-dev rust cargo zigbuild --target-dir target-test --profile release-device \
     --target aarch64-unknown-linux-musl -p luyaz-sentinel
+# A build that ran somewhere else leaves the old binary here: refuse to test it.
+stale=$(find crates/luyaz-sentinel crates/luyaz-alerts -name '*.rs' \
+    -newer target-test/aarch64-unknown-linux-musl/release-device/luyaz-sentinel | head -1)
+[ -z "$stale" ] || { echo "binary older than $stale: build it on this machine" >&2; exit 2; }
 bin=$(mktemp -d)
 cp target-test/aarch64-unknown-linux-musl/release-device/luyaz-sentinel "$bin/"
 fail=0

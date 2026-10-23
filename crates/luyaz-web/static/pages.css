@@ -36,6 +36,7 @@
 @media (min-width: 1024px) { .st-page .p-4 { padding: 20px; } }
 .st-bar { height: 8px; width: 100%; overflow: hidden; border-radius: 9999px; background: var(--nd-track); }
 .st-bar__fill { height: 100%; border-radius: 9999px; background: var(--nd-t1); transition: width 0.5s; }
+@media (prefers-reduced-motion: reduce) { .st-bar__fill { transition: none; } }
 .st-bad { color: var(--nd-badT); }
 #st-op:not(:empty) { margin-top: 8px; padding-inline: 4px; }
 

@@ -168,3 +168,39 @@ fn serializes_tagged() {
     let v = serde_json::to_value(replay(&base())).unwrap();
     assert_eq!(v["risk"], "remote_trial");
 }
+
+#[test]
+fn revert_measured_per_kind() {
+    // O3 on u60g, 10-23: both APs' no-rejoin writes; rejoin settings never
+    assert!(revert_measured(Ap::Guest, Change::OnOff));
+    assert!(revert_measured(Ap::Main, Change::OnOff));
+    assert!(!revert_measured(Ap::Guest, Change::Settings));
+    assert!(!revert_measured(Ap::Main, Change::Settings));
+}
+
+#[test]
+fn a_measured_settings_change_still_needs_another_way_in() {
+    let e = Evidence {
+        change: Some(Change::Settings),
+        other_entry: None,
+        revert_measured: Some(revert_measured(Ap::Guest, Change::Settings)),
+        ..base()
+    };
+    assert_eq!(
+        replay(&e),
+        Advice::OnSiteOnly {
+            why: "revert_unmeasured"
+        }
+    );
+    // even if the table ever measured it, no other way in keeps it on site
+    let e = Evidence {
+        revert_measured: Some(true),
+        ..e
+    };
+    assert_eq!(
+        replay(&e),
+        Advice::OnSiteOnly {
+            why: "no_other_entry"
+        }
+    );
+}

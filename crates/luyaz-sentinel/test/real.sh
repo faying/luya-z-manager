@@ -59,6 +59,36 @@ echo ui >/tmp/luyaz-screen.ctl
 sleep 4
 U=$(ui)
 check "after give-up, ui request brings ours back" '[ -n "$U" ] && [ ! -f /data/luyaz/screen/gave-up ]'
+# races (docs/designs/fault-injection.md R1/R2): opposite requests in a burst and from two writers at
+# once. The 1185 rule: whatever happens, a screen program is back within a moment, and it settles
+# on exactly one, the last one asked for.
+nscreens() { echo $(( $(pgrep -x luyaz-ui | wc -l) + $(pgrep -f /usr/local/bin/zte_topsw_devui | wc -l) )); }
+watch_gap() { # longest run of 0.2 s samples with no screen program, over $1 samples
+    g=0; m=0; i=0
+    while [ $i -lt "$1" ]; do
+        if [ "$(nscreens)" = 0 ]; then g=$((g+1)); [ $g -gt $m ] && m=$g; else g=0; fi
+        sleep 0.2; i=$((i+1))
+    done
+    echo $m
+}
+printf 'vendor\nui\nvendor\nui\nui\n' >/tmp/luyaz-screen.ctl
+gap=$(watch_gap 40)
+check "burst: settles on ours alone" '[ "$(pgrep -x luyaz-ui | wc -l)" = 1 ] && [ -z "$(vendor)" ]'
+check "burst: never without a screen for over 1 s (max ${gap}x0.2 s)" '[ "$gap" -le 5 ]'
+( for i in 1 2 3 4; do echo vendor >/tmp/luyaz-screen.ctl; done ) &
+W1=$!
+( for i in 1 2 3 4; do echo ui >/tmp/luyaz-screen.ctl; done ) &
+W2=$!
+wait $W1 $W2   # not a bare wait: the sentinel is a background job too
+echo vendor >/tmp/luyaz-screen.ctl
+gap=$(watch_gap 40)
+check "two writers, then vendor: vendor alone" '[ "$(nscreens)" = 1 ] && [ -n "$(vendor)" ]'
+check "two writers: never without a screen for over 1 s (max ${gap}x0.2 s)" '[ "$gap" -le 5 ]'
+check "races: sentinel alive, FIFO kept, no give-up, no crash alert" 'kill -0 $SP && [ -p /tmp/luyaz-screen.ctl ] && [ ! -f /data/luyaz/screen/gave-up ] && [ "$(grep -c ui-crash /data/alerts/queue)" = 2 ]'
+echo ui >/tmp/luyaz-screen.ctl
+sleep 4
+U=$(ui)
+check "races: back to ours" '[ -n "$U" ] && [ "$(nscreens)" = 1 ]'
 kill -TERM $SP; wait $SP
 check "TERM: sentinel exits 0" '[ $? = 0 ]'
 check "TERM: FIFO removed, UI left running" '[ ! -e /tmp/luyaz-screen.ctl ] && [ "$(ui)" = "$U" ]'

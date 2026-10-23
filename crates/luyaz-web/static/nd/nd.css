@@ -199,7 +199,9 @@ a.nd-module:hover, button.nd-module:hover { box-shadow: inset 0 0 0 1px var(--nd
 .nd-btn--confirm { background: var(--nd-confirm); color: var(--nd-onConfirm); }
 .nd-btn--danger { background: var(--nd-fillRed); color: var(--nd-onFill); }
 .nd-btn--ghost { background: transparent; color: var(--nd-t1); padding: 0 12px; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--nd-hair); }
-.nd-btn--sm { min-height: 36px; padding: 0 14px; font-size: 14px; }
+.nd-btn--sm { position: relative; min-height: 36px; padding: 0 14px; font-size: 14px; }
+/* 36 to look at, 44 to tap (like the segment). */
+.nd-btn--sm::after { content: ""; position: absolute; inset: -4px 0; }
 .nd-btn--icon { width: 44px; padding: 0; }
 .nd-btn--primary[data-hovered]:not([data-disabled]),
 .nd-btn--confirm[data-hovered]:not([data-disabled]),

@@ -172,7 +172,7 @@
 
 表里其余的（csl、SmarTone、CTM、NTT docomo、SoftBank、au (KDDI)、SK Telecom、KT、LG U+、Singtel、M1、StarHub、SIMBA、AT&T、T-Mobile、Verizon、Telus、Bell、Rogers、O2 UK、Vodafone UK、Three UK、EE、Vodafone NL、KPN、Odido、Orange、SFR、Free、Bouygues、Telekom、Vodafone DE、O2 DE、AIS、True、dtac、Maxis、CelcomDigi、U Mobile、Telstra、Optus、Vodafone AU）本来就是英文，原样用。
 
-## 9. 告警短信（guard `sms_body()`，英文模式）
+## 9. 告警短信（`crates/luyaz-alerts/src/sms.rs` `sms_text()`，英文模式）
 
 格式 `[Luya-Z] <正文> (<日 月 时:分>)`，整条纯 ASCII、≤70 字符（评审 R7）；句末不加句号，几层意思用 `;` 连。时间写 `01 Oct 14:32`（`date '+%d %b %H:%M'`，定宽，10-01 定）。下表「长」是整条长度，含末尾 `#999` 短码（10-15 前缀改成 `[Luya-Z]` 后重算）。
 
@@ -292,7 +292,7 @@
 | scenario | 情景 | Scene |
 | scheduler | 定时任务 | Schedule |
 | auto | 自动 | Auto |
-| guard | 自动恢复 | Auto-recovery |
+| guard（core `engines/guard_duties`） | 自动恢复 | Auto-recovery |
 
 **项目名**：制式 / Network mode；搜网 / Network search；其他 设置 / Setting。
 

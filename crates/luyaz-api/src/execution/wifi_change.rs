@@ -9,10 +9,31 @@ use serde::Serialize;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Change {
-    /// Turning an AP on or off.
+    /// Turning an AP on or off, or a change its clients ride through after the reload
+    /// (channel, width, isolation, hiding): the web's "no rejoin" writes.
     OnOff,
-    /// Password, SSID, band, channel, hiding: clients have to reconnect or re-enter.
+    /// Name, password, security, a band switched off: clients have to rejoin or re-enter.
     Settings,
+}
+
+/// Which AP the change is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Ap {
+    Main,
+    Guest,
+}
+
+/// Whether this kind of change has had its receipt + revert measured on a device (O3, §4.5):
+/// both outcomes (confirmed by receipt, reverted without one) seen through the web on u60g on
+/// 10-23 — guest AP isolation and the main 2.4 GHz channel, both sent as `OnOff` (no rejoin).
+/// `Settings` (name, password, security, a band switched off) stays unmeasured: clients may not
+/// come back even when the revert lands.
+pub fn revert_measured(ap: Ap, change: Change) -> bool {
+    match (ap, change) {
+        (Ap::Main | Ap::Guest, Change::OnOff) => true,
+        (_, Change::Settings) => false,
+    }
 }
 
 /// Where the request comes from, as the web sees it.

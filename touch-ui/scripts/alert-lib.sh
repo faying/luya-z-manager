@@ -45,7 +45,15 @@ alert_add() {
         flock 8 || exit 1
         _seq=$(cat "$ALERT_DIR/seq" 2>/dev/null)
         case "$_seq" in '' | *[!0-9]*) _seq=0 ;; esac
+        # seq lost or behind (power cut on a fresh file): never reuse a number the queue has,
+        # the read and SMS cursors would skip the new event.
+        _qmax=$(awk -F'\t' 'NF == 5 && $1 ~ /^[0-9]+$/ && $1 + 0 > m { m = $1 + 0 } END { print m + 0 }' \
+            "$ALERT_DIR/queue" 2>/dev/null)
+        case "$_qmax" in '' | *[!0-9]*) _qmax=0 ;; esac
+        [ "$_qmax" -gt "$_seq" ] && _seq=$_qmax
         _seq=$((_seq + 1))
+        # a writer killed mid-line left no newline: end that line, or ours would join it
+        [ -n "$(tail -c 1 "$ALERT_DIR/queue" 2>/dev/null)" ] && echo >>"$ALERT_DIR/queue"
         _up=$(cut -d. -f1 "$ALERT_UPTIME_FILE" 2>/dev/null)
         # seq is written before the line: a crash in between skips a number,
         # which is harmless; the reverse could hand out the same number twice.

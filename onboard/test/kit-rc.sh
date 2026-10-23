@@ -42,5 +42,41 @@ for start in vendor sentinel; do
     echo "ok   $start"
 done
 
+# 故障注入（docs/designs/fault-injection.md K1/K2）：rc_write 的 cat / sync / mv 各自失败时
+# rc.local 逐字节不变、临时文件清掉、退出非 0；上次在 mv 前被杀留下的临时文件，下一遍照常。
+mkdir -p "$T/shim"
+for step in cat sync mv; do
+    d="$T/fail-$step"; mkdir -p "$d"; cp "$T/vendor" "$d/rc.local"
+    case $step in
+    cat) printf '%s\n' '#!/bin/sh' '[ "$1" = /tmp/rc.local.new ] && { head -c 7 "$1"; exit 1; }' 'exec /bin/cat "$@"' ;;
+    sync) printf '%s\n' '#!/bin/sh' 'exit 1' ;;
+    mv) printf '%s\n' '#!/bin/sh' 'case "$*" in *u60kit.tmp*) exit 1 ;; esac' 'exec /bin/mv "$@"' ;;
+    esac > "$T/shim/$step"
+    chmod 755 "$T/shim/$step"
+    (
+        KIT_RC="$d/rc.local" KIT_STATE="$d/state" KIT_LIB_ONLY=1 PATH="$T/shim:$PATH"
+        export KIT_RC KIT_STATE KIT_LIB_ONLY PATH
+        . "$ONB/device/install.sh"
+        steps
+    ) >/dev/null 2>&1 && { echo "FAIL $step 失败却退出 0"; fail=1; }
+    rm -f "$T/shim/$step"
+    cmp -s "$T/vendor" "$d/rc.local" || { echo "FAIL $step 失败后 rc.local 变了"; fail=1; continue; }
+    [ ! -e "$d/rc.local.u60kit.tmp" ] || { echo "FAIL $step 失败后临时文件还在"; fail=1; continue; }
+    echo "ok   $step 失败：rc.local 不变"
+done
+d="$T/stale"; mkdir -p "$d"; cp "$T/vendor" "$d/rc.local"
+printf 'exit 0\n# half' > "$d/rc.local.u60kit.tmp"
+(
+    KIT_RC="$d/rc.local" KIT_STATE="$d/state" KIT_LIB_ONLY=1
+    export KIT_RC KIT_STATE KIT_LIB_ONLY
+    . "$ONB/device/install.sh"
+    steps
+) >/dev/null 2>&1 || { echo "FAIL 残留临时文件：重跑失败"; fail=1; }
+if [ "$(rc_mode "$d/rc.local")" = sentinel ] && [ ! -e "$d/rc.local.u60kit.tmp" ] && ! grep -q '# half' "$d/rc.local"; then
+    echo "ok   残留临时文件：重跑正常"
+else
+    echo "FAIL 残留临时文件：结果不对"; fail=1
+fi
+
 [ -n "${SHOW:-}" ] && for s in vendor sentinel; do echo "== $s"; cat "$T/$s.d/rc.local"; done
 exit $fail

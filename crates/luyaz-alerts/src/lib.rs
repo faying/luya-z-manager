@@ -334,13 +334,26 @@ impl Alerts {
             .filter(|c| c.is_ascii() && !c.is_ascii_control())
             .take(120)
             .collect();
-        let seq = self.read_u64("seq") + 1;
+        // Same as alert-lib.sh: a lost or lagging `seq` never reuses a number the queue has (the
+        // cursors would skip the event), and a line torn by a killed writer gets its newline first.
+        let before = fs::read_to_string(self.path("queue")).unwrap_or_default();
+        let queued = parse_queue(&before)
+            .iter()
+            .map(|e| e.seq)
+            .max()
+            .unwrap_or(0);
+        let seq = self.read_u64("seq").max(queued) + 1;
         self.write_whole("seq", &format!("{seq}\n"))?;
         let mut q = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(self.path("queue"))?;
-        writeln!(q, "{seq}\t{wall}\t{uptime}\t{kind}\t{text}")?;
+        let torn = if before.is_empty() || before.ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
+        writeln!(q, "{torn}{seq}\t{wall}\t{uptime}\t{kind}\t{text}")?;
         drop(q);
         let all = fs::read_to_string(self.path("queue")).unwrap_or_default();
         let lines: Vec<&str> = all.lines().collect();
@@ -705,6 +718,36 @@ mod tests {
         assert_eq!(a.events()[0].text, "[8559f5dc-1] gave up");
         assert_eq!(a.find_event("8559f5dc-1"), Some(1));
         assert_eq!(a.find_event("8559f5dc-2"), None);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A writer killed mid-line, and a lost `seq` (docs/designs/fault-injection.md P1–P3).
+    #[test]
+    fn a_torn_queue_or_lost_seq_loses_no_event() {
+        use super::*;
+        let d = std::env::temp_dir().join(format!("u60-alerts-torn-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        let a = Alerts::at(&d);
+        assert_eq!(a.add("core-crash", "one", 100, 5).unwrap(), 1);
+        let mut q = fs::OpenOptions::new()
+            .append(true)
+            .open(d.join("queue"))
+            .unwrap();
+        std::io::Write::write_all(&mut q, b"2\t101\t6\tcore-cra").unwrap();
+        drop(q);
+        fs::write(d.join("seq"), "2\n").unwrap();
+        assert_eq!(a.add("core-crash", "after torn", 102, 7).unwrap(), 3);
+        let seqs: Vec<u64> = a.events().iter().map(|e| e.seq).collect();
+        assert_eq!(
+            seqs,
+            [1, 3],
+            "the torn line is skipped, the new one is whole"
+        );
+        fs::write(d.join("seq"), "").unwrap();
+        assert_eq!(a.add("core-crash", "after lost seq", 103, 8).unwrap(), 4);
+        fs::write(d.join(".seq.tmp"), "junk").unwrap();
+        a.write_whole("seq", "4\n").unwrap();
+        assert!(!d.join(".seq.tmp").exists());
         let _ = fs::remove_dir_all(&d);
     }
 

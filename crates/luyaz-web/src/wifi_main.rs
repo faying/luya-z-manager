@@ -1528,7 +1528,14 @@ pub async fn main_ask(State(app): State<Shared>, req: axum::extract::Request) ->
                 luyaz_api::execution::wifi_change::Change::OnOff
             };
             let clients = app.hub.read(on_wifi).and_then(|n| u32::try_from(n).ok());
-            crate::follow::remote_risk_note(&mut cf, ctx.remote, kind, clients, l);
+            crate::follow::remote_risk_note(
+                &mut cf,
+                ctx.remote,
+                luyaz_api::execution::wifi_change::Ap::Main,
+                kind,
+                clients,
+                l,
+            );
             let op_id = write::next_op_id();
             let t = put(Held {
                 change: c,

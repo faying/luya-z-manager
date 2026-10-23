@@ -261,6 +261,12 @@ pub async fn get(app: &Shared, who: &Caller, path: &str) -> Result<Value, Fail> 
     data(code, v)
 }
 
+/// [`get`], but the whole reply (`data` plus its siblings) on success.
+pub async fn get_whole(app: &Shared, who: &Caller, path: &str) -> Result<Value, Fail> {
+    let (code, v) = send(app, who, reqwest::Method::GET, path, None, None).await?;
+    data(code, v.clone()).map(|_| v)
+}
+
 /// A GET for `/agent-api` (agent_api.rs, u60-mcp.md): no browser session — the caller checked
 /// the token and the source itself — but the same client and the same [`ON_U60D`] list.
 /// The status and the whole reply.

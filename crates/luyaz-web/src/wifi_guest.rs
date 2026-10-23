@@ -1191,7 +1191,14 @@ pub async fn ask(State(app): State<Shared>, req: axum::extract::Request) -> impl
                 } else {
                     luyaz_api::execution::wifi_change::Change::OnOff
                 };
-                crate::follow::remote_risk_note(&mut c, ctx.remote, kind, None, l);
+                crate::follow::remote_risk_note(
+                    &mut c,
+                    ctx.remote,
+                    luyaz_api::execution::wifi_change::Ap::Guest,
+                    kind,
+                    None,
+                    l,
+                );
                 let t = put(s);
                 area(l, ctx.remote, &t, &write::Phase::Ask(c))
             }

@@ -155,7 +155,7 @@ cd luyaz-kit
 ```
 
 装 SSH 时会顺便**关掉固件自动升级**。U60 的地址不是 `192.168.0.1` 时，在命令前加 `GATEWAY=你的地址`。
-没有终端（比如让 Claude Code 代装）时，密码从环境变量 `ROUTER_PASSWORD`、`AGENT_PASSWORD` 或包里的 `u60.env` 读（模板 `u60.env.example`）。
+没有终端（比如让 Claude Code 代装）时，密码从环境变量 `ROUTER_PASSWORD`、`AGENT_PASSWORD`（管理网页密码，变量名沿用旧名）或包里的 `u60.env` 读（模板 `u60.env.example`）。
 
 装机包自带的 [README](../onboard/README.zh-CN.md) 写得更细：装到了哪些路径、日常用法、常见问题。
 

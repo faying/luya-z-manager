@@ -26,19 +26,49 @@ fn vendor_switch_only_when_exactly_off_and_turning_on() {
 
 #[test]
 fn expectation_follows_radio_and_ap_flags() {
-    assert_eq!(expectation("0", "0", "0", "0", false), Expect::On { ap_2g: true, ap_5g: true });
+    assert_eq!(
+        expectation("0", "0", "0", "0", false),
+        Expect::On {
+            ap_2g: true,
+            ap_5g: true
+        }
+    );
     // Missing keys mean enabled.
-    assert_eq!(expectation("", "", "", "", false), Expect::On { ap_2g: true, ap_5g: true });
+    assert_eq!(
+        expectation("", "", "", "", false),
+        Expect::On {
+            ap_2g: true,
+            ap_5g: true
+        }
+    );
     // Either layer disables a band.
-    assert_eq!(expectation("1", "0", "0", "0", false), Expect::On { ap_2g: false, ap_5g: true });
-    assert_eq!(expectation("0", "0", "0", "1", false), Expect::On { ap_2g: true, ap_5g: false });
+    assert_eq!(
+        expectation("1", "0", "0", "0", false),
+        Expect::On {
+            ap_2g: false,
+            ap_5g: true
+        }
+    );
+    assert_eq!(
+        expectation("0", "0", "0", "1", false),
+        Expect::On {
+            ap_2g: true,
+            ap_5g: false
+        }
+    );
     assert_eq!(expectation("0", "1", "0", "1", false), Expect::Off);
     assert_eq!(expectation("1", "1", "1", "1", false), Expect::Off);
     assert_eq!(expectation("0", "1", "0", "1", true), Expect::Unknown);
 }
 
 fn try_flock(path: &str) -> bool {
-    let f = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).unwrap();
+    let f = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .unwrap();
     // SAFETY: valid fd; the lock goes away when `f` is dropped.
     unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
 }
@@ -59,7 +89,11 @@ fn lock_takes_both_layers_and_releases_both() {
     // same thing `flock` in a shell would see).
     assert!(!try_flock(path), "flock should be held");
     // The holder's pid is in the file for other holders.
-    let pid: u32 = std::fs::read_to_string(path).unwrap().trim().parse().unwrap();
+    let pid: u32 = std::fs::read_to_string(path)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
     assert_eq!(pid, std::process::id());
     // In-process layer: a second acquisition times out instead of hanging.
     let t0 = Instant::now();
@@ -84,7 +118,10 @@ fn lock_takes_both_layers_and_releases_both() {
     })
     .join()
     .unwrap();
-    assert!(waiter.join().unwrap(), "waiter should acquire after release");
+    assert!(
+        waiter.join().unwrap(),
+        "waiter should acquire after release"
+    );
 
     // Both layers are free again.
     assert!(try_flock(path), "flock should be free");
@@ -92,12 +129,61 @@ fn lock_takes_both_layers_and_releases_both() {
 
     // A process-external holder (another process, e.g. the sentinel) blocks the
     // flock layer until the deadline, and the in-process flag is given back.
-    let outside = OpenOptions::new().read(true).write(true).open(path).unwrap();
+    let outside = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
     // SAFETY: valid fd.
-    assert_eq!(unsafe { libc::flock(outside.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }, 0);
+    assert_eq!(
+        unsafe { libc::flock(outside.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
     assert!(lock_at(path, Duration::from_millis(300)).is_err());
     drop(outside);
     drop(lock_at(path, Duration::from_millis(300)).expect("free after outside holder left"));
+
+    // A shell holder (RELIABILITY.md §1: `9>>`, then flock) that is killed -9 while holding:
+    // the kernel lets go, nobody has to clean up (docs/designs/fault-injection.md W1).
+    let mut sh = std::process::Command::new("sh")
+        .args([
+            "-c",
+            r#"exec 9>>"$0"; flock 9 && echo held && exec sleep 30"#,
+            path,
+        ])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("sh");
+    let mut line = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(sh.stdout.take().unwrap()),
+        &mut line,
+    )
+    .unwrap();
+    assert_eq!(line.trim(), "held");
+    assert!(
+        lock_at(path, Duration::from_millis(300)).is_err(),
+        "shell holder blocks"
+    );
+    sh.kill().unwrap();
+    sh.wait().unwrap();
+    drop(lock_at(path, Duration::from_secs(1)).expect("free once the holder is killed"));
+
+    // A child started while holding (a uci/ubus that hangs and is left behind) must not keep
+    // the lock after we let go: the fd is close-on-exec (W2).
+    let lk = lock_at(path, Duration::from_secs(1)).expect("lock again");
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .expect("sleep");
+    drop(lk);
+    assert!(
+        try_flock(path),
+        "a child outliving the holder must not hold the lock"
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -113,8 +199,20 @@ fn max_hold_covers_a_normal_apply() {
 fn a_reload_is_verified_only_when_hostapd_serves_the_new_name() {
     let st = "state=ENABLED\nchannel=1\nssid[0]=U-Chill\nbss[0]=wlan0\n";
     assert!(status_serves(st, Some("U-Chill")));
-    assert!(!status_serves(st, Some("U-Chill-t")), "old hostapd, old name: not yet");
-    assert!(status_serves(st, None), "no name to compare: ENABLED is enough");
-    assert!(!status_serves("state=DISABLED\nssid[0]=U-Chill\n", Some("U-Chill")));
-    assert!(!status_serves(st, Some("U-Chil")), "whole name, not a prefix");
+    assert!(
+        !status_serves(st, Some("U-Chill-t")),
+        "old hostapd, old name: not yet"
+    );
+    assert!(
+        status_serves(st, None),
+        "no name to compare: ENABLED is enough"
+    );
+    assert!(!status_serves(
+        "state=DISABLED\nssid[0]=U-Chill\n",
+        Some("U-Chill")
+    ));
+    assert!(
+        !status_serves(st, Some("U-Chil")),
+        "whole name, not a prefix"
+    );
 }

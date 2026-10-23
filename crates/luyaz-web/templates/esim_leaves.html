@@ -20,7 +20,7 @@
 <div id="es-dlgo"><button type="button" class="nd-btn nd-btn--primary"{% if v.locked %} disabled{% else %} data-attr:disabled="!$_esCode.trim()"{% endif %} data-on:click="@post('/router/esim/download/ask', {filterSignals: {include: /^_esCo/, exclude: /(?!)/}})">{{ v.l.pick("Download", "下载") }}</button></div>
 <!--leaf-->
 <div id="es-notif">{% if !v.notifs.is_empty() %}<section aria-labelledby="es-nt-t"><div class="flex items-end gap-2"><h2 id="es-nt-t" class="nd-group-title flex-1">{{ v.l.pick("Pending notifications", "待发送通知") }}</h2><button type="button" class="nd-btn nd-btn--secondary nd-btn--sm mb-2"{% if v.notif_dis %} disabled{% endif %} data-on:click="@post('/router/esim/notif/ask')">{{ crate::shell::icon("PaperPlaneRight", false, 20, "")|safe }}<span>{{ v.l.pick("Send all", "全部发送") }}</span></button></div>
-<p class="nd-aux -mt-1 mb-3 px-1">{{ v.l.pick("Receipts the card still has to send to the carrier's SM-DP+ server after a profile change", "改过配置后，卡还要发给运营商 SM-DP+ 服务器的回执") }}</p>
+<p class="nd-aux -mt-1 mb-3 px-1">{{ v.l.pick("Receipts the card still has to send to the carrier's SM-DP+ server after a profile change", "改过配置后，卡还要发给运营商 SM-DP+ 服务器的回执") }}{% if let Some(r) = v.resend %}<br>{{ r }}{% endif %}</p>
 <div class="nd-group{% if v.stale %} nd-stale{% endif %}">{% for n in v.notifs %}<div class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label">#{{ n.seq }} · <span data-data>{{ n.op }}</span></span><span class="nd-row__sub block"><span class="nd-mono" data-data>{{ n.addr }}</span> · <span class="nd-mono" data-data>{{ n.iccid }}</span></span></span></div>{% endfor %}</div>
 </section>{% endif %}</div>
 <!--leaf-->
