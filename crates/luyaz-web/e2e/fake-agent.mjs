@@ -101,13 +101,15 @@ function handler(req, res) {
             // Synthetic Core projection for browser tests; never live device evidence.
             v.data.write_policies = Object.fromEntries(["usb.mode.set", "usb.attach.share", "usb.attach.fast_charge"].map((id) => {
               const status = id === "usb.mode.set" ? (settable === "false" ? "unsupported" : settable === "true" ? "supported" : "unknown") : "unknown";
-              return [id, { disposition: status === "unsupported" ? "denied" : "human_preflight", assessment: {
+              // as luyaz-api's usb_write_policy: supported + fresh + ready → ready, unsupported → denied
+              const ready = status === "supported";
+              return [id, { disposition: status === "unsupported" ? "denied" : ready ? "ready" : "human_preflight", assessment: {
                 capability_id: id, status, reason: "no_evidence", evidence_ids: [], contradicting_evidence_ids: [],
-                availability: { state: "unknown", reason: "synthetic" },
+                availability: { state: ready ? "ready" : "unknown", reason: "synthetic" },
                 scope: { device_id: "synthetic", fingerprint: null, collector_id: "synthetic", generation: 0,
                   rule_revision: 1, adapter_revision: 1, component_revision: "synthetic", cohort: "unknown", context: {
                     ubus_epoch: null, usb_epoch: null, sim_epoch: null, connection_epoch: null, radio_mode: null } },
-                freshness: { fresh: false, max_age_seconds: 60, age_seconds: null }, validation: null,
+                freshness: { fresh: ready, max_age_seconds: 60, age_seconds: ready ? 0 : null }, validation: null,
                 last_attempt_evidence_id: null, selected_dialect: null,
               } }];
             }));

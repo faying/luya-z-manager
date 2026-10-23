@@ -100,7 +100,11 @@ struct Slot {
     reply: Vec<u8>,
 }
 
+type Contact = (Option<Vec<u8>>, Option<(OwnedFd, Vec<u8>)>);
+
 pub struct CoreLink {
+    background: bool,
+    contact: Option<super::background::Task<Contact>>,
     pub cfg: Cfg,
     sse: Option<OwnedFd>,
     bad_events: u32,
@@ -595,6 +599,8 @@ fn ok_200(buf: &[u8]) -> bool {
 impl CoreLink {
     pub fn new(cfg: Cfg) -> CoreLink {
         CoreLink {
+            background: false,
+            contact: None,
             cfg,
             sse: None,
             bad_events: 0,
@@ -622,6 +628,53 @@ impl CoreLink {
             sms_arm_id: -1,
             sms_arm_ms: 0,
         }
+    }
+
+    /// Production reads establish both HTTP and SSE away from the LVGL thread.
+    pub fn background(cfg: Cfg) -> Self {
+        Self { background: true, ..Self::new(cfg) }
+    }
+
+    fn poll_background(&mut self, now: u32) -> bool {
+        self.control_reap(now);
+        let mut changed = false;
+        if let Some(task) = &self.contact {
+            match task.take() {
+                Ok((state, stream)) => {
+                    self.contact = None;
+                    if let Some(resp) = state
+                        && let Some(body) = body_start(&resp).filter(|_| ok_200(&resp))
+                    {
+                        self.mark_alive();
+                        changed |= self.v2_apply_snapshot(&resp[body..], false) > 0;
+                    }
+                    if let Some((fd, head)) = stream { self.install_stream(fd, head); }
+                    let wait = if self.backend_silent() { self.cfg.silent_retry_ms } else { self.cfg.retry_ms };
+                    self.retry_at_ms = now.wrapping_add(wait);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.contact = None;
+                    self.retry_at_ms = now.wrapping_add(self.cfg.retry_ms);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if self.sse.is_some() {
+            changed |= self.drain_sse_stream();
+            if self.sse.is_some() && self.backend_silent() { self.close_sse_stream(); }
+        }
+        if self.sse.is_none() && self.contact.is_none() && self.due(now) {
+            let cfg = self.cfg.clone();
+            self.contact = super::background::Task::start_notify(move || {
+                let link = Self::new(cfg);
+                let req = format!("GET /v2/state HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n\r\n", link.cfg.host, link.cfg.port);
+                let state = link.ask(&req, REPLY_CAP, true).map(|(_, body)| body);
+                let req = format!("GET /v2/events HTTP/1.1\r\nHost: {}:{}\r\nAccept: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n", link.cfg.host, link.cfg.port);
+                let stream = link.ask(&req, 16384, false);
+                (state, stream)
+            }, |_| true);
+        }
+        changed
     }
 
     fn mark_alive(&mut self) {
@@ -799,7 +852,7 @@ impl CoreLink {
 
     // ---- transport ----
 
-    /// Sends `req` and reads core's answer, each read bounded by io_ms: all of it (until core
+    /// Sends `req` and reads core's answer within a total read budget of io_ms: all of it (until core
     /// hangs up) when `whole`, else just past the head. None on any failure or past `limit`.
     fn ask(&self, req: &str, limit: usize, whole: bool) -> Option<(OwnedFd, Vec<u8>)> {
         let fd = http::connect_tcp(&self.cfg.host, self.cfg.port, self.cfg.io_ms)?;
@@ -808,11 +861,13 @@ impl CoreLink {
             return None;
         }
         let mut got = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(self.cfg.io_ms.max(0) as u64);
         loop {
             if !whole && body_start(&got).is_some() {
                 return Some((fd, got));
             }
-            if got.len() + 1 >= limit || wait(raw, false, self.cfg.io_ms) <= 0 {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if got.len() + 1 >= limit || left.is_zero() || wait(raw, false, left.as_millis().max(1).min(i32::MAX as u128) as i32) <= 0 {
                 return None;
             }
             let room = limit - 1 - got.len();
@@ -873,6 +928,10 @@ impl CoreLink {
             self.cfg.host, self.cfg.port
         );
         let Some((fd, head)) = self.ask(&req, 16384, false) else { return false };
+        self.install_stream(fd, head)
+    }
+
+    fn install_stream(&mut self, fd: OwnedFd, head: Vec<u8>) -> bool {
         let Some(body) = body_start(&head).filter(|_| ok_200(&head)) else { return false };
         // SAFETY: fcntl on a socket we own
         let nonblocking = unsafe {
@@ -980,6 +1039,7 @@ impl CoreLink {
     /// Every main-loop pass: settle parked writes, read the stream, reconnect when it is gone,
     /// silent or unusable. true = the live snapshot changed.
     pub fn poll(&mut self, now: u32) -> bool {
+        if self.background { return self.poll_background(now); }
         self.control_reap(now);
         let mut changed = false;
         if !self.shown_ok && !self.latest_ok && self.due(now) {
@@ -1023,13 +1083,14 @@ impl CoreLink {
     }
 
     pub fn close(&mut self) {
+        self.contact = None;
         self.sse = None;
         self.stream_buf.clear();
     }
 
     /// No snapshot on screen yet: try to get one now (blocks for the connect).
     pub fn refresh_init(&mut self) {
-        if !self.shown_ok {
+        if !self.shown_ok && !self.background {
             self.init();
         }
     }

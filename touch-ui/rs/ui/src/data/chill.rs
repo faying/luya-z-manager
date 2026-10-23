@@ -18,7 +18,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 /// beside the program (Luya-Z D5)
 const SC_CONF: &str = "/data/luyaz/ui/chill.conf";
 const SC_IO_MS: i32 = 1500;
-const SC_TTL_MS: i64 = 2000;
+const SC_TTL_MS: i64 = 5000; // was 2000; reduced poll rate (P2 觸屏降頻 2026-10-19)
 /// /configs is about 170 KB (mostly the TUN route exclusions) for the one field we want
 const SC_CFG_TTL_MS: i64 = 30000;
 /// one hand-picked group had 168 nodes on 2026-09-22
@@ -46,6 +46,7 @@ pub const CH_REST: usize = 2;
 const CH_KEYS: [&str; 3] = ["media", "ip", "rest"];
 
 /// One (rule group, node) pair's bytes since this process started.
+#[derive(Clone)]
 struct Pair {
     grp_raw: String,
     node_raw: String,
@@ -54,6 +55,7 @@ struct Pair {
 }
 
 /// A connection's last counters, to take the difference each round.
+#[derive(Clone)]
 struct Track {
     id: String,
     up: i64,
@@ -119,6 +121,64 @@ pub struct Chill {
     home: chill_home_t,
     home_ms: i64,
 }
+impl super::background::ReadCopy for Chill {
+    fn read_copy(&self) -> Self {
+        Self {
+            host: self.host.clone(),
+            port: self.port,
+            secret: self.secret.clone(),
+            group: self.group.clone(),
+            conf_loaded: self.conf_loaded,
+            online: self.online,
+            mode_raw: self.mode_raw.clone(),
+            profile: self.profile.clone(),
+            profile_eff: self.profile_eff.clone(),
+            thermal_eco: self.thermal_eco,
+            profile_pending_ms: self.profile_pending_ms,
+            node: self.node.clone(),
+            main_now: self.main_now.clone(),
+            traffic: self.traffic.clone(),
+            speed: self.speed.clone(),
+            chain: self.chain.clone(),
+            chain_raw: self.chain_raw.clone(),
+            prev_dl: self.prev_dl,
+            prev_ul: self.prev_ul,
+            prev_t: self.prev_t,
+            conns: self.conns.clone(),
+            core_running: self.core_running,
+            nodes: self.nodes.clone(),
+            nodes_raw: self.nodes_raw.clone(),
+            node_delay: self.node_delay.clone(),
+            fixed: self.fixed.clone(),
+            exit_pin: self.exit_pin.clone(),
+            stat_pair: self.stat_pair.clone(),
+            track: self.track.clone(),
+            top_pair: self.top_pair.clone(),
+            grp_raw: self.grp_raw.clone(),
+            grp_disp: self.grp_disp.clone(),
+            grp_type: self.grp_type.clone(),
+            grp_idx: self.grp_idx,
+            conn_direct: self.conn_direct,
+            conn_proxy: self.conn_proxy,
+            last_ms: self.last_ms,
+            cfg_ms: self.cfg_ms,
+            cfg_again: self.cfg_again,
+            last_truncated: self.last_truncated,
+            delay_fd: None,
+            delay_t0: 0,
+            delay_buf: Vec::new(),
+            home: self.home.clone(),
+            home_ms: self.home_ms,
+        }
+    }
+    fn apply(&mut self, mut next: Self) {
+        next.delay_fd = self.delay_fd.take();
+        next.delay_buf = std::mem::take(&mut self.delay_buf);
+        next.delay_t0 = self.delay_t0;
+        *self = next;
+    }
+}
+
 
 /// The first row of an auto (url-test / fallback) group's node list.
 fn auto_row_label(fixed: &str, now: &str, en: bool) -> String {
@@ -961,7 +1021,7 @@ impl Chill {
 
     /// Take whatever of the delay answer has arrived; once the peer closes (or the buffer is
     /// full) apply it. A test that runs past SC_DELAY_MAX_MS is dropped.
-    fn delay_poll(&mut self) {
+    pub(super) fn delay_poll(&mut self) {
         let Some(fd) = self.delay_fd.as_ref().map(AsRawFd::as_raw_fd) else { return };
         let limit = SC_DELAY_BUF - 1;
         while self.delay_buf.len() < limit {

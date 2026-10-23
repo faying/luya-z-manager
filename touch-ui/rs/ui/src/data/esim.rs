@@ -35,6 +35,7 @@ struct Prof {
     enabled: bool,
 }
 
+#[derive(Clone)]
 pub struct Esim {
     prof: Vec<Prof>,
     loaded: bool,

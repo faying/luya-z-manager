@@ -2,6 +2,7 @@
 //! built from the core's endpoints and the device's files.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
+pub mod background;
 pub mod core_api;
 pub mod alerts;
 pub mod battery;

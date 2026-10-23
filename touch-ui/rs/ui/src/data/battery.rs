@@ -95,6 +95,7 @@ pub fn est_from_report(obj: Option<&[u8]>) -> (bool, Est, i32) {
     (true, e, target)
 }
 
+#[derive(Clone)]
 pub struct BatteryEst {
     text: String,
     was_active: bool,

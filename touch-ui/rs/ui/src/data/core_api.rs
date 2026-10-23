@@ -14,7 +14,7 @@ pub const IO_MS: i32 = 1500;
 /// A response: the HTTP status (0 = unreachable or no usable reply) and the body (None on 0).
 pub type Reply = (i32, Option<Vec<u8>>);
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CoreApi {
     port: u16,
 }

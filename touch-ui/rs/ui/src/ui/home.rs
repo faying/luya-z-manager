@@ -1655,9 +1655,9 @@ impl Ui {
         if !active || (a.read_at != 0 && now.wrapping_sub(a.read_at) < 5000) {
             return;
         }
-        a.read_at = now;
         if let Some((w24, w5, psm)) = self.src.aux_read() {
             let a = &mut self.aux;
+            a.read_at = now;
             aux_take(&mut a.w24, &mut a.hold_w24, w24, now);
             aux_take(&mut a.w5, &mut a.hold_w5, w5, now);
             if psm >= 0 {

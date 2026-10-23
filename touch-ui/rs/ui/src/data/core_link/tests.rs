@@ -444,3 +444,38 @@ fn clients_keep_lanid_fields_and_a_full_list() {
     read_clients(br#"{"total":1,"list":[{"name":"n","ip":"1","mac":"m"}]}"#, &mut d);
     assert!(d.lan_n == 1 && d.lan[0].alias.is_empty() && !d.lan[0].private);
 }
+
+#[test]
+fn background_contact_keeps_pumping_during_a_delayed_handshake() {
+    use std::time::Instant;
+    let (listener, port) = crate::data::testsrv::listen();
+    let h = crate::data::testsrv::serve(listener, 2, |c, i| {
+        let request = crate::data::testsrv::read_req(c);
+        std::thread::sleep(Duration::from_millis(180));
+        if i == 0 {
+            assert!(request.starts_with("GET /v2/state "));
+            c.write_all(format!("HTTP/1.0 200 OK\r\n\r\n{SNAP}").as_bytes()).unwrap();
+        } else {
+            assert!(request.starts_with("GET /v2/events "));
+            c.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n").unwrap();
+            // Keep the stream alive until the test has collected the handshake.
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    let mut core = CoreLink::background(cfg(port));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut passes = 0;
+    while !core.shown_ok {
+        let at = Instant::now();
+        core.poll(mono_ms32());
+        core.commit_latest();
+        assert!(at.elapsed() < Duration::from_millis(100), "UI pump waited on contact");
+        assert!(Instant::now() < deadline);
+        passes += 1;
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(passes >= 20, "the UI kept running before data arrived");
+    assert_eq!(core.refresh().1.carrier, "X");
+    core.close();
+    h.join().unwrap();
+}

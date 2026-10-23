@@ -17,6 +17,9 @@ const DG_SLOW_MS: i64 = 5000;
 const DG_BACKOFF_MS: i64 = 5000;
 const DG_RESP_MAX: usize = 8192;
 
+type Signature = (diag_run_t, i32, bool, Option<dg_proposal_t>, String, Option<dg_restore_t>);
+
+#[derive(Clone)]
 pub struct Diagnose {
     run: diag_run_t,
     /// the agent has nothing to show (run: what it had)
@@ -25,7 +28,7 @@ pub struct Diagnose {
     refused: String,
     poll_ms: i64,
     kick: bool,
-    sig: Option<(diag_run_t, i32, bool, Option<dg_proposal_t>, String, Option<dg_restore_t>)>,
+    sig: Option<Signature>,
     /// the core's pending redial proposal (`data.proposal`)
     proposal: Option<dg_proposal_t>,
     /// the core's words on a strong but slow signal (`data.slow_signal.say`), this language

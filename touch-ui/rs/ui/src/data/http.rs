@@ -130,10 +130,11 @@ pub fn read_into(fd: RawFd, buf: &mut Vec<u8>, room: usize) -> isize {
     n
 }
 
-/// Read until the peer closes, a read waits longer than io_ms, or cap - 1 bytes are in
+/// Read until the peer closes, the total read budget io_ms expires, or cap - 1 bytes are in
 /// (http_read_all). Returns (bytes, truncated).
 pub fn read_all(fd: RawFd, cap: usize, io_ms: i32) -> (Vec<u8>, bool) {
     let mut buf = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(io_ms.max(0) as u64);
     if cap == 0 {
         return (buf, false);
     }
@@ -141,7 +142,8 @@ pub fn read_all(fd: RawFd, cap: usize, io_ms: i32) -> (Vec<u8>, bool) {
         if buf.len() + 1 >= cap {
             return (buf, true);
         }
-        if wait(fd, false, io_ms) <= 0 {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() || wait(fd, false, left.as_millis().max(1).min(i32::MAX as u128) as i32) <= 0 {
             break;
         }
         let room = cap - 1 - buf.len();

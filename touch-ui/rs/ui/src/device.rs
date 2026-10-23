@@ -171,11 +171,11 @@ fn maybe_dump_fb() {
 }
 
 /// Wait on the input fds and the core's socket; true when touch or the key woke it.
-fn wait_fds(fds: &[i32], data_fd: i32, ms: i32) -> bool {
+fn wait_fds(fds: &[i32], data_fd: i32, wake_fd: i32, ms: i32) -> bool {
     let mut pf: Vec<libc::pollfd> = fds.iter().filter(|&&f| f >= 0).map(|&fd| libc::pollfd { fd, events: libc::POLLIN, revents: 0 }).collect();
     let input_n = pf.len();
-    if data_fd >= 0 {
-        pf.push(libc::pollfd { fd: data_fd, events: libc::POLLIN, revents: 0 });
+    for fd in [data_fd, wake_fd].into_iter().filter(|&fd| fd >= 0) {
+        pf.push(libc::pollfd { fd, events: libc::POLLIN, revents: 0 });
     }
     // SAFETY: a vector of pollfds
     let r = unsafe { libc::poll(pf.as_mut_ptr(), pf.len() as libc::nfds_t, ms) };
@@ -273,6 +273,8 @@ pub fn run(args: &[String]) -> i32 {
     let (refr_timer, read_timer) = unsafe { (lv::Timer(sys::lv_display_get_refr_timer(disp)), lv::Timer(sys::lv_indev_get_read_timer(indev))) };
     let quiet_on = std::env::var("LUYAZ_UI_QUIET").map_or(true, |v| v != "0");
     let loopstats = std::env::var_os("LUYAZ_UI_LOOPSTATS").is_some();
+    let perf = std::env::var_os("LUYAZ_UI_PERF").is_some();
+    let (mut passes, mut pump_us, mut timer_us, mut over_20ms) = (0u64, 0u128, 0u128, 0u64);
     let (mut dark, mut quiet, mut still) = (false, false, 0);
     let mut last_frames = frames();
     let (mut quiets, mut wake_input, mut wake_inval) = (0u64, 0u64, 0u64);
@@ -296,10 +298,18 @@ pub fn run(args: &[String]) -> i32 {
             break;
         }
         // the data side's transport: the snapshot moves only when the stream is drained
-        ui::with(|u| u.src.pump(now));
-
+        let at = perf.then(std::time::Instant::now);
+        ui::with(|u| { if u.src.pump(now) { u.refresh_data(); } });
+        if let Some(at) = at { pump_us = pump_us.max(at.elapsed().as_micros()); }
+        let at = perf.then(std::time::Instant::now);
         // SAFETY: one thread
         let idle = unsafe { sys::lv_timer_handler() };
+        if let Some(at) = at {
+            let us = at.elapsed().as_micros();
+            timer_us = timer_us.max(us);
+            over_20ms += (us > 20_000) as u64;
+            passes += 1;
+        }
         if !offscreen {
             maybe_dump_fb();
         }
@@ -313,7 +323,7 @@ pub fn run(args: &[String]) -> i32 {
             );
         }
 
-        let (key_fd, data_fd, lit, held) = ui::with(|u| (u.src.key_fd(), u.src.data_fd(), u.bl_is_on(), u.key_held()));
+        let (key_fd, data_fd, wake_fd, lit, held) = ui::with(|u| (u.src.key_fd(), u.src.data_fd(), u.src.wake_fd(), u.bl_is_on(), u.key_held()));
         // a power key held on a dark screen keeps being polled, or its long press is lost
         let want_dark = !lit && !held;
         if want_dark != dark {
@@ -328,7 +338,7 @@ pub fn run(args: &[String]) -> i32 {
         }
         let wait_ms = idle.min(1000) as i32;
         if dark {
-            if wait_fds(&[touch_fd, key_fd], data_fd, wait_ms) {
+            if wait_fds(&[touch_fd, key_fd], data_fd, wake_fd, wait_ms) {
                 // touch or key: let LVGL and the key poll handle it now
                 dark = false;
                 pause(false);
@@ -340,7 +350,7 @@ pub fn run(args: &[String]) -> i32 {
             // something asked for a redraw during the last pass: draw it now
             let mut wake = INVAL.load(Ordering::Relaxed);
             if !wake {
-                wake = wait_fds(&[touch_fd, key_fd], data_fd, wait_ms);
+                wake = wait_fds(&[touch_fd, key_fd], data_fd, wake_fd, wait_ms);
                 if wake {
                     wake_input += 1;
                 }
@@ -384,6 +394,9 @@ pub fn run(args: &[String]) -> i32 {
         std::thread::sleep(std::time::Duration::from_millis(idle.min(8) as u64));
     }
 
+    if perf {
+        eprintln!("ui-perf: passes={passes} pump_max_us={pump_us} timer_max_us={timer_us} timer_over_20ms={over_20ms} frames={}", frames());
+    }
     ui::with(|u| u.src.data_set_pace(true)); // don't leave core slow behind a stopped UI
     if let Some(f) = arg(args, "--texts=") {
         let mut t = Vec::new();

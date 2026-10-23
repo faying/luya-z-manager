@@ -333,3 +333,72 @@ pub fn load() -> bool {
     let _ = FONTS.set(f);
     ok
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// WCAG 2 relative luminance of 0xRRGGBB.
+    fn lum(c: u32) -> f64 {
+        let ch = |s: u32| {
+            let v = ((c >> s) & 0xff) as f64 / 255.0;
+            if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * ch(16) + 0.7152 * ch(8) + 0.0722 * ch(0)
+    }
+
+    fn ratio(a: u32, b: u32) -> f64 {
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// Every text colour on every surface text sits on, both themes: WCAG AA 4.5:1.
+    /// pill only ever carries t1 (the selected segment), so only t1 is checked there.
+    #[test]
+    fn text_contrast_aa() {
+        let mut bad = Vec::new();
+        for th in [&LIGHT, &DARK] {
+            let texts = [
+                ("t1", th.t1),
+                ("t2", th.t2),
+                ("t3", th.t3),
+                ("ok_t", th.ok_t),
+                ("warn_t", th.warn_t),
+                ("bad_t", th.bad_t),
+                ("acc_t", th.acc_t),
+            ];
+            let surfaces = [
+                ("bg", th.bg),
+                ("card", th.card),
+                ("glass", th.glass),
+                ("wash", th.wash),
+                ("wash_w", th.wash_w),
+                ("wash_b", th.wash_b),
+                ("track", th.track),
+                ("acc_s", th.acc_s),
+            ];
+            let mut pairs: Vec<(&str, u32, &str, u32)> = Vec::new();
+            for &(tn, tc) in &texts {
+                for &(sn, sc) in &surfaces {
+                    pairs.push((tn, tc, sn, sc));
+                }
+            }
+            pairs.push(("t1", th.t1, "pill", th.pill));
+            for (fname, f) in [
+                ("fill_blue", th.fill_blue),
+                ("fill_orange", th.fill_orange),
+                ("fill_green", th.fill_green),
+                ("fill_red", th.fill_red),
+            ] {
+                pairs.push(("white", 0xffffff, fname, f));
+            }
+            for (tn, tc, sn, sc) in pairs {
+                let r = ratio(tc, sc);
+                if r < 4.5 {
+                    bad.push(format!("{} {tn} on {sn}: {r:.2}", if th.dark { "dark" } else { "light" }));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "below 4.5:1: {bad:?}");
+    }
+}

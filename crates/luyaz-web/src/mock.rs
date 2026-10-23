@@ -682,8 +682,9 @@ fn alerts_data(unread: u64) -> Value {
        "sms": {"configured": false, "number": null, "recent": []}})
 }
 
-/// `POST /mock/alerts-to-agent?on=true`: `/v2/api/alerts` answers "not mine", so the /alerts page
-/// (5a) reads the fake agent's full summary (with the SMS part) instead of this short one.
+/// `POST /mock/alerts-to-agent?on=true`: `/v2/api/alerts` and `/v2/api/alerts/read` answer "not
+/// mine", so the /alerts page (5a) reads and marks the fake agent's full summary (with the SMS part)
+/// instead of this short one.
 static ALERTS_TO_AGENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 async fn screen_alerts(State(m): State<Arc<Mock>>) -> Response {

@@ -52,6 +52,15 @@ pub(crate) fn status_extra(d: &mut Value) {
 }
 
 async fn read_alert(body: axum::body::Bytes) -> Response {
+    // with /mock/alerts-to-agent on, the list comes from the fake agent: so does marking it read,
+    // or the page's read-back would look at a cursor this write never moved
+    if super::ALERTS_TO_AGENT.load(std::sync::atomic::Ordering::SeqCst) {
+        return (
+            StatusCode::NOT_FOUND,
+            axum::Json(json!({"ok": false, "error": "not_in_compat_yet"})),
+        )
+            .into_response();
+    }
     let v: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     let mut s = st().lock().unwrap();
     if let Some(q) = v["seq"].as_u64() {

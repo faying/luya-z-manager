@@ -378,6 +378,7 @@ impl Source for Replay {
         true
     }
     fn chill_test_delay(&mut self) -> i32 {
+        println!("ACTION chill_test_delay");
         self.acted();
         1
     }
@@ -815,6 +816,14 @@ pub fn run(args: &[String]) -> i32 {
             },
             // the backlight is the data side's: its effect comes as a model line
             "call" => match (f.get(1).copied(), num(2)) {
+                (Some("refresh_data()"), _) => {
+                    ui::with(|u| u.refresh_data());
+                    true
+                }
+                (Some("refresh()"), _) => {
+                    ui::with(|u| u.refresh());
+                    true
+                }
                 (Some("backlight_on()" | "backlight_off()"), _) => true,
                 (Some("net_clear_arms()"), _) => {
                     ui::with(|u| u.net_clear_arms());

@@ -164,3 +164,20 @@ fn agent_goes_to_u60ds_v2_api_without_a_login() {
     a.config(port);
     assert_eq!(a.api("GET", "/api/y", None, 4096), (0, None));
 }
+
+#[test]
+fn a_dripping_peer_cannot_extend_the_total_read_budget() {
+    let (listener, port) = listen();
+    let h = serve(listener, 1, |c, _| {
+        read_req(c);
+        for _ in 0..20 {
+            if c.write_all(b"x").is_err() { break; }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    });
+    let fd = connect_tcp("127.0.0.1", port, 500).unwrap();
+    let at = Instant::now();
+    let _ = exchange(fd, b"GET / HTTP/1.0\r\n\r\n", 4096, 120);
+    assert!(at.elapsed() < Duration::from_millis(350), "drip extended the read budget");
+    h.join().unwrap();
+}

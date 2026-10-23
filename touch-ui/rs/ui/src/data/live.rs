@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::core_api::CoreApi;
+use super::background::{Cached, Task};
 use super::alerts::Alerts;
 use super::battery::BatteryEst;
 use super::landing::Landing;
@@ -33,18 +34,19 @@ const LANG_HOLD_MS: u64 = 400;
 pub struct Live {
     pub agent: CoreApi,
     pub core: CoreLink,
-    sf: ScreenFeed,
-    scenario: Scenario,
-    netinfo: Netinfo,
-    alerts: Alerts,
-    esim: Esim,
-    speed: Speedtest,
-    ts: Tailscale,
-    diag: Diagnose,
-    bat: BatteryEst,
-    vers: Versions,
-    landing: Landing,
-    chill: Chill,
+    sf: Cached<ScreenFeed>,
+    scenario: Cached<Scenario>,
+    netinfo: Cached<Netinfo>,
+    alerts: Cached<Alerts>,
+    esim: Cached<Esim>,
+    speed: Cached<Speedtest>,
+    ts: Cached<Tailscale>,
+    diag: Cached<Diagnose>,
+    bat: Cached<BatteryEst>,
+    vers: Cached<Versions>,
+    landing: Cached<Landing>,
+    chill: Cached<Chill>,
+    aux: Option<Task<(i32, i32, i32)>>,
     pub bl: Backlight,
     pub key: Key,
 }
@@ -54,19 +56,20 @@ impl Live {
     pub fn new(key: Key) -> Live {
         Live {
             agent: CoreApi::default(),
-            core: CoreLink::new(Cfg::default()),
-            sf: ScreenFeed::new(SfCfg::default()),
-            scenario: Scenario::new(),
-            netinfo: Netinfo::default(),
-            alerts: Alerts::default(),
-            esim: Esim::default(),
-            speed: Speedtest::default(),
-            ts: Tailscale::default(),
-            diag: Diagnose::default(),
-            bat: BatteryEst::default(),
-            vers: Versions::default(),
-            landing: Landing::default(),
-            chill: Chill::default(),
+            core: CoreLink::background(Cfg::default()),
+            sf: Cached::new(ScreenFeed::new(SfCfg::default())),
+            scenario: Cached::new(Scenario::new()),
+            netinfo: Cached::new(Netinfo::default()),
+            alerts: Cached::new(Alerts::default()),
+            esim: Cached::new(Esim::default()),
+            speed: Cached::new(Speedtest::default()),
+            ts: Cached::new(Tailscale::default()),
+            diag: Cached::new(Diagnose::default()),
+            bat: Cached::new(BatteryEst::default()),
+            vers: Cached::new(Versions::default()),
+            landing: Cached::new(Landing::default()),
+            chill: Cached::new(Chill::default()),
+            aux: None,
             bl: Backlight::init(),
             key,
         }
@@ -74,7 +77,9 @@ impl Live {
 
     /// the core's stream: every main-loop pass (data_backend_poll + commit_latest).
     pub fn pump(&mut self, now_ms: u32) -> bool {
-        self.core.poll(now_ms) && self.core.commit_latest()
+        let woke = super::background::take_wake();
+        let changed = self.core.poll(now_ms) && self.core.commit_latest();
+        woke || changed
     }
 
     /// The view model from the getters.
@@ -214,45 +219,66 @@ impl Source for Live {
     fn pump(&mut self, now_ms: u32) -> bool {
         Live::pump(self, now_ms)
     }
+    fn wake_fd(&self) -> i32 { super::background::wake_fd() }
     fn data_fd(&self) -> i32 {
         self.core.fd()
     }
     fn poll(&mut self, _n: u32, a: &Activity) -> Polled {
         let mut p = Polled::default();
-        let ag = &mut self.agent;
+        let a = a.clone();
         self.core.set_pace(a.panel_lit);
-        // before the core's early return: agent_health() is the time since the last good read
-        p.scenario = self.scenario.poll(ag, a.home);
-        p.netinfo = self.netinfo.poll(ag, a.ni_mode);
-        // data_refresh(): no snapshot yet, try now
-        self.core.refresh_init();
-        if !self.core.refresh().0 {
-            p.diagnose = self.diag.poll(ag, a.diag);
-            return p;
+        let mut ag = self.agent.clone();
+        let home = a.home;
+        p.scenario = self.scenario.poll(move |s| s.poll(&mut ag, home) as u32) != 0;
+        let mut ag = self.agent.clone();
+        let mode = a.ni_mode;
+        p.netinfo = self.netinfo.poll(move |s| s.poll(&mut ag, mode) as u32) != 0;
+        let mut ag = self.agent.clone();
+        let diag = a.diag;
+        p.diagnose = self.diag.poll(move |s| s.poll(&mut ag, diag) as u32) != 0;
+        // The main loop establishes core in the background. Never retry synchronously here.
+        if !self.core.refresh().0 { return p; }
+        let version = self.core.version();
+        if a.lit && !self.core.silent() {
+            p.screen = self.sf.poll(move |s| s.poll(version) as u32) != 0;
         }
-        let silent = self.core.silent();
-        // dark: nothing shows it, so core is not asked to compute it
-        if a.lit && !silent {
-            p.screen = self.sf.poll(self.core.version());
-        }
-        p.diagnose = self.diag.poll(ag, a.diag);
-        p.tailscale = self.ts.poll(a.tailscale);
+        let active = a.tailscale;
+        p.tailscale = self.ts.poll(move |s| s.poll(active) as u32) != 0;
+        // Only this thread owns the delay-test socket; reads are already nonblocking.
+        if self.chill.delay_pending() { self.chill.delay_poll(); }
+        let mut ag = self.agent.clone();
         let fast = self.chill.home().busy != 0 || a.hx_sending;
-        p.chill_home = self.chill.home_poll(ag, a.chill_page, fast);
-        p.chill = self.chill.poll(a.chill);
-        p.esim = self.esim.poll(ag, a.esim);
-        if a.esim_prefetch {
-            let key = self.core.sim_key();
-            if self.esim.prefetch(ag, &key) {
-                p.esim = true;
-            }
-        }
-        p.speedtest = self.speed.poll(ag, a.speed);
-        p.servers = self.speed.servers_poll(ag, a.speed_page);
-        p.battery = self.bat.poll(ag, a.sys);
-        p.versions = self.vers.poll(ag, a.sys);
-        p.landing = self.landing.poll(ag, a.home && a.lit);
-        p.alerts = self.alerts.poll(ag, a.alerts);
+        let (page, active) = (a.chill_page, a.chill);
+        let ch = self.chill.poll(move |s| {
+            s.home_poll(&mut ag, page, fast) as u32 | ((s.poll(active) as u32) << 1)
+        });
+        p.chill_home = ch & 1 != 0;
+        p.chill = ch & 2 != 0;
+        let mut ag = self.agent.clone();
+        let (active, prefetch) = (a.esim, a.esim_prefetch);
+        let key = self.core.sim_key();
+        p.esim = self.esim.poll(move |s| {
+            let changed = s.poll(&mut ag, active);
+            (changed | (prefetch && s.prefetch(&mut ag, &key))) as u32
+        }) != 0;
+        let mut ag = self.agent.clone();
+        let (active, page) = (a.speed, a.speed_page);
+        let speed = self.speed.poll(move |s| {
+            s.poll(&mut ag, active) as u32 | ((s.servers_poll(&mut ag, page) as u32) << 1)
+        });
+        p.speedtest = speed & 1 != 0;
+        p.servers = speed & 2 != 0;
+        let mut ag = self.agent.clone();
+        let sys = a.sys;
+        p.battery = self.bat.poll(move |s| s.poll(&mut ag, sys) as u32) != 0;
+        let mut ag = self.agent.clone();
+        p.versions = self.vers.poll(move |s| s.poll(&mut ag, sys) as u32) != 0;
+        let mut ag = self.agent.clone();
+        let active = a.home && a.lit;
+        p.landing = self.landing.poll(move |s| s.poll(&mut ag, active) as u32) != 0;
+        let mut ag = self.agent.clone();
+        let active = a.alerts;
+        p.alerts = self.alerts.poll(move |s| s.poll(&mut ag, active) as u32) != 0;
         p
     }
 
@@ -391,7 +417,8 @@ impl Source for Live {
         self.diag.kick();
     }
     fn diagnose_poll(&mut self, active: bool) -> bool {
-        self.diag.poll(&mut self.agent, active)
+        let mut ag = self.agent.clone();
+        self.diag.poll(move |s| s.poll(&mut ag, active) as u32) != 0
     }
     fn diagnose_start(&mut self) -> bool {
         self.diag.start(&mut self.agent)
@@ -427,7 +454,8 @@ impl Source for Live {
         self.chill.home_extend(&mut self.agent)
     }
     fn chill_home_read(&mut self) {
-        self.chill.home_poll(&mut self.agent, true, true);
+        let mut ag = self.agent.clone();
+        self.chill.poll(move |s| s.home_poll(&mut ag, true, true) as u32);
     }
 
     fn exec(&mut self, l: &Launch) -> i32 {
@@ -491,19 +519,31 @@ impl Source for Live {
     }
     /// The radios from /sys, Wi-Fi power save from iw (nl80211, not ubus).
     fn aux_read(&mut self) -> Option<(i32, i32, i32)> {
-        let (w24, w5) = (oper_up("wlan0"), oper_up("wlan2"));
-        let out = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(
-                "ps=$(iw dev wlan0 get power_save 2>/dev/null | grep -o 'o[nf]*' | tail -1);\
-                 [ -z \"$ps\" ] && ps=$(iw dev wlan2 get power_save 2>/dev/null | grep -o 'o[nf]*' | tail -1);\
-                 echo PSM=$([ \"$ps\" = on ] && echo 1 || echo 0)",
-            )
-            .output()
-            .ok();
-        let psm = out
-            .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().find_map(|l| l.strip_prefix("PSM=").map(|v| crate::json::atol(v.as_bytes()) as i32)))
-            .unwrap_or(-1);
-        Some((w24, w5, psm))
+        if let Some(task) = &self.aux {
+            match task.take() {
+                Ok(result) => { self.aux = None; return Some(result); }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.aux = None,
+            }
+        }
+        self.aux = Task::start_notify(read_aux, |_| true);
+        None
     }
+}
+
+fn read_aux() -> (i32, i32, i32) {
+    let (w24, w5) = (oper_up("wlan0"), oper_up("wlan2"));
+    let out = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(
+            "ps=$(iw dev wlan0 get power_save 2>/dev/null | grep -o 'o[nf]*' | tail -1);\
+             [ -z \"$ps\" ] && ps=$(iw dev wlan2 get power_save 2>/dev/null | grep -o 'o[nf]*' | tail -1);\
+             echo PSM=$([ \"$ps\" = on ] && echo 1 || echo 0)",
+        )
+        .output()
+        .ok();
+    let psm = out
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().find_map(|l| l.strip_prefix("PSM=").map(|v| crate::json::atol(v.as_bytes()) as i32)))
+        .unwrap_or(-1);
+    (w24, w5, psm)
 }

@@ -22,6 +22,7 @@ pub const ST_CANCELLED: i32 = 5;
 pub const ST_ERROR: i32 = 6;
 pub const ST_DISCOVERING: i32 = 7;
 
+#[derive(Clone)]
 pub struct Speedtest {
     online: bool,
     /// The progress was asked at least once (it is asked only while the speed page is open).

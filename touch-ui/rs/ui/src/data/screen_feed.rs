@@ -35,6 +35,7 @@ impl Default for SfCfg {
 }
 
 #[derive(Default)]
+#[derive(Clone)]
 pub struct ScreenFeed {
     pub cfg: SfCfg,
     view: net_view_t,

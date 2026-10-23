@@ -317,3 +317,24 @@ fn auto_group_row_and_pin() {
     let sel: Vec<i32> = c.nodes().iter().map(|n| n.selected).collect();
     assert_eq!(sel, vec![1, 0, 0]);
 }
+
+#[test]
+fn read_snapshot_does_not_share_or_replace_the_live_delay_socket() {
+    use crate::data::background::ReadCopy;
+    use std::os::fd::{AsRawFd, OwnedFd};
+    let (socket, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+    let fd: OwnedFd = socket.into();
+    let raw = fd.as_raw_fd();
+    let mut chill = Chill {
+        delay_fd: Some(fd), delay_buf: b"pending response".to_vec(), delay_t0: 123,
+        ..Default::default()
+    };
+    let mut next = chill.read_copy();
+    assert!(next.delay_fd.is_none() && next.delay_buf.is_empty());
+    next.online = true;
+    chill.apply(next);
+    assert!(chill.online);
+    assert_eq!(chill.delay_fd.as_ref().unwrap().as_raw_fd(), raw);
+    assert_eq!(chill.delay_buf, b"pending response");
+    assert_eq!(chill.delay_t0, 123);
+}

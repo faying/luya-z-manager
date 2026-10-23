@@ -14,6 +14,7 @@ const AL_RESP_MAX: usize = 32768;
 pub const ALERTS_MAX: usize = 12;
 pub const HEALTH_MAX: usize = 8;
 
+#[derive(Clone)]
 pub struct Alerts {
     items: Vec<alert_item_t>,
     hc: Vec<health_item_t>,

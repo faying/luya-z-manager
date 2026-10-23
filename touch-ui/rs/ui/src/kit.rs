@@ -853,11 +853,16 @@ pub fn anim_stop(o: Obj) {
 }
 
 // ---------------------------------------------------------------- sheet
+/// The 1 px black rim glass surfaces wear (opacity per theme: `rim_opa`).
+pub fn rim(o: Obj) {
+    o.set_style_border_width(1, 0);
+    o.set_style_border_color(0x000000, 0);
+    o.set_style_border_opa(t().rim_opa, 0);
+}
+
 fn glass(p: Obj, x: i32, y: i32, w: i32, h: i32, r: i32) -> Obj {
     let g = bx(p, x, y, w, h, t().glass, r);
-    g.set_style_border_width(1, 0);
-    g.set_style_border_color(0x000000, 0);
-    g.set_style_border_opa(t().rim_opa, 0);
+    rim(g);
     g
 }
 

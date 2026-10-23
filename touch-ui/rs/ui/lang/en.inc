@@ -735,3 +735,5 @@
     { "智能设备", "Smart device", NULL },
     { "随机地址", "Private address", NULL },
     { " · 上限 未知", " · max unknown", NULL },
+    { "还没读到策略组", "No groups received yet", NULL },
+    { "还没读到节点", "No nodes received yet", NULL },

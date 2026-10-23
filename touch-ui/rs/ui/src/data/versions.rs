@@ -58,6 +58,7 @@ pub fn parse(body: &[u8], now: i64) -> Option<(Vec<ver_row_t>, String)> {
 }
 
 #[derive(Default)]
+#[derive(Clone)]
 pub struct Versions {
     rows: Vec<ver_row_t>,
     checked: String,

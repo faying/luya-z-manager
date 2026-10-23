@@ -23,7 +23,7 @@ const sid = /lw_sid=([0-9a-f]+)/.exec(r.headers.get("set-cookie") ?? "")?.[1];
 if (!sid) throw new Error(`login failed: ${r.status}`);
 
 // PW_EXE: a browser already on the machine when the pinned one is not downloaded
-const browser = await chromium.launch(process.env.PW_EXE ? { executablePath: process.env.PW_EXE } : {});
+const browser = await chromium.launch(process.env.PW_EXE ? { executablePath: process.env.PW_EXE } : { channel: "chrome" });
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
 await ctx.addCookies([{ name: "lw_sid", value: sid, url: WEB }, { name: "u60_lang", value: "zh", url: WEB }]);
 const p = await ctx.newPage();

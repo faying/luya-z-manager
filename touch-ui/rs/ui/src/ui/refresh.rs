@@ -89,7 +89,12 @@ impl Ui {
         }
     }
 
-    pub fn refresh(&mut self) {
+    pub fn refresh(&mut self) { self.refresh_inner(true); }
+
+    /// A completed read paints promptly but does not advance one-second history/counters.
+    pub fn refresh_data(&mut self) { self.refresh_inner(false); }
+
+    fn refresh_inner(&mut self, periodic: bool) {
         self.appearance_tick();
         self.refreshes += 1;
         let a = self.activity();
@@ -99,7 +104,7 @@ impl Ui {
         let m = self.model.clone();
 
         // perf counters (per-second deltas)
-        self.perf_paint();
+        if periodic { self.perf_paint(); }
 
         // wall clock, independent of the backend
         {
@@ -107,7 +112,6 @@ impl Ui {
             let l = self.top_time;
             self.set(l, cf!("%02d:%02d", tm.hour, tm.min));
         }
-        let sc_changed = self.home_scene_changed();
         if self.ex.xm_off_arm.expire(crate::lv::tick_get(), super::exit::XM_ARM_MS) {
             self.exit_menu_refresh();
         }
@@ -134,6 +138,7 @@ impl Ui {
         }
 
         if m.data_ok == 0 {
+            self.home.sc_force |= self.polled.scenario;
             // backend down: a device-wide condition, said once in the shared banner
             self.banner_set(Some(tr("后台数据服务不可用").as_bytes()));
             self.home_signal_down();
@@ -145,6 +150,9 @@ impl Ui {
             self.diag_refresh();
             return;
         }
+        // A scenario read can finish before the first core snapshot. Consume its change
+        // only when this refresh can actually paint the card.
+        let sc_changed = self.home_scene_changed();
         // answered before, silent now: keep the last numbers, dimmed, say since when
         let core_silent = m.backend_silent != 0;
         let v = self.screen_view();
@@ -277,7 +285,7 @@ impl Ui {
         self.esim_refresh(sim_changed);
         self.speed_paint();
         self.system_paint();
-        self.charts_paint(core_silent);
+        if periodic { self.charts_paint(core_silent); }
         self.sms_paint();
         if self.polled.alerts {
             self.alerts_paint();

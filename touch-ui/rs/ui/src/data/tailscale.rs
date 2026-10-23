@@ -19,6 +19,7 @@ pub const TS_PEER_MAX: usize = 12;
 const SOCKS: [&str; 2] = ["/tmp/tailscaled.sock", "/var/run/tailscale/tailscaled.sock"];
 
 #[derive(Default)]
+#[derive(Clone)]
 pub struct Tailscale {
     sock: Option<&'static str>,
     pub st: tailscale_status_t,

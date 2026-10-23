@@ -10,6 +10,17 @@ const current = readFileSync(new URL("../src/icons.rs", import.meta.url), "utf8"
 const names = new Set(["House", "ChartLine", "SquaresFour", "GearSix", "MagnifyingGlass", "SignOut", "CaretLeft", "CaretRight", "Translate", "X", "ArrowClockwise", "Play", "Stop", "EnvelopeOpen", "Trash", "PaperPlaneRight", "ArrowLeft"]);
 for (const m of current.matchAll(/\("(\w+)", (?:true|false)\)/g)) names.add(m[1]);
 
+// One decimal is enough in a 256 viewBox drawn at 24 px or less (0.05 unit ≈ 0.005 px) and makes
+// the sprite, which every page loads, smaller. Paths run numbers together ("1.5.3" = 1.5, .3), so a
+// value that rounds to a whole number keeps its ".0" when the text either side of it would merge.
+function round(d) {
+  return d.replace(/\d*\.\d+/g, (m, at, all) => {
+    const r = (Math.round(Number(m) * 10) / 10).toFixed(1);
+    if (!r.endsWith(".0") || m.startsWith(".") || all[at + m.length] === ".") return r;
+    return r.slice(0, -2);
+  });
+}
+
 function weight(src, w) {
   const start = src.indexOf(`"${w}",`);
   if (start < 0) throw new Error("no weight " + w);
@@ -18,7 +29,7 @@ function weight(src, w) {
   const els = [...block.matchAll(/createElement\(\s*"(\w+)",\s*\{([^}]*)\}/g)];
   return els.map(([, tag, attrs]) => {
     if (tag !== "path") throw new Error(`${tag} element, not handled`);
-    return `<path d="${/d: "([^"]+)"/.exec(attrs)[1]}"/>`;
+    return `<path d="${round(/d: "([^"]+)"/.exec(attrs)[1])}"/>`;
   }).join("");
 }
 

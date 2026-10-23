@@ -469,9 +469,7 @@ impl Ui {
         // title bar, right: 再查一次 (glass, like the ‹ button)
         {
             let b = kit::bx(self.sub_layer, 0, 3, 10, 30, th.glass, 15);
-            b.set_style_border_width(1, 0);
-            b.set_style_border_color(0x000000, 0);
-            b.set_style_border_opa(th.rim_opa, 0);
+            kit::rim(b);
             let l = kit::label(b, f.cj14, th.acc_t, 12, 6, tr("再查一次"));
             l.update_layout();
             let w = l.width() + 24;

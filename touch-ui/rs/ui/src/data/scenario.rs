@@ -18,6 +18,7 @@ const SC_RESP_MAX: usize = 16384;
 const SC_LOST_MS: i64 = 120000;
 
 #[derive(Default)]
+#[derive(Clone)]
 pub struct Scenario {
     ok: bool,
     configured: bool,

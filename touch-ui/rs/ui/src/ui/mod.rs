@@ -423,6 +423,7 @@ impl Ui {
         self.update_tabs();
         self.diag_hdr_sync();
         match id {
+            Sub::Chill => self.hx_paint(),
             Sub::Diag => self.diag_on_open(),
             Sub::Place => self.place_on_open(),
             Sub::Op => self.op_on_open(),
@@ -572,9 +573,7 @@ impl Ui {
         let cw = (w - 8) / TABS as i32;
         let th = t();
         let tb = kit::bx(Obj::layer_top(), MARGIN, H - TAB_GAP - TAB_H, w, TAB_H, th.glass, 22);
-        tb.set_style_border_width(1, 0);
-        tb.set_style_border_color(0x000000, 0);
-        tb.set_style_border_opa(th.rim_opa, 0);
+        kit::rim(tb);
         tb.set_style_shadow_width(16, 0);
         tb.set_style_shadow_offset_y(6, 0);
         tb.set_style_shadow_color(0x000000, 0);
@@ -590,9 +589,7 @@ impl Ui {
             cell.set_style_bg_opa(lv::OPA_TRANSP, 0);
             kit::tappable(cell, Some(tab_click_cb), i);
             let pill = kit::bx(cell, 0, 0, cw, 36, th.acc_s, 18);
-            pill.set_style_border_width(1, 0);
-            pill.set_style_border_color(0x000000, 0);
-            pill.set_style_border_opa(th.rim_opa, 0);
+            kit::rim(pill);
             self.tab_pill[i] = pill;
             self.tabs[i] = kit::label(cell, uf().cj13, th.t2, 0, 0, tr(TAB_NAMES[i]));
             self.tabs[i].center();
@@ -878,9 +875,7 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
         let hdr = kit::bx(sl, 0, 0, W, SUB_HDR, th.bg, 0);
         kit::bx(hdr, 0, SUB_HDR - 1, W, 1, th.sep, 0);
         let bk = kit::bx(hdr, 10, 3, 30, 30, th.glass, 15);
-        bk.set_style_border_width(1, 0);
-        bk.set_style_border_color(0x000000, 0);
-        bk.set_style_border_opa(th.rim_opa, 0);
+        kit::rim(bk);
         let c = kit::label(bk, uf().cj17b, th.t1, 0, 0, "‹");
         c.align(lv::LV_ALIGN_CENTER, -1, -1);
         kit::tappable(bk, Some(sub_back_cb), 0);

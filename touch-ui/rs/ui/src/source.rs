@@ -105,6 +105,8 @@ pub trait Source {
     fn pump(&mut self, now_ms: u32) -> bool;
     /// the core's socket, -1 none (the quiet and dark loops wait on it)
     fn data_fd(&self) -> i32;
+    /// Completed background reads; separate from the SSE socket, -1 for replay.
+    fn wake_fd(&self) -> i32 { -1 }
 
     // ---- the refresh ----
     /// The polls refresh n runs, in ui::refresh's order; what each said.

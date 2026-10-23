@@ -11,6 +11,12 @@ use crate::lang::{n_, tr};
 use crate::lv::Obj;
 use crate::theme::uf;
 
+/// Traffic values stay complete; names use the remaining width in both CHILL lists.
+fn pair_name_fit(name: Obj, value: Obj) {
+    value.update_layout();
+    name.set_width((CARD_W - 2 * kit::PAD - value.width() - 12).max(0));
+}
+
 /// 小区信息's values (the old 信令读取 page).
 #[derive(Default, Clone)]
 pub struct SigPage {
@@ -486,6 +492,7 @@ impl Ui {
                 self.set(e.pair_val[i], &it.traffic);
                 kit::text_color(e.pair_name[i], th.t1);
             }
+            pair_name_fit(e.pair_name[i], e.pair_val[i]);
         }
         self.ex.base_h = CHILL_HOME_TOP + vis_rows as i32 * CHILL_HOME_ROW_H + 2;
         e.chill_card.set_height(self.ex.base_h + self.ex.mf_dy);
@@ -755,18 +762,21 @@ pub struct ChillPage {
     // 节点
     scroll_nodes: Obj,
     grp_card: Obj,
+    grp_empty: Obj,
     grp_btn: [Obj; CHILL_MAX_GROUPS],
     grp_lbl: [Obj; CHILL_MAX_GROUPS],
     grp_sig: Option<(usize, String)>,
     node_sec: Obj,
     delay_lbl: Obj,
     node_card: Obj,
+    node_empty: Obj,
     node_row: Vec<Obj>,
     node_ok: Vec<Obj>,
     node_name: Vec<Obj>,
     node_dl: Vec<Obj>,
     // 规则 → 节点
     pair_card: Obj,
+    pair_empty: Obj,
     pair_name: [Obj; CHILL_TRAF_ROWS],
     pair_val: [Obj; CHILL_TRAF_ROWS],
     pair_sep: [Obj; CHILL_TRAF_ROWS],
@@ -818,17 +828,20 @@ impl Default for ChillPage {
             on_shown: -1,
             scroll_nodes: n,
             grp_card: n,
+            grp_empty: n,
             grp_btn: [n; CHILL_MAX_GROUPS],
             grp_lbl: [n; CHILL_MAX_GROUPS],
             grp_sig: None,
             node_sec: n,
             delay_lbl: n,
             node_card: n,
+            node_empty: n,
             node_row: Vec::new(),
             node_ok: Vec::new(),
             node_name: Vec::new(),
             node_dl: Vec::new(),
             pair_card: n,
+            pair_empty: n,
             pair_name: [n; CHILL_TRAF_ROWS],
             pair_val: [n; CHILL_TRAF_ROWS],
             pair_sep: [n; CHILL_TRAF_ROWS],
@@ -877,8 +890,12 @@ unsafe extern "C" fn chill_group_cb(e: *mut sys::lv_event_t) {
 
 unsafe extern "C" fn chill_delay_cb(_e: *mut sys::lv_event_t) {
     super::with(|u| {
+        if u.model.chill_online == 0 || u.model.chill_nodes.is_empty() || u.model.chill_delay_pending != 0 {
+            return;
+        }
         u.src.chill_test_delay();
         u.sync();
+        u.chill_page_paint();
     });
 }
 
@@ -1291,8 +1308,9 @@ impl Ui {
             kit::show(cp.hx_again[i], false);
         }
         cp.hx_foot = kit::label_w(p, f.cj12, th.t3, MARGIN + 6, y + 20 + CH_N as i32 * kit::ROW2_H + 6, CARD_W - 12, true, "");
-        cp.hx_foot.add_event_cb(hx_extend_cb, lv::LV_EVENT_CLICKED, 0);
-        cp.hx_foot.set_ext_click_area(12);
+        kit::tappable(cp.hx_foot, Some(hx_extend_cb), 0);
+        cp.hx_foot.remove_flag(lv::LV_OBJ_FLAG_CLICKABLE); // hx_paint enables only an extend link
+        cp.hx_foot.set_ext_click_area(14); // a one-line 12 px label still has a 40 px target
         kit::show(cp.hx_sec, false);
         kit::show(cp.hx_card, false);
         kit::show(cp.hx_foot, false);
@@ -1371,10 +1389,13 @@ impl Ui {
         let cp = &self.cp;
         let (mut x, mut y, maxx) = (PAD, 12, CARD_W - PAD);
         for i in 0..ng {
+            // Measure the new name naturally, then constrain it to the card before wrapping.
+            cp.grp_lbl[i].set_width(lv::SIZE_CONTENT);
             cp.grp_lbl[i].update_layout();
-            let w = cp.grp_lbl[i].width() + 22;
+            let w = (cp.grp_lbl[i].width() + 22).min(maxx - PAD);
+            cp.grp_lbl[i].set_width(w - 22);
             cp.grp_btn[i].set_width(w);
-            if x + w > maxx {
+            if x > PAD && x + w > maxx {
                 x = PAD;
                 y += 36;
             }
@@ -1384,9 +1405,10 @@ impl Ui {
         let gh = y + 28 + 12;
         cp.grp_card.set_height(gh);
         let ny = 24 + gh + 10;
-        cp.node_sec.set_y(ny);
-        cp.delay_lbl.align(lv::LV_ALIGN_TOP_RIGHT, -(MARGIN + 6), ny);
-        cp.node_card.set_y(ny + 20);
+        // The action owns a full row: its expanded target must not hit the first node.
+        cp.node_sec.set_y(ny + (ROW_H - uf().cj12.line_height()) / 2);
+        cp.delay_lbl.align(lv::LV_ALIGN_TOP_RIGHT, -(MARGIN + 6), ny + (ROW_H - uf().cj13.line_height()) / 2);
+        cp.node_card.set_y(ny + ROW_H);
     }
 
     pub(super) fn build_sub_chill_nodes(&mut self, p: Obj) {
@@ -1397,9 +1419,12 @@ impl Ui {
         cp.scroll_nodes = sc;
         kit::section(sc, 4, tr("策略组"));
         cp.grp_card = kit::card(sc, MARGIN, 24, CARD_W, 52);
+        cp.grp_empty = kit::label_w(cp.grp_card, f.cj14, th.t3, PAD, 11, CARD_W - 2 * PAD, true, tr("还没读到策略组"));
         for i in 0..CHILL_MAX_GROUPS {
             let (b, l) = kit::chip(cp.grp_card, PAD, 12, "");
             l.set_style_text_font(f.cj13, 0);
+            l.set_height(f.cj13.line_height());
+            l.set_long_mode(lv::LV_LABEL_LONG_MODE_DOTS);
             l.set_y(6);
             kit::tappable(b, Some(chill_group_cb), i);
             kit::show(b, false);
@@ -1408,10 +1433,10 @@ impl Ui {
         }
         cp.node_sec = kit::section(sc, 90, tr("节点"));
         cp.delay_lbl = kit::label(sc, f.cj13, th.acc_t, 0, 90, tr("测延迟"));
-        cp.delay_lbl.add_flag(lv::LV_OBJ_FLAG_CLICKABLE);
-        cp.delay_lbl.set_ext_click_area(14);
-        cp.delay_lbl.add_event_cb(chill_delay_cb, lv::LV_EVENT_CLICKED, 0);
+        cp.delay_lbl.set_height(f.cj13.line_height());
+        kit::tappable(cp.delay_lbl, Some(chill_delay_cb), 0);
         cp.node_card = kit::card(sc, MARGIN, 110, CARD_W, ROW_H);
+        cp.node_empty = kit::label_w(cp.node_card, f.cj14, th.t3, PAD, 11, CARD_W - 2 * PAD, true, "");
         for i in 0..CHILL_MAX_NODES {
             let row = kit::bx(cp.node_card, 0, i as i32 * ROW_H, CARD_W, ROW_H, th.card, 0);
             row.set_style_bg_opa(lv::OPA_TRANSP, 0);
@@ -1436,6 +1461,7 @@ impl Ui {
         kit::section(sc, 4, tr("规则 → 节点流量"));
         let cp = &mut self.cp;
         cp.pair_card = kit::card(sc, MARGIN, 24, CARD_W, CHILL_TRAF_ROWS as i32 * ROW_H);
+        cp.pair_empty = kit::label_w(cp.pair_card, f.cj14, th.t3, PAD, 11, CARD_W - 2 * PAD, true, "");
         for i in 0..CHILL_TRAF_ROWS {
             cp.pair_sep[i] = if i > 0 { kit::sep(cp.pair_card, i as i32 * ROW_H) } else { Obj::NULL };
             cp.pair_name[i] = kit::label_w(cp.pair_card, f.cj13, th.t1, PAD, i as i32 * ROW_H + 12, 190, false, "");
@@ -1514,11 +1540,19 @@ impl Ui {
                 self.chill_nodes_layout(ng);
             }
         }
+        kit::show(cp.grp_empty, ng == 0);
         let pending = m.chill_delay_pending != 0;
-        cp.delay_lbl.set_text(if pending { tr("测试中…") } else { tr("测延迟") });
-        kit::text_color(cp.delay_lbl, if pending { th.t3 } else { th.acc_t });
-
         let nn = m.chill_nodes.len().min(CHILL_MAX_NODES);
+        cp.delay_lbl.set_text(if !online { tr("服务不可用") } else if pending { tr("测试中…") } else { tr("测延迟") });
+        kit::text_color(cp.delay_lbl, if !online || pending { th.t3 } else { th.acc_t });
+        kit::show(cp.delay_lbl, nn > 0 || (online && pending));
+        if online && nn > 0 && !pending {
+            cp.delay_lbl.add_flag(lv::LV_OBJ_FLAG_CLICKABLE);
+        } else {
+            cp.delay_lbl.remove_flag(lv::LV_OBJ_FLAG_CLICKABLE);
+        }
+        kit::show(cp.node_empty, nn == 0);
+        self.set(cp.node_empty, if online { tr("还没读到节点") } else { tr("服务不可用") });
         for i in 0..CHILL_MAX_NODES {
             if i >= nn {
                 kit::show(cp.node_row[i], false);
@@ -1535,7 +1569,9 @@ impl Ui {
             }
             kit::text_color(
                 cp.node_dl[i],
-                if ni.delay == 0 {
+                if !online {
+                    th.t3
+                } else if ni.delay == 0 {
                     th.bad_t
                 } else if ni.delay < 0 {
                     th.t3
@@ -1554,6 +1590,8 @@ impl Ui {
 
         // 规则 → 节点: from the /connections chill_poll already read; one row per (rule, node)
         let tpn = m.chill_pairs.len();
+        kit::show(cp.pair_empty, tpn == 0);
+        self.set(cp.pair_empty, if online { tr("暂无活跃连接") } else { tr("服务不可用") });
         for i in 0..CHILL_TRAF_ROWS {
             if i >= tpn {
                 cp.pair_name[i].add_flag(lv::LV_OBJ_FLAG_HIDDEN);
@@ -1565,6 +1603,7 @@ impl Ui {
             cp.pair_val[i].remove_flag(lv::LV_OBJ_FLAG_HIDDEN);
             self.set(cp.pair_name[i], &it.name);
             self.set(cp.pair_val[i], &it.traffic);
+            pair_name_fit(cp.pair_name[i], cp.pair_val[i]);
         }
         for i in 1..CHILL_TRAF_ROWS {
             kit::show(cp.pair_sep[i], i < tpn);

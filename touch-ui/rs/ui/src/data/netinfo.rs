@@ -24,6 +24,7 @@ pub const NI_MAX_CLIENTS: usize = 8;
 pub const NI_MAX_APNS: usize = 10;
 pub const NI_MAX_CANDS: usize = 6;
 
+#[derive(Clone)]
 pub struct Netinfo {
     pub ni: netinfo_t,
     act_err: String,

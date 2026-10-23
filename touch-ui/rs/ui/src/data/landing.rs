@@ -27,6 +27,7 @@ pub fn parse(body: &[u8]) -> Option<landing_t> {
 }
 
 #[derive(Default)]
+#[derive(Clone)]
 pub struct Landing {
     now: Option<landing_t>,
     was_active: bool,
