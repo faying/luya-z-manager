@@ -197,7 +197,13 @@ Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_C
 
 - [faying](https://github.com/faying): core (luyaz-core), admin web (luyaz-web), sentinel, Rust touch UI, install kit, eSIM, Tailscale.
 
-This project grew out of earlier open-source U60 work; the projects and their authors are listed in [NOTICE](NOTICE). Everything taken from them was rewritten in October 2026.
+This project learned from and grew out of these open-source projects; thanks to their authors for the ideas and groundwork:
+
+- [Jesther Silvestre](https://github.com/jesther-ai): this project started from [open-u60-pro](https://github.com/jesther-ai/open-u60-pro).
+- [33333s](https://github.com/33333s): [zwrt-datad](https://github.com/33333s/zwrt-datad) shaped the core's device layer, [u60pro-devui](https://github.com/33333s/u60pro-devui) the touch UI.
+- Wei REN: the earlier fork this work continued from (install kit, eSIM probe).
+
+The code itself was rewritten in October 2026; see [NOTICE](NOTICE).
 
 ## License and disclaimer
 

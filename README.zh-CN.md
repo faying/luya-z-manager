@@ -195,7 +195,13 @@ docs/          GETTING-STARTED、SCREENSHOTS、ARCHITECTURE、DESIGN.md（界面
 
 - [faying](https://github.com/faying)：核心（luyaz-core）、管理网页（luyaz-web）、哨兵、Rust 触屏、装机包、eSIM、Tailscale。
 
-本项目源自更早的 U60 开源项目，这些项目和作者列在 [NOTICE](NOTICE) 里。从它们拿来的东西已在 2026 年 10 月全部重写。
+本项目学习并源自以下开源项目，感谢作者们的思路和打下的基础：
+
+- [Jesther Silvestre](https://github.com/jesther-ai)：本项目从 [open-u60-pro](https://github.com/jesther-ai/open-u60-pro) 起步。
+- [33333s](https://github.com/33333s)：[zwrt-datad](https://github.com/33333s/zwrt-datad) 启发了核心的设备层，[u60pro-devui](https://github.com/33333s/u60pro-devui) 启发了触屏。
+- Wei REN：本项目接着做的较早分支（装机包、eSIM 探测）。
+
+代码本身已在 2026 年 10 月重写，详见 [NOTICE](NOTICE)。
 
 ## 许可证与免责声明
 
