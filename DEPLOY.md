@@ -10,7 +10,7 @@ For the first install, see [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md). T
 ./onboard/build-kit.sh                       # → onboard/dist/luyaz-kit-YYYYMMDD.tar.gz
 tar xzf onboard/dist/luyaz-kit-*.tar.gz -C /tmp && cd /tmp/luyaz-kit
 ./install.sh admin                           # luyaz-web, the admin web (over SSH, no cable needed)
-./install.sh devui                           # touch UI + core (luyaz-core) + luyaz-sentinel
+./install.sh ui                              # touch UI + core (luyaz-core) + luyaz-sentinel
 ./install.sh esim                            # eSIM tools
 ./install.sh chill                           # CHILL proxy (optional; put chill.env on the device first, see docs/PROXY.md)
 ./install.sh status                          # show status
@@ -22,12 +22,12 @@ tar xzf onboard/dist/luyaz-kit-*.tar.gz -C /tmp && cd /tmp/luyaz-kit
 ```
 
 If the device is not at `192.168.0.1`, add `GATEWAY=…`; if your SSH key is not `~/.ssh/id_ed25519`, add `SSH_KEY=…`.
-If the device has an unfinished ship transaction (see [touch-ui/docs/SHIP.md](touch-ui/docs/SHIP.md)), `admin`, `devui` and `recover` refuse to install until it is finished or rolled back.
+If the device has an unfinished ship transaction (see [touch-ui/docs/SHIP.md](touch-ui/docs/SHIP.md)), `admin`, `ui` and `recover` refuse to install until it is finished or rolled back.
 
 ## Building the kit
 
 - `build-kit.sh` only needs this repository plus Docker to build a complete kit (core, admin web, sentinel, touch UI, eSIM and fonts are all built or generated fresh, nothing is pulled from any device); see section 3 of [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
-- `build-kit.sh` variables (`DATAD_BIN`, `DEVUI_BIN`, `SENTINEL_BIN`, `ESIM_TGZ`, `DEVUI_FONTS_DIR`, `FONTS=0`, `DEVUI_REPO`, etc.) are listed at the top of the script; you can also put them in `onboard/kit.local.env` (not tracked by git).
+- `build-kit.sh` variables (`CORE_BIN`, `TOUCH_BIN`, `SENTINEL_BIN`, `ESIM_TGZ`, `UI_FONTS_DIR`, `FONTS=0`, `TOUCH_REPO`, etc.) are listed at the top of the script; you can also put them in `onboard/kit.local.env` (not tracked by git).
 - The touch program must be the Rust build and the core must be the Rust `luyaz-core` without external update sources; otherwise `build-kit.sh` stops.
 - The eSIM tools are built fresh by `scripts/esim/build-esim-bundle.sh --out`, with Alpine package versions and sha256 pinned in `scripts/esim/alpine.lock`. When an Alpine security update replaces a pinned package, run `python3 scripts/esim/alpine_closure.py --relock`, rebuild, and verify `lpac.sh chip info` on a real device first.
 - Bundled third-party binaries (dropbear, lpac and its libraries) are not in this repo; when you give the kit to someone else, include each one's license.
@@ -52,10 +52,10 @@ ssh -p 2222 root@192.168.0.1 'cat > /data/luyaz/luyaz-web.new && chmod 755 /data
 ssh -p 2222 root@192.168.0.1 'wget -q -O- http://127.0.0.1:9090/ | head -c 200'
 ```
 
-The core (`/data/luyaz/luyaz-core`, `/etc/init.d/luyaz-core`) works the same way, but the screen and the admin web depend on it; prefer `./install.sh devui`.
+The core (`/data/luyaz/luyaz-core`, `/etc/init.d/luyaz-core`) works the same way, but the screen and the admin web depend on it; prefer `./install.sh ui`.
 
 Notes:
 
 - Always restart services with `/etc/init.d/<name> restart`; don't start a second copy by hand with `nohup`.
-- **Don't** overwrite the touch UI binary (`/data/luyaz/ui/luyaz-ui`) or the sentinel this way: a build that crashes on startup puts the device into a reboot loop, and a screen with no UI for a few minutes also triggers a full reboot. Use `./install.sh devui`, or follow [touch-ui/docs/DEVELOPMENT.md](touch-ui/docs/DEVELOPMENT.md) and do a trial run under a different file name first.
+- **Don't** overwrite the touch UI binary (`/data/luyaz/ui/luyaz-ui`) or the sentinel this way: a build that crashes on startup puts the device into a reboot loop, and a screen with no UI for a few minutes also triggers a full reboot. Use `./install.sh ui`, or follow [touch-ui/docs/DEVELOPMENT.md](touch-ui/docs/DEVELOPMENT.md) and do a trial run under a different file name first.
 - dropbear refuses reconnections that come too fast; combine multiple commands into one `ssh`.

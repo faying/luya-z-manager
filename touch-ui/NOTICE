@@ -8,8 +8,8 @@ License 1.0.0 (see ../LICENSE and ../NOTICE).
 History
 -------
 The touch UI started from 33333s/u60pro-devui (MIT) and Wei REN's fork. The
-current touch UI is a Rust + LVGL rewrite; the remaining code derived from
-those projects was rewritten in October 2026. Versions published before
+current touch UI is a Rust + LVGL rewrite; all code derived from those
+projects was rewritten in October 2026 and none of it remains. Versions published before
 2026-10-21 stay under the MIT License they were released with.
 
 Not published:

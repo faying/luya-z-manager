@@ -61,16 +61,15 @@ rs/build.sh test             # cargo test
 在共用构建镜像（`onboard/build.Dockerfile`）里用 cargo zigbuild 编，LVGL 固定 v9.5。装机包 `onboard/build-kit.sh` 自己会调 `rs/build.sh device`。
 触屏字体（Nunito、中文兜底）用 `scripts/fonts/build-nunito.sh`、`scripts/fonts/build-cjk-fallback.sh` 生成（公开下载按 sha256 固定），装机包会自动调。
 
-代码结构：入口 `rs/devui/src/main.rs`，各页 `rs/devui/src/ui/`，组件 `kit.rs`，色板 `theme.rs`，显示和触摸在 `rs/plat`。离屏渲染测试在 `rs/devui/src/render/`（`rs/smoke.sh`、`rs/parity.sh`）；`scripts/test/docker.sh` 在 busybox 容器里跑设备端脚本测试。设计规则见 [docs/DESIGN.zh-CN.md](../docs/DESIGN.zh-CN.md) §4。更多见 [docs/DEVELOPMENT.zh-CN.md](docs/DEVELOPMENT.zh-CN.md)。
+代码结构：入口 `rs/ui/src/main.rs`，各页 `rs/ui/src/ui/`，组件 `kit.rs`，色板 `theme.rs`，显示和触摸在 `rs/plat`。离屏渲染测试在 `rs/ui/src/render/`（`rs/smoke.sh`、`rs/still.sh`）；`scripts/test/docker.sh` 在 busybox 容器里跑设备端脚本测试。设计规则见 [docs/DESIGN.zh-CN.md](../docs/DESIGN.zh-CN.md) §4。更多见 [docs/DEVELOPMENT.zh-CN.md](docs/DEVELOPMENT.zh-CN.md)。
 
-之前的 C 版已删除，留在 git tag `legacy-c-touch-ui`；更早的 litehtml 渲染器在 tag `legacy-litehtml`。
 
 ## 在设备上
 
 > **新构建不要直接覆盖设备上的正式程序。** 一启动就崩的版本会被固件升级成整机重启循环；屏幕上几分钟没有界面，固件也会整机重启。
 > 先用别的文件名试跑，步骤见 [docs/DEVELOPMENT.zh-CN.md](docs/DEVELOPMENT.zh-CN.md#在真机上试新版本) 和 [docs/SHIP.md](docs/SHIP.md)。
 
-布局：界面是 `/data/luyaz/ui/luyaz-ui`（进程名 `luyaz-ui`），设置 `devui.conf`、`operator-logos/` 目录和字体也在 `/data/luyaz/ui/`。界面由 luyaz-sentinel（`/etc/init.d/luyaz-sentinel`）拉起，自己不起。
+布局：界面是 `/data/luyaz/ui/luyaz-ui`（进程名 `luyaz-ui`），设置 `ui.conf`、`operator-logos/` 目录和字体也在 `/data/luyaz/ui/`。界面由 luyaz-sentinel（`/etc/init.d/luyaz-sentinel`）拉起，自己不起。
 
 ## 可靠性脚本
 
@@ -87,9 +86,7 @@ rs/build.sh test             # cargo test
 
 ## 致谢
 
-- Wei REN：Rust + LVGL 触屏界面（luyaz-ui）、eSIM 页、Tailscale 卡片。
-- [33333s](https://github.com/33333s)：[u60pro-devui](https://github.com/33333s/u60pro-devui) 是本触屏界面的起点（其 C 代码现已全部换掉）；界面读取的 luyaz-core，其设备读写层来自 [zwrt-datad](https://github.com/33333s/zwrt-datad)。
-- [Jesther Silvestre](https://github.com/jesther-ai)：[open-u60-pro](https://github.com/jesther-ai/open-u60-pro)，manager 仓库的起点。
+这个触屏界面的来历、之前各部分是谁写的，见 [NOTICE](NOTICE)。
 
 ## 许可证与免责声明
 
