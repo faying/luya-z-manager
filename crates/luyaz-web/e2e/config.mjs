@@ -52,7 +52,6 @@ async function own(p, ctx) {
   ok(/ZXHN/.test(t) && /CBC/.test(t) && /SIGNATURE-1/.test(t) && /100 字节/.test(t) && /600 字节/.test(t), "header: magic ZXHN, CBC, signature, offset 100, size 600");
   ok(/000000 {2}5a 58 48 4e 02/.test(await p.textContent(".cf-hex")) && /\.\.\. \(344 more bytes\)/.test(await p.textContent(".cf-hex")), "hex preview: first line and '344 more bytes'");
   ok(/good\.zxhn/.test(t), "file name shown");
-  ok((await p.locator("#cf-k-t").count()) === 1 && (await p.locator("main .nd-row--two").count()) === 5, "5 known keys");
   await p.screenshot({ path: `${OUT}/config-result.png`, fullPage: true });
   await p.setInputFiles("#cf-file", `${dir}/plain.txt`);
   await p.getByRole("button", { name: "查看" }).click();

@@ -22,7 +22,7 @@ Clear signal readouts, band and cell locking, eSIM, SMS, health checks and a wat
 > **Hardware:** runs on the ZTE U60 Pro (MU5250). Community project, not affiliated with ZTE. Use at your own risk.
 
 > [!IMPORTANT]
-> **Can I install it?** A fresh install works on firmware **B31 or earlier**. On B27 or earlier the installer gets in by itself; from B28 on ZTE removed that interface, so you first ***REMOVED*** (tested on a device that came with B31; ***REMOVED***). Versions after B31 are untested. Check your version first ([how](docs/GETTING-STARTED.md#2-prerequisites)) and **do not update the firmware before installing**.
+> **Can I install it?** A fresh install works on firmware **B31 or earlier**. On B27 or earlier the installer gets in by itself; from B28 on ZTE removed that interface, so you need working SSH on the device first — how you open it is outside the scope of this project. Versions after B31 are untested. Check your version first ([how](docs/GETTING-STARTED.md#2-prerequisites)) and **do not update the firmware before installing**.
 
 ## Contents
 

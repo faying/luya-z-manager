@@ -29,11 +29,5 @@
 <section aria-labelledby="cf-x-t"><h2 id="cf-x-t" class="nd-group-title">{{ shell.t("First 256 Bytes in Hex", "前 256 字节（十六进制）") }}</h2>
 <div class="nd-group p-4"><pre class="nd-mono cf-hex" tabindex="0" aria-label="{{ shell.t("Hex preview", "十六进制预览") }}">{{ d.hex }}</pre></div></section>
 {% endif %}
-<section aria-labelledby="cf-k-t"><h2 id="cf-k-t" class="nd-group-title">{{ shell.t("***REMOVED***", "***REMOVED***") }}</h2>
-<p class="nd-aux mb-2">{{ shell.t("***REMOVED***. Full decrypt/re-encrypt is available in the iOS companion app.", "***REMOVED***。完整的解密 / 重新加密在 iOS 配套 App 里。") }}</p>
-<div class="nd-group">{% for k in keys %}<div class="nd-row nd-row--two"><span class="nd-row__text"><span class="nd-row__label">{{ k.label }}</span><span class="nd-row__sub block nd-mono pg-breakall" data-data>{{ k.hex }}</span></span></div>
-{% endfor %}</div>
-<p class="nd-aux mt-2">{{ shell.t("Full AES-ECB/CBC decrypt, zlib decompress, XML view and re-encryption are implemented in the iOS app (***REMOVED***). They are not available on this page.", "完整的 AES-ECB/CBC 解密、zlib 解压、XML 视图和重新加密在 iOS App 里实现（***REMOVED***），这个页面没有。") }}</p>
-</section>
 </div>
 {% endblock %}

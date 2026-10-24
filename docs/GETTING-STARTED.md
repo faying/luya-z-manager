@@ -52,19 +52,15 @@ What it looks like once installed (screenshots use fake data):
 | Your situation | Result |
 |---|---|
 | New device, B27 or earlier | Install from scratch with this guide |
-| New device, B28 – B31 | **Works**, but ADB cannot be enabled, so the install kit cannot open SSH by itself. Open SSH first through the stock configuration restore (below), then install as usual. Tested on a device that came with B31 |
+| New device, B28 – B31 | **Works**, but ADB cannot be enabled, so the install kit cannot open SSH by itself. Get the device onto SSH first (how you do that is outside the scope of this project), then install as usual |
 | Newer than B31 | **Unknown**: not tested |
 | Already installed, then upgraded to B31 | The programs themselves run on B31 (the maintainer's device has been on B31 since 10-03). But the upgrade resets `/etc/rc.local` to the stock version and removes the services installed under `/etc/init.d/`, so after the reboot SSH, the admin web, the touch UI and luyaz-core no longer start, and the screen shows the stock UI |
 
 What survives the upgrade: every program and all data under `/data`, the SSH program and keys (`/data/ssh`), the network address, the web password and your settings; firmware auto-update stays off.
-To recover, the key step is adding the line that starts SSH back to `rc.local` without ADB. The maintainer did this ***REMOVED***,
-***REMOVED***, so the steps are not documented here. Once SSH is back, run `./install.sh admin ui` from a freshly built install kit; it puts the services back and fixes `rc.local`.
+To recover you need to get SSH back; how you do that is outside the scope of this project. Once SSH is back, run `./install.sh admin ui` from a freshly built install kit; it puts the services back and fixes `rc.local`.
 Note: `/data/luyaz/kit/rc.local.orig` holds the stock `rc.local` of the firmware **before** the upgrade. To uninstall after an upgrade, do not copy it over the new one; just remove the lines this project added.
 
-**New device on B28 – B31: ***REMOVED***.** When the stock web UI restores a configuration backup, it unpacks the files in it as root with `tar -C /` and then reboots.
-So: take a backup in the web UI → ***REMOVED*** to `rc.local`, and put an SSH server (for example the dropbear from the install kit) and your public key into the archive → ***REMOVED*** → restore it in the web UI.
-The maintainer did this on a device that came with B31 (2026-10-20): SSH was up about a minute after the restore, and the rest of the install went as on an upgraded device (`./install.sh admin ui` and so on).
-This project does not ship a tool or ***REMOVED***; ***REMOVED***, so look there. Keep the untouched backup to restore if something goes wrong, do not insert a SIM or connect any WAN until SSH works (an automatic firmware download could change the format), and make sure you can recover the device the stock way first.
+**A new device on B28 – B31 needs to be on SSH first; how you open it is outside the scope of this project.** Do not insert a SIM or connect any WAN until SSH works, and make sure you can recover the device the stock way first.
 
 **Install computer** (macOS / Linux / Git Bash on Windows): `adb`, `ssh`, `curl`.
 

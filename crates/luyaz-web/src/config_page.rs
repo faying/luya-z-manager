@@ -24,26 +24,6 @@ pub const MAX_FILE: usize = 4 * 1024 * 1024;
 const SLACK: usize = 64 * 1024;
 const PREVIEW: usize = 256;
 
-/// Known AES keys: label EN, label ZH, key hex.
-const KNOWN_KEYS: [(&str, &str, &str); 5] = [
-    (
-        "Generic default (Telstra and others)",
-        "通用默认（Telstra 等）",
-        "***REMOVED***",
-    ),
-    (
-        "Optus / ZTE global",
-        "Optus / 中兴全球版",
-        "***REMOVED***",
-    ),
-    ("Vodafone AU", "Vodafone 澳洲", "***REMOVED***"),
-    ("TPG/iiNet AU", "TPG / iiNet 澳洲", "***REMOVED***"),
-    (
-        "Open/community key",
-        "开放 / 社区密钥",
-        "***REMOVED***",
-    ),
-];
 
 pub fn routes() -> Router<Shared> {
     Router::new()
@@ -197,17 +177,11 @@ pub struct View {
     pub done: Option<Done>,
 }
 
-pub struct KeyRow {
-    pub label: &'static str,
-    pub hex: &'static str,
-}
-
 #[derive(Template)]
 #[template(path = "config.html")]
 struct Page {
     shell: crate::shell::Shell,
     v: View,
-    keys: Vec<KeyRow>,
     max_mib: usize,
 }
 
@@ -221,18 +195,9 @@ fn render(
     let shell = app
         .hub
         .read(|st| crate::shell::Shell::new(headers, PATH).live(st, ctx, None));
-    let l = ctx.lang;
-    let keys = KNOWN_KEYS
-        .iter()
-        .map(|(en, zh, hex)| KeyRow {
-            label: l.pick(en, zh),
-            hex,
-        })
-        .collect();
     let html = Page {
         shell,
         v,
-        keys,
         max_mib: MAX_FILE >> 20,
     }
     .render()
