@@ -30,6 +30,11 @@ Third-party components
 - docs/images/ are screenshots rendered from made-up test data (mock core
   and the touch UI's offscreen render test), not from a real device.
 - Rust crates: see Cargo.lock; each crate keeps its own license.
+- crates/luyaz-core's heap allocator is mimalloc
+  (https://github.com/microsoft/mimalloc), MIT License, Copyright (c)
+  2018-2025 Microsoft Corporation, Daan Leijen; compiled from the C sources
+  bundled in the libmimalloc-sys crate, which Cargo fetches at build time,
+  and not included in this repository.
 - touch-ui/ builds against LVGL (MIT) and FreeType (FreeType License); their
   sources are fetched at build time and are not included in this repository.
 - crates/luyaz-sentinel/FRAME-FONT-LICENSE: the font embedded in the sentinel's
