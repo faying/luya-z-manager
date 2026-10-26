@@ -479,3 +479,29 @@ fn background_contact_keeps_pumping_during_a_delayed_handshake() {
     core.close();
     h.join().unwrap();
 }
+
+/// The regress block (design review 4A/14A): absent on an older core, never read yet, fresh, then
+/// stale with the last rows kept and the time they came.
+#[test]
+fn regress_block_absent_never_fresh_and_stale() {
+    let snap = |extra: &str| format!(r#"{{"epoch":"e1","seq":1,"blocks":{{{}{extra}}}}}"#, blk("battery", L_BAT));
+    let mut d = CoreLink::new(cfg(1));
+    assert_eq!(feed(&mut d, "snapshot", &snap("")), 1);
+    assert!(d.fresh_snap.regress.is_none(), "an older core: no block, no incident section data");
+    let never = r#","regress":{"revision":0,"observed_at":0,"stale":true,"data":null}"#;
+    assert_eq!(feed(&mut d, "snapshot", &snap(never)), 1);
+    let r = d.fresh_snap.regress.clone().unwrap();
+    assert!(r.has == 0 && r.fresh == 0 && r.open.is_empty());
+    let data = r#"{"open_total":6,"open":[{"id":"mem-abs-1","kind":"regress-mem-abs","name_zh":"内存超标","name_en":"High memory","sub":"","from":1792800000,"to":null,"end":"","count":1,"observed_zh":"","observed_en":""}],"closed":[{"id":"q3","kind":"core-crash","name_zh":"数据服务崩溃","name_en":"Data service crash","sub":"","from":1792790000,"to":1792795000,"end":"quiet","count":3,"observed_zh":"原厂动作：redial","observed_en":"stock firmware: redial"}]}"#;
+    assert_eq!(feed(&mut d, "snapshot", &snap(&format!(",{}", blk("regress", data)))), 1);
+    let r = d.fresh_snap.regress.clone().unwrap();
+    assert!(r.fresh == 1 && r.has == 1 && r.open_total == 6 && r.at > 0);
+    assert_eq!((r.open[0].name.as_str(), r.open[0].to, r.closed[0].end.as_str(), r.closed[0].count), ("内存超标", 0, "quiet", 3));
+    assert_eq!(r.closed[0].observed, "原厂动作：redial");
+    let at = r.at;
+    // stale: the last rows stay, greyed by the page, with when they came
+    let ev = format!(r#"{{"epoch":"e1","seq":2,"name":"regress","revision":2,"observed_at":2,"stale":true,"data":{data}}}"#);
+    assert_eq!(feed(&mut d, "block", &ev), 1);
+    let r = d.fresh_snap.regress.clone().unwrap();
+    assert!(r.fresh == 0 && r.has == 1 && r.open.len() == 1 && r.at == at);
+}

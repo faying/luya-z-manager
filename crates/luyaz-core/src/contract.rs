@@ -470,6 +470,35 @@ contract! {
 }
 
 contract! {
+    /// The regress layer's incidents for the touch screen (design review 14A, eng review round 3
+    /// D8/D11): open ones (at most 5, `open_total` in all), ended ones still shown (at most 3).
+    /// Kinds, names and times only; no identifiers.
+    pub struct Regress {
+        normal open_total: u32,
+        nested open: Vec<RegressItem>,
+        nested closed: Vec<RegressItem>,
+    }
+}
+
+contract! {
+    pub struct RegressItem {
+        normal id: String,
+        normal kind: String,
+        normal name_zh: String,
+        normal name_en: String,
+        normal sub: String,
+        /// wall clock (device local time marked UTC); null when it was not trusted
+        normal from: Option<i64>,
+        normal to: Option<i64>,
+        /// "" while open, `recovered`, `quiet`
+        normal end: String,
+        normal count: u32,
+        normal observed_zh: String,
+        normal observed_en: String,
+    }
+}
+
+contract! {
     pub struct AdvicePref {
         normal secs: i64,
         normal crashes: u32,
@@ -1075,6 +1104,7 @@ blocks! {
     "op" => Op,
     "powerbank" => Powerbank,
     "qos" => Qos,
+    "regress" => Regress,
     "router" => Router,
     "signal" => Signal,
     "sim" => Sim,

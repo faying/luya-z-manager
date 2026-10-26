@@ -47,6 +47,8 @@ pub enum Layer {
     Chill,
     /// 会断 Tailscale / 改 WAN 的（D-g）：只按主人的指令做。
     Link,
+    /// regress 接受新水位（设计 2026-10-24 §4，CEO G2）：不看敏感、不占限速，只按主人的指令做。
+    Regress,
 }
 
 impl Layer {
@@ -55,6 +57,7 @@ impl Layer {
             Self::Apn => "apn",
             Self::Chill => "chill",
             Self::Link => "link",
+            Self::Regress => "regress",
         }
     }
 }
@@ -69,6 +72,9 @@ pub fn layer_of(action: &str) -> Option<Layer> {
     }
     if CHILL_ACTIONS.contains(&action) {
         return Some(Layer::Chill);
+    }
+    if action == "regress.accept" {
+        return Some(Layer::Regress);
     }
     link(action).then_some(Layer::Link)
 }

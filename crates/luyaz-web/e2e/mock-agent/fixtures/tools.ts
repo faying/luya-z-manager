@@ -4,6 +4,12 @@
 // Speed test: progress is computed lazily from the time since start (no
 // timers), ~15 s end to end: latency 0-1.5 s, download 1.5-11.5 s, upload
 // 11.5-15 s, with luyaz-speedtest's progress bands (0-20 / 20-60 / 60-100).
+// It answers as the v2 engine (core 1.48.0, method_version 2): download is
+// single 1.5-4.5 s then multi 4.5-11.5 s (with path "chill" the last 2.5 s are
+// the CHILL pair), stage/step/steps, the v2 result fields and a verdict. While
+// roaming (netinfo roaming, i.e. unless scenario home-network) the core runs
+// coarse: download only, 5 s, no verdict. Scenario speed-v1 answers as an old
+// core (no v2 fields, the old four numbers); speed-short ends sample_short.
 // The server list comes from speedtest.net on the real device (geolocated to
 // the device's public IP), so here it is a Taiwan list; the hosts are made up.
 // Offline (nosignal, airplane, mobile data off): the list fetch fails with 503
@@ -57,6 +63,47 @@ interface RunState {
   /** Set when the network was down at start: ends in phase "error" after latency. */
   offline: boolean;
   cancelledAt: number | null;
+  /** old core: no v2 fields */
+  v1: boolean;
+  /** roaming: coarse, download only */
+  coarse: boolean;
+  chill: boolean;
+  short: boolean;
+}
+
+const COARSE_MS = 5_000;
+const SINGLE_END_MS = 4_500;
+const CHILL_FROM_MS = 9_000;
+const MB = 1_000_000;
+
+/** The mock's v2 fields (luyaz-speedtest SpeedTestProgress after `server`). */
+function v2Fields(s: RunState | null): Record<string, unknown> {
+  return {
+    method_version: 2, mode: s?.coarse ? "coarse" : "full", roaming_capped: !!s?.coarse, path: s?.chill ? "chill" : "direct",
+    stage: null, step: 0, steps: s?.coarse ? 1 : s?.chill ? 6 : 5, connections: 6,
+    download_whole_mbps: null, single_mbps: null, single_whole_mbps: null, upload_whole_mbps: null,
+    chill_mbps: null, chill_whole_mbps: null, chill_region: null, idle_ms: null,
+    loaded_down_ms: null, loaded_up_ms: null, loaded_chill_ms: null, sample_short: false,
+    server_name: s?.server.name ?? "", server_sponsor: s?.server.sponsor ?? "", net_tune: s ? "off" : null,
+    radio: s ? { sinr_db: 14, band: "n78", ca: 2 } : null, cpu_peak_pct: null, mihomo_cpu_pct: null, verdict: null,
+  };
+}
+
+/** luyaz-speedtest verdict.rs `judge` for the mock's numbers. */
+function verdictOf(s: RunState): Record<string, unknown> {
+  const single = r2(s.dl / 3.1);
+  const ratio = (s.dl / single).toFixed(1);
+  const loaded = s.ping + 150;
+  const layers = [
+    { key: "single", state: "warn", value_zh: `${single.toFixed(0)} Mbps，多连接的 1/${ratio}`, value_en: `${single.toFixed(0)} Mbps, 1/${ratio} of multi` },
+    s.chill
+      ? { key: "proxy", state: "ok", value_zh: `经 CHILL ${(s.dl * 0.82).toFixed(0)} Mbps，直连的 82%`, value_en: `${(s.dl * 0.82).toFixed(0)} Mbps via CHILL, 82% of direct` }
+      : { key: "proxy", state: "untested", value_zh: "没开「经 CHILL」", value_en: "\"Via CHILL\" off", reason: "not_requested" },
+    { key: "queue", state: "warn", value_zh: `下载时延迟 +${(loaded - s.ping).toFixed(0)} ms`, value_en: `Latency +${(loaded - s.ping).toFixed(0)} ms downloading` },
+    { key: "radio", state: "ok", value_zh: "SINR 14 dB · n78 · 2CA（只供参考）", value_en: "SINR 14 dB · n78 · 2CA (reference only)" },
+    { key: "cell_wifi", state: "untested", value_zh: "没测", value_en: "Not tested", reason: "phase_two" },
+  ];
+  return { bottlenecks: ["single", "queue"], layers, summary_zh: "慢在单连接、下载时卡", summary_en: "Slow at single connection, lag under load" };
 }
 
 let run: RunState | null = null;
@@ -75,8 +122,8 @@ function getServers(ctx: Ctx): { list: SpeedServer[]; fetched: boolean } | { err
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
-function idleProgress(server = ""): SpeedProgress {
-  return {
+function idleProgress(server = "", s: RunState | null = null): SpeedProgress {
+  const base = {
     phase: "idle",
     progress: 0,
     live_speed_mbps: 0,
@@ -89,11 +136,74 @@ function idleProgress(server = ""): SpeedProgress {
     server,
     error: null,
   };
+  return (s?.v1 || (s === null && v1Now) ? base : { ...base, ...v2Fields(s) }) as SpeedProgress;
 }
+
+/** The last request's speed-v1 (an idle reply has no run to say which core it is). */
+let v1Now = false;
 
 /** luyaz-speedtest's progress reply `t` ms after start. */
 function progressAt(s: RunState, t: number): SpeedProgress {
-  const p = idleProgress(`${s.server.sponsor} (${s.server.name})`);
+  if (s.coarse) return coarseAt(s, t);
+  const p = progressV1(s, t);
+  if (s.v1) return p;
+  const q = p as unknown as Record<string, unknown>;
+  const stage = (st: string, step: number) => { q.stage = st; q.step = step; };
+  if (p.phase === "latency") stage("idle_latency", 1);
+  if (p.phase === "download") {
+    if (t < SINGLE_END_MS) stage("single_download", 2);
+    else if (s.chill && t >= CHILL_FROM_MS) stage("chill_download", 4);
+    else stage("multi_download", 3);
+  }
+  if (p.phase === "upload") stage("multi_upload", s.chill ? 5 : 4);
+  if (p.ping_ms !== null) q.idle_ms = p.ping_ms;
+  if (t >= SINGLE_END_MS) { q.single_mbps = r2(s.dl / 3.1); q.single_whole_mbps = r2(s.dl / 3.4); }
+  if (p.download_mbps !== null) { q.download_whole_mbps = r2(s.dl * 0.9); q.loaded_down_ms = r2(s.ping + 150); }
+  if (s.chill && p.download_mbps !== null) { q.chill_mbps = r2(s.dl * 0.82); q.chill_whole_mbps = r2(s.dl * 0.75); q.chill_region = "日本"; }
+  if (p.phase === "complete") {
+    q.step = q.steps;
+    q.upload_whole_mbps = r2(s.ul * 0.92);
+    q.loaded_up_ms = r2(s.ping + 40);
+    q.cpu_peak_pct = 38;
+    if (s.short) q.sample_short = true;
+    else q.verdict = verdictOf(s);
+  }
+  return p;
+}
+
+/** The coarse run (roaming): download only, 5 s, ≤ 30 MB, no ping, no verdict. */
+function coarseAt(s: RunState, t: number): SpeedProgress {
+  const p = idleProgress(`Ookla · ${s.server.sponsor} (${s.server.name})`, s);
+  const q = p as unknown as Record<string, unknown>;
+  if (s.offline) {
+    p.phase = "error";
+    p.error = "all ping attempts failed";
+    return p;
+  }
+  const dl = Math.min(s.dl, 40);
+  if (t < COARSE_MS) {
+    const secs = t / 1000;
+    p.phase = "download";
+    q.stage = "multi_download";
+    q.step = 1;
+    p.progress = Math.floor((t / COARSE_MS) * 100);
+    p.live_speed_mbps = r2(dl * (1 - Math.exp(-secs / 0.6)));
+    p.download_bytes = Math.min(30 * MB, Math.round(((dl * 1e6) / 8) * secs));
+    return p;
+  }
+  p.phase = "complete";
+  p.progress = 100;
+  q.step = 1;
+  p.download_mbps = dl;
+  q.download_whole_mbps = r2(dl * 0.85);
+  p.download_bytes = Math.min(30 * MB, Math.round(((dl * 1e6) / 8) * (COARSE_MS / 1000)));
+  if (s.short) q.sample_short = true;
+  return p;
+}
+
+/** The old engine's shape (still the v2 one's skeleton). */
+function progressV1(s: RunState, t: number): SpeedProgress {
+  const p = idleProgress(s.v1 ? `${s.server.sponsor} (${s.server.name})` : `Ookla · ${s.server.sponsor} (${s.server.name})`, s);
   if (t < LAT_MS) {
     p.phase = "latency";
     p.progress = Math.min(19, Math.floor((t / LAT_MS) * 20));
@@ -140,6 +250,7 @@ function progressAt(s: RunState, t: number): SpeedProgress {
 
 function currentProgress(now: number): SpeedProgress {
   if (!run) return idleProgress();
+  if (run.v1 !== v1Now) return idleProgress();
   if (run.cancelledAt !== null) {
     const p = progressAt(run, run.cancelledAt - run.startedAt);
     if (p.phase === "complete" || p.phase === "error") return p;
@@ -153,6 +264,7 @@ function currentProgress(now: number): SpeedProgress {
 function isRunning(now: number): boolean {
   if (!run || run.cancelledAt !== null) return false;
   const t = now - run.startedAt;
+  if (run.coarse) return t < COARSE_MS;
   return run.offline ? t < LAT_MS : t < TOTAL_MS;
 }
 
@@ -251,6 +363,11 @@ export const routes: Route[] = [
         ul: weak ? 1.92 : 41.73,
         offline: offline(ctx),
         cancelledAt: null,
+        v1: ctx.has("speed-v1"),
+        // the core decides roaming at admission (an old core never runs coarse)
+        coarse: !ctx.has("speed-v1") && !ctx.has("home-network"),
+        chill: !ctx.has("speed-v1") && bodyField(ctx.body, "path") === "chill",
+        short: ctx.has("speed-short"),
       };
       return ok({ status: "started" });
     },
@@ -258,7 +375,10 @@ export const routes: Route[] = [
   {
     method: "GET",
     path: "/api/speedtest/progress",
-    handler: (ctx: Ctx) => ok(currentProgress(ctx.now)),
+    handler: (ctx: Ctx) => {
+      v1Now = ctx.has("speed-v1");
+      return ok(currentProgress(ctx.now));
+    },
   },
   {
     // luyaz-speedtest stop

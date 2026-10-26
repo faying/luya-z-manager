@@ -270,6 +270,8 @@ async fn writes_are_404_until_step_9() {
         ("POST", "/api/speedtest/start"),
         ("GET", "/api/speedtest/progress"),
         ("POST", "/api/speedtest/stop"),
+        ("GET", "/api/net-tune"),
+        ("PUT", "/api/net-tune"),
         ("GET", "/api/esim/profiles"),
         ("GET", "/api/esim/job"),
         ("POST", "/api/esim/switch"),
@@ -1260,7 +1262,13 @@ async fn speed_test_through_the_agents_engine() {
         (st, b["error"].as_str()),
         (409, Some("test already running"))
     );
-    let (_, b) = call(addr, "GET", "/api/speedtest/progress", "").await;
+    // The node name lands once the background job has picked it; wait for it under load.
+    let mut b = serde_json::Value::Null;
+    for _ in 0..200 {
+        b = call(addr, "GET", "/api/speedtest/progress", "").await.1;
+        if b["data"]["server"] != "" { break; }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert_eq!(b["data"]["server"], "Ookla · Test (Loop)");
     assert_eq!(
         call(addr, "POST", "/api/speedtest/stop", "{}").await.1["data"]["status"],
@@ -1425,4 +1433,92 @@ async fn speedtest_discovery_is_background_and_config_survives_restart() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("discovery did not cancel");
+}
+
+/// A signal block as the hub publishes it, with this `roaming`.
+fn signal_hub(roaming: &str) -> Arc<crate::block::Hub> {
+    let hub = Arc::new(crate::block::Hub::new(
+        vec![crate::block::BlockSpec::derived("signal", Box::new(crate::block::SignalPolicy))],
+        Box::new(crate::block::tests::Recorder::default()),
+    ));
+    hub.record(
+        "signal",
+        Ok(json!({"type": "SA", "roaming": roaming, "nr_band": "78", "nr_snr": "12.5", "nr_cell_id": 7,
+                  "nr_rsrp": -95, "bars": 4, "lteca": "", "nrca": "", "ltecasig": ""})),
+        tokio::time::Instant::now(),
+    );
+    hub
+}
+
+/// R9: roaming (the signal block's `roaming`, as ship's gate reads it) turns a full start into
+/// the capped run at admission, marked `roaming_capped`; home runs the full test. The cell,
+/// the radio readings and the tuning's want file reach the engine.
+#[tokio::test]
+async fn speedtest_downgrades_to_coarse_when_roaming() {
+    for (roam, mode, capped) in [("Roaming", "coarse", true), ("Home", "full", false)] {
+        let root = std::env::temp_dir().join(format!("u60d-speed-roam-{roam}-{}", std::process::id()));
+        let _ = fs::create_dir_all(root.join("data/luyaz"));
+        fs::write(root.join("data/luyaz/net-tune.want"), "1\n").unwrap();
+        let src = Sources { hub: Some(signal_hub(roam)), speed_servers: speed_server().await, ..Sources::none() };
+        let addr = start(Compat::new(root.to_str().unwrap(), src).with_writes(true)).await;
+        let (st, b) = call(addr, "POST", "/api/speedtest/start", r#"{"path":"chill"}"#).await;
+        assert_eq!(st, 200, "{b}");
+        let (_, b) = call(addr, "GET", "/api/speedtest/progress", "").await;
+        let d = &b["data"];
+        assert_eq!((d["mode"].as_str(), d["roaming_capped"].as_bool()), (Some(mode), Some(capped)), "{roam}: {d}");
+        assert_eq!(d["method_version"], 2);
+        assert_eq!(d["net_tune"], "on");
+        assert_eq!((d["radio"]["sinr_db"].as_f64(), d["radio"]["band"].as_str()), (Some(12.5), Some("n78")));
+        // the path asked for, whether or not a pair runs (roaming: none; here nothing on 7894)
+        assert_eq!(d["path"], "chill");
+        assert_eq!(call(addr, "POST", "/api/speedtest/stop", "{}").await.0, 200);
+        for _ in 0..300 {
+            let (_, b) = call(addr, "GET", "/api/speedtest/progress", "").await;
+            if b["data"]["phase"] == "cancelled" { break; }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+    // no fresh signal block = not known to be home: capped, like ship's gate
+    let hub = Arc::new(crate::block::Hub::new(
+        vec![crate::block::BlockSpec::derived("signal", Box::new(crate::block::SignalPolicy))],
+        Box::new(crate::block::tests::Recorder::default()),
+    ));
+    assert!(super::speed::roaming(hub.view("signal").as_ref()));
+    assert!(!super::speed::roaming(signal_hub("home").view("signal").as_ref()));
+    assert!(super::speed::roaming(signal_hub("Roaming").view("signal").as_ref()));
+}
+
+/// T9: the tuning's switch writes or deletes the want file and runs net-tune.sh as a child
+/// (its output in the reply); a missing script still sets the switch and says so.
+#[tokio::test]
+async fn net_tune_switch_writes_the_want_file_and_runs_the_script() {
+    let root = std::env::temp_dir().join(format!("u60d-net-tune-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("data/luyaz/scripts")).unwrap();
+    let want = root.join("data/luyaz/net-tune.want");
+    let addr = start(Compat::new(root.to_str().unwrap(), Sources::none()).with_writes(true)).await;
+    // no script yet
+    let (st, b) = call(addr, "PUT", "/api/net-tune", r#"{"on":true}"#).await;
+    assert_eq!((st, b["error"].as_str()), (503, Some("script_missing")), "{b}");
+    assert!(want.exists());
+    let (st, b) = call(addr, "GET", "/api/net-tune", "").await;
+    assert_eq!((st, b["data"]["on"].as_bool(), b["data"]["error"].as_str()), (200, Some(true), Some("script_missing")));
+    fs::write(
+        root.join("data/luyaz/scripts/net-tune.sh"),
+        "echo \"ran $1\"\n[ \"$1\" = show ] && echo 'rps br-lan on'\n[ \"$1\" = restore ] && { echo 'lock busy' >&2; exit 3; }\nexit 0\n",
+    )
+    .unwrap();
+    let (st, b) = call(addr, "PUT", "/api/net-tune", r#"{"on":true}"#).await;
+    assert_eq!(st, 200, "{b}");
+    assert_eq!((b["data"]["ran"].as_str(), b["data"]["output"].as_str()), (Some("apply"), Some("ran apply\n")));
+    let (_, b) = call(addr, "GET", "/api/net-tune", "").await;
+    assert_eq!(b["data"]["on"], true);
+    assert!(b["data"]["output"].as_str().unwrap().contains("rps br-lan on"), "{b}");
+    let (st, b) = call(addr, "PUT", "/api/net-tune", r#"{"on":false}"#).await;
+    assert_eq!((st, b["data"]["exit"].as_i64()), (500, Some(3)), "{b}");
+    assert!(b["data"]["output"].as_str().unwrap().contains("lock busy"));
+    assert!(!want.exists());
+    assert_eq!(call(addr, "PUT", "/api/net-tune", r#"{"on":"yes"}"#).await.0, 400);
+    let _ = fs::remove_dir_all(&root);
 }

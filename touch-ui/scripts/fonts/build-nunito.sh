@@ -4,7 +4,7 @@
 #   scripts/fonts/build-nunito.sh <输出目录> [缓存目录]
 #
 # 来源：google/fonts 仓库里的可变字体 ofl/nunito/Nunito[wght].ttf（提交号 + sha256 固定），
-# 在 Docker（python:3.12-slim + fonttools 4.54.1）里用 varLib.instancer 切出三个字重。
+# 在 Docker（python:3.12-slim 按 digest 钉死 + fonttools 4.54.1）里用 varLib.instancer 切出三个字重。
 # 不改字体名表（和 2026-09 装机包里的字体逐表一致，只有 head.modified 不同；
 # 这里用固定的 SOURCE_DATE_EPOCH，重跑结果逐字节相同）。
 # 产出：Nunito-600.ttf Nunito-700.ttf Nunito-800.ttf OFL-Nunito.txt
@@ -36,7 +36,7 @@ get "$BASE/Nunito%5Bwght%5D.ttf" "$VF" "$VF_SHA"
 get "$BASE/OFL.txt" OFL-Nunito-$REV.txt "$OFL_SHA"
 cp "$CACHE/OFL-Nunito-$REV.txt" "$OUT/OFL-Nunito.txt"
 
-docker run --rm -e SOURCE_DATE_EPOCH=1758672000 -v "$CACHE":/cache:ro -v "$OUT":/out python:3.12-slim sh -c "
+docker run --rm -e SOURCE_DATE_EPOCH=1758672000 -v "$CACHE":/cache:ro -v "$OUT":/out python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704 sh -c "
 set -e
 pip -q install --disable-pip-version-check fonttools==4.54.1 >/dev/null 2>&1
 for w in 600 700 800; do

@@ -68,8 +68,16 @@ fn data_switch_reads_like_core() {
 }
 
 #[test]
+fn connected_without_ipv4_is_neutral() {
+    let hub = hub_with(json!({"interfaces": {"cellular": {"enable": 1, "connect_status": "ipv4_ipv6_connected", "ipv4_address": "", "roam_enable": 1}}}));
+    let v = hub.read(|st| net_view(st, None, Lang::En));
+    assert_eq!((v.tone, v.state.as_str(), v.conn.as_str()), ("neutral", "Checking the connection…", "Unconfirmed"));
+    assert_eq!(hub.read(cell).unwrap().up, None);
+}
+
+#[test]
 fn net_view_status_jobs_and_results() {
-    let hub = hub_with(json!({"interfaces": {"cellular": {"enable": 1, "connect_status": "ipv4_ipv6_connected", "roam_enable": 1}}}));
+    let hub = hub_with(json!({"interfaces": {"cellular": {"enable": 1, "connect_status": "ipv4_ipv6_connected", "ipv4_address": "10.1.2.3", "roam_enable": 1}}}));
     let ni = json!({"scan": {"state": "done", "finished_at": 100, "operators": [
         {"status": "2", "name": "中华电信", "operator_en": "Chunghwa", "plmn": "46692", "rat": "11"},
         {"status": "3", "name": "X", "operator_en": "X", "plmn": "466'97", "rat": "7;"}]},

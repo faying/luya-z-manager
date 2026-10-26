@@ -51,7 +51,8 @@ pub fn run(c: &Cfg) -> (String, i32) {
         .map(|d| d.subsec_nanos() ^ std::process::id())
         .unwrap_or(0)
         % 1_000_000_000;
-    // /data/ledger takes a 512-byte line, fsynced, and gives it back
+    // the core's long-term directory (the guard's /data/ledger is gone, 10-19) takes a 512-byte
+    // line, fsynced, and gives it back
     let ld = &c.ledger_dir;
     let f = format!("{ld}/.selftest");
     let sl = "x".repeat(512);
@@ -63,7 +64,7 @@ pub fn run(c: &Cfg) -> (String, i32) {
             .and_then(|h| h.sync_all())
             .is_ok()
         && cat(&f).as_deref() == Some(sl.as_str());
-    let item = format!("账本目录可写（{ld}）");
+    let item = format!("长期记录目录可写（{ld}）");
     st(
         wrote,
         &item,

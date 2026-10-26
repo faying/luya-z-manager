@@ -52,15 +52,19 @@ pub(crate) fn within(at: Option<&BootTime>, now: Option<&BootTime>, seconds: u64
 pub(crate) fn coverage() -> std::collections::BTreeMap<String, luyaz_api::firmware::ContextCoverage>
 {
     [
+        // Minted from ubusd `ubus.object.add/remove` once the self-sent probe confirms the
+        // subscription (§12.10); ubusd's behaviour for a slow subscriber is unverified.
         (
             "ubus_epoch",
-            "ubus_cli_and_socket",
-            "no_acknowledged_object_lifecycle_stream",
+            "ubus_object_lifecycle_probe_confirmed",
+            "producer_exists_slow_subscriber_drop_unverified",
         ),
+        // Minted by `uevent` (bind, UDC snapshot, SEQNUM gap/ENOBUFS revokes); the vendor
+        // BSP_TYPEC/POWERBANK events only revoke+remint. One plug cycle observed (§12.10).
         (
             "usb_epoch",
-            "BSP_TYPEC_EVENT/BSP_POWERBANK_EVENT",
-            "no_subscription_ack_or_sequence_loss_contract",
+            "kobject_uevent_udc_seqnum",
+            "producer_exists_one_plug_cycle_observed",
         ),
         // Minted from ubus `zwrt_card_state_event` once a self-sent probe confirms the
         // subscription; ubusd's behaviour for a slow subscriber is unverified.
@@ -115,6 +119,14 @@ mod tests {
         c.ubus_epoch = Some("synthetic".into());
         invalidate(&mut c, Loss::Ubus);
         assert_eq!(c, Context::default());
+    }
+    #[test]
+    fn no_context_producer_is_authoritative() {
+        let all = coverage();
+        assert_eq!(all.len(), 5);
+        for (key, c) in all {
+            assert!(!c.authoritative, "{key} must stay non-authoritative");
+        }
     }
     #[test]
     fn radio_observations_expire_and_include_suspend() {

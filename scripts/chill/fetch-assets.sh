@@ -6,7 +6,7 @@
 #
 # 产出（已存在且校验通过的不重下）：
 #   <缓存>/mihomo-<版本>.gz        mihomo 官方 arm64 包（sha256 固定）
-#   <缓存>/ruleset/<名字>.mrs       template.yaml 里声明的每一个规则集
+#   <缓存>/ruleset/<名字>.mrs|.list template.yaml 里声明的每一个规则集（ai_domain 是文本 .list）
 #   <缓存>/ruleset/cn.list          CN CIDR 列表（route-exclude-address 用）
 #   <缓存>/zashboard-<版本>.zip     zashboard 官方 dist.zip（sha256 固定）
 #
@@ -50,13 +50,13 @@ fi
 MRS_LIST="$(awk '
   /^ *[a-z_]+: *\{type: http/ {
     name = $1; sub(/:$/, "", name)
-    if (match($0, /geo\/[a-z]+\/[^.]+\.mrs/)) print name "=" substr($0, RSTART + 4, RLENGTH - 4)
+    if (match($0, /geo\/[a-z]+\/[^.]+\.(mrs|list)/)) print name "=" substr($0, RSTART + 4, RLENGTH - 4)
   }' "$TEMPLATE")"
 [ -n "$MRS_LIST" ] || die "没能从 template.yaml 解析出规则集"
 n=0
 for item in $MRS_LIST; do
     name="${item%%=*}"; path="${item#*=}"
-    out="$CACHE/ruleset/$name.mrs"
+    out="$CACHE/ruleset/$name.${path##*.}"
     [ -s "$out" ] || { curl -fsSL -o "$out.tmp" "$MRS_BASE/$path" && mv "$out.tmp" "$out"; } || die "下载 $path 失败"
     n=$((n + 1))
 done

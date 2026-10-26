@@ -695,7 +695,8 @@ async fn screen_alerts(State(m): State<Arc<Mock>>) -> Response {
         )
             .into_response();
     }
-    let mut d = alerts_data(m.unread.load(Ordering::SeqCst));
+    let mut d = incidents::alerts(m.unread.load(Ordering::SeqCst))
+        .unwrap_or_else(|| alerts_data(m.unread.load(Ordering::SeqCst)));
     poller::alerts_extra(&mut d);
     axum::Json(json!({"ok": true, "data": d})).into_response()
 }
@@ -1130,6 +1131,9 @@ pub fn router(raw: &str, speed: f64) -> Router {
         .route("/mock/apn", post(reset_apn))
         .route("/mock/net", post(reset_net))
         .route("/v2/api/alerts", get(screen_alerts))
+        .route("/v2/incidents", get(incidents::incidents))
+        .route("/v2/incidents/{id}", get(incidents::one))
+        .route("/mock/incidents", post(incidents::choose))
         .route("/v2/api/public/status", get(screen_status))
         .route("/v2/usage/days", get(usage_days))
         .route("/v2/usage/landing", get(usage_landing))
@@ -1151,6 +1155,7 @@ mod router_firewall;
 mod router_lan;
 mod router_qos;
 mod home;
+mod incidents;
 mod poller;
 mod receipt;
 mod router_vpn;

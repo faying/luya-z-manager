@@ -145,6 +145,17 @@ impl sms::SmsIo for Host {
         )
         .wall_usable()
     }
+    fn wall_settled(&mut self) -> bool {
+        let at = luyaz_api::clock::BootTime::from_uptime(
+            &self.read(BOOT_ID),
+            &self.read("/proc/uptime"),
+        );
+        luyaz_api::clock::evidence_settled(
+            &self.read(CLOCK_OK),
+            at.as_ref(),
+            luyaz_api::alerts::now(),
+        )
+    }
     fn lang_en(&mut self) -> bool {
         sms::lang_en(&self.read(sms::UI_CONF))
     }

@@ -35,6 +35,10 @@ struct Inner {
     // The ubus listener confirmed its subscription with a probe (`listen::Notice::Ready`)
     // and has not had a gap since.
     sim_live: bool,
+    // Same probe, for the ubusd object lifecycle stream (`ubus.object.add/remove`).
+    ubus_live: bool,
+    // The uevent producer holds a socket with an unbroken SEQNUM run since its UDC snapshot.
+    usb_live: bool,
 }
 
 pub(crate) struct Collector(Mutex<Inner>);
@@ -237,6 +241,18 @@ impl Inner {
         }
     }
 
+    fn remint_ubus(&mut self) {
+        if self.ubus_live && self.context.ubus_epoch.is_none() {
+            self.context.ubus_epoch = Some(opaque_id()).filter(|id| !id.is_empty());
+        }
+    }
+
+    fn remint_usb(&mut self) {
+        if self.usb_live && self.context.usb_epoch.is_none() {
+            self.context.usb_epoch = Some(opaque_id()).filter(|id| !id.is_empty());
+        }
+    }
+
     fn remint_sim(&mut self) {
         if self.sim_live && self.context.sim_epoch.is_none() {
             self.context.sim_epoch = Some(opaque_id()).filter(|id| !id.is_empty());
@@ -333,6 +349,8 @@ impl Collector {
             radio_changes: 0,
             conn_live: false,
             sim_live: false,
+            ubus_live: false,
+            usb_live: false,
         }))
     }
 
@@ -509,9 +527,13 @@ impl Collector {
             g.radio_at = None;
             // A listener gap can hide a SIM event; only the next probe re-arms it.
             g.sim_live = false;
+            g.ubus_live = false;
             g.remint_connection();
             g.bump_radio();
         }
+        // Neither loss touches the uevent stream: a vendor USB event or a ubus gap only
+        // revokes, and the still-live uevent socket gives a new value at once.
+        g.remint_usb();
         g.generation = g.generation.saturating_add(1);
     }
 
@@ -535,6 +557,47 @@ impl Collector {
         g.context.sim_epoch = None;
         g.remint_sim();
         g.bump_radio();
+        g.generation = g.generation.saturating_add(1);
+    }
+
+    /// Same probe as [`Self::sim_listening`], for the ubus epoch (firmware-capabilities
+    /// §12.10): from here no object add/remove can have been missed, so a new value.
+    pub(crate) fn ubus_listening(&self) {
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.ubus_live = true;
+        g.context.ubus_epoch = None;
+        g.remint_ubus();
+        g.generation = g.generation.saturating_add(1);
+    }
+
+    /// `ubus.object.add`/`ubus.object.remove`. Objects a [`super::resolve`] spec targets (or
+    /// an unreadable path) give a new value every time, even remove+add of the same path (ABA);
+    /// unrelated objects leave it alone.
+    pub(crate) fn ubus_object_event(&self, path: Option<&str>) {
+        if path.is_some_and(|p| !super::resolve::ubus_object_relevant(p)) {
+            return;
+        }
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.context.ubus_epoch = None;
+        g.remint_ubus();
+        g.generation = g.generation.saturating_add(1);
+    }
+
+    /// uevent producer (firmware-capabilities §12.10): `true` once the UDC snapshot was read
+    /// on a bound socket, `false` on a SEQNUM gap/read error/close. Either way a new value.
+    pub(crate) fn usb_live(&self, live: bool) {
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.usb_live = live;
+        g.context.usb_epoch = None;
+        g.remint_usb();
+        g.generation = g.generation.saturating_add(1);
+    }
+
+    /// A USB-related kernel uevent: a new USB epoch, repeats included.
+    pub(crate) fn usb_event(&self) {
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.context.usb_epoch = None;
+        g.remint_usb();
         g.generation = g.generation.saturating_add(1);
     }
 

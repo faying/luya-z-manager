@@ -252,11 +252,12 @@ proxy-groups:
 # ─────────────────────────────────────────────────────────────────────────────
 # 规则集（§6）。统一 http + mrs + 三天更新，经 🚀 节点选择 下载。
 # 缺少 private_domain / cn_domain / ai_domain 三个关键集时 chill.sh 不启动核心。
+# ai_domain 用文本格式：chill.sh 的 AI 闸门要从同一份清单生成 dnsmasq 的封锁文件（mrs 是二进制）。
 # ─────────────────────────────────────────────────────────────────────────────
 rule-providers:
   private_domain: {type: http, behavior: domain, format: mrs, interval: 259200, proxy: 🚀 节点选择, path: ./ruleset/private_domain.mrs, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geosite/private.mrs'}
   cn_domain:      {type: http, behavior: domain, format: mrs, interval: 259200, proxy: 🚀 节点选择, path: ./ruleset/cn_domain.mrs,      url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geosite/cn.mrs'}
-  ai_domain:      {type: http, behavior: domain, format: mrs, interval: 259200, proxy: 🚀 节点选择, path: ./ruleset/ai_domain.mrs,      url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geosite/category-ai-!cn.mrs'}
+  ai_domain:      {type: http, behavior: domain, format: text, interval: 259200, proxy: 🚀 节点选择, path: ./ruleset/ai_domain.list,     url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geosite/category-ai-!cn.list'}
   telegram_domain: {type: http, behavior: domain, format: mrs, interval: 259200, proxy: 🚀 节点选择, path: ./ruleset/telegram_domain.mrs, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geosite/telegram.mrs'}
   apple_domain:   {type: http, behavior: domain, format: mrs, interval: 259200, proxy: 🚀 节点选择, path: ./ruleset/apple_domain.mrs,   url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geosite/apple.mrs'}
   youtube:        {type: http, behavior: domain, format: mrs, interval: 259200, proxy: 🚀 节点选择, path: ./ruleset/youtube.mrs,        url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geosite/youtube.mrs'}

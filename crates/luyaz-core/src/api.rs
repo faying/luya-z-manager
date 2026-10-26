@@ -43,13 +43,14 @@ mod chill_page;
 pub(crate) mod control;
 mod device_admin;
 mod esim;
-mod exits;
+pub(crate) mod exits;
 pub(crate) mod execute;
 pub(crate) mod finding;
 pub(crate) mod approve;
 pub(crate) mod propose;
 pub(crate) mod home;
 pub(crate) mod home_exit;
+mod neighbors;
 mod net_reads;
 mod netinfo;
 pub(crate) mod ops;
@@ -225,7 +226,12 @@ impl Compat {
         let root = root.trim_end_matches('/').to_string();
         let speed = Arc::new(
             luyaz_speedtest::SpeedTest::new(&src.speed_servers)
-                .with_config_path(format!("{root}/speedtest.json")),
+                .with_config_path(format!("{root}/speedtest.json"))
+                .with_context(speed::context(
+                    src.hub.clone(),
+                    format!("{root}{}", speed::NET_TUNE_WANT).into(),
+                ))
+                .with_chill(luyaz_speedtest::CHILL_PROXY, &src.mihomo),
         );
         let net: Arc<netinfo::NetCache> = Arc::default();
         let gate: Arc<std::sync::Mutex<luyaz_api::diagnose::Gate>> = Arc::default();
@@ -431,7 +437,7 @@ impl Compat {
             .route("/api/screen", get(screen))
             .route("/api/alerts", get(alerts_get))
             .route("/api/poller", get(poller_get))
-            .route("/api/netinfo/neighbors/scan", post(neighbors_scan))
+            .route("/api/netinfo/neighbors/scan", get(neighbors::scan).post(neighbors::scan))
             .route("/api/netinfo", get(netinfo::get))
             // 8d-1b: the agent's last reads luyaz-web used (agent path and reply shape)
             .route("/api/cpu", get(sys_reads::cpu))
@@ -487,6 +493,11 @@ impl Compat {
                 .route("/api/speedtest/start", post(speed::start))
                 .route("/api/speedtest/progress", get(speed::progress))
                 .route("/api/speedtest/stop", post(speed::stop))
+                // the CPU-path tuning's switch (net-performance.md T9)
+                .route(
+                    "/api/net-tune",
+                    get(speed::net_tune_get).put(speed::net_tune_put),
+                )
                 .route("/api/esim/status", get(esim::status))
                 .route("/api/esim/profiles", get(esim::profiles))
                 .route("/api/esim/notifications", get(esim::notifications))
@@ -734,10 +745,13 @@ async fn alerts_get(
     let cursor = cursor_query(q.as_deref());
     let data = tokio::task::spawn_blocking(move || {
         let a = Alerts::at(&dir);
-        match cursor {
+        let mut v = match cursor {
             Some((since, limit)) => a.since(since, limit, luyaz_api::alerts::now(), offset),
             None => a.summary(luyaz_api::alerts::now(), uptime_now(), offset),
-        }
+        };
+        // each event's incident, when it has one (eng review round 3 D2)
+        crate::longterm::regress::io::tag_alerts(&mut v);
+        v
     })
     .await
     .unwrap_or(Value::Null);
@@ -813,15 +827,6 @@ async fn alerts_read(State(c): State<Compat>, body: Bytes) -> Response {
     })
     .await
     .unwrap_or_else(|_| reply(500, json!({"ok": false, "error": "internal"})))
-}
-
-/// POST /api/netinfo/neighbors/scan (the agent's `netinfo::neighbors_scan`): switched off.
-async fn neighbors_scan() -> Response {
-    reply(
-        410,
-        json!({"ok": false, "error": "原厂扫描会断网且拿不到数据，已停用",
-               "error_en": "Off: the stock scan drops data, finds nothing"}),
-    )
 }
 
 async fn not_yet(request: Request) -> Response {

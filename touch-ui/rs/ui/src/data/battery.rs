@@ -98,6 +98,8 @@ pub fn est_from_report(obj: Option<&[u8]>) -> (bool, Est, i32) {
 #[derive(Clone)]
 pub struct BatteryEst {
     text: String,
+    /// the estimate behind the line (Home's battery cell words it short)
+    est: Est,
     was_active: bool,
     last_try: i64,
     last_ok: i64,
@@ -105,7 +107,7 @@ pub struct BatteryEst {
 
 impl Default for BatteryEst {
     fn default() -> Self {
-        BatteryEst { text: "—".into(), was_active: false, last_try: 0, last_ok: 0 }
+        BatteryEst { text: "—".into(), est: Est { kind: EST_UNKNOWN, minutes: 0 }, was_active: false, last_try: 0, last_ok: 0 }
     }
 }
 
@@ -128,7 +130,11 @@ impl BatteryEst {
         }
         if !came_back && self.last_try != 0 && t - self.last_try < BE_POLL_MS {
             // gone stale: no old line as new
-            return self.last_ok != 0 && t - self.last_ok > BE_STALE_MS && self.set("—".into());
+            if self.last_ok != 0 && t - self.last_ok > BE_STALE_MS {
+                self.est = Est { kind: EST_UNKNOWN, minutes: 0 };
+                return self.set("—".into());
+            }
+            return false;
         }
         self.last_try = t;
         let (code, b) = agent.api_ms("GET", "/api/screen", None, 4096, BE_IO_MS);
@@ -137,15 +143,22 @@ impl BatteryEst {
             if self.last_ok != 0 && t - self.last_ok <= BE_STALE_MS {
                 return false;
             }
+            self.est = Est { kind: EST_UNKNOWN, minutes: 0 };
             return self.set("—".into());
         };
         self.last_ok = t;
         let (_, e, target) = est_from_report(Some(&bat));
-        self.set(est_text(e, target, 96))
+        let changed = e != self.est;
+        self.est = e;
+        self.set(est_text(e, target, 96)) | changed
     }
 
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    pub fn est(&self) -> Est {
+        self.est
     }
 }
 

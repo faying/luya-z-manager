@@ -1,20 +1,17 @@
-//! 首页: the status card (a
-//! conclusion, then 载波 · Wi-Fi · 出口 · 流量), 情景, Tailscale, and the net-speed chart
-//! (ui/system.rs, built with the charts). Cards are stacked by home_reflow under whatever the
-//! status card shows.
+//! 首页 (DESIGN.md §4 Home hierarchy): four fixed slots. The status card (SIM line, verdict,
+//! speed or the hint, SINR ring, carriers or the action), the scenario card and the bottom row
+//! (ui/home_scene.rs); below the fold 落地 and Tailscale details.
+//! Content changes inside a slot and never moves the slots below it.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-use super::{Sub, Ui, SF_OLD_DATAD, TAB_CELL, TAB_HOME, TAB_WIFI, VIEW_H};
+use super::home_scene::Scene;
+use super::{Sub, Ui, SF_OLD_DATAD, TAB_CELL, VIEW_H};
 use crate::cf;
 use crate::clock;
-use crate::kit::{self, Hero, CARD_W, HERO_H, MARGIN, PAD, ROW_H, TAB_PAD, W};
-
-/// the dual-standby block under the hero: two 18 px lines
-/// Dual standby: the hero grows by one line (two slot lines replace the top line).
-const DUAL_H: i32 = 18;
-use crate::lang::{self, tr, trn};
-use crate::logic::{self, NetHold, CAUSE_NARROW, NET_BAD, NET_OK, NET_WARN};
-use crate::lv::{self, sys, EventCb, Obj};
+use crate::kit::{self, CARD_W, MARGIN, PAD, R_CARD, ROW_H, TAB_PAD};
+use crate::lang::tr;
+use crate::logic::{self, NetHold, NET_BAD, NET_OK, NET_WARN};
+use crate::lv::{self, sys, Obj, Series};
 use crate::net_view as nv;
 use crate::theme::{t, uf};
 use crate::trc;
@@ -23,18 +20,69 @@ use ui_model::scenario_status_t;
 
 /// 5 carrier slots: 3 NR + 2 LTE covers EN-DC on this modem with headroom.
 pub const CA_SLOTS: usize = 5;
+/// the speed wave's floor (rate_scale 50 = 10 KB/s): at or under it is idle, drawn as a gap
+const WAVE_FLOOR: i32 = 50;
+/// the foot's carrier bars are drawn against this many MHz (or the total, when wider)
+const FOOT_FULL_MHZ: i32 = 100;
 pub const CA_CARD_TOP: i32 = 34;
 pub const SC_CARD_H: i32 = 72;
 /// Tailscale · 本机 · 节点 · 子网 · 出口/提示
 pub const TS_HOME_ROWS: usize = 5;
 
+// the slots, in the home scroll's coordinates (the screen's minus the 26 px status bar)
+pub const HERO_Y: i32 = 4;
+pub const HERO_BOX_H: i32 = 147;
+pub const SCENE_Y: i32 = 156;
+pub const SCENE_H: i32 = 174;
+pub const ROW_Y: i32 = 336;
+pub const CELL_H: i32 = 54;
+/// below the fold: 落地, Tailscale (the speed chart is on 系统)
+pub const FOLD_Y: i32 = ROW_Y + CELL_H + 2 * MARGIN;
+// inside the status card: SIM line 29 · body 92 · footer 26; dual standby: two SIM lines 39 ·
+// body 82 (a smaller ring; the wave keeps its place at the body's foot)
+const SIM_H: i32 = 29;
+const SIM_H2: i32 = 39;
+const BODY_Y: i32 = SIM_H;
+const FOOT_Y: i32 = SIM_H + 92;
+const FOOT_H: i32 = HERO_BOX_H - FOOT_Y;
+/// the ring and its word take the body's right 92 px
+const RING_D: i32 = 74;
+const RING_D2: i32 = 66;
+const BODY_W: i32 = CARD_W - 92;
+/// speed wave: points kept (one per chart step)
+const WAVE_PTS: u32 = 30;
+
+/// One SIM line: logo · words …… a role word on the right (dual standby only).
+#[derive(Default, Clone)]
+pub struct SimRow {
+    pub logo: Obj,
+    pub l: Obj,
+    pub r: Obj,
+    slug: Option<String>,
+    w: i32,
+    h: i32,
+    opa: i32,
+}
+
+/// What the status card's footer offers on its right end, when there is something to do.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HeroAct {
+    None,
+    /// 查原因 › (network diagnosis)
+    Diag,
+    /// 详情 › (a write in progress: the transaction page)
+    Op,
+    /// 换这张上网 › (dual standby: the data card has no service, the other one has signal)
+    Swap,
+    /// 去启用 › (no SIM: SIM and eSIM)
+    Enable,
+}
+
+/// One carrier in the footer: band label + a bar as wide as its MHz share.
 #[derive(Default, Clone, Copy)]
-pub struct HomeRow {
-    pub bx: Obj,
-    /// moved right of the mark before 出口 (private build); unread in the public build
-    #[allow(dead_code)]
-    pub key: Obj,
-    pub val: Obj,
+pub struct FootCa {
+    pub band: Obj,
+    pub bar: Obj,
 }
 
 /// One carrier: active (40 px) or configured but inactive (32 px).
@@ -58,60 +106,53 @@ pub struct CaSlot {
 #[derive(Clone)]
 pub struct Home {
     pub scroll: Obj,
-    // 自动退回已打开 · 知道了 (DD18)
-    pub hn_box: Obj,
-    hn_h: i32,
     // status card
     pub cell_card: Obj,
-    pub cc_hero: Hero,
-    pub cc_hint_box: Obj,
-    /// dual standby: one line per slot under the hero (left: card · operator · RAT, right: role + RSRP · SINR)
-    pub cc_dual: Obj,
-    pub cc_dual_l: [Obj; 2],
-    pub cc_dual_r: [Obj; 2],
-    /// each line's own operator logo (same files as cc_logo)
-    pub cc_dual_img: [Obj; 2],
-    /// what each line's image shows: (slug, w, h); w 0 = none
-    dual_logo: [(Option<String>, i32, i32); 2],
-    /// each line's logo opacity as last set (-1 = not yet)
-    dual_opa: [i32; 2],
-    /// the top line as last composed (operator · RAT · local), for the data slot's line
-    st_line: Vec<u8>,
-    /// its last part when roaming (「漫游」): the dual line never drops it
-    st_roam: Vec<u8>,
-    dual_on: bool,
-    cc_hint: Obj,
-    cc_diag: Obj,
-    cc_hint_sub: Sub,
-    cc_logo: Obj,
-    logo_slug: Option<String>,
-    logo_w: i32,
-    logo_h: i32,
-    hr_ca: HomeRow,
-    hr_wifi: HomeRow,
-    hr_exit: HomeRow,
-    hr_traf: HomeRow,
-    hr_ca_sub: Obj,
-    hr_exit_sub: Obj,
-    hr_exit_mark: Obj,
+    /// SIM lines: the data card; dual standby adds the other card's line under it
+    sim: [SimRow; 2],
+    /// the card's inner layout as last set (dual standby: two SIM lines, a tighter body)
+    hero_dual: Option<bool>,
+    /// body: verdict (+ since), speed + noise · load + wave, or the hint; the SINR ring
+    big: Obj,
+    since: Obj,
+    spd: Obj,
+    spd_u: Obj,
+    spd_up: Obj,
+    spd_upu: Obj,
+    nl: Obj,
+    wave: Obj,
+    wave_s: Series,
+    /// the snapshot the wave last moved on: a step with no new data leaves it still
+    wave_ver: u64,
+    hint: Obj,
+    /// the hint as broken into lines last (wrap_cjk measures: only when it changes)
+    hint_src: String,
+    ring: Obj,
+    ring_v: Obj,
+    ring_c: Obj,
+    /// footer: hairline, carriers or a status line, total or the action
+    foot_ca: [FootCa; CA_SLOTS],
+    foot_txt: Obj,
+    foot_tot: Obj,
+    act_box: Obj,
+    act_l: Obj,
+    pub act: HeroAct,
+    /// tone colours as last set: (card wash, ring arc)
     c_wash: Option<u32>,
-    c_subcol: Option<u32>,
-    last_exit: String,
-    // 情景
-    sc_card: Obj,
+    c_arc: Option<u32>,
+    /// the scenario card and the bottom row (home_scene.rs)
+    pub sn: Scene,
     // 落地: a new country, for 24 h (travel-assist.md §5)
     ld_card: Obj,
     ld_title: Obj,
     ld_when: Obj,
     ld_note: Obj,
-    sc_state: Obj,
-    sc_note: Obj,
     pub sc_force: bool,
     // 载波明细 (lives on 蜂窝)
     pub ca_card: Obj,
     ca_qos: Obj,
     ca: [CaSlot; CA_SLOTS],
-    // Tailscale
+    // Tailscale (below the fold: the details the column has no room for)
     ts_card: Obj,
     ts_dot: Obj,
     ts_val: [Obj; TS_HOME_ROWS],
@@ -120,7 +161,7 @@ pub struct Home {
     // refresh state
     ever_valid: bool,
     pub last_valid_wall: i64,
-    cc_tone: i32,
+    pub cc_tone: i32,
     shown_tone: i32,
     shown_cause: i32,
     shown_headline: String,
@@ -128,51 +169,44 @@ pub struct Home {
     shown_state: i32,
     hold: NetHold,
     nosig_since: u32,
-    c_diag: i32,
+    last_exit: String,
 }
 
 impl Default for Home {
     fn default() -> Self {
         Home {
             scroll: Obj::NULL,
-            hn_box: Obj::NULL,
-            hn_h: ROW_H,
             cell_card: Obj::NULL,
-            cc_hero: Hero::default(),
-            cc_hint_box: Obj::NULL,
-            cc_dual: Obj::NULL,
-            cc_dual_l: [Obj::NULL; 2],
-            cc_dual_r: [Obj::NULL; 2],
-            cc_dual_img: [Obj::NULL; 2],
-            dual_logo: [(None, 0, 0), (None, 0, 0)],
-            dual_opa: [-1; 2],
-            st_line: Vec::new(),
-            st_roam: Vec::new(),
-            dual_on: false,
-            cc_hint: Obj::NULL,
-            cc_diag: Obj::NULL,
-            cc_hint_sub: Sub::Diag,
-            cc_logo: Obj::NULL,
-            logo_slug: None,
-            logo_w: 0,
-            logo_h: 0,
-            hr_ca: HomeRow::default(),
-            hr_wifi: HomeRow::default(),
-            hr_exit: HomeRow::default(),
-            hr_traf: HomeRow::default(),
-            hr_ca_sub: Obj::NULL,
-            hr_exit_sub: Obj::NULL,
-            hr_exit_mark: Obj::NULL,
+            sim: [SimRow::default(), SimRow::default()],
+            hero_dual: None,
+            big: Obj::NULL,
+            since: Obj::NULL,
+            spd: Obj::NULL,
+            spd_u: Obj::NULL,
+            spd_up: Obj::NULL,
+            spd_upu: Obj::NULL,
+            nl: Obj::NULL,
+            wave: Obj::NULL,
+            wave_s: Series::default(),
+            wave_ver: 0,
+            hint: Obj::NULL,
+            hint_src: String::new(),
+            ring: Obj::NULL,
+            ring_v: Obj::NULL,
+            ring_c: Obj::NULL,
+            foot_ca: [FootCa::default(); CA_SLOTS],
+            foot_txt: Obj::NULL,
+            foot_tot: Obj::NULL,
+            act_box: Obj::NULL,
+            act_l: Obj::NULL,
+            act: HeroAct::None,
             c_wash: None,
-            c_subcol: None,
-            last_exit: String::new(),
-            sc_card: Obj::NULL,
+            c_arc: None,
+            sn: Scene::default(),
             ld_card: Obj::NULL,
             ld_title: Obj::NULL,
             ld_when: Obj::NULL,
             ld_note: Obj::NULL,
-            sc_state: Obj::NULL,
-            sc_note: Obj::NULL,
             sc_force: false,
             ca_card: Obj::NULL,
             ca_qos: Obj::NULL,
@@ -192,25 +226,21 @@ impl Default for Home {
             shown_state: 0,
             hold: NetHold::default(),
             nosig_since: 0,
-            c_diag: -1,
+            last_exit: String::new(),
         }
     }
 }
 
-/// One 40 px row inside the status card; the box carries its labels so the whole row moves
-/// with one set_y. cb = tappable with a chevron.
-fn home_row(c: Obj, key: &str, cb: Option<EventCb>, user: usize) -> HomeRow {
-    let th = t();
-    let bx = kit::bx(c, 0, 0, CARD_W, ROW_H, th.card, 0);
-    bx.set_style_bg_opa(lv::OPA_TRANSP, 0);
-    kit::sep(bx, 0);
-    let key = kit::label(bx, uf().cj14, th.t2, PAD, 11, key);
-    let val = kit::label_r(bx, uf().n15, th.t1, CARD_W - PAD - if cb.is_some() { 16 } else { 0 }, 10, "");
-    if cb.is_some() {
-        kit::chevron(bx, 0);
-        kit::tappable(bx, cb, user);
+/// Long SSIDs keep both ends: the start names the network, the end often tells bands or
+/// floors apart (first n−6 characters + 「…」 + last 5).
+pub fn midcut(x: &str, n: usize) -> String {
+    let c: Vec<char> = x.chars().collect();
+    if c.len() <= n || n < 7 {
+        return x.into();
     }
-    HomeRow { bx, key, val }
+    let head: String = c[..n - 6].iter().collect();
+    let tail: String = c[c.len() - 5..].iter().collect();
+    format!("{head}…{tail}")
 }
 
 /// 「国家 省 市」keeps the country and the last part (the city); two parts or fewer as they
@@ -366,132 +396,65 @@ pub fn mf_wrap(input: &[u8], f: lv::Font, w: i32) -> Vec<u8> {
     out
 }
 
-unsafe extern "C" fn cc_hint_cb(_e: *mut sys::lv_event_t) {
-    super::with(|u| u.sub_open(u.home.cc_hint_sub));
-}
-
-unsafe extern "C" fn sc_card_cb(_e: *mut sys::lv_event_t) {
-    super::with(|u| u.sub_open(Sub::Scene));
-}
-
-unsafe extern "C" fn op_notice_cb(_e: *mut sys::lv_event_t) {
-    super::with(|u| {
-        u.data_control("op.notice_ack", "{}", None);
-        u.op.notice_acked = true;
-        u.op_notice_paint(); // answered at once (DESIGN.md §4)
-    });
-}
-
-/// 首页「出口」行: with a 手动优先 notice to the top of the exit tab's CHILL area; 家里不通:
-/// the CHILL page (exit.rs exit_row_go).
-unsafe extern "C" fn exit_row_cb(_e: *mut sys::lv_event_t) {
-    super::with(|u| u.exit_row_go());
+unsafe extern "C" fn act_cb(_e: *mut sys::lv_event_t) {
+    super::with(|u| u.home_act());
 }
 
 fn visible_h(o: Obj) -> i32 {
     if o.hidden() { -1 } else { o.style_height(0) }
 }
 
+/// Load slug's logo into img once (cached in cur/w/h; None or unreadable = hidden).
+fn logo_cache(img: Obj, cur: &mut Option<String>, w: &mut i32, h: &mut i32, slug: Option<&str>) {
+    let slug = slug.filter(|s| !s.is_empty());
+    if slug == cur.as_deref() {
+        return;
+    }
+    *cur = slug.map(String::from);
+    (*w, *h) = slug.and_then(|s| Ui::logo_load(img, s)).unwrap_or((0, 0));
+    if *w == 0 {
+        *cur = None;
+    }
+}
+
+
+/// The footer's right end without an action: how many carriers, how wide together.
+pub fn ca_total(v: &net_view_t) -> Vec<u8> {
+    let n = (v.ca_n.max(0) as usize).min(v.ca.len());
+    let act: Vec<&ui_model::nv_carrier_t> = v.ca[..n].iter().filter(|c| c.active != 0).collect();
+    if act.is_empty() {
+        return Vec::new();
+    }
+    let mhz: i32 = act.iter().map(|c| c.bw.max(0)).sum();
+    let nr = act.iter().any(|c| c.kind == 'n' as i32);
+    let lte = act.iter().any(|c| c.kind != 'n' as i32);
+    if act.len() == 1 {
+        cf!(tr("单载波 · %d MHz"), mhz)
+    } else if nr && lte && v.fine.contains("NSA") {
+        cf!(tr("锚点 + 5G · %d MHz"), mhz)
+    } else {
+        cf!(tr("%d 条聚合 · %d MHz"), act.len() as i32, mhz)
+    }
+}
+
+/// The SINR the ring shows: the first active carrier's.
+fn ring_sinr(v: &net_view_t) -> Option<(f64, i32)> {
+    let n = (v.ca_n.max(0) as usize).min(v.ca.len());
+    let c = v.ca[..n].iter().find(|c| c.active != 0)?;
+    c.sinr.trim().parse::<f64>().ok().map(|s| (s, c.sinr_tone))
+}
+
 impl Ui {
     pub(super) fn build_home(&mut self, tile: Obj) {
         let th = t();
         let f = uf();
-        // worst case (5 active carriers, 5 Tailscale rows, …) ~1010; home_reflow moves the
-        // spacer to the real height
+        // the first screen is fixed; below the fold 落地 + Tailscale (home_reflow moves
+        // the spacer to the real height)
         let sc = kit::scroll(tile, 0, VIEW_H, 1100);
+        self.home.scroll = sc;
+        self.build_home_hero(sc);
+        self.build_home_scene(sc);
         let h = &mut self.home;
-        h.scroll = sc;
-
-        // 自动退回已打开 · 知道了: text left (wraps), 知道了 a ≥ 40 px target right
-        {
-            const DOT_X: i32 = PAD + MARGIN;
-            const LBL_X: i32 = PAD + MARGIN + 16;
-            const ACK_W: i32 = 72;
-            let hb = kit::bx(sc, 0, 0, W, ROW_H, th.card, 0);
-            hb.set_style_border_side(lv::LV_BORDER_SIDE_BOTTOM, 0);
-            hb.set_style_border_width(1, 0);
-            hb.set_style_border_color(th.sep, 0);
-            let dot = kit::dot(hb, DOT_X, 0, 8, th.acc_t);
-            let lbl = kit::label_w(hb, f.cj13, th.t1, LBL_X, 0, W - LBL_X - ACK_W, true, tr("自动退回已开：切模式没通会退回"));
-            lbl.update_layout();
-            let lh = lbl.height();
-            h.hn_h = if lh + 18 > ROW_H { lh + 18 } else { ROW_H };
-            hb.set_height(h.hn_h);
-            lbl.set_y((h.hn_h - lh) / 2);
-            dot.set_y((h.hn_h - 8) / 2);
-            let ack = kit::bx(hb, W - ACK_W, 0, ACK_W, h.hn_h - 1, th.card, 0);
-            ack.set_style_bg_opa(lv::OPA_TRANSP, 0);
-            let al = kit::label(ack, f.cj14, th.acc_t, 0, 0, tr("知道了"));
-            al.align(lv::LV_ALIGN_CENTER, 0, 0);
-            kit::tappable(ack, Some(op_notice_cb), 0);
-            kit::show(hb, false);
-            h.hn_box = hb;
-        }
-
-        // status card: the conclusion, then Wi-Fi · traffic · carrier summary
-        let c = kit::card(sc, MARGIN, 4, CARD_W, HERO_H + 4 * ROW_H);
-        h.cell_card = c;
-        h.cc_hero = kit::hero(c, f.cj24b);
-        kit::show(h.cc_hero.unit, false);
-        h.cc_hero.big.set_x(PAD); // same margin left and right
-        // dual standby: two slot lines on the wash, in place of the top line
-        h.cc_dual = kit::bx(c, 0, 0, CARD_W, 46, th.card, 0);
-        h.cc_dual.set_style_bg_opa(lv::OPA_TRANSP, 0);
-        for i in 0..2 {
-            let y = 8 + i as i32 * 19;
-            h.cc_dual_img[i] = Obj::image(h.cc_dual);
-            h.cc_dual_img[i].remove_flag(lv::LV_OBJ_FLAG_CLICKABLE);
-            kit::show(h.cc_dual_img[i], false);
-            h.cc_dual_l[i] = kit::label_w(h.cc_dual, f.cj12, th.t1, PAD, y, CARD_W - 2 * PAD - 120, false, "");
-            h.cc_dual_l[i].set_long_mode(lv::LV_LABEL_LONG_MODE_DOTS);
-            h.cc_dual_r[i] = kit::label_w(h.cc_dual, f.cj12, th.t1, CARD_W - PAD - 150, y, 150, false, "");
-            h.cc_dual_r[i].set_style_text_align(lv::LV_TEXT_ALIGN_RIGHT, 0);
-        }
-        kit::show(h.cc_dual, false);
-        // the hint line: while the verdict is abnormal the whole row opens 网络诊断 (查原因 ›)
-        h.cc_hint_box = kit::bx(c, 0, HERO_H, CARD_W, ROW_H, th.card, 0);
-        h.cc_hint_box.set_style_bg_opa(lv::OPA_TRANSP, 0);
-        h.cc_hint = kit::label_w(h.cc_hint_box, f.cj13, th.t2, PAD, 8, CARD_W - 2 * PAD, true, "");
-        h.cc_diag = kit::label(h.cc_hint_box, f.cj13, th.acc_t, 0, 8, tr("查原因 ›"));
-        kit::tappable(h.cc_hint_box, Some(cc_hint_cb), 0);
-        kit::show(h.cc_diag, false);
-        kit::show(h.cc_hint_box, false);
-        // the top line (operator · RAT · local/roaming) may be long: limited, ends in "…"
-        h.cc_hero.st.set_size(CARD_W - 26 - PAD, 18);
-        h.cc_hero.st.set_long_mode(lv::LV_LABEL_LONG_MODE_DOTS);
-        // operator logo: transparent PNG, 16 high, ≤ 96 wide
-        h.cc_logo = Obj::image(c);
-        h.cc_logo.remove_flag(lv::LV_OBJ_FLAG_CLICKABLE);
-        kit::show(h.cc_logo, false);
-        // summary rows: 蜂窝 / Wi-Fi / 出口 each open their tab; 流量 is read-only
-        h.hr_ca = home_row(c, tr("载波"), Some(super::tab_go_cb), TAB_CELL);
-        h.hr_wifi = home_row(c, "Wi-Fi", Some(super::tab_go_cb), TAB_WIFI);
-        h.hr_exit = home_row(c, tr("出口"), Some(exit_row_cb), 0); // with a 手动优先 notice: to the CHILL area
-        h.hr_traf = home_row(c, tr("流量"), None, 0);
-        h.hr_ca_sub = kit::label_w(h.hr_ca.bx, f.cj12, th.t3, PAD, 34, CARD_W - 2 * PAD - 16, false, "");
-        h.hr_exit_sub = kit::label_w(h.hr_exit.bx, f.cj12, th.t3, PAD, 34, CARD_W - 2 * PAD - 16, false, "");
-        // 手动优先: the mark before 「出口 ›」 (coloured by kind); the notice is the small line
-        h.hr_exit_mark = kit::label(h.hr_exit.bx, f.cj14, th.warn_t, PAD, 11, "");
-        kit::show(h.hr_exit_mark, false);
-        for s in [h.hr_ca_sub, h.hr_exit_sub] {
-            s.set_height(18);
-            s.set_long_mode(lv::LV_LABEL_LONG_MODE_DOTS);
-        }
-        h.hr_ca.bx.set_y(HERO_H);
-        h.hr_wifi.bx.set_y(HERO_H + ROW_H);
-        h.hr_exit.bx.set_y(HERO_H + 2 * ROW_H);
-        h.hr_traf.bx.set_y(HERO_H + 3 * ROW_H);
-        h.hr_wifi.val.set_text("—");
-        for v in [h.hr_exit.val, h.hr_ca.val] {
-            v.set_text("—");
-            v.set_width(210);
-            v.set_style_text_align(lv::LV_TEXT_ALIGN_RIGHT, 0);
-            v.set_long_mode(lv::LV_LABEL_LONG_MODE_DOTS);
-            v.set_style_text_font(f.cj14, 0);
-            v.set_height(20); // one line: ends in "…", never wraps
-            v.align(lv::LV_ALIGN_TOP_RIGHT, -(PAD + 16), 11);
-        }
-        h.hr_traf.val.set_text("—");
 
         // 落地: where the device has just arrived (read-only; gone after 24 h)
         let l = kit::card(sc, MARGIN, 0, CARD_W, SC_CARD_H);
@@ -501,16 +464,6 @@ impl Ui {
         h.ld_note.set_long_mode(lv::LV_LABEL_LONG_MODE_DOTS);
         kit::show(l, false);
         h.ld_card = l;
-
-        // 情景: what the device decided about where it is (opens the 情景 page)
-        let s = kit::card(sc, MARGIN, 0, CARD_W, SC_CARD_H);
-        kit::label(s, f.cj14, th.t2, PAD, 11, tr("情景"));
-        h.sc_state = kit::label_r(s, f.cj14, th.t1, CARD_W - PAD - 16, 11, "");
-        h.sc_note = kit::label_w(s, f.cj12, th.t2, PAD, 34, CARD_W - 2 * PAD, false, "");
-        kit::chevron(s, 0); // opens a page: › (DESIGN.md §4)
-        kit::tappable(s, Some(sc_card_cb), 0);
-        kit::show(s, false);
-        h.sc_card = s;
 
         // 载波明细: every carrier row (moved to the top of 蜂窝)
         let cc = kit::card(sc, MARGIN, 0, CARD_W, CA_CARD_TOP + 40);
@@ -571,32 +524,111 @@ impl Ui {
         self.home_reflow();
     }
 
-    /// Stack the home cards under whatever the status card is showing. Property changes on
-    /// existing objects only.
+    /// The status card: one card tinted by the tone, three bands (SIM line · body · footer).
+    fn build_home_hero(&mut self, sc: Obj) {
+        let th = t();
+        let f = uf();
+        let h = &mut self.home;
+        let c = kit::bx(sc, MARGIN, HERO_Y, CARD_W, HERO_BOX_H, th.wash, R_CARD);
+        c.set_style_clip_corner(true, 0);
+        h.c_wash = Some(th.wash);
+        kit::tappable(c, Some(super::tab_go_cb), TAB_CELL);
+        h.cell_card = c;
+        // SIM line (20 px at y 9): logo · words …… the other card's logo · its state
+        let ly = 9 + (20 - f.cj12.line_height()) / 2;
+        for i in 0..2 {
+            let r = &mut h.sim[i];
+            r.logo = Obj::image(c);
+            r.logo.remove_flag(lv::LV_OBJ_FLAG_CLICKABLE);
+            kit::show(r.logo, false);
+            r.l = kit::label_w(c, f.cj12, if i == 0 { th.t1 } else { th.t2 }, PAD, ly, CARD_W - 2 * PAD, false, "");
+            r.r = kit::label_w(c, f.cj12, th.t2, CARD_W - PAD - 120, ly, 120, false, "");
+            r.r.set_style_text_align(lv::LV_TEXT_ALIGN_RIGHT, 0);
+            r.opa = -1;
+        }
+        // body: verdict (+ 已 12 分钟), then speed · noise/load · wave, or the hint
+        h.big = kit::label(c, f.cj24b, th.ok_t, PAD, BODY_Y + 2, "");
+        h.big.set_style_max_width(BODY_W - PAD, 0);
+        h.big.set_long_mode(lv::LV_LABEL_LONG_MODE_DOTS);
+        h.big.set_height(f.cj24b.line_height());
+        h.since = kit::label_w(c, f.cj12, th.t2, PAD, BODY_Y + 3 + f.cj12.line_height(), BODY_W - PAD, false, "");
+        let sy = BODY_Y + 36;
+        h.spd = kit::label(c, f.n20, th.t1, PAD, sy, "");
+        h.spd_u = kit::label(c, f.n11, th.t2, PAD, sy + f.n20.line_height() - f.n11.line_height() - 3, "Mbps");
+        h.spd_up = kit::label(c, f.n15, th.t2, PAD, sy + f.n20.line_height() - f.n15.line_height() - 2, "");
+        h.spd_upu = kit::label(c, f.n11, th.t2, PAD, sy + f.n20.line_height() - f.n11.line_height() - 3, "Mbps");
+        h.nl = kit::label_w(c, f.cj12, th.t2, PAD, BODY_Y + 3, BODY_W - PAD, false, "");
+        let (w, ws, _) = kit::chart(c, 0, BODY_Y + 66, BODY_W, 24, WAVE_PTS, th.green, 0);
+        w.chart_set_div_line_count(0, 0);
+        // the net chart's scale (system.rs): ~10 KB/s to 100 MB/s; idle is left out
+        w.chart_set_axis_range(sys::lv_chart_axis_t::LV_CHART_AXIS_PRIMARY_Y, WAVE_FLOOR, 100);
+        (h.wave, h.wave_s) = (w, ws);
+        h.hint = kit::label_w(c, f.cj13, th.t1, PAD, sy, BODY_W - PAD, true, "");
+        h.hint.set_height(3 * f.cj13.line_height());
+        h.hint.set_long_mode(lv::LV_LABEL_LONG_MODE_DOTS);
+        kit::show(h.hint, false);
+        // SINR ring: a 270° track, the arc as long as the quality, coloured by it
+        let rx = CARD_W - 10 - RING_D;
+        let r = Obj::arc(c);
+        r.remove_flag(lv::LV_OBJ_FLAG_CLICKABLE);
+        r.set_size(RING_D, RING_D);
+        r.set_pos(rx, BODY_Y - 2);
+        r.arc_set_rotation(135);
+        r.arc_set_bg_angles(0, 270);
+        r.arc_set_range(0, 100);
+        r.arc_set_value(0);
+        r.set_style_bg_opa(lv::OPA_TRANSP, lv::LV_PART_MAIN);
+        r.set_style_pad_all(0, lv::LV_PART_MAIN);
+        for part in [lv::LV_PART_MAIN, lv::LV_PART_INDICATOR] {
+            r.set_style_arc_width(7, part);
+            r.set_style_arc_rounded(true, part);
+        }
+        r.set_style_arc_color(th.track, lv::LV_PART_MAIN);
+        r.set_style_arc_color(th.track, lv::LV_PART_INDICATOR);
+        r.set_style_bg_opa(lv::OPA_TRANSP, lv::LV_PART_KNOB);
+        r.set_style_pad_all(0, lv::LV_PART_KNOB);
+        h.ring = r;
+        h.c_arc = Some(th.track);
+        let vy = BODY_Y - 2 + RING_D / 2 - f.n20.line_height() / 2 - 5;
+        h.ring_v = kit::label_w(c, f.n20, th.t1, rx, vy, RING_D, false, "—");
+        h.ring_v.set_style_text_align(lv::LV_TEXT_ALIGN_CENTER, 0);
+        h.ring_c = kit::label_w(c, f.n11, th.t3, rx, vy + f.n20.line_height() - 3, RING_D, false, "SINR");
+        h.ring_c.set_style_text_align(lv::LV_TEXT_ALIGN_CENTER, 0);
+        // footer: a hairline on the same tint; carriers or a status line; total or the action
+        let hair = kit::bx(c, 0, FOOT_Y, CARD_W, 1, if th.dark { 0xffffff } else { 0x000000 }, 0);
+        hair.set_style_bg_opa(if th.dark { 26 } else { 20 }, 0);
+        let fy = FOOT_Y + (FOOT_H - f.cj12.line_height()) / 2;
+        for i in 0..CA_SLOTS {
+            let k = FootCa {
+                band: kit::label(c, f.n12, th.t1, PAD, FOOT_Y + (FOOT_H - f.n12.line_height()) / 2, ""),
+                bar: kit::bx(c, PAD, FOOT_Y + (FOOT_H - 8) / 2, 10, 8, th.blue, 4),
+            };
+            kit::show(k.band, false);
+            kit::show(k.bar, false);
+            h.foot_ca[i] = k;
+        }
+        h.foot_txt = kit::label_w(c, f.cj12, th.t2, PAD, fy, CARD_W - 2 * PAD, false, "");
+        h.foot_tot = kit::label_r(c, f.cj12, th.t2, CARD_W - PAD, fy, "");
+        let ab = kit::bx(c, CARD_W - 110, FOOT_Y, 110, FOOT_H, th.card, 0);
+        ab.set_style_bg_opa(lv::OPA_TRANSP, 0);
+        h.act_l = kit::label(ab, f.cj13, th.acc_t, 0, 0, "");
+        h.act_l.align(lv::LV_ALIGN_RIGHT_MID, -PAD, 0);
+        kit::tappable(ab, Some(act_cb), 0);
+        kit::show(ab, false);
+        h.act_box = ab;
+    }
+
+    /// The first screen is fixed; below it 落地 and Tailscale stack.
     pub fn home_reflow(&mut self) {
         let h = &self.home;
-        let mut y = 4;
-        if visible_h(h.hn_box) >= 0 {
-            y += h.hn_h; // 自动退回已打开 (DD18)
-        }
-        h.cell_card.set_y(y);
-        y += visible_h(h.cell_card) + MARGIN;
+        let mut y = FOLD_Y;
         if visible_h(h.ld_card) >= 0 {
             h.ld_card.set_y(y);
-            y += SC_CARD_H + MARGIN;
-        }
-        if visible_h(h.sc_card) >= 0 {
-            h.sc_card.set_y(y);
             y += SC_CARD_H + MARGIN;
         }
         if !h.ts_card.hidden() {
             h.ts_card.set_y(y);
             y += h.ts_card.style_height(0) + MARGIN;
-        }
-        let net = self.charts.net_card;
-        if !net.is_null() {
-            net.set_y(y);
-            y += net.style_height(0) + MARGIN;
         }
         kit::scroll_extent(h.scroll, y + TAB_PAD);
         // the carrier card and others are on other tabs: shown or hidden, those move too
@@ -622,264 +654,311 @@ impl Ui {
         }
     }
 
-    /// Dual line i: show slug's logo (cached: reloads only when the slug changes).
-    fn dual_logo_set(&mut self, i: usize, slug: Option<&str>) -> i32 {
-        let slug = slug.filter(|s| !s.is_empty());
-        if self.home.dual_logo[i].0.as_deref() != slug {
-            let img = self.home.cc_dual_img[i];
-            let wh = slug.and_then(|s| Self::logo_load(img, s)).unwrap_or((0, 0));
-            self.home.dual_logo[i] = (slug.map(String::from), wh.0, wh.1);
-            self.home.dual_opa[i] = -1; // logo_load set its own
+    /// SIM line i's logo (cached: reloads only when the slug changes); opa dims the idle card's.
+    fn home_logo_set(&mut self, i: usize, slug: Option<&str>, opa: u8) -> (i32, i32) {
+        let r = &mut self.home.sim[i];
+        let before = r.slug.clone();
+        logo_cache(r.logo, &mut r.slug, &mut r.w, &mut r.h, slug);
+        if r.slug != before {
+            r.opa = -1; // logo_load set its own
         }
-        self.home.dual_logo[i].1
+        if r.w > 0 && r.opa != opa as i32 {
+            r.opa = opa as i32;
+            r.logo.set_style_image_opa(opa, 0);
+        }
+        (r.w, r.h)
     }
 
-    fn home_logo_set(&mut self, slug: Option<&str>) {
-        let slug = slug.filter(|s| !s.is_empty());
-        let h = &mut self.home;
-        if slug == h.logo_slug.as_deref() {
+    /// The card's inside for one card or two: SIM lines, then the body under them. Only when
+    /// it changes (sizes are not compared by LVGL).
+    fn home_hero_layout(&mut self, dual: bool) {
+        if self.home.hero_dual == Some(dual) {
             return;
         }
-        let path = slug.map(|s| {
-            let dir = std::env::var("LUYAZ_UI_LOGO_DIR").ok().filter(|d| !d.is_empty());
-            // with the program
-            format!("{}/{s}{}.png", dir.as_deref().unwrap_or("/data/luyaz/ui/operator-logos"), if t().dark { "-w" } else { "" })
-        });
-        let readable = path.as_ref().is_some_and(|p| std::fs::File::open(p).is_ok());
-        h.logo_slug = if readable { slug.map(String::from) } else { None };
-        h.logo_w = 0;
-        h.logo_h = 0;
-        if let (Some(_), Some(p)) = (&h.logo_slug, path) {
-            let src = format!("A:{p}");
-            match lv::image_info(&src) {
-                Some((w, ih)) if w > 0 && w <= 96 && ih <= 18 => {
-                    h.cc_logo.set_image_src(&src);
-                    h.cc_logo.set_style_image_opa(if t().dark { 217 } else { lv::OPA_COVER }, 0);
-                    h.logo_w = w as i32;
-                    h.logo_h = ih as i32;
-                }
-                _ => h.logo_slug = None,
-            }
+        self.home.hero_dual = Some(dual);
+        let f = uf();
+        let h = self.home.clone();
+        let lh = f.cj12.line_height();
+        let rows: [i32; 2] = if dual { [5 + (16 - lh) / 2, 21 + (16 - lh) / 2] } else { [9 + (20 - lh) / 2, 0] };
+        for (r, y) in h.sim.iter().zip(rows) {
+            r.l.set_y(y);
+            r.r.set_y(y);
+        }
+        let (by, d) = if dual { (SIM_H2, RING_D2) } else { (BODY_Y, RING_D) };
+        // verdict, then speed / the hint, then noise · load; the wave stays put (y = BODY_Y + 66) in both
+        let top = if dual { by } else { by + 2 };
+        let sy = if dual { by + 32 } else { by + 36 };
+        h.big.set_y(top);
+        // the two small lines beside the verdict: centred on its line
+        let ly = top + (f.cj24b.line_height() - 2 * f.cj12.line_height()) / 2;
+        h.since.set_y(ly + f.cj12.line_height());
+        h.spd.set_y(sy);
+        h.spd_u.set_y(sy + f.n20.line_height() - f.n11.line_height() - 3);
+        h.spd_up.set_y(sy + f.n20.line_height() - f.n15.line_height() - 2);
+        h.spd_upu.set_y(sy + f.n20.line_height() - f.n11.line_height() - 3);
+        h.nl.set_y(ly);
+        h.hint.set_y(sy);
+        h.ring.set_size(d, d);
+        h.ring_v.set_width(d);
+        h.ring_c.set_width(d);
+    }
+
+    /// The ring, centred in the body (its signal word is on the verdict's line).
+    fn home_ring_place(&mut self) {
+        let f = uf();
+        let h = &self.home;
+        let dual = h.hero_dual == Some(true);
+        let (by, d) = if dual { (SIM_H2, RING_D2) } else { (BODY_Y, RING_D) };
+        let rx = CARD_W - 10 - RING_D + (RING_D - d) / 2;
+        let ry = by + (FOOT_Y - by - d) / 2;
+        h.ring.set_pos(rx, ry);
+        let vy = ry + d / 2 - f.n20.line_height() / 2 - 5;
+        h.ring_v.set_pos(rx, vy);
+        h.ring_c.set_pos(rx, vy + f.n20.line_height() - 3);
+    }
+
+    /// 信号强/中/弱 in the status bar's tiers and colour; 正在搜网 without service.
+    fn home_sig_word(&self, v: &net_view_t) -> (Vec<u8>, u32) {
+        let th = t();
+        let s = &v.story;
+        if v.sim_usable == 0 {
+            (Vec::new(), th.t2)
+        } else if v.nosvc != 0 {
+            (tr("正在搜网").into(), th.t2)
+        } else if !s.sig.is_empty() {
+            let col = if s.sig_tone == NET_OK { th.ok_t } else if s.sig_tone == NET_WARN { th.warn_t } else { th.bad_t };
+            (cf!(tr("信号%s"), &s.sig), col)
+        } else {
+            (Vec::new(), th.t2)
         }
     }
 
-    /// Dual standby only (`sim.dual.mode == "dual"`): one line per slot on the wash, the data
-    /// slot first: [logo] RAT · place …… 上网中 / 待机. Returns whether shown.
-    fn home_dual(&mut self, d: &ui_model::core_snapshot_t, _v: &net_view_t) -> bool {
+    /// The footer's action.
+    fn home_act(&mut self) {
+        match self.home.act {
+            HeroAct::Diag => self.sub_open(Sub::Diag),
+            HeroAct::Op => self.sub_open(Sub::Op),
+            HeroAct::Enable => self.sub_open(Sub::Esim),
+            // 蜂窝's dual-SIM rows switch the data card (with their own confirm)
+            HeroAct::Swap | HeroAct::None => self.tab_go(TAB_CELL),
+        }
+    }
+
+    /// The SIM lines: the data card (logo · RAT · local/roaming); in dual standby a second line
+    /// for the other card, dimmed, and on the right of each what it is doing (上网中 / 待机 /
+    /// 待机 · 信号弱). Too wide: whole trailing parts go first, roaming never does.
+    fn home_sim_paint(&mut self, v: &net_view_t) {
         let th = t();
+        let f = uf();
+        let m = self.model.clone();
+        let d = &m.data;
         let dual = d.sim_dual.as_ref().filter(|x| x.mode == "dual" && !x.slots.is_empty());
-        let on = dual.is_some();
-        self.home_dual_layout(on);
         self.cell_dual(dual);
-        let Some(x) = dual else { return false };
-        let tone_t = [th.ok_t, th.warn_t, th.bad_t, th.t3, th.acc_t, th.on_fill, th.on_fill, th.on_fill]
-            .get(self.home.cc_tone as usize)
-            .copied()
-            .unwrap_or(th.t3);
-        // the data slot always on the first line, whatever its number
-        let mut order: Vec<&ui_model::sim_slot_t> = x.slots.iter().collect();
-        order.sort_by_key(|s| s.role != "data");
-        for i in 0..2 {
-            let (l, r, img) = (self.home.cc_dual_l[i], self.home.cc_dual_r[i], self.home.cc_dual_img[i]);
-            let Some(s) = order.get(i).copied() else {
-                kit::show(img, false);
-                self.set(l, "");
-                self.set(r, "");
-                continue;
-            };
-            let data = s.role == "data";
-            let data_line = data && !self.home.st_line.is_empty();
-            let slug: Option<String> = if data_line {
-                self.home.logo_slug.clone()
-            } else {
-                let (mcc, mnc) = (s.mcc.parse().unwrap_or(0), s.mnc.parse().unwrap_or(-1));
-                Some(s.logo.clone())
-                    .filter(|g| !g.is_empty())
-                    .or_else(|| crate::data::core_link::mainland_logo(mcc, mnc, &s.operator).map(String::from))
-            };
-            let lw_logo = self.dual_logo_set(i, slug.as_deref());
-            let mut lx = PAD;
-            kit::show(img, lw_logo > 0);
-            if lw_logo > 0 {
-                let lh = self.home.dual_logo[i].2;
-                img.set_pos(lx, l.y() + (uf().cj12.line_height() - lh) / 2);
-                lx += lw_logo + 5;
-            }
-            // right: what this card is doing; a state word when it cannot
-            let state = match s.state.as_str() {
-                "" | "ready" => None,
-                "locked" => Some(tr("PIN 锁")),
-                "absent" => Some(tr("无卡")),
-                "off" => Some(tr("未启用")),
-                _ => Some(tr("未就绪")),
-            };
-            let (right, rcol): (Vec<u8>, u32) = if data && x.switching != 0 {
-                (tr("切换中").into(), th.t2)
-            } else if let Some(w) = state {
-                (w.into(), th.t2)
-            } else if data {
-                (if x.smart != 0 { tr("上网中 · 自动切换") } else { tr("上网中") }.into(), th.t2)
-            } else if s.has_sig != 0 && (1..=2).contains(&s.sig_bars) {
-                // core's bars_tier (screen.rs): 1–2 = 弱; only that is worth a word on the idle card
-                (tr("待机 · 信号弱").into(), th.warn_t)
-            } else {
-                (tr("待机").into(), th.t2)
-            };
-            let rw = lv::text_w(&right, uf().cj12).min(150);
-            kit::text_color(r, rcol);
-            self.set(r, &right);
-            // left: the data card's own top line; the idle card has no data call, so its RAT is plain
-            let avail = CARD_W - PAD - rw - 8 - lx;
-            l.set_x(lx);
-            l.set_width(avail);
-            let left = if data_line {
-                // too wide: drop whole trailing parts (「 · 本地」) before the label's "…" would cut one;
-                // roaming is never dropped: the parts before it go first
-                let sep = " · ".as_bytes();
-                let roam = self.home.st_roam.clone();
-                let mut st = self.home.st_line.clone();
-                let tail: Vec<u8> = if !roam.is_empty() && st.ends_with(&roam) && st.len() > roam.len() + sep.len() {
-                    st.truncate(st.len() - roam.len() - sep.len());
-                    [sep, roam.as_slice()].concat()
-                } else {
-                    Vec::new()
-                };
-                let tail_w = if tail.is_empty() { 0 } else { lv::text_w(&tail, uf().cj12) };
-                while lv::text_w(&st, uf().cj12) + tail_w > avail {
-                    match st.windows(sep.len()).rposition(|w| w == sep) {
-                        Some(k) => st.truncate(k),
+        let two = dual.is_some_and(|x| x.slots.len() >= 2);
+        self.home_hero_layout(two);
+        let dk = t().dark;
+        let (lw, lh) = self.home_logo_set(0, if v.sim_usable != 0 { Some(&v.logo) } else { None }, if dk { 217 } else { lv::OPA_COVER });
+        let rows = self.home.sim.clone();
+        let row_y = |i: usize| if two { 5 + 16 * i as i32 } else { 9 };
+        let row_h = if two { 16 } else { 20 };
+
+        // line 0: the data card
+        let r0 = &rows[0];
+        kit::show(r0.logo, lw > 0);
+        let mut x = PAD;
+        if lw > 0 {
+            r0.logo.set_pos(PAD, row_y(0) + (row_h - lh) / 2);
+            x += lw + 6;
+        }
+        let (right, rcol): (&str, u32) = match dual {
+            Some(x) if two && x.switching != 0 => (tr("切换中"), th.t2),
+            Some(_) if two && v.nosvc != 0 => (tr("没连上"), th.bad_t),
+            Some(_) if two => (tr("上网中"), th.t2),
+            _ => ("", th.t2),
+        };
+        let rw = if right.is_empty() { 0 } else { lv::text_w(right.as_bytes(), f.cj12) + 8 };
+        let avail = CARD_W - PAD - rw - x;
+        let line: Vec<u8> = if v.sim_usable == 0 {
+            if d.sim_say.is_empty() { tr("没有 SIM 卡").into() } else { cf!(tr("没有 SIM 卡 · %s"), &d.sim_say) }
+        } else {
+            let mut fine = v.fine.clone();
+            let mut line: Vec<u8> = Vec::new();
+            // too long: first drop the RAT's extra (「5G NSA · 4G 锚点」→「5G NSA」); still too
+            // long: the label ends in "…"
+            for pass in 0..2 {
+                if pass == 1 {
+                    match fine.find(" · ") {
+                        Some(i) => fine.truncate(i),
                         None => break,
                     }
                 }
-                // roaming still does not fit after the RAT: roaming alone (the status bar has the RAT);
-                // 「漫游到 X」 after X's own logo shortens to 漫游
-                if !tail.is_empty() && lv::text_w(&st, uf().cj12) + tail_w > avail {
-                    st = roam.clone();
-                    if lv::text_w(&st, uf().cj12) > avail && lw_logo > 0 {
-                        st = tr("漫游").as_bytes().to_vec();
-                    }
+                line = if lw != 0 {
+                    cf!("%s%s%s", &fine, if !fine.is_empty() && !v.r#where.is_empty() { " · " } else { "" }, &v.r#where)
                 } else {
-                    st.extend_from_slice(&tail);
+                    cf!(
+                        "%s%s%s%s%s",
+                        &v.name,
+                        if fine.is_empty() { "" } else { " · " },
+                        &fine,
+                        if v.r#where.is_empty() { "" } else { " · " },
+                        if v.other != 0 {
+                            if v.roam != 0 { tr("漫游") } else { "" }
+                        } else {
+                            v.r#where.as_str()
+                        }
+                    )
+                };
+                if lv::text_w(&line, f.cj12) <= avail {
+                    break;
                 }
-                st
-            } else {
-                // idle on NR is always SA (NSA needs a data call on the LTE anchor)
-                let rat = match s.sig_rat.as_str() {
-                    "nr" => "5G SA",
-                    "lte" => "4G",
-                    _ => "",
-                };
-                let name: Vec<u8> = if lw_logo > 0 {
-                    Vec::new()
-                } else {
-                    let (mcc, mnc) = (s.mcc.parse().unwrap_or(0), s.mnc.parse().unwrap_or(-1));
-                    crate::data::core_link::mainland_operator_cn(mcc, mnc, &s.operator).unwrap_or(s.operator.as_str()).into()
-                };
-                let line: Vec<u8> = cf!("%s%s%s", &name, if rat.is_empty() || name.is_empty() { "" } else { " · " }, rat);
-                // where, like the data card's line: 本地 / 漫游到中国移动 (the core's words)
-                let place = crate::data::core_link::slot_place(s);
-                let line: Vec<u8> = match (place.is_empty(), line.is_empty()) {
-                    (true, _) => line,
-                    (false, true) => place.into(),
-                    (false, false) => cf!("%s · %s", &line, place),
-                };
-                // too wide: the RAT goes before the place does
-                if lv::text_w(&line, uf().cj12) > avail && !place.is_empty() {
-                    let short: Vec<u8> = if name.is_empty() { place.into() } else { cf!("%s · %s", &name, place) };
-                    if lv::text_w(&short, uf().cj12) <= avail { short } else { place.into() }
-                } else {
-                    line
-                }
-            };
-            // the data card in the hero's tone, the idle one dimmed; the right word says which
-            kit::text_color(l, if data { tone_t } else { th.t2 });
-            let opa = match (data, t().dark) {
-                (true, true) => 217,
-                (true, false) => lv::OPA_COVER,
-                (false, _) => 140,
-            };
-            if self.home.dual_opa[i] != opa as i32 {
-                self.home.dual_opa[i] = opa as i32;
-                img.set_style_image_opa(opa, 0);
             }
-            self.set(l, left);
-        }
-        true
-    }
+            line
+        };
+        r0.l.set_x(x);
+        r0.l.set_width(avail.max(1));
+        kit::text_color(r0.l, th.t1);
+        self.set(r0.l, &line);
+        kit::show(r0.r, !right.is_empty());
+        self.set(r0.r, right);
+        kit::text_color(r0.r, rcol);
 
-    /// Dual standby: the hero grows by DUAL_H; the two slot lines take the top line's place,
-    /// the verdict row below is single-card's, moved down.
-    fn home_dual_layout(&mut self, on: bool) {
-        kit::show(self.home.cc_dual, on);
-        let (h, e) = (&self.home.cc_hero, if on { DUAL_H } else { 0 });
-        h.wash.set_height(HERO_H + e);
-        h.wash2.set_y(HERO_H + e - 20);
-        h.big.set_y(34 + e);
-        h.r1.set_y(30 + e);
-        h.r2.set_y(52 + e);
-        kit::show(h.st, !on);
-        kit::show(h.rtop, !on);
-        if on {
-            kit::show(h.dot, false);
-            kit::show(self.home.cc_logo, false);
+        // line 1: the other card (dual standby)
+        let r1 = &rows[1];
+        let idle = dual.filter(|_| two).and_then(|x| x.slots.iter().find(|s| s.role != "data"));
+        for o in [r1.l, r1.r] {
+            kit::show(o, idle.is_some());
         }
-        self.home.dual_on = on;
-    }
-
-    fn home_logo_place(&mut self) {
-        let h = &self.home;
-        let (w, lh) = (h.logo_w, h.logo_h);
-        let x = if w != 0 { PAD + w + 6 } else { 26 };
-        if w != 0 {
-            h.cc_logo.set_pos(PAD, 16 - lh / 2);
+        let Some(s) = idle else {
+            kit::show(r1.logo, false);
+            return;
+        };
+        let (mcc, mnc) = (s.mcc.parse().unwrap_or(0), s.mnc.parse().unwrap_or(-1));
+        let slug: Option<String> =
+            Some(s.logo.clone()).filter(|g| !g.is_empty()).or_else(|| crate::data::core_link::mainland_logo(mcc, mnc, &s.operator).map(String::from));
+        let (sw, sh) = self.home_logo_set(1, slug.as_deref(), 140);
+        kit::show(r1.logo, sw > 0);
+        let mut x = PAD;
+        if sw > 0 {
+            r1.logo.set_pos(PAD, row_y(1) + (row_h - sh) / 2);
+            x += sw + 6;
         }
-        // dual standby: the slot lines have their own logos; showing these between would redraw
-        kit::show(h.cc_logo, w > 0 && !h.dual_on);
-        kit::show(h.cc_hero.dot, w == 0 && !h.dual_on);
-        h.cc_hero.st.set_x(x);
-        h.cc_hero.st.set_width(CARD_W - x - PAD);
+        // right: what this card is doing; a state word when it cannot
+        let (right, rcol): (&str, u32) = match s.state.as_str() {
+            "" | "ready" => {
+                if s.has_sig != 0 && (1..=2).contains(&s.sig_bars) {
+                    // core's bars_tier (screen.rs): 1–2 = 弱; only that is worth a word on the idle card
+                    (tr("待机 · 信号弱"), th.warn_t)
+                } else if s.has_sig != 0 && v.nosvc != 0 {
+                    (tr("待机 · 信号好"), th.t2)
+                } else {
+                    (tr("待机"), th.t2)
+                }
+            }
+            "locked" => (tr("PIN 锁"), th.t2),
+            "absent" => (tr("无卡"), th.t2),
+            "off" => (tr("未启用"), th.t2),
+            _ => (tr("未就绪"), th.t2),
+        };
+        self.set(r1.r, right);
+        kit::text_color(r1.r, rcol);
+        let avail = CARD_W - PAD - (lv::text_w(right.as_bytes(), f.cj12) + 8) - x;
+        // left: the idle card has no data call, so its RAT is plain (idle on NR is always SA)
+        let rat = match s.sig_rat.as_str() {
+            "nr" => "5G SA",
+            "lte" => "4G",
+            _ => "",
+        };
+        let name: String = if sw > 0 {
+            String::new()
+        } else {
+            crate::data::core_link::mainland_operator_cn(mcc, mnc, &s.operator).unwrap_or(s.operator.as_str()).into()
+        };
+        let place = crate::data::core_link::slot_place(s);
+        let parts: Vec<&str> = [name.as_str(), rat, place].into_iter().filter(|p| !p.is_empty()).collect();
+        let mut left: Vec<u8> = parts.join(" · ").into_bytes();
+        // too wide: the RAT goes before the place does
+        if lv::text_w(&left, f.cj12) > avail && !place.is_empty() {
+            let short: Vec<&str> = [name.as_str(), place].into_iter().filter(|p| !p.is_empty()).collect();
+            left = short.join(" · ").into_bytes();
+        }
+        r1.l.set_x(x);
+        r1.l.set_width(avail.max(1));
+        self.set(r1.l, &left);
     }
 
     /// No snapshot from the data service. Before the first one: 正在读取…; after, the
-    /// numbers stay, dimmed, and the block says since when (an outage is not "no signal").
+    /// numbers stay, dimmed, and the card says since when (an outage is not "no signal").
     pub(super) fn home_signal_down(&mut self) {
         let th = t();
-        kit::hero_tone(&self.home.cc_hero, 3);
-        self.home.cc_tone = 3;
-        self.home_logo_set(None); // data stopped: whose network we are on is unknown
-        self.home_logo_place();
-        if self.home.dual_on {
-            // dual layout stays (rows below keep their place); the top line carries the message
-            kit::show(self.home.cc_dual, false);
-            kit::show(self.home.cc_hero.st, true);
+        self.home_tone(3);
+        self.home_hero_layout(false);
+        self.home_logo_set(0, None, 0); // data stopped: whose network we are on is unknown
+        let h = self.home.clone();
+        let r0 = &h.sim[0];
+        for o in [r0.logo, r0.r, h.sim[1].logo, h.sim[1].l, h.sim[1].r] {
+            kit::show(o, false);
         }
-        let hero = self.home.cc_hero;
+        r0.l.set_x(PAD);
+        r0.l.set_width(CARD_W - 2 * PAD);
         if !self.home.ever_valid {
-            self.set(hero.st, tr("正在读取…"));
-            hero.big.set_text("--");
-            hero.rtop.set_text("");
-            hero.r1.set_text("");
-            hero.r2.set_text("");
-            kit::hero_layout(&hero);
+            self.set(r0.l, tr("正在读取…"));
+            self.set(h.big, "--");
         } else {
             let alive = self.model.backend_alive_wall;
             let tt = if alive != 0 { alive } else { self.home.last_valid_wall };
             let hm = clock::strftime("%H:%M", &clock::local(tt));
-            self.set(hero.st, cf!(tr("数据服务掉线 · 数字停在 %s"), &hm));
-            hero.rtop.set_text("");
-            hero.big.set_text(tr("读不到数据"));
+            self.set(r0.l, cf!(tr("数据服务掉线 · 数字停在 %s"), &hm));
+            self.set(h.big, tr("读不到数据"));
         }
+        self.set(h.since, "");
+        self.set(h.nl, "");
+        for o in [h.spd, h.spd_u, h.spd_up, h.spd_upu, h.wave, h.hint] {
+            kit::show(o, false);
+        }
+        self.set(h.ring_v, "—");
+        h.ring.arc_set_value(0);
+        self.home_act_set(HeroAct::None);
         for k in &self.home.ca {
             for l in [k.band, k.rsrp, k.sinr] {
                 kit::text_color(l, th.t3);
             }
         }
-        // the numbers stopped: everything that follows the network dims
-        let h = &self.home;
-        for l in [h.hr_wifi.val, h.hr_traf.val, h.hr_exit.val, h.hr_ca.val, h.cc_hero.r1] {
-            kit::text_color(l, th.t3);
+        for k in &self.home.foot_ca {
+            kit::text_color(k.band, th.t3);
         }
-        self.home_reflow();
+    }
+
+    /// tone: 0 good, 1 warn, 2 bad, 3 neutral: the card's tint and the verdict's colour.
+    fn home_tone(&mut self, tone: i32) {
+        let th = t();
+        let tone = tone.clamp(0, 3);
+        self.home.cc_tone = tone;
+        let wash = [th.wash, th.wash_w, th.wash_b, th.track][tone as usize];
+        if self.home.c_wash != Some(wash) {
+            self.home.c_wash = Some(wash);
+            kit::bg(self.home.cell_card, wash);
+        }
+        kit::text_color(self.home.big, [th.ok_t, th.warn_t, th.bad_t, th.t3][tone as usize]);
+    }
+
+    fn home_act_set(&mut self, a: HeroAct) {
+        self.home.act = a;
+        let txt = match a {
+            HeroAct::None => "",
+            HeroAct::Diag => tr("查原因 ›"),
+            HeroAct::Op => tr("详情 ›"),
+            HeroAct::Swap => tr("换这张上网 ›"),
+            HeroAct::Enable => tr("去启用 ›"),
+        };
+        let (bx, l) = (self.home.act_box, self.home.act_l);
+        kit::show(bx, a != HeroAct::None);
+        self.set(l, txt);
+        if a != HeroAct::None {
+            let w = lv::text_w(txt.as_bytes(), uf().cj13) + PAD + 12;
+            bx.set_width(w);
+            bx.set_x(CARD_W - w);
+            l.align(lv::LV_ALIGN_RIGHT_MID, -PAD, 0);
+        }
     }
 
     /// The status card, from the core's view of the network.
@@ -930,238 +1009,203 @@ impl Ui {
             NET_BAD => 2,
             _ => 3,
         };
-        if tone != self.home.cc_tone {
-            self.home.cc_tone = tone;
-            kit::hero_tone(&self.home.cc_hero, tone);
-        }
-        let hint = self.home.shown_hint.clone();
-        let hero = self.home.cc_hero;
-        // top line: whose network · what network · local/roaming
-        self.home_logo_set(Some(&v.logo));
-        if v.sim_usable == 0 {
-            self.set(hero.st, tr("没有 SIM 卡"));
-            self.home.st_line.clear();
-            self.home.st_roam.clear();
-        } else {
-            // the status bar has the short form (5G-A / 4G+ …): here how it is built
-            let mut fine = v.fine.clone();
-            let mut line: Vec<u8> = Vec::new();
-            // too long: first drop the RAT's extra (「5G NSA · 4G 锚点」→「5G NSA」); still too
-            // long: the label ends in "…"
-            for pass in 0..2 {
-                if pass == 1 {
-                    match fine.find(" · ") {
-                        Some(i) => fine.truncate(i),
-                        None => break,
-                    }
-                }
-                let logo_w = self.home.logo_w;
-                line = if logo_w != 0 {
-                    cf!("%s%s%s", &fine, if !fine.is_empty() && !v.r#where.is_empty() { " · " } else { "" }, &v.r#where)
-                } else {
-                    cf!(
-                        "%s%s%s%s%s",
-                        &v.name,
-                        if fine.is_empty() { "" } else { " · " },
-                        &fine,
-                        if v.r#where.is_empty() { "" } else { " · " },
-                        if v.other != 0 {
-                            if v.roam != 0 { tr("漫游") } else { "" }
-                        } else {
-                            v.r#where.as_str()
-                        }
-                    )
-                };
-                let avail = if logo_w != 0 { CARD_W - 2 * PAD - logo_w - 6 } else { CARD_W - 26 - PAD };
-                if lv::text_w(&line, hero.st.style_text_font(0)) <= avail {
-                    break;
-                }
-            }
-            self.home.st_roam = if v.roam != 0 {
-                if self.home.logo_w != 0 { v.r#where.as_bytes().to_vec() } else { tr("漫游").as_bytes().to_vec() }
-            } else {
-                Vec::new()
-            };
-            self.home.st_line = line.clone();
-            self.set(hero.st, line);
-        }
+        self.home_tone(tone);
+        self.home_sim_paint(v);
+        let h = self.home.clone();
+
+        // verdict, and how long for no service
         let headline = self.home.shown_headline.clone();
-        self.set(hero.big, &headline);
-        if nosvc {
+        self.set(h.big, &headline);
+        let since: Vec<u8> = if nosvc {
             let mins = now.wrapping_sub(self.home.nosig_since) / 60000;
-            if mins != 0 {
-                self.set(hero.rtop, cf!(tr("已 %u 分钟"), mins));
-            } else {
-                self.set(hero.rtop, tr("刚刚"));
-            }
+            if mins != 0 { cf!(tr("已 %u 分钟"), mins) } else { tr("刚刚").into() }
         } else {
-            self.set(hero.rtop, "");
-        }
-        // right: three things that don't decide each other, in fixed places.
-        //   top: 信号强/中/弱 (the status bar's bars, same colour)
-        //   below: 干扰小/中/大 · 负载正常/高 (no 负载 while nothing downloads)
+            Vec::new()
+        };
+        h.big.update_layout();
+        // beside the verdict, two small lines: the signal word (its colour), then 干扰 · 负载 (or
+        // how long without service); short of room, the load goes, then the noise
         {
             let s = &v.story;
-            let (mut a, mut b): (Vec<u8>, Vec<u8>) = (Vec::new(), Vec::new());
-            if nosvc {
-                a = tr("正在搜网").into();
-            } else if !s.sig.is_empty() {
-                a = cf!(tr("信号%s"), &s.sig);
-                // whole sentences, so the English can be worded on its own
-                if !s.noise.is_empty() && !s.load.is_empty() {
-                    b = cf!(tr("干扰%s · 负载%s"), &s.noise, &s.load);
-                } else if !s.noise.is_empty() {
-                    b = cf!(tr("干扰%s"), &s.noise);
-                } else if !s.load.is_empty() {
-                    b = cf!(tr("负载%s"), &s.load);
-                } else if d.rssi != 0 {
-                    b = cf!("RSSI %d dBm", d.rssi);
+            let lx = PAD + h.big.width() + 8;
+            let room = (BODY_W - lx).max(1);
+            let (word, wcol) = self.home_sig_word(v);
+            let mut parts: Vec<Vec<u8>> = Vec::new();
+            if !since.is_empty() {
+                parts.push(since.clone());
+            } else if v.sim_usable != 0 {
+                if !s.noise.is_empty() {
+                    parts.push(cf!(tr("干扰%s"), &s.noise));
+                }
+                if !s.load.is_empty() {
+                    parts.push(cf!(tr("负载%s"), &s.load));
+                }
+                if parts.is_empty() && d.rssi != 0 {
+                    parts.push(cf!("RSSI %d dBm", d.rssi));
                 }
             }
-            self.set(hero.r1, &a);
-            self.set(hero.r2, &b);
-            let at = s.sig_tone;
-            kit::text_color(
-                hero.r1,
-                if nosvc {
-                    th.t1
-                } else if at == NET_OK {
-                    th.ok_t
-                } else if at == NET_WARN {
-                    th.warn_t
-                } else {
-                    th.bad_t
-                },
-            );
+            let sep = " · ".as_bytes();
+            while parts.len() > 1 && lv::text_w(&parts.join(sep), f.cj12) > room {
+                parts.pop();
+            }
+            for (o, w) in [(h.nl, room), (h.since, room)] {
+                o.set_x(lx);
+                o.set_width(w);
+            }
+            self.set(h.nl, &word);
+            kit::text_color(h.nl, wcol);
+            self.set(h.since, parts.join(sep));
         }
-        kit::hero_layout(&hero);
-        self.home_logo_place();
 
-        let mut y = HERO_H;
-        if self.home_dual(d, v) {
-            y += DUAL_H;
+        // the hint replaces speed and the wave
+        let hint = self.home.shown_hint.clone();
+        let with_hint = !hint.is_empty();
+        kit::show(h.hint, with_hint);
+        for o in [h.spd, h.spd_u, h.spd_up, h.spd_upu] {
+            kit::show(o, !with_hint);
         }
-        {
-            // abnormal (slow, not connected, connected but nothing back): the hint row opens
-            // 网络诊断 with 「查原因 ›」 at its end; beside the hint if it costs no extra line
-            let h = &mut self.home;
-            let op = h.shown_state == nv::ST_CHANGING || h.shown_state == nv::ST_REVERT_FAIL;
-            let diag = op || nv::abnormal(h.shown_state, h.shown_cause);
-            // E4: the status block shows a change in progress; its › opens the 事务页
-            if op != (h.cc_hint_sub == Sub::Op) {
-                h.cc_hint_sub = if op { Sub::Op } else { Sub::Diag };
-                h.cc_diag.set_text(if op { tr("详情 ›") } else { tr("查原因 ›") });
-                h.c_diag = -1;
+        kit::show(h.wave, !with_hint);
+        if with_hint {
+            if self.home.hint_src != hint {
+                let w = kit::wrap_cjk(hint.as_bytes(), f.cj13, BODY_W - PAD);
+                self.set(h.hint, &w);
+                self.home.hint_src = hint.clone();
             }
-            let (hint_box, hint_l, diag_l) = (h.cc_hint_box, h.cc_hint, h.cc_diag);
-            kit::show(hint_box, !hint.is_empty() || diag);
-            kit::show(diag_l, diag);
-            if diag as i32 != h.c_diag {
-                h.c_diag = diag as i32;
-                if diag {
-                    hint_box.add_flag(lv::LV_OBJ_FLAG_CLICKABLE);
-                } else {
-                    hint_box.remove_flag(lv::LV_OBJ_FLAG_CLICKABLE); // no › = not tappable
-                }
+        } else {
+            // each direction carries its own unit: 12.3 Mbps down and 115 Kbps up can share a line
+            use super::refresh::rate_unit;
+            let bits = self.conf.speed_bits;
+            let ((dn, du), (un, uu)) = (rate_unit(d.down_bps, bits), rate_unit(d.up_bps, bits));
+            self.set(h.spd, cf!("↓ %s", &dn));
+            self.set(h.spd_u, &du);
+            self.set(h.spd_up, cf!("↑ %s", &un));
+            self.set(h.spd_upu, &uu);
+            h.spd.update_layout();
+            let ux = PAD + h.spd.width() + 2;
+            h.spd_u.set_x(ux);
+            h.spd_u.update_layout();
+            let vx = ux + h.spd_u.width() + 10;
+            h.spd_up.set_x(vx);
+            h.spd_up.update_layout();
+            h.spd_upu.set_x(vx + h.spd_up.width() + 2);
+        }
+        self.home_ring_place();
+
+        // SINR ring (its word is on the verdict's line)
+        let ring = if nosvc || v.sim_usable == 0 { None } else { ring_sinr(v) };
+        let (val, arc, q): (Vec<u8>, u32, i32) = match ring {
+            Some((sn, tn)) => {
+                let q = (((sn + 7.0) / 32.0).clamp(0.03, 1.0) * 100.0) as i32;
+                let col = if tn == NET_OK { th.green } else if tn == NET_WARN { th.orange } else { th.red };
+                (cf!("%.0f", sn), col, q)
             }
-            if !hint.is_empty() || diag {
-                let full = CARD_W - 2 * PAD;
-                let lh = f.cj13.line_height();
-                let (mut dw, mut w) = (0, full);
-                if diag {
-                    diag_l.update_layout();
-                    dw = diag_l.width();
-                }
-                if diag && !hint.is_empty() {
-                    // beside the hint only when that costs it no extra line, never a 3rd
-                    let (_, sn) = lv::text_size(hint.as_bytes(), f.cj13, full - dw - 10);
-                    let (_, sf) = lv::text_size(hint.as_bytes(), f.cj13, full);
-                    w = if sn <= sf { full - dw - 10 } else { full };
-                }
-                hint_l.set_width(w);
-                self.set(hint_l, &hint);
-                kit::show(hint_l, !hint.is_empty());
-                hint_l.update_layout();
-                let th_ = if hint.is_empty() { 0 } else { hint_l.height() };
-                let mut bh = 8 + if th_ != 0 { th_ } else { lh } + 8;
-                if diag {
-                    let hy;
-                    if hint.is_empty() || w < full {
-                        hy = 8 + if th_ > lh { th_ - lh } else { 0 }; // beside the last line
-                    } else {
-                        hy = 8 + th_ + 2; // its own line under it
-                        bh = hy + lh + 8;
-                    }
-                    diag_l.set_pos(CARD_W - PAD - dw, hy);
-                }
-                hint_box.set_y(y);
-                hint_box.set_height(bh);
-                y += bh;
+            None => ("—".into(), th.track, 0),
+        };
+        self.set(h.ring_v, &val);
+        h.ring.arc_set_value(q);
+        if self.home.c_arc != Some(arc) {
+            self.home.c_arc = Some(arc);
+            h.ring.set_style_arc_color(arc, lv::LV_PART_INDICATOR);
+        }
+
+        // footer: what to do, else how many carriers and how wide
+        let op = self.home.shown_state == nv::ST_CHANGING || self.home.shown_state == nv::ST_REVERT_FAIL;
+        let dual = d.sim_dual.as_ref().filter(|x| x.mode == "dual" && !x.slots.is_empty());
+        let idle = dual.and_then(|x| x.slots.iter().find(|s| s.role != "data"));
+        let swap = nosvc && idle.is_some_and(|s| s.has_sig != 0 && s.sig_bars >= 3 && (s.state.is_empty() || s.state == "ready"));
+        let act = if op {
+            HeroAct::Op
+        } else if v.sim_usable == 0 {
+            HeroAct::Enable
+        } else if swap {
+            HeroAct::Swap
+        } else if nv::abnormal(self.home.shown_state, self.home.shown_cause) {
+            HeroAct::Diag
+        } else {
+            HeroAct::None
+        };
+        self.home_act_set(act);
+        let right: Vec<u8> = if act == HeroAct::None { ca_total(v) } else { Vec::new() };
+        self.set(h.foot_tot, &right);
+        kit::show(h.foot_tot, !right.is_empty());
+        let rw = if act != HeroAct::None {
+            h.act_box.style_width(0) - PAD + 8
+        } else if right.is_empty() {
+            0
+        } else {
+            lv::text_w(&right, f.cj12) + 8
+        };
+        let n = (v.ca_n.max(0) as usize).min(v.ca.len());
+        let act_ca: Vec<&ui_model::nv_carrier_t> = v.ca[..n].iter().filter(|c| c.active != 0).take(CA_SLOTS).collect();
+        // each band with its own width: the total on the right goes when 查原因 › takes its place
+        let labels: Vec<String> = act_ca
+            .iter()
+            .map(|c| {
+                let l = if c.label_short.is_empty() { c.label.as_str() } else { c.label_short.as_str() };
+                if c.bw > 0 { format!("{l} {}M", c.bw) } else { l.to_string() }
+            })
+            .collect();
+        let lws: Vec<i32> = labels.iter().map(|l| lv::text_w(l.as_bytes(), f.n12)).collect();
+        let fixed: i32 = lws.iter().map(|w| w + 4).sum::<i32>() + 8 * (act_ca.len() as i32 - 1).max(0);
+        let bars = CARD_W - 2 * PAD - rw - fixed;
+        let show_ca = !act_ca.is_empty() && bars >= 6 * act_ca.len() as i32;
+        // bars against 100 MHz (one n78), or the total when wider: one n5 15M is a short bar
+        let mhz: i32 = act_ca.iter().map(|c| c.bw.max(1)).sum::<i32>().max(FOOT_FULL_MHZ);
+        let mut x = PAD;
+        for i in 0..CA_SLOTS {
+            let k = self.home.foot_ca[i];
+            let on = show_ca && i < act_ca.len();
+            kit::show(k.band, on);
+            kit::show(k.bar, on);
+            if !on {
+                continue;
             }
+            self.set(k.band, labels[i].as_str());
+            kit::text_color(k.band, th.t1);
+            k.band.set_x(x);
+            x += lws[i] + 4;
+            let bw = (bars * act_ca[i].bw.max(1) / mhz).max(6);
+            k.bar.set_x(x);
+            k.bar.set_width(bw);
+            x += bw + 8;
         }
-        // 载波: how many the cell gave, how many are in use; small line: down on which, up on
-        // which (the primary only: uplink aggregation is not confirmed yet)
-        {
-            let (row, sub) = (self.home.hr_ca, self.home.hr_ca_sub);
-            self.set(row.val, &v.ca_val);
-            kit::text_color(
-                row.val,
-                if self.home.shown_cause == CAUSE_NARROW {
-                    th.warn_t
-                } else if v.act_n != 0 {
-                    th.t1
-                } else {
-                    th.t3
-                },
-            );
-            self.set(sub, &v.ca_sub);
-            kit::show(sub, !v.ca_sub.is_empty());
-            let ch = if v.ca_sub.is_empty() { ROW_H } else { 60 };
-            row.bx.set_height(ch);
-            row.bx.set_y(y);
-            y += ch;
-            let q = self.home.ca_qos;
-            self.set(q, qos_line(d));
-        }
-        // Wi-Fi · 设备数 (opens the Wi-Fi tab)
-        {
-            let row = self.home.hr_wifi;
-            if d.ap_on == 0 {
-                self.set(row.val, tr("已关闭"));
-            } else {
-                let ssid = if d.ap_ssid.is_empty() { "-" } else { d.ap_ssid.as_str() };
-                self.set(row.val, cf!(trn("%.16s · %d 台", d.lan_total as i64), ssid, d.lan_total));
-            }
-            kit::text_color(row.val, if d.ap_on != 0 { th.t1 } else { th.t3 });
-            row.bx.set_y(y);
-            y += ROW_H;
-        }
-        // 出口: one row; two (the small line says the other way) when there is another way
-        {
-            // the 手动优先 notice takes the small line, folded to two when one is not enough
-            let mf = mf_view(&m.scenario, m.chill_chain.as_deref().unwrap_or(""), m.chill_pin.as_deref());
-            let proxy = m.netinfo.as_ref().is_some_and(|n| n.proxy.present != 0);
-            let mut eh = if m.chill_online != 0 && proxy { 60 } else { ROW_H };
-            if mf.on {
-                eh = if lv::text_w(&mf.line, f.cj12) > CARD_W - 2 * PAD - 16 { 78 } else { 60 };
-            }
-            let row = self.home.hr_exit;
-            row.bx.set_height(eh);
-            row.bx.set_y(y);
-            y += eh;
-        }
-        // 今日/本月: the firmware's calendar-day/month counters, not this boot's rx/tx
-        {
-            let row = self.home.hr_traf;
-            let day = fmt_bytes_total(d.day_rx_bytes + d.day_tx_bytes);
-            let month = fmt_bytes_total(d.month_rx_bytes + d.month_tx_bytes);
-            self.set(row.val, cf!(tr("今日 %s · 本月 %s"), &day, &month));
-            kit::text_color(row.val, th.t1);
-            row.bx.set_y(y);
-            y += ROW_H;
-        }
-        self.home.cell_card.set_height(y);
+        // no carriers: one status line instead
+        let txt: Vec<u8> = if show_ca {
+            Vec::new()
+        } else if v.sim_usable == 0 {
+            let names: Vec<&str> = m.esim_profiles.iter().map(|p| p.name.as_str()).filter(|n| !n.is_empty()).collect();
+            if names.is_empty() { Vec::new() } else { cf!("eSIM：%s", &names.join("、")) }
+        } else if let Some(s) = idle.filter(|s| s.has_sig != 0) {
+            let (mcc, mnc) = (s.mcc.parse().unwrap_or(0), s.mnc.parse().unwrap_or(-1));
+            let name = crate::data::core_link::mainland_operator_cn(mcc, mnc, &s.operator).unwrap_or(s.operator.as_str());
+            cf!(tr("待机卡 %s %s"), name, if (1..=2).contains(&s.sig_bars) { tr("信号弱") } else { tr("信号好") })
+        } else if nosvc {
+            tr("没有在用的载波").into()
+        } else {
+            v.ca_val.as_bytes().to_vec()
+        };
+        kit::show(h.foot_txt, !txt.is_empty());
+        h.foot_txt.set_width((CARD_W - 2 * PAD - rw).max(1));
+        self.set(h.foot_txt, &txt);
+
+        let q = self.home.ca_qos;
+        self.set(q, qos_line(d));
         self.ca_paint(v);
+    }
+
+    /// One point on the status card's speed wave (the net chart's step and average).
+    pub(super) fn home_wave_push(&mut self, avg_rx: i64) {
+        let ver = self.model.core_version;
+        let h = &mut self.home;
+        if h.wave.is_null() || ver == h.wave_ver {
+            return;
+        }
+        h.wave_ver = ver;
+        // idle (the axis floor, ~10 KB/s: background chatter) is a gap, not a flat line along the
+        // floor that reads like a broken screen
+        let v = super::system::rate_scale(avg_rx);
+        let v = if v <= WAVE_FLOOR { lv::CHART_POINT_NONE } else { v };
+        h.wave.chart_set_next_value(h.wave_s, v);
     }
 
     /// 载波明细 (on 蜂窝): one row per carrier.
@@ -1221,108 +1265,6 @@ impl Ui {
         kit::show(self.home.ca_card, ca_n > 0);
     }
 
-    /// 出口 (Home): IP and place from luyaz-core's cache; operator and roaming are on the top
-    /// line already.
-    pub(super) fn home_exit_paint(&mut self) {
-        if !self.tab_visible(TAB_HOME) {
-            return;
-        }
-        let th = t();
-        let m = self.model.clone();
-        let default_ni = ui_model::netinfo_t::default();
-        let n = m.netinfo.as_ref().unwrap_or(&default_ni);
-        let dead = self.home.cc_tone >= 2; // no signal / no SIM: the exit is stale
-        #[allow(unused_mut)]
-        let mut sub: Vec<u8> = Vec::new();
-        // 直连 and CHILL are two sides of one thing, said as CHILL routes now:
-        //   off          → 直连 · 中国 深圳
-        //   rules        → 国外走 CHILL · 日本 东京 / small: 国内直连 · 中国 深圳
-        //   global       → 全走 CHILL · 日本 东京 / small: 设备自己的流量仍直连 …
-        //   direct, AI   → 直连 · 中国 深圳 / small: AI 仍走 CHILL · 日本 东京
-        //   all direct   → 全部直连 · 中国 深圳 / small: CHILL 开着，但不经过它
-        let ex = m.chill_exit_raw.as_deref().unwrap_or("");
-        let ch_on = m.chill_online != 0 && n.proxy.present != 0;
-        let dg: String = if !n.direct.ip.is_empty() {
-            if n.direct.geo.is_empty() { n.direct.ip.clone() } else { geo_short(&n.direct.geo) }
-        } else if n.err.is_empty() {
-            tr("查询中…").into()
-        } else {
-            "—".into()
-        };
-        let pg: String = if !ch_on {
-            String::new()
-        } else if !n.proxy.geo.is_empty() {
-            geo_short(&n.proxy.geo)
-        } else if !n.proxy.ip.is_empty() {
-            n.proxy.ip.clone()
-        } else {
-            tr("查询中…").into()
-        };
-        let mut g: Vec<u8> = if !ch_on {
-            cf!(tr("直连 · %s"), &dg)
-        } else if ex == "direct_all" {
-            sub = tr("CHILL 开着，但不经过它").into();
-            cf!(tr("全部直连 · %s"), &dg)
-        } else if ex == "direct_keep_ai" {
-            // not 「全部直连」: AI still goes through CHILL
-            sub = cf!(tr("AI 仍走 CHILL · %s"), &pg);
-            cf!(tr("直连 · %s"), &dg)
-        } else if ex == "global" {
-            sub = cf!(tr("设备自己的流量仍直连 · %s"), &dg);
-            cf!(tr("全走 CHILL · %s"), &pg)
-        } else {
-            sub = cf!(tr("国内直连 · %s"), &dg);
-            cf!(tr("国外走 CHILL · %s"), &pg)
-        };
-        // 家里出口 on (DD2): the strongest item at the end of the row
-        {
-            let hsc = &m.scenario;
-            if hsc.home_on & 4 != 0 {
-                let left = (hsc.home_until - self.now()).max(0);
-                g.extend(cf!(tr(" · 家里 剩 %ld:%02ld"), left / 3600, (left % 3600) / 60));
-            } else if hsc.home_on & 1 != 0 {
-                g.extend_from_slice(tr(" · 家里 版权").as_bytes());
-            } else if hsc.home_on & 2 != 0 {
-                g.extend_from_slice(tr(" · 家里 IP").as_bytes());
-            }
-        }
-        let row = self.home.hr_exit;
-        self.set(row.val, &g);
-        kit::text_color(row.val, if dead { th.t3 } else { th.t1 });
-        let exit_sub = self.home.hr_exit_sub;
-        // 手动优先: the whole row washed, 「▲ 出口 ›」, the notice itself in the small line
-        {
-            let mf = mf_view(&m.scenario, m.chill_chain.as_deref().unwrap_or(""), m.chill_pin.as_deref());
-            let wash = if mf.on && mf.wash != 0 { mf.wash } else { 0 };
-            let subcol = if mf.on { mf.col } else { th.t3 };
-            let mut two = false;
-            if mf.on {
-                sub = mf_wrap(&mf.line, uf().cj12, CARD_W - 2 * PAD - 16);
-                two = lv::text_w(&mf.line, uf().cj12) > CARD_W - 2 * PAD - 16;
-            }
-            exit_sub.set_height(if two { 36 } else { 18 });
-            exit_sub.set_long_mode(if two { lv::LV_LABEL_LONG_MODE_WRAP } else { lv::LV_LABEL_LONG_MODE_DOTS });
-            let mark = self.home.hr_exit_mark;
-            self.set(mark, if mf.on { mf.mark } else { "" });
-            kit::show(mark, mf.on && !mf.mark.is_empty());
-            kit::text_color(mark, if mf.on { mf.mark_col } else { th.t2 });
-            row.key.set_x(if mf.on && !mf.mark.is_empty() { PAD + 18 } else { PAD });
-            if self.home.c_wash != Some(wash) {
-                self.home.c_wash = Some(wash);
-                if wash != 0 {
-                    kit::bg(row.bx, wash);
-                }
-                row.bx.set_style_bg_opa(if wash != 0 { lv::OPA_COVER } else { lv::OPA_TRANSP }, 0);
-            }
-            if self.home.c_subcol != Some(subcol) {
-                self.home.c_subcol = Some(subcol);
-                kit::text_color(exit_sub, subcol);
-            }
-        }
-        self.set(exit_sub, &sub);
-        kit::show(exit_sub, !sub.is_empty());
-    }
-
     /// 落地 (Home): 「到了日本 · 2 小时前」, 「从中国来 · 落地以来 120MB」; shown for 24 h after a
     /// landing the core recorded. Country names come from /api/netinfo (serving / home operator).
     pub(super) fn home_landing_paint(&mut self) {
@@ -1355,81 +1297,6 @@ impl Ui {
             kit::show(card, true);
             self.home_reflow();
         }
-    }
-
-    /// 情景 (Home): repainted when luyaz-core's answer changed.
-    pub(super) fn home_scene_paint(&mut self, changed: bool) {
-        if !changed {
-            return;
-        }
-        let th = t();
-        let m = self.model.clone();
-        let sc = &m.scenario;
-        let (card, state, note) = (self.home.sc_card, self.home.sc_state, self.home.sc_note);
-        if sc.available == 0 {
-            card.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
-            self.chill_master_sync();
-            return;
-        }
-        card.remove_flag(lv::LV_OBJ_FLAG_HIDDEN);
-        if sc.enabled == 0 {
-            self.set(state, tr("已停用"));
-        } else {
-            self.set(state, if sc.name.is_empty() { tr("判定中") } else { sc.name.as_str() });
-        }
-        kit::text_color(state, if sc.enabled != 0 { th.t1 } else { th.t3 });
-        let mut when = String::new();
-        if sc.last_switch > 0 {
-            // today: the time only; earlier: the date only
-            let (tm, tn) = (clock::local(sc.last_switch), clock::local(self.now()));
-            let today = tm.year == tn.year && tm.yday == tn.yday;
-            when = clock::strftime(
-                if today {
-                    "%H:%M"
-                } else if lang::is_en() {
-                    "%d %b"
-                } else {
-                    "%m-%d"
-                },
-                &tm,
-            );
-        }
-        // 在家: why Wi-Fi is gone; 判定中: why there is no answer yet; otherwise when it
-        // switched. Pinned by hand: 已固定 first.
-        let pinned = if sc.pin.is_empty() { "" } else { tr("已固定 · ") };
-        #[allow(unused_mut)]
-        let mut note_col = th.t2;
-        if sc.enabled != 0 && sc.name.is_empty() {
-            self.set(note, tr("开机后要连续两次扫描确认位置"));
-        }
-        else if sc.abroad != 0 && sc.chill_on == 1 {
-            // abroad: how CHILL goes now; the card changes it
-            note_col = th.acc_t;
-            self.set(note, cf!("%sCHILL %s", pinned, m.chill_mode.as_deref().unwrap_or("")));
-        } else if sc.abroad != 0 && sc.chill_on == 0 {
-            note_col = th.acc_t;
-            self.set(note, cf!("%s%s", pinned, if sc.chill_back != 0 { tr("CHILL 已关，回国自动开") } else { tr("CHILL 已关") }));
-        }
-        else {
-            self.set(
-                note,
-                cf!(
-                    "%s%s%s%s",
-                    pinned,
-                    if sc.wifi_off != 0 {
-                        tr("Wi-Fi 已关 · ")
-                    } else if when.is_empty() {
-                        ""
-                    } else {
-                        tr("切换于 ")
-                    },
-                    &when,
-                    if sc.wifi_off != 0 && when.is_empty() { tr("手机走家里网络") } else { "" }
-                ),
-            );
-        }
-        kit::text_color(note, note_col);
-        self.chill_master_sync();
     }
 
     /// Whether 情景 should repaint: scenario_poll read something new, or the exit it shows

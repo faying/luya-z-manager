@@ -39,6 +39,8 @@ pub struct Scenario {
     home_on: i32,
     home_until: i64,
     home_fallback: bool,
+    ai_gate: i32,
+    ai_region: String,
     /// services.chill as last read (C keeps the buffer: a reply without it reads the old one)
     ch: Vec<u8>,
     /// changed locally (a switch from the screen): redraw on the next round
@@ -130,6 +132,16 @@ impl Scenario {
                 self.home_until = json::get_int(&he, "rest_until", 0);
                 self.home_fallback = jtrue(&he, "fallback");
             }
+            // the AI gate (luyaz-core engines/chill_ai_gate.rs): null when off
+            self.ai_gate = 0;
+            self.ai_region.clear();
+            if let Some(g) = json::get(&self.ch, "ai_gate", 256)
+                && g.first() == Some(&b'{')
+                && jstr(&g, "way", 12) != "ai"
+            {
+                self.ai_gate = if jtrue(&g, "open") { 2 } else { 1 };
+                self.ai_region = jstr(&g, "region", 4);
+            }
         }
         if data.is_empty() {
             self.mf_stale = !self.mf_notice.is_empty(); // the notice stays, dimmed, with its time
@@ -172,6 +184,7 @@ impl Scenario {
         h = fnv(h, self.mf_kind.as_bytes());
         h = fnv(h, if self.mf_stale { b"stale" } else { b"live" });
         h = fnv(h, format!("{}/{}/{}", self.home_on, self.home_until, self.home_fallback as i32).as_bytes());
+        h = fnv(h, format!("{}/{}", self.ai_gate, self.ai_region).as_bytes());
         if h == self.sig {
             return false;
         }
@@ -199,6 +212,8 @@ impl Scenario {
             home_on: self.home_on,
             home_until: self.home_until,
             home_fallback: self.home_fallback as i32,
+            ai_gate: self.ai_gate,
+            ai_region: self.ai_region.clone(),
         }
     }
 

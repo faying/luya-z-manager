@@ -34,7 +34,7 @@ fn is_type(o: Obj, c: *const sys::lv_obj_class_t) -> bool {
     // SAFETY: o is a live object
     unsafe { sys::lv_obj_check_type(o.0, c) }
 }
-fn is_label(o: Obj) -> bool {
+pub(super) fn is_label(o: Obj) -> bool {
     is_type(o, &raw const lv_label_class)
 }
 fn font(o: Obj) -> lv::Font {

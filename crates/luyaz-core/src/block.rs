@@ -126,6 +126,8 @@ pub fn phase1_blocks() -> Vec<BlockSpec> {
         // E4 T13（V2-34）：写操作的界面数据，由事务引擎交（每轮一次 + 每次状态变化）。
         BlockSpec::derived("op", Box::new(OnChange)),
         BlockSpec::derived("advice", Box::new(OnChange)),
+        // regress (design 2026-10-24): open incidents and those the screen still shows
+        BlockSpec::derived("regress", Box::new(OnChange)),
         // V2-46（2026-10-05）：旧 /state 的读者迁到 /v2 用，data 和旧 /state 同名对象同形，变了才发。
         BlockSpec::derived("qos", Box::new(OnChange)),
         BlockSpec::derived("clients", Box::new(OnChange)),
@@ -377,7 +379,41 @@ pub struct Observation {
     pub name: &'static str,
     pub data: Value,
     pub observed: Option<luyaz_api::clock::BootTime>,
+    /// Bumps on every read failure and every change other than traffic counters (see
+    /// [`identity_changed`]), so A→B→A still counts.
     pub generation: u64,
+}
+
+/// Per-interface traffic counters: they move with any client traffic, so they never mean the
+/// connection changed. The interfaces block carries them under `lan_config.lan_info[]`; counting
+/// them restarted the Finding's 60 s hold on every LAN refresh while a client was attached, i.e.
+/// in exactly the outages that matter (decision-execution-loop §4.10, 10-24).
+const COUNTERS: [&str; 8] = [
+    "rx_bytes",
+    "rx_packets",
+    "rx_dropped",
+    "rx_error",
+    "tx_bytes",
+    "tx_packets",
+    "tx_dropped",
+    "tx_error",
+];
+
+fn without_counters(v: &Value) -> Value {
+    match v {
+        Value::Object(m) => Value::Object(
+            m.iter()
+                .filter(|(k, _)| !COUNTERS.contains(&k.as_str()))
+                .map(|(k, x)| (k.clone(), without_counters(x)))
+                .collect(),
+        ),
+        Value::Array(a) => Value::Array(a.iter().map(without_counters).collect()),
+        x => x.clone(),
+    }
+}
+
+fn identity_changed(old: Option<&Value>, new: &Value) -> bool {
+    old.is_none_or(|o| o != new && without_counters(o) != without_counters(new))
 }
 
 struct Block {
@@ -612,7 +648,7 @@ impl Hub {
                 b.last_success = Some(now);
                 b.observed_at = wall_secs();
                 b.observed_boot = luyaz_api::clock::BootTime::read();
-                if b.stale || b.data.as_ref() != Some(&shaped) {
+                if b.stale || identity_changed(b.data.as_ref(), &shaped) {
                     b.generation = b.generation.saturating_add(1);
                 }
                 // 原始回复没变，依赖它的块不用重算（电池的 sysfs 电压电流每次读都变，别多发一条）。
@@ -1332,6 +1368,38 @@ pub(crate) mod tests {
 #[cfg(test)]
 mod finding_observation_tests {
     use super::*;
+    #[test]
+    fn traffic_counters_do_not_change_generation_but_anything_else_does() {
+        let hub = Hub::new(
+            vec![BlockSpec::derived("interfaces", Box::new(OnChange))],
+            Box::new(NoSink),
+        );
+        let generation = || hub.observations(&["interfaces"]).pop().unwrap().generation;
+        let lan = |rx: u64, addr: &str| {
+            serde_json::json!({
+                "cellular": {"connect_status": "ipv4_ipv6_connected", "ipv4_address": addr},
+                "lan_config": {"lan_info": [{"mac": "b8:d4", "rx_bytes": rx, "tx_packets": rx / 2}]},
+            })
+        };
+        hub.record("interfaces", Ok(lan(1, "10.0.0.2")), Instant::now());
+        let g = generation();
+        hub.record("interfaces", Ok(lan(75_335, "10.0.0.2")), Instant::now());
+        assert_eq!(
+            generation(),
+            g,
+            "LAN counters moving is not a connection change"
+        );
+        hub.record("interfaces", Ok(lan(80_000, "10.0.0.3")), Instant::now());
+        assert!(generation() > g, "an address change is");
+        let g = generation();
+        hub.record("interfaces", Ok(lan(80_000, "10.0.0.2")), Instant::now());
+        assert!(generation() > g, "and so is changing back");
+        let g = generation();
+        hub.record("interfaces", Err("unreadable".into()), Instant::now());
+        hub.record("interfaces", Ok(lan(90_000, "10.0.0.2")), Instant::now());
+        assert!(generation() > g, "a failed read still invalidates");
+    }
+
     #[test]
     fn wall_timestamp_steps_do_not_change_internal_elapsed_evidence() {
         let hub = Hub::new(

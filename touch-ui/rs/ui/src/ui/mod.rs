@@ -11,9 +11,11 @@ mod dualsim;
 mod esim;
 mod exit;
 mod home;
+mod home_scene;
 mod lock;
 mod network;
 mod op;
+mod place;
 mod power;
 mod refresh;
 mod sms;
@@ -130,6 +132,8 @@ pub const SUB_HDR: i32 = NAV_H - BAR_H;
 pub const SUB_VIEW: i32 = H - NAV_H;
 
 const TOP_BATT_XR: i32 = 308;
+/// The ▲'s hit box (design review 13A: 44×44; eng review round 3 D4).
+pub const ALERT_HIT: i32 = logic::ALERT_HIT;
 /// time + dots + RAT end here; the rate never crosses it
 const TOP_LEFT_END: i32 = 150;
 
@@ -217,7 +221,7 @@ pub struct Ui {
     pub cp: exit::ChillPage,
     pub apn: apn::Apn,
     pub dg: diagnose::Diag,
-    pub pl: diagnose::Place,
+    pub pl: place::Place,
     /// the benchmark timer: runs only while 性能测试 is open (bench_gate)
     bench_timer: lv::Timer,
     /// the full-screen 「正在切换到 English…」 frame, made the first time it shows
@@ -638,7 +642,7 @@ impl Ui {
         self.top_rate_hit.set_style_bg_opa(lv::OPA_TRANSP, 0);
         kit::tappable(self.top_rate_hit, Some(speed_unit_cb), 0);
         self.top_updown = kit::label(self.top_rate_hit, uf().n12, th.t2, 0, 6, "");
-        self.top_alert_hit = kit::bx(Obj::layer_top(), 246, 0, 40, 40, th.bg, 0);
+        self.top_alert_hit = kit::bx(Obj::layer_top(), 246, 0, ALERT_HIT, ALERT_HIT, th.bg, 0);
         self.top_alert_hit.set_style_bg_opa(lv::OPA_TRANSP, 0);
         kit::tappable(self.top_alert_hit, Some(open_alerts_cb), 0);
         self.top_alert = kit::label(self.top_alert_hit, uf().cj12, th.warn_t, 0, 5, "▲");
@@ -649,19 +653,30 @@ impl Ui {
         kit::show(self.top_batt.nub, false);
     }
 
+    /// The render harness's ▲ check (eng review round 3 D5): the ▲ shown and laid out with a
+    /// plausible rate and battery; its hit box.
+    pub fn alert_probe(&mut self) -> Obj {
+        let warn = t().warn_t;
+        self.statusbar_layout(b"\xe2\x86\x9312.3Mb \xe2\x86\x911.5Mb", b"\xe2\x86\x9312Mb \xe2\x86\x912Mb", b"\xe2\x86\x9312M\xe2\x86\x912M", b"\xe2\x86\x9312M", 80, false, true, warn);
+        self.top_alert_hit
+    }
+
     /// Place the rate and ▲ between the RAT and the battery.
     #[allow(clippy::too_many_arguments)]
-    fn statusbar_layout(&mut self, full: &[u8], shrt: &[u8], down: &[u8], pct: i32, chg: bool, alert: bool, alert_col: u32) {
+    fn statusbar_layout(&mut self, full: &[u8], shrt: &[u8], tight: &[u8], down: &[u8], pct: i32, chg: bool, alert: bool, alert_col: u32) {
         let mut right = TOP_BATT_XR - kit::battery_w(pct, chg) - 6;
         kit::show(self.top_alert_hit, alert);
         if alert {
             kit::text_color(self.top_alert, alert_col);
+            // the ▲ takes its own width + a gap; its 44 px hit box starts where the rate's ends and
+            // grows over the ▲ and the battery (eng review round 3 D4: never over the rate's)
             let aw = lv::text_w("▲".as_bytes(), uf().cj12);
-            self.top_alert_hit.set_x(right - 40);
-            self.top_alert.set_x((40 - aw) / 2);
-            right -= 40;
+            let (x, lx) = logic::alert_hit(right, aw);
+            self.top_alert_hit.set_x(x);
+            self.top_alert.set_x(lx);
+            right -= aw + 10;
         }
-        let f = [full, shrt, down];
+        let f = [full, shrt, tight, down];
         let w = f.map(|s| lv::text_w(s, uf().n12));
         let k = logic::rate_pick(w, right - TOP_LEFT_END);
         if self.rate_shown != f[k] {
@@ -847,7 +862,7 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
         cp: exit::ChillPage::default(),
         apn: apn::Apn::default(),
         dg: diagnose::Diag::default(),
-        pl: diagnose::Place::default(),
+        pl: place::Place::default(),
         bench_timer: lv::Timer::default(),
         lang_frame: Obj::NULL,
         edge_p0: (0, 0),

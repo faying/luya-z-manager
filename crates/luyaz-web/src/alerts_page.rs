@@ -58,6 +58,8 @@ pub struct Ev {
     pub label_en: Option<String>,
     pub text: String,
     pub unread: bool,
+    /// The incident it belongs to (core ≥ 1.45.0, eng review round 3 D2).
+    pub incident: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -106,6 +108,7 @@ pub fn parse(v: &Value) -> Data {
                     label_en: s(&e["label_en"]),
                     text: e["text"].as_str().unwrap_or("").into(),
                     unread: e["unread"].as_bool().unwrap_or(false),
+                    incident: s(&e["incident"]),
                 })
                 .collect()
         })
@@ -209,6 +212,10 @@ struct Poll {
     data: Option<Data>,
     fail: Option<Fail>,
     at: Option<SystemTime>,
+    /// The incidents (`/v2/incidents`): the last answer, the last failure, when it was read.
+    inc: Option<crate::alerts_incidents::Got>,
+    inc_fail: Option<Fail>,
+    inc_at: Option<SystemTime>,
 }
 
 fn mark(tone: &str, text: &str) -> String {
@@ -240,6 +247,9 @@ impl Poll {
             data: None,
             fail: None,
             at: None,
+            inc: None,
+            inc_fail: None,
+            inc_at: None,
         }
     }
 
@@ -251,6 +261,28 @@ impl Poll {
                 self.at = Some(SystemTime::now());
             }
             Err(f) => self.fail = Some(f),
+        }
+        match crate::agent::get(app, &self.who, "/incidents").await {
+            Ok(v) => {
+                self.inc = Some(crate::alerts_incidents::parse(&v));
+                self.inc_fail = None;
+                self.inc_at = Some(SystemTime::now());
+            }
+            Err(f) => match crate::alerts_incidents::failed(&f) {
+                Some(g) => {
+                    self.inc = Some(g);
+                    self.inc_fail = None;
+                }
+                None => self.inc_fail = Some(f),
+            },
+        }
+    }
+
+    /// The incidents drawn this time, fresh (an older list or none: every alert stays in 「记录」).
+    fn inc_list(&self) -> Option<&crate::alerts_incidents::List> {
+        match (&self.inc, &self.inc_fail) {
+            (Some(crate::alerts_incidents::Got::List(l)), None) => Some(l),
+            _ => None,
         }
     }
 
@@ -266,8 +298,13 @@ impl Poll {
         let st_cls = if stale { " nd-stale" } else { "" };
         let mut out = String::new();
 
-        // status
+        // status: open incidents first (design review IA), else as before
+        let open = self.inc_list().and_then(|i| crate::alerts_incidents::status(i, l));
         let (mut tone, state, reason): (&str, String, Option<String>) = match (d, &self.fail) {
+            (_, _) if open.is_some() => {
+                let (s, r) = open.clone().unwrap_or_default();
+                ("warn", s, Some(r))
+            }
             (None, Some(f)) => (
                 "bad",
                 l.pick("Can't read alerts", "读不到告警").into(),
@@ -331,6 +368,25 @@ impl Poll {
             },
         ));
 
+        // incidents (design 2026-10-24)
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        out.push_str("<div id=\"al-incidents\">");
+        out.push_str(&crate::alerts_incidents::leaf(
+            self.inc.as_ref(),
+            self.inc_fail.as_ref(),
+            (self.inc.is_some() && self.inc_fail.is_some()).then_some(self.inc_at).flatten(),
+            now,
+            l,
+        ));
+        out.push_str("</div>\n<!--leaf-->\n");
+        // an incident drawn above has its alerts in its details, not here (round 3 D7)
+        let drawn = self
+            .inc_list()
+            .map(crate::alerts_incidents::drawn)
+            .unwrap_or_default();
+
         // events
         out.push_str("<div id=\"al-events\">");
         match d {
@@ -352,7 +408,23 @@ impl Poll {
                         retry_btn(l)
                     ));
                 }
-                if d.events.is_empty() {
+                let shown: Vec<&Ev> = d
+                    .events
+                    .iter()
+                    .filter(|e| e.incident.as_ref().is_none_or(|i| !drawn.contains(i)))
+                    .collect();
+                if shown.is_empty() && !d.events.is_empty() {
+                    out.push_str(&format!(
+                        "<p class=\"nd-body al-note\">{}</p>",
+                        mark(
+                            "ok",
+                            l.pick(
+                                "Every recent alert belongs to an incident above.",
+                                "最近的告警都归在上面的事故里。"
+                            )
+                        )
+                    ));
+                } else if d.events.is_empty() {
                     out.push_str(&format!(
                         "<p class=\"nd-body al-note\">{}</p>",
                         mark(
@@ -365,7 +437,7 @@ impl Poll {
                     ));
                 } else {
                     out.push_str(&format!("<ul class=\"nd-group al-list{st_cls}\">"));
-                    for e in &d.events {
+                    for e in shown {
                         let label = esc(&word(&e.label, &e.label_en, &e.kind, l, &d.events));
                         let head = if e.unread {
                             format!(
@@ -641,6 +713,36 @@ pub async fn events(
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
     let p = Poll::new(Caller::of(&app, &req), ctx.lang);
     crate::agent::stream(app, ctx, q.g, PATH, p)
+}
+
+#[derive(serde::Deserialize)]
+pub struct IncQuery {
+    id: String,
+}
+
+/// One incident's details, read when its row is opened (design review 10A).
+pub async fn incident(
+    State(app): State<Shared>,
+    Query(q): Query<IncQuery>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
+    let ctx = crate::topbar::Ctx::of_request(&req, PATH);
+    let who = Caller::of(&app, &req);
+    let ok = !q.id.is_empty()
+        && q.id.len() <= 64
+        && q.id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    let got = if ok {
+        crate::agent::get(&app, &who, &format!("/incidents/{}", q.id)).await
+    } else {
+        Err(Fail::Refused(404, String::new(), String::new()))
+    };
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let id = if ok { q.id.clone() } else { "x".into() };
+    one(crate::alerts_incidents::detail(&id, got, now, ctx.lang))
 }
 
 /// Retry: ask the agent again now.
@@ -985,6 +1087,7 @@ pub fn routes() -> Router<Shared> {
         .route(PATH, get(page))
         .route("/alerts/events", get(events))
         .route("/alerts/refresh", post(refresh))
+        .route("/alerts/incident", post(incident))
         .route("/alerts/mark", post(mark_send))
         .route("/alerts/mark/cancel", post(mark_cancel))
         .route("/alerts/number/ask", post(number_ask))

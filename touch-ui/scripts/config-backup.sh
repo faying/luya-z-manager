@@ -7,6 +7,7 @@
 #   config-backup.sh verify  <archive>            unpack into a sandbox, check every file parses
 #   config-backup.sh plan    <archive> [root]     dry run: what a restore would change
 #   config-backup.sh restore <archive> [root]     write the files (root defaults to /)
+#   (verify / plan / restore: with CB_EXPECT_SHA256=<hex> the archive's sha256 must match first)
 #
 # Driven from the computer by the install kit (./install.sh backup / restore);
 # backups are only ever stored on that computer.
@@ -101,8 +102,20 @@ do_export() {
     tar czf - -C "$W" u60-backup
 }
 
+# CB_EXPECT_SHA256=<hex>: the sum the computer checked against the backup's
+# .sha256 sidecar; verify / plan / restore refuse the archive if this copy differs.
+sum_check() { # <archive>
+    [ -n "${CB_EXPECT_SHA256:-}" ] || return 0
+    command -v sha256sum >/dev/null 2>&1 || die "no sha256sum on this device; cannot check the archive"
+    got=$(sha256sum "$1" | cut -d' ' -f1)
+    want=$(printf '%s' "$CB_EXPECT_SHA256" | tr 'A-F' 'a-f')
+    [ "$got" = "$want" ] || die "archive checksum mismatch (got $got, expected $want); refusing"
+    echo "  ok   archive sha256 matches"
+}
+
 unpack() { # <archive> → $X/u60-backup
     [ -f "$1" ] || die "no such archive: $1"
+    sum_check "$1"
     # Look before unpacking: every entry must sit under u60-backup/, with no
     # absolute paths and no '..' anywhere.
     tar tzf "$1" > /tmp/u60-backup-list.$$ 2>/dev/null || { rm -f /tmp/u60-backup-list.$$; die "not a readable tar.gz"; }

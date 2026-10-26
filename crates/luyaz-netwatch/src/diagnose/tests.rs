@@ -13,6 +13,7 @@ fn history_from_events() {
     d["in_use"] = json!(false);
     let mut s = key_json(&key(20));
     s["mbps"] = json!(6.5);
+    s["method"] = json!(SPEED_METHOD);
     let no_cell = json!({"plmn": "460-11", "hour": 20, "mbps": 3.0});
     let evs = vec![Event::new(1, "diagnose", d), Event::new(2, "speed", s), Event::new(3, "speed", no_cell), Event::new(4, "data_down", json!({}))];
     let (runs, sp) = past_from_events(&evs);
@@ -124,7 +125,7 @@ impl Host for Fake {
     fn push_event(&self, kind: &str, data: Value) {
         self.events.lock().unwrap().push((kind.into(), data));
     }
-    fn events(&self, _: u64, _: u64) -> Vec<Event> {
+    fn events(&self, _: u64, _: u64, _: &[&str]) -> Vec<Event> {
         Vec::new()
     }
 }

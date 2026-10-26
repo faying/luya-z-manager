@@ -13,11 +13,16 @@ const RX_FRESH: u64 = 30;
 /// file exists and is under [`RX_QUIET_MAX_S`] old, moving counters do not count as receiving.
 /// Deleting a data address leaves the counters moving, so a real outage cannot otherwise be
 /// staged. On the RAM disk (gone at reboot) and self-expiring; everything else stays real.
-const RX_QUIET_FILE: &str = "/tmp/luyaz-test-rx-quiet";
-const RX_QUIET_MAX_S: u64 = 600;
+pub(crate) const RX_QUIET_FILE: &str = "/tmp/luyaz-test-rx-quiet";
+pub(crate) const RX_QUIET_MAX_S: u64 = 600;
 
 fn rx_quiet_test() -> bool {
-    std::fs::metadata(RX_QUIET_FILE)
+    rx_quiet_at(std::path::Path::new(RX_QUIET_FILE))
+}
+
+/// The switch at `p` is on (the regress layer records it as a drill).
+pub(crate) fn rx_quiet_at(p: &std::path::Path) -> bool {
+    std::fs::metadata(p)
         .and_then(|m| m.modified())
         .ok()
         .and_then(|t| t.elapsed().ok())
@@ -28,7 +33,8 @@ fn rx_quiet_test() -> bool {
 pub struct Connection {
     pub iccid: String,
     // Includes failures and A→B→A changes observed by the collector, not just final equality.
-    // Any SIM/interfaces change is conservative invalidation, even an unrelated LAN change.
+    // Any SIM/interfaces change is conservative invalidation (traffic counters excluded, see
+    // `block::Observation::generation`), even an unrelated LAN change.
     generations: [u64; 2],
 }
 

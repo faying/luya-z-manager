@@ -1,6 +1,6 @@
 [package]
 name = "luyaz-core"
-version = "1.38.0"
+version = "1.49.1"
 edition = "2024"
 rust-version = "1.99"
 description = "Luya-Z core daemon (luyaz-core): device read path, HTTP API and write path, policies, wake ledger."
@@ -22,6 +22,8 @@ crc32c = "0.6"
 # HMAC references for secret fields in the event log (sens.rs); already in the tree via rsa
 sha2 = "0.10"
 libc = "0.2"
+# the heap allocator (mem.rs): musl mallocng kept freed memory resident (Phase 5 RSS)
+mimalloc = { version = "0.1", default-features = false }
 # the agent's alert files, login and clock offset for the touch compatibility layer (compat.rs)
 luyaz-api = { path = "../luyaz-api" }
 luyaz-esim = { path = "../luyaz-esim" }

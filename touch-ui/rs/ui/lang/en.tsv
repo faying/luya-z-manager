@@ -425,10 +425,8 @@ tailscale|节点	Peers
 测速或切卡进行中，完成后再换外观	Busy; try again when it finishes
 
 # 网络诊断、摆放模式、首页「查原因 ›」（manager docs/designs/slow-diagnosis.md §12，10-02）
-%s SINR · 越大越好	%s SINR · higher is better
 %s 测 · 已记下，谢谢	Checked %s · noted, thanks
 %s 测 · 结论对吗？	Checked %s · right?
-▲ 比最好低 %s dB	▲ %s dB below best
 ● 接近最好	● Near the best
 不对	Wrong
 信号	Signal
@@ -451,8 +449,7 @@ tailscale|节点	Peers
 已发送…	Sent…
 已发送，测速约 5 秒	Sent; about 5 s
 已清零，重新计	Reset; counting again
-换了小区会重新计；这页开着不息屏	Resets on a new cell; the screen stays on here
-换了小区，重新计	New cell; counting again
+换到小区 %d，重新计	On cell %d now; counting again
 排查	Troubleshoot
 摆放模式	Placement
 数字停在 %s	Last update %s
@@ -498,6 +495,12 @@ tailscale|节点	Peers
 %s%sCHILL 直连	%s%sCHILL direct
 AI 也直连	AI direct too
 AI 仍走 CHILL · %s	AI still via CHILL · %s
+AI 已暂停 · 出口不在%s	AI paused · exit not in %s
+AI 可用 · 出口已确认在%s	AI on · exit checked in %s
+台湾	Taiwan
+日本	Japan
+新加坡	Singapore
+美国	United States
 AI、VoWiFi 也直连	AI and VoWiFi go direct too
 CHILL 出口	CHILL route
 CHILL 已关	CHILL off
@@ -738,7 +741,6 @@ PIN 锁	PIN locked
 Luya-Z 免费提供。付钱买了装好的设备，费用和售后归卖家，与 Luya-Z 无关。	Luya-Z is free. If you paid for a device with it installed, price and support are the seller's, not Luya-Z's.
 
 # 出行助手：摆放模式曲线、首页落地（manager docs/designs/travel-assist.md，10-21）
-近 30 秒	Last 30 s
 到了%s	Arrived in %s
 从%s来 · 落地以来 %s	From %s · %s since landing
 落地以来 %s	%s since landing
@@ -756,3 +758,191 @@ Luya-Z 免费提供。付钱买了装好的设备，费用和售后归卖家，�
 
 还没读到策略组	No groups received yet
 还没读到节点	No nodes received yet
+
+# Home, three questions (DESIGN.md §4, 10-24): status card footer, scenario card, bottom row
+单载波 · %d MHz	1 carrier · %d MHz
+锚点 + 5G · %d MHz	Anchor + 5G · %d MHz
+%d 条聚合 · %d MHz	%d carriers · %d MHz
+待机 · 信号好	Standby · good signal
+没有 SIM 卡 · %s	No SIM · %s
+换这张上网 ›	Use this SIM ›
+去启用 ›	Set up ›
+待机卡 %s %s	Standby %s %s
+没有在用的载波	No active carrier
+香港	Hong Kong
+CHILL 开着，出口还在查	CHILL on, checking its exit
+CHILL 关着，全部直连	CHILL off: all direct
+CHILL 没在运行，暂时全部直连	CHILL not running: all direct for now
+全部	All
+全局：所有流量都走这个节点	Global: all traffic through this node
+其余	Rest
+国内	China
+不通，暂走直连	Down, direct for now
+家里	Home
+其余都走家里	Rest via home
+route|节点	Node
+版权	Media
+国内版权网站	China media sites
+直连留 AI：只有 AI 还走节点	Direct but AI: only AI uses a node
+没有情景	No scenarios
+恢复自动 ›	Back to auto ›
+判断中	Deciding
+● 自动	● Auto
+ · %s 起	 · since %s
+情景引擎没开	Scenario engine off
+不会自动切 Wi-Fi 和 CHILL	Wi-Fi and CHILL stay as set
+国外	abroad
+因为在%s	In %s
+（卡是%s的）	 (SIM from %s)
+因为看到%s	Saw %s
+家里 Wi-Fi	home Wi-Fi
+■ 已关	■ Off
+▲ 没运行	▲ Not running
+▲ 没网	▲ No network
+▲ 太热省电	▲ Hot: saving
+● 运行中	● Running
+全直连	All direct
+直连留 AI	Direct + AI
+规则	Rules
+■ 已暂停	■ Paused
+没装	Not installed
+■ 未运行	■ Not running
+▲ 离线	▲ Offline
+▲ 要登录	▲ Log in
+▲ 等批准	▲ Approve
+%d/%d 在线	%d/%d online
+只有本机	Only this one
+等网络	Waiting for network
+▲ 家里 不通	▲ Home down
+家里 直连	Home direct
+▲ 家里 中继	▲ Home relay
+无家里出口	No home exit
+直连 %d · 中继 %d	Direct %d · relay %d
+关	Off
+情景关的	By scenario
+今日	Today
+月 %s	Month %s
+充电 %s满	Full in %s
+约 %s	About %s
+尽快充电	Charge soon
+▲ 偏热 %d°C	▲ Warm %d°C
+Tailscale 要登录：在管理网页打开登录链接	Tailscale needs a login: open the link in the admin web
+Tailscale 等批准：在 Tailscale 后台批准这台设备	Tailscale waits for approval: approve this device in its admin console
+去看	Open
+没连上	Not connected
+
+# 摆放模式重做：分数、算式、记下的地方（manager docs/designs/travel-assist.md §8，10-24）
+近 3 分钟	Last 3 min
+近 3 分钟 · 小区 %d	Last 3 min · cell %d
+记下这里	Record here
+再记一处	Record another
+取消这次	Cancel
+去测速	Speed test
+换个房间再记	Try another room
+读不到信号	No signal reading
+这里可以放	Good spot
+这里一般	So-so spot
+这里信号差	Poor spot
+正在记第 %d 处	Recording spot %d
+放回第 %d 处	Go back to spot %d
+就放这里	Leave it here
+放哪都差不多	Any spot will do
+放哪都不行	No spot works
+不是摆放的问题	Not the spot
+读不到信号，没记上	No signal; not recorded
+等有信号再看。	Wait for a signal.
+放稳，手拿开，别碰它。	Set it down; hands off.
+再记一处就能比。	Record one more to compare.
+走动看曲线：往上就是变好。	Walk and watch: up is better.
+靠窗、高一点再试试。	Try near a window, or higher.
+换个地方，或换个房间。	Try another spot or room.
+现在比它低 %d 分，往回走。	%d points lower here; go back.
+它分数最高。	It scored highest.
+现在跟最好的差不多。	About as good as the best.
+%d 处只差 %d 分，放哪个都行。	%d spots within %d points; any will do.
+%d 处都差：换个房间，或换张卡。	All %d poor: try another room or SIM.
+%d 处一样；基站忙，换位置没用。	All %d alike; the cell is busy.
+第 %d 处 · %s	Spot %d · %s
+第 %d 处	Spot %d
+%d 分	%d pts
+小区 %s	cell %s
+差不多	same
+最好	best
+也行	also fine
+低 %d	%d lower
+下一处	next
+%d 分 · %s	%d pts · %s
+▲ 比最好低 %d 分	▲ %d pts below best
+换了小区会标出来；这页开着不息屏	New cells are marked; the screen stays on here
+卡在两个基站之间	Cell ping-pong
+在小区 %d、%d 之间来回切了 %d 次，往一边挪。	Switched between cells %d and %d %d times; move to one side.
+切过基站	cell switched
+频宽	Width
+这里只连到 %s %d MHz，刚才有过 %d MHz。	Only %s %d MHz here; %d MHz seen earlier.
+总分	Total
+很好	Great
+良好	Good
+一般	Fair
+差	Poor
+扣 %d	−%d
+不扣	none
+频宽 MHz	MHz
+信号强度	Strength
+弱	weak
+忙	busy
+不忙	quiet
+频宽扣	narrower
+频宽不扣	width OK
+比 5 秒前 +%d，继续往这边。	+%d vs 5 s ago; keep going.
+比 5 秒前 %d，往回走。	%d vs 5 s ago; go back.
+干扰低、信号强、基站不忙。	Clean, strong, cell not busy.
+差在干扰：SINR %s dB，转个方向或靠窗。	Interference: SINR %s dB; turn it.
+差在信号弱：RSRP %d，往窗边、高处挪。	Weak: RSRP %d; go higher or to a window.
+差在基站忙：RSRQ %d，挪位置没用。	Busy cell: RSRQ %d; moving won't help.
+差在频宽：只有 %s %d MHz，刚才有过 %d。	Narrow: only %s %d MHz; %d seen earlier.
+干扰	interference
+基站忙	busy
+频宽窄	narrow
+低 %d · %s	%d lower · %s
+
+# 事故（regress，告警子页，design 2026-10-24）
+事故	Incidents
+事故数据停在 %s	Incident data stopped at %s
+core 版本太旧，不支持事故	The core is too old for incidents
+读不到事故数据	Can't read incident data
+● 24 小时内没有事故	● No incidents in 24 h
+还开着	still open
+已结束 · %d 次	Ended · %d×
+已恢复	Recovered
+时间不可信	time not trusted
+%s 起	since %s
+还有 %d 个开着	%d more open
+
+# 测速页 v2（net-performance.md Design Review DR1–DR13，2026-10-25）
+分层	Layers
+单连接	Single conn.
+下载时卡	Under load
+无线	Radio
+基站、Wi-Fi	Cell, Wi-Fi
+空闲延迟	Idle latency
+单连接下载	1-conn download
+多连接下载	Multi download
+经 CHILL 下载	Via CHILL
+多连接上传	Multi upload
+%d 条连接 · 前 2 秒不计	%d connection · first 2 s dropped|%d connections · first 2 s dropped
+%d 条连接 · 前 0.5 秒不计	%d connection · first 0.5 s dropped|%d connections · first 0.5 s dropped
+%d 条连接上传	%d-connection upload|%d-connection upload
+%d 条连接	%d connection|%d connections
+样本不足，数字只供参考	Too few samples; rough figure
+粗测 · 漫游中只测 5 秒	Rough · 5 s only while roaming
+粗测 · 只测 5 秒	Rough · 5 s only
+延迟 %.0f ms	Latency %.0f ms
+，下载时 %.0f ms	, %.0f ms loaded
+用掉 %.0f MB	used %.0f MB
+用掉 %.2f GB	used %.2f GB
+也测经 CHILL	Also via CHILL
+漫游中只粗测	Rough only, roaming
+CHILL 没在运行	CHILL not running
+漫游中：只粗测 5 秒、最多 30 MB	Roaming: rough test, 5 s, ≤30 MB
+约 30 秒 · 最多 750 MB	~30 s · ≤750 MB
+约 40 秒 · 最多 1.15 GB	~40 s · ≤1.15 GB

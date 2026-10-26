@@ -75,6 +75,8 @@ pub struct Read {
     pub activity: Option<super::activity::Read>,
     /// The card's program name → RSS kB.
     pub rss: BTreeMap<String, i64>,
+    /// This process: RssAnon kB, then the heap's live and peak kB (mem.rs).
+    pub mem: Option<(Option<i64>, i64, i64)>,
     pub free_mb: Option<i64>,
     pub dump_mb: Option<i64>,
     /// The quiet fold since the previous check (set by [`super::Fold::power`]); None = not taken.
@@ -111,6 +113,7 @@ pub struct Acc {
     cpu_first: Option<(u32, u64, u64, i64)>,
     cpu_last: Option<(u32, u64, u64, i64)>,
     rss: BTreeMap<String, i64>,
+    mem: Option<(Option<i64>, i64, i64)>,
     free_mb: Option<i64>,
     dump_mb: Option<i64>,
     batt_tmax: Option<i64>,
@@ -226,6 +229,7 @@ impl Acc {
             self.cap_to = r.cap;
         }
         self.rss = r.rss.clone();
+        self.mem = r.mem;
         self.free_mb = r.free_mb;
         self.dump_mb = r.dump_mb;
     }
@@ -310,6 +314,11 @@ impl Acc {
         let m = o.as_object_mut().expect("object");
         for (k, _) in RSS {
             m.insert(format!("rss_{k}"), json!(self.rss.get(k)));
+        }
+        if let Some((anon, live, peak)) = self.mem {
+            m.insert("anon_core".into(), json!(anon));
+            m.insert("heap_live".into(), json!(live));
+            m.insert("heap_peak".into(), json!(peak));
         }
         m.insert("chill_on_s".into(), json!(self.chill_on_s));
         m.insert("chill_ok_s".into(), json!(self.chill_ok_s));
@@ -465,9 +474,13 @@ fn chill_profile(dir: &Path, thermal_eco: &Path) -> String {
 }
 
 fn rss_kb(proc_: &Path, pid: u32) -> Option<i64> {
+    status_kb(proc_, pid, "VmRSS:")
+}
+
+fn status_kb(proc_: &Path, pid: u32, key: &str) -> Option<i64> {
     let s = std::fs::read_to_string(proc_.join(pid.to_string()).join("status")).ok()?;
     s.lines()
-        .find_map(|l| l.strip_prefix("VmRSS:"))?
+        .find_map(|l| l.strip_prefix(key))?
         .split_whitespace()
         .next()?
         .parse()
@@ -631,6 +644,8 @@ impl ReadState {
                 r.rss.insert(k.to_string(), kb);
             }
         }
+        let (live, peak) = crate::mem::stats();
+        r.mem = Some((status_kb(&p.proc_, me, "RssAnon:"), live, peak));
         r.free_mb = free_mb(&p.data);
         r.dump_mb = du_mb(&p.dumps);
         r

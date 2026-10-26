@@ -69,7 +69,7 @@ fn lookup(urls: &[String], proxy_port: Option<u16>) -> Result<(Geo, String), Str
 
 /// The main table's default route as `"<iface> <ipv4>"` (empty: none): it changes when the
 /// cellular session is set up again, and so (usually) does the public address.
-pub(super) fn route_key(route_table: &str, ipv4_of: impl Fn(&str) -> Option<String>) -> String {
+pub(crate) fn route_key(route_table: &str, ipv4_of: impl Fn(&str) -> Option<String>) -> String {
     let iface = route_table.lines().skip(1).find_map(|l| {
         let f: Vec<&str> = l.split_whitespace().collect();
         (f.len() > 7 && f[1] == "00000000" && f[7] == "00000000").then(|| f[0].to_string())
@@ -80,7 +80,7 @@ pub(super) fn route_key(route_table: &str, ipv4_of: impl Fn(&str) -> Option<Stri
     format!("{iface} {}", ipv4_of(&iface).unwrap_or_default())
 }
 
-fn ipv4_of(iface: &str) -> Option<String> {
+pub(crate) fn ipv4_of(iface: &str) -> Option<String> {
     let mut out = None;
     // SAFETY: getifaddrs/freeifaddrs pair; entries are only read in between.
     unsafe {

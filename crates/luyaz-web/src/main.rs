@@ -19,6 +19,7 @@
 mod agent;
 mod agent_act;
 mod agent_api;
+mod alerts_incidents;
 mod alerts_page;
 mod apn;
 mod assets;

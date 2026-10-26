@@ -24,7 +24,8 @@
 #                     procd init 脚本（装到 /data/luyaz/scripts 和 /etc/init.d）
 #   chill/            CHILL：scripts/chill/stage.sh 摆好的 mihomo（sha256 固定）、规则集（下载时的最新版）、脚本、
 #                     zashboard（sha256 固定），下载缓存在 onboard/cache/chill。CHILL=0 不打
-# 另外：install.sh、device/install.sh、README、u60.env.example、CLAUDE.md（kit-CLAUDE.md）、
+# 另外：install.sh、device/install.sh、firmware-capabilities.matrix.json（装前自检，按组件）、THIRD-PARTY.md（第三方许可证）、
+#       README、u60.env.example、CLAUDE.md（kit-CLAUDE.md）、
 #       MANIFEST.txt（来源 + 每个文件的 sha256，install.sh 先核对）、versions.json（各组件版本）。
 
 # 环境变量：TOUCH_REPO（默认本仓库的 touch-ui/）、CHILL=0（不打 CHILL）、
@@ -156,7 +157,8 @@ cp "$WORK/dropbear/usr/sbin/dropbear" "$PL/dropbear"
 # zigbuild <profile> <包>：本仓库现编一个 aarch64-musl 程序，打印产物路径。有 cargo-zigbuild 就本机编，
 # 没有走 Docker（同 tools/luyaz ship）。LUYAZ_COMMIT：核心把它当版本号写进长期记录（u60-sentinel.md §17）
 # KIT_ZIGBUILD=<命令>：换个地方编（比如另一台构建机），调用 <命令> <profile> <包> <commit> <产物路径>，
-# 它要把本仓库工作区编出的 aarch64-musl 程序放到 <产物路径>（包 ui = 触屏界面，见下面 ui 一节）
+# 它要把本仓库工作区编出的 aarch64-musl 程序放到 <产物路径>（包 ui = 触屏界面，见下面 ui 一节）；
+# 包名 cargo-metadata（profile 给 -）= 把 `cargo metadata --locked --format-version 1` 的输出写到 <产物路径>
 zigbuild() {
   local head; head=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo 0000000)
   local out="$ROOT/target/aarch64-unknown-linux-musl/$1/$2" log="$WORK/build-$2.log"
@@ -172,6 +174,19 @@ zigbuild() {
   fi || { tail -n 20 "$log" >&2; die "$2 构建失败"; }
   [ -f "$out" ] || die "$2 没编出来（$out 不在）"
   echo "$out"
+}
+
+# cargo_metadata <输出文件>：依赖清单（THIRD-PARTY.md 用），和 zigbuild 走同一个地方
+cargo_metadata() {
+  if [ -n "${KIT_ZIGBUILD:-}" ]; then
+    $KIT_ZIGBUILD - cargo-metadata "$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo 0000000)" "$1" >"$WORK/metadata.log" 2>&1
+  elif command -v cargo >/dev/null 2>&1; then
+    ( cd "$ROOT" && cargo metadata --locked --format-version 1 ) >"$1" 2>"$WORK/metadata.log"
+  else
+    docker run --rm -v "$ROOT":/repo -v u60-cargo-registry:/usr/local/cargo/registry -w /repo "$ZIGBUILD_IMAGE" \
+      cargo metadata --locked --format-version 1 >"$1" 2>"$WORK/metadata.log"
+  fi || { tail -n 20 "$WORK/metadata.log" >&2; die "cargo metadata 失败"; }
+  [ -s "$1" ] || die "cargo metadata 没有输出"
 }
 
 # ── 高级后台：luyaz-web（:9090）────────────────────────────────────────────────
@@ -265,7 +280,7 @@ mkdir -p "$PL/scripts"
 # luyaz-recover.sh 由设备端放成 /data/luyaz/ship/luyaz-recover.sh（自检过才放，已有就不换；rc.local 那一行只由 recover 组件加）
 # 去掉 luyaz-ship.sh、core-trial.sh、luyaz-recover.sh 以后，这张表要和 luyaz-ship.sh 的 SCRIPTS_FILES + SCRIPTS_INITS
 # 一致（u60 ship scripts，touch-ui docs/SHIP.md）。
-for f in alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION \
+for f in alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh net-tune.sh VERSION \
          luyaz-ship.sh core-trial.sh luyaz-recover.sh \
          luyaz-core.init luyaz-sentinel.init luyaz-web.init; do
   [ -f "$TOUCH_REPO/scripts/$f" ] || die "缺 $TOUCH_REPO/scripts/$f"
@@ -413,11 +428,20 @@ cp "$ONB/install.sh" "$ONB/README.md" "$ONB/README.zh-CN.md" "$ONB/u60.env.examp
 cp "$ONB/device/install.sh" "$KIT/device/"
 cp "$ONB/kit-CLAUDE.md" "$KIT/CLAUDE.md"   # 在包目录里开 Claude Code，它会先读这份
 chmod 755 "$KIT/install.sh"   # 对方直接 ./install.sh
+cp "$ONB/firmware-capabilities.matrix.json" "$KIT/"   # install.sh 的装前自检按组件读它
+
+# THIRD-PARTY.md：包里每个第三方部分的许可证（crate 读 cargo metadata，eSIM 读 .apk 里的 .PKGINFO，
+# 其余是 onboard/third-party.list 手工核对过的）。缺许可证字段就停
+step "第三方许可证清单（THIRD-PARTY.md）"
+cargo_metadata "$WORK/cargo-metadata.json"
+python3 -I "$ONB/third-party.py" --check --kit "$KIT" --cargo-metadata "$WORK/cargo-metadata.json" \
+  --alpine-lock "$ROOT/scripts/esim/alpine.lock" --apk-dir "$CACHE/alpine-pkgs" --list "$ONB/third-party.list" \
+  -o "$KIT/THIRD-PARTY.md" || die "第三方许可证清单不完整（ESIM_TGZ 用现成包时 $CACHE/alpine-pkgs 也要有对应的 .apk）"
 
 # MANIFEST.txt：前面是给人看的来源（第 3 行起，打完包会印出几行），
 # 「sha256」那一行之后是 install.sh 要逐个核对的「摘要  路径」（两个空格）
 kit_hashes() {
-  ( cd "$KIT" && find install.sh device payload -type f | LC_ALL=C sort ) | while read -r rel; do
+  ( cd "$KIT" && find install.sh firmware-capabilities.matrix.json device payload -type f | LC_ALL=C sort ) | while read -r rel; do
     printf '%s  %s\n' "$(sha256 "$KIT/$rel")" "$rel"
   done
 }

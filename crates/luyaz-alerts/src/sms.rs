@@ -18,7 +18,7 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::io::AsRawFd;
 
-use crate::{Alerts, parse_queue, parse_sms_log, valid_number};
+use crate::{Alerts, Event, parse_queue, parse_sms_log, valid_number};
 
 /// A `sending` claim this old is taken as "the sender died mid-send".
 pub const UNCERTAIN_AFTER_S: u64 = 120;
@@ -40,7 +40,20 @@ const NEVER: &[&str] = &[
     // R18-P2-01 stock anomalies (owner 10-23): inbox and MCP only while false alarms are watched
     "wifi-post-stuck",
     "no-service-long",
+    // regress (10-24): a Wi-Fi the watchdog brought back is no regression; cellular outages stay
+    // inbox-only as no-service-long was (eng review R2); "this kind is blind" is inbox-only
+    "wifi-takeover",
+    "regress-cellular",
+    "regress-blind",
 ];
+
+/// A regress or point-event alert the device refused (eng review R9) goes again this long after
+/// the first refusal (1st, 2nd, 3rd retry), outside the rate limits; refused a 4th time it is
+/// `failed` as any other.
+const RETRY_AFTER_S: [i64; 3] = [300, 600, 900];
+
+/// How long a regress SMS may be, in UCS-2 characters (two parts of a long SMS).
+pub const REGRESS_MAX: usize = 134;
 
 /// What a sender needs from the device. The core implements `send` through its reconciler, the
 /// sentinel straight over ubus.
@@ -54,6 +67,12 @@ pub trait SmsIo {
     /// Fresh, same-boot wall estimate with no observed step, as the sentinel computes it.
     /// This preserves local-wall rate limiting; it does not mean verified UTC/NTP.
     fn clock_ok(&mut self) -> bool;
+    /// The wall is fit to print in an SMS: [`Self::clock_ok`] and not just the wall the device
+    /// booted with (`last_wall`), which can be hours off until SNTP steps it (10-26: a reboot SMS
+    /// said 01:58 at 09:58). Without it the SMS goes out with no time.
+    fn wall_settled(&mut self) -> bool {
+        self.clock_ok()
+    }
     /// The screen's language is English (`lang=en`, last line, in ui.conf).
     fn lang_en(&mut self) -> bool;
     /// ZTE's SNTP zone in whole hours (`zwrt_zte_sntp.settings.time_from_utc`).
@@ -63,6 +82,10 @@ pub trait SmsIo {
     /// Delete the copy the firmware keeps in its sent box (the newest to `number`).
     fn delete_sent_copy(&mut self, number: &str);
     fn log(&mut self, msg: &str);
+    /// The owner turned regress SMS off ([`crate::REGRESS_SMS_OFF`] exists).
+    fn regress_sms_off(&mut self) -> bool {
+        std::path::Path::new(crate::REGRESS_SMS_OFF).exists()
+    }
 }
 
 /// Why a send did not work.
@@ -133,6 +156,69 @@ pub fn rate_ok(log: &str, kind: &str, now: i64) -> bool {
     hour < 1 && day < RATE_DAY_MAX
 }
 
+/// The day limit alone (a point event's 2nd/4th/8th in a row, a regress escalation: eng review
+/// R12): five sent in 24 h, a future stamp counting as just sent.
+pub fn day_ok(log: &str, now: i64) -> bool {
+    parse_sms_log(log)
+        .iter()
+        .filter(|r| r.result == "sent" && (r.wall > now || r.wall > now - RATE_DAY_S))
+        .count()
+        < RATE_DAY_MAX
+}
+
+/// Which one in its row a point event is: 1 + the events of its kind before it, each within
+/// [`crate::POINT_WINDOW_S`] of the next (the queue holds what both senders and the core wrote).
+pub fn row_n(events: &[Event], ev: &Event) -> usize {
+    let mut n = 1;
+    let mut t = ev.wall;
+    for e in events
+        .iter()
+        .rev()
+        .filter(|e| e.seq < ev.seq && e.kind == ev.kind)
+    {
+        if e.wall > t || t - e.wall > crate::POINT_WINDOW_S {
+            break;
+        }
+        n += 1;
+        t = e.wall;
+    }
+    n
+}
+
+/// What the regress rules make of one alert on top of the guard's verdict (eng review R4, R6, R12,
+/// CEO OV-C4); every other kind is left exactly as [`verdict`] says (R6: the regression contract).
+/// `nth`: a point event's place in its row; `esc`: a regress escalation (`rg-…-esc<n>`).
+pub fn regress_verdict(v: Verdict, kind: &str, nth: Option<usize>, off: bool) -> Verdict {
+    if v != Verdict::Send {
+        return v;
+    }
+    if crate::is_regress(kind) && off {
+        return Verdict::Record("suppressed-off");
+    }
+    if nth.is_some_and(|n| !matches!(n, 1 | 2 | 4 | 8)) {
+        return Verdict::Record("suppressed-repeat");
+    }
+    Verdict::Send
+}
+
+/// A transition for the inbox only, no SMS: one that closes an incident (`rg-…-close`; design §5:
+/// a recovery never costs the quota) or asks whether a level is the new normal (`rg-…-ask`;
+/// design §4: inbox and MCP).
+pub fn is_inbox_only(text: &str) -> bool {
+    crate::text_id(text)
+        .is_some_and(|id| id.starts_with("rg-") && (id.ends_with("-close") || id.ends_with("-ask")))
+}
+
+/// A regress escalation (`rg-…-esc<n>`).
+pub fn is_escalation(text: &str) -> bool {
+    crate::text_id(text).is_some_and(|id| {
+        id.starts_with("rg-")
+            && id
+                .rsplit_once('-')
+                .is_some_and(|(_, t)| t.strip_prefix("esc").is_some_and(|n| !n.is_empty()))
+    })
+}
+
 // ── texts ───────────────────────────────────────────────────────────────────
 
 /// What the owner reads on the phone, in Chinese (guard `sms_body`, word for word): what happened,
@@ -160,6 +246,7 @@ fn body_zh(kind: &str) -> String {
         // Phase 10 X9: the core's crash watch
         "web-crash" => "管理网页意外退出，已自动重启。不用管。",
         "sentinel-crash" => "U60的看门程序意外退出，已自动重启。不用管。",
+        "agent-silent" => "自动管理Wi-Fi的程序没反应了，Wi-Fi会保持打开，上网不受影响。",
         _ => return format!("有新告警（{kind}），请到管理网页「系统→告警」查看。"),
     };
     m.to_string()
@@ -184,6 +271,7 @@ fn body_en(kind: &str) -> String {
         "screen-empty" => "Screen blank; stock UI on; hold corner 3s",
         "web-crash" => "Admin pages crashed; restarted; no action",
         "sentinel-crash" => "Watchdog crashed; restarted; no action",
+        "agent-silent" => "Wi-Fi automation silent; Wi-Fi kept on",
         // a kind is ASCII by alert-lib's rules; kept to 17 safe chars so the SMS stays one
         // message whatever comes in
         _ => {
@@ -204,28 +292,142 @@ fn body_en(kind: &str) -> String {
 /// text stays one 70-character SMS. A device name (`sms-name`, 10-20: two U60s alerting one
 /// phone) goes after the signature, `【Luya-Z】名字：…`; the longer texts then go out as a long
 /// SMS (UCS-2 over 70 characters: the firmware splits it, the phone shows one; CN B31, 10-20).
+/// `wall` 0 = no time to print (the clock is not settled, [`SmsIo::wall_settled`]).
 pub fn sms_text(kind: &str, en: bool, wall: i64, seq: u64, name: Option<&str>) -> String {
+    let body = if en { body_en(kind) } else { body_zh(kind) };
+    stamp(&body, en, wall, seq, name)
+}
+
+/// The fixed part of a regress SMS (eng review O3): what happened, in the owner's words; the
+/// queue text's details go after it, then where the recovery shows (design review 7A). `None` for
+/// kinds that are never texted or not regress.
+fn regress_zh(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "regress-reboot" => "U60意外重启了，现已恢复运行。",
+        "regress-mem" => "数据服务内存比平时高很多，可能在泄漏。",
+        "regress-mem-abs" => "数据服务内存超过上限，可能在泄漏。",
+        "regress-egress" => "出口不通超过5分钟。",
+        "regress-power" => "待机耗电比平时高。",
+        "regress-power-abs" => "待机耗电超过上限。",
+        "regress-recorder" => "长期记录停了10分钟以上。",
+        "regress-core-down" => "数据服务停了10分钟以上，屏幕数据可能不更新。",
+        "regress-disk" => "存储空间快满了，程序可能写不进去而崩溃。",
+        _ => return None,
+    })
+}
+
+fn regress_en(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "regress-reboot" => "Unexpected reboot; back up now.",
+        "regress-mem" => "Data service memory well above normal.",
+        "regress-mem-abs" => "Data service memory over limit.",
+        "regress-egress" => "Route down 5+ min.",
+        "regress-power" => "Standby power above normal.",
+        "regress-power-abs" => "Standby power over limit.",
+        "regress-recorder" => "Recorder stalled 10+ min.",
+        "regress-core-down" => "Data service down 10+ min.",
+        "regress-disk" => "Storage almost full.",
+        _ => return None,
+    })
+}
+
+const TAIL_ZH: &str = "恢复消息见网页「告警」页 / Discord";
+const TAIL_EN: &str = "recovery: web Alerts / Discord";
+
+/// The SMS for one queued alert: a regress kind's template with the details from its queue text
+/// (cut first, never the template, to [`REGRESS_MAX`] characters); every other kind exactly as
+/// [`sms_text`] words it.
+pub fn sms_text_for(
+    kind: &str,
+    text: &str,
+    en: bool,
+    wall: i64,
+    seq: u64,
+    name: Option<&str>,
+) -> String {
+    let fixed = if en {
+        regress_en(kind)
+    } else {
+        regress_zh(kind)
+    };
+    let Some(fixed) = fixed else {
+        return sms_text(kind, en, wall, seq, name);
+    };
+    let raw = crate::text_body(text).trim();
+    let hint;
+    let detail = if en {
+        raw
+    } else {
+        hint = if kind == "regress-disk" {
+            // paths and sizes read the same in either language
+            raw.to_string()
+        } else {
+            regress_hint_zh(raw)
+        };
+        hint.as_str()
+    };
+    let build = |d: &str| {
+        let (mid, tail) = if en { (" ", TAIL_EN) } else { ("", TAIL_ZH) };
+        let d = if d.is_empty() {
+            String::new()
+        } else if en {
+            format!("{d}. ")
+        } else {
+            format!("{d}。")
+        };
+        let body = format!("{fixed}{mid}{d}{tail}");
+        stamp(&body, en, wall, seq, name)
+    };
+    let whole = build(detail);
+    if whole.chars().count() <= REGRESS_MAX {
+        return whole;
+    }
+    let bare = build("").chars().count();
+    // room for the details and their separators (". " / "。") and the ellipsis
+    let room = REGRESS_MAX.saturating_sub(bare + if en { 3 } else { 2 });
+    let cut: String = detail.chars().take(room).collect();
+    if cut.is_empty() {
+        return build("");
+    }
+    build(&format!("{}…", cut.trim_end()))
+}
+
+/// Signature, device name, body, the device-local time and the short code, as [`sms_text`] puts
+/// them around its body.
+fn stamp(body: &str, en: bool, wall: i64, seq: u64, name: Option<&str>) -> String {
     let (_, mo, d, h, mi, _) = civil(wall);
     let seq = seq % 1000;
-    let (name_zh, name_en) = match name {
-        Some(n) => (format!("{n}："), format!("{n}: ")),
-        None => (String::new(), String::new()),
-    };
     if en {
         const MON: [&str; 12] = [
             "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
         ];
+        let name = name.map(|n| format!("{n}: ")).unwrap_or_default();
+        if wall <= 0 {
+            return format!("[Luya-Z] {name}{body}#{seq}");
+        }
         format!(
-            "[Luya-Z] {name_en}{} ({d:02} {} {h:02}:{mi:02})#{seq}",
-            body_en(kind),
+            "[Luya-Z] {name}{body} ({d:02} {} {h:02}:{mi:02})#{seq}",
             MON[(mo - 1) as usize]
         )
     } else {
-        format!(
-            "【Luya-Z】{name_zh}{}（{mo:02}-{d:02} {h:02}:{mi:02}）#{seq}",
-            body_zh(kind)
-        )
+        let name = name.map(|n| format!("{n}：")).unwrap_or_default();
+        if wall <= 0 {
+            return format!("【Luya-Z】{name}{body}#{seq}");
+        }
+        format!("【Luya-Z】{name}{body}（{mo:02}-{d:02} {h:02}:{mi:02}）#{seq}")
     }
+}
+
+/// What a Chinese regress SMS says of the queue text's details: the owner's words only. The
+/// details themselves (codes, builds, /healthz) are English for the web and MCP; the one fact
+/// worth a text is a ship just before it (`ship <comp>`), and it only "may be related".
+fn regress_hint_zh(detail: &str) -> String {
+    detail
+        .split(';')
+        .find_map(|p| p.trim().strip_prefix("ship "))
+        .and_then(|r| r.split_whitespace().next())
+        .map(|comp| format!("之前刚换过{comp}，可能有关"))
+        .unwrap_or_default()
 }
 
 /// UTF-8 → UCS-2 big-endian hex, uppercase (guard `ucs2_hex`, as sms_forward.rs encodes);
@@ -400,6 +602,17 @@ impl Alerts {
         Ok(Locked { _f: f })
     }
 
+    /// A refused alert's retries (`sms-retry`: `seq \t tries \t first refusal wall`, eng review
+    /// R9): how many retries were set up and when it was first refused.
+    fn retry_of(&self, seq: u64) -> Option<(u32, i64)> {
+        let t = fs::read_to_string(self.path("sms-retry")).ok()?;
+        let f: Vec<&str> = t.trim_end().split('\t').collect();
+        if f.len() != 3 || f[0].parse::<u64>().ok()? != seq {
+            return None;
+        }
+        Some((f[1].parse().ok()?, f[2].parse().ok()?))
+    }
+
     /// The claim now in `sms-sending`, if any.
     pub fn sms_claim(&self) -> Option<Claim> {
         parse_claim(&fs::read_to_string(self.path("sms-sending")).ok()?)
@@ -484,6 +697,9 @@ impl Alerts {
         }
         self.write_whole("sms-done", &format!("{seq}\n"))?;
         let _ = fs::remove_file(self.path("sms-sending"));
+        if self.retry_of(seq).is_some() {
+            let _ = fs::remove_file(self.path("sms-retry"));
+        }
         Ok(true)
     }
 
@@ -531,15 +747,54 @@ impl Alerts {
             let number = self.number();
             let log = fs::read_to_string(self.path("sms-log")).unwrap_or_default();
             let clock_ok = io.clock_ok();
-            let v = verdict(&Facts {
-                kind: &ev.kind,
-                number: number.as_deref(),
-                abroad: self.exists("abroad"),
-                sms_abroad: self.exists("sms-abroad"),
-                clock_ok,
-                // a resend of an uncertain claim is not rate-limited: it may never have gone out
-                rate_ok: resend || rate_ok(&log, &ev.kind, wall),
+            // regress and point events (10-24): the row count, escalations, refusals retried
+            let regress = crate::is_regress(&ev.kind);
+            let point = crate::is_point(&ev.kind);
+            let nth = point.then(|| {
+                let queue = fs::read_to_string(self.path("queue")).unwrap_or_default();
+                row_n(&parse_queue(&queue), &ev)
             });
+            let retry = if regress || point {
+                self.retry_of(ev.seq)
+            } else {
+                None
+            };
+            if let Some((tries, first)) = retry
+                && clock_ok
+                && wall >= first
+                && wall < first + RETRY_AFTER_S[(tries.clamp(1, 3) - 1) as usize]
+            {
+                // refused before, its next try not due yet: everything after it waits too (order)
+                self.unclaim(ev.seq, sender, pid);
+                return if n > 0 { Round::Done(n) } else { Round::Held };
+            }
+            let v = if is_inbox_only(&ev.text) {
+                Verdict::Skip
+            } else {
+                let escalation = nth.is_some_and(|k| k > 1) || is_escalation(&ev.text);
+                regress_verdict(
+                    verdict(&Facts {
+                        kind: &ev.kind,
+                        number: number.as_deref(),
+                        abroad: self.exists("abroad"),
+                        sms_abroad: self.exists("sms-abroad"),
+                        clock_ok,
+                        // a resend of an uncertain claim is not rate-limited: it may never have
+                        // gone out; nor is a retry of a refused one (R9); an escalation counts
+                        // against the day only (R12)
+                        rate_ok: resend
+                            || retry.is_some()
+                            || if escalation {
+                                day_ok(&log, wall)
+                            } else {
+                                rate_ok(&log, &ev.kind, wall)
+                            },
+                    }),
+                    &ev.kind,
+                    nth,
+                    regress && io.regress_sms_off(),
+                )
+            };
             let result = match v {
                 Verdict::Hold => {
                     self.unclaim(ev.seq, sender, pid);
@@ -550,12 +805,40 @@ impl Alerts {
                 Verdict::Send => {
                     let number = number.unwrap_or_default();
                     let name = self.sms_name();
-                    let text = sms_text(&ev.kind, io.lang_en(), wall, ev.seq, name.as_deref());
+                    let shown = if io.wall_settled() { wall } else { 0 };
+                    let text = sms_text_for(
+                        &ev.kind,
+                        &ev.text,
+                        io.lang_en(),
+                        shown,
+                        ev.seq,
+                        name.as_deref(),
+                    );
                     let tz = io.tz_hours();
                     match io.send(&send_args(&number, &text, wall, tz)) {
                         Ok(()) => {
                             io.delete_sent_copy(&number);
                             Some("sent")
+                        }
+                        Err(SendError::Rejected(e))
+                            if (regress || point)
+                                && retry.map_or(0, |r| r.0) < RETRY_AFTER_S.len() as u32 =>
+                        {
+                            let (tries, first) = retry.map_or((1, wall), |(t, f)| (t + 1, f));
+                            io.log(&format!(
+                                "sms: alert {} refused ({e}); try {} of {} in a few minutes",
+                                ev.seq,
+                                tries + 1,
+                                RETRY_AFTER_S.len() + 1
+                            ));
+                            if let Err(e) = self.write_whole(
+                                "sms-retry",
+                                &format!("{}\t{tries}\t{first}\n", ev.seq),
+                            ) {
+                                io.log(&format!("sms: alert files: {e}"));
+                            }
+                            self.unclaim(ev.seq, sender, pid);
+                            return Round::Done(n);
                         }
                         Err(SendError::Rejected(e)) => {
                             io.log(&format!("sms: {e}"));

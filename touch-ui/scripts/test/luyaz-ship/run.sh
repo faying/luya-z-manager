@@ -155,7 +155,7 @@ EOF
 
     export U60S_ROOT=$R U60S_TMP=$T/tmp U60S_BOOT_ID=$T/boot_id U60S_DF=$T/bin/df
     export U60S_MANIFEST=$R/data/luyaz/ship/manifest.jsonl
-    unset U60S_CRASH_AT U60S_DIR U60S_LOG U60S_TEST_LOG U60S_MIN_FREE_KB
+    unset U60S_CRASH_AT U60S_DIR U60S_LOG U60S_TEST_LOG U60S_MIN_FREE_KB U60S_LOG_MAX
     export DT_INITD=$T/bin/initd DT_UPTIME=$T/uptime DT_PIDFILE=$T/trial.pid
     export DT_CURL=$T/bin/curl DT_PIDOF=$T/bin/pidof DT_PS=$T/bin/ps
     export DT_LOGREAD=$T/bin/logread DT_KILL=$T/bin/kill DT_SLEEP=$T/bin/sleep
@@ -478,6 +478,7 @@ check "$CASE: test build started without supervise, then killed" "grep -q 'luyaz
 check "$CASE: trial ran the whole window" "logged '试跑通过（60s）'"
 check "$CASE: manifest one line" '[ "$(mlines)" = 1 ]'
 check "$CASE: manifest fields" "grep -q '\"kind\":\"ship\",\"comp\":\"core\",\"txn\":\"$TXN\",\"commit\":\"7e8d223\",\"format\":1,\"mac_time\":1790000000,\"boot_id\":\"aaaa-1111\"' '$U60S_MANIFEST' && grep -q '\"path\":\"$LIVE\",\"md5\":\"$NEW\",\"prev\":\"$LIVE.prev-$TXN\"' '$U60S_MANIFEST'"
+check "$CASE: manifest says when it went live (eng review O2)" "grep -q '\"act_boot\":\"aaaa-1111\",\"act_uptime\":[0-9][0-9]*[,}]' '$U60S_MANIFEST' && grep -qx 'act_boot=aaaa-1111' '$R/data/luyaz/ship/txn' && grep -q '^act_uptime=[0-9][0-9]*\$' '$R/data/luyaz/ship/txn'"
 check "$CASE: stage dir removed" '[ ! -e "$R/data/luyaz/ship/stage/$TXN" ]'
 check "$CASE: heartbeat names the transaction" "grep -q ' $TXN done\$' '$T/tmp/heartbeat'"
 check "$CASE: hand-made neighbours untouched" '[ "$(cat "$D/luyaz-core.prev-cache-20260923")" = "keep $D/luyaz-core.prev-cache-20260923" ] && [ -f "$D/luyaz-core.orig-backup" ] && [ -f "$R/data/other.prev-esim-20260926" ]'
@@ -489,6 +490,28 @@ check "$CASE: status: no observation after a reboot" "! grep -q observe_left '$T
 sh "$SHIP" wait 10 >"$T/st"
 RC=$?
 check "$CASE: wait returns at once on a terminal phase" '[ $RC = 0 ] && grep -qx "phase=done" "$T/st"'
+teardown
+
+CASE="logs rotate at stage"
+setup
+_sl=$R/data/luyaz/ship/ship.log _tl=$R/data/luyaz/ship/test.log
+head -c 300 /dev/zero | tr '\0' x >"$_sl"; echo old >"$_sl.old"; echo small >"$_tl"
+upload
+U60S_LOG_MAX=200 stage
+check "$CASE: staged" '[ "$RC" = 0 ] && [ "$(phase)" = staged ]'
+check "$CASE: big ship.log → .old, the older copy dropped" '[ "$(wc -c <"$_sl.old")" -eq 300 ] && ! grep -q "^old" "$_sl.old" && [ "$(wc -c <"$_sl")" -lt 300 ]'
+check "$CASE: small test.log stays" '[ "$(cat "$_tl")" = small ] && [ ! -e "$_tl.old" ]'
+teardown
+
+CASE="logs stay while busy"
+setup
+head -c 300 /dev/zero | tr '\0' x >"$R/data/luyaz/ship/ship.log"
+upload
+stage
+upload 20260930-120001-core
+U60S_LOG_MAX=200 stage 20260930-120001-core
+check "$CASE: refused (a transaction is staged)" '[ "$RC" != 0 ]'
+check "$CASE: ship.log not rotated" '[ ! -e "$R/data/luyaz/ship/ship.log.old" ]'
 teardown
 
 # heartbeat: every fake sleep records the heartbeat's age and phase

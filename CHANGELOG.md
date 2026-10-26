@@ -21,9 +21,289 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+- chill: `rules_drift` no longer fires every minute when a scenario turns Wi-Fi off. The stock firmware adds `iif wlanN failed_policy` rules per interface and drops them with the interface; when it comes back their priority follows the new ifindex. A rule bound to an interface (`iif`/`oif`) now only counts as gone while that interface is up and no rule with the same text is left; any other rule that disappears is reported as before.
+
+- kit: `firmware-capabilities.matrix.json` replaces `device/compat.list`: model / region / build → each component (ssh, admin, ui, esim, chill, recover) `verified`, `code-only` or `unsupported`. `install.sh` checks each picked component on its own: `code-only` still needs `LUYAZ_ALLOW_UNVERIFIED=1`, `unsupported` is skipped with a message and the rest is installed; it stops only when nothing is left. The matrix is in the kit and in MANIFEST.txt.
+
+- kit: install progress per component in `/data/luyaz/kit/progress` (kit id = first 16 hex of MANIFEST.txt's sha256, component, step; written to a temp file and renamed). Running the same kit after an interruption skips the finished components and resumes at the first unfinished one; another kit, a finished run or `KIT_FRESH=1` starts over. `./install.sh status` shows it.
+
+- kit: `backup` writes `<backup>.sha256` (and one for the `.system.tgz`). `restore` checks it before sending anything: a mismatch always stops, a missing one stops unless `LUYAZ_RESTORE_NO_SHA256=1` (older backups); the copy is checked again on the device before verify, plan and restore.
+
+- chill: AI gate (`CHILL_AI_STRICT=1` in chill.env). AI only ever leaves through the region 🤖 AI is set to: whenever CHILL stops (crash, hang, heat, pause, idle, switched off) the AI domains stop resolving in the same dnsmasq restart that hands DNS back, and stay that way until the core checks the cellular exit is in that region. `ai_domain` is now the text list (`ai_domain.list`, same source) so dnsmasq's block file and mihomo's rule come from one list; a built-in short list backs it up. dnsmasq is restarted, not reloaded, when the block changes (reload does not re-read conf-dir).
+
 - kit: `OUI_TSV=` (a table from `scripts/lanid/make-oui.sh`) is installed to `/data/luyaz/lanid/oui.tsv` for vendor names; the public build has none.
 
 - kit: carries the lanid-parse component (LAN client identification) and installs it to `/data/luyaz/core/plugins/` as the only component; without it the core runs with identification off. `LANID_CWASM=` uses a ready-made one.
+
+## core 1.49.1 — 2026-10-26
+
+- keeps the sentinel's `regress-disk` incidents ("Storage low"); alerts: its SMS and labels.
+
+## sentinel 1.2.0 — 2026-10-26
+
+- restarts the core (`/etc/init.d/luyaz-core restart`) when it has been down 10 min (`regress-core-down` opens), then after 10, 20, 40 min and hourly while it stays down; never while a ship replaces it. procd gives up after 5 crashes and nothing else brought it back (10-26: down 50 min after an ENOSPC crash loop). The incident's close says how many restarts it took.
+- watches /data and /tmp every round: below a twentieth of the space (at least 32 MB) or of the inodes it opens `regress-disk` (SMS) with the room left and the five biggest entries two levels down; it closes at twice that. In the sentinel, not the core: a full /data is what stops the core.
+
+## scripts 1.3.3 — 2026-10-26
+
+- scripts: `luyaz-core.init` takes `LUYAZ_NETREC` from core.env (the recorder's switch, core 1.49.0).
+
+## sentinel 1.1.3 — 2026-10-26
+
+- the screen log and the worker log are also kept on flash, `/data/luyaz/screen/log` (`<boot id 8> <screen|worker> <line>`, each line synced, 64 KB then one `.old`), so the lines before an unexpected reboot can still be read after it.
+
+## scripts 1.3.2 — 2026-10-26
+
+- when `luyaz-ship.sh` cannot hand the screen back (the live UI does not come up, or the sentinel is down), it no longer leaves the panel dark until the firmware reboots (1185, u60g 2026-10-25): with no UI on screen it has the sentinel put up the vendor UI (release, then vendor), or starts a sentinel that is down so it launches a UI; a UI already on screen is left alone and the ship still fails with the original reason. The next release sends `ui` first when that vendor request is still in force.
+
+## core 1.49.0 — 2026-10-26
+
+- netrec, the network recorder (2a, first batch; docs/designs/net-performance.md「2a 记录仪细节设计」). Off unless `LUYAZ_NETREC=1` in core.env. It rides the collect round with what that round already read (vendor `get_wwandst` counters, `rmnet_data0`, LAN + Wi-Fi client lists, nwinfo): no timer, thread or ubus of its own, and an idle round does no extra reads or writes. A session starts after 3 rounds ≥ 1 Mbps with clients (a failed client read counts as clients) and stops after 60 s < 0.5 Mbps, when the clients are gone, or at 2 h. Device-local traffic does not count: `local = Δrmnet_data0 − Δchill0`, `chill0` is read only in a session or when the vendor rate alone reaches 1 Mbps. Each round in a session → a 160-byte row in `/tmp/luyaz-netrec.ring` (2 MiB, wraps, resumes after a restart); every 10 s a summary line (rate p50/max, direct/proxy/local bytes, SNR range, cell/band/CA events, CPU) plus start/end lines → `/data/luyaz/core/netrec/YYYYMMDD.jsonl`, written at 4 KiB or session end with one fsync; ≤ 1 MiB a day (past it only start/end, the session marked `trimmed`), 8 MiB in all (oldest day first). No addresses stored; not in the event log or the shareable bundle. API: `GET /v2/netrec/sessions`, `GET /v2/netrec/summary?since=&cursor=&limit=` (JSONL, `x-netrec-next`), `GET /v2/netrec/ring?session=&offset=&limit=`. Doctor: a 记录仪 row (on/off, KB written today) when it is on or has files.
+
+## sentinel 1.1.2 — 2026-10-26
+
+- the same SMS fixes (time only on a settled clock, Chinese regress texts without English details); agent-silent is not raised while the core is down (regress-core-down says it; the Wi-Fi rescue still runs).
+
+## core 1.48.3 — 2026-10-26
+
+- alert SMS fixes from the 10-26 real-device tests. The time is printed only once the clock has stepped past the wall the device booted with (`last_wall`); before that the SMS has no time (a reboot SMS said 01:58 at 09:58). A Chinese regress SMS no longer carries the English details (codes, builds, /healthz): only "a ship just before it, may be related"; the English SMS keeps them. agent-silent has its own words.
+
+## core 1.48.2 — 2026-10-26
+
+- an incident's evidence gives `recovery_s` only when a signal said it was over (`end: recovered`); a crash or reboot whose window just passed (`quiet`) no longer shows the 6-hour wait as a recovery time. Evidence already on the device is rewritten at start.
+
+## scripts 1.3.1 — 2026-10-25
+
+- `luyaz-ship.sh` waits up to 20 s again for the live UI after the sentinel takes the screen back. The rename in c622e515 dropped `UID_UP`, so the wait was 0 s: a UI that was one second late failed the touch ship and its rollback (u60g, 2026-10-25, followed by an unexpected reboot).
+
+## core 1.48.1 — 2026-10-25
+
+- speed test verdict: lag under load names the stage (「下载时」/「上传时」) and also counts a stage whose probes were too slow to reach 20 samples when at least 5 are already 100 ms over idle (first device run: upload probes took ~1.8 s each and the row read "ok"). SINR rounding never shows "-0".
+
+## lweb 1.34.1 — 2026-10-25
+
+- Speed test page English follows the glossary (§17): the layer section is "Layers", too few samples reads "Too few samples; rough figure".
+
+## touch 1.15.0 — 2026-10-25
+
+- Speed test page for speed test v2 (net-performance DR1–DR13): the big number is the multi-connection stable rate with a conclusion line under it, a layer section of five rows below the card (the proxy and weak-radio rows open the exit and placement pages), step-numbered stage text while running, a grey number for too few samples, a rough-test line when coarse, a roaming hint with tap-again, an "also via CHILL" switch (off by default, back off after each run, grey when CHILL is not running or while roaming), the data cost before and the data used after. Against an older core the page is unchanged.
+
+## lweb 1.34.0 — 2026-10-25
+
+- /tools/speedtest reads the v2 result (net-performance T10b): the state says the step (「3/5 · 多连接下载」) and the measuring method while running, and the conclusion when done (「完成 · ▲ 慢在单连接」); only these are announced, not the percent. The fourth readout is latency while downloading (jitter moved to the details); a 「分层」 list (single connection, proxy, lag under load, radio, cell and Wi-Fi) follows the readouts, the proxy row links to CHILL when slow; the details add the whole-run average, jitter, connections and 内核调参：开 / 关 (read only, as at the test). A short sample greys the download number (「▲ 样本不足，数字只供参考」); a coarse run says 「● 粗测 · 漫游中只测 5 秒」. New switch 「也测经 CHILL」 (once per start, off while roaming or with CHILL not running); the start confirm states the new cost (about 30 s / 750 MB, 40 s / 1.15 GB with CHILL, 5 s / 30 MB while roaming). With a core before 1.48.0 the page looks as before. The full layout needs core 1.48.0.
+
+## core 1.48.0 — 2026-10-25
+
+- speed test v2 (net-performance 1a, method 2): idle latency 2 s, one long single-connection download 8 s, a 6-connection download 10 s with a latency probe every 200 ms on its own kept-alive connection, and a 6-connection upload 10 s of fixed-size POSTs (only acknowledged ones count). Each stage drops its first 2 s; `download_mbps`/`upload_mbps` are now the multi-connection stable rates, beside `*_whole_mbps`, `single_mbps`, `idle_ms`/`loaded_*_ms`, `cpu_peak_pct`. Request timeouts follow the stage (no 3 s reconnects); every byte is reserved before it is read: 200/400/150 MB per stage, 750 MB in all, cut upload → single → multi when short. A stable part under 3 s (1 s coarse) is `sample_short`. Auto picks among the 3 lowest-latency nodes by a 1 s, 2-connection trial and drops nodes still at 0 bytes after 2 s; the diagnosis' capped run (`mode:"coarse"`) reuses that node on the same cell for 30 min. `verdict` (single connection / proxy / lag under load / radio, Chinese and English) when the run is full and long enough.
+- `POST /api/speedtest/start` takes `path:"chill"`: the same node is measured again through CHILL's 7894 listener right after the direct download (+400 MB); `chill_region` is only the main exit's region (「直连」 on DIRECT). CHILL not running or stopping midway is reported (`chill_not_running`/`chill_stopped`), never 0 Mbps and never retried direct. A roaming device (the signal block's `roaming`, as ship's gate reads it) runs the capped test (`roaming_capped:true`). `net_tune` and `radio` record the state at the start. Old fields keep their names and types; `phase` keeps its values (the new sub-stage is `stage`, `step`/`steps`).
+- `GET/PUT /api/net-tune` `{"on": bool}`: writes or deletes `/data/luyaz/net-tune.want` and runs `net-tune.sh apply`/`restore` (child process, 8 s cap over the script's own 5 s lock wait), replying with its output; GET answers `net-tune.sh show`.
+
+## scripts 1.3.0 — 2026-10-25
+
+- `net-tune.sh apply [iface]|restore|show` (net-performance 1b): CPU-path network tuning, on while `/data/luyaz/net-tune.want` exists — `tcp_slow_start_after_idle=0`, `tcp_rmem`/`tcp_wmem` max 16 MB, `rmem_max`/`wmem_max` 8 MB, `tcp_notsent_lowat=131072`, `netdev_max_backlog=4096`, RPS mask `e` on br-lan/chill0/tailscale0. Each item's original value is recorded the first time it is seen (`/data/luyaz/net-tune.baseline`, checked against the stock values; a different value is refused); `restore` puts back every recorded item; one `flock -n` lock, 5 s. `luyaz-core.init` runs `apply` before the core (subprocess, 5 s cap); `doctor.sh` (no arguments) prints `show`.
+
+## core 1.47.1 — 2026-10-25
+
+- APN page follows the data card on a dual-SIM unit: with data on slot 2, `get_auto_apn_list` is read with `slotId` (without it the firmware answers slot 1's list), and in automatic mode a dialled profile that is in neither of this card's lists (`get_apn_at_cid` keeps the old card's) gives way to the card's enabled candidate. The ICCID fallback for the per-card pick reads `sim2_iccid` on slot 2.
+
+## sentinel 1.1.1 — 2026-10-25
+
+- built with luyaz-alerts that keeps `rg-…-ask` inbox-only like `rg-…-close`. Requires: core ≥ 1.47.0 for the asks themselves.
+
+## lweb 1.33.0 — 2026-10-25
+
+- /alerts incident rows say 「可能相关：演练」 for a drill in the hour before (same boot); the details have 可能相关的演练; the Agent API passes `drill`, `archived`, `recovery_s`, `boot_code`.
+
+## core 1.47.0 — 2026-10-25
+
+- regress incident evidence finished (design 「變差才通知」 X5): `long/incident-<id>.json` is written again when an incident ends (end, recovery time, its alerts), names the boot's reason code, a drill and the exits (CHILL / Tailscale seconds on and fine per hour) beside memory and standby power; an incident begun before the clock was trusted gets its 6 hours once it is. `/v2/incidents/<id>` reads one the 8-day list let go back from its evidence for 30 days (`archived`, `recovery_s`, `boot_code`). Evidence written by an older core only when it opened is written once more at start.
+- drills: while the decision loop's test switch `/tmp/luyaz-test-rx-quiet` is on, a drill is recorded (`incidents.json` `drills`, the last 20); an incident within the hour after it in the same boot, or early in the next boot, carries `drill` (like `ship`).
+- a `regress-mem` / `regress-power` incident open 3 days asks once in the inbox whether its level is the new normal (`rg-<id>-ask`: builds and level, `regress accept <kind>`); never an SMS, never accepted by itself.
+- `doctor --ledger-selftest` checks the core's long-term directory, not the retired `/data/ledger`.
+
+## core 1.46.2 — 2026-10-25
+
+- the deep diagnosis reads only the `diagnose` and `speed` events of its 7 days of signal history, line by line; it used to read the week's minute records as well and drop them, about 20 MB of heap for a second (u60g 8 → 28 MB).
+- QoS keeps only the `[DATA]` lines while reading key.log's 2 MB tails, instead of both tails as text every 30 s.
+
+## scripts 1.2.1 — 2026-10-25
+
+- `luyaz-ship.sh` keeps `ship.log` and `test.log` under 256 KB each: at stage (under the lock, nothing running) one over it moves to `<log>.old`, the one before is dropped (`U60S_LOG_MAX`).
+
+## core 1.46.1 — 2026-10-25
+
+- doctor's 短信告警 row warns when regress SMS is off (`/data/luyaz/core/regress-sms-off`; inbox only, `tools/luyaz regress sms on`); a warning, the exit code stays 0.
+
+## core 1.46.0 — 2026-10-25
+
+- the heap allocator is mimalloc (still under the heap counters). On musl's own allocator the core's RssAnon went 33 → 82 MB in 8 h while the live heap stayed at 8 MB: freed memory stayed resident. Third-party list: mimalloc (MIT).
+
+## lweb 1.32.0 — 2026-10-25
+
+- /alerts: 「事故 · 7 天」 between the status and the event list — the core's incidents (open ones first, then those ended in 7 days, at most 50), each opening its details (what else was seen, start/end, a ship that may be related, the memory snapshot, its alerts). An alert of an incident drawn there leaves 「记录」 and marks its incident unread; nothing is hidden when incidents cannot be read or the core is older. The status block leads with open incidents.
+- `/agent-api/incidents`, `/agent-api/incidents/<id>`; `/agent-api/act/regress-accept` (only with `instruction: owner`).
+- Requires: core 1.45.0 (older cores: 「core 版本太旧，不支持事故」).
+
+## touch 1.14.2 — 2026-10-25
+
+- Home: the status card's speed wave also shows in dual standby (it was hidden there for lack of room); it stays at the body's foot and may overlap the speed line slightly.
+
+## touch 1.14.1 — 2026-10-25
+
+- 摆放模式: a cell is its PCI (and 4G / 5G), not band · PCI: with carrier aggregation the modem files the PCI under whichever carrier's band, so one cell read as n78·603, n5·603 and n1·603 and counted as returns.
+- 摆放模式: 「卡在两个基站之间」 counts at the current spot only (taking a place starts it again; walking between places is not switching back and forth) and headlines only while the score is under 60 (良好): at a good score the switching costs nothing worth moving for. The line names the two cells: 「在小区 603、615 之间来回切了 5 次，往一边挪。」
+- 摆放模式: the cell in use is on the chart (「近 3 分钟 · 小区 603」), the cell-change note names the new one, and a place on another cell shows its PCI instead of 「另一小区」.
+- 摆放模式: places tied on score go to the later one, the one last called best (it had said 「就放这里」 at place 3, then 「放回第 2 处」 at place 4 with 2 and 3 equal).
+
+## touch 1.14.0 — 2026-10-25
+
+- The top bar's ▲ also lights for an incident the core says is open (fresh data only); its tap box is 44×44 beside the rate's, never over it. 健康与告警 starts with 事故: open ones (≤5), those ended in 24 h (≤3), what else was seen; stale, never read and an older core are said, not hidden.
+- 网络诊断's 再查一次 moved from the title bar into the page (the ▲ would cover it).
+- `luyaz-ui --hitcheck` (rs/hitcheck.sh): every page, nothing tappable under the ▲.
+- Requires: core 1.45.0 for incidents (older cores show 「core 版本太旧，不支持事故」).
+
+## core 1.45.0 — 2026-10-24
+
+- Tell me when it gets worse (regress): incidents from what the core already reads, in `long/incidents.json` — memory (against a 7-day baseline and absolute: heap 32 MiB / RssAnon 96 MiB), cellular down 5 min (inbox only), CHILL / Tailscale failing 5 min, standby power (two qualifying hours over 600 mW or over the baseline), unexpected reboots (no planned mark, not a manual or weekly code), and crash rows merged from the alert queue. Each opening is one alert (an SMS with the details), each recovery one inbox-only alert; point incidents end "quiet" after their window.
+- `/v2/incidents`, `/v2/incidents/<id>` (alerts, evidence, memory snapshot), `/api/alerts` events carry `incident`, a `regress` block in `/v2/state` (open ≤ 5, ended in 24 h ≤ 3).
+- `<core> regress accept regress-mem|regress-power`, `regress limit mem|power …`, `regress sms on|off`; `regress.accept` on `/control` (an agent only with `instruction: owner`).
+- The scorecard reads `long/` alone when there is no `cutover` (newer devices no longer say "no ledger records"); doctor no longer prints the old ledger's summary.
+- Requires: sentinel 1.1.0 (roll back together: both carry the SMS rules).
+
+## sentinel 1.1.0 — 2026-10-24
+
+- `regress-core-down`: `/healthz` failing 10 min (not during a ship) is queued and texted by the sentinel; `regress-recorder`: `long/open.json` unchanged 10 min while the core answers. Both close with an inbox-only alert.
+- SMS rules shared with the core: a crash row texts its 1st/2nd/4th/8th, refused regress alerts are retried, `regress-sms-off` holds regress kinds back, `wifi-takeover` is no longer texted.
+- Requires: core 1.45.0.
+
+## scripts 1.2.0 — 2026-10-24
+
+- `luyaz-ship.sh` writes `act_boot` / `act_uptime` (when the new version went live) into the transaction and the manifest's ship line; the core names ships by it.
+
+## touch 1.13.5 — 2026-10-25
+
+- 摆放模式: 「卡在两个基站之间」 counts only returns to a cell left in the last 2 minutes (3GPP's ping-pong), not every change: walking through new cells no longer trips it, and readings mid-handover (PCI 65535, no band) are ignored. One walk on u60 logged 30 changes, many of them band and PCI updating a snapshot apart. Returns are marked `back` in the log.
+- 摆放模式: the score card is five columns, each a number, its name and what it means: 总分 (the big number, with its tier), SINR (dB, its points), 频宽 (MHz, what it takes off), 信号强度 (RSRP, 正常 / 弱), 基站负载 (RSRQ, 不忙 / 忙). The total = SINR's points − the width's.
+- Home: the speed wave leaves idle out (at or under its 10 KB/s floor) as a gap; a flat green line along the bottom read like a broken screen.
+
+## touch 1.13.4 — 2026-10-24
+
+- 摆放模式: the score is 3GPP's SINR-to-throughput curve (TR 36.942 Annex A.2: 0.6·log2(1 + SINR), from −10 dB, capped at 4.4 b/s/Hz ≈ 22 dB) × the primary carrier's width ratio (throughput is linear in bandwidth, TS 38.306 §4.1.2). RSRP and RSRQ are no longer multiplied in: SINR already has a weak signal's noise and the interference in it, and no published model turns them into a throughput factor; they name the reason instead (RSRP ≤ −105 weak, RSRQ ≤ −15 busy). The live SINR is smoothed (time constant ≈ 3 s), so the score glides instead of jumping when the modem steps a reading. The equation card: SINR score − width = the big number, then strength and load as words (正常 / 弱, 不忙 / 忙) with their readings.
+- Home: each carrier under the status card carries its width ("n5 15M"), and the bars are drawn against 100 MHz (or the total, when wider), so n5 15 MHz is a short bar and n78 100 MHz a full one; the width stays visible when 查原因 › takes the right side.
+
+## touch 1.13.3 — 2026-10-24
+
+- 摆放模式: full marks at SINR 20 dB instead of 25 (indoor spots topped out in the 40s and barely moved): 13 dB ≈ 60, about 6–7 points per dB; tiers 80 / 60 / 40, places within 8 points are the same, 「放哪都不行」 under 30. A second line says why: the biggest deduction with its reading (「差在干扰：SINR 9.6 dB，转个方向或靠窗」); while walking, 「比 5 秒前 +8」. Record cells name what holds a place down (「低 48 · 干扰」).
+
+## touch 1.13.2 — 2026-10-24
+
+- 摆放模式: the width is the primary carrier's own (SA the NR cell, 4G the LTE cell, NSA anchor + NR leg); secondary carriers no longer count, since the base station adds them only for a download. NSA reads quality from the LTE anchor only, so the score no longer jumps when the NR leg's SINR comes and goes. The equation card shows points taken off (「55 · 0 · −6 · 0」) that add up to the big number, which is now this second's score.
+
+## touch 1.13.1 — 2026-10-24
+
+- 摆放模式: a cell change counts only when the new band · PCI holds for two readings and has a PCI (a one-off reading no longer reports 「卡在两个基站之间」); each counted change is logged.
+
+## touch 1.13.0 — 2026-10-24
+
+- 摆放模式 (Placement) redone: a 0–100 score = the share of this link's fastest speed (SINR's ceiling × strength, load and relative-bandwidth discounts, shown as an equation), the score's last 3 minutes on the status card with recorded places pinned on it, and up to three places compared: go back to spot N, they're all the same, no spot works (try another room or SIM), or not a placement issue (busy cell; opens the speed test). Switching back and forth between cells is called out first. Places are 「第 N 处」 with their time: the device has no compass or motion sensor.
+
+## touch 1.12.6 — 2026-10-24
+
+- System: the 5-minute speed chart reads like the status bar too (numbers, unit setting; axis marks 80Mb / 800Kb in bits).
+
+## touch 1.12.5 — 2026-10-24
+
+- Home: the status card's speed reads like the status bar: same scale and unit setting (112 Kbps, not 0.1 Mbps), and upload has its own unit.
+
+## touch 1.12.4 — 2026-10-24
+
+- Home: the signal word and 干扰 · 负载 are two small lines beside the verdict (no service: how long). The 5-minute speed chart moved from Home's second screen to System (近 5 分钟), above CPU and memory; Home keeps the status card's wave.
+
+## touch 1.12.3 — 2026-10-24
+
+- Home: 信号 · 干扰 · 负载 sit beside the verdict (the space right of 顺畅 was empty); the load drops first when it is short of room, then the noise. The speed wave takes the freed line and is taller.
+
+## touch 1.12.2 — 2026-10-24
+
+- Home: the signal word leads the noise · load line (信号强 · 干扰中 · 负载正常) and the SINR ring sits centred; under the ring only while a hint takes that line. Home's scenario card and cells lose the dark theme's 1 px top highlight (it read as a stray white line).
+- status bar: the upload no longer drops out first when the ▲ is up: a tighter form (no space, no unit letter) comes before 「↓ only」, and the ▲ takes only its own width. The short form keeps one decimal under 10 M, so it reads as Home's speed (2.3M, not 2M).
+- the speed chart's upload line is solid (dashed, it vanished under the download fill) and the axis starts at ~1.6 KB/s (the upload sat on the floor).
+
+## touch 1.12.1 — 2026-10-24
+
+- Home's battery cell said 「充电中」 on battery: it now goes by the charger, as System does.
+
+## touch 1.12.0 — 2026-10-24
+
+- Home answers three questions on one screen (DESIGN.md §4): a status card tinted by the verdict (SIM line, or two in dual standby; speed with a wave, or the hint in up to 3 lines; SINR ring; carriers with their bandwidth, or what to do: 查原因 / 详情 / 换这张上网 / 去启用), a scenario card (scenario, mode, why; CHILL with one line per traffic class and its latency; Tailscale with the path to the home exit) and a bottom row (Wi-Fi · today · battery to the minute, or a notice over the first two cells). Fixed slots: nothing moves when content changes. The speed chart, landing and Tailscale details are below the fold. The home exit state and the battery estimate are now read while Home is lit.
+
+## core 1.44.2 — 2026-10-24
+
+- the journal merges identical repeated writes that change no undoable item: the first is written, repeats are counted and summed into one line (`repeat`, `since`) when something else is written or once an hour. The scenario engine's every-15-s `enableAutoSleep` refresh had filled the 512 KiB journal in about a day and a half, pushing real changes and `took_ms` samples out. That call also no longer clears the whole state cache.
+
+## scripts 1.1.0 — 2026-10-24
+
+- `config-backup.sh` verify / plan / restore refuse the archive when `CB_EXPECT_SHA256` is set and the archive's sha256 differs.
+
+## core 1.44.1 — 2026-10-24
+
+- `/api/netinfo/neighbors/scan`: reads the whole `manual_scan` section; with the option unset (SA) `uci get` of the option answers nothing, which came back as a 502 instead of `not_reported`.
+
+## core 1.44.0 — 2026-10-24
+
+- SMS forwarding: a persistent delivery queue (`/data/luyaz/core/sms-forward-queue.json`, saved with fsync on every change): one job per SMS × rule with its own state, tries and next try (30 s doubling to 15 min). A rule whose target is down no longer holds back the other rules or later SMS (the cause of "only the first one arrives": one transient failure used to stop everything behind it for up to 6 h). Pending jobs resume after a restart, a rule that got an SMS never gets it again, and an SMS is known by sender + date + text, so one renumbered by a SIM re-read is not sent twice. Given up after 24 h online or when the queue is full (alert `sms-forward-stuck`); mark-read / delete only after every rule succeeded and only if the id still holds that SMS. `GET /api/sms/forward/config` adds `queue` (pending / sent / failed / next_at).
+- `/api/netinfo/neighbors/scan` (GET or POST) reads the LTE neighbours the modem already reports (uci `zte_nwinfo.manual_scan.lteg_nbr_content`) instead of answering 410: `{ok, status: "ok" | "not_reported", cells: [{pci, earfcn, band, rsrp, rsrq}]}`, the serving and CA cells left out, values out of range `null`. No scan, no write; empty in SA.
+- Wi-Fi master switch (`wifi.set_module`) reads back `wifi_onoff_by_user` and fails when it does not show the wanted value within 15 s (the stock call can answer success without moving it; on B31 switching on takes ~6 s).
+
+## core 1.43.1 — 2026-10-24
+
+- AI gate: switching 🤖 AI to another region drops the old verdict (a stop would otherwise have trusted it); a mode switch from the CHILL panel (which does not write the mode file) is written to it once seen, so chill.sh and the core agree.
+
+## core 1.43.0 — 2026-10-24
+
+- heap counters for the slow RSS growth between restarts: a counting wrapper over the system allocator; each new 4 MB high mark writes `[mem] live … kB; thread …; last <path> …s ago` to the core log, and `hour_proc` gains `anon_core` (RssAnon), `heap_live` and `heap_peak` (kB). No new thread or timer.
+
+## core 1.42.1 — 2026-10-24
+
+- the AI gate tells "AI goes through mihomo" from dnsmasq's running config (`server=127.0.0.1`) instead of chill.state, and does not close after its lookups when CHILL took DNS over meanwhile (on u60g a start was closed again for up to a minute).
+
+## touch 1.11.1 — 2026-10-24
+
+- Home's exit row is two lines tall while the AI gate's line shows (it was hidden under 流量).
+
+## touch 1.11.0 — 2026-10-24
+
+- Home's exit row says when AI is paused (exit not in the AI group's region) or checked.
+
+## lweb 1.31.0 — 2026-10-24
+
+- Home's CHILL card says when AI is paused (exit not in the AI group's region) or checked.
+
+## core 1.42.0 — 2026-10-24
+
+- AI gate engine: watches whether AI goes through 🤖 AI (CHILL running in rule mode); otherwise (CHILL down, mode `direct` or `global`) keeps the AI domains blocked until three country lookups (Cloudflare trace, ip-api, ipinfo; at least two answering, all the region) place the exit in 🤖 AI's region, tied to this boot and the cellular route (a redial or another SIM checks again). Lookups only with somebody connected, backing off. `services.chill.ai_gate` shows it.
+
+## core 1.41.0 — 2026-10-24
+
+- USB epoch producer: a kernel uevent socket (NETLINK_KOBJECT_UEVENT); the USB epoch is minted after a `/sys/class/udc/*/state` snapshot taken once the socket is bound, and renewed on every UDC/USB/Type-C/charger uevent. A SEQNUM gap, a lost message or a read error revokes it until a new snapshot; the vendor Type-C/power-bank events still revoke and renew it. Still not authoritative.
+
+## core 1.40.0 — 2026-10-24
+
+- ubus epoch producer: the listener also follows ubusd `ubus.object.add`/`ubus.object.remove`; the ubus epoch is minted once the probe confirms the subscription and renewed on every add/remove of an object a ubus-bound capability uses. Still not authoritative.
+
+## lweb 1.30.1 — 2026-10-24
+
+- the top bar and the mobile network page no longer show "connected" when the modem claims connected without an IPv4 address (B31 keeps claiming it after a drop); they show it as unconfirmed, in neutral.
+
+## core 1.39.0 — 2026-10-24
+
+- turning direct supply on or off also sets `zwrt_deviceui.Device.direct_power_mode_switch` ("1"/"0", only when it differs), so the stock UI shows the same state; a failed sync is a warning.
+- SMS forwarding no longer stops after the first message: when the hub SMS summary has not changed it reads the inbox directly; a message dated more than 2 days ahead no longer blocks newer ones.
+- new capability item `wwaniface_trustworthy` (Unknown on B31: `get_wwaniface` keeps saying connected after a drop); the long-term link log counts "connected" without an IPv4 address as down.
+
+## core 1.38.1 — 2026-10-24
+
+- a Finding (no-internet check) could never open while a device was connected: the LAN traffic counters in the interfaces block counted as a connection change and restarted the 60 s hold on every refresh. Counters no longer count; any other change, changing back, or a failed read still does.
 
 ## lweb 1.30.0 — 2026-10-23
 

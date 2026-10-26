@@ -138,6 +138,15 @@ const SPECS: &[Spec] = &[
         "AT+CGEQOSRDP",
         &[Sim, Connection, Radio],
     ),
+    // §12.6: B31 kept `connect_status` connected through a disconnect; no evidence = Unknown,
+    // so consumers corroborate it (`luyaz_api::firmware::wwaniface_connected`).
+    Spec::new(
+        WWANIFACE_TRUSTWORTHY,
+        Facet::Read,
+        "ubus.wwaniface.v1",
+        "zwrt_data:get_wwaniface",
+        &[Connection],
+    ),
     Spec {
         verifier: Some("modem.recovery.readback.v1"),
         ..Spec::new(
@@ -183,6 +192,17 @@ fn base(input: &ResolveInput<'_>, id: &str) -> CapabilityAssessment {
         last_attempt_evidence_id: None,
         selected_dialect: None,
     }
+}
+
+/// Whether a ubus object add/remove can change a capability bound to the ubus epoch: the
+/// object of any `[Ubus]` spec target (`object:method`), or a dotted parent/child of one.
+pub(crate) fn ubus_object_relevant(path: &str) -> bool {
+    let nested = |a: &str, b: &str| a.strip_prefix(b).is_some_and(|r| r.starts_with('.'));
+    SPECS
+        .iter()
+        .filter(|s| s.contexts.contains(&Ubus))
+        .filter_map(|s| s.target.split_once(':').map(|(object, _)| object))
+        .any(|object| object == path || nested(object, path) || nested(path, object))
 }
 
 fn same_instance(a: &Scope, b: &Scope) -> bool {

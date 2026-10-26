@@ -1,5 +1,5 @@
-//! Rule matching and the actual sending: one SMS to one destination, with retries for
-//! transient failures. Errors are plain text; a 4xx is tagged `(permanent error)` and that tag
+//! Rule matching and the actual sending: one SMS to one destination, one try (the queue backs
+//! off and tries again). Errors are plain text; a 4xx is tagged `(permanent error)` and that tag
 //! is what [`is_transient_error`] reads.
 
 use std::time::Duration;
@@ -10,17 +10,14 @@ use crate::text::{
     decode_ucs2_hex, encode_ucs2_hex, format_sms_time, humanize_zte_date, is_ucs2_hex, now_ts,
 };
 use crate::{
-    fetch_sms_both_stores, item_id, DecodedSms, ForwardDestination, Host, SmsFilter, HANDED_OVER,
+    fetch_sms_both_stores, item_id, DecodedSms, ForwardDestination, Host, SmsFilter,
 };
 
-/// Attempts per destination, and the pauses between them (seconds).
-pub(crate) const MAX_RETRIES: u32 = 3;
-const BACKOFF_SECS: [u64; 3] = [5, 15, 60];
 /// Whole-request timeout for every HTTP destination.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 /// Discord rejects longer messages.
 const DISCORD_MAX: usize = 2000;
-const PERMANENT: &str = "(permanent error)";
+pub(crate) const PERMANENT: &str = "(permanent error)";
 
 // ── matching ──
 
@@ -274,38 +271,4 @@ fn delete_sent_copy(host: &dyn Host, number: &str) {
 /// Everything but a 4xx is worth trying again later.
 pub(crate) fn is_transient_error(err: &str) -> bool {
     !err.contains(PERMANENT)
-}
-
-/// [`forward_to`] up to [`MAX_RETRIES`] times with a growing pause; a permanent error or a
-/// hand-over (checked after each pause) ends it early.
-pub(crate) fn forward_with_retry(
-    host: &dyn Host,
-    to: &ForwardDestination,
-    msg: &DecodedSms,
-    http: &ureq::Agent,
-) -> Result<(), String> {
-    let kind = destination_type_name(to);
-    let mut latest = String::new();
-    for (n, pause) in (1..=MAX_RETRIES).zip(BACKOFF_SECS) {
-        let err = match forward_to(host, to, msg, http) {
-            Ok(()) => return Ok(()),
-            Err(e) => e,
-        };
-        eprintln!(
-            "[sms_forward] attempt {n}/{MAX_RETRIES} failed for SMS {} -> {kind}: {err}",
-            msg.id
-        );
-        if !is_transient_error(&err) {
-            return Err(err);
-        }
-        latest = err;
-        if n == MAX_RETRIES {
-            break;
-        }
-        host.sleep(Duration::from_secs(pause));
-        if !host.active() {
-            return Err(HANDED_OVER.into());
-        }
-    }
-    Err(format!("{latest} (failed after {MAX_RETRIES} retries)"))
 }

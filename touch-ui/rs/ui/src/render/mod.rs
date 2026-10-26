@@ -316,7 +316,7 @@ impl Source for Replay {
         self.acted();
         if i == 0 { source::ESIM_SEL_CURRENT } else { source::ESIM_SEL_ARMED }
     }
-    fn speedtest_start(&mut self) -> bool {
+    fn speedtest_start(&mut self, _chill: bool) -> bool {
         self.acted();
         true
     }
@@ -581,6 +581,184 @@ impl Run {
 
 fn arg(args: &[String], k: &str) -> Option<String> {
     args.iter().find_map(|a| a.strip_prefix(k).map(String::from))
+}
+
+/// `luyaz-ui --hitcheck` (eng review round 3 D5): Home, every tab and every subpage with the ▲
+/// shown (an open incident can keep it lit for days): nothing tappable may sit under its 44×44
+/// box. One line per page, "HIT ok <page>" or "HIT FAIL <page>: <what> at x,y w×h"; exit 1 on any.
+pub fn hitcheck(args: &[String]) -> i32 {
+    let dark = args.iter().any(|a| a == "--dark");
+    // SAFETY: LVGL is set up once, on this thread; FB outlives it
+    unsafe {
+        sys::lv_init();
+        sys::lv_tick_set_cb(Some(tick_cb));
+        let disp = sys::lv_display_create(W as i32, H as i32);
+        sys::lv_display_set_flush_cb(disp, Some(flush_cb));
+        sys::lv_display_set_buffers(
+            disp,
+            (&raw mut FB).cast(),
+            std::ptr::null_mut(),
+            (W * H * 2) as u32,
+            sys::lv_display_render_mode_t::LV_DISPLAY_RENDER_MODE_DIRECT,
+        );
+    }
+    let conf = Conf::parse(if dark { "appearance=dark\nautooff=0\n" } else { "appearance=light\nautooff=0\n" });
+    let src = Box::new(Replay {
+        feed: BTreeMap::new(),
+        step: Rc::new(RefCell::new(None)),
+        cur: Rc::new(RefCell::new(String::new())),
+        next: None,
+    });
+    ui::create(conf, logic::launch_parse(&["luyaz-ui"]), Rc::new(Model::default()), src, "luyaz-ui");
+    settle(200);
+    fn tappable_under(o: Obj, box_: &sys::lv_area_t, skip: Obj, out: &mut Vec<String>) {
+        if o.is_null() || o.hidden() {
+            return;
+        }
+        if o != skip && o.has_flag(lv::LV_OBJ_FLAG_CLICKABLE) && o.event_count() > 0 {
+            let a = o.coords();
+            let (w, h) = (a.x2 - a.x1 + 1, a.y2 - a.y1 + 1);
+            // a page-sized container (gestures, swipes) is not a control; a control counts when
+            // the box covers a fifth of it or more (a card's corner strip still taps)
+            let ix = (a.x2.min(box_.x2) - a.x1.max(box_.x1) + 1).max(0);
+            let iy = (a.y2.min(box_.y2) - a.y1.max(box_.y1) + 1).max(0);
+            let page = w >= W as i32 / 2 && h >= 200;
+            if !page && ix * iy * 5 >= w * h {
+                let mut t: Vec<u8> = Vec::new();
+                for i in 0..o.child_count() as i32 {
+                    let c = o.child(i);
+                    if !c.hidden() && checks::is_label(c) && !c.text().is_empty() {
+                        t = c.text();
+                        break;
+                    }
+                }
+                out.push(format!(
+                    "\"{}\" at {},{} {}x{}",
+                    String::from_utf8_lossy(&t[..t.len().min(40)]),
+                    a.x1,
+                    a.y1,
+                    w,
+                    h
+                ));
+            }
+        }
+        for i in 0..o.child_count() as i32 {
+            tappable_under(o.child(i), box_, skip, out);
+        }
+    }
+    let check = |page: &str| -> usize {
+        let hit = ui::with(|u| u.alert_probe());
+        settle(60);
+        let b = hit.coords();
+        let mut out = Vec::new();
+        tappable_under(Obj::screen_active(), &b, hit, &mut out);
+        tappable_under(Obj::layer_top(), &b, hit, &mut out);
+        if out.is_empty() {
+            println!("HIT ok {page} (box {},{} {}x{})", b.x1, b.y1, b.x2 - b.x1 + 1, b.y2 - b.y1 + 1);
+        }
+        for o in &out {
+            println!("HIT FAIL {page}: {o}");
+        }
+        out.len()
+    };
+    let mut bad = 0;
+    for tab in 0..TABS {
+        ui::with(|u| {
+            u.sub_close();
+            u.tab_go(tab);
+        });
+        settle(400);
+        bad += check(&format!("tab{tab}"));
+    }
+    for &s in SUBS {
+        ui::with(|u| {
+            u.sub_close();
+            u.sub_open(s);
+        });
+        settle(400);
+        bad += check(&format!("{s:?}"));
+    }
+    println!("HITCHECK {} pages, {bad} under the ▲", TABS + SUBS.len());
+    if let Some(dir) = arg(args, "--incshots=") {
+        incshots(&dir, dark);
+    }
+    i32::from(bad > 0)
+}
+
+/// `--hitcheck --incshots=DIR [--dark]`: the alerts subpage's 事故 section in each state (design
+/// review 4A/11A/14A), one PNG each: inc-<state>-<light|dark>.png.
+fn incshots(dir: &str, dark: bool) {
+    use ui_model::{regress_item_t, regress_t};
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let it = |id: &str, kind: &str, name: &str, sub: &str, from: i64, to: i64, end: &str, count: i32, obs: &str| regress_item_t {
+        id: id.into(),
+        kind: kind.into(),
+        name: name.into(),
+        sub: sub.into(),
+        from,
+        to,
+        end: end.into(),
+        count,
+        observed: obs.into(),
+    };
+    let open = vec![
+        it("mem-abs-1", "regress-mem-abs", "内存超标", "", now - 7800, 0, "", 1, ""),
+        it("egress-chill-1", "regress-egress", "出口不通", "chill", now - 1900, 0, "", 1, "症状：出口不通；原厂动作：redial"),
+    ];
+    let closed = vec![
+        it("q3", "core-crash", "数据服务崩溃", "", now - 9000, now - 5000, "quiet", 3, ""),
+        it("cell-1", "regress-cellular", "蜂窝断线", "", now - 20_000, now - 19_000, "recovered", 1, "原厂动作：lpm_cycle"),
+    ];
+    let reg = |fresh: i32, has: i32, open: Vec<regress_item_t>, total: i32, closed: Vec<regress_item_t>| regress_t {
+        fresh,
+        has,
+        at: now - 1500,
+        open_total: total,
+        open,
+        closed,
+    };
+    let many: Vec<regress_item_t> = (0..5)
+        .map(|k| it(&format!("p{k}"), "regress-egress", "出口不通", if k % 2 == 0 { "chill" } else { "tailscale" }, now - 600 * (k + 1) as i64, 0, "", 1, ""))
+        .collect();
+    let states: Vec<(&str, Option<regress_t>)> = vec![
+        ("open", Some(reg(1, 1, open.clone(), 2, closed.clone()))),
+        ("many", Some(reg(1, 1, many, 7, vec![]))),
+        ("stale", Some(reg(0, 1, open, 2, closed))),
+        ("never", Some(reg(0, 0, vec![], 0, vec![]))),
+        ("old", None),
+        ("empty", Some(reg(1, 1, vec![], 0, vec![]))),
+    ];
+    for (name, r) in states {
+        // a lit screen at this moment (the replay source reads these from the model)
+        let m = Model {
+            data_ok: 1,
+            data: ui_model::core_snapshot_t { populated: 1, regress: r, ..Default::default() },
+            bl_is_on: 1,
+            bl_panel_lit: 1,
+            now,
+            ..Default::default()
+        };
+        ui::set_model(Rc::new(m));
+        ui::with(|u| {
+            u.sub_close();
+            u.sub_open(Sub::Alerts);
+        });
+        settle(1500);
+        Obj::screen_active().invalidate();
+        Obj::layer_top().invalidate();
+        // SAFETY: the default display, created above
+        unsafe { sys::lv_refr_now(std::ptr::null_mut()) };
+        // SAFETY: rendering is done; FB is not touched until the next lv call
+        let fb = unsafe { std::slice::from_raw_parts((&raw const FB).cast::<u16>(), W * H) };
+        let path = format!("{dir}/inc-{name}-{}.png", if dark { "dark" } else { "light" });
+        if let Err(e) = std::fs::write(&path, plat::png_rgb565(W as u32, H as u32, fb)) {
+            eprintln!("incshots: {path}: {e}");
+        } else {
+            println!("SHOT {path}");
+        }
+    }
 }
 
 pub fn run(args: &[String]) -> i32 {

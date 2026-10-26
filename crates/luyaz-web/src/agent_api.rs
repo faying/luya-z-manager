@@ -73,6 +73,8 @@ pub fn routes() -> Router<Shared> {
         .route("/agent-api/capabilities", get(firmware::capabilities))
         .route("/agent-api/recovery-actions", get(firmware::recovery_actions))
         .route("/agent-api/no-service-history", get(firmware::no_service_history))
+        .route("/agent-api/incidents", get(incidents::list))
+        .route("/agent-api/incidents/{id}", get(incidents::one_id))
         .route("/agent-api/sim", get(sim))
 }
 
@@ -769,6 +771,7 @@ async fn events(State(app): State<Shared>, Query(q): Query<EventsQ>, req: Reques
 }
 
 mod firmware;
+mod incidents;
 
 #[cfg(test)]
 mod tests;

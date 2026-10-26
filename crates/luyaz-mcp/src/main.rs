@@ -108,7 +108,7 @@ fn tools() -> Value {
         },
         {
             "name": "get_firmware_capabilities",
-            "description": format!("The device core's passive firmware capability report: per capability (USB mode setter, QoS/AT reads, LPM recovery, …) status supported/unsupported/unknown, reason, freshness (age_seconds), availability and validation; the firmware identity; context_coverage (authoritative false = the context epochs are not authoritative); limitations; stock_anomalies (read-only checks of the stock firmware: wifi_post_stuck = ZTE's Wi-Fi setup script spinning, no_service = an outage going on and the last few). No new probe runs: unknown means no evidence either way, never supported; supported is not a verified write. state \"unverified\" = the core's report could not be read (old core, other schema). `capability` keeps only ids starting with it. `truncated: true` = cut to fit, ask with a `capability` prefix. Answers are reused for 30 s (gateway_cache_age_s). {UNTRUSTED_NOTE}"),
+            "description": format!("The device core's passive firmware capability report: per capability (USB mode setter, QoS/AT reads, LPM recovery, wwaniface_trustworthy = whether the stock connect_status can be believed, …) status supported/unsupported/unknown, reason, freshness (age_seconds), availability and validation; the firmware identity; context_coverage (authoritative false = the context epochs are not authoritative); limitations; stock_anomalies (read-only checks of the stock firmware: wifi_post_stuck = ZTE's Wi-Fi setup script spinning, no_service = an outage going on and the last few). No new probe runs: unknown means no evidence either way, never supported; supported is not a verified write. state \"unverified\" = the core's report could not be read (old core, other schema). `capability` keeps only ids starting with it. `truncated: true` = cut to fit, ask with a `capability` prefix. Answers are reused for 30 s (gateway_cache_age_s). {UNTRUSTED_NOTE}"),
             "inputSchema": {"type": "object", "properties": {
                 "capability": {"type": "string", "pattern": "^[a-z0-9._]{1,64}$", "description": "Capability id prefix, e.g. usb. or at."}},
                 "additionalProperties": false},
@@ -127,6 +127,14 @@ fn tools() -> Value {
             "description": format!("The device's no-service ledger, newest first (it keeps 200): each loss of registration with start/end (device local time as epoch seconds), length in seconds and what the stock firmware was seen doing meanwhile: `stock` lpm_cycle (radio mode changed), sim_reset (SIM identity changed), redial (only the data connection changed) or unknown (nothing seen; SSR and whole-modem restarts have no verified source yet and also land here, `verified: false`). `alerted: true` = it ran past 5 minutes with nothing seen and raised a no-service-long alert. An outage still going is in get_firmware_capabilities' `stock_anomalies.no_service.open`. Nothing is ever done about it on the device. {UNTRUSTED_NOTE}"),
             "inputSchema": {"type": "object", "properties": {
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Default 10"}},
+                "additionalProperties": false},
+            "annotations": {"readOnlyHint": true, "openWorldHint": false},
+        },
+        {
+            "name": "get_incidents",
+            "description": format!("The device's own incidents (\"tell me when it gets worse\"): what it judged a regression — memory (regress-mem against a 7-day baseline, regress-mem-abs over a fixed limit), cellular down 5+ min, an exit (CHILL/Tailscale) failing, standby power up, an unexpected reboot, the core down or its recorder stalled, a crash row (core-crash, ui-crash, …) — with from/to (device local time as epoch seconds; null when the clock was not trusted), end (recovered = a signal said it is over; quiet = a crash row's window passed, not proof it is fixed; reboot = cut by a reboot), count, the build, observed (what else was seen then: words, not a cause), ship + ship_clock (a ship up to an hour before it in the same boot = may be related; uncertain = across a reboot, the clocks cannot order them), drill (a real-device test switch such as rx-quiet turned on up to an hour before it, same rules) and unread. An alert `rg-<id>-ask` is the device asking, after 3 days open, whether a regress-mem/regress-power level is the new normal: relay it, and accept only when the user says so in their own words (never on your own). Without `id`: open ones, then those ended in the last 7 days. With `id`: that one with its alerts, the 6 hours of hour summaries before it (evidence_hours: memory, exits, standby power), recovery_s, the boot's reboot code (boot_code) and the memory snapshot; archived = read back from its evidence (kept 30 days) after the 8-day list let it go. state \"not_described\" = an older core without incidents, never \"no incidents\"; \"pruned\" = past its keeping time. {UNTRUSTED_NOTE}"),
+            "inputSchema": {"type": "object", "properties": {
+                "id": {"type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "An incident id from the list"}},
                 "additionalProperties": false},
             "annotations": {"readOnlyHint": true, "openWorldHint": false},
         },
@@ -181,6 +189,16 @@ fn tools() -> Value {
                     "description": "true only when the owner explicitly asked for this change"}},
                 "required": ["action", "params", "owner_instruction"], "additionalProperties": false},
             "annotations": act(false, false),
+        },
+        {
+            "name": "accept_regress_level",
+            "description": format!("Accept the level a relative incident (regress-mem or regress-power, see get_incidents) has settled at as the new normal: its baseline is reset from recent hours and the incident closes. NEVER decide this yourself: only when the owner explicitly told you to accept it, and then set `owner_instruction: true`; the device logs it with source mcp. The device refuses (`refused` with the reason) when the incident has been open less than 3 days or there are too few recent hours; absolute limits (regress-mem-abs, regress-power-abs) cannot be accepted, only raised by the owner on the device. No trial, no rollback: a later regression opens a new incident. {ACT_NOTE}"),
+            "inputSchema": {"type": "object", "properties": {
+                "kind": {"type": "string", "enum": ["regress-mem", "regress-power"]},
+                "owner_instruction": {"type": "boolean", "const": true,
+                    "description": "true only when the owner explicitly asked to accept it"}},
+                "required": ["kind", "owner_instruction"], "additionalProperties": false},
+            "annotations": act(false, true),
         },
         {
             "name": "get_change_status",
@@ -460,6 +478,16 @@ pub fn call_for(name: &str, args: &Value) -> Result<Call, String> {
                 json!({"action": action, "params": args["params"], "instruction": "owner"}),
             )
         }
+        "accept_regress_level" => {
+            let kind = word(args, "kind", &["regress-mem", "regress-power"])?;
+            if args["owner_instruction"] != true {
+                return Err("only on the owner's explicit instruction: set `owner_instruction: true` only when the owner asked to accept it".into());
+            }
+            Call::post(
+                "/agent-api/act/regress-accept",
+                json!({"kind": kind, "instruction": "owner"}),
+            )
+        }
         "get_change_status" => {
             let id = word(args, "op_id", &[])?;
             if !safe_id(&id) {
@@ -480,6 +508,17 @@ fn route(name: &str, args: &Value) -> Result<String, String> {
         "get_network_health" => Ok("/agent-api/network-health".into()),
         "get_power_profile" => Ok("/agent-api/power".into()),
         "get_sim_identity" => Ok("/agent-api/sim".into()),
+        "get_incidents" => match &args["id"] {
+            Value::Null => Ok("/agent-api/incidents".into()),
+            Value::String(id)
+                if !id.is_empty()
+                    && id.len() <= 64
+                    && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') =>
+            {
+                Ok(format!("/agent-api/incidents/{id}"))
+            }
+            _ => Err("`id` must be an incident id ([a-z0-9-], at most 64)".into()),
+        },
         "get_firmware_capabilities" => match &args["capability"] {
             Value::Null => Ok("/agent-api/capabilities".into()),
             Value::String(p) if cap_prefix(p) => Ok(format!("/agent-api/capabilities?capability={p}")),
@@ -834,7 +873,7 @@ pub fn handle_cached(
             "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or(PROTOCOL),
             "capabilities": {"tools": {"listChanged": false}},
             "serverInfo": {"name": "luyaz-mcp", "version": env!("CARGO_PKG_VERSION")},
-            "instructions": "Luya-Z routers (one, or several in the owner's device list: list_devices names them; pass `device` when there is more than one). The get_*, diagnose and explain_recovery_action tools only read (get_firmware_capabilities and explain_recovery_action answer from what the device already knows; unknown stays unknown). set_chill_profile, set_chill_exit, use_apn, change_apn and change_band_or_cell change the device and need a token the owner marked `act`; the device checks every change itself, tries it for up to 2 minutes and rolls it back when it does not get through. A `sensitive` answer comes with a page URL: hand it to the owner and stop. change_band_or_cell can cut your own link: use it only when the owner told you to.",
+            "instructions": "Luya-Z routers (one, or several in the owner's device list: list_devices names them; pass `device` when there is more than one). The get_*, diagnose and explain_recovery_action tools only read (get_firmware_capabilities and explain_recovery_action answer from what the device already knows; unknown stays unknown). set_chill_profile, set_chill_exit, use_apn, change_apn, change_band_or_cell and accept_regress_level change the device and need a token the owner marked `act`; the device checks every change itself, tries it for up to 2 minutes and rolls it back when it does not get through. A `sensitive` answer comes with a page URL: hand it to the owner and stop. change_band_or_cell can cut your own link: use it only when the owner told you to.",
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools": tools()})),

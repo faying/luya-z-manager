@@ -619,8 +619,9 @@ function netinfo(ctx: Ctx) {
     chill_running: true,
     home_operator: { mcc: "460", mnc: "01", name: "中国联通", operator_en: "China Unicom", country: "中国", country_en: "China", country_iso: "CN" },
     serving_operator: { mcc: "466", mnc: "92", name: "中华电信", operator_en: "Chunghwa Telecom", country: "中国台湾", country_en: "Taiwan", country_iso: "TW" },
-    roaming: true,
-    roaming_raw: "Roaming",
+    // scenario home-network: at home (the speed test runs in full)
+    roaming: !ctx.has("home-network"),
+    roaming_raw: ctx.has("home-network") ? "Home" : "Roaming",
     network_type: "SA",
     data_connected: true,
     selection: { mode: "auto", checked_at: now - 60 },

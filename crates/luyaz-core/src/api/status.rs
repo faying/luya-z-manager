@@ -130,18 +130,22 @@ fn scenario(c: &Compat) -> Value {
     v
 }
 
-/// `services.chill`: CHILL's state file and switch, the manual-first notice, the home exit's line.
+/// `services.chill`: CHILL's state file and switch, the manual-first notice, the home exit's line,
+/// the AI gate.
 fn chill(c: &Compat) -> Value {
     use luyaz_api::chill as ch;
     let state: Option<Value> = read(c, ch::CHILL_STATE);
     let (st, reason) = ch::state_and_reason(state.as_ref());
-    ch::public(
+    let mut v = ch::public(
         &st,
         reason.as_deref(),
         !exists(c, ch::CHILL_DISABLED),
         &manual_first_summary(c),
         home_exit_summary(c),
-    )
+    );
+    // the AI gate (engines/chill_ai_gate.rs): null when off
+    v["ai_gate"] = crate::engines::chill_ai_gate::view();
+    v
 }
 
 /// The manual-first summary: the live engine's when u60d runs it (9g), else its state file.

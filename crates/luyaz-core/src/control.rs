@@ -728,13 +728,45 @@ async fn direct_supply(params: &Value) -> Outcome {
             );
         }
     }
-    Outcome::Ok(json!({
+    let mut out = json!({
         "supported": true,
         "enabled": want,
         "mode": supply_word(want),
         "changed": changed,
         "verified": true,
-    }))
+    });
+    if let Err(why) = sync_stock_ui_switch(want).await {
+        out["warning"] = json!(format!("stock UI switch not synced: {why}"));
+    }
+    Outcome::Ok(out)
+}
+
+/// The stock UI reads direct supply from this uci option, not the charger.
+const STOCK_UI_SWITCH: &str = "zwrt_deviceui.Device.direct_power_mode_switch";
+
+/// The value to write to the stock UI's switch, or `None` when it already matches.
+/// The option holds "1" (on) / "0" (off); anything else gets overwritten.
+fn stock_ui_switch_update(current: Option<&str>, want: bool) -> Option<&'static str> {
+    let target = if want { "1" } else { "0" };
+    (current.map(str::trim) != Some(target)).then_some(target)
+}
+
+/// Keep the stock UI's switch in step with the charger. Only writes (and commits)
+/// when it differs; a failure is the caller's warning, never the action's failure.
+async fn sync_stock_ui_switch(want: bool) -> Result<(), String> {
+    let current = state::ubus(
+        "uci",
+        "get",
+        json!({"config":"zwrt_deviceui","section":"Device","option":"direct_power_mode_switch"}),
+    )
+    .await
+    .ok()
+    .and_then(|v| v.get("value").and_then(Value::as_str).map(str::to_owned));
+    let Some(value) = stock_ui_switch_update(current.as_deref(), want) else {
+        return Ok(());
+    };
+    state::uci_write("set", STOCK_UI_SWITCH, Some(value)).await?;
+    state::uci_write("commit", "zwrt_deviceui", None).await
 }
 /// 原厂屏幕（`zte_topsw_devui`）调这两个写时带的 `source_module`，照抄。
 const USB_SOURCE_MODULE: &str = "zte_topsw_devui";
@@ -966,12 +998,31 @@ async fn wifi_module(params: &Value) -> Outcome {
     } else {
         None
     };
-    call(
+    let reply = match call(
         "zwrt_wlan",
         "set",
         wifi_module_args(enabled, lbd.as_deref()),
     )
     .await
+    {
+        Outcome::Ok(v) => v,
+        other => return other,
+    };
+    // 原厂回成功不代表开关真的动了（上游 #175）：读回 `wifi_onoff_by_user`，15 秒内不是要的值就如实说没改成。
+    // B31 实测（10-24 u60g）：关当场就变、开约 6 秒；上一次开还没做完时再关，回成功但 10 秒都没变
+    let want = if enabled { "1" } else { "0" };
+    let get = json!({"config":"wireless","section":"zte_mbb","option":"wifi_onoff_by_user"});
+    if poll_until("uci", "get", get, 75, |v| {
+        v.get("value").and_then(Value::as_str) == Some(want)
+    })
+    .await
+    {
+        Outcome::Ok(reply)
+    } else {
+        Outcome::Failed(format!(
+            "Wi-Fi master switch readback did not show wifi_onoff_by_user={want}"
+        ))
+    }
 }
 
 /// AP options `wifi.apply` may set (the Wi-Fi pages, AP switch, scenario,
@@ -1406,6 +1457,16 @@ mod wifi_apply_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn stock_ui_switch_update_only_when_different() {
+        assert_eq!(stock_ui_switch_update(Some("0"), true), Some("1"));
+        assert_eq!(stock_ui_switch_update(Some("1"), false), Some("0"));
+        assert_eq!(stock_ui_switch_update(Some("1"), true), None);
+        assert_eq!(stock_ui_switch_update(Some("0\n"), false), None);
+        assert_eq!(stock_ui_switch_update(None, false), Some("0"));
+        assert_eq!(stock_ui_switch_update(Some("enable"), true), Some("1"));
+    }
     use super::*;
     #[test]
     fn doh_off_leaves_chill_dns_alone() {

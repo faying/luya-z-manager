@@ -161,6 +161,12 @@ impl<I: WorkerIo> WorkerIo for ShadowWorker<I> {
     fn alert(&mut self, kind: &str, text: &str) {
         self.would(format!("alert {kind}: {text}"));
     }
+    fn mtime(&mut self, path: &str) -> Option<i64> {
+        self.real.mtime(path)
+    }
+    fn alert_id(&mut self, id: &str, kind: &str, text: &str) {
+        self.would(format!("alert {kind} [{id}]: {text}"));
+    }
     fn restore_wifi(&mut self) -> Result<(), String> {
         // Assumed to work: whether it really did is the guard's to find out, and the next round
         // judges by what really beacons (a made-up failure would back off and alert where the
@@ -188,6 +194,16 @@ impl<I: WorkerIo> WorkerIo for ShadowWorker<I> {
     }
     fn alert_sms(&mut self) {
         self.would("send alert SMS (core unhealthy)".into());
+    }
+    fn disk_free(&mut self, path: &str) -> Option<crate::worker::Disk> {
+        self.real.disk_free(path)
+    }
+    fn largest(&mut self, path: &str) -> String {
+        self.real.largest(path)
+    }
+    fn restart_core(&mut self) -> Result<(), String> {
+        self.would("restart the core".into());
+        Ok(())
     }
     fn proc_blind(&mut self) -> bool {
         self.real.proc_blind()
@@ -335,10 +351,7 @@ fn spawn_ui() -> Result<i32, String> {
         .map(|m| m.len() > 1024 * 1024)
         .unwrap_or(false)
     {
-        let _ = OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(UI_LOG);
+        let _ = OpenOptions::new().write(true).truncate(true).open(UI_LOG);
     }
     let out = OpenOptions::new()
         .create(true)

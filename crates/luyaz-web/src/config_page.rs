@@ -177,6 +177,7 @@ pub struct View {
     pub done: Option<Done>,
 }
 
+
 #[derive(Template)]
 #[template(path = "config.html")]
 struct Page {

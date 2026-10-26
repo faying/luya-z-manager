@@ -16,7 +16,7 @@ pub const RECOV_LIVE: f64 = 1_790_458_980.0;
 pub struct Paths {
     pub ledger: PathBuf,
     /// The core's long-term layer; with a `cutover` file in it (an epoch: when the guard's ledger
-    /// stopped, T9d) the card is the guard's before it and the core's from it.
+    /// stopped, T9d) the card is the guard's before it and the core's from it, else the core's.
     pub long: PathBuf,
     pub crashcap: PathBuf,
     pub alerts_queue: PathBuf,
@@ -202,12 +202,11 @@ pub fn card(paths: &Paths, w: f64, summary: bool, body: Option<&str>) -> String 
     let cut = std::fs::read_to_string(paths.long.join("cutover"))
         .ok()
         .and_then(|c| c.trim().parse::<f64>().ok());
+    // the guard's ledger stopped (10-19) and newer devices never had one: without a cut the card
+    // is the core's long-term layer alone
     let (text, rc) = match cut {
         Some(c) => super::replay::stitch(&paths.ledger, &paths.long, c, &inp),
-        None => {
-            let shown = paths.ledger.to_string_lossy().into_owned();
-            super::replay::guard(&paths.ledger, &shown, &inp)
-        }
+        None => super::replay::core(&paths.long, &inp),
     };
     format!("{text}rc={rc}\n")
 }

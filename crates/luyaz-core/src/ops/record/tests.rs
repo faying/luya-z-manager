@@ -346,3 +346,54 @@ fn txn_line_has_only_the_iccid_tail() {
     // 没确认通的不记用时
     assert!(l["took_ms"].is_null());
 }
+
+#[tokio::test]
+async fn identical_writes_merge_into_counted_lines() {
+    let dir = temp_dir();
+    let rec = Record::open_with(Some(dir.clone()), DEFAULT_MAX_BYTES);
+    let sleep =
+        json!({"action":"vendor.call","source":"scenario","params":{"switch":false},"result":"ok"});
+    let t0 = 1_000_000;
+    rec.append_repeat_at(sleep.clone(), t0);
+    for i in 1..=10 {
+        rec.append_repeat_at(sleep.clone(), t0 + i * 15);
+    }
+    // 满一小时落一行汇总，之后重新计数
+    rec.append_repeat_at(sleep.clone(), t0 + REPEAT_EVERY);
+    rec.append_repeat_at(sleep.clone(), t0 + REPEAT_EVERY + 15);
+    // 别的行先补上没记的那一次
+    rec.append(json!({"action":"band.set_lte","source":"web","result":"confirmed"}));
+    // 参数不同不合并
+    rec.append_repeat_at(sleep.clone(), t0 + REPEAT_EVERY + 30);
+    rec.append_repeat_at(
+        json!({"action":"vendor.call","source":"scenario","params":{"switch":true},"result":"ok"}),
+        t0 + REPEAT_EVERY + 45,
+    );
+    rec.flush().await;
+    let lines: Vec<Value> = file_lines(&dir, JOURNAL)
+        .iter()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let repeats: Vec<Option<u64>> = lines
+        .iter()
+        .map(|l| l.get("repeat").and_then(Value::as_u64))
+        .collect();
+    assert_eq!(repeats, [None, Some(11), Some(1), None, None, None]);
+    assert_eq!(lines[1]["since"], json!(civil(t0 + 15)));
+    assert_eq!(lines[3]["action"], "band.set_lte");
+    assert_eq!(lines[5]["params"]["switch"], true);
+}
+
+#[tokio::test]
+async fn flush_writes_pending_repeat_count() {
+    let dir = temp_dir();
+    let rec = Record::open_with(Some(dir.clone()), DEFAULT_MAX_BYTES);
+    let line = json!({"action":"vendor.call","source":"scenario","result":"ok"});
+    for i in 0..4 {
+        rec.append_repeat_at(line.clone(), 100 + i);
+    }
+    rec.flush().await;
+    let lines = file_lines(&dir, JOURNAL);
+    assert_eq!(lines.len(), 2);
+    assert!(lines[1].contains("\"repeat\":3"));
+}

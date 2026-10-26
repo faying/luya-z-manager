@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::core_api::CoreApi;
-use super::util::{bytes_cap, find, jget, jset, mono_ms, trunc};
+use super::util::{bytes_cap, find, jget, jset, jstr, mono_ms, trunc};
 use crate::cf;
 use crate::json;
 use crate::lang::{self, tr};
-use ui_model::speedtest_server_t;
+use ui_model::{speed_layer_t, speed_verdict_t, speedtest_server_t, speedtest_v2_t};
 
 const ST_TTL_MS: i64 = 1000;
 const ST_RESP_MAX: usize = 65536;
@@ -42,6 +42,8 @@ pub struct Speedtest {
     selected: i32,
     srv_last_ms: i64,
     servers_error: String,
+    /// the v2 engine's fields; None = an old core (no method_version)
+    v2: Option<speedtest_v2_t>,
 }
 
 impl Default for Speedtest {
@@ -64,8 +66,63 @@ impl Default for Speedtest {
             selected: -1,
             srv_last_ms: 0,
             servers_error: String::new(),
+            v2: None,
         }
     }
+}
+
+/// v2's fields (net-performance.md 第 1 期实现契约), None without method_version ≥ 2. Every
+/// field is optional: what is missing reads as its empty value.
+fn parse_v2(data: &[u8]) -> Option<speedtest_v2_t> {
+    let mv = json::get_int(data, "method_version", 0);
+    if mv < 2 {
+        return None;
+    }
+    let flag = |k: &str| json::get(data, k, 8).is_some_and(|v| v == b"true");
+    let verdict = json::get(data, "verdict", 8192).filter(|v| v.first() == Some(&b'{')).map(|v| {
+        let mut out = speed_verdict_t {
+            summary_zh: jstr(&v, "summary_zh", 256),
+            summary_en: jstr(&v, "summary_en", 256),
+            ..Default::default()
+        };
+        if let Some(b) = json::get(&v, "bottlenecks", 256) {
+            let mut p = 0;
+            while let Some((e, next)) = json::arr_next(&b, p, 32) {
+                out.bottlenecks.push(String::from_utf8_lossy(&e).trim_matches('"').to_string());
+                p = next;
+            }
+        }
+        if let Some(l) = json::get(&v, "layers", 8192) {
+            for o in json::objects(&l).take(8) {
+                out.layers.push(speed_layer_t {
+                    key: jstr(o, "key", 24),
+                    state: jstr(o, "state", 24),
+                    value_zh: jstr(o, "value_zh", 256),
+                    value_en: jstr(o, "value_en", 256),
+                });
+            }
+        }
+        out
+    });
+    let loaded = get_double(data, "loaded_down_ms", -1.0);
+    Some(speedtest_v2_t {
+        method_version: mv as i32,
+        mode: jstr(data, "mode", 16),
+        roaming_capped: flag("roaming_capped"),
+        path: jstr(data, "path", 16),
+        stage: jstr(data, "stage", 24),
+        step: json::get_int(data, "step", 0) as i32,
+        steps: json::get_int(data, "steps", 0) as i32,
+        connections: json::get_int(data, "connections", 0) as i32,
+        sample_short: flag("sample_short"),
+        provider: jstr(data, "provider", 16),
+        server_name: jstr(data, "server_name", 96),
+        server_sponsor: jstr(data, "server_sponsor", 96),
+        download_bytes: json::get_int(data, "download_bytes", 0),
+        upload_bytes: json::get_int(data, "upload_bytes", 0),
+        loaded_down_ms: (loaded >= 0.0).then_some(loaded),
+        verdict,
+    })
 }
 
 /// A number that may be null (Option<f64> in the agent): def then.
@@ -111,6 +168,7 @@ impl Speedtest {
         self.dl = get_double(&data, "download_mbps", -1.0);
         self.ul = get_double(&data, "upload_mbps", -1.0);
         jset(&data, "server", 96, &mut self.server);
+        self.v2 = parse_v2(&data);
         let zh = jget(&data, "error", 256);
         let en = jget(&data, "error_en", 256);
         let en = if en == "null" { "" } else { &en };
@@ -162,6 +220,9 @@ impl Speedtest {
     pub fn error(&self) -> &str {
         &self.error
     }
+    pub fn v2(&self) -> Option<&speedtest_v2_t> {
+        self.v2.as_ref()
+    }
     pub fn start_error(&self) -> &str {
         &self.start_err
     }
@@ -175,13 +236,18 @@ impl Speedtest {
     }
 
     /// true = started (the agent runs it in the background); refused: the agent's own words
-    /// (e.g. 409 while a diagnosis runs) in start_error.
-    pub fn start(&mut self, agent: &mut CoreApi) -> bool {
-        let js = if self.selected >= 0 && (self.selected as usize) < self.srv.len() {
+    /// (e.g. 409 while a diagnosis runs) in start_error. chill: also measure through CHILL
+    /// (`path:"chill"`; only sent when asked, so an old core gets the request it knows).
+    pub fn start(&mut self, agent: &mut CoreApi, chill: bool) -> bool {
+        let mut js = if self.selected >= 0 && (self.selected as usize) < self.srv.len() {
             format!("{{\"provider\":\"{}\",\"server_id\":{}}}", if self.srv[self.selected as usize].provider == "librespeed" { "librespeed" } else { "ookla" }, self.srv[self.selected as usize].id)
         } else {
             match self.selected { -2 => "{\"provider\":\"ookla\"}", -3 => "{\"provider\":\"librespeed\"}", _ => "{\"provider\":\"auto\"}" }.to_string()
         };
+        if chill {
+            js.pop();
+            js.push_str(",\"path\":\"chill\"}");
+        }
         let (code, b) = agent.api("POST", "/api/speedtest/start", Some(&js), ST_RESP_MAX);
         if code == 200 {
             self.phase = ST_DISCOVERING;
@@ -379,13 +445,43 @@ mod provider_tests {
         for (selection, expected) in [(-1,"\"provider\":\"auto\""),(-2,"\"provider\":\"ookla\""),(-3,"\"provider\":\"librespeed\""),(0,"\"server_id\":7")] {
             speed.select_server(selection);
             let (mut api, thread) = mock(r#"{"ok":true,"data":{"status":"started"}}"#);
-            assert!(speed.start(&mut api));
+            assert!(speed.start(&mut api, false));
             assert!(speed.running());
             let request = thread.join().unwrap();
             assert!(request.starts_with("POST /v2/api/speedtest/start "));
             assert!(request.contains(expected), "{request}");
             if selection == 0 { assert!(request.contains("\"provider\":\"librespeed\"")); }
+            assert!(!request.contains("\"path\""), "{request}");
         }
+        speed.select_server(-1);
+        let (mut api, thread) = mock(r#"{"ok":true,"data":{"status":"started"}}"#);
+        assert!(speed.start(&mut api, true));
+        let request = thread.join().unwrap();
+        assert!(request.contains(r#"{"provider":"auto","path":"chill"}"#), "{request}");
+    }
+
+    #[test]
+    fn old_core_has_no_v2_and_v2_fields_parse() {
+        let (mut api, thread) = mock(r#"{"ok":true,"data":{"phase":"complete","progress":100,"download_mbps":312.4,"upload_mbps":41.2,"ping_ms":23,"server":"X"}}"#);
+        let mut speed = Speedtest::default();
+        assert!(speed.poll(&mut api, true));
+        thread.join().unwrap();
+        assert!(speed.v2().is_none());
+        assert_eq!(speed.dl(), 312.4);
+        speed.last_ms = 0; // the next read at once
+
+        let (mut api, thread) = mock(r#"{"ok":true,"data":{"phase":"complete","progress":100,"download_mbps":312.4,"method_version":2,"mode":"full","roaming_capped":false,"path":"chill","stage":null,"step":6,"steps":6,"connections":6,"loaded_down_ms":210.0,"sample_short":false,"provider":"ookla","server_name":"上海","server_sponsor":"电信","download_bytes":290000000,"upload_bytes":22000000,"radio":{"sinr_db":14.0,"band":"n78","ca":2},"verdict":{"bottlenecks":["single","queue"],"layers":[{"key":"single","state":"warn","value_zh":"88 Mbps，多连接的 1/3.5","value_en":"88 Mbps, 1/3.5 of multi"},{"key":"proxy","state":"untested","value_zh":"没测 · CHILL 没在运行","value_en":"Not tested · CHILL not running","reason":"chill_not_running"}],"summary_zh":"慢在单连接、下载时卡","summary_en":"Slow at single connection, lag under load"}}}"#);
+        assert!(speed.poll(&mut api, true));
+        thread.join().unwrap();
+        let v = speed.v2().expect("v2");
+        assert_eq!((v.method_version, v.path.as_str(), v.stage.as_str(), v.step, v.steps), (2, "chill", "", 6, 6));
+        assert_eq!((v.download_bytes, v.upload_bytes, v.loaded_down_ms), (290_000_000, 22_000_000, Some(210.0)));
+        assert_eq!((v.server_name.as_str(), v.provider.as_str()), ("上海", "ookla"));
+        let vd = v.verdict.as_ref().expect("verdict");
+        assert_eq!(vd.bottlenecks, ["single", "queue"]);
+        assert_eq!(vd.layers.len(), 2);
+        assert_eq!((vd.layers[1].key.as_str(), vd.layers[1].state.as_str(), vd.layers[1].value_zh.as_str()), ("proxy", "untested", "没测 · CHILL 没在运行"));
+        assert_eq!(vd.summary_zh, "慢在单连接、下载时卡");
     }
     #[test]
     fn provider_error_is_localized_while_core_is_reachable() {

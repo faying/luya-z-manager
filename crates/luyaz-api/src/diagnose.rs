@@ -1355,6 +1355,10 @@ pub fn key_of(v: &Value) -> CellKey {
     }
 }
 
+/// The measuring method `speed` events are written with (R1/R2): results from an older
+/// engine aren't comparable, so `past_from` ignores any other value (or none).
+pub const SPEED_METHOD: u64 = 2;
+
 /// The cell-load history from `diagnose` and `speed` events: (kind, data).
 pub fn past_from(events: &[(String, Value)]) -> (Vec<PastRun>, Vec<PastSpeed>) {
     let (mut runs, mut speeds) = (Vec::new(), Vec::new());
@@ -1376,7 +1380,7 @@ pub fn past_from(events: &[(String, Value)]) -> (Vec<PastRun>, Vec<PastSpeed>) {
                     });
                 }
             }
-            "speed" => {
+            "speed" if d.get("method").and_then(Value::as_u64) == Some(SPEED_METHOD) => {
                 if let Some(m) = d.get("mbps").and_then(Value::as_f64) {
                     speeds.push(PastSpeed { key, mbps: m });
                 }

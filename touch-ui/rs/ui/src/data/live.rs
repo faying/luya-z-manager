@@ -156,6 +156,7 @@ impl Live {
             st_start_error: Some(st.start_error().into()),
             st_servers: st.servers().to_vec(),
             st_selected_index: st.selected(),
+            st_v2: st.v2().cloned(),
 
             agent_health: self.scenario.health(),
             scenario: self.scenario.status(),
@@ -179,6 +180,8 @@ impl Live {
             diagnose_restore: self.diag.restore().cloned(),
 
             battery_est: Some(self.bat.text().into()),
+            battery_kind: self.bat.est().kind,
+            battery_min: self.bat.est().minutes,
             versions: self.vers.rows().to_vec(),
             versions_checked: Some(self.vers.checked().into()),
             landing: self.landing.get().cloned(),
@@ -248,7 +251,8 @@ impl Source for Live {
         if self.chill.delay_pending() { self.chill.delay_poll(); }
         let mut ag = self.agent.clone();
         let fast = self.chill.home().busy != 0 || a.hx_sending;
-        let (page, active) = (a.chill_page, a.chill);
+        // Home's Tailscale column says how the home exit goes (direct / relay): read there too
+        let (page, active) = (a.chill_page || (a.home && a.lit), a.chill);
         let ch = self.chill.poll(move |s| {
             s.home_poll(&mut ag, page, fast) as u32 | ((s.poll(active) as u32) << 1)
         });
@@ -270,7 +274,9 @@ impl Source for Live {
         p.servers = speed & 2 != 0;
         let mut ag = self.agent.clone();
         let sys = a.sys;
-        p.battery = self.bat.poll(move |s| s.poll(&mut ag, sys) as u32) != 0;
+        // Home's battery cell: time left / to full
+        let bat_on = sys || (a.home && a.lit);
+        p.battery = self.bat.poll(move |s| s.poll(&mut ag, bat_on) as u32) != 0;
         let mut ag = self.agent.clone();
         p.versions = self.vers.poll(move |s| s.poll(&mut ag, sys) as u32) != 0;
         let mut ag = self.agent.clone();
@@ -391,8 +397,8 @@ impl Source for Live {
     fn esim_select(&mut self, i: usize) -> i32 {
         self.esim.select(&mut self.agent, i)
     }
-    fn speedtest_start(&mut self) -> bool {
-        self.speed.start(&mut self.agent)
+    fn speedtest_start(&mut self, chill: bool) -> bool {
+        self.speed.start(&mut self.agent, chill)
     }
     fn speedtest_stop(&mut self) -> bool {
         self.speed.stop(&mut self.agent)

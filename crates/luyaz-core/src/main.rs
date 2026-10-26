@@ -26,6 +26,8 @@ mod envelope;
 #[allow(dead_code)]
 mod evlog;
 mod ledger;
+mod mem;
+mod netrec;
 mod longterm;
 mod nl;
 mod o2;
@@ -59,6 +61,10 @@ mod v2;
 mod versions;
 mod watchdog;
 mod wifi;
+
+// Phase 5 RSS: count the heap (mem.rs)
+#[global_allocator]
+static HEAP: mem::Counting = mem::Counting;
 
 // The policy host and its policies (plugin.rs)
 mod plugin;
@@ -340,6 +346,11 @@ fn main() {
     // `<core> lanid-selftest real|hostile <plugins-dir>`: the component checks on the device build
     if raw.get(1).map(String::as_str) == Some("lanid-selftest") {
         std::process::exit(lanid::selftest::main(&raw[2..]));
+    }
+    // `<core> regress accept <kind> | limit mem <heap MiB> <anon MiB> | limit power <mW> |
+    // sms on|off` (design 2026-10-24 §4, CEO OV-C4)
+    if raw.get(1).map(String::as_str) == Some("regress") {
+        std::process::exit(longterm::regress::cli::main(&raw[2..]));
     }
     // `<core> plan-reboot [why]`: mark the coming shell `reboot` as asked for (ledger S1)
     if raw.get(1).map(String::as_str) == Some("plan-reboot") {

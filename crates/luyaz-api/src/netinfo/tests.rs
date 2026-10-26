@@ -35,6 +35,26 @@ fn apn_in_use_is_the_dialled_profile() {
 }
 
 #[test]
+fn apn_in_use_follows_the_data_card() {
+    // u60g 2026-10-25: data on slot 2 (CMIOT5G), get_apn_at_cid still slot 1's cmhk.
+    let mode = json!({"apn_mode": 0});
+    let dialled = json!({"profilename":"cmhk","wanapn":"cmhk","pdpType":3,"profileId":"auto9000000","isEnable":false,"isValid":1});
+    let auto = json!({"apnListArray":[
+        {"profilename":"China Mobile","wanapn":"CMIOT5G","pdpType":3,"profileId":"auto109750","isEnable":true}]});
+    let manual = json!({"apnListArray":[{"profilename":"Default","wanapn":"","pdpType":3,"profileId":"manu1","isEnable":true}]});
+    let v = apn_view(&mode, &dialled, &auto, &manual);
+    assert_eq!(
+        (v["in_use"]["apn"].as_str(), v["auto"][0]["in_use"].as_bool(), v["auto"][0]["iot"].as_bool()),
+        (Some("CMIOT5G"), Some(true), Some(true))
+    );
+    // manual mode trusts the firmware's answer; so does auto with nothing enabled to take over
+    let v = apn_view(&json!({"apn_mode": 1}), &dialled, &auto, &manual);
+    assert_eq!(v["in_use"]["apn"], "cmhk");
+    let none = json!({"apnListArray":[{"profileId":"auto109750","wanapn":"CMIOT5G","isEnable":false}]});
+    assert_eq!(dialled_on_card(true, &dialled, &none, &manual)["wanapn"], "cmhk");
+}
+
+#[test]
 fn geo_ipip_json() {
     let g = parse_geo(
         r#"{"ret":"ok","data":{"ip":"1.2.3.4","location":["中国","北京","北京","","联通"]}}"#,

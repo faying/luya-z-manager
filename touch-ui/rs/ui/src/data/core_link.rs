@@ -10,7 +10,7 @@ use super::util::{find, jget, jstr, mono_ms32, text, trunc, wall};
 use crate::json;
 use crate::lang::tr;
 use crate::logic::{self, Ctl};
-use ui_model::{data_notice_t, core_snapshot_t, lan_client_t, sms_entry_t, sim_dual_t, sim_slot_t};
+use ui_model::{data_notice_t, core_snapshot_t, lan_client_t, regress_item_t, regress_t, sms_entry_t, sim_dual_t, sim_slot_t};
 use std::os::fd::{AsRawFd, OwnedFd};
 
 pub const INBOX_CAP: usize = 32;
@@ -82,14 +82,20 @@ const B_DHCP: usize = 11;
 const B_INTERFACES: usize = 12;
 const B_TYPEC: usize = 13;
 const B_POWERBANK: usize = 14;
-const B_COUNT: usize = 15;
+const B_REGRESS: usize = 15;
+const B_COUNT: usize = 16;
 const V2_NAMES: [&str; B_COUNT] =
-    ["signal", "battery", "charger", "live", "sms", "sms_list", "sim", "qos", "clients", "wlan", "nfc", "dhcp", "interfaces", "typec", "powerbank"];
+    ["signal", "battery", "charger", "live", "sms", "sms_list", "sim", "qos", "clients", "wlan", "nfc", "dhcp", "interfaces", "typec", "powerbank", "regress"];
 
 #[derive(Default, Clone)]
 struct Blk {
     data: Vec<u8>,
     fresh: bool,
+    /// the core has this block (an older core does not: the regress block)
+    present: bool,
+    /// data came fresh at least once, and the device wall clock when it last did
+    has: bool,
+    at: i64,
 }
 
 /// A /control request waiting for the core's answer.
@@ -449,6 +455,9 @@ pub fn decode_snapshot(buf: &[u8]) -> Option<core_snapshot_t> {
     if let Some(s) = section("powerbank") {
         d.powerbank = num(&s, "state", -1) as i32;
     }
+    if let Some(s) = section("regress") {
+        d.regress = Some(regress(&s));
+    }
     if let Some(s) = section("dhcp") {
         d.lan_ip = jget(&s, "ip", 24);
         d.dhcp_first = jget(&s, "start", 24);
@@ -476,6 +485,42 @@ pub fn decode_snapshot(buf: &[u8]) -> Option<core_snapshot_t> {
 }
 
 /// `sim.dual` (absent or null on a one-slot device).
+/// The regress pseudo-section (`{fresh, has, at, data}`, built by `v2_rebuild`).
+fn regress(s: &[u8]) -> regress_t {
+    let flag = |k: &str| (json::get(s, k, 8).as_deref() == Some(b"true")) as i32;
+    let data = json::get(s, "data", SNAPSHOT_CAP).filter(|d| d.first() == Some(&b'{'));
+    let items = |k: &str| -> Vec<regress_item_t> {
+        let mut v = Vec::new();
+        if let Some(arr) = data.as_deref().and_then(|d| json::get(d, k, 16384)) {
+            let mut p = 0;
+            while let Some((o, next)) = json::arr_next(&arr, p, 2048) {
+                let pick = |zh: &str, en: &str| crate::lang::pick(&jget(&o, zh, 96), &jget(&o, en, 96)).to_string();
+                v.push(regress_item_t {
+                    id: jstr(&o, "id", 64),
+                    kind: jstr(&o, "kind", 40),
+                    name: pick("name_zh", "name_en"),
+                    sub: jstr(&o, "sub", 24),
+                    from: json::get_int(&o, "from", 0),
+                    to: json::get_int(&o, "to", 0),
+                    end: jstr(&o, "end", 16),
+                    count: json::get_int(&o, "count", 1) as i32,
+                    observed: pick("observed_zh", "observed_en"),
+                });
+                p = next;
+            }
+        }
+        v
+    };
+    regress_t {
+        fresh: flag("fresh"),
+        has: flag("has"),
+        at: json::get_int(s, "at", 0),
+        open_total: data.as_deref().map_or(0, |d| json::get_int(d, "open_total", 0) as i32),
+        open: items("open"),
+        closed: items("closed"),
+    }
+}
+
 fn sim_dual(o: &[u8]) -> Option<sim_dual_t> {
     if o.first() != Some(&b'{') {
         return None;
@@ -711,9 +756,14 @@ impl CoreLink {
             return false;
         };
         let b = &mut self.blk[i];
+        b.present = true;
         b.fresh = stale == b"false" && data.first() == Some(&b'{');
         if b.fresh {
+            if b.data != data || !b.has {
+                b.at = wall();
+            }
             b.data = data;
+            b.has = true;
         }
         true
     }
@@ -754,6 +804,21 @@ impl CoreLink {
                 cat(&[b",\"traffic\":", &sub]);
             }
         }
+        // regress: kept when stale (the screen greys the last rows and says when they stopped)
+        let r = &self.blk[B_REGRESS];
+        if r.present {
+            cat(&[
+                b",\"regress\":{\"fresh\":",
+                if r.fresh { b"true" } else { b"false" },
+                b",\"has\":",
+                if r.has { b"true" } else { b"false" },
+                b",\"at\":",
+                r.at.to_string().as_bytes(),
+                b",\"data\":",
+                if r.has { &r.data } else { b"null" },
+                b"}",
+            ]);
+        }
         if self.blk[B_SMS].fresh || self.blk[B_SMS_LIST].fresh {
             let unread = if self.blk[B_SMS].fresh { json::get_int(&self.blk[B_SMS].data, "unread", 0) } else { 0 };
             cat(&[b",\"sms\":{\"unread\":", unread.to_string().as_bytes()]);
@@ -782,6 +847,7 @@ impl CoreLink {
         let Some(blocks) = json::get(j, "blocks", SNAPSHOT_CAP).filter(|b| b.first() == Some(&b'{')) else { return -1 };
         for (i, name) in V2_NAMES.iter().enumerate() {
             self.blk[i].fresh = false;
+            self.blk[i].present = false;
             if let Some(blk) = json::get(&blocks, name, SNAPSHOT_CAP)
                 && !self.v2_set_block(i, &blk)
             {

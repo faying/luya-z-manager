@@ -200,7 +200,7 @@ fn idfrom(id: &str) -> f64 {
     num(id.rsplit('-').next().unwrap_or(""))
 }
 
-fn klass(code: &str) -> &'static str {
+pub(crate) fn klass(code: &str) -> &'static str {
     match code {
         "1150" | "1152" => "manual",
         "1112" => "scheduled",

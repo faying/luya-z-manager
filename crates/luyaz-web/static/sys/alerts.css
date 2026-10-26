@@ -17,3 +17,16 @@
 .al-bad { color: var(--nd-badT); }
 .al-bad[hidden] { display: none; }
 #al-recent .nd-group-title { margin-top: 24px; }
+/* incidents (design 2026-10-24): a row opens its details */
+.al-inc { list-style: none; }
+.al-inc__row { width: 100%; text-align: start; background: none; border: 0; font: inherit; color: inherit; cursor: pointer; min-height: 56px; }
+.al-inc__row:focus-visible { outline: 2px solid var(--nd-focus, currentColor); outline-offset: -2px; }
+.al-chev { flex: none; transition: transform .15s; }
+.al-inc__row[aria-expanded="true"] .al-chev { transform: rotate(90deg); }
+.al-panel { padding: 4px 16px 12px; }
+.al-dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; margin: 0; font-size: 14px; }
+.al-dl dt { color: var(--nd-t3); }
+.al-dl dd { margin: 0; overflow-wrap: anywhere; }
+.al-pre { margin: 0; white-space: pre-wrap; font-size: 12px; max-height: 12em; overflow: auto; }
+.al-sub { margin-top: 12px; }
+@media (max-width: 639px) { .al-dl { grid-template-columns: 1fr; } .al-dl dt { margin-top: 6px; } }

@@ -366,16 +366,11 @@ impl Ui {
 
     // ---- DD18: 自动退回已打开 · 知道了, once, on Home ----
     pub(super) fn op_notice_paint(&mut self) {
-        let want = self.op.view.notice == "rollback_on";
-        if !want {
+        if self.op.view.notice != "rollback_on" {
             self.op.notice_acked = false;
         }
-        let want = want && !self.op.notice_acked;
-        if want == !self.home.hn_box.hidden() {
-            return;
-        }
-        kit::show(self.home.hn_box, want);
-        self.home_reflow();
+        // the notice itself is one of Home's bottom-row notices (home_scene.rs)
+        self.home_notice_paint();
     }
 
     /// Every refresh tick.

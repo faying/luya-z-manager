@@ -72,6 +72,7 @@ On `/data`, mode 700: a reboot loop must neither wipe alerts nor reset the SMS q
   - **sentinel** only while the core is unhealthy (2 bad `/healthz` rounds) and not being replaced by ship.
   The `sms-sending` claim keeps a handover between them from sending twice.
 - Rules: `sms-failed` and `ui-theme-paused` are never sent; no number → `no-number`; `abroad` without `sms-abroad` → `suppressed-abroad`; at most 1 per kind per hour and 5 per 24 h → else `suppressed-rate`. Nothing is sent and the cursor does not advance until the clock verdict (section 9) is trusted.
+- Regress and point events (section 12): a crash row texts its 1st, 2nd, 4th and 8th (`suppressed-repeat` otherwise), the 2nd/4th/8th and regress escalations outside the hourly limit but inside the daily one; a regress or point-event alert the device refuses is retried 5, 10, 15 min after the first refusal before it is `failed`; `rg-…-close` alerts are inbox only; `/data/luyaz/core/regress-sms-off` holds every regress kind back (`suppressed-off`); `wifi-takeover`, `regress-cellular`, `regress-blind` are never texted. Every other kind goes exactly as before.
 - Send: `ubus call zwrt_wms zte_libwms_send_sms` (`number`, `message_body` uppercase UCS-2 hex, `encode_type` `UNICODE`, `sms_time` `YY;MM;DD;HH;MM;SS;+TZ`, `id` `-1`). Success if `result` is 3 or missing; the sent copy is then deleted from the SMS store. Failure logs `failed` and appends `sms-failed`; no retry.
 - Text: one plain-Chinese sentence per kind, `【Luya-Z】…（MM-DD HH:MM）`, ≤ 70 characters; unknown kinds point to the web.
 
@@ -137,3 +138,26 @@ Design and full table: `docs/designs/fault-injection.md`. Each test was checked 
 | Ship / update crash at every step, trial and check failure | `touch-ui/scripts/test/luyaz-ship*/` |
 
 Not covered: real power cuts and real Wi-Fi reloads on the device (`touch-ui/scripts/chaos.sh` only kills services, each run with the owner's consent).
+
+## 12. Regress alerts: what each means and what to do
+
+Detectors in the core's long-term thread (`crates/luyaz-core/src/longterm/regress/`, files in `touch-ui/docs/LEDGER.md` §15) and two in the sentinel. An incident opens with one alert (an SMS unless noted) and closes with one inbox-only alert; `tools/luyaz status` lists the incidents opened within an hour of a ship.
+
+| Kind | Opens | Look at | Then |
+|---|---|---|---|
+| `regress-reboot` | a boot without the planned-reboot mark whose reason code is not manual (1150/1152) or the weekly reboot (1112); 2nd/4th/8th within 6 h escalate | `/v2/incidents/<id>` (code, previous build, ship, drill), `long/events.jsonl` `boot` | a ship named "may be related" → `tools/luyaz rollback <comp>` |
+| `regress-mem-abs` | heap > 32 MiB 15 min or RssAnon > 96 MiB 30 min | `long/memsnap-<id>.txt`, `hours.jsonl` `hour_proc` | a leak → rollback core; a legitimate new level → `<core> regress limit mem <heap> <anon>` |
+| `regress-mem` | 30 min after core start: heap > 1.5× or RssAnon > 2× the 7-day baseline | same | open 3 days, the inbox asks once (`rg-<id>-ask`, never an SMS); the new level is fine → `<core> regress accept regress-mem` (or the MCP tool on the owner's word) |
+| `regress-cellular` (inbox only) | no service, or registered without a data route, 5 min, with SIM ready, data on, data roaming on when roaming | `/v2/device/no-service-history` | the stock firmware recovers or not; nothing to roll back |
+| `regress-egress` | CHILL (process down or forwarding broken) or Tailscale failing 5 min while meant on | CHILL page, `tailscale status` | a CHILL/Tailscale change → roll it back |
+| `regress-power-abs` | two qualifying standby hours > 600 mW | `hours.jsonl` `hour_power` | find what keeps it awake; a legitimate level → `<core> regress limit power <mW>` |
+| `regress-power` | two qualifying hours > max(1.3× baseline, baseline + 100 mW) | same | as `regress-mem` (`accept regress-power`) |
+| `regress-recorder` (sentinel) | `long/open.json` unchanged 10 min while the core answers | `/tmp/luyaz-core.log` `[longterm]` | restart the core (`/etc/init.d/luyaz-core restart`) |
+| `regress-core-down` (sentinel) | `/healthz` failing 10 min, not during a ship | `/tmp/luyaz-core.log`, `logread` | procd should restart it; if not, rollback core |
+| `regress-blind` (inbox only) | a kind could not be judged for 3 days (power: unplugged 6 h in a week and no qualifying hour) | — | nothing; it is a notice that silence there means nothing |
+
+- `<core> regress sms off` (or `tools/luyaz regress sms off`) keeps detecting and filling the inbox, without SMS; `on` reverses it. Both senders read the flag. While it is off, doctor's 短信告警 row is a warning and `tools/luyaz status` says so.
+- **Minimum compatible versions, roll back in pairs:** the flag, the 1/2/4/8 rule and the regress texts live in luyaz-alerts, built into both core ≥ 1.45.0 and sentinel ≥ 1.1.0. Rolling one of them back to an older build makes that sender ignore the flag and text regress kinds with the generic sentence: roll core and sentinel back together.
+- **Drills:** while the decision loop's test switch `/tmp/luyaz-test-rx-quiet` is on, the core records a drill; an incident starting within the hour after it (same boot), or early in the next boot, names it 「可能相关：演练」. A reboot after a drill is usually the stock cut-off protection (1155), not a regression.
+- **Evidence:** `long/incident-<id>.json` is written when an incident opens and again when it ends (end, recovery time, its alerts); `/v2/incidents/<id>` reads it back for 30 days, after the 8-day list let it go (`archived`).
+- The core's `/v2/incidents` and the touch screen's `regress` block are read-only; nothing here changes the device.

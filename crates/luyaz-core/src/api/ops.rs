@@ -19,6 +19,7 @@ use luyaz_api::netinfo as ni;
 use luyaz_policy::scenario as sc;
 
 use super::control::{Session, Writer};
+use crate::project::snapshot::{apn_list_args, card_field, data_on_slot2};
 use super::{Compat, reply};
 
 /// u60d's guard marker (the agent's is `/data/netinfo.guard`).
@@ -691,12 +692,18 @@ pub(super) async fn current_iccid(c: &Compat) -> String {
         .filter(|v| !v.stale)
     {
         Some(b) => b.data["iccid"].as_str().unwrap_or("").to_string(),
-        None => c.ubus("zwrt_zte_mdm.api", "get_sim_info", json!({})).await["sim_iccid"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
+        None => {
+            let sim = c.ubus("zwrt_zte_mdm.api", "get_sim_info", json!({})).await;
+            card_field(&sim, data_on_slot2(&sim), "sim_iccid")
+        }
     };
     raw.trim().trim_end_matches(['F', 'f']).to_string()
+}
+
+/// `get_auto_apn_list`'s args for the card data is on (its list is per slot).
+pub(super) async fn auto_apn_args(c: &Compat) -> Value {
+    let sim = c.ubus("zwrt_zte_mdm.api", "get_sim_info", json!({})).await;
+    apn_list_args(data_on_slot2(&sim))
 }
 
 /// The ICCID for a candidate pick, a few tries (it reads empty for a moment after a re-read).
@@ -752,7 +759,8 @@ pub async fn apn_use(State(c): State<Compat>, req: axum::extract::Request) -> Re
     let list_has = |m: &'static str| {
         let (c, id) = (c.clone(), id.clone());
         async move {
-            c.ubus("zwrt_apn_object", m, json!({})).await["apnListArray"]
+            let args = if m == "get_auto_apn_list" { auto_apn_args(&c).await } else { json!({}) };
+            c.ubus("zwrt_apn_object", m, args).await["apnListArray"]
                 .as_array()
                 .is_some_and(|a| a.iter().any(|p| p["profileId"] == id.as_str()))
         }
@@ -975,7 +983,7 @@ async fn manual_for_candidate(
     auto_id: &str,
 ) -> Result<(String, String), String> {
     let auto = c
-        .ubus_res("zwrt_apn_object", "get_auto_apn_list", json!({}))
+        .ubus_res("zwrt_apn_object", "get_auto_apn_list", auto_apn_args(c).await)
         .await?;
     let cand = auto["apnListArray"]
         .as_array()

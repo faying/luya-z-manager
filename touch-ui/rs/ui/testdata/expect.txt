@@ -541,16 +541,14 @@ diagnose-result	diagnose-roam-armed	走漫游流量，再按一次
 diagnose-result	diagnose-speed	测试中…
 diagnose-result	diagnose-speed	测速中…
 diagnose-result	diagnose-again	正在检查…
-placement	placement	5G SINR · 越大越好
-placement	placement	14.5
-placement	placement	● 信号良好 · RSRP -92
-placement	placement	这次最好
-placement	placement	18.0 · 
-placement	placement	对比
-placement	placement	▲ 比最好低 3.5 dB
-placement	placement	n78 · PCI 603
+placement	placement	近 3 分钟
+placement	placement	总分
+placement	placement	记下这里
 placement	placement	重新开始
-placement	placement	换了小区会重新计；这页开着不息屏
+placement	placement	这次最好
+placement	placement	对比
+placement	placement	在用
+placement	placement	换了小区会标出来；这页开着不息屏
 diagnose-running	diagnose	正在检查… 3/6
 diagnose-result	diagnose	代理
 diagnose-result	diagnose	JP 03 180 ms · 直连 140 ms

@@ -299,6 +299,14 @@ pub fn evidence_status(text: &str, now: Option<&BootTime>, raw_wall: i64) -> Evi
     ClockEvidence::decode(text).map_or(EvidenceStatus::Unknown, |e| e.status(now, raw_wall))
 }
 
+/// Usable and stepped past the wall the device booted with: `last_wall` alone is only "not
+/// earlier than before" and on this firmware can be hours off until SNTP steps it.
+pub fn evidence_settled(text: &str, now: Option<&BootTime>, raw_wall: i64) -> bool {
+    ClockEvidence::decode(text).is_some_and(|e| {
+        e.source != ClockSource::LastWall && e.status(now, raw_wall).wall_usable()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

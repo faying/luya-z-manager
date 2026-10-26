@@ -23,6 +23,9 @@ fn main() {
         println!("{}", version_line("luyaz-ui"));
         return;
     }
+    if args.iter().any(|a| a == "--hitcheck") {
+        std::process::exit(luyaz_ui::render::hitcheck(&args));
+    }
     if args.iter().any(|a| a == "--render") {
         std::process::exit(luyaz_ui::render::run(&args));
     }

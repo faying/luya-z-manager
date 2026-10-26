@@ -1,0 +1,11 @@
+# 装机包里不经 cargo、也不经 Alpine 的第三方部分。onboard/third-party.py 原样抄进 THIRD-PARTY.md。
+# 许可证一律照上游原文核对（版本对应的 tag 或包里的元数据），不凭记忆写；换版本时重新核对。
+# 字段用 | 分隔：组件|版本|许可证|来源|进包的位置|核对依据
+dropbear|2022.82-6 (OpenWrt 23.05.4)|MIT|https://matt.ucc.asn.au/dropbear/dropbear.html|payload/dropbear|ipk control: License: MIT
+mihomo|v1.19.31|GPL-3.0|https://github.com/MetaCubeX/mihomo|payload/chill/bin/mihomo|LICENSE at tag v1.19.31
+zashboard|v3.27.0|MIT|https://github.com/Zephyruso/zashboard|payload/chill/ui.tgz|LICENSE at tag v3.27.0
+meta-rules-dat|branch meta (downloaded at build time)|GPL-3.0|https://github.com/MetaCubeX/meta-rules-dat|payload/chill/ruleset/|GitHub license metadata
+LVGL|vendored in touch-ui/third_party/lvgl|MIT|https://github.com/lvgl/lvgl|linked into payload/devui/luyaz-ui|touch-ui/third_party/lvgl/LICENCE.txt
+Nunito|600/700/800 (google/fonts, pinned revision)|OFL-1.1|https://github.com/google/fonts/tree/main/ofl/nunito|payload/devui/fonts/Nunito-*.ttf|payload/devui/fonts/OFL-Nunito.txt
+Resource Han Rounded (subset)|0.990|OFL-1.1|https://github.com/CyanoHao/Resource-Han-Rounded|payload/devui/fonts/u60-cjk-fallback.ttf|payload/devui/fonts/OFL-ResourceHanRounded.txt
+Operator logos|-|trademarks of their owners, not licensed|-|payload/operator-logos/, payload/devui/operator-logos/|not cleared for redistribution

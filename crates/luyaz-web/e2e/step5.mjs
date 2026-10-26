@@ -45,7 +45,7 @@ const PAGES = {
     path: "/trends",
     ready: (p) => p.waitForSelector("#tr-cpu-line polyline", { state: "attached", timeout: 20000 }),
     async own(p) {
-      ok(await p.locator(".tr-card").count() === 4, "4 chart cards");
+      ok(await p.locator(".tr-card").count() === 5, "5 chart cards");
       ok(await p.locator("#tr-speed-line polyline").count() === 2, "speed: down and up lines");
       const a = await p.getAttribute("#tr-cpu-line polyline", "points");
       await p.waitForTimeout(4000);
@@ -126,17 +126,34 @@ const PAGES = {
   },
   speedtest: {
     path: "/tools/speedtest",
-    ready: (p) => p.waitForSelector("#st-server-select option:nth-child(3)", { state: "attached", timeout: 15000 }),
+    ready: (p) => p.waitForSelector("#st-server-select option[value=\"ookla:27981\"]", { state: "attached", timeout: 15000 }),
     async own(p) {
       const state = async () => (await p.textContent("#st-status .nd-status__state")).trim();
+      const live = async () => (await p.textContent("#st-status [aria-live]")).trim();
+      const ready = () => p.waitForSelector("#st-server-select option[value=\"ookla:27981\"]", { state: "attached", timeout: 15000 });
+      const done = (re, ms) => p.waitForFunction((src) => new RegExp(src).test(document.querySelector("#st-status .nd-status__state")?.textContent ?? ""), re.source, { timeout: ms }).catch(() => {});
       ok(/还没有结果|完成|已取消/.test(await state()), `first state: ${await state()}`);
+      // roaming (the mock's default): the core only runs coarse; the cost says so, CHILL can't be added
       await p.click("#st-status .nd-btn--primary");
-      ok(await p.isVisible("#st-start-confirm") && /移动数据/.test(await p.textContent("#st-start-confirm")), "Start opens the inline confirm with the data cost");
+      ok(/漫游中：只粗测 5 秒、最多 30 MB/.test(await p.textContent("#st-start-confirm")), `roaming cost: ${(await p.textContent("#st-start-confirm")).trim()}`);
+      ok(await p.isDisabled("#st-chill [role=switch]") && /漫游中只粗测/.test(await p.textContent("#st-chill .nd-row__text")), "CHILL switch off while roaming");
+      await p.click("#st-start-confirm .nd-btn--confirm");
+      await done(/完成/, 12000);
+      ok(/粗测 · 漫游中只测 5 秒/.test(await live()), `rough result: ${await live()}`);
+      ok(!(await p.isVisible("#st-layers section")), "rough result: no layers");
+      // at home: the full v2 run
+      await scenario("home-network");
+      await p.reload();
+      await ready();
+      await p.click("#st-status .nd-btn--primary");
+      ok(await p.isVisible("#st-start-confirm") && /移动数据：约 30 秒 · 最多 750 MB/.test(await p.textContent("#st-start-confirm")), "Start opens the inline confirm with the data cost");
       ok(await p.getAttribute("#st-status .nd-btn--primary", "aria-expanded") === "true", "trigger aria-expanded");
-      await p.selectOption("#st-server-select", "27981");
+      await p.selectOption("#st-server-select", "ookla:27981");
       await p.click("#st-start-confirm .nd-btn--confirm");
       await p.waitForSelector("#st-status [role=progressbar]", { timeout: 5000 }).catch(() => {});
       ok(/· \d+%/.test(await state()), `running: ${await state()}`);
+      await p.waitForFunction(() => /\d\/5 · /.test(document.querySelector("#st-status [aria-live]")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
+      ok(/^\S*\d\/5 · \S+$/.test(await live()) && !/%/.test(await live()), `step announced, percent not: ${await live()}`);
       ok(await p.isDisabled("#st-server-select"), "server choice disabled while running");
       ok(/设备已接受/.test(await p.textContent("#st-op")), "start accepted");
       await p.waitForFunction(() => /实时/.test(document.querySelector("#st-wall .nd-readout--hero")?.textContent ?? ""), null, { timeout: 8000 }).catch(() => {});
@@ -150,12 +167,32 @@ const PAGES = {
       ok(/已生效/.test(await p.textContent("#st-op")), `stop read back: ${(await p.textContent("#st-op")).trim()}`);
       await p.waitForTimeout(1500);
       ok(/已取消/.test(await state()) && !(await p.isDisabled("#st-server-select")), `after stop: ${await state()}, server choice enabled`);
+      // 「也测经 CHILL」 for one run
+      await p.click("#st-chill [role=switch]");
+      ok(await p.getAttribute("#st-chill [role=switch]", "aria-checked") === "true" && /1\.15 GB/.test(await p.textContent("#st-cost")), "CHILL on: the cost grows");
       await p.click("#st-status .nd-btn--primary");
       await p.click("#st-start-confirm .nd-btn--confirm");
+      await p.waitForFunction(() => /设备已接受/.test(document.querySelector("#st-op")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
+      ok(await p.getAttribute("#st-chill [role=switch]", "aria-checked") === "false", "CHILL back to off after the start");
       await p.waitForFunction(() => /^\s*●?完成/.test(document.querySelector("#st-status .nd-status__state")?.textContent ?? ""), null, { timeout: 25000 }).catch(() => {});
       ok(/完成/.test(await state()), `second run completes: ${await state()}`);
+      ok(/完成 · ▲慢在单连接、下载时卡/.test((await live()).replace(/\s+/g, " ")), `conclusion announced: ${await live()}`);
       ok(/所用服务器/.test(await p.textContent("#st-details")) && /MB/.test(await p.textContent("#st-details")), "details: server used, data used");
-      ok(/\d/.test(await p.textContent("#ro-ul")) && /\d/.test(await p.textContent("#ro-ping")), "upload and ping filled");
+      ok(/全程均值/.test(await p.textContent("#st-details")) && /内核调参\s*关/.test(await p.textContent("#st-details")) && /连接数\s*6/.test(await p.textContent("#st-details")), "details: whole-run average, connections, kernel tuning");
+      ok(/\d/.test(await p.textContent("#ro-ul")) && /\d/.test(await p.textContent("#ro-ping")) && /\d/.test(await p.textContent("#ro-loaded")), "upload, ping and ping while downloading filled");
+      ok(await p.$("#ro-jitter") === null, "jitter moved to the details");
+      const rows = await p.$$eval("#st-layers li", (l) => l.map((e) => e.textContent.trim()));
+      ok(rows.length === 5 && /^单连接/.test(rows[0]) && /经 CHILL/.test(rows[1]) && /^基站、Wi-Fi/.test(rows[4]), `layers: ${rows.join(" | ")}`);
+      ok(/注意/.test(rows[0]) && /没测/.test(rows[4]), "layer states have text equivalents");
+      // an old core (before 1.48.0): the four numbers as before, no conclusion, no layers, no CHILL switch
+      await scenario("home-network,speed-v1");
+      await p.reload();
+      await ready();
+      ok(/512 MB/.test(await p.textContent("#st-cost")) && !(await p.$("#st-chill [role=switch]")), "old core: old cost line, no CHILL switch");
+      await p.click("#st-status .nd-btn--primary");
+      await p.click("#st-start-confirm .nd-btn--confirm");
+      await done(/完成/, 25000);
+      ok(/^●?完成$/.test(await live()) && !(await p.isVisible("#st-layers section")) && await p.$("#ro-jitter") !== null, `old core result: ${await live()}`);
       // a diagnosis holds the device: the agent's 409 busy sentence is shown, not swallowed
       await scenario("diag-slow");
       await fetch(`${WEB}/tools/diagnose/start`, { method: "POST", headers: { cookie: `lw_sid=${sid}`, origin: new URL(WEB).origin } });

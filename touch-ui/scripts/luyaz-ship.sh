@@ -117,6 +117,7 @@ DF=${U60S_DF:-df}
 MIN_FREE_KB=${U60S_MIN_FREE_KB:-204800}   # 200 MB (R11)
 HB_STALE=30                               # recover-live: heartbeat older = dead
 KEEP_PREV=3                               # ship-made .prev per file (R11)
+LOG_MAX=${U60S_LOG_MAX:-262144}           # ship.log / test.log over this → .old at stage (regress §9)
 OBSERVE=600                               # observation after done (R7; 10 min since 10-14, user)
 CRASH_AT=${U60S_CRASH_AT:-}               # tests: kill -9 ourselves here
 TO_INITD=${U60S_TO_INITD:-25}             # s: one init.d stop/start (T4)
@@ -175,14 +176,16 @@ BLANK_MAX=20                              # s: the screen without a UI (touch tr
 SENT_BIN=$ROOT/data/luyaz/luyaz-sentinel
 SENT_INITD=${U60S_SENT_INITD:-$ROOT/etc/init.d/luyaz-sentinel}
 SENT_HB=${U60S_SENT_HB:-/tmp/luyaz-sentinel.hb}
+SENT_WANT=${U60S_SENT_WANT:-/tmp/luyaz/screen.want} # "vendor" after a vendor request (screen_rescue)
 SENT_HB_STALE=150                         # s: the core's "sentinel silent" line (§4)
 UID_CTL=${U60S_UID_CTL:-/tmp/luyaz-screen.ctl} # the sentinel's FIFO
 HOLD_MAX=3600                             # s: the sentinel's longest hold (luyaz-sentinel HOLD_MAX_S)
+UID_UP=${DT_UID_UP:-10}                   # s: sent_release waits 2× this for the live UI (lost in c622e515: the wait was 0)
 RC_LOCAL=${U60S_RC_LOCAL:-$ROOT/etc/rc.local}
 VERDICT=$SHIP_DIR/verdict                 # the trial judge's line (core, §7)
 # The scripts component: the device scripts in /data/luyaz/scripts. web-auth.sh writes
 # /data/luyaz/web.env, which luyaz-web logs in with.
-SCRIPTS_FILES="alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION"
+SCRIPTS_FILES="alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh net-tune.sh VERSION"
 # luyaz-web's init rides here too, as the sentinel's does (needs luyaz-recover.sh
 # formats 4); it refuses to start while /data/luyaz/luyaz-web is not there.
 # luyaz-core's (10e, formats 5) too.
@@ -873,6 +876,10 @@ sent_release() {
     _wu=${1:-$(md5_of "$(ui_bin)")}
     screen_clear
     log "让哨兵收回屏幕（release；要界面 ${_wu%"${_wu#????????}"}）"
+    # a vendor request (screen_rescue) sticks until "ui"; this release wants our UI back
+    if grep -q vendor "$SENT_WANT" 2>/dev/null; then
+        ctl_send ui || return 1
+    fi
     ctl_send release || return 1
     _i=0
     while :; do
@@ -1368,11 +1375,34 @@ screen_hold() {
 # REASON at once.
 screen_release() {
     if [ -n "$(sent_pids)" ]; then
-        sent_release "$1"
+        sent_release "$1" && return 0
     else
         REASON="哨兵没在跑，屏幕交不回去（先 /etc/init.d/luyaz-sentinel start）"
-        return 1
     fi
+    screen_rescue
+    return 1
+}
+
+# screen_rescue: a release that failed must not leave the panel dark: minutes without
+# a UI and the firmware reboots (1185; u60g 10-25 after a failed touch ship). Any UI
+# on screen is enough, so one already there is left alone; otherwise the sentinel puts
+# the vendor UI up, or (down) its init starts it and it launches a UI itself.
+# Best effort: REASON keeps the failure, the caller still fails.
+screen_rescue() {
+    _rs=$(sent_hb 3)
+    if [ -n "$(sent_pids)" ]; then
+        [ "$_rs" = vendor ] && return 0
+        [ "$_rs" = ours ] && [ -n "$(ui_pid)" ] && return 0
+        # a held sentinel only notes vendor; release lifts the hold so it acts on it
+        log "屏幕上没有界面（心跳说 ${_rs:-无}）：让哨兵换上原厂界面"
+        _rr=$REASON
+        { ctl_send release && ctl_send vendor; } || log "原厂界面没叫上：$REASON"
+        REASON=$_rr
+    elif [ -z "$(ui_pid)" ] && [ -f "$SENT_INITD" ]; then
+        log "哨兵没在跑、屏幕上也没有界面：起哨兵（它会拉起界面）"
+        step "$TO_INITD" "$SENT_INITD" start >/dev/null 2>&1
+    fi
+    return 0
 }
 
 # watch_screen <window s> <want UI md5>: every INTERVAL s: the sentinel and the
@@ -1543,7 +1573,7 @@ NL='
 txn_clear() {
     X_V= X_TXN= X_COMP= X_PHASE= X_REASON= X_BOOT= X_COMMIT= X_MACTIME=
     X_FORMAT= X_TRIAL= X_CHECK= X_EXEC= X_TSTAGE= X_TPHASE= X_NOTE=
-    X_FILES= X_DIRS= X_STATES= X_STATELIST=
+    X_FILES= X_DIRS= X_STATES= X_STATELIST= X_ACTBOOT= X_ACTUP=
 }
 
 txn_load() {
@@ -1568,6 +1598,8 @@ txn_load() {
             exec_pid=*) X_EXEC=${_l#exec_pid=} ;;
             t_stage=*) X_TSTAGE=${_l#t_stage=} ;;
             t_phase=*) X_TPHASE=${_l#t_phase=} ;;
+            act_boot=*) X_ACTBOOT=${_l#act_boot=} ;;
+            act_uptime=*) X_ACTUP=${_l#act_uptime=} ;;
             file=*) X_FILES="$X_FILES${_l#file=}$NL" ;;
             dir=*) X_DIRS="$X_DIRS${_l#dir=}$NL" ;;
             state=*) X_STATES="$X_STATES${_l#state=}$NL" ;;
@@ -1632,6 +1664,7 @@ txn_save() {
         echo "exec_pid=$X_EXEC"
         echo "t_stage=$X_TSTAGE"
         echo "t_phase=$X_TPHASE"
+        [ -n "$X_ACTUP" ] && echo "act_boot=$X_ACTBOOT" && echo "act_uptime=$X_ACTUP"
         printf '%s' "$X_FILES" | sed 's/^/file=/'
         printf '%s' "$X_DIRS" | sed 's/^/dir=/'
         printf '%s' "$X_STATELIST" | sed 's/^/statelist=/'
@@ -1973,8 +2006,11 @@ manifest_line() {
     manifest_records
     _nt=
     [ -n "$X_NOTE" ] && _nt=",\"note\":\"$X_NOTE\""
-    printf '{"v":1,"kind":"ship","comp":"%s","txn":"%s","commit":"%s","format":%s,"mac_time":%s,"boot_id":"%s","uptime":%s,"files":[%s],"state":[%s]%s}\n' \
-        "$X_COMP" "$X_TXN" "$X_COMMIT" "$(num "$X_FORMAT")" "$(num "$X_MACTIME")" "$X_BOOT" "$(num "$(now)")" "$_files" "$_st" "$_nt"
+    # when the new version went live (the core's regress layer names ships by it, eng review O2)
+    _act=
+    [ -n "$X_ACTUP" ] && _act=",\"act_boot\":\"$X_ACTBOOT\",\"act_uptime\":$(num "$X_ACTUP")"
+    printf '{"v":1,"kind":"ship","comp":"%s","txn":"%s","commit":"%s","format":%s,"mac_time":%s,"boot_id":"%s","uptime":%s%s,"files":[%s],"state":[%s]%s}\n' \
+        "$X_COMP" "$X_TXN" "$X_COMMIT" "$(num "$X_FORMAT")" "$(num "$X_MACTIME")" "$X_BOOT" "$(num "$(now)")" "$_act" "$_files" "$_st" "$_nt"
 }
 
 # manifest_records: a kind=record line for every file of this transaction
@@ -2218,6 +2254,17 @@ tgz_problem() {
     tar -tvzf "$1" 2>/dev/null | grep -qv '^[-d]' && echo "里面有链接或特殊文件"
 }
 
+# logs_rotate: ship.log and test.log grow by every ship (2026-10-24 regress design §9: what goes
+# to flash has a cap). At stage, under the lock and with no transaction or trial running, one over
+# LOG_MAX becomes <log>.old (the one before is dropped): at most about twice LOG_MAX each.
+logs_rotate() {
+    for _lf in "$LOG" "$TEST_LOG"; do
+        [ -f "$_lf" ] || continue
+        [ "$(num "$(wc -c <"$_lf" 2>/dev/null)")" -gt "$LOG_MAX" ] && mv -f "$_lf" "$_lf.old"
+    done
+    return 0
+}
+
 # stage_undo <why>: placing the side files failed half-way: remove them all
 stage_undo() {
     for _q in $C_FILES; do rm -f "$_q.test"; done
@@ -2250,6 +2297,7 @@ ship_stage() {
         P="$P${NL}core-trial 的守护在跑（pid $_tp）"
     fi
     [ -n "$P" ] && ship_refuse 暂存 "$P"
+    logs_rotate
 
     _sd=$STAGE_DIR/$_txn
     [ -f "$_sd/meta" ] || ship_refuse 暂存 "$_sd/meta 不存在"
@@ -2553,6 +2601,10 @@ ship_run() {
     fi
     promote_files || do_rollback "转正失败：$REASON"
     promote_dirs || do_rollback "转正失败：$REASON"
+    # the moment the new version is live, on this boot's clock (eng review O2)
+    X_ACTBOOT=$(boot_id)
+    X_ACTUP=$(num "$(now)")
+    txn_save
     hook start || do_rollback "新版起不来：$REASON"
     set_phase check || do_rollback "事务日志写不上"
     crashpoint check:begin

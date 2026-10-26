@@ -191,6 +191,9 @@ impl Chill {
                         l.pick("Start it on the CHILL page.", "到 CHILL 页启动。")
                     ));
                 }
+                if let Some(line) = notice.as_ref().and_then(|n| ai_gate_line(l, &n["ai_gate"])) {
+                    body.push_str(&line);
+                }
                 if running {
                     if let Some(n) = &notice
                         && let Some(line) = pick_notice(n, l)
@@ -224,12 +227,20 @@ impl Chill {
                         agent::esc(c["region"]["active"].as_str().unwrap_or("—"))
                     ));
                     if c["exit"] == "direct_all" {
+                        let gated = notice.as_ref().is_some_and(|n| n["ai_gate"].is_object());
                         body.push_str(&format!(
                             "<p class=\"nd-aux mt-2\">{}</p>",
-                            l.pick(
-                                "Everything is going direct (AI and VoWiFi too). Change it on the CHILL page.",
-                                "现在是全部直连（AI 和 VoWiFi 也直连）。到 CHILL 页修改。"
-                            )
+                            if gated {
+                                l.pick(
+                                    "Everything else is going direct (VoWiFi too). Change it on the CHILL page.",
+                                    "其余全部直连（VoWiFi 也直连）。到 CHILL 页修改。"
+                                )
+                            } else {
+                                l.pick(
+                                    "Everything is going direct (AI and VoWiFi too). Change it on the CHILL page.",
+                                    "现在是全部直连（AI 和 VoWiFi 也直连）。到 CHILL 页修改。"
+                                )
+                            }
                         ));
                     }
                     if stale {
@@ -264,6 +275,43 @@ impl Chill {
         out.push(("hm-chill-seg".to_owned(), self.seg.clone()));
         out
     }
+}
+
+/// The AI gate (`services.chill.ai_gate`, luyaz-core engines/chill_ai_gate.rs): one line while AI is
+/// not going through 🤖 AI — blocked, or out the other way with its exit checked in the region.
+fn ai_gate_line(l: Lang, g: &Value) -> Option<String> {
+    if !g.is_object() || g["way"] == "ai" {
+        return None;
+    }
+    let region = match g["region"].as_str().unwrap_or("TW") {
+        "JP" => l.pick("Japan", "日本"),
+        "SG" => l.pick("Singapore", "新加坡"),
+        "US" => l.pick("the US", "美国"),
+        _ => l.pick("Taiwan", "台湾"),
+    };
+    let (tone, sym, text) = if g["open"] == true {
+        (
+            "ok",
+            "●",
+            match l {
+                Lang::En => format!("AI on: exit checked in {region}"),
+                Lang::Zh => format!("AI 可用：出口已确认在{region}"),
+            },
+        )
+    } else {
+        (
+            "warn",
+            "▲",
+            match l {
+                Lang::En => format!("AI paused: exit not in {region} (AI only leaves through the AI group's region)"),
+                Lang::Zh => format!("AI 已暂停：出口不在{region}（AI 只走 AI 策略组选的地区）"),
+            },
+        )
+    };
+    Some(format!(
+        "<p role=\"status\" class=\"hm-note\"><span class=\"nd-mark nd-mark--{tone}\"><span class=\"nd-mark__sym\" aria-hidden=\"true\">{sym}</span><span>{}</span></span></p>",
+        agent::esc(&text)
+    ))
 }
 
 fn pick_notice(n: &Value, l: Lang) -> Option<String> {
@@ -444,4 +492,20 @@ async fn exit_cancel(
     axum::response::sse::Sse::new(futures_util::stream::once(async move {
         Ok::<_, std::convert::Infallible>(crate::pages::patch(&html))
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_ai_gate_line_only_while_ai_is_not_going_through_its_group() {
+        assert_eq!(ai_gate_line(Lang::Zh, &Value::Null), None, "gate off");
+        assert_eq!(ai_gate_line(Lang::Zh, &json!({"way": "ai", "open": true, "region": "TW"})), None);
+        let closed = ai_gate_line(Lang::Zh, &json!({"way": "cellular", "open": false, "region": "TW"})).unwrap();
+        assert!(closed.contains("AI 已暂停：出口不在台湾") && closed.contains("nd-mark--warn"), "{closed}");
+        let open = ai_gate_line(Lang::En, &json!({"way": "global", "open": true, "region": "JP"})).unwrap();
+        assert!(open.contains("AI on: exit checked in Japan") && open.contains("nd-mark--ok"), "{open}");
+    }
 }

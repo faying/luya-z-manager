@@ -39,6 +39,16 @@
 @media (prefers-reduced-motion: reduce) { .st-bar__fill { transition: none; } }
 .st-bad { color: var(--nd-badT); }
 #st-op:not(:empty) { margin-top: 8px; padding-inline: 4px; }
+.st-dim .nd-readout__value { color: var(--nd-t3); }
+.st-layers { list-style: none; margin: 0; padding: 0; }
+.st-layers li { position: relative; }
+.st-layers li + li::before { content: ""; position: absolute; top: 0; right: 0; left: 14px; border-top: 1px solid var(--nd-sep); z-index: 1; }
+@media (min-width: 1024px) { .st-layers li + li::before { left: 20px; } }
+.st-layer { justify-content: space-between; flex-wrap: wrap; row-gap: 2px; }
+.st-layer .nd-row__value { text-align: end; }
+.st-muted, .st-muted .nd-mark { color: var(--nd-t3); }
+.st-chev { margin-inline-start: 8px; color: var(--nd-t2); }
+.mt-3 { margin-top: 12px; }
 
 /* /router/signal-detect */
 .sd-page { max-width: 960px; }

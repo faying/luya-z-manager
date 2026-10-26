@@ -9,7 +9,7 @@
 
 - **固件自动升级必须一直关着。** 关着的样子：`zwrt_zte_dm.dm_update.dm_update_mode` 为 `0`，`zwrt_zte_dm.dm_update.TURNOFFPOLLING` 为 `1`。
   任何脚本、页面、自动化都不许把它打开。装 `ssh` 组件时脚本会把两项都设好（只往关的方向写）并读回核对——
-  因为升级会覆盖开机自启，新固件又开不了 ADB。
+  因为升级会覆盖开机自启。
 - **不许 `/etc/init.d/<服务> disable` 原厂服务。** 主守护进程 `zte_topsw_daemon` 要等下面这些全部就绪才放行开机，
   关掉任何一个，设备就停在 ZTE logo、不拨号、触屏没反应：
   `zte_dm zte_router zte_smart_manage zte_topsw_apn zte_topsw_data zte_topsw_devui zte_topsw_fota_result zte_topsw_key zte_topsw_led zte_topsw_mc zte_topsw_mdm zte_topsw_nwinfo zte_topsw_sleep_faw zte_topsw_tr098db zte_topsw_wlan zte_topsw_wms`（按字母排）。
@@ -43,25 +43,13 @@
 
 ## 二、动手前检查（不满足就停下来告诉用户）
 
-1. **电脑上的工具**：`command -v adb ssh ssh-keygen curl tar`。
-   缺 adb 就告诉用户怎么装：macOS `brew install android-platform-tools`；Linux `sudo apt install adb`；
-   Windows 下载 Google SDK Platform-Tools 并加进 PATH。要替用户装软件，先征得同意。
-2. **电脑经 Wi-Fi 连着 U60**，设备默认地址 `192.168.0.1`。不能只靠 USB 网络共享：开 ADB 后 USB 口进调试模式，那条网就断了。
-   用匿名接口探一下：
-   ```sh
-   curl -s --noproxy '*' -m 5 -H 'Content-Type: application/json' http://192.168.0.1/ubus/ \
-     -H 'Origin: http://192.168.0.1' -H 'Referer: http://192.168.0.1/' \
-     -d '[{"id":1,"jsonrpc":"2.0","method":"call","params":["00000000000000000000000000000000","zwrt_web","web_login_info",{}]}]'
-   ```
-   - 返回里有 `zte_web_sault` = 通了。`login_fail_num` 是网页密码还能试几次；`login_fail_lock_lefttime` 大于 0 表示正在锁定。
-   - 不通：请用户确认连的是 U60 的 Wi-Fi。**不要让用户关代理**（你自己可能就靠它上网）；
-     如果代理（Surge、Clash 之类）开了 TUN 或增强模式，请用户把 `192.168.0.0/16` 加成直连规则。
-   - 地址不是 192.168.0.1：后面每条命令前面加 `GATEWAY=<地址>`。
-3. **固件**：只支持 CN 固件 **B27 及更早**。用户说不清也没关系，脚本登录后会打印版本；
-   B28 以后会停在「开 ADB 被拒绝」，那就**到此为止**，不要尝试任何别的解锁办法。
-4. **数据线**：USB-C 线已经把 U60 接到这台电脑（开 ADB 后脚本最多等 90 秒），而且电脑上**没有接别的安卓设备**。
+**本包只经用户自己已经配好的 SSH 工作**：`root@<设备>`，端口 2222，用密钥登录（dropbear）。
+它不会自己去开任何进入方式；SSH 怎么来的不在本项目范围内——**你也不要去找、去试、去教任何开通办法**。SSH 不通就停下告诉用户。
 
-**判断是不是已经装过**：下面这条成功，说明 SSH 已经通了，直接 `./install.sh status` 看现状，不需要密码和数据线。
+1. **电脑上的工具**：`command -v ssh tar`。
+2. **电脑连着 U60**，设备默认地址 `192.168.0.1`；地址不同时后面每条命令前面加 `GATEWAY=<地址>`。
+   **不要让用户关代理**（你自己可能就靠它上网）；代理（Surge、Clash 之类）开了 TUN 或增强模式时，请用户把设备地址设成直连。
+3. **SSH 已经能登录**：下面这条要成功（打印 SSH_OK）。不成功就到此为止。
 
 ```sh
 ssh -p 2222 -o BatchMode=yes -o ConnectTimeout=6 -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
@@ -70,51 +58,38 @@ ssh -p 2222 -o BatchMode=yes -o ConnectTimeout=6 -i ~/.ssh/id_ed25519 -o Identit
 
 `~/.ssh/id_ed25519` 是脚本默认用的密钥（本手册所有 ssh 命令都按它写）。如果用 `SSH_KEY=` 换了别的密钥，
 以后每次跑 `./install.sh`（含 `status`、`reboot`）和手动 ssh 都得带同一把，否则会被当成 SSH 不通。
+装过没装过都可以先 `./install.sh status` 看现状。
 
 ## 三、安装流程
 
 ### 1. 密码
 
-需要两个：
-
-- **路由器管理密码**（登录 `http://192.168.0.1` 用的），只有开 ADB 时才用到。
-- **高级后台密码**，可以和路由器密码相同；**不能有引号、反斜杠、空格**。
+只需要一个：**高级后台密码**（只有装 `admin` 时用）；**不能有引号、反斜杠、空格**。
 
 ### 怎么给密码
 
 给密码有两种方式，让用户挑一种：
 
-- **直接告诉你**：你通过环境变量传给脚本。先提醒用户：密码会留在这台电脑的对话记录里。
+- **直接告诉你**：你通过环境变量 `AGENT_PASSWORD` 传给脚本。先提醒用户：密码会留在这台电脑的对话记录里。
 - **自己写文件**：请用户 `cp u60.env.example u60.env` 然后自己编辑。脚本启动时自动读取。
   这种情况下**你不要读 `u60.env` 的内容**，只确认文件存在。
 
-### 两种都给了
-
-两种同时存在时，以环境变量为准。
-
-`AGENT_PASSWORD` 分三种情况，注意区分：
+两种同时存在时，以环境变量为准。`AGENT_PASSWORD` 分三种情况：
 
 | 写法 | 结果 |
 |:--|:--|
-| 不设 | 用 `ROUTER_PASSWORD` 的值；`ROUTER_PASSWORD` 也没给时，沿用设备上已有的后台密码 |
+| 不设 | 有终端就当场问（直接回车 = 沿用设备上已有的）；没终端（比如你代跑）就沿用设备上已有的后台密码 |
 | 设成空（`AGENT_PASSWORD=''`） | 沿用设备上已有的后台密码 |
 | 设成具体值 | 就用这个值 |
 
-### 第一次装 admin
-
-**第一次装 `admin` 最好明确给 `AGENT_PASSWORD`。** 如果 ADB 已经开着，脚本不会再去网页登录，也就不需要 `ROUTER_PASSWORD`；
-这时两个都没给、设备上又从没装过后台，脚本会在推送前报「需要高级后台密码」。
-
-### 登录被锁
-
-网页登录连续输错会被锁一段时间。**登录失败时不要换着密码再试**：把剩余次数告诉用户，请用户核对密码。
+**第一次装 `admin` 必须给 `AGENT_PASSWORD`**：设备上从没装过后台又没给密码时，脚本会在推送前报「需要高级后台密码」。
 
 ### 2. 运行
 
 Bash 工具的 timeout 设成 600000。
 
 ```sh
-ROUTER_PASSWORD='…' AGENT_PASSWORD='…' ./install.sh      # 密码走环境变量
+AGENT_PASSWORD='…' ./install.sh      # 密码走环境变量
 ./install.sh                                              # 密码在 u60.env 里
 ```
 
@@ -134,7 +109,7 @@ ROUTER_PASSWORD='…' AGENT_PASSWORD='…' ./install.sh      # 密码走环境�
 
 脚本会重启设备，等 SSH 恢复，再列出每个组件的状态。
 
-- 只有上一步输出里出现「SSH 公钥登录验证通过」才做这一步。SSH 没通就重启，ADB 也会跟着没了。
+- 只有上一步输出里出现「SSH 公钥登录验证通过」才做这一步（装了 `ssh` 组件时）。
 - 没终端时脚本不会自己重启，会提示「没有重启验证」，要重启就单独跑上面这条。
 - 电脑没自动重连 U60 的 Wi-Fi 会导致超时：请用户手动连上，再跑 `./install.sh status`。
 - 如果这台电脑只靠 U60 上网，重启期间你也会断线，事先跟用户说。
@@ -149,7 +124,6 @@ ROUTER_PASSWORD='…' AGENT_PASSWORD='…' ./install.sh      # 密码走环境�
 
 ```sh
 ssh -i ~/.ssh/id_ed25519 -p 2222 -o UserKnownHostsFile=~/.ssh/known_hosts_u60 root@192.168.0.1 '<命令>'
-adb shell '<命令>'        # 仅限 ADB 还通的时候（重启后 ADB 就没了）
 ```
 
 - 连续连接后偶尔会突然 `Permission denied`：等 20～30 秒再试，别急着断定密钥坏了。多条查询尽量合并成一次 ssh。
@@ -183,16 +157,11 @@ authorized_keys、start_dropbear.sh），供升固件前参考，`restore` 不�
 
 | 看到什么 | 怎么办 |
 |:--|:--|
-| 连不上 `http://192.168.0.1` | 电脑没连 U60 的 Wi-Fi；或代理 TUN 劫持（设直连，别关代理）；或地址不同（用 GATEWAY） |
-| 需要路由器管理密码 | 没传 `ROUTER_PASSWORD`，`u60.env` 又不存在或这一项是空的（你不读那个文件，请用户自己看）。回到「三、1. 密码」 |
+| SSH 登录不了 / 找不到私钥 | 电脑没连着 U60；代理 TUN 劫持（设直连，别关代理）；地址不同（用 GATEWAY）；密钥不对（用 SSH_KEY）。SSH 本身没开通就停下：本项目不管怎么开通 |
 | 需要高级后台密码 | 设备上从没装过后台，也没提供后台密码：带上 `AGENT_PASSWORD` 再跑 |
-| 登录失败、被锁 | 密码错了。不要自己再试，去问用户；已经锁了就等提示里的秒数 |
-| 开 ADB 被拒绝 | 固件是 B28 以后，本包不适用，停止 |
-| 90 秒等不到 ADB | 换数据线或 USB 口，别用扩展坞；Windows 设备管理器里有黄色感叹号时装 Google USB Driver 并手动选「Android ADB Interface」。`adb devices` 出现 `device` 后重跑 |
-| 多个 ADB 设备 / 「ADB 连着的设备不是 U60」 | 请用户拔掉手机等其他安卓设备（未授权、离线的也算）；确实要留着就设 `ANDROID_SERIAL` 指定 U60 |
 | 文件损坏 / 缺文件 | 包不完整：请用户重新解压或重新要包。**不要改包里的文件**（有 sha256 校验） |
 | `[device] 失败: …` | 按提示去看对应日志；修好原因后重跑同一条命令 |
-| SSH 验证失败、但设备端成功 | 先别重启（ADB 还在，方便查）。常见原因：电脑不在 U60 的 Wi-Fi 里；代理 TUN 劫持；`~/.ssh/id_ed25519` 有密码短语（脚本用 BatchMode，没加进 ssh-agent 就登不上，可以 `SSH_KEY=` 指定一把无密码的密钥重跑 `./install.sh ssh`） |
+| SSH 验证失败、但设备端成功 | 先别重启。常见原因：电脑不在 U60 的 Wi-Fi 里；代理 TUN 劫持；`~/.ssh/id_ed25519` 有密码短语（脚本用 BatchMode，没加进 ssh-agent 就登不上，可以 `SSH_KEY=` 指定一把无密码的密钥重跑 `./install.sh ssh`） |
 | 屏幕没数据 | 看 `/tmp/luyaz-core.log`；通常重启一次就好 |
 | 屏幕卡住、黑屏 | 先退回原厂界面（第六节第一条），再把日志给用户 |
 
@@ -228,7 +197,7 @@ rm -rf /data/luyaz /data/esim /data/chill /data/alerts /data/crashlog /data/powe
 reboot   # 重启后生效
 ```
 
-**原厂系统卡 logo / 不拨号的急救**（在 ADB 或 SSH 里执行）：
+**原厂系统卡 logo / 不拨号的急救**（在 SSH 里执行）：
 
 ```sh
 sh /usr/bin/mtdev2tuio.sh; kill -9 $(pidof zte_topsw_devui); /usr/bin/zte_topsw_devui &   # 屏幕或触摸没起来时

@@ -132,6 +132,25 @@ RULES_NOW=$(printf '%s\n' "$SAMPLE" | grep -v '^5210:')
 rules_drift=; check_rules_drift; eq "Tailscale 5210 消失：漂移" "$rules_drift" "true"
 has "日志写出消失的规则" "$(cat "$LOG")" '5210:'
 case "$(cat "$LOG")" in *5270:*) ng "日志混进了没消失的规则" ;; *) ok "日志只写消失的规则" ;; esac
+
+SYS_NET="$CHILL_DIR/sysnet"; mkdir -p "$SYS_NET/wlan0" "$SYS_NET/wlan2"
+WL='4200000025:	from all iif wlan0 failed_policy
+4200000026:	from all iif wlan2 failed_policy'
+printf '%s\n%s\n' "$SAMPLE" "$WL" > "$RULES_BEFORE"
+echo down > "$SYS_NET/wlan0/operstate"; rm -rf "$SYS_NET/wlan2"
+RULES_NOW="$SAMPLE"
+rules_drift=; check_rules_drift; eq "情景关 Wi-Fi，接口规则跟着没了：不漂移" "$rules_drift" "false"
+echo up > "$SYS_NET/wlan0/operstate"; mkdir -p "$SYS_NET/wlan2"; echo up > "$SYS_NET/wlan2/operstate"
+RULES_NOW="$SAMPLE
+4200000061:	from all iif wlan0 failed_policy
+4200000062:	from all iif wlan2 failed_policy"
+rules_drift=; check_rules_drift; eq "Wi-Fi 回来、优先级变了：不漂移" "$rules_drift" "false"
+: > "$LOG"
+RULES_NOW="$SAMPLE
+4200000061:	from all iif wlan0 failed_policy"
+rules_drift=; check_rules_drift; eq "接口在跑、规则真没了：漂移" "$rules_drift" "true"
+has "日志写出 wlan2 那条" "$(cat "$LOG")" 'iif wlan2'
+case "$(cat "$LOG")" in *"iif wlan0"*) ng "日志混进了还在的 wlan0" ;; *) ok "日志不写还在的 wlan0" ;; esac
 unset -f ip; rm -f "$RULES_BEFORE"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -303,6 +322,102 @@ printf 'config dnsmasq\noption noresolv 1\n' > "$DHCP_CONF"
 if restore_dns; then ok "无备份时安全返回 0"; else ng "无备份时返回了失败"; fi
 eq "无备份时不 reload" "$(reloads)" "1"
 has "无备份时不改动现有配置" "$(cat "$DHCP_CONF")" 'noresolv'
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "AI 闸门：CHILL 停下时同一次重启里封上，确认落地后才放"
+
+AI_LIST="$CHILL_DIR/ruleset/ai_domain.list"
+AI_BLOCK="$CHILL_DIR/dnsmasq.d/luyaz-ai-block.conf"
+AI_OK="$CHILL_DIR/ai-ok"
+AI_LOCK="$CHILL_DIR/ai-gate.lock"
+mkdir -p "$CHILL_PROC/net"
+printf 'Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\nrmnet_data0\t00000000\t00000000\t0001\t0\t0\t0\t00000000\n' > "$CHILL_PROC/net/route"
+ip() { [ "$*" = "-4 -o addr show dev rmnet_data0" ] && echo "9: rmnet_data0    inet 10.20.30.40/30 scope global rmnet_data0"; }
+uci() { :; }
+printf '+.openai.com\nai.google.dev\n# 注释\n+.Bad_Name.com\nnodot\r\n+.claude.ai\n' > "$AI_LIST"
+printf '100.00 0.00\n' > "$CHILL_PROC/uptime"
+restarts() { grep -c '^restart$' "$RELOAD_LOG" | tr -d ' '; }
+plain_reloads() { grep -c '^reload$' "$RELOAD_LOG" | tr -d ' '; }
+: > "$RELOAD_LOG"
+printf 'config dnsmasq\n' > "$DHCP_BACKUP"; cp "$DHCP_BACKUP" "$DHCP_CONF"
+
+CHILL_AI_STRICT=0
+restore_dns
+eq "没开：不写封锁文件" "$([ -e "$AI_BLOCK" ] && echo y || echo n)" n
+eq "没开：dnsmasq 不动" "$(restarts)/$(plain_reloads)" "0/0"
+
+CHILL_AI_STRICT=1
+restore_dns
+eq "开了、没确认：封上" "$([ -e "$AI_BLOCK" ] && echo y || echo n)" y
+eq "封锁文件变了就 restart（reload 不重读 conf-dir）" "$(restarts)/$(plain_reloads)" "1/0"
+has "规则集的 +. 去掉前缀" "$(cat "$AI_BLOCK")" 'address=/openai.com/'
+has "规则集的完整网域照写" "$(cat "$AI_BLOCK")" 'address=/ai.google.dev/'
+has "内置底单也在" "$(cat "$AI_BLOCK")" 'address=/chatgpt.com/'
+eq "坏行（注释、大写下划线、无点）丢掉" "$(grep -c 'Bad_Name\|nodot\|#' "$AI_BLOCK")" 0
+eq "重复的只写一次" "$(grep -c '^address=/claude.ai/$' "$AI_BLOCK")" 1
+restore_dns
+eq "再停一次：不重复 restart（幂等）" "$(restarts)" 1
+
+printf 'config dnsmasq\noption noresolv 1\n' > "$DHCP_CONF"
+restore_dns
+eq "DNS 回滚、封锁不变：照旧 reload" "$(restarts)/$(plain_reloads)" "1/1"
+
+rm -f "$AI_LIST"
+CHILL_AI_STRICT=0; restore_dns; CHILL_AI_STRICT=1
+restore_dns
+has "规则集不见了：内置底单照样封" "$(cat "$AI_BLOCK")" 'address=/openai.com/'
+printf '+.openai.com\n+.claude.ai\n' > "$AI_LIST"
+
+: > "$RELOAD_LOG"
+printf 'v2 boot-a 50 500 direct rmnet_data0 10.20.30.40 TW\n' > "$AI_OK"
+restore_dns
+eq "核心确认过这条连接：放" "$([ -e "$AI_BLOCK" ] && echo y || echo n)" n
+eq "放也要 restart" "$(restarts)" 1
+for bad in 'v2 boot-a 50 500 direct rmnet_data0 10.20.30.41 TW' \
+           'v2 boot-b 50 500 direct rmnet_data0 10.20.30.40 TW' \
+           'v2 boot-a 50 90 direct rmnet_data0 10.20.30.40 TW' \
+           'v2 boot-a 150 500 direct rmnet_data0 10.20.30.40 TW' \
+           'v2 boot-a 50 500 global rmnet_data0 10.20.30.40 TW' \
+           'v2 boot-a 50 500 direct rmnet_data0 10.20.30.40' \
+           'garbage'; do
+  printf '%s\n' "$bad" > "$AI_OK"
+  eq "确认不算数（换了 IP/开机/过期/未来/别的路径/缺字段/坏档）：$bad" "$(ai_want_down)" on
+done
+rm -f "$AI_OK"
+eq "没有默认路由：封" "$(CHILL_PROC=/nonexistent ai_want_down)" on
+
+: > "$RELOAD_LOG"
+printf 'garbage\n' > "$AI_OK"; restore_dns; rm -f "$AI_OK"
+printf 'rule\n' > "$MODE_FILE"
+apply_dns
+eq "CHILL 接管 DNS（rule）：放，同一次 restart" "$([ -e "$AI_BLOCK" ] && echo y || echo n)/$(restarts)/$(plain_reloads)" "n/2/0"
+printf 'global\n' > "$MODE_FILE"
+apply_dns
+eq "接管时是全局模式：先封，等核心经 7894 确认" "$([ -e "$AI_BLOCK" ] && echo y || echo n)" y
+rm -f "$AI_BLOCK"
+ai_gate_tick
+eq "运行中复查：全局交给核心，不动" "$([ -e "$AI_BLOCK" ] && echo y || echo n)" n
+printf 'direct\n' > "$MODE_FILE"
+ai_gate_tick
+eq "运行中复查：全部直连且没确认，封" "$([ -e "$AI_BLOCK" ] && echo y || echo n)" y
+printf 'rule\n' > "$MODE_FILE"
+_r0=$(restarts)
+ai_gate_tick
+eq "运行中复查：回到 rule，放并 restart" "$([ -e "$AI_BLOCK" ] && echo y || echo n)/$(( $(restarts) - _r0 ))" "n/1"
+ai_gate_tick
+eq "运行中复查：没变化不 restart" "$(( $(restarts) - _r0 ))" 1
+# 设备上的 busybox flock 只认 -sxun（没有 -w，10-24 真机）
+flock() { case "$1" in -[sxun]) return 0 ;; *) echo "flock: unrecognized option" >&2; return 1 ;; esac; }
+_fl=$( { ai_gate_write on; ai_gate_write off; } 2>&1 >/dev/null )
+eq "flock 只用 busybox 认得的选项" "$_fl" ""
+unset -f flock
+CHILL_AI_STRICT=0
+printf 'direct\n' > "$MODE_FILE"
+ai_gate_tick
+eq "关掉开关：不封" "$([ -e "$AI_BLOCK" ] && echo y || echo n)" n
+rm -f "$MODE_FILE" "$AI_LIST"
+unset -f ip uci
+printf '10000.00 0.00\n' > "$CHILL_PROC/uptime"
 
 # ─────────────────────────────────────────────────────────────────────────────
 sec "event：状态迁移留痕（DT3）"

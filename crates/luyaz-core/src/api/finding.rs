@@ -36,7 +36,7 @@ pub const FILE: &str = "/data/luyaz/core/findings.json";
 pub const EVERY_ROUNDS: u32 = 6;
 pub const RECHECK_SECS: u64 = 600;
 pub(crate) mod budget;
-pub(super) mod sampling;
+pub(crate) mod sampling;
 /// How long the passive reading must say down, without a break, before a probe may run (design
 /// Open Question 2, owner 2026-10-17). Why 60 s: the signal log 2026-10-10..10-17 (7.5 days)
 /// shows reconnects while registered back within 10 s, and the one long gap (100 s) came back by

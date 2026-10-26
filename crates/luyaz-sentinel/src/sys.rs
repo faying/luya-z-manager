@@ -452,18 +452,51 @@ pub fn append(path: &str, line: &str) {
     }
 }
 
+/// Both logs, kept on flash too: /tmp goes with the reboot that most needs them read
+/// (10-25 u60g: the screen went dark after a failed touch ship, the firmware rebooted,
+/// and why the sentinel brought no UI back went with /tmp). A few lines an hour, so
+/// each one synced; `<boot8> <screen|worker> <line>`, 64 KB then one `.old`.
+pub const KEPT_LOG: &str = "/data/luyaz/screen/log";
+const KEPT_CAP: u64 = 64 * 1024;
+
+fn keep(tag: &str, line: &str) {
+    let b: String = boot_id()
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .take(8)
+        .collect();
+    let _g = LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    keep_at(KEPT_LOG, KEPT_CAP, &format!("{b} {tag} {line}"));
+}
+
+pub(crate) fn keep_at(path: &str, cap: u64, line: &str) {
+    if fs::metadata(path).map(|m| m.len() >= cap).unwrap_or(false) {
+        let _ = fs::rename(path, format!("{path}.old"));
+    }
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o644)
+        .open(path)
+    {
+        let _ = f.write_all(format!("{line}\n").as_bytes());
+        let _ = f.sync_data();
+    }
+}
+
 /// The screen log line: `<stamp> <msg>` (no prefix: ship's UID_BAD matches the bare message).
 pub fn uid_log(msg: &str) {
     eprintln!("luyaz-sentinel: {msg}");
-    append(UID_LOG, &format!("{} {msg}", stamp(wall_s())));
+    let line = format!("{} {msg}", stamp(wall_s()));
+    append(UID_LOG, &line);
+    keep("screen", &line);
 }
 
 /// The guard's log line shape: `<stamp> up=<uptime> <msg>`.
 pub fn worker_log(msg: &str) {
-    append(
-        SENTINEL_LOG,
-        &format!("{} up={} {msg}", stamp(wall_s()), uptime_s()),
-    );
+    let line = format!("{} up={} {msg}", stamp(wall_s()), uptime_s());
+    append(SENTINEL_LOG, &line);
+    keep("worker", &line);
 }
 
 pub fn shadow_log(who: &str, msg: &str) {
@@ -741,8 +774,32 @@ impl WorkerIo for RealWorker {
     fn boot_is_normal(&mut self) -> bool {
         boot_is_normal()
     }
+    fn mtime(&mut self, path: &str) -> Option<i64> {
+        use std::os::unix::fs::MetadataExt;
+        fs::metadata(path).ok().map(|m| m.mtime())
+    }
+    fn alert_id(&mut self, id: &str, kind: &str, text: &str) {
+        // straight into the queue (the core may be the one that is down); the core reads it back
+        let a = luyaz_alerts::Alerts::at(std::path::Path::new(luyaz_alerts::DIR));
+        if let Err(e) = a.add_once(id, kind, text, wall_s(), uptime_s()) {
+            worker_log(&format!("regress: queue {id}: {e}"));
+        }
+    }
     fn proc_blind(&mut self) -> bool {
         fs::read_dir("/proc").is_err()
+    }
+    fn disk_free(&mut self, path: &str) -> Option<crate::worker::Disk> {
+        disk_free(path)
+    }
+    fn largest(&mut self, path: &str) -> String {
+        largest(path, 5)
+    }
+    fn restart_core(&mut self) -> Result<(), String> {
+        run(
+            Command::new(CORE_INITD).arg("restart"),
+            Duration::from_secs(45),
+        )
+        .map(|_| ())
     }
     fn alert_sms(&mut self) {
         let a = luyaz_alerts::Alerts::at(std::path::Path::new(luyaz_alerts::DIR));
@@ -891,6 +948,95 @@ pub fn boot_trace_keep(old: &str, block: &str) -> String {
     out
 }
 
+pub const CORE_INITD: &str = "/etc/init.d/luyaz-core";
+
+/// The room on the filesystem holding `path`.
+pub fn disk_free(path: &str) -> Option<crate::worker::Disk> {
+    let c = std::ffi::CString::new(path).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: a valid C string and a zeroed out-struct of the right type.
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    let f = st.f_frsize as u64;
+    Some(crate::worker::Disk {
+        free: st.f_bavail as u64 * f,
+        total: st.f_blocks as u64 * f,
+        ifree: st.f_favail as u64,
+        itotal: st.f_files as u64,
+    })
+}
+
+/// Bytes under `path`, this filesystem only, symlinks not followed; stops at `budget` entries.
+fn tree_size(path: &std::path::Path, dev: u64, budget: &mut u32) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(m) = fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if m.dev() != dev {
+        return 0;
+    }
+    if !m.is_dir() {
+        return m.blocks() * 512;
+    }
+    let mut sum = m.blocks() * 512;
+    if let Ok(rd) = fs::read_dir(path) {
+        for e in rd.flatten() {
+            if *budget == 0 {
+                break;
+            }
+            *budget -= 1;
+            sum += tree_size(&e.path(), dev, budget);
+        }
+    }
+    sum
+}
+
+/// The `n` biggest entries two levels under `path` (`luyaz/core 312M, logfs 41M`), for the record
+/// of a filesystem running full: what filled it is the question afterwards.
+pub fn largest(path: &str, n: usize) -> String {
+    use std::os::unix::fs::MetadataExt;
+    let root = std::path::Path::new(path);
+    let Ok(dev) = fs::metadata(root).map(|m| m.dev()) else {
+        return String::new();
+    };
+    let mut budget = 200_000u32;
+    let mut sizes: Vec<(u64, String)> = Vec::new();
+    let Ok(top) = fs::read_dir(root) else {
+        return String::new();
+    };
+    for e in top.flatten() {
+        let p = e.path();
+        let name = e.file_name().to_string_lossy().into_owned();
+        let is_dir = fs::symlink_metadata(&p)
+            .map(|m| m.is_dir() && m.dev() == dev)
+            .unwrap_or(false);
+        let subs: Vec<_> = if is_dir {
+            fs::read_dir(&p)
+                .map(|r| r.flatten().collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        if subs.is_empty() {
+            sizes.push((tree_size(&p, dev, &mut budget), name));
+            continue;
+        }
+        for s in subs {
+            let sub = format!("{name}/{}", s.file_name().to_string_lossy());
+            sizes.push((tree_size(&s.path(), dev, &mut budget), sub));
+        }
+    }
+    sizes.sort_by_key(|s| std::cmp::Reverse(s.0));
+    sizes
+        .iter()
+        .take(n)
+        .filter(|(b, _)| *b > 0)
+        .map(|(b, p)| format!("{p} {}M", b >> 20))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The core is being replaced (D6): a core transaction with a live executor.
 pub fn core_being_replaced() -> bool {
     txn_live(&["core"])
@@ -1025,6 +1171,13 @@ impl luyaz_alerts::sms::SmsIo for SentinelSms {
             wall_s(),
         )
         .wall_usable()
+    }
+    fn wall_settled(&mut self) -> bool {
+        luyaz_alerts::clock::evidence_settled(
+            &read(CLOCK_OK).unwrap_or_default(),
+            luyaz_alerts::clock::BootTime::read().as_ref(),
+            wall_s(),
+        )
     }
     fn lang_en(&mut self) -> bool {
         ui_conf().is_some_and(|c| luyaz_alerts::sms::lang_en(&c))

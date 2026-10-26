@@ -41,32 +41,26 @@ What it looks like once installed (screenshots use fake data):
 **Device**
 
 - ZTE U60 Pro (MU5250), **firmware B31 or earlier** (in the stock web UI under 「设备信息」 (Device Information), it looks like `…MU5250V1.0.0B31`).
-  On B27 or earlier the install kit opens SSH over USB debugging (ADB). From B28 on, ZTE removed the interface for enabling ADB, so you open SSH yourself first (see below); after that the install kit works the same. Versions after B31 have not been tested, so **do not upgrade the firmware before installing.**
+  Versions after B31 have not been tested, so **do not upgrade the firmware before installing.**
   See "Firmware versions" below for what each version means.
-- The router admin password (the one you use to log in at `http://192.168.0.1`). The install script uses it to enable ADB through the web interface, then installs key-only SSH (port 2222).
-- A USB-C cable that carries data.
+- **A working SSH login** to the device: `root` on port 2222 (dropbear) with your key. The install kit only works over an SSH login you have already set up; it never opens a way into the device by itself. How you get it is outside this project.
 - For eSIM, a removable eUICC card (5ber, eSTK.me and the like).
 
 **Firmware versions** (tested: B27; B31 both as an upgrade, since 2026-10-03, and on a device that came with B31, 2026-10-20; B28–B30 not tried but expected to behave like B31)
 
 | Your situation | Result |
 |---|---|
-| New device, B27 or earlier | Install from scratch with this guide |
-| New device, B28 – B31 | **Works**, but ADB cannot be enabled, so the install kit cannot open SSH by itself. Get the device onto SSH first (how you do that is outside the scope of this project), then install as usual |
+| New device, B27 – B31, SSH already working | Install with this guide (B27 and a device that came with B31 tested) |
 | Newer than B31 | **Unknown**: not tested |
 | Already installed, then upgraded to B31 | The programs themselves run on B31 (the maintainer's device has been on B31 since 10-03). But the upgrade resets `/etc/rc.local` to the stock version and removes the services installed under `/etc/init.d/`, so after the reboot SSH, the admin web, the touch UI and luyaz-core no longer start, and the screen shows the stock UI |
 
 What survives the upgrade: every program and all data under `/data`, the SSH program and keys (`/data/ssh`), the network address, the web password and your settings; firmware auto-update stays off.
-To recover you need to get SSH back; how you do that is outside the scope of this project. Once SSH is back, run `./install.sh admin ui` from a freshly built install kit; it puts the services back and fixes `rc.local`.
+To recover you need the SSH login back; how you get it is outside this project. Once SSH works, run `./install.sh admin ui` from a freshly built install kit; it puts the services back and fixes `rc.local`.
 Note: `/data/luyaz/kit/rc.local.orig` holds the stock `rc.local` of the firmware **before** the upgrade. To uninstall after an upgrade, do not copy it over the new one; just remove the lines this project added.
 
-**A new device on B28 – B31 needs to be on SSH first; how you open it is outside the scope of this project.** Do not insert a SIM or connect any WAN until SSH works, and make sure you can recover the device the stock way first.
+**Install computer** (macOS / Linux / Git Bash on Windows): `ssh`, `tar`.
 
-**Install computer** (macOS / Linux / Git Bash on Windows): `adb`, `ssh`, `curl`.
-
-- macOS: the `android-platform-tools` package from Homebrew
-- Linux: your distribution's adb package (on Debian and Ubuntu it is simply `adb`)
-- Windows: Google SDK Platform-Tools (added to PATH) + Git for Windows
+- Windows: Git for Windows
 
 **Build computer** (for compiling; can be the same machine):
 
@@ -136,22 +130,21 @@ cd luyaz-kit
 
 Follow the prompts:
 
-1. Connect the computer to the U60's **Wi-Fi** and enter the router admin password; the script enables USB debugging through the web interface.
-2. When it says it is waiting for the ADB device, connect the U60 to the computer with the USB-C cable.
-3. Set an **admin web password** (press Enter to use the same one as the router admin password).
-4. Push, install and verify run automatically, in a minute or two. The screen flickers once and switches to the new UI.
-5. When asked whether to reboot to verify, answering yes is recommended; the script confirms that SSH, the admin web and the screen all come back on their own after the reboot.
+1. The script first checks that SSH logs in; if it does not, it stops without changing anything.
+2. Set an **admin web password** (press Enter to keep the one already on the device; a first install needs one).
+3. Push, install and verify run automatically, in a minute or two. The screen flickers once and switches to the new UI.
+4. When asked whether to reboot to verify, answering yes is recommended; the script confirms that SSH, the admin web and the screen all come back on their own after the reboot.
 
 The full set is the four components `ssh admin ui esim`. You can also install only some of them:
 
 ```sh
-./install.sh ssh               # only enable ADB + install persistent SSH
+./install.sh ssh               # only make the SSH login persist across reboots
 ./install.sh ssh admin ui   # without eSIM
 ./install.sh chill             # CHILL proxy, not part of the full set, must be named explicitly (see section 7)
 ```
 
 Installing SSH also **turns off firmware auto-update**. If the U60's address is not `192.168.0.1`, prefix the command with `GATEWAY=your-address`.
-Without a terminal (for example when Claude Code installs it for you), passwords are read from the environment variables `ROUTER_PASSWORD`, `AGENT_PASSWORD` (the admin web password; the name is historical), or from `u60.env` in the kit (template `u60.env.example`).
+Without a terminal (for example when Claude Code installs it for you), passwords are read from the environment variable `AGENT_PASSWORD` (the admin web password; the name is historical; unset = keep the one on the device), or from `u60.env` in the kit (template `u60.env.example`).
 
 The [README](../onboard/README.md) that ships with the install kit goes into more detail: which paths get installed, day-to-day use, and common problems.
 
@@ -232,13 +225,11 @@ After that, use the admin web's 「CHILL」 page to turn it on or off, change th
 
 ## 9. FAQ
 
-- **Keeps waiting for the ADB device**: try another cable or another USB port (not a hub). The connection works only when `adb devices` shows a line with `device`. Windows may need the Google USB Driver.
 - **SSH will not connect**: the computer is not on the U60's Wi-Fi, or a proxy app's TUN/enhanced mode is hijacking `192.168.0.1`. Set `192.168.0.0/16` to direct in the proxy,
   and add `--noproxy '*'` when testing with `curl`.
 - **Admin web will not open but SSH works**: most likely the proxy as well. Verify on the device: `wget -q -O- http://127.0.0.1:9090/ | head -c 200`.
 - **SSH occasionally refuses connections**: dropbear refuses reconnects that come too quickly; wait a few seconds and try again. Combine multiple commands into one `ssh` where possible.
 - **No data on the screen**: `/etc/init.d/luyaz-core restart`, then check `/tmp/luyaz-core.log`.
-- **Web login locked**: the stock web UI locks for a while after 5 wrong passwords in a row. The script shows the remaining attempts and a countdown; do not keep retrying.
 - **`admin` / `ui` refuse to install, saying there is an unfinished transaction**: a `luyaz-ship.sh` update did not finish. Finish it or roll it back first (touch-ui `docs/SHIP.md`); do not delete the transaction log by hand.
 - **Install failed halfway**: `install.sh` can be rerun; parts already installed are skipped or overwritten.
 - **Device time looks off by several hours**: the firmware stores local time as UTC, and both the admin web and the touch UI display local time. This is expected.

@@ -5,6 +5,34 @@ Measurements originate on the device, not in the browser. The source and server
 used are included in each result. Results from different servers or providers
 are not directly comparable.
 
+## Method (v2, core 1.48.0)
+
+A full run has five steps (six with the CHILL pair), each dropping its first
+2 seconds so the TCP ramp is not counted:
+
+1. idle latency, 2 s;
+2. one single-connection download, 8 s;
+3. a 6-connection download, 10 s, with a latency probe every 200 ms on its own
+   kept-alive connection (latency while downloading);
+4. optionally the same node again through CHILL's local mixed port (`path:"chill"`,
+   +400 MB);
+5. a 6-connection upload, 10 s of fixed-size POSTs; only acknowledged ones count.
+
+`download_mbps`/`upload_mbps` are the multi-connection stable rates; the whole-run
+averages, the single-connection rate and the latencies are reported beside them.
+Every byte is reserved before it is read: 200/400/150 MB per stage (CHILL 400 MB),
+750 MB in all; when short, upload is cut first, then the single connection, then
+the multi-connection download. A stable part under 3 s is `sample_short` and gets
+no verdict. Otherwise `verdict` names the layers that look slow, in a fixed order:
+single connection (multi ÷ single ≥ 2), proxy (CHILL ÷ direct ≤ 0.7), lag under
+load (loaded − idle latency ≥ 100 ms), radio (SINR below 3 dB, a reference reading
+only); cell and Wi-Fi are not measured yet.
+
+A roaming device (as the core reads it at admission) and the diagnosis run the
+coarse test (`mode:"coarse"`): download only, 5 s, up to 30 MB, first 0.5 s
+dropped, no verdict. The admin page states the cost before each start (about
+30 s / up to 750 MB, 40 s / 1.15 GB with CHILL, 5 s / 30 MB while roaming).
+
 ## Providers
 
 - **Auto** tries Ookla, then configured LibreSpeed endpoints if Ookla discovery,
@@ -65,16 +93,33 @@ All paths below are relative to `/v2` on the core:
   discovery returns a structured service error. An explicit start permits a
   new attempt after a previous discovery failure. The explicit server-list retry
   uses `?refresh=1` to bypass the backoff without duplicating an active refresh.
-- `POST /api/speedtest/start`: `{provider:"auto"|"ookla"|"librespeed",server_id?}`.
+- `POST /api/speedtest/start`: `{provider:"auto"|"ookla"|"librespeed",server_id?,path?:"direct"|"chill"}`.
+  Roaming is decided by the core, never sent by the client.
   Returns `200 {ok:true,data:{status:"started"}}` as soon as the worker is
   admitted. Node discovery and unknown-node errors are reported by progress.
   A concurrent test or diagnosis is still refused synchronously with 409.
 - `GET /api/speedtest/progress`: includes the `discovering` phase and `provider`,
   `error_code`, `error`, `error_en`, `fallback_reason` in addition to existing
   speed and byte fields. Provider errors do not change core reachability.
+  v2 only adds fields: `method_version` (2), `mode`, `roaming_capped`, `path`,
+  `stage` (`idle_latency`, `single_download`, `multi_download`, `chill_download`,
+  `multi_upload`), `step`/`steps`, `connections`, `*_whole_mbps`, `single_mbps`,
+  `chill_mbps`, `chill_region`, `idle_ms`, `loaded_down_ms`/`loaded_up_ms`/`loaded_chill_ms`,
+  `sample_short`, `server_name`/`server_sponsor`, `net_tune` (`on`/`off` at the
+  start), `radio`, `cpu_peak_pct`, `mihomo_cpu_pct` and `verdict`
+  (`{bottlenecks, layers, summary_zh, summary_en}`). `phase` keeps its old values.
+  A client that finds no `method_version` is talking to an older core and shows
+  the old four numbers.
 - `POST /api/speedtest/stop`: also cancels discovery and prevents further
-  attempts. A request already in flight can take up to its remaining timeout
-  to finish (3 seconds for discovery/download/ping, 10 seconds for upload).
+  attempts. Each request's timeout is the stage's remaining time, and the
+  workers check the stop between reads.
+- `GET /api/net-tune`: `{on, exit, output}`: whether the kernel tuning is wanted
+  (`/data/luyaz/net-tune.want` exists) and the output of `net-tune.sh show`.
+- `PUT /api/net-tune` `{"on": bool}`: writes or deletes the want file, then runs
+  `net-tune.sh apply` or `restore` (a child process, 5 s at most) and replies with
+  its output (`ran`, `exit`, `output`); a script failure is `ok:false`. The admin
+  page only shows the state at the time of the test (「内核调参：开 / 关」), with
+  no switch.
 
 Codes include `provider_unreachable`, `provider_timeout`, `no_servers`,
 `invalid_server_list`, `provider_not_configured`, `transfer_failed`, and
@@ -82,11 +127,11 @@ Codes include `provider_unreachable`, `provider_timeout`, `no_servers`,
 possible network restriction without asserting one. Failed transfers never
 become a successful zero-Mbps result.
 
-One full run shares a 60-second deadline and 512 MB test-payload budget across
-all fallback attempts. Byte counters include failed attempts; speed metrics
-belong to the selected attempt. Protocol overhead is additional. Diagnosis
-continues to use its smaller shared budget: up to five seconds / 30 MB,
-download only. Stop, mutual exclusion and limits are shared by both UIs.
+One full run shares the 750 MB test-payload budget (1.15 GB with the CHILL pair)
+across all fallback attempts and node trials. Byte counters include failed
+attempts and CHILL bytes; speed metrics belong to the selected attempt. Protocol
+overhead is additional. The coarse run (diagnosis, roaming) uses up to five
+seconds / 30 MB, download only. Stop, mutual exclusion and limits are shared by both UIs.
 
 See [LibreSpeed's custom server-list format](https://github.com/librespeed/speedtest-cli#use-a-custom-backend-server-list).
 

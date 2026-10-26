@@ -363,9 +363,20 @@ impl TGate {
 }
 
 // ---- status bar ----
-/// Widest of the three rate forms that fits in maxw (the last one regardless).
-pub fn rate_pick(widths: [i32; 3], maxw: i32) -> usize {
-    (0..2).find(|&i| widths[i] <= maxw).unwrap_or(2)
+/// The ▲'s hit box side (design review 13A).
+pub const ALERT_HIT: i32 = 44;
+
+/// Where the ▲'s hit box goes (eng review round 3 D4): its left edge on the rate's hit box's right
+/// edge (the rate ends `aw + 10` left of `right`, the ▲'s own right edge), 44 wide over the ▲ and
+/// the battery (not tappable); the ▲'s x inside it. (box x, ▲ x in the box)
+pub fn alert_hit(right: i32, aw: i32) -> (i32, i32) {
+    let x = right - aw - 10;
+    (x, right - aw - x)
+}
+
+/// Widest of the rate forms that fits in maxw (the last one regardless).
+pub fn rate_pick<const N: usize>(widths: [i32; N], maxw: i32) -> usize {
+    (0..N - 1).find(|&i| widths[i] <= maxw).unwrap_or(N - 1)
 }
 
 // ---- battery ----
@@ -712,6 +723,18 @@ pub fn usb_track(t: &mut UsbTrack, cc: i32, phone: bool, now_ms: u32) -> UsbEv {
 
 #[cfg(test)]
 mod tests {
+    /// Round 3 D4: the ▲'s box starts where the rate's ends, covers the ▲, stays on the screen.
+    #[test]
+    fn alert_hit_box_beside_the_rate() {
+        for (pct_w, aw) in [(20, 12), (34, 12), (60, 14)] {
+            let right = 308 - pct_w - 6;
+            let (x, lx) = alert_hit(right, aw);
+            let rate_right = right - aw - 10;
+            assert_eq!(x, rate_right, "touches the rate box, never over it");
+            assert!(x + lx >= x && x + lx + aw <= x + ALERT_HIT, "the ▲ inside the box");
+            assert!(x + ALERT_HIT <= 320 && x >= 0, "on the screen");
+        }
+    }
     use super::*;
 
     const fn m(h: i32, mi: i32) -> i32 {
@@ -864,6 +887,8 @@ mod tests {
         assert_eq!(rate_pick(w, 80), 1);
         assert_eq!(rate_pick(w, 50), 2);
         assert_eq!(rate_pick(w, 10), 2);
+        assert_eq!(rate_pick([96, 72, 60, 40], 64), 2);
+        assert_eq!(rate_pick([96, 72, 60, 40], 50), 3);
     }
 
     #[test]

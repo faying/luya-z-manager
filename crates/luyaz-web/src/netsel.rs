@@ -413,6 +413,8 @@ pub fn families(s: &str) -> String {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cell {
     pub status: String,
+    /// `connect_status` corroborated by `ipv4_address` (`topbar::cell_up`); None = claimed, unconfirmed.
+    pub up: Option<bool>,
     /// The mobile data switch (`enable` 0 with the call up counts as on); None = can't tell.
     pub data: Option<bool>,
     pub roam: Option<bool>,
@@ -433,7 +435,7 @@ pub fn cell(st: &St) -> Option<Cell> {
         },
         None => None,
     };
-    Some(Cell { status, data, roam: flag(&c["roam_enable"]) })
+    Some(Cell { status, up: crate::topbar::cell_up(c), data, roam: flag(&c["roam_enable"]) })
 }
 
 /// The agent's jobs and radio state.
@@ -541,7 +543,12 @@ pub fn net_view(st: &St, jobs: Option<&Result<Jobs, Fail>>, l: Lang) -> NetView 
     let stale = st.blocks.get("interfaces").is_some_and(|b| b.stale) || st.link != Link::Live;
     let j = jobs.and_then(|r| r.as_ref().ok());
     let airplane = j.and_then(|j| j.airplane) == Some(true);
-    let kind = c.as_ref().map(|c| connect_kind(&c.status)).unwrap_or("unknown");
+    let kind = match c.as_ref().map(|c| (connect_kind(&c.status), c.up)) {
+        // B31 keeps saying connected after a drop; without an IPv4 address it is unconfirmed.
+        Some(("connected", None)) => "unconfirmed",
+        Some((k, _)) => k,
+        None => "unknown",
+    };
     let fams = c.as_ref().map(|c| families(&c.status)).unwrap_or_default();
     let (tone, state, reason) = match &c {
         None => ("neutral", l.pick("Reading the mobile connection…", "正在读取移动网络…").to_string(), String::new()),
@@ -555,6 +562,11 @@ pub fn net_view(st: &St, jobs: Option<&Result<Jobs, Fail>>, l: Lang) -> NetView 
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>()
                 .join(" · "),
+        ),
+        Some(_) if kind == "unconfirmed" => (
+            "neutral",
+            l.pick("Checking the connection…", "正在确认连接…").into(),
+            l.pick("The modem says connected but has no IPv4 address yet.", "调制解调器说已连接，但还没有 IPv4 地址。").into(),
         ),
         Some(_) if kind == "connecting" => ("neutral", l.pick("Connecting…", "正在连接…").into(), String::new()),
         Some(c) => (
@@ -591,6 +603,7 @@ pub fn net_view(st: &St, jobs: Option<&Result<Jobs, Fail>>, l: Lang) -> NetView 
         conn: match kind {
             "connected" => [l.pick("Connected", "已连接").to_string(), fams].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
             "connecting" => l.pick("Connecting…", "正在连接…").into(),
+            "unconfirmed" => l.pick("Unconfirmed", "未确认").into(),
             _ => c.as_ref().map(|c| c.status.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| "—".into()),
         },
         data: c.as_ref().and_then(|c| c.data),

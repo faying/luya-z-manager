@@ -40,6 +40,15 @@ pub struct Theme {
     pub acc_s: u32,
     pub pill: u32,
     pub on_fill: u32,
+    /// 情景 (Home's scenario card): text in `ind` on the `ind_w` band; pills and the icon disc
+    /// are `fill_ind` with white text
+    pub ind: u32,
+    pub ind_w: u32,
+    pub fill_ind: u32,
+    /// traffic-class tags on Home (white text): AI, 版权 / IP, and 全部 / no exit
+    pub fill_vio: u32,
+    pub fill_teal: u32,
+    pub fill_grey: u32,
     /// card top highlight (dark only, 0 = none)
     pub hl_opa: u8,
     /// 1 px black rim on glass
@@ -77,6 +86,12 @@ pub static LIGHT: Theme = Theme {
     acc_s: 0xe7f3ff,
     pill: 0xffffff,
     on_fill: 0xe7f3ff,
+    ind: 0x393cc6,
+    ind_w: 0xefebff,
+    fill_ind: 0x393cc6,
+    fill_vio: 0x8c3cd6,
+    fill_teal: 0x087973,
+    fill_grey: 0x5a616b,
     hl_opa: 0,
     rim_opa: 26,
     scrim_opa: 90,
@@ -111,6 +126,12 @@ pub static DARK: Theme = Theme {
     acc_s: 0x10304a,
     pill: 0x39414a,
     on_fill: 0xe7f3ff,
+    ind: 0xadaeff,
+    ind_w: 0x181c39,
+    fill_ind: 0x393cc6,
+    fill_vio: 0x8c3cd6,
+    fill_teal: 0x087973,
+    fill_grey: 0x5a616b,
     hl_opa: 40,
     rim_opa: 150,
     scrim_opa: 140,

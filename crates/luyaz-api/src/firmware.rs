@@ -532,3 +532,92 @@ impl CapabilityReport {
         Ok(())
     }
 }
+
+/// Capability id: whether `zwrt_data get_wwaniface`'s `connect_status` follows the data session.
+/// On CN B31 it kept saying `ipv4_ipv6_connected` through a disconnect while only `ipv4_address`
+/// went empty (firmware-capabilities.md §12.6), so without evidence it is [`Support::Unknown`]
+/// and the claim is never taken alone.
+pub const WWANIFACE_TRUSTWORTHY: &str = "wwaniface_trustworthy";
+
+/// The vendor's connected values (`connected`, `ipv4_connected`, `ipv4_ipv6_connected`, …);
+/// `disconnected` is not one of them.
+pub fn wwaniface_claims_connected(status: &str) -> bool {
+    status == "connected" || status.ends_with("_connected")
+}
+
+/// What a `get_wwaniface` snapshot says about the data session, under `trust` for
+/// [`WWANIFACE_TRUSTWORTHY`]. `Some(false)` = down; `Some(true)` = up; `None` = the snapshot
+/// claims connected but nothing corroborates it: not usable as "up" (callers holding the
+/// rtnetlink address state should use that instead).
+/// Untrusted, a connected claim counts only with an IPv4 address; with no address and a live
+/// rtnetlink `connection_epoch` (address events are being seen) it is down.
+pub fn wwaniface_connected(
+    trust: Support,
+    status: &str,
+    ipv4_address: Option<&str>,
+    connection_epoch: Option<&str>,
+) -> Option<bool> {
+    if !wwaniface_claims_connected(status) {
+        return Some(false);
+    }
+    if trust == Support::Supported || ipv4_address.is_some_and(|a| !a.trim().is_empty()) {
+        return Some(true);
+    }
+    connection_epoch
+        .filter(|e| !e.trim().is_empty())
+        .map(|_| false)
+}
+
+#[cfg(test)]
+mod wwaniface_tests {
+    use super::*;
+
+    #[test]
+    fn b31_stale_connected_without_address_or_epoch_is_not_usable() {
+        assert_eq!(
+            wwaniface_connected(Support::Unknown, "ipv4_ipv6_connected", Some(""), None),
+            None
+        );
+        assert_eq!(
+            wwaniface_connected(Support::Unknown, "ipv4_ipv6_connected", None, None),
+            None
+        );
+        assert_eq!(
+            wwaniface_connected(Support::Unsupported, "ipv4_connected", Some(" "), None),
+            None
+        );
+    }
+
+    #[test]
+    fn live_netlink_epoch_without_address_is_down() {
+        assert_eq!(
+            wwaniface_connected(
+                Support::Unknown,
+                "ipv4_ipv6_connected",
+                Some(""),
+                Some("e1")
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn address_or_trust_corroborates_and_disconnected_is_down() {
+        assert_eq!(
+            wwaniface_connected(Support::Unknown, "ipv4_connected", Some("10.0.0.2"), None),
+            Some(true)
+        );
+        assert_eq!(
+            wwaniface_connected(Support::Supported, "connected", None, None),
+            Some(true)
+        );
+        assert_eq!(
+            wwaniface_connected(Support::Supported, "disconnected", Some("10.0.0.2"), None),
+            Some(false)
+        );
+        assert_eq!(
+            wwaniface_connected(Support::Unknown, "connecting", None, Some("e1")),
+            Some(false)
+        );
+    }
+}

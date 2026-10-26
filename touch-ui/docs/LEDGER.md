@@ -30,12 +30,17 @@
 | `keylog.anchor` | key.log 补记锚点（第 10 节）。 |
 | `init-done` | 第一次上线的基准已经建好（没有它时不补历史，只设锚点）。 |
 | `crashlog.seen` | 已入账的崩溃文件。 |
-| `cutover` | 旧账本停写的时刻（epoch）：成绩单在这之前读旧账本，之后读 `long/`。 |
+| `cutover` | 旧账本停写的时刻（epoch）：成绩单在这之前读旧账本，之后读 `long/`；没有这个文件（新装的设备）时成绩单只读 `long/`。 |
+| `incidents.json` | regress 事故（「变差才通知」，第 15 节）：开着的和 8 天内结束的、告警队列读到哪、每个事故收了哪些告警、最近的演练（实机测试开关 `/tmp/luyaz-test-rx-quiet` 打开的时刻，最多 20 个）。事故开/关/又一次时写（fsync）。 |
+| `baseline.json` | regress 基线：内存（heap、anon）和待机耗电（按在家/国外）的 7 天中位数与锚点，每天重算。 |
+| `regress-limits.json` | 主人调过的绝对门槛（`<core> regress limit`），没有就是起始值。 |
+| `incident-<id>.json` | 一个事故的证据：开始前 6 小时的小时摘要（内存、两个出口、待机耗电）、开始那次开机的原因码、可能相关的上机和演练，结束时再写一次（结束方式、恢复用时、收的告警）；≤ 8 KB，留 30 天、最多 50 份。8 天清单放掉之后 `/v2/incidents/<id>` 从它读回（`archived`）。 |
+| `memsnap-<id>.txt` | 内存事故开始时的 smaps_rollup、线程数、堆计数，≤ 4 KB，最多 10 份。 |
 
 `/data/luyaz/core/planned-reboot`：人为重启标记（第 4 节 `boot.planned`）。
 
 只读的旧账本 `/data/ledger/`（`boot-*.jsonl` 分段等，不再追加）：成绩单读 `cutover` 之前的部分，经验库 `places.json` 开头从它回填一次，
-doctor 默认输出末尾照抄它的 `summary`（存在时）。`/data/ledger/state/wall.last` 仍由哨兵写（第 7 节）。
+doctor 默认输出末尾不再照抄它的 `summary`（10-24 起：那份停在 10-19，会误导）。`/data/ledger/state/wall.last` 仍由哨兵写（第 7 节）。
 
 易失（`/tmp`，重新开机清空，核心重启后接着用）：
 - `/tmp/luyaz/core/longterm.json`：同一次开机里两个核心进程之间交接的累计状态（含每分钟查看的状态：各程序 pid 和启动时间、`ver` 的 md5、屏幕日志读到第几行）。
@@ -280,3 +285,14 @@ doctor 默认输出末尾照抄它的 `summary`（存在时）。`/data/ledger/s
 ## 14. 公开导出
 
 CHILL（mihomo）相关的字段随 CHILL 一起公开；没装 CHILL 的设备上这些字段不写，读的一方按缺字段处理。
+
+## 15. regress 事故（`longterm/regress/`）
+
+设计：本机设计稿（「变差才通知」）及其实作用整合规格。长期层每分钟检查时顺带判断，不加读取、不加唤醒：
+
+- **区间型**（`regress-mem`、`regress-mem-abs`、`regress-cellular`、`regress-egress`、`regress-power`、`regress-power-abs`；哨兵的 `regress-recorder`、`regress-core-down`；`wifi-restore-failed`）：开一则、恢复一则（`end: recovered`，只进收件匣）；整机重启时没关的记 `end: reboot`。
+- **点事件型**（`core-crash`、`ui-crash`、`web-crash`、`sentinel-crash`、`ui-gave-up`、`sentinel-silent`，窗口 1 小时；`regress-reboot`，窗口 6 小时）：同类在窗口内再来就并进同一事故（`count`），窗口过了没再来就 `end: quiet`（不是「已恢复」）。
+- 每次转换是一则告警，id `rg-<事故 id>-<open|esc<n>|close>`：先把事故连同「待入队」写进 `incidents.json`，再 `add_once`，再去掉待入队标记，所以中途重启只会补入队一次。
+- 告警队列每次检查读回（`ingested_seq`）：转换告警和点事件告警记在事故的 `alert_seqs`（最多 50，超过只计数），`/api/alerts` 每则带 `incident`；队列被剪掉还没读的部分记 `gap_at`（`/v2/incidents` 的 `ingest_gap`），不猜内容。第一次运行把读到哪设成当时的队列尾、当前开机记为已判断（旧告警不变成事故，装上新核心那次开机不报重启）。
+- 基线：`hour_proc` 里整小时同一个核心进程的 heap_live / anon_core，`hour_power` 里合格小时（整小时熄屏、没充电、该格蜂窝包 ≤ 15000、计量覆盖 ≥ 95%）的待机 mW；排除事故区间；第一次的值做锚点，之后不超过锚点 ×1.25。固件或 SIM 归属网络变了，耗电基线清空。
+- 读的一方：`/v2/incidents`（开着的 + 7 天内结束的，每个带 `unread`）、`/v2/incidents/<id>`（加 `alerts[]`、证据小时、内存快照）、`/v2/state` 的 `regress` 块（开着 ≤ 5 + 24 小时内结束的 ≤ 3；跨开机只按可信墙钟算 24 小时）。

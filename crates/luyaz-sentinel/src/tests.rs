@@ -218,13 +218,9 @@ fn corner_box_and_comm_prefix() {
     assert!(!in_corner_box(255, 479) && !in_corner_box(319, 415));
     assert!(!is_ui_comm("zte_topsw_devui") && !is_ui_comm("luyaz-sentinel"));
     // luyaz-ui and its side-by-side build; nothing else
-    assert!(
-        is_ui_comm("luyaz-ui") && is_ui_comm("luyaz-ui.test") && is_ui_comm("luyaz-ui.te")
-    );
+    assert!(is_ui_comm("luyaz-ui") && is_ui_comm("luyaz-ui.test") && is_ui_comm("luyaz-ui.te"));
     assert!(!is_ui_comm("otherui") && !is_ui_comm("otherui.te"));
-    assert!(
-        !is_ui_comm("luyaz-core") && !is_ui_comm("luyaz-web") && !is_ui_comm("luyaz-u")
-    );
+    assert!(!is_ui_comm("luyaz-core") && !is_ui_comm("luyaz-web") && !is_ui_comm("luyaz-u"));
 }
 
 #[test]
@@ -505,10 +501,7 @@ fn crash_twice_gives_up_to_vendor_once() {
         w.explains, 1,
         "the explanation frame once, before the vendor UI"
     );
-    assert_eq!(
-        w.alerts,
-        vec!["ui-crash", "ui-crash", "ui-gave-up"]
-    );
+    assert_eq!(w.alerts, vec!["ui-crash", "ui-crash", "ui-gave-up"]);
     assert!(w.logs.iter().any(|l| l == "giving up: 2 launches did not stay up; vendor UI on screen. Corner long-press or 'echo ui > /tmp/luyaz-screen.ctl' to retry"));
     assert!(
         s.touch_open(),
@@ -728,6 +721,14 @@ struct Dev {
     sms_rounds: u32,
     blind: bool,
     charging: bool,
+    mtimes: HashMap<String, i64>,
+    /// `alert_id` calls: `<id> <kind>`, and their texts.
+    ids: Vec<String>,
+    texts: Vec<String>,
+    /// `disk_free` answers by path.
+    disks: HashMap<String, Disk>,
+    /// BOOTTIME s of each `restart_core`.
+    core_restarts: Vec<u64>,
 }
 
 impl Dev {
@@ -865,6 +866,25 @@ impl WorkerIo for Dev {
     fn boot_is_normal(&mut self) -> bool {
         !self.charging
     }
+    fn mtime(&mut self, path: &str) -> Option<i64> {
+        self.mtimes.get(path).copied()
+    }
+    fn alert_id(&mut self, id: &str, kind: &str, text: &str) {
+        self.changes += 1;
+        self.ids.push(format!("{id} {kind}"));
+        self.texts.push(text.into());
+    }
+    fn disk_free(&mut self, path: &str) -> Option<Disk> {
+        self.disks.get(path).copied()
+    }
+    fn largest(&mut self, _path: &str) -> String {
+        "luyaz/core 300M".into()
+    }
+    fn restart_core(&mut self) -> Result<(), String> {
+        self.changes += 1;
+        self.core_restarts.push(self.up);
+        Ok(())
+    }
 }
 
 fn wk() -> Worker {
@@ -930,6 +950,25 @@ fn guard_dies_while_wifi_up() {
         "stale but beaconing: no restore"
     );
     assert_eq!(d.kinds(), "agent-silent", "alerted once");
+}
+
+/// 10-26: the engine runs in the core; with the core down, core-down texts it, not agent-silent too.
+#[test]
+fn engine_silent_with_the_core_down_is_not_a_second_alert() {
+    let (mut w, mut d) = (wk(), Dev::new());
+    d.up = 2000;
+    d.hb(1600);
+    d.beacon = true;
+    d.health = Some(Health::Down("refused".into()));
+    w.core_round(&mut d);
+    w.core_round(&mut d);
+    assert!(w.core.unhealthy);
+    w.round(&mut d);
+    assert!(
+        !d.kinds().contains("agent-silent"),
+        "core down: no agent-silent: {}",
+        d.kinds()
+    );
 }
 
 /// run.sh 386/393: the vendor switch is read only inside the restore, so "left alone" is "the
@@ -1268,9 +1307,9 @@ fn ship_recover_live() {
         d.recover_calls, 1,
         "heartbeat 31 s old (stuck): recover-live"
     );
-    assert!(d.logs.iter().any(|l| l.contains(
-        "u60-ship: transaction (core, check) has no live executor (heartbeat 31s old)"
-    )));
+    assert!(d.logs.iter().any(|l| {
+        l.contains("u60-ship: transaction (core, check) has no live executor (heartbeat 31s old)")
+    }));
     let mut d = ship_dev();
     txn(&mut d, "trial", "core", 1900);
     executor(&mut d, 1999, false);
@@ -2312,4 +2351,293 @@ fn utc_file_requires_root_private_regular_single_link_and_bounded_size() {
     assert!(crate::sys::trusted_utc_file(&file).is_none());
     assert!(crate::sys::trusted_utc_file(&dir).is_none());
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ── regress: the core down, the recorder stalled (eng review F1, C1, O1) ─────
+
+const OPEN_JSON: &str = "/data/luyaz/core/long/open.json";
+
+/// Rounds a minute apart from `d.up`, each with this health and open.json's mtime moving or not.
+fn minutes(w: &mut Worker, d: &mut Dev, n: u64, health: Option<Health>, writes: bool) {
+    for _ in 0..n {
+        d.up += 60;
+        d.health = health.clone();
+        if writes {
+            let t = d.up as i64;
+            d.mtimes.insert(OPEN_JSON.into(), t);
+        }
+        w.core_round(d);
+    }
+}
+
+fn ids(d: &Dev, kind: &str) -> Vec<String> {
+    d.ids
+        .iter()
+        .filter(|s| s.ends_with(kind))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn core_down_ten_minutes_by_no_answer_or_a_bad_answer() {
+    for h in [
+        Health::Down("refused".into()),
+        Health::Bad("503 stalled".into()),
+    ] {
+        let mut w = wk();
+        let mut d = Dev::new();
+        d.up = 1000;
+        d.mtimes.insert(OPEN_JSON.into(), 1);
+        minutes(&mut w, &mut d, 11, Some(h.clone()), false);
+        assert!(ids(&d, "regress-core-down").is_empty(), "{h:?}: not yet");
+        minutes(&mut w, &mut d, 1, Some(h.clone()), false);
+        let open = ids(&d, "regress-core-down");
+        assert_eq!(open.len(), 1, "{h:?}");
+        assert!(
+            open[0].starts_with("rg-core-down-") && open[0].contains("-open "),
+            "{open:?}"
+        );
+        assert!(luyaz_alerts::valid_event_id(
+            open[0].split(' ').next().unwrap()
+        ));
+        minutes(&mut w, &mut d, 5, Some(h.clone()), false);
+        assert_eq!(ids(&d, "regress-core-down").len(), 1, "once");
+        minutes(&mut w, &mut d, 1, None, true);
+        let all = ids(&d, "regress-core-down");
+        assert_eq!(all.len(), 2);
+        assert!(all[1].contains("-close "), "{all:?}");
+        assert!(
+            ids(&d, "regress-recorder").is_empty(),
+            "{h:?}: core-down covers the stall"
+        );
+    }
+}
+
+/// 10-26: procd gave up on a crash-looping core and nothing brought it back for 50 min.
+#[test]
+fn a_core_down_ten_minutes_is_restarted_with_a_growing_wait() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    d.up = 1000;
+    let down = Some(Health::Down("refused".into()));
+    minutes(&mut w, &mut d, 11, down.clone(), false);
+    assert!(d.core_restarts.is_empty(), "not before the incident opens");
+    minutes(&mut w, &mut d, 1, down.clone(), false);
+    assert_eq!(d.core_restarts.len(), 1, "with the incident");
+    let first = d.core_restarts[0];
+    // 10, 20, 40 min, then hourly
+    minutes(&mut w, &mut d, 10 + 20 + 40 + 60 + 60, down.clone(), false);
+    let gaps: Vec<u64> = d.core_restarts.windows(2).map(|p| p[1] - p[0]).collect();
+    assert_eq!(gaps, [600, 1200, 2400, 3600, 3600], "{:?}", d.core_restarts);
+    assert!(first > 1000);
+    // the state survives a sentinel restart: no extra restart right away
+    let mut w2 = wk();
+    w2.load(&mut d);
+    let n = d.core_restarts.len();
+    minutes(&mut w2, &mut d, 1, down.clone(), false);
+    assert_eq!(d.core_restarts.len(), n);
+    minutes(&mut w2, &mut d, 1, None, true);
+    assert!(
+        d.texts.last().unwrap().contains("after 6 sentinel restart"),
+        "{:?}",
+        d.texts
+    );
+    // a new outage starts the count over
+    minutes(&mut w2, &mut d, 12, down, false);
+    assert_eq!(d.core_restarts.len(), n + 1);
+}
+
+#[test]
+fn a_ship_replacing_the_core_is_never_restarted_over() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    d.up = 1000;
+    d.core_replacing = true;
+    minutes(
+        &mut w,
+        &mut d,
+        30,
+        Some(Health::Down("refused".into())),
+        false,
+    );
+    assert!(d.core_restarts.is_empty());
+}
+
+const MB: u64 = 1 << 20;
+
+fn disk(free_mb: u64, total_mb: u64, ifree: u64) -> Disk {
+    Disk {
+        free: free_mb * MB,
+        total: total_mb * MB,
+        ifree,
+        itotal: 1000,
+    }
+}
+
+#[test]
+fn a_filesystem_running_full_opens_once_and_closes_with_room_again() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    d.up = 1000;
+    // /data 2000 MB: low below 100 MB, clear at 200 MB
+    d.disks.insert("/data".into(), disk(500, 2000, 900));
+    d.disks.insert("/tmp".into(), disk(200, 250, 900));
+    w.disk_round(&mut d);
+    assert!(d.ids.is_empty());
+    d.disks.insert("/data".into(), disk(90, 2000, 900));
+    w.disk_round(&mut d);
+    w.disk_round(&mut d);
+    let open = ids(&d, "regress-disk");
+    assert_eq!(open.len(), 1, "once: {open:?}");
+    assert!(open[0].starts_with("rg-disk-data-") && open[0].contains("-open "));
+    assert!(luyaz_alerts::valid_event_id(
+        open[0].split(' ').next().unwrap()
+    ));
+    assert_eq!(
+        d.texts[0],
+        "/data 90/2000 MB, 900/1000 inodes free; luyaz/core 300M"
+    );
+    // between low and twice low: still open
+    d.disks.insert("/data".into(), disk(150, 2000, 900));
+    w.disk_round(&mut d);
+    assert_eq!(ids(&d, "regress-disk").len(), 1);
+    // kept across a sentinel restart
+    let mut w2 = wk();
+    w2.load(&mut d);
+    w2.disk_round(&mut d);
+    assert_eq!(ids(&d, "regress-disk").len(), 1);
+    d.disks.insert("/data".into(), disk(300, 2000, 900));
+    w2.disk_round(&mut d);
+    let all = ids(&d, "regress-disk");
+    assert_eq!(all.len(), 2);
+    assert!(all[1].contains("-close "));
+    // a small filesystem: the 32 MB floor, not a twentieth
+    d.disks.insert("/tmp".into(), disk(20, 250, 900));
+    w2.disk_round(&mut d);
+    assert!(ids(&d, "regress-disk")[2].starts_with("rg-disk-tmp-"));
+    // cannot tell: nothing said
+    let mut d2 = Dev::new();
+    wk().disk_round(&mut d2);
+    assert!(d2.ids.is_empty());
+}
+
+/// Out of inodes is ENOSPC too, with space to spare.
+#[test]
+fn running_out_of_inodes_is_running_full() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    d.disks.insert("/data".into(), disk(1500, 2000, 40));
+    w.disk_round(&mut d);
+    assert_eq!(ids(&d, "regress-disk").len(), 1);
+    d.disks.insert("/data".into(), disk(1500, 2000, 80));
+    w.disk_round(&mut d);
+    assert_eq!(ids(&d, "regress-disk").len(), 1, "not yet twice the floor");
+    d.disks.insert("/data".into(), disk(1500, 2000, 100));
+    w.disk_round(&mut d);
+    assert_eq!(ids(&d, "regress-disk").len(), 2);
+}
+
+#[test]
+fn core_down_waits_out_a_replacement_and_a_short_outage() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    d.up = 1000;
+    d.core_replacing = true;
+    minutes(
+        &mut w,
+        &mut d,
+        15,
+        Some(Health::Down("refused".into())),
+        false,
+    );
+    assert!(d.ids.is_empty(), "a ship replacing the core");
+    let mut w = wk();
+    let mut d = Dev::new();
+    d.up = 1000;
+    minutes(
+        &mut w,
+        &mut d,
+        9,
+        Some(Health::Down("refused".into())),
+        false,
+    );
+    minutes(&mut w, &mut d, 2, None, true);
+    assert!(d.ids.is_empty(), "back within 9 min");
+}
+
+#[test]
+fn a_stalled_recorder_with_a_healthy_core_and_its_recovery() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    d.up = 1000;
+    minutes(&mut w, &mut d, 3, None, true);
+    minutes(&mut w, &mut d, 9, None, false);
+    assert!(d.ids.is_empty());
+    minutes(&mut w, &mut d, 2, None, false);
+    let r = ids(&d, "regress-recorder");
+    assert_eq!(r.len(), 1, "{:?}", d.ids);
+    assert!(r[0].starts_with("rg-recorder-"));
+    minutes(&mut w, &mut d, 1, None, true);
+    let r = ids(&d, "regress-recorder");
+    assert_eq!(r.len(), 2);
+    assert!(r[1].contains("-close "));
+}
+
+/// O1: health flapping (bad a few minutes, good one round) does not reset the recorder's clock,
+/// and the stall is said exactly once.
+#[test]
+fn a_flapping_core_and_a_stall_say_one_recorder() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    d.up = 1000;
+    minutes(&mut w, &mut d, 1, None, true);
+    for _ in 0..4 {
+        minutes(
+            &mut w,
+            &mut d,
+            3,
+            Some(Health::Down("timeout".into())),
+            false,
+        );
+        minutes(&mut w, &mut d, 1, None, false);
+    }
+    assert_eq!(ids(&d, "regress-recorder").len(), 1, "{:?}", d.ids);
+    assert!(ids(&d, "regress-core-down").is_empty());
+    // the sentinel restarts: the state in tmpfs keeps it from saying it again
+    let mut w2 = wk();
+    w2.load(&mut d);
+    minutes(&mut w2, &mut d, 3, None, false);
+    assert_eq!(ids(&d, "regress-recorder").len(), 1);
+}
+
+#[test]
+fn a_replacement_pauses_the_recorder() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    d.up = 1000;
+    minutes(&mut w, &mut d, 1, None, true);
+    d.core_replacing = true;
+    minutes(&mut w, &mut d, 15, None, false);
+    d.core_replacing = false;
+    minutes(&mut w, &mut d, 5, None, false);
+    assert!(d.ids.is_empty(), "{:?}", d.ids);
+}
+
+#[test]
+fn kept_log_rolls_into_one_old_file_at_the_cap() {
+    let dir = std::env::temp_dir().join(format!("sentinel-kept-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("log");
+    let p = p.to_str().unwrap();
+    for i in 0..3 {
+        crate::sys::keep_at(p, 18, &format!("line {i} 0123456789"));
+    }
+    // each line is 18 bytes, the cap: every later line finds the file full and rolls it
+    assert_eq!(std::fs::read_to_string(p).unwrap(), "line 2 0123456789\n");
+    assert_eq!(
+        std::fs::read_to_string(format!("{p}.old")).unwrap(),
+        "line 1 0123456789\n"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

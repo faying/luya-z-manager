@@ -77,10 +77,161 @@ fn phase_word(p: &str, l: Lang) -> &'static str {
     }
 }
 
+/// v2's sub-stage word (DR7)
+fn stage_word(s: &str, l: Lang) -> Option<&'static str> {
+    Some(match s {
+        "idle_latency" => l.pick("Idle latency", "空闲延迟"),
+        "single_download" => l.pick("Single-connection download", "单连接下载"),
+        "multi_download" => l.pick("Multi-connection download", "多连接下载"),
+        "chill_download" => l.pick("Download via CHILL", "经 CHILL 下载"),
+        "multi_upload" => l.pick("Multi-connection upload", "多连接上传"),
+        _ => return None,
+    })
+}
+
+/// How the running stage measures (DR7): the conclusion line's place while it runs.
+fn stage_method(p: &Value, l: Lang) -> Option<String> {
+    let n = p["connections"].as_u64().unwrap_or(6);
+    let skip = if p["mode"] == "coarse" { "0.5" } else { "2" };
+    Some(match p["stage"].as_str()? {
+        "single_download" => match l {
+            Lang::En => format!("1 connection · first {skip} s not counted"),
+            Lang::Zh => format!("1 条连接 · 前 {skip} 秒不计"),
+        },
+        "multi_download" | "chill_download" => match l {
+            Lang::En => format!("{n} connections · first {skip} s not counted"),
+            Lang::Zh => format!("{n} 条连接 · 前 {skip} 秒不计"),
+        },
+        "multi_upload" => match l {
+            Lang::En => format!("{n}-connection upload"),
+            Lang::Zh => format!("{n} 条连接上传"),
+        },
+        _ => return None,
+    })
+}
+
+fn layer_name(key: &str, l: Lang) -> &'static str {
+    match key {
+        "single" => l.pick("Single connection", "单连接"),
+        "proxy" => l.pick("Proxy", "代理"),
+        "queue" => l.pick("Lag under load", "下载时卡"),
+        "radio" => l.pick("Radio", "无线"),
+        _ => l.pick("Cell, Wi-Fi", "基站、Wi-Fi"),
+    }
+}
+
+fn v2_of(p: &Value, phase: &str, have: bool, loading: bool, l: Lang) -> V2 {
+    let complete = phase == "complete";
+    let short = complete && p["sample_short"] == true;
+    let coarse = complete && p["mode"] == "coarse";
+    let pick = |zh: &str, en: &str| -> String {
+        if l == Lang::En { en } else { zh }.to_string()
+    };
+    let verdict_obj = p["verdict"].as_object().filter(|_| complete && !short && !coarse);
+    let verdict = if short {
+        Some((
+            "warn",
+            pick("样本不足，数字只供参考", "Too few samples; rough figure"),
+        ))
+    } else if coarse {
+        Some((
+            "neutral",
+            if p["roaming_capped"] == true {
+                pick("粗测 · 漫游中只测 5 秒", "Rough test · 5 s only while roaming")
+            } else {
+                pick("粗测 · 只测 5 秒", "Rough test · 5 s only")
+            },
+        ))
+    } else {
+        verdict_obj.map(|v| {
+            let hit = v
+                .get("bottlenecks")
+                .and_then(Value::as_array)
+                .is_some_and(|b| !b.is_empty());
+            let t = v
+                .get(if l == Lang::En { "summary_en" } else { "summary_zh" })
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            (if hit { "warn" } else { "ok" }, t)
+        })
+    };
+    let layers = verdict_obj
+        .and_then(|v| v.get("layers"))
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .map(|r| {
+                    let key = r["key"].as_str().unwrap_or("");
+                    let state = match r["state"].as_str() {
+                        Some("warn") => "warn",
+                        Some("ok") => "ok",
+                        _ => "untested",
+                    };
+                    LayerRow {
+                        name: layer_name(key, l),
+                        state,
+                        value: r[if l == Lang::En { "value_en" } else { "value_zh" }]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string(),
+                        // DR9: the proxy row (when slow) leads to CHILL's nodes; the web has no
+                        // placement page, so the radio row stays plain
+                        href: (key == "proxy" && state == "warn").then_some("/services/chill"),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut rows = Vec::new();
+    if have {
+        let whole: Vec<String> = [("↓", "download_whole_mbps"), ("↑", "upload_whole_mbps")]
+            .iter()
+            .filter_map(|(a, k)| f1(&p[*k]).map(|v| format!("{a} {v} Mbps")))
+            .collect();
+        if !whole.is_empty() {
+            rows.push((pick("全程均值", "Whole-run average"), whole.join(" · ")));
+        }
+        if let Some(j) = f1(&p["jitter_ms"]) {
+            rows.push((pick("抖动", "Jitter"), format!("{j} ms")));
+        }
+        if let Some(n) = p["connections"].as_u64() {
+            rows.push((pick("连接数", "Connections"), n.to_string()));
+        }
+        match p["net_tune"].as_str() {
+            Some("on") => rows.push((pick("内核调参", "Kernel tuning"), pick("开", "On"))),
+            Some("off") => rows.push((pick("内核调参", "Kernel tuning"), pick("关", "Off"))),
+            _ => {}
+        }
+    }
+    let loaded = if loading {
+        None
+    } else if have {
+        Some(
+            p["loaded_down_ms"]
+                .as_f64()
+                .filter(|x| x.is_finite())
+                .map(|x| format!("{x:.1}")),
+        )
+    } else {
+        Some(None)
+    };
+    V2 {
+        verdict,
+        dim: short,
+        loaded: ro(loaded, ""),
+        layers,
+        rows,
+    }
+}
+
 pub struct View {
     pub l: Lang,
     pub tone: &'static str,
+    /// the announced state (DR11: step changes and the conclusion only)
     pub word: String,
+    /// " · 62%": shown beside the state, never announced
+    pub tail: Option<String>,
     pub reason: Option<String>,
     pub running: bool,
     pub pct: i64,
@@ -94,9 +245,75 @@ pub struct View {
     pub jitter: Readout,
     /// (server, total MB, "download d MB · upload u MB")
     pub details: Option<(String, String, String)>,
+    /// the v2 engine (`method_version` present); None = an old core, shown as before (DR4)
+    pub v2: Option<V2>,
+    /// `/api/netinfo?lite=1`: (roaming, CHILL running), once read
+    pub net: Option<(bool, bool)>,
+}
+
+/// What the v2 result adds (net-performance.md DR3, DR5–DR8, DR11–DR14).
+pub struct V2 {
+    /// the conclusion beside the state word: (tone, text); only once the run ended complete
+    pub verdict: Option<(&'static str, String)>,
+    /// the hero number is only for reference (DR5)
+    pub dim: bool,
+    /// the fourth readout: latency while downloading (replaces jitter)
+    pub loaded: Readout,
+    pub layers: Vec<LayerRow>,
+    /// extra detail rows (label, value)
+    pub rows: Vec<(String, String)>,
+}
+
+pub struct LayerRow {
+    pub name: &'static str,
+    /// "ok" | "warn" | "untested"
+    pub state: &'static str,
+    pub value: String,
+    pub href: Option<&'static str>,
+}
+
+impl LayerRow {
+    pub fn symbol(&self) -> &'static str {
+        if self.state == "warn" {
+            "▲"
+        } else {
+            "●"
+        }
+    }
+    pub fn tone(&self) -> &'static str {
+        match self.state {
+            "warn" => "warn",
+            "ok" => "ok",
+            _ => "neutral",
+        }
+    }
+    pub fn said(&self, l: &Lang) -> &'static str {
+        match self.state {
+            "warn" => l.pick("attention", "注意"),
+            "ok" => l.pick("normal", "正常"),
+            _ => l.pick("not tested", "没测"),
+        }
+    }
 }
 
 impl View {
+    /// The data-cost sentence of 「开始」 (DR6, DR13): "old" (an old core's 60 s / 512 MB),
+    /// "roaming" (the core will run coarse) or "full" (30 s / 750 MB, 40 s / 1.15 GB via CHILL).
+    pub fn cost(&self) -> &'static str {
+        match (&self.v2, self.net) {
+            (None, _) => "old",
+            (Some(_), Some((true, _))) => "roaming",
+            _ => "full",
+        }
+    }
+    /// Why 「也测经 CHILL」 can't be turned on now (DR12); None = it can.
+    pub fn chill_off(&self) -> Option<&'static str> {
+        match self.net {
+            Some((true, _)) => Some(self.l.pick("Rough test only while roaming", "漫游中只粗测")),
+            Some((false, false)) => Some(self.l.pick("CHILL not running", "CHILL 没在运行")),
+            _ => None,
+        }
+    }
     pub fn symbol(&self) -> &'static str {
         match self.tone {
             "warn" => "▲",
@@ -129,6 +346,8 @@ fn ro(v: Option<Option<String>>, word: &str) -> Readout {
 #[derive(Default)]
 struct Got {
     prog: Option<Value>,
+    /// (roaming, CHILL running) from `/api/netinfo?lite=1`
+    net: Option<(bool, bool)>,
     err: Option<Fail>,
     last_ok: Option<SystemTime>,
 }
@@ -144,6 +363,7 @@ fn view(g: &Got, expect: bool, l: Lang) -> View {
     let live = p
         .filter(|_| active(phase))
         .and_then(|p| f1(&p["live_speed_mbps"]));
+    let is_v2 = p.is_some_and(|p| p["method_version"].as_u64().is_some_and(|v| v >= 2));
     let (tone, word, reason) = match p {
         None if g.err.is_some() => (
             "bad",
@@ -152,20 +372,21 @@ fn view(g: &Got, expect: bool, l: Lang) -> View {
             g.err.as_ref().map(|e| e.text(l)),
         ),
         None => ("neutral", l.pick("Reading…", "正在读取…").to_string(), None),
-        Some(_) if running => (
+        Some(p) if running => (
             if stale { "stale" } else { "neutral" },
-            format!(
-                "{} · {pct}%",
-                if active(phase) {
-                    phase_word(phase, l)
-                } else {
-                    l.pick("Starting…", "正在开始…")
-                }
-            ),
-            live.clone().map(|v| match l {
-                Lang::En => format!("Live: {v} Mbps"),
-                Lang::Zh => format!("实时：{v} Mbps"),
-            }),
+            match (is_v2, p["step"].as_u64(), p["steps"].as_u64(), p["stage"].as_str().and_then(|s| stage_word(s, l))) {
+                (true, Some(n), Some(m), Some(w)) if n > 0 && active(phase) => format!("{n}/{m} · {w}"),
+                _ if active(phase) => phase_word(phase, l).to_string(),
+                _ => l.pick("Starting…", "正在开始…").to_string(),
+            },
+            if is_v2 && active(phase) {
+                stage_method(p, l)
+            } else {
+                live.clone().map(|v| match l {
+                    Lang::En => format!("Live: {v} Mbps"),
+                    Lang::Zh => format!("实时：{v} Mbps"),
+                })
+            },
         ),
         Some(p) if phase == "complete" => (
             "ok",
@@ -225,6 +446,9 @@ fn view(g: &Got, expect: bool, l: Lang) -> View {
     };
     let have = p.is_some() && phase != "idle";
     let loading = p.is_none() && g.err.is_none();
+    let v2 = p
+        .filter(|_| is_v2)
+        .map(|p| v2_of(p, phase, have, loading, l));
     let live_word = l.pick("Live", "实时");
     let val = |key: &str, live_here: bool| -> Option<Option<String>> {
         if loading {
@@ -257,6 +481,7 @@ fn view(g: &Got, expect: bool, l: Lang) -> View {
         l,
         tone,
         word,
+        tail: running.then(|| format!(" · {pct}%")),
         reason,
         running,
         pct,
@@ -275,6 +500,8 @@ fn view(g: &Got, expect: bool, l: Lang) -> View {
         ping: ro(val("ping_ms", false), ""),
         jitter: ro(val("jitter_ms", false), ""),
         details,
+        v2,
+        net: g.net,
     }
 }
 
@@ -335,6 +562,7 @@ pub struct Poll {
     got: Got,
     servers: Option<String>,
     servers_at: Option<Instant>,
+    net_at: Option<Instant>,
 }
 
 impl Poll {
@@ -345,6 +573,7 @@ impl Poll {
             got: Got::default(),
             servers: None,
             servers_at: None,
+            net_at: None,
         }
     }
 
@@ -359,6 +588,20 @@ impl Poll {
                 self.got.last_ok = Some(SystemTime::now());
             }
             Err(e) => self.got.err = Some(e),
+        }
+        // roaming and CHILL decide the cost line and the CHILL switch (same read as the
+        // diagnosis page), every 30 s
+        if self
+            .net_at
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(30))
+        {
+            if let Ok(n) = crate::agent::get(app, &self.who, "/api/netinfo?lite=1").await {
+                self.got.net = Some((
+                    n["roaming"].as_bool() == Some(true),
+                    n["chill_running"].as_bool() == Some(true),
+                ));
+                self.net_at = Some(Instant::now());
+            }
         }
     }
 
@@ -523,7 +766,17 @@ fn not_applied(l: Lang, e: &str) -> String {
     }
 }
 
+/// The page's choice plus `path:"chill"` only when 「也测经 CHILL」 is on (an old core then sees
+/// the same body as before).
 fn start_request(sig: &Value) -> Value {
+    let mut v = server_request(sig);
+    if sig["chill"] == true {
+        v["path"] = json!("chill");
+    }
+    v
+}
+
+fn server_request(sig: &Value) -> Value {
     if let Some(id) = sig["server"].as_u64() {
         return json!({"provider":"ookla","server_id":id});
     }
@@ -608,6 +861,14 @@ pub async fn start(
         let html = match r {
             Ok((c, v)) if (200..300).contains(&c) && v["ok"].as_bool() != Some(false) => {
                 *STARTED.lock().unwrap() = Some(Instant::now());
+                // DR12: 「也测经 CHILL」 is for one run, back to off
+                let _ = tx
+                    .send(
+                        Event::default()
+                            .event("datastar-patch-signals")
+                            .data("signals {\"chill\":false}"),
+                    )
+                    .await;
                 op_html(l, "ok", l.pick("Accepted by the device", "设备已接受"))
             }
             // another job holds the device (a diagnosis): the agent's own sentence says what and
@@ -749,7 +1010,8 @@ mod tests {
         );
         let v = view(&g, false, Lang::Zh);
         assert!(v.running);
-        assert_eq!(v.word, "测下载… · 42%");
+        assert_eq!(format!("{}{}", v.word, v.tail.as_deref().unwrap_or("")), "测下载… · 42%");
+        assert!(v.v2.is_none(), "an old core: no v2 parts");
         assert_eq!(v.reason.as_deref(), Some("实时：87.2 Mbps"));
         assert_eq!(v.dl.value.as_deref(), Some("87.2"));
         assert_eq!(v.dl.word, "实时");
@@ -762,7 +1024,7 @@ mod tests {
         let g = got(json!({"phase":"idle","progress":0}));
         let v = view(&g, true, Lang::Zh);
         assert!(v.running);
-        assert_eq!(v.word, "正在开始… · 0%");
+        assert_eq!(format!("{}{}", v.word, v.tail.as_deref().unwrap_or("")), "正在开始… · 0%");
         let v = view(&g, false, Lang::Zh);
         assert!(!v.running);
         assert_eq!(v.word, "还没有结果");
@@ -777,6 +1039,11 @@ mod tests {
         let v = view(&g, false, Lang::En);
         assert_eq!((v.tone, v.word.as_str()), ("ok", "Complete"));
         assert_eq!(v.reason.as_deref(), Some("Last test, on CHT (Taipei)"));
+        // an old core (no method_version): the four readouts as before, no conclusion or layers
+        assert!(v.v2.is_none() && v.cost() == "old");
+        let html = Leaves { v: &v }.render().unwrap();
+        assert!(html.contains("Jitter") && !html.contains("Layers") && html.contains("512 MB"));
+        assert!(!html.contains("Also test via CHILL"));
         let d = v.details.unwrap();
         assert_eq!(d.1, "400 MB");
         assert_eq!(d.2, "Download 390 MB · upload 10.0 MB");
@@ -810,6 +1077,132 @@ mod tests {
         }
         .render()
         .unwrap();
+        assert!(
+            !html.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)
+                || ('\u{3000}'..='\u{303f}').contains(&c)
+                || ('\u{ff00}'..='\u{ffef}').contains(&c)),
+            "{html}"
+        );
+    }
+
+    fn v2_done(extra: Value) -> Value {
+        let mut p = json!({"phase":"complete","progress":100,"download_mbps":312.4,"upload_mbps":41.2,
+            "ping_ms":23.0,"jitter_ms":2.4,"download_bytes":5.5e8,"upload_bytes":1.1e8,
+            "server":"Ookla · 上海电信 (上海)","method_version":2,"mode":"full","roaming_capped":false,
+            "path":"direct","stage":null,"step":5,"steps":5,"connections":6,
+            "download_whole_mbps":280.1,"upload_whole_mbps":38.0,"single_mbps":88.0,
+            "idle_ms":23.0,"loaded_down_ms":210.0,"sample_short":false,"net_tune":"off",
+            "verdict":{"bottlenecks":["single","queue"],"summary_zh":"慢在单连接、下载时卡","summary_en":"Slow at single connection, lag under load",
+              "layers":[
+                {"key":"single","state":"warn","value_zh":"88 Mbps，多连接的 1/3.5","value_en":"88 Mbps, 1/3.5 of multi"},
+                {"key":"proxy","state":"untested","value_zh":"没开「经 CHILL」","value_en":"\"Via CHILL\" off","reason":"not_requested"},
+                {"key":"queue","state":"warn","value_zh":"下载时延迟 +187 ms","value_en":"Latency +187 ms downloading"},
+                {"key":"radio","state":"ok","value_zh":"SINR 14 dB · n78（只供参考）","value_en":"SINR 14 dB · n78 (reference only)"},
+                {"key":"cell_wifi","state":"untested","value_zh":"没测","value_en":"Not tested","reason":"phase_two"}]}});
+        for (k, v) in extra.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        p
+    }
+
+    #[test]
+    fn v2_running_shows_the_step_and_the_method_not_the_percent() {
+        let g = got(json!({"phase":"download","progress":62,"live_speed_mbps":250.0,"method_version":2,
+            "mode":"full","stage":"multi_download","step":3,"steps":5,"connections":6}));
+        let v = view(&g, false, Lang::Zh);
+        assert_eq!(v.word, "3/5 · 多连接下载");
+        assert_eq!(v.tail.as_deref(), Some(" · 62%"));
+        assert_eq!(v.reason.as_deref(), Some("6 条连接 · 前 2 秒不计"));
+        assert_eq!(v.dl.value.as_deref(), Some("250.0"));
+        let v = view(&got(json!({"phase":"upload","progress":80,"method_version":2,"stage":"multi_upload","step":5,"steps":6,"connections":6})), false, Lang::En);
+        assert_eq!((v.word.as_str(), v.reason.as_deref()), ("5/6 · Multi-connection upload", Some("6-connection upload")));
+        let v = view(&got(json!({"phase":"discovering","progress":0,"method_version":2,"stage":null,"step":0,"steps":5})), false, Lang::Zh);
+        assert_eq!(v.word, "正在寻找测速节点…");
+        // the live region holds the step only; the percent sits outside it
+        let html = Leaves { v: &view(&g, false, Lang::Zh) }.render().unwrap();
+        let live = html.split("aria-live=\"polite\">").nth(1).unwrap().split("</span></span></span>").next().unwrap();
+        assert!(live.contains("3/5") && !live.contains('%'), "{live}");
+    }
+
+    #[test]
+    fn v2_complete_with_bottlenecks_layers_and_details() {
+        let v = view(&got(v2_done(json!({}))), false, Lang::Zh);
+        let x = v.v2.as_ref().unwrap();
+        assert_eq!(x.verdict, Some(("warn", "慢在单连接、下载时卡".into())));
+        assert!(!x.dim);
+        assert_eq!(x.loaded.value.as_deref(), Some("210.0"));
+        let names: Vec<_> = x.layers.iter().map(|r| (r.name, r.state)).collect();
+        assert_eq!(names, [("单连接","warn"),("代理","untested"),("下载时卡","warn"),("无线","ok"),("基站、Wi-Fi","untested")]);
+        assert!(x.layers.iter().all(|r| r.href.is_none()), "proxy not slow: no link");
+        let rows: Vec<_> = x.rows.iter().map(|r| format!("{}={}", r.0, r.1)).collect();
+        assert_eq!(rows, ["全程均值=↓ 280.1 Mbps · ↑ 38.0 Mbps", "抖动=2.4 ms", "连接数=6", "内核调参=关"]);
+        let html = Leaves { v: &v }.render().unwrap();
+        assert!(html.contains("分层") && html.contains("下载时延迟") && !html.contains("ro-jitter") && html.contains("ro-loaded"));
+        assert!(html.contains("完成</span></span> · <span class=\"nd-mark nd-mark--warn\">"));
+        // a slow proxy row leads to CHILL
+        let p = v2_done(json!({"verdict":{"bottlenecks":["proxy"],"summary_zh":"慢在代理","summary_en":"Slow at proxy",
+            "layers":[{"key":"proxy","state":"warn","value_zh":"经 CHILL 40 Mbps，直连的 13%","value_en":"40 Mbps via CHILL, 13% of direct"}]}}));
+        let v = view(&got(p), false, Lang::En);
+        let x = v.v2.as_ref().unwrap();
+        assert_eq!(x.layers[0].href, Some("/services/chill"));
+        assert_eq!(x.verdict, Some(("warn", "Slow at proxy".into())));
+        let none = v2_done(json!({"verdict":{"bottlenecks":[],"summary_zh":"没发现瓶颈","summary_en":"No bottleneck found","layers":[]}}));
+        assert_eq!(view(&got(none), false, Lang::Zh).v2.unwrap().verdict, Some(("ok", "没发现瓶颈".into())));
+    }
+
+    #[test]
+    fn v2_short_sample_and_rough_tests_have_no_layers() {
+        let v = view(&got(v2_done(json!({"sample_short":true,"verdict":null}))), false, Lang::Zh);
+        let x = v.v2.as_ref().unwrap();
+        assert_eq!(x.verdict, Some(("warn", "样本不足，数字只供参考".into())));
+        assert!(x.dim && x.layers.is_empty());
+        assert!(Leaves { v: &v }.render().unwrap().contains("st-dim"));
+        // short wins over coarse
+        let v = view(&got(v2_done(json!({"sample_short":true,"mode":"coarse","verdict":null}))), false, Lang::Zh);
+        assert!(v.v2.unwrap().dim);
+        let v = view(&got(v2_done(json!({"mode":"coarse","roaming_capped":true,"verdict":null}))), false, Lang::Zh);
+        let x = v.v2.unwrap();
+        assert_eq!(x.verdict, Some(("neutral", "粗测 · 漫游中只测 5 秒".into())));
+        assert!(!x.dim && x.layers.is_empty());
+        let v = view(&got(v2_done(json!({"mode":"coarse","verdict":null}))), false, Lang::En);
+        assert_eq!(v.v2.unwrap().verdict, Some(("neutral", "Rough test · 5 s only".into())));
+    }
+
+    #[test]
+    fn v2_cost_line_and_the_chill_switch() {
+        let mut g = got(json!({"phase":"idle","progress":0,"method_version":2}));
+        let v = view(&g, false, Lang::Zh);
+        assert_eq!((v.cost(), v.chill_off()), ("full", None));
+        let html = Leaves { v: &v }.render().unwrap();
+        assert!(html.contains("750 MB") && html.contains("1.15 GB") && html.contains("也测经 CHILL"));
+        g.net = Some((true, true));
+        let v = view(&g, false, Lang::Zh);
+        assert_eq!((v.cost(), v.chill_off()), ("roaming", Some("漫游中只粗测")));
+        let html = Leaves { v: &v }.render().unwrap();
+        assert!(html.contains("只粗测 5 秒、最多 30 MB") && html.contains("data-signals:chill=\"false\""));
+        g.net = Some((false, false));
+        assert_eq!(view(&g, false, Lang::Zh).chill_off(), Some("CHILL 没在运行"));
+        assert_eq!(start_request(&json!({"server":"auto","chill":true})), json!({"provider":"auto","path":"chill"}));
+        assert_eq!(start_request(&json!({"server":"auto","chill":false})), json!({"provider":"auto"}));
+    }
+
+    #[test]
+    fn v2_english_has_no_chinese() {
+        let mut html = String::new();
+        for p in [
+            v2_done(json!({})),
+            v2_done(json!({"sample_short":true,"verdict":null})),
+            v2_done(json!({"mode":"coarse","roaming_capped":true,"verdict":null,"net_tune":"on"})),
+            json!({"phase":"download","progress":40,"method_version":2,"stage":"single_download","step":2,"steps":5,"server":"x"}),
+        ] {
+            let mut g = got(p);
+            for n in [None, Some((true, true)), Some((false, false))] {
+                g.net = n;
+                html += &Leaves { v: &view(&g, false, Lang::En) }.render().unwrap();
+            }
+        }
+        // the server name is data (the device names it); everything else is ours
+        let html = html.replace("上海电信 (上海)", "");
         assert!(
             !html.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)
                 || ('\u{3000}'..='\u{303f}').contains(&c)

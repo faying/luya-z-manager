@@ -99,7 +99,8 @@ fn cache_put<T>(cache: &Cache<T>, key: String, ttl: Duration, value: T) {
 /// APN 块的四个读（10 分钟缓存；写过之后 `invalidate_cache`、数据卡换了（ICCID 变）都让这一轮立即读）。
 /// 任何一个失败整块 stale。不再 60 秒一读：厂商每读一次往 key.log 写约 30 行，
 /// 10-22 一天十几 MB，把承载记录（QoS）和别的诊断记录都冲掉了。
-async fn apn_reads(card: &str) -> Result<[Value; 4], String> {
+/// 候选列表要按数据卡所在的槽读（`apn_list_args`）：不带 slotId 读到的总是卡 1 的。
+async fn apn_reads(card: &str, slot2: bool) -> Result<[Value; 4], String> {
     const O: &str = "zwrt_apn_object";
     static CARD: Mutex<String> = Mutex::new(String::new());
     if let Ok(mut seen) = CARD.lock()
@@ -116,7 +117,7 @@ async fn apn_reads(card: &str) -> Result<[Value; 4], String> {
         ubus_ttl(600, O, "get_apn_mode", json!({})).await?,
         ubus_ttl(600, O, "get_apn_at_cid", json!({"cid": 1})).await?,
         ubus_ttl(600, O, "get_manu_apn_list", json!({})).await?,
-        ubus_ttl(600, O, "get_auto_apn_list", json!({})).await?,
+        ubus_ttl(600, O, "get_auto_apn_list", apn_list_args(slot2)).await?,
     ])
 }
 
@@ -990,11 +991,11 @@ async fn read_inputs(hub: &crate::block::Hub) -> Inputs {
     let battery = hub.legacy("battery");
     let charger = hub.legacy("charger");
     let nfc = ubus_ttl(60, "zwrt_nfc", "zwrt_nfc_wifi_get", json!({})).await;
-    let apn = apn_reads(&{
+    let apn = {
         let sim = object(sim.clone());
-        card_field(&sim, data_on_slot2(&sim), "sim_iccid")
-    })
-    .await;
+        let slot2 = data_on_slot2(&sim);
+        apn_reads(&card_field(&sim, slot2, "sim_iccid"), slot2).await
+    };
     let router = router_reads().await;
     // u60d：登记短信会话密钥（`zwrt_web web_http_enstr_set`）会顶掉另一个进程（比如并跑的 data-service）在厂商那里登记的那把，
     // 它之后就解不开短信（密钥缓存到重启）。所以只在 u60d 就是核心（`luyaz-core` 名字起、serve 模式）
@@ -1072,9 +1073,15 @@ async fn read_inputs(hub: &crate::block::Hub) -> Inputs {
     };
     // 同步读文件一次交给阻塞线程池，先后和原来一样：thermal、runtime、key.log、租约、电源轨。
     let qos_token = hub.firmware().token();
+    // 记录仪（netrec.rs，LUYAZ_NETREC=1）：只用这一轮已读到的厂商计数、客户端表、基带信息
+    let netrec = crate::netrec::enabled()
+        .then(|| crate::netrec::Pre::from_reads(&traffic, &lan_clients, &wifi_clients, &net));
     let (cpu_sys, zones, cpu_usage_tenths, runtime, qos_logs, leases, rails) = blocking(|| {
         let (cpu_sys, zones, runtime_zones) = thermal_zones();
         let (cpu_usage_tenths, runtime) = runtime(runtime_zones);
+        if let Some(pre) = netrec {
+            crate::netrec::tick(pre, &runtime, now_ms(), unix_now());
+        }
         let qos_logs = crate::qos::logs();
         (
             cpu_sys,

@@ -29,7 +29,7 @@ use serde_json::{Value, json};
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 pub const DIR: &str = "/data/signal-log";
@@ -674,6 +674,32 @@ impl Store {
         (ms, es)
     }
 
+    /// Events of one of `kinds` with `from <= t < to`, oldest first. Each day file is read line
+    /// by line and only a line naming one of the kinds is parsed: a deep diagnosis wants its two
+    /// rare kinds out of a week of cell changes, and reading the minutes with them held about
+    /// 20 MB of heap for nothing (10-25, u60g).
+    pub fn read_events(&self, from: u64, to: u64, kinds: &[&str]) -> Vec<Event> {
+        let tags: Vec<String> = kinds.iter().map(|k| format!("\"kind\":{}", json!(k))).collect();
+        let mut es = Vec::new();
+        let mut day = from / 86_400;
+        while day * 86_400 < to {
+            if let Ok(f) = fs::File::open(self.events_path(&day_name(day * 86_400))) {
+                for l in BufReader::new(f).lines().map_while(Result::ok) {
+                    if !tags.iter().any(|t| l.contains(t.as_str())) {
+                        continue;
+                    }
+                    match serde_json::from_str::<Event>(&l) {
+                        Ok(e) if e.t >= from && e.t < to && kinds.contains(&e.kind.as_str()) => es.push(e),
+                        _ => {}
+                    }
+                }
+            }
+            day += 1;
+        }
+        es.sort_by_key(|e| e.t);
+        es
+    }
+
     /// Delete day files older than [`KEEP_DAYS`] before `now`'s day.
     pub fn prune(&self, now: u64) {
         let keep_from = day_name(now.saturating_sub(KEEP_DAYS * 86_400));
@@ -795,6 +821,19 @@ impl Log {
         let disk_last_e = es.last().map(|e| e.t);
         es.extend(self.rec.events.iter().filter(|e| e.t >= from && e.t < to && disk_last_e.is_none_or(|l| e.t > l)).cloned());
         (ms, es)
+    }
+
+    /// [`Log::range`]'s events of `kinds` only, without the minutes.
+    pub fn events(&self, from: u64, to: u64, kinds: &[&str]) -> Vec<Event> {
+        let of = |e: &&Event| e.t >= from && e.t < to && kinds.contains(&e.kind.as_str());
+        let mem_from = self.rec.minutes.front().map(|m| m.t).unwrap_or(u64::MAX);
+        if from >= mem_from || !self.loaded {
+            return self.rec.events.iter().filter(of).cloned().collect();
+        }
+        let mut es = self.store.read_events(from, to, kinds);
+        let disk_last = es.last().map(|e| e.t);
+        es.extend(self.rec.events.iter().filter(of).filter(|e| disk_last.is_none_or(|l| e.t > l)).cloned());
+        es
     }
 }
 

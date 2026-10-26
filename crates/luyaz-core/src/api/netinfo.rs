@@ -251,7 +251,7 @@ fn scenes(c: &Compat) -> Value {
     )
 }
 
-/// The four `zwrt_apn_object` reads.
+/// The four `zwrt_apn_object` reads (the auto list for the data card's slot).
 async fn read_apn(c: &Compat) -> Result<(Value, Value, Value, Value), String> {
     let call = |m: &'static str, a: Value| (c.src.ubus)("zwrt_apn_object", m, a);
     match call("get_apn_mode", json!({})).await {
@@ -261,7 +261,7 @@ async fn read_apn(c: &Compat) -> Result<(Value, Value, Value, Value), String> {
             call("get_apn_at_cid", json!({"cid": 1}))
                 .await
                 .unwrap_or(Value::Null),
-            call("get_auto_apn_list", json!({}))
+            call("get_auto_apn_list", super::ops::auto_apn_args(c).await)
                 .await
                 .unwrap_or(Value::Null),
             call("get_manu_apn_list", json!({}))
@@ -291,21 +291,7 @@ async fn apn(c: &Compat) -> Value {
             reads
         }
     };
-    let iccid = match c
-        .src
-        .hub
-        .as_ref()
-        .and_then(|h| h.view("sim"))
-        .filter(|v| !v.stale)
-    {
-        Some(b) => b.data["iccid"].as_str().unwrap_or("").to_string(),
-        None => (c.src.ubus)("zwrt_zte_mdm.api", "get_sim_info", json!({}))
-            .await
-            .ok()
-            .and_then(|v| v["sim_iccid"].as_str().map(str::to_string))
-            .unwrap_or_default(),
-    };
-    let iccid = iccid.trim().trim_end_matches(['F', 'f']).to_string();
+    let iccid = super::ops::current_iccid(c).await;
     let store = read_json(c, ni::APN_PICK_STORE).unwrap_or(Value::Null);
     let (picked, notice) = ni::apn_pick_view(&store, &iccid, now() as u64);
     let err = c

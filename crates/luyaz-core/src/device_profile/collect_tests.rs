@@ -58,7 +58,7 @@ fn assessment<'a>(r: &'a CapabilityReport, id: &str) -> &'a CapabilityAssessment
 fn empty_report_is_complete_schema_and_unique_per_collector() {
     let c = Collector::new();
     let report = c.report(Some(&at(1)));
-    assert_eq!(report.assessments.len(), 13);
+    assert_eq!(report.assessments.len(), 14);
     assert!(
         report
             .assessments
@@ -549,4 +549,127 @@ fn a_fresh_online_read_keeps_the_radio_epoch_the_proposal_bound() {
     c.radio_read(c.token(), Some("LOW_POWER"), Some(at(210)));
     c.radio_read(c.token(), Some("ONLINE"), Some(at(220)));
     assert_ne!(c.loop_epochs(Some(&at(221)), 30).0.radio, first);
+}
+
+#[test]
+fn ubus_capability_resolves_only_with_the_listener_minted_epoch() {
+    // §12.10: the real producer, not synthetic epochs. `usb.mode.setter.surface` is `[Ubus]`.
+    let surface = |c: &Collector, s: u64| {
+        assessment(&c.report(Some(&at(s))), "usb.mode.setter.surface").status
+    };
+    let c = Collector::new();
+    identity(&c, "CN_ZTE_MU5250V1.0.0B31");
+    c.ubus_object_event(Some("zwrt_bsp.usb"));
+    assert_eq!(
+        c.token().context.ubus_epoch,
+        None,
+        "no epoch before the probe"
+    );
+    listing(&c, c.token(), 2, PRESENT, true);
+    assert_eq!(surface(&c, 3), Support::Unknown);
+    let before = c.token();
+    c.ubus_listening();
+    let first = c.token().context.ubus_epoch.expect("probe mints");
+    listing(&c, before, 3, PRESENT, true);
+    assert_eq!(surface(&c, 4), Support::Unknown, "bound to no epoch");
+    listing(&c, c.token(), 4, PRESENT, true);
+    assert_eq!(surface(&c, 5), Support::Supported);
+    c.ubus_object_event(Some("unrelated.object"));
+    assert_eq!(surface(&c, 5), Support::Supported, "unrelated object kept");
+    c.ubus_object_event(Some("zwrt_bsp.usb"));
+    let second = c.token().context.ubus_epoch.expect("still live");
+    assert_ne!(first, second);
+    assert_eq!(surface(&c, 6), Support::Unknown, "target object lifecycle");
+    listing(&c, c.token(), 6, PRESENT, true);
+    assert_eq!(surface(&c, 7), Support::Supported);
+    c.invalidate_context(crate::device_profile::context::Loss::Ubus);
+    assert_eq!(c.token().context.ubus_epoch, None);
+    assert_eq!(surface(&c, 8), Support::Unknown, "listener gap");
+    c.ubus_listening();
+    assert_ne!(
+        c.token().context.ubus_epoch.as_deref(),
+        Some(second.as_str())
+    );
+}
+
+#[test]
+fn ubus_object_filter_is_derived_from_the_ubus_specs() {
+    use crate::device_profile::resolve::ubus_object_relevant as relevant;
+    for p in [
+        "zwrt_bsp.usb",
+        "zwrt_bsp.typec",
+        "zwrt_bsp.powerbank",
+        "zwrt_bsp",
+    ] {
+        assert!(relevant(p), "{p}");
+    }
+    for p in ["zwrt_bsp.usbx", "zwrt_wms", "qos", "AT", "", "zwrt_bs"] {
+        assert!(!relevant(p), "{p}");
+    }
+}
+
+#[test]
+fn ubus_usb_capability_resolves_only_when_both_producer_epochs_match() {
+    // §12.10: the real producers. `usb.status.read` is `[Ubus, Usb]`.
+    let read = |c: &Collector, s: u64| {
+        c.ubus(
+            c.token(),
+            Some(at(s)),
+            "zwrt_bsp.usb",
+            "list",
+            Some(&json!({"mode":"user"})),
+        );
+    };
+    let status =
+        |c: &Collector, s: u64| assessment(&c.report(Some(&at(s))), "usb.status.read").status;
+    let c = Collector::new();
+    identity(&c, "CN_ZTE_MU5250V1.0.0B31");
+    c.usb_event();
+    assert_eq!(
+        c.token().context.usb_epoch,
+        None,
+        "no epoch before the snapshot"
+    );
+    c.ubus_listening();
+    read(&c, 2);
+    assert_eq!(status(&c, 3), Support::Unknown, "ubus epoch alone");
+    c.usb_live(true);
+    let first = c.token().context.usb_epoch.expect("snapshot mints");
+    assert_eq!(
+        status(&c, 3),
+        Support::Unknown,
+        "read bound to no USB epoch"
+    );
+    read(&c, 3);
+    assert_eq!(status(&c, 4), Support::Supported);
+    c.usb_event();
+    let second = c.token().context.usb_epoch.expect("still live");
+    assert_ne!(first, second);
+    assert_eq!(status(&c, 4), Support::Unknown, "uevent reminted");
+    read(&c, 4);
+    assert_eq!(status(&c, 5), Support::Supported);
+    // Vendor BSP event: revoke + remint at once, the uevent socket is still live.
+    c.invalidate_context(crate::device_profile::context::Loss::Usb);
+    let third = c.token().context.usb_epoch.expect("reminted");
+    assert_ne!(second, third);
+    assert_eq!(status(&c, 5), Support::Unknown);
+    read(&c, 5);
+    assert_eq!(status(&c, 6), Support::Supported);
+    // A ubus gap clears the ubus epoch; the USB one is reminted, the read stays unknown.
+    c.invalidate_context(crate::device_profile::context::Loss::Ubus);
+    assert_eq!(c.token().context.ubus_epoch, None);
+    assert!(c.token().context.usb_epoch.is_some());
+    read(&c, 6);
+    assert_eq!(status(&c, 7), Support::Unknown, "ubus missing");
+    c.ubus_listening();
+    read(&c, 7);
+    assert_eq!(status(&c, 8), Support::Supported);
+    // SEQNUM gap: the producer reports lost; nothing until the next snapshot.
+    c.usb_live(false);
+    assert_eq!(c.token().context.usb_epoch, None);
+    assert_eq!(status(&c, 8), Support::Unknown, "uevent stream lost");
+    read(&c, 8);
+    assert_eq!(status(&c, 9), Support::Unknown, "no USB epoch to bind");
+    c.usb_live(true);
+    assert_ne!(c.token().context.usb_epoch.as_deref(), Some(third.as_str()));
 }

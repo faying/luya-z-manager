@@ -123,8 +123,8 @@ pub trait Host: Send + Sync + 'static {
     }
     /// Into the signal history (`diagnose`, `speed`, `diagnose_feedback`).
     fn push_event(&self, kind: &str, data: Value);
-    /// History events with `from <= t < to`.
-    fn events(&self, from: u64, to: u64) -> Vec<Event>;
+    /// History events of one of `kinds` with `from <= t < to`.
+    fn events(&self, from: u64, to: u64, kinds: &[&str]) -> Vec<Event>;
 }
 
 /// The runner: the gate it shares with its caller's search/register and speed test, and the run.
@@ -229,12 +229,16 @@ impl Diagnosis {
         let done: OnDone = Box::new(move |p: &SpeedTestProgress| {
             let row = speed_row(p);
             me.update(id, |r| r.speed = Some(row));
-            if let Some(m) = p.download_mbps() {
+            // R3: a short sample (v2 engine's `sample_short`) still shows in the row but never
+            // enters the history. Read through the JSON so an engine without the field is fine.
+            let short = serde_json::to_value(p).ok().and_then(|v| v.get("sample_short").and_then(Value::as_bool)).unwrap_or(false);
+            if let Some(m) = p.download_mbps().filter(|_| !short) {
                 let mut ev = key_json(&key);
                 ev["id"] = json!(id);
                 ev["mbps"] = json!(m);
                 ev["bytes"] = json!(p.download_bytes());
                 ev["route"] = json!("direct");
+                ev["method"] = json!(SPEED_METHOD);
                 me.host.push_event("speed", ev);
             }
         });
@@ -498,7 +502,7 @@ impl Diagnosis {
         } else {
             self.update(id, |r| r.running("crowd"));
             let now = now_unix();
-            let events = self.host.events(now.saturating_sub(7 * 86_400), now + 1);
+            let events = self.host.events(now.saturating_sub(7 * 86_400), now + 1, &["diagnose", "speed"]);
             let (past, speeds) = past_from_events(&events);
             self.update(id, |r| r.put(judge_crowd(&radio, &key, probe.as_ref(), &past, &speeds)));
         }

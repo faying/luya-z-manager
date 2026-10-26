@@ -776,6 +776,13 @@ pub(crate) fn card_field(sim: &Value, slot2: bool, key: &str) -> String {
     }
 }
 
+/// `get_auto_apn_list`'s args for the data card. Without `slotId` it answers slot 1's list
+/// even when data is on slot 2 (u60g 10-25: slot 2 dialling CMIOT5G, the bare call said
+/// slot 1's cmhk / cmlink). Slot 1 keeps the bare call (the same answer, B27 included).
+pub(crate) fn apn_list_args(slot2: bool) -> Value {
+    if slot2 { json!({"slotId": 2}) } else { json!({}) }
+}
+
 pub(crate) fn string(v: &Value, key: &str) -> String {
     match v.get(key) {
         Some(Value::String(x)) => x.clone(),
@@ -1267,9 +1274,10 @@ pub(crate) fn apn_block([mode, at_cid, manual, auto]: &[Value; 4]) -> c::Apn {
             .map(|a| a.iter().map(apn_profile).collect())
             .unwrap_or_default()
     };
+    let mode = integer(mode, "apn_mode");
     c::Apn {
-        mode: integer(mode, "apn_mode"),
-        current: string(at_cid, "profileId"),
+        current: string(luyaz_api::netinfo::dialled_on_card(mode != 1, at_cid, auto, manual), "profileId"),
+        mode,
         manual: list(manual),
         auto: list(auto),
     }

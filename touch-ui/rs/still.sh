@@ -22,7 +22,7 @@ docker run --rm -v u60-ui-rs-target:/t:ro -v "$models":/m:ro \
     -v "$LUYAZ_DEVICE_FONTS":/fonts/dev:ro -v "$LUYAZ_NUNITO_DIR":/fonts/nunito:ro \
     -e LUYAZ_UI_CJK_FONT=/fonts/dev/ZTEZhengYuan.ttf -e LUYAZ_UI_ROBOTO=/fonts/dev/Roboto.ttf \
     -e LUYAZ_UI_FONT_DIR=/fonts/nunito u60-rust-ci:1.99.0 sh -c '
-for n in "$@"; do /t/release-device/luyaz-ui --render --models=/m --name=$n --pages=none --still 2>/dev/null | grep "^STILL"; done' sh $names >/tmp/still.$$ || true
+for n in "$@"; do /t/aarch64-unknown-linux-musl/release-device/luyaz-ui --render --models=/m --name=$n --pages=none --still 2>/dev/null | grep "^STILL"; done' sh $names >/tmp/still.$$ || true
 LIVE='op-verifying op-rollback-off'
 bad=$(awk -v live=" $LIVE " '{ s = $2; sub(/^\[/, "", s); sub(/\/.*/, "", s) } $4 != 0 && index(live, " " s " ") == 0' /tmp/still.$$)
 runs=$(awk '{print $2}' /tmp/still.$$ | sort -u | wc -l | tr -d ' ')

@@ -50,6 +50,7 @@ pub fn routes() -> Router<Shared> {
         .route("/agent-api/act/apn/use", post(apn_use))
         .route("/agent-api/act/apn", post(apn))
         .route("/agent-api/act/link", post(link))
+        .route("/agent-api/act/regress-accept", post(regress_accept))
         .route("/agent-api/act/status", get(status))
         .route("/agent-api/action-url", get(action_url))
 }
@@ -328,6 +329,41 @@ async fn link(State(app): State<Shared>, req: Request) -> Response {
     }
     let url = if action.starts_with("cell.") { cell_url } else { band_url };
     act_as(&app, &name, action, pick(&b["params"], keys), url, true).await
+}
+
+/// Accept a relative regress incident's level as the new normal (design 2026-10-24 §4, CEO
+/// review G2): only on the owner's explicit instruction (`instruction: "owner"`); the core checks
+/// the incident has been open 3 days and has enough recent hours, and records `source=mcp`.
+async fn regress_accept(State(app): State<Shared>, req: Request) -> Response {
+    let name = match admit_act(&req) {
+        Ok(n) => n,
+        Err(r) => return r,
+    };
+    let Some(b) = body_of(req).await else {
+        return refuse(400, "bad_request", "a JSON object with kind and instruction");
+    };
+    let kind = b["kind"].as_str().unwrap_or("");
+    if !matches!(kind, "regress-mem" | "regress-power") {
+        return refuse(400, "bad_request", "kind must be regress-mem or regress-power");
+    }
+    if b["instruction"] != "owner" {
+        return refuse(
+            403,
+            "needs_instruction",
+            "accepting a new normal is the owner's call: only on their explicit instruction (instruction: owner)",
+        );
+    }
+    eprintln!("[agent-api] {name} act regress.accept {kind}");
+    match control(&app, "regress.accept", json!({"kind": kind}), true).await {
+        Ok((code, v)) if (200..300).contains(&code) && v["ok"] != false => reply(json!({
+            "state": "done", "said": untrusted(&v["data"]["said"]),
+            "authority": authority(&name, "regress", false, None),
+        })),
+        Ok((409, v)) => reply(json!({"state": "refused",
+            "reason": untrusted(&v["error"]["message"]), "note": "the incident stays open; do not retry until it changes"})),
+        Ok((code, v)) => reply(shape(code, &v, None)),
+        Err(()) => reply(json!({"core": "down"})),
+    }
 }
 
 /// Use an APN (`{"id"}`: `auto`, a candidate `autoN`, a manual `manuN`): the core's `apn_use`

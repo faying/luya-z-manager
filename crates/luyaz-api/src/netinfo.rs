@@ -1361,6 +1361,7 @@ pub fn apn_view(mode: &Value, dialled: &Value, auto: &Value, manual: &Value) -> 
         Value::String(s) => s.parse().unwrap_or(0),
         v => v.as_i64().unwrap_or(0),
     };
+    let dialled = dialled_on_card(mode != 1, dialled, auto, manual);
     let in_use = dialled["profileId"].as_str().unwrap_or("");
     let list = |v: &Value| -> Vec<Value> {
         v["apnListArray"]
@@ -1374,6 +1375,20 @@ pub fn apn_view(mode: &Value, dialled: &Value, auto: &Value, manual: &Value) -> 
         "auto": list(auto),
         "manual": list(manual),
     })
+}
+
+/// The profile the data card is on. `get_apn_at_cid` is not per slot: after data moves to the
+/// other card it keeps answering the old card's profile (u60g 10-25: slot 2 on CMIOT5G, it still
+/// said slot 1's cmhk, which is in neither of this card's lists). In automatic mode such an
+/// answer gives way to this card's enabled candidate; one that is in a list stands.
+pub fn dialled_on_card<'a>(auto_mode: bool, dialled: &'a Value, auto: &'a Value, manual: &'a Value) -> &'a Value {
+    let arr = |v: &'a Value| v["apnListArray"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let id = dialled["profileId"].as_str().unwrap_or("");
+    let listed = |v| arr(v).iter().any(|p| p["profileId"].as_str() == Some(id));
+    if !auto_mode || id.is_empty() || listed(auto) || listed(manual) {
+        return dialled;
+    }
+    arr(auto).iter().find(|p| truthy(&p["isEnable"])).unwrap_or(dialled)
 }
 
 pub const NBR_UNSUPPORTED: &str = "原厂扫描会断网且拿不到数据，已停用";

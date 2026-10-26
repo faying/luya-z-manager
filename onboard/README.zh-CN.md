@@ -1,6 +1,6 @@
 # Luya-Z 装机包（ZTE U60 Pro / MU5250）
 
-*[English](README.md) · 中文*。把一台**刚开箱的 ZTE U60 Pro（MU5250）**变成 Luya-Z 设备，只要跑一次 `./install.sh`。
+*[English](README.md) · 中文*。在你自己已经配好的 SSH 登录上跑一次 `./install.sh`，把 ZTE U60 Pro（MU5250）变成 Luya-Z 设备。
 
 ## 会装上什么
 
@@ -19,15 +19,10 @@
 
 ## 需要准备
 
-1. **固件 B27～B31。** 版本号在网页后台首页或「设备信息」里，结尾类似 `…MU5250V1.0.0B31`。B27 及更老，装机包经 USB 调试（ADB）开 SSH；B28 起装机包开 ADB 用的接口（`zwrt_bsp.usb set`）没了，要先自己开好 SSH（见 [GETTING-STARTED](../docs/GETTING-STARTED.zh-CN.md) 第 2 节），之后装机包照常用。B31 之后的版本没测过：**装之前别升级。**
-2. **路由器管理密码**，也就是在 `http://192.168.0.1` 登录用的那个。
-3. 一根**能传数据的 USB-C 线**。有些线只能充电。
-4. 电脑上有 **adb**：
-   - Mac 电脑：`brew install android-platform-tools`
-   - Linux 电脑：`sudo apt install adb`
-   - Windows 电脑：下载 Google 的 [SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools)，解压后把目录加进 PATH；
-     再装 [Git for Windows](https://git-scm.com/download/win)，下面的命令都在 **Git Bash** 里输入
-5. 要用 eSIM 就准备一张可插拔 eUICC 卡。普通 SIM 卡也能完成安装，只是 eSIM 页面会显示没有卡。
+1. **SSH 已经能用。** 装机包只经你自己已经配好的 SSH 登录工作：`root`、端口 2222（dropbear）、你的密钥（`SSH_KEY`，默认 `~/.ssh/id_ed25519`），自己不会去开任何进入设备的方式。SSH 怎么来的不在本项目范围内。可以先用 `ssh -p 2222 -i ~/.ssh/id_ed25519 root@192.168.0.1 true` 试一下。
+2. **固件 B27～B31。** 版本号在网页后台首页或「设备信息」里，结尾类似 `…MU5250V1.0.0B31`。B31 之后的版本没测过：**装之前别升级。**`install.sh` 动手之前会先读设备的型号和固件，按 `firmware-capabilities.matrix.json`（型号 / 地区 / 固件 → 每个组件 `verified`、`code-only` 或 `unsupported`）逐个组件对照：国行 B27、B31 在真机上装过；B28～B30 和 MU5252 上各组件是 `code-only`，要加 `LUYAZ_ALLOW_UNVERIFIED=1` 才装；`unsupported` 的组件（以及更新的固件、别的地区、别的机型上的全部组件）跳过并说明，其余照装；一个都不剩才停。
+3. 电脑上有 **ssh** 和 **tar**。Windows 电脑装 [Git for Windows](https://git-scm.com/download/win)，下面的命令都在 **Git Bash** 里输入。
+4. 要用 eSIM 就准备一张可插拔 eUICC 卡。普通 SIM 卡也能完成安装，只是 eSIM 页面会显示没有卡。
 
 ## 安装
 
@@ -39,11 +34,10 @@ cd luyaz-kit
 
 脚本会一步步带你：
 
-1. 连上 U60 的 **Wi-Fi**，输入路由器管理密码，脚本通过网页接口打开 USB 调试。（别只靠 USB 网络共享：调试模式一打开，那条网就断了。）
-2. 提示在等 ADB 设备时，用 USB-C 线把 U60 接到电脑上。
-3. 给**高级后台**定一个登录密码。直接回车 = 用路由器管理密码；不能有引号、反斜杠、空格。
-4. 接下来上传、安装、检查自动进行，约 1～2 分钟；屏幕闪一下，回来就是新界面。
-5. 问要不要**重启验证**时选是：重启后脚本会确认 SSH、高级后台和屏幕都自己起来了。
+1. 先确认 SSH 能登录（登不上就停，什么都不改）。
+2. 给**高级后台**定一个登录密码。直接回车 = 沿用设备上已有的（第一次装必须输入，或设 `AGENT_PASSWORD`）；不能有引号、反斜杠、空格。
+3. 接下来4. 接下来上传、安装、检查自动进行，约 1～2 分钟；屏幕闪一下，回来就是新界面。
+4. 问要不要**重启验证**时选是：重启后脚本会确认 SSH、高级后台和屏幕都自己起来了。
 
 ### 装完以后
 
@@ -58,12 +52,12 @@ cd luyaz-kit
 claude              # Claude Code 会读这里的 CLAUDE.md
 ```
 
-跟它说「帮我装 U60」。它会先查 adb、网络和固件，再问密码。不想把密码交给它，就 `cp u60.env.example u60.env`，自己填好，然后告诉它「密码在 u60.env 里」。需要人动手的地方（插线、同不同意重启等）它会停下来问你。
+跟它说「帮我装 U60」。它会先确认 SSH 能登录，再问高级后台密码。不想把密码交给它，就 `cp u60.env.example u60.env`，自己填好，然后告诉它「密码在 u60.env 里」。需要人动手的地方（同不同意重启等）它会停下来问你。
 
 ### 只装一部分，以及其他命令
 
 ```sh
-./install.sh ssh               # 只开 ADB 并装上重启不丢的 SSH
+./install.sh ssh               # 只把 SSH 登录装成重启不丢（dropbear 2222 端口，你的密钥）
 ./install.sh ssh admin ui   # 除了 eSIM 都装
 ./install.sh chill             # CHILL 代理（不在默认组件里；第一次装完不启动，见「日常用法」）
 ./install.sh recover           # u60 ship 的开机收尾：在设备上自检通过后放上 /data/luyaz/ship/luyaz-recover.sh，
@@ -74,9 +68,12 @@ claude              # Claude Code 会读这里的 CLAUDE.md
 ./install.sh backup            # 把设备配置备份到这台电脑的 ./backups/（里面有密码，别外传）；
                                #   另存一份 config-…system.tgz（rc.local、我们的 init.d 脚本、dropbear host key、
                                #   authorized_keys、start_dropbear.sh），供升固件前参考，restore 不恢复它
-./install.sh restore 备份.tgz  # 先列出会改哪些文件，输入 yes 才写
+./install.sh restore 备份.tgz  # 先和 backup 旁存的 备份.tgz.sha256 比对（不符一律不恢复；没有它的旧备份要
+                               #   LUYAZ_RESTORE_NO_SHA256=1），推到设备后再比一次，再列出会改哪些文件，输入 yes 才写
 ./install.sh reboot            # 重启一次，确认各组件都能自己起来
 ```
+
+装到一半断了（连接掉了、某个组件失败）：用同一个包再跑一次。设备上 `/data/luyaz/kit/progress` 按组件记着进度（`./install.sh status` 能看到），已装完的组件跳过，从第一个没完成的续；换了包或加 `KIT_FRESH=1` 就从头来。
 
 以后要更新或重装某个组件，解开新的装机包跑 `./install.sh admin`（或 `ui` / `esim`）即可，走 SSH，不用插线。
 
@@ -118,11 +115,10 @@ U60 不在默认地址时：`GATEWAY=192.168.x.1 ./install.sh`。
   3. 以后在后台「服务 → CHILL」里开关、选出口。那一页的按钮打开 zashboard，由高级后台在自己的登录后面提供（`:9090/chill-ui/`，经 Tailscale 也能用）。
 
   之后再跑 `./install.sh chill` 就是更新：订阅地址和缓存保留；原来在运行的话会重启内核，新内核起不来会自动换回旧的。
-- **临时要用 ADB**：SSH 进去跑 `ubus call zwrt_bsp.usb set '{"mode":"debug"}'`。`./install.sh status` 里「USB 模式」显示 `user` 就说明已回到普通模式。只在 `ubus -v list zwrt_bsp.usb` 还列出 `set` 的固件上有效；CN B31 只列 `list`，调用会报 `Method not found`。
 
 ## 别做的事
 
-- **别升级固件。** 升级会换掉 `rc.local`，SSH、高级后台、屏幕开机都不再自己起来；新固件又开不了 ADB，没法重装。装 SSH 时已经关了自动升级，手机 App 和网页里的升级提示也别点。
+- **别升级固件。** 升级会换掉 `rc.local`，SSH、高级后台、屏幕开机都不再自己起来，还可能丢掉装机包重装要用的 SSH 登录。装 SSH 时已经关了自动升级，手机 App 和网页里的升级提示也别点。
 - **别用 `/etc/init.d/<服务> disable` 关原厂服务。** U60 的主守护进程要等一组固定的服务全部报到才放行开机；关掉其中一个，屏幕就停在 ZTE logo，模块也不拨号。想精简服务先问清楚。
 - **人在远程时别把 eSIM 切到没流量的 profile。** 如果远程连接走的就是这台 U60 的网络，一切换就断了，只能到设备跟前在屏幕上切回来。
 - 这是非官方改装，风险自负。
@@ -146,8 +142,7 @@ reboot   # 重启后生效
 
 ## 出问题时
 
-- **登录失败、被锁**：网页后台连续输错 5 次会锁一段时间。脚本会显示还能试几次、多久解锁；别再猜，先核对密码。
-- **一直等不到 ADB 设备**：换根线，插电脑本身的 USB 口（别用扩展坞、Hub）。Windows 上打开设备管理器，看到带黄色感叹号的设备时：先装 Google USB Driver，再右键 → 更新驱动程序 → 浏览我的电脑 → 选「Android ADB Interface」。`adb devices` 出现以 `device` 结尾的一行就通了，重跑 `./install.sh` 会接着装。
+- **装之前 SSH 就登不上**：脚本会停下，什么都不改。核对 `GATEWAY`、`SSH_KEY`，以及代理软件的 TUN/增强模式有没有劫持 `192.168.0.1`（设成直连，不用整个关掉）。SSH 本身怎么开通不在本项目范围内。
 - **提示 SSH 连不上**：设备那边已经装好了，提示会说是没有密钥、连接被拒、认证失败还是超时。常见原因是电脑没连 U60 的 Wi-Fi，或者代理软件的 TUN/增强模式劫持了 `192.168.0.1`（在代理里把 `192.168.0.0/16` 设成直连，不用整个关掉）。然后再试 `ssh -p 2222 -i ~/.ssh/id_ed25519 root@192.168.0.1`。
 - **屏幕上没数据**：SSH 进去看 `tail -n 50 /tmp/luyaz-core.log`（屏幕本身不对再看 `/tmp/luyaz-sentinel.log`），或者跑 `./install.sh doctor`。重启一次一般就好。
 - **装到一半失败**：直接再跑一遍，装好的部分会跳过或覆盖。一直失败的话，把终端的完整输出发给给你装机包的人。

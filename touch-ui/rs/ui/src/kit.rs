@@ -672,7 +672,7 @@ pub fn battery_set(b: &Battery, pct: i32, charging: bool) {
 
 // ---------------------------------------------------------------- charts
 /// Area under the first series: flat low-opacity triangles + rects (LVGL has no area series);
-/// the second series dashed.
+/// the second series drawn over it, solid (dashes hid the upload line on Home, 10-24).
 unsafe extern "C" fn chart_fill_cb(e: *mut sys::lv_event_t) {
     // SAFETY: LVGL's DRAW_TASK_ADDED event on a chart: the task, its descriptors and layer are
     // valid for the call
@@ -683,12 +683,6 @@ unsafe extern "C" fn chart_fill_cb(e: *mut sys::lv_event_t) {
             return;
         }
         let obj = sys::lv_event_get_target_obj(e);
-        if (*base).id1 == 1 {
-            let ld = sys::lv_draw_task_get_line_dsc(dt);
-            (*ld).dash_width = 4;
-            (*ld).dash_gap = 3;
-            return;
-        }
         if (*base).id1 != 0 {
             return;
         }
@@ -726,7 +720,7 @@ unsafe extern "C" fn chart_fill_cb(e: *mut sys::lv_event_t) {
     }
 }
 
-/// Line chart without its own background; second series (c2 != 0) dashed, the first with a
+/// Line chart without its own background; second series (c2 != 0) on top, the first with a
 /// low-opacity area fill.
 #[allow(clippy::too_many_arguments)]
 pub fn chart(p: Obj, x: i32, y: i32, w: i32, h: i32, points: u32, c1: u32, c2: u32) -> (Obj, Series, Series) {
@@ -758,6 +752,52 @@ pub fn chart(p: Obj, x: i32, y: i32, w: i32, h: i32, points: u32, c1: u32, c2: u
         ch.chart_set_all_values(s2, lv::CHART_POINT_NONE);
     }
     (ch, s1, s2)
+}
+
+// ---------------------------------------------------------------- wrapping
+/// Closing punctuation never starts a line (CJK line-breaking rules).
+const NO_LINE_START: &str = "，。、；：！？）」』》〉】,.;:!?)%";
+
+/// Line breaks for a wrapping label, worked out here: LVGL breaks CJK text anywhere, so 「，」 or
+/// 「」」 can start a line. Breaks by measuring; closing punctuation takes the character before
+/// it down with it; a Latin word moves down whole. Explicit '\n' stay. Each line fits `w`, so
+/// LVGL keeps these breaks.
+pub fn wrap_cjk(text: &[u8], f: Font, w: i32) -> Vec<u8> {
+    let s = String::from_utf8_lossy(text);
+    let mut out = String::new();
+    for (k, para) in s.split('\n').enumerate() {
+        if k > 0 {
+            out.push('\n');
+        }
+        let c: Vec<char> = para.chars().collect();
+        let (mut from, mut i) = (0, 0);
+        while i < c.len() {
+            let line: String = c[from..=i].iter().collect();
+            if i == from || lv::text_w(line.as_bytes(), f) <= w {
+                i += 1;
+                continue;
+            }
+            let mut br = i;
+            if NO_LINE_START.contains(c[br]) && br - 1 > from {
+                br -= 1;
+            }
+            if c[br].is_ascii_alphanumeric()
+                && c[br - 1].is_ascii_alphanumeric()
+                && let Some(sp) = c[from..br].iter().rposition(|&x| x == ' ').map(|p| p + from).filter(|&p| p > from)
+            {
+                br = sp + 1;
+            }
+            out.extend(c[from..br].iter().rev().skip_while(|&&x| x == ' ').collect::<Vec<_>>().into_iter().rev());
+            out.push('\n');
+            from = br;
+            while from < c.len() && c[from] == ' ' {
+                from += 1;
+            }
+            i = from;
+        }
+        out.extend(c[from..].iter());
+    }
+    out.into_bytes()
 }
 
 // ---------------------------------------------------------------- scrolling

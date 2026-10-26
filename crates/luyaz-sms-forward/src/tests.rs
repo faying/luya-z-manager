@@ -201,158 +201,6 @@ fn sms_deferred_midway_resumes() {
     once_each(&sent, 11..=13);
 }
 
-/// Two rules: 1 = a target that may fail with 5xx, 2 = always fine.
-/// Mirrors `deliver`: tick the online clock, skip rules already
-/// delivered, settle the hold, persist. `state` is the JSON state file.
-struct HoldSim {
-    state: String,
-    clock: OnlineClock,
-    now: u64,
-    online: bool,
-    /// Rule 1 answers 503 for this SMS id.
-    broken_for: u64,
-    sends: Vec<(u64, u32)>,
-    alerts: Vec<String>,
-}
-
-impl HoldSim {
-    fn new(wm: u64) -> Self {
-        let st = ForwardState { last_forwarded_id: wm, last_forwarded_time: Some(0), ..Default::default() };
-        HoldSim { state: serde_json::to_string(&st).unwrap(), clock: OnlineClock::default(), now: 1000, online: true, broken_for: 11, sends: Vec::new(), alerts: Vec::new() }
-    }
-    fn st(&self) -> ForwardState {
-        serde_json::from_str(&self.state).unwrap()
-    }
-    /// Core restart: in-memory clock gone, state file kept.
-    fn restart(&mut self) {
-        self.clock = OnlineClock::default();
-    }
-    /// Time passes; `online` changes are observed like connectivity_monitor.
-    fn advance(&mut self, secs: u64, online_after: bool) {
-        self.now += secs;
-        let mut st = self.st();
-        let add = self.clock.observe(self.now, online_after);
-        if let Some(h) = st.held.as_mut() {
-            h.online_secs += add;
-        }
-        self.online = online_after;
-        self.state = serde_json::to_string(&st).unwrap();
-    }
-    fn pass(&mut self, dev: &FakeDev) -> usize {
-        let st0 = self.st();
-        let mut calls = 0;
-        let cell = std::cell::RefCell::new(st0.clone());
-        let (clock, now, online, broken_for) = (&mut self.clock, self.now, self.online, self.broken_for);
-        let (sends, alerts) = (&mut self.sends, &mut self.alerts);
-        let n = run_pass(
-            st0.last_forwarded_id,
-            st0.last_forwarded_time,
-            dev.max_id(),
-            &mut |a, l| dev.list_after(a, l, &mut calls),
-            &mut |sms: &DecodedSms| {
-                let mut st = cell.borrow_mut();
-                let add = clock.observe(now, online);
-                if let Some(h) = st.held.as_mut() {
-                    h.online_secs += add;
-                }
-                let mut done: Vec<u32> = st.held.iter().filter(|h| h.sms_id == sms.id).flat_map(|h| h.delivered_rules.clone()).collect();
-                let mut errors = Vec::new();
-                for rule in [1u32, 2] {
-                    if done.contains(&rule) {
-                        continue;
-                    }
-                    if !online {
-                        errors.push(NO_WAN_ERR.to_string());
-                    } else if rule == 1 && sms.id == broken_for {
-                        errors.push("webhook: HTTP 503".to_string());
-                    } else {
-                        sends.push((sms.id, rule));
-                        done.push(rule);
-                    }
-                }
-                let (o, alert) = settle_hold(&mut st.held, sms.id, delivery_outcome(&errors), &done, 0);
-                alerts.extend(alert);
-                o
-            },
-            &mut |w, t| {
-                let mut st = cell.borrow_mut();
-                st.last_forwarded_id = w;
-                st.last_forwarded_time = t;
-            },
-        )
-        .unwrap();
-        self.state = serde_json::to_string(&*cell.borrow()).unwrap();
-        n
-    }
-}
-
-/// A target stuck on 5xx holds its SMS for 6 h online, then that SMS is
-/// skipped (alert once) and later SMS flow again.
-#[test]
-fn sms_hold_times_out_after_6h_online() {
-    let mut dev = FakeDev::new(1..=10);
-    dev.add(11..=12);
-    let mut sim = HoldSim::new(10);
-    assert_eq!(sim.pass(&dev), 0);
-    assert_eq!(sim.st().held.as_ref().unwrap().delivered_rules, vec![2]);
-    for _ in 0..5 {
-        sim.advance(3600, true);
-        assert_eq!(sim.pass(&dev), 0);
-    }
-    assert_eq!(sim.st().last_forwarded_id, 10, "5 h: still held");
-    sim.advance(3600, true);
-    assert_eq!(sim.pass(&dev), 2);
-    assert_eq!(sim.st().last_forwarded_id, 12);
-    assert!(sim.st().held.is_none());
-    assert_eq!(sim.alerts.len(), 1, "one alert");
-    assert!(sim.alerts[0].contains("SMS 11"));
-    assert_eq!(sim.sends, vec![(11, 2), (12, 1), (12, 2)], "rule 2 got 11 once");
-    assert_eq!(sim.pass(&dev), 0);
-    assert_eq!(sim.alerts.len(), 1, "still one alert");
-}
-
-/// Offline time does not count toward the 6 h.
-#[test]
-fn sms_hold_offline_does_not_count() {
-    let mut dev = FakeDev::new(1..=10);
-    dev.add(11..=11);
-    let mut sim = HoldSim::new(10);
-    assert_eq!(sim.pass(&dev), 0);
-    sim.advance(3600, false); // 1 h online, then the link drops
-    for _ in 0..24 {
-        sim.advance(3600, false); // a day offline
-        assert_eq!(sim.pass(&dev), 0);
-    }
-    sim.advance(0, true);
-    sim.advance(4 * 3600, true);
-    assert_eq!(sim.pass(&dev), 0);
-    assert_eq!(sim.st().held.as_ref().unwrap().online_secs, 5 * 3600);
-    sim.advance(3600, true);
-    assert_eq!(sim.pass(&dev), 1);
-    assert_eq!(sim.alerts.len(), 1);
-}
-
-/// Restart keeps the waited time and the rules already delivered;
-/// an old state file without `held` still loads.
-#[test]
-fn sms_hold_survives_restart() {
-    let old: ForwardState = serde_json::from_str(r#"{"last_forwarded_id":10,"log":[]}"#).unwrap();
-    assert!(old.held.is_none());
-    let mut dev = FakeDev::new(1..=10);
-    dev.add(11..=11);
-    let mut sim = HoldSim::new(10);
-    assert_eq!(sim.pass(&dev), 0);
-    sim.advance(4 * 3600, true);
-    assert_eq!(sim.pass(&dev), 0);
-    sim.restart();
-    assert_eq!(sim.pass(&dev), 0, "first tick after restart counts nothing");
-    assert_eq!(sim.st().held.as_ref().unwrap().online_secs, 4 * 3600);
-    sim.advance(2 * 3600, true);
-    assert_eq!(sim.pass(&dev), 1);
-    assert_eq!(sim.sends, vec![(11, 2)], "rule 2 not re-sent after restart");
-    assert_eq!(sim.alerts.len(), 1);
-}
-
 #[test]
 fn delivery_outcome_classifies() {
     assert_eq!(delivery_outcome(&[]), Delivery::Delivered);
@@ -958,10 +806,19 @@ struct FakeHost {
     sleeps: AtomicUsize,
     /// A SIM switch holds the checks.
     hold: AtomicBool,
+    /// The core's `sms` block stuck at this (max id, count) instead of following `rows`.
+    frozen_summary: Mutex<Option<(u64, u64)>>,
+    /// Direct `zwrt_wms` SMS reads answer from `rows` (NV store; SIM store empty).
+    ubus_sms: AtomicBool,
+    /// Numbers whose send fails transiently (no hand-over).
+    down_numbers: Mutex<Vec<String>>,
 }
 
 impl Host for FakeHost {
     fn sms_summary(&self) -> Option<(u64, u64)> {
+        if let Some(frozen) = *self.frozen_summary.lock().unwrap() {
+            return Some(frozen);
+        }
         let rows = self.rows.lock().unwrap();
         Some((rows.iter().map(item_id).max().unwrap_or(0), rows.len() as u64))
     }
@@ -972,12 +829,26 @@ impl Host for FakeHost {
         v.truncate(limit as usize);
         Ok(Page { items: v, has_more })
     }
-    fn ubus_read(&self, obj: &str, method: &str, _: Option<&str>, _: bool) -> Result<Value, String> {
+    fn ubus_read(&self, obj: &str, method: &str, params: Option<&str>, _: bool) -> Result<Value, String> {
+        if self.ubus_sms.load(Ordering::SeqCst) && method == "zte_libwms_get_sms_data" {
+            let q: Value = serde_json::from_str(params.unwrap()).unwrap();
+            if q["mem_store"] != 1 {
+                return Ok(json!({"messages": []}));
+            }
+            let (page, per) = (q["page"].as_u64().unwrap() as usize, q["data_per_page"].as_u64().unwrap() as usize);
+            let mut v = self.rows.lock().unwrap().clone();
+            v.sort_by_key(|r| std::cmp::Reverse(item_id(r)));
+            let v: Vec<Value> = v.into_iter().skip(page * per).take(per).collect();
+            return Ok(json!({"messages": v}));
+        }
         Err(format!("{obj} {method}: no ubus here"))
     }
     fn vendor(&self, _: &str, _: &str, params: Option<&str>) -> Result<Value, String> {
         let p: Value = serde_json::from_str(params.unwrap()).unwrap();
         let number = p["number"].as_str().unwrap().to_string();
+        if self.down_numbers.lock().unwrap().contains(&number) {
+            return Err("io: timed out".into());
+        }
         if self.fail_numbers.lock().unwrap().contains(&number) {
             self.active.store(false, Ordering::SeqCst);
             return Err("io: timed out".into());
@@ -1050,48 +921,146 @@ fn read_back(d: &Path) -> ForwardState {
     serde_json::from_str(&fs::read_to_string(d.join("state.json")).unwrap()).unwrap()
 }
 
-/// Handed over while a rule waits to retry: the SMS is held (watermark before it) with the rule
-/// that already got it saved; the next owner, built from the same files, sends only the rest.
+fn queue_of(d: &Path) -> Queue {
+    Queue::load(&d.join("sms-forward-queue.json")).expect("queue file")
+}
+
+/// Restart with a job pending: the next forwarder, built from the same files, sends only what
+/// is still pending; the rule that already got the SMS never gets it again.
 #[test]
-fn handover_mid_retry_holds_the_sms() {
-    let (fwd, host, d) = forwarder("mid-retry", Some(sms_rules(&["111", "222"])), Some(json!({"last_forwarded_id": 10})));
+fn restart_resumes_pending_and_never_resends() {
+    let (fwd, host, d) = forwarder("resume", Some(sms_rules(&["111", "222"])), Some(json!({"last_forwarded_id": 10})));
     host.rows.lock().unwrap().push(sms_row(11));
-    host.fail_numbers.lock().unwrap().push("222".into());
+    host.down_numbers.lock().unwrap().push("222".into());
     fwd.check(host.sms_summary());
     assert_eq!(*host.sends.lock().unwrap(), vec!["111"]);
-    let st = read_back(&d);
-    assert_eq!(st.last_forwarded_id, 10, "watermark held before 11");
-    let held = st.held.expect("held");
-    assert_eq!((held.sms_id, held.delivered_rules), (11, vec![1]));
-    assert!(st.log.iter().any(|e| e.rule_id == 2 && e.error.as_deref() == Some(HANDED_OVER)));
-    assert!(host.controls.lock().unwrap().is_empty(), "no mark-read / delete for a held SMS");
+    assert_eq!(read_back(&d).last_forwarded_id, 11, "the watermark moved on: queued");
+    let q = queue_of(&d);
+    let states: Vec<(u32, JobState, u32)> = q.jobs.iter().map(|j| (j.rule_id, j.state, j.attempts)).collect();
+    assert_eq!(states, vec![(1, JobState::Sent, 0), (2, JobState::Pending, 1)]);
+    assert!(host.controls.lock().unwrap().is_empty());
 
-    // The next owner: same files, a target that works now.
     let host2 = Arc::new(FakeHost { active: AtomicBool::new(true), ..Default::default() });
     host2.rows.lock().unwrap().push(sms_row(11));
     let fwd2 = SmsForwarder::new(host2.clone(), d.join("config.json"), d.join("state.json"));
     fwd2.set_service("LTE");
     fwd2.check(host2.sms_summary());
-    assert_eq!(*host2.sends.lock().unwrap(), vec!["222"], "rule 1 already had it");
-    let st = read_back(&d);
-    assert_eq!(st.last_forwarded_id, 11);
-    assert!(st.held.is_none());
+    assert!(host2.sends.lock().unwrap().is_empty(), "backing off: not due yet");
+    // due now (clock stand-in: pull next_at back)
+    fwd2.queue.lock().unwrap().jobs[1].next_at = 0;
+    fwd2.check(host2.sms_summary());
+    fwd2.check(host2.sms_summary());
+    assert_eq!(*host2.sends.lock().unwrap(), vec!["222"], "only the pending one, once");
+    assert!(queue_of(&d).jobs.iter().all(|j| j.state == JobState::Sent));
     let _ = fs::remove_dir_all(&d);
 }
 
-/// Handed over between two SMS of one pass: the second is not sent, the watermark stops after
-/// the first.
+/// Handed over between two sends of one drain: the rest stays pending for the next owner.
 #[test]
-fn handover_between_sms_stops_the_pass() {
+fn handover_mid_drain_leaves_the_rest_pending() {
     let (fwd, host, d) = forwarder("between", Some(sms_rules(&["111"])), Some(json!({"last_forwarded_id": 10})));
     host.rows.lock().unwrap().extend([sms_row(11), sms_row(12)]);
     *host.handover_after_sends.lock().unwrap() = Some(1);
     fwd.check(host.sms_summary());
     assert_eq!(host.sends.lock().unwrap().len(), 1);
-    let st = read_back(&d);
-    assert_eq!(st.last_forwarded_id, 11);
-    assert_eq!(st.held.as_ref().map(|h| (h.sms_id, h.delivered_rules.clone())), Some((12, vec![])));
+    let q = queue_of(&d);
+    assert_eq!(q.pending().map(|j| j.sms_id).collect::<Vec<_>>(), vec![12]);
     let _ = fs::remove_dir_all(&d);
+}
+
+/// The same SMS at a new, higher id (a SIM re-read renumbered it), dated recently: not queued
+/// or sent again.
+#[test]
+fn renumbered_sms_not_resent() {
+    let (fwd, host, d) = forwarder("renum", Some(sms_rules(&["111"])), Some(json!({"last_forwarded_id": 10})));
+    host.rows.lock().unwrap().push(sms_row(11));
+    fwd.check(host.sms_summary());
+    let mut again = sms_row(11);
+    again["id"] = json!(40);
+    host.rows.lock().unwrap().clear();
+    host.rows.lock().unwrap().push(again);
+    fwd.check(host.sms_summary());
+    assert_eq!(host.sends.lock().unwrap().len(), 1);
+    assert_eq!(read_back(&d).last_forwarded_id, 40);
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// First start with the queue: what is already on the device (at or below the watermark) is
+/// fingerprinted, so renumbered copies of it are not sent.
+#[test]
+fn seeding_covers_sms_already_handled() {
+    let (fwd, host, d) = forwarder("seed", Some(sms_rules(&["111"])), Some(json!({"last_forwarded_id": 11})));
+    host.rows.lock().unwrap().push(sms_row(11));
+    fwd.check(host.sms_summary());
+    assert!(queue_of(&d).seeded);
+    let mut again = sms_row(11);
+    again["id"] = json!(30);
+    host.rows.lock().unwrap().push(again);
+    fwd.check(host.sms_summary());
+    assert!(host.sends.lock().unwrap().is_empty());
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// An old single hold migrates: the rule that already got it is queued as sent.
+#[test]
+fn old_hold_migrates_into_the_queue() {
+    let (fwd, host, d) = forwarder("migrate", Some(sms_rules(&["111", "222"])), Some(json!({"last_forwarded_id": 10, "held": {"sms_id": 11, "first_deferred_at": 0, "online_secs": 5, "delivered_rules": [1]}})));
+    host.rows.lock().unwrap().push(sms_row(11));
+    fwd.check(host.sms_summary());
+    assert_eq!(*host.sends.lock().unwrap(), vec!["222"]);
+    assert!(read_back(&d).held.is_none());
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn backoff_doubles_to_15_min() {
+    let got: Vec<i64> = (1..=8).map(backoff_secs).collect();
+    assert_eq!(got, vec![30, 60, 120, 240, 480, 900, 900, 900]);
+    assert_eq!(backoff_secs(u32::MAX), 900);
+}
+
+fn job(key: &str, rule: u32, state: JobState, next_at: i64, created: i64) -> Job {
+    Job { key: key.into(), rule_id: rule, sms_id: 1, sender: String::new(), content: String::new(), date: String::new(), state, attempts: 0, next_at, created_at: created, online_secs: 0, last_error: None }
+}
+
+/// Per rule only the oldest pending job runs (order holds), other rules never wait for it; a
+/// rule whose link is down sets no timer.
+#[test]
+fn due_is_per_channel_fifo() {
+    let q = Queue { jobs: vec![job("a", 1, JobState::Pending, 500, 0), job("b", 1, JobState::Pending, 0, 0), job("a", 2, JobState::Pending, 0, 0)], ..Default::default() };
+    assert_eq!(q.due(100, &|_| true), vec![2]);
+    assert_eq!(q.wait_secs(100, &|_| true), Some(0));
+    assert_eq!(q.wait_secs(100, &|r| r == 1), Some(400));
+    assert_eq!(q.wait_secs(100, &|_| false), None);
+}
+
+/// Bounds: give up after 24 h online (reported), finished jobs dropped after 3 days, at most
+/// MAX_JOBS kept (finished first).
+#[test]
+fn queue_bounds() {
+    let mut q = Queue::default();
+    let mut old = job("x", 1, JobState::Pending, 0, 0);
+    old.online_secs = queue::GIVE_UP_ONLINE_SECS;
+    q.jobs.push(old);
+    q.jobs.push(job("y", 1, JobState::Sent, 0, 0));
+    let now = queue::DONE_KEEP_SECS + 10;
+    let gone = q.prune(now);
+    assert_eq!(gone.len(), 1);
+    assert!(q.jobs.is_empty(), "the given-up one is old too");
+    for i in 0..queue::MAX_JOBS + 5 {
+        q.jobs.push(job(&i.to_string(), 1, JobState::Pending, 0, now));
+    }
+    q.jobs.insert(0, job("done", 1, JobState::Sent, 0, now));
+    let gone = q.prune(now);
+    assert_eq!(q.jobs.len(), queue::MAX_JOBS);
+    assert_eq!(gone.len(), 5, "the sent one went first, then the oldest pending");
+    assert!(!q.jobs.iter().any(|j| j.key == "done"));
+}
+
+#[test]
+fn fingerprint_is_stable() {
+    assert_eq!(fingerprint("a", "b", "c"), fingerprint("a", "b", "c"));
+    assert_ne!(fingerprint("ab", "", "c"), fingerprint("a", "b", "c"));
 }
 
 /// The loop's start re-reads what another owner left; online time counted here for the same
@@ -1151,5 +1120,69 @@ fn host_hold_defers_then_sends() {
     fwd.check(host.sms_summary());
     assert_eq!(*host.sends.lock().unwrap(), vec!["111"]);
     assert_eq!(read_back(&d).last_forwarded_id, 11);
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// The core's `sms` block stops following the device (its ubus listen missed the new SMS, or it
+/// went quiet under the rate limit): the summary still says the watermark, yet a second SMS
+/// arrived. Seeing the same summary twice must read ubus directly, else only the first SMS
+/// is ever forwarded.
+#[test]
+fn frozen_core_summary_falls_back_to_direct_read() {
+    let (fwd, host, d) = forwarder("frozen", Some(sms_rules(&["111"])), Some(json!({"last_forwarded_id": 10})));
+    host.ubus_sms.store(true, Ordering::SeqCst);
+    host.rows.lock().unwrap().push(sms_row(11));
+    fwd.check(host.sms_summary());
+    assert_eq!(host.sends.lock().unwrap().len(), 1, "first SMS via core");
+    *host.frozen_summary.lock().unwrap() = Some((11, 1));
+    host.rows.lock().unwrap().push(sms_row(12));
+    fwd.check(host.sms_summary());
+    fwd.check(host.sms_summary());
+    assert_eq!(host.sends.lock().unwrap().len(), 2, "second SMS found by the direct read");
+    assert_eq!(read_back(&d).last_forwarded_id, 12);
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// A bad SMS date far in the future must not become the last forwarded time: every later SMS
+/// would then look "older than the last one" and be skipped as re-read from the SIM.
+#[test]
+fn future_last_time_does_not_block_new_sms() {
+    let (fwd, host, d) = forwarder("future", Some(sms_rules(&["111"])), Some(json!({"last_forwarded_id": 10})));
+    let mut bad = sms_row(11);
+    bad["date"] = json!("99,12,31,23,59,59,+8");
+    host.rows.lock().unwrap().push(bad);
+    fwd.check(host.sms_summary());
+    host.rows.lock().unwrap().push(sms_row(12));
+    fwd.check(host.sms_summary());
+    assert_eq!(host.sends.lock().unwrap().len(), 2, "the SMS after the bad date still goes out");
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// A state file already carrying a future last time (written before the clamp) is ignored.
+#[test]
+fn saved_future_last_time_is_ignored() {
+    let far = sms_time_key("99,12,31,23,59,59,+8").unwrap();
+    let (fwd, host, d) = forwarder(
+        "saved-future",
+        Some(sms_rules(&["111"])),
+        Some(json!({"last_forwarded_id": 10, "last_forwarded_time": far})),
+    );
+    host.rows.lock().unwrap().push(sms_row(11));
+    fwd.check(host.sms_summary());
+    assert_eq!(host.sends.lock().unwrap().len(), 1);
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// 「只收到一次」: one channel failing transiently must not stop the others. Rule 2's target is
+/// down; SMS 11, 12, 13 arrive: rule 1 gets all three at once, rule 2 none yet.
+#[test]
+fn one_channel_down_does_not_block_the_others() {
+    let (fwd, host, d) = forwarder("hol", Some(sms_rules(&["111", "222"])), Some(json!({"last_forwarded_id": 10})));
+    host.down_numbers.lock().unwrap().push("222".into());
+    host.rows.lock().unwrap().extend([sms_row(11), sms_row(12), sms_row(13)]);
+    fwd.check(host.sms_summary());
+    let to = |n: &str| host.sends.lock().unwrap().iter().filter(|s| *s == n).count();
+    assert_eq!(to("111"), 3, "rule 1 got every SMS");
+    assert_eq!(to("222"), 0);
     let _ = fs::remove_dir_all(&d);
 }

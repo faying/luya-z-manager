@@ -6,7 +6,7 @@
 #
 # 输出目录（先清空）：
 #   bin/mihomo            解压好的 mihomo（fetch-assets.sh 校验过 sha256）
-#   ruleset/*.mrs cn.list 规则集
+#   ruleset/*.mrs *.list  规则集（cn.list、ai_domain.list）
 #   ui/                   zashboard（index.html 注入了 :9999 自动配置，见下）
 #   chill.sh chill.init template.yaml chill.env.example
 #
@@ -34,7 +34,7 @@ ZASHBOARD_VER="${ZASHBOARD_VER:-v3.27.0}"
 rm -rf "$OUT" && mkdir -p "$OUT/bin" "$OUT/ruleset"
 gunzip -c "$CACHE/mihomo-$MIHOMO_VER.gz" > "$OUT/bin/mihomo"
 chmod 755 "$OUT/bin/mihomo"
-cp "$CACHE"/ruleset/*.mrs "$CACHE/ruleset/cn.list" "$OUT/ruleset/"
+cp "$CACHE"/ruleset/*.mrs "$CACHE"/ruleset/*.list "$OUT/ruleset/"
 cp "$HERE/chill.sh" "$HERE/chill.init" "$HERE/template.yaml" "$HERE/chill.env.example" "$OUT/"
 chmod 755 "$OUT/chill.sh" "$OUT/chill.init"
 

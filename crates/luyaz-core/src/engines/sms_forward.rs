@@ -297,7 +297,8 @@ fn take_over(c: &Compat) -> Running {
         Arc::new(host),
         c.path(sf::CONFIG_PATH),
         c.path(sf::STATE_PATH),
-    ));
+    )
+    .queue_at(c.path(sf::QUEUE_PATH)));
     if let Err(e) = sf::write_lease(&lease(c), "u60d") {
         eprintln!("[compat] sms_forward: could not write the lease: {e}");
     }

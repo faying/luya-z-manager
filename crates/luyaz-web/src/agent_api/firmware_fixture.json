@@ -16,14 +16,14 @@
    "reason": "single_hotswap_observed_ubusd_loss_contract_unverified"
   },
   "ubus_epoch": {
-   "source": "ubus_cli_and_socket",
+   "source": "ubus_object_lifecycle_probe_confirmed",
    "authoritative": false,
-   "reason": "no_acknowledged_object_lifecycle_stream"
+   "reason": "producer_exists_slow_subscriber_drop_unverified"
   },
   "usb_epoch": {
-   "source": "BSP_TYPEC_EVENT/BSP_POWERBANK_EVENT",
+   "source": "kobject_uevent_udc_seqnum",
    "authoritative": false,
-   "reason": "no_subscription_ack_or_sequence_loss_contract"
+   "reason": "producer_exists_one_plug_cycle_observed"
   }
  },
  "schema_version": 1,

@@ -38,6 +38,7 @@ pub mod boot;
 pub mod energy;
 pub mod places;
 pub mod power;
+pub mod regress;
 pub mod standby;
 pub mod watch;
 
@@ -331,13 +332,9 @@ impl Fold {
     }
 
     /// This check's power and process readings into the hour (`hour_power`, `hour_proc`); the
-    /// screen and charging as read (known or not), for the tailnet poller check.
-    pub fn power(
-        &mut self,
-        c: &Clock,
-        p: &power::Paths,
-        out: &mut Out,
-    ) -> (Option<bool>, Option<bool>) {
+    /// reading itself (the screen and charging as read for the tailnet poller check, the exits
+    /// and memory for the regress layer).
+    pub fn power(&mut self, c: &Clock, p: &power::Paths, out: &mut Out) -> power::Read {
         if self.boot != c.boot {
             self.tick(c, out);
         }
@@ -345,7 +342,7 @@ impl Fold {
         r.clients = self.seen.clients;
         r.wan = Some(crate::cell_window::take_quiet());
         self.power_with(c, &r);
-        (r.screen_known, r.charging_known)
+        r
     }
 
     /// [`Fold::power`] with the readings given.
@@ -492,10 +489,26 @@ impl Fold {
                 }
             }
             "interfaces" => {
+                // B31 can keep saying connected with the session down (§12.6): a connected
+                // claim needs the IPv4 address too (`wwaniface_trustworthy` is Unknown here)
                 let st = data
                     .pointer("/cellular/connect_status")
                     .and_then(Value::as_str)
-                    .map(str::to_string);
+                    .map(|x| {
+                        let ipv4 = data
+                            .pointer("/cellular/ipv4_address")
+                            .and_then(Value::as_str);
+                        use luyaz_api::firmware::{
+                            Support, wwaniface_claims_connected, wwaniface_connected,
+                        };
+                        if wwaniface_claims_connected(x)
+                            && wwaniface_connected(Support::Unknown, x, ipv4, None) != Some(true)
+                        {
+                            "no_ipv4_address".to_string()
+                        } else {
+                            x.to_string()
+                        }
+                    });
                 let up = |s: &Option<String>| {
                     s.as_deref()
                         .is_some_and(|x| x.contains("connected") && !x.contains("disconnect"))
@@ -899,6 +912,11 @@ pub enum Msg {
     Tick,
     /// The boot line's facts and the key.log backfill ([`boot::gather`]).
     Boot(Value, boot::Backfill),
+    /// An owner's command for the regress layer, answered on the channel.
+    Regress(
+        regress::io::Command,
+        std::sync::mpsc::Sender<Result<String, String>>,
+    ),
 }
 
 static TX: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<Msg>>> =
@@ -1261,6 +1279,12 @@ pub fn start(dir: PathBuf) -> std::sync::mpsc::Sender<Msg> {
             let ppaths = power::Paths::device();
             let spaths = standby::Paths::device();
             let mut last_prune: Option<i64> = None;
+            // the regress layer (design 2026-10-24): incidents from what this thread reads
+            let mut rg = regress::io::Engine::start(
+                regress::io::Paths::device(&dir),
+                version,
+                &clock_now(&boot),
+            );
             for m in rx {
                 let c = clock_now(&boot);
                 let mut out = Out::default();
@@ -1269,13 +1293,18 @@ pub fn start(dir: PathBuf) -> std::sync::mpsc::Sender<Msg> {
                     Msg::Block(name, stale, data) => fold.block(&c, &name, stale, &data, &mut out),
                     Msg::Tick => fold.tick(&c, &mut out),
                     Msg::Boot(facts, bf) => {
+                        rg.boot(&c, &facts);
                         if fold.boot_facts(&c, &facts, &bf.lines, &mut out) {
                             backfill = Some(bf);
                         }
                     }
+                    Msg::Regress(cmd, reply) => {
+                        let _ = reply.send(rg.command(&c, cmd));
+                    }
                 }
                 let due = fold.check_due(&c);
                 let mut after = Vec::new();
+                let mut reading = None;
                 if due {
                     // a planned-reboot marker whose reboot never came goes (boot.rs `planned`)
                     let _ = boot::planned_now();
@@ -1292,9 +1321,10 @@ pub fn start(dir: PathBuf) -> std::sync::mpsc::Sender<Msg> {
                             eprintln!("[longterm] fp: {e}");
                         }
                     }
-                    let (screen, charging) = fold.power(&c, &ppaths, &mut out);
+                    let r = fold.power(&c, &ppaths, &mut out);
                     // power.tailnet_poller: conntrack on screen-off checks only (poller.rs)
-                    crate::poller::check(c.wall, c.mono, screen, charging);
+                    crate::poller::check(c.wall, c.mono, r.screen_known, r.charging_known);
+                    reading = Some(r);
                     let mut rep = sh.report();
                     rep.looks = lk.cov;
                     fold.cover(&c, &rep, &mut out);
@@ -1334,6 +1364,9 @@ pub fn start(dir: PathBuf) -> std::sync::mpsc::Sender<Msg> {
                     && let Err(e) = boot::commit(&dir, bf)
                 {
                     eprintln!("[longterm] key.log anchor: {e}");
+                }
+                if let Some(r) = &reading {
+                    rg.check(&c, r, &out.hours);
                 }
                 if let Err(e) = written {
                     eprintln!("[longterm] write: {e}");
@@ -1380,6 +1413,20 @@ mod tests {
     }
 
     #[test]
+    fn b31_stale_connected_without_ipv4_is_a_link_down() {
+        // §12.6: wwaniface kept ipv4_ipv6_connected while disconnected, only ipv4_address emptied
+        let mut f = Fold::new("v1");
+        let mut out = Out::default();
+        let c = |up: i64| clk("8559f5dcaaaa", up, 0, Some(1_791_500_400 + up));
+        let cell = |addr: &str| json!({"cellular": {"connect_status": "ipv4_ipv6_connected", "ipv4_address": addr}});
+        f.block(&c(100), "interfaces", false, &cell("10.0.0.2"), &mut out);
+        f.block(&c(200), "interfaces", false, &cell(""), &mut out);
+        let links: Vec<_> = out.events.iter().filter(|e| e["k"] == "link").collect();
+        assert_eq!(links.len(), 1, "{out:?}");
+        assert_eq!(links[0]["state"], "down", "{out:?}");
+    }
+
+    #[test]
     fn hours_on_the_wall_clock_with_sleep_abroad_charging_and_link() {
         let mut f = Fold::new("v1");
         let mut out = Out::default();
@@ -1399,7 +1446,7 @@ mod tests {
             &c(100, 0),
             "interfaces",
             false,
-            &json!({"cellular": {"connect_status": "ipv4_connected"}}),
+            &json!({"cellular": {"connect_status": "ipv4_connected", "ipv4_address": "10.0.0.2"}}),
             &mut out,
         );
         f.tick(&c(700, 0), &mut out);
@@ -1506,7 +1553,7 @@ mod tests {
                     2 => Some((
                         "interfaces".to_string(),
                         false,
-                        json!({"cellular": {"connect_status": if i % 40 < 20 { "ipv4_connected" } else { "disconnected" }}}),
+                        json!({"cellular": {"connect_status": if i % 40 < 20 { "ipv4_connected" } else { "disconnected" }, "ipv4_address": "10.0.0.2"}}),
                     )),
                     _ => None,
                 };

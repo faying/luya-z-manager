@@ -18,11 +18,11 @@
 |---|---|---|
 | `/data/luyaz/ship/stage/<事务号>/` | Mac 上传的 `meta` 和产物 | Mac 写；`stage` 核对后把产物拷到旁路名并删掉暂存副本，只留 `meta`；事务结束时整个目录删掉 |
 | `/data/luyaz/ship/txn` | 当前（或最近一次）事务的事务日志 | 每次改：临时文件 → sync → mv → sync |
-| `/data/luyaz/ship/ship.log` | 执行器、stage、recover-live 的人看日志 | 追加 |
+| `/data/luyaz/ship/ship.log` | 执行器、stage、recover-live 的人看日志 | 追加；`stage` 时超过 256 KB 改名成 `ship.log.old`（只留一份） |
 | `/data/luyaz/ship/recover.log` | luyaz-recover.sh 的日志（只在它动手或看不懂时写） | 追加 |
-| `/data/luyaz/ship/test.log` | 试跑时测试版的标准输出/错误 | 追加 |
+| `/data/luyaz/ship/test.log` | 试跑时测试版的标准输出/错误 | 追加；同上，超过 256 KB 改名成 `test.log.old` |
 | `/data/luyaz/ship/lock` | `stage` 用的 flock 文件（防两个 stage 同时进来） | — |
-| `/data/luyaz/ship/manifest.jsonl` | 设备清单，一行一条 | 整个文件重写：临时文件 → sync → mv → sync |
+| `/data/luyaz/ship/manifest.jsonl` | 设备清单，一行一条 | 整个文件重写：临时文件 → sync → mv → sync；不截短（退回要找组件的每条 ship 记录，装机包那行是没 ship 过的组件的底） |
 | `/tmp/luyaz/ship/heartbeat` | 执行器心跳（内存盘，重启就没了） | 临时文件 → mv |
 | `/tmp/luyaz/ship/executor.pid` | detach 时用的 pid 文件名前缀（`-p <它>.none`） | — |
 | `<正式文件>.test` | 旁路名：`stage` 放在正式文件同一目录，转正时 mv 过去 | — |
@@ -46,7 +46,7 @@
 |---|---|---|---|---|---|
 | `core` | 一 | 可用 | `/data/luyaz/luyaz-core` | 无（下面格式示例里的 cooling.conf 只是举例） | 旁路顶替 180 s / 120 s（core-trial 的全部检查） |
 | `touch` | 二 | 可用（只编 `rs/`） | `/data/luyaz/ui/luyaz-ui` | `/data/luyaz/ui/ui.conf` | 旁路顶替 60 s / 120 s（下面「第二期」的 touch 检查） |
-| `scripts` | 五 | 可用（带 luyaz-web、luyaz-core 的 init：txn v=5，设备上的 luyaz-recover.sh 要有 formats 5） | `/data/luyaz/scripts/` 下 `SCRIPTS_FILES`（`alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION`，和 Mac 端 `luyaz` 的同名表一致；`luyaz-fallback.sh` 不在时 `touch` 拒绝）+ `/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}`（`SCRIPTS_INITS`）。改名留下的旧文件（`agent-auth.sh`、`datad-trial.sh`、`u60-fallback.sh` 等）不在表里，ship 不管 | — | direct，— / 60 s（md5 + sh -n） |
+| `scripts` | 五 | 可用（带 luyaz-web、luyaz-core 的 init：txn v=5，设备上的 luyaz-recover.sh 要有 formats 5） | `/data/luyaz/scripts/` 下 `SCRIPTS_FILES`（`alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh net-tune.sh VERSION`，和 Mac 端 `luyaz` 的同名表一致；`luyaz-fallback.sh` 不在时 `touch` 拒绝）+ `/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}`（`SCRIPTS_INITS`）。改名留下的旧文件（`agent-auth.sh`、`datad-trial.sh`、`u60-fallback.sh` 等）不在表里，ship 不管 | — | direct，— / 60 s（md5 + sh -n） |
 | `sentinel` | 五 | 可用 | `/data/luyaz/luyaz-sentinel`（只换程序，rc.local 不动） | — | direct，— / 300 s（下面「哨兵」的检查 + 核心的判定，两者都要过） |
 | `lweb` | 8c | 可用（10-13 上机；第一次要先 install-recover、ship scripts，rc.local 加一行都问用户） | `/data/luyaz/luyaz-web`（manager crates/luyaz-web，`release`：unwind；8d-2c 起 `0.0.0.0:9090`） | — | 旁路顶替 120 s / 120 s（下面「luyaz-web」的检查） |
 | `agent`、`web`、`uid`、`guard`、`datad` | — | **已删除**（屏幕和看门狗归哨兵，`datad` 只叫 `core`）：stage / record-kit / prepare-rollback 按名字拒绝，`luyaz` 构建前就拒；设备上的旧文件不动 | — | — | — |
@@ -284,7 +284,7 @@ init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来
 | `scripts` | `/data/luyaz/scripts/` 下 `SCRIPTS_FILES` + `/etc/init.d/<名>`（`SCRIPTS_INITS`） | `git show X:scripts/<名>`；init.d 的 = `scripts/<名>.init` | direct | — / 60 s | 4 或 5（有 `/etc/init.d/luyaz-web` / `luyaz-core`） |
 
 - `uid`、`guard`（第二期原有）10c 退役，见上面的组件表。
-- `SCRIPTS_FILES="alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh"`，
+- `SCRIPTS_FILES="alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh net-tune.sh"`，
   `SCRIPTS_INITS="luyaz-core luyaz-sentinel luyaz-web"`（luyaz-ship.sh 和 luyaz 各一张同样的表）。设备目录里其余文件（日志、`lan-ipv6-off`、`standby.baseline`、手工备份）一律不碰。
   从清单里拿掉的文件 ship 不会删，留在设备上没人调用，要删手工删。
 - init 脚本归 scripts：产物按正式文件的文件名命名；新的 init 要等那个服务下次启动（ship 那个组件、手工 restart 或重启设备）才生效。

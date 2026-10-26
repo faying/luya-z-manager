@@ -43,6 +43,42 @@ done
 check "luyaz-sentinel: no procd stdout/stderr params" '! grep -q "procd_set_param std" "$SCRIPTS/luyaz-sentinel.init"'
 check "luyaz-core: no SUPERVISE_COMM" '! grep -q SUPERVISE_COMM "$SCRIPTS/luyaz-core.init"'
 
+# net-performance 1b A1: start_service runs net-tune.sh as a subprocess capped at 5 s; whatever it
+# does (missing, erroring, a fatal ash error, no want file, hanging) the core's instance is still set up.
+core_start() { # <net-tune script path>: runs start_service in a subshell; prints what procd got
+    (
+        . "$SCRIPTS/luyaz-core.init"
+        boot_is_normal() { return 0; }
+        seed_token() { return 0; }
+        procd_open_instance() { echo open; }
+        procd_set_param() { [ "$1" = command ] && echo command; }
+        procd_append_param() { :; }
+        procd_close_instance() { echo close; }
+        BIN=$T/fakeprog NET_TUNE=$1 NET_TUNE_LOG=$T/nt.log
+        start_service
+        echo "rc=$?"
+    ) 2>&1
+}
+printf 'exit 3\n' >"$T/nt-err.sh"
+printf 'x=abc\necho $((x + ))\necho not-reached\n' >"$T/nt-fatal.sh"
+printf 'sleep 30\n' >"$T/nt-hang.sh"
+mkdir -p "$T/nt/sys/net/ipv4"
+echo 1 >"$T/nt/sys/net/ipv4/tcp_slow_start_after_idle"
+export NT_SYSCTL=$T/nt/sys NT_NET=$T/nt/net NT_WANT=$T/nt/want NT_BASELINE=$T/nt/baseline NT_INTENT=$T/nt/intent NT_LOCK=$T/nt/lock
+for c in missing err fatal nowant hang; do
+    case $c in
+    missing) f=$T/nt-none.sh ;; nowant) f=$SCRIPTS/net-tune.sh ;; *) f=$T/nt-$c.sh ;;
+    esac
+    _t0=$(date +%s)
+    out=$(core_start "$f" | tr '\n' ' ')
+    _dt=$(($(date +%s) - _t0))
+    check "luyaz-core: net-tune $c -> core instance still set up ($out)" '[ "$out" = "open command close rc=0 " ]'
+    case $c in hang) check "luyaz-core: hanging net-tune capped at 5 s (${_dt}s)" '[ "$_dt" -le 7 ]' ;; esac
+done
+check "luyaz-core: no want file -> nothing changed, no baseline" '[ "$(cat "$T/nt/sys/net/ipv4/tcp_slow_start_after_idle")" = 1 ] && [ ! -e "$T/nt/baseline" ]'
+check "luyaz-core: net-tune never sourced" '! grep -Eq "^[[:space:]]*\\.[[:space:]].*NET_TUNE|source .*NET_TUNE" "$SCRIPTS/luyaz-core.init"'
+unset NT_SYSCTL NT_NET NT_WANT NT_BASELINE NT_INTENT NT_LOCK
+
 rm -rf "$T"
 echo "passed $PASS, failed $FAIL"
 [ "$FAIL" = 0 ]

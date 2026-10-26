@@ -386,10 +386,10 @@ export const routes: Route[] = [
     method: "POST",
     path: "/api/cell/neighbors/scan",
     handler: (ctx) => {
-      // luyaz-core api.rs `neighbors_scan`: 410 on the real device — the stock scan
-      // drops mobile data and returns no cells. Scenario "nbrscan" keeps the
-      // old simulated scan for the cell-lock page's own tests.
-      if (!ctx.has("nbrscan")) return fail(NBR_UNSUPPORTED, 410, NBR_UNSUPPORTED_EN);
+      // luyaz-core api/neighbors.rs: a passive read of the modem's own LTE neighbour
+      // list (empty in SA = not_reported); never the stock scan. Scenario "nbrscan"
+      // keeps the old simulated scan for the cell-lock page's own tests.
+      if (!ctx.has("nbrscan")) return ok({ status: "not_reported", cells: [] });
       if (shared.airplane) return ubusFail(NW, "nwinfo_scan_nbr", "Operation not permitted");
       neighborScanAt = ctx.now;
       return ok(UBUS_EMPTY);

@@ -298,6 +298,9 @@ fn scenarios() {
         r#"rm -f "$T/proc/100/comm""#,
         // alerts, SMS
         r#"printf '9\t1\tcrash\tx\ty\n10\t1\tb\tx\ty\n' >"$T/alerts/queue"; echo 9 >"$T/alerts/read"; rm -f "$T/alerts/sms-to""#,
+        // regress SMS turned off (2026-10-24 X8): set up but off; no number wins
+        r#"touch "$T/regress-sms-off""#,
+        r#"touch "$T/regress-sms-off"; rm -f "$T/alerts/sms-to""#,
         // whiteouts: on a boot-barrier daemon, unrelated ones, no overlay
         r#"mknod "$T/rcd/S99zte_topsw_devui" c 0 0"#,
         r#"mknod "$T/rcd/K10foo" c 0 0; mknod "$T/rcd/S20bar" c 0 0; touch "$T/rcd/S30plain""#,

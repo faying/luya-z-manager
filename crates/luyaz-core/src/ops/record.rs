@@ -9,6 +9,9 @@
 //! - skipped 合并（D27）：同一来源 + 同一项 + 同一原因，第一次记一行（`skip:start`），之后只计数；
 //!   原因变了，或这个来源对这一项有了别的记录，再记一行结束（`skip:end`，`count` = 连第一次在内一共跳过几次）。
 //!   计数只在内存里，核心重启时进行中的那一段丢掉（已知限制）。
+//! - 重复写合并：不算事务、不占项的写（`append_repeat`）和上一条完全一样（来源、动作、参数、结果）时不另记，
+//!   只计数；换了别的行、或离上次落盘满 [`REPEAT_EVERY`]，补一行原样内容加 `repeat`（这期间没记的次数）和
+//!   `since`（其中第一次的时间）。情景引擎每 15 秒保一次「不休眠」，不合并的话一天上千行，真改动一天半就被挤掉。
 //! - owners（D16）：每一项最后一次是谁写的（来源、值、墙钟时间），单独存，流水账滚掉也不丢。
 //! - 时间：系统时间按 UTC 拆成年月日时分秒，不换时区（设备时钟是「当地时间标成 UTC」）。
 //! - 目录没设（测试、CI）就什么都不记，`list` 为空。
@@ -35,6 +38,8 @@ const DEFAULT_MAX_BYTES: u64 = 256 * 1024;
 const MAX_LINE: usize = 2_048;
 const MAX_STRING: usize = 256;
 const QUEUE: usize = 256;
+/// 一直重复的写，最多隔这么久落一行汇总。
+const REPEAT_EVERY: u64 = 3_600;
 pub const REDACTED: &str = "(changed)";
 
 enum Msg {
@@ -49,6 +54,39 @@ struct RecSt {
     skips: HashMap<(String, String), (String, u64)>,
     owners: Map<String, Value>,
     dropped: u64,
+    /// 进行中的重复写。
+    repeat: Option<Repeat>,
+}
+
+struct Repeat {
+    line: Value,
+    /// 上次落盘以来没记的次数。
+    count: u64,
+    /// 其中第一次（unix 秒）。
+    since: u64,
+    /// 上次落盘（unix 秒）。
+    wrote: u64,
+}
+
+impl Repeat {
+    fn summary(&self) -> Value {
+        let mut line = self.line.clone();
+        if let Value::Object(m) = &mut line {
+            m.insert("repeat".into(), json!(self.count));
+            m.insert("since".into(), json!(civil(self.since)));
+        }
+        line
+    }
+}
+
+/// 有没被记的重复就补一行汇总。
+fn close_repeat(s: &Shared, st: &mut RecSt) {
+    if let Some(r) = st.repeat.take()
+        && r.count > 0
+    {
+        let line = r.summary();
+        emit(s, st, line);
+    }
 }
 
 struct Shared {
@@ -114,6 +152,7 @@ impl Record {
     pub fn append(&self, line: Value) {
         let Some(s) = &self.inner else { return };
         let mut st = Self::lock(s);
+        close_repeat(s, &mut st);
         if let Some(k) = key(&line)
             && let Some((reason, count)) = st.skips.remove(&k)
         {
@@ -123,11 +162,51 @@ impl Record {
         emit(s, &mut st, line);
     }
 
+    /// 不算事务的写：和上一条完全一样就只计数（见模块说明「重复写合并」）。
+    pub fn append_repeat(&self, line: Value) {
+        self.append_repeat_at(line, now().0);
+    }
+
+    fn append_repeat_at(&self, line: Value, at: u64) {
+        let Some(s) = &self.inner else { return };
+        let mut st = Self::lock(s);
+        if let Some(r) = st.repeat.as_mut()
+            && r.line == line
+        {
+            if r.count == 0 {
+                r.since = at;
+            }
+            r.count += 1;
+            if at.saturating_sub(r.wrote) >= REPEAT_EVERY {
+                let summary = r.summary();
+                r.count = 0;
+                r.wrote = at;
+                emit(s, &mut st, summary);
+            }
+            return;
+        }
+        close_repeat(s, &mut st);
+        if let Some(k) = key(&line)
+            && let Some((reason, count)) = st.skips.remove(&k)
+        {
+            let end = skip_line(&k, &reason, "end", count);
+            emit(s, &mut st, end);
+        }
+        st.repeat = Some(Repeat {
+            line: line.clone(),
+            count: 0,
+            since: at,
+            wrote: at,
+        });
+        emit(s, &mut st, line);
+    }
+
     /// 一次跳过（D27）：同一来源 + 同一项 + 同一原因只记开头和结尾。
     pub fn skip(&self, source: &str, item: &str, reason: &str) {
         let Some(s) = &self.inner else { return };
         let k = (source.to_owned(), item.to_owned());
         let mut st = Self::lock(s);
+        close_repeat(s, &mut st);
         match st.skips.get_mut(&k) {
             Some((r, n)) if r == reason => {
                 *n += 1;
@@ -183,9 +262,10 @@ impl Record {
         }
     }
 
-    /// 等前面放进去的行都写进闪存（重启/关机前用）。通道满就稍等再放；一共最多等 2 秒。
+    /// 等前面放进去的行（连同没记的重复次数）都写进闪存（重启/关机前用）。通道满就稍等再放；一共最多等 2 秒。
     pub async fn flush(&self) {
         let Some(s) = &self.inner else { return };
+        close_repeat(s, &mut Self::lock(s));
         let _ = tokio::time::timeout(Duration::from_secs(2), async {
             let (tx, rx) = tokio::sync::oneshot::channel();
             let mut msg = Msg::Flush(tx);

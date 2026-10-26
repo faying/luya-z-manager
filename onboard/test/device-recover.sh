@@ -23,6 +23,7 @@ FAIL=0
 ok() { PASS=$((PASS + 1)); echo "  ok   $1"; }
 bad() { FAIL=$((FAIL + 1)); echo "  FAIL $1"; [ -f "$T/out" ] && sed 's/^/       | /' "$T/out" | tail -n 8; }
 check() { _d=$1; shift; if eval "$@"; then ok "$_d"; else bad "$_d  [$*]"; fi; }
+add_tx() { { echo "KLANG=${KLANG:-zh}"; grep "^tx() {" "$K/device/install.sh"; } >>"$T/fns.sh"; }  # the extracted functions print through tx
 md5() { md5sum "$1" 2>/dev/null | cut -d' ' -f1; }
 
 setup() {
@@ -93,6 +94,7 @@ rm -rf "$T"
 # place_recover (admin / ui): only when missing; never touches rc.local
 setup
 sed -n '/^recover_check() {/,/^do_recover() {/p' "$K/device/install.sh" | sed '$d' >"$T/fns.sh"
+add_tx
 place() { (
     P=$K/payload SHIPD=$KIT_SHIP_DIR
     # the three helpers device/install.sh defines before these functions
@@ -116,6 +118,7 @@ echo 'lweb build' >"$T/root/data/luyaz/luyaz-web"
 cp "$SCRIPTS/luyaz-web.init" "$T/root/etc/init.d/luyaz-web"
 printf 'stamp=20261001\nlweb_commit=abc1234def\nlweb_format=1\nlweb_dirty=1\n' >"$K/payload/scripts/kit-source"
 sed -n '/^kit_record() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
+add_tx
 rec() { (
     P=$K/payload S=$T/data/luyaz/scripts
     export U60S_ROOT=$T/root U60S_TMP=$T/tmp KIT_MAC_TIME=1790000000
@@ -138,6 +141,7 @@ mkdir -p "$T/root/data/luyaz/ship" "$T/data/luyaz/scripts"
 cp "$SCRIPTS/luyaz-ship.sh" "$T/data/luyaz/scripts/luyaz-ship.sh"
 echo 'core build' >"$T/root/data/luyaz/luyaz-core"
 sed -n '/^kit_record() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
+add_tx
 recd() { (
     P=$K/payload S=$T/data/luyaz/scripts
     export U60S_ROOT=$T/root U60S_TMP=$T/tmp KIT_MAC_TIME=1790000000
@@ -204,6 +208,7 @@ mkdir -p "$T/data/luyaz/scripts"
 printf '#!/bin/sh\necho "$*" >>%s/ship.calls\n' "$T" >"$T/data/luyaz/scripts/luyaz-ship.sh"
 printf 'stamp=20261001\nlweb_commit=abc1234\nlweb_format=1\nlweb_dirty=0\ntouch_commit=def5678\ntouch_format=1\ntouch_dirty=0\nsentinel_commit=def5678\nsentinel_format=2\nsentinel_dirty=1\n' >"$K/payload/scripts/kit-source"
 sed -n '/^kit_record() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
+add_tx
 (
     P=$K/payload S=$T/data/luyaz/scripts KIT_MAC_TIME=1790000000
     log() { echo "[device] $*"; }
@@ -214,7 +219,7 @@ sed -n '/^kit_record() {/,/^}/p' "$K/device/install.sh" >"$T/fns.sh"
 ) >"$T/out" 2>&1
 check "kit_record touch, sentinel: each with its own commit, format, dirty" "[ \"\$(cat '$T/ship.calls')\" = 'record-kit touch 20261001 def5678 1 1790000000
 record-kit sentinel 20261001 def5678 2 1790000000 dirty' ]"
-check "do_ui records touch and sentinel after the screen is up" "sed -n '/^do_ui() {/,/^}/p' '$K/device/install.sh' | tail -n 4 | tr -d ' ' | grep -qx 'kit_recordtouch' && sed -n '/^do_ui() {/,/^}/p' '$K/device/install.sh' | grep -q '^ *kit_record sentinel\$'"
+check "do_ui records touch and sentinel after the screen is up" "sed -n '/^do_ui() {/,/^}/p' '$K/device/install.sh' | grep -q '^ *kit_record touch$' && sed -n '/^do_ui() {/,/^}/p' '$K/device/install.sh' | grep -q '^ *kit_record sentinel\$'"
 rm -rf "$T"
 
 # rc.local writers (rc_add, do_recover): a candidate,

@@ -83,6 +83,7 @@ core_snapshot_t {
             ],
         },
     ),
+    regress: None,
     carrier: "中国电信",
     mcc: 460,
     mnc: 11,

@@ -15,7 +15,7 @@
 # + 全角标点/符号 + 程序里写死的所有文字。短信、运营商名、Wi-Fi 名、节点名是任意文字，
 # 只裁界面用到的字是不够的。
 #
-# 全在 Docker（python:3.12-slim）里做，本机不用装 Python 包；字体包按 sha256 固定。
+# 全在 Docker（python:3.12-slim，按 digest 钉死；SOURCE_DATE_EPOCH 固定字体时间戳）里做，本机不用装 Python 包；字体包按 sha256 固定。
 # 字体文件是二进制，不进任何 git 仓库。
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
@@ -45,7 +45,7 @@ fi
 [ "$(shasum -a 256 "$CACHE/OFL-License.txt" | cut -d' ' -f1)" = "$OFL_SHA" ] || { echo "OFL 许可证 sha256 不符" >&2; exit 1; }
 cp "$CACHE/OFL-License.txt" "$OUT/OFL-ResourceHanRounded.txt"
 
-docker run --rm -v "$CACHE":/cache -v "$OUT":/out -v "$ROOT":/src:ro -w /cache python:3.12-slim sh -c '
+docker run --rm -e SOURCE_DATE_EPOCH=1758672000 -v "$CACHE":/cache -v "$OUT":/out -v "$ROOT":/src:ro -w /cache python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704 sh -c '
 set -e
 pip -q install --disable-pip-version-check py7zr==0.22.0 fonttools==4.54.1 >/dev/null 2>&1
 python - <<"PY"

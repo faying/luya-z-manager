@@ -1,23 +1,18 @@
-//! 网络诊断 and 摆放模式 (manager docs/designs/slow-diagnosis.md §4.2,
-//! §12.2–12.5).
+//! 网络诊断 (manager docs/designs/slow-diagnosis.md §4.2, §12.2–12.5); 摆放模式 is place.rs.
 //!
 //! 网络诊断: luyaz-core runs it (about 10 s, ≤ 20 s); the page starts it, reads it every second
 //! while it runs and draws what it says. The run is kept 10 minutes: coming back within that
 //! shows it with when it was measured; after that, opening the page measures again. Status
 //! block = the main cause and one thing to do; a row per layer; then 加测速度 and 对 / 不对.
-//!
-//! 摆放模式: moving a device that stays put (a window sill, a shelf): the main radio's SINR as a
-//! 3-second median, big; the best this visit and how far off it we are now. A new cell starts
-//! the best over. The screen stays on while the page is up.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::{Sub, Ui, SUB_VIEW, TAB_CELL};
 use crate::cf;
 use crate::clock;
 use crate::diag_view::{self as dv, DG_BAD, DG_DONE, DG_IDLE, DG_INFO, DG_NA, DG_NONE, DG_OK, DG_PENDING, DG_RUN, DG_RUNNING, DG_WAITING, DG_WARN};
-use crate::kit::{self, BtnKind, Hero, CARD_W, HERO_H, MARGIN, PAD, ROW_H, W};
+use crate::kit::{self, BtnKind, Hero, CARD_W, HERO_H, MARGIN, PAD, ROW_H};
 use crate::lang::tr;
-use crate::logic::{self, Arm, Rat};
+use crate::logic::Arm;
 use crate::lv::{self, sys, Obj};
 use crate::theme::{t, uf};
 use ui_model::{dg_layer_t, diag_run_t};
@@ -33,10 +28,6 @@ const DG_NOTE_MS: u32 = 4000;
 const DG_ACT_NONE: i32 = 0;
 const DG_ACT_PLACE: i32 = 1;
 const DG_ACT_PROXY: i32 = 2;
-const PL_SAMPLES: usize = 3;
-const PL_CURVE_H: i32 = 96;
-/// the curve: one point per core snapshot (~1 s), the last 30
-const PL_CURVE: u32 = 30;
 
 #[derive(Default, Clone, Copy)]
 pub struct DgRow {
@@ -88,38 +79,6 @@ pub struct Diag {
     tone: i32,
 }
 
-#[derive(Default)]
-pub struct Place {
-    cap: Obj,
-    big: Obj,
-    word: Obj,
-    note: Obj,
-    best_l: Obj,
-    cmp: Obj,
-    cell: Obj,
-    btn: Obj,
-    /// SINR in tenths of a dB, the last 3 seconds
-    v: [i32; PL_SAMPLES],
-    n: usize,
-    head: usize,
-    /// core snapshot the last sample came from
-    ver: u64,
-    best: i32,
-    /// the best's RSRP (dBm; 0 = none): the tiebreak when SINR is level
-    best_rsrp: i32,
-    have_best: bool,
-    best_at: i64,
-    /// RAT · band · PCI the best belongs to
-    key: String,
-    /// 「换了小区，重新计」 shown since
-    reset_at: u32,
-    /// the reset was the button
-    manual: bool,
-    col: Option<u32>,
-    chart: Obj,
-    ser: lv::Series,
-}
-
 unsafe extern "C" fn dg_start_cb(_e: *mut sys::lv_event_t) {
     super::with(|u| u.dg_start_tap());
 }
@@ -161,10 +120,6 @@ unsafe extern "C" fn dg_act_cb(e: *mut sys::lv_event_t) {
     super::with(|u| u.dg_act_tap(k));
 }
 
-unsafe extern "C" fn pl_reset_cb(_e: *mut sys::lv_event_t) {
-    super::with(|u| u.pl_reset());
-}
-
 fn dg_going(r: &diag_run_t) -> bool {
     r.state == DG_WAITING || r.state == DG_RUN
 }
@@ -185,46 +140,8 @@ pub(super) fn ago(d: i64) -> String {
     String::from_utf8_lossy(&w).into_owned()
 }
 
-/// The best so far: higher SINR wins, level SINR goes to the stronger RSRP (travel-assist §7 Q1).
-fn pl_better(sinr: i32, rsrp: i32, best: i32, best_rsrp: i32) -> bool {
-    sinr > best || (sinr == best && rsrp != 0 && (best_rsrp == 0 || rsrp > best_rsrp))
-}
-
-/// SINR tenths on the curve's scale: -10..30 dB.
-fn pl_curve_y(v: i32) -> i32 {
-    v.clamp(-100, 300)
-}
-
-fn dg_hm(t: i64) -> String {
+pub(super) fn dg_hm(t: i64) -> String {
     if t > 0 { clock::strftime("%H:%M", &clock::local(t)) } else { "--:--".into() }
-}
-
-/// "17.7" / "-2.5" → tenths; None = no number
-fn pl_tenths(s: &str) -> Option<i32> {
-    let b = s.as_bytes();
-    let mut i = 0;
-    while i < b.len() && b[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let st = i;
-    if i < b.len() && matches!(b[i], b'+' | b'-') {
-        i += 1;
-    }
-    let d0 = i;
-    while i < b.len() && (b[i].is_ascii_digit() || b[i] == b'.') {
-        i += 1;
-    }
-    if i == d0 {
-        return None;
-    }
-    let v: f64 = s[st..i].parse().ok()?;
-    Some((v * 10.0 + if v < 0.0 { -0.5 } else { 0.5 }) as i32)
-}
-
-/// tenths → "17.7" / "-2.5"
-fn pl_fmt(t: i32) -> String {
-    let a = t.abs();
-    format!("{}{}.{}", if t < 0 { "-" } else { "" }, a / 10, a % 10)
 }
 
 impl Ui {
@@ -401,7 +318,8 @@ impl Ui {
         }
     }
 
-    /// The title bar's 再查一次 (on the subpage header, only for this page).
+    /// 再查一次: on the page under the result (it was on the title bar, where the status bar's
+    /// ▲ — lit for days while an incident is open — covered it: eng review round 3 D5).
     pub(super) fn diag_hdr_sync(&mut self) {
         let h = self.dg.hdr;
         if h.is_null() {
@@ -409,7 +327,7 @@ impl Ui {
         }
         // always there on this page (a tap while it runs says so); the agent not answering
         // puts 重试 on the page instead
-        kit::show(h, self.sub_cur == Some(Sub::Diag) && self.model.diagnose_agent_err == 0);
+        kit::show(h, self.model.diagnose_agent_err == 0);
     }
 
     pub(super) fn build_sub_diag(&mut self, p: Obj) {
@@ -466,17 +384,9 @@ impl Ui {
         dg.fb_lbl = kit::label_w(dg.fb, f.cj13, th.t2, 6, 12, 150, false, "");
         (dg.no, _) = kit::button(dg.fb, CARD_W - 64, 0, 64, 44, tr("不对"), BtnKind::Plain, Some(dg_fb_cb), 0);
         (dg.yes, _) = kit::button(dg.fb, CARD_W - 64 - 8 - 64, 0, 64, 44, tr("对"), BtnKind::Plain, Some(dg_fb_cb), 1);
-        // title bar, right: 再查一次 (glass, like the ‹ button)
+        // 再查一次: under the result, a full-width button like the page's others
         {
-            let b = kit::bx(self.sub_layer, 0, 3, 10, 30, th.glass, 15);
-            kit::rim(b);
-            let l = kit::label(b, f.cj14, th.acc_t, 12, 6, tr("再查一次"));
-            l.update_layout();
-            let w = l.width() + 24;
-            b.set_size(w, 30);
-            b.set_x(W - MARGIN - w);
-            kit::tappable(b, Some(dg_start_cb), 0);
-            b.set_ext_click_area(6);
+            let (b, l) = kit::button(sc, MARGIN, 0, CARD_W, 44, tr("再查一次"), BtnKind::Plain, Some(dg_start_cb), 0);
             kit::show(b, false);
             self.dg.hdr = b;
             self.dg.hdr_lbl = l;
@@ -731,6 +641,12 @@ impl Ui {
             y += sl.height() + 6;
         }
 
+        // ---- 再查一次 ----
+        let again = self.dg.hdr;
+        if !again.is_null() && self.model.diagnose_agent_err == 0 {
+            again.set_y(y);
+            y += 44 + 6;
+        }
         // ---- 加测速度 / 重试 ----
         let done = r.state == DG_DONE && !self.dg.pending;
         let show_btn = err != 0 || done;
@@ -800,261 +716,11 @@ impl Ui {
             }
         }
     }
-
-    // ======================= 摆放模式 =======================
-    fn pl_restart(&mut self) {
-        let p = &mut self.pl;
-        p.n = 0;
-        p.head = 0;
-        p.have_best = false;
-        p.best_rsrp = 0;
-        p.reset_at = lv::tick_get().max(1);
-        if !p.chart.is_null() {
-            p.chart.chart_set_all_values(p.ser, lv::CHART_POINT_NONE);
-        }
-    }
-
-    /// Opening the page: 这次最好 is this visit's, not a leftover from the last one.
-    pub(super) fn place_on_open(&mut self) {
-        self.pl_restart();
-        self.pl.reset_at = 0;
-        self.pl.key.clear();
-        self.pl.manual = false;
-    }
-
-    fn pl_reset(&mut self) {
-        self.pl_restart();
-        self.pl.manual = true; // answered at once, the numbers follow
-        let p = &self.pl;
-        let (best, cmp, note) = (p.best_l, p.cmp, p.note);
-        self.set(best, "—");
-        self.set(cmp, "—");
-        kit::text_color(cmp, t().t3);
-        self.set(note, tr("已清零，重新计"));
-    }
-
-    pub(super) fn build_sub_place(&mut self, p: Obj) {
-        let th = t();
-        let f = uf();
-        let sc = kit::scroll(p, 0, SUB_VIEW, 4 + 150 + 10 + PL_CURVE_H + 10 + 3 * ROW_H + 10 + 44 + 10 + 40 + 16);
-        let c = kit::card(sc, MARGIN, 4, CARD_W, 150);
-        let pl = &mut self.pl;
-        pl.col = Some(1);
-        pl.cap = kit::label(c, f.cj13, th.t2, 0, 14, "");
-        pl.cap.set_width(CARD_W);
-        pl.cap.set_style_text_align(lv::LV_TEXT_ALIGN_CENTER, 0);
-        pl.big = kit::label(c, f.n36, th.t1, 0, 36, "--");
-        pl.big.set_width(CARD_W);
-        pl.big.set_style_text_align(lv::LV_TEXT_ALIGN_CENTER, 0);
-        pl.word = kit::label(c, f.cj14, th.t2, 0, 92, "");
-        pl.word.set_width(CARD_W);
-        pl.word.set_style_text_align(lv::LV_TEXT_ALIGN_CENTER, 0);
-        pl.note = kit::label_w(c, f.cj12, th.t3, PAD, 120, CARD_W - 2 * PAD, false, "");
-        pl.note.set_style_text_align(lv::LV_TEXT_ALIGN_CENTER, 0);
-        let mut y = 4 + 150 + 10;
-        // the last 30 s of SINR: walking the room shows where it rose
-        let cc = kit::card(sc, MARGIN, y, CARD_W, PL_CURVE_H);
-        kit::label(cc, f.cj12, th.t3, PAD, 8, tr("近 30 秒"));
-        (pl.chart, pl.ser, _) = kit::chart(cc, PAD, 30, CARD_W - 2 * PAD, PL_CURVE_H - 40, PL_CURVE, th.blue, 0);
-        pl.chart.chart_set_axis_range(sys::lv_chart_axis_t::LV_CHART_AXIS_PRIMARY_Y, -100, 300);
-        y += PL_CURVE_H + 10;
-        let rc = kit::card(sc, MARGIN, y, CARD_W, 3 * ROW_H);
-        pl.best_l = kit::row(rc, 0, tr("这次最好"), true);
-        pl.cmp = kit::row(rc, ROW_H, tr("对比"), false);
-        pl.cell = kit::row(rc, 2 * ROW_H, tr("在用"), false);
-        pl.cmp.set_style_text_font(f.cj14, 0);
-        y += 3 * ROW_H + 10;
-        (pl.btn, _) = kit::button(sc, MARGIN, y, CARD_W, 44, tr("重新开始"), BtnKind::Plain, Some(pl_reset_cb), 0);
-        y += 44 + 10;
-        kit::label_w(sc, f.cj12, th.t3, MARGIN + 6, y, CARD_W - 12, true, tr("换了小区会重新计；这页开着不息屏"));
-        sc.scroll_to_y(0);
-    }
-
-    /// live = core answered this second; the model's data is its snapshot (or the last one).
-    pub(super) fn place_paint(&mut self, live: bool) {
-        let th = t();
-        if self.pl.big.is_null() {
-            return;
-        }
-        let m = self.model.clone();
-        let d = &m.data;
-        let rat = logic::rat(&d.radio);
-        // NSA: the NR leg often reports no SINR while the LTE anchor does (issue #4) — use NR
-        // only when its SINR parses, else the anchor; SA has no LTE leg
-        let nr = rat == Rat::G5Sa || (rat == Rat::G5Nsa && pl_tenths(&d.nr_snr).is_some());
-        let snr = if nr { &d.nr_snr } else { &d.lte_snr };
-        let pci = if nr { d.nr_pci } else { d.lte_pci };
-        let band: String = if nr {
-            d.nr_band_text.clone()
-        } else if !d.band_text.is_empty() {
-            logic::band_short(&d.band_text, false)
-        } else {
-            String::new()
-        };
-        let sample = if live && d.populated != 0 && rat != Rat::None { pl_tenths(snr) } else { None };
-        let have = sample.is_some();
-        let v = sample.unwrap_or(0);
-        let lte_or_nr = nr || rat == Rat::G4 || rat == Rat::G5Nsa;
-        let pl = self.pl.clone_handles();
-        self.set(pl.cap, cf!(tr("%s SINR · 越大越好"), if nr { "5G" } else { "4G" }));
-        // a different cell: the best so far was somewhere else
-        let key = format!("{}·{}·{}", rat as i32, band, pci);
-        if have && key != self.pl.key {
-            if !self.pl.key.is_empty() {
-                self.pl_restart();
-                self.pl.manual = false;
-            }
-            self.pl.key = key;
-        }
-        // a new sample per new core snapshot
-        let ver = self.src.core_version(&self.model);
-        let rsrp = if nr { d.nr_rsrp } else { d.lte_rsrp };
-        let p = &mut self.pl;
-        if live && ver != p.ver && !p.chart.is_null() {
-            let y = if have && lte_or_nr { pl_curve_y(v) } else { lv::CHART_POINT_NONE };
-            p.chart.chart_set_next_value(p.ser, y);
-        }
-        if have && lte_or_nr && ver != p.ver {
-            p.ver = ver;
-            p.v[p.head] = v;
-            p.head = (p.head + 1) % PL_SAMPLES;
-            if p.n < PL_SAMPLES {
-                p.n += 1;
-            }
-        }
-        let mut med = 0;
-        if p.n > 0 {
-            let mut a = p.v;
-            let n = p.n;
-            a[..n].sort_unstable();
-            med = a[(n - 1) / 2]; // two readings: the lower one
-            if live && have && (!p.have_best || pl_better(med, rsrp, p.best, p.best_rsrp)) {
-                p.best = med;
-                p.best_rsrp = rsrp;
-                p.have_best = true;
-                p.best_at = m.now;
-            }
-        }
-
-        let mut col = th.t3;
-        if !live && self.pl.n > 0 {
-            // core stopped: the last number stays, dimmed, with when
-            let alive = m.backend_alive_wall;
-            let hm = dg_hm(if alive != 0 { alive } else { self.home.last_valid_wall });
-            self.set(pl.big, pl_fmt(med));
-            self.set(pl.word, cf!(tr("数字停在 %s"), &hm));
-        } else if !have || !lte_or_nr {
-            self.set(pl.big, "--");
-            self.set(
-                pl.word,
-                if !live {
-                    tr("读不到数据")
-                } else if !lte_or_nr && rat != Rat::None {
-                    tr("这个制式没有 SINR")
-                } else {
-                    tr("没有信号")
-                },
-            );
-            self.pl.n = 0;
-        } else {
-            let (word, mark) = if med >= 200 {
-                col = th.ok_t;
-                (tr("信号很好"), "●")
-            } else if med >= 130 {
-                col = th.ok_t;
-                (tr("信号良好"), "●")
-            } else if med >= 0 {
-                col = th.warn_t;
-                (tr("信号一般"), "▲")
-            } else {
-                col = th.bad_t;
-                (tr("信号较差"), "■")
-            };
-            self.set(pl.big, pl_fmt(med));
-            if rsrp != 0 {
-                self.set(pl.word, cf!("%s %s · RSRP %d", mark, word, rsrp));
-            } else {
-                self.set(pl.word, cf!("%s %s", mark, word));
-            }
-        }
-        if self.pl.col != Some(col) {
-            self.pl.col = Some(col);
-            kit::text_color(pl.big, col);
-            kit::text_color(pl.word, col);
-        }
-
-        let ra = self.pl.reset_at;
-        if ra != 0 && lv::tick_get().wrapping_sub(ra) < 10000 {
-            self.set(pl.note, if self.pl.manual { tr("已清零，重新计") } else { tr("换了小区，重新计") });
-        } else {
-            self.set(pl.note, "");
-        }
-
-        if self.pl.have_best {
-            let b = pl_fmt(self.pl.best);
-            let when = ago(m.now - self.pl.best_at);
-            if self.pl.best_rsrp != 0 {
-                self.set(pl.best_l, cf!("%s · %d dBm · %s", &b, self.pl.best_rsrp, &when));
-            } else {
-                self.set(pl.best_l, cf!("%s · %s", &b, &when));
-            }
-            let gap = self.pl.best - med;
-            if self.pl.n == 0 {
-                self.set(pl.cmp, "—");
-            } else if gap <= 10 {
-                self.set(pl.cmp, tr("● 接近最好"));
-            } else {
-                self.set(pl.cmp, cf!(tr("▲ 比最好低 %s dB"), &pl_fmt(gap)));
-            }
-            kit::text_color(pl.cmp, if self.pl.n == 0 || !live { th.t3 } else if gap <= 10 { th.ok_t } else { th.warn_t });
-        } else {
-            self.set(pl.best_l, "—");
-            self.set(pl.cmp, "—");
-            kit::text_color(pl.cmp, th.t3);
-        }
-        kit::text_color(pl.best_l, if live { th.t1 } else { th.t3 });
-        if !band.is_empty() && pci != 0 {
-            self.set(pl.cell, cf!("%s · PCI %d", &band, pci));
-        } else {
-            self.set(pl.cell, "—");
-        }
-        kit::text_color(pl.cell, if live { th.t1 } else { th.t3 });
-    }
-}
-
-/// The page's labels, copied out so the painter can borrow the screen.
-#[derive(Clone, Copy)]
-struct PlHandles {
-    cap: Obj,
-    big: Obj,
-    word: Obj,
-    note: Obj,
-    best_l: Obj,
-    cmp: Obj,
-    cell: Obj,
-}
-
-impl Place {
-    fn clone_handles(&self) -> PlHandles {
-        PlHandles { cap: self.cap, big: self.big, word: self.word, note: self.note, best_l: self.best_l, cmp: self.cmp, cell: self.cell }
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ago, pl_better, pl_curve_y, pl_fmt, pl_tenths};
-
-    #[test]
-    fn best_is_sinr_then_rsrp() {
-        assert!(pl_better(180, -90, 170, -80));
-        assert!(!pl_better(160, -70, 170, -80));
-        assert!(pl_better(170, -79, 170, -80));
-        assert!(!pl_better(170, -81, 170, -80));
-        assert!(!pl_better(170, 0, 170, -80));
-        assert!(pl_better(170, -100, 170, 0));
-        assert_eq!(pl_curve_y(-250), -100);
-        assert_eq!(pl_curve_y(400), 300);
-    }
+    use super::ago;
 
     #[test]
     fn ago_words() {
@@ -1063,18 +729,5 @@ mod tests {
         assert_eq!(ago(150), "2 分钟前");
         assert_eq!(ago(7300), "2 小时前");
         assert_eq!(ago(-5), "刚刚");
-    }
-
-    #[test]
-    fn sinr_in_tenths() {
-        assert_eq!(pl_tenths("17.7"), Some(177));
-        assert_eq!(pl_tenths("-2.5"), Some(-25));
-        assert_eq!(pl_tenths("13"), Some(130));
-        assert_eq!(pl_tenths(""), None);
-        assert_eq!(pl_tenths("-"), None);
-        assert_eq!(pl_fmt(177), "17.7");
-        assert_eq!(pl_fmt(-25), "-2.5");
-        assert_eq!(pl_fmt(-5), "-0.5");
-        assert_eq!(pl_fmt(0), "0.0");
     }
 }

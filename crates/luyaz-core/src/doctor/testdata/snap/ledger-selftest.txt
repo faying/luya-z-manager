@@ -1,7 +1,7 @@
 === scenario
 
 --- rc=0
-PASS 账本目录可写（$T/ledger）
+PASS 长期记录目录可写（$T/ledger）
 PASS key.log 的原因码（这次开机 1150）
 PASS 基带崩溃自恢复开关（enabled）
 PASS dd iflag=skip_bytes
@@ -19,7 +19,7 @@ PASS kmsg 落盘（0 秒内）
 === scenario
 mv "$T/key.log" "$T/key.log.0"; : >"$T/key.log"
 --- rc=0
-PASS 账本目录可写（$T/ledger）
+PASS 长期记录目录可写（$T/ledger）
 PASS key.log 的原因码（这次开机 1150）
 PASS 基带崩溃自恢复开关（enabled）
 PASS dd iflag=skip_bytes
@@ -37,7 +37,7 @@ PASS kmsg 落盘（0 秒内）
 === scenario
 mv "$T/key.log" "$T/key.log.0"; printf 'reboot_reason_code=1 x reboot_reason_code=1185!!! \nreboot_reason_code=x\n' >"$T/key.log"
 --- rc=0
-PASS 账本目录可写（$T/ledger）
+PASS 长期记录目录可写（$T/ledger）
 PASS key.log 的原因码（这次开机 1185）
 PASS 基带崩溃自恢复开关（enabled）
 PASS dd iflag=skip_bytes
@@ -55,7 +55,7 @@ PASS kmsg 落盘（0 秒内）
 === scenario
 echo "999999 1 0" >"$T/lt/w.pos"; echo "123" >"$T/lt/watcher.pid"
 --- rc=0
-PASS 账本目录可写（$T/ledger）
+PASS 长期记录目录可写（$T/ledger）
 PASS key.log 的原因码（这次开机 1150）
 PASS 基带崩溃自恢复开关（enabled）
 PASS dd iflag=skip_bytes
@@ -74,7 +74,7 @@ PASS 观察循环读过了测试行
 === scenario
 echo "10 1 0" >"$T/lt/w.pos"; echo "123" >"$T/lt/watcher.pid"
 --- rc=1
-PASS 账本目录可写（$T/ledger）
+PASS 长期记录目录可写（$T/ledger）
 PASS key.log 的原因码（这次开机 1150）
 PASS 基带崩溃自恢复开关（enabled）
 PASS dd iflag=skip_bytes
@@ -93,7 +93,7 @@ FAIL 观察循环读过了测试行：它的位置 10 没过 16
 === scenario
 : >"$T/key.log"; rm -f "$T/crashcap/kmsg-aaaaaaaa.log" "$T/recovery"; export DOC_KMSG=$T/no/such/kmsg; printf 'Iface\tDestination\n' >"$T/route"; printf '#!/bin/sh\nexit 1\n' >"$T/bin/wget"; printf '#!/bin/sh\n' >"$T/bin/jsonfilter"
 --- rc=1
-PASS 账本目录可写（$T/ledger）
+PASS 长期记录目录可写（$T/ledger）
 FAIL key.log 的原因码：$T/key.log 和 $T/key.log.0 里都找不到 reboot_reason_code=
 FAIL 基带崩溃自恢复开关：读不到 $T/recovery
 PASS dd iflag=skip_bytes
@@ -111,7 +111,7 @@ FAIL kmsg 落盘：没有这次开机的落盘文件 $T/crashcap/kmsg-aaaaaaaa.l
 === scenario
 export DOC_KMSG=$T/no/such/kmsg
 --- rc=1
-PASS 账本目录可写（$T/ledger）
+PASS 长期记录目录可写（$T/ledger）
 PASS key.log 的原因码（这次开机 1150）
 PASS 基带崩溃自恢复开关（enabled）
 PASS dd iflag=skip_bytes
@@ -129,7 +129,7 @@ FAIL kmsg 落盘：写不进 $T/no/such/kmsg
 === scenario
 export DOC_KMSG=$T/elsewhere; : >"$T/elsewhere"
 --- rc=1
-PASS 账本目录可写（$T/ledger）
+PASS 长期记录目录可写（$T/ledger）
 PASS key.log 的原因码（这次开机 1150）
 PASS 基带崩溃自恢复开关（enabled）
 PASS dd iflag=skip_bytes
@@ -147,7 +147,7 @@ FAIL kmsg 落盘：测试行 1 秒内没出现在 $T/crashcap/kmsg-aaaaaaaa.log
 === scenario
 chmod 500 "$T/ledger"; export DOC_LEDGER_DIR=$T/ledger/sub/x; rm -f "$T/bootid"
 --- rc=1
-PASS 账本目录可写（$T/ledger/sub/x）
+PASS 长期记录目录可写（$T/ledger/sub/x）
 PASS key.log 的原因码（这次开机 1150）
 PASS 基带崩溃自恢复开关（enabled）
 PASS dd iflag=skip_bytes

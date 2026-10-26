@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -253,24 +253,35 @@ pub fn parse_external(text: &str) -> Option<Values> {
     last
 }
 
-/// Last `TAIL_WINDOW` bytes of a file as text; when the read starts mid-file
-/// the partial first line is dropped.
+/// The `[DATA]` lines in the last `TAIL_WINDOW` bytes of a file (every reader filters on the tag);
+/// when the read starts mid-file the partial first line is dropped. Read line by line: the whole
+/// window as text was up to 4 MB of heap churn per scan for a few dozen bearer lines.
 fn tail_of(path: &Path) -> Option<String> {
     let mut f = File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
     let from = len.saturating_sub(TAIL_WINDOW);
     f.seek(SeekFrom::Start(from)).ok()?;
-    let mut buf = Vec::new();
-    f.take(TAIL_WINDOW).read_to_end(&mut buf).ok()?;
-    let body = if from == 0 {
-        &buf[..]
-    } else {
-        match buf.iter().position(|&b| b == b'\n') {
-            Some(nl) => &buf[nl + 1..],
-            None => &buf[..],
+    let mut r = BufReader::new(f.take(TAIL_WINDOW));
+    let mut line = Vec::new();
+    if from > 0 {
+        r.read_until(b'\n', &mut line).ok()?;
+        // a window without a line break is one partial line, kept as the whole read was
+        if line.last() == Some(&b'\n') {
+            line.clear();
         }
-    };
-    Some(String::from_utf8_lossy(body).into_owned())
+    }
+    let mut out = String::new();
+    loop {
+        if line.is_empty() && r.read_until(b'\n', &mut line).ok()? == 0 {
+            return Some(out);
+        }
+        if line.windows(6).any(|w| w == b"[DATA]") {
+            let text = String::from_utf8_lossy(&line);
+            out.push_str(text.trim_end_matches('\n'));
+            out.push('\n');
+        }
+        line.clear();
+    }
 }
 
 /// Every data bearer found in the logs, oldest first, plus a bare `qci = …`
@@ -1240,5 +1251,17 @@ mod tests {
             parse_texts(&[("[DATA] qci = 7\n", true)], Query::default()).qci,
             7
         );
+    }
+
+    #[test]
+    fn tail_keeps_only_whole_data_lines_of_the_window() {
+        let p = std::env::temp_dir().join(format!("qos-tail-{}.log", std::process::id()));
+        // the window starts inside a [DATA] line: that partial line is dropped
+        let head = format!("x[DATA] cut {}\n", "y".repeat(TAIL_WINDOW as usize));
+        std::fs::write(&p, format!("{head}noise\n[DATA] cid1 one\r\nnoise [DATA] two")).unwrap();
+        assert_eq!(tail_of(&p).unwrap(), "[DATA] cid1 one\r\nnoise [DATA] two\n");
+        std::fs::write(&p, "[DATA] a\nb\n").unwrap();
+        assert_eq!(tail_of(&p).unwrap(), "[DATA] a\n");
+        let _ = std::fs::remove_file(&p);
     }
 }

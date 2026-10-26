@@ -8,6 +8,7 @@ pub(crate) mod listing;
 pub(crate) mod netlink;
 pub(crate) mod policy;
 pub(crate) mod resolve;
+pub(crate) mod uevent;
 pub(crate) mod usb;
 
 #[cfg(test)]

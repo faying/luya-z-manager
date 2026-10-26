@@ -966,3 +966,27 @@ fn clock_with_https() {
     assert_eq!(judge_clock_https(None, Some(400), Some(&one)), judge_clock(None, Some(400)));
     assert_eq!(judge_clock_https(Some(E::Verified), None, None), judge_clock(Some(E::Verified), None));
 }
+
+#[test]
+fn past_from_keeps_only_current_method_speeds() {
+    let k = json!({"plmn": "460-11", "cell": 5_242_881_234i64, "ch": 633_984, "hour": 20});
+    let with = |extra: Value| {
+        let mut v = k.clone();
+        for (a, b) in extra.as_object().unwrap() {
+            v[a] = b.clone();
+        }
+        v
+    };
+    // (event, counted?)
+    let rows = [
+        (with(json!({"mbps": 6.5, "method": SPEED_METHOD})), true),
+        (with(json!({"mbps": 3.0})), false),                // old engine, no method
+        (with(json!({"mbps": 4.0, "method": 1})), false),   // older method
+        (with(json!({"mbps": 5.0, "method": "2"})), false), // not a number
+    ];
+    let events: Vec<_> = rows.iter().map(|(e, _)| ("speed".to_string(), e.clone())).collect();
+    let (runs, sp) = past_from(&events);
+    assert!(runs.is_empty());
+    let want: Vec<f64> = rows.iter().filter(|r| r.1).map(|r| r.0["mbps"].as_f64().unwrap()).collect();
+    assert_eq!(sp.iter().map(|s| s.mbps).collect::<Vec<_>>(), want);
+}

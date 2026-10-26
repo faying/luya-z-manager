@@ -196,6 +196,9 @@ impl Obj {
     pub fn chart(parent: Obj) -> Obj {
         Obj(unsafe { lv_chart_create(parent.0) })
     }
+    pub fn arc(parent: Obj) -> Obj {
+        Obj(unsafe { lv_arc_create(parent.0) })
+    }
     pub fn switch(parent: Obj) -> Obj {
         Obj(unsafe { lv_switch_create(parent.0) })
     }
@@ -639,6 +642,36 @@ impl Default for Series {
 }
 
 impl Obj {
+    // arcs (Home's SINR ring): set once at build, the value only when it changes
+    pub fn arc_set_bg_angles(self, start: u32, end: u32) {
+        unsafe { lv_arc_set_bg_angles(self.0, start as _, end as _) }
+    }
+    pub fn arc_set_rotation(self, r: i32) {
+        unsafe { lv_arc_set_rotation(self.0, r as _) }
+    }
+    pub fn arc_set_range(self, lo: i32, hi: i32) {
+        unsafe { lv_arc_set_range(self.0, lo, hi) }
+    }
+    pub fn arc_set_value(self, v: i32) {
+        if unsafe { lv_arc_get_value(self.0) } == v {
+            return;
+        }
+        unsafe { lv_arc_set_value(self.0, v) }
+    }
+    pub fn set_style_arc_width(self, w: i32, sel: u32) {
+        unsafe { lv_obj_set_style_arc_width(self.0, w, sel) }
+    }
+    pub fn set_style_arc_rounded(self, on: bool, sel: u32) {
+        unsafe { lv_obj_set_style_arc_rounded(self.0, on, sel) }
+    }
+    pub fn set_style_arc_color(self, rgb: u32, sel: u32) {
+        unsafe { lv_obj_set_style_arc_color(self.0, color(rgb), sel) }
+    }
+    /// 「#rrggbb word#」 in the text draws that word in the colour
+    pub fn label_set_recolor(self, on: bool) {
+        unsafe { lv_label_set_recolor(self.0, on) }
+    }
+
     pub fn chart_set_type(self, t: lv_chart_type_t::Type) {
         unsafe { lv_chart_set_type(self.0, t) }
     }
@@ -662,6 +695,9 @@ impl Obj {
     }
     pub fn chart_set_next_value(self, s: Series, v: i32) {
         unsafe { lv_chart_set_next_value(self.0, s.0, v) }
+    }
+    pub fn chart_set_series_color(self, s: Series, rgb: u32) {
+        unsafe { lv_chart_set_series_color(self.0, s.0, color(rgb)) }
     }
 }
 

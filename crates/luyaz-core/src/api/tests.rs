@@ -115,7 +115,7 @@ async fn alerts_and_the_read_cursor() {
 }
 
 #[tokio::test]
-async fn screen_and_the_switched_off_neighbour_scan() {
+async fn screen_and_the_passive_neighbour_read() {
     let addr = start(Compat::new(scratch("screen").to_str().unwrap(),
         Sources::none(),
     ))
@@ -123,12 +123,9 @@ async fn screen_and_the_switched_off_neighbour_scan() {
     let (st, body) = call(addr, "GET", "/api/screen", None, "").await;
     assert_eq!((st, body["data"]["v"].clone()), (200, json!(1)));
     assert!(body["data"]["battery"]["state"].is_string(), "{body}");
+    // no ubus here: the uci read fails, reported as such (never a scan)
     let (st, body) = call(addr, "POST", "/api/netinfo/neighbors/scan", None, "").await;
-    assert_eq!(st, 410);
-    assert_eq!(
-        body["error_en"],
-        "Off: the stock scan drops data, finds nothing"
-    );
+    assert_eq!((st, body["ok"].clone()), (502, json!(false)), "{body}");
 }
 
 fn put(root: &std::path::Path, path: &str, text: &str) {

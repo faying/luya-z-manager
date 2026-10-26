@@ -28,7 +28,24 @@ CORE_ENV=/data/luyaz/core/core.env
 # The core reads only LUYAZ_* names. Only the listed switches are taken from core.env,
 # so it can never set the rollback or ubus settings.
 core_switches() {
-    grep -E '^LUYAZ_(CHILL_IDLE|CONTRACT_DEBUG|CRASHWATCH|HOME_EXIT|LONGTERM|MIHOMO_API|PLUGINS|POLICIES|SMS_SESSION)=[A-Za-z0-9_.,:/-]*$' "$1" 2>/dev/null
+    grep -E '^LUYAZ_(CHILL_IDLE|CONTRACT_DEBUG|CRASHWATCH|HOME_EXIT|LONGTERM|MIHOMO_API|NETREC|PLUGINS|POLICIES|SMS_SESSION)=[A-Za-z0-9_.,:/-]*$' "$1" 2>/dev/null
+}
+
+# Network tuning (manager docs/designs/net-performance.md 1b, A1): before the core
+# starts, `net-tune.sh apply` as a subprocess (never `.`: a busybox ash error in
+# it would end this shell and the core would not start), output to the core's
+# log, capped at 5 s, its result ignored. No want file = it changes nothing.
+NET_TUNE=/data/luyaz/scripts/net-tune.sh
+NET_TUNE_LOG=/tmp/luyaz-core.log
+net_tune() {
+    [ -f "$NET_TUNE" ] || return 0
+    sh "$NET_TUNE" apply >>"$NET_TUNE_LOG" 2>&1 </dev/null &
+    local p=$! w
+    (sleep 5; kill "$p" 2>/dev/null) >/dev/null 2>&1 </dev/null &
+    w=$!
+    wait "$p" 2>/dev/null
+    kill "$w" 2>/dev/null
+    return 0
 }
 
 # Same test as start.sh: in power-off charging the UI falls back to sysfs,
@@ -60,6 +77,7 @@ start_service() {
     boot_is_normal || return 0
     [ -x "$BIN" ] || return 1
     seed_token || return 1
+    net_tune || true
     procd_open_instance
     # --lan-bind is what opens the LAN listener AND keeps loopback auth-free
     # for the touch UI; --lan-port alone does neither.

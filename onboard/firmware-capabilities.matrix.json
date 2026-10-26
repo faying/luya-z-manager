@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "about": "install.sh checks each picked component against the first entry whose model/region/build match (* = any). verified = installed and run on a real device; code-only = the code supports it, never installed on a real device (needs LUYAZ_ALLOW_UNVERIFIED=1); unsupported = skipped. No matching entry = unsupported. Keep one entry per line: install.sh reads this file without a JSON tool.",
+  "features": ["ssh", "admin", "ui", "esim", "chill", "recover"],
+  "entries": [
+    {"model": "MU5250", "region": "CN", "build": "B31", "features": {"ssh": "verified", "admin": "verified", "ui": "verified", "esim": "verified", "chill": "verified", "recover": "verified"}},
+    {"model": "MU5250", "region": "CN", "build": "B27", "features": {"ssh": "verified", "admin": "verified", "ui": "verified", "esim": "verified", "chill": "verified", "recover": "verified"}},
+    {"model": "MU5250", "region": "CN", "build": "B28", "features": {"ssh": "code-only", "admin": "code-only", "ui": "code-only", "esim": "code-only", "chill": "code-only", "recover": "code-only"}},
+    {"model": "MU5250", "region": "CN", "build": "B29", "features": {"ssh": "code-only", "admin": "code-only", "ui": "code-only", "esim": "code-only", "chill": "code-only", "recover": "code-only"}},
+    {"model": "MU5250", "region": "CN", "build": "B30", "features": {"ssh": "code-only", "admin": "code-only", "ui": "code-only", "esim": "code-only", "chill": "code-only", "recover": "code-only"}},
+    {"model": "MU5252", "region": "*", "build": "*", "features": {"ssh": "code-only", "admin": "code-only", "ui": "code-only", "esim": "code-only", "chill": "code-only", "recover": "code-only"}}
+  ]
+}

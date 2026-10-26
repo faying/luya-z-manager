@@ -390,6 +390,11 @@ impl Watch {
     pub fn history(&self, from: u64, to: u64) -> (Vec<record::Minute>, Vec<record::Event>) {
         lock(&self.log).as_ref().map(|l| l.range(from, to)).unwrap_or_default()
     }
+
+    /// [`Self::history`]'s events of `kinds` only (no minute records read).
+    pub fn events(&self, from: u64, to: u64, kinds: &[&str]) -> Vec<record::Event> {
+        lock(&self.log).as_ref().map(|l| l.events(from, to, kinds)).unwrap_or_default()
+    }
 }
 
 /// The parts of the core's legacy `/state` that netwatch reads, from the `/v2` blocks (same shapes,

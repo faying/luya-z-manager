@@ -80,6 +80,9 @@ pub struct core_snapshot_t {
     /// `sim.dual` (global edition, manager docs/designs/dual-sim-global.md); None = one slot
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sim_dual: Option<sim_dual_t>,
+    /// The core's `regress` block (incidents, core ≥ 1.45.0); None = a core without it
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regress: Option<regress_t>,
 
     // the network
     pub carrier: String,
@@ -173,6 +176,37 @@ pub struct core_snapshot_t {
     pub sms_new: i32,
     pub inbox_n: i32,
     pub inbox: Vec<sms_entry_t>,
+}
+
+/// The regress block as the screen keeps it (design review 4A/14A): what was last seen, whether it
+/// is fresh now, when it last was (device wall clock, for 「事故数据停在 hh:mm」).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct regress_t {
+    /// the block is fresh now (else the rows are the last seen, grey)
+    pub fresh: i32,
+    /// data came at least once (else 「读不到事故数据」)
+    pub has: i32,
+    /// device wall clock when it last came fresh
+    pub at: i64,
+    pub open_total: i32,
+    pub open: Vec<regress_item_t>,
+    pub closed: Vec<regress_item_t>,
+}
+
+/// One incident row (names in the screen language).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct regress_item_t {
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    pub sub: String,
+    /// device wall clock; 0 = not trusted
+    pub from: i64,
+    pub to: i64,
+    /// "" open, "recovered", "quiet"
+    pub end: String,
+    pub count: i32,
+    pub observed: String,
 }
 
 /// Dual SIM as the core reads it: mode "single" | "dual", the main slot (1/2), smart switching,
@@ -448,6 +482,54 @@ pub struct speedtest_server_t {
     pub country: String,
 }
 
+/// One row of the speed test's 「分层」 (net-performance.md 第 1 期实现契约 `verdict.layers`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct speed_layer_t {
+    /// single / proxy / queue / radio / cell_wifi
+    pub key: String,
+    /// ok / warn / untested
+    pub state: String,
+    pub value_zh: String,
+    pub value_en: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct speed_verdict_t {
+    pub bottlenecks: Vec<String>,
+    pub summary_zh: String,
+    pub summary_en: String,
+    pub layers: Vec<speed_layer_t>,
+}
+
+/// The v2 engine's fields of /api/speedtest/progress; absent (None in the model) from an old
+/// core, which then looks exactly as before (Design Review DR4).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct speedtest_v2_t {
+    pub method_version: i32,
+    /// full / coarse
+    pub mode: String,
+    pub roaming_capped: bool,
+    /// direct / chill
+    pub path: String,
+    /// idle_latency / single_download / multi_download / chill_download / multi_upload, "" none
+    pub stage: String,
+    pub step: i32,
+    pub steps: i32,
+    pub connections: i32,
+    pub sample_short: bool,
+    /// ookla / librespeed, "" not known
+    pub provider: String,
+    pub server_name: String,
+    pub server_sponsor: String,
+    pub download_bytes: i64,
+    pub upload_bytes: i64,
+    pub loaded_down_ms: Option<f64>,
+    pub verdict: Option<speed_verdict_t>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct agent_health_t {
     pub lost_secs: i64,
@@ -477,6 +559,12 @@ pub struct scenario_status_t {
     pub home_on: i32,
     pub home_until: i64,
     pub home_fallback: i32,
+    /// services.chill.ai_gate: 0 off / AI through 🤖 AI, 1 AI blocked, 2 AI out the other way,
+    /// checked to land in ai_region
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub ai_gate: i32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ai_region: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

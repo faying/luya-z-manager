@@ -300,8 +300,8 @@ impl Host for DiagHost {
             .push_event(record::Event::new(luyaz_netwatch::now_unix(), kind, data));
     }
 
-    fn events(&self, from: u64, to: u64) -> Vec<record::Event> {
-        self.watch.history(from, to).1
+    fn events(&self, from: u64, to: u64, kinds: &[&str]) -> Vec<record::Event> {
+        self.watch.events(from, to, kinds)
     }
 }
 

@@ -48,6 +48,7 @@ STATE=/tmp/chill.state
 CORE_PID=/tmp/chill.core.pid
 LOG=/tmp/chill.log
 RULES_BEFORE=/tmp/chill.rules.before
+SYS_NET=/sys/class/net                   # 看接口在不在跑（check_rules_drift）；单测指向 fixture
 RESTART_FLAG=/tmp/chill.restart       # 有它 = 监督循环下一拍平稳重启核心（不算崩溃）
 THERMAL_ECO=/tmp/chill.thermal-eco    # 有它 = 因温度暂时按 eco 跑（重启设备自然清掉）
 IDLE_LEASE=/tmp/chill.idle.v2            # 核心写的「息屏暂停」租约：到这个秒数前停着（u60-radio.md 6e）
@@ -224,6 +225,104 @@ EOF
   mv "$STATE.tmp" "$STATE" 2>/dev/null
 }
 
+# ── AI 闸门（CHILL_AI_STRICT=1）──────────────────────────────────────────────
+# AI 的流量只走 🤖 AI 选的地区。CHILL 一停（崩溃、卡死、过热、暂停、息屏暂停、总开关关）
+# 或出口模式不是 rule（direct / global 不看规则），AI 网域就由 dnsmasq 答「不存在」，
+# 直到核心确认蜂窝落地就是 🤖 AI 的地区（核心写 $AI_OK，见 crates/luyaz-core 的
+# engines/chill_ai_gate.rs）。其余网站照常直连；管理网页、tailnet 不是 AI 网域，不受影响。
+# - 封锁文件放 dnsmasq 的 conf-dir。dnsmasq 的 reload 只发 SIGHUP，不重读 conf-dir（10-24 真机
+#   验证），所以封锁文件一有变化就 restart。
+# - 先封后放：CHILL 停下的同一次 dnsmasq 重启里就封上，不等核心。
+# - 网域取自 🤖 AI 的规则集（mihomo 每 3 天更新的文本版），再加一份内置的底，规则集坏了也不空。
+AI_LIST="$CHILL_DIR/ruleset/ai_domain.list"
+AI_BLOCK="${AI_BLOCK:-/tmp/dnsmasq.d/luyaz-ai-block.conf}"
+AI_OK="${AI_OK:-/tmp/chill.ai-ok}"
+AI_LOCK="${AI_LOCK:-/tmp/chill.ai-gate.lock}"
+AI_FALLBACK="openai.com chatgpt.com oaistatic.com oaiusercontent.com sora.com anthropic.com claude.ai claude.com gemini.google.com aistudio.google.com generativelanguage.googleapis.com perplexity.ai x.ai grok.com"
+
+ai_strict() { [ "${CHILL_AI_STRICT:-0}" = 1 ]; }
+
+# dnsmasq 的封锁文件内容：每个网域一行 address=/网域/（连子网域一起答 NXDOMAIN，A 和 AAAA 都是）。
+ai_block_text() {
+  { cat "$AI_LIST" 2>/dev/null; for _d in $AI_FALLBACK; do echo "$_d"; done; } \
+    | tr -d '\r' | sed -n 's/^+\.//; /^[a-z0-9][a-z0-9.-]*\.[a-z0-9-]*[a-z0-9]$/p' \
+    | sort -u | sed 's|.*|address=/&/|'
+}
+
+# 主路由表默认路由的「接口 IPv4」（和核心 api/exits.rs 的 route_key 一样）：重拨、换卡都会变。
+ai_route_key() {
+  _if=$(awk 'NR>1 && $2=="00000000" && $8=="00000000" {print $1; exit}' "$CHILL_PROC/net/route" 2>/dev/null)
+  [ -n "$_if" ] || return 1
+  _ip=$(ip -4 -o addr show dev "$_if" 2>/dev/null | awk '{split($4, a, "/"); print a[1]; exit}')
+  echo "$_if $_ip"
+}
+
+# 核心确认过：这次开机、这条蜂窝连接、还没到期，直连的落地就是 🤖 AI 的地区。
+# 文件：v2 <boot_id> <起> <止> direct <接口> <IPv4> <地区>（起止是 /proc/uptime 的秒）。
+ai_ok_direct() {
+  _ok=$(cat "$AI_OK" 2>/dev/null) || return 1
+  set -f; set -- $_ok; set +f
+  [ "$#" -eq 8 ] && [ "$1" = v2 ] && [ "$5" = direct ] || return 1
+  uint "$3" && uint "$4" || return 1
+  _ob=$(boot_id) && _on=$(boot_now) || return 1
+  [ "$2" = "$_ob" ] && [ "$_on" -ge "$3" ] && [ "$_on" -lt "$4" ] || return 1
+  [ "$(ai_route_key)" = "$6 $7" ]
+}
+
+# CHILL 不在跑（或模式 direct）时要不要封：on / off。
+ai_want_down() {
+  ai_strict || { echo off; return; }
+  ai_ok_direct && echo off || echo on
+}
+# CHILL 刚接管 DNS、或运行中复查：rule 模式放开；direct 同上；global 先封，由核心经 7894 确认后放
+# （运行中复查时 global 交给核心，返回 keep）。
+ai_want_up() {
+  ai_strict || { echo off; return; }
+  case "$(cat "$MODE_FILE" 2>/dev/null)" in
+    direct) ai_want_down ;;
+    global) echo "${1:-on}" ;;
+    *) echo off ;;
+  esac
+}
+
+# 把封锁文件改成 on / off（keep 不动）。返回 0 = 变了（调用方要 restart dnsmasq），1 = 没变。
+# 核心经 `chill.sh ai-gate` 也会写，用 flock 串起来（busybox 的 flock 没有 -w；锁里只有文件操作，
+# dnsmasq 重启在锁外，不会久等）。
+ai_gate_write() {
+  [ "$1" = keep ] && return 1
+  if command -v flock >/dev/null 2>&1; then
+    ( flock -x 9 || true; ai_gate_write_locked "$1" ) 9>"$AI_LOCK"
+  else
+    ai_gate_write_locked "$1"
+  fi
+}
+ai_gate_write_locked() {
+  if [ "$1" = on ]; then
+    mkdir -p "$(dirname "$AI_BLOCK")" 2>/dev/null
+    { ai_block_text > "$AI_BLOCK.tmp"; } 2>/dev/null || return 1
+    if cmp -s "$AI_BLOCK.tmp" "$AI_BLOCK"; then rm -f "$AI_BLOCK.tmp"; return 1; fi
+    mv "$AI_BLOCK.tmp" "$AI_BLOCK" || return 1
+    log "AI 闸门：封（$(wc -l < "$AI_BLOCK" | tr -d ' ') 个网域）"
+    event "ai_gate -> blocked"
+  else
+    [ -e "$AI_BLOCK" ] || return 1
+    rm -f "$AI_BLOCK" || return 1
+    log "AI 闸门：放"
+    event "ai_gate -> open"
+  fi
+  return 0
+}
+
+dnsmasq_restart() {
+  "$DNSMASQ_INIT" restart >/dev/null 2>&1
+}
+
+# 运行中每分钟一次：封锁文件和现在的模式对不上就改（核心刚好在 CHILL 起来时写了封锁的那种竞态）。
+ai_gate_tick() {
+  ai_gate_write "$(ai_want_up keep)" && dnsmasq_restart
+  return 0
+}
+
 # ── dnsmasq 回滚（决定 3）────────────────────────────────────────────────────
 # ⚠ 这是整个脚本最不能出错的函数。dnsmasq 上游指向 mihomo 期间，只停核不回滚 DNS
 # 会让全屋**断网**而不是降级成直连——过热、崩溃、stop、重启全都会踩到。
@@ -246,13 +345,26 @@ mark_stopped() {
   write_state stopped ""
 }
 
+# AI 闸门在同一次 dnsmasq 重启里封上（见「AI 闸门」）：封锁文件变了就 restart，不 reload。
 restore_dns() {
-  [ -f "$DHCP_BACKUP" ] || return 0
-  cmp -s "$DHCP_BACKUP" "$DHCP_CONF" && return 0
-  cp "$DHCP_BACKUP" "$DHCP_CONF" 2>/dev/null || return 1
-  "$DNSMASQ_INIT" reload >/dev/null 2>&1 || "$DNSMASQ_INIT" restart >/dev/null 2>&1
-  log "restore_dns: dnsmasq 已回滚到备份"
-  event "dns_restored -> direct"
+  _ai_changed=1
+  ai_gate_write "$(ai_want_down)" && _ai_changed=0
+  if [ -f "$DHCP_BACKUP" ] && ! cmp -s "$DHCP_BACKUP" "$DHCP_CONF"; then
+    if ! cp "$DHCP_BACKUP" "$DHCP_CONF" 2>/dev/null; then
+      [ "$_ai_changed" = 0 ] && dnsmasq_restart
+      return 1
+    fi
+    if [ "$_ai_changed" = 0 ]; then
+      dnsmasq_restart
+    else
+      "$DNSMASQ_INIT" reload >/dev/null 2>&1 || dnsmasq_restart
+    fi
+    log "restore_dns: dnsmasq 已回滚到备份"
+    event "dns_restored -> direct"
+  elif [ "$_ai_changed" = 0 ]; then
+    dnsmasq_restart
+  fi
+  return 0
 }
 
 # 让 dnsmasq 把查询转发给 mihomo。**必须在确认 mihomo 的 dns.listen 能应答之后再调**，
@@ -264,13 +376,26 @@ apply_dns() {
   uci -q delete dhcp.lan_dns.server 2>/dev/null
   uci -q add_list dhcp.lan_dns.server=127.0.0.1
   uci -q commit dhcp
-  "$DNSMASQ_INIT" reload >/dev/null 2>&1
+  if ai_gate_write "$(ai_want_up)"; then
+    dnsmasq_restart
+  else
+    "$DNSMASQ_INIT" reload >/dev/null 2>&1
+  fi
   log "apply_dns: dnsmasq 上游已指向 mihomo"
 }
 
 dns_answers() {
   # 确认 mihomo 的 dns.listen 真的能应答，再动 dnsmasq
   nslookup www.gstatic.com 127.0.0.1 >/dev/null 2>&1
+}
+
+# 核心建好 chill0 后补它的 RPS（manager docs/designs/net-performance.md 1b）。chill0 每次启动
+# 都是新建的，所以每次都要调。子进程跑、结果不管；脚本不在（旧 scripts 组件）就什么都不做，
+# 调优开关没开（没有 net-tune.want）时它自己什么都不改。
+NET_TUNE="${CHILL_NET_TUNE:-/data/luyaz/scripts/net-tune.sh}"
+net_tune_chill0() {
+  [ -f "$NET_TUNE" ] || return 0
+  sh "$NET_TUNE" apply chill0 >> "$LOG" 2>&1 < /dev/null || true
 }
 
 # 起核心后等它就绪：API 回 2xx（与判活同一个探针，带鉴权头）且 dns.listen 能应答。
@@ -359,11 +484,25 @@ strip_owned() {
 missing_rules() { # missing_rules <快照> <现状>：输出快照里有、现状里没有的行
   awk 'NR==FNR { have[$0] = 1; next } !($0 in have)' "$2" "$1" 2>/dev/null
 }
+# 绑在接口上的规则（`iif X` / `oif X`）跟着接口走：接口关了（情景关 Wi-Fi）原厂就删，
+# 接口回来再加，优先级随 ifindex 变。所以这类规则：接口没在跑 → 不算消失；接口在跑 →
+# 只比优先级后面的内容。真被删掉的（接口在跑、内容也找不到）照样算。
+iface_rules_settled() { # iface_rules_settled <现状>：stdin 是消失的行，输出仍算消失的
+  while IFS= read -r _l; do
+    _if=$(printf '%s\n' "$_l" | sed -n 's/.*[[:space:]][io]if[[:space:]]\{1,\}\([^[:space:]]\{1,\}\).*/\1/p')
+    if [ -n "$_if" ]; then
+      _st=$(cat "$SYS_NET/$_if/operstate" 2>/dev/null)
+      case "$_st" in up|unknown) ;; *) continue ;; esac
+      awk -v b="${_l#*:}" '{ x = $0; sub(/^[^:]*:/, "", x); if (x == b) f = 1 } END { exit !f }' "$1" && continue
+    fi
+    printf '%s\n' "$_l"
+  done
+}
 check_rules_drift() {
   [ -f "$RULES_BEFORE" ] || return 0
   { ip rule show; ip -6 rule show; } 2>/dev/null | strip_owned > /tmp/chill.rules.after
   strip_owned < "$RULES_BEFORE" > /tmp/chill.rules.snap
-  _gone=$(missing_rules /tmp/chill.rules.snap /tmp/chill.rules.after)
+  _gone=$(missing_rules /tmp/chill.rules.snap /tmp/chill.rules.after | iface_rules_settled /tmp/chill.rules.after)
   if [ -z "$_gone" ]; then
     rules_drift=false
   else
@@ -766,8 +905,8 @@ render() {
 
 # ── 前置检查 ────────────────────────────────────────────────────────────────
 rulesets_ok() {
-  for f in cn_domain private_domain ai_domain; do
-    [ -s "$CHILL_DIR/ruleset/$f.mrs" ] || return 1
+  for f in cn_domain.mrs private_domain.mrs ai_domain.list; do
+    [ -s "$CHILL_DIR/ruleset/$f" ] || return 1
   done
   return 0
 }
@@ -975,6 +1114,8 @@ run() {
       flush; sleep 5; continue
     fi
 
+    net_tune_chill0
+
     # DNS 与绕行都要在核心确认可用之后才施加
     if dns_answers; then apply_dns; else log "dns.listen 无应答，跳过 apply_dns"; fi
     apply_bypass
@@ -1020,6 +1161,7 @@ run() {
       tick=0
 
       truncate_log
+      ai_gate_tick
 
       # API 连续 2 次失败按崩溃处理。**必须计数**：此前这条路径只 flush 后
       # break，crash_n 不增，于是核心卡死时永远不会 gaveup，会无限重启。
@@ -1198,5 +1340,13 @@ case "${1:-}" in
     [ -f "$CHILL_DIR/deadman.pid" ] && kill "$(cat "$CHILL_DIR/deadman.pid")" 2>/dev/null
     echo "已确认"
     ;;
-  *) echo "usage: $0 {run|start|stop|restart|reload|status|flush|pause <min>|safe-start|confirm|profile [eco|standard|perf]}"; exit 1 ;;
+  ai-gate)
+    # 核心（engines/chill_ai_gate.rs）用：on = 封、off = 放；status 打印 blocked / open。
+    case "${2:-}" in
+      on|off) if ai_gate_write "$2"; then dnsmasq_restart; echo changed; else echo same; fi ;;
+      status) [ -e "$AI_BLOCK" ] && echo blocked || echo open ;;
+      *) echo "usage: $0 ai-gate {on|off|status}" >&2; exit 2 ;;
+    esac
+    ;;
+  *) echo "usage: $0 {run|start|stop|restart|reload|status|flush|pause <min>|safe-start|confirm|profile [eco|standard|perf]|ai-gate on|off|status}"; exit 1 ;;
 esac

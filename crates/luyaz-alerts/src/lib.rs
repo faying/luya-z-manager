@@ -74,16 +74,73 @@ pub struct SmsRecord {
     pub result: String,
 }
 
-/// A sentinel event id: the boot id's first 8 hex digits, `-`, a decimal sequence number.
+/// A sentinel event id: the boot id's first 8 hex digits, `-`, a decimal sequence number; or a
+/// regress transition id ([`valid_regress_id`]).
 pub fn valid_event_id(id: &str) -> bool {
-    id.split_once('-').is_some_and(|(b, n)| {
-        b.len() == 8
-            && b.bytes().all(|c| c.is_ascii_hexdigit())
-            && !n.is_empty()
-            && n.len() <= 12
-            && n.bytes().all(|c| c.is_ascii_digit())
-    })
+    valid_regress_id(id)
+        || id.split_once('-').is_some_and(|(b, n)| {
+            b.len() == 8
+                && b.bytes().all(|c| c.is_ascii_hexdigit())
+                && !n.is_empty()
+                && n.len() <= 12
+                && n.bytes().all(|c| c.is_ascii_digit())
+        })
 }
+
+/// A regress transition id (eng review R8): `rg-<incident id>-<open|esc<n>|close|ask>`, lowercase
+/// letters, digits and `-`, at most 64 characters.
+pub fn valid_regress_id(id: &str) -> bool {
+    id.len() <= 64
+        && id.strip_prefix("rg-").is_some_and(|r| {
+            !r.is_empty()
+                && r.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
+}
+
+/// The id an event's text starts with (`[<id>] …`, [`Alerts::add_once`]), if any.
+pub fn text_id(text: &str) -> Option<&str> {
+    let r = text.strip_prefix('[')?;
+    let (id, _) = r.split_once("] ")?;
+    valid_event_id(id).then_some(id)
+}
+
+/// The text after its `[<id>] ` (all of it when there is none).
+pub fn text_body(text: &str) -> &str {
+    match text_id(text) {
+        Some(id) => &text[id.len() + 3..],
+        None => text,
+    }
+}
+
+/// The kinds of the regress layer ("tell me when it gets worse", 10-24): the core's detectors and
+/// the sentinel's three (`regress-recorder`, `regress-core-down`, `regress-disk`).
+pub fn is_regress(kind: &str) -> bool {
+    kind.starts_with("regress-")
+}
+
+/// Point events (eng review R4): a crash or give-up that happens and is over. The SMS sender sends
+/// the 1st, 2nd, 4th and 8th in a row (each within an hour of the one before), the core merges a
+/// row into one incident.
+pub const POINT_KINDS: &[&str] = &[
+    "core-crash",
+    "ui-crash",
+    "web-crash",
+    "sentinel-crash",
+    "ui-gave-up",
+    "sentinel-silent",
+];
+
+pub fn is_point(kind: &str) -> bool {
+    POINT_KINDS.contains(&kind)
+}
+
+/// A point event's row: the next one within this long of the one before is the same row.
+pub const POINT_WINDOW_S: i64 = 3600;
+
+/// The owner's switch for regress SMS (CEO review OV-C4): when this file exists, regress kinds are
+/// recorded, not texted, by either sender. `tools/luyaz regress sms on|off` writes it.
+pub const REGRESS_SMS_OFF: &str = "/data/luyaz/core/regress-sms-off";
 
 pub fn valid_kind(k: &str) -> bool {
     !k.is_empty()
@@ -602,6 +659,18 @@ pub fn kind_label(kind: &str) -> String {
         // R18-P2-01 stock anomalies (read-only)
         ("wifi-post-stuck", "原厂 Wi-Fi 后台脚本卡住，在空转"),
         ("no-service-long", "无服务超过 5 分钟，原厂没有恢复动作"),
+        // the regress layer (10-24: tell me when it gets worse)
+        ("regress-reboot", "设备意外重启（没有计划重启标记）"),
+        ("regress-mem", "数据服务内存比平时高很多"),
+        ("regress-mem-abs", "数据服务内存超过上限"),
+        ("regress-cellular", "蜂窝数据断了 5 分钟以上"),
+        ("regress-egress", "出口（CHILL / Tailscale）不通 5 分钟以上"),
+        ("regress-power", "待机耗电比平时高"),
+        ("regress-power-abs", "待机耗电超过上限"),
+        ("regress-recorder", "长期记录停了 10 分钟以上"),
+        ("regress-core-down", "数据服务停了 10 分钟以上"),
+        ("regress-disk", "存储空间快满了（/data 或 /tmp）"),
+        ("regress-blind", "有一类情况连续几天看不见"),
     ];
     T.iter()
         .find(|t| t.0 == kind)
@@ -688,6 +757,23 @@ pub fn kind_label_en(kind: &str) -> String {
             "no-service-long",
             "No service for 5+ min and the stock firmware did nothing",
         ),
+        (
+            "regress-reboot",
+            "Unexpected reboot (no planned-reboot mark)",
+        ),
+        ("regress-mem", "Data service memory well above normal"),
+        ("regress-mem-abs", "Data service memory over the limit"),
+        ("regress-cellular", "Cellular data down for 5+ min"),
+        (
+            "regress-egress",
+            "Route (CHILL / Tailscale) down for 5+ min",
+        ),
+        ("regress-power", "Standby power draw above normal"),
+        ("regress-power-abs", "Standby power draw over the limit"),
+        ("regress-recorder", "Long-term recorder stalled for 10+ min"),
+        ("regress-core-down", "Data service down for 10+ min"),
+        ("regress-disk", "Storage almost full (/data or /tmp)"),
+        ("regress-blind", "One kind of check has been blind for days"),
     ];
     T.iter()
         .find(|t| t.0 == kind)
@@ -787,6 +873,17 @@ mod tests {
             "esim-rebooted",
             "wifi-post-stuck",
             "no-service-long",
+            "regress-reboot",
+            "regress-mem",
+            "regress-mem-abs",
+            "regress-cellular",
+            "regress-egress",
+            "regress-power",
+            "regress-power-abs",
+            "regress-recorder",
+            "regress-core-down",
+            "regress-disk",
+            "regress-blind",
         ];
         for k in kinds {
             let en = kind_label_en(k);

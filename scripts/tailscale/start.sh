@@ -531,6 +531,7 @@ up_after() {
     while [ ! -S "$SOCK" ] && [ "$_i" -lt 30 ]; do $SLEEP 1; _i=$((_i + 1)); done
     [ -S "$SOCK" ] || log "socket $SOCK not there after ${_i}s"
     ts_up
+    net_tune_ts0 "$(cat "$MODE_FILE" 2>/dev/null)"
     if [ "${TSS_FIRST:-0}" = 1 ] && [ "$TIMER" = 1 ] && [ -n "$TSS_NOW" ]; then
         if [ "$TSS_WHY" = safe-mode ]; then _t=$TS_SAFE_RETRY; else _t=$TS_STABLE; fi
         $SLEEP "$_t"
@@ -562,6 +563,16 @@ ts_up() { # "up" with this config, bounded
         --hostname="$TS_HOSTNAME" --timeout=60s >"$RUN/tailscale-up.log" 2>&1
     _rc=$?
     log "up rc=$_rc: $(tail -n 1 "$RUN/tailscale-up.log" 2>/dev/null)"
+}
+
+# After "up" tailscale0 exists (TUN mode; userspace has none): its RPS
+# (manager docs/designs/net-performance.md 1b). A subprocess, result ignored;
+# nothing when the script is not installed or the tuning is off.
+NET_TUNE=${TSS_NET_TUNE:-/data/luyaz/scripts/net-tune.sh}
+net_tune_ts0() { # <mode>
+    [ -f "$NET_TUNE" ] || return 0
+    [ "$1" = tun ] || return 0
+    sh "$NET_TUNE" apply tailscale0 >>"$LOG" 2>&1 </dev/null || true
 }
 
 pick_mode() { # sets NOW FIRST N STABLE MODE WHY TS_ROUTES _w; waits for the WAN (bounded)
@@ -645,6 +656,7 @@ worker() {
     while [ ! -S "$SOCK" ] && [ "$_i" -lt 30 ]; do $SLEEP 1; _i=$((_i + 1)); done
     [ -S "$SOCK" ] || log "socket $SOCK not there after ${_i}s"
     ts_up
+    net_tune_ts0 "$MODE"
 
     if [ "$FIRST" = 1 ] && [ "$TIMER" = 1 ] && [ -n "$NOW" ]; then
         if [ "$WHY" = safe-mode ]; then _t=$TS_SAFE_RETRY; else _t=$TS_STABLE; fi

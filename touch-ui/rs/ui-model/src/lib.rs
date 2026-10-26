@@ -83,6 +83,9 @@ pub struct Model {
     pub st_start_error: Option<String>,
     pub st_servers: Vec<speedtest_server_t>,
     pub st_selected_index: i32,
+    /// the v2 engine's fields, None from an old core
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub st_v2: Option<speedtest_v2_t>,
 
     pub agent_health: agent_health_t,
     pub scenario: scenario_status_t,
@@ -113,6 +116,12 @@ pub struct Model {
     pub diagnose_restore: Option<dg_restore_t>,
 
     pub battery_est: Option<String>,
+    /// the estimate behind battery_est: data::battery EST_* and its minutes (charging /
+    /// discharging only)
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub battery_kind: i32,
+    #[serde(default, skip_serializing_if = "is_zero64")]
+    pub battery_min: i64,
 
     /// component versions (luyaz-core GET /v2/versions), in its order; empty: not read yet
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -140,6 +149,14 @@ impl Model {
     pub fn from_json(s: &str) -> serde_json::Result<Model> {
         serde_json::from_str(s)
     }
+}
+
+fn is_zero(v: &i32) -> bool {
+    *v == 0
+}
+
+fn is_zero64(v: &i64) -> bool {
+    *v == 0
 }
 
 #[cfg(test)]

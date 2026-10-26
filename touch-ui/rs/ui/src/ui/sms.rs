@@ -20,6 +20,12 @@ const HC_TOP: i32 = 24;
 const AL_CHEV_W: i32 = 16;
 pub const ALERTS_MAX: usize = 12;
 pub const HEALTH_MAX: usize = 8;
+/// 事故 rows: open ones (at most 5) and those ended in the last 24 h (at most 3) (design review 14A).
+pub const INC_MAX: usize = 8;
+const INC_ROW_H: i32 = 50;
+/// a row with 「同时观察到」 under its two lines
+const INC_ROW_OBS_H: i32 = 66;
+const INC_TOP: i32 = 24;
 
 #[derive(Default)]
 pub struct Sms {
@@ -63,6 +69,19 @@ pub struct Sms {
     hc_label: [Obj; HEALTH_MAX],
     hc_detail: [Obj; HEALTH_MAX],
     hc_none: Obj,
+    // 事故 (design 2026-10-24): above 体检; the rest of the page moves with its height
+    inc_note: Obj,
+    inc_card: Obj,
+    inc_none: Obj,
+    inc_row: [Obj; INC_MAX],
+    inc_mark: [Obj; INC_MAX],
+    inc_label: [Obj; INC_MAX],
+    inc_time: [Obj; INC_MAX],
+    inc_obs: [Obj; INC_MAX],
+    inc_more: Obj,
+    al_rest: Obj,
+    /// what the section was last laid out as (rows' heights, note, more), so a quiet refresh moves nothing
+    inc_layout: Vec<i32>,
     // its 详情
     ald_scroll: Obj,
     ald_title: Obj,
@@ -204,14 +223,44 @@ impl Ui {
     pub(super) fn build_sub_alerts(&mut self, p: Obj) {
         let th = t();
         let f = uf();
+        let inc_max_h = INC_TOP + 20 + INC_MAX as i32 * INC_ROW_OBS_H + 30;
         let sc = kit::scroll(
             p,
             0,
             SUB_VIEW,
-            HC_TOP + HEALTH_MAX as i32 * HC_ROW_H + 30 + SMS_TOOLBAR_H + ALERTS_MAX as i32 * AL_ROW_H + 16,
+            inc_max_h + HC_TOP + HEALTH_MAX as i32 * HC_ROW_H + 30 + SMS_TOOLBAR_H + ALERTS_MAX as i32 * AL_ROW_H + 16,
         );
         let s = &mut self.sms;
         s.al_scroll = sc;
+        // 事故: rows not tappable (details are on the web, design review 11A)
+        kit::section(sc, 4, tr("事故"));
+        s.inc_note = kit::label_w(sc, f.cj12, th.t3, MARGIN + 6, INC_TOP, CARD_W - 12, false, "");
+        kit::show(s.inc_note, false);
+        s.inc_card = kit::card(sc, MARGIN, INC_TOP, CARD_W, ROW_H);
+        s.inc_none = kit::label_w(s.inc_card, f.cj14, th.t2, PAD, 11, CARD_W - 2 * PAD, false, tr("读取中…"));
+        for i in 0..INC_MAX {
+            let c = kit::bx(s.inc_card, 0, i as i32 * INC_ROW_H, CARD_W, INC_ROW_H, th.card, 0);
+            c.set_style_bg_opa(lv::OPA_TRANSP, 0);
+            s.inc_row[i] = c;
+            if i > 0 {
+                kit::sep(c, 0);
+            }
+            s.inc_mark[i] = kit::label(c, f.cj12, th.warn_t, PAD, 10, "▲");
+            s.inc_label[i] = kit::label_w(c, f.cj14, th.t1, PAD + 18, 7, CARD_W - 2 * PAD - 18, false, "");
+            s.inc_time[i] = kit::label_w(c, f.cj12, th.t2, PAD + 18, 28, CARD_W - 2 * PAD - 18, false, "");
+            s.inc_obs[i] = kit::label_w(c, f.cj12, th.t2, PAD + 18, 46, CARD_W - 2 * PAD - 18, false, "");
+            s.inc_obs[i].set_height(f.cj12.line_height());
+            s.inc_obs[i].set_long_mode(lv::LV_LABEL_LONG_MODE_DOTS);
+            kit::show(s.inc_obs[i], false);
+            kit::show(c, false);
+        }
+        s.inc_more = kit::label_w(sc, f.cj12, th.t3, MARGIN + 6, 0, CARD_W - 12, false, "");
+        kit::show(s.inc_more, false);
+        // 体检 and 告警记录 below it, in one block that moves with 事故's height
+        let rest = kit::bx(sc, 0, INC_TOP + ROW_H + 10, W, HC_TOP + HEALTH_MAX as i32 * HC_ROW_H + 30 + SMS_TOOLBAR_H + ALERTS_MAX as i32 * AL_ROW_H, th.bg, 0);
+        rest.set_style_bg_opa(lv::OPA_TRANSP, 0);
+        s.al_rest = rest;
+        let sc = rest;
         kit::section(sc, 4, tr("体检"));
         s.hc_card = kit::card(sc, MARGIN, HC_TOP, CARD_W, ROW_H);
         s.hc_none = kit::label_w(s.hc_card, f.cj14, th.t2, PAD, 11, CARD_W - 2 * PAD, false, tr("读取中…"));
@@ -462,6 +511,123 @@ impl Ui {
     }
 
     /// the health checks that are not fine, then the alert log.
+    /// 事故 (design review 3A/4A/11A/14A; round 3 D8/D11): open ones, then those ended in 24 h
+    /// (the core's `regress` block chose them); stale = the last rows in grey and when they
+    /// stopped; never read / an older core said in words, never hidden.
+    pub(super) fn incidents_paint(&mut self) {
+        let th = t();
+        let m = self.model.clone();
+        let r = m.data.regress.as_ref();
+        let fresh = r.is_some_and(|r| r.fresh != 0 && r.has != 0) && m.backend_silent == 0;
+        let rows: Vec<&ui_model::regress_item_t> = r.map_or_else(Vec::new, |r| r.open.iter().chain(r.closed.iter()).take(INC_MAX).collect());
+        let note: Vec<u8> = match r {
+            Some(r) if r.has != 0 && !fresh => {
+                let when = clock::strftime("%H:%M", &clock::local(r.at));
+                cf!(tr("事故数据停在 %s"), &when)
+            }
+            _ => Vec::new(),
+        };
+        let none: &str = match r {
+            None => tr("core 版本太旧，不支持事故"),
+            Some(r) if r.has == 0 => tr("读不到事故数据"),
+            _ => tr("● 24 小时内没有事故"),
+        };
+        let now = self.now();
+        let mut heights = Vec::with_capacity(INC_MAX + 3);
+        for i in 0..INC_MAX {
+            let s = &self.sms;
+            let (row, mark, label, time, obs) = (s.inc_row[i], s.inc_mark[i], s.inc_label[i], s.inc_time[i], s.inc_obs[i]);
+            let Some(it) = rows.get(i) else {
+                kit::show(row, false);
+                continue;
+            };
+            kit::show(row, true);
+            let open = it.end.is_empty();
+            let state: Vec<u8> = match it.end.as_str() {
+                "" => tr("还开着").into(),
+                "quiet" => cf!(tr("已结束 · %d 次"), it.count),
+                _ => tr("已恢复").into(),
+            };
+            let line1 = [it.name.as_bytes(), " · ".as_bytes(), &state].concat();
+            let hm = |t: i64| -> Vec<u8> {
+                if t <= 0 {
+                    return tr("时间不可信").into();
+                }
+                let f = if now - t > 20 * 3600 { if lang::is_en() { "%d %b %H:%M" } else { "%m-%d %H:%M" } } else { "%H:%M" };
+                clock::strftime(f, &clock::local(t)).into()
+            };
+            let mut line2: Vec<u8> = if open {
+                cf!(tr("%s 起"), &hm(it.from))
+            } else {
+                [hm(it.from), "–".as_bytes().to_vec(), clock::strftime("%H:%M", &clock::local(it.to)).into()].concat()
+            };
+            match it.sub.as_str() {
+                "chill" => line2.extend_from_slice(" · CHILL".as_bytes()),
+                "tailscale" => line2.extend_from_slice(" · Tailscale".as_bytes()),
+                _ => {}
+            }
+            let blind = it.kind == "regress-blind";
+            let (sym, col) = if !fresh {
+                (if open { "▲" } else { "●" }, th.t3)
+            } else if open && !blind {
+                ("▲", th.warn_t)
+            } else if open {
+                ("●", th.t2)
+            } else {
+                ("●", th.ok_t)
+            };
+            self.set(mark, sym);
+            kit::text_color(mark, col);
+            self.set(label, &line1);
+            kit::text_color(label, if fresh { th.t1 } else { th.t3 });
+            self.set(time, &line2);
+            kit::text_color(time, if fresh { th.t2 } else { th.t3 });
+            let has_obs = !it.observed.is_empty();
+            if has_obs {
+                self.set(obs, &it.observed);
+            }
+            kit::show(obs, has_obs);
+            heights.push(if has_obs { INC_ROW_OBS_H } else { INC_ROW_H });
+        }
+        let more = r.map_or(0, |r| (r.open_total - r.open.len() as i32).max(0));
+        heights.push(!note.is_empty() as i32);
+        heights.push(more);
+        heights.push(rows.is_empty() as i32);
+        let s = &self.sms;
+        let (note_l, card, none_l, more_l, rest) = (s.inc_note, s.inc_card, s.inc_none, s.inc_more, s.al_rest);
+        if !note.is_empty() {
+            self.set(note_l, &note);
+        }
+        if rows.is_empty() {
+            self.set(none_l, none);
+        }
+        if more > 0 {
+            self.set(more_l, cf!(tr("还有 %d 个开着"), more));
+        }
+        if self.sms.inc_layout == heights {
+            return;
+        }
+        // lay out only when something moved (a quiet refresh invalidates nothing)
+        let note_h = if note.is_empty() { 0 } else { 20 };
+        kit::show(note_l, note_h > 0);
+        let card_y = INC_TOP + note_h;
+        let mut y = 0;
+        for (i, &h) in heights.iter().take(rows.len()).enumerate() {
+            self.sms.inc_row[i].set_y(y);
+            self.sms.inc_row[i].set_height(h);
+            y += h;
+        }
+        let card_h = if rows.is_empty() { ROW_H } else { y };
+        kit::show(none_l, rows.is_empty());
+        card.set_y(card_y);
+        card.set_height(card_h);
+        let more_h = if more > 0 { 22 } else { 0 };
+        kit::show(more_l, more > 0);
+        more_l.set_y(card_y + card_h + 4);
+        rest.set_y(card_y + card_h + more_h + 10);
+        self.sms.inc_layout = heights;
+    }
+
     pub(super) fn alerts_paint(&mut self) {
         let th = t();
         let m = self.model.clone();

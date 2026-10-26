@@ -36,6 +36,10 @@ pub const POWERBANK_EVENT: &str = "BSP_POWERBANK_EVENT";
 pub const CARD_EVENT: &str = "zwrt_card_state_event";
 /// 休眠／唤醒（`zte_topsw_mc` 发）。只看事件名：无线电代次换新（R18-P1-01，§12.8）。
 pub const POWER_EVENT: &str = "zwrt_device_power_state_event";
+/// ubusd 自己发的对象登记／注销：`{"ubus.object.add":{"id":…,"path":"zwrt_bsp.usb"}}`。
+/// 只取 `path`，给 ubus 代次用（firmware-capabilities §12.10）。u60 真机空闲 90 秒 0 条。
+pub const OBJECT_ADD_EVENT: &str = "ubus.object.add";
+pub const OBJECT_REMOVE_EVENT: &str = "ubus.object.remove";
 /// 订阅确认（R18-P1-01）：`ubus listen` 不回报何时登记好，核心自己 `ubus send` 这条，
 /// 收到才算这一轮的订阅生效（[`Notice::Ready`]）。排在参数最后，前面的都已登记。
 pub const PROBE_EVENT: &str = "luyaz_listen_probe";
@@ -116,10 +120,12 @@ impl Options {
 }
 
 /// 按环境变量起监听；关闭时返回 `false`、不起子进程。每种事件的 `fire` 在各自去抖后调用。
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum Notice {
     Gap,
     Event(&'static str),
+    /// `ubus.object.add`／`ubus.object.remove` 的对象名；没有或读不懂是 `None`（当作相关）。
+    Object(Option<String>),
     /// 本轮子进程收到了自己的探针：从这里起事件不会漏在登记之前（每轮至多一次）。
     Ready,
 }
@@ -331,7 +337,11 @@ fn dispatch(
 ) -> bool {
     if let Some(i) = event_of(line, events) {
         // Synchronous, before debounce or queueing, even with a full kick channel.
-        observe(Notice::Event(events[i]));
+        if matches!(events[i], OBJECT_ADD_EVENT | OBJECT_REMOVE_EVENT) {
+            observe(Notice::Object(object_path(line, events[i])));
+        } else {
+            observe(Notice::Event(events[i]));
+        }
         !matches!(
             txs[i].try_send(()),
             Err(mpsc::error::TrySendError::Closed(()))
@@ -340,6 +350,13 @@ fn dispatch(
         observe(Notice::Gap);
         true
     }
+}
+
+/// `path` of an object lifecycle line; anything unexpected is `None` (fails toward re-mint).
+fn object_path(line: &str, event: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let path = v.get(event)?.get("path")?.as_str()?;
+    (!path.is_empty() && path.len() <= 256).then(|| path.to_owned())
 }
 
 /// Bound a CLI line without allocating until an attacker-controlled newline arrives.
@@ -620,13 +637,161 @@ mod tests {
             s2.lock().unwrap().push(match n {
                 Notice::Gap => "gap",
                 Notice::Ready => "ready",
-                Notice::Event(_) => "event",
+                Notice::Event(_) | Notice::Object(_) => "event",
             })
         });
         let (tx, _rx) = mpsc::channel(64);
-        let out = run_once(&script.display().to_string(), &[CARD_EVENT], &[tx], &observe).await;
+        let out = run_once(
+            &script.display().to_string(),
+            &[CARD_EVENT],
+            &[tx],
+            &observe,
+        )
+        .await;
         let seen = seen.lock().unwrap().clone();
         assert_eq!(seen, ["ready", "ready", "event"], "{out}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// §12.10: object add/remove drive the ubus epoch through the same observer as `server.rs`.
+    /// Nothing before the probe, a new value on every relevant add/remove (ABA), unrelated
+    /// objects ignored, child exit clears it and the next child's probe mints again.
+    #[tokio::test]
+    async fn object_lifecycle_mints_the_ubus_epoch_only_after_the_probe() {
+        use crate::device_profile::{collect::Collector, context::Loss};
+        let dir = std::env::temp_dir().join(format!("core-objects-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let events = dir.join("events");
+        let line =
+            |e: &str, path: &str| format!("{{ \"{e}\": {{ \"id\": 7, \"path\": \"{path}\" }} }}\n");
+        let probe = format!("{{ \"{PROBE_EVENT}\": {{}} }}\n");
+        let body = [
+            line(OBJECT_ADD_EVENT, "zwrt_bsp.usb"),
+            probe.clone(),
+            line(OBJECT_REMOVE_EVENT, "zwrt_bsp.usb"),
+            line(OBJECT_ADD_EVENT, "zwrt_bsp.usb"),
+            line(OBJECT_ADD_EVENT, "unrelated.object"),
+            format!("{{ \"{OBJECT_REMOVE_EVENT}\": {{ \"id\": 7 }} }}\n"),
+        ]
+        .concat();
+        std::fs::write(&events, body).unwrap();
+        let script = dir.join("ubus");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nMOCK_LISTEN_EVENTS_FILE='{}' MOCK_LISTEN_EXIT_AFTER=0 exec sh '{}' \"$@\"\n",
+                events.display(),
+                mock_script()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let c = Arc::new(Collector::new());
+        // (notice, ubus epoch right after it)
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<(String, Option<String>)>::new()));
+        let (c2, s2) = (c.clone(), seen.clone());
+        let observe: Observer = Arc::new(move |n| {
+            let name = match &n {
+                Notice::Gap => "gap".to_owned(),
+                Notice::Ready => "ready".to_owned(),
+                Notice::Event(e) => (*e).to_owned(),
+                Notice::Object(p) => format!("object {}", p.as_deref().unwrap_or("?")),
+            };
+            match n {
+                Notice::Object(p) => c2.ubus_object_event(p.as_deref()),
+                Notice::Ready => c2.ubus_listening(),
+                Notice::Gap => c2.invalidate_context(Loss::Ubus),
+                Notice::Event(_) => {}
+            }
+            s2.lock()
+                .unwrap()
+                .push((name, c2.token().context.ubus_epoch));
+        });
+        let (tx1, _rx1) = mpsc::channel(64);
+        let (tx2, _rx2) = mpsc::channel(64);
+        let opts = Options {
+            program: script.display().to_string(),
+            backoff_min: Duration::from_millis(50),
+            backoff_max: Duration::from_millis(50),
+            debounce: DEBOUNCE,
+        };
+        let h = tokio::spawn(supervise(
+            opts,
+            vec![OBJECT_ADD_EVENT, OBJECT_REMOVE_EVENT],
+            vec![tx1, tx2],
+            observe,
+        ));
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline
+            && seen
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(n, _)| n == "ready")
+                .count()
+                < 2
+        {
+            sleep(Duration::from_millis(50)).await;
+        }
+        h.abort();
+        let seen = seen.lock().unwrap().clone();
+        let _ = std::fs::remove_dir_all(&dir);
+        let names: Vec<&str> = seen.iter().map(|(n, _)| n.as_str()).collect();
+        let first = names
+            .iter()
+            .position(|n| *n == "ready")
+            .expect("probe seen");
+        let second = first
+            + 1
+            + names[first + 1..]
+                .iter()
+                .position(|n| *n == "ready")
+                .unwrap();
+        assert_eq!(
+            &names[first - 2..=first + 6],
+            [
+                "gap",
+                "object zwrt_bsp.usb",
+                "ready",
+                "object zwrt_bsp.usb",
+                "object zwrt_bsp.usb",
+                "object unrelated.object",
+                "object ?",
+                "gap",
+                "gap",
+            ],
+            "{names:?}"
+        );
+        let epoch = |i: usize| seen[i].1.clone();
+        assert_eq!(
+            epoch(first - 1),
+            None,
+            "an add before the probe mints nothing"
+        );
+        let minted: Vec<String> = (first..=first + 2)
+            .map(|i| epoch(i).expect("live"))
+            .collect();
+        assert!(
+            minted[0] != minted[1] && minted[1] != minted[2] && minted[0] != minted[2],
+            "remove + add of the same path: a new value each time"
+        );
+        assert_eq!(
+            epoch(first + 3),
+            epoch(first + 2),
+            "unrelated object ignored"
+        );
+        assert_ne!(
+            epoch(first + 4),
+            epoch(first + 3),
+            "unreadable path re-mints"
+        );
+        assert!(epoch(first + 4).is_some());
+        assert_eq!(epoch(first + 5), None, "child exit clears it");
+        assert!(
+            (first + 5..second).all(|i| epoch(i).is_none()),
+            "nothing before the next probe"
+        );
+        let again = epoch(second).expect("next probe mints again");
+        assert!(!minted.contains(&again) && epoch(first + 4).as_ref() != Some(&again));
     }
 }

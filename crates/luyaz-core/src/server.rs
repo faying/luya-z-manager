@@ -206,6 +206,8 @@ impl App {
         if std::env::var("LUYAZ_CHILL_PROBE").map_or(true, |v| v != "0") {
             crate::engines::chill_probe::spawn(app.inner.exec.hub().clone());
         }
+        // the AI gate: AI only out through 🤖 AI's region; off unless CHILL_AI_STRICT=1 in chill.env
+        crate::engines::chill_ai_gate::spawn(app.inner.exec.hub().clone());
         // component versions: the daily look at the public repo's versions.json; LUYAZ_VERSION_CHECK=0
         if crate::versions::enabled() {
             crate::versions::spawn(app.clone());
@@ -251,8 +253,12 @@ impl App {
         tokio::task::spawn_blocking(crate::ops::reconnect::recover);
         // R18-P1-01：数据网卡（rmnet）的内核事件产生连接代次；见 device_profile/netlink.rs。
         crate::device_profile::netlink::spawn(context_hub.clone());
+        // §12.10：内核 uevent（UDC／USB／充电）产生 USB 代次；见 device_profile/uevent.rs。
+        crate::device_profile::uevent::spawn(context_hub.clone());
         // R18-P2-01: the stock-anomaly ledger reads the radio mark and connection epoch.
         crate::stock_anomaly::set_hub(context_hub.clone());
+        // the regress layer's cellular detector reads the sim / signal / interfaces / op blocks
+        crate::longterm::regress::io::set_hub(context_hub.clone());
         listen::spawn_if_enabled(
             std::env::var(listen::ENV_ENABLE).ok().as_deref(),
             listen::Options::from_env(),
@@ -286,6 +292,17 @@ impl App {
                     min_interval: listen::USB_KICK_MIN_INTERVAL,
                     fire: Arc::new(|| {}),
                 },
+                // ubusd 的对象登记／注销只为 ubus 代次订阅（firmware-capabilities §12.10）。
+                Handler {
+                    event: listen::OBJECT_ADD_EVENT,
+                    min_interval: listen::USB_KICK_MIN_INTERVAL,
+                    fire: Arc::new(|| {}),
+                },
+                Handler {
+                    event: listen::OBJECT_REMOVE_EVENT,
+                    min_interval: listen::USB_KICK_MIN_INTERVAL,
+                    fire: Arc::new(|| {}),
+                },
             ],
             Arc::new(move |notice| {
                 use crate::device_profile::context::Loss;
@@ -299,7 +316,14 @@ impl App {
                     listen::Notice::Event(listen::POWER_EVENT) => {
                         return context_hub.firmware().radio_event();
                     }
-                    listen::Notice::Ready => return context_hub.firmware().sim_listening(),
+                    listen::Notice::Object(path) => {
+                        return context_hub.firmware().ubus_object_event(path.as_deref());
+                    }
+                    listen::Notice::Ready => {
+                        let firmware = context_hub.firmware();
+                        firmware.sim_listening();
+                        return firmware.ubus_listening();
+                    }
                     listen::Notice::Gap => Loss::Ubus,
                     _ => return,
                 };
@@ -366,6 +390,14 @@ impl App {
             Ok(crate::longterm::places::advice_now()),
             tokio::time::Instant::now(),
         );
+        // the regress block (design review 14A): the long-term thread builds it each check; handed
+        // in every round so a long incident never goes stale, published only when it changes
+        if let Some(b) = crate::longterm::regress::io::block_now() {
+            self.inner
+                .exec
+                .hub()
+                .record("regress", Ok(b), tokio::time::Instant::now());
+        }
         let mut held = self.inner.snapshot.write().await;
         // Only a change in content is announced; a new timestamp alone just moves `ts` forward.
         let content_moved = held.core != next.core || held.fields != next.fields;
@@ -441,6 +473,8 @@ impl App {
             .route("/capabilities", get(capabilities))
             .route("/v2/device/capabilities", get(device_capabilities))
             .route("/v2/device/no-service-history", get(no_service_history))
+            .route("/v2/incidents", get(v2_incidents))
+            .route("/v2/incidents/{id}", get(v2_incident))
             .route("/v2/recovery/actions", get(recovery::actions))
             .route("/control", post(control))
             .route("/v2/sentinel/event", post(sentinel_event))
@@ -450,6 +484,9 @@ impl App {
             .route("/v2/dual/switches", get(dual_switches))
             .route("/v2/usage/days", get(usage_days))
             .route("/v2/usage/landing", get(usage_landing))
+            .route("/v2/netrec/sessions", get(netrec_sessions))
+            .route("/v2/netrec/summary", get(netrec_summary))
+            .route("/v2/netrec/ring", get(netrec_ring))
             .route("/v2/versions/check", post(versions_check));
         // M6b: the screen's agent-shaped API (`/v2/api/...`, compat's `/api/...` routes), loopback
         // listener only. Nested at `/v2`: the routes above are static and win over the nest's tail.
@@ -475,6 +512,7 @@ impl App {
 /// （客户端按连不上处理、过一会儿重试）；`/`、`/healthz`、`/version`、`/capabilities`、登录照常。
 /// `/control` 在处理函数里等就绪（`wait_stage(Ready)`）。
 async fn starting_gate(State(app): State<App>, request: Request, next: Next) -> Response {
+    crate::mem::note_path(request.uri().path());
     let open = matches!(
         request.uri().path(),
         "/" | "/healthz"
@@ -487,13 +525,19 @@ async fn starting_gate(State(app): State<App>, request: Request, next: Next) -> 
             | "/v2/dual/switches"
             | "/v2/usage/days"
             | "/v2/usage/landing"
+            | "/v2/netrec/sessions"
+            | "/v2/netrec/summary"
+            | "/v2/netrec/ring"
             | "/state"
             | "/events"
             | "/auth/login"
             | "/auth/exchange"
     );
-    // the screen's API reads its own files and blocks; it must not wait for the first round
-    let open = open || request.uri().path().starts_with("/v2/api/");
+    // the screen's API reads its own files and blocks; it must not wait for the first round;
+    // nor do the incidents (the long-term thread's, tools/luyaz status reads them after a ship)
+    let open = open
+        || request.uri().path().starts_with("/v2/api/")
+        || request.uri().path().starts_with("/v2/incidents");
     if open || app.wait_stage(Stage::Snapshot, READ_START_WAIT).await {
         return next.run(request).await;
     }
@@ -910,6 +954,64 @@ async fn usage_days(uri: axum::http::Uri) -> Json<Value> {
     Json(json!({"ok": true, "data": v}))
 }
 
+/// `?k=v` of a query string.
+fn query_param<'a>(uri: &'a axum::http::Uri, k: &str) -> Option<&'a str> {
+    uri.query()?.split('&').find_map(|p| p.strip_prefix(k)?.strip_prefix('='))
+}
+
+/// `GET /v2/netrec/sessions?n=` (netrec.rs): `{ok, data: {enabled, active, sessions: [...]}}`,
+/// newest first. Reads files only.
+async fn netrec_sessions(uri: axum::http::Uri) -> Json<Value> {
+    let n = query_param(&uri, "n").and_then(|v| v.parse().ok()).unwrap_or(100);
+    let v = tokio::task::spawn_blocking(move || {
+        crate::netrec::sessions(std::path::Path::new(crate::netrec::DIR), n)
+    })
+    .await
+    .unwrap_or(Value::Null);
+    Json(json!({"ok": true, "data": v}))
+}
+
+/// `GET /v2/netrec/summary?since=<device epoch>&cursor=<YYYYMMDD:offset>&limit=` (netrec.rs):
+/// the 10 s summary lines as JSONL; `x-netrec-next` names the cursor of the next page.
+async fn netrec_summary(uri: axum::http::Uri) -> Response {
+    let since = query_param(&uri, "since").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let cursor = query_param(&uri, "cursor").map(str::to_owned);
+    let limit = query_param(&uri, "limit").and_then(|v| v.parse().ok()).unwrap_or(2000);
+    let (body, next) = tokio::task::spawn_blocking(move || {
+        crate::netrec::summary_lines(
+            std::path::Path::new(crate::netrec::DIR),
+            since,
+            cursor.as_deref(),
+            limit,
+        )
+    })
+    .await
+    .unwrap_or_default();
+    let mut r = (
+        [(axum::http::header::CONTENT_TYPE, "application/x-ndjson")],
+        body,
+    )
+        .into_response();
+    if let Some(next) = next.and_then(|n| axum::http::HeaderValue::from_str(&n).ok()) {
+        r.headers_mut().insert("x-netrec-next", next);
+    }
+    r
+}
+
+/// `GET /v2/netrec/ring?session=&offset=&limit=` (netrec.rs): one session's rows from the
+/// tmpfs ring (default the newest session), `{ok, data: {session, total, more, rows}}`.
+async fn netrec_ring(uri: axum::http::Uri) -> Json<Value> {
+    let session = query_param(&uri, "session").and_then(|v| v.parse().ok());
+    let offset = query_param(&uri, "offset").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let limit = query_param(&uri, "limit").and_then(|v| v.parse().ok()).unwrap_or(1000);
+    let v = tokio::task::spawn_blocking(move || {
+        crate::netrec::ring_rows(std::path::Path::new(crate::netrec::RING), session, offset, limit)
+    })
+    .await
+    .unwrap_or(Value::Null);
+    Json(json!({"ok": true, "data": v}))
+}
+
 /// `GET /v2/usage/landing` (usage_log.rs): the last arrival in a country and the bytes used
 /// since: `{ok, data: {mcc, from, at, rx, tx} | null}` (`from` null: the first record, not a
 /// landing). Reads memory or a file only.
@@ -978,6 +1080,34 @@ struct HistoryQ {
 }
 
 /// R18-P2-01: the no-service ledger, newest first (`limit` 1–50, default 10).
+/// `GET /v2/incidents` (design 2026-10-24 「變差才通知」, eng review round 3 D10): open incidents,
+/// then those that ended in the last 7 days, each with `unread` from the alert queue. Before the
+/// layer ran: `{v, open: [], closed: [], error}` (CEO review S2), never a 500.
+async fn v2_incidents() -> impl IntoResponse {
+    let dir = crate::state::host_path(luyaz_api::alerts::DIR);
+    let v = tokio::task::spawn_blocking(move || {
+        crate::longterm::regress::io::incidents(std::path::Path::new(&dir))
+    })
+    .await
+    .unwrap_or_else(|_| json!({"v": 1, "open": [], "closed": [], "error": "internal"}));
+    ([(axum::http::header::CACHE_CONTROL, "private, no-store")], Json(v))
+}
+
+/// `GET /v2/incidents/<id>` (CEO review OV-C5, round 3 D10): one incident with its alerts, its
+/// evidence hours and memory snapshot; an id it does not know (pruned, or never) is 404.
+async fn v2_incident(axum::extract::Path(id): axum::extract::Path<String>) -> Response {
+    let dir = crate::state::host_path(luyaz_api::alerts::DIR);
+    let r = tokio::task::spawn_blocking(move || {
+        crate::longterm::regress::io::incident(&id, std::path::Path::new(&dir))
+    })
+    .await
+    .unwrap_or(Err(()));
+    match r {
+        Ok(v) => ([(axum::http::header::CACHE_CONTROL, "private, no-store")], Json(v)).into_response(),
+        Err(()) => (StatusCode::NOT_FOUND, Json(json!({"reason": "pruned"}))).into_response(),
+    }
+}
+
 async fn no_service_history(axum::extract::Query(q): axum::extract::Query<HistoryQ>) -> impl IntoResponse {
     let n = q.limit.unwrap_or(10).clamp(1, 50);
     let rows = tokio::task::spawn_blocking(move || crate::stock_anomaly::history(n))

@@ -8,6 +8,9 @@
 {{ self.leaf("al-status")|safe }}
 <div class="al-op">{{ mark_op|safe }}</div>
 </section>
+<section aria-labelledby="al-inc-t"><h2 id="al-inc-t" class="nd-group-title">{{ l.pick("Incidents · 7 days", "事故 · 7 天") }}</h2>
+{{ self.leaf("al-incidents")|safe }}
+</section>
 <section aria-labelledby="al-events-t"><h2 id="al-events-t" class="nd-group-title">{{ l.pick("Events", "记录") }}</h2>
 {{ self.leaf("al-events")|safe }}
 </section>

@@ -456,16 +456,14 @@ diagnose-result	diagnose-roam-armed	Uses roaming data; tap again
 diagnose-result	diagnose-speed	Testing…
 diagnose-result	diagnose-speed	Testing speed…
 diagnose-result	diagnose-again	Checking…
-placement	placement	5G SINR · higher is better
-placement	placement	14.5
-placement	placement	● Good signal · RSRP -92
-placement	placement	Best so far
-placement	placement	18.0 · 
-placement	placement	Compared
-placement	placement	▲ 3.5 dB below best
-placement	placement	n78 · PCI 603
+placement	placement	Last 3 min
+placement	placement	Total
+placement	placement	Record here
 placement	placement	Start over
-placement	placement	Resets on a new cell; the screen stays on here
+placement	placement	Best so far
+placement	placement	Compared
+placement	placement	In use
+placement	placement	New cells are marked; the screen stays on here
 diagnose-running	diagnose	Checking… 3/6
 diagnose-result	diagnose	Proxy
 diagnose-result	diagnose	JP 03 180 ms · direct 140 ms

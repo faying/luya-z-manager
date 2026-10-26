@@ -29,6 +29,10 @@ struct Fake {
     logs: Arc<Mutex<Vec<String>>>,
     /// Sleep in send (concurrency test).
     slow_ms: u64,
+    /// The device refuses this many sends, then takes them.
+    refuse: u32,
+    /// The owner's regress SMS switch is off.
+    off: bool,
 }
 
 impl Fake {
@@ -46,6 +50,8 @@ impl Fake {
             deleted: Arc::default(),
             logs: Arc::default(),
             slow_ms: 0,
+            refuse: 0,
+            off: false,
         }
     }
     fn sent(&self) -> Vec<String> {
@@ -91,6 +97,10 @@ impl SmsIo for Fake {
         if self.fail {
             return Err(SendError::Rejected("device rejected (result=1)".into()));
         }
+        if self.refuse > 0 {
+            self.refuse -= 1;
+            return Err(SendError::Rejected("device rejected (result=1)".into()));
+        }
         assert_eq!(args["encode_type"], "UNICODE");
         assert_eq!(args["id"], "-1");
         self.sent
@@ -104,6 +114,9 @@ impl SmsIo for Fake {
     }
     fn log(&mut self, msg: &str) {
         self.logs.lock().unwrap().push(msg.to_string());
+    }
+    fn regress_sms_off(&mut self) -> bool {
+        self.off
     }
 }
 
@@ -442,17 +455,18 @@ fn no_trusted_clock_holds_everything_and_drops_the_claim() {
 
 #[test]
 fn a_failed_send_is_logged_alerted_and_not_texted_about() {
-    let a = setup("fail", &["web-crash"]);
+    // a kind outside the regress and point-event families: refused once is failed (eng review R9)
+    let a = setup("fail", &["dropbear-down"]);
     let mut io = Fake::new();
     io.fail = true;
     assert_eq!(a.sms_round("core", 10, &mut io), Round::Done(2));
     assert_eq!(
         log_results(&a),
-        vec![(1, "web-crash".into(), "failed".into())]
+        vec![(1, "dropbear-down".into(), "failed".into())]
     );
     let ev = a.events();
     assert_eq!(ev.last().unwrap().kind, "sms-failed");
-    assert_eq!(ev.last().unwrap().text, "alert 1 (web-crash) not sent");
+    assert_eq!(ev.last().unwrap().text, "alert 1 (dropbear-down) not sent");
     // the same round went on to the sms-failed it added: skipped, no SMS about a failed SMS
     assert!(io.sent().is_empty());
     assert_eq!(a.read_u64("sms-done"), 2);
@@ -677,4 +691,332 @@ fn tailnet_poller_is_never_an_sms() {
         rate_ok: true,
     };
     assert!(matches!(verdict(&f), Verdict::Skip));
+}
+
+// ── regress (10-24) ──
+
+/// One alert at a time, each round at its own wall clock: the sms-log results in order.
+fn run_seq(name: &str, rows: &[(i64, &str)], off: bool) -> Vec<String> {
+    let a = dir(name);
+    a.write_whole("sms-to", "+8613800000000\n").unwrap();
+    let mut io = Fake::new();
+    io.off = off;
+    for (t, k) in rows {
+        io.wall = T0 + t;
+        a.add(k, "text", T0 + t, 900).unwrap();
+        a.sms_round("core", 10, &mut io);
+    }
+    log_results(&a).into_iter().map(|r| r.2).collect()
+}
+
+/// eng review R6 (the regression contract): kinds that are neither point events nor regress go
+/// exactly as before, with the owner's regress switch on or off.
+#[test]
+fn other_kinds_go_as_before_whatever_the_regress_switch() {
+    let rows: &[(i64, &str)] = &[
+        (0, "dropbear-down"),
+        (600, "dropbear-down"),
+        (700, "home-exit-down"),
+        (4000, "dropbear-down"),
+        (4100, "sim-changed"),
+        (4200, "esim-failed"),
+        (4300, "wifi-restore-failed"),
+        (4400, "tailnet-poller"),
+    ];
+    let want = [
+        "sent",
+        "suppressed-rate",
+        "sent",
+        "sent",
+        "sent",
+        "sent",
+        "suppressed-rate",
+    ];
+    for off in [false, true] {
+        assert_eq!(
+            run_seq(&format!("contract-{off}"), rows, off),
+            want,
+            "off={off}"
+        );
+    }
+}
+
+/// eng review R4/R12: a crash row of 9 within the hour texts the 1st, 2nd, 4th and 8th; the
+/// 2nd/4th/8th are not held by the hourly limit; one the sentinel queued counts the same.
+#[test]
+fn a_crash_row_texts_the_1st_2nd_4th_and_8th() {
+    let a = dir("row");
+    a.write_whole("sms-to", "+8613800000000\n").unwrap();
+    let mut io = Fake::new();
+    for i in 0..9i64 {
+        io.wall = T0 + i * 300;
+        if i == 2 {
+            a.add_once("8559f5dc-7", "core-crash", "x", io.wall, 900)
+                .unwrap();
+        } else {
+            a.add("core-crash", "x", io.wall, 900).unwrap();
+        }
+        a.sms_round("core", 10, &mut io);
+    }
+    let got: Vec<String> = log_results(&a).into_iter().map(|r| r.2).collect();
+    assert_eq!(
+        got,
+        [
+            "sent",
+            "sent",
+            "suppressed-repeat",
+            "sent",
+            "suppressed-repeat",
+            "suppressed-repeat",
+            "suppressed-repeat",
+            "sent",
+            "suppressed-repeat"
+        ]
+    );
+    // a gap over an hour starts a new row
+    io.wall += 3601;
+    a.add("core-crash", "x", io.wall, 900).unwrap();
+    a.sms_round("core", 10, &mut io);
+    assert_eq!(log_results(&a).last().unwrap().2, "sent");
+}
+
+#[test]
+fn escalations_still_count_against_the_day() {
+    let a = dir("row-day");
+    a.write_whole("sms-to", "+8613800000000\n").unwrap();
+    let five: String = (0..5)
+        .map(|i| format!("{}\t{}\tsim-changed\tsent\n", T0 - 5000 + i, 100 + i))
+        .collect();
+    a.write_whole("sms-log", &five).unwrap();
+    let mut io = Fake::new();
+    for i in 0..2i64 {
+        io.wall = T0 + i * 300;
+        a.add("ui-crash", "x", io.wall, 900).unwrap();
+        a.sms_round("core", 10, &mut io);
+    }
+    let got: Vec<String> = log_results(&a).into_iter().skip(5).map(|r| r.2).collect();
+    assert_eq!(got, ["suppressed-rate", "suppressed-rate"]);
+    // a regress escalation goes by the day alone too
+    let b = dir("esc-hour");
+    b.write_whole("sms-to", "+8613800000000\n").unwrap();
+    let mut io = Fake::new();
+    b.add_once("rg-reboot-q5-open", "regress-reboot", "1119", T0, 900)
+        .unwrap();
+    b.sms_round("core", 10, &mut io);
+    io.wall = T0 + 600;
+    b.add_once(
+        "rg-reboot-q5-esc2",
+        "regress-reboot",
+        "1119 x2",
+        io.wall,
+        900,
+    )
+    .unwrap();
+    b.sms_round("core", 10, &mut io);
+    let got: Vec<String> = log_results(&b).into_iter().map(|r| r.2).collect();
+    assert_eq!(got, ["sent", "sent"]);
+}
+
+/// eng review R9: a regress alert the device refuses goes again 5, 10, 15 min after the first
+/// refusal (outside the rate limits); a 4th refusal is `failed`; other kinds fail at once.
+#[test]
+fn a_refused_regress_alert_is_retried_three_times() {
+    let a = dir("retry-ok");
+    a.write_whole("sms-to", "+8613800000000\n").unwrap();
+    let mut io = Fake::new();
+    io.refuse = 2;
+    a.add_once(
+        "rg-mem-1790865000-open",
+        "regress-mem",
+        "heap 40MiB",
+        T0,
+        900,
+    )
+    .unwrap();
+    for (dt, want_sent) in [(0, 0), (60, 0), (300, 0), (599, 0), (600, 1)] {
+        io.wall = T0 + dt;
+        a.sms_round("core", 10, &mut io);
+        assert_eq!(io.sent().len(), want_sent, "at +{dt}");
+    }
+    assert_eq!(
+        log_results(&a).into_iter().map(|r| r.2).collect::<Vec<_>>(),
+        ["sent"]
+    );
+    assert!(!a.exists("sms-retry"));
+
+    let b = dir("retry-fail");
+    b.write_whole("sms-to", "+8613800000000\n").unwrap();
+    let mut io = Fake::new();
+    io.fail = true;
+    b.add_once("rg-mem-1790865000-open", "regress-mem", "", T0, 900)
+        .unwrap();
+    for dt in [0, 300, 600, 900] {
+        io.wall = T0 + dt;
+        b.sms_round("core", 10, &mut io);
+    }
+    let r: Vec<String> = log_results(&b).into_iter().map(|r| r.2).collect();
+    assert_eq!(r, ["failed"]);
+    assert!(b.events().iter().any(|e| e.kind == "sms-failed"));
+
+    let c = dir("retry-other");
+    c.write_whole("sms-to", "+8613800000000\n").unwrap();
+    let mut io = Fake::new();
+    io.fail = true;
+    c.add("dropbear-down", "x", T0, 900).unwrap();
+    c.sms_round("core", 10, &mut io);
+    let r: Vec<String> = log_results(&c).into_iter().map(|r| r.2).collect();
+    assert_eq!(r, ["failed"]);
+}
+
+#[test]
+fn closes_and_asks_are_inbox_only_and_the_switch_holds_regress_back() {
+    let a = dir("close");
+    a.write_whole("sms-to", "+8613800000000\n").unwrap();
+    let mut io = Fake::new();
+    a.add_once("rg-mem-1790865000-close", "regress-mem", "back", T0, 900)
+        .unwrap();
+    // the 3-day 「new normal?」 is the inbox's and MCP's too (design §4)
+    a.add_once("rg-mem-1790865000-ask", "regress-mem", "open 3d", T0, 900)
+        .unwrap();
+    a.add_once("rg-cell-1790865000-open", "regress-cellular", "x", T0, 900)
+        .unwrap();
+    a.add_once(
+        "rg-blind-power-1790865000-open",
+        "regress-blind",
+        "x",
+        T0,
+        900,
+    )
+    .unwrap();
+    a.add("wifi-takeover", "x", T0, 900).unwrap();
+    a.sms_round("core", 10, &mut io);
+    assert!(io.sent().is_empty());
+    assert!(log_results(&a).is_empty(), "skipped without a trace");
+    assert_eq!(a.read_u64("sms-done"), 5);
+
+    let b = dir("off");
+    b.write_whole("sms-to", "+8613800000000\n").unwrap();
+    let mut io = Fake::new();
+    io.off = true;
+    b.add_once("rg-mem-1790865000-open", "regress-mem", "x", T0, 900)
+        .unwrap();
+    b.add("core-crash", "x", T0, 900).unwrap();
+    b.sms_round("core", 10, &mut io);
+    let r: Vec<String> = log_results(&b).into_iter().map(|r| r.2).collect();
+    assert_eq!(r, ["suppressed-off", "sent"]);
+}
+
+const REGRESS_TEXTED: &[&str] = &[
+    "regress-reboot",
+    "regress-mem",
+    "regress-mem-abs",
+    "regress-egress",
+    "regress-power",
+    "regress-power-abs",
+    "regress-recorder",
+    "regress-core-down",
+    "regress-disk",
+];
+
+#[test]
+fn regress_texts_are_template_details_and_where_the_recovery_shows() {
+    assert_eq!(
+        sms_text_for(
+            "regress-mem",
+            "[rg-mem-1790865000-open] heap 41MiB > 32MiB 15m; build 1.45.0",
+            false,
+            T0,
+            7,
+            None
+        ),
+        "【Luya-Z】数据服务内存比平时高很多，可能在泄漏。恢复消息见网页「告警」页 / Discord（10-01 14:32）#7"
+    );
+    assert_eq!(
+        sms_text_for(
+            "regress-reboot",
+            "[rg-reboot-q9-open] ",
+            true,
+            T0,
+            7,
+            Some("U60")
+        ),
+        "[Luya-Z] U60: Unexpected reboot; back up now. recovery: web Alerts / Discord (01 Oct 14:32)#7"
+    );
+    // every other kind word for word as before
+    for k in KINDS {
+        for en in [false, true] {
+            assert_eq!(
+                sms_text_for(k, "[8559f5dc-1] whatever", en, T0, 9, Some("名字")),
+                sms_text(k, en, T0, 9, Some("名字"))
+            );
+        }
+    }
+}
+
+/// 10-26: a Chinese regress SMS carries no English details, only a ship just before it; the
+/// English one keeps them. An unsettled clock prints no time; agent-silent has its own words.
+#[test]
+fn chinese_regress_texts_say_a_ship_and_unsettled_clocks_print_no_time() {
+    let t = "[rg-reboot-x-open] code 1134; prev build 9fe962c; ship core before reboot?";
+    assert_eq!(
+        sms_text_for("regress-reboot", t, false, T0, 38, None),
+        "【Luya-Z】U60意外重启了，现已恢复运行。之前刚换过core，可能有关。恢复消息见网页「告警」页 / Discord（10-01 14:32）#38"
+    );
+    assert!(sms_text_for("regress-reboot", t, true, T0, 38, None).contains("code 1134"));
+    assert_eq!(
+        sms_text_for(
+            "regress-core-down",
+            "[rg-core-down-a-1-open] /healthz no answer: refused for 10 min; attribution unknown",
+            false,
+            0,
+            65,
+            Some("U60Pro")
+        ),
+        "【Luya-Z】U60Pro：数据服务停了10分钟以上，屏幕数据可能不更新。恢复消息见网页「告警」页 / Discord#65"
+    );
+    // the space left and what holds it, in either language
+    assert_eq!(
+        sms_text_for(
+            "regress-disk",
+            "[rg-disk-data-a-1-open] /data 90/2000 MB free; luyaz/core 300M",
+            false,
+            0,
+            70,
+            None
+        ),
+        "【Luya-Z】存储空间快满了，程序可能写不进去而崩溃。/data 90/2000 MB free; luyaz/core 300M。恢复消息见网页「告警」页 / Discord#70"
+    );
+    assert_eq!(
+        sms_text("agent-silent", false, 0, 64, None),
+        "【Luya-Z】自动管理Wi-Fi的程序没反应了，Wi-Fi会保持打开，上网不受影响。#64"
+    );
+    assert!(sms_text("agent-silent", true, T0, 64, None).len() <= 70);
+}
+
+/// eng review round 3 (fact correction): every texted regress kind, both languages, a 16-character
+/// device name, details empty or far too long: never over 134 characters, the template whole.
+#[test]
+fn regress_texts_fit_134_with_the_longest_name() {
+    let name = "一二三四五六七八九十一二三四五六";
+    assert_eq!(name.chars().count(), crate::NAME_MAX);
+    let long = format!("[rg-x-1-open] {}", "detail ".repeat(40));
+    for k in REGRESS_TEXTED {
+        for en in [false, true] {
+            for text in ["[rg-x-1-open] ", long.as_str()] {
+                let t = sms_text_for(k, text, en, T0, 99_999, Some(name));
+                assert!(
+                    t.chars().count() <= REGRESS_MAX,
+                    "{k} en={en}: {} chars: {t}",
+                    t.chars().count()
+                );
+                let fixed = if en { regress_en(k) } else { regress_zh(k) }.unwrap();
+                assert!(t.contains(fixed), "{t}");
+                assert!(t.contains(if en { TAIL_EN } else { TAIL_ZH }), "{t}");
+                assert!(t.ends_with("#999"), "{t}");
+                if en && text.len() > 20 {
+                    assert!(t.contains('…'), "cut: {t}");
+                }
+            }
+        }
+    }
 }

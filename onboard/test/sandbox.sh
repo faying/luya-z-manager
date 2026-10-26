@@ -9,7 +9,7 @@
 # run/clean 的三个变量没有默认值，必须显式给；HOST 经 `ssh -G` 解析出来的地址必须等于 GATEWAY。
 # SSH_KEY 要是这台设备 authorized_keys 里已有的那把（沙盒里的 dropbear 仍然认 /etc/dropbear/authorized_keys）。
 # ── 隔离手段
-#   - 假 adb：shell/push 走 ssh 到 HOST；命令里带 reboot 的一律拒绝
+#   - install.sh 只走设备上已有的 SSH（2222，SSH_KEY）；reboot 换成空操作
 #   - 设备端脚本的所有落盘路径改到 /data/local/tmp/kit-sb；沙盒 dropbear 用 2223 端口
 #   - 关自动升级的两条命令换成空操作（设备上本来就是关的，测试前后会核对）
 #   - admin（luyaz-web）装进沙盒目录、只听 127.0.0.1:19090，不装 init 脚本和设备脚本，不写设备清单
@@ -63,29 +63,7 @@ clean() { # 停沙盒进程、删沙盒文件
   echo "sandbox cleaned on $HOST"   # 完成
 }   # clean
 
-# ── 本机准备：解包 → 假 adb → 改写 → 防呆 → 重算 MANIFEST ─────────────────
-write_fake_adb() {
-  # 生成的假 adb：devices 报一台 SANDBOX；shell 经 ssh 执行（含 reboot 的拒绝）；push 用 cat 或 tar 管道
-  cat >"$WORK/bin/adb" <<FAKE_ADB
-#!/usr/bin/env bash
-SSH=(ssh ${SSH_OPTS[*]} $HOST)
-cmd=\$1; shift
-if [ "\$cmd" = devices ]; then
-    printf 'List of devices attached\nSANDBOX\tdevice\n'
-elif [ "\$cmd" = shell ]; then
-    case "\$*" in *reboot*) echo "fake-adb: refusing reboot" >&2; exit 1 ;; esac
-    "\${SSH[@]}" "\$*"
-elif [ "\$cmd" = push ] && [ -d "\$1" ]; then
-    tar czf - -C "\$(dirname "\$1")" "\$(basename "\$1")" | "\${SSH[@]}" "mkdir -p '\$2' && tar xzf - -C '\$2'"
-elif [ "\$cmd" = push ]; then
-    "\${SSH[@]}" "cat > '\$2'" <"\$1"
-else
-    echo "fake-adb: unsupported \$cmd \$*" >&2; exit 1
-fi
-FAKE_ADB
-  chmod +x "$WORK/bin/adb"
-}
-
+# ── 本机准备：解包 → 改写 → 防呆 → 重算 MANIFEST ─────────────────
 # 第一轮：do_admin 换成沙盒里的 luyaz-web（$SB/luyaz，127.0.0.1:19090，密码/会话/logo 都在 $SB），
 # 设备脚本只放 web-auth.sh，不碰 /etc/init.d，不写清单。规则按 device/install.sh 的原文逐行匹配。
 rewrite_admin() {
@@ -153,11 +131,10 @@ guard_device_script() {
   fi   # 没有漏网的真实写入
 }
 
-# 电脑端 install.sh：ssh 端口换成 2223，重启换成空操作，web.env 指到沙盒
+# 电脑端 install.sh：通道仍是设备上已有的 SSH（2222），重启换成空操作，web.env 指到沙盒
 rewrite_host_script() {
-  # 端口 2222→2223；dev_run "reboot" 变成 echo；设备上的 web.env 指到沙盒
+  # dev_run "reboot" 变成 echo；设备上的 web.env 指到沙盒
   sed -i '' \
-      -e 's#^SSH_PORT=2222#SSH_PORT=2223#' \
       -e 's#dev_run "reboot"#dev_run "echo sandbox-no-reboot"#' \
       -e "s#/data/luyaz/web.env#$SB/web.env#g" \
       "$KIT/install.sh"
@@ -179,9 +156,8 @@ prepare() {
   local tarball
   tarball=$(ls -t "$REPO"/onboard/dist/luyaz-kit-*.tar.gz 2>/dev/null | head -1)
   [ -n "$tarball" ] || { echo "先跑 onboard/build-kit.sh" >&2; exit 1; }
-  rm -rf "$WORK" && mkdir -p "$WORK/bin" "$WORK/home/.ssh"
+  rm -rf "$WORK" && mkdir -p "$WORK/home/.ssh"
   tar xzf "$tarball" -C "$WORK"
-  write_fake_adb
   rewrite_admin
   rewrite_paths
   guard_device_script
@@ -193,9 +169,9 @@ prepare() {
 # ── 设备上的场景 ─────────────────────────────────────────────────────────
 KEY_IN_HOME() { echo "$WORK/home/.ssh/$(basename "$SSH_KEY")"; }
 
-# 在包目录里跑 install.sh：假 adb 在 PATH 前面，HOME 指到工作目录，默认不重启
+# 在包目录里跑 install.sh：HOME 指到工作目录，默认不重启
 kit() {
-  ( cd "$KIT" && env HOME="$WORK/home" PATH="$WORK/bin:$PATH" GATEWAY="$GATEWAY" SSH_KEY="$(KEY_IN_HOME)" \
+  ( cd "$KIT" && env HOME="$WORK/home" GATEWAY="$GATEWAY" SSH_KEY="$(KEY_IN_HOME)" \
       NO_REBOOT=1 bash ./install.sh "$@" )
 }
 
@@ -213,15 +189,14 @@ LWS
   on_device "mkdir -p $SB/etc && sed -e '/^sh \/data/d' -e '/^# Tailscale/d' -e '/^\[ -x \/data\/plugins/d' /etc/rc.local > $SB/etc/rc.local && sh -n $SB/etc/rc.local"
 }
 
-# 没有真 ADB、没终端、没路由器密码：只应调匿名接口然后停下，不提交登录（不消耗密码次数）
-scenario_no_router_password() {
-  [ "$(adb devices 2>/dev/null | grep -c 'device$' || true)" = 0 ] || return 0
-  say "缺路由器密码时在登录前停下"
+# SSH 登不上（私钥不存在）：应在连设备之前就停下，不去找别的进入方式
+scenario_no_ssh() {
+  say "SSH 不通时直接停下"
   local log
-  log=$( cd "$KIT" && env HOME="$WORK/home" GATEWAY="$GATEWAY" SSH_KEY="$(KEY_IN_HOME)" \
-           bash ./install.sh ssh </dev/null 2>&1 ) && abort "应该失败"
+  log=$( cd "$KIT" && env HOME="$WORK/home" GATEWAY="$GATEWAY" SSH_KEY="$WORK/home/.ssh/no-such-key" \
+           bash ./install.sh status </dev/null 2>&1 ) && abort "应该失败"
   echo "$log" | tail -1
-  echo "$log" | grep -q 'ROUTER_PASSWORD' || abort "没有提示 ROUTER_PASSWORD"
+  echo "$log" | grep -q '本包只经已经能用的 SSH' || abort "没有说明需要已有的 SSH"
 }
 
 # 输入全走环境变量 / u60.env，stdin 接 /dev/null（和代装的 Claude Code 一样没有终端）
@@ -236,7 +211,7 @@ scenario_admin_needs_password() {
 }
 
 scenario_fresh_install() {
-  say "ADB 模式全新安装（ssh admin esim，AGENT_PASSWORD 走环境变量）"
+  say "全新安装（ssh admin esim，AGENT_PASSWORD 走环境变量）"
   AGENT_PASSWORD='kit-Test_123' kit ssh admin esim </dev/null
 }
 
@@ -244,7 +219,7 @@ scenario_ssh_rerun() {
   say "SSH 模式重跑（u60.env 里 AGENT_PASSWORD 为空 = 沿用；不设 NO_REBOOT，没终端应跳过重启）"
   local log
   printf "AGENT_PASSWORD=''\n" > "$KIT/u60.env"
-  log=$( cd "$KIT" && env HOME="$WORK/home" PATH="$WORK/bin:$PATH" GATEWAY="$GATEWAY" \
+  log=$( cd "$KIT" && env HOME="$WORK/home" GATEWAY="$GATEWAY" \
            SSH_KEY="$(KEY_IN_HOME)" bash ./install.sh ssh admin </dev/null 2>&1 )
   rm -f "$KIT/u60.env"
   echo "$log" | grep -E '^\[(device|!|\*)\]|没有重启验证'
@@ -278,7 +253,7 @@ run() {
   local before after
   before=$(on_device "$SNAP")
 
-  scenario_no_router_password
+  scenario_no_ssh
   scenario_admin_needs_password
   scenario_fresh_install
   scenario_ssh_rerun

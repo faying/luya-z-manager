@@ -435,10 +435,14 @@ struct AlertbarFrag<'a> {
     bar: Option<&'a Bar>,
 }
 
-/// The vendor's `connect_status` values: `connected`, `ipv4_connected`, `ipv4_ipv6_connected`, …
-/// and `disconnected`, `connecting`, … (a substring test would take `disconnected` as connected).
-pub fn connected(status: &str) -> bool {
-    status == "connected" || status.ends_with("_connected")
+/// `interfaces.cellular` read through [`luyaz_api::firmware::wwaniface_connected`].
+pub fn cell_up(c: &Value) -> Option<bool> {
+    luyaz_api::firmware::wwaniface_connected(
+        luyaz_api::firmware::Support::Unknown,
+        c["connect_status"].as_str().unwrap_or(""),
+        c["ipv4_address"].as_str(),
+        None,
+    )
 }
 
 fn block<'a>(st: &'a St, name: &str) -> Option<&'a Value> {
@@ -456,9 +460,9 @@ pub fn icons(st: &St, l: Lang) -> Vec<Icon> {
     let sig = block(st, "signal");
     let cell = block(st, "interfaces").map(|i| &i["cellular"]);
     let known = sig.is_some() || cell.is_some();
-    let up = cell
-        .and_then(|c| c["connect_status"].as_str())
-        .is_some_and(connected);
+    // B31 keeps claiming connected after a drop; only an IPv4 address confirms it.
+    // None = claimed but unconfirmed: shown neutral, not as on or down.
+    let up = cell.map(cell_up).unwrap_or(Some(false));
     let ty = sig
         .and_then(|s| s["type"].as_str())
         .unwrap_or("")
@@ -473,15 +477,16 @@ pub fn icons(st: &St, l: Lang) -> Vec<Icon> {
         })
         .unwrap_or(0);
     let weak = rsrp != 0 && rsrp <= -110;
-    let mut label = if up {
-        t("Mobile data on", "移动数据已通")
-    } else {
-        t("Mobile data down", "移动数据断了")
+    let mut label = match up {
+        Some(true) => t("Mobile data on", "移动数据已通"),
+        Some(false) => t("Mobile data down", "移动数据断了"),
+        None => t("Mobile data unconfirmed", "移动数据未确认"),
     };
-    if up && !ty.is_empty() {
+    let on = up == Some(true);
+    if on && !ty.is_empty() {
         label = format!("{label} · {ty}");
     }
-    if up && weak {
+    if on && weak {
         label = format!("{label} · {}", l.pick("weak signal", "信号弱"));
     }
     out.push(Icon {
@@ -489,9 +494,10 @@ pub fn icons(st: &St, l: Lang) -> Vec<Icon> {
         href: "/signal",
         icon: "CellSignalFull",
         tone: match (up, weak) {
-            (false, _) => Tone::Bad,
-            (true, true) => Tone::Warn,
-            (true, false) => Tone::Ok,
+            (None, _) => Tone::Off,
+            (Some(false), _) => Tone::Bad,
+            (Some(true), true) => Tone::Warn,
+            (Some(true), false) => Tone::Ok,
         },
         label,
         badge: 0,
@@ -926,6 +932,7 @@ mod tests {
 
     #[test]
     fn disconnected_is_not_connected() {
+        use luyaz_api::firmware::wwaniface_claims_connected as connected;
         assert!(connected("ipv4_ipv6_connected"));
         assert!(connected("connected"));
         assert!(!connected("disconnected"));
@@ -938,7 +945,7 @@ mod tests {
     fn icons_from_blocks() {
         let hub = hub_with(json!({
             "signal": {"type": "SA", "nr_rsrp": -112, "lte_rsrp": -90},
-            "interfaces": {"cellular": {"connect_status": "ipv4_ipv6_connected"}},
+            "interfaces": {"cellular": {"connect_status": "ipv4_ipv6_connected", "ipv4_address": "10.1.2.3"}},
             "wlan": {"enabled": 0},
             "sms": {"unread": 12}
         }));
@@ -962,6 +969,20 @@ mod tests {
         let ic = hub.read(|st| icons(st, Lang::En));
         assert_eq!(ic[0].tone, Tone::Bad);
         assert_eq!(ic[0].label, "Mobile data down");
+    }
+
+    #[test]
+    fn connected_without_ipv4_is_unconfirmed() {
+        let hub = hub_with(json!({
+            "signal": {"type": "LTE", "lte_rsrp": -95},
+            "interfaces": {"cellular": {"connect_status": "ipv4_ipv6_connected", "ipv4_address": ""}}
+        }));
+        let ic = hub.read(|st| icons(st, Lang::En));
+        assert_eq!(ic[0].tone, Tone::Off);
+        assert_eq!(ic[0].label, "Mobile data unconfirmed");
+        assert_eq!(cell_up(&json!({"connect_status": "ipv4_connected"})), None);
+        assert_eq!(cell_up(&json!({"connect_status": "disconnected", "ipv4_address": "10.0.0.2"})), Some(false));
+        assert_eq!(cell_up(&json!({"connect_status": "connected", "ipv4_address": "10.0.0.2"})), Some(true));
     }
 
     fn alerts(unread: u64, configured: bool) -> Value {

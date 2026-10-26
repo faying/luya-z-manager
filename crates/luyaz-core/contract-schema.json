@@ -1645,6 +1645,113 @@
       "title": "Qos",
       "type": "object"
     },
+    "regress": {
+      "$defs": {
+        "RegressItem": {
+          "properties": {
+            "count": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            },
+            "end": {
+              "description": "\"\" while open, `recovered`, `quiet`",
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "from": {
+              "description": "wall clock (device local time marked UTC); null when it was not trusted",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            },
+            "id": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "kind": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "name_en": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "name_zh": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "observed_en": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "observed_zh": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "sub": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "to": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "name_zh",
+            "name_en",
+            "sub",
+            "end",
+            "count",
+            "observed_zh",
+            "observed_en"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The regress layer's incidents for the touch screen (design review 14A, eng review round 3\nD8/D11): open ones (at most 5, `open_total` in all), ended ones still shown (at most 3).\nKinds, names and times only; no identifiers.",
+      "properties": {
+        "closed": {
+          "items": {
+            "$ref": "#/$defs/RegressItem"
+          },
+          "type": "array",
+          "x-u60-level": "nested"
+        },
+        "open": {
+          "items": {
+            "$ref": "#/$defs/RegressItem"
+          },
+          "type": "array",
+          "x-u60-level": "nested"
+        },
+        "open_total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer",
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "open_total",
+        "open",
+        "closed"
+      ],
+      "title": "Regress",
+      "type": "object"
+    },
     "router": {
       "$defs": {
         "FilterRule": {

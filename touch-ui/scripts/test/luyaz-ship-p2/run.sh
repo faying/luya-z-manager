@@ -188,7 +188,7 @@ EOF
 
     export U60S_ROOT=$R U60S_TMP=$T/tmp U60S_BOOT_ID=$T/boot_id U60S_DF=$T/bin/df U60S_PROC=$T/proc
     export U60S_MANIFEST=$R/data/luyaz/ship/manifest.jsonl
-    export U60S_SENT_INITD=$T/bin/sent-initd U60S_SENT_HB=$T/sent.hb U60S_UID_CTL=$T/ctl
+    export U60S_SENT_INITD=$T/bin/sent-initd U60S_SENT_HB=$T/sent.hb U60S_UID_CTL=$T/ctl U60S_SENT_WANT=$T/sent.want
     unset U60S_CRASH_AT U60S_DIR U60S_LOG U60S_TEST_LOG U60S_MIN_FREE_KB U60S_TO_INITD U60S_SCREEN_STATE
     export DT_UPTIME=$T/uptime DT_PIDFILE=$T/trial.pid DT_CURL=$T/bin/curl DT_PIDOF=$T/bin/pidof
     unset DT_LOGREAD # the default reader: <log>.old, then <log>
@@ -223,9 +223,14 @@ EOF
             echo "$l $u" >>"$T/ctl.log"
             case "$l" in
                 hold*) echo held >"$T/sent.state"; echo "$u 8500 held 0 $u" >"$T/sent.hb" ;;
+                # vendor sticks (screen.want) until ui; the vendor UI goes up once nothing holds
+                vendor) echo vendor >"$T/sent.want"; echo vendor >"$T/sent.state"; echo "$u 8500 vendor 0 $u" >"$T/sent.hb" ;;
+                ui) rm -f "$T/sent.want" ;;
                 release)
                     grep -qx 8500 "$T/pids/luyaz-sentinel" 2>/dev/null || continue
                     echo "release $u" >>"$T/events"
+                    [ -f "$T/sent.want" ] && continue
+                    [ -f "$T/ui-dead" ] && { echo ours >"$T/sent.state"; echo "$u 8500 ours 0 $u" >"$T/sent.hb"; continue; }
                     if [ -s "$T/pids/luyaz-ui" ]; then echo ours >"$T/sent.state"; echo "$u 8500 ours 0 $u" >"$T/sent.hb"; continue; fi
                     a=$(cat "$SD/attempts" 2>/dev/null); a=$(( ${a:-0} + 1 )); echo $a >"$SD/attempts"
                     if [ $a -gt 2 ]; then
@@ -646,6 +651,36 @@ rm -f "$T/pids/luyaz-sentinel"; rm -rf "$T/proc/8500"
 sh "$SHIP" screen-restart >"$T/out" 2>&1
 RC=$?
 check "$CASE: exit 1 at once, says the sentinel is down" '[ $RC = 1 ] && grep -q "哨兵没在跑" "$T/out" && [ ! -s "$T/ctl.log" ]'
+check "$CASE: a UI on screen: the sentinel is not started behind the owner's back" '[ ! -s "$T/sent-initd.log" ]'
+rm -f "$T/pids/luyaz-ui"; rm -rf "$T/proc/8200"
+sh "$SHIP" screen-restart >"$T/out" 2>&1
+RC=$?
+check "$CASE: no UI either: still exit 1, the sentinel started so it launches one" '[ $RC = 1 ] && grep -q "哨兵没在跑" "$T/out" && grep -q "^start" "$T/sent-initd.log"'
+teardown
+
+# 10-25 u60g: a touch ship failed to hand the screen back and the panel stayed dark until the
+# firmware rebooted (1185). A failed release puts the vendor UI up; the next release undoes it.
+setup
+CASE="screen-restart, the UI never comes back"
+rm -f "$T/pids/luyaz-ui"; rm -rf "$T/proc/8200"
+touch "$T/ui-dead"
+sh "$SHIP" screen-restart >"$T/out" 2>&1
+RC=$?
+check "$CASE: exit 1 with the release's reason" '[ $RC = 1 ] && grep -q "界面没起来" "$T/out"'
+check "$CASE: then release + vendor: the vendor UI on screen" '[ "$(cut -d" " -f1 "$T/ctl.log" | tr "\n" " ")" = "release release vendor " ] && [ "$(cat "$T/sent.state")" = vendor ]'
+rm -f "$T/ui-dead"
+sh "$SHIP" screen-restart >"$T/out" 2>&1
+RC=$?
+check "$CASE: the next release says ui first and gets our UI back" '[ $RC = 0 ] && [ "$(tail -n 2 "$T/ctl.log" | cut -d" " -f1 | tr "\n" " ")" = "ui release " ] && [ ! -e "$T/sent.want" ] && [ -s "$T/pids/luyaz-ui" ]'
+teardown
+
+setup
+CASE="screen-restart, vendor UI already up"
+rm -f "$T/pids/luyaz-ui"; rm -rf "$T/proc/8200"
+echo 3 >"$SD/attempts"
+sh "$SHIP" screen-restart >"$T/out" 2>&1
+RC=$?
+check "$CASE: whatever the outcome, no vendor request on top of a UI" '! grep -q "^vendor" "$T/ctl.log"'
 teardown
 
 setup
@@ -863,7 +898,7 @@ _ml=
 # list is left as it is
 rm -rf "$R/data/luyaz/scripts"
 mkdir -p "$R/data/luyaz/scripts" && printf '#!/bin/sh\n# OLD other.sh\n' >"$R/data/luyaz/scripts/other.sh"
-for f in alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION; do
+for f in alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh net-tune.sh VERSION; do
     printf '#!/bin/sh\n# NEW %s luyaz-write.lock\nexit 0\n' "$f" >"$R/data/luyaz/ship/stage/$TSC/$f"
     _ml="$_ml${_ml:+$NL}file=$f $(md5 "$R/data/luyaz/ship/stage/$TSC/$f")"
 done
@@ -877,7 +912,7 @@ stage $TSC
 check "$CASE: staged as v=5 (it brings the sentinel's, luyaz-web's and luyaz-core's inits)" '[ "$RC" = 0 ] && [ "$(txnv)" = 5 ]'
 run $TSC
 check "$CASE: done, the sentinel's, luyaz-web's and the core's inits are new" '[ "$(phase)" = done ] && grep -q "NEW luyaz-web" "$R/etc/init.d/luyaz-web" && grep -q "NEW luyaz-sentinel" "$R/etc/init.d/luyaz-sentinel" && grep -q "NEW luyaz-core" "$R/etc/init.d/luyaz-core" && grep -q "NEW doctor.sh" "$R/data/luyaz/scripts/doctor.sh"'
-check "$CASE: the scripts went to /data/luyaz/scripts, a file not in the list stays" '[ "$(ls "$R/data/luyaz/scripts" | wc -l)" = 10 ] && grep -q "NEW luyaz-fallback.sh" "$R/data/luyaz/scripts/luyaz-fallback.sh" && grep -q "OLD other.sh" "$R/data/luyaz/scripts/other.sh" && grep -q "/data/luyaz/scripts/doctor.sh" "$R/data/luyaz/ship/txn"'
+check "$CASE: the scripts went to /data/luyaz/scripts, a file not in the list stays" '[ "$(ls "$R/data/luyaz/scripts" | wc -l)" = 11 ] && grep -q "NEW luyaz-fallback.sh" "$R/data/luyaz/scripts/luyaz-fallback.sh" && grep -q "OLD other.sh" "$R/data/luyaz/scripts/other.sh" && grep -q "/data/luyaz/scripts/doctor.sh" "$R/data/luyaz/ship/txn"'
 check "$CASE: an init not in the list untouched" 'grep -q "OLD init" "$R/etc/init.d/other" && ! grep -q "init.d/other" "$R/data/luyaz/ship/txn"'
 recover_newboot
 check "$CASE: a quiet next boot" '[ "$RRC" = 0 ]'
@@ -1107,7 +1142,7 @@ CASE="ship scripts: a luyaz-recover.sh without formats 4"
 TSC=20261012-140000-scripts
 mkdir -p "$R/data/luyaz/ship/stage/$TSC"
 _ml=
-for f in alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION luyaz-core luyaz-sentinel luyaz-web; do
+for f in alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh net-tune.sh VERSION luyaz-core luyaz-sentinel luyaz-web; do
     printf '#!/bin/sh\n# NEW %s luyaz-write.lock\n' "$f" >"$R/data/luyaz/ship/stage/$TSC/$f"
     _ml="$_ml${_ml:+$NL}file=$f $(md5 "$R/data/luyaz/ship/stage/$TSC/$f")"
 done
@@ -1123,7 +1158,7 @@ CASE="ship scripts: a luyaz-recover.sh without formats 5"
 TSC=20261014-140000-scripts
 mkdir -p "$R/data/luyaz/ship/stage/$TSC"
 _ml=
-for f in alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh VERSION luyaz-core luyaz-sentinel luyaz-web; do
+for f in alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh net-tune.sh VERSION luyaz-core luyaz-sentinel luyaz-web; do
     printf '#!/bin/sh\n# NEW %s luyaz-write.lock\n' "$f" >"$R/data/luyaz/ship/stage/$TSC/$f"
     _ml="$_ml${_ml:+$NL}file=$f $(md5 "$R/data/luyaz/ship/stage/$TSC/$f")"
 done
@@ -1133,6 +1168,12 @@ stage $TSC
 check "$CASE: refused, install-recover first" '[ "$RC" = 1 ] && grep -q "v=5" "$T/out" && grep -q "install-recover" "$T/out"'
 teardown
 
+
+# 10-25: c622e515 dropped UID_UP, so sent_release's wait was 0 s and a UI one second late
+# failed the touch ship (u60g, twice). Every name the waits multiply must be assigned.
+for v in UID_UP HOLD_MAX; do
+    check "wait constant $v is assigned" 'grep -q "^$v=" "$SHIP"'
+done
 
 rm -f "$OLDREC"
 echo "u60-ship phase two: $PASS passed, $FAIL failed"

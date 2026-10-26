@@ -161,6 +161,14 @@ async fn agent_gate(action: &str, body: &Value) -> Result<Option<AgentPass>, Res
     if layer == Layer::Link && !agent::by_instruction(body) {
         return refuse(Refusal::NeedsInstruction);
     }
+    // regress 接受新水位（CEO G2）：只按主人的指令，不看敏感、不占 30 分钟限速
+    if layer == Layer::Regress {
+        return if agent::by_instruction(body) {
+            Ok(None)
+        } else {
+            refuse(Refusal::NeedsInstruction)
+        };
+    }
     let g = agent::gate();
     if let Some(id) = body.get("agent_ticket").and_then(Value::as_str) {
         return match g.redeem(id, layer, now) {
@@ -559,6 +567,7 @@ async fn control_job(
     // A remembered screen choice is automation, even though its transport says screen.
     // Missing/legacy sources and internal callers cannot authorize an unknown USB write.
     let usb_human = usb_human(&body);
+    let keeps_state = leaves_state(&action, &body);
     let response = executor::usb_human_scope(usb_human, control_task(app.clone(), &action, body)).await;
     if let Some(j) = &journal
         && !ends
@@ -574,7 +583,7 @@ async fn control_job(
         }
     }
     // V2-27：成功后相关块下一轮立即读（没有映射就全部块），不另起一轮采集。
-    if response.status().is_success() && !read_only(&action) {
+    if response.status().is_success() && !keeps_state {
         crate::state::invalidate_cache();
         marker.mark_immediate(blocks_for_action(&action));
     }
@@ -659,7 +668,12 @@ impl JournalWrite {
             "status": status,
         });
         self.who.tag(&mut line);
-        app.inner.ops.record().append(line);
+        // 占项的（可撤销）一条一条记；其余一模一样的重复写只计数（record「重复写合并」）。
+        if self.item.is_some() {
+            app.inner.ops.record().append(line);
+        } else {
+            app.inner.ops.record().append_repeat(line);
+        }
     }
 
     fn owner(&self, app: &App) {
@@ -819,6 +833,35 @@ async fn ops_route(
                     Json(json!({"ok": false, "action": action, "error": v})),
                 )
                     .into_response()
+            });
+        }
+        // regress（设计 2026-10-24 §4）：主人接受相对门槛事故的水位；Agent 只按主人的指令（agent_gate）
+        "regress.accept" => {
+            let Some(kind) = params.get("kind").and_then(Value::as_str).map(str::to_owned) else {
+                return Some(invalid_parameter(action, "missing parameter: kind"));
+            };
+            let source = match who_of(body) {
+                Some(w) if w.approved_by == Source::Mcp => "mcp".to_string(),
+                Some(w) => w.source.as_str().to_string(),
+                None if body.get("source").and_then(Value::as_str) == Some("cli") => "cli".into(),
+                None => "unknown".into(),
+            };
+            let r = tokio::task::spawn_blocking(move || {
+                crate::longterm::regress::io::request(crate::longterm::regress::io::Command::Accept {
+                    kind,
+                    source,
+                })
+            })
+            .await
+            .unwrap_or_else(|_| Err("internal".into()));
+            return Some(match r {
+                Ok(said) => control_ok(action, json!({"said": said})),
+                Err(why) => (
+                    StatusCode::CONFLICT,
+                    Json(json!({"ok": false, "action": action,
+                        "error": {"code": "refused", "message": why}})),
+                )
+                    .into_response(),
             });
         }
         "op.revert" | "op.keep" | "op.receipt" => {
@@ -1063,6 +1106,14 @@ fn read_only(action: &str) -> bool {
     matches!(action, "sms.list_after" | "state.set_interval") || action.starts_with("poller.")
 }
 
+/// 不改任何块的读数：只读动作，和原厂休眠开关（情景引擎每 15 秒保一次「不休眠」，以前每次都清全部缓存）。
+fn leaves_state(action: &str, body: &Value) -> bool {
+    read_only(action)
+        || (action == "vendor.call"
+            && body.pointer("/params/object").and_then(Value::as_str)
+                == Some("zwrt_zte_sleep_faw.wakelock"))
+}
+
 /// `/control` 动作 → 它会改变的块。没列出的动作算「没有映射」，成功后全部块立即读（R12）。
 fn blocks_for_action(action: &str) -> Option<&'static [&'static str]> {
     match action {
@@ -1087,7 +1138,7 @@ async fn control_task(app: App, action: &str, body: Value) -> Response {
     // stale (state.rs `invalidate_cache`); it is cleared again after a
     // successful action (the task runs on the executor, so no round can refill
     // the cache with pre-action values in between).
-    if !read_only(action) {
+    if !leaves_state(action, &body) {
         crate::state::invalidate_cache();
     }
     // a bare redial would cut a diagnosis / Finding probe mid-run: queue behind it on the
@@ -1201,6 +1252,9 @@ mod tests {
         assert!(read_only("sms.list_after"));
         assert!(!read_only("device.reboot"));
         assert!(!read_only("power.direct_supply.set"));
+        let sleep = json!({"params":{"object":"zwrt_zte_sleep_faw.wakelock","method":"enableAutoSleep","args":{"switch":false}}});
+        assert!(leaves_state("vendor.call", &sleep));
+        assert!(!leaves_state("vendor.call", &json!({"params":{"object":"zwrt_router.api"}})));
         // 不在会改设备的动作表里：不拿写锁、不记流水账
         assert!(!crate::control::ACTIONS.contains(&"state.set_interval"));
         assert!(!crate::control::E4_ACTIONS.contains(&"state.set_interval"));
@@ -1253,6 +1307,17 @@ mod tests {
                 Ok(_) => panic!("{action} let through"),
             }
         }
+        // regress 接受新水位：没带主人指令 → needs_instruction；带了 → 放过（不占位）
+        let Err(r) = agent_gate("regress.accept", &json!({"source":"mcp"})).await else {
+            panic!("regress.accept let through without the owner's instruction");
+        };
+        let b = axum::body::to_bytes(r.into_body(), 4096).await.unwrap();
+        let v: Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!(v["error"]["code"], "needs_instruction");
+        assert!(matches!(
+            agent_gate("regress.accept", &json!({"source":"mcp","instruction":"owner"})).await,
+            Ok(None)
+        ));
         // 编的票不算
         let r = agent_gate("apn.add", &json!({"source":"mcp","agent_ticket":"0000"})).await;
         assert!(r.is_err());

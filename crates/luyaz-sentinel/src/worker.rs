@@ -55,6 +55,8 @@ pub struct Paths {
     pub ship: String,
     pub ship_txn: String,
     pub ship_hb: String,
+    /// The core's long-term layer's per-check file (the recorder is alive while it changes).
+    pub long_open: String,
     pub cap_logs: Vec<String>,
     pub cap_bytes: u64,
     pub cap_tmp_logs: Vec<String>,
@@ -76,6 +78,7 @@ impl Default for Paths {
             ship: s("/data/luyaz/scripts/luyaz-ship.sh"),
             ship_txn: s("/data/luyaz/ship/txn"),
             ship_hb: s("/tmp/luyaz/ship/heartbeat"),
+            long_open: s("/data/luyaz/core/long/open.json"),
             // tailscaled writes ~7.5 MB/day and nothing rotates it; start.sh opens it for append.
             cap_logs: vec![s("/data/tailscaled.log")],
             cap_bytes: 1_048_576,
@@ -162,6 +165,107 @@ pub trait WorkerIo {
     fn proc_blind(&mut self) -> bool;
     /// A normal boot, not power-off charging.
     fn boot_is_normal(&mut self) -> bool;
+    /// A file's modification time (any clock: only compared with itself); None = unreadable.
+    fn mtime(&mut self, _path: &str) -> Option<i64> {
+        None
+    }
+    /// Queue an alert under a regress transition id (`rg-…`, `u60-alerts` `add_once`): once,
+    /// whoever adds it first.
+    fn alert_id(&mut self, id: &str, kind: &str, text: &str);
+    /// A filesystem's space and inodes (`statvfs`); None = cannot tell.
+    fn disk_free(&mut self, _path: &str) -> Option<Disk> {
+        None
+    }
+    /// The largest entries under `path` (same filesystem), biggest first, for the record.
+    fn largest(&mut self, _path: &str) -> String {
+        String::new()
+    }
+    /// `/etc/init.d/luyaz-core restart` (procd gives up after its respawn limit).
+    fn restart_core(&mut self) -> Result<(), String>;
+}
+
+/// The regress layer's two sentinel checks (design 2026-10-24; eng review F1, O1, CEO R3-5):
+/// the core down 10 min (`regress-core-down`), its long-term recorder stalled 10 min
+/// (`regress-recorder`). Kept in tmpfs: a reboot starts over (`regress-reboot` takes over).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RegressState {
+    /// BOOTTIME s of the round the core turned unhealthy (outside a ship's replacement).
+    pub down_since: Option<u64>,
+    pub down_open: Option<String>,
+    /// `open.json`'s last mtime seen, and BOOTTIME s when it last changed (or was first seen).
+    pub rec_mtime: Option<i64>,
+    pub rec_changed: Option<u64>,
+    pub rec_open: Option<String>,
+    /// The previous round's BOOTTIME s (a replacement pauses the recorder's clock).
+    pub last_up: Option<u64>,
+    /// Restarts of the core in this outage, and BOOTTIME s from when the next one may go.
+    pub revives: u32,
+    pub revive_at: Option<u64>,
+    /// The open low-space incident per filesystem ([`DISKS`] name → id).
+    pub disk_open: std::collections::BTreeMap<String, String>,
+}
+
+/// Down or stalled this long opens.
+pub const REGRESS_AFTER_S: u64 = 600;
+/// The longest wait between two restarts of a core that stays down.
+pub const REVIVE_MAX_S: u64 = 3600;
+/// The filesystems watched for space (10-26: /data filled, the core crash-looped, procd gave up).
+pub const DISKS: &[(&str, &str)] = &[("data", "/data"), ("tmp", "/tmp")];
+/// Low below the larger of a twentieth of the filesystem and this; clear at twice that.
+pub const DISK_LOW_MIN: u64 = 32 << 20;
+
+/// A filesystem's room: bytes and inodes free to an unprivileged writer, and their totals.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Disk {
+    pub free: u64,
+    pub total: u64,
+    pub ifree: u64,
+    pub itotal: u64,
+}
+
+impl Disk {
+    /// Out of either (both end in ENOSPC): below [`disk_low`] bytes or a twentieth of the inodes.
+    fn low(&self, times: u64) -> bool {
+        self.free < disk_low(self.total) * times || self.ifree < self.itotal / 20 * times
+    }
+}
+
+/// The free bytes below which `total` counts as low.
+pub fn disk_low(total: u64) -> u64 {
+    (total / 20).max(DISK_LOW_MIN)
+}
+
+impl RegressState {
+    fn encode(&self) -> String {
+        serde_json::json!({"down_since": self.down_since, "down_open": self.down_open,
+            "rec_mtime": self.rec_mtime, "rec_changed": self.rec_changed,
+            "rec_open": self.rec_open, "last_up": self.last_up, "revives": self.revives,
+            "revive_at": self.revive_at, "disk_open": self.disk_open})
+        .to_string()
+    }
+
+    fn decode(text: &str) -> RegressState {
+        let v: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+        let s = |k: &str| v[k].as_str().map(str::to_string);
+        RegressState {
+            down_since: v["down_since"].as_u64(),
+            down_open: s("down_open"),
+            rec_mtime: v["rec_mtime"].as_i64(),
+            rec_changed: v["rec_changed"].as_u64(),
+            rec_open: s("rec_open"),
+            last_up: v["last_up"].as_u64(),
+            revives: v["revives"].as_u64().unwrap_or(0) as u32,
+            revive_at: v["revive_at"].as_u64(),
+            disk_open: v["disk_open"]
+                .as_object()
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
 }
 
 /// The guard's handover file (u60d `compat/guard_duties.rs`): the duties the core runs.
@@ -169,6 +273,17 @@ pub trait WorkerIo {
 /// the core is healthy, keeps LAN IPv6 off, writes the kernel log to flash (`crashcap`, G8), the
 /// standby records (G10) or the program fingerprints (G11) (u60-sentinel.md §20).
 pub const CORE_DUTIES: &str = "sms\nlanv6\ncore\ncrashcap\nstandby\nfp\n";
+
+/// The boot id's first 8 hex digits (empty when unreadable).
+fn boot8(io: &mut dyn WorkerIo) -> String {
+    io.read("/proc/sys/kernel/random/boot_id")
+        .unwrap_or_default()
+        .chars()
+        .filter(char::is_ascii_hexdigit)
+        .take(8)
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
 
 fn num(s: Option<String>) -> u64 {
     // the guard's `num`: the whole content a plain number, else 0
@@ -296,6 +411,7 @@ pub struct Worker {
     dropbear_limit_said: bool,
     /// Monotonic seconds when the last round began (the heartbeat's 5th field).
     pub last_round_mono: i64,
+    pub regress: RegressState,
     boot_checked: bool,
     charging_only: bool,
 }
@@ -315,6 +431,9 @@ impl Worker {
         }
         if let Some(t) = io.read(&format!("{}/clock", self.paths.state)) {
             self.clock = ClockState::decode(&t);
+        }
+        if let Some(t) = io.read(&format!("{}/regress", self.paths.state)) {
+            self.regress = RegressState::decode(&t);
         }
     }
 
@@ -343,6 +462,7 @@ impl Worker {
         self.ship_round(io);
         self.clock_round(io);
         self.core_round(io);
+        self.disk_round(io);
         self.guard_round(io);
         self.rtc_round(io);
         self.logcap_round(io);
@@ -554,10 +674,149 @@ impl Worker {
         }
         self.core.unhealthy = unhealthy;
         self.core.last = Some(what);
+        self.regress_round(io);
         // §6: the alert SMS while the core cannot send them, except while it is being replaced
         // (D6: its replacement is expected within the trial)
         if unhealthy && !io.core_being_replaced() {
             io.alert_sms();
+        }
+    }
+
+    // ── regress: the core down, the recorder stalled ────────────────────────
+    pub fn regress_round(&mut self, io: &mut dyn WorkerIo) {
+        let before = self.regress.clone();
+        let up = io.uptime();
+        let replacing = io.core_being_replaced();
+        let boot = boot8(io);
+        let r = &mut self.regress;
+        // F1: unhealthy 10 min in a row (BOOTTIME), not while a ship replaces the core
+        if self.core.unhealthy && !replacing {
+            let since = *r.down_since.get_or_insert(up);
+            if r.down_open.is_none() && up.saturating_sub(since) >= REGRESS_AFTER_S {
+                let id = format!("core-down-{boot}-{since}");
+                let what = self.core.last.clone().unwrap_or_default();
+                let text = format!(
+                    "/healthz {what} for {} min; attribution unknown",
+                    (up - since) / 60
+                );
+                io.alert_id(&format!("rg-{id}-open"), "regress-core-down", &text);
+                io.log(&format!("regress: core down since {since} s: {id}"));
+                r.down_open = Some(id);
+            }
+            // nobody else brings it back once procd has given up (10-26: down 50 min): restart
+            // it now, then after 10, 20, 40 min and hourly
+            if r.down_open.is_some() && up >= r.revive_at.unwrap_or(0) {
+                r.revives += 1;
+                let n = r.revives;
+                match io.restart_core() {
+                    Ok(()) => io.log(&format!("regress: restarted the core (try {n})")),
+                    Err(e) => io.log(&format!("regress: core restart {n} failed: {e}")),
+                }
+                let wait = (REGRESS_AFTER_S << (n - 1).min(4)).min(REVIVE_MAX_S);
+                r.revive_at = Some(up + wait);
+            }
+        } else {
+            r.down_since = None;
+            if !self.core.unhealthy
+                && let Some(id) = r.down_open.take()
+            {
+                let text = match r.revives {
+                    0 => "core healthy again".to_string(),
+                    n => format!("core healthy again after {n} sentinel restart(s)"),
+                };
+                io.alert_id(&format!("rg-{id}-close"), "regress-core-down", &text);
+                io.log(&format!("regress: core back: {id}"));
+            }
+            if !self.core.unhealthy {
+                r.revives = 0;
+                r.revive_at = None;
+            }
+        }
+        // O1: the recorder's clock runs on open.json alone (a health flap does not reset it); a
+        // replacement pauses it
+        let m = io.mtime(&self.paths.long_open);
+        if let (Some(last), true) = (r.last_up, replacing)
+            && let Some(c) = r.rec_changed.as_mut()
+        {
+            *c += up.saturating_sub(last);
+        }
+        r.last_up = Some(up);
+        if m.is_none() {
+            // not there (the layer is off): nothing to judge
+        } else if m != r.rec_mtime || r.rec_changed.is_none() {
+            r.rec_mtime = m;
+            r.rec_changed = Some(up);
+            if let Some(id) = r.rec_open.take() {
+                io.alert_id(
+                    &format!("rg-{id}-close"),
+                    "regress-recorder",
+                    "open.json written again",
+                );
+                io.log(&format!("regress: recorder writing again: {id}"));
+            }
+        } else if let Some(c) = r.rec_changed
+            && r.rec_open.is_none()
+            && up.saturating_sub(c) >= REGRESS_AFTER_S
+            && !self.core.unhealthy
+            && r.down_open.is_none()
+        {
+            // the core answers and still writes nothing (while it is down, core-down says it)
+            let id = format!("recorder-{boot}-{c}");
+            let text = format!("long/open.json not written for {} min", (up - c) / 60);
+            io.alert_id(&format!("rg-{id}-open"), "regress-recorder", &text);
+            io.log(&format!("regress: recorder stalled since {c} s: {id}"));
+            r.rec_open = Some(id);
+        }
+        if self.regress != before {
+            io.write(
+                &format!("{}/regress", self.paths.state),
+                &self.regress.encode(),
+            );
+        }
+    }
+
+    // ── regress: a filesystem running out of space ─────────────────────────
+    /// Here, not in the core: a full /data is what stops the core (10-26 ENOSPC crash loop).
+    pub fn disk_round(&mut self, io: &mut dyn WorkerIo) {
+        let before = self.regress.disk_open.clone();
+        let up = io.uptime();
+        for &(name, path) in DISKS {
+            let Some(d) = io.disk_free(path) else {
+                continue;
+            };
+            let open = self.regress.disk_open.get(name).cloned();
+            let room = format!(
+                "{path} {}/{} MB, {}/{} inodes free",
+                d.free >> 20,
+                d.total >> 20,
+                d.ifree,
+                d.itotal
+            );
+            if open.is_none() && d.low(1) {
+                let boot = boot8(io);
+                let id = format!("disk-{name}-{boot}-{up}");
+                let big = io.largest(path);
+                let mut text = room;
+                if !big.is_empty() {
+                    text.push_str(&format!("; {big}"));
+                }
+                io.alert_id(&format!("rg-{id}-open"), "regress-disk", &text);
+                io.log(&format!("regress: {text}: {id}"));
+                self.regress.disk_open.insert(name.into(), id);
+            } else if let Some(id) = open
+                && !d.low(2)
+            {
+                let text = format!("{room} again");
+                io.alert_id(&format!("rg-{id}-close"), "regress-disk", &text);
+                io.log(&format!("regress: {text}: {id}"));
+                self.regress.disk_open.remove(name);
+            }
+        }
+        if self.regress.disk_open != before {
+            io.write(
+                &format!("{}/regress", self.paths.state),
+                &self.regress.encode(),
+            );
         }
     }
 
@@ -645,7 +904,9 @@ impl Worker {
             self.wifi.episode = Some(now);
             io.log(&format!("scenario engine looks gone: {why}"));
         }
-        if !self.wifi.alerted_silent {
+        // the engine runs in the core: with the core down, regress-core-down tells it (10-26: two
+        // texts for one stop); the rescue below still runs
+        if !self.wifi.alerted_silent && !self.core.unhealthy {
             self.wifi.alerted_silent = true;
             io.alert("agent-silent", &why);
         }

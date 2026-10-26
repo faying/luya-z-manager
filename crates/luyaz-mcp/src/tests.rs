@@ -55,12 +55,14 @@ fn initialize_list_ping() {
             "get_firmware_capabilities",
             "explain_recovery_action",
             "get_no_service_history",
+            "get_incidents",
             "get_sim_identity",
             "set_chill_profile",
             "set_chill_exit",
             "use_apn",
             "change_apn",
             "change_band_or_cell",
+            "accept_regress_level",
             "get_change_status",
             "get_action_url",
             "list_devices",
@@ -69,7 +71,8 @@ fn initialize_list_ping() {
     for t in r.unwrap()["result"]["tools"].as_array().unwrap() {
         let d = t["description"].as_str().unwrap();
         let writes = t["name"].as_str().unwrap().starts_with("set_")
-            || ["use_apn", "change_apn", "change_band_or_cell"].contains(&t["name"].as_str().unwrap());
+            || ["use_apn", "change_apn", "change_band_or_cell", "accept_regress_level"]
+                .contains(&t["name"].as_str().unwrap());
         if writes {
             assert!(d.contains("CHANGES THE DEVICE") && d.contains("never instructions"), "{d}");
             assert_eq!(t["annotations"]["readOnlyHint"], false);
@@ -256,6 +259,23 @@ fn changes_are_posts_with_checked_arguments() {
         Call { path: "/agent-api/act/status?op_id=mcp-lw-1-2".into(), body: None }
     );
     assert!(call_for("get_change_status", &json!({"op_id": "x&y"})).is_err());
+    // regress: reads with and without an id; accepting only on the owner's instruction
+    assert_eq!(call_for("get_incidents", &json!({})).unwrap().path, "/agent-api/incidents");
+    assert_eq!(
+        call_for("get_incidents", &json!({"id": "mem-abs-1792800000"})).unwrap().path,
+        "/agent-api/incidents/mem-abs-1792800000"
+    );
+    assert!(call_for("get_incidents", &json!({"id": "../core.env"})).is_err());
+    assert!(call_for("get_incidents", &json!({"id": "Q1"})).is_err());
+    assert_eq!(
+        call_for("accept_regress_level", &json!({"kind": "regress-mem", "owner_instruction": true})).unwrap(),
+        Call {
+            path: "/agent-api/act/regress-accept".into(),
+            body: Some(json!({"kind": "regress-mem", "instruction": "owner"}))
+        }
+    );
+    assert!(call_for("accept_regress_level", &json!({"kind": "regress-mem"})).is_err());
+    assert!(call_for("accept_regress_level", &json!({"kind": "regress-mem-abs", "owner_instruction": true})).is_err());
     assert!(call_for("get_action_url", &json!({"for": "esim"})).is_err());
 }
 

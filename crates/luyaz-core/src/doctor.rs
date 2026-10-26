@@ -67,6 +67,8 @@ pub struct Cfg {
     uptime: String,
     clock_ok: String,
     alerts: String,
+    /// `regress-sms-off`: the owner turned regress SMS off (detection goes on)
+    regress_off: String,
     crash: String,
     data_dir: String,
     device_id: String,
@@ -115,6 +117,8 @@ pub struct Cfg {
     scorecard_url: String,
     calib_url: String,
     chill: chill::Cfg,
+    core_env: String,
+    netrec_dir: String,
 }
 
 impl Cfg {
@@ -144,6 +148,7 @@ impl Cfg {
             uptime: s("DOC_UPTIME", "/proc/uptime"),
             clock_ok: s("DOC_CLOCK_OK", &format!("{guard_tmp}/clock-ok")),
             alerts: s("DOC_ALERTS", "/data/alerts"),
+            regress_off: s("DOC_REGRESS_SMS_OFF", luyaz_api::alerts::REGRESS_SMS_OFF),
             crash: s("DOC_CRASH", "/data/crashlog"),
             data_dir: s("DOC_DATA", "/data"),
             device_id: s("DOC_DEVICE_ID", "/data/luyaz/web-device-id"),
@@ -178,7 +183,7 @@ impl Cfg {
             fp_changed: s("DOC_FP_CHANGED", &format!("{guard_tmp}/ledger/fp-changed")),
             standby_stat: s("DOC_STANDBY_STAT", "/tmp/standby.stat"),
             standby_base: s("DOC_STANDBY_BASE", "/data/luyaz/scripts/standby.baseline"),
-            ledger_dir: s("DOC_LEDGER_DIR", "/data/ledger"),
+            ledger_dir: s("DOC_LEDGER_DIR", crate::longterm::DIR),
             ledger_tmp: s("DOC_LEDGER_TMP", &format!("{guard_tmp}/ledger")),
             crashcap_dir: s("DOC_CRASHCAP_DIR", "/data/crashcap"),
             keylog: s("DOC_KEYLOG", "/data/logfs/key.log"),
@@ -200,6 +205,8 @@ impl Cfg {
                 template: s("DOC_CHILL_TEMPLATE", "/data/chill/template.yaml"),
                 dir: s("DOC_CHILL_DIR", "/data/chill"),
             },
+            core_env: s("DOC_CORE_ENV", &format!("{data_dir}/core.env")),
+            netrec_dir: s("DOC_NETREC_DIR", crate::netrec::DIR),
         }
     }
 }
@@ -332,6 +339,7 @@ pub fn run(c: &Cfg, mode: Mode) -> Vec<Row> {
     rows.push(sms(c));
     rows.push(crashes(c, unread));
     rows.push(disk(c));
+    rows.extend(netrec(c));
     rows.extend(device_id(c));
     let (lv, d) = standby::check(c, false);
     let de = if mode == Mode::Tsv2 {
@@ -1189,7 +1197,18 @@ fn alerts(unread: usize) -> Row {
 }
 
 fn sms(c: &Cfg) -> Row {
-    if std::fs::metadata(format!("{}/sms-to", c.alerts)).is_ok_and(|m| m.len() > 0) {
+    let set = std::fs::metadata(format!("{}/sms-to", c.alerts)).is_ok_and(|m| m.len() > 0);
+    if set && std::path::Path::new(&c.regress_off).exists() {
+        // 2026-10-24 「变差才通知」X8: off on purpose, but easy to forget
+        row(
+            "warn",
+            "sms",
+            "短信告警",
+            "已配置，但「变差」类短信关着（只进收件箱；tools/luyaz regress sms on 打开）".into(),
+            "Alert SMS",
+            "Set up, but regress SMS is off (inbox only; tools/luyaz regress sms on)".into(),
+        )
+    } else if set {
         row(
             "ok",
             "sms",
@@ -1378,6 +1397,20 @@ fn disk(c: &Cfg) -> Row {
 
 /// R18-P0-04：管理网页的设备 ID 档（核心的 `/control` 用它核对 `expect_device_id`）。
 /// 缺了或读不懂 = 网页带着 ID 的写会全被拒（409 wrong_device）；好的时候不占一行。
+/// The recorder (netrec.rs): only on a device that has it on in core.env or has its files.
+fn netrec(c: &Cfg) -> Option<Row> {
+    let on = cat(&c.core_env).is_some_and(|t| t.lines().any(|l| l.trim() == "LUYAZ_NETREC=1"));
+    let dir = std::path::Path::new(&c.netrec_dir);
+    if !on && !dir.is_dir() {
+        return None;
+    }
+    let wall = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let (d, de) = crate::netrec::doctor_detail(dir, on, wall);
+    Some(row("ok", "netrec", "记录仪", d, "Recorder", de))
+}
+
 fn device_id(c: &Cfg) -> Option<Row> {
     let id = cat(&c.device_id).map(|s| s.trim().to_owned()).unwrap_or_default();
     if id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -1496,7 +1529,7 @@ fn report(c: &Cfg, w: Option<&str>, sum: Option<&str>) -> (String, i32) {
 
 /// `<core> doctor ARGS`: the exit code. Like doctor.sh only the first argument counts.
 /// Text mode's last lines: the scorecard's summary, the core's card now (`report_core 7d`, the
-/// standby verdict as the body), else the ledger's summary file as it was last written.
+/// standby verdict as the body), else nothing.
 pub fn footer(c: &Cfg) -> String {
     let (lv, d) = standby::check(c, false);
     let dir = std::env::temp_dir().join(format!("doctor-summary.{}", std::process::id()));
@@ -1532,10 +1565,8 @@ pub fn footer(c: &Cfg) -> String {
     {
         return format!("\n{head}");
     }
-    match std::fs::read(format!("{}/summary", c.ledger_dir)) {
-        Ok(b) if !b.is_empty() => format!("\n{}", String::from_utf8_lossy(&b)),
-        _ => String::new(),
-    }
+    // the guard's ledger summary stopped with the guard (10-19): an old one would mislead
+    String::new()
 }
 
 /// The whole output of one mode and its exit code.

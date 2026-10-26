@@ -344,6 +344,26 @@ fn append_after_a_cut_off_line() {
 }
 
 #[test]
+fn read_events_parses_only_the_kinds_asked() {
+    let dir = tmp("kinds");
+    let mut st = Store::new(&dir);
+    let midnight = T0 + 12 * 3600;
+    st.append_event(&Event::new(midnight - 30, "speed", json!({"mbps": 80.5}))).unwrap();
+    // a cell change whose data names "diagnose" is still not a diagnose event
+    st.append_event(&Event::new(midnight - 20, "cell_change", json!({"note": "\"kind\":\"diagnose\""}))).unwrap();
+    st.append_event(&Event::new(midnight + 10, "diagnose", json!({"link_ms": 40}))).unwrap();
+    st.append_event(&Event::new(midnight + 20, "stall", json!({}))).unwrap();
+    st.append_event(&Event::new(midnight + 7200, "diagnose", json!({}))).unwrap();
+    let es = st.read_events(midnight - 60, midnight + 3600, &["diagnose", "speed"]);
+    assert_eq!(kinds(&es), ["speed", "diagnose"]);
+    assert_eq!(es[0].data["mbps"], 80.5);
+    let (_, all) = st.read_range(midnight - 60, midnight + 3600);
+    let picked: Vec<_> = all.into_iter().filter(|e| e.kind == "diagnose" || e.kind == "speed").collect();
+    assert_eq!(kinds(&picked), kinds(&es));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn minutes_across_midnight_go_to_two_files() {
     let dir = tmp("midnight");
     let mut st = Store::new(&dir);

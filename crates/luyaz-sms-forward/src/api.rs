@@ -112,9 +112,10 @@ impl SmsForwarder {
     pub fn config_get(&self) -> (u16, Value) {
         let cfg = self.config.lock().unwrap().clone();
         let watermark = self.state.lock().unwrap().last_forwarded_id;
+        let queue = self.queue.lock().unwrap().status();
         done(
             200,
-            json!({ "config": cfg, "last_forwarded_id": watermark }),
+            json!({ "config": cfg, "last_forwarded_id": watermark, "queue": queue }),
         )
     }
 
@@ -320,6 +321,16 @@ impl SmsForwarder {
                 l.success = true;
                 // the held SMS must not be sent to this rule again by the loop
                 self.delivered.lock().unwrap().insert((l.sms_id, rule_id));
+                let mut q = self.queue.lock().unwrap();
+                let mut hit = false;
+                for j in q.jobs.iter_mut().filter(|j| j.sms_id == l.sms_id && j.rule_id == rule_id && j.state != crate::JobState::Sent) {
+                    j.state = crate::JobState::Sent;
+                    j.last_error = None;
+                    hit = true;
+                }
+                if hit {
+                    self.save_queue(&q);
+                }
                 if let Some(h) = st.held.as_mut() {
                     if h.sms_id == l.sms_id && !h.delivered_rules.contains(&rule_id) {
                         h.delivered_rules.push(rule_id);

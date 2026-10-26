@@ -1488,7 +1488,13 @@
 | 进度：阶段（空闲/测延迟…/测下载…/测上传…/完成/已取消/错误）+ 百分比 + 进度条 | `/api/speedtest/progress` | `phase`、`progress`（0–100 整数） | 页面 `setTimeout` 链 1000（运行中） | 否（agent 内存状态） |
 | 实时速率 Mbps | 同上 | `live_speed_mbps` | 1000 | 否 |
 | 错误原因 | 同上 | `phase=error` 时的 `error` | 1000 | 否 |
-| 结果卡：延迟 / 抖动 / 下载 / 上传 | 同上 | `ping_ms`、`jitter_ms`、`download_mbps`、`upload_mbps`（完成时） | — | 否 |
+| 结果卡：延迟 / 抖动 / 下载 / 上传（旧 core） | 同上 | `ping_ms`、`jitter_ms`、`download_mbps`、`upload_mbps`（完成时） | — | 否 |
+| 结果墙（v2 core，有 `method_version`）：下载（多连接稳定段）/ 上传 / 延迟（空闲）/ 下载时延迟；样本不足时下载数字灰 | 同上 | `download_mbps`、`upload_mbps`、`ping_ms`、`loaded_down_ms`、`sample_short` | — | 否 |
+| 状态词带步数「3/5 · 多连接下载」，原因行写测法（读屏只广播步数和结论，不广播百分比） | 同上 | `stage`、`step`/`steps`、`connections`、`mode` | 1000 | 否 |
+| 结论（状态词后）：「▲ 慢在…」「● 没发现瓶颈」「▲ 样本不足，数字只供参考」「● 粗测 · 漫游中只测 5 秒」「● 粗测 · 只测 5 秒」 | 同上 | `verdict.summary_zh/en`、`verdict.bottlenecks`、`sample_short`、`mode`、`roaming_capped` | — | 否 |
+| 「分层」区（`<ul>`，5 行；代理 ▲ 时整行链到 /services/chill） | 同上 | `verdict.layers[].key/state/value_zh/value_en` | — | 否 |
+| 详情：全程均值、抖动、连接数、内核调参：开 / 关（测速当时，只读） | 同上 | `download_whole_mbps`、`upload_whole_mbps`、`jitter_ms`、`connections`、`net_tune` | — | 否 |
+| 是否漫游、CHILL 是否在跑（决定费用文案和「也测经 CHILL」能否开） | `/api/netinfo?lite=1` | `roaming`、`chill_running` | 30000 | 否 |
 | （接口有、页面没显示） | 同上 | `server`、`download_bytes`、`upload_bytes` | — | — |
 
 #### 控件
@@ -1496,7 +1502,8 @@
 | 控件 | 可访问名称 | 接口 + 方法 + 请求体要点 | 步骤 | 读回 | 现有确认 | 档位 |
 |---|---|---|---|---|---|---|
 | 服务器下拉（自动（Ookla → 已配置的 LibreSpeed）+ 列表） | 无（label 未关联）；建议 combobox「服务器」 | 无（草稿） | — | — | 无 | —（本地） |
-| 「开始」 | button「开始」 | POST `/api/speedtest/start` `{}` 或 `{server_id}` | 1，之后每秒 GET progress 直到 complete/cancelled/error | 无读回（结果即进度接口的数值） | 无 | 二（消耗蜂窝流量） |
+| 「也测经 CHILL」开关（v2 core 才有；默认关，开始后自动回到关；漫游或 CHILL 没在跑时灰，右侧写原因） | switch「也测经 CHILL」 | 无（本地信号 `$chill`，随「开始」带 `path:"chill"`） | — | — | 无 | —（本地） |
+| 「开始」（行内确认写费用：v2「约 30 秒 · 最多 750 MB」，开经 CHILL「约 40 秒 · 最多 1.15 GB」，漫游「只粗测 5 秒、最多 30 MB」；旧 core 照旧「最多 60 秒、约 512 MB」） | button「开始」 | POST `/api/speedtest/start` `{provider, server_id?, path?:"chill"}` | 1，之后每秒 GET progress 直到 complete/cancelled/error | 无读回（结果即进度接口的数值） | 无 | 二（消耗蜂窝流量） |
 | 「停止」（运行中） | button「停止」 〔交互后：测速进行中才有；点 button「开始」，点 button「确认：{x}」〕 | POST `/api/speedtest/stop` `{}`（错误被页面忽略） | 1 | `/api/speedtest/progress` `phase=cancelled` | 无 | 二 |
 
 ---

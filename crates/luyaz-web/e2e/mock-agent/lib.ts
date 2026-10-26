@@ -24,7 +24,7 @@ export const SCENARIOS = [
   "old-agent-names", // agent before 2026-09-25: calls router_get_upnp_switch / router_get_qos_switch, which B27 lacks → 503 Method not found
   "apn-manual-pick", // auto APN mode, first manual profile still isEnable (owner's device 2026-09-25: isEnable = manual mode's pick, not in use)
   "apn-candidates", // auto APN with two carrier candidates (ctiot = IoT, dialled; ctnet), as on the owner's device 2026-10-03; POST /api/netinfo/apn picks one for this SIM
-  "nbrscan", // POST /api/cell/neighbors/scan keeps the old simulated scan (the real device answers 410; cell-lock tests use this)
+  "nbrscan", // POST /api/cell/neighbors/scan keeps the old simulated scan (the real device reads passively; cell-lock tests use this)
   "diag-waiting", // POST /api/diagnose: the run waits 3 s for "another operation" (waiting_for speedtest) before it starts
   "diag-slow", // POST /api/diagnose: 4 s per layer instead of 0.8 s (keeps a run going for busy-409 tests)
   "diag-sim-warn", // POST /api/diagnose: the sim layer is a suspect (eSIM channels all taken)
@@ -33,6 +33,9 @@ export const SCENARIOS = [
   "verdict-stall", // /api/public/status network.verdict = "stall" (connected, nothing comes back), signal itself good
   "verdict-crowd", // /api/public/status network.verdict = "crowd" (cell likely busy), signal itself good
   "ts-keysoon", // /api/services/tailscale: this node's key expires in 5 days (the status block warns)
+  "home-network", // /api/netinfo roaming false: the v2 speed test runs in full (default: roaming, coarse)
+  "speed-v1", // /api/speedtest/*: an old core (before 1.48.0): no method_version or other v2 fields
+  "speed-short", // /api/speedtest: the v2 run ends sample_short (no verdict)
   "mf-alldown", // manual-first notice "both down" (notice_kind alldown) in /api/public/status and /api/services/chill
 ] as const;
 

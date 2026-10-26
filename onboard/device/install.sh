@@ -3,7 +3,7 @@
 # Luya-Z 装机包：设备端（busybox ash）。
 
 # 由电脑端 install.sh 调用，不用手动跑：它先把包解到 /data/local/tmp/u60-kit，
-# 再经 ssh 或 adb shell 执行
+# 再经 ssh 执行
 #   sh device/install.sh ssh admin ui esim     按给的顺序装这些组件（chill、recover 要单独点名）
 #   sh device/install.sh status                   只读，打印各组件现状
 
@@ -25,33 +25,37 @@ RC=${KIT_RC:-/etc/rc.local}
 STATE=${KIT_STATE:-/data/luyaz/kit}       # 原厂 rc.local 备份 + 已装版本记录
 SHIPD=${KIT_SHIP_DIR:-/data/luyaz/ship}    # u60 ship：事务、清单 manifest.jsonl、开机收尾脚本 luyaz-recover.sh（touch-ui docs/SHIP.md）
 
+# 提示语言：电脑端用 LUYAZ_LANG=en|zh 传过来；没传（手动跑、测试）按中文
+case "${LUYAZ_LANG:-zh}" in en) KLANG=en ;; *) KLANG=zh ;; esac
+tx() { if [ "$KLANG" = zh ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
+
 # 输出都带 [device] 前缀，电脑端原样转给用户
 log()  { echo "[device] $*"; }   # 进度
 
-warn() { echo "[device] 注意: $*"; }   # 提醒，不中止
+warn() { echo "[device] $(tx '注意' 'warning'): $*"; }   # 提醒，不中止
 
-die()  { echo "[device] 失败: $*"; exit 1; }   # 中止整个安装
+die()  { echo "[device] $(tx '失败' 'failed'): $*"; [ -z "${PROG_C:-}" ] || prog_set "$PROG_C" failed; exit 1; }   # 中止整个安装（进度里记下停在哪个组件）
 
 # 换文件不原地覆盖：写同目录的 .new 再改名。正在跑的程序照样能换（不会 Text file busy），
 # 中途出错原文件也还在。
 put() { # <来源> <目标> <权限>
     cp "$1" "$2.new" && chmod "$3" "$2.new" && mv -f "$2.new" "$2" && return 0
-    die "写入 $2 失败"
+    die "$(tx "写入 $2 失败" "could not write $2")"
 }  # put
 
 # 整个目录换新：解到 <目标>.new，解完整了才删旧的、改名
 put_tree() { # <tgz> <目标目录>
     _nd="$2.new"
     rm -rf "$_nd"
-    { mkdir -p "$_nd" && tar xzf "$1" -C "$_nd"; } || die "解压到 $2 失败"
+    { mkdir -p "$_nd" && tar xzf "$1" -C "$_nd"; } || die "$(tx "解压到 $2 失败" "could not extract to $2")"
     chown -R 0:0 "$_nd" 2>/dev/null      # 包是在电脑上打的，属主改回 root
-    { rm -rf "$2" && mv "$_nd" "$2"; } || die "替换 $2 失败"
+    { rm -rf "$2" && mv "$_nd" "$2"; } || die "$(tx "替换 $2 失败" "could not replace $2")"
 }  # put_tree
 
 # 原厂 rc.local 只留一次：之后再改都不覆盖这份
 backup_rc() {   # 原厂备份只做一次
     if [ -f "$STATE/rc.local.orig" ]; then return 0; fi
-    mkdir -p "$STATE" && cp "$RC" "$STATE/rc.local.orig" && log "原厂 rc.local 已备份到 $STATE/rc.local.orig"   # 第一次改之前
+    mkdir -p "$STATE" && cp "$RC" "$STATE/rc.local.orig" && log "$(tx "原厂 rc.local 已备份到 $STATE/rc.local.orig" "stock rc.local backed up to $STATE/rc.local.orig")"   # 第一次改之前
 }  # backup_rc
 
 # 把改好的候选文件换成 rc.local：sh -n → 同目录临时文件 → sync → mv → sync（照 tools/luyaz after-upgrade）。
@@ -62,13 +66,13 @@ rc_write() { # <candidate>
     _rt="$RC.u60kit.tmp"
     if ! sh -n "$1"; then
         rm -f "$1"
-        die "rc.local 语法检查没过，已放弃修改"
+        die "$(tx 'rc.local 语法检查没过，已放弃修改' 'rc.local failed the syntax check; change dropped')"
     fi
     rm -f "$_rt"
     if [ -e "$RC" ]; then cp -p "$RC" "$_rt"; else : > "$_rt" && chmod 755 "$_rt"; fi &&
         cat "$1" > "$_rt" && sync && mv -f "$_rt" "$RC" && sync || {
         rm -f "$_rt" "$1"
-        die "写 rc.local 失败，原文件没动"
+        die "$(tx '写 rc.local 失败，原文件没动' 'could not write rc.local; the original is untouched')"
     }
     rm -f "$1"
 }
@@ -83,7 +87,7 @@ rc_add() { # <要加的行> <标记>
         { print }
         END { if (!put) print line }' > /tmp/rc.local.new
     rc_write /tmp/rc.local.new
-    log "rc.local 加入: $1"   # 告诉用户加了哪一行
+    log "$(tx "rc.local 加入: $1" "rc.local added: $1")"   # 告诉用户加了哪一行
 }  # rc_add
 
 # ── 设备脚本：/data/luyaz/scripts + /etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}
@@ -96,13 +100,13 @@ CORE_DIR=${KIT_CORE_DIR:-/data/luyaz/core}
 SCREEN_DIR=${KIT_SCREEN_DIR:-/data/luyaz/screen}
 
 install_scripts() {
-    [ -d "$P/scripts" ] || die "包里没有 scripts/（装机包太旧？）"
+    [ -d "$P/scripts" ] || die "$(tx '包里没有 scripts/（装机包太旧？）' 'the kit has no scripts/ (kit too old?)')"
     for d in /data/u60d /data/u60-uid /data/u60-ship /data/plugins/u60pro-devui /data/plugins/zwrt-datad; do  # RESIDUE-OK: 旧布局守卫
-        [ -d "$d" ] && die "这台还是更早的布局（有 $d）：这个装机包只装 Luya-Z 布局，先用旧版装机包升级"
+        [ -d "$d" ] && die "$(tx "这台还是更早的布局（有 $d）：这个装机包只装 Luya-Z 布局，先用旧版装机包升级" "this device still has an older layout ($d exists): this kit only installs the Luya-Z layout; upgrade with an older kit first")"
     done
     mkdir -p "$S" "$CORE_DIR" "$SCREEN_DIR"
     for f in alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh \
-             luyaz-fallback.sh; do
+             luyaz-fallback.sh net-tune.sh; do
         put "$P/scripts/$f" "$S/$f" 755
     done
     # the device scripts' version (docs/designs/component-versions.md); older kits have none
@@ -125,36 +129,36 @@ recover_check() { # <file>：sh -n + selftest 都过 = 0
 }
 
 recover_put() { # 自检过了才放：临时名 → sync → mv → sync
-    recover_check "$P/scripts/luyaz-recover.sh" || die "包里的 luyaz-recover.sh 在这台设备上 sh -n 或 selftest 不过，没装"
+    recover_check "$P/scripts/luyaz-recover.sh" || die "$(tx '包里的 luyaz-recover.sh 在这台设备上 sh -n 或 selftest 不过，没装' "the kit's luyaz-recover.sh fails sh -n or selftest on this device; not installed")"
     mkdir -p "$SHIPD" && cp "$P/scripts/luyaz-recover.sh" "$SHIPD/luyaz-recover.sh.new" && chmod 755 "$SHIPD/luyaz-recover.sh.new" \
-        && sync && mv -f "$SHIPD/luyaz-recover.sh.new" "$SHIPD/luyaz-recover.sh" && sync || die "写入 $SHIPD/luyaz-recover.sh 失败"
+        && sync && mv -f "$SHIPD/luyaz-recover.sh.new" "$SHIPD/luyaz-recover.sh" && sync || die "$(tx "写入 $SHIPD/luyaz-recover.sh 失败" "could not write $SHIPD/luyaz-recover.sh")"
 }
 
 place_recover() {
     [ -f "$P/scripts/luyaz-recover.sh" ] || return 0
     if [ ! -f "$SHIPD/luyaz-recover.sh" ]; then
         recover_put
-        log "u60 ship 开机收尾脚本: 已放到 $SHIPD/luyaz-recover.sh（自检通过）；rc.local 那一行要 ./install.sh recover 才加"
+        log "$(tx "u60 ship 开机收尾脚本: 已放到 $SHIPD/luyaz-recover.sh（自检通过）；rc.local 那一行要 ./install.sh recover 才加" "u60 ship boot cleanup script: placed at $SHIPD/luyaz-recover.sh (selftest passed); its rc.local line is added only by ./install.sh recover")"
     elif ! cmp -s "$P/scripts/luyaz-recover.sh" "$SHIPD/luyaz-recover.sh"; then
-        warn "设备上的 $SHIPD/luyaz-recover.sh 和包里的不一样，没换（换它要单独一步：./install.sh recover，先问用户）"
+        warn "$(tx "设备上的 $SHIPD/luyaz-recover.sh 和包里的不一样，没换（换它要单独一步：./install.sh recover，先问用户）" "$SHIPD/luyaz-recover.sh on the device differs from the kit's; not replaced (replacing it is a separate step: ./install.sh recover, ask the owner first)")"
     fi
 }
 
 # recover 组件：换上包里的 luyaz-recover.sh（装成 luyaz-recover.sh，自检过才换），并在 rc.local 里各服务启动行之前加一行调用它
 do_recover() {
-    [ -f "$P/scripts/luyaz-recover.sh" ] || die "包里没有 scripts/luyaz-recover.sh（装机包太旧？）"
+    [ -f "$P/scripts/luyaz-recover.sh" ] || die "$(tx '包里没有 scripts/luyaz-recover.sh（装机包太旧？）' 'the kit has no scripts/luyaz-recover.sh (kit too old?)')"
     if [ -f "$SHIPD/luyaz-recover.sh" ] && cmp -s "$P/scripts/luyaz-recover.sh" "$SHIPD/luyaz-recover.sh"; then
-        log "luyaz-recover.sh: 已是包里的版本"
+        log "$(tx 'luyaz-recover.sh: 已是包里的版本' "luyaz-recover.sh: already the kit's version")"
     else
         [ -f "$SHIPD/luyaz-recover.sh" ] && cp "$SHIPD/luyaz-recover.sh" "$SHIPD/luyaz-recover.sh.prev-kit"
         recover_put
-        log "luyaz-recover.sh: 已换上（自检通过）"
+        log "$(tx 'luyaz-recover.sh: 已换上（自检通过）' 'luyaz-recover.sh: replaced (selftest passed)')"
     fi
     # 「; [ $? = 10 ] && exec」：luyaz-recover.sh 换回了旧 rc.local（退出 10）时重读它，不接着起已经不在的哨兵
     # （同 tools/luyaz after-upgrade）
     line="sh $SHIPD/luyaz-recover.sh; [ \$? = 10 ] && exec /bin/sh $RC   # luyaz recover：开机先收尾上次没做完的 u60 ship"
     # 已有一行就不加
-    grep -v '^[[:space:]]*#' "$RC" 2>/dev/null | grep -q 'luyaz-recover\.sh' && { log "rc.local: 已有调用 luyaz-recover.sh 的一行"; return 0; }
+    grep -v '^[[:space:]]*#' "$RC" 2>/dev/null | grep -q 'luyaz-recover\.sh' && { log "$(tx 'rc.local: 已有调用 luyaz-recover.sh 的一行' 'rc.local: already has the line that calls luyaz-recover.sh')"; return 0; }
     backup_rc
     # 插在第一条服务启动行（luyaz-core / luyaz-web / luyaz-sentinel）之前；都没有就放 exit 0 之前
     awk -v ins="$line" '
@@ -162,7 +166,7 @@ do_recover() {
         { print }
         END { if (!d) print ins }' "$RC" > /tmp/rc.local.new
     rc_write /tmp/rc.local.new
-    log "rc.local 加入（在服务启动行之前）: $line"
+    log "$(tx "rc.local 加入（在服务启动行之前）: $line" "rc.local added (before the service start lines): $line")"
 }
 
 # 设备上有没结束的 u60 ship 事务时，不装会停/换我们组件的东西（admin、ui、recover）：
@@ -180,14 +184,14 @@ ship_busy() { # 有事务就打印一句原因
     done < "$SHIPD/txn"
     case "$_v" in 1 | 2) ;; *) _e= ;; esac
     if [ "$_e" != 1 ]; then
-        echo "设备上的上机事务日志 $SHIPD/txn 读不懂"
+        tx "设备上的上机事务日志 $SHIPD/txn 读不懂" "cannot read the ship transaction log $SHIPD/txn on the device"; echo
         return 0
     fi
     case "$_ph" in
         done | rolledback | aborted | manifest_pending) ;;
-        staged | trial | promote | check | manifest | rollback) echo "设备上有没结束的上机事务 $_tx（$_cp，$_ph）" ;;
-        failed) echo "设备上的上机事务 $_tx（$_cp）停在 failed，要人处理" ;;
-        *) echo "设备上的上机事务日志阶段看不懂（${_ph:-空}）" ;;
+        staged | trial | promote | check | manifest | rollback) tx "设备上有没结束的上机事务 $_tx（$_cp，$_ph）" "an unfinished ship transaction is on the device: $_tx ($_cp, $_ph)"; echo ;;
+        failed) tx "设备上的上机事务 $_tx（$_cp）停在 failed，要人处理" "ship transaction $_tx ($_cp) stopped at failed; someone needs to look at it"; echo ;;
+        *) tx "设备上的上机事务日志阶段看不懂（${_ph:-空}）" "unknown phase in the ship transaction log (${_ph:-empty})"; echo ;;
     esac
 }
 
@@ -196,7 +200,7 @@ ship_busy() { # 有事务就打印一句原因
 # kit-source 里没有这个组件的提交号：记 0000000 并标成有改动，
 # 不冒充某个干净提交编的。
 kit_record() { # <组件>
-    [ -f "$S/luyaz-ship.sh" ] && [ -f "$P/scripts/kit-source" ] || { warn "没记进设备清单（包里缺 luyaz-ship.sh 或 kit-source，装机包太旧？）"; return 0; }
+    [ -f "$S/luyaz-ship.sh" ] && [ -f "$P/scripts/kit-source" ] || { warn "$(tx '没记进设备清单（包里缺 luyaz-ship.sh 或 kit-source，装机包太旧？）' 'not recorded in the device manifest (the kit lacks luyaz-ship.sh or kit-source; kit too old?)')"; return 0; }
     stamp=$(sed -n 's/^stamp=//p' "$P/scripts/kit-source")
     commit=$(sed -n "s/^$1_commit=//p" "$P/scripts/kit-source")
     format=$(sed -n "s/^$1_format=//p" "$P/scripts/kit-source")
@@ -205,9 +209,9 @@ kit_record() { # <组件>
     [ "$dirty" = 1 ] && dirty=dirty || dirty=
     case "${KIT_MAC_TIME:-}" in '' | *[!0-9]*) KIT_MAC_TIME=$(date +%s) ;; esac
     if sh "$S/luyaz-ship.sh" record-kit "$1" "$stamp" "${commit:-0000000}" "${format:-1}" "$KIT_MAC_TIME" $dirty >/dev/null 2>&1; then
-        log "设备清单: 记下装机包 $stamp 装的 $1（${commit:-0000000}${dirty:+，有未提交改动}）"
+        log "$(tx "设备清单: 记下装机包 $stamp 装的 $1（${commit:-0000000}${dirty:+，有未提交改动}）" "device manifest: recorded $1 from kit $stamp (${commit:-0000000}${dirty:+, with uncommitted changes})")"
     else
-        warn "设备清单没记上 $1（有 u60 ship 事务在进行？看 $SHIPD/ship.log）"
+        warn "$(tx "设备清单没记上 $1（有 u60 ship 事务在进行？看 $SHIPD/ship.log）" "could not record $1 in the device manifest (a u60 ship transaction running? see $SHIPD/ship.log)")"
     fi
 }
 
@@ -228,7 +232,7 @@ rc_owner() {
     if cmp -s /tmp/rc.local.new "$RC"; then rm -f /tmp/rc.local.new; return 0; fi
     backup_rc
     rc_write /tmp/rc.local.new
-    log "rc.local: 屏幕和看门狗归哨兵（一行 /etc/init.d/luyaz-sentinel start）"
+    log "$(tx 'rc.local: 屏幕和看门狗归哨兵（一行 /etc/init.d/luyaz-sentinel start）' 'rc.local: the sentinel owns the screen and the watchdog (one line /etc/init.d/luyaz-sentinel start)')"
 }
 
 # 停掉哨兵（只 stop，绝不 disable）。哨兵停下时把界面留在屏上。
@@ -254,7 +258,7 @@ sentinel_start() { # <界面程序>
         fi
         sleep 1; i=$((i + 1))
     done
-    warn "60 秒内没确认哨兵把新界面放上屏（看 /tmp/luyaz-sentinel.log、/tmp/luyaz-sentinel.hb）"
+    warn "$(tx '60 秒内没确认哨兵把新界面放上屏（看 /tmp/luyaz-sentinel.log、/tmp/luyaz-sentinel.hb）' 'could not confirm within 60 seconds that the sentinel put the new UI on screen (see /tmp/luyaz-sentinel.log, /tmp/luyaz-sentinel.hb)')"
 }
 
 svc_running() { # <name>
@@ -279,7 +283,7 @@ STARTER
 ssh_listening() { netstat -ltn 2>/dev/null | grep -q ':2222 '; }
 
 do_ssh() {   # dropbear + 公钥 + 开机自启 + 关自动升级
-    [ -s "$P/authorized_keys" ] || die "包里没有公钥（authorized_keys）"   # 电脑端没放公钥
+    [ -s "$P/authorized_keys" ] || die "$(tx '包里没有公钥（authorized_keys）' 'the kit has no public key (authorized_keys)')"   # 电脑端没放公钥
     mkdir -p /data/ssh && chmod 700 /data/ssh   # 只有 root 能进
     put "$P/dropbear" /data/ssh/dropbear 755   # 程序本体
     # 这个 dropbear 是多合一程序，看自己被叫成什么名字决定干什么；dropbearkey 指向它就行
@@ -292,31 +296,30 @@ do_ssh() {   # dropbear + 公钥 + 开机自启 + 关自动升级
     done < "$P/authorized_keys"   # 包里带来的公钥
     chmod 600 /data/ssh/authorized_keys   # dropbear 要求权限够严
     if [ ! -s /data/ssh/dropbear_ed25519_host_key ]; then   # 已有 host key 就沿用（指纹不变）
-        /data/ssh/dropbearkey -t ed25519 -f /data/ssh/dropbear_ed25519_host_key >/dev/null 2>&1 || die "生成 host key 失败"
+        /data/ssh/dropbearkey -t ed25519 -f /data/ssh/dropbear_ed25519_host_key >/dev/null 2>&1 || die "$(tx '生成 host key 失败' 'could not create the host key')"
     fi  # do_ssh
     write_dropbear_starter
     # 写进开机自启的，必须是在这台设备上刚刚确认能起来、能监听的东西
     if ssh_listening; then
         # 这次多半就是从 SSH 进来的：进程不动，只把新公钥同步过去
-        pidof dropbear >/dev/null || die "2222 端口被别的程序占着、不是 dropbear，rc.local 没改"
+        pidof dropbear >/dev/null || die "$(tx '2222 端口被别的程序占着、不是 dropbear，rc.local 没改' 'port 2222 is taken by another program, not dropbear; rc.local not changed')"
         cp /data/ssh/authorized_keys /etc/dropbear/authorized_keys 2>/dev/null   # 运行中的 dropbear 读这份
-        log "SSH: 2222 端口已在监听，公钥已同步"   # 没动进程
+        log "$(tx 'SSH: 2222 端口已在监听，公钥已同步' 'SSH: already listening on port 2222; public keys synced')"   # 没动进程
     else  # do_ssh
         sh /data/local/tmp/start_dropbear.sh   # 和开机时同一个启动脚本
         n=0
         until ssh_listening || [ $n -ge 10 ]; do sleep 1; n=$((n + 1)); done
-        pidof dropbear >/dev/null || die "dropbear 进程没起来（/data/ssh/dropbear 在这台设备上跑不了？），rc.local 没改"
-        ssh_listening || die "dropbear 进程在、但 10 秒内没在 2222 端口监听，rc.local 没改"
-        log "SSH: dropbear 已在 2222 端口启动"   # 进程在、端口在听
+        pidof dropbear >/dev/null || die "$(tx 'dropbear 进程没起来（/data/ssh/dropbear 在这台设备上跑不了？），rc.local 没改' 'dropbear did not start (/data/ssh/dropbear cannot run on this device?); rc.local not changed')"
+        ssh_listening || die "$(tx 'dropbear 进程在、但 10 秒内没在 2222 端口监听，rc.local 没改' 'dropbear runs but did not listen on port 2222 within 10 seconds; rc.local not changed')"
+        log "$(tx 'SSH: dropbear 已在 2222 端口启动' 'SSH: dropbear started on port 2222')"   # 进程在、端口在听
     fi  # do_ssh
     rc_add "sh /data/local/tmp/start_dropbear.sh" "start_dropbear.sh"   # 确认能起来之后才写自启
     fota_off   # 装 SSH 时顺手关自动升级
 }  # do_ssh
 
 # ── 固件自动升级：装 SSH 时一并关掉 ───────────────────────────────────────────
-# 为什么：升级会换掉 /etc/rc.local（我们的自启全没了），而新固件又拿掉了开 ADB 的接口，升上去就回不来。
-# 「关」= dm_update_mode=0 且 TURNOFFPOLLING=1（项目硬规则的基准，tools/luyaz-cfgkit.py 的 FOTA_OFF、
-# doctor 用的是同一个）。这里只会往「关」写，绝不往「开」写；写完读回两项核对。
+# 为什么：升级会换掉 /etc/rc.local（我们的自启全没了）。
+# 「关」= dm_update_mode=0 且 TURNOFFPOLLING=1（项目硬规则的基准，doctor 用的是同一个）。这里只会往「关」写，绝不往「开」写；写完读回两项核对。
 fota_vals() { echo "dm_update_mode=$(uci -q get zwrt_zte_dm.dm_update.dm_update_mode) TURNOFFPOLLING=$(uci -q get zwrt_zte_dm.dm_update.TURNOFFPOLLING)"; }
 
 fota_is_off() { [ "$(fota_vals)" = "dm_update_mode=0 TURNOFFPOLLING=1" ]; }
@@ -332,9 +335,9 @@ fota_off() {   # 只往「关」写，写完读回
         uci -q set zwrt_zte_dm.dm_update.TURNOFFPOLLING=1 && uci -q commit zwrt_zte_dm
     fi
     if fota_is_off; then
-        log "固件自动升级: 已关闭（$(fota_vals)）"
+        log "$(tx "固件自动升级: 已关闭（$(fota_vals)）" "firmware auto-update: off ($(fota_vals))")"
     else  # fota_off
-        warn "没能确认关掉自动升级（读回 $(fota_vals)），请到网页后台「系统设置 → 软件升级」手动关"
+        warn "$(tx "没能确认关掉自动升级（读回 $(fota_vals)），请到网页后台「系统设置 → 软件升级」手动关" "could not confirm auto-update is off (read back $(fota_vals)); turn it off by hand in the router's web page under System Settings -> Software Upgrade")"
     fi  # fota_off
 }  # fota_off
 
@@ -354,19 +357,19 @@ web_code() { # <curl 参数…> → HTTP 状态码（连不上 = 000）
 # 密码只从 600 的临时文件读（--data-urlencode name@file），不进命令行。
 web_verify() {
     _pw=$(grep -m1 '^LUYAZ_WEB_PASSWORD=' "$WEB_ENV" 2>/dev/null) ||
-        { warn "$WEB_ENV 里没有密码"; return 1; }
+        { warn "$(tx "$WEB_ENV 里没有密码" "no password in $WEB_ENV")"; return 1; }
     _w=$(mktemp -d) || return 1
     chmod 700 "$_w"
     (umask 077; printf '%s' "${_pw#LUYAZ_WEB_PASSWORD=}" > "$_w/pw"; : > "$_w/empty")
     _u=http://127.0.0.1:9090
     _f=0
     c=$(web_code "$_u/")
-    if [ "$c" != 200 ] && [ "$c" != 000 ]; then log "  ok   没登录打开首页 → $c"; else warn "没登录打开首页 → $c（应当不给页面）"; _f=1; fi
+    if [ "$c" != 200 ] && [ "$c" != 000 ]; then log "$(tx "  ok   没登录打开首页 → $c" "  ok   home page without login -> $c")"; else warn "$(tx "没登录打开首页 → $c（应当不给页面）" "home page without login -> $c (should not show the page)")"; _f=1; fi
     c=$(web_code -D "$_w/h" -H "Origin: $_u" --data-urlencode "password@$_w/pw" "$_u/login")
-    if [ "$c" = 200 ] && grep -qi '^set-cookie: lw_sid=[^;]' "$_w/h"; then log "  ok   后台密码能登录"; else warn "后台密码登录 → $c（没拿到会话）"; _f=1; fi
+    if [ "$c" = 200 ] && grep -qi '^set-cookie: lw_sid=[^;]' "$_w/h"; then log "$(tx '  ok   后台密码能登录' '  ok   admin web password logs in')"; else warn "$(tx "后台密码登录 → $c（没拿到会话）" "admin web password login -> $c (no session)")"; _f=1; fi
     rm -f "$_w/h"
     c=$(web_code -D "$_w/h" -H "Origin: $_u" --data-urlencode "password@$_w/empty" "$_u/login")
-    if grep -qi '^set-cookie: lw_sid=[^;]' "$_w/h" 2>/dev/null; then warn "空密码登录成功了（→ $c）"; _f=1; else log "  ok   空密码登录不了（→ $c）"; fi
+    if grep -qi '^set-cookie: lw_sid=[^;]' "$_w/h" 2>/dev/null; then warn "$(tx "空密码登录成功了（→ $c）" "empty password logged in (-> $c)")"; _f=1; else log "$(tx "  ok   空密码登录不了（→ $c）" "  ok   empty password cannot log in (-> $c)")"; fi
     rm -rf "$_w"
     return $_f
 }
@@ -391,9 +394,9 @@ do_admin() {   # 管理网页 luyaz-web
     #  • 没带 → 沿用 $WEB_ENV；没有就不装
     if [ -s "$P/web-password.env" ]; then
         rm -f "$WEB_ENV"
-        WEB_AUTH_OLD="$P/web-password.env" WEB_AUTH_ENV="$WEB_ENV" sh "$S/web-auth.sh" migrate || die "写入后台密码失败"
+        WEB_AUTH_OLD="$P/web-password.env" WEB_AUTH_ENV="$WEB_ENV" sh "$S/web-auth.sh" migrate || die "$(tx '写入后台密码失败' 'could not write the admin web password')"
     elif [ ! -s "$WEB_ENV" ]; then
-        die "没有后台密码：包里没带新密码，设备上也没有 $WEB_ENV"
+        die "$(tx "没有后台密码：包里没带新密码，设备上也没有 $WEB_ENV" "no admin web password: the kit has none and $WEB_ENV is not on the device")"
     fi
     rc_add "/etc/init.d/luyaz-web start" "/etc/init.d/luyaz-web start"
 
@@ -403,10 +406,10 @@ do_admin() {   # 管理网页 luyaz-web
     while [ "$(web_code http://127.0.0.1:9090/login)" != 200 ] && [ $i -lt 20 ]; do
         sleep 1; i=$((i + 1))
     done
-    svc_running luyaz-web && pidof luyaz-web >/dev/null || die "luyaz-web 没起来，看 /tmp/luyaz-web.log 和 logread"
-    [ "$(web_code http://127.0.0.1:9090/login)" = 200 ] || die "管理网页打不开（http://127.0.0.1:9090/login），看 /tmp/luyaz-web.log"
-    web_verify || die "后台鉴权检查没过（见上）——不要让设备带着开放的后台运行"
-    log "高级后台: luyaz-web 已启动（:9090，procd 监督，鉴权三项已验证）"
+    svc_running luyaz-web && pidof luyaz-web >/dev/null || die "$(tx 'luyaz-web 没起来，看 /tmp/luyaz-web.log 和 logread' 'luyaz-web did not start; see /tmp/luyaz-web.log and logread')"
+    [ "$(web_code http://127.0.0.1:9090/login)" = 200 ] || die "$(tx '管理网页打不开（http://127.0.0.1:9090/login），看 /tmp/luyaz-web.log' 'the admin web does not open (http://127.0.0.1:9090/login); see /tmp/luyaz-web.log')"
+    web_verify || die "$(tx '后台鉴权检查没过（见上）——不要让设备带着开放的后台运行' 'the admin web login check failed (see above) -- do not leave the device running with an open admin web')"
+    log "$(tx '高级后台: luyaz-web 已启动（:9090，procd 监督，鉴权三项已验证）' 'admin web: luyaz-web started (:9090, under procd, 3 login checks passed)')"
     # Wi-Fi 兜底看门狗和告警归哨兵，随 ui 装
     kit_record lweb
 }  # do_admin
@@ -416,7 +419,7 @@ do_ui() {
     # the program, its fonts, ui.conf, the logos, the boot trace and the vendor UI's backup
     UI=/data/luyaz/ui
     mkdir -p "$UI"
-    [ -f "$P/luyaz-sentinel" ] || die "包里没有 luyaz-sentinel（装机包太旧？）"
+    [ -f "$P/luyaz-sentinel" ] || die "$(tx '包里没有 luyaz-sentinel（装机包太旧？）' 'the kit has no luyaz-sentinel (kit too old?)')"
     install_scripts
     # The sentinel would read the
     # kill below as a crash (alert, relaunch race). Stopping it leaves the UI running; the
@@ -435,10 +438,10 @@ do_ui() {
         _pd=/data/luyaz/core/plugins
         mkdir -p /data/luyaz/core
         rm -rf "$_pd.new"
-        { mkdir -p "$_pd.new" && cp "$P"/ui/plugins/* "$_pd.new/"; } || die "写入 $_pd 失败"
+        { mkdir -p "$_pd.new" && cp "$P"/ui/plugins/* "$_pd.new/"; } || die "$(tx "写入 $_pd 失败" "could not write $_pd")"
         chown -R 0:0 "$_pd.new" 2>/dev/null
         chmod 700 "$_pd.new"; chmod 600 "$_pd.new"/*
-        { rm -rf "$_pd" && mv "$_pd.new" "$_pd"; } || die "替换 $_pd 失败"
+        { rm -rf "$_pd" && mv "$_pd.new" "$_pd"; } || die "$(tx "替换 $_pd 失败" "could not replace $_pd")"
     fi
     # OUI 厂商表：包里有才装（公开构建没有）
     if [ -f "$P/ui/lanid/oui.tsv" ]; then
@@ -471,12 +474,12 @@ do_ui() {
         pidof luyaz-ui >/dev/null && pidof luyaz-core >/dev/null && break
         sleep 1; i=$((i + 1))   # 下一秒再看
     done  # do_ui
-    pidof luyaz-ui >/dev/null || die "ui 没起来，看 /tmp/luyaz-ui.log 和 /tmp/luyaz-sentinel.log"
-    [ "$(pidof luyaz-ui | wc -w)" -le 1 ] || warn "有不止一个触屏界面在跑"
-    svc_running luyaz-sentinel || warn "哨兵没在 procd 下运行，看 /tmp/luyaz-sentinel.log 和 logread"
-    pidof luyaz-core >/dev/null || warn "核心 luyaz-core 没起来，屏幕会没有数据，看 /tmp/luyaz-core.log 和 logread"
-    [ "$(pidof luyaz-core | wc -w)" -le 1 ] || warn "有不止一个核心在跑"
-    log "ui: 屏幕界面已接管"
+    pidof luyaz-ui >/dev/null || die "$(tx 'ui 没起来，看 /tmp/luyaz-ui.log 和 /tmp/luyaz-sentinel.log' 'ui did not start; see /tmp/luyaz-ui.log and /tmp/luyaz-sentinel.log')"
+    [ "$(pidof luyaz-ui | wc -w)" -le 1 ] || warn "$(tx '有不止一个触屏界面在跑' 'more than one touch UI is running')"
+    svc_running luyaz-sentinel || warn "$(tx '哨兵没在 procd 下运行，看 /tmp/luyaz-sentinel.log 和 logread' 'the sentinel is not running under procd; see /tmp/luyaz-sentinel.log and logread')"
+    pidof luyaz-core >/dev/null || warn "$(tx '核心 luyaz-core 没起来，屏幕会没有数据，看 /tmp/luyaz-core.log 和 logread' 'the core luyaz-core did not start, so the screen will have no data; see /tmp/luyaz-core.log and logread')"
+    [ "$(pidof luyaz-core | wc -w)" -le 1 ] || warn "$(tx '有不止一个核心在跑' 'more than one core is running')"
+    log "$(tx 'ui: 屏幕界面已接管' 'ui: the screen UI has taken over')"
     kit_record touch
     kit_record sentinel
     kit_record core
@@ -492,9 +495,9 @@ do_esim() {   # lpac 组件 + 读一次卡
     _flock=; command -v flock >/dev/null 2>&1 && _flock="flock -w 60 /var/run/luyaz-esim.lock"
     _eid=$($_flock /data/esim/lpac.sh chip info 2>&1 | sed -n 's/.*"eidValue":"\([0-9A-Fa-f]*\)".*/\1/p')
     if [ -z "$_eid" ]; then
-        log "eSIM: 组件已装，但没读到 eUICC 卡（现在插的是普通 SIM 的话这是正常的）"   # 不算失败
+        log "$(tx 'eSIM: 组件已装，但没读到 eUICC 卡（现在插的是普通 SIM 的话这是正常的）' 'eSIM: installed, but no eUICC card was read (normal if a plain SIM is in)')"   # 不算失败
     else
-        log "eSIM: 读到 eUICC 卡，EID $_eid"
+        log "$(tx "eSIM: 读到 eUICC 卡，EID $_eid" "eSIM: eUICC card found, EID $_eid")"
     fi  # do_esim
 }  # do_esim
 
@@ -531,7 +534,7 @@ chill_wait_running() { # <秒> <停之前的 started_at>
 }
 
 do_chill() {
-    [ -d "$P/chill" ] || die "包里没有 chill/（装机包太旧？）"
+    [ -d "$P/chill" ] || die "$(tx '包里没有 chill/（装机包太旧？）' 'the kit has no chill/ (kit too old?)')"
     fresh=0; [ -x "$C/chill.sh" ] || fresh=1
     was_running=0; svc_running chill && was_running=1
     mkdir -p "$C/bin" "$C/ruleset" "$C/run" "$C/providers" "$STATE"
@@ -566,24 +569,24 @@ do_chill() {
             f=$(uci add firewall forwarding); uci set firewall.$f.src=lan; uci set firewall.$f.dest=chill
             uci commit firewall
             /etc/init.d/firewall reload >/dev/null 2>&1
-            log "CHILL: 已建防火墙区 chill"
+            log "$(tx 'CHILL: 已建防火墙区 chill' 'CHILL: firewall zone chill created')"
         fi
     fi
     # 自启只走 rc.local（不 enable init.d，见 chill.init 开头）。关掉 CHILL = touch $C/disabled
     rc_add "[ -f $C/disabled ] || /etc/init.d/chill start" "/etc/init.d/chill start"
 
     if [ $fresh = 1 ]; then
-        log "CHILL: 已装好，没有启动。接下来："
-        log "  1. cp $C/chill.env.example $C/chill.env && chmod 600 $C/chill.env，填订阅地址；节点快照放 $C/providers/"
-        log "  2. sh $C/chill.sh safe-start，网络正常就在 5 分钟内 sh $C/chill.sh confirm"
+        log "$(tx 'CHILL: 已装好，没有启动。接下来：' 'CHILL: installed, not started. Next:')"
+        log "$(tx "  1. cp $C/chill.env.example $C/chill.env && chmod 600 $C/chill.env，填订阅地址；节点快照放 $C/providers/" "  1. cp $C/chill.env.example $C/chill.env && chmod 600 $C/chill.env, then fill in the subscription URL; put node snapshots in $C/providers/")"
+        log "$(tx "  2. sh $C/chill.sh safe-start，网络正常就在 5 分钟内 sh $C/chill.sh confirm" "  2. sh $C/chill.sh safe-start; if the network works, run sh $C/chill.sh confirm within 5 minutes")"
         return 0
     fi
     if [ $was_running = 0 ]; then
-        log "CHILL: 已更新（${changed:- 程序没变}）；原来没在跑，不启动"
+        log "$(tx "CHILL: 已更新（${changed:- 程序没变}）；原来没在跑，不启动" "CHILL: updated (${changed:- programs unchanged}); it was not running, so not started")"
         return 0
     fi
     if [ -z "$changed" ]; then
-        log "CHILL: 程序、脚本、模板都没变，只更新了规则集和面板，核心不重启"
+        log "$(tx 'CHILL: 程序、脚本、模板都没变，只更新了规则集和面板，核心不重启' 'CHILL: programs, scripts and template unchanged; only rule sets and panel updated, core not restarted')"
         return 0
     fi
     # 换了 chill.sh 必须 stop+start，reload 只让 mihomo 重读配置，监督进程还是旧脚本
@@ -591,52 +594,104 @@ do_chill() {
     /etc/init.d/chill stop >/dev/null 2>&1
     /etc/init.d/chill start
     if chill_wait_running 60 "$t0"; then
-        log "CHILL: 已更新并重启（换了:$changed），新核心运行中，70 秒后复查也正常"
+        log "$(tx "CHILL: 已更新并重启（换了:$changed），新核心运行中，70 秒后复查也正常" "CHILL: updated and restarted (replaced:$changed); the new core runs and was still fine 70 seconds later")"
         return 0
     fi
-    warn "CHILL 更新后 60 秒没回到运行状态（$(chill_state)），换回原来的版本"
+    warn "$(tx "CHILL 更新后 60 秒没回到运行状态（$(chill_state)），换回原来的版本" "CHILL not running 60 seconds after the update ($(chill_state)); going back to the previous version")"
     for f in $changed; do [ -f "$C/$f.prev" ] && mv -f "$C/$f.prev" "$C/$f"; done
     put "$C/chill.init" /etc/init.d/chill 755
     t0=$(chill_field started_at)
     /etc/init.d/chill stop >/dev/null 2>&1
     /etc/init.d/chill start
-    chill_wait_running 60 "$t0" && die "CHILL 新版起不来，已换回原来的版本并恢复运行，看 /tmp/chill.log" \
-        || die "CHILL 换回原来的版本后也没起来（$(chill_state)）。chill.sh 停机时会回滚 DNS，网络是直连；看 /tmp/chill.state 和 /tmp/chill.log"
+    chill_wait_running 60 "$t0" && die "$(tx 'CHILL 新版起不来，已换回原来的版本并恢复运行，看 /tmp/chill.log' 'the new CHILL does not start; went back to the previous version, which runs again; see /tmp/chill.log')" \
+        || die "$(tx "CHILL 换回原来的版本后也没起来（$(chill_state)）。chill.sh 停机时会回滚 DNS，网络是直连；看 /tmp/chill.state 和 /tmp/chill.log" "CHILL did not start even after going back to the previous version ($(chill_state)). chill.sh restores DNS when stopped, so traffic goes direct; see /tmp/chill.state and /tmp/chill.log")"
+}
+
+# ── 装机进度：$STATE/progress（电脑端传来 KIT_ID = 装机包 MANIFEST.txt 的 sha256 前 16 位）──
+# 每行 键=值：kit components done current step updated。每次都写同目录临时文件再 mv，掉电不会半截。
+# 同一个包上次没装完（step 不是 complete）：已装完的组件跳过，从第一个没完成的续；
+# 换了包、上次已装完、或 KIT_FRESH=1：从头来。没有 KIT_ID（手动跑、旧电脑端）不记。
+PROG=$STATE/progress
+PROG_C=
+prog_get() { sed -n "s/^$1=//p" "$PROG" 2>/dev/null | head -n 1; }   # <键>
+
+prog_write() { # <kit> <components> <done> <current> <step>
+    mkdir -p "$STATE" 2>/dev/null || return 0
+    printf 'kit=%s\ncomponents=%s\ndone=%s\ncurrent=%s\nstep=%s\nupdated=%s\n' "$1" "$2" "$3" "$4" "$5" "${KIT_MAC_TIME:-$(date +%s)}" > "$PROG.tmp" \
+        && mv -f "$PROG.tmp" "$PROG" || rm -f "$PROG.tmp"
+}
+
+prog_begin() { # <本次的组件…>：定 PROG_DONE（要跳过的）
+    PROG_DONE=
+    [ -n "${KIT_ID:-}" ] || return 0
+    if [ "${KIT_FRESH:-0}" != 1 ] && [ "$(prog_get kit)" = "$KIT_ID" ] && [ "$(prog_get step)" != complete ]; then
+        PROG_DONE=$(prog_get done)
+        [ -z "$PROG_DONE" ] || log "$(tx "同一个装机包上次停在 $(prog_get current)（$(prog_get step)）：已完成的 $PROG_DONE 跳过，从没完成的续装（KIT_FRESH=1 从头来）" "the same kit stopped last time at $(prog_get current) ($(prog_get step)): skipping the finished $PROG_DONE and resuming (KIT_FRESH=1 starts over)")"
+    fi
+    prog_write "$KIT_ID" "$*" "$PROG_DONE" "" begin
+}
+
+prog_is_done() { case " $PROG_DONE " in *" $1 "*) return 0 ;; esac; return 1; }   # <组件>
+
+prog_set() { # <组件> <步骤>
+    [ -n "${KIT_ID:-}" ] || return 0
+    prog_write "$KIT_ID" "$COMPONENTS" "$PROG_DONE" "$1" "$2"
+}
+
+prog_done() { # <组件>
+    PROG_C=
+    [ -n "${KIT_ID:-}" ] || return 0
+    PROG_DONE=${PROG_DONE:+$PROG_DONE }$1
+    prog_write "$KIT_ID" "$COMPONENTS" "$PROG_DONE" "" "done:$1"
+}
+
+prog_finish() { [ -z "${KIT_ID:-}" ] || prog_write "$KIT_ID" "$COMPONENTS" "$PROG_DONE" "" complete; }
+
+prog_status() { # status 里那一行
+    [ -f "$PROG" ] || { tx '没有记录' 'no record'; return 0; }
+    if [ "$(prog_get step)" = complete ]; then
+        tx "装机包 $(prog_get kit) 已装完：$(prog_get done)" "kit $(prog_get kit) finished: $(prog_get done)"
+    else
+        tx "装机包 $(prog_get kit) 没装完：停在 $(prog_get current)（$(prog_get step)），已完成 $(prog_get done)；同一个包再跑会续装" "kit $(prog_get kit) unfinished: stopped at $(prog_get current) ($(prog_get step)), finished $(prog_get done); running the same kit again resumes"
+    fi
 }
 
 # ── status：只读，一项一行（中文宽度对不齐，就不对齐）────────────────────────
 do_status() {   # 只读
-    p() { printf '  %s：%s\n' "$1" "$2"; }
+    p() { printf '  %s%s%s\n' "$1" "$(tx '：' ': ')" "$2"; }
     yes_no() { if eval "$1"; then echo "$2"; else echo "$3"; fi; }   # <条件> <真> <假>
-    svc() { svc_running "$1" && echo "（procd 监督）" || { [ -x "/etc/init.d/$1" ] && echo "（procd：未运行）"; }; }
+    svc() { svc_running "$1" && tx '（procd 监督）' ' (under procd)' || { [ -x "/etc/init.d/$1" ] && tx '（procd：未运行）' ' (procd: not running)'; }; }
     _fw=$(ubus call zwrt_web device_info '{}' 2>/dev/null | sed -n 's/.*"wa_inner_version": *"\([^"]*\)".*/\1/p')
-    p "固件" "${_fw:-未知}"
-    p "SSH" "$(netstat -ltn 2>/dev/null | grep -q ':2222 ' && echo '运行中 (:2222)' || echo 未运行)"   # 看端口
-    p "高级后台" "$(pidof luyaz-web >/dev/null && echo '运行中 (:9090)' || echo 未运行)$(svc luyaz-web)"
-    p "ui" "$(pidof luyaz-ui >/dev/null && echo 运行中 || echo 未运行)$([ -f "$SCREEN_DIR/gave-up" ] && echo '，已放弃重试（长按右下角 3 秒恢复）')"
-    p "哨兵" "$(pidof luyaz-sentinel >/dev/null && echo 运行中 || echo 未运行)$(svc luyaz-sentinel)$(h=$(cut -d' ' -f3 /tmp/luyaz-sentinel.hb 2>/dev/null) && [ -n "$h" ] && echo "，屏幕：$h")"
-    p "核心" "$(pidof luyaz-core >/dev/null && echo 运行中 || echo 未运行)$(svc luyaz-core)"
-    p "eSIM 组件" "$(yes_no '[ -x /data/esim/lpac ]' 已装 未装)"
-    p "上机收尾" "$([ -f "$SHIPD/luyaz-recover.sh" ] && echo 'luyaz-recover.sh 已放' || echo 'luyaz-recover.sh 没放')$(grep -v '^[[:space:]]*#' "$RC" 2>/dev/null | grep -q 'luyaz-recover\.sh' && echo '，rc.local 有那一行' || echo '，rc.local 没有那一行（./install.sh recover）')"
-    p "CHILL" "$([ -x /data/chill/chill.sh ] && { s=$(chill_state); echo "已装，${s:-未运行}$(svc chill)$([ -f /data/chill/disabled ] && echo '，已关闭')"; } || echo 未装)"
-    p "自动升级" "$(fota_is_off && echo 已关闭 || echo "没有完全关闭（$(fota_vals)）")"
-    p "USB 模式" "$(ubus call zwrt_bsp.usb list '{}' 2>/dev/null | sed -n 's/.*"mode": *"\([^"]*\)".*/\1/p')"   # 原厂 ubus
-    echo "  rc.local 自启:"   # 下面列出我们加的启动行
+    p "$(tx 固件 Firmware)" "${_fw:-$(tx 未知 unknown)}"
+    p "SSH" "$(netstat -ltn 2>/dev/null | grep -q ':2222 ' && tx '运行中 (:2222)' 'running (:2222)' || tx 未运行 'not running')"   # 看端口
+    p "$(tx 高级后台 'Admin web')" "$(pidof luyaz-web >/dev/null && tx '运行中 (:9090)' 'running (:9090)' || tx 未运行 'not running')$(svc luyaz-web)"
+    p "ui" "$(pidof luyaz-ui >/dev/null && tx 运行中 running || tx 未运行 'not running')$([ -f "$SCREEN_DIR/gave-up" ] && tx '，已放弃重试（长按右下角 3 秒恢复）' ', gave up retrying (hold the bottom-right corner for 3 seconds to bring it back)')"
+    p "$(tx 哨兵 Sentinel)" "$(pidof luyaz-sentinel >/dev/null && tx 运行中 running || tx 未运行 'not running')$(svc luyaz-sentinel)$(h=$(cut -d' ' -f3 /tmp/luyaz-sentinel.hb 2>/dev/null) && [ -n "$h" ] && tx "，屏幕：$h" ", screen: $h")"
+    p "$(tx 核心 Core)" "$(pidof luyaz-core >/dev/null && tx 运行中 running || tx 未运行 'not running')$(svc luyaz-core)"
+    p "$(tx 'eSIM 组件' 'eSIM')" "$(yes_no '[ -x /data/esim/lpac ]' "$(tx 已装 installed)" "$(tx 未装 'not installed')")"
+    p "$(tx 上机收尾 'Ship cleanup')" "$([ -f "$SHIPD/luyaz-recover.sh" ] && tx 'luyaz-recover.sh 已放' 'luyaz-recover.sh in place' || tx 'luyaz-recover.sh 没放' 'luyaz-recover.sh missing')$(grep -v '^[[:space:]]*#' "$RC" 2>/dev/null | grep -q 'luyaz-recover\.sh' && tx '，rc.local 有那一行' ', rc.local has its line' || tx '，rc.local 没有那一行（./install.sh recover）' ', rc.local lacks its line (./install.sh recover)')"
+    p "CHILL" "$([ -x /data/chill/chill.sh ] && { s=$(chill_state); echo "$(tx 已装， 'installed, ')${s:-$(tx 未运行 'not running')}$(svc chill)$([ -f /data/chill/disabled ] && tx '，已关闭' ', turned off')"; } || tx 未装 'not installed')"
+    p "$(tx 装机进度 'Install progress')" "$(prog_status)"
+    p "$(tx 自动升级 'Auto-update')" "$(fota_is_off && tx 已关闭 off || tx "没有完全关闭（$(fota_vals)）" "not fully off ($(fota_vals))")"
+    echo "  $(tx 'rc.local 自启:' 'rc.local autostart:')"   # 下面列出我们加的启动行
     grep -E "start_dropbear|/etc/init.d/(luyaz-core|luyaz-web|luyaz-sentinel|chill) start" "$RC" 2>/dev/null | sed 's/^/    /'
 }  # do_status
 
 # 测试（onboard/test/kit-rc.sh）只要上面的函数
 [ -n "${KIT_LIB_ONLY:-}" ] && return 0
 
-[ $# -gt 0 ] || die "用法: sh device/install.sh {ssh|admin|ui|esim|chill|recover|status}..."
+[ $# -gt 0 ] || die "$(tx '用法' 'usage'): sh device/install.sh {ssh|admin|ui|esim|chill|recover|status}..."
 COMPONENTS="$*"   # 给 ship_busy 之类的检查用
 case " $COMPONENTS " in
     *" admin "* | *" ui "* | *" recover "*)
         busy=$(ship_busy)
-        [ -n "$busy" ] && die "$busy：先等它结束（电脑上 tools/luyaz status 看；sh $S/luyaz-ship.sh status），这次什么都没装"
+        [ -n "$busy" ] && die "$busy$(tx "：先等它结束（电脑上 tools/luyaz status 看；sh $S/luyaz-ship.sh status），这次什么都没装" ": wait for it to finish (on the computer: tools/luyaz status; on the device: sh $S/luyaz-ship.sh status). Nothing was installed this time")"
         ;;
 esac
+[ "$1" = status ] || prog_begin "$@"
 for c in "$@"; do   # 按命令行顺序装
+    if [ "$c" != status ] && prog_is_done "$c"; then log "$(tx "$c：同一个装机包上次已装完，跳过" "$c: already installed by this kit last time; skipped")"; continue; fi
+    [ "$c" = status ] || { PROG_C=$c; prog_set "$c" started; }
     case "$c" in   # 组件名 → 函数
         ssh)     do_ssh ;;   # SSH
         admin)   do_admin ;;   # 管理网页
@@ -645,6 +700,8 @@ for c in "$@"; do   # 按命令行顺序装
         recover) do_recover ;;
         chill)   do_chill ;;
         status)  do_status ;;   # 现状
-        *)       die "不认识的组件: $c" ;;   # 其他一律拒绝
+        *)       die "$(tx "不认识的组件: $c" "unknown component: $c")" ;;   # 其他一律拒绝
     esac  # do_status
+    [ "$c" = status ] || prog_done "$c"
 done  # do_status
+[ "$1" = status ] || prog_finish

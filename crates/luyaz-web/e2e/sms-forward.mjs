@@ -98,8 +98,8 @@ async function own(p) {
   await p.fill("input[data-bind=_rn]", "TG 测试");
   await p.fill("input[data-bind=_rbt]", "777:SECRETtok");
   await p.click("#fwd-form .nd-btn--primary");
-  await done("fwd-rule", "填完整");
-  ok(/填完整/.test(await op("fwd-rule")), `missing chat id: ${await op("fwd-rule")}`);
+  await done("fwd-rule", "Chat ID 填上");
+  ok(/把 Chat ID 填上/.test(await op("fwd-rule")), `missing chat id: ${await op("fwd-rule")}`);
   await p.fill("input[data-bind=_rci]", "-42");
   await p.click("#fwd-form .nd-btn--primary");
   await inline("fwd-rule").waitFor({ timeout: 8000 }).catch(() => {});

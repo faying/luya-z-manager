@@ -32,16 +32,43 @@ impl Default for Sim {
 use super::speed::ST_COMPLETE;
 use crate::source::{Activity, NI_APN, NI_CLIENTS, NI_HOME, NI_LITE, NI_OFF, NI_PAGE};
 
+/// One rate as number + scale ("M" / "K" / ""), shared by the status bar and Home's card so
+/// both read the same: one decimal for M under 100, whole otherwise. Bits count in 1000s, bytes in 1024s.
+pub fn rate_parts(bps: i64, bits: bool) -> (Vec<u8>, &'static str) {
+    let v = if bits { bps.max(0) as f64 * 8.0 } else { bps.max(0) as f64 };
+    let k = if bits { 1000.0 } else { 1024.0 };
+    if v >= k * k {
+        let m = v / (k * k);
+        (if m < 100.0 { cf!("%.1f", m) } else { cf!("%.0f", m) }, "M")
+    } else if v >= k {
+        (cf!("%.0f", v / k), "K")
+    } else {
+        (cf!("%.0f", v), "")
+    }
+}
+
+/// A rate with its unit spelled out, for cards: 「112 Kbps」 / 「1.5 MB/s」.
+pub fn rate_unit(bps: i64, bits: bool) -> (Vec<u8>, Vec<u8>) {
+    let (n, sc) = rate_parts(bps, bits);
+    (n, cf!("%s%s", sc, if bits { "bps" } else { "B/s" }))
+}
+
 /// Status bar rate: "12.4MB" / "380KB" (bits: "12.4Mb"), or the short form "12M" / "380K"
 /// (bits: "12Mb") when space runs out. The unit letter stays in both.
 pub fn fmt_rate_top(bps: i64, bits: bool, shortf: bool) -> Vec<u8> {
+    let u = if bits { "b" } else { "B" };
+    let (n, sc) = rate_parts(bps, bits);
+    if !shortf {
+        return cf!("%s%s%s", &n, sc, u);
+    }
     let v = if bits { bps as f64 * 8.0 } else { bps as f64 };
     let k = if bits { 1000.0 } else { 1024.0 };
-    let u = if bits { "b" } else { "B" };
     if v >= k * k {
-        if shortf { cf!("%.0fM%s", v / (k * k), if bits { "b" } else { "" }) } else { cf!("%.1fM%s", v / (k * k), u) }
+        // short: one decimal under 10 still, so it reads as Home's 「2.3 Mbps」, not 「2M」
+        let m = v / (k * k);
+        if m < 10.0 { cf!("%.1fM%s", m, if bits { u } else { "" }) } else { cf!("%.0fM%s", m, if bits { "b" } else { "" }) }
     } else if v >= k {
-        cf!("%.0fK%s", v / k, if shortf && !bits { "" } else { u })
+        cf!("%.0fK%s", v / k, if bits { u } else { "" })
     } else {
         cf!("%.0f%s", v, u)
     }
@@ -117,9 +144,12 @@ impl Ui {
         }
         self.vendor_arm_tick();
         let ah = &m.agent_health;
+        // an open incident lights it too, only on fresh data from a live core (design review 3A/4A)
+        let inc_open = m.backend_silent == 0
+            && m.data.regress.as_ref().is_some_and(|r| r.fresh != 0 && r.open_total > 0);
         self.alert_st = if ah.lost_secs != 0 {
             2
-        } else if ah.unread > 0 {
+        } else if ah.unread > 0 || inc_open {
             1
         } else {
             0
@@ -148,6 +178,10 @@ impl Ui {
                 self.place_paint(false);
             }
             self.diag_refresh();
+            if self.sub_visible(Sub::Alerts) {
+                // the core gone: the incident rows turn grey and say when they stopped
+                self.incidents_paint();
+            }
             return;
         }
         // A scenario read can finish before the first core snapshot. Consume its change
@@ -257,6 +291,9 @@ impl Ui {
             let (dn2, up2) = (fmt_rate_top(d.down_bps, bits, true), fmt_rate_top(d.up_bps, bits, true));
             let full = cf!("↓%s ↑%s", &dn, &up);
             let shrt = cf!("↓%s ↑%s", &dn2, &up2);
+            // tight: no space, no unit letter; only then the upload goes
+            let strip = |s: &[u8]| -> Vec<u8> { s.strip_suffix(b"b").or_else(|| s.strip_suffix(b"B")).unwrap_or(s).to_vec() };
+            let tight = cf!("↓%s↑%s", &strip(&dn2), &strip(&up2));
             let down = cf!("↓%s", &dn2);
             // charging = charger_connect only: d.charging is a status code, truthy almost always
             let chg = d.charger_in != 0 && d.chg_volt_uv > 1000000;
@@ -268,12 +305,12 @@ impl Ui {
                 kit::show(self.top_batt.nub, true);
             }
             let alert_col = if self.alert_st == 2 { th.bad_t } else { th.warn_t };
-            self.statusbar_layout(&full, &shrt, &down, d.batt_pct, chg, self.alert_st != 0, alert_col);
+            self.statusbar_layout(&full, &shrt, &tight, &down, d.batt_pct, chg, self.alert_st != 0, alert_col);
         }
 
         self.home_signal_paint(&v, core_silent);
-        self.home_exit_paint();
         self.home_scene_paint(sc_changed);
+        self.home_row_paint();
         self.home_landing_paint();
         if self.tab_visible(TAB_HOME) || self.tab_visible(super::TAB_EXIT) || self.sub_visible(super::Sub::Ts) {
             self.home_ts_paint();
@@ -289,6 +326,9 @@ impl Ui {
         self.sms_paint();
         if self.polled.alerts {
             self.alerts_paint();
+        }
+        if self.sub_visible(Sub::Alerts) {
+            self.incidents_paint();
         }
         self.sig_paint(&v.mode_word);
 
@@ -423,5 +463,12 @@ mod tests {
         assert_eq!(fmt_rate_top(1532000, false, false), b"1.5MB");
         assert_eq!(fmt_rate_top(188000, false, true), b"184K");
         assert_eq!(fmt_rate_top(900, false, false), b"900B");
+        // Home's card reads the same numbers: 112 Kbps, not 0.1 Mbps
+        assert_eq!(rate_parts(14000, true), (b"112".to_vec(), "K"));
+        assert_eq!(rate_parts(1532000, true), (b"12.3".to_vec(), "M"));
+        assert_eq!(rate_parts(20_000_000, true), (b"160".to_vec(), "M"));
+        assert_eq!(fmt_rate_top(20_000_000, true, false), b"160Mb");
+        assert_eq!(rate_unit(188000, false), (b"184".to_vec(), b"KB/s".to_vec()));
+        assert_eq!(rate_unit(900, true), (b"7".to_vec(), b"Kbps".to_vec()));
     }
 }

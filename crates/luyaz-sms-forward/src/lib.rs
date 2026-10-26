@@ -21,23 +21,24 @@ use serde::{Deserialize, Serialize};
 mod api;
 mod lease;
 mod model;
+mod queue;
 mod send;
 mod text;
 
 pub use lease::{remove_lease, wait_lease_free, write_lease, LEASE_FILE, LEASE_WAIT};
 pub use model::{ForwardDestination, ForwardLogEntry, ForwardRule, HttpHeader, SmsFilter, SmsForwardConfig};
 pub(crate) use model::DecodedSms;
+pub use queue::{backoff_secs, fingerprint, Job, JobState, Queue, QUEUE_PATH};
 use send::{
-    destination_type_name, forward_to, forward_with_retry, http_agent, is_forward_loop, is_garbled_echo,
+    destination_type_name, forward_to, http_agent, is_forward_loop, is_garbled_echo,
     is_transient_error, matches_filter,
 };
 use text::{decode_ucs2_hex, is_ucs2_hex, now_ts, preview};
 
 /// Log lines kept in the state file (oldest dropped first).
 const MAX_LOG_ENTRIES: usize = 200;
-/// Pause between two rules of the same SMS, and between two SMS.
+/// Pause between two sends of one drain.
 const RULE_GAP: Duration = Duration::from_millis(500);
-const SMS_GAP: Duration = Duration::from_secs(1);
 
 pub const CONFIG_PATH: &str = "/data/local/tmp/sms_forward.json";
 pub const STATE_PATH: &str = "/data/local/tmp/sms_forward_state.json";
@@ -108,12 +109,6 @@ pub struct HeldSms {
     pub delivered_rules: Vec<u32>,
 }
 
-/// A held SMS that still has not gone out after this much online time is
-/// skipped for the rules still failing (one broken target must not block
-/// every later SMS forever).
-const HOLD_TIMEOUT_SECS: u64 = 6 * 3600;
-const HOLD_TIMEOUT_NOTE: &str = "等待超时跳过";
-
 /// Counts time only while online. `observe(now, online)` is called with the
 /// link state from `now` on; it returns the seconds since the previous
 /// observation if the link was up since then (an interval that started
@@ -133,32 +128,6 @@ impl OnlineClock {
         self.last = Some((now, online));
         add
     }
-}
-
-/// Settle the hold after one delivery attempt of `sms_id`. Not deferred →
-/// hold cleared. Deferred → hold started (or kept) with the rules delivered
-/// so far; once it has waited `HOLD_TIMEOUT_SECS` online, the outcome turns
-/// into `Skipped` and the alert text is returned (the hold is then cleared,
-/// so this happens once per SMS).
-fn settle_hold(held: &mut Option<HeldSms>, sms_id: u64, outcome: Delivery, delivered: &[u32], wall: i64) -> (Delivery, Option<String>) {
-    let Delivery::Deferred(err) = outcome else {
-        *held = None;
-        return (outcome, None);
-    };
-    let h = match held {
-        Some(h) if h.sms_id == sms_id => h,
-        _ => held.insert(HeldSms { sms_id, first_deferred_at: wall, ..Default::default() }),
-    };
-    let mut rules = delivered.to_vec();
-    rules.sort_unstable();
-    rules.dedup();
-    h.delivered_rules = rules;
-    if h.online_secs < HOLD_TIMEOUT_SECS {
-        return (Delivery::Deferred(err), None);
-    }
-    let alert = format!("SMS {sms_id} not forwarded after {}h online, skipped: {err}", h.online_secs / 3600);
-    *held = None;
-    (Delivery::Skipped(format!("{HOLD_TIMEOUT_NOTE}: {err}")), Some(alert))
 }
 
 /// Whole seconds of `CLOCK_MONOTONIC` (immune to wall-clock steps).
@@ -373,10 +342,16 @@ pub struct SmsForwarder {
     /// held at (a deferred SMS is tried again later: rules that already got
     /// it, automatically or by a manual retry, are not sent it twice).
     delivered: Mutex<HashSet<(u64, u32)>>,
-    /// Online-only clock for the held SMS's timeout.
+    /// Where the delivery queue is saved, and the queue as last saved (plus unsaved online time).
+    queue_path: PathBuf,
+    queue: Mutex<Queue>,
+    /// Online-only clock for the queued jobs' give-up time.
     online_clock: Mutex<OnlineClock>,
     /// Wakes the forwarder (connectivity came back, new SMS).
     wake: Mutex<Option<mpsc::Sender<Wake>>>,
+    /// The core `sms` summary the last check saw: seen again with nothing to do, the block may
+    /// have stopped following the device, so that check also reads ubus directly.
+    last_summary: Mutex<Option<(u64, u64)>>,
 }
 
 /// Two link flags, both down until something says otherwise.
@@ -431,17 +406,28 @@ impl SmsForwarder {
         let config_path: PathBuf = config_path.into();
         let state_path: PathBuf = state_path.into();
         let saved: ForwardState = read_state(&state_path);
+        let queue_path = state_path.with_file_name("sms-forward-queue.json");
         SmsForwarder {
+            queue: Mutex::new(Queue::load(&queue_path).unwrap_or_default()),
+            queue_path,
             delivered: Mutex::new(delivered_of(&saved)),
             state: Mutex::new(saved),
             config: Mutex::new(load_json(&config_path)),
             link: Link::default(),
             online_clock: Mutex::default(),
             wake: Mutex::new(None),
+            last_summary: Mutex::new(None),
             config_path,
             state_path,
             host,
         }
+    }
+
+    /// The queue saved at `path` instead (the core: [`QUEUE_PATH`] under its data dir).
+    pub fn queue_at(mut self, path: impl Into<PathBuf>) -> Self {
+        self.queue_path = path.into();
+        self.queue = Mutex::new(Queue::load(&self.queue_path).unwrap_or_default());
+        self
     }
 
     /// One try at whichever link flag is still down; true when both are known up.
@@ -530,15 +516,15 @@ impl SmsForwarder {
         self.link.service() && self.link.wan()
     }
 
-    /// Add the online time since the last tick to the held SMS (in memory;
-    /// persisted with the next save).
+    /// Add the online time since the last tick to every pending job (in memory; saved with the
+    /// next transition).
     fn tick_online(&self) {
         let gained = self.online_clock.lock().unwrap().observe(mono_secs(), self.online());
         if gained == 0 {
             return;
         }
-        if let Some(h) = self.state.lock().unwrap().held.as_mut() {
-            h.online_secs += gained;
+        for j in self.queue.lock().unwrap().jobs.iter_mut().filter(|j| j.state == JobState::Pending) {
+            j.online_secs += gained;
         }
     }
 
@@ -576,7 +562,7 @@ impl SmsForwarder {
         };
         let mut st = self.state.lock().unwrap();
         st.last_forwarded_id = top;
-        st.last_forwarded_time = max_time(st.last_forwarded_time, newest);
+        st.last_forwarded_time = sane_time(max_time(st.last_forwarded_time, newest));
         self.save_state(&st);
         eprintln!("[sms_forward] watermark initialized to {top}");
     }
@@ -600,11 +586,25 @@ impl SmsForwarder {
         self.check(first);
         sched.polled(started.elapsed());
         'wakes: loop {
-            let woke = rx.recv_timeout(sched.wait(started.elapsed()));
+            let wait = match self.queue_wait() {
+                Some(q) => sched.wait(started.elapsed()).min(q),
+                None => sched.wait(started.elapsed()),
+            };
+            let woke = rx.recv_timeout(wait);
             match woke {
                 // a burst queues many wakes; one pass pages through all of them
                 Ok(Wake) => while rx.try_recv().is_ok() {},
-                Err(mpsc::RecvTimeoutError::Timeout) if !sched.due(started.elapsed()) => continue 'wakes,
+                // a queued job came due before the next poll: just the queue
+                Err(mpsc::RecvTimeoutError::Timeout) if !sched.due(started.elapsed()) => {
+                    if !self.host.active() {
+                        return eprintln!("[sms_forward] handed over: forwarder stopped");
+                    }
+                    let cfg = self.config.lock().unwrap().clone();
+                    if is_active(&cfg) && !self.host.hold() {
+                        self.drain(&cfg, &http_agent());
+                    }
+                    continue 'wakes;
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     return eprintln!("[sms_forward] wake channel closed");
@@ -635,25 +635,35 @@ impl SmsForwarder {
             return eprintln!("[sms_forward] held: SIM switch in progress");
         }
         self.init_watermark();
+        self.seed(summary.is_some());
+        self.scan(summary, &cfg, &live);
+        self.drain(&cfg, &http_agent());
+    }
 
-        let agent = http_agent();
+    /// The pass: everything above the watermark goes into the queue.
+    fn scan(&self, summary: Option<(u64, u64)>, cfg: &SmsForwardConfig, live: &[&ForwardRule]) {
         let host = &*self.host;
-        let mut forward = |sms: &DecodedSms| self.deliver(sms, &cfg, &live, &agent);
+        let mut forward = |sms: &DecodedSms| self.enqueue(sms, cfg, live);
         let mut commit = |watermark: u64, last_time: Option<i64>| {
             let mut st = self.state.lock().unwrap();
-            (st.last_forwarded_id, st.last_forwarded_time) = (watermark, last_time);
+            (st.last_forwarded_id, st.last_forwarded_time) = (watermark, sane_time(last_time));
             self.save_state(&st);
         };
         let position = || {
             let st = self.state.lock().unwrap();
-            (st.last_forwarded_id, st.last_forwarded_time)
+            (st.last_forwarded_id, sane_time(st.last_forwarded_time))
         };
 
         if let Some((top, _)) = summary {
+            let repeated = self.last_summary.lock().unwrap().replace((top, summary.unwrap().1)) == summary;
             let (from, since) = position();
             let mut via_core = |after: u64, limit: u64| host.list_after(after, limit);
             let res = recorded_pass(host, "core", from, since, top, &mut via_core, &mut forward, &mut commit);
             match res {
+                // The derived block only moves on a ubus event; one missed (or rate limited)
+                // leaves it at the watermark while new SMS wait. Same summary as last time and
+                // nothing to do: confirm with a direct read (cheap: the idle poll is 5 min).
+                Ok(0) if repeated && top == from => {}
                 Ok(0) => return,
                 Ok(n) => return eprintln!("[sms_forward] forwarded {n} message(s) after id {from} (via core)"),
                 // whatever got through is committed; the direct read below finishes the job (D2)
@@ -676,158 +686,303 @@ impl SmsForwarder {
         }
     }
 
-    /// Sends one SMS through every matching rule and logs each try; when all succeeded the
-    /// device copy is marked read / deleted as configured. [`Delivery::Deferred`] (a transient failure
-    /// on some rule) holds the watermark at this SMS; rules that already got
-    /// it are remembered and skipped next time.
-    fn deliver(&self, sms: &DecodedSms, config: &SmsForwardConfig, enabled_rules: &[&ForwardRule], agent: &ureq::Agent) -> Delivery {
-        let mut errors: Vec<String> = Vec::new();
-        self.tick_online();
-        let held_before = self.state.lock().unwrap().held.clone();
+    /// Queues one SMS for every matching rule (saved before the watermark moves past it) and
+    /// returns at once: the sends are [`drain`](Self::drain)'s. An SMS whose fingerprint was
+    /// seen before (a SIM re-read gave it a new id) is not queued again. A rule that already got
+    /// it under the old single hold (`delivered`) is queued as sent.
+    fn enqueue(&self, sms: &DecodedSms, config: &SmsForwardConfig, enabled_rules: &[&ForwardRule]) -> Delivery {
+        // no longer the owner: this SMS stays above the watermark for the next one
+        if !self.host.active() {
+            return Delivery::Deferred(HANDED_OVER.into());
+        }
+        let key = fingerprint(&sms.sender, &sms.date, &sms.content);
+        let now = now_ts();
+        let mut q = self.queue.lock().unwrap();
+        if q.is_seen(&key) {
+            eprintln!("[sms_forward] SMS {} already queued before (same sender, date and text): not again", sms.id);
+            return Delivery::Delivered;
+        }
+        let delivered = self.delivered.lock().unwrap().clone();
         let mut steps: Vec<Value> = Vec::new();
-        let last = enabled_rules.len().saturating_sub(1);
-        for (n, rule) in enabled_rules.iter().enumerate() {
+        let mut jobs = Vec::new();
+        for rule in enabled_rules {
             let dest = destination_type_name(&rule.destination);
-            let mut note = |step: &str| steps.push(json!({"rule": rule.id, "dest": dest, "step": step}));
-            // the firmware's garbled echo of our own SMS forward, a non-match, or a rule that
-            // already got this held SMS: nothing to send
-            let pass = if is_forward_loop(&rule.destination, &sms.sender) && is_garbled_echo(&sms.content) {
-                Some("echo")
+            // the firmware's garbled echo of our own SMS forward, or a non-match: nothing to send
+            let step = if is_forward_loop(&rule.destination, &sms.sender) && is_garbled_echo(&sms.content) {
+                "echo"
             } else if !matches_filter(&rule.filter, &sms.sender, &sms.content) {
-                Some("no_match")
-            } else if self.delivered.lock().unwrap().contains(&(sms.id, rule.id)) {
-                Some("already")
+                "no_match"
+            } else if delivered.contains(&(sms.id, rule.id)) {
+                "already"
             } else {
-                None
+                "queued"
             };
-            if let Some(why) = pass {
-                note(why);
+            steps.push(json!({"rule": rule.id, "dest": dest, "step": step}));
+            if step == "echo" || step == "no_match" {
                 continue;
             }
-            // no longer the owner: this SMS stays held (transient), later rules are not tried
-            if !self.host.active() {
-                note("transient");
-                errors.push(HANDED_OVER.into());
-                break;
-            }
-            // an SMS target needs cellular service, every other one the WAN
-            let blocked = match rule.destination {
-                ForwardDestination::Sms { .. } => (!self.link.service()).then_some(NO_SERVICE_ERR),
-                _ => (!self.link.wan()).then_some(NO_WAN_ERR),
-            };
-            let result = if let Some(why) = blocked {
-                eprintln!("[sms_forward] skipping forward for SMS {} -> {dest}: {why}", sms.id);
-                Err(why.to_string())
-            } else {
-                forward_with_retry(&*self.host, &rule.destination, sms, agent)
-            };
-            let handed_over = matches!(&result, Err(e) if e == HANDED_OVER);
-            let step = match &result {
-                Ok(()) => "ok",
-                Err(e) if is_transient_error(e) => "transient",
-                Err(_) => "permanent",
-            };
-            note(step);
-            match &result {
-                Ok(()) => {
-                    self.delivered.lock().unwrap().insert((sms.id, rule.id));
-                }
-                Err(e) => errors.push(e.clone()),
-            }
-
-            let entry = ForwardLogEntry {
-                timestamp: now_ts(),
+            jobs.push(Job {
+                key: key.clone(),
+                rule_id: rule.id,
                 sms_id: sms.id,
                 sender: sms.sender.clone(),
-                content_preview: preview(&sms.content, 80),
-                rule_name: rule.name.clone(),
-                destination_type: destination_type_name(&rule.destination).to_string(),
-                success: result.is_ok(),
-                error: result.err(),
-                rule_id: rule.id,
                 content: sms.content.clone(),
                 date: sms.date.clone(),
-            };
+                state: if step == "already" { JobState::Sent } else { JobState::Pending },
+                attempts: 0,
+                next_at: now,
+                created_at: now,
+                online_secs: 0,
+                last_error: None,
+            });
+        }
+        let nothing_to_send = jobs.is_empty();
+        let mut saved = q.clone();
+        saved.see(&key, now);
+        saved.jobs.extend(jobs);
+        if let Err(e) = saved.save(&self.queue_path) {
+            // not durable: hold the watermark here and try again on the next pass
+            eprintln!("[sms_forward] could not queue SMS {}: {e}", sms.id);
+            return Delivery::Deferred(format!("queue: {e}"));
+        }
+        *q = saved;
+        drop(q);
+        {
+            let mut st = self.state.lock().unwrap();
+            if st.held.as_ref().is_some_and(|h| h.sms_id == sms.id) {
+                st.held = None;
+                self.delivered.lock().unwrap().clear();
+            }
+        }
+        self.host.tick(json!({"kind": "enqueue", "sms_id": sms.id, "wall": now, "rules": steps}));
+        // nothing matched: done with it at once (as when every rule succeeded)
+        if nothing_to_send {
+            self.after_forward(sms.id, &key, config);
+        }
+        Delivery::Delivered
+    }
 
+    /// A rule's jobs can be tried now: it is on and its link is up (a removed rule runs, to be
+    /// marked failed).
+    fn runnable(&self, cfg: &SmsForwardConfig, rule_id: u32) -> bool {
+        match cfg.rules.iter().find(|r| r.id == rule_id) {
+            None => true,
+            Some(r) if !r.enabled => false,
+            Some(r) => match r.destination {
+                ForwardDestination::Sms { .. } => self.link.service(),
+                _ => self.link.wan(),
+            },
+        }
+    }
+
+    /// How long until a queued job comes due (`None`: nothing waits on a timer).
+    fn queue_wait(&self) -> Option<Duration> {
+        let cfg = self.config.lock().unwrap().clone();
+        if !is_active(&cfg) {
+            return None;
+        }
+        let q = self.queue.lock().unwrap();
+        let secs = q.wait_secs(now_ts(), &|r| self.runnable(&cfg, r))?;
+        Some(Duration::from_secs(secs.max(1) as u64))
+    }
+
+    /// The SMS already on the device at or below the watermark are fingerprinted once (first
+    /// start with the queue, or forwarding just switched on), so a SIM re-read that renumbers
+    /// them above the watermark does not send them. A failed read tries again next check.
+    fn seed(&self, via_core: bool) {
+        if self.queue.lock().unwrap().seeded {
+            return;
+        }
+        let wm = self.state.lock().unwrap().last_forwarded_id;
+        let host = &*self.host;
+        let mut keys = Vec::new();
+        let (mut after, mut pages) = (0, 0);
+        loop {
+            let page = if via_core {
+                host.list_after(after, LIST_PAGE)
+            } else {
+                list_after_direct(after, LIST_PAGE, &mut |store, page| ubus_sms_page(host, store, page))
+            };
+            let page = match page {
+                Ok(p) => p,
+                Err(e) => return eprintln!("[sms_forward] could not fingerprint the SMS on the device: {e}"),
+            };
+            let last = page.items.iter().map(item_id).max().unwrap_or(after);
+            for item in &page.items {
+                if let (id, Some(m)) = decode_item(item) {
+                    if id <= wm {
+                        keys.push(fingerprint(&m.sender, &m.date, &m.content));
+                    }
+                }
+            }
+            pages += 1;
+            if !page.has_more || last <= after || last > wm || pages >= 2 * LIST_MAX_PAGES {
+                break;
+            }
+            after = last;
+        }
+        let now = now_ts();
+        let mut q = self.queue.lock().unwrap();
+        for k in &keys {
+            q.see(k, now);
+        }
+        q.seeded = true;
+        q.prune(now);
+        self.save_queue(&q);
+        eprintln!("[sms_forward] fingerprinted {} SMS already on the device", keys.len());
+    }
+
+    /// One try for every due job (per rule the oldest pending one), again while a rule's head
+    /// went out; a transient failure backs that job off ([`backoff_secs`]) and its rule waits,
+    /// the others go on. Size and age bounds afterwards (an alert for each job given up).
+    fn drain(&self, cfg: &SmsForwardConfig, agent: &ureq::Agent) {
+        self.tick_online();
+        loop {
+            let now = now_ts();
+            let picks: Vec<(String, u32)> = {
+                let mut q = self.queue.lock().unwrap();
+                q.clamp(now);
+                let due = q.due(now, &|r| self.runnable(cfg, r));
+                due.into_iter().map(|i| (q.jobs[i].key.clone(), q.jobs[i].rule_id)).collect()
+            };
+            if picks.is_empty() {
+                break;
+            }
+            for (n, (key, rule_id)) in picks.iter().enumerate() {
+                if !self.host.active() || self.host.hold() {
+                    return;
+                }
+                if n > 0 {
+                    self.host.sleep(RULE_GAP);
+                }
+                self.attempt(key, *rule_id, cfg, agent);
+            }
+        }
+        let given_up = {
+            let mut q = self.queue.lock().unwrap();
+            let before = q.clone();
+            let given_up = q.prune(now_ts());
+            if *q != before {
+                self.save_queue(&q);
+            }
+            given_up
+        };
+        for j in given_up {
+            let text = format!("SMS {} not forwarded to rule {}, given up: {}", j.sms_id, j.rule_id, j.last_error.clone().unwrap_or_default());
+            eprintln!("[sms_forward] {text}");
+            {
+                let mut st = self.state.lock().unwrap();
+                for e in st.log.iter_mut().filter(|e| e.sms_id == j.sms_id && e.rule_id == j.rule_id && !e.success) {
+                    if let Some(err) = e.error.as_mut() {
+                        if !err.contains(queue::GIVE_UP_NOTE) {
+                            *err = format!("{err}（{}）", queue::GIVE_UP_NOTE);
+                        }
+                    }
+                }
+                self.save_state(&st);
+            }
+            self.host.alert("sms-forward-stuck", &text);
+        }
+    }
+
+    /// One send of one job; its new state saved, its log line written; when this was the SMS's
+    /// last job and every one went out, the device copy is marked read / deleted as configured.
+    fn attempt(&self, key: &str, rule_id: u32, cfg: &SmsForwardConfig, agent: &ureq::Agent) {
+        let find = |q: &Queue| q.jobs.iter().position(|j| j.key == key && j.rule_id == rule_id && j.state == JobState::Pending);
+        let job = {
+            let q = self.queue.lock().unwrap();
+            match find(&q) {
+                Some(i) => q.jobs[i].clone(),
+                None => return,
+            }
+        };
+        let rule = cfg.rules.iter().find(|r| r.id == rule_id);
+        let msg = DecodedSms { id: job.sms_id, sender: job.sender.clone(), content: job.content.clone(), date: job.date.clone() };
+        let result = match rule {
+            None => Err(format!("rule {rule_id} removed {}", send::PERMANENT)),
+            Some(r) => forward_to(&*self.host, &r.destination, &msg, agent),
+        };
+        let dest = rule.map_or("removed", |r| destination_type_name(&r.destination));
+        let now = now_ts();
+        let finished = {
+            let mut q = self.queue.lock().unwrap();
+            let Some(i) = find(&q) else { return };
+            let j = &mut q.jobs[i];
+            match &result {
+                Ok(()) => {
+                    j.state = JobState::Sent;
+                    j.last_error = None;
+                }
+                Err(e) if !is_transient_error(e) => {
+                    j.state = JobState::Failed;
+                    j.last_error = Some(e.clone());
+                }
+                Err(e) => {
+                    j.attempts += 1;
+                    j.next_at = now + backoff_secs(j.attempts);
+                    j.last_error = Some(e.clone());
+                    eprintln!("[sms_forward] SMS {} -> {dest} try {} failed: {e}; next in {} s", j.sms_id, j.attempts, backoff_secs(j.attempts));
+                }
+            }
+            self.save_queue(&q);
+            (!q.has_pending(key)).then(|| q.all_sent(key))
+        };
+        if let Some(rule) = rule {
+            let entry = ForwardLogEntry {
+                timestamp: now,
+                sms_id: job.sms_id,
+                sender: job.sender.clone(),
+                content_preview: preview(&job.content, 80),
+                rule_name: rule.name.clone(),
+                destination_type: dest.to_string(),
+                success: result.is_ok(),
+                error: result.as_ref().err().cloned(),
+                rule_id,
+                content: job.content.clone(),
+                date: job.date.clone(),
+            };
             let mut state = self.state.lock().unwrap();
             push_log(&mut state.log, entry);
             if state.log.len() > MAX_LOG_ENTRIES {
                 let excess = state.log.len() - MAX_LOG_ENTRIES;
                 state.log.drain(..excess);
             }
-            drop(state);
-            if handed_over {
-                break;
-            }
-
-            // Delay between rules for the same SMS
-            if n < last {
-                self.host.sleep(RULE_GAP);
-            }
-        }
-
-        let delivered_now: Vec<u32> =
-            self.delivered.lock().unwrap().iter().filter(|(id, _)| *id == sms.id).map(|(_, r)| *r).collect();
-        let wall = now_ts();
-        let (outcome, alert) = {
-            let mut state = self.state.lock().unwrap();
-            let (outcome, alert) = settle_hold(&mut state.held, sms.id, delivery_outcome(&errors), &delivered_now, wall);
-            self.host.tick(json!({
-                "kind": "deliver",
-                "sms_id": sms.id,
-                "wall": wall,
-                "held_before": held_before,
-                "rules": steps,
-                "delivered_now": delivered_now,
-                "outcome": delivery_kind(&outcome),
-                "held_after": state.held,
-                "alert": alert.is_some(),
-                "mark_read": config.mark_read_after_forward,
-                "delete": config.delete_after_forward,
-            }));
-            if alert.is_some() {
-                for e in state.log.iter_mut().filter(|e| e.sms_id == sms.id && !e.success) {
-                    if let Some(err) = e.error.as_mut() {
-                        if !err.contains(HOLD_TIMEOUT_NOTE) {
-                            *err = format!("{err}（{HOLD_TIMEOUT_NOTE}）");
-                        }
-                    }
-                }
-            }
             self.save_state(&state);
-            (outcome, alert)
+        }
+        if finished == Some(true) {
+            self.after_forward(job.sms_id, key, cfg);
+        }
+    }
+
+    /// Mark read / delete the device copy (as configured), only if that id still holds the same
+    /// SMS: by now a SIM re-read may have given the id to another one.
+    fn after_forward(&self, sms_id: u64, key: &str, config: &SmsForwardConfig) {
+        if !config.mark_read_after_forward && !config.delete_after_forward {
+            return;
+        }
+        let same = match self.host.list_after(sms_id.saturating_sub(1), 1) {
+            Ok(p) => p.items.first().is_some_and(|item| match decode_item(item) {
+                (id, Some(m)) => id == sms_id && fingerprint(&m.sender, &m.date, &m.content) == key,
+                _ => false,
+            }),
+            Err(e) => {
+                eprintln!("[sms_forward] could not re-read SMS {sms_id}: {e}; left as it is");
+                return;
+            }
         };
-        if let Some(text) = alert {
-            eprintln!("[sms_forward] SMS {} {HOLD_TIMEOUT_NOTE} (held over {HOLD_TIMEOUT_SECS}s online)", sms.id);
-            self.host.alert("sms-forward-stuck", &text);
+        if !same {
+            return eprintln!("[sms_forward] SMS {sms_id} is no longer the forwarded one: left as it is");
         }
-        match &outcome {
-            Delivery::Deferred(e) => {
-                eprintln!("[sms_forward] SMS {} deferred ({e}); will resume from it on the next wake-up", sms.id);
-                self.host.sleep(SMS_GAP);
-                return outcome;
-            }
-            Delivery::Skipped(e) => eprintln!("[sms_forward] SMS {} skipped after a permanent error: {e}", sms.id),
-            Delivery::Delivered => {}
-        }
-        self.delivered.lock().unwrap().clear();
-        let all_succeeded = errors.is_empty();
-
-        // Post-forward actions — only when ALL rules succeeded
-        if all_succeeded && config.mark_read_after_forward {
-            if let Err(e) = self.host.control("sms.mark_read", &json!({"ids": sms.id.to_string(), "tag": 0})) {
-                eprintln!("[sms_forward] mark-read failed for SMS {}: {e}", sms.id);
+        if config.mark_read_after_forward {
+            if let Err(e) = self.host.control("sms.mark_read", &json!({"ids": sms_id.to_string(), "tag": 0})) {
+                eprintln!("[sms_forward] mark-read failed for SMS {sms_id}: {e}");
             }
         }
-        if all_succeeded && config.delete_after_forward {
-            if let Err(e) = self.host.control("sms.delete", &json!({"ids": sms.id.to_string()})) {
-                eprintln!("[sms_forward] delete failed for SMS {}: {e}", sms.id);
+        if config.delete_after_forward {
+            if let Err(e) = self.host.control("sms.delete", &json!({"ids": sms_id.to_string()})) {
+                eprintln!("[sms_forward] delete failed for SMS {sms_id}: {e}");
             }
         }
-
-        // Delay between different SMS messages
-        self.host.sleep(SMS_GAP);
-        outcome
     }
 }
 
@@ -914,8 +1069,10 @@ fn record_pass(
     (res, rec)
 }
 
-/// Pre-forward connectivity failures: transient, the SMS waits for the link.
+/// Pre-forward connectivity failures (the tests' model of a pass).
+#[cfg(test)]
 const NO_SERVICE_ERR: &str = "no cellular service (will retry)";
+#[cfg(test)]
 const NO_WAN_ERR: &str = "no WAN connectivity (will retry)";
 /// The host stopped owning forwarding mid-delivery: transient, the next owner resumes.
 const HANDED_OVER: &str = "handed over";
@@ -926,14 +1083,16 @@ enum Delivery {
     /// Every matching rule succeeded (or none matched): move past it.
     Delivered,
     /// Some rule failed permanently (4xx / config): logged, move past it.
+    #[allow(dead_code)] // run_pass's contract with luyaz-policy keeps it
     Skipped(String),
     /// Some rule failed transiently (no link, connection error, timeout,
     /// 5xx, retries used up): stop here, resume from this SMS next time.
     Deferred(String),
 }
 
-/// Rule errors of one SMS → its outcome. Any transient error wins: the SMS
-/// is held so that rule gets it later.
+/// Rule errors of one SMS → its outcome (the tests' model of a pass). Any transient error wins:
+/// the SMS is held.
+#[cfg(test)]
 fn delivery_outcome(errors: &[String]) -> Delivery {
     if let Some(e) = errors.iter().find(|e| is_transient_error(e)) {
         return Delivery::Deferred(e.clone());
@@ -1018,6 +1177,26 @@ fn is_reimported(sms: &DecodedSms, last_time: Option<i64>) -> bool {
 /// The later of two optional times; a missing one never wins.
 fn max_time(a: Option<i64>, b: Option<i64>) -> Option<i64> {
     a.into_iter().chain(b).max()
+}
+
+/// How far past the system clock an SMS time may be and still count: the device clock is
+/// local time labelled UTC (up to 14 h off) plus SMS-centre skew.
+const FUTURE_MARGIN_SECS: i64 = 2 * 86_400;
+
+/// A time (the [`sms_time_key`] scale, seconds since 2000-01-01 UTC) beyond now + margin: a bad
+/// SMS date. Kept as the last forwarded time it would make every later SMS look re-imported, so
+/// [`SmsForwarder::check`] neither saves nor uses one (the pure [`run_pass`] stays clock-free).
+fn sane_time(t: Option<i64>) -> Option<i64> {
+    t.filter(|&t| !in_future(t))
+}
+
+fn in_future(t: i64) -> bool {
+    const UNIX_2000: i64 = 946_684_800;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64 - UNIX_2000)
+        .unwrap_or(i64::MAX);
+    t > now.saturating_add(FUTURE_MARGIN_SECS)
 }
 
 /// Page through the device's SMS above the watermark and forward them. Pure:
@@ -1235,6 +1414,13 @@ impl SmsForwarder {
         let _ = atomic_write(&self.config_path, text.as_bytes());
     }
 
+    /// The queue, durably; a failure is logged (the next transition tries again).
+    fn save_queue(&self, q: &Queue) {
+        if let Err(e) = q.save(&self.queue_path) {
+            eprintln!("[sms_forward] could not save the queue: {e}");
+        }
+    }
+
     /// State is saved compact, often.
     fn save_state(&self, state: &ForwardState) {
         if let Ok(text) = serde_json::to_string(state) {
@@ -1262,6 +1448,11 @@ fn commit_config(fwd: &SmsForwarder, was_active: bool, config: &SmsForwardConfig
         state.last_forwarded_time = None;
         state.held = None;
         fwd.save_state(&state);
+        drop(state);
+        // what is on the device now is fingerprinted again before the first pass
+        let mut q = fwd.queue.lock().unwrap();
+        q.seeded = false;
+        fwd.save_queue(&q);
         eprintln!("[sms_forward] forwarding switched on: baseline reset");
     }
 }

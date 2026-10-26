@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::cellular::nz;
+use super::refresh::rate_unit;
 use super::{Sub, Ui, VIEW_H};
 use crate::cf;
 use crate::kit::{self, BtnKind, Seg, CARD_W, MARGIN, PAD, ROW_H, TAB_PAD};
@@ -31,6 +32,9 @@ pub struct Charts {
     tx: Series,
     net_dn: Obj,
     net_up: Obj,
+    /// axis marks: 10 MB/s and 100 KB/s, written in the unit setting (80Mb / 800Kb)
+    ax_hi: Obj,
+    ax_lo: Obj,
     cpu: Obj,
     cpu_s: Series,
     cpu_v: Obj,
@@ -52,6 +56,9 @@ pub struct Charts {
     acc_bat: i64,
     acc_n: i32,
     pts: i32,
+    /// the snapshot the last point came from: a step with no new data adds none (a still
+    /// screen must not redraw)
+    ver: u64,
 }
 
 #[derive(Default, Clone)]
@@ -110,18 +117,6 @@ pub fn rate_scale(bps: i64) -> i32 {
     }
     let v = (bps as f64).log10() * 100.0 / 8.0; // 10^8 B/s == full scale
     v.clamp(0.0, 100.0) as i32
-}
-
-/// A rate in bytes per second: whole B/s below a kilobyte, else KB/s or MB/s to one decimal.
-pub fn fmt_rate(bps: i64) -> Vec<u8> {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * KB;
-    let r = bps as f64;
-    match r {
-        _ if r >= MB => cf!("%.1f MB/s", r / MB),
-        _ if r >= KB => cf!("%.1f KB/s", r / KB),
-        _ => cf!("%ld B/s", bps),
-    }
 }
 
 /// Card-coloured backing so the chart's grid line does not run through the text.
@@ -597,13 +592,14 @@ impl Ui {
     }
 
     /// 原「图表」标签 (2026-09-25 into 系统, under 电池与负载). y0 = the first card's place;
-    /// returns the height taken. The net-speed card goes on Home.
+    /// returns the height taken.
     fn build_charts(&mut self, p: Obj, y0: i32) -> i32 {
         let th = t();
         let f = uf();
         // 网速: log scale (bytes/s spans five orders of magnitude here), two lines told apart
         // by colour and dash, legend in text colours
-        let c = kit::card(self.home.scroll, MARGIN, 0, CARD_W, 116);
+        // on 系统 since 1.12.4 (Home has its own wave in the status card)
+        let c = kit::card(p, MARGIN, y0, CARD_W, 116);
         kit::label(c, f.cj12, th.t3, 12, 9, tr("网速 · 对数刻度"));
         let ch = &mut self.charts;
         ch.net_card = c;
@@ -611,13 +607,14 @@ impl Ui {
         ch.net_dn = kit::label_r(c, f.n12, th.acc_t, 200, 8, "");
         (ch.net, ch.rx, ch.tx) = kit::chart(c, 44, 30, 244, 60, CHART_PTS, th.blue, th.orange);
         // rate_scale: 10^8 B/s = 100 → 10 MB/s at 87.5, 100 KB/s at 62.5. The axis shows
-        // 50–100 (~30 KB/s to 100 MB/s): below that is idle chatter.
-        ch.net.chart_set_axis_range(sys::lv_chart_axis_t::LV_CHART_AXIS_PRIMARY_Y, 50, 100);
-        kit::label(c, f.n11, th.t3, 12, 30 + 60 * 25 / 100 - 7, "10M");
-        kit::label(c, f.n11, th.t3, 12, 30 + 60 * 75 / 100 - 7, "100K");
+        // 40–100 (~1.6 KB/s to 100 MB/s): the upload is often a few KB/s and sat on the floor
+        ch.net.chart_set_axis_range(sys::lv_chart_axis_t::LV_CHART_AXIS_PRIMARY_Y, 40, 100);
+        ch.ax_hi = kit::label(c, f.n11, th.t3, 12, 30 + 60 * 125 / 600 - 7, "");
+        ch.ax_lo = kit::label(c, f.n11, th.t3, 12, 30 + 60 * 375 / 600 - 7, "");
         kit::label_r(c, f.cj12, th.t3, 288, 94, tr("近 5 分钟"));
         ch.wait[0] = chart_wait(c, 56, 52);
 
+        let y0 = y0 + 116 + 10;
         let a = kit::card(p, MARGIN, y0, 145, 110);
         let m = kit::card(p, MARGIN + 155, y0, 145, 110);
         kit::label(a, f.cj12, th.t3, 12, 9, "CPU");
@@ -638,8 +635,7 @@ impl Ui {
         (ch.bat, ch.bat_s, _) = kit::chart(b, 12, 56, 276, 36, CHART_PTS, th.green, 0);
         kit::label_r(b, f.cj12, th.t3, 288, 92, tr("近 5 分钟"));
         ch.wait[3] = chart_wait(b, 8, 66);
-        self.home_reflow();
-        120 + 110
+        116 + 10 + 120 + 110
     }
 
     /// 健康 on 系统: the device check's counts (refreshed before the core check: it is the
@@ -739,12 +735,14 @@ impl Ui {
         ch.acc_tx += d.up_bps;
         ch.acc_bat += d.batt_pct as i64;
         ch.acc_n += 1;
-        if ch.acc_n >= CHART_STEP {
+        if ch.acc_n >= CHART_STEP && m.core_version != ch.ver {
+            ch.ver = m.core_version;
             let n = ch.acc_n as i64;
             ch.cpu.chart_set_next_value(ch.cpu_s, (ch.acc_cpu / n) as i32);
             ch.mem.chart_set_next_value(ch.mem_s, (ch.acc_mem / n) as i32);
             ch.net.chart_set_next_value(ch.rx, rate_scale(ch.acc_rx / n));
             ch.net.chart_set_next_value(ch.tx, rate_scale(ch.acc_tx / n));
+            let rx = ch.acc_rx / n;
             ch.bat.chart_set_next_value(ch.bat_s, (ch.acc_bat / n) as i32);
             (ch.acc_cpu, ch.acc_mem, ch.acc_rx, ch.acc_tx, ch.acc_bat, ch.acc_n) = (0, 0, 0, 0, 0, 0);
             if ch.pts < CHART_READY {
@@ -753,14 +751,20 @@ impl Ui {
                     kit::show(w, ch.pts < CHART_READY);
                 }
             }
+            self.home_wave_push(rx); // Home's speed wave: the same points
         }
         let ch = self.charts.clone();
         self.set(ch.cpu_v, cf!("%ld%%", d.cpu_pct.max(0)));
         self.set(ch.cpu_t, cf!("%ld°C", d.soc_temp));
         self.set(ch.mem_v, cf!("%ld%%", d.mem_pct));
         self.set(ch.mem_sub, cf!("%ldM / %ldM", (d.mem_size - d.mem_free) / 1048576, d.mem_size / 1048576));
-        self.set(ch.net_dn, cf!("↓ %s", &fmt_rate(d.down_bps)));
-        self.set(ch.net_up, cf!("↑ %s", &fmt_rate(d.up_bps)));
+        // the same numbers and unit setting as the status bar and Home's card
+        let bits = self.conf.speed_bits;
+        let ((dn, du), (un, uu)) = (rate_unit(d.down_bps, bits), rate_unit(d.up_bps, bits));
+        self.set(ch.net_dn, cf!("↓ %s %s", &dn, &du));
+        self.set(ch.net_up, cf!("↑ %s %s", &un, &uu));
+        self.set(ch.ax_hi, if bits { "80Mb" } else { "10MB" });
+        self.set(ch.ax_lo, if bits { "800Kb" } else { "100KB" });
         ch.net_up.update_layout();
         ch.net_dn.align(lv::LV_ALIGN_TOP_RIGHT, -(12 + ch.net_up.width() + 8), 8);
         let chg = d.charger_in != 0 && d.chg_volt_uv > 1000000;
@@ -818,19 +822,6 @@ mod tests {
         assert_eq!(rate_scale(1532000), 77);
         assert_eq!(rate_scale(100_000_000), 100);
         assert_eq!(rate_scale(1_000_000_000_000), 100);
-    }
-
-    #[test]
-    fn rates_as_c_prints_them() {
-        assert_eq!(fmt_rate(1532000), b"1.5 MB/s");
-        assert_eq!(fmt_rate(188000), b"183.6 KB/s");
-        assert_eq!(fmt_rate(900), b"900 B/s");
-        // the edges
-        assert_eq!(fmt_rate(1023), b"1023 B/s");
-        assert_eq!(fmt_rate(1024), b"1.0 KB/s");
-        assert_eq!(fmt_rate(1048575), b"1024.0 KB/s");
-        assert_eq!(fmt_rate(1048576), b"1.0 MB/s");
-        assert_eq!(fmt_rate(-5), b"-5 B/s");
     }
 }
 

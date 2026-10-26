@@ -399,6 +399,65 @@ DESIGN.zh-CN.md §5 用来描述网页、跟框架无关的词。只在文档和
 | 三档写操作 | write tiers | 写操作按后果分三档：直接发（direct）/ 页内确认（inline）/ 弹窗确认（dialog）；以前写作 `useWriteOp` |
 | 外框 | shell | 每页都有的导航 + 横条那一层 |
 
+## 16. 事故（变差才通知，10-24；core `longterm/regress/mod.rs` `name()`，网页 /alerts、触屏告警子页、MCP 同一套）
+
+名称由 core 送（`name_zh` / `name_en`），触屏不另放对照。触屏 ≤ 6 个中文字，英文 ≤ 18 字符；详情第二行用 `kind_label` 的长句。
+
+| kind | 中文 | English |
+|---|---|---|
+| regress-mem、regress-mem-abs | 内存超标 | High memory |
+| regress-reboot | 意外重启 | Unexpected reboot |
+| regress-cellular | 蜂窝断线 | Cellular down |
+| regress-egress | 出口不通（第二行写 CHILL / Tailscale） | Route down |
+| regress-power、regress-power-abs | 耗电变高 | Higher power draw |
+| regress-core-down | 数据服务停了 | Data service down |
+| regress-recorder | 记录停了 | Recorder stalled |
+| regress-blind | 看不见：蜂窝 / 出口 / 耗电 | Can't watch cellular / routes / power |
+| core-crash | 数据服务崩溃 | Data service crash |
+| ui-crash | 触屏闪退 | Screen UI crash |
+| web-crash | 管理网页崩溃 | Admin web crash |
+| sentinel-crash | 哨兵崩溃 | Sentinel crash |
+| ui-gave-up | 触屏换回原厂 | Stock UI fallback |
+| sentinel-silent | 哨兵没心跳 | Sentinel silent |
+| wifi-restore-failed | Wi-Fi没打开 | Wi-Fi won't start |
+| 不认得的 | 设备异常 | Device issue |
+
+状态词：还开着 / still open（▲ 警告；「看不见」用 ● 中性灰）；已恢复 / Recovered（● 正常，有恢复信号）；已结束 · N 次 / Ended · N×（● 正常，崩溃这类窗口过了没再来，**不是**已恢复；详情写「1 小时内没再发生」，重启「6 小时内没再发生」）；因重启中断 / cut by a reboot（网页）。读不到：事故数据停在 hh:mm（触屏，行变灰）/ 读不到事故数据 / core 版本太旧，不支持事故；网页「读不到事故：…」「7 天内没有事故」「还有 N 条，可用 MCP 或 tools/luyaz 查」，触屏「还有 N 个开着」「24 小时内没有事故」。同时观察到 / Seen at the same time：只写看到的现象，不写原因。
+
+regress 短信（`sms.rs` `regress_zh`/`regress_en`）：模板 + 告警文字里的细节 + 尾巴「恢复消息见网页「告警」页 / Discord」/「recovery: web Alerts / Discord」，整条 ≤ 134 个 UCS-2 字（两段长短信），超了先截细节。
+
+## 17. 测速 v2（net-performance 第 1 期，10-25；core `crates/luyaz-speedtest` verdict，触屏测速页、网页 /tools/speedtest 同一套）
+
+层名和结论行的字来自 core（`verdict.layers[].value_*`、`summary_*`），界面不自己拼。触屏放不下时用右列的短写（量宽定，DR8）。
+
+| 中文 | English | 触屏短写 |
+|---|---|---|
+| 分层 | Layers | — |
+| 单连接 | Single connection | Single conn. |
+| 代理 | Proxy | — |
+| 下载时卡 | Lag under load | Under load |
+| 无线 | Radio | — |
+| 基站、Wi-Fi | Cell, Wi-Fi | — |
+| 慢在<层>、<层> / 慢在<层>、<层>等 N 处 | Slow at <layer>, <layer> / Slow at <layer>, <layer> and N more | — |
+| 没发现瓶颈 | No bottleneck found | — |
+| 下载时延迟 +N ms / 上传时延迟 +N ms | Latency +N ms downloading / uploading | — |
+| 信号差，以上数字受限于无线 | weak signal: the numbers above are limited by radio | — |
+| 没测（没开「经 CHILL」/ CHILL 没在运行 / 中途停了 / 中途换了小区、节点、主出口 / 流量上限 / 样本太少） | Not tested (reasons likewise) | — |
+| 空闲延迟 / 单连接下载 / 多连接下载 / 经 CHILL 下载 / 多连接上传（阶段字，前面带「3/5 · 」） | Idle latency / Single-connection download / Multi-connection download / Download via CHILL / Multi-connection upload | — / 1-conn download / Multi download / Via CHILL / Multi upload |
+| N 条连接 · 前 2 秒不计（粗测 0.5 秒） | N connections · first 2 s not counted | N connection(s) · first 2 s dropped |
+| N 条连接上传 | N-connection upload | — |
+| 样本不足，数字只供参考 | Too few samples; rough figure | — |
+| 粗测 · 漫游中只测 5 秒 / 粗测 · 只测 5 秒 | Rough test · 5 s only while roaming / Rough test · 5 s only | Rough · … |
+| 也测经 CHILL | Also test via CHILL | Also via CHILL |
+| 漫游中只粗测 / CHILL 没在运行（开关灰时右侧） | Rough test only while roaming / CHILL not running | Rough only, roaming / — |
+| 约 30 秒 · 最多 750 MB / 约 40 秒 · 最多 1.15 GB | ~30 s · ≤750 MB / ~40 s · ≤1.15 GB | — |
+| 漫游中：只粗测 5 秒、最多 30 MB | Roaming: rough test, 5 s, ≤30 MB | — |
+| 用掉 N MB | used N MB | — |
+| 下载时延迟（网页结果墙第 4 格） | Ping while downloading | — |
+| 全程均值 / 抖动 / 连接数 / 内核调参：开、关（网页详情） | Whole-run average / Jitter / Connections / Kernel tuning: On, Off | — |
+
+网页行内确认是整句，照现有写法带句号（「会用掉移动数据：约 30 秒 · 最多 750 MB。」）。
+
 ## 外部评审（10-01，独立子代理；Codex 卡死没跑成）
 
 15 条采纳 14 条：漫游写成找运营商/套餐而非 SIM；RSRP/SINR/RSRQ 带单位；no action needed 代替 nothing to do；ui-gave-up 说清长按是换回；on backup 易被当成电池，改 using fallback；Airplane 代替 Cell off（和提示一致）；核心掉线照实写 Data service offline；web admin；干扰统一叫 Noise；提示行一句话用 `;`；带宽 Wide、No cell、Cell busy、Restricted 等小改。

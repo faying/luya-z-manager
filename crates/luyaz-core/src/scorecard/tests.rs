@@ -222,6 +222,24 @@ fn core_coverage_reaches_the_card() {
     let (h, e) = (text(&out.hours), text(&out.events));
     let t = card(&h, &e);
     assert!(t.contains("账本：1 次开机，3 小时的记录"), "{t}");
+    // the live card on a device with no guard ledger and no cut (u60g): the core's layer alone
+    let d = std::env::temp_dir().join(format!("u60d-live-nocut-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(d.join("long")).unwrap();
+    std::fs::write(d.join("long/hours.jsonl"), &h).unwrap();
+    std::fs::write(d.join("long/events.jsonl"), &e).unwrap();
+    let paths = super::live::Paths {
+        ledger: d.join("ledger"),
+        long: d.join("long"),
+        crashcap: d.join("crashcap"),
+        alerts_queue: d.join("queue"),
+        uid_state: d.join("screen"),
+        standby_base: d.join("standby.baseline"),
+    };
+    let live = super::live::card(&paths, 86_400.0, false, None);
+    let _ = std::fs::remove_dir_all(&d);
+    assert!(live.contains("账本：1 次开机，3 小时的记录"), "{live}");
+    assert!(!live.contains("账本还没有记录"), "{live}");
     let p1 = row(&t, "P1");
     assert!(p1.contains("覆盖完整"), "{p1}\n{t}");
     assert!(
