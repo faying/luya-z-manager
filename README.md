@@ -2,9 +2,9 @@
 
 # Luya-Z Manager
 
-**A replacement admin web, touch screen UI and on-device core for a 5G portable hotspot.**
+**A learning and research project: rebuilding the admin web, touch screen UI and on-device core of a 5G portable hotspot built on OpenWrt.**
 
-Clear signal readouts, band and cell locking, eSIM, SMS, health checks and a watchdog, on the device's front panel and in your browser.
+Shared to read and discuss. It is not a product or a service, and not a recommendation to modify your own device.
 
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/faying/luya-z-manager?sort=date&display_name=tag)](https://github.com/faying/luya-z-manager/releases)
@@ -19,10 +19,10 @@ Clear signal readouts, band and cell locking, eSIM, SMS, health checks and a wat
 </div>
 
 > [!NOTE]
-> **Hardware:** runs on the ZTE U60 Pro (MU5250). Community project, not affiliated with ZTE. Use at your own risk.
+> **Hardware:** written for the ZTE U60 Pro (MU5250). A personal learning and research project, not affiliated with ZTE. Modifying a device can void its warranty or leave it unusable; anything you do with this code is at your own risk.
 
 > [!IMPORTANT]
-> **Can I install it?** A fresh install works on firmware **B31 or earlier**. On B27 or earlier the installer gets in by itself; from B28 on ZTE removed that interface, so you need working SSH on the device first — how you open it is outside the scope of this project. Versions after B31 are untested. Check your version first ([how](docs/GETTING-STARTED.md#2-prerequisites)) and **do not update the firmware before installing**.
+> **Which firmware was it tried on?** B27 and B31 (one unit that came with B31, one upgraded from B27). B28 – B30 and anything after B31 have not been tried. The install kit only works over an SSH login you already have; it never opens a way into the device, and how you get one is outside the scope of this project. Check your version first ([how](docs/GETTING-STARTED.md#2-prerequisites)) and **do not update the firmware before installing**.
 
 ## Contents
 
@@ -31,6 +31,8 @@ Clear signal readouts, band and cell locking, eSIM, SMS, health checks and a wat
 - [Versions and updates](#versions-and-updates) · [Project status](#project-status) · [Documentation](#documentation) · [Credits](#credits) · [License](#license-and-disclaimer)
 
 ## Why
+
+The U60 Pro runs OpenWrt underneath, which makes it a good device to learn on: how a vendor builds on ubus, uci and procd, how a 5G modem reports its state, and what can be changed without breaking it. The code here is what that study turned into.
 
 The stock firmware hides most of what the modem knows behind a slow web UI and a front panel that shows little more than bars. Luya-Z puts one local API in front of the device (`luyaz-core`) and builds two interfaces on it:
 
@@ -71,7 +73,7 @@ All screenshots use the English UI with made-up data. **[Feature tour](docs/SCRE
 | **Reliability** | procd supervision for the core, the admin web and the sentinel; Wi-Fi fallback watchdog; alert banners, a Health page and optional alert SMS; a change log of every setting change; a network-mode change that cannot connect is reverted automatically |
 | **Operations** | `./install.sh doctor` read-only health check, `backup` / `restore` for configuration, per-component updates with rollback ([DEPLOY.md](DEPLOY.md)) |
 | **Proxy (CHILL)** | Optional transparent proxy on native mihomo: a generic template (one subscription, a small rule set), a panel behind the admin web, an exit page on the touch screen; installed separately with `./install.sh chill` ([docs/PROXY.md](docs/PROXY.md)) |
-| **Install kit** | One `./install.sh` on a new device sets up SSH, the admin web, the touch UI and eSIM, and turns off automatic firmware updates |
+| **Install kit** | Over an existing SSH login, one `./install.sh` sets up the admin web, the touch UI and eSIM, and turns off automatic firmware updates |
 
 The proxy is not part of the full install. It ships with no subscription or personal rules: you add your own subscription URL in `chill.env` on the device.
 
@@ -80,9 +82,9 @@ The proxy is not part of the full install. It ships with no subscription or pers
 | | |
 |---|---|
 | Device | ZTE U60 Pro (MU5250) |
-| Firmware for a fresh install | **B31 or earlier**; B28 – B31 need SSH opened first (see the note at the top) |
+| Firmware tried | B27 and B31, one unit each; B28 – B30 and after B31 not tried (see the note at the top) |
 | Build machine | Docker (macOS or Linux); the kit builds everything inside containers, no local toolchain needed |
-| Install | A computer on the device's Wi-Fi, a USB-C data cable and the router admin password |
+| Install | A computer on the device's network and a working SSH login (`root`, port 2222, key) |
 | Binaries | None published yet: you build them yourself, the guide has every step |
 
 ## Quick start
@@ -92,7 +94,7 @@ The proxy is not part of the full install. It ships with no subscription or pers
 ```sh
 ./onboard/build-kit.sh                 # → onboard/dist/luyaz-kit-YYYYMMDD.tar.gz
 # unpack the kit; connect the computer to the device's Wi-Fi, then:
-./install.sh                           # first install; plug in USB-C when it asks
+./install.sh                           # first install, over SSH
 ./install.sh doctor                    # read-only health check
 ```
 
@@ -171,7 +173,7 @@ The five parts — core, admin web, sentinel, touch UI and device scripts — ea
 
 ## Project status
 
-Maintained by one person and tested on one device (CN firmware). It is used daily, but expect rough edges on other firmware variants and regions. Bug reports with `./install.sh doctor` output are welcome.
+A personal learning and research project, maintained by one person and tried on two units (CN firmware). There is no support commitment and no roadmap promise. Issues and discussion are welcome; for a bug, `./install.sh doctor` output helps.
 
 **There is no official seller.** Luya-Z is free. If you paid for a device with Luya-Z installed, or for an install service, the price and any support are between you and the seller; Luya-Z has nothing to do with the sale. Devices bought that way get the same help as anyone else: open an issue with `./install.sh doctor` output.
 

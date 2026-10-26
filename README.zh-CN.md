@@ -2,9 +2,9 @@
 
 # Luya-Z 管理后台
 
-**给 5G 随身 Wi-Fi 换上的管理网页、触屏界面和设备端核心。**
+**一个学习研究项目：为一台底层是 OpenWrt 的 5G 随身 Wi-Fi 重写管理网页、触屏界面和设备端核心。**
 
-信号看得懂、能锁频锁小区、管 eSIM 和短信、有体检和看门狗——在设备前面板上，也在浏览器里。
+公开出来供阅读和讨论。它不是产品，也不是服务，不建议任何人改装自己的设备。
 
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/faying/luya-z-manager?sort=date&display_name=tag)](https://github.com/faying/luya-z-manager/releases)
@@ -19,10 +19,10 @@
 </div>
 
 > [!NOTE]
-> **适用硬件：** 中兴 U60 Pro（MU5250）。社区项目，和中兴（ZTE）没有关系，风险自负。
+> **适用硬件：** 为中兴 U60 Pro（MU5250）而写。个人学习研究项目，和中兴（ZTE）没有关系。改装设备可能失去保修，甚至让设备无法使用；用这些代码做的任何事，风险自负。
 
 > [!IMPORTANT]
-> **我的设备能装吗？** 从零安装支持固件 **B31 及更早**。B27 及更早，安装程序自己就能进设备；B28 起中兴删了那个接口，需要你自己先让设备能 SSH 登录——怎么开不在本项目范围内。B31 之后的版本没测过。先查自己的版本（[怎么查](docs/GETTING-STARTED.zh-CN.md#2-准备)），**装之前别升级固件**。
+> **在哪些固件上试过？** B27 和 B31（一台出厂即 B31，一台由 B27 升级）。B28～B30 和 B31 之后都没试过。装机包只走你已有的 SSH 登录，不会自己打开进入设备的途径；怎么取得不在本项目范围内。先查自己的版本（[怎么查](docs/GETTING-STARTED.zh-CN.md#2-准备)），**装之前别升级固件**。
 
 ## 目录
 
@@ -31,6 +31,8 @@
 - [版本与更新](#版本与更新) · [项目状态](#项目状态) · [文档](#文档) · [致谢](#致谢) · [许可证](#许可证与免责声明)
 
 ## 为什么做
+
+U60 Pro 的底层是 OpenWrt，很适合拿来学习：厂商怎样在 ubus、uci、procd 上做产品，5G 模组怎样报告自己的状态，哪些地方能改而不把设备改坏。这里的代码就是这番研究的结果。
 
 原厂固件把调制解调器知道的大部分信息藏在一个很慢的网页后面，前面板也只显示几格信号。Luya-Z 在设备上放一套本机 API（`luyaz-core`），在它上面做了两个界面：
 
@@ -71,7 +73,7 @@
 | **可靠性** | 核心、管理网页、哨兵由 procd 监督；Wi-Fi 兜底看门狗；告警横幅、「健康」页、可选告警短信；每次改设置都记进变更记录；改网络模式后连不上会自动退回 |
 | **运维** | `./install.sh doctor` 只读体检，`backup` / `restore` 备份配置，单个组件更新和回退（[DEPLOY.zh-CN.md](DEPLOY.zh-CN.md)） |
 | **代理（CHILL）** | 可选的透明代理，基于原生 mihomo：通用模板（一个订阅、精简规则）、经管理网页的面板、触屏「出口」页；用 `./install.sh chill` 单独装（[docs/PROXY.zh-CN.md](docs/PROXY.zh-CN.md)） |
-| **装机包** | 新设备一条 `./install.sh` 装好 SSH、管理网页、触屏、eSIM，并关掉固件自动升级 |
+| **装机包** | 在已有的 SSH 登录上，一条 `./install.sh` 装好管理网页、触屏、eSIM，并关掉固件自动升级 |
 
 代理不在全套安装里，也不带任何订阅和个人规则：订阅地址由你自己写进设备上的 `chill.env`。
 
@@ -80,9 +82,9 @@
 | | |
 |---|---|
 | 设备 | 中兴 U60 Pro（MU5250） |
-| 从零安装的固件 | **B31 及更早**；B28～B31 要先开 SSH（见顶部说明） |
+| 试过的固件 | B27、B31 各一台；B28～B30 和 B31 之后没试过（见顶部说明） |
 | 编译用的电脑 | 装好 Docker（macOS 或 Linux）；装机包在容器里编全部程序，本机不用装工具链 |
-| 安装 | 一台连着设备 Wi-Fi 的电脑、一根能传数据的 USB-C 线、路由器管理密码 |
+| 安装 | 一台连着设备网络的电脑，以及能用的 SSH 登录（`root`、端口 2222、密钥） |
 | 二进制 | 目前不发布，需要自己编，指南里有完整步骤 |
 
 ## 快速开始
@@ -92,7 +94,7 @@
 ```sh
 ./onboard/build-kit.sh                 # → onboard/dist/luyaz-kit-YYYYMMDD.tar.gz
 # 解开装机包，电脑连上设备的 Wi-Fi，然后：
-./install.sh                           # 首次安装；提示时插上 USB-C 线
+./install.sh                           # 首次安装，走 SSH
 ./install.sh doctor                    # 只读体检
 ```
 
@@ -171,7 +173,7 @@ docs/          GETTING-STARTED、SCREENSHOTS、ARCHITECTURE、DESIGN.md（界面
 
 ## 项目状态
 
-一个人维护，只在一台设备（国内版固件）上测过。每天在用，但换了固件版本或地区难免有毛病。报问题时附上 `./install.sh doctor` 的输出最好。
+个人学习研究项目，一个人维护，在两台设备（国内版固件）上试过。不承诺支持，也不承诺路线图。欢迎开 issue 讨论；报问题时附上 `./install.sh doctor` 的输出最好。
 
 **没有官方卖家。** Luya-Z 免费提供。如果你付钱买了装好 Luya-Z 的设备或安装服务，费用和售后是你和卖家之间的事，与 Luya-Z 无关。这样买来的设备和别人一样：有问题开 issue，附上 `./install.sh doctor` 的输出。
 
