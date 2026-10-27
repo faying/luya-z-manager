@@ -77,7 +77,17 @@ pub struct Diag {
     /// roaming now (the core's view), for the speed confirm
     pub net_roam: bool,
     tone: i32,
+    /// Home's footer asked for this layer (core `story.fix` diag:<layer>): scroll to its row
+    /// once the run is done and tint it briefly; "" = none
+    pub focus: String,
+    /// the tinted row and when the tint started (lv tick)
+    flash: Option<(usize, u32)>,
+    /// where the page scrolled for it (sub_open scrolls to the top after the first paint)
+    pub focus_top: Option<i32>,
 }
+
+/// how long the asked-for row stays tinted
+const FLASH_MS: u32 = 1600;
 
 unsafe extern "C" fn dg_start_cb(_e: *mut sys::lv_event_t) {
     super::with(|u| u.dg_start_tap());
@@ -564,8 +574,27 @@ impl Ui {
             let w = self.dg.row[k];
             kit::show(w.bx, true);
             w.bx.set_y(y);
+            if r.state == DG_DONE && !self.dg.focus.is_empty() && l.id == self.dg.focus {
+                self.dg.focus.clear();
+                self.dg.flash = Some((k, lv::tick_get()));
+                kit::bg(w.bx, t().wash_w);
+                w.bx.set_style_bg_opa(lv::OPA_COVER, 0);
+                let top = (self.dg.card.style_y(0) + y - 8).max(0);
+                self.dg.scroll.scroll_to_y(top);
+                self.dg.focus_top = Some(top);
+            }
             y += self.dg_row_paint(k, &l, dv::layer_name(&l.id), k == 0, act, act_txt);
             k += 1;
+        }
+        // the run is done and has no such row: the page stays at the top
+        if r.state == DG_DONE {
+            self.dg.focus.clear();
+        }
+        if let Some((fk, t0)) = self.dg.flash
+            && lv::tick_get().wrapping_sub(t0) >= FLASH_MS
+        {
+            self.dg.flash = None;
+            self.dg.row[fk].bx.set_style_bg_opa(lv::OPA_TRANSP, 0);
         }
         if r.has_speed != 0 && r.state == DG_DONE {
             let w = self.dg.row[k];

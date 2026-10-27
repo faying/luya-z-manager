@@ -5,7 +5,7 @@
 // looked fine on screen: the engine off (enabled === false, not true), a pin (pin === "home", not
 // null), a config PUT (200 and changed): a home network removed / added from a scan (a SSID with
 // quote and angle bracket too), a scenario's Wi-Fi, a CHILL node (and Cancel puts the select
-// back), the six timing numbers
+// back), the timing numbers
 // defaults on an empty config. A write the agent refuses is said. Mock state is in memory: start a
 // fresh fake agent before each run. From source/manager:
 //   WEB=http://127.0.0.1:18594 AGENT=http://127.0.0.1:19594 OUT=/tmp/lw-scene \

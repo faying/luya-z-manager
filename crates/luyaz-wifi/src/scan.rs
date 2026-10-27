@@ -175,6 +175,84 @@ fn scan_on(iface: &str) -> Result<Vec<Network>, String> {
     Err(last_err)
 }
 
+/// Upper bound for the supplementary passive/DFS 5 GHz scan.
+const PASSIVE_LIMIT: Duration = Duration::from_secs(8);
+
+/// Enabled channels in 5150-5730 MHz from `iw phy <phy> info`. The normal full
+/// scan never returns networks there on this chip (the regdomain marks them
+/// PASSIVE-SCAN / DFS), but an explicit `scan freq …` does (measured 2026-10-27).
+pub fn passive_5g_freqs(phy_info: &str) -> Vec<u32> {
+    let mut out: Vec<u32> = Vec::new();
+    for line in phy_info.lines() {
+        let t = line.trim();
+        let Some(rest) = t.strip_prefix("* ") else { continue };
+        let Some((num, tail)) = rest.split_once(" MHz") else { continue };
+        let Ok(f) = num.trim().parse::<f64>() else { continue };
+        let f = f as u32;
+        if !(5150..=5730).contains(&f) || tail.contains("(disabled)") {
+            continue;
+        }
+        if !out.contains(&f) {
+            out.push(f);
+        }
+    }
+    out
+}
+
+/// Arguments for `iw dev <iface> scan freq <f>…`.
+pub fn freq_scan_args(iface: &str, freqs: &[u32]) -> Vec<String> {
+    let mut a: Vec<String> = vec!["dev".into(), iface.into(), "scan".into(), "freq".into()];
+    a.extend(freqs.iter().map(|f| f.to_string()));
+    a
+}
+
+/// Merge two scan results: one entry per BSSID (case-insensitive), stronger
+/// signal wins, strongest first.
+pub fn merge_networks(mut a: Vec<Network>, b: Vec<Network>) -> Vec<Network> {
+    for n in b {
+        match a.iter_mut().find(|x| x.bssid.eq_ignore_ascii_case(&n.bssid)) {
+            Some(x) => {
+                if n.signal > x.signal {
+                    *x = n;
+                }
+            }
+            None => a.push(n),
+        }
+    }
+    a.sort_by(|x, y| y.signal.partial_cmp(&x.signal).unwrap_or(std::cmp::Ordering::Equal));
+    a
+}
+
+/// Phy of an interface (`wiphy N` → `phyN`), read fresh every time.
+fn phy_of(iface: &str) -> Option<String> {
+    run("iw", &["dev", iface, "info"]).ok().and_then(|text| {
+        text.lines()
+            .find_map(|l| l.trim().strip_prefix("wiphy ").map(|n| format!("phy{}", n.trim())))
+    })
+}
+
+/// Second pass over the passive/DFS 5 GHz channels. Any failure just means
+/// "nothing extra".
+fn passive_scan(iface: &str) -> Vec<Network> {
+    let Some(phy) = phy_of(iface) else { return Vec::new() };
+    let Ok(info) = run("iw", &["phy", &phy, "info"]) else { return Vec::new() };
+    let freqs = passive_5g_freqs(&info);
+    if freqs.is_empty() {
+        return Vec::new();
+    }
+    let args = freq_scan_args(iface, &freqs);
+    match crate::output_within(Command::new("iw").args(&args), PASSIVE_LIMIT) {
+        Ok(out) if out.status.success() => parse_scan(&String::from_utf8_lossy(&out.stdout)),
+        _ => Vec::new(),
+    }
+}
+
+/// Full scan, then the passive/DFS 5 GHz supplement merged in.
+fn scan_full(iface: &str) -> Result<Vec<Network>, String> {
+    let nets = scan_on(iface)?;
+    Ok(merge_networks(nets, passive_scan(iface)))
+}
+
 /// Remove the temporary vdev. Best effort — if it is already gone (a Wi-Fi
 /// reload took the whole wiphy with it) that is not an error.
 fn drop_scan_iface() {
@@ -197,7 +275,7 @@ pub fn scan() -> Result<Vec<Network>, String> {
     }
 
     if let Some(iface) = existing_ifaces().into_iter().find(|i| i != SCAN_IFACE) {
-        if let Ok(nets) = scan_on(&iface) {
+        if let Ok(nets) = scan_full(&iface) {
             return Ok(nets);
         }
         // Fall through: the interface exists but could not scan (it may be
@@ -211,7 +289,7 @@ pub fn scan() -> Result<Vec<Network>, String> {
     let result = (|| {
         run("ip", &["link", "set", SCAN_IFACE, "up"])?;
         std::thread::sleep(Duration::from_millis(800));
-        scan_on(SCAN_IFACE)
+        scan_full(SCAN_IFACE)
     })();
     drop_scan_iface();
     result
@@ -261,6 +339,41 @@ BSS 02:00:00:00:00:04(on scen-scan0)
         // A stray SSID line with no preceding BSS must not invent a network.
         let nets = parse_scan("\tSSID: orphan\n");
         assert!(nets.is_empty());
+    }
+
+    const PHY_INFO: &str = "Wiphy phy3
+\tBand 2:
+\t\tFrequencies:
+\t\t\t* 5180 MHz [36] (23.0 dBm) (no IR)
+\t\t\t* 5200.0 MHz [40] (23.0 dBm) (no IR)
+\t\t\t* 5260 MHz [52] (20.0 dBm) (no IR, radar detection)
+\t\t\t* 5280 MHz [56] (disabled)
+\t\t\t* 5500 MHz [100] (20.0 dBm) (radar detection)
+\t\t\t* 5745 MHz [149] (30.0 dBm)
+\tBand 1:
+\t\t\t* 2412 MHz [1] (20.0 dBm)
+";
+
+    #[test]
+    fn passive_freqs_skip_disabled_and_out_of_range() {
+        assert_eq!(passive_5g_freqs(PHY_INFO), vec![5180, 5200, 5260, 5500]);
+        assert_eq!(
+            freq_scan_args("wlan0", &[5180, 5260]),
+            vec!["dev", "wlan0", "scan", "freq", "5180", "5260"]
+        );
+    }
+
+    #[test]
+    fn merge_dedupes_case_insensitively_keeping_stronger() {
+        let n = |b: &str, s: f64| Network { ssid: "x".into(), bssid: b.into(), signal: s };
+        let m = merge_networks(
+            vec![n("02:00:00:00:00:aa", -70.0), n("02:00:00:00:00:bb", -50.0)],
+            vec![n("02:00:00:00:00:AA", -40.0), n("02:00:00:00:00:cc", -90.0)],
+        );
+        assert_eq!(m.len(), 3);
+        assert_eq!(m[0].signal, -40.0);
+        assert_eq!(m[1].bssid, "02:00:00:00:00:bb");
+        assert_eq!(m[2].signal, -90.0);
     }
 
     #[test]

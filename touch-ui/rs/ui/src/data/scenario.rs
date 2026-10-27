@@ -16,6 +16,77 @@ const SC_TTL_MS: i64 = 30000;
 const SC_RESP_MAX: usize = 16384;
 /// lost only after 2 minutes: an agent restart takes seconds
 const SC_LOST_MS: i64 = 120000;
+/// GET /api/scenario (the matched Wi-Fi, the judging dots): at most once a minute while Home is
+/// up on a lit screen, sooner when the public summary changed
+const SC_DETAIL_MS: i64 = 60000;
+/// its data carries the whole config: room for it
+const SC_DETAIL_MAX: usize = 65536;
+
+/// What the card takes from GET /api/scenario's data (core 1.50); None = not the shape.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Detail {
+    pub current: String,
+    pub candidate: String,
+    pub hits: i32,
+    pub enter_hits: i32,
+    pub matched_id: String,
+    pub matched_ssid: String,
+    pub matched_since: i64,
+    pub misses: i32,
+    pub exit_misses: i32,
+    pub cand_name: String,
+    /// the SSID last matched for the scenario in force (sticky across reads)
+    pub cur_ssid: String,
+}
+
+/// The display name of scenario `id` in the config (English from names_en when asked).
+fn scenario_name(d: &[u8], id: &str, en: bool) -> String {
+    if id.is_empty() {
+        return String::new();
+    }
+    if en
+        && let Some(ne) = json::get(d, "names_en", 4096)
+    {
+        let n = jstr(&ne, id, 48);
+        if !n.is_empty() {
+            return n;
+        }
+    }
+    let Some(cfg) = json::get(d, "config", SC_DETAIL_MAX) else { return String::new() };
+    let Some(arr) = json::get(&cfg, "scenarios", SC_DETAIL_MAX) else { return String::new() };
+    let mut p = 0;
+    while let Some((s, np)) = json::arr_next(&arr, p, 16384) {
+        p = np;
+        if jstr(&s, "id", 48) == id {
+            return jstr(&s, "name", 48);
+        }
+    }
+    String::new()
+}
+
+pub fn parse_detail(body: &[u8]) -> Option<Detail> {
+    let d = json::get(body, "data", SC_DETAIL_MAX)?;
+    // an older core has no enter_hits: nothing here it can say
+    json::get(&d, "enter_hits", 16).filter(|v| v.first().is_some_and(u8::is_ascii_digit))?;
+    let mut o = Detail {
+        current: jstr(&d, "current", 48),
+        candidate: jstr(&d, "candidate", 48),
+        hits: json::get_int(&d, "hits", 0) as i32,
+        enter_hits: json::get_int(&d, "enter_hits", 0) as i32,
+        misses: json::get_int(&d, "misses", 0) as i32,
+        exit_misses: json::get_int(&d, "exit_misses", 0) as i32,
+        ..Default::default()
+    };
+    o.cand_name = scenario_name(&d, &o.candidate, lang::is_en());
+    if let Some(m) = json::get(&d, "matched", 512)
+        && m.first() == Some(&b'{')
+    {
+        o.matched_id = jstr(&m, "id", 48);
+        o.matched_ssid = jstr(&m, "ssid", 96);
+        o.matched_since = json::get_int(&m, "since", 0);
+    }
+    Some(o)
+}
 
 #[derive(Default)]
 #[derive(Clone)]
@@ -55,6 +126,11 @@ pub struct Scenario {
     h_checked: bool,
     h_bad: i32,
     h_warn: i32,
+    /// GET /api/scenario's part, None = never read or the core has none
+    detail: Option<Detail>,
+    detail_ms: i64,
+    detail_sig: u32,
+    was_lit: bool,
 }
 
 impl Scenario {
@@ -65,15 +141,19 @@ impl Scenario {
         }
     }
 
-    /// Every refresh; active = Home is up on a lit screen. true = what shows changed.
-    pub fn poll(&mut self, agent: &mut CoreApi, active: bool) -> bool {
+    /// Every refresh; active = Home is up, lit = and the screen is lit (the logged-in read).
+    /// true = what shows changed.
+    pub fn poll(&mut self, agent: &mut CoreApi, active: bool, lit: bool) -> bool {
         let just_shown = active && !self.was_active;
+        // the screen lit again on Home: the logged-in part is read at once
+        let just_lit = active && lit && !self.was_lit;
+        self.was_lit = active && lit;
         let t = mono_ms();
         if self.first_ms == 0 {
             self.first_ms = t;
         }
         self.was_active = active;
-        if self.poll_ms != 0 && t - self.poll_ms < SC_TTL_MS && !(just_shown && self.ok) {
+        if self.poll_ms != 0 && t - self.poll_ms < SC_TTL_MS && !((just_shown || just_lit) && self.ok) {
             if !self.dirty {
                 return false;
             }
@@ -165,6 +245,28 @@ impl Scenario {
             self.auto_direct = jtrue(&sc, "auto_direct");
         }
 
+        // the logged-in read: on a lit Home only, once a minute or when the summary moved
+        let pub_sig = fnv(fnv(FNV0, self.name.as_bytes()), format!("{}/{}/{}", self.last_switch, self.pin, self.enabled as i32).as_bytes());
+        if active && lit && self.ok && (just_shown || just_lit || pub_sig != self.detail_sig || self.detail_ms == 0 || t - self.detail_ms >= SC_DETAIL_MS) {
+            self.detail_sig = pub_sig;
+            self.detail_ms = t;
+            let (code, b) = agent.api_ms("GET", "/api/scenario", None, SC_DETAIL_MAX, SC_IO_MS);
+            // 503 (engine not up), 404 / no new keys (older core), unreachable: the card as before
+            let prev = self.detail.take();
+            self.detail = b.filter(|_| code == 200).and_then(|b| parse_detail(&b)).map(|mut d| {
+                // the Wi-Fi that brought it here, kept while the scans miss it
+                d.cur_ssid = if d.matched_id == d.current && !d.matched_ssid.is_empty() {
+                    d.matched_ssid.clone()
+                } else {
+                    prev.filter(|p| p.current == d.current).map(|p| p.cur_ssid).unwrap_or_default()
+                };
+                d
+            });
+        } else if pub_sig != self.detail_sig {
+            // the scenario moved while the detail could not be read: it no longer belongs to it
+            self.detail = None;
+        }
+
         let nums = format!(
             "{}/{}/{}/{}/{}/{}/{}{}{}",
             self.ok as i32,
@@ -185,6 +287,10 @@ impl Scenario {
         h = fnv(h, if self.mf_stale { b"stale" } else { b"live" });
         h = fnv(h, format!("{}/{}/{}", self.home_on, self.home_until, self.home_fallback as i32).as_bytes());
         h = fnv(h, format!("{}/{}", self.ai_gate, self.ai_region).as_bytes());
+        if let Some(d) = &self.detail {
+            h = fnv(h, format!("{}/{}/{}/{}/{}/{}/{}", d.current, d.candidate, d.hits, d.enter_hits, d.matched_id, d.matched_ssid, d.matched_since).as_bytes());
+            h = fnv(h, format!("{}/{}/{}/{}", d.misses, d.exit_misses, d.cand_name, d.cur_ssid).as_bytes());
+        }
         if h == self.sig {
             return false;
         }
@@ -214,6 +320,26 @@ impl Scenario {
             home_fallback: self.home_fallback as i32,
             ai_gate: self.ai_gate,
             ai_region: self.ai_region.clone(),
+            ..self.detail_status()
+        }
+    }
+
+    fn detail_status(&self) -> scenario_status_t {
+        let Some(d) = &self.detail else { return scenario_status_t::default() };
+        scenario_status_t {
+            detail: 1,
+            current: d.current.clone(),
+            candidate: d.candidate.clone(),
+            hits: d.hits,
+            enter_hits: d.enter_hits,
+            matched_id: d.matched_id.clone(),
+            matched_ssid: d.matched_ssid.clone(),
+            matched_since: d.matched_since,
+            misses: d.misses,
+            exit_misses: d.exit_misses,
+            cand_name: d.cand_name.clone(),
+            cur_ssid: d.cur_ssid.clone(),
+            ..Default::default()
         }
     }
 
@@ -255,5 +381,38 @@ impl Scenario {
             bad: self.h_bad,
             warn: self.h_warn,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_detail() {
+        // the real reply carries the whole config (scenarios, actions, a nested "current"-like key)
+        let mut cfg = String::from(r#"{"scenarios":["#);
+        for i in 0..80 {
+            cfg.push_str(&format!(r#"{{"id":"s{i}","name":"情景{i}","detect":{{"wifi":{{"ssids":["Net{i}"]}}}},"actions":[{{"path":"/api/wifi/radio","body":{{"current":"x","matched":null}}}}]}},"#));
+        }
+        cfg.push_str(r#"{"id":"home"}],"params":{"enter_hits":9}}"#);
+        let b = format!(
+            // serde_json's order (alphabetical): the config, with its own enter_hits, comes first
+            r#"{{"ok":true,"data":{{"allowed_paths":["/api/wifi/radio"],"applied":true,"candidate":"away","config":{cfg},"current":"home","enabled":true,"enter_hits":2,"exit_misses":2,"hits":1,"matched":{{"id":"home","since":1790000000,"ssid":"Home-5G"}},"misses":0,"pin":null}}}}"#
+        );
+        assert!(b.len() > 8000);
+        let d = parse_detail(b.as_bytes()).unwrap();
+        assert_eq!((d.current.as_str(), d.candidate.as_str(), d.hits, d.enter_hits), ("home", "away", 1, 2));
+        assert_eq!((d.matched_id.as_str(), d.matched_ssid.as_str(), d.matched_since), ("home", "Home-5G", 1_790_000_000));
+        assert_eq!((d.misses, d.exit_misses), (0, 2));
+        // the candidate's name from the config (s0..s79 then home; ask for one in the middle)
+        let b2 = b.replace(r#""candidate":"away""#, r#""candidate":"s41""#);
+        assert_eq!(parse_detail(b2.as_bytes()).unwrap().cand_name, "情景41");
+        // nothing matched
+        let d = parse_detail(br#"{"ok":true,"data":{"current":"away","candidate":null,"hits":0,"enter_hits":2,"matched":null}}"#).unwrap();
+        assert!(d.matched_ssid.is_empty() && d.candidate.is_empty());
+        // an older core: no enter_hits
+        assert!(parse_detail(br#"{"ok":true,"data":{"current":"home","candidate":null,"hits":0}}"#).is_none());
+        assert!(parse_detail(br#"{"ok":false,"error":"x"}"#).is_none());
     }
 }

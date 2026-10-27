@@ -21,6 +21,7 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+- kit: the model check no longer needs an underscore before `MU` (`BD_CNMU5250V1.0.0B31`, `BD_XCBZHKMU5250V1.0.0B03`); the region comes from the part before `MU`. Firmware outside the matrix is still refused.
 - chill: `rules_drift` no longer fires every minute when a scenario turns Wi-Fi off. The stock firmware adds `iif wlanN failed_policy` rules per interface and drops them with the interface; when it comes back their priority follows the new ifindex. A rule bound to an interface (`iif`/`oif`) now only counts as gone while that interface is up and no rule with the same text is left; any other rule that disappears is reported as before.
 
 - kit: `firmware-capabilities.matrix.json` replaces `device/compat.list`: model / region / build → each component (ssh, admin, ui, esim, chill, recover) `verified`, `code-only` or `unsupported`. `install.sh` checks each picked component on its own: `code-only` still needs `LUYAZ_ALLOW_UNVERIFIED=1`, `unsupported` is skipped with a message and the rest is installed; it stops only when nothing is left. The matrix is in the kit and in MANIFEST.txt.
@@ -34,6 +35,72 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 - kit: `OUI_TSV=` (a table from `scripts/lanid/make-oui.sh`) is installed to `/data/luyaz/lanid/oui.tsv` for vendor names; the public build has none.
 
 - kit: carries the lanid-parse component (LAN client identification) and installs it to `/data/luyaz/core/plugins/` as the only component; without it the core runs with identification off. `LANID_CWASM=` uses a ready-made one.
+
+## touch 1.18.0 — 2026-10-27
+
+- Wi-Fi client rows get a link line 「协商 ↓2402 ↑1201 Mbps · Wi-Fi 6 · -39 dBm」; a field iw didn't report reads 读不到 (band too). Reads `link_up_mbps` from netinfo.
+
+## lweb 1.37.0 — 2026-10-27
+
+- `/clients` details panel shows each Wi-Fi device's link: negotiated rate down / up (Mbps), band (channel, hotspot width), signal (dBm and grade) and Wi-Fi standard. Every field is always listed; one the driver didn't report says so (「读不到」 / "Not reported"), nothing is guessed. The row's summary now has both ↓ and ↑ link rates.
+
+## core 1.53.1 — 2026-10-27
+
+- Wi-Fi scans now also sweep the enabled passive/DFS 5 GHz channels (5150-5730 MHz) with an explicit `iw dev <iface> scan freq …` and merge the results; the plain scan never returned networks there.
+
+## lweb 1.36.0 — 2026-10-27
+
+- the scenario timing form has the three leave numbers (signal to leave, blip signal, blip hold); an older core without them shows the defaults.
+
+## core 1.53.0 — 2026-10-27
+
+- leaving a Wi-Fi-detected scenario follows the signal. A scan whose best matching network is weaker than `leave_rssi_dbm` (-72) counts as a miss, so a fading home Wi-Fi switches to away early; a network last seen at `blip_strong_dbm` (-60) or stronger that vanishes from the scans is held as a router blip for `blip_hold_secs` (300 s) before absent scans count. New params in `/api/scenario` config (defaults when missing; validated); `state.json` gains `last_seen_at`/`last_seen_dbm` (set by the scan that enters, so a blip right after entering is held too). The engine log says why (`"home" weak: …`, `"home" not seen, held as a blip: …`).
+
+## core 1.52.0 — 2026-10-27
+
+- forwarded SMS that sat in the queue over 2 minutes say so in the chat text ("late: forwarded 3 h 05 min after it came in"); webhooks get `late_secs`. The forward queue status adds `oldest_pending_secs`.
+- after a killed lpac, its channel is closed only when a fresh probe shows it still taken, so a channel that is free again (or a wrong guess) is never closed.
+- `state.set_interval` takes `{client, milliseconds, ttl_s}` (a want that lapses, default 180 s) or `{client, release: true}`. The sampling pace is the fastest live want, else 5 s. A touch UI that dies with the screen lit no longer leaves the core sampling every second; calls without `client` keep their old meaning.
+
+## lweb 1.35.0 — 2026-10-27
+
+- Only names nobody outside can own are served (IP addresses, single labels, `.lan`/`.local`/`.home.arpa`/`.internal`, `*.ts.net`, and `LUYAZ_WEB_HOSTS`); others get 421. This closes DNS rebinding, which passed the Origin check.
+- Wrong passwords slow the next try from that address (1 s doubling to 5 min, plus a shared limit); a right one clears it.
+- One address holds at most 16 connections and the last 8 slots are kept for loopback and the tailnet; idle keep-alive connections close after 10 s.
+- While a tab is open the core is asked for 1 s data (also with the screen dark); released when the last tab closes.
+
+## touch 1.17.0 — 2026-10-27
+
+- The core pace (1 s lit, 5 s dark) is a want renewed each minute and taken back on exit or handover.
+
+## core 1.51.0 — 2026-10-27
+
+- eSIM downloads and deletes that lpac reports as failed (or that time out) are judged by reading the card's profile list back, so a profile that did land is reported as done and the single-use activation code is never retried. A write cut off by a core restart is settled the same way on the next start.
+- `wifi_post_stuck` also wakes on the stock Wi-Fi script starting (inotify, no polling) and looks at 35 s and 65 s, so a spinning script is reported in about a minute. Still read-only.
+
+## touch 1.16.2 — 2026-10-27
+
+- the scenario card's why line follows DESIGN §4: pinned reads 「已固定 · 你 10:20 手动选的」, abroad reads 「· 到了 2 小时」 (largest whole unit) instead of 「· HH:MM 起」.
+
+## touch 1.16.1 — 2026-10-27
+
+- clippy allows narrowed to the two pre-existing items in place.rs; no behaviour change.
+
+## core 1.50.2 — 2026-10-27
+
+- `/v2/latency/direct` and `/v2/timeline/today` take their probe and long-term source from the server state (set once at start) instead of reading them per request; replies are unchanged. Route-level tests for both, and a test for the two-URL latency race.
+
+## core 1.50.1 — 2026-10-26
+
+- the direct-exit latency (`/v2/latency/direct`, deep diagnosis' direct probe) asks a mainland 204 alongside gstatic and takes the first answer; gstatic alone never answered direct inside the mainland, so Home always showed 「—」.
+
+## touch 1.16.0 — 2026-10-26
+
+- Home reads core 1.50's data. The scenario card says which Wi-Fi put it there and since when (「因为看到家里 Wi-Fi Home-5G · 08:41 起」, long SSIDs keep both ends) and shows 「判断中 ●●○」 while the scans point at another scenario, with 「可能切到外出：家里 Wi-Fi N 次没看到」 while they miss the Wi-Fi that brought it (`GET /api/scenario`, once a minute at most, lit Home only). The status card's action follows `story.fix`: 「摆放模式 ›」 opens Placement, 「去打开 ›」 Cellular, diag:<layer> the diagnosis scrolled to that layer's row, tinted for a moment; the swap-SIM offer and the old rules stay when there is no `fix`. 直连 lines show the direct exit's latency (`GET /v2/latency/direct`, once a minute on a lit Home; 「—」 when it fails). New 「今天」 card below Tailscale (`GET /v2/timeline/today`, every 5 minutes on a lit Home): 24 hour cells coloured by average SINR with the RAT where it changes, then the newest eight events and 「还有 N 条」; 「设备时间还没校准，时间线暂停」 without a set clock. With an older core everything draws as before. Requires: core 1.50.0 for the new parts.
+
+## core 1.50.0 — 2026-10-26
+
+- the touch Home's data. `GET /api/scenario` (authenticated) adds `matched` (`{id, ssid, since}`: the Wi-Fi network the last scan matched and since when the same one keeps matching; null when detection was not by Wi-Fi), `enter_hits` and `exit_misses` (beside `candidate`, `hits`, `misses`, for 判断中 ●●○); the public status still carries no SSID. `story.fix` names where the footer action goes (`sim_enable`, `cell`, `placement`, `diag:data|internet|dns|limit|crowd|link`, `op`; absent when normal), set exactly where the touch showed an action. `GET /v2/latency/direct`: the direct exit's latency (deep diagnosis' own probe of `generate_204`, 3 s), measured only when asked, one probe per 60 s shared by every caller, with `roaming`. `GET /v2/timeline/today`: since local midnight, scenario switches, link down/up, boots with the reason code, incidents opened/closed, charging start/stop and automatic repairs, plus one point per hour (`sinr_avg`, `rat`); `clock_trusted:false` without a trusted clock, `available:false` with the long-term layer off. The long-term layer newly writes `charge` (a flip held 5 min), `scenario` and `repair` events, and the hour line `sinr_avg` and `rat`.
 
 ## core 1.49.1 — 2026-10-26
 

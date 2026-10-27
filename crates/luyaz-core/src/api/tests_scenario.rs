@@ -50,6 +50,14 @@ async fn u60d_runs_the_scenario_engine() {
     let (status, body) = call(addr, "GET", "/api/scenario", None, "").await;
     assert_eq!(status, 200);
     assert_eq!(body["data"]["current"], "home");
+    // the network that matched, for the home card (authenticated read only)
+    assert_eq!(body["data"]["matched"]["ssid"], "TestHome", "{body}");
+    assert_eq!(body["data"]["matched"]["id"], "home");
+    assert!(body["data"]["matched"]["since"].as_i64().is_some());
+    assert_eq!(body["data"]["enter_hits"], 2);
+    assert_eq!(body["data"]["exit_misses"], 2);
+    let (_, public) = call(addr, "GET", "/api/public/status", None, "").await;
+    assert!(!public.to_string().contains("TestHome"), "{public}");
     assert_eq!(call(addr, "GET", "/api/scenario/log", None, "").await.0, 200);
     // the screen's pin goes to the engine (its full reply)
     let (status, body) = call(addr, "POST", "/api/scenario/pin", None, r#"{"id":"away"}"#).await;

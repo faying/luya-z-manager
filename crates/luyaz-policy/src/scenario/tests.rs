@@ -1008,3 +1008,254 @@ fn after_switch_ignores_an_unknown_scenario() {
     };
     assert_eq!(after_switch(&st, &cfg, "office", 5, Ok(())), st);
 }
+
+#[test]
+fn matched_names_the_network_and_keeps_its_streak() {
+    let cfg = home_cfg();
+    let nets = home_nets();
+    let scan = |st: &RunState, at: i64| {
+        step(&input(
+            &cfg,
+            st,
+            at,
+            Scan::Networks {
+                at,
+                networks: &nets,
+            },
+        ))
+        .state
+    };
+    // away, home seen: the candidate's network, since this scan
+    let st = scan(&in_scenario(AWAY_ID, 0), 1000);
+    let m = st.matched.clone().unwrap();
+    assert_eq!(
+        (m.id.as_str(), m.ssid.as_str(), m.since),
+        ("home", "MyHome", 1000)
+    );
+    assert_eq!((st.candidate.as_str(), st.hits), ("home", 1));
+    // seen again: the streak keeps its start
+    let st = scan(&st, 1060);
+    assert_eq!(st.matched.as_ref().map(|m| m.since), Some(1000));
+    // not seen: no Wi-Fi match, cleared
+    let empty: Vec<Network> = Vec::new();
+    let o = step(&input(
+        &cfg,
+        &st,
+        1120,
+        Scan::Networks {
+            at: 1120,
+            networks: &empty,
+        },
+    ));
+    assert_eq!(o.state.matched, None);
+    // seen after the gap (the away interval later): a new streak
+    let st = scan(&o.state, 1500);
+    assert_eq!(st.matched.as_ref().map(|m| m.since), Some(1500));
+}
+
+#[test]
+fn detect_match_says_which_network_and_none_for_mcc() {
+    let cfg = home_cfg();
+    let d = detect_match(&cfg, &home_nets(), Some("460")).unwrap();
+    assert_eq!((d.id.as_str(), d.ssid.as_deref()), ("home", Some("MyHome")));
+    let d = detect_match(&cfg, &[], Some("440")).unwrap();
+    assert_eq!(d.ssid, None);
+    assert_eq!(
+        detect(&cfg, &home_nets(), Some("460")).as_deref(),
+        Some("home")
+    );
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn state_files_without_matched_still_load() {
+    let st: RunState = serde_json::from_str(
+        r#"{"current":"home","candidate":"","hits":0,"misses":0,"applied":{},"last_switch":null,"last_error":null,"last_scan":5}"#,
+    )
+    .unwrap();
+    assert_eq!((st.current.as_str(), st.matched), ("home", None));
+}
+
+// ── leaving by signal strength ──────────────────────────────────────────────
+
+/// One full tick (scan + recheck with the same networks) at `at`, then the switch if any.
+fn tick_with(cfg: &Config, st: &RunState, at: i64, nets: &[Network]) -> RunState {
+    let o = step(&TickInput {
+        recheck: Some(Recheck { at, networks: nets }),
+        ..input(cfg, st, at, Scan::Networks { at, networks: nets })
+    });
+    match &o.intent {
+        Intent::Switch { to } => after_switch(&o.state, cfg, to, at, Ok(())),
+        _ => o.state,
+    }
+}
+
+fn at_home(dbm: f64) -> Vec<Network> {
+    vec![net("MyHome", HOME_BSSID, dbm)]
+}
+
+#[test]
+fn strong_signal_that_vanishes_for_four_minutes_is_a_blip() {
+    let cfg = home_cfg();
+    let mut st = tick_with(&cfg, &in_scenario("home", 0), 60, &at_home(-38.0));
+    assert_eq!((st.last_seen_at, st.last_seen_dbm), (Some(60), Some(-38.0)));
+    for t in [120, 180, 240, 300] {
+        st = tick_with(&cfg, &st, t, &[]);
+        assert_eq!((st.current.as_str(), st.misses), ("home", 0), "at {t}");
+    }
+    assert_eq!(
+        leave_reading(&cfg, &st, &[], 160),
+        Some(Leave::Blip {
+            dbm: -38.0,
+            ago: 100
+        })
+    );
+    st = tick_with(&cfg, &st, 360, &at_home(-40.0));
+    assert_eq!((st.current.as_str(), st.last_seen_at), ("home", Some(360)));
+}
+
+#[test]
+fn gone_longer_than_the_hold_leaves() {
+    let cfg = home_cfg();
+    let mut st = tick_with(&cfg, &in_scenario("home", 0), 60, &at_home(-38.0));
+    let mut left = None;
+    for t in (120..=600).step_by(60) {
+        st = tick_with(&cfg, &st, t, &[]);
+        if st.current == AWAY_ID && left.is_none() {
+            left = Some(t);
+        }
+    }
+    // hold until 60+300; misses at 360 and 420
+    assert_eq!(left, Some(420));
+    assert_eq!(
+        (st.last_seen_at, st.last_seen_dbm),
+        (None, None),
+        "cleared on switch"
+    );
+}
+
+#[test]
+fn weak_signal_twice_leaves() {
+    let cfg = home_cfg();
+    let st = tick_with(&cfg, &in_scenario("home", 0), 60, &at_home(-75.0));
+    assert_eq!((st.current.as_str(), st.misses), ("home", 1));
+    assert_eq!(st.last_seen_dbm, Some(-75.0));
+    let st = tick_with(&cfg, &st, 120, &at_home(-75.0));
+    assert_eq!(st.current, AWAY_ID);
+}
+
+#[test]
+fn walking_away_leaves_at_the_weak_threshold_before_vanishing() {
+    let cfg = home_cfg();
+    let mut st = in_scenario("home", 0);
+    let mut path = Vec::new();
+    for (t, dbm) in [(60, -40.0), (120, -65.0), (180, -74.0), (240, -76.0)] {
+        st = tick_with(&cfg, &st, t, &at_home(dbm));
+        path.push(st.current.clone());
+    }
+    assert_eq!(path, ["home", "home", "home", AWAY_ID]);
+}
+
+#[test]
+fn weak_then_gone_leaves_without_a_hold() {
+    let cfg = home_cfg();
+    let st = tick_with(&cfg, &in_scenario("home", 0), 60, &at_home(-75.0));
+    let st = tick_with(&cfg, &st, 120, &[]);
+    assert_eq!(st.current, AWAY_ID);
+}
+
+#[test]
+fn weak_name_only_network_also_counts_as_a_miss() {
+    let mut cfg = cfg_with(vec![SsidEntry {
+        ssid: "MyHome".into(),
+        bssid: None,
+    }]);
+    cfg.params.min_rssi_dbm = -80.0;
+    let st = tick_with(
+        &cfg,
+        &in_scenario("home", 0),
+        60,
+        &[net("MyHome", "x", -75.0)],
+    );
+    assert_eq!(st.misses, 1);
+}
+
+#[test]
+fn entering_still_ignores_the_signal_of_a_pinned_network() {
+    let cfg = home_cfg();
+    // away on battery scans every 300 s
+    let st = tick_with(&cfg, &in_scenario(AWAY_ID, 0), 300, &at_home(-85.0));
+    assert_eq!(st.candidate, "home");
+    let st = tick_with(&cfg, &st, 360, &at_home(-85.0));
+    assert_eq!(st.current, "home");
+}
+
+#[test]
+fn leave_notes_say_why() {
+    let p = Params::default();
+    assert_eq!(
+        leave_note("home", &Leave::Weak { dbm: -75.0 }, &p).unwrap(),
+        r#""home" weak: best -75 dBm (leave below -72)"#
+    );
+    assert_eq!(
+        leave_note(
+            "home",
+            &Leave::Blip {
+                dbm: -38.0,
+                ago: 100
+            },
+            &p
+        )
+        .unwrap(),
+        r#""home" not seen, held as a blip: last seen -38 dBm 1m40s ago (hold 5m)"#
+    );
+    assert_eq!(leave_note("home", &Leave::Absent, &p), None);
+}
+
+#[test]
+fn validate_rejects_nonsense_leave_params() {
+    let ok = template();
+    assert!(validate(&ok).is_ok());
+    let mut c = template();
+    c.params.blip_strong_dbm = -80.0;
+    assert!(validate(&c).unwrap_err().contains("blip_strong_dbm"));
+    let mut c = template();
+    c.params.blip_hold_secs = 3601;
+    assert!(validate(&c).unwrap_err().contains("blip_hold_secs"));
+    let mut c = template();
+    c.params.leave_rssi_dbm = f64::NAN;
+    assert!(validate(&c).is_err());
+    let mut c = template();
+    c.params.leave_rssi_dbm = 0.0;
+    assert!(validate(&c).is_err());
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn old_params_and_state_load_with_the_leave_defaults() {
+    let p: Params = serde_json::from_str(
+        r#"{"scan_interval_home_secs":60,"scan_interval_away_battery_secs":300,"scan_interval_away_charging_secs":60,"enter_hits":2,"exit_misses":2,"min_rssi_dbm":-70.0}"#,
+    )
+    .unwrap();
+    assert_eq!(p, Params::default());
+    let st: RunState = serde_json::from_str(
+        r#"{"current":"home","candidate":"","hits":0,"misses":0,"applied":{},"last_switch":null,"last_error":null,"last_scan":5}"#,
+    )
+    .unwrap();
+    assert_eq!((st.last_seen_at, st.last_seen_dbm), (None, None));
+}
+
+#[test]
+fn a_blip_right_after_entering_is_held() {
+    let cfg = home_cfg();
+    let st = tick_with(&cfg, &in_scenario(AWAY_ID, 0), 300, &at_home(-38.0));
+    let st = tick_with(&cfg, &st, 360, &at_home(-38.0));
+    assert_eq!(st.current, "home");
+    assert_eq!(
+        (st.last_seen_at, st.last_seen_dbm),
+        (Some(360), Some(-38.0))
+    );
+    let st = tick_with(&cfg, &st, 420, &[]);
+    let st = tick_with(&cfg, &st, 480, &[]);
+    assert_eq!((st.current.as_str(), st.misses), ("home", 0));
+}

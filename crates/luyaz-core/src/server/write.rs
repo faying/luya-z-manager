@@ -1171,15 +1171,39 @@ async fn control_task(app: App, action: &str, body: Value) -> Response {
         };
     }
     if action == "state.set_interval" {
-        let milliseconds = body
-            .get("params")
-            .and_then(|value| value.get("milliseconds"))
-            .and_then(Value::as_u64);
-        let Some(milliseconds) = milliseconds.filter(|value| (500..=5000).contains(value)) else {
-            return (StatusCode::BAD_REQUEST,Json(json!({"ok":false,"action":action,"error":{"code":"invalid_parameter","message":"milliseconds must be between 500 and 5000"}}))).into_response();
+        let params = body.get("params").cloned().unwrap_or(json!({}));
+        let milliseconds = params.get("milliseconds").and_then(Value::as_u64);
+        let client = params.get("client").and_then(Value::as_str);
+        let release = params.get("release").and_then(Value::as_bool) == Some(true);
+        // with a client: a want that lapses after ttl_s (default 180 s, 10..=3600), or a release
+        let ttl = params.get("ttl_s").and_then(Value::as_u64).unwrap_or(180);
+        let bad = |message: &str| {
+            (StatusCode::BAD_REQUEST,Json(json!({"ok":false,"action":action,"error":{"code":"invalid_parameter","message":message}}))).into_response()
         };
-        app.inner.exec.set_interval_ms(milliseconds);
-        return control_ok(action, json!({"sample_interval_ms":milliseconds}));
+        if let Some(client) = client {
+            if client.is_empty() || client.len() > 32 || !(10..=3600).contains(&ttl) {
+                return bad("client must be 1..=32 chars, ttl_s between 10 and 3600");
+            }
+            if release {
+                let now_ms = app.inner.exec.want_interval(client, None, None);
+                return control_ok(action, json!({"sample_interval_ms":now_ms}));
+            }
+        }
+        let Some(milliseconds) = milliseconds.filter(|value| (500..=5000).contains(value)) else {
+            return bad("milliseconds must be between 500 and 5000");
+        };
+        let now_ms = match client {
+            Some(client) => app.inner.exec.want_interval(
+                client,
+                Some(milliseconds),
+                Some(std::time::Duration::from_secs(ttl)),
+            ),
+            None => {
+                app.inner.exec.set_interval_ms(milliseconds);
+                app.inner.exec.interval_ms()
+            }
+        };
+        return control_ok(action, json!({"sample_interval_ms":now_ms}));
     }
     (
         StatusCode::NOT_FOUND,

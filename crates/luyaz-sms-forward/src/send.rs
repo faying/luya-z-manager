@@ -90,9 +90,20 @@ pub(crate) fn destination_type_name(to: &ForwardDestination) -> &'static str {
 }
 
 /// The text chat-style destinations get: sender, readable date, blank line, body.
-fn chat_text(msg: &DecodedSms) -> String {
+pub(crate) fn chat_text(msg: &DecodedSms) -> String {
     let when = humanize_zte_date(&msg.date);
-    format!("SMS from {}\n{when}\n\n{}", msg.sender, msg.content)
+    let late = msg.late_secs.map_or(String::new(), |s| format!(" (late: forwarded {} after it came in)", wait_text(s)));
+    format!("SMS from {}\n{when}{late}\n\n{}", msg.sender, msg.content)
+}
+
+/// `45 min`, `3 h 05 min`, `2 d 4 h`.
+pub(crate) fn wait_text(secs: i64) -> String {
+    let m = secs.max(0) / 60;
+    match m {
+        0..60 => format!("{} min", m.max(1)),
+        60..1440 => format!("{} h {:02} min", m / 60, m % 60),
+        _ => format!("{} d {} h", m / 1440, m % 1440 / 60),
+    }
 }
 
 pub(crate) fn http_agent() -> ureq::Agent {
@@ -197,6 +208,7 @@ pub(crate) fn forward_to(
                 "event": "sms_received",
                 "timestamp": now_ts(),
                 "sms": { "id": msg.id, "sender": msg.sender, "content": msg.content, "date": msg.date },
+                "late_secs": msg.late_secs,
             })
             .to_string();
             let base = if method.eq_ignore_ascii_case("PUT") {

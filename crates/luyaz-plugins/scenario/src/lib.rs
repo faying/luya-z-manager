@@ -18,6 +18,8 @@ fn config(c: Config) -> p::Config {
             enter_hits: c.params.enter_hits,
             exit_misses: c.params.exit_misses,
             min_rssi_dbm: c.params.min_rssi_dbm,
+            // not in the wit (0.1.0) yet: the defaults
+            ..p::Params::default()
         },
         scenarios: c
             .scenarios
@@ -57,6 +59,9 @@ fn state_in(s: RunState) -> p::RunState {
         last_error: s.last_error,
         last_scan: s.last_scan,
         scan_failures: s.scan_failures,
+        matched: None,
+        last_seen_at: None,
+        last_seen_dbm: None,
     }
 }
 

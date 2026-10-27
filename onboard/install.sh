@@ -202,8 +202,12 @@ check_device() {
   arch=$(printf '%s\n' "$raw" | sed -n 1p)
   iv=$(printf '%s\n' "$raw" | sed -n 2p)   # 例：CN_ZTE_MU5250V1.0.0B31
   [ "$arch" = aarch64 ] || fail "$(tx "设备 CPU 是 ${arch:-未知}，不是 aarch64：这不是 U60 Pro，不装" "Device CPU is ${arch:-unknown}, not aarch64: this is not a U60 Pro. Not installing")"
-  model=$(printf '%s' "$iv" | sed -n 's/.*_\(MU[0-9][0-9]*\)V.*/\1/p')
-  region=${iv%%_*}
+  # 型号不要求前面有底线：也见过 BD_CNMU5250V1.0.0B31、BD_XCBZHKMU5250V1.0.0B03 这种写法（wa_inner_version 风格）
+  model=$(printf '%s' "$iv" | sed -n 's/.*\(MU[0-9][0-9][0-9][0-9]\)V.*/\1/p')
+  case "$iv" in
+    *_ZTE_MU*) region=${iv%%_*} ;;                                                     # CN_ZTE_MU5250V…
+    *) region=$(printf '%s' "$iv" | sed -n 's/^[A-Z]*_\([A-Z]*\)MU[0-9].*/\1/p') ;;  # BD_CNMU5250V… → CN
+  esac
   build=$(printf '%s' "$iv" | sed -n 's/.*V[0-9.]*\(B[0-9][0-9]*\)$/\1/p')
   [ -n "$model" ] && [ -n "$build" ] || fail "$(tx "认不出固件版本「${iv:-空}」，不装（不是 U60 Pro，或固件太新/太旧）" "Unknown firmware version \"${iv:-empty}\". Not installing (not a U60 Pro, or firmware too new/old)")"
   info "$(tx "设备：$model，固件 $region $build" "Device: $model, firmware $region $build")"

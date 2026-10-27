@@ -279,6 +279,7 @@ async fn check(app: &Shared, password: &str) -> Result<(), bool> {
 
 pub async fn login(
     State(app): State<Shared>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Form(f): Form<LoginForm>,
 ) -> Response {
@@ -287,7 +288,38 @@ pub async fn login(
     if !same_origin(&Method::POST, &headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    match check(&app, &f.password).await {
+    // too many wrong passwords: refuse without looking at this one (guard.rs). Loopback is the
+    // device itself (and the e2e runs): not counted.
+    let limiter = crate::guard::limiter();
+    let peer = if peer.ip().to_canonical().is_loopback() { None } else { Some(peer.ip()) };
+    let now = std::time::Instant::now();
+    if let Some(Err(wait)) = peer.map(|ip| limiter.check(ip, now)) {
+        let secs = wait.as_secs().max(1);
+        let mut r = page(
+            &headers,
+            LoginPage {
+                lang,
+                next,
+                error: lang.pick(
+                    "Too many wrong passwords. Wait a moment and try again.",
+                    "密码错太多次，等一会儿再试。",
+                ),
+            }
+            .render()
+            .unwrap(),
+            StatusCode::TOO_MANY_REQUESTS,
+        );
+        r.headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from(secs));
+        return r;
+    }
+    let outcome = check(&app, &f.password).await;
+    match (&outcome, peer) {
+        (Ok(()), Some(ip)) => limiter.succeeded(ip),
+        (Err(true), Some(ip)) => limiter.failed(ip, now),
+        _ => {}
+    }
+    match outcome {
         Ok(()) => {
             let id = app.sessions.create(None);
             let html = LoginDone {

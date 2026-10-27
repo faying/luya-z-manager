@@ -92,7 +92,7 @@ fn strip_added_fields(mut got: Value) -> Value {
     let o = got.as_object_mut().unwrap();
     o.retain(|k, _| !k.ends_with("_en") && k != "mode_word" && k != "mode_auto" && k != "home");
     let st = o.get_mut("story").unwrap().as_object_mut().unwrap();
-    st.retain(|k, _| !k.ends_with("_en") && k != "state");
+    st.retain(|k, _| !k.ends_with("_en") && k != "state" && k != "fix");
     got
 }
 
@@ -2171,4 +2171,98 @@ fn a_sure_finding_goes_over_the_story_not_over_a_write() {
     let before = v.home.clone();
     with_finding(&mut v, "data", sym);
     assert_eq!(v.home, before);
+}
+
+/// `story.fix` is set exactly where the touch offered an action (an abnormal verdict, no SIM,
+/// an op), naming the target; never where it showed the carriers.
+#[test]
+fn fix_where_the_touch_had_an_action() {
+    let i = base();
+    let acts = [
+        State::Limit,
+        State::Weak,
+        State::Noise,
+        State::Crowd,
+        State::Narrow,
+        State::Nodata,
+        State::Stall,
+        State::Nosim,
+        State::Changing,
+        State::RevertFail,
+    ];
+    for s in [
+        State::Ok,
+        State::Nosim,
+        State::Airplane,
+        State::Sos,
+        State::Nosvc,
+        State::Nodata,
+        State::Stall,
+        State::Limit,
+        State::Weak,
+        State::Noise,
+        State::Crowd,
+        State::Only2g,
+        State::Only3g,
+        State::Narrow,
+        State::Hot,
+        State::Changing,
+        State::RevertFail,
+    ] {
+        assert_eq!(fix_for(s, &i).is_some(), acts.contains(&s), "{s:?}");
+    }
+    let fix = |f: fn(&mut NetIn<'static>)| with(f).fix;
+    assert_eq!(fix(|_| {}), None);
+    assert_eq!(
+        fix(|x| x.sim_state = "sim absent").as_deref(),
+        Some("sim_enable")
+    );
+    assert_eq!(fix(|x| x.bars = 1).as_deref(), Some("placement"));
+    assert_eq!(fix(|x| x.sinr = -3.0).as_deref(), Some("placement"));
+    assert_eq!(fix(|x| x.ambr_dl = 2.0).as_deref(), Some("diag:limit"));
+    assert_eq!(
+        fix(|x| {
+            x.data_up = false;
+            x.data_sw = Sw::Off
+        })
+        .as_deref(),
+        Some("cell")
+    );
+    assert_eq!(fix(|x| x.data_up = false).as_deref(), Some("diag:data"));
+    // pinned to 4G: a hint, but no footer action (as before)
+    assert_eq!(
+        fix(|x| {
+            x.net_type = "LTE";
+            x.net_select = "Only_LTE"
+        }),
+        None
+    );
+    assert!(
+        !serde_json::to_string(&with(|_| {}))
+            .unwrap()
+            .contains("\"fix\"")
+    );
+}
+
+#[test]
+fn fix_for_a_finding_and_an_op() {
+    let state = worst_case_state();
+    let sym = ("x", "x");
+    for (layer, want) in [
+        ("data", Some("diag:data")),
+        ("internet", Some("diag:internet")),
+        ("dns", Some("diag:dns")),
+        ("signal", None),
+    ] {
+        let mut v = net_view_op(&state, None, None);
+        with_finding(&mut v, layer, sym);
+        assert_eq!(v.home.unwrap().fix.as_deref(), want, "{layer}");
+    }
+    let so = ScreenOp {
+        kind: ScreenOpKind::Alert,
+        head: ("退回也没通".into(), "Revert failed".into()),
+        hint: ("x".into(), "x".into()),
+    };
+    let v = net_view_op(&state, None, Some(&so));
+    assert_eq!(v.home.unwrap().fix.as_deref(), Some("op"));
 }

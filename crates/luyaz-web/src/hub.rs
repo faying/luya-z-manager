@@ -315,6 +315,27 @@ async fn idle_for(rx: &mut watch::Receiver<usize>, idle: Duration) {
     }
 }
 
+/// While a tab watches, core is asked for its 1 s pace (a want that lapses unless renewed, so a
+/// stopped luyaz-web does not hold it); dropped when the last tab has gone.
+const PACE_MS: u64 = 1000;
+const PACE_TTL_S: u64 = 180;
+const PACE_RENEW: Duration = Duration::from_secs(60);
+
+async fn pace(client: &reqwest::Client, control_url: &str, want: Option<u64>) {
+    let params = match want {
+        Some(ms) => serde_json::json!({"client":"web","milliseconds":ms,"ttl_s":PACE_TTL_S}),
+        None => serde_json::json!({"client":"web","release":true}),
+    };
+    let body = serde_json::json!({
+        "action":"state.set_interval","source":"web",
+        "op_id": format!("web-pace-{}", crate::write::next_op_id()),"params":params,
+    });
+    let r = client.post(control_url).timeout(Duration::from_secs(5)).json(&body).send().await;
+    if let Err(e) = r.and_then(|r| r.error_for_status()) {
+        eprintln!("[hub] pace {want:?}: {e}");
+    }
+}
+
 /// The upstream loop. Runs forever; connects only while someone watches.
 pub async fn run(hub: Arc<Hub>, events_url: String, idle: Duration) {
     let client = reqwest::Client::builder()
@@ -323,6 +344,7 @@ pub async fn run(hub: Arc<Hub>, events_url: String, idle: Duration) {
         .expect("http client");
     let mut subs = hub.subs.subscribe();
     let mut backoff = 1u64;
+    let control_url = format!("{}/control", events_url.trim_end_matches("/v2/events"));
     loop {
         while *subs.borrow_and_update() == 0 {
             hub.set_link(Link::Idle);
@@ -343,6 +365,15 @@ pub async fn run(hub: Arc<Hub>, events_url: String, idle: Duration) {
         let gone = match resp {
             Err(_) => false,
             Ok(resp) => {
+                let renew = {
+                    let (client, url) = (client.clone(), control_url.clone());
+                    tokio::spawn(async move {
+                        loop {
+                            pace(&client, &url, Some(PACE_MS)).await;
+                            tokio::time::sleep(PACE_RENEW).await;
+                        }
+                    })
+                };
                 let mut body = resp.bytes_stream();
                 let mut parser = Parser::default();
                 let mut gone = false;
@@ -363,6 +394,10 @@ pub async fn run(hub: Arc<Hub>, events_url: String, idle: Duration) {
                         },
                         _ = &mut idle_gone => { gone = true; break; }
                     }
+                }
+                renew.abort();
+                if gone {
+                    pace(&client, &control_url, None).await;
                 }
                 gone
             }

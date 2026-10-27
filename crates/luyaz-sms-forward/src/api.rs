@@ -243,6 +243,7 @@ impl SmsForwarder {
             date: "2025-01-01 12:00:00".into(),
             sender: "+1234567890".into(),
             content: "This is a test message from the Luya-Z SMS forwarder.".into(),
+            late_secs: None,
         };
         match forward_to(&*self.host, &destination, &sample, &http_agent()) {
             Ok(()) => sent(),
@@ -309,6 +310,7 @@ impl SmsForwarder {
             sender: line.sender,
             content: line.content,
             date: line.date,
+            late_secs: None,
         };
         let outcome = forward_to(&*self.host, &target, &again, &http_agent());
 

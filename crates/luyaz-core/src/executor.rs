@@ -219,7 +219,12 @@ struct Shared {
     round: Mutex<RoundState>,
     hub: Arc<Hub>,
     cfg: Config,
+    /// 现行采样间隔 = `pace` 里未过期登记的最小值；没有登记时 = `idle_ms`。
     interval_ms: AtomicU64,
+    /// 没人登记时的节奏（起始 = spawn 的间隔；serve 用 [`Executor::set_idle_ms`] 设成暗屏 5 秒）。
+    idle_ms: AtomicU64,
+    /// `state.set_interval` 的登记：客户端 → (想要的毫秒, 过期时刻；None = 不过期，旧客户端)。
+    pace: Mutex<std::collections::HashMap<String, (u64, Option<Instant>)>>,
     /// 轮转：下一轮从这块开始（V2-20）。
     cursor: Mutex<usize>,
     driver: Mutex<Option<Arc<dyn RoundDriver>>>,
@@ -593,6 +598,19 @@ impl Shared {
         Duration::from_millis(self.interval_ms.load(Ordering::Relaxed))
     }
 
+    /// 去掉过期登记，重算现行间隔；变了就叫醒主循环。返回现行间隔。
+    fn refresh_pace(&self, now: Instant) -> u64 {
+        let ms = {
+            let mut p = lock(&self.pace);
+            p.retain(|_, (_, until)| until.is_none_or(|u| u > now));
+            p.values().map(|(ms, _)| *ms).min().unwrap_or(self.idle_ms.load(Ordering::Relaxed))
+        };
+        if self.interval_ms.swap(ms, Ordering::Relaxed) != ms {
+            self.wake.notify_one();
+        }
+        ms
+    }
+
     fn schedule(&self) -> Schedule {
         Schedule {
             cache: self.cfg.cache,
@@ -677,6 +695,7 @@ impl Shared {
     async fn run(self: Arc<Self>) {
         let mut last_round_end = Instant::now();
         loop {
+            self.refresh_pace(Instant::now());
             let driver = lock(&self.driver).clone();
             let deadline = driver
                 .as_ref()
@@ -731,6 +750,8 @@ impl Executor {
             hub,
             cfg,
             interval_ms: AtomicU64::new(sample_interval.as_millis() as u64),
+            idle_ms: AtomicU64::new(sample_interval.as_millis() as u64),
+            pace: Mutex::default(),
             cursor: Mutex::new(0),
             driver: Mutex::new(None),
             kick: AtomicBool::new(false),
@@ -788,10 +809,34 @@ impl Executor {
         self.shared.interval_ms.load(Ordering::Relaxed)
     }
 
-    /// `state.set_interval`：改执行者的睡眠间隔，正在睡的这一次按新间隔重算。
+    /// 没人登记时回落到的节奏。
+    pub fn set_idle_ms(&self, ms: u64) {
+        self.shared.idle_ms.store(ms, Ordering::Relaxed);
+        self.shared.refresh_pace(Instant::now());
+    }
+
+    /// 旧客户端的 `state.set_interval`（不带 client）：一条不过期的登记。
     pub fn set_interval_ms(&self, ms: u64) {
-        self.shared.interval_ms.store(ms, Ordering::Relaxed);
-        self.shared.wake.notify_one();
+        self.want_interval("", Some(ms), None);
+    }
+
+    /// `state.set_interval` 带 client：登记（`ms` = Some，`ttl` 后过期）或撤销（None）。
+    /// 现行间隔取所有未过期登记里最快的，都没有就回到 idle；变了就叫醒执行者按新间隔重算。
+    /// 返回现行间隔。客户端崩了不撤销，过期后自动回落（触屏亮屏崩溃不会把核心钉在 1 秒）。
+    pub fn want_interval(&self, client: &str, ms: Option<u64>, ttl: Option<Duration>) -> u64 {
+        let now = Instant::now();
+        {
+            let mut p = lock(&self.shared.pace);
+            match ms {
+                Some(ms) => {
+                    p.insert(client.to_string(), (ms, ttl.map(|t| now + t)));
+                }
+                None => {
+                    p.remove(client);
+                }
+            }
+        }
+        self.shared.refresh_pace(now)
     }
 
     /// 从现在起周期采集：睡一个采样间隔，采一轮，如此往复。

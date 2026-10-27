@@ -21,6 +21,8 @@ pub const QUEUE_PATH: &str = "/data/luyaz/core/sms-forward-queue.json";
 pub(crate) const BACKOFF_BASE_SECS: i64 = 30;
 pub(crate) const BACKOFF_CAP_SECS: i64 = 15 * 60;
 /// A job still pending after this much online time is given up (alert once).
+/// A job that goes out this long after it was queued is marked late in the chat text.
+pub(crate) const LATE_AFTER_SECS: i64 = 120;
 pub(crate) const GIVE_UP_ONLINE_SECS: u64 = 24 * 3600;
 /// Jobs kept; past it the oldest finished ones go first, then the oldest pending (given up).
 pub(crate) const MAX_JOBS: usize = 300;
@@ -223,6 +225,8 @@ impl Queue {
             "sent": count(JobState::Sent),
             "failed": count(JobState::Failed),
             "next_at": self.pending().map(|j| j.next_at).min(),
+            // how long the oldest pending one has waited (device clock), null when none
+            "oldest_pending_secs": self.pending().map(|j| j.created_at).min().map(|t| (crate::text::now_ts() - t).max(0)),
         })
     }
 }

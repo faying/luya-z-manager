@@ -514,6 +514,7 @@ impl Ui {
     }
 
     /// live = core answered this second; the model's data is its snapshot (or the last one).
+    #[allow(clippy::needless_range_loop)] // pre-existing, not touched in 1.16.0
     pub(super) fn place_paint(&mut self, live: bool) {
         if self.pl.hero.is_null() {
             return;
@@ -987,6 +988,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)] // pre-existing, not touched in 1.16.0
     fn width_is_the_primary_carrier() {
         let mut d = ui_model::core_snapshot_t::default();
         d.nr_width = "100".into();

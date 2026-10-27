@@ -154,6 +154,12 @@ pub fn ex_lines(m: &Model, now: i64) -> (Vec<ExLine>, String) {
     } else {
         tr("查询中…").into()
     };
+    // the direct exit: core 1.50's on-demand probe, while fresh; else 「—」 as before
+    let dms = m
+        .direct_lat
+        .as_ref()
+        .filter(|l| l.ms > 0 && now - l.at < crate::data::latency::SHOW_S && l.at - now < 300)
+        .map_or(LAT_NONE, |l| l.ms);
     // the main selector's node: its last delay test
     let node = m.chill_node.as_deref().unwrap_or("");
     let node_ms = match m.chill_nodes.iter().find(|x| x.selected != 0 && x.name == node) {
@@ -171,7 +177,7 @@ pub fn ex_lines(m: &Model, now: i64) -> (Vec<ExLine>, String) {
         } else {
             tr("CHILL 没在运行，暂时全部直连")
         };
-        return (vec![line(tr("全部"), th.fill_grey, tr("直连"), dg, LAT_NONE)], desc.into());
+        return (vec![line(tr("全部"), th.fill_grey, tr("直连"), dg, dms)], desc.into());
     }
     let ex = m.chill_exit_raw.as_deref().unwrap_or("");
     let mut v: Vec<ExLine> = Vec::new();
@@ -182,12 +188,12 @@ pub fn ex_lines(m: &Model, now: i64) -> (Vec<ExLine>, String) {
             desc = tr("全局：所有流量都走这个节点").into();
         }
         "direct_all" => {
-            v.push(line(tr("全部"), th.fill_green, tr("直连"), dg, LAT_NONE));
+            v.push(line(tr("全部"), th.fill_green, tr("直连"), dg, dms));
             desc = tr("CHILL 开着，但不经过它").into();
         }
-        "direct_keep_ai" => v.push(line(tr("其余"), th.fill_green, tr("直连"), dg, LAT_NONE)),
+        "direct_keep_ai" => v.push(line(tr("其余"), th.fill_green, tr("直连"), dg, dms)),
         _ => {
-            v.push(line(tr("国内"), th.fill_green, tr("直连"), dg, LAT_NONE));
+            v.push(line(tr("国内"), th.fill_green, tr("直连"), dg, dms));
             v.push(line(tr("其余"), th.fill_blue, trc!("route", "节点"), pg, node_ms));
         }
     }
@@ -195,7 +201,7 @@ pub fn ex_lines(m: &Model, now: i64) -> (Vec<ExLine>, String) {
     if ex != "direct_all" && (!sc.ai_region.is_empty() || sc.ai_gate != 0 || ex == "direct_keep_ai") {
         // gate 1: shut until the exit is checked; gate 2: out the cellular exit, checked to be
         // in the region
-        let ms = if sc.ai_gate == 1 { LAT_PAUSED } else { LAT_NONE };
+        let ms = if sc.ai_gate == 1 { LAT_PAUSED } else if sc.ai_gate == 2 { dms } else { LAT_NONE };
         let exit = if sc.ai_gate == 2 { tr("直连") } else { trc!("route", "节点") };
         v.push(line("AI", th.fill_vio, exit, region_name(&sc.ai_region), ms));
     }
@@ -283,9 +289,62 @@ pub fn dur_short(m: i64) -> String {
     }
 }
 
+/// how long it has been here, in the largest whole unit: 「40 分钟」「2 小时」「3 天」
+fn stay(secs: i64) -> String {
+    let m = secs / 60;
+    let (n, unit) = if m < 60 { (m.max(1), tr("%d 分钟")) } else if m < 48 * 60 { (m / 60, tr("%d 小时")) } else { (m / 1440, tr("%d 天")) };
+    String::from_utf8_lossy(&cf!(unit, n as i32)).into_owned()
+}
+
 /// a #rrggbb recolour run (label_set_recolor): `w` in `col`
 fn hl(col: u32, w: &str) -> String {
     format!("#{col:06x} {w}#")
+}
+
+/// 「判断中 ●●○」 (core 1.50's GET /api/scenario): the scans point at another scenario than the
+/// one in force; a filled dot per scan so far, out of the scans it takes. Empty = not judging.
+pub fn judge_dots(sc: &ui_model::scenario_status_t) -> String {
+    if sc.detail == 0 || sc.candidate.is_empty() || sc.candidate == sc.current || sc.enter_hits <= 0 || sc.enter_hits > 6 {
+        return String::new();
+    }
+    let n = sc.enter_hits as usize;
+    let k = (sc.hits.max(0) as usize).min(n);
+    format!("{} {}{}", tr("判断中"), "●".repeat(k), "○".repeat(n - k))
+}
+
+/// The Wi-Fi that put the device in the scenario in force: (SSID, since) when the last scan
+/// matched one for it (core 1.50); None = an older core, or not by Wi-Fi.
+pub fn matched_wifi(sc: &ui_model::scenario_status_t) -> Option<(String, i64)> {
+    (sc.detail != 0 && !sc.matched_ssid.is_empty() && sc.matched_id == sc.current && sc.matched_since > 0)
+        // a # would start a recolour run in the label
+        .then(|| (sc.matched_ssid.replace('#', "＃"), sc.matched_since))
+}
+
+/// The scans miss the Wi-Fi that put the device in the scenario in force: (the scenario they
+/// point at, misses so far). None = not leaving, not Wi-Fi-detected, or an older core.
+pub fn leaving(sc: &ui_model::scenario_status_t) -> Option<(String, i32)> {
+    if sc.detail == 0 || sc.misses <= 0 || sc.cur_ssid.is_empty() || sc.candidate.is_empty() || sc.candidate == sc.current {
+        return None;
+    }
+    let to = if sc.cand_name.is_empty() { tr("别的情景").to_string() } else { sc.cand_name.clone() };
+    Some((to, sc.misses))
+}
+
+/// 「08:41」 today, else the date (as the switch time is written).
+fn hhmm_or_date(at: i64, now: i64) -> String {
+    let (tm, tn) = (clock::local(at), clock::local(now));
+    let today = tm.year == tn.year && tm.yday == tn.yday;
+    clock::strftime(if today { "%H:%M" } else if lang::is_en() { "%d %b" } else { "%m-%d" }, &tm)
+}
+
+/// `x` as it is when it fits in `room` px, else cut in the middle (midcut) to the longest that
+/// does; never under 7 characters.
+pub fn fit_midcut(x: &str, room: i32, w: impl Fn(&str) -> i32) -> String {
+    if w(x) <= room {
+        return x.into();
+    }
+    let n = x.chars().count();
+    (7..n).rev().map(|k| midcut(x, k)).find(|c| w(c) <= room).unwrap_or_else(|| midcut(x, 7))
 }
 
 unsafe extern "C" fn sc_band_cb(_e: *mut sys::lv_event_t) {
@@ -472,6 +531,9 @@ impl Ui {
         } else {
             (tr("● 自动"), th.fill_ind)
         };
+        // core 1.50: the scans point elsewhere: 「判断中 ●●○」, a dot per scan it needs
+        let judging = judge_dots(sc);
+        let pill: &str = if sc.available != 0 && sc.enabled != 0 && sc.pin.is_empty() && !judging.is_empty() { &judging } else { pill };
         self.set(s.pill_l, pill);
         let pw = lv::text_w(pill.as_bytes(), f.cj12) + 18;
         s.pill.set_width(pw);
@@ -493,7 +555,8 @@ impl Ui {
         } else if sc.name.is_empty() {
             tr("开机后要连续两次扫描确认位置").into()
         } else if !sc.pin.is_empty() {
-            format!("{}{}", k(tr("已固定")), since(&when))
+            let by = if when.is_empty() { String::new() } else { String::from_utf8_lossy(&cf!(tr(" · 你 %s 手动选的"), &when)).into_owned() };
+            format!("{}{}", k(tr("已固定")), by)
         } else if sc.abroad != 0 {
             let ni = m.netinfo.clone().unwrap_or_default();
             let here = if ni.serving.country.is_empty() { tr("国外").to_string() } else { ni.serving.country.clone() };
@@ -501,7 +564,28 @@ impl Ui {
             if !ni.home.country.is_empty() && ni.home.country != here {
                 w.push_str(&String::from_utf8_lossy(&cf!(tr("（卡是%s的）"), &ni.home.country)));
             }
-            w + &since(&when)
+            if sc.last_switch > 0 && now >= sc.last_switch {
+                w.push_str(&String::from_utf8_lossy(&cf!(tr(" · 到了 %s"), &stay(now - sc.last_switch))));
+            }
+            w
+        } else if let Some((to, n)) = leaving(sc) {
+            // core 1.50: the Wi-Fi that brought it here has not been seen N scans in a row
+            let wifi: String = if home_like {
+                tr("家里 Wi-Fi").into()
+            } else {
+                let room = CARD_W - 50 - 12 - lv::text_w(cf!(tr("可能切到%s：%s %d 次没看到"), &to, "Wi-Fi ", n).as_slice(), f.cj12);
+                format!("Wi-Fi {}", fit_midcut(&sc.cur_ssid.replace('#', "＃"), room, |x| lv::text_w(x.as_bytes(), f.cj12)))
+            };
+            String::from_utf8_lossy(&cf!(tr("可能切到%s：%s %d 次没看到"), &k(&to), &wifi, n)).into_owned()
+        } else if let Some((ssid, at)) = matched_wifi(sc) {
+            // core 1.50: the network the scans matched, and since when
+            let wifi = if home_like { tr("家里 Wi-Fi") } else { "Wi-Fi" };
+            let at = hhmm_or_date(at, now);
+            let head = String::from_utf8_lossy(&cf!(tr("因为看到%s"), wifi)).into_owned();
+            // the SSID gets what the line has left (cj12), both ends kept
+            let room = CARD_W - 50 - 12 - lv::text_w(format!("{head} {}", since(&at)).as_bytes(), f.cj12);
+            let ssid = fit_midcut(&ssid, room, |x| lv::text_w(x.as_bytes(), f.cj12));
+            String::from_utf8_lossy(&cf!(tr("因为看到%s"), &k(&format!("{wifi} {ssid}")))).into_owned() + &since(&at)
         } else if sc.wifi_off != 0 {
             String::from_utf8_lossy(&cf!(tr("因为看到%s"), &k(tr("家里 Wi-Fi")))).into_owned() + &since(&when)
         } else if when.is_empty() {
@@ -800,6 +884,37 @@ impl Ui {
 mod tests {
     use super::*;
 
+    #[test]
+    fn matched_wifi_and_judging() {
+        let mut sc = ui_model::scenario_status_t { detail: 1, current: "home".into(), enter_hits: 2, ..Default::default() };
+        assert!(judge_dots(&sc).is_empty());
+        sc.candidate = "away".into();
+        sc.hits = 1;
+        assert_eq!(judge_dots(&sc), "判断中 ●○");
+        sc.hits = 5;
+        assert_eq!(judge_dots(&sc), "判断中 ●●");
+        // an older core: never
+        sc.detail = 0;
+        assert!(judge_dots(&sc).is_empty());
+        let mut sc = ui_model::scenario_status_t { detail: 1, current: "home".into(), matched_id: "home".into(), matched_ssid: "Home#5G".into(), matched_since: 100, ..Default::default() };
+        assert_eq!(matched_wifi(&sc), Some(("Home＃5G".into(), 100)));
+        let mut lv_ = sc.clone();
+        lv_.cur_ssid = "Home-5G".into();
+        assert!(leaving(&lv_).is_none());
+        (lv_.candidate, lv_.cand_name, lv_.misses) = ("away".into(), "外出".into(), 2);
+        assert_eq!(leaving(&lv_), Some(("外出".into(), 2)));
+        lv_.cand_name.clear();
+        assert_eq!(leaving(&lv_).unwrap().0, "别的情景");
+        // the match is for a scenario not (yet) in force
+        sc.matched_id = "office".into();
+        assert!(matched_wifi(&sc).is_none());
+        // one px per char: both ends kept, as long as fits
+        let w = |x: &str| x.chars().count() as i32;
+        assert_eq!(fit_midcut("Home-5G", 20, w), "Home-5G");
+        assert_eq!(fit_midcut("MyVeryLongHomeNetwork-5G", 12, w), "MyVery…rk-5G");
+        assert_eq!(fit_midcut("MyVeryLongHomeNetwork-5G", 12, w).chars().count(), 12);
+    }
+
     fn l(tag: &str, exit: &str, ms: i32) -> ExLine {
         ExLine { tag: tag.into(), fill: 0, exit: exit.into(), place: String::new(), place_col: 0, ms }
     }
@@ -825,5 +940,14 @@ mod tests {
         assert_eq!(dur_short(100), "1h 40m");
         assert_eq!(dur_short(120), "2h");
         assert_eq!(dur_short(891), "14h 51m");
+    }
+
+    #[test]
+    fn stay_in_the_largest_whole_unit() {
+        assert_eq!(stay(20), "1 分钟");
+        assert_eq!(stay(40 * 60), "40 分钟");
+        assert_eq!(stay(2 * 3600 + 59 * 60), "2 小时");
+        assert_eq!(stay(47 * 3600), "47 小时");
+        assert_eq!(stay(3 * 86400), "3 天");
     }
 }

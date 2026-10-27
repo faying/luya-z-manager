@@ -14,6 +14,12 @@
 //!   whole-modem restarts have no verified source yet and land in `unknown`. Only an outage over
 //!   [`NO_SERVICE_ALERT`] s with nothing seen queues `no-service-long`.
 //!
+//! A also has an event path ([`spawn_wifi_watch`]): an inotify `IN_OPEN` on the script wakes a
+//! thread that looks again just past [`WIFI_MIN_AGE`] and once more after that, so a spin opens
+//! about a minute after the script starts instead of two or three minute ticks later. The thread
+//! sleeps in a blocking `read` the rest of the time (no polling); without inotify the minute tick
+//! alone still covers it.
+//!
 //! Neither kind is sent as an SMS (owner 10-23: inbox and MCP only while false alarms are watched).
 
 use serde_json::{Value, json};
@@ -360,15 +366,22 @@ fn save_row(row: &Value) {
     }
 }
 
-/// One minute tick, from the usage log with the snapshot's fields.
-pub fn tick(fields: Option<&serde_json::Map<String, Value>>, wall: i64) {
-    let up = uptime();
-    let g = gens();
-    let registered = fields
-        .and_then(|f| f.get("net")?.get("type")?.as_str())
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .map(crate::ops::registered);
+fn live() -> std::sync::MutexGuard<'static, Option<Live>> {
+    LIVE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn live_of(slot: &mut Option<Live>) -> &mut Live {
+    slot.get_or_insert_with(|| Live {
+        wifi: WifiWatch::default(),
+        ledger: Ledger::default(),
+        forks: None,
+        gens: Gens::default(),
+        up: 0,
+    })
+}
+
+/// Look at the script and both counts now, and step check A.
+fn wifi_check(l: &mut Live, up: u64) {
     let proc = crate::state::host_path("/proc");
     let (start, clis) = scan_proc(Path::new(&proc));
     let hz = 100; // CONFIG_HZ-independent USER_HZ
@@ -379,14 +392,6 @@ pub fn tick(fields: Option<&serde_json::Map<String, Value>>, wall: i64) {
         .ok()
         .and_then(|s| forks(&s));
 
-    let mut live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
-    let l = live.get_or_insert_with(|| Live {
-        wifi: WifiWatch::default(),
-        ledger: Ledger::default(),
-        forks: None,
-        gens: Gens::default(),
-        up: 0,
-    });
     let forks_per_s = match (l.forks, fk) {
         (Some((u0, f0)), Some(f)) if up > u0 => {
             Some((f.saturating_sub(f0)) as f64 / (up - u0) as f64)
@@ -415,6 +420,20 @@ pub fn tick(fields: Option<&serde_json::Map<String, Value>>, wall: i64) {
             up,
         );
     }
+}
+
+/// One minute tick, from the usage log with the snapshot's fields.
+pub fn tick(fields: Option<&serde_json::Map<String, Value>>, wall: i64) {
+    let up = uptime();
+    let g = gens();
+    let registered = fields
+        .and_then(|f| f.get("net")?.get("type")?.as_str())
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(crate::ops::registered);
+    let mut live = live();
+    let l = live_of(&mut live);
+    wifi_check(l, up);
     let t = l.ledger.step(registered, &g, up, wall);
     if let Some(row) = &t.row {
         save_row(row);
@@ -434,9 +453,90 @@ pub fn tick(fields: Option<&serde_json::Map<String, Value>>, wall: i64) {
     l.up = up;
 }
 
+pub const WIFI_SCRIPT: &str = "/sbin/zte_post_wifi.sh";
+/// After the script starts: first look just past `WIFI_MIN_AGE`, the second one this much later
+/// (the two hits `WifiWatch` needs).
+const WATCH_FIRST: u64 = WIFI_MIN_AGE + 5;
+const WATCH_AGAIN: u64 = 30;
+
+/// Event path for check A (see the module docs). Returns at once; the thread ends quietly when
+/// inotify or the script is missing (the minute tick still covers it).
+pub fn spawn_wifi_watch() {
+    let _ = std::thread::Builder::new()
+        .name("wifi-post-watch".into())
+        .spawn(|| {
+            let Some(fd) = open_watch(&crate::state::host_path(WIFI_SCRIPT)) else {
+                eprintln!("[stock_anomaly] no inotify on {WIFI_SCRIPT}: minute tick only");
+                return;
+            };
+            let mut buf = [0u8; 1024];
+            loop {
+                // blocking read: the thread sleeps until something opens the script
+                let n = unsafe {
+                    // SAFETY: read into a buffer we own, from an fd we own.
+                    libc::read(
+                        std::os::fd::AsRawFd::as_raw_fd(&fd),
+                        buf.as_mut_ptr().cast(),
+                        buf.len(),
+                    )
+                };
+                if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                if n <= 0 {
+                    eprintln!("[stock_anomaly] wifi watch read failed: minute tick only");
+                    return;
+                }
+                for wait in [WATCH_FIRST, WATCH_AGAIN] {
+                    std::thread::sleep(std::time::Duration::from_secs(wait));
+                    let up = uptime();
+                    wifi_check(live_of(&mut live()), up);
+                }
+                // opens while we waited belong to the run just looked at (or a later one the
+                // minute tick sees): drop them, then wait for the next start
+                drain(&fd);
+            }
+        });
+}
+
+fn open_watch(path: &str) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    let c = std::ffi::CString::new(path).ok()?;
+    // SAFETY: inotify_init1 / add_watch with plain values; the fd is owned below.
+    unsafe {
+        let fd = libc::inotify_init1(libc::IN_CLOEXEC);
+        if fd < 0 {
+            return None;
+        }
+        let owned = std::os::fd::OwnedFd::from_raw_fd(fd);
+        (libc::inotify_add_watch(fd, c.as_ptr(), libc::IN_OPEN) >= 0).then_some(owned)
+    }
+}
+
+fn drain(fd: &std::os::fd::OwnedFd) {
+    use std::os::fd::AsRawFd;
+    let raw = fd.as_raw_fd();
+    let mut buf = [0u8; 1024];
+    loop {
+        let mut p = libc::pollfd {
+            fd: raw,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one pollfd we own, no wait.
+        if unsafe { libc::poll(&mut p, 1, 0) } <= 0 {
+            return;
+        }
+        // SAFETY: read into a buffer we own.
+        if unsafe { libc::read(raw, buf.as_mut_ptr().cast(), buf.len()) } <= 0 {
+            return;
+        }
+    }
+}
+
 /// `stock_anomalies` for `/v2/device/capabilities`.
 pub fn report() -> Value {
-    let live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
+    let live = live();
     let (wifi, outage) = live.as_ref().map_or((None, None), |l| {
         (l.wifi.open().cloned(), l.ledger.current(&l.gens, l.up))
     });

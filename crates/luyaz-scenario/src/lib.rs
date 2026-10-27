@@ -248,6 +248,10 @@ pub trait Io: Send + Sync + 'static {
     /// last): the agent writes the file for u60d's shadow; nobody else needs them.
     fn publish(&self, _ring: &str) {}
 
+    /// A switch by detection finished: from `from` to `to` (named `name`); `ok` false = apply
+    /// failed and the engine fell back to away. Rare (hysteresis), so the host may keep it.
+    fn switched(&self, _from: &str, _to: &str, _name: &str, _ok: bool) {}
+
     /// The decisions: u60-policy's built-in step, or a host's component of it.
     fn step(&self, i: &TickInput) -> TickOutcome {
         sc::step(i)
@@ -932,6 +936,7 @@ impl Engine {
         let applied_ok = result.is_ok();
 
         let mut st = lk(&self.state);
+        let from = st.current.clone();
         match result {
             Ok(()) => {
                 st.current = scen.id.clone();
@@ -963,9 +968,11 @@ impl Engine {
             "kind": "applied", "origin": "tick", "to": scen.id, "ok": applied_ok,
             "error": st.last_error, "after": tick_state(&st),
         });
+        let to = st.current.clone();
         drop(st);
         // switch_to is only reached from tick (the HTTP paths go through bootsafe)
         self.publish(rec);
+        self.io.switched(&from, &to, &scen.name, applied_ok);
     }
 
     /// One tick: the decisions are [`Io::step`]'s (u60-policy `scenario::step`), called before the
@@ -1129,7 +1136,11 @@ impl Engine {
             input.recheck = Some(Recheck { at: self.io.now(), networks: &more });
             out = self.io.step(&input);
             let detected = sc::detect(&cfg, &all, mcc.as_deref()).unwrap_or_else(|| AWAY_ID.to_string());
-            if detected == current {
+            // why a seen-but-weak scan counts as a miss, or an absent one does not
+            let reading = sc::leave_reading(&cfg, &st, &all, out.state.last_scan);
+            if let Some(note) = reading.and_then(|r| sc::leave_note(&current, &r, &cfg.params)) {
+                self.log(&note);
+            } else if detected == current {
                 self.log(&format!("{current:?} unseen in one scan ({first_scan} networks), seen on recheck"));
             } else if let Some(entries) = sc::ssid_entries(&cfg, &current) {
                 self.log(&format!(

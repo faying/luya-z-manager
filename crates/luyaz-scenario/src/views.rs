@@ -73,6 +73,11 @@ impl Engine {
             "candidate": st.candidate,
             "hits": st.hits,
             "misses": st.misses,
+            // what the touch draws as 判断中 ●●○: hits towards entering, misses towards leaving
+            "enter_hits": cfg.params.enter_hits,
+            "exit_misses": cfg.params.exit_misses,
+            // the network the last scan matched (never in public_summary: an SSID spoofs home)
+            "matched": st.matched.as_ref().map(|m| json!({"id": m.id, "ssid": m.ssid, "since": m.since})),
             "applied": st.applied,
             "last_switch": st.last_switch,
             "last_scan": st.last_scan,

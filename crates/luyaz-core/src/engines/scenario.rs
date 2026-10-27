@@ -200,6 +200,14 @@ impl Io for U60dIo {
         format!("{}{p}", self.root)
     }
 
+    /// The home timeline's scenario switches (`long/events.jsonl`, kind `scenario`).
+    fn switched(&self, from: &str, to: &str, name: &str, ok: bool) {
+        crate::longterm::note(
+            "scenario",
+            json!({"from": from, "to": to, "name": name, "ok": ok}),
+        );
+    }
+
     fn active(&self) -> bool {
         self.active.load(Ordering::SeqCst)
     }

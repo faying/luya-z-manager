@@ -132,6 +132,12 @@ pub struct Model {
     /// 落地 (core GET /v2/usage/landing): None = none to show
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landing: Option<landing_t>,
+    /// the direct exit's latency (core GET /v2/latency/direct): None = not measured / failed
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_lat: Option<direct_lat_t>,
+    /// today's timeline (core GET /v2/timeline/today): None = not read, or the core has none
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub today: Option<today_t>,
 
     pub bl_panel_lit: i32,
     pub bl_is_on: i32,

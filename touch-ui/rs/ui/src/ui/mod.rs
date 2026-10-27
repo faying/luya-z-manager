@@ -12,6 +12,7 @@ mod esim;
 mod exit;
 mod home;
 mod home_scene;
+mod home_today;
 mod lock;
 mod network;
 mod op;

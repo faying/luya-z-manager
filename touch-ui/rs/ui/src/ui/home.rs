@@ -76,6 +76,33 @@ pub enum HeroAct {
     Swap,
     /// 去启用 › (no SIM: SIM and eSIM)
     Enable,
+    /// 摆放模式 › (core's fix `placement`: weak signal or high noise)
+    Place,
+    /// 去打开 › (core's fix `cell`: mobile data or data roaming is off)
+    Cell,
+}
+
+/// The diagnosis row for `story.fix`'s diag:<layer> (the story says data / internet, the
+/// diagnosis names them bearer / e2e); the others are the same ids.
+pub fn diag_row(layer: &str) -> &str {
+    match layer {
+        "data" => "bearer",
+        "internet" => "e2e",
+        l => l,
+    }
+}
+
+/// The footer's action for the core's `story.fix` (core 1.50); None = no fix given (an older
+/// core, or nothing to do), and the touch decides as before.
+pub fn fix_act(fix: &str) -> Option<HeroAct> {
+    Some(match fix {
+        "sim_enable" => HeroAct::Enable,
+        "cell" => HeroAct::Cell,
+        "placement" => HeroAct::Place,
+        "op" => HeroAct::Op,
+        f if f.starts_with("diag:") => HeroAct::Diag,
+        _ => return None,
+    })
 }
 
 /// One carrier in the footer: band label + a bar as wide as its MHz share.
@@ -158,6 +185,8 @@ pub struct Home {
     ts_val: [Obj; TS_HOME_ROWS],
     ts_key: [Obj; TS_HOME_ROWS],
     ts_sep: [Obj; TS_HOME_ROWS],
+    /// 今天 (home_today.rs), after Tailscale
+    pub td: super::home_today::TodayCard,
     // refresh state
     ever_valid: bool,
     pub last_valid_wall: i64,
@@ -166,6 +195,8 @@ pub struct Home {
     shown_cause: i32,
     shown_headline: String,
     shown_hint: String,
+    /// story.fix held with the headline (the action never flickers against the verdict)
+    shown_fix: String,
     shown_state: i32,
     hold: NetHold,
     nosig_since: u32,
@@ -216,6 +247,7 @@ impl Default for Home {
             ts_val: [Obj::NULL; TS_HOME_ROWS],
             ts_key: [Obj::NULL; TS_HOME_ROWS],
             ts_sep: [Obj::NULL; TS_HOME_ROWS],
+            td: Default::default(),
             ever_valid: false,
             last_valid_wall: 0,
             cc_tone: -1,
@@ -223,6 +255,7 @@ impl Default for Home {
             shown_cause: 0,
             shown_headline: String::new(),
             shown_hint: String::new(),
+            shown_fix: String::new(),
             shown_state: 0,
             hold: NetHold::default(),
             nosig_since: 0,
@@ -521,6 +554,7 @@ impl Ui {
         kit::tappable(ts, Some(super::tile_click_cb), Sub::Ts as usize);
         kit::show(ts, false);
         h.ts_card = ts;
+        self.build_home_today(sc);
         self.home_reflow();
     }
 
@@ -630,6 +664,10 @@ impl Ui {
             h.ts_card.set_y(y);
             y += h.ts_card.style_height(0) + MARGIN;
         }
+        if !h.td.card.is_null() && !h.td.card.hidden() {
+            h.td.card.set_y(y);
+            y += h.td.card.style_height(0) + MARGIN;
+        }
         kit::scroll_extent(h.scroll, y + TAB_PAD);
         // the carrier card and others are on other tabs: shown or hidden, those move too
         self.cell_reflow();
@@ -734,11 +772,24 @@ impl Ui {
     }
 
     /// The footer's action.
-    fn home_act(&mut self) {
+    pub fn home_act(&mut self) {
         match self.home.act {
-            HeroAct::Diag => self.sub_open(Sub::Diag),
+            HeroAct::Diag => {
+                // core 1.50's diag:<layer>: the page scrolls to that layer's row when done
+                self.dg.focus = diag_row(self.home.shown_fix.strip_prefix("diag:").unwrap_or("")).to_string();
+                self.dg.focus_top = None;
+                self.sub_open(Sub::Diag);
+                // a finished run was painted on opening, before sub_open went to the top
+                if let Some(top) = self.dg.focus_top.take()
+                    && let Some(sc) = super::obj_scroller(self.sub_page[Sub::Diag as usize])
+                {
+                    sc.scroll_to_y(top);
+                }
+            }
             HeroAct::Op => self.sub_open(Sub::Op),
             HeroAct::Enable => self.sub_open(Sub::Esim),
+            HeroAct::Place => self.sub_open(Sub::Place),
+            HeroAct::Cell => self.tab_go(TAB_CELL),
             // 蜂窝's dual-SIM rows switch the data card (with their own confirm)
             HeroAct::Swap | HeroAct::None => self.tab_go(TAB_CELL),
         }
@@ -949,6 +1000,8 @@ impl Ui {
             HeroAct::Op => tr("详情 ›"),
             HeroAct::Swap => tr("换这张上网 ›"),
             HeroAct::Enable => tr("去启用 ›"),
+            HeroAct::Place => tr("摆放模式 ›"),
+            HeroAct::Cell => tr("去打开 ›"),
         };
         let (bx, l) = (self.home.act_box, self.home.act_l);
         kit::show(bx, a != HeroAct::None);
@@ -992,6 +1045,7 @@ impl Ui {
                 h.shown_state = v.state;
                 h.shown_headline = v.story.headline.clone();
                 h.shown_hint = v.story.hint.clone();
+                h.shown_fix = v.story.fix.clone();
             }
         }
         self.top_label = v.story.rat.clone();
@@ -1119,6 +1173,9 @@ impl Ui {
             HeroAct::Enable
         } else if swap {
             HeroAct::Swap
+        } else if let Some(a) = fix_act(&self.home.shown_fix) {
+            // core 1.50 names where to go; the swap offer above stays the touch's
+            a
         } else if nv::abnormal(self.home.shown_state, self.home.shown_cause) {
             HeroAct::Diag
         } else {
@@ -1557,6 +1614,19 @@ pub(crate) fn qos_line(d: &ui_model::core_snapshot_t) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fix_targets() {
+        assert_eq!(fix_act("placement"), Some(HeroAct::Place));
+        assert_eq!(fix_act("diag:dns"), Some(HeroAct::Diag));
+        assert_eq!(fix_act("cell"), Some(HeroAct::Cell));
+        assert_eq!(fix_act("sim_enable"), Some(HeroAct::Enable));
+        assert_eq!(fix_act("op"), Some(HeroAct::Op));
+        // absent (older core) or unknown (a newer one, e.g. exit): the old rules
+        assert_eq!(fix_act(""), None);
+        assert_eq!(fix_act("exit"), None);
+        assert_eq!((diag_row("data"), diag_row("internet"), diag_row("dns")), ("bearer", "e2e", "dns"));
+    }
 
     #[test]
     fn geo_keeps_country_and_city() {

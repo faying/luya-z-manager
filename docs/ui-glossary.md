@@ -458,6 +458,25 @@ regress 短信（`sms.rs` `regress_zh`/`regress_en`）：模板 + 告警文字�
 
 网页行内确认是整句，照现有写法带句号（「会用掉移动数据：约 30 秒 · 最多 750 MB。」）。
 
+## 18. 首页补数据（core 1.50 / touch 1.16.0，10-26；触屏首页）
+
+| 位置 | 中文 | English | 说明 |
+|---|---|---|---|
+| 情景卡「为什么」 | 因为看到家里 Wi-Fi Home-5G · 08:41 起 | Saw home Wi-Fi Home-5G · since 08:41 | 不是家里的情景写「Wi-Fi <SSID>」；SSID 太长两头留（前 n−6 字 + … + 后 5 字） |
+| 情景卡「为什么」（要离开） | 可能切到外出：家里 Wi-Fi N 次没看到 | May switch to Away: home Wi-Fi missed N times | 「外出」= 候选情景名；没有名字写「别的情景 / another scenario」；不是家里写「Wi-Fi <SSID>」 |
+| 情景卡「为什么」（已固定） | 已固定 · 你 10:20 手动选的 | Pinned · you picked it at 10:20 | 时间 = 最近一次切换 |
+| 情景卡「为什么」（国外） | 因为在日本（卡是澳门的）· 到了 2 小时 | In Japan (SIM from Macau) · here 2 h | 取最大整单位：分钟 / 小时（48 小时以内）/ 天 |
+| 情景卡模式胶囊 | 判断中 ●●○ | Deciding ●●○ | 实心 = 已经看到的次数，总数 = enter_hits |
+| 状态卡底行操作 | 摆放模式 › | Placement › | fix = placement |
+| 状态卡底行操作 | 去打开 › | Turn on › | fix = cell（移动数据 / 数据漫游关着）→ 蜂窝 |
+| 状态卡底行操作 | 查原因 › | Diagnose › | fix = diag:<层> |
+| 今天（标题） | 今天 | Today | |
+| 今天（标题右） | 每小时平均信号 | Hourly average signal | 一个读数都没有时：还没有信号记录 / No signal readings yet |
+| 今天（时钟没校准） | 设备时间还没校准，时间线暂停 | Device clock not set: timeline paused | |
+| 今天（没有事件） | 今天还没有要记的事 | Nothing to note today yet | |
+| 今天（折叠） | 还有 N 条 | N more | 只显示最新 8 条 |
+| 事件文字 | （core 的 text_zh / text_en 原样） | | core `longterm/today.rs` |
+
 ## 外部评审（10-01，独立子代理；Codex 卡死没跑成）
 
 15 条采纳 14 条：漫游写成找运营商/套餐而非 SIM；RSRP/SINR/RSRQ 带单位；no action needed 代替 nothing to do；ui-gave-up 说清长按是换回；on backup 易被当成电池，改 using fallback；Airplane 代替 Cell off（和提示一致）；核心掉线照实写 Data service offline；web admin；干扰统一叫 Noise；提示行一句话用 `;`；带宽 Wide、No cell、Cell busy、Restricted 等小改。

@@ -85,6 +85,9 @@ function template(): ScenarioConfig {
       enter_hits: 2,
       exit_misses: 2,
       min_rssi_dbm: -70.0,
+      leave_rssi_dbm: -72.0,
+      blip_strong_dbm: -60.0,
+      blip_hold_secs: 300,
     },
     scenarios: [
       { id: "home", name: "在家", detect: { type: "ssid", entries: [] }, actions: [wifiAction(false)], inhibit_sleep: true },

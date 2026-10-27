@@ -1242,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-core"
-version = "1.49.1"
+version = "1.53.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-ui"
-version = "1.15.0"
+version = "1.18.0"
 dependencies = [
  "libc",
  "lvgl-sys",
@@ -1396,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-web"
-version = "1.34.1"
+version = "1.37.0"
 dependencies = [
  "askama",
  "axum",

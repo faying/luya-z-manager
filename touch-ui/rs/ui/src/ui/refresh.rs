@@ -312,6 +312,7 @@ impl Ui {
         self.home_scene_paint(sc_changed);
         self.home_row_paint();
         self.home_landing_paint();
+        self.home_today_paint();
         if self.tab_visible(TAB_HOME) || self.tab_visible(super::TAB_EXIT) || self.sub_visible(super::Sub::Ts) {
             self.home_ts_paint();
         }

@@ -15,7 +15,7 @@
 | 仓库 | 在设备上是什么 | 作用 |
 |---|---|---|
 | [luya-z-manager](https://github.com/faying/luya-z-manager)（本仓库） | `luyaz-core`（由 `crates/luyaz-core` 编，`/data/luyaz/luyaz-core`，`127.0.0.1:9460`）+ `luyaz-web`（:9090）+ `luyaz-sentinel` | 数据服务和设备 API、浏览器里的高级后台、eSIM、CHILL 代理控制，**以及装机包（`onboard/`）** |
-| [luya-z-touch-ui](https://github.com/faying/luya-z-touch-ui) | `/data/luyaz/ui/`（`luyaz-ui`） | 前面板触屏界面（Rust，`touch-ui/rs/`；源码现在在本仓库的 `touch-ui/` 里），以及 `/data/luyaz/scripts/` 下的体检和兜底脚本 |
+| 本仓库的 `touch-ui/` | `/data/luyaz/ui/`（`luyaz-ui`） | 前面板触屏界面（Rust，`touch-ui/rs/`），以及 `/data/luyaz/scripts/` 下的体检和兜底脚本 |
 
 它们在设备上这样连起来：
 
@@ -74,12 +74,11 @@ macOS（Apple 芯片或 Intel）、x86_64 Linux 都验证过能用；触屏程�
 
 ## 3. 编出装机包
 
-仓库并排放在同一个目录下，**只要 manager 和 touch-ui 就能打出完整的装机包，不需要从任何已经装好的设备上拉东西**：
+克隆本仓库（触屏界面在它的 `touch-ui/` 里），**只要这一个仓库就能打出完整的装机包，不需要从任何已经装好的设备上拉东西**：
 
 ```sh
 mkdir u60 && cd u60
 git clone https://github.com/faying/luya-z-manager.git
-git clone https://github.com/faying/luya-z-touch-ui.git
 cd luya-z-manager
 ./onboard/build-kit.sh
 # → onboard/dist/luyaz-kit-YYYYMMDD.tar.gz
@@ -178,7 +177,7 @@ cd luyaz-kit
                         #   （会在 rc.local 加一行；只在用 luyaz-ship.sh 时才装）
 ```
 
-设备上有没结束的 `luyaz-ship.sh` 事务时（见 touch-ui [docs/SHIP.md](https://github.com/faying/luya-z-touch-ui/blob/main/docs/SHIP.md)），`admin`、`ui`、`recover` 会拒绝安装，要先把事务做完或退回。
+设备上有没结束的 `luyaz-ship.sh` 事务时（见 [touch-ui/docs/SHIP.md](../touch-ui/docs/SHIP.md)），`admin`、`ui`、`recover` 会拒绝安装，要先把事务做完或退回。
 
 **备份和恢复配置**（只有配置，不含程序；备份里有密码，别外传）：
 

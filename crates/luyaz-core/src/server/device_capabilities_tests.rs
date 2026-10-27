@@ -41,6 +41,12 @@ pub(super) async fn app() -> (App, crate::ubus::mock_ubusd::MockUbusd) {
                 stage: watch::channel(Stage::Starting).0,
                 interval: Duration::from_secs(1),
                 stop: watch::channel(false).0,
+                latency: latency::Direct::new(Arc::new(|| Box::pin(async { None }))),
+                timeline: crate::longterm::today::Source {
+                    dir: None,
+                    alerts: PathBuf::new(),
+                    clock: || (0, false),
+                },
             }),
         },
         m,

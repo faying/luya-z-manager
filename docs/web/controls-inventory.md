@@ -743,7 +743,7 @@
 | 每个情景做什么：名称 / Wi-Fi 开关状态（外出=「始终开」） | `/api/scenario` | `config.scenarios[].actions[]` 中 `path=/api/wifi/radio` 的 `body.ap_2g`；`detect.type=fallback` | 10000 | 否 |
 | 每个情景做什么：名称 / Wi-Fi 开关状态（外出=「始终开」）/ CHILL 节点下拉当前值 | `/api/scenario` | `config.scenarios[].actions[]` 中 `path=/api/wifi/radio` 的 `body.ap_2g`；`path=/api/services/chill/regions` 且 `body.group="🚀 节点选择"` 的 `body.member`；`detect.type=fallback` | 10000 | 否 |
 | CHILL 节点下拉的选项 | `/api/services/chill` | `region.options`（CHILL 没运行时用页面内置的 `DIRECT / 🇹🇼 台湾 / 🇯🇵 日本 / 🇸🇬 新加坡 / 🇺🇸 美国`） | 无 | 是：chill.rs:122-124 mihomo 不通时 `region` 为 null，照样 ok |
-| 反应快慢 6 个输入框初值 | `/api/scenario` | `config.params.scan_interval_away_charging_secs/scan_interval_away_battery_secs/scan_interval_home_secs/enter_hits/exit_misses/min_rssi_dbm`（只填一次） | 10000 | 否 |
+| 反应快慢 9 个输入框初值 | `/api/scenario` | `config.params.scan_interval_away_charging_secs/scan_interval_away_battery_secs/scan_interval_home_secs/enter_hits/exit_misses/min_rssi_dbm/leave_rssi_dbm/blip_strong_dbm/blip_hold_secs`（缺的用默认值）（只填一次） | 10000 | 否 |
 | 运行记录 | `/api/scenario/log` | `log`（末若干行） | 15000 | 否 |
 | 「还没设置」卡（没有任何情景时整页只显示这张） | `/api/scenario` | `config.scenarios.length === 0` | 10000 | 否 |
 | 整页错误（带 Retry） | `/api/scenario` | SWR `error` | — | — |

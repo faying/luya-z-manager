@@ -45,6 +45,10 @@ const FALLBACK_SCRIPT: &str = "/data/luyaz/scripts/luyaz-fallback.sh";
 /// = start.sh's -i 1000; 5000 = the core's upper limit
 const PACE_LIT_MS: i32 = 1000;
 const PACE_DARK_MS: i32 = 5000;
+/// the pace is a want that lapses in core after PACE_TTL_S (a UI that dies lit does not leave
+/// core at 1 s); sent again every PACE_RENEW_MS while it holds
+const PACE_TTL_S: u32 = 180;
+const PACE_RENEW_MS: u32 = 60_000;
 const SMS_ARM_MS: u32 = 4000;
 const SMS_ARM_DEBOUNCE_MS: u32 = 400;
 
@@ -138,6 +142,7 @@ pub struct CoreLink {
     op_seq: u32,
     /// the interval last asked for; -1 = unknown
     pace_sent: i32,
+    pace_at: u32,
     sms_arm_id: i64,
     sms_arm_ms: u32,
 }
@@ -670,6 +675,7 @@ impl CoreLink {
             notice: data_notice_t::default(),
             op_seq: 0,
             pace_sent: -1,
+            pace_at: 0,
             sms_arm_id: -1,
             sms_arm_ms: 0,
         }
@@ -1351,16 +1357,28 @@ impl CoreLink {
         (self.notice.at != 0 && mono_ms32().wrapping_sub(self.notice.at) < max_age_ms).then(|| self.notice.clone())
     }
 
-    /// the core's polling pace: 1 s lit, 5 s dark. Sent on a change only, and again after every
-    /// reconnect (a restarted core is back at 1 s); never on a timer: each call makes core
-    /// drop its slow-data cache.
+    /// the core's polling pace: 1 s lit, 5 s dark, as this UI's want (client "touch"): core runs
+    /// at the fastest want and drops one that is not renewed. Sent on a change, after every
+    /// reconnect (a restarted core has no wants), and once a minute while it holds.
     pub fn set_pace(&mut self, panel_lit: bool) {
         let want = if panel_lit { PACE_LIT_MS } else { PACE_DARK_MS };
-        if want == self.pace_sent {
+        let now = mono_ms32();
+        if want == self.pace_sent && now.wrapping_sub(self.pace_at) < PACE_RENEW_MS {
             return;
         }
-        self.control_send_ex("state.set_interval", &format!("{{\"milliseconds\":{want}}}"), false);
+        self.control_send_ex(
+            "state.set_interval",
+            &format!("{{\"client\":\"touch\",\"milliseconds\":{want},\"ttl_s\":{PACE_TTL_S}}}"),
+            false,
+        );
         self.pace_sent = want;
+        self.pace_at = now;
+    }
+
+    /// this UI stops (or hands the screen over): take its want back; core falls to its idle pace.
+    pub fn release_pace(&mut self) {
+        self.control_send_ex("state.set_interval", "{\"client\":\"touch\",\"release\":true}", false);
+        self.pace_sent = -1;
     }
 
     // ---- SMS ----

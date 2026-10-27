@@ -522,6 +522,18 @@ impl St {
                 t.op_id, t.action, t.source, t.phase, t.reason
             );
             rec.append(record::txn_line(&t));
+            // the home timeline's automatic repairs: what no person started, and every revert
+            // the core did by itself
+            let auto_revert = t
+                .rollback_reason
+                .is_some_and(|r| !matches!(r, Reason::UserRevert));
+            if matches!(t.source, Source::Auto | Source::Guard) || auto_revert {
+                crate::longterm::note(
+                    "repair",
+                    json!({"op_id": t.op_id, "action": t.action, "item": t.item, "source": t.source,
+                           "phase": t.phase, "rollback_reason": t.rollback_reason}),
+                );
+            }
             if t.who().approved_by == Source::Mcp
                 && let Some(f) = AGENT_END.get()
             {

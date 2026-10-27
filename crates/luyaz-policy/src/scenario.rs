@@ -63,6 +63,29 @@ pub struct Params {
     pub exit_misses: u32,
     /// A name-only network weaker than this does not count as "here".
     pub min_rssi_dbm: f64,
+    /// Leaving a Wi-Fi-detected scenario: a scan whose best matching network (pinned or
+    /// name-only alike) is weaker than this counts as a miss. A fading signal is walking away,
+    /// and the device should take over while the Wi-Fi is already poor. Entering ignores it.
+    #[cfg_attr(feature = "serde", serde(default = "default_leave_rssi"))]
+    pub leave_rssi_dbm: f64,
+    /// Last seen at least this strong and then gone from every scan: a router blip, not
+    /// leaving (nobody walks out of a -40 dBm room between two scans).
+    #[cfg_attr(feature = "serde", serde(default = "default_blip_strong"))]
+    pub blip_strong_dbm: f64,
+    /// How long such a blip is held: absent scans count as misses only once this many seconds
+    /// have passed since the networks were last seen.
+    #[cfg_attr(feature = "serde", serde(default = "default_blip_hold"))]
+    pub blip_hold_secs: u64,
+}
+
+fn default_leave_rssi() -> f64 {
+    -72.0
+}
+fn default_blip_strong() -> f64 {
+    -60.0
+}
+fn default_blip_hold() -> u64 {
+    300
 }
 
 impl Default for Params {
@@ -74,6 +97,9 @@ impl Default for Params {
             enter_hits: 2,
             exit_misses: 2,
             min_rssi_dbm: -70.0,
+            leave_rssi_dbm: default_leave_rssi(),
+            blip_strong_dbm: default_blip_strong(),
+            blip_hold_secs: default_blip_hold(),
         }
     }
 }
@@ -433,6 +459,17 @@ pub fn validate(cfg: &Config) -> Result<(), String> {
     if cfg.params.enter_hits == 0 || cfg.params.exit_misses == 0 {
         return Err("enter_hits and exit_misses must be at least 1".into());
     }
+    let p = &cfg.params;
+    let dbm = |v: f64| v.is_finite() && (-100.0..=-20.0).contains(&v);
+    if !dbm(p.leave_rssi_dbm) || !dbm(p.blip_strong_dbm) {
+        return Err("leave_rssi_dbm and blip_strong_dbm must be between -100 and -20 dBm".into());
+    }
+    if p.blip_strong_dbm < p.leave_rssi_dbm {
+        return Err("blip_strong_dbm must not be below leave_rssi_dbm".into());
+    }
+    if p.blip_hold_secs > 3600 {
+        return Err("blip_hold_secs must be at most 3600".into());
+    }
     Ok(())
 }
 
@@ -543,6 +580,29 @@ pub struct RunState {
     /// Consecutive scan failures. Reset on any successful scan.
     #[cfg_attr(feature = "serde", serde(default))]
     pub scan_failures: u32,
+    /// The Wi-Fi network the last scan matched (the detected scenario's, current or candidate),
+    /// and since when that same network has kept matching. `None` when detection was not by
+    /// Wi-Fi (MCC, abroad, fallback) or nothing matched. Authenticated reads only: an SSID is
+    /// what a LAN client could use to spoof "home".
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub matched: Option<Matched>,
+    /// Wall-clock second of the last scan that saw the current Wi-Fi-detected scenario's
+    /// networks (any strength), and the best signal then. Cleared on a switch.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub last_seen_at: Option<i64>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub last_seen_dbm: Option<f64>,
+}
+
+/// [`RunState::matched`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Matched {
+    /// The scenario it detects.
+    pub id: String,
+    pub ssid: String,
+    /// Wall-clock second of the first scan in this streak that matched it.
+    pub since: i64,
 }
 
 // ── SIM ─────────────────────────────────────────────────────────────────────
@@ -633,36 +693,74 @@ pub struct Network {
 /// Which scenario the surroundings say we are in: named networks and specific MCCs first (in
 /// configuration order), then the catch-all abroad, then the fallback.
 pub fn detect(cfg: &Config, nets: &[Network], mcc: Option<&str>) -> Option<String> {
+    detect_match(cfg, nets, mcc).map(|d| d.id)
+}
+
+/// What [`detect`] found, and by which network when it was a Wi-Fi match.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Detected {
+    pub id: String,
+    /// The scanned network's SSID that matched (Wi-Fi-detected scenarios only).
+    pub ssid: Option<String>,
+}
+
+/// [`detect`] with the network that matched.
+pub fn detect_match(cfg: &Config, nets: &[Network], mcc: Option<&str>) -> Option<Detected> {
     for scen in &cfg.scenarios {
         let hit = match &scen.detect {
-            Detect::Ssid { entries } => entries.iter().any(|e| {
-                nets.iter().any(|n| {
-                    n.ssid == e.ssid
-                        && match &e.bssid {
-                            Some(b) => n.bssid.eq_ignore_ascii_case(b.trim()),
-                            None => n.signal >= cfg.params.min_rssi_dbm,
-                        }
-                })
+            Detect::Ssid { entries } => entries.iter().find_map(|e| {
+                nets.iter()
+                    .find(|n| {
+                        n.ssid == e.ssid
+                            && match &e.bssid {
+                                Some(b) => n.bssid.eq_ignore_ascii_case(b.trim()),
+                                None => n.signal >= cfg.params.min_rssi_dbm,
+                            }
+                    })
+                    .map(|n| Some(n.ssid.clone()))
             }),
-            Detect::Mcc { mccs } => mcc.is_some_and(|m| mccs.iter().any(|x| x == m)),
-            Detect::Abroad | Detect::Fallback => false,
+            Detect::Mcc { mccs } => mcc
+                .is_some_and(|m| mccs.iter().any(|x| x == m))
+                .then_some(None),
+            Detect::Abroad | Detect::Fallback => None,
         };
-        if hit {
-            return Some(scen.id.clone());
+        if let Some(ssid) = hit {
+            return Some(Detected {
+                id: scen.id.clone(),
+                ssid,
+            });
         }
     }
+    let plain = |s: &Scenario| Detected {
+        id: s.id.clone(),
+        ssid: None,
+    };
     if mcc.is_some_and(|m| m != cfg.home_mcc)
         && let Some(s) = cfg
             .scenarios
             .iter()
             .find(|s| matches!(s.detect, Detect::Abroad))
     {
-        return Some(s.id.clone());
+        return Some(plain(s));
     }
     cfg.scenarios
         .iter()
         .find(|s| matches!(s.detect, Detect::Fallback))
-        .map(|s| s.id.clone())
+        .map(plain)
+}
+
+/// The next [`RunState::matched`]: the same network keeps its `since`, another one starts at
+/// `at`, no Wi-Fi match clears it.
+pub fn next_matched(prev: Option<&Matched>, d: &Detected, at: i64) -> Option<Matched> {
+    let ssid = d.ssid.as_ref()?;
+    let since = prev
+        .filter(|p| p.id == d.id && &p.ssid == ssid)
+        .map_or(at, |p| p.since);
+    Some(Matched {
+        id: d.id.clone(),
+        ssid: ssid.clone(),
+        since,
+    })
 }
 
 /// The Wi-Fi entries that detect scenario `id`, if it is detected by Wi-Fi.
@@ -710,6 +808,81 @@ pub fn miss_summary(
         nets.len() - first,
         parts.join(", ")
     )
+}
+
+/// The best signal among the scanned networks that match `entries` (a pinned entry by its
+/// SSID and hardware address, a name-only one by SSID at any strength).
+pub fn best_signal(entries: &[SsidEntry], nets: &[Network]) -> Option<f64> {
+    nets.iter()
+        .filter(|n| entries.iter().any(|e| entry_matches(e, n)))
+        .map(|n| n.signal)
+        .fold(None, |m: Option<f64>, x| Some(m.map_or(x, |m| m.max(x))))
+}
+
+fn entry_matches(e: &SsidEntry, n: &Network) -> bool {
+    n.ssid == e.ssid
+        && match &e.bssid {
+            Some(b) => n.bssid.eq_ignore_ascii_case(b.trim()),
+            None => true,
+        }
+}
+
+/// What a scan says about staying in the current Wi-Fi-detected scenario.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Leave {
+    /// Seen at or above `leave_rssi_dbm` (detection decides as before).
+    Seen { dbm: f64 },
+    /// Seen, but weaker than `leave_rssi_dbm`: counts as a miss.
+    Weak { dbm: f64 },
+    /// Not seen, last seen strong `ago` seconds ago, within the hold: not a miss.
+    Blip { dbm: f64, ago: i64 },
+    /// Not seen, and no blip hold applies: a miss as before.
+    Absent,
+}
+
+/// [`Leave`] for `st.current` given the scans `nets` taken at `at`; `None` when the current
+/// scenario is not detected by Wi-Fi.
+pub fn leave_reading(cfg: &Config, st: &RunState, nets: &[Network], at: i64) -> Option<Leave> {
+    let entries = ssid_entries(cfg, &st.current)?;
+    let p = &cfg.params;
+    Some(match best_signal(entries, nets) {
+        Some(dbm) if dbm < p.leave_rssi_dbm => Leave::Weak { dbm },
+        Some(dbm) => Leave::Seen { dbm },
+        None => match (st.last_seen_at, st.last_seen_dbm) {
+            (Some(t), Some(dbm))
+                if dbm >= p.blip_strong_dbm && at - t < p.blip_hold_secs as i64 =>
+            {
+                Leave::Blip { dbm, ago: at - t }
+            }
+            _ => Leave::Absent,
+        },
+    })
+}
+
+/// "1m40s", "45s", "5m".
+pub fn short_duration(secs: i64) -> String {
+    let (m, s) = (secs.max(0) / 60, secs.max(0) % 60);
+    match (m, s) {
+        (0, s) => format!("{s}s"),
+        (m, 0) => format!("{m}m"),
+        (m, s) => format!("{m}m{s}s"),
+    }
+}
+
+/// The engine's log line for a weak or held reading; `None` for the others.
+pub fn leave_note(id: &str, r: &Leave, p: &Params) -> Option<String> {
+    match r {
+        Leave::Weak { dbm } => Some(format!(
+            "{id:?} weak: best {dbm:.0} dBm (leave below {:.0})",
+            p.leave_rssi_dbm
+        )),
+        Leave::Blip { dbm, ago } => Some(format!(
+            "{id:?} not seen, held as a blip: last seen {dbm:.0} dBm {} ago (hold {})",
+            short_duration(*ago),
+            short_duration(p.blip_hold_secs as i64)
+        )),
+        _ => None,
+    }
 }
 
 /// Hysteresis. Returns the scenario to switch to, or `None` to stay put. Entering and leaving
@@ -971,8 +1144,31 @@ pub fn step(i: &TickInput) -> TickOutcome {
         }
     };
 
-    let detect_any = |n: &[Network]| detect(cfg, n, i.mcc).unwrap_or_else(|| AWAY_ID.to_string());
-    let mut detected = detect_any(nets);
+    let detect_any = |n: &[Network]| {
+        detect_match(cfg, n, i.mcc).unwrap_or_else(|| Detected {
+            id: AWAY_ID.to_string(),
+            ssid: None,
+        })
+    };
+    // The current Wi-Fi scenario seen only weakly is a miss: detect as if it were not there.
+    let detect_eff = |n: &[Network], at: i64| {
+        let reading = leave_reading(cfg, st, n, at);
+        let found = match (&reading, ssid_entries(cfg, current)) {
+            (Some(Leave::Weak { .. }), Some(entries)) => {
+                let rest: Vec<Network> = n
+                    .iter()
+                    .filter(|x| !entries.iter().any(|e| entry_matches(e, x)))
+                    .cloned()
+                    .collect();
+                detect_any(&rest)
+            }
+            _ => detect_any(n),
+        };
+        (found, reading)
+    };
+    let (mut found, mut reading) = detect_eff(nets, out.state.last_scan);
+    let mut detected = found.id.clone();
+    let mut combined: Option<Vec<Network>> = None;
     // Leaving a Wi-Fi-detected scenario rests on not seeing something; a partial scan does not
     // see it either. Look again before believing it.
     if detected != current && ssid_entries(cfg, current).is_some() {
@@ -982,12 +1178,31 @@ pub fn step(i: &TickInput) -> TickOutcome {
             return out;
         };
         let all: Vec<Network> = nets.iter().chain(r.networks).cloned().collect();
-        detected = detect_any(&all);
+        (found, reading) = detect_eff(&all, r.at);
+        detected = found.id.clone();
         out.state.last_scan = r.at;
+        combined = Some(all);
     }
+    let nets_seen: &[Network] = combined.as_deref().unwrap_or(nets);
 
     out.state.scan_failures = 0;
+    match reading {
+        Some(Leave::Seen { dbm } | Leave::Weak { dbm }) => {
+            out.state.last_seen_at = Some(out.state.last_scan);
+            out.state.last_seen_dbm = Some(dbm);
+        }
+        // A strong network gone between two scans: a router blip. Not a miss until the hold
+        // runs out; the counters and the matched network stay as they were.
+        Some(Leave::Blip { .. }) if detected != current => return out,
+        _ => {}
+    }
+    out.state.matched = next_matched(st.matched.as_ref(), &found, out.state.last_scan);
     if let Some(id) = decide(&mut out.state, &detected, &cfg.params) {
+        // Entering a Wi-Fi scenario: the scan that brought it is its first sighting, so a
+        // blip right after entering is held too ([`after_switch`] keeps it).
+        let best = ssid_entries(cfg, &id).and_then(|e| best_signal(e, nets_seen));
+        out.state.last_seen_at = best.map(|_| out.state.last_scan);
+        out.state.last_seen_dbm = best;
         out.intent = switch(&id);
     }
     out
@@ -1017,6 +1232,15 @@ pub fn after_switch(
             st.current = AWAY_ID.to_string();
             st.last_error = Some(e.to_string());
         }
+    }
+    // Kept only when [`step`] set it for this very switch: the triggering scan saw `id`.
+    let fresh = matches!(result, Ok(()))
+        && st.last_seen_at == Some(st.last_scan)
+        && st.matched.as_ref().is_some_and(|m| m.id == id)
+        && st.candidate == id;
+    if !fresh {
+        st.last_seen_at = None;
+        st.last_seen_dbm = None;
     }
     st.candidate.clear();
     st.hits = 0;

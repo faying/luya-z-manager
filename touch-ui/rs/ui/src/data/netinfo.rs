@@ -260,6 +260,7 @@ pub fn parse(n: &mut netinfo_t, data: &[u8]) {
                     band: jstr(&o, "band", 12),
                     wifi_gen: strtol(&v("wifi_gen")) as i32,
                     link_down: strtol(&v("link_down_mbps")) as i32,
+                    link_up: strtol(&v("link_up_mbps")) as i32,
                 };
                 n.nclients += 1;
             }

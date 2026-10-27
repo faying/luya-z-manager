@@ -399,13 +399,24 @@ impl Ui {
         let bits = self.conf.speed_bits;
         let rate = |r: i64| if r >= 0 { super::refresh::fmt_rate_top(r, bits, false) } else { b"-".to_vec() };
         let (ra, rb) = (rate(cl.down_rate), rate(cl.up_rate));
-        let band = if cl.band.is_empty() { Vec::new() } else { cf!("%s · ", &cl.band) };
+        let band = if cl.band.is_empty() { tr("频段读不到 · ").as_bytes().to_vec() } else { cf!("%s · ", &cl.band) };
         let sig = super::home::wifi_sig_word(&cl.signal_tier).map_or(Vec::new(), |w| cf!(" · %s", w));
         let mut out = if cl.down_rate < 0 && cl.up_rate < 0 {
             cf!(tr("%s速率稍后显示%s"), &band, &sig)
         } else {
             cf!("%s↓%s/s ↑%s/s%s", &band, &ra, &rb, &sig)
         };
+        out.truncate(95);
+        out
+    }
+
+    /// 「协商 ↓2402 ↑1201 Mbps · Wi-Fi 6 · -39 dBm」: what the link negotiated; core sends null
+    /// (parsed as 0) for what iw didn't print, and that field says 读不到 instead of a guess.
+    fn ni_link_line(cl: &ni_client_t) -> Vec<u8> {
+        let rate = |m: i32| if m > 0 { cf!("%d Mbps", m) } else { tr("读不到").as_bytes().to_vec() };
+        let mut out = cf!(tr("协商 ↓%s ↑%s"), &rate(cl.link_down), &rate(cl.link_up));
+        out.extend(if cl.wifi_gen > 0 { cf!(" · Wi-Fi %d", cl.wifi_gen) } else { cf!(" · %s", tr("协议读不到")) });
+        out.extend(if cl.signal < 0 { cf!(" · %d dBm", cl.signal) } else { cf!(" · %s", tr("信号读不到")) });
         out.truncate(95);
         out
     }
@@ -454,8 +465,9 @@ impl Ui {
             self.set(w.cli_ip[i], &c.ip);
             let extra = kit::name_address_reflow(w.cli_name[i], w.cli_ip[i], CARD_W - PAD);
             w.cli_mac[i].set_y(29 + extra);
-            w.cli_tot[i].set_y(47 + extra);
-            w.cli_desc[i].set_y(65 + extra);
+            w.cli_link[i].set_y(47 + extra);
+            w.cli_tot[i].set_y(65 + extra);
+            w.cli_desc[i].set_y(83 + extra);
             // a Wi-Fi device: 「5 GHz · ↓… ↑… · 信号很好」, then the totals, then what lanid knows
             // on its own line; cable / USB devices keep the MAC
             let st = self.wifi_station_for(&c.mac, &c.ip);
@@ -463,6 +475,8 @@ impl Ui {
             if let Some(s) = &st {
                 let line = self.ni_client_line(s);
                 self.set(w.cli_mac[i], &line);
+                self.set(w.cli_link[i], Self::ni_link_line(s));
+                rh += 18;
                 let (a, b) = (super::home::fmt_bytes_total(s.down), super::home::fmt_bytes_total(s.up));
                 self.set(w.cli_tot[i], cf!(tr("连上以来 ↓%s ↑%s"), &a, &b));
                 rh += 18;
@@ -475,6 +489,7 @@ impl Ui {
             } else {
                 let line = if desc.is_empty() { c.mac.as_bytes().to_vec() } else { [&desc[..], " · ".as_bytes(), c.mac.as_bytes()].concat() };
                 self.set(w.cli_mac[i], &line);
+                self.set(w.cli_link[i], "");
                 self.set(w.cli_tot[i], "");
                 self.set(w.cli_desc[i], "");
             }

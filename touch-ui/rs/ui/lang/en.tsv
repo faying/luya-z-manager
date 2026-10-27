@@ -405,6 +405,11 @@ tailscale|节点	Peers
 还没配置情景，在管理网页的「情景」页设置	No scenarios yet; set them up in Scenarios on the web admin
 这张就是正在用的	Already in use
 连上以来 ↓%s ↑%s	Since connected ↓%s ↑%s
+协商 ↓%s ↑%s	Link ↓%s ↑%s
+读不到	n/a
+协议读不到	standard n/a
+信号读不到	signal n/a
+频段读不到 · 	Band n/a · 
 连不上测速服务（数据服务 127.0.0.1:9460）。\n检查数据服务有没有在跑。	Can't reach the speed test service (data service 127.0.0.1:9460).\nCheck that the data service is running
 连不上管理后台	Can't reach the admin backend
 连接与测速	Connections & speed test
@@ -946,3 +951,20 @@ CHILL 没在运行	CHILL not running
 漫游中：只粗测 5 秒、最多 30 MB	Roaming: rough test, 5 s, ≤30 MB
 约 30 秒 · 最多 750 MB	~30 s · ≤750 MB
 约 40 秒 · 最多 1.15 GB	~40 s · ≤1.15 GB
+
+# 首页 core 1.50（10-26）：底部动作、今天
+摆放模式 ›	Placement ›
+去打开 ›	Turn on ›
+今天	Today
+设备时间还没校准，时间线暂停	Device clock not set: timeline paused
+每小时平均信号	Hourly average signal
+还没有信号记录	No signal readings yet
+今天还没有要记的事	Nothing to note today yet
+还有 %d 条	%d more
+可能切到%s：%s %d 次没看到	May switch to %s: %s missed %d times
+别的情景	another scenario
+ · 你 %s 手动选的	 · you picked it at %s
+ · 到了 %s	 · here %s
+%d 分钟	%d min
+%d 小时	%d h
+%d 天	%d days

@@ -188,4 +188,7 @@ pub(crate) struct DecodedSms {
     pub(crate) content: String,
     /// the raw device date string
     pub(crate) date: String,
+    /// Seconds it sat in the queue, when that is past [`crate::queue::LATE_AFTER_SECS`]: the
+    /// chat text says so, so a forward that came in late is not read as a new SMS.
+    pub(crate) late_secs: Option<i64>,
 }

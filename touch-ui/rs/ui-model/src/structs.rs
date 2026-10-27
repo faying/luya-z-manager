@@ -304,6 +304,10 @@ pub struct ui_net_story_t {
     pub noise_tone: i32,
     pub load: String,
     pub limit: String,
+    /// where the home footer's action goes (core 1.50 `story.fix`: sim_enable / cell /
+    /// placement / diag:<layer> / op); empty = an older core, the touch decides as before
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fix: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -565,6 +569,78 @@ pub struct scenario_status_t {
     pub ai_gate: i32,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub ai_region: String,
+    /// GET /api/scenario (logged-in read, core 1.50): 1 = read; the rest is only meaningful then
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub detail: i32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub current: String,
+    /// the scenario the scans point at, not yet switched to ("" = none)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub candidate: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub hits: i32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub enter_hits: i32,
+    /// the Wi-Fi the last scan matched: its scenario, SSID and since when (wall s)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub matched_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub matched_ssid: String,
+    #[serde(default, skip_serializing_if = "is_zero64")]
+    pub matched_since: i64,
+    /// scans in a row that missed the scenario in force, and how many it takes to leave
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub misses: i32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub exit_misses: i32,
+    /// the candidate's display name (from the config; English when there is one)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cand_name: String,
+    /// the SSID that last put the device in the scenario in force (kept while scans miss it)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cur_ssid: String,
+}
+
+/// The direct exit's latency (core GET /v2/latency/direct): ms of the last good probe, when.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct direct_lat_t {
+    pub ms: i32,
+    pub at: i64,
+}
+
+/// One line of today's timeline (core GET /v2/timeline/today), in the UI's language.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct today_event_t {
+    pub t: i64,
+    pub kind: String,
+    pub text: String,
+    /// NET_OK / NET_WARN / NET_BAD / NET_NEUTRAL
+    pub tone: i32,
+}
+
+/// One hour of today's signal: the average SINR (None = no reading), the RAT, link drops.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct today_hour_t {
+    pub hour: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sinr: Option<f64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rat: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub link_down: i32,
+}
+
+/// Today's timeline: clock_trusted 0 = paused (no "today" without a set clock).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct today_t {
+    pub clock_trusted: i32,
+    pub now: i64,
+    /// newest first, at most TODAY_EVENTS
+    pub events: Vec<today_event_t>,
+    /// how many older events were left out
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub more: i32,
+    pub hours: Vec<today_hour_t>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -675,6 +751,7 @@ pub struct ni_client_t {
     pub band: String,
     pub wifi_gen: i32,
     pub link_down: i32,
+    pub link_up: i32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -799,4 +876,8 @@ fn is_zero(v: &i32) -> bool {
 
 fn minus_one() -> i32 {
     -1
+}
+
+fn is_zero64(v: &i64) -> bool {
+    *v == 0
 }

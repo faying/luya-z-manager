@@ -214,6 +214,8 @@ impl Source for Replay {
             battery: false,
             versions: false,
             landing: false,
+            direct_lat: false,
+            today: false,
             alerts: true,
             diagnose: a.diag,
         }
@@ -278,6 +280,7 @@ impl Source for Replay {
         false
     }
     fn data_set_pace(&mut self, _panel_lit: bool) {}
+    fn data_release_pace(&mut self) {}
     fn data_control_fb(&mut self, _a: &str, _p: &str, _fa: &str, _fb: Option<&str>) -> bool {
         self.acted();
         true
@@ -1009,6 +1012,11 @@ pub fn run(args: &[String]) -> i32 {
                 }
                 (Some("net_paint"), Some(v)) => {
                     ui::with(|u| u.net_paint(v != 0));
+                    true
+                }
+                // the status card's footer action, as a tap on it would (fixtures of story.fix)
+                (Some("home_act()"), _) => {
+                    ui::with(|u| u.home_act());
                     true
                 }
                 (Some("diag_paint()"), _) => {

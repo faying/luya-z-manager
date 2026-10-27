@@ -64,8 +64,8 @@ fn full_body() {
     assert!(n.clients[0].up_rate == -1 && n.clients[1].name.is_empty());
     assert!(n.clients[0].signal == -47 && n.clients[1].signal == 0);
     assert!(n.clients[0].signal_tier == "great" && n.clients[1].signal_tier.is_empty());
-    assert!(n.clients[0].band == "5 GHz" && n.clients[0].wifi_gen == 6 && n.clients[0].link_down == 2402);
-    assert!(n.clients[1].band.is_empty() && n.clients[1].wifi_gen == 0 && n.clients[1].link_down == 0);
+    assert!(n.clients[0].band == "5 GHz" && n.clients[0].wifi_gen == 6 && n.clients[0].link_down == 2402 && n.clients[0].link_up == 1201);
+    assert!(n.clients[1].band.is_empty() && n.clients[1].wifi_gen == 0 && n.clients[1].link_down == 0 && n.clients[1].link_up == 0);
     assert!(n.scenes[0].name == "在家" && n.scenes[0].wifi_off != 0 && n.scenes[2].abroad != 0);
     assert!(n.scene_current == "abroad" && n.scene_pin.is_empty());
 

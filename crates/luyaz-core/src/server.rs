@@ -23,6 +23,7 @@ use tokio::{
 };
 use tower_http::limit::RequestBodyLimitLayer;
 
+mod latency;
 mod recovery;
 mod write;
 #[cfg(test)]
@@ -55,6 +56,10 @@ struct Inner {
     interval: Duration,
     /// 收到 SIGTERM/SIGINT 后置 true（P2-4）：SSE 流看到就结束，服务在 `SHUTDOWN_GRACE` 内退出。
     stop: watch::Sender<bool>,
+    /// `/v2/latency/direct`: the cache and its probe.
+    latency: latency::Direct,
+    /// `/v2/timeline/today`: where it reads from.
+    timeline: crate::longterm::today::Source,
 }
 
 /// 收到退出信号后最多等连接收尾这么久（P2-4）。procd 的 `term_timeout` 约 5 秒，到了就 SIGKILL；
@@ -63,6 +68,10 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
 /// How many `/v2/events` subscribers may be connected at once.
 const MAX_SSE_CLIENTS: usize = 16;
+
+/// The sampling pace when no client wants a faster one (`state.set_interval` with a client:
+/// touch 1 s lit / 5 s dark, a watched admin web 1 s; each lapses unless renewed).
+const IDLE_PACE_MS: u64 = 5000;
 
 /// 启动进度（P1-3）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -136,6 +145,8 @@ impl App {
             interval,
         );
         executor::install(&exec);
+        // 没有客户端登记节奏时（触屏没起、亮屏时崩了、网页没人看）按暗屏的 5 秒采；`-i` 只是第一轮之前的节奏
+        exec.set_idle_ms(IDLE_PACE_MS);
         // V2-22：独立定时器补心跳（带 exec_age_ms）；V2-32：看门狗。第一轮之前就起：第一轮里每次调用都记前进，
         // 执行者闲着时不算卡（P1-3：以前第一轮在看门狗起来之前跑，ubusd 不回时没人管）。
         exec.start_heartbeat(HEARTBEAT_EVERY);
@@ -174,6 +185,8 @@ impl App {
                 stage,
                 interval,
                 stop: watch::channel(false).0,
+                latency: latency::Direct::real(),
+                timeline: crate::longterm::today::Source::real(),
             }),
         })
     }
@@ -257,6 +270,7 @@ impl App {
         crate::device_profile::uevent::spawn(context_hub.clone());
         // R18-P2-01: the stock-anomaly ledger reads the radio mark and connection epoch.
         crate::stock_anomaly::set_hub(context_hub.clone());
+        crate::stock_anomaly::spawn_wifi_watch();
         // the regress layer's cellular detector reads the sim / signal / interfaces / op blocks
         crate::longterm::regress::io::set_hub(context_hub.clone());
         listen::spawn_if_enabled(
@@ -487,6 +501,8 @@ impl App {
             .route("/v2/netrec/sessions", get(netrec_sessions))
             .route("/v2/netrec/summary", get(netrec_summary))
             .route("/v2/netrec/ring", get(netrec_ring))
+            .route("/v2/latency/direct", get(latency_direct))
+            .route("/v2/timeline/today", get(timeline_today))
             .route("/v2/versions/check", post(versions_check));
         // M6b: the screen's agent-shaped API (`/v2/api/...`, compat's `/api/...` routes), loopback
         // listener only. Nested at `/v2`: the routes above are static and win over the nest's tail.
@@ -528,6 +544,8 @@ async fn starting_gate(State(app): State<App>, request: Request, next: Next) -> 
             | "/v2/netrec/sessions"
             | "/v2/netrec/summary"
             | "/v2/netrec/ring"
+            | "/v2/latency/direct"
+            | "/v2/timeline/today"
             | "/state"
             | "/events"
             | "/auth/login"
@@ -954,6 +972,25 @@ async fn usage_days(uri: axum::http::Uri) -> Json<Value> {
     Json(json!({"ok": true, "data": v}))
 }
 
+/// `GET /v2/latency/direct` (server/latency.rs): `{ok, data: {ms, at, ok, age_s, roaming}}`.
+async fn latency_direct(State(app): State<App>) -> Json<Value> {
+    let roaming = app
+        .hub()
+        .view("signal")
+        .filter(|v| !v.stale)
+        .and_then(|v| v.data.get("true_roaming").and_then(Value::as_bool));
+    Json(json!({"ok": true, "data": app.inner.latency.data(roaming).await}))
+}
+
+/// `GET /v2/timeline/today` (longterm/today.rs): `{ok, data}`; `data.available` false when the
+/// long-term layer is off. Reads files only.
+async fn timeline_today(State(app): State<App>) -> Json<Value> {
+    let v = tokio::task::spawn_blocking(move || app.inner.timeline.data())
+        .await
+        .unwrap_or(Value::Null);
+    Json(json!({"ok": true, "data": v}))
+}
+
 /// `?k=v` of a query string.
 fn query_param<'a>(uri: &'a axum::http::Uri, k: &str) -> Option<&'a str> {
     uri.query()?.split('&').find_map(|p| p.strip_prefix(k)?.strip_prefix('='))
@@ -1249,6 +1286,10 @@ async fn shutdown(app: App) {
 #[cfg(test)]
 #[path = "server/device_capabilities_tests.rs"]
 mod device_capabilities_tests;
+
+#[cfg(test)]
+#[path = "server/home_reads_tests.rs"]
+mod home_reads_tests;
 
 #[cfg(test)]
 #[path = "server/write_lock_tests.rs"]

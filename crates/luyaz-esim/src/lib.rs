@@ -30,6 +30,16 @@
 //! enable/disable notifications are dropped and the new ones are sent once data works (see
 //! `plan_notifications`).
 //!
+//! Downloads and deletes are judged the same way: an error or a timeout from lpac is settled by
+//! reading the profile list back (see `settle_write`), and a write cut off by a core restart is
+//! settled on the next start, never re-run.
+//!
+//! Status words: lpac 2.3.0 (`euicc.c`, `es10x_transmit_iter`) answers 61xx with GET RESPONSE
+//! itself; 6Cxx ends the call as an error. ES10x commands are STORE DATA with a body (case 4),
+//! where a card has no Le to correct, so 6Cxx is not expected; were one ever seen, the write
+//! read-back above still reports what the card really did. The Alpine lpac is kept unpatched
+//! (checked 10-27 against the MU5250-OpenUI and SadykovIV forks, which also leave 6Cxx alone).
+//!
 //! Anything slow or networked (download, delete, notifications, switch) runs on a detached
 //! thread behind a one-slot job, the same shape as the ShellCrash profile manager; clients poll
 //! `/api/esim/job`.
@@ -142,6 +152,10 @@ const AUTO_REBOOT_EVERY: u64 = 24 * 3600;
 pub const AUTO_REBOOT_STAMP: &str = "/data/luyaz/core/esim-auto-reboot";
 /// With this file present the identity-timeout reboot is off (owner, 10-22: kept,
 /// on by default, but switchable): the switch ends `identity_stuck` as past the cap.
+/// A card write in flight (download / delete). Kept on /data so a core restart in the
+/// middle of one is settled by reading the card back on the next start, never by
+/// running the write again (an SM-DP+ download is single-use).
+pub const PENDING_WRITE: &str = "/data/luyaz/core/esim-pending.json";
 pub const AUTO_REBOOT_OFF: &str = "/data/luyaz/core/esim-auto-reboot-off";
 /// The card lock across processes: the core's lpac runs and any script's (the
 /// kit's `install.sh` takes it with `flock`). tmpfs, so a reboot frees it.
@@ -294,6 +308,12 @@ impl Host for Card {
     fn wall_unix(&self) -> u64 {
         self.inner.wall_unix()
     }
+    fn note_write(&self, w: Option<&Value>) {
+        self.inner.note_write(w)
+    }
+    fn pending_write(&self) -> Option<Value> {
+        self.inner.pending_write()
+    }
     fn switch_event(&self, ev: SwitchEvent) {
         self.inner.switch_event(ev)
     }
@@ -309,6 +329,11 @@ struct ListCache {
 
 impl Esim {
     pub fn new(host: Arc<dyn Host>) -> Self {
+        let e = Self::bare(host);
+        e.settle_interrupted();
+        e
+    }
+    fn bare(host: Arc<dyn Host>) -> Self {
         Self {
             host: Arc::new(Card {
                 inner: host,
@@ -368,6 +393,12 @@ pub trait Host: Send + Sync + 'static {
     }
     /// Where a switch is (the core's SIM identity tracking; its caches).
     fn switch_event(&self, _ev: SwitchEvent) {}
+    /// Keep (`Some`) or clear (`None`) the in-flight write record (`PENDING_WRITE`).
+    fn note_write(&self, _w: Option<&Value>) {}
+    /// The write record a previous run left behind, if any.
+    fn pending_write(&self) -> Option<Value> {
+        None
+    }
 }
 
 /// A switch's steps as the host hears them.
@@ -475,6 +506,22 @@ impl Host for RealHost {
     fn switch_event(&self, ev: SwitchEvent) {
         (self.switch_event)(ev)
     }
+    fn note_write(&self, w: Option<&Value>) {
+        match w {
+            Some(w) => {
+                let tmp = format!("{PENDING_WRITE}.tmp");
+                if std::fs::write(&tmp, w.to_string()).is_ok() {
+                    let _ = std::fs::rename(&tmp, PENDING_WRITE);
+                }
+            }
+            None => {
+                let _ = std::fs::remove_file(PENDING_WRITE);
+            }
+        }
+    }
+    fn pending_write(&self) -> Option<Value> {
+        serde_json::from_str(&std::fs::read_to_string(PENDING_WRITE).ok()?).ok()
+    }
 }
 
 /* -------------------------------------------------------------- *
@@ -513,10 +560,30 @@ fn run_lpac(args: &[&str], deadline: Duration) -> Result<Value, String> {
     )
     .map_err(|err| format!("spawn lpac failed: {err}"))?;
     lpac_result(ran, deadline, || {
-        if let Some(c) = chan {
+        release_after_kill(chan, free_channel, |c| {
             run_cmd(&format!("{QMI_PROBE} close {c} 2>/dev/null"), PROBE_TIMEOUT);
-        }
+        });
     })
+}
+
+/// After a kill: close `guess` (the channel lpac was expected to get) only when it is
+/// still taken, i.e. a fresh probe now hands out a different one. The guess is read before
+/// lpac starts, so if anything else opened a channel in between it can be wrong; a channel
+/// that is free again is then never touched. Returns the channel closed.
+fn release_after_kill(
+    guess: Option<u8>,
+    probe: impl FnOnce() -> Option<u8>,
+    close: impl FnOnce(u8),
+) -> Option<u8> {
+    let c = guess?;
+    let now = probe();
+    if now == Some(c) {
+        eprintln!("esim: channel {c} is free after the kill: nothing to close");
+        return None;
+    }
+    // a different free channel, or none (all taken): `c` is held, most likely by lpac
+    close(c);
+    Some(c)
 }
 
 /// lpac's answer from how its run ended. `release` runs when lpac was killed (by us or a
@@ -1184,7 +1251,7 @@ fn send_receipts(h: &dyn Host, cancel: &AtomicBool, until: Instant) -> Sent {
                 sent: 0,
                 left: 1,
                 error: Some(e),
-            }
+            };
         }
     };
     let mut failed: Vec<String> = Vec::new();
@@ -1863,7 +1930,21 @@ impl Esim {
                 if !conf.is_empty() {
                     args.extend(["-c", &conf]);
                 }
-                h.lpac(&args, LPAC_TIMEOUT_NET)?;
+                // What the card holds before, so an error or a timeout can be settled by
+                // reading it back: the profile may well have landed (`settle_write`).
+                let w = h
+                    .lpac(&["profile", "list"], LPAC_TIMEOUT_FAST)
+                    .map(|l| json!({"kind": "download", "before": iccids_of(&l)}));
+                if let Ok(w) = &w {
+                    h.note_write(Some(w));
+                }
+                let done = match (h.lpac(&args, LPAC_TIMEOUT_NET), &w) {
+                    (Ok(_), _) => Ok("profile downloaded".to_string()),
+                    (Err(e), Ok(w)) => settle_write(h, w, &e),
+                    (Err(e), Err(_)) => Err(e),
+                };
+                h.note_write(None);
+                let msg = done?;
                 // SGP.22 wants the install notification sent. If that part fails the
                 // download still stands, so its result is ignored.
                 // Superseded enable/disable ones go first, so `-a` doesn't send
@@ -1871,7 +1952,7 @@ impl Esim {
                 if send_receipts(h, &AtomicBool::new(false), h.now() + RECEIPT_ROUND_MAX).left > 0 {
                     arm_receipts(&receipts, h.now(), RECEIPT_FIRST);
                 }
-                Ok("profile downloaded".to_string())
+                Ok(msg)
             });
             h.wake(false);
             finish_job(&job, &running, res, false);
@@ -1921,11 +2002,18 @@ impl Esim {
             let h: &dyn Host = &*h;
             h.wake(true);
             let res = contained(|| {
-                h.lpac(&["profile", "delete", &iccid], LPAC_TIMEOUT_FAST)?;
+                let w = json!({"kind": "delete", "iccid": iccid});
+                h.note_write(Some(&w));
+                let done = match h.lpac(&["profile", "delete", &iccid], LPAC_TIMEOUT_FAST) {
+                    Ok(_) => Ok("profile deleted".to_string()),
+                    Err(e) => settle_write(h, &w, &e),
+                };
+                h.note_write(None);
+                let msg = done?;
                 if send_receipts(h, &AtomicBool::new(false), h.now() + RECEIPT_ROUND_MAX).left > 0 {
                     arm_receipts(&receipts, h.now(), RECEIPT_FIRST);
                 }
-                Ok("profile deleted".to_string())
+                Ok(msg)
             });
             h.wake(false);
             finish_job(&job, &running, res, false);
@@ -1958,6 +2046,112 @@ impl Esim {
         started_reply(job_id)
     }
 }
+
+/* ---- writes whose answer was lost ----
+ *
+ * lpac reporting an error (or timing out) on a download or delete does not mean the
+ * card is unchanged: the profile may have been installed or removed before the
+ * answer went missing. The card is the record: read the profile list back and
+ * judge from it. Never run the write again — the activation code is single-use.
+ */
+
+fn iccids_of(list: &Value) -> Vec<String> {
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p["iccid"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// What the card shows for write record `w`: `Some(true)` it happened, `Some(false)`
+/// it did not, `None` the card could not be read.
+fn card_shows(h: &dyn Host, w: &Value) -> Option<bool> {
+    let now = iccids_of(&h.lpac(&["profile", "list"], LPAC_TIMEOUT_FAST).ok()?);
+    Some(match w["kind"].as_str() {
+        Some("download") => {
+            let before: Vec<&str> = w["before"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            now.iter().any(|i| !before.contains(&i.as_str()))
+        }
+        Some("delete") => !now.iter().any(|i| Some(i.as_str()) == w["iccid"].as_str()),
+        _ => false,
+    })
+}
+
+/// lpac answered `err` on write `w`: settle it from the card.
+fn settle_write(h: &dyn Host, w: &Value, err: &str) -> Result<String, String> {
+    let kind = w["kind"].as_str().unwrap_or("write");
+    match card_shows(h, w) {
+        Some(true) => {
+            eprintln!("esim: {kind}: lpac said \"{err}\" but the card shows it done");
+            let did = if kind == "delete" {
+                "deleted"
+            } else {
+                "downloaded"
+            };
+            Ok(format!(
+                "profile {did} (lpac reported an error; the card shows it done)"
+            ))
+        }
+        Some(false) => Err(err.to_string()),
+        None => Err(format!(
+            "{err}; the card could not be read back, so the outcome is unknown: check the profile list before trying again"
+        )),
+    }
+}
+
+impl Esim {
+    /// A write was in flight when the core last stopped: settle it from the card
+    /// (a short job, retried while the card wakes up after boot). Nothing is re-run.
+    fn settle_interrupted(&self) {
+        let Some(w) = self.host.pending_write() else {
+            return;
+        };
+        let kind = w["kind"].as_str().unwrap_or("write").to_owned();
+        let iccid = w["iccid"].as_str().unwrap_or("").to_owned();
+        let Some(_) = self.try_start_job(&kind, &iccid) else {
+            return;
+        };
+        let job = Arc::clone(&self.job);
+        let running = Arc::clone(&self.running);
+        let h = Arc::clone(&self.host);
+        std::thread::spawn(move || {
+            let h: &dyn Host = &*h;
+            let mut seen = None;
+            for _ in 0..SETTLE_TRIES {
+                seen = contained(|| Ok::<_, String>(card_shows(h, &w))).unwrap_or(None);
+                if seen.is_some() {
+                    break;
+                }
+                h.sleep(SETTLE_EVERY);
+            }
+            let res = match seen {
+                Some(true) => Ok(format!(
+                    "{kind} finished before the core restarted (read back from the card)"
+                )),
+                Some(false) => Err(format!(
+                    "{kind} was cut off by a core restart; the card shows it did not happen"
+                )),
+                None => Err(format!(
+                    "{kind} was cut off by a core restart and the card could not be read: check the profile list"
+                )),
+            };
+            eprintln!("esim: interrupted {kind}: {res:?}");
+            if seen.is_some() {
+                h.note_write(None);
+            }
+            finish_job(&job, &running, res, false);
+        });
+    }
+}
+
+/// Settling an interrupted write right after boot: the card may need a while.
+const SETTLE_TRIES: u32 = 6;
+const SETTLE_EVERY: Duration = Duration::from_secs(20);
 
 /* -------------------------------------------------------------- *
  *  Job lifecycle
@@ -2394,6 +2588,14 @@ mod tests {
         notifs: Vec<(i64, &'static str, &'static str)>,
         /// this server fails every send
         dead_server: &'static str,
+        /// download / delete: None = answers ok; Some(true) = errors but the card
+        /// changed anyway; Some(false) = errors and nothing changed
+        write_err: Option<bool>,
+        /// downloaded / deleted ICCIDs, on top of the two fixed profiles
+        added: Vec<String>,
+        gone: Vec<String>,
+        /// the PENDING_WRITE file
+        pending: Option<Value>,
     }
 
     pub(super) struct OnCard<'a>(&'a Fake);
@@ -2432,10 +2634,28 @@ mod tests {
                     s.list_fails -= 1;
                     Err("lpac: euicc_init: QMI error 80 (code -1)".into())
                 }
-                ["profile", "list"] => Ok(json!([
-                    {"iccid": "89852000000000000001", "profileState": if s.enabled == "89852000000000000001" { "enabled" } else { "disabled" }},
-                    {"iccid": "89852000000000000002", "profileState": if s.enabled == "89852000000000000002" { "enabled" } else { "disabled" }},
-                ])),
+                ["profile", "list"] => {
+                    let ids = ["89852000000000000001", "89852000000000000002"]
+                        .into_iter()
+                        .map(String::from)
+                        .chain(s.added.iter().cloned())
+                        .filter(|i| !s.gone.contains(i));
+                    Ok(ids
+                        .map(|i| json!({"iccid": i, "profileState": if s.enabled == i { "enabled" } else { "disabled" }}))
+                        .collect())
+                }
+                ["profile", "download", ..] | ["profile", "delete", _] => {
+                    if s.write_err != Some(false) {
+                        match args {
+                            ["profile", "delete", i] => s.gone.push(i.to_string()),
+                            _ => s.added.push("89852000000000000003".into()),
+                        }
+                    }
+                    match s.write_err {
+                        None => Ok(Value::Null),
+                        Some(_) => Err("lpac: es9p: timeout".into()),
+                    }
+                }
                 ["profile", "enable", iccid] => {
                     s.enables += 1;
                     if self.busy && (self.busy_for == 0 || s.enables <= self.busy_for) {
@@ -2524,6 +2744,157 @@ mod tests {
         fn wall_unix(&self) -> u64 {
             1_000_000
         }
+        fn note_write(&self, w: Option<&Value>) {
+            self.state.lock().unwrap().pending = w.cloned();
+        }
+        fn pending_write(&self) -> Option<Value> {
+            self.state.lock().unwrap().pending.clone()
+        }
+    }
+
+    fn write_job(e: &Esim) -> JobState {
+        for _ in 0..500 {
+            if !e.busy() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        e.job.lock().unwrap().clone()
+    }
+
+    fn fake_writing(err: Option<bool>) -> Arc<Fake> {
+        let f = Fake::default();
+        f.state.lock().unwrap().write_err = err;
+        Arc::new(f)
+    }
+
+    #[test]
+    fn download_error_but_card_has_the_profile_counts_as_done() {
+        let fake = fake_writing(Some(true));
+        let e = Esim::new(fake.clone());
+        e.download(br#"{"code":"LPA:1$x$y"}"#);
+        let j = write_job(&e);
+        assert_eq!(j.status, "done", "{}", j.message);
+        assert!(j.message.contains("card shows it done"));
+        assert!(
+            fake.state.lock().unwrap().pending.is_none(),
+            "record cleared"
+        );
+        let log = fake.state.lock().unwrap().log.clone();
+        assert_eq!(
+            log.iter()
+                .filter(|l| l.starts_with("lpac profile download"))
+                .count(),
+            1,
+            "never re-run"
+        );
+    }
+
+    #[test]
+    fn download_error_and_nothing_landed_stays_an_error() {
+        let fake = fake_writing(Some(false));
+        let e = Esim::new(fake.clone());
+        e.download(br#"{"code":"LPA:1$x$y"}"#);
+        let j = write_job(&e);
+        assert_eq!(j.status, "error");
+        assert_eq!(j.message, "lpac: es9p: timeout");
+    }
+
+    #[test]
+    fn delete_error_but_profile_gone_counts_as_done() {
+        let fake = fake_writing(Some(true));
+        let e = Esim::new(fake.clone());
+        e.delete(br#"{"iccid":"89852000000000000002"}"#);
+        let j = write_job(&e);
+        assert_eq!(j.status, "done", "{}", j.message);
+        assert!(j.message.starts_with("profile deleted"));
+        let fake = fake_writing(Some(false));
+        let e = Esim::new(fake.clone());
+        e.delete(br#"{"iccid":"89852000000000000002"}"#);
+        assert_eq!(write_job(&e).status, "error");
+    }
+
+    #[test]
+    fn plain_writes_leave_no_record() {
+        let fake = fake_writing(None);
+        let e = Esim::new(fake.clone());
+        e.download(br#"{"code":"LPA:1$x$y"}"#);
+        assert_eq!(write_job(&e).message, "profile downloaded");
+        assert!(fake.state.lock().unwrap().pending.is_none());
+    }
+
+    #[test]
+    fn write_cut_off_by_a_restart_is_settled_from_the_card_not_rerun() {
+        // the download landed before the restart
+        let fake = fake_writing(None);
+        {
+            let mut s = fake.state.lock().unwrap();
+            s.added.push("89852000000000000003".into());
+            s.pending = Some(
+                json!({"kind": "download", "before": ["89852000000000000001", "89852000000000000002"]}),
+            );
+        }
+        let e = Esim::new(fake.clone());
+        let j = write_job(&e);
+        assert_eq!(
+            (j.kind.as_str(), j.status.as_str()),
+            ("download", "done"),
+            "{}",
+            j.message
+        );
+        assert!(fake.state.lock().unwrap().pending.is_none());
+        // a delete that never happened
+        let fake = fake_writing(None);
+        fake.state.lock().unwrap().pending =
+            Some(json!({"kind": "delete", "iccid": "89852000000000000002"}));
+        let e = Esim::new(fake.clone());
+        let j = write_job(&e);
+        assert_eq!(j.status, "error");
+        assert!(j.message.contains("did not happen"));
+        let log = fake.state.lock().unwrap().log.clone();
+        assert!(!log
+            .iter()
+            .any(|l| l.contains("profile delete") || l.contains("profile download")));
+    }
+
+    #[test]
+    fn unreadable_card_after_a_restart_keeps_the_record() {
+        let fake = fake_writing(None);
+        {
+            let mut s = fake.state.lock().unwrap();
+            s.list_fails = 99;
+            s.pending = Some(json!({"kind": "delete", "iccid": "89852000000000000002"}));
+        }
+        let e = Esim::new(fake.clone());
+        let j = write_job(&e);
+        assert_eq!(j.status, "error");
+        assert!(j.message.contains("could not be read"));
+        assert!(
+            fake.state.lock().unwrap().pending.is_some(),
+            "kept for the next start"
+        );
+    }
+
+    #[test]
+    fn a_killed_lpac_channel_is_closed_only_while_still_taken() {
+        let closed = std::cell::Cell::new(None);
+        // lpac held 1: the probe now gets 2 → close 1
+        assert_eq!(
+            release_after_kill(Some(1), || Some(2), |c| closed.set(Some(c))),
+            Some(1)
+        );
+        assert_eq!(closed.get(), Some(1));
+        // every channel taken → still close the guess
+        assert_eq!(release_after_kill(Some(1), || None, |_| {}), Some(1));
+        // 1 is free again (the modem let go, or the guess was wrong): leave it
+        closed.set(None);
+        assert_eq!(
+            release_after_kill(Some(1), || Some(1), |c| closed.set(Some(c))),
+            None
+        );
+        assert_eq!(closed.get(), None);
+        // no guess: no probe either
+        assert_eq!(release_after_kill(None, || panic!("probed"), |_| {}), None);
     }
 
     #[test]

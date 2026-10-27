@@ -10,7 +10,7 @@
 //!
 //! **The old page's writes were wrong** (inventory: it JSON-encoded the body twice, so `PUT
 //! /api/scenario` failed, a pin always unpinned and the engine switch always turned it on). Here
-//! the browser sends only what the user meant (an id, an on/off, a SSID, six numbers); the server
+//! the browser sends only what the user meant (an id, an on/off, a SSID, the timing numbers); the server
 //! builds every body as plain JSON from a fresh read and proves each write by reading
 //! `/api/scenario` again (the agent drops disk errors, so the readback is the only proof).
 //!
@@ -24,7 +24,7 @@
 //!   fresh read at confirm time, under one lock, and only `config` is sent.
 //! - Never sent twice: no reply → read back anyway → 「连接中断，还没确认是否生效」.
 //!
-//! Drafts: the six timing numbers are Datastar signals (`data-signals__ifmissing`), so a push never
+//! Drafts: the timing numbers are Datastar signals (`data-signals__ifmissing`), so a push never
 //! wipes what is being typed. Everything else acts on a click (ask → confirm → set).
 //!
 //! CHILL-specific parts (the abroad section, a scenario's CHILL node, the restore texts) are in
@@ -395,11 +395,13 @@ impl Edit for Wifi {
     }
 }
 
-/// The six timing numbers, in `PARAMS` order.
-struct Params([f64; 6]);
+/// The timing numbers, in `PARAMS` order.
+struct Params([f64; NPARAMS]);
+
+const NPARAMS: usize = 9;
 
 /// (key, signal, English label, Chinese label, input mode)
-const PARAMS: [(&str, &str, &str, &str, &str); 6] = [
+const PARAMS: [(&str, &str, &str, &str, &str); NPARAMS] = [
     ("scan_interval_away_charging_secs", "_tc", "Scan interval on charger (s)", "充电时扫描间隔（秒）", "numeric"),
     ("scan_interval_away_battery_secs", "_tb", "Scan interval on battery (s)", "用电池时扫描间隔（秒）", "numeric"),
     ("scan_interval_home_secs", "_th", "Scan interval at home (s)", "在家时扫描间隔（秒）", "numeric"),
@@ -407,7 +409,25 @@ const PARAMS: [(&str, &str, &str, &str, &str); 6] = [
     ("exit_misses", "_tx", "Confirmations to leave", "离开需确认次数", "numeric"),
     // a negative number: a numeric keypad has no minus sign on iOS
     ("min_rssi_dbm", "_tr", "Signal floor without a hardware address (dBm)", "无硬件地址时的信号下限（dBm）", "text"),
+    ("leave_rssi_dbm", "_tl", "Leave when the signal falls below (dBm)", "信号弱于此值即离开（dBm）", "text"),
+    ("blip_strong_dbm", "_ts", "Strong signal that vanishes is a blip from (dBm)", "强于此值突然消失算闪断（dBm）", "text"),
+    ("blip_hold_secs", "_tk", "Hold a blip for (s)", "闪断最多等待（秒）", "numeric"),
 ];
+
+/// Whole numbers (the agent's integer fields); the dBm values may have a fraction.
+fn int_param(i: usize) -> bool {
+    !PARAMS[i].0.ends_with("_dbm")
+}
+
+/// What a core without the field uses (older cores do not send the leave numbers).
+fn param_default(key: &str) -> Option<f64> {
+    match key {
+        "leave_rssi_dbm" => Some(-72.0),
+        "blip_strong_dbm" => Some(-60.0),
+        "blip_hold_secs" => Some(300.0),
+        _ => None,
+    }
+}
 
 impl Edit for Params {
     fn apply(&self, cfg: &mut Value, _: Option<&Value>, _: Lang) -> Result<(), String> {
@@ -415,7 +435,7 @@ impl Edit for Params {
             cfg["params"] = json!({});
         }
         for (i, (key, ..)) in PARAMS.iter().enumerate() {
-            cfg["params"][*key] = if i < 5 {
+            cfg["params"][*key] = if int_param(i) {
                 json!(self.0[i] as u64)
             } else {
                 json!(self.0[i])
@@ -819,13 +839,13 @@ pub fn view(g: &Got, l: Lang, sid: &str) -> View {
     // timing: the numbers as read; the draft is the browser's (signals), seeded once
     let shown = |i: usize| {
         let v = &s["config"]["params"][PARAMS[i].0];
-        match v.as_f64() {
+        match v.as_f64().or_else(|| param_default(PARAMS[i].0)) {
             Some(f) if f.fract() == 0.0 => format!("{}", f as i64),
             Some(f) => format!("{f}"),
             None => String::new(),
         }
     };
-    let vals: Vec<String> = (0..6).map(shown).collect();
+    let vals: Vec<String> = (0..NPARAMS).map(shown).collect();
     let mut sigs = serde_json::Map::new();
     let mut dirty = Vec::new();
     let mut reset = Vec::new();
@@ -1374,10 +1394,10 @@ async fn ask_wifi(
     .await
 }
 
-/// The six numbers typed in the form, checked like the old page (plus whole numbers, which the
+/// The numbers typed in the form, checked like the old page (plus whole numbers, which the
 /// agent's integer fields need).
-pub(crate) fn params_check(sent: &Value, l: Lang) -> Result<[f64; 6], String> {
-    let mut v = [0.0; 6];
+pub(crate) fn params_check(sent: &Value, l: Lang) -> Result<[f64; NPARAMS], String> {
+    let mut v = [0.0; NPARAMS];
     for (i, (_, sig, ..)) in PARAMS.iter().enumerate() {
         let s = match &sent[*sig] {
             Value::String(s) => s.trim().to_owned(),
@@ -1390,7 +1410,7 @@ pub(crate) fn params_check(sent: &Value, l: Lang) -> Result<[f64; 6], String> {
             .filter(|f| f.is_finite() && !s.is_empty())
             .ok_or_else(|| l.pick("Every field must be a number", "每一项都必须是数字").to_owned())?;
     }
-    if v[..5].iter().any(|f| f.fract() != 0.0 || *f < 0.0 || *f > 4e9) {
+    if (0..NPARAMS).filter(|i| int_param(*i)).any(|i| v[i].fract() != 0.0 || v[i] < 0.0 || v[i] > 4e9) {
         return Err(l
             .pick(
                 "Intervals and confirmations must be whole numbers, 0 or more",
@@ -1401,6 +1421,26 @@ pub(crate) fn params_check(sent: &Value, l: Lang) -> Result<[f64; 6], String> {
     if v[3] < 1.0 || v[4] < 1.0 {
         return Err(l
             .pick("Confirmations must be at least 1", "确认次数至少为 1")
+            .into());
+    }
+    // the core's own checks (luyaz_policy::scenario::validate), said before asking
+    let dbm = |f: f64| (-100.0..=-20.0).contains(&f);
+    if !dbm(v[6]) || !dbm(v[7]) {
+        return Err(l
+            .pick("Signal levels must be between -100 and -20 dBm", "信号值必须在 -100 到 -20 dBm 之间")
+            .into());
+    }
+    if v[7] < v[6] {
+        return Err(l
+            .pick(
+                "The blip signal must not be weaker than the leave signal",
+                "闪断信号不能弱于离开信号",
+            )
+            .into());
+    }
+    if v[8] > 3600.0 {
+        return Err(l
+            .pick("A blip is held for at most 3600 s", "闪断最多等待 3600 秒")
             .into());
     }
     Ok(v)
@@ -1791,16 +1831,28 @@ mod tests {
 
     #[test]
     fn timing_numbers_are_checked_and_sent_as_the_agent_wants_them() {
-        let ok = json!({"_tc":"60","_tb":"300","_th":"90","_te":"3","_tx":"2","_tr":"-65.5"});
+        let ok = json!({"_tc":"60","_tb":"300","_th":"90","_te":"3","_tx":"2","_tr":"-65.5","_tl":"-72","_ts":"-60","_tk":"300"});
         let v = params_check(&ok, Lang::En).unwrap();
-        assert_eq!(v, [60.0, 300.0, 90.0, 3.0, 2.0, -65.5]);
+        assert_eq!(v, [60.0, 300.0, 90.0, 3.0, 2.0, -65.5, -72.0, -60.0, 300.0]);
         let mut cfg = state(true)["config"].clone();
         Params(v).apply(&mut cfg, None, Lang::En).unwrap();
         assert!(Params(v).holds(&cfg));
         // integers go out as integers (a u32 field refuses 3.0)
         assert_eq!(cfg["params"]["enter_hits"].to_string(), "3");
         assert_eq!(cfg["params"]["min_rssi_dbm"].as_f64(), Some(-65.5));
-        for (k, bad) in [("_tc", ""), ("_tb", "abc"), ("_th", "1.5"), ("_tc", "-1"), ("_te", "0"), ("_tx", "0")] {
+        assert_eq!(cfg["params"]["blip_hold_secs"].to_string(), "300");
+        for (k, bad) in [
+            ("_tc", ""),
+            ("_tb", "abc"),
+            ("_th", "1.5"),
+            ("_tc", "-1"),
+            ("_te", "0"),
+            ("_tx", "0"),
+            ("_ts", "-80"),
+            ("_tl", "0"),
+            ("_tk", "3601"),
+            ("_tk", "1.5"),
+        ] {
             let mut x = ok.clone();
             x[k] = json!(bad);
             assert!(params_check(&x, Lang::En).is_err(), "{k}={bad}");
@@ -1889,7 +1941,7 @@ mod tests {
         let v = view(&got(Some(state(true)), None), Lang::En, "");
         assert_eq!(
             serde_json::from_str::<Value>(&v.sigs).unwrap(),
-            json!({"_tc":"60","_tb":"300","_th":"60","_te":"2","_tx":"2","_tr":"-70"})
+            json!({"_tc":"60","_tb":"300","_th":"60","_te":"2","_tx":"2","_tr":"-70","_tl":"-72","_ts":"-60","_tk":"300"})
         );
         let html = Leaves { v: &v }.render().unwrap();
         assert!(html.contains("data-signals__ifmissing"));

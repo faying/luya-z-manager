@@ -34,6 +34,8 @@ pub struct Wifi {
     pub cli_name: [Obj; WIFI_MAX_CLI],
     pub cli_mac: [Obj; WIFI_MAX_CLI],
     pub cli_ip: [Obj; WIFI_MAX_CLI],
+    /// 「协商 ↓1201 ↑864 Mbps · Wi-Fi 6 · -60 dBm」, each 「读不到」 when iw didn't say
+    pub cli_link: [Obj; WIFI_MAX_CLI],
     /// 连上以来的总流量 (netinfo)
     pub cli_tot: [Obj; WIFI_MAX_CLI],
     /// 「Apple · 手机 · 随机地址」 (lanid), its own line so the totals are never cut off
@@ -133,6 +135,7 @@ impl Ui {
             w.cli_name[i] = kit::label_w(r, f.cj14, th.t1, PAD, 8, 160, false, "");
             w.cli_mac[i] = kit::label_w(r, f.cj12, th.t3, PAD, 29, CARD_W - 2 * PAD, false, "");
             w.cli_ip[i] = kit::label_r(r, f.n15, th.t1, CARD_W - PAD, 7, "");
+            w.cli_link[i] = kit::label_w(r, f.cj12, th.t3, PAD, 47, CARD_W - 2 * PAD, false, "");
             w.cli_tot[i] = kit::label_w(r, f.cj12, th.t3, PAD, 47, CARD_W - 2 * PAD, false, "");
             w.cli_desc[i] = kit::label_w(r, f.cj12, th.t3, PAD, 65, CARD_W - 2 * PAD, false, "");
             kit::show(r, false);

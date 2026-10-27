@@ -793,6 +793,27 @@ async fn set_interval_changes_sleep() {
     assert_eq!(mock.times("a.list").len(), 3, "{:?}", mock.names());
 }
 
+/// 按客户端登记：取最快的；撤销或过期就回落；全没了回到 idle（启动间隔）。旧客户端的登记不过期。
+#[tokio::test(start_paused = true)]
+async fn interval_wants_take_the_fastest_and_lapse() {
+    let (exec, mock, _) = setup(vec![spec("a", 0)], Config::default(), 5000);
+    exec.start_rounds(Arc::new(NoLegacy));
+    let ttl = Some(Duration::from_secs(10));
+    assert_eq!(exec.want_interval("touch", Some(5000), ttl), 5000);
+    assert_eq!(exec.want_interval("web", Some(1000), ttl), 1000);
+    assert_eq!(exec.want_interval("web", None, None), 5000, "web gone: touch's 5 s");
+    assert_eq!(exec.want_interval("touch", Some(1000), ttl), 1000);
+    // touch dies lit: no release; the want lapses and the loop notices within one interval
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    assert_eq!(exec.interval_ms(), 5000, "back to idle");
+    let before = mock.times("a.list").len();
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert_eq!(mock.times("a.list").len() - before, 2, "5 s rounds: {:?}", mock.names());
+    exec.set_interval_ms(2000);
+    tokio::time::sleep(Duration::from_secs(3600)).await;
+    assert_eq!(exec.interval_ms(), 2000, "an old client's want does not lapse");
+}
+
 #[tokio::test]
 async fn call_without_executor_fails_instead_of_hanging() {
     if GLOBAL.get().is_none() {

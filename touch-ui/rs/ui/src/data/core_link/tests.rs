@@ -374,6 +374,7 @@ fn pace_only_on_a_change() {
     let s = seen.lock().unwrap();
     assert_eq!(s.len(), 2);
     assert!(s[0].contains("\"milliseconds\":5000") && s[1].contains("\"milliseconds\":1000"));
+    assert!(s.iter().all(|r| r.contains("\"client\":\"touch\"") && r.contains("\"ttl_s\":180")));
 }
 
 #[test]

@@ -13,12 +13,14 @@ pub mod diagnose;
 pub mod esim;
 pub mod http;
 pub mod landing;
+pub mod latency;
 pub mod live;
 pub mod netinfo;
 pub mod scenario;
 pub mod screen_feed;
 pub mod speedtest;
 pub mod tailscale;
+pub mod today;
 #[cfg(test)]
 pub mod testsrv;
 pub mod util;

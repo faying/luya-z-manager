@@ -7,6 +7,8 @@ use super::background::{Cached, Task};
 use super::alerts::Alerts;
 use super::battery::BatteryEst;
 use super::landing::Landing;
+use super::latency::DirectLat;
+use super::today::Today;
 use super::versions::Versions;
 use super::chill::Chill;
 use super::core_link::{Cfg, CoreLink};
@@ -45,6 +47,8 @@ pub struct Live {
     bat: Cached<BatteryEst>,
     vers: Cached<Versions>,
     landing: Cached<Landing>,
+    direct_lat: Cached<DirectLat>,
+    today: Cached<Today>,
     chill: Cached<Chill>,
     aux: Option<Task<(i32, i32, i32)>>,
     pub bl: Backlight,
@@ -68,6 +72,8 @@ impl Live {
             bat: Cached::new(BatteryEst::default()),
             vers: Cached::new(Versions::default()),
             landing: Cached::new(Landing::default()),
+            direct_lat: Cached::new(DirectLat::default()),
+            today: Cached::new(Today::default()),
             chill: Cached::new(Chill::default()),
             aux: None,
             bl: Backlight::init(),
@@ -185,6 +191,8 @@ impl Live {
             versions: self.vers.rows().to_vec(),
             versions_checked: Some(self.vers.checked().into()),
             landing: self.landing.get().cloned(),
+            direct_lat: self.direct_lat.get().cloned(),
+            today: self.today.get().cloned(),
 
             bl_panel_lit: self.bl.panel_lit() as i32,
             bl_is_on: self.bl.is_on() as i32,
@@ -231,8 +239,8 @@ impl Source for Live {
         let a = a.clone();
         self.core.set_pace(a.panel_lit);
         let mut ag = self.agent.clone();
-        let home = a.home;
-        p.scenario = self.scenario.poll(move |s| s.poll(&mut ag, home) as u32) != 0;
+        let (home, lit) = (a.home, a.lit);
+        p.scenario = self.scenario.poll(move |s| s.poll(&mut ag, home, lit) as u32) != 0;
         let mut ag = self.agent.clone();
         let mode = a.ni_mode;
         p.netinfo = self.netinfo.poll(move |s| s.poll(&mut ag, mode) as u32) != 0;
@@ -282,6 +290,11 @@ impl Source for Live {
         let mut ag = self.agent.clone();
         let active = a.home && a.lit;
         p.landing = self.landing.poll(move |s| s.poll(&mut ag, active) as u32) != 0;
+        // Home's 直连 latency and 今天 (core 1.50): each its own pace, both only on a lit Home
+        let mut ag = self.agent.clone();
+        p.direct_lat = self.direct_lat.poll(move |s| s.poll(&mut ag, active) as u32) != 0;
+        let mut ag = self.agent.clone();
+        p.today = self.today.poll(move |s| s.poll(&mut ag, active) as u32) != 0;
         let mut ag = self.agent.clone();
         let active = a.alerts;
         p.alerts = self.alerts.poll(move |s| s.poll(&mut ag, active) as u32) != 0;
@@ -362,6 +375,9 @@ impl Source for Live {
 
     fn data_set_pace(&mut self, panel_lit: bool) {
         self.core.set_pace(panel_lit);
+    }
+    fn data_release_pace(&mut self) {
+        self.core.release_pace();
     }
     fn data_control_fb(&mut self, action: &str, params: &str, fb_action: &str, fb_args: Option<&str>) -> bool {
         self.core.control_fb(action, params, fb_action, fb_args)

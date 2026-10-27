@@ -431,7 +431,7 @@ pub fn run(args: &[String]) -> i32 {
     if perf {
         eprintln!("ui-perf: passes={passes} pump_max_us={pump_us} timer_max_us={timer_us} timer_over_20ms={over_20ms} frames={}", frames());
     }
-    ui::with(|u| u.src.data_set_pace(true)); // don't leave core slow behind a stopped UI
+    ui::with(|u| u.src.data_release_pace()); // core back to its idle pace behind a stopped UI
     if let Some(f) = arg(args, "--texts=") {
         let mut t = Vec::new();
         ui::with(|u| texts(u.tiles[ui::TAB_HOME], &mut t));

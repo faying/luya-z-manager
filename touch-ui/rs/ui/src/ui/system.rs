@@ -249,8 +249,8 @@ impl Ui {
         if automatic {
             l.hist = logic::exec_next(Some(&self.launch.hist), self.src.boot_s(&self.model));
         }
-        // the new process sets its own pace; don't leave core slow if it never does
-        self.src.data_set_pace(true);
+        // the new process sets its own pace; take this one's want back
+        self.src.data_release_pace();
         let r = self.src.exec(&l);
         self.sync();
         r

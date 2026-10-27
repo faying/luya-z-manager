@@ -35,6 +35,7 @@ mod device_info;
 mod diagnose;
 mod esim;
 mod follow;
+mod guard;
 mod health_page;
 mod hub;
 mod i18n;
@@ -423,6 +424,7 @@ pub fn app(
             state.clone(),
             proxy::gate,
         ))
+        .layer(axum::middleware::from_fn(guard::host_gate))
         .with_state(state)
 }
 
@@ -472,6 +474,10 @@ const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 /// each connection takes a permit, gets `ConnectInfo<SocketAddr>` like
 /// `into_make_service_with_connect_info`, and keeps upgrades (the CHILL WebSocket). On stop the
 /// loop stops accepting; open connections are dropped with the process.
+///
+/// Slots (guard.rs): one address holds at most [`guard::PER_PEER`]; the last [`guard::RESERVED`]
+/// of `max_conns` are for loopback and the tailnet only. A connection over its address's share is
+/// closed at once; one waiting for a slot gives up after `header_timeout`.
 async fn accept_loop(
     l: tokio::net::TcpListener,
     router: Router,
@@ -480,10 +486,15 @@ async fn accept_loop(
     header_timeout: Duration,
 ) {
     let addr = l.local_addr().map(|a| a.to_string()).unwrap_or_default();
-    let slots = Arc::new(tokio::sync::Semaphore::new(max_conns));
+    let reserved = guard::RESERVED.min(max_conns.saturating_sub(1));
+    let slots = Arc::new(tokio::sync::Semaphore::new(max_conns - reserved));
+    let spare = Arc::new(tokio::sync::Semaphore::new(reserved));
+    let peers = Arc::new(guard::PeerCount::default());
+    // accepted and not yet closed (open or waiting): beyond this, accept waits
+    let open = Arc::new(tokio::sync::Semaphore::new(max_conns * 2));
     loop {
-        let permit = tokio::select! {
-            p = slots.clone().acquire_owned() => match p { Ok(p) => p, Err(_) => return },
+        let held = tokio::select! {
+            p = open.clone().acquire_owned() => match p { Ok(p) => p, Err(_) => return },
             () = until_stop(&mut stop) => return,
         };
         let (sock, peer) = tokio::select! {
@@ -498,8 +509,24 @@ async fn accept_loop(
             },
             () = until_stop(&mut stop) => return,
         };
+        let Some(share) = peers.take(peer.ip(), guard::PER_PEER) else {
+            drop(sock);
+            continue;
+        };
         let router = router.clone();
+        let (slots, spare) = (slots.clone(), spare.clone());
         tokio::spawn(async move {
+            let trusted = guard::trusted_peer(peer.ip());
+            let permit = match slots.clone().try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => match trusted.then(|| spare.try_acquire_owned().ok()).flatten() {
+                    Some(p) => p,
+                    None => match tokio::time::timeout(header_timeout, slots.acquire_owned()).await {
+                        Ok(Ok(p)) => p,
+                        _ => return,
+                    },
+                },
+            };
             let svc = hyper::service::service_fn(move |mut req: hyper::Request<hyper::body::Incoming>| {
                 req.extensions_mut().insert(axum::extract::ConnectInfo(peer));
                 let mut r = router.clone();
@@ -511,7 +538,7 @@ async fn accept_loop(
                 .serve_connection(hyper_util::rt::TokioIo::new(sock), svc)
                 .with_upgrades();
             let _ = conn.await;
-            drop(permit);
+            drop((permit, share, held));
         });
     }
 }
@@ -669,6 +696,50 @@ mod tests {
         let n = tokio::time::timeout(Duration::from_secs(1), silent.read(&mut buf)).await.unwrap().unwrap_or(0);
         assert!(n == 0 || buf[..n].starts_with(b"HTTP/1.1 408"), "silent one closed");
         let _ = tx.send(true);
+    }
+
+    /// One address holds at most PER_PEER; the rest are closed at once. An idle keep-alive
+    /// connection is closed after the header timeout, so it does not hold its slot for ever.
+    #[tokio::test]
+    async fn one_address_cannot_take_every_slot_and_idle_ones_close() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let router = Router::new().route("/", get(|| async { "ok" }));
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        tokio::spawn(accept_loop(l, router, rx, 64, Duration::from_millis(300)));
+        let mut held = Vec::new();
+        for _ in 0..guard::PER_PEER {
+            held.push(tokio::net::TcpStream::connect(addr).await.unwrap());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut over = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut buf = [0u8; 64];
+        let n = tokio::time::timeout(Duration::from_millis(200), over.read(&mut buf)).await.unwrap().unwrap_or(0);
+        assert_eq!(n, 0, "over its share: closed before the header timeout");
+        drop(held);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut ka = tokio::net::TcpStream::connect(addr).await.unwrap();
+        ka.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
+        let n = tokio::time::timeout(Duration::from_secs(1), ka.read(&mut buf)).await.unwrap().unwrap();
+        assert!(buf[..n].starts_with(b"HTTP/1.1 200"));
+        let started = std::time::Instant::now();
+        let mut rest = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), ka.read_to_end(&mut rest)).await.expect("idle keep-alive closed").ok();
+        assert!(started.elapsed() < Duration::from_millis(1500));
+        let _ = tx.send(true);
+    }
+
+    #[tokio::test]
+    async fn a_foreign_host_name_is_refused() {
+        use tower_service::Service;
+        let mut r = Router::new()
+            .route("/", get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn(guard::host_gate));
+        let req = |h: &str| axum::http::Request::get("/").header("host", h).body(axum::body::Body::empty()).unwrap();
+        assert_eq!(r.call(req("192.168.0.1:9090")).await.unwrap().status(), 200);
+        assert_eq!(r.call(req("evil.example:9090")).await.unwrap().status(), 421);
     }
 
     #[tokio::test]

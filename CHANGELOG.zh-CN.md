@@ -18,6 +18,7 @@
 
 ## Unreleased
 
+- kit: 型号检查不再要求 `MU` 前面有底线（`BD_CNMU5250V1.0.0B31`、`BD_XCBZHKMU5250V1.0.0B03`），region 取 `MU` 前面那段；矩阵外的固件照样拒装。
 - chill：情景关掉 Wi-Fi 时，`rules_drift` 不再每分钟报一次。原厂按接口加 `iif wlanN failed_policy` 规则，接口关了就删，接口回来时优先级跟着新的 ifindex 变。现在绑在接口上的规则（`iif`/`oif`）只有在接口在跑、而且找不到同样内容的规则时才算消失；其他规则消失照旧报。
 
 - kit: `firmware-capabilities.matrix.json` 取代 `device/compat.list`：型号 / 地区 / 固件 → 每个组件（ssh、admin、ui、esim、chill、recover）`verified`、`code-only` 或 `unsupported`。`install.sh` 按组件各自检查：`code-only` 仍要 `LUYAZ_ALLOW_UNVERIFIED=1`，`unsupported` 跳过并说明、其余照装，一个都不剩才停。矩阵打进装机包、列在 MANIFEST.txt 里。
@@ -31,6 +32,72 @@
 - kit: 给了 `OUI_TSV=`（`scripts/lanid/make-oui.sh` 生成的表）就装到 `/data/luyaz/lanid/oui.tsv`，用来显示厂商；公开构建没有这张表。
 
 - kit: 装机包带上 lanid-parse 组件（已连设备识别），装到 `/data/luyaz/core/plugins/`，只有这一个组件；没有时核心照常跑、识别关着。`LANID_CWASM=` 指定现成的。
+
+## touch 1.18.0 — 2026-10-27
+
+- Wi-Fi 设备行加一行连接信息「协商 ↓2402 ↑1201 Mbps · Wi-Fi 6 · -39 dBm」，iw 没给的项写「读不到」（频段也是）。从 netinfo 读 `link_up_mbps`。
+
+## lweb 1.37.0 — 2026-10-27
+
+- `/clients` 详情面板显示每台 Wi-Fi 设备的连接：协商速率下行 / 上行（Mbps）、频段（信道、热点频宽）、信号强度（dBm 和等级）、Wi-Fi 协议。四项一直列出，驱动没给的写「读不到」，不猜。行内摘要改为同时显示 ↓ 和 ↑ 协商速率。
+
+## core 1.53.1 — 2026-10-27
+
+- Wi-Fi 扫描再补扫一遍已启用的被动/DFS 5 GHz 信道（5150-5730 MHz，`iw dev <iface> scan freq …`）并合并结果；普通扫描在这些信道上从来扫不到网络。
+
+## lweb 1.36.0 — 2026-10-27
+
+- 情景「反应快慢」表单加上三个离开参数（离开信号、闪断信号、闪断等待）；旧版 core 没有这些字段时显示默认值。
+
+## core 1.53.0 — 2026-10-27
+
+- 离开靠 Wi-Fi 判定的场景按信号走。一轮扫描里命中网络的最好信号弱于 `leave_rssi_dbm`（-72）就算一次未命中，家里 Wi-Fi 变弱时提前切到外出；最后看到时不弱于 `blip_strong_dbm`（-60）的网络突然消失，按路由器闪断保留 `blip_hold_secs`（300 秒）后才开始算未命中。`/api/scenario` 配置新增这三个参数（缺省用默认值，有校验）；`state.json` 新增 `last_seen_at`/`last_seen_dbm`（进入时由触发切换的那次扫描写入，刚进入就闪断也会保留）。引擎日志写明原因（`"home" weak: …`、`"home" not seen, held as a blip: …`）。
+
+## core 1.52.0 — 2026-10-27
+
+- 在队列里等了超过 2 分钟才转发的短信，正文会注明（「late: forwarded 3 h 05 min after it came in」）；webhook 带 `late_secs`。转发队列状态新增 `oldest_pending_secs`。
+- lpac 被杀后，先重新探一次，确认它的通道还被占着才关；已经空出来的通道（或猜错的）不会被关。
+- `state.set_interval` 可带 `{client, milliseconds, ttl_s}`（会过期的登记，默认 180 秒）或 `{client, release: true}`。采样节奏取未过期登记里最快的，没有就是 5 秒。触屏亮屏时崩溃不会再让核心一直每秒采；不带 `client` 的旧调用照旧。
+
+## lweb 1.35.0 — 2026-10-27
+
+- 只接受外人拿不到的名字（IP、单段名、`.lan`/`.local`/`.home.arpa`/`.internal`、`*.ts.net`、`LUYAZ_WEB_HOSTS`），其他回 421，堵住能绕过 Origin 检查的 DNS rebinding。
+- 密码错了，同一地址下次要等（1 秒起翻倍，最多 5 分钟，另有总量上限）；输对就清零。
+- 一个地址最多 16 条连接，最后 8 个名额留给本机和 tailnet；空闲的 keep-alive 连接 10 秒后关。
+- 有页面开着时请核心按 1 秒采（暗屏也一样），最后一个页面关掉就撤回。
+
+## touch 1.17.0 — 2026-10-27
+
+- 核心节奏（亮屏 1 秒、暗屏 5 秒）改成每分钟续一次的登记，退出或交出屏幕时撤回。
+
+## core 1.51.0 — 2026-10-27
+
+- eSIM 下载、删除时 lpac 报错或超时，改为回读卡上的 profile 列表判定：其实已装上/已删掉就算成功，激活码不会被重试。core 在写入中途重启时，下次启动用同样方法判定。
+- `wifi_post_stuck` 另在原厂 Wi-Fi 脚本启动时被唤醒（inotify，不轮询），35 秒、65 秒各看一次，空转约 1 分钟就报。仍然只读。
+
+## touch 1.16.2 — 2026-10-27
+
+- 情景卡「为什么」按 DESIGN §4：已固定写「已固定 · 你 10:20 手动选的」，国外写「· 到了 2 小时」（取最大整单位），不再写「· HH:MM 起」。
+
+## touch 1.16.1 — 2026-10-27
+
+- clippy 豁免只留在 place.rs 两处原有代码上；行为不变。
+
+## core 1.50.2 — 2026-10-27
+
+- `/v2/latency/direct` 和 `/v2/timeline/today` 的测量函数和长期层来源改成启动时放进服务状态，不再每次请求时读；回复不变。两个接口加了经过路由的测试，双网址测延迟的竞速也加了测试。
+
+## core 1.50.1 — 2026-10-26
+
+- 直连出口延迟（`/v2/latency/direct`、深查的直连探测）同时问国内的 204 和 gstatic，取先回来的；只问 gstatic 在国内直连永远不通，首页一直显示「—」。
+
+## touch 1.16.0 — 2026-10-26
+
+- 首页接上 core 1.50 的数据。情景卡写出是哪个 Wi-Fi、从几点起（「因为看到家里 Wi-Fi Home-5G · 08:41 起」，SSID 太长两头留），扫描指向别的情景时胶囊显示「判断中 ●●○」、为什么那行写「可能切到外出：家里 Wi-Fi N 次没看到」（`GET /api/scenario`，只在亮屏首页、最多一分钟一次）。状态卡的操作按 `story.fix` 走：「摆放模式 ›」开摆放模式，「去打开 ›」去蜂窝，diag:<层> 开诊断并滚到那一层、短暂高亮；换卡提示和没有 `fix` 时的旧规则不变。直连那几行显示直连延迟（`GET /v2/latency/direct`，亮屏首页一分钟一次；失败写「—」）。Tailscale 下面新加「今天」卡（`GET /v2/timeline/today`，亮屏首页 5 分钟一次）：24 个小时格按平均 SINR 上色、制式变化处标出，下面是最新 8 条事件和「还有 N 条」；时钟没校准时写「设备时间还没校准，时间线暂停」。旧 core 下一切照旧。Requires: core 1.50.0（新的部分）。
+
+## core 1.50.0 — 2026-10-26
+
+- 触屏首页要的数据。`GET /api/scenario`（要登录）加 `matched`（`{id, ssid, since}`：最近一次扫描对上的 Wi-Fi，和同一个网络从什么时候起一直对得上；不是按 Wi-Fi 判的就是 null）、`enter_hits`、`exit_misses`（和 `candidate`、`hits`、`misses` 一起画「判断中 ●●○」）；公开状态里照旧没有 SSID。`story.fix` 说首页底部按钮去哪（`sim_enable`、`cell`、`placement`、`diag:data|internet|dns|limit|crowd|link`、`op`；正常时没有这个字段），只在触屏原来有按钮的地方有。`GET /v2/latency/direct`：直连出口延迟（深查自己的 `generate_204` 探测，3 秒），只在有人问时测，60 秒内所有调用共用一次，带 `roaming`。`GET /v2/timeline/today`：当地零点以来的情景切换、蜂窝断开/恢复、开机（带原因码）、事件开始/结束、开始/停止充电、自动修复，加每小时一个点（`sinr_avg`、`rat`）；时钟不可信时 `clock_trusted:false`，长期层关着时 `available:false`。长期层新写 `charge`（保持 5 分钟才算）、`scenario`、`repair` 事件，小时行加 `sinr_avg`、`rat`。
 
 ## core 1.49.1 — 2026-10-26
 

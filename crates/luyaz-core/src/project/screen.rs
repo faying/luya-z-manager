@@ -744,6 +744,7 @@ fn with_op(mut o: Story, op: Option<&ScreenOp>) -> Story {
                 (State::RevertFail, Tone::Bad)
             };
             o.cause = Cause::None;
+            o.fix = Some("op".into());
             o.headline = cstr(op.head.0.clone(), 32);
             o.headline_en = op.head.1.clone();
             o.hint = cstr(op.hint.0.clone(), 128);
@@ -782,6 +783,7 @@ pub fn with_finding(v: &mut NetView, layer: &str, symptom: (&str, &str)) {
     {
         return;
     }
+    // `signal` reads as no service, which offers no action on the touch: no fix, as before
     let (state, head, head_en) = match layer {
         "signal" => (State::Nosvc, "没注册上", "No service"),
         "data" => (State::Nodata, "数据没连上", "No data"),
@@ -791,6 +793,7 @@ pub fn with_finding(v: &mut NetView, layer: &str, symptom: (&str, &str)) {
     };
     let mut o = v.story.clone();
     (o.state, o.tone, o.cause) = (state, Tone::Bad, Cause::None);
+    o.fix = (layer != "signal").then(|| format!("diag:{layer}"));
     o.headline = cstr(head.into(), 32);
     o.headline_en = head_en.into();
     // `network.health`'s detail (the symptom, what is paused, what to do) and where the proof is
@@ -884,6 +887,44 @@ pub struct Story {
     pub load_en: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub limit_en: String,
+    /// Where the home footer's action goes, as a stable code (absent when there is nothing to
+    /// do; the touch then shows the carriers instead):
+    /// - `sim_enable`: no usable SIM — SIM & eSIM, to insert or enable one
+    /// - `cell`: a switch in Cellular is off (mobile data, data roaming)
+    /// - `placement`: weak signal or high noise — the placement page (摆放模式)
+    /// - `diag:<layer>`: the deep diagnosis, opened at that layer: `data` (not dialled), `internet`
+    ///   (dialled, nothing back), `dns`, `limit` (carrier cap), `crowd` (busy cell), `link` (one
+    ///   narrow carrier)
+    /// - `op`: a change in progress or its failed revert (the op card)
+    /// - `exit` is reserved for a proxy exit fault; no verdict here names one yet.
+    ///
+    /// Set exactly where the touch showed an action before (an abnormal verdict, no SIM, an op);
+    /// the swap-to-the-other-SIM offer needs dual-SIM readings the story does not have and stays
+    /// the touch's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
+}
+
+/// [`Story::fix`] for a network verdict (the op and the finding set their own).
+fn fix_for(state: State, i: &NetIn) -> Option<&'static str> {
+    Some(match state {
+        State::Nosim => "sim_enable",
+        State::Nodata if i.data_sw == Sw::Off || (i.roaming == 1 && i.roam_sw == Sw::Off) => "cell",
+        State::Nodata => "diag:data",
+        State::Stall => "diag:internet",
+        State::Weak | State::Noise => "placement",
+        State::Limit => "diag:limit",
+        State::Crowd => "diag:crowd",
+        State::Narrow => "diag:link",
+        State::Changing | State::RevertFail => "op",
+        State::Ok
+        | State::Airplane
+        | State::Sos
+        | State::Nosvc
+        | State::Only2g
+        | State::Only3g
+        | State::Hot => return None,
+    })
 }
 
 /// The English sibling of a Chinese field: kept only when the Chinese has
@@ -975,6 +1016,12 @@ fn sim_usable(st: &str) -> bool {
 }
 
 fn story(i: &NetIn) -> Story {
+    let mut o = verdict(i);
+    o.fix = fix_for(o.state, i).map(str::to_string);
+    o
+}
+
+fn verdict(i: &NetIn) -> Story {
     let rat = rat_of(i.net_type);
     let pin = pinned_mode(i.net_select);
     let limited = has_ci(i.net_type, "LIMIT") || has_ci(i.net_type, "EMERGENCY");

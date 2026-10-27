@@ -897,7 +897,7 @@ impl SmsForwarder {
             }
         };
         let rule = cfg.rules.iter().find(|r| r.id == rule_id);
-        let msg = DecodedSms { id: job.sms_id, sender: job.sender.clone(), content: job.content.clone(), date: job.date.clone() };
+        let msg = DecodedSms { id: job.sms_id, sender: job.sender.clone(), content: job.content.clone(), date: job.date.clone(), late_secs: (now_ts() - job.created_at >= queue::LATE_AFTER_SECS).then(|| now_ts() - job.created_at) };
         let result = match rule {
             None => Err(format!("rule {rule_id} removed {}", send::PERMANENT)),
             Some(r) => forward_to(&*self.host, &r.destination, &msg, agent),
@@ -1152,7 +1152,7 @@ fn decode_item(item: &Value) -> (u64, Option<DecodedSms>) {
         .to_string();
     let sender = if is_ucs2_hex(sender_raw) { decode_ucs2_hex(sender_raw) } else { sender_raw.to_string() };
     let content = if is_ucs2_hex(content_raw) { decode_ucs2_hex(content_raw) } else { content_raw.to_string() };
-    (id, Some(DecodedSms { id, sender, content, date }))
+    (id, Some(DecodedSms { id, sender, content, date, late_secs: None }))
 }
 
 /// How far before the last handled SMS a received one may be dated and still

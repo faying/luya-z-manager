@@ -1186,3 +1186,26 @@ fn one_channel_down_does_not_block_the_others() {
     assert_eq!(to("222"), 0);
     let _ = fs::remove_dir_all(&d);
 }
+
+#[test]
+fn late_forward_says_so_in_the_chat_text() {
+    let mut m = DecodedSms {
+        id: 1,
+        sender: "10086".into(),
+        content: "hi".into(),
+        date: "26,10,27,09,05,00,+8".into(),
+        late_secs: None,
+    };
+    assert!(!send::chat_text(&m).contains("late"));
+    m.late_secs = Some(3 * 3600 + 5 * 60);
+    assert!(send::chat_text(&m).contains("(late: forwarded 3 h 05 min after it came in)"));
+    assert_eq!(send::wait_text(30), "1 min");
+    assert_eq!(send::wait_text(45 * 60), "45 min");
+    assert_eq!(send::wait_text(50 * 3600), "2 d 2 h");
+}
+
+#[test]
+fn queue_status_reports_the_oldest_pending_wait() {
+    let q = queue::Queue::default();
+    assert!(q.status()["oldest_pending_secs"].is_null());
+}

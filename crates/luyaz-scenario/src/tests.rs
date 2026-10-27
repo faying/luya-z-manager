@@ -64,9 +64,10 @@ fn a_trip_home_away_abroad_and_back() {
     tick_after(&f, &e, 10);
     assert_eq!(f.calls(), vec!["auto-sleep false"]);
 
-    // home gone: a recheck before believing it, then two misses to leave
+    // home gone (past the blip hold since it was last seen on entering): a recheck before
+    // believing it, then two misses to leave
     f.scan_returns(vec![net("Cafe", "02:00:00:00:00:09", -50.0)]);
-    tick_after(&f, &e, 60);
+    tick_after(&f, &e, 300);
     let calls = f.calls();
     assert_eq!(calls.iter().filter(|c| *c == "scan").count(), 2, "{calls:?}");
     assert!(f.log().contains("\"home\" not seen: scans saw 1+1 networks; Home 02:00:00:00:00:01 absent"));
@@ -477,4 +478,32 @@ fn a_hand_edited_config_is_picked_up() {
     e.tick();
     assert_eq!(e.config(), c2);
     assert_eq!(f.log().matches("reloaded").count(), 1);
+}
+
+#[test]
+fn leaving_follows_the_signal_and_says_why() {
+    let f = Fake::new("leave-signal");
+    f.write_config(&config());
+    let e = Engine::new(f.clone());
+    e.bootsafe();
+    f.scan_returns(vec![home_net()]);
+    tick_after(&f, &e, 60);
+    tick_after(&f, &e, 60);
+    tick_after(&f, &e, 60);
+    assert_eq!(e.run_state().current, "home");
+    assert_eq!(e.run_state().last_seen_dbm, Some(-40.0));
+
+    // the router blips: held, no miss
+    f.scan_returns(vec![]);
+    tick_after(&f, &e, 60);
+    assert!(f.log().contains("\"home\" not seen, held as a blip: last seen -40 dBm 1m"), "{}", f.log());
+    assert_eq!((e.run_state().current.as_str(), e.run_state().misses), ("home", 0));
+
+    // back, then fading: two weak scans leave
+    f.scan_returns(vec![net("Home", "02:00:00:00:00:01", -75.0)]);
+    tick_after(&f, &e, 60);
+    assert!(f.log().contains("\"home\" weak: best -75 dBm (leave below -72)"), "{}", f.log());
+    assert_eq!(e.run_state().misses, 1);
+    tick_after(&f, &e, 60);
+    assert_eq!(e.run_state().current, "away");
 }

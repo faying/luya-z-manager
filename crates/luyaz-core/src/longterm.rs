@@ -5,7 +5,8 @@
 //!   trusted, else every hour of uptime, as the guard's ledger does), `/data/luyaz/core/long/hours.jsonl`.
 //! - **Important events**, kept 30 days and at most [`EVENTS_CAP`] bytes: boot, our version, the
 //!   cellular link going down/up, the clock becoming trusted, blocks going stale and back,
-//!   `/data/luyaz/core/long/events.jsonl`.
+//!   charging starting/stopping (held 5 min), scenario switches and automatic repairs ([`note`]),
+//!   `/data/luyaz/core/long/events.jsonl`. [`today`] reads both files for the home timeline.
 //!
 //! Sans-IO: [`Fold`] takes the published block events (the same ones the raw log stores) and
 //! clock readings and gives the lines; [`Store`] appends and prunes. So the layer can be rebuilt
@@ -40,6 +41,7 @@ pub mod places;
 pub mod power;
 pub mod regress;
 pub mod standby;
+pub mod today;
 pub mod watch;
 
 use serde::{Deserialize, Serialize};
@@ -113,6 +115,9 @@ struct Seen {
     /// The serving band (NR when there is one), for the experience library.
     #[serde(default)]
     band: Option<String>,
+    /// The signal block's radio type (`SA`, `ENDC`, `LTE`, …), for the hour's `rat`.
+    #[serde(default)]
+    rat: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -130,6 +135,11 @@ struct Hour {
     /// `hour_power` / `hour_proc` sums.
     #[serde(default)]
     pw: power::Acc,
+    /// SINR readings this hour (the serving NR cell's when there is one, else LTE's): sum, count.
+    #[serde(default)]
+    sinr_sum: f64,
+    #[serde(default)]
+    sinr_n: u32,
 }
 
 /// What the IO side saw of the sources since the last check (all CLOCK_MONOTONIC seconds).
@@ -197,6 +207,25 @@ pub struct Fold {
     /// `net.last`, as the guard's `state/net.last`).
     #[serde(default)]
     pub net_last: Option<String>,
+    /// Charging as the last `charge` event (or the first reading) said, and a flip waiting to
+    /// hold for [`CHARGE_HOLD_S`] (its value, MONOTONIC s since).
+    #[serde(default)]
+    chg_said: Option<bool>,
+    #[serde(default)]
+    chg_flip: Option<(bool, i64)>,
+}
+
+/// A charging flip goes out as a `charge` event once it has held this long (the fuel gauge's
+/// current crosses zero often around full).
+const CHARGE_HOLD_S: i64 = 300;
+
+/// A number from a block that may carry it as text.
+fn num_of(v: &Value) -> Option<f64> {
+    match v {
+        Value::String(x) => x.trim().parse().ok(),
+        Value::Number(x) => x.as_f64(),
+        _ => None,
+    }
 }
 
 /// What the fold gives: lines for the two files.
@@ -455,6 +484,18 @@ impl Fold {
                     .map(|x| x.chars().take(24).collect());
                 s.home_mcc = data["home_mcc"].as_i64();
                 s.serving_mcc = data["serving_mcc"].as_i64();
+                s.rat = data["type"]
+                    .as_str()
+                    .filter(|x| !x.is_empty())
+                    .map(|x| x.chars().take(24).collect());
+                let nr = data["nr_band"].as_str().is_some_and(|b| !b.is_empty())
+                    || data["nr_band"].is_number();
+                let sinr = num_of(&data[if nr { "nr_snr" } else { "lte_snr" }])
+                    .filter(|x| x.is_finite() && (-30.0..=60.0).contains(x));
+                if let (Some(x), Some(h)) = (sinr, self.hour.as_mut()) {
+                    h.sinr_sum += x;
+                    h.sinr_n += 1;
+                }
                 // net_change (LEDGER.md §4): the preference or the serving country moved
                 if let (Some(ns), Some(net)) = (s.net_select.clone(), s.net.clone()) {
                     let key = format!("{ns} {}", net.split('-').next().unwrap_or(""));
@@ -479,6 +520,26 @@ impl Fold {
                 // the fuel gauge's current, as `hour_power` reads it: the block's `charging` is
                 // the charger's status code, set on this device while the battery drains
                 s.charging = data["bat_ua"].as_i64().is_some_and(|i| i > 0);
+                let now = s.charging;
+                match self.chg_said {
+                    None => self.chg_said = Some(now),
+                    Some(said) if said == now => self.chg_flip = None,
+                    Some(_) => match self.chg_flip {
+                        Some((v, since)) if v == now => {
+                            if c.mono - since >= CHARGE_HOLD_S {
+                                self.chg_said = Some(now);
+                                self.chg_flip = None;
+                                out.events.push(self.event(
+                                    c,
+                                    "charge",
+                                    json!({"state": if now { "start" } else { "stop" }, "since_up": c.boottime - (c.mono - since)}),
+                                ));
+                            }
+                        }
+                        _ => self.chg_flip = Some((now, c.mono)),
+                    },
+                }
+                let s = &mut self.seen;
                 if let Some(h) = self.hour.as_mut() {
                     if h.batt_from.is_none() {
                         h.batt_from = s.battery;
@@ -725,6 +786,8 @@ impl Fold {
             "batt_tmax": h.batt_tmax,
             "chg_s": h.chg_s,
             "link_down": h.link_down,
+            "rat": self.seen.rat,
+            "sinr_avg": (h.sinr_n > 0).then(|| (h.sinr_sum / f64::from(h.sinr_n) * 10.0).round() / 10.0),
             "stale_flips": h.stale_flips,
         });
         let (free, dump) = h.pw.free_dump();
@@ -964,6 +1027,25 @@ impl crate::block::EventSink for Tee {
 
 pub fn enabled() -> bool {
     std::env::var("LUYAZ_LONGTERM").is_ok_and(|v| v == "1")
+}
+
+/// One event of kind `k` from elsewhere in the core (a scenario switch, an automatic repair),
+/// stamped like the fold's and appended to `events.jsonl`. Only for rare events (each is an
+/// fsynced write to flash); nothing when the layer is off.
+pub fn note(k: &str, fields: Value) {
+    if !enabled() {
+        return;
+    }
+    let c = clock_now(&crate::evlog::boot_id());
+    let mut v = json!({"t": wall_or_null(&c), "raw_wall": c.wall, "clock_status": c.clock_status,
+        "up": c.boottime, "boot": boot8(&c.boot), "k": k});
+    if let (Some(o), Value::Object(f)) = (v.as_object_mut(), fields) {
+        o.extend(f);
+    }
+    let dir = PathBuf::from(crate::state::host_path(DIR));
+    if let Err(e) = Store::at(&dir).append_events(&[v]) {
+        eprintln!("[longterm] {k} event: {e}");
+    }
 }
 
 fn mono_s() -> i64 {
@@ -1962,6 +2044,47 @@ mod tests {
             "older than 30 days gone, untimed kept"
         );
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn charging_held_5_min_is_one_event_and_a_flicker_none() {
+        let mut f = Fold::new("t");
+        let mut out = Out::default();
+        let bat = |ua: i64| json!({"percent": 50, "temp": 30, "bat_ua": ua});
+        f.block(&wc(10, 0), "battery", false, &bat(-100), &mut out);
+        // a 2-minute blip of charging: nothing
+        f.block(&wc(100, 0), "battery", false, &bat(200), &mut out);
+        f.block(&wc(220, 0), "battery", false, &bat(-100), &mut out);
+        // charging that holds: one charge start, 5 min after it began
+        f.block(&wc(300, 0), "battery", false, &bat(200), &mut out);
+        f.block(&wc(500, 0), "battery", false, &bat(200), &mut out);
+        f.block(&wc(600, 0), "battery", false, &bat(200), &mut out);
+        f.block(&wc(700, 0), "battery", false, &bat(200), &mut out);
+        let ch: Vec<&Value> = out.events.iter().filter(|e| e["k"] == "charge").collect();
+        assert_eq!(ch.len(), 1, "{:?}", kinds(&out));
+        assert_eq!(
+            (ch[0]["state"].as_str(), ch[0]["since_up"].as_i64()),
+            (Some("start"), Some(300))
+        );
+    }
+
+    #[test]
+    fn the_hour_carries_its_sinr_average_and_rat() {
+        let mut f = Fold::new("t");
+        let mut out = Out::default();
+        for (up, snr) in [(10, "10.0"), (20, "15.0"), (30, "bad")] {
+            let s = json!({"type": "SA", "nr_band": "78", "nr_snr": snr, "lte_snr": "1"});
+            f.block(&wc(up, 0), "signal", false, &s, &mut out);
+        }
+        f.tick(&wc(3700, 0), &mut out);
+        let h = hrs(&out);
+        assert_eq!(
+            (h[0]["sinr_avg"].as_f64(), h[0]["rat"].as_str()),
+            (Some(12.5), Some("SA"))
+        );
+        // an hour without readings: null, not 0
+        f.tick(&wc(7300, 0), &mut out);
+        assert!(hrs(&out)[1]["sinr_avg"].is_null());
     }
 }
 

@@ -15,7 +15,7 @@ It is written for people new to this project. Every command comes from scripts a
 | Repository | What it is on the device | Purpose |
 |---|---|---|
 | [luya-z-manager](https://github.com/faying/luya-z-manager) (this repository) | `luyaz-core` (built from `crates/luyaz-core`, `/data/luyaz/luyaz-core`, `127.0.0.1:9460`) + `luyaz-web` (:9090) + `luyaz-sentinel` | The data service and device API, the advanced admin web in the browser, eSIM, CHILL proxy control, **and the install kit (`onboard/`)** |
-| [luya-z-touch-ui](https://github.com/faying/luya-z-touch-ui) | `/data/luyaz/ui/` (`luyaz-ui`) | Front-panel touch UI (Rust, `touch-ui/rs/`; its source now lives in this repository under `touch-ui/`), plus the health check and fallback scripts in `/data/luyaz/scripts/` |
+| `touch-ui/` in this repository | `/data/luyaz/ui/` (`luyaz-ui`) | Front-panel touch UI (Rust, `touch-ui/rs/`), plus the health check and fallback scripts in `/data/luyaz/scripts/` |
 
 How they connect on the device:
 
@@ -74,12 +74,11 @@ Verified on macOS (Apple silicon or Intel) and x86_64 Linux. The touch program's
 
 ## 3. Build the install kit
 
-Put the repositories side by side in one directory. **manager and touch-ui are all you need to build a complete install kit; nothing has to be pulled from an already installed device**:
+Clone this repository (the touch UI is in its `touch-ui/` folder). **This repository is all you need to build a complete install kit; nothing has to be pulled from an already installed device**:
 
 ```sh
 mkdir u60 && cd u60
 git clone https://github.com/faying/luya-z-manager.git
-git clone https://github.com/faying/luya-z-touch-ui.git
 cd luya-z-manager
 ./onboard/build-kit.sh
 # → onboard/dist/luyaz-kit-YYYYMMDD.tar.gz
@@ -178,7 +177,7 @@ Then:
                         #   (adds one line to rc.local; run it only if you use luyaz-ship.sh)
 ```
 
-If the device has an unfinished `luyaz-ship.sh` transaction (see touch-ui [docs/SHIP.md](https://github.com/faying/luya-z-touch-ui/blob/main/docs/SHIP.md)), `admin`, `ui` and `recover` refuse to install until it is finished or rolled back.
+If the device has an unfinished `luyaz-ship.sh` transaction (see [touch-ui/docs/SHIP.md](../touch-ui/docs/SHIP.md)), `admin`, `ui` and `recover` refuse to install until it is finished or rolled back.
 
 **Back up and restore configuration** (configuration only, no programs; backups contain passwords, do not share them):
 

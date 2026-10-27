@@ -62,7 +62,7 @@ mod status;
 mod sys_reads;
 mod ts_reads;
 pub(crate) mod underlay;
-mod watch;
+pub(crate) mod watch;
 mod wifi_reads;
 
 /// Starts the background duties (they run with or without anyone calling the routes).

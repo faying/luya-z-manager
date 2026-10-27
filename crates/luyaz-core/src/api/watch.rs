@@ -96,6 +96,41 @@ impl DiagHost {
     }
 }
 
+/// The direct exit's latency: one GET of CHILL's probe page (`generate_204`) from the core's
+/// own socket, as deep diagnosis' proxy layer does it, 3 s at most; `None` = no answer. Shared
+/// with `/v2/latency/direct`.
+pub(crate) async fn direct_ms() -> Option<u32> {
+    // gstatic never answers direct inside the mainland, a mainland 204 is far abroad:
+    // ask both, the first answer is the direct exit's latency.
+    let client = reqwest::Client::new();
+    let t = std::time::Instant::now();
+    let probe = |url: &'static str| {
+        let req = client.get(url).timeout(Duration::from_secs(3)).send();
+        async move { req.await.ok().map(|_| t.elapsed().as_millis() as u32) }
+    };
+    first_some(
+        probe(luyaz_api::chill::PROBE_URL),
+        probe(DIRECT_PROBE_URL_CN),
+    )
+    .await
+}
+
+/// The first `Some` of two futures; `None` only once both have ended with `None`.
+pub(crate) async fn first_some<T>(
+    a: impl std::future::Future<Output = Option<T>>,
+    b: impl std::future::Future<Output = Option<T>>,
+) -> Option<T> {
+    tokio::pin!(a, b);
+    tokio::select! {
+        Some(v) = &mut a => Some(v),
+        Some(v) = &mut b => Some(v),
+        else => None,
+    }
+}
+
+/// The mainland twin of [`luyaz_api::chill::PROBE_URL`] for [`direct_ms`].
+const DIRECT_PROBE_URL_CN: &str = "http://connect.rom.miui.com/generate_204";
+
 fn fresh(hub: Option<&Arc<crate::block::Hub>>, name: &str) -> Option<Value> {
     hub?.view(name).filter(|v| !v.stale).map(|v| v.data.clone())
 }
@@ -129,7 +164,7 @@ impl Host for DiagHost {
     }
 
     fn proxy_probe(&self) -> luyaz_api::diagnose::ProxyProbe {
-        use luyaz_api::chill::{Got, PROBE_URL, probe_exit};
+        use luyaz_api::chill::{Got, probe_exit};
         let http = reqwest::Client::new();
         let get = move |url: String, secs: u64| {
             let http = http.clone();
@@ -153,14 +188,8 @@ impl Host for DiagHost {
             }
         };
         let direct = {
-            let (h, get) = (self.handle.clone(), get.clone());
-            std::thread::spawn(move || {
-                let t = std::time::Instant::now();
-                match h.block_on(get(PROBE_URL.to_string(), 3)) {
-                    Got::Unreachable => None,
-                    _ => Some(t.elapsed().as_millis() as u32),
-                }
-            })
+            let h = self.handle.clone();
+            std::thread::spawn(move || h.block_on(direct_ms()))
         };
         // a 3 s delay test needs more than 3 s of HTTP
         let (node, node_probe) = probe_exit(&|path, slow| {

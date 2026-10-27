@@ -73,6 +73,10 @@ pub struct Polled {
     pub versions: bool,
     /// 落地 changed
     pub landing: bool,
+    /// the direct exit's latency changed
+    pub direct_lat: bool,
+    /// today's timeline changed
+    pub today: bool,
     pub alerts: bool,
     pub diagnose: bool,
 }
@@ -147,6 +151,7 @@ pub trait Source {
 
     // ---- core ----
     fn data_set_pace(&mut self, panel_lit: bool);
+    fn data_release_pace(&mut self);
     /// /control; fb_args None = no emergency write (fb_action: the script's name for it)
     fn data_control_fb(&mut self, action: &str, params: &str, fb_action: &str, fb_args: Option<&str>) -> bool;
     fn data_control_undo(&mut self, action: &str, params: &str) -> bool;

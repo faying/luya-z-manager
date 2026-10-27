@@ -107,9 +107,9 @@ fn carrier(o: &[u8]) -> nv_carrier_t {
 /// text field is read from its <field>_en sibling when that is there and not empty.
 pub fn parse(net: &[u8]) -> (bool, net_view_t) {
     let mut v = net_view_t { ca: vec![nv_carrier_t::default(); NV_CA_MAX], bars_tier: -1, ..Default::default() };
-    let Some(mut st) = json::get(net, "story", 1024) else { return (false, v) };
+    let Some(mut st) = json::get(net, "story", 2048) else { return (false, v) };
     // E4: "home" = the story with a write transaction laid over it, only while there is one
-    if let Some(home) = json::get(net, "home", 1024)
+    if let Some(home) = json::get(net, "home", 2048)
         && home.first() == Some(&b'{')
     {
         st = home;
@@ -155,6 +155,7 @@ pub fn parse(net: &[u8]) -> (bool, net_view_t) {
     s.noise = text(&st, "noise", 8);
     s.load = text(&st, "load", 12);
     s.limit = text(&st, "limit", 8);
+    s.fix = str(&st, "fix", 24);
     v.state = state(&st);
     let ok = !v.story.headline.is_empty();
     (ok, v)
@@ -377,6 +378,17 @@ mod parse_tests {
 
     fn p(s: &str) -> (bool, net_view_t) {
         parse(s.as_bytes())
+    }
+
+    #[test]
+    fn reads_the_fix_target() {
+        let (_, v) = p(r#"{"story":{"headline":"慢","tone":"warn","fix":"diag:dns"}}"#);
+        assert_eq!(v.story.fix, "diag:dns");
+        // the transaction's story wins, with its own fix
+        let (_, v) = p(r#"{"story":{"headline":"慢","fix":"placement"},"home":{"headline":"正在改","fix":"op"}}"#);
+        assert_eq!(v.story.fix, "op");
+        // an older core: none
+        assert!(p(r#"{"story":{"headline":"x"}}"#).1.story.fix.is_empty());
     }
 
     #[test]

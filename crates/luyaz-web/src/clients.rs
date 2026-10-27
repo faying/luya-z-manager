@@ -58,6 +58,9 @@ pub struct Row {
     pub private: bool,
     pub sources: Vec<Src>,
     pub wifi: Option<(String, String)>,
+    /// The details panel's Wi-Fi link, every field always there (「读不到」 when the driver didn't
+    /// say): (label, value, read).
+    pub link: Vec<(&'static str, String, bool)>,
     pub not_on_wifi: bool,
     pub traffic: Option<String>,
     pub addr: String,
@@ -137,8 +140,11 @@ fn wifi_line(st: &Value, l: Lang) -> (String, String) {
     if let Some(g) = st["wifi_gen"].as_u64().filter(|g| *g > 0) {
         parts.push(format!("Wi-Fi {g}"));
     }
-    if let Some(n) = st["link_down_mbps"].as_u64().filter(|n| *n > 0) {
-        parts.push(format!("{n} Mbps"));
+    match (pos(st, "link_down_mbps"), pos(st, "link_up_mbps")) {
+        (Some(d), Some(u)) => parts.push(format!("↓{d} ↑{u} Mbps")),
+        (Some(d), None) => parts.push(format!("↓{d} Mbps")),
+        (None, Some(u)) => parts.push(format!("↑{u} Mbps")),
+        (None, None) => {}
     }
     if let Some(w) = st["signal_tier"].as_str().and_then(|t| sig_word(t, l)) {
         parts.push(w.into());
@@ -161,6 +167,67 @@ fn wifi_line(st: &Value, l: Lang) -> (String, String) {
         None => String::new(),
     };
     (line, title)
+}
+
+/// A field the core reads from `iw`; 0 is a driver that printed nothing useful, not a value.
+fn pos(st: &Value, k: &str) -> Option<u64> {
+    st[k].as_u64().filter(|n| *n > 0)
+}
+
+/// The details panel's four Wi-Fi fields (luyaz-api station_wifi_json). Nothing is guessed: a
+/// rate line without MCS gives no generation, so the protocol then reads 「读不到」 too.
+fn link_rows(st: &Value, l: Lang) -> Vec<(&'static str, String, bool)> {
+    let none = || l.pick("Not reported", "读不到").to_string();
+    let rate = |k| pos(st, k).map_or_else(none, |n| format!("{n} Mbps"));
+    let (down, up) = (rate("link_down_mbps"), rate("link_up_mbps"));
+    let rates_read = pos(st, "link_down_mbps").is_some() || pos(st, "link_up_mbps").is_some();
+    let band = st["band"].as_str().filter(|b| !b.is_empty()).map(|b| {
+        let mut s = b.to_string();
+        if let Some(c) = pos(st, "channel") {
+            s += &match l {
+                Lang::En => format!(" · channel {c}"),
+                Lang::Zh => format!(" · 信道 {c}"),
+            };
+        }
+        if let Some(w) = pos(st, "width_mhz") {
+            // the hotspot's width (iw dev … info), not this client's own
+            s += &match l {
+                Lang::En => format!(" · hotspot {w} MHz wide"),
+                Lang::Zh => format!(" · 热点频宽 {w} MHz"),
+            };
+        }
+        s
+    });
+    let signal = st["signal"].as_i64().map(|d| {
+        match st["signal_tier"].as_str().and_then(|t| sig_word(t, l)) {
+            Some(w) => format!("{d} dBm · {w}"),
+            None => format!("{d} dBm"),
+        }
+    });
+    let gen_ = pos(st, "wifi_gen").map(|g| {
+        let std = match g {
+            7 => " (802.11be)",
+            6 => " (802.11ax)",
+            5 => " (802.11ac)",
+            4 => " (802.11n)",
+            _ => "",
+        };
+        format!("Wi-Fi {g}{std}")
+    });
+    let opt = |v: Option<String>| (v.is_some(), v.unwrap_or_else(none));
+    let (b_ok, band) = opt(band);
+    let (s_ok, signal) = opt(signal);
+    let (g_ok, gen_) = opt(gen_);
+    vec![
+        (
+            l.pick("Link rate (down / up)", "协商速率（下行 / 上行）"),
+            format!("↓ {down} · ↑ {up}"),
+            rates_read,
+        ),
+        (l.pick("Band", "频段"), band, b_ok),
+        (l.pick("Signal", "信号强度"), signal, s_ok),
+        (l.pick("Wi-Fi standard", "Wi-Fi 协议"), gen_, g_ok),
+    ]
 }
 
 fn traffic_line(tr: &Value, l: Lang) -> Option<String> {
@@ -418,6 +485,7 @@ fn view(g: &Got, l: Lang) -> View {
             private,
             sources,
             wifi: st.map(|s| wifi_line(s, l)),
+            link: st.map(|s| link_rows(s, l)).unwrap_or_default(),
             not_on_wifi: st.is_none() && is_active && wifi.is_some(),
             traffic: tr.and_then(|t| traffic_line(t, l)),
             addr: if mac.is_empty() {
@@ -860,17 +928,54 @@ mod tests {
         assert_eq!(active[0].name, "hint-name", "host hint by any MAC casing");
         assert_eq!(
             active[0].wifi.as_ref().unwrap().0,
-            "5 GHz · Wi-Fi 6 · 2402 Mbps · 信号很好"
+            "5 GHz · Wi-Fi 6 · ↓2402 Mbps · 信号很好"
         );
         assert_eq!(
             active[0].traffic.as_deref(),
             Some("↓ 11.6 ↑ 0.30 Mbps · 连上后共 1.94 GB")
         );
         assert_eq!(active[0].left, "3 小时 2 分");
+        assert_eq!(
+            active[0].link,
+            vec![
+                ("协商速率（下行 / 上行）", "↓ 2402 Mbps · ↑ 读不到".to_string(), true),
+                ("频段", "5 GHz · 信道 44".to_string(), true),
+                ("信号强度", "-39 dBm · 信号很好".to_string(), true),
+                ("Wi-Fi 协议", "Wi-Fi 6 (802.11ax)".to_string(), true),
+            ]
+        );
         assert!(active[1].not_on_wifi);
+        assert!(active[1].link.is_empty(), "no Wi-Fi block off Wi-Fi");
         assert_eq!(active[1].left, "10 分");
         assert_eq!(expired[0].name, "old");
         assert!(!expired[0].not_on_wifi, "only active leases say so");
+    }
+
+    #[test]
+    fn wifi_link_all_fields_and_none() {
+        let full = json!({"band": "5 GHz", "channel": 149, "width_mhz": 80, "wifi_gen": 7,
+            "link_down_mbps": 2882, "link_up_mbps": 1441, "signal": -71, "signal_tier": "fair"});
+        assert_eq!(wifi_line(&full, Lang::Zh).0, "5 GHz · Wi-Fi 7 · ↓2882 ↑1441 Mbps · 信号一般");
+        let v: Vec<String> = link_rows(&full, Lang::Zh).into_iter().map(|r| r.1).collect();
+        assert_eq!(
+            v,
+            [
+                "↓ 2882 Mbps · ↑ 1441 Mbps",
+                "5 GHz · 信道 149 · 热点频宽 80 MHz",
+                "-71 dBm · 信号一般",
+                "Wi-Fi 7 (802.11be)"
+            ]
+        );
+        // a driver that prints zeros / nothing: every field still there, each says so
+        let bare = json!({"band": null, "channel": null, "wifi_gen": null, "link_down_mbps": 0,
+            "link_up_mbps": null, "signal": null});
+        let rows = link_rows(&bare, Lang::Zh);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].1, "↓ 读不到 · ↑ 读不到");
+        assert!(rows.iter().all(|r| !r.2));
+        assert!(rows[1..].iter().all(|r| r.1 == "读不到"));
+        assert_eq!(link_rows(&bare, Lang::En)[3].1, "Not reported");
+        assert_eq!(wifi_line(&bare, Lang::Zh).0, "连着 Wi-Fi");
     }
 
     #[test]
