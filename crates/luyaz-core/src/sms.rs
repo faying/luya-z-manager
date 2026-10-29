@@ -532,6 +532,15 @@ fn provision_args(slot: i64, active: bool) -> Value {
 /// reports it as current.
 async fn select_slot(slot: i64) -> Result<(), String> {
     const METHOD: &str = "zwrt_mdm_change_provision_session";
+    // 双卡（两槽都开着）时这样换会把另一槽关掉：待机的电话卡就收不到电话、短信（10-29 全球版）。
+    // 不替用户改卡槽设置，照实拒绝
+    if let Ok(info) = state::sim_info().await
+        && ["sim1_provision_state", "sim2_provision_state"]
+            .iter()
+            .all(|k| info.get(*k).and_then(Value::as_str) == Some("1"))
+    {
+        return Err(format!("dual SIM is on: SIM slot {slot} is not the data SIM, not switching"));
+    }
     let other = if slot == 2 { 1 } else { 2 };
     // Releasing the other slot is best effort; the activation below is what counts.
     let _ = state::ubus("zwrt_zte_mdm.api", METHOD, provision_args(other, false)).await;
@@ -554,20 +563,19 @@ const CMD_FAILED: i64 = 2;
 /// Send through this device's own `zwrt_wms`, then poll the command status
 /// (up to 20 × 500 ms).
 async fn send_host(number: &str, message: &str, sms_time: &str) -> Result<Value, String> {
-    let (sealed_number, sealed_body) = {
-        let mut key = ensure_crypto_session().await?;
-        let sealed = encrypt(&key, number).and_then(|n| Ok((n, encrypt(&key, message)?)));
-        key.zeroize();
-        sealed?
-    };
+    // 明文参数，和告警短信、插件 sms.send 同一条路：加密的送法（会话金钥封号码和内容）
+    // B31 固件一秒内就拒、寄件匣里没有
     let request = json!({
-        "number": sealed_number,
-        "message_body": sealed_body,
+        "number": number,
+        "message_body": message,
         "sms_time": sms_time,
         "encode_type": "UNICODE",
         "id": "-1",
     });
-    state::ubus("zwrt_wms", "zte_libwms_send_sms", request).await?;
+    let reply = state::ubus("zwrt_wms", "zte_libwms_send_sms", request).await?;
+    if !send_accepted(reply.get("result")) {
+        return Err(format!("zwrt_wms refused the SMS (result={})", reply["result"]));
+    }
     for _ in 0..20 {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let status = state::ubus("zwrt_wms", "zwrt_wms_get_cmd_status", json!({"sms_cmd":4}))
@@ -581,6 +589,14 @@ async fn send_host(number: &str, message: &str, sms_time: &str) -> Result<Value,
         }
     }
     Err("zwrt_wms SMS command timed out".into())
+}
+
+/// `zte_libwms_send_sms` 的回覆：没有或 3 算收下（同 `luyaz-alerts::sms::send_result_ok`）。
+pub(crate) fn send_accepted(r: Option<&Value>) -> bool {
+    match r {
+        None | Some(Value::Null) => true,
+        Some(v) => v.as_i64() == Some(3) || v.as_str() == Some("3") || v.as_str() == Some(""),
+    }
 }
 
 /// Which path a `sender` value selects.
@@ -633,6 +649,15 @@ pub async fn send(params: &Value) -> Result<Value, (bool, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn send_reply_counts_as_accepted_like_alert_sms() {
+        assert!(send_accepted(None));
+        assert!(send_accepted(Some(&json!(3))));
+        assert!(send_accepted(Some(&json!(""))));
+        assert!(!send_accepted(Some(&json!(2))));
+        assert!(!send_accepted(Some(&json!("failure"))));
+    }
 
     #[test]
     fn validates_external_shape() {

@@ -227,7 +227,8 @@ impl Engine {
     /// One minute check, with the power reading the fold just took and the hour lines it wrote.
     pub fn check(&mut self, c: &Clock, read: &crate::longterm::power::Read, hours: &[Value]) {
         let now = At::of(c);
-        let k = detect::Check {
+        #[allow(unused_mut)]
+        let mut k = detect::Check {
             at: now.clone(),
             core_age: c.boottime - self.started_up,
             heap_kb: read.mem.map(|m| m.1),
@@ -240,7 +241,9 @@ impl Engine {
             ),
             ts: if read.ts_on { read.ts_ok } else { None },
             observed: observed_net(),
+            ..Default::default()
         };
+        k.heat = crate::heat::critical();
         let lm = std::fs::metadata(self.p.long.join(LIMITS))
             .and_then(|m| m.modified())
             .ok();

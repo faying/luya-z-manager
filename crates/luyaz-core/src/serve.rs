@@ -143,6 +143,8 @@ pub async fn main(raw: Vec<String>) -> Result<()> {
     crate::lanid_capture::start(&argv0);
     // before the ledger's boot line (~60 s) takes the planned-reboot marker away
     crate::sim_alerts::boot();
+    // 进程插件的 Unix socket（没有插件的专用用户就不开）
+    crate::plug::start();
     server::write_pid_file();
     let starting = app.clone();
     tokio::spawn(async move { starting.start().await });

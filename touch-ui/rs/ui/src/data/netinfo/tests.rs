@@ -6,13 +6,13 @@ use super::*;
 
 fn cells_and_ops(ncells: usize, nops: usize) -> String {
     let cells: Vec<String> = (0..ncells)
-        .map(|i| format!(r#"{{"arfcn":"627264","pci":{},"rat":"NR","rsrp":"-{}","rsrq":null,"sinr":null}}"#, 100 + i, 90 + i))
+        .map(|i| format!(r#"{{"arfcn":1650,"band":"B3","pci":{},"rat":"LTE","rsrp":-{},"rsrq":null,"sinr":null}}"#, 100 + i, 90 + i))
         .collect();
     let ops: Vec<String> = (0..nops)
         .map(|i| format!(r#"{{"country":"日本","name":"Op{i}","plmn":"440{i:02}","rat":"12","raw_name":"X","status":"1"}}"#))
         .collect();
     format!(
-        r#""neighbors":{{"cells":[{}],"error":null,"scanned_at":1790250000,"state":"done"}},"network_type":"SA","now":1790250112,"proxy":null,"roaming":true,"roaming_raw":"Roaming","scan":{{"error":null,"finished_at":1,"last_status":"2","operators":[{}],"started_at":0,"state":"done"}},"#,
+        r#""neighbors":{{"cells":[{}],"error":null,"scanned_at":1790250000,"state":"ok"}},"network_type":"SA","now":1790250112,"proxy":null,"roaming":true,"roaming_raw":"Roaming","scan":{{"error":null,"finished_at":1,"last_status":"2","operators":[{}],"started_at":0,"state":"done"}},"#,
         cells.join(","),
         ops.join(",")
     )
@@ -46,6 +46,7 @@ fn full_body() {
     assert!(n.guard_phase == "registering" && n.guard_target == "44020");
     assert_eq!(n.ncells as usize, NI_MAX_CELLS);
     assert_eq!(n.cells[0].pci, "100", "numeric pci read as text");
+    assert!(n.nbr_state == "ok" && n.cells[0].band == "B3" && n.cells[0].arfcn == "1650");
     assert!(n.cells[0].rsrq.is_empty(), "null rsrq → empty");
     assert_eq!(n.cells[NI_MAX_CELLS - 1].rsrp, "-97");
     assert_eq!(n.nops as usize, NI_MAX_OPS);
@@ -102,7 +103,7 @@ fn full_body() {
 
 #[test]
 fn english_twins() {
-    let l2 = r#"{"guard":{"phase":"reverted","reason":"手动恢复自动","reason_code":"manual_auto","reason_en":"Back to automatic on request","target":"44020"},"home_operator":{"country":"中国","country_en":"China","country_iso":"CN","mcc":"460","mnc":"01","name":"中国联通","operator_en":"China Unicom"},"neighbors":{"cells":[],"error":"原厂扫描会断网且拿不到数据，已停用","error_en":"Off: the stock scan drops data, finds nothing","state":"unsupported"},"scan":{"error":"没搜到网络","error_en":"No networks found","operators":[{"country":"中国台湾","country_en":"Taiwan","country_iso":"TW","name":"中华电信","operator_en":"Chunghwa Telecom","plmn":"46692","rat":"7","status":"1"},{"country":null,"country_en":null,"country_iso":null,"name":"X","operator_en":"X","plmn":"52098","rat":"7","status":"1"}],"state":"error"},"scenes":{"current":"home","enabled":true,"guard_takeover":false,"list":[{"abroad":false,"does":"关 Wi-Fi","id":"home","name":"在家","when":"附近有 Wi-Fi「A」时","wifi_off":true},{"abroad":false,"does":"开 Wi-Fi","id":"office","name":"办公室","when":"插的是日本的卡时","wifi_off":false}],"list_en":[{"does_en":"Wi-Fi off","id":"home","name_en":"Home","when_en":"When Wi-Fi \"A\" is nearby"},{"does_en":"Wi-Fi on","id":"office","name_en":null,"when_en":"When the SIM is from Japan"}],"pin":null},"serving_operator":{"country":"日本","country_en":"Japan","country_iso":"JP","mcc":"440","mnc":"20","name":"SoftBank","operator_en":"SoftBank"}}"#;
+    let l2 = r#"{"guard":{"phase":"reverted","reason":"手动恢复自动","reason_code":"manual_auto","reason_en":"Back to automatic on request","target":"44020"},"home_operator":{"country":"中国","country_en":"China","country_iso":"CN","mcc":"460","mnc":"01","name":"中国联通","operator_en":"China Unicom"},"neighbors":{"cells":[],"error":"5G 独立组网（SA）下基带不报邻区","error_en":"In 5G SA the modem reports no neighbours","state":"not_reported"},"scan":{"error":"没搜到网络","error_en":"No networks found","operators":[{"country":"中国台湾","country_en":"Taiwan","country_iso":"TW","name":"中华电信","operator_en":"Chunghwa Telecom","plmn":"46692","rat":"7","status":"1"},{"country":null,"country_en":null,"country_iso":null,"name":"X","operator_en":"X","plmn":"52098","rat":"7","status":"1"}],"state":"error"},"scenes":{"current":"home","enabled":true,"guard_takeover":false,"list":[{"abroad":false,"does":"关 Wi-Fi","id":"home","name":"在家","when":"附近有 Wi-Fi「A」时","wifi_off":true},{"abroad":false,"does":"开 Wi-Fi","id":"office","name":"办公室","when":"插的是日本的卡时","wifi_off":false}],"list_en":[{"does_en":"Wi-Fi off","id":"home","name_en":"Home","when_en":"When Wi-Fi \"A\" is nearby"},{"does_en":"Wi-Fi on","id":"office","name_en":null,"when_en":"When the SIM is from Japan"}],"pin":null},"serving_operator":{"country":"日本","country_en":"Japan","country_iso":"JP","mcc":"440","mnc":"20","name":"SoftBank","operator_en":"SoftBank"}}"#;
     let old = r#"{"guard":{"phase":"reverted","reason":"注册失败","target":"44020"},"home_operator":{"country":"中国","mcc":"460","mnc":"01","name":"中国联通"},"scan":{"error":"没搜到网络","operators":[],"state":"error"},"scenes":{"current":"home","enabled":true,"list":[{"abroad":false,"does":"关 Wi-Fi","id":"home","name":"在家","when":"w","wifi_off":true}],"pin":null}}"#;
     let mut n = empty();
     lang::set_en(false);
@@ -110,7 +111,7 @@ fn english_twins() {
     assert!(n.home.name == "中国联通" && n.home.country == "中国");
     assert!(n.home.country_iso == "CN" && n.serving.country_iso == "JP");
     assert!(n.guard_reason == "手动恢复自动" && n.guard_reason_code == "manual_auto");
-    assert!(n.scan_err == "没搜到网络" && n.nbr_err == "原厂扫描会断网且拿不到数据，已停用");
+    assert!(n.scan_err == "没搜到网络" && n.nbr_err == "5G 独立组网（SA）下基带不报邻区");
     assert!(n.ops[0].name == "中华电信" && n.ops[0].country == "中国台湾" && n.ops[0].country_iso == "TW");
     assert!(n.nscenes == 2 && n.scenes[0].name == "在家" && n.scenes[0].when == "附近有 Wi-Fi「A」时");
 
@@ -120,7 +121,7 @@ fn english_twins() {
     assert!(n.home.country == "China" && n.serving.country == "Japan");
     assert!(n.guard_reason == "Back to automatic on request" && n.guard_reason_code == "manual_auto");
     assert_eq!(n.scan_err, "No networks found");
-    assert_eq!(n.nbr_err, "Off: the stock scan drops data, finds nothing");
+    assert_eq!(n.nbr_err, "In 5G SA the modem reports no neighbours");
     assert!(n.ops[0].name == "Chunghwa Telecom" && n.ops[0].country == "Taiwan");
     assert!(n.ops[1].name == "X" && n.ops[1].country.is_empty() && n.ops[1].country_iso.is_empty());
     assert_eq!(n.scenes[0].name, "Home");

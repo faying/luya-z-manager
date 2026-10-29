@@ -526,6 +526,7 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
             msisdn.clear();
         }
     }
+    crate::sms_journal::note_voice(crate::ops::dual_sim::voice_card(&sim));
     let sim_block = c::Sim {
         // epoch / phase / say*: stamped by `state::collect` (the identity tracking keeps state)
         epoch: 0,

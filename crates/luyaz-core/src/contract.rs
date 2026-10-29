@@ -481,6 +481,29 @@ contract! {
 }
 
 contract! {
+    /// Heat care (`crate::heat`, design thermal-care): the level (`normal`/`warm`/`hot`/`critical`)
+    /// and since when (device wall clock), the readings (°C), what it holds: charging paused by
+    /// the heat, the owner's resume winning until unplugged, the CHILL request (`""`/`hot`/
+    /// `critical`) and what CHILL is doing for it now (`chill_now`, same words: say only that).
+    /// `stock_protect`: the battery driver's `thermal_protection_mbb`. `acting`: the core owns
+    /// charging (otherwise it only watches). `test_offset`: °C added for a device test.
+    pub struct Heat {
+        normal level: String,
+        normal since: Option<i64>,
+        normal battery_c: Option<i64>,
+        normal chip_c: Option<i64>,
+        normal plugged: Option<bool>,
+        normal charge_paused: bool,
+        normal manual_resume: bool,
+        normal chill: String,
+        normal chill_now: String,
+        normal test_offset: Option<i64>,
+        normal stock_protect: Option<i64>,
+        normal acting: bool,
+    }
+}
+
+contract! {
     pub struct RegressItem {
         normal id: String,
         normal kind: String,
@@ -497,6 +520,34 @@ contract! {
         normal observed_en: String,
     }
 }
+
+contract! {
+    /// A plugin's card on the touch screen (plug::display, luyaz-phone design R1-4): null when
+    /// there is none. The pairing code is secret: it is for the person at the device only.
+    pub struct Display {
+        nested card: Option<DisplayCard>,
+        nested said: Option<DisplaySaid>,
+    }
+}
+
+contract! {
+    pub struct DisplayCard {
+        normal id: String,
+        normal kind: String,
+        secret code: String,
+        normal left_s: u64,
+        normal answered: bool,
+    }
+}
+
+contract! {
+    /// The short line after a card closes: `done` or `cancelled`.
+    pub struct DisplaySaid {
+        normal id: String,
+        normal result: String,
+    }
+}
+
 
 contract! {
     pub struct AdvicePref {
@@ -1098,6 +1149,8 @@ blocks! {
     "charger" => Charger,
     "clients" => Clients,
     "dhcp" => Dhcp,
+    "display" => Display,
+    "heat" => Heat,
     "interfaces" => Interfaces,
     "live" => Live,
     "nfc" => Nfc,

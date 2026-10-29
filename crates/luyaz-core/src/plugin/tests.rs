@@ -72,3 +72,17 @@ fn checks_abi_file_name_and_hash() {
 fn engine_builds_with_the_shared_config() {
     engine().unwrap();
 }
+
+/// Heat care: the screen resumes charging through /control directly; that is a manual resume
+/// (owner 10-29), a web one too; the core's own writes and stops are not.
+#[test]
+fn a_hand_written_resume_is_a_manual_resume() {
+    use super::charge::manual_resume_in;
+    use serde_json::{Value, json};
+    let w = |source: &str, enabled: Value| json!({"source": source, "params": {"enabled": enabled}});
+    assert!(manual_resume_in(&w("screen", json!(false))));
+    assert!(manual_resume_in(&w("web", json!("0"))));
+    assert!(!manual_resume_in(&w("screen", json!(true))), "a stop");
+    assert!(!manual_resume_in(&w("auto", json!(false))), "the core's own");
+    assert!(!manual_resume_in(&json!({"params": {"enabled": false}})), "no source");
+}

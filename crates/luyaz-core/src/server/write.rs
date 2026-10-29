@@ -36,6 +36,10 @@ async fn handle_inner(
     body: Value,
     peer: Option<std::net::SocketAddr>,
 ) -> Response {
+    // 插件卡片的回答（luyaz-phone 配对的「人在设备旁」）：不碰设备、不排队，只认触屏
+    if action == "display.answer" {
+        return display_answer(&action, &body, peer);
+    }
     // P1-3：启动中（第一轮、事务恢复还没做完）先等，最多 20 秒；还没好就照队列满回 503 `busy`。
     // R18-P0-04：带了 expect_device_id 就先核对是不是这台设备，不对什么都不做
     if let Some(r) = device_gate(&action, &body, || {
@@ -734,6 +738,11 @@ async fn ops_route(
     let params = body.get("params").unwrap_or(&empty);
     let op_id = params.get("op_id").and_then(Value::as_str);
     match action {
+        // 插件设置（R33）：过了 device_gate 和 agent_gate（MCP 不在白名单），但不进执行者、不拿写锁，
+        // 插件卡住只让这几笔等（在途上限见 plug::IN_FLIGHT_MAX）
+        "plugin.settings.get" | "plugin.settings.set" => {
+            return Some(plugin_settings(action, body, params).await);
+        }
         "op.status" => return Some(control_ok(action, ops.status(op_id))),
         "journal.append" => return Some(journal_append(app, action, body, params)),
         "journal.list" => {
@@ -1098,6 +1107,36 @@ fn ends_device(action: &str, body: &Value) -> bool {
         )
 }
 
+/// 触屏卡片的回答（`display.answer {id, answer:"confirm"|"cancel"}`，plug::display）。按「一致」
+/// 就是「人在设备旁」的证明，所以只认本机连线上 `source:"screen"` 的：网页、Agent/MCP、局域网的
+/// 连线（就算带了令牌）都不行。
+fn display_answer(action: &str, body: &Value, peer: Option<std::net::SocketAddr>) -> Response {
+    let local = peer.is_some_and(|p| match p.ip() {
+        std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(v6.is_loopback(), |v4| v4.is_loopback()),
+        ip => ip.is_loopback(),
+    });
+    let screen = body.get("source").and_then(Value::as_str) == Some("screen")
+        && body.get("approved_by").is_none();
+    if !local || !screen {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"ok":false,"action":action,"error":{"code":"refused","message":"only the touch screen answers a card"}})),
+        )
+            .into_response();
+    }
+    let params = body.get("params").cloned().unwrap_or(json!({}));
+    let id = params.get("id").and_then(Value::as_str).unwrap_or("");
+    let answer = params.get("answer").and_then(Value::as_str).unwrap_or("");
+    match crate::plug::display::answer(id, answer) {
+        Ok(()) => control_ok(action, json!({})),
+        Err(e) => (
+            StatusCode::CONFLICT,
+            Json(json!({"ok":false,"action":action,"error":{"code":"refused","message":e}})),
+        )
+            .into_response(),
+    }
+}
+
 /// 只读、不改设备的动作：不清慢数据缓存、不标块（`sms.list_after` 翻页时每页一次，清缓存会让下一轮全部重读）。
 /// `poller.*` 只写核心自己的白名单文件、改内存里的事件（poller.rs）。
 /// `state.set_interval` 只改本进程执行者的采样间隔（`Executor::set_interval_ms`，一个原子数 + 唤醒），
@@ -1184,6 +1223,14 @@ async fn control_task(app: App, action: &str, body: Value) -> Response {
             if client.is_empty() || client.len() > 32 || !(10..=3600).contains(&ttl) {
                 return bad("client must be 1..=32 chars, ttl_s between 10 and 3600");
             }
+            // 触屏登记它会显示插件卡片（plug::display）；交还屏幕时一起拿掉
+            if client == "touch" {
+                let display = !release
+                    && params.get("caps").and_then(Value::as_array).is_some_and(|c| {
+                        c.iter().any(|x| x.as_str() == Some("display"))
+                    });
+                crate::plug::display::touch_caps(display, std::time::Duration::from_secs(ttl));
+            }
             if release {
                 let now_ms = app.inner.exec.want_interval(client, None, None);
                 return control_ok(action, json!({"sample_interval_ms":now_ms}));
@@ -1210,6 +1257,31 @@ async fn control_task(app: App, action: &str, body: Value) -> Response {
         Json(json!({"ok":false,"action":action,"error":{"code":"unknown_action","message":"unsupported control action"}})),
     )
         .into_response()
+}
+
+/// `plugin.settings.get|set`（DR13）：转给插件；来源原样带给插件记稽核（R-SWITCH）。
+async fn plugin_settings(action: &str, body: &Value, params: &Value) -> Response {
+    use crate::plug::{REPLY_WAIT, link, settings};
+    let hub = link::hub();
+    let r = if action == "plugin.settings.get" {
+        settings::get(&hub, REPLY_WAIT).await
+    } else {
+        let mut extra = serde_json::Map::new();
+        for k in ["source", "approved_by"] {
+            if let Some(v) = body.get(k).filter(|v| v.is_string()) {
+                extra.insert(k.into(), v.clone());
+            }
+        }
+        settings::set(&hub, params, extra, REPLY_WAIT).await
+    };
+    match r {
+        Ok(v) => control_ok(action, v),
+        Err(f) => (
+            StatusCode::from_u16(f.status).unwrap_or(StatusCode::BAD_GATEWAY),
+            Json(json!({"ok":false,"action":action,"error":{"code":f.code,"message":f.message}})),
+        )
+            .into_response(),
+    }
 }
 
 fn control_ok(action: &str, value: Value) -> Response {
@@ -1271,6 +1343,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_the_touch_screen_on_this_device_answers_a_card() {
+        let local: std::net::SocketAddr = "127.0.0.1:40000".parse().unwrap();
+        let lan: std::net::SocketAddr = "192.168.0.20:40000".parse().unwrap();
+        let body = |source: &str| json!({"action":"display.answer","source":source,"params":{"id":"zz","answer":"confirm"}});
+        for (b, peer) in [
+            (body("web"), Some(local)),
+            (body("mcp"), Some(local)),
+            (json!({"action":"display.answer","source":"mcp","approved_by":"screen","params":{}}), Some(local)),
+            (json!({"action":"display.answer","source":"screen","approved_by":"screen","params":{}}), Some(local)),
+            (json!({"action":"display.answer","params":{}}), Some(local)),
+            (body("screen"), Some(lan)),
+            (body("screen"), None),
+        ] {
+            assert_eq!(display_answer("display.answer", &b, peer).status(), StatusCode::FORBIDDEN, "{b} {peer:?}");
+        }
+        // 触屏本机：认，但没有这张卡片
+        assert_eq!(display_answer("display.answer", &body("screen"), Some(local)).status(), StatusCode::CONFLICT);
+        let v6: std::net::SocketAddr = "[::ffff:127.0.0.1]:40000".parse().unwrap();
+        assert_eq!(display_answer("display.answer", &body("screen"), Some(v6)).status(), StatusCode::CONFLICT);
+        assert!(!crate::control::ACTIONS.contains(&"display.answer"));
+        assert!(!crate::control::E4_ACTIONS.contains(&"display.answer"));
+    }
+
+    #[test]
     fn set_interval_is_read_only_and_not_a_device_write() {
         assert!(read_only("state.set_interval"));
         assert!(read_only("sms.list_after"));
@@ -1325,6 +1421,9 @@ mod tests {
             ("op.keep", json!({"source":"mcp"})),
             ("op.revert", json!({"source":"mcp"})),
             ("wifi.settings", json!({"source":"mcp"})),
+            // 插件设置（例如关掉来电推送）不给 MCP
+            ("plugin.settings.set", json!({"source":"mcp"})),
+            ("plugin.settings.get", json!({"source":"mcp"})),
         ] {
             match agent_gate(action, &body).await {
                 Err(r) => assert_eq!(r.status(), StatusCode::FORBIDDEN, "{action}"),
@@ -1364,6 +1463,60 @@ mod tests {
         ] {
             assert!(matches!(agent_gate(action, &body).await, Ok(None)), "{action} {body}");
         }
+    }
+
+    /// R33：插件设置在执行者之前分流，插件不回的时候，同时发出的设备控制照常做完。
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_silent_plugin_does_not_hold_up_other_controls() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let (app, m) = super::super::device_capabilities_tests::app().await;
+        m.add_method(
+            "zwrt_wms",
+            0x21,
+            "zwrt_wms_modify_tag",
+            json!({"result":"success"}),
+        );
+        let dir = std::env::temp_dir().join(format!("plug-r33-{}", std::process::id()));
+        let path = dir.join("core.sock");
+        let listener =
+            crate::plug::link::bind(path.to_str().unwrap(), unsafe { libc::getegid() }).unwrap();
+        let hub = crate::plug::link::hub();
+        hub.set_installed(true);
+        let uid = unsafe { libc::geteuid() };
+        tokio::spawn(crate::plug::link::serve(hub.clone(), listener, uid));
+        // 假插件：hello 之后什么都不回
+        let s = tokio::net::UnixStream::connect(&path).await.unwrap();
+        let (r, mut w) = s.into_split();
+        let mut r = tokio::io::BufReader::new(r);
+        w.write_all(b"{\"t\":\"hello\",\"v\":0,\"name\":\"silent\",\"ops\":[\"settings\"]}\n")
+            .await
+            .unwrap();
+        let mut line = String::new();
+        r.read_line(&mut line).await.unwrap();
+        let body = json!({"source":"web","params":{"key":"push","value":false,"rev":1}});
+        let slow = tokio::spawn(gated(
+            app.clone(),
+            "plugin.settings.set".into(),
+            body,
+            None,
+            None,
+        ));
+        line.clear();
+        r.read_line(&mut line).await.unwrap(); // 插件收到了请求，没回
+        let started = std::time::Instant::now();
+        let fast = run_control_from(
+            app.clone(),
+            "sms.mark_read".into(),
+            json!({"action":"sms.mark_read","params":{"ids":"1","tag":0},"source":"web"}),
+            None,
+        )
+        .await
+        .expect("queue not full");
+        assert!(fast.status().is_success(), "{}", fast.status());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert!(!slow.is_finished(), "the plugin request is still waiting");
+        slow.abort();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// R18-P0-04：expect_device_id 不对 → 409 wrong_device（不读写别的）；对 → 放过；不带 → 不读本机 ID、放过。

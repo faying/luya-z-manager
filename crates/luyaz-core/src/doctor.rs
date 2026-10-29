@@ -337,6 +337,7 @@ pub fn run(c: &Cfg, mode: Mode) -> Vec<Row> {
     let unread = unread_alerts(c);
     rows.push(alerts(unread));
     rows.push(sms(c));
+    rows.extend(heat(c));
     rows.push(crashes(c, unread));
     rows.push(disk(c));
     rows.extend(netrec(c));
@@ -1228,6 +1229,58 @@ fn sms(c: &Cfg) -> Row {
         )
     }
 }
+
+/// Heat care (thermal-care §4.3), as the core's `heat` block says. No row without the block (an
+/// older core, or the core can't be read: the core-http row says so).
+fn heat(c: &Cfg) -> Option<Row> {
+    let out = sh_raw(&c.wget, &["-q", "-T", "2", "-O", "-", &c.core_url], true);
+    let v: serde_json::Value = serde_json::from_str(&out).ok()?;
+    let (lv, zh, en) = heat_text(&v["blocks"]["heat"]["data"])?;
+    Some(row(lv, "heat", "温度", zh, "Temperature", en))
+}
+
+fn heat_text(d: &serde_json::Value) -> Option<(&'static str, String, String)> {
+    let level = d["level"].as_str()?;
+    let deg = |k: &str| d[k].as_i64().map_or("?".to_string(), |v| v.to_string());
+    let (b, ch) = (deg("battery_c"), deg("chip_c"));
+    let mut zh = format!("电池 {b} °C、芯片 {ch} °C");
+    let mut en = format!("battery {b} °C, chip {ch} °C");
+    if d["charge_paused"] == true {
+        zh.push_str("；因为热暂停充电");
+        en.push_str("; charging paused for the heat");
+    }
+    match d["chill_now"].as_str() {
+        Some("hot") => {
+            zh.push_str("；CHILL 降到省电档");
+            en.push_str("; CHILL on eco");
+        }
+        Some("critical") => {
+            zh.push_str("；CHILL 停核直连");
+            en.push_str("; CHILL direct");
+        }
+        _ => {}
+    }
+    if d["stock_protect"].as_i64().is_some_and(|v| v != 0) {
+        zh.push_str("；原厂电池保护也在限流");
+        en.push_str("; the stock battery protection is limiting too");
+    }
+    if let Some(o) = d["test_offset"].as_i64() {
+        zh.push_str(&format!("（测试中：读数 {o:+} °C）"));
+        en.push_str(&format!(" (test: readings {o:+} °C)"));
+    }
+    if d["acting"] == false && level != "normal" {
+        zh.push_str("（充电归别处管，这里只看）");
+        en.push_str(" (charging is not the core's: watching only)");
+    }
+    let (lv, z, e) = match level {
+        "warm" => ("warn", "偏热", "Warm"),
+        "hot" => ("warn", "热", "Hot"),
+        "critical" => ("bad", "过热", "Too hot"),
+        _ => ("ok", "正常", "Normal"),
+    };
+    Some((lv, format!("{z}：{zh}"), format!("{e}: {en}")))
+}
+
 
 /// awk's `$1 + 0`: the longest leading number, else 0.
 fn awk_num(s: &str) -> f64 {

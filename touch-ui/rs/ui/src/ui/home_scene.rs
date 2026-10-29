@@ -448,7 +448,7 @@ impl Ui {
         let cw = (CARD_W - 2 * CELL_GAP) / 3;
         let mut x = MARGIN;
         let targets: [(Option<lv::EventCb>, usize); 3] =
-            [(Some(super::tab_go_cb), TAB_WIFI), (Some(super::tab_go_cb), TAB_SYS), (Some(super::tab_go_cb), TAB_SYS)];
+            [(Some(super::tab_go_cb), TAB_WIFI), (Some(super::tile_click_cb), Sub::Usage as usize), (Some(super::tab_go_cb), TAB_SYS)];
         for (i, (cb, user)) in targets.into_iter().enumerate() {
             let w = if i == 1 { CARD_W - 2 * CELL_GAP - 2 * cw } else { cw };
             let bx = kit::card(sc, x, ROW_Y, w, CELL_H);

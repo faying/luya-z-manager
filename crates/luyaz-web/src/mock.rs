@@ -1156,6 +1156,7 @@ mod router_lan;
 mod router_qos;
 mod home;
 mod incidents;
+mod plugin_settings;
 mod poller;
 mod receipt;
 mod router_vpn;
@@ -1174,6 +1175,7 @@ const BATCH4_CONTROL: &[Batch4Control] = &[
     wifi_main::control,
     home::control,
     poller::control,
+    plugin_settings::control,
 ];
 
 const BATCH4_SEED: &[fn(&Arc<Mock>)] = &[
@@ -1186,6 +1188,7 @@ const BATCH4_SEED: &[fn(&Arc<Mock>)] = &[
     wifi_main::seed,
     home::seed,
     poller::seed,
+    plugin_settings::seed,
 ];
 
 /// The first batch-4 page that claims the write answers it (logged in `page_ops` by the page).
@@ -1203,6 +1206,7 @@ fn batch4_routes(r: Router<Arc<Mock>>) -> Router<Arc<Mock>> {
     let r = wifi_main::routes(r);
     let r = receipt::routes(r);
     let r = poller::routes(r);
+    let r = plugin_settings::routes(r);
     home::routes(r)
 }
 

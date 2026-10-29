@@ -8,7 +8,6 @@ use super::network::{
 };
 use super::{Sub, Ui, SUB_VIEW};
 use crate::cf;
-use crate::clock;
 use crate::kit::{self, BtnKind, CARD_W, HERO_H, MARGIN, PAD, ROW2_H, ROW_H};
 use crate::lang::{self, tr};
 use crate::lv::{self, sys, Obj};
@@ -461,8 +460,6 @@ impl Ui {
             100
         } else if net_armed(net.arm_auto) {
             101
-        } else if net_armed(net.arm_nbr) {
-            102
         } else if net.arm_sc_idx >= 0 && net_armed(net.arm_sc) {
             200 + net.arm_sc_idx
         } else if net.arm_idx >= 0 && net_armed(net.arm_op) {
@@ -838,33 +835,19 @@ impl Ui {
         self.set(al, if arm == 101 { tr("再点确认") } else { tr("恢复自动") });
         kit::button_kind(ab, al, if arm == 101 { BtnKind::Armed } else { BtnKind::Plain });
 
-        // 邻小区. The vendor scan cuts the data and gets nothing (2026-09-25), the agent says
-        // unsupported: no button, the reason instead
-        let nbr_off = n.nbr_state == "unsupported";
-        let net = &self.net;
-        let (ns, nb, nl) = (net.nbr_state, net.nbr_btn, net.nbr_lbl);
-        kit::show(nb, !nbr_off);
-        ns.set_width(CARD_W - 2 * PAD - if nbr_off { 0 } else { 80 });
-        let buf: Vec<u8> = if nbr_off {
-            if n.nbr_err.is_empty() { tr("本机暂时读不到邻区").into() } else { n.nbr_err.clone().into() }
-        } else if n.nbr_state == "scanning" {
-            tr("扫描中…").into()
-        } else if arm == 102 {
-            tr("可能短暂影响网速").into()
-        } else if n.nbr_state == "error" {
-            tr("扫描失败").into()
-        } else if n.nbr_at > 0 {
-            // device clock = local time labelled UTC: local() gives the right numbers
-            let hm = clock::strftime("%H:%M", &clock::local(n.nbr_at));
-            cf!(tr("%s 扫描 · %d 个"), &hm, n.ncells)
+        // 邻小区: the LTE neighbours the modem reports, read by the core with each netinfo pass,
+        // strongest first. No scan (the vendor one cuts the data and gets nothing, 2026-09-25);
+        // none in SA, the core says why
+        let ncells = if n.nbr_state == "ok" { n.ncells.max(0) as usize } else { 0 };
+        let buf: Vec<u8> = if ncells > 0 {
+            cf!(tr("%d 个 · 信号强的在前 · RSRP / RSRQ"), ncells as i32)
+        } else if !n.nbr_err.is_empty() {
+            n.nbr_err.clone().into()
         } else {
-            tr("还没扫过，点「扫描」读一次").into()
+            tr("基带现在没报邻区").into()
         };
+        let ns = self.net.nbr_state;
         self.set(ns, &buf);
-        kit::text_color(ns, if arm == 102 { th.warn_t } else { th.t2 });
-        self.set(nl, if arm == 102 { tr("再点开始") } else { tr("扫描") });
-        kit::button_kind(nb, nl, if arm == 102 { BtnKind::Armed } else { BtnKind::Plain });
-        let ncells = n.ncells.max(0) as usize;
         for i in 0..NI_MAX_CELLS {
             let net = &self.net;
             let (r, l, rr) = (net.nbr_row[i], net.nbr_l[i], net.nbr_r[i]);
@@ -873,11 +856,13 @@ impl Ui {
                 continue;
             }
             let cl = n.cells.get(i).cloned().unwrap_or_default();
+            let dash = |v: &str| if v.is_empty() { "-".to_string() } else { v.to_string() };
             kit::show(r, true);
-            self.set(l, cf!("%-3s PCI %s  %s", &cl.rat, &cl.pci, &cl.arfcn));
-            self.set(rr, cf!("%s%s", if cl.rsrp.is_empty() { "-" } else { cl.rsrp.as_str() }, if cl.rsrp.is_empty() { "" } else { " dBm" }));
+            let band = if cl.band.is_empty() { cl.rat.as_str() } else { cl.band.as_str() };
+            self.set(l, cf!("%d  %-4s PCI %-3s  %s", (i + 1) as i32, band, &dash(&cl.pci), &dash(&cl.arfcn)));
+            self.set(rr, cf!("%s / %s", &dash(&cl.rsrp), &dash(&cl.rsrq)));
         }
 
-        self.net_reflow(if n.err.is_empty() { 0 } else { 22 }, scene_px, if two { 2 } else { 1 }, ops as i32, n.ncells);
+        self.net_reflow(if n.err.is_empty() { 0 } else { 22 }, scene_px, if two { 2 } else { 1 }, ops as i32, ncells as i32);
     }
 }

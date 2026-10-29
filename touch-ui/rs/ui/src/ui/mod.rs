@@ -22,6 +22,7 @@ mod refresh;
 mod sms;
 mod speed;
 mod system;
+mod usage;
 mod usbmode;
 mod wifi;
 
@@ -71,6 +72,8 @@ pub enum Sub {
     Op,
     Log,
     LogDetail,
+    /// opened by tapping Home's 今日 cell
+    Usage,
 }
 
 pub const SUBS: &[Sub] = &[
@@ -95,6 +98,7 @@ pub const SUBS: &[Sub] = &[
     Sub::Op,
     Sub::Log,
     Sub::LogDetail,
+    Sub::Usage,
 ];
 
 /// The title = the words on the way in.
@@ -121,6 +125,7 @@ fn sub_title(s: Sub) -> &'static str {
         Sub::Op => n_("改动"),
         Sub::Log => n_("改动记录"),
         Sub::LogDetail => n_("详情"),
+        Sub::Usage => n_("流量"),
     }
 }
 
@@ -223,6 +228,7 @@ pub struct Ui {
     pub apn: apn::Apn,
     pub dg: diagnose::Diag,
     pub pl: place::Place,
+    pub usage: usage::UsagePage,
     /// the benchmark timer: runs only while 性能测试 is open (bench_gate)
     bench_timer: lv::Timer,
     /// the full-screen 「正在切换到 English…」 frame, made the first time it shows
@@ -451,6 +457,7 @@ impl Ui {
             Sub::Op => self.op_on_open(),
             Sub::Log => self.op_log_on_open(),
             Sub::LogDetail => self.op_logd_on_open(),
+            Sub::Usage => self.usage_paint(),
             _ => {}
         }
     }
@@ -864,6 +871,7 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
         apn: apn::Apn::default(),
         dg: diagnose::Diag::default(),
         pl: place::Place::default(),
+        usage: usage::UsagePage::default(),
         bench_timer: lv::Timer::default(),
         lang_frame: Obj::NULL,
         edge_p0: (0, 0),
@@ -940,7 +948,7 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
     let pg = |s: Sub| u.sub_page[s as usize];
     let (p_esim, p_perf, p_smsd, p_al, p_ald) = (pg(Sub::Esim), pg(Sub::Perf), pg(Sub::SmsDetail), pg(Sub::Alerts), pg(Sub::AlertDetail));
     let (p_apn, p_net, p_diag, p_place) = (pg(Sub::Apn), pg(Sub::Net), pg(Sub::Diag), pg(Sub::Place));
-    let (p_op, p_log, p_logd) = (pg(Sub::Op), pg(Sub::Log), pg(Sub::LogDetail));
+    let (p_op, p_log, p_logd, p_usage) = (pg(Sub::Op), pg(Sub::Log), pg(Sub::LogDetail), pg(Sub::Usage));
     u.build_sub_esim(p_esim);
     u.build_sub_perf(p_perf);
     u.build_sub_sms_detail(p_smsd);
@@ -954,6 +962,7 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
     u.build_sub_op(p_op);
     u.build_sub_log(p_log);
     u.build_sub_log_detail(p_logd);
+    u.build_sub_usage(p_usage);
     u.sub_close();
 
     // lay out first: switching tile on tiles without a size leaves stale scroll state

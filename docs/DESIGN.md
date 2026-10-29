@@ -53,6 +53,7 @@ Data source is `/data/chill/events.log` (on `/data`, survives reboot; `chill.sh`
 
 The touch UI bottom line renders it as `最近：03:12 过热暂停 · 03:29 已恢复` ("Recent: 03:12 paused for heat · 03:29 recovered").
 This history is also the basis for calibrating thermal thresholds — run a few days, count real triggers, then fill in `CHILL_TEMP_HOT_*` — so don't change the format casually.
+Since 10-29 the core's heat care (`docs/designs/thermal-care.md`) also asks chill.sh for eco (`hot`) or direct (`critical`) through `/tmp/luyaz/heat`; chill.sh stays the one controller of the proxy core and logs `warm core=hot …` for those.
 
 ---
 

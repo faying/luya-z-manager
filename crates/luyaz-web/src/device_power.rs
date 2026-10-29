@@ -522,6 +522,63 @@ fn mode_rows(g: &Got, l: Lang) -> (Vec<ModeRow>, Option<String>) {
 }
 
 /// Plugged in = the hub's battery block `charger_connect` (no poll of its own).
+/// Heat care's row (core `heat` block, design thermal-care §4.3): the level and what it holds.
+/// None without the block (an older core) or while it is stale.
+fn heat_row(h: &Value, l: Lang) -> Option<Row> {
+    let level = h["level"].as_str()?;
+    let since = h["since"]
+        .as_i64()
+        .map(|s| crate::alerts_page::mdhm(s)[6..].to_owned());
+    let mut parts: Vec<String> = vec![
+        match level {
+            "warm" => l.pick("Warm", "偏热"),
+            "hot" => l.pick("Hot", "热"),
+            "critical" => l.pick("Too hot", "过热"),
+            _ => l.pick("Normal", "正常"),
+        }
+        .to_owned(),
+    ];
+    if h["charge_paused"] == true {
+        parts.push(l.pick("charging paused", "暂停充电").into());
+    } else if h["manual_resume"] == true && level != "normal" {
+        parts.push(l.pick("charging on (you resumed it)", "照常充电（你手动恢复的）").into());
+    }
+    // what CHILL did, not what was asked (it may be off)
+    match h["chill_now"].as_str() {
+        Some("hot") => parts.push(l.pick("CHILL on eco", "CHILL 省电档").into()),
+        Some("critical") => parts.push(l.pick("CHILL direct", "CHILL 直连").into()),
+        _ => {}
+    }
+    if let Some(t) = since.filter(|_| level != "normal") {
+        parts.push(match l {
+            Lang::En => format!("since {t}"),
+            Lang::Zh => format!("{t} 起"),
+        });
+    }
+    if h["stock_protect"].as_i64().is_some_and(|v| v != 0) {
+        parts.push(l.pick("stock protection limiting", "原厂保护在限流").into());
+    }
+    Some(Row {
+        label: l.pick("Heat care", "温控").into(),
+        sub: Some(
+            l.pick(
+                "When hot: pause charging, then CHILL to eco; back on its own once cool",
+                "热了先停充、再让 CHILL 降档，凉下来自动恢复",
+            )
+            .into(),
+        ),
+        value: parts.join(" · "),
+        mono: false,
+    })
+}
+
+fn heat(app: &Shared, l: Lang) -> Option<Row> {
+    app.hub.read(|st| {
+        let b = st.blocks.get("heat").filter(|b| !b.stale)?;
+        heat_row(&b.data, l)
+    })
+}
+
 fn plugged(app: &Shared) -> Option<bool> {
     app.hub.read(|st| {
         let b = st.blocks.get("battery")?;
@@ -550,7 +607,18 @@ pub fn view(app: &Shared, g: &Got, form: &str, l: Lang) -> View {
         }
     });
     let bat = match (&g.bat.v, &g.bat.err) {
-        (Some(b), _) => Some(Ok(battery_rows(b, plugged(app), l))),
+        (Some(b), _) => {
+            let mut rows = battery_rows(b, plugged(app), l);
+            if let Some(h) = heat(app, l) {
+                // right under the battery's temperature
+                let at = rows
+                    .iter()
+                    .position(|r| r.label == l.pick("Temperature", "温度"))
+                    .map_or(rows.len(), |i| i + 1);
+                rows.insert(at, h);
+            }
+            Some(Ok(rows))
+        }
         (None, Some(Fail::Refused(503, ..))) => Some(Err((
             l.pick(
                 "This device doesn't report battery details",

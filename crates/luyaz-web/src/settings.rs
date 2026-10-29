@@ -65,6 +65,8 @@ struct Page {
     allow: Option<Vec<Allow>>,
     /// The last poller write's result (`?pm=`).
     note: Option<(&'static str, String)>,
+    /// A plugin with settings is installed: its title (None before the core has read it).
+    plugin: Option<Option<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -91,10 +93,11 @@ async fn page(
     let headers = req.headers().clone();
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
     let who = Caller::of(&app, &req);
-    let allow = crate::agent::get(&app, &who, crate::home::poller::STATUS)
-        .await
-        .ok()
-        .map(|v| allow_rows(&v));
+    let (allow, plugin) = tokio::join!(
+        crate::agent::get(&app, &who, crate::home::poller::STATUS),
+        crate::plugin_settings::entry(&app, std::time::Duration::from_millis(3500)),
+    );
+    let allow = allow.ok().map(|v| allow_rows(&v));
     let shell = app
         .hub
         .read(|st| crate::shell::Shell::new(&headers, PATH).live(st, &ctx, None));
@@ -102,6 +105,7 @@ async fn page(
         shell,
         allow,
         note: note_of(ctx.lang, &q.pm),
+        plugin,
     }
     .render()
     .unwrap();
@@ -181,6 +185,7 @@ mod tests {
             shell: Shell::new(&h, PATH),
             allow: Some(Vec::new()),
             note: None,
+            plugin: None,
         }
         .render()
         .unwrap()
@@ -198,6 +203,7 @@ mod tests {
             shell: Shell::new(&h, PATH),
             allow: Some(allow_rows(&v)),
             note: note_of(Lang::Zh, "forever"),
+            plugin: Some(Some("<i>x</i>".into())),
         }
         .render()
         .unwrap();
@@ -206,11 +212,14 @@ mod tests {
         assert!(html.contains(r#"action="/settings/poller""#));
         assert!(html.contains(r#"name="op" value="forever""#) && html.contains(r#"name="op" value="remove""#));
         assert!(html.contains("已改成永久"));
+        // the plugin entry: its title as text, linking to the plugin page
+        assert!(html.contains(r#"href="/settings/plugin""#) && html.contains("&#60;i&#62;x&#60;/i&#62;"));
         // an empty list and an unreadable one say so
-        let empty = Page { shell: Shell::new(&h, PATH), allow: Some(Vec::new()), note: None }.render().unwrap();
+        let empty = Page { shell: Shell::new(&h, PATH), allow: Some(Vec::new()), note: None, plugin: None }.render().unwrap();
         assert!(empty.contains("还没有放行的设备"));
-        let none = Page { shell: Shell::new(&h, PATH), allow: None, note: None }.render().unwrap();
+        let none = Page { shell: Shell::new(&h, PATH), allow: None, note: None, plugin: None }.render().unwrap();
         assert!(none.contains("读不到"));
+        assert!(!none.contains("/settings/plugin"), "no plugin, no entry");
     }
 
     #[test]

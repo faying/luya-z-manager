@@ -1,7 +1,8 @@
 //! Component versions (docs/designs/component-versions.md): what is installed on the device,
 //! and the newest the public repo lists in its `versions.json`.
 //!
-//! Installed: the core's own version; luyaz-web, the sentinel and the touch UI carry a
+//! Installed: the core's own version; luyaz-web, the sentinel, the touch UI (and the phone
+//! bridge's two programs) carry a
 //! `LUYAZ_VERSION=<x.y.z>;` marker in their binary, found by reading the file (never by running
 //! it: an old touch UI started with an argument it does not know would open the screen); the
 //! device scripts have `/data/luyaz/scripts/VERSION`. None of those (a build from before
@@ -29,7 +30,7 @@ const CACHE: &str = "/data/luyaz/core/versions-latest.json";
 const MARK: &[u8] = b"LUYAZ_VERSION=";
 
 /// (name, where its version is): the order the screen and the web list them in.
-const COMPONENTS: [(&str, Source); 5] = [
+const COMPONENTS: &[(&str, Source)] = &[
     ("core", Source::Own),
     ("lweb", Source::Binary("/data/luyaz/luyaz-web")),
     ("sentinel", Source::Binary("/data/luyaz/luyaz-sentinel")),

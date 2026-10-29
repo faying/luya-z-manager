@@ -404,8 +404,7 @@
 | LTE·PCI * 输入框 | 无；建议 textbox「LTE PCI」 | 无（草稿） | — | — | 无 | —（本地） |
 | LTE·EARFCN * 输入框 | 无；建议 textbox「LTE EARFCN」 | 无（草稿） | — | — | 无 | —（本地） |
 | 「锁定 LTE」 | button「锁定 LTE」 | POST `/api/cell/lock/lte` `{pci, earfcn}`（ubus `nwinfo_lock_lte_cell`） | 1 | 无读回；间接：`/api/network/signal` `lte_pci`/`lte_earfcn` | 无 | 三（锁小区） |
-| 「扫描邻区」/「扫描中…」 | button「扫描邻区」（`/api/netinfo` 的 `neighbors.state` 为 `unsupported` 时置灰，下方写原因） | POST `/api/cell/neighbors/scan`（agent 固定回 410「原厂扫描会断网且拿不到数据，已停用」，不再调 ubus `nwinfo_scan_nbr`） | **3 个请求**：① POST 扫描 → 页面等 3 秒 → ② GET `/api/cell/neighbors/nr` ③ GET `/api/cell/neighbors/lte`（②③ 失败被静默忽略，仍提示「扫描完成」） | 邻区表有行 | 无 | 二 |
-| 邻区表每行「选择」 | button「选择」（每行同名；建议 `aria-label`「用 PCI {pci} 填表」） 〔现名：button「用 PCI {pci} 填表」〕〔缺失：2026-09-25 起邻区扫描停用（原厂扫描会断移动数据且拿不到小区，agent 回 410，按钮置灰并说明原因），结果行不会出现〕 | 无（把该行 pci/earfcn/band 填进上面表单） | — | — | 无 | —（本地） |
+| 邻区表（只读） | table（#、PCI、频段、EARFCN、RSRP、RSRQ；没有时一句原因，role=status） | GET `/api/netinfo?lite=1` 的 `neighbors`（core ≥ 1.54.0：基带自己报的 LTE 邻区，按 RSRP 由强到弱；SA 下 `not_reported`），每 15 秒 | — | — | 无 | —（只读） |
 
 写接口假成功风险：锁 NR / 锁 LTE / 重置 / 扫描都是「否·透传」，页面不看 `data.result`。
 

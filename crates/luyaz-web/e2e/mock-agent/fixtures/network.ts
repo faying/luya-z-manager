@@ -18,7 +18,7 @@
 import type { Ctx, Reply, Route } from "../lib.ts";
 import { ok, clone, bodyField } from "../lib.ts";
 import { shared } from "../shared.ts";
-import { modemPrivate, NBR_UNSUPPORTED, NBR_UNSUPPORTED_EN } from "./modem.ts";
+import { modemPrivate, neighborsNow } from "./modem.ts";
 import { candidateApnBlock } from "./router.ts";
 import type {
   NetworkSignal,
@@ -626,7 +626,7 @@ function netinfo(ctx: Ctx) {
     data_connected: true,
     selection: { mode: "auto", checked_at: now - 60 },
     guard: modemPrivate.guardNow(ctx.now),
-    neighbors: { state: "unsupported", scanned_at: 0, error: NBR_UNSUPPORTED, error_en: NBR_UNSUPPORTED_EN, cells: [] },
+    neighbors: neighborsNow(ctx, now),
     scan: modemPrivate.netinfoScanNow(ctx),
     // the three Wi-Fi clients of clients(); rates wobble so the page visibly updates
     clients: {

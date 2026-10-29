@@ -62,7 +62,7 @@
   - 哨兵：`agent-silent`、`wifi-takeover`、`wifi-restore-failed`、`dropbear-down`、`dropbear-restarted`、`ui-crash`、`ui-gave-up`
   - core svcwatch：`core-crash`（核心自己；改名 F4 前叫 `core-crash`，旧记录照认）、`web-crash`、`sentinel-crash`
   - 核心哨兵监视：`sentinel-silent`、`screen-empty`（只在空屏兜底开关打开时）
-  - 核心引擎：`home-exit-down`、`home-exit-check-failed`、`sms-forward-stuck`
+  - 核心引擎：`home-exit-down`、`home-exit-check-failed`、`sms-forward-stuck`、`sms-forward-queue`
   - 触屏：`ui-theme-paused`
 
 ### 短信

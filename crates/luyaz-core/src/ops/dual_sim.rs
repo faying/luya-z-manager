@@ -62,7 +62,9 @@ pub fn readback(sim: &Value, smart_flag: &str) -> Option<Value> {
     if text(sim, "support_dual_sim") != "1" {
         return None;
     }
-    let on = |n: u8| text(sim, &format!("sim{n}_provision_state")) == "1";
+    let state = |n: u8| text(sim, if n == 1 { "sim_states" } else { "sim2_states" });
+    // 旗标是 1 但槽里看不到卡 = 实际没开（见 steps），按没开报，界面才不会显示假的「双卡」
+    let on = |n: u8| text(sim, &format!("sim{n}_provision_state")) == "1" && state(n) != "sim undetected";
     let active = slot(&Value::String(text(sim, "current_sim_slot"))).ok();
     match (on(1), on(2)) {
         (true, true) if smart_flag == "1" => Some(json!({"mode": "dual", "smart": true})),
@@ -101,8 +103,12 @@ pub fn steps(value: &Value, sim: &Value) -> Result<Vec<Step>, String> {
     let active = value["active_slot"].as_i64();
     let want = |n: i64| i64::from(dual || active == Some(n));
     let now = |n: i64| text(sim, &format!("sim{n}_provision_state")).parse::<i64>().unwrap_or(-1);
+    // 旗标会骗人：单卡切过再重启后，原厂可能报两槽都是 1，但没开的槽其实没上电（「sim undetected」）。
+    // 要开的槽看不到卡（precheck 已确认槽里有卡）就照样重下旗标，否则切主卡只会超时退回。
+    let state = |n: i64| text(sim, if n == 1 { "sim_states" } else { "sim2_states" });
+    let unseen = (1..=2).any(|n| want(n) == 1 && state(n) == "sim undetected");
     let mut out = Vec::new();
-    if (want(1), want(2)) != (now(1), now(2)) {
+    if unseen || (want(1), want(2)) != (now(1), now(2)) {
         for n in [2, 1] {
             out.push((
                 MDM,
@@ -121,6 +127,49 @@ pub fn steps(value: &Value, sim: &Value) -> Result<Vec<Step>, String> {
     }
     // 单卡、槽也对：什么都不调，交给读回确认
     Ok(out)
+}
+
+/// 电话卡在哪个槽（全球版双卡）：`LUYAZ_VOICE_SLOT`（1 或 2），默认 1（实体卡槽）。
+pub fn voice_slot() -> u8 {
+    match std::env::var("LUYAZ_VOICE_SLOT").ok().as_deref().map(str::trim) {
+        Some("2") => 2,
+        _ => 1,
+    }
+}
+
+/// 通话口要绑的 SUB（0 = 槽 1）：只在双卡机器上给。电话卡那槽开着、卡就绪就用它；
+/// 不然（单卡只开了另一槽、电话卡拔了）跟现在用的那槽，那时只有它能打电话。
+pub fn voice_sub(sim: &Value, voice_slot: u8) -> Option<u8> {
+    if text(sim, "support_dual_sim") != "1" {
+        return None;
+    }
+    let slot = if usable(sim, voice_slot) {
+        voice_slot
+    } else {
+        text(sim, "current_sim_slot").parse::<u8>().ok().filter(|s| matches!(s, 1 | 2))?
+    };
+    Some(slot - 1)
+}
+
+/// 双卡时电话卡的 ICCID 和号码（卡里存了才有）：短信、App 线路跟它，不跟上网卡。
+/// 单卡机器、电话卡那槽没开或没卡时 `None`（照旧跟现在用的那张）。
+pub fn voice_card(sim: &Value) -> Option<(String, String)> {
+    let slot = voice_slot();
+    if text(sim, "support_dual_sim") != "1" || !usable(sim, slot) {
+        return None;
+    }
+    // 原厂的 msisdn 只有槽 1 的
+    Some(if slot == 1 {
+        (text(sim, "sim_iccid"), text(sim, "msisdn"))
+    } else {
+        (text(sim, "sim2_iccid"), String::new())
+    })
+    .filter(|(iccid, _)| !iccid.is_empty())
+}
+
+fn usable(sim: &Value, slot: u8) -> bool {
+    let state = if slot == 1 { "sim_states" } else { "sim2_states" };
+    text(sim, &format!("sim{slot}_provision_state")) == "1" && text(sim, state) == "sim ready"
 }
 
 #[cfg(test)]
@@ -195,6 +244,37 @@ mod tests {
 
     fn calls(v: Value, sim: Value) -> Vec<(String, Value)> {
         steps(&v, &sim).unwrap().into_iter().map(|(_, m, a)| (m.into(), a)).collect()
+    }
+
+    #[test]
+    fn voice_card_is_the_voice_slot_when_it_is_up() {
+        let mut sim = info("1", "1", "2");
+        sim["sim_states"] = json!("sim ready");
+        sim["sim2_states"] = json!("sim ready");
+        sim["sim_iccid"] = json!("8986031");
+        sim["sim2_iccid"] = json!("8986002");
+        sim["msisdn"] = json!("8613300000000");
+        assert_eq!(voice_card(&sim), Some(("8986031".into(), "8613300000000".into())));
+        sim["sim_states"] = json!("sim undetected");
+        assert_eq!(voice_card(&sim), None, "voice slot down: follow the data SIM");
+        assert_eq!(voice_card(&json!({"support_dual_sim":"0"})), None);
+    }
+
+    #[test]
+    fn steps_reprovision_unseen_slot() {
+        // 10-29 全球版：单卡切过再重启，原厂报两槽旗标都是 1，槽 1 却「sim undetected」
+        let mut sim = info("1", "1", "2");
+        sim["sim_states"] = json!("sim undetected");
+        sim["sim2_states"] = json!("sim ready");
+        assert_eq!(readback(&sim, "0"), Some(json!({"mode": "single", "active_slot": 2})));
+        let got = calls(json!({"mode": "dual", "smart": false, "active_slot": 1}), sim);
+        assert_eq!(
+            &got[..2],
+            &[
+                ("zwrt_mdm_change_provision_session".into(), json!({"active_slot":2,"active_flag":1})),
+                ("zwrt_mdm_change_provision_session".into(), json!({"active_slot":1,"active_flag":1})),
+            ]
+        );
     }
 
     #[test]

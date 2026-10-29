@@ -107,6 +107,8 @@ impl Host for U60dHost {
         let has_more = r["has_more"]
             .as_bool()
             .ok_or("sms.list_after: no has_more")?;
+        // 先进短信日志，进了才往下转发（luyaz-phone 设计 R22）：写不进去这页就不给，下一轮再来
+        crate::sms_journal::ingest(&items, false)?;
         Ok(Page { items, has_more })
     }
 

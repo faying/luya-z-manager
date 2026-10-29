@@ -33,8 +33,7 @@
 {{ reset_op|safe }}</div>
 </section>
 <section aria-labelledby="cl-nbr-t"><h2 id="cl-nbr-t" class="nd-group-title">{{ l.pick("Neighbour cells", "邻区") }}</h2>
-<div class="nd-group grid gap-3 p-4"><div><button type="button" class="nd-btn nd-btn--secondary" disabled aria-describedby="cl-nbr-off">{{ l.pick("Scan neighbours", "扫描邻区") }}</button></div>
-<p id="cl-nbr-off" class="nd-body">{{ l.pick("Neighbour scan is off: the stock scan drops mobile data for minutes and returns no cells on this firmware.", "邻区扫描已停用：这版固件的原厂扫描会让移动数据断开好几分钟，而且拿不到任何小区。") }}</p></div>
+<div class="nd-group grid gap-3 p-4">{{ self.leaf("cl-nbr")|safe }}</div>
 </section>
 </div>
 </div>

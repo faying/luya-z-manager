@@ -286,6 +286,42 @@ fn cellular_down_five_minutes_opens_three_good_close() {
     assert!(r.file.open.is_empty());
 }
 
+/// Heat care critical (thermal-care §4.2) opens at once and is texted; no reading neither opens
+/// nor closes; 3 checks out of critical close it.
+#[test]
+fn heat_critical_opens_and_cooling_closes() {
+    let mut r = fresh();
+    let mut k = chk(0);
+    k.heat = Some(false);
+    k.at = at(60);
+    r.check(&k);
+    assert!(r.file.open.is_empty());
+    k.heat = Some(true);
+    k.at = at(120);
+    r.check(&k);
+    assert_eq!(kinds(&r), ["regress-heat"]);
+    assert!(
+        luyaz_api::alerts::sms::sms_text_for("regress-heat", "x", false, 0, 1, None)
+            .contains("温度过高")
+    );
+    k.heat = None;
+    for up in [180, 240, 300, 360] {
+        k.at = at(up);
+        r.check(&k);
+    }
+    assert_eq!(kinds(&r), ["regress-heat"], "no reading does not close");
+    k.heat = Some(false);
+    for up in [420, 480] {
+        k.at = at(up);
+        r.check(&k);
+    }
+    assert_eq!(kinds(&r), ["regress-heat"]);
+    k.at = at(540);
+    r.check(&k);
+    assert!(r.file.open.is_empty());
+}
+
+
 /// Eng review R14: CHILL failing (forwarding broken) twice over 5 min opens, 3 through close; a
 /// stale probe is "cannot tell"; failures while cellular is down are cellular's.
 #[test]

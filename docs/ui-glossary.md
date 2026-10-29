@@ -477,6 +477,20 @@ regress 短信（`sms.rs` `regress_zh`/`regress_en`）：模板 + 告警文字�
 | 今天（折叠） | 还有 N 条 | N more | 只显示最新 8 条 |
 | 事件文字 | （core 的 text_zh / text_en 原样） | | core `longterm/today.rs` |
 
+
+## 20. 温控（10-29；core `heat.rs`，触屏横幅和系统页电池行，网页电池卡「温控」行；设计 `docs/designs/thermal-care.md`）
+
+| 位置 | 中文 | English | 说明 |
+|---|---|---|---|
+| 触屏横幅（过热） | 过热：已停充、CHILL 直连，放到阴凉处 | Too hot: charging stopped, CHILL direct; move somewhere cool | 电池 ≥55 °C 或芯片 ≥90 °C；只写真做了的：只停充「过热：已停充，放到阴凉处」、只直连「过热：CHILL 已直连，放到阴凉处」、都没有「过热，放到阴凉处」 |
+| 触屏横幅（热） | 太热：已暂停充电、CHILL 降档，凉下来自动恢复 | Hot: charging paused, CHILL on eco; back once cool | 电池 ≥50 °C 或芯片 ≥80 °C；同上：「太热：已暂停充电，凉下来自动恢复」「太热：CHILL 已降档，凉下来自动恢复」「太热，放到通风的地方」（用电池跑、CHILL 没开时） |
+| 触屏横幅（旧 core） | 电池过热，拔掉充电器放到阴凉处 | Battery hot; unplug the charger and move somewhere cool | 没有 heat 块时照旧看电池 ≥50 °C |
+| 触屏系统页电池行 | 因为热暂停充电 · 46°C | Paused: too hot · 46°C | 取代「充电中/放电中」 |
+| 网页电池卡 | 温控：偏热 / 热 / 过热 · 暂停充电 · CHILL 省电档 · 12:03 起 | Heat care: Warm / Hot / Too hot · charging paused · CHILL on eco · since 12:03 | 正常时只写「正常」 |
+| 收件箱 | 温度偏高（电池 N °C、芯片 N °C）：暂停充电…，凉下来自动恢复 | | `heat-protect`，不发短信；只写会做的（没插电、CHILL 没开就写「，放到通风的地方」） |
+| 事故 | 温度过高 | Too hot | `regress-heat`，发短信「温度过高（电池≥55°C或芯片≥90°C），放到阴凉处。」 |
+| doctor | 温度 | Temperature | ok / warn（偏热、热）/ bad（过热） |
+
 ## 外部评审（10-01，独立子代理；Codex 卡死没跑成）
 
 15 条采纳 14 条：漫游写成找运营商/套餐而非 SIM；RSRP/SINR/RSRQ 带单位；no action needed 代替 nothing to do；ui-gave-up 说清长按是换回；on backup 易被当成电池，改 using fallback；Airplane 代替 Cell off（和提示一致）；核心掉线照实写 Data service offline；web admin；干扰统一叫 Noise；提示行一句话用 `;`；带宽 Wide、No cell、Cell busy、Restricted 等小改。

@@ -344,6 +344,12 @@ impl Compat {
             crate::plugin::charge_policy::set_executor(tx);
             tokio::spawn(charge::run(self.clone(), rx));
             tokio::spawn(health::run(self.clone()));
+            // 短信先进日志，sms-forward 和插件才看得到（luyaz-phone 设计 O-2、R22）
+            crate::sms_journal::init(
+                self.path(crate::sms_journal::JOURNAL_PATH),
+                self.path(crate::sms_journal::SALT_PATH),
+            );
+            tokio::spawn(crate::sms_journal::run(self.clone()));
             tokio::spawn(crate::engines::sms_forward::run(self.clone()));
             tokio::spawn(crate::engines::guard_duties::run(self.clone()));
             tokio::spawn(crate::engines::sentinel_watch::run(self.clone()));
@@ -656,6 +662,7 @@ async fn lanid_get() -> Response {
         .unwrap_or(Value::Null);
     reply(200, json!({"ok": true, "data": v}))
 }
+
 
 /// POST /api/lanid/alias `{"mac", "alias"}`: the user's name for a MAC (an empty alias removes
 /// it). Written to aliases.json and read back; the answer is the stored value.

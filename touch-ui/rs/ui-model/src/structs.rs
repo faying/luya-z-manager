@@ -66,6 +66,12 @@ pub struct core_snapshot_t {
     pub batt_cur_ua: i64,
     pub chg_volt_uv: i64,
     pub chg_cur_ua: i64,
+    /// heat care (the core's `heat` block): -1 no block, 0 normal, 1 warm, 2 hot, 3 critical
+    pub heat_level: i32,
+    /// charging paused for the heat (1)
+    pub heat_paused: i32,
+    /// what CHILL is doing for the heat now: 0 nothing, 1 eco, 2 direct
+    pub heat_chill: i32,
 
     // SIM
     pub sim_state: String,
@@ -83,6 +89,9 @@ pub struct core_snapshot_t {
     /// The core's `regress` block (incidents, core ≥ 1.45.0); None = a core without it
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regress: Option<regress_t>,
+    /// The core's `display` block (a plugin's card, core ≥ 1.56.0); None = an older core
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<display_t>,
 
     // the network
     pub carrier: String,
@@ -191,6 +200,23 @@ pub struct regress_t {
     pub open_total: i32,
     pub open: Vec<regress_item_t>,
     pub closed: Vec<regress_item_t>,
+}
+
+/// A plugin's card on the screen (core `plug::display`): its code, and the short line after it
+/// closes.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct display_t {
+    /// "" = no card up
+    pub id: String,
+    pub kind: String,
+    pub code: String,
+    /// seconds left (the core counts)
+    pub left_s: i32,
+    /// 「一致」 was pressed: waiting for the plugin to finish
+    pub answered: i32,
+    /// the closed card's line: "done", "cancelled", "" none
+    pub said: String,
+    pub said_id: String,
 }
 
 /// One incident row (names in the screen language).
@@ -665,6 +691,28 @@ pub struct landing_t {
     pub tx: i64,
 }
 
+/// One card's use on one device date (core GET /v2/usage/days): bytes up + down.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct usage_card_t {
+    /// the core's card key (sha256 of the ICCID, 16 hex): a card's colour on the page
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub card: String,
+    /// the ICCID's last 4 digits ("" when unknown)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tail: String,
+    /// the operator as the core saw it (CMCC, …)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub op: String,
+    pub bytes: i64,
+}
+
+/// One device date in the core's usage ledger (YYYY-MM-DD), its cards in the core's order.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct usage_day_t {
+    pub day: String,
+    pub cards: Vec<usage_card_t>,
+}
+
 /// One component's version (docs/designs/component-versions.md).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ver_row_t {
@@ -720,6 +768,9 @@ pub struct ni_scan_op_t {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ni_cell_t {
     pub rat: String,
+    /// "B3" (older cores and the C model leave it out)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub band: String,
     pub pci: String,
     pub arfcn: String,
     pub rsrp: String,

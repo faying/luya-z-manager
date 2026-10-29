@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}"><link rel="stylesheet" href="{{ crate::assets::url("sys.css") }}">{% endblock %}
+{% block main %}
+{# Everything the plugin wrote goes into element content only (R29); keys are checked [a-z0-9_.] before they reach an id, a form or a link. #}
+{% match view %}
+{% when View::Ready(d) %}
+<h1 class="nd-title mb-2 mt-2" data-data>{{ d.title }}</h1>
+<p class="nd-aux mb-4 max-w-[720px]">{{ shell.t("Settings of an installed plugin. The plugin describes them; changes are sent to it through the core and read back.", "已安装插件的设置。内容由插件描述；改动经核心服务送给插件，再读回确认。") }}</p>
+<div class="grid max-w-[720px] gap-6">
+{% if !d.online %}<p class="t-note t-note--warn px-1" role="status">{{ shell.t("The plugin is not running: read only.", "插件没在运行：只能看，不能改。") }}{% if let Some(t) = d.confirmed %} {{ shell.t("Last confirmed ", "最后确认于 ") }}<span class="nd-mono" data-data>{{ t }}</span>{% endif %}</p>{% endif %}
+{% if let Some((tone, text)) = note %}<p class="t-note t-note--{{ tone }} px-1" role="status">{{ text }}</p>{% endif %}
+{% if let Some(t) = self.sub_title(d) %}<a class="nd-btn nd-btn--ghost nd-btn--sm justify-self-start" href="{{ crate::plugin_settings::PATH }}">{{ shell.icon("ArrowLeft", 16)|safe }}<span>{{ d.title }}</span></a>{% endif %}
+{% for g in self.shown(d) %}
+<section aria-labelledby="ps-g-{{ g.key }}"><h2 id="ps-g-{{ g.key }}" class="nd-group-title">{{ g.title }}</h2>
+<div class="nd-group">{% for r in g.rows %}
+{% match r.kind %}
+{% when Kind::Page %}{% if let Some(p) = r.page %}<a class="nd-row" href="{{ crate::plugin_settings::PATH }}?page={{ p }}"><span class="nd-row__text"><span class="nd-row__label">{{ r.label }}</span>{% if let Some(n) = r.note %}<span class="nd-row__sub block">{{ n }}</span>{% endif %}</span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a>{% endif %}
+{% when Kind::Toggle %}<div class="nd-row flex-wrap gap-2" id="ps-r-{{ r.key }}"><span class="nd-row__text"><span class="nd-row__label" id="ps-l-{{ r.key }}">{{ r.label }}</span>{% if let Some(n) = r.note %}<span class="nd-row__sub block">{{ n }}</span>{% endif %}{% if let Some(n) = r.vnote %}<span class="nd-row__sub block">{{ n }}</span>{% endif %}</span>
+{%- match r.on %}{% when None %}<span class="nd-row__value">—</span>{% when Some(on) %}
+{%- if r.live(*d.online) %}
+{%- if r.confirm.is_some() %}<form method="get" action="{{ crate::plugin_settings::PATH }}">{% if let Some(p) = self.sub %}<input type="hidden" name="page" value="{{ p }}">{% endif %}<input type="hidden" name="ask" value="{{ r.key }}"><button type="submit" role="switch" class="nd-switch t-switch" aria-labelledby="ps-l-{{ r.key }}" aria-checked="{{ on }}"{% if *on %} data-selected="true"{% endif %}><span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span></button></form>
+{%- else %}<form method="post" action="/settings/plugin/set"><input type="hidden" name="key" value="{{ r.key }}"><input type="hidden" name="to" value="{% if *on %}false{% else %}true{% endif %}"><input type="hidden" name="rev" value="{{ d.rev }}">{% if let Some(p) = self.sub %}<input type="hidden" name="page" value="{{ p }}">{% endif %}<button type="submit" role="switch" class="nd-switch t-switch" aria-labelledby="ps-l-{{ r.key }}" aria-checked="{{ on }}"{% if *on %} data-selected="true"{% endif %}><span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span></button></form>{% endif %}
+{%- else %}<button type="button" role="switch" class="nd-switch t-switch" aria-labelledby="ps-l-{{ r.key }}" aria-checked="{{ on }}"{% if *on %} data-selected="true"{% endif %} disabled data-disabled="true"><span class="nd-switch__track"><svg class="nd-switch__check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.6 9.5 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nd-switch__thumb"></span></span></button>{% endif %}
+{%- endmatch %}</div>
+{%- if ask.as_deref() == Some(r.key.as_str()) && r.live(*d.online) %}{% if let Some(c) = r.confirm %}{% if let Some(on) = r.on %}
+<div role="group" aria-labelledby="ps-l-{{ r.key }}" class="nd-confirm" id="ps-ask"><p class="nd-confirm__text">{{ c }}</p>
+<div class="nd-confirm__actions"><form method="post" action="/settings/plugin/set"><input type="hidden" name="key" value="{{ r.key }}"><input type="hidden" name="to" value="{% if *on %}false{% else %}true{% endif %}"><input type="hidden" name="rev" value="{{ d.rev }}">{% if let Some(p) = self.sub %}<input type="hidden" name="page" value="{{ p }}">{% endif %}<button type="submit" class="nd-btn nd-btn--confirm">{% if *on %}{{ shell.t("Confirm: turn off", "确认：关掉") }}{% else %}{{ shell.t("Confirm: turn on", "确认：打开") }}{% endif %}</button></form><a class="nd-btn nd-btn--secondary" href="{{ crate::plugin_settings::PATH }}?{{ self.sub_q() }}">{{ shell.t("Cancel", "取消") }}</a></div></div>
+{%- endif %}{% endif %}{% endif %}
+{% when _ %}<div class="nd-row{% if r.note.is_some() || r.vnote.is_some() %} nd-row--two{% endif %}"><span class="nd-row__text"><span class="nd-row__label">{{ r.label }}</span>{% if let Some(n) = r.note %}<span class="nd-row__sub block">{{ n }}</span>{% endif %}{% if let Some(n) = r.vnote %}<span class="nd-row__sub block">{{ n }}</span>{% endif %}</span><span class="nd-row__value" data-data>{% match r.text %}{% when Some(t) %}{{ t }}{% when None %}—{% endmatch %}</span></div>
+{% endmatch %}
+{% endfor %}</div></section>
+{% endfor %}
+</div>
+{% when View::Offline %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.t("Plugin settings", "插件设置") }}</h1>
+<div class="nd-group max-w-[720px]"><div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("The plugin is not running", "插件没在运行") }}</span><span class="nd-row__sub block">{{ shell.t("Nothing confirmed since the core started; this page fills in once the plugin is back.", "核心服务启动后还没确认过；插件回来后这页会显示设置。") }}</span></span></div></div>
+{% when View::Invalid %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.t("Plugin settings", "插件设置") }}</h1>
+<div class="nd-group max-w-[720px]"><div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("The plugin's settings description is invalid", "插件描述无效") }}</span><span class="nd-row__sub block">{{ shell.t("It was not shown. The core's log has the reason.", "没有显示。原因写在核心服务的日志里。") }}</span></span></div></div>
+{% when View::Unread %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.t("Plugin settings", "插件设置") }}</h1>
+<div class="nd-group max-w-[720px]"><div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("Can't read the plugin settings from the core", "读不到核心服务的插件设置") }}</span></span></div></div>
+{% when View::None %}
+<h1 class="nd-title mb-4 mt-2">{{ shell.t("Plugin settings", "插件设置") }}</h1>
+<div class="nd-group max-w-[720px]"><div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("No plugin with settings is installed", "没有可设置的插件") }}</span></span></div></div>
+{% endmatch %}
+{% endblock %}

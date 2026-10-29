@@ -10,7 +10,7 @@ use super::util::{find, jget, jstr, mono_ms32, text, trunc, wall};
 use crate::json;
 use crate::lang::tr;
 use crate::logic::{self, Ctl};
-use ui_model::{data_notice_t, core_snapshot_t, lan_client_t, regress_item_t, regress_t, sms_entry_t, sim_dual_t, sim_slot_t};
+use ui_model::{data_notice_t, core_snapshot_t, display_t, lan_client_t, regress_item_t, regress_t, sms_entry_t, sim_dual_t, sim_slot_t};
 use std::os::fd::{AsRawFd, OwnedFd};
 
 pub const INBOX_CAP: usize = 32;
@@ -87,9 +87,11 @@ const B_INTERFACES: usize = 12;
 const B_TYPEC: usize = 13;
 const B_POWERBANK: usize = 14;
 const B_REGRESS: usize = 15;
-const B_COUNT: usize = 16;
+const B_DISPLAY: usize = 16;
+const B_HEAT: usize = 17;
+const B_COUNT: usize = 18;
 const V2_NAMES: [&str; B_COUNT] =
-    ["signal", "battery", "charger", "live", "sms", "sms_list", "sim", "qos", "clients", "wlan", "nfc", "dhcp", "interfaces", "typec", "powerbank", "regress"];
+    ["signal", "battery", "charger", "live", "sms", "sms_list", "sim", "qos", "clients", "wlan", "nfc", "dhcp", "interfaces", "typec", "powerbank", "regress", "display", "heat"];
 
 #[derive(Default, Clone)]
 struct Blk {
@@ -426,7 +428,7 @@ pub fn decode_snapshot(buf: &[u8]) -> Option<core_snapshot_t> {
     if matches!(buf.first(), None | Some(0)) {
         return None;
     }
-    let mut d = core_snapshot_t { dps_mode: -1, cell_data: -1, cell_roam: -1, usb_cc: -1, powerbank: -1, ..empty() };
+    let mut d = core_snapshot_t { dps_mode: -1, cell_data: -1, cell_roam: -1, usb_cc: -1, powerbank: -1, heat_level: -1, ..empty() };
     let section = |key| json::get(buf, key, SNAPSHOT_CAP);
     let readers: [(&str, Reader); 8] = [
         ("net", read_net),
@@ -462,6 +464,24 @@ pub fn decode_snapshot(buf: &[u8]) -> Option<core_snapshot_t> {
     }
     if let Some(s) = section("regress") {
         d.regress = Some(regress(&s));
+    }
+    if let Some(s) = section("heat") {
+        d.heat_level = match json::get(&s, "level", 16).as_deref() {
+            Some(b"warm") => 1,
+            Some(b"hot") => 2,
+            Some(b"critical") => 3,
+            _ => 0,
+        };
+        d.heat_paused = (json::get(&s, "charge_paused", 8).as_deref() == Some(b"true")) as i32;
+        // what CHILL did, not what was asked: the banner says only that
+        d.heat_chill = match json::get(&s, "chill_now", 16).as_deref() {
+            Some(b"hot") => 1,
+            Some(b"critical") => 2,
+            _ => 0,
+        };
+    }
+    if let Some(s) = section("display") {
+        d.display = Some(display(&s));
     }
     if let Some(s) = section("dhcp") {
         d.lan_ip = jget(&s, "ip", 24);
@@ -524,6 +544,26 @@ fn regress(s: &[u8]) -> regress_t {
         open: items("open"),
         closed: items("closed"),
     }
+}
+
+/// The display block (`{card:{id,kind,code,left_s,answered}|null, said:{id,result}|null}`):
+/// only while fresh (a card from a core that went quiet is not shown).
+fn display(s: &[u8]) -> display_t {
+    let card = json::get(s, "card", 1024).filter(|c| c.first() == Some(&b'{'));
+    let said = json::get(s, "said", 512).filter(|c| c.first() == Some(&b'{'));
+    let mut d = display_t::default();
+    if let Some(c) = card.as_deref() {
+        d.id = jstr(c, "id", 64);
+        d.kind = jstr(c, "kind", 16);
+        d.code = jstr(c, "code", 8);
+        d.left_s = json::get_int(c, "left_s", 0) as i32;
+        d.answered = (json::get(c, "answered", 8).as_deref() == Some(b"true")) as i32;
+    }
+    if let Some(w) = said.as_deref() {
+        d.said = jstr(w, "result", 16);
+        d.said_id = jstr(w, "id", 64);
+    }
+    d
 }
 
 fn sim_dual(o: &[u8]) -> Option<sim_dual_t> {
@@ -777,7 +817,7 @@ impl CoreLink {
     /// The fresh blocks as one old-/state object: signal → net, charger → power, live →
     /// system + traffic, sms + sms_list → sms {unread, list}. None when it would not fit.
     fn v2_rebuild(&self) -> Option<Vec<u8>> {
-        const SAME: [(usize, &str); 12] = [
+        const SAME: [(usize, &str); 13] = [
             (B_SIGNAL, "net"),
             (B_BATTERY, "battery"),
             (B_CHARGER, "power"),
@@ -790,6 +830,7 @@ impl CoreLink {
             (B_INTERFACES, "interfaces"),
             (B_TYPEC, "typec"),
             (B_POWERBANK, "powerbank"),
+            (B_HEAT, "heat"),
         ];
         let mut out: Vec<u8> = b"{\"v2\":1".to_vec();
         let mut cat = |parts: &[&[u8]]| {
@@ -824,6 +865,11 @@ impl CoreLink {
                 if r.has { &r.data } else { b"null" },
                 b"}",
             ]);
+        }
+        // display: only fresh (a card the core no longer hands in is gone)
+        let dp = &self.blk[B_DISPLAY];
+        if dp.present && dp.fresh && dp.data.first() == Some(&b'{') {
+            cat(&[b",\"display\":", &dp.data]);
         }
         if self.blk[B_SMS].fresh || self.blk[B_SMS_LIST].fresh {
             let unread = if self.blk[B_SMS].fresh { json::get_int(&self.blk[B_SMS].data, "unread", 0) } else { 0 };

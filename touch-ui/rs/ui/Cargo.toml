@@ -1,6 +1,6 @@
 [package]
 name = "luyaz-ui"
-version = "1.18.0"
+version = "1.23.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

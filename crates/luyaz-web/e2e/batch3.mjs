@@ -206,10 +206,11 @@ const PAGES = {
       const field = (sec, i) => p.locator(`section[aria-labelledby=${sec}] input >> nth=${i}`);
       const done = (id) => until(p, (id) => /已改成|没有生效|设备已接受/.test(document.querySelector(`#${id}-op`)?.textContent ?? ""), id, 20000);
 
-      // not locked; the serving cell; scan off with the reason
+      // not locked; the serving cell; the neighbours strongest first
       ok(await txt(p, "#cl-nrlock") === "没锁" && await txt(p, "#cl-ltelock") === "没锁", `locks: ${await txt(p, "#cl-nrlock")} / ${await txt(p, "#cl-ltelock")}`);
       ok(/^(NR|LTE)$/.test(await txt(p, "#cl-now a.nd-row .nd-row__value")), `network: ${await txt(p, "#cl-now a.nd-row .nd-row__value")}`);
-      ok(await p.locator("section[aria-labelledby=cl-nbr-t] button").isDisabled() && /邻区扫描已停用/.test(await txt(p, "#cl-nbr-off")), "neighbour scan off, said why");
+      await until(p, () => document.querySelectorAll("#cl-nbr tbody tr").length === 3, null, 20000);
+      ok(await txt(p, "#cl-nbr tbody tr:first-child td:nth-child(2)") === "182" && await txt(p, "#cl-nbr tbody tr:first-child td:nth-child(5)") === "-99", `neighbours: ${await txt(p, "#cl-nbr")}`);
       ok(await lteBtn.isDisabled() && await resetBtn.isEnabled(), "Lock LTE off until filled; Unlock all on");
 
       // the touch screen locks a cell meanwhile: the rows follow, typing is kept

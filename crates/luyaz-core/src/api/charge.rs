@@ -107,9 +107,55 @@ async fn enforce(c: &Compat, source: &'static str, s: &Settings, why: &'static s
         limit: s.limit,
         hysteresis: s.hysteresis,
     };
-    if let Some(allow) = policy::decide_now(policy::Ask::Enforce(b)) {
-        set_charging(c, source, allow, why).await;
+    match policy::decide_now(policy::Ask::Enforce(b)) {
+        // the limit's resume waits while the heat pause wants charging stopped
+        Some(true) if crate::heat::wants_pause() => {}
+        Some(allow) => {
+            set_charging(c, source, allow, why).await;
+        }
+        None => {}
     }
+}
+
+/// What the heat pause does with the charger: `Some(allow)` to write, and whether the heat holds
+/// charging after it (design thermal-care §4.2). While it wants a pause: stop, or take over an
+/// existing stop. When it no longer does: give back what it held, unless the active limit wants
+/// charging stopped (`capacity` at or over it).
+pub(super) fn heat_step(
+    want: bool,
+    held: bool,
+    stopped: bool,
+    limit_stops: bool,
+) -> (Option<bool>, bool) {
+    match (want, held) {
+        (true, _) if stopped => (None, true),
+        (true, _) => (Some(false), true),
+        (false, false) => (None, false),
+        (false, true) if stopped && !limit_stops => (Some(true), false),
+        (false, true) => (None, false),
+    }
+}
+
+async fn heat(c: &Compat, s: &Settings, active: bool) {
+    let Some(stopped) = stopped_now(c).await else {
+        eprintln!("[compat] charge: stop flag unknown, heat pause waits");
+        return;
+    };
+    let capacity: u8 = sysfs(c, "capacity").parse().unwrap_or(0);
+    let limit_stops = active && capacity >= s.limit;
+    let (write, held) = heat_step(
+        crate::heat::wants_pause(),
+        crate::heat::held(),
+        stopped,
+        limit_stops,
+    );
+    let why = if held { "heat" } else { "heat_over" };
+    if let Some(allow) = write
+        && !set_charging(c, "auto", allow, why).await
+    {
+        return;
+    }
+    crate::heat::set_held(held);
 }
 
 /// One action of the policy loop (owned).
@@ -127,10 +173,12 @@ async fn execute(c: &Compat, job: policy::Job) {
         policy::Job::Limit if active => enforce(c, "auto", &s, "limit").await,
         policy::Job::Limit => {}
         policy::Job::Unplugged => {
+            crate::heat::set_held(false);
             if stopped_now(c).await == Some(true) {
                 set_charging(c, "auto", true, "unplugged").await;
             }
         }
+        policy::Job::Heat => heat(c, &s, active).await,
     }
 }
 
@@ -186,6 +234,10 @@ pub async fn put(State(c): State<Compat>, req: Request) -> Response {
         }
         policy::owner_wrote(!stopped, "manual");
         charge::set_override(stopped);
+        if !stopped {
+            // owner 10-29: a manual resume beats a warm/hot pause until unplugged
+            crate::heat::manual_resume();
+        }
     }
     if let Some(change) = r.settings {
         let new = change.apply(&charge::current().0);

@@ -186,8 +186,16 @@ impl Ui {
         const NAMESD: [&str; 3] = [n_("网络诊断"), n_("测速"), n_("摆放模式")];
         const IDS1: [Sub; 2] = [Sub::Esim, Sub::Apn];
         const NAMES1: [&str; 2] = [n_("SIM 与 eSIM"), "APN"];
-        const IDS2: [Sub; 3] = [Sub::Net, Sub::Lock, Sub::Cell];
-        const NAMES2: [&str; 3] = [n_("运营商选择"), n_("锁频"), n_("小区信息")];
+        const IDS2: &[Sub] = &[
+            Sub::Net,
+            Sub::Lock,
+            Sub::Cell,
+        ];
+        const NAMES2: &[&str] = &[
+            n_("运营商选择"),
+            n_("锁频"),
+            n_("小区信息"),
+        ];
         let th = t();
         let f = uf();
         let sc = kit::scroll(tile, 0, VIEW_H, 1000);
@@ -259,7 +267,7 @@ impl Ui {
         tail.set_pos(0, y);
         tail.set_width(W);
         self.cell.tail = tail;
-        let mut ty = self.nav_card(tail, 0, n_("网络"), &IDS2, &NAMES2);
+        let mut ty = self.nav_card(tail, 0, n_("网络"), IDS2, NAMES2);
         ty = self.nav_card(tail, ty, n_("消息"), &[Sub::Sms], &[n_("短信")]);
         tail.set_height(ty);
         rest.set_height(y + ty);

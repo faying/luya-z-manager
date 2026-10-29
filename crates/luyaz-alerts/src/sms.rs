@@ -37,6 +37,8 @@ const NEVER: &[&str] = &[
     "agent-change",
     "tailnet-poller",
     "lan-new-device",
+    // heat care (owner 10-29): warm and hot are inbox only; critical is regress-heat, texted
+    "heat-protect",
     // R18-P2-01 stock anomalies (owner 10-23): inbox and MCP only while false alarms are watched
     "wifi-post-stuck",
     "no-service-long",
@@ -307,6 +309,7 @@ fn regress_zh(kind: &str) -> Option<&'static str> {
         "regress-mem" => "数据服务内存比平时高很多，可能在泄漏。",
         "regress-mem-abs" => "数据服务内存超过上限，可能在泄漏。",
         "regress-egress" => "出口不通超过5分钟。",
+        "regress-heat" => "温度过高（电池≥55°C或芯片≥90°C），放到阴凉处。",
         "regress-power" => "待机耗电比平时高。",
         "regress-power-abs" => "待机耗电超过上限。",
         "regress-recorder" => "长期记录停了10分钟以上。",
@@ -322,6 +325,7 @@ fn regress_en(kind: &str) -> Option<&'static str> {
         "regress-mem" => "Data service memory well above normal.",
         "regress-mem-abs" => "Data service memory over limit.",
         "regress-egress" => "Route down 5+ min.",
+        "regress-heat" => "Too hot (battery 55+ °C or chip 90+ °C); move it somewhere cool.",
         "regress-power" => "Standby power above normal.",
         "regress-power-abs" => "Standby power over limit.",
         "regress-recorder" => "Recorder stalled 10+ min.",

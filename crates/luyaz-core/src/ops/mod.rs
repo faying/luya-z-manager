@@ -638,6 +638,10 @@ impl engine::Device for UbusDevice {
             return self.resolve_apn(spec, target, params).await;
         }
         if spec.item == DUAL_SIM {
+            // 换卡槽会把正在打的电话断掉（DSDS 换上网卡要重开卡槽），跟 ship 一样通话中不做
+            if crate::at::in_call() {
+                return Err("a call is on: switch SIMs after it ends".into());
+            }
             let sim = crate::state::sim_info().await?;
             let i1 = crate::state::uci_value("zwrt_zte_mdm.sim_info.simcard_0_iccid").await;
             let i2 = crate::state::uci_value("zwrt_zte_mdm.sim_info.simcard_1_iccid").await;

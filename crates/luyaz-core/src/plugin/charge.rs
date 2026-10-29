@@ -125,7 +125,23 @@ pub fn save(s: &Limit, file: &std::path::Path) {
 
 /// Every `/control` charge write that succeeded: the agent's own charge writes (source auto) go to the
 /// charge_policy comparison, a manual one (web/screen) sets the override mirror.
+/// A web or screen write that resumes charging (direct supply off).
+pub(crate) fn manual_resume_in(body: &Value) -> bool {
+    let by_hand = body
+        .get("source")
+        .and_then(Value::as_str)
+        .and_then(crate::ops::Source::parse)
+        .is_some_and(|s| matches!(s, crate::ops::Source::Web | crate::ops::Source::Screen));
+    let params = body.get("params").cloned().unwrap_or(Value::Null);
+    by_hand && crate::control::direct_supply_enabled(&params) == Ok(false)
+}
+
 pub fn observe_control(action: &str, body: &Value) {
+    if action == "power.direct_supply.set" && manual_resume_in(body) {
+        // owner 10-29: a manual resume beats a warm/hot heat pause until unplugged (the screen
+        // writes /control directly, the web goes through charge-control: both end up here or there)
+        crate::heat::manual_resume();
+    }
     if action != "power.direct_supply.set" || !super::enabled() || owned() {
         // owned: the override is what the route set, and the auto writes are u60d's own
         return;

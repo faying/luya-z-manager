@@ -557,6 +557,177 @@
       "title": "Dhcp",
       "type": "object"
     },
+    "display": {
+      "$defs": {
+        "DisplayCard": {
+          "properties": {
+            "answered": {
+              "type": "boolean",
+              "x-u60-level": "normal"
+            },
+            "code": {
+              "type": "string",
+              "x-u60-level": "secret"
+            },
+            "id": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "kind": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "left_s": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "code",
+            "left_s",
+            "answered"
+          ],
+          "type": "object"
+        },
+        "DisplaySaid": {
+          "description": "The short line after a card closes: `done` or `cancelled`.",
+          "properties": {
+            "id": {
+              "type": "string",
+              "x-u60-level": "normal"
+            },
+            "result": {
+              "type": "string",
+              "x-u60-level": "normal"
+            }
+          },
+          "required": [
+            "id",
+            "result"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "A plugin's card on the touch screen (plug::display, luyaz-phone design R1-4): null when\nthere is none. The pairing code is secret: it is for the person at the device only.",
+      "properties": {
+        "card": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplayCard"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-u60-level": "nested"
+        },
+        "said": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplaySaid"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-u60-level": "nested"
+        }
+      },
+      "title": "Display",
+      "type": "object"
+    },
+    "heat": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Heat care (`crate::heat`, design thermal-care): the level (`normal`/`warm`/`hot`/`critical`)\nand since when (device wall clock), the readings (°C), what it holds: charging paused by\nthe heat, the owner's resume winning until unplugged, the CHILL request (`\"\"`/`hot`/\n`critical`) and what CHILL is doing for it now (`chill_now`, same words: say only that).\n`stock_protect`: the battery driver's `thermal_protection_mbb`. `acting`: the core owns\ncharging (otherwise it only watches). `test_offset`: °C added for a device test.",
+      "properties": {
+        "acting": {
+          "type": "boolean",
+          "x-u60-level": "normal"
+        },
+        "battery_c": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "charge_paused": {
+          "type": "boolean",
+          "x-u60-level": "normal"
+        },
+        "chill": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "chill_now": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "chip_c": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "level": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "manual_resume": {
+          "type": "boolean",
+          "x-u60-level": "normal"
+        },
+        "plugged": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "since": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "stock_protect": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "test_offset": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "level",
+        "charge_paused",
+        "manual_resume",
+        "chill",
+        "chill_now",
+        "acting"
+      ],
+      "title": "Heat",
+      "type": "object"
+    },
     "interfaces": {
       "$defs": {
         "Addr": {

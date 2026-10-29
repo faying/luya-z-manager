@@ -88,7 +88,7 @@ macro_rules! copies {
 copies!(super::scenario::Scenario, super::netinfo::Netinfo, super::alerts::Alerts,
     super::esim::Esim, super::speedtest::Speedtest, super::tailscale::Tailscale,
     super::diagnose::Diagnose, super::battery::BatteryEst, super::versions::Versions,
-    super::landing::Landing, super::latency::DirectLat, super::today::Today,
+    super::landing::Landing, super::latency::DirectLat, super::today::Today, super::usage::Usage,
     super::screen_feed::ScreenFeed);
 
 pub struct Cached<T> {

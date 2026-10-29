@@ -21,6 +21,7 @@ pub mod screen_feed;
 pub mod speedtest;
 pub mod tailscale;
 pub mod today;
+pub mod usage;
 #[cfg(test)]
 pub mod testsrv;
 pub mod util;

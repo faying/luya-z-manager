@@ -93,6 +93,8 @@ struct State {
     slot: Slot<Component>,
     /// plug state and stop flag of the last reading fed
     switches: (Option<bool>, Option<bool>),
+    /// charge level and plug state of the last battery read, for `power.now` (plugins)
+    last: (Option<i64>, Option<bool>),
 }
 
 static STATE: OnceLock<Mutex<State>> = OnceLock::new();
@@ -107,6 +109,7 @@ fn load(dir: &std::path::Path) -> State {
         tracker: Tracker::new(),
         slot: Slot::load(dir, NAME, ABI, Component::new),
         switches: (None, None),
+        last: (None, None),
     }
 }
 
@@ -129,6 +132,7 @@ fn run(hub: &Hub, only_on_switch: bool) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let mut g = state().lock().unwrap_or_else(|e| e.into_inner());
+    g.last = (r.soc, r.charger_connected);
     let switches = (r.charger_connected, r.charging_stopped);
     if only_on_switch && g.switches == switches {
         return;
@@ -187,6 +191,23 @@ pub fn report() -> Value {
     let g = state().lock().unwrap_or_else(|e| e.into_inner());
     let now = g.t0.elapsed().as_secs_f64();
     json!(g.tracker.report(now))
+}
+
+/// `power.now` (plugin contract): `{"pct":82,"plugged":true}` from the last battery read, no
+/// sysfs read of its own; `null` before the first one. `plugged` is left out when the charger
+/// block is stale (unknown, not false).
+pub fn now() -> Value {
+    let (soc, plugged) = state().lock().unwrap_or_else(|e| e.into_inner()).last;
+    now_of(soc, plugged)
+}
+
+fn now_of(soc: Option<i64>, plugged: Option<bool>) -> Value {
+    let Some(pct) = soc else { return Value::Null };
+    let mut v = json!({"pct": pct.clamp(0, 100)});
+    if let Some(p) = plugged {
+        v["plugged"] = json!(p);
+    }
+    v
 }
 
 #[cfg(test)]

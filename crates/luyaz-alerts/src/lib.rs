@@ -665,6 +665,8 @@ pub fn kind_label(kind: &str) -> String {
         ("regress-mem-abs", "数据服务内存超过上限"),
         ("regress-cellular", "蜂窝数据断了 5 分钟以上"),
         ("regress-egress", "出口（CHILL / Tailscale）不通 5 分钟以上"),
+        ("regress-heat", "温度过高（电池 ≥55 °C 或芯片 ≥90 °C）"),
+        ("heat-protect", "温度偏高，暂停充电 / CHILL 降档"),
         ("regress-power", "待机耗电比平时高"),
         ("regress-power-abs", "待机耗电超过上限"),
         ("regress-recorder", "长期记录停了 10 分钟以上"),
@@ -767,6 +769,11 @@ pub fn kind_label_en(kind: &str) -> String {
         (
             "regress-egress",
             "Route (CHILL / Tailscale) down for 5+ min",
+        ),
+        ("regress-heat", "Too hot (battery ≥55 °C or chip ≥90 °C)"),
+        (
+            "heat-protect",
+            "Running warm: charging paused / CHILL to eco",
         ),
         ("regress-power", "Standby power draw above normal"),
         ("regress-power-abs", "Standby power draw over the limit"),

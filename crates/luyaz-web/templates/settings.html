@@ -22,7 +22,10 @@
 <div class="nd-group"><form method="post" action="/logout" class="nd-row flex-wrap gap-2"><span class="nd-row__text"><span class="nd-row__label">{{ shell.t("Log out of this browser", "退出这个浏览器的登录") }}</span><span class="nd-row__sub block">{{ shell.t("Ends this session; you will need the password to come back.", "结束这次登录，再进来要输入密码。") }}</span></span>
 <button type="submit" class="nd-btn nd-btn--secondary">{{ shell.icon("SignOut", 20)|safe }}{{ shell.t("Log out", "退出登录") }}</button></form></div>
 </section>
-<section aria-labelledby="st-pl-t"><h2 id="st-pl-t" class="nd-group-title">{{ shell.t("Tailscale polling allow list", "Tailscale 轮询白名单") }}</h2>
+{% if let Some(title) = plugin %}<section aria-labelledby="st-pg-t"><h2 id="st-pg-t" class="nd-group-title">{{ shell.t("Plugins", "插件") }}</h2>
+<div class="nd-group"><a class="nd-row" href="/settings/plugin"><span class="nd-row__text"><span class="nd-row__label">{% match title %}{% when Some(t) %}{{ t }}{% when None %}{{ shell.t("Plugin settings", "插件设置") }}{% endmatch %}</span><span class="nd-row__sub block">{{ shell.t("Settings the plugin describes; changed through the core", "插件自己描述的设置，经核心服务修改") }}</span></span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a></div>
+</section>
+{% endif %}<section aria-labelledby="st-pl-t"><h2 id="st-pl-t" class="nd-group-title">{{ shell.t("Tailscale polling allow list", "Tailscale 轮询白名单") }}</h2>
 <p class="nd-aux mb-2">{{ shell.t("Peers allowed to keep polling the admin ports over Tailscale without a home-page warning. Matched by address and port only: a gateway's address allows everything behind it.", "这些对端经 Tailscale 持续访问管理接口时，首页不再提醒。只按地址和端口匹配：网关的地址等于放行它后面的整个网段。") }}</p>
 {% if let Some((tone, text)) = note %}<p class="t-note t-note--{{ tone }} mb-2" role="status">{{ text }}</p>{% endif %}
 <div class="nd-group">{% match allow %}{% when None %}<p class="nd-body p-4 text-nd-t2">{{ shell.t("Can't read the allow list from the core", "读不到核心的白名单") }}</p>{% when Some(rows) %}{% if rows.is_empty() %}<p class="nd-body p-4 text-nd-t2">{{ shell.t("Nothing allowed yet. Use “It’s mine” on the home-page warning.", "还没有放行的设备。首页提醒上点「是我自己的」会加到这里。") }}</p>{% endif %}{% for a in rows %}

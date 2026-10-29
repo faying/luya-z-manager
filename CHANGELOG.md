@@ -21,6 +21,10 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+- core: heat care (`docs/designs/thermal-care.md`). The battery and the hottest CPU zone (main-chip side only, never the modem's sensors) are read on the charge policy's tick (every 30 s, no timer of its own). Warm (battery ≥44 °C while plugged in) pauses charging; hot (battery ≥50 °C or chip ≥80 °C) also asks CHILL for eco; critical (battery ≥55 °C or chip ≥90 °C) asks for direct and opens the `regress-heat` incident (texted). A level is entered after two readings and left 5 minutes under its exit line (40/46·73/51·83 °C). The pause goes through the charge executor, the one writer of the charger switch; a manual resume wins until unplugged except at critical; at 30 % or less a warm/hot pause gives way. Warm and hot are inbox notices (`heat-protect`, never texted). New `heat` block; doctor Temperature row.
+- chill: reads the core's request in `/tmp/luyaz/heat` (`hot` = eco, `critical` = direct, as its own `CHILL_TEMP_WARM`/`CHILL_TEMP_HOT`); back after the request is gone and `COOL_HOLD`.
+- lweb: battery card has a Heat care row (level, charging paused, CHILL eco/direct, since when, stock protection).
+- touch: banner says when heat care paused charging and moved CHILL (hot / too hot); System's battery line says 「因为热暂停充电」. Without the core's `heat` block the old battery ≥50 °C banner stays.
 - kit: the model check no longer needs an underscore before `MU` (`BD_CNMU5250V1.0.0B31`, `BD_XCBZHKMU5250V1.0.0B03`); the region comes from the part before `MU`. Firmware outside the matrix is still refused.
 - chill: `rules_drift` no longer fires every minute when a scenario turns Wi-Fi off. The stock firmware adds `iif wlanN failed_policy` rules per interface and drops them with the interface; when it comes back their priority follows the new ifindex. A rule bound to an interface (`iif`/`oif`) now only counts as gone while that interface is up and no rule with the same text is left; any other rule that disappears is reported as before.
 
@@ -35,6 +39,149 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 - kit: `OUI_TSV=` (a table from `scripts/lanid/make-oui.sh`) is installed to `/data/luyaz/lanid/oui.tsv` for vendor names; the public build has none.
 
 - kit: carries the lanid-parse component (LAN client identification) and installs it to `/data/luyaz/core/plugins/` as the only component; without it the core runs with identification off. `LANID_CWASM=` uses a ready-made one.
+
+## core 1.74.0 — 2026-10-29
+
+- Dual SIM (global edition): a fixed voice SIM, slot 1 by default (`LUYAZ_VOICE_SLOT=2` for slot 2). While both slots are on, the SMS journal files messages under the voice SIM, not the data SIM. The stock SMS store has no slot field, so on dual SIM every message counts as the voice SIM's.
+- Dual SIM: `sim.dual` is refused while a call is on. `sms.send_raw` with `sim1`/`sim2` no longer turns the other slot off while dual SIM is on, it refuses instead.
+
+
+## core 1.73.0 — 2026-10-29
+
+- core: plugin op `power.now` gives the battery level and whether it is plugged in, from the last battery read (no extra read).
+
+## core 1.72.0 — 2026-10-29
+
+- core: `/v2/versions` lists components from one table that the screen and the web both follow, so a new component shows up in both.
+
+## lweb 1.40.1 — 2026-10-29
+
+- lweb: a component the versions list does not know gets its own row id instead of taking the scripts row's.
+
+## touch 1.23.0 — 2026-10-29
+
+- touch: the 组件版本 card has one row per component the core lists (the card grows with it).
+
+## core 1.71.1 — 2026-10-29
+
+- Dual SIM (global edition): after a single-slot switch and a reboot the stock MDM can report both slots as enabled while the slot left off is not powered (`sim undetected`). Switching the data slot to it timed out and rolled back, and the screen showed a false "dual". A slot that reports `sim undetected` now reads as off, and switching to it re-issues the slot flags.
+
+## core 1.71.0 — 2026-10-29
+
+- plugin op `sim.identity` gains `number`: the SIM's own number (MSISDN) from the last collected snapshot, only when the card stores a valid one; never reads the modem.
+
+
+## core 1.70.1 — 2026-10-29
+
+- `net.now` reads the cached `net` field (the signal block is not kept in the snapshot fields), so plugins get the network instead of nothing.
+
+## core 1.70.0 — 2026-10-29
+
+- plugin op `net.now`: the current radio type, band and signal bars (`{"type":"SA","band":"n78","bars":4}`, or `null` before the first collection / without service), from the last collected snapshot; it never reads the modem.
+
+
+## lweb 1.40.0 — 2026-10-28
+
+- a generic plugin settings page (`/settings/plugin`, linked from Settings when an installed plugin declares settings). It shows what the plugin describes (groups, switches, values, status lines, sub pages), reads through `/control plugin.settings.get` and writes through `plugin.settings.set` with the revision it saw. The plugin's words only ever go into text, never into an attribute. A revision conflict re-reads and shows the current values; a result the plugin did not confirm in time is read back before the page says anything; while the plugin is not running the page is read only with the time the values were last confirmed. The mock core has a demo plugin for the browser check `e2e/plugin-settings.mjs`.
+
+## core 1.68.2 — 2026-10-28
+
+- the admin web's 写短信 page sends again. `sms.send_raw` sealed the number and text with the vendor session key, which the B31 firmware refuses within a second (nothing in the sent box); it now passes them plain like alert SMS and the plugin `sms.send` (1.57.1), and a refusal in the firmware's reply is reported as failed instead of waiting out the status poll.
+
+## core 1.68.1 — 2026-10-28
+
+- a damaged SMS forwarding queue file no longer forwards old SMS again. It used to read as an empty queue (the fingerprints of SMS already forwarded lost, so an SMS the firmware renumbered went out a second time) with no alert. Now the file is moved to `.corrupt-<secs>` and the previous copy (`.prev`, kept on every save) is read instead; with neither, the queue is rebuilt and the SMS already on the device are fingerprinted, not sent. Either way one `sms-forward-queue` alert is raised.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## core 1.59.0 — 2026-10-27
+
+- the plugin contract is v1; plugins that say v0 in their hello still connect, and v0's operations are unchanged.
+- the AT port stays open once a command has used it, with one reader on it that sleeps in `poll(2)` (no wake-ups while the modem is quiet). Unsolicited lines (RING, +CLIP, +CMTI, IMS registration, call ends) are no longer drained away before the next command: they are broadcast inside core, even when they arrive in the middle of another command's answer. A command that ends without its final code leaves the port dirty; the next one first sends a marked `AT+CMEE?` and drops everything up to its answer, so a late OK is never taken as the next command's. A port that hangs up fails the command on it at once and is opened again by the next one. The lock, the 25 s limit, the stuck-port message, the CFUN refusal, the terminal's refusal of ATD/ATA/+CHUP and the port choice are unchanged.
+- while a voice call rings or runs, other AT commands (terminal, USSD, STK, QoS reads, network selection) are refused with "in a voice call, try again later"; the call's own commands go ahead of waiting ones.
+
+## core 1.58.0 — 2026-10-27
+
+- plugin socket: `sms.remove {items}` deletes SMS from both firmware stores (an iPhone's delete is global). A received one is found by sender, date and text, a sent one by the firmware's own copy (tag 2: recipient and text, the nearest time within 2 minutes); the stock delete goes first and `sms.db_delete` takes the rows it leaves, as in the admin web. At most 200 per call; answers `{removed, left}`.
+- plugin socket: `sms.reports {after}` gives the network's delivery reports (`{id, number, ok, at}`) read from the firmware's `sms_report` table, read-only: the stock `zwrt_wms_get_status_rpt_data` clears a report once it is read. Reports only come when the firmware's `status_report_on` is 1 (off by default).
+
+## core 1.57.2 — 2026-10-27
+
+- SMS journal: only received SMS (tag 0/1) are taken. The firmware keeps a copy of every SMS this device sends (tag 2) in the same list, and the journal took those as received ones, so a plugin saw its own sent SMS come back as new. Send-failed (3) and draft (4) rows are skipped too.
+
+## core 1.57.1 — 2026-10-27
+
+- plugin socket: `sms.send` uses the plain `zte_libwms_send_sms` arguments, the path alert SMS already take; the firmware did not accept the encrypted ones `sms.send_raw` sends. A refusal is logged with the firmware's result code (no number or text).
+
+## core 1.57.0 — 2026-10-27
+
+- plugin socket: `sms.send {to, text}` sends an SMS from the current SIM (at most 1024 UTF-16 units). The answer is `{result:"submitted"}` when the firmware says it went out, the error `send_failed` when it says it did not, and `{result:"unknown"}` when polling its status timed out (it may have gone out; the plugin should not resend on its own). Error texts never carry the number or the text.
+
+## touch 1.21.0 — 2026-10-27
+
+- no change on the screen in the public build (the pace registration is unchanged).
+
+## core 1.56.0 — 2026-10-27
+
+- plugin socket: `display.show {id, kind, code, seconds}` / `display.dismiss {id, result}` (a card a plugin asks the touch screen to show; the answer comes back as a `display` event) and `clock.utc` (the clock's offset from real UTC, or `clock_unset` before the clock is set). A card is refused unless the screen registered that it shows them; the public touch UI does not, so `display.show` answers `screen_unavailable` there.
+
+## core 1.55.1 — 2026-10-27
+
+- the SMS journal's own full scan asks for pages of 50 (what `sms.list_after` takes); it asked for 200 and every scan was refused, so the journal only filled from SMS forwarding's reads.
+
+## core 1.55.0 — 2026-10-27
+
+- every new SMS is written to a capped journal (`/data/luyaz/core/sms-journal.json`, 2000 entries / 2 MB, previous copy kept as `.prev`) before SMS forwarding sees it; SMS are known by sender, date and text, so a card re-read that renumbers them neither repeats nor misses one. Each entry names its card by a salted key (`sim-salt`), never the ICCID. A plugin socket (`/var/run/luyaz/core.sock`) opens only when the plugin user `phone` exists: peer uid checked, contract v0, 64 KB frames, 4 requests in flight; `plugin.settings.get`/`set` relays the plugin's settings for the admin web (not reachable by MCP).
+
+## touch 1.20.4 — 2026-10-27
+
+- 流量 page in the 系统 chart language: four half cards (今天 · 昨天 / 前天 · 本月, each with its note), 近 14 天 as blue columns with the average line and the picked day underlined, its readout under a hairline; per-card rows read 「size · share」.
+
+## touch 1.20.3 — 2026-10-27
+
+- 流量 page: a tap on a column picks that column (the next column's widened target used to cover half of it).
+
+## touch 1.20.2 — 2026-10-27
+
+- 流量 page: no scale label over the readout line; per-card rows read 「operator · last 4」 without truncation; a share under 1% says <1%.
+
+## touch 1.20.1 — 2026-10-27
+
+- the 流量 page redone for reading at a glance: today in big digits with the 7-day daily average, 昨天 · 前天 · 本月 as cells; the last 14 days as columns stacked by card with the average as a line (tap a column: its date, total, change against the average and per-card split); the last 30 days per card with share. Days without a record have no column.
+
+## touch 1.20.0 — 2026-10-27
+
+- tapping Home's 今日 cell opens a new 流量 page: today, yesterday, the day before and this month. Yesterday and the day before come from the core's per-card ledger (`GET /v2/usage/days`), matched by device date; a day with no record says 「没有记录」 rather than 0, and a day used on more than one card lists each card (operator · last 4). Today and this month are the firmware counters Home shows. Read only while the page is up. Requires: core ≥ 1.17.0 (older cores: the two days say 没有记录).
+
+## core 1.54.1 — 2026-10-27
+
+- `/api/netinfo/neighbors/scan` reads netinfo also when the list is empty, so in SA its `reason` is the SA one (as `/api/netinfo`).
+
+## touch 1.19.0 — 2026-10-27
+
+- 邻小区 (小区信息) is a ranking: `rank  band  PCI  EARFCN` on the left, `RSRP / RSRQ` on the right, strongest first, the count in the header; when there are none, the core's reason. The 「扫描」 button and its confirm are gone (nothing is scanned). Reads `band` (older cores: the RAT).
+
+## lweb 1.38.0 — 2026-10-27
+
+- 小区锁定's 邻区 section is a read-only table (#, PCI, band, EARFCN, RSRP, RSRQ) from `/api/netinfo?lite=1`, polled every 15 s, strongest first; the core's reason when empty. The disabled 「扫描邻区」 button is gone.
+
+## core 1.54.0 — 2026-10-27
+
+- `/api/netinfo` `neighbors` carries the LTE neighbours the modem reports (uci `zte_nwinfo.manual_scan.lteg_nbr_content`, read with each netinfo pass; no scan, no write): `state` `ok` with `cells` `[{rat, band, pci, arfcn, rsrp, rsrq, sinr: null}]` strongest RSRP first (then RSRQ; at most 16), or `not_reported` with why in `error`/`error_en` (in SA: 「5G 独立组网（SA）下基带不报邻区」; otherwise 「基带现在没报邻区」). `unsupported` is gone. A list whose first entry is not the current serving cell (left from an earlier cell) and any list in SA count as not reported. `/api/netinfo/neighbors/scan` uses the same check and order and adds `reason`.
 
 ## touch 1.18.0 — 2026-10-27
 

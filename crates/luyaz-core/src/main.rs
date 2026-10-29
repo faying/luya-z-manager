@@ -34,6 +34,8 @@ mod o2;
 mod verified;
 mod paths;
 mod peer_pid;
+// 进程插件的连线（luyaz-phone 设计 R1、R3、R26–R33）
+mod plug;
 mod poller;
 mod procfs;
 mod qmi_nas;
@@ -44,8 +46,12 @@ mod scorecard;
 mod sens;
 mod sim_follow;
 mod sim_alerts;
+// 温控（docs/designs/thermal-care.md）
+mod heat;
 mod sim_identity;
 mod sim_say;
+// 短信持久日志（luyaz-phone 设计 O-2）
+mod sms_journal;
 mod stock_anomaly;
 
 // Phase 3: HTTP and the write path moved from data-service (serve.rs)

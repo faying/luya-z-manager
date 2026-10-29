@@ -53,6 +53,7 @@
 
 触屏底部那一行由它渲染成：`最近：03:12 过热暂停 · 03:29 已恢复`。
 这份历史同时是温控阈值标定的依据——跑几天看实际触发次数，再回填 `CHILL_TEMP_HOT_*`，所以格式不要随意改。
+10-29 起 core 的温控（`docs/designs/thermal-care.md`）也经 `/tmp/luyaz/heat` 请 chill.sh 降到 eco（`hot`）或直连（`critical`）；代理核心仍只归 chill.sh 管，这类降档日志写 `warm core=hot …`。
 
 ---
 

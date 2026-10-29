@@ -265,6 +265,7 @@ pub fn name(kind: &str, sub: Option<&str>) -> (String, String) {
         "regress-reboot" => ("意外重启", "Unexpected reboot"),
         "regress-cellular" => ("蜂窝断线", "Cellular down"),
         "regress-egress" => ("出口不通", "Route down"),
+        "regress-heat" => ("温度过高", "Too hot"),
         "regress-power" | "regress-power-abs" => ("耗电变高", "Higher power draw"),
         "regress-core-down" => ("数据服务停了", "Data service down"),
         "regress-recorder" => ("记录停了", "Recorder stalled"),

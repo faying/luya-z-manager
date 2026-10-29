@@ -55,6 +55,8 @@ pub struct Activity {
     pub alerts: bool,
     /// 网络诊断
     pub diag: bool,
+    /// 流量 (the usage ledger)
+    pub usage: bool,
 }
 
 /// What each poll said this refresh.
@@ -77,6 +79,8 @@ pub struct Polled {
     pub direct_lat: bool,
     /// today's timeline changed
     pub today: bool,
+    /// the usage ledger changed
+    pub usage: bool,
     pub alerts: bool,
     pub diagnose: bool,
 }
@@ -87,7 +91,6 @@ pub enum NiAct {
     Scan,
     Auto,
     Register(usize),
-    NbrScan,
 }
 
 /// esim_select's answers.

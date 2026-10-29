@@ -62,7 +62,7 @@ On `/data`, mode 700: a reboot loop must neither wipe alerts nor reset the SMS q
   - sentinel: `agent-silent`, `wifi-takeover`, `wifi-restore-failed`, `dropbear-down`, `dropbear-restarted`, `ui-crash`, `ui-gave-up`
   - core svcwatch: `core-crash` (the core itself; `core-crash` before rename F4, old rows still read), `web-crash`, `sentinel-crash`
   - core sentinel watch: `sentinel-silent`, `screen-empty` (only if the screen-guard switch is on)
-  - core engines: `home-exit-down`, `home-exit-check-failed`, `sms-forward-stuck`
+  - core engines: `home-exit-down`, `home-exit-check-failed`, `sms-forward-stuck`, `sms-forward-queue`
   - touch UI: `ui-theme-paused`
 
 ### SMS

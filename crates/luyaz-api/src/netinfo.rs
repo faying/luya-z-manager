@@ -976,7 +976,8 @@ pub fn error_en_raw(zh: &str) -> String {
         "上一次 APN 切换还没做完" => Some("The last APN switch hasn't finished"),
         "没搜到网络" => Some("No networks found"),
         "没有可用的查询地址" => Some("No lookup address available"),
-        NBR_UNSUPPORTED => Some(NBR_UNSUPPORTED_EN),
+        NBR_SA => Some(NBR_SA_EN),
+        NBR_NONE => Some(NBR_NONE_EN),
         _ => None,
     };
     if let Some(f) = fixed {
@@ -1391,8 +1392,11 @@ pub fn dialled_on_card<'a>(auto_mode: bool, dialled: &'a Value, auto: &'a Value,
     arr(auto).iter().find(|p| truthy(&p["isEnable"])).unwrap_or(dialled)
 }
 
-pub const NBR_UNSUPPORTED: &str = "原厂扫描会断网且拿不到数据，已停用";
-pub const NBR_UNSUPPORTED_EN: &str = "Off: the stock scan drops data, finds nothing";
+/// Why the neighbour list is empty: the modem only reports LTE neighbours, and none in SA.
+pub const NBR_SA: &str = "5G 独立组网（SA）下基带不报邻区";
+pub const NBR_SA_EN: &str = "In 5G SA the modem reports no neighbours";
+pub const NBR_NONE: &str = "基带现在没报邻区";
+pub const NBR_NONE_EN: &str = "The modem reports no neighbours right now";
 
 /// IoT / M2M APNs: they bring up a bearer but not the normal internet, which
 /// is exactly why the firmware keeps picking them. Shown, tagged, not hidden.
@@ -1779,13 +1783,15 @@ pub fn clients_list(
     (list, next)
 }
 
-/// The vendor neighbour scan drops data and finds nothing, so it is off: the block always says so.
-pub fn neighbors_json(scanned_at: i64, cells: &[Value]) -> Value {
+/// The LTE neighbours the modem reports, read passively (no scan: the vendor one drops data):
+/// `state` `ok` with the cells strongest first, or `not_reported` with why (`error`, empty if
+/// not read yet).
+pub fn neighbors_json(state: &str, why: &str, read_at: i64, cells: &[Value]) -> Value {
     json!({
-        "state": "unsupported",
-        "scanned_at": scanned_at,
-        "error": NBR_UNSUPPORTED,
-        "error_en": NBR_UNSUPPORTED_EN,
+        "state": state,
+        "scanned_at": read_at,
+        "error": why,
+        "error_en": error_en(why),
         "cells": cells,
     })
 }

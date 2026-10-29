@@ -396,6 +396,15 @@ fn delivered_of(state: &ForwardState) -> HashSet<(u64, u32)> {
     state.held.iter().flat_map(|h| h.delivered_rules.iter().map(move |r| (h.sms_id, *r))).collect()
 }
 
+/// The queue file opened; a damaged one is recovered and reported once (`sms-forward-queue`).
+fn open_queue(host: &dyn Host, path: &Path) -> Queue {
+    let (q, note) = Queue::open(path);
+    if let Some(note) = note {
+        host.alert("sms-forward-queue", &note);
+    }
+    q
+}
+
 /// Seed attempts at start (the vendor services may not be registered yet), 2 s apart.
 const SEED_TRIES: u32 = 5;
 
@@ -407,8 +416,9 @@ impl SmsForwarder {
         let state_path: PathBuf = state_path.into();
         let saved: ForwardState = read_state(&state_path);
         let queue_path = state_path.with_file_name("sms-forward-queue.json");
+        let queue = open_queue(&*host, &queue_path);
         SmsForwarder {
-            queue: Mutex::new(Queue::load(&queue_path).unwrap_or_default()),
+            queue: Mutex::new(queue),
             queue_path,
             delivered: Mutex::new(delivered_of(&saved)),
             state: Mutex::new(saved),
@@ -426,7 +436,7 @@ impl SmsForwarder {
     /// The queue saved at `path` instead (the core: [`QUEUE_PATH`] under its data dir).
     pub fn queue_at(mut self, path: impl Into<PathBuf>) -> Self {
         self.queue_path = path.into();
-        self.queue = Mutex::new(Queue::load(&self.queue_path).unwrap_or_default());
+        self.queue = Mutex::new(open_queue(&*self.host, &self.queue_path));
         self
     }
 

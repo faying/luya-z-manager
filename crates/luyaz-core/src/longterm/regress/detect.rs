@@ -48,6 +48,8 @@ pub struct Check {
     pub ts: Option<bool>,
     /// What the home screens' finding and the no-service ledger say now (cellular, exits).
     pub observed: Option<Said>,
+    /// Heat care's level is critical (`crate::heat`): None = no temperature read at all.
+    pub heat: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -89,6 +91,7 @@ pub struct State {
     mem_abs_ok: Hold,
     cell_bad: Hold,
     cell_good: u32,
+    cooled: u32,
     paths: BTreeMap<&'static str, Path>,
     /// Per power cell: the last qualifying hours' mW (newest last, two kept).
     power: BTreeMap<String, Vec<f64>>,
@@ -106,6 +109,7 @@ impl Regress {
         self.mem(k);
         self.cellular(k);
         self.egress(k);
+        self.heat(k);
         let cell_known = k.cell.is_some();
         let egress_known = k.chill.is_some() || k.ts.is_some();
         self.blind("cellular", cell_known, &k.at);
@@ -295,6 +299,35 @@ impl Regress {
             }
         }
     }
+
+    /// Too hot (design thermal-care §4.2). No hold: heat care entered critical only after two
+    /// readings and holds it 5 minutes under its exit line. Closes after 3 checks out of critical.
+    fn heat(&mut self, k: &Check) {
+        let open = self.find_open("regress-heat", None);
+        match (open, k.heat) {
+            (None, Some(true)) => {
+                self.det.cooled = 0;
+                self.open(
+                    "regress-heat",
+                    None,
+                    &k.at,
+                    "heat care critical".into(),
+                    None,
+                    None,
+                );
+            }
+            (Some(i), Some(false)) => {
+                self.det.cooled += 1;
+                if self.det.cooled >= GOOD_CHECKS {
+                    self.det.cooled = 0;
+                    self.close(i, &k.at, "recovered", "heat care out of critical");
+                }
+            }
+            (Some(_), Some(true)) => self.det.cooled = 0,
+            _ => {}
+        }
+    }
+
 
     /// One class judged or not at `at` (design §5, CEO R3-6).
     pub fn blind(&mut self, class: &str, known: bool, at: &At) {

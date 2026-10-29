@@ -221,6 +221,8 @@ impl App {
         }
         // the AI gate: AI only out through 🤖 AI's region; off unless CHILL_AI_STRICT=1 in chill.env
         crate::engines::chill_ai_gate::spawn(app.inner.exec.hub().clone());
+        // the plugin's card: published as soon as it changes, not at the next round
+        crate::plug::display::spawn(app.inner.exec.hub().clone());
         // component versions: the daily look at the public repo's versions.json; LUYAZ_VERSION_CHECK=0
         if crate::versions::enabled() {
             crate::versions::spawn(app.clone());
@@ -412,6 +414,18 @@ impl App {
                 .hub()
                 .record("regress", Ok(b), tokio::time::Instant::now());
         }
+        // heat care (design thermal-care §4.3): every round, published only when it changes
+        self.inner.exec.hub().record(
+            "heat",
+            Ok(crate::heat::report(crate::plugin::charge::owned())),
+            tokio::time::Instant::now(),
+        );
+        // the plugin's card on the touch screen: handed in every round too (deadline, link lost)
+        self.inner.exec.hub().record(
+            "display",
+            Ok(crate::plug::display::block_round()),
+            tokio::time::Instant::now(),
+        );
         let mut held = self.inner.snapshot.write().await;
         // Only a change in content is announced; a new timestamp alone just moves `ts` forward.
         let content_moved = held.core != next.core || held.fields != next.fields;

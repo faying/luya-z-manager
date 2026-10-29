@@ -216,6 +216,7 @@ impl Source for Replay {
             landing: false,
             direct_lat: false,
             today: false,
+            usage: false,
             alerts: true,
             diagnose: a.diag,
         }
@@ -414,6 +415,7 @@ impl Source for Replay {
         None
     }
 }
+
 
 struct Shot {
     name: String,
@@ -687,6 +689,8 @@ pub fn hitcheck(args: &[String]) -> i32 {
     }
     i32::from(bad > 0)
 }
+
+
 
 /// `--hitcheck --incshots=DIR [--dark]`: the alerts subpage's 事故 section in each state (design
 /// review 4A/11A/14A), one PNG each: inc-<state>-<light|dark>.png.

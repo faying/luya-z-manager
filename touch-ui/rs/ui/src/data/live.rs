@@ -7,6 +7,7 @@ use super::background::{Cached, Task};
 use super::alerts::Alerts;
 use super::battery::BatteryEst;
 use super::landing::Landing;
+use super::usage::Usage;
 use super::latency::DirectLat;
 use super::today::Today;
 use super::versions::Versions;
@@ -49,6 +50,7 @@ pub struct Live {
     landing: Cached<Landing>,
     direct_lat: Cached<DirectLat>,
     today: Cached<Today>,
+    usage: Cached<Usage>,
     chill: Cached<Chill>,
     aux: Option<Task<(i32, i32, i32)>>,
     pub bl: Backlight,
@@ -74,6 +76,7 @@ impl Live {
             landing: Cached::new(Landing::default()),
             direct_lat: Cached::new(DirectLat::default()),
             today: Cached::new(Today::default()),
+            usage: Cached::new(Usage::default()),
             chill: Cached::new(Chill::default()),
             aux: None,
             bl: Backlight::init(),
@@ -193,6 +196,7 @@ impl Live {
             landing: self.landing.get().cloned(),
             direct_lat: self.direct_lat.get().cloned(),
             today: self.today.get().cloned(),
+            usage_days: self.usage.get().to_vec(),
 
             bl_panel_lit: self.bl.panel_lit() as i32,
             bl_is_on: self.bl.is_on() as i32,
@@ -295,6 +299,10 @@ impl Source for Live {
         p.direct_lat = self.direct_lat.poll(move |s| s.poll(&mut ag, active) as u32) != 0;
         let mut ag = self.agent.clone();
         p.today = self.today.poll(move |s| s.poll(&mut ag, active) as u32) != 0;
+        // 流量 (tapped from Home's 今日): only while the page is up
+        let mut ag = self.agent.clone();
+        let active = a.usage;
+        p.usage = self.usage.poll(move |s| s.poll(&mut ag, active) as u32) != 0;
         let mut ag = self.agent.clone();
         let active = a.alerts;
         p.alerts = self.alerts.poll(move |s| s.poll(&mut ag, active) as u32) != 0;
@@ -431,7 +439,6 @@ impl Source for Live {
             NiAct::Scan => self.netinfo.scan(ag),
             NiAct::Auto => self.netinfo.auto(ag),
             NiAct::Register(i) => self.netinfo.register(ag, i),
-            NiAct::NbrScan => self.netinfo.nbr_scan(ag),
         }
     }
     fn netinfo_pin(&mut self, id: &str) {

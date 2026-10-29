@@ -506,3 +506,31 @@ fn regress_block_absent_never_fresh_and_stale() {
     let r = d.fresh_snap.regress.clone().unwrap();
     assert!(r.fresh == 0 && r.has == 1 && r.open.len() == 1 && r.at == at);
 }
+
+/// The display block (core plug::display): a card, the line after it, nothing.
+#[test]
+fn display_card_and_the_line_after() {
+    let d = super::display(br#"{"card":{"id":"p1","kind":"pair","code":"482913","left_s":28,"answered":false},"said":null}"#);
+    assert!(d.id == "p1" && d.code == "482913" && d.left_s == 28 && d.answered == 0 && d.said.is_empty());
+    let d = super::display(br#"{"card":{"id":"p1","kind":"pair","code":"482913","left_s":3,"answered":true},"said":null}"#);
+    assert_eq!(d.answered, 1);
+    let d = super::display(br#"{"card":null,"said":{"id":"p1","result":"done"}}"#);
+    assert!(d.id.is_empty() && d.said == "done" && d.said_id == "p1");
+    assert_eq!(super::display(br#"{"card":null,"said":null}"#), ui_model::display_t::default());
+}
+
+/// Heat care (core `heat` block, thermal-care §4.3): the level and the pause; no block = -1 (an
+/// older core: the screen falls back to the battery temperature alone).
+#[test]
+fn heat_block_parses_level_and_pause() {
+    let d = decode_snapshot(br#"{"heat":{"level":"hot","charge_paused":true,"chill":"hot","chill_now":"hot"}}"#).unwrap();
+    assert_eq!((d.heat_level, d.heat_paused, d.heat_chill), (2, 1, 1));
+    let d = decode_snapshot(br#"{"heat":{"level":"critical","charge_paused":true,"chill":"critical","chill_now":""}}"#).unwrap();
+    assert_eq!(d.heat_chill, 0, "asked for, not done");
+    let d = decode_snapshot(br#"{"heat":{"level":"critical","charge_paused":false}}"#).unwrap();
+    assert_eq!((d.heat_level, d.heat_paused), (3, 0));
+    let d = decode_snapshot(br#"{"heat":{"level":"normal"}}"#).unwrap();
+    assert_eq!(d.heat_level, 0);
+    let d = decode_snapshot(br#"{"battery":{}}"#).unwrap();
+    assert_eq!(d.heat_level, -1);
+}

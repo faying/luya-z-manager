@@ -80,8 +80,8 @@ pub struct Sys {
     imei: Obj,
     usb: Obj,
     fw: Obj,
-    /// 组件版本: core, lweb, sentinel, touch, scripts (VER_NAMES), then 检查更新
-    vers: [Obj; 5],
+    /// 组件版本: one row per VER_NAMES, then 检查更新
+    vers: [Obj; VER_NAMES.len()],
     vchk: Obj,
     pub health: Obj,
     health_col: Option<u32>,
@@ -98,7 +98,15 @@ pub struct Sys {
 }
 
 /// The components in the core's order, with their row names.
-const VER_NAMES: [(&str, &str); 5] = [("core", n_("核心")), ("lweb", n_("管理网页")), ("sentinel", n_("哨兵")), ("touch", n_("触屏界面")), ("scripts", n_("设备脚本"))];
+/// The core's `/v2/versions` order.
+const VER_NAMES: &[(&str, &str)] = &[
+    ("core", n_("核心")),
+    ("lweb", n_("管理网页")),
+    ("sentinel", n_("哨兵")),
+    ("touch", n_("触屏界面")),
+    ("scripts", n_("设备脚本")),
+];
+const VER_ROWS: i32 = VER_NAMES.len() as i32;
 
 /// 「1.0.0」, 「1.0.0 → 1.1.0」 when there is a newer one, 「未编号」 for a build before 1.0.0.
 pub fn ver_line(r: &ui_model::ver_row_t) -> String {
@@ -540,15 +548,15 @@ impl Ui {
         // look at the public repo now
         kit::section(sc, y, tr("组件版本"));
         y += 20;
-        let c = kit::card(sc, MARGIN, y, CARD_W, 6 * ROW_H);
+        let c = kit::card(sc, MARGIN, y, CARD_W, (VER_ROWS + 1) * ROW_H);
         let s = &mut self.sys;
         for (i, (_, key)) in VER_NAMES.iter().enumerate() {
             s.vers[i] = kit::row(c, i as i32 * ROW_H, tr(key), i == 0);
             s.vers[i].set_style_text_font(f.cj14, 0);
         }
-        s.vchk = kit::row_nav(c, 5 * ROW_H, tr("检查更新"), false, Some(versions_check_cb), 0);
+        s.vchk = kit::row_nav(c, VER_ROWS * ROW_H, tr("检查更新"), false, Some(versions_check_cb), 0);
         s.vchk.set_style_text_font(f.cj14, 0);
-        y += 6 * ROW_H + 6;
+        y += (VER_ROWS + 1) * ROW_H + 6;
         // people sell devices with Luya-Z installed: say plainly that it is free
         let disclosure = kit::label_w(sc, f.cj12, th.t3, MARGIN + PAD, y, CARD_W - 2 * PAD, true, tr("Luya-Z 免费提供。付钱买了装好的设备，费用和售后归卖家，与 Luya-Z 无关。"));
         disclosure.update_layout();
@@ -769,7 +777,14 @@ impl Ui {
         ch.net_dn.align(lv::LV_ALIGN_TOP_RIGHT, -(12 + ch.net_up.width() + 8), 8);
         let chg = d.charger_in != 0 && d.chg_volt_uv > 1000000;
         self.set(ch.bat_v, cf!("%d%%", d.batt_pct));
-        self.set(ch.bat_sub, cf!("%s · %d°C", if chg { tr("充电中") } else { tr("放电中") }, d.batt_temp));
+        let state = if d.heat_paused != 0 {
+            tr("因为热暂停充电")
+        } else if chg {
+            tr("充电中")
+        } else {
+            tr("放电中")
+        };
+        self.set(ch.bat_sub, cf!("%s · %d°C", state, d.batt_temp));
     }
 }
 

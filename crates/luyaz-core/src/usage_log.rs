@@ -278,6 +278,12 @@ pub fn pruned(text: &str, t: i64) -> String {
 static LATEST: Mutex<Option<serde_json::Map<String, Value>>> = Mutex::new(None);
 static START: Once = Once::new();
 
+/// The latest collection round's `key` block (`signal`, `sim`, ...); `None` before the first round.
+/// Free: no device read, just the copy kept here.
+pub fn latest(key: &str) -> Option<Value> {
+    LATEST.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.get(key).cloned()
+}
+
 /// Called from each collection round with the snapshot's fields; starts the thread once.
 pub fn offer(fields: &serde_json::Map<String, Value>) {
     let keep: serde_json::Map<String, Value> = ["traffic", "sim", "net", "signal"]

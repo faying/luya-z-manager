@@ -812,6 +812,7 @@ struct FakeHost {
     ubus_sms: AtomicBool,
     /// Numbers whose send fails transiently (no hand-over).
     down_numbers: Mutex<Vec<String>>,
+    alerts: Mutex<Vec<String>>,
 }
 
 impl Host for FakeHost {
@@ -864,7 +865,9 @@ impl Host for FakeHost {
         self.controls.lock().unwrap().push(action.to_string());
         Ok(json!({}))
     }
-    fn alert(&self, _: &str, _: &str) {}
+    fn alert(&self, key: &str, _: &str) {
+        self.alerts.lock().unwrap().push(key.to_owned());
+    }
     fn tick(&self, _: Value) {}
     fn sms_zone_hours(&self) -> i64 {
         8
@@ -922,7 +925,54 @@ fn read_back(d: &Path) -> ForwardState {
 }
 
 fn queue_of(d: &Path) -> Queue {
-    Queue::load(&d.join("sms-forward-queue.json")).expect("queue file")
+    Queue::load(&d.join("sms-forward-queue.json")).expect("queue file").expect("queue parses")
+}
+
+/// A queue file that does not parse is moved aside and `.prev` read back: what went out stays
+/// sent (not forwarded again), and one alert says so.
+#[test]
+fn corrupt_queue_recovers_from_prev_without_resending() {
+    let (fwd, host, d) = forwarder("corrupt-prev", Some(sms_rules(&["111"])), Some(json!({"last_forwarded_id": 10})));
+    host.rows.lock().unwrap().push(sms_row(11));
+    fwd.check(host.sms_summary());
+    assert_eq!(*host.sends.lock().unwrap(), vec!["111"]);
+    // one more save, so `.prev` holds the job as sent (it is one save behind the main file)
+    let qp = d.join("sms-forward-queue.json");
+    fwd.queue.lock().unwrap().save(&qp).unwrap();
+    fs::write(&qp, b"{\"jobs\": [tru").unwrap();
+    drop(fwd);
+
+    let fwd2 = Arc::new(SmsForwarder::new(host.clone(), d.join("config.json"), d.join("state.json")));
+    fwd2.set_service("LTE");
+    fwd2.set_wan("ipv4_connected");
+    host.rows.lock().unwrap()[0]["id"] = json!(31); // the firmware renumbered it
+    fwd2.check(host.sms_summary());
+    assert_eq!(*host.sends.lock().unwrap(), vec!["111"], "sent again after recovery");
+    assert_eq!(host.alerts.lock().unwrap().iter().filter(|k| *k == "sms-forward-queue").count(), 1);
+    assert!(fs::read_dir(&d).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().contains(".corrupt-")));
+    assert!(queue_of(&d).seeded);
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// Main file and `.prev` both unusable: rebuilt unseeded, so the SMS already on the device are
+/// fingerprinted, not forwarded.
+#[test]
+fn corrupt_queue_without_prev_reseeds_instead_of_resending() {
+    let (fwd, host, d) = forwarder("corrupt-none", Some(sms_rules(&["111"])), Some(json!({"last_forwarded_id": 10})));
+    host.rows.lock().unwrap().push(sms_row(5));
+    fwd.check(host.sms_summary());
+    drop(fwd);
+    fs::write(d.join("sms-forward-queue.json"), b"garbage").unwrap();
+    let _ = fs::remove_file(d.join("sms-forward-queue.json.prev"));
+
+    let fwd2 = Arc::new(SmsForwarder::new(host.clone(), d.join("config.json"), d.join("state.json")));
+    fwd2.set_service("LTE");
+    fwd2.set_wan("ipv4_connected");
+    fwd2.check(host.sms_summary());
+    assert!(host.sends.lock().unwrap().is_empty(), "old SMS forwarded after rebuild");
+    assert_eq!(host.alerts.lock().unwrap().as_slice(), ["sms-forward-queue"]);
+    assert!(queue_of(&d).seeded, "fingerprinted again");
+    let _ = fs::remove_dir_all(&d);
 }
 
 /// Restart with a job pending: the next forwarder, built from the same files, sends only what

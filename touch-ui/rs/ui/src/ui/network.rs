@@ -93,8 +93,6 @@ pub struct Net {
     pub auto_btn: Obj,
     pub auto_lbl: Obj,
     pub nbr_state: Obj,
-    pub nbr_btn: Obj,
-    pub nbr_lbl: Obj,
     pub nbr_row: [Obj; NI_MAX_CELLS],
     pub nbr_l: [Obj; NI_MAX_CELLS],
     pub nbr_r: [Obj; NI_MAX_CELLS],
@@ -102,7 +100,6 @@ pub struct Net {
     pub arm_scan: u32,
     pub arm_auto: u32,
     pub arm_op: u32,
-    pub arm_nbr: u32,
     pub arm_idx: i32,
     pub arm_sc: u32,
     pub arm_sc_idx: i32,
@@ -157,15 +154,12 @@ impl Default for Net {
             auto_btn: n,
             auto_lbl: n,
             nbr_state: n,
-            nbr_btn: n,
-            nbr_lbl: n,
             nbr_row: [n; NI_MAX_CELLS],
             nbr_l: [n; NI_MAX_CELLS],
             nbr_r: [n; NI_MAX_CELLS],
             arm_scan: 0,
             arm_auto: 0,
             arm_op: 0,
-            arm_nbr: 0,
             arm_idx: -1,
             arm_sc: 0,
             arm_sc_idx: -1,
@@ -232,10 +226,6 @@ unsafe extern "C" fn net_op_cb(e: *mut sys::lv_event_t) {
     // SAFETY: LVGL's event
     let i = unsafe { lv::event_user(e) };
     super::with(|u| u.net_op_tap(i));
-}
-
-unsafe extern "C" fn net_nbr_cb(_e: *mut sys::lv_event_t) {
-    super::with(|u| u.net_nbr_tap());
 }
 
 unsafe extern "C" fn net_sc_cb(e: *mut sys::lv_event_t) {
@@ -379,8 +369,7 @@ impl Ui {
 
         let c = kit::card(host[4], MARGIN, 0, CARD_W, NET_NBR_HDR);
         net.card[4] = c;
-        net.nbr_state = kit::label_w(c, f.cj13, th.t2, PAD, 12, CARD_W - 2 * PAD - 80, false, "");
-        (net.nbr_btn, net.nbr_lbl) = kit::button(c, CARD_W - PAD - 72, 6, 72, 28, tr("扫描"), kit::BtnKind::Plain, Some(net_nbr_cb), 0);
+        net.nbr_state = kit::label_w(c, f.cj13, th.t2, PAD, 12, CARD_W - 2 * PAD, false, "");
         for i in 0..NI_MAX_CELLS {
             let r = kit::bx(c, 0, NET_NBR_HDR + i as i32 * NET_NBR_H, CARD_W, NET_NBR_H, th.card, 0);
             r.set_style_bg_opa(lv::OPA_TRANSP, 0);
@@ -401,7 +390,6 @@ impl Ui {
         let n = &mut self.net;
         n.arm_scan = 0;
         n.arm_auto = 0;
-        n.arm_nbr = 0;
         n.arm_op = 0;
         n.arm_sc = 0;
         n.arm_idx = -1;
@@ -505,19 +493,6 @@ impl Ui {
         self.net_paint(true);
     }
 
-    fn net_nbr_tap(&mut self) {
-        if self.ni().nbr_state == "scanning" {
-            return;
-        }
-        if net_confirm(self.net.arm_nbr) {
-            self.net_clear_arms();
-            self.net_send(NiAct::NbrScan);
-            return;
-        }
-        self.net_clear_arms();
-        self.net.arm_nbr = lv::tick_get();
-        self.net_paint(true);
-    }
 
     /// A scene row: 0 = 自动, 1..n = pin scenes[i-1], the last row is something else. A
     /// scene can turn Wi-Fi on or off, so two taps; once sent, 切换中 until it really moved.

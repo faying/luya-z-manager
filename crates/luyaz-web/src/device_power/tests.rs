@@ -172,3 +172,24 @@ fn a_reply_is_judged_by_the_readback_never_by_itself() {
         write::Outcome::Failed(_)
     ));
 }
+
+/// Heat care's row reads the core's `heat` block (thermal-care §4.3).
+#[test]
+fn heat_row_says_level_and_what_it_holds() {
+    assert!(heat_row(&json!(null), Lang::Zh).is_none());
+    let n = heat_row(&json!({"level":"normal","since":null,"charge_paused":false,"chill":""}), Lang::Zh).unwrap();
+    assert_eq!(n.value, "正常");
+    // 1793246400 = 10-29 04:00 on the device clock (local labelled UTC)
+    let h = heat_row(
+        &json!({"level":"hot","since":1793246400,"charge_paused":true,"chill":"hot","chill_now":"hot","stock_protect":1}),
+        Lang::Zh,
+    )
+    .unwrap();
+    assert_eq!(h.value, "热 · 暂停充电 · CHILL 省电档 · 04:00 起 · 原厂保护在限流");
+    let m = heat_row(
+        &json!({"level":"warm","since":1793246400,"charge_paused":false,"manual_resume":true,"chill":""}),
+        Lang::En,
+    )
+    .unwrap();
+    assert_eq!(m.value, "Warm · charging on (you resumed it) · since 04:00");
+}

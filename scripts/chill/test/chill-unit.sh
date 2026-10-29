@@ -696,6 +696,27 @@ echo eco > "$PROFILE_FILE"; CALLS=""
 if thermal_step 90000; then ng "本来就是 eco 不该再重启"; else ok "本来就是 eco 不动"; fi
 rm -f "$PROFILE_FILE"; CHILL_TEMP_WARM=""
 
+# heat_req：读 core 的请求，没有文件或空文件 = 空
+HEAT_REQ="$CHILL_DIR/heat-req"
+rm -f "$HEAT_REQ"; heat_req; eq "没有请求文件 = 空" "$h" ""
+: > "$HEAT_REQ"; heat_req; eq "空文件 = 空" "$h" ""
+echo critical > "$HEAT_REQ"; heat_req; eq "读到 critical" "$h" "critical"
+rm -f "$HEAT_REQ"
+
+# core 温控的请求（thermal-care.md）：没设 CHILL_TEMP_WARM 也照降；请求还在就不回档
+CALLS=""
+if thermal_step 40000 ""; then ng "没有请求不该降档"; else ok "没有请求不降档"; fi
+if thermal_step 40000 hot; then ok "core 说 hot 就降档"; else ng "core 说 hot 没降档"; fi
+[ -f "$THERMAL_ECO" ] && ok "core 请求也留下降档标记" || ng "core 请求没留降档标记"
+has "core 请求降档也平稳重启" "$CALLS" "save kill flush"
+CALLS=""
+cool_since=$(( $(boot_now) - COOL_HOLD - 1 ))
+if thermal_step 40000 critical; then ng "请求还在不该回档"; else ok "请求还在不回档"; fi
+if thermal_step 40000 ""; then ng "请求刚撤不该马上回档"; else ok "请求撤了先开始计时"; fi
+cool_since=$(( $(boot_now) - COOL_HOLD - 1 ))
+if thermal_step 40000 ""; then ok "请求撤了凉够 ${COOL_HOLD} 秒回档"; else ng "请求撤了凉够了没回档"; fi
+[ -f "$THERMAL_ECO" ] && ng "回档后降档标记还在" || ok "回档后降档标记清掉"
+
 # ─────────────────────────────────────────────────────────────────────────────
 sec "wait_core_ready：起核心后等 API 和 dns.listen，代替固定 sleep 5"
 

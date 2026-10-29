@@ -68,6 +68,7 @@ mod device_power;
 mod dns;
 mod enable_adb;
 mod agent_perms;
+mod plugin_settings;
 mod processes;
 mod sim_page;
 mod stc;
@@ -417,6 +418,7 @@ pub fn app(
         .merge(enable_adb::routes())
         .merge(dns::routes())
         .merge(settings::routes())
+        .merge(plugin_settings::routes())
         .merge(config_page::routes())
         // the gate answers anything not served here with a 404 before it gets this far
         .fallback(|| async { axum::http::StatusCode::NOT_FOUND })

@@ -51,6 +51,7 @@ RULES_BEFORE=/tmp/chill.rules.before
 SYS_NET=/sys/class/net                   # 看接口在不在跑（check_rules_drift）；单测指向 fixture
 RESTART_FLAG=/tmp/chill.restart       # 有它 = 监督循环下一拍平稳重启核心（不算崩溃）
 THERMAL_ECO=/tmp/chill.thermal-eco    # 有它 = 因温度暂时按 eco 跑（重启设备自然清掉）
+HEAT_REQ="${HEAT_REQ:-/tmp/luyaz/heat}"  # core 温控的请求（docs/designs/thermal-care.md）：hot = 降到 eco，critical = 停核直连；没有 = 不管
 IDLE_LEASE=/tmp/chill.idle.v2            # 核心写的「息屏暂停」租约：到这个秒数前停着（u60-radio.md 6e）
 
 FAKE_IP_NET=198.18.0.0/16
@@ -1023,18 +1024,32 @@ restart_core() {
 }
 
 # 温度降档（CHILL_TEMP_WARM 设了才有）。返回 0 = 已经重启核心，调用方要 break。
+# core 温控的请求读进 h（hot/critical/空）。只用内建 read，每个 tick 不多开进程。
+heat_req() {
+  h=
+  [ -f "$HEAT_REQ" ] && read -r h < "$HEAT_REQ"
+  return 0
+}
+
+# $1 = 本机最高温（毫摄氏度），$2 = core 温控的请求（hot/critical/空）。
+# 降档的理由有两个：自己的 CHILL_TEMP_WARM（默认不设）或 core 说热；两个都没了、再凉够 COOL_HOLD 才回档。
 thermal_step() {
-  [ -n "$CHILL_TEMP_WARM" ] || return 1
+  case "${2:-}" in hot|critical) req=1 ;; *) req=0 ;; esac
+  [ -n "$CHILL_TEMP_WARM" ] || [ "$req" = 1 ] || [ -f "$THERMAL_ECO" ] || return 1
   if [ ! -f "$THERMAL_ECO" ]; then
     cool_since=-1
     [ "$(profile_read)" = eco ] && return 1
-    [ "$1" -ge "$CHILL_TEMP_WARM" ] || return 1
+    if [ "$req" = 0 ]; then
+      [ "$1" -ge "$CHILL_TEMP_WARM" ] || return 1
+    fi
     : > "$THERMAL_ECO"
-    event "warm cpuss=$(( $1 / 1000 )) -> eco"
+    if [ "$req" = 1 ]; then event "warm core=$2 cpuss=$(( $1 / 1000 )) -> eco"
+    else event "warm cpuss=$(( $1 / 1000 )) -> eco"; fi
     restart_core eco
     return 0
   fi
-  if [ "$1" -ge $((CHILL_TEMP_WARM - TEMP_RECOVER_DELTA)) ]; then
+  if [ "$req" = 1 ]; then cool_since=-1; return 1; fi
+  if [ -n "$CHILL_TEMP_WARM" ] && [ "$1" -ge $((CHILL_TEMP_WARM - TEMP_RECOVER_DELTA)) ]; then
     cool_since=-1; return 1
   fi
   now=$(boot_now) || return 1
@@ -1091,6 +1106,9 @@ run() {
       [ "$_rn" -lt "$backoff" ] && { sleep 5; continue; }
       backoff=0
     fi
+    # core 温控还要直连（critical）就不起核心：否则退避一到就起、一起又过热直连，反复断连接、反复发热
+    heat_req
+    if [ "$h" = critical ]; then sleep 15; continue; fi
 
     # ---- 启动核心 ----
     cn_set_up
@@ -1176,13 +1194,14 @@ run() {
       fi
 
       t=$(max_temp)
-      if [ "$t" -ge "$CHILL_TEMP_HOT" ]; then
+      heat_req
+      if [ "$t" -ge "$CHILL_TEMP_HOT" ] || [ "$h" = critical ]; then
         enter_direct overheat
         direct_since=$(boot_now) || direct_since=0
         next_backoff
         break
       fi
-      thermal_step "$t" && break
+      thermal_step "$t" "$h" && break
       save_mode
 
       # 低内存先归因：只有核心自己 RSS 超标才停，否则只标 mem_pressure。

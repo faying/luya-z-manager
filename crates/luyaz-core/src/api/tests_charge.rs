@@ -228,3 +228,21 @@ async fn charge_control_and_the_limit_with_writes_on() {
     assert_eq!(dbg["owner"], "u60d");
     assert_eq!(dbg["writes"][0]["why"], "unplugged");
 }
+
+/// Heat care's pause (thermal-care §4.2): stops, takes over a stop already there, gives back only
+/// what it held, and leaves charging stopped when the active limit wants that.
+#[test]
+fn heat_pause_writes_only_what_it_owns() {
+    use super::charge::heat_step;
+    // wants a pause: stop, or hold the stop already there
+    assert_eq!(heat_step(true, false, false, false), (Some(false), true));
+    assert_eq!(heat_step(true, false, true, false), (None, true));
+    assert_eq!(heat_step(true, true, true, false), (None, true));
+    // a pause it held is over: resume
+    assert_eq!(heat_step(false, true, true, false), (Some(true), false));
+    // ... unless the limit wants it stopped, or something else resumed it already
+    assert_eq!(heat_step(false, true, true, true), (None, false));
+    assert_eq!(heat_step(false, true, false, false), (None, false));
+    // never held: a stop is the limit's or the owner's, left alone
+    assert_eq!(heat_step(false, false, true, false), (None, false));
+}

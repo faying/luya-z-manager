@@ -1,5 +1,8 @@
 //! The delivery queue: one job per (SMS × rule), each with its own state, attempts and next try,
 //! saved on every transition (tmp + fsync + rename + dir fsync, mode 0600: it holds SMS bodies).
+//! The copy it replaces stays as `.prev`. A file that does not parse is moved to
+//! `.corrupt-<secs>` and `.prev` read instead; with neither the queue starts unseeded, so the SMS
+//! already on the device are fingerprinted again rather than forwarded again.
 //!
 //! The pass only enqueues and moves the watermark on; [`crate::SmsForwarder`] drains the queue
 //! (one attempt per due job, then back off). A channel that is down holds only its own jobs: the
@@ -109,12 +112,46 @@ pub fn backoff_secs(attempts: u32) -> i64 {
 }
 
 impl Queue {
-    pub fn load(path: &Path) -> Option<Queue> {
-        let text = fs::read_to_string(path).ok()?;
-        Some(serde_json::from_str(&text).unwrap_or_default())
+    /// The file as it is: `None` when missing, `Some(Err)` when it does not read or parse.
+    pub fn load(path: &Path) -> Option<Result<Queue, String>> {
+        let text = match fs::read_to_string(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(e) => return Some(Err(e.to_string())),
+            Ok(t) => t,
+        };
+        Some(serde_json::from_str(&text).map_err(|e| e.to_string()))
     }
 
-    /// Saved durably; an error is the caller's to log.
+    /// The queue to run on, and what was wrong with the file (for the alert) when it had to be
+    /// recovered. A damaged file is moved aside, `.prev` read; the recovered queue is saved back
+    /// at once, so a second open finds it whole.
+    pub fn open(path: &Path) -> (Queue, Option<String>) {
+        let main = match Queue::load(path) {
+            None => None,
+            Some(Ok(q)) => return (q, None),
+            Some(Err(e)) => {
+                let to = with_suffix(path, &format!(".corrupt-{}", crate::text::now_ts()));
+                eprintln!("[sms_forward] queue {}: {e}: moved to {}", path.display(), to.display());
+                let _ = fs::rename(path, &to);
+                Some(e)
+            }
+        };
+        let (q, note) = match (Queue::load(&with_suffix(path, ".prev")), main) {
+            (Some(Ok(q)), _) => (q, "转发队列档案坏了或不见了：已从上一份（.prev）回复"),
+            (None, None) => return (Queue::default(), None),
+            _ => (
+                Queue::default(),
+                "转发队列档案和上一份都不能用：已重建，设备上已有的短信当已转发，不会重发",
+            ),
+        };
+        eprintln!("[sms_forward] {note}");
+        if let Err(e) = q.save(path) {
+            eprintln!("[sms_forward] queue save after recovery: {e}");
+        }
+        (q, Some(note.to_owned()))
+    }
+
+    /// Saved durably, the copy it replaces kept as `.prev`; an error is the caller's to log.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let text = serde_json::to_vec(self).map_err(std::io::Error::other)?;
         durable_write(path, &text)
@@ -233,12 +270,17 @@ impl Queue {
 
 pub(crate) const GIVE_UP_NOTE: &str = "等待超时跳过";
 
-/// `path.tmp` written and fsynced, renamed over `path`, the directory fsynced; mode 0600.
+fn with_suffix(p: &Path, suffix: &str) -> PathBuf {
+    let mut s = p.as_os_str().to_owned();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+/// `path.tmp` written and fsynced, `path` renamed to `path.prev`, `path.tmp` renamed over
+/// `path`, the directory fsynced; mode 0600.
 fn durable_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
+    let tmp = with_suffix(path, ".tmp");
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
@@ -251,6 +293,9 @@ fn durable_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
             .open(&tmp)?;
         f.write_all(data)?;
         f.sync_all()?;
+    }
+    if path.exists() {
+        fs::rename(path, with_suffix(path, ".prev"))?;
     }
     fs::rename(&tmp, path)?;
     if let Some(dir) = path.parent() {

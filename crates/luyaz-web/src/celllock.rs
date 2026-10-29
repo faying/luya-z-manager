@@ -12,8 +12,9 @@
 //! (u60d wants the band: the old form's "optional" is gone, it starts at the serving NR band),
 //! `cell.lock_lte {pci, earfcn}`, and "unlock all" = `band.reset {}` (the firmware has no cell
 //! unlock: bands and cell locks are both reset, D22). Each send has a new `op_id` and is followed in
-//! the `op` block (follow.rs). Neighbour scan stays off (the agent answers 410): the button is shown
-//! disabled with the reason, nothing is requested.
+//! the `op` block (follow.rs). Neighbours: the LTE cells the modem reports, read passively by the
+//! core (`/api/netinfo?lite=1` `neighbors`, strongest first; no scan: the vendor one drops data);
+//! none in SA, the core says why. Polled with the page.
 //!
 //! The form fields are page-local signals (`_npci` …), outside the pushed leaves, so pushes never
 //! touch what is being typed; the values go in the ask/confirm URL and are checked again.
@@ -30,7 +31,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::topbar::Via;
-use crate::agent::Polled;
+use crate::agent::{Caller, Polled};
 use crate::hub::{Link, St};
 use crate::i18n::Lang;
 use crate::pages::{Shared, StreamQuery, async_stream, patch, split_leaves};
@@ -478,19 +479,98 @@ async fn set(app: Shared, w: Which, q: CellQuery, req: axum::extract::Request) -
 
 // ---- the page and its stream ----
 
+// ---- neighbours ----
+
+const NBR_POLL: Duration = Duration::from_secs(15);
+
+/// One neighbour row, as shown ("-" for a value the modem left out).
+#[derive(Debug, PartialEq)]
+pub struct Nbr {
+    pub pci: String,
+    pub band: String,
+    pub arfcn: String,
+    pub rsrp: String,
+    pub rsrq: String,
+}
+
+/// The neighbour list of `/api/netinfo`'s `neighbors` (`Ok`, strongest first as the core sends
+/// it), or why there is none.
+pub fn neighbours(n: &Value, l: Lang) -> Result<Vec<Nbr>, String> {
+    let s = |v: &Value| match v {
+        Value::Number(x) => x.to_string(),
+        Value::String(x) if !x.is_empty() => x.clone(),
+        _ => "-".to_string(),
+    };
+    let cells: Vec<Nbr> = n["cells"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|c| Nbr {
+                    pci: s(&c["pci"]),
+                    band: if c["band"].is_string() { s(&c["band"]) } else { s(&c["rat"]) },
+                    arfcn: s(&c["arfcn"]),
+                    rsrp: s(&c["rsrp"]),
+                    rsrq: s(&c["rsrq"]),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if n["state"].as_str() == Some("ok") && !cells.is_empty() {
+        return Ok(cells);
+    }
+    let why = match l {
+        Lang::En => n["error_en"].as_str(),
+        Lang::Zh => n["error"].as_str(),
+    }
+    .filter(|w| !w.is_empty());
+    Err(why.map_or_else(|| l.pick("The modem reports no neighbours right now", "基带现在没报邻区").to_string(), str::to_string))
+}
+
+#[derive(Template)]
+#[template(
+    ext = "html",
+    source = r#"<div id="cl-nbr">{% match r %}{% when Ok(rows) %}<p class="nd-body">{{ l.pick("Strongest first (RSRP). LTE only: what the modem reports, read without a scan.", "按 RSRP 由强到弱。只有 LTE：基带自己报的，不扫描。") }}</p><div class="sd-scroll" tabindex="0"><table class="sd-table"><thead><tr><th scope="col">#</th><th scope="col">PCI</th><th scope="col">{{ l.pick("Band", "频段") }}</th><th scope="col">EARFCN</th><th scope="col">RSRP</th><th scope="col">RSRQ</th></tr></thead><tbody>{% for c in rows %}<tr><td class="nd-mono">{{ loop.index }}</td><td class="nd-mono">{{ c.pci }}</td><td class="nd-mono">{{ c.band }}</td><td class="nd-mono">{{ c.arfcn }}</td><td class="nd-mono">{{ c.rsrp }}</td><td class="nd-mono">{{ c.rsrq }}</td></tr>{% endfor %}</tbody></table></div>{% when Err(why) %}<p class="nd-body" role="status">{{ why }}</p>{% endmatch %}</div>"#
+)]
+struct NbrLeaf<'a> {
+    l: Lang,
+    r: &'a Result<Vec<Nbr>, String>,
+}
+
+fn nbr_leaf(n: Option<&Value>, l: Lang) -> (String, String) {
+    let html = match n {
+        Some(n) => NbrLeaf { l, r: &neighbours(n, l) }.render().unwrap(),
+        None => format!(r#"<div id="cl-nbr"><p class="nd-body sd-muted" role="status">{}</p></div>"#, l.pick("Reading…", "读取中…")),
+    };
+    ("cl-nbr".to_string(), html)
+}
+
 pub struct Poll {
     l: Lang,
+    who: Caller,
+    /// the last `neighbors` block read
+    nbr: Option<Value>,
+}
+
+impl Poll {
+    fn all(&self, app: &Shared) -> Vec<(String, String)> {
+        let mut v = leaves(app, self.l);
+        v.push(nbr_leaf(self.nbr.as_ref(), self.l));
+        v
+    }
 }
 
 impl Polled for Poll {
     async fn step(&mut self, app: &Shared) -> (Vec<(String, String)>, Duration) {
-        (leaves(app, self.l), Duration::from_secs(24 * 3600))
+        if let Ok(m) = crate::agent::get(app, &self.who, "/api/netinfo?lite=1").await {
+            self.nbr = Some(m["neighbors"].clone());
+        }
+        (self.all(app), NBR_POLL)
     }
     fn watches(&self, block: &str) -> bool {
         matches!(block, "signal" | "op" | "exec")
     }
     fn render(&mut self, app: &Shared) -> Option<Vec<(String, String)>> {
-        Some(leaves(app, self.l))
+        Some(self.all(app))
     }
 }
 
@@ -524,10 +604,12 @@ pub async fn page(State(app): State<Shared>, req: axum::extract::Request) -> Res
     });
     let idle = write::Phase::Idle;
     let none = Lock::default();
+    let mut leaves = leaves(&app, l);
+    leaves.push(nbr_leaf(None, l));
     let html = Page {
         shell,
         l,
-        leaves: leaves(&app, l),
+        leaves,
         band0,
         nr_op: area(Which::Nr, l, ctx.remote, &none, &idle),
         lte_op: area(Which::Lte, l, ctx.remote, &none, &idle),
@@ -540,7 +622,7 @@ pub async fn page(State(app): State<Shared>, req: axum::extract::Request) -> Res
 
 pub async fn events(State(app): State<Shared>, Query(q): Query<StreamQuery>, req: axum::extract::Request) -> impl IntoResponse {
     let ctx = crate::topbar::Ctx::of_request(&req, PATH);
-    let p = Poll { l: ctx.lang };
+    let p = Poll { l: ctx.lang, who: Caller::of(&app, &req), nbr: None };
     crate::agent::stream(app, ctx, q.g, PATH, p)
 }
 

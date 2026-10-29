@@ -16,3 +16,4 @@ pub mod manual_first;
 pub mod scenario;
 pub mod scheduler;
 pub mod sms_forward;
+pub mod thermal;

@@ -11,6 +11,17 @@
 //! Port: `LUYAZ_AT_PORT`, else the first candidate no other process holds open that answers
 //! "AT" with OK. An answer ends at its final result code (`OK`, `ERROR`, `+CME ERROR:`,
 //! `+CMS ERROR:`, each a whole line); a failure says which [`ErrorKind`] it is.
+//!
+//! A port a command has used stays open with one reader on it ([`broker`], luyaz-phone R11,
+//! R15, R19): unsolicited lines (RING, +CLIP, +CMTI…) go to [`urcs`] instead of being drained
+//! away before the next command. While a voice call rings or runs ([`set_in_call`]) every other
+//! command is refused and the call's own commands ([`voice`]) go ahead of waiting ones (R18).
+
+// the public tree has no voice-call user of these (in_call, voice, urcs)
+#![allow(dead_code, unused_imports)]
+
+mod broker;
+pub use broker::{Urc, subscribe as urcs};
 
 use fs2::FileExt;
 use std::{
@@ -20,7 +31,7 @@ use std::{
     path::Path,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -67,6 +78,8 @@ impl ErrorKind {
 }
 
 const BUSY: &str = "AT port busy";
+/// Refused while a voice call rings or runs (R18): a [`ErrorKind::Busy`].
+const IN_CALL: &str = "AT port busy: in a voice call, try again later";
 const HELD: &str = "every AT port is held by another process";
 const NO_PORT: &str = "no AT port found";
 
@@ -250,6 +263,34 @@ struct Job {
     until: Until,
     /// the answer must end in OK (the fixed list); else whatever came back is the answer
     strict: bool,
+    /// a voice call's own command ([`voice`]): not refused in a call, goes ahead of the others
+    call: bool,
+}
+
+/// From RING until CLCC shows no call (the call capability sets it): other commands are refused.
+#[cfg(not(test))]
+static IN_A_CALL: AtomicBool = AtomicBool::new(false);
+// tests run side by side in one process: each test thread has its own call
+#[cfg(test)]
+thread_local! {
+    static IN_A_CALL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// Voice commands waiting for the port: the others leave the lock to them.
+static CALL_WAITING: AtomicUsize = AtomicUsize::new(0);
+
+/// A voice call rings or runs (`true`) or none is left (`false`).
+pub fn set_in_call(on: bool) {
+    #[cfg(not(test))]
+    IN_A_CALL.store(on, Ordering::SeqCst);
+    #[cfg(test)]
+    IN_A_CALL.with(|c| c.set(on));
+}
+
+pub fn in_call() -> bool {
+    #[cfg(not(test))]
+    return IN_A_CALL.load(Ordering::SeqCst);
+    #[cfg(test)]
+    IN_A_CALL.with(|c| c.get())
 }
 
 impl Job {
@@ -259,6 +300,7 @@ impl Job {
             wait: ANSWER_WAIT,
             until: Until::Final,
             strict: true,
+            call: false,
         }
     }
 
@@ -268,6 +310,7 @@ impl Job {
             wait,
             until,
             strict: false,
+            call: false,
         }
     }
 
@@ -306,9 +349,36 @@ pub async fn probe(t: Target) -> Result<String, String> {
         wait: Duration::ZERO,
         until: Until::Final,
         strict: true,
+        call: false,
     };
     let total = job.total();
     run(job, t.lock, t.port, total).await.map(|a| a.port)
+}
+
+/// A voice call's own command (answer, hang up, list, DTMF, dial; the text is the caller's to
+/// build from checked parts): not refused while a call rings or runs, and ahead of commands
+/// waiting for the port. A command already on the port is not cut short (R18: a USSD may hold
+/// it 8 s). `fresh_radio`: read the radio mode first, as every other command does; answering
+/// and hanging up skip it, the call itself shows the radio is up and the read goes through the
+/// executor's queue.
+pub(crate) async fn voice(
+    t: Target,
+    text: String,
+    wait: Duration,
+    until: Until,
+    fresh_radio: bool,
+) -> Result<String, String> {
+    if text.is_empty() || text.chars().any(char::is_control) {
+        return Err("one command, no control characters".into());
+    }
+    let job = Job {
+        call: true,
+        ..Job::loose(text, wait, until)
+    };
+    let total = job.total();
+    run_as(job, t.lock, t.port, total, fresh_radio)
+        .await
+        .map(|a| a.text)
 }
 
 fn lock_path() -> Option<String> {
@@ -370,6 +440,19 @@ async fn run(
     port: Option<String>,
     total: Duration,
 ) -> Result<Answer, String> {
+    run_as(job, lock, port, total, true).await
+}
+
+async fn run_as(
+    job: Job,
+    lock: Option<String>,
+    port: Option<String>,
+    total: Duration,
+    fresh_radio: bool,
+) -> Result<Answer, String> {
+    if !job.call && in_call() {
+        return Err(IN_CALL.into());
+    }
     // Before any lock, probe, port open or thread: no manual/terminal/internal bypass.
     if job
         .text
@@ -394,7 +477,9 @@ async fn run(
     // A current read permits this explicit attempt; it does not mint a radio epoch.
     // The pre-read shares the caller's total budget and has its own short bound.
     let started = Instant::now();
-    let binding = if let Some(hub) = crate::executor::profile_hub() {
+    let binding = if !fresh_radio {
+        None
+    } else if let Some(hub) = crate::executor::profile_hub() {
         let mode = tokio::time::timeout(
             MODE_READ_WAIT.min(total),
             crate::executor::call(
@@ -489,10 +574,29 @@ async fn run(
     }
 }
 
+#[cfg(test)]
 fn take_lock(path: Option<String>) -> Result<Option<File>, String> {
+    take_lock_as(path, false)
+}
+
+/// The cross-process lock; a voice command (`call`) is let in first: the others do not try
+/// while one waits.
+fn take_lock_as(path: Option<String>, call: bool) -> Result<Option<File>, String> {
     let Some(path) = path else {
         return Ok(None);
     };
+    struct Waiting(bool);
+    impl Drop for Waiting {
+        fn drop(&mut self) {
+            if self.0 {
+                CALL_WAITING.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+    }
+    let _waiting = Waiting(call);
+    if call {
+        CALL_WAITING.fetch_add(1, Ordering::SeqCst);
+    }
     let open = |p: &str| {
         OpenOptions::new()
             .create(true)
@@ -503,7 +607,7 @@ fn take_lock(path: Option<String>) -> Result<Option<File>, String> {
     let f = open(&path).map_err(|e| format!("AT lock {path}: {e}"))?;
     let start = Instant::now();
     loop {
-        if f.try_lock_exclusive().is_ok() {
+        if (call || CALL_WAITING.load(Ordering::SeqCst) == 0) && f.try_lock_exclusive().is_ok() {
             return Ok(Some(f));
         }
         if start.elapsed() >= LOCK_WAIT {
@@ -520,7 +624,11 @@ fn send_blocking(
     progress: &dyn Fn(),
     context: &dyn Fn() -> Result<(), String>,
 ) -> Result<Answer, String> {
-    let _lock = take_lock(lock)?;
+    let _lock = take_lock_as(lock, job.call)?;
+    // a call may have started while this one waited
+    if !job.call && in_call() {
+        return Err(IN_CALL.into());
+    }
     context()?;
     progress();
     let port = match port {
@@ -593,8 +701,7 @@ fn find_port_in_checked(
             continue;
         }
         context()?;
-        let ok = exchange(p, "AT", Duration::from_secs(1))
-            .is_ok_and(|a| final_code(&a) == Some(Final::Ok));
+        let ok = probe_port(p).is_ok_and(|a| final_code(&a) == Some(Final::Ok));
         progress();
         if ok {
             return Ok((*p).to_string());
@@ -656,6 +763,21 @@ fn set_nonblocking(f: &std::fs::File, on: bool) {
     }
 }
 
+/// "AT" to a candidate: through its reader if it is open already (else the reader would take
+/// the answer), else once on its own, so a port that is not picked is not kept open.
+fn probe_port(port: &str) -> Result<String, String> {
+    let wait = Duration::from_secs(1);
+    let (s, ended) = match broker::resident(port) {
+        Some(p) => p.command("AT", wait, Until::Final)?,
+        None => exchange_once(port, "AT", wait, Until::Final)?,
+    };
+    if ended {
+        Ok(s)
+    } else {
+        Err(format!("AT: {}", s.trim()))
+    }
+}
+
 /// Write `text\r`, read until OK / ERROR or `wait`.
 fn exchange(port: &str, text: &str, wait: Duration) -> Result<String, String> {
     let (s, ended) = exchange_until(port, text, wait, Until::Final)?;
@@ -687,8 +809,19 @@ fn complete(s: &str, until: Until) -> bool {
 /// The most of one answer kept (a terminal command that never stops talking).
 const ANSWER_MAX: usize = 64 * 1024;
 
-/// Write `text\r`, read until `until` or `wait`: what came, and whether `until` ended it.
+/// Write `text\r` on the resident port, read until `until` or `wait`: what came, and whether
+/// `until` ended it.
 fn exchange_until(
+    port: &str,
+    text: &str,
+    wait: Duration,
+    until: Until,
+) -> Result<(String, bool), String> {
+    broker::get(port)?.command(text, wait, until)
+}
+
+/// [`exchange_until`] on a port opened for this one command (the probe of a candidate).
+fn exchange_once(
     port: &str,
     text: &str,
     wait: Duration,
@@ -848,6 +981,64 @@ pub(crate) mod tests {
                 }
             });
             (name, rx)
+        }
+    }
+
+    /// A part that makes the fake modem hang up (close its master side: the port being reset).
+    pub(crate) const HANG_UP: &str = "\u{0}hang up";
+
+    /// A modem that answers each line by `script` (parts: after a delay, a text; [`HANG_UP`]
+    /// closes it). Returns the slave path, what it was sent and the master descriptor.
+    pub(crate) fn fake_modem_script(
+        script: impl Fn(&str) -> Vec<(u64, String)> + Send + 'static,
+    ) -> (String, std::sync::mpsc::Receiver<String>, i32) {
+        // SAFETY: plain libc pty calls on a fresh descriptor (as `fake_modem_after`).
+        unsafe {
+            let m = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            assert!(m >= 0);
+            assert_eq!(libc::grantpt(m), 0);
+            assert_eq!(libc::unlockpt(m), 0);
+            let mut buf = [0 as libc::c_char; 128];
+            assert_eq!(libc::ptsname_r(m, buf.as_mut_ptr(), buf.len()), 0);
+            let name = CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned();
+            let s = libc::open(
+                std::ffi::CString::new(name.clone()).unwrap().as_ptr(),
+                libc::O_RDWR | libc::O_NOCTTY,
+            );
+            let mut t: libc::termios = std::mem::zeroed();
+            libc::tcgetattr(s, &mut t);
+            libc::cfmakeraw(&mut t);
+            libc::tcsetattr(s, libc::TCSANOW, &t);
+            // the slave stays open here only until the test's own reader has it: a reset must
+            // be seen as a hang-up once the master goes
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut slave = Some(s);
+                let mut line = Vec::new();
+                let mut b = [0u8; 1];
+                while libc::read(m, b.as_mut_ptr().cast(), 1) == 1 {
+                    if let Some(s) = slave.take() {
+                        libc::close(s);
+                    }
+                    if b[0] == b'\r' {
+                        let l = String::from_utf8_lossy(&line).into_owned();
+                        line.clear();
+                        let parts = script(&l);
+                        let _ = tx.send(l);
+                        for (ms, text) in parts {
+                            std::thread::sleep(Duration::from_millis(ms));
+                            if text == HANG_UP {
+                                libc::close(m);
+                                return;
+                            }
+                            libc::write(m, text.as_ptr().cast(), text.len());
+                        }
+                    } else {
+                        line.push(b[0]);
+                    }
+                }
+            });
+            (name, rx, m)
         }
     }
 
@@ -1107,5 +1298,253 @@ pub(crate) mod tests {
                 Err(e) => panic!("{e}"),
             }
         }
+    }
+
+    fn ok(text: &str) -> Vec<(u64, String)> {
+        vec![(0, format!("{text}\r\nOK\r\n"))]
+    }
+
+    /// R15 ①: a RING and a +CLIP in the middle of an answer are broadcast, the answer is whole.
+    #[tokio::test]
+    async fn an_unsolicited_line_mid_answer_is_broadcast_and_the_answer_stays_whole() {
+        let mut urcs = urcs();
+        let (port, _, _) = fake_modem_script(|l| match l {
+            "AT+CGCONTRDP" => vec![
+                (0, "\r\n+CGCONTRDP: 1,5,\"apn\"\r\n".into()),
+                (20, "\r\nRING\r\n\r\n+CLIP: \"+15550100\",145\r\n".into()),
+                (20, "\r\n+CGCONTRDP: 2,6,\"ims\"\r\n\r\nOK\r\n".into()),
+            ],
+            _ => ok(""),
+        });
+        let a = send_with(Cmd::Cgcontrdp, None, Some(port.clone()))
+            .await
+            .unwrap();
+        assert!(
+            a.contains("+CGCONTRDP: 1") && a.contains("+CGCONTRDP: 2"),
+            "{a:?}"
+        );
+        assert!(!a.contains("RING") && !a.contains("+CLIP"), "{a:?}");
+        let mut got = Vec::new();
+        while got.len() < 2 {
+            let u = tokio::time::timeout(Duration::from_secs(2), urcs.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            if u.port == port {
+                got.push(u.line);
+            }
+        }
+        assert_eq!(got, ["RING", "+CLIP: \"+15550100\",145"]);
+    }
+
+    /// Between commands nothing is drained away any more: a RING with no command on the port.
+    #[tokio::test]
+    async fn a_ring_between_commands_is_not_lost() {
+        let mut urcs = urcs();
+        let (port, _, m) = fake_modem_script(|_| ok(""));
+        send_with(Cmd::CopsAuto, None, Some(port.clone()))
+            .await
+            .unwrap();
+        let ring = "\r\nRING\r\n";
+        // SAFETY: writing to the fake modem's master, which the test owns
+        unsafe { libc::write(m, ring.as_ptr().cast(), ring.len()) };
+        let u = loop {
+            let u = tokio::time::timeout(Duration::from_secs(2), urcs.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            if u.port == port {
+                break u;
+            }
+        };
+        assert_eq!(u.line, "RING");
+    }
+
+    /// R19: `+CLCC:` is the answer of `AT+CLCC`, never an unsolicited line; a call command's
+    /// NO CARRIER is its own.
+    #[tokio::test]
+    async fn a_clcc_answer_and_a_call_commands_result_belong_to_the_command() {
+        let mut urcs = urcs();
+        let (port, _, _) = fake_modem_script(|l| match l {
+            "AT+CLCC" => ok("\r\n+CLCC: 1,1,4,0,0,\"+15550100\",145"),
+            "ATA" => vec![(0, "\r\nNO CARRIER\r\n".into())],
+            _ => ok(""),
+        });
+        let t = target(&port);
+        let a = voice(
+            t.clone(),
+            "AT+CLCC".into(),
+            Duration::from_secs(2),
+            Until::Final,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(a.contains("+CLCC: 1,1,4"), "{a:?}");
+        // the caller hung up while ATA ran: NO CARRIER ends it, no waiting the whole time
+        let started = Instant::now();
+        let a = voice(t, "ATA".into(), Duration::from_secs(5), Until::Final, false)
+            .await
+            .unwrap();
+        assert!(a.contains("NO CARRIER"), "{a:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        while let Ok(u) = urcs.try_recv() {
+            assert_ne!(u.port, port, "{u:?}");
+        }
+    }
+
+    /// R19: a command that ran out of time leaves the port dirty; its late OK is dropped by the
+    /// resync and never taken as the next command's answer.
+    #[tokio::test]
+    async fn a_late_ok_is_not_the_next_commands_answer() {
+        let (port, sent, _) = fake_modem_script(|l| match l {
+            "AT+COPS=0" => vec![(500, "\r\nOK\r\n".into())],
+            "AT+CMEE?" => ok("\r\n+CMEE: 1"),
+            "AT+CGCONTRDP" => ok("\r\n+CGCONTRDP: 1,5,\"apn\""),
+            _ => ok(""),
+        });
+        let e = exchange(&port, "AT+COPS=0", Duration::from_millis(150)).unwrap_err();
+        assert!(e.contains("no answer"), "{e}");
+        let a = exchange(&port, "AT+CGCONTRDP", Duration::from_secs(3)).unwrap();
+        assert!(a.contains("+CGCONTRDP: 1"), "{a:?}");
+        let lines: Vec<String> = sent.try_iter().collect();
+        assert_eq!(lines, ["AT+COPS=0", "AT+CMEE?", "AT+CGCONTRDP"]);
+        // clean now: no resync before the next one
+        exchange(&port, "AT+CGCONTRDP", Duration::from_secs(3)).unwrap();
+        assert_eq!(
+            sent.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "AT+CGCONTRDP"
+        );
+    }
+
+    /// R15 ②: while another process (the fallback script) holds the lock, nothing is written.
+    #[test]
+    fn a_command_waits_for_the_lock_another_process_holds() {
+        let dir = std::env::temp_dir().join(format!("core-at-held-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lock = dir.join("at.lock").to_string_lossy().into_owned();
+        let held = File::create(&lock).unwrap();
+        held.lock_exclusive().unwrap();
+        let (port, sent, _) = fake_modem_script(|_| ok(""));
+        let cmd = std::thread::spawn(move || {
+            send_blocking(
+                Job::fixed(Cmd::CopsAuto),
+                Some(lock),
+                Some(port),
+                &|| {},
+                &|| Ok(()),
+            )
+        });
+        assert!(sent.recv_timeout(Duration::from_millis(400)).is_err());
+        FileExt::unlock(&held).unwrap();
+        assert_eq!(
+            sent.recv_timeout(Duration::from_secs(2)).unwrap(),
+            "AT+COPS=0"
+        );
+        assert!(cmd.join().unwrap().is_ok());
+    }
+
+    /// R15 ③: the port reset under a command: the command fails at once, the next one opens
+    /// the port again instead of hanging on the dead reader.
+    #[tokio::test]
+    async fn a_reset_port_fails_the_command_at_once_and_is_opened_again() {
+        let (port, sent, _) = fake_modem_script(|_| vec![(200, HANG_UP.into())]);
+        let p = port.clone();
+        let t = Instant::now();
+        let cmd = std::thread::spawn(move || {
+            exchange_until(&p, "AT+COPS=0", Duration::from_secs(8), Until::Final)
+        });
+        assert_eq!(
+            sent.recv_timeout(Duration::from_secs(2)).unwrap(),
+            "AT+COPS=0"
+        );
+        let e = cmd.join().unwrap().unwrap_err();
+        assert!(e.starts_with("read "), "{e}");
+        assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+        assert!(broker::resident(&port).is_none());
+        let t = Instant::now();
+        assert!(exchange(&port, "AT", Duration::from_secs(5)).is_err());
+        assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+    }
+
+    /// R15 ④: the reader sleeps in poll: no wake-ups while the modem is quiet.
+    #[tokio::test]
+    async fn the_reader_does_not_wake_while_the_port_is_quiet() {
+        if !Path::new("/proc/self/task").exists() {
+            return; // not Linux
+        }
+        let (port, _, _) = fake_modem_script(|_| ok(""));
+        send_with(Cmd::CopsAuto, None, Some(port.clone()))
+            .await
+            .unwrap();
+        // the reader of this port: the newest "at-read" thread
+        let switches = || {
+            let mut best = (0u64, 0u64);
+            for t in std::fs::read_dir("/proc/self/task").unwrap().flatten() {
+                let comm = std::fs::read_to_string(t.path().join("comm")).unwrap_or_default();
+                if comm.trim() != "at-read" {
+                    continue;
+                }
+                let tid: u64 = t.file_name().to_string_lossy().parse().unwrap_or(0);
+                let status = std::fs::read_to_string(t.path().join("status")).unwrap_or_default();
+                let n = status
+                    .lines()
+                    .find_map(|l| l.strip_prefix("voluntary_ctxt_switches:"))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                if tid > best.0 {
+                    best = (tid, n);
+                }
+            }
+            best
+        };
+        let (tid, before) = switches();
+        assert!(tid > 0, "no reader thread");
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let (tid2, after) = switches();
+        if tid2 == tid {
+            assert!(after - before <= 1, "{before} -> {after}");
+        }
+    }
+
+    /// R18: in a call every other command is refused before it touches the lock or the port;
+    /// the call's own commands go through.
+    #[tokio::test]
+    async fn in_a_call_other_commands_are_refused_and_voice_ones_go_through() {
+        let (port, sent, _) = fake_modem_script(|l| match l {
+            "AT+CLCC" => ok("\r\n+CLCC: 1,1,0,0,0,\"+15550100\",145"),
+            _ => ok(""),
+        });
+        set_in_call(true);
+        let e = raw(target(&port), "ATI", Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        let e2 = send_with(Cmd::CopsAuto, None, Some(port.clone()))
+            .await
+            .unwrap_err();
+        let a = voice(
+            target(&port),
+            "AT+CLCC".into(),
+            Duration::from_secs(2),
+            Until::Final,
+            false,
+        )
+        .await;
+        set_in_call(false);
+        assert_eq!(error_kind(&e), ErrorKind::Busy, "{e}");
+        assert!(
+            e.contains("voice call") && e2.contains("voice call"),
+            "{e} / {e2}"
+        );
+        assert!(a.unwrap().contains("+CLCC: 1"));
+        assert_eq!(
+            sent.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "AT+CLCC"
+        );
+        assert!(sent.try_recv().is_err(), "nothing else reached the port");
     }
 }

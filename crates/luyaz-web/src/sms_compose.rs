@@ -10,7 +10,7 @@
 //!       ─▶ u60d sms.send_raw {number, message_hex, sms_time} (fresh op_id, never retried)
 //!       ─▶ 「设备已接受：发给 X 的短信」, the form cleared; never "成功"
 //! ```
-//! - **u60d sends every SMS as UCS-2** (`send_raw` encrypts the hex and fixes `encode_type:
+//! - **u60d sends every SMS as UCS-2** (`send_raw` passes the hex as is and fixes `encode_type:
 //!   UNICODE`), so a part holds 70 UTF-16 units, 67 when split, ASCII too. The old page counted
 //!   ASCII text in GSM-7 parts (160 / 153), which the device never used through this path; the
 //!   count and the confirm now say what is actually sent.
@@ -39,7 +39,7 @@ use crate::write;
 pub const PATH: &str = "/sms/compose";
 /// u60d's limit: `message_hex` ≤ 4096 hex digits = 1024 UTF-16 units.
 pub const MAX_UNITS: usize = 1024;
-/// send_raw: the vendor crypto session, then up to 10 s of command-status polling.
+/// send_raw: up to 10 s of command-status polling.
 const SEND_TIMEOUT: Duration = Duration::from_secs(40);
 
 /// Spaces, dashes and brackets out (the old `cleanNumber`).

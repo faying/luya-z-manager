@@ -47,6 +47,8 @@ struct Cached {
     clients: Vec<Value>,
     clients_prev: ni::Counters,
     clients_at: i64,
+    /// the `neighbors` block (Null before the first pass)
+    neighbors: Value,
 }
 
 /// What the refresh pass leaves for the requests, and the writes in progress (the agent's `Inner`).
@@ -153,9 +155,17 @@ async fn refresh(c: Compat) {
     .await
     .unwrap_or(Value::Null);
     let (snap, sel) = ni::local_json(&net, &sim_state, &imsi, &wwan);
+    // a uci read that fails keeps the last block
+    let nbr = super::neighbors::read_raw(&c)
+        .await
+        .ok()
+        .map(|raw| super::neighbors::block(&super::neighbors::report(&net, &raw), t));
     {
         let mut g = c.net.lock();
         g.local = snap;
+        if let Some(b) = nbr {
+            g.neighbors = b;
+        }
         if let Some(sel) = sel {
             g.selection = Some(sel);
             g.selection_at = now();
@@ -364,7 +374,11 @@ pub async fn get(State(c): State<Compat>, RawQuery(query): RawQuery) -> Response
         selection_at: g.selection_at,
         guard,
         scan,
-        neighbors: ni::neighbors_json(0, &[]),
+        neighbors: if g.neighbors.is_null() {
+            ni::neighbors_json("not_reported", "", 0, &[])
+        } else {
+            g.neighbors.clone()
+        },
         clients: &g.clients,
         clients_at: g.clients_at,
         scenes,

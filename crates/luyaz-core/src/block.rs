@@ -128,6 +128,10 @@ pub fn phase1_blocks() -> Vec<BlockSpec> {
         BlockSpec::derived("advice", Box::new(OnChange)),
         // regress (design 2026-10-24): open incidents and those the screen still shows
         BlockSpec::derived("regress", Box::new(OnChange)),
+        // 温控（docs/designs/thermal-care.md）：档位、温度、停充与 CHILL 请求，变了才发
+        BlockSpec::derived("heat", Box::new(OnChange)),
+        // 插件的显示请求（luyaz-phone 设计 R1-4）：触屏上的卡片，变了才发；plug::display 交
+        BlockSpec::derived("display", Box::new(OnChange)),
         // V2-46（2026-10-05）：旧 /state 的读者迁到 /v2 用，data 和旧 /state 同名对象同形，变了才发。
         BlockSpec::derived("qos", Box::new(OnChange)),
         BlockSpec::derived("clients", Box::new(OnChange)),

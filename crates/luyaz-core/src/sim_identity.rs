@@ -102,6 +102,10 @@ impl SimIdentity {
     pub fn phase(&self) -> Phase {
         self.phase
     }
+    /// The identity last seen (none before the first read or while there is no card).
+    pub fn known(&self) -> Option<&Identity> {
+        self.known.as_ref()
+    }
 
     /// Once per epoch, when its transition has settled back to `online`: the epoch, for the
     /// listeners that must follow a card change (CHILL reload, home exit's miss count).

@@ -471,7 +471,8 @@ ln -s 1 "$T/l/x"; : >"$T/p/a|b"; ln -s "$T/a" "$T/link"; : >"$T/n/$(printf 'a\nb
 /// doctor-legacy.sh): read off its `record_list`.
 #[test]
 fn record_names_are_the_ship_executors() {
-    let ship = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../touch-ui/scripts/luyaz-ship.sh");
+    let ship =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../touch-ui/scripts/luyaz-ship.sh");
     let Ok(text) = std::fs::read_to_string(&ship) else {
         return;
     };
@@ -805,3 +806,33 @@ fn lanid_row_from_the_clients_block() {
     assert!(run(r#"{"blocks":{"clients":{"data":{"list":[]}}}}"#).is_none());
     assert!(run("").is_none());
 }
+
+/// Heat care's row from the `heat` block.
+#[test]
+fn heat_row_reads_the_block() {
+    assert!(
+        heat_text(&serde_json::Value::Null).is_none(),
+        "older core: no row"
+    );
+    let (lv, zh, _) = heat_text(&serde_json::json!({"level":"normal","battery_c":31,"chip_c":44,"charge_paused":false,"chill":"","stock_protect":0,"acting":true})).unwrap();
+    assert_eq!(lv, "ok");
+    assert_eq!(zh, "正常：电池 31 °C、芯片 44 °C");
+    let (lv, zh, en) = heat_text(&serde_json::json!({"level":"hot","battery_c":51,"chip_c":70,"charge_paused":true,"chill":"hot","chill_now":"hot","stock_protect":1,"acting":true})).unwrap();
+    assert_eq!(lv, "warn");
+    assert!(
+        zh.contains("暂停充电") && zh.contains("省电档") && zh.contains("原厂"),
+        "{zh}"
+    );
+    assert!(en.starts_with("Hot: battery 51"), "{en}");
+    let (lv, zh, _) = heat_text(&serde_json::json!({"level":"critical","battery_c":null,"chip_c":91,"chill":"critical","chill_now":"critical","test_offset":20,"acting":false})).unwrap();
+    assert_eq!(lv, "bad");
+    assert!(
+        zh.contains("电池 ? °C") && zh.contains("直连") && zh.contains("只看"),
+        "{zh}"
+    );
+    assert!(zh.contains("测试中：读数 +20 °C"), "{zh}");
+    // asked for but CHILL did not act (not running): not claimed
+    let (_, zh, _) = heat_text(&serde_json::json!({"level":"hot","battery_c":51,"chip_c":60,"charge_paused":false,"chill":"hot","chill_now":"","acting":true})).unwrap();
+    assert_eq!(zh, "热：电池 51 °C、芯片 60 °C");
+}
+

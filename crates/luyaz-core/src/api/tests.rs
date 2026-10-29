@@ -560,9 +560,10 @@ async fn netinfo_as_the_agent_assembles_it() {
             d["guard"]["phase"].as_str(),
             d["scan"]["state"].as_str(),
             d["neighbors"]["state"].as_str(),
-            d["neighbors"]["scanned_at"].as_i64(),
+            d["neighbors"]["cells"].as_array().map(Vec::len),
         ),
-        (Some("idle"), Some("idle"), Some("unsupported"), Some(0))
+        // SA: the modem reports no neighbours
+        (Some("idle"), Some("idle"), Some("not_reported"), Some(0))
     );
     // clients: the station with its lease
     let cl = &d["clients"]["list"][0];

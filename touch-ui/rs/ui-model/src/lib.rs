@@ -132,6 +132,10 @@ pub struct Model {
     /// 落地 (core GET /v2/usage/landing): None = none to show
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landing: Option<landing_t>,
+    /// the last days of the usage ledger (core GET /v2/usage/days), newest first; empty: not
+    /// read (the 流量 page reads it while up) or an older core
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usage_days: Vec<usage_day_t>,
     /// the direct exit's latency (core GET /v2/latency/direct): None = not measured / failed
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direct_lat: Option<direct_lat_t>,

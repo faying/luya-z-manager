@@ -17,6 +17,9 @@ pub const SVC_NAS: u32 = 0x03;
 pub const MSG_BIND_SUBSCRIPTION: u16 = 0x0045;
 pub const MSG_GET_SIGNAL_INFO: u16 = 0x004F;
 pub const MSG_GET_SERVING_SYSTEM: u16 = 0x0024;
+pub const MSG_IMSA_BIND: u16 = 0x0033;
+pub const MSG_IMSA_GET_REG: u16 = 0x0020;
+pub const MSG_IMSA_GET_SERVICES: u16 = 0x0021;
 /// How often the sampler reads the standby slot.
 pub const EVERY: Duration = Duration::from_secs(30);
 /// A reading older than this is dropped from the snapshot (three missed cycles).
@@ -213,13 +216,13 @@ mod io {
         Some(fd)
     }
 
-    /// The NAS server's address from the QRTR name service.
-    fn lookup(fd: &Fd) -> Option<SockaddrQrtr> {
+    /// A service's server address from the QRTR name service.
+    fn lookup(fd: &Fd, want: u32) -> Option<SockaddrQrtr> {
         let mut local: SockaddrQrtr = unsafe { zeroed() };
         let mut sl = size_of::<SockaddrQrtr>() as u32;
         let mut pkt = [0u8; 20];
         pkt[0..4].copy_from_slice(&QRTR_TYPE_NEW_LOOKUP.to_le_bytes());
-        pkt[4..8].copy_from_slice(&SVC_NAS.to_le_bytes());
+        pkt[4..8].copy_from_slice(&want.to_le_bytes());
         let mut ctrl = SockaddrQrtr { family: AF_QIPCRTR as u16, node: 0, port: QRTR_PORT_CTRL };
         if !send(fd, ctrl, &pkt) {
             unsafe { libc::getsockname(fd.0, (&mut local as *mut SockaddrQrtr).cast(), &mut sl) };
@@ -244,7 +247,7 @@ mod io {
             if svc == 0 && node == 0 && port == 0 {
                 break;
             }
-            if svc == SVC_NAS && found.is_none() {
+            if svc == want && found.is_none() {
                 found = Some(SockaddrQrtr { family: AF_QIPCRTR as u16, node, port });
             }
         }
@@ -271,7 +274,7 @@ mod io {
     /// One subscription's reading on a fresh client (closed on return).
     pub fn read_sub(sub: u8) -> Option<Reading> {
         let fd = open()?;
-        let nas = lookup(&fd)?;
+        let nas = lookup(&fd, SVC_NAS)?;
         let b = request(&fd, nas, 1, MSG_BIND_SUBSCRIPTION, &bind_tlv(sub))?;
         if !result_ok(&b) {
             return None;
@@ -280,6 +283,7 @@ mod io {
         r.serving = request(&fd, nas, 3, MSG_GET_SERVING_SYSTEM, &[]).as_deref().and_then(decode_serving);
         Some(r)
     }
+
 }
 
 #[cfg(target_os = "linux")]

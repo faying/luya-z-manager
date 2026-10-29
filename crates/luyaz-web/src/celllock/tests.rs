@@ -113,3 +113,22 @@ fn confirms_say_what_and_english_has_no_chinese() {
     let html = Leaves { v: &v }.render().unwrap();
     assert!(!cjk(&html), "{html}");
 }
+
+#[test]
+fn neighbours_in_the_cores_order_or_why_not() {
+    let ok = json!({"state": "ok", "cells": [
+        {"rat": "LTE", "band": "B3", "pci": 182, "arfcn": 1750, "rsrp": -99, "rsrq": -16, "sinr": null},
+        {"rat": "LTE", "pci": 7, "arfcn": 1650, "rsrp": null, "rsrq": -19},
+    ]});
+    let r = neighbours(&ok, Lang::Zh).unwrap();
+    assert_eq!(r[0], Nbr { pci: "182".into(), band: "B3".into(), arfcn: "1750".into(), rsrp: "-99".into(), rsrq: "-16".into() });
+    assert!(r[1].band == "LTE" && r[1].rsrp == "-");
+    let html = nbr_leaf(Some(&ok), Lang::En).1;
+    assert!(html.starts_with(r#"<div id="cl-nbr">"#) && html.contains(r#"<td class="nd-mono">182</td>"#), "{html}");
+    let sa = json!({"state": "not_reported", "error": "5G 独立组网（SA）下基带不报邻区", "error_en": "In 5G SA the modem reports no neighbours", "cells": []});
+    assert_eq!(neighbours(&sa, Lang::En).unwrap_err(), "In 5G SA the modem reports no neighbours");
+    assert_eq!(neighbours(&sa, Lang::Zh).unwrap_err(), "5G 独立组网（SA）下基带不报邻区");
+    // an older core: unsupported with its reason; nothing at all
+    assert_eq!(neighbours(&json!({"state": "unsupported", "error": "x"}), Lang::Zh).unwrap_err(), "x");
+    assert_eq!(neighbours(&Value::Null, Lang::Zh).unwrap_err(), "基带现在没报邻区");
+}

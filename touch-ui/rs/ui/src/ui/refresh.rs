@@ -8,7 +8,7 @@ use crate::lv;
 use crate::cf;
 use crate::clock;
 use crate::kit;
-use crate::lang::{pick, tr};
+use crate::lang::{n_, pick, tr};
 use crate::logic::{self, SimKind, CTL_BUSY, CTL_FULL};
 use crate::theme::{t, uf};
 use crate::trc;
@@ -113,6 +113,7 @@ impl Ui {
             sys: self.tab_visible(TAB_SYS),
             alerts: self.sub_visible(Sub::Alerts),
             diag: self.sub_visible(Sub::Diag),
+            usage: self.sub_visible(Sub::Usage),
         }
     }
 
@@ -223,7 +224,10 @@ impl Ui {
             self.banner_set(Some(&b)); // 已按记住的方式：…
         } else if ah.lost_secs != 0 {
             self.banner_set(Some(&cf!(tr("管理后台失联 %ld 分钟"), ah.lost_secs / 60)));
-        } else if d.batt_temp >= 50 {
+        } else if d.heat_level >= 2 {
+            self.banner_set(Some(tr(heat_banner(d.heat_level, d.heat_paused != 0, d.heat_chill)).as_bytes()));
+        } else if d.heat_level < 0 && d.batt_temp >= 50 {
+            // an older core without heat care
             self.banner_set(Some(tr("电池过热，拔掉充电器放到阴凉处").as_bytes()));
         } else if d.batt_pct <= 10 && !(d.charger_in != 0 && d.chg_volt_uv > 1000000) {
             self.banner_set(Some(tr("电量低，尽快充电").as_bytes()));
@@ -313,6 +317,9 @@ impl Ui {
         self.home_row_paint();
         self.home_landing_paint();
         self.home_today_paint();
+        if self.sub_visible(super::Sub::Usage) {
+            self.usage_paint();
+        }
         if self.tab_visible(TAB_HOME) || self.tab_visible(super::TAB_EXIT) || self.sub_visible(super::Sub::Ts) {
             self.home_ts_paint();
         }
@@ -471,5 +478,40 @@ mod tests {
         assert_eq!(fmt_rate_top(20_000_000, true, false), b"160Mb");
         assert_eq!(rate_unit(188000, false), (b"184".to_vec(), b"KB/s".to_vec()));
         assert_eq!(rate_unit(900, true), (b"7".to_vec(), b"Kbps".to_vec()));
+    }
+}
+
+/// Heat care's banner (thermal-care §4.3): says only what was done (charging paused, CHILL moved),
+/// so on battery under load it is just the advice.
+pub(crate) fn heat_banner(level: i32, paused: bool, chill: i32) -> &'static str {
+    if level >= 3 {
+        match (paused, chill >= 2) {
+            (true, true) => n_("过热：已停充、CHILL 直连，放到阴凉处"),
+            (true, false) => n_("过热：已停充，放到阴凉处"),
+            (false, true) => n_("过热：CHILL 已直连，放到阴凉处"),
+            (false, false) => n_("过热，放到阴凉处"),
+        }
+    } else {
+        match (paused, chill >= 1) {
+            (true, true) => n_("太热：已暂停充电、CHILL 降档，凉下来自动恢复"),
+            (true, false) => n_("太热：已暂停充电，凉下来自动恢复"),
+            (false, true) => n_("太热：CHILL 已降档，凉下来自动恢复"),
+            (false, false) => n_("太热，放到通风的地方"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod heat_banner_tests {
+    use super::heat_banner;
+
+    #[test]
+    fn says_only_what_was_done() {
+        assert_eq!(heat_banner(2, true, 1), "太热：已暂停充电、CHILL 降档，凉下来自动恢复");
+        assert_eq!(heat_banner(2, false, 0), "太热，放到通风的地方");
+        assert_eq!(heat_banner(2, false, 1), "太热：CHILL 已降档，凉下来自动恢复");
+        assert_eq!(heat_banner(3, true, 1), "过热：已停充，放到阴凉处", "eco is not direct");
+        assert_eq!(heat_banner(3, true, 2), "过热：已停充、CHILL 直连，放到阴凉处");
+        assert_eq!(heat_banner(3, false, 0), "过热，放到阴凉处");
     }
 }

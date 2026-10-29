@@ -132,6 +132,8 @@ pub enum Job {
     Limit,
     /// unplugged: resume charging if stopped
     Unplugged,
+    /// the heat pause (`crate::heat`) and what holds charging disagree: pause or resume
+    Heat,
 }
 
 static EXECUTOR: OnceLock<tokio::sync::mpsc::UnboundedSender<Job>> = OnceLock::new();
@@ -228,6 +230,10 @@ pub fn tick(hub: &Hub) {
     let discharging = sys("status")
         .map(|s| s.trim() == "Discharging")
         .unwrap_or(false);
+    // heat care's "plugged": charger_connect can read 1 with nothing plugged in on this hardware,
+    // so a real input voltage too, or charging stopped (direct supply drops the input to 0)
+    let volt = battery.as_ref().and_then(|b| b.data["chg_uv"].as_i64());
+    let heat_plugged = connected.map(|c| c && (stopped || volt.is_some_and(|v| v > 1_000_000)));
     let (limit, manual_override) = charge::current();
     let mut g = lock();
     let changed = g.revisions != revisions;
@@ -249,6 +255,11 @@ pub fn tick(hub: &Hub) {
         wall_now(),
     );
     drop(g);
+    let mut jobs = jobs;
+    // heat care reads on this same tick (no timer of its own), owned or not; only the owner acts
+    if crate::heat::tick(heat_plugged, connected == Some(false), capacity) && charge::owned() {
+        jobs.push(Job::Heat);
+    }
     if let Some(tx) = EXECUTOR.get() {
         for j in jobs {
             let _ = tx.send(j);

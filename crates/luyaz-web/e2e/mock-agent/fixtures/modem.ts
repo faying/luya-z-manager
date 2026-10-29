@@ -180,8 +180,14 @@ const cellLock: {
 const nrBandLock: { nsa: string | null; sa: string | null } = { nsa: null, sa: null };
 
 const NEIGHBOR_MS = 2500;
-export const NBR_UNSUPPORTED = "原厂扫描会断网且拿不到数据，已停用";
-export const NBR_UNSUPPORTED_EN = "Off: the stock scan drops data, finds nothing";
+// core ≥ 1.54.0: the LTE neighbours the modem reports, strongest first; none in SA
+export const NBR_SA = "5G 独立组网（SA）下基带不报邻区";
+export const NBR_SA_EN = "In 5G SA the modem reports no neighbours";
+export function neighborsNow(ctx: { has(s: string): boolean }, now: number) {
+  if (ctx.has("nbr-sa")) return { state: "not_reported", scanned_at: now, error: NBR_SA, error_en: NBR_SA_EN, cells: [] };
+  const cell = (pci: number, band: string, arfcn: number, rsrp: number, rsrq: number) => ({ rat: "LTE", band, pci, arfcn, rsrp, rsrq, sinr: null });
+  return { state: "ok", scanned_at: now, error: "", error_en: "", cells: [cell(182, "B3", 1750, -99, -16), cell(7, "B3", 1650, -104, -18), cell(311, "B1", 100, -112, -19)] };
+}
 let neighborScanAt: number | null = null;
 
 const NR_NEIGHBORS: CellNeighbor[] = [

@@ -319,6 +319,7 @@ pub fn parse(n: &mut netinfo_t, data: &[u8]) {
             for o in objs(&arr, NI_MAX_CELLS) {
                 n.cells[n.ncells as usize] = ni_cell_t {
                     rat: jstr(&o, "rat", 4),
+                    band: jstr(&o, "band", 8),
                     pci: jstr(&o, "pci", 8),
                     arfcn: jstr(&o, "arfcn", 12),
                     rsrp: jstr(&o, "rsrp", 8),
@@ -431,9 +432,6 @@ impl Netinfo {
     }
     pub fn auto(&mut self, agent: &mut CoreApi) {
         self.act(agent, "/api/modem/netselect/auto", None);
-    }
-    pub fn nbr_scan(&mut self, agent: &mut CoreApi) {
-        self.act(agent, "/api/netinfo/neighbors/scan", None);
     }
 
     /// Pin this scenario; "" = back to automatic.

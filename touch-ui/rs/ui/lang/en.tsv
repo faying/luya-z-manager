@@ -7,6 +7,7 @@
  · 握手 	 · handshake 
  · 离线	 · offline
 %.16s · %d 台	%.16s · %d device|%.16s · %d devices
+%d 个 · 信号强的在前 · RSRP / RSRQ	%d · strongest first · RSRP / RSRQ
 %d 台	%d device|%d devices
 %d 条 · %d 未读	%d SMS · %d unread
 %d 条未读 · 共 %d 条	%d unread · %d total
@@ -21,7 +22,6 @@
 %ld 秒前	%ld s ago
 %s · 共 %s	%s · %s total
 %s · 在线 %d/%d	%s · online %d/%d
-%s 扫描 · %d 个	Scanned %s · %d found
 %s。重启设备也会回到自动选网。	%s; a restart also returns to auto
 %s速率稍后显示%s	%sSpeed shown shortly%s
 %s（%s）%s%s	%s (%s) %s%s
@@ -34,6 +34,7 @@
 5G NSA 频段	5G NSA bands
 5G SA 频段	5G SA bands
 5G 服务小区	5G serving cell
+5G 独立组网（SA）下基带不报邻区	In 5G SA the modem reports no neighbours
 5G 频段	5 GHz band
 5G（现在不用，下面是测量值）	5G (not in use; measured values below)
 DERP 中继	DERP relay
@@ -139,12 +140,12 @@ tailscale|节点	Peers
 卡刚报过忙，还要等 %d 秒再试	Card was busy; retry in %d s
 卡忙没切成	Card busy
 卡忙：重启设备或拔插卡后再切	Busy: restart device or reinsert card
+基带现在没报邻区	The modem reports no neighbours right now
 没切成	Didn't switch
 正在发送 eSIM 通知	Sending eSIM notices
 原始运营商	SIM operator
 取消	Cancel
 只有本机在线	Only this device online
-可能短暂影响网速	May slow data briefly
 号码	Number
 号码没写在卡里	No number on SIM
 卡 2 不提供号码	SIM 2 reports no number
@@ -238,9 +239,6 @@ tailscale|节点	Peers
 手动选网	Manual selection
 手动：一直用选中的这条，换卡也不变	Manual: always the selected one, even with another SIM
 手机走家里网络	phones use the home network
-扫描	Scan
-扫描中…	Scanning…
-扫描失败	Scan failed
 按 SIM 卡自动选	Picked by SIM
 按下面每个情景的条件自己切换	Switches by each scenario's conditions below
 按国外设置	abroad settings
@@ -270,7 +268,6 @@ tailscale|节点	Peers
 未锁定	Not locked
 本地	Local
 本机	This device
-本机暂时读不到邻区	Can't read neighbor cells here
 条件变了，1–2 分钟内跟着换	Follows within 1–2 min when they change
 查询中…	Looking up…
 正在关机…	Powering off…
@@ -396,7 +393,6 @@ tailscale|节点	Peers
 运营商选择	Network Operator
 运行	Uptime
 近 5 分钟	Last 5 min
-还没扫过，点「扫描」读一次	Not scanned yet; tap Scan
 还没有 eSIM 配置 · 用管理网页添加	No eSIM profiles yet · add one in the web admin
 还没有手动 APN。要用自定义 APN，先在管理网页里新建	No manual APNs yet; add one in the web admin first
 还没有设备连上	No devices connected yet
@@ -968,3 +964,25 @@ CHILL 没在运行	CHILL not running
 %d 分钟	%d min
 %d 小时	%d h
 %d 天	%d days
+
+# 流量页：首页「今日」点进来（manager docs/designs/travel-assist.md §4，10-27）
+昨天	Yesterday
+前天	Day before
+本月	This month
+没有记录	No record
+时间没校准	Clock not set
+未知的卡	Unknown card
+截至 %02d:%02d	As of %02d:%02d
+比日均 %+ld%%	%+ld%% vs avg
+近 30 天 · 按卡	Last 30 days · by card
+近 14 天	Last 14 days
+日均 %s	Avg %s/day
+过热：已停充、CHILL 直连，放到阴凉处	Too hot: charging stopped, CHILL direct; move somewhere cool
+太热：已暂停充电、CHILL 降档，凉下来自动恢复	Hot: charging paused, CHILL on eco; back once cool
+因为热暂停充电	Paused: too hot
+过热：已停充，放到阴凉处	Too hot: charging stopped; move somewhere cool
+过热：CHILL 已直连，放到阴凉处	Too hot: CHILL direct; move somewhere cool
+过热，放到阴凉处	Too hot; move somewhere cool
+太热：已暂停充电，凉下来自动恢复	Hot: charging paused; back once cool
+太热：CHILL 已降档，凉下来自动恢复	Hot: CHILL on eco; back once cool
+太热，放到通风的地方	Hot; move it somewhere airy

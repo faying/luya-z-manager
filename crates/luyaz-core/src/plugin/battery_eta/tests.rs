@@ -214,3 +214,12 @@ fn abi_is_the_wit_package() {
     let line = wit.lines().find(|l| l.starts_with("package ")).unwrap();
     assert_eq!(line, format!("package {ABI};"));
 }
+
+#[test]
+fn power_now_gives_the_level_and_plug_only_when_known() {
+    use serde_json::json;
+    assert_eq!(now_of(None, Some(true)), Value::Null);
+    assert_eq!(now_of(Some(82), Some(true)), json!({"pct": 82, "plugged": true}));
+    assert_eq!(now_of(Some(40), None), json!({"pct": 40}));
+    assert_eq!(now_of(Some(104), Some(false)), json!({"pct": 100, "plugged": false}));
+}
