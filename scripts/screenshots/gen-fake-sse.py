@@ -78,7 +78,7 @@ static = {
     "nfc": {"switch": 0},
     "op": {"active": None, "last": None, "rollback_enabled": True},
     "powerbank": {"state": 0},
-    "qos": {"ambr_dl": "1000000", "ambr_ul": "200000", "bearer": "nr_pdu", "qci": 9, "stale": False, "usb_mode": "user"},
+    "qos": {"ambr_dl": "1000.000", "ambr_ul": "200.000", "bearer": "nr_pdu", "qci": 9, "stale": False, "usb_mode": "user"},
     "sim": {"current_slot": 1, "dual_sim": 1, "iccid": ICCID, "imsi": IMSI, "modem_state": "modem_init_complete", "msisdn": MSISDN,
         "pin_status": "0", "sim1_provision": 0, "sim2_provision": 0, "spn": "Example Mobile", "state": "ready"},
     "typec": {"cc_attch_state": 0, "data_role": "device", "power_role": "sink"},

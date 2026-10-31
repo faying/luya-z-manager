@@ -194,6 +194,7 @@ impl Shell {
     pub fn search_items(&self) -> Vec<SearchItem> {
         ROUTES
             .iter()
+            .filter(|r| r.present())
             .map(|r| SearchItem {
                 href: r.href,
                 label: r.title(self.lang),

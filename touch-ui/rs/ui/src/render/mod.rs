@@ -411,8 +411,15 @@ impl Source for Replay {
     fn power_last_resort(&mut self, _reboot: bool) {}
     fn lang_hold(&mut self) {}
     fn alert_theme_paused(&mut self) {}
+    /// None, as C's render test had it (the switches read off); LUYAZ_RENDER_AUX="w24,w5,psm"
+    /// (e.g. "1,1,0", the screenshots) gives the radios and power save instead.
     fn aux_read(&mut self) -> Option<(i32, i32, i32)> {
-        None
+        let v = std::env::var("LUYAZ_RENDER_AUX").ok()?;
+        let n: Vec<i32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        match n[..] {
+            [a, b, c] => Some((a, b, c)),
+            _ => None,
+        }
     }
 }
 

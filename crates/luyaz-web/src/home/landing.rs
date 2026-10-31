@@ -56,6 +56,8 @@ pub(crate) struct Now<'a> {
     pub device: &'a Value,
     /// The core's `/api/services/chill` (`None`: not read).
     pub chill: Option<&'a Value>,
+    /// CHILL is installed (without it the "Home exit" row, CHILL's, is left out).
+    pub chill_installed: bool,
 }
 
 fn country(mcc: i64, l: Lang) -> String {
@@ -174,7 +176,9 @@ pub(crate) fn card(l: Lang, land: Option<&Value>, n: &Now) -> String {
     if let Some(t) = local_time(n, mcc, l) {
         rows.push_str(&row(l.pick("Local time", "当地时间"), &t, None));
     }
-    rows.push_str(&row(l.pick("Home exit", "家里出口"), exit, Some(tone)));
+    if n.chill_installed {
+        rows.push_str(&row(l.pick("Home exit", "家里出口"), exit, Some(tone)));
+    }
     rows.push_str(&row(
         l.pick("Data since landing", "落地以来流量"),
         &agent::bytes(Some(used)).unwrap_or_else(|| "—".into()),
@@ -220,7 +224,7 @@ impl Landing {
         }
     }
 
-    pub(super) fn leaves(&self, app: &Shared, l: Lang, chill: Option<&Value>) -> Vec<(String, String)> {
+    pub(super) fn leaves(&self, app: &Shared, l: Lang, chill: Option<&Value>, chill_installed: bool) -> Vec<(String, String)> {
         let html = app.hub.read(|st| {
             let data = |k: &str| st.blocks.get(k).map_or(&Value::Null, |b| &b.data);
             let n = Now {
@@ -229,6 +233,7 @@ impl Landing {
                 signal: data("signal"),
                 device: data("uci_device_info"),
                 chill,
+                chill_installed,
             };
             card(l, self.src.val.as_ref(), &n)
         });
@@ -257,7 +262,7 @@ mod tests {
     use serde_json::json;
 
     fn now<'a>(t: i64, sig: &'a Value, dev: &'a Value, chill: Option<&'a Value>) -> Now<'a> {
-        Now { t, utc_offset: Some(28_800), signal: sig, device: dev, chill }
+        Now { t, utc_offset: Some(28_800), signal: sig, device: dev, chill, chill_installed: true }
     }
 
     #[test]
@@ -290,6 +295,11 @@ mod tests {
         assert!(card(Lang::Zh, Some(&land), &now(100 + SHOW_FOR, &sig, &dev, None)).contains("hidden"));
         assert!(card(Lang::Zh, Some(&Value::Null), &now(200, &sig, &dev, None)).contains("hidden"));
         assert_eq!(home_exit(Some(&json!({"home": {"ok": false}})), Lang::Zh).0, "不可用");
+        // no CHILL on the device: no "Home exit" row, the rest unchanged
+        let mut n = now(200, &sig, &dev, None);
+        n.chill_installed = false;
+        let h = card(Lang::En, Some(&land), &n);
+        assert!(!h.contains("Home exit") && h.contains("Data since landing"), "{h}");
         assert_eq!(home_exit(Some(&json!({"enabled": false})), Lang::Zh).0, "未配置");
     }
 }

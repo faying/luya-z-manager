@@ -25,7 +25,6 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 - chill: reads the core's request in `/tmp/luyaz/heat` (`hot` = eco, `critical` = direct, as its own `CHILL_TEMP_WARM`/`CHILL_TEMP_HOT`); back after the request is gone and `COOL_HOLD`.
 - chill: subscriptions can no longer pin an egress interface (ext-1030 #14): `interface-name` / `routing-mark` are dropped from everything under `proxy-providers` in the rendered config, and each provider gets `override: interface-name: "", routing-mark: 0` so downloaded subscriptions are cleared too; the template's own home exit (`tailscale0`) is untouched. Before starting the core (ext-1030 #16), if `chill0` already exists or something else listens on 127.0.0.1/0.0.0.0/:: port 9999, 53 (UDP), 7894 or 7895, CHILL stays direct with reason `port_busy` / `tun_busy` (checked twice, 2 s apart), retries every 30 s, and does not count it as a crash.
-- touch: banner says when heat care paused charging and moved CHILL (hot / too hot); System's battery line says 「因为热暂停充电」. Without the core's `heat` block the old battery ≥50 °C banner stays.
 - kit: the model check no longer needs an underscore before `MU` (`BD_CNMU5250V1.0.0B31`, `BD_XCBZHKMU5250V1.0.0B03`); the region comes from the part before `MU`. Firmware outside the matrix is still refused.
 - chill: `rules_drift` no longer fires every minute when a scenario turns Wi-Fi off. The stock firmware adds `iif wlanN failed_policy` rules per interface and drops them with the interface; when it comes back their priority follows the new ifindex. A rule bound to an interface (`iif`/`oif`) now only counts as gone while that interface is up and no rule with the same text is left; any other rule that disappears is reported as before.
 
@@ -40,6 +39,19 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 - kit: `OUI_TSV=` (a table from `scripts/lanid/make-oui.sh`) is installed to `/data/luyaz/lanid/oui.tsv` for vendor names; the public build has none.
 
 - kit: carries the lanid-parse component (LAN client identification) and installs it to `/data/luyaz/core/plugins/` as the only component; without it the core runs with identification off. `LANID_CWASM=` uses a ready-made one.
+
+## touch 1.28.1 — 2026-10-31
+
+- the heap is mimalloc, as in the core. On musl's mallocng RSS rose about 13 KB per core event (3–8 MB an hour on the device, up to ~190 MB) until the next light/dark exec: freed snapshot buffers kept their pages. Same load now stays flat.
+
+## lweb 1.50.0 — 2026-10-31
+
+- without CHILL installed (`/data/chill/chill.sh` missing, as `install.sh status` decides) home leaves out the CHILL card and the landing card's "Home exit" row, and the sidebar, hub pages and ⌘K search leave out CHILL; the rest of the page closes up. Checked when a page opens; only "no such file" counts as absent. New `--chill-sh` / `LUYAZ_WEB_CHILL_SH`; default with a password file (the device) `/data/chill/chill.sh`, without one not checked (CHILL shown).
+
+## touch 1.28.0 — 2026-10-31
+
+- without CHILL installed (same file, looked at every 30 s) Home's scenario card has no CHILL column (Tailscale takes the width) and the exit tab no CHILL card. System's 语言 / Language row: the small line under it is in the language in use (the row's name and choices stay in both). The offscreen render takes the Wi-Fi switches from `LUYAZ_RENDER_AUX` (screenshots).
+- banner says when heat care paused charging and moved CHILL (hot / too hot); System's battery line says 「因为热暂停充电」. Without the core's `heat` block the old battery ≥50 °C banner stays.
 
 ## lweb 1.49.0 — 2026-10-31
 

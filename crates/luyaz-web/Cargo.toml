@@ -1,6 +1,6 @@
 [package]
 name = "luyaz-web"
-version = "1.49.0"
+version = "1.50.0"
 edition = "2024"
 rust-version = "1.99"
 description = "U60 Pro (MU5250) admin web: server-rendered pages (askama) pushed with Datastar. One upstream /v2/events connection to u60d, fanned out to the open tabs (u60-web.md E1, E2). `luyaz-web mock` replays a recorded /v2/events stream for local tests."

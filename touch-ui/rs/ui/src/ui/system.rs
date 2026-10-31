@@ -22,7 +22,11 @@ pub const CHART_READY: i32 = 12;
 /// The auto-off choices in segment order, in ms; 0 keeps the screen on.
 const AUTOOFF_CHOICES: [u32; 3] = [0, 30_000, 120_000];
 const AP_VAL: [Appear; 3] = [Appear::Light, Appear::Dark, Appear::Auto];
-const LANG_NOTE: &str = "告警短信也用这个语言 · Alert SMS use this too";
+/// The 语言 row's small line, in the language in use (the row's name and the two choices stay in
+/// both: whoever switched by mistake finds the way back by those).
+fn lang_note() -> &'static str {
+    if lang::is_en() { "Alert SMS use this too" } else { "告警短信也用这个语言" }
+}
 
 #[derive(Default, Clone)]
 pub struct Charts {
@@ -422,7 +426,7 @@ impl Ui {
         if l.is_null() {
             return;
         }
-        l.set_text(LANG_NOTE);
+        l.set_text(lang_note());
         kit::text_color(l, t().t3);
     }
 
@@ -483,7 +487,7 @@ impl Ui {
         self.sys.lang_seg = kit::seg(card, 166, 6, 120, &["中文", "English"], Some(lang_btn_cb));
         kit::seg_set(&mut self.sys.lang_seg, lang::is_en() as i32);
         // own line under the segment (it ends at y 36)
-        self.sys.lang_note = kit::label_w(card, f.cj12, th.t3, PAD, 39, CARD_W - 2 * PAD, false, LANG_NOTE);
+        self.sys.lang_note = kit::label_w(card, f.cj12, th.t3, PAD, 39, CARD_W - 2 * PAD, false, lang_note());
         kit::sep(card, 60);
         // the rows below keep their offsets
         let c = kit::bx(card, 0, 60, CARD_W, 120, th.card, 0);

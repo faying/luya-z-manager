@@ -5,6 +5,11 @@
 #[used]
 static VERSION_MARK: &str = concat!("LUYAZ_VERSION=", env!("CARGO_PKG_VERSION"), ";");
 
+/// mimalloc, as luyaz-core: musl's mallocng kept the per-event snapshot buffers' pages, RSS rose
+/// ~13 KB per core event (3-8 MB/h on the device) until the next theme exec; glibc stayed flat.
+#[global_allocator]
+static HEAP: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// `<name> <version> (<commit>)`: the commit from LUYAZ_COMMIT (tools/luyaz ship passes it)
 fn version_line(name: &str) -> String {
     match option_env!("LUYAZ_COMMIT").filter(|c| !c.is_empty()) {

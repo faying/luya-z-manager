@@ -2,6 +2,7 @@
 //   WEB=http://127.0.0.1:28081 OUT=dir [CHROME=path] node shoot-web.mjs [name…]
 // Uses @playwright/test from crates/luyaz-web/node_modules (npm ci there once).
 import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
 const require = createRequire(new URL("../../crates/luyaz-web/package.json", import.meta.url));
 const { chromium } = require("@playwright/test");
 const WEB = process.env.WEB ?? "http://127.0.0.1:28081";
@@ -21,7 +22,15 @@ const shots = [
   ["wifi", "/router/wifi", desk], ["sim", "/router/sim", desk], ["esim", "/router/esim", desk],
   ["login-phone", "/login", phone, "light", true],
 ];
-const b = await chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {});
+// CHROME, else Playwright's own browser, else the system Google Chrome (macOS)
+const SYSTEM_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const b = process.env.CHROME
+  ? await chromium.launch({ executablePath: process.env.CHROME })
+  : await chromium.launch().catch(async (e) => {
+      if (!existsSync(SYSTEM_CHROME)) throw e;
+      console.error(`Playwright's browser not installed; using ${SYSTEM_CHROME}`);
+      return chromium.launch({ executablePath: SYSTEM_CHROME });
+    });
 for (const [name, path, vp, scheme = "light", anon = false] of shots) {
   if (only.length && !only.includes(name)) continue;
   const ctx = await b.newContext({ viewport: vp, colorScheme: scheme, deviceScaleFactor: vp === phone ? 2 : 1 });

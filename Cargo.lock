@@ -1386,17 +1386,18 @@ dependencies = [
 
 [[package]]
 name = "luyaz-ui"
-version = "1.27.0"
+version = "1.28.1"
 dependencies = [
  "libc",
  "lvgl-sys",
+ "mimalloc",
  "plat",
  "ui-model",
 ]
 
 [[package]]
 name = "luyaz-web"
-version = "1.49.0"
+version = "1.50.0"
 dependencies = [
  "askama",
  "axum",

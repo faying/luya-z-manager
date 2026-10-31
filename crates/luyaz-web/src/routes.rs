@@ -38,6 +38,10 @@ impl Route {
     pub fn title(&self, l: Lang) -> &'static str {
         l.pick(self.en, self.zh)
     }
+    /// The feature behind the page is on this device (CHILL may not be installed).
+    pub fn present(&self) -> bool {
+        self.href != "/services/chill" || crate::chill_proxy::installed()
+    }
 }
 
 impl Group {
@@ -86,7 +90,9 @@ impl Group {
         }
     }
     pub fn routes(self) -> impl Iterator<Item = &'static Route> {
-        ROUTES.iter().filter(move |r| r.group == self && !r.hidden)
+        ROUTES
+            .iter()
+            .filter(move |r| r.group == self && !r.hidden && r.present())
     }
 }
 

@@ -8,8 +8,8 @@
 # agent (crates/luyaz-web/e2e/fake-agent.mjs) behind rewrite-agent.mjs (one made-up operator)
 # and core-front.mjs, then shoots every page in English (shoot-web.mjs). Stops everything at
 # the end. Needs Docker, node, and `npm ci` in crates/luyaz-web once.
-# Env: IMAGE (Rust build image, default u60-rust-ci:1.99.0), CHROME (browser for Playwright,
-# when its own is not installed), PORT_BASE (default 28000: uses +81, +461, +470, +90, +91).
+# Env: IMAGE (Rust build image, default u60-rust-ci:1.99.0), CHROME (browser for Playwright;
+# default its own, else the system Google Chrome), PORT_BASE (default 28000: uses +81, +461, +470, +90, +91).
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
@@ -43,7 +43,10 @@ printf 'LUYAZ_WEB_PASSWORD=x\n' > "$work/pw.env"
 
 echo "== start mock + serve, fake agent"
 docker rm -f $name >/dev/null 2>&1 || true
-docker run -d --name $name -p 127.0.0.1:$web:8080 -p 127.0.0.1:$mock:9460 \
+# LUYAZ_WEB_IFACES: the port mapping arrives on the container's eth0, not lo (guard.rs serves only
+# listed interfaces); LUYAZ_WEB_CHILL_SH: no CHILL here, as on a device without it
+docker run -d --name $name -e LUYAZ_WEB_IFACES=lo,eth0 -e LUYAZ_WEB_CHILL_SH=/nonexistent/chill.sh \
+    -p 127.0.0.1:$web:8080 -p 127.0.0.1:$mock:9460 \
     --add-host host.docker.internal:host-gateway -v luyaz-shots-target:/target:ro -v "$work":/s:ro "$image" \
     sh -c "/target/debug/luyaz-web mock --bind 0.0.0.0:9460 --replay /s/fake-events.sse --speed 1 &
            exec /target/debug/luyaz-web serve --bind 0.0.0.0:8080 --upstream http://host.docker.internal:$front \

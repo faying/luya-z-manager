@@ -24,7 +24,6 @@
 - core：采样少读（ext-1030 §3-A–C）。`uci show` 和采集用的 `uci get` 按包记住结果，`/etc/config/<包>` 和 `/tmp/.uci/<包>` 的（mtime、纳秒、大小、inode）不变就复用——有未保存改动的包以前每轮都 fork `uci show`，现在也不用了；子进程失败不记。温区扫描 5 秒内复用（温控照旧自己读）。`/proc/net/tcp` 每轮读一次，原来两次。
 - chill: 读 core 的请求 `/tmp/luyaz/heat`（`hot` = eco，`critical` = 直连，跟自己的 `CHILL_TEMP_WARM`/`CHILL_TEMP_HOT` 一样处理）；请求撤掉再过 `COOL_HOLD` 才回档。
 - chill: 订阅不能再指定出口网卡（ext-1030 第 14 条）：渲染结果里 `proxy-providers` 下的 `interface-name` / `routing-mark` 一律删掉，每个 provider 补上 `override: interface-name: "", routing-mark: 0`，mihomo 下载回来的订阅也一并清空；模板自己的家里出口（`tailscale0`）不动。起核心前（ext-1030 第 16 条）：`chill0` 已经存在，或 127.0.0.1/0.0.0.0/:: 上的 9999、53（UDP）、7894、7895 被别的程序监听，就停在直连，理由 `port_busy` / `tun_busy`（隔 2 秒看两次），每 30 秒再试，不算崩溃。
-- touch: 温控停充、CHILL 降档时横幅说明（热 / 过热）；系统页电池行写「因为热暂停充电」。core 没有 `heat` 块时照旧看电池 ≥50 °C。
 - kit: 型号检查不再要求 `MU` 前面有底线（`BD_CNMU5250V1.0.0B31`、`BD_XCBZHKMU5250V1.0.0B03`），region 取 `MU` 前面那段；矩阵外的固件照样拒装。
 - chill：情景关掉 Wi-Fi 时，`rules_drift` 不再每分钟报一次。原厂按接口加 `iif wlanN failed_policy` 规则，接口关了就删，接口回来时优先级跟着新的 ifindex 变。现在绑在接口上的规则（`iif`/`oif`）只有在接口在跑、而且找不到同样内容的规则时才算消失；其他规则消失照旧报。
 
@@ -39,6 +38,19 @@
 - kit: 给了 `OUI_TSV=`（`scripts/lanid/make-oui.sh` 生成的表）就装到 `/data/luyaz/lanid/oui.tsv`，用来显示厂商；公开构建没有这张表。
 
 - kit: 装机包带上 lanid-parse 组件（已连设备识别），装到 `/data/luyaz/core/plugins/`，只有这一个组件；没有时核心照常跑、识别关着。`LANID_CWASM=` 指定现成的。
+
+## touch 1.28.1 — 2026-10-31
+
+- 内存分配器改用 mimalloc（跟 core 一样）。musl 的 mallocng 下每收一次 core 推送内存多约 13 KB（设备上每小时 3–8 MB，最高约 190 MB），要等深浅色切换重启才回落：已释放的快照缓冲区占着页不还。同样负载下现在不涨。
+
+## lweb 1.50.0 — 2026-10-31
+
+- 没装 CHILL（没有 `/data/chill/chill.sh`，跟 `install.sh status` 同一个判断）时，首页不显示 CHILL 卡片和落地卡的「家里出口」行，侧栏、分类页和 ⌘K 搜索也不列 CHILL；其余内容顺次补上。打开页面时判断；只有「文件不存在」才算没装。新增 `--chill-sh` / `LUYAZ_WEB_CHILL_SH`；有密码文件（设备上）默认 `/data/chill/chill.sh`，没有就不查（照常显示 CHILL）。
+
+## touch 1.28.0 — 2026-10-31
+
+- 没装 CHILL（同一个文件，每 30 秒看一次）时，首页情景卡没有 CHILL 一栏（Tailscale 占满整行），出口页没有 CHILL 卡片。系统页「语言 / Language」一行下面的小字改成只用当前语言（行名和两个选项仍是双语）。离屏渲染的 Wi-Fi 开关可由 `LUYAZ_RENDER_AUX` 给（截图用）。
+- 温控停充、CHILL 降档时横幅说明（热 / 过热）；系统页电池行写「因为热暂停充电」。core 没有 `heat` 块时照旧看电池 ≥50 °C。
 
 ## lweb 1.49.0 — 2026-10-31
 

@@ -52,6 +52,28 @@ pub fn set_ui_dir(dir: PathBuf) {
     let _ = UI_DIR_FLAG.set(dir);
 }
 
+/// `--chill-sh`: the file whose absence means CHILL is not installed (install.sh status reads
+/// the same `/data/chill/chill.sh`). `None`: not checked, taken as installed (off the device).
+static CHILL_SH: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Call before the first request; an empty path is the same as none.
+pub fn set_chill_sh(p: Option<PathBuf>) {
+    let _ = CHILL_SH.set(p.filter(|p| !p.as_os_str().is_empty()));
+}
+
+/// CHILL is on this device: without it home, the sidebar and search leave CHILL out. Only "no
+/// such file" counts as absent; any other error keeps CHILL shown.
+pub fn installed() -> bool {
+    match CHILL_SH.get() {
+        Some(Some(p)) => present(p),
+        _ => true,
+    }
+}
+
+fn present(p: &std::path::Path) -> bool {
+    !matches!(std::fs::metadata(p), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+
 fn conf() -> &'static Conf {
     CONF.get_or_init(|| Conf {
         ui_dir: UI_DIR_FLAG
@@ -438,6 +460,19 @@ async fn websocket(conf: &Conf, mut req: Request, target: &str) -> Response {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn chill_is_absent_only_when_its_script_is_missing() {
+        let d = std::env::temp_dir().join(format!("lweb-chill-sh-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let sh = d.join("chill.sh");
+        assert!(!present(&sh));
+        std::fs::write(&sh, "#!/bin/sh\n").unwrap();
+        assert!(present(&sh));
+        // not a "no such file" (a path through a file): kept as installed
+        assert!(present(&sh.join("x")));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
 
     #[test]
     fn strips_only_the_seed_script() {

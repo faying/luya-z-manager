@@ -145,6 +145,11 @@ enum Cmd {
         /// The CHILL dashboard (zashboard) files served at /chill-ui/ (chill_proxy.rs).
         #[arg(long, env = "LUYAZ_WEB_CHILL_UI_DIR", default_value = "/data/chill/ui")]
         chill_ui_dir: std::path::PathBuf,
+        /// CHILL's script; when it is missing CHILL is not installed and home, the sidebar and
+        /// search leave it out. Default with a password file (the device): /data/chill/chill.sh;
+        /// without one: not checked (CHILL shown).
+        #[arg(long, env = "LUYAZ_WEB_CHILL_SH")]
+        chill_sh: Option<std::path::PathBuf>,
         /// `/agent-api` tokens, `name token` per line (agent_api.rs); no file = the routes are off.
         #[arg(long, env = "LUYAZ_WEB_AGENT_TOKEN_FILE", default_value = agent_api::TOKEN_FILE)]
         agent_token_file: std::path::PathBuf,
@@ -633,12 +638,18 @@ fn main() {
                 pages,
                 logo_dir,
                 chill_ui_dir,
+                chill_sh,
                 agent_token_file,
                 agent_allow_file,
                 agent_act_allow_file,
                 ifaces,
             } => {
                 chill_proxy::set_ui_dir(chill_ui_dir);
+                chill_proxy::set_chill_sh(chill_sh.or_else(|| {
+                    password_file
+                        .as_ref()
+                        .map(|_| std::path::PathBuf::from("/data/chill/chill.sh"))
+                }));
                 agent_api::set_files(agent_token_file, agent_allow_file);
                 agent_act::set_act_allow(agent_act_allow_file);
                 (

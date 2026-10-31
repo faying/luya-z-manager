@@ -12,6 +12,8 @@ const rules = [
   [/台湾旅行/g, "Travel eSIM"], [/国内主号/g, "Home Line"],
   [/🇹🇼/g, "🇯🇵"], [/台湾/g, "Japan"],
   [/"roaming"\s*:\s*true/g, '"roaming":false'],
+  // phone numbers: +886 9000001xx → +1 555 01xx (the fictional range)
+  [/\+8869000001(\d\d)/g, "+155501$1"], [/\+886900000000/g, "+15550100"],
 ];
 http.createServer((req, res) => {
   const c = []; req.on("data", (d) => c.push(d)); req.on("end", () => {

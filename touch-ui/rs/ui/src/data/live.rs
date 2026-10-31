@@ -129,6 +129,7 @@ impl Live {
             chill_pin: self.chill.exit_pin(),
             chill_conns: Some(self.chill.conns().into()),
             chill_online: self.chill.online() as i32,
+            chill_absent: self.chill.absent() as i32,
             chill_conn_split: Some(self.chill.conn_split()),
             chill_groups: self.chill.groups(),
             chill_nodes: self.chill.nodes(),

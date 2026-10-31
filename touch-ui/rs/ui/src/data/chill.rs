@@ -39,6 +39,10 @@ const SC_DELAY_BUF: usize = 16384;
 /// chains longer than this stop following
 const SC_CHAIN_STOP: usize = 160 - 32;
 const CHILL_STATE_FILE: &str = "/tmp/chill.state";
+/// CHILL's script: missing = CHILL is not installed (install.sh status reads the same file)
+const CHILL_SH: &str = "/data/chill/chill.sh";
+/// how often CHILL_SH is looked at again (installing CHILL brings its card back by itself)
+const SC_ABSENT_TTL_MS: i64 = 30000;
 /// Home's pinned line: the groups that keep their node, and how often they are read (each read
 /// is /group, ~15 KB, plus one delay test per group)
 const SC_PINS: [(&str, &str); 2] = [("AI", "🤖 AI"), ("VoWiFi", "📞 VoWiFi")];
@@ -73,6 +77,9 @@ pub struct Chill {
     secret: String,
     group: String,
     conf_loaded: bool,
+    /// CHILL_SH is missing: CHILL is not installed
+    absent: bool,
+    absent_ms: i64,
 
     online: bool,
     mode_raw: String,
@@ -136,6 +143,8 @@ impl super::background::ReadCopy for Chill {
             secret: self.secret.clone(),
             group: self.group.clone(),
             conf_loaded: self.conf_loaded,
+            absent: self.absent,
+            absent_ms: self.absent_ms,
             online: self.online,
             mode_raw: self.mode_raw.clone(),
             profile: self.profile.clone(),
@@ -277,6 +286,8 @@ impl Default for Chill {
             secret: String::new(),
             group: SC_MAIN_GROUP.into(),
             conf_loaded: false,
+            absent: false,
+            absent_ms: 0,
             online: false,
             mode_raw: String::new(),
             profile: "standard".into(),
@@ -711,6 +722,10 @@ impl Chill {
     pub fn poll(&mut self, active: bool) -> bool {
         let now = mono_ms();
         self.load_conf();
+        if self.absent_ms == 0 || now - self.absent_ms >= SC_ABSENT_TTL_MS {
+            self.absent_ms = now.max(1);
+            self.absent = missing(CHILL_SH);
+        }
         // the delay test is read every round, cache or not
         self.delay_poll();
         if !active {
@@ -909,6 +924,10 @@ impl Chill {
     }
     pub fn online(&self) -> bool {
         self.online
+    }
+    /// CHILL is not installed on this device (its script is missing).
+    pub fn absent(&self) -> bool {
+        self.absent
     }
 
     /// The exit state, luyaz-api chill.rs exit_state()'s rule: the mode, then in rule mode
@@ -1249,6 +1268,11 @@ impl Chill {
         self.home_ms = 0;
         Some(until)
     }
+}
+
+/// Only "no such file" counts: any other error keeps CHILL shown.
+fn missing(p: &str) -> bool {
+    matches!(std::fs::metadata(p), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
 }
 
 #[cfg(test)]

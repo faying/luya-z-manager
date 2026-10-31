@@ -362,6 +362,7 @@ struct ChillSnap {
     pairs: Vec<ui_model::chill_traffic_item_t>,
     chill_on: i32,
     chill_back: i32,
+    absent: i32,
 }
 
 unsafe extern "C" fn exit_pick_cb(e: *mut sys::lv_event_t) {
@@ -434,6 +435,7 @@ impl Ui {
             pairs: m.chill_pairs.clone(),
             chill_on: m.scenario.chill_on,
             chill_back: m.scenario.chill_back,
+            absent: m.chill_absent,
         };
         if self.ex.last.as_ref() == Some(&snap) {
             return;
@@ -443,8 +445,9 @@ impl Ui {
         let online = m.chill_online != 0;
         let csc = &m.scenario;
         let e = self.ex.clone();
-        // hidden only when there is no CHILL at all; stopped still shows, with the way back
-        kit::show(e.chill_card, online || csc.chill_on == 0);
+        // hidden when CHILL is not installed or there is no CHILL at all; stopped still shows,
+        // with the way back
+        kit::show(e.chill_card, m.chill_absent == 0 && (online || csc.chill_on == 0));
         let rows = if !online {
             self.set(e.state, tr("已关闭"));
             kit::text_color(e.state, th.t3);

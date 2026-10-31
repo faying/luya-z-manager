@@ -5,8 +5,8 @@
 #   MODELS=<model dir> scripts/screenshots/touch.sh [OUT_DIR]     (default OUT_DIR: scripts/screenshots/out/touch)
 #
 # Renders the Rust UI off-screen (luyaz-ui --render, touch-ui/rs/ui/src/render/mod.rs) on the
-# view models in MODELS (`index-<scene>.txt` per scene). The old ones came from the C render
-# test and are no longer used; new ones are to be generated from the Rust UI. Needs Docker and
+# view models in MODELS (`index-<scene>.txt` per scene), made by touch-models.py from one dumped
+# view model (made-up texts, CHILL not installed, a series that fills the charts). Needs Docker and
 # `touch-ui/rs/build.sh native` (volume u60-ui-rs-target). The device fonts are not in the
 # repo (ZTEZhengYuan is proprietary): copy them from /usr/ui/fonts on a U60 Pro.
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
@@ -17,7 +17,7 @@ out=${1:-$here/out/touch}
 mkdir -p "$out"; out=$(cd "$out" && pwd)
 : "${LUYAZ_DEVICE_FONTS:?dir with ZTEZhengYuan.ttf and Roboto.ttf}" "${LUYAZ_NUNITO_DIR:?dir with Nunito-600/700/800.ttf}"
 
-# file name ← scene, page, scroll step (.0 = top); scenes without CHILL lines, English
+# file name ← scene, page, scroll step (.0 = top); CHILL not installed, English
 shots='touch-home us-light-en home 0
 touch-home-dark op-notice-dark-en home 0
 touch-notice op-notice-light-en home 0
@@ -41,7 +41,7 @@ while read -r scene pages; do
     docker run --rm -v u60-ui-rs-target:/t:ro -v "$models":/m:ro -v "$raw":/o \
         -v "$LUYAZ_DEVICE_FONTS":/fonts/dev:ro -v "$LUYAZ_NUNITO_DIR":/fonts/nunito:ro \
         -e LUYAZ_UI_CJK_FONT=/fonts/dev/ZTEZhengYuan.ttf -e LUYAZ_UI_ROBOTO=/fonts/dev/Roboto.ttf \
-        -e LUYAZ_UI_FONT_DIR=/fonts/nunito u60-rust-ci:1.99.0 \
+        -e LUYAZ_UI_FONT_DIR=/fonts/nunito -e LUYAZ_RENDER_AUX=1,1,0 u60-rust-ci:1.99.0 \
         /t/release-device/luyaz-ui --render --models=/m --name="$scene" --pages="$pages" --png=/o --keep-going >/dev/null 2>&1 || true  # exits 1 when its parity checks differ; the PNGs are still written
 done
 printf '%s\n' "$shots" | while read -r file scene page k; do

@@ -78,7 +78,7 @@ async fn page(State(app): State<Shared>, req: Request) -> Response {
         shell,
         l: ctx.lang,
         status,
-        chill: chill::frame(ctx.lang),
+        chill: if crate::chill_proxy::installed() { chill::frame(ctx.lang) } else { String::new() },
         poller: poller::frame(),
         landing: landing::frame(),
     }
@@ -310,6 +310,9 @@ struct Poll {
     /// Operator logo files (`--logo-dir`), copied from the app at each render.
     logo_dir: std::path::PathBuf,
     chill: chill::Chill,
+    /// CHILL was installed when the stream began (the page's frame has its card then): without
+    /// it the card is not polled or sent.
+    chill_on: bool,
     poller: poller::Poller,
     landing: landing::Landing,
 }
@@ -327,6 +330,7 @@ impl Poll {
             ca_shape: None,
             logo_dir: std::path::PathBuf::new(),
             chill: chill::Chill::new(),
+            chill_on: crate::chill_proxy::installed(),
             poller: poller::Poller::new(),
             landing: landing::Landing::new(),
         }
@@ -339,7 +343,8 @@ impl Poll {
             .min(self.ts.next())
             .min(self.ni.next())
             .min(self.wifi.next());
-        let e = e.min(self.chill.next()).min(self.poller.next()).min(self.landing.next());
+        let e = if self.chill_on { e.min(self.chill.next()) } else { e };
+        let e = e.min(self.poller.next()).min(self.landing.next());
         e
     }
 
@@ -351,9 +356,11 @@ impl Poll {
         let v = app.hub.read(|st| self.view(st, now));
         #[allow(unused_mut)]
         let mut out = split_leaves(&Leaves { v: &v }.render().unwrap());
-        out.extend(self.chill.leaves(app, self.l, now));
+        if self.chill_on {
+            out.extend(self.chill.leaves(app, self.l, now));
+        }
         out.extend(self.poller.leaves(self.l));
-        out.extend(self.landing.leaves(app, self.l, self.chill.status()));
+        out.extend(self.landing.leaves(app, self.l, self.chill.status(), self.chill_on));
         out
     }
 
@@ -850,7 +857,9 @@ impl Polled for Poll {
             fetch(app, &self.who, self.ni.due(now), "/api/netinfo?lite=1"),
             fetch(app, &self.who, self.wifi.due(now), "/api/wifi/status"),
         );
-        self.chill.poll(app, &self.who, now, kicked).await;
+        if self.chill_on {
+            self.chill.poll(app, &self.who, now, kicked).await;
+        }
         self.poller.poll(app, &self.who, now, kicked).await;
         self.landing.poll(app, &self.who, now, kicked).await;
         let at = Instant::now();

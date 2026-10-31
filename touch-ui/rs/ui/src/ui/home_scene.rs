@@ -92,6 +92,10 @@ pub struct Scene {
     rows: [ExRow; EX_LINES],
     desc: Obj,
     ts_box: Obj,
+    /// the line between the CHILL and Tailscale columns
+    ts_sep: Obj,
+    /// CHILL is not installed: the Tailscale column takes the whole width (as laid out last)
+    ts_full: bool,
     ts_state: Obj,
     ts_l1: Obj,
     ts_l2: Obj,
@@ -493,7 +497,7 @@ impl Ui {
         // Tailscale column
         s.ts_box = kit::bx(c, CH_W, BAND_H, TS_W, SCENE_H - BAND_H, th.card, 0);
         s.ts_box.set_style_bg_opa(lv::OPA_TRANSP, 0);
-        kit::bx(s.ts_box, 0, 0, 1, SCENE_H - BAND_H, th.sep, 0);
+        s.ts_sep = kit::bx(s.ts_box, 0, 0, 1, SCENE_H - BAND_H, th.sep, 0);
         disc(s.ts_box, 12, hy, 22, th.fill_teal, SYM_LOOP, lv::montserrat(12));
         kit::label(s.ts_box, f.cj12, th.t2, 40, hy + 3, "Tailscale");
         s.ts_state = kit::label_w(s.ts_box, f.cj15, th.t1, 12, 0, TS_W - 20, false, "");
@@ -663,7 +667,23 @@ impl Ui {
         };
         self.set(s.why, &why);
 
-        // ---- CHILL
+        // ---- CHILL: not installed, no column; Tailscale takes the width
+        let absent = m.chill_absent != 0;
+        if absent != s.ts_full {
+            self.home.sn.ts_full = absent;
+            kit::show(s.ch_box, !absent);
+            kit::show(s.ts_sep, !absent);
+            let w = if absent { CARD_W } else { TS_W };
+            s.ts_box.set_x(if absent { 0 } else { CH_W });
+            s.ts_box.set_width(w);
+            for o in [s.ts_state, s.ts_l1, s.ts_l2] {
+                o.set_width(w - 20);
+            }
+        }
+        if absent {
+            self.home_ts_col_paint();
+            return;
+        }
         let dead = self.home.cc_tone >= 2;
         let (run, run_col): (&str, u32) = if m.chill_online == 0 {
             if sc.chill_on == 0 { (tr("■ 已关"), th.t3) } else { (tr("▲ 没运行"), th.warn_t) }

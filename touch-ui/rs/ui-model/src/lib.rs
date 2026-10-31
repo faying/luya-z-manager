@@ -46,6 +46,10 @@ pub struct Model {
     pub chill_pin: Option<String>,
     pub chill_conns: Option<String>,
     pub chill_online: i32,
+    /// CHILL is not installed (/data/chill/chill.sh missing): Home, the exit tab and the
+    /// system page leave it out. 0 (installed) when a model does not say.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub chill_absent: i32,
     pub chill_conn_split: Option<String>,
     pub chill_groups: Vec<chill_group_info_t>,
     pub chill_nodes: Vec<chill_node_info_t>,
