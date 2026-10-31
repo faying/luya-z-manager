@@ -167,6 +167,7 @@ pub fn voice_card(sim: &Value) -> Option<(String, String)> {
     .filter(|(iccid, _)| !iccid.is_empty())
 }
 
+
 fn usable(sim: &Value, slot: u8) -> bool {
     let state = if slot == 1 { "sim_states" } else { "sim2_states" };
     text(sim, &format!("sim{slot}_provision_state")) == "1" && text(sim, state) == "sim ready"
@@ -259,6 +260,7 @@ mod tests {
         assert_eq!(voice_card(&sim), None, "voice slot down: follow the data SIM");
         assert_eq!(voice_card(&json!({"support_dual_sim":"0"})), None);
     }
+
 
     #[test]
     fn steps_reprovision_unseen_slot() {

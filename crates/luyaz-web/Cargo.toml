@@ -1,6 +1,6 @@
 [package]
 name = "luyaz-web"
-version = "1.40.1"
+version = "1.49.0"
 edition = "2024"
 rust-version = "1.99"
 description = "U60 Pro (MU5250) admin web: server-rendered pages (askama) pushed with Datastar. One upstream /v2/events connection to u60d, fanned out to the open tabs (u60-web.md E1, E2). `luyaz-web mock` replays a recorded /v2/events stream for local tests."
@@ -24,3 +24,5 @@ hyper = { version = "1", default-features = false, features = ["server", "http1"
 hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
 # main.rs accept_loop: calls the Router directly (already in the tree through axum)
 tower-service = "0.3"
+# guard.rs: getifaddrs for the interface gate (already in the tree through tokio)
+libc = "0.2"

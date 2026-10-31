@@ -155,10 +155,11 @@ fn status(g: &Got, l: Lang) -> String {
                 } else {
                     match l {
                         Lang::En => format!("Traffic is going direct: {}", reason(r, l)),
-                        Lang::Zh => format!("当前直连,原因:{}", reason(r, l)),
+                        Lang::Zh => format!("当前直连，原因：{}", reason(r, l)),
                     }
                 };
-                ("warn", l.pick("Direct", "直连").into(), reason, String::new())
+                let tone = if matches!(r, "idle" | "paused" | "disabled") { "neutral" } else { "warn" };
+                (tone, l.pick("Direct", "直连").into(), reason, String::new())
             }
             "stopped" => (
                 "neutral",
@@ -607,9 +608,8 @@ fn vitals(g: &Got, l: Lang, known: bool, now: i64) -> String {
         return hidden("ch-vitals");
     };
     let num = |k: &str| v[k].as_f64().map(|x| format!("{x:.0}")).unwrap_or_default();
-    let pid = v["core_pid"].as_i64().filter(|p| *p > 0).map(|p| p.to_string()).unwrap_or_default();
     format!(
-        "<div id=\"ch-vitals\" class=\"nd-wall{}\" role=\"group\" aria-label=\"{}\">{}{}{}{}</div>",
+        "<div id=\"ch-vitals\" class=\"nd-wall{}\" role=\"group\" aria-label=\"{}\">{}{}{}</div>",
         stale_cls(g.status.stale()),
         l.pick("CHILL vitals", "CHILL 运行状况"),
         readout(l.pick("Temperature", "温度"), &num("cpuss_c"), "°C", ""),
@@ -620,7 +620,6 @@ fn vitals(g: &Got, l: Lang, known: bool, now: i64) -> String {
             if v["mem_pressure"].as_bool() == Some(true) { l.pick("Under pressure", "内存紧张") } else { "" }
         ),
         readout(l.pick("Uptime", "运行时间"), &uptime(s(v, "started_at"), now).unwrap_or_default(), "", s(v, "version")),
-        readout("PID", &pid, "", ""),
     )
 }
 

@@ -574,11 +574,7 @@ impl Poll {
         rows.push_str(&row(&lab("Hostname", "主机名"), &dash(&me.and_then(|m| m.hostname.clone())), true));
         rows.push_str(&row(&lab("Tailscale name", "Tailscale 名称"), &dash(&me.and_then(|m| m.dns_name.clone())), true));
         rows.push_str(&row(
-            &format!(
-                "{} {}",
-                lab("State", "状态"),
-                help(l, "ts-state", l.pick("State", "状态"), l.pick("Whether Tailscale on the device is connected.", "设备上的 Tailscale 连没连上。"))
-            ),
+            &lab("State", "状态"),
             &dash(&d.backend_state),
             false,
         ));
@@ -665,13 +661,12 @@ impl Poll {
             rows.push_str(&self.peer_row(p, now));
         }
         format!(
-            "<section id=\"ts-peers\" class=\"ts-sec\" aria-labelledby=\"ts-peers-t\"><h2 id=\"ts-peers-t\" class=\"nd-group-title\">{}</h2><p class=\"nd-aux ts-sub\">{}{}</p><div class=\"nd-group{}\">{rows}</div></section>",
+            "<section id=\"ts-peers\" class=\"ts-sec\" aria-labelledby=\"ts-peers-t\"><h2 id=\"ts-peers-t\" class=\"nd-group-title\">{}</h2>{}<div class=\"nd-group{}\">{rows}</div></section>",
             l.pick("Peers", "节点列表"),
-            esc(&peers_summary(d, l)),
             if capped {
                 match l {
-                    Lang::En => format!(" · showing the first {PEER_CAP}"),
-                    Lang::Zh => format!(" · 只显示前 {PEER_CAP} 个"),
+                    Lang::En => format!("<p class=\"nd-aux ts-sub\">Showing the first {PEER_CAP}</p>"),
+                    Lang::Zh => format!("<p class=\"nd-aux ts-sub\">只显示前 {PEER_CAP} 个</p>"),
                 }
             } else {
                 String::new()
@@ -735,8 +730,7 @@ impl Poll {
     fn mesh(&self, d: &Status, stale: bool) -> String {
         let l = self.l;
         let st = if stale { " nd-stale" } else { "" };
-        let mut rows = row(&esc(l.pick("Peers", "节点")), &num(d.peer_count), false);
-        rows.push_str(&row(&esc(l.pick("Online", "在线")), &num(d.peer_online), false));
+        let mut rows = String::new();
         if let Some(n) = d.peer_active {
             let direct = d.peer_direct.unwrap_or(0);
             rows.push_str(&row(

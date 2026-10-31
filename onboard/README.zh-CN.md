@@ -70,10 +70,14 @@ claude              # Claude Code 会读这里的 CLAUDE.md
                                #   authorized_keys、start_dropbear.sh），供升固件前参考，restore 不恢复它
 ./install.sh restore 备份.tgz  # 先和 backup 旁存的 备份.tgz.sha256 比对（不符一律不恢复；没有它的旧备份要
                                #   LUYAZ_RESTORE_NO_SHA256=1），推到设备后再比一次，再列出会改哪些文件，输入 yes 才写
+./install.sh undo [--ssh]      # 退回第一次装机改过的东西（快照在 /data/luyaz/kit/snap）；只换文件、不停不起服务，
+                               #   重启后完全生效。默认保留 SSH，加 --ssh 连它一起退
 ./install.sh reboot            # 重启一次，确认各组件都能自己起来
 ```
 
 装到一半断了（连接掉了、某个组件失败）：用同一个包再跑一次。设备上 `/data/luyaz/kit/progress` 按组件记着进度（`./install.sh status` 能看到），已装完的组件跳过，从第一个没完成的续；换了包或加 `KIT_FRESH=1` 就从头来。
+
+写任何东西之前先查空间（`/data` ≥ 载荷 + 2 × 快照 + 16 MB，`/etc` ≥ 2 MB），不够就停。第一次装机（没有进度文件，或 `KIT_FRESH=1`）先把要写的东西——`rc.local`、`/etc/init.d/{luyaz-core,luyaz-web,luyaz-sentinel,chill}`、`/etc/config/{firewall,dhcp}`、`/data/luyaz` 下的程序和目录、`/data/esim`、`/data/chill`、`/data/ssh`、`start_dropbear.sh`——拷到 `/data/luyaz/kit/snap`，记下哪些原来就有。默认仍是续装；想退回就 `./install.sh undo`：原来有的放回、原来没有的删掉，`rc.local` 先 `sh -n`，中途断了可以再跑一次。基带（NV/EFS、APN、网络模式）、eSIM profile、固件自动升级都不碰，自动升级保持关闭。
 
 以后要更新或重装某个组件，解开新的装机包跑 `./install.sh admin`（或 `ui` / `esim`）即可，走 SSH，不用插线。
 

@@ -1,4 +1,11 @@
-//! The network recorder (2a, first batch; docs/designs/net-performance.md「2a 记录仪细节设计」).
+//! The network recorder (2a; docs/designs/net-performance.md「2a 记录仪细节设计」).
+//!
+//! Second batch (`diag`): every session row also carries the root qdisc counters of
+//! `rmnet_data0` and `chill0` (one rtnetlink dump), and at most every [`TCP_EVERY_MS`] — only when
+//! `rmnet_data0` moved bytes that round (CPU-path traffic; IPA-forwarded flows have no local
+//! socket) — a `TCP_INFO` summary of the device's WAN-side TCP (local + mihomo's upstream legs)
+//! from one sock_diag dump. A dump slower than [`TCP_SLOW_US`] stretches the cadence to
+//! [`TCP_SLOW_EVERY_MS`]. Nothing of this runs outside a session.
 //!
 //! Off unless `LUYAZ_NETREC=1` (read once). When off nothing here runs. When on, it rides the
 //! collect round (`state::read_inputs`, inside the blocking closure that already reads /proc and
@@ -28,7 +35,7 @@
 //!   SIM change, no time passed) neither starts nor stops; it breaks the start streak, does not
 //!   touch the stop timer.
 //!
-//! **Storage.** One fixed 160-byte row per round in session → [`RING`] (tmpfs, 2 MiB, wraps;
+//! **Storage.** One fixed 240-byte row per round in session → [`RING`] (tmpfs, 2 MiB, wraps;
 //! a restart resumes at the header's index). Every 10 s a summary line, plus start/end lines,
 //! → `DIR/YYYYMMDD.jsonl` (device date), buffered to 4 KiB or session end, one write + fsync.
 //! A day file past [`DAY_CAP`] takes only start/end lines (the session is marked `trimmed`);
@@ -44,12 +51,15 @@ use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+pub mod diag;
+use diag::{Qdisc, TcpSum};
+
 pub const RING: &str = "/tmp/luyaz-netrec.ring";
 pub const DIR: &str = "/data/luyaz/core/netrec";
 pub const RING_BYTES: u64 = 2 << 20;
-pub const ROW: usize = 160;
+pub const ROW: usize = 240;
 const HEAD: u64 = 64;
-const MAGIC: &[u8; 8] = b"NETREC1\0";
+const MAGIC: &[u8; 8] = b"NETREC2\0";
 /// 1 Mbps and 0.5 Mbps, in bytes per second.
 pub const ON_BPS: u64 = 125_000;
 pub const OFF_BPS: u64 = 62_500;
@@ -60,6 +70,9 @@ pub const SUMMARY_MS: u64 = 10_000;
 pub const FLUSH_BYTES: usize = 4096;
 pub const DIR_CAP: u64 = 8 << 20;
 pub const DAY_CAP: u64 = 1 << 20;
+pub const TCP_EVERY_MS: u64 = 5_000;
+pub const TCP_SLOW_EVERY_MS: u64 = 10_000;
+pub const TCP_SLOW_US: u32 = 5_000;
 const NONE: u64 = u64::MAX;
 
 /// `LUYAZ_NETREC=1`, read once.
@@ -281,6 +294,10 @@ pub trait Io {
     fn append(&mut self, day: &str, data: &[u8]);
     /// Keep the day files under [`DIR_CAP`], never deleting `today`.
     fn prune(&mut self, today: &str);
+    /// Root qdisc counters of `rmnet_data0` and `chill0` (one netlink dump).
+    fn qdiscs(&mut self) -> [Option<Qdisc>; 2];
+    /// Established TCP sockets with `tcp_info` and what the dump cost (µs).
+    fn tcp(&mut self) -> Option<(Vec<diag::Tcp>, u32)>;
 }
 
 /// The device's files.
@@ -291,6 +308,8 @@ pub struct Fs {
     file: Option<fs::File>,
     next: u64,
     count: u64,
+    route: Option<crate::nl::NlSock>,
+    sockdiag: Option<crate::nl::NlSock>,
 }
 
 impl Fs {
@@ -302,6 +321,8 @@ impl Fs {
             file: None,
             next: 0,
             count: 0,
+            route: None,
+            sockdiag: None,
         }
     }
 
@@ -336,6 +357,43 @@ impl Fs {
 }
 
 impl Io for Fs {
+    fn qdiscs(&mut self) -> [Option<Qdisc>; 2] {
+        if self.route.is_none() {
+            self.route = crate::nl::NlSock::open(crate::nl::NETLINK_ROUTE, 256 << 10).ok();
+        }
+        let Some(sock) = self.route.as_mut() else {
+            return [None, None];
+        };
+        match diag::dump_qdiscs(sock) {
+            Ok(p) => {
+                let want = [diag::ifindex("rmnet_data0"), diag::ifindex("chill0")];
+                let v = diag::roots(&p, &want);
+                [v[0], v[1]]
+            }
+            Err(_) => {
+                self.route = None;
+                [None, None]
+            }
+        }
+    }
+
+    fn tcp(&mut self) -> Option<(Vec<diag::Tcp>, u32)> {
+        if self.sockdiag.is_none() {
+            self.sockdiag = crate::nl::NlSock::open(crate::nl::NETLINK_SOCK_DIAG, 1 << 20).ok();
+        }
+        let t = std::time::Instant::now();
+        match diag::dump_tcp(self.sockdiag.as_mut()?) {
+            Ok(v) => Some((
+                v,
+                t.elapsed().as_micros().min(u128::from(u32::MAX - 1)) as u32,
+            )),
+            Err(_) => {
+                self.sockdiag = None;
+                None
+            }
+        }
+    }
+
     fn iface(&mut self, name: &str) -> Option<(u64, u64)> {
         let st = self.net.join(name).join("statistics");
         let c =
@@ -450,6 +508,11 @@ pub struct Row {
     pub rate: u64,
     pub radio: Radio,
     pub cpu_tenths: i64,
+    /// Root qdisc of `rmnet_data0`, `chill0` (cumulative).
+    pub q_rmnet: Option<Qdisc>,
+    pub q_chill0: Option<Qdisc>,
+    /// TCP summary; None = not sampled this round.
+    pub tcp: Option<TcpSum>,
 }
 
 pub const EV_CELL: u8 = 1;
@@ -510,6 +573,9 @@ impl Row {
         b[138..140].copy_from_slice(&clamp16(self.cpu_tenths).to_le_bytes());
         put_str(&mut b[148..156], &self.radio.band);
         put_str(&mut b[156..160], &self.radio.rat);
+        diag::put_qdisc(&mut b[160..180], self.q_rmnet);
+        diag::put_qdisc(&mut b[180..200], self.q_chill0);
+        diag::put_tcp(&mut b[200..236], self.tcp);
         // rate is not stored: derived from the deltas when read
         b
     }
@@ -551,6 +617,9 @@ impl Row {
                 rsrp: un16(i16at(136)).unwrap_or(i64::MIN),
             },
             cpu_tenths: un16(i16at(138)).unwrap_or(-1),
+            q_rmnet: diag::get_qdisc(&b[160..180]),
+            q_chill0: diag::get_qdisc(&b[180..200]),
+            tcp: diag::get_tcp(&b[200..236]),
         }
     }
 }
@@ -584,6 +653,17 @@ pub fn row_json(r: &Row, prev: Option<&Row>) -> Value {
         ),
         None => (Value::Null, Value::Null, Value::Null),
     };
+    // a qdisc counter going backwards = the interface was recreated: no delta
+    let qd = |a: Option<Qdisc>, b: Option<Qdisc>| -> Value {
+        match (a, b) {
+            (Some(a), Some(b)) if a.drops >= b.drops => json!(a.drops - b.drops),
+            _ => Value::Null,
+        }
+    };
+    let (dq_rmnet, dq_chill) = match prev {
+        Some(p) => (qd(r.q_rmnet, p.q_rmnet), qd(r.q_chill0, p.q_chill0)),
+        None => (Value::Null, Value::Null),
+    };
     let ipa = match (dcell.as_u64(), drmnet.as_u64()) {
         (Some(c), Some(m)) => json!(c.saturating_sub(m)),
         _ => Value::Null,
@@ -598,6 +678,9 @@ pub fn row_json(r: &Row, prev: Option<&Row>) -> Value {
         "rat": r.radio.rat, "band": r.radio.band, "pci": r.radio.pci, "cell_id": r.radio.cell_id,
         "nr_snr": opt(r.radio.nr_snr), "lte_snr": opt(r.radio.lte_snr), "rsrp": opt(r.radio.rsrp),
         "cpu": r.cpu_tenths, "ev": ev_names(r.ev),
+        "q_rmnet": diag::qdisc_json(r.q_rmnet), "q_chill0": diag::qdisc_json(r.q_chill0),
+        "d_q_rmnet_drops": dq_rmnet, "d_q_chill0_drops": dq_chill,
+        "tcp": diag::tcp_json(r.tcp),
     })
 }
 
@@ -617,6 +700,13 @@ struct Window {
     ev: u8,
     cpu_sum: i64,
     cpu_n: i64,
+    q_drops: [Option<u64>; 2],
+    q_backlog_max: [Option<u32>; 2],
+    tcp_retx: Option<u64>,
+    tcp_segs: Option<u64>,
+    tcp_rtt_p50: Vec<u32>,
+    tcp_min_rtt: Option<u32>,
+    tcp_cwnd_min: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -648,6 +738,12 @@ pub struct Recorder {
     session: Option<Session>,
     pending: Vec<Line>,
     pending_bytes: usize,
+    /// The session's last qdisc reading (for the window's drop deltas).
+    last_q: [Option<Qdisc>; 2],
+    /// The session's last TCP sample: when, and cookie → (retrans, segs_out).
+    tcp_at: Option<u64>,
+    tcp_prev: Option<std::collections::HashMap<u64, (u32, u32)>>,
+    tcp_every: u64,
 }
 
 fn delta(now: Option<(u64, u64)>, then: Option<(u64, u64)>) -> Option<u64> {
@@ -729,6 +825,10 @@ impl Recorder {
                 return;
             }
             Act::Start => {
+                self.last_q = [None, None];
+                self.tcp_at = None;
+                self.tcp_prev = None;
+                self.tcp_every = TCP_EVERY_MS;
                 self.session = Some(Session {
                     id: wall,
                     start_ms: at_ms,
@@ -752,9 +852,30 @@ impl Recorder {
             self.chill0 = io.iface("chill0");
             self.chill0_round = self.round;
         }
-        let brlan = io.iface("br-lan");
         let Some(mut s) = self.session.take() else {
             return;
+        };
+        let brlan = io.iface("br-lan");
+        let [q_rmnet, q_chill0] = io.qdiscs();
+        // TCP: CPU-path traffic this round, and the cadence is due
+        let cpu_path = delta(rmnet, prev_rmnet).is_some_and(|d| d > 0);
+        let due = self
+            .tcp_at
+            .is_none_or(|t| at_ms.saturating_sub(t) >= self.tcp_every);
+        let tcp = if cpu_path && due {
+            io.tcp().map(|(conns, us)| {
+                let (sum, next) = diag::summarize(&conns, self.tcp_prev.as_ref(), us);
+                self.tcp_prev = Some(next);
+                self.tcp_at = Some(at_ms);
+                self.tcp_every = if us > TCP_SLOW_US {
+                    TCP_SLOW_EVERY_MS
+                } else {
+                    TCP_EVERY_MS
+                };
+                sum
+            })
+        } else {
+            None
         };
         let row = Row {
             t_ms: at_ms,
@@ -769,6 +890,9 @@ impl Recorder {
             rate: rate.unwrap_or(0),
             radio: pre.radio.clone(),
             cpu_tenths,
+            q_rmnet,
+            q_chill0,
+            tcp,
         };
         io.ring(&row.encode());
         // the window
@@ -802,6 +926,31 @@ impl Recorder {
             if cpu_tenths >= 0 {
                 w.cpu_sum += cpu_tenths;
                 w.cpu_n += 1;
+            }
+            for (i, q) in [q_rmnet, q_chill0].into_iter().enumerate() {
+                let Some(q) = q else { continue };
+                if let Some(p) = self.last_q[i].filter(|p| q.drops >= p.drops) {
+                    w.q_drops[i] = Some(w.q_drops[i].unwrap_or(0) + u64::from(q.drops - p.drops));
+                }
+                w.q_backlog_max[i] = Some(w.q_backlog_max[i].unwrap_or(0).max(q.backlog));
+            }
+            self.last_q = [q_rmnet, q_chill0];
+            if let Some(t) = tcp {
+                if let Some(r) = t.retx {
+                    w.tcp_retx = Some(w.tcp_retx.unwrap_or(0) + u64::from(r));
+                }
+                if let Some(g) = t.segs {
+                    w.tcp_segs = Some(w.tcp_segs.unwrap_or(0) + u64::from(g));
+                }
+                if t.rtt_p50 != diag::NA {
+                    w.tcp_rtt_p50.push(t.rtt_p50);
+                }
+                if t.min_rtt != diag::NA {
+                    w.tcp_min_rtt = Some(w.tcp_min_rtt.map_or(t.min_rtt, |m| m.min(t.min_rtt)));
+                }
+                if t.cwnd_min != diag::NA {
+                    w.tcp_cwnd_min = Some(w.tcp_cwnd_min.map_or(t.cwnd_min, |m| m.min(t.cwnd_min)));
+                }
             }
         }
         self.radio = Some(pre.radio);
@@ -885,6 +1034,9 @@ fn summary(id: i64, wall: i64, at_ms: u64, w: &Window) -> Value {
     let mut r = w.rates.clone();
     r.sort_unstable();
     let p50 = r.get(r.len() / 2).copied();
+    let mut t = w.tcp_rtt_p50.clone();
+    t.sort_unstable();
+    let rtt50 = t.get(t.len() / 2).copied();
     json!({
         "kind": "sum", "session": id, "ts": wall,
         "wall": crate::ops::record::civil(wall.max(0) as u64),
@@ -895,6 +1047,11 @@ fn summary(id: i64, wall: i64, at_ms: u64, w: &Window) -> Value {
         "snr": w.snr.map(|(a, b)| json!([a, b])),
         "ev": ev_names(w.ev),
         "cpu": (w.cpu_n > 0).then(|| w.cpu_sum / w.cpu_n),
+        "q_rmnet_drops": w.q_drops[0], "q_chill0_drops": w.q_drops[1],
+        "q_rmnet_backlog_max": w.q_backlog_max[0], "q_chill0_backlog_max": w.q_backlog_max[1],
+        "tcp_retx": w.tcp_retx, "tcp_segs": w.tcp_segs,
+        "tcp_rtt_p50_us": rtt50,
+        "tcp_min_rtt_us": w.tcp_min_rtt, "tcp_cwnd_min": w.tcp_cwnd_min,
     })
 }
 

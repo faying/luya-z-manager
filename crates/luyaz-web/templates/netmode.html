@@ -7,7 +7,7 @@
 <p class="nd-body">{{ l.pick("Which radio technology (RAT) the device prefers", "设备优先用哪种无线接入技术（RAT）") }}</p>
 {{ self.leaf("nm-now")|safe }}
 <section aria-labelledby="nm-t"><h2 id="nm-t" class="nd-group-title">{{ l.pick("Select Mode", "选择模式") }}</h2>
-<fieldset class="nd-group" aria-labelledby="nm-t">{% for m in self.modes() %}<label class="nd-row"><input type="radio" name="nm" value="{{ m.0 }}"{% if cur == m.0 %} checked{% endif %} data-bind="_nm" data-attr:disabled="$_dis"><span class="nd-row__text"><span class="nd-row__label">{{ m.1 }} <span class="nd-aux" data-show="$_nmnow === '{{ m.0 }}'"{% if cur != m.0 %} style="display: none"{% endif %}>· {{ l.pick("Active", "使用中") }}</span></span><span class="nd-row__sub block">{{ m.2 }}</span></span></label>{% endfor %}</fieldset>
+<fieldset class="nd-group" aria-labelledby="nm-t">{% for m in self.modes() %}<label class="nd-row"><input type="radio" name="nm" value="{{ m.0 }}"{% if cur == m.0 %} checked{% endif %} data-bind="_nm" data-attr:disabled="$_dis"><span class="nd-row__text"><span class="nd-row__label">{{ m.1 }} <span class="nd-aux" data-show="$_nmnow === '{{ m.0 }}'"{% if cur != m.0 %} style="display: none"{% endif %}>{{ l.pick("(active)", "（使用中）") }}</span></span><span class="nd-row__sub block">{{ m.2 }}</span></span></label>{% endfor %}</fieldset>
 <div class="mt-2 flex flex-wrap items-center gap-3"><button type="button" class="nd-btn nd-btn--primary" disabled data-attr:disabled="$_dis || !$_nm || $_nm === $_nmnow" data-on:click="@post('{{ crate::netsel::MODE_PATH }}/ask?mode=' + $_nm)">{{ l.pick("Apply", "应用") }}</button></div>
 {{ op|safe }}
 </section>

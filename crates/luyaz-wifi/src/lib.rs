@@ -43,6 +43,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 mod run;
+pub mod dfs;
 pub mod layout;
 pub mod scan;
 

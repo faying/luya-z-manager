@@ -22,6 +22,7 @@ fn answer(r: Result<(u16, Value), tokio::task::JoinError>) -> Response {
 pub fn real_host() -> std::sync::Arc<dyn luyaz_esim::Host> {
     std::sync::Arc::new(luyaz_esim::RealHost {
         data_up: Box::new(crate::ops::reconnect::read_bearer_up),
+        net_probe: Box::new(|| crate::o2::net_probe(crate::ops::reconnect::IFACE)),
         planned_reboot: Box::new(|| {
             if let Err(e) = crate::longterm::boot::plan("esim-identity") {
                 eprintln!("[esim] planned-reboot marker: {e}");

@@ -55,6 +55,9 @@ pub struct Model {
     pub chill_thermal_eco: i32,
     pub chill_delay_pending: i32,
     pub chill_home: Option<chill_home_t>,
+    /// 🤖 AI and 📞 VoWiFi (Home's pinned line); empty = not read
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chill_pins: Vec<chill_pin_t>,
     pub tailscale: tailscale_status_t,
     pub tailscale_peers: Vec<tailscale_peer_t>,
 

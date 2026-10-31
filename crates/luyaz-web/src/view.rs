@@ -402,15 +402,12 @@ pub fn signal_view(st: &St, now: Instant, l: Lang) -> SignalView {
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned),
             cc,
-            bars.filter(|b| *b >= 0).map(|b| match l {
-                Lang::En => format!("{b}/5 bars"),
-                Lang::Zh => format!("{b}/5 格"),
-            }),
         ]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
-        .join(" · ")
+        // a sentence, not a dot chain; the bars are their own readout (and the verdict's input)
+        .join(l.pick(", ", "，"))
     });
 
     let readout = |v: Option<f64>, word: &str| Readout {
@@ -482,16 +479,13 @@ pub fn signal_view(st: &St, now: Instant, l: Lang) -> SignalView {
         ),
         (
             l.pick("Band", "频段"),
-            l.pick("Band of the serving cell.", "服务小区所在的频段。"),
+            "",
             dash(band),
             true,
         ),
         (
             l.pick("Bandwidth", "带宽"),
-            l.pick(
-                "How wide the channel is; wider is usually faster.",
-                "信道有多宽，一般越宽越快。",
-            ),
+            "",
             dash(
                 serving
                     .and_then(|c| c.bw)
@@ -548,10 +542,7 @@ pub fn signal_view(st: &St, now: Instant, l: Lang) -> SignalView {
     }
     cell.push((
         l.pick("Network selection", "选网方式"),
-        l.pick(
-            "Automatic, or a network you picked by hand.",
-            "自动选网，还是你手动选的。",
-        ),
+        "",
         selection_word(&sig["net_select_mode"], l),
         false,
     ));

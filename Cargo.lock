@@ -1222,7 +1222,7 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
 name = "luyaz-alerts"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libc",
  "serde",
@@ -1242,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-core"
-version = "1.74.0"
+version = "1.80.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1353,7 +1353,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-sentinel"
-version = "1.2.0"
+version = "1.2.2"
 dependencies = [
  "libc",
  "luyaz-alerts",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-ui"
-version = "1.23.0"
+version = "1.27.0"
 dependencies = [
  "libc",
  "lvgl-sys",
@@ -1396,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-web"
-version = "1.40.1"
+version = "1.49.0"
 dependencies = [
  "askama",
  "axum",
@@ -1405,6 +1405,7 @@ dependencies = [
  "futures-util",
  "hyper",
  "hyper-util",
+ "libc",
  "luyaz-api",
  "reqwest",
  "serde",
@@ -1417,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "luyaz-wifi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "serde_json",

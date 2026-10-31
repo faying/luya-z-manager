@@ -270,6 +270,8 @@ impl App {
         crate::device_profile::netlink::spawn(context_hub.clone());
         // §12.10：内核 uevent（UDC／USB／充电）产生 USB 代次；见 device_profile/uevent.rs。
         crate::device_profile::uevent::spawn(context_hub.clone());
+        // F1: stock binary sha256, once per boot, cached per firmware version string.
+        crate::device_profile::stock::spawn(context_hub.clone());
         // R18-P2-01: the stock-anomaly ledger reads the radio mark and connection epoch.
         crate::stock_anomaly::set_hub(context_hub.clone());
         crate::stock_anomaly::spawn_wifi_watch();

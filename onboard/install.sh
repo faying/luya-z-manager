@@ -10,6 +10,8 @@
 #                 并在 rc.local 的服务启动行前面加一行调用它。全套不含它
 #   ./install.sh status                  各组件现状
 #   ./install.sh doctor                  只读体检（开机同步、自动升级、服务、心跳、Wi-Fi、告警…）
+#   ./install.sh undo [--ssh]            退回到第一次装机之前（设备上 /data/luyaz/kit/snap 的快照；只换文件、不停不起服务，重启后完全生效）。
+#                                        默认保留 SSH；--ssh 连 SSH 一起退（之后就进不来了）。不自动跑：装到一半断了默认还是续装
 #   ./install.sh reboot                  重启设备，等它回来再看各组件是不是自己起来了（要 SSH 已通）
 #   ./install.sh backup [--with-tailscale]   配置备份到这台电脑（目录 BACKUP_DIR，默认 ./backups）
 #   ./install.sh restore <备份.tgz>          先比对旁存的 <备份.tgz>.sha256，再列出会动哪些文件，输入 yes 才写（没终端时设 RESTORE_YES=1）
@@ -86,7 +88,11 @@ TTY=$HAVE_TTY
 # ── 命令行 ───────────────────────────────────────────────────────────────────
 WITH_TS=""          # backup 的 --with-tailscale
 RESTORE_FILE=""
-if [ "${1:-}" = backup ]; then
+UNDO_SSH=0          # undo 的 --ssh
+if [ "${1:-}" = undo ]; then
+  [ "${2:-}" != --ssh ] || UNDO_SSH=1
+  set -- undo
+elif [ "${1:-}" = backup ]; then
   [ "${2:-}" != --with-tailscale ] || WITH_TS=--with-tailscale
   set -- backup
 elif [ "${1:-}" = restore ]; then
@@ -96,13 +102,13 @@ elif [ "${1:-}" = restore ]; then
 fi
 COMPONENTS="${*:-$FULL_SET}"
 
-MODE=install        # install | status | doctor | reboot | backup | restore
+MODE=install        # install | status | doctor | reboot | backup | restore | undo
 case "$COMPONENTS" in   # 先分出模式，再逐个校验组件名
-  status|doctor|reboot|backup|restore) MODE=$COMPONENTS ;;
+  status|doctor|reboot|backup|restore|undo) MODE=$COMPONENTS ;;
   *)
     for c in $COMPONENTS; do   # 每个名字都要认识
       case "$c" in   # 组件名
-        status|doctor|reboot) fail "$(tx 'status / doctor / reboot 要单独跑，不能和组件混在一起' 'Run status / doctor / reboot on their own, not together with components')" ;;
+        status|doctor|reboot|undo) fail "$(tx 'status / doctor / reboot / undo 要单独跑，不能和组件混在一起' 'Run status / doctor / reboot / undo on their own, not together with components')" ;;
         ssh|admin|ui|esim|chill|recover) ;;
         *) fail "$(tx "不认识的组件: ${c}（可选 ssh admin ui esim chill recover，或 status / doctor / reboot）" "Unknown component: ${c} (choose from ssh admin ui esim chill recover, or status / doctor / reboot)")" ;;
       esac
@@ -537,6 +543,13 @@ install_kit() {
   maybe_reboot
   summary
 }
+do_undo() { # 设备端 device/install.sh undo：按第一次装机前的快照退回
+  local tmp=/tmp/u60-kit-undo.sh
+  push_file "$KIT/device/install.sh" "$tmp" \
+    || fail "$(tx 'undo 失败：SSH 推送设备脚本没成功（刚连过的话等 20 秒再试）' 'Undo failed: could not send the device script over SSH (if you just connected, wait 20 seconds and try again)')"
+  dev_run "LUYAZ_LANG=$KLANG KIT_UNDO_SSH=$UNDO_SSH sh $tmp undo; r=\$?; rm -f $tmp; exit \$r" | tr -d '\r' \
+    || fail "$(tx 'undo 没做完（见上）；可以再跑一次 ./install.sh undo' 'Undo did not finish (see above); you can run ./install.sh undo again')"
+}  # do_undo
 
 # ── 入口 ─────────────────────────────────────────────────────────────────────
 if $INSTALLING; then
@@ -551,6 +564,7 @@ case "$MODE" in
   backup)  do_backup ;;
   restore) do_restore ;;
   reboot)  reboot_verify ;;
+  undo)    do_undo ;;
   install) install_kit ;;
 esac
 exit 0

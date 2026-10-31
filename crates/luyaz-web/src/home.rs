@@ -238,8 +238,6 @@ struct View {
     title: Option<String>,
     sub: Option<String>,
     sub_loading: bool,
-    sms_n: u64,
-    sms_label: String,
     alerts_n: u64,
     alerts_label: String,
     status: String,
@@ -253,6 +251,8 @@ struct View {
     sinr: Readout,
     dl: Readout,
     ul: Readout,
+    /// Both speeds under 0.1 Mbps.
+    idle: bool,
     temp: Readout,
     bat: Readout,
     d_stale: bool,
@@ -274,6 +274,8 @@ struct View {
     roaming: Option<bool>,
     w_stale: bool,
     wifi_on: String,
+    /// Wi-Fi known to be off: the two band rows say nothing more and are hidden.
+    wifi_off: bool,
     wifi_2: String,
     wifi_5: String,
     ca_full: bool,
@@ -439,8 +441,13 @@ impl Poll {
         let lv = data("live").unwrap_or(&Value::Null);
         let live_have = have("live");
         let mbps = |k: &str| agent::mbps(num(&lv["traffic"][k]));
-        let dl = ro(!live_have, mbps("rx_speed"), String::from("↓"));
-        let ul = ro(!live_have, mbps("tx_speed"), String::from("↑"));
+        let dl = ro(!live_have, mbps("rx_speed"), String::new());
+        let ul = ro(!live_have, mbps("tx_speed"), String::new());
+        // both ways under 0.1 Mbps: the cell says 「空闲」, the two figures go under it
+        let idle = live_have
+            && ["rx_speed", "tx_speed"]
+                .iter()
+                .all(|k| num(&lv["traffic"][*k]).is_some_and(|b| b * 8.0 < 100_000.0));
         let temp_c = num(&lv["system"]["cpu_temp"])
             .filter(|t| *t >= 0.0)
             .map(|t| if t >= 1000.0 { t / 1000.0 } else { t });
@@ -500,7 +507,7 @@ impl Poll {
         let bat_word = match (word.is_empty(), est) {
             (_, None) => word.to_owned(),
             (true, Some(e)) => e,
-            (false, Some(e)) => format!("{word} · {e}"),
+            (false, Some(e)) => format!("{word}{}{e}", l.pick(". ", "，")),
         };
         let bat = ro(
             !b_have,
@@ -727,11 +734,6 @@ impl Poll {
             .then(|| op_text.map(str::to_owned).or(ssid))
             .flatten();
         let sub_loading = !seen;
-        let sms_n = if seen {
-            data("sms").and_then(|s| s["unread"].as_u64()).unwrap_or(0)
-        } else {
-            0
-        };
         let alerts_n = st
             .side
             .alerts
@@ -785,8 +787,6 @@ impl Poll {
             title,
             sub,
             sub_loading,
-            sms_n,
-            sms_label: counted(sms_n, "unread SMS", "条未读短信", "SMS", "短信"),
             alerts_n,
             alerts_label: counted(alerts_n, "new alerts", "条新告警", "Alerts", "告警"),
             status: crate::pages::status_frag(&sv),
@@ -798,6 +798,7 @@ impl Poll {
             sinr,
             dl,
             ul,
+            idle,
             temp,
             bat,
             d_stale: seen && (!block_ok("clients") || !block_ok("live")),
@@ -822,6 +823,7 @@ impl Poll {
             roaming: ni.and_then(|n| n["roaming"].as_bool()),
             w_stale: seen && (!block_ok("wifi") || self.wifi.stale(now)),
             wifi_on,
+            wifi_off: w.as_ref().is_some_and(|w| !w.on),
             wifi_2: band_line(0),
             wifi_5: band_line(1),
             ca_full,
@@ -998,7 +1000,7 @@ fn ts_html(l: Lang, ts: &Src<Ts>, now: Instant) -> String {
         );
     }
     if !t.running {
-        return mark("warn", l.pick("Not running · open ›", "未运行 · 去打开 ›"));
+        return mark("warn", l.pick("Not running. Open ›", "未运行，去打开 ›"));
     }
     let online = t.online == Some(true);
     let n = if t.capped {
@@ -1012,8 +1014,8 @@ fn ts_html(l: Lang, ts: &Src<Ts>, now: Instant) -> String {
     };
     if let Some(r) = &t.relay {
         sub.push_str(&match l {
-            Lang::En => format!(" · relay {r}"),
-            Lang::Zh => format!(" · 中继 {r}"),
+            Lang::En => format!(", relay {r}"),
+            Lang::Zh => format!("，中继 {r}"),
         });
     }
     format!(
@@ -1147,7 +1149,6 @@ mod tests {
         assert!(v.rsrp.loading() && v.bat.loading() && v.dl.loading(), "skeletons");
         assert_eq!(v.clients, "—");
         assert!(v.title.is_none() && v.sub.is_none() && v.sub_loading);
-        assert_eq!(v.sms_n, 0);
         assert!(!v.why);
     }
 
@@ -1168,7 +1169,7 @@ mod tests {
         assert_eq!(v.clients, "3");
         assert_eq!(v.day, "↓ 2.00 GB · ↑ 185 MB");
         assert_eq!(v.uptime, "1 d 2 h");
-        assert_eq!(v.sms_n, 2);
+        assert!(!v.idle);
         // two carriers: the serving n1 (40) and n78 (100)
         assert_eq!(v.bw.text(), "140");
         assert_eq!(v.bw.word, "2 NR carriers");
@@ -1191,7 +1192,7 @@ mod tests {
         feed(&hub, "block", block("battery", 3, json!({"percent":50,"online":1,"charger_connect":1,"time_to_full":50})));
         assert_eq!(hub.read(|st| p.view(st, Instant::now())).bat.word, "Charging");
         p.screen.set(Instant::now(), Some(json!({"battery":{"state":"ok","kind":"charging_eta","minutes":50,"target_pct":100}})));
-        assert_eq!(hub.read(|st| p.view(st, Instant::now())).bat.word, "Charging · Full in about 50 min");
+        assert_eq!(hub.read(|st| p.view(st, Instant::now())).bat.word, "Charging. Full in about 50 min");
     }
 
     #[test]

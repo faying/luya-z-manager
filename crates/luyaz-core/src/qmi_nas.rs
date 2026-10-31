@@ -305,14 +305,28 @@ pub fn want(slot: i64) {
     WANT.store(slot, Ordering::Relaxed);
     if slot != 0 && cfg!(not(test)) {
         START.call_once(|| {
-            let _ = std::thread::Builder::new().name("qmi-nas".into()).spawn(sampler);
+            if let Ok(h) = std::thread::Builder::new().name("qmi-nas".into()).spawn(sampler) {
+                let _ = SAMPLER.set(h.thread().clone());
+            }
         });
+        if let Some(t) = SAMPLER.get() {
+            t.unpark();
+        }
     }
 }
+
+/// The sampler thread, so `want` can wake it when a standby slot comes back.
+static SAMPLER: std::sync::OnceLock<std::thread::Thread> = std::sync::OnceLock::new();
 
 fn sampler() {
     loop {
         let slot = WANT.load(Ordering::Relaxed);
+        if slot == 0 {
+            // back to one card: nothing to read until `want` names a standby slot again
+            // (park can return early; the loop checks again)
+            std::thread::park();
+            continue;
+        }
         if slot == 1 || slot == 2 {
             let got = std::panic::catch_unwind(|| read_sub((slot - 1) as u8)).ok().flatten();
             let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());

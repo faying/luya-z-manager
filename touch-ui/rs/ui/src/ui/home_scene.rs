@@ -48,6 +48,9 @@ const SYM_LOOP: &str = "\u{F079}";
 struct ExRow {
     tag: Obj,
     tag_l: Obj,
+    /// the second tag on a shared line (AI + VoWiFi)
+    tag2: Obj,
+    tag2_l: Obj,
     exit: Obj,
     place: Obj,
     dot: Obj,
@@ -115,10 +118,14 @@ pub struct ExLine {
     pub place: String,
     pub place_col: u32,
     pub ms: i32,
+    /// a second tag sharing the line (AI + VoWiFi: same exit, same place); "" = none. Such a
+    /// line shows the place in the exit's place, bold, without the exit word.
+    pub tag2: String,
+    pub fill2: u32,
 }
 
 fn line(tag: &str, fill: u32, exit: &str, place: impl Into<String>, ms: i32) -> ExLine {
-    ExLine { tag: tag.into(), fill, exit: exit.into(), place: place.into(), place_col: t().t2, ms }
+    ExLine { tag: tag.into(), fill, exit: exit.into(), place: place.into(), place_col: t().t2, ms, tag2: String::new(), fill2: 0 }
 }
 
 /// 🤖 AI's region as a place name
@@ -129,6 +136,15 @@ fn region_name(r: &str) -> &'static str {
         "US" => tr("美国"),
         "HK" => tr("香港"),
         _ => tr("台湾"),
+    }
+}
+
+/// A pinned group's place: a region name, the flag's letters when not one of ours.
+fn pin_place(code: &str) -> String {
+    match code {
+        "JP" | "SG" | "US" | "HK" | "TW" => region_name(code).into(),
+        "" => tr("节点").into(),
+        c => c.into(),
     }
 }
 
@@ -188,22 +204,57 @@ pub fn ex_lines(m: &Model, now: i64) -> (Vec<ExLine>, String) {
             desc = tr("全局：所有流量都走这个节点").into();
         }
         "direct_all" => {
-            v.push(line(tr("全部"), th.fill_green, tr("直连"), dg, dms));
+            v.push(line(tr("全部"), th.fill_green, tr("直连"), dg.clone(), dms));
             desc = tr("CHILL 开着，但不经过它").into();
         }
-        "direct_keep_ai" => v.push(line(tr("其余"), th.fill_green, tr("直连"), dg, dms)),
+        "direct_keep_ai" => v.push(line(tr("其余"), th.fill_green, tr("直连"), dg.clone(), dms)),
         _ => {
-            v.push(line(tr("国内"), th.fill_green, tr("直连"), dg, dms));
+            v.push(line(tr("国内"), th.fill_green, tr("直连"), dg.clone(), dms));
             v.push(line(tr("其余"), th.fill_blue, trc!("route", "节点"), pg, node_ms));
         }
     }
-    // AI: out through 🤖 AI's region; the gate shuts it while the exit is not checked there
-    if ex != "direct_all" && (!sc.ai_region.is_empty() || sc.ai_gate != 0 || ex == "direct_keep_ai") {
-        // gate 1: shut until the exit is checked; gate 2: out the cellular exit, checked to be
-        // in the region
-        let ms = if sc.ai_gate == 1 { LAT_PAUSED } else if sc.ai_gate == 2 { dms } else { LAT_NONE };
+    // AI and VoWiFi keep their nodes whatever 🚀 does (touch reads both chains from mihomo);
+    // AI: the gate shuts it while the exit is not checked to be in 🤖 AI's region
+    let pin = |name: &str| m.chill_pins.iter().find(|p| p.name == name);
+    let pin_ms = |ms: i32| if ms > 0 { ms } else if ms == 0 { LAT_TIMEOUT } else { LAT_NONE };
+    let ai = if ex == "direct_all" {
+        None
+    } else if sc.ai_gate != 0 {
+        // gate 1: shut until the exit is checked; gate 2: out the cellular exit, checked there
+        let ms = if sc.ai_gate == 1 { LAT_PAUSED } else { dms };
         let exit = if sc.ai_gate == 2 { tr("直连") } else { trc!("route", "节点") };
-        v.push(line("AI", th.fill_vio, exit, region_name(&sc.ai_region), ms));
+        Some(line("AI", th.fill_vio, exit, region_name(&sc.ai_region), ms))
+    } else if ex == "global" {
+        None
+    } else if let Some(p) = pin("AI") {
+        Some(if p.region == "DIRECT" {
+            line("AI", th.fill_vio, tr("直连"), dg.clone(), dms)
+        } else {
+            let place = if p.region.is_empty() && !sc.ai_region.is_empty() { region_name(&sc.ai_region).into() } else { pin_place(&p.region) };
+            line("AI", th.fill_vio, trc!("route", "节点"), place, pin_ms(p.ms))
+        })
+    } else if !sc.ai_region.is_empty() || ex == "direct_keep_ai" {
+        Some(line("AI", th.fill_vio, trc!("route", "节点"), region_name(&sc.ai_region), LAT_NONE))
+    } else {
+        None
+    };
+    let vo = match pin("VoWiFi") {
+        Some(p) if ex != "direct_all" && ex != "global" => Some(if p.region == "DIRECT" {
+            line("VoWiFi", th.fill_pink, tr("直连"), dg.clone(), dms)
+        } else {
+            line("VoWiFi", th.fill_pink, trc!("route", "节点"), pin_place(&p.region), pin_ms(p.ms))
+        }),
+        _ => None,
+    };
+    match (ai, vo) {
+        // same exit, same place: one line, two tags, the worse latency
+        (Some(mut a), Some(w)) if a.exit == w.exit && a.place == w.place && a.exit == trc!("route", "节点") && a.ms != LAT_PAUSED => {
+            a.ms = worse_ms(a.ms, w.ms);
+            a.tag2 = w.tag;
+            a.fill2 = w.fill;
+            v.push(a);
+        }
+        (a, w) => v.extend(a.into_iter().chain(w)),
     }
     // 家里出口 (DD2): through Tailscale to home
     let home_ms = m.chill_home.as_ref().filter(|h| h.known != 0 && h.stale == 0 && h.ms > 0).map_or(LAT_NONE, |h| h.ms);
@@ -251,6 +302,16 @@ pub fn ex_lines(m: &Model, now: i64) -> (Vec<ExLine>, String) {
     (ex_fold(v), desc)
 }
 
+/// The worse of two latencies: paused, then timed out, then the slower; unknown loses.
+fn worse_ms(a: i32, b: i32) -> i32 {
+    for bad in [LAT_PAUSED, LAT_TIMEOUT] {
+        if a == bad || b == bad {
+            return bad;
+        }
+    }
+    a.max(b)
+}
+
 /// Five lines or more: the first three, the rest as one grey 「+N」 line (their exit if they
 /// share one, their tags joined with 「/」, the worst latency).
 pub fn ex_fold(mut v: Vec<ExLine>) -> Vec<ExLine> {
@@ -266,7 +327,7 @@ pub fn ex_fold(mut v: Vec<ExLine>) -> Vec<ExLine> {
     } else {
         rest.iter().map(|x| x.ms).max().unwrap_or(LAT_NONE)
     };
-    let tags: Vec<&str> = rest.iter().map(|x| x.tag.as_str()).collect();
+    let tags: Vec<&str> = rest.iter().flat_map(|x| [x.tag.as_str(), x.tag2.as_str()]).filter(|t| !t.is_empty()).collect();
     v.push(ExLine {
         tag: format!("+{}", rest.len()),
         fill: t().fill_grey,
@@ -274,6 +335,8 @@ pub fn ex_fold(mut v: Vec<ExLine>) -> Vec<ExLine> {
         place: tags.join("/"),
         place_col: t().t2,
         ms,
+        tag2: String::new(),
+        fill2: 0,
     });
     v
 }
@@ -409,9 +472,14 @@ impl Ui {
             let tag = kit::bx(s.ch_box, 12, y, 34, 17, th.fill_grey, 9);
             let tag_l = kit::label(tag, f.cj11, 0xffffff, 0, 0, "");
             tag_l.align(lv::LV_ALIGN_CENTER, 0, 0);
+            let tag2 = kit::bx(s.ch_box, 12, y, 34, 17, th.fill_grey, 9);
+            let tag2_l = kit::label(tag2, f.cj11, 0xffffff, 0, 0, "");
+            tag2_l.align(lv::LV_ALIGN_CENTER, 0, 0);
             let r = ExRow {
                 tag,
                 tag_l,
+                tag2,
+                tag2_l,
                 exit: kit::label(s.ch_box, f.cj14, th.t1, 53, y, ""),
                 place: kit::label_w(s.ch_box, f.cj12, th.t2, 90, y + 2, 60, false, ""),
                 dot: kit::dot(s.ch_box, 0, y + 6, 7, th.green),
@@ -635,17 +703,33 @@ impl Ui {
             }
             if !on {
                 kit::show(r.dot, false);
+                kit::show(r.tag2, false);
                 continue;
             }
             let l = &lines[i];
             let y = LINES_TOP - BAND_H + gap + i as i32 * (LINE_H + gap);
             self.set(r.tag_l, &l.tag);
-            let tw = (lv::text_w(l.tag.as_bytes(), f.cj11) + 10).max(34);
+            let shared = !l.tag2.is_empty();
+            // a shared line's tags hug their text (two must fit), a lone tag is at least 34 wide
+            let tw = if shared { lv::text_w(l.tag.as_bytes(), f.cj11) + 10 } else { (lv::text_w(l.tag.as_bytes(), f.cj11) + 10).max(34) };
             r.tag.set_pos(12, y);
             r.tag.set_width(tw);
             r.tag_l.align(lv::LV_ALIGN_CENTER, 0, 0);
             kit::bg(r.tag, l.fill);
-            let ex = if l.exit.is_empty() { "—" } else { l.exit.as_str() };
+            kit::show(r.tag2, shared);
+            let tw = if shared {
+                self.set(r.tag2_l, &l.tag2);
+                let w2 = lv::text_w(l.tag2.as_bytes(), f.cj11) + 10;
+                r.tag2.set_pos(12 + tw + 2, y);
+                r.tag2.set_width(w2);
+                r.tag2_l.align(lv::LV_ALIGN_CENTER, 0, 0);
+                kit::bg(r.tag2, l.fill2);
+                tw + 2 + w2
+            } else {
+                tw
+            };
+            // a shared line: the place, bold, where the exit word goes
+            let ex = if shared { l.place.as_str() } else if l.exit.is_empty() { "—" } else { l.exit.as_str() };
             self.set(r.exit, ex);
             kit::text_color(r.exit, if ex == "—" { th.t3 } else { th.t1 });
             r.exit.set_pos(12 + tw + 7, y);
@@ -671,7 +755,7 @@ impl Ui {
             }
             let rx = CH_W - 10 - mw - if dcol != 0 { 10 } else { 0 } - 6;
             let px = 12 + tw + 7 + ex_w + 6;
-            self.set(r.place, &l.place);
+            self.set(r.place, if shared { "" } else { &l.place });
             kit::text_color(r.place, l.place_col);
             r.place.set_pos(px, y + 2);
             r.place.set_width((rx - px).max(0));
@@ -916,7 +1000,7 @@ mod tests {
     }
 
     fn l(tag: &str, exit: &str, ms: i32) -> ExLine {
-        ExLine { tag: tag.into(), fill: 0, exit: exit.into(), place: String::new(), place_col: 0, ms }
+        ExLine { tag: tag.into(), fill: 0, exit: exit.into(), place: String::new(), place_col: 0, ms, tag2: String::new(), fill2: 0 }
     }
 
     #[test]

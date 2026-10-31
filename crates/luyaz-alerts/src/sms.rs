@@ -47,6 +47,8 @@ const NEVER: &[&str] = &[
     "wifi-takeover",
     "regress-cellular",
     "regress-blind",
+    // the 5 GHz channel guard (wifi-dfs-guard): the fallback worked, inbox only; still down is texted
+    "wifi-5g-fallback",
 ];
 
 /// A regress or point-event alert the device refused (eng review R9) goes again this long after
@@ -249,6 +251,7 @@ fn body_zh(kind: &str) -> String {
         "web-crash" => "管理网页意外退出，已自动重启。不用管。",
         "sentinel-crash" => "U60的看门程序意外退出，已自动重启。不用管。",
         "agent-silent" => "自动管理Wi-Fi的程序没反应了，Wi-Fi会保持打开，上网不受影响。",
+        "wifi-5g-down" => "U60的5G Wi-Fi停了5分钟还没恢复，2.4G不受影响。可在管理网页重开Wi-Fi。",
         _ => return format!("有新告警（{kind}），请到管理网页「系统→告警」查看。"),
     };
     m.to_string()
@@ -274,6 +277,7 @@ fn body_en(kind: &str) -> String {
         "web-crash" => "Admin pages crashed; restarted; no action",
         "sentinel-crash" => "Watchdog crashed; restarted; no action",
         "agent-silent" => "Wi-Fi automation silent; Wi-Fi kept on",
+        "wifi-5g-down" => "5 GHz Wi-Fi down 5+ min; 2.4 GHz still on",
         // a kind is ASCII by alert-lib's rules; kept to 17 safe chars so the SMS stays one
         // message whatever comes in
         _ => {

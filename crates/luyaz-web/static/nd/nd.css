@@ -30,26 +30,28 @@
 @media (min-width: 1024px) { .nd-title { font-size: 32px; line-height: 38px; letter-spacing: -0.025em; } }
 .nd-product { font-size: 17px; line-height: 24px; font-weight: 500; letter-spacing: -0.01em; }
 @media (min-width: 1024px) { .nd-product { font-size: 20px; line-height: 28px; } }
-/* Group titles are eyebrows: small mono caps, the Cohere/Figma section marker. */
+/* Group titles are real headings in the text face: ink, sentence case, no tracking. */
 .nd-group-title {
-  font-family: var(--nd-mono); font-size: 11px; line-height: 16px; font-weight: 500;
-  letter-spacing: 0.06em; text-transform: uppercase; color: var(--nd-t3);
-  margin: 20px 2px 8px;
+  font-family: var(--nd-font); font-size: 15px; line-height: 22px; font-weight: 600;
+  color: var(--nd-t1); margin: 28px 2px 10px;
 }
+@media (min-width: 1024px) { .nd-group-title { font-size: 16px; line-height: 24px; margin-top: 32px; } }
 .nd-group-title:first-child { margin-top: 0; }
 .nd-body { font-size: 15px; line-height: 22px; }
 @media (min-width: 1024px) { .nd-body { font-size: 16px; line-height: 24px; } }
 .nd-aux { font-size: 13px; line-height: 18px; color: var(--nd-t3); }
 @media (min-width: 1024px) { .nd-aux { font-size: 14px; line-height: 20px; } }
-.nd-mono { font-family: var(--nd-mono); font-size: 0.92em; letter-spacing: 0; }
+.nd-mono { font-family: inherit; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+/* Monospace only where the text is code: AT/hex/query panes and the console. */
+.nd-console .nd-mono, .nd-mono.cf-hex, .nd-mono.qc-pre, .nd-mono.qc-q, .nd-mono.qc-wrap { font-family: var(--nd-mono); font-size: 0.92em; }
 
 /* --- status mark: symbol + word, never colour alone -------------- */
 .nd-mark { display: inline-flex; align-items: baseline; gap: 6px; font-weight: 500; max-width: 100%; }
 .nd-mark > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .nd-mark__sym { font-size: 0.72em; line-height: 1; }
-.nd-mark--ok { color: var(--nd-okT); }
-.nd-mark--warn { color: var(--nd-warnT); }
-.nd-mark--bad { color: var(--nd-badT); }
+.nd-mark--ok .nd-mark__sym { color: var(--nd-okMark); }
+.nd-mark--warn .nd-mark__sym { color: var(--nd-warnMark); }
+.nd-mark--bad .nd-mark__sym { color: var(--nd-badMark); }
 .nd-mark--neutral,
 .nd-mark--stale { color: var(--nd-t3); }
 
@@ -96,6 +98,8 @@
   min-height: 44px; padding: 10px 14px;
   font-size: 15px; line-height: 22px;
 }
+/* `display: flex` above would beat the hidden attribute and leave an empty 44px row */
+.nd-row[hidden] { display: none; }
 @media (min-width: 1024px) { .nd-row { min-height: 48px; padding: 12px 20px; font-size: 16px; line-height: 24px; } }
 .nd-row + .nd-row::before {
   content: ""; position: absolute; top: 0; right: 0; left: 14px;
@@ -136,8 +140,8 @@ a.nd-row:active, button.nd-row:active { background: color-mix(in srgb, var(--nd-
 }
 @media (min-width: 640px) { .nd-wall--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .nd-readout__label {
-  font-family: var(--nd-mono); font-size: 11px; line-height: 16px; font-weight: 500;
-  letter-spacing: 0.04em; color: var(--nd-t3);
+  font-family: var(--nd-font); font-size: 13px; line-height: 18px; font-weight: 500;
+  color: var(--nd-t2);
 }
 .nd-readout__value {
   display: flex; align-items: baseline; gap: 5px; flex-wrap: wrap;
@@ -286,8 +290,8 @@ a.nd-module:hover, button.nd-module:hover { box-shadow: inset 0 0 0 1px var(--nd
 }
 .nd-dialog__facts { display: grid; gap: 8px; font-size: 14px; line-height: 21px; color: var(--nd-t2); }
 .nd-dialog__facts dt {
-  font-family: var(--nd-mono); font-size: 11px; line-height: 16px; font-weight: 500;
-  letter-spacing: 0.06em; text-transform: uppercase; color: var(--nd-t3); margin-top: 4px;
+  font-family: var(--nd-font); font-size: 13px; line-height: 18px; font-weight: 500;
+  color: var(--nd-t3); margin-top: 4px;
 }
 .nd-field {
   width: 100%; min-height: 44px; padding: 0 12px; border-radius: var(--nd-r-field);
@@ -324,7 +328,7 @@ a.nd-module:hover, button.nd-module:hover { box-shadow: inset 0 0 0 1px var(--nd
 .nd-chip {
   min-width: 56px; min-height: 44px; padding: 0 12px; border-radius: var(--nd-r-field);
   background: var(--nd-card); color: var(--nd-t1); box-shadow: inset 0 0 0 1px var(--nd-hair);
-  font-family: var(--nd-mono); font-size: 14px; font-weight: 500; cursor: pointer;
+  font-family: var(--nd-font); font-size: 14px; font-weight: 500; cursor: pointer;
   transition: background-color 120ms var(--nd-ease), color 120ms var(--nd-ease), box-shadow 120ms var(--nd-ease);
 }
 .nd-chip[data-hovered]:not([data-selected]) { box-shadow: inset 0 0 0 1px var(--nd-t2); }
@@ -346,52 +350,20 @@ a.nd-module:hover, button.nd-module:hover { box-shadow: inset 0 0 0 1px var(--nd
 .nd-choice[data-disabled] { opacity: 0.4; cursor: not-allowed; }
 }
 
-/* --- colour families ------------------------------------------------
- * Each route group owns one Figma colour block. It fills the page's
- * status block when things are fine and the sidebar's selected item.
- * warn / bad keep their own amber / coral so trouble never looks
- * like decoration. Home gets Cohere's deep-green band.            */
+/* --- colour means state only ----------------------------------------
+ * Pages carry no category colour. A status block that is fine (or
+ * neutral) is a plain card; only attention (amber) and error (coral)
+ * fill it. The current nav item is a neutral tone step. Home modules
+ * are ordinary cards. The deep-green band is kept for login alone. */
 @layer components {
-[data-family] { --nd-fam: var(--nd-track); }
-[data-family="charts"] { --nd-fam: var(--nd-blkCharts); }
-[data-family="network"] { --nd-fam: var(--nd-blkNetwork); }
-[data-family="wifiLan"] { --nd-fam: var(--nd-blkWifi); }
-[data-family="services"] { --nd-fam: var(--nd-blkServices); }
-[data-family="messages"] { --nd-fam: var(--nd-blkMessages); }
-[data-family="device"],
-[data-family="maintenance"],
-[data-family="tools"],
-[data-family="system"] { --nd-fam: var(--nd-blkSystem); }
-[data-family="functions"] { --nd-fam: var(--nd-blkServices); }
-[data-family="home"] { --nd-fam: var(--nd-blkNetwork); }
-
-[data-family] .nd-status--ok,
-[data-family] .nd-status--neutral { background: var(--nd-fam); }
+.nd-status--ok,
+.nd-status--neutral { background: var(--nd-card); box-shadow: inset 0 0 0 1px var(--nd-hair); }
 .nd-status .nd-status__reason,
-.nd-status .nd-status__meta { color: color-mix(in srgb, var(--nd-t1) 80%, transparent); }
+.nd-status .nd-status__meta { color: var(--nd-t2); }
 
-/* Home: the headline state sits on the deep-green band. */
-[data-family="home"] .nd-status--ok { background: var(--nd-band); color: var(--nd-onBand); }
-[data-family="home"] .nd-status--ok .nd-status__state .nd-mark { color: var(--nd-onBand); }
-[data-family="home"] .nd-status--ok .nd-mark__sym { color: var(--nd-bandAccent); }
-[data-family="home"] .nd-status--ok .nd-status__reason,
-[data-family="home"] .nd-status--ok .nd-status__meta { color: color-mix(in srgb, var(--nd-onBand) 80%, transparent); }
-[data-family="home"] .nd-status--ok .nd-btn--secondary { background: transparent; color: var(--nd-onBand); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--nd-onBand) 40%, transparent); }
-
-/* Home module cards: lilac, cream, navy — flat blocks, no hairline. */
-[data-family="home"] .nd-module { box-shadow: none; }
-[data-family="home"] .nd-module--lilac { background: var(--nd-blkServices); }
-[data-family="home"] .nd-module--cream { background: var(--nd-blkSystem); }
-[data-family="home"] .nd-module--navy { background: var(--nd-blkNavy); color: #ffffff; --nd-t1: #ffffff; --nd-t2: #d4d2ec; --nd-t3: #b3b0d6; --nd-okT: #bfe89a; --nd-card: var(--nd-blkNavy); --nd-hair: #3d3a66; --nd-track: #2c2a52; }
-[data-theme="light"] [data-family="home"] .nd-module--lilac .nd-seg__track,
-[data-theme="light"] [data-family="home"] .nd-module--cream .nd-seg__track { background: color-mix(in srgb, #ffffff 55%, transparent); box-shadow: none; }
-
-/* Sidebar / rail / tab bar pick up the family colour for the current page. */
-.nd .nd-side__link[aria-current="page"] { background: var(--nd-fam); color: var(--nd-t1); }
+.nd .nd-side__link[aria-current="page"] { background: var(--nd-accS); color: var(--nd-t1); font-weight: 600; }
 .nd .nd-side__link[aria-current="page"] svg { color: var(--nd-t1); }
-[data-family="home"] .nd-side__link[aria-current="page"] { background: var(--nd-band); color: var(--nd-onBand); }
-[data-family="home"] .nd-side__link[aria-current="page"] svg { color: var(--nd-onBand); }
-.nd-tabbar__item[aria-current="page"] svg { background: var(--nd-fam); border-radius: 999px; padding: 2px 12px; box-sizing: content-box; }
+.nd-tabbar__item[aria-current="page"] svg { background: var(--nd-accS); border-radius: 999px; padding: 2px 12px; box-sizing: content-box; }
 
 /* Login: full deep-green band, white card. */
 .nd-bandpage { background: var(--nd-band); color: var(--nd-onBand); }
@@ -404,29 +376,15 @@ a.nd-module:hover, button.nd-module:hover { box-shadow: inset 0 0 0 1px var(--nd
 }
 
 @layer components {
-/* Chinese labels: mono caps only suit Latin; CJK falls back unevenly and
- * uppercase mangles units (MHz → MHZ). Use the text face, no transform. */
-html[lang^="zh"] .nd-group-title,
-html[lang^="zh"] .nd-readout__label,
-html[lang^="zh"] .nd-dialog__facts dt {
-  font-family: var(--nd-font); text-transform: none; letter-spacing: 0.02em; font-size: 12px;
-}
-
 /* Inside a colour block (status block, home module cards) status words are
  * ink; only the glyph keeps its tone (keeps text contrast on every block). */
-[data-family="home"] .nd-module--lilac .nd-mark,
-[data-family="home"] .nd-module--cream .nd-mark,
 .nd-status .nd-mark { color: var(--nd-t1); }
-[data-family="home"] .nd-module--lilac .nd-mark--ok .nd-mark__sym,
-[data-family="home"] .nd-module--cream .nd-mark--ok .nd-mark__sym,
 .nd-status .nd-mark--ok .nd-mark__sym { color: var(--nd-okMark); }
 .nd-module .nd-mark--warn .nd-mark__sym, .nd-status .nd-mark--warn .nd-mark__sym { color: var(--nd-warnMark); }
 .nd-module .nd-mark--bad .nd-mark__sym, .nd-status .nd-mark--bad .nd-mark__sym { color: var(--nd-badMark); }
 
 /* Blocks only use t1/t2: the lightest grey is mapped up inside them. */
-.nd-status,
-[data-family="home"] .nd-module--lilac,
-[data-family="home"] .nd-module--cream { --nd-t3: var(--nd-t2); }
+.nd-status { --nd-t3: var(--nd-t2); }
 
 /* Console-band headings and error lines (one role each, replaces ad-hoc sizes). */
 .nd-console__title { font-family: var(--nd-font); font-size: 15px; line-height: 22px; font-weight: 500; }

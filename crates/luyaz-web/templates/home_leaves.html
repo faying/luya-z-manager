@@ -9,8 +9,6 @@
 <!--leaf-->
 <p id="hm-sub" class="nd-aux mt-0.5"{% if v.sub.is_none() && !v.sub_loading %} hidden{% endif %}>{% if let Some(s) = v.sub %}{{ v.sub_logo|safe }}<span class="min-w-0 truncate" data-data>{{ s }}</span>{% else if v.sub_loading %}<span class="nd-skel" style="width:14ch"></span>{% endif %}</p>
 <!--leaf-->
-<a id="hm-sms" class="hm-count" href="/sms" aria-label="{{ v.sms_label }}">{{ crate::shell::icon("ChatCircleText", v.sms_n > 0, 20, "")|safe }}{% if v.sms_n > 0 %}<span class="hm-count__n" aria-hidden="true">{% if v.sms_n > 99 %}99+{% else %}{{ v.sms_n }}{% endif %}</span>{% endif %}</a>
-<!--leaf-->
 <a id="hm-alerts" class="hm-count" href="/alerts" aria-label="{{ v.alerts_label }}">{{ crate::shell::icon("Bell", false, 20, "")|safe }}{% if v.alerts_n > 0 %}<span class="hm-count__n" aria-hidden="true">{% if v.alerts_n > 99 %}99+{% else %}{{ v.alerts_n }}{% endif %}</span>{% endif %}</a>
 <!--leaf-->
 {{ v.status|safe }}
@@ -31,9 +29,9 @@
 <!--leaf-->
 {% call m::ro_word("sinr", v.sinr) %}{% endcall %}
 <!--leaf-->
-{% call m::ro_value("dl", v.dl, "Mbps") %}{% endcall %}
+{% if v.idle %}<div id="ro-dl" class="nd-readout__value"><span>{{ v.l.pick("Idle", "空闲") }}</span></div>{% else %}<div id="ro-dl" class="nd-readout__value">{% if v.dl.loading() %}<span class="nd-skel" aria-label="…"></span>{% elif v.dl.empty %}<span class="nd-readout__empty">—</span>{% else %}<span>↓ {{ v.dl.text() }}</span><span class="nd-readout__unit">Mbps</span>{% endif %}</div>{% endif %}
 <!--leaf-->
-{% call m::ro_value("ul", v.ul, "Mbps") %}{% endcall %}
+<div id="ro-ul" class="nd-readout__sub"{% if v.ul.loading() || (v.ul.empty && !v.idle) %} hidden{% endif %}>{% if v.idle %}↓ {{ v.dl.text() }} · {% endif %}↑ {{ v.ul.text() }} Mbps</div>
 <!--leaf-->
 {% call m::ro_value("temp", v.temp, "°C") %}{% endcall %}
 <!--leaf-->
@@ -75,7 +73,7 @@
 <!--leaf-->
 <i id="hm-fl-w" class="hm-flag" hidden{% if v.w_stale %} data-stale{% endif %}></i>
 <!--leaf-->
-<span id="hw-on" class="nd-row__value">{{ v.wifi_on }}</span>
+<span id="hw-on" class="nd-row__value"{% if v.wifi_off %} data-off{% endif %}>{{ v.wifi_on }}</span>
 <!--leaf-->
 <span id="hw-2" class="nd-row__sub" data-data>{{ v.wifi_2 }}</span>
 <!--leaf-->
@@ -90,6 +88,6 @@
 <div id="hc-sel" class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Network selection", "选网方式") }}</span></span><span class="nd-row__value">{{ s }}</span></div>
 {% endif %}
 <!--leaf-->
-<a id="hm-scene" class="nd-module nd-module--cream hm-o8" href="/router/scenario"><span class="nd-module__head">{{ v.l.pick("Scenarios", "情景") }}{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</span>{% match v.scene %}{% when Scene::Loading %}<span class="nd-skel" style="width:10ch"></span>{% when Scene::None %}<p class="nd-body text-nd-t2">{{ v.l.pick("No scenarios yet · set up ›", "还没有情景 · 去设置 ›") }}</p>{% when Scene::On(s) %}<p class="nd-body"><span data-data>{{ s.name }}</span>{% if s.pinned %}<span class="nd-aux"> · {{ v.l.pick("pinned", "已固定") }}</span>{% endif %}{% if s.engine_off %}<span class="nd-aux"> · {{ v.l.pick("engine off", "引擎已关") }}</span>{% endif %}</p>{% if let Some(t) = s.last %}<p class="nd-aux">{% match v.l %}{% when Lang::En %}Switched {{ t }}{% when Lang::Zh %}{{ t }} 切换{% endmatch %}</p>{% endif %}{% endmatch %}</a>
+<a id="hm-scene" class="nd-module nd-module--cream hm-o8" href="/router/scenario"><span class="nd-module__head">{{ v.l.pick("Scenarios", "情景") }}{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</span>{% match v.scene %}{% when Scene::Loading %}<span class="nd-skel" style="width:10ch"></span>{% when Scene::None %}<p class="nd-body text-nd-t2">{{ v.l.pick("No scenarios yet. Set up ›", "还没有情景，去设置 ›") }}</p>{% when Scene::On(s) %}<p class="nd-body"><span data-data>{{ s.name }}</span>{% if s.pinned %}<span class="nd-aux">{{ v.l.pick(", pinned", "，已固定") }}</span>{% endif %}{% if s.engine_off %}<span class="nd-aux">{{ v.l.pick(", engine off", "，引擎已关") }}</span>{% endif %}</p>{% if let Some(t) = s.last %}<p class="nd-aux">{% match v.l %}{% when Lang::En %}Switched {{ t }}{% when Lang::Zh %}{{ t }} 切换{% endmatch %}</p>{% endif %}{% endmatch %}</a>
 <!--leaf-->
 <a id="hm-ts" class="nd-module nd-module--navy hm-o9{% if v.ts_stale %} hm-dim{% endif %}" href="/services/tailscale"><span class="nd-module__head">Tailscale{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</span>{{ v.ts|safe }}</a>

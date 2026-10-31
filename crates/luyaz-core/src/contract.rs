@@ -504,6 +504,30 @@ contract! {
 }
 
 contract! {
+    /// The 5 GHz channel guard (`engines::wifi_dfs`, design wifi-dfs-guard): 5 GHz wanted on (uci)
+    /// and serving (`up`), on which channel and width (MHz) and whether that touches a DFS channel;
+    /// `auto`: the owner's fallback switch. `down_since`: wanted on but not serving since (device
+    /// wall clock). `override_*`: the fallback is in place, what goes back and when (`restore_at`,
+    /// no earlier and only with no station and no call). `last_event`: `moved`/`narrowed`/`down`/
+    /// `back`/`fallback`/`restored`, or `""`.
+    pub struct WifiDfs {
+        normal want_5g: bool,
+        normal up: bool,
+        normal channel: Option<i64>,
+        normal width: Option<i64>,
+        normal on_dfs: Option<bool>,
+        normal auto: bool,
+        normal down_since: Option<i64>,
+        normal override_channel: Option<String>,
+        normal override_htmode: Option<String>,
+        normal override_at: Option<i64>,
+        normal restore_at: Option<i64>,
+        normal last_event: String,
+        normal last_event_at: Option<i64>,
+    }
+}
+
+contract! {
     pub struct RegressItem {
         normal id: String,
         normal kind: String,
@@ -1166,6 +1190,7 @@ blocks! {
     "typec" => Typec,
     "uci_device_info" => UciDeviceInfo,
     "wifi" => Wifi,
+    "wifi_dfs" => WifiDfs,
     "wlan" => Wlan,
 }
 

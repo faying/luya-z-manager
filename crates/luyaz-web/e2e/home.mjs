@@ -50,16 +50,18 @@ async function own(p) {
   // values: hub blocks
   ok(/U60 Pro · MU5250/.test(await txt(p, "#hm-title")), `title: ${await txt(p, "#hm-title")}`);
   ok((await txt(p, "#hm-sub")).length > 0, `subtitle: ${await txt(p, "#hm-sub")}`);
-  for (const id of ["ro-bw", "ro-rsrp", "ro-sinr", "ro-dl", "ro-ul", "ro-temp", "ro-bat"]) {
+  for (const id of ["ro-bw", "ro-rsrp", "ro-sinr", "ro-temp", "ro-bat"]) {
     ok(/^-?\d/.test(await txt(p, `#${id}`)), `${id}: ${await txt(p, `#${id}`)}`);
   }
+  // speed: one cell, 「空闲」 under 0.1 Mbps both ways, the figures always in the line under it
+  ok(/^(↓ \d|空闲)/.test(await txt(p, "#ro-dl")) && /↑ \d/.test(await txt(p, "#ro-ul")), `speed: ${await txt(p, "#ro-dl")} | ${await txt(p, "#ro-ul")}`);
   ok(/RSRQ -?\d+/.test(await txt(p, "#ro-rsrp-w")), `RSRP sub: ${await txt(p, "#ro-rsrp-w")}`);
   ok(/使用电池/.test(await txt(p, "#ro-bat-w")) && /约可用/.test(await txt(p, "#ro-bat-w")), `battery sub (on battery + estimate): ${await txt(p, "#ro-bat-w")}`);
   ok(/^\d+$/.test(await txt(p, "#hd-cl")), `connected devices: ${await txt(p, "#hd-cl")}`);
   ok(/↓ .*GB.*↑/.test(await txt(p, "#hd-day")) && /↓ .*GB.*↑/.test(await txt(p, "#hd-mon")), `today / month: ${await txt(p, "#hd-day")} | ${await txt(p, "#hd-mon")}`);
   ok(/小时|分钟|天/.test(await txt(p, "#hd-up")), `uptime: ${await txt(p, "#hd-up")}`);
-  ok(/^2$/.test(await txt(p, "#hm-sms .hm-count__n")), `SMS badge: ${await txt(p, "#hm-sms")}`);
-  ok(await p.locator("#hm-sms").getAttribute("href") === "/sms" && await p.locator("#hm-alerts").getAttribute("href") === "/alerts", "SMS and alerts links");
+  // unread SMS is counted once, in the top bar; the home header keeps only the alerts bell
+  ok(await p.locator("#hm-sms").count() === 0 && await p.locator("#hm-alerts").getAttribute("href") === "/alerts", "alerts link, no second SMS count");
   ok((await p.locator("#hm-ca .nd-row").count()) >= 2, `carrier group rows: ${await p.locator("#hm-ca .nd-row").count()}`);
   ok(/Cell \d+/.test(await txt(p, "#ca-0")) && /服务小区/.test(await txt(p, "#ca-0")), `serving carrier: ${await txt(p, "#ca-0")}`);
   ok(await p.locator("#hc-sel").count() === 1, "network selection row");
@@ -214,7 +216,7 @@ for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [12
   await p.waitForSelector("#hm-chill-seg [role=radio]", { timeout: 15000 }).catch(() => {});
   await p.waitForFunction(() => !/^—$/.test(document.querySelector("#hi-ip")?.textContent.trim() ?? "—") && /MHz/.test(document.querySelector("#hw-5")?.textContent ?? ""), null, { timeout: 12000 }).catch(() => {});
   if (lang === "en") {
-    ok(/Detail/.test(await txt(p, "#hm-detail-t")) && /Aggregate bandwidth/.test(await txt(p, "#hm-readouts")), "English labels");
+    ok(/Detail/.test(await txt(p, "#hm-detail-t")) && /Bandwidth/.test(await txt(p, "#hm-readouts")), "English labels");
     const left = (await mainText(p)).match(CJK) ?? [];
     ok(left.length === 0, `English body without Chinese (${[...new Set(left)].join("") || "none"})`);
     ok(await p.getAttribute("html", "lang") === "en", "html lang=en");

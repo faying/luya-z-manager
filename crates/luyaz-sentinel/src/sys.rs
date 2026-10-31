@@ -174,8 +174,39 @@ pub fn find_ui() -> Option<i32> {
     None
 }
 
-/// First pid whose comm starts with `prefix` (never this process).
+/// Start time of `pid` in clock ticks since boot (`/proc/<pid>/stat` field 22): with the pid it
+/// names one process, a reused pid gets a later one.
+fn start_ticks(pid: i32) -> Option<u64> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
+}
+
+/// First pid whose comm starts with `prefix` (never this process). The last answer per prefix is
+/// remembered and re-checked (comm and start time) before a full /proc scan.
 pub fn find_comm(prefix: &str) -> Option<i32> {
+    static LAST: Mutex<Vec<(String, i32, u64)>> = Mutex::new(Vec::new());
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&(_, pid, ticks)) = last.iter().find(|(p, ..)| p == prefix) {
+        if pid_is(pid, prefix) && start_ticks(pid) == Some(ticks) {
+            return Some(pid);
+        }
+    }
+    last.retain(|(p, ..)| p != prefix);
+    let found = scan_comm(prefix);
+    if let Some(pid) = found {
+        if let Some(t) = start_ticks(pid) {
+            last.push((prefix.to_string(), pid, t));
+        }
+    }
+    found
+}
+
+fn scan_comm(prefix: &str) -> Option<i32> {
     let me = std::process::id() as i32;
     let rd = fs::read_dir("/proc").ok()?;
     for e in rd.flatten() {
@@ -1813,4 +1844,43 @@ fn draw(fd: RawFd, en: bool) -> Result<(), String> {
     let mut h_ = handle;
     let _ = drm_io(fd, drm::DESTROY_DUMB, &mut h_);
     result
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod find_comm_tests {
+    use super::*;
+
+    #[test]
+    fn a_remembered_pid_is_checked_again_before_it_is_answered() {
+        // a name nothing else has: comm is the program's file name
+        let dir = std::env::temp_dir().join(format!("fc-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let prog = dir.join("lzfindcomm");
+        fs::copy(
+            Command::new("sh")
+                .args(["-c", "command -v sleep"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap(),
+            &prog,
+        )
+        .unwrap();
+        let mut a = Command::new(&prog).arg("30").spawn().unwrap();
+        let pid = a.id() as i32;
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(find_comm("lzfindcomm"), Some(pid));
+        assert_eq!(
+            find_comm("lzfindcomm"),
+            Some(pid),
+            "cache hit, same process"
+        );
+        a.kill().unwrap();
+        a.wait().unwrap();
+        assert_eq!(
+            find_comm("lzfindcomm"),
+            None,
+            "gone: not answered from the cache"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

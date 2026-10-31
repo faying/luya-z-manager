@@ -3663,6 +3663,105 @@
       "title": "Wifi",
       "type": "object"
     },
+    "wifi_dfs": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The 5 GHz channel guard (`engines::wifi_dfs`, design wifi-dfs-guard): 5 GHz wanted on (uci)\nand serving (`up`), on which channel and width (MHz) and whether that touches a DFS channel;\n`auto`: the owner's fallback switch. `down_since`: wanted on but not serving since (device\nwall clock). `override_*`: the fallback is in place, what goes back and when (`restore_at`,\nno earlier and only with no station and no call). `last_event`: `moved`/`narrowed`/`down`/\n`back`/`fallback`/`restored`, or `\"\"`.",
+      "properties": {
+        "auto": {
+          "type": "boolean",
+          "x-u60-level": "normal"
+        },
+        "channel": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "down_since": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "last_event": {
+          "type": "string",
+          "x-u60-level": "normal"
+        },
+        "last_event_at": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "on_dfs": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "override_at": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "override_channel": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "override_htmode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "restore_at": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        },
+        "up": {
+          "type": "boolean",
+          "x-u60-level": "normal"
+        },
+        "want_5g": {
+          "type": "boolean",
+          "x-u60-level": "normal"
+        },
+        "width": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-u60-level": "normal"
+        }
+      },
+      "required": [
+        "want_5g",
+        "up",
+        "auto",
+        "last_event"
+      ],
+      "title": "WifiDfs",
+      "type": "object"
+    },
     "wlan": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {

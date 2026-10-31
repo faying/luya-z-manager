@@ -67,6 +67,8 @@ interface RunState {
   v1: boolean;
   /** roaming: coarse, download only */
   coarse: boolean;
+  /** roaming, but `roaming_ok:true` (the two-step confirm, R11): the full run, marked */
+  roamFull: boolean;
   chill: boolean;
   short: boolean;
 }
@@ -79,7 +81,7 @@ const MB = 1_000_000;
 /** The mock's v2 fields (luyaz-speedtest SpeedTestProgress after `server`). */
 function v2Fields(s: RunState | null): Record<string, unknown> {
   return {
-    method_version: 2, mode: s?.coarse ? "coarse" : "full", roaming_capped: !!s?.coarse, path: s?.chill ? "chill" : "direct",
+    method_version: 2, mode: s?.coarse ? "coarse" : "full", roaming_capped: !!s?.coarse, roaming_full: !!s?.roamFull, path: s?.chill ? "chill" : "direct",
     stage: null, step: 0, steps: s?.coarse ? 1 : s?.chill ? 6 : 5, connections: 6,
     download_whole_mbps: null, single_mbps: null, single_whole_mbps: null, upload_whole_mbps: null,
     chill_mbps: null, chill_whole_mbps: null, chill_region: null, idle_ms: null,
@@ -365,7 +367,8 @@ export const routes: Route[] = [
         cancelledAt: null,
         v1: ctx.has("speed-v1"),
         // the core decides roaming at admission (an old core never runs coarse)
-        coarse: !ctx.has("speed-v1") && !ctx.has("home-network"),
+        coarse: !ctx.has("speed-v1") && !ctx.has("home-network") && bodyField(ctx.body, "roaming_ok") !== true,
+        roamFull: !ctx.has("speed-v1") && !ctx.has("home-network") && bodyField(ctx.body, "roaming_ok") === true,
         chill: !ctx.has("speed-v1") && bodyField(ctx.body, "path") === "chill",
         short: ctx.has("speed-short"),
       };

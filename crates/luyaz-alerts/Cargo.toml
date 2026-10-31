@@ -1,6 +1,6 @@
 [package]
 name = "luyaz-alerts"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.99"
 description = "U60 Pro (MU5250) alert files under /data/alerts (queue, SMS log, cursors, flags; the format alert-lib.sh writes), shared by u60d and luyaz-sentinel. Split out of u60-api (u60-sentinel.md D9) so the sentinel does not carry the login code."

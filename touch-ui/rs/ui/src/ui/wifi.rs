@@ -23,6 +23,8 @@ pub struct Wifi {
     pub pass: Obj,
     pub enc: Obj,
     pub state: Obj,
+    /// 5 GHz's channel and width, and the channel guard's word (core `wifi_dfs`)
+    pub ch5: Obj,
     pub sw: [Obj; 5],
     pub sw_st: [Obj; 5],
     pub cli_sec: Obj,
@@ -106,12 +108,13 @@ impl Ui {
 
         kit::section(sc, y, tr("热点"));
         y += 20;
-        let ap = kit::card(sc, MARGIN, y, CARD_W, 3 * ROW_H);
+        let ap = kit::card(sc, MARGIN, y, CARD_W, 4 * ROW_H);
         w.ssid = kit::label_w(ap, f.cj17b, th.t1, PAD, 10, 200, false, "");
         w.state = kit::label_r(ap, f.cj13, th.ok_t, CARD_W - PAD, 12, "");
         w.enc = kit::row(ap, ROW_H, tr("加密"), false);
         w.pass = kit::row(ap, 2 * ROW_H, tr("密码"), false);
-        y += 3 * ROW_H + 10;
+        w.ch5 = kit::row(ap, 3 * ROW_H, tr("5G 信道"), false);
+        y += 4 * ROW_H + 10;
 
         kit::section(sc, y, tr("开关"));
         y += 20;

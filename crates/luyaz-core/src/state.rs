@@ -324,17 +324,66 @@ pub(crate) async fn uci_show(package: &str) -> BTreeMap<String, String> {
     if crate::ubus::validate_name(package).is_err() {
         return Default::default();
     }
+    // 戳在读之前取：读的途中文件变了，下一次戳对不上就重读。
+    let stamp = blocking({
+        let p = package.to_owned();
+        move || uci_stamp(&p)
+    })
+    .await;
+    if let Some(v) = uci_memo_get(&UCI_SHOW_MEMO, package, &stamp) {
+        return v;
+    }
     let p = package.to_owned();
     let parsed = blocking(move || {
         uci_parsed(&p).map(|pkg| uci_show_map(&crate::uci::render_show(&p, &pkg)))
     })
     .await;
-    match parsed {
+    let map = match parsed {
         Some(map) => map,
-        None => command::run(&uci_bin(), ["-q", "show", package], UCI_DEADLINE)
-            .await
-            .map(|raw| uci_show_map(&raw))
-            .unwrap_or_default(),
+        // 子进程失败（超时、读不到）不记：下一轮照样重试。
+        None => match command::run(&uci_bin(), ["-q", "show", package], UCI_DEADLINE).await {
+            Ok(raw) => uci_show_map(&raw),
+            Err(_) => return Default::default(),
+        },
+    };
+    uci_memo_put(&UCI_SHOW_MEMO, package, stamp, map.clone());
+    map
+}
+
+/// 一个 UCI 包的变化戳：`/etc/config/<包>` 和 `/tmp/.uci/<包>` 各自的
+/// (mtime 秒, 纳秒, 大小, inode)；文件不在是 `None`。两个都没变 = `uci show` 的结果没变
+/// （`uci commit` 是改名替换，inode 会变；`uci set` 追加改动文件，大小会变）。
+type UciStamp = [Option<(i64, i64, u64, u64)>; 2];
+
+fn uci_stamp(package: &str) -> UciStamp {
+    uci_stamp_in(package, &uci_config_dir(), &uci_save_dir())
+}
+
+fn uci_stamp_in(package: &str, confdir: &std::path::Path, savedir: &std::path::Path) -> UciStamp {
+    use std::os::unix::fs::MetadataExt;
+    let one = |dir: &std::path::Path| {
+        fs::metadata(dir.join(package))
+            .ok()
+            .map(|m| (m.mtime(), m.mtime_nsec(), m.size(), m.ino()))
+    };
+    [one(confdir), one(savedir)]
+}
+
+type UciMemo<T> = OnceLock<Mutex<std::collections::HashMap<String, (UciStamp, T)>>>;
+/// `uci_show` 按戳记住的结果（解析路径和子进程路径都记）。
+static UCI_SHOW_MEMO: UciMemo<BTreeMap<String, String>> = OnceLock::new();
+/// `uci_value` 按戳记住的解析结果（`None` = 这个包要走子进程）。
+static UCI_PKG_MEMO: UciMemo<Option<std::sync::Arc<crate::uci::Package>>> = OnceLock::new();
+
+fn uci_memo_get<T: Clone>(memo: &UciMemo<T>, package: &str, stamp: &UciStamp) -> Option<T> {
+    let m = memo.get_or_init(Default::default).lock().ok()?;
+    let (s, v) = m.get(package)?;
+    (s == stamp).then(|| v.clone())
+}
+
+fn uci_memo_put<T>(memo: &UciMemo<T>, package: &str, stamp: UciStamp, v: T) {
+    if let Ok(mut m) = memo.get_or_init(Default::default).lock() {
+        m.insert(package.to_owned(), (stamp, v));
     }
 }
 
@@ -361,7 +410,13 @@ pub(crate) async fn uci_value(path: &str) -> String {
         let (package, section, option) =
             (package.to_owned(), section.to_owned(), option.to_owned());
         let parsed = blocking(move || {
-            uci_parsed(&package).map(|pkg| {
+            let stamp = uci_stamp(&package);
+            let pkg = uci_memo_get(&UCI_PKG_MEMO, &package, &stamp).unwrap_or_else(|| {
+                let pkg = uci_parsed(&package).map(std::sync::Arc::new);
+                uci_memo_put(&UCI_PKG_MEMO, &package, stamp, pkg.clone());
+                pkg
+            });
+            pkg.map(|pkg| {
                 crate::uci::get(&pkg, &section, &option)
                     .map(|v| String::from_utf8_lossy(&v).trim().to_owned())
                     .unwrap_or_default()
@@ -486,6 +541,29 @@ fn tcp_aggregation_summary() -> (usize, String, u16, bool) {
 /// Kernel thermal zones. Returns the CPU figure (mean of the `cpuss*` zones,
 /// else the hottest zone), the `/state` list and the `/v2` runtime list.
 fn thermal_zones() -> (i64, Value, Vec<crate::contract::ThermalZone>) {
+    type Zones = (i64, Value, Vec<crate::contract::ThermalZone>);
+    // 按目录记：测试换 LUYAZ_THERMAL_ROOT 时不会拿到别的目录的结果。
+    static LAST: Mutex<Option<(String, Instant, Zones)>> = Mutex::new(None);
+    let base = env_or("LUYAZ_THERMAL_ROOT", "/sys/class/thermal");
+    if let Ok(last) = LAST.lock()
+        && let Some((b, at, z)) = last.as_ref()
+        && *b == base
+        && at.elapsed() < THERMAL_TTL
+    {
+        return z.clone();
+    }
+    let z = thermal_zones_scan();
+    if let Ok(mut last) = LAST.lock() {
+        *last = Some((base, Instant::now(), z.clone()));
+    }
+    z
+}
+
+/// 温区一遍要读几十个文件（PMIC 的 ADC 每个约 0.3 ms）；温度 5 秒内的变化对显示和
+/// 记录都不要紧。过热判断（heat.rs）自己直接读它要的温区，不走这里。
+const THERMAL_TTL: Duration = Duration::from_secs(5);
+
+fn thermal_zones_scan() -> (i64, Value, Vec<crate::contract::ThermalZone>) {
     let base = env_or("LUYAZ_THERMAL_ROOT", "/sys/class/thermal");
     let Ok(dir) = fs::read_dir(base) else {
         return (0, json!([]), Vec::new());
@@ -566,16 +644,17 @@ fn count_lines(path: &str, header: bool) -> u64 {
     if header { rows.saturating_sub(1) } else { rows }
 }
 
-/// IPv4 TCP sockets in ESTABLISHED (state 01).
-fn tcp_active() -> u64 {
+/// IPv4 TCP sockets: (ESTABLISHED (state 01), all rows), from one read of the table.
+fn tcp_counts() -> (u64, u64) {
     let table = fs::read_to_string(host_path("/proc/net/tcp")).unwrap_or_default();
-    let mut n = 0;
+    let (mut established, mut all) = (0, 0);
     for row in table.lines().skip(1) {
+        all += 1;
         if row.split_whitespace().nth(3) == Some("01") {
-            n += 1;
+            established += 1;
         }
     }
-    n
+    (established, all)
 }
 
 /// 测试用：LUYAZ_HOST_ROOT 设了时，下面这些写死的 /proc、/sys、/data 路径整体挪到它下面，
@@ -702,6 +781,10 @@ fn link_rates(now: u64) -> Vec<crate::contract::LinkRate> {
 /// LAN bridge transmits is what users download. Falls back to the Wi-Fi APs,
 /// then to the cellular interfaces.
 fn user_bytes() -> (u64, u64) {
+    user_bytes_from(iface_bytes)
+}
+
+fn user_bytes_from(iface_bytes: impl Fn(&str) -> Option<(u64, u64)>) -> (u64, u64) {
     let swapped_sum = |names: &[&str]| -> Option<(u64, u64)> {
         let mut found = false;
         let mut down = 0u64;
@@ -713,9 +796,16 @@ fn user_bytes() -> (u64, u64) {
         }
         found.then_some((down, up))
     };
+    // Last resort, the WAN side: rmnet_ipa0 is the device under rmnet_data0, so adding the two
+    // counts the same bytes twice; and on WAN rx is already the download, no swap.
+    let wan = || {
+        ["rmnet_data0", "rmnet_ipa0"]
+            .iter()
+            .find_map(|n| iface_bytes(n))
+    };
     swapped_sum(&["br-lan"])
         .or_else(|| swapped_sum(&["wlan0", "wlan2"]))
-        .or_else(|| swapped_sum(&["rmnet_data0", "rmnet_ipa0"]))
+        .or_else(wan)
         .unwrap_or((0, 0))
 }
 
@@ -810,8 +900,7 @@ fn runtime(runtime_zones: Vec<crate::contract::ThermalZone>) -> (i64, crate::con
     };
     let freqs = per_core.keys().map(|core| (core.clone(), core_freq(core))).collect();
     let rows = |p: &str| count_lines(&host_path(p), true);
-    let established = tcp_active();
-    let tcp4 = rows("/proc/net/tcp");
+    let (established, tcp4) = tcp_counts();
     let connections = crate::contract::Connections {
         tcp_active: established,
         tcp_other: tcp4.saturating_sub(established),
@@ -1304,6 +1393,9 @@ async fn integrated_modem(ctx: &Mu5252Ctx, subid: i64) -> Value {
         "wwan": wwan_summary(&ctx.cellular),
         "interfaces": {"ipv4": interface(&ctx.wan4_if), "ipv6": interface(&ctx.wan6_if)},
         "traffic": realtime_traffic(&traffic),
+        // get_wwandst ignores `subid` (u60g 10-21): with an external module both entries may
+        // carry the same figures (docs/designs/traffic-counters.md)
+        "traffic_per_module": false,
         "qos": {
             "qci": q.qci, "ambr_dl": q.ambr_dl, "ambr_ul": q.ambr_ul,
             "bearer": q.bearer, "stale": q.stale, "sampled_at": 0,
@@ -1367,6 +1459,9 @@ async fn external_modem(
         "wwan": wwan_summary(&wwan),
         "interfaces": {"ipv4": interface(&v4), "ipv6": interface(&v6)},
         "traffic": realtime_traffic(&traffic),
+        // get_wwandst ignores `subid` (u60g 10-21): with an external module both entries may
+        // carry the same figures (docs/designs/traffic-counters.md)
+        "traffic_per_module": false,
         "qos": {
             "qci": probe.qos.qci, "ambr_dl": probe.qos.ambr_dl,
             "ambr_ul": probe.qos.ambr_ul, "sampled_at": probe.qos_at,
@@ -1578,6 +1673,43 @@ pub async fn sim_info() -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn uci_stamp_sees_commit_and_set() {
+        let dir = std::env::temp_dir().join(format!("luyaz-uci-stamp-{}", std::process::id()));
+        let (conf, save) = (dir.join("config"), dir.join("save"));
+        std::fs::create_dir_all(&conf).unwrap();
+        std::fs::create_dir_all(&save).unwrap();
+        let st = || super::uci_stamp_in("pkg", &conf, &save);
+        let none = st();
+        assert_eq!(none, [None, None]);
+        std::fs::write(conf.join("pkg"), "config a 'b'\n").unwrap();
+        let s1 = st();
+        assert_ne!(s1, none);
+        assert_eq!(st(), s1, "nothing changed, same stamp");
+        // uci set: the delta file grows
+        std::fs::write(save.join("pkg"), "pkg.b.x='1'\n").unwrap();
+        let s2 = st();
+        assert_ne!(s2, s1);
+        // uci commit: rename over the config (new inode, same size) and empty delta
+        std::fs::write(dir.join("tmp"), "config a 'c'\n").unwrap();
+        std::fs::rename(dir.join("tmp"), conf.join("pkg")).unwrap();
+        std::fs::write(save.join("pkg"), "").unwrap();
+        assert_ne!(st(), s2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn uci_memo_only_hits_on_same_stamp() {
+        let memo: super::UciMemo<u32> = std::sync::OnceLock::new();
+        let a = [Some((1, 2, 3, 4)), None];
+        let b = [Some((1, 2, 3, 5)), None];
+        assert_eq!(super::uci_memo_get(&memo, "p", &a), None);
+        super::uci_memo_put(&memo, "p", a, 7);
+        assert_eq!(super::uci_memo_get(&memo, "p", &a), Some(7));
+        assert_eq!(super::uci_memo_get(&memo, "p", &b), None);
+        assert_eq!(super::uci_memo_get(&memo, "q", &a), None);
+    }
+
     /// E3 D2：真漫游按国家比，不按原厂的 roaming 标志。
     #[test]
     fn roaming_fields_compare_countries() {
@@ -1814,6 +1946,20 @@ mod tests {
             assert_eq!(normalize_profile(raw), want);
         }
     }
+    #[test]
+    fn user_bytes_counts_wan_once_and_the_right_way_round() {
+        fn only<'a>(have: &'a [(&str, (u64, u64))]) -> impl Fn(&str) -> Option<(u64, u64)> + 'a {
+            move |n| have.iter().find(|(k, _)| *k == n).map(|(_, v)| *v)
+        }
+        // LAN side: what the bridge sends is what the clients download
+        assert_eq!(user_bytes_from(only(&[("br-lan", (10, 900))])), (900, 10));
+        // WAN side: rx is the download; rmnet_ipa0 under rmnet_data0 is not added on top
+        let wan = [("rmnet_data0", (500, 20)), ("rmnet_ipa0", (510, 21))];
+        assert_eq!(user_bytes_from(only(&wan)), (500, 20));
+        assert_eq!(user_bytes_from(only(&[("rmnet_ipa0", (7, 3))])), (7, 3));
+        assert_eq!(user_bytes_from(only(&[])), (0, 0));
+    }
+
     #[test]
     fn integer_or_default() {
         assert_eq!(integer_or(&json!({}), "missing", -1), -1);

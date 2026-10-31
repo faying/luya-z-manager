@@ -7,7 +7,7 @@ use super::cellular::nz;
 use super::network::NetFlash;
 use super::Ui;
 use crate::cf;
-use crate::kit::{self, CARD_W, MARGIN, PAD};
+use crate::kit::{self, Hero, CARD_W, HERO_H, MARGIN, PAD};
 use crate::lang::tr;
 use crate::lv::{self, sys, Obj};
 use crate::theme::{t, uf};
@@ -15,9 +15,13 @@ use ui_model::sim_dual_t;
 
 pub const DS_ROWS: usize = 5;
 const DS_ROW_H: i32 = 50;
-const DS_HEAD_H: i32 = 50;
-/// the block's height on the page: section title, card, gap
-pub const DS_H: i32 = 20 + DS_HEAD_H + DS_ROWS as i32 * DS_ROW_H + 10;
+/// the footer under the choices: the hint, or core's words while a switch runs (two lines at most)
+const DS_FOOT_H: i32 = 40;
+/// where the choices' caption sits: section title, the current-mode card, gap
+const DS_CHOICES_Y: i32 = 20 + HERO_H + 10;
+/// the block's height on the page: section title, current mode, 切换到 + the choices, footer
+pub const DS_H: i32 = DS_CHOICES_Y + 20 + DS_ROWS as i32 * DS_ROW_H + DS_FOOT_H + FWD_BLOCK;
+const FWD_BLOCK: i32 = 0;
 const ARM_MS: u32 = 5000;
 /// sent and core never said anything about it (its own deadline is 120 s)
 const WAIT_MS: u32 = 150_000;
@@ -26,8 +30,12 @@ const ITEM: &str = "sim.dual";
 #[derive(Default)]
 pub struct DualSim {
     pub sec: Obj,
+    /// where things stand: its own tinted card (the page's 使用中 hero), apart from the choices
+    now_card: Obj,
+    now: Hero,
+    cap: Obj,
     card: Obj,
-    now: Obj,
+    /// the hint, a refusal or core's words on a running switch
     line: Obj,
     row: [Obj; DS_ROWS],
     name: [Obj; DS_ROWS],
@@ -144,6 +152,18 @@ unsafe extern "C" fn ds_row_cb(e: *mut sys::lv_event_t) {
     super::with(|u| u.ds_tap(i));
 }
 
+impl DualSim {
+    fn show(&self, on: bool) {
+        for o in [self.sec, self.now_card, self.cap, self.card, self.line] {
+            kit::show(o, on);
+        }
+    }
+
+    fn big_set(&self, txt: &str) {
+        self.now.big.set_text(txt);
+    }
+}
+
 impl Ui {
     /// The block at y on the eSIM page's scroll; hidden until core reports two slots.
     pub(super) fn build_dualsim(&mut self, sc: Obj, y: i32) {
@@ -151,21 +171,28 @@ impl Ui {
         let f = uf();
         let ds = &mut self.ds;
         ds.sec = kit::section(sc, y, tr("双卡"));
-        ds.card = kit::card(sc, MARGIN, y + 20, CARD_W, DS_HEAD_H + DS_ROWS as i32 * DS_ROW_H);
+        ds.now_card = kit::card(sc, MARGIN, y + 20, CARD_W, HERO_H);
+        ds.now = kit::hero(ds.now_card, f.cj22b);
+        kit::hero_tone(&ds.now, 4);
+        ds.now.st.set_text(tr("当前模式"));
+        ds.big_set("—");
+        ds.cap = kit::section(sc, y + DS_CHOICES_Y, tr("切换到"));
+        ds.card = kit::card(sc, MARGIN, y + DS_CHOICES_Y + 20, CARD_W, DS_ROWS as i32 * DS_ROW_H);
         ds.card.set_style_clip_corner(true, 0);
-        ds.now = kit::label_w(ds.card, f.cj14, th.t1, PAD, 8, CARD_W - 2 * PAD, false, "—");
-        ds.line = kit::label_w(ds.card, f.cj12, th.t2, PAD, 29, CARD_W - 2 * PAD, false, "");
+        let foot_y = y + DS_CHOICES_Y + 20 + DS_ROWS as i32 * DS_ROW_H + 6;
+        ds.line = kit::label_w(sc, f.cj12, th.t2, MARGIN + 6, foot_y, CARD_W - 12, true, "");
         for i in 0..DS_ROWS {
-            let row = kit::bx(ds.card, 0, DS_HEAD_H + i as i32 * DS_ROW_H, CARD_W, DS_ROW_H, th.card, 0);
+            let row = kit::bx(ds.card, 0, i as i32 * DS_ROW_H, CARD_W, DS_ROW_H, th.card, 0);
             kit::tappable(row, Some(ds_row_cb), i);
-            kit::sep(row, 0);
+            if i > 0 {
+                kit::sep(row, 0);
+            }
             ds.row[i] = row;
             ds.name[i] = kit::label_w(row, f.cj14, th.t1, PAD, 8, 200, false, choice_name(i));
             ds.sub[i] = kit::label_w(row, f.n11, th.t3, PAD, 29, CARD_W - 2 * PAD, false, "");
             ds.tag[i] = kit::label_r(row, f.cj13, th.acc_t, CARD_W - PAD, 16, "");
         }
-        kit::show(ds.sec, false);
-        kit::show(ds.card, false);
+        ds.show(false);
     }
 
     /// A tap on a choice: arm, then send; when nothing can move, say why (never silently).
@@ -260,8 +287,7 @@ impl Ui {
         let Some(d) = d else {
             if !ds.key.is_empty() {
                 ds.key.clear();
-                kit::show(ds.sec, false);
-                kit::show(ds.card, false);
+                ds.show(false);
             }
             return;
         };
@@ -273,7 +299,7 @@ impl Ui {
         } else if d.switching != 0 {
             tr("设备正在自己换卡…").into()
         } else {
-            tr("切换会断网约 10 秒，点两次确认").into()
+            tr("点两次确认切换，会断网约 10 秒").into()
         };
         let busy = ds.want.is_some() || running;
         let key = format!("{d:?}|{cur:?}|{:?}|{:?}|{}|{}|{}", ds.armed, ds.want, String::from_utf8_lossy(&line), busy, serving);
@@ -281,9 +307,12 @@ impl Ui {
             return;
         }
         ds.key = key;
-        kit::show(ds.sec, true);
-        kit::show(ds.card, true);
-        ds.now.set_text(now_words(cur));
+        ds.show(true);
+        // where things stand lives in its own tinted card; a switch underway turns it amber
+        let moving = busy || d.switching != 0;
+        kit::hero_tone(&ds.now, if moving { 1 } else { 4 });
+        ds.now.st.set_text(if moving { tr("正在切换") } else { tr("当前模式") });
+        ds.big_set(now_words(cur));
         ds.line.set_text(&line);
         kit::text_color(ds.line, if ds.flash.on() { ds.flash.col } else { th.t2 });
         for i in 0..DS_ROWS {
@@ -318,7 +347,7 @@ impl Ui {
             } else {
                 ""
             });
-            kit::bg(ds.row[i], if armed { th.fill_orange } else if on { th.acc_s } else { th.card });
+            kit::bg(ds.row[i], if armed { th.fill_orange } else { th.card });
             kit::text_color(ds.name[i], if armed { 0xffffff } else if gone || (busy && !going) { th.t3 } else { th.t1 });
             kit::text_color(ds.sub[i], if armed { th.on_fill } else { th.t3 });
             kit::text_color(ds.tag[i], if armed { 0xffffff } else if on || going { th.acc_t } else { th.t3 });

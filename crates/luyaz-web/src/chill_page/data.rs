@@ -127,9 +127,9 @@ pub fn reason(code: &str, l: Lang) -> String {
         "lowmem" => ("low on memory", "内存不足"),
         "gaveup" => ("gave up after repeated crashes", "多次崩溃已放弃重试"),
         "ruleset_missing" => ("rule set missing", "规则集缺失"),
-        "captive_wan" => ("uplink is not cellular (captive portal)", "出口不是蜂窝网络(门户认证中)"),
+        "captive_wan" => ("uplink is not cellular (captive portal)", "出口不是蜂窝网络（门户认证中）"),
         "paused" => ("paused by hand", "已手动暂停"),
-        "idle" => ("paused while the screen is off (resumes when it lights or a device joins)", "息屏暂停(没人在用,亮屏或有设备连上就恢复)"),
+        "idle" => ("paused while the screen is off (resumes when it lights or a device joins)", "息屏暂停（没人在用，亮屏或有设备连上就恢复）"),
         "disabled" => ("switched off by hand", "已手动停用"),
         _ => return code.to_owned(),
     };

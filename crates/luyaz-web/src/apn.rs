@@ -931,7 +931,7 @@ async fn run(app: Shared, act: Act, save: Option<Save>, who: Caller, l: Lang, tx
         if failed || i + 1 == n {
             break;
         }
-        let _ = tx.send(patch(&pending(l.pick("Saved · making it the active profile…", "已保存 · 正在设为使用中…").into()))).await;
+        let _ = tx.send(patch(&pending(l.pick("Saved, making it the active profile…", "已保存，正在设为使用中…").into()))).await;
     }
     if let (write::Outcome::Applied(t), Some(s)) = (&mut last, &save)
         && s.id.is_none()

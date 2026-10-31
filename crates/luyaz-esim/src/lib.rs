@@ -73,6 +73,9 @@ const LPAC_TIMEOUT_FAST: Duration = Duration::from_secs(30); // half a minute
 const LPAC_TIMEOUT_NET: Duration = Duration::from_secs(4 * 60);
 
 // Input bounds for the web routes.
+/// In bytes, so about 21 Chinese characters. SGP.22 bounds `profileNickname` at 64; lpac 2.3.0
+/// (`es10c_set_nickname`) sends the UTF-8 bytes as they are (`strlen`, no check of its own), so
+/// the card decides, and whether a card counts characters or bytes is not tested: bytes is safe.
 const MAX_NICKNAME_LEN: usize = 64;
 const MAX_CODE_LEN: usize = 512;
 // ---- reading the card back ----
@@ -122,6 +125,17 @@ const IDENTITY_WAIT: Duration = Duration::from_secs(45);
 const IDENTITY_GRACE: Duration = Duration::from_secs(75);
 const IDENTITY_POLL: Duration = Duration::from_secs(2);
 const DATA_WAIT: Duration = Duration::from_secs(90);
+/// Internet check after the bearer is up (ext-1030 §3.1): read-only probes the host runs bound
+/// to the cellular interface and its source address (never through CHILL's TUN or mihomo).
+/// `NET_CHECK_OKS` answers in a row, `NET_CHECK_GAP` apart (0 s, ~6 s, ~12 s), make it `ok`; a
+/// failure restarts the count after `NET_CHECK_RETRY`. No new probe starts past
+/// `NET_CHECK_BUDGET` from the first. Only inside a switch job: no polling anywhere else.
+const NET_CHECK_OKS: u32 = 3;
+const NET_CHECK_GAP: Duration = Duration::from_secs(6);
+const NET_CHECK_RETRY: Duration = Duration::from_secs(3);
+const NET_CHECK_BUDGET: Duration = Duration::from_secs(30);
+/// One probe's own bound (the host keeps connect 2 s / total 4 s inside it).
+const NET_PROBE_MAX: Duration = Duration::from_secs(5);
 /// After a switch the card answers `profile list` with transitional errors for
 /// a while (upstream B27: 5–25 s of `euicc_init` failures / QMI error 80
 /// SimFileNotFound). For `LIST_STALE_WINDOW` after a switch ends, such an error
@@ -172,6 +186,8 @@ pub const SWITCH_DEADLINE: Duration = Duration::from_secs(
         + 30 // MDM_RESTART_TIMEOUT
         + IDENTITY_WAIT.as_secs()
         + DATA_WAIT.as_secs()
+        + NET_CHECK_BUDGET.as_secs()
+        + NET_PROBE_MAX.as_secs()
         + LPAC_TIMEOUT_NOTIF.as_secs(),
 );
 
@@ -196,7 +212,8 @@ pub struct JobState {
     /// "not_switched" (lpac or the card refused; the card still has the old
     /// profile), "no_data" (a `done` switch: the card and the modem are on the
     /// new profile but the data call did not come back in time; no reboot),
-    /// "identity_stuck" (`done` with no reboot: the card is on the new
+    /// "no_internet" (`done`: data is back but the internet check failed, see
+    /// `net_check`), "identity_stuck" (`done` with no reboot: the card is on the new
     /// profile, the ZTE stack never picked it up and the 24 h reboot cap was
     /// used — restart by hand), "cancelled" (the busy retries were stopped),
     /// "" otherwise.
@@ -206,6 +223,14 @@ pub struct JobState {
     deadline_s: u64,
     /// Enable tries so far (switch; > 1 = the card answered busy and was retried).
     attempts: u32,
+    /// A switch with data back: the internet check (§3.1) — "ok" (`NET_CHECK_OKS` answers in
+    /// a row), "no_internet" (bearer up, the probes did not get through; `reason` says so
+    /// too), "skipped" (no source address to bind to: not known, not healthy); "" = not run.
+    #[serde(default)]
+    net_check: String,
+    /// Probes the internet check ran.
+    #[serde(default)]
+    net_attempts: u32,
 }
 
 impl JobState {
@@ -287,6 +312,9 @@ impl Host for Card {
     fn data_up(&self) -> bool {
         self.inner.data_up()
     }
+    fn net_probe(&self) -> NetProbe {
+        self.inner.net_probe()
+    }
     fn wake(&self, hold: bool) {
         self.inner.wake(hold)
     }
@@ -367,6 +395,11 @@ pub trait Host: Send + Sync + 'static {
     fn reboot(&self);
     /// The data call is up.
     fn data_up(&self) -> bool;
+    /// One read-only internet probe bound to the cellular interface and its source address
+    /// (bounded by `NET_PROBE_MAX`). The default knows no source address.
+    fn net_probe(&self) -> NetProbe {
+        NetProbe::NoSource
+    }
     /// Hold (true) or release the wake lock.
     fn wake(&self, hold: bool);
     fn sleep(&self, d: Duration);
@@ -398,6 +431,43 @@ pub trait Host: Send + Sync + 'static {
     /// The write record a previous run left behind, if any.
     fn pending_write(&self) -> Option<Value> {
         None
+    }
+}
+
+/// One internet probe's answer ([`Host::net_probe`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetProbe {
+    /// An endpoint answered (204) over the cellular path.
+    Ok,
+    /// None did (refused, reset, timed out, wrong answer).
+    Fail,
+    /// No global source address on the cellular interface: says nothing.
+    NoSource,
+}
+
+/// The internet check after the bearer is up: (`net_check`, probes run). See `NET_CHECK_*`.
+fn net_check(h: &dyn Host) -> (&'static str, u32) {
+    let start = h.now();
+    let (mut run, mut attempts) = (0u32, 0u32);
+    loop {
+        attempts += 1;
+        match h.net_probe() {
+            NetProbe::NoSource => return ("skipped", attempts),
+            NetProbe::Ok => run += 1,
+            NetProbe::Fail => run = 0,
+        }
+        if run >= NET_CHECK_OKS {
+            return ("ok", attempts);
+        }
+        let gap = if run > 0 {
+            NET_CHECK_GAP
+        } else {
+            NET_CHECK_RETRY
+        };
+        if h.now().saturating_duration_since(start) + gap > NET_CHECK_BUDGET {
+            return ("no_internet", attempts);
+        }
+        h.sleep(gap);
     }
 }
 
@@ -441,6 +511,8 @@ fn busy_gap(n: u32, seed: u64) -> Duration {
 /// `planned_reboot` marks the coming reboot as asked for (core's boot ledger).
 pub struct RealHost {
     pub data_up: Box<dyn Fn() -> bool + Send + Sync>,
+    /// [`Host::net_probe`] (the core binds to `rmnet_data0`).
+    pub net_probe: Box<dyn Fn() -> NetProbe + Send + Sync>,
     pub planned_reboot: Box<dyn Fn() + Send + Sync>,
     pub switch_event: Box<dyn Fn(SwitchEvent) + Send + Sync>,
 }
@@ -463,6 +535,9 @@ impl Host for RealHost {
     }
     fn data_up(&self) -> bool {
         (self.data_up)()
+    }
+    fn net_probe(&self) -> NetProbe {
+        (self.net_probe)()
     }
     fn wake(&self, hold: bool) {
         let _ = std::fs::write(if hold { WAKE_LOCK } else { WAKE_UNLOCK }, WAKE_TAG);
@@ -984,6 +1059,20 @@ fn decide_enable(lpac: &Result<(), String>, card: CardSays) -> EnableOutcome {
             msg: e.clone(),
         },
     }
+}
+
+/// No control characters, line/paragraph separators or bidi marks, overrides and isolates: the
+/// nickname is shown on the touch screen, the web and the App, where those would hide or reorder
+/// what is around it. luyaz-web `nick_chars_ok` is the same list.
+pub fn nickname_chars_ok(n: &str) -> bool {
+    !n.chars().any(|c| {
+        c.is_control()
+            || matches!(
+                c,
+                '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{2028}' | '\u{2029}'
+                    | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+            )
+    })
 }
 
 /// Read the profile list a few times until it answers.
@@ -1588,12 +1677,56 @@ impl Esim {
         if nickname.len() > MAX_NICKNAME_LEN {
             return refuse(400, "nickname too long");
         }
-        match self.host.lpac(
+        if !nickname_chars_ok(nickname) {
+            return refuse(400, "nickname has control characters");
+        }
+        // the other profiles as they are before: a rename must leave them alone
+        let before = self
+            .host
+            .lpac(&["profile", "list"], LPAC_TIMEOUT_FAST)
+            .ok()
+            .filter(Value::is_array);
+        if before
+            .as_ref()
+            .is_some_and(|b| !iccids_of(b).contains(&iccid))
+        {
+            return refuse(404, "no such profile on the card");
+        }
+        // `expect`: the name the asker saw; someone renamed it since → do not overwrite
+        if let (Some(b), Some(want)) = (&before, v.get("expect").and_then(Value::as_str)) {
+            if nickname_of(b, &iccid).as_deref() != Some(want.trim()) {
+                return refuse(409, "snapshot_changed");
+            }
+        }
+        if let Err(e) = self.host.lpac(
             &["profile", "nickname", &iccid, nickname],
             LPAC_TIMEOUT_FAST,
         ) {
-            Ok(_) => (200, json!({"ok": true})),
-            Err(e) => (502, json!({"ok": false, "error": e})),
+            return (502, json!({"ok": false, "error": e}));
+        }
+        // read it back from the card: the write answering ok is not the name being there
+        let Some(list) = read_profiles_retry(self.host.as_ref()) else {
+            return (200, json!({"ok": true, "verified": false}));
+        };
+        if before
+            .as_ref()
+            .is_some_and(|b| others(b, &iccid) != others(&list, &iccid))
+        {
+            return refuse(502, "other profiles changed during the rename");
+        }
+        let on_card = list.as_array().and_then(|a| {
+            a.iter()
+                .find(|p| p["iccid"].as_str() == Some(iccid.as_str()))
+                .map(|p| {
+                    p["profileNickname"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string()
+                })
+        });
+        match on_card {
+            Some(n) if n == nickname => (200, json!({"ok": true, "verified": true})),
+            _ => refuse(502, "nickname not read back from the card"),
         }
     }
     /// POST /api/esim/switch with `{iccid}`. Enables the profile on the card, then
@@ -1859,16 +1992,29 @@ impl Esim {
                     "esim: switch {iccid}: {steps}{}",
                     if data { "" } else { " (not back)" }
                 );
-                list.lock().unwrap().switched_at = Some(h.now());
                 if data {
-                    finish_job(
-                        &job,
-                        &running,
-                        Ok(format!("switched — no reboot needed ({steps})")),
-                        false,
-                    );
+                    // read-only: the switch stays `done` whatever it says (no APN, data, IMS
+                    // or modem writes here)
+                    let (net, tries) = net_check(h);
+                    eprintln!("esim: switch {iccid}: internet {net} after {tries} probes");
+                    {
+                        let mut j = job.lock().unwrap();
+                        j.net_check = net.to_owned();
+                        j.net_attempts = tries;
+                    }
+                    list.lock().unwrap().switched_at = Some(h.now());
+                    let (msg, reason) = if net == "no_internet" {
+                        (
+                            format!("switched — data up, no internet yet ({steps})"),
+                            net,
+                        )
+                    } else {
+                        (format!("switched — no reboot needed ({steps})"), "")
+                    };
+                    finish_job_with(&job, &running, Ok(msg), false, reason);
                     send_switch_notifications(h, &job, &running, &cancel, &receipts, to_send);
                 } else {
+                    list.lock().unwrap().switched_at = Some(h.now());
                     // this switch's notifications stay pending: the bounded re-send has them
                     arm_receipts(&receipts, h.now(), RECEIPT_FIRST);
                     finish_job_with(
@@ -1938,7 +2084,12 @@ impl Esim {
                 if let Ok(w) = &w {
                     h.note_write(Some(w));
                 }
-                let done = match (h.lpac(&args, LPAC_TIMEOUT_NET), &w) {
+                // lpac's error (its stderr tail, the server's answer) goes to the UIs
+                // and the log: never with the codes in it.
+                let answer = h
+                    .lpac(&args, LPAC_TIMEOUT_NET)
+                    .map_err(|e| hide_codes(e, &[&code, &conf]));
+                let done = match (answer, &w) {
                     (Ok(_), _) => Ok("profile downloaded".to_string()),
                     (Err(e), Ok(w)) => settle_write(h, w, &e),
                     (Err(e), Err(_)) => Err(e),
@@ -2063,6 +2214,25 @@ fn iccids_of(list: &Value) -> Vec<String> {
         .collect()
 }
 
+/// The nickname `iccid` has in `list` ("" for none), `None` if it is not there.
+fn nickname_of(list: &Value, iccid: &str) -> Option<String> {
+    list.as_array()?
+        .iter()
+        .find(|p| p["iccid"].as_str() == Some(iccid))
+        .map(|p| p["profileNickname"].as_str().unwrap_or_default().to_owned())
+}
+
+/// Every profile but `iccid`, as (ICCID, state, nickname), in card order.
+fn others(list: &Value, iccid: &str) -> Vec<(String, String, String)> {
+    let s = |p: &Value, k: &str| p[k].as_str().unwrap_or_default().to_owned();
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| p["iccid"].as_str() != Some(iccid))
+        .map(|p| (s(p, "iccid"), s(p, "profileState"), s(p, "profileNickname")))
+        .collect()
+}
+
 /// What the card shows for write record `w`: `Some(true)` it happened, `Some(false)`
 /// it did not, `None` the card could not be read.
 fn card_shows(h: &dyn Host, w: &Value) -> Option<bool> {
@@ -2080,6 +2250,14 @@ fn card_shows(h: &dyn Host, w: &Value) -> Option<bool> {
         Some("delete") => !now.iter().any(|i| Some(i.as_str()) == w["iccid"].as_str()),
         _ => false,
     })
+}
+
+/// `err` with every non-empty `secrets` (activation / confirmation code) cut out.
+fn hide_codes(err: String, secrets: &[&str]) -> String {
+    secrets
+        .iter()
+        .filter(|c| !c.is_empty())
+        .fold(err, |e, c| e.replace(c, "[code]"))
 }
 
 /// lpac answered `err` on write `w`: settle it from the card.
@@ -2560,6 +2738,10 @@ mod tests {
         converge_at: u32,
         /// the data call never comes back
         no_data: bool,
+        /// internet probes in order (past the end: the last one again; empty = no source)
+        net: Vec<NetProbe>,
+        /// each probe takes this long on the fake clock (a timeout)
+        net_cost: Duration,
         /// `get_sim_info`'s `sim1_provision_state` / `current_sim_slot` ("" = absent)
         sim1_provision: &'static str,
         data_slot: &'static str,
@@ -2591,11 +2773,21 @@ mod tests {
         /// download / delete: None = answers ok; Some(true) = errors but the card
         /// changed anyway; Some(false) = errors and nothing changed
         write_err: Option<bool>,
+        /// the write error echoes lpac's arguments (as a stderr tail could)
+        write_err_echo: bool,
         /// downloaded / deleted ICCIDs, on top of the two fixed profiles
         added: Vec<String>,
         gone: Vec<String>,
         /// the PENDING_WRITE file
         pending: Option<Value>,
+        /// internet probes run
+        net_probes: usize,
+        /// nicknames written, by ICCID
+        nicknames: std::collections::HashMap<String, String>,
+        /// `profile nickname` answers ok but the card keeps the old name
+        nickname_lost: bool,
+        /// `profile nickname` also renames the first profile
+        nickname_spills: bool,
     }
 
     pub(super) struct OnCard<'a>(&'a Fake);
@@ -2641,7 +2833,8 @@ mod tests {
                         .chain(s.added.iter().cloned())
                         .filter(|i| !s.gone.contains(i));
                     Ok(ids
-                        .map(|i| json!({"iccid": i, "profileState": if s.enabled == i { "enabled" } else { "disabled" }}))
+                        .map(|i| json!({"iccid": i, "profileState": if s.enabled == i { "enabled" } else { "disabled" },
+                            "profileNickname": s.nicknames.get(&i)}))
                         .collect())
                 }
                 ["profile", "download", ..] | ["profile", "delete", _] => {
@@ -2653,8 +2846,21 @@ mod tests {
                     }
                     match s.write_err {
                         None => Ok(Value::Null),
+                        Some(_) if s.write_err_echo => Err(format!(
+                            "lpac: es9p: timeout — stderr: {}",
+                            args.join(" ")
+                        )),
                         Some(_) => Err("lpac: es9p: timeout".into()),
                     }
+                }
+                ["profile", "nickname", iccid, name] => {
+                    if !s.nickname_lost {
+                        s.nicknames.insert(iccid.to_string(), name.to_string());
+                    }
+                    if s.nickname_spills {
+                        s.nicknames.insert("89852000000000000001".into(), name.to_string());
+                    }
+                    Ok(Value::Null)
                 }
                 ["profile", "enable", iccid] => {
                     s.enables += 1;
@@ -2725,6 +2931,13 @@ mod tests {
         }
         fn data_up(&self) -> bool {
             !self.no_data
+        }
+        fn net_probe(&self) -> NetProbe {
+            let mut s = self.state.lock().unwrap();
+            s.slept += self.net_cost;
+            s.net_probes += 1;
+            let i = (s.net_probes - 1).min(self.net.len().saturating_sub(1));
+            self.net.get(i).copied().unwrap_or(NetProbe::NoSource)
         }
         fn wake(&self, _hold: bool) {}
         fn sleep(&self, d: Duration) {
@@ -2812,6 +3025,60 @@ mod tests {
         let e = Esim::new(fake.clone());
         e.delete(br#"{"iccid":"89852000000000000002"}"#);
         assert_eq!(write_job(&e).status, "error");
+    }
+
+    #[test]
+    fn nickname_is_not_written_over_a_rename_the_asker_did_not_see() {
+        let fake = Arc::new(Fake::default());
+        let e = Esim::new(fake.clone());
+        let body = |expect: &str, nick: &str| {
+            json!({"iccid": "89852000000000000002", "expect": expect, "nickname": nick}).to_string()
+        };
+        assert_eq!(
+            e.nickname(body("", "one").as_bytes()).0,
+            200,
+            "no name yet, as seen"
+        );
+        let (st, v) = e.nickname(body("", "two").as_bytes());
+        assert_eq!((st, v["error"].as_str()), (409, Some("snapshot_changed")));
+        assert_eq!(e.nickname(body("one", "two").as_bytes()).0, 200);
+        let n = fake
+            .state
+            .lock()
+            .unwrap()
+            .nicknames
+            .get("89852000000000000002")
+            .cloned();
+        assert_eq!(n.as_deref(), Some("two"));
+    }
+
+    #[test]
+    fn nickname_is_checked_and_read_back() {
+        let fake = Arc::new(Fake::default());
+        let e = Esim::new(fake.clone());
+        let (st, v) = e
+            .nickname("{\"iccid\":\"89852000000000000002\",\"nickname\":\"旅行卡 HK\"}".as_bytes());
+        assert_eq!((st, v["verified"].as_bool()), (200, Some(true)), "{v}");
+        let (st, _) = e.nickname(
+            "{\"iccid\":\"89852000000000000002\",\"nickname\":\"a\u{202E}b\"}".as_bytes(),
+        );
+        assert_eq!(st, 400, "bidi override refused");
+        let (st, _) = e.nickname(br#"{"iccid":"89852000000000000002","nickname":"a\nb"}"#);
+        assert_eq!(st, 400, "control character refused");
+        fake.state.lock().unwrap().nickname_lost = true;
+        let (st, _) = e.nickname(br#"{"iccid":"89852000000000000002","nickname":"other"}"#);
+        assert_eq!(st, 502, "a name the card did not keep is not a success");
+        let (st, _) = e.nickname(br#"{"iccid":"89852000000000000009","nickname":"x"}"#);
+        assert_eq!(st, 404, "not on the card: nothing written");
+        let mut s = fake.state.lock().unwrap();
+        (s.nickname_lost, s.nickname_spills) = (false, true);
+        drop(s);
+        let (st, v) = e.nickname(br#"{"iccid":"89852000000000000002","nickname":"y"}"#);
+        assert_eq!(st, 502, "another profile changed: {v}");
+        for bad in ["a\u{2028}b", "a\u{200F}b", "a\u{061C}b"] {
+            assert!(!nickname_chars_ok(bad), "{bad:?}");
+        }
+        assert!(nickname_chars_ok("旅行卡 HK·2"));
     }
 
     #[test]
@@ -2944,6 +3211,88 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         panic!("switch never ended");
+    }
+
+    fn net_switch(net: Vec<NetProbe>, cost: u64) -> (Value, usize) {
+        let (j, fake) = switch_with(Fake {
+            enable_works: true,
+            converges: true,
+            net,
+            net_cost: Duration::from_secs(cost),
+            ..Fake::default()
+        });
+        assert_eq!(j["status"], "done", "{j}");
+        assert_eq!(j["rebooting"], false, "{j}");
+        let n = fake.state.lock().unwrap().net_probes;
+        (j, n)
+    }
+
+    #[test]
+    fn net_check_all_ok() {
+        use NetProbe::*;
+        let (j, n) = net_switch(vec![Ok, Ok, Ok], 0);
+        assert_eq!(
+            (j["net_check"].as_str(), j["reason"].as_str()),
+            (Some("ok"), Some("")),
+            "{j}"
+        );
+        assert_eq!((j["net_attempts"].as_u64(), n), (Some(3), 3));
+    }
+
+    #[test]
+    fn net_check_bearer_up_probes_fail_is_no_internet() {
+        let (j, n) = net_switch(vec![NetProbe::Fail], 0);
+        assert_eq!(
+            (j["net_check"].as_str(), j["reason"].as_str()),
+            (Some("no_internet"), Some("no_internet")),
+            "{j}"
+        );
+        // retries every 3 s within the 30 s budget, then stops: bounded
+        assert!((5..=11).contains(&n), "{n}");
+    }
+
+    #[test]
+    fn net_check_flaky_needs_three_in_a_row() {
+        use NetProbe::*;
+        let (j, n) = net_switch(vec![Ok, Fail, Ok, Ok, Ok], 0);
+        assert_eq!(j["net_check"], "ok", "{j}");
+        assert_eq!(n, 5);
+        // two in a row then failing for good is not ok
+        let (j, _) = net_switch(vec![Ok, Ok, Fail], 0);
+        assert_eq!(j["net_check"], "no_internet", "{j}");
+    }
+
+    #[test]
+    fn net_check_without_source_is_skipped_not_healthy() {
+        let (j, n) = net_switch(vec![], 0);
+        assert_eq!(
+            (j["net_check"].as_str(), j["reason"].as_str()),
+            (Some("skipped"), Some("")),
+            "{j}"
+        );
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn net_check_timeouts_end_within_budget() {
+        let (j, n) = net_switch(vec![NetProbe::Fail], 5);
+        assert_eq!(j["net_check"], "no_internet", "{j}");
+        // 5 s per timed-out probe + 3 s gaps: no new probe past the 30 s budget
+        assert!(n <= 4, "{n}");
+    }
+
+    #[test]
+    fn a_switch_without_data_runs_no_net_check() {
+        let (j, fake) = switch_with(Fake {
+            enable_works: true,
+            converges: true,
+            no_data: true,
+            net: vec![NetProbe::Ok],
+            ..Fake::default()
+        });
+        assert_eq!(j["reason"], "no_data", "{j}");
+        assert_eq!(j["net_check"], "");
+        assert_eq!(fake.state.lock().unwrap().net_probes, 0);
     }
 
     #[test]
@@ -3547,5 +3896,51 @@ mod tests {
             1,
             "counts toward the bound"
         );
+    }
+
+    /// Canaries (T1, ext-1031): an activation code and a confirmation code never come
+    /// back in a reply, a job record or the pending-write file, even when lpac's error
+    /// echoes them. ICCIDs are the profiles' identifiers for the owner's own UIs and
+    /// are returned in full by design.
+    #[test]
+    fn canary_codes_never_reach_a_reply_or_record() {
+        const CODE: &str = "LPA:1$smdp.canary.example$CANARYMATCHID7781";
+        const CONF: &str = "CanaryConf9921";
+        for err in [Some(false), Some(true)] {
+            let fake = fake_writing(err);
+            fake.state.lock().unwrap().write_err_echo = true;
+            let e = Esim::new(fake.clone());
+            let body = json!({"code": CODE, "confirmation_code": CONF}).to_string();
+            let started = e.download(body.as_bytes());
+            let j = write_job(&e);
+            let st = fake.state.lock().unwrap();
+            assert!(
+                st.log.iter().any(|l| l.contains(CODE)),
+                "the code did reach lpac"
+            );
+            let seen = format!(
+                "{started:?} {} {:?}",
+                serde_json::to_string(&j).unwrap(),
+                st.pending
+            );
+            for c in [CODE, "CANARYMATCHID7781", CONF] {
+                assert!(!seen.contains(c), "{c} leaked: {seen}");
+            }
+            if err == Some(false) {
+                assert_eq!(j.status, "error");
+                assert!(j.message.contains("[code]"), "{}", j.message);
+            }
+        }
+        // refusals do not echo what they refused
+        let e = Esim::new(Arc::new(Fake::default()));
+        let long = format!("{CODE}{}", "x".repeat(MAX_CODE_LEN));
+        let r = e.download(json!({"code": long}).to_string().as_bytes());
+        assert!(!format!("{r:?}").contains("CANARYMATCHID7781"));
+        let r = e.download(
+            json!({"code": CODE, "confirmation_code": format!("{CONF}\n")})
+                .to_string()
+                .as_bytes(),
+        );
+        assert!(!format!("{r:?}").contains(CONF));
     }
 }

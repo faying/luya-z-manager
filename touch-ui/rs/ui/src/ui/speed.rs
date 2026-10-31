@@ -33,6 +33,11 @@ const ST_LAYERS: usize = 5;
 const ST_ARM_MS: u32 = 5000;
 /// a layer row with its value on a second line
 const ST_ROW2_H: i32 = 54;
+/// 「仍要完整测速」 (R11): under the roaming line; its own first tap arms, the second starts
+const ST_FULL_H: i32 = 36;
+/// the arm ids: the start button, 「仍要完整测速」
+const ARM_START: i32 = 0;
+const ARM_FULL: i32 = 1;
 
 #[derive(Default)]
 pub struct Speed {
@@ -70,6 +75,11 @@ pub struct Speed {
     hint: Obj,
     /// roaming: the first tap arms, the second starts (DR6)
     arm: Arm,
+    /// roaming: 「仍要完整测速」, a full run after its own two taps (R11)
+    full_btn: Obj,
+    full_lbl: Obj,
+    /// the look set last (armed or not): a refresh that changes nothing restyles nothing
+    full_armed: Option<bool>,
     /// the y the button is at now (old core: ST_ACTION_Y)
     action_y: i32,
     layer_sec: Obj,
@@ -95,6 +105,10 @@ pub struct Speed {
 
 unsafe extern "C" fn speedtest_btn_cb(_e: *mut sys::lv_event_t) {
     super::with(|u| u.speedtest_btn());
+}
+
+unsafe extern "C" fn speedtest_full_cb(_e: *mut sys::lv_event_t) {
+    super::with(|u| u.speedtest_full());
 }
 
 unsafe extern "C" fn speedtest_srv_cb(e: *mut sys::lv_event_t) {
@@ -210,6 +224,8 @@ impl Ui {
             kit::show(o, false);
         }
         (s.btn, s.btn_lbl) = kit::button(c, PAD, ST_ACTION_Y, CARD_W - 2 * PAD, ST_ACTION_H, tr("开始测速"), BtnKind::Primary, Some(speedtest_btn_cb), 0);
+        (s.full_btn, s.full_lbl) = kit::button(c, PAD, 0, CARD_W - 2 * PAD, ST_FULL_H, tr("仍要完整测速"), BtnKind::Plain, Some(speedtest_full_cb), 0);
+        kit::show(s.full_btn, false);
         s.offline = kit::label_w(c, f.cj13, th.bad_t, PAD, ST_ACTION_Y + ST_ACTION_H + MARGIN, CARD_W - 2 * PAD, true, "");
         kit::show(s.offline, false);
 
@@ -281,6 +297,10 @@ impl Ui {
         if !s.btn.hidden() && !s.hint.hidden() {
             s.hint.set_y(bottom + 6);
             bottom += 6 + uf().cj12.line_height();
+        }
+        if !s.btn.hidden() && !s.full_btn.hidden() {
+            s.full_btn.set_y(bottom + 8);
+            bottom += 8 + ST_FULL_H;
         }
         if !s.offline.hidden() && !s.offline.text().is_empty() {
             let y = if s.btn.hidden() { 32 } else { bottom + MARGIN };
@@ -379,17 +399,40 @@ impl Ui {
             return;
         }
         // roaming (v2 only: an old core does not cap the run): first tap arms (DR6)
-        if self.model.st_v2.is_some() && self.dg.net_roam && !self.st.arm.tap(0, lv::tick_get(), ST_ARM_MS) {
+        if self.model.st_v2.is_some() && self.dg.net_roam && !self.st.arm.tap(ARM_START, lv::tick_get(), ST_ARM_MS) {
             self.speed_paint();
             return;
         }
+        self.speed_start(false);
+    }
+
+    /// 「仍要完整测速」 (R11): roaming, a v2 core; the first tap arms (the label says what it
+    /// costs), the second within 5 s starts the full run with `roaming_ok:true`.
+    fn speedtest_full(&mut self) {
+        if self.model.st_running != 0 || !self.speed_full_ok() {
+            self.speed_paint();
+            return;
+        }
+        if !self.st.arm.tap(ARM_FULL, lv::tick_get(), ST_ARM_MS) {
+            self.speed_paint();
+            return;
+        }
+        self.speed_start(true);
+    }
+
+    /// 「仍要完整测速」 is offered: v2, idle, roaming.
+    fn speed_full_ok(&self) -> bool {
+        self.model.st_v2.is_some() && self.model.st_running == 0 && self.dg.net_roam
+    }
+
+    fn speed_start(&mut self, roaming_ok: bool) {
         self.st.arm.clear();
-        let l = self.st.btn_lbl;
+        let l = if roaming_ok { self.st.full_lbl } else { self.st.btn_lbl };
         l.set_text(tr("已发送…")); // the request is synchronous: answer first
         self.label_cache.remove(&(l.0 as usize));
         lv::refr_now();
-        let chill = self.st.chill_want && self.speed_chill_ok();
-        let ok = self.src.speedtest_start(chill);
+        let chill = !roaming_ok && self.st.chill_want && self.speed_chill_ok();
+        let ok = self.src.speedtest_start(chill, roaming_ok);
         self.sync();
         if ok {
             self.st.refused_at = 0;
@@ -398,7 +441,12 @@ impl Ui {
         }
         let th = t();
         self.st.refused_at = lv::tick_get().max(1);
-        l.set_text(tr("开始测速"));
+        self.st.btn_lbl.set_text(tr("开始测速"));
+        self.label_cache.remove(&(self.st.btn_lbl.0 as usize));
+        if roaming_ok {
+            self.st.full_lbl.set_text(tr("仍要完整测速"));
+            self.label_cache.remove(&(self.st.full_lbl.0 as usize));
+        }
         let off = self.st.offline;
         off.set_text(self.model.st_start_error.as_deref().unwrap_or(""));
         self.st_col(off, th.warn_t);
@@ -493,8 +541,10 @@ impl Ui {
             };
             // the usage must show (DR13): shorter names first, then no provider
             let sponsor = if v.server_sponsor.is_empty() { srv } else { v.server_sponsor.as_str() };
+            // R11: a full run while roaming says so first
+            let roam = if v.roaming_full { tr("漫游中完整测速 · ") } else { "" };
             for (p, n) in [(prov, srv), (prov, sponsor), ("", sponsor)] {
-                sl = cf!("%s%s · ", p, n);
+                sl = cf!("%s%s%s · ", roam, p, n);
                 sl.extend(cf!(trn("%d 条连接", v.connections as i64), v.connections));
                 sl.extend_from_slice(" · ".as_bytes());
                 sl.extend(used(v.download_bytes + v.upload_bytes));
@@ -627,7 +677,7 @@ impl Ui {
         let mut layers = false;
         if !self.polled.speedtest {
         } else if m.st_agent_reachable == 0 {
-            for o in [live, detail, result, server, btn, self.st.concl_mark, self.st.concl, self.st.chill_row, self.st.hint] {
+            for o in [live, detail, result, server, btn, self.st.concl_mark, self.st.concl, self.st.chill_row, self.st.hint, self.st.full_btn] {
                 kit::show(o, false);
             }
             kit::show(offline, true);
@@ -680,7 +730,19 @@ impl Ui {
             if let Some(v) = m.st_v2.as_ref() {
                 layers = ph == ST_COMPLETE && !v.sample_short && v.mode != "coarse";
             }
-            let armed = !running && self.st.arm.live(0, lv::tick_get(), ST_ARM_MS);
+            let armed = !running && self.st.arm.live(ARM_START, lv::tick_get(), ST_ARM_MS);
+            // 「仍要完整测速」 (R11): roaming only; armed, it says the cost
+            let full = self.speed_full_ok();
+            let full_armed = full && self.st.arm.live(ARM_FULL, lv::tick_get(), ST_ARM_MS);
+            kit::show(self.st.full_btn, full);
+            if full {
+                let (fb, fl) = (self.st.full_btn, self.st.full_lbl);
+                self.set(fl, if full_armed { tr("走漫游流量约 750 MB，再按一次") } else { tr("仍要完整测速") });
+                if self.st.full_armed != Some(full_armed) {
+                    self.st.full_armed = Some(full_armed);
+                    kit::button_kind(fb, fl, if full_armed { BtnKind::Armed } else { BtnKind::Plain });
+                }
+            }
             self.set(btn_lbl, if running {
                 tr("停止")
             } else if armed {

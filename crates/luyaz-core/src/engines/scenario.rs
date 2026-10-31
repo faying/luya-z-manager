@@ -49,7 +49,19 @@ fn control(
     params: &Value,
     secs: u64,
 ) -> luyaz_api::control::Reply {
-    let body = json!({"action": action, "source": "scenario", "params": params});
+    control_as("scenario", url, token, action, params, secs)
+}
+
+/// [`control`] as another source (the 5 GHz channel guard writes as `auto`).
+pub(crate) fn control_as(
+    source: &str,
+    url: &str,
+    token: Option<&str>,
+    action: &str,
+    params: &Value,
+    secs: u64,
+) -> luyaz_api::control::Reply {
+    let body = json!({"action": action, "source": source, "params": params});
     let mut req = http(secs)
         .post(url)
         .header("Content-Type", "application/json");

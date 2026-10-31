@@ -363,6 +363,8 @@ impl Compat {
                 exits::spawn(self.clone());
             }
             tokio::spawn(crate::engines::manual_first::run(self.clone()));
+            // the 5 GHz channel guard (docs/designs/wifi-dfs-guard.md)
+            crate::engines::wifi_dfs::spawn(self.clone());
             // eSIM receipts left on the card: re-sent on their own, bounded (SIM P1)
             let esim = self.esim.clone();
             std::thread::spawn(move || esim.run_receipts());

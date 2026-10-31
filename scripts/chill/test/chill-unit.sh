@@ -891,6 +891,78 @@ if pause_for 2; then ng "缺时钟不得写暂停"; else ok "缺时钟拒绝写�
 unset -f date
 
 # ─────────────────────────────────────────────────────────────────────────────
+sec "strip_egress：订阅不许指定出口网卡（ext-1030 第 14 条）"
+
+cat > "$CHILL_DIR/template.yaml" <<'YAML'
+proxies:
+  - {name: 家里, type: socks5, server: 192.0.2.10, port: 1080, interface-name: tailscale0}
+proxy-providers:
+  # 注释
+  sub:
+    type: inline
+    payload:
+      - {name: a, type: ss, server: 1.2.3.4, port: 1, interface-name: rmnet_data0, cipher: aes-128-gcm}
+      - name: b
+        type: ss
+        interface-name: rmnet_data0
+        routing-mark: 6666
+        server: 1.2.3.5
+  snap2:
+    type: file
+    path: ./providers/snap2.yaml
+    override:
+      interface-name: rmnet_data0
+      proxy-name:
+        - {pattern: x, target: y}
+
+proxy-groups:
+  - {name: g, type: select, use: [sub, snap2]}
+YAML
+TEMPLATE="$CHILL_DIR/template.yaml"; CHILL_HOME_EXIT=''
+render >/dev/null 2>&1; eq "带 interface-name 的订阅照样渲染成功" "$?" "0"
+body=$(cat "$CONFIG")
+case "$body" in *rmnet_data0*) ng "渲染结果里还有 interface-name: rmnet_data0" ;; *) ok "订阅里的 interface-name: rmnet_data0 去掉了" ;; esac
+case "$body" in *6666*) ng "routing-mark 还在" ;; *) ok "订阅里的 routing-mark 去掉了" ;; esac
+has "模板自己的家里出口不动" "$body" 'interface-name: tailscale0}'
+has "流式节点其余字段还在" "$body" '{name: a, type: ss, server: 1.2.3.4, port: 1, cipher: aes-128-gcm}'
+has "块写法节点其余字段还在" "$body" "$(printf '        type: ss\n        server: 1.2.3.5')"
+has "没有 override 的 provider 补上清空" "$body" "$(printf '        server: 1.2.3.5\n    override: {interface-name: %s, routing-mark: 0}' '""')"
+has "已有 override 的 provider 补进去" "$body" "$(printf '    override:\n      interface-name: %s\n      routing-mark: 0\n      proxy-name:' '""')"
+eq "每个 provider 恰好一份清空" "$(grep -c 'interface-name: ""' "$CONFIG")" "2"
+has "后面的段原样" "$body" '  - {name: g, type: select, use: [sub, snap2]}'
+
+# ─────────────────────────────────────────────────────────────────────────────
+sec "start_blocked：端口 / TUN 被别人占着（ext-1030 第 16 条）"
+
+SYS_NET="$CHILL_DIR/sysnet"; mkdir -p "$CHILL_PROC/net"; rm -rf "$SYS_NET/chill0"
+HDR='  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode'
+printf '%s\n' "$HDR" > "$CHILL_PROC/net/tcp6"; printf '%s\n' "$HDR" > "$CHILL_PROC/net/udp6"
+# dnsmasq 绑在 192.168.0.1:53 上（UDP）和一条到 9999 的已建立连接，都不算占用
+printf '%s\n   0: 0142000A:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 1\n' "$HDR" > "$CHILL_PROC/net/udp"
+printf '%s\n   0: 0100007F:C350 0100007F:270F 01 00000000:00000000 00:00000000 00000000 0 0 2\n' "$HDR" > "$CHILL_PROC/net/tcp"
+CHILL_BUSY_RECHECK=0; CHILL_API_LAN=0
+kill_core() { :; }; restore_dns() { :; }; ip() { :; }
+if core_slots_busy >/dev/null; then ng "空闲时误报被占"; else ok "dnsmasq 的 192.168.0.1:53、已建立连接都不算被占"; fi
+
+printf '   1: 0100007F:270F 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 3\n' >> "$CHILL_PROC/net/tcp"
+eq "认出 9999 被占" "$(core_slots_busy)" "tcp:9999"
+GAVEUP="$CHILL_DIR/gaveup"; crash_n=1; crash_t0=5; rm -f "$GAVEUP" "$STATE"
+if start_blocked; then ok "9999 被占：不起核心"; else ng "9999 被占却照样起核心"; fi
+has "进直连，理由是 port_busy" "$(cat "$STATE")" '"state":"direct","reason":"port_busy"'
+eq "不算崩溃：计数不变" "$crash_n" "1"
+[ -f "$GAVEUP" ] && ng "不该 gaveup" || ok "没有 gaveup"
+
+printf '%s\n' "$HDR" > "$CHILL_PROC/net/tcp"
+printf '   0: 00000000:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 4\n' >> "$CHILL_PROC/net/udp"
+eq "0.0.0.0:53 的 UDP 算被占" "$(core_slots_busy)" "udp:53"
+printf '%s\n' "$HDR" > "$CHILL_PROC/net/udp"
+mkdir -p "$SYS_NET/chill0"
+rm -f "$STATE"; start_blocked; has "TUN 名被占：理由是 tun_busy" "$(cat "$STATE")" '"reason":"tun_busy"'
+rm -rf "$SYS_NET/chill0"
+if start_blocked; then ng "都空着却不起核心"; else ok "都空着：照常起核心"; fi
+unset -f kill_core restore_dns ip
+
+# ─────────────────────────────────────────────────────────────────────────────
 printf '\n=== 结果：%d 通过 / %d 失败\n' "$PASS" "$FAIL"
 rm -rf "$CHILL_DIR" "$BIN"
 [ "$FAIL" -eq 0 ]

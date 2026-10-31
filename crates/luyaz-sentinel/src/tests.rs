@@ -2521,6 +2521,36 @@ fn a_filesystem_running_full_opens_once_and_closes_with_room_again() {
     assert!(d2.ids.is_empty());
 }
 
+/// 10-29 u60g: /tmp filled, the state file in /tmp could not be written, the device rebooted and
+/// /tmp came back empty. The open incident is kept on /data, so it is not opened twice and closes
+/// once there is room again, in the next boot too.
+#[test]
+fn a_full_tmp_closes_after_the_reboot_it_caused() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    d.up = 6786;
+    d.disks.insert("/tmp".into(), disk(0, 795, 900));
+    w.disk_round(&mut d);
+    assert_eq!(ids(&d, "regress-disk").len(), 1);
+    // /tmp full: only the /data copy holds; a restarted sentinel does not open it again
+    d.files.remove("/tmp/luyaz-sentinel/regress");
+    let mut w2 = wk();
+    w2.load(&mut d);
+    w2.disk_round(&mut d);
+    assert_eq!(ids(&d, "regress-disk").len(), 1);
+    // the reboot: /tmp is empty and roomy, /data kept the open id
+    d.files.retain(|k, _| !k.starts_with("/tmp/"));
+    d.up = 60;
+    d.disks.insert("/tmp".into(), disk(780, 795, 900));
+    let mut w3 = wk();
+    w3.load(&mut d);
+    w3.disk_round(&mut d);
+    let all = ids(&d, "regress-disk");
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert!(all[1].starts_with("rg-disk-tmp-") && all[1].contains("-close "));
+    assert_eq!(d.files["/data/luyaz/screen/disk-open"], "{}");
+}
+
 /// Out of inodes is ENOSPC too, with space to spare.
 #[test]
 fn running_out_of_inodes_is_running_full() {

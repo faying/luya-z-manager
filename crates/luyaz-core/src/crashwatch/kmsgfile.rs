@@ -3,13 +3,17 @@
 //! the scorecard's `cap` row and whoever reads it after a crash reboot see the same file.
 //!
 //! - Every record line as `/dev/kmsg` gives it (`<pri>,<seq>,<ts>,<flags>;<text>` and its
-//!   ` KEY=value` continuation lines), less the SELinux noise (lines with ` audit: ` or ` avc: `).
+//!   ` KEY=value` continuation lines), less the SELinux noise (lines with ` audit: ` or ` avc: `)
+//!   and the Wi-Fi driver's per-second chatter ([`NOISE`], with its continuation lines): most of
+//!   the file's bytes, nothing a crash reboot is read for.
 //! - Started again in the same boot (a core restart, or taking it over from the guard), it goes
 //!   on after the last record the file already has: a new reader of `/dev/kmsg` starts at the
 //!   oldest record the kernel still holds.
-//! - Synced to flash after each batch (the crash watcher reads kmsg at most every 2 s in a burst,
-//!   as the guard's fsync loop ran every 2 s): the lines before a crash reboot are what this is
-//!   for.
+//! - Written after each batch (the crash watcher reads kmsg at most every 2 s in a burst), but
+//!   synced to flash only when the batch has a record at error level or worse (`<pri>` & 7 ≤ 3:
+//!   what comes before a crash reboot; not the Wi-Fi driver's, [`QUIET_ERRORS`]) or [`SYNC_EVERY`] since the last sync. A sync rewrites the
+//!   file's last 4 KB page and commits the ext4 journal: syncing every batch was ~150 MB of flash
+//!   writes a day for 5–7 MB of log (10-30 measured).
 //! - Over [`MAX`] bytes: the newest half kept. This boot's file and the newest [`KEEP`]−1 others
 //!   in boot order (`.order`, one line per boot; not by mtime, a boot that ended before NTP has a
 //!   2025 mtime) stay; files never on the list come last, newest first.
@@ -23,12 +27,23 @@ pub const MAX: u64 = 8 * 1024 * 1024;
 /// The guard's handover name, and its file (compat `guard_duties::FILE`).
 pub const NAME: &str = "crashcap";
 pub const HANDOVER: &str = "/tmp/luyaz/handover";
+/// The longest an ordinary batch waits for its sync (the kernel's own writeback is about this).
+pub const SYNC_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+/// Records left out by their text (the Wi-Fi driver's band steering and rate dumps, several a second).
+pub const NOISE: [&str; 2] = ["wifi_bs: ==========", "wlan_hdd_fill_rate_info"];
+/// Error-level records kept in the file but not synced at once: the Wi-Fi driver logs one every
+/// ~8 s (`peer idx … NOT FOUND`, `no free rx_descs`), none of them before a crash reboot.
+pub const QUIET_ERRORS: [&str; 1] = [" wlan: "];
 
 pub struct KmsgFile {
     pub file: PathBuf,
     /// The last record's seq the file has (None: nothing yet).
     last: Option<u64>,
     max: u64,
+    /// When the file was last synced (None: not yet this run).
+    synced: Option<std::time::Instant>,
+    /// What was taken since the last sync has a record at error level or worse.
+    urgent: bool,
 }
 
 fn header_seq(line: &str) -> Option<u64> {
@@ -155,7 +170,13 @@ impl KmsgFile {
         let last = tail_text(&file, LAST_SEQ_BYTES)
             .ok()
             .and_then(|t| last_seq(&t));
-        Ok(KmsgFile { file, last, max })
+        Ok(KmsgFile {
+            file,
+            last,
+            max,
+            synced: None,
+            urgent: false,
+        })
     }
 
     /// The lines of one raw record to append (empty: already in the file, or only noise).
@@ -168,6 +189,14 @@ impl KmsgFile {
                 if k {
                     self.last = Some(seq);
                 }
+                k = k && !NOISE.iter().any(|n| l.contains(n));
+                let level = l.split(',').next().and_then(|p| p.parse::<u32>().ok());
+                if k
+                    && level.is_some_and(|p| p & 7 <= 3)
+                    && !QUIET_ERRORS.iter().any(|q| l.contains(q))
+                {
+                    self.urgent = true;
+                }
             }
             if k && !l.contains(" audit: ") && !l.contains(" avc: ") {
                 out.push_str(l);
@@ -177,7 +206,8 @@ impl KmsgFile {
         out
     }
 
-    /// Append, sync, and cut to the newest half when over the limit. Returns whether it cut.
+    /// Append, sync when due (see the module doc), and cut to the newest half when over the limit.
+    /// Returns whether it cut.
     pub fn append(&mut self, text: &str) -> std::io::Result<bool> {
         if text.is_empty() {
             return Ok(false);
@@ -187,7 +217,12 @@ impl KmsgFile {
             .append(true)
             .open(&self.file)?;
         f.write_all(text.as_bytes())?;
-        f.sync_data()?;
+        let now = std::time::Instant::now();
+        if self.urgent || self.synced.is_none_or(|t| now.duration_since(t) >= SYNC_EVERY) {
+            f.sync_data()?;
+            self.synced = Some(now);
+            self.urgent = false;
+        }
         let size = f.metadata()?.len();
         drop(f);
         if size <= self.max {
@@ -237,6 +272,41 @@ mod tests {
         assert_eq!(k2.take("6,11,101,-;old\n"), "");
         assert_eq!(k2.take("6,12,102,-;old\n"), "");
         assert_eq!(k2.take("6,13,103,-;new\n"), "6,13,103,-;new\n");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn wifi_chatter_left_out_and_errors_marked_for_sync() {
+        let d = dir("noise");
+        let mut k = KmsgFile::start(&d, "n1", KEEP, MAX).unwrap();
+        let mut t = String::new();
+        t += &k.take("12,20,200,-;wifi_bs: ==========mac_tmp1====\n SUBSYSTEM=x\n");
+        t += &k.take("6,21,201,-;wlan: [1:I:HDD] wlan_hdd_fill_rate_info: rx: mode 1\n");
+        t += &k.take("6,22,202,-;usb 1-1: new device\n");
+        assert_eq!(t, "6,22,202,-;usb 1-1: new device\n");
+        assert!(!k.urgent);
+        // the first append syncs (nothing synced yet this run); the next ordinary one waits
+        k.append(&t).unwrap();
+        assert!(k.synced.is_some());
+        let first = k.synced;
+        let o = k.take("6,23,203,-;ordinary\n");
+        k.append(&o).unwrap();
+        assert_eq!(k.synced, first);
+        // an error-level record syncs at once, even 0 s after the last sync
+        let e = k.take("3,24,204,-;remoteproc0: crash\n");
+        assert!(k.urgent);
+        k.append(&e).unwrap();
+        assert!(!k.urgent);
+        assert_ne!(k.synced, first);
+        // the Wi-Fi driver's errors are kept but wait for the next sync
+        assert_ne!(
+            k.take("3,26,206,-;[0x1][13:07:59] wlan: [0:E:DP] no free rx_descs\n"),
+            ""
+        );
+        assert!(!k.urgent);
+        // a noisy record at error level does not count
+        assert_eq!(k.take("11,25,205,-;wifi_bs: ==========5g====\n"), "");
+        assert!(!k.urgent);
         let _ = fs::remove_dir_all(&d);
     }
 

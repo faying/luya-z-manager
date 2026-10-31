@@ -627,7 +627,12 @@ pub fn bar(st: &St, ctx: &Ctx) -> Option<Bar> {
     } else {
         None
     };
+    // the core prefixes some texts with its event id ("[fa717fe4-22962] …"); not for people
     let text = latest.and_then(|e| e["text"].as_str()).unwrap_or("");
+    let text = match text.strip_prefix('[').and_then(|r| r.split_once("] ")) {
+        Some((id, rest)) if !id.contains(' ') => rest,
+        _ => text,
+    };
     let detail = [text, sms_note.unwrap_or("")]
         .iter()
         .filter(|s| !s.is_empty())
@@ -652,7 +657,7 @@ impl Bar {
         if self.label.is_empty() {
             n
         } else {
-            format!("{n} · {}", self.label)
+            format!("{n}{}{}", l.pick(": ", "："), self.label)
         }
     }
 }
@@ -997,7 +1002,7 @@ mod tests {
         let hub = hub_with(json!({}));
         hub.set_side(|s| s.alerts = Some(alerts(2, false)));
         let b = hub.read(|st| bar(st, &ctx("/signal"))).unwrap();
-        assert_eq!(b.title(Lang::Zh), "2 条新告警 · Wi-Fi 掉了");
+        assert_eq!(b.title(Lang::Zh), "2 条新告警：Wi-Fi 掉了");
         assert_eq!(b.detail, "已自动恢复 短信告警未配置。");
         assert_eq!(b.seq, 9);
         assert!(hub.read(|st| bar(st, &ctx("/alerts/"))).is_none());

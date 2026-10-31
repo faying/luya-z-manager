@@ -706,7 +706,10 @@ U60 在充电	U60 charging
 没发出去：连不上核心，等一下再试	Not sent: can't reach the core, try again shortly
 设备没回话，看「改动记录」	No answer from the device, see Change log
 设备正在自己换卡…	The device is switching cards…
-切换会断网约 10 秒，点两次确认	Switching cuts data for about 10 s, tap twice
+点两次确认切换，会断网约 10 秒	Tap twice to switch; data drops ~10 s
+当前模式	Current mode
+切换到	Switch to
+正在切换	Switching
 再点一次切换 · 断网约 10 秒 · 可能算漫游	Tap again · ~10 s offline · may roam here
 再点一次切换 · 断网约 10 秒	Tap again · ~10 s offline
 两张卡都开，上网用卡槽 1	Both on, data on slot 1
@@ -945,6 +948,9 @@ core 版本太旧，不支持事故	The core is too old for incidents
 漫游中只粗测	Rough only, roaming
 CHILL 没在运行	CHILL not running
 漫游中：只粗测 5 秒、最多 30 MB	Roaming: rough test, 5 s, ≤30 MB
+仍要完整测速	Full test anyway
+走漫游流量约 750 MB，再按一次	Up to 750 MB roaming, tap again
+漫游中完整测速 · 	Full, roaming · 
 约 30 秒 · 最多 750 MB	~30 s · ≤750 MB
 约 40 秒 · 最多 1.15 GB	~40 s · ≤1.15 GB
 
@@ -986,3 +992,7 @@ CHILL 没在运行	CHILL not running
 太热：已暂停充电，凉下来自动恢复	Hot: charging paused; back once cool
 太热：CHILL 已降档，凉下来自动恢复	Hot: CHILL on eco; back once cool
 太热，放到通风的地方	Hot; move it somewhere airy
+5G 信道	5 GHz channel
+已停（可能遇到雷达）	Stopped (radar?)
+暂避雷达	off radar for now
+未开	Off

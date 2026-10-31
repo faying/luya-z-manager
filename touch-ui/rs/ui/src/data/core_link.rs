@@ -89,9 +89,10 @@ const B_POWERBANK: usize = 14;
 const B_REGRESS: usize = 15;
 const B_DISPLAY: usize = 16;
 const B_HEAT: usize = 17;
-const B_COUNT: usize = 18;
+const B_WIFI_DFS: usize = 18;
+const B_COUNT: usize = 19;
 const V2_NAMES: [&str; B_COUNT] =
-    ["signal", "battery", "charger", "live", "sms", "sms_list", "sim", "qos", "clients", "wlan", "nfc", "dhcp", "interfaces", "typec", "powerbank", "regress", "display", "heat"];
+    ["signal", "battery", "charger", "live", "sms", "sms_list", "sim", "qos", "clients", "wlan", "nfc", "dhcp", "interfaces", "typec", "powerbank", "regress", "display", "heat", "wifi_dfs"];
 
 #[derive(Default, Clone)]
 struct Blk {
@@ -428,7 +429,7 @@ pub fn decode_snapshot(buf: &[u8]) -> Option<core_snapshot_t> {
     if matches!(buf.first(), None | Some(0)) {
         return None;
     }
-    let mut d = core_snapshot_t { dps_mode: -1, cell_data: -1, cell_roam: -1, usb_cc: -1, powerbank: -1, heat_level: -1, ..empty() };
+    let mut d = core_snapshot_t { dps_mode: -1, cell_data: -1, cell_roam: -1, usb_cc: -1, powerbank: -1, heat_level: -1, ap5_dfs: -1, ..empty() };
     let section = |key| json::get(buf, key, SNAPSHOT_CAP);
     let readers: [(&str, Reader); 8] = [
         ("net", read_net),
@@ -478,6 +479,21 @@ pub fn decode_snapshot(buf: &[u8]) -> Option<core_snapshot_t> {
             Some(b"hot") => 1,
             Some(b"critical") => 2,
             _ => 0,
+        };
+    }
+    if let Some(s) = section("wifi_dfs") {
+        let yes = |k| json::get(&s, k, 8).as_deref() == Some(b"true");
+        d.ap5_ch = num(&s, "channel", 0) as i32;
+        d.ap5_width = num(&s, "width", 0) as i32;
+        // the worst first: stopped, then moved for now, then merely on DFS
+        d.ap5_dfs = if !yes("want_5g") {
+            0
+        } else if !yes("up") && num(&s, "down_since", -1) >= 0 {
+            2
+        } else if num(&s, "override_at", -1) >= 0 {
+            3
+        } else {
+            yes("on_dfs") as i32
         };
     }
     if let Some(s) = section("display") {
@@ -817,7 +833,7 @@ impl CoreLink {
     /// The fresh blocks as one old-/state object: signal → net, charger → power, live →
     /// system + traffic, sms + sms_list → sms {unread, list}. None when it would not fit.
     fn v2_rebuild(&self) -> Option<Vec<u8>> {
-        const SAME: [(usize, &str); 13] = [
+        const SAME: [(usize, &str); 14] = [
             (B_SIGNAL, "net"),
             (B_BATTERY, "battery"),
             (B_CHARGER, "power"),
@@ -831,6 +847,7 @@ impl CoreLink {
             (B_TYPEC, "typec"),
             (B_POWERBANK, "powerbank"),
             (B_HEAT, "heat"),
+            (B_WIFI_DFS, "wifi_dfs"),
         ];
         let mut out: Vec<u8> = b"{\"v2\":1".to_vec();
         let mut cat = |parts: &[&[u8]]| {

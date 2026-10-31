@@ -325,6 +325,9 @@ pub struct Row {
     pub line2: String,
     /// Who approved an agent change and whether it rolls back, for a `source: mcp` row (R18-P0-03).
     pub agent: Option<String>,
+    /// Older identical rows folded into this one (same item, change, source and result).
+    pub more: usize,
+    key: String,
 }
 
 /// The agent label of a row the MCP agent made (R18-P0-03): where the permission came from, and
@@ -383,6 +386,8 @@ pub fn row(e: &Value, l: Lang) -> Row {
         change: pick(e, "change", l),
         line2: line2(e, l),
         agent: agent_label(e, l),
+        more: 0,
+        key: format!("{}|{}", pick(e, "source", l), pick(e, "result", l)),
     }
 }
 
@@ -490,7 +495,7 @@ pub fn view(got: &Got, want: &Want, snap: &mut Option<Value>, stuck: bool, l: La
                 Main::Detail(detail(e, l, stuck, true))
             } else {
                 Main::List {
-                    rows: rows.iter().map(|e| row(e, l)).collect(),
+                    rows: fold(rows.iter().map(|e| row(e, l))),
                     stopped: got
                         .err
                         .is_some()
@@ -500,6 +505,21 @@ pub fn view(got: &Got, want: &Want, snap: &mut Option<Value>, stuck: bool, l: La
         }
     };
     View { l, main }
+}
+
+/// Folds runs of identical rows ("原厂设置 · 情景 · 已改" fifty times) into the newest one.
+pub fn fold(rows: impl Iterator<Item = Row>) -> Vec<Row> {
+    let mut out: Vec<Row> = Vec::new();
+    for r in rows {
+        if let Some(p) = out.last_mut() {
+            if p.tone == r.tone && p.what == r.what && p.change == r.change && p.key == r.key && p.agent == r.agent {
+                p.more += 1;
+                continue;
+            }
+        }
+        out.push(r);
+    }
+    out
 }
 
 // ---- undo ----

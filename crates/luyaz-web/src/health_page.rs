@@ -235,9 +235,13 @@ impl Poll {
         let mut out = String::new();
 
         // summary
-        let counts = |d: &Data| match l {
-            Lang::En => format!("{} problem(s), {} to look at.", d.bad, d.warn),
-            Lang::Zh => format!("{} 项异常，{} 项需要注意。", d.bad, d.warn),
+        let counts = |d: &Data| match (l, d.bad, d.warn) {
+            (Lang::En, 0, w) => format!("{w} to look at."),
+            (Lang::En, b, 0) => format!("{b} problem(s)."),
+            (Lang::En, b, w) => format!("{b} problem(s), {w} to look at."),
+            (Lang::Zh, 0, w) => format!("{w} 项需要注意。"),
+            (Lang::Zh, b, 0) => format!("{b} 项异常。"),
+            (Lang::Zh, b, w) => format!("{b} 项异常，{w} 项需要注意。"),
         };
         let (mut tone, state, reason): (&str, String, Option<String>) = match (d, &self.fail) {
             (None, Some(f)) => (
@@ -763,7 +767,7 @@ mod tests {
         let p = poll(Lang::En, Some(parse(&sample())), None);
         let s = leaf(&p, "hl-status");
         assert!(
-            s.contains("nd-status--warn") && s.contains("0 problem(s), 1 to look at."),
+            s.contains("nd-status--warn") && s.contains(">1 to look at."),
             "{s}"
         );
         assert!(
@@ -772,7 +776,7 @@ mod tests {
         );
         let z = leaf(&poll(Lang::Zh, Some(parse(&sample())), None), "hl-status");
         assert!(
-            z.contains("0 项异常，1 项需要注意。") && z.contains(" 检查"),
+            z.contains("1 项需要注意。") && z.contains(" 检查"),
             "{z}"
         );
     }

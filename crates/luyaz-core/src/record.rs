@@ -646,4 +646,41 @@ mod tests {
                 .contains("1.2.3.4")
         );
     }
+
+    /// Canary (T1, ext-1031): a peer address is in full in the stored record (personal,
+    /// on the device) and never in a redacted view of a minute or a diagnosis.
+    #[test]
+    fn canary_peer_never_in_a_redacted_view() {
+        const PEER: &str = "198.51.100.173";
+        let flow = FlowRow {
+            owner: "x".into(),
+            peer: Personal(PEER.into()),
+            ..Default::default()
+        };
+        let m = Minute {
+            flows: vec![flow.clone()],
+            flows_other: flow.clone(),
+            tailnet: vec![flow.clone()],
+            ..Default::default()
+        };
+        let b = Breaker {
+            flow,
+            ..Default::default()
+        };
+        let d = Diag {
+            breakers: vec![b.clone()],
+            by_owner: vec![b.clone()],
+            inner: vec![b.clone()],
+            inner_by_owner: vec![b],
+            ..Default::default()
+        };
+        assert!(serde_json::to_string(&m).unwrap().contains(PEER));
+        for view in [
+            serde_json::to_string(&m.redacted()).unwrap(),
+            serde_json::to_string(&d.redacted()).unwrap(),
+        ] {
+            assert!(!view.contains(PEER), "{view}");
+            assert!(!view.contains("198.51.100.1"), "{view}");
+        }
+    }
 }

@@ -13,8 +13,11 @@
 <div class="nd-confirm__actions"><button type="button" class="nd-btn nd-btn--confirm" data-on:click="$askStop = false; @post('/tools/speedtest/stop', {retryMaxCount: 0})">{{ v.l.pick("Confirm: Stop", "确认：停止") }}</button><button type="button" class="nd-btn nd-btn--secondary" data-on:click="$askStop = false">{{ v.l.pick("Cancel", "取消") }}</button></div>
 </div>{% else %}<div id="st-start-confirm" role="group" aria-label="{{ v.l.pick("Start", "开始") }}" class="nd-confirm" style="display:none" data-show="$ask" data-on:keydown__window="evt.key === 'Escape' && ($ask = false)">
 <p class="nd-confirm__text">{% call cost(v) %}{% endcall %}</p>
-<div class="nd-confirm__actions"><button type="button" class="nd-btn nd-btn--confirm" data-on:click="$ask = false; @post('/tools/speedtest/start', {retryMaxCount: 0})">{{ v.l.pick("Confirm: Start", "确认：开始") }}</button><button type="button" class="nd-btn nd-btn--secondary" data-on:click="$ask = false">{{ v.l.pick("Cancel", "取消") }}</button></div>
-</div>{% endif %}
+<div class="nd-confirm__actions"><button type="button" class="nd-btn nd-btn--confirm" data-on:click="$ask = false; @post('/tools/speedtest/start', {retryMaxCount: 0})">{{ v.l.pick("Confirm: Start", "确认：开始") }}</button>{% if v.roam_full() %}<button type="button" class="nd-btn nd-btn--secondary" aria-controls="st-full-confirm" data-on:click="$ask = false; $askFull = true">{{ v.l.pick("Full test anyway", "仍要完整测速") }}</button>{% endif %}<button type="button" class="nd-btn nd-btn--secondary" data-on:click="$ask = false">{{ v.l.pick("Cancel", "取消") }}</button></div>
+</div>{% if v.roam_full() %}<div id="st-full-confirm" role="group" aria-label="{{ v.l.pick("Full test anyway", "仍要完整测速") }}" class="nd-confirm" style="display:none" data-show="$askFull" data-on:keydown__window="evt.key === 'Escape' && ($askFull = false)">
+<p class="nd-confirm__text">{{ v.l.pick("Roaming: a full test uses roaming data, about 30 s and up to 750 MB, charged at the local roaming rate.", "漫游中：完整测速会走漫游流量，约 30 秒 · 最多 750 MB，按漫游资费计。") }}</p>
+<div class="nd-confirm__actions"><button type="button" class="nd-btn nd-btn--confirm" data-on:click="$askFull = false; $roamFull = true; @post('/tools/speedtest/start', {retryMaxCount: 0})">{{ v.l.pick("Confirm: Full test", "确认：完整测速") }}</button><button type="button" class="nd-btn nd-btn--secondary" data-on:click="$askFull = false">{{ v.l.pick("Cancel", "取消") }}</button></div>
+</div>{% endif %}{% endif %}
 {% if !v.running %}<p id="st-cost" class="nd-aux mt-2 px-1">{% call cost(v) %}{% endcall %}</p>{% endif %}
 </div>
 <!--leaf-->

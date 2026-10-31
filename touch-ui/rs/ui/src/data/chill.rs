@@ -11,7 +11,7 @@ use super::util::{bytes_cap, find, find_byte, jget, jstr, mono_ms, text, trunc};
 use crate::cf;
 use crate::json;
 use crate::lang::{self, tr};
-use ui_model::{chill_group_info_t, chill_home_t, chill_node_info_t, chill_traffic_item_t};
+use ui_model::{chill_group_info_t, chill_home_t, chill_node_info_t, chill_pin_t, chill_traffic_item_t};
 use std::fmt::Write as _;
 use std::os::fd::{AsRawFd, OwnedFd};
 
@@ -39,6 +39,10 @@ const SC_DELAY_BUF: usize = 16384;
 /// chains longer than this stop following
 const SC_CHAIN_STOP: usize = 160 - 32;
 const CHILL_STATE_FILE: &str = "/tmp/chill.state";
+/// Home's pinned line: the groups that keep their node, and how often they are read (each read
+/// is /group, ~15 KB, plus one delay test per group)
+const SC_PINS: [(&str, &str); 2] = [("AI", "🤖 AI"), ("VoWiFi", "📞 VoWiFi")];
+const SC_PIN_TTL_MS: i64 = 60000;
 
 pub const CH_MEDIA: usize = 0;
 pub const CH_IP: usize = 1;
@@ -120,6 +124,9 @@ pub struct Chill {
 
     home: chill_home_t,
     home_ms: i64,
+
+    pins: Vec<chill_pin_t>,
+    pins_ms: i64,
 }
 impl super::background::ReadCopy for Chill {
     fn read_copy(&self) -> Self {
@@ -169,6 +176,8 @@ impl super::background::ReadCopy for Chill {
             delay_buf: Vec::new(),
             home: self.home.clone(),
             home_ms: self.home_ms,
+            pins: self.pins.clone(),
+            pins_ms: self.pins_ms,
         }
     }
     fn apply(&mut self, mut next: Self) {
@@ -179,6 +188,57 @@ impl super::background::ReadCopy for Chill {
     }
 }
 
+
+/// /group's (name, now) pairs, raw names.
+fn group_nows(j: &[u8]) -> Vec<(String, String)> {
+    const NAME: &[u8] = b"\"name\":\"";
+    const NOW: &[u8] = b"\"now\":\"";
+    let mut out = Vec::new();
+    let mut from = 0;
+    while out.len() < SC_MAX_GRP * 2 {
+        let Some(start) = find(j, NAME, from).map(|at| at + NAME.len()) else { break };
+        let Some(end) = find_byte(j, b'"', start) else { break };
+        // "now" follows "name" inside the same object (mihomo sorts the keys)
+        let next = find(j, NAME, end).unwrap_or(j.len());
+        let now = find(j, NOW, end)
+            .filter(|&at| at < next)
+            .map(|at| at + NOW.len())
+            .and_then(|n| find_byte(j, b'"', n).map(|e| raw_name(&j[n..e])))
+            .unwrap_or_default();
+        out.push((raw_name(&j[start..end]), now));
+        from = end + 1;
+    }
+    out
+}
+
+/// A pinned group's way out: (the node it lands on, the first flag on the way as two letters,
+/// "DIRECT" when it goes direct, "" when no flag). None when the group is not there.
+fn pin_chain(now: &[(String, String)], group: &str) -> Option<(String, String)> {
+    let mut at = now.iter().find(|(n, _)| n == group)?.1.clone();
+    let mut region = String::new();
+    for _ in 0..6 {
+        if at == "DIRECT" {
+            return Some((at, "DIRECT".into()));
+        }
+        if region.is_empty() {
+            region = flag_of(&at);
+        }
+        match now.iter().find(|(n, _)| *n == at) {
+            Some((_, next)) if !next.is_empty() => at = next.clone(),
+            _ => break,
+        }
+    }
+    (!at.is_empty()).then_some((at, region))
+}
+
+/// The two letters of the first flag in a name ("🇹🇼 台湾" → "TW"), "" = none.
+fn flag_of(name: &str) -> String {
+    let cps: Vec<u32> = name.chars().map(u32::from).collect();
+    cps.windows(2)
+        .find(|w| w.iter().all(|c| (0x1F1E6..=0x1F1FF).contains(c)))
+        .map(|w| w.iter().map(|&c| char::from(b'A' + (c - 0x1F1E6) as u8)).collect())
+        .unwrap_or_default()
+}
 
 /// The first row of an auto (url-test / fallback) group's node list.
 fn auto_row_label(fixed: &str, now: &str, en: bool) -> String {
@@ -257,6 +317,8 @@ impl Default for Chill {
             delay_buf: Vec::new(),
             home: chill_home_t { in_china: -1, roaming: -1, home_ok: -1, ms: -1, nitem: -1, on: vec![0; 3], ..Default::default() },
             home_ms: 0,
+            pins: Vec::new(),
+            pins_ms: 0,
         }
     }
 }
@@ -1115,6 +1177,52 @@ impl Chill {
 
     pub fn home(&self) -> &chill_home_t {
         &self.home
+    }
+
+    // ---- Home's pinned line (🤖 AI, 📞 VoWiFi) ----
+
+    /// While Home is up: once a minute, where 🤖 AI and 📞 VoWiFi leave (their chain from
+    /// /group) and one delay test each (blocking, on the reader thread). true = something new.
+    pub fn pins_poll(&mut self, active: bool) -> bool {
+        let t = mono_ms();
+        if !active || (self.pins_ms != 0 && t - self.pins_ms < SC_PIN_TTL_MS) {
+            return false;
+        }
+        self.pins_ms = t;
+        self.load_conf();
+        let Some(b) = self.get("/group") else {
+            let was = !self.pins.is_empty();
+            self.pins.clear();
+            return was;
+        };
+        let now = group_nows(&b);
+        let mut pins = Vec::new();
+        for (label, group) in SC_PINS {
+            let Some((_, region)) = pin_chain(&now, group) else { continue };
+            let ms = if region == "DIRECT" {
+                -1
+            } else {
+                // the group's own test, read for the member it is on now: /proxies/<node>/delay
+                // does not know provider nodes ("Resource not found", 10-29). mihomo gives up at
+                // 1200 ms, under SC_IO_MS; a member left out timed out.
+                let first = now.iter().find(|(n, _)| n == group).map(|(_, x)| x.clone()).unwrap_or_default();
+                let path = format!("/group/{}/delay?url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=1200", path_escape(group, 384));
+                self.get(&path).map_or(0, |d| {
+                    let key = trunc(&format!("\"{first}\""), SC_NAME_MAX + 4);
+                    find(&d, key.as_bytes(), 0)
+                        .and_then(|at| find_byte(&d, b':', at + key.len()))
+                        .map_or(0, |c| json::atol(&d[c + 1..]) as i32)
+                })
+            };
+            pins.push(chill_pin_t { name: label.into(), region, ms });
+        }
+        let changed = pins != self.pins;
+        self.pins = pins;
+        changed
+    }
+
+    pub fn pins(&self) -> Vec<chill_pin_t> {
+        self.pins.clone()
     }
 
     /// One item on or off (the second tap): the HTTP status, and the agent's code on 409.

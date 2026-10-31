@@ -7,7 +7,14 @@
 #![allow(clippy::missing_safety_doc)]
 
 pub use lvgl_sys as sys;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::c_void;
+
+thread_local! {
+    /// The full text last given to each dots label (objects are never deleted: the key stays its own).
+    static DOTS_SET: RefCell<HashMap<usize, Vec<u8>>> = RefCell::new(HashMap::new());
+}
 use sys::*;
 
 pub const OPA_TRANSP: u8 = 0;
@@ -474,12 +481,24 @@ impl Obj {
 
     // labels
     pub fn set_text(self, t: impl AsRef<[u8]>) {
+        let t = t.as_ref();
         // the same text again still re-lays the label out and invalidates it
-        if self.text() == t.as_ref() {
+        let cur = self.text();
+        if cur == t {
             return;
         }
-        let c = cstr(t.as_ref());
+        // a dots label holds its cut text ("…前缀..."): compare with what was set last
+        if let Some(head) = cur.strip_suffix(b"...")
+            && t.starts_with(head)
+            && DOTS_SET.with(|m| m.borrow().get(&(self.0 as usize)).is_some_and(|v| v == t))
+        {
+            return;
+        }
+        let c = cstr(t);
         unsafe { lv_label_set_text(self.0, c.as_ptr().cast()) }
+        if unsafe { lv_label_get_long_mode(self.0) } == LV_LABEL_LONG_MODE_DOTS {
+            DOTS_SET.with(|m| m.borrow_mut().insert(self.0 as usize, t.to_vec()));
+        }
     }
     pub fn text(self) -> Vec<u8> {
         unsafe {

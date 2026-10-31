@@ -1528,9 +1528,12 @@ impl Ui {
             let mut nm = gi.name.as_bytes().to_vec();
             nm.truncate(47);
             names.push(String::from_utf8_lossy(&nm).into_owned());
-            kit::chip_set(cp.grp_btn[i], cp.grp_lbl[i], gi.selected != 0);
             if gi.auto_pick != 0 && gi.selected == 0 {
+                // one colour per refresh: chip_set's t2 then t3 redrew the chip every second
+                kit::bg(cp.grp_btn[i], th.track);
                 kit::text_color(cp.grp_lbl[i], th.t3);
+            } else {
+                kit::chip_set(cp.grp_btn[i], cp.grp_lbl[i], gi.selected != 0);
             }
         }
         {

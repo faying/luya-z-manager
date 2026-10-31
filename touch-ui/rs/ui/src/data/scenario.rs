@@ -215,11 +215,14 @@ impl Scenario {
             // the AI gate (luyaz-core engines/chill_ai_gate.rs): null when off
             self.ai_gate = 0;
             self.ai_region.clear();
+            // way "ai" (rule mode): AI goes through 🤖 AI, the gate has nothing to say, but the
+            // region still names where AI lands
             if let Some(g) = json::get(&self.ch, "ai_gate", 256)
                 && g.first() == Some(&b'{')
-                && jstr(&g, "way", 12) != "ai"
             {
-                self.ai_gate = if jtrue(&g, "open") { 2 } else { 1 };
+                if jstr(&g, "way", 12) != "ai" {
+                    self.ai_gate = if jtrue(&g, "open") { 2 } else { 1 };
+                }
                 self.ai_region = jstr(&g, "region", 4);
             }
         }

@@ -138,6 +138,7 @@ impl Live {
             chill_thermal_eco: self.chill.thermal_eco() as i32,
             chill_delay_pending: self.chill.delay_pending() as i32,
             chill_home: Some(self.chill.home().clone()),
+            chill_pins: self.chill.pins(),
             tailscale: self.ts.status(),
             tailscale_peers: self.ts.peers().to_vec(),
 
@@ -264,9 +265,9 @@ impl Source for Live {
         let mut ag = self.agent.clone();
         let fast = self.chill.home().busy != 0 || a.hx_sending;
         // Home's Tailscale column says how the home exit goes (direct / relay): read there too
-        let (page, active) = (a.chill_page || (a.home && a.lit), a.chill);
+        let (page, active, home) = (a.chill_page || (a.home && a.lit), a.chill, a.home && a.lit);
         let ch = self.chill.poll(move |s| {
-            s.home_poll(&mut ag, page, fast) as u32 | ((s.poll(active) as u32) << 1)
+            s.home_poll(&mut ag, page, fast) as u32 | ((s.poll(active) as u32) << 1) | ((s.pins_poll(home) as u32) << 1)
         });
         p.chill_home = ch & 1 != 0;
         p.chill = ch & 2 != 0;
@@ -421,8 +422,8 @@ impl Source for Live {
     fn esim_select(&mut self, i: usize) -> i32 {
         self.esim.select(&mut self.agent, i)
     }
-    fn speedtest_start(&mut self, chill: bool) -> bool {
-        self.speed.start(&mut self.agent, chill)
+    fn speedtest_start(&mut self, chill: bool, roaming_ok: bool) -> bool {
+        self.speed.start(&mut self.agent, chill, roaming_ok)
     }
     fn speedtest_stop(&mut self) -> bool {
         self.speed.stop(&mut self.agent)

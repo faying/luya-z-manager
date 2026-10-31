@@ -677,10 +677,139 @@ do_status() {   # 只读
     grep -E "start_dropbear|/etc/init.d/(luyaz-core|luyaz-web|luyaz-sentinel|chill) start" "$RC" 2>/dev/null | sed 's/^/    /'
 }  # do_status
 
+# ── 第一次装机的快照和 undo（docs/research/ext-1030-installer-rollback.md §4-B）──────────
+# 只在新装（KIT_FRESH=1 或没有 progress）时拍一次：把装机包会写的固定清单 cp -a 到 $SNAP/before/<序号>，
+# present 记下哪些原来就有，最后写 state=pending（临时文件 → sync → mv → sync）。拍到一半断了：没有 state = 不算数，下次重拍。
+# `sh device/install.sh undo` 按快照退回（不自动；默认仍是续装）：原来有的放回原样，原来没有的删掉。
+# 不在范围内：基带 NV/EFS、eSIM profile、APN/网络模式、uci 运行态、固件自动升级（只会是关，undo 不碰 zwrt_zte_dm）。
+# undo 只换文件，不停、不起服务；重启后才完全回到装之前（重启由用户决定）。
+# 默认保留 SSH（/data/ssh、start_dropbear.sh 和 rc.local 里那一行），不然 undo 完就进不来了；KIT_UNDO_SSH=1 连它一起退。
+KR=${KIT_ROOT:-}          # 测试（onboard/test/kit-undo.sh）把整个根挪进临时目录
+SNAP=$STATE/snap
+SSH_TARGETS="$KR/data/ssh $KR/data/local/tmp/start_dropbear.sh"
+snap_targets() { # 装机包会写的东西（do_* 里实际写的路径）；/etc/config 只有 chill 第一次装会改（firewall、dhcp）
+    echo "$RC"
+    for s in luyaz-core luyaz-web luyaz-sentinel chill; do echo "$KR/etc/init.d/$s"; done
+    echo "$KR/etc/config/firewall"; echo "$KR/etc/config/dhcp"
+    echo "$S"; echo "$CORE_DIR"; echo "$SCREEN_DIR"; echo "$SHIPD"
+    for f in luyaz-web luyaz-core luyaz-sentinel web.env ui lanid operator-logos; do echo "$KR/data/luyaz/$f"; done
+    echo "$KR/data/esim"; echo "$KR/data/chill"
+    for f in $SSH_TARGETS; do echo "$f"; done
+}
+
+snap_state() { sed -n 's/^state=//p' "$SNAP/state" 2>/dev/null | head -n 1; }
+snap_state_write() { # <state>：临时文件 → sync → mv → sync
+    printf 'state=%s\nkit=%s\nupdated=%s\n' "$1" "$(sed -n 's/^kit=//p' "$SNAP/state" 2>/dev/null | head -n 1)${_snap_kit:-}" "${KIT_MAC_TIME:-$(date +%s)}" > "$SNAP/state.tmp" \
+        && sync && mv -f "$SNAP/state.tmp" "$SNAP/state" && sync
+}
+
+kb_of() { # <路径…> → 合计 KB（不存在的算 0）
+    _t=0
+    for _p in "$@"; do
+        [ -e "$_p" ] || [ -L "$_p" ] || continue
+        _k=$(du -sk "$_p" 2>/dev/null | awk '{print $1; exit}')
+        case "$_k" in '' | *[!0-9]*) _k=0 ;; esac
+        _t=$((_t + _k))
+    done
+    echo "$_t"
+}
+
+free_kb() { # <路径>：所在文件系统剩余 KB（路径还没有就往上找）；读不出来 = 空
+    _d=$1
+    while [ ! -d "$_d" ] && [ "$_d" != / ] && [ -n "$_d" ]; do _d=$(dirname "$_d"); done
+    _f=$(df -Pk "$_d" 2>/dev/null | awk 'NR == 2 {print $4}')
+    case "$_f" in '' | *[!0-9]*) echo "" ;; *) echo "$_f" ;; esac
+}
+
+kit_is_fresh() { [ "${KIT_FRESH:-0}" = 1 ] || [ ! -f "$PROG" ]; }
+
+# 要不要拍：新装，并且没有一份完整、没退回过的快照（第一次那份原样最有用，不拿后来的覆盖）
+snap_wanted() { kit_is_fresh || return 1; case "$(snap_state)" in pending) return 1 ;; esac; return 0; }
+
+space_check() { # 写任何东西之前：/data ≥ 载荷 + 2×快照 + 16 MB，/etc ≥ 2 MB
+    _snapkb=0
+    if snap_wanted; then _snapkb=$(kb_of $(snap_targets)); fi
+    _pay=$(kb_of "$P")
+    _need=$((_pay + 2 * _snapkb + 16384))
+    _fd=${KIT_DF_DATA:-$(free_kb "$STATE")}
+    _fe=${KIT_DF_ETC:-$(free_kb "$(dirname "$RC")")}
+    case "$_fd" in '' | *[!0-9]*) die "$(tx "读不出 /data 剩余空间，这次什么都没装" "could not read the free space on /data; nothing was installed")" ;; esac
+    case "$_fe" in '' | *[!0-9]*) die "$(tx "读不出 /etc 剩余空间，这次什么都没装" "could not read the free space on /etc; nothing was installed")" ;; esac
+    [ "$_fd" -ge "$_need" ] || die "$(tx "/data 剩 ${_fd} KB，要 ${_need} KB（载荷 ${_pay} + 2×快照 ${_snapkb} + 16 MB），这次什么都没装" "/data has ${_fd} KB free, needs ${_need} KB (payload ${_pay} + 2x snapshot ${_snapkb} + 16 MB); nothing was installed")"
+    [ "$_fe" -ge 2048 ] || die "$(tx "/etc 剩 ${_fe} KB，要 2048 KB，这次什么都没装" "/etc has ${_fe} KB free, needs 2048 KB; nothing was installed")"
+}
+
+snap_take() {
+    snap_wanted || return 0
+    _tmp=$SNAP.tmp
+    rm -rf "$_tmp"; mkdir -p "$_tmp/before" || die "$(tx "建不了快照目录 $_tmp" "could not create the snapshot dir $_tmp")"
+    trap 'rm -rf "$SNAP.tmp"' EXIT INT TERM HUP   # 拍到一半被打断：半成品删掉
+    _i=0
+    for _t in $(snap_targets); do
+        _i=$((_i + 1))
+        echo "$_i $_t" >> "$_tmp/targets"
+        if [ -e "$_t" ] || [ -L "$_t" ]; then
+            cp -a "$_t" "$_tmp/before/$_i" || die "$(tx "快照 $_t 失败，这次什么都没装" "could not snapshot $_t; nothing was installed")"
+            echo "$_i" >> "$_tmp/present"
+        fi
+    done
+    touch "$_tmp/present"
+    sync
+    rm -rf "$SNAP" && mv "$_tmp" "$SNAP" || die "$(tx "快照没放好" "could not put the snapshot in place")"
+    trap - EXIT INT TERM HUP
+    _snap_kit=${KIT_ID:-}
+    snap_state_write pending || die "$(tx "写快照状态失败" "could not write the snapshot state")"
+    _snap_kit=
+    log "$(tx "装之前的快照: $SNAP（$(wc -l < "$SNAP/present") 项原来就有；装坏了可以 ./install.sh undo）" "snapshot before installing: $SNAP ($(wc -l < "$SNAP/present") items existed; ./install.sh undo goes back if needed)")"
+}
+
+snap_is_ssh() { for _s in $SSH_TARGETS; do [ "$1" = "$_s" ] && return 0; done; return 1; }
+
+do_undo() {
+    [ -f "$SNAP/state" ] && [ -f "$SNAP/targets" ] && [ -f "$SNAP/present" ] \
+        || die "$(tx "没有完整的装机前快照（$SNAP）：只有第一次装机（或 KIT_FRESH=1）才拍，没东西可退" "no complete pre-install snapshot ($SNAP): only a first install (or KIT_FRESH=1) takes one; nothing to undo")"
+    busy=$(ship_busy)
+    [ -n "$busy" ] && die "$busy$(tx "：先等它结束，undo 什么都没动" ": wait for it to finish; undo changed nothing")"
+    _keep_ssh=1; [ "${KIT_UNDO_SSH:-0}" = 1 ] && _keep_ssh=0
+    # 先把 rc.local 候选做好、查过，再动任何文件
+    _rcn=
+    _ri=$(awk -v p="$RC" '$2 == p {print $1; exit}' "$SNAP/targets")
+    if [ -n "$_ri" ] && grep -qx "$_ri" "$SNAP/present"; then
+        _rcn=$RC.u60kit.undo
+        cp -a "$SNAP/before/$_ri" "$_rcn" || die "$(tx '准备 rc.local 失败，undo 什么都没动' 'could not prepare rc.local; undo changed nothing')"
+        if [ $_keep_ssh = 1 ] && ! grep -q 'start_dropbear\.sh' "$_rcn" && grep -v '^[[:space:]]*#' "$RC" 2>/dev/null | grep -q 'start_dropbear\.sh'; then
+            awk '!put && /^exit 0/ { print "sh /data/local/tmp/start_dropbear.sh"; put = 1 } { print } END { if (!put) print "sh /data/local/tmp/start_dropbear.sh" }' "$SNAP/before/$_ri" > "$_rcn"
+        fi
+        sh -n "$_rcn" || { rm -f "$_rcn"; die "$(tx '快照里的 rc.local 语法检查没过，undo 什么都没动' 'the snapshot rc.local failed the syntax check; undo changed nothing')"; }
+    fi
+    snap_state_write pending || die "$(tx "写快照状态失败" "could not write the snapshot state")"   # 中途断了可以再跑一遍
+    while read -r _i _t; do
+        case "$_i" in '' | *[!0-9]*) continue ;; esac
+        [ $_keep_ssh = 1 ] && snap_is_ssh "$_t" && continue
+        if [ "$_t" = "$RC" ]; then
+            if [ -n "$_rcn" ]; then sync; mv -f "$_rcn" "$RC" || die "$(tx '放回 rc.local 失败' 'could not put rc.local back')"; sync
+            else rm -f "$RC"; fi
+            continue
+        fi
+        if grep -qx "$_i" "$SNAP/present"; then
+            rm -rf "$_t.kit-undo"
+            cp -a "$SNAP/before/$_i" "$_t.kit-undo" || die "$(tx "放回 $_t 失败（可以再跑一次 undo）" "could not put $_t back (run undo again)")"
+            rm -rf "$_t" && mv "$_t.kit-undo" "$_t" || die "$(tx "放回 $_t 失败（可以再跑一次 undo）" "could not put $_t back (run undo again)")"
+        else
+            rm -rf "$_t" "$_t.kit-undo"
+        fi
+    done < "$SNAP/targets"
+    sync
+    rm -f "$PROG"
+    snap_state_write undone || die "$(tx "写快照状态失败" "could not write the snapshot state")"
+    log "$(tx "已退回到装之前（$([ $_keep_ssh = 1 ] && echo 'SSH 保留')）。服务没停没起：重启设备后才完全生效（要不要重启你决定）" "back to before the install ($([ $_keep_ssh = 1 ] && echo 'SSH kept')). No service was stopped or started: it fully takes effect after a reboot (your call)")"
+}
+
 # 测试（onboard/test/kit-rc.sh）只要上面的函数
 [ -n "${KIT_LIB_ONLY:-}" ] && return 0
 
-[ $# -gt 0 ] || die "$(tx '用法' 'usage'): sh device/install.sh {ssh|admin|ui|esim|chill|recover|status}..."
+[ $# -gt 0 ] || die "$(tx '用法' 'usage'): sh device/install.sh {ssh|admin|ui|esim|chill|recover|status|undo}..."
+if [ "$1" = undo ]; then do_undo; exit 0; fi
 COMPONENTS="$*"   # 给 ship_busy 之类的检查用
 case " $COMPONENTS " in
     *" admin "* | *" ui "* | *" recover "*)
@@ -688,6 +817,7 @@ case " $COMPONENTS " in
         [ -n "$busy" ] && die "$busy$(tx "：先等它结束（电脑上 tools/luyaz status 看；sh $S/luyaz-ship.sh status），这次什么都没装" ": wait for it to finish (on the computer: tools/luyaz status; on the device: sh $S/luyaz-ship.sh status). Nothing was installed this time")"
         ;;
 esac
+[ "$1" = status ] || { space_check; snap_take; }   # 写任何东西之前：空间够不够、新装就拍快照
 [ "$1" = status ] || prog_begin "$@"
 for c in "$@"; do   # 按命令行顺序装
     if [ "$c" != status ] && prog_is_done "$c"; then log "$(tx "$c：同一个装机包上次已装完，跳过" "$c: already installed by this kit last time; skipped")"; continue; fi

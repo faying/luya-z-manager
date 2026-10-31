@@ -57,6 +57,9 @@ pub struct Paths {
     pub ship_hb: String,
     /// The core's long-term layer's per-check file (the recorder is alive while it changes).
     pub long_open: String,
+    /// The open low-space incidents again, on /data: a full /tmp can't take the state file, and
+    /// the reboot a full /tmp ends in wipes it (10-29 u60g: two opens, never closed).
+    pub disk_open: String,
     pub cap_logs: Vec<String>,
     pub cap_bytes: u64,
     pub cap_tmp_logs: Vec<String>,
@@ -79,6 +82,7 @@ impl Default for Paths {
             ship_txn: s("/data/luyaz/ship/txn"),
             ship_hb: s("/tmp/luyaz/ship/heartbeat"),
             long_open: s("/data/luyaz/core/long/open.json"),
+            disk_open: s("/data/luyaz/screen/disk-open"),
             // tailscaled writes ~7.5 MB/day and nothing rotates it; start.sh opens it for append.
             cap_logs: vec![s("/data/tailscaled.log")],
             cap_bytes: 1_048_576,
@@ -434,6 +438,13 @@ impl Worker {
         }
         if let Some(t) = io.read(&format!("{}/regress", self.paths.state)) {
             self.regress = RegressState::decode(&t);
+        }
+        // the copy on /data wins: it outlives the boot, and /tmp may have been too full to write
+        if let Some(m) = io
+            .read(&self.paths.disk_open)
+            .and_then(|t| serde_json::from_str::<std::collections::BTreeMap<String, String>>(&t).ok())
+        {
+            self.regress.disk_open = m;
         }
     }
 
@@ -816,6 +827,10 @@ impl Worker {
             io.write(
                 &format!("{}/regress", self.paths.state),
                 &self.regress.encode(),
+            );
+            io.write(
+                &self.paths.disk_open,
+                &serde_json::to_string(&self.regress.disk_open).unwrap_or_default(),
             );
         }
     }

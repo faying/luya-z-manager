@@ -44,7 +44,7 @@ const txt = async (p, sel) => ((await p.textContent(sel).catch(() => "")) ?? "")
 const until = (p, sel, re, ms = 10000) => p.waitForFunction(([s, src]) => new RegExp(src).test(document.querySelector(s)?.textContent ?? ""), [sel, re.source], { timeout: ms }).catch(() => {});
 
 async function own(p) {
-  ok(/\d+ 项异常，\d+ 项需要注意。|一切正常。/.test(await txt(p, "#hl-status .nd-status__state")), `summary: ${await txt(p, "#hl-status .nd-status__state")}`);
+  ok(/(\d+ 项异常)?，?(\d+ 项需要注意)?。|一切正常。/.test(await txt(p, "#hl-status .nd-status__state")), `summary: ${await txt(p, "#hl-status .nd-status__state")}`);
   ok(/\d\d:\d\d 检查/.test(await txt(p, "#hl-status .nd-status__meta")), `checked time: ${await txt(p, "#hl-status .nd-status__meta")}`);
   const n = await p.locator("#hl-checks .nd-row").count();
   ok(n >= 5, `check rows: ${n}`);

@@ -494,7 +494,7 @@ fn view(g: &Got, l: Lang) -> View {
                 format!("{ip} · {mac}")
             },
             left: if exp == 0 {
-                "—".into()
+                String::new()
             } else {
                 lease_left(exp.saturating_sub(now), l)
             },
@@ -994,7 +994,7 @@ mod tests {
             panic!()
         };
         assert!(expired.is_empty());
-        assert_eq!(active[0].left, "—");
+        assert_eq!(active[0].left, "");
         assert!(!active[0].expired);
     }
 

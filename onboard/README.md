@@ -71,10 +71,14 @@ Ask it to "set up my U60". It checks that SSH works before asking for the admin 
 ./install.sh restore 备份.tgz  # checks 备份.tgz against the 备份.tgz.sha256 that backup wrote next to it (a mismatch always stops;
                                #   an older backup without one needs LUYAZ_RESTORE_NO_SHA256=1), checks the copy again on the device,
                                #   shows which files would change and writes only after you type yes
+./install.sh undo [--ssh]      # put back what the first install changed (snapshot in /data/luyaz/kit/snap); files only, no
+                               #   service is stopped or started, a reboot completes it. Keeps SSH unless --ssh
 ./install.sh reboot            # restart once and confirm everything comes back on its own
 ```
 
 If an install is cut off half-way (connection lost, a component failed), run the same kit again: the device keeps per-component progress in `/data/luyaz/kit/progress` (`./install.sh status` shows it), skips the components that already finished and resumes from the first unfinished one. A different kit, or `KIT_FRESH=1`, starts over.
+
+Before writing anything the kit checks free space (`/data` ≥ payload + 2 × snapshot + 16 MB, `/etc` ≥ 2 MB) and stops if it is short. On a first install (no progress file, or `KIT_FRESH=1`) it first copies everything it is about to write — `rc.local`, `/etc/init.d/{luyaz-core,luyaz-web,luyaz-sentinel,chill}`, `/etc/config/{firewall,dhcp}`, the `/data/luyaz` programs and directories, `/data/esim`, `/data/chill`, `/data/ssh`, `start_dropbear.sh` — to `/data/luyaz/kit/snap`, noting which existed. Resuming stays the default; `./install.sh undo` is there if you would rather go back: it restores what existed, deletes what did not, checks `rc.local` with `sh -n` first, and can be run again if it is cut off. It does not touch the modem (NV/EFS, APN, network mode), eSIM profiles, or firmware auto-update, which stays off.
 
 To update or reinstall a component later, unpack the newer kit and run e.g. `./install.sh admin` (or `ui` / `esim`). That goes over SSH.
 

@@ -6,6 +6,7 @@
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+pub const NETLINK_ROUTE: i32 = 0;
 pub const NETLINK_SOCK_DIAG: i32 = 4;
 pub const NETLINK_NETFILTER: i32 = 12;
 pub const NETLINK_GENERIC: i32 = 16;
@@ -424,7 +425,7 @@ impl NlSock {
     }
 
     /// Sends a dump request and collects every reply payload of `want` type until DONE.
-    fn dump(&mut self, ty: u16, body: &[u8], want: u16) -> io::Result<Vec<Vec<u8>>> {
+    pub(crate) fn dump(&mut self, ty: u16, body: &[u8], want: u16) -> io::Result<Vec<Vec<u8>>> {
         self.send(ty, NLM_F_REQUEST | NLM_F_DUMP, body)?;
         let mut out = Vec::new();
         let mut buf = vec![0u8; 64 * 1024];

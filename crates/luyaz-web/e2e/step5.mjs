@@ -141,6 +141,18 @@ const PAGES = {
       await done(/完成/, 12000);
       ok(/粗测 · 漫游中只测 5 秒/.test(await live()), `rough result: ${await live()}`);
       ok(!(await p.isVisible("#st-layers section")), "rough result: no layers");
+      // R11: still roaming, 「仍要完整测速」 takes a second confirm with the roaming cost, then runs full
+      await p.click("#st-status .nd-btn--primary");
+      await p.click("#st-start-confirm button:has-text(\"仍要完整测速\")");
+      ok(!(await p.isVisible("#st-start-confirm")) && await p.isVisible("#st-full-confirm"), "full anyway: its own confirm");
+      ok(/走漫游流量，约 30 秒 · 最多 750 MB/.test(await p.textContent("#st-full-confirm")), `roaming full cost: ${(await p.textContent("#st-full-confirm")).trim()}`);
+      await p.click("#st-full-confirm .nd-btn--confirm");
+      await p.waitForFunction(() => /\d\/5 · /.test(document.querySelector("#st-status [aria-live]")?.textContent ?? ""), null, { timeout: 8000 }).catch(() => {});
+      ok(/\d\/5 · /.test(await live()), `roaming full run: ${await live()}`);
+      ok(await p.evaluate(() => /漫游中完整测速/.test(document.body.textContent)), "roaming full run is marked");
+      await p.click("#st-status .nd-btn--secondary");
+      await p.click("#st-stop-confirm .nd-btn--confirm");
+      await done(/已取消/, 20000);
       // at home: the full v2 run
       await scenario("home-network");
       await p.reload();

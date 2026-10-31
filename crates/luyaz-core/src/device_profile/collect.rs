@@ -39,6 +39,8 @@ struct Inner {
     ubus_live: bool,
     // The uevent producer holds a socket with an unbroken SEQNUM run since its UDC snapshot.
     usb_live: bool,
+    // F1: stock binary hashes, set once per boot by `stock::spawn`.
+    stock: Vec<Component>,
 }
 
 pub(crate) struct Collector(Mutex<Inner>);
@@ -151,7 +153,10 @@ impl Inner {
                     .filter(|c| !c.is_empty())
                     .map(str::to_owned),
                 hash: None,
-            }],
+            }]
+            .into_iter()
+            .chain(self.stock.iter().cloned())
+            .collect(),
         };
         let model = identity::build_profile(input(firmware.clone())).model;
         // Only common.integrate_version is a reviewed external firmware identity source.
@@ -351,6 +356,7 @@ impl Collector {
             sim_live: false,
             ubus_live: false,
             usb_live: false,
+            stock: Vec::new(),
         }))
     }
 
@@ -793,6 +799,20 @@ impl Collector {
             e.verification = Verification::WriteVerified;
         }
         g.retain(e);
+    }
+
+    /// F1: the raw stock firmware version string (external, else internal), only to key the
+    /// stock-hash cache. Memory only.
+    pub(crate) fn firmware_key(&self) -> Option<String> {
+        let g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        ["integrate_version", "wa_inner_version"].iter().find_map(|field| {
+            g.identity.values().find_map(|r| text(&r.data, field))
+        })
+    }
+
+    /// F1: stock component hashes for `profile.components` (not part of the fingerprint).
+    pub(crate) fn set_stock(&self, components: Vec<Component>) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).stock = components;
     }
 
     /// Snapshot only: caller supplies BOOTTIME. No refresh, disk reads, commands or HTTP calls.

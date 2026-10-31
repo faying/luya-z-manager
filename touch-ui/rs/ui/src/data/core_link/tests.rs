@@ -534,3 +534,18 @@ fn heat_block_parses_level_and_pause() {
     let d = decode_snapshot(br#"{"battery":{}}"#).unwrap();
     assert_eq!(d.heat_level, -1);
 }
+
+/// The 5 GHz channel guard (core `wifi_dfs` block): the worst state wins; no block = -1.
+#[test]
+fn wifi_dfs_block_parses_the_state() {
+    let d = decode_snapshot(br#"{"wifi_dfs":{"want_5g":true,"up":true,"channel":36,"width":160,"on_dfs":true,"down_since":null,"override_at":null}}"#).unwrap();
+    assert_eq!((d.ap5_dfs, d.ap5_ch, d.ap5_width), (1, 36, 160));
+    let d = decode_snapshot(br#"{"wifi_dfs":{"want_5g":true,"up":false,"channel":null,"on_dfs":null,"down_since":100,"override_at":50}}"#).unwrap();
+    assert_eq!((d.ap5_dfs, d.ap5_ch), (2, 0));
+    let d = decode_snapshot(br#"{"wifi_dfs":{"want_5g":true,"up":true,"channel":36,"width":80,"on_dfs":false,"down_since":null,"override_at":50}}"#).unwrap();
+    assert_eq!(d.ap5_dfs, 3);
+    let d = decode_snapshot(br#"{"wifi_dfs":{"want_5g":false,"up":false,"down_since":null,"override_at":50}}"#).unwrap();
+    assert_eq!(d.ap5_dfs, 0);
+    let d = decode_snapshot(br#"{"battery":{}}"#).unwrap();
+    assert_eq!(d.ap5_dfs, -1);
+}

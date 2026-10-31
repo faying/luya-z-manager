@@ -171,8 +171,8 @@ pub trait Source {
     /// 「检查更新」 (component versions)
     fn versions_check(&mut self);
     fn esim_select(&mut self, i: usize) -> i32;
-    /// chill: also measure through CHILL (`path:"chill"`)
-    fn speedtest_start(&mut self, chill: bool) -> bool;
+    /// chill: also measure through CHILL (`path:"chill"`); roaming_ok: full while roaming (R11)
+    fn speedtest_start(&mut self, chill: bool, roaming_ok: bool) -> bool;
     fn speedtest_stop(&mut self) -> bool;
     fn speedtest_select_server(&mut self, i: i32);
     fn scenario_kick(&mut self);

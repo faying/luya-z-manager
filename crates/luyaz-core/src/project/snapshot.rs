@@ -527,6 +527,9 @@ pub(crate) fn project(inputs: Inputs, sample_interval_ms: u64) -> Projection {
         }
     }
     crate::sms_journal::note_voice(crate::ops::dual_sim::voice_card(&sim));
+    crate::sms_journal::note_voice_slot(
+        crate::ops::dual_sim::voice_sub(&sim, crate::ops::dual_sim::voice_slot()).map(|s| s + 1),
+    );
     let sim_block = c::Sim {
         // epoch / phase / say*: stamped by `state::collect` (the identity tracking keeps state)
         epoch: 0,
@@ -1960,5 +1963,21 @@ mod sim_dual_tests {
         assert!(sim_dual(&sim, &mdm(&[])).is_none());
         let v = c::value(&c::Sim { dual: None, ..Default::default() });
         assert!(v.get("dual").is_none());
+    }
+}
+
+#[cfg(test)]
+mod traffic_number_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn vendor_speeds_given_as_strings_are_read_too() {
+        // some firmware answers get_wwandst with numbers in strings
+        let t = realtime_traffic(&json!({"real_rx_speed": "43750000", "real_tx_speed": 2500000,
+            "real_rx_bytes": "18446744073709551615x"}));
+        assert_eq!(t["rx_speed"], 43_750_000);
+        assert_eq!(t["tx_speed"], 2_500_000);
+        assert_eq!(t["rx_bytes"], 0, "not a number: 0, as a missing field");
     }
 }

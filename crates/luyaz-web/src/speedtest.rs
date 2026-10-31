@@ -198,6 +198,10 @@ fn v2_of(p: &Value, phase: &str, have: bool, loading: bool, l: Lang) -> V2 {
         if let Some(n) = p["connections"].as_u64() {
             rows.push((pick("连接数", "Connections"), n.to_string()));
         }
+        // R11: roaming, run full after the two-step confirm
+        if p["roaming_full"] == true {
+            rows.push((pick("漫游", "Roaming"), pick("漫游中完整测速", "Full test while roaming")));
+        }
         match p["net_tune"].as_str() {
             Some("on") => rows.push((pick("内核调参", "Kernel tuning"), pick("开", "On"))),
             Some("off") => rows.push((pick("内核调参", "Kernel tuning"), pick("关", "Off"))),
@@ -249,6 +253,8 @@ pub struct View {
     pub v2: Option<V2>,
     /// `/api/netinfo?lite=1`: (roaming, CHILL running), once read
     pub net: Option<(bool, bool)>,
+    /// the last run was capped because the device was roaming (R9)
+    pub capped_last: bool,
 }
 
 /// What the v2 result adds (net-performance.md DR3, DR5–DR8, DR11–DR14).
@@ -305,6 +311,18 @@ impl View {
             (Some(_), Some((true, _))) => "roaming",
             _ => "full",
         }
+    }
+    /// 「仍要完整测速」 in the start confirm (R11): a v2 core that will cap the run because the
+    /// device is roaming (or, roaming not read yet, just did); its own second confirm says what
+    /// it costs.
+    pub fn roam_full(&self) -> bool {
+        self.v2.is_some()
+            && !self.running
+            && match self.net {
+                Some((roaming, _)) => roaming,
+                // not read yet: the last run says
+                None => self.capped_last,
+            }
     }
     /// Why 「也测经 CHILL」 can't be turned on now (DR12); None = it can.
     pub fn chill_off(&self) -> Option<&'static str> {
@@ -502,6 +520,7 @@ fn view(g: &Got, expect: bool, l: Lang) -> View {
         details,
         v2,
         net: g.net,
+        capped_last: p.is_some_and(|p| p["roaming_capped"] == true),
     }
 }
 
@@ -773,6 +792,10 @@ fn start_request(sig: &Value) -> Value {
     if sig["chill"] == true {
         v["path"] = json!("chill");
     }
+    // R11: only from the second step of 「仍要完整测速」
+    if sig["roamFull"] == true {
+        v["roaming_ok"] = json!(true);
+    }
     v
 }
 
@@ -858,6 +881,14 @@ pub async fn start(
     let stream = async_stream(move |tx| async move {
         let _ = tx.send(patch(&sending(l))).await;
         let r = crate::agent::post_raw(&app, &who, "/api/speedtest/start", &req_body).await;
+        // R11: the confirmed full run is for this one request only
+        let _ = tx
+            .send(
+                Event::default()
+                    .event("datastar-patch-signals")
+                    .data("signals {\"roamFull\":false}"),
+            )
+            .await;
         let html = match r {
             Ok((c, v)) if (200..300).contains(&c) && v["ok"].as_bool() != Some(false) => {
                 *STARTED.lock().unwrap() = Some(Instant::now());
@@ -1187,12 +1218,45 @@ mod tests {
     }
 
     #[test]
+    fn roaming_full_needs_two_confirms_and_is_marked() {
+        let mut g = got(json!({"phase":"idle","progress":0,"method_version":2}));
+        assert!(!view(&g, false, Lang::Zh).roam_full());
+        let html = Leaves { v: &view(&g, false, Lang::Zh) }.render().unwrap();
+        assert!(!html.contains("仍要完整测速") && !html.contains("st-full-confirm"));
+        // roaming: the start confirm offers it, its own confirm says the cost
+        g.net = Some((true, true));
+        let v = view(&g, false, Lang::Zh);
+        assert!(v.roam_full());
+        let html = Leaves { v: &v }.render().unwrap();
+        assert!(html.contains("$ask = false; $askFull = true") && html.contains("仍要完整测速"));
+        assert!(html.contains("走漫游流量，约 30 秒 · 最多 750 MB") && html.contains("$roamFull = true; @post"));
+        // roaming not read yet: a capped last run offers it; home now does not
+        g.net = None;
+        g.prog = Some(v2_done(json!({"mode":"coarse","roaming_capped":true,"verdict":null})));
+        assert!(view(&g, false, Lang::Zh).roam_full());
+        g.net = Some((false, true));
+        assert!(!view(&g, false, Lang::Zh).roam_full());
+        // an old core never gets it; nor a running test
+        assert!(!view(&got(json!({"phase":"idle","progress":0})), false, Lang::Zh).roam_full());
+        let mut r = got(json!({"phase":"download","progress":40,"method_version":2}));
+        r.net = Some((true, true));
+        assert!(!view(&r, false, Lang::Zh).roam_full());
+        // only the second step sends roaming_ok
+        assert_eq!(start_request(&json!({"server":"auto","roamFull":true})), json!({"provider":"auto","roaming_ok":true}));
+        assert_eq!(start_request(&json!({"server":"auto","roamFull":false})), json!({"provider":"auto"}));
+        // the result says it was a full run while roaming
+        let v = view(&got(v2_done(json!({"roaming_full":true}))), false, Lang::Zh);
+        assert!(v.v2.unwrap().rows.contains(&("漫游".into(), "漫游中完整测速".into())));
+    }
+
+    #[test]
     fn v2_english_has_no_chinese() {
         let mut html = String::new();
         for p in [
             v2_done(json!({})),
             v2_done(json!({"sample_short":true,"verdict":null})),
             v2_done(json!({"mode":"coarse","roaming_capped":true,"verdict":null,"net_tune":"on"})),
+            v2_done(json!({"roaming_full":true})),
             json!({"phase":"download","progress":40,"method_version":2,"stage":"single_download","step":2,"steps":5,"server":"x"}),
         ] {
             let mut g = got(p);

@@ -338,3 +338,25 @@ fn read_snapshot_does_not_share_or_replace_the_live_delay_socket() {
     assert_eq!(chill.delay_buf, b"pending response");
     assert_eq!(chill.delay_t0, 123);
 }
+
+// ---- Home's pinned line ----
+
+/// The shape of mihomo's /group on 2026-10-29: 🤖 AI → a region group → a node; 📞 VoWiFi
+/// straight on a node; "now" after "name" in each object.
+const PIN_GROUPS: &str = r#"{"proxies":[{"all":["🇹🇼 台湾","🇯🇵 日本"],"history":[],"name":"🤖 AI","now":"🇹🇼 台湾","type":"Selector"},{"all":["🇹🇼 示例节点 02丨3x TW"],"history":[],"name":"🇹🇼 台湾","now":"🇹🇼 示例节点 02丨3x TW","type":"URLTest"},{"all":["🇹🇼 示例节点 03丨3x TW"],"name":"📞 VoWiFi","now":"🇹🇼 示例节点 03丨3x TW","type":"Selector"},{"name":"🍎 Apple","now":"DIRECT","type":"Selector"}]}"#;
+
+#[test]
+fn pin_chain_follows_groups_to_the_node() {
+    let now = group_nows(PIN_GROUPS.as_bytes());
+    assert_eq!(pin_chain(&now, "🤖 AI"), Some(("🇹🇼 示例节点 02丨3x TW".into(), "TW".into())));
+    assert_eq!(pin_chain(&now, "📞 VoWiFi"), Some(("🇹🇼 示例节点 03丨3x TW".into(), "TW".into())));
+    assert_eq!(pin_chain(&now, "🍎 Apple"), Some(("DIRECT".into(), "DIRECT".into())));
+    assert_eq!(pin_chain(&now, "📺 流媒体"), None, "a group that is not there");
+}
+
+#[test]
+fn flag_of_takes_the_first_flag() {
+    assert_eq!(flag_of("🇯🇵 Japan 25"), "JP");
+    assert_eq!(flag_of("香港 01"), "");
+    assert_eq!(flag_of("🚀 节点选择"), "");
+}

@@ -803,6 +803,89 @@ cn_set_up() {
   rm -f "$CN_NFT"
 }
 
+# 订阅不许指定出口网卡（ext-1030 第 14 条）：proxy-providers 里的节点一律不带
+# interface-name / routing-mark。出站走哪张网卡由 tun 的 auto-detect-interface 决定；
+# 订阅里写了 interface-name: rmnet_data0 这类值，连接就会绕开 TUN 的路由、Tailscale
+# 的表 52，换网后还绑着旧网卡。两层做法：
+#   1) 渲染结果里 proxy-providers 段（含 inline 的 payload）出现的这两个键直接删掉；
+#   2) 每个 provider 的 override 补上 interface-name: "" 和 routing-mark: 0，
+#      mihomo 下载回来的订阅正文（不经过这里）也会被清空。
+# 顶层 proxies: 是模板自己写的（家里出口必须 interface-name: tailscale0），不动。
+# 只认块写法 `    override:` 和单行 `{…}` 两种；列表项第一个键（`- interface-name:`）不处理。
+strip_egress() {
+  awk '
+    function strip(s) {
+      gsub(/,[ \t]*(interface-name|routing-mark):[ \t]*[^,}]*/, "", s)
+      gsub(/(interface-name|routing-mark):[ \t]*[^,}]*,[ \t]*/, "", s)
+      gsub(/(interface-name|routing-mark):[ \t]*[^,}]*/, "", s)
+      return s
+    }
+    function close_prov() {
+      if (prov && !ovr) print "    override: {interface-name: \"\", routing-mark: 0}"
+      prov = 0; ovr = 0
+    }
+    /^[^ \t#]/ { if (insec) close_prov(); insec = ($0 ~ /^proxy-providers:/); print; next }
+    !insec { print; next }
+    /^[ \t]*(#|$)/ { print; next }
+    /^  [^ \t#-][^:]*:[ \t]*$/ { close_prov(); prov = 1; print; next }
+    prov && /^    override:[ \t]*$/ {
+      print; print "      interface-name: \"\""; print "      routing-mark: 0"; ovr = 1; next
+    }
+    prov && /^    override:[ \t]*\{/ {
+      line = strip($0); sub(/\{[ \t]*/, "{interface-name: \"\", routing-mark: 0, ", line)
+      sub(/, *\}/, "}", line); print line; ovr = 1; next
+    }
+    /^[ \t]+(interface-name|routing-mark):/ { next }
+    { print strip($0) }
+    END { if (insec) close_prov() }
+  ' "$1" > "$1.eg" && mv "$1.eg" "$1"
+}
+
+# 起核心前看它要用的端口和 TUN 名是不是已经被别的程序占了（ext-1030 第 16 条）。
+# 自己上一份核心在这之前已经被 flush / enter_direct 停掉，所以这里看到的都算别人的。
+# 被占时核心起来也只会立刻退出，那不是崩溃：不进崩溃计数、不 gaveup，停在直连等它让出来。
+# 端口：external-controller 9999、dns.listen 53、两个 netinfo 入口 7894/7895；只看监听
+# （TCP 0A、UDP 07），地址只认 127.0.0.1 / 0.0.0.0 / :: / ::ffff:127.0.0.1——dnsmasq 绑在
+# 192.168.0.1:53 上不算冲突。CHILL_API_LAN=1 时 9999 绑 0.0.0.0，任何地址上的 9999 都算。
+# 输出第一个被占的（tcp:9999 / udp:53 / tun:chill0），没有被占返回 1。
+TUN_DEV=chill0
+core_slots_busy() {
+  if [ -e "$SYS_NET/$TUN_DEV" ]; then echo "tun:$TUN_DEV"; return 0; fi
+  for _f in tcp tcp6 udp udp6; do
+    [ -r "$CHILL_PROC/net/$_f" ] || continue
+    awk -v proto="${_f%6}" -v lan="$CHILL_API_LAN" '
+      NR == 1 { next }
+      {
+        split($2, a, ":"); addr = toupper(a[1]); port = toupper(a[2])
+        if (proto == "tcp") { if ($4 != "0A") next } else { if ($4 != "07") next }
+        if (proto == "tcp") { if (port != "270F" && port != "1ED6" && port != "1ED7") next }
+        else { if (port != "0035") next }
+        # 0.0.0.0 和 :: 都是全 0；::ffff:127.0.0.1 是 0…0FFFF0000 + 0100007F
+        mine = 0
+        if (addr == "0100007F" || addr ~ /^0+$/) mine = 1
+        if (addr ~ /^0+FFFF00000100007F$/) mine = 1
+        if (lan == "1" && port == "270F") mine = 1
+        if (!mine) next
+        n["270F"] = 9999; n["1ED6"] = 7894; n["1ED7"] = 7895; n["0035"] = 53
+        print proto ":" n[port]; found = 1; exit
+      }
+      END { exit (found ? 0 : 1) }' "$CHILL_PROC/net/$_f" && return 0
+  done
+  return 1
+}
+
+# 被占：进直连并写清原因（port_busy / tun_busy），返回 0 让 run 跳过这一轮。
+# 先等 CHILL_BUSY_RECHECK 秒再看一次：刚停掉的核心偶尔还没把 TUN 收回。
+CHILL_BUSY_RECHECK="${CHILL_BUSY_RECHECK:-2}"
+start_blocked() {
+  _busy=$(core_slots_busy) || return 1
+  sleep "$CHILL_BUSY_RECHECK"
+  _busy=$(core_slots_busy) || return 1
+  log "起核心前发现被占：${_busy}（别的程序在用，不算崩溃）"
+  case "$_busy" in tun:*) enter_direct tun_busy ;; *) enter_direct port_busy ;; esac
+  return 0
+}
+
 render() {
   mkdir -p "$RUN_DIR"
   [ -f "$TEMPLATE" ] || { log "render: 缺 template.yaml"; return 1; }
@@ -889,6 +972,7 @@ render() {
       }
       print line
     }' "$TEMPLATE" > "$CONFIG.tmp" || return 1
+  strip_egress "$CONFIG.tmp" || { rm -f "$CONFIG.tmp"; return 1; }
 
   # 绝对路径 -f：验证从任何工作目录都能通过
   if _t_out=$("$BIN" -t -d "$CHILL_DIR" -f "$CONFIG.tmp" 2>&1); then
@@ -1111,6 +1195,7 @@ run() {
     if [ "$h" = critical ]; then sleep 15; continue; fi
 
     # ---- 启动核心 ----
+    if start_blocked; then sleep 30; continue; fi
     cn_set_up
     render || { enter_direct render_failed; sleep 30; continue; }
     [ "$CHILL_API_LAN" = "1" ] && rebuild_api_guard

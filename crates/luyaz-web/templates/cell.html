@@ -1,7 +1,7 @@
 {% import "macros.html" as m %}<div id="sig-cell" class="grid content-start gap-4">
 <section><h2 class="nd-group-title">{{ v.l.pick("Serving cell", "服务小区") }}</h2>
 <div class="nd-group{% if v.stale %} nd-stale{% endif %}">
-{% for c in v.cell %}<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ c.0 }} {% call m::help(v.l, loop.index, c.0, c.1) %}{% endcall %}</span></span>{% call m::cell_value(loop.index, c) %}{% endcall %}</div>
+{% for c in v.cell %}<div class="nd-row"><span class="nd-row__text"><span class="nd-row__label">{{ c.0 }} {% if !c.1.is_empty() %}{% call m::help(v.l, loop.index, c.0, c.1) %}{% endcall %}{% endif %}</span></span>{% call m::cell_value(loop.index, c) %}{% endcall %}</div>
 {% endfor %}</div></section>
 {% if let Some(a) = v.anchor_ref() %}<section><h2 class="nd-group-title">{{ v.l.pick("4G anchor (5G NSA)", "4G 锚点（5G NSA）") }}</h2>
 <div class="nd-group{% if v.stale %} nd-stale{% endif %}">

@@ -617,6 +617,10 @@ fn run(hub: Option<Arc<Hub>>) {
         let mono_ms = clock_ms(libc::CLOCK_MONOTONIC);
         let mut recs = Vec::new();
         let lost = read_kmsg(kmsg.as_raw_fd(), &mut recs);
+        // the 5 GHz channel guard looks at once on a radar/DFS/CSA line
+        for r in &recs {
+            crate::engines::wifi_dfs::poke(&r.text);
+        }
         for (src, yes) in [
             ("watcher", lost > 0),
             ("link", nl_lost),

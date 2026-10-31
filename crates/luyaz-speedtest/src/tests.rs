@@ -337,7 +337,8 @@ fn blocked_ookla_falls_back_and_manual_ookla_does_not() {
     let st = SpeedTest::new("http://127.0.0.1:1/blocked");
     configure_local(&st, &server().base_url);
     assert_eq!(
-        st.begin(None, None, quick(), false, None, &claim_running).0,
+        st.begin(None, None, quick(), false, false, None, &claim_running)
+            .0,
         200
     );
     let p = wait(&st);
@@ -365,6 +366,7 @@ fn manual_librespeed_bypasses_ookla_discovery_and_provider_ids_do_not_collide() 
             Some(Provider::Librespeed),
             Some(1),
             quick(),
+            false,
             false,
             None,
             &claim_running
@@ -487,6 +489,7 @@ fn transfer_failures_are_not_successful_zero_speed_and_share_the_byte_cap() {
                 ..quick()
             },
             false,
+            false,
             None,
             &claim_running
         )
@@ -565,7 +568,8 @@ fn reachable_directory_with_unreachable_ookla_node_uses_fallback() {
     let st = SpeedTest::new(&url);
     configure_local(&st, &server().base_url);
     assert_eq!(
-        st.begin(None, None, quick(), false, None, &claim_running).0,
+        st.begin(None, None, quick(), false, false, None, &claim_running)
+            .0,
         200
     );
     let p = wait(&st);
@@ -787,6 +791,65 @@ fn coarse_run_has_no_verdict_and_on_done_sees_the_end() {
     let p = wait(&st);
     assert_eq!(p["phase"], "complete", "{p}");
     assert!(p["upload_mbps"].is_null() && p["verdict"].is_null());
+    assert_eq!(p["roaming_full"], false);
+}
+
+/// R11: `roaming_ok:true` (after a two-step confirm) runs the full test while roaming, and the
+/// result says so; at home the flag changes nothing.
+#[test]
+fn roaming_ok_runs_full_while_roaming_and_says_so() {
+    let st = SpeedTest::new("http://127.0.0.1:1/blocked");
+    configure_local(&st, &server().base_url);
+    let st = st.with_context(|| RunContext {
+        roaming: true,
+        ..RunContext::default()
+    });
+    assert_eq!(st.start(br#"{"roaming_ok":true}"#, &claim_running).0, 200);
+    let p = st.progress().1["data"].clone();
+    assert_eq!(
+        (
+            p["mode"].as_str(),
+            p["roaming_capped"].as_bool(),
+            p["roaming_full"].as_bool()
+        ),
+        (Some("full"), Some(false), Some(true))
+    );
+    // a full run is 30 s: stop it; the mark stays on what it measured
+    assert_eq!(st.stop().0, 200);
+    let p = wait(&st);
+    assert_eq!(
+        (p["mode"].as_str(), p["roaming_full"].as_bool()),
+        (Some("full"), Some(true)),
+        "{p}"
+    );
+    // `false` is the default: still capped
+    assert_eq!(st.start(br#"{"roaming_ok":false}"#, &claim_running).0, 200);
+    let p = st.progress().1["data"].clone();
+    assert_eq!(
+        (
+            p["mode"].as_str(),
+            p["roaming_capped"].as_bool(),
+            p["roaming_full"].as_bool()
+        ),
+        (Some("coarse"), Some(true), Some(false))
+    );
+    wait(&st);
+    // not a bool: refused, nothing runs
+    assert_eq!(st.start(br#"{"roaming_ok":"yes"}"#, &claim_running).0, 400);
+    // at home the flag changes nothing
+    let st = st.with_context(RunContext::default);
+    assert_eq!(st.start(br#"{"roaming_ok":true}"#, &claim_running).0, 200);
+    let p = st.progress().1["data"].clone();
+    assert_eq!(
+        (
+            p["mode"].as_str(),
+            p["roaming_capped"].as_bool(),
+            p["roaming_full"].as_bool()
+        ),
+        (Some("full"), Some(false), Some(false))
+    );
+    st.stop();
+    wait(&st);
 }
 
 /// R10: a 0-byte node is dropped, the fastest tried node wins; a coarse run on the same cell
@@ -816,7 +879,8 @@ fn node_trial_drops_dead_nodes_picks_the_fastest_and_coarse_reuses_it() {
         ..RunContext::default()
     });
     assert_eq!(
-        st.begin(None, None, quick(), false, None, &claim_running).0,
+        st.begin(None, None, quick(), false, false, None, &claim_running)
+            .0,
         200
     );
     let p = wait(&st);
@@ -828,7 +892,8 @@ fn node_trial_drops_dead_nodes_picks_the_fastest_and_coarse_reuses_it() {
     assert!(p["fallback_reason"].is_null());
     let t = Instant::now();
     assert_eq!(
-        st.begin(None, None, CAPPED, false, None, &claim_running).0,
+        st.begin(None, None, CAPPED, false, false, None, &claim_running)
+            .0,
         200
     );
     let p = wait(&st);
@@ -940,6 +1005,7 @@ fn chill_run(proxy: String, main: &'static str) -> Value {
             None,
             quick(),
             true,
+            false,
             None,
             &claim_running
         )
@@ -1039,7 +1105,8 @@ fn old_clients_see_the_old_fields_unchanged() {
         (Some("idle"), Some(2))
     );
     assert_eq!(
-        st.begin(None, None, quick(), false, None, &claim_running).0,
+        st.begin(None, None, quick(), false, false, None, &claim_running)
+            .0,
         200
     );
     let mut phases = std::collections::BTreeSet::new();

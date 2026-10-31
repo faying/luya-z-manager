@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block head %}<link rel="stylesheet" href="{{ crate::assets::url("pages.css") }}">{% endblock %}
 {% block main %}
-<div class="st-page" data-signals="{server: 'auto', ask: false, askStop: false, running: false, chill: false}">
+<div class="st-page" data-signals="{server: 'auto', ask: false, askStop: false, askFull: false, roamFull: false, running: false, chill: false}">
 <h1 class="nd-title mb-4 mt-2">{{ shell.title() }}</h1>
 <div class="grid gap-6">
 <section aria-label="{{ shell.t("Speed test status", "测速状态") }}">

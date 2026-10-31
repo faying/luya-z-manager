@@ -486,7 +486,7 @@ pub fn view_with(
             val: Val::Text(kernel_release(k)),
             mono: true,
             data: true,
-            sub: Some(k.clone()),
+            sub: None,
             stale: false,
         },
         Some(Err(_)) => Row {

@@ -10,6 +10,11 @@
 //!   shared bucket bounds wrong tries from all addresses together. A right password clears it.
 //! - Slots: loopback and the tailnet may use the last [`RESERVED`] connection slots, so a LAN
 //!   client that fills the rest does not lock out Tailscale.
+//! - Interfaces: a connection is served only when the device address it reached belongs to one
+//!   of the listed interfaces ([`SERVED_IFACES`]; `LUYAZ_WEB_IFACES`). The cellular side
+//!   (`rmnet*`) is refused here as well as by the firewall; Tailscale arrives on `tailscale0`
+//!   (or on `br-lan`'s address through a subnet route) and is served. The interface list cannot
+//!   be read: refused.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -104,6 +109,100 @@ pub fn trusted_peer(ip: IpAddr) -> bool {
                     && v6.segments()[2] == 0xa1e0)
         }
     }
+}
+
+// ---- interfaces ----
+
+/// Interfaces whose addresses are served by default.
+pub const SERVED_IFACES: &str = "lo,br-lan,tailscale0";
+/// Refusals are logged at most this often (with the count since the last line).
+const REFUSE_LOG_EVERY: Duration = Duration::from_secs(60);
+
+/// Which local (device) addresses may be served. `*` in the list: any.
+pub struct IfaceGate {
+    names: Vec<String>,
+    any: bool,
+    log: Mutex<(Option<Instant>, u64)>,
+}
+
+impl IfaceGate {
+    pub fn new(list: &str) -> Self {
+        let names: Vec<String> = list
+            .split(',')
+            .map(|n| n.trim().to_owned())
+            .filter(|n| !n.is_empty())
+            .collect();
+        IfaceGate {
+            any: names.iter().any(|n| n == "*"),
+            names,
+            log: Mutex::new((None, 0)),
+        }
+    }
+
+    /// The connection reached `local` from `peer`: serve it? Refusals are logged (rate-limited).
+    pub fn admit(&self, local: IpAddr, peer: IpAddr) -> bool {
+        if self.any || local.to_canonical().is_loopback() {
+            return true;
+        }
+        let ok = match ifaddrs() {
+            Some(addrs) => local_ok(local, &addrs, &self.names),
+            None => false,
+        };
+        if !ok {
+            let mut g = self.log.lock().unwrap();
+            g.1 += 1;
+            let now = Instant::now();
+            if g.0.is_none_or(|t| now.duration_since(t) >= REFUSE_LOG_EVERY) {
+                eprintln!("[guard] refused {peer} -> {local} (not on {}; {} since last line)", self.names.join(","), g.1);
+                *g = (Some(now), 0);
+            }
+        }
+        ok
+    }
+}
+
+/// `local` is an address of one of `names` in `addrs` (`(interface, address)`).
+pub fn local_ok(local: IpAddr, addrs: &[(String, IpAddr)], names: &[String]) -> bool {
+    let local = local.to_canonical();
+    addrs.iter().any(|(n, a)| *a == local && names.contains(n))
+}
+
+/// Every interface address (IPv4 and IPv6); None when the list cannot be read.
+fn ifaddrs() -> Option<Vec<(String, IpAddr)>> {
+    let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: getifaddrs fills the list; it is only read below and freed with freeifaddrs.
+    if unsafe { libc::getifaddrs(&mut head) } != 0 {
+        return None;
+    }
+    let mut found = Vec::new();
+    let mut p = head;
+    while !p.is_null() {
+        // SAFETY: p is a node from getifaddrs; ifa_addr may be null, checked first.
+        let ifa = unsafe { &*p };
+        if !ifa.ifa_addr.is_null() {
+            // SAFETY: the family says which sockaddr ifa_addr points at.
+            let ip = match unsafe { (*ifa.ifa_addr).sa_family } as i32 {
+                libc::AF_INET => {
+                    let sin = unsafe { &*(ifa.ifa_addr as *const libc::sockaddr_in) };
+                    Some(IpAddr::from(u32::from_be(sin.sin_addr.s_addr).to_be_bytes()))
+                }
+                libc::AF_INET6 => {
+                    let sin6 = unsafe { &*(ifa.ifa_addr as *const libc::sockaddr_in6) };
+                    Some(IpAddr::from(sin6.sin6_addr.s6_addr))
+                }
+                _ => None,
+            };
+            if let Some(ip) = ip {
+                // SAFETY: ifa_name is NUL-terminated.
+                let name = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) };
+                found.push((name.to_string_lossy().into_owned(), ip));
+            }
+        }
+        p = ifa.ifa_next;
+    }
+    // SAFETY: head came from getifaddrs.
+    unsafe { libc::freeifaddrs(head) };
+    Some(found)
 }
 
 // ---- login attempts ----
@@ -250,6 +349,36 @@ impl Drop for PeerSlot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_listed_interfaces_are_served() {
+        let addrs: Vec<(String, IpAddr)> = [
+            ("lo", "127.0.0.1"),
+            ("br-lan", "192.168.0.1"),
+            ("rmnet_data0", "10.66.123.76"),
+            ("rmnet_data0", "2408:840d:3630:1e79:a00e:c1c:24fa:cbe1"),
+            ("tailscale0", "100.84.210.91"),
+            ("tailscale0", "fd7a:115c:a1e0::bf2e:d25c"),
+        ]
+        .iter()
+        .map(|(n, a)| (n.to_string(), a.parse().unwrap()))
+        .collect();
+        let names: Vec<String> = SERVED_IFACES.split(',').map(String::from).collect();
+        let ok = |a: &str| local_ok(a.parse().unwrap(), &addrs, &names);
+        assert!(ok("192.168.0.1"));
+        assert!(ok("::ffff:192.168.0.1"));
+        assert!(ok("100.84.210.91"));
+        assert!(ok("fd7a:115c:a1e0::bf2e:d25c"));
+        assert!(!ok("10.66.123.76"));
+        assert!(!ok("2408:840d:3630:1e79:a00e:c1c:24fa:cbe1"));
+        assert!(!ok("192.0.2.1"));
+        // unreadable list: nothing but loopback
+        assert!(!local_ok("192.168.0.1".parse().unwrap(), &[], &names));
+        let gate = IfaceGate::new("br-lan");
+        assert!(gate.admit("127.0.0.1".parse().unwrap(), "127.0.0.1".parse().unwrap()));
+        assert!(IfaceGate::new("*").admit("192.0.2.1".parse().unwrap(), "192.0.2.9".parse().unwrap()));
+        assert!(!gate.admit("192.0.2.1".parse().unwrap(), "192.0.2.9".parse().unwrap()));
+    }
 
     #[test]
     fn hosts_nobody_outside_can_own() {

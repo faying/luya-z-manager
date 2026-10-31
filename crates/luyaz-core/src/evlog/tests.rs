@@ -759,3 +759,62 @@ fn stale_flips_are_fsynced_at_most_hourly_cap() {
     log.on_block(&ev("wlan", 200, true, json!({"a": 1})), &tm(3_700_000));
     assert_eq!(log.stats.fsyncs, FSYNC_PER_HOUR as u64 + 1);
 }
+
+/// Canaries (T1, ext-1031): a full 20-digit ICCID, a profile name, a password and an
+/// SMS one-time code through the real contracts into the log's bytes. The ICCID is
+/// personal and kept in full on the device by design (`contract.rs` levels); the rest
+/// must not be there in plain text.
+#[test]
+fn canaries_in_the_log_bytes() {
+    const ICCID: &str = "89860012345678901234";
+    const NICK: &str = "CanaryProfileNick7Q";
+    const PASS: &str = "CanaryPassw0rd!9xZ";
+    const OTP: &str = "CanarySmsCode4471";
+    let mut log = EvLog::memory("b-canary");
+    let mut samples = crate::contract::samples();
+    for (name, v) in samples.iter_mut() {
+        match *name {
+            "sim" => {
+                v["iccid"] = json!(ICCID);
+                v["profileNickname"] = json!(NICK);
+                v["password"] = json!(PASS);
+            }
+            "apn" => v["manual"][0]["password"] = json!(PASS),
+            "sms_list" => v["list"][0]["text"] = json!(format!("code {OTP}")),
+            _ => {}
+        }
+    }
+    for (i, (name, v)) in samples.iter().enumerate() {
+        let e = BlockEvent {
+            seq: i as u64,
+            name,
+            revision: 1,
+            observed_at: 1,
+            stale: false,
+            data: v.clone(),
+        };
+        log.on_block(&e, &Tm::now("b-canary"));
+    }
+    let (groups, _) = log.read_all().unwrap();
+    let bytes: Vec<u8> = groups
+        .iter()
+        .flatten()
+        .flat_map(|r| r.payload.clone())
+        .collect();
+    let has = |n: &str| bytes.windows(n.len()).any(|w| w == n.as_bytes());
+    assert!(
+        has(ICCID),
+        "personal: the ICCID stays in full on the device"
+    );
+    for c in [NICK, PASS, OTP] {
+        assert!(!has(c), "{c} reached the log");
+    }
+    let state: String = log.state().values().map(|b| b.data.to_string()).collect();
+    for c in [NICK, PASS, OTP] {
+        assert!(!state.contains(c), "{c} in the log state");
+    }
+    assert!(
+        log.stats.blocks["sim"].inexact > 0,
+        "unknown fields dropped, counted"
+    );
+}

@@ -262,24 +262,24 @@ pub fn view(st: &St, a: &Agent, busy: &Busy, l: Lang) -> View {
             Some(true) => (
                 "ok",
                 match l {
-                    Lang::En => format!("USB cable attached · {mt}"),
-                    Lang::Zh => format!("USB 线已连接 · {mt}"),
+                    Lang::En => "USB cable attached".to_string(),
+                    Lang::Zh => "USB 线已连接".to_string(),
                 },
                 None,
             ),
             Some(false) => (
                 "neutral",
                 match l {
-                    Lang::En => format!("No USB cable · mode {mt}"),
-                    Lang::Zh => format!("没插 USB 线 · 模式 {mt}"),
+                    Lang::En => "No USB cable".to_string(),
+                    Lang::Zh => "没插 USB 线".to_string(),
                 },
                 None,
             ),
             None => (
                 "warn",
                 match l {
-                    Lang::En => format!("USB link state unknown · mode {mt}"),
-                    Lang::Zh => format!("USB 连接状态不明 · 模式 {mt}"),
+                    Lang::En => "USB link state unknown".to_string(),
+                    Lang::Zh => "USB 连接状态不明".to_string(),
                 },
                 Some(
                     l.pick(
@@ -337,14 +337,6 @@ pub fn view(st: &St, a: &Agent, busy: &Busy, l: Lang) -> View {
             data: true,
         },
         Row {
-            id: "usb-moderow",
-            label: l.pick("Mode", "模式"),
-            value: mt.clone(),
-            sub: None,
-            mono: true,
-            data: true,
-        },
-        Row {
             id: "usb-rj45",
             label: l.pick("USB-to-Ethernet adapter", "USB 转网口适配器"),
             value: yes_no(
@@ -382,31 +374,16 @@ pub fn view(st: &St, a: &Agent, busy: &Busy, l: Lang) -> View {
             data: false,
         },
         Row {
-            id: "usb-chgtype",
-            label: l.pick("Charger Type", "充电器类型"),
-            value: num("charger_type"),
-            sub: None,
-            mono: true,
-            data: false,
-        },
-        Row {
-            id: "usb-chgstat",
-            label: l.pick("Charge status (raw)", "充电状态（原始值）"),
-            value: num("charging"),
-            sub: None,
-            mono: true,
-            data: false,
-        },
-        Row {
             id: "usb-direct",
             label: l.pick("Direct power", "直接供电"),
-            sub: match direct.as_deref() {
-                Some("enable") => Some(l.pick("charging stopped", "已停止充电")),
-                Some("disable") => Some(l.pick("charging allowed", "允许充电")),
-                _ => None,
+            sub: None,
+            value: match direct.as_deref() {
+                Some("enable") => l.pick("On, charging stopped", "开，已停止充电").to_string(),
+                Some("disable") => l.pick("Off, charging allowed", "关，允许充电").to_string(),
+                Some(o) => o.to_string(),
+                None => dash(),
             },
-            value: direct.clone().unwrap_or_else(dash),
-            mono: true,
+            mono: false,
             data: false,
         },
     ];

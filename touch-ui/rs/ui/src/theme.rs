@@ -48,6 +48,8 @@ pub struct Theme {
     /// traffic-class tags on Home (white text): AI, 版权 / IP, and 全部 / no exit
     pub fill_vio: u32,
     pub fill_teal: u32,
+    /// 📞 VoWiFi's tag (white text on it)
+    pub fill_pink: u32,
     pub fill_grey: u32,
     /// card top highlight (dark only, 0 = none)
     pub hl_opa: u8,
@@ -91,6 +93,7 @@ pub static LIGHT: Theme = Theme {
     fill_ind: 0x393cc6,
     fill_vio: 0x8c3cd6,
     fill_teal: 0x087973,
+    fill_pink: 0xc2417a,
     fill_grey: 0x5a616b,
     hl_opa: 0,
     rim_opa: 26,
@@ -131,6 +134,7 @@ pub static DARK: Theme = Theme {
     fill_ind: 0x393cc6,
     fill_vio: 0x8c3cd6,
     fill_teal: 0x087973,
+    fill_pink: 0xc2417a,
     fill_grey: 0x5a616b,
     hl_opa: 40,
     rim_opa: 150,

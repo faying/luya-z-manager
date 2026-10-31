@@ -297,6 +297,91 @@ pub fn check(iface: &str) -> Option<(Vec<Sample>, Verdict)> {
     Some((samples, v))
 }
 
+/// The two `generate_204` hosts the direct-exit probe already asks (`api/watch.rs`: gstatic and
+/// its mainland twin), over plain HTTP so a probe is one TCP exchange.
+const NET_204: [&str; 2] = ["connect.rom.miui.com", "www.gstatic.com"];
+const NET_CONNECT: Duration = Duration::from_secs(2);
+const NET_TOTAL: Duration = Duration::from_secs(4);
+
+/// One internet probe for the eSIM switch (ext-1030 §3.1): both 204 hosts at once, each bound
+/// to `iface` and its source address (operator DNS on that path, never CHILL's TUN or
+/// mihomo), connect 2 s / total 4 s, no reused connection. Any 204 = `Ok`; no global source
+/// address = `NoSource` (unknown, not healthy). Read-only; only the switch job calls it.
+pub fn net_probe(iface: &str) -> luyaz_esim::NetProbe {
+    let Some(source) = cellular_source(iface) else {
+        return luyaz_esim::NetProbe::NoSource;
+    };
+    let path = Arc::new(Path {
+        interface: iface.to_owned(),
+        source,
+        source_kind: "esim",
+        dns: operator_dns(),
+    });
+    let (tx, rx) = std::sync::mpsc::channel();
+    for host in NET_204 {
+        let (tx, path) = (tx.clone(), path.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(got_204(&path, host, NET_TOTAL));
+        });
+    }
+    drop(tx);
+    let end = Instant::now() + NET_TOTAL + Duration::from_millis(500);
+    while let Some(left) = end.checked_duration_since(Instant::now()) {
+        match rx.recv_timeout(left) {
+            Ok(true) => return luyaz_esim::NetProbe::Ok,
+            Ok(false) => continue,
+            Err(_) => break,
+        }
+    }
+    luyaz_esim::NetProbe::Fail
+}
+
+/// `GET /generate_204` on `host` over the bound path answered 204, all within `budget`.
+fn got_204(path: &Path, host: &str, budget: Duration) -> bool {
+    let began = Instant::now();
+    let Resolved::Addrs(a) = resolve(path, host, budget.min(Duration::from_secs(2))) else {
+        return false;
+    };
+    let Some(to) = a
+        .into_iter()
+        .find(|a| global(*a))
+        .map(|a| SocketAddr::new(a, 80))
+    else {
+        return false;
+    };
+    let Some(rest) = budget.checked_sub(began.elapsed()).filter(|d| !d.is_zero()) else {
+        return false;
+    };
+    let Ok(mut tcp) = bound(&path.interface, path.source, to, rest.min(NET_CONNECT)) else {
+        return false;
+    };
+    let Some(rest) = budget.checked_sub(began.elapsed()).filter(|d| !d.is_zero()) else {
+        return false;
+    };
+    if tcp.set_read_timeout(Some(rest)).is_err() || tcp.set_write_timeout(Some(rest)).is_err() {
+        return false;
+    }
+    let req = format!("GET /generate_204 HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    if tcp.write_all(req.as_bytes()).is_err() {
+        return false;
+    }
+    let mut buf = [0u8; 64];
+    let mut n = 0;
+    while n < 12 {
+        match tcp.read(&mut buf[n..]) {
+            Ok(0) | Err(_) => break,
+            Ok(k) => n += k,
+        }
+    }
+    is_204(&buf[..n])
+}
+
+/// The status line says 204.
+fn is_204(head: &[u8]) -> bool {
+    let t = String::from_utf8_lossy(head);
+    t.starts_with("HTTP/1.") && t.get(9..12) == Some("204")
+}
+
 /// One run on a path the caller already has (a deep diagnosis: `finding::path::paths`).
 pub fn check_path(path: &Path, budget: Duration) -> (Vec<Sample>, Verdict) {
     let samples = run_within(path, budget);
@@ -339,6 +424,14 @@ pub fn main(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_204_status_line_counts() {
+        assert!(is_204(b"HTTP/1.1 204 No Content\r\n"));
+        assert!(!is_204(b"HTTP/1.1 200 OK\r\n"));
+        assert!(!is_204(b"HTTP/1.1 20"));
+        assert!(!is_204(b""));
+    }
 
     #[test]
     fn only_public_unicast_counts() {

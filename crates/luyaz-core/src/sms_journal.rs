@@ -474,6 +474,19 @@ pub fn note_voice(card: Option<(String, String)>) {
     *VOICE.lock().unwrap_or_else(|e| e.into_inner()) = card;
 }
 
+/// 双卡时电话卡的卡槽（1/2，[`crate::ops::dual_sim::voice_sub`]，每轮采集更新）；单卡是 `None`。
+static VOICE_SLOT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// 每轮采集：双卡时电话卡在哪一槽，单卡 `None`。
+pub fn note_voice_slot(slot: Option<u8>) {
+    VOICE_SLOT.store(slot.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 电话卡的卡槽（双卡才有）：通话的声音要走这张卡的通路（VSID）。
+pub fn voice_slot() -> Option<u8> {
+    Some(VOICE_SLOT.load(std::sync::atomic::Ordering::Relaxed)).filter(|s| matches!(s, 1 | 2))
+}
+
 /// 电话卡的号码（双卡、卡里存了才有）。
 pub fn voice_number() -> Option<String> {
     VOICE

@@ -1,6 +1,6 @@
 [package]
 name = "luyaz-wifi"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.99"
 description = "U60 Pro (MU5250) Wi-Fi AP switch (lock, apply and verify) and nearby-network scan, run by the core."

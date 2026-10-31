@@ -123,6 +123,8 @@ pub struct SpeedTestProgress {
     method_version: u8,
     mode: Mode,
     roaming_capped: bool,
+    /// roaming, and the caller confirmed a full run (`roaming_ok`, R11): run full, said here
+    roaming_full: bool,
     path: PathKind,
     stage: Option<Stage>,
     step: u8,
@@ -169,6 +171,7 @@ impl Default for SpeedTestProgress {
             method_version: METHOD_VERSION,
             mode: Mode::Full,
             roaming_capped: false,
+            roaming_full: false,
             path: PathKind::Direct,
             stage: None,
             step: 0,
@@ -230,6 +233,7 @@ impl SpeedTestProgress {
             fallback_reason: self.fallback_reason.take(),
             mode: self.mode,
             roaming_capped: self.roaming_capped,
+            roaming_full: self.roaming_full,
             path: self.path,
             steps: self.steps,
             connections: self.connections,
@@ -628,13 +632,17 @@ impl SpeedTest {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
-    /// `{"provider"?, "server_id"?, "path"?: "direct"|"chill"}`. Roaming is the core's call.
+    /// `{"provider"?, "server_id"?, "path"?: "direct"|"chill", "roaming_ok"?: bool}`. Roaming
+    /// is the core's call; `roaming_ok:true` (sent only after the screen's or the web's
+    /// two-step confirm, R11) runs the full test while roaming too.
     pub fn start(&self, body: &[u8], admit: Admit) -> (u16, Value) {
         #[derive(Deserialize)]
         struct Request {
             provider: Option<String>,
             server_id: Option<u64>,
             path: Option<String>,
+            #[serde(default)]
+            roaming_ok: bool,
         }
         let Ok(req) = serde_json::from_slice::<Request>(body) else {
             return (400, json!({"ok": false, "error": "invalid JSON"}));
@@ -664,17 +672,27 @@ impl SpeedTest {
                 return (400, json!({"ok":false,"error":"Invalid speed-test path"}));
             }
         };
-        self.begin(mode, req.server_id, FULL, chill, None, admit)
+        self.begin(
+            mode,
+            req.server_id,
+            FULL,
+            chill,
+            req.roaming_ok,
+            None,
+            admit,
+        )
     }
     pub fn start_capped(&self, on_done: OnDone, admit: Admit) -> (u16, Value) {
-        self.begin(None, None, CAPPED, false, Some(on_done), admit)
+        self.begin(None, None, CAPPED, false, false, Some(on_done), admit)
     }
+    #[allow(clippy::too_many_arguments)]
     fn begin(
         &self,
         mode: Option<Provider>,
         id: Option<u64>,
         lim: Limits,
         chill: bool,
+        roaming_ok: bool,
         on_done: Option<OnDone>,
         admit: Admit,
     ) -> (u16, Value) {
@@ -683,7 +701,8 @@ impl SpeedTest {
         }
         // Admission: the device as it is now decides the run's shape (R9).
         let ctx = (self.context)();
-        let roaming_capped = ctx.roaming && !lim.coarse;
+        let roaming_capped = ctx.roaming && !lim.coarse && !roaming_ok;
+        let roaming_full = ctx.roaming && !lim.coarse && roaming_ok;
         let lim = if roaming_capped { CAPPED } else { lim };
         let asked_chill = chill;
         let chill = if !chill || lim.coarse {
@@ -706,6 +725,7 @@ impl SpeedTest {
             provider: mode,
             mode: if lim.coarse { Mode::Coarse } else { Mode::Full },
             roaming_capped,
+            roaming_full,
             // the path asked for (the contract), even when roaming leaves out the pair
             path: if asked_chill {
                 PathKind::Chill

@@ -13,3 +13,4 @@ pub(crate) mod scenario;
 pub(crate) mod scheduler;
 pub(crate) mod sentinel_watch;
 pub(crate) mod sms_forward;
+pub(crate) mod wifi_dfs;

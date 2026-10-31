@@ -986,6 +986,41 @@ fn row(label: &str, value: String) -> Row {
     }
 }
 
+/// The 5 GHz channel guard's line (core `wifi_dfs` block, design wifi-dfs-guard): stopped, moved
+/// to the fallback channel, or serving on a DFS channel. None without the block (an older core),
+/// while it is stale, or when there is nothing to say (on a non-DFS channel, 5 GHz off).
+pub fn dfs_line(st: &St, l: Lang) -> Option<String> {
+    let d = &st.blocks.get("wifi_dfs").filter(|b| !b.stale)?.data;
+    let hm = |k: &str| d[k].as_i64().map(|s| crate::alerts_page::mdhm(s)[6..].to_owned());
+    if d["want_5g"] != true {
+        return None;
+    }
+    if d["up"] != true && d["down_since"].is_i64() {
+        let since = hm("down_since").unwrap_or_default();
+        return Some(match (l, d["auto"] == true && d["override_at"].is_null()) {
+            (Lang::En, true) => format!("5 GHz stopped at {since} (radar?) — moving it to a channel radar can't take"),
+            (Lang::Zh, true) => format!("5 GHz {since} 停了（可能遇到雷达），正在换到不受雷达影响的信道"),
+            (Lang::En, false) => format!("5 GHz stopped at {since} and is not back yet"),
+            (Lang::Zh, false) => format!("5 GHz {since} 停了，还没恢复"),
+        });
+    }
+    if let Some(ch) = d["override_channel"].as_str() {
+        let back = hm("restore_at").unwrap_or_default();
+        let orig = if ch == "0" { l.pick("auto", "自动") } else { ch };
+        return Some(match l {
+            Lang::En => format!("5 GHz moved off a radar channel; back to channel {orig} after {back}, once no device is connected"),
+            Lang::Zh => format!("5 GHz 已避开雷达信道；{back} 后、没有设备连着时换回信道 {orig}"),
+        });
+    }
+    (d["on_dfs"] == true).then(|| {
+        l.pick(
+            "5 GHz is on a DFS channel: radar nearby can stop it; it then moves to channel 36 on its own",
+            "5 GHz 用到了 DFS 信道：附近有雷达时会被停，停了会自动换到 36 信道",
+        )
+        .into()
+    })
+}
+
 pub fn view(st: &St, live: Option<&Live>, psm: Option<Psm>, l: Lang) -> View {
     let w = wifi(st);
     let rb = block(st);
@@ -1076,6 +1111,9 @@ pub fn view(st: &St, live: Option<&Live>, psm: Option<Psm>, l: Lang) -> View {
             };
             meta.push(line);
         }
+    }
+    if let Some(t) = w.as_ref().filter(|w| w.on).and_then(|_| dfs_line(st, l)) {
+        meta.push(t);
     }
     if w.is_some() && stale {
         tone = "stale";

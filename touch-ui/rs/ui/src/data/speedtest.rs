@@ -109,6 +109,7 @@ fn parse_v2(data: &[u8]) -> Option<speedtest_v2_t> {
         method_version: mv as i32,
         mode: jstr(data, "mode", 16),
         roaming_capped: flag("roaming_capped"),
+        roaming_full: flag("roaming_full"),
         path: jstr(data, "path", 16),
         stage: jstr(data, "stage", 24),
         step: json::get_int(data, "step", 0) as i32,
@@ -238,7 +239,9 @@ impl Speedtest {
     /// true = started (the agent runs it in the background); refused: the agent's own words
     /// (e.g. 409 while a diagnosis runs) in start_error. chill: also measure through CHILL
     /// (`path:"chill"`; only sent when asked, so an old core gets the request it knows).
-    pub fn start(&mut self, agent: &mut CoreApi, chill: bool) -> bool {
+    /// roaming_ok: run full while roaming (`roaming_ok:true`, R11; only after the page's
+    /// two-step confirm, and likewise only sent when asked).
+    pub fn start(&mut self, agent: &mut CoreApi, chill: bool, roaming_ok: bool) -> bool {
         let mut js = if self.selected >= 0 && (self.selected as usize) < self.srv.len() {
             format!("{{\"provider\":\"{}\",\"server_id\":{}}}", if self.srv[self.selected as usize].provider == "librespeed" { "librespeed" } else { "ookla" }, self.srv[self.selected as usize].id)
         } else {
@@ -247,6 +250,10 @@ impl Speedtest {
         if chill {
             js.pop();
             js.push_str(",\"path\":\"chill\"}");
+        }
+        if roaming_ok {
+            js.pop();
+            js.push_str(",\"roaming_ok\":true}");
         }
         let (code, b) = agent.api("POST", "/api/speedtest/start", Some(&js), ST_RESP_MAX);
         if code == 200 {
@@ -445,19 +452,24 @@ mod provider_tests {
         for (selection, expected) in [(-1,"\"provider\":\"auto\""),(-2,"\"provider\":\"ookla\""),(-3,"\"provider\":\"librespeed\""),(0,"\"server_id\":7")] {
             speed.select_server(selection);
             let (mut api, thread) = mock(r#"{"ok":true,"data":{"status":"started"}}"#);
-            assert!(speed.start(&mut api, false));
+            assert!(speed.start(&mut api, false, false));
             assert!(speed.running());
             let request = thread.join().unwrap();
             assert!(request.starts_with("POST /v2/api/speedtest/start "));
             assert!(request.contains(expected), "{request}");
             if selection == 0 { assert!(request.contains("\"provider\":\"librespeed\"")); }
-            assert!(!request.contains("\"path\""), "{request}");
+            assert!(!request.contains("\"path\"") && !request.contains("roaming_ok"), "{request}");
         }
         speed.select_server(-1);
         let (mut api, thread) = mock(r#"{"ok":true,"data":{"status":"started"}}"#);
-        assert!(speed.start(&mut api, true));
+        assert!(speed.start(&mut api, true, false));
         let request = thread.join().unwrap();
         assert!(request.contains(r#"{"provider":"auto","path":"chill"}"#), "{request}");
+        // R11: the confirmed full run while roaming
+        let (mut api, thread) = mock(r#"{"ok":true,"data":{"status":"started"}}"#);
+        assert!(speed.start(&mut api, false, true));
+        let request = thread.join().unwrap();
+        assert!(request.contains(r#"{"provider":"auto","roaming_ok":true}"#), "{request}");
     }
 
     #[test]

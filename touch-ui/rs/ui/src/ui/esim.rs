@@ -76,7 +76,7 @@ impl Ui {
         es.list_sec = kit::section(sc, y, tr("eSIM 配置"));
         es.list_card = kit::card(sc, MARGIN, y + 20, CARD_W, ESIM_MAX_ROWS as i32 * ESIM_ROW_H);
         es.list_card.set_style_clip_corner(true, 0);
-        es.empty = kit::label_w(es.list_card, f.cj14, th.t3, PAD, 11, CARD_W - 2 * PAD, false, tr("读取中…"));
+        es.empty = kit::label_w(es.list_card, f.cj14, th.t3, PAD, 11, CARD_W - 2 * PAD, true, tr("读取中…"));
         for i in 0..ESIM_MAX_ROWS {
             let row = kit::bx(es.list_card, 0, i as i32 * ESIM_ROW_H, CARD_W, ESIM_ROW_H, th.card, 0);
             kit::tappable(row, Some(esim_row_cb), i);
@@ -270,7 +270,14 @@ impl Ui {
                 },
             );
         }
-        es.list_card.set_height(if n > 0 { n as i32 * ESIM_ROW_H } else { ROW_H });
+        // the empty line wraps (the plain-SIM sentence is two lines): the card follows it
+        let h = if n > 0 {
+            n as i32 * ESIM_ROW_H
+        } else {
+            es.empty.update_layout();
+            (es.empty.height() + 22).max(ROW_H)
+        };
+        es.list_card.set_height(h);
     }
 
     /// repaint when esim_poll (or the prefetch) read something new,

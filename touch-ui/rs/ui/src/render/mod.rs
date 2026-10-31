@@ -320,7 +320,7 @@ impl Source for Replay {
         self.acted();
         if i == 0 { source::ESIM_SEL_CURRENT } else { source::ESIM_SEL_ARMED }
     }
-    fn speedtest_start(&mut self, _chill: bool) -> bool {
+    fn speedtest_start(&mut self, _chill: bool, _roaming_ok: bool) -> bool {
         self.acted();
         true
     }
@@ -1172,10 +1172,18 @@ unsafe extern "C" fn still_cb(e: *mut sys::lv_event_t) {
     STILL.lock().unwrap().push(a);
 }
 
-/// --still: nothing changes, so nothing may be invalidated (the device's quiet loop).
+/// --still: nothing changes, so nothing may be invalidated (the device's quiet loop): each tab,
+/// then each subpage (they refresh too while open, e.g. the eSIM page's 双卡 and 分卡来电).
 fn still_check(tag: &str) {
-    for t in 0..TABS {
-        ui::with(|u| u.to_tab(t));
+    let views = (0..TABS).map(|t| (format!("tab{t}"), None)).chain(SUBS.iter().map(|s| (format!("sub{s:?}"), Some(*s))));
+    for (name, sub) in views {
+        match sub {
+            None => ui::with(|u| u.to_tab(name[3..].parse().unwrap_or(0))),
+            Some(s) => ui::with(|u| {
+                u.sub_close();
+                u.sub_open(s)
+            }),
+        }
         settle(3000);
         STILL.lock().unwrap().clear();
         // SAFETY: LVGL is initialised; one thread
@@ -1199,8 +1207,9 @@ fn still_check(tag: &str) {
                 }
             }
         }
-        println!("STILL {tag} tab{t} {} {}", v.len(), areas.join(" "));
+        println!("STILL {tag} {name} {} {}", v.len(), areas.join(" "));
     }
+    ui::with(|u| u.sub_close());
 }
 
 /// The smallest visible object inside an invalidated area (--still, LUYAZ_STILL_WHO=1).

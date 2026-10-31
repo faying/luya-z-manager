@@ -305,6 +305,10 @@ pub fn identity() -> Value {
     {
         v["number"] = json!(n);
     }
+    // 双卡时电话卡在哪一槽：phone 按它开声音通路。单卡不带（phone 照旧用卡 1）
+    if let Some(s) = sms_journal::voice_slot() {
+        v["slot"] = json!(s);
+    }
     v
 }
 

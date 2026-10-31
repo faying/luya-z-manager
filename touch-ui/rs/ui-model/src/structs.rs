@@ -67,11 +67,23 @@ pub struct core_snapshot_t {
     pub chg_volt_uv: i64,
     pub chg_cur_ua: i64,
     /// heat care (the core's `heat` block): -1 no block, 0 normal, 1 warm, 2 hot, 3 critical
+    #[serde(default = "minus_one")]
     pub heat_level: i32,
     /// charging paused for the heat (1)
+    #[serde(default)]
     pub heat_paused: i32,
     /// what CHILL is doing for the heat now: 0 nothing, 1 eco, 2 direct
+    #[serde(default)]
     pub heat_chill: i32,
+    /// the 5 GHz channel guard (the core's `wifi_dfs` block): -1 no block, 0 nothing to say,
+    /// 1 serving on a DFS channel, 2 stopped, 3 moved off a radar channel for now
+    #[serde(default = "minus_one")]
+    pub ap5_dfs: i32,
+    /// what 5 GHz serves on: channel and width (MHz), 0 unknown
+    #[serde(default)]
+    pub ap5_ch: i32,
+    #[serde(default)]
+    pub ap5_width: i32,
 
     // SIM
     pub sim_state: String,
@@ -408,6 +420,16 @@ pub struct chill_group_info_t {
     pub auto_pick: i32,
 }
 
+/// A group that keeps its node whatever the main group does (🤖 AI, 📞 VoWiFi): where it
+/// leaves and how fast. ms > 0, 0 = timed out, -1 = not measured.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct chill_pin_t {
+    pub name: String,
+    /// the first flag on its way (two letters), "" = none; "DIRECT" when it goes direct
+    pub region: String,
+    pub ms: i32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct chill_node_info_t {
     pub name: String,
@@ -542,6 +564,8 @@ pub struct speedtest_v2_t {
     /// full / coarse
     pub mode: String,
     pub roaming_capped: bool,
+    /// roaming, run full after the two-step confirm (`roaming_ok`, R11)
+    pub roaming_full: bool,
     /// direct / chill
     pub path: String,
     /// idle_latency / single_download / multi_download / chill_download / multi_upload, "" none
@@ -802,6 +826,7 @@ pub struct ni_client_t {
     pub band: String,
     pub wifi_gen: i32,
     pub link_down: i32,
+    #[serde(default)]
     pub link_up: i32,
 }
 

@@ -830,6 +830,8 @@ pub struct Req {
     pub before: usize,
     /// Delete: the word to type.
     pub word: Option<String>,
+    /// Nick: the name the card had when asked (the core refuses if it changed since).
+    pub was: Option<String>,
 }
 
 type Stash = Mutex<HashMap<String, (Instant, Act, Req)>>;
@@ -1034,6 +1036,15 @@ pub fn job_end(ours: u64, j: &Value) -> Option<JobEnd> {
 
 /// The start POST's refusal (the agent's words; 409 = another job holds the card).
 pub fn refusal(code: u16, v: &Value, l: Lang) -> write::Outcome {
+    if code == 409 && v["error"] == "snapshot_changed" {
+        return write::Outcome::Failed(
+            l.pick(
+                "The name was just changed elsewhere; look at the list again first.",
+                "名字刚被别处改过，先重新看一下列表。",
+            )
+            .into(),
+        );
+    }
     if code == 409 {
         return write::Outcome::Failed(job_clash(l).into());
     }
@@ -1524,7 +1535,10 @@ async fn run(
     }
     let body = match act {
         Act::Switch | Act::Delete => json!({"iccid": r.iccid}),
-        Act::Nick => json!({"iccid": r.iccid, "nickname": r.nick}),
+        Act::Nick => match &r.was {
+            Some(was) => json!({"iccid": r.iccid, "nickname": r.nick, "expect": was}),
+            None => json!({"iccid": r.iccid, "nickname": r.nick}),
+        },
         Act::Download if r.conf.is_empty() => json!({"code": r.code}),
         Act::Download => json!({"code": r.code, "confirmation_code": r.conf}),
         Act::Notif => json!({}),
@@ -1873,6 +1887,10 @@ pub async fn nick_ask(
         return one(area(act, l, remote, &write::Phase::Idle)).into_response();
     }
     let nick = f.nick.trim().to_owned();
+    if let Some(say) = nick_problem(&nick, l) {
+        let o = write::Outcome::NotYet(say.into());
+        return one(area(act, l, remote, &write::Phase::Done(o))).into_response();
+    }
     let r = gate(&app, &who, Some(&q.k), l).await;
     if let Ok((_, Some(p))) = &r
         && p.nick.clone().unwrap_or_default() == nick
@@ -1891,11 +1909,41 @@ pub async fn nick_ask(
             key: p.key.clone(),
             name: p.name(),
             nick,
+            was: Some(p.nick.clone().unwrap_or_default()),
             ..Req::default()
         };
         (confirm(act, &req, None, 0, l), req)
     });
     one(ask_reply(act, l, remote, r)).into_response()
+}
+
+/// Why a nickname cannot be saved, before asking the card: the core's limits (64 bytes,
+/// `luyaz_esim::nickname_chars_ok`), said in words instead of its refusal.
+pub fn nick_problem(n: &str, l: Lang) -> Option<&'static str> {
+    if n.len() > 64 {
+        return Some(l.pick(
+            "At most 64 bytes (about 21 Chinese characters).",
+            "最多 64 字节（约 21 个汉字）。",
+        ));
+    }
+    (!nick_chars_ok(n)).then(|| {
+        l.pick(
+            "No line breaks, control or text-direction characters.",
+            "不能有换行、控制字元或文字方向字元。",
+        )
+    })
+}
+
+/// The same list as `luyaz_esim::nickname_chars_ok` (luyaz-web does not link luyaz-esim).
+fn nick_chars_ok(n: &str) -> bool {
+    !n.chars().any(|c| {
+        c.is_control()
+            || matches!(
+                c,
+                '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{2028}' | '\u{2029}'
+                    | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+            )
+    })
 }
 
 /// An activation code as the old page accepted it (`LPA:1$…` or `1$…`).
@@ -2162,5 +2210,27 @@ mod resend_tests {
         assert_eq!(resend_of(&json!({"resend": {"next_s": null, "gave_up": false}})), None);
         assert_eq!(resend_of(&json!({"resend": {"next_s": 90, "gave_up": false}})), Some(Resend::In(90)));
         assert_eq!(resend_of(&json!({"resend": {"next_s": null, "gave_up": true}})), Some(Resend::Stopped));
+    }
+}
+
+#[cfg(test)]
+mod nick_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_nickname_the_core_would_refuse_is_said_before_asking() {
+        assert_eq!(nick_problem("旅行卡 HK", Lang::Zh), None);
+        assert!(nick_problem(&"卡".repeat(22), Lang::Zh).is_some(), "66 bytes");
+        assert!(nick_problem(&"卡".repeat(21), Lang::Zh).is_none(), "63 bytes");
+        assert!(nick_problem("a\u{202E}b", Lang::En).is_some());
+        assert!(nick_problem("a\u{2028}b", Lang::En).is_some());
+    }
+
+    #[test]
+    fn a_rename_someone_else_made_first_is_its_own_message() {
+        let v = json!({"ok": false, "error": "snapshot_changed"});
+        let write::Outcome::Failed(t) = refusal(409, &v, Lang::Zh) else { panic!() };
+        assert!(t.contains("改过"), "{t}");
     }
 }

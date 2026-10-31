@@ -310,3 +310,38 @@ fn wifi_undo_from_the_change_log_is_tier_three_in_wifi_words() {
     let c = crate::changes::confirm(&e, Lang::Zh);
     assert!(!c.cuts_uplink && c.downtime.unwrap().contains("Wi-Fi 重新加载"));
 }
+
+fn dfs_hub(d: Value) -> Arc<Hub> {
+    let hub = Hub::new();
+    hub.apply(&Frame {
+        event: "snapshot".into(),
+        data: json!({"epoch": "e", "blocks": {"wifi_dfs": blk(d)}}).to_string(),
+    });
+    hub
+}
+
+#[test]
+fn the_dfs_line_says_only_what_matters() {
+    let base = json!({"want_5g": true, "up": true, "channel": 36, "width": 160, "on_dfs": true, "auto": true,
+                      "down_since": null, "override_channel": null, "override_htmode": null, "override_at": null,
+                      "restore_at": null, "last_event": "", "last_event_at": null});
+    let line = |d: &Value, l| dfs_hub(d.clone()).read(|st| dfs_line(st, l));
+    assert!(line(&base, Lang::Zh).unwrap().contains("DFS"));
+    let mut d = base.clone();
+    d["on_dfs"] = json!(false);
+    assert_eq!(line(&d, Lang::En), None, "a non-DFS channel: nothing to say");
+    d["want_5g"] = json!(false);
+    assert_eq!(line(&d, Lang::En), None);
+    let mut d = base.clone();
+    d["up"] = json!(false);
+    d["down_since"] = json!(3600);
+    assert!(line(&d, Lang::En).unwrap().contains("moving it"));
+    d["auto"] = json!(false);
+    assert!(line(&d, Lang::Zh).unwrap().contains("还没恢复"));
+    let mut d = base.clone();
+    d["override_channel"] = json!("0");
+    d["override_at"] = json!(0);
+    d["restore_at"] = json!(1800);
+    let t = line(&d, Lang::Zh).unwrap();
+    assert!(t.contains("00:30") && t.contains("自动"), "{t}");
+}

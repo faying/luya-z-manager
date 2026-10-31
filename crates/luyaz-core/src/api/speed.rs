@@ -123,8 +123,10 @@ pub async fn servers(
     reply(s, v)
 }
 
-/// POST /api/speedtest/start `{"provider"?, "server_id"?, "path"?: "direct"|"chill"}`:
-/// immediate job admission. A roaming device runs the capped test (`roaming_capped`).
+/// POST /api/speedtest/start `{"provider"?, "server_id"?, "path"?: "direct"|"chill", "roaming_ok"?}`:
+/// immediate job admission. A roaming device runs the capped test (`roaming_capped`) unless
+/// `roaming_ok:true` (a two-step confirm on the screen or the web) asks for the full one
+/// (`roaming_full`, R11).
 pub async fn start(State(c): State<Compat>, body: Bytes) -> Response {
     answer(
         tokio::task::spawn_blocking(move || c.speed.start(&body, &|r: &AtomicBool| admit(&c, r)))

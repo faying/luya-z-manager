@@ -21,9 +21,10 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
-- core: heat care (`docs/designs/thermal-care.md`). The battery and the hottest CPU zone (main-chip side only, never the modem's sensors) are read on the charge policy's tick (every 30 s, no timer of its own). Warm (battery ≥44 °C while plugged in) pauses charging; hot (battery ≥50 °C or chip ≥80 °C) also asks CHILL for eco; critical (battery ≥55 °C or chip ≥90 °C) asks for direct and opens the `regress-heat` incident (texted). A level is entered after two readings and left 5 minutes under its exit line (40/46·73/51·83 °C). The pause goes through the charge executor, the one writer of the charger switch; a manual resume wins until unplugged except at critical; at 30 % or less a warm/hot pause gives way. Warm and hot are inbox notices (`heat-protect`, never texted). New `heat` block; doctor Temperature row.
+- kit: a space check before anything is written (`/data` ≥ payload + 2 × snapshot + 16 MB, `/etc` ≥ 2 MB). A first install (no progress, or `KIT_FRESH=1`) snapshots everything the kit writes into `/data/luyaz/kit/snap` (which items existed, state written tmp → sync → mv); the first snapshot is kept until it is undone. New `./install.sh undo [--ssh]` puts it back: restores what existed, deletes what did not, `sh -n` on `rc.local` first, re-runnable if cut off; keeps SSH unless `--ssh`; files only (no service stopped or started, no FOTA, modem or eSIM change). Not automatic: resuming stays the default. Offline test `onboard/test/kit-undo.sh`.
+
 - chill: reads the core's request in `/tmp/luyaz/heat` (`hot` = eco, `critical` = direct, as its own `CHILL_TEMP_WARM`/`CHILL_TEMP_HOT`); back after the request is gone and `COOL_HOLD`.
-- lweb: battery card has a Heat care row (level, charging paused, CHILL eco/direct, since when, stock protection).
+- chill: subscriptions can no longer pin an egress interface (ext-1030 #14): `interface-name` / `routing-mark` are dropped from everything under `proxy-providers` in the rendered config, and each provider gets `override: interface-name: "", routing-mark: 0` so downloaded subscriptions are cleared too; the template's own home exit (`tailscale0`) is untouched. Before starting the core (ext-1030 #16), if `chill0` already exists or something else listens on 127.0.0.1/0.0.0.0/:: port 9999, 53 (UDP), 7894 or 7895, CHILL stays direct with reason `port_busy` / `tun_busy` (checked twice, 2 s apart), retries every 30 s, and does not count it as a crash.
 - touch: banner says when heat care paused charging and moved CHILL (hot / too hot); System's battery line says 「因为热暂停充电」. Without the core's `heat` block the old battery ≥50 °C banner stays.
 - kit: the model check no longer needs an underscore before `MU` (`BD_CNMU5250V1.0.0B31`, `BD_XCBZHKMU5250V1.0.0B03`); the region comes from the part before `MU`. Firmware outside the matrix is still refused.
 - chill: `rules_drift` no longer fires every minute when a scenario turns Wi-Fi off. The stock firmware adds `iif wlanN failed_policy` rules per interface and drops them with the interface; when it comes back their priority follows the new ifindex. A rule bound to an interface (`iif`/`oif`) now only counts as gone while that interface is up and no rule with the same text is left; any other rule that disappears is reported as before.
@@ -39,6 +40,103 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 - kit: `OUI_TSV=` (a table from `scripts/lanid/make-oui.sh`) is installed to `/data/luyaz/lanid/oui.tsv` for vendor names; the public build has none.
 
 - kit: carries the lanid-parse component (LAN client identification) and installs it to `/data/luyaz/core/plugins/` as the only component; without it the core runs with identification off. `LANID_CWASM=` uses a ready-made one.
+
+## lweb 1.49.0 — 2026-10-31
+
+- change log folds runs of identical rows into the newest ("and N more like it"). APN: IPv6 line and roaming switch read as sentences (PDP type in brackets, SIM tail aside). Scenarios: "Pinned to" row only while pinned (the selector already shows Auto). Device info: kernel row shows the release only. Network mode: "(active)" instead of "· Active".
+
+## lweb 1.48.0 — 2026-10-31
+
+- status marks colour only the symbol (text stays ink) on every page. Clients: "Not on Wi-Fi" without the long explanation (now a tooltip), no "—" lease. Tailscale: peer counts once (status), no ⓘ on State. CHILL: no PID tile; "Direct" while idle/paused/disabled is neutral, not amber; full-width punctuation in Chinese reasons. USB: status without the mode (the selector shows it), no raw charger-type/charge-status rows, direct power in words. Health: zero counts left out of the summary.
+
+## lweb 1.47.0 — 2026-10-31
+
+- sentences lose their dot chains: the signal status line reads "5G SA, China Unicom, 2 NR carriers" (the bars figure is dropped, it is its own readout), the alert bar "2 new alerts: …", battery "On battery. About …", Tailscale ", relay hkg", scenario ", pinned". The ⓘ on Band, Bandwidth and Network selection is gone (plain words); jargon keeps it. DESIGN.md §5 has the rule.
+
+## lweb 1.46.1 — 2026-10-31
+
+- home readouts one step smaller (24/28 px) so the status line (28/36 px) stays the largest type.
+
+## lweb 1.46.0 — 2026-10-31
+
+- home leads with the verdict: the status line is the largest type, the readouts are six equal cells (bandwidth no longer a 64 px hero; download and upload share one Speed cell that reads 「Idle」 under 0.1 Mbps both ways, with the figures beneath). The Detail group moves to the right column on wide screens. Unread SMS is counted once (top bar), not again in the home header. The alert bar drops the core's event id prefix ("[fa717fe4-22962] …"). Hidden rows no longer leave a blank 44 px row (Public IP without CHILL). Wi-Fi off hides the 2.4/5 GHz rows.
+
+## lweb 1.45.0 — 2026-10-31
+
+- colour means state only: status blocks that are fine are plain cards (amber/coral stay for attention/error); home's CHILL/Scenarios/Tailscale cards and the current nav item lose their category colours; the home green band is gone (login keeps it). Group titles are real headings (text face, ink, 15–16 px) instead of small grey mono eyebrows; IPs, PCI and other data use the text face with tabular figures, mono stays for the console, AT, hex and raw queries.
+- battery card has a Heat care row (level, charging paused, CHILL eco/direct, since when, stock protection).
+
+## lweb 1.44.0 — 2026-10-31
+
+- eSIM rename says before asking when a name is over 64 bytes (about 21 Chinese characters) or has control/direction characters, sends the name it saw, and says so when someone renamed the profile in between.
+
+## core 1.80.0 — 2026-10-31
+
+- an eSIM download error (lpac's stderr tail or the server's answer) has the activation and confirmation codes cut out (`[code]`) before it reaches the job record, the web reply or the log. Canary tests for the event log, the ledger views and eSIM replies.
+- eSIM rename refuses line/paragraph separators and the remaining bidi marks too (U+061C, U+200E/200F, U+2028/2029); a rename carrying `expect` (the name the asker saw) is refused with 409 `snapshot_changed` if the card shows another name by then.
+- each `modems[]` entry says `traffic_per_module: false` (get_wwandst ignores `subid`).
+- the device profile's `components[]` now lists stock binaries (`stock:zte_topsw_mdm`, `stock:zte_topsw_daemon`, `stock:diag-router`, `stock:ipacm`, `stock:qcrilnr`) with their sha256, hashed once per boot after the firmware version is known and cached in `/data/luyaz/core/stock-components.json` keyed by that version string (reused while size+mtime match; unreadable files left out). The version only picks the cache; capabilities still come from runtime probes, and the fingerprint is unchanged.
+
+## sentinel 1.2.2 — 2026-10-31
+
+- finding a process by name remembers the last pid per name and re-checks its comm and start time before a full /proc scan.
+
+## lweb 1.43.1 — 2026-10-31
+
+- Charts speed uses the core's vendor counter (`live.traffic`), like the home page and the touch screen; the rmnet sum missed hotspot traffic forwarded by the IPA hardware (shown far too low on direct-connected clients).
+
+## core 1.79.1 — 2026-10-31
+
+- user throughput's last fallback reads `rmnet_data0` or else `rmnet_ipa0`, no longer the two added together (the same bytes twice), and the right way round (on WAN rx is the download; it was swapped like the LAN side).
+- the standby-slot signal sampler sleeps while there is no standby card instead of waking every 30 s.
+- eSIM rename refuses control characters and bidi overrides, refuses an ICCID that is not on the card (404), reads the card back after writing and fails if the name is not there or another profile changed.
+
+## lweb 1.43.0 — 2026-10-30
+
+- lweb: second gate in front of `:9090` (research backlog C3): a connection is served only if the device address it reached belongs to `lo`, `br-lan` or `tailscale0` (`--ifaces` / `LUYAZ_WEB_IFACES`, `*` = any; loopback always). The cellular side (`rmnet*`) is closed without a reply even if the firewall lets it through; Tailscale (on `tailscale0`, or `br-lan`'s address through a subnet route) is served as before. If the interface list cannot be read the connection is refused. Refusals log one line a minute at most, with a count. `luyaz-web mock` is not gated.
+
+## core 1.79.0 / lweb 1.42.0 / touch 1.27.0 — 2026-10-30
+
+- core: a speed test can run in full while roaming (net-performance R11). `/api/speedtest/start` takes `roaming_ok: true` (default false); a roaming device with it runs the full test and the result says `roaming_full: true` (kept if stopped). Without it roaming still runs the capped test (`roaming_capped`). Only the two-step confirm in the admin web and touch screen sends it, and only for that one test.
+- core: the network recorder's second batch (net-performance 2a). Each row adds root qdisc counters for `rmnet_data0` and `chill0` (`q_rmnet` / `q_chill0`: drops, overlimits, requeues, backlog, qlen; `d_q_*_drops` per row) from one `RTM_GETQDISC` dump, and a `tcp` summary of WAN-side ESTABLISHED sockets from sock_diag `INET_DIAG_INFO` (count, active, retransmits and data segments since the last dump by socket cookie, RTT p50/max, smallest min_rtt, cwnd and peer window, dump time). The TCP dump runs only when `rmnet_data0` moved bytes, at most every 5 s (10 s after a dump over 5 ms). The 10 s summary gains the drop, backlog and TCP totals. Nothing is read while the recorder is off. Rows grow to 240 B (about 2.4 h in the 2 MiB ring); the ring header is now `NETREC2`, so an old ring starts over.
+- lweb: while roaming, the start dialog offers 「仍要完整测速」 with a second confirm (roaming data, about 750 MB at most); the result shows 「漫游中完整测速」.
+- touch: while roaming, 「仍要完整测速」 under Start; the first tap asks again (5 s), the second starts; the result line is marked.
+
+## core 1.78.0 — 2026-10-30
+
+- an eSIM switch with data back now checks the internet too (read-only, ext-1030 §3.1): `generate_204` from connect.rom.miui.com and www.gstatic.com over plain HTTP, bound to `rmnet_data0` and its source address with the operator DNS (never CHILL's TUN or mihomo), connect 2 s / total 4 s; three answers in a row about 6 s apart make it `ok`, a failure restarts the count, nothing new starts past 30 s. The job gets `net_check` (`ok` / `no_internet` / `skipped` when there is no source address — unknown, not healthy) and `net_attempts`; `no_internet` also sets `reason: "no_internet"` and the job stays `done`. No APN, data, IMS or modem writes; no probes outside a switch. `deadline_s` grows by 35 s.
+- sampling reads less (ext-1030 §3-A–C). `uci show` and the collector's `uci get` results are kept per package and reused while `/etc/config/<pkg>` and `/tmp/.uci/<pkg>` keep the same (mtime, ns, size, inode) — this also covers packages with unsaved changes, which used to fork `uci show` every round; a failed child is not kept. The thermal-zone scan is reused for 5 s (heat care still reads its own zones). `/proc/net/tcp` is read once per round instead of twice.
+- heat care (`docs/designs/thermal-care.md`). The battery and the hottest CPU zone (main-chip side only, never the modem's sensors) are read on the charge policy's tick (every 30 s, no timer of its own). Warm (battery ≥44 °C while plugged in) pauses charging; hot (battery ≥50 °C or chip ≥80 °C) also asks CHILL for eco; critical (battery ≥55 °C or chip ≥90 °C) asks for direct and opens the `regress-heat` incident (texted). A level is entered after two readings and left 5 minutes under its exit line (40/46·73/51·83 °C). The pause goes through the charge executor, the one writer of the charger switch; a manual resume wins until unplugged except at critical; at 30 % or less a warm/hot pause gives way. Warm and hot are inbox notices (`heat-protect`, never texted). New `heat` block; doctor Temperature row.
+
+## core 1.77.3 — 2026-10-30
+
+- The kernel log on flash: the Wi-Fi driver's error-level records (one every ~8 s) are still written but no longer synced at once.
+
+## core 1.77.2 — 2026-10-30
+
+- The kernel log on flash (`/data/crashcap`) is synced only when a batch has an error-level record or 30 s after the last sync (it was every batch: about 150 MB of flash writes a day for 5–7 MB of log), and leaves out the Wi-Fi driver's per-second `wifi_bs: ==========` and `wlan_hdd_fill_rate_info` records.
+
+## core 1.77.1 — 2026-10-30
+
+- The `wifi_dfs` block no longer shows as stale between the 5 GHz guard's 300-second looks (its max age is now 1200 s instead of three sample rounds).
+
+## core 1.77.0 / lweb 1.41.0 / touch 1.26.0 — 2026-10-30
+
+- core: 5 GHz channel guard (`docs/designs/wifi-dfs-guard.md`). The 5 GHz AP runs auto/160 MHz, which on 36 spans the DFS channels 52–64; radar there can stop it. The core now notices the outcome, not log lines: 5 GHz wanted on but wlan2 not ENABLED, or serving on another channel/width. Down 90 s with the switch on (default; `/data/luyaz/core/wifi-dfs-off` turns it off) and the last channel touched DFS: `wifi1` goes to channel 36 at 80 MHz (same htmode family) through `wifi.apply` under the Wi-Fi lock, and what was there is kept in `/data/luyaz/core/wifi-dfs.json`; after 30 min (the radar block period), with no Wi-Fi station and no call, it is put back (uci only while 5 GHz is off). Still down 5 min: `wifi-5g-down` (texted); the fallback itself is an inbox notice (`wifi-5g-fallback`). Looks every 5 min (30 s while down or overridden), at once on a kernel line about radar/DFS/CSA. New `wifi_dfs` block. Not seen with real radar yet.
+- lweb: Wi-Fi page says when 5 GHz is on a DFS channel, stopped, or moved off radar for now (and when it goes back).
+- touch: Wi-Fi hotspot card has a 「5G 信道」 row (channel · width, DFS, stopped, off radar for now).
+
+## touch 1.25.2 — 2026-10-29
+
+- touch: a label cut with "..." no longer redraws every refresh. LVGL keeps the cut text in the label, so the "same text again" check never matched and the label was set and invalidated each time (the eSIM page's empty line twice a second with a plain SIM). The CHILL 节点 page's auto-picked group chip no longer flips colour every refresh either.
+- touch: the eSIM page's empty line wraps and its card grows with it: with a plain SIM the sentence was cut after 「没有 eSIM 配置」.
+- touch: `rs/still.sh` checks every subpage too, not only the five tabs (性能测试 is exempt: its benchmark redraws on purpose); view models from before heat care and Wi-Fi link details load again (`heat_*` read as no block, `link_up` as 0).
+
+
+
+
+
+
 
 ## core 1.74.0 — 2026-10-29
 

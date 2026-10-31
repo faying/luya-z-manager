@@ -48,8 +48,17 @@ pub struct Sample {
 /// The sample a `live` block (and the battery block as it is then) gives.
 pub fn sample(live: &Value, battery: Option<&Value>, at: Instant) -> Sample {
     let rt = &live["runtime"];
-    // the agent's speed (`read_rmnet_bytes`) counts every rmnet interface; u60d's `rx_bps` is
-    // bytes per second despite the name
+    // u60d's `traffic` speed is the vendor counter, which sees what the IPA hardware forwards
+    // for hotspot clients; the rmnet interfaces miss that. Same figure as the home page and
+    // the touch screen (u60d writes 0 when the vendor gives none), so rmnet is only for a
+    // core without the `traffic` block.
+    // Both are bytes per second despite the names.
+    let vendor = |k: &str| {
+        live["traffic"][k]
+            .as_f64()
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .map(|v| v * 8.0 / 1e6)
+    };
     let rates: Vec<&Value> = rt["link_rates"]
         .as_array()
         .map(|a| {
@@ -78,8 +87,8 @@ pub fn sample(live: &Value, battery: Option<&Value>, at: Instant) -> Sample {
     };
     Sample {
         at,
-        down: sum("rx_bps"),
-        up: sum("tx_bps"),
+        down: vendor("rx_speed").or_else(|| sum("rx_bps")),
+        up: vendor("tx_speed").or_else(|| sum("tx_bps")),
         cpu: rt["cpu_usage_tenths"].as_f64().map(|t| t / 10.0),
         mem,
         bat: b["percent"].as_f64(),
@@ -501,6 +510,16 @@ mod tests {
             feed(&hub, "block", live(i + 1, 1_250_000, 100 + i));
         }
         hub
+    }
+
+    #[test]
+    fn speed_prefers_the_vendor_counter_over_rmnet() {
+        // IPA offload: hotspot traffic never shows on rmnet, the vendor counter has it
+        let mut l = live(1, 125_000, 100)["data"].clone();
+        l["traffic"] = json!({"rx_speed":43_750_000,"tx_speed":2_500_000});
+        let s = sample(&l, None, Instant::now());
+        assert_eq!(s.down, Some(350.0));
+        assert_eq!(s.up, Some(20.0));
     }
 
     #[test]

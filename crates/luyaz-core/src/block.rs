@@ -130,6 +130,12 @@ pub fn phase1_blocks() -> Vec<BlockSpec> {
         BlockSpec::derived("regress", Box::new(OnChange)),
         // 温控（docs/designs/thermal-care.md）：档位、温度、停充与 CHILL 请求，变了才发
         BlockSpec::derived("heat", Box::new(OnChange)),
+        // 5G 信道守护（docs/designs/wifi-dfs-guard.md）：信道、频宽、DFS、接手中，变了才发
+        // 守护平时每 300 秒才交一次：按 400 秒算过期（max_age = 3 倍），不按每轮
+        BlockSpec {
+            interval: Duration::from_secs(400),
+            ..BlockSpec::derived("wifi_dfs", Box::new(OnChange))
+        },
         // 插件的显示请求（luyaz-phone 设计 R1-4）：触屏上的卡片，变了才发；plug::display 交
         BlockSpec::derived("display", Box::new(OnChange)),
         // V2-46（2026-10-05）：旧 /state 的读者迁到 /v2 用，data 和旧 /state 同名对象同形，变了才发。

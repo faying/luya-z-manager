@@ -154,6 +154,10 @@ enum Cmd {
         /// Who may use an `act` token (`/agent-api/act/*`), one CIDR per line; no file = no one.
         #[arg(long, env = "LUYAZ_WEB_AGENT_ACT_ALLOW_FILE", default_value = agent_act::ACT_ALLOW_FILE)]
         agent_act_allow_file: std::path::PathBuf,
+        /// Serve only connections that reached an address of these interfaces (guard.rs);
+        /// loopback always. `*` = any interface.
+        #[arg(long, env = "LUYAZ_WEB_IFACES", default_value = guard::SERVED_IFACES)]
+        ifaces: String,
     },
     /// Stand in for u60d: replay a recorded /v2/events capture.
     Mock {
@@ -486,6 +490,7 @@ async fn accept_loop(
     mut stop: tokio::sync::watch::Receiver<bool>,
     max_conns: usize,
     header_timeout: Duration,
+    gate: Arc<guard::IfaceGate>,
 ) {
     let addr = l.local_addr().map(|a| a.to_string()).unwrap_or_default();
     let reserved = guard::RESERVED.min(max_conns.saturating_sub(1));
@@ -511,6 +516,11 @@ async fn accept_loop(
             },
             () = until_stop(&mut stop) => return,
         };
+        // the cellular side (rmnet*) and anything else not listed: closed without a word
+        if !sock.local_addr().is_ok_and(|a| gate.admit(a.ip(), peer.ip())) {
+            drop(sock);
+            continue;
+        }
         let Some(share) = peers.take(peer.ip(), guard::PER_PEER) else {
             drop(sock);
             continue;
@@ -547,11 +557,12 @@ async fn accept_loop(
 
 /// Bind every address; serve each one bound. An address in use is retried in the background
 /// ([`rebind`]); any other failure gives that address up. None bound at start: exit.
-async fn serve_all(binds: Vec<String>, router: Router, every: Duration) {
+async fn serve_all(binds: Vec<String>, router: Router, every: Duration, gate: guard::IfaceGate) {
+    let gate = Arc::new(gate);
     let (stop_tx, stop) = tokio::sync::watch::channel(false);
     let mut tasks = Vec::new();
-    let serve = |l: tokio::net::TcpListener, router: Router, stop: tokio::sync::watch::Receiver<bool>| {
-        accept_loop(l, router, stop, MAX_CONNS, HEADER_TIMEOUT)
+    let serve = move |l: tokio::net::TcpListener, router: Router, stop: tokio::sync::watch::Receiver<bool>| {
+        accept_loop(l, router, stop, MAX_CONNS, HEADER_TIMEOUT, gate.clone())
     };
     let mut bound = 0;
     for addr in binds.iter().map(|b| b.trim()).filter(|b| !b.is_empty()) {
@@ -564,6 +575,7 @@ async fn serve_all(binds: Vec<String>, router: Router, every: Duration) {
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                 eprintln!("[luyaz-web] bind {addr}: {e}; trying again every {}s", every.as_secs());
                 let (addr, why, stop, router) = (addr.to_string(), e.to_string(), stop.clone(), router.clone());
+                let serve = serve.clone();
                 tasks.push(tokio::spawn(async move {
                     if let Some(l) = rebind(addr, every, why, stop.clone()).await {
                         serve(l, router, stop).await;
@@ -611,7 +623,7 @@ fn main() {
         .build()
         .expect("runtime");
     rt.block_on(async move {
-        let (binds, router) = match cli.cmd {
+        let (binds, router, gate) = match cli.cmd {
             Cmd::Serve {
                 bind,
                 upstream,
@@ -624,6 +636,7 @@ fn main() {
                 agent_token_file,
                 agent_allow_file,
                 agent_act_allow_file,
+                ifaces,
             } => {
                 chill_proxy::set_ui_dir(chill_ui_dir);
                 agent_api::set_files(agent_token_file, agent_allow_file);
@@ -638,6 +651,7 @@ fn main() {
                         session_file,
                         logo_dir,
                     ),
+                    guard::IfaceGate::new(&ifaces),
                 )
             }
             Cmd::Mock {
@@ -647,10 +661,10 @@ fn main() {
             } => {
                 let raw = std::fs::read_to_string(&replay)
                     .unwrap_or_else(|e| panic!("{}: {e}", replay.display()));
-                (vec![bind], mock::router(&raw, speed))
+                (vec![bind], mock::router(&raw, speed), guard::IfaceGate::new("*"))
             }
         };
-        serve_all(binds, router, REBIND).await;
+        serve_all(binds, router, REBIND, gate).await;
     });
 }
 
@@ -683,7 +697,7 @@ mod tests {
             }),
         );
         let (tx, rx) = tokio::sync::watch::channel(false);
-        tokio::spawn(accept_loop(l, router, rx, 1, Duration::from_millis(200)));
+        tokio::spawn(accept_loop(l, router, rx, 1, Duration::from_millis(200), Arc::new(guard::IfaceGate::new("lo"))));
 
         let mut silent = tokio::net::TcpStream::connect(addr).await.unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -709,7 +723,7 @@ mod tests {
         let addr = l.local_addr().unwrap();
         let router = Router::new().route("/", get(|| async { "ok" }));
         let (tx, rx) = tokio::sync::watch::channel(false);
-        tokio::spawn(accept_loop(l, router, rx, 64, Duration::from_millis(300)));
+        tokio::spawn(accept_loop(l, router, rx, 64, Duration::from_millis(300), Arc::new(guard::IfaceGate::new("lo"))));
         let mut held = Vec::new();
         for _ in 0..guard::PER_PEER {
             held.push(tokio::net::TcpStream::connect(addr).await.unwrap());
