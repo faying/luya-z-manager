@@ -9,7 +9,7 @@
 # and core-front.mjs, then shoots every page in English (shoot-web.mjs). Stops everything at
 # the end. Needs Docker, node, and `npm ci` in crates/luyaz-web once.
 # Env: IMAGE (Rust build image, default u60-rust-ci:1.99.0), CHROME (browser for Playwright;
-# default its own, else the system Google Chrome), PORT_BASE (default 28000: uses +81, +461, +470, +90, +91).
+# default its own, else the system Google Chrome), PORT_BASE (default 28000: uses +81, +461, +470, +90, +91, +92).
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
@@ -18,7 +18,7 @@ out=${1:-$here/out/web}; [ $# -gt 0 ] && shift
 mkdir -p "$out"; out=$(cd "$out" && pwd)
 image=${IMAGE:-u60-rust-ci:1.99.0}
 pb=${PORT_BASE:-28000}
-web=$((pb + 81)) mock=$((pb + 461)) front=$((pb + 470)) agent=$((pb + 90)) rewrite=$((pb + 91))
+web=$((pb + 81)) mock=$((pb + 461)) front=$((pb + 470)) agent=$((pb + 90)) rewrite=$((pb + 91)) rewrite2=$((pb + 92))
 name=luyaz-shots-web
 [ -d "$root/crates/luyaz-web/node_modules/@playwright/test" ] || { echo "first: (cd crates/luyaz-web && npm ci)" >&2; exit 2; }
 
@@ -49,10 +49,11 @@ docker run -d --name $name -e LUYAZ_WEB_IFACES=lo,eth0 -e LUYAZ_WEB_CHILL_SH=/no
     -p 127.0.0.1:$web:8080 -p 127.0.0.1:$mock:9460 \
     --add-host host.docker.internal:host-gateway -v luyaz-shots-target:/target:ro -v "$work":/s:ro "$image" \
     sh -c "/target/debug/luyaz-web mock --bind 0.0.0.0:9460 --replay /s/fake-events.sse --speed 1 &
-           exec /target/debug/luyaz-web serve --bind 0.0.0.0:8080 --upstream http://host.docker.internal:$front \
+           exec /target/debug/luyaz-web serve --bind 0.0.0.0:8080 --upstream http://host.docker.internal:$rewrite2 \
                 --password-file /s/pw.env --session-file /tmp/s" >/dev/null
 (cd "$root/crates/luyaz-web" && node e2e/fake-agent.mjs $agent) >"$work/agent.log" 2>&1 & pids="$pids $!"
 node "$here/rewrite-agent.mjs" $rewrite $agent >"$work/rewrite.log" 2>&1 & pids="$pids $!"
+node "$here/rewrite-agent.mjs" $rewrite2 $front 0.0.0.0 >"$work/rewrite2.log" 2>&1 & pids="$pids $!"
 (cd "$root/crates/luyaz-web" && node e2e/core-front.mjs $front $rewrite $mock) >"$work/front.log" 2>&1 & pids="$pids $!"
 
 # let the replay fill the 5-minute charts and the signal trend
