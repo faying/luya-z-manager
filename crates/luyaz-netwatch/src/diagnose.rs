@@ -618,20 +618,63 @@ pub fn rp_effective(all: Option<u8>, own: Option<u8>) -> Option<u8> {
     }
 }
 
+/// The LAN bridge's own IPv4 address: its connected route in `/proc/net/route`, then the local
+/// /32 inside that subnet in `/proc/net/fib_trie`.
+pub fn lan_addr(route: &str, fib_trie: &str) -> Option<std::net::Ipv4Addr> {
+    let hex = |h: &str| u32::from_str_radix(h, 16).ok().map(u32::from_be);
+    let (net, mask) = route.lines().skip(1).find_map(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        (f.len() >= 8 && f[0] == "br-lan" && f[2] == "00000000").then(|| Some((hex(f[1])?, hex(f[7])?))).flatten()
+    })?;
+    let mut last: Option<std::net::Ipv4Addr> = None;
+    for l in fib_trie.lines() {
+        let t = l.trim_start_matches([' ', '|', '+', '-', '`']);
+        if let Ok(a) = t.trim().parse::<std::net::Ipv4Addr>() {
+            last = Some(a);
+        } else if t.trim() == "/32 host LOCAL" {
+            if let Some(a) = last.filter(|a| u32::from(*a) & mask == net & mask && mask != 0) {
+                return Some(a);
+            }
+        }
+    }
+    None
+}
+
 /// Two names to the device's own resolver on one socket; only answers with an address count.
+/// Loopback first (mihomo with CHILL on); stock dnsmasq leaves out `lo` and binds br-lan only,
+/// so a refused loopback asks the LAN address instead (issue #6).
 pub fn local_dns_probe() -> LocalDns {
-    let mut out = LocalDns { asked: 0, answered: 0, ms: None };
-    let Ok(sock) = UdpSocket::bind("127.0.0.1:0") else { return out };
-    if sock.connect("127.0.0.1:53").is_err() {
+    let (out, refused) = local_dns_at("127.0.0.1".parse().unwrap());
+    if !refused {
         return out;
+    }
+    let read = |p| std::fs::read_to_string(p).ok();
+    match read("/proc/net/route").zip(read("/proc/net/fib_trie")).and_then(|(r, t)| lan_addr(&r, &t)) {
+        Some(a) => local_dns_at(a).0,
+        None => out,
+    }
+}
+
+/// One probe to `addr:53`; true when the port refused (nothing listening there).
+fn local_dns_at(addr: std::net::Ipv4Addr) -> (LocalDns, bool) {
+    let mut out = LocalDns { asked: 0, answered: 0, ms: None };
+    let mut refused = false;
+    let Ok(sock) = UdpSocket::bind((addr, 0)) else { return (out, refused) };
+    if sock.connect((addr, 53)).is_err() {
+        return (out, refused);
     }
     let base = (now_unix() as u16) ^ 0x6d6d;
     let qs: Vec<Vec<u8>> = LOCAL_DNS_NAMES.iter().enumerate().map(|(i, n)| dns_query(base.wrapping_add(i as u16), n)).collect();
     let start = Instant::now();
     for q in &qs {
-        if sock.send(q).is_ok() {
-            out.asked += 1;
+        match sock.send(q) {
+            Ok(_) => out.asked += 1,
+            // the first query's port-unreachable can surface on the next send
+            Err(e) => refused |= e.kind() == std::io::ErrorKind::ConnectionRefused,
         }
+    }
+    if refused {
+        return (out, refused);
     }
     let mut got = vec![false; qs.len()];
     let mut buf = [0u8; 512];
@@ -640,7 +683,13 @@ pub fn local_dns_probe() -> LocalDns {
         if sock.set_read_timeout(Some(left)).is_err() {
             break;
         }
-        let Ok(n) = sock.recv(&mut buf) else { break };
+        let n = match sock.recv(&mut buf) {
+            Ok(n) => n,
+            Err(e) => {
+                refused = e.kind() == std::io::ErrorKind::ConnectionRefused && out.answered == 0;
+                break;
+            }
+        };
         for (i, q) in qs.iter().enumerate() {
             if !got[i] && crate::finding::path::dns_answer(&buf[..n], q) == Some(ResultState::Passed) {
                 got[i] = true;
@@ -649,7 +698,7 @@ pub fn local_dns_probe() -> LocalDns {
             }
         }
     }
-    out
+    (out, refused)
 }
 
 /// Past runs and capped speed tests, from the history's events.

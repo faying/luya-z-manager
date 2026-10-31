@@ -82,6 +82,10 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 - eSIM rename says before asking when a name is over 64 bytes (about 21 Chinese characters) or has control/direction characters, sends the name it saw, and says so when someone renamed the profile in between.
 
+## core 1.80.1 — 2026-10-31
+
+- Diagnose → DNS no longer reads Poor with CHILL off: stock dnsmasq leaves out `lo` and binds br-lan only, so a refused `127.0.0.1:53` now asks the LAN bridge's address (from `/proc/net/route` + `/proc/net/fib_trie`). Loopback is still asked first (mihomo with CHILL on). (#6)
+
 ## core 1.80.0 — 2026-10-31
 
 - an eSIM download error (lpac's stderr tail or the server's answer) has the activation and confirmation codes cut out (`[code]`) before it reaches the job record, the web reply or the log. Canary tests for the event log, the ledger views and eSIM replies.

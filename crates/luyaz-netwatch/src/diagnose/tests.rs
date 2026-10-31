@@ -280,3 +280,16 @@ fn https_that_never_gets_through_warns_beside_a_plain_http_answer() {
     assert_eq!(level_of(&v, "e2e"), "warn");
     assert_eq!(*host.https_calls.lock().unwrap(), 1);
 }
+
+#[test]
+fn lan_addr_from_route_and_fib_trie() {
+    let route = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n\
+rmnet_data0\t00000000\t00000000\t0001\t0\t0\t0\t00000000\t0\t0\t0\n\
+br-lan\t0000A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n";
+    let trie = "Main:\n  +-- 0.0.0.0/0 3 0 5\n     |-- 10.20.30.40\n        /32 host LOCAL\n\
+     +-- 192.168.0.0/24 2 0 2\n        |-- 192.168.0.0\n           /32 link BROADCAST\n\
+        |-- 192.168.0.1\n           /32 host LOCAL\n";
+    assert_eq!(lan_addr(route, trie), Some("192.168.0.1".parse().unwrap()));
+    assert_eq!(lan_addr("Iface\n", trie), None, "no br-lan route");
+    assert_eq!(lan_addr(route, "Main:\n  |-- 10.20.30.40\n     /32 host LOCAL\n"), None, "no address in the subnet");
+}
