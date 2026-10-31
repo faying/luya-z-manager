@@ -20,8 +20,6 @@
 
 - kit: 写任何东西之前先查空间（`/data` ≥ 载荷 + 2 × 快照 + 16 MB，`/etc` ≥ 2 MB）。第一次装机（没有进度或 `KIT_FRESH=1`）把装机包要写的东西快照到 `/data/luyaz/kit/snap`（记下哪些原来就有，状态按临时文件 → sync → mv 写）；第一份快照一直留到被 undo。新增 `./install.sh undo [--ssh]` 按快照退回：原来有的放回、原来没有的删掉，`rc.local` 先 `sh -n`，中途断了可以重跑；默认保留 SSH，`--ssh` 才一起退；只换文件（不停不起服务，不碰自动升级、基带、eSIM）。不自动：默认仍是续装。离线测试 `onboard/test/kit-undo.sh`。
 
-- core：eSIM 切换后数据回来了，再做一次只读的真上网确认（ext-1030 §3.1）：绑 `rmnet_data0` 和它的源地址、用运营商 DNS（不经 CHILL TUN、不经 mihomo），明文 HTTP 取 connect.rom.miui.com 和 www.gstatic.com 的 `generate_204`，连接 2 秒、总共 4 秒；隔约 6 秒连续 3 次通才算 `ok`，失败重新计，30 秒后不再开始新的探测。job 加 `net_check`（`ok` / `no_internet` / 没有源地址时 `skipped`——不知道，不算正常）和 `net_attempts`；`no_internet` 时 `reason` 也是 `no_internet`，job 仍是 `done`。不写 APN、数据开关、IMS、基带；切换以外不探测。`deadline_s` 加 35 秒。
-- core：采样少读（ext-1030 §3-A–C）。`uci show` 和采集用的 `uci get` 按包记住结果，`/etc/config/<包>` 和 `/tmp/.uci/<包>` 的（mtime、纳秒、大小、inode）不变就复用——有未保存改动的包以前每轮都 fork `uci show`，现在也不用了；子进程失败不记。温区扫描 5 秒内复用（温控照旧自己读）。`/proc/net/tcp` 每轮读一次，原来两次。
 - chill: 读 core 的请求 `/tmp/luyaz/heat`（`hot` = eco，`critical` = 直连，跟自己的 `CHILL_TEMP_WARM`/`CHILL_TEMP_HOT` 一样处理）；请求撤掉再过 `COOL_HOLD` 才回档。
 - chill: 订阅不能再指定出口网卡（ext-1030 第 14 条）：渲染结果里 `proxy-providers` 下的 `interface-name` / `routing-mark` 一律删掉，每个 provider 补上 `override: interface-name: "", routing-mark: 0`，mihomo 下载回来的订阅也一并清空；模板自己的家里出口（`tailscale0`）不动。起核心前（ext-1030 第 16 条）：`chill0` 已经存在，或 127.0.0.1/0.0.0.0/:: 上的 9999、53（UDP）、7894、7895 被别的程序监听，就停在直连，理由 `port_busy` / `tun_busy`（隔 2 秒看两次），每 30 秒再试，不算崩溃。
 - kit: 型号检查不再要求 `MU` 前面有底线（`BD_CNMU5250V1.0.0B31`、`BD_XCBZHKMU5250V1.0.0B03`），region 取 `MU` 前面那段；矩阵外的固件照样拒装。
@@ -119,6 +117,8 @@
 
 ## core 1.78.0 — 2026-10-30
 
+- eSIM 切换后数据回来了，再做一次只读的真上网确认（ext-1030 §3.1）：绑 `rmnet_data0` 和它的源地址、用运营商 DNS（不经 CHILL TUN、不经 mihomo），明文 HTTP 取 connect.rom.miui.com 和 www.gstatic.com 的 `generate_204`，连接 2 秒、总共 4 秒；隔约 6 秒连续 3 次通才算 `ok`，失败重新计，30 秒后不再开始新的探测。job 加 `net_check`（`ok` / `no_internet` / 没有源地址时 `skipped`——不知道，不算正常）和 `net_attempts`；`no_internet` 时 `reason` 也是 `no_internet`，job 仍是 `done`。不写 APN、数据开关、IMS、基带；切换以外不探测。`deadline_s` 加 35 秒。
+- 采样少读（ext-1030 §3-A–C）。`uci show` 和采集用的 `uci get` 按包记住结果，`/etc/config/<包>` 和 `/tmp/.uci/<包>` 的（mtime、纳秒、大小、inode）不变就复用——有未保存改动的包以前每轮都 fork `uci show`，现在也不用了；子进程失败不记。温区扫描 5 秒内复用（温控照旧自己读）。`/proc/net/tcp` 每轮读一次，原来两次。
 - 温控（`docs/designs/thermal-care.md`）。搭充电策略的 tick 读电池和最热的 CPU zone（只读主芯片侧，不碰基带侧传感器）（每 30 秒，不另开计时器）。偏热（插电时电池 ≥44 °C）暂停充电；热（电池 ≥50 °C 或芯片 ≥80 °C）再请 CHILL 降到 eco；过热（电池 ≥55 °C 或芯片 ≥90 °C）请 CHILL 直连并开 `regress-heat` 事故（发短信）。连续两次读到才进档，降到退出线（40/46·73/51·83 °C）以下 5 分钟才退。停充走充电执行器（唯一写充电开关的地方）；手动恢复充电优先到拔电，过热档除外；电量 ≤30% 时偏热/热档不停充。偏热、热只进收件箱（`heat-protect`，不发短信）。新 `heat` 块；doctor「温度」栏。
 
 ## core 1.77.3 — 2026-10-30
