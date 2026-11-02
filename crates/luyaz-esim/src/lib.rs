@@ -204,6 +204,9 @@ pub struct JobState {
     iccid: String,      // the profile the job is about, if any
     started_unix: u64,  // wall clock at start
     finished_unix: u64, // 0 while running
+    /// When a switch started, on the monotonic clock: bounds [`Esim::switching`].
+    #[serde(skip)]
+    switch_started: Option<Instant>,
     /// A switch that ended by scheduling a reboot.
     rebooting: bool, // the UIs show "restarting" instead of an error
     /// Machine-readable cause of an error, so the UIs need not parse
@@ -1615,6 +1618,21 @@ impl Esim {
     pub fn busy(&self) -> bool {
         self.running.load(Ordering::Relaxed)
     }
+    /// A switch is restarting the modem stack, so network writes wait for it. Only a switch:
+    /// downloads, receipts and the channel check leave the stack alone. Bounded: every step has a
+    /// timeout, so past `SWITCH_DEADLINE` + a minute something is wrong and writes go through again.
+    pub fn switching(&self) -> bool {
+        if !self.running.load(Ordering::SeqCst) {
+            return false;
+        }
+        let state = self.job.lock().unwrap_or_else(|e| e.into_inner());
+        state.kind == "switch"
+            && state.status == "running"
+            && state.switch_started.is_none_or(|t| {
+                self.host.now().saturating_duration_since(t)
+                    < SWITCH_DEADLINE + Duration::from_secs(60)
+            })
+    }
     /// The deep diagnosis' check for a free logical channel (open + close one, no lpac). It
     /// holds the job slot meanwhile, so no switch can start on the card under it, and never
     /// runs while one is going.
@@ -1758,7 +1776,11 @@ impl Esim {
             return busy_reply();
         };
         self.cancel.store(false, Ordering::SeqCst);
-        self.job.lock().unwrap().deadline_s = SWITCH_DEADLINE.as_secs();
+        {
+            let mut state = self.job.lock().unwrap();
+            state.deadline_s = SWITCH_DEADLINE.as_secs();
+            state.switch_started = Some(self.host.now());
+        }
         let job = Arc::clone(&self.job);
         let running = Arc::clone(&self.running);
         let cancel = Arc::clone(&self.cancel);
@@ -3451,6 +3473,33 @@ mod tests {
             );
         }
         assert_ne!(busy_gap(1, 1), busy_gap(1, 2), "jittered");
+    }
+
+    /// N1: only a running switch counts, the slot is freed at its end, and a stuck one stops
+    /// holding network writes back past its bound.
+    #[test]
+    fn switching_means_a_running_switch_and_is_bounded() {
+        let (_, fake, e) = switch_on(Fake {
+            enable_works: true,
+            converges: true,
+            ..Fake::default()
+        });
+        assert!(!e.switching(), "ended");
+        let start = |kind: &str| {
+            let id = claim_slot(&e.job, &e.running, kind, "x").expect("slot free");
+            e.job.lock().unwrap().switch_started = Some(fake.now());
+            id
+        };
+        start("download");
+        assert!(e.busy() && !e.switching(), "a download leaves the stack alone");
+        finish_job(&e.job, &e.running, Ok(String::new()), false);
+        start("switch");
+        assert!(e.switching());
+        fake.state.lock().unwrap().slept += SWITCH_DEADLINE;
+        assert!(e.switching(), "within the bound");
+        fake.state.lock().unwrap().slept += Duration::from_secs(61);
+        assert!(!e.switching(), "past the bound");
+        assert!(e.busy(), "the card slot itself stays with the job");
     }
 
     #[test]

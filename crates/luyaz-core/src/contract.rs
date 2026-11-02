@@ -702,6 +702,8 @@ contract! {
         /// `switch_card_status == "0"`: the firmware is switching on its own
         normal switching: bool,
         nested slots: Vec<SimSlot>,
+        /// Slot that takes calls and SMS (setting, 1 unless changed)
+        normal voice_slot: i64,
         /// Smart switching rule, UCI `zte_nwinfo.dsds` (absent when not set)
         #[serde(default, skip_serializing_if = "Option::is_none")]
         nested smart_rule: Option<SimSmartRule>,

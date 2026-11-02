@@ -241,7 +241,7 @@ pub const SESSION_BLOCKS: &[&str] = &[
 #[derive(Clone)]
 pub struct TxnGate {
     pub gate: Arc<Mutex<Gate>>,
-    /// 测速或搜网/注册正在跑（在 Gate 的锁里读）。
+    /// 测速、搜网/注册或 eSIM 切换正在跑（在 Gate 的锁里读）。
     pub others: Arc<dyn Fn() -> bool + Send + Sync>,
     /// 最多等多久（上限 `admit::TXN_WAIT_MAX_MS`）。
     pub wait_ms: u64,
@@ -259,6 +259,18 @@ pub fn device_user_writes() -> Option<u64> {
 /// 设备上接 Gate（core `api.rs` 开写入时调一次）；之后建的、和已经建好的引擎都用它。
 pub fn set_txn_gate(g: TxnGate) {
     let _ = TXN_GATE.set(g);
+}
+
+static ESIM_SWITCHING: OnceLock<Arc<dyn Fn() -> bool + Send + Sync>> = OnceLock::new();
+
+/// 设备上接「eSIM 正在切换」（core `api.rs` 开写入时调一次）。
+pub fn set_esim_switching(f: Arc<dyn Fn() -> bool + Send + Sync>) {
+    let _ = ESIM_SWITCHING.set(f);
+}
+
+/// eSIM 正在切换（没接 = 否）。
+pub fn esim_switching() -> bool {
+    ESIM_SWITCHING.get().is_some_and(|f| f())
 }
 
 /// 触屏来的最多等多久：触屏对 `/control` 只等 5 秒，要在那之前回 busy 它才看得到。

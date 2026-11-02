@@ -22,7 +22,7 @@ LAN_PORT=9461
 ROLLBACK_FLAG=/data/luyaz/core/ops/rollback-on
 # Extra settings from /data/luyaz/core/core.env, one VAR=value per line; only plain values are taken, and only the
 # core's switches (core_switches below).
-# Absent (every install by default) = none. Change it, then restart this service. Not in the
+# Absent (every install by default) = none, apart from LUYAZ_LONGTERM=1 (start_service). Change it, then restart this service. Not in the
 # ship trial's launch: a trial build runs without them.
 CORE_ENV=/data/luyaz/core/core.env
 # The core reads only LUYAZ_* names. Only the listed switches are taken from core.env,
@@ -95,7 +95,12 @@ start_service() {
     procd_set_param env LUYAZ_UBUS=auto LUYAZ_ROLLBACK="$rollback"
     local extra
     extra=$(core_switches "$CORE_ENV")
-    [ -n "$extra" ] && procd_append_param env $extra
+    # the long-term records are on unless core.env says otherwise (about 50 KB a day, 14 days kept)
+    case "$extra" in
+        *LUYAZ_LONGTERM=*) ;;
+        *) extra="$extra LUYAZ_LONGTERM=1" ;;
+    esac
+    procd_append_param env $extra
     # respawn 300 5 5: procd forgives past crashes only after one run lasts the
     # threshold; the 6th exit inside it and procd gives up until the next
     # `start`. 300 s (not 3600) so that a few kills in a test session, or one bad

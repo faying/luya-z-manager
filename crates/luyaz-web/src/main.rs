@@ -81,6 +81,7 @@ mod sms_forward;
 mod speedtest;
 mod sse;
 mod topbar;
+mod battery_history;
 mod trends;
 mod usage;
 mod usb;
@@ -329,6 +330,7 @@ pub fn app(
         .route("/router/dualsim", get(dualsim::page))
         .route("/router/dualsim/events", get(dualsim::events))
         .route("/router/dualsim/ask", post(dualsim::ask))
+        .route("/router/dualsim/voice", post(dualsim::voice_set))
         .route("/router/dualsim/set", post(dualsim::set))
         .route("/router/dualsim/cancel", post(dualsim::cancel))
         .route("/router/apn", get(apn::page))

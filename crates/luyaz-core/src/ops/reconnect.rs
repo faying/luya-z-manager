@@ -23,8 +23,31 @@ const DOWN: Duration = Duration::from_secs(8);
 /// IPv4, IPv6.
 const FAMILIES: [u8; 2] = [1, 2];
 
-fn args(family: u8, enable: u8) -> Value {
-    json!({"source_module": "zte_topsw_data", "type": family, "enable": enable, "sub_id": 1})
+/// Which `sub_id` brings the session back. Measured on the dual-SIM device (11-02, one run): with
+/// data on slot 2, `enable:0 sub_id:1` drops the session, but `enable:1 sub_id:1` left it down for
+/// over 40 s; `enable:1 sub_id:2` had it up within 3 s. So enable names the data card's slot, and
+/// anything unreadable stays 1, the single-card value.
+pub fn enable_sub(sim: &Value) -> u8 {
+    match &sim["current_sim_slot"] {
+        Value::String(s) if s.trim() == "2" => 2,
+        Value::Number(n) if n.as_i64() == Some(2) => 2,
+        _ => 1,
+    }
+}
+
+/// `enable:0` keeps `sub_id:1`: that is the value measured to drop a session on either slot.
+fn args(family: u8, enable: u8, sub: u8) -> Value {
+    json!({"source_module": "zte_topsw_data", "type": family, "enable": enable, "sub_id": sub})
+}
+
+/// The data card's `sub_id`, read now, blocking (guard and recovery, no async there).
+fn read_enable_sub() -> u8 {
+    std::process::Command::new("ubus")
+        .args(["call", "zwrt_zte_mdm.api", "get_sim_info"])
+        .output()
+        .ok()
+        .and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok())
+        .map_or(1, |v| enable_sub(&v))
 }
 
 /// "up" when the data interface has a global IPv4 or IPv6 address, else "down".
@@ -109,10 +132,11 @@ impl Drop for Guard {
 }
 
 fn enable_sync() {
+    let sub = read_enable_sub();
     for f in FAMILIES {
         for _ in 0..2 {
             let ok = std::process::Command::new("ubus")
-                .args(["call", "zwrt_qcmap_cli", "set_qcliiface", &args(f, 1).to_string()])
+                .args(["call", "zwrt_qcmap_cli", "set_qcliiface", &args(f, 1, sub).to_string()])
                 .status()
                 .is_ok_and(|s| s.success());
             if ok {
@@ -139,15 +163,16 @@ fn recover_at(marker: &Path, enable: impl FnOnce()) -> bool {
 
 /// Disable both families, wait, enable both. `call` is the ubus call (the executor's, in the
 /// engine's executor task). Err before the marker is saved = nothing was touched.
-pub async fn redial<F, Fut>(call: F) -> Result<Value, String>
+/// `sub` = [`enable_sub`] of the current SIM info.
+pub async fn redial<F, Fut>(sub: u8, call: F) -> Result<Value, String>
 where
     F: Fn(Value) -> Fut,
     Fut: std::future::Future<Output = Result<Value, String>>,
 {
-    redial_at(Path::new(MARKER), DOWN, call).await
+    redial_at(Path::new(MARKER), DOWN, sub, call).await
 }
 
-async fn redial_at<F, Fut>(marker: &Path, down: Duration, call: F) -> Result<Value, String>
+async fn redial_at<F, Fut>(marker: &Path, down: Duration, sub: u8, call: F) -> Result<Value, String>
 where
     F: Fn(Value) -> Fut,
     Fut: std::future::Future<Output = Result<Value, String>>,
@@ -160,16 +185,16 @@ where
     };
     for f in FAMILIES {
         // a failed disable still goes on to enable: the guard covers the rest
-        if let Err(e) = call(args(f, 0)).await {
+        if let Err(e) = call(args(f, 0, 1)).await {
             eprintln!("reconnect: disable type {f}: {e}");
         }
     }
     tokio::time::sleep(down).await;
     let mut last = Ok(Value::Null);
     for f in FAMILIES {
-        let mut r = call(args(f, 1)).await;
+        let mut r = call(args(f, 1, sub)).await;
         if r.is_err() {
-            r = call(args(f, 1)).await;
+            r = call(args(f, 1, sub)).await;
         }
         if r.is_err() {
             last = r;

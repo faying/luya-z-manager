@@ -101,7 +101,7 @@ impl Guest for Policy {
     fn replay(before: Machine, s: Step, recorded: Vec<Event>) -> Outcome {
         let step = match s {
             Step::Tick(o) => p::Step::Tick {
-                obs: p::Obs { now: o.now, serving_mcc: o.serving_mcc, env: items_in(o.env), clients: o.clients, screen_on: o.screen_on, cell_busy: o.cell_busy },
+                obs: p::Obs { now: o.now, serving_mcc: o.serving_mcc, home_mcc: Some(460), env: items_in(o.env), clients: o.clients, screen_on: o.screen_on, cell_busy: o.cell_busy },
             },
             Step::Startup(s) => p::Step::Startup { had_file: s.had_file, env: items_in(s.env), now: s.now },
         };

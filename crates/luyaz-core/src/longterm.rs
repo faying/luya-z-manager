@@ -1,7 +1,7 @@
 //! The event log's long-term layer (u60-platform.md D9, u60-sentinel.md §8 D16; T8): what is kept
 //! after the raw events' 24 hours, so the 7-day scorecard and "what happened last week" have data.
 //!
-//! - **Hour summaries**, kept 90 days: one line per hour (on the wall clock's hour once it can be
+//! - **Hour summaries**, kept 14 days: one line per hour (on the wall clock's hour once it can be
 //!   trusted, else every hour of uptime, as the guard's ledger does), `/data/luyaz/core/long/hours.jsonl`.
 //! - **Important events**, kept 30 days and at most [`EVENTS_CAP`] bytes: boot, our version, the
 //!   cellular link going down/up, the clock becoming trusted, blocks going stale and back,
@@ -51,7 +51,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const DIR: &str = "/data/luyaz/core/long";
-pub const HOURS_KEEP_S: i64 = 90 * 86_400;
+pub const HOURS_KEEP_S: i64 = 14 * 86_400;
 pub const EVENTS_KEEP_S: i64 = 30 * 86_400;
 pub const EVENTS_CAP: u64 = 1 << 20;
 /// Blocks the fold looks at; everything else passes by.
@@ -2020,7 +2020,7 @@ mod tests {
         let s = Store::at(&d);
         let now = 1_800_000_000;
         let hours: Vec<Value> = (0..5)
-            .map(|i| json!({"k": "hour", "tt": now - i * 30 * 86_400}))
+            .map(|i| json!({"k": "hour", "tt": now - i * 5 * 86_400}))
             .collect();
         let events: Vec<Value> = (0..3)
             .map(|i| json!({"k": "link", "t": if i == 2 { Value::Null } else { json!(now - i * 40 * 86_400) }}))
@@ -2036,7 +2036,7 @@ mod tests {
         );
         s.prune(Some(now)).unwrap();
         let h = std::fs::read_to_string(d.join("hours.jsonl")).unwrap();
-        assert_eq!(h.lines().count(), 4, "older than 90 days gone");
+        assert_eq!(h.lines().count(), 3, "older than 14 days gone");
         let e = std::fs::read_to_string(d.join("events.jsonl")).unwrap();
         assert_eq!(
             e.lines().count(),

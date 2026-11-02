@@ -900,8 +900,8 @@ pub fn number_confirm(n: &str, l: Lang) -> write::Confirm {
             l,
             l.pick("Save the number", "保存号码").into(),
             match l {
-                Lang::En => format!("Alerts will be texted from this device's SIM to {n}."),
-                Lang::Zh => format!("以后的告警会用本机 SIM 发短信到 {n}。"),
+                Lang::En => format!("Alerts will be texted from this device's SIM to {n}. With two cards, the firmware picks which one sends."),
+                Lang::Zh => format!("以后的告警会用本机 SIM 发短信到 {n}。双卡时由固件决定用哪张发。"),
             },
             l.pick("Confirm: save the number", "确认：保存号码").into(),
         )

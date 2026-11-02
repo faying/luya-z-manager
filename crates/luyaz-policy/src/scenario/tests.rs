@@ -890,6 +890,31 @@ fn step_recheck_saves_home() {
 }
 
 #[test]
+fn clock_stepping_back_does_not_stop_scans() {
+    let cfg = home_cfg();
+    let t = 1_800_000_000;
+    // roaming: 12 h back; boot before the time sync: the RTC's 1971
+    for now in [t - 12 * 3600, 40_000_000] {
+        let st = in_scenario(AWAY_ID, t);
+        let o = step(&input(&cfg, &st, now, Scan::NotScanned));
+        assert_ne!(o.branch, Branch::NotDue, "now {now}");
+    }
+    // the next scan restamps, so the clock's new value paces it again
+    let st = in_scenario(AWAY_ID, t);
+    let o = step(&input(&cfg, &st, t + 1, Scan::NotScanned));
+    assert_eq!(o.branch, Branch::NotDue);
+    // same for the pin retry
+    let home = in_scenario("home", 0);
+    let o = step(&TickInput {
+        pin: Some("home"),
+        pin_retry_at: t,
+        ..input(&cfg, &home, t - 12 * 3600, Scan::NotScanned)
+    });
+    assert_eq!(o.pin_retry_at, t - 12 * 3600);
+    assert!(o.restores.is_some());
+}
+
+#[test]
 fn step_pin_overrides_detection() {
     let cfg = home_cfg();
     let st = in_scenario(AWAY_ID, 0);

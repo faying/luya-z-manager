@@ -21,6 +21,8 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+- phone: a new call after a core restart is no longer dropped as a stale event of a forwarded call (the mark is forgotten when `boot` changes; an old core without `boot`: on an empty list). Older lists from the same start are ignored. The first `call.list` is asked again while the core says `not_ready`; a lease refused with `no_call` settles from the list. Requires: core 1.81.0 for `boot`.
+
 - kit: a space check before anything is written (`/data` ≥ payload + 2 × snapshot + 16 MB, `/etc` ≥ 2 MB). A first install (no progress, or `KIT_FRESH=1`) snapshots everything the kit writes into `/data/luyaz/kit/snap` (which items existed, state written tmp → sync → mv); the first snapshot is kept until it is undone. New `./install.sh undo [--ssh]` puts it back: restores what existed, deletes what did not, `sh -n` on `rc.local` first, re-runnable if cut off; keeps SSH unless `--ssh`; files only (no service stopped or started, no FOTA, modem or eSIM change). Not automatic: resuming stays the default. Offline test `onboard/test/kit-undo.sh`.
 
 - chill: reads the core's request in `/tmp/luyaz/heat` (`hot` = eco, `critical` = direct, as its own `CHILL_TEMP_WARM`/`CHILL_TEMP_HOT`); back after the request is gone and `COOL_HOLD`.
@@ -39,6 +41,73 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 - kit: `OUI_TSV=` (a table from `scripts/lanid/make-oui.sh`) is installed to `/data/luyaz/lanid/oui.tsv` for vendor names; the public build has none.
 
 - kit: carries the lanid-parse component (LAN client identification) and installs it to `/data/luyaz/core/plugins/` as the only component; without it the core runs with identification off. `LANID_CWASM=` uses a ready-made one.
+
+## touch 1.28.3 — 2026-11-02
+
+- Home's CHILL 节点 line now tests its node once a minute like the AI and VoWiFi lines, so it shows a latency without a hand test on the node page.
+
+## touch 1.28.2 — 2026-11-02
+
+- on the speed test page, 「分层」 no longer disappears between reads of the result, which made the server list below jump up and back about once a second.
+
+## lweb 1.53.1 — 2026-11-02
+
+- speed test page: the "also test via CHILL" block shared the id `st-chill` with the top bar's CHILL icon, so a push could land on the wrong element; it has its own id now.
+
+## core 1.86.1, scripts 1.3.4 — 2026-11-02
+
+- core: hour lines are kept 14 days instead of 90 (about 50 KB a day); the battery curve takes charging from `hour_power`, as the `hour` line's flag stays on while the battery drains.
+- scripts: the long-term records are on by default; `LUYAZ_LONGTERM=0` in `core.env` turns them off.
+
+## core 1.86.0, lweb 1.53.0 — 2026-11-02
+
+- core: `GET /v2/battery/history`: the last 7 days of hourly battery readings, from the long-term hour lines already on flash (no new writes).
+- lweb: the device page draws battery curves for the last 24 hours and 7 days; hours on the charger are shaded, gaps break the line, and a device without records says why.
+
+## core 1.85.0 — 2026-11-02
+
+- during an eSIM switch (the modem stack is restarting) network writes (mode, bands, cell lock, APN, dual SIM, redial, a new search) get an immediate 409 `busy` saying why, and transactions and manual redials wait on the same Gate. Turning data or roaming off, back-to-automatic and Wi-Fi still go through; writes reopen when the switch ends, at most a minute past its deadline if it hangs.
+
+## core 1.84.0, lweb 1.52.0, sentinel 1.2.3 — 2026-11-02
+
+- core: redial follows the data card: with data on slot 2, bringing the session back now names slot 2. Measured once on a dual-SIM device: `enable:1 sub_id:1` left IPv4 down for over 40 s, `sub_id:2` had it up in 3 s.
+- core, lweb: the phone card is a setting on the dual SIM page (`PUT /api/sim/voice-slot`), no longer environment-only.
+- lweb: the PIN page and the alert number say what they mean on two cards. Alerts and doctor say "Phone SIM", not "SIM 1".
+- sentinel: rebuilt, so its alert texts honour the roaming flag from core 1.83.0.
+
+## core 1.83.1 — 2026-11-02
+
+- (no notes)
+
+## core 1.83.1 — 2026-11-02
+
+- a clock stepping back (roaming, boot before the time sync) no longer stops scenario scans or the pin retry for as long as the step. The home-exit trial runs on a monotonic clock: 30 s and 6 checks whichever way the clock moves. Before, a step back kept a bad exit on for hours and a step forward cut it to one check, a false alarm.
+
+## chill.sh — 2026-11-02
+
+- the bypass rules (priority 8999) are no longer in the set the supervisor watches, so deleting a bypass IP on the web page does not restart the proxy core. If something else removes one, the next core start puts it back.
+
+## core 1.83.0 — 2026-11-02
+
+- core: "home" is no longer assumed to be China. Home-exit auto-close, its "in home country" state and the agent's band/cell guard use the scenario `home_mcc`, else the data SIM's country. A new scenario config starts from the SIM in use.
+- core: alert SMS is also held while the data card is really roaming (`signal.true_roaming`), with or without scenarios; "send while abroad" still overrides it. Requires a new sentinel for texts it sends while the core is down.
+
+## lweb 1.51.0 — 2026-11-02
+
+- lweb: the scenario page shows and edits the home country code, and says when the SIM in use is not from it.
+
+## core 1.82.0 — 2026-11-02
+
+- the doctor's ZTE auto-update row also reports what gets around its switches, read-only: an install in progress or a `delta*` package in `/cache` (bad), and the FOTA server block missing from `/etc/hosts` on a device that set it up (warn). Nothing is written, deleted or cancelled.
+
+## core 1.81.0 — 2026-11-02
+
+- the call list carries `boot` (differs on every core start), and is always sent once when the startup call check finishes, even if unchanged.
+
+## core 1.80.2 — 2026-11-02
+
+- Operator IPv6 switch on dual-SIM devices: cid 1 can still hold the previous card's APN after data moves to another slot. The switch now reads the data card's profile and refuses to write back another card's
+- SIM slot read for `sim1`/`sim2` SMS accepts the firmware's string value; network info falls back to the data card's IMSI, not always slot 1
 
 ## touch 1.28.1 — 2026-10-31
 

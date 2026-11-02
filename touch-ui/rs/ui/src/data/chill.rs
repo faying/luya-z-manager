@@ -133,6 +133,8 @@ pub struct Chill {
     home_ms: i64,
 
     pins: Vec<chill_pin_t>,
+    /// the main selector's current member, tested with the pins: ms, 0 timed out; None = not read or DIRECT
+    main_ms: Option<i32>,
     pins_ms: i64,
 }
 impl super::background::ReadCopy for Chill {
@@ -186,6 +188,7 @@ impl super::background::ReadCopy for Chill {
             home: self.home.clone(),
             home_ms: self.home_ms,
             pins: self.pins.clone(),
+            main_ms: self.main_ms,
             pins_ms: self.pins_ms,
         }
     }
@@ -329,6 +332,7 @@ impl Default for Chill {
             home: chill_home_t { in_china: -1, roaming: -1, home_ok: -1, ms: -1, nitem: -1, on: vec![0; 3], ..Default::default() },
             home_ms: 0,
             pins: Vec::new(),
+            main_ms: None,
             pins_ms: 0,
         }
     }
@@ -1210,8 +1214,9 @@ impl Chill {
         self.pins_ms = t;
         self.load_conf();
         let Some(b) = self.get("/group") else {
-            let was = !self.pins.is_empty();
+            let was = !self.pins.is_empty() || self.main_ms.is_some();
             self.pins.clear();
+            self.main_ms = None;
             return was;
         };
         let now = group_nows(&b);
@@ -1225,19 +1230,33 @@ impl Chill {
                 // does not know provider nodes ("Resource not found", 10-29). mihomo gives up at
                 // 1200 ms, under SC_IO_MS; a member left out timed out.
                 let first = now.iter().find(|(n, _)| n == group).map(|(_, x)| x.clone()).unwrap_or_default();
-                let path = format!("/group/{}/delay?url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=1200", path_escape(group, 384));
-                self.get(&path).map_or(0, |d| {
-                    let key = trunc(&format!("\"{first}\""), SC_NAME_MAX + 4);
-                    find(&d, key.as_bytes(), 0)
-                        .and_then(|at| find_byte(&d, b':', at + key.len()))
-                        .map_or(0, |c| json::atol(&d[c + 1..]) as i32)
-                })
+                self.member_delay(group, &first)
             };
             pins.push(chill_pin_t { name: label.into(), region, ms });
         }
-        let changed = pins != self.pins;
+        // the main selector's member too: Home's 节点 line has nothing else until someone
+        // opens the node page and tests by hand
+        let member = now.iter().find(|(n, _)| n == SC_MAIN_GROUP).map(|(_, x)| x.clone()).unwrap_or_default();
+        let main_ms = (!member.is_empty() && member != "DIRECT").then(|| self.member_delay(SC_MAIN_GROUP, &member));
+        let changed = pins != self.pins || main_ms != self.main_ms;
         self.pins = pins;
+        self.main_ms = main_ms;
         changed
+    }
+
+    /// One member's ms from its group's delay test; 0 = left out of the answer, or no answer.
+    fn member_delay(&mut self, group: &str, member: &str) -> i32 {
+        let path = format!("/group/{}/delay?url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=1200", path_escape(group, 384));
+        self.get(&path).map_or(0, |d| {
+            let key = trunc(&format!("\"{member}\""), SC_NAME_MAX + 4);
+            find(&d, key.as_bytes(), 0)
+                .and_then(|at| find_byte(&d, b':', at + key.len()))
+                .map_or(0, |c| json::atol(&d[c + 1..]) as i32)
+        })
+    }
+
+    pub fn main_ms(&self) -> Option<i32> {
+        self.main_ms
     }
 
     pub fn pins(&self) -> Vec<chill_pin_t> {

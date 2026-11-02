@@ -4,6 +4,7 @@
 <div class="sim-col" data-signals="{_panel: '', _x: '', pin: '', oldpin: '', newpin: '', puk: '', nck: ''}">
 <div class="sim-head"><h1 class="nd-title">{{ shell.title() }}</h1><button type="button" class="nd-btn nd-btn--ghost nd-btn--icon" aria-label="{{ l.pick("Refresh", "刷新") }}" data-on:click="@post('/router/sim/refresh')">{{ crate::shell::icon("ArrowClockwise", false, 20, "")|safe }}</button></div>
 <p class="nd-body sim-desc">{{ l.pick("The card's state, and its PIN.", "SIM 卡的状态和 PIN。") }}</p>
+{% if dual %}<p class="t-note">{{ l.pick("Dual SIM: status and PIN below are for the card the firmware reports here, normally slot 1.", "双卡时：下面的状态和 PIN 是固件在这里报告的那张卡，通常是卡槽 1。") }}</p>{% endif %}
 {{ self.leaf("sim-status")|safe }}
 <div>
 {{ self.leaf("sim-info")|safe }}

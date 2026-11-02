@@ -363,6 +363,7 @@ impl Compat {
                 exits::spawn(self.clone());
             }
             tokio::spawn(crate::engines::manual_first::run(self.clone()));
+            tokio::spawn(home::roaming_flag_loop(self.clone()));
             // the 5 GHz channel guard (docs/designs/wifi-dfs-guard.md)
             crate::engines::wifi_dfs::spawn(self.clone());
             // eSIM receipts left on the card: re-sent on their own, bounded (SIM P1)
@@ -385,12 +386,15 @@ impl Compat {
             Sources::host(hub, control, screen),
         );
         // the engine's network transactions reserve this gate before writing (decision loop
-        // §4.3 E1); "others" = a speed test or a search/register, as the probes see it
-        let (net, speed) = (c.net.clone(), c.speed.running_flag());
+        // §4.3 E1); "others" = a speed test, a search/register or an eSIM switch
+        let (net, speed, esim) = (c.net.clone(), c.speed.running_flag(), c.esim.clone());
+        let switching = esim.clone();
+        crate::ops::engine::set_esim_switching(Arc::new(move || switching.switching()));
         crate::ops::engine::set_txn_gate(crate::ops::engine::TxnGate {
             gate: c.gate.clone(),
             others: Arc::new(move || {
                 speed.load(std::sync::atomic::Ordering::SeqCst)
+                    || esim.switching()
                     || net.ops.lock().unwrap_or_else(|e| e.into_inner()).kind
                         != luyaz_api::netinfo::OpKind::Idle
             }),
@@ -594,6 +598,7 @@ impl Compat {
                 .route("/api/device/reboot", post(device_reboot))
                 .route("/api/alerts/read", post(alerts_read))
                 .route("/api/alerts/sms", axum::routing::put(alerts_sms))
+                .route("/api/sim/voice-slot", axum::routing::put(sim_voice_slot))
                 // 8d-1b: the firmware's signal detection (modem writes: only with writes on)
                 .route("/api/cell/signal-detect/start", post(cell_detect::start))
                 .route("/api/cell/signal-detect/stop", post(cell_detect::stop))
@@ -783,6 +788,23 @@ async fn alerts_sms(State(c): State<Compat>, body: Bytes) -> Response {
     })
     .await
     .unwrap_or_else(|_| reply(500, json!({"ok": false, "error": "internal"})))
+}
+
+/// PUT /api/sim/voice-slot {slot}: which slot takes calls and SMS on a dual-SIM device.
+async fn sim_voice_slot(body: Bytes) -> Response {
+    let slot = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v["slot"].as_u64())
+        .and_then(|s| u8::try_from(s).ok());
+    let Some(slot) = slot else {
+        return reply(400, json!({"ok": false, "error": "slot must be 1 or 2"}));
+    };
+    match tokio::task::spawn_blocking(move || crate::ops::dual_sim::set_voice_slot(slot)).await {
+        Ok(Ok(())) => reply(200, json!({"ok": true, "data": {"slot": slot}})),
+        Ok(Err(e)) if e.starts_with("slot") => reply(400, json!({"ok": false, "error": e})),
+        Ok(Err(e)) => reply(500, json!({"ok": false, "error": e})),
+        Err(_) => reply(500, json!({"ok": false, "error": "internal"})),
+    }
 }
 
 /// POST /api/device/reboot (the agent's `device_ext::device_reboot`): `sync`, then

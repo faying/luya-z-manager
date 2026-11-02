@@ -83,6 +83,8 @@ pub struct Dual {
     pub smart: bool,
     pub switching: bool,
     pub slots: Vec<Slot>,
+    /// The slot that takes calls and SMS.
+    pub voice: u8,
 }
 
 fn sim(st: &St) -> Option<(&Value, bool)> {
@@ -105,6 +107,7 @@ pub fn parse(d: &Value) -> Option<Dual> {
         active: d["active_slot"].as_u64().unwrap_or(0) as u8,
         smart: d["smart"] == true,
         switching: d["switching"] == true,
+        voice: d["voice_slot"].as_u64().unwrap_or(1) as u8,
         slots: d["slots"]
             .as_array()
             .map(|a| {
@@ -535,6 +538,7 @@ struct Page {
     l: Lang,
     leaves: Vec<(String, String)>,
     /// The form starts at the current setting.
+    voice: u8,
     dm: &'static str,
     ds: String,
     dsm: bool,
@@ -568,6 +572,7 @@ pub async fn page(State(app): State<Shared>, req: axum::extract::Request) -> Res
         shell,
         l,
         leaves: leaves(&app, l),
+        voice: d.as_ref().map_or(1, |d| d.voice),
         dm: if d.as_ref().is_some_and(|d| d.dual) { "dual" } else { "single" },
         ds: d.as_ref().map_or("1".into(), |d| d.active.max(1).to_string()),
         dsm: d.as_ref().is_some_and(|d| d.dual && d.smart),
@@ -577,6 +582,33 @@ pub async fn page(State(app): State<Shared>, req: axum::extract::Request) -> Res
     .render()
     .unwrap();
     crate::assets::maybe_gzip(&headers, "text/html; charset=utf-8", html.into_bytes(), "no-store")
+}
+
+#[derive(serde::Deserialize)]
+pub struct VoiceQuery {
+    slot: u8,
+}
+
+/// The phone card's slot: a saved setting, read at the next call, nothing on the link changes.
+pub async fn voice_set(State(app): State<Shared>, Query(q): Query<VoiceQuery>, req: axum::extract::Request) -> impl IntoResponse {
+    let ctx = crate::topbar::Ctx::of_request(&req, PATH);
+    let l = ctx.lang;
+    let who = crate::agent::Caller::of(&app, &req);
+    let remote = ctx.remote;
+    let pending = area(l, remote, None, &write::Phase::Idle);
+    write::respond(pending, async move {
+    let sent = crate::agent::put_raw(&app, &who, "/api/sim/voice-slot", &json!({"slot": q.slot})).await;
+    let o = match sent {
+        Ok(_) if matches!(q.slot, 1 | 2) => write::Outcome::Applied(
+            match l {
+                Lang::En => format!("Calls and SMS now use {}", slot_name(q.slot, l)),
+                Lang::Zh => format!("电话和短信改用{}", slot_name(q.slot, l)),
+            },
+        ),
+        _ => write::Outcome::Failed(l.pick("Could not save the setting", "设置没有保存").into()),
+    };
+    area(l, remote, None, &write::Phase::Done(o))
+    })
 }
 
 pub async fn events(State(app): State<Shared>, Query(q): Query<StreamQuery>, req: axum::extract::Request) -> impl IntoResponse {

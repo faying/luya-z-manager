@@ -96,6 +96,7 @@ pub fn routes() -> Router<Shared> {
         .route("/router/scenario/ask/scan", post(ask_scan))
         .route("/router/scenario/ask/wifi", post(ask_wifi))
         .route("/router/scenario/ask/timing", post(ask_timing))
+        .route("/router/scenario/ask/home", post(ask_home))
         .route("/router/scenario/ask/defaults", post(ask_defaults))
         .route("/router/scenario/set", post(set))
         .route("/router/scenario/cancel", post(cancel));
@@ -249,6 +250,59 @@ pub(crate) fn gone(l: Lang) -> String {
         "这个情景已经不在了",
     )
     .into()
+}
+
+struct HomeMcc(String);
+
+impl Edit for HomeMcc {
+    fn apply(&self, cfg: &mut Value, _: Option<&Value>, _: Lang) -> Result<(), String> {
+        cfg["home_mcc"] = json!(self.0);
+        Ok(())
+    }
+    fn holds(&self, cfg: &Value) -> bool {
+        cfg["home_mcc"] == self.0.as_str()
+    }
+    fn pending(&self, l: Lang) -> String {
+        l.pick("Saving the home country…", "正在保存本国代码…").into()
+    }
+    fn applied(&self, l: Lang) -> String {
+        l.pick("Home country saved", "本国代码已保存").into()
+    }
+}
+
+/// `Ok` = three digits and no scenario fires on it (the core refuses that too).
+fn home_mcc_check(st: &Value, sent: &Value, l: Lang) -> Result<String, String> {
+    let m = sent["_hm"].as_str().unwrap_or("").trim().to_owned();
+    if m.len() != 3 || !m.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(l.pick("A country code is three digits", "国家代码是三位数字").into());
+    }
+    let clash = st["config"]["scenarios"].as_array().is_some_and(|a| {
+        a.iter().any(|s| s["detect"]["mccs"].as_array().is_some_and(|v| v.iter().any(|x| x == m.as_str())))
+    });
+    if clash {
+        return Err(l
+            .pick("A scenario is set to fire on this country; change that one first", "有情景设为在这个国家触发，请先改那个情景")
+            .into());
+    }
+    Ok(m)
+}
+
+async fn ask_home(State(app): State<Shared>, req: axum::extract::Request) -> Response {
+    ask_with(&app, req, "sc-now", true, |st, sent, l, _| {
+        let m = home_mcc_check(st, sent, l)?;
+        let what = t!(l,
+            "A SIM from any other country than {m} now counts as abroad: abroad scenarios run and alert SMS waits unless allowed.",
+            "之后不是 {m} 的卡都算在国外：国外情景会启动，告警短信默认不发。");
+        Ok((
+            Kind::Edit(Box::new(HomeMcc(m))),
+            inline(
+                l.pick("Home country", "本国").into(),
+                what,
+                l.pick("Confirm: save the home country", "确认：保存本国代码").into(),
+            ),
+        ))
+    })
+    .await
 }
 
 struct AddEntry {
@@ -630,6 +684,8 @@ pub struct View {
     pub last_switch: String,
     pub last_scan: String,
     pub sim_mcc: Option<String>,
+    pub home_mcc: String,
+    pub sim_differs: bool,
     pub enabled: bool,
     pub eng_url: String,
     // pin
@@ -870,6 +926,8 @@ pub fn view(g: &Got, l: Lang, sid: &str) -> View {
         last_switch: crate::sms_forward::device_time(s["last_switch"].as_i64().unwrap_or(0)),
         last_scan: crate::sms_forward::device_time(s["last_scan"].as_i64().unwrap_or(0)),
         sim_mcc: s["sim_mcc"].as_str().map(str::to_owned),
+        home_mcc: s["config"]["home_mcc"].as_str().unwrap_or("").to_owned(),
+        sim_differs: s["sim_mcc"].as_str().is_some_and(|m| s["config"]["home_mcc"].as_str() != Some(m)),
         enabled,
         eng_url: format!("{PATH}/ask/engine?on={}", !enabled),
         pin_name: pin_id.as_deref().map(|p| name_by_id(s, p, l)),
@@ -1816,6 +1874,16 @@ mod tests {
         // a scenario without a Wi-Fi action counts as on
         cfg["scenarios"][1]["actions"] = json!([]);
         assert!(w("away", true).holds(&cfg));
+    }
+
+    #[test]
+    fn home_mcc_needs_three_digits_and_no_clashing_scenario() {
+        let st = json!({"config":{"scenarios":[{"detect":{"mccs":["440"]}}]}});
+        let f = |m: &str| home_mcc_check(&st, &json!({"_hm": m}), Lang::En);
+        assert_eq!(f(" 208 ").unwrap(), "208");
+        assert!(f("20").is_err());
+        assert!(f("abc").is_err());
+        assert!(f("440").is_err());
     }
 
     #[test]

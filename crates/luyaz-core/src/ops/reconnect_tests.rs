@@ -40,7 +40,7 @@ fn recorder(calls: &Calls, fail_enable: bool) -> impl Fn(Value) -> std::future::
 async fn redial_disables_both_then_enables_both_and_clears_the_marker() {
     let m = tmp("ok");
     let calls = Calls::default();
-    let r = redial_at(&m, DOWN, recorder(&calls, false)).await;
+    let r = redial_at(&m, DOWN, 1, recorder(&calls, false)).await;
     assert!(r.is_ok());
     assert_eq!(*calls.lock().unwrap(), [(1, 0), (2, 0), (1, 1), (2, 1)]);
     assert!(!m.exists());
@@ -50,7 +50,7 @@ async fn redial_disables_both_then_enables_both_and_clears_the_marker() {
 async fn a_failed_enable_is_retried_and_the_marker_stays_for_recovery() {
     let m = tmp("fail");
     let calls = Calls::default();
-    let r = redial_at(&m, DOWN, recorder(&calls, true)).await;
+    let r = redial_at(&m, DOWN, 1, recorder(&calls, true)).await;
     assert!(r.is_err());
     // each enable tried twice; the guard then re-enables synchronously and drops the marker
     assert_eq!(
@@ -64,7 +64,7 @@ async fn a_failed_enable_is_retried_and_the_marker_stays_for_recovery() {
 async fn no_marker_no_change() {
     let m = std::env::temp_dir().join("luyaz-reconnect-missing-dir/x/reconnect.inflight");
     let calls = Calls::default();
-    let r = redial_at(&m, DOWN, recorder(&calls, false)).await;
+    let r = redial_at(&m, DOWN, 1, recorder(&calls, false)).await;
     assert!(r.is_err());
     assert!(calls.lock().unwrap().is_empty(), "nothing touched");
 }
@@ -73,7 +73,7 @@ async fn no_marker_no_change() {
 async fn a_cancelled_redial_leaves_nothing_disabled() {
     let m = tmp("cancel");
     let calls = Calls::default();
-    let fut = redial_at(&m, DOWN, recorder(&calls, false));
+    let fut = redial_at(&m, DOWN, 1, recorder(&calls, false));
     // cancelled while down (core stopping, task aborted)
     let _ = tokio::time::timeout(Duration::from_secs(1), fut).await;
     assert_eq!(*calls.lock().unwrap(), [(1, 0), (2, 0)]);
@@ -119,4 +119,27 @@ fn bearer_needs_an_address_and_the_route() {
     assert!(!bearer_up("", ll, "", r6));
     // another rmnet does not count
     assert!(!bearer_up(v4, "", "1.1.1.1 via 192.0.2.1 dev rmnet_data9 src 192.0.2.2\n", ""));
+}
+
+#[test]
+fn enable_names_the_data_cards_slot_and_defaults_to_one() {
+    assert_eq!(enable_sub(&json!({"current_sim_slot": "2"})), 2);
+    assert_eq!(enable_sub(&json!({"current_sim_slot": 2})), 2);
+    assert_eq!(enable_sub(&json!({"current_sim_slot": "1"})), 1);
+    assert_eq!(enable_sub(&json!({"current_sim_slot": ""})), 1);
+    assert_eq!(enable_sub(&json!({})), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn on_slot_two_disable_stays_one_and_enable_uses_two() {
+    let m = tmp("slot2");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let s = seen.clone();
+    redial_at(&m, DOWN, 2, move |a: Value| {
+        s.lock().unwrap().push((a["enable"].as_u64().unwrap(), a["sub_id"].as_u64().unwrap()));
+        std::future::ready(Ok(Value::Null))
+    })
+    .await
+    .unwrap();
+    assert_eq!(*seen.lock().unwrap(), [(0, 1), (0, 1), (1, 2), (1, 2)]);
 }

@@ -876,6 +876,7 @@ pub(crate) fn sim_dual(sim: &Value, uci_sets: &[BTreeMap<String, String>]) -> Op
         active_slot,
         switching: string(sim, "switch_card_status") == "0",
         slots,
+        voice_slot: i64::from(crate::ops::dual_sim::voice_slot()),
         smart_rule: smart_rule(uci_sets),
     })
 }

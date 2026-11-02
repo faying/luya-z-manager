@@ -1392,6 +1392,19 @@ pub fn dialled_on_card<'a>(auto_mode: bool, dialled: &'a Value, auto: &'a Value,
     arr(auto).iter().find(|p| truthy(&p["isEnable"])).unwrap_or(dialled)
 }
 
+/// `get_apn_at_cid` really is a profile of the data card: it is listed for this card. After data
+/// moves to another slot it can still hold the previous card's profile, which must not be
+/// written back.
+pub fn at_cid_on_card(dialled: &Value, auto: &Value, manual: &Value) -> bool {
+    let id = dialled["profileId"].as_str().unwrap_or("");
+    !id.is_empty()
+        && [auto, manual].iter().any(|v| {
+            v["apnListArray"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|p| p["profileId"].as_str() == Some(id)))
+        })
+}
+
 /// Why the neighbour list is empty: the modem only reports LTE neighbours, and none in SA.
 pub const NBR_SA: &str = "5G 独立组网（SA）下基带不报邻区";
 pub const NBR_SA_EN: &str = "In 5G SA the modem reports no neighbours";
@@ -2005,3 +2018,20 @@ pub mod iw;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod at_cid_tests {
+    use super::at_cid_on_card;
+    use serde_json::json;
+
+    #[test]
+    fn another_cards_profile_is_not_on_this_card() {
+        let auto = json!({"apnListArray":[{"profileId":"auto108990"}]});
+        let manual = json!({"apnListArray":[{"profileId":"manu2"}]});
+        let on = |id| at_cid_on_card(&json!({"profileId":id}), &auto, &manual);
+        assert!(!on("auto2900"));
+        assert!(!on(""));
+        assert!(on("auto108990"));
+        assert!(on("manu2"));
+    }
+}

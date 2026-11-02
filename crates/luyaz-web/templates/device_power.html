@@ -6,6 +6,7 @@
 <div class="pg-col">
 {{ self.leaf("dc-status")|safe }}
 {{ self.leaf("dc-battery")|safe }}
+{{ self.leaf("dc-history")|safe }}
 <section aria-labelledby="dc-charge-t"><h2 id="dc-charge-t" class="nd-group-title">{{ l.pick("Charge Limit", "充电限制") }}</h2>
 {{ self.leaf("dc-form")|safe }}
 <div class="mt-2 px-1">{{ charge_op|safe }}</div>

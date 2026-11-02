@@ -183,6 +183,23 @@ async fn group_now(c: &Compat, secret: &str, group: &str) -> Option<String> {
     v.get("now").and_then(Value::as_str).map(str::to_string)
 }
 
+/// Keeps the alert sender's `roaming` flag on /data in step with `signal.true_roaming`. Unknown or
+/// stale leaves it as it is.
+pub(crate) async fn roaming_flag_loop(c: Compat) {
+    let alerts = luyaz_api::alerts::Alerts::at(&c.path(luyaz_api::alerts::DIR));
+    let mut last = None;
+    loop {
+        let now = where_now(&c).1;
+        if now.is_some() && now != last {
+            match alerts.set_flag(luyaz_api::alerts::sms::ROAMING_FLAG, now == Some(true)) {
+                Ok(()) => last = now,
+                Err(e) => eprintln!("[alerts] could not update the roaming flag: {e}"),
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    }
+}
+
 /// (serving_mcc, true_roaming) from u60d's own signal block; unknown when stale.
 fn where_now(c: &Compat) -> (Option<i64>, Option<bool>) {
     let Some(sig) = c
@@ -237,6 +254,9 @@ pub async fn get(State(c): State<Compat>) -> Response {
     };
     let around = ch::Around {
         serving_mcc,
+        home_mcc: crate::engines::scenario::home_mcc_or(
+            c.src.hub.as_ref().and_then(|h| h.view("signal")).and_then(|v| v.data.get("home_mcc").and_then(Value::as_i64)),
+        ),
         true_roaming,
         blocked: mode.blocked(),
         sites,

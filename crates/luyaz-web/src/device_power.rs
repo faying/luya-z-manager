@@ -5,6 +5,7 @@
 //! ```text
 //!  agent (tab's own session; u60d first for the 5c paths, else "not mine" → the agent)
 //!   /api/battery               every 5 s   ─▶ dc-battery (details + estimate; plugged = hub battery block)
+//!   /battery/history           every 10 min ─▶ dc-history (the 24-hour and 7-day curves)
 //!   /api/device/charge-control every 30 s  ─▶ dc-status, dc-cap, dc-modes (stop charging), dc-form (once)
 //!   POST /api/device/power-save, /api/device/fast-boot
 //!                              on open, after a write, on 重试 ─▶ dc-modes
@@ -51,6 +52,8 @@ const POWER_SAVE: &str = "/api/device/power-save";
 const FAST_BOOT: &str = "/api/device/fast-boot";
 const BATTERY_EVERY: Duration = Duration::from_secs(5);
 const CHARGE_EVERY: Duration = Duration::from_secs(30);
+/// The curve gains a point an hour.
+const HISTORY_EVERY: Duration = Duration::from_secs(600);
 
 /// Bumped by every write and every 重试: a stream re-reads the one-shot sources when it moved.
 static GEN: AtomicU64 = AtomicU64::new(0);
@@ -119,6 +122,7 @@ pub struct Got {
     pub bat: Src,
     pub ps: Src,
     pub fb: Src,
+    pub hist: Src,
 }
 
 /// "1"/"0" (or 1/0/true/false) → bool; a missing key or an odd shape → unknown.
@@ -177,6 +181,7 @@ pub struct View {
     // battery details: None = nothing yet; Some(Err(text, retry)) = said; Some(Ok(rows))
     pub bat: Option<Result<Vec<Row>, (String, bool)>>,
     pub bat_stale: bool,
+    pub history: crate::battery_history::History,
     pub form: String,
     pub modes: Vec<ModeRow>,
     pub mode_err: Option<String>,
@@ -645,6 +650,7 @@ pub fn view(app: &Shared, g: &Got, form: &str, l: Lang) -> View {
         cap,
         bat,
         bat_stale: g.bat.stale(),
+        history: crate::battery_history::view(g.hist.v.as_ref(), g.hist.err.is_some(), l),
         form: form.to_owned(),
         modes,
         mode_err,
@@ -672,6 +678,7 @@ pub struct Poll {
     first: bool,
     last_charge: Option<Instant>,
     last_bat: Option<Instant>,
+    last_hist: Option<Instant>,
     /// The form is sent once, from the first answer.
     form: Option<String>,
 }
@@ -686,6 +693,7 @@ impl Poll {
             first: true,
             last_charge: None,
             last_bat: None,
+            last_hist: None,
             form: None,
         }
     }
@@ -705,8 +713,9 @@ impl Polled for Poll {
             due(self.last_bat, BATTERY_EVERY),
             moved || self.first,
         );
+        let hist = due(self.last_hist, HISTORY_EVERY);
         let who = &self.who;
-        let (c, b, p, f) = tokio::join!(
+        let (c, b, p, f, h) = tokio::join!(
             async {
                 if charge {
                     Some(crate::agent::get(app, who, CHARGE).await)
@@ -735,7 +744,18 @@ impl Polled for Poll {
                     None
                 }
             },
+            async {
+                if hist {
+                    Some(crate::agent::get(app, who, "/battery/history").await)
+                } else {
+                    None
+                }
+            },
         );
+        if let Some(r) = h {
+            self.last_hist = Some(now);
+            self.got.hist.put(r);
+        }
         if let Some(r) = c {
             self.last_charge = Some(now);
             self.got.charge.put(r);

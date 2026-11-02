@@ -125,6 +125,10 @@ impl Host for U60dHost {
             eprintln!("[home_exit] could not raise {kind}: {e}");
         }
     }
+    fn home_mcc(&self) -> Option<i64> {
+        let sim = self.block("signal").and_then(|s| s.get("home_mcc").and_then(Value::as_i64));
+        super::scenario::home_mcc_or(sim)
+    }
     fn where_now(&self) -> (Option<i64>, Option<bool>) {
         let Some(sig) = self.block("signal") else {
             return (None, None);

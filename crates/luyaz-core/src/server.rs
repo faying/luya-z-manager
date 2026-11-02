@@ -519,6 +519,7 @@ impl App {
             .route("/v2/netrec/ring", get(netrec_ring))
             .route("/v2/latency/direct", get(latency_direct))
             .route("/v2/timeline/today", get(timeline_today))
+            .route("/v2/battery/history", get(battery_history))
             .route("/v2/versions/check", post(versions_check));
         // M6b: the screen's agent-shaped API (`/v2/api/...`, compat's `/api/...` routes), loopback
         // listener only. Nested at `/v2`: the routes above are static and win over the nest's tail.
@@ -562,6 +563,7 @@ async fn starting_gate(State(app): State<App>, request: Request, next: Next) -> 
             | "/v2/netrec/ring"
             | "/v2/latency/direct"
             | "/v2/timeline/today"
+            | "/v2/battery/history"
             | "/state"
             | "/events"
             | "/auth/login"
@@ -1002,6 +1004,15 @@ async fn latency_direct(State(app): State<App>) -> Json<Value> {
 /// long-term layer is off. Reads files only.
 async fn timeline_today(State(app): State<App>) -> Json<Value> {
     let v = tokio::task::spawn_blocking(move || app.inner.timeline.data())
+        .await
+        .unwrap_or(Value::Null);
+    Json(json!({"ok": true, "data": v}))
+}
+
+/// `GET /v2/battery/history` (longterm/today.rs): `{ok, data}`; `data.available` false when the
+/// long-term layer is off.
+async fn battery_history(State(app): State<App>) -> Json<Value> {
+    let v = tokio::task::spawn_blocking(move || app.inner.timeline.battery())
         .await
         .unwrap_or(Value::Null);
     Json(json!({"ok": true, "data": v}))

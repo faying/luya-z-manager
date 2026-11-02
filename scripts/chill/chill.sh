@@ -1002,10 +1002,11 @@ wan_is_cellular() {
 # ── 运行中的规则自愈 ────────────────────────────────────────────────────────
 # mihomo 只在 TUN 启动时建 9000 段 ip rule 和 table 2022，被别人删了（重拨、原厂
 # 重刷路由）不会自己补；check_rules_drift 故意不看自管区间，这里单独看。
-# 不写死 sing-tun 规则的样子：核心起来后把自管区间（含 8998/8999）照原样记下来，
+# 不写死 sing-tun 规则的样子：核心起来后把自管区间（含 8998）照原样记下来，
 # 之后每分钟比一次「快照里有、现在没有」。只看 v4：局域网 IPv6 关着。
+# 绕行 8999 不算：网页随时增删（luyaz-core bypass_set），删一条不该重启核心；被外部删了下次启动补。
 owned_rules() {
-  ip rule show 2>/dev/null | awk -F: -v lo="$RULE_LO" -v hi="$RULE_HI" '$1+0>=lo && $1+0<=hi'
+  ip rule show 2>/dev/null | awk -F: -v lo="$RULE_LO" -v hi="$RULE_HI" -v by="$BYPASS_PRIO" '$1+0>=lo && $1+0<=hi && $1+0!=by'
 }
 # 返回 1 = 缺了（快照里的规则不见了，或 table 2022 里没有 chill0 的路由）。
 # 还没有像样的快照（TUN 规则刚起来）就现在记，这一轮算好。

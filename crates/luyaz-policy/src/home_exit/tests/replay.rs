@@ -142,6 +142,7 @@ fn random_steps_replay_exactly() {
                     obs: Obs {
                         now,
                         serving_mcc: mcc,
+                        home_mcc: Some(460),
                         env,
                         clients,
                         screen_on,
@@ -189,6 +190,7 @@ fn a_different_apply_is_a_divergence() {
         obs: Obs {
             now: 200,
             serving_mcc: Some(440),
+            home_mcc: Some(460),
             env: m.p.items,
             clients: Some(0),
             ..Default::default()

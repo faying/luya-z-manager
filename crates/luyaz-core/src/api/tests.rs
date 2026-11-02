@@ -359,7 +359,7 @@ async fn chill_home_as_the_agent_renders_it() {
     ));
     hub.record(
         "signal",
-        Ok(json!({"serving_mcc": 440, "true_roaming": true, "bars": 3})),
+        Ok(json!({"serving_mcc": 440, "home_mcc": 460, "true_roaming": true, "bars": 3})),
         tokio::time::Instant::now(),
     );
     let src = Sources {
@@ -655,6 +655,9 @@ mod home_exit_engine {
     struct Fast(AtomicU64);
     impl Clock for Fast {
         fn now(&self) -> u64 {
+            self.0.load(Ordering::SeqCst)
+        }
+        fn mono(&self) -> u64 {
             self.0.load(Ordering::SeqCst)
         }
         fn sleep(&self, secs: u64) {

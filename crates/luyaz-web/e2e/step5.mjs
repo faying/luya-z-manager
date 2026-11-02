@@ -136,7 +136,7 @@ const PAGES = {
       // roaming (the mock's default): the core only runs coarse; the cost says so, CHILL can't be added
       await p.click("#st-status .nd-btn--primary");
       ok(/漫游中：只粗测 5 秒、最多 30 MB/.test(await p.textContent("#st-start-confirm")), `roaming cost: ${(await p.textContent("#st-start-confirm")).trim()}`);
-      ok(await p.isDisabled("#st-chill [role=switch]") && /漫游中只粗测/.test(await p.textContent("#st-chill .nd-row__text")), "CHILL switch off while roaming");
+      ok(await p.isDisabled("#st-via-chill [role=switch]") && /漫游中只粗测/.test(await p.textContent("#st-chill .nd-row__text")), "CHILL switch off while roaming");
       await p.click("#st-start-confirm .nd-btn--confirm");
       await done(/完成/, 12000);
       ok(/粗测 · 漫游中只测 5 秒/.test(await live()), `rough result: ${await live()}`);
@@ -180,12 +180,12 @@ const PAGES = {
       await p.waitForTimeout(1500);
       ok(/已取消/.test(await state()) && !(await p.isDisabled("#st-server-select")), `after stop: ${await state()}, server choice enabled`);
       // 「也测经 CHILL」 for one run
-      await p.click("#st-chill [role=switch]");
-      ok(await p.getAttribute("#st-chill [role=switch]", "aria-checked") === "true" && /1\.15 GB/.test(await p.textContent("#st-cost")), "CHILL on: the cost grows");
+      await p.click("#st-via-chill [role=switch]");
+      ok(await p.getAttribute("#st-via-chill [role=switch]", "aria-checked") === "true" && /1\.15 GB/.test(await p.textContent("#st-cost")), "CHILL on: the cost grows");
       await p.click("#st-status .nd-btn--primary");
       await p.click("#st-start-confirm .nd-btn--confirm");
       await p.waitForFunction(() => /设备已接受/.test(document.querySelector("#st-op")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
-      ok(await p.getAttribute("#st-chill [role=switch]", "aria-checked") === "false", "CHILL back to off after the start");
+      ok(await p.getAttribute("#st-via-chill [role=switch]", "aria-checked") === "false", "CHILL back to off after the start");
       await p.waitForFunction(() => /^\s*●?完成/.test(document.querySelector("#st-status .nd-status__state")?.textContent ?? ""), null, { timeout: 25000 }).catch(() => {});
       ok(/完成/.test(await state()), `second run completes: ${await state()}`);
       ok(/完成 · ▲慢在单连接、下载时卡/.test((await live()).replace(/\s+/g, " ")), `conclusion announced: ${await live()}`);
@@ -200,7 +200,7 @@ const PAGES = {
       await scenario("home-network,speed-v1");
       await p.reload();
       await ready();
-      ok(/512 MB/.test(await p.textContent("#st-cost")) && !(await p.$("#st-chill [role=switch]")), "old core: old cost line, no CHILL switch");
+      ok(/512 MB/.test(await p.textContent("#st-cost")) && !(await p.$("#st-via-chill [role=switch]")), "old core: old cost line, no CHILL switch");
       await p.click("#st-status .nd-btn--primary");
       await p.click("#st-start-confirm .nd-btn--confirm");
       await done(/完成/, 25000);

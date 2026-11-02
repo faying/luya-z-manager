@@ -516,12 +516,13 @@ async fn redial(params: &Value) -> Outcome {
         Ok(None) => vec![1, 2],
         Err(e) => return Outcome::Invalid(e),
     };
+    let sub = state::sim_info().await.map_or(1, |s| crate::ops::reconnect::enable_sub(&s));
     let mut last = Value::Null;
     for t in types {
         match state::ubus(
             "zwrt_qcmap_cli",
             "set_qcliiface",
-            json!({"source_module":"zte_topsw_data","type":t,"enable":1,"sub_id":1}),
+            json!({"source_module":"zte_topsw_data","type":t,"enable":1,"sub_id":sub}),
         )
         .await
         {
@@ -543,6 +544,21 @@ async fn apn_pdp_type(params: &Value) -> Outcome {
         Ok(v) => v,
         Err(e) => return Outcome::Failed(format!("read APN failed: {e}")),
     };
+    // cid 1 可能还是上一张卡的 APN（双卡换过上网卡后）：绝不把它写回去
+    let slot2 = match state::sim_info().await {
+        Ok(sim) => crate::project::snapshot::data_on_slot2(&sim),
+        Err(e) => return Outcome::Failed(format!("read SIM failed: {e}")),
+    };
+    let lists = (
+        state::ubus("zwrt_apn_object", "get_auto_apn_list", crate::project::snapshot::apn_list_args(slot2)).await,
+        state::ubus("zwrt_apn_object", "get_manu_apn_list", json!({})).await,
+    );
+    let (Ok(auto), Ok(manual)) = lists else {
+        return Outcome::Failed("read APN lists failed".into());
+    };
+    if !luyaz_api::netinfo::at_cid_on_card(&apn, &auto, &manual) {
+        return Outcome::Failed("the APN on cid 1 belongs to another SIM; not changing it".into());
+    }
     let pdp = if enabled { 3 } else { 1 };
     let s = |k: &str| apn.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let n = |k: &str, d: i64| apn.get(k).and_then(Value::as_i64).unwrap_or(d);
@@ -564,10 +580,12 @@ async fn apn_pdp_type(params: &Value) -> Outcome {
         return Outcome::Failed(format!("set APN failed: {e}"));
     }
     // 正在用的连接：type 2 是 IPv6 那条腿；失败不算（PDP 类型已改，下次拨号生效）
+    // 打开要写上网卡的槽（reconnect::enable_sub），关闭 sub_id 1 两槽都实测有效
+    let sub = if enabled { crate::ops::reconnect::enable_sub(&state::sim_info().await.unwrap_or_default()) } else { 1 };
     let _ = state::ubus(
         "zwrt_qcmap_cli",
         "set_qcliiface",
-        json!({"source_module":"zte_topsw_data","type":2,"enable": if enabled {1} else {0},"sub_id":1}),
+        json!({"source_module":"zte_topsw_data","type":2,"enable": if enabled {1} else {0},"sub_id":sub}),
     )
     .await;
     Outcome::Ok(json!({"ipv6_enabled": enabled, "pdp_type": pdp}))

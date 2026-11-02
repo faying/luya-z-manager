@@ -91,16 +91,13 @@ pub fn by_instruction(body: &Value) -> bool {
     body.get("instruction").and_then(Value::as_str) == Some("owner")
 }
 
-/// 主人的本国（中国）的国家码；和情景引擎默认的 `home_mcc` 一样。
-const HOME_MCC: i64 = 460;
-
 /// D-g 的判定：漫游中、注册在外国网络（插当地卡也算，用户 10-23 定）、或读不到，都算敏感；
 /// 不看「漫游不算贵」。
-pub fn link_sensitive(roaming: Option<bool>, rmcc: Option<i64>) -> Result<(), String> {
+pub fn link_sensitive(roaming: Option<bool>, rmcc: Option<i64>, home: Option<i64>) -> Result<(), String> {
     match (roaming, rmcc) {
         (Some(true), _) => Err("roaming: band and cell changes go to the owner on the web page".into()),
         (None, _) => Err("cannot read whether the device is roaming".into()),
-        (_, Some(HOME_MCC)) => Ok(()),
+        (_, Some(m)) if m > 0 && home.is_none_or(|h| h == m) => Ok(()),
         (_, Some(m)) if m > 0 => Err("abroad: band and cell changes go to the owner on the web page".into()),
         _ => Err("cannot read which country's network the device is on".into()),
     }
@@ -115,7 +112,8 @@ pub async fn link_sensitivity() -> Result<(), String> {
         Value::String(m) => m.trim().parse().ok(),
         _ => None,
     });
-    link_sensitive(net.and_then(super::roaming), rmcc)
+    // no home known: not roaming means the network is the SIM's own country
+    link_sensitive(net.and_then(super::roaming), rmcc, crate::engines::scenario::home_mcc_or(None))
 }
 
 /// `tailscale status --json` 说本机在线：后台在跑、本节点连着控制面。读不到、不认识都算不在线。
@@ -671,13 +669,17 @@ mod tests {
         assert!(!by_instruction(&json!({})));
         assert!(!by_instruction(&json!({"instruction": "agent"})));
         assert!(!by_instruction(&json!({"instruction": true})));
-        assert_eq!(link_sensitive(Some(false), Some(460)), Ok(()));
-        assert!(link_sensitive(Some(true), Some(460)).is_err());
-        assert!(link_sensitive(None, Some(460)).is_err());
+        assert_eq!(link_sensitive(Some(false), Some(460), Some(460)), Ok(()));
+        // a French owner at home on Orange is not "abroad"; nor is an unknown home
+        assert_eq!(link_sensitive(Some(false), Some(208), Some(208)), Ok(()));
+        assert_eq!(link_sensitive(Some(false), Some(208), None), Ok(()));
+        assert!(link_sensitive(Some(false), Some(460), Some(208)).is_err());
+        assert!(link_sensitive(Some(true), Some(460), Some(460)).is_err());
+        assert!(link_sensitive(None, Some(460), Some(460)).is_err());
         // 国外插当地卡：不漫游，但注册在外国网络
-        assert!(link_sensitive(Some(false), Some(440)).is_err());
-        assert!(link_sensitive(Some(false), Some(0)).is_err());
-        assert!(link_sensitive(Some(false), None).is_err());
+        assert!(link_sensitive(Some(false), Some(440), Some(460)).is_err());
+        assert!(link_sensitive(Some(false), Some(0), Some(460)).is_err());
+        assert!(link_sensitive(Some(false), None, Some(460)).is_err());
         assert!(tailnet_online(&json!({"BackendState": "Running", "Self": {"Online": true}})));
         assert!(!tailnet_online(&json!({"BackendState": "Running", "Self": {"Online": false}})));
         assert!(!tailnet_online(&json!({"BackendState": "NeedsLogin", "Self": {"Online": true}})));

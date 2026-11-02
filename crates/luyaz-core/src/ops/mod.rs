@@ -684,7 +684,8 @@ impl engine::Device for UbusDevice {
         if spec.item == DATA_SESSION {
             // 闭环专用（`ops::reconnect`）：同样拿着写锁写，拿不到就不写
             let r = write_lock::run(&self.exec, async move {
-            reconnect::redial(|a| async move {
+            let sub = crate::state::sim_info().await.map_or(1, |s| reconnect::enable_sub(&s));
+            reconnect::redial(sub, |a| async move {
                 crate::executor::call("zwrt_qcmap_cli", "set_qcliiface", &a)
                     .await
                     .map_err(|e| e.to_string())

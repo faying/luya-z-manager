@@ -83,6 +83,12 @@ pub struct Cfg {
     uid_want: String,
     lweb_bin: String,
     overlay_rcd: String,
+    /// FOTA 封锁（`# u60-cloud-fota` 行）所在的 hosts；`cloud_dir` 在才算机主封过
+    hosts: String,
+    cloud_dir: String,
+    /// 原厂下载升级包的地方、正在安装的标记
+    cache_dir: String,
+    fota_busy: String,
     daemon_conf: String,
     core_url: String,
     ip: Vec<String>,
@@ -163,6 +169,10 @@ impl Cfg {
             uid_want: s("DOC_UID_WANT", "/tmp/luyaz/screen.want"),
             lweb_bin: s("DOC_LWEB_BIN", "/data/luyaz/luyaz-web"),
             overlay_rcd: s("DOC_OVERLAY_RCD", "/zteoverlay/etc-upper_a/rc.d"),
+            hosts: s("DOC_HOSTS", "/etc/hosts"),
+            cloud_dir: s("DOC_CLOUD_DIR", "/data/u60-cloud"),
+            cache_dir: s("DOC_CACHE_DIR", "/cache"),
+            fota_busy: s("DOC_FOTA_BUSY", "/tmp/fota_install_processing"),
             daemon_conf: s("DOC_DAEMON_CONF", "/etc/config/zte_topsw_daemon.conf"),
             core_url: s("DOC_DATAD_URL", "http://127.0.0.1:9460/v2/state"),
             ip: w("DOC_IP", "ip"),
@@ -769,14 +779,18 @@ fn fota(c: &Cfg) -> Row {
         false,
     );
     if mode == "0" && poll == "1" {
-        return row(
-            "ok",
-            "fota",
-            "ZTE 自动升级",
-            "已关闭".into(),
-            "ZTE auto-update",
-            "Off".into(),
-        );
+        let pkgs: Vec<String> = std::fs::read_dir(&c.cache_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("delta"))
+            .collect();
+        let hosts = cat(&c.hosts).unwrap_or_default();
+        let opted = std::path::Path::new(&c.cloud_dir).is_dir();
+        let busy = std::path::Path::new(&c.fota_busy).exists();
+        let (lv, z, e) = fota_off_text(busy, &pkgs, opted, &hosts);
+        return row(lv, "fota", "ZTE 自动升级", z, "ZTE auto-update", e);
     }
     let q = |s: &str| {
         if s.is_empty() {
@@ -796,6 +810,47 @@ fn fota(c: &Cfg) -> Row {
             "Not fully off (dm_update_mode={m} TURNOFFPOLLING={p}); an update would overwrite rc.local"
         ),
     )
+}
+
+/// 必须封住的 FOTA 主机（`dmcn` 是入口，`dl14` 是下载）。
+const FOTA_HOSTS: [&str; 2] = ["dmcn.ztems.com", "dl14.ztems.com"];
+
+/// 这个主机在 hosts 里指向 0.0.0.0。
+fn fota_blocked(hosts: &str, host: &str) -> bool {
+    hosts.lines().any(|l| {
+        let mut w = l.split('#').next().unwrap_or("").split_whitespace();
+        w.next() == Some("0.0.0.0") && w.any(|h| h == host)
+    })
+}
+
+/// 开关都关着时再看有没有绕过开关的迹象。只报告：不写、不删、不取消（手工升级的包也长这样）。
+/// `opted`：机主封过 FOTA 主机；别人的设备没封过不算问题。
+fn fota_off_text(busy: bool, pkgs: &[String], opted: bool, hosts: &str) -> (&'static str, String, String) {
+    if busy {
+        return (
+            "bad",
+            "开关关着，但正在安装升级；不是你手工升级的话先别断电，马上看".into(),
+            "Off, but an update is installing; unless you started it, keep the power on and look now".into(),
+        );
+    }
+    if !pkgs.is_empty() {
+        let l = pkgs.join(", ");
+        return (
+            "bad",
+            format!("开关关着，但 /cache 里有升级包（{l}）；不是你手工升级的话马上看"),
+            format!("Off, but /cache holds an update package ({l}); unless you started it, look now"),
+        );
+    }
+    let open: Vec<&str> = FOTA_HOSTS.iter().copied().filter(|h| !fota_blocked(hosts, h)).collect();
+    if opted && !open.is_empty() {
+        let l = open.join(", ");
+        return (
+            "warn",
+            format!("开关关着，但服务器封锁没了（{l}）；手工升级后要重新封"),
+            format!("Off, but the server block is gone ({l}); block it again after a manual upgrade"),
+        );
+    }
+    ("ok", "已关闭".into(), "Off".into())
 }
 
 /// `uptime_s`: `cut -d. -f1 $UPTIME_FILE || echo 0`, then digits or 0.

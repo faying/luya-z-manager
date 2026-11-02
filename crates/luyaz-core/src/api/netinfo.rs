@@ -126,7 +126,14 @@ async fn sim_state_imsi(c: &Compat) -> (String, String) {
     let sim = (c.src.ubus)("zwrt_zte_mdm.api", "get_sim_info", json!({}))
         .await
         .unwrap_or(Value::Null);
-    (s(&sim, "sim_states"), s(&sim, "sim_imsi"))
+    sim_state_imsi_raw(&sim)
+}
+
+/// State and IMSI of the card data is on: `sim_*` are always slot 1, slot 2 is in `sim2_*`.
+fn sim_state_imsi_raw(sim: &Value) -> (String, String) {
+    let slot2 = crate::project::snapshot::data_on_slot2(sim);
+    let card = |k| crate::project::snapshot::card_field(sim, slot2, k);
+    (card("sim_states"), card("sim_imsi"))
 }
 
 /// One refresh pass (the agent's `refresh_pass` without the lookups and the AT read).
@@ -386,4 +393,20 @@ pub async fn get(State(c): State<Compat>, RawQuery(query): RawQuery) -> Response
         local: &g.local,
     });
     reply(200, json!({"ok": true, "data": data}))
+}
+
+#[cfg(test)]
+mod slot_card_tests {
+    use super::sim_state_imsi_raw;
+    use serde_json::json;
+
+    #[test]
+    fn fallback_reads_the_data_card() {
+        let mut sim = json!({"sim_states":"sim ready","sim_imsi":"208011234567890",
+            "sim2_states":"sim ready","sim2_imsi":"460001234567890",
+            "sim2_iccid":"89860000000000000000","current_sim_slot":"2"});
+        assert_eq!(sim_state_imsi_raw(&sim).1, "460001234567890");
+        sim["current_sim_slot"] = json!("1");
+        assert_eq!(sim_state_imsi_raw(&sim).1, "208011234567890");
+    }
 }

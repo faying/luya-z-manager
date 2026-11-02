@@ -62,6 +62,9 @@ pub struct Model {
     /// 🤖 AI and 📞 VoWiFi (Home's pinned line); empty = not read
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chill_pins: Vec<chill_pin_t>,
+    /// the main selector's member, tested once a minute while Home is up: ms, 0 timed out
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chill_main_ms: Option<i32>,
     pub tailscale: tailscale_status_t,
     pub tailscale_peers: Vec<tailscale_peer_t>,
 

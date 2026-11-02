@@ -108,6 +108,8 @@ const ON_U60D: &[&str] = &[
     "/api/usb/status",
     "/api/sms/capacity",
     "/api/router/wan-ipv6",
+    // the battery curve: the long-term layer's hours (u60d longterm/today.rs; not under /api)
+    "/battery/history",
     "/api/network/clients",
     // LAN client identification: every source per MAC, and the user's aliases (u60d lanid.rs)
     "/api/lanid",
@@ -121,6 +123,7 @@ const ON_U60D: &[&str] = &[
     // eSIM once handed over, else "not mine" sends them to the agent)
     "/api/alerts",
     "/api/alerts/sms",
+    "/api/sim/voice-slot",
     "/api/health",
     "/api/health/crashlog",
     "/api/sms/forward/",

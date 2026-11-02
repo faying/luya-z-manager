@@ -611,10 +611,47 @@ pub fn affects_network(action: &str, params: &Value) -> bool {
         })
 }
 
+/// eSIM 切换期间（simreset + mdm 重启）要挡的写：影响上网的写、描述表里 Wi-Fi 以外的事务、开新的搜网会话。
+/// 放行：安全类写（关数据/漫游）；回自动（guard 退回不能丢）；搜网 guard 带着会话的重拨。
+pub fn blocked_by_esim_switch(action: &str, params: &Value, session: bool) -> bool {
+    if is_safety(action, params) || action == "netselect.auto" {
+        return false;
+    }
+    if action == "cellular.redial" {
+        return !session;
+    }
+    action == "netselect.session.open"
+        || affects_network(action, params)
+        || find(action).is_some_and(|s| !is_wifi(s.item))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn esim_switch_blocks_network_writes_only() {
+        let block = |a: &str, p: Value| blocked_by_esim_switch(a, &p, false);
+        for a in ["network.set_mode", "apn.add", "apn.enable", "sim.dual", "modem.online",
+            "band.reset", "cell.lock_lte", "cellular.redial", "netselect.session.open"] {
+            assert!(block(a, json!({})), "{a}");
+        }
+        assert!(block("cellular.set", json!({"enabled": true})));
+        assert!(block("vendor.call", json!({"object": "zwrt_zte_mdm.api", "method": "sim_change_pin"})));
+        // 关数据、关漫游照做；回自动和搜网 guard 的重拨不丢
+        assert!(!block("cellular.set", json!({"enabled": false})));
+        assert!(!block("cellular.set", json!({"roaming": false})));
+        assert!(!block("netselect.auto", json!({})));
+        assert!(!blocked_by_esim_switch("cellular.redial", &json!({}), true));
+        // 和上网无关的写
+        for a in ["sms.send", "device.reboot", "op.keep", "op.interrupt", "netselect.session.close"] {
+            assert!(!block(a, json!({})), "{a}");
+        }
+        assert!(!block("vendor.call", json!({"object": "x", "method": "y"})));
+        let wifi = SPECS.iter().find(|s| is_wifi(s.item)).expect("a Wi-Fi spec");
+        assert!(!block(wifi.action, json!({})));
+    }
 
     #[test]
     fn auto_modes_are_one_value() {

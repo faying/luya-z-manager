@@ -180,13 +180,10 @@ pub fn ex_lines(m: &Model, now: i64) -> (Vec<ExLine>, String) {
         .as_ref()
         .filter(|l| l.ms > 0 && now - l.at < crate::data::latency::SHOW_S && l.at - now < 300)
         .map_or(LAT_NONE, |l| l.ms);
-    // the main selector's node: its last delay test
+    // the main selector's node: the once-a-minute test, else the last one run by hand
     let node = m.chill_node.as_deref().unwrap_or("");
-    let node_ms = match m.chill_nodes.iter().find(|x| x.selected != 0 && x.name == node) {
-        Some(x) if x.delay > 0 => x.delay,
-        Some(x) if x.delay == 0 => LAT_TIMEOUT,
-        _ => LAT_NONE,
-    };
+    let by_hand = m.chill_nodes.iter().find(|x| x.selected != 0 && x.name == node).map(|x| x.delay);
+    let node_ms = node_latency(m.chill_main_ms, by_hand);
     if !ch_on {
         let desc = if m.chill_online != 0 {
             tr("CHILL 开着，出口还在查")
@@ -304,6 +301,15 @@ pub fn ex_lines(m: &Model, now: i64) -> (Vec<ExLine>, String) {
         desc = tr("直连留 AI：只有 AI 还走节点").into();
     }
     (ex_fold(v), desc)
+}
+
+/// The 节点 line's latency: ms, 0 = timed out, a negative = never measured.
+fn node_latency(auto: Option<i32>, by_hand: Option<i32>) -> i32 {
+    match auto.or(by_hand) {
+        Some(ms) if ms > 0 => ms,
+        Some(0) => LAT_TIMEOUT,
+        _ => LAT_NONE,
+    }
 }
 
 /// The worse of two latencies: paused, then timed out, then the slower; unknown loses.
@@ -1036,6 +1042,15 @@ mod tests {
         let f = ex_fold(v);
         assert_eq!((f[3].exit.as_str(), f[3].ms), ("", LAT_PAUSED));
         assert_eq!(ex_fold(vec![l("a", "x", 1); 4]).len(), 4);
+    }
+
+    #[test]
+    fn node_line_has_latency_without_a_hand_test() {
+        assert_eq!(node_latency(Some(149), None), 149);
+        assert_eq!(node_latency(Some(0), Some(80)), LAT_TIMEOUT);
+        assert_eq!(node_latency(None, Some(80)), 80);
+        assert_eq!(node_latency(None, Some(-1)), LAT_NONE);
+        assert_eq!(node_latency(None, None), LAT_NONE);
     }
 
     #[test]

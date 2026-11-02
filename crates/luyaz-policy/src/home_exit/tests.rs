@@ -61,6 +61,7 @@ fn obs(now: u64, mcc: Option<i64>, env: Items) -> Obs {
     Obs {
         now,
         serving_mcc: mcc,
+        home_mcc: Some(460),
         env,
         clients: None,
         ..Default::default()
@@ -268,4 +269,28 @@ fn tick_follows_a_hand_edited_env() {
     assert_eq!(m.p.rest_until, T0 + REST_SECS);
     m.tick(&obs(T0 + 30, None, Items::default()), &mut io);
     assert_eq!(m.p.rest_until, 0);
+}
+
+#[test]
+fn home_is_the_owners_country_not_a_fixed_one() {
+    let mut a = Machine::default();
+    a.p.items = on(&[Item::Media]);
+    let env = a.p.items;
+    let mut io = Fake::default();
+    // a French home: ten minutes in China closes nothing
+    let o = |t, m| Obs { home_mcc: Some(208), ..obs(t, Some(m), env) };
+    a.tick(&o(T0, 460), &mut io);
+    a.tick(&o(T0 + BACK_HOME_SECS, 460), &mut io);
+    assert!(a.p.items.media);
+    // ten minutes in France does
+    a.tick(&o(T0 + BACK_HOME_SECS + 1, 208), &mut io);
+    a.tick(&o(T0 + 2 * BACK_HOME_SECS + 1, 208), &mut io);
+    assert!(!a.p.items.media);
+    // unknown home never counts as home
+    let mut b = Machine::default();
+    b.p.items = env;
+    let u = |t| Obs { home_mcc: None, ..obs(t, Some(460), env) };
+    b.tick(&u(T0), &mut io);
+    b.tick(&u(T0 + BACK_HOME_SECS), &mut io);
+    assert!(b.p.items.media);
 }

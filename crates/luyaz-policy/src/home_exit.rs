@@ -100,6 +100,9 @@ pub struct Persist {
 pub struct Obs {
     pub now: u64,
     pub serving_mcc: Option<i64>,
+    /// The owner's home country (scenario `home_mcc`, else the data SIM's); `None` = unknown,
+    /// which never counts as being home.
+    pub home_mcc: Option<i64>,
     pub env: Items,
     pub clients: Option<i64>,
     #[cfg_attr(feature = "serde", serde(default))]
@@ -248,7 +251,7 @@ impl Machine {
         }
 
         match o.serving_mcc {
-            Some(460) => {
+            Some(m) if Some(m) == o.home_mcc => {
                 let since = *self.china_since.get_or_insert(now);
                 let mut want = self.p.items;
                 if want.media && !self.p.reopened_in_china.media {

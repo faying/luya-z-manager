@@ -188,6 +188,14 @@ tun_rules_ok; eq "9001 被删：坏" "$?" 1
 has "日志写出不见的规则" "$(cat "$LOG")" '9001:'
 RULES_NOW=$(printf '%s\n' "$TUN_RULES" | grep -v '^8998:')
 tun_rules_ok; eq "国内直连 8998 被删：坏" "$?" 1
+# 网页删绕行 IP 不算规则丢失：不然每删一条就重启一次核心
+RULES_NOW="8999:	from 192.168.0.50 lookup main
+$TUN_RULES"
+rm -f "$TUN_SNAP"
+tun_rules_ok; eq "带绕行记快照" "$?" 0
+eq "快照不记绕行" "$(grep -c '^8999:' "$TUN_SNAP")" 0
+RULES_NOW=$TUN_RULES
+tun_rules_ok; eq "绕行 8999 被删：好" "$?" 0
 RULES_NOW=$TUN_RULES; T2022=
 tun_rules_ok; eq "table 2022 清空：坏" "$?" 1
 T2022='default dev chill0 scope link'

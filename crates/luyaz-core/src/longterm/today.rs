@@ -229,6 +229,37 @@ pub fn build(dir: &Path, now: i64, trusted: bool, incidents: &Value) -> Value {
     })
 }
 
+/// How far back `GET /v2/battery/history` looks.
+const BATTERY_WINDOW_S: i64 = 7 * DAY_S;
+
+/// The battery curve at wall second `now`: every closed hour of the last 7 days that knows its
+/// charge, oldest first. One point an hour, already on flash: this adds no writes of its own.
+pub fn battery_history(dir: &Path, now: i64, trusted: bool) -> Value {
+    if !trusted {
+        return json!({"available": true, "clock_trusted": false, "now": null, "hours": []});
+    }
+    let mut hours: Vec<(i64, Value)> = Vec::new();
+    for v in lines(&dir.join("hours.jsonl")) {
+        // `hour_power`, not `hour`: the `hour` line's `chg_s` follows a flag that stays on while
+        // the battery drains (api/hot_drain.rs)
+        if v["k"] != "hour_power" {
+            continue;
+        }
+        let (Some(ft), Some(tt)) = (v["ft"].as_i64(), v["tt"].as_i64()) else { continue };
+        let (Some(from), Some(to)) = (v["batt_from"].as_i64(), v["batt_to"].as_i64()) else {
+            continue;
+        };
+        if ft < now - BATTERY_WINDOW_S || tt > now + 60 || tt <= ft {
+            continue;
+        }
+        hours.push((ft, json!({"from": ft, "to": tt, "batt_from": from, "batt_to": to, "chg_s": v["chg_s"]})));
+    }
+    // a clock step can leave lines out of order
+    hours.sort_by_key(|(ft, _)| *ft);
+    let hours: Vec<Value> = hours.into_iter().map(|(_, v)| v).collect();
+    json!({"available": true, "clock_trusted": true, "now": now, "hours": hours})
+}
+
 /// Where the handler reads from, fixed when the server starts (tests build their own).
 pub struct Source {
     /// The long-term directory; `None` when the layer is off (`available: false`).
@@ -261,6 +292,15 @@ impl Source {
         let incidents = super::regress::io::incidents(&self.alerts);
         build(dir, now, trusted, &incidents)
     }
+
+    /// `GET /v2/battery/history`'s `data` (blocking: reads a file).
+    pub fn battery(&self) -> Value {
+        let Some(dir) = &self.dir else {
+            return json!({"available": false});
+        };
+        let (now, trusted) = (self.clock)();
+        battery_history(dir, now, trusted)
+    }
 }
 
 #[cfg(test)]
@@ -280,6 +320,37 @@ mod tests {
     }
 
     const DAY: i64 = 20_000 * DAY_S;
+
+    #[test]
+    fn battery_history_keeps_the_last_week_of_hours_that_know_their_charge() {
+        let d = dir("battery");
+        let now = DAY + 3 * 3600;
+        let h = |ft: i64, a: i64, b: i64| json!({"k": "hour_power", "ft": ft, "tt": ft + 3600, "batt_from": a, "batt_to": b, "chg_s": 0});
+        write(
+            &d,
+            "hours.jsonl",
+            &[
+                h(now - 8 * DAY_S, 1, 2),
+                h(DAY + 3600, 80, 70),
+                h(DAY, 90, 80), // out of order after a clock step
+                json!({"k": "hour", "ft": DAY, "tt": DAY + 3600, "batt_from": 5, "batt_to": 6}),
+                json!({"k": "hour_power", "ft": DAY - 3600, "tt": DAY, "batt_from": null, "batt_to": 90}),
+                json!({"k": "hour_power", "ft": null, "tt": DAY, "batt_from": 9, "batt_to": 9}),
+                h(now + DAY_S, 3, 4), // ahead of the clock
+            ],
+        );
+        let v = battery_history(&d, now, true);
+        let got: Vec<i64> = v["hours"].as_array().unwrap().iter().map(|x| x["batt_from"].as_i64().unwrap()).collect();
+        assert_eq!(got, [90, 80]);
+        assert_eq!(v["now"], now);
+    }
+
+    #[test]
+    fn battery_history_needs_a_trusted_clock() {
+        let v = battery_history(&dir("battery-clock"), DAY, false);
+        assert_eq!(v["clock_trusted"], false);
+        assert_eq!(v["hours"], json!([]));
+    }
 
     #[test]
     fn today_from_the_two_files_and_the_incidents() {

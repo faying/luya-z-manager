@@ -517,10 +517,15 @@ async fn current_slot() -> i64 {
     let Ok(info) = state::sim_info().await else {
         return 0;
     };
+    slot_of(&info)
+}
+
+/// The firmware reports the slot as a string (`"2"`); a number is accepted too.
+fn slot_of(info: &Value) -> i64 {
     ["current_sim_slot", "sim_slot"]
         .iter()
         .find_map(|key| info.get(*key))
-        .and_then(Value::as_i64)
+        .and_then(|v| v.as_i64().or_else(|| v.as_str()?.trim().parse().ok()))
         .unwrap_or(0)
 }
 
@@ -649,6 +654,14 @@ pub async fn send(params: &Value) -> Result<Value, (bool, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slot_reads_the_firmware_string() {
+        assert_eq!(slot_of(&json!({"current_sim_slot":"2"})), 2);
+        assert_eq!(slot_of(&json!({"current_sim_slot":1})), 1);
+        assert_eq!(slot_of(&json!({"current_sim_slot":""})), 0);
+        assert_eq!(slot_of(&json!({})), 0);
+    }
 
     #[test]
     fn send_reply_counts_as_accepted_like_alert_sms() {

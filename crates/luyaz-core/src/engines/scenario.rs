@@ -303,6 +303,17 @@ impl Io for U60dIo {
     }
 }
 
+/// The owner's home country: `home_mcc` of a saved scenario config, else the data SIM's country
+/// (`signal.home_mcc`). No country is assumed.
+pub fn home_mcc_or(sim: Option<i64>) -> Option<i64> {
+    configured_home(std::fs::read(luyaz_scenario::CONFIG_FILE).ok().as_deref()).or(sim)
+}
+
+fn configured_home(file: Option<&[u8]>) -> Option<i64> {
+    let v: serde_json::Value = serde_json::from_slice(file?).ok()?;
+    v.get("home_mcc")?.as_str()?.parse().ok()
+}
+
 // ── running it ──────────────────────────────────────────────────────────────
 
 /// The engine u60d runs, if any.
@@ -405,5 +416,17 @@ pub async fn run(c: Compat, make: MakeIo) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod home_tests {
+    use super::configured_home;
+
+    #[test]
+    fn home_comes_from_the_saved_config_only() {
+        assert_eq!(configured_home(Some(br#"{"home_mcc":"208"}"#)), Some(208));
+        assert_eq!(configured_home(Some(b"not json")), None);
+        assert_eq!(configured_home(None), None);
     }
 }

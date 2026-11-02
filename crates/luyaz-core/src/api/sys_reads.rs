@@ -420,6 +420,13 @@ async fn wan_ipv6_reply(c: &Compat) -> (u16, Value) {
         Ok(v) => v,
         Err(e) => return fail(e),
     };
+    // cid 1 may still hold the previous card's profile: report the data card's
+    let args = super::ops::auto_apn_args(c).await;
+    let auto = ubus(c, "zwrt_apn_object", "get_auto_apn_list", args).await.unwrap_or(Value::Null);
+    let manual = ubus(c, "zwrt_apn_object", "get_manu_apn_list", json!({})).await.unwrap_or(Value::Null);
+    let mode = ubus(c, "zwrt_apn_object", "get_apn_mode", json!({})).await.unwrap_or(Value::Null);
+    let auto_mode = mode["apn_mode"].as_i64() != Some(1) && mode["apn_mode"].as_str() != Some("1");
+    let apn = luyaz_api::netinfo::dialled_on_card(auto_mode, &apn, &auto, &manual);
     let wan = ubus(
         c,
         "zwrt_data",
@@ -430,6 +437,6 @@ async fn wan_ipv6_reply(c: &Compat) -> (u16, Value) {
     .ok();
     (
         200,
-        json!({"ok": true, "data": wan_ipv6_data(&apn, wan.as_ref())}),
+        json!({"ok": true, "data": wan_ipv6_data(apn, wan.as_ref())}),
     )
 }

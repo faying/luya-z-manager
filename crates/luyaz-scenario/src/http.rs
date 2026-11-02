@@ -43,7 +43,12 @@ impl Engine {
     /// GET /api/scenario/template — a starting configuration, with no home
     /// networks filled in so it cannot trigger until the user names one.
     pub fn http_template(&self) -> (u16, Value) {
-        (200, json!({"ok": true, "data": sc::template()}))
+        let mut t = sc::template();
+        // the first guess at "home" is the card in use; the page shows it and it can be changed
+        if let Some(m) = self.io.sim_mcc() {
+            t.home_mcc = m;
+        }
+        (200, json!({"ok": true, "data": t}))
     }
 
     /// POST /api/scenario/pin — body `{"id": "home"}` or `{"id": null}`.

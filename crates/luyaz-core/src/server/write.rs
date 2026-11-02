@@ -54,6 +54,9 @@ async fn handle_inner(
     if !app.wait_stage(Stage::Ready, CONTROL_START_WAIT).await {
         return control_busy(&action);
     }
+    if let Some(r) = esim_gate(&action, &body, crate::ops::engine::esim_switching) {
+        return r;
+    }
     if let Err(e) = check_approved_by(&body) {
         return invalid_parameter(&action, &e);
     }
@@ -120,6 +123,27 @@ fn device_gate(
             "wrong_device",
             "this request was meant for another device",
             None,
+        )
+    })
+}
+
+/// eSIM 切换中（模组栈在重启）：影响上网的写马上回 409 `busy`，什么都不写。`switching` 只在动作要挡时才读。
+fn esim_gate(action: &str, body: &Value, switching: impl FnOnce() -> bool) -> Option<Response> {
+    let empty = json!({});
+    let params = body.get("params").unwrap_or(&empty);
+    let session = body.get("session").is_some_and(|s| !s.is_null());
+    (crate::ops::spec::blocked_by_esim_switch(action, params, session) && switching()).then(|| {
+        op_error(
+            action,
+            StatusCode::CONFLICT,
+            "busy",
+            "an eSIM switch is in progress; try again when it ends",
+            Some(("doing", json!({
+                "action": "esim.switch",
+                "phase": "running",
+                "say_zh": "正在切换 eSIM，稍等",
+                "say_en": "Busy: switching eSIM",
+            }))),
         )
     })
 }
@@ -1517,6 +1541,24 @@ mod tests {
         assert!(!slow.is_finished(), "the plugin request is still waiting");
         slow.abort();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// N1：切换中挡网络写并说清原因；不在切换立即放行；不相关的动作不读状态。
+    #[tokio::test]
+    async fn esim_gate_refuses_network_writes_only_during_a_switch() {
+        let body = json!({"source": "web", "params": {"mode": "auto"}});
+        let r = esim_gate("network.set_mode", &body, || true).expect("refused");
+        assert_eq!(r.status(), StatusCode::CONFLICT);
+        let v: Value = serde_json::from_slice(
+            &axum::body::to_bytes(r.into_body(), 4096).await.unwrap(),
+        )
+        .unwrap();
+        assert_eq!(v["error"]["code"], "busy");
+        assert_eq!(v["doing"]["say_zh"], "正在切换 eSIM，稍等");
+        assert!(esim_gate("network.set_mode", &body, || false).is_none());
+        assert!(esim_gate("sms.send", &body, || panic!("not read")).is_none());
+        let off = json!({"source": "web", "params": {"enabled": false}});
+        assert!(esim_gate("cellular.set", &off, || panic!("not read")).is_none());
     }
 
     /// R18-P0-04：expect_device_id 不对 → 409 wrong_device（不读写别的）；对 → 放过；不带 → 不读本机 ID、放过。

@@ -124,6 +124,10 @@ pub struct Facts<'a> {
     pub rate_ok: bool,
 }
 
+/// Present while the data card is on a network of another country (`signal.true_roaming`), written
+/// by the core: charges apply whether or not a scenario says "abroad".
+pub const ROAMING_FLAG: &str = "roaming";
+
 /// guard `sms_round`, in its order.
 pub fn verdict(f: &Facts) -> Verdict {
     if NEVER.contains(&f.kind) {
@@ -784,7 +788,7 @@ impl Alerts {
                     verdict(&Facts {
                         kind: &ev.kind,
                         number: number.as_deref(),
-                        abroad: self.exists("abroad"),
+                        abroad: self.exists("abroad") || self.exists(ROAMING_FLAG),
                         sms_abroad: self.exists("sms-abroad"),
                         clock_ok,
                         // a resend of an uncertain claim is not rate-limited: it may never have

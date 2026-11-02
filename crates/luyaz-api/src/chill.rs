@@ -264,6 +264,7 @@ pub fn wants_fallback(m: &Home, mode: ChillMode) -> bool {
 #[derive(Clone, Debug, Default)]
 pub struct Around {
     pub serving_mcc: Option<i64>,
+    pub home_mcc: Option<i64>,
     pub true_roaming: Option<bool>,
     pub blocked: Option<&'static str>,
     pub sites: usize,
@@ -287,7 +288,8 @@ pub fn home_get(m: &Home, a: &Around) -> Value {
         "where": {
             "serving_mcc": a.serving_mcc,
             "true_roaming": a.true_roaming,
-            "in_china": a.serving_mcc.map(|m| m == 460),
+            // the wire name is old: true = on a network of the owner's home country
+            "in_china": a.serving_mcc.zip(a.home_mcc).map(|(m, h)| m == h),
         },
         "blocked": a.blocked,
         "items": {

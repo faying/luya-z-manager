@@ -243,6 +243,7 @@ fn home_get_as_the_screens_read_it() {
     };
     let a = Around {
         serving_mcc: Some(460),
+        home_mcc: Some(460),
         true_roaming: Some(false),
         sites: 3,
         tailscale: Some("direct"),
@@ -311,6 +312,7 @@ fn the_fullest_replies_fit_the_screen_buffers() {
     };
     let a = Around {
         serving_mcc: Some(440),
+        home_mcc: Some(460),
         true_roaming: Some(true),
         blocked: Some("mode_global"),
         sites: 9999,

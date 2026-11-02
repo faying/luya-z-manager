@@ -674,7 +674,11 @@ impl Ui {
         let s = &self.st;
         let (phase_l, live, unit, detail, result, server, btn, btn_lbl, offline) =
             (s.phase, s.live, s.unit, s.detail, s.result, s.server, s.btn, s.btn_lbl, s.offline);
-        let mut layers = false;
+        // From the kept result, not from this tick's read: most ticks have no read, and
+        // hiding 「分层」 on those made the list below jump up and back.
+        let layers = m.st_agent_reachable != 0
+            && m.st_phase == ST_COMPLETE
+            && m.st_v2.as_ref().is_some_and(|v| !v.sample_short && v.mode != "coarse");
         if !self.polled.speedtest {
         } else if m.st_agent_reachable == 0 {
             for o in [live, detail, result, server, btn, self.st.concl_mark, self.st.concl, self.st.chill_row, self.st.hint, self.st.full_btn] {
@@ -726,9 +730,6 @@ impl Ui {
             if btn.y() != ay || self.st.action_y != ay {
                 btn.set_y(ay);
                 self.st.action_y = ay;
-            }
-            if let Some(v) = m.st_v2.as_ref() {
-                layers = ph == ST_COMPLETE && !v.sample_short && v.mode != "coarse";
             }
             let armed = !running && self.st.arm.live(ARM_START, lv::tick_get(), ST_ARM_MS);
             // 「仍要完整测速」 (R11): roaming only; armed, it says the cost

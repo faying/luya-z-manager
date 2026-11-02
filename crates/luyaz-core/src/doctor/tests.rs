@@ -836,3 +836,19 @@ fn heat_row_reads_the_block() {
     assert_eq!(zh, "热：电池 51 °C、芯片 60 °C");
 }
 
+
+#[test]
+fn fota_off_reports_what_gets_around_the_switches() {
+    let blocked = "127.0.0.1 localhost\n0.0.0.0 dmcn.ztems.com # u60-cloud-fota\n:: dmcn.ztems.com\n0.0.0.0 dl14.ztems.com\n";
+    let pkg = ["delta.package".to_owned()];
+    assert_eq!(fota_off_text(false, &[], true, blocked).0, "ok");
+    // 别人的设备没封过：不算问题
+    assert_eq!(fota_off_text(false, &[], false, "").0, "ok");
+    let (lv, z, _) = fota_off_text(false, &[], true, "127.0.0.1 localhost\n0.0.0.0 dmcn.ztems.com\n");
+    assert_eq!(lv, "warn");
+    assert!(z.contains("dl14.ztems.com") && !z.contains("dmcn"), "{z}");
+    // 注释掉、或指向别处的都不算封
+    assert_eq!(fota_off_text(false, &[], true, "#0.0.0.0 dmcn.ztems.com\n1.2.3.4 dl14.ztems.com\n").0, "warn");
+    assert_eq!(fota_off_text(false, &pkg, false, "").0, "bad");
+    assert_eq!(fota_off_text(true, &[], false, "").0, "bad");
+}

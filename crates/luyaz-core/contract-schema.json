@@ -2561,6 +2561,12 @@
               "description": "`switch_card_status == \"0\"`: the firmware is switching on its own",
               "type": "boolean",
               "x-u60-level": "normal"
+            },
+            "voice_slot": {
+              "description": "Slot that takes calls and SMS (setting, 1 unless changed)",
+              "format": "int64",
+              "type": "integer",
+              "x-u60-level": "normal"
             }
           },
           "required": [
@@ -2568,7 +2574,8 @@
             "mode",
             "active_slot",
             "switching",
-            "slots"
+            "slots",
+            "voice_slot"
           ],
           "type": "object"
         },

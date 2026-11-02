@@ -24,6 +24,12 @@
 <div><button type="button" class="nd-btn nd-btn--primary" disabled data-attr:disabled="$_dis" data-on:click="@post('{{ crate::dualsim::PATH }}/ask?mode=' + $_dm + '&amp;slot=' + $_ds + '&amp;smart=' + ($_dsm ? '1' : '0'))">{{ l.pick("Switch…", "切换…") }}</button></div>
 {{ op|safe }}</div>
 </section>
+<section aria-labelledby="ds-voice-t"><h2 id="ds-voice-t" class="nd-group-title">{{ l.pick("Phone card", "电话卡") }}</h2>
+<div class="nd-group grid gap-3 p-4">
+<p class="nd-aux">{{ l.pick("The card that takes calls. Texts received and App lines follow it. Alert SMS may still leave from a card the firmware picks.", "接电话的卡，收短信和 App 线路也跟它。告警短信从哪张卡发出由固件决定，可能不是这张。") }}</p>
+<div class="flex gap-2"><button type="button" class="nd-btn{% if voice == 1 %} nd-btn--primary{% endif %}" data-attr:disabled="$_dis" data-on:click="@post('{{ crate::dualsim::PATH }}/voice?slot=1')">{{ self.slot_name(1) }}</button><button type="button" class="nd-btn{% if voice == 2 %} nd-btn--primary{% endif %}" data-attr:disabled="$_dis" data-on:click="@post('{{ crate::dualsim::PATH }}/voice?slot=2')">{{ self.slot_name(2) }}</button></div>
+</div>
+</section>
 </div>
 </div>
 {% endblock %}

@@ -4,3 +4,6 @@
 .dc-slider__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .dc-slider__ends { display: flex; justify-content: space-between; }
 .dc-range { width: 100%; height: 44px; accent-color: var(--nd-accT, currentColor); }
+/* the battery curve (dc-history): hours on the charger, and the time axis under the plot */
+.bh-chg { fill: var(--nd-hair); }
+.bh-axis { display: flex; justify-content: space-between; margin: 4px 8px 0 40px; font-size: 11px; color: var(--nd-t3); }

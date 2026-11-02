@@ -165,6 +165,9 @@ pub struct Obs {
     /// The serving network's MCC from core (`/v2` signal, D2); `None` =
     /// unknown, which never counts as "in China".
     pub serving_mcc: Option<i64>,
+    /// The owner's home country (scenario `home_mcc`, else the data SIM's); `None` = unknown,
+    /// which never counts as being home.
+    pub home_mcc: Option<i64>,
     /// What chill.env says now.
     pub env: Items,
     /// LAN clients (Wi-Fi + wired) from the core's `clients` block; `None` =
@@ -238,6 +241,8 @@ pub trait Io {
 
 pub trait Clock {
     fn now(&self) -> u64;
+    /// Seconds that only go forward; the trial's length must not follow a clock step.
+    fn mono(&self) -> u64;
     fn sleep(&self, secs: u64);
 }
 
@@ -373,7 +378,7 @@ impl Machine {
         // D7: 10 minutes on a Chinese network turns media and rest off,
         // unless they were opened by hand while in China. Unknown never counts.
         match o.serving_mcc {
-            Some(460) => {
+            Some(m) if Some(m) == o.home_mcc => {
                 let since = *self.china_since.get_or_insert(now);
                 let mut want = self.p.items;
                 if want.media && !self.p.reopened_in_china.media {
@@ -511,6 +516,10 @@ pub trait Host: Send + Sync {
     fn alert(&self, kind: &str, text: &str);
     /// the core's D2 fields: (serving_mcc, true_roaming), `None` each when unknown.
     fn where_now(&self) -> (Option<i64>, Option<bool>);
+    /// The owner's home country; `None` when unknown.
+    fn home_mcc(&self) -> Option<i64> {
+        None
+    }
     /// LAN clients (Wi-Fi + wired); `None` when unknown.
     fn clients_now(&self) -> Option<i64>;
     /// The screen's backlight is on; `None` when unknown (the old probe rule).
@@ -635,14 +644,14 @@ pub fn run_job(m: &Mutex<Machine>, io: &mut dyn Io, clock: &dyn Clock, item: Ite
         return;
     }
 
-    let start = clock.now();
+    let start = clock.mono();
     {
         let mut g = lock();
-        g.busy = Some(Busy { item: item.name(), on, phase: "trial", until: start + TRIAL_SECS });
+        g.busy = Some(Busy { item: item.name(), on, phase: "trial", until: clock.now() + TRIAL_SECS });
     }
     let mut last = Fail::Core;
     let mut passed = false;
-    while clock.now().saturating_sub(start) < TRIAL_SECS {
+    while clock.mono().saturating_sub(start) < TRIAL_SECS {
         clock.sleep(TRIAL_STEP);
         match io.check() {
             Ok(()) => {
@@ -827,6 +836,10 @@ impl Clock for WallClock {
     fn now(&self) -> u64 {
         now_unix()
     }
+    fn mono(&self) -> u64 {
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        START.get_or_init(std::time::Instant::now).elapsed().as_secs()
+    }
     fn sleep(&self, secs: u64) {
         thread::sleep(Duration::from_secs(secs));
     }
@@ -1006,6 +1019,7 @@ impl HomeExit {
         let o = Obs {
             now: self.clock.now(),
             serving_mcc: self.host.where_now().0,
+            home_mcc: self.host.home_mcc(),
             env: self.env_items(),
             clients: self.host.clients_now(),
             screen_on: self.host.screen_on(),
@@ -1030,7 +1044,7 @@ impl HomeExit {
         copy.tick(&o, &mut rec);
         let events = rec.events;
         if worth_a_record(&before, &copy, &events) {
-            let step = json!({"step": "tick", "obs": {"now": o.now, "serving_mcc": o.serving_mcc, "env": o.env, "clients": o.clients, "screen_on": o.screen_on, "cell_busy": o.cell_busy}});
+            let step = json!({"step": "tick", "obs": {"now": o.now, "serving_mcc": o.serving_mcc, "home_mcc": o.home_mcc, "env": o.env, "clients": o.clients, "screen_on": o.screen_on, "cell_busy": o.cell_busy}});
             self.publish(step_record(step, &before, &events, &copy, *quiet));
             *quiet = 0;
         } else {
@@ -1095,6 +1109,7 @@ impl HomeExit {
         };
         let around = luyaz_api::chill::Around {
             serving_mcc,
+            home_mcc: self.host.home_mcc(),
             true_roaming,
             blocked: mode.blocked(),
             sites: self.list_sites(),
@@ -1154,7 +1169,7 @@ impl HomeExit {
             let phase = if on { "checking" } else { "applying" };
             m.busy = Some(Busy { item: item.name(), on, phase, until: 0 });
         }
-        let in_china = serving == Some(460);
+        let in_china = serving.is_some() && serving == self.host.home_mcc();
         let me = Arc::clone(self);
         thread::Builder::new()
             .name("home-exit-job".into())
@@ -1339,6 +1354,9 @@ mod tests {
         fn now(&self) -> u64 {
             self.0.get()
         }
+        fn mono(&self) -> u64 {
+            self.0.get()
+        }
         fn sleep(&self, secs: u64) {
             self.0.set(self.0.get() + secs);
         }
@@ -1351,11 +1369,30 @@ mod tests {
     }
 
     fn obs(now: u64, mcc: Option<i64>, env: Items) -> Obs {
-        Obs { now, serving_mcc: mcc, env, clients: None, ..Default::default() }
+        Obs { now, serving_mcc: mcc, home_mcc: Some(460), env, clients: None, ..Default::default() }
     }
 
     fn ctx(chill: ChillMode, roaming: Option<bool>, confirm: bool) -> Ctx {
         Ctx { configured: true, chill, true_roaming: roaming, list_sites: 3, confirm }
+    }
+
+    /// The wall clock steps by `step` during the first sleep; `mono` does not notice.
+    struct SteppingClock {
+        wall: Cell<i64>,
+        mono: Cell<u64>,
+        step: Cell<i64>,
+    }
+    impl Clock for SteppingClock {
+        fn now(&self) -> u64 {
+            self.wall.get() as u64
+        }
+        fn mono(&self) -> u64 {
+            self.mono.get()
+        }
+        fn sleep(&self, secs: u64) {
+            self.wall.set(self.wall.get() + secs as i64 + self.step.replace(0));
+            self.mono.set(self.mono.get() + secs);
+        }
     }
 
     fn job(m: Machine, io: &mut Fake, item: Item, turn_on: bool, in_china: bool) -> Machine {
@@ -1420,6 +1457,21 @@ mod tests {
         let m = job(Machine::default(), &mut io, Item::Media, true, false);
         assert!(m.p.items.media);
         assert!(io.alerts.is_empty());
+    }
+
+    /// A clock step mid-trial changes neither its length nor the number of checks: forward
+    /// used to leave one check (a false alarm), back used to keep a bad exit on for hours.
+    #[test]
+    fn trial_ignores_clock_steps() {
+        for step in [-8 * 3600, 8 * 3600] {
+            let mut io = Fake { checks: vec![Err(Fail::Home); 20], ..Default::default() };
+            let clock = SteppingClock { wall: Cell::new(T0 as i64), mono: Cell::new(50), step: Cell::new(step) };
+            let cell = Mutex::new(Machine::default());
+            run_job(&cell, &mut io, &clock, Item::Media, true, false);
+            assert_eq!(clock.mono.get(), 50 + TRIAL_SECS, "step {step}");
+            assert_eq!(io.checks.len(), 20 - (TRIAL_SECS / TRIAL_STEP) as usize, "step {step}");
+            assert_eq!(io.alerts, vec!["home-exit-check-failed"], "step {step}");
+        }
     }
 
     /// §4.4: home unreachable before turning on: nothing applied, no alert.
@@ -1487,14 +1539,14 @@ mod tests {
         let mut io = Fake { probes: vec![Some(None), None, Some(None), Some(None), Some(Some(30))], ..Default::default() };
         let mut published = 0;
         for k in 0..12u64 {
-            let o = Obs { now: T0 + k * PROBE_EVERY, serving_mcc: Some(if k > 8 { 460 } else { 440 }), env: m.p.items, clients: Some(if k == 10 { 0 } else { 1 }), screen_on: (k % 2 == 0).then_some(false), cell_busy: (k % 3 == 0).then_some(true) };
+            let o = Obs { now: T0 + k * PROBE_EVERY, home_mcc: Some(460), serving_mcc: Some(if k > 8 { 460 } else { 440 }), env: m.p.items, clients: Some(if k == 10 { 0 } else { 1 }), screen_on: (k % 2 == 0).then_some(false), cell_busy: (k % 3 == 0).then_some(true) };
             let before = m.clone();
             let mut rec = Recorder { inner: &mut io, events: Vec::new() };
             m.tick(&o, &mut rec);
             let events = rec.events;
             if worth_a_record(&before, &m, &events) {
                 published += 1;
-                let step = json!({"step": "tick", "obs": {"now": o.now, "serving_mcc": o.serving_mcc, "env": o.env, "clients": o.clients, "screen_on": o.screen_on, "cell_busy": o.cell_busy}});
+                let step = json!({"step": "tick", "obs": {"now": o.now, "serving_mcc": o.serving_mcc, "home_mcc": o.home_mcc, "env": o.env, "clients": o.clients, "screen_on": o.screen_on, "cell_busy": o.cell_busy}});
                 check(step, &before, &events, &m);
             }
         }

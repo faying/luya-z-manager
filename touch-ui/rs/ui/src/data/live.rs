@@ -140,6 +140,7 @@ impl Live {
             chill_delay_pending: self.chill.delay_pending() as i32,
             chill_home: Some(self.chill.home().clone()),
             chill_pins: self.chill.pins(),
+            chill_main_ms: self.chill.main_ms(),
             tailscale: self.ts.status(),
             tailscale_peers: self.ts.peers().to_vec(),
 

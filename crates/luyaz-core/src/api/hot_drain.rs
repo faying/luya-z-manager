@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 
 /// The window may have ended at most this long ago (BOOTTIME s).
 pub const FRESH_S: i64 = 2 * 3600;
-/// Hours kept for the baselines (30 days).
+/// A cap on the hours parsed for the baselines; the file itself keeps 14 days (`HOURS_KEEP_S`).
 pub const KEEP: usize = 30 * 24;
 const CELLS: [&str; 4] = ["on_home", "on_abroad", "off_home", "off_abroad"];
 const OFF_HOME: usize = 2;

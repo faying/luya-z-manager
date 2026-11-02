@@ -1092,7 +1092,7 @@ pub fn step(i: &TickInput) -> TickOutcome {
         out.branch = Branch::Pinned;
         if pinned != current {
             out.intent = switch(pinned);
-        } else if i.now - i.pin_retry_at >= PIN_RETRY_SECS {
+        } else if i.now < i.pin_retry_at || i.now - i.pin_retry_at >= PIN_RETRY_SECS {
             out.pin_retry_at = i.now;
             out.restores = Some(Restores {
                 next: current_known,
@@ -1101,7 +1101,11 @@ pub fn step(i: &TickInput) -> TickOutcome {
         return out;
     }
 
-    if i.now - st.last_scan < scan_interval(cfg, current, &st.candidate, i.charging) as i64 {
+    // A stamp from the future means the clock stepped back (roaming, or boot before the time
+    // sync): due now, or scanning would stop for as long as the step, across restarts too.
+    if i.now >= st.last_scan
+        && i.now - st.last_scan < scan_interval(cfg, current, &st.candidate, i.charging) as i64
+    {
         out.branch = Branch::NotDue;
         out.keep_awake = cfg
             .scenarios

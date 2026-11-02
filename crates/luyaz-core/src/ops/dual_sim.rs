@@ -129,12 +129,44 @@ pub fn steps(value: &Value, sim: &Value) -> Result<Vec<Step>, String> {
     Ok(out)
 }
 
-/// 电话卡在哪个槽（全球版双卡）：`LUYAZ_VOICE_SLOT`（1 或 2），默认 1（实体卡槽）。
-pub fn voice_slot() -> u8 {
-    match std::env::var("LUYAZ_VOICE_SLOT").ok().as_deref().map(str::trim) {
+/// 管理网页存的电话卡槽。
+const VOICE_FILE: &str = "/data/luyaz/core/voice-slot";
+/// 0 = 还没读文件。snapshot 每轮都问，不每次读盘。
+static VOICE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+fn voice_pick(saved: Option<&str>, env: Option<&str>) -> u8 {
+    match saved.or(env).map(str::trim) {
         Some("2") => 2,
         _ => 1,
     }
+}
+
+/// 电话卡在哪个槽（双卡）：网页存的设置，其次 `LUYAZ_VOICE_SLOT`，默认 1。
+pub fn voice_slot() -> u8 {
+    use std::sync::atomic::Ordering::Relaxed;
+    match VOICE.load(Relaxed) {
+        0 => {
+            let saved = std::fs::read_to_string(VOICE_FILE).ok();
+            let env = std::env::var("LUYAZ_VOICE_SLOT").ok();
+            let v = voice_pick(saved.as_deref(), env.as_deref());
+            VOICE.store(v, Relaxed);
+            v
+        }
+        v => v,
+    }
+}
+
+/// 存电话卡槽：写好才生效，写失败设置不变。
+pub fn set_voice_slot(slot: u8) -> Result<(), String> {
+    if !matches!(slot, 1 | 2) {
+        return Err("slot must be 1 or 2".into());
+    }
+    let tmp = format!("{VOICE_FILE}.tmp");
+    std::fs::write(&tmp, slot.to_string())
+        .and_then(|()| std::fs::rename(&tmp, VOICE_FILE))
+        .map_err(|e| e.to_string())?;
+    VOICE.store(slot, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
 }
 
 /// 通话口要绑的 SUB（0 = 槽 1）：只在双卡机器上给。电话卡那槽开着、卡就绪就用它；
@@ -171,6 +203,20 @@ pub fn voice_card(sim: &Value) -> Option<(String, String)> {
 fn usable(sim: &Value, slot: u8) -> bool {
     let state = if slot == 1 { "sim_states" } else { "sim2_states" };
     text(sim, &format!("sim{slot}_provision_state")) == "1" && text(sim, state) == "sim ready"
+}
+
+#[cfg(test)]
+mod voice_tests {
+    use super::voice_pick;
+
+    #[test]
+    fn the_saved_slot_wins_over_the_env_and_the_default_is_one() {
+        assert_eq!(voice_pick(Some("2\n"), Some("1")), 2);
+        assert_eq!(voice_pick(Some("1"), Some("2")), 1);
+        assert_eq!(voice_pick(None, Some("2")), 2);
+        assert_eq!(voice_pick(None, None), 1);
+        assert_eq!(voice_pick(Some("x"), Some("2")), 1);
+    }
 }
 
 #[cfg(test)]
