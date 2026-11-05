@@ -37,7 +37,7 @@ luyaz-sentinel：屏幕主人 + 看门狗
 
 正常运行时 `luyaz-ui` 从 `127.0.0.1:9460` 读 `/v2/screen`（`/v2/state` + `/v2/events`），所有写操作发往 `POST /control`。为保证 `luyaz-core` 挂掉或卡死时拿在手里的设备仍能自救，`luyaz-ui` 保留四条有界的本地兜底路径（`touch-ui/rs/ui/src/ui/power.rs`、`src/data/live.rs`、`src/data/core.rs`）：
 
-- **电源菜单兜底**（`power_fallback` / `power_last_resort`）：重启、关机先调 `POST /control`（`device.reboot` / `device.poweroff`）。核心连不上时，触屏直接 `sync` 并调 `ubus -t 10 call zwrt_mc.device.manager device_reboot|device_poweroff '{"moduleName":"zte_topsw_devui"}'`，失败退回 `reboot`/`poweroff`；确认后 40 秒仍未关机/重启，则由 `power_last_resort` 直接调系统 `reboot`/`poweroff`。
+- **电源菜单兜底**（`power_fallback` / `power_last_resort`）：重启、关机先调 `POST /control`（`device.reboot` / `device.poweroff`）。核心连不上时，触屏直接 `sync` 并调 `ubus -t 10 call zwrt_mc.device.manager device_reboot|device_poweroff '{"moduleName":"zte_topsw_devui"}'`，重启失败退回 `reboot`；重启确认后 40 秒仍没重启，由 `power_last_resort` 调系统 `reboot`。关机不做这一步：这台硬件上 busybox `poweroff` 的效果是重启；原厂进入快速关机（`mode_power_off_quick*`）（经 ubus 读实时值）就算关机成功，触屏保持熄屏；按电源键执行 `reboot`，这是唯一的恢复办法，原厂在这些状态下拒绝 `device_reboot`；其他情况 40 秒后只提示没成功。
 - **核心不在线时的控制兜底**（`core.rs::control_fb` → `/data/luyaz/scripts/luyaz-fallback.sh`）：只在 `127.0.0.1:9460` TCP 连接失败时触发（核心回 409/503 或请求超时绝不触发，以免核心其实在执行却被绕过）。脚本先用 `pidof` 再次确认 `luyaz-core` 没在跑，再直接执行断网自救必需的开关（`wifi.radio`、`cellular.data`、`cellular.roaming`、`cellular.rat`、`apn.mode`、`sim.slot`、`usb.mode`、`charge.inhibit`、`fast.boot`）。
 - **切回原厂界面兜底**（`request_vendor` / `vendor_fallback`）：优先往 `/tmp/luyaz-screen.ctl` 写 `vendor\n`；若哨兵没在听 FIFO，则后台延时拉起 `/etc/init.d/zte_topsw_devui start` 并给自己发 `SIGTERM` 让出 DRM master（`/dev/dri/card0`）。
 - **本地硬件读写**：背光（`/sys/class/backlight`）、电源键（`/dev/input`）与辅助 Wi-Fi 状态（`/sys/class/net/wlan*/operstate`、`iw`）。

@@ -95,7 +95,7 @@ tailscale|节点	Peers
 全部频段（未锁定）	All bands (not locked)
 共 %d 条，都已读	%d total, all read
 关机	Power off
-关机没成功，再试一次…	Power off didn't work; trying again…
+关机没成功，请再试一次	Power off didn't work; try again
 关闭	Off
 其他告警（%s）	Other alert (%s)
 内存	Memory
@@ -671,6 +671,10 @@ U60 在充电	U60 charging
 检查更新	Check for updates
 还没查过	Not checked yet
 检查失败	Check failed
+上机中	Shipping
+上机停下	Ship stopped
+需重启	Restart needed
+和记录不符	Differs from record
 ，暂用 %s	; on %s for now
 首选 %s 不通，暂用 %s	Pick %s is down; on %s for now
 

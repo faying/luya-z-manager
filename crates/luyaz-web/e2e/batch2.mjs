@@ -56,6 +56,8 @@ const PAGES = {
       ok(await txt(p, "#di-ver-core .nd-row__value") === "1.0.0" && /已是最新/.test(await txt(p, "#di-ver-core")), "versions: core 1.0.0, up to date");
       ok(/有新版：1\.1\.0/.test(await txt(p, "#di-ver-touch")), `versions: touch has a newer one: ${await txt(p, "#di-ver-touch")}`);
       ok(await txt(p, "#di-ver-scripts .nd-row__value") === "未编号", "versions: scripts from before 1.0.0 say so");
+      ok(/文件已换，重启后生效/.test(await txt(p, "#di-ver-sentinel")), `versions: sentinel needs a restart: ${await txt(p, "#di-ver-sentinel")}`);
+      ok(await txt(p, "#di-ver-ship .nd-row__value") === "核心：检查中", `versions: a ship under way: ${await txt(p, "#di-ver-ship")}`);
       ok(/(\d+ (分钟|小时|天)前|刚刚)$/.test(await txt(p, "#di-ver-checked .nd-row__value")), `versions: last check: ${await txt(p, "#di-ver-checked .nd-row__value")}`);
       await p.click("#di-versions-err button");
       await p.waitForFunction(() => /刚刚/.test(document.querySelector("#di-ver-checked")?.textContent ?? ""), null, { timeout: 15000 }).catch(() => {});

@@ -26,6 +26,9 @@ pub const UNCERTAIN_AFTER_S: u64 = 120;
 const RATE_KIND_S: i64 = 3600;
 const RATE_DAY_S: i64 = 86400;
 const RATE_DAY_MAX: usize = 5;
+/// Past the day limit all the same: a build went back by itself, rare, and the person may not be
+/// able to reach the device any other way. The hour limit still holds.
+const RATE_NO_DAY_LIMIT: &[&str] = &["ship-auto-rollback", "ship-conn-rollback"];
 const SMS_LOG_KEEP: usize = 100;
 /// Kinds never sent as an SMS: a failed SMS, the screen's colours, what an MCP agent changed (MCP
 /// second phase: the agent reads it back, the owner's alert forwarding shows it), the tailnet
@@ -161,7 +164,7 @@ pub fn rate_ok(log: &str, kind: &str, now: i64) -> bool {
             hour += 1;
         }
     }
-    hour < 1 && day < RATE_DAY_MAX
+    hour < 1 && (day < RATE_DAY_MAX || RATE_NO_DAY_LIMIT.contains(&kind))
 }
 
 /// The day limit alone (a point event's 2nd/4th/8th in a row, a regress escalation: eng review
@@ -318,6 +321,9 @@ fn regress_zh(kind: &str) -> Option<&'static str> {
         "regress-mem-abs" => "数据服务内存超过上限，可能在泄漏。",
         "regress-egress" => "出口不通超过5分钟。",
         "regress-heat" => "温度过高（电池≥55°C或芯片≥90°C），放到阴凉处。",
+        "ship-auto-rollback" => "新版反复出事，已自动换回旧版并隔离。",
+        "ship-conn-rollback" => "新版上机后连不上，已自动换回旧版。",
+        "ship-prev-damaged" => "回滚用的旧版副本损坏，当前版本不受影响。",
         "regress-power" => "待机耗电比平时高。",
         "regress-power-abs" => "待机耗电超过上限。",
         "regress-recorder" => "长期记录停了10分钟以上。",
@@ -334,6 +340,9 @@ fn regress_en(kind: &str) -> Option<&'static str> {
         "regress-mem-abs" => "Data service memory over limit.",
         "regress-egress" => "Route down 5+ min.",
         "regress-heat" => "Too hot (battery 55+ °C or chip 90+ °C); move it somewhere cool.",
+        "ship-auto-rollback" => "New build kept failing: old version restored, build quarantined.",
+        "ship-conn-rollback" => "Lost a way in after a new build: old version restored.",
+        "ship-prev-damaged" => "Rollback copy damaged; running version not affected.",
         "regress-power" => "Standby power above normal.",
         "regress-power-abs" => "Standby power over limit.",
         "regress-recorder" => "Recorder stalled 10+ min.",

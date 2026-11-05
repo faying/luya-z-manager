@@ -110,6 +110,41 @@ fn ago(t: i64, l: Lang) -> String {
     }
 }
 
+/// What a ship is doing right now, or a transaction that stopped and wants a person; failing
+/// those, the builds still being watched. None: nothing to say.
+fn ship_line(v: &Value, l: Lang) -> Option<String> {
+    let s = &v["ship"];
+    let phase = s["phase"].as_str().unwrap_or("");
+    if s["active"] == true || phase == "failed" {
+        let comp = comp_name(s["comp"].as_str().unwrap_or(""), l);
+        let what = match phase {
+            "" | "staged" => l.pick("staged", "已暂存"),
+            "trial" => l.pick("on trial", "试跑中"),
+            "promote" => l.pick("promoting", "转正中"),
+            "check" => l.pick("checking", "检查中"),
+            "manifest" => l.pick("recording", "写清单中"),
+            "rollback" => l.pick("rolling back", "退回中"),
+            "failed" => l.pick("stopped, needs attention", "已停下，要人处理"),
+            other => other,
+        };
+        return Some(match l {
+            Lang::En => format!("{comp}: {what}"),
+            Lang::Zh => format!("{comp}：{what}"),
+        });
+    }
+    let watched: Vec<&str> = v["watching"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|w| w["comp"].as_str())
+        .map(|c| comp_name(c, l))
+        .collect();
+    (!watched.is_empty()).then(|| match l {
+        Lang::En => format!("Watching: {}", watched.join(", ")),
+        Lang::Zh => format!("观察中：{}", watched.join("、")),
+    })
+}
+
 /// The versions group: one row per component (installed; the newer one under it), then when
 /// the public repo was last looked at.
 fn version_group(vers: &Option<Result<Value, String>>, l: Lang) -> Group {
@@ -121,7 +156,11 @@ fn version_group(vers: &Option<Result<Value, String>>, l: Lang) -> Group {
                 let name = c["name"].as_str().unwrap_or("");
                 let cur = c["installed"].as_str();
                 let new = c["latest"].as_str();
-                let sub = if c["update"] == true {
+                let sub = if c["restart_needed"] == true {
+                    Some(l.pick("New file in place, restart to use it", "文件已换，重启后生效").into())
+                } else if c["drift"] == true {
+                    Some(l.pick("File differs from the last ship", "文件和上次上机记录不一致").into())
+                } else if c["update"] == true {
                     new.map(|n| match l {
                         Lang::En => format!("Update available: {n}"),
                         Lang::Zh => format!("有新版：{n}"),
@@ -145,6 +184,17 @@ fn version_group(vers: &Option<Result<Value, String>>, l: Lang) -> Group {
                     mono: cur.is_some(),
                     data: false,
                     sub,
+                    stale: false,
+                });
+            }
+            if let Some(text) = ship_line(v, l) {
+                rows.push(Row {
+                    id: "di-ver-ship",
+                    label: l.pick("Shipping", "上机").into(),
+                    val: Val::Text(text),
+                    mono: false,
+                    data: false,
+                    sub: None,
                     stale: false,
                 });
             }

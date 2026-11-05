@@ -39,6 +39,70 @@
 
 - kit: 装机包带上 lanid-parse 组件（已连设备识别），装到 `/data/luyaz/core/plugins/`，只有这一个组件；没有时核心照常跑、识别关着。`LANID_CWASM=` 指定现成的。
 
+## touch 1.29.2 — 2026-11-05
+
+- 现在认得出快速关机（经 ubus 读实时状态，含插着充电器的情况），按电源键用 `reboot` 重新开机；1.29.1 读的是过时的文件，屏幕亮着但基带、SIM 和 Wi-Fi 都是关的（#7）
+
+## scripts 1.11.0 — 2026-11-05
+
+- `ship chill`、`ship tailscale` 让这些脚本可回滚；设备上 `mihomo -t` 不过的模板不会上线，设置文件不进事务。
+
+## core 1.88.1, sentinel 1.5.0, scripts 1.10.0 — 2026-11-05
+
+- 转正的版本证明过自己后，按记录的 md5 或目录指纹核对一次回滚用的旧版副本。副本损坏，或不见了且没有 3 份更新的副本时，发 `ship-prev-damaged` 短信。不修复，不碰正式文件；开机不做哈希。
+
+## scripts 1.9.0 — 2026-11-05
+
+- 没接电且电量低于 30%、或达到 50°C 时，设备拒绝上机；`luyaz-ship.sh preflight` 报电量、温度和实际走的路由。退回不受限。
+
+## touch 1.29.1 — 2026-11-05
+
+- 开着原厂快速开机时，关机不再变成重启：进入 `mode_power_off_quick*` 就算关机成功，屏幕保持熄灭直到原厂唤醒。不再执行 busybox `poweroff`（这台硬件上效果是重启）；真的没关掉时 40 秒后提示（#7）
+
+## touch 1.29.0 — 2026-11-04
+
+- 版本行会标需重启、和记录不符，上次检查一行显示正在上机。Requires: core 1.88.0。
+
+## lweb 1.54.0 — 2026-11-04
+
+- 版本一组会说文件已换但程序没重启、文件和上次上机记录不一致，以及上机进行到哪。Requires: core 1.88.0。
+
+## core 1.88.0 — 2026-11-04
+
+- `/v2/versions` 同时报运行中的程序、磁盘文件和上次上机记录是否一致，上机事务在做什么，哪些版本还在观察。
+
+## scripts 1.8.0 — 2026-11-04
+
+- 换 luyaz-ship.sh 前留旧版（ship/prev，3 份）；新增一份不会被后续上机清掉的已知良好组合（`luyaz known-good`、`luyaz executor-restore`）。
+
+## core 1.87.0、scripts 1.7.0、phone（状态清单）— 2026-11-03
+
+- core、scripts：core 和 phone 的设置文件宣告成状态文件，试跑、检查、开机恢复时的退回一起换回，旧版不会把设置重置。其他可变文件写进 `state-keep`，带原因。
+
+## core 1.86.2 — 2026-11-03
+
+- core：`ship-auto-rollback`、`ship-conn-rollback` 的短信不再受 24 小时 5 则的限制；同类每小时一则照旧。
+
+## sentinel 1.4.1、scripts 1.6.1 — 2026-11-03
+
+- sentinel、scripts：连通检查的 `lan` 改看 br-lan 已启用且有地址。`operstate` 在没有客户端时就是 down，最后一台设备离开可能把好版本退回。
+
+## sentinel 1.4.0、scripts 1.6.0 — 2026-11-03
+
+- sentinel、scripts：连通比对延续到转正以后。基线里通的 SSH、LAN、Tailscale 比到版本证明过自己为止，只看转正那次开机；连续坏 10 分钟就退回基线里有这一项的最新版本，不隔离，一次开机最多一个。不比路由。告警 `ship-conn-rollback`。要求：先上 scripts 1.6.0，再上 sentinel 1.4.0。
+
+## scripts 1.5.0 — 2026-11-03
+
+- 上机时把 SSH、LAN、Tailscale、默认路由和到发起电脑的路由跟动手前的基线比（试跑结束、转正检查后各一次）；只有原来通、现在持续约一分钟不通才算不过，不管流量走哪张网卡。
+
+## scripts 1.4.0 — 2026-11-03
+
+- `luyaz-ship.sh auto-rollback`、`unquarantine`；`stage` 拒绝被隔离的版本。设备有新的 `luyaz-recover.sh`（`install-recover`）和哨兵时，上机才进看守。新的 `luyaz-recover.sh` 每第 3 次非预期开机退回最新一个没证明过的版本，一轮最多 3 个；转正后改的设置保留（`touch-ui/docs/SHIP.md`）。Requires: sentinel 1.3.0
+
+## sentinel 1.3.0 — 2026-11-03
+
+- 判还在看守中的版本（`/data/luyaz/ship/watch/`）：转正那次开机里程序反复死掉就换回并隔离，证明过自己的版本退出看守。新告警 `ship-auto-rollback` 的文字（core、lweb 下一版起显示）。
+
 ## touch 1.28.3 — 2026-11-02
 
 - 首页 CHILL 的「节点」行和 AI、VoWiFi 行一样每分钟测一次延迟，不用先到节点页手动测才有数字。

@@ -1,0 +1,59 @@
+# 可变、退回时不换回的（路径，目录以 / 结尾；类别；原因）。tools/luyaz state-audit 对照设备。
+# 类别：data 收到的数据 / identity 身份 / counter 计数和缓存 / device 设备现状 / log 日志
+/data/luyaz/core/sms-journal.json data 换回会丢新短信、序号重用
+/data/luyaz/core/sms-journal.json.prev data 同上
+/data/luyaz/core/sms-forward-queue.json data 排队中的转发
+/data/luyaz/core/sms-forward-queue.json.prev data 同上
+/data/local/tmp/sms_forward_state.json data 转发进度
+/data/alerts/ data 告警队列和发送记录，也是设置 sms-to 的家（用户改号不随退回）
+/data/luyaz/core/auth.token identity 不改写
+/data/luyaz/core/sim-salt identity 不改写
+/data/luyaz/core/ops/ device 进行中的写操作和历史，不能倒退
+/data/luyaz/core/loop.json device 换回旧的 spent 可能重跑已执行的提议
+/data/luyaz/core/wifi-dfs.json device 记着要换回的 Wi-Fi 设置
+/data/luyaz/core/esim-pending.json device 进行中的 eSIM 写
+/data/luyaz/core/esim-auto-reboot device 重启间隔保护
+/data/luyaz/core/voice-slot device 跟卡的现状走
+/data/luyaz/core/net-tune.want device 开关，文本不会变格式
+/data/luyaz/net-tune.want device 同上
+/data/scenario/state.json device 情景现状
+/data/scenario/restore.json device 待还原的设置
+/data/scenario/pin device 令牌，不变格式
+/data/scenario/disabled device 开关
+/data/scenario/log log 只追加
+/data/chill/ device CHILL 自己的配置和订阅，脚本 chill.sh 也写
+/data/luyaz/core/planned-reboot counter 开机路径要读，不能被换掉
+/data/luyaz/core/core.running counter 崩溃标记
+/data/luyaz/core/reconnect.inflight counter 重拨标记
+/data/luyaz/core/netinfo.guard counter 标记
+/data/luyaz/core/crashwatch-init counter 标记
+/data/luyaz/core/crashwatch.json counter 缓存
+/data/luyaz/core/screen-guard-on counter 标记
+/data/luyaz/core/ims-voice-seen counter 标记
+/data/luyaz/core/poller-state.json counter 事件和确认，丢了重来
+/data/luyaz/core/findings.json counter 重新探测
+/data/luyaz/core/findings.probe-budget.json counter 探测预算
+/data/luyaz/core/findings.probe-budget.lock counter 锁
+/data/luyaz/core/chill-probe-budget.json counter 探测预算
+/data/luyaz/core/chill-probe-budget.lock counter 锁
+/data/luyaz/core/versions-latest.json counter 缓存
+/data/luyaz/core/stock-components.json counter 缓存
+/data/luyaz/core/longterm.json counter 缓存
+/data/luyaz/core/standby.prev counter 缓存
+/data/luyaz/core/qos-lines.log log 整份重写的日志
+/data/luyaz/core/no-service.jsonl log 账本
+/data/luyaz/core/core.env device 手工配置，core 只读
+/data/luyaz/core/core.env.pre-netrec device 手工备份
+/data/luyaz/core/long/ log 账本和证据
+/data/luyaz/core/usage/ log 用量账
+/data/luyaz/core/netrec/ log 记录仪
+/data/luyaz/core/dsds/ log 日志
+/data/luyaz/core/ledger/ log 账本
+/data/luyaz/core/verified/ counter 每卡验证结果，重新验证
+/data/luyaz/core/plugins/ device 外挂，不跟 core 走
+/data/luyaz/core/otherd/ counter 旧数据
+/data/luyaz/core/lanid-capture/ log 抓取
+/data/luyaz/lanid/clients.json counter 客户端记录
+/data/luyaz/ship/verdict counter 上机判定
+/data/luyaz/scripts/standby.baseline counter 待机基线
+/data/luyaz/lanid/oui.tsv device 厂商表，装机带的，core 只读

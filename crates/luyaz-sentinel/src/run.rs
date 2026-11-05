@@ -181,6 +181,23 @@ impl<I: WorkerIo> WorkerIo for ShadowWorker<I> {
         self.would("start luyaz-ship.sh recover-live".into());
         false
     }
+    fn auto_rollback(&mut self, txn: &str, why: &str) -> bool {
+        self.would(format!("auto-rollback {txn}: {why}"));
+        false
+    }
+    fn verify_prev(&mut self) -> bool {
+        self.would("start luyaz-ship.sh verify-prev".into());
+        false
+    }
+    fn list_dir(&mut self, path: &str) -> Vec<String> {
+        self.real.list_dir(path)
+    }
+    fn comm_running(&mut self, comm: &str) -> Option<bool> {
+        self.real.comm_running(comm)
+    }
+    fn conn_ok(&mut self, item: &str) -> Option<bool> {
+        self.real.conn_ok(item)
+    }
     fn cap_log(&mut self, path: &str) -> bool {
         self.would(format!("cap {path}"));
         false

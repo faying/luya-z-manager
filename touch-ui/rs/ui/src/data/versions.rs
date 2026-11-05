@@ -31,6 +31,8 @@ pub fn parse(body: &[u8], now: i64) -> Option<(Vec<ver_row_t>, String)> {
             installed: text(&c, "installed", 16).unwrap_or_default(),
             latest: text(&c, "latest", 16).unwrap_or_default(),
             update: json::get(&c, "update", 8).is_some_and(|v| v == b"true") as i32,
+            restart: json::get(&c, "restart_needed", 8).is_some_and(|v| v == b"true") as i32,
+            drift: json::get(&c, "drift", 8).is_some_and(|v| v == b"true") as i32,
         });
     }
     if rows.is_empty() {
@@ -54,7 +56,24 @@ pub fn parse(body: &[u8], now: i64) -> Option<(Vec<ver_row_t>, String)> {
         let when = String::from_utf8_lossy(&when).into_owned();
         if failed { format!("{when} · {}", tr("检查失败")) } else { when }
     };
+    let line = match ship_note(body) {
+        Some(note) => format!("{note} · {line}"),
+        None => line,
+    };
     Some((rows, line))
+}
+
+/// A ship under way, or one stopped that wants a person (the phases as in SHIP.md).
+fn ship_note(body: &[u8]) -> Option<String> {
+    let ship = json::get(body, "ship", 512)?;
+    let phase = text(&ship, "phase", 24).unwrap_or_default();
+    let active = json::get(&ship, "active", 8).is_some_and(|v| v == b"true");
+    if !active && phase != "failed" {
+        return None;
+    }
+    let comp = text(&ship, "comp", 16).unwrap_or_default();
+    let what = if phase == "failed" { tr("上机停下") } else { tr("上机中") };
+    Some(format!("{what} {comp}"))
 }
 
 #[derive(Default)]
@@ -104,6 +123,18 @@ impl Versions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_integrity_and_ship() {
+        crate::lang::set_en(false);
+        let body = br#"{"components":[{"name":"core","installed":"1.0.0","latest":null,"update":false,"restart_needed":true,"drift":false},{"name":"touch","installed":"1.0.0","latest":null,"update":false,"drift":true}],"checked_at":null,"ship":{"active":true,"comp":"core","phase":"check","reason":"","txn":"t"},"watching":[]}"#;
+        let (rows, line) = parse(body, 1000).unwrap();
+        assert_eq!((rows[0].restart, rows[0].drift), (1, 0));
+        assert_eq!((rows[1].restart, rows[1].drift), (0, 1));
+        assert_eq!(line, "上机中 core · 还没查过");
+        let done = br#"{"components":[{"name":"core","installed":"1.0.0"}],"ship":{"active":false,"phase":"done","comp":"core"}}"#;
+        assert_eq!(parse(done, 1000).unwrap().1, "还没查过");
+    }
 
     #[test]
     fn reads_the_report() {

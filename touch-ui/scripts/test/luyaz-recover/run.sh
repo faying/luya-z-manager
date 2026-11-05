@@ -631,5 +631,155 @@ recover
 check "$CASE: put back, rolledback" '[ "$(md5 "$P")" = "$PO" ] && grep -q "^phase=rolledback" "$R/data/luyaz/ship/txn"'
 teardown
 
+# ── promoted builds that keep rebooting the device (docs/SHIP.md「转正后自动退回」) ──
+W=data/luyaz/ship
+watch_one() { # watch_one <txn> <comp> <commit> <file> <old md5> <new md5>: promoted, not proved
+    mkdir -p "$R/$W/watch"
+    printf 'v=1\ntxn=%s\ncomp=%s\ncommit=%s\nphase=done\nreason=\nboot_id=aaaa-1111\nmac_time=1790000000\nact_boot=aaaa-1111\nact_uptime=5\nwatch=1\nfile=%s|%s|%s\nstate=%s|%s\nend=1\n' \
+        "$1" "$2" "$3" "$4" "$5" "$6" "$S1" "$OS" >"$R/$W/watch/$1"
+    cp "$R/$W/watch/$1" "$R/$W/txn"
+    printf '{"v":1,"kind":"ship","comp":"%s","txn":"%s","commit":"%s","format":3}\n' "$2" "$1" "$3" >>"$R/$W/manifest.jsonl"
+}
+done_txn() {
+    mkdir -p "$R/data/luyaz"
+    echo "/data/luyaz/ship/watch" >"$R/data/luyaz/luyaz-sentinel"
+    cp "$T/n1" "$P1"
+    cp "$T/o1" "$P1.prev-$TXN"
+    echo "user setting" >"$S1"
+    printf '{"v":1,"kind":"kit","comp":"core","commit":"1234567","format":3}\n' >"$R/$W/manifest.jsonl"
+    watch_one "$TXN" core abcdef1 "$P1" "$O1" "$N1"
+}
+boots() { # boots <n> <tag>: that many boots, each with its own id
+    _i=0
+    while [ "$_i" -lt "$1" ]; do
+        _i=$((_i + 1))
+        echo "$2$_i" | tr 'g-z' 'a-f' | sed 's/^/ab/' >"$T/boot"
+        sh "$REC" >/dev/null 2>&1
+    done
+}
+
+setup
+CASE="watched build, 2 unasked boots"
+done_txn
+boots 2 a
+check "$CASE: not yet" '[ "$(md5 "$P1")" = "$N1" ] && grep -q "^phase=done" "$R/$W/txn" && [ ! -e "$R/$W/quarantine" ]'
+CASE="same boot id again (rc.local re-run)"
+sh "$REC" >/dev/null 2>&1
+check "$CASE: not counted" '[ "$(grep -c . "$R/$W/watch-boots")" = 2 ] && [ "$(md5 "$P1")" = "$N1" ]'
+CASE="third unasked boot"
+boots 1 b
+check "$CASE: old program back, rolledback" '[ "$(md5 "$P1")" = "$O1" ] && grep -q "^phase=rolledback" "$R/$W/txn" && [ ! -e "$R/$W/watch/$TXN" ]'
+check "$CASE: settings stay" '[ "$(cat "$S1")" = "user setting" ]'
+check "$CASE: quarantined" 'grep -q "^core|abcdef1|$N1|$TXN|" "$R/$W/quarantine"'
+check "$CASE: manifest names what the kit put there" 'tail -n 1 "$R/$W/manifest.jsonl" | grep -q "\"commit\":\"1234567\".*\"note\":\"auto-rollback\""'
+CASE="nothing left to watch"
+_m=$(md5 "$R/$W/manifest.jsonl")
+boots 3 c
+check "$CASE: no further" '[ "$(md5 "$R/$W/manifest.jsonl")" = "$_m" ] && [ "$(md5 "$P1")" = "$O1" ]'
+teardown
+
+setup
+CASE="the bad one is under a newer ship of something else"
+done_txn
+_t2=20260930-130000-touch
+cp "$T/n2" "$P2"
+cp "$T/o2" "$P2.prev-$_t2"
+watch_one "$_t2" touch bbbbbb2 "$P2" "$O2" "$N2"
+boots 3 a
+check "$CASE: 3 boots, the newest back first" '[ "$(md5 "$P2")" = "$O2" ] && [ "$(md5 "$P1")" = "$N1" ] && [ ! -e "$R/$W/watch/$_t2" ] && [ -e "$R/$W/watch/$TXN" ]'
+boots 2 b
+check "$CASE: the count starts over" '[ "$(md5 "$P1")" = "$N1" ]'
+boots 1 c
+check "$CASE: 3 more, then the older one" '[ "$(md5 "$P1")" = "$O1" ] && [ "$(grep -c . "$R/$W/quarantine")" = 2 ]'
+teardown
+
+setup
+CASE="two ships of one program"
+done_txn
+_t2=20260930-130000-core
+printf 'third\n' >"$T/n3"
+N3=$(md5 "$T/n3")
+cp "$T/n1" "$P1.prev-$_t2"
+cp "$T/n3" "$P1"
+watch_one "$_t2" core ccccccc "$P1" "$N1" "$N3"
+boots 3 a
+check "$CASE: back one version" '[ "$(md5 "$P1")" = "$N1" ]'
+check "$CASE: manifest: the version before it" 'tail -n 1 "$R/$W/manifest.jsonl" | grep -q "\"commit\":\"abcdef1\".*auto-rollback"'
+boots 3 b
+check "$CASE: then to the first" '[ "$(md5 "$P1")" = "$O1" ]'
+check "$CASE: manifest: what was there first, not a later line" 'tail -n 1 "$R/$W/manifest.jsonl" | grep -q "\"commit\":\"1234567\".*auto-rollback"'
+teardown
+
+setup
+CASE="more bad ships than the limit"
+done_txn
+: >"$R/$W/watch-rolled"
+for _i in 1 2 3; do echo x >>"$R/$W/watch-rolled"; done
+boots 3 a
+check "$CASE: stops, nothing touched, nothing more watched" '[ "$(md5 "$P1")" = "$N1" ] && [ -z "$(ls "$R/$W/watch" 2>/dev/null)" ]'
+teardown
+
+setup
+CASE="proved itself"
+done_txn
+rm -f "$R/$W/watch/$TXN"
+boots 4 a
+check "$CASE: not counted" '[ "$(md5 "$P1")" = "$N1" ] && [ ! -e "$R/$W/watch-boots" ]'
+teardown
+
+setup
+CASE="off switch"
+done_txn
+: >"$R/$W/auto-rollback-off"
+boots 4 a
+check "$CASE: not counted" '[ "$(md5 "$P1")" = "$N1" ] && [ ! -e "$R/$W/watch-boots" ]'
+teardown
+
+setup
+CASE="a sentinel that cannot end the count"
+done_txn
+echo old >"$R/data/luyaz/luyaz-sentinel"
+boots 4 a
+check "$CASE: not counted" '[ "$(md5 "$P1")" = "$N1" ] && [ ! -e "$R/$W/watch-boots" ]'
+teardown
+
+setup
+CASE="a hostile entry"
+done_txn
+sed -i "s#^file=.*#file=/etc/passwd|$O1|$N1#" "$R/$W/watch/$TXN"
+boots 3 a
+check "$CASE: dropped, nothing touched" '[ "$(md5 "$P1")" = "$N1" ] && [ ! -e "$R/$W/watch/$TXN" ]'
+teardown
+
+for _code in 1150 1152 1112; do
+    setup
+    CASE="reason $_code"
+    done_txn
+    mkdir -p "$R/etc/config"
+    printf "config x\n\toption reboot_reason_code '%s'\n" "$_code" >"$R/etc/config/zwrt_zte_mc_tmp"
+    boots 4 a
+    check "$CASE: not counted" '[ "$(md5 "$P1")" = "$N1" ] && [ ! -e "$R/$W/watch-boots" ]'
+    teardown
+done
+
+setup
+CASE="planned mark the core never cleared"
+done_txn
+mkdir -p "$R/data/luyaz/core"
+echo "aaaa-1111 100 web" >"$R/data/luyaz/core/planned-reboot"
+boots 3 a
+check "$CASE: excuses one boot only" '[ "$(grep -c . "$R/$W/watch-boots")" = 2 ] && [ "$(md5 "$P1")" = "$N1" ]'
+boots 1 b
+check "$CASE: then counted" '[ "$(md5 "$P1")" = "$O1" ]'
+teardown
+
+setup
+CASE="old version not there"
+done_txn
+rm -f "$P1.prev-$TXN"
+boots 3 a
+check "$CASE: left alone, failed" '[ "$(md5 "$P1")" = "$N1" ] && grep -q "^phase=failed" "$R/$W/txn"'
+teardown
+
 echo "u60-recover: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

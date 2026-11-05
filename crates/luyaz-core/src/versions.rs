@@ -12,6 +12,12 @@
 //! device is truly roaming; `POST /v2/versions/check` asks now, roaming or not.
 //! `LUYAZ_VERSION_CHECK=0` turns the daily check off. The answer is kept in
 //! `/data/luyaz/core/versions-latest.json`, so a restart shows the last one at once.
+//!
+//! Integrity (OTA-05): the same report says whether the running program, the file on disk and
+//! the last ship's manifest are the same build, what the ship transaction is doing and which
+//! builds are still being watched. Md5s are computed once per file identity, and only when
+//! someone asks. `components` keeps its entries short: a touch UI before 1.29.0 reads at most
+//! 256 bytes of one and 2048 of the list, so the md5s sit in a separate `integrity` list.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -28,6 +34,10 @@ const FIRST_AFTER: Duration = Duration::from_secs(120);
 const TIMEOUT: Duration = Duration::from_secs(20);
 const CACHE: &str = "/data/luyaz/core/versions-latest.json";
 const MARK: &[u8] = b"LUYAZ_VERSION=";
+const CORE_PATH: &str = "/data/luyaz/luyaz-core";
+const SHIP_TXN: &str = "/data/luyaz/ship/txn";
+const SHIP_MANIFEST: &str = "/data/luyaz/ship/manifest.jsonl";
+const SHIP_WATCH: &str = "/data/luyaz/ship/watch";
 
 /// (name, where its version is): the order the screen and the web list them in.
 const COMPONENTS: &[(&str, Source)] = &[
@@ -131,10 +141,147 @@ fn installed(src: Source) -> Option<String> {
     }
 }
 
+fn hex(d: [u8; 16]) -> String {
+    d.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A file's md5, computed once per identity: a replaced program is a new inode, so the program
+/// a process still runs and the file on disk never share an entry unless they are one file.
+fn cached_md5(path: &std::path::Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    type Seen = BTreeMap<(u64, u64, u64, i64), String>;
+    static SEEN: OnceLock<Mutex<Seen>> = OnceLock::new();
+    let m = std::fs::metadata(path).ok()?;
+    let key = (m.dev(), m.ino(), m.len(), m.mtime());
+    let seen = SEEN.get_or_init(Default::default);
+    if let Some(v) = seen.lock().unwrap().get(&key) {
+        return Some(v.clone());
+    }
+    let v = hex(crate::crashwatch::md5_file(path)?);
+    seen.lock().unwrap().insert(key, v.clone());
+    Some(v)
+}
+
+/// The md5 of what a process started from `path` runs: found by the exe link, not by name, so a
+/// bypass copy under another name is not taken for it. A replaced file reads `path (deleted)`,
+/// and `/proc/<pid>/exe` still opens the old program.
+fn running_md5(path: &str) -> Option<String> {
+    for e in std::fs::read_dir("/proc").ok()?.flatten() {
+        let name = e.file_name();
+        if !name.to_string_lossy().bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let exe = e.path().join("exe");
+        let Ok(link) = std::fs::read_link(&exe) else { continue };
+        let link = link.to_string_lossy();
+        if link.strip_suffix(" (deleted)").unwrap_or(&link) == path {
+            return cached_md5(&exe);
+        }
+    }
+    None
+}
+
+/// The manifest's picture: component → path → md5, the last `ship` or `kit` line of a component
+/// being what it holds (docs SHIP.md). The core's old component name `datad` counts as `core`.
+pub fn parse_manifest(text: &str) -> BTreeMap<String, BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    for line in text.lines() {
+        // cheap filter: the file is hundreds of KB, mostly `record` lines
+        if !line.contains("\"kind\":\"ship\"") && !line.contains("\"kind\":\"kit\"") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Some(comp) = v["comp"].as_str() else { continue };
+        let comp = if comp == "datad" { "core" } else { comp };
+        let files = v["files"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|f| Some((f["path"].as_str()?.to_string(), f["md5"].as_str()?.to_string())))
+            .collect();
+        out.insert(comp.to_string(), files);
+    }
+    out
+}
+
+/// The manifest, parsed again only when the file changed.
+fn manifest() -> BTreeMap<String, BTreeMap<String, String>> {
+    type Kept = Option<((u64, i64), BTreeMap<String, BTreeMap<String, String>>)>;
+    static KEPT: Mutex<Kept> = Mutex::new(None);
+    use std::os::unix::fs::MetadataExt;
+    let path = crate::state::host_path(SHIP_MANIFEST);
+    let Ok(m) = std::fs::metadata(&path) else { return BTreeMap::new() };
+    let key = (m.len(), m.mtime());
+    let mut kept = KEPT.lock().unwrap();
+    if let Some((k, v)) = kept.as_ref()
+        && *k == key
+    {
+        return v.clone();
+    }
+    let v = parse_manifest(&std::fs::read_to_string(&path).unwrap_or_default());
+    *kept = Some((key, v.clone()));
+    v
+}
+
+/// The transaction log's summary. Null without one. A log with no phase yet is being staged.
+pub fn parse_txn(text: &str) -> Value {
+    let field = |k: &str| {
+        text.lines().find_map(|l| l.strip_prefix(k)?.strip_prefix('=')).unwrap_or("")
+    };
+    if field("txn").is_empty() {
+        return Value::Null;
+    }
+    let phase = field("phase");
+    let terminal = matches!(phase, "done" | "rolledback" | "aborted" | "manifest_pending" | "failed");
+    json!({"txn": field("txn"), "comp": field("comp"), "phase": phase,
+           "reason": field("reason"), "active": !terminal})
+}
+
+/// (restart needed, disk differs from the manifest). While a transaction is moving files both
+/// are expected, so neither is claimed. A program not running needs no restart: the touch UI is
+/// legitimately stopped while the stock screen has the display.
+pub fn compare(
+    running: Option<&str>,
+    disk: Option<&str>,
+    manifest: Option<&str>,
+    active: bool,
+) -> (bool, bool) {
+    if active {
+        return (false, false);
+    }
+    let restart = matches!((running, disk), (Some(r), Some(d)) if r != d);
+    let drift = matches!((disk, manifest), (Some(d), Some(m)) if d != m);
+    (restart, drift)
+}
+
+/// Builds still on watch after they were promoted (a file per transaction, removed by the
+/// sentinel once the build has proved itself). `<date>-<time>-<component>`.
+fn watching() -> Vec<Value> {
+    let mut ids: Vec<String> = std::fs::read_dir(crate::state::host_path(SHIP_WATCH))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    ids.sort();
+    ids.into_iter()
+        .map(|id| {
+            let comp = id.rsplit('-').next().unwrap_or("").to_string();
+            json!({"txn": id, "comp": comp})
+        })
+        .collect()
+}
+
 /// `GET /v2/versions`: every component with what is installed, the newest known, and whether
-/// that is newer.
+/// that is newer; whether what runs is what is on disk and in the manifest. May read programs
+/// for their md5 the first time: call it off the async workers.
 pub fn report() -> Value {
     let l = latest().lock().unwrap().clone();
+    let ship = std::fs::read_to_string(crate::state::host_path(SHIP_TXN))
+        .map_or(Value::Null, |t| parse_txn(&t));
+    let active = ship["active"] == true;
+    let recorded = manifest();
+    let mut integrity = Vec::new();
     let comps: Vec<Value> = COMPONENTS
         .iter()
         .map(|(name, src)| {
@@ -146,12 +293,33 @@ pub fn report() -> Value {
                 (None, Some(_)) => true,
                 _ => false,
             };
-            json!({"name": name, "installed": cur, "latest": new, "update": update})
+            let (path, runs) = match src {
+                Source::Own => (CORE_PATH, true),
+                Source::Binary(p) => (*p, true),
+                Source::Text(p) => (*p, false),
+            };
+            let on_disk = crate::state::host_path(path);
+            let disk = cached_md5(std::path::Path::new(&on_disk));
+            let running = match src {
+                Source::Own => cached_md5(std::path::Path::new("/proc/self/exe")),
+                _ if runs => running_md5(&on_disk),
+                _ => None,
+            };
+            let listed = recorded.get(*name).and_then(|f| f.get(path)).cloned();
+            let (restart, drift) =
+                compare(running.as_deref(), disk.as_deref(), listed.as_deref(), active);
+            integrity.push(json!({"name": name, "running_md5": running, "disk_md5": disk,
+                                  "manifest_md5": listed}));
+            json!({"name": name, "installed": cur, "latest": new, "update": update,
+                   "restart_needed": restart, "drift": drift})
         })
         .collect();
     let any = comps.iter().any(|c| c["update"] == true);
     json!({
         "components": comps,
+        "integrity": integrity,
+        "ship": ship,
+        "watching": watching(),
         "update_available": any,
         "checked_at": (l.checked_at > 0).then_some(l.checked_at),
         "ok_at": (l.ok_at > 0).then_some(l.ok_at),
@@ -226,7 +394,7 @@ pub async fn check() -> Value {
             let _ = std::fs::rename(&tmp, &path);
         }
     }
-    report()
+    tokio::task::spawn_blocking(report).await.unwrap_or(Value::Null)
 }
 
 pub fn enabled() -> bool {
@@ -280,6 +448,67 @@ mod tests {
         assert_eq!(parse("1.10.0"), Some((1, 10, 0)));
         assert!(parse("1.10.0") > parse("1.9.9"));
         assert_eq!(parse("1.0.0.0"), None);
+    }
+
+    #[test]
+    fn manifest_last_line_wins() {
+        let m = parse_manifest(concat!(
+            r#"{"v":1,"kind":"ship","comp":"datad","files":[{"path":"/a","md5":"11"}]}"#, "\n",
+            r#"{"v":1,"kind":"record","name":"rc.local","path":"/etc/rc.local","md5":"22"}"#, "\n",
+            "not json \"kind\":\"ship\"\n",
+            r#"{"v":1,"kind":"ship","comp":"core","files":[{"path":"/a","md5":"33","prev":"/p"}]}"#, "\n",
+            r#"{"v":1,"kind":"kit","comp":"touch","files":[{"path":"/t","md5":"44"}]}"#, "\n",
+        ));
+        assert_eq!(m["core"]["/a"], "33");
+        assert_eq!(m["touch"]["/t"], "44");
+        assert_eq!(m.len(), 2);
+    }
+
+    #[test]
+    fn transaction_phases() {
+        assert_eq!(parse_txn(""), Value::Null);
+        let t = parse_txn("v=1\ntxn=20261104-032053-core\ncomp=core\nreason=x\nphase=check\n");
+        assert_eq!(t["phase"], "check");
+        assert_eq!(t["active"], true);
+        for p in ["done", "rolledback", "aborted", "manifest_pending", "failed"] {
+            assert_eq!(parse_txn(&format!("txn=a\nphase={p}\n"))["active"], false, "{p}");
+        }
+        assert_eq!(parse_txn("txn=a\n")["active"], true);
+    }
+
+    #[test]
+    fn comparing_builds() {
+        let (a, b) = (Some("a"), Some("b"));
+        assert_eq!(compare(a, a, a, false), (false, false));
+        assert_eq!(compare(a, b, b, false), (true, false), "file replaced, not restarted");
+        assert_eq!(compare(a, a, b, false), (false, true), "file differs from the manifest");
+        assert_eq!(compare(a, b, a, true), (false, false), "a transaction is moving files");
+        assert_eq!(compare(None, a, a, false), (false, false), "not running");
+        assert_eq!(compare(a, a, None, false), (false, false), "not in the manifest");
+    }
+
+    #[test]
+    fn a_replaced_file_is_not_the_cached_one() {
+        let d = std::env::temp_dir().join(format!("versions-md5-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let (f, t) = (d.join("f"), d.join("t"));
+        std::fs::write(&f, b"one").unwrap();
+        assert_eq!(cached_md5(&f).unwrap(), "f97c5d29941bfb1b2fdab0874906ab82");
+        assert_eq!(cached_md5(&f).unwrap(), "f97c5d29941bfb1b2fdab0874906ab82");
+        std::fs::write(&t, b"two").unwrap();
+        std::fs::rename(&t, &f).unwrap();
+        assert_eq!(cached_md5(&f).unwrap(), "b8a9f715dbb64fd5c56e7783c6820a61");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn report_stays_readable_by_an_old_touch_ui() {
+        let r = report();
+        for c in r["components"].as_array().unwrap() {
+            assert!(c.to_string().len() < 256, "{c}");
+        }
+        assert!(r["components"].to_string().len() < 2048);
+        assert!(r.to_string().len() < 4096);
     }
 
     #[test]

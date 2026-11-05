@@ -33,6 +33,15 @@ pub const BACKOFF_MAX_S: u64 = 480;
 pub const SHIP_STALE_S: u64 = 30;
 /// Staged and never started for this long = the Mac went away.
 pub const SHIP_STAGED_S: u64 = 300;
+/// A promoted build proved itself: this long after the promote in the boot it went live in, or
+/// this long into any later boot.
+const WATCH_SAME_BOOT_S: u64 = 3600;
+const WATCH_OTHER_BOOT_S: u64 = 1800;
+/// Procd gave up on it, or someone stopped it: rounds (60 s) before it counts as gone.
+const WATCH_ABSENT_ROUNDS: u32 = 3;
+/// A way in down this long after a promote goes back; nobody is waiting, so far longer than the
+/// ship's own 60 s.
+const WATCH_CONN_S: u64 = 600;
 /// The core's `/healthz` may say `starting` this long after boot without counting against it.
 pub const CORE_BOOT_S: u64 = 180;
 pub const DROPBEAR_PER_HOUR: usize = 3;
@@ -55,6 +64,13 @@ pub struct Paths {
     pub ship: String,
     pub ship_txn: String,
     pub ship_hb: String,
+    /// One file per promoted build not yet proved (deleting it ends `luyaz-recover.sh`'s count).
+    pub watch_dir: String,
+    pub prev_check_dir: String,
+    pub watch_boots: String,
+    pub watch_rolled: String,
+    pub watch_conn_rolled: String,
+    pub ui_gave_up: String,
     /// The core's long-term layer's per-check file (the recorder is alive while it changes).
     pub long_open: String,
     /// The open low-space incidents again, on /data: a full /tmp can't take the state file, and
@@ -81,6 +97,12 @@ impl Default for Paths {
             ship: s("/data/luyaz/scripts/luyaz-ship.sh"),
             ship_txn: s("/data/luyaz/ship/txn"),
             ship_hb: s("/tmp/luyaz/ship/heartbeat"),
+            watch_dir: s("/data/luyaz/ship/watch"),
+            prev_check_dir: s("/data/luyaz/ship/prev-check"),
+            watch_boots: s("/data/luyaz/ship/watch-boots"),
+            watch_rolled: s("/data/luyaz/ship/watch-rolled"),
+            watch_conn_rolled: s("/data/luyaz/ship/watch-conn-rolled"),
+            ui_gave_up: s("/data/luyaz/screen/gave-up"),
             long_open: s("/data/luyaz/core/long/open.json"),
             disk_open: s("/data/luyaz/screen/disk-open"),
             // tailscaled writes ~7.5 MB/day and nothing rotates it; start.sh opens it for append.
@@ -158,6 +180,16 @@ pub trait WorkerIo {
     /// Start `luyaz-ship.sh recover-live` in the background unless the previous one we started still
     /// runs. False = not started.
     fn recover_live(&mut self) -> bool;
+    /// Start `luyaz-ship.sh auto-rollback <txn> <why>` in the same background slot.
+    fn auto_rollback(&mut self, txn: &str, why: &str) -> bool;
+    /// Start `luyaz-ship.sh verify-prev` in the same background slot.
+    fn verify_prev(&mut self) -> bool;
+    /// A process of this name runs; None = cannot tell.
+    fn comm_running(&mut self, comm: &str) -> Option<bool>;
+    /// `ssh`, `lan` or `tailscale`, by the same rules as luyaz-ship.sh `conn_probe`.
+    fn conn_ok(&mut self, item: &str) -> Option<bool>;
+    /// A directory's file names, sorted; empty when it is not there.
+    fn list_dir(&mut self, path: &str) -> Vec<String>;
     /// Copy to `<path>.old`, then truncate. False when it failed.
     fn cap_log(&mut self, path: &str) -> bool;
     fn start_dropbear(&mut self) -> bool;
@@ -279,7 +311,7 @@ impl RegressState {
 pub const CORE_DUTIES: &str = "sms\nlanv6\ncore\ncrashcap\nstandby\nfp\n";
 
 /// The boot id's first 8 hex digits (empty when unreadable).
-fn boot8(io: &mut dyn WorkerIo) -> String {
+pub(crate) fn boot8(io: &mut dyn WorkerIo) -> String {
     io.read("/proc/sys/kernel/random/boot_id")
         .unwrap_or_default()
         .chars()
@@ -405,6 +437,12 @@ pub struct CoreState {
 #[derive(Debug, Default)]
 pub struct Worker {
     pub paths: Paths,
+    /// prev-check entries verify-prev was already started for (memory only: a reboot tries again).
+    prev_tried: Vec<String>,
+    /// Rounds the watched program was not running (memory only: a new boot judges nothing).
+    watch_absent: std::collections::HashMap<String, u32>,
+    /// Since when (uptime) each watched way in has been down (memory only, like `watch_absent`).
+    conn_down: std::collections::HashMap<String, u64>,
     pub wifi: WifiState,
     pub clock: ClockState,
     pub core: CoreState,
@@ -471,6 +509,7 @@ impl Worker {
         }
         self.mss_recovery_round(io);
         self.ship_round(io);
+        self.watch_round(io);
         self.clock_round(io);
         self.core_round(io);
         self.disk_round(io);
@@ -580,6 +619,186 @@ impl Worker {
             "u60-ship: transaction ({comp}, {ph}) has no live executor (heartbeat {age}); starting recover-live"
         ));
         io.recover_live();
+    }
+
+    // ── a promoted build that loops (docs/SHIP.md「转正后自动退回」) ─────────────
+    /// In the boot a build went live in, sends one that keeps dying back (the newest of its
+    /// component); with nothing failing, ends the watch of those that proved themselves. The
+    /// sentinel's own ship and scripts are the boot path's alone: nothing here can judge those.
+    pub fn watch_round(&mut self, io: &mut dyn WorkerIo) {
+        let up = io.uptime();
+        let boot = boot8(io);
+        let names = io.list_dir(&self.paths.watch_dir);
+        let mut seen: Vec<String> = Vec::new();
+        let mut entries = Vec::new();
+        let mut conn_entries = Vec::new();
+        for name in names.iter().rev() {
+            let Some(t) = io.read(&format!("{}/{name}", self.paths.watch_dir)) else {
+                continue;
+            };
+            let kv = |k: &str| {
+                t.lines()
+                    .find_map(|l| l.strip_prefix(k)?.strip_prefix('='))
+                    .unwrap_or("")
+                    .to_string()
+            };
+            let same_boot = !boot.is_empty() && kv("act_boot").starts_with(&boot);
+            let (comp, act) = (kv("comp"), kv("act_uptime").parse().unwrap_or(up));
+            if same_boot && !matches!(comp.as_str(), "sentinel" | "scripts") {
+                conn_entries.push((name.clone(), comp.clone(), kv("conn_ok")));
+            }
+            if same_boot && !seen.contains(&comp) {
+                seen.push(comp.clone());
+                if let Some(why) = self.watch_failing(io, &comp, up) {
+                    io.log(&format!("watch: {name}: {why}; auto-rollback"));
+                    if io.auto_rollback(name, &why) && comp == "core" {
+                        // the rollback stops and starts the core: no revive racing it
+                        self.regress.revive_at = Some(up + REGRESS_AFTER_S);
+                    }
+                    return; // one at a time, and nothing is "proved" while one is failing
+                }
+            }
+            entries.push((name.clone(), same_boot, act));
+        }
+        if self.watch_conn(io, &conn_entries, &boot, up) {
+            return; // down or just sent back: nothing is "proved" meanwhile
+        }
+        for (name, same_boot, act) in entries {
+            let proved = if same_boot {
+                up.saturating_sub(act) >= WATCH_SAME_BOOT_S
+            } else {
+                up >= WATCH_OTHER_BOOT_S
+            };
+            if proved {
+                // the record has what the rollback copies should be: leave it for verify-prev
+                let from = format!("{}/{name}", self.paths.watch_dir);
+                if let Some(t) = io.read(&from) {
+                    io.write(&format!("{}/{name}", self.paths.prev_check_dir), &t);
+                }
+                io.remove(&from);
+                io.log(&format!("watch: {name} proved itself"));
+            }
+        }
+        // a boot that lasted is the end of any loop
+        if up >= WATCH_OTHER_BOOT_S {
+            for f in [
+                self.paths.watch_boots.clone(),
+                self.paths.watch_rolled.clone(),
+            ] {
+                if io.exists(&f) {
+                    io.remove(&f);
+                }
+            }
+        }
+        // once per entry per run: an older script that cannot do this must not be started forever
+        let waiting = io.list_dir(&self.paths.prev_check_dir);
+        if waiting.iter().any(|n| !self.prev_tried.contains(n)) && io.verify_prev() {
+            self.prev_tried = waiting;
+        }
+    }
+
+    /// A way in that this boot's newest builds had and that stays gone sends back the newest
+    /// build whose baseline had it, without quarantine: it may not be that build's doing, so once
+    /// per boot at most. True while one is down. Newest first in `watched`.
+    fn watch_conn(
+        &mut self,
+        io: &mut dyn WorkerIo,
+        watched: &[(String, String, String)],
+        boot: &str,
+        up: u64,
+    ) -> bool {
+        let spent = !boot.is_empty()
+            && io
+                .read(&self.paths.watch_conn_rolled)
+                .is_some_and(|t| t.starts_with(boot));
+        let items: Vec<String> = if spent {
+            Vec::new()
+        } else {
+            let mut v: Vec<String> = Vec::new();
+            for it in watched.iter().flat_map(|e| e.2.split(',')) {
+                if !it.is_empty() && !v.iter().any(|x| x == it) {
+                    v.push(it.to_string());
+                }
+            }
+            v
+        };
+        self.conn_down.retain(|k, _| items.contains(k));
+        // a ship stops things on purpose: its own checks judge that, and the clock starts over
+        let busy = io.read(&self.paths.ship_txn).is_some_and(|t| {
+            t.lines().any(|l| {
+                matches!(
+                    l,
+                    "phase=staged"
+                        | "phase=trial"
+                        | "phase=promote"
+                        | "phase=check"
+                        | "phase=manifest"
+                        | "phase=rollback"
+                )
+            })
+        });
+        if busy {
+            self.conn_down.clear();
+            return false;
+        }
+        let mut lost: Option<String> = None;
+        for it in &items {
+            match io.conn_ok(it) {
+                Some(true) => {
+                    self.conn_down.remove(it);
+                }
+                Some(false) => {
+                    let since = *self.conn_down.entry(it.clone()).or_insert(up);
+                    if up.saturating_sub(since) >= WATCH_CONN_S && lost.is_none() {
+                        lost = Some(it.clone());
+                    }
+                }
+                None => {}
+            }
+        }
+        let Some(it) = lost else {
+            return !self.conn_down.is_empty();
+        };
+        let blamed = watched
+            .iter()
+            .find(|e| e.2.split(',').any(|x| x == it))
+            .map(|e| (e.0.clone(), e.1.clone()));
+        if let Some((name, comp)) = blamed {
+            let why = format!("conn lost: {it}");
+            io.log(&format!("watch: {name}: {why}; auto-rollback"));
+            if io.auto_rollback(&name, &why) && comp == "core" {
+                self.regress.revive_at = Some(up + REGRESS_AFTER_S);
+            }
+        }
+        true
+    }
+
+    fn watch_failing(&mut self, io: &mut dyn WorkerIo, comp: &str, up: u64) -> Option<String> {
+        match comp {
+            "core" => self
+                .regress
+                .down_since
+                .filter(|s| up.saturating_sub(*s) >= REGRESS_AFTER_S)
+                .map(|_| "core unhealthy 10 min".to_string()),
+            "touch" => io
+                .exists(&self.paths.ui_gave_up)
+                .then(|| "UI launches gave up".to_string()),
+            "lweb" | "phone" | "audio" => {
+                let comm = match comp {
+                    "lweb" => "luyaz-web",
+                    "phone" => "luyaz-phone",
+                    _ => "luyaz-audio",
+                };
+                let n = self.watch_absent.entry(comm.to_string()).or_default();
+                match io.comm_running(comm) {
+                    Some(false) => *n += 1,
+                    Some(true) => *n = 0,
+                    None => {}
+                }
+                (*n >= WATCH_ABSENT_ROUNDS).then(|| format!("{comm} gone"))
+            }
+            _ => None,
+        }
     }
 
     // ── G3: clock trust (docs/LEDGER.md §7) ─────────────────────────────────

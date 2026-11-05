@@ -36,7 +36,8 @@ http.createServer(async (req, res) => {
       const c = (name, installed, latest) => ({ name, installed, latest, update: latest !== installed });
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify({
-        components: [c("core", "1.0.0", "1.0.0"), c("lweb", "1.0.0", "1.0.0"), c("sentinel", "1.0.0", "1.0.0"), c("touch", "1.0.0", "1.1.0"), c("scripts", null, "1.0.0")],
+        components: [c("core", "1.0.0", "1.0.0"), c("lweb", "1.0.0", "1.0.0"), { ...c("sentinel", "1.0.0", "1.0.0"), restart_needed: true }, c("touch", "1.0.0", "1.1.0"), c("scripts", null, "1.0.0")],
+        ship: { txn: "t", comp: "core", phase: "check", reason: "", active: true }, watching: [],
         update_available: true, checked_at: versionsChecked, ok_at: versionsChecked, error: null,
       }));
     }

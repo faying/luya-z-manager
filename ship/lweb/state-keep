@@ -1,0 +1,4 @@
+# 可变、退回时不换回的（路径；类别；原因）。tools/luyaz state-audit 对照设备。
+/data/luyaz/web-sessions identity 逐行读、坏行跳过；换回会让刚退出的会话复活
+/data/luyaz/web-device-id identity 不改写
+/data/luyaz/agent.id identity 不改写

@@ -1,0 +1,3 @@
+# 可变、退回时不换回的（路径；类别；原因）。没有要换回的。tools/luyaz state-audit 对照设备。
+/data/luyaz/screen/ counter 启动次数、事件、日志，开机路径和看门狗要现值
+/data/ledger/state/wall.last counter 上次的时钟

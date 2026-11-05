@@ -748,6 +748,103 @@ impl WorkerIo for RealWorker {
     fn set_autosleep(&mut self, on: bool) {
         wifi::set_autosleep(&mut RealWifi::default(), on);
     }
+    fn verify_prev(&mut self) -> bool {
+        if let luyaz_wifi::SlotState::Running(_) =
+            luyaz_wifi::check_slot(&mut self.recover, RECOVER_CAP)
+        {
+            return false;
+        }
+        let mut cmd = Command::new("sh");
+        let ship = crate::worker::Paths::default().ship;
+        cmd.args([ship.as_str(), "verify-prev"]).stdin(Stdio::null());
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        if let Ok(f) = OpenOptions::new().create(true).append(true).open(SENTINEL_LOG)
+            && let Ok(f2) = f.try_clone()
+        {
+            cmd.stdout(f).stderr(f2);
+        }
+        match cmd.spawn() {
+            Ok(c) => {
+                self.recover = Some((c, Instant::now()));
+                true
+            }
+            Err(e) => {
+                worker_log(&format!("cannot start verify-prev: {e}"));
+                false
+            }
+        }
+    }
+    fn auto_rollback(&mut self, txn: &str, why: &str) -> bool {
+        if let luyaz_wifi::SlotState::Running(_) =
+            luyaz_wifi::check_slot(&mut self.recover, RECOVER_CAP)
+        {
+            return false;
+        }
+        let log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(SENTINEL_LOG);
+        let mut cmd = Command::new("sh");
+        let ship = crate::worker::Paths::default().ship;
+        cmd.args([ship.as_str(), "auto-rollback", txn, why])
+            .stdin(Stdio::null());
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        if let Ok(f) = log
+            && let Ok(f2) = f.try_clone()
+        {
+            cmd.stdout(f).stderr(f2);
+        }
+        match cmd.spawn() {
+            Ok(c) => {
+                self.recover = Some((c, Instant::now()));
+                true
+            }
+            Err(e) => {
+                worker_log(&format!("cannot start auto-rollback: {e}"));
+                false
+            }
+        }
+    }
+    fn list_dir(&mut self, path: &str) -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| !n.starts_with('.'))
+            .collect();
+        v.sort();
+        v
+    }
+    fn comm_running(&mut self, comm: &str) -> Option<bool> {
+        let dir = fs::read_dir("/proc").ok()?;
+        Some(dir.flatten().any(|e| {
+            read(&format!("{}/comm", e.path().display())).is_some_and(|c| c.trim() == comm)
+        }))
+    }
+    fn conn_ok(&mut self, item: &str) -> Option<bool> {
+        match item {
+            "ssh" => Some(["/proc/net/tcp", "/proc/net/tcp6"].iter().any(|p| {
+                read(p).is_some_and(|t| {
+                    t.lines().any(|l| {
+                        let mut f = l.split_whitespace();
+                        let local = f.nth(1).unwrap_or("");
+                        f.nth(1) == Some("0A")
+                            && (local.ends_with(":08AE") || local.ends_with(":0016"))
+                    })
+                })
+            })),
+            "lan" => Some(
+                // IFF_UP, not operstate: that is down whenever no client is attached
+                read("/sys/class/net/br-lan/flags")
+                    .and_then(|s| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok())
+                    .is_some_and(|f| f & 1 == 1)
+                    && has_ipv4("br-lan"),
+            ),
+            "tailscale" => Some(self.comm_running("tailscaled")? && has_ipv4("tailscale0")),
+            _ => None,
+        }
+    }
     fn recover_live(&mut self) -> bool {
         match luyaz_wifi::check_slot(&mut self.recover, RECOVER_CAP) {
             luyaz_wifi::SlotState::Running(_) => return false, // ours is still at it
@@ -1883,4 +1980,28 @@ mod find_comm_tests {
         );
         let _ = fs::remove_dir_all(&dir);
     }
+}
+
+/// Whether an interface has an IPv4 address (what `ip -4 addr show <if> | grep inet` says).
+fn has_ipv4(ifname: &str) -> bool {
+    let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+    if unsafe { libc::getifaddrs(&mut head) } != 0 {
+        return false;
+    }
+    let mut found = false;
+    let mut p = head;
+    while !p.is_null() {
+        let a = unsafe { &*p };
+        let name = unsafe { std::ffi::CStr::from_ptr(a.ifa_name) };
+        if name.to_bytes() == ifname.as_bytes()
+            && !a.ifa_addr.is_null()
+            && i32::from(unsafe { (*a.ifa_addr).sa_family }) == libc::AF_INET
+        {
+            found = true;
+            break;
+        }
+        p = a.ifa_next;
+    }
+    unsafe { libc::freeifaddrs(head) };
+    found
 }

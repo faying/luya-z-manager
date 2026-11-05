@@ -528,19 +528,32 @@ impl Source for Live {
         unsafe { libc::raise(libc::SIGTERM) };
     }
     /// The vendor call the stock UI makes (zte_topsw_mc winds the services down, then a bare
-    /// reboot(2) with no sync: sync first); refused: busybox.
+    /// reboot(2) with no sync: sync first). Refused: busybox for a reboot; nothing for a
+    /// power-off, where busybox restarts this hardware (the 40 s check reports it).
     fn power_fallback(&mut self, reboot: bool) {
+        let (call, or_else) = if reboot { ("device_reboot", " || reboot") } else { ("device_poweroff", "") };
         let cmd = format!(
-            "( sync; ubus -t 10 call zwrt_mc.device.manager {} '{{\"moduleName\":\"zte_topsw_devui\"}}' >/dev/null 2>&1 || {} ) </dev/null >/dev/null 2>&1 &",
-            if reboot { "device_reboot" } else { "device_poweroff" },
-            if reboot { "reboot" } else { "poweroff" }
+            "( sync; ubus -t 10 call zwrt_mc.device.manager {call} '{{\"moduleName\":\"zte_topsw_devui\"}}' >/dev/null 2>&1{or_else} ) </dev/null >/dev/null 2>&1 &",
         );
-        if !system(&cmd) {
-            system(if reboot { "reboot" } else { "poweroff" });
+        if !system(&cmd) && reboot {
+            system("reboot");
         }
     }
-    fn power_last_resort(&mut self, reboot: bool) {
-        system(if reboot { "reboot" } else { "poweroff" });
+    fn power_last_resort(&mut self) {
+        system("reboot");
+    }
+    fn power_mode(&mut self) -> String {
+        std::process::Command::new("ubus")
+            .args(["-t", "2", "call", "zwrt_mc.device.manager", "get_device_info", r#"{"deviceInfoList":["mode_main_state"]}"#])
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .find(|l| l.contains("\"mode_main_state\""))
+                    .and_then(|l| l.split('"').nth(3).map(str::to_string))
+            })
+            .unwrap_or_default()
     }
     fn lang_hold(&mut self) {
         std::thread::sleep(std::time::Duration::from_millis(LANG_HOLD_MS));

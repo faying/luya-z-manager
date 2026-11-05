@@ -1,0 +1,2 @@
+# 可变、退回时不换回的（路径；类别；原因）。tools/luyaz state-audit 对照设备。ui.conf 在 state-files。
+/data/luyaz/ui/boot-trace.log log 启动记录

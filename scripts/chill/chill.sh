@@ -7,6 +7,7 @@
 #   chill.sh reload              重新渲染并热重载（不重启进程）
 #   chill.sh status              打印 chill.state
 #   chill.sh flush               幂等清理（可单独执行）
+#   chill.sh validate <模板>     只渲染并校验，不碰服务（ship 转正前用）
 #   chill.sh pause <分钟>        临时直连，到点自动恢复
 #   chill.sh safe-start          首装用：挂 5 分钟死人开关，没 confirm 就自动 stop
 #   chill.sh confirm             撤销 safe-start 的死人开关
@@ -1376,6 +1377,18 @@ case "${1:-}" in
     (sleep 300; ip route del unreachable "$FAKE_IP_NET" 2>/dev/null) >/dev/null 2>&1 &
     ;;
   restart) /etc/init.d/chill restart ;;
+  validate)
+    # ship 转正前用：拿这台设备自己的 chill.env、cn.list 渲染给定模板并 mihomo -t。
+    # 渲染结果含订阅地址，只放临时目录，用完就删；不碰正在用的配置和服务。
+    [ -f "${2:-}" ] || { echo "validate: 没有模板 ${2:-}" >&2; exit 2; }
+    TEMPLATE=$2
+    RUN_DIR=/tmp/chill-validate.$$
+    CONFIG=$RUN_DIR/config.yaml
+    trap 'rm -rf "$RUN_DIR"' EXIT
+    (umask 077; mkdir -p "$RUN_DIR") || exit 2
+    render
+    exit $?
+    ;;
   reload)
     # 要返回正确的退出码：调用方（脚本、u60d）凭它判断 reload 成没成。
     # mihomo 的 /configs 只认 PUT 且必须带 {"path": ...}（真机验证：空 body 400，带 path 204）。

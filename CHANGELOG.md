@@ -42,6 +42,70 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 - kit: carries the lanid-parse component (LAN client identification) and installs it to `/data/luyaz/core/plugins/` as the only component; without it the core runs with identification off. `LANID_CWASM=` uses a ready-made one.
 
+## touch 1.29.2 — 2026-11-05
+
+- the fast power-off is now seen (live mode over ubus, including on a charger), and the power key restarts the device out of it with `reboot`: 1.29.1 read a stale file and left the screen on with the modem, SIM and Wi-Fi off (#7)
+
+## scripts 1.11.0 — 2026-11-05
+
+- `ship chill` and `ship tailscale` make those scripts rollback transactions; a template that fails `mihomo -t` on the device never goes live, and settings stay out of them.
+
+## core 1.88.1, sentinel 1.5.0, scripts 1.10.0 — 2026-11-05
+
+- Once a promoted build has proved itself, its rollback copies are checked against the recorded md5 or directory fingerprint. A damaged copy, or one missing without three newer ones, sends a `ship-prev-damaged` SMS. Nothing is repaired and live files are not touched. Boots hash nothing.
+
+## scripts 1.9.0 — 2026-11-05
+
+- a ship is refused on the device when unplugged below 30% or at 50°C and above; `luyaz-ship.sh preflight` reports battery, heat and the route actually in use. Rollbacks are exempt.
+
+## touch 1.29.1 — 2026-11-05
+
+- with the vendor's fast boot on, 关机 no longer turns into a restart: entering `mode_power_off_quick*` counts as success and the screen stays dark until the vendor wakes it. busybox `poweroff` is no longer run, as it restarts this hardware; a power-off that truly failed is reported after 40 s (#7)
+
+## touch 1.29.0 — 2026-11-04
+
+- the version rows say when a restart is needed or a file differs from the last ship, and the last-check line shows a ship under way. Requires: core 1.88.0.
+
+## lweb 1.54.0 — 2026-11-04
+
+- the versions group says when a file was replaced but its program not restarted, when a file differs from the last ship, and what a ship is doing. Requires: core 1.88.0.
+
+## core 1.88.0 — 2026-11-04
+
+- `/v2/versions` also says whether the running program, the file on disk and the last ship agree, what the ship transaction is doing, and which builds are still being watched.
+
+## scripts 1.8.0 — 2026-11-04
+
+- the replaced luyaz-ship.sh stays in ship/prev (3 copies); a saved known-good set of every component survives later ships (`luyaz known-good`, `luyaz executor-restore`).
+
+## core 1.87.0, scripts 1.7.0, phone (state list) — 2026-11-03
+
+- core, scripts: core's and phone's settings are declared and go back with a rollback during trial, check or boot recovery, so an older build cannot reset them. Everything else mutable is declared in `state-keep` with its reason.
+
+## core 1.86.2 — 2026-11-03
+
+- core: `ship-auto-rollback` and `ship-conn-rollback` SMS are no longer dropped by the limit of five per 24 h; one per kind per hour still holds.
+
+## sentinel 1.4.1, scripts 1.6.1 — 2026-11-03
+
+- sentinel, scripts: `lan` in the reachability check means br-lan is enabled with an address. `operstate` is down whenever no client is attached, so the last client leaving could have sent a good build back.
+
+## sentinel 1.4.0, scripts 1.6.0 — 2026-11-03
+
+- sentinel, scripts: the reachability check goes on after the promote. SSH, LAN and Tailscale that were up in the ship's baseline are compared until the build proved itself, in the boot it went live in; 10 minutes down sends the newest build that had it back, unquarantined, at most once per boot. Routes are not compared. Alert `ship-conn-rollback`. Requires: scripts 1.6.0 before sentinel 1.4.0.
+
+## scripts 1.5.0 — 2026-11-03
+
+- ship compares SSH, LAN, Tailscale, the default route and the route to the shipping computer with a baseline taken before it touches anything, at the end of the trial and after the check; only what was up and stays down for about a minute fails it, whatever carries the traffic.
+
+## scripts 1.4.0 — 2026-11-03
+
+- `luyaz-ship.sh auto-rollback`, `unquarantine`; `stage` refuses a quarantined build. Ships are put under watch when the device has the new `luyaz-recover.sh` (`install-recover`) and sentinel. The new `luyaz-recover.sh` sends the newest unproved build back on every third unasked boot, at most 3 in one loop; settings changed since the promote stay (`touch-ui/docs/SHIP.md`). Requires: sentinel 1.3.0
+
+## sentinel 1.3.0 — 2026-11-03
+
+- judges builds still under watch (`/data/luyaz/ship/watch/`): in the boot one went live in, a program that keeps dying is sent back and quarantined; a build that proved itself leaves the watch. Text for the new alert `ship-auto-rollback` (core and lweb show it from their next version).
+
 ## touch 1.28.3 — 2026-11-02
 
 - Home's CHILL 节点 line now tests its node once a minute like the AI and VoWiFi lines, so it shows a latency without a hand test on the node page.

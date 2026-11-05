@@ -108,6 +108,11 @@ MANIFEST=${U60S_MANIFEST:-$SHIP_DIR_NEW/manifest.jsonl}
 REC_NAME=luyaz-recover.sh
 TXN_FILE=$SHIP_DIR/txn
 STAGE_DIR=$SHIP_DIR/stage
+CH_DIR=$ROOT/data/chill
+CH_INITD=$ROOT/etc/init.d/chill
+CH_STATE=$ROOT/tmp/chill.state
+TS_DIR=$ROOT/data/tailscale
+TS_INITD=$ROOT/etc/init.d/tailscale
 LOCK_FILE=$SHIP_DIR/lock
 RECOVER_LOCK=$SHIP_DIR/recover.lock       # recover-live: one at a time (core + sentinel both start it)
 HB_FILE=$SHIP_TMP/heartbeat
@@ -115,6 +120,10 @@ BOOT_ID_FILE=${U60S_BOOT_ID:-/proc/sys/kernel/random/boot_id}
 SYNC=${U60S_SYNC:-sync}
 DF=${U60S_DF:-df}
 MIN_FREE_KB=${U60S_MIN_FREE_KB:-204800}   # 200 MB (R11)
+BATTERY_DIR=${U60S_BATTERY:-/sys/class/power_supply/battery}
+ROUTE_FILE=${U60S_ROUTE:-/proc/net/route}
+MIN_BATTERY=30                            # % on battery; a rollback is never held back (OTA-06)
+MAX_TEMP=50                               # deg C, the heat care's own "hot" line
 HB_STALE=30                               # recover-live: heartbeat older = dead
 KEEP_PREV=3                               # ship-made .prev per file (R11)
 LOG_MAX=${U60S_LOG_MAX:-262144}           # ship.log / test.log over this → .old at stage (regress §9)
@@ -1087,6 +1096,128 @@ c_scripts_check() {
     IFS=$_ifs
 }
 
+# chill: the new template (its side file, name.test) rendered and tested before anything is touched
+# (the new chill.sh, this device's chill.env). A rollback goes back to
+# what ran before, whatever an old chill.sh can validate.
+c_chill_pre() {
+    case "$X_NOTE" in rollback*) return 0 ;; esac
+    if ! _o=$(sh "$CH_DIR/chill.sh.test" validate "$CH_DIR/template.yaml.test" 2>&1); then
+        REASON="新模板校验不过：$(printf '%s' "$_o" | tail -n 1 | cut -c1-160)"
+        return 1
+    fi
+}
+c_chill_stop() {
+    log "停 CHILL（重启后按新版走）"
+    step "$TO_INITD" "$CH_INITD" stop >/dev/null 2>&1
+    rm -f "$CH_STATE"
+}
+# as rc.local: a device switched off stays off
+c_chill_start() {
+    [ -f "$CH_DIR/disabled" ] && return 0
+    step "$TO_INITD" "$CH_INITD" start >/dev/null 2>&1
+    _i=0
+    while [ ! -f "$CH_STATE" ]; do
+        if [ $_i -ge 30 ]; then
+            REASON="CHILL 30s 内没写状态（$CH_STATE）"
+            return 1
+        fi
+        $SLEEP 1
+        _i=$((_i + 1))
+    done
+}
+ch_field() { sed -n "s/.*\"$1\":\"\{0,1\}\([^\",]*\).*/\1/p" "$CH_STATE" 2>/dev/null | head -n 1; }
+# running, or direct for a reason that is not this version's fault. Idle or
+# paused before the ship means the new core does not start here: the template
+# was only proved by c_chill_pre.
+c_chill_check() {
+    c_scripts_check || return 1
+    [ -f "$CH_DIR/disabled" ] && return 0
+    T0=$(num "$(now)")
+    _lp=
+    while :; do
+        wait_step
+        T=$(num "$(now)")
+        _st=$(ch_field state)
+        _rs=$(ch_field reason)
+        case "$_st:$_rs" in
+            direct:gaveup | direct:render_failed)
+                REASON="CHILL 回了直连（$_rs）"
+                return 1
+                ;;
+            running:*)
+                _cp=$(ch_field core_pid)
+                if [ -n "$_lp" ] && [ "$_cp" != "$_lp" ]; then
+                    REASON="CHILL 核心被重启过（pid $_lp → $_cp）"
+                    return 1
+                fi
+                _lp=$_cp
+                ;;
+        esac
+        if [ $((T - T0)) -ge "$X_CHECK" ]; then
+            case "$_st:$_rs" in
+                running:*)
+                    [ -d "$ROOT/proc/$_cp" ] && return 0
+                    REASON="CHILL 说在跑，核心 pid $_cp 不在"
+                    ;;
+                direct:idle | direct:paused | direct:captive_wan | direct:overheat | direct:ruleset_missing) return 0 ;;
+                *) REASON="CHILL 状态不对（${_st:-没有状态} ${_rs}）" ;;
+            esac
+            return 1
+        fi
+    done
+}
+
+# tailscale: the new start.sh's own check. The way back over the
+# tailnet goes down with the stop; the executor is detached and rolls back alone.
+c_tailscale_pre() {
+    case "$X_NOTE" in rollback*) return 0 ;; esac
+    if ! _o=$(sh "$TS_DIR/start.sh.test" check 2>&1); then
+        REASON="start.sh check 不过：$(printf '%s\n' "$_o" | grep -m1 '^FAIL' | cut -c1-160)"
+        return 1
+    fi
+}
+c_tailscale_stop() {
+    [ -f "$TS_DIR/disabled" ] && return 0
+    step "$TO_INITD" "$TS_INITD" stop >/dev/null 2>&1
+    _i=0
+    while [ -n "$($PIDOF tailscaled 2>/dev/null)" ]; do
+        if [ $_i -ge 20 ]; then
+            REASON="tailscaled 20s 内没有退出"
+            return 1
+        fi
+        $SLEEP 1
+        _i=$((_i + 1))
+    done
+}
+c_tailscale_start() {
+    [ -f "$TS_DIR/disabled" ] && return 0
+    step "$TO_INITD" "$TS_INITD" start >/dev/null 2>&1
+}
+# up by the end and not restarted since first seen; not up before the ship: only the files
+c_tailscale_check() {
+    c_scripts_check || return 1
+    [ -f "$TS_DIR/disabled" ] && return 0
+    case ",$X_CONN," in *,tailscale,*) ;; *) return 0 ;; esac
+    T0=$(num "$(now)")
+    _lp=
+    while :; do
+        wait_step
+        T=$(num "$(now)")
+        _cur=$(first_pid tailscaled)
+        _up=$(conn_probe | awk '$1 == "tailscale" { print $2 }')
+        if [ -n "$_lp" ] && [ -n "$_cur" ] && [ "$_cur" != "$_lp" ]; then
+            REASON="tailscaled 被重启过（pid $_lp → $_cur）"
+            return 1
+        fi
+        [ -n "$_cur" ] && _lp=$_cur
+        if [ $((T - T0)) -ge "$X_CHECK" ]; then
+            [ "$_up" = ok ] && return 0
+            REASON="检查窗口结束时 tailscale0 还没起来"
+            return 1
+        fi
+    done
+}
+
 # ── components ──────────────────────────────────────────────────────────────
 # comp_load <name>: C_KIND (trial = side-by-side stand-in, direct = promote
 # at once), C_FILES (live files), C_DIRS (live directories, replaced whole:
@@ -1112,8 +1243,9 @@ comp_load() {
         core)
             C_KIND=trial
             C_FILES="$CORE_BIN"
-            # no state files (crates/luyaz-core/ship/core/state-files is empty). Only stage
-            # checks this list: a rollback restores what its own txn log names (state= lines)
+            # settings an older core would silently reset (crates/luyaz-core/ship/core/state-files).
+            # Only stage checks this list: a rollback restores what its own txn log names
+            C_STATE_ALLOW="$ROOT/data/scenario/scenarios.json $ROOT/data/apn-pick.json $ROOT/data/local/tmp/scheduler.json $ROOT/data/local/tmp/charge_limit.json $ROOT/data/local/tmp/sms_forward.json $ROOT/data/luyaz/lanid/aliases.json $ROOT/data/luyaz/core/poller-allow.json $ROOT/data/luyaz/core/long/regress-limits.json $ROOT/data/luyaz/core/ops/agent-limit.json $ROOT/data/luyaz/core/ops/roam-cheap.json"
             TEST_BIN=$CORE_BIN.test
             ;;
         touch)
@@ -1152,6 +1284,25 @@ comp_load() {
             C_FILES=${C_FILES% }
             C_ALLOW_NEW=1
             C_CHECK=60
+            ;;
+        chill)
+            # no stand-in (TUN, :9999): c_chill_pre validates the template first.
+            # chill.env (subscription) and the mihomo binary are never part of it
+            C_KIND=direct
+            C_FILES="$CH_DIR/chill.sh $CH_DIR/template.yaml $CH_DIR/VERSION"
+            C_ALLOW_NEW=1
+            C_PRE=1
+            C_CHECK=120
+            [ -f "$CH_DIR/chill.sh" ] && [ -f "$CH_INITD" ] || C_NOTREADY="这台设备没装 CHILL（${CH_DIR#"$ROOT"}/chill.sh 或 ${CH_INITD#"$ROOT"} 不在）"
+            ;;
+        tailscale)
+            # tuning.env (each device its own) and the tailscaled binary are never part of it
+            C_KIND=direct
+            C_FILES="$TS_DIR/start.sh $TS_DIR/apply.sh $TS_DIR/VERSION"
+            C_ALLOW_NEW=1
+            C_PRE=1
+            C_CHECK=180
+            [ -f "$TS_DIR/start.sh" ] && [ -f "$TS_INITD" ] || C_NOTREADY="这台设备没装 Tailscale（${TS_DIR#"$ROOT"}/start.sh 或 ${TS_INITD#"$ROOT"} 不在）"
             ;;
         selftest)
             # sandbox only: never exists on the real paths
@@ -1573,7 +1724,7 @@ NL='
 txn_clear() {
     X_V= X_TXN= X_COMP= X_PHASE= X_REASON= X_BOOT= X_COMMIT= X_MACTIME=
     X_FORMAT= X_TRIAL= X_CHECK= X_EXEC= X_TSTAGE= X_TPHASE= X_NOTE=
-    X_FILES= X_DIRS= X_STATES= X_STATELIST= X_ACTBOOT= X_ACTUP= X_CALLOK=
+    X_FILES= X_DIRS= X_STATES= X_STATELIST= X_ACTBOOT= X_ACTUP= X_CALLOK= X_WATCH= AUTO_WHY= X_CONN=
 }
 
 txn_load() {
@@ -1600,6 +1751,9 @@ txn_load() {
             t_phase=*) X_TPHASE=${_l#t_phase=} ;;
             act_boot=*) X_ACTBOOT=${_l#act_boot=} ;;
             act_uptime=*) X_ACTUP=${_l#act_uptime=} ;;
+            watch=*) X_WATCH=${_l#watch=} ;;
+            auto_why=*) AUTO_WHY=${_l#auto_why=} ;;
+            conn_ok=*) X_CONN=${_l#conn_ok=} ;;
             file=*) X_FILES="$X_FILES${_l#file=}$NL" ;;
             dir=*) X_DIRS="$X_DIRS${_l#dir=}$NL" ;;
             state=*) X_STATES="$X_STATES${_l#state=}$NL" ;;
@@ -1665,6 +1819,9 @@ txn_save() {
         echo "t_stage=$X_TSTAGE"
         echo "t_phase=$X_TPHASE"
         [ -n "$X_ACTUP" ] && echo "act_boot=$X_ACTBOOT" && echo "act_uptime=$X_ACTUP"
+        [ "$X_WATCH" = 1 ] && echo "watch=1"
+        [ -n "$AUTO_WHY" ] && echo "auto_why=$AUTO_WHY"
+        [ -n "$X_CONN" ] && echo "conn_ok=$X_CONN"
         printf '%s' "$X_FILES" | sed 's/^/file=/'
         printf '%s' "$X_DIRS" | sed 's/^/dir=/'
         printf '%s' "$X_STATELIST" | sed 's/^/statelist=/'
@@ -2146,9 +2303,15 @@ device_format() {
 # finish <terminal phase> <reason>: write it, tidy up, exit.
 finish() {
     FINISHED=1
+    if [ -n "$AUTO_WHY" ]; then
+        [ "$1" = rolledback ] && auto_records
+        rm -f "$WATCH_DIR/$X_TXN"
+        auto_alert "$1"
+    fi
     set_phase "$1" "$2"
     case "$1" in
         done)
+            watch_after_done
             prune_all
             rm -rf "${STAGE_DIR:?}/$X_TXN"
             say "完成：$X_TXN"
@@ -2169,6 +2332,7 @@ finish() {
         rm -rf "${STAGE_DIR:?}/$X_TXN"
     fi
     say "$1：$2"
+    [ -n "$AUTO_WHY" ] && [ "$1" = rolledback ] && exit 0
     exit 1
 }
 
@@ -2266,6 +2430,45 @@ logs_rotate() {
 }
 
 # stage_undo <why>: placing the side files failed half-way: remove them all
+# preflight_read: PF_BATTERY (%), PF_STATUS, PF_TEMP (deg C), empty when unreadable; PF_BEARER =
+# cellular, other or none, from the default route the device really uses.
+preflight_read() {
+    PF_BATTERY=$(cat "$BATTERY_DIR/capacity" 2>/dev/null)
+    PF_STATUS=$(cat "$BATTERY_DIR/status" 2>/dev/null)
+    PF_TEMP=$(cat "$BATTERY_DIR/temp" 2>/dev/null)
+    matches "$PF_BATTERY" '^[0-9]{1,3}$' || PF_BATTERY=
+    if matches "$PF_TEMP" '^-?[0-9]{1,4}$'; then PF_TEMP=$((PF_TEMP / 10)); else PF_TEMP=; fi
+    _if=$(awk 'NR > 1 && $2 == "00000000" { if (m == "" || $7 + 0 < m + 0) { m = $7; i = $1 } } END { print i }' "$ROUTE_FILE" 2>/dev/null)
+    case "$_if" in
+        '') PF_BEARER=none ;;
+        rmnet*) PF_BEARER=cellular ;;
+        *) PF_BEARER=other ;;
+    esac
+}
+
+# preflight_problem: prints why not to ship now, nothing when fine. Unreadable is not a reason:
+# the check protects a battery and a hot device, it must not block one that reports neither.
+preflight_problem() {
+    preflight_read
+    if [ -n "$PF_BATTERY" ] && [ "$PF_STATUS" = Discharging ] && [ "$PF_BATTERY" -lt "$MIN_BATTERY" ]; then
+        echo "电量 $PF_BATTERY%，没接电（要 ≥ $MIN_BATTERY% 或接电）"
+    fi
+    if [ -n "$PF_TEMP" ] && [ "$PF_TEMP" -ge "$MAX_TEMP" ]; then
+        echo "电池 $PF_TEMP°C，太热（要 < $MAX_TEMP°C）"
+    fi
+}
+
+# preflight: the facts for the Mac, one key=value per line. Reads only.
+ship_preflight() {
+    preflight_read  # here too: the line below runs in a subshell
+    _pp=$(preflight_problem | tr '\n' ' ')
+    echo "battery=$PF_BATTERY"
+    echo "status=$PF_STATUS"
+    echo "temp=$PF_TEMP"
+    echo "bearer=$PF_BEARER"
+    echo "problem=$_pp"
+}
+
 stage_undo() {
     for _q in $C_FILES; do rm -f "$_q.test"; done
     for _q in $C_DIRS; do rm -rf "$_q.test"; done
@@ -2302,7 +2505,7 @@ ship_stage() {
     _sd=$STAGE_DIR/$_txn
     [ -f "$_sd/meta" ] || ship_refuse 暂存 "$_sd/meta 不存在"
     txn_clear
-    _mv= _mfiles= _mstates= _mdirs=
+    _mv= _mfiles= _mstates= _mdirs= _pfok=
     P=
     while IFS= read -r _l || [ -n "$_l" ]; do
         case "$_l" in
@@ -2316,6 +2519,7 @@ ship_stage() {
             trial=*) X_TRIAL=${_l#trial=} ;;
             check=*) X_CHECK=${_l#check=} ;;
             note=*) X_NOTE=${_l#note=} ;;
+            preflight_ok=1) _pfok=1 ;;
             file=*) _mfiles="$_mfiles${_l#file=}$NL" ;;
             dir=*) _mdirs="$_mdirs${_l#dir=}$NL" ;;
             state=*) _mstates="$_mstates${_l#state=}$NL" ;;
@@ -2433,6 +2637,9 @@ ship_stage() {
     done
     IFS=$_ifs
 
+    _qh=$(quarantine_hit "$X_COMP" "$X_COMMIT" "$(printf '%s' "$_mfiles" | awk '{ print $2 }')")
+    [ -n "$_qh" ] && P="$P${NL}这个版本被隔离了（$_qh）：修好换新版本，确实要再试先跑 unquarantine $X_COMMIT"
+
     # a v=2 log is only safe with a luyaz-recover.sh that reads it
     if [ -n "$_need2" ] && ! sh "$SHIP_DIR/$REC_NAME" formats 2>/dev/null | grep -qw 2; then
         P="$P${NL}这次要写 v=2 的事务日志，设备上的 luyaz-recover.sh 读不了：先装新版 luyaz-recover.sh（u60 install-recover，要用户同意）"
@@ -2478,6 +2685,12 @@ ship_stage() {
 
     _free=$(num "$($DF -Pk "$ROOT/data" 2>/dev/null | awk 'NR == 2 { print $4 }')")
     [ "$_free" -lt "$(num "$MIN_FREE_KB")" ] && P="$P${NL}/data 可用只有 $((_free / 1024)) MB（< $((MIN_FREE_KB / 1024)) MB）"
+
+    # a rollback goes through whatever the battery says: staying on a bad build costs more
+    case "$X_NOTE" in
+        rollback*) ;;
+        *) [ -z "$_pfok" ] && P="$P${NL}$(preflight_problem)" ;;
+    esac
 
     if matches "$X_FORMAT" '^[0-9]{1,4}$'; then
         _dfmt=$(device_format "$X_COMP")
@@ -2566,6 +2779,7 @@ ship_run() {
     }
     txn_unlock
 
+    conn_baseline
     if [ "$C_KIND" = trial ]; then
         HB_STEP=1
         crashpoint trial:begin
@@ -2582,6 +2796,7 @@ ship_run() {
         hook launch_test || abort_trial "测试版没起来（$_why）"
         crashpoint trial:running
         hook trial_watch || abort_trial "试跑不过：$REASON"
+        conn_lost || abort_trial "试跑不过：$REASON"
         hook kill_test || finish failed "试跑通过，但测试版杀不掉，没有启动正式版（手动 kill -9 后 init.d start）"
         log "试跑通过（${X_TRIAL}s）"
     fi
@@ -2604,11 +2819,21 @@ ship_run() {
     # the moment the new version is live, on this boot's clock (eng review O2)
     X_ACTBOOT=$(boot_id)
     X_ACTUP=$(num "$(now)")
+    # watched for a loop after the promote, if the boot path can act on it; a rollback is never undone
+    case "$X_NOTE" in
+        rollback*) ;;
+        *)
+            # both ends of the watch: the boot path that counts, the sentinel that ends the count
+            [ "$(sh "$SHIP_DIR/$REC_NAME" auto-watch 2>/dev/null)" = 1 ] &&
+                grep -q ship/watch "$ROOT/data/luyaz/luyaz-sentinel" 2>/dev/null && X_WATCH=1
+            ;;
+    esac
     txn_save
     hook start || do_rollback "新版起不来：$REASON"
     set_phase check || do_rollback "事务日志写不上"
     crashpoint check:begin
     hook check || do_rollback "转正后检查不过：$REASON"
+    conn_lost || do_rollback "转正后检查不过：$REASON"
     set_phase manifest || do_rollback "事务日志写不上"
     crashpoint manifest:begin
     manifest_write || finish manifest_pending "$REASON"
@@ -2673,6 +2898,7 @@ ship_status() {
     echo "phase=$X_PHASE"
     echo "reason=$X_REASON"
     echo "commit=$X_COMMIT"
+    [ -f "$QUARANTINE" ] && echo "quarantined=$(grep -c . "$QUARANTINE")"
     hb_read
     echo "hb_age=$HB_AGE"
     if exec_alive "$HB_PID"; then echo "exec_alive=1"; else echo "exec_alive=0"; fi
@@ -2831,6 +3057,250 @@ ship_record_kit() {
 # rollback` goes through stage / trial / promote / check like any ship. The
 # commit and format are those of the ship before it (0000000 and the current
 # format when that version came from somewhere else).
+# ── reachability: compared only with this transaction's own baseline (docs/SHIP.md「连通基线」) ──
+CONN_PROBE=${U60S_CONN_PROBE:-}
+CONN_ROUNDS=${U60S_CONN_ROUNDS:-7}
+CONN_WAIT=${U60S_CONN_WAIT:-10}
+CONN_BASE=
+
+# conn_probe: one "<name> ok|bad" per thing that keeps us reachable; local state only, no packet
+# leaves, no interface name of the cellular side.
+conn_probe() {
+    if [ -n "$CONN_PROBE" ]; then
+        sh "$CONN_PROBE" 2>/dev/null
+        return 0
+    fi
+    _cs=bad
+    cat /proc/net/tcp /proc/net/tcp6 2>/dev/null |
+        awk '$4 == "0A" && ($2 ~ /:08AE$/ || $2 ~ /:0016$/) { f = 1 } END { exit !f }' && _cs=ok
+    echo "ssh $_cs"
+    _cs=bad
+    # administratively up, not operstate: that is down whenever no client is attached
+    ip link show br-lan 2>/dev/null | head -n 1 | grep -q '[<,]UP[,>]' &&
+        ip -4 addr show br-lan 2>/dev/null | grep -q ' inet ' && _cs=ok
+    echo "lan $_cs"
+    _cs=bad
+    [ -n "$($PIDOF tailscaled 2>/dev/null)" ] &&
+        ip -4 addr show tailscale0 2>/dev/null | grep -q ' inet ' && _cs=ok
+    echo "tailscale $_cs"
+    _cs=bad
+    ip route get 1.1.1.1 2>/dev/null | head -n 1 | grep -q ' dev ' && _cs=ok
+    echo "route $_cs"
+    # the path back to the computer doing this ship, if it came over SSH
+    _cc=${SSH_CONNECTION%% *}
+    if [ -n "$_cc" ]; then
+        _cs=bad
+        ip route get "$_cc" 2>/dev/null | head -n 1 | grep -q ' dev ' && _cs=ok
+        echo "client-route $_cs"
+    fi
+}
+
+conn_baseline() {
+    CONN_BASE=$(conn_probe)
+    log "连通基线：$(printf '%s' "$CONN_BASE" | tr '\n' ' ')"
+    # what the sentinel keeps comparing after the promote: never the routes, a base station can
+    # take those away from a good build, and the computer may simply have left
+    X_CONN=$(printf '%s\n' "$CONN_BASE" | awk '$2 == "ok" && $1 ~ /^(ssh|lan|tailscale)$/ { s = s (s == "" ? "" : ",") $1 } END { print s }')
+}
+
+# conn_lost: what the baseline had and is gone for the whole wait (a blip is not a loss, and what
+# was already bad is not this build's doing). Sets REASON; 0 = nothing lost.
+conn_lost() {
+    _cw=$(printf '%s\n' "$CONN_BASE" | awk '$2 == "ok" { print $1 }')
+    _cr=0
+    while :; do
+        _cn=$(conn_probe)
+        _cl=
+        for _ci in $_cw; do
+            printf '%s\n' "$_cn" | grep -qx "$_ci ok" || _cl="$_cl $_ci"
+        done
+        _cw=$_cl
+        [ -z "$_cw" ] && return 0
+        _cr=$((_cr + 1))
+        [ "$_cr" -ge "$CONN_ROUNDS" ] && break
+        hb_sleep "$CONN_WAIT"
+    done
+    REASON="更新前通、现在不通：$_cw"
+    log "连通对比不过：$_cw（基线：$(printf '%s' "$CONN_BASE" | tr '\n' ' ')）"
+    return 1
+}
+
+# ── after the promote: a loop puts the old version back (docs/SHIP.md「转正后自动退回」) ──
+QUARANTINE=$SHIP_DIR/quarantine
+WATCH_DIR=$SHIP_DIR/watch
+
+# watch_after_done: keep this transaction's log until the build proves itself. A manual rollback
+# is the user's verdict on that component: its older entries must not undo it later.
+watch_after_done() {
+    case "$X_NOTE" in
+        rollback*)
+            for _we in "$WATCH_DIR"/*; do
+                grep -qx "comp=$X_COMP" "$_we" 2>/dev/null && rm -f "$_we"
+            done
+            ;;
+    esac
+    [ "$X_WATCH" = 1 ] || return 0
+    mkdir -p "$WATCH_DIR" "$SHIP_DIR/prev-check" 2>/dev/null
+    cp "$TXN_FILE" "$WATCH_DIR/.$X_TXN.tmp" 2>/dev/null && mv -f "$WATCH_DIR/.$X_TXN.tmp" "$WATCH_DIR/$X_TXN"
+    sync_hb
+}
+
+auto_records() {
+    _nw=
+    _fl=
+    _ifs=$IFS
+    IFS=$NL
+    for _e in $X_FILES; do
+        IFS=$_ifs
+        _p=${_e%%|*}
+        _r=${_e#*|}
+        _nw="$_nw${_nw:+,}${_e##*|}"
+        [ "${_r%%|*}" = - ] || _fl="$_fl${_fl:+,}{\"path\":\"$_p\",\"md5\":\"${_r%%|*}\"}"
+    done
+    IFS=$_ifs
+    if auto_is_conn; then
+        # at most one per boot: the next build is no more to blame than this one was
+        printf '%s\n' "$(boot_id)" >"$SHIP_DIR/watch-conn-rolled" 2>/dev/null
+        sync_hb
+    else
+        grep -q "|$X_TXN|" "$QUARANTINE" 2>/dev/null || add_line "$QUARANTINE" "$X_COMP|$X_COMMIT|$_nw|$X_TXN|$AUTO_WHY"
+    fi
+    # what was live before this transaction: older ones may have been stacked on, or sent back
+    _ls=$(grep -e '"kind":"ship"' -e '"kind":"kit"' "$MANIFEST" 2>/dev/null | grep "\"comp\":\"$X_COMP\"" |
+        awk -v t="\"txn\":\"$X_TXN\"" 'index($0, t) { exit } { l = $0 } END { print l }')
+    _cm=$(printf '%s' "$_ls" | sed -n 's/.*"commit":"\([0-9a-f]*\)".*/\1/p')
+    _fm=$(printf '%s' "$_ls" | sed -n 's/.*"format":\([0-9]*\).*/\1/p')
+    add_line "$MANIFEST" "$(printf '{"v":1,"kind":"ship","comp":"%s","txn":"%s","commit":"%s","format":%s,"mac_time":%s,"boot_id":"%s","uptime":%s,"files":[%s],"state":[],"note":"auto-rollback"}' \
+        "$X_COMP" "$X_TXN" "${_cm:-0000000}" "${_fm:-1}" "$(num "$X_MACTIME")" "$(boot_id)" "$(num "$(now)")" "$_fl")"
+}
+
+add_line() {
+    { [ -f "$1" ] && cat "$1"; printf '%s\n' "$2"; } >"$1.tmp.$$" 2>/dev/null || {
+        rm -f "$1.tmp.$$"
+        return 1
+    }
+    sync_hb
+    mv -f "$1.tmp.$$" "$1" || return 1
+    sync_hb
+}
+
+# auto_is_conn: lost reachability, not a loop. The why survives in the log, so a recover-live
+# finishing this rollback still knows.
+auto_is_conn() {
+    case "$AUTO_WHY" in "conn lost"*) return 0 ;; esac
+    return 1
+}
+
+auto_alert() {
+    _al=$SCRIPTS_DIR/alert-lib.sh
+    _ak=ship-auto-rollback
+    _at="crash loop after $X_COMP ship: $1"
+    auto_is_conn && _ak=ship-conn-rollback _at="$AUTO_WHY after $X_COMP ship: $1"
+    sh -c '. "$1" && alert_add "$2" "$3"' sh "$_al" "$_ak" "$_at" >/dev/null 2>&1
+}
+
+# prev_state <path> <expected>: ok, pruned (ship kept KEEP_PREV newer ones) or bad. Uses X_TXN.
+prev_state() {
+    _vp=$(prev_of "$1")
+    if [ ! -e "$_vp" ]; then
+        _vb=${_vp%.prev-"$X_TXN"}
+        _vn=$(ls -1 "${_vb%/*}" 2>/dev/null | grep -F "${_vb##*/}.prev-" | LC_ALL=C awk -v t="${_vb##*/}.prev-$X_TXN" '$0 > t { n++ } END { print n + 0 }')
+        [ "$(num "$_vn")" -ge "$KEEP_PREV" ] && echo pruned || echo bad
+    elif [ -d "$_vp" ]; then
+        [ "$(tree_fp "$_vp")" = "$2" ] && echo ok || echo bad
+    else
+        [ "$(md5_of "$_vp")" = "$2" ] && echo ok || echo bad
+    fi
+}
+
+# verify-prev: once per promoted build, when the sentinel found it proved. The rollback copies were
+# right when made; this says while there is still time if one has rotted since. Reads and alerts,
+# never repairs and never touches a live file.
+ship_verify_prev() {
+    for _ve in "$SHIP_DIR"/prev-check/*; do
+        [ -f "$_ve" ] || continue
+        _tf=$TXN_FILE
+        TXN_FILE=$_ve
+        txn_load
+        _lr=$?
+        TXN_FILE=$_tf
+        if [ $_lr != 0 ] || [ "$X_TXN" != "${_ve##*/}" ]; then
+            log "校验上一版：$_ve 看不懂，跳过"
+            rm -f "$_ve"
+            continue
+        fi
+        _bad=
+        _cnt=0
+        _ifs=$IFS
+        IFS=$NL
+        for _e in $X_FILES $X_DIRS $X_STATES; do
+            IFS=$_ifs
+            _p=${_e%%|*}
+            _rest=${_e#*|}
+            _o=${_rest%%|*}
+            [ "$_o" = - ] && continue
+            _cnt=$((_cnt + 1))
+            [ "$(prev_state "$_p" "$_o")" = bad ] && _bad="$_bad${_bad:+ }$_p"
+        done
+        IFS=$_ifs
+        if [ -n "$_bad" ]; then
+            log "校验上一版：$X_TXN 坏了或不见了：$_bad"
+            say "$X_TXN damaged: $_bad"
+            sh -c '. "$1" && alert_add ship-prev-damaged "$2"' sh "$SCRIPTS_DIR/alert-lib.sh" \
+                "rollback copy damaged after $X_COMP ship $X_TXN: ${_bad%% *}" >/dev/null 2>&1
+        else
+            log "校验上一版：$X_TXN 通过（$_cnt 项）"
+        fi
+        rm -f "$_ve"
+    done
+    return 0
+}
+
+# auto-rollback <txn> <why>: the sentinel saw this promoted build loop in the boot it went live in.
+# 0 done, 3 not now (off switch, a call), 1 refused.
+ship_auto_rollback() {
+    [ -e "$SHIP_DIR/auto-rollback-off" ] && { say "自动退回已关"; return 3; }
+    matches "$1" "$TXN_RE" && [ -f "$WATCH_DIR/$1" ] || { say "$1 不在看守中"; return 1; }
+    P=$(txn_busy)
+    [ -n "$P" ] && { say "$P"; return 3; }
+    _tf=$TXN_FILE
+    TXN_FILE=$WATCH_DIR/$1
+    txn_load
+    _lr=$?
+    TXN_FILE=$_tf
+    [ $_lr = 0 ] && [ "$X_TXN" = "$1" ] || { say "看守记录 $1 看不懂"; return 1; }
+    comp_load "$X_COMP" || { say "组件 $X_COMP 看不懂"; return 1; }
+    AUTO_WHY=$(printf '%s' "$2" | tr -d '|\n' | cut -c1-80)
+    # programs only: settings changed since the promote stay
+    X_STATES=
+    FINISHED=
+    trap on_exec_exit EXIT
+    trap 'EXIT_WHY="auto-rollback 被停止"; exit 1' INT TERM
+    HB_STEP=5
+    do_rollback "自动退回：$AUTO_WHY"
+}
+
+# unquarantine <commit>: the user lets that build be shipped again.
+ship_unquarantine() {
+    matches "$1" '^[0-9a-f]{7,40}$' || { say "提交号格式不对"; return 1; }
+    [ -f "$QUARANTINE" ] || return 0
+    grep -v "^[^|]*|$1" "$QUARANTINE" >"$QUARANTINE.tmp"
+    mv -f "$QUARANTINE.tmp" "$QUARANTINE"
+    sync_hb
+}
+
+# quarantine_hit <comp> <commit> <md5s>: the line that bars this build, if any.
+quarantine_hit() {
+    [ -f "$QUARANTINE" ] || return 0
+    while IFS='|' read -r _qc _qm _qf _qt _qw; do
+        [ "$_qc" = "$1" ] || continue
+        case "$2" in "$_qm"* | '') [ -n "$2" ] && { echo "$_qt：$_qw"; return 0; } ;; esac
+        for _q5 in $3; do
+            case ",$_qf," in *",$_q5,"*) echo "$_qt：$_qw"; return 0 ;; esac
+        done
+    done <"$QUARANTINE"
+}
+
 ship_prepare_rollback() {
     _c=$1
     _txn=$2
@@ -2991,6 +3461,169 @@ ship_screen_restart() {
     return 1
 }
 
+# ── known-good set (docs/SHIP.md「已知良好组合」): one saved copy of every shipped component,
+# the executor and the recover script. KEEP_PREV never touches it; only keep-good replaces it.
+KNOWN_GOOD=$SHIP_DIR/known-good
+KG_COMPS="core touch lweb sentinel scripts chill tailscale phone audio"
+
+# a power cut in the swap: the old set comes back, a half-built one goes.
+kg_heal() {
+    rm -rf "$KNOWN_GOOD.new"
+    if [ -d "$KNOWN_GOOD.old" ]; then
+        if [ -d "$KNOWN_GOOD" ]; then rm -rf "$KNOWN_GOOD.old"; else mv -f "$KNOWN_GOOD.old" "$KNOWN_GOOD"; fi
+    fi
+}
+
+# keep-good <mac time> [why]: what is live now becomes the known-good set. Only between
+# transactions and with no build still proving itself; a file that is not what the manifest
+# says went in is refused (nobody has vouched for it).
+ship_keep_good() {
+    matches "$1" '^[0-9]{9,11}$' || ship_refuse 保存已知良好 "时间 “$1” 不是 Unix 秒"
+    _kt=$1
+    _kw=${2:-}
+    P=$(txn_busy)
+    [ -n "$P" ] && ship_refuse 保存已知良好 "$P"
+    for _ke in "$WATCH_DIR"/*; do
+        [ -f "$_ke" ] && ship_refuse 保存已知良好 "${_ke##*/} 转正后还在观察，等它过了再存"
+    done
+    _kf=$($DF -Pk "$ROOT/data" 2>/dev/null | awk 'NR == 2 { print $4 }')
+    [ "$(num "$_kf")" -lt "$(num "$MIN_FREE_KB")" ] && ship_refuse 保存已知良好 "/data 可用只有 $((_kf / 1024)) MB"
+    kg_heal
+    _kn=$KNOWN_GOOD.new
+    mkdir -p "$_kn" || ship_refuse 保存已知良好 "建不了 $_kn"
+    _kl=$(grep -e '"kind":"ship"' -e '"kind":"kit"' "$MANIFEST" 2>/dev/null)
+    _kc=
+    for _c in $KG_COMPS; do
+        _cl=$(printf '%s\n' "$_kl" | grep "\"comp\":\"$_c\"")
+        [ -n "$_cl" ] || continue
+        comp_load "$_c" 2>/dev/null || continue
+        _l1=$(printf '%s\n' "$_cl" | tail -n 1)
+        _cm=$(printf '%s' "$_l1" | sed -n 's/.*"commit":"\([0-9a-f]*\)".*/\1/p')
+        _fm=$(printf '%s' "$_l1" | sed -n 's/.*"format":\([0-9]*\).*/\1/p')
+        mkdir -p "$_kn/$_c"
+        _m="commit=${_cm:-0000000}${NL}format=${_fm:-$(device_format "$_c")}"
+        for _p in $C_FILES; do
+            if [ ! -f "$_p" ]; then
+                [ -n "$C_ALLOW_NEW" ] && continue
+                rm -rf "$_kn"
+                ship_refuse 保存已知良好 "$_p 不在"
+            fi
+            _w=$(printf '%s\n' "$_cl" | grep -o "\"path\":\"$_p\",\"md5\":\"[0-9a-f]*\"" | tail -n 1 | sed 's/.*"md5":"//; s/"$//')
+            _h=$(md5_of "$_p")
+            if [ "$_w" != "$_h" ]; then
+                rm -rf "$_kn"
+                ship_refuse 保存已知良好 "$_p 和清单对不上（清单 ${_w:-没写}，现在 $_h）"
+            fi
+            cp -p "$_p" "$_kn/$_c/${_p##*/}" && [ "$(md5_of "$_kn/$_c/${_p##*/}")" = "$_h" ] || {
+                rm -rf "$_kn"
+                ship_refuse 保存已知良好 "拷不了 $_p"
+            }
+            _m="$_m${NL}file=${_p##*/} $_h"
+        done
+        printf '%s\n' "$_m" >"$_kn/$_c/meta"
+        _kc="$_kc${_kc:+ }$_c"
+    done
+    [ -n "$_kc" ] || {
+        rm -rf "$_kn"
+        ship_refuse 保存已知良好 "清单里没有任何组件"
+    }
+    _m="v=1${NL}mac_time=$_kt${NL}why=$(printf '%s' "$_kw" | tr -d '\n' | cut -c1-120)${NL}comps=$_kc"
+    for _p in "$SELF" "$SHIP_DIR/$REC_NAME"; do
+        [ -f "$_p" ] || continue
+        cp -p "$_p" "$_kn/${_p##*/}" || {
+            rm -rf "$_kn"
+            ship_refuse 保存已知良好 "拷不了 $_p"
+        }
+        _m="$_m${NL}file=${_p##*/} $(md5_of "$_kn/${_p##*/}")"
+    done
+    printf '%s\n' "$_m" >"$_kn/meta"
+    sync_hb
+    _kf=$($DF -Pk "$ROOT/data" 2>/dev/null | awk 'NR == 2 { print $4 }')
+    if [ "$(num "$_kf")" -lt "$(num "$MIN_FREE_KB")" ]; then
+        rm -rf "$_kn"
+        ship_refuse 保存已知良好 "存完 /data 只剩 $((_kf / 1024)) MB，会挡住以后上机"
+    fi
+    [ -d "$KNOWN_GOOD" ] && mv -f "$KNOWN_GOOD" "$KNOWN_GOOD.old"
+    mv -f "$_kn" "$KNOWN_GOOD" || ship_refuse 保存已知良好 "换不上（下次运行会恢复旧的）"
+    sync_hb
+    rm -rf "$KNOWN_GOOD.old"
+    sync_hb
+    log "保存已知良好组合：$_kc${_kw:+（$_kw）}"
+    say "已保存已知良好组合：$_kc"
+}
+
+# known-good-show: one line per item, each file checked again; changes nothing. Exit 1: none, or damaged.
+ship_known_good_show() {
+    _ks=$KNOWN_GOOD
+    [ -f "$_ks/meta" ] || _ks=$KNOWN_GOOD.old
+    [ -f "$_ks/meta" ] || {
+        echo "known-good: none"
+        return 1
+    }
+    _kbad=0
+    echo "known-good: saved $(sed -n 's/^mac_time=//p' "$_ks/meta") $(sed -n 's/^why=//p' "$_ks/meta")"
+    for _km in "$_ks/meta" "$_ks"/*/meta; do
+        [ -f "$_km" ] || continue
+        _kd=${_km%/meta}
+        _kk=ok
+        for _kf in $(sed -n 's/^file=\([^ ]*\) .*/\1/p' "$_km"); do
+            [ "$(md5_of "$_kd/$_kf")" = "$(sed -n "s/^file=$_kf //p" "$_km")" ] || _kk=damaged
+        done
+        [ "$_kk" = ok ] || _kbad=1
+        if [ "$_kd" = "$_ks" ]; then
+            echo "tools $_kk"
+        else
+            echo "${_kd##*/} $(sed -n 's/^commit=//p' "$_km" | cut -c1-8) $_kk"
+        fi
+    done
+    return $_kbad
+}
+
+# prepare-known-good <comp> <txn> <mac time>: stage the saved copy, then it goes through
+# stage / trial / promote / check like any rollback (note=rollback: the user's verdict).
+ship_prepare_known_good() {
+    _c=$1
+    _txn=$2
+    matches "$_txn" "$TXN_RE" || ship_refuse 准备退回 "事务号 “$_txn” 格式不对"
+    case "$_txn" in *-"$_c") ;; *) ship_refuse 准备退回 "事务号不是以组件名 $_c 结尾" ;; esac
+    matches "$3" '^[0-9]{9,11}$' || ship_refuse 准备退回 "时间 “$3” 不是 Unix 秒"
+    { matches "$_c" '^[a-z0-9]{1,12}$' && comp_load "$_c"; } || ship_refuse 准备退回 "${C_NOTREADY:-组件 “$_c” 不认识}"
+    [ -n "$C_NOTREADY" ] && ship_refuse 准备退回 "$C_NOTREADY"
+    P=$(txn_busy)
+    [ -n "$P" ] && ship_refuse 准备退回 "$P"
+    kg_heal
+    _kd=$KNOWN_GOOD/$_c
+    [ -f "$_kd/meta" ] || ship_refuse 准备退回 "已知良好组合里没有 $_c"
+    _sd=$STAGE_DIR/$_txn
+    rm -rf "$_sd"
+    mkdir -p "$_sd" || ship_refuse 准备退回 "建不了 $_sd"
+    _cm=$(sed -n 's/^commit=//p' "$_kd/meta")
+    _meta="v=1${NL}txn=$_txn${NL}comp=$_c${NL}commit=$_cm${NL}mac_time=$3${NL}format=$(sed -n 's/^format=//p' "$_kd/meta")${NL}note=rollback"
+    for _p in $C_FILES; do
+        _b=${_p##*/}
+        _w=$(sed -n "s/^file=$_b //p" "$_kd/meta")
+        if [ -n "$_w" ]; then
+            _src=$_kd/$_b
+        elif [ -n "$C_ALLOW_NEW" ] && [ -f "$_p" ]; then
+            log "准备退回：$_p 不在已知良好组合里，保持现在的版本"
+            _src=$_p
+            _w=$(md5_of "$_p")
+        else
+            rm -rf "$_sd"
+            ship_refuse 准备退回 "已知良好组合里没有 $_b"
+        fi
+        cp "$_src" "$_sd/$_b" && [ "$(md5_of "$_sd/$_b")" = "$_w" ] || {
+            rm -rf "$_sd"
+            ship_refuse 准备退回 "已知良好的 $_b 坏了（md5 不对）"
+        }
+        _meta="$_meta${NL}file=$_b $_w"
+    done
+    printf '%s\n' "$_meta" >"$_sd/meta"
+    sync_hb
+    log "准备退回：$_c 退到已知良好的 $_cm"
+    say "已准备退回 $_txn：$_c → 已知良好 $_cm"
+}
+
 # selftest: a whole transaction in a /tmp sandbox with the selftest
 # component (pass; check fails → rolled back; bad md5 → refused).
 ship_selftest() {
@@ -3038,7 +3671,7 @@ ship_selftest() {
         [ "$1" = rollback ] && : >"$_sb/root/selftest-check-fail"
         (
             export U60S_ROOT="$_sb/root" U60S_TMP="$_sb/tmp" U60S_BOOT_ID="$_sb/boot_id"
-            export U60S_MIN_FREE_KB=0 U60S_SELFTEST_CHECK=1 U60S_MANIFEST="$_sb/root/data/luyaz/ship/manifest.jsonl"
+            export U60S_BATTERY=/nonexistent U60S_MIN_FREE_KB=0 U60S_SELFTEST_CHECK=1 U60S_MANIFEST="$_sb/root/data/luyaz/ship/manifest.jsonl"
             unset U60S_DIR U60S_LOG U60S_TEST_LOG U60S_CRASH_AT
             sh "$SELF" stage 20000101-000000-selftest && sh "$SELF" run 20000101-000000-selftest
         ) >"$_sb/out" 2>&1
@@ -3078,6 +3711,9 @@ usage: $0 stage <txn>        check the upload in stage/<txn>/, place side files
        $0 wait <seconds>     until a terminal phase (exit 4 on timeout)
        $0 abort              TERM the executor (it finishes by phase)
        $0 recover-live [--force]   finish a transaction whose executor died
+       $0 verify-prev                 the sentinel: check rollback copies of builds that proved themselves
+       $0 auto-rollback <txn> <why>   the sentinel: a promoted build loops, put the old one back
+       $0 unquarantine <commit>   let a quarantined build be shipped again
        $0 manifest-finish    write the manifest line a transaction still owes
        $0 selftest           whole transactions in a /tmp sandbox
        $0 print-launch core|touch|lweb   the trial's start command
@@ -3086,6 +3722,9 @@ usage: $0 stage <txn>        check the upload in stage/<txn>/, place side files
        $0 install-recover <txn>   replace luyaz-recover.sh with stage/<txn>/luyaz-recover.sh
        $0 record <name|all> <mac unix time> [why…]   accept a recorded file as it is now
        $0 prepare-rollback <comp> <txn> <mac unix time>   stage the version before the last ship
+       $0 keep-good <mac unix time> [why]   what is live now becomes the known-good set
+       $0 known-good-show    the known-good set, each file checked
+       $0 prepare-known-good <comp> <txn> <mac unix time>   stage the known-good copy of a component
        $0 record-kit <comp> <kit stamp> <commit> <format> <mac unix time> [dirty]   the install kit put it there
        $0 tree-fp <dir>      the directory fingerprint (exit 1: cannot be taken)
 formats: docs/SHIP.md
@@ -3101,13 +3740,20 @@ ship_main() {
         start) [ $# = 1 ] || ship_usage; ship_start "$1" ;;
         run) [ $# = 1 ] || ship_usage; ship_run "$1" ;;
         status) ship_status ;;
+        preflight) ship_preflight ;;
         wait) [ $# = 1 ] || ship_usage; ship_wait "$1" ;;
         abort) ship_abort ;;
         recover-live) ship_recover_live "$1" ;;
+        auto-rollback) [ $# = 2 ] || ship_usage; ship_auto_rollback "$1" "$2" ;;
+        verify-prev) ship_verify_prev ;;
+        unquarantine) [ $# = 1 ] || ship_usage; ship_unquarantine "$1" ;;
         manifest-finish) ship_manifest_finish ;;
         selftest) ship_selftest ;;
         record) [ $# -ge 2 ] || ship_usage; ship_record "$@" ;;
         prepare-rollback) [ $# = 3 ] || ship_usage; ship_prepare_rollback "$@" ;;
+        keep-good) [ $# -ge 1 ] && [ $# -le 2 ] || ship_usage; ship_keep_good "$@" ;;
+        known-good-show) ship_known_good_show ;;
+        prepare-known-good) [ $# = 3 ] || ship_usage; ship_prepare_known_good "$@" ;;
         record-kit) [ $# -ge 5 ] && [ $# -le 6 ] || ship_usage; ship_record_kit "$@" ;;
         tree-fp) [ $# = 1 ] || ship_usage; tree_fp "$1" ;;
         install-recover) [ $# = 1 ] || ship_usage; ship_install_recover "$1" ;;

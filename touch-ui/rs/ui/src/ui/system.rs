@@ -115,7 +115,15 @@ const VER_ROWS: i32 = VER_NAMES.len() as i32;
 /// 「1.0.0」, 「1.0.0 → 1.1.0」 when there is a newer one, 「未编号」 for a build before 1.0.0.
 pub fn ver_line(r: &ui_model::ver_row_t) -> String {
     let cur = if r.installed.is_empty() { tr("未编号") } else { r.installed.as_str() };
-    if r.update != 0 && !r.latest.is_empty() { format!("{cur} → {}", r.latest) } else { cur.to_string() }
+    if r.restart != 0 {
+        format!("{cur} · {}", tr("需重启"))
+    } else if r.drift != 0 {
+        format!("{cur} · {}", tr("和记录不符"))
+    } else if r.update != 0 && !r.latest.is_empty() {
+        format!("{cur} → {}", r.latest)
+    } else {
+        cur.to_string()
+    }
 }
 
 unsafe extern "C" fn versions_check_cb(_e: *mut sys::lv_event_t) {

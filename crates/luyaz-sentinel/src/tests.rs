@@ -711,6 +711,10 @@ struct Dev {
     alerts: Vec<String>,
     logs: Vec<String>,
     recover_calls: u32,
+    auto_calls: Vec<String>,
+    verify_calls: u32,
+    gone_comms: Vec<String>,
+    conn_bad: Vec<String>,
     cmdlines: HashMap<i32, String>,
     non_append: Vec<String>,
     capped: Vec<String>,
@@ -840,6 +844,31 @@ impl WorkerIo for Dev {
         self.changes += 1;
         self.recover_calls += 1;
         true
+    }
+    fn auto_rollback(&mut self, txn: &str, why: &str) -> bool {
+        self.changes += 1;
+        self.auto_calls.push(format!("{txn}: {why}"));
+        true
+    }
+    fn verify_prev(&mut self) -> bool {
+        self.verify_calls += 1;
+        true
+    }
+    fn list_dir(&mut self, path: &str) -> Vec<String> {
+        let pre = format!("{path}/");
+        let mut v: Vec<String> = self
+            .files
+            .keys()
+            .filter_map(|k| k.strip_prefix(&pre).map(str::to_string))
+            .collect();
+        v.sort();
+        v
+    }
+    fn conn_ok(&mut self, item: &str) -> Option<bool> {
+        Some(!self.conn_bad.iter().any(|c| c == item))
+    }
+    fn comm_running(&mut self, comm: &str) -> Option<bool> {
+        Some(!self.gone_comms.iter().any(|c| c == comm))
     }
     fn cap_log(&mut self, path: &str) -> bool {
         self.changes += 1;
@@ -2671,3 +2700,256 @@ fn kept_log_rolls_into_one_old_file_at_the_cap() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+const WD: &str = "/data/luyaz/ship/watch";
+fn watched(d: &mut Dev, txn: &str, comp: &str, act_boot: &str, act_up: u64) {
+    d.files.insert(
+        format!("{WD}/{txn}"),
+        format!("v=1\ntxn={txn}\ncomp={comp}\nphase=done\nact_boot={act_boot}\nact_uptime={act_up}\nwatch=1\nend=1\n"),
+    );
+}
+fn this_boot(d: &mut Dev) -> String {
+    format!("{}-rest", boot8(d))
+}
+
+/// A later boot that lasts proves every build and ends the count; earlier it judges nothing.
+#[test]
+fn watch_ends_after_a_long_boot_and_never_acts_across_boots() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    watched(&mut d, "t1", "lweb", "other", 100);
+    watched(&mut d, "t2", "core", "other", 200);
+    d.files
+        .insert("/data/luyaz/ship/watch-boots".into(), "x\n".into());
+    d.gone_comms.push("luyaz-web".into());
+    d.up = 1799;
+    for _ in 0..5 {
+        w.watch_round(&mut d);
+    }
+    assert!(d.auto_calls.is_empty());
+    assert!(d.files.contains_key(&format!("{WD}/t1")));
+    d.up = 1800;
+    w.watch_round(&mut d);
+    assert!(!d.files.keys().any(|k| k.starts_with(WD)), "all proved");
+    assert!(!d.files.contains_key("/data/luyaz/ship/watch-boots"));
+}
+
+/// Gone three rounds running sends it back; a return resets the count.
+#[test]
+fn watch_sends_back_a_program_that_stays_gone() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    let (b, up) = (this_boot(&mut d), d.up);
+    watched(&mut d, "t1", "lweb", &b, up);
+    d.gone_comms.push("luyaz-web".into());
+    w.watch_round(&mut d);
+    w.watch_round(&mut d);
+    d.gone_comms.clear();
+    w.watch_round(&mut d);
+    d.gone_comms.push("luyaz-web".into());
+    w.watch_round(&mut d);
+    w.watch_round(&mut d);
+    assert!(d.auto_calls.is_empty(), "the return reset it");
+    w.watch_round(&mut d);
+    assert_eq!(d.auto_calls, ["t1: luyaz-web gone"]);
+}
+
+/// A ship of something else on top does not hide the older build that is failing, and only
+/// the failing component is blamed.
+#[test]
+fn watch_finds_the_failing_build_under_a_newer_ship() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    let (b, up) = (this_boot(&mut d), d.up);
+    watched(&mut d, "t1", "touch", &b, up);
+    watched(&mut d, "t2", "lweb", &b, up);
+    watched(&mut d, "t3", "sentinel", &b, up);
+    d.files
+        .insert("/data/luyaz/screen/gave-up".into(), "1".into());
+    w.watch_round(&mut d);
+    assert_eq!(d.auto_calls, ["t1: UI launches gave up"]);
+}
+
+/// Two ships of one component: the newest goes back first.
+#[test]
+fn watch_sends_back_the_newest_of_a_component() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    let (b, up) = (this_boot(&mut d), d.up);
+    watched(&mut d, "t1", "touch", &b, up);
+    watched(&mut d, "t2", "touch", &b, up);
+    d.files
+        .insert("/data/luyaz/screen/gave-up".into(), "1".into());
+    w.watch_round(&mut d);
+    assert_eq!(d.auto_calls, ["t2: UI launches gave up"]);
+}
+
+/// An hour in the boot it went live in proves it, each on its own clock.
+#[test]
+fn watch_hands_a_proved_build_to_verify_prev_once() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    d.up = 5000;
+    let boot = this_boot(&mut d);
+    watched(&mut d, "20261105-000000-lweb", "lweb", &boot, 100);
+    w.watch_round(&mut d);
+    let moved = "/data/luyaz/ship/prev-check/20261105-000000-lweb";
+    assert!(d.files.get(moved).is_some_and(|t| t.contains("comp=lweb")));
+    assert!(!d.files.contains_key("/data/luyaz/ship/watch/20261105-000000-lweb"));
+    assert_eq!(d.verify_calls, 1);
+    w.watch_round(&mut d);
+    assert_eq!(d.verify_calls, 1, "a script that left it is not started again");
+}
+
+#[test]
+fn watch_proves_each_build_on_its_own_clock() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    let b = this_boot(&mut d);
+    d.up = 5000;
+    watched(&mut d, "t1", "core", &b, 1400);
+    watched(&mut d, "t2", "lweb", &b, 4000);
+    w.watch_round(&mut d);
+    assert!(!d.files.contains_key(&format!("{WD}/t1")));
+    assert!(d.files.contains_key(&format!("{WD}/t2")));
+}
+
+/// Still failing when the hour is up: sent back, never "proved".
+#[test]
+fn watch_never_proves_a_build_that_is_failing() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    let b = this_boot(&mut d);
+    d.up = 5000;
+    d.files
+        .insert("/data/luyaz/screen/gave-up".into(), "1".into());
+    watched(&mut d, "t1", "touch", &b, 1000);
+    watched(&mut d, "t0", "core", &b, 1000);
+    w.watch_round(&mut d);
+    assert_eq!(d.auto_calls.len(), 1);
+    assert!(d.files.contains_key(&format!("{WD}/t0")), "nothing proved");
+    assert!(d.files.contains_key(&format!("{WD}/t1")));
+}
+
+fn conn_watched(d: &mut Dev, txn: &str, comp: &str, ok: &str) {
+    let (b, up) = (this_boot(d), d.up);
+    d.files.insert(
+        format!("{WD}/{txn}"),
+        format!("v=1\ntxn={txn}\ncomp={comp}\nphase=done\nact_boot={b}\nact_uptime={up}\nwatch=1\nconn_ok={ok}\nend=1\n"),
+    );
+}
+/// Rounds a minute apart.
+fn conn_rounds(w: &mut Worker, d: &mut Dev, n: u32) {
+    for _ in 0..n {
+        w.watch_round(d);
+        d.up += 60;
+    }
+}
+
+/// Ten minutes down, not a round less, and coming back starts the clock over.
+#[test]
+fn watch_conn_sends_back_after_ten_minutes_down() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    conn_watched(&mut d, "t1", "lweb", "ssh,tailscale");
+    d.conn_bad.push("tailscale".into());
+    conn_rounds(&mut w, &mut d, 10);
+    d.conn_bad.clear();
+    conn_rounds(&mut w, &mut d, 1);
+    d.conn_bad.push("tailscale".into());
+    conn_rounds(&mut w, &mut d, 10);
+    assert!(d.auto_calls.is_empty(), "{:?}", d.auto_calls);
+    conn_rounds(&mut w, &mut d, 1);
+    assert_eq!(d.auto_calls, ["t1: conn lost: tailscale"]);
+}
+
+/// What the baseline did not have, or a record with no baseline, is never this build's doing.
+#[test]
+fn watch_conn_only_compares_with_the_baseline() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    conn_watched(&mut d, "t1", "lweb", "ssh");
+    let (b, up) = (this_boot(&mut d), d.up);
+    watched(&mut d, "t0", "core", &b, up);
+    d.conn_bad.push("tailscale".into());
+    conn_rounds(&mut w, &mut d, 30);
+    assert!(d.auto_calls.is_empty(), "{:?}", d.auto_calls);
+}
+
+/// The newest build that had it takes the blame, and a build shipped while it was down does not.
+#[test]
+fn watch_conn_blames_the_newest_that_had_it() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    conn_watched(&mut d, "t1", "touch", "ssh,tailscale");
+    conn_watched(&mut d, "t2", "lweb", "ssh,tailscale");
+    conn_watched(&mut d, "t3", "core", "ssh");
+    conn_watched(&mut d, "t4", "sentinel", "ssh,tailscale");
+    d.conn_bad.push("tailscale".into());
+    conn_rounds(&mut w, &mut d, 11);
+    assert_eq!(d.auto_calls, ["t2: conn lost: tailscale"]);
+}
+
+/// A carrier or a person may be the cause: once sent back, the other builds are left alone.
+#[test]
+fn watch_conn_goes_back_once_per_boot() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    conn_watched(&mut d, "t1", "touch", "tailscale");
+    conn_watched(&mut d, "t2", "lweb", "tailscale");
+    d.conn_bad.push("tailscale".into());
+    conn_rounds(&mut w, &mut d, 11);
+    assert_eq!(d.auto_calls.len(), 1);
+    // what `auto_records` leaves
+    let boot = this_boot(&mut d);
+    d.files.remove(&format!("{WD}/t2"));
+    d.files.insert("/data/luyaz/ship/watch-conn-rolled".into(), format!("{boot}\n"));
+    conn_rounds(&mut w, &mut d, 60);
+    assert_eq!(d.auto_calls.len(), 1, "{:?}", d.auto_calls);
+    assert!(!d.files.contains_key(&format!("{WD}/t1")), "it proves itself");
+}
+
+/// A refused rollback (a call, the off switch) is tried again; a marker from an older boot counts
+/// for nothing.
+#[test]
+fn watch_conn_retries_and_ignores_an_old_marker() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    d.files.insert("/data/luyaz/ship/watch-conn-rolled".into(), "00000000-old\n".into());
+    conn_watched(&mut d, "t1", "lweb", "lan");
+    d.conn_bad.push("lan".into());
+    conn_rounds(&mut w, &mut d, 12);
+    assert_eq!(d.auto_calls.len(), 2);
+}
+
+/// A ship in progress stops things itself; the count waits for it to end.
+#[test]
+fn watch_conn_does_not_count_during_a_ship() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    conn_watched(&mut d, "t1", "lweb", "lan");
+    d.files.insert("/data/luyaz/ship/txn".into(), "phase=trial\ncomp=core\n".into());
+    d.conn_bad.push("lan".into());
+    conn_rounds(&mut w, &mut d, 20);
+    d.files.insert("/data/luyaz/ship/txn".into(), "phase=done\ncomp=core\n".into());
+    conn_rounds(&mut w, &mut d, 10);
+    assert!(d.auto_calls.is_empty(), "{:?}", d.auto_calls);
+    conn_rounds(&mut w, &mut d, 1);
+    assert_eq!(d.auto_calls.len(), 1);
+}
+
+/// While one is down nothing proves itself, however old.
+#[test]
+fn watch_conn_holds_the_proof_while_down() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    conn_watched(&mut d, "t1", "lweb", "lan");
+    d.up += 3590;
+    d.conn_bad.push("lan".into());
+    conn_rounds(&mut w, &mut d, 5);
+    assert!(d.files.contains_key(&format!("{WD}/t1")));
+    d.conn_bad.clear();
+    conn_rounds(&mut w, &mut d, 1);
+    assert!(!d.files.contains_key(&format!("{WD}/t1")));
+}
+

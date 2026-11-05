@@ -1020,3 +1020,16 @@ fn regress_texts_fit_134_with_the_longest_name() {
         }
     }
 }
+
+#[test]
+fn a_rollback_alert_passes_the_day_limit_but_not_the_hour_limit() {
+    let now = 1_000_000;
+    let full: String = (0..5)
+        .map(|i| format!("{}\t{i}\tregress-egress\tsent\n", now - 7200 - i))
+        .collect();
+    assert!(!rate_ok(&full, "regress-power", now));
+    assert!(rate_ok(&full, "ship-conn-rollback", now));
+    assert!(rate_ok(&full, "ship-auto-rollback", now));
+    let again = format!("{full}{}\t9\tship-conn-rollback\tsent\n", now - 60);
+    assert!(!rate_ok(&again, "ship-conn-rollback", now));
+}

@@ -747,6 +747,12 @@ pub struct ver_row_t {
     /// empty: not known
     pub latest: String,
     pub update: i32,
+    /// the file was replaced and the program still runs the old one
+    #[serde(default)]
+    pub restart: i32,
+    /// the file differs from the last ship's record
+    #[serde(default)]
+    pub drift: i32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

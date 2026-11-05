@@ -1,3 +1,13 @@
 # u60 ship：core 的状态文件（设备上的绝对路径，一行一个）。试跑、转正前拷一份，退回时一起换回。
-# 只写会被程序改写的设置和状态；只追加的日志、账本不写。必须在 luyaz-ship.sh 里这个组件的清单之内。
-# 现在没有。
+# 只写用户设置，且旧版读不懂新格式时会回到默认值、下次保存就把设置盖掉的。必须在 luyaz-ship.sh 里这个组件的清单之内。
+# 其余可变文件见同目录 state-keep。
+/data/scenario/scenarios.json
+/data/apn-pick.json
+/data/local/tmp/scheduler.json
+/data/local/tmp/charge_limit.json
+/data/local/tmp/sms_forward.json
+/data/luyaz/lanid/aliases.json
+/data/luyaz/core/poller-allow.json
+/data/luyaz/core/long/regress-limits.json
+/data/luyaz/core/ops/agent-limit.json
+/data/luyaz/core/ops/roam-cheap.json

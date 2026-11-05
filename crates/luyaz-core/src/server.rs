@@ -1089,14 +1089,18 @@ async fn usage_landing() -> Json<Value> {
 }
 
 async fn versions() -> Json<Value> {
-    Json(crate::versions::report())
+    Json(blocking_report().await)
+}
+/// `report` may hash a program the first time it sees it.
+async fn blocking_report() -> Value {
+    tokio::task::spawn_blocking(crate::versions::report).await.unwrap_or(Value::Null)
 }
 /// Look at the public repo now (the screen's and the web's 「检查更新」). The check runs on its own
 /// task: the screen hangs up after a second and reads the answer later.
 async fn versions_check() -> Json<Value> {
     match tokio::spawn(crate::versions::check()).await {
         Ok(v) => Json(v),
-        Err(_) => Json(crate::versions::report()),
+        Err(_) => Json(blocking_report().await),
     }
 }
 

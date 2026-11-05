@@ -103,6 +103,8 @@ Served by the core on loopback as `/v2/api/…`; luyaz-web (`alerts_page.rs`) is
 - The core runs the checks itself (first 20 s after start, then periodically) and serves the snapshot at `/api/health`.
 - `touch-ui/scripts/config-backup.sh`: configuration only (list at the top of the script), Tailscale identity only with `--with-tailscale`. Backups live only on the computer (`./install.sh backup`); `restore` plans first, leaves `.pre-restore`, does not reload Wi-Fi.
 
+- **After a promote**: a build that loops goes back by itself: `luyaz-recover.sh` counts unasked boots while `/data/luyaz/ship/watch/<txn>` files exist and sends the newest back every third, the sentinel judges the boot a build went live in and deletes its file once it proved itself. Quarantine `/data/luyaz/ship/quarantine`, off switch `/data/luyaz/ship/auto-rollback-off`, alert `ship-auto-rollback`. A way in (SSH, LAN, Tailscale) that the ship's baseline had and stays down 10 minutes in that boot sends the newest build back too, unquarantined, once per boot (`ship-conn-rollback`). Rules: `touch-ui/docs/SHIP.md`.
+
 ## 8. Standby records
 
 - Writer: core `longterm/standby.rs`, only while `/tmp/luyaz/handover` names `standby`. While the backlight is off, one line per round to `/tmp/standby.stat`: `<uptime> <cellular pkts/min> <Tailscale tunnel pkts/min> <wakeups/s per program>`, last 60 kept; a program whose pid changed is `-`; no line if the previous round is more than 150 s ago.

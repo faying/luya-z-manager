@@ -102,6 +102,8 @@
 - 核心自己跑体检（启动后 20 秒第一次，之后定时），快照由 `/api/health` 提供。
 - `touch-ui/scripts/config-backup.sh`：只备份配置（清单在脚本开头），Tailscale 身份要 `--with-tailscale`。备份只存在电脑上（`./install.sh backup`）；`restore` 先 plan、写前留 `.pre-restore`、不 reload Wi-Fi。
 
+- **转正后**：反复出事的版本自动换回：`/data/luyaz/ship/watch/<事务号>` 还在时 `luyaz-recover.sh` 数非预期开机，每 3 次退最新的一个；哨兵判转正那次开机，版本证明过自己后删掉那个文件。隔离清单 `/data/luyaz/ship/quarantine`，关闭开关 `/data/luyaz/ship/auto-rollback-off`，告警 `ship-auto-rollback`。基线里通的 SSH、LAN、Tailscale 在那次开机连续坏 10 分钟，也退最新的版本，不隔离，一次开机最多一个（`ship-conn-rollback`）。规则见 `touch-ui/docs/SHIP.md`。
+
 ## 8. 待机记录
 
 - 写者：核心 `longterm/standby.rs`，只在 `/tmp/luyaz/handover` 列了 `standby` 时。背光关着时每轮往 `/tmp/standby.stat` 写一行：`<开机秒> <蜂窝包/分> <Tailscale 隧道包/分> <各程序唤醒/秒>`，留 60 行；中途换了 pid 的程序写 `-`；离上一轮超过 150 秒不写。

@@ -351,6 +351,58 @@ check "$CASE: prepared, luyaz-ui from the .prev" '[ "$RC" = 0 ] && [ "$(md5 "$R/
 teardown
 
 setup
+CASE="known-good"
+upload_touch
+stage $TT
+vok $TT
+run $TT
+sh "$SHIP" known-good-show >"$T/out" 2>&1; RC=$?
+check "$CASE: none yet" '[ "$RC" = 1 ] && grep -q "known-good: none" "$T/out"'
+KGW="$R/data/luyaz/ship/watch/$TT"
+mkdir -p "${KGW%/*}"; : >"$KGW"
+sh "$SHIP" keep-good 1790000100 >"$T/out" 2>&1; RC=$?
+check "$CASE: refused while a build is still watched, nothing saved" '[ "$RC" != 0 ] && [ ! -e "$R/data/luyaz/ship/known-good" ]'
+rm -f "$KGW"
+KGU=$UD/luyaz-ui
+KGL=$(md5 "$KGU")
+cp "$KGU" "$T/kg-live"; echo tampered >>"$KGU"
+sh "$SHIP" keep-good 1790000100 >"$T/out" 2>&1; RC=$?
+check "$CASE: a file the manifest does not vouch for is refused" '[ "$RC" != 0 ] && [ ! -e "$R/data/luyaz/ship/known-good" ] && [ ! -e "$R/data/luyaz/ship/known-good.new" ]'
+cp "$T/kg-live" "$KGU"
+sh "$SHIP" keep-good 1790000100 "first" >"$T/out" 2>&1; RC=$?
+KGD=$R/data/luyaz/ship/known-good
+check "$CASE: saved the live build with its commit" '[ "$RC" = 0 ] && [ "$(md5 "$KGD/touch/luyaz-ui")" = "$KGL" ] && grep -q "^commit=" "$KGD/touch/meta" && [ -f "$KGD/luyaz-ship.sh" ]'
+# four more real ships: the .prev rotation runs, the known-good copy stays
+for i in 1 2 3 4; do
+    TT=2026100${i}-15000${i}-touch
+    upload_touch "$TT"
+    stage $TT
+    vok $TT
+    run $TT
+done
+check "$CASE: four later ships: rotated to 3 .prev, the set is still there" '[ "$RC" = 0 ] && [ "$(phase)" = done ] && [ "$(ls "$UD" | grep -c "luyaz-ui\.prev-")" = 3 ] && [ "$(md5 "$KGD/touch/luyaz-ui")" = "$KGL" ] && [ "$(md5 "$UD/luyaz-ui")" != "$KGL" ]'
+sh "$SHIP" known-good-show >"$T/out" 2>&1; RC=$?
+check "$CASE: show says ok" '[ "$RC" = 0 ] && grep -q "^touch .* ok$" "$T/out"'
+echo x >>"$KGD/touch/luyaz-ui"
+sh "$SHIP" known-good-show >"$T/out" 2>&1; RC=$?
+check "$CASE: one damaged byte is reported" '[ "$RC" = 1 ] && grep -q "^touch .* damaged$" "$T/out"'
+sh "$SHIP" prepare-known-good touch 20261001-140000-touch 1790000200 >"$T/out" 2>&1; RC=$?
+check "$CASE: a damaged copy is not staged" '[ "$RC" != 0 ] && [ ! -e "$R/data/luyaz/ship/stage/20261001-140000-touch" ]'
+cp "$T/kg-live" "$KGD/touch/luyaz-ui"
+sh "$SHIP" prepare-known-good touch 20261001-140000-touch 1790000200 >"$T/out" 2>&1; RC=$?
+KGS=$R/data/luyaz/ship/stage/20261001-140000-touch
+check "$CASE: restore stages the saved copy as a rollback" '[ "$RC" = 0 ] && [ "$(md5 "$KGS/luyaz-ui")" = "$KGL" ] && grep -qx "note=rollback" "$KGS/meta"'
+stage 20261001-140000-touch
+check "$CASE: stage accepts it" '[ "$RC" = 0 ]'
+mv "$KGD" "$KGD.old"; mkdir "$KGD.new"
+sh "$SHIP" known-good-show >"$T/out" 2>&1; RC=$?
+check "$CASE: a swap cut by power: show still reads the old set, changes nothing" '[ "$RC" = 0 ] && grep -q "^touch " "$T/out" && [ -d "$KGD.old" ] && [ -d "$KGD.new" ]'
+rm -f "$R/data/luyaz/ship/txn" "$UD/luyaz-ui.test"
+sh "$SHIP" prepare-known-good touch 20261001-160000-touch 1790000300 >"$T/out" 2>&1; RC=$?
+check "$CASE: the next prepare puts the old set back" '[ "$RC" = 0 ] && [ -f "$KGD/meta" ] && [ ! -e "$KGD.old" ] && [ ! -e "$KGD.new" ]'
+teardown
+
+setup
 CASE="touch: the core never says ok"
 upload_touch
 stage $TT
@@ -1177,5 +1229,74 @@ for v in UID_UP HOLD_MAX; do
 done
 
 rm -f "$OLDREC"
+# ═══ the other programs the sentinel can send back ═══
+arm_watch() {
+    cp "$RECOVER" "$R/data/luyaz/ship/luyaz-recover.sh"
+    echo /data/luyaz/ship/watch >"$R/data/luyaz/luyaz-sentinel"
+}
+for _pc in phone audio; do
+    pa_setup
+    CASE="auto-rollback $_pc"
+    arm_watch
+    upload_pa $_pc
+    stage $PT
+    run $PT
+    check "$CASE: promoted, under watch" '[ "$(phase)" = done ] && [ -e "$R/data/luyaz/ship/watch/$PT" ]'
+    sh "$SHIP" auto-rollback "$PT" "luyaz-$_pc gone" >"$T/out" 2>&1
+    RC=$?
+    check "$CASE: exit 0, the old program runs again" '[ "$RC" = 0 ] && [ "$(phase)" = rolledback ] && [ "$(pa_md5 luyaz-$_pc)" != "$PA_NEW" ] && [ -n "$(pa_md5 luyaz-$_pc)" ]'
+    check "$CASE: quarantined" 'grep -q "^$_pc|.*|$PA_NEW|$PT|" "$R/data/luyaz/ship/quarantine"'
+    pa_teardown
+done
+pa_setup
+CASE="auto-rollback phone during a call"
+arm_watch
+upload_pa phone
+stage $PT
+run $PT
+echo "+15550100" >"$U60S_CALLS"
+sh "$SHIP" auto-rollback "$PT" "gone" >"$T/out" 2>&1
+RC=$?
+check "$CASE: not now" '[ "$RC" = 3 ] && [ "$(phase)" = done ] && [ -e "$R/data/luyaz/ship/watch/$PT" ]'
+: >"$U60S_CALLS"
+upload_pa_rb=20261028-130000-phone
+sh "$SHIP" prepare-rollback phone $upload_pa_rb 1790000100 >"$T/out" 2>&1
+stage $upload_pa_rb
+run $upload_pa_rb
+check "$CASE: a manual rollback ends the watch on that component" '[ "$(phase)" = done ] && [ ! -e "$R/data/luyaz/ship/watch/$PT" ]'
+pa_teardown
+
+lw_setup
+CASE="auto-rollback lweb"
+arm_watch
+upload_lweb
+stage $TW
+run $TW
+check "$CASE: under watch" '[ -e "$R/data/luyaz/ship/watch/$TW" ]'
+sh "$SHIP" auto-rollback "$TW" "luyaz-web gone" >"$T/out" 2>&1
+RC=$?
+check "$CASE: exit 0, the program of that first ship gone" '[ "$RC" = 0 ] && [ "$(phase)" = rolledback ] && [ ! -e "$LWB" ]'
+lw_teardown
+
+# ═══ the promoted touch UI loops: the sentinel's auto-rollback (docs/SHIP.md「转正后自动退回」) ═══
+setup
+CASE="auto-rollback touch"
+upload_touch
+vok "$TT"
+stage "$TT"
+run "$TT"
+check "$CASE: promoted" '[ "$(phase)" = done ]'
+_ui=$R/data/luyaz/ui/luyaz-ui
+_uinew=$(md5sum "$_ui" | cut -d' ' -f1)
+sed -i 's/^end=1$/watch=1\nend=1/' "$R/data/luyaz/ship/txn"
+mkdir -p "$R/data/luyaz/ship/watch"
+cp "$R/data/luyaz/ship/txn" "$R/data/luyaz/ship/watch/$TT"
+: >"$R/data/luyaz/screen/gave-up"
+sh "$SHIP" auto-rollback "$TT" "UI launches gave up" >"$T/out" 2>&1
+check "$CASE: old UI back, rolledback" "[ \"\$(phase)\" = rolledback ] && [ \"\$(md5sum '$_ui' | cut -d' ' -f1)\" != '$_uinew' ]"
+check "$CASE: the give-up cleared" "[ ! -e '$R/data/luyaz/screen/gave-up' ]"
+check "$CASE: quarantined" "grep -q '^touch|.*|$_uinew|$TT|UI launches gave up' '$R/data/luyaz/ship/quarantine'"
+teardown
+
 echo "u60-ship phase two: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

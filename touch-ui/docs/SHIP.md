@@ -6,7 +6,7 @@
 
 | 脚本 | 设备上的位置 | 谁更新它 |
 |---|---|---|
-| `scripts/luyaz-ship.sh` | `/data/luyaz/scripts/luyaz-ship.sh`（`core-trial.sh` 在同一目录，是它的壳；装机包放，ship 不换它） | 每次 ship 随上传一起带上（`luyaz-ship.sh.new`）；换之前先在设备上 `sh -n` + `luyaz-ship.sh selftest` |
+| `scripts/luyaz-ship.sh` | `/data/luyaz/scripts/luyaz-ship.sh`（`core-trial.sh` 在同一目录，是它的壳；装机包放，ship 不换它） | 每次 ship 随上传一起带上（`luyaz-ship.sh.new`）；换之前先在设备上 `sh -n` + `luyaz-ship.sh selftest`，旧版留在 `prev/` |
 | `scripts/luyaz-recover.sh` | `/data/luyaz/ship/luyaz-recover.sh` | **不随 ship 更新**；换它是单独一步（`sh -n` + `luyaz-recover.sh selftest` + 先问用户），和改 rc.local 一样 |
 
 本文件是两者和 Mac 端 `luyaz`（T7；`luyaz ship <组件>`、`luyaz rollback`、`luyaz status` 等，是维护者自己工作区的工具，不在本仓库里，没有它的人用装机包 `onboard/`）、哨兵兜底（G2，原 guard 的 T4）、doctor（T6）之间的约定。改格式要升版本号（下面每种文件都有 `v`），
@@ -44,7 +44,7 @@
 
 | 组件 | 期 | 状态 | 正式文件 | 状态文件（精确清单，不按目录） | 试跑 / 转正后检查 |
 |---|---|---|---|---|---|
-| `core` | 一 | 可用 | `/data/luyaz/luyaz-core` | 无（下面格式示例里的 cooling.conf 只是举例） | 旁路顶替 180 s / 120 s（core-trial 的全部检查） |
+| `core` | 一 | 可用 | `/data/luyaz/luyaz-core` | `crates/luyaz-core/ship/core/state-files` 的 10 个设置文件（下面格式示例里的 cooling.conf 只是举例） | 旁路顶替 180 s / 120 s（core-trial 的全部检查） |
 | `touch` | 二 | 可用（只编 `rs/`） | `/data/luyaz/ui/luyaz-ui` | `/data/luyaz/ui/ui.conf` | 旁路顶替 60 s / 120 s（下面「第二期」的 touch 检查） |
 | `scripts` | 五 | 可用（带 luyaz-web、luyaz-core 的 init：txn v=5，设备上的 luyaz-recover.sh 要有 formats 5） | `/data/luyaz/scripts/` 下 `SCRIPTS_FILES`（`alert-lib.sh web-auth.sh chaos.sh doctor.sh config-backup.sh wan-sources.sh rpc-acl.sh luyaz-fallback.sh net-tune.sh VERSION`，和 Mac 端 `luyaz` 的同名表一致；`luyaz-fallback.sh` 不在时 `touch` 拒绝）+ `/etc/init.d/{luyaz-core,luyaz-sentinel,luyaz-web}`（`SCRIPTS_INITS`）。改名留下的旧文件（`agent-auth.sh`、`datad-trial.sh`、`u60-fallback.sh` 等）不在表里，ship 不管 | — | direct，— / 60 s（md5 + sh -n） |
 | `sentinel` | 五 | 可用 | `/data/luyaz/luyaz-sentinel`（只换程序，rc.local 不动） | — | direct，— / 300 s（下面「哨兵」的检查 + 核心的判定，两者都要过） |
@@ -60,6 +60,7 @@
   touch 的界面检查同样。测试用 `DT_LOGREAD` 时是那份输出的简单计数。
 - 试跑启动的命令和 init 脚本 `start_service` 一样（init 由 procd 直接拉起，试跑不经 procd，崩了不被拉起；supervise.sh 10-15 已退役）：core（`core`）、touch、lweb 见 `print-launch <组件>`。测试里各有一个
   「和 init 脚本对不上就失败」的用例。
+- **可变状态都要宣告**：`state-files` 退回时换回（只放用户设置，旧版读不懂新格式会回到默认值、下次保存就盖掉）；`state-keep` 不换回（收到的数据、身份、设备现状、计数、日志，一行写类别和原因）。两者之外的文件由 `luyaz state-audit` 报出来。换回只发生在试跑、转正后检查、开机恢复这几分钟内；转正后的自动退回不换状态。
 - 只追加的日志和账本（`/data/scenario/log`、核心的 `/data/luyaz/core/long/*.jsonl` 等）不是状态文件，退回时不会被覆盖。
 - 状态文件只能是普通文件（或者不存在）。
 - 组件描述在 `luyaz-ship.sh` 的 `comp_load` 里：`C_KIND`（`trial` 旁路顶替 / `direct` 直接转正）、`C_FILES`、`C_DIRS`（整个换的目录）、
@@ -111,6 +112,7 @@ state=/data/luyaz/core/cooling.conf   可选，可重复；必须在组件的状
   解开以后指纹不对、正式目录不在或算不了指纹；要写 v=2 而设备上的 luyaz-recover.sh 读不了 v=2；
 - 有事务在进行（非终态）或停在「failed」；core-trial（核心试跑）的守护在跑；另一个 stage 拿着 flock；
 - `/data` 可用 < 200 MB；
+- 没接电且电量 < 30%，或电池 ≥ 50°C（OTA-06）。读不到不算；退回（`note=rollback`）不受限；`preflight_ok=1`（`luyaz ship --preflight-ok`）跳过；
 - 格式版本和设备上的不同：设备上的版本 = 清单里这个组件最后一条 ship 记录的 `format`，没有记录按 1 算。
   **高了**按 R14 拒绝（要单独写迁移和退回方案）；**低了**也拒绝（报告没覆盖，按「宁可中止」处理：旧程序读新格式的数据不可预期）。
 - 上一次事务停在「清单待补」时，stage 先补完清单（`manifest-finish`）再往下查。
@@ -195,6 +197,79 @@ staged → trial → promote → check → manifest → done
 luyaz-recover.sh 只在「日志里的开机号 ≠ 现在的开机号」时动手（同一次开机归执行器和哨兵兜底）；日志的 `v` 看不懂、没有 `end=1`、
 字段不合格式、路径越界、程序文件被标成「原来不存在」时一律不动文件（整份日志里只要有一行不对就全部不动），只在 recover.log 记一行。它不做算术、不 `.` 任何文件、不联网。
 
+## 检查中重启演练（OTA-03）
+
+`tools/luyaz-drill [--device global]`：真实上一版 core，停在转正后检查时改一个宣告过的状态文件并重启（计划内），开机后核对恢复链：`phase=rolledback`、程序和状态文件的 md5 都是旧的、清单没有这个事务、隔离没变、核心和界面都在。结果追加到设备 `/data/luyaz/ship/drills` 和电脑 `releases/device-backups/drills.jsonl`。之后要重新上这一版。重启前要用户同意，两次重启至少隔 10 分钟。
+
+实机结果（2026-11-04，两台）：验过「重启打断进行中的退回，开机后收尾」；全球版还验过「执行器被杀，哨兵接手退回，再被重启打断」。程序和状态文件都换回旧值。**没验过断电时停在 `check`**：普通 `reboot` 的 SIGTERM 让执行器先进 `rollback`，先 `kill -9` 执行器时哨兵几秒内接手，所以工具现在总是报 `not-from-check`。要验这一格得同时暂停哨兵。
+
+## 连通基线（OTA-02）
+
+执行器动任何东西之前记一份基线，试跑结束和转正后检查通过之后各比一次。
+
+| 项 | 怎么算通（只看本机状态，不发包） |
+|---|---|
+| `ssh` | 2222 或 22 端口在监听 |
+| `lan` | `br-lan` 已启用（`IFF_UP`，不看 `operstate`：没有客户端时它就是 down）且有 IPv4 |
+| `tailscale` | `tailscaled` 在跑且 `tailscale0` 有 IPv4 |
+| `route` | `ip route get 1.1.1.1` 有出口，不管走哪张网卡（蜂窝、Wi-Fi、隧道都算） |
+| `client-route` | 到发起这次 ship 的电脑（`SSH_CONNECTION`）有路由；不是经 SSH 发起就没有这一项 |
+
+- **只比基线**：基线里就不通的项不算这一版的错（没装 Tailscale、飞行中没路由，都照常上机）。
+- **一时断开不算**：不通的项每 10 秒再看，最多 7 次（约 60 秒），其间通过一次就过；试跑不过 = 中止，转正后不过 = 退回。
+- 原因写进事务日志的 `reason`，基线和对比写在 `ship.log`。基线只在这个执行器的内存里；执行器死了由恢复流程收尾，不再比。
+- **局限**：只证明这条路还在，不证明包真的走得通；基站正好断 60 秒以上，也会把无辜的版本退回（不隔离，可以重上）。
+
+**转正后继续比**：`ssh`、`lan`、`tailscale` 里基线通的项写进事务日志的 `conn_ok=`，随看守记录交给哨兵（`watch_conn`），比到这个版本证明过自己为止，只看转正那次开机。
+
+- 一项连续坏 **10 分钟**（这时没人在等，比上机时的 60 秒长得多）→ 退回基线里有这一项的最新版本。`sentinel`、`scripts`、没有 `conn_ok` 的旧记录不比。
+- **不隔离，一次开机最多退一个**（`watch-conn-rolled` 记 boot_id）：断线不一定是版本的错，不能把一串无辜的版本都退掉。告警 `ship-conn-rollback`（发短信）。
+- 不比 `route`（基站能让好版本没路由）和 `client-route`（电脑可能只是走了）。
+- 有事务进行中不计时；有一项在坏时，什么都不算证明过自己。
+- 手工挡住：转正后 1 小时内要手动停 Tailscale 或 SSH，先建 `auto-rollback-off`。退回做到一半断电时，开机路径的旧 `luyaz-recover.sh` 不认这条原因，会把版本隔离，看原因后 `unquarantine`。
+- 测试用 `U60S_CONN_PROBE`、`U60S_CONN_ROUNDS`、`U60S_CONN_WAIT`。
+
+## 转正后自动退回（OTA-01）
+
+`phase=done` 以后原来没有人会换回旧版：开机恢复和 recover-live 只管没做完的事务，regress 告警只发短信，procd 和哨兵只会放弃。这一节补上这条路。
+
+**谁来判**：一定是能活过坏版本的那个。
+
+| 情况 | 判定者 | 条件 |
+|---|---|---|
+| 重启循环 | `luyaz-recover.sh`（不随 ship 换，早于所有服务） | 还有没「证明过自己」的版本时 **3 次非预期开机** |
+| 同一次开机的崩溃循环 | 哨兵 `watch_round` → `luyaz-ship.sh auto-rollback <事务号> <原因>` | 只看转正那次开机：`core` 的 `/healthz` 坏 10 分钟；`touch` 的 `/data/luyaz/screen/gave-up` 出现；`lweb`、`phone`、`audio` 进程连续 3 轮（60 s 一轮）不在 |
+
+`sentinel`、`scripts` 上机只由开机路径判：坏哨兵判不了自己，它一死屏幕没人管，固件 1185 重启，开机路径接手。
+
+**看守的范围**
+- 转正时事务日志写 `watch=1`，`finish done` 把它拷成 `/data/luyaz/ship/watch/<事务号>`。条件：设备上的 luyaz-recover.sh 有 `auto-watch` 命令、哨兵程序里有 `ship/watch`（没人能结束看守时不开始）、这次不是退回。`luyaz rollback` 完成时删掉同组件还在看的记录（用户的判断优先）。
+- **同时看多个版本**：连着上几个组件时，较早的不会因为被盖过就没人看。
+- **证明过自己**：哨兵删掉那个文件，时机是转正那次开机满 1 小时，或之后任一次开机满 30 分钟；还在出事时一个都不删。一次开机满 30 分钟也清掉 `watch-boots`、`watch-rolled`。周期超过 30 分钟的重启循环抓不到，只有 regress-reboot 短信。
+- **非预期开机**不算这些：原因码（`/etc/config/zwrt_zte_mc_tmp`）是 1150、1152、1112；计划重启标记 `/data/luyaz/core/planned-reboot` 写于更早的开机。一个标记只免一次（记在 `watch-planned`），核心一直起不来时没人清它。计数在 `watch-boots`，一行一个 boot_id。事务日志停在 `failed` 或进行中的阶段时不计数。
+- 手工挡住：`/data/luyaz/ship/auto-rollback-off` 存在 = 两条路都不动。手工调试要停 `lweb`、`phone`、`audio` 时先建这个文件（转正后 1 小时内，停 3 分钟就算不在）。`auto-rollback` 在通话中或有事务进行时返回 3，下一轮再试。
+
+**做什么**
+- **重启循环按时间倒着退**：每 3 次非预期开机退最新的一个，计数重来；还循环就退下一个。一轮最多退 3 个（`watch-rolled`），之后清掉看守、发短信，要人处理。开机时分不清谁的错，所以无辜的新版本可能先被退、被隔离，看隔离清单的原因后 `unquarantine` 再上。
+- **同次开机的崩溃循环只退出事的组件**，同组件有几个时退最新的。
+- 只换程序和目录，**状态文件不还原**：转正以后用户改的设置留着。每个事务最多退一次。旧版不在或 md5 不对（`.prev` 每个文件只留 3 份）→ `phase=failed`，正式文件不动，看守停下。
+- 隔离：`/data/luyaz/ship/quarantine` 一行 `<组件>|<提交>|<新 md5,…>|<事务号>|<原因>`。`stage` 拒绝同组件的同提交或同 md5（不同构建机编同一提交 md5 不同，所以两个都比）。确实要再试：`luyaz-ship.sh unquarantine <提交>`。`status` 打印 `quarantined=<行数>`。
+- 清单追加一行 `kind:ship`、`note:auto-rollback`，提交号取这个事务之前的那一行（ship 或 kit）。这一行没有 `prev`，之后 `luyaz rollback` 会拒绝。开机路径不补 `kind:record`，`scripts` 退回后 doctor 可能报 init 脚本变了，`luyaz record` 接受即可。
+- 退回较早的事务时：同次开机的路径会让 `txn` 变成那个事务（已退回），开机路径不动 `txn`；两者都以清单为准。
+- 告警 `ship-auto-rollback`（发短信，和 `ship-conn-rollback` 一样不受 24 小时 5 则的限制，同类每小时一则照旧；漫游时不发短信的设置仍然有效）。连通丢失的退回见「连通基线」，不隔离。
+
+**校验旧版副本（OTA-07）**：版本证明过自己时，哨兵先把看守记录写到 `ship/prev-check/<事务号>`，再启动 `luyaz-ship.sh verify-prev`。它按记录里的旧 md5 或目录指纹核对这个事务的 `.prev`（程序、目录、状态文件）各一次，核完删记录。损坏，或不见了且不是因为已有 3 份更新的副本，就发 `ship-prev-damaged` 短信、记 `ship.log`；不修复，不碰正式文件。开机不做全量哈希。哨兵这一轮之后，每条记录每次运行最多启动一次脚本。
+
+**上机顺序**：先 `luyaz ship sentinel`（旧哨兵不会结束看守，所以 ship 不开始看），再 `luyaz install-recover`（要用户同意），之后每次 ship 才带 `watch=1`。
+
+## 执行器留旧版和已知良好组合（OTA-04）
+
+- **执行器旧版**：上传新的 `luyaz-ship.sh` 通过 `sh -n` 和 selftest 后，换之前把现在这份拷到 `prev/luyaz-ship.sh.prev-<事务号>`，只留最近 3 份；拷不成就不换。selftest 查不出的问题用电脑端 `luyaz executor-restore [--good]` 换回：它在设备上只用普通 shell，不调用坏掉的执行器，有事务在进行时拒绝，旧版也要过 `sh -n` 和 selftest。下次 ship 会再传那个提交的执行器，所以要先修源码。
+- **已知良好组合**：`/data/luyaz/ship/known-good/`，每个组件一个子目录（程序和 `meta`：`commit=`、`format=`、`file=<名> <md5>`），顶层放 `meta`、执行器和恢复脚本。只有一份，`KEEP_PREV` 碰不到，也不自动更新。
+- **保存**：`luyaz known-good save [原因]`。core 的 `/healthz` 不是 200、有事务、`watch/` 里还有观察中的版本、文件和清单对不上、存完 /data 低于 200 MB，都拒绝。先建 `known-good.new`，校验后再换名；换到一半断电，下次保存或退回时恢复旧的。
+- **查看**：`luyaz known-good show` 重新算每个文件的校验，不改任何东西。
+- **退回**：`luyaz known-good restore <组件>` 等于 `luyaz rollback <组件> --known-good`，走一样的 stage、试跑、转正和检查，`note=rollback`。一次退一个组件，依赖检查照旧；隔离清单照旧挡，要先 `unquarantine`。
+
 ## 执行器心跳 `/tmp/luyaz/ship/heartbeat`（给哨兵兜底用）
 
 一行：`<uptime 秒> <执行器 pid> <事务号> <phase>`。试跑时每秒写一次，其余阶段至少每 5 秒一次（执行器里所有 sleep 都经过心跳）。
@@ -217,6 +292,7 @@ init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来
 | `stage <事务号>` | 核对暂存目录（上面的拒绝条件），放好旁路文件，写 `staged` | 0 / 1 拒绝 |
 | `start <事务号>` | 脱离 ssh 起执行器（`run`），5 秒内看到心跳才算起来；没起来 → `aborted` | 0 / 1 |
 | `run <事务号>` | 执行器本身（前台；测试直接调） | 0 完成 / 1 退回或中止 / 2 清单待补 |
+| `preflight` | 只读，`key=value`：battery、status、temp、bearer（默认路由：cellular、other、none）、problem。Mac 据此在上传前停下；bearer=other 不算漫游流量 | 0 |
 | `status` | `key=value`：phase、txn、comp、reason、hb_age、exec_alive、observe_left（完成后 1 小时观察期还剩几秒） | 0 |
 | `wait <秒>` | 等到终态或超时，然后同 `status` | 0 终态 / 4 超时 |
 | `abort` | 给执行器发 TERM（它按阶段自己收尾） | 0 / 1 没有执行器 |
@@ -226,6 +302,7 @@ init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来
 | `record <名\|all> <Mac 时间> [原因]` | 只记录的文件按现在的 md5 记一行 | 0 / 1 拒绝 |
 | `record-kit <组件> <装机包日期> <提交号> <格式> <Mac 时间> [dirty]` | 装机包装完写一条 `kind=kit`；有事务在进行时拒绝 | 0 / 1 |
 | `prepare-rollback <组件> <事务号> <Mac 时间>` | 把组件最后一次上机的 `.prev-<那次事务号>` 拷进 `stage/<事务号>/` 并写好 meta（提交号、格式取再上一次上机的；没有就是 `0000000`、现在的格式；`note=rollback`），之后照常 stage / start：退回也走试跑、转正、检查 | 0 / 1 拒绝 |
+| `verify-prev` | 哨兵调用：核对 `prev-check/` 里每个事务的旧版副本，坏了告警，见「转正后自动退回」 | 0 |
 | `selftest` | 在 /tmp 的沙盒里用 `selftest` 组件把完整事务走一遍（通过、检查不过退回），再查需要的 applet | 0 PASS / 1 |
 
 ## 清单 `/data/luyaz/ship/manifest.jsonl`
@@ -250,6 +327,15 @@ init.d 超过 25 秒就 kill -9 并当作失败（之后照常按「停不下来
   `init.d/luyaz-core`、`init.d/tailscale`；`rc.local`；`luyaz-recover.sh`；目录 `ui-fonts`（`/data/luyaz/ui/fonts`）、`ui-logos`、`core-plugins`。
   文件不存在记 `"md5":"-"`。
   私有版另有 CHILL 的 `chill.sh`、`template.yaml`；`chill.env` 是设置文件，不进清单。
+
+**CHILL、Tailscale 组件**：`tools/luyaz ship chill`（`chill.sh`、`template.yaml`、`VERSION`）、`ship tailscale`（`start.sh`、`apply.sh`、`VERSION`），都取自提交的 `scripts/<组件>/`，没有并行试跑。
+
+- 不进事务：`chill.env`（订阅）、`tuning.env`（每台不同）、`mihomo`、`tailscaled`、两个 init 脚本。这些仍手工改后 `record`。
+- 转正前：`chill.sh validate` 用这台的 `chill.env` 和 `cn.list` 渲染新模板并跑 `mihomo -t`；`start.sh check` 查 Tailscale。不过就中止，服务没停、文件没动。
+- 转正后 CHILL：在跑或因 `idle`、`paused`、`captive_wan`、`overheat`、`ruleset_missing` 停在直连都算过；`gaveup`、`render_failed`、窗口内核心被重启、其他原因都退回。息屏暂停时新核心不会启动，只有转正前的校验证明过模板。
+- 转正后 Tailscale：更新前通的，窗口结束时必须通且没被重启；更新前不通的只查文件。之后由连通看守比到版本证明过自己。
+- 开关：有 `disabled` 就不启动。
+- 全球版经 tailnet 连接，上 `tailscale` 时连接会断，执行器在设备上独立跑完；优先走 `u60b`。
   运行中会被正常改写的设置文件不进清单。原因去掉引号、反斜杠和控制字符，最长 120 字节。有事务在进行时拒绝。
   doctor.sh 里有同一张名字表，测试检查两边一致。
 - 只有 `done` 才写一条；试跑不过、转正后退回，清单都不变。

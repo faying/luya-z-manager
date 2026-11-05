@@ -155,6 +155,7 @@ EOF
 
     export U60S_ROOT=$R U60S_TMP=$T/tmp U60S_BOOT_ID=$T/boot_id U60S_DF=$T/bin/df
     export U60S_MANIFEST=$R/data/luyaz/ship/manifest.jsonl
+    export U60S_BATTERY=$T/battery U60S_ROUTE=$T/route
     unset U60S_CRASH_AT U60S_DIR U60S_LOG U60S_TEST_LOG U60S_MIN_FREE_KB U60S_LOG_MAX
     export DT_INITD=$T/bin/initd DT_UPTIME=$T/uptime DT_PIDFILE=$T/trial.pid
     export DT_CURL=$T/bin/curl DT_PIDOF=$T/bin/pidof DT_PS=$T/bin/ps
@@ -353,6 +354,42 @@ for sp in /etc/passwd "$R/data/luyaz/core/../ship/txn" "$R/data/scenario/log" "$
 done
 
 
+# OTA-06: battery and heat, checked on the device before any file moves
+battery() { mkdir -p "$T/battery"; echo "$1" >"$T/battery/capacity"; echo "$2" >"$T/battery/status"; echo "$3" >"$T/battery/temp"; }
+setup; battery 20 Discharging 300; upload; stage
+refused "low battery, not plugged in" "电量 20%"
+nolog
+teardown
+setup; battery 80 Discharging 520; upload; stage
+refused "too hot" "电池 52°C"
+nolog
+teardown
+for _case in "20 Charging 300" "20 Full 300" "20 'Not charging' 300" "30 Discharging 490"; do
+    setup; eval battery $_case; upload; stage
+    check "preflight passes: $_case" '[ "$RC" = 0 ]'
+    teardown
+done
+setup; upload; stage
+check "preflight passes: a device with no battery readings" '[ "$RC" = 0 ]'
+teardown
+setup; battery 20 Discharging 300; upload; echo note=rollback >>"$R/data/luyaz/ship/stage/$TXN/meta"; stage
+check "preflight never holds a rollback back" '[ "$RC" = 0 ]'
+teardown
+setup; battery 20 Discharging 300; upload; echo preflight_ok=1 >>"$R/data/luyaz/ship/stage/$TXN/meta"; stage
+check "preflight_ok overrides" '[ "$RC" = 0 ]'
+teardown
+# the bearer is the route in use, not the roaming flag
+route() { printf 'Iface Destination Gateway Flags RefCnt Use Metric\n' >"$T/route"; printf '%s 00000000 0 3 0 0 %s\n' "$1" "$2" >>"$T/route"; [ -z "${3:-}" ] || printf '%s 00000000 0 3 0 0 %s\n' "$3" "$4" >>"$T/route"; }
+setup; battery 60 Discharging 300; route rmnet_data0 256; sh "$SHIP" preflight >"$T/out" 2>&1
+check "preflight: cellular" 'grep -qx bearer=cellular "$T/out" && grep -qx battery=60 "$T/out" && grep -qx temp=30 "$T/out" && grep -qx "problem=" "$T/out"'
+route wlan0 10; sh "$SHIP" preflight >"$T/out" 2>&1
+check "preflight: Wi-Fi WAN is not cellular" 'grep -qx bearer=other "$T/out"'
+route rmnet_data0 256 usb0 10; sh "$SHIP" preflight >"$T/out" 2>&1
+check "preflight: the lowest metric wins" 'grep -qx bearer=other "$T/out"'
+: >"$T/route"; sh "$SHIP" preflight >"$T/out" 2>&1
+check "preflight: no route" 'grep -qx bearer=none "$T/out"'
+teardown
+
 setup
 echo 100000 >"$T/free-kb"
 upload
@@ -472,7 +509,7 @@ check "$CASE: run exit 0, done" '[ "$RC" = 0 ] && [ "$(phase)" = done ]'
 check "$CASE: live is the new build" '[ "$(md5 "$LIVE")" = "$NEW" ] && [ -x "$LIVE" ]'
 check "$CASE: previous version kept" '[ "$(md5 "$LIVE.prev-$TXN")" = "$OLD" ]'
 check "$CASE: side file gone" '[ ! -e "$LIVE.test" ]'
-check "$CASE: no state lines (the core has none since 10-06)" "! grep -q '^state' '$R/data/luyaz/ship/txn'"
+check "$CASE: its settings are state files" 'grep -q "^statelist=.*/data/scenario/scenarios.json" "$R/data/luyaz/ship/txn"'
 check "$CASE: stop for the trial, start after promotion" '[ "$(tr "\n" " " <"$T/initd.log")" = "stop start " ]'
 check "$CASE: test build started without supervise, then killed" "grep -q 'luyaz-core.test -i 1000' '$T/setsid.log' && ! grep -q supervise '$T/setsid.log' && grep -q 4242 '$T/kill.log'"
 check "$CASE: trial ran the whole window" "logged '试跑通过（60s）'"
@@ -1112,6 +1149,265 @@ check "$CASE: launch count and give-up cleared" '[ -z "$(find "$T/new" -type f)"
 check "$CASE: the kill lines take luyaz-ui" '[ "$(grep -c "KILL.* \$(\$PIDOF luyaz-ui 2>/dev/null) 2>/dev/null$" "$SHIP")" = 2 ]'
 teardown
 
+
+# ── reachability against this transaction's baseline (docs/SHIP.md「连通基线」) ──
+conn_setup() { # conn_setup <baseline> <end of trial> <after the check>: each "name=ok,name=bad"
+    cat >"$T/probe" <<EOF
+n=\$(cat $T/conn.n 2>/dev/null); n=\$((\${n:-0} + 1)); echo \$n >$T/conn.n
+case \$n in 1) s='$1' ;; 2) s='$2' ;; *) s='$3' ;; esac
+echo "\$s" | tr ',=' '\n '
+EOF
+    export U60S_CONN_PROBE=$T/probe U60S_CONN_ROUNDS=2 U60S_CONN_WAIT=0
+}
+conn_end() { unset U60S_CONN_PROBE U60S_CONN_ROUNDS U60S_CONN_WAIT; teardown; }
+
+setup
+CASE="conn: everything stays"
+conn_setup ssh=ok,route=ok ssh=ok,route=ok ssh=ok,route=ok
+upload; stage; run
+check "$CASE: done" '[ "$(phase)" = done ] && [ "$(md5 "$LIVE")" = "$NEW" ]'
+conn_end
+
+setup
+CASE="conn: bad before the update and still bad"
+conn_setup ssh=ok,tailscale=bad,lan=ok,route=bad ssh=ok,tailscale=bad,lan=ok,route=bad ssh=ok,tailscale=bad,lan=ok,route=bad
+upload; stage; run
+check "$CASE: not this build, done" '[ "$(phase)" = done ]'
+check "$CASE: only what was ok goes on, never a route" 'grep -qx "conn_ok=ssh,lan" "$R/data/luyaz/ship/txn"'
+conn_end
+
+setup
+CASE="conn: lost in the trial"
+conn_setup ssh=ok,route=ok ssh=bad,route=ok ssh=bad,route=ok
+upload; stage; run
+check "$CASE: aborted, says what" '[ "$(phase)" = aborted ] && [ "$(md5 "$LIVE")" = "$OLD" ] && grep -q "^reason=.*现在不通： ssh" "$R/data/luyaz/ship/txn"'
+conn_end
+
+setup
+CASE="conn: lost after the promote"
+conn_setup tailscale=ok,lan=ok tailscale=ok,lan=ok tailscale=bad,lan=ok
+upload; stage; run
+check "$CASE: rolled back, says what" '[ "$(phase)" = rolledback ] && [ "$(md5 "$LIVE")" = "$OLD" ] && grep -q "^reason=.*现在不通： tailscale" "$R/data/luyaz/ship/txn"'
+conn_end
+
+setup
+CASE="conn: a blip"
+cat >"$T/probe" <<EOF
+n=\$(cat $T/conn.n 2>/dev/null); n=\$((\${n:-0} + 1)); echo \$n >$T/conn.n
+if [ \$n = 3 ]; then echo "route bad"; else echo "route ok"; fi
+EOF
+export U60S_CONN_PROBE=$T/probe U60S_CONN_ROUNDS=2 U60S_CONN_WAIT=0
+upload; stage; run
+check "$CASE: back in the next look, done" '[ "$(phase)" = done ]'
+conn_end
+
+# ── a promoted core that loops (docs/SHIP.md「转正后自动退回」) ──
+setup
+CASE="watched core"
+cp "$RECOVER" "$R/data/luyaz/ship/luyaz-recover.sh"
+echo /data/luyaz/ship/watch >"$R/data/luyaz/luyaz-sentinel"
+upload
+stage
+run
+check "$CASE: done, under watch" '[ "$(phase)" = done ] && grep -qx "watch=1" "$R/data/luyaz/ship/watch/$TXN"'
+: >"$T/initd.log"
+sh "$SHIP" auto-rollback "$TXN" "core unhealthy 10 min" >"$T/out" 2>&1
+RC=$?
+check "$CASE: auto-rollback: exit 0, the old core, restarted" '[ "$RC" = 0 ] && [ "$(phase)" = rolledback ] && [ "$(md5 "$LIVE")" = "$OLD" ] && grep -q start "$T/initd.log"'
+check "$CASE: quarantined, the watch on it ended" 'grep -q "^core|.*|$NEW|$TXN|core unhealthy" "$R/data/luyaz/ship/quarantine" && [ ! -e "$R/data/luyaz/ship/watch/$TXN" ]'
+check "$CASE: manifest says so" 'tail -n 1 "$U60S_MANIFEST" | grep -q "auto-rollback"'
+teardown
+
+setup
+CASE="unwatched: an old sentinel"
+cp "$RECOVER" "$R/data/luyaz/ship/luyaz-recover.sh"
+echo old >"$R/data/luyaz/luyaz-sentinel"
+upload
+stage
+run
+check "$CASE: no watch" '[ "$(phase)" = done ] && [ ! -e "$R/data/luyaz/ship/watch/$TXN" ]'
+teardown
+
+setup
+CASE="killed in the middle of an auto-rollback, next boot"
+cp "$RECOVER" "$R/data/luyaz/ship/luyaz-recover.sh"
+echo /data/luyaz/ship/watch >"$R/data/luyaz/luyaz-sentinel"
+upload
+stage
+run
+U60S_CRASH_AT=rollback:begin sh "$SHIP" auto-rollback "$TXN" "core unhealthy" >/dev/null 2>&1
+check "$CASE: left in rollback with its reason" '[ "$(phase)" = rollback ] && grep -q "^auto_why=core unhealthy" "$R/data/luyaz/ship/txn"'
+echo bbbb-2222 >"$T/boot"
+U60R_ROOT=$R U60R_BOOT_ID=$T/boot sh "$RECOVER" >/dev/null 2>&1
+check "$CASE: finished with its records" '[ "$(phase)" = rolledback ] && [ "$(md5 "$LIVE")" = "$OLD" ] && grep -q "^core|" "$R/data/luyaz/ship/quarantine" && tail -n 1 "$U60S_MANIFEST" | grep -q auto-rollback && [ ! -e "$R/data/luyaz/ship/watch/$TXN" ]'
+teardown
+
+setup
+CASE="verify-prev"
+cp "$RECOVER" "$R/data/luyaz/ship/luyaz-recover.sh"
+echo /data/luyaz/ship/watch >"$R/data/luyaz/luyaz-sentinel"
+upload
+stage
+run
+PC=$R/data/luyaz/ship/prev-check
+PV=$LIVE.prev-$TXN
+check "$CASE: the queue directory exists" '[ -d "$PC" ]'
+cp "$R/data/luyaz/ship/watch/$TXN" "$PC/$TXN"
+LV=$(md5 "$LIVE")
+sh "$SHIP" verify-prev >"$T/out" 2>&1
+RC=$?
+check "$CASE: an intact copy: quiet, entry gone" '[ "$RC" = 0 ] && ! grep -q damaged "$T/out" && [ ! -e "$PC/$TXN" ]'
+cp "$PV" "$T/pv.keep"
+printf x | dd of="$PV" bs=1 seek=100 conv=notrunc 2>/dev/null
+cp "$R/data/luyaz/ship/watch/$TXN" "$PC/$TXN"
+sh "$SHIP" verify-prev >"$T/out" 2>&1
+check "$CASE: one byte changed: reported, live file untouched" 'grep -q "damaged: $LIVE" "$T/out" && [ "$(md5 "$LIVE")" = "$LV" ] && [ ! -e "$PC/$TXN" ]'
+rm -f "$PV"
+cp "$R/data/luyaz/ship/watch/$TXN" "$PC/$TXN"
+sh "$SHIP" verify-prev >"$T/out" 2>&1
+check "$CASE: gone with no newer copies: reported" 'grep -q "damaged: $LIVE" "$T/out"'
+for _n in 1 2 3; do : >"$LIVE.prev-29991231-00000$_n-core"; done
+cp "$R/data/luyaz/ship/watch/$TXN" "$PC/$TXN"
+sh "$SHIP" verify-prev >"$T/out" 2>&1
+check "$CASE: gone because three newer ones were kept: quiet" '! grep -q damaged "$T/out"'
+echo junk >"$PC/20000101-000000-core"
+sh "$SHIP" verify-prev >"$T/out" 2>&1
+check "$CASE: an unreadable entry is dropped" '[ ! -e "$PC/20000101-000000-core" ]'
+teardown
+
+# ── chill, tailscale: settings stay, a bad template never goes live ─────────
+svc_setup() { # svc_setup chill|tailscale <file1> <file2>: live old files, a stage with new ones
+    setup
+    SC=$1
+    TXN2=20260930-120000-$SC
+    SD=$R/data/$SC
+    SG=$R/data/luyaz/ship/stage/$TXN2
+    mkdir -p "$SD" "$SG" "$R/tmp"
+    printf '#!/bin/sh\nexit 0\n' >"$R/etc/init.d/$SC"
+    {
+        echo v=1; echo "txn=$TXN2"; echo "comp=$SC"; echo commit=7e8d223
+        echo mac_time=1790000000; echo format=1; echo check=30
+    } >"$SG/meta"
+    for _f in "$2" "$3" VERSION; do
+        echo "old $_f" >"$SD/$_f"
+        printf 'case $1 in validate|check) [ ! -f %s/pre-bad ] || { echo "FAIL boom"; exit 1; } ;; esac\n# new %s\n' "$T" "$_f" >"$SG/$_f"
+        echo "file=$_f $(md5 "$SG/$_f")" >>"$SG/meta"
+    done
+    OLDM=$(md5 "$SD/$2")
+    NEWM=$(md5 "$SG/$2")
+    echo "secret-sub" >"$SD/chill.env"
+    echo "per-device" >"$SD/tuning.env"
+    # the init scripts: start = whatever the case arranged
+    cat >"$R/etc/init.d/$SC" <<STUB
+#!/bin/sh
+echo "$SC \$1" >>$T/initd.log
+[ "\$1" = start ] || { rm -f $T/pids/tailscaled; exit 0; }
+case $SC in
+chill) cp $T/ch-state $R/tmp/chill.state ;;
+tailscale) echo 777 >$T/pids/tailscaled ;;
+esac
+exit 0
+STUB
+    chmod +x "$R/etc/init.d/$SC"
+}
+svc_go() { sh "$SHIP" stage "$TXN2" >"$T/out" 2>&1 && timeout 60 sh "$SHIP" run "$TXN2" >>"$T/out" 2>&1; RC=$?; }
+ch_state() { printf '{"state":"%s","reason":%s,\n"core_pid":%s,"x":1}\n' "$1" "$2" "$3" >"$T/ch-state"; }
+svc_keep() {
+    check "$CASE: subscription untouched" '[ "$(cat "$SD/chill.env")" = secret-sub ]'
+    check "$CASE: per-device tuning untouched" '[ "$(cat "$SD/tuning.env")" = per-device ]'
+}
+
+CASE="chill, running"
+svc_setup chill chill.sh template.yaml
+ch_state running null 4321
+mkdir -p "$R/proc/4321"
+svc_go
+check "$CASE: done" 'logged "已转正" && [ "$(md5 "$SD/chill.sh")" = "$NEWM" ]'
+check "$CASE: restarted" 'grep -q "chill stop" "$T/initd.log" && grep -q "chill start" "$T/initd.log"'
+check "$CASE: manifest says chill" 'grep -q "\"comp\":\"chill\"" "$U60S_MANIFEST"'
+svc_keep
+teardown
+
+CASE="chill, idle before the ship"
+svc_setup chill chill.sh template.yaml
+ch_state direct '"idle"' 0
+svc_go
+check "$CASE: an idle device is not a failure" 'logged "已转正" && [ "$(md5 "$SD/chill.sh")" = "$NEWM" ]'
+teardown
+
+CASE="chill, bad template"
+svc_setup chill chill.sh template.yaml
+ch_state running null 4321
+: >"$T/pre-bad"
+svc_go
+check "$CASE: live untouched" '[ "$(md5 "$SD/chill.sh")" = "$OLDM" ]'
+check "$CASE: the service was never stopped" '! grep -q chill "$T/initd.log"'
+check "$CASE: says why" 'logged "新模板校验不过"'
+svc_keep
+teardown
+
+CASE="chill, gives up after the promote"
+svc_setup chill chill.sh template.yaml
+ch_state direct '"gaveup"' 0
+svc_go
+check "$CASE: rolled back" '[ "$(md5 "$SD/chill.sh")" = "$OLDM" ] && logged "gaveup"'
+svc_keep
+teardown
+
+CASE="chill, switched off"
+svc_setup chill chill.sh template.yaml
+ch_state running null 4321
+: >"$SD/disabled"
+svc_go
+check "$CASE: done, stays off" 'logged "已转正" && ! grep -q "chill start" "$T/initd.log"'
+teardown
+
+CASE="chill, not installed"
+svc_setup chill chill.sh template.yaml
+rm -f "$R/etc/init.d/chill"
+svc_go
+check "$CASE: refused" 'grep -q "没装 CHILL" "$T/out"'
+teardown
+
+tailscale_probe() {
+    cat >"$T/probe" <<STUB
+n=\$(cat $T/conn.n 2>/dev/null); n=\$((\${n:-0} + 1)); echo \$n >$T/conn.n
+echo "ssh ok"; echo "lan ok"
+if [ \$n = 1 ]; then echo "tailscale $1"; else echo "tailscale $2"; fi
+STUB
+    export U60S_CONN_PROBE=$T/probe U60S_CONN_ROUNDS=2 U60S_CONN_WAIT=0
+}
+CASE="tailscale, comes back"
+svc_setup tailscale start.sh apply.sh
+echo 777 >"$T/pids/tailscaled"
+tailscale_probe ok ok
+svc_go
+check "$CASE: done" 'logged "已转正" && [ "$(md5 "$SD/start.sh")" = "$NEWM" ]'
+svc_keep
+conn_end
+
+CASE="tailscale, does not come back"
+svc_setup tailscale start.sh apply.sh
+echo 777 >"$T/pids/tailscaled"
+tailscale_probe ok bad
+svc_go
+check "$CASE: rolled back" '[ "$(md5 "$SD/start.sh")" = "$OLDM" ]'
+conn_end
+
+CASE="tailscale, was not up before"
+svc_setup tailscale start.sh apply.sh
+tailscale_probe bad bad
+svc_go
+check "$CASE: not this version's fault" 'logged "已转正" && [ "$(md5 "$SD/start.sh")" = "$NEWM" ]'
+conn_end
+
+CASE="tailscale, its own check fails"
+svc_setup tailscale start.sh apply.sh
+: >"$T/pre-bad"
+tailscale_probe ok ok
+svc_go
+check "$CASE: live untouched, not stopped" '[ "$(md5 "$SD/start.sh")" = "$OLDM" ] && ! grep -q tailscale "$T/initd.log"'
+conn_end
 
 echo "u60-ship: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

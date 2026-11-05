@@ -209,8 +209,11 @@ pub trait Source {
     fn vendor_fallback(&mut self);
     /// core could not be asked to power down: the vendor call directly
     fn power_fallback(&mut self, reboot: bool);
-    /// 40 s and still up: busybox reboot / poweroff
-    fn power_last_resort(&mut self, reboot: bool);
+    /// a reboot 40 s on and still up: busybox reboot
+    fn power_last_resort(&mut self);
+    /// the vendor's mode_main_state, live over ubus: zwrt_zte_mc_tmp on disk lags behind it
+    /// ("" = not read)
+    fn power_mode(&mut self) -> String;
     /// hold the 「正在切换」 frame before the exec (UI_LANG_HOLD_MS)
     fn lang_hold(&mut self);
     /// the alert for automatic appearance switching paused

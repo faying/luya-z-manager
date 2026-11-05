@@ -35,6 +35,8 @@
 # It never puts back an rc.local that starts /etc/init.d/zwrt-datad or a core
 # program at the old path: there is no way back (the old layout is retired;
 # until rename F5/6 this hung on /data/luyaz/core/.migrated, deleted then).
+# Promoted builds still under watch (watch/<txn>): this boot counts against them, every
+# third unasked one sends the newest back (docs/SHIP.md「转正后自动退回」).
 # Anything else (no log, terminal phase, same boot) returns at once without
 # writing a byte. A log it does not understand (version, no final "end=1"
 # line, fields, paths outside /data, a v=2 feature in a v=1 log) is left
@@ -53,6 +55,9 @@ TXN_FILE=$DIR/txn
 LOG=$DIR/recover.log
 BOOT_ID_FILE=${U60R_BOOT_ID:-/proc/sys/kernel/random/boot_id}
 SYNC=${U60R_SYNC:-sync}
+WATCH_DIR=$DIR/watch
+WATCH_MAX=3
+REASON_FILE=${U60R_REASON:-$ROOT/etc/config/zwrt_zte_mc_tmp}
 NL='
 '
 
@@ -279,44 +284,184 @@ restore_dir() {
     log "还原：$1 ← ${_prev##*/}"
 }
 
-recover() {
-    [ -f "$TXN_FILE" ] || return 0
-    V= TXN= PHASE= BOOT= FILES= STATES= DIRS= END=
+# boot_exempt: this boot was asked for (planned mark from an earlier boot) or is a manual or
+# the weekly reboot; the same rule as the core's regress-reboot.
+boot_exempt() {
+    # the core clears the mark; a core that keeps dying never does, so one mark excuses one boot
+    _pm=$(cat "$ROOT/data/luyaz/core/planned-reboot" 2>/dev/null)
+    if [ -n "$_pm" ] && [ "${_pm%% *}" != "$_now" ] && [ "$_pm" != "$(cat "$DIR/watch-planned" 2>/dev/null)" ]; then
+        printf '%s\n' "$_pm" >"$DIR/watch-planned"
+        return 0
+    fi
+    case "$(sed -n "s/.*option reboot_reason_code '\([0-9]*\)'.*/\1/p" "$REASON_FILE" 2>/dev/null | head -n 1)" in
+        1150 | 1152 | 1112) return 0 ;;
+    esac
+    return 1
+}
+
+# boot_watch: count this boot against the promoted builds that have not proved themselves
+# ($WATCH_DIR/<txn>, the sentinel deletes each when it has). Every third unasked boot sends the
+# newest one back, at most WATCH_MAX in one loop, then it stops and asks for a person. Programs
+# and directories only: settings changed since the promote stay.
+boot_watch() {
+    [ -e "$DIR/auto-rollback-off" ] && return 0
+    [ -n "$(ls "$WATCH_DIR" 2>/dev/null)" ] || return 0
+    # a sentinel that cannot end the count (rolled back since): nothing could prove a build
+    grep -q ship/watch "$ROOT/data/luyaz/luyaz-sentinel" 2>/dev/null || return 0
+    _now=$(tr -dc '0-9a-f-' <"$BOOT_ID_FILE" 2>/dev/null)
+    [ -n "$_now" ] || return 0
+    # a transaction still needing a person, or one we cannot read, is not a state to add to
+    case "$(sed -n 's/^phase=//p' "$TXN_FILE" 2>/dev/null)" in
+        '' | done | rolledback | aborted | manifest_pending) ;;
+        *) return 0 ;;
+    esac
+    boot_exempt && return 0
+    _w=$DIR/watch-boots
+    grep -qx "$_now" "$_w" 2>/dev/null && return 0 # rc.local ran us twice in one boot
+    add_line "$_w" "$_now" || return 0
+    _n=$(grep -c . "$_w" 2>/dev/null)
+    log "转正后第 $_n 次非预期开机（还在看：$(ls "$WATCH_DIR" | tr '\n' ' ')）"
+    case "$_n" in
+        1 | 2) return 0 ;;
+    esac
+    if [ "$(grep -c . "$DIR/watch-rolled" 2>/dev/null)" -ge "$WATCH_MAX" ] 2>/dev/null; then
+        log "已自动退回 $WATCH_MAX 个版本还在循环：不再退，要人处理"
+        rm -rf "$WATCH_DIR" "$_w" "$DIR/watch-rolled"
+        $SYNC
+        auto_alert "reboot loop goes on after $WATCH_MAX rollbacks: needs a person"
+        return 0
+    fi
+    _cur=$(sed -n 's/^txn=//p' "$TXN_FILE" 2>/dev/null)
+    _entry=$(ls "$WATCH_DIR" | LC_ALL=C sort | tail -n 1)
+    txn_parse "$WATCH_DIR/$_entry"
+    if [ "$TXN" != "$_entry" ] || ! txn_valid; then
+        log "看守记录 $_entry 不能用，删掉"
+        rm -f "$WATCH_DIR/$_entry" "$_w"
+        $SYNC
+        return 0
+    fi
+    _bad=
+    _rc0=$(md5_of "$ROOT/etc/rc.local")
+    _ifs=$IFS
+    IFS=$NL
+    for _e in $FILES; do
+        IFS=$_ifs
+        _p=${_e%%|*}
+        _r=${_e#*|}
+        restore_one "$_p" "${_r%%|*}" || _bad="$_bad ${_p##*/}"
+    done
+    IFS=$NL
+    for _e in $DIRS; do
+        IFS=$_ifs
+        _p=${_e%%|*}
+        _r=${_e#*|}
+        restore_dir "$_p" "${_r%%|*}" || _bad="$_bad ${_p##*/}/"
+    done
+    IFS=$_ifs
+    [ "$(md5_of "$ROOT/etc/rc.local")" != "$_rc0" ] && RC_CHANGED=1
+    if [ -n "$_bad" ]; then
+        # phase=failed stops the watch: the older versions cannot safely go back past this one
+        [ "$_cur" = "$TXN" ] || cp "$WATCH_DIR/$_entry" "$TXN_FILE"
+        set_phase failed "转正后重启循环，自动退回不完整：$_bad 没换回，要人处理"
+        rm -f "$WATCH_DIR/$_entry"
+        $SYNC
+        auto_alert "reboot loop after $COMP ship: rollback incomplete"
+        return 0
+    fi
+    auto_records "reboot loop"
+    add_line "$DIR/watch-rolled" "$TXN"
+    [ "$_cur" = "$TXN" ] && set_phase rolledback "自动退回：转正后连续 $_n 次非预期开机"
+    rm -f "$WATCH_DIR/$_entry" "$_w"
+    $SYNC
+    log "自动退回：$TXN（$COMP）"
+    auto_alert "reboot loop after $COMP ship: back to the old version"
+}
+
+# auto_records <why>: the quarantine line, then a manifest line saying what is live again, or
+# every later check would take the bad build for the current one.
+auto_records() {
+    _nw=
+    _fl=
+    _ifs=$IFS
+    IFS=$NL
+    for _e in $FILES; do
+        IFS=$_ifs
+        _p=${_e%%|*}
+        _r=${_e#*|}
+        _nw="$_nw${_nw:+,}${_e##*|}"
+        [ "${_r%%|*}" = - ] || _fl="$_fl${_fl:+,}{\"path\":\"$_p\",\"md5\":\"${_r%%|*}\"}"
+    done
+    IFS=$_ifs
+    grep -q "|$TXN|" "$DIR/quarantine" 2>/dev/null || add_line "$DIR/quarantine" "$COMP|$COMMIT|$_nw|$TXN|$1"
+    grep "\"txn\":\"$TXN\"" "$DIR/manifest.jsonl" 2>/dev/null | grep -q '"note":"auto-rollback"' && return 0
+    # what was live before this transaction: older ones may have been stacked on, or sent back
+    _ls=$(grep -e '"kind":"ship"' -e '"kind":"kit"' "$DIR/manifest.jsonl" 2>/dev/null | grep "\"comp\":\"$COMP\"" |
+        awk -v t="\"txn\":\"$TXN\"" 'index($0, t) { exit } { l = $0 } END { print l }')
+    _cm=$(printf '%s' "$_ls" | sed -n 's/.*"commit":"\([0-9a-f]*\)".*/\1/p')
+    _fm=$(printf '%s' "$_ls" | sed -n 's/.*"format":\([0-9]*\).*/\1/p')
+    add_line "$DIR/manifest.jsonl" "$(printf '{"v":1,"kind":"ship","comp":"%s","txn":"%s","commit":"%s","format":%s,"mac_time":%s,"boot_id":"%s","uptime":0,"files":[%s],"state":[],"note":"auto-rollback"}' \
+        "$COMP" "$TXN" "${_cm:-0000000}" "${_fm:-1}" "${MACTIME:-0}" "$_now" "$_fl")"
+}
+
+# add_line <file> <line>: old content + the line → temp → sync → mv → sync (a power cut leaves
+# one whole file or the other).
+add_line() {
+    { [ -f "$1" ] && cat "$1"; printf '%s\n' "$2"; } >"$1.rec-tmp" 2>/dev/null || {
+        rm -f "$1.rec-tmp"
+        log "！！写不上 $1"
+        return 1
+    }
+    $SYNC
+    mv -f "$1.rec-tmp" "$1" || return 1
+    $SYNC
+}
+
+# auto_alert <text>: in a child shell, a broken alert-lib must not stop the boot.
+auto_alert() {
+    sh -c '. "$1" && alert_add ship-auto-rollback "$2"' sh "$ROOT/data/luyaz/scripts/alert-lib.sh" "$1" >/dev/null 2>&1
+}
+
+# txn_parse <file>: its lines into V, TXN, PHASE, …
+txn_parse() {
+    V= TXN= PHASE= BOOT= FILES= STATES= DIRS= END= COMP= COMMIT= WATCH= ACTBOOT= MACTIME= AUTOWHY=
     while IFS= read -r _l; do
         case "$_l" in
             end=1) END=1 ;;
             v=*) V=${_l#v=} ;;
             txn=*) TXN=${_l#txn=} ;;
             phase=*) PHASE=${_l#phase=} ;;
+            comp=*) COMP=${_l#comp=} ;;
+            commit=*) COMMIT=${_l#commit=} ;;
+            watch=*) WATCH=${_l#watch=} ;;
+            auto_why=*) AUTOWHY=${_l#auto_why=} ;;
+            act_boot=*) ACTBOOT=${_l#act_boot=} ;;
+            mac_time=*) MACTIME=${_l#mac_time=} ;;
             boot_id=*) BOOT=${_l#boot_id=} ;;
             file=*) FILES="$FILES${_l#file=}$NL" ;;
             dir=*) DIRS="$DIRS${_l#dir=}$NL" ;;
             state=*) STATES="$STATES${_l#state=}$NL" ;;
         esac
     done <<EOF
-$(head -n 400 "$TXN_FILE" 2>/dev/null)
+$(head -n 400 "$1" 2>/dev/null)
 EOF
-    # the normal boot: nothing to do, nothing written
-    case "$PHASE" in
-        done | rolledback | aborted | manifest_pending | failed) return 0 ;;
-    esac
-    _now=$(tr -dc '0-9a-f-' <"$BOOT_ID_FILE" 2>/dev/null)
-    [ -n "$_now" ] && [ "$BOOT" = "$_now" ] && return 0
+}
 
+# txn_valid: every line of the parsed log is one we may act on (1 = logged, leave it alone).
+txn_valid() {
     case "$V" in
         1 | 2 | 3 | 4 | 5) ;;
         *)
             log "事务日志版本 “$V” 看不懂，不动"
-            return 0
+            return 1
             ;;
     esac
     if [ "$END" != 1 ]; then
         log "事务日志不完整（没有最后一行 end=1），不动"
-        return 0
+        return 1
     fi
     if ! txn_ok "$TXN"; then
         log "事务号 “$TXN” 格式不对，不动"
-        return 0
+        return 1
     fi
     # every entry is checked before anything is touched
     _ifs=$IFS
@@ -328,7 +473,7 @@ EOF
         _o=${_r%%|*}
         if ! path_ok "$_p" || { ! is_md5 "$_o" && [ "$_o" != - ]; }; then
             log "事务 $TXN 的一行看不懂或路径越界（$(printf '%s' "$_e" | cut -c1-120)），不动"
-            return 0
+            return 1
         fi
     done
     for _e in $DIRS; do
@@ -337,7 +482,7 @@ EOF
         _r=${_e#*|}
         if ! dir_ok "$_p" || ! is_md5 "${_r%%|*}"; then
             log "事务 $TXN 的目录一行看不懂或不是能换的目录（$(printf '%s' "$_e" | cut -c1-120)），不动"
-            return 0
+            return 1
         fi
     done
     IFS=$_ifs
@@ -347,7 +492,7 @@ EOF
             IFS=$_ifs
             if v3_path "${_e%%|*}"; then
                 log "事务 $TXN：v=$V 的日志里有只有 v=3 才能写的文件（${_e%%|*}），不动"
-                return 0
+                return 1
             fi
         done
         IFS=$_ifs
@@ -358,7 +503,7 @@ EOF
             IFS=$_ifs
             if v4_path "${_e%%|*}"; then
                 log "事务 $TXN：v=$V 的日志里有只有 v=4 才能写的文件（${_e%%|*}），不动"
-                return 0
+                return 1
             fi
         done
         IFS=$_ifs
@@ -369,7 +514,7 @@ EOF
             IFS=$_ifs
             if v5_path "${_e%%|*}"; then
                 log "事务 $TXN：v=$V 的日志里有只有 v=5 才能写的文件（${_e%%|*}），不动"
-                return 0
+                return 1
             fi
         done
         IFS=$_ifs
@@ -378,12 +523,26 @@ EOF
         # v=2 features in a v=1 log: not something phase one wrote
         if [ -n "$DIRS" ]; then
             log "事务 $TXN：v=1 的日志里有 dir= 行，不动"
-            return 0
+            return 1
         fi
         for _e in $FILES; do
-            case "${_e#*|}" in -*) log "事务 $TXN：程序文件不能标成原来不存在（v=1），不动"; return 0 ;; esac
+            case "${_e#*|}" in -*) log "事务 $TXN：程序文件不能标成原来不存在（v=1），不动"; return 1 ;; esac
         done
     fi
+    return 0
+}
+
+recover() {
+    [ -f "$TXN_FILE" ] || return 0
+    txn_parse "$TXN_FILE"
+    # the normal boot: nothing to do, nothing written
+    case "$PHASE" in
+        done | rolledback | aborted | manifest_pending | failed) return 0 ;;
+    esac
+    _now=$(tr -dc '0-9a-f-' <"$BOOT_ID_FILE" 2>/dev/null)
+    [ -n "$_now" ] && [ "$BOOT" = "$_now" ] && return 0
+
+    txn_valid || return 0
 
     case "$PHASE" in
         staged | trial)
@@ -439,6 +598,11 @@ EOF
             if [ -n "$_bad" ]; then
                 set_phase failed "开机时退回不完整（断电时在 $PHASE）：$_bad 没换回，要人处理"
             else
+                # an auto-rollback the power cut interrupted still owes its records
+                if [ -n "$AUTOWHY" ]; then
+                    auto_records "$AUTOWHY"
+                    rm -f "$WATCH_DIR/$TXN"
+                fi
                 set_phase rolledback "开机时已退回（断电时在 $PHASE）"
             fi
             ;;
@@ -627,10 +791,12 @@ selftest() {
 case "$1" in
     selftest) selftest ;;
     formats) echo "1 2 3 4 5" ;;
+    auto-watch) echo 1 ;;
     tree-fp) tree_fp "$2" ;;
     '')
         RC_CHANGED=
         recover
+        boot_watch
         if [ -n "$RC_CHANGED" ]; then
             log "rc.local 已换回：返回 10，让正在跑的 rc.local 重新执行换回的那一份"
             exit 10
