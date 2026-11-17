@@ -41,6 +41,8 @@ t OK   "$ALL" aarch64 BD_CNMU5250V1.0.0B31 "$ALL"           # 无底线写法也
 t FAIL ""     aarch64 BD_XCBZHKMU5250V1.0.0B03 "$ALL"       # 港版 B03：矩阵里没有 → 不装
 t FAIL ""     aarch64 BD_XCBZHKMU5250V1.0.0B03 "$ALL" 1     # 放开未实测也不装（unsupported）
 t FAIL ""     aarch64 CN_ZTE_MU5120V1.0.0B31 "$ALL"         # 别的型号
+t FAIL ""     aarch64 FLY_CN_MU5250V1.0.0B11 "$ALL"        # FLY_CN_ 前缀也认得出地区；B11 是 code-only
+t WARN "$ALL" aarch64 FLY_CN_MU5250V1.0.0B11 "$ALL" 1      # 放开未实测 → 装
 
 # 按功能：临时矩阵里 B99 的 esim 不支持、chill 只有代码 → 其余照装，esim 跳过
 M=$(mktemp)

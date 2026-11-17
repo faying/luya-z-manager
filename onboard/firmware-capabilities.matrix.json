@@ -8,6 +8,7 @@
     {"model": "MU5250", "region": "CN", "build": "B28", "features": {"ssh": "code-only", "admin": "code-only", "ui": "code-only", "esim": "code-only", "chill": "code-only", "recover": "code-only"}},
     {"model": "MU5250", "region": "CN", "build": "B29", "features": {"ssh": "code-only", "admin": "code-only", "ui": "code-only", "esim": "code-only", "chill": "code-only", "recover": "code-only"}},
     {"model": "MU5250", "region": "CN", "build": "B30", "features": {"ssh": "code-only", "admin": "code-only", "ui": "code-only", "esim": "code-only", "chill": "code-only", "recover": "code-only"}},
+    {"model": "MU5250", "region": "CN", "build": "B11", "features": {"ssh": "code-only", "admin": "code-only", "ui": "code-only", "esim": "code-only", "chill": "code-only", "recover": "code-only"}},
     {"model": "MU5252", "region": "*", "build": "*", "features": {"ssh": "code-only", "admin": "code-only", "ui": "code-only", "esim": "code-only", "chill": "code-only", "recover": "code-only"}}
   ]
 }
