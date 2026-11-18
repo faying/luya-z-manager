@@ -36,6 +36,20 @@ If the device has an unfinished ship transaction (see [touch-ui/docs/SHIP.md](to
   `HOST=<ssh alias> GATEWAY=<device address> SSH_KEY=<key> onboard/test/sandbox.sh run`
   (device-side writes are redirected to `/data/local/tmp/kit-sb`; afterwards it checks that device files and processes are unchanged; the touch UI component is not run in the sandbox).
 
+## Building device binaries on Windows
+
+Use x64 Windows, PowerShell 7, Git for Windows, rustup, and Visual Studio Build Tools with the **Desktop development with C++** workload (x64 MSVC tools and a Windows SDK). From the repository root:
+
+```powershell
+pwsh -NoProfile -File .\scripts\build-device.ps1 -Setup
+pwsh -NoProfile -File .\scripts\build-device.ps1
+pwsh -NoProfile -File .\scripts\build-device.ps1 -Component sentinel
+```
+
+Run `-Setup` once to install the pinned Rust toolchain and target via rustup, plus Zig and cargo-zigbuild in `%LOCALAPPDATA%\LuyaZ\build`. It does not change your default Rust toolchain or PATH. The build defaults to `all`; select `core`, `web`, `sentinel`, or `touch` to build just that component. Only a build that includes `touch` prepares LVGL and FreeType.
+
+The script prints the paths to the Linux AArch64 musl executables under `target/aarch64-unknown-linux-musl/`: `release/luyaz-web` and `release-device/{luyaz-core,luyaz-sentinel,luyaz-ui}`. No WSL or Docker is needed for these four binaries. The full install kit, eSIM helpers, LANID `.cwasm`, fonts, and device deployment still use their existing workflows.
+
 ## Updating a single program by hand (during development)
 
 A device set up with the install kit only accepts SSH keys. There is no scp/sftp on the device, so transfer through a pipe.
