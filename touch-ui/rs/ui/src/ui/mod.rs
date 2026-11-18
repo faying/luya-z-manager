@@ -599,7 +599,7 @@ impl Ui {
             // SAFETY: LVGL is initialised; NULL = every display
             unsafe { sys::lv_display_trigger_activity(std::ptr::null_mut()) };
         }
-        f & logic::TG_FORWARD != 0
+        !self.wifi_blocks_touch(pressed) && f & logic::TG_FORWARD != 0
     }
 
     // ---- shared chrome ----

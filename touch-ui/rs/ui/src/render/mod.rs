@@ -34,7 +34,7 @@ mod checks;
 
 use crate::conf::Conf;
 use crate::logic::{self, Launch};
-use crate::source::{self, Activity, NiAct, Polled, Source};
+use crate::source::{self, Activity, NiAct, Polled, Source, WifiRead};
 use crate::lv::{self, sys, Obj};
 use crate::ui::{self, Sub, SUBS, TABS};
 use checks::Checks;
@@ -176,6 +176,17 @@ struct Replay {
     /// the hash of the model last handed out
     cur: Rc<RefCell<String>>,
     next: Option<Rc<Model>>,
+    #[cfg(test)]
+    wifi_test: Option<Rc<RefCell<WifiTest>>>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct WifiTest {
+    read: WifiRead,
+    reply: Option<bool>,
+    writes: Vec<(String, String)>,
+    fresh_reads: usize,
 }
 
 impl Replay {
@@ -284,6 +295,12 @@ impl Source for Replay {
     fn data_set_pace(&mut self, _panel_lit: bool) {}
     fn data_release_pace(&mut self) {}
     fn data_control_fb(&mut self, _a: &str, _p: &str, _fa: &str, _fb: Option<&str>) -> bool {
+        #[cfg(test)]
+        if let Some(wifi) = &self.wifi_test {
+            let mut wifi = wifi.borrow_mut();
+            wifi.reply = None;
+            wifi.writes.push((_a.into(), _p.into()));
+        }
         self.acted();
         true
     }
@@ -430,15 +447,30 @@ impl Source for Replay {
     }
     fn lang_hold(&mut self) {}
     fn alert_theme_paused(&mut self) {}
-    /// None, as C's render test had it (the switches read off); LUYAZ_RENDER_AUX="w24,w5,psm"
-    /// (e.g. "1,1,0", the screenshots) gives the radios and power save instead.
-    fn aux_read(&mut self) -> Option<(i32, i32, i32)> {
-        let v = std::env::var("LUYAZ_RENDER_AUX").ok()?;
-        let n: Vec<i32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-        match n[..] {
-            [a, b, c] => Some((a, b, c)),
-            _ => None,
+    /// `LUYAZ_RENDER_AUX="w24,w5,psm"` gives the screenshot fixture's settings.
+    fn wifi_read(&mut self, _fresh: bool) -> Option<WifiRead> {
+        #[cfg(test)]
+        if let Some(wifi) = &self.wifi_test {
+            let mut wifi = wifi.borrow_mut();
+            if _fresh {
+                wifi.fresh_reads += 1;
+                return None; // a pre-write sample cannot complete the operation
+            }
+            return Some(wifi.read);
         }
+        let v = std::env::var("LUYAZ_RENDER_AUX").unwrap_or_else(|_| "0,0,0".into());
+        let mut flags = v.split(',').map(|x| x.trim() == "1");
+        let up = [flags.next()?, flags.next()?];
+        let on = up[0] || up[1];
+        Some(WifiRead { master: Some(on), radios: up.map(Some), power_save: flags.next(), module: Some(on), main: [Some(true); 2], up })
+    }
+
+    fn wifi_reply(&self) -> Option<bool> {
+        #[cfg(test)]
+        if let Some(wifi) = &self.wifi_test {
+            return wifi.borrow().reply;
+        }
+        Some(true)
     }
 }
 
@@ -614,6 +646,96 @@ fn arg(args: &[String], k: &str) -> Option<String> {
     args.iter().find_map(|a| a.strip_prefix(k).map(String::from))
 }
 
+#[cfg(test)]
+#[test]
+fn wifi_switch_waits_for_readback_and_blocks_touch() {
+    // SAFETY: this test owns the display and pointer on this thread.
+    unsafe {
+        sys::lv_init();
+        sys::lv_tick_set_cb(Some(tick_cb));
+        let disp = sys::lv_display_create(W as i32, H as i32);
+        sys::lv_display_set_flush_cb(disp, Some(flush_cb));
+        sys::lv_display_set_buffers(disp, (&raw mut FB).cast(), std::ptr::null_mut(),
+            (W * H * 2) as u32, sys::lv_display_render_mode_t::LV_DISPLAY_RENDER_MODE_DIRECT);
+        let finger = sys::lv_indev_create();
+        sys::lv_indev_set_type(finger, sys::lv_indev_type_t::LV_INDEV_TYPE_POINTER);
+        sys::lv_indev_set_read_cb(finger, Some(finger_cb));
+    }
+    let initial = WifiRead {
+        master: Some(false), module: Some(false), radios: [Some(false), Some(true)],
+        main: [Some(true); 2], power_save: Some(true), up: [false; 2],
+    };
+    let wifi = Rc::new(RefCell::new(WifiTest { read: initial, ..WifiTest::default() }));
+    let src = Box::new(Replay {
+        feed: BTreeMap::new(), step: Rc::new(RefCell::new(None)), cur: Rc::new(RefCell::new(String::new())),
+        next: None, wifi_test: Some(wifi.clone()),
+    });
+    let model = Model { bl_is_on: 1, bl_panel_lit: 1, bl_is_lit: 1, ..Model::default() };
+    ui::create(Conf::parse("appearance=dark\nautooff=0\n"), logic::launch_parse(&["luyaz-ui"]),
+        Rc::new(model), src, "luyaz-ui");
+    ui::with(|u| u.to_tab(ui::TAB_WIFI));
+    settle(1200);
+
+    let finger = |x, y, down| {
+        FX.store(x, Ordering::Relaxed);
+        FY.store(y, Ordering::Relaxed);
+        FDOWN.store(down, Ordering::Relaxed);
+        settle(100);
+    };
+    let tap_switch = |i: usize| {
+        let a = ui::with(|u| u.wifi.sw[i].coords());
+        let (x, y) = ((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2);
+        finger(x, y, true);
+        finger(x, y, false);
+    };
+    let checked = || ui::with(|u| std::array::from_fn(|i| u.wifi.sw[i].has_state(lv::LV_STATE_CHECKED)));
+    fn has_text(o: Obj, text: &[u8]) -> bool {
+        !o.hidden() && ((checks::is_label(o) && o.text() == text)
+            || (0..o.child_count() as i32).any(|i| has_text(o.child(i), text)))
+    }
+    let overlay_has = |text: &str| has_text(Obj::layer_top(), text.as_bytes());
+    assert_eq!(checked(), [false, false, true, true]);
+    tap_switch(0);
+    assert_eq!(wifi.borrow().writes, [("wifi.set_module".into(), r#"{"enabled":1}"#.into())]);
+    assert!(overlay_has("正在处理，等设备确认 Wi-Fi"));
+
+    tap_switch(0);
+    tap_switch(2);
+    finger(35, 450, true); // a tab tap started under the overlay
+    wifi.borrow_mut().read = WifiRead { master: Some(true), module: Some(true), ..initial };
+    settle(1100);
+    assert_eq!(wifi.borrow().writes.len(), 1);
+    assert_eq!(checked(), [false, false, true, true]);
+
+    wifi.borrow_mut().reply = Some(true);
+    settle(2200);
+    assert_eq!(wifi.borrow().fresh_reads, 1);
+    assert!(overlay_has("正在处理，等设备确认 Wi-Fi"), "accepted config without 5 GHz up");
+    wifi.borrow_mut().read.up[1] = true;
+    settle(1200);
+    assert!(!overlay_has("正在处理，等设备确认 Wi-Fi"));
+    finger(35, 450, false);
+    assert_eq!(ui::with(|u| u.cur_tab()), ui::TAB_WIFI);
+    assert_eq!(checked(), [true, false, true, true]);
+
+    tap_switch(0);
+    assert_eq!(wifi.borrow().writes[1].1, r#"{"enabled":0}"#);
+    wifi.borrow_mut().reply = Some(true);
+    wifi.borrow_mut().read = WifiRead { up: [false, true], ..initial };
+    settle(2200);
+    assert!(overlay_has("正在处理，等设备确认 Wi-Fi"), "unlocked before 5 GHz stopped");
+    wifi.borrow_mut().read = initial;
+    settle(1200);
+    assert_eq!(checked(), [false, false, true, true]);
+    assert!(!overlay_has("正在处理，等设备确认 Wi-Fi"));
+
+    tap_switch(0);
+    wifi.borrow_mut().reply = Some(false);
+    settle(2200);
+    assert!(!overlay_has("正在处理，等设备确认 Wi-Fi"));
+    assert_eq!(checked(), [false, false, true, true]);
+}
+
 /// `luyaz-ui --hitcheck` (eng review round 3 D5): Home, every tab and every subpage with the ▲
 /// shown (an open incident can keep it lit for days): nothing tappable may sit under its 44×44
 /// box. One line per page, "HIT ok <page>" or "HIT FAIL <page>: <what> at x,y w×h"; exit 1 on any.
@@ -639,6 +761,8 @@ pub fn hitcheck(args: &[String]) -> i32 {
         step: Rc::new(RefCell::new(None)),
         cur: Rc::new(RefCell::new(String::new())),
         next: None,
+        #[cfg(test)]
+        wifi_test: None,
     });
     ui::create(conf, logic::launch_parse(&["luyaz-ui"]), Rc::new(Model::default()), src, "luyaz-ui");
     settle(200);
@@ -853,7 +977,11 @@ pub fn run(args: &[String]) -> i32 {
     }
     // the model an action inside the current step leaves (the C log's model line right after it)
     let pending: Pending = Rc::new(RefCell::new(None));
-    let mut replay = Some(Box::new(Replay { feed: feed_models, step: pending.clone(), cur: cur.clone(), next: None }));
+    let mut replay = Some(Box::new(Replay {
+        feed: feed_models, step: pending.clone(), cur: cur.clone(), next: None,
+        #[cfg(test)]
+        wifi_test: None,
+    }));
 
     let mut checks = Checks::default();
     checks.dump = args.iter().any(|a| a == "--dump");

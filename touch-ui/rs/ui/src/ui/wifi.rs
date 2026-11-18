@@ -2,12 +2,13 @@
 //! The list and the values are drawn by refresh_wifi (cellular.rs, as in C).
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-use super::cellular::{nz, toggle_row, WIFI_CLI_H, WIFI_MAX_CLI};
+use super::cellular::{sw_apply, toggle_row, WIFI_CLI_H, WIFI_MAX_CLI};
 use super::network::NH_WIFI;
 use super::{Ui, VIEW_H};
-use crate::kit::{self, CARD_W, MARGIN, PAD, ROW_H, W};
+use crate::kit::{self, CARD_W, H, MARGIN, PAD, ROW_H, W};
 use crate::lang::{n_, tr};
 use crate::lv::{self, sys, Obj};
+use crate::source::WifiRead;
 use crate::theme::{t, uf};
 
 const WSW_MASTER: usize = 0;
@@ -15,6 +16,8 @@ const WSW_24: usize = 1;
 const WSW_5: usize = 2;
 const WSW_PSM: usize = 3;
 const WSW_NFC: usize = 4;
+const WIFI_READ_MS: u32 = 5_000;
+const WIFI_WRITE_MS: u32 = 75_000;
 
 #[derive(Default, Clone)]
 pub struct Wifi {
@@ -47,6 +50,60 @@ pub struct Wifi {
     pub gw: Obj,
     pub pool: Obj,
     pub lease: Obj,
+    settings: [Option<bool>; 4],
+    read_at: Option<u32>,
+    write: Option<WifiWrite>,
+    eat_touch: bool,
+    warn_at: Option<u32>,
+    cover: Obj,
+    cover_title: Obj,
+}
+
+#[derive(Clone, Copy)]
+struct WifiWrite {
+    id: usize,
+    on: bool,
+    started: u32,
+    reading: bool,
+}
+
+impl Wifi {
+    fn update_settings(&mut self, read: WifiRead) {
+        // An unreadable value (such as unsaved PSM with Wi-Fi off) is not off.
+        for (cached, value) in self.settings.iter_mut().zip(read.settings()) {
+            *cached = value.or(*cached);
+        }
+    }
+}
+
+impl WifiRead {
+    fn settings(self) -> [Option<bool>; 4] {
+        [self.master, self.radios[0], self.radios[1], self.power_save]
+    }
+
+    fn confirms(self, id: usize, on: bool) -> bool {
+        if self.settings()[id] != Some(on) {
+            return false;
+        }
+        if id == WSW_PSM {
+            return true;
+        }
+        let want = if id == WSW_MASTER { Some(on) } else { self.master };
+        if want.is_none() || self.module != want {
+            return false;
+        }
+        if want == Some(false) {
+            return self.up == [false; 2];
+        }
+        (0..2).all(|i| match (self.radios[i], self.main[i]) {
+            (Some(false), _) => !self.up[i],
+            (Some(true), Some(true)) => self.up[i],
+            // If a scenario stopped a main AP, a radio setting alone does not say
+            // whether a guest or the STA on that radio should be up.
+            (Some(true), Some(false)) => true,
+            _ => false,
+        })
+    }
 }
 
 unsafe extern "C" fn wifi_sw_cb(e: *mut sys::lv_event_t) {
@@ -57,7 +114,19 @@ unsafe extern "C" fn wifi_sw_cb(e: *mut sys::lv_event_t) {
 
 impl Ui {
     fn wifi_sw(&mut self, id: usize, on: bool) {
-        let now = lv::tick_get();
+        if id < WSW_NFC {
+            // LVGL has flipped the widget for the tap; keep the confirmed position
+            // behind the modal until the post-write read completes.
+            sw_apply(self.wifi.sw[id], self.wifi.settings[id] == Some(true));
+            if self.wifi_busy() {
+                return;
+            }
+            self.wifi.write = Some(WifiWrite { id, on, started: lv::tick_get(), reading: false });
+            self.wifi.warn_at = None;
+            self.wifi.cover_title.set_text(if on { tr("正在开启…") } else { tr("正在关闭…") });
+            self.wifi.cover.move_foreground();
+            kit::show(self.wifi.cover, true);
+        }
         match id {
             WSW_MASTER => {
                 // The stock master switch through the core (`wifi.set_module` → `zwrt_wlan set
@@ -77,21 +146,18 @@ impl Ui {
                 // runs (the main-AP-flag form is the one it cannot — QCMAP's single-AP mode lands
                 // on wlan0 and EnableWLAN fails; CN B11, measured 2026-11-18). Guests are not
                 // touched: a radio's guests cannot run without it, so no bad layout can arise.
-                let w24 = if id == WSW_5 { self.aux.w24 == 1 } else { on };
-                let w5 = if id == WSW_24 { self.aux.w5 == 1 } else { on };
-                self.aux.w24 = w24 as i32;
-                self.aux.w5 = w5 as i32;
-                self.aux.hold_w24 = nz(now);
-                self.aux.hold_w5 = nz(now);
-                let params = format!(
-                    "{{\"set\":{{\"wireless.wifi0.disabled\":\"{}\",\"wireless.wifi1.disabled\":\"{}\"}},\"reload\":true}}",
-                    !w24 as i32, !w5 as i32
-                );
-                self.data_control("wifi.apply", &params, Some(&format!("ap_2g={} ap_5g={}", w24 as i32, w5 as i32)));
+                let band = id - WSW_24;
+                let params = format!("{{\"set\":{{\"wireless.wifi{band}.disabled\":\"{}\"}},\"reload\":true}}", !on as i32);
+                // The emergency script still takes both settings; use the other
+                // band's configuration, not whether it happens to be broadcasting.
+                let fb = self.wifi.settings[WSW_24 + (1 - band)].map(|other| {
+                    let [w24, w5] = if band == 0 { [on, other] } else { [other, on] };
+                    format!("ap_2g={} ap_5g={}", w24 as i32, w5 as i32)
+                });
+                self.data_control_fb("wifi.apply", &params, "wifi.radio", fb.as_deref());
             }
             WSW_PSM => {
                 // through core (E4): the hotplug script keeps it across an ifup
-                self.aux.psm = on as i32;
                 self.data_control("wifi.power_save", &format!("{{\"enabled\":{}}}", on as i32), None);
             }
             WSW_NFC => {
@@ -99,6 +165,78 @@ impl Ui {
                 self.data_control("nfc.set", &format!("{{\"enabled\":{},\"flag\":2}}", on as i32), Some(&fb));
             }
             _ => {}
+        }
+    }
+
+    pub(super) fn wifi_busy(&self) -> bool {
+        self.wifi.write.is_some()
+    }
+
+    pub(super) fn wifi_blocks_touch(&mut self, pressed: bool) -> bool {
+        let blocked = self.wifi_busy() || self.wifi.eat_touch;
+        if blocked {
+            // A finger held during the change must lift before it can tap again.
+            self.wifi.eat_touch = pressed;
+        }
+        blocked
+    }
+
+    pub(super) fn wifi_warning(&self) -> Option<&'static str> {
+        self.wifi.warn_at.filter(|at| lv::tick_get().wrapping_sub(*at) < 6_000)
+            .map(|_| tr("Wi-Fi 更改未确认"))
+    }
+
+    pub(super) fn wifi_switches_refresh(&mut self, visible: bool, nfc_on: bool) {
+        let now = lv::tick_get();
+        if let Some(mut write) = self.wifi.write {
+            let reply = self.src.wifi_reply();
+            let timed_out = now.wrapping_sub(write.started) >= WIFI_WRITE_MS;
+            if reply.is_some() || timed_out {
+                // No in-flight pre-write read is allowed to unlock the screen.
+                let read = self.src.wifi_read(!write.reading);
+                write.reading = true;
+                if timed_out || read.is_some_and(|r| reply == Some(false) || r.confirms(write.id, write.on)) {
+                    let w = &mut self.wifi;
+                    if let Some(read) = read {
+                        w.update_settings(read);
+                    }
+                    w.read_at = None;
+                    if timed_out || reply != Some(true) {
+                        w.warn_at = Some(now);
+                    }
+                    w.write = None;
+                    kit::show(w.cover, false);
+                } else {
+                    self.wifi.write = Some(write);
+                }
+            }
+        } else if visible && self.wifi.read_at.is_none_or(|at| now.wrapping_sub(at) >= WIFI_READ_MS)
+            && let Some(read) = self.src.wifi_read(false)
+        {
+            self.wifi.update_settings(read);
+            self.wifi.read_at = Some(now);
+        }
+        let w = &self.wifi;
+        let [master, w24, w5, psm] = w.settings;
+        let values = [master, w24, w5, psm, Some(nfc_on)];
+        let sw = w.sw;
+        let labels = w.sw_st;
+        for (i, value) in values.into_iter().enumerate() {
+            sw_apply(sw[i], value == Some(true));
+            let label = match value {
+                Some(true) => tr("已开启"),
+                Some(false) => tr("已关闭"),
+                None => "—",
+            };
+            self.set(labels[i], label);
+            let disabled = value.is_none() && i != WSW_PSM;
+            if disabled != sw[i].has_state(lv::LV_STATE_DISABLED) {
+                if disabled {
+                    sw[i].add_state(lv::LV_STATE_DISABLED);
+                } else {
+                    sw[i].remove_state(lv::LV_STATE_DISABLED);
+                }
+            }
         }
     }
 
@@ -128,6 +266,17 @@ impl Ui {
         for i in 0..5 {
             w.sw[i] = toggle_row(sws, i as i32 * ROW_H, tr(SW_NAME[i]), i == 0, &mut w.sw_st[i], Some(wifi_sw_cb), i);
         }
+        let cover = kit::bx(Obj::layer_top(), 0, 0, W, H, 0x000000, 0);
+        cover.set_style_bg_opa(th.scrim_opa, 0);
+        cover.add_flag(lv::LV_OBJ_FLAG_CLICKABLE);
+        let dialog = kit::card(cover, MARGIN, H / 2 - 39, CARD_W, 78);
+        let title = kit::label(dialog, f.cj17b, th.t1, 0, 0, "");
+        title.align(lv::LV_ALIGN_TOP_MID, 0, 15);
+        let subtitle = kit::label(dialog, f.cj13, th.t3, 0, 0, tr("正在处理，等设备确认 Wi-Fi"));
+        subtitle.align(lv::LV_ALIGN_TOP_MID, 0, 44);
+        w.cover = cover;
+        w.cover_title = title;
+        kit::show(cover, false);
         y += 5 * ROW_H + 10;
 
         w.cli_sec = kit::section(sc, y, tr("已连接设备"));

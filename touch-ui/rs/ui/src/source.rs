@@ -230,8 +230,20 @@ pub trait Source {
     fn lang_hold(&mut self);
     /// the alert for automatic appearance switching paused
     fn alert_theme_paused(&mut self);
-    /// the Wi-Fi radios up (wlan0, wlan2) and Wi-Fi power save, None = not read here
-    fn aux_read(&mut self) -> Option<(i32, i32, i32)>;
+    /// Poll settings; `fresh` discards a read started before the write reply.
+    fn wifi_read(&mut self, fresh: bool) -> Option<WifiRead>;
+    /// Most recent Wi-Fi write reply; None while Core or the emergency script still runs.
+    fn wifi_reply(&self) -> Option<bool>;
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct WifiRead {
+    pub master: Option<bool>,
+    pub radios: [Option<bool>; 2],
+    pub power_save: Option<bool>,
+    pub module: Option<bool>,
+    pub main: [Option<bool>; 2],
+    pub up: [bool; 2],
 }
 
 #[cfg(test)]

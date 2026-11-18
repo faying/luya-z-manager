@@ -24,7 +24,7 @@ use super::speedtest::Speedtest;
 use super::tailscale::Tailscale;
 use super::util;
 use crate::logic::Launch;
-use crate::source::{Activity, NiAct, Polled, Source};
+use crate::source::{Activity, NiAct, Polled, Source, WifiRead};
 use ui_model::Model;
 use plat::backlight::Backlight;
 use plat::key::Key;
@@ -54,7 +54,7 @@ pub struct Live {
     today: Cached<Today>,
     usage: Cached<Usage>,
     chill: Cached<Chill>,
-    aux: Option<Task<(i32, i32, i32)>>,
+    wifi: Option<Task<WifiRead>>,
     pub bl: Backlight,
     pub key: Key,
 }
@@ -81,7 +81,7 @@ impl Live {
             today: Cached::new(Today::default()),
             usage: Cached::new(Usage::default()),
             chill: Cached::new(Chill::default()),
-            aux: None,
+            wifi: None,
             bl: Backlight::init(),
             key,
         }
@@ -233,8 +233,8 @@ fn system(cmd: &str) -> bool {
 }
 
 /// /sys/class/net/<if>/operstate starts with "up".
-fn oper_up(ifname: &str) -> i32 {
-    std::fs::read_to_string(format!("/sys/class/net/{ifname}/operstate")).is_ok_and(|s| s.starts_with("up")) as i32
+fn oper_up(ifname: &str) -> bool {
+    std::fs::read_to_string(format!("/sys/class/net/{ifname}/operstate")).is_ok_and(|s| s.trim() == "up")
 }
 
 impl Source for Live {
@@ -594,33 +594,86 @@ impl Source for Live {
             eprintln!("ui: could not record the ui-theme-paused alert");
         }
     }
-    /// The radios from /sys, Wi-Fi power save from iw (nl80211, not ubus).
-    fn aux_read(&mut self) -> Option<(i32, i32, i32)> {
-        if let Some(task) = &self.aux {
+    fn wifi_read(&mut self, fresh: bool) -> Option<WifiRead> {
+        if fresh {
+            self.wifi = None;
+        }
+        if let Some(task) = &self.wifi {
             match task.take() {
-                Ok(result) => { self.aux = None; return Some(result); }
+                Ok(result) => { self.wifi = None; return Some(result); }
                 Err(std::sync::mpsc::TryRecvError::Empty) => return None,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.aux = None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.wifi = None,
             }
         }
-        self.aux = Task::start_notify(read_aux, |_| true);
+        self.wifi = Task::start_notify(read_wifi, |_| true);
         None
+    }
+
+    fn wifi_reply(&self) -> Option<bool> {
+        self.core.wifi_reply()
     }
 }
 
-fn read_aux() -> (i32, i32, i32) {
-    let (w24, w5) = (oper_up("wlan0"), oper_up("wlan2"));
-    let out = std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(
-            "ps=$(iw dev wlan0 get power_save 2>/dev/null | grep -o 'o[nf]*' | tail -1);\
-             [ -z \"$ps\" ] && ps=$(iw dev wlan2 get power_save 2>/dev/null | grep -o 'o[nf]*' | tail -1);\
-             echo PSM=$([ \"$ps\" = on ] && echo 1 || echo 0)",
-        )
-        .output()
-        .ok();
-    let psm = out
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().find_map(|l| l.strip_prefix("PSM=").map(|v| crate::json::atol(v.as_bytes()) as i32)))
-        .unwrap_or(-1);
-    (w24, w5, psm)
+fn read_wifi() -> WifiRead {
+    use std::process::Command;
+
+    let mut read = WifiRead::default();
+    if let Ok(out) = Command::new("uci").args(["-q", "show", "wireless"]).output()
+        && out.status.success()
+    {
+        read = wifi_config(&String::from_utf8_lossy(&out.stdout));
+    }
+    read.up = [oper_up("wlan0"), oper_up("wlan2")];
+    // An ifdown removes the interfaces, not the owner's saved choice.
+    read.power_save = std::fs::read_to_string("/etc/hotplug.d/iface/99-disable-powersave")
+        .ok()
+        .and_then(|s| s.lines().find_map(|l| l.split_once(" set power_save ").and_then(|(_, v)| psm_flag(v))))
+        .or_else(|| {
+            ["wlan0", "wlan2"].into_iter().zip(read.up).filter(|(_, up)| *up).find_map(|(iface, _)| {
+                let out = Command::new("iw").args(["dev", iface, "get", "power_save"]).output().ok()?;
+                if !out.status.success() { return None; }
+                String::from_utf8_lossy(&out.stdout).lines().find_map(|l| psm_flag(l.trim().strip_prefix("Power save: ")?))
+            })
+        });
+    read
+}
+
+fn psm_flag(s: &str) -> Option<bool> {
+    match s.split_ascii_whitespace().next()? {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn wifi_config(text: &str) -> WifiRead {
+    let mut read = WifiRead::default();
+    let mut radios = [false; 2];
+    let mut main = [false; 2];
+    for (key, value) in text.lines().filter_map(|l| l.split_once('=')) {
+        let bit = match value.trim_matches('\'') {
+            "0" => Some(false),
+            "1" => Some(true),
+            _ => None,
+        };
+        match key {
+            "wireless.zte_mbb.wifi_onoff_by_user" => read.master = bit,
+            "wireless.zte_mbb.wifi_onoff" => read.module = bit,
+            "wireless.wifi0" => radios[0] = true,
+            "wireless.wifi1" => radios[1] = true,
+            "wireless.main_2g" => main[0] = true,
+            "wireless.main_5g" => main[1] = true,
+            "wireless.wifi0.disabled" => read.radios[0] = bit.map(|v| !v),
+            "wireless.wifi1.disabled" => read.radios[1] = bit.map(|v| !v),
+            "wireless.main_2g.disabled" => read.main[0] = bit.map(|v| !v),
+            "wireless.main_5g.disabled" => read.main[1] = bit.map(|v| !v),
+            _ => {}
+        }
+    }
+    read.master = read.master.or(read.module);
+    for i in 0..2 {
+        read.radios[i] = read.radios[i].or(radios[i].then_some(true));
+        read.main[i] = read.main[i].or(main[i].then_some(true));
+    }
+    read
 }

@@ -169,10 +169,11 @@ impl Ui {
             }
         }
 
+        self.wifi_switches_refresh(self.tab_visible(TAB_WIFI), m.data.nfc_on != 0);
         if m.data_ok == 0 {
             self.home.sc_force |= self.polled.scenario;
             // backend down: a device-wide condition, said once in the shared banner
-            self.banner_set(Some(tr("后台数据服务不可用").as_bytes()));
+            self.banner_set(Some(self.wifi_warning().unwrap_or_else(|| tr("后台数据服务不可用")).as_bytes()));
             self.home_signal_down();
             self.lk_mode_sync(-1, false); // a tapped 网络模式 still gets its ending
             self.op_refresh();
@@ -221,6 +222,8 @@ impl Ui {
                 tr("没改成 · 数据服务回了错误")
             };
             self.banner_set(Some(txt.as_bytes()));
+        } else if let Some(warning) = self.wifi_warning() {
+            self.banner_set(Some(warning.as_bytes()));
         } else if let Some(b) = self.usbmode_banner() {
             self.banner_set(Some(&b)); // 已按记住的方式：…
         } else if ah.lost_secs != 0 {
@@ -355,23 +358,15 @@ impl Ui {
         }
         self.tile_rows_paint();
 
-        // Wi-Fi (the radios and power save are read while Wi-Fi, 系统 or 蜂窝 is up: M5)
-        let aux_on = self.tab_visible(TAB_WIFI) || self.tab_visible(super::TAB_SYS) || self.tab_visible(TAB_CELL);
-        self.aux_refresh(aux_on, d);
+        self.aux_refresh(d);
         self.md_refresh();
         self.refresh_wifi(d);
         {
             let a = &self.aux;
-            let st = [a.w24 == 1 || a.w5 == 1, a.w24 == 1, a.w5 == 1, a.psm == 1, d.nfc_on != 0];
             let pool = a.pool.clone();
             let dps = a.dps;
-            let w = self.wifi.clone();
-            for (i, &on) in st.iter().enumerate() {
-                super::cellular::sw_apply(w.sw[i], on);
-                self.set(w.sw_st[i], if on { tr("已开启") } else { tr("已关闭") });
-            }
             if !pool.is_empty() {
-                self.set_at(w.pool, 1, &pool);
+                self.set_at(self.wifi.pool, 1, &pool);
             }
             let s = self.sys.clone();
             super::cellular::sw_apply(s.dps_sw, dps == 1);

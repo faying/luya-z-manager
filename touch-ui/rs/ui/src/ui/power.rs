@@ -213,7 +213,7 @@ impl Ui {
 
         // Auto screen-off after inactivity. Not while the power menu or the 插线用法 sheet is
         // up, nor on 摆放模式 (watched while the device is moved).
-        if self.autooff_ms != 0 && !self.power_menu_visible() && !self.usbmode_visible() && self.sub_cur != Some(Sub::Place) {
+        if self.autooff_ms != 0 && !self.wifi_busy() && !self.power_menu_visible() && !self.usbmode_visible() && self.sub_cur != Some(Sub::Place) {
             let idle = lv::inactive_ms();
             // exec'd with the screen off: inactivity restarted at zero with the new process;
             // wait for a touch that happened after the start

@@ -27,7 +27,7 @@
 
 ## 设备数据从哪来
 
-界面自己不读 ubus 或 uci。luyaz-core 汇总基带、Wi-Fi、电池、短信等状态，提供 `/v2/state` 和 `/v2/events`，界面只读这些。
+luyaz-core 汇总基带、Wi-Fi、电池、短信等状态，通过 `/v2/state` 和 `/v2/events` 提供给界面。Wi-Fi 开关还在本机读 `wireless` UCI 和保存的节能设置，射频停掉不等于设置被关闭。写入后另行检查实际接口状态。
 
 ## 本仓库不包含的东西
 

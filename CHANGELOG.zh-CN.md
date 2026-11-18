@@ -156,6 +156,7 @@
 - core: Wi-Fi 总开关改为原厂总开关本身（`wifi.set_module` → `zwrt_wlan set {zte_mbb:{wifi_onoff}}`，CN B11 实测 2026-11-18）：关/开不再改写频段和访客开关，用户单独关掉的 2.4 GHz 在总开关开关一轮后保持关；关约 2 秒生效、开约 14 秒。旧「两个主网络都 disabled」的关法（旧版核心、情景引擎留下的）打开时照旧写回四个 0。确认（`Confirm::Wifi`、`settled`）认得原厂开关关着 = 没有 AP 在跑；只动原厂开关的写不再多发一次 reload。
 - core: 单独关 2.4 GHz 放行：`radio2_disabled=1`（页面的频段开关）不再被 AP 布局检查拒绝——2.4 radio 关掉时 reload 和重启都保持 5 GHz 在 wlan2 广播（CN B11 实测）。仍拒的是「2.4 主网络 AP 关、radio 还开着」的写法（整机 Wi-Fi 起不来：QCMAP 单 AP 模式落在 wlan0 上，EnableWLAN 失败），提示语改为说清用 radio 开关。
 - lweb: Wi-Fi 设置页的 2.4 GHz 频段开关单独关（5 GHz 开着）不再在确认对话框前被拦；总开关打开的说明改为「单独关掉的频段保持关着」。
+- touch: Wi-Fi 开关显示配置值，不因接口暂时消失而回跳。总开关、频段和节能设置变更时显示全屏处理中并拦截触摸；读回确认后解锁，未确认则提示。
 
 - phone: core 重启后的新来电不再被当成已转走那通的旧事件丢掉（`boot` 变了就忘掉标记；旧 core 没有 `boot`，在列表为空时忘掉）。同一次启动里较旧的列表不理。第一次 `call.list` 遇到 `not_ready` 会再问；续约被拒 `no_call` 时按列表收尾。Requires: core 1.81.0 才有 `boot`。
 

@@ -1509,14 +1509,8 @@ pub fn wifi_sig_word(tier: &str) -> Option<&'static str> {
 /// same value, so it does not snap back while the core's next read is on its way.
 const AUX_HOLD_MS: u32 = 30000;
 
-/// Device state the main snapshot fields don't cover: the
-/// DHCP pool, direct power supply and the cellular data / roaming switches come from core;
-/// the radios (/sys) and Wi-Fi power save (iw) are read on the device while a page that shows
-/// them is up, at most every 5 s.
+/// DHCP pool, direct power supply, and cellular data / roaming from Core.
 pub struct Aux {
-    pub w24: i32,
-    pub w5: i32,
-    pub psm: i32,
     pub dps: i32,
     pub data: i32,
     pub roam: i32,
@@ -1524,18 +1518,11 @@ pub struct Aux {
     pub hold_dps: u32,
     pub hold_data: u32,
     pub hold_roam: u32,
-    pub hold_w24: u32,
-    pub hold_w5: u32,
-    /// the last device read (0 = never)
-    read_at: u32,
 }
 
 impl Default for Aux {
     fn default() -> Self {
         Aux {
-            w24: -1,
-            w5: -1,
-            psm: -1,
             dps: -1,
             data: -1,
             roam: -1,
@@ -1543,9 +1530,6 @@ impl Default for Aux {
             hold_dps: 0,
             hold_data: 0,
             hold_roam: 0,
-            hold_w24: 0,
-            hold_w5: 0,
-            read_at: 0,
         }
     }
 }
@@ -1563,8 +1547,7 @@ fn aux_take(cur: &mut i32, hold: &mut u32, from_core: i32, now: u32) {
 }
 
 impl Ui {
-    /// the core's values; the radios and power save from the device.
-    pub(super) fn aux_refresh(&mut self, active: bool, d: &ui_model::core_snapshot_t) {
+    pub(super) fn aux_refresh(&mut self, d: &ui_model::core_snapshot_t) {
         let now = lv::tick_get();
         let a = &mut self.aux;
         if d.populated != 0 {
@@ -1574,18 +1557,6 @@ impl Ui {
             a.pool.clear();
             if !d.lan_ip.is_empty() && !d.dhcp_first.is_empty() {
                 a.pool = logic::dhcp_pool_text(&d.lan_ip, &d.dhcp_first, &d.dhcp_count);
-            }
-        }
-        if !active || (a.read_at != 0 && now.wrapping_sub(a.read_at) < 5000) {
-            return;
-        }
-        if let Some((w24, w5, psm)) = self.src.aux_read() {
-            let a = &mut self.aux;
-            a.read_at = now;
-            aux_take(&mut a.w24, &mut a.hold_w24, w24, now);
-            aux_take(&mut a.w5, &mut a.hold_w5, w5, now);
-            if psm >= 0 {
-                a.psm = psm;
             }
         }
     }
