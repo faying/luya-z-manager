@@ -7,7 +7,8 @@
 //!   换成 `*.key_fp` = 本机密钥的 HMAC 指纹（和 APN 同一把 `apn.key`），空密码为 ""。
 //! - **目标**：照 agent 的做法从请求体算出要写的 uci（顺序：国家码、逐键、总开关最后），套到现在的
 //!   `wireless` 上，再经同一个 `wifi_block` 展开，和现在的展开比，只留变了的键。读回走同一条路，
-//!   所以 sanitize、布尔写法、总开关压过 radio 开关这些都一样。一个键都没变 = 不算事务。
+//!   所以 sanitize、布尔写法这些都一样；总开关不再是 uci 的四个开关，见 [`master_writes`]。
+//!   一个键都没变 = 不算事务。
 //! - **写**：目标（或退回、撤销的旧值）→ uci 的逆映射，只写和现状不同的；密码按指纹从本机保管箱
 //!   `wifi-vault.json`（0600）取。保管箱里存现在的和新写的密码，不离开设备。
 //! - Wi-Fi 6 跟着 radio 模式一起改，这里不支持：请求要改它就拒绝（agent 回 501）。
@@ -109,11 +110,12 @@ impl Kind {
     }
 }
 
-/// 要写的 uci（路径 → 值，按写的顺序）和要不要先打开原厂总开关（`wifi.set_module {enabled:1}`）。
+/// 要写的 uci（路径 → 值，按写的顺序）和要不要动原厂总开关（`wifi.set_module {enabled}`：
+/// `Some(true)` 先开、`Some(false)` 就是这次的总开关关，见 [`master_writes`]）。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Plan {
     pub set: Vec<(String, String)>,
-    pub vendor_on: bool,
+    pub vendor: Option<bool>,
 }
 
 impl Plan {
@@ -126,12 +128,12 @@ impl Plan {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.set.is_empty() && !self.vendor_on
+        self.set.is_empty() && self.vendor.is_none()
     }
 
     /// 只改了发射功率：agent 用 iw 热改、不重载。返回要热改的 (接口, 百分比)。
     pub fn hot_txpower(&self) -> Option<Vec<(&'static str, u32)>> {
-        if self.vendor_on || self.set.is_empty() {
+        if self.vendor.is_some() || self.set.is_empty() {
             return None;
         }
         self.set
@@ -177,34 +179,32 @@ fn wifi6(raw: &str) -> &'static str {
     if raw == "0" { "0" } else { "1" }
 }
 
-/// agent `master_writes`：开 = 两个 AP 和两个 radio 都开；关 = 两个 AP 关。已经是这样就不写。
-fn master_writes(want_on: bool, current_on: bool) -> Vec<(&'static str, &'static str)> {
-    if want_on == current_on {
-        return Vec::new();
+/// agent `master_writes`，按固件自己的语义重做（CN B11 实测 2026-11-18）：总开关开/关就是原厂
+/// 总开关（`wifi.set_module` → `zwrt_wlan set {zte_mbb:{wifi_onoff}}`），它不碰频段开关——用户
+/// 单独关掉的 2.4 GHz（radio 关）在总开关开关一轮后保持原样，访客开关同样不动。uci 的
+/// 「两个主网络都 disabled」只作为旧状态的恢复对象：那是一个旧版核心或场景引擎留下的
+/// 关法，开关打开时仍写回四个 0。
+fn master_writes(want_on: bool, m: &Uci) -> (Option<bool>, Vec<(&'static str, &'static str)>) {
+    if want_on == master_on(m) {
+        return (None, Vec::new());
     }
     if want_on {
-        vec![
-            ("wireless.wifi0.disabled", "0"),
-            ("wireless.wifi1.disabled", "0"),
-            ("wireless.main_2g.disabled", "0"),
-            ("wireless.main_5g.disabled", "0"),
-        ]
+        let vendor_off = get(m, "wireless.zte_mbb.wifi_onoff") == "0";
+        let mains_off = get(m, "wireless.main_2g.disabled") == "1"
+            && get(m, "wireless.main_5g.disabled") == "1";
+        let mut writes = Vec::new();
+        if mains_off {
+            writes.extend([
+                ("wireless.wifi0.disabled", "0"),
+                ("wireless.wifi1.disabled", "0"),
+                ("wireless.main_2g.disabled", "0"),
+                ("wireless.main_5g.disabled", "0"),
+            ]);
+        }
+        // 原厂开关只在它真的关着时才动；「两个主网络都关」用 uci 写回（开关本身开着）
+        (vendor_off.then_some(true), writes)
     } else {
-        vec![
-            ("wireless.main_2g.disabled", "1"),
-            ("wireless.main_5g.disabled", "1"),
-        ]
-    }
-}
-
-/// 总开关关 = 访客也关（有的节）：两个主网络关了、访客还开着，固件跑不起来（`luyaz_wifi::layout`
-/// 的 GUEST_ALONE），关 Wi-Fi 就会被拒。开的时候访客不动（和原厂一样，要自己再开）。
-fn guests_off_with_mains(plan: &mut Plan, cur: &Uci, want_on: bool) {
-    if want_on || master_on(cur) == want_on {
-        return;
-    }
-    for g in GUESTS.iter().filter(|g| exists(cur, g)) {
-        plan.put(cur, &format!("wireless.{g}.disabled"), "1");
+        (Some(false), Vec::new())
     }
 }
 
@@ -326,12 +326,11 @@ pub fn main_plan(body: &Map<String, Value>, cur: &Uci) -> Result<Plan, String> {
         }
     }
     if let Some(want) = body.get("wifi_onoff").and_then(body_str) {
-        let want_on = want != "0";
-        plan.vendor_on = want_on && get(cur, "wireless.zte_mbb.wifi_onoff") == "0";
-        for (path, v) in master_writes(want_on, master_on(cur)) {
+        let (vendor, writes) = master_writes(want != "0", cur);
+        plan.vendor = vendor;
+        for (path, v) in writes {
             plan.put(cur, path, v);
         }
-        guests_off_with_mains(&mut plan, cur, want_on);
     }
     Ok(plan)
 }
@@ -357,8 +356,8 @@ pub fn simulate(cur: &Uci, plan: &Plan) -> Uci {
     for (p, v) in &plan.set {
         m.insert(p.clone(), v.clone());
     }
-    if plan.vendor_on {
-        m.insert("wireless.zte_mbb.wifi_onoff".into(), "1".into());
+    if let Some(on) = plan.vendor {
+        m.insert("wireless.zte_mbb.wifi_onoff".into(), if on { "1" } else { "0" }.into());
     }
     m
 }
@@ -512,11 +511,11 @@ pub fn plan_for(
         }
     }
     if let Some(want_on) = master {
-        plan.vendor_on = want_on && get(cur, "wireless.zte_mbb.wifi_onoff") == "0";
-        for (path, v) in master_writes(want_on, master_on(cur)) {
+        let (vendor, writes) = master_writes(want_on, cur);
+        plan.vendor = vendor;
+        for (path, v) in writes {
             plan.put(cur, path, v);
         }
-        guests_off_with_mains(&mut plan, cur, want_on);
     }
     Ok(plan)
 }

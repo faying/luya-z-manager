@@ -99,18 +99,24 @@ printf '#!/bin/sh\necho "$*" >>"%s/uci"\n' "$T" >"$T/bin-uci"
 mkdir -p "$T/bin" && mv "$T/bin-uci" "$T/bin/uci" && chmod +x "$T/bin/uci"
 export LUYAZ_FALLBACK_UCI=$T/bin/uci
 run wifi.radio ap_2g=1 ap_5g=0
-check "wifi.radio: uci set both, guests off, commit, then reload" '[ "$RC" = 0 ] && [ "$(cat "$T/uci")" = "set wireless.main_2g.disabled=0
-set wireless.main_5g.disabled=1
--q get wireless.guest_2g
-set wireless.guest_2g.disabled=1
--q get wireless.guest_5g
-set wireless.guest_5g.disabled=1
+check "wifi.radio: the two radios, commit, then reload (guests untouched)" '[ "$RC" = 0 ] && [ "$(cat "$T/uci")" = "set wireless.wifi0.disabled=0
+set wireless.wifi1.disabled=1
 commit wireless" ] && [ "$(sent zwrt_wlan.reload)" = "{}" ]'
 : >"$T/uci"
 run wifi.radio ap_2g=0 ap_5g=1
-check "wifi.radio: 2.4 off with 5 on → exit 2, nothing written" '[ "$RC" = 2 ] && [ ! -s "$T/uci" ]'
+check "wifi.radio: 2.4 off with 5 on is fine now (radio form)" '[ "$RC" = 0 ] && [ "$(cat "$T/uci")" = "set wireless.wifi0.disabled=1
+set wireless.wifi1.disabled=0
+commit wireless" ]'
 run wifi.radio ap_2g=1
 check "wifi.radio needs both → exit 2" '[ "$RC" = 2 ]'
+: >"$T/uci"
+run wifi.master enabled=0
+check "wifi.master off: the stock switch call, no uci" '[ "$RC" = 0 ] && [ "$(sent zwrt_wlan.set)" = "{\"zte_mbb\":{\"wifi_onoff\":\"0\"}}" ] && [ ! -s "$T/uci" ]'
+: >"$T/uci"
+run wifi.master enabled=1
+check "wifi.master on: reads lbd, the stock switch call (lbd not 0/1 → left out)" '[ "$RC" = 0 ] && [ "$(calls | grep "^zwrt_wlan.set " | tail -n 1 | cut -d" " -f4-)" = "{\"zte_mbb\":{\"wifi_onoff\":\"1\"}}" ] && [ "$(cat "$T/uci")" = "-q get wireless.zte_mbb.lbd" ]'
+run wifi.master enabled=2
+check "wifi.master bad value → exit 2" '[ "$RC" = 2 ]'
 teardown
 setup
 run cellular.redial

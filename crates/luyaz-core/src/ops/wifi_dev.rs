@@ -5,8 +5,10 @@
 //!   用请求参数里的交接号（[`LOCK_TOKEN`]，不落盘）交给这次写；退回、撤销以外没有交接的写（自动退回、
 //!   重启后续跑）自己拿，最多等 150 秒（在阻塞线程里等，不占执行者）。顺序是先 Wi-Fi 锁、后写锁
 //!   （和 guard、agent 经 `/control` 写一样，`wifi_lock.rs` 说明了为什么不会死锁）。
-//! - **写**：一个执行者任务里拿写锁，要开原厂总开关就先开（`wifi.set_module`），再 `wifi.apply
-//!   {set, reload:false}`（访客 best_effort）。只改了发射功率：iw 热改、不重载。别的：锁交给一个系统线程做
+//! - **写**：一个执行者任务里拿写锁，要动原厂总开关就先动（`wifi.set_module`：`Some(true)` 先开、
+//!   `Some(false)` 就是总开关关本身），再 `wifi.apply {set, reload:false}`（访客 best_effort）。
+//!   只动原厂总开关、没有 uci 要写时不 reload——开关自己已生效（B11 实测约 2 秒关 / 十几秒开），
+//!   确认在线程里等 radios 对上 uci（`verify_no_reload`）。只改了发射功率：iw 热改、不重载。别的：锁交给一个系统线程做
 //!   `luyaz_wifi::reload_and_verify`（重载走执行者、轮询 hostapd 在线程里，执行者不被占几十秒），做完放锁。
 //! - **确认**（`Confirm::Wifi`）：读回对上目标，且 `Reading::registered` = AP 已按 uci 起来/关掉：
 //!   最近一次重载的确认结果（重载中为否；结果是「没法判断」时看重载报没报错）；没有在跟的重载（u60d 重启过、
@@ -280,14 +282,23 @@ impl WifiDev {
             return Ok(json!({"status": "ok", "note": "no changes"}));
         }
         let hot = plan.hot_txpower();
-        let (set, vendor_on, guest) = (plan.set_json(), plan.vendor_on, kind == Kind::Guest);
+        let (set, vendor, guest) = (plan.set_json(), plan.vendor, kind == Kind::Guest);
+        // 总开关一个键、没有 uci 要写：原厂开关自己就生效（约 2 秒关 / 十几秒开），再 reload 只会把
+        // 已经起来的 AP 白白拆一遍。确认走 verify_no_reload（不重载，只等 radios 对上 uci）。
+        let vendor_only = set.as_object().is_none_or(|s| s.is_empty()) && vendor.is_some();
         // D7：拿不到写锁就什么都不写（Wi-Fi 锁已经拿着，lk 随返回放掉）
         let r = write_lock::run(exec, async move {
             let mut out = json!({"status": "ok"});
-            if vendor_on {
-                match crate::control::execute("wifi.set_module", &json!({"enabled": 1})).await {
-                    Outcome::Ok(_) => out["vendor_switch"] = json!("turned_on"),
+            if let Some(on) = vendor {
+                match crate::control::execute("wifi.set_module", &json!({"enabled": on as i32})).await {
+                    Outcome::Ok(_) => {
+                        out["vendor_switch"] = json!(if on { "turned_on" } else { "turned_off" })
+                    }
                     Outcome::Failed(e) | Outcome::Invalid(e) => {
+                        if vendor_only {
+                            // 没有别的写兜底：开关没动就是没动成
+                            return Err(e);
+                        }
                         eprintln!("ops: vendor Wi-Fi switch: {e}; writing the APs anyway");
                         out["vendor_switch"] = json!("failed");
                         out["vendor_switch_error"] = json!(e);
@@ -336,11 +347,16 @@ impl WifiDev {
         let spawned = std::thread::Builder::new()
             .name("wifi-txn".into())
             .spawn(move || {
-                let host = ReloadHost {
-                    handle: handle.clone(),
-                    exec: exec.clone(),
+                let data = if vendor_only {
+                    // 原厂开关自己已生效：不重载，只等对上 uci（关 = 没有 hostapd；开 = 该开的在广播）
+                    luyaz_wifi::verify_no_reload(&UciHost)
+                } else {
+                    let host = ReloadHost {
+                        handle: handle.clone(),
+                        exec: exec.clone(),
+                    };
+                    luyaz_wifi::reload_and_verify(&host, &lk)
                 };
-                let data = luyaz_wifi::reload_and_verify(&host, &lk);
                 // 没法判断（只有访客网络开着）时看重载报没报错
                 let ok = data["verified"]
                     .as_bool()

@@ -206,12 +206,14 @@ fn refusals_say_what_holds_the_device() {
 }
 
 #[test]
-fn only_2g_off_with_5g_on_is_refused_before_the_dialog() {
+fn only_2g_off_with_5g_on_goes_to_the_dialog() {
+    // 2.4 GHz off alone is the radio switch — the layout the firmware supports (CN B11, measured
+    // 2026-11-18); it used to be refused before the dialog.
     let (s, c) = (seed(), cur());
     let mut d = s.clone();
     d.b[0].radio = false;
-    let e = check(&s, &d, ["", ""], Some(&c), Lang::Zh).unwrap_err().text(Lang::Zh);
-    assert!(e.contains("只关 2.4 GHz"), "{e}");
+    let ch = check(&s, &d, ["", ""], Some(&c), Lang::Zh).unwrap();
+    assert_eq!(ch.params["radio2_disabled"], json!("1"));
     // only 5 GHz off, or both: fine
     let mut d = s.clone();
     d.b[1].radio = false;

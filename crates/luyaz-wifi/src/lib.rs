@@ -444,6 +444,10 @@ fn expectation(radio_2g: &str, main_2g: &str, radio_5g: &str, main_5g: &str, gue
 
 fn current_expectation(h: &dyn Host) -> Expect {
     let get = |k: &str| h.uci_get(k).unwrap_or_default();
+    // The vendor master switch off: nothing can broadcast, whatever the AP flags say.
+    if get(VENDOR_ONOFF) == "0" {
+        return Expect::Off;
+    }
     // Guest sections may not exist at all; only an explicit "0" counts as on.
     let guest_on = get("wireless.guest_2g.disabled") == "0" || get("wireless.guest_5g.disabled") == "0";
     expectation(&get("wireless.wifi0.disabled"), &get(AP_2G), &get("wireless.wifi1.disabled"), &get(AP_5G), guest_on)
@@ -474,6 +478,19 @@ pub fn reload(h: &dyn Host, _lk: &WifiLock) -> Result<Value, String> {
 /// returned object carries `verified` and any `reload_error`, like `apply`'s.
 pub fn reload_and_verify(h: &dyn Host, lk: &WifiLock) -> Value {
     let reload = reload(h, lk);
+    let mut data = verify_no_reload(h);
+    if let Err(e) = reload {
+        if let Some(obj) = data.as_object_mut() {
+            obj.insert("reload_error".into(), json!(e));
+        }
+    }
+    data
+}
+
+/// [`reload_and_verify`] without the reload: wait until the radios match what uci says, for a
+/// change something else already applied — the vendor master switch (`wifi.set_module`) turns
+/// Wi-Fi off and on on its own, and reloading on top of it would only tear working APs down.
+pub fn verify_no_reload(h: &dyn Host) -> Value {
     let verified = match current_expectation(h) {
         Expect::On { ap_2g, ap_5g } => Some(poll_until(ON_DEADLINE, || {
             hostapd_count() > 0 && (!ap_2g || hostapd_serves(h, IFACE_2G, SSID_2G)) && (!ap_5g || hostapd_serves(h, IFACE_5G, SSID_5G))
@@ -484,9 +501,6 @@ pub fn reload_and_verify(h: &dyn Host, lk: &WifiLock) -> Value {
     let mut data = observe(h);
     if let Some(obj) = data.as_object_mut() {
         obj.insert("verified".into(), json!(verified));
-        if let Err(e) = &reload {
-            obj.insert("reload_error".into(), json!(e));
-        }
     }
     data
 }

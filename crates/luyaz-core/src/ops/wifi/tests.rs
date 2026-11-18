@@ -90,7 +90,7 @@ fn main_plan_is_the_agents_write() {
     assert_eq!(set["wireless.wifi1.channel"], "149");
     assert_eq!(set["wireless.main_2g.hidden"], "1");
     assert_eq!(set["wireless.wifi0.country"], "JP");
-    assert!(!p.vendor_on);
+    assert_eq!(p.vendor, None);
     // 同样的请求体再来一次：没有要写的
     assert!(
         main_plan(&body(json!({"ssid_2g": "Home", "wifi_onoff": "1"})), &m)
@@ -118,7 +118,7 @@ fn master_switch_wins_over_the_radio_keys() {
         &m,
     )
     .unwrap();
-    assert!(p.vendor_on);
+    assert_eq!(p.vendor, Some(true));
     let after = apply(&m, &p);
     assert_eq!(after["wireless.wifi0.disabled"], "0");
     assert_eq!(after["wireless.main_2g.disabled"], "0");
@@ -126,12 +126,55 @@ fn master_switch_wins_over_the_radio_keys() {
     let t = target(Kind::Main, &m, &p, &v);
     assert_eq!(t["on"], json!(true));
     assert_eq!(t["band_2g.radio_on"], json!(true));
-    // 关：两个 AP 关，radio 不动
+    // 关：就是原厂总开关（`wifi.set_module`），band/访客开关一个不动——用户单独关掉的
+    // 2.4 GHz 在总开关开关一轮后保持关（CN B11 实测 2026-11-18）
     let p = main_plan(&body(json!({"wifi_onoff": "0"})), &uci()).unwrap();
+    assert_eq!(p.vendor, Some(false));
+    assert!(p.set.is_empty());
+    // 原厂开关已经是关：没有要写的
+    let mut off = uci();
+    off.insert("wireless.zte_mbb.wifi_onoff".into(), "0".into());
+    assert!(main_plan(&body(json!({"wifi_onoff": "0"})), &off)
+        .unwrap()
+        .is_empty());
+    // 原厂开关开着、两个主网络都 disabled（旧版核心或场景引擎的关法）：开 = 写回四个 0
+    let mut legacy = uci();
+    legacy.insert("wireless.main_2g.disabled".into(), "1".into());
+    legacy.insert("wireless.main_5g.disabled".into(), "1".into());
+    let p = main_plan(&body(json!({"wifi_onoff": "1"})), &legacy).unwrap();
+    assert_eq!(p.vendor, None);
     let set: std::collections::BTreeMap<_, _> = p.set.iter().cloned().collect();
     assert_eq!(set.len(), 2);
-    assert_eq!(set["wireless.main_5g.disabled"], "1");
-    assert!(!p.vendor_on);
+    assert_eq!(set["wireless.main_2g.disabled"], "0");
+    assert_eq!(set["wireless.main_5g.disabled"], "0");
+}
+
+#[test]
+fn master_off_keeps_a_band_the_user_switched_off() {
+    // 用户平时 2.4G radio 关着：总开关关→开一轮，2.4G 保持关
+    let mut m = uci();
+    m.insert("wireless.wifi0.disabled".into(), "1".into());
+    let v = vault();
+    let now = value(Kind::Main, &m, &v).unwrap();
+    // 关
+    let p = plan_for(Kind::Main, &body(json!({"on": false})), &m, &now, |_| None).unwrap();
+    assert_eq!(p.vendor, Some(false));
+    assert!(p.set.is_empty());
+    let off = simulate(&m, &p);
+    assert_eq!(off["wireless.zte_mbb.wifi_onoff"], "0");
+    assert_eq!(off["wireless.wifi0.disabled"], "1", "band 开关原样");
+    // 再开：只有原厂开关，band 开关还是原样
+    let now = value(Kind::Main, &off, &v).unwrap();
+    assert_eq!(now["on"], json!(false));
+    let p = plan_for(Kind::Main, &body(json!({"on": true})), &off, &now, |_| None).unwrap();
+    assert_eq!(p.vendor, Some(true));
+    assert!(p.set.is_empty());
+    let after = simulate(&off, &p);
+    assert_eq!(after["wireless.wifi0.disabled"], "1");
+    let t = value(Kind::Main, &after, &v).unwrap();
+    assert_eq!(t["on"], json!(true), "5G 在跑就算开");
+    assert_eq!(t["band_2g.radio_on"], json!(false));
+    assert_eq!(t["band_5g.radio_on"], json!(true));
 }
 
 #[test]
@@ -432,20 +475,26 @@ fn journal_undo_request_is_projected() {
 fn layouts_the_firmware_cannot_run_are_seen_on_the_plan() {
     use luyaz_wifi::layout::{NO_2G, THREE_APS, refusal};
     let m = uci();
-    // 只关 2.4G，5G 开着：Wi-Fi 全断
+    let v = vault();
+    // 只关 2.4G 的 radio（页面频段开关的写法）：5G 单跑是固件支持的布局，不拒
     for b in [
         json!({"radio2_disabled": "1"}),
         json!({"radio2_disabled": true}),
     ] {
         let p = main_plan(&body(b), &m).unwrap();
-        assert_eq!(refusal(&m, &simulate(&m, &p)), Some(NO_2G));
+        assert_eq!(refusal(&m, &simulate(&m, &p)), None);
     }
+    // 只关 2.4G 主网络、radio 还开着（值形式的 band_2g.ap_on；撤销/退回会写）：Wi-Fi 全断，拒
+    let now = value(Kind::Main, &m, &v).unwrap();
+    let want = serde_json::Map::from_iter([("band_2g.ap_on".to_owned(), json!(false))]);
+    let p = plan_for(Kind::Main, &want, &m, &now, |_| None).unwrap();
+    assert_eq!(refusal(&m, &simulate(&m, &p)), Some(NO_2G));
     // 只关 5G、总开关关：可以
     for b in [json!({"radio5_disabled": "1"}), json!({"wifi_onoff": "0"})] {
         let p = main_plan(&body(b), &m).unwrap();
         assert_eq!(refusal(&m, &simulate(&m, &p)), None);
     }
-    // 访客两个频段都开着时关 Wi-Fi：访客跟着关，不拒
+    // 访客两个频段都开着时关 Wi-Fi：总开关关，访客开关原样（开关一轮后跟着回来）
     let mut g = m.clone();
     for (k, v) in [
         ("wireless.guest_2g.disabled", "0"),
@@ -455,17 +504,11 @@ fn layouts_the_firmware_cannot_run_are_seen_on_the_plan() {
         g.insert(k.into(), v.into());
     }
     let p = main_plan(&body(json!({"wifi_onoff": "0"})), &g).unwrap();
-    assert!(
-        p.set
-            .contains(&("wireless.guest_2g.disabled".into(), "1".into()))
-    );
-    assert!(
-        p.set
-            .contains(&("wireless.guest_5g.disabled".into(), "1".into()))
-    );
+    assert_eq!(p.vendor, Some(false));
+    assert!(p.set.is_empty());
     assert_eq!(refusal(&g, &simulate(&g, &p)), None);
     let want = body(json!({"on": false}));
-    let now = value(Kind::Main, &g, &vault()).unwrap();
+    let now = value(Kind::Main, &g, &v).unwrap();
     let p = plan_for(Kind::Main, &want, &g, &now, |_| None).unwrap();
     assert_eq!(refusal(&g, &simulate(&g, &p)), None, "退回/撤销同样");
     // 只关一个频段的主网络、同频段访客还开着：拒

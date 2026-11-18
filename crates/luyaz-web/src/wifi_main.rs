@@ -566,12 +566,9 @@ pub fn check(
             "2.4 GHz：美国不允许 12、13 信道；换一个或选自动",
         ).into());
     }
-    // 2.4 GHz off with 5 GHz still up: the firmware runs no Wi-Fi at all (luyaz_wifi::layout; the
-    // core refuses it too — said here before the dialog, in the page's language)
-    let up = |i: usize| draft.b[i].radio && cur.bands[i].ap_on;
-    if draft.on && (draft.b[0].radio != seed.b[0].radio || draft.b[1].radio != seed.b[1].radio) && up(1) && !up(0) {
-        errs.push(l.pick(LAYOUT_WORDS[0].1, LAYOUT_WORDS[0].2).trim_start_matches("Not applied: ").trim_start_matches("没有生效：").to_owned());
-    }
+    // 2.4 GHz off with 5 GHz up used to be refused here (the AP-flag layout the firmware cannot
+    // run); the page's band switch is the 2.4 GHz radio, which is the supported way (CN B11,
+    // measured 2026-11-18) — it goes to the dialog, and the core takes it.
     if !errs.is_empty() {
         return Err(write::Outcome::NotYet(errs.join(l.pick("; ", "；"))));
     }
@@ -702,7 +699,7 @@ pub fn what(c: &Change, l: Lang) -> String {
         lines.push(if v == "0" {
             l.pick("All Wi-Fi goes off: every device on the U60's Wi-Fi drops.", "所有 Wi-Fi 都会关掉：连着 U60 Wi-Fi 的设备全部断开。").into()
         } else {
-            l.pick("Wi-Fi comes on.", "Wi-Fi 打开。").into()
+            l.pick("Wi-Fi comes on; bands you switched off stay off.", "Wi-Fi 打开；单独关掉的频段保持关着。").into()
         });
     }
     for i in 0..2 {
@@ -854,9 +851,9 @@ pub fn confirm(c: &Change, l: Lang) -> write::Confirm {
 /// The core's AP layout refusals (`luyaz_wifi::layout`), matched by their start.
 const LAYOUT_WORDS: [(&str, &str, &str); 3] = [
     (
-        "turning 2.4 GHz off while 5 GHz stays on",
-        "Not applied: turning 2.4 GHz off while 5 GHz stays on stops all Wi-Fi on this device; turn both off, or only 5 GHz",
-        "没有生效：只关 2.4 GHz、5 GHz 还开着，这台设备的 Wi-Fi 会整个断掉；请两个都关，或只关 5 GHz",
+        "turning the 2.4 GHz network off with its AP flag",
+        "Not applied: turning the 2.4 GHz network off with its AP flag while 5 GHz stays on stops all Wi-Fi on this device; switch the 2.4 GHz radio off instead, or turn both bands off",
+        "没有生效：只关 2.4 GHz 主网络、5 GHz 还开着，这台设备的 Wi-Fi 会整个断掉；请改关 2.4 GHz 的射频开关，或两个频段都关",
     ),
     (
         "a guest network needs the main network",

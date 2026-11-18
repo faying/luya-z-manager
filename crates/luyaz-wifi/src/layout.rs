@@ -3,9 +3,12 @@
 //!
 //! Three layouts take all Wi-Fi down on the U60 Pro, and the device may be reachable only over it:
 //!
-//!  * **No 2.4 GHz AP while a 5 GHz one runs** (found on MU5250): the stock QCMAP then
+//!  * **The 2.4 GHz AP flag off while a 5 GHz AP runs** (found on MU5250): the stock QCMAP then
 //!    starts single-AP mode, which only brings an AP up on wlan0; 5 GHz lives on wlan2, so hostapd
-//!    never gets ready. Turning off only 5 GHz, or both, is fine.
+//!    never gets ready (`EnableWLAN` fails, `zteqcawifi` gives up and *all* Wi-Fi stays down).
+//!    The supported way to run 5 GHz only is the **2.4 GHz radio off** (`wireless.wifi0.disabled`):
+//!    CN B11, measured 2026-11-18 — reload keeps 5 GHz beaconing on wlan2 within ~15 s, and so does
+//!    boot. Turning off only 5 GHz, or both, is fine either way.
 //!  * **A guest AP without its band's main AP**: the main AP is the band's first interface (wlan0 /
 //!    wlan2); the guest one is stacked on it.
 //!  * **Exactly three APs** (upstream #181, measured on MU5250): QCMAP supports 1, 2 or 4; with 3 it
@@ -34,7 +37,7 @@ enum Band {
     G5,
 }
 
-pub const NO_2G: &str = "turning 2.4 GHz off while 5 GHz stays on stops all Wi-Fi on this device; turn both off, or only 5 GHz";
+pub const NO_2G: &str = "turning the 2.4 GHz network off with its AP flag while 5 GHz stays on stops all Wi-Fi on this device; switch the 2.4 GHz radio off instead, or turn both bands off";
 pub const GUEST_ALONE: &str = "a guest network needs the main network of its band on";
 pub const THREE_APS: &str = "this device cannot run exactly three Wi-Fi networks; turn the guest network on for both bands, or off";
 
@@ -62,6 +65,17 @@ pub fn running(m: &Uci) -> Vec<&'static str> {
         .collect()
 }
 
+/// The radio section a band's APs sit on, as `running` resolves it: a section's `device` option,
+/// else the firmware's radio for that band. None when the band has no AP section.
+fn band_radio(m: &Uci, b: Band) -> Option<String> {
+    APS.iter()
+        .find(|(sec, band, _)| *band == b && m.contains_key(&format!("wireless.{sec}")))
+        .map(|(sec, _, radio)| match get(m, &format!("wireless.{sec}.device")) {
+            "" => (*radio).to_owned(),
+            d => d.to_owned(),
+        })
+}
+
 /// Why the layout in `after` must not be written, or None. Only checked when the running set changes.
 pub fn refusal(before: &Uci, after: &Uci) -> Option<&'static str> {
     let on = running(after);
@@ -71,7 +85,15 @@ pub fn refusal(before: &Uci, after: &Uci) -> Option<&'static str> {
     let on = on.as_slice();
     let band = |b: Band| APS.iter().any(|(s, x, _)| *x == b && on.contains(s));
     if band(Band::G5) && !band(Band::G2) {
-        return Some(NO_2G);
+        // 5 GHz only is runnable, but only through the 2.4 GHz radio being off: with the radio
+        // still up and the AP flag down, QCMAP's single-AP mode takes all Wi-Fi down (CN B11,
+        // measured 2026-11-18 — see the module doc). A write that leaves the running set as it
+        // was never reaches here, so a device already in the bad layout can still be repaired.
+        let radio_up = band_radio(after, Band::G2)
+            .is_some_and(|r| get(after, &format!("wireless.{r}.disabled")) != "1");
+        if radio_up {
+            return Some(NO_2G);
+        }
     }
     if (on.contains(&"guest_2g") && !on.contains(&"main_2g"))
         || (on.contains(&"guest_5g") && !on.contains(&"main_5g"))
@@ -145,29 +167,55 @@ mod tests {
     }
 
     #[test]
-    fn radio_off_counts_as_its_aps_off() {
+    fn radio_off_is_the_supported_2g_off() {
         let before = uci(true, true, false, false);
+        // 2.4 GHz radio off, 5 GHz running: the supported 5 GHz-only layout (CN B11, measured
+        // 2026-11-18: reload and boot both keep 5 GHz on wlan2).
         let mut after = before.clone();
         after.insert("wireless.wifi0.disabled".into(), "1".into());
         assert_eq!(
             refusal(&before, &after),
-            Some(NO_2G),
-            "radio2_disabled=1 with 5G on"
+            None,
+            "2.4 GHz radio off with 5G on"
         );
-        after.insert("wireless.wifi1.disabled".into(), "1".into());
-        assert_eq!(refusal(&before, &after), None, "both radios off");
+        // …and the way back on.
+        assert_eq!(refusal(&after, &before), None);
+        // The AP-flag form with the radio still up is the one QCMAP cannot run.
+        let mut ap_off = before.clone();
+        ap_off.insert("wireless.main_2g.disabled".into(), "1".into());
+        assert_eq!(refusal(&before, &ap_off), Some(NO_2G));
+        // Both flags: the radio being off is what the firmware sees — allowed. From the bad
+        // layout itself (before main_2g already flag-off) the same write changes nothing and is
+        // allowed earlier still: that is the repair path.
+        let mut both = ap_off.clone();
+        both.insert("wireless.wifi0.disabled".into(), "1".into());
+        assert_eq!(refusal(&before, &both), None);
+        // Both radios off still fine, and 5 GHz off alone either way.
+        let mut both_radios = before.clone();
+        both_radios.insert("wireless.wifi0.disabled".into(), "1".into());
+        both_radios.insert("wireless.wifi1.disabled".into(), "1".into());
+        assert_eq!(refusal(&before, &both_radios), None);
         let mut only5off = before.clone();
         only5off.insert("wireless.wifi1.disabled".into(), "1".into());
         assert_eq!(refusal(&before, &only5off), None);
+        let mut only5_ap_off = before.clone();
+        only5_ap_off.insert("wireless.main_5g.disabled".into(), "1".into());
+        assert_eq!(refusal(&before, &only5_ap_off), None);
     }
 
     #[test]
     fn radio_from_device_option() {
         let before = uci(true, true, false, false);
+        // The AP's own flag down while its (renamed) radio is up: the layout QCMAP cannot run.
+        let mut after = before.clone();
+        after.insert("wireless.main_2g.device".into(), "radio0".into());
+        after.insert("wireless.main_2g.disabled".into(), "1".into());
+        assert_eq!(refusal(&before, &after), Some(NO_2G));
+        // The renamed radio switched off instead: allowed like wifi0.
         let mut after = before.clone();
         after.insert("wireless.main_2g.device".into(), "radio0".into());
         after.insert("wireless.radio0.disabled".into(), "1".into());
-        assert_eq!(refusal(&before, &after), Some(NO_2G));
+        assert_eq!(refusal(&before, &after), None);
     }
 
     #[test]

@@ -59,28 +59,34 @@ impl Ui {
     fn wifi_sw(&mut self, id: usize, on: bool) {
         let now = lv::tick_get();
         match id {
-            WSW_MASTER | WSW_24 | WSW_5 => {
-                // the same lasting switch as the web page (E4): the main AP interfaces' uci
-                // `disabled`, written and reloaded by core (wifi.apply)
+            WSW_MASTER => {
+                // The stock master switch through the core (`wifi.set_module` → `zwrt_wlan set
+                // {zte_mbb:{wifi_onoff}}`): it leaves the band and guest switches alone, so a band
+                // switched off alone stays off across an off/on cycle (CN B11, measured 2026-11-18).
+                // Emergency (core unreachable): the script's vendor call by the same name.
+                self.data_control_fb(
+                    "wifi.set_module",
+                    &format!("{{\"enabled\":{}}}", on as i32),
+                    "wifi.master",
+                    Some(&format!("enabled={}", on as i32)),
+                );
+            }
+            WSW_24 | WSW_5 => {
+                // The band switches are the radios (`wireless.wifi0/wifi1.disabled`), like the web
+                // page's radio2_disabled: 2.4 GHz off with 5 GHz on is the layout this firmware
+                // runs (the main-AP-flag form is the one it cannot — QCMAP's single-AP mode lands
+                // on wlan0 and EnableWLAN fails; CN B11, measured 2026-11-18). Guests are not
+                // touched: a radio's guests cannot run without it, so no bad layout can arise.
                 let w24 = if id == WSW_5 { self.aux.w24 == 1 } else { on };
                 let w5 = if id == WSW_24 { self.aux.w5 == 1 } else { on };
                 self.aux.w24 = w24 as i32;
                 self.aux.w5 = w5 as i32;
                 self.aux.hold_w24 = nz(now);
                 self.aux.hold_w5 = nz(now);
-                // both off: the guests too — one left on alone is a layout the firmware cannot run,
-                // and the core refuses it (luyaz_wifi::layout); best_effort: a guest section may be
-                // missing. 2.4 GHz off with 5 GHz on is refused by the core; the switch comes back.
-                let guests = if !w24 && !w5 {
-                    ",\"wireless.guest_2g.disabled\":\"1\",\"wireless.guest_5g.disabled\":\"1\""
-                } else {
-                    ""
-                };
                 let params = format!(
-                    "{{\"set\":{{\"wireless.main_2g.disabled\":\"{}\",\"wireless.main_5g.disabled\":\"{}\"{guests}}},\"reload\":true,\"best_effort\":{}}}",
-                    !w24 as i32, !w5 as i32, !w24 && !w5
+                    "{{\"set\":{{\"wireless.wifi0.disabled\":\"{}\",\"wireless.wifi1.disabled\":\"{}\"}},\"reload\":true}}",
+                    !w24 as i32, !w5 as i32
                 );
-                // the emergency script calls this write wifi.radio
                 self.data_control("wifi.apply", &params, Some(&format!("ap_2g={} ap_5g={}", w24 as i32, w5 as i32)));
             }
             WSW_PSM => {
