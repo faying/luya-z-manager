@@ -51,6 +51,7 @@ pub struct Wifi {
     pub pool: Obj,
     pub lease: Obj,
     settings: [Option<bool>; 4],
+    pub(super) up: Option<[bool; 2]>,
     read_at: Option<u32>,
     write: Option<WifiWrite>,
     eat_touch: bool,
@@ -65,6 +66,7 @@ struct WifiWrite {
     on: bool,
     started: u32,
     reading: bool,
+    radios_before: [Option<bool>; 2],
 }
 
 impl Wifi {
@@ -73,6 +75,7 @@ impl Wifi {
         for (cached, value) in self.settings.iter_mut().zip(read.settings()) {
             *cached = value.or(*cached);
         }
+        self.up = Some(read.up);
     }
 }
 
@@ -81,12 +84,19 @@ impl WifiRead {
         [self.master, self.radios[0], self.radios[1], self.power_save]
     }
 
-    fn confirms(self, id: usize, on: bool) -> bool {
+    fn confirms(self, WifiWrite { id, on, radios_before, .. }: WifiWrite) -> bool {
         if self.settings()[id] != Some(on) {
             return false;
         }
         if id == WSW_PSM {
             return true;
+        }
+        if id == WSW_MASTER && radios_before.into_iter().zip(self.radios)
+            .any(|(before, after)| before.is_some() && before != after)
+        {
+            // A firmware master flip can update its flag before radio backup
+            // and restoration are finished. Do not confirm that intermediate state.
+            return false;
         }
         let want = if id == WSW_MASTER { Some(on) } else { self.master };
         if want.is_none() || self.module != want {
@@ -118,10 +128,13 @@ impl Ui {
             // LVGL has flipped the widget for the tap; keep the confirmed position
             // behind the modal until the post-write read completes.
             sw_apply(self.wifi.sw[id], self.wifi.settings[id] == Some(true));
-            if self.wifi_busy() {
+            if self.wifi_busy() || ((WSW_24..=WSW_5).contains(&id) && self.wifi.settings[WSW_MASTER] != Some(true)) {
                 return;
             }
-            self.wifi.write = Some(WifiWrite { id, on, started: lv::tick_get(), reading: false });
+            self.wifi.write = Some(WifiWrite {
+                id, on, started: lv::tick_get(), reading: false,
+                radios_before: [self.wifi.settings[WSW_24], self.wifi.settings[WSW_5]],
+            });
             self.wifi.warn_at = None;
             self.wifi.cover_title.set_text(if on { tr("正在开启…") } else { tr("正在关闭…") });
             self.wifi.cover.move_foreground();
@@ -130,8 +143,7 @@ impl Ui {
         match id {
             WSW_MASTER => {
                 // The stock master switch through the core (`wifi.set_module` → `zwrt_wlan set
-                // {zte_mbb:{wifi_onoff}}`): it leaves the band and guest switches alone, so a band
-                // switched off alone stays off across an off/on cycle (CN B11, measured 2026-11-18).
+                // {zte_mbb:{wifi_onoff}}`): the firmware restores the saved band choices on enable.
                 // Emergency (core unreachable): the script's vendor call by the same name.
                 self.data_control_fb(
                     "wifi.set_module",
@@ -195,7 +207,7 @@ impl Ui {
                 // No in-flight pre-write read is allowed to unlock the screen.
                 let read = self.src.wifi_read(!write.reading);
                 write.reading = true;
-                if timed_out || read.is_some_and(|r| reply == Some(false) || r.confirms(write.id, write.on)) {
+                if timed_out || read.is_some_and(|r| reply == Some(false) || r.confirms(write)) {
                     let w = &mut self.wifi;
                     if let Some(read) = read {
                         w.update_settings(read);
@@ -229,7 +241,9 @@ impl Ui {
                 None => "—",
             };
             self.set(labels[i], label);
-            let disabled = value.is_none() && i != WSW_PSM;
+            // B11 would overwrite a direct band write made while the master is off.
+            let disabled = (value.is_none() && i != WSW_PSM)
+                || ((WSW_24..=WSW_5).contains(&i) && master != Some(true));
             if disabled != sw[i].has_state(lv::LV_STATE_DISABLED) {
                 if disabled {
                     sw[i].add_state(lv::LV_STATE_DISABLED);

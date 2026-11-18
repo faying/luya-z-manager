@@ -708,8 +708,12 @@ fn wifi_switch_waits_for_readback_and_blocks_touch() {
     assert_eq!(checked(), [false, false, true, true]);
 
     wifi.borrow_mut().reply = Some(true);
+    wifi.borrow_mut().read.radios[1] = Some(false); // firmware hasn't restored 5 GHz yet
     settle(2200);
     assert_eq!(wifi.borrow().fresh_reads, 1);
+    assert!(overlay_has("正在处理，等设备确认 Wi-Fi"), "unlocked before the saved band was restored");
+    wifi.borrow_mut().read.radios[1] = Some(true);
+    settle(1100);
     assert!(overlay_has("正在处理，等设备确认 Wi-Fi"), "accepted config without 5 GHz up");
     wifi.borrow_mut().read.up[1] = true;
     settle(1200);

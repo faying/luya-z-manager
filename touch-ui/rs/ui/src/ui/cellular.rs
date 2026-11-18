@@ -448,14 +448,16 @@ impl Ui {
         );
         // the mode as the backend says it: psk2 / sae / sae-mixed differ
         self.set(w.enc, if open { tr("开放") } else { d.ap_auth.as_str() });
-        self.set(w.state, if d.ap_on != 0 { tr("已开启") } else { tr("已关闭") });
-        kit::text_color(w.state, if d.ap_on != 0 { th.ok_t } else { th.t3 });
+        let broadcasting = w.up.map_or(d.ap_on != 0, |up| up[0] || up[1]);
+        self.set(w.state, if broadcasting { tr("已开启") } else { tr("已关闭") });
+        kit::text_color(w.state, if broadcasting { th.ok_t } else { th.t3 });
         // 5 GHz and the channel guard: stopped / moved off radar for now / on DFS (radar can stop it)
         let ch = || cf!("%d · %d MHz", d.ap5_ch, d.ap5_width);
         let (txt, tone) = match d.ap5_dfs {
             2 => (tr("已停（可能遇到雷达）").as_bytes().to_vec(), th.warn_t),
             3 => ([ch(), cf!(" · %s", tr("暂避雷达"))].concat(), th.t1),
             1 => ([ch(), b" \xc2\xb7 DFS".to_vec()].concat(), th.t1),
+            _ if w.up.is_some_and(|up| !up[1]) => (tr("未开").as_bytes().to_vec(), th.t3),
             _ if d.ap5_ch > 0 => (ch(), th.t1),
             0 => (tr("未开").as_bytes().to_vec(), th.t3),
             _ => (b"\xe2\x80\x94".to_vec(), th.t3),

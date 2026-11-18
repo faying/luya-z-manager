@@ -649,6 +649,7 @@ fn psm_flag(s: &str) -> Option<bool> {
 fn wifi_config(text: &str) -> WifiRead {
     let mut read = WifiRead::default();
     let mut radios = [false; 2];
+    let mut backup = [None; 2];
     let mut main = [false; 2];
     for (key, value) in text.lines().filter_map(|l| l.split_once('=')) {
         let bit = match value.trim_matches('\'') {
@@ -665,6 +666,8 @@ fn wifi_config(text: &str) -> WifiRead {
             "wireless.main_5g" => main[1] = true,
             "wireless.wifi0.disabled" => read.radios[0] = bit.map(|v| !v),
             "wireless.wifi1.disabled" => read.radios[1] = bit.map(|v| !v),
+            "wireless.wifi0.disabled_bk" => backup[0] = bit.map(|v| !v),
+            "wireless.wifi1.disabled_bk" => backup[1] = bit.map(|v| !v),
             "wireless.main_2g.disabled" => read.main[0] = bit.map(|v| !v),
             "wireless.main_5g.disabled" => read.main[1] = bit.map(|v| !v),
             _ => {}
@@ -672,8 +675,28 @@ fn wifi_config(text: &str) -> WifiRead {
     }
     read.master = read.master.or(read.module);
     for i in 0..2 {
-        read.radios[i] = read.radios[i].or(radios[i].then_some(true));
+        // CN B11 writes disabled=1 on each radio during master-off. It records a
+        // disabled_bk=1 for a radio that was already disabled; no backup means on.
+        read.radios[i] = if read.module == Some(false) && read.radios[i] == Some(false) {
+            backup[i].or(radios[i].then_some(true))
+        } else {
+            read.radios[i].or(radios[i].then_some(true))
+        };
         read.main[i] = read.main[i].or(main[i].then_some(true));
     }
     read
+}
+
+#[cfg(test)]
+#[test]
+fn wifi_config_reads_saved_bands_while_master_is_off() {
+    let config = "wireless.wifi0=wifi-device\nwireless.wifi1=wifi-device\n\
+        wireless.wifi0.disabled='1'\nwireless.wifi1.disabled='1'\n\
+        wireless.wifi0.disabled_bk='1'\nwireless.zte_mbb.wifi_onoff='0'\n\
+        wireless.zte_mbb.wifi_onoff_by_user='0'\n";
+    let off = wifi_config(config);
+    assert_eq!(off.master, Some(false));
+    assert_eq!(off.radios, [Some(false), Some(true)]);
+    let starting = wifi_config(&config.replace("wifi_onoff='0'", "wifi_onoff='1'"));
+    assert_eq!(starting.radios, [Some(false), Some(false)]);
 }
