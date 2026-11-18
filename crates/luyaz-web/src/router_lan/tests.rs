@@ -296,8 +296,9 @@ fn readback_and_notes() {
             && n.contains("重新登录")
     );
     assert!(note(Lang::En, Note::StillHere, ip).contains("not confirmed"));
+    // Askama can leave a trailing CR when the template is checked out with CRLF.
     assert_eq!(
-        note(Lang::Zh, Note::Pending, None),
+        note(Lang::Zh, Note::Pending, None).trim_end_matches(['\r', '\n']),
         "<div id=\"lan-new\"></div>"
     );
     // by the old LAN address: the tab dies with it

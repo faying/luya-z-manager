@@ -566,7 +566,9 @@ mod tests {
 
     #[test]
     fn states_and_lines_as_designed() {
-        let Got::List(l) = parse(&json!({"v": 1, "open": [inc("a", false, None)],
+        // The detail cache is shared with the other tests, so give this row its own key.
+        let id = "refresh-cache";
+        let Got::List(l) = parse(&json!({"v": 1, "open": [inc(id, false, None)],
             "closed": [inc("b", true, Some("recovered")), inc("c", true, Some("quiet"))]})) else {
             panic!()
         };
@@ -579,10 +581,10 @@ mod tests {
         assert_eq!(when(&l.open[0], now, Lang::Zh), format!("{f} 起 · 已 2h 10m · 可能相关：core 上机"));
         assert_eq!(when(&l.closed[0], now, Lang::Zh), format!("{f}–00:17 · 17 分钟 · 可能相关：core 上机"));
         let html = leaf(Some(&Got::List(l.clone())), None, None, now, Lang::Zh);
-        assert!(html.contains("aria-expanded=\"false\"") && html.contains("aria-controls=\"al-ip-a\""));
-        assert!(html.contains("id=\"al-it-a\""));
+        assert!(html.contains("aria-expanded=\"false\"") && html.contains(&format!("aria-controls=\"al-ip-{id}\"")));
+        assert!(html.contains(&format!("id=\"al-it-{id}\"")));
         // details read once are drawn again by the next refresh (not "reading…")
-        keep_detail("a", Lang::Zh, "<p>kept</p>");
+        keep_detail(id, Lang::Zh, "<p>kept</p>");
         assert!(leaf(Some(&Got::List(l.clone())), None, None, now, Lang::Zh).contains("<p>kept</p>"));
         assert!(!leaf(Some(&Got::List(l.clone())), None, None, now, Lang::En).contains("<p>kept</p>"));
         assert_eq!(drawn(&l).len(), 3);
