@@ -920,13 +920,14 @@ fn render_lock_theme(theme: &str) {
         model.data_ok = 1;
         model.data.populated = 1;
         model.data.radio = "LTE".into();
-        model.data.ap_on = 1;
+        model.data.ap_on = 0;
         model.data.batt_pct = 75;
         ui::set_model(Rc::new(model.clone()));
         ui::with(|u| u.refresh());
         settle(100);
         let zero = text();
         assert!(!zero.contains("状态暂不可用"), "{theme}: {zero}");
+        assert!(zero.contains("Wi-Fi 关"), "{theme}: {zero}");
         assert_eq!(zero.matches("0 B/s").count(), 2, "{theme}: {zero}");
         lock_test_capture(&format!("{theme}-zero-bytes"));
 
@@ -940,12 +941,14 @@ fn render_lock_theme(theme: &str) {
 
         model.data.down_bps = 1024;
         model.data.up_bps = 2048;
+        model.data.ap_on = 1;
         model.now += 1;
         ui::set_model(Rc::new(model.clone()));
         ui::with(|u| u.refresh());
         settle(100);
         let bytes = text();
         assert!(bytes.contains("1 KB/s") && bytes.contains("2 KB/s"), "{theme}: {bytes}");
+        assert!(bytes.contains("Wi-Fi 开"), "{theme}: {bytes}");
         check_geometry();
         lock_test_capture(&format!("{theme}-bytes"));
         ui::with(|u| { u.conf.speed_bits = true; u.paint_screen_lock(); });

@@ -443,6 +443,11 @@ impl Ui {
         self.src.key_held()
     }
 
+    /// Keep reading until the wake guard sees a lift after its 300 ms window.
+    pub(crate) fn touch_wake_pending(&self) -> bool {
+        self.tgate.suppress
+    }
+
     // ---- subpage layer ----
     fn sub_show(&mut self, id: Sub, forward: bool) {
         let changed = self.sub_cur != Some(id);

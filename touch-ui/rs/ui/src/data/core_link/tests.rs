@@ -158,6 +158,22 @@ fn mobile_data_switch_reads_like_core() {
 }
 
 #[test]
+fn wifi_master_readback_overrides_saved_ap_flag() {
+    let wlan = blk("wlan", L_WLAN);
+    let wifi = blk("wifi", r#"{"on":false}"#);
+    let snap = format!(r#"{{"epoch":"e7","seq":41,"blocks":{{{wlan},{wifi}}}}}"#);
+    let mut d = CoreLink::new(cfg(1));
+    assert_eq!(feed(&mut d, "snapshot", &snap), 1);
+    assert_eq!(d.fresh_snap.ap_on, 0);
+    assert_eq!(d.fresh_snap.ap_ssid, "U60");
+    assert_eq!(
+        feed(&mut d, "block", r#"{"epoch":"e7","seq":42,"name":"wifi","revision":2,"observed_at":2,"stale":false,"data":{"on":true}}"#),
+        1
+    );
+    assert_eq!(d.fresh_snap.ap_on, 1);
+}
+
+#[test]
 fn v2_matches_legacy() {
     let legacy = format!(
         r#"{{"net":{L_NET},"battery":{L_BAT},"power":{L_PWR},"system":{L_SYS},"traffic":{L_TRF},"sms":{{"unread":1,"list":{L_LIST}}},"sim":{L_SIM},"qos":{L_QOS},"clients":{L_CLI},"wlan":{L_WLAN},"dhcp":{L_DHCP},"interfaces":{L_IF},"typec":{L_TYPEC},"powerbank":{{"state":0}},"ts":1}}"#

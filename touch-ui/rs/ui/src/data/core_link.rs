@@ -94,9 +94,10 @@ const B_REGRESS: usize = 15;
 const B_DISPLAY: usize = 16;
 const B_HEAT: usize = 17;
 const B_WIFI_DFS: usize = 18;
-const B_COUNT: usize = 19;
+const B_WIFI: usize = 19;
+const B_COUNT: usize = 20;
 const V2_NAMES: [&str; B_COUNT] =
-    ["signal", "battery", "charger", "live", "sms", "sms_list", "sim", "qos", "clients", "wlan", "nfc", "dhcp", "interfaces", "typec", "powerbank", "regress", "display", "heat", "wifi_dfs"];
+    ["signal", "battery", "charger", "live", "sms", "sms_list", "sim", "qos", "clients", "wlan", "nfc", "dhcp", "interfaces", "typec", "powerbank", "regress", "display", "heat", "wifi_dfs", "wifi"];
 
 #[derive(Default, Clone)]
 struct Blk {
@@ -457,6 +458,14 @@ pub fn decode_snapshot(buf: &[u8]) -> Option<core_snapshot_t> {
         d.ap_psk = jget(&s, "key", 64);
         d.ap_auth = jget(&s, "enc", 24);
         d.ap_on = num(&s, "enabled", 1) as i32;
+    }
+    if let Some(wifi) = section("wifi") {
+        // wlan.enabled is the configured AP flag. The module can be off while it is set.
+        match json::get(&wifi, "on", 8).as_deref() {
+            Some(b"true") => d.ap_on = 1,
+            Some(b"false") => d.ap_on = 0,
+            _ => {}
+        }
     }
     if let Some(s) = section("nfc") {
         d.nfc_on = small(&s, "switch");
@@ -867,6 +876,11 @@ impl CoreLink {
             if self.blk[b].fresh {
                 cat(&[b",\"", key.as_bytes(), b"\":", &self.blk[b].data]);
             }
+        }
+        if self.blk[B_WIFI].fresh
+            && let Some(on) = json::get(&self.blk[B_WIFI].data, "on", 8)
+        {
+            cat(&[b",\"wifi\":{\"on\":", &on, b"}"]);
         }
         if self.blk[B_LIVE].fresh {
             if let Some(sub) = json::get(&self.blk[B_LIVE].data, "system", SNAPSHOT_CAP) {
