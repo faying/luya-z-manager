@@ -44,7 +44,10 @@ NFC 碰一碰	NFC tap
 SIM 与 eSIM	SIM & eSIM
 SIM 卡	SIM
 SIM 卡 · %s	SIM · %s
+Wi-Fi 关	Wi-Fi off
+Wi-Fi 开	Wi-Fi on
 Wi-Fi 已关 · 	Wi-Fi off · 
+Wi-Fi 更改未确认	Wi-Fi change not confirmed
 Wi-Fi 开着	Wi-Fi stays on
 Wi-Fi 看门狗接管中，固定暂时不生效，先按「外出」	Wi-Fi watchdog in charge; the pin is paused, acting as Away
 WiFi 总开关	Wi-Fi
@@ -62,7 +65,9 @@ tailscale|节点	Peers
 ● %d 项检查都正常	● All %d checks OK
 ● 一切正常	● All good
 上传中…	Uploading…
+上行	Upload
 下一步	Next
+下行	Download
 下载中…	Downloading…
 不过期	Never expires
 中国广电	China Broadnet
@@ -150,6 +155,7 @@ tailscale|节点	Peers
 号码没写在卡里	No number on SIM
 卡 2 不提供号码	SIM 2 reports no number
 后台数据服务不可用	Data service unavailable
+向上滑动解锁	Swipe up to unlock
 告警 · %s	Alert · %s
 告警 · 开机后 %ld 分钟	Alert · %ld min after boot
 告警记录	Alert log
@@ -277,6 +283,8 @@ tailscale|节点	Peers
 正在切换，等它做完	Switch in progress
 正在切换，等设备确认…	Switching; waiting for the device…
 正在回到自动选网…	Going back to automatic selection…
+正在处理，等设备确认 Wi-Fi	Waiting for Wi-Fi confirmation
+正在开启…	Turning on…
 正在忙	Busy
 正在恢复自动…	Going back to auto…
 正在恢复自动判断…	Going back to automatic…
@@ -320,6 +328,7 @@ tailscale|节点	Peers
 热点	Hotspot
 版本	Version
 状态栏网速用 Mbps	Status bar speed in Mbps
+状态暂不可用	Status unavailable
 现在	Now
 现在就在 %s 上	Already on %s
 现在已经是自动 · 按位置和 SIM 判断为「%s」	Already automatic · decided as \"%s\" by place and SIM

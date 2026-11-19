@@ -156,6 +156,10 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+- core: On the verified CN B11 stock script, end a CPU-bound orphan after the Wi-Fi module, both radios and mesh are off and `iw dev` reports no interfaces. The existing anomaly report follows the process's exit.
+- sentinel: Release the old stock touchscreen process's sleep lock after Luya-Z takes over the screen and the old PID is gone.
+- touch: Show time, date, battery, connection and both traffic rates when the screen lights up. Swipe up from the bottom to return to the previous page.
+
 - core: the Wi-Fi master switch is now the stock switch itself (`wifi.set_module` → `zwrt_wlan set {zte_mbb:{wifi_onoff}}`, measured on CN B11 2026-11-18): off/on no longer rewrites the band or guest switches, so a 2.4 GHz the user switched off alone stays off across a master off/on cycle; off lands in ~2 s, on in ~14 s. The old "both main networks disabled" off-state (left by an older core or the scenario engine) is still undone by writing the four 0s. Confirmation (`Confirm::Wifi`, `settled`) knows the stock switch off = no AP running; a write that only moves the stock switch no longer fires an extra reload.
 - core: switching 2.4 GHz off alone is allowed: `radio2_disabled=1` (the page's band switch) is no longer refused by the AP-layout check — with the 2.4 radio off, reload and boot both keep 5 GHz beaconing on wlan2 (measured on CN B11). What is still refused is the 2.4 main-AP flag off with its radio still on (that layout takes all Wi-Fi down: QCMAP's single-AP mode lands on wlan0 and EnableWLAN fails); the message now says to use the radio switch.
 - lweb: the Wi-Fi page's 2.4 GHz band switch off (with 5 GHz on) is no longer stopped before the confirm dialog; the master-on wording now says bands switched off stay off.

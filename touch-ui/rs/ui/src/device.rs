@@ -66,12 +66,11 @@ pub fn unblank() {
 thread_local! {
     static PANEL: RefCell<Option<Panel>> = const { RefCell::new(None) };
     static TOUCH: RefCell<Option<Touch>> = const { RefCell::new(None) };
-    static RD: RefCell<ReadState> = const { RefCell::new(ReadState { was: false, fwd_was: false, taplog: false }) };
+    static RD: RefCell<ReadState> = const { RefCell::new(ReadState { was: false, taplog: false }) };
 }
 
 struct ReadState {
     was: bool,
-    fwd_was: bool,
     taplog: bool,
 }
 
@@ -168,13 +167,7 @@ unsafe extern "C" fn read_cb(ind: *mut sys::lv_indev_t, data: *mut sys::lv_indev
         }
         r.was = pressed;
     });
-    let fwd = ui::with(|u| u.touch_filter(pressed, x, y));
-    let cut = RD.with(|r| {
-        let mut r = r.borrow_mut();
-        let cut = r.fwd_was && !fwd && pressed;
-        r.fwd_was = fwd;
-        cut
-    });
+    let (fwd, cut) = ui::with(|u| u.touch_filter(pressed, x, y));
     // SAFETY: LVGL's indev and its read buffer for this call
     unsafe {
         if cut {
@@ -298,6 +291,12 @@ pub fn run(args: &[String]) -> i32 {
     let mut live = Live::new(key);
     let model = std::rc::Rc::new(live.build());
     ui::create(conf, launch, model, Box::new(live), &argv0);
+    if !offscreen {
+        ui::with(|u| u.init_screen_lock());
+        if !ui::with(|u| u.bl_is_on()) {
+            blank();
+        }
+    }
 
     // SAFETY: LVGL's own timers for this display and input
     let (refr_timer, read_timer) = unsafe { (lv::Timer(sys::lv_display_get_refr_timer(disp)), lv::Timer(sys::lv_indev_get_read_timer(indev))) };
@@ -353,11 +352,17 @@ pub fn run(args: &[String]) -> i32 {
             );
         }
 
-        let (key_fd, data_fd, wake_fd, lit, held) = ui::with(|u| (u.src.key_fd(), u.src.data_fd(), u.src.wake_fd(), u.bl_is_on(), u.key_held()));
-        // lit by someone else (the vendor key daemon sees the key too): our content back first
-        if BLANKED.load(Ordering::Relaxed) && ui::with(|u| u.src.bl_panel_lit(&u.model)) {
+        // The vendor key daemon can light the panel too. Prepare the wake before the first frame.
+        if BLANKED.load(Ordering::Relaxed) && ui::with(|u| {
+            if !u.src.bl_is_lit(&u.model) {
+                return false;
+            }
+            u.prepare_screen_wake();
+            true
+        }) {
             unblank();
         }
+        let (key_fd, data_fd, wake_fd, lit, held) = ui::with(|u| (u.src.key_fd(), u.src.data_fd(), u.src.wake_fd(), u.bl_is_on(), u.key_held()));
         // a power key held on a dark screen keeps being polled, or its long press is lost
         let want_dark = !lit && !held;
         if want_dark != dark {

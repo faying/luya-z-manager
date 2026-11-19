@@ -76,7 +76,11 @@ pub fn fmt_rate_top(bps: i64, bits: bool, shortf: bool) -> Vec<u8> {
 
 impl Ui {
     /// What is on screen, as each poll's `active`.
-    fn activity(&self) -> Activity {
+    fn activity(&self, panel_lit: bool) -> Activity {
+        let hx_sending = self.cp.hx_sending >= 0;
+        if self.screen_locked() {
+            return Activity { panel_lit, hx_sending, ..Activity::default() };
+        }
         use super::{TAB_EXIT as EXIT, TAB_SYS};
         // only 运营商选择 reads everything (the agent runs AT+COPS?); others what they show
         let ni_mode = if self.sub_visible(Sub::Net) {
@@ -93,13 +97,13 @@ impl Ui {
             NI_OFF
         };
         Activity {
-            panel_lit: self.src.bl_panel_lit(&self.model),
+            panel_lit,
             lit: self.bl_is_on(),
             home: self.tab_visible(TAB_HOME),
             ni_mode,
             tailscale: self.tab_visible(TAB_HOME) || self.tab_visible(EXIT) || self.sub_visible(Sub::Ts),
             chill_page: self.sub_visible(Sub::Chill),
-            hx_sending: self.cp.hx_sending >= 0,
+            hx_sending,
             chill: self.tab_visible(TAB_HOME)
                 || self.tab_visible(EXIT)
                 || self.sub_visible(Sub::Chill)
@@ -126,9 +130,20 @@ impl Ui {
     fn refresh_inner(&mut self, periodic: bool) {
         self.appearance_tick();
         self.refreshes += 1;
-        let a = self.activity();
+        let panel_lit = self.src.bl_panel_lit(&self.model);
+        if !panel_lit {
+            self.engage_screen_lock();
+            if self.bl_is_on() && !self.src.bl_is_lit(&self.model) {
+                // The stock firmware turned off the panel. Keep the black frame until wake.
+                crate::device::blank();
+            }
+        }
+        let a = self.activity(panel_lit);
         self.polled = self.src.poll(self.refreshes, &a);
         self.sync();
+        if panel_lit {
+            self.paint_screen_lock();
+        }
         let th = t();
         let m = self.model.clone();
 

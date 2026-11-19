@@ -286,6 +286,45 @@ pub fn auto_decide(i: &AutoIn) -> Auto {
 }
 
 // ---- touch while the screen is dark ----
+/// A lock-screen gesture starts only after an eligible release and finishes on release.
+#[derive(Default)]
+pub struct SwipeUnlock {
+    armed: bool,
+    start: Option<(i32, i32)>,
+}
+
+impl SwipeUnlock {
+    pub fn reset(&mut self) {
+        self.armed = false;
+        self.start = None;
+    }
+
+    pub fn step(&mut self, eligible: bool, pressed: bool, x: i32, y: i32) -> bool {
+        if !eligible {
+            self.reset();
+            return false;
+        }
+        if pressed {
+            if self.armed {
+                self.armed = false;
+                self.start = (y >= 384).then_some((x, y));
+            } else if let Some((sx, _)) = self.start
+                && (i64::from(x) - i64::from(sx)).abs() > 64
+            {
+                self.start = None;
+            }
+            false
+        } else {
+            let unlock = self.start.take().is_some_and(|(sx, sy)| {
+                (i64::from(x) - i64::from(sx)).abs() <= 64
+                    && i64::from(sy) - i64::from(y) >= 100
+            });
+            self.armed = true;
+            unlock
+        }
+    }
+}
+
 pub const TAP_MAX_MS: i64 = 350;
 pub const TAP_SLOP: i32 = 24;
 pub const DTAP_GAP_MS: i64 = 450;
@@ -736,6 +775,46 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn swipe_unlock_requires_a_complete_eligible_gesture() {
+        let mut s = SwipeUnlock::default();
+        let mut sample = |pressed, x, y| s.step(true, pressed, x, y);
+        assert!(!sample(false, 160, 445));
+        // A tap, horizontal swipe, downward swipe, and middle start do not unlock.
+        for (start, end) in [((160, 445), (160, 445)), ((50, 430), (250, 425)),
+            ((160, 404), (160, 470)), ((160, 383), (160, 200))] {
+            assert!(!sample(true, start.0, start.1));
+            assert!(!sample(false, end.0, end.1));
+        }
+        assert!(!sample(true, 160, 445));
+        assert!(!sample(true, 225, 350)); // exceeding the horizontal limit poisons the contact
+        assert!(!sample(true, 160, 300));
+        assert!(!sample(false, 160, 300));
+        assert!(!sample(true, 160, 445));
+        assert!(!sample(true, 224, 345)); // enough distance, but still held
+        assert!(sample(false, 224, 345));
+    }
+
+    #[test]
+    fn swipe_unlock_reset_and_ineligible_contact_require_release() {
+        let mut s = SwipeUnlock::default();
+        // Starting while unarmed cannot become a gesture midway through a contact.
+        assert!(!s.step(true, true, 160, 445));
+        assert!(!s.step(true, true, 160, 300));
+        assert!(!s.step(true, false, 160, 300));
+        assert!(!s.step(true, true, 160, 445));
+        s.reset();
+        assert!(!s.step(true, true, 160, 300));
+        assert!(!s.step(true, false, 160, 300));
+        assert!(!s.step(true, true, 160, 445));
+        assert!(!s.step(false, true, 160, 400));
+        assert!(!s.step(false, false, 160, 300));
+        assert!(!s.step(true, true, 160, 445));
+        assert!(!s.step(true, false, 160, 300));
+        assert!(!s.step(true, true, 160, 445));
+        assert!(s.step(true, false, 160, 345));
+    }
 
     const fn m(h: i32, mi: i32) -> i32 {
         h * 60 + mi

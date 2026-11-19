@@ -307,6 +307,134 @@ pub fn run(cmd: &mut Command, limit: Duration) -> Result<String, String> {
     }
 }
 
+const WAKELOCK_MAP: &str = "/tmp/wakelockMap.txt";
+
+fn devui_lock_pid(map: &str) -> Result<Option<i32>, &'static str> {
+    let mut pid = None;
+    for line in map.lines() {
+        let mut fields = line.split_whitespace();
+        if fields.next() != Some(crate::run::VENDOR_COMM) {
+            continue;
+        }
+        if pid.is_some() {
+            return Err("duplicate stock UI lock entries");
+        }
+        pid = fields
+            .next()
+            .and_then(|v| v.parse::<i32>().ok())
+            .filter(|&v| v > 0);
+        if pid.is_none() || fields.next().is_some() {
+            return Err("invalid stock UI lock entry");
+        }
+    }
+    Ok(pid)
+}
+
+fn stale_devui_lock_pid(
+    map: &str,
+    vendor_alive: bool,
+    pid_absent: impl FnOnce(i32) -> bool,
+) -> Option<i32> {
+    if vendor_alive {
+        return None;
+    }
+    devui_lock_pid(map)
+        .ok()
+        .flatten()
+        .filter(|&pid| pid_absent(pid))
+}
+
+fn delete_devui_lock_args(pid: i32) -> String {
+    format!(
+        r#"{{"sourceId":{pid},"lockName":"{}"}}"#,
+        crate::run::VENDOR_COMM
+    )
+}
+
+/// After we own the screen, remove only the stock UI's lock for a PID that no longer exists.
+pub(crate) fn release_stale_devui_sleep_lock() -> Result<bool, String> {
+    use crate::run::{HEARTBEAT, VENDOR_COMM};
+    use std::io::ErrorKind::NotFound;
+
+    let before = match fs::read_to_string(WAKELOCK_MAP) {
+        Ok(map) => map,
+        Err(e) if e.kind() == NotFound => return Ok(false),
+        Err(e) => return Err(format!("{WAKELOCK_MAP}: {e}")),
+    };
+    let pid_absent =
+        |pid| matches!(fs::metadata(format!("/proc/{pid}")), Err(e) if e.kind() == NotFound);
+    let Some(pid) = stale_devui_lock_pid(&before, find_comm(VENDOR_COMM).is_some(), pid_absent)
+    else {
+        return Ok(false);
+    };
+    let Some(heartbeat) = read(HEARTBEAT) else {
+        return Ok(false);
+    };
+    let mut fields = heartbeat.split_whitespace().skip(1);
+    if fields.next().and_then(|v| v.parse::<u32>().ok()) != Some(std::process::id())
+        || fields.next() != Some("ours")
+    {
+        return Ok(false);
+    }
+    let Some((ui, started)) = find_ui().and_then(|ui| Some((ui, start_ticks(ui)?))) else {
+        return Ok(false);
+    };
+
+    if read(WAKELOCK_MAP).as_deref() != Some(&before)
+        || find_comm(VENDOR_COMM).is_some()
+        || !pid_absent(pid)
+        || !pid_is_ui(ui)
+        || start_ticks(ui) != Some(started)
+        || read(HEARTBEAT).as_deref() != Some(&heartbeat)
+    {
+        return Ok(false);
+    }
+
+    run(
+        Command::new("ubus").args([
+            "-t",
+            "2",
+            "call",
+            "zwrt_zte_sleep_faw.wakelock",
+            "internalDeleteWakelock",
+            &delete_devui_lock_args(pid),
+        ]),
+        Duration::from_secs(2),
+    )?;
+    let after =
+        fs::read_to_string(WAKELOCK_MAP).map_err(|e| format!("readback {WAKELOCK_MAP}: {e}"))?;
+    match devui_lock_pid(&after) {
+        Ok(None) => Ok(true),
+        Ok(Some(_)) => Err(format!("stock UI entry still present after deleting PID {pid}")),
+        Err(reason) => Err(format!("readback: {reason}")),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn stock_ui_sleep_lock_selects_only_dead_devui() {
+    let before = "usbIsCharging 20325\nzte_topsw_devui 20400\nzte_topsw_mc 19948\n";
+    let after = "usbIsCharging 20325\nzte_topsw_mc 19948\n";
+    let pid = stale_devui_lock_pid(before, false, |pid| pid == 20400).unwrap();
+    let request: serde_json::Value = serde_json::from_str(&delete_devui_lock_args(pid)).unwrap();
+    assert_eq!(
+        request,
+        serde_json::json!({"sourceId": 20400, "lockName": "zte_topsw_devui"})
+    );
+    assert_eq!(devui_lock_pid(after), Ok(None));
+    assert_eq!(stale_devui_lock_pid(before, false, |_| false), None); // reused PID
+    assert_eq!(stale_devui_lock_pid(before, true, |_| true), None); // live stock UI
+    let repeated = format!("{before}zte_topsw_devui 20401\n");
+    assert_eq!(stale_devui_lock_pid(&repeated, false, |_| true), None);
+    for invalid in [
+        "zte_topsw_devui 0",
+        "zte_topsw_devui 2147483648",
+        "zte_topsw_devui 42 extra",
+    ] {
+        assert_eq!(stale_devui_lock_pid(invalid, false, |_| true), None);
+    }
+}
+
 pub fn pidfd_open(pid: i32) -> Option<OwnedFd> {
     // SAFETY: plain syscall; a valid fd is owned by us from here on.
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };

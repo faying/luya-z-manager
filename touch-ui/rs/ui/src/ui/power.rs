@@ -87,6 +87,7 @@ impl Ui {
         self.pw.mode_ms = self.pw.go_ms;
         self.pw.quick_off = false;
         self.power_menu_set(false);
+        self.paint_screen_lock();
         let p = &self.pw;
         p.cover_lbl.set_text(if which != 0 { tr("正在重启…") } else { tr("正在关机…") });
         p.cover.remove_flag(lv::LV_OBJ_FLAG_HIDDEN);
@@ -107,6 +108,7 @@ impl Ui {
         self.pw.quick_off = false;
         self.pw.going = 1;
         self.pw.go_ms = lv::tick_get();
+        self.paint_screen_lock();
         let p = &self.pw;
         p.cover_lbl.set_text(tr("正在重启…"));
         p.cover.remove_flag(lv::LV_OBJ_FLAG_HIDDEN);
@@ -140,10 +142,7 @@ impl Ui {
                 self.pw.quick_off = false;
                 self.pw.going = -1;
                 self.pw.cover.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
-                self.src.bl_on();
-                self.sync();
-                self.tgate.woke(now as i64);
-                lv::trigger_activity();
+                self.light_lock_screen();
             }
         }
         if self.pw.quick_off {
@@ -162,24 +161,32 @@ impl Ui {
             } else if now.wrapping_sub(p.go_ms) >= 80000 {
                 self.pw.cover.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
                 self.pw.going = -1;
+                self.engage_screen_lock();
+                if self.src.bl_panel_lit(&self.model) {
+                    self.paint_screen_lock();
+                }
             }
         }
+    }
+
+    fn light_lock_screen(&mut self) {
+        self.prepare_screen_wake();
+        self.src.bl_on();
+        self.sync();
     }
 
     /// The power key (key_poll_cb, every 50 ms; 1 s while the lit screen is quiet).
     fn key_poll(&mut self) {
         let ev = self.src.key_poll(lv::tick_get());
-        if ev != KEY_EV_NONE {
-            // a dark screen may be a fast power-off started elsewhere (web, schedule)
-            if self.pw.quick_off
-                || (self.pw.going < 0 && !self.src.bl_is_lit(&self.model) && is_quick_off(&self.src.power_mode()))
-            {
-                self.power_wake();
-                return;
-            }
-            // the key is not an LVGL input: without this a wake by the key was undone by the
-            // auto-off below in the same pass (a one-frame flash)
-            lv::trigger_activity();
+        // A dark screen may be a fast power-off started elsewhere (web, schedule).
+        if ev != KEY_EV_NONE
+            && (self.pw.quick_off
+                || (self.pw.going < 0
+                    && !self.src.bl_is_lit(&self.model)
+                    && is_quick_off(&self.src.power_mode())))
+        {
+            self.power_wake();
+            return;
         }
         self.power_menu_tick(lv::tick_get());
         if self.pw.going >= 0 {
@@ -188,32 +195,33 @@ impl Ui {
         if ev == KEY_EV_SHORT {
             // from the real brightness: the vendor key daemon sees the key too
             if self.src.bl_is_lit(&self.model) {
+                self.engage_screen_lock();
                 self.src.bl_off();
+                self.sync();
+                self.auto_slept = false;
                 if self.power_menu_visible() {
                     self.power_menu_disarm();
                     self.power_menu_set(false);
                 }
             } else {
-                self.src.bl_on();
-                self.tgate.woke(lv::tick_get() as i64);
+                self.light_lock_screen();
             }
-            self.sync();
-            self.auto_slept = false;
         } else if ev == KEY_EV_LONG {
             if !self.src.bl_is_lit(&self.model) {
-                self.tgate.woke(lv::tick_get() as i64);
+                self.light_lock_screen();
             }
-            self.src.bl_on();
-            self.sync();
-            self.auto_slept = false;
-            self.power_menu_disarm();
-            let v = !self.power_menu_visible();
-            self.power_menu_set(v);
+            if !self.screen_locked() {
+                lv::trigger_activity();
+                self.power_menu_disarm();
+                let v = !self.power_menu_visible();
+                self.power_menu_set(v);
+            }
         }
 
-        // Auto screen-off after inactivity. Not while the power menu or the 插线用法 sheet is
-        // up, nor on 摆放模式 (watched while the device is moved).
-        if self.autooff_ms != 0 && !self.wifi_busy() && !self.power_menu_visible() && !self.usbmode_visible() && self.sub_cur != Some(Sub::Place) {
+        // Auto screen-off after inactivity. Exempt the sheets and 摆放模式 while visible.
+        let keep_lit = !self.screen_locked()
+            && (self.power_menu_visible() || self.usbmode_visible() || self.sub_cur == Some(Sub::Place));
+        if self.autooff_ms != 0 && !self.wifi_busy() && !keep_lit {
             let idle = lv::inactive_ms();
             // exec'd with the screen off: inactivity restarted at zero with the new process;
             // wait for a touch that happened after the start
@@ -225,16 +233,14 @@ impl Ui {
             }
             if idle > self.autooff_ms {
                 if self.bl_is_on() {
+                    self.engage_screen_lock();
                     self.src.bl_off();
                     self.sync();
                     self.auto_slept = true;
                 }
             } else if self.auto_slept {
                 // activity with the screen dark: only the key gets here
-                self.src.bl_on();
-                self.sync();
-                self.tgate.woke(lv::tick_get() as i64);
-                self.auto_slept = false;
+                self.light_lock_screen();
             }
         }
     }

@@ -19,6 +19,7 @@ mod op;
 mod place;
 mod power;
 mod refresh;
+mod screen_lock;
 mod sms;
 mod ladder;
 mod speed;
@@ -242,6 +243,7 @@ pub struct Ui {
     /// the left-edge swipe back (edge_back_cb)
     edge_p0: (i32, i32),
     edge_armed: bool,
+    screen_lock: screen_lock::ScreenLock,
     /// the card in the modem (eSIM section of the refresh): the 「SIM 与 eSIM」 row
     pub sim: refresh::Sim,
     /// where the data comes from and the actions go (the device's data side, or the replay)
@@ -255,6 +257,7 @@ pub struct Ui {
     pub refreshes: u32,
     /// the touch gate in front of the touchscreen (ui_touch_filter)
     tgate: logic::TGate,
+    forwarded_press: bool,
     /// the screen went off by itself (not with the power key): a double tap wakes it
     pub auto_slept: bool,
     /// started with the screen off (an exec): wait for a real touch before auto-off acts
@@ -385,11 +388,14 @@ impl Ui {
     }
 
     pub fn tab_visible(&self, tab: usize) -> bool {
-        self.bl_is_on() && self.sub_cur.is_none() && self.tv.tile_active() == self.tiles[tab]
+        !self.screen_locked()
+            && self.bl_is_on()
+            && self.sub_cur.is_none()
+            && self.tv.tile_active() == self.tiles[tab]
     }
 
     pub fn sub_visible(&self, s: Sub) -> bool {
-        self.bl_is_on() && self.sub_cur == Some(s)
+        !self.screen_locked() && self.bl_is_on() && self.sub_cur == Some(s)
     }
 
     /// The wall clock (time(NULL); the device's clock is local time labelled UTC).
@@ -492,7 +498,7 @@ impl Ui {
         if self.bench_timer.is_null() {
             return;
         }
-        if self.sub_cur == Some(Sub::Perf) {
+        if !self.screen_locked() && self.sub_cur == Some(Sub::Perf) {
             self.bench_timer.resume();
         } else {
             self.bench_timer.pause();
@@ -586,20 +592,45 @@ impl Ui {
         dx >= EDGE_DX && dy < EDGE_DY && dy > -EDGE_DY
     }
 
-    /// The gate in front of the touchscreen (ui_touch_filter): a dark screen takes no taps;
-    /// one that went off by itself wakes on a double tap. Returns whether LVGL gets the press.
-    pub fn touch_filter(&mut self, pressed: bool, x: i32, y: i32) -> bool {
-        let lit = self.bl_is_on();
-        let f = self.tgate.step(lit, self.auto_slept && self.autooff_ms != 0, pressed, x, y, lv::tick_get() as i64);
+    /// Prepare the first frame and suppress a contact still held from before wake.
+    pub(crate) fn prepare_screen_wake(&mut self) {
+        self.engage_screen_lock();
+        self.paint_screen_lock();
+        self.tgate.woke(lv::tick_get() as i64);
+        self.auto_slept = false;
+        self.wake_guard = false;
+        lv::trigger_activity();
+    }
+
+    /// Returns (forward pressed state, cancel the previous page press before processing).
+    pub fn touch_filter(&mut self, pressed: bool, x: i32, y: i32) -> (bool, bool) {
+        let lit = self.bl_is_on() && self.src.bl_panel_lit(&self.model);
+        let f = self.tgate.step(
+            lit,
+            self.auto_slept && self.autooff_ms != 0,
+            pressed,
+            x,
+            y,
+            lv::tick_get() as i64,
+        );
         if f & logic::TG_WAKE != 0 {
+            self.prepare_screen_wake();
             self.src.bl_on();
             self.sync();
-            self.auto_slept = false;
-            self.wake_guard = false;
-            // SAFETY: LVGL is initialised; NULL = every display
-            unsafe { sys::lv_display_trigger_activity(std::ptr::null_mut()) };
         }
-        !self.wifi_blocks_touch(pressed) && f & logic::TG_FORWARD != 0
+        let wifi_blocked = self.wifi_blocks_touch(pressed);
+        let ready = lit && !wifi_blocked && !self.tgate.suppress;
+        // The release itself remains blocked, even if it unlocks the screen.
+        let locked = self.screen_locked();
+        let eligible = ready && !self.powering_down();
+        if locked && self.screen_lock.swipe.step(eligible, pressed, x, y) {
+            self.unlock_screen_lock();
+        }
+        let blocked = locked || !ready;
+        let forward = !blocked && f & logic::TG_FORWARD != 0;
+        let cancel = self.forwarded_press && blocked;
+        self.forwarded_press = forward;
+        (forward, cancel)
     }
 
     // ---- shared chrome ----
@@ -884,12 +915,14 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
         lang_frame: Obj::NULL,
         edge_p0: (0, 0),
         edge_armed: false,
+        screen_lock: screen_lock::ScreenLock::default(),
         sim: refresh::Sim::default(),
         src,
         polled: Polled::default(),
         c_tile_on: [-1, -1],
         refreshes: 0,
         tgate: logic::TGate::default(),
+        forwarded_press: false,
         auto_slept,
         wake_guard,
         wake_idle_last: lv::tick_get(),

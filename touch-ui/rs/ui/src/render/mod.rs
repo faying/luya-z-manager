@@ -69,11 +69,14 @@ static FX: AtomicI32 = AtomicI32::new(0);
 static FY: AtomicI32 = AtomicI32::new(0);
 static FDOWN: AtomicBool = AtomicBool::new(false);
 
-unsafe extern "C" fn finger_cb(_in: *mut sys::lv_indev_t, d: *mut sys::lv_indev_data_t) {
+unsafe extern "C" fn finger_cb(ind: *mut sys::lv_indev_t, d: *mut sys::lv_indev_data_t) {
     let (x, y, down) = (FX.load(Ordering::Relaxed), FY.load(Ordering::Relaxed), FDOWN.load(Ordering::Relaxed));
-    let pressed = ui::with(|u| u.touch_filter(down, x, y));
+    let (pressed, cancel) = ui::with(|u| u.touch_filter(down, x, y));
     // SAFETY: LVGL's read buffer for this call
     unsafe {
+        if cancel {
+            sys::lv_indev_reset(ind, std::ptr::null_mut());
+        }
         (*d).point = sys::lv_point_t { x, y };
         (*d).state = if pressed { sys::lv_indev_state_t::LV_INDEV_STATE_PRESSED } else { sys::lv_indev_state_t::LV_INDEV_STATE_RELEASED };
     }
@@ -647,9 +650,33 @@ fn arg(args: &[String], k: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-#[test]
-fn wifi_switch_waits_for_readback_and_blocks_touch() {
-    // SAFETY: this test owns the display and pointer on this thread.
+fn isolated_render(test: &str, variants: &[&'static str]) -> Option<&'static str> {
+    // Theme and FreeType font pointers have process lifetime, like the device UI.
+    const VARIANT: &str = "LUYAZ_TEST_RENDER_VARIANT";
+    if let Ok(active) = std::env::var(VARIANT) {
+        return Some(variants.iter().copied().find(|&v| v == active).unwrap());
+    }
+    let exe = std::env::current_exe().unwrap();
+    for &variant in variants {
+        let out = std::process::Command::new(&exe)
+            .args(["--exact", test, "--nocapture"])
+            .env(VARIANT, variant)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success() && out.stdout.starts_with(b"\nrunning 1 test"),
+            "{test} ({variant}): {}\n{}\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+    }
+    None
+}
+
+#[cfg(test)]
+fn init_render_test() {
+    // SAFETY: this test is the sole LVGL user in the process; FB outlives the display.
     unsafe {
         sys::lv_init();
         sys::lv_tick_set_cb(Some(tick_cb));
@@ -661,6 +688,15 @@ fn wifi_switch_waits_for_readback_and_blocks_touch() {
         sys::lv_indev_set_type(finger, sys::lv_indev_type_t::LV_INDEV_TYPE_POINTER);
         sys::lv_indev_set_read_cb(finger, Some(finger_cb));
     }
+}
+
+#[cfg(test)]
+#[test]
+fn wifi_switch_waits_for_readback_and_blocks_touch() {
+    if isolated_render("render::wifi_switch_waits_for_readback_and_blocks_touch", &["dark"]).is_none() {
+        return;
+    }
+    init_render_test();
     let initial = WifiRead {
         master: Some(false), module: Some(false), radios: [Some(false), Some(true)],
         main: [Some(true); 2], power_save: Some(true), up: [false; 2],
@@ -738,6 +774,194 @@ fn wifi_switch_waits_for_readback_and_blocks_touch() {
     settle(2200);
     assert!(!overlay_has("正在处理，等设备确认 Wi-Fi"));
     assert_eq!(checked(), [false, false, true, true]);
+}
+
+#[cfg(test)]
+#[test]
+fn swipe_unlock_blocks_underlying_controls() {
+    if isolated_render("render::swipe_unlock_blocks_underlying_controls", &["dark"]).is_none() {
+        return;
+    }
+    init_render_test();
+    let initial = WifiRead {
+        master: Some(false), module: Some(false), radios: [Some(false), Some(true)],
+        main: [Some(true); 2], power_save: Some(true), up: [false; 2],
+    };
+    let wifi = Rc::new(RefCell::new(WifiTest { read: initial, ..WifiTest::default() }));
+    let src = Box::new(Replay {
+        feed: BTreeMap::new(), step: Rc::new(RefCell::new(None)), cur: Rc::new(RefCell::new(String::new())),
+        next: None, wifi_test: Some(wifi.clone()),
+    });
+    let model = Model { bl_is_on: 1, bl_panel_lit: 1, bl_is_lit: 1, ..Model::default() };
+    ui::create(Conf::parse("appearance=dark\nautooff=0\n"), logic::launch_parse(&["luyaz-ui"]),
+        Rc::new(model), src, "luyaz-ui");
+    ui::with(|u| u.to_tab(ui::TAB_WIFI));
+    settle(1200);
+    let a = ui::with(|u| u.wifi.sw[0].coords());
+    let (x, y) = ((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2);
+    assert!(y <= 345, "the actual Wi-Fi switch must be within reach of a bottom swipe: {y}");
+    let finger = |x, y, down, ms| {
+        FX.store(x, Ordering::Relaxed);
+        FY.store(y, Ordering::Relaxed);
+        FDOWN.store(down, Ordering::Relaxed);
+        settle(ms);
+    };
+    ui::with(|u| { u.init_screen_lock(); u.prepare_screen_wake(); });
+    finger(x, 445, true, 40);
+    finger(x, y, false, 40);
+    assert!(ui::with(|u| u.screen_locked()), "wake-suppressed contact unlocked the screen");
+    assert!(wifi.borrow().writes.is_empty());
+    settle(400);
+    finger(x, y, true, 100);
+    finger(x, y, false, 100);
+    assert!(ui::with(|u| u.screen_locked()));
+    assert!(wifi.borrow().writes.is_empty());
+    finger(x, 445, true, 100);
+    finger(x, (445 + y) / 2, true, 100);
+    finger(x, y, false, 100); // release over the real write-producing switch
+    assert!(!ui::with(|u| u.screen_locked()));
+    assert_eq!(ui::with(|u| u.cur_tab()), ui::TAB_WIFI);
+    assert!(wifi.borrow().writes.is_empty());
+
+    // A previously forwarded press must be cancelled even if the blocking sample is its release.
+    finger(x, y, true, 100);
+    ui::with(|u| u.engage_screen_lock());
+    finger(x, y, false, 100);
+    assert!(wifi.borrow().writes.is_empty());
+    assert!(ui::with(|u| u.screen_locked()));
+    finger(x, 445, true, 100);
+    finger(x, y, true, 100);
+    finger(x, y, false, 100);
+    assert!(!ui::with(|u| u.screen_locked()));
+    finger(x, y, true, 100);
+    finger(x, y, false, 100);
+    assert_eq!(wifi.borrow().writes, [("wifi.set_module".into(), r#"{"enabled":1}"#.into())]);
+}
+
+#[cfg(test)]
+fn lock_test_labels(o: Obj, out: &mut Vec<(String, sys::lv_area_t)>) {
+    if o.is_null() || o.hidden() {
+        return;
+    }
+    if checks::is_label(o) {
+        out.push((String::from_utf8_lossy(&o.text()).into_owned(), o.coords()));
+    }
+    for i in 0..o.child_count() as i32 {
+        lock_test_labels(o.child(i), out);
+    }
+}
+
+#[cfg(test)]
+fn lock_test_capture(name: &str) {
+    // SAFETY: the test owns the default display and framebuffer.
+    unsafe { sys::lv_refr_now(std::ptr::null_mut()) };
+    if let Some(dir) = std::env::var_os("LUYAZ_LOCK_TEST_PNG_DIR") {
+        let path = std::path::PathBuf::from(dir).join(format!("lock-{name}.png"));
+        let fb = unsafe { std::slice::from_raw_parts((&raw const FB).cast::<u16>(), W * H) };
+        std::fs::write(&path, plat::png_rgb565(W as u32, H as u32, fb))
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn swipe_unlock_render_themes_and_data() {
+    if let Some(theme) = isolated_render("render::swipe_unlock_render_themes_and_data", &["light", "dark"]) {
+        render_lock_theme(theme);
+    }
+}
+
+#[cfg(test)]
+fn render_lock_theme(theme: &str) {
+    init_render_test();
+    let now = 1_790_250_112;
+    let tm = crate::clock::local(now);
+    let time = format!("{:02}:{:02}", tm.hour, tm.min);
+    let date = format!("{:02}-{:02}", tm.mon, tm.mday);
+    {
+        let src = Box::new(Replay {
+            feed: BTreeMap::new(), step: Rc::new(RefCell::new(None)), cur: Rc::new(RefCell::new(String::new())),
+            next: None, wifi_test: None,
+        });
+        let mut model = Model { now, bl_is_on: 1, bl_panel_lit: 1, bl_is_lit: 1, ..Model::default() };
+        ui::create(Conf::parse(&format!("appearance={theme}\nautooff=0\nspeed_bits=0\n")), logic::launch_parse(&["luyaz-ui"]),
+            Rc::new(model.clone()), src, "luyaz-ui");
+        ui::with(|u| u.init_screen_lock());
+        settle(1200);
+        let labels = || {
+            // SAFETY: this test owns the default display.
+            let root = Obj(unsafe { sys::lv_display_get_layer_sys(std::ptr::null_mut()) });
+            let mut labels = Vec::new();
+            lock_test_labels(root, &mut labels);
+            labels
+        };
+        let text = || labels().into_iter().map(|(s, _)| s).collect::<Vec<_>>().join(" ");
+        let unavailable = text();
+        assert!(unavailable.contains(&time), "{theme}: {unavailable}");
+        assert!(unavailable.contains(&date), "{theme}: {unavailable}");
+        assert!(unavailable.contains("状态暂不可用"), "{theme}: {unavailable}");
+        assert!(unavailable.matches('—').count() >= 2, "{theme}: {unavailable}");
+        for (s, a) in labels().into_iter().filter(|(s, _)| !s.is_empty()) {
+            assert!(a.x1 >= 0 && a.y1 >= 0 && a.x2 < W as i32 && a.y2 < H as i32,
+                "{theme}: label {s:?} out of bounds: {},{}-{},{}", a.x1, a.y1, a.x2, a.y2);
+        }
+        let check_geometry = || {
+            let root = Obj(unsafe { sys::lv_display_get_layer_sys(std::ptr::null_mut()) });
+            let mut checks = Checks::default();
+            checks.collect(root);
+            checks.geo_walk(root);
+            checks.page_done("lock");
+            assert!(checks.fails.is_empty(), "{theme}: {:?}", checks.fails);
+            assert_eq!(checks.ntrunc, 0, "{theme}: truncated lock text");
+        };
+        check_geometry();
+        lock_test_capture(&format!("{theme}-unavailable"));
+
+        model.data_ok = 1;
+        model.data.populated = 1;
+        model.data.radio = "LTE".into();
+        model.data.ap_on = 1;
+        model.data.batt_pct = 75;
+        ui::set_model(Rc::new(model.clone()));
+        ui::with(|u| u.refresh());
+        settle(100);
+        let zero = text();
+        assert!(!zero.contains("状态暂不可用"), "{theme}: {zero}");
+        assert_eq!(zero.matches("0 B/s").count(), 2, "{theme}: {zero}");
+        lock_test_capture(&format!("{theme}-zero-bytes"));
+
+        // Repeat the paint with exactly the same input; unchanged labels must not invalidate.
+        STILL.lock().unwrap().clear();
+        let disp = unsafe { sys::lv_display_get_default() };
+        unsafe { sys::lv_display_add_event_cb(disp, Some(still_cb), sys::lv_event_code_t::LV_EVENT_INVALIDATE_AREA, std::ptr::null_mut()) };
+        ui::with(|u| u.paint_screen_lock());
+        unsafe { sys::lv_display_remove_event_cb_with_user_data(disp, Some(still_cb), std::ptr::null_mut()) };
+        assert!(STILL.lock().unwrap().is_empty(), "{theme}: identical lock frame invalidated");
+
+        model.data.down_bps = 1024;
+        model.data.up_bps = 2048;
+        model.now += 1;
+        ui::set_model(Rc::new(model.clone()));
+        ui::with(|u| u.refresh());
+        settle(100);
+        let bytes = text();
+        assert!(bytes.contains("1 KB/s") && bytes.contains("2 KB/s"), "{theme}: {bytes}");
+        check_geometry();
+        lock_test_capture(&format!("{theme}-bytes"));
+        ui::with(|u| { u.conf.speed_bits = true; u.paint_screen_lock(); });
+        settle(100);
+        let bits = text();
+        assert!(bits.contains("8 Kbps") && bits.contains("16 Kbps"), "{theme}: {bits}");
+        check_geometry();
+        lock_test_capture(&format!("{theme}-bits"));
+        model.backend_silent = 1;
+        ui::set_model(Rc::new(model));
+        ui::with(|u| u.refresh());
+        settle(100);
+        let silent = text();
+        assert!(silent.contains("状态暂不可用"), "{theme}: {silent}");
+        lock_test_capture(&format!("{theme}-silent"));
+    }
 }
 
 /// `luyaz-ui --hitcheck` (eng review round 3 D5): Home, every tab and every subpage with the ▲
