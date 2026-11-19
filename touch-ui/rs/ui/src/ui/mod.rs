@@ -443,11 +443,6 @@ impl Ui {
         self.src.key_held()
     }
 
-    /// Keep reading until the wake guard sees a lift after its 300 ms window.
-    pub(crate) fn touch_wake_pending(&self) -> bool {
-        self.tgate.suppress
-    }
-
     // ---- subpage layer ----
     fn sub_show(&mut self, id: Sub, forward: bool) {
         let changed = self.sub_cur != Some(id);
@@ -628,8 +623,8 @@ impl Ui {
         // The release itself remains blocked, even if it unlocks the screen.
         let locked = self.screen_locked();
         let eligible = ready && !self.powering_down();
-        if locked && self.screen_lock.swipe.step(eligible, pressed, x, y) {
-            self.unlock_screen_lock();
+        if locked {
+            self.screen_lock_touch(eligible, pressed, x, y);
         }
         let blocked = locked || !ready;
         let forward = !blocked && f & logic::TG_FORWARD != 0;

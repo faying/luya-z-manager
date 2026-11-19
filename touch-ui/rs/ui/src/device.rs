@@ -414,7 +414,7 @@ pub fn run(args: &[String]) -> i32 {
             let busy = frames() != last_frames
                 || unsafe { sys::lv_anim_count_running() } > 0
                 || held
-                || ui::with(|u| u.touch_wake_pending())
+                || ui::with(|u| u.lock_needs_touch_samples())
                 || unsafe { sys::lv_indev_get_state(indev) } == sys::lv_indev_state_t::LV_INDEV_STATE_PRESSED
                 || unsafe { !sys::lv_indev_get_scroll_obj(indev).is_null() };
             last_frames = frames();

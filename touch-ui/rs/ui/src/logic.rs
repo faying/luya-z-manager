@@ -285,10 +285,22 @@ pub fn auto_decide(i: &AutoIn) -> Auto {
     }
 }
 
-// ---- touch while the screen is dark ----
+// ---- lock screen touch ----
+const SWIPE_START_Y: i32 = 240;
+pub(crate) const SWIPE_DISTANCE: i32 = 72;
+const SWIPE_SIDE_SLOP: u32 = 36;
+const SWIPE_DOWN_SLOP: i32 = 24;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SwipeUpdate {
+    Idle,
+    Dragging(i32),
+    Unlocked,
+}
+
 /// A lock-screen gesture starts only after an eligible release and finishes on release.
 #[derive(Default)]
-pub struct SwipeUnlock {
+pub(crate) struct SwipeUnlock {
     armed: bool,
     start: Option<(i32, i32)>,
 }
@@ -299,29 +311,33 @@ impl SwipeUnlock {
         self.start = None;
     }
 
-    pub fn step(&mut self, eligible: bool, pressed: bool, x: i32, y: i32) -> bool {
+    pub fn step(&mut self, eligible: bool, pressed: bool, x: i32, y: i32) -> SwipeUpdate {
         if !eligible {
             self.reset();
-            return false;
+            return SwipeUpdate::Idle;
         }
-        if pressed {
-            if self.armed {
-                self.armed = false;
-                self.start = (y >= 384).then_some((x, y));
-            } else if let Some((sx, _)) = self.start
-                && (i64::from(x) - i64::from(sx)).abs() > 64
-            {
-                self.start = None;
-            }
-            false
-        } else {
-            let unlock = self.start.take().is_some_and(|(sx, sy)| {
-                (i64::from(x) - i64::from(sx)).abs() <= 64
-                    && i64::from(sy) - i64::from(y) >= 100
-            });
+        if pressed && self.armed {
+            self.armed = false;
+            self.start = (y >= SWIPE_START_Y).then_some((x, y));
+        }
+        let progress = self.start.and_then(|(sx, sy)| {
+            let rise = sy.saturating_sub(y);
+            // Accept diagonal swipes. A sideways or downward excursion cancels this contact.
+            (rise >= -SWIPE_DOWN_SLOP && sx.abs_diff(x) <= SWIPE_SIDE_SLOP + rise.max(0) as u32)
+                .then_some(rise.clamp(0, SWIPE_DISTANCE))
+        });
+        if !pressed {
             self.armed = true;
-            unlock
+            self.start = None;
+            if progress == Some(SWIPE_DISTANCE) {
+                return SwipeUpdate::Unlocked;
+            }
+        } else if let Some(rise) = progress {
+            return SwipeUpdate::Dragging(rise);
+        } else {
+            self.start = None;
         }
+        SwipeUpdate::Idle
     }
 }
 
@@ -778,42 +794,55 @@ mod tests {
 
     #[test]
     fn swipe_unlock_requires_a_complete_eligible_gesture() {
+        use SwipeUpdate::*;
         let mut s = SwipeUnlock::default();
         let mut sample = |pressed, x, y| s.step(true, pressed, x, y);
-        assert!(!sample(false, 160, 445));
-        // A tap, horizontal swipe, downward swipe, and middle start do not unlock.
+        assert_eq!(sample(false, 160, 445), Idle);
         for (start, end) in [((160, 445), (160, 445)), ((50, 430), (250, 425)),
-            ((160, 404), (160, 470)), ((160, 383), (160, 200))] {
-            assert!(!sample(true, start.0, start.1));
-            assert!(!sample(false, end.0, end.1));
+            ((160, 404), (160, 470)), ((160, 305), (160, 234))] {
+            assert_eq!(sample(true, start.0, start.1), Dragging(0));
+            assert_eq!(sample(false, end.0, end.1), Idle);
         }
-        assert!(!sample(true, 160, 445));
-        assert!(!sample(true, 225, 350)); // exceeding the horizontal limit poisons the contact
-        assert!(!sample(true, 160, 300));
-        assert!(!sample(false, 160, 300));
-        assert!(!sample(true, 160, 445));
-        assert!(!sample(true, 224, 345)); // enough distance, but still held
-        assert!(sample(false, 224, 345));
+        assert_eq!(sample(true, 160, 239), Idle);
+        assert_eq!(sample(false, 160, 100), Idle);
+        assert_eq!(sample(true, 160, 320), Dragging(0));
+        assert_eq!(sample(true, 210, 317), Idle);
+        assert_eq!(sample(true, 160, 210), Idle); // cancellation lasts until release
+        assert_eq!(sample(false, 160, 210), Idle);
+
+        // Both edges of the lower half accept diagonal swipes. A held touch is only guidance.
+        for (x, direction) in [(15, 1), (305, -1)] {
+            assert_eq!(sample(true, x, 240), Dragging(0));
+            assert_eq!(sample(true, x + direction * 60, 204), Dragging(36));
+            assert_eq!(sample(true, x + direction * 90, 168), Dragging(SWIPE_DISTANCE));
+            assert_eq!(sample(false, x + direction * 90, 168), Unlocked);
+        }
+
+        assert_eq!(sample(true, 160, 320), Dragging(0));
+        assert_eq!(sample(true, 160, 240), Dragging(SWIPE_DISTANCE));
+        assert_eq!(sample(true, 160, 280), Dragging(40));
+        assert_eq!(sample(false, 160, 280), Idle);
     }
 
     #[test]
     fn swipe_unlock_reset_and_ineligible_contact_require_release() {
+        use SwipeUpdate::*;
         let mut s = SwipeUnlock::default();
         // Starting while unarmed cannot become a gesture midway through a contact.
-        assert!(!s.step(true, true, 160, 445));
-        assert!(!s.step(true, true, 160, 300));
-        assert!(!s.step(true, false, 160, 300));
-        assert!(!s.step(true, true, 160, 445));
+        assert_eq!(s.step(true, true, 160, 445), Idle);
+        assert_eq!(s.step(true, true, 160, 300), Idle);
+        assert_eq!(s.step(true, false, 160, 300), Idle);
+        assert_eq!(s.step(true, true, 160, 445), Dragging(0));
         s.reset();
-        assert!(!s.step(true, true, 160, 300));
-        assert!(!s.step(true, false, 160, 300));
-        assert!(!s.step(true, true, 160, 445));
-        assert!(!s.step(false, true, 160, 400));
-        assert!(!s.step(false, false, 160, 300));
-        assert!(!s.step(true, true, 160, 445));
-        assert!(!s.step(true, false, 160, 300));
-        assert!(!s.step(true, true, 160, 445));
-        assert!(s.step(true, false, 160, 345));
+        assert_eq!(s.step(true, true, 160, 300), Idle);
+        assert_eq!(s.step(true, false, 160, 300), Idle);
+        assert_eq!(s.step(true, true, 160, 445), Dragging(0));
+        assert_eq!(s.step(false, true, 160, 400), Idle);
+        assert_eq!(s.step(false, false, 160, 300), Idle);
+        assert_eq!(s.step(true, true, 160, 445), Idle);
+        assert_eq!(s.step(true, false, 160, 300), Idle);
+        assert_eq!(s.step(true, true, 160, 445), Dragging(0));
+        assert_eq!(s.step(true, false, 160, 373), Unlocked);
     }
 
     const fn m(h: i32, mi: i32) -> i32 {

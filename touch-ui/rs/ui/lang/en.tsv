@@ -155,7 +155,9 @@ tailscale|节点	Peers
 号码没写在卡里	No number on SIM
 卡 2 不提供号码	SIM 2 reports no number
 后台数据服务不可用	Data service unavailable
-向上滑动解锁	Swipe up to unlock
+从下半屏向上滑动解锁	Swipe up from the lower half
+继续上滑	Keep swiping up
+松手解锁	Release to unlock
 告警 · %s	Alert · %s
 告警 · 开机后 %ld 分钟	Alert · %ld min after boot
 告警记录	Alert log

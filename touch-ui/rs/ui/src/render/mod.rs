@@ -816,10 +816,27 @@ fn swipe_unlock_blocks_underlying_controls() {
     finger(x, y, false, 100);
     assert!(ui::with(|u| u.screen_locked()));
     assert!(wifi.borrow().writes.is_empty());
-    finger(x, 445, true, 100);
-    finger(x, (445 + y) / 2, true, 100);
+    let guide = |expected: &str| {
+        let mut labels = Vec::new();
+        let layer = Obj(unsafe { sys::lv_layer_sys() });
+        lock_test_labels(layer, &mut labels);
+        assert!(labels.iter().any(|(s, _)| s == expected), "{labels:?}");
+    };
+    let start_y = y + 92;
+    finger(x - 64, start_y, true, 100);
+    guide("继续上滑");
+    finger(x - 40, start_y - 36, true, 100);
+    assert!(ui::with(|u| u.lock_needs_touch_samples()));
+    lock_test_capture("dark-swipe-partial");
+    guide("继续上滑");
+    finger(x, y, true, 100);
+    assert!(ui::with(|u| u.screen_locked()));
+    assert!(wifi.borrow().writes.is_empty());
+    guide("松手解锁");
+    lock_test_capture("dark-swipe-ready");
     finger(x, y, false, 100); // release over the real write-producing switch
     assert!(!ui::with(|u| u.screen_locked()));
+    assert!(!ui::with(|u| u.lock_needs_touch_samples()));
     assert_eq!(ui::with(|u| u.cur_tab()), ui::TAB_WIFI);
     assert!(wifi.borrow().writes.is_empty());
 
@@ -829,6 +846,12 @@ fn swipe_unlock_blocks_underlying_controls() {
     finger(x, y, false, 100);
     assert!(wifi.borrow().writes.is_empty());
     assert!(ui::with(|u| u.screen_locked()));
+    finger(x, 295, true, 100);
+    finger(x, 265, true, 100);
+    guide("继续上滑");
+    finger(x, 265, false, 100);
+    guide("从下半屏向上滑动解锁");
+    assert!(!ui::with(|u| u.lock_needs_touch_samples()));
     finger(x, 445, true, 100);
     finger(x, y, true, 100);
     finger(x, y, false, 100);

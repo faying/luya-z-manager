@@ -11,7 +11,7 @@ use crate::cf;
 use crate::clock;
 use crate::kit::{self, H, W};
 use crate::lang::tr;
-use crate::logic::{self, Rat};
+use crate::logic::{self, Rat, SWIPE_DISTANCE, SwipeUpdate};
 use crate::lv::{self, sys, Obj};
 use crate::theme::{t, uf};
 
@@ -24,14 +24,14 @@ const CARD_H: i32 = 92;
 const COL_DX: i32 = 60;
 const COL_KEY_Y: i32 = 18;
 const COL_VAL_Y: i32 = 41;
-/// The 64×4 handle bar at the bottom.
-const BAR_W: i32 = 64;
+const SWIPE_BAR_W: i32 = 144;
+const SWIPE_HINT: &str = "从下半屏向上滑动解锁";
 
 pub(super) struct ScreenLock {
     /// The full-screen cover on lv_layer_sys(); Obj::NULL until init_screen_lock builds it.
     root: Obj,
     /// The swipe that unlocks it (logic.rs): reset to wait for a release on every engage.
-    pub(super) swipe: logic::SwipeUnlock,
+    swipe: logic::SwipeUnlock,
     /// Engaged (the cover state, independent of powering_down hiding it for the shutdown frame).
     locked: bool,
     time: Obj,
@@ -39,6 +39,9 @@ pub(super) struct ScreenLock {
     status: Obj,
     dn: Obj,
     up: Obj,
+    hint: Obj,
+    fill: Obj,
+    rise: Option<i32>,
 }
 
 impl Default for ScreenLock {
@@ -52,6 +55,9 @@ impl Default for ScreenLock {
             status: Obj::NULL,
             dn: Obj::NULL,
             up: Obj::NULL,
+            hint: Obj::NULL,
+            fill: Obj::NULL,
+            rise: None,
         }
     }
 }
@@ -99,11 +105,16 @@ impl Ui {
         let up = kit::label(card, f.n20, th.t1, 0, COL_VAL_Y, "");
         up.align(lv::LV_ALIGN_TOP_MID, COL_DX, COL_VAL_Y);
 
-        let hint = kit::label(root, f.cj13, th.t2, 0, 420, tr("向上滑动解锁"));
-        hint.align(lv::LV_ALIGN_TOP_MID, 0, 420);
-        kit::bx(root, (W - BAR_W) / 2, 454, BAR_W, 4, th.t3, 2);
+        let hint = kit::label(root, f.cj15, th.t2, 0, 416, tr(SWIPE_HINT));
+        hint.align(lv::LV_ALIGN_TOP_MID, 0, 416);
+        let x = (W - SWIPE_BAR_W) / 2;
+        kit::bx(root, x, 452, SWIPE_BAR_W, 6, th.sw_off, 3);
+        let fill = kit::bx(root, x, 452, 8, 6, th.acc_t, 3);
+        kit::show(fill, false);
 
-        self.screen_lock = ScreenLock { root, locked: false, time, date, status, dn, up, ..Default::default() };
+        self.screen_lock = ScreenLock {
+            root, time, date, status, dn, up, hint, fill, ..Default::default()
+        };
         self.engage_screen_lock();
         // Placeholders only until the panel is actually lit; a dark panel takes its values
         // from the wake path, which paints before bl_on().
@@ -121,6 +132,7 @@ impl Ui {
         }
         self.screen_lock.locked = true;
         self.screen_lock.swipe.reset();
+        self.paint_swipe_progress(None);
         self.edge_armed = false;
         self.bench_gate();
         kit::show(self.screen_lock.root, !self.powering_down());
@@ -129,6 +141,40 @@ impl Ui {
     /// The cover is up (touches below it are not forwarded). False before init_screen_lock.
     pub fn screen_locked(&self) -> bool {
         self.screen_lock.locked
+    }
+
+    /// The pointer stays quiet to LVGL while we consume a swipe ourselves.
+    pub(crate) fn lock_needs_touch_samples(&self) -> bool {
+        self.tgate.suppress || self.screen_lock.rise.is_some()
+    }
+
+    pub(super) fn screen_lock_touch(&mut self, eligible: bool, pressed: bool, x: i32, y: i32) {
+        match self.screen_lock.swipe.step(eligible, pressed, x, y) {
+            SwipeUpdate::Idle => self.paint_swipe_progress(None),
+            SwipeUpdate::Dragging(rise) => self.paint_swipe_progress(Some(rise)),
+            SwipeUpdate::Unlocked => self.unlock_screen_lock(),
+        }
+    }
+
+    fn paint_swipe_progress(&mut self, rise: Option<i32>) {
+        let previous = self.screen_lock.rise;
+        if previous == rise {
+            return;
+        }
+        self.screen_lock.rise = rise;
+        let guide = |rise| match rise {
+            None => SWIPE_HINT,
+            Some(SWIPE_DISTANCE) => "松手解锁",
+            Some(_) => "继续上滑",
+        };
+        if guide(previous) != guide(rise) {
+            self.set(self.screen_lock.hint, tr(guide(rise)));
+        }
+        let fill = self.screen_lock.fill;
+        if let Some(pixels) = rise {
+            fill.set_width(8 + pixels * (SWIPE_BAR_W - 8) / SWIPE_DISTANCE);
+        }
+        kit::show(fill, rise.is_some());
     }
 
     /// The cover's contents and visibility. Wakes call this before bl_on(); refresh calls it
@@ -168,8 +214,9 @@ impl Ui {
 
     /// The unlocking lift was consumed: hide the cover and go back to the page as it was —
     /// no navigation, no scroll reset. Only the unlock path calls this.
-    pub(super) fn unlock_screen_lock(&mut self) {
+    fn unlock_screen_lock(&mut self) {
         self.screen_lock.locked = false;
+        self.paint_swipe_progress(None);
         self.edge_armed = false;
         if !self.screen_lock.root.is_null() {
             self.screen_lock.root.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
