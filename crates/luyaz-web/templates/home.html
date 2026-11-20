@@ -30,6 +30,7 @@
 <a class="nd-row" href="/router/wifi"><span class="nd-row__text"><span class="nd-row__label">Wi-Fi</span></span><span id="hw-on" class="nd-row__value">—</span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a>
 <div class="nd-row hm-band"><span class="nd-row__text"><span class="nd-row__label">2.4 GHz</span><span id="hw-2" class="nd-row__sub">—</span></span></div>
 <div class="nd-row hm-band"><span class="nd-row__text"><span class="nd-row__label">5 GHz</span><span id="hw-5" class="nd-row__sub">—</span></span></div>
+<div id="hw-guest" hidden></div>
 </div></section>
 <section class="hm-o7" aria-labelledby="hm-ca-t"><h2 id="hm-ca-t" class="nd-group-title">{{ l.pick("Carriers", "载波") }}</h2><div id="hm-ca" class="nd-group">
 <a class="nd-row" href="/signal"><span class="nd-row__text"><span class="nd-row__label">{{ l.pick("No active carriers", "没有激活的载波") }}</span></span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a>

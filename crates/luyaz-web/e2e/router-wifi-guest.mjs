@@ -66,12 +66,28 @@ async function own(p) {
   };
   const apply = () => p.click("#wg-form button:has-text('应用')");
 
-  ok(/访客 Wi-Fi 已开启/.test(await txt(p, "#wg-status")) && /2\.4 GHz/.test(await txt(p, "#wg-status")), `status: ${await txt(p, "#wg-status")}`);
+  ok(/访客 Wi-Fi 已设置开启/.test(await txt(p, "#wg-status")) && /2\.4 GHz/.test(await txt(p, "#wg-status")), `status: ${await txt(p, "#wg-status")}`);
   ok(/已设密码/.test(await txt(p, "#wg-rows")) && /U60-Guest/.test(await txt(p, "#wg-rows")) && /240 分钟/.test(await txt(p, "#wg-rows")), `rows: ${await txt(p, "#wg-rows")}`);
   const t0 = await txt(p, "#wg-status .nd-status__meta");
   await sleep(2100);
   const t1 = await txt(p, "#wg-status .nd-status__meta");
   ok(/^剩余 2 小时 0\d 分 \d\d 秒$/.test(t1) && t0 !== t1, `countdown runs: ${t0} → ${t1}`);
+
+  // Only the module is blocked. The saved guest controls still open, and the dashboard agrees.
+  await post("/mock/wguest", { module_on: false });
+  await until(p, () => /Wi-Fi 模块关闭/.test(document.querySelector("#wg-status")?.textContent ?? ""));
+  const home = await p.context().newPage();
+  await home.goto(WEB + "/", { waitUntil: "load" });
+  await until(home, () => /Wi-Fi 模块关闭/.test(document.querySelector("#hw-guest")?.textContent ?? ""));
+  ok(/已设置开启.*Wi-Fi 模块关闭/.test(await txt(p, "#wg-status")) && /已设置开启.*Wi-Fi 模块关闭/.test(await txt(home, "#hw-guest")), "guest availability on detail and home");
+  await open();
+  ok(await p.locator("input[data-bind=_wgtime]").isEnabled(), "guest timer remains editable while blocked");
+  await p.click("#wg-btn");
+  await post("/mock/wguest", { module_on: null });
+  await until(p, () => /可用性未知/.test(document.querySelector("#wg-status")?.textContent ?? ""));
+  ok(/可用性未知/.test(await txt(p, "#wg-status")), "unknown module gives unknown guest availability");
+  await post("/mock/wguest", { module_on: true });
+  await home.close();
 
   // nothing changed: said in the area, nothing sent
   await open();
@@ -102,7 +118,10 @@ async function own(p) {
   const b = await lastOp();
   ok(await p.locator("#wg-save-op .t-note--ok").count() === 1, `applied: ${await txt(p, "#wg-save-op")}`);
   ok(b.receipt === false && !/自动回报/.test(dt) && (await stats()).receipts.length === 0, "LAN: no receipt asked, no receipt note");
-  ok(b.source === "web" && /^lw-/.test(b.op_id) && same(b.params, { guest_ssid: "Cafe e2e", guest_key: "secretpw99", guest_disabled_5g: "0" }), `body: ${JSON.stringify(b.params)}`);
+  ok(b.source === "web" && /^lw-/.test(b.op_id) && same(b.params, {
+    guest_ssid: "Cafe e2e", guest_key: "secretpw99", guest_disabled_5g: "0",
+    expect: { "guest.ssid": "U60-Guest", "guest.on_5g": false },
+  }), "only the edited guest fields and their expectations were sent");
   await until(p, () => /Cafe e2e/.test(document.querySelector("#wg-rows")?.textContent ?? ""));
   ok(/Cafe e2e/.test(await txt(p, "#wg-rows")) && /2\.4 GHz \+ 5 GHz/.test(await txt(p, "#wg-status")), "rows and status follow");
   ok(await p.locator("input[data-bind=_wgssid]").count() === 0 && (await p.getAttribute("#wg-btn", "aria-expanded")) === "false", "form closed after the readback");
@@ -165,14 +184,32 @@ async function own(p) {
     await done("没有生效");
     ok(new RegExp(re).test(await txt(p, "#wg-save-op")), `${next}: ${await txt(p, "#wg-save-op")}`);
   }
-  // already so on the device (u60d "no changes"): plain
+  // Another writer edits the same SSID after the dialog opens, so Core rejects its seed.
   await apply();
   await dialog().waitFor({ timeout: 8000 }).catch(() => {});
   await post("/mock/wguest", { guest: { ssid: "Busy try" } });
-  await sleep(500);
+  await until(p, () => /Busy try/.test(document.querySelector("#wg-rows")?.textContent ?? ""));
   await p.click("#wg-save-confirm .nd-btn--confirm");
-  await done("没有要改的|没有生效");
-  ok(/没有要改的/.test(await txt(p, "#wg-save-op")), `no changes: ${await txt(p, "#wg-save-op")}`);
+  await done("重新打开表单");
+  ok(/重新打开表单/.test(await txt(p, "#wg-save-op")), `conflict at confirmation: ${await txt(p, "#wg-save-op")}`);
+  const nConflict = await nOps();
+  await apply();
+  await done("重新打开表单");
+  ok((await nOps()) === nConflict && await dialog().count() === 0, "fresh read refuses conflict before send");
+
+  // A different field changes after the form is opened. The rename leaves isolation alone.
+  await p.click("#wg-btn");
+  await post("/mock/wguest", { guest: { isolate: false } });
+  await until(p, () => /关，访客之间可以互访/.test(document.querySelector("#wg-rows")?.textContent ?? ""));
+  await open();
+  await p.fill("input[data-bind=_wgssid]", "Concurrent rename");
+  await post("/mock/wguest", { guest: { isolate: true } });
+  await until(p, () => /开，访客之间不能互访/.test(document.querySelector("#wg-rows")?.textContent ?? ""));
+  await apply();
+  await dialog().waitFor({ timeout: 8000 });
+  await p.click("#wg-save-confirm .nd-btn--confirm");
+  await until(p, () => document.querySelector("#wg-save-op .t-note--ok"));
+  ok(same((await lastOp()).params, { guest_ssid: "Concurrent rename", expect: { "guest.ssid": "Busy try" } }) && /开，访客之间不能互访/.test(await txt(p, "#wg-rows")), "SSID-only save preserves another writer's isolation setting");
 
   // a transaction that is not confirmed in time: "accepted", never "applied"
   await post("/mock/txn?end=live");

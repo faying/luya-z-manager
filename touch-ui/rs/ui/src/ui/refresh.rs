@@ -179,7 +179,17 @@ impl Ui {
             }
         }
 
-        self.wifi_switches_refresh(self.tab_visible(TAB_WIFI), m.data.nfc_on != 0);
+        self.op_parse();
+        // NFC: a concrete value only from a model a live core filled in (a stale block
+        // already decodes to unknown); a gone or silent core says — instead of its last word
+        let nfc = (m.data_ok != 0 && m.backend_silent == 0)
+            .then(|| match m.data.nfc_on {
+                1 => Some(true),
+                0 => Some(false),
+                _ => None,
+            })
+            .flatten();
+        self.wifi_switches_refresh(self.tab_visible(TAB_WIFI), nfc);
         if m.data_ok == 0 {
             self.home.sc_force |= self.polled.scenario;
             // backend down: a device-wide condition, said once in the shared banner
@@ -214,8 +224,10 @@ impl Ui {
         }
         self.diag_refresh();
         if core_silent {
-            self.banner_set(Some(tr("后台数据服务不可用").as_bytes()));
+            self.banner_set(Some(self.wifi_warning().unwrap_or_else(|| tr("后台数据服务不可用")).as_bytes()));
             self.home_signal_down();
+        } else if let Some(warning) = self.wifi_warning() {
+            self.banner_set(Some(warning.as_bytes()));
         } else if m.screen_stuck != 0 {
             // E4: answers, but its executor has not moved for 20 s (V2-40)
             self.banner_set(Some(tr("数据服务没响应 · 暂时不能改设置").as_bytes()));
@@ -232,8 +244,6 @@ impl Ui {
                 tr("没改成 · 数据服务回了错误")
             };
             self.banner_set(Some(txt.as_bytes()));
-        } else if let Some(warning) = self.wifi_warning() {
-            self.banner_set(Some(warning.as_bytes()));
         } else if let Some(b) = self.usbmode_banner() {
             self.banner_set(Some(&b)); // 已按记住的方式：…
         } else if ah.lost_secs != 0 {

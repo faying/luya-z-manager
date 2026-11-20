@@ -218,8 +218,26 @@ pub trait Source {
     fn alert_theme_paused(&mut self);
     /// Poll settings; `fresh` discards a read started before the write reply.
     fn wifi_read(&mut self, fresh: bool) -> Option<WifiRead>;
-    /// Most recent Wi-Fi write reply; None while Core or the emergency script still runs.
-    fn wifi_reply(&self) -> Option<bool>;
+    /// A Wi-Fi verdict from the control reply or the emergency script.
+    fn wifi_reply(&self) -> Option<WifiReply>;
+    /// The ID of a fully sent Wi-Fi request, even if the reply never arrives.
+    fn wifi_op_id(&self) -> Option<&str> { None }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WifiReply {
+    CoreDone,
+    EmergencyDone,
+    Failed,
+}
+
+impl WifiReply {
+    pub(crate) fn from_op(op: &crate::op_view::OpItem, op_id: &str) -> Option<Self> {
+        if !op.have || op.op_id != op_id || !crate::op_view::phase_final(&op.phase) {
+            return None;
+        }
+        Some(if op.phase == "confirmed" && op.step_done[1] { Self::CoreDone } else { Self::Failed })
+    }
 }
 
 #[derive(Clone, Copy, Default)]

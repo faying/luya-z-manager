@@ -78,6 +78,8 @@
 <span id="hw-2" class="nd-row__sub" data-data>{{ v.wifi_2 }}</span>
 <!--leaf-->
 <span id="hw-5" class="nd-row__sub" data-data>{{ v.wifi_5 }}</span>
+<!--leaf-->
+<div id="hw-guest"{% if v.wifi_guest.is_none() %} hidden{% endif %}>{% if let Some((ssid, state)) = v.wifi_guest %}<a class="nd-row nd-row--two" href="/router/wifi-guest"><span class="nd-row__text"><span class="nd-row__label">{{ v.l.pick("Guest Wi-Fi", "访客 Wi-Fi") }}</span>{% if !ssid.is_empty() %}<span class="nd-row__sub block nd-mono" data-data>{{ ssid }}</span>{% endif %}<span class="nd-row__sub block">{{ state }}</span></span>{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</a>{% endif %}</div>
 {% if v.ca_full %}<!--leaf-->
 <div id="hm-ca" class="nd-group{% if v.ca_stale %} nd-stale{% endif %}">{% call ca_rows(v) %}{% endcall %}</div>
 {% endif %}{% for c in v.ca_rows %}<!--leaf-->

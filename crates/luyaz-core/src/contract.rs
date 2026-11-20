@@ -1064,16 +1064,16 @@ contract! {
 contract! {
     /// One main AP and its radio (uci `wireless`). The password never leaves the device.
     pub struct WifiBand {
-        /// `main_*.disabled` is not "1"
-        normal ap_on: bool,
+        /// Saved main AP setting, null if the section or its value is unreadable.
+        normal ap_on: Option<bool>,
         /// uci as set ("0"/"auto" = automatic)
         normal channel: String,
         normal encryption: String,
         normal has_password: bool,
         normal hidden: bool,
         normal htmode: String,
-        /// `wifiN.disabled` is not "1"
-        normal radio_on: bool,
+        /// Saved radio setting, including the vendor backup while the module is off.
+        normal radio_on: Option<bool>,
         personal ssid: String,
         /// `txpowerpercent`
         normal txpower: String,
@@ -1106,8 +1106,10 @@ contract! {
         nested band_5g: WifiBand,
         normal country: String,
         nested guest: WifiGuest,
-        /// master switch: vendor `wifi_onoff` not "0" and not both main APs disabled
-        normal on: bool,
+        /// Actual vendor module switch (`wifi_onoff`).
+        normal module_on: Option<bool>,
+        /// Saved master switch (`wifi_onoff_by_user`, falling back to the module).
+        normal on: Option<bool>,
         /// `zte_mbb.wifi6_switch` not "0" (missing counts as on, as the stock page does)
         normal wifi6: bool,
     }

@@ -212,7 +212,8 @@ fn contract_schema_file_is_current() {
     if std::env::var_os("LUYAZ_UPDATE_GOLDEN").is_some() {
         std::fs::write(&p, &text).unwrap();
     }
-    let on_disk = std::fs::read_to_string(&p).unwrap_or_default();
+    // Git for Windows can check out the generated schema with CRLF.
+    let on_disk = std::fs::read_to_string(&p).unwrap_or_default().replace("\r\n", "\n");
     assert!(
         on_disk == text,
         "contract-schema.json is out of date: LUYAZ_UPDATE_GOLDEN=1 cargo test -p luyaz-core contract_schema"

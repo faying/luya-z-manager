@@ -92,6 +92,9 @@ impl Fake {
 }
 
 impl luyaz_wifi::Host for Fake {
+    fn wireless(&self) -> Option<luyaz_wifi::layout::Uci> {
+        Some(self.d().uci.clone())
+    }
     fn uci_get(&self, key: &str) -> Option<String> {
         self.d().uci.get(key).cloned()
     }

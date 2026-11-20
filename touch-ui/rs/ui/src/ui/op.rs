@@ -272,15 +272,15 @@ impl Ui {
         self.model.screen_stuck != 0 || lv::tick_get().wrapping_sub(self.op.at) >= OP_STALE_MS
     }
 
-    fn op_parse(&mut self) {
-        let raw = self.model.screen_op.clone().unwrap_or_default();
+    pub(super) fn op_parse(&mut self) {
+        let raw = self.model.screen_op.as_deref().unwrap_or_default();
         let o = &mut self.op;
         if o.parsed && raw == o.raw {
             return;
         }
-        let prev_last = o.view.last.op_id.clone();
-        o.view = op_view::parse(&raw).unwrap_or_default();
-        o.raw = raw;
+        let prev_last = std::mem::take(&mut o.view.last.op_id);
+        o.view = op_view::parse(raw).unwrap_or_default();
+        raw.clone_into(&mut o.raw);
         o.at = lv::tick_get();
         if o.view.active.have {
             o.seen_live = o.view.active.op_id.clone();
@@ -360,7 +360,9 @@ impl Ui {
         }
         kit::bg(o.opr_dot, if state == OPR_LIVE { t().acc_t } else { op_mark_col(it.mark) });
         kit::show(o.opr, true);
-        o.opr.move_foreground();
+        if !self.wifi_busy() {
+            o.opr.move_foreground();
+        }
         self.op.row_state = state;
     }
 
@@ -375,7 +377,6 @@ impl Ui {
 
     /// Every refresh tick.
     pub(super) fn op_refresh(&mut self) {
-        self.op_parse();
         self.op_guard_paint();
         self.op_notice_paint();
         self.op_row_paint();

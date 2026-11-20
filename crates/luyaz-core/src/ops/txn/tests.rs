@@ -1110,6 +1110,37 @@ fn ap(v: &str) -> Reading {
 }
 
 #[test]
+fn wifi_waits_for_the_two_vendor_flags_and_the_verified_layout() {
+    let mut t = wifi_remote(true);
+    t.receipt = false;
+    t.old = json!({"on": false, "module_on": false, "band_5g.radio_on": true});
+    t.target = json!({"on": true, "module_on": true, "band_5g.radio_on": true});
+    let mut r = ap("unused");
+    r.registered = false;
+    r.value = Some(json!({"on": true, "module_on": false, "band_5g.radio_on": true}));
+    assert_eq!(t.on_reading(&r, 2_000), Next::Wait);
+    r.value = Some(json!({"on": true, "module_on": true, "band_5g.radio_on": false}));
+    assert_eq!(t.on_reading(&r, 3_000), Next::Wait);
+    r.value = Some(t.target.clone());
+    assert_eq!(t.on_reading(&r, 4_000), Next::Wait);
+    r.registered = true;
+    assert_eq!(t.on_reading(&r, 5_000), Next::Done);
+    assert_eq!(end(&t), (Phase::Confirmed, Some(Reason::Verified)));
+}
+
+#[test]
+fn wifi_legacy_rollback_does_not_require_fields_added_later() {
+    let mut t = wifi_remote(true);
+    t.rollback_to = json!({"on": false});
+    t.revert().unwrap();
+    t.rollback_sent(2_000);
+    let mut r = ap("unused");
+    r.value = Some(json!({"on": false, "module_on": false}));
+    assert_eq!(t.on_reading(&r, 3_000), Next::Done);
+    assert_eq!(end(&t), (Phase::RolledBack, Some(Reason::UserRevert)));
+}
+
+#[test]
 fn remote_wifi_waits_for_a_receipt_after_the_ap_is_up() {
     let mut t = wifi_remote(true);
     assert_eq!(t.receipt(), Err("Wi-Fi not confirmed yet"), "AP not up yet");

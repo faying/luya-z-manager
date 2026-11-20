@@ -24,7 +24,7 @@ use super::ladder::Ladder;
 use super::speedtest::Speedtest;
 use super::util;
 use crate::logic::Launch;
-use crate::source::{Activity, NiAct, Polled, Source, WifiRead};
+use crate::source::{Activity, NiAct, Polled, Source, WifiRead, WifiReply};
 use ui_model::Model;
 use plat::backlight::Backlight;
 use plat::key::Key;
@@ -232,11 +232,6 @@ impl Live {
 /// system(3): through /bin/sh, waited for; true when it exited 0.
 fn system(cmd: &str) -> bool {
     std::process::Command::new("/bin/sh").arg("-c").arg(cmd).status().is_ok_and(|s| s.success())
-}
-
-/// /sys/class/net/<if>/operstate starts with "up".
-fn oper_up(ifname: &str) -> bool {
-    std::fs::read_to_string(format!("/sys/class/net/{ifname}/operstate")).is_ok_and(|s| s.trim() == "up")
 }
 
 impl Source for Live {
@@ -595,8 +590,12 @@ impl Source for Live {
         None
     }
 
-    fn wifi_reply(&self) -> Option<bool> {
+    fn wifi_reply(&self) -> Option<WifiReply> {
         self.core.wifi_reply()
+    }
+
+    fn wifi_op_id(&self) -> Option<&str> {
+        self.core.wifi_op_id()
     }
 }
 
@@ -607,82 +606,32 @@ fn read_wifi() -> WifiRead {
     if let Ok(out) = Command::new("uci").args(["-q", "show", "wireless"]).output()
         && out.status.success()
     {
-        read = wifi_config(&String::from_utf8_lossy(&out.stdout));
+        // the one parser the core shares: the vendor module bit and the saved band
+        // preferences, which a master-off temporarily rewrites in the raw UCI
+        let sw = luyaz_wifi::switches::read_show(&String::from_utf8_lossy(&out.stdout));
+        read.master = sw.master;
+        read.module = sw.module;
+        read.radios = sw.radios;
+        read.main = sw.main;
     }
-    read.up = [oper_up("wlan0"), oper_up("wlan2")];
-    // An ifdown removes the interfaces, not the owner's saved choice.
-    read.power_save = std::fs::read_to_string("/etc/hotplug.d/iface/99-disable-powersave")
+    read.up = luyaz_wifi::psm::main_up();
+    // An ifdown removes the interfaces, not the owner's saved choice. The parse the core
+    // shares: preferred is the saved script first, the live driver only without one — and
+    // the driver is only asked on an interface that is up (a down one still answers iw).
+    let saved = std::fs::read_to_string(format!("/etc/hotplug.d/iface/{}", luyaz_wifi::psm::HOTPLUG_FILE))
         .ok()
-        .and_then(|s| s.lines().find_map(|l| l.split_once(" set power_save ").and_then(|(_, v)| psm_flag(v))))
-        .or_else(|| {
-            ["wlan0", "wlan2"].into_iter().zip(read.up).filter(|(_, up)| *up).find_map(|(iface, _)| {
-                let out = Command::new("iw").args(["dev", iface, "get", "power_save"]).output().ok()?;
-                if !out.status.success() { return None; }
-                String::from_utf8_lossy(&out.stdout).lines().find_map(|l| psm_flag(l.trim().strip_prefix("Power save: ")?))
-            })
-        });
+        .and_then(|s| luyaz_wifi::psm::from_hotplug(&s));
+    let live = saved.is_none().then(|| psm_live(read.up)).flatten();
+    read.power_save = luyaz_wifi::psm::preferred(saved, live);
     read
 }
 
-fn psm_flag(s: &str) -> Option<bool> {
-    match s.split_ascii_whitespace().next()? {
-        "on" => Some(true),
-        "off" => Some(false),
-        _ => None,
-    }
-}
-
-fn wifi_config(text: &str) -> WifiRead {
-    let mut read = WifiRead::default();
-    let mut radios = [false; 2];
-    let mut backup = [None; 2];
-    let mut main = [false; 2];
-    for (key, value) in text.lines().filter_map(|l| l.split_once('=')) {
-        let bit = match value.trim_matches('\'') {
-            "0" => Some(false),
-            "1" => Some(true),
-            _ => None,
-        };
-        match key {
-            "wireless.zte_mbb.wifi_onoff_by_user" => read.master = bit,
-            "wireless.zte_mbb.wifi_onoff" => read.module = bit,
-            "wireless.wifi0" => radios[0] = true,
-            "wireless.wifi1" => radios[1] = true,
-            "wireless.main_2g" => main[0] = true,
-            "wireless.main_5g" => main[1] = true,
-            "wireless.wifi0.disabled" => read.radios[0] = bit.map(|v| !v),
-            "wireless.wifi1.disabled" => read.radios[1] = bit.map(|v| !v),
-            "wireless.wifi0.disabled_bk" => backup[0] = bit.map(|v| !v),
-            "wireless.wifi1.disabled_bk" => backup[1] = bit.map(|v| !v),
-            "wireless.main_2g.disabled" => read.main[0] = bit.map(|v| !v),
-            "wireless.main_5g.disabled" => read.main[1] = bit.map(|v| !v),
-            _ => {}
-        }
-    }
-    read.master = read.master.or(read.module);
-    for i in 0..2 {
-        // CN B11 writes disabled=1 on each radio during master-off. It records a
-        // disabled_bk=1 for a radio that was already disabled; no backup means on.
-        read.radios[i] = if read.module == Some(false) && read.radios[i] == Some(false) {
-            backup[i].or(radios[i].then_some(true))
-        } else {
-            read.radios[i].or(radios[i].then_some(true))
-        };
-        read.main[i] = read.main[i].or(main[i].then_some(true));
-    }
-    read
-}
-
-#[cfg(test)]
-#[test]
-fn wifi_config_reads_saved_bands_while_master_is_off() {
-    let config = "wireless.wifi0=wifi-device\nwireless.wifi1=wifi-device\n\
-        wireless.wifi0.disabled='1'\nwireless.wifi1.disabled='1'\n\
-        wireless.wifi0.disabled_bk='1'\nwireless.zte_mbb.wifi_onoff='0'\n\
-        wireless.zte_mbb.wifi_onoff_by_user='0'\n";
-    let off = wifi_config(config);
-    assert_eq!(off.master, Some(false));
-    assert_eq!(off.radios, [Some(false), Some(true)]);
-    let starting = wifi_config(&config.replace("wifi_onoff='0'", "wifi_onoff='1'"));
-    assert_eq!(starting.radios, [Some(false), Some(false)]);
+/// The driver's setting from the first interface that is up (a down wlan still answers).
+fn psm_live(up: [bool; 2]) -> Option<bool> {
+    use std::process::Command;
+    luyaz_wifi::psm::MAIN_IFACES.into_iter().zip(up).filter(|(_, up)| *up).find_map(|(iface, _)| {
+        let out = Command::new("iw").args(["dev", iface, "get", "power_save"]).output().ok()?;
+        if !out.status.success() { return None; }
+        luyaz_wifi::psm::from_iw(&String::from_utf8_lossy(&out.stdout))
+    })
 }

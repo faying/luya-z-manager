@@ -52,10 +52,24 @@ fn body(v: Value) -> Map<String, Value> {
     v.as_object().unwrap().clone()
 }
 
-/// 目标：和 `wifi_dev::resolve` 一样（计划 → 套上 → 同一个展开 → 只留变了的）。
+/// 目标：和 `wifi_dev::resolve` 一样，保留差异和总开关操作的验证约束。
 fn target(kind: Kind, m: &Uci, plan: &Plan, v: &Vault) -> Map<String, Value> {
     let cur = value(kind, m, v).unwrap();
-    changed(&cur, &value(kind, &simulate(m, plan), v).unwrap())
+    let new = value(kind, &simulate(m, plan), v).unwrap();
+    let mut target = changed(&cur, &new);
+    if let Some(on) = plan.vendor {
+        for k in ["on", "module_on"] {
+            target.insert(k.into(), json!(on));
+        }
+        for k in ["band_2g.radio_on", "band_5g.radio_on"] {
+            if let Some(saved) = cur[k].as_bool() {
+                target.insert(k.into(), json!(saved));
+            } else {
+                target.remove(k);
+            }
+        }
+    }
+    target
 }
 
 fn apply(m: &Uci, plan: &Plan) -> Uci {
@@ -106,75 +120,209 @@ fn main_plan_is_the_agents_write() {
 }
 
 #[test]
-fn master_switch_wins_over_the_radio_keys() {
+fn master_switch_reconciles_a_split_without_changing_band_or_ap_flags() {
     let mut m = uci();
     m.insert("wireless.main_2g.disabled".into(), "1".into());
     m.insert("wireless.main_5g.disabled".into(), "1".into());
     m.insert("wireless.wifi0.disabled".into(), "1".into());
-    m.insert("wireless.zte_mbb.wifi_onoff".into(), "0".into());
-    // 打开总开关：请求体同时说 2.4G radio 关着，总开关最后写、压过它；原厂开关也要开
-    let p = main_plan(
-        &body(json!({"radio2_disabled": "1", "wifi_onoff": "1"})),
-        &m,
-    )
-    .unwrap();
+    m.insert(SAVED_MASTER.into(), "0".into());
+    let b = body(json!({"wifi_onoff": "1", "radio2_disabled": "1", "radio5_disabled": 0}));
+    let p = main_plan(&b, &m).unwrap();
     assert_eq!(p.vendor, Some(true));
-    let after = apply(&m, &p);
-    assert_eq!(after["wireless.wifi0.disabled"], "0");
-    assert_eq!(after["wireless.main_2g.disabled"], "0");
-    let v = vault();
-    let t = target(Kind::Main, &m, &p, &v);
-    assert_eq!(t["on"], json!(true));
-    assert_eq!(t["band_2g.radio_on"], json!(true));
-    // 关：就是原厂总开关（`wifi.set_module`），band/访客开关一个不动——用户单独关掉的
-    // 2.4 GHz 在总开关开关一轮后保持关（CN B11 实测 2026-11-18）
-    let p = main_plan(&body(json!({"wifi_onoff": "0"})), &uci()).unwrap();
-    assert_eq!(p.vendor, Some(false));
     assert!(p.set.is_empty());
-    // 原厂开关已经是关：没有要写的
-    let mut off = uci();
-    off.insert("wireless.zte_mbb.wifi_onoff".into(), "0".into());
-    assert!(main_plan(&body(json!({"wifi_onoff": "0"})), &off)
-        .unwrap()
-        .is_empty());
-    // 原厂开关开着、两个主网络都 disabled（旧版核心或场景引擎的关法）：开 = 写回四个 0
-    let mut legacy = uci();
-    legacy.insert("wireless.main_2g.disabled".into(), "1".into());
-    legacy.insert("wireless.main_5g.disabled".into(), "1".into());
-    let p = main_plan(&body(json!({"wifi_onoff": "1"})), &legacy).unwrap();
+    let mut expected = m.clone();
+    expected.insert(SAVED_MASTER.into(), "1".into());
+    let after = apply(&m, &p);
+    assert_eq!(after, expected);
+    assert!(main_plan(&b, &after).unwrap().is_empty());
+
+    let v = vault();
+    let now = value(Kind::Main, &m, &v).unwrap();
+    let t = target(Kind::Main, &m, &p, &v);
+    assert_eq!(
+        t,
+        body(json!({
+            "on": true, "module_on": true, "band_2g.radio_on": false, "band_5g.radio_on": true,
+        }))
+    );
+    assert_eq!(plan_for(Kind::Main, &t, &m, &now, |_| None), Ok(p));
+
+    let old = project(&Value::Object(now.clone()), &Value::Object(t));
+    assert_eq!(
+        old,
+        json!({
+            "on": false, "module_on": true, "band_2g.radio_on": false, "band_5g.radio_on": true,
+        })
+    );
+    let aligned = value(Kind::Main, &after, &v).unwrap();
+    let mut restore = body(old);
+    restore.insert("band_5g.ssid".into(), json!("Cafe"));
+    assert_eq!(
+        plan_for(Kind::Main, &restore, &after, &aligned, |_| None),
+        Err(CONTRADICTORY_SWITCH.into())
+    );
+    let p = plan_for(Kind::Main, &restore, &m, &now, |_| None).unwrap();
     assert_eq!(p.vendor, None);
-    let set: std::collections::BTreeMap<_, _> = p.set.iter().cloned().collect();
-    assert_eq!(set.len(), 2);
-    assert_eq!(set["wireless.main_2g.disabled"], "0");
-    assert_eq!(set["wireless.main_5g.disabled"], "0");
+    assert_eq!(p.set_json(), json!({"wireless.main_5g.ssid": "Cafe"}));
 }
 
 #[test]
 fn master_off_keeps_a_band_the_user_switched_off() {
-    // 用户平时 2.4G radio 关着：总开关关→开一轮，2.4G 保持关
+    let v = vault();
+    let mut on = uci();
+    on.insert(SAVED_MASTER.into(), "1".into());
+    on.insert("wireless.wifi0.disabled".into(), "1".into());
+    let mut off = on.clone();
+    off.insert(SAVED_MASTER.into(), "0".into());
+    off.insert(MODULE_SWITCH.into(), "0".into());
+    off.insert("wireless.wifi0.disabled_bk".into(), "1".into());
+    off.insert("wireless.wifi1.disabled".into(), "1".into());
+
+    for (before, after, wanted) in [(&on, &off, false), (&off, &on, true)] {
+        let p = main_plan(
+            &body(json!({"wifi_onoff": wanted, "radio2_disabled": 1, "radio5_disabled": 0})),
+            before,
+        )
+        .unwrap();
+        assert_eq!(p.vendor, Some(wanted));
+        assert!(p.set.is_empty());
+        let t = target(Kind::Main, before, &p, &v);
+        assert_eq!(
+            t,
+            body(json!({
+                "on": wanted, "module_on": wanted,
+                "band_2g.radio_on": false, "band_5g.radio_on": true,
+            }))
+        );
+        let now = value(Kind::Main, before, &v).unwrap();
+        let replay = plan_for(Kind::Main, &t, before, &now, |_| None).unwrap();
+        assert_eq!(replay, p);
+        assert_eq!(&simulate(before, &replay), after);
+    }
+    assert!(luyaz_wifi::layout::running(&off).is_empty());
+    assert_eq!(luyaz_wifi::layout::running(&on), vec!["main_5g"]);
+    assert!(
+        main_plan(&body(json!({"wifi_onoff": 0, "radio5_disabled": false})), &off)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        main_plan(&body(json!({"wifi_onoff": 1, "radio5_disabled": 1})), &off),
+        Err(SEPARATE_SWITCH_AND_BANDS.into())
+    );
+}
+
+#[test]
+fn master_target_has_no_constraint_for_an_unreadable_saved_band() {
     let mut m = uci();
+    m.insert(SAVED_MASTER.into(), "0".into());
+    m.insert(MODULE_SWITCH.into(), "0".into());
     m.insert("wireless.wifi0.disabled".into(), "1".into());
+    m.insert("wireless.wifi1.disabled".into(), "1".into());
+    m.insert("wireless.wifi1.disabled_bk".into(), "invalid".into());
     let v = vault();
     let now = value(Kind::Main, &m, &v).unwrap();
-    // 关
-    let p = plan_for(Kind::Main, &body(json!({"on": false})), &m, &now, |_| None).unwrap();
-    assert_eq!(p.vendor, Some(false));
-    assert!(p.set.is_empty());
-    let off = simulate(&m, &p);
-    assert_eq!(off["wireless.zte_mbb.wifi_onoff"], "0");
-    assert_eq!(off["wireless.wifi0.disabled"], "1", "band 开关原样");
-    // 再开：只有原厂开关，band 开关还是原样
-    let now = value(Kind::Main, &off, &v).unwrap();
-    assert_eq!(now["on"], json!(false));
-    let p = plan_for(Kind::Main, &body(json!({"on": true})), &off, &now, |_| None).unwrap();
-    assert_eq!(p.vendor, Some(true));
-    assert!(p.set.is_empty());
-    let after = simulate(&off, &p);
-    assert_eq!(after["wireless.wifi0.disabled"], "1");
-    let t = value(Kind::Main, &after, &v).unwrap();
-    assert_eq!(t["on"], json!(true), "5G 在跑就算开");
-    assert_eq!(t["band_2g.radio_on"], json!(false));
-    assert_eq!(t["band_5g.radio_on"], json!(true));
+    assert_eq!(now["band_5g.radio_on"], Value::Null);
+    let p = main_plan(&body(json!({"wifi_onoff": 1})), &m).unwrap();
+    let t = target(Kind::Main, &m, &p, &v);
+    assert_eq!(
+        t,
+        body(json!({"on": true, "module_on": true, "band_2g.radio_on": true}))
+    );
+    assert_eq!(plan_for(Kind::Main, &t, &m, &now, |_| None), Ok(p));
+}
+
+#[test]
+fn actual_radio_changes_need_both_switches_on_and_a_separate_request() {
+    let m = uci();
+    let band = body(json!({"radio2_disabled": "1"}));
+    let mixed = body(json!({"wifi_onoff": 0, "radio2_disabled": "1"}));
+    assert_eq!(main_plan(&mixed, &m), Err(SEPARATE_SWITCH_AND_BANDS.into()));
+    let p = main_plan(&body(json!({"wifi_onoff": 1, "radio2_disabled": true})), &m).unwrap();
+    assert_eq!(p.vendor, None);
+    assert_eq!(p.set_json(), json!({"wireless.wifi0.disabled": "1"}));
+
+    let v = vault();
+    let want = body(json!({"band_2g.radio_on": false}));
+    for (saved, module) in [("0", "0"), ("0", "1"), ("1", "0"), ("1", "unknown")] {
+        let mut other = m.clone();
+        other.insert(SAVED_MASTER.into(), saved.into());
+        other.insert(MODULE_SWITCH.into(), module.into());
+        assert_eq!(main_plan(&band, &other), Err(BANDS_REQUIRE_ON.into()));
+        let now = value(Kind::Main, &other, &v).unwrap();
+        assert_eq!(
+            plan_for(Kind::Main, &want, &other, &now, |_| None),
+            Err(BANDS_REQUIRE_ON.into())
+        );
+    }
+
+    let mut unknown = m;
+    unknown.remove(MODULE_SWITCH);
+    assert_eq!(
+        main_plan(&body(json!({"wifi_onoff": 1})), &unknown),
+        Err(SWITCH_UNAVAILABLE.into())
+    );
+}
+
+#[test]
+fn master_restore_checks_band_constraints_only_when_a_switch_call_is_needed() {
+    let m = uci();
+    let v = vault();
+    let now = value(Kind::Main, &m, &v).unwrap();
+    for flag in ["band_2g.radio_on", "band_2g.ap_on"] {
+        let mut want = body(json!({"on": false, "module_on": false}));
+        want.insert(flag.into(), json!(false));
+        assert_eq!(
+            plan_for(Kind::Main, &want, &m, &now, |_| None),
+            Err(SEPARATE_SWITCH_AND_BANDS.into())
+        );
+        want.insert("on".into(), json!(true));
+        want.insert("module_on".into(), json!(true));
+        let p = plan_for(Kind::Main, &want, &m, &now, |_| None).unwrap();
+        assert_eq!(p.vendor, None);
+        let path = if flag.ends_with("radio_on") {
+            "wireless.wifi0.disabled"
+        } else {
+            "wireless.main_2g.disabled"
+        };
+        assert_eq!(p.set, vec![(path.into(), "1".into())]);
+    }
+
+    for k in ["on", "module_on"] {
+        let want = Map::from_iter([(k.to_owned(), json!(false))]);
+        let p = plan_for(Kind::Main, &want, &m, &now, |_| None).unwrap();
+        assert_eq!(p.vendor, Some(false));
+        assert!(p.set.is_empty());
+    }
+}
+
+#[test]
+fn legacy_restore_can_change_ap_flags_without_a_master_call() {
+    let mut m = uci();
+    m.insert("wireless.main_2g.disabled".into(), "1".into());
+    m.insert("wireless.main_5g.disabled".into(), "1".into());
+    let v = vault();
+    let now = value(Kind::Main, &m, &v).unwrap();
+    let want = body(json!({"on": true, "band_2g.ap_on": true, "band_5g.ap_on": true}));
+    let p = plan_for(Kind::Main, &want, &m, &now, |_| None).unwrap();
+    assert_eq!(p.vendor, None);
+    assert_eq!(
+        p.set_json(),
+        json!({"wireless.main_2g.disabled": "0", "wireless.main_5g.disabled": "0"})
+    );
+}
+
+#[test]
+fn rollback_ignores_unreadable_saved_switch_and_band_values() {
+    let m = uci();
+    let now = value(Kind::Main, &m, &vault()).unwrap();
+    let want = body(json!({
+        "on": null, "module_on": null, "band_2g.radio_on": null,
+        "band_5g.ap_on": null, "band_5g.ssid": "Cafe",
+    }));
+    let p = plan_for(Kind::Main, &want, &m, &now, |_| None).unwrap();
+    assert_eq!(p.vendor, None);
+    assert_eq!(p.set_json(), json!({"wireless.main_5g.ssid": "Cafe"}));
 }
 
 #[test]
@@ -306,9 +454,12 @@ fn params_are_checked() {
     assert!(check_guest(&json!({"guest_key": "1234567"})).is_err());
     assert!(check_guest(&json!({"guest_ssid": "ok", "guest_isolate": true})).is_ok());
     // 撤销：只认这一项的键和类型
-    let r = json!({"restore": {"on": true, "band_2g.key_fp": "ab"}});
+    let r = json!({"restore": {"on": true, "module_on": false, "band_2g.key_fp": "ab"}});
     assert_eq!(check_main(&r), Ok(r["restore"].clone()));
     assert!(check_main(&json!({"restore": {"on": "1"}})).is_err());
+    assert!(check_main(&json!({"restore": {"module_on": 1}})).is_err());
+    assert!(check_main(&json!({"restore": {"module_on": null}})).is_err());
+    assert!(check_main(&json!({"restore": {"band_2g.radio_on": "1"}})).is_err());
     assert!(check_main(&json!({"restore": {"guest.ssid": "x"}})).is_err());
     assert!(check_main(&json!({"restore": {}})).is_err());
     assert!(check_guest(&json!({"restore": {"guest.active_time": 3600}})).is_ok());
@@ -316,6 +467,24 @@ fn params_are_checked() {
     assert_eq!(s.confirm, Confirm::Wifi);
     let old = json!({"band_2g.ssid": "a"});
     assert_eq!(s.target(&s.to_params(&old)), Ok(old));
+}
+
+#[test]
+fn switch_params_accept_only_zero_or_one_after_body_conversion() {
+    let m = uci();
+    for key in ["wifi_onoff", "radio2_disabled", "radio5_disabled"] {
+        for v in [json!("on"), json!(2), json!("01"), json!([]), Value::Null] {
+            let request = Map::from_iter([(key.to_owned(), v)]);
+            let msg = format!("{key} must be 0 or 1");
+            assert_eq!(main_plan(&request, &m), Err(msg.clone()));
+            assert_eq!(check_main(&Value::Object(request)), Err(msg));
+        }
+        for v in [json!("0"), json!(1), json!(false)] {
+            let request = Map::from_iter([(key.to_owned(), v)]);
+            assert!(main_plan(&request, &m).is_ok());
+            assert_eq!(check_main(&Value::Object(request)), Ok(pending()));
+        }
+    }
 }
 
 #[test]

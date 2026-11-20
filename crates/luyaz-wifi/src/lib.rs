@@ -43,9 +43,12 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 mod run;
+mod runtime;
 pub mod dfs;
 pub mod layout;
+pub mod psm;
 pub mod scan;
+pub mod switches;
 
 pub use run::{check_slot, kill_group, output_within, Slot, SlotState};
 
@@ -54,8 +57,6 @@ pub const AP_5G: &str = "wireless.main_5g.disabled";
 const HOSTAPD_CTRL: &str = "/data/vendor/wifi/hostapd";
 const IFACE_2G: &str = "wlan0";
 const IFACE_5G: &str = "wlan2";
-const SSID_2G: &str = "wireless.main_2g.ssid";
-const SSID_5G: &str = "wireless.main_5g.ssid";
 /// `hostapd_cli status` gives up after this (the agent's `ubus::CMD_TIMEOUT`).
 const CMD_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -68,12 +69,15 @@ pub const OFF_DEADLINE: Duration = Duration::from_secs(20);
 pub const ON_DEADLINE: Duration = Duration::from_secs(45);
 const POLL_EVERY: Duration = Duration::from_millis(1500);
 
-/// What the switch needs from the process it runs in: uci reads and the three writes, which each
-/// side sends its own way (the agent to core with the emergency script behind it, u60d to its own
-/// `/control`). Only ever called under the lock.
+/// What the switch needs from the process it runs in. Writes run under the Wi-Fi lock, and
+/// observation and recovery can also read without it.
 pub trait Host {
-    /// One uci value; `None` when it cannot be read.
-    fn uci_get(&self, key: &str) -> Option<String>;
+    /// One fresh `uci show wireless` snapshot, or `None` when it cannot be read.
+    fn wireless(&self) -> Option<layout::Uci>;
+    /// A scenario can snapshot arbitrary UCI keys. Hosts that support those keys override this.
+    fn uci_get(&self, key: &str) -> Option<String> {
+        self.wireless()?.remove(key)
+    }
     /// Write both AP flags and reload (`wifi.apply` `{set: {AP_2G, AP_5G}, reload: true}`): `Ok(None)`
     /// done, `Ok(Some(e))` written but the reload reported `e` (not fatal: the verify decides),
     /// `Err` not written.
@@ -221,16 +225,14 @@ fn flock_file(path: &str, deadline: Instant) -> Result<File, String> {
 /// Number of running hostapd processes. hostapd is what emits beacons, so zero
 /// processes is positive proof that nothing is broadcasting — and unlike
 /// `hostapd_cli`, "zero" cannot be confused with "we asked the wrong socket".
-fn hostapd_count() -> usize {
-    // Bounded: this runs under the lock, and a hung `ps` would hold it until the sentinel gives up.
-    let out = match output_within(Command::new("ps").arg("w"), CMD_TIMEOUT) {
-        Ok(o) => o,
-        Err(_) => return usize::MAX, // unknown — never let this read as "off"
-    };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter(|l| l.contains("/hostapd ") || l.ends_with("/hostapd"))
-        .count()
+fn hostapd_count(timeout: Duration) -> Option<usize> {
+    let out = output_within(Command::new("ps").arg("w"), timeout).ok()?;
+    out.status.success().then(|| {
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| l.contains("/hostapd ") || l.ends_with("/hostapd"))
+            .count()
+    })
 }
 
 /// `true` only when this interface's hostapd answers and reports ENABLED.
@@ -240,42 +242,22 @@ fn hostapd_count() -> usize {
 /// indistinguishable from a wrong `-p` path or a hostapd that has not come up
 /// yet. Proving presence is safe; proving absence is not.
 fn hostapd_enabled(iface: &str) -> bool {
-    hostapd_status(iface).is_some_and(|t| t.contains("state=ENABLED"))
+    hostapd_serves(iface, None, CMD_TIMEOUT) == Some(true)
 }
 
-fn hostapd_status(iface: &str) -> Option<String> {
-    output_within(Command::new("hostapd_cli").args(["-i", iface, "-p", HOSTAPD_CTRL, "status"]), CMD_TIMEOUT)
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-}
-
-/// After a settings reload: ENABLED *and* broadcasting the name uci now holds. The vendor reload
-/// lands late (device 10-18: ~40 s after the write); until then the old hostapd still answers
-/// ENABLED with the old name, and "enabled" alone verified a change that had not happened yet.
-/// A name uci can't give is not checked.
-fn hostapd_serves(h: &dyn Host, iface: &str, ssid_key: &str) -> bool {
-    let Some(t) = hostapd_status(iface) else { return false };
-    let want = h.uci_get(ssid_key).filter(|s| !s.is_empty());
-    status_serves(&t, want.as_deref())
+/// An existing hostapd can still answer ENABLED with the old SSID during a reload.
+fn hostapd_serves(iface: &str, ssid: Option<&str>, timeout: Duration) -> Option<bool> {
+    let out = output_within(
+        Command::new("hostapd_cli").args(["-i", iface, "-p", HOSTAPD_CTRL, "status"]),
+        timeout,
+    ).ok()?;
+    let status = std::str::from_utf8(&out.stdout).ok()?;
+    out.status.success().then(|| status_serves(status, ssid))
 }
 
 fn status_serves(status: &str, ssid: Option<&str>) -> bool {
-    status.contains("state=ENABLED")
+    status.lines().any(|l| l == "state=ENABLED")
         && ssid.is_none_or(|s| status.lines().any(|l| l.strip_prefix("ssid[0]=") == Some(s)))
-}
-
-fn poll_until(deadline: Duration, mut done: impl FnMut() -> bool) -> bool {
-    let start = Instant::now();
-    loop {
-        if done() {
-            return true;
-        }
-        if start.elapsed() >= deadline {
-            return false;
-        }
-        std::thread::sleep(POLL_EVERY);
-    }
 }
 
 /// Is anything broadcasting right now? Cheap, read-only, no side effects.
@@ -284,34 +266,36 @@ fn poll_until(deadline: Duration, mut done: impl FnMut() -> bool) -> bool {
 /// `apply`, which always writes and reloads — appropriate for a deliberate
 /// change, wasteful and disruptive as a health check.
 pub fn beaconing() -> bool {
-    let n = hostapd_count();
-    n > 0 && n != usize::MAX
+    hostapd_count(CMD_TIMEOUT).is_some_and(|n| n > 0)
 }
 
-/// Both APs configured on *and* both answering ENABLED — exactly what `apply`'s
-/// own verify would accept after `apply(true, true)`. When this holds, applying
-/// "both on" again would only tear the wiphy down and rebuild it, dropping every
-/// connected client for ~30 s to arrive where it started.
-///
-/// Only ever used to skip turning Wi-Fi *on*. It proves presence, which is safe;
-/// there is no equivalent shortcut for "off" (see `hostapd_enabled`).
+/// Both main APs configured on and the effective layout settled with at least one main AP serving.
+/// Used to avoid tearing down a working network, including one with a user's radio disabled.
 pub fn fully_on(h: &dyn Host) -> bool {
-    snapshot(h) == (true, true) && beaconing() && hostapd_enabled(IFACE_2G) && hostapd_enabled(IFACE_5G)
+    h.wireless().is_some_and(|cfg| runtime::fully_on(&cfg))
 }
 
 /// Snapshot of what the AP interfaces are currently configured as, for rollback.
 pub fn snapshot(h: &dyn Host) -> (bool, bool) {
-    let on = |key: &str| h.uci_get(key).unwrap_or_default() != "1";
+    configured_aps(h.wireless().as_ref())
+}
+
+fn configured_aps(cfg: Option<&layout::Uci>) -> (bool, bool) {
+    let on = |key: &str| cfg.and_then(|m| m.get(key)).map(String::as_str) != Some("1");
     (on(AP_2G), on(AP_5G))
 }
 
 /// Observed state, for reporting. `beaconing` is the honest answer to "is
 /// anything broadcasting right now".
 pub fn observe(h: &dyn Host) -> Value {
-    let (cfg_2g, cfg_5g) = snapshot(h);
+    observation(h.wireless().as_ref())
+}
+
+fn observation(cfg: Option<&layout::Uci>) -> Value {
+    let (cfg_2g, cfg_5g) = configured_aps(cfg);
     json!({
         "configured": { "ap_2g": cfg_2g, "ap_5g": cfg_5g },
-        "hostapd_processes": hostapd_count(),
+        "hostapd_processes": hostapd_count(CMD_TIMEOUT).unwrap_or(usize::MAX),
         "beaconing": { IFACE_2G: hostapd_enabled(IFACE_2G), IFACE_5G: hostapd_enabled(IFACE_5G) },
     })
 }
@@ -340,16 +324,10 @@ pub fn apply_locked(h: &dyn Host, lk: &WifiLock, ap_2g: bool, ap_5g: bool) -> Re
         None => Ok(()),
     };
 
-    let want_any_on = ap_2g || ap_5g;
-    let verified = if want_any_on {
-        poll_until(ON_DEADLINE, || {
-            hostapd_count() > 0 && (!ap_2g || hostapd_enabled(IFACE_2G)) && (!ap_5g || hostapd_enabled(IFACE_5G))
-        })
-    } else {
-        poll_until(OFF_DEADLINE, || hostapd_count() == 0)
-    };
+    let (verified, cfg) = runtime::poll(h, runtime::Target::Aps([ap_2g, ap_5g]));
+    let verified = verified == Some(true);
 
-    let mut data = observe(h);
+    let mut data = observation(cfg.as_ref());
     if let Some(obj) = data.as_object_mut() {
         obj.insert("verified".into(), json!(verified));
         obj.insert("target".into(), json!({"ap_2g": ap_2g, "ap_5g": ap_5g}));
@@ -385,7 +363,7 @@ pub fn apply_locked(h: &dyn Host, lk: &WifiLock, ap_2g: bool, ap_5g: bool) -> Re
 // down. `wifi.set_module` makes the stock call (with the current `lbd`), the
 // same thing the old guard script's `vendor_wifi_on` did.
 
-/// The vendor switch's uci key. A missing key means on.
+/// The vendor module switch's UCI key.
 pub const VENDOR_ONOFF: &str = "wireless.zte_mbb.wifi_onoff";
 
 /// Whether turning Wi-Fi on must first turn the vendor switch on: only when
@@ -404,8 +382,9 @@ pub fn vendor_on_if_off(h: &dyn Host, _lk: &WifiLock, want_on: bool) -> Option<R
     if !want_on {
         return None;
     }
-    let onoff = h.uci_get(VENDOR_ONOFF);
-    if !vendor_switch_needs_on(want_on, onoff.as_deref()) {
+    let cfg = h.wireless();
+    let onoff = cfg.as_ref().and_then(|m| m.get(VENDOR_ONOFF)).map(String::as_str);
+    if !vendor_switch_needs_on(want_on, onoff) {
         return None;
     }
     eprintln!("[wifi] vendor Wi-Fi switch ({VENDOR_ONOFF}) is off; turning it on");
@@ -416,56 +395,15 @@ pub fn vendor_on_if_off(h: &dyn Host, _lk: &WifiLock, want_on: bool) -> Option<R
     Some(r)
 }
 
-#[derive(Debug, PartialEq)]
-enum Expect {
-    /// At least one main AP should be beaconing; wait for exactly these.
-    On { ap_2g: bool, ap_5g: bool },
-    /// Nothing at all configured on: wait for zero hostapd processes.
-    Off,
-    /// Only guest APs on. Their interface names are not known here, so there is
-    /// nothing honest to wait for; the reload result is all we report.
-    Unknown,
-}
-
-/// A band is on when neither its radio nor its main AP is disabled. Arguments
-/// are the raw `disabled` values; a missing key reads as "" (= enabled), as in
-/// OpenWrt.
-fn expectation(radio_2g: &str, main_2g: &str, radio_5g: &str, main_5g: &str, guest_on: bool) -> Expect {
-    let ap_2g = radio_2g != "1" && main_2g != "1";
-    let ap_5g = radio_5g != "1" && main_5g != "1";
-    if ap_2g || ap_5g {
-        Expect::On { ap_2g, ap_5g }
-    } else if guest_on {
-        Expect::Unknown
-    } else {
-        Expect::Off
-    }
-}
-
-fn current_expectation(h: &dyn Host) -> Expect {
-    let get = |k: &str| h.uci_get(k).unwrap_or_default();
-    // The vendor master switch off: nothing can broadcast, whatever the AP flags say.
-    if get(VENDOR_ONOFF) == "0" {
-        return Expect::Off;
-    }
-    // Guest sections may not exist at all; only an explicit "0" counts as on.
-    let guest_on = get("wireless.guest_2g.disabled") == "0" || get("wireless.guest_5g.disabled") == "0";
-    expectation(&get("wireless.wifi0.disabled"), &get(AP_2G), &get("wireless.wifi1.disabled"), &get(AP_5G), guest_on)
-}
-
-/// One look, no waiting: do the radios match what uci now says? The same test
-/// [`reload_and_verify`] polls for; `None` when there is nothing honest to check
-/// (only guest APs on). For a caller that lost track of a reload it started
-/// (u60d restarted while a Wi-Fi change was being confirmed).
+/// One look, no waiting: do the interfaces match a fresh wireless snapshot?
 pub fn settled(h: &dyn Host) -> Option<bool> {
-    match current_expectation(h) {
-        Expect::On { ap_2g, ap_5g } => {
-            let n = hostapd_count();
-            Some(n > 0 && n != usize::MAX && (!ap_2g || hostapd_serves(h, IFACE_2G, SSID_2G)) && (!ap_5g || hostapd_serves(h, IFACE_5G, SSID_5G)))
-        }
-        Expect::Off => Some(hostapd_count() == 0),
-        Expect::Unknown => None,
-    }
+    settled_layout(&h.wireless()?)
+}
+
+/// Check runtime against a supplied fresh snapshot. `None` means the necessary state could
+/// not be read. Recovery callers can reuse the snapshot they used to identify the layout.
+pub fn settled_layout(cfg: &layout::Uci) -> Option<bool> {
+    runtime::check(cfg, runtime::Target::Current, layout::running_checked(cfg)?, None)
 }
 
 /// Reload synchronously, without waiting for the result to show. Only for
@@ -491,17 +429,19 @@ pub fn reload_and_verify(h: &dyn Host, lk: &WifiLock) -> Value {
 /// change something else already applied — the vendor master switch (`wifi.set_module`) turns
 /// Wi-Fi off and on on its own, and reloading on top of it would only tear working APs down.
 pub fn verify_no_reload(h: &dyn Host) -> Value {
-    let verified = match current_expectation(h) {
-        Expect::On { ap_2g, ap_5g } => Some(poll_until(ON_DEADLINE, || {
-            hostapd_count() > 0 && (!ap_2g || hostapd_serves(h, IFACE_2G, SSID_2G)) && (!ap_5g || hostapd_serves(h, IFACE_5G, SSID_5G))
-        })),
-        Expect::Off => Some(poll_until(OFF_DEADLINE, || hostapd_count() == 0)),
-        Expect::Unknown => None,
-    };
-    let mut data = observe(h);
-    if let Some(obj) = data.as_object_mut() {
-        obj.insert("verified".into(), json!(verified));
-    }
+    verify_target(h, runtime::Target::Current)
+}
+
+/// Verify both switch values, the previous saved band preferences, and the running layout after
+/// a vendor module change. The module command applies the change itself.
+pub fn verify_master(h: &dyn Host, wanted: bool, radios_before: [Option<bool>; 2]) -> Value {
+    verify_target(h, runtime::Target::Master { wanted, radios_before })
+}
+
+fn verify_target(h: &dyn Host, target: runtime::Target) -> Value {
+    let (verified, cfg) = runtime::poll(h, target);
+    let mut data = observation(cfg.as_ref());
+    data["verified"] = json!(verified);
     data
 }
 

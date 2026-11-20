@@ -24,6 +24,19 @@ The browser checks normally start it for you through `../fake-agent.mjs`; point 
 local luyaz-web at that port instead of the core's `127.0.0.1:9460` to click
 around by hand. It listens on IPv4 loopback only.
 
+### Wi-Fi control browser fixtures
+
+The Wi-Fi settings and guest Wi-Fi browser checks use the Rust `luyaz-web mock`
+service. `/mock/wifi` accepts `{"psm":{"saved":true,"live":false,"write":"mismatch"}}`
+to expose a saved choice with an inactive driver value and force the same write
+failure. The `write` setting also accepts `"normal"` and `"unknown"`.
+`{"nfc":{"switch":1,"stale":true}}` marks a known NFC value stale, and
+`{"nfc":{"switch":null}}` publishes a fresh block with no readable value.
+`/mock/wguest` can merge a concurrent writer's guest settings with
+`{"guest":{"isolate":true}}` or mark the module off with `{"module_on":false}`.
+The guest transaction checks `params.expect` against its current guest settings
+before applying the draft.
+
 ## Auth
 
 - `POST /api/auth/login` (a mock-only shortcut; the core itself signs in on `/auth/login`

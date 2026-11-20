@@ -83,13 +83,27 @@ async function own(p) {
   await until(p, () => /NFC|没有生效|设备已接受/.test(document.querySelector("#wf-nfc-op")?.textContent ?? ""));
   ok(new RegExp(`已${was ? "关掉" : "打开"}NFC 碰一碰`).test(await txt(p, "#wf-nfc-op")), `NFC: ${await txt(p, "#wf-nfc-op")}`);
   ok(same((await lastOp()).params, { enabled: was ? 0 : 1, flag: 2 }) && (await lastOp()).action === "nfc.set", "NFC body");
-  // power save: tier 1; the agent (not the mock u60d) holds the state, so no readback here
+  const nNfc = (await ops()).length;
+  const already = await p.request.post(WEB + `/router/wifi/nfc/set?on=${!was}`, { headers: { origin: new URL(WEB).origin } });
+  ok(already.ok() && /设备已是这个设置/.test(await already.text()) && (await ops()).length === nNfc, "same NFC value returns already-set without sending");
+  await post("/mock/wifi", { nfc: { switch: was ? 0 : 1, stale: true } });
+  await p.locator("#wf-nfc-unknown").waitFor({ timeout: 8000 });
+  const blocked = await p.request.post(WEB + `/router/wifi/nfc/set?on=${was}`, { headers: { origin: new URL(WEB).origin } });
+  ok(await p.locator("#wf-nfc-unknown").isDisabled() && /NFC 状态未知/.test(await blocked.text()) && (await ops()).length === nNfc, "stale NFC is disabled and rejected server-side");
+  await post("/mock/wifi", { nfc: { switch: was ? 0 : 1 } });
+
+  // Power save reflects the saved choice, and a saved/live mismatch is an explicit failure.
   const psm = p.locator("button[aria-labelledby=wf-psm-l]");
-  if (await psm.count()) {
-    await psm.click();
-    await until(p, () => /节能|没有生效|设备已接受/.test(document.querySelector("#wf-psm-op")?.textContent ?? ""), null, 25000);
-    ok(/Wi-Fi 节能|设备已接受/.test(await txt(p, "#wf-psm-op")) && (await lastOp()).action === "wifi.power_save", `power save: ${await txt(p, "#wf-psm-op")}`);
-  } else ok(false, "power save row (fake agent answers /api/wifi/power-save)");
+  await post("/mock/wifi", { psm: { saved: false, live: false, write: "mismatch" } });
+  await p.locator("button[aria-labelledby=wf-psm-l][aria-checked=false]").waitFor({ timeout: 8000 });
+  await psm.click();
+  await until(p, () => /已保存，当前未生效/.test(document.querySelector("#wf-psm-op")?.textContent ?? ""));
+  await p.locator("button[aria-labelledby=wf-psm-l][aria-checked=true]").waitFor({ timeout: 8000 });
+  ok(/已保存，当前未生效/.test(await txt(p, "#wf-extras")) && /已保存，当前未生效/.test(await txt(p, "#wf-psm-op")) && (await lastOp()).action === "wifi.power_save", "saved power-save choice selected while driver mismatch is reported");
+  await post("/mock/wifi", { psm: { saved: true, live: true, write: "normal" } });
+  await psm.click();
+  await until(p, () => /已关掉Wi-Fi 节能/.test(document.querySelector("#wf-psm-op")?.textContent ?? ""));
+  ok(/已关掉Wi-Fi 节能/.test(await txt(p, "#wf-psm-op")), `power save: ${await txt(p, "#wf-psm-op")}`);
 
   // the form: read-only groups hide while it is open
   await open();

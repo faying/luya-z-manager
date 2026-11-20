@@ -1237,7 +1237,16 @@ async fn wifi_power_save(params: &Value) -> Outcome {
         Err(e) => return Outcome::Invalid(e),
     };
     let dir = std::env::var("LUYAZ_HOTPLUG_DIR").unwrap_or_else(|_| "/etc/hotplug.d/iface".into());
-    power_save_apply(std::path::Path::new(&dir), &iw_bin(), enabled).await
+    power_save_apply(std::path::Path::new(&dir), &iw_bin(), enabled, || {
+        let up = luyaz_wifi::psm::main_up();
+        let idle = !up.contains(&true)
+            && crate::state::wifi_map_sync().is_some_and(|cfg| {
+                luyaz_wifi::layout::running(&cfg).is_empty()
+                    && luyaz_wifi::settled_layout(&cfg) == Some(true)
+            });
+        (up, idle)
+    })
+    .await
 }
 
 const PSM_IFACES: [&str; 4] = ["wlan0", "wlan1", "wlan2", "wlan3"];
@@ -1254,13 +1263,19 @@ fn psm_script(enabled: bool) -> String {
     s
 }
 
-async fn power_save_apply(dir: &std::path::Path, iw: &str, enabled: bool) -> Outcome {
+async fn power_save_apply(
+    dir: &std::path::Path,
+    iw: &str,
+    enabled: bool,
+    wifi_runtime: impl FnOnce() -> ([bool; 2], bool) + Send + 'static,
+) -> Outcome {
+    use luyaz_wifi::psm;
     use std::os::unix::fs::PermissionsExt;
     // u60d (current_thread, E2 item 2): the file writes go to the blocking pool, same order
     let d = dir.to_owned();
     let saved = crate::state::blocking(move || {
         let dir = d.as_path();
-        let file = dir.join("99-disable-powersave");
+        let file = dir.join(psm::HOTPLUG_FILE);
         let tmp = dir.join(".99-disable-powersave.tmp");
         let saved = std::fs::create_dir_all(dir)
             .and_then(|_| std::fs::write(&tmp, psm_script(enabled)))
@@ -1272,12 +1287,13 @@ async fn power_save_apply(dir: &std::path::Path, iw: &str, enabled: bool) -> Out
             // 很早的触屏版本写过的另一份，留着会和这份打架
             let _ = std::fs::remove_file(dir.join("psm"));
         }
-        saved
+        saved.map(|()| file)
     })
     .await;
-    if let Err(e) = saved {
-        return Outcome::Failed(format!("could not save Wi-Fi power save: {e}"));
-    }
+    let file = match saved {
+        Ok(file) => file,
+        Err(e) => return Outcome::Failed(format!("could not save Wi-Fi power save: {e}")),
+    };
     let m = if enabled { "on" } else { "off" };
     for w in PSM_IFACES {
         // 关着的接口会报错，照旧忽略：下次 ifup 由脚本套用
@@ -1288,29 +1304,34 @@ async fn power_save_apply(dir: &std::path::Path, iw: &str, enabled: bool) -> Out
         )
         .await;
     }
-    let mut live = None;
-    for w in ["wlan0", "wlan2"] {
-        if let Ok(out) =
-            crate::command::run(iw, ["dev", w, "get", "power_save"], Duration::from_secs(3)).await
-        {
-            let out = String::from_utf8_lossy(&out);
-            if out.contains("Power save: on") {
-                live = Some(true);
-            } else if out.contains("Power save: off") {
-                live = Some(false);
-            }
-            if live.is_some() {
-                break;
-            }
+    let (up, idle) = crate::state::blocking(wifi_runtime).await;
+    let mut applied = idle || up.contains(&true);
+    let mut mismatch = false;
+    for (w, up) in psm::MAIN_IFACES.into_iter().zip(up) {
+        if !up {
+            continue;
         }
+        let live = crate::command::run(iw, ["dev", w, "get", "power_save"], Duration::from_secs(3))
+            .await
+            .ok()
+            .and_then(|out| psm::from_iw(&String::from_utf8_lossy(&out)));
+        applied &= live == Some(enabled);
+        mismatch |= live.is_some_and(|v| v != enabled);
     }
-    match live {
-        Some(v) if v != enabled => Outcome::Failed(format!(
-            "Wi-Fi power save still {}",
-            if v { "on" } else { "off" }
-        )),
-        _ => Outcome::Ok(json!({"enabled": enabled, "saved": true, "live": live})),
+    let saved = crate::state::blocking(move || std::fs::read_to_string(file).ok())
+        .await
+        .and_then(|text| psm::from_hotplug(&text));
+    if saved != Some(enabled) {
+        return Outcome::Failed("Wi-Fi power save was not saved".into());
     }
+    if mismatch {
+        return Outcome::Failed("Wi-Fi power save saved, but not active".into());
+    }
+    if !applied {
+        return Outcome::Failed("Wi-Fi power save saved, but driver state is unknown".into());
+    }
+    let live = (!idle).then_some(enabled);
+    Outcome::Ok(json!({"enabled": enabled, "saved": true, "live": live}))
 }
 
 /// 原厂 `zwrt_wms_delete_sms` 删不掉存在 SIM 里的短信（回 result 3，不删），列表又是从
@@ -1529,7 +1550,7 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&iw, std::fs::Permissions::from_mode(0o755)).unwrap();
         let hp = d.join("hotplug");
-        let out = power_save_apply(&hp, iw.to_str().unwrap(), false).await;
+        let out = power_save_apply(&hp, iw.to_str().unwrap(), false, || ([false, true], false)).await;
         assert!(
             matches!(&out, Outcome::Ok(v) if v["live"] == json!(false)),
             "{out:?}"
@@ -1554,14 +1575,18 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(matches!(
-            power_save_apply(&hp, stuck.to_str().unwrap(), false).await,
-            Outcome::Failed(_)
+            power_save_apply(&hp, stuck.to_str().unwrap(), false, || ([true, true], false)).await,
+            Outcome::Failed(e) if e == "Wi-Fi power save saved, but not active"
         ));
         // Wi-Fi 关着读不到：存了就算，live 为空
         let none = d.join("iw-none");
         std::fs::write(&none, "#!/bin/sh\nexit 1\n").unwrap();
         std::fs::set_permissions(&none, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let out = power_save_apply(&hp, none.to_str().unwrap(), true).await;
+        assert!(matches!(
+            power_save_apply(&hp, none.to_str().unwrap(), true, || ([false, true], false)).await,
+            Outcome::Failed(e) if e.contains("driver state is unknown")
+        ));
+        let out = power_save_apply(&hp, none.to_str().unwrap(), true, || ([false, false], true)).await;
         assert!(
             matches!(&out, Outcome::Ok(v) if v["live"].is_null() && v["enabled"] == json!(true)),
             "{out:?}"

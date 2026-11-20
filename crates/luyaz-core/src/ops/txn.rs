@@ -906,19 +906,19 @@ impl Txn {
                             DataJudge::NotYet => {}
                         }
                     }
-                } else if *v == self.old {
+                } else if self.matches_previous(&self.old, v) {
                     // R3：对上过又回到旧值是带外改回；从没对上过、写又报了错，就是没写进去。
-                    if self.ever_matched {
+                    if self.ever_matched && !(self.confirm == Confirm::Wifi && !r.registered) {
                         return self.finish(Phase::Cancelled, Reason::ManualChange);
                     }
                     if self.apply_failed {
                         return self.finish(Phase::NotApplied, Reason::Ignored);
                     }
-                } else if !blank(v) && !self.transient_values() {
+                } else if !blank(v) && !self.transient_values(r.registered) {
                     // R3：既不是旧值也不是目标值的第三个值。
                     return self.finish(Phase::Cancelled, Reason::ManualChange);
                 }
-            } else if *v == self.rollback_to {
+            } else if self.matches_previous(&self.rollback_to, v) {
                 // CHILL：值回去了就算退回完成（mihomo 可能正被闲置暂停停着，原值本来也未必测得通）
                 if self.confirm == Confirm::Chill
                     || (r.registered && self.data_judge(r) != DataJudge::NotYet)
@@ -926,17 +926,26 @@ impl Txn {
                     let why = self.rollback_reason.unwrap_or(Reason::Timeout);
                     return self.finish(Phase::RolledBack, why);
                 }
-            } else if !matches(&self.target, v) && !blank(v) && !self.transient_values() {
+            } else if !matches(&self.target, v) && !blank(v) && !self.transient_values(r.registered) {
                 return self.finish(Phase::Cancelled, Reason::ManualChange);
             }
         }
         self.on_tick(now)
     }
 
-    /// 切换中途会读到第三个值的项（双卡：旗标先变、主卡后换，`{dual, 旧槽}` 会停几秒）：
-    /// 第三个值只当「还没到」，到点照时限处理，不算人改的。代价：这期间真有人在原厂页面改了也会被退回。
-    fn transient_values(&self) -> bool {
-        self.item == super::spec::DUAL_SIM
+    /// Wi-Fi records from older Core versions do not contain all of today's fields.
+    fn matches_previous(&self, saved: &Value, actual: &Value) -> bool {
+        if self.confirm == Confirm::Wifi {
+            !blank(saved) && matches(saved, actual)
+        } else {
+            saved == actual
+        }
+    }
+
+    /// SIM may change its flag before its slot. Wi-Fi may update its two switches and band
+    /// flags in separate steps while the device executor is still verifying the layout.
+    fn transient_values(&self, registered: bool) -> bool {
+        self.item == super::spec::DUAL_SIM || (self.confirm == Confirm::Wifi && !registered)
     }
 
     /// 这一拍没拿到读数（读失败）：只看时限。
@@ -966,12 +975,12 @@ impl Txn {
         if self.phase == Phase::RollingBack {
             return self.finish(Phase::RollbackFailed, Reason::RollbackTimeout);
         }
-        // 双卡这类会停在半路的：最后的读回已经不是旧值，说明改了一半，照样退回
-        let half_way = self.transient_values()
+        // 双卡、Wi-Fi 切换停在半路也可能需要退回。
+        let half_way = self.transient_values(self.registered)
             && self
                 .readback
                 .as_ref()
-                .is_some_and(|v| *v != self.old && !blank(v));
+                .is_some_and(|v| !self.matches_previous(&self.old, v) && !blank(v));
         if self.read_ok && !self.ever_matched && !half_way {
             return self.finish(Phase::NotApplied, Reason::Ignored);
         }

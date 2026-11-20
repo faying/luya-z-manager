@@ -271,6 +271,9 @@ fn config_routes_validate_and_persist() {
 fn the_run_loop_beats_and_stops_once_taken_back() {
     struct Stopping(Arc<Fake>, std::sync::atomic::AtomicU32);
     impl luyaz_wifi::Host for Stopping {
+        fn wireless(&self) -> Option<luyaz_wifi::layout::Uci> {
+            luyaz_wifi::Host::wireless(&*self.0)
+        }
         fn uci_get(&self, key: &str) -> Option<String> {
             luyaz_wifi::Host::uci_get(&*self.0, key)
         }

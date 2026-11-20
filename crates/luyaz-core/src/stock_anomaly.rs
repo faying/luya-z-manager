@@ -1,4 +1,4 @@
-//! Stock-firmware anomalies (R18-P2-01; docs/designs/stock-anomaly-recovery.md).
+//! Stock-firmware anomalies and recovery.
 //!
 //! Two checks, both riding the usage log's minute tick (no poller of their own):
 //!
@@ -8,7 +8,8 @@
 //!   over [`WIFI_MIN_AGE`] s **and** the two counts differ, two ticks in a row; close when it
 //!   exits or the counts meet. Opening queues `wifi-post-stuck`. On the verified stock script,
 //!   an orphan still spinning with the module, radios and mesh all off can be terminated once
-//!   the kernel confirms that there are no Wi-Fi interfaces left to configure.
+//!   the kernel confirms that there are no Wi-Fi interfaces left to configure. With one radio
+//!   off and all effective APs already served, run the verified stock post steps before stopping it.
 //! - **B `no_service`:** every loss of registration is one ledger row (start, end, length and
 //!   which stock recovery was seen meanwhile: radio mode change → `lpm_cycle`, SIM identity
 //!   epoch → `sim_reset`, only the data connection epoch → `redial`, none → `unknown`). SSR and
@@ -23,9 +24,12 @@
 //!
 //! Neither kind is sent as an SMS (owner 10-23: inbox and MCP only while false alarms are watched).
 
+use luyaz_wifi::layout::{self, Uci};
 use serde_json::{Value, json};
 use std::path::Path;
+use std::process::Command;
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 /// Script age (s) before a count mismatch counts; a normal run ends in about 5 s.
 pub const WIFI_MIN_AGE: u64 = 30;
@@ -113,21 +117,13 @@ impl WifiWatch {
     }
 }
 
-/// Enabled `main*`/`guest*` `wifi-iface` sections, as the script counts them (disabled ≠ 1).
-pub fn enabled_aps(pkg: &crate::uci::Package) -> Vec<String> {
-    pkg.sections
-        .iter()
-        .filter_map(|s| {
-            let name = String::from_utf8_lossy(s.name.as_deref()?).into_owned();
-            if !(name.starts_with("main") || name.starts_with("guest")) {
-                return None;
-            }
-            let off = s.options.iter().any(|(k, v)| {
-                k == b"disabled" && matches!(v, crate::uci::Value::Str(x) if x == b"1")
-            });
-            (!off).then_some(name)
-        })
-        .collect()
+/// The signed script counts explicitly enabled main/guest flags without consulting the radios.
+fn enabled_aps(cfg: &Uci) -> impl Iterator<Item = &str> {
+    cfg.iter().filter_map(|(key, value)| {
+        let section = key.strip_prefix("wireless.")?.strip_suffix(".disabled")?;
+        (value == "0" && (section.starts_with("main") || section.starts_with("guest")))
+            .then_some(section)
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,21 +216,77 @@ fn scan_proc(proc: &Path) -> (Option<PostWifiProc>, Vec<String>) {
     (script, clis)
 }
 
-fn wifi_module_off(pkg: &crate::uci::Package) -> bool {
-    use crate::uci::get;
-    ["wifi_onoff", "wifi_onoff_by_user", "mesh_onoff"]
-        .iter()
-        .all(|key| get(pkg, "zte_mbb", key).as_deref() == Some(b"0"))
-        && ["wifi0", "wifi1"]
-            .iter()
-            .all(|radio| get(pkg, radio, "disabled").as_deref() == Some(b"1"))
+fn flag<'a>(cfg: &'a Uci, key: &str) -> Option<&'a str> {
+    cfg.get(key).map(String::as_str)
+}
+
+fn off_layout(cfg: &Uci) -> bool {
+    [
+        "wireless.zte_mbb.wifi_onoff",
+        "wireless.zte_mbb.wifi_onoff_by_user",
+        "wireless.zte_mbb.mesh_onoff",
+    ]
+    .into_iter()
+    .all(|key| flag(cfg, key) == Some("0"))
+        && ["wireless.wifi0.disabled", "wireless.wifi1.disabled"]
+            .into_iter()
+            .all(|key| flag(cfg, key) == Some("1"))
+}
+
+fn active_ifnames(cfg: &Uci, enabled: usize, clis: &[String]) -> Option<Vec<String>> {
+    if flag(cfg, "wireless.zte_mbb.wifi_onoff") != Some("1")
+        || flag(cfg, "wireless.zte_mbb.mesh_onoff") != Some("0")
+    {
+        return None;
+    }
+    let main = match (flag(cfg, "wireless.wifi0.disabled"), flag(cfg, "wireless.wifi1.disabled")) {
+        (Some("1"), Some("0")) => "main_5g",
+        (Some("0"), Some("1")) => "main_2g",
+        _ => return None,
+    };
+    let effective = layout::running(cfg);
+    if enabled <= effective.len() || !effective.contains(&main) {
+        return None;
+    }
+    let mut names = Vec::with_capacity(effective.len());
+    for section in effective {
+        let name = layout::ifname(cfg, section)?;
+        // The vendor's watcher and post steps address the explicitly configured interface.
+        if flag(cfg, &format!("wireless.{section}.ifname")) != Some(name)
+            || flag(cfg, &format!("wireless.{section}.mode")) != Some("ap")
+        {
+            return None;
+        }
+        names.push(name.to_owned());
+    }
+    names.sort_unstable();
+    (names == clis).then_some(names)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecoveryKind {
+    Off,
+    Active,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Recovery {
+    post: PostWifiProc,
+    kind: RecoveryKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecoveryResult {
+    Deferred,
+    Attempted,
+    Stopped,
 }
 
 #[derive(Default)]
 struct WifiCleanup {
-    first: Option<(PostWifiProc, u64)>,
+    first: Option<(Recovery, u64)>,
     attempting: bool,
-    signalled: Vec<(i32, u64)>,
+    handled: Vec<(i32, u64)>,
 }
 
 impl WifiCleanup {
@@ -242,43 +294,51 @@ impl WifiCleanup {
         &mut self,
         post: Option<PostWifiProc>,
         probe: &WifiProbe,
-        pkg: Option<&crate::uci::Package>,
+        cfg: Option<&Uci>,
         up: u64,
-    ) -> Option<PostWifiProc> {
-        let Some(post) = post.filter(|p| {
-            p.parent_pid == 1
-                && probe.clis.is_empty()
-                && probe.enabled.as_ref().is_some_and(|aps| !aps.is_empty())
-                && pkg.is_some_and(wifi_module_off)
-                && !self.signalled.contains(&p.id())
-        }) else {
+    ) -> Option<Recovery> {
+        if self.attempting {
+            return None;
+        }
+        let candidate = || {
+            let post = post.filter(|p| p.parent_pid == 1 && !self.handled.contains(&p.id()))?;
+            let cfg = cfg?;
+            let enabled = probe.enabled.as_ref()?.len();
+            if enabled > 0 && probe.clis.is_empty() && off_layout(cfg) {
+                Some(Recovery { post, kind: RecoveryKind::Off })
+            } else {
+                active_ifnames(cfg, enabled, &probe.clis)?;
+                Some(Recovery { post, kind: RecoveryKind::Active })
+            }
+        };
+        let Some(target) = candidate() else {
             self.first = None;
             return None;
         };
-        let Some((first, since)) = self.first.filter(|(p, _)| p.id() == post.id()) else {
-            self.first = Some((post, up));
+        let post = target.post;
+        let Some((first, since)) = self.first.filter(|(p, _)| p.post.id() == post.id() && p.kind == target.kind) else {
+            self.first = Some((target, up));
             return None;
         };
         let elapsed = up.checked_sub(since)?;
         if elapsed < CLEANUP_WINDOW
             || up.saturating_sub(post.start_ticks / USER_HZ) < CLEANUP_MIN_AGE
-            || self.attempting
         {
             return None;
         }
         // An attempt or an interval below the CPU threshold both start a new sample window.
-        self.first = Some((post, up));
-        if post.cpu_ticks.saturating_sub(first.cpu_ticks) < elapsed.saturating_mul(USER_HZ / 2) {
+        self.first = Some((target, up));
+        if post.cpu_ticks.saturating_sub(first.post.cpu_ticks) < elapsed.saturating_mul(USER_HZ / 2) {
             return None;
         }
         self.attempting = true;
-        Some(post)
+        Some(target)
     }
 
-    fn finish(&mut self, post: PostWifiProc, sent: bool) {
+    fn finish(&mut self, target: Recovery, result: RecoveryResult) {
         self.attempting = false;
-        if sent {
-            self.signalled.push(post.id());
+        if result != RecoveryResult::Deferred {
+            self.handled.push(target.post.id());
         }
     }
 }
@@ -487,32 +547,63 @@ fn live_of(slot: &mut Option<Live>) -> &mut Live {
     })
 }
 
-/// Step check A and claim any cleanup attempt while holding LIVE.
-fn wifi_check(l: &mut Live, up: u64) -> Option<PostWifiProc> {
+fn wifi_sample(up: u64) -> (Option<PostWifiProc>, WifiProbe, Option<Uci>, Option<u64>) {
     let proc = crate::state::host_path("/proc");
     let (post, clis) = scan_proc(Path::new(&proc));
     let script = post.map(|p| (p.start_ticks, up.saturating_sub(p.start_ticks / USER_HZ)));
-    let wireless = post.and_then(|_| crate::state::uci_parsed("wireless"));
+    let wireless = post.and_then(|_| crate::state::wifi_map_sync());
     let fk = std::fs::read_to_string(format!("{proc}/stat"))
         .ok()
         .and_then(|s| forks(&s));
+    let probe = WifiProbe {
+        script,
+        enabled: wireless.as_ref().map(|cfg| enabled_aps(cfg).map(str::to_owned).collect()),
+        clis,
+        forks_per_s: None,
+    };
+    (post, probe, wireless, fk)
+}
 
-    let forks_per_s = match (l.forks, fk) {
+fn sample_forks(l: &mut Live, probe: &mut WifiProbe, up: u64, fk: Option<u64>) {
+    probe.forks_per_s = match (l.forks, fk) {
         (Some((u0, f0)), Some(f)) if up > u0 => {
             Some((f.saturating_sub(f0)) as f64 / (up - u0) as f64)
         }
         _ => None,
     };
-    if let Some(f) = fk {
+    if let Some(f) = fk && l.forks.is_none_or(|(u0, _)| up >= u0) {
         l.forks = Some((up, f));
     }
-    let probe = WifiProbe {
-        script,
-        enabled: wireless.as_ref().map(enabled_aps),
-        clis,
-        forks_per_s,
+}
+
+/// The minute tick and event watcher share one claim. All device I/O runs outside LIVE.
+fn wifi_check(up: u64) {
+    let (post, mut probe, wireless, fk) = wifi_sample(up);
+    let (edge, recovery) = {
+        let mut slot = live();
+        let l = live_of(&mut slot);
+        if l.wifi_cleanup.attempting || l.forks.is_some_and(|(u0, _)| up < u0) {
+            return;
+        }
+        sample_forks(l, &mut probe, up, fk);
+        let recovery = l.wifi_cleanup.observe(post, &probe, wireless.as_ref(), up);
+        (l.wifi.step(&probe), recovery)
     };
-    if let Edge::Opened(s) = l.wifi.step(&probe) {
+    if let Some(target) = recovery {
+        let result = signal_stale_wifi_post(target);
+        if result == RecoveryResult::Stopped {
+            let now = uptime();
+            let (_, mut fresh, _, fk) = wifi_sample(now);
+            let mut slot = live();
+            let l = live_of(&mut slot);
+            l.wifi_cleanup.finish(target, result);
+            sample_forks(l, &mut fresh, now, fk);
+            l.wifi.step(&fresh);
+            return;
+        }
+        live_of(&mut live()).wifi_cleanup.finish(target, result);
+    }
+    if let Edge::Opened(s) = edge {
         raise(
             s,
             WIFI_STUCK,
@@ -525,89 +616,184 @@ fn wifi_check(l: &mut Live, up: u64) -> Option<PostWifiProc> {
             up,
         );
     }
-    l.wifi_cleanup.observe(post, &probe, wireless.as_ref(), up)
 }
 
 fn no_wifi_interfaces(success: bool, stdout: &[u8]) -> bool {
     success && stdout.iter().all(u8::is_ascii_whitespace)
 }
 
-fn signal_stale_wifi_post(post: PostWifiProc) -> bool {
+const STOCK_SHA: [u8; 32] = [
+    0x6c, 0x92, 0x3d, 0x29, 0x85, 0x4f, 0xa7, 0xa5, 0x03, 0x77, 0xb2, 0xef, 0x60, 0xaa,
+    0x79, 0x68, 0x4f, 0xe4, 0x34, 0x54, 0xd2, 0x2c, 0xe7, 0xf0, 0x2f, 0x12, 0xda, 0x6d,
+    0xea, 0xaf, 0xfb, 0x75,
+];
+const POST_BOUNDARY: &str = "\necho \"zte_post_wifi $LINENO: sleep 3s and go on...\" > /dev/kmsg\n";
+const POST_COMPLETE: &str = "luyaz-stock-wifi-post-complete";
+
+fn verified_stock(script: &[u8], digest: &[u8; 32]) -> bool {
     use sha2::{Digest, Sha256};
+    Sha256::digest(script)[..] == digest[..]
+}
+
+fn post_functions(script: &str) -> Option<&str> {
+    let (definitions, rest) = script.split_once(POST_BOUNDARY)?;
+    (!rest.contains(POST_BOUNDARY)).then_some(definitions)
+}
+
+fn replay_post(definitions: &str, limit: Duration, stop: impl FnOnce() -> bool) -> RecoveryResult {
+    // Preserve the stock sequence. Its function statuses are not a success contract (e.g. the
+    // txpower loop can end on a disabled radio). Redirection also covers its background DFS helper.
+    let command = format!(
+        "{definitions}\n{{\nhandle_macfilter_at_post\nzte_post_txpower\n}} >/dev/null 2>&1\nprintf '%s\\n' '{POST_COMPLETE}'\n"
+    );
+    let result = luyaz_wifi::output_within(Command::new("/bin/sh").args(["-c", &command]), limit);
+    match result {
+        Ok(out) if out.status.success() && out.stdout.trim_ascii() == POST_COMPLETE.as_bytes() => {
+            if stop() { RecoveryResult::Stopped } else { RecoveryResult::Attempted }
+        }
+        Ok(_) => RecoveryResult::Attempted,
+        Err(e) => {
+            eprintln!("[stock_anomaly] stock Wi-Fi post steps: {e}");
+            RecoveryResult::Attempted
+        }
+    }
+}
+
+fn only_expected_aps(iw: &str, expected: &[String], down: impl Fn(&str) -> bool) -> bool {
+    let mut current = None;
+    let mut seen = 0;
+    for line in iw.lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix("Interface ") {
+            current = Some(name);
+        } else if line.starts_with("phy#") {
+            current = None;
+        } else if line == "type AP" {
+            let Some(name) = current.take() else { return false };
+            if expected.iter().any(|ap| ap == name) {
+                seen += 1;
+            } else if !down(name) {
+                return false;
+            }
+        }
+    }
+    seen == expected.len()
+}
+
+fn proc_matches(proc: &Path, post: PostWifiProc) -> bool {
+    let path = proc.join(post.pid.to_string());
+    std::fs::read(path.join("cmdline")).is_ok_and(|cmd| is_post_wifi(&cmd))
+        && std::fs::read_to_string(path.join("stat"))
+            .ok()
+            .and_then(|s| PostWifiProc::parse(post.pid, &s))
+            .is_some_and(|p| p.id() == post.id() && p.parent_pid == 1)
+}
+
+/// Take a fresh layout and process sample with the Wi-Fi lock held.
+fn recovery_layout(target: Recovery) -> Option<Vec<String>> {
+    let cfg = crate::state::wifi_map_sync()?;
+    let (post, clis) = scan_proc(Path::new("/proc"));
+    if post.is_none_or(|p| p.id() != target.post.id() || p.parent_pid != 1) {
+        return None;
+    }
+    let enabled = enabled_aps(&cfg).count();
+    let names = match target.kind {
+        RecoveryKind::Off if enabled != 0 && clis.is_empty() && off_layout(&cfg) => Vec::new(),
+        RecoveryKind::Off => return None,
+        RecoveryKind::Active => active_ifnames(&cfg, enabled, &clis)?,
+    };
+    if luyaz_wifi::settled_layout(&cfg) != Some(true) {
+        return None;
+    }
+    let iw = luyaz_wifi::output_within(Command::new("iw").arg("dev"), Duration::from_secs(2)).ok()?;
+    let ready = if names.is_empty() {
+        no_wifi_interfaces(iw.status.success(), &iw.stdout)
+    } else {
+        iw.status.success() && only_expected_aps(std::str::from_utf8(&iw.stdout).ok()?, &names, |ifname| {
+            ifname != "." && ifname != ".." && !ifname.contains('/')
+                && std::fs::read(format!("/sys/class/net/{ifname}/operstate"))
+                    .is_ok_and(|state| state.trim_ascii() == b"down")
+        })
+    };
+    ready.then_some(names)
+}
+
+fn with_wifi_lock(path: &str, recover: impl FnOnce() -> RecoveryResult) -> RecoveryResult {
+    let Ok(Some(_lock)) = crate::ops::wifi_lock::try_take(path) else {
+        return RecoveryResult::Deferred;
+    };
+    recover()
+}
+
+fn signal_stale_wifi_post(target: Recovery) -> RecoveryResult {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-    use std::{fs, process::Command, time::Duration};
+    use RecoveryResult::{Attempted, Deferred, Stopped};
 
     if !cfg!(all(target_os = "linux", target_arch = "aarch64"))
         || crate::state::host_path("/proc") != "/proc"
     {
-        return false;
+        return Deferred;
     }
-    let Ok(script) = fs::read(WIFI_SCRIPT) else {
-        return false;
+    let Ok(script) = std::fs::read(WIFI_SCRIPT) else {
+        return Deferred;
     };
-    const STOCK_SHA: [u8; 32] = [
-        0x6c, 0x92, 0x3d, 0x29, 0x85, 0x4f, 0xa7, 0xa5, 0x03, 0x77, 0xb2, 0xef, 0x60, 0xaa,
-        0x79, 0x68, 0x4f, 0xe4, 0x34, 0x54, 0xd2, 0x2c, 0xe7, 0xf0, 0x2f, 0x12, 0xda, 0x6d,
-        0xea, 0xaf, 0xfb, 0x75,
-    ];
-    if Sha256::digest(&script)[..] != STOCK_SHA {
-        return false;
+    if !verified_stock(&script, &STOCK_SHA) {
+        return Deferred;
     }
-
-    use crate::ops::wifi_lock;
-    let cfg = wifi_lock::Cfg::from_env();
-    let Some(path) = cfg.path else { return false };
-    let Ok(Some(_lock)) = wifi_lock::try_take(&path) else {
-        return false;
-    };
-    let Ok(iw) = luyaz_wifi::output_within(Command::new("iw").arg("dev"), Duration::from_secs(2))
-    else {
-        return false;
-    };
-    if !no_wifi_interfaces(iw.status.success(), &iw.stdout) {
-        return false;
+    let definitions = std::str::from_utf8(&script).ok().and_then(post_functions);
+    if target.kind == RecoveryKind::Active && definitions.is_none() {
+        return Deferred;
     }
-
-    // SAFETY: the syscall takes scalar arguments and returns a fresh fd on success.
-    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, post.pid, 0) };
-    if fd < 0 {
-        return false;
-    }
-    // SAFETY: ownership of the successfully opened fd stays here until drop.
-    let fd = unsafe { OwnedFd::from_raw_fd(fd as i32) };
-    let proc = format!("/proc/{}", post.pid);
-    if !fs::read(format!("{proc}/cmdline")).is_ok_and(|cmd| is_post_wifi(&cmd))
-        || !fs::read_to_string(format!("{proc}/stat"))
-            .ok()
-            .and_then(|s| PostWifiProc::parse(post.pid, &s))
-            .is_some_and(|current| current.id() == post.id() && current.parent_pid == 1)
-        || !crate::state::uci_parsed("wireless").is_some_and(|pkg| wifi_module_off(&pkg))
-    {
-        return false;
-    }
-
-    // SAFETY: fd pins the rechecked process identity through signal delivery.
-    (unsafe {
-        libc::syscall(
-            libc::SYS_pidfd_send_signal,
-            fd.as_raw_fd(),
-            libc::SIGTERM,
-            std::ptr::null::<libc::siginfo_t>(),
-            0,
-        )
-    }) == 0
-}
-
-fn try_wifi_cleanup(post: Option<PostWifiProc>) {
-    let Some(post) = post else { return };
-    let sent = signal_stale_wifi_post(post);
-    if sent {
-        eprintln!(
-            "[stock_anomaly] signalled stale Wi-Fi post script pid={}",
-            post.pid
-        );
-    }
-    live_of(&mut live()).wifi_cleanup.finish(post, sent);
+    let Some(path) = crate::ops::wifi_lock::Cfg::from_env().path else { return Deferred };
+    with_wifi_lock(&path, || {
+        let post = target.post;
+        // SAFETY: the syscall takes scalar arguments and returns a fresh fd on success.
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, post.pid, 0) };
+        if fd < 0 {
+            return Deferred;
+        }
+        // SAFETY: this scope owns the descriptor from pidfd_open.
+        let fd = unsafe { OwnedFd::from_raw_fd(fd as i32) };
+        let proc = Path::new("/proc");
+        if !proc_matches(proc, post) {
+            return Deferred;
+        }
+        let Some(names) = recovery_layout(target) else { return Deferred };
+        if !proc_matches(proc, post) {
+            return Deferred;
+        }
+        let stop = || {
+            if !proc_matches(proc, post) {
+                return false;
+            }
+            // SAFETY: fd pins the matching process identity through signal delivery.
+            let sent = unsafe {
+                libc::syscall(libc::SYS_pidfd_send_signal, fd.as_raw_fd(), libc::SIGTERM, std::ptr::null::<libc::siginfo_t>(), 0)
+            } == 0;
+            let mut p = libc::pollfd { fd: fd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            // SAFETY: poll borrows one initialized record for up to one second.
+            sent && unsafe { libc::poll(&mut p, 1, 1000) } == 1 && p.revents & libc::POLLIN != 0
+        };
+        let result = match target.kind {
+            RecoveryKind::Off if stop() => Stopped,
+            RecoveryKind::Off => Deferred,
+            RecoveryKind::Active => replay_post(definitions.unwrap(), Duration::from_secs(20), || {
+                recovery_layout(target).is_some_and(|fresh| fresh == names) && stop()
+            }),
+        };
+        match (target.kind, result) {
+            (RecoveryKind::Active, Stopped) => eprintln!(
+                "[stock_anomaly] completed stock Wi-Fi post steps and stopped stale pid={}", post.pid
+            ),
+            (RecoveryKind::Active, Attempted) => eprintln!(
+                "[stock_anomaly] stock Wi-Fi post recovery unconfirmed pid={}", post.pid
+            ),
+            (RecoveryKind::Off, Stopped) => eprintln!(
+                "[stock_anomaly] signalled stale Wi-Fi post script pid={}", post.pid
+            ),
+            _ => (),
+        }
+        result
+    })
 }
 
 /// One minute tick, from the usage log with the snapshot's fields.
@@ -619,10 +805,14 @@ pub fn tick(fields: Option<&serde_json::Map<String, Value>>, wall: i64) {
         .map(str::trim)
         .filter(|t| !t.is_empty())
         .map(crate::ops::registered);
-    let mut live = live();
-    let l = live_of(&mut live);
-    let post = wifi_check(l, up);
-    let t = l.ledger.step(registered, &g, up, wall);
+    let t = {
+        let mut slot = live();
+        let l = live_of(&mut slot);
+        let t = l.ledger.step(registered, &g, up, wall);
+        l.gens = g;
+        l.up = up;
+        t
+    };
     if let Some(row) = &t.row {
         save_row(row);
     }
@@ -637,10 +827,7 @@ pub fn tick(fields: Option<&serde_json::Map<String, Value>>, wall: i64) {
             up,
         );
     }
-    l.gens = g;
-    l.up = up;
-    drop(live);
-    try_wifi_cleanup(post);
+    wifi_check(up);
 }
 
 pub const WIFI_SCRIPT: &str = "/sbin/zte_post_wifi.sh";
@@ -679,9 +866,7 @@ pub fn spawn_wifi_watch() {
                 }
                 for wait in [WATCH_FIRST, WATCH_AGAIN] {
                     std::thread::sleep(std::time::Duration::from_secs(wait));
-                    let up = uptime();
-                    let post = wifi_check(live_of(&mut live()), up);
-                    try_wifi_cleanup(post);
+                    wifi_check(uptime());
                 }
                 // opens while we waited belong to the run just looked at (or a later one the
                 // minute tick sees): drop them, then wait for the next start
@@ -780,13 +965,21 @@ mod tests {
         assert_eq!(w.step(&probe(160, 1, 0)), Edge::Opened(1000));
     }
 
+    fn config(text: &str) -> Uci {
+        let pkg = crate::uci::parse(text.as_bytes()).unwrap();
+        crate::state::uci_show_map(&crate::uci::render_show("wireless", &pkg))
+    }
+
     #[test]
-    fn enabled_aps_counts_main_and_guest_not_disabled() {
-        let pkg = crate::uci::parse(
-            b"config wifi-iface 'main_2g'\n\toption disabled '0'\nconfig wifi-iface 'main_5g'\n\toption disabled '1'\nconfig wifi-iface 'guest_2g'\nconfig wifi-device 'wifi0'\nconfig wifi-iface 'mesh'\n",
-        )
-        .unwrap();
-        assert_eq!(enabled_aps(&pkg), ["main_2g", "guest_2g"]);
+    fn enabled_aps_counts_only_explicit_zero_flags() {
+        let cfg = config(
+            "config wifi-iface 'main_2g'\noption disabled '0'\n\
+             config wifi-iface 'main_5g'\noption disabled '1'\n\
+             config wifi-iface 'guest_2g'\n\
+             config wifi-iface 'guest_5g'\noption disabled '0'\n\
+             config wifi-iface 'mesh'\noption disabled '0'\n",
+        );
+        assert_eq!(enabled_aps(&cfg).collect::<Vec<_>>(), ["guest_5g", "main_2g"]);
     }
 
     fn proc_fixture(tag: &str) -> std::path::PathBuf {
@@ -855,7 +1048,7 @@ mod tests {
             config wifi-device 'wifi0'\noption disabled '1'\n\
             config wifi-device 'wifi1'\noption disabled '1'\n\
             config wifi-iface 'main_2g'\noption disabled '0'\n";
-        let off = crate::uci::parse(wireless.as_bytes()).unwrap();
+        let off = config(wireless);
         let off_probe = probe(90, 1, 0);
         let no_aps = probe(90, 0, 0);
         let matched = probe(90, 1, 1);
@@ -886,7 +1079,7 @@ mod tests {
             ("wifi1'\noption disabled '1'", "wifi1'\noption disabled '0'"),
         ] {
             let mut w = WifiCleanup::default();
-            let on = crate::uci::parse(wireless.replace(old, new).as_bytes()).unwrap();
+            let on = config(&wireless.replace(old, new));
             assert_eq!(w.observe(first, &off_probe, Some(&off), 100), None);
             assert_eq!(w.observe(spinning, &off_probe, Some(&on), 130), None, "{new}");
             assert_eq!(w.observe(spinning, &off_probe, Some(&off), 131), None);
@@ -902,11 +1095,108 @@ mod tests {
         let claimed = w.observe(spinning, &off_probe, Some(&off), 130).unwrap();
         let later = spinning.map(|p| PostWifiProc { cpu_ticks: p.cpu_ticks + 1500, ..p });
         assert_eq!(w.observe(later, &off_probe, Some(&off), 160), None);
-        w.finish(claimed, false);
+        w.finish(claimed, RecoveryResult::Deferred);
         assert_eq!(w.observe(later, &off_probe, Some(&off), 159), None);
         let retry = w.observe(later, &off_probe, Some(&off), 160).unwrap();
-        w.finish(retry, true);
+        w.finish(retry, RecoveryResult::Stopped);
         assert_eq!(w.observe(later, &off_probe, Some(&off), 200), None);
+    }
+
+    fn single_band() -> Uci {
+        config(
+            "config device 'zte_mbb'\noption wifi_onoff '1'\noption mesh_onoff '0'\n\
+             config wifi-device 'wifi0'\noption disabled '1'\n\
+             config wifi-device 'wifi1'\noption disabled '0'\n\
+             config wifi-iface 'main_2g'\noption disabled '0'\noption ifname 'wlan0'\noption mode 'ap'\n\
+             config wifi-iface 'main_5g'\noption disabled '0'\noption ifname 'wlan2'\noption mode 'ap'\n",
+        )
+    }
+
+    #[test]
+    fn active_cleanup_matches_the_exact_watcher_and_live_interface_set() {
+        let mut cfg = single_band();
+        let watcher = ["wlan2".into()];
+        assert_eq!(active_ifnames(&cfg, 2, &watcher).as_deref(), Some(watcher.as_slice()));
+        assert!(active_ifnames(&cfg, 2, &["wlan0".into()]).is_none());
+        assert!(active_ifnames(&cfg, 2, &["wlan2".into(), "wlan2".into()]).is_none());
+        assert!(active_ifnames(&cfg, 1, &watcher).is_none());
+        cfg.remove("wireless.main_5g.ifname");
+        assert!(active_ifnames(&cfg, 2, &watcher).is_none());
+        let iw = "phy#6\n\tInterface wlan2\n\t\ttype AP\n\tInterface wlan0\n\t\ttype AP\n";
+        assert!(only_expected_aps(iw, &watcher, |name| name == "wlan0"));
+        assert!(!only_expected_aps(iw, &watcher, |_| false));
+        assert!(!only_expected_aps("", &watcher, |_| true));
+    }
+
+    #[test]
+    fn busy_lock_and_attempted_active_cleanup_are_distinct() {
+        let dir = proc_fixture("active");
+        let lock_path = dir.join("wifi.lock");
+        let sample = |start, cpu| {
+            proc_entry(&dir, "5202", b"sh\0/sbin/zte_post_wifi.sh\0", start, cpu);
+            scan_proc(&dir).0.unwrap()
+        };
+        let first = sample(1000, 100);
+        let cfg = single_band();
+        let mut probe = probe(90, 2, 1);
+        probe.clis = vec!["wlan2".into()];
+        let mut w = WifiCleanup::default();
+        assert_eq!(w.observe(Some(first), &probe, Some(&cfg), 100), None);
+        let second = sample(1000, 1600);
+        let target = w.observe(Some(second), &probe, Some(&cfg), 130).unwrap();
+        assert_eq!(target, Recovery { post: second, kind: RecoveryKind::Active });
+        let path = lock_path.to_str().unwrap();
+        let busy = crate::ops::wifi_lock::try_take(path).unwrap().unwrap();
+        let result = with_wifi_lock(path, || panic!("busy must not run any stock commands"));
+        assert_eq!(result, RecoveryResult::Deferred);
+        w.finish(target, result);
+        drop(busy);
+        let third = sample(1000, 3100);
+        let next = w.observe(Some(third), &probe, Some(&cfg), 160).unwrap();
+        w.finish(next, RecoveryResult::Attempted);
+        let fourth = sample(1000, 4600);
+        assert_eq!(w.observe(Some(fourth), &probe, Some(&cfg), 190), None);
+        assert!(proc_matches(&dir, fourth));
+        let reused = sample(1001, 4600);
+        assert!(!proc_matches(&dir, fourth));
+        assert_eq!(w.observe(Some(reused), &probe, Some(&cfg), 220), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn verified_post_steps_run_in_order_before_signal() {
+        let dir = proc_fixture("post");
+        std::fs::create_dir(&dir).unwrap();
+        let file = dir.join("steps");
+        let quote = format!("'{}'", file.display().to_string().replace('\'', "'\\''"));
+        let script = format!(
+            "handle_macfilter_at_post() {{ echo mac > {quote}; }}\n\
+             zte_post_txpower() {{ echo tx >> {quote}; echo ignored; }}\n\
+             {POST_BOUNDARY}\nexit 9\n"
+        );
+        use sha2::{Digest, Sha256};
+        let sig = Sha256::digest(script.as_bytes()).into();
+        assert!(verified_stock(script.as_bytes(), &sig));
+        assert!(!verified_stock(script.as_bytes(), &STOCK_SHA));
+        assert!(post_functions("no boundary").is_none());
+        assert!(post_functions(&format!("{script}{POST_BOUNDARY}")).is_none());
+        let defs = post_functions(&script).unwrap();
+        let result = replay_post(defs, Duration::from_secs(2), || {
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), "mac\ntx\n");
+            true
+        });
+        assert_eq!(result, RecoveryResult::Stopped);
+        for defs in [
+            "handle_macfilter_at_post() { sleep 2; }; zte_post_txpower() { :; }",
+            "handle_macfilter_at_post() { :; }; zte_post_txpower() { exit 7; }",
+            "handle_macfilter_at_post() { exit 0; }; zte_post_txpower() { :; }",
+        ] {
+            assert_eq!(
+                replay_post(defs, Duration::from_millis(100), || panic!("incomplete post steps")),
+                RecoveryResult::Attempted,
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

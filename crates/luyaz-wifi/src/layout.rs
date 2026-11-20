@@ -23,84 +23,156 @@ use std::collections::BTreeMap;
 
 pub type Uci = BTreeMap<String, String>;
 
-/// AP sections, with the band and the radio they sit on when `device` is not set.
-const APS: [(&str, Band, &str); 4] = [
-    ("main_2g", Band::G2, "wifi0"),
-    ("main_5g", Band::G5, "wifi1"),
-    ("guest_2g", Band::G2, "wifi0"),
-    ("guest_5g", Band::G5, "wifi1"),
-];
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Band {
-    G2,
-    G5,
+pub(crate) struct Ap {
+    section: &'static str,
+    section_key: &'static str,
+    disabled_key: &'static str,
+    device_key: &'static str,
+    radio: &'static str,
+    default_ifname: &'static str,
+    guest_ifname_key: Option<&'static str>,
+    ssid_key: Option<&'static str>,
 }
+
+macro_rules! ap {
+    ($section:literal, $radio:literal, $ifname:literal, $guest_key:expr, $ssid_key:expr) => {
+        Ap {
+            section: $section,
+            section_key: concat!("wireless.", $section),
+            disabled_key: concat!("wireless.", $section, ".disabled"),
+            device_key: concat!("wireless.", $section, ".device"),
+            radio: $radio,
+            default_ifname: $ifname,
+            guest_ifname_key: $guest_key,
+            ssid_key: $ssid_key,
+        }
+    };
+}
+
+/// Main first, then guest, with 2.4 GHz first in each pair.
+pub(crate) static APS: [Ap; 4] = [
+    ap!("main_2g", "wifi0", "wlan0", None, Some("wireless.main_2g.ssid")),
+    ap!("main_5g", "wifi1", "wlan2", None, Some("wireless.main_5g.ssid")),
+    ap!("guest_2g", "wifi0", "wlan1", Some("wireless.guest_2g.ifname"), None),
+    ap!("guest_5g", "wifi1", "wlan3", Some("wireless.guest_5g.ifname"), None),
+];
 
 pub const NO_2G: &str = "turning the 2.4 GHz network off with its AP flag while 5 GHz stays on stops all Wi-Fi on this device; switch the 2.4 GHz radio off instead, or turn both bands off";
 pub const GUEST_ALONE: &str = "a guest network needs the main network of its band on";
 pub const THREE_APS: &str = "this device cannot run exactly three Wi-Fi networks; turn the guest network on for both bands, or off";
 
-fn get<'a>(m: &'a Uci, key: &str) -> &'a str {
-    m.get(key).map(String::as_str).unwrap_or("")
+fn get<'a>(m: &'a Uci, key: &str) -> Option<&'a str> {
+    m.get(key).map(String::as_str)
+}
+
+fn enabled(disabled: Option<&str>, strict: bool) -> Option<bool> {
+    match disabled {
+        None | Some("0") => Some(true),
+        Some("1") => Some(false),
+        _ if !strict => Some(true),
+        _ => None,
+    }
+}
+
+impl Ap {
+    fn radio_enabled(&self, m: &Uci, strict: bool) -> Option<bool> {
+        let device = get(m, self.device_key).filter(|d| !d.is_empty()).unwrap_or(self.radio);
+        let (section, disabled) = match device {
+            "wifi0" => ("wireless.wifi0", "wireless.wifi0.disabled"),
+            "wifi1" => ("wireless.wifi1", "wireless.wifi1.disabled"),
+            name => {
+                let mut key = String::with_capacity("wireless.".len() + name.len() + ".disabled".len());
+                key.push_str("wireless.");
+                key.push_str(name);
+                if strict && !m.contains_key(key.as_str()) {
+                    return None;
+                }
+                key.push_str(".disabled");
+                return enabled(get(m, &key), strict);
+            }
+        };
+        if strict && !m.contains_key(section) {
+            return None;
+        }
+        enabled(get(m, disabled), strict)
+    }
+
+    fn running(&self, m: &Uci, strict: bool) -> Option<bool> {
+        if !m.contains_key(self.section_key) {
+            // A firmware can lack the guest sections entirely.
+            return (!strict || self.guest_ifname_key.is_some()).then_some(false);
+        }
+        if !enabled(get(m, self.disabled_key), strict)? {
+            return Some(false);
+        }
+        self.radio_enabled(m, strict)
+    }
+
+    pub(crate) fn ifname<'a>(&self, m: &'a Uci) -> Option<&'a str> {
+        let name = self.guest_ifname_key.and_then(|key| get(m, key))
+            .filter(|name| !name.is_empty()).unwrap_or(self.default_ifname);
+        // A configured name must address one netdev, not another path under sysfs.
+        (name != "." && name != ".." && name.len() < libc::IFNAMSIZ
+            && !name.bytes().any(|b| b == b'/' || b == b':' || b == 0 || b.is_ascii_whitespace()))
+            .then_some(name)
+    }
+
+    pub(crate) fn ssid<'a>(&self, m: &'a Uci) -> Option<&'a str> {
+        self.ssid_key.and_then(|key| get(m, key)).filter(|value| !value.is_empty())
+    }
+}
+
+/// Runtime interface name for a main or guest AP section. Guest names come from UCI when set;
+/// boards without the option use the stock wlan1/wlan3 mapping.
+pub fn ifname<'a>(m: &'a Uci, section: &str) -> Option<&'a str> {
+    APS.iter().find(|ap| ap.section == section)?.ifname(m)
+}
+
+fn running_flags(m: &Uci, strict: bool) -> Option<[bool; 4]> {
+    match get(m, crate::VENDOR_ONOFF) {
+        Some("0") => return Some([false; 4]),
+        Some("1") => (),
+        _ if strict => return None,
+        _ => (),
+    }
+    let [main_2g, main_5g, guest_2g, guest_5g] = std::array::from_fn(|i| APS[i].running(m, strict));
+    Some([main_2g?, main_5g?, guest_2g?, guest_5g?])
 }
 
 /// The AP sections that would broadcast: the section exists, it and its radio are not disabled, and
-/// the vendor master switch is not off.
+/// the vendor module is not off. Used to compare proposed layouts, including legacy UCI defaults.
 pub fn running(m: &Uci) -> Vec<&'static str> {
-    if get(m, "wireless.zte_mbb.wifi_onoff") == "0" {
-        return Vec::new();
-    }
-    APS.iter()
-        .filter(|(sec, _, radio)| {
-            let device = match get(m, &format!("wireless.{sec}.device")) {
-                "" => *radio,
-                d => d,
-            };
-            m.contains_key(&format!("wireless.{sec}"))
-                && get(m, &format!("wireless.{sec}.disabled")) != "1"
-                && get(m, &format!("wireless.{device}.disabled")) != "1"
-        })
-        .map(|(sec, ..)| *sec)
-        .collect()
+    let on = running_flags(m, false).expect("non-strict layout always has a value");
+    APS.iter().zip(on).filter_map(|(ap, on)| on.then_some(ap.section)).collect()
 }
 
-/// The radio section a band's APs sit on, as `running` resolves it: a section's `device` option,
-/// else the firmware's radio for that band. None when the band has no AP section.
-fn band_radio(m: &Uci, b: Band) -> Option<String> {
-    APS.iter()
-        .find(|(sec, band, _)| *band == b && m.contains_key(&format!("wireless.{sec}")))
-        .map(|(sec, _, radio)| match get(m, &format!("wireless.{sec}.device")) {
-            "" => (*radio).to_owned(),
-            d => d.to_owned(),
-        })
+/// The same effective layout, with positive evidence for the module and every relevant flag.
+pub(crate) fn running_checked(m: &Uci) -> Option<[bool; 4]> {
+    running_flags(m, true)
 }
 
 /// Why the layout in `after` must not be written, or None. Only checked when the running set changes.
 pub fn refusal(before: &Uci, after: &Uci) -> Option<&'static str> {
-    let on = running(after);
-    if on == running(before) {
+    let on = running_flags(after, false)?;
+    if Some(on) == running_flags(before, false) {
         return None;
     }
-    let on = on.as_slice();
-    let band = |b: Band| APS.iter().any(|(s, x, _)| *x == b && on.contains(s));
-    if band(Band::G5) && !band(Band::G2) {
+    let [main_2g, main_5g, guest_2g, guest_5g] = on;
+    if (main_5g || guest_5g) && !(main_2g || guest_2g) {
         // 5 GHz only is runnable, but only through the 2.4 GHz radio being off: with the radio
         // still up and the AP flag down, QCMAP's single-AP mode takes all Wi-Fi down (CN B11,
         // measured 2026-11-18 — see the module doc). A write that leaves the running set as it
         // was never reaches here, so a device already in the bad layout can still be repaired.
-        let radio_up = band_radio(after, Band::G2)
-            .is_some_and(|r| get(after, &format!("wireless.{r}.disabled")) != "1");
+        let radio_up = [&APS[0], &APS[2]].into_iter().find(|ap| after.contains_key(ap.section_key))
+            .is_some_and(|ap| ap.radio_enabled(after, false) == Some(true));
         if radio_up {
             return Some(NO_2G);
         }
     }
-    if (on.contains(&"guest_2g") && !on.contains(&"main_2g"))
-        || (on.contains(&"guest_5g") && !on.contains(&"main_5g"))
-    {
+    if (guest_2g && !main_2g) || (guest_5g && !main_5g) {
         return Some(GUEST_ALONE);
     }
-    (on.len() == 3).then_some(THREE_APS)
+    (on.into_iter().filter(|enabled| *enabled).count() == 3).then_some(THREE_APS)
 }
 
 #[cfg(test)]

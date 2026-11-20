@@ -243,6 +243,7 @@ struct View {
     wifi_off: bool,
     wifi_2: String,
     wifi_5: String,
+    wifi_guest: Option<(String, String)>,
     ca_full: bool,
     ca_stale: bool,
     ca_rows: Vec<CaRow>,
@@ -592,8 +593,11 @@ impl Poll {
         let band_line = |i: usize| -> String {
             let Some(w) = &w else { return dash() };
             let b = &w.bands[i];
-            if !b.up() {
+            if b.radio_on == Some(false) || b.ap_on == Some(false) {
                 return l.pick("Off", "关闭").to_owned();
+            }
+            if !b.up() {
+                return dash();
             }
             let mhz = &lw.bw[i];
             let parts = [
@@ -615,8 +619,9 @@ impl Poll {
             if j.is_empty() { dash() } else { j }
         };
         let wifi_on = match &w {
-            Some(w) if w.on => l.pick("On", "开启").to_owned(),
-            Some(_) => l.pick("Off", "关闭").to_owned(),
+            Some(w) if w.on == Some(true) => l.pick("On", "开启").to_owned(),
+            Some(w) if w.on == Some(false) => l.pick("Off", "关闭").to_owned(),
+            Some(_) => dash(),
             None => dash(),
         };
 
@@ -784,9 +789,10 @@ impl Poll {
             roaming: ni.and_then(|n| n["roaming"].as_bool()),
             w_stale: seen && (!block_ok("wifi") || self.wifi.stale(now)),
             wifi_on,
-            wifi_off: w.as_ref().is_some_and(|w| !w.on),
+            wifi_off: w.as_ref().is_some_and(|w| w.on == Some(false)),
             wifi_2: band_line(0),
             wifi_5: band_line(1),
+            wifi_guest: crate::wifi_guest::summary(st, l).filter(|_| seen),
             ca_full,
             ca_stale: sig_stale,
             ca_rows,
@@ -1041,6 +1047,27 @@ mod tests {
             "uci_device_info": block("uci_device_info", 1, json!({"device_market_name":"U60 Pro","device_model":"MU5250"})),
         }}));
         hub
+    }
+
+    #[test]
+    fn wifi_guest_dashboard_shows_blocked_and_unknown_availability() {
+        let hub = app_hub();
+        let mut p = poll();
+        let mut wifi = json!({"on": true, "module_on": false,
+            "band_2g": {"radio_on": true, "ap_on": true},
+            "band_5g": {"radio_on": true, "ap_on": true},
+            "guest": {"ssid": "Guest", "on_2g": true, "on_5g": false, "encryption": "none",
+                      "has_password": false, "hidden": false, "isolate": true, "active_time": 0}
+        });
+        for (rev, expected) in [(1, "Wi-Fi module off"), (2, "availability unknown")] {
+            feed(&hub, "block", block("wifi", rev, wifi.clone()));
+            let v = hub.read(|st| p.view(st, Instant::now()));
+            let leaf = split_leaves(&Leaves { v: &v }.render().unwrap()).into_iter()
+                .find(|(id, _)| id == "hw-guest").unwrap().1;
+            assert!(leaf.contains("Set to on") && leaf.contains(expected));
+            assert!(!leaf.contains("broadcasting"));
+            wifi["module_on"] = Value::Null;
+        }
     }
 
     #[test]

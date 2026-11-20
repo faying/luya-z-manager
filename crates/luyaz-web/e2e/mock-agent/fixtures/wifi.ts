@@ -420,7 +420,7 @@ function onOff(ctx: Ctx, set: (on: boolean) => void): Reply {
 }
 
 export const routes: Route[] = [
-  { method: "GET", path: "/api/wifi/power-save", handler: () => ok({ enabled: psmOn, live: psmOn, saved: psmOn }) },
+  { method: "GET", path: "/api/wifi/power-save", handler: () => ok({ enabled: psmOn, preferred: psmOn, live: psmOn, saved: psmOn }) },
   { method: "PUT", path: "/api/wifi/power-save", handler: (ctx) => onOff(ctx, (on) => (psmOn = on)) },
   { method: "GET", path: "/api/nfc", handler: () => ok({ supported: true, enabled: nfcOn }) },
   { method: "PUT", path: "/api/nfc", handler: (ctx) => onOff(ctx, (on) => (nfcOn = on)) },

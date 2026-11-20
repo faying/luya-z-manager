@@ -8,7 +8,7 @@ use super::{Ui, VIEW_H};
 use crate::kit::{self, CARD_W, H, MARGIN, PAD, ROW_H, W};
 use crate::lang::{n_, tr};
 use crate::lv::{self, sys, Obj};
-use crate::source::WifiRead;
+use crate::source::{WifiRead, WifiReply};
 use crate::theme::{t, uf};
 
 const WSW_MASTER: usize = 0;
@@ -18,6 +18,7 @@ const WSW_PSM: usize = 3;
 const WSW_NFC: usize = 4;
 const WIFI_READ_MS: u32 = 5_000;
 const WIFI_WRITE_MS: u32 = 75_000;
+const WIFI_TXN_MS: u32 = 145_000;
 
 #[derive(Default, Clone)]
 pub struct Wifi {
@@ -51,6 +52,12 @@ pub struct Wifi {
     pub pool: Obj,
     pub lease: Obj,
     settings: [Option<bool>; 4],
+    checked: [bool; 4],
+    /// the NFC row's last concrete value; None until one arrives
+    nfc: Option<bool>,
+    /// the row's handle position, kept across a transient unknown
+    nfc_checked: bool,
+    module: Option<bool>,
     pub(super) up: Option<[bool; 2]>,
     read_at: Option<u32>,
     write: Option<WifiWrite>,
@@ -65,17 +72,30 @@ struct WifiWrite {
     id: usize,
     on: bool,
     started: u32,
-    reading: bool,
+    verdict: Option<WifiReply>,
     radios_before: [Option<bool>; 2],
 }
 
 impl Wifi {
     fn update_settings(&mut self, read: WifiRead) {
-        // An unreadable value (such as unsaved PSM with Wi-Fi off) is not off.
-        for (cached, value) in self.settings.iter_mut().zip(read.settings()) {
-            *cached = value.or(*cached);
+        self.settings = read.settings();
+        self.module = read.module;
+        for (cached, value) in self.checked.iter_mut().zip(self.settings) {
+            if let Some(value) = value {
+                *cached = value;
+            }
         }
         self.up = Some(read.up);
+    }
+
+    fn setting_enabled(&self, id: usize) -> bool {
+        match id {
+            WSW_MASTER => self.settings[id].is_some() && self.module.is_some(),
+            WSW_24 | WSW_5 => self.settings[id].is_some()
+                && self.settings[WSW_MASTER] == Some(true) && self.module == Some(true),
+            WSW_PSM => true,
+            _ => false,
+        }
     }
 }
 
@@ -84,12 +104,9 @@ impl WifiRead {
         [self.master, self.radios[0], self.radios[1], self.power_save]
     }
 
-    fn confirms(self, WifiWrite { id, on, radios_before, .. }: WifiWrite) -> bool {
+    fn confirms_emergency(self, WifiWrite { id, on, radios_before, .. }: WifiWrite) -> bool {
         if self.settings()[id] != Some(on) {
             return false;
-        }
-        if id == WSW_PSM {
-            return true;
         }
         if id == WSW_MASTER && radios_before.into_iter().zip(self.radios)
             .any(|(before, after)| before.is_some() && before != after)
@@ -127,12 +144,12 @@ impl Ui {
         if id < WSW_NFC {
             // LVGL has flipped the widget for the tap; keep the confirmed position
             // behind the modal until the post-write read completes.
-            sw_apply(self.wifi.sw[id], self.wifi.settings[id] == Some(true));
-            if self.wifi_busy() || ((WSW_24..=WSW_5).contains(&id) && self.wifi.settings[WSW_MASTER] != Some(true)) {
+            sw_apply(self.wifi.sw[id], self.wifi.checked[id]);
+            if self.wifi_busy() || !self.wifi.setting_enabled(id) {
                 return;
             }
             self.wifi.write = Some(WifiWrite {
-                id, on, started: lv::tick_get(), reading: false,
+                id, on, started: lv::tick_get(), verdict: None,
                 radios_before: [self.wifi.settings[WSW_24], self.wifi.settings[WSW_5]],
             });
             self.wifi.warn_at = None;
@@ -142,39 +159,35 @@ impl Ui {
         }
         match id {
             WSW_MASTER => {
-                // The stock master switch through the core (`wifi.set_module` → `zwrt_wlan set
-                // {zte_mbb:{wifi_onoff}}`): the firmware restores the saved band choices on enable.
-                // Emergency (core unreachable): the script's vendor call by the same name.
                 self.data_control_fb(
-                    "wifi.set_module",
-                    &format!("{{\"enabled\":{}}}", on as i32),
+                    "wifi.settings",
+                    &format!("{{\"wifi_onoff\":\"{}\"}}", on as i32),
                     "wifi.master",
                     Some(&format!("enabled={}", on as i32)),
                 );
             }
             WSW_24 | WSW_5 => {
-                // The band switches are the radios (`wireless.wifi0/wifi1.disabled`), like the web
-                // page's radio2_disabled: 2.4 GHz off with 5 GHz on is the layout this firmware
-                // runs (the main-AP-flag form is the one it cannot — QCMAP's single-AP mode lands
-                // on wlan0 and EnableWLAN fails; CN B11, measured 2026-11-18). Guests are not
-                // touched: a radio's guests cannot run without it, so no bad layout can arise.
                 let band = id - WSW_24;
-                let params = format!("{{\"set\":{{\"wireless.wifi{band}.disabled\":\"{}\"}},\"reload\":true}}", !on as i32);
-                // The emergency script still takes both settings; use the other
-                // band's configuration, not whether it happens to be broadcasting.
+                let key = ["radio2_disabled", "radio5_disabled"][band];
+                let params = format!("{{\"{key}\":\"{}\"}}", !on as i32);
+                // The emergency script takes both saved band settings.
                 let fb = self.wifi.settings[WSW_24 + (1 - band)].map(|other| {
                     let [w24, w5] = if band == 0 { [on, other] } else { [other, on] };
                     format!("ap_2g={} ap_5g={}", w24 as i32, w5 as i32)
                 });
-                self.data_control_fb("wifi.apply", &params, "wifi.radio", fb.as_deref());
+                self.data_control_fb("wifi.settings", &params, "wifi.radio", fb.as_deref());
             }
             WSW_PSM => {
                 // through core (E4): the hotplug script keeps it across an ifup
                 self.data_control("wifi.power_save", &format!("{{\"enabled\":{}}}", on as i32), None);
             }
             WSW_NFC => {
-                let fb = format!("enabled={} flag=2", on as i32);
-                self.data_control("nfc.set", &format!("{{\"enabled\":{},\"flag\":2}}", on as i32), Some(&fb));
+                // only from a known state: without one the row is disabled, and a flip
+                // could not be told apart from the core's unreadable last word
+                if self.wifi.nfc.is_some() {
+                    let fb = format!("enabled={} flag=2", on as i32);
+                    self.data_control("nfc.set", &format!("{{\"enabled\":{},\"flag\":2}}", on as i32), Some(&fb));
+                }
             }
             _ => {}
         }
@@ -198,22 +211,45 @@ impl Ui {
             .map(|_| tr("Wi-Fi 更改未确认"))
     }
 
-    pub(super) fn wifi_switches_refresh(&mut self, visible: bool, nfc_on: bool) {
+    pub(super) fn wifi_switches_refresh(&mut self, visible: bool, nfc_on: Option<bool>) {
+        if let Some(on) = nfc_on {
+            self.wifi.nfc = Some(on);
+            self.wifi.nfc_checked = on;
+        }
         let now = lv::tick_get();
         if let Some(mut write) = self.wifi.write {
-            let reply = self.src.wifi_reply();
-            let timed_out = now.wrapping_sub(write.started) >= WIFI_WRITE_MS;
-            if reply.is_some() || timed_out {
-                // No in-flight pre-write read is allowed to unlock the screen.
-                let read = self.src.wifi_read(!write.reading);
-                write.reading = true;
-                if timed_out || read.is_some_and(|r| reply == Some(false) || r.confirms(write)) {
+            let op_id = self.src.wifi_op_id().filter(|_| write.id != WSW_PSM);
+            let limit = if op_id.is_some() { WIFI_TXN_MS } else { WIFI_WRITE_MS };
+            let timed_out = now.wrapping_sub(write.started) >= limit;
+            let verdict = write.verdict
+                .or_else(|| self.src.wifi_reply())
+                .or_else(|| {
+                    let id = op_id?;
+                    let view = &self.op.view;
+                    WifiReply::from_op(&view.active, id).or_else(|| WifiReply::from_op(&view.last, id))
+                })
+                .or_else(|| timed_out.then_some(WifiReply::Failed));
+            if let Some(verdict) = verdict {
+                // Latch a terminal event across the fresh read, even if /v2/screen's last op changes.
+                let read = self.src.wifi_read(write.verdict.is_none());
+                write.verdict = Some(verdict);
+                let confirmed = read.is_some_and(|r| match verdict {
+                    WifiReply::CoreDone if write.id == WSW_PSM => r.power_save == Some(write.on),
+                    WifiReply::CoreDone => true,
+                    WifiReply::EmergencyDone => r.confirms_emergency(write),
+                    WifiReply::Failed => false,
+                });
+                if timed_out || confirmed || (verdict == WifiReply::Failed && read.is_some()) {
                     let w = &mut self.wifi;
                     if let Some(read) = read {
                         w.update_settings(read);
+                    } else {
+                        w.settings = [None; 4];
+                        w.module = None;
+                        w.up = None;
                     }
                     w.read_at = None;
-                    if timed_out || reply != Some(true) {
+                    if timed_out || !confirmed {
                         w.warn_at = Some(now);
                     }
                     w.write = None;
@@ -230,22 +266,22 @@ impl Ui {
         }
         let w = &self.wifi;
         let [master, w24, w5, psm] = w.settings;
-        let values = [master, w24, w5, psm, Some(nfc_on)];
+        let values = [master, w24, w5, psm, nfc_on];
+        let [master_checked, w24_checked, w5_checked, psm_checked] = w.checked;
+        let checked = [master_checked, w24_checked, w5_checked, psm_checked, w.nfc_checked];
+        let disabled: [bool; 5] = std::array::from_fn(|i| if i == WSW_NFC { nfc_on.is_none() } else { !w.setting_enabled(i) });
         let sw = w.sw;
         let labels = w.sw_st;
         for (i, value) in values.into_iter().enumerate() {
-            sw_apply(sw[i], value == Some(true));
+            sw_apply(sw[i], checked[i]);
             let label = match value {
                 Some(true) => tr("已开启"),
                 Some(false) => tr("已关闭"),
                 None => "—",
             };
             self.set(labels[i], label);
-            // B11 would overwrite a direct band write made while the master is off.
-            let disabled = (value.is_none() && i != WSW_PSM)
-                || ((WSW_24..=WSW_5).contains(&i) && master != Some(true));
-            if disabled != sw[i].has_state(lv::LV_STATE_DISABLED) {
-                if disabled {
+            if disabled[i] != sw[i].has_state(lv::LV_STATE_DISABLED) {
+                if disabled[i] {
                     sw[i].add_state(lv::LV_STATE_DISABLED);
                 } else {
                     sw[i].remove_state(lv::LV_STATE_DISABLED);

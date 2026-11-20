@@ -2,19 +2,20 @@
 //! `wifi.guest`（`wifi.guest`，PUT /api/wifi/guest），请求体和 agent 的一样。纯函数；读写设备在
 //! `ops::wifi_dev`。
 //!
-//! - **值**是 `wifi` 块（`snapshot::wifi_block`，5a56c9cf）展开成一层的键：`on`、`country`、
+//! - **值**是 `wifi` 块（`snapshot::wifi_block`，5a56c9cf）展开成一层的键：`on`、`module_on`、`country`、
 //!   `band_2g.ssid`、`guest.on_5g`……（`txn::matches` 只比一层，目标只带改了的键）。密码不进值：
 //!   换成 `*.key_fp` = 本机密钥的 HMAC 指纹（和 APN 同一把 `apn.key`），空密码为 ""。
-//! - **目标**：照 agent 的做法从请求体算出要写的 uci（顺序：国家码、逐键、总开关最后），套到现在的
+//! - **目标**：从请求体算出国家码、逐键的 uci 写入和原厂总开关操作，套到现在的
 //!   `wireless` 上，再经同一个 `wifi_block` 展开，和现在的展开比，只留变了的键。读回走同一条路，
-//!   所以 sanitize、布尔写法这些都一样；总开关不再是 uci 的四个开关，见 [`master_writes`]。
-//!   一个键都没变 = 不算事务。
+//!   所以 sanitize、布尔写法这些都一样。总开关操作额外确认用户开关、模块开关和原有频段选择。
+//!   一个键都没变且无需原厂操作 = 不算事务。
 //! - **写**：目标（或退回、撤销的旧值）→ uci 的逆映射，只写和现状不同的；密码按指纹从本机保管箱
 //!   `wifi-vault.json`（0600）取。保管箱里存现在的和新写的密码，不离开设备。
 //! - Wi-Fi 6 跟着 radio 模式一起改，这里不支持：请求要改它就拒绝（agent 回 501）。
 
 use super::apn::Vault;
 use crate::project::snapshot;
+use luyaz_wifi::switches::{self, Switches};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
@@ -26,12 +27,23 @@ pub const VAULT_MAX: usize = 16;
 
 pub const WIFI6_REFUSED: &str = "this firmware changes Wi-Fi 6 together with the radio mode; switching it here is not supported yet";
 pub const KEY_LOST: &str = "the old Wi-Fi password was not kept on the device";
+const SWITCH_UNAVAILABLE: &str = "Wi-Fi switch state is unavailable";
+const BANDS_REQUIRE_ON: &str = "turn Wi-Fi on before changing its bands";
+const SEPARATE_SWITCH_AND_BANDS: &str = "apply the Wi-Fi switch and band changes separately";
+const CONTRADICTORY_SWITCH: &str = "cannot restore contradictory Wi-Fi switch values";
 
 /// 两个频段：值里的前缀、主网络的 AP 节、radio 节、接口（txpower 热改用）。
 const BANDS: [(&str, &str, &str, &str); 2] = [
     ("band_2g", "main_2g", "wifi0", "wlan0"),
     ("band_5g", "main_5g", "wifi1", "wlan2"),
 ];
+/// Saved radio switches, in the same band order as `Switches::radios`.
+const RADIO_SWITCHES: [(&str, &str, &str); 2] = [
+    ("radio2_disabled", "wireless.wifi0.disabled", "wireless.wifi0.disabled_bk"),
+    ("radio5_disabled", "wireless.wifi1.disabled", "wireless.wifi1.disabled_bk"),
+];
+const SAVED_MASTER: &str = "wireless.zte_mbb.wifi_onoff_by_user";
+const MODULE_SWITCH: &str = "wireless.zte_mbb.wifi_onoff";
 const GUESTS: [&str; 2] = ["guest_2g", "guest_5g"];
 
 /// 一个频段在值里的键（不含前缀）。
@@ -58,14 +70,9 @@ const GUEST_FIELDS: &[&str] = &[
 ];
 
 /// 主 Wi-Fi 请求体的键 → uci 路径：`<项>_2g|_5g` 落到 `main_<频段>`（SSID、密码、加密、隐藏）
-/// 或 radio 节 `wifi0`/`wifi1`（信道、功率、带宽），`radio2_disabled`/`radio5_disabled` 是 radio 开关。
+/// 或 radio 节 `wifi0`/`wifi1`（信道、功率、带宽）。开关单独校验。
 /// 不认得的键 = `None`。
 fn main_path(key: &str) -> Option<String> {
-    match key {
-        "radio2_disabled" => return Some("wireless.wifi0.disabled".into()),
-        "radio5_disabled" => return Some("wireless.wifi1.disabled".into()),
-        _ => {}
-    }
     let (item, band) = key.rsplit_once('_')?;
     let (main, radio) = match band {
         "2g" => ("main_2g", "wifi0"),
@@ -99,7 +106,11 @@ impl Kind {
     fn keys(self) -> Vec<String> {
         match self {
             Self::Main => {
-                let mut k = vec!["on".to_owned(), "country".to_owned()];
+                let mut k = vec![
+                    "on".to_owned(),
+                    "module_on".to_owned(),
+                    "country".to_owned(),
+                ];
                 for (b, ..) in BANDS {
                     k.extend(BAND_FIELDS.iter().map(|f| format!("{b}.{f}")));
                 }
@@ -111,7 +122,7 @@ impl Kind {
 }
 
 /// 要写的 uci（路径 → 值，按写的顺序）和要不要动原厂总开关（`wifi.set_module {enabled}`：
-/// `Some(true)` 先开、`Some(false)` 就是这次的总开关关，见 [`master_writes`]）。
+/// `Some(true)` 开、`Some(false)` 关，见 [`master_change`]）。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Plan {
     pub set: Vec<(String, String)>,
@@ -119,9 +130,8 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// 写一个值：同一路径后写的算；和现状一样就不写（之前排的也撤掉）。
+    /// 和现状一样就不写。各设置映射到不同的路径。
     fn put(&mut self, cur: &Uci, path: &str, val: &str) {
-        self.set.retain(|(p, _)| p != path);
         if get(cur, path) != val {
             self.set.push((path.to_owned(), val.to_owned()));
         }
@@ -167,45 +177,36 @@ fn exists(m: &Uci, section: &str) -> bool {
     m.contains_key(&format!("wireless.{section}"))
 }
 
-/// agent `master_on_from`：原厂开关不是 "0"，且两个主网络不是都关着。
-fn master_on(m: &Uci) -> bool {
-    get(m, "wireless.zte_mbb.wifi_onoff") != "0"
-        && !(get(m, "wireless.main_2g.disabled") == "1"
-            && get(m, "wireless.main_5g.disabled") == "1")
+fn read_switches(cur: &Uci) -> Switches {
+    switches::read(|path| cur.get(path).map(String::as_str))
+}
+
+/// Either switch can lag behind. Only matching readbacks for both are a no-op.
+fn master_change(cur: &Uci, want: bool) -> Result<Option<bool>, String> {
+    let switch = read_switches(cur);
+    let (Some(master), Some(module)) = (switch.master, switch.module) else {
+        return Err(SWITCH_UNAVAILABLE.into());
+    };
+    Ok((master != want || module != want).then_some(want))
+}
+
+fn check_radio_change(
+    master: Option<bool>,
+    module: Option<bool>,
+    vendor: Option<bool>,
+) -> Result<(), String> {
+    if vendor.is_some() {
+        return Err(SEPARATE_SWITCH_AND_BANDS.into());
+    }
+    if master != Some(true) || module != Some(true) {
+        return Err(BANDS_REQUIRE_ON.into());
+    }
+    Ok(())
 }
 
 /// agent `wifi6_from`：缺省算开，只有 "0" 算关。
 fn wifi6(raw: &str) -> &'static str {
     if raw == "0" { "0" } else { "1" }
-}
-
-/// agent `master_writes`，按固件自己的语义重做（CN B11 实测 2026-11-18）：总开关开/关就是原厂
-/// 总开关（`wifi.set_module` → `zwrt_wlan set {zte_mbb:{wifi_onoff}}`），它不碰频段开关——用户
-/// 单独关掉的 2.4 GHz（radio 关）在总开关开关一轮后保持原样，访客开关同样不动。uci 的
-/// 「两个主网络都 disabled」只作为旧状态的恢复对象：那是一个旧版核心或场景引擎留下的
-/// 关法，开关打开时仍写回四个 0。
-fn master_writes(want_on: bool, m: &Uci) -> (Option<bool>, Vec<(&'static str, &'static str)>) {
-    if want_on == master_on(m) {
-        return (None, Vec::new());
-    }
-    if want_on {
-        let vendor_off = get(m, "wireless.zte_mbb.wifi_onoff") == "0";
-        let mains_off = get(m, "wireless.main_2g.disabled") == "1"
-            && get(m, "wireless.main_5g.disabled") == "1";
-        let mut writes = Vec::new();
-        if mains_off {
-            writes.extend([
-                ("wireless.wifi0.disabled", "0"),
-                ("wireless.wifi1.disabled", "0"),
-                ("wireless.main_2g.disabled", "0"),
-                ("wireless.main_5g.disabled", "0"),
-            ]);
-        }
-        // 原厂开关只在它真的关着时才动；「两个主网络都关」用 uci 写回（开关本身开着）
-        (vendor_off.then_some(true), writes)
-    } else {
-        (Some(false), Vec::new())
-    }
 }
 
 /// 请求体里的值 → uci 写法（agent：字符串原样、数字十进制、布尔 1/0，再 sanitize）；别的类型不认。
@@ -217,6 +218,14 @@ fn body_str(v: &Value) -> Option<String> {
         _ => return None,
     };
     Some(luyaz_api::wifi::sanitize_uci_value(&s))
+}
+
+fn switch_input(key: &str, v: &Value) -> Result<bool, String> {
+    match body_str(v).as_deref() {
+        Some("0") => Ok(false),
+        Some("1") => Ok(true),
+        _ => Err(format!("{key} must be 0 or 1")),
+    }
 }
 
 fn check_value(name: &str, v: &str) -> Result<(), String> {
@@ -244,9 +253,8 @@ fn restored(kind: Kind, params: &Value) -> Option<Result<Value, String>> {
             && m.iter().all(|(k, v)| {
                 keys.contains(k)
                     && match k.rsplit('.').next().unwrap_or(k) {
-                        "on" | "ap_on" | "radio_on" | "hidden" | "isolate" | "on_2g" | "on_5g" => {
-                            v.is_boolean()
-                        }
+                        "on" | "module_on" | "ap_on" | "radio_on" | "hidden" | "isolate"
+                        | "on_2g" | "on_5g" => v.is_boolean(),
                         "active_time" => v.is_i64(),
                         _ => v.as_str().is_some_and(|s| check_value(k, s).is_ok()),
                     }
@@ -271,8 +279,11 @@ pub fn check_main(params: &Value) -> Result<Value, String> {
     }
     let body = params.as_object().ok_or("params must be an object")?;
     for (k, v) in body {
-        let known = main_path(k).is_some()
-            || matches!(k.as_str(), "country" | "wifi_onoff" | "wifi6_switch");
+        if k == "wifi_onoff" || RADIO_SWITCHES.iter().any(|(key, ..)| k.as_str() == *key) {
+            switch_input(k, v)?;
+            continue;
+        }
+        let known = main_path(k).is_some() || matches!(k.as_str(), "country" | "wifi6_switch");
         let Some(s) = known.then(|| body_str(v)).flatten() else {
             continue;
         };
@@ -304,14 +315,21 @@ pub fn check_guest(params: &Value) -> Result<Value, String> {
     Ok(pending())
 }
 
-/// 主 Wi-Fi 的写：国家码（两个 radio）、逐键、总开关最后（压过 radio 开关）；只写和现状不同的。
+/// 主 Wi-Fi 的写：国家码（两个 radio）、逐键；总开关和频段变更需要分开。
 pub fn main_plan(body: &Map<String, Value>, cur: &Uci) -> Result<Plan, String> {
     if let Some(v) = body.get("wifi6_switch").and_then(body_str)
         && wifi6(&v) != wifi6(get(cur, "wireless.zte_mbb.wifi6_switch"))
     {
         return Err(WIFI6_REFUSED.into());
     }
-    let mut plan = Plan::default();
+    let vendor = match body.get("wifi_onoff") {
+        Some(v) => master_change(cur, switch_input("wifi_onoff", v)?)?,
+        None => None,
+    };
+    let mut plan = Plan {
+        vendor,
+        ..Plan::default()
+    };
     if let Some(cc) = body.get("country").and_then(Value::as_str) {
         let cc = luyaz_api::wifi::sanitize_uci_value(cc).to_uppercase();
         if cc.len() == 2 && cc.chars().all(|c| c.is_ascii_alphabetic()) {
@@ -321,15 +339,21 @@ pub fn main_plan(body: &Map<String, Value>, cur: &Uci) -> Result<Plan, String> {
         }
     }
     for (key, value) in body {
-        if let (Some(path), Some(v)) = (main_path(key), body_str(value)) {
+        if let Some(path) = main_path(key)
+            && let Some(v) = body_str(value)
+        {
             plan.put(cur, &path, &v);
         }
     }
-    if let Some(want) = body.get("wifi_onoff").and_then(body_str) {
-        let (vendor, writes) = master_writes(want != "0", cur);
-        plan.vendor = vendor;
-        for (path, v) in writes {
-            plan.put(cur, path, v);
+    let mut current = None;
+    for (i, (key, path, _)) in RADIO_SWITCHES.into_iter().enumerate() {
+        if let Some(v) = body.get(key) {
+            let disabled = switch_input(key, v)?;
+            let switch = current.get_or_insert_with(|| read_switches(cur));
+            if switch.radios[i] != Some(!disabled) {
+                check_radio_change(switch.master, switch.module, plan.vendor)?;
+                plan.put(cur, path, flag(disabled));
+            }
         }
     }
     Ok(plan)
@@ -357,7 +381,23 @@ pub fn simulate(cur: &Uci, plan: &Plan) -> Uci {
         m.insert(p.clone(), v.clone());
     }
     if let Some(on) = plan.vendor {
-        m.insert("wireless.zte_mbb.wifi_onoff".into(), if on { "1" } else { "0" }.into());
+        let before = read_switches(cur);
+        m.insert(SAVED_MASTER.into(), flag(on).into());
+        m.insert(MODULE_SWITCH.into(), flag(on).into());
+        // CN B11 only forces/restores the raw flags on a module transition. On off,
+        // disabled_bk=1 remembers that the radio was already disabled; absence means it was on.
+        if before.module == Some(!on) {
+            for ((_, raw, backup), saved) in RADIO_SWITCHES.into_iter().zip(before.radios) {
+                if let Some(saved) = saved {
+                    m.insert(raw.into(), flag(!on || !saved).into());
+                    if !on && !saved {
+                        m.insert(backup.into(), "1".into());
+                    } else {
+                        m.remove(backup);
+                    }
+                }
+            }
+        }
     }
     m
 }
@@ -393,6 +433,7 @@ pub fn value(kind: Kind, m: &Uci, vault: &Vault) -> Option<Map<String, Value>> {
                 put_band(b, &block[b], &format!("wireless.{ap}.key"), BAND_FIELDS);
             }
             out.insert("on".into(), block["on"].clone());
+            out.insert("module_on".into(), block["module_on"].clone());
             out.insert("country".into(), block["country"].clone());
         }
         Kind::Guest => put_band(
@@ -440,7 +481,7 @@ fn flag(b: bool) -> &'static str {
     if b { "1" } else { "0" }
 }
 
-/// 值 → 要写的 uci（逆映射），只写和现状不同的键；总开关最后。密码按指纹从保管箱取（`lookup`）。
+/// 值 → 要写的 uci 和原厂总开关（逆映射），只写和现状不同的键。密码按指纹从保管箱取（`lookup`）。
 /// 新写、退回、撤销都走这里。
 pub fn plan_for(
     kind: Kind,
@@ -450,7 +491,26 @@ pub fn plan_for(
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<Plan, String> {
     let mut plan = Plan::default();
-    let mut master = None;
+    let current_master = now.get("on").and_then(Value::as_bool);
+    let current_module = now.get("module_on").and_then(Value::as_bool);
+    if kind == Kind::Main {
+        // Persisted rollback values can contain null for an unreadable switch.
+        let requested = |key: &str| match want.get(key) {
+            Some(Value::Bool(on)) => Ok(Some(*on)),
+            None | Some(Value::Null) => Ok(None),
+            _ => Err(SWITCH_UNAVAILABLE),
+        };
+        plan.vendor = match (requested("on")?, requested("module_on")?) {
+            (Some(on), Some(module)) if on != module => {
+                if (current_master, current_module) != (Some(on), Some(module)) {
+                    return Err(CONTRADICTORY_SWITCH.into());
+                }
+                None
+            }
+            (Some(on), _) | (_, Some(on)) => master_change(cur, on)?,
+            (None, None) => None,
+        };
+    }
     let s = |v: &Value| match v {
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),
@@ -470,7 +530,7 @@ pub fn plan_for(
             lookup(&fp).ok_or_else(|| KEY_LOST.to_owned())
         };
         match (kind, prefix, field) {
-            (Kind::Main, "", "on") => master = Some(b(v)),
+            (Kind::Main, "", "on" | "module_on") => {}
             (Kind::Main, "", "country") => {
                 for (.., radio, _) in BANDS {
                     plan.put(cur, &format!("wireless.{radio}.country"), &s(v));
@@ -482,8 +542,24 @@ pub fn plan_for(
                     .find(|(p, ..)| *p == band)
                     .ok_or_else(|| format!("not a Wi-Fi setting: {k}"))?;
                 let (path, val) = match f {
-                    "ap_on" => (format!("{ap}.disabled"), flag(!b(v)).to_owned()),
-                    "radio_on" => (format!("{radio}.disabled"), flag(!b(v)).to_owned()),
+                    "ap_on" | "radio_on" => {
+                        if v.is_null() {
+                            continue;
+                        }
+                        let enabled = v.as_bool().ok_or(SWITCH_UNAVAILABLE)?;
+                        let section = if f == "radio_on" {
+                            // Matching radio constraints were skipped above. A vendor operation
+                            // may preserve the saved preference but may never change it.
+                            check_radio_change(current_master, current_module, plan.vendor)?;
+                            radio
+                        } else {
+                            if plan.vendor.is_some() {
+                                return Err(SEPARATE_SWITCH_AND_BANDS.into());
+                            }
+                            ap
+                        };
+                        (format!("{section}.disabled"), flag(!enabled).to_owned())
+                    }
                     "ssid" | "encryption" => (format!("{ap}.{f}"), s(v)),
                     "hidden" => (format!("{ap}.hidden"), flag(b(v)).to_owned()),
                     "channel" | "htmode" => (format!("{radio}.{f}"), s(v)),
@@ -508,13 +584,6 @@ pub fn plan_for(
                 }
             }
             _ => return Err(format!("not a Wi-Fi setting: {k}")),
-        }
-    }
-    if let Some(want_on) = master {
-        let (vendor, writes) = master_writes(want_on, cur);
-        plan.vendor = vendor;
-        for (path, v) in writes {
-            plan.put(cur, path, v);
         }
     }
     Ok(plan)

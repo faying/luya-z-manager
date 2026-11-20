@@ -34,7 +34,7 @@ mod checks;
 
 use crate::conf::Conf;
 use crate::logic::{self, Launch};
-use crate::source::{self, Activity, NiAct, Polled, Source, WifiRead};
+use crate::source::{self, Activity, NiAct, Polled, Source, WifiRead, WifiReply};
 use crate::lv::{self, sys, Obj};
 use crate::ui::{self, Sub, SUBS, TABS};
 use checks::Checks;
@@ -187,7 +187,10 @@ struct Replay {
 #[derive(Default)]
 struct WifiTest {
     read: WifiRead,
-    reply: Option<bool>,
+    reply: Option<WifiReply>,
+    op_id: Option<&'static str>,
+    emergency: bool,
+    block_readback: bool,
     writes: Vec<(String, String)>,
     fresh_reads: usize,
 }
@@ -296,14 +299,22 @@ impl Source for Replay {
     fn data_set_pace(&mut self, _panel_lit: bool) {}
     fn data_release_pace(&mut self) {}
     fn data_control_fb(&mut self, _a: &str, _p: &str, _fa: &str, _fb: Option<&str>) -> bool {
+        let sent = true;
         #[cfg(test)]
-        if let Some(wifi) = &self.wifi_test {
+        let sent = if let Some(wifi) = &self.wifi_test {
             let mut wifi = wifi.borrow_mut();
             wifi.reply = None;
             wifi.writes.push((_a.into(), _p.into()));
-        }
+            wifi.op_id = if wifi.emergency { None } else {
+                ["screen-1-1", "screen-1-2", "screen-1-3", "screen-1-4", "screen-1-5"]
+                    .get(wifi.writes.len() - 1).copied()
+            };
+            !wifi.emergency
+        } else {
+            sent
+        };
         self.acted();
-        true
+        sent
     }
     fn data_control_undo(&mut self, _a: &str, _p: &str) -> bool {
         self.acted();
@@ -445,7 +456,7 @@ impl Source for Replay {
                 wifi.fresh_reads += 1;
                 return None; // a pre-write sample cannot complete the operation
             }
-            return Some(wifi.read);
+            return (!wifi.block_readback).then_some(wifi.read);
         }
         let v = std::env::var("LUYAZ_RENDER_AUX").unwrap_or_else(|_| "0,0,0".into());
         let mut flags = v.split(',').map(|x| x.trim() == "1");
@@ -454,12 +465,20 @@ impl Source for Replay {
         Some(WifiRead { master: Some(on), radios: up.map(Some), power_save: flags.next(), module: Some(on), main: [Some(true); 2], up })
     }
 
-    fn wifi_reply(&self) -> Option<bool> {
+    fn wifi_reply(&self) -> Option<WifiReply> {
         #[cfg(test)]
         if let Some(wifi) = &self.wifi_test {
             return wifi.borrow().reply;
         }
-        Some(true)
+        Some(WifiReply::CoreDone)
+    }
+
+    fn wifi_op_id(&self) -> Option<&str> {
+        #[cfg(test)]
+        if let Some(wifi) = &self.wifi_test {
+            return wifi.borrow().op_id;
+        }
+        None
     }
 }
 
@@ -716,50 +735,261 @@ fn wifi_switch_waits_for_readback_and_blocks_touch() {
             || (0..o.child_count() as i32).any(|i| has_text(o.child(i), text)))
     }
     let overlay_has = |text: &str| has_text(Obj::layer_top(), text.as_bytes());
+    let pending = || overlay_has("正在处理，等设备确认 Wi-Fi");
+    let warned = || overlay_has("Wi-Fi 更改未确认");
+    let show_op = |slot: &str, id: &str, phase: &str, registered: bool| {
+        let mut model = ui::with(|u| (*u.model).clone());
+        model.screen_op = Some(format!(r#"{{"{slot}":{{"op_id":"{id}","phase":"{phase}","steps":[{{"key":"applied","done":true}},{{"key":"registered","done":{registered}}}]}}}}"#));
+        ui::set_model(Rc::new(model));
+        ui::with(|u| u.refresh());
+    };
     assert_eq!(checked(), [false, false, true, true]);
+    tap_switch(2); // band controls are disabled with the module off
+    assert!(wifi.borrow().writes.is_empty());
     tap_switch(0);
-    assert_eq!(wifi.borrow().writes, [("wifi.set_module".into(), r#"{"enabled":1}"#.into())]);
-    assert!(overlay_has("正在处理，等设备确认 Wi-Fi"));
+    assert_eq!(wifi.borrow().writes, [("wifi.settings".into(), r#"{"wifi_onoff":"1"}"#.into())]);
+    assert!(pending());
 
     tap_switch(0);
     tap_switch(2);
+    show_op("active", "screen-1-1", "accepted", false);
     finger(35, 450, true); // a tab tap started under the overlay
     wifi.borrow_mut().read = WifiRead { master: Some(true), module: Some(true), ..initial };
+    show_op("active", "screen-1-1", "verifying", true);
+    show_op("last", "screen-9-1", "confirmed", true);
     settle(1100);
     assert_eq!(wifi.borrow().writes.len(), 1);
     assert_eq!(checked(), [false, false, true, true]);
+    assert_eq!(wifi.borrow().fresh_reads, 0);
+    assert!(pending());
 
-    wifi.borrow_mut().reply = Some(true);
-    wifi.borrow_mut().read.radios[1] = Some(false); // firmware hasn't restored 5 GHz yet
-    settle(2200);
+    // The HTTP reply was lost. The matching Core verdict starts one fresh read.
+    wifi.borrow_mut().block_readback = true;
+    show_op("last", "screen-1-1", "confirmed", true);
     assert_eq!(wifi.borrow().fresh_reads, 1);
-    assert!(overlay_has("正在处理，等设备确认 Wi-Fi"), "unlocked before the saved band was restored");
-    wifi.borrow_mut().read.radios[1] = Some(true);
-    settle(1100);
-    assert!(overlay_has("正在处理，等设备确认 Wi-Fi"), "accepted config without 5 GHz up");
-    wifi.borrow_mut().read.up[1] = true;
+    assert!(pending());
+    show_op("last", "screen-9-2", "confirmed", true); // the verdict must survive this overwrite
+    wifi.borrow_mut().block_readback = false;
     settle(1200);
-    assert!(!overlay_has("正在处理，等设备确认 Wi-Fi"));
+    assert!(!pending());
     finger(35, 450, false);
     assert_eq!(ui::with(|u| u.cur_tab()), ui::TAB_WIFI);
     assert_eq!(checked(), [true, false, true, true]);
+    assert!(!warned());
 
+    tap_switch(1);
+    assert_eq!(wifi.borrow().writes[1], ("wifi.settings".into(), r#"{"radio2_disabled":"0"}"#.into()));
+    show_op("last", "screen-1-2", "confirmed", false); // terminal without Core's layout confirmation
+    settle(1200);
+    assert!(!pending());
+    assert!(warned());
+    assert_eq!(checked(), [true, false, true, true]);
+
+    // Known saved preference but no running module: preserve display and reject a band tap.
+    wifi.borrow_mut().read.module = Some(false);
+    settle(6100);
+    tap_switch(2);
+    assert_eq!(wifi.borrow().writes.len(), 2);
+    wifi.borrow_mut().read.module = Some(true);
+    wifi.borrow_mut().read.radios[1] = None;
+    settle(6100);
+    assert_eq!(checked(), [true, false, true, true]);
+    assert!(ui::with(|u| u.wifi.sw[2].has_state(lv::LV_STATE_DISABLED)));
+    tap_switch(2);
+    assert_eq!(wifi.borrow().writes.len(), 2);
+    wifi.borrow_mut().read.radios[1] = Some(true);
+    settle(6100);
+    tap_switch(2);
+    assert_eq!(wifi.borrow().writes[2], ("wifi.settings".into(), r#"{"radio5_disabled":"1"}"#.into()));
+    wifi.borrow_mut().reply = Some(WifiReply::Failed);
+    settle(2200);
+    assert!(warned());
+    assert!(!pending());
+    assert_eq!(checked(), [true, false, true, true]);
+
+    // A missing HTTP response and missing outcome must never send the request twice.
     tap_switch(0);
-    assert_eq!(wifi.borrow().writes[1].1, r#"{"enabled":0}"#);
-    wifi.borrow_mut().reply = Some(true);
+    assert_eq!(wifi.borrow().writes[3].1, r#"{"wifi_onoff":"0"}"#);
+    TICK.fetch_add(75_000, Ordering::Relaxed);
+    ui::with(|u| u.refresh());
+    assert!(pending(), "a sent transaction gets longer than the emergency deadline");
+    TICK.fetch_add(70_000, Ordering::Relaxed);
+    ui::with(|u| u.refresh());
+    assert!(!pending());
+    assert!(warned());
+    assert_eq!(wifi.borrow().writes.len(), 4);
+    settle(1200);
+    assert_eq!(checked(), [true, false, true, true]);
+
+    wifi.borrow_mut().emergency = true;
+    tap_switch(0);
+    wifi.borrow_mut().reply = Some(WifiReply::EmergencyDone);
     wifi.borrow_mut().read = WifiRead { up: [false, true], ..initial };
     settle(2200);
-    assert!(overlay_has("正在处理，等设备确认 Wi-Fi"), "unlocked before 5 GHz stopped");
+    assert!(pending(), "the emergency script still needs a running-layout readback");
     wifi.borrow_mut().read = initial;
     settle(1200);
+    assert!(!pending());
     assert_eq!(checked(), [false, false, true, true]);
-    assert!(!overlay_has("正在处理，等设备确认 Wi-Fi"));
+}
 
-    tap_switch(0);
-    wifi.borrow_mut().reply = Some(false);
+/// The NFC row says only what a live core actually read: without a model, a silent core or
+/// a block that never carried a real value, it shows —, stays disabled and cannot send
+/// nfc.set; the handle keeps its position across the transient unknown.
+#[cfg(test)]
+#[test]
+fn wifi_nfc_row_shows_only_a_live_known_value() {
+    if isolated_render("render::wifi_nfc_row_shows_only_a_live_known_value", &["dark"]).is_none() {
+        return;
+    }
+    init_render_test();
+    let initial = WifiRead {
+        master: Some(true), module: Some(true), radios: [Some(true), Some(true)],
+        main: [Some(true); 2], power_save: Some(true), up: [true, true],
+    };
+    let wifi = Rc::new(RefCell::new(WifiTest { read: initial, ..WifiTest::default() }));
+    let src = Box::new(Replay {
+        feed: BTreeMap::new(), step: Rc::new(RefCell::new(None)), cur: Rc::new(RefCell::new(String::new())),
+        next: None, wifi_test: Some(wifi.clone()),
+    });
+    let mut model = Model { bl_is_on: 1, bl_panel_lit: 1, bl_is_lit: 1, ..Model::default() };
+    ui::create(Conf::parse("appearance=dark\nautooff=0\n"), logic::launch_parse(&["luyaz-ui"]),
+        Rc::new(model.clone()), src, "luyaz-ui");
+    ui::with(|u| u.to_tab(ui::TAB_WIFI));
+    settle(1200);
+
+    let finger = |x, y, down| {
+        FX.store(x, Ordering::Relaxed);
+        FY.store(y, Ordering::Relaxed);
+        FDOWN.store(down, Ordering::Relaxed);
+        settle(100);
+    };
+    let tap_nfc = || {
+        let a = ui::with(|u| u.wifi.sw[4].coords());
+        let (x, y) = ((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2);
+        finger(x, y, true);
+        finger(x, y, false);
+    };
+    let nfc = || {
+        ui::with(|u| {
+            (
+                u.wifi.sw[4].has_state(lv::LV_STATE_CHECKED),
+                u.wifi.sw[4].has_state(lv::LV_STATE_DISABLED),
+                u.wifi.sw_st[4].text(),
+            )
+        })
+    };
+
+    // no data at all: unknown, disabled, nothing to send
+    assert_eq!(nfc(), (false, true, "—".into()));
+    tap_nfc();
+    assert!(wifi.borrow().writes.is_empty());
+
+    // a live model with the switch on: the row is a real control again
+    model.data_ok = 1;
+    model.data.nfc_on = 1;
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(1100);
+    assert_eq!(nfc(), (true, false, "已开启".into()));
+    tap_nfc();
+    assert_eq!(wifi.borrow().writes, [("nfc.set".into(), r#"{"enabled":0,"flag":2}"#.into())]);
+    assert_eq!(nfc().0, false, "the flip shows until the core says otherwise");
+    model.data.nfc_on = 0;
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(1100);
+    assert_eq!(nfc(), (false, false, "已关闭".into()));
+
+    // the core goes silent: unknown again, the handle keeps its word, no second write
+    model.backend_silent = 1;
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(1100);
+    assert_eq!(nfc(), (false, true, "—".into()));
+    tap_nfc();
+    assert_eq!(wifi.borrow().writes.len(), 1);
+
+    // and back: the value the model carries, not the one the handle held
+    model.backend_silent = 0;
+    model.data.nfc_on = 1;
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    settle(1100);
+    assert_eq!(nfc(), (true, false, "已开启".into()));
+}
+
+/// 节能模式 through the core: CoreDone alone is not the saved selection — the fresh read
+/// must carry it; an explicit failure warns and leaves the row on the last known value.
+#[cfg(test)]
+#[test]
+fn wifi_power_save_confirms_on_the_fresh_saved_selection() {
+    if isolated_render("render::wifi_power_save_confirms_on_the_fresh_saved_selection", &["dark"]).is_none() {
+        return;
+    }
+    init_render_test();
+    let initial = WifiRead {
+        master: Some(true), module: Some(true), radios: [Some(true), Some(true)],
+        main: [Some(true); 2], power_save: Some(true), up: [true, true],
+    };
+    let wifi = Rc::new(RefCell::new(WifiTest { read: initial, ..WifiTest::default() }));
+    let src = Box::new(Replay {
+        feed: BTreeMap::new(), step: Rc::new(RefCell::new(None)), cur: Rc::new(RefCell::new(String::new())),
+        next: None, wifi_test: Some(wifi.clone()),
+    });
+    let model = Model { bl_is_on: 1, bl_panel_lit: 1, bl_is_lit: 1, ..Model::default() };
+    ui::create(Conf::parse("appearance=dark\nautooff=0\n"), logic::launch_parse(&["luyaz-ui"]),
+        Rc::new(model), src, "luyaz-ui");
+    ui::with(|u| u.to_tab(ui::TAB_WIFI));
+    settle(1200);
+
+    let finger = |x, y, down| {
+        FX.store(x, Ordering::Relaxed);
+        FY.store(y, Ordering::Relaxed);
+        FDOWN.store(down, Ordering::Relaxed);
+        settle(100);
+    };
+    let tap = |i: usize| {
+        let a = ui::with(|u| u.wifi.sw[i].coords());
+        let (x, y) = ((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2);
+        finger(x, y, true);
+        finger(x, y, false);
+    };
+    let psm_checked = || ui::with(|u| u.wifi.sw[3].has_state(lv::LV_STATE_CHECKED));
+    fn has_text(o: Obj, text: &[u8]) -> bool {
+        !o.hidden() && ((checks::is_label(o) && o.text() == text)
+            || (0..o.child_count() as i32).any(|i| has_text(o.child(i), text)))
+    }
+    let overlay_has = |text: &str| has_text(Obj::layer_top(), text.as_bytes());
+    let pending = || overlay_has("正在处理，等设备确认 Wi-Fi");
+    let warned = || overlay_has("Wi-Fi 更改未确认");
+
+    assert!(psm_checked());
+    tap(3);
+    assert_eq!(wifi.borrow().writes, [("wifi.power_save".into(), r#"{"enabled":0}"#.into())]);
+    assert!(pending());
+
+    // core said done but the read still carries the old selection: not confirmed
+    wifi.borrow_mut().reply = Some(WifiReply::CoreDone);
+    settle(1100);
+    assert!(pending(), "CoreDone alone does not confirm the power-save write");
+    assert!(psm_checked(), "the handle stays on the confirmed value");
+
+    // the fresh read carries the saved selection: done
+    wifi.borrow_mut().read.power_save = Some(false);
+    settle(1200);
+    assert!(!pending());
+    assert!(!warned());
+    assert!(!psm_checked());
+
+    // an explicit failure warns without claiming the change
+    tap(3);
+    assert_eq!(wifi.borrow().writes[1], ("wifi.power_save".into(), r#"{"enabled":1}"#.into()));
+    wifi.borrow_mut().reply = Some(WifiReply::Failed);
     settle(2200);
-    assert!(!overlay_has("正在处理，等设备确认 Wi-Fi"));
-    assert_eq!(checked(), [false, false, true, true]);
+    assert!(!pending());
+    assert!(warned());
+    assert!(!psm_checked(), "a refused write does not flip the row");
 }
 
 #[cfg(test)]
@@ -844,7 +1074,7 @@ fn swipe_unlock_blocks_underlying_controls() {
     assert!(!ui::with(|u| u.screen_locked()));
     finger(x, y, true, 100);
     finger(x, y, false, 100);
-    assert_eq!(wifi.borrow().writes, [("wifi.set_module".into(), r#"{"enabled":1}"#.into())]);
+    assert_eq!(wifi.borrow().writes, [("wifi.settings".into(), r#"{"wifi_onoff":"1"}"#.into())]);
 }
 
 #[cfg(test)]

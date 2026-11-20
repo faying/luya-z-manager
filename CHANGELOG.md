@@ -21,6 +21,10 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
+- The admin web and touchscreen now share Core Wi-Fi transactions. The master switch preserves the saved bands and main AP settings. Confirmation waits for the vendor readback and the expected broadcast layout.
+- On compatible U60 Pro firmware, Core can finish the stock MAC-filter and transmit-power steps and stop a verified post-Wi-Fi loop when only one radio is enabled.
+- The web and touchscreen show the saved power-save choice. The web distinguishes guest configuration from availability, protects edited guest fields from concurrent changes, and waits for fresh NFC readback.
+
 - core, lweb, touch: retire Tailscale and the CHILL home exit that used it. Update Core, admin web, touch, sentinel and device scripts together. On devices with CHILL installed, update its launcher and template together as well.
 - core, MCP: band and cell locking require a person to act on the management web or touch screen. The MCP tool is retired with its reachability check.
 - scripts, sentinel: retire Tailscale deployment and watchdog probes. Restoring an older configuration backup skips the stored Tailscale identity.

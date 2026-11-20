@@ -88,6 +88,10 @@ pub struct WifiHost {
 }
 
 impl luyaz_wifi::Host for WifiHost {
+    fn wireless(&self) -> Option<luyaz_wifi::layout::Uci> {
+        crate::state::wifi_map_sync()
+    }
+
     fn uci_get(&self, key: &str) -> Option<String> {
         let out = luyaz_wifi::output_within(
             std::process::Command::new("uci").args(["-q", "get", key]),
