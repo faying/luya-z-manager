@@ -6,10 +6,17 @@
 //     crates/luyaz-web/e2e/run.sh router-wifi
 import { chromium } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import os from "node:os";
 
 const WEB = process.env.WEB ?? "http://127.0.0.1:18216";
 const OUT = process.env.OUT ?? "/tmp/lw-wifi";
 const MOCK = process.env.MOCK ?? "http://127.0.0.1:19416";
+// A real peer from off the LAN: this machine's own non-loopback IPv4. luyaz-web classifies a
+// connection by its peer address alone (topbar::via), never by the Host header, so the remote
+// checks come in through this address — the web under test must listen on it too (--bind /
+// LUYAZ_WEB_BIND, and the interface in LUYAZ_WEB_IFACES), or the checks fail with that message.
+const OFF_LAN = Object.values(os.networkInterfaces()).flat().find((a) => a?.family === "IPv4" && !a.internal)?.address ?? "";
+const RW = OFF_LAN ? WEB.replace(/127\.0\.0\.1|localhost/, OFF_LAN) : "";
 const AGENT_KEY = "u60pro-Tw2026"; // the typed mock agent's key_2g / key_5g
 const post = (path, body) => fetch(MOCK + path, { method: "POST", headers: { "content-type": "application/json" }, body: body && JSON.stringify(body) });
 const stats = () => fetch(`${MOCK}/mock/stats`).then((r) => r.json());
@@ -98,7 +105,7 @@ async function own(p) {
   await apply();
   await dialog().waitFor({ timeout: 8000 }).catch(() => {});
   const dlg = await txt(p, "dialog#wf-main-confirm");
-  ok(await dialog().count() === 1 && /10–60 秒/.test(dlg) && /「U60-New」/.test(dlg) && !/你正在经 Tailscale/.test(dlg), `rename: dialog (tier 3) ${dlg.slice(0, 200)}`);
+  ok(await dialog().count() === 1 && /10–60 秒/.test(dlg) && /「U60-New」/.test(dlg) && !/按远程处理|你正在远程操作/.test(dlg), `rename: dialog (tier 3, local: no remote warning) ${dlg.slice(0, 200)}`);
   await p.click("dialog#wf-main-confirm .nd-btn--confirm");
   await done("设置已生效|没有生效|设备已接受|已退回");
   ok(await txt(p, "#wf-main-op") === "Wi-Fi 设置已生效", `rename: ${await txt(p, "#wf-main-op")}`);
@@ -206,10 +213,13 @@ async function own(p) {
   await reset();
 }
 
-// O3: from off the LAN (a Host without a dot) the change asks for a receipt; the page sends it by
-// itself once the core waits (mock: src/mock/receipt.rs); without it the core puts the old back
+// O3: from off the LAN (the machine's real non-loopback address) the change asks for a receipt;
+// the page sends it by itself once the core waits (mock: src/mock/receipt.rs); without it the
+// core puts the old back
 async function remote(browser) {
-  const RW = WEB.replace("127.0.0.1", "lwremote");
+  if (!RW) return ok(false, "remote: this machine has no non-loopback IPv4 — the remote checks need a real off-LAN peer");
+  if (!(await fetch(RW + "/login").then(() => true, () => false)))
+    return ok(false, `remote: ${RW} does not answer — the web must listen on a non-loopback address too (--bind, and the interface in LUYAZ_WEB_IFACES)`);
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await ctx.addCookies([{ name: "lw_sid", value: sid, url: RW }, { name: "u60_lang", value: "zh", url: RW }]);
   const p = await ctx.newPage();
@@ -253,7 +263,7 @@ async function remote(browser) {
   await ctx.close();
 }
 
-const browser = await chromium.launch({ channel: "chrome", args: ["--host-resolver-rules=MAP lwremote 127.0.0.1"] });
+const browser = await chromium.launch({ channel: "chrome" });
 await remote(browser);
 for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [1280, 900, "desk", "en", "dark"], [390, 844, "phone", "zh", "light"]]) {
   const ctx = await browser.newContext({ viewport: { width: w, height: h } });

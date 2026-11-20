@@ -44,7 +44,6 @@ impl Slot {
 #[derive(Default)]
 pub struct Got {
     pub status: Slot,
-    pub home: Slot,
     pub prov: Slot,
     pub bypass: Slot,
     pub clients: Slot,
@@ -94,7 +93,6 @@ pub fn leaves(g: &Got, l: Lang, tab: &str, now: i64) -> Vec<(String, String)> {
     vec![
         ("ch-status".into(), status(g, l)),
         ("ch-exit".into(), exit(g, l, running)),
-        ("ch-home".into(), home(g, l, known, now)),
         ("ch-region".into(), pick(g, l, running, "main")),
         ("ch-ai".into(), pick(g, l, running, "ai")),
         ("ch-profile".into(), profile(g, l, known)),
@@ -251,71 +249,11 @@ fn exit(g: &Got, l: Lang, running: bool) -> String {
     )
 }
 
-// ---- home exit ----
-
 fn switch(label_id: &str, on: bool, disabled: bool, click: &str) -> String {
     format!(
         "<button type=\"button\" role=\"switch\" class=\"nd-switch t-switch\" aria-labelledby=\"{label_id}\" aria-checked=\"{on}\"{}{} data-on:click=\"{click}\"><span class=\"nd-switch__track\"><svg class=\"nd-switch__check\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><path d=\"M2.5 6.2 5 8.6 9.5 3.6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg><span class=\"nd-switch__thumb\"></span></span></button>",
         if on { " data-selected=\"true\"" } else { "" },
         if disabled { " disabled data-disabled=\"true\"" } else { "" },
-    )
-}
-
-fn line_html(x: &Line) -> String {
-    if x.tone == "neutral" {
-        format!("<span data-data>{}</span>", esc(&x.text))
-    } else {
-        mark(x.tone, &format!("<span data-data>{}</span>", esc(&x.text)))
-    }
-}
-
-fn home(g: &Got, l: Lang, known: bool, now: i64) -> String {
-    let Some(h) = g.home.v.as_ref().filter(|h| known && h["configured"].as_bool() == Some(true) && h["updating"].as_bool() != Some(true) && h["items"].is_object()) else {
-        return hidden("ch-home");
-    };
-    let busy = h["busy"].is_object();
-    let mut rows = String::new();
-    for item in HOME_ITEMS.iter().filter(|i| home_shown(h, i)) {
-        let on = h["items"][item]["on"].as_bool() == Some(true);
-        let grey = h["blocked"].is_string() && !on;
-        let no_sites = *item == "ip" && !on && h["items"]["ip"]["sites"].as_i64().unwrap_or(0) == 0;
-        let row = home_row(h, item, now, l);
-        let lid = format!("ch-hl-{item}");
-        rows += &format!(
-            "<div class=\"nd-row\"><span class=\"nd-row__text\"><span class=\"nd-row__label{}\" id=\"{lid}\">{}</span><span class=\"nd-row__sub block\" aria-live=\"polite\">{}</span></span>{}</div>",
-            if grey { " ch-grey" } else { "" },
-            esc(home_label(item, l)),
-            line_html(&row),
-            switch(&lid, on, busy || grey || no_sites, &format!("@post('/services/chill/home/ask?item={item}&on={}')", u8::from(!on))),
-        );
-    }
-    let foot = home_foot(h, now, l);
-    let foot_html = if foot.text.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "<p class=\"ch-foot px-1\" aria-live=\"polite\">{}{}</p>",
-            line_html(&foot),
-            if foot.extend {
-                format!(
-                    " <button type=\"button\" class=\"nd-btn nd-btn--secondary nd-btn--sm\" data-write=\"ch-ho\" data-on:click=\"{}\">{}</button>",
-                    post_once("/services/chill/home/extend"),
-                    l.pick("Extend 2h", "再开 2 小时")
-                )
-            } else {
-                String::new()
-            }
-        )
-    };
-    let reload = if h["busy"]["phase"].as_str() == Some("applying") {
-        aux(l.pick("Switching; this page may drop for a few seconds.", "正在切换，网页可能断几秒。"))
-    } else {
-        String::new()
-    };
-    format!(
-        "<section id=\"ch-home\" aria-labelledby=\"ch-home-t\">{}<div class=\"nd-group{}\">{rows}</div>{foot_html}{reload}</section>",
-        title(l, "ch-home-t", "Home exit", "家里出口"),
-        stale_cls(g.home.stale()),
     )
 }
 
@@ -676,4 +614,4 @@ pub fn area(id: &str, l: Lang, remote: Via, set: &str, phase: &crate::write::Pha
 }
 
 /// The ids of the write areas, in page order.
-pub const AREAS: [&str; 8] = ["ch-pw", "ch-ex", "ch-ho", "ch-rg", "ch-ax", "ch-pf", "ch-pv", "ch-bp"];
+pub const AREAS: [&str; 7] = ["ch-pw", "ch-ex", "ch-rg", "ch-ax", "ch-pf", "ch-pv", "ch-bp"];

@@ -2,11 +2,11 @@
 //! (u60-sentinel.md §3 G10, G11; §20): the same files at the same places, so doctor reads them as
 //! before (touch-ui docs/LEDGER.md §12).
 //!
-//! - `standby` (the guard's `standby_round`): each check, the WAN and Tailscale packet counts and
-//!   each program's context switches (all its threads); while the backlight is off and the check
-//!   before is close enough (not across a sleep), one line `<uptime> <wan pkts/min> <ts pkts/min>
-//!   <switches/s per program or ->` to `/tmp/standby.stat`, the last 60 kept. The previous sample
-//!   is ours (`/tmp/luyaz/core/standby.prev`), so a core restart goes on from it.
+//! - `standby` (the guard's `standby_round`): each check, the WAN packet count and each program's
+//!   context switches (all its threads); while the backlight is off and the previous check is
+//!   close enough, one line is appended to `/tmp/standby.stat`, the last 60 kept. The retired
+//!   tunnel packet and process columns remain as `0` and `-` so older records keep their layout.
+//!   The previous sample is ours (`/tmp/luyaz/core/standby.prev`).
 //! - `fp` (the guard's `fp_round`): `/tmp/luyaz/ledger/fp` = `<program> <pid> <md5 prefix>`
 //!   per program (`- -` when not running), the md5 taken only when the pid changed; when a
 //!   program's md5 changed, `fp-changed` gets the uptime (doctor then judges only standby records
@@ -18,10 +18,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// The programs measured (the guard's `STANDBY_PROGS`, in its order: doctor reads by position).
-/// These are ledger keys ([`crate::paths::prog_key`]). A baseline's columns and `fp` lines are
-/// by position: renaming or dropping a key orphans every baseline and fingerprint on the device.
-pub const PROGS: [&str; 4] = ["tailscaled", "mihomo", crate::paths::UI, crate::paths::CORE];
+/// Measured ledger keys, in the order of their columns after the retired process slot.
+pub const PROGS: [&str; 3] = ["mihomo", crate::paths::UI, crate::paths::CORE];
 /// Lines kept in the standby file.
 const KEEP: usize = 60;
 /// Checks further apart than this were across a sleep (the guard's `WAKE_GAP`, 2 rounds + 30 s).
@@ -38,7 +36,6 @@ pub struct Paths {
     pub ltmp: PathBuf,
     pub handover: PathBuf,
     pub wan_if: String,
-    pub ts_if: String,
 }
 
 impl Paths {
@@ -53,7 +50,6 @@ impl Paths {
             ltmp: h("/tmp/luyaz/ledger"),
             handover: h("/tmp/luyaz/handover"),
             wan_if: "rmnet_data0".into(),
-            ts_if: "tailscale0".into(),
         }
     }
 }
@@ -123,14 +119,10 @@ fn switches(proc_: &Path, pid: u32) -> u64 {
     n
 }
 
-/// One sample, as the guard keeps it: `<uptime> <wan> <ts> <pid:switches or ->…`.
+/// One sample: `<uptime> <wan> 0 - <pid:switches or ->…`.
 pub fn sample(p: &Paths, up: i64, pids: &BTreeMap<String, u32>) -> String {
     let nd = read(&p.netdev).unwrap_or_default();
-    let mut s = format!(
-        "{up} {} {}",
-        packets(&nd, &p.wan_if),
-        packets(&nd, &p.ts_if)
-    );
+    let mut s = format!("{up} {} 0 -", packets(&nd, &p.wan_if));
     for prog in PROGS {
         match pids.get(prog) {
             Some(&pid) => s.push_str(&format!(" {pid}:{}", switches(&p.proc_, pid))),
@@ -145,7 +137,7 @@ pub fn sample(p: &Paths, up: i64, pids: &BTreeMap<String, u32>) -> String {
 pub fn line(prev: &str, cur: &str, gap: i64) -> Option<String> {
     let a: Vec<&str> = prev.split_whitespace().collect();
     let b: Vec<&str> = cur.split_whitespace().collect();
-    if a.len() < 3 || a.len() != b.len() {
+    if a.len() < 4 || a.len() != b.len() {
         return None;
     }
     let n = |s: &str| s.parse::<f64>().unwrap_or(0.0);
@@ -154,12 +146,12 @@ pub fn line(prev: &str, cur: &str, gap: i64) -> Option<String> {
         return None;
     }
     let wan = (n(b[1]) - n(a[1])) * 60.0 / el;
-    let ts = (n(b[2]) - n(a[2])) * 60.0 / el;
-    if wan < 0.0 || ts < 0.0 {
+    if wan < 0.0 {
         return None;
     }
-    let mut out = format!("{} {wan:.0} {ts:.0}", n(b[0]) as i64);
-    for i in 3..a.len() {
+    // Ignore the retired columns even when the previous sample predates retirement.
+    let mut out = format!("{} {wan:.0} 0 -", n(b[0]) as i64);
+    for i in 4..a.len() {
         let (x, y) = (a[i], b[i]);
         let pair = |s: &str| s.split_once(':').map(|(p, c)| (p.to_string(), n(c)));
         match (pair(x), pair(y)) {
@@ -244,18 +236,18 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn line_as_the_guards_awk() {
-        // 60 s apart, 120 + 30 packets, core 600 switches → 10.0/s, one program gone, one new pid
+    fn line_preserves_legacy_columns() {
+        // A legacy previous sample can have tunnel packets and a running retired process.
         let prev = "1000 500 100 11:100 - 13:1000 14:50 15:7";
-        let cur = "1060 620 130 11:160 - 13:1600 99:60 15:7";
+        let cur = "1060 620 0 - - 13:1600 99:60 15:7";
         assert_eq!(
             line(prev, cur, 150).as_deref(),
-            Some("1060 120 30 1.0 - 10.0 - 0.0")
+            Some("1060 120 0 - - 10.0 - 0.0")
         );
         // 30 s apart: per minute doubles
         assert_eq!(
             line("1000 0 0 - - - - -", "1030 10 1 - - - - -", 150).as_deref(),
-            Some("1030 20 2 - - - - -")
+            Some("1030 20 0 - - - - -")
         );
         // across a sleep, not after, counters reset, switches went back
         assert_eq!(
@@ -269,17 +261,17 @@ mod tests {
         );
         assert_eq!(
             line(prev, "1060 620 130 11:90 - 13:1600 14:60 15:7", 150).as_deref(),
-            Some("1060 120 30 - - 10.0 0.2 0.0")
+            Some("1060 120 0 - - 10.0 0.2 0.0")
         );
         assert_eq!(line("", "1060 0 0 - - - - -", 150), None);
         // rounding as busybox awk's printf (checked against it): halves to even
         for (cur, want) in [
-            ("1007 1 1 1:1", "1007 9 9 0.1"),
-            ("1008 1 1 1:3", "1008 8 8 0.4"),
-            ("1024 1 1 1:6", "1024 2 2 0.2"),
-            ("1040 1 3 1:1", "1040 2 4 0.0"),
+            ("1007 1 1 - 1:1", "1007 9 0 - 0.1"),
+            ("1008 1 1 - 1:3", "1008 8 0 - 0.4"),
+            ("1024 1 1 - 1:6", "1024 2 0 - 0.2"),
+            ("1040 1 3 - 1:1", "1040 2 0 - 0.0"),
         ] {
-            assert_eq!(line("1000 0 0 1:0", cur, 150).as_deref(), Some(want));
+            assert_eq!(line("1000 0 0 - 1:0", cur, 150).as_deref(), Some(want));
         }
     }
 
@@ -304,7 +296,6 @@ mod tests {
             ltmp: r.join("ledger"),
             handover: r.join("handover"),
             wan_if: "rmnet_data0".into(),
-            ts_if: "tailscale0".into(),
         };
         (r, p)
     }
@@ -332,12 +323,16 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(" ")
         };
-        let pids: BTreeMap<String, u32> = [(crate::paths::CORE.to_string(), 7)].into();
+        let pids: BTreeMap<String, u32> = [
+            (crate::paths::CORE.to_string(), 7),
+            ("tailscaled".to_string(), 8),
+        ]
+        .into();
         task(&p, 7, 7, 10, 2);
         task(&p, 7, 8, 5, 0);
         fs::write(
             &p.netdev,
-            " rmnet_data0: 0 10 0 0 0 0 0 0 0 5 0 0 0 0 0 0\n",
+            " rmnet_data0: 0 10 0 0 0 0 0 0 0 5 0 0 0 0 0 0\n tailscale0: 0 50 0 0 0 0 0 0 0 20 0 0 0 0 0 0\n",
         )
         .unwrap();
         fs::write(&p.backlight, "0\n").unwrap();
@@ -345,7 +340,7 @@ mod tests {
         assert!(!p.stat.exists(), "no line from the first sample");
         assert_eq!(
             fs::read_to_string(&p.prev).unwrap(),
-            format!("1000 15 0 {}\n", cols("7:17"))
+            format!("1000 15 0 - {}\n", cols("7:17"))
         );
         task(&p, 7, 8, 65, 0);
         fs::write(
@@ -356,7 +351,7 @@ mod tests {
         standby_round(&p, 1060, &pids).unwrap();
         assert_eq!(
             fs::read_to_string(&p.stat).unwrap(),
-            format!("1060 30 0 {}\n", cols("1.0"))
+            format!("1060 30 0 - {}\n", cols("1.0"))
         );
         // screen on: sampled, no line
         fs::write(&p.backlight, "120\n").unwrap();
@@ -368,13 +363,15 @@ mod tests {
         }
         let t = fs::read_to_string(&p.stat).unwrap();
         assert_eq!(t.lines().count(), 60);
-        assert!(t.ends_with(&format!("{} 0 0 {}\n", 1180 + 69 * 60, cols("0.0"))));
+        assert!(t.ends_with(&format!("{} 0 0 - {}\n", 1180 + 69 * 60, cols("0.0"))));
         let _ = fs::remove_dir_all(&r);
     }
 
     #[test]
     fn fingerprints_md5_once_a_pid_and_fp_changed_when_the_binary_changed() {
         let (r, p) = root("fp");
+        fs::create_dir_all(&p.ltmp).unwrap();
+        fs::write(p.ltmp.join("fp"), "tailscaled 8 deadbeef\n").unwrap();
         fs::create_dir_all(p.proc_.join("7")).unwrap();
         fs::write(p.proc_.join("7/exe"), b"one").unwrap();
         let pids: BTreeMap<String, u32> = [(crate::paths::CORE.to_string(), 7)].into();
@@ -412,6 +409,33 @@ mod tests {
                 .unwrap()
                 .ends_with("luyaz-core - -\n")
         );
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn legacy_fingerprints_keep_remaining_named_rows() {
+        let (r, p) = root("legacy-fp");
+        fs::create_dir_all(&p.ltmp).unwrap();
+        fs::write(
+            p.ltmp.join("fp"),
+            "tailscaled 8 deadbeef\nmihomo 5 abcdef12\nluyaz-ui - -\nluyaz-core - -\n",
+        )
+        .unwrap();
+        let pids: BTreeMap<String, u32> = [
+            ("tailscaled".to_string(), 8),
+            ("mihomo".to_string(), 5),
+        ]
+        .into();
+        fp_round(&p, 100, &pids).unwrap();
+        assert_eq!(
+            fs::read_to_string(p.ltmp.join("fp")).unwrap(),
+            format!(
+                "mihomo 5 abcdef12\n{} - -\n{} - -\n",
+                crate::paths::UI,
+                crate::paths::CORE
+            )
+        );
+        assert!(!p.ltmp.join("fp-changed").exists());
         let _ = fs::remove_dir_all(&r);
     }
 

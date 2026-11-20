@@ -105,7 +105,6 @@ const OWN_PREFIX: &[&str] = &[
     "/settings",
     "/config",
     // 5b
-    "/services/tailscale",
     "/services/chill",
     "/router/scenario",
     // 5c

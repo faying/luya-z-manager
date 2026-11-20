@@ -715,6 +715,7 @@ struct Dev {
     verify_calls: u32,
     gone_comms: Vec<String>,
     conn_bad: Vec<String>,
+    conn_probes: Vec<String>,
     cmdlines: HashMap<i32, String>,
     non_append: Vec<String>,
     capped: Vec<String>,
@@ -865,6 +866,7 @@ impl WorkerIo for Dev {
         v
     }
     fn conn_ok(&mut self, item: &str) -> Option<bool> {
+        self.conn_probes.push(item.into());
         Some(!self.conn_bad.iter().any(|c| c == item))
     }
     fn comm_running(&mut self, comm: &str) -> Option<bool> {
@@ -1527,6 +1529,7 @@ fn logcap() {
 fn logcap_default_covers_every_service_log() {
     // every RAM log our procd services write (/tmp/<name>.log), luyaz-web included
     let p = Paths::default();
+    assert!(p.cap_logs.is_empty());
     for l in [
         "/tmp/luyaz-core.log",
         "/tmp/luyaz-sentinel.log",
@@ -2846,21 +2849,51 @@ fn conn_rounds(w: &mut Worker, d: &mut Dev, n: u32) {
     }
 }
 
+#[test]
+fn watch_conn_ignores_legacy_tailscale_only_baseline() {
+    let mut w = wk();
+    let mut d = Dev::new();
+    conn_watched(&mut d, "t1", "lweb", "tailscale");
+    d.conn_bad.push("tailscale".into());
+    conn_rounds(&mut w, &mut d, 61);
+    assert!(d.conn_probes.is_empty());
+    assert!(d.auto_calls.is_empty());
+    assert!(!d.files.contains_key(&format!("{WD}/t1")));
+    assert!(d.files.contains_key("/data/luyaz/ship/prev-check/t1"));
+}
+
+#[test]
+fn watch_conn_ignores_legacy_tailscale_but_checks_ssh_and_lan() {
+    for lost in ["ssh", "lan"] {
+        let mut w = wk();
+        let mut d = Dev::new();
+        conn_watched(&mut d, "t1", "lweb", "ssh,tailscale,unknown,lan");
+        d.conn_bad.push("tailscale".into());
+        d.conn_bad.push(lost.into());
+        conn_rounds(&mut w, &mut d, 11);
+        assert_eq!(d.auto_calls, [format!("t1: conn lost: {lost}")]);
+        assert!(d.conn_probes.iter().any(|item| item == "ssh"));
+        assert!(d.conn_probes.iter().any(|item| item == "lan"));
+        assert!(!d.conn_probes.iter().any(|item| item == "tailscale"));
+        assert!(!d.conn_probes.iter().any(|item| item == "unknown"));
+    }
+}
+
 /// Ten minutes down, not a round less, and coming back starts the clock over.
 #[test]
 fn watch_conn_sends_back_after_ten_minutes_down() {
     let mut w = wk();
     let mut d = Dev::new();
-    conn_watched(&mut d, "t1", "lweb", "ssh,tailscale");
-    d.conn_bad.push("tailscale".into());
+    conn_watched(&mut d, "t1", "lweb", "ssh,lan");
+    d.conn_bad.push("ssh".into());
     conn_rounds(&mut w, &mut d, 10);
     d.conn_bad.clear();
     conn_rounds(&mut w, &mut d, 1);
-    d.conn_bad.push("tailscale".into());
+    d.conn_bad.push("ssh".into());
     conn_rounds(&mut w, &mut d, 10);
     assert!(d.auto_calls.is_empty(), "{:?}", d.auto_calls);
     conn_rounds(&mut w, &mut d, 1);
-    assert_eq!(d.auto_calls, ["t1: conn lost: tailscale"]);
+    assert_eq!(d.auto_calls, ["t1: conn lost: ssh"]);
 }
 
 /// What the baseline did not have, or a record with no baseline, is never this build's doing.
@@ -2871,7 +2904,7 @@ fn watch_conn_only_compares_with_the_baseline() {
     conn_watched(&mut d, "t1", "lweb", "ssh");
     let (b, up) = (this_boot(&mut d), d.up);
     watched(&mut d, "t0", "core", &b, up);
-    d.conn_bad.push("tailscale".into());
+    d.conn_bad.push("lan".into());
     conn_rounds(&mut w, &mut d, 30);
     assert!(d.auto_calls.is_empty(), "{:?}", d.auto_calls);
 }
@@ -2881,13 +2914,13 @@ fn watch_conn_only_compares_with_the_baseline() {
 fn watch_conn_blames_the_newest_that_had_it() {
     let mut w = wk();
     let mut d = Dev::new();
-    conn_watched(&mut d, "t1", "touch", "ssh,tailscale");
-    conn_watched(&mut d, "t2", "lweb", "ssh,tailscale");
+    conn_watched(&mut d, "t1", "touch", "ssh,lan");
+    conn_watched(&mut d, "t2", "lweb", "ssh,lan");
     conn_watched(&mut d, "t3", "core", "ssh");
-    conn_watched(&mut d, "t4", "sentinel", "ssh,tailscale");
-    d.conn_bad.push("tailscale".into());
+    conn_watched(&mut d, "t4", "sentinel", "ssh,lan");
+    d.conn_bad.push("lan".into());
     conn_rounds(&mut w, &mut d, 11);
-    assert_eq!(d.auto_calls, ["t2: conn lost: tailscale"]);
+    assert_eq!(d.auto_calls, ["t2: conn lost: lan"]);
 }
 
 /// A carrier or a person may be the cause: once sent back, the other builds are left alone.
@@ -2895,9 +2928,9 @@ fn watch_conn_blames_the_newest_that_had_it() {
 fn watch_conn_goes_back_once_per_boot() {
     let mut w = wk();
     let mut d = Dev::new();
-    conn_watched(&mut d, "t1", "touch", "tailscale");
-    conn_watched(&mut d, "t2", "lweb", "tailscale");
-    d.conn_bad.push("tailscale".into());
+    conn_watched(&mut d, "t1", "touch", "lan");
+    conn_watched(&mut d, "t2", "lweb", "lan");
+    d.conn_bad.push("lan".into());
     conn_rounds(&mut w, &mut d, 11);
     assert_eq!(d.auto_calls.len(), 1);
     // what `auto_records` leaves

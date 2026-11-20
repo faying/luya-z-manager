@@ -14,7 +14,7 @@ export const SCENARIOS = [
   "stale", // signal + speed endpoints hang past the client's 9 s timeout
   "missing", // GET payloads with fields absent or null
   "cmdfail", // every write returns 500 {ok:false,error:"mock failure"}
-  "fakesuccess", // 200 ok:true but downstream failed (e.g. tailscale data.error)
+  "fakesuccess", // 200 ok:true but downstream failed (e.g. CHILL's mihomo calls all fail)
   "esim-busy", // POST /api/esim/switch: the card answers catBusy; the job retries (attempts +1 every 4 s) until POST /api/esim/cancel or 60 s
   "esim-nick-refused", // POST /api/esim/nickname: refused with "nickname too long", whatever the name
   "reboot-token", // POST /api/device/reboot -> 20 s of dropped sockets, then all tokens invalid
@@ -33,7 +33,6 @@ export const SCENARIOS = [
   "finding", // the core's open finding (T6): registered, data connection down, confidence sure; GET /api/diagnose data.finding + /api/public/status network.finding until POST /api/diagnose/dismiss
   "verdict-stall", // /api/public/status network.verdict = "stall" (connected, nothing comes back), signal itself good
   "verdict-crowd", // /api/public/status network.verdict = "crowd" (cell likely busy), signal itself good
-  "ts-keysoon", // /api/services/tailscale: this node's key expires in 5 days (the status block warns)
   "home-network", // /api/netinfo roaming false: the v2 speed test runs in full (default: roaming, coarse)
   "speed-v1", // /api/speedtest/*: an old core (before 1.48.0): no method_version or other v2 fields
   "speed-short", // /api/speedtest: the v2 run ends sample_short (no verdict)

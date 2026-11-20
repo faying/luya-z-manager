@@ -12,12 +12,6 @@
 #   ${EXCLUDE_FILTER}  高倍率/到期信息节点的排除正则
 #   ${FILTER_TW} ${FILTER_JP} ${FILTER_SG} ${FILTER_US}   各地区正则
 #   ${HC_INTERVAL} ${KEEPALIVE} ${TCP_CONCURRENT}   档位（chill.sh profile_vars；standard = 1800 / 600 / false）
-#   ${HOME_SERVER} ${HOME_PORT}   家里出口（chill.env 的 CHILL_HOME_EXIT=IPv4:端口）
-#   ${HOME_PROBE_URL}  家里出口两个组的探测地址（CHILL_HOME_PROBE_URL，默认国内 204）
-#
-# 行尾的 #@home、#@home-media、#@home-ip、#@home-rest 是家里出口（E3）的开关标签：
-# chill.sh 只保留打开了的标签的行（去掉标签），其余整行删掉。没配 CHILL_HOME_EXIT 时
-# 一行都不留，渲染结果和没有这个功能时一样。设计见 docs/designs/home-exit.md。
 #
 # 这是公开版的通用模板：一个订阅（SUB_URL）、精简规则。按自己的需要加 provider 和规则。
 #
@@ -64,16 +58,6 @@ listeners:
   #（crates/luyaz-api netinfo.rs 的 DEFAULT_AI_PORT）。
   - {name: netinfo-ai, type: mixed, port: 7895, listen: 127.0.0.1, udp: false, proxy: 🤖 AI}
 
-# 家里出口（E3）：家里那台机器上的 SOCKS5（经 Tailscale 子网路由到达，不改整机路由）。
-# udp: false：2026-10-05 实测家里用的 SOCKS5 不支持 UDP ASSOCIATE（回 07）。
-# mihomo 对不支持 UDP 的出口会跳过这条规则往下匹配（tunnel.go），UDP 不会被丢。
-# interface-name: tailscale0 —— 必须写。上面 tun 的 auto-detect-interface 让 mihomo
-# 把出站连接绑到默认网卡（rmnet_data0），绑了网卡就不再查 Tailscale 的路由表 52，
-# 到家里的连接从蜂窝口出去、永远超时（2026-10-05 真机：curl 绑 rmnet_data0 不通、
-# 绑 tailscale0 0.5 s 通）。
-proxies:  #@home
-  - {name: 家里, type: socks5, server: ${HOME_SERVER}, port: ${HOME_PORT}, udp: false, interface-name: tailscale0}  #@home
-
 # 不设 routing-mark：没有需要它的场景，加进来只会多一个与 TUN 路由交互的变量。
 
 tun:
@@ -103,13 +87,13 @@ tun:
   # 实测：注入后该行约 163KB，mihomo -t 通过；table 2022 由 51 条涨到 12731 条，
   # 4 秒内注入完毕，内存开销约 35–42MB（余量仍 ~690MB）。
   #
-  # 末尾的私网段是自写的，**不要换成 geoip/private**——它含 198.18.0.0/15，
+  # 这里显式列出私网和运营商共享地址段，**不要换成 geoip/private**——它含 198.18.0.0/15，
   # 会把 fake-ip 段一起排除掉，导致所有代理流量黑洞。
   route-exclude-address:
     [${CN_CIDR}
      0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16,
      172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4,
-     fd7a:115c:a1e0::/48, fc00::/7, fe80::/10, ff00::/8]
+     fc00::/7, fe80::/10, ff00::/8]
 
   # ✗ 这里原本有 exclude-mac-address（按设备绕行）。2026-09-16 实测确认它在本机
   #   **静默失效**：配置被接受、TUN 正常、日志无错，但内核里查不到任何一条按 MAC
@@ -142,23 +126,12 @@ dns:
   # cn_domain 在这里 → 国内域名拿到真实 IP → 落在 route-exclude-address 的 CN 段内
   # → 不进 table 2022 → 走 WAN 直连。这就是「国内流量不进 mihomo」的完整链路。
   #
-  # rule 模式（E3）：从上往下第一条命中的说了算。家里出口开着时，最前面几行把国内版权
-  # 和家里 IP 网站改回 fake-ip，它们才会进 TUN、走到下面的规则。下面 real-ip 那些是
-  # 原来 list 模式逐项翻译的，2026-10-05 用 mihomo v1.19.31 对 26 个域名比过两种写法，
-  # 结果相同。⚠ time.*.com 不能写成 DOMAIN-WILDCARD：它的 * 能跨几级（time.a.b.com
-  # 也算），原来的 * 只配一级，所以用 DOMAIN-REGEX。这里不认 AND/OR 这类逻辑规则。
+  # 从上往下第一条命中的说了算。time.*.com 用正则限制只匹配一级子域名。
   fake-ip-filter-mode: rule
   fake-ip-filter:
-    - RULE-SET,media_cn,fake-ip  #@home-media
-    - RULE-SET,media_iqiyi,fake-ip  #@home-media
-    - RULE-SET,media_youku,fake-ip  #@home-media
-    - RULE-SET,media_bilibili,fake-ip  #@home-media
-    - RULE-SET,media_netease,fake-ip  #@home-media
-    - RULE-SET,home_ip,fake-ip  #@home-ip
     - RULE-SET,cn_domain,real-ip
     - RULE-SET,private_domain,real-ip
     - DOMAIN-SUFFIX,local,real-ip
-    - DOMAIN-SUFFIX,ts.net,real-ip
     - DOMAIN-REGEX,^time\.[^.]+\.com$,real-ip
     - DOMAIN-REGEX,^ntp\.[^.]+\.com$,real-ip
     - DOMAIN,captive.apple.com,real-ip
@@ -183,14 +156,12 @@ dns:
   # App Store 搜索/更新、Apple 推送）。运营商 DNS 变了 chill.sh 会热重载。
   direct-nameserver: ["system://"${DIRECT_DNS_EXTRA}]
 
-  nameserver-policy:
-    # ✗ 不要写 "+.lan"：实测 Mac.lan 在 mihomo 与 dnsmasq 下均为 NXDOMAIN，
-    #   本机局域网命名不带 .lan 后缀，这条是无效假设。
-    # ✗ 更不要写 "^[^.]+$" 去匹配裸主机名：mihomo 把键当域名模式解析，会报
-    #   invalid domain（"+" wildcard must occupy the entire label），**整份配置校验不过**。
-    #   裸主机名由 dnsmasq 用 DHCP 租约作答（实测 Mac -> 192.168.0.109 正确）；
-    #   若让 mihomo 解析会得到错误的 fake-ip（实测 198.18.0.5），属静默错误。
-    "+.ts.net": ["100.100.100.100#tailscale0"]
+  # ✗ 不要写 "+.lan"：实测 Mac.lan 在 mihomo 与 dnsmasq 下均为 NXDOMAIN，
+  #   本机局域网命名不带 .lan 后缀，这条是无效假设。
+  # ✗ 更不要写 "^[^.]+$" 去匹配裸主机名：mihomo 把键当域名模式解析，会报
+  #   invalid domain（"+" wildcard must occupy the entire label），**整份配置校验不过**。
+  #   裸主机名由 dnsmasq 用 DHCP 租约作答（实测 Mac -> 192.168.0.109 正确）；
+  #   若让 mihomo 解析会得到错误的 fake-ip（实测 198.18.0.5），属静默错误。
 
 sniffer:
   enable: true
@@ -242,12 +213,6 @@ proxy-groups:
   - {name: 🍎 Apple, type: select, proxies: [DIRECT, 🚀 节点选择, 🇹🇼 台湾, 🇯🇵 日本, 🇸🇬 新加坡, 🇺🇸 美国]}
   - {name: 🐟 漏网之鱼, type: select, proxies: [🚀 节点选择, DIRECT, 🇹🇼 台湾, 🇯🇵 日本, 🇸🇬 新加坡, 🇺🇸 美国]}
   - {name: 📞 VoWiFi, type: select, use: [sub], filter: '${FILTER_TW}'}
-  # 家里出口（E3）。探测用国内的 204（D5）：国外地址到了家里会按家里的规则再走它自己的
-  # 国外节点，测到的就不只是「家里通不通」了。
-  # 版权：家里不通就退回直连（看不了，但不影响别的）。
-  - {name: 家里出口, type: fallback, proxies: [家里, DIRECT], url: '${HOME_PROBE_URL}', interval: 300, timeout: 3000, lazy: true}  #@home
-  # 家里 IP 网站和「其余都走家里」：家里不通就退回现在的出口（OQ1）。
-  - {name: 家里IP, type: fallback, proxies: [家里, 🐟 漏网之鱼], url: '${HOME_PROBE_URL}', interval: 300, timeout: 3000, lazy: true}  #@home
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 规则集（§6）。统一 http + mrs + 三天更新，经 🚀 节点选择 下载。
@@ -268,17 +233,6 @@ rule-providers:
   # 国内 IP 已由 route-exclude-address 在内核层绕开）。保留是为了能随时按 §6 所说
   # 在 MATCH 前加回 RULE-SET,cn_ip,DIRECT，代价仅 37KB。
   cn_ip:          {type: http, behavior: ipcidr, format: mrs, interval: 259200, proxy: 🚀 节点选择, path: ./ruleset/cn_ip.mrs,          url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geoip/cn.mrs'}
-  # 国内版权（E3 cn_media）。不用 tencent：它含微信，会把聊天也绕回国。
-  # 不在 chill.sh 的必需规则集里：缺了只影响这个功能。
-  media_cn:       {type: http, behavior: domain, format: mrs, interval: 259200, proxy: 🚀 节点选择, path: ./ruleset/media_cn.mrs,       url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geosite/category-media-cn.mrs'}  #@home
-  media_iqiyi:    {type: http, behavior: domain, format: mrs, interval: 259200, proxy: 🚀 节点选择, path: ./ruleset/media_iqiyi.mrs,    url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geosite/iqiyi.mrs'}  #@home
-  media_youku:    {type: http, behavior: domain, format: mrs, interval: 259200, proxy: 🚀 节点选择, path: ./ruleset/media_youku.mrs,    url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geosite/youku.mrs'}  #@home
-  media_bilibili: {type: http, behavior: domain, format: mrs, interval: 259200, proxy: 🚀 节点选择, path: ./ruleset/media_bilibili.mrs, url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geosite/bilibili.mrs'}  #@home
-  media_netease:  {type: http, behavior: domain, format: mrs, interval: 259200, proxy: 🚀 节点选择, path: ./ruleset/media_netease.mrs,  url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geosite/netease.mrs'}  #@home
-  # 家里 IP 网站：用户手写的域名表（一行一个，+.example.com 含子域名）。
-  # 表是空的或不存在时 chill.sh 不打开 #@home-ip。mihomo -t 不加载 provider、查不出缺文件；
-  # 运行时缺文件只记一条错误、规则集是空的，等于「开着却什么都没走家里」（2026-10-05 实测）。
-  home_ip:        {type: file, behavior: domain, format: text, path: ./home_ip.list}  #@home-ip
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 规则（§6）。顺序即优先级。
@@ -301,27 +255,8 @@ rules:
   - DOMAIN,detectportal.firefox.com,DIRECT
 
 
-  # 家里出口（E3 §4.3）：排在 cn_domain 前面，国内版权和家里 IP 网站才轮得到。
-  # 先拒绝它们的 QUIC：家里的 SOCKS5 不转 UDP，放过去会落到下面的直连，从当地出去。
-  # 拒绝后 App 退回 TCP，走家里。
-  - AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,media_cn)),REJECT  #@home-media
-  - AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,media_iqiyi)),REJECT  #@home-media
-  - AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,media_youku)),REJECT  #@home-media
-  - AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,media_bilibili)),REJECT  #@home-media
-  - AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,media_netease)),REJECT  #@home-media
-  - RULE-SET,media_cn,家里出口  #@home-media
-  - RULE-SET,media_iqiyi,家里出口  #@home-media
-  - RULE-SET,media_youku,家里出口  #@home-media
-  - RULE-SET,media_bilibili,家里出口  #@home-media
-  - RULE-SET,media_netease,家里出口  #@home-media
-  - AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,home_ip)),REJECT  #@home-ip
-  - RULE-SET,home_ip,家里IP  #@home-ip
-
   - RULE-SET,cn_domain,DIRECT
   - RULE-SET,ai_domain,🤖 AI
-  # 「其余都走家里 · 2 小时」（D4）：AI、VoWiFi、私网、国内直连在上面，照旧。
-  # UDP 到这里会被跳过（家里不转 UDP），继续按下面的规则走。
-  - MATCH,家里IP  #@home-rest
   - RULE-SET,telegram_domain,🚀 节点选择
   - RULE-SET,telegram_ip,🚀 节点选择,no-resolve
   - RULE-SET,youtube,📺 流媒体

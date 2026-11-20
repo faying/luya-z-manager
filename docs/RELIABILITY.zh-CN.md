@@ -62,7 +62,7 @@
   - 哨兵：`agent-silent`、`wifi-takeover`、`wifi-restore-failed`、`dropbear-down`、`dropbear-restarted`、`ui-crash`、`ui-gave-up`
   - core svcwatch：`core-crash`（核心自己；改名 F4 前叫 `core-crash`，旧记录照认）、`web-crash`、`sentinel-crash`
   - 核心哨兵监视：`sentinel-silent`、`screen-empty`（只在空屏兜底开关打开时）
-  - 核心引擎：`home-exit-down`、`home-exit-check-failed`、`sms-forward-stuck`、`sms-forward-queue`
+  - 核心引擎：`sms-forward-stuck`、`sms-forward-queue`
   - 触屏：`ui-theme-paused`
 
 ### 短信
@@ -100,14 +100,14 @@
 - `luyaz-core doctor`（进程名 `luyaz-doctor`；`/data/luyaz/scripts/doctor.sh` 是薄壳）。只读。输出：给人看的文字、`--tsv`（`<ok|warn|bad>\t<id>\t<名称>\t<说明>`）、`--tsv2`（头 `#tsv2`，英文）；有 bad 行退出码 1。另有 `--manifest`、`--tree-fp`、`--ledger-selftest`。
 - `--calibrate-standby` 写待机基线（第 8 节）；`--report 24h|7d [--summary]` 输出长期计分卡（`scorecard::live::card`，Core 1.3.0 / `7637b1b1e` 已搬进核心）。`doctor.sh` 只转给 `/data/luyaz/luyaz-core doctor`，没有核心就退出 2（shell 兜底 `doctor-legacy.sh` 改名 F4 已删）。
 - 核心自己跑体检（启动后 20 秒第一次，之后定时），快照由 `/api/health` 提供。
-- `touch-ui/scripts/config-backup.sh`：只备份配置（清单在脚本开头），Tailscale 身份要 `--with-tailscale`。备份只存在电脑上（`./install.sh backup`）；`restore` 先 plan、写前留 `.pre-restore`、不 reload Wi-Fi。
+- `touch-ui/scripts/config-backup.sh`：只备份配置（清单在脚本开头）；已退役的 Tailscale 身份不再备份，旧档案里的 Tailscale 文件随档案一起校验但永不恢复。备份只存在电脑上（`./install.sh backup`）；`restore` 先 plan、写前留 `.pre-restore`、不 reload Wi-Fi。
 
-- **转正后**：反复出事的版本自动换回：`/data/luyaz/ship/watch/<事务号>` 还在时 `luyaz-recover.sh` 数非预期开机，每 3 次退最新的一个；哨兵判转正那次开机，版本证明过自己后删掉那个文件。隔离清单 `/data/luyaz/ship/quarantine`，关闭开关 `/data/luyaz/ship/auto-rollback-off`，告警 `ship-auto-rollback`。基线里通的 SSH、LAN、Tailscale 在那次开机连续坏 10 分钟，也退最新的版本，不隔离，一次开机最多一个（`ship-conn-rollback`）。规则见 `touch-ui/docs/SHIP.md`。
+- **转正后**：反复出事的版本自动换回：`/data/luyaz/ship/watch/<事务号>` 还在时 `luyaz-recover.sh` 数非预期开机，每 3 次退最新的一个；哨兵判转正那次开机，版本证明过自己后删掉那个文件。隔离清单 `/data/luyaz/ship/quarantine`，关闭开关 `/data/luyaz/ship/auto-rollback-off`，告警 `ship-auto-rollback`。基线里通的 SSH、LAN 在那次开机连续坏 10 分钟，也退最新的版本，不隔离，一次开机最多一个（`ship-conn-rollback`）。规则见 `touch-ui/docs/SHIP.md`。
 
 ## 8. 待机记录
 
-- 写者：核心 `longterm/standby.rs`，只在 `/tmp/luyaz/handover` 列了 `standby` 时。背光关着时每轮往 `/tmp/standby.stat` 写一行：`<开机秒> <蜂窝包/分> <Tailscale 隧道包/分> <各程序唤醒/秒>`，留 60 行；中途换了 pid 的程序写 `-`；离上一轮超过 150 秒不写。
-- 程序列按位置固定（doctor 按位置读）：`tailscaled mihomo luyaz-ui luyaz-core`。
+- 写者：核心 `longterm/standby.rs`，只在 `/tmp/luyaz/handover` 列了 `standby` 时。背光关着时每轮往 `/tmp/standby.stat` 写一行：`<开机秒> <蜂窝包/分> <隧道包/分> <各程序唤醒/秒>`，留 60 行；中途换了 pid 的程序写 `-`；离上一轮超过 150 秒不写。Tailscale 的两列——隧道包和 `tailscaled` 位——已退役：写者恒写 `0` 和 `-`，旧记录和旧基线的列位不变。
+- 程序列按位置固定：退役的 `tailscaled` 位（恒 `-`），之后是 `mihomo luyaz-ui luyaz-core`；doctor 只判退役位之后的列。
 - 指纹 `/tmp/luyaz/ledger/fp`、`fp-changed`。基线 `/data/luyaz/scripts/standby.baseline`（v2，带 `fp` 行），由 `luyaz-core doctor --calibrate-standby` 写（至少 30 行记录；每列中位数和 MAD，再加指纹；经 `POST /v2/longterm/calib` 记一条 `calib` 事件），由 doctor 的「待机」行判定。
 
 ## 9. 时钟判定、崩溃记录、`.migrated`

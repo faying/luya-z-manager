@@ -62,7 +62,6 @@ mod home_dual;
 mod dual_switches;
 mod scenario;
 mod settings;
-mod tailscale;
 mod at_term;
 mod device_power;
 mod dns;
@@ -137,7 +136,7 @@ enum Cmd {
         #[arg(
             long,
             env = "LUYAZ_WEB_PAGES",
-            default_value = "/signal,/charts,/functions,/system,/trends,/clients,/tools/speedtest,/tools/speedtest/ladder,/router/signal-detect,/tools/diagnose,/device-info,/router/qci,/tools/cpu,/sms,/sms/compose,/changes,/usb,/bandlock,/router/celllock,/router/apn,/router/network-mode,/router/mobile-network,/router/qos,/router/vpn,/router/telemetry,/router/firewall,/router/lan,/router/wifi,/router/wifi-guest,/alerts,/sms/forward,/scheduler,/router/esim,/health,/settings,/config,/,/services/tailscale,/services/chill,/router/scenario,/router/device,/tools/enable-adb,/tools/agent,/router/sim,/router/dualsim,/router/stc,/router/stk,/tools/at,/tools/processes,/router/dns,/usage"
+            default_value = "/signal,/charts,/functions,/system,/trends,/clients,/tools/speedtest,/tools/speedtest/ladder,/router/signal-detect,/tools/diagnose,/device-info,/router/qci,/tools/cpu,/sms,/sms/compose,/changes,/usb,/bandlock,/router/celllock,/router/apn,/router/network-mode,/router/mobile-network,/router/qos,/router/vpn,/router/telemetry,/router/firewall,/router/lan,/router/wifi,/router/wifi-guest,/alerts,/sms/forward,/scheduler,/router/esim,/health,/settings,/config,/,/services/chill,/router/scenario,/router/device,/tools/enable-adb,/tools/agent,/router/sim,/router/dualsim,/router/stc,/router/stk,/tools/at,/tools/processes,/router/dns,/usage"
         )]
         pages: String,
         /// Operator logo files (`<slug>.svg`/`.png`). Trademarks: read from disk, never embedded.
@@ -155,7 +154,7 @@ enum Cmd {
         /// `/agent-api` tokens, `name token` per line (agent_api.rs); no file = the routes are off.
         #[arg(long, env = "LUYAZ_WEB_AGENT_TOKEN_FILE", default_value = agent_api::TOKEN_FILE)]
         agent_token_file: std::path::PathBuf,
-        /// Extra `/agent-api` source networks, one CIDR per line (beside loopback and the tailnet).
+        /// Extra `/agent-api` source networks, one CIDR per line (beside loopback).
         #[arg(long, env = "LUYAZ_WEB_AGENT_ALLOW_FILE", default_value = agent_api::ALLOW_FILE)]
         agent_allow_file: std::path::PathBuf,
         /// Who may use an `act` token (`/agent-api/act/*`), one CIDR per line; no file = no one.
@@ -419,7 +418,6 @@ pub fn app(
         .merge(esim::routes())
         .merge(health_page::routes())
         .merge(home::routes())
-        .merge(tailscale::routes())
         .merge(scenario::routes())
         .merge(chill_page::routes())
         .merge(chill_proxy::routes())
@@ -493,7 +491,7 @@ const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 /// loop stops accepting; open connections are dropped with the process.
 ///
 /// Slots (guard.rs): one address holds at most [`guard::PER_PEER`]; the last [`guard::RESERVED`]
-/// of `max_conns` are for loopback and the tailnet only. A connection over its address's share is
+/// of `max_conns` are reserved for loopback. A connection over its address's share is
 /// closed at once; one waiting for a slot gives up after `header_timeout`.
 async fn accept_loop(
     l: tokio::net::TcpListener,

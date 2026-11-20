@@ -8,7 +8,7 @@
 |:--|:--|
 | **SSH** | 用 `ssh -p 2222 root@192.168.0.1` 凭密钥登录（密码登录一直关着），重启后照样能连 |
 | **高级后台** | 浏览器开 `http://192.168.0.1:9090/`：锁频锁小区、短信、APN、防火墙、Wi-Fi 等 |
-| **ui 触屏界面** | 前面板换成新界面，按任务分 5 个标签（首页 · 蜂窝 · Wi-Fi · 出口 · 系统）：信号结论和载波、Wi-Fi 和连着的设备、CHILL/Tailscale 出口、eSIM 切换 |
+| **ui 触屏界面** | 前面板换成新界面，按任务分 5 个标签（首页 · 蜂窝 · Wi-Fi · 出口 · 系统）：信号结论和载波、Wi-Fi 和连着的设备、CHILL 出口、eSIM 切换 |
 | **eSIM** | 插可插拔 eUICC 卡（5ber、eSTK.me 之类）后，在后台下载、切换、删除 profile；屏幕上也能切 |
 | **CHILL**（可选，点名才装） | 设备上的透明代理（mihomo），带 zashboard 面板，按规则分流；订阅地址要你自己的 |
 
@@ -69,7 +69,8 @@ claude              # Claude Code 会读这里的 CLAUDE.md
                                #   另存一份 config-…system.tgz（rc.local、我们的 init.d 脚本、dropbear host key、
                                #   authorized_keys、start_dropbear.sh），供升固件前参考，restore 不恢复它
 ./install.sh restore 备份.tgz  # 先和 backup 旁存的 备份.tgz.sha256 比对（不符一律不恢复；没有它的旧备份要
-                               #   LUYAZ_RESTORE_NO_SHA256=1），推到设备后再比一次，再列出会改哪些文件，输入 yes 才写
+                               #   LUYAZ_RESTORE_NO_SHA256=1），推到设备后再比一次，再列出会改哪些文件，输入 yes 才写；
+                               #   Tailscale 退役前的旧备份：其余照常恢复，已退役的 Tailscale 身份跳过并逐条说明
 ./install.sh undo [--ssh]      # 退回第一次装机改过的东西（快照在 /data/luyaz/kit/snap）；只换文件、不停不起服务，
                                #   重启后完全生效。默认保留 SSH，加 --ssh 连它一起退
 ./install.sh reboot            # 重启一次，确认各组件都能自己起来
@@ -116,9 +117,18 @@ U60 不在默认地址时：`GATEWAY=192.168.x.1 ./install.sh`。
 - **CHILL**：第一次 `./install.sh chill` 只装不启动。
   1. SSH 进去，把 `/data/chill/chill.env.example` 复制成 `/data/chill/chill.env`，填上订阅地址，`chmod 600`。静态节点快照放 `/data/chill/providers/`。
   2. 跑 `sh /data/chill/chill.sh safe-start`；确认全屋网络正常后，5 分钟内跑 `sh /data/chill/chill.sh confirm`。不确认它会自己停掉，配错了也不会把你锁在外面。
-  3. 以后在后台「服务 → CHILL」里开关、选出口。那一页的按钮打开 zashboard，由高级后台在自己的登录后面提供（`:9090/chill-ui/`，经 Tailscale 也能用）。
+  3. 以后在后台「服务 → CHILL」里开关、选出口。那一页的按钮打开 zashboard，由高级后台在自己的登录后面提供（`:9090/chill-ui/`）。
 
   之后再跑 `./install.sh chill` 就是更新：订阅地址和缓存保留；原来在运行的话会重启内核，新内核起不来会自动换回旧的。
+
+## 旧版 Tailscale 安装
+
+装机包不再安装 Tailscale，也不会自动卸载旧安装或独立管理的 VPN。迁移旧设备前，
+先确认本地管理通道，检查进行中的 ship 事务和 watch 记录；旧版看守可能因 Tailscale
+停止触发回滚。检查 `/etc/rc.local` 中旧版 `/data/tailscale/start.sh` 或
+`/data/tailscale-start.sh` 以及旧服务和状态，再经设备主人同意处理。另行检查网络规则
+和旧备份，不要删除无关 VPN 配置。旧配置备份仍会校验，但恢复时会报告并跳过已退役的
+`/data/tailscale` 数据。
 
 ## 别做的事
 
@@ -142,7 +152,8 @@ rm -rf /data/luyaz /data/esim /data/chill /data/alerts /data/crashlog /data/powe
 reboot   # 重启后生效
 ```
 
-重启后屏幕就是原厂界面。需要自动升级的话，自己到网页后台打开。
+重启后屏幕就是原厂界面。固件自动升级始终保持关闭。保存的 `rc.local` 可能包含更早
+安装的 Tailscale；恢复前应先检查，不能直接假定它是原厂内容。
 
 ## 出问题时
 

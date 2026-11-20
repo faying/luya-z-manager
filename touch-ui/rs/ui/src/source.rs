@@ -33,12 +33,6 @@ pub struct Activity {
     pub home: bool,
     /// netinfo_poll's mode (NI_*)
     pub ni_mode: i32,
-    /// Home, 出口 or the Tailscale page
-    pub tailscale: bool,
-    /// the CHILL page itself (家里出口)
-    pub chill_page: bool,
-    /// a 家里出口 switch is being sent from the screen
-    pub hx_sending: bool,
     /// Home, 出口 or a CHILL page
     pub chill: bool,
     /// the eSIM page
@@ -67,9 +61,7 @@ pub struct Polled {
     pub scenario: bool,
     pub netinfo: bool,
     pub screen: bool,
-    pub tailscale: bool,
     pub chill: bool,
-    pub chill_home: bool,
     pub esim: bool,
     pub speedtest: bool,
     pub servers: bool,
@@ -204,12 +196,6 @@ pub trait Source {
     fn chill_select_group(&mut self, i: usize) -> bool;
     fn chill_set_profile(&mut self, p: &str) -> bool;
     fn chill_test_delay(&mut self) -> i32;
-    /// (HTTP status, the agent's code on 409)
-    fn chill_home_set(&mut self, item: usize, on: bool) -> (i32, String);
-    /// the new end of 其余, None = not extended
-    fn chill_home_extend(&mut self, m: &Model) -> Option<i64>;
-    /// chill_home_poll(1, 1) right after a switch
-    fn chill_home_read(&mut self);
 
     // ---- the process ----
     /// exec a fresh copy with these arguments; returns only on failure (-1)

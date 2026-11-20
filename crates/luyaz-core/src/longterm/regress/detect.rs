@@ -45,7 +45,6 @@ pub struct Check {
     pub cell: Option<Cell>,
     /// Per exit: None = not meant on (or cannot tell), Some(ok).
     pub chill: Option<bool>,
-    pub ts: Option<bool>,
     /// What the home screens' finding and the no-service ledger say now (cellular, exits).
     pub observed: Option<Said>,
     /// Heat care's level is critical (`crate::heat`): None = no temperature read at all.
@@ -111,7 +110,7 @@ impl Regress {
         self.egress(k);
         self.heat(k);
         let cell_known = k.cell.is_some();
-        let egress_known = k.chill.is_some() || k.ts.is_some();
+        let egress_known = k.chill.is_some();
         self.blind("cellular", cell_known, &k.at);
         self.blind("egress", egress_known, &k.at);
         super::sync::expire(self, &k.at);
@@ -260,7 +259,7 @@ impl Regress {
     fn egress(&mut self, k: &Check) {
         // while the cellular link is down its exits' failures are its own (design §3)
         let cell_open = self.find_open("regress-cellular", None).is_some();
-        for (name, v) in [("chill", k.chill), ("tailscale", k.ts)] {
+        for (name, v) in [("chill", k.chill)] {
             let open = self.find_open("regress-egress", Some(name));
             let p = self.det.paths.entry(name).or_default();
             let v = if cell_open { None } else { v };

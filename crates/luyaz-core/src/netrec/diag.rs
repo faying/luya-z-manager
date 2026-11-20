@@ -176,7 +176,7 @@ pub fn dump_tcp(sock: &mut NlSock) -> std::io::Result<Vec<Tcp>> {
     Ok(v)
 }
 
-/// A WAN-side peer: not loopback, private, CGNAT (tailnet), link-local, ULA, or mihomo's
+/// A WAN-side peer: not loopback, private, CGNAT, link-local, ULA, or mihomo's
 /// TUN range 198.18.0.0/15 (the LAN clients' side of proxied flows).
 pub fn wan(ip: &IpAddr) -> bool {
     match ip {

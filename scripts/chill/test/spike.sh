@@ -12,7 +12,7 @@
 #
 # 硬约束（来自工作区 CLAUDE.md 与设计文档）：
 #   • 设备写入只落 /tmp/chill-spike，不碰 /data、/etc/config、/etc/rc.local
-#   • 不改 uci，不重启设备，不动 Tailscale
+#   • 不改 uci，不重启设备
 #   • 所有退出路径都要删掉临时 iptables 规则、nft 表、ip rule、unreachable 路由
 #   • 死人开关：设备端 300 秒后无条件自毁，SSH 断了也能恢复
 # ─────────────────────────────────────────────────────────────────────────────
@@ -198,7 +198,7 @@ dns:
   ipv6: false
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
-  fake-ip-filter: ["rule-set:cn_domain", "rule-set:private_domain", "+.lan", "+.local", "+.ts.net"]
+  fake-ip-filter: ["rule-set:cn_domain", "rule-set:private_domain", "+.lan", "+.local"]
   default-nameserver: [223.5.5.5]
   nameserver: [223.5.5.5, 119.29.29.29]
   nameserver-policy:
@@ -314,11 +314,6 @@ EOF
   AFTER_MARTIAN=$(dev "awk 'NR==2{print \$8}' /proc/net/stat/rt_cache")
   [ "$AFTER_MARTIAN" = "$BEFORE_MARTIAN" ] && ok "in_martian_src 未增长（${AFTER_MARTIAN}）" || bad "in_martian_src 增长：$BEFORE_MARTIAN → $AFTER_MARTIAN"
   dev "$SB/mihomo -v >/dev/null; wget -q -O- -T 3 http://127.0.0.1:9999/version" | head -c 80; echo
-  # 这里原来只跑了个 ssh_ok=1 的空赋值就宣称通过，什么都没验。
-  # 真正要证明的是 TUN 起来之后 tailscale0 没被抢掉。
-  if dev "ip -4 addr show tailscale0 2>/dev/null | grep -q 'inet '"; then
-    ok "tailscale0 仍有地址，tailnet 未被 TUN 抢走"
-  else bad "tailscale0 没有地址或已消失（TUN 与 Tailscale 冲突）"; fi
 
   cat <<'MANUAL'
 

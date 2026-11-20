@@ -39,7 +39,7 @@ pub fn slot() -> Arc<AtomicBool> {
 /// 等它就绪（chill.sh 里最长的等待是就绪探测，几十秒内）；`profile` 改档后重启 mihomo。5 分钟
 /// 远超正常用时，只用来截住卡死的那次：到点杀掉整个进程组、放开工作槽、报超时。
 pub const SH_TIMEOUT: Duration = Duration::from_secs(300);
-/// `chill.sh reload`（家里出口引擎每拍可能调用）：只重渲染配置 + 让 mihomo 重读，60 秒足够。
+/// `chill.sh reload` 只重渲染配置和让 mihomo 重读。
 pub const RELOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// `sh -c cmd`，限时 `limit`：`Ok((退出成功, stdout + stderr))`，超时 `Err("… timed out after N s")`。
@@ -77,6 +77,27 @@ pub async fn sh_within(cmd: &str, limit: Duration) -> Result<(bool, String), Str
             );
             Err(format!("timed out after {} s", limit.as_secs()))
         }
+    }
+}
+
+/// Run a reload off the async runtime. Kill the whole process group if the deadline expires.
+pub(crate) fn chill_reload_within(cmd: &str, limit: Duration) -> Result<(), String> {
+    let mut c = std::process::Command::new("sh");
+    c.arg("-c").arg(cmd);
+    match luyaz_api::health::output_within_group(&mut c, limit) {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => {
+            let s = format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            Err(format!("reload failed: {}", ch::tail(&s, 6)))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(format!("reload timed out after {} s", limit.as_secs()))
+        }
+        Err(e) => Err(format!("reload failed: {e}")),
     }
 }
 
@@ -340,12 +361,31 @@ pub fn busy() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_hung_reload_returns_at_its_deadline() {
+        let t0 = Instant::now();
+        let e = super::chill_reload_within("sleep 3600", Duration::from_millis(300)).unwrap_err();
+        assert!(e.contains("timed out"), "{e}");
+        assert!(t0.elapsed() < Duration::from_secs(2));
+        // a later reload still runs
+        assert_eq!(
+            super::chill_reload_within("true", Duration::from_secs(5)),
+            Ok(())
+        );
+        assert!(
+            super::chill_reload_within("echo no; exit 1", Duration::from_secs(5))
+                .unwrap_err()
+                .contains("no")
+        );
+    }
+
     #[tokio::test]
     async fn a_hung_chill_sh_is_killed_at_its_deadline() {
-        use std::time::Duration;
         // R7: `sleep 3600` stands in for a wedged chill.sh; its background child dies with it.
         let mark = format!("/tmp/luyaz-chill-r7-{}", std::process::id());
-        let t0 = std::time::Instant::now();
+        let t0 = Instant::now();
         let r = super::sh_within(
             &format!("(sleep 2; touch {mark}) & sleep 3600"),
             Duration::from_millis(300),

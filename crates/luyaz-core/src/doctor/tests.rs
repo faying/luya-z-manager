@@ -197,8 +197,8 @@ fn golden(name: &str) -> String {
 
 const STANDBY_PRE: &str = r#"export DOC_STANDBY_STAT=$T/sb DOC_STANDBY_BASE=$T/sb.base DOC_LEDGER_DIR=$T/ledger DOC_BOOT_ID_FILE=$T/bootid
 echo aaaaaaaa-0000-4000-8000-000000000001 >"$T/bootid"
-i=0; while [ $i -lt 40 ]; do echo "$((100 + i * 20)) $((50 + i)) 20 30.0 5.0 2.0 1.0" >>"$T/sb"; i=$((i + 1)); done"#;
-const STANDBY_POST: &str = r#": >"$T/sb"; i=0; while [ $i -lt 10 ]; do echo "$((300 + i * 60)) 200 20 30.0 5.0 2.0 1.0" >>"$T/sb"; i=$((i + 1)); done
+i=0; while [ $i -lt 40 ]; do echo "$((100 + i * 20)) $((50 + i)) 0 - 5.0 2.0 1.0" >>"$T/sb"; i=$((i + 1)); done"#;
+const STANDBY_POST: &str = r#": >"$T/sb"; i=0; while [ $i -lt 10 ]; do echo "$((300 + i * 60)) 200 0 - 5.0 2.0 1.0" >>"$T/sb"; i=$((i + 1)); done
 unset DOC_LEDGER_DIR DOC_BOOT_ID_FILE"#;
 
 fn golden_fixture(name: &str) -> Fx {
@@ -331,57 +331,27 @@ fn scenarios() {
 
 #[test]
 fn chill_rows() {
-    let base = r#"mkdir -p "$T/proc/net"
-printf '#!/bin/sh\ncase "$*" in *public/status*) cat %s/public 2>/dev/null ;; *%%E9%%87%%8C) cat %s/proxy 2>/dev/null ;; esac\nexit 0\n' "$T" "$T" >"$T/bin/wget"
-printf '#!/bin/sh\ncat %s/iproute 2>/dev/null\n' "$T" >"$T/bin/ip"; chmod +x "$T/bin/wget" "$T/bin/ip"
-export DOC_IP=$T/bin/ip DOC_CHILL_STATE=$T/chill.state
-"#;
-    let run_ts = r#"printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"running","reason":null}' >"$T/chill.state"; echo "192.0.2.10 dev tailscale0 table 52" >"$T/iproute""#;
-    let hist = |t: &str, d: &str| {
-        format!(
-            r#"{run_ts}; printf '{{"alive":true,"extra":{{"http://x/204":{{"history":[{{"time":"2026-09-27T08:00:00Z","delay":1}}]}}}},"history":[{{"time":"2026-09-27T08:00:00.1Z","delay":2}},{{"time":"{t}","delay":{d}}}],"name":"x"}}' >"$T/proxy""#
-        )
-    };
-    let mut scenarios: Vec<String> = [
+    // the retired home-exit cases went with the feature; what is left is the listener check
+    let scenarios: Vec<String> = [
         "",
         r#": >"$T/chill.env""#,
         r#": >"$T/chill.env"; printf '  sl  local_address rem_address   st\n   0: 0100007F:270F 00000000:0000 0A 0\n   1: 00000000:0050 00000000:0000 0A 0\n   2: 0142000A:270F 0A00000A:D431 01 0\n' >"$T/proc/net/tcp""#,
         r#": >"$T/chill.env"; printf '  sl  local_address rem_address   st\n   0: 00000000:270F 00000000:0000 0A 0\n   1: 0142000A:270F 0:0 0A 0\n' >"$T/proc/net/tcp"; printf '  sl  local_address rem_address   st\n   0: 00000000000000000000000000000000:270F 00000000000000000000000000000000:0000 0A 0\n' >"$T/proc/net/tcp6""#,
-        r#"printf "SUB_URL='x'\nCHILL_HOME_EXIT='192.0.2.10'\n" >"$T/chill.env""#,
-        r#"printf "CHILL_HOME_EXIT=\"1.2.3.4:5:6\"\n" >"$T/chill.env""#,
-        r#"printf "CHILL_HOME_EXIT=1.2.3.4:80  \nCHILL_HOME_EXIT='x' y\n" >"$T/chill.env""#,
-        r#"printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env""#,
-        r#"printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"direct","reason":"idle"}' >"$T/chill.state""#,
-        r#"printf "CHILL_HOME_EXIT='192.0.2.10:1080'\n" >"$T/chill.env"; echo '{"state":"running","reason":null}' >"$T/chill.state"; echo "192.0.2.10 via 10.1.2.4 dev rmnet_data0" >"$T/iproute""#,
-        run_ts,
     ]
     .iter()
     .map(|s| s.to_string())
     .collect();
-    for (t, d) in [
-        ("2026-09-27T09:01:40.123456789Z", "52"),
-        ("2026-09-27T09:01:40.5Z", "0"),
-        ("2026-09-27T08:50:00Z", "52"),
-        ("2026-09-27T08:20:00Z", "52"),
-        ("2026-09-27T07:00:00Z", "0"),
-        ("2026-09-27T09:10:00Z", "52"),
-    ] {
-        scenarios.push(hist(t, d));
-    }
-    scenarios.push(format!(r#"{run_ts}; echo garbage >"$T/proxy""#));
+    let base = r#"mkdir -p "$T/proc/net"
+"#;
     let mut cases = Vec::new();
     for s in scenarios {
         let fx = fixture(&format!("{base}{s}"));
-        if s.contains("history") {
-            let t = rust(&fx, Mode::Tsv).0;
-            assert!(t.contains("\thome-exit\t"), "{t}");
-        }
         cases.push((s, all_modes(&fx)));
     }
     snap("chill", &cases);
 }
 
-const MS: &str = r#"export DOC_MANIFEST=$T/m.jsonl DOC_SHIP_TXN=$T/txn DOC_SHIP_HB=$T/hb.ship DOC_MD5_CACHE=$T/md5c/cache DOC_TS_DIR=$T/ts DOC_BOOT_ID_FILE=$T/bootid DOC_CHILL_DIR=$T/chill
+const MS: &str = r#"export DOC_MANIFEST=$T/m.jsonl DOC_SHIP_TXN=$T/txn DOC_SHIP_HB=$T/hb.ship DOC_MD5_CACHE=$T/md5c/cache DOC_BOOT_ID_FILE=$T/bootid DOC_CHILL_DIR=$T/chill
 echo bbbb-0000 >"$T/bootid"
 printf 'core build A\n' >"$T/core"; DM=$(md5sum "$T/core" | cut -d' ' -f1); RM=$(md5sum "$T/rc" | cut -d' ' -f1)
 mship() { printf '{"v":1,"kind":"ship","comp":"%s","txn":"20260930-120000-%s","commit":"abc1234","format":1,"mac_time":1790000000,"boot_id":"x","uptime":5,"files":[{"path":"%s","md5":"%s","prev":"%s.prev-x"}],"state":[]}\n' "$1" "$1" "$2" "$3" "$2" >>"$T/m.jsonl"; }
@@ -480,10 +450,8 @@ fn record_names_are_the_ship_executors() {
     let body = &body[..body.find("\n}\n").unwrap()];
     let mut theirs: Vec<String> = Vec::new();
     for l in body.lines().map(str::trim) {
-        if l.starts_with("for _s in $CORE_NAME tailscale;") {
-            theirs.extend(["init.d/luyaz-core".into(), "init.d/tailscale".into()]);
-        } else if let Some(r) = l.split("echo \"").nth(1) {
-            let n = r.split(' ').next().unwrap().to_owned();
+        if let Some(r) = l.split("echo \"").nth(1) {
+            let n = r.split(' ').next().unwrap().replace("$CORE_NAME", "luyaz-core");
             if !theirs.contains(&n) {
                 theirs.push(n);
             }
@@ -526,11 +494,12 @@ fn md5_is_md5sum() {
 }
 
 const FPFIX: &str = r#"export DOC_STANDBY_STAT=$T/sb DOC_STANDBY_BASE=$T/sb.base
-MCOL=' 5.0'
-printf 'tailscaled 501 aaaaaaaa\nmihomo 502 bbbbbbbb\nluyaz-ui 503 cccccccc\nluyaz-core 504 dddddddd\n' >"$T/fp"
-rows() { _i=0; while [ $_i -lt "$1" ]; do echo "$(($2 + _i * 60)) $3 20 ${4:-30.0}$MCOL 2.0 1.0"; _i=$((_i + 1)); done; }
+printf 'mihomo 502 bbbbbbbb\nluyaz-ui 503 cccccccc\nluyaz-core 504 dddddddd\n' >"$T/fp"
+// rows: count, first uptime, cellular, mihomo wakeups (the retired columns are the writer's
+// placeholders: 0 for the old tunnel packets, - for the old tailscaled process)
+rows() { _i=0; while [ $_i -lt "$1" ]; do echo "$(($2 + _i * 60)) $3 0 - ${4:-5.0} 2.0 1.0"; _i=$((_i + 1)); done; }
 // cal: the 40 rows a baseline is calibrated from; the tests run --calibrate-standby right after
-cal() { : >"$T/sb"; i=0; while [ $i -lt 40 ]; do echo "$((100 + i * 20)) $((50 + i)) 20 30.0$MCOL 2.0 1.0" >>"$T/sb"; i=$((i + 1)); done; }
+cal() { : >"$T/sb"; i=0; while [ $i -lt 40 ]; do echo "$((100 + i * 20)) $((50 + i)) 0 - 5.0 2.0 1.0" >>"$T/sb"; i=$((i + 1)); done; }
 "#;
 
 #[test]
@@ -549,20 +518,20 @@ fn standby() {
         r#"cal; rows 10 300 200 >"$T/sb""#,
         r#"cal; rows 10 300 70 90.0 >"$T/sb""#,
         r#"cal; rows 9 300 70 90.0 >"$T/sb"; rows 1 900 70 90.5 >>"$T/sb""#,
-        r#"cal; { rows 4 300 70; echo "600 70 20 - - - -"; rows 5 660 70; } >"$T/sb""#,
-        r#"cal; : >"$T/sb"; i=1; while [ $i -le 10 ]; do echo "$((i * 9)) 500 20 30.0$MCOL 2.0 1.0" >>"$T/sb"; i=$((i + 1)); done"#,
+        r#"cal; { rows 4 300 70; echo "600 70 0 - - - -"; rows 5 660 70; } >"$T/sb""#,
+        r#"cal; : >"$T/sb"; i=1; while [ $i -le 10 ]; do echo "$((i * 9)) 500 0 - 5.0 2.0 1.0" >>"$T/sb"; i=$((i + 1)); done"#,
         r#"cal; rm -f "$T/sb""#,
-        r#"echo "TS_NO_LOGS_NO_SUPPORT=true" >"$T/tuning.env"; cal; rows 10 300 70 90.0 >"$T/sb"; sed -i 's/^tailscaled 501 aaaaaaaa/tailscaled 601 ffffffff/' "$T/fp""#,
-        r#"echo "TS_NO_LOGS_NO_SUPPORT=true" >"$T/tuning.env"; cal; rows 10 300 70 90.0 >"$T/sb"; echo "TS_DEBUG_FIREWALL_MODE=auto" >>"$T/tuning.env""#,
+        r#"cal; rows 10 300 70 >"$T/sb"; sed -i 's/^mihomo 502 bbbbbbbb/mihomo 602 ffffffff/' "$T/fp""#,
         r#"cal; rows 10 300 70 90.0 >"$T/sb"; echo 800 >"$T/fp-changed""#,
         r#"cal; rows 10 300 70 90.0 >"$T/sb"; rm -f "$T/fp""#,
         r#"cal; rows 10 300 70 >"$T/sb"; printf '2 69.5 10.0\n3 20.0 0.0\n4 30.0 0.0\n' >"$T/sb.base""#,
+        // a baseline and records from before the retirement: the old named rows (3, 4) are
+        // skipped, the named programs still line up by position
+        r#"cal; { i=0; while [ $i -lt 10 ]; do echo "$((300 + i * 60)) 70 20 30.0 5.0 2.0 1.0"; i=$((i + 1)); done; } >"$T/sb"; printf 'v2\n2 69.5 10.0\n3 20.0 0.0\n4 30.0 0.0\n5 5.0 0.0\n6 2.0 0.0\n7 1.0 0.0\nfp 5 bbbbbbbb+none+none\nfp 6 cccccccc\nfp 7 dddddddd\n' >"$T/sb.base""#,
         r#"cal; rows 10 300 70 | sed 's/ 1.0$/ 9.0/' >"$T/sb""#,
         r#"cal; rows 10 300 70 | sed 's/ 2.0 / 7.5 /' >"$T/sb""#,
     ] {
-        let pre = format!(
-            "export DOC_FP=$T/fp DOC_FP_CHANGED=$T/fp-changed DOC_TS_TUNING=$T/tuning.env\n{fpfix}"
-        );
+        let pre = format!("export DOC_FP=$T/fp DOC_FP_CHANGED=$T/fp-changed\n{fpfix}");
         // `cal;` = the calibration rows, then --calibrate-standby (in Rust), then the rest
         let fx = match s.split_once("cal;") {
             Some((before, after)) => {
@@ -590,15 +559,15 @@ fn calibrate_standby() {
         .map(|l| format!("{l}\n"))
         .collect();
     let pre = format!(
-        "export DOC_FP=$T/fp DOC_FP_CHANGED=$T/fp-changed DOC_TS_TUNING=$T/tuning.env DOC_WGET=/bin/false\n{fpfix}"
+        "export DOC_FP=$T/fp DOC_FP_CHANGED=$T/fp-changed DOC_WGET=/bin/false\n{fpfix}"
     );
     let mut cases = Vec::new();
     for s in [
         r#"rows 40 100 70 >"$T/sb""#,
         r#"rows 29 100 70 >"$T/sb""#,
         r#"rm -f "$T/sb""#,
-        r#"{ rows 20 100 70; echo "1400 - - - - - -"; rows 15 1500 90 45.5; } >"$T/sb"; rm -f "$T/fp""#,
-        r#"rows 31 100 70 | sed 's/ 1.0$/ -/' >"$T/sb"; echo "TS_NO_LOGS_NO_SUPPORT=true" >"$T/tuning.env""#,
+        r#"{ rows 20 100 70; echo "1400 - 0 - - - -"; rows 15 1500 90 45.5; } >"$T/sb"; rm -f "$T/fp""#,
+        r#"rows 31 100 70 | sed 's/ 1.0$/ -/' >"$T/sb""#,
     ] {
         let fx = fixture(&format!("{pre}{s}"));
         let (out, rc) = standby::calibrate(&cfg(&fx));

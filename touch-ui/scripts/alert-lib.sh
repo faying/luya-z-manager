@@ -5,8 +5,8 @@
 #   . /data/luyaz/scripts/alert-lib.sh
 #   alert_add agent-crash "exit 139 (SIGSEGV)"
 #
-# Shared by the device shell scripts that raise alerts (e.g. scripts/tailscale/
-# start.sh); luyaz-core's svcwatch writes the same queue. File formats: source/manager docs/RELIABILITY.md §4 — the
+# Shared by the device shell scripts that raise alerts (e.g. scripts/chill/
+# chill.sh); luyaz-core's svcwatch writes the same queue. File formats: source/manager docs/RELIABILITY.md §4 — the
 # agent reads what this writes, so change both together.
 #
 # Why events carry a sequence number and not a line number or a timestamp:

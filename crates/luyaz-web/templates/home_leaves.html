@@ -89,5 +89,3 @@
 {% endif %}
 <!--leaf-->
 <a id="hm-scene" class="nd-module nd-module--cream hm-o8" href="/router/scenario"><span class="nd-module__head">{{ v.l.pick("Scenarios", "情景") }}{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</span>{% match v.scene %}{% when Scene::Loading %}<span class="nd-skel" style="width:10ch"></span>{% when Scene::None %}<p class="nd-body text-nd-t2">{{ v.l.pick("No scenarios yet. Set up ›", "还没有情景，去设置 ›") }}</p>{% when Scene::On(s) %}<p class="nd-body"><span data-data>{{ s.name }}</span>{% if s.pinned %}<span class="nd-aux">{{ v.l.pick(", pinned", "，已固定") }}</span>{% endif %}{% if s.engine_off %}<span class="nd-aux">{{ v.l.pick(", engine off", "，引擎已关") }}</span>{% endif %}</p>{% if let Some(t) = s.last %}<p class="nd-aux">{% match v.l %}{% when Lang::En %}Switched {{ t }}{% when Lang::Zh %}{{ t }} 切换{% endmatch %}</p>{% endif %}{% endmatch %}</a>
-<!--leaf-->
-<a id="hm-ts" class="nd-module nd-module--navy hm-o9{% if v.ts_stale %} hm-dim{% endif %}" href="/services/tailscale"><span class="nd-module__head">Tailscale{{ crate::shell::icon("CaretRight", false, 16, "nd-row__chev")|safe }}</span>{{ v.ts|safe }}</a>

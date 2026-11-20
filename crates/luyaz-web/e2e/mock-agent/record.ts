@@ -61,8 +61,6 @@ const ALLOWLIST: Entry[] = [
   { path: "/api/scheduler/jobs", checked: "scheduler.rs list — jobs held in memory" },
   { path: "/api/speedtest/progress", checked: "speed.rs progress — state held in memory" },
   // --- services / scenario
-  { path: "/api/services/tailscale", checked: "ts_reads.rs status — pidof + `tailscale status --json` (read, with a timeout)" },
-  { path: "/api/services/tailscale/log", checked: "ts_reads.rs log — tail of /data/tailscaled.log" },
   // chill: up to 3 loopback GETs to mihomo (/version, /proxies, /configs), 3 s each — read-only.
   { path: "/api/services/chill", checked: "chill_page.rs status — CHILL state file + mihomo GETs" },
   { path: "/api/services/chill/providers", checked: "chill_page.rs providers_list — mihomo GET /providers/proxies" },
@@ -79,6 +77,8 @@ const ALLOWLIST: Entry[] = [
 // router/lan, router/firewall/*, router/vpn, router/qos, router/domain-filter, router/apn/*,
 // doh/*, modem/data, cell/neighbors/*, cell/signal-detect/progress, sim/imei,
 // device/battery-info, device/thermal, device/charger, device/system.
+// Dropped on 2026-11-20 for the same reason: services/tailscale, services/tailscale/log,
+// services/chill/home, poller.
 
 // ------------------------------------------------------------------ excluded
 // Never requested, and refused below even if someone adds them to ALLOWLIST:
@@ -96,10 +96,15 @@ const ALLOWLIST: Entry[] = [
 //                              the log holds whole SMS bodies and codes. Out until a scrubber exists.
 // - /api/health/crashlog      health.rs crashlog — read-only, but returns raw logs; not needed for shapes.
 // - /chill-api/*, /api/services/chill/dashboard — no longer in the core; kept on the deny list.
+// - /api/services/tailscale*, /api/services/chill/home, /api/poller — removed from the core with
+//                              Tailscale and the tailnet poller; kept on the deny list.
 // - POST-served reads (POST /api/device/power-save): this recorder is GET-only by design.
 const DENY = [
   /^\/api\/scenario\/scan$/,
   /^\/api\/services\/chill\/dashboard$/,
+  /^\/api\/services\/tailscale/,
+  /^\/api\/services\/chill\/home/,
+  /^\/api\/poller/,
   /^\/api\/health\b.*refresh/,
   /^\/api\/stk\//,
   /^\/chill-api/,

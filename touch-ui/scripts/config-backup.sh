@@ -2,8 +2,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # config-backup.sh — back up and restore the U60 Pro (MU5250) configuration.
 #
-#   config-backup.sh list    [--with-tailscale]   what a backup would contain
-#   config-backup.sh export  [--with-tailscale]   tar.gz to stdout
+#   config-backup.sh list                        what a backup would contain
+#   config-backup.sh export                      tar.gz to stdout
 #   config-backup.sh verify  <archive>            unpack into a sandbox, check every file parses
 #   config-backup.sh plan    <archive> [root]     dry run: what a restore would change
 #   config-backup.sh restore <archive> [root]     write the files (root defaults to /)
@@ -15,9 +15,8 @@
 # Configuration only, never runtime state (review X10): the scenario engine's
 # state/pin/log, alert history, crash logs, downloaded providers and
 # rule sets are all left out — restoring them would replay another moment's
-# state onto a device. Tailscale's state is the node's identity: restoring it
-# onto a second device while the first is online makes two machines claim to
-# be one, so it is only included with --with-tailscale.
+# state onto a device. Older archives may contain the retired Tailscale identity;
+# it is verified with the rest of the archive but never restored.
 #
 # Wi-Fi settings go in as `uci export wireless` text and are restored by
 # writing /etc/config/wireless; nothing here reloads Wi-Fi — that, like every
@@ -52,25 +51,18 @@ FILES="$FILES
 /data/chill/confirmed                        plain
 /data/luyaz/ui/chill.conf                    plain
 "
-TAILSCALE_DIR=/data/tailscale/state
-
 die() { echo "config-backup: $*" >&2; exit 1; }
 
-with_ts=0
-for a in "$@"; do [ "$a" = --with-tailscale ] && with_ts=1; done
+retired() { case "$1" in /data/tailscale|/data/tailscale/*) return 0 ;; *) return 1 ;; esac; }
 
 present() { # the configured files that exist, one path per line
     echo "$FILES" | while read -r p kind; do
         [ -n "$p" ] || continue
         [ -f "$ROOT_SRC$p" ] && echo "$p"
     done
-    if [ "$with_ts" = 1 ] && [ -d "$ROOT_SRC$TAILSCALE_DIR" ]; then
-        (cd "$ROOT_SRC/" && find "${TAILSCALE_DIR#/}" -type f) | sed 's|^|/|'
-    fi
 }
 
-kind_of() { # secret | json | json-secret | plain | tailscale
-    case "$1" in "$TAILSCALE_DIR"/*) echo tailscale; return ;; esac
+kind_of() { # secret | json | json-secret | plain
     echo "$FILES" | awk -v p="$1" '$1 == p {print $2}'
 }
 
@@ -93,7 +85,6 @@ do_export() {
         echo "u60 config backup"
         echo "time: $(date '+%Y-%m-%d %H:%M:%S') device local"
         echo "firmware: $(ubus call zwrt_web device_info '{}' 2>/dev/null | sed -n 's/.*"wa_inner_version": *"\([^"]*\)".*/\1/p')"
-        echo "tailscale: $([ "$with_ts" = 1 ] && echo included || echo not included)"
         echo "files:"
         (cd "$W/u60-backup" && find files wireless.uci -type f 2>/dev/null | sort | while read -r f; do
             echo "  $(md5sum "$f" | cut -c1-32)  $f"
@@ -117,15 +108,19 @@ unpack() { # <archive> → $X/u60-backup
     [ -f "$1" ] || die "no such archive: $1"
     sum_check "$1"
     # Look before unpacking: every entry must sit under u60-backup/, with no
-    # absolute paths and no '..' anywhere.
+    # absolute paths, dot components, repeated separators or '..' anywhere.
     tar tzf "$1" > /tmp/u60-backup-list.$$ 2>/dev/null || { rm -f /tmp/u60-backup-list.$$; die "not a readable tar.gz"; }
-    if grep -qv '^u60-backup/\|^u60-backup$' /tmp/u60-backup-list.$$ || grep -q '\.\.' /tmp/u60-backup-list.$$; then
+    if grep -qv '^u60-backup/\|^u60-backup$' /tmp/u60-backup-list.$$ || grep -q '\.\.' /tmp/u60-backup-list.$$ || grep -Eq '(^|/)\.(/|$)|//' /tmp/u60-backup-list.$$; then
         rm -f /tmp/u60-backup-list.$$
-        die "archive has entries outside u60-backup/ or '..' paths; refusing"
+        die "archive has unsafe or non-canonical paths; refusing"
     fi
-    rm -f /tmp/u60-backup-list.$$
     X=$(mktemp -d) || die "mktemp"
-    tar xzf "$1" -C "$X" 2>/dev/null || die "not a readable tar.gz"
+    trap 'rm -rf "$X"' EXIT
+    mv /tmp/u60-backup-list.$$ "$X/list" || die "cannot retain archive list"
+    # Legacy identities are verified directly from the archive, never extracted
+    # into a temporary directory or written back to the device.
+    printf '%s\n' 'u60-backup/files/data/tailscale' 'u60-backup/files/data/tailscale/*' > "$X/exclude"
+    tar xzf "$1" -C "$X" -X "$X/exclude" 2>/dev/null || die "not a readable tar.gz"
     [ -f "$X/u60-backup/MANIFEST" ] || die "not a u60 config backup (no MANIFEST)"
 }
 
@@ -140,12 +135,16 @@ check_json() { # a JSON file parses
 
 do_verify() {
     unpack "$1"
-    trap 'rm -rf "$X"' EXIT
     B=$X/u60-backup
     bad=0
     # MANIFEST checksums
     sed -n 's/^  \([0-9a-f]\{32\}\)  \(.*\)$/\1 \2/p' "$B/MANIFEST" | while read -r sum f; do
-        [ "$(md5sum "$B/$f" 2>/dev/null | cut -c1-32)" = "$sum" ] || echo "  FAIL checksum $f"
+        if [ "${f#files}" != "$f" ] && retired "${f#files}"; then
+            got=$( { tar xOzf "$1" "u60-backup/$f" 2>/dev/null; echo $? >"$X/tar-status"; } | md5sum | cut -c1-32)
+            [ "$(cat "$X/tar-status")" = 0 ] && [ "$got" = "$sum" ] || echo "  FAIL checksum $f"
+        else
+            [ "$(md5sum "$B/$f" 2>/dev/null | cut -c1-32)" = "$sum" ] || echo "  FAIL checksum $f"
+        fi
     done | tee "$X/cs"
     [ -s "$X/cs" ] && bad=1
     (cd "$B" && find files -type f) | while read -r f; do
@@ -176,11 +175,12 @@ do_verify() {
 
 do_plan() { # <archive> <root>
     unpack "$1"
-    trap 'rm -rf "$X"' EXIT
     R=${2:-/}
     case "$R" in */) ;; *) R="$R/" ;; esac
+    sed -n '/^u60-backup\/files\/data\/tailscale\// { /\/$/d; s|^u60-backup/files|  skip       |; s|$| (retired Tailscale data)|; p; }' "$X/list"
     (cd "$X/u60-backup" && find files -type f | sort) | while read -r f; do
         p=${f#files}
+        if retired "$p"; then echo "  skip       $p (retired Tailscale data)"; continue; fi
         t=$R${p#/}
         if [ ! -e "$t" ]; then echo "  new        $p"
         elif cmp -s "$X/u60-backup/$f" "$t"; then echo "  same       $p"
@@ -191,11 +191,12 @@ do_plan() { # <archive> <root>
 
 do_restore() { # <archive> <root>
     unpack "$1"
-    trap 'rm -rf "$X"' EXIT
     R=${2:-/}
     case "$R" in */) ;; *) R="$R/" ;; esac
+    sed -n '/^u60-backup\/files\/data\/tailscale\// { /\/$/d; s|^u60-backup/files|  skipped |; s|$| (retired Tailscale data)|; p; }' "$X/list"
     (cd "$X/u60-backup" && find files -type f) | while read -r f; do
         p=${f#files}
+        if retired "$p"; then echo "  skipped $p (retired Tailscale data)"; continue; fi
         t=$R${p#/}
         mkdir -p "$(dirname "$t")"
         [ -e "$t" ] && cp -p "$t" "$t.pre-restore" 2>/dev/null
@@ -205,7 +206,7 @@ do_restore() { # <archive> <root>
             sed -i 's/^ZTE_AGENT_PASSWORD=/LUYAZ_WEB_PASSWORD=/' "$t.restore-tmp"  # RESIDUE-OK: key of pre-F7 archives
         fi
         mv -f "$t.restore-tmp" "$t" || { echo "  FAIL $p"; continue; }
-        case "$(kind_of "$p")" in secret | json-secret | tailscale) chmod 600 "$t" ;; *) chmod 644 "$t" ;; esac
+        case "$(kind_of "$p")" in secret | json-secret) chmod 600 "$t" ;; *) chmod 644 "$t" ;; esac
         echo "  restored $p"
     done
     if [ -f "$X/u60-backup/wireless.uci" ]; then
@@ -219,8 +220,8 @@ do_restore() { # <archive> <root>
 }
 
 case "$1" in
-    list) do_list ;;
-    export) do_export ;;
+    list) [ "$#" = 1 ] || die "list takes no options"; do_list ;;
+    export) [ "$#" = 1 ] || die "export takes no options"; do_export ;;
     verify) do_verify "$2" ;;
     plan) do_plan "$2" "${3:-/}" ;;
     restore) do_restore "$2" "${3:-/}" ;;

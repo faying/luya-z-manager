@@ -6,7 +6,7 @@
 //!    from the hub (one SSE): signal, live (speeds, temperature, uptime, today/month), battery,
 //!        clients, wifi, uci_device_info (title), sms, side (alerts, scenario, verdict, CHILL)
 //!    polled with the tab's session (agent.rs, u60d first): /api/screen 10 s (battery estimate),
-//!        /api/services/tailscale 15 s, /api/netinfo?lite=1 30 s, /api/wifi/status 30 s
+//!        /api/netinfo?lite=1 30 s, /api/wifi/status 30 s
 //!        (only the actual channel and width are kept; the reply carries both passwords),
 //!        CHILL: home/chill.rs (private)
 //! ```
@@ -36,7 +36,6 @@ use crate::view::{self, Readout, js_num, num};
 
 mod chill;
 mod landing;
-pub(crate) mod poller;
 
 const PATH: &str = "/";
 
@@ -45,7 +44,6 @@ pub fn routes() -> Router<Shared> {
         .route(PATH, get(page))
         .route("/home/events", get(events));
     let r = chill::routes(r);
-    let r = poller::routes(r);
     let r = landing::routes(r);
     r
 }
@@ -57,7 +55,6 @@ struct Page {
     l: Lang,
     status: String,
     chill: String,
-    poller: String,
     landing: String,
 }
 
@@ -79,7 +76,6 @@ async fn page(State(app): State<Shared>, req: Request) -> Response {
         l: ctx.lang,
         status,
         chill: if crate::chill_proxy::installed() { chill::frame(ctx.lang) } else { String::new() },
-        poller: poller::frame(),
         landing: landing::frame(),
     }
     .render()
@@ -169,37 +165,6 @@ pub(crate) async fn fetch(
     Some(agent::get(app, who, path).await.ok())
 }
 
-/// Tailscale as the card shows it (the reply also lists every peer).
-#[derive(Clone, Default)]
-struct Ts {
-    installed: bool,
-    running: bool,
-    /// Running but the daemon did not answer (a "fake success").
-    error: bool,
-    online: Option<bool>,
-    relay: Option<String>,
-    peers_online: i64,
-    capped: bool,
-}
-
-fn ts_of(v: &Value) -> Ts {
-    let peers = v["peers"].as_array().map(Vec::as_slice).unwrap_or(&[]);
-    Ts {
-        installed: v["installed"].as_bool().unwrap_or(false),
-        running: v["running"].as_bool().unwrap_or(false),
-        error: v["error"].as_str().is_some_and(|e| !e.is_empty()),
-        online: v["self"]["online"].as_bool(),
-        relay: v["self"]["relay"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned),
-        peers_online: v["peer_online"]
-            .as_i64()
-            .unwrap_or_else(|| peers.iter().filter(|p| p["online"].as_bool() == Some(true)).count() as i64),
-        capped: peers.len() >= 32 && v["peer_count"].as_i64().unwrap_or(0) > 32,
-    }
-}
-
 // ---- the view ----
 
 pub(crate) fn mark(tone: &str, text: &str) -> String {
@@ -284,8 +249,6 @@ struct View {
     ca_off: Option<String>,
     ca_sel: Option<String>,
     scene: Scene,
-    ts: String,
-    ts_stale: bool,
     /// The 「双卡」 section (home_dual.rs); a hidden empty section outside dual mode.
     dual: String,
 }
@@ -302,7 +265,6 @@ struct Poll {
     /// The link was Live at some read of this stream.
     live_seen: bool,
     screen: Src<Value>,
-    ts: Src<Ts>,
     ni: Src<Value>,
     wifi: Src<crate::wifi_main::Live>,
     /// Carriers group shape last sent: (rows, "not scheduled" row, selection row).
@@ -313,7 +275,6 @@ struct Poll {
     /// CHILL was installed when the stream began (the page's frame has its card then): without
     /// it the card is not polled or sent.
     chill_on: bool,
-    poller: poller::Poller,
     landing: landing::Landing,
 }
 
@@ -324,14 +285,12 @@ impl Poll {
             who,
             live_seen: false,
             screen: Src::new(10),
-            ts: Src::new(15),
             ni: Src::new(30),
             wifi: Src::new(30),
             ca_shape: None,
             logo_dir: std::path::PathBuf::new(),
             chill: chill::Chill::new(),
             chill_on: crate::chill_proxy::installed(),
-            poller: poller::Poller::new(),
             landing: landing::Landing::new(),
         }
     }
@@ -340,11 +299,10 @@ impl Poll {
         let e = self
             .screen
             .next()
-            .min(self.ts.next())
             .min(self.ni.next())
             .min(self.wifi.next());
         let e = if self.chill_on { e.min(self.chill.next()) } else { e };
-        let e = e.min(self.poller.next()).min(self.landing.next());
+        let e = e.min(self.landing.next());
         e
     }
 
@@ -359,8 +317,7 @@ impl Poll {
         if self.chill_on {
             out.extend(self.chill.leaves(app, self.l, now));
         }
-        out.extend(self.poller.leaves(self.l));
-        out.extend(self.landing.leaves(app, self.l, self.chill.status(), self.chill_on));
+        out.extend(self.landing.leaves(app, self.l));
         out
     }
 
@@ -786,9 +743,6 @@ impl Poll {
             }
         };
 
-        // ---- Tailscale ----
-        let ts = ts_html(l, &self.ts, now);
-
         View {
             l,
             title,
@@ -839,8 +793,6 @@ impl Poll {
             ca_off,
             ca_sel,
             scene,
-            ts_stale: self.ts.stale(now),
-            ts,
             dual: crate::home_dual::leaf(st, l, &self.logo_dir),
         }
     }
@@ -851,24 +803,18 @@ impl Polled for Poll {
         let now = Instant::now();
         // a step before the earliest deadline is a kick (CHILL write done): read CHILL again
         let kicked = now + Duration::from_millis(300) < self.earliest();
-        let (screen, ts, ni, wifi) = tokio::join!(
+        let (screen, ni, wifi) = tokio::join!(
             fetch(app, &self.who, self.screen.due(now), "/api/screen"),
-            fetch(app, &self.who, self.ts.due(now), "/api/services/tailscale"),
             fetch(app, &self.who, self.ni.due(now), "/api/netinfo?lite=1"),
             fetch(app, &self.who, self.wifi.due(now), "/api/wifi/status"),
         );
         if self.chill_on {
             self.chill.poll(app, &self.who, now, kicked).await;
         }
-        self.poller.poll(app, &self.who, now, kicked).await;
         self.landing.poll(app, &self.who, now, kicked).await;
         let at = Instant::now();
         if let Some(r) = screen {
             self.screen.set(at, r);
-        }
-        if let Some(r) = ts {
-            // running but the daemon does not answer = not a valid read
-            self.ts.set(at, r.map(|v| ts_of(&v)).filter(|t| !(t.running && t.error)));
         }
         if let Some(r) = ni {
             self.ni.set(at, r);
@@ -988,57 +934,6 @@ fn plmn_of(o: Option<&Value>) -> Option<String> {
         && (1..=3).contains(&n.len())
         && n.bytes().all(|b| b.is_ascii_digit()))
     .then(|| format!("{c}-{n:0>3}"))
-}
-
-fn ts_html(l: Lang, ts: &Src<Ts>, now: Instant) -> String {
-    let Some(t) = &ts.val else {
-        return if ts.failed() {
-            format!(
-                "<p class=\"nd-body text-nd-t2\">{}</p>",
-                l.pick("Can't read Tailscale status", "读不到 Tailscale 状态")
-            )
-        } else {
-            "<span class=\"nd-skel\" style=\"width:10ch\"></span>".to_owned()
-        };
-    };
-    let _ = now;
-    if !t.installed {
-        return format!(
-            "<p class=\"nd-body text-nd-t2\">{}</p>",
-            l.pick("Not installed", "未安装")
-        );
-    }
-    if !t.running {
-        return mark("warn", l.pick("Not running. Open ›", "未运行，去打开 ›"));
-    }
-    let online = t.online == Some(true);
-    let n = if t.capped {
-        "32+".to_owned()
-    } else {
-        t.peers_online.to_string()
-    };
-    let mut sub = match l {
-        Lang::En => format!("{n} devices online"),
-        Lang::Zh => format!("{n} 台设备在线"),
-    };
-    if let Some(r) = &t.relay {
-        sub.push_str(&match l {
-            Lang::En => format!(", relay {r}"),
-            Lang::Zh => format!("，中继 {r}"),
-        });
-    }
-    format!(
-        "{}<p class=\"nd-aux mt-1\" data-data>{}</p>",
-        mark(
-            if online { "ok" } else { "warn" },
-            if online {
-                l.pick("Online", "在线")
-            } else {
-                l.pick("Offline", "离线")
-            }
-        ),
-        agent::esc(&sub)
-    )
 }
 
 #[allow(dead_code)]
@@ -1268,7 +1163,6 @@ mod tests {
             l: Lang::En,
             status: String::new(),
             chill: chill::frame(Lang::En),
-            poller: poller::frame(),
             landing: landing::frame(),
         }
         .render()

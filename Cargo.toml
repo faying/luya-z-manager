@@ -1,9 +1,9 @@
 [workspace]  # manager crates + the touch UI, one Cargo.lock
-members = ["crates/luyaz-core", "crates/luyaz-policy", "crates/luyaz-api", "crates/luyaz-alerts", "crates/luyaz-sentinel", "crates/luyaz-speedtest", "crates/luyaz-esim", "crates/luyaz-home-exit", "crates/luyaz-netwatch", "crates/luyaz-sms-forward", "crates/luyaz-manual-first", "crates/luyaz-wifi", "crates/luyaz-scenario", "crates/luyaz-web", "crates/luyaz-mcp", "touch-ui/rs/lvgl-sys", "touch-ui/rs/plat", "touch-ui/rs/ui-model", "touch-ui/rs/ui"]
+members = ["crates/luyaz-core", "crates/luyaz-policy", "crates/luyaz-api", "crates/luyaz-alerts", "crates/luyaz-sentinel", "crates/luyaz-speedtest", "crates/luyaz-esim", "crates/luyaz-netwatch", "crates/luyaz-sms-forward", "crates/luyaz-manual-first", "crates/luyaz-wifi", "crates/luyaz-scenario", "crates/luyaz-web", "crates/luyaz-mcp", "touch-ui/rs/lvgl-sys", "touch-ui/rs/plat", "touch-ui/rs/ui-model", "touch-ui/rs/ui"]
 # `cargo build/test/clippy` without -p: the manager crates only (lvgl-sys's build script needs
 # LVGL_DIR/FT_SRC, see touch-ui/rs/build.sh)
 # luyaz-mcp (the computer's MCP server) is a member but not a default one: device builds never see it
-default-members = ["crates/luyaz-core", "crates/luyaz-policy", "crates/luyaz-api", "crates/luyaz-alerts", "crates/luyaz-sentinel", "crates/luyaz-speedtest", "crates/luyaz-esim", "crates/luyaz-home-exit", "crates/luyaz-netwatch", "crates/luyaz-sms-forward", "crates/luyaz-manual-first", "crates/luyaz-wifi", "crates/luyaz-scenario", "crates/luyaz-web"]
+default-members = ["crates/luyaz-core", "crates/luyaz-policy", "crates/luyaz-api", "crates/luyaz-alerts", "crates/luyaz-sentinel", "crates/luyaz-speedtest", "crates/luyaz-esim", "crates/luyaz-netwatch", "crates/luyaz-sms-forward", "crates/luyaz-manual-first", "crates/luyaz-wifi", "crates/luyaz-scenario", "crates/luyaz-web"]
 resolver = "2"  # see [workspace.package] below for why not 3
 # wasm32 components and their precompiler (cranelift): own workspace and lockfile, never in a device binary
 exclude = ["crates/luyaz-plugins"]

@@ -21,7 +21,6 @@ pub mod scenario;
 pub mod screen_feed;
 pub mod ladder;
 pub mod speedtest;
-pub mod tailscale;
 pub mod today;
 pub mod usage;
 #[cfg(test)]

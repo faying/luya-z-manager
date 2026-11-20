@@ -639,11 +639,6 @@ pub fn kind_label(kind: &str) -> String {
             "dropbear-down",
             "SSH（:2222）一小时内反复掉线，已到重开上限",
         ),
-        (
-            "home-exit-down",
-            "家里出口 15 分钟没回应，「其余都走家里」已关",
-        ),
-        ("home-exit-check-failed", "家里出口打开后自检没过，已关回去"),
         // luyaz-core poller.rs (tailnet-poller.md)
         (
             "tailnet-poller",
@@ -664,7 +659,7 @@ pub fn kind_label(kind: &str) -> String {
         ("regress-mem", "数据服务内存比平时高很多"),
         ("regress-mem-abs", "数据服务内存超过上限"),
         ("regress-cellular", "蜂窝数据断了 5 分钟以上"),
-        ("regress-egress", "出口（CHILL / Tailscale）不通 5 分钟以上"),
+        ("regress-egress", "出口（CHILL）不通 5 分钟以上"),
         ("regress-heat", "温度过高（电池 ≥55 °C 或芯片 ≥90 °C）"),
         ("heat-protect", "温度偏高，暂停充电 / CHILL 降档"),
         ("wifi-5g-down", "5G Wi-Fi 停了 5 分钟以上"),
@@ -740,14 +735,6 @@ pub fn kind_label_en(kind: &str) -> String {
             "SSH (:2222) keeps going away; restart limit reached",
         ),
         (
-            "home-exit-down",
-            "Home exit silent 15 min; \"Rest via home\" turned off",
-        ),
-        (
-            "home-exit-check-failed",
-            "Home exit failed its check after turning on; turned back off",
-        ),
-        (
             "tailnet-poller",
             "A device keeps polling the admin ports over Tailscale (more drain with the screen off)",
         ),
@@ -774,10 +761,7 @@ pub fn kind_label_en(kind: &str) -> String {
         ("regress-mem", "Data service memory well above normal"),
         ("regress-mem-abs", "Data service memory over the limit"),
         ("regress-cellular", "Cellular data down for 5+ min"),
-        (
-            "regress-egress",
-            "Route (CHILL / Tailscale) down for 5+ min",
-        ),
+        ("regress-egress", "Route (CHILL) down for 5+ min"),
         ("regress-heat", "Too hot (battery ≥55 °C or chip ≥90 °C)"),
         (
             "heat-protect",

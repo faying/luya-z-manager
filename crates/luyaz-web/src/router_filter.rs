@@ -11,7 +11,7 @@
 //!
 //! Writes (web/docs/controls-inventory.md §/router/telemetry): `vendor.call` `zwrt_router.api
 //! router_set_domain_filter {action: "add"|"delete", domain}` (the args the agent passed through
-//! as they came), tier 2 on the LAN and tier 3 over Tailscale (treated like firewall rules), read
+//! as they came), tier 2 on the LAN and tier 3 remotely (treated like firewall rules), read
 //! back from `router.blocked_domains` (u60d re-reads after any write).
 //! - Quick block: one send per known domain not blocked yet, one after another, each once (the
 //!   old page swallowed a failed one and still said "done"). The result names what was blocked
@@ -423,15 +423,15 @@ fn confirm(remote: Via, title: String, what: String, action: String, l: Lang) ->
         what,
         downtime: Some(
             l.pick(
-                "None; the filter reloads in a moment.",
-                "不断网；过滤规则马上重新加载。",
+                "The filter reloads in a moment; the connection may drop.",
+                "过滤规则马上重新加载，连接可能断开。",
             )
             .into(),
         ),
         recovery: Some(
             l.pick(
-                "Undo it on this page. If this page stops loading over Tailscale, someone on the U60's Wi-Fi can change it.",
-                "在这个页面改回来。如果经 Tailscale 打不开这个页面了，请连着 U60 Wi-Fi 的人来改。",
+                "Undo it on this page. If the page stops loading, someone on the U60's Wi-Fi can change it.",
+                "在这个页面改回来。如果页面打不开，请连着 U60 Wi-Fi 的人来改。",
             )
             .into(),
         ),

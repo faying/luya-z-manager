@@ -32,8 +32,9 @@ const RATE_NO_DAY_LIMIT: &[&str] = &["ship-auto-rollback", "ship-conn-rollback"]
 const SMS_LOG_KEEP: usize = 100;
 /// Kinds never sent as an SMS: a failed SMS, the screen's colours, what an MCP agent changed (MCP
 /// second phase: the agent reads it back, the owner's alert forwarding shows it), the tailnet
-/// poller (owner 10-21: web and Hermes only), a new device on the LAN (guests on the hotspot would
-/// each cost an SMS; the screen and the web show it).
+/// poller (owner 10-21: web and Hermes only; the producer is retired — the exclusion stays so
+/// events already in a queue never text after an upgrade), a new device on the LAN (guests on
+/// the hotspot would each cost an SMS; the screen and the web show it).
 const NEVER: &[&str] = &[
     "sms-failed",
     "ui-theme-paused",

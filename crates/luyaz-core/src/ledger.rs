@@ -74,8 +74,6 @@ pub enum Class {
     Cellular = 0,
     Lan = 1,
     Local = 2,
-    /// inside tailscale0 (100.64/10, fd7a:115c:a1e0::/48): what the outer UDP carries
-    Tailnet = 3,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -132,8 +130,6 @@ pub fn classify(f: &Flow, s: &Snapshot) -> (Class, FlowKey) {
         Class::Cellular
     } else if o.src.is_loopback() || o.dst.is_loopback() || is_tun(&o.src) || is_tun(&o.dst) {
         Class::Local
-    } else if is_tailnet(&o.src) || is_tailnet(&o.dst) {
-        Class::Tailnet
     } else {
         Class::Lan
     };
@@ -146,14 +142,6 @@ pub fn classify(f: &Flow, s: &Snapshot) -> (Class, FlowKey) {
             port,
         },
     )
-}
-
-/// Tailscale addresses: 100.64.0.0/10 and fd7a:115c:a1e0::/48
-fn is_tailnet(a: &IpAddr) -> bool {
-    match a {
-        IpAddr::V4(v) => v.octets()[0] == 100 && (v.octets()[1] & 0xc0) == 64,
-        IpAddr::V6(v) => v.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0],
-    }
 }
 
 /// mihomo TUN / fake-ip range 198.18.0.0/15
@@ -265,7 +253,6 @@ struct Acc {
     ifaces: BTreeMap<String, [u64; 4]>,
     procs: HashMap<String, ProcAcc>,
     flows: HashMap<FlowKey, (u64, u64)>,
-    tailnet: HashMap<FlowKey, (u64, u64)>,
     flow_pkts: [u64; 4],
     forks: HashMap<(String, String), u32>,
     irqs: HashMap<String, u64>,
@@ -447,12 +434,10 @@ impl Ledger {
             for (f, dp, db) in self.flows.step(flows, &s.destroyed, false) {
                 let (class, key) = classify(f, s);
                 a.flow_pkts[class as usize] += dp;
-                let table = match class {
-                    Class::Cellular => &mut a.flows,
-                    Class::Tailnet => &mut a.tailnet,
-                    _ => continue,
-                };
-                let e = table.entry(key).or_default();
+                if class != Class::Cellular {
+                    continue;
+                }
+                let e = a.flows.entry(key).or_default();
                 e.0 += dp;
                 e.1 += db;
             }
@@ -572,15 +557,6 @@ impl Ledger {
             flows_other.bytes += f.bytes;
         }
         flows.truncate(TOP_FLOWS);
-        let mut tailnet: Vec<FlowRow> = a.tailnet.iter().map(|(k, v)| k.row(v.0, v.1)).collect();
-        tailnet.sort_by(|x, y| {
-            y.pkts
-                .cmp(&x.pkts)
-                .then(x.owner.cmp(&y.owner))
-                .then(x.peer.cmp(&y.peer))
-        });
-        tailnet.truncate(TOP_FLOWS);
-
         let mut forks: Vec<ForkRow> = a
             .forks
             .iter()
@@ -649,7 +625,7 @@ impl Ledger {
             wakes_total,
             flows,
             flows_other,
-            tailnet,
+            tailnet: Vec::new(),
             flow_pkts: a.flow_pkts,
             forks,
             irqs,
@@ -747,7 +723,7 @@ mod tests {
             self_pid: 999,
             wan_addrs: [wan].into_iter().collect(),
             local_addrs: [wan, "192.168.0.1".parse().unwrap()].into_iter().collect(),
-            owners: [((17u8, 41641u16), "/data/tailscale/tailscaled".to_string())]
+            owners: [((17u8, 41641u16), "/data/example/agent".to_string())]
                 .into_iter()
                 .collect(),
             ..Default::default()
@@ -757,7 +733,7 @@ mod tests {
     #[test]
     fn minute_accounts_threads_exits_forks_flows() {
         let mut l = Ledger::new();
-        // t0: tailscaled (2 threads), a shell loop (old), the ledger itself
+        // t0: agent (2 threads), a shell loop (old), the ledger itself
         let mut s0 = base(1_000_000);
         s0.stat = SysStat {
             ctxt: 1000,
@@ -767,7 +743,7 @@ mod tests {
             intr: 50,
         };
         s0.procs = vec![
-            proc_(100, 1, 100, "/data/tailscale/tailscaled", "tailscaled", 10),
+            proc_(100, 1, 100, "/data/example/agent", "agent", 10),
             proc_(200, 1, 100, "sh /data/luyaz/scripts/doctor.sh", "sh", 5),
             proc_(999, 1, 100, "u60d", "u60d", 1),
         ];
@@ -813,7 +789,7 @@ mod tests {
             intr: 80,
         };
         s1.procs = vec![
-            proc_(100, 1, 100, "/data/tailscale/tailscaled", "tailscaled", 14),
+            proc_(100, 1, 100, "/data/example/agent", "agent", 14),
             proc_(200, 1, 100, "sh /data/luyaz/scripts/doctor.sh", "sh", 6),
             proc_(999, 1, 100, "u60d", "u60d", 2),
         ];
@@ -838,7 +814,7 @@ mod tests {
             TaskExit {
                 pid: 101,
                 ppid: 1,
-                comm: "tailscaled".into(),
+                comm: "agent".into(),
                 ctxt: 75,
                 ..Default::default()
             },
@@ -892,9 +868,9 @@ mod tests {
                 .cloned()
                 .unwrap_or_default()
         };
-        // tailscaled: main 30 + exited thread residual 5
-        assert_eq!(row("/data/tailscale/tailscaled").wakes, 35);
-        assert_eq!(row("/data/tailscale/tailscaled").cpu_ms, 40);
+        // agent: main 30 + exited thread residual 5
+        assert_eq!(row("/data/example/agent").wakes, 35);
+        assert_eq!(row("/data/example/agent").cpu_ms, 40);
         assert_eq!(row("sh /data/luyaz/scripts/doctor.sh → awk").wakes, 7);
         assert_eq!(row("sh /data/luyaz/scripts/doctor.sh → awk").cpu_ms, 20);
         let g = "sh /data/luyaz/scripts/doctor.sh".to_string();
@@ -919,9 +895,9 @@ mod tests {
         assert_eq!(m.self_cost.wakes, 1);
         assert_eq!((m.ctxt, m.clones, m.exits), (1000, 3, 5));
         assert_eq!(m.busy_pm, 100);
-        // flows: tailscaled +5, DNS 2 whole (owner unknown: no socket for 5353)
+        // flows: agent +5, DNS 2 whole (owner unknown: no socket for 5353)
         assert_eq!(m.flow_pkts[0], 7);
-        assert_eq!(m.flows[0].owner, "/data/tailscale/tailscaled");
+        assert_eq!(m.flows[0].owner, "/data/example/agent");
         assert_eq!(m.flows[0].pkts, 5);
         assert_eq!(m.flows[1].owner, "?");
         assert_eq!(
@@ -952,10 +928,21 @@ mod tests {
         fwd_nat.reply.dst = "10.20.30.40".parse().unwrap();
         let (c, k) = classify(&fwd_nat, &s);
         assert_eq!((c, k.owner.as_str()), (Class::Cellular, "LAN"));
+        // Shared and ULA addresses follow the same accounting as other non-WAN
+        // traffic, while a translated WAN address still takes precedence.
+        for (src, dst) in [
+            ("100.100.1.2", "100.64.0.9"),
+            ("fd7a:115c:a1e0::1", "fd7a:115c:a1e0::2"),
+        ] {
+            let mut f = flow(10, src, dst, 50000, 443, 1);
+            assert_eq!(classify(&f, &s).0, Class::Lan);
+            f.reply.dst = "10.20.30.40".parse().unwrap();
+            assert_eq!(classify(&f, &s).0, Class::Cellular);
+        }
         let inbound = flow(2, "203.0.113.5", "10.20.30.40", 33333, 41641, 1);
         let (c, k) = classify(&inbound, &s);
         assert_eq!(c, Class::Cellular);
-        assert_eq!(k.owner, "← /data/tailscale/tailscaled");
+        assert_eq!(k.owner, "← /data/example/agent");
         let mut s2 = base(0);
         s2.peers.insert(
             (17, "203.0.113.1".parse().unwrap(), 443),

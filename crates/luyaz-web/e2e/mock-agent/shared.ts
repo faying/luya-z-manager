@@ -1,5 +1,5 @@
 // Cross-area mock state. Values that more than one endpoint reports (e.g.
-// /api/public/status summarises Wi-Fi, services, Tailscale and SMS) live here so
+// /api/public/status summarises Wi-Fi, services and SMS) live here so
 // a write in one area is visible in another area's readback. Area-private
 // state stays inside fixtures/<area>.ts.
 
@@ -18,10 +18,6 @@ export const shared = {
     exit: "proxy" as string,
     region: "TW" as string,
     profile: "standard" as string,
-  },
-  tailscale: {
-    running: true,
-    node: "u60-pro",
   },
   sms: {
     unread: 2,

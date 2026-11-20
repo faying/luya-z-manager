@@ -8,8 +8,7 @@ Reply shapes follow what luyaz-core sends today. Some fixtures still carry
 type-only imports, so nothing breaks at run time.
 
 Data describes a user travelling in Taiwan: NR SA n78 with NR CA plus LTE CA,
-RSRP −95 / SINR 18, battery 76 % charging,
-Tailscale running with 5 peers (3 online), 2 unread SMS.
+RSRP −95 / SINR 18, battery 76 % charging, CHILL running, 2 unread SMS.
 
 ## Run
 
@@ -56,7 +55,7 @@ curl  http://127.0.0.1:9199/__mock/state                  # shared state + route
 | `stale` | `GET /api/network/signal` and `/api/network/speed` hang `MOCK_STALE_MS` (default 12 s, past the planned 9 s client timeout) before answering. |
 | `missing` | GET payloads come back with fields absent or `null` (generic transform; a few endpoints do their own). |
 | `cmdfail` | Every write returns 500 `{ok:false,error:"mock failure"}` (login and read-over-POST endpoints excluded). |
-| `fakesuccess` | 200 `ok:true` but the downstream failed: Tailscale returns `data.error`. |
+| `fakesuccess` | 200 `ok:true` but the downstream failed: CHILL answers with every mihomo call failed. |
 | `reboot-token` | After `POST /api/device/reboot` is acknowledged, every connection is dropped for `MOCK_REBOOT_MS` (default 20 s; `/api/public/status` too), and all tokens issued before are invalid when it comes back. Without this scenario reboot just returns ok. |
 | `step2-timeout` | The second write of a multi-step operation (a write arriving within `MOCK_STEP_WINDOW_MS`, default 3 s, of the previous write finishing — e.g. the second `POST /api/cell/band/nr`, or `POST /api/doh/disable` after `PUT /api/router/dns`) hangs `MOCK_STEP2_MS` (default 20 s), then completes. |
 | `down` | Every socket is destroyed (connection reset). Only `/__mock/*` still answers, so you can switch back. |
@@ -93,7 +92,7 @@ network search and manual register get a busy 409
 Writes update in-memory state so the matching GET reads the change back (Wi-Fi
 settings, band lock, APN profiles, SMS read /
 delete, scheduler jobs, …). Values that several endpoints report (Wi-Fi on,
-Tailscale, unread SMS, home mode, band lock) live in `shared.ts`.
+unread SMS, home mode, band lock) live in `shared.ts`.
 Restart the server to reset everything.
 
 ## Layout

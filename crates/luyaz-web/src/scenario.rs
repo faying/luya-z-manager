@@ -18,7 +18,7 @@
 //! - tier 2 (in the page): engine on/off (`PUT /enabled {"enabled":bool}`), pin / unpin (`POST /pin
 //!   {"id":…|null}`), every config edit (`PUT /api/scenario`, the whole config: add / remove a home
 //!   network, create the defaults, a scenario's Wi-Fi, the timing numbers), the scan;
-//! - tier 3 (dialog): a scenario's Wi-Fi set to off, when the browser came over Tailscale.
+//! - tier 3 (dialog): a scenario's Wi-Fi set to off, when the browser is remote.
 //! - A config edit is read-modify-write on the config as a `serde_json::Value` (so `snapshot`,
 //!   `verify_field`, `restore_on_exit`, the original names… are sent back as they were) from a
 //!   fresh read at confirm time, under one lock, and only `config` is sent.
@@ -1435,8 +1435,8 @@ async fn ask_wifi(
                     "From the moment the device enters “{name}” until it leaves it.",
                     "从设备进入「{name}」开始，到离开为止。"));
                 c.recovery = Some(l.pick(
-                    "Turn this switch back on, or turn the engine off (it puts Wi-Fi back on). Over Tailscale the page stays reachable through the mobile connection.",
-                    "把这个开关重新打开，或关闭情景引擎（会把 Wi-Fi 打开）。经 Tailscale 访问时，这个页面仍可以通过移动网络打开。",
+                    "Turn this switch back on, or turn the engine off (it puts Wi-Fi back on). If the page becomes unreachable, someone at the device must restore access.",
+                    "把这个开关重新打开，或关闭情景引擎（会把 Wi-Fi 打开）。如果页面无法访问，需要有人在设备旁恢复连接。",
                 ).into());
             }
         }

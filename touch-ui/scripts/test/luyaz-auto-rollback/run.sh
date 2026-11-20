@@ -93,7 +93,7 @@ rm -rf "$T"
 
 # lost reachability: the same rollback, no quarantine, one marker for the boot, its own alert
 setup
-sh "$SHIP" auto-rollback "$TXN" "conn lost: tailscale" >/dev/null 2>&1
+sh "$SHIP" auto-rollback "$TXN" "conn lost: ssh" >/dev/null 2>&1
 RC=$?
 check "conn: old program back" '[ $RC = 0 ] && [ "$(md5 "$F")" = "$O" ] && grep -q "^phase=rolledback" "$D/txn"'
 check "conn: no quarantine" '[ ! -s "$D/quarantine" ]'

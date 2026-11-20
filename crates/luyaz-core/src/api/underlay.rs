@@ -9,14 +9,13 @@
 //!   known broken, whatever the cell does.
 //! - Inferential repairs (a probe failed, so maybe my layer is broken) hold while a lower layer
 //!   is down: the failure is the lower layer's, and acting on it only adds churn.
-//! - No address on the data interface is hard evidence: hold for as long as it lasts (P0: the
-//!   cell down 30 min must not close home-exit's rest).
+//! - No address on the data interface is hard evidence. Hold proxy recovery while it lasts.
 //! - A lower finding is an inference: hold at most [`MAX_HOLD_SECS`], then let the caller act
 //!   again, so a misread lower layer cannot freeze the upper one for good.
 //!
-//! Who asks: home-exit before counting a missed probe, manual-first before counting a timeout
-//! (both through their host's `cell_up` / `cell_alive`). chill.sh's repairs are all structural
-//! (rules lost, crash restart, captive WAN to direct, flush to direct), so it does not ask.
+//! Manual-first asks through its host's `cell_alive` before counting a timeout.
+//! chill.sh's repairs are structural (rules lost, crash restart, captive WAN to direct,
+//! flush to direct), so it does not ask.
 
 /// The layer that wants to act. Only the proxy layer asks yet: the IP layer's repair
 /// (`data.reconnect`) is proposal-only and no_internet already offers it for IP/data only.
@@ -25,7 +24,7 @@
 pub enum Layer {
     Ip,
     Dns,
-    /// mihomo, Tailscale, home-exit
+    /// mihomo
     Proxy,
 }
 
@@ -248,7 +247,7 @@ mod tests {
 
     #[test]
     fn no_address_holds_without_a_limit() {
-        // P0: the cell down 40 min still holds home-exit, nothing is released
+        // A missing bearer still holds proxy recovery after 40 minutes.
         let b = below(Some(false), Some(("data", 40 * 60)));
         assert_eq!(gate(Layer::Proxy, Kind::Inferential, &b), Verdict::Hold(Reason::NoBearer));
         assert!(gate(Layer::Proxy, Kind::Inferential, &below(Some(false), None)).holds());

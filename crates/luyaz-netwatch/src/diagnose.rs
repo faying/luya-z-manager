@@ -596,11 +596,11 @@ pub fn default_routes(text: &str) -> Option<Vec<String>> {
 }
 
 /// The other ways out: interfaces with a default route besides the cellular one, plus tunnels
-/// that route by policy (Tailscale's table 52, CHILL's TUN) found among the network devices.
+/// that route by policy found among the network devices.
 pub fn ways_out(cellular: &str, defaults: &[String], devices: &[String]) -> usize {
     // tun0, utun1, wg0…: a prefix and digits (not tunl0 / sit0, the kernel's idle ipip/sit devices)
     let numbered = |d: &str, p: &str| d.strip_prefix(p).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-    let tunnel = |d: &str| d.starts_with("tailscale") || ["tun", "utun", "wg"].iter().any(|p| numbered(d, p)) || d == "Meta";
+    let tunnel = |d: &str| ["tun", "utun", "wg"].iter().any(|p| numbered(d, p)) || d == "Meta";
     let mut ways: Vec<&str> = vec![cellular];
     for d in defaults.iter().map(String::as_str).chain(devices.iter().map(String::as_str).filter(|d| tunnel(d))) {
         if !ways.contains(&d) {

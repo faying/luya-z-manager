@@ -42,8 +42,6 @@ LEGACY_PAUSE="$CHILL_DIR/pause_until"
 PAUSE_UNTIL="$CHILL_DIR/pause.v2"
 PROFILE_FILE="$CHILL_DIR/profile"     # 档位：eco / standard / perf，没有 = standard
 MODE_FILE="$CHILL_DIR/mode"           # 最近一次的出口模式（rule/global/direct），重启核心后恢复
-HOME_IP_LIST="$CHILL_DIR/home_ip.list"  # 家里出口：要家里 IP 的网站（用户手写）
-HOME_PROBE_DEFAULT="http://connect.rom.miui.com/generate_204"
 
 STATE=/tmp/chill.state
 CORE_PID=/tmp/chill.core.pid
@@ -58,12 +56,12 @@ IDLE_LEASE=/tmp/chill.idle.v2            # 核心写的「息屏暂停」租约�
 FAKE_IP_NET=198.18.0.0/16
 TABLE=2022
 # CHILL 自管的 ip rule 区间。8990–9099：mihomo 自己用 9000+，按源 IP 绕行用 8999。
-# 区间之外一律不删——Tailscale 的 5210–5270 与 table 52 永不触碰。
+# 区间之外的规则和路由表一律不删。
 RULE_LO=8990
 RULE_HI=9099
 BYPASS_PRIO=8999
 # 国内直连（CHILL_CN_SET=1）：nft 集合给发往 CN 段的局域网流量打这一位，8998 这条规则把它送回
-# main 表，不进 TUN。位要避开原厂的 0xff0000（connmark 0x40000、Tailscale 0x80000）和 0xC0。
+# main 表，不进 TUN。位要避开 0xff0000（含原厂的 connmark 0x40000）和 0xC0。
 CN_MARK=0x1000000
 CN_PRIO=8998
 CN_NFT=/tmp/chill.cn.nft
@@ -231,7 +229,7 @@ EOF
 # AI 的流量只走 🤖 AI 选的地区。CHILL 一停（崩溃、卡死、过热、暂停、息屏暂停、总开关关）
 # 或出口模式不是 rule（direct / global 不看规则），AI 网域就由 dnsmasq 答「不存在」，
 # 直到核心确认蜂窝落地就是 🤖 AI 的地区（核心写 $AI_OK，见 crates/luyaz-core 的
-# engines/chill_ai_gate.rs）。其余网站照常直连；管理网页、tailnet 不是 AI 网域，不受影响。
+# engines/chill_ai_gate.rs）。其余网站照常直连，管理网页不受影响。
 # - 封锁文件放 dnsmasq 的 conf-dir。dnsmasq 的 reload 只发 SIGHUP，不重读 conf-dir（10-24 真机
 #   验证），所以封锁文件一有变化就 restart。
 # - 先封后放：CHILL 停下的同一次 dnsmasq 重启里就封上，不等核心。
@@ -469,11 +467,8 @@ flush() {
 }
 
 # 段外漂移检测（T3）。
-# 要回答的问题是「我们的 flush 有没有误删别人的规则」——尤其 Tailscale 的
-# 5210–5270 与 table 52。所以比的是**自管区间之外**的部分：把启动前快照和当前
-# 状态各自剔除 8990–9099 后对比，不一致才算漂移。
-# ⚠ 不要反过来写成「段内规则消失就告警」：那既检测不到误删 Tailscale，
-#   又会在正常降级（本就该清空段内规则）时误报。
+# 只检测自管区间之外的规则有没有被删除。比对启动前和当前的快照时，
+# 两边都剔除 8990–9099。正常降级会清空段内规则，所以段内变化不记作漂移。
 strip_owned() {
   awk -F: -v lo="$RULE_LO" -v hi="$RULE_HI" '
     { p = $1 + 0 }
@@ -667,86 +662,6 @@ direct_dns4() {
     }'
 }
 
-# ── 家里出口（E3，docs/designs/home-exit.md）──────────────────────────────
-# chill.env（由 u60d 即 luyaz-core 写）：
-#   CHILL_HOME_EXIT=IPv4:端口   家里的 SOCKS5；空 = 整个功能不出现
-#   CHILL_HOME_MEDIA=1          国内版权走家里
-#   CHILL_HOME_IP=1             家里 IP 网站（$HOME_IP_LIST）走家里
-#   CHILL_HOME_REST=1           其余都走家里
-#   CHILL_HOME_PROBE_URL=…      两个组的探测地址（默认 $HOME_PROBE_DEFAULT）
-# 这里只算出 HOME_ON（要保留的模板行标签）和三个占位值。任何一项不对都只是不渲染
-# 那部分并写日志，不让 render 失败：render 失败 chill.sh 会进降级循环，整个 CHILL 停掉。
-
-# IPv4:端口 才算数（四段 0–255，端口 1–65535）。
-valid_home_exit() {
-  case "$1" in *[!0-9.:]*|*:*:*) return 1 ;; *?:?*) ;; *) return 1 ;; esac
-  _he_port="${1##*:}"
-  case "$_he_port" in *[!0-9]*) return 1 ;; esac
-  [ ${#_he_port} -le 5 ] && [ "$_he_port" -ge 1 ] && [ "$_he_port" -le 65535 ] || return 1
-  _he_ifs=$IFS; IFS=.
-  # shellcheck disable=SC2086
-  set -- ${1%:*}
-  IFS=$_he_ifs
-  [ $# -eq 4 ] || return 1
-  for _he_o in "$@"; do
-    case "$_he_o" in ''|*[!0-9]*) return 1 ;; esac
-    [ ${#_he_o} -le 3 ] && [ "$_he_o" -le 255 ] || return 1
-  done
-  return 0
-}
-
-# 这五个键每次渲染都从 chill.env 现读：开关是 u60d 改 env 再 reload，而常驻的 `chill.sh run`
-# 只在启动时 source 过一次，它自己再渲染（运营商 DNS 变了、过热降档重启核心）时会拿旧值，
-# 把开着的悄悄关掉、关了的又打开。在子 shell 里 source，不动本进程的其他变量；
-# env 文件读坏了（子 shell 失败）就保留现在的值。没有 env 文件（单测）就用现有变量。
-home_env() {
-  [ -f "$ENV_FILE" ] || return 0
-  _he_out=$(
-    unset CHILL_HOME_EXIT CHILL_HOME_MEDIA CHILL_HOME_IP CHILL_HOME_REST CHILL_HOME_PROBE_URL
-    . "$ENV_FILE" >/dev/null 2>&1 || exit 1
-    printf '%s\n' "${CHILL_HOME_EXIT:-}" "${CHILL_HOME_MEDIA:-}" "${CHILL_HOME_IP:-}" \
-      "${CHILL_HOME_REST:-}" "${CHILL_HOME_PROBE_URL:-}"
-  ) || { log "render: 读 chill.env 失败，家里出口沿用现在的设置"; return 0; }
-  {
-    IFS= read -r CHILL_HOME_EXIT; IFS= read -r CHILL_HOME_MEDIA; IFS= read -r CHILL_HOME_IP
-    IFS= read -r CHILL_HOME_REST; IFS= read -r CHILL_HOME_PROBE_URL
-  } <<EOF
-$_he_out
-EOF
-  return 0
-}
-
-home_vars() {
-  home_env
-  HOME_ON=""; HOME_SERVER=""; HOME_PORT=""
-  HOME_PROBE_URL="${CHILL_HOME_PROBE_URL:-$HOME_PROBE_DEFAULT}"
-  case "$HOME_PROBE_URL" in
-    *"'"*|*"
-"*|*" "*) log "render: CHILL_HOME_PROBE_URL 含单引号、空格或换行，用默认"; HOME_PROBE_URL="$HOME_PROBE_DEFAULT" ;;
-    http://?*|https://?*) ;;
-    *) log "render: CHILL_HOME_PROBE_URL 不是 http(s) 地址，用默认"; HOME_PROBE_URL="$HOME_PROBE_DEFAULT" ;;
-  esac
-  _he="${CHILL_HOME_EXIT:-}"
-  [ -n "$_he" ] || return 0
-  if ! valid_home_exit "$_he"; then
-    log "render: CHILL_HOME_EXIT 不是 IPv4:端口，家里出口不渲染"
-    return 0
-  fi
-  HOME_SERVER="${_he%:*}"; HOME_PORT="${_he##*:}"
-  HOME_ON="home"
-  if [ "${CHILL_HOME_MEDIA:-0}" = "1" ]; then HOME_ON="$HOME_ON home-media"; fi
-  if [ "${CHILL_HOME_IP:-0}" = "1" ]; then
-    # 空表不渲染：mihomo -t 查不出缺文件，运行时规则集是空的，等于开着却什么都没走家里
-    if grep -q '[^[:space:]]' "$HOME_IP_LIST" 2>/dev/null; then
-      HOME_ON="$HOME_ON home-ip"
-    else
-      log "render: CHILL_HOME_IP=1 但 home_ip.list 是空的，这项不渲染"
-    fi
-  fi
-  if [ "${CHILL_HOME_REST:-0}" = "1" ]; then HOME_ON="$HOME_ON home-rest"; fi
-  return 0
-}
-
 # ── 国内直连：nft 集合代替 route-exclude-address 里的 CN 段（CHILL_CN_SET=1）─────────
 # 原来把 cn.list 全部写进 route-exclude-address，table 2022 有 1.2 万多条路由。sing-tun 的
 # 默认网口监视器每次检查都把所有路由表整个读一遍，而开机那一波路由会撑爆它的 netlink
@@ -806,12 +721,12 @@ cn_set_up() {
 
 # 订阅不许指定出口网卡（ext-1030 第 14 条）：proxy-providers 里的节点一律不带
 # interface-name / routing-mark。出站走哪张网卡由 tun 的 auto-detect-interface 决定；
-# 订阅里写了 interface-name: rmnet_data0 这类值，连接就会绕开 TUN 的路由、Tailscale
-# 的表 52，换网后还绑着旧网卡。两层做法：
+# 订阅里写了 interface-name: rmnet_data0 会把连接固定到旧网卡，换网时无法随默认路由切换。
+# 两层做法：
 #   1) 渲染结果里 proxy-providers 段（含 inline 的 payload）出现的这两个键直接删掉；
 #   2) 每个 provider 的 override 补上 interface-name: "" 和 routing-mark: 0，
 #      mihomo 下载回来的订阅正文（不经过这里）也会被清空。
-# 顶层 proxies: 是模板自己写的（家里出口必须 interface-name: tailscale0），不动。
+# 顶层 proxies: 为模板作者明确指定，不动。
 # 只认块写法 `    override:` 和单行 `{…}` 两种；列表项第一个键（`- interface-name:`）不处理。
 strip_egress() {
   awk '
@@ -922,7 +837,6 @@ render() {
   # 的 ${SUB_URL} 永远不会被替换，会原样留在渲染结果里传给 mihomo。
   profile_vars "$(profile_effective)"
   DIRECT_DNS_EXTRA=$(direct_dns4)
-  home_vars
   if [ -f "$CN_SET_MARK" ]; then _cn_routes=0; else _cn_routes=1; fi
   HC_INTERVAL="$HC_INTERVAL" KEEPALIVE="$KEEPALIVE" TCP_CONCURRENT="$TCP_CONCURRENT" \
   CONTROLLER="$CONTROLLER" SUB_URL="${SUB_URL:-}" \
@@ -930,8 +844,6 @@ render() {
   FILTER_UNION="${FILTER_UNION:-}" EXCLUDE_FILTER="${EXCLUDE_FILTER:-}" \
   FILTER_TW="${FILTER_TW:-}" FILTER_JP="${FILTER_JP:-}" \
   FILTER_SG="${FILTER_SG:-}" FILTER_US="${FILTER_US:-}" \
-  HOME_ON="$HOME_ON" HOME_SERVER="$HOME_SERVER" HOME_PORT="$HOME_PORT" \
-  HOME_PROBE_URL="$HOME_PROBE_URL" \
   awk -v cnlist="$CN_LIST" -v cnroutes="$_cn_routes" '
     # CN_CIDR 单独处理：值有 163KB 量级，不能走 ENVIRON（会撞 argv/envp 大小
     # 限制，见上面的中文注释）。-v 传的只是文件路径（几十字节），BEGIN 里
@@ -957,14 +869,6 @@ render() {
     }
     {
       line = $0
-      # 家里出口的行尾标签（#@home、#@home-media …）：标签在 HOME_ON 里才保留这行并去掉标签，
-      # 不在（包括 HOME_ON 没传进来）就整行不要。先看原行，免得替换进来的值里碰巧有 #@home。
-      if (match(line, /[ \t]*#@home(-[a-z]+)?[ \t]*$/)) {
-        tag = substr(line, RSTART, RLENGTH)
-        sub(/^[ \t]*#@/, "", tag); sub(/[ \t]*$/, "", tag)
-        if (index(" " ENVIRON["HOME_ON"] " ", " " tag " ") == 0) next
-        line = substr(line, 1, RSTART - 1)
-      }
       while (match(line, /\$\{[A-Z_]+\}/)) {
         key = substr(line, RSTART + 2, RLENGTH - 3)
         # 同上：这台设备的 awk 三元运算符不可靠，这里也改用显式 if/else。
@@ -1339,7 +1243,7 @@ run() {
   done
 }
 
-# CHILL_API_LAN=1 时限制 :9999 的来源。fw3 不管 nft 表，所以这张表不会被 reload 冲掉。
+# CHILL_API_LAN=1 时只允许本机和 br-lan 上白名单里的 IPv4 来源。fw3 不管理这张 nft 表。
 rebuild_api_guard() {
   nft delete table inet chill 2>/dev/null || true
   allow=""
@@ -1348,8 +1252,8 @@ rebuild_api_guard() {
 table inet chill {
   chain input {
     type filter hook input priority -5;
-    tcp dport 9999 iifname { "lo", "tailscale0" } accept
-    $( [ -n "$allow" ] && echo "tcp dport 9999 ip saddr { ${allow%,} } accept" )
+    tcp dport 9999 iifname "lo" accept
+    $( [ -n "$allow" ] && echo "tcp dport 9999 iifname \"br-lan\" ip saddr {${allow%,} } accept" )
     tcp dport 9999 drop
   }
 }

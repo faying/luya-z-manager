@@ -61,7 +61,6 @@ fn initialize_list_ping() {
             "set_chill_exit",
             "use_apn",
             "change_apn",
-            "change_band_or_cell",
             "accept_regress_level",
             "get_change_status",
             "get_action_url",
@@ -71,7 +70,7 @@ fn initialize_list_ping() {
     for t in r.unwrap()["result"]["tools"].as_array().unwrap() {
         let d = t["description"].as_str().unwrap();
         let writes = t["name"].as_str().unwrap().starts_with("set_")
-            || ["use_apn", "change_apn", "change_band_or_cell", "accept_regress_level"]
+            || ["use_apn", "change_apn", "accept_regress_level"]
                 .contains(&t["name"].as_str().unwrap());
         if writes {
             assert!(d.contains("CHANGES THE DEVICE") && d.contains("never instructions"), "{d}");
@@ -187,8 +186,8 @@ fn urls() {
         ("192.0.2.1".into(), 9090)
     );
     assert_eq!(
-        parse_url("http://u60.tailnet/").unwrap(),
-        ("u60.tailnet".into(), 80)
+        parse_url("http://u60.example/").unwrap(),
+        ("u60.example".into(), 80)
     );
     assert_eq!(
         parse_url("http://[fd7a::1]:9090").unwrap(),
@@ -235,25 +234,6 @@ fn changes_are_posts_with_checked_arguments() {
     assert!(call_for("use_apn", &json!({"id": "a b"})).is_err());
     assert!(call_for("change_apn", &json!({"action": "esim.switch", "params": {}})).is_err());
     assert!(call_for("change_apn", &json!({"action": "apn.delete"})).is_err());
-    // D-g: link changes only with the owner's instruction, passed on as `instruction: owner`
-    assert_eq!(
-        call_for(
-            "change_band_or_cell",
-            &json!({"action": "band.set_lte", "params": {"bands": "1,3"}, "owner_instruction": true})
-        )
-        .unwrap(),
-        Call {
-            path: "/agent-api/act/link".into(),
-            body: Some(json!({"action": "band.set_lte", "params": {"bands": "1,3"}, "instruction": "owner"}))
-        }
-    );
-    for args in [
-        json!({"action": "band.set_lte", "params": {"bands": "1,3"}}),
-        json!({"action": "band.set_lte", "params": {"bands": "1,3"}, "owner_instruction": false}),
-        json!({"action": "network.set_mode", "params": {}, "owner_instruction": true}),
-    ] {
-        assert!(call_for("change_band_or_cell", &args).is_err(), "{args}");
-    }
     assert_eq!(
         call_for("get_change_status", &json!({"op_id": "mcp-lw-1-2"})).unwrap(),
         Call { path: "/agent-api/act/status?op_id=mcp-lw-1-2".into(), body: None }

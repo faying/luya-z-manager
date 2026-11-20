@@ -25,8 +25,8 @@
 //!   changes"` = nothing to do; no `op` (older u60d) = read back from the `wifi` block. Busy (409 with
 //!   `doing`, or 503 for the Wi-Fi lock) and refusals are shown, not hidden.
 //! - Tiers: anything that reloads Wi-Fi is tier 3 (dialog, also on the LAN: devices on this Wi-Fi
-//!   drop for ~10–60 s; Tailscale goes over the mobile link and is not affected, so no Tailscale
-//!   warning); transmit power alone is applied hot by u60d: tier 2.
+//!   drop for ~10–60 s, and a remote path may also be interrupted); transmit power alone is
+//!   applied hot by u60d: tier 2.
 //! - The Wi-Fi 6 switch stays, but a change is refused before sending (the firmware changes it
 //!   together with the radio mode; u60d refuses it too).
 //! - Power save `wifi.power_save {enabled}` (read back from the agent) and NFC `nfc.set {enabled,
@@ -805,33 +805,26 @@ pub fn confirm(c: &Change, l: Lang) -> write::Confirm {
         )
         .to_string()
     };
-    let not_ts = l.pick(
-        " Over a cable, USB or Tailscale (which goes over the mobile link) the page is not affected.",
-        "经网线、USB 或 Tailscale（走移动网络）打开的这个页面不受影响。",
-    );
     let recovery = if c.master_off() {
         l.pick(
-            "Turn Wi-Fi back on from the touchscreen, or open this page over a cable, USB or Tailscale and turn it on here.",
-            "在触屏上把 Wi-Fi 打开，或经网线、USB 或 Tailscale 打开这个页面再打开。",
+            "Turn Wi-Fi back on from the touchscreen, or open this page over a working cable or USB connection and turn it on here.",
+            "在触屏上把 Wi-Fi 打开，或经可用的网线、USB 连接打开这个页面再打开。",
         )
         .to_string()
     } else if c.rejoin() {
         let n = names(c, l);
         let key = c.keys.iter().any(|k| *k);
         match (l, key) {
-            (Lang::En, true) => format!("Devices on the U60's Wi-Fi (this browser too, if it is on it) must join {n} again with the new password; then open this page again.{not_ts}"),
-            (Lang::En, false) => format!("Devices on the U60's Wi-Fi (this browser too, if it is on it) must join {n} again; then open this page again.{not_ts}"),
-            (Lang::Zh, true) => format!("连着 U60 Wi-Fi 的设备（包括这个浏览器，如果它也连着）要用新密码重新连到{n}，再打开这个页面。{not_ts}"),
-            (Lang::Zh, false) => format!("连着 U60 Wi-Fi 的设备（包括这个浏览器，如果它也连着）要重新连到{n}，再打开这个页面。{not_ts}"),
+            (Lang::En, true) => format!("Devices on the U60's Wi-Fi (this browser too, if it is on it) must join {n} again with the new password; then open this page again."),
+            (Lang::En, false) => format!("Devices on the U60's Wi-Fi (this browser too, if it is on it) must join {n} again; then open this page again."),
+            (Lang::Zh, true) => format!("连着 U60 Wi-Fi 的设备（包括这个浏览器，如果它也连着）要用新密码重新连到{n}，再打开这个页面。"),
+            (Lang::Zh, false) => format!("连着 U60 Wi-Fi 的设备（包括这个浏览器，如果它也连着）要重新连到{n}，再打开这个页面。"),
         }
     } else {
-        format!(
-            "{}{not_ts}",
-            l.pick(
-                "If this browser is on the U60's Wi-Fi, the page loses its connection, reconnects by itself when Wi-Fi is back and shows the result.",
-                "如果这个浏览器连的是 U60 的 Wi-Fi，页面会断开，Wi-Fi 回来后自己重连并显示结果。",
-            )
-        )
+        l.pick(
+            "If this browser is on the U60's Wi-Fi, the page loses its connection, reconnects by itself when Wi-Fi is back and shows the result.",
+            "如果这个浏览器连的是 U60 的 Wi-Fi，页面会断开，Wi-Fi 回来后自己重连并显示结果。",
+        ).to_string()
     };
     write::Confirm {
         tier: write::Tier::Dialog,
@@ -840,8 +833,7 @@ pub fn confirm(c: &Change, l: Lang) -> write::Confirm {
         downtime: Some(downtime),
         recovery: Some(recovery),
         action,
-        // Tailscale goes over the mobile link: no "someone has to be at the device" warning
-        cuts_uplink: false,
+        cuts_uplink: true,
         word: None,
         danger: false,
         revert: crate::write::Revert::No,
@@ -1049,8 +1041,8 @@ pub fn view(st: &St, live: Option<&Live>, psm: Option<Psm>, l: Lang) -> View {
             "neutral",
             l.pick("Wi-Fi off", "Wi-Fi 已关闭").into(),
             Some(l.pick(
-                "The master switch is off. Devices reach the U60 by cable, USB or Tailscale only.",
-                "总开关关着。设备只能经网线、USB 或 Tailscale 连 U60。",
+                "The master switch is off. Use another available connection, such as cable or USB, to reach the U60.",
+                "总开关关着。请通过其他可用连接（如网线或 USB）连接 U60。",
             ).into()),
             false,
         ),

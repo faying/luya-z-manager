@@ -107,6 +107,7 @@ fn only_changed_keys_go_and_an_empty_password_is_kept() {
         s.what.contains("主网络")
             && s.reconnect.as_deref() == Some("访客设备要重新连接「Cafe 2」。")
     );
+    assert!(confirm(&s, Lang::Zh).cuts_uplink, "a remote path may depend on Wi-Fi");
 }
 
 #[test]

@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 
 /// A program not running is looked for again at most this often.
 pub const RESCAN_S: i64 = 600;
-const PROGS: [&str; 4] = [crate::paths::CORE, crate::paths::UI, "tailscaled", "mihomo"];
+const PROGS: [&str; 3] = [crate::paths::CORE, crate::paths::UI, "mihomo"];
 const SCRIPTS: [&str; 2] = ["doctor.sh", "alert-lib.sh"];
 const RESTARTS: [&str; 1] = [crate::paths::CORE];
 /// Our own program name: this process.

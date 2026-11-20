@@ -8,17 +8,16 @@
 #
 # The switch is /data/luyaz/net-tune.want (exists = on); the core API writes or
 # removes it and then runs apply or restore. Callers: luyaz-core.init at start
-# (a subprocess, capped at 5 s), chill.sh once chill0 is up (`apply chill0`),
-# tailscale start.sh once tailscale0 is up (`apply tailscale0`). `apply <iface>`
-# only does that interface's RPS.
+# (a subprocess, capped at 5 s), and chill.sh once chill0 is up (`apply chill0`).
+# `apply <iface>` only does that interface's RPS.
 #
 # Items: the sysctls in ITEMS below, and RPS (rps_cpus of every rx queue) on
-# br-lan, chill0 and tailscale0. rmnet_data0 (stock mask 6, rmnet_sch, IPA) and
+# br-lan and chill0. rmnet_data0 (stock mask 6, rmnet_sch, IPA) and
 # wlan0 are never touched.
 #
 # Baseline (/data/luyaz/net-tune.baseline): each item is recorded the first time
 # it is seen and never overwritten, so an interface that appears later
-# (chill0/tailscale0 are rebuilt on every start) still gets its own original
+# (chill0 is rebuilt on every start) still gets its own original
 # value. Before a sysctl or a queue is recorded its value is checked against the
 # stock table (10-24/10-25 read-outs of both devices, B31); a mismatch means
 # someone else set it, so that item is refused (not recorded, not changed) and
@@ -44,7 +43,7 @@ INTENT=${NT_INTENT:-/data/luyaz/net-tune.intent}
 LOCK=${NT_LOCK:-/tmp/luyaz-net-tune.lock}
 TRIES=${NT_LOCK_TRIES:-25}
 case $TRIES in '' | *[!0-9]*) TRIES=25 ;; esac
-IFACES=${NT_IFACES:-br-lan chill0 tailscale0}
+IFACES=${NT_IFACES:-br-lan chill0}
 
 # RPS mask e = CPUs 1-3 (4× A55): CPU0 takes most hardware interrupts (Wi-Fi,
 # IPA), so the protocol work moves off it; rmnet_data0's stock mask is 6.

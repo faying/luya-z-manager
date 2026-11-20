@@ -62,8 +62,6 @@ async function own(p, net) {
   ok(await p.locator("#ch-groups .nd-row").count() === 5, "proxy groups: five");
   const rows = await p.locator("#ch-byp .nd-row").count();
   ok(rows >= 6 && await p.locator("#ch-byp [role=switch][aria-checked=true]").count() === 1 && /192\.168\.0\.105/.test(await txt(p, "#ch-byp")), `bypass: ${rows} rows, the bypassed IP without a lease is listed`);
-  ok(await p.locator("#ch-home [role=switch]").count() === 3, "home exit: three rows (abroad)");
-  ok(/经 Tailscale · 直连 38 ms/.test(await txt(p, "#ch-home")), "home exit foot: Tailscale path");
 
   // ---- tier 1: exit ----
   await p.click("#ch-exit [role=radio]:has-text('直连 · AI 不动')");
@@ -83,8 +81,6 @@ async function own(p, net) {
   await p.click("#ch-ex-op .nd-btn--confirm");
   await until(p, "#ch-ex-op", /出口：全部直连/);
   ok(/出口：全部直连/.test(await txt(p, "#ch-ex-op")), "all direct confirmed and read back");
-  await p.waitForFunction(() => document.querySelector("#ch-home .ch-grey, #ch-home .nd-row__sub")?.textContent, null, { timeout: 8000 }).catch(() => {});
-  ok(/不生效/.test(await txt(p, "#ch-home")), `home exit says it is not used in All direct: ${(await txt(p, "#ch-home")).slice(-60)}`);
   await p.click("#ch-exit [role=radio]:has-text('代理')");
   await until(p, "#ch-ex-op", /出口：代理/);
 
@@ -122,17 +118,6 @@ async function own(p, net) {
   // an address that is not one is refused before it is sent
   const bad = await (await fetch(`${WEB}/services/chill/byp/set?ip=1.2.3.4%27&on=1`, { method: "POST", headers: { ...hdr, "datastar-request": "true" } })).text();
   ok(/不是 IPv4 地址|not an IPv4/.test(bad) || /不是 IPv4/.test(bad.replaceAll("\\u", "\\u")), "bypass: a bad address is refused");
-
-  // ---- tier 2: home exit ----
-  await p.locator("#ch-home [role=switch]").first().click();
-  await p.waitForSelector("#ch-ho-op .nd-confirm");
-  ok(/漫游/.test(await txt(p, "#ch-ho-op .nd-confirm__text")), `home exit asks (roaming): ${await txt(p, "#ch-ho-op .nd-confirm__text")}`);
-  await p.click("#ch-ho-op .nd-btn--confirm");
-  await until(p, "#ch-ho-op .t-note", /国内版权走家里 · 打开/, 20000);
-  ok(/国内版权走家里 · 打开/.test(await txt(p, "#ch-ho-op .t-note")) && await p.locator("#ch-home [role=switch][aria-checked=true]").count() === 1, `home exit on: ${await txt(p, "#ch-ho-op")}`);
-  await p.locator("#ch-home [role=switch][aria-checked=true]").first().click();
-  await p.click("#ch-ho-op .nd-btn--confirm");
-  await until(p, "#ch-ho-op .t-note", /关闭/, 20000);
 
   // ---- tier 2: provider refresh ----
   await p.click("#ch-pr-2");

@@ -1,16 +1,23 @@
 // /router/vpn (batch 4): common checks (first load ≤ 40 KiB gzip without fonts, axe light/dark 0,
 // 390 px no sideways scroll, English body without Chinese, no page errors) and the page's own:
 // B31 state (only SIP reported: 状态不明 + 打开/关掉, each 「设备已接受，读不回来确认」), a
-// reported field read back, no readback → 「设备已接受，还没读回」, the read failed, the Tailscale
-// dialog (tier 3, a Host without a dot counts as remote). Run from source/manager:
+// reported field read back, no readback → 「设备已接受，还没读回」, the read failed, the remote
+// dialog (tier 3, the peer comes in from off the LAN). Run from source/manager:
 //   WEB=http://127.0.0.1:18212 MOCK=http://127.0.0.1:19412 OUT=/tmp/lw-vpn crates/luyaz-web/e2e/run.sh router-vpn
 import { chromium } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdirSync } from "node:fs";
+import os from "node:os";
 
 const WEB = process.env.WEB ?? "http://127.0.0.1:18212";
 const MOCK = process.env.MOCK ?? "http://127.0.0.1:19412";
 const OUT = process.env.OUT ?? "/tmp/lw-vpn";
+// A real peer from off the LAN: this machine's own non-loopback IPv4. luyaz-web classifies a
+// connection by its peer address alone (topbar::via), never by the Host header, so the remote
+// checks come in through this address — the web under test must listen on it too (--bind /
+// LUYAZ_WEB_BIND, and the interface in LUYAZ_WEB_IFACES), or the checks fail with that message.
+const OFF_LAN = Object.values(os.networkInterfaces()).flat().find((a) => a?.family === "IPv4" && !a.internal)?.address ?? "";
+const RW = OFF_LAN ? WEB.replace(/127\.0\.0\.1|localhost/, OFF_LAN) : "";
 mkdirSync(OUT, { recursive: true });
 const mock = (path) => fetch(MOCK + path, { method: "POST" });
 const ops = () => fetch(`${MOCK}/mock/stats`).then((r) => r.json()).then((s) => s.page_ops.filter((b) => b.params?.method === "router_set_alg_switch"));
@@ -112,7 +119,7 @@ async function own(p) {
   await waitText(p, "#vpn-status", /这版固件不报告/);
 }
 
-const browser = await chromium.launch({ channel: "chrome", args: ["--host-resolver-rules=MAP lwremote 127.0.0.1"] });
+const browser = await chromium.launch({ channel: "chrome" });
 await mock("/mock/router-vpn?reported=false");
 for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [1280, 900, "desk", "en", "dark"], [390, 844, "phone", "zh", "light"]]) {
   const ctx = await browser.newContext({ viewport: { width: w, height: h } });
@@ -153,9 +160,12 @@ for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [12
   await ctx.close();
 }
 
-// over Tailscale (a Host without a dot): tier 3 dialog with the warning; Cancel sends nothing
-{
-  const RW = WEB.replace("127.0.0.1", "lwremote");
+// from off the LAN (the machine's real non-loopback address — Via::Remote or Via::Unknown both
+// warn): tier 3 dialog with the remote warning; Cancel sends nothing
+if (!RW) ok(false, "remote: this machine has no non-loopback IPv4 — the remote checks need a real off-LAN peer");
+else if (!(await fetch(RW + "/login").then(() => true, () => false)))
+  ok(false, `remote: ${RW} does not answer — the web must listen on a non-loopback address too (--bind, and the interface in LUYAZ_WEB_IFACES)`);
+else {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await ctx.addCookies([{ name: "lw_sid", value: sid, url: RW }, { name: "u60_lang", value: "zh", url: RW }]);
   const p = await ctx.newPage();
@@ -164,7 +174,7 @@ for (const [w, h, name, lang, theme] of [[1280, 900, "desk", "zh", "light"], [12
   const n0 = (await ops()).length;
   await p.click("#vpn-ipsec button:has-text('关掉')");
   await p.waitForSelector("dialog#vpn-sw-confirm[open]", { timeout: 10000 }).catch(() => {});
-  ok(await p.locator("dialog#vpn-sw-confirm[open]").count() === 1 && /Tailscale/.test(await txt(p, "#vpn-sw-confirm")) && /怎么恢复/.test(await txt(p, "#vpn-sw-confirm")), `remote: tier 3 dialog with the warning`);
+  ok(await p.locator("dialog#vpn-sw-confirm[open]").count() === 1 && /按远程处理|你正在远程操作/.test(await txt(p, "#vpn-sw-confirm")) && /怎么恢复/.test(await txt(p, "#vpn-sw-confirm")), `remote: tier 3 dialog with the warning`);
   const ax = await new AxeBuilder({ page: p }).analyze();
   ok(ax.violations.length === 0, `axe dialog: ${ax.violations.map((v) => v.id + "×" + v.nodes.length).join(", ") || "0"}`);
   await p.screenshot({ path: `${OUT}/vpn-remote-dialog.png` });

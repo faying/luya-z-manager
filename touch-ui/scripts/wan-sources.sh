@@ -4,8 +4,8 @@
 #
 #   sh /data/luyaz/scripts/wan-sources.sh [minutes]        default 5
 #
-# Run it detached, with no SSH session open (SSH rides Tailscale, which rides
-# the cellular link, and would show up as the top talker):
+# Run it detached, with no remote SSH session open, so the management session
+# does not dominate the cellular capture:
 #   nohup sh /data/luyaz/scripts/wan-sources.sh 10 >/dev/null 2>&1 &
 #
 # Captures packet HEADERS only (addresses, ports, protocol, length; never

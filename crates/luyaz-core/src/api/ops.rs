@@ -932,7 +932,6 @@ pub async fn roam_cheap_get(State(c): State<Compat>) -> Response {
             "agent_last": {
                 "apn": g.last(crate::ops::agent::Layer::Apn),
                 "chill": g.last(crate::ops::agent::Layer::Chill),
-                "link": g.last(crate::ops::agent::Layer::Link),
             },
         }}),
     )

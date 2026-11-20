@@ -177,10 +177,10 @@ pub struct Minute {
     /// cellular flows, top N
     pub flows: Vec<FlowRow>,
     pub flows_other: FlowRow,
-    /// flows inside tailscale0 (what the outer tailscaled UDP carries), top N
+    /// Historical tunnel flows; retained for decoding and redacting older records.
     #[serde(default)]
     pub tailnet: Vec<FlowRow>,
-    /// packets by class: cellular, lan/forwarded-not-cellular, local (lo/tun), tailnet
+    /// Packets by class: cellular, LAN/forwarded, local, and a historical reserved slot.
     pub flow_pkts: [u64; 4],
     pub forks: Vec<ForkRow>,
     pub irqs: Vec<Count>,
@@ -230,8 +230,7 @@ pub struct Diag {
     pub by_owner: Vec<Breaker>,
     /// busy seconds with no conntrack flow moving (untracked, offloaded, RA/ND…)
     pub unattributed_secs: u32,
-    /// flows inside tailscale0 that moved in cellular-busy seconds (same columns;
-    /// solo = the only inner flow moving), and the same per owner
+    /// Historical tunnel flows and owners, retained for decoding and redaction.
     #[serde(default)]
     pub inner: Vec<Breaker>,
     #[serde(default)]
@@ -575,7 +574,7 @@ mod tests {
                 cpu_ms: 1,
             },
             flows: vec![FlowRow {
-                owner: "/data/tailscale/nofight/tailscaled".into(),
+                owner: "/data/example/agent".into(),
                 proto: 17,
                 peer: Personal("203.0.113.9".into()),
                 port: 41641,
@@ -588,6 +587,13 @@ mod tests {
                 bytes: 3,
                 ..Default::default()
             },
+            tailnet: vec![FlowRow {
+                owner: "historical".into(),
+                peer: Personal("100.64.0.9".into()),
+                pkts: 42,
+                ..Default::default()
+            }],
+            flow_pkts: [100, 7, 3, 42],
             forks: vec![ForkRow {
                 ancestor: "/data/luyaz/luyaz-web".into(),
                 comm: "stat".into(),
@@ -674,6 +680,14 @@ mod tests {
             inner_by_owner: vec![b],
             ..Default::default()
         };
+        let m: Minute = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        let d: Diag = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        let mut names = Vec::new();
+        let packed = MinuteC::pack(&m, &mut names);
+        let m: Minute = from_cbor::<MinuteC>(&to_cbor(&packed))
+            .unwrap()
+            .unpack(&names)
+            .unwrap();
         assert!(serde_json::to_string(&m).unwrap().contains(PEER));
         for view in [
             serde_json::to_string(&m.redacted()).unwrap(),

@@ -90,7 +90,6 @@ async function own(p) {
   ok((await fetch(`${WEB}/oplogo/chunghwa`, { redirect: "manual" })).status !== 200, "/oplogo needs a session");
   ok(/SIM/.test(await txt(p, "#hi-reg-s")), `SIM line under Registered on: ${await txt(p, "#hi-reg-s")}`);
   ok(/信道 \d+/.test(await txt(p, "#hw-2")) && /MHz/.test(await txt(p, "#hw-5")), `Wi-Fi lines (actual channel + width): ${await txt(p, "#hw-2")} | ${await txt(p, "#hw-5")}`);
-  ok(/在线|离线/.test(await txt(p, "#hm-ts")) && /台设备在线/.test(await txt(p, "#hm-ts")), `Tailscale: ${await txt(p, "#hm-ts")}`);
   ok(/国外/.test(await txt(p, "#hm-scene")) && /切换/.test(await txt(p, "#hm-scene")), `scenario: ${await txt(p, "#hm-scene")}`);
   ok(/运行中/.test(await txt(p, "#hm-chill-t")) && await p.locator("#hm-chill-seg [role=radio]").count() === 3, `CHILL card: ${await txt(p, "#hm-chill")}`);
   ok(await p.locator("#hm-chill-seg [aria-checked=true]").count() === 1, "one exit selected");
@@ -98,7 +97,7 @@ async function own(p) {
   await p.waitForFunction(() => document.querySelector("#hm-why")?.hidden, null, { timeout: 15000 }).catch(() => {}); // the finding line from the common checks goes with the next status read
   ok(await p.locator("#hm-why").isHidden(), "no 查原因 link with an ok verdict");
   // the links of the old page
-  for (const [sel, href] of [["#hd-cl", "/clients"], ["#hi-reg", "/router/mobile-network"], ["#hw-on", "/router/wifi"], ["#hm-scene", "/router/scenario"], ["#hm-ts", "/services/tailscale"]]) {
+  for (const [sel, href] of [["#hd-cl", "/clients"], ["#hi-reg", "/router/mobile-network"], ["#hw-on", "/router/wifi"], ["#hm-scene", "/router/scenario"]]) {
     const h = await p.locator(`a:has(${sel}), a${sel}`).first().getAttribute("href");
     ok(h === href, `link ${sel} → ${h}`);
   }
@@ -185,14 +184,14 @@ async function layout(browser) {
     return [ctx, p];
   };
   let [ctx, p] = await mk(1280, 900);
-  const [rd, ch, sc, ts, ca] = await Promise.all(["#hm-readouts", "#hm-chill", "#hm-scene", "#hm-ts", "#hm-ca"].map((s) => box(p, s)));
-  ok(ch.x > rd.x + rd.width - 2 && sc.x > rd.x + rd.width - 2 && ts.x > rd.x + rd.width - 2, `desk: CHILL, scenario, Tailscale are in the right column (x ${Math.round(ch.x)} vs readouts ${Math.round(rd.x)}+${Math.round(rd.width)})`);
-  ok(ch.y < sc.y && sc.y < ts.y, "desk: right column order CHILL, scenario, Tailscale");
+  const [rd, ch, sc, ca] = await Promise.all(["#hm-readouts", "#hm-chill", "#hm-scene", "#hm-ca"].map((s) => box(p, s)));
+  ok(ch.x > rd.x + rd.width - 2 && sc.x > rd.x + rd.width - 2, `desk: CHILL and scenario are in the right column (x ${Math.round(ch.x)} vs readouts ${Math.round(rd.x)}+${Math.round(rd.width)})`);
+  ok(ch.y < sc.y, "desk: right column order CHILL, scenario");
   ok(ca.x < ch.x, "desk: carriers on the left");
   await ctx.close();
   [ctx, p] = await mk(390, 844);
   const ys = [];
-  for (const s of ["#sig-status", "#hm-chill", "#hm-readouts", "#hd-cl", "#hi-ip", "#hw-on", "#ca-0", "#hm-scene", "#hm-ts"]) ys.push([s, (await box(p, s)).y]);
+  for (const s of ["#sig-status", "#hm-chill", "#hm-readouts", "#hd-cl", "#hi-ip", "#hw-on", "#ca-0", "#hm-scene"]) ys.push([s, (await box(p, s)).y]);
   ok(ys.every(([, y], i) => i === 0 || y > ys[i - 1][1]), `phone reading order: ${ys.map(([s, y]) => `${s}@${Math.round(y)}`).join(" ")}`);
   await ctx.close();
 }

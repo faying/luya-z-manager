@@ -333,7 +333,6 @@ fn an_exit_failing_opens_and_cellular_takes_its_failures() {
     let mut r = fresh();
     let mut k = chk(0);
     k.chill = Some(false);
-    k.ts = Some(true);
     for up in (0..=300).step_by(60) {
         k.at = at(up);
         r.check(&k);
@@ -362,6 +361,24 @@ fn an_exit_failing_opens_and_cellular_takes_its_failures() {
         r.check(&k);
     }
     assert_eq!(kinds(&r), ["regress-cellular"]);
+}
+
+#[test]
+fn old_tailnet_incidents_retire_without_recovery_or_pending_alerts() {
+    let mut old = fresh();
+    old.open("regress-egress", Some("tailscale"), &at(100), "down".into(), None, None);
+    old.open("regress-egress", Some("chill"), &at(100), "down".into(), None, None);
+    let json = serde_json::to_string(&old.file).unwrap();
+    let file: File = serde_json::from_str(&json).unwrap();
+    let loaded = Regress::load(Some(file), base::Base::default(), "1.45.0", &at(200), 0, BOOT);
+    assert_eq!(loaded.file.open.len(), 1);
+    assert_eq!(loaded.file.open[0].sub.as_deref(), Some("chill"));
+    let retired = &loaded.file.closed[0];
+    assert_eq!(retired.sub.as_deref(), Some("tailscale"));
+    assert_eq!(retired.end.as_deref(), Some("retired"));
+    assert!(retired.pending.is_empty());
+    assert_eq!(loaded.pending().len(), 1);
+    assert!(loaded.dirty);
 }
 
 fn hour_power(ft: i64, mw: f64, chg: i64, pkts: i64) -> serde_json::Value {
@@ -960,7 +977,7 @@ fn evidence_has_the_end_the_exits_and_stays_under_8kb() {
     let h = v["hours"].as_array().unwrap();
     assert!(!h.is_empty());
     assert_eq!(h[0]["chill"], json!([3600, 3500]));
-    assert_eq!(h[0]["ts"], json!([3600, 3000, 2900]));
+    assert!(h[0].get("ts").is_none());
     // begun before the clock was trusted: counted back from a trusted clock in the same boot
     let mut j = i.clone();
     j.from.ok = false;

@@ -566,7 +566,6 @@ pub async fn diagnose_get(State(c): State<Compat>) -> Response {
         d.insert("band_flap".into(), super::band_flap::view());
         d.insert("hot_drain".into(), hot);
         d.insert("long_idle".into(), idle);
-        d.insert("tailnet_poller".into(), crate::poller::view());
         d.insert("slow_signal".into(), slow);
     }
     reply(s, v)

@@ -9,8 +9,7 @@
 //!   10-20: a read-only page).
 //! - The scopes, the limit and the rollback words mirror `luyaz-core` `ops/agent.rs` (`Layer`,
 //!   `LIMIT_SECS`), `ops/spec.rs` (every `apn.*` and `chill.*` op is `Unsupported`: no automatic
-//!   rollback; the link scope's band and cell locks are `CapturedAndProven`: the trial rolls back,
-//!   only on the owner's instruction, D-g) and `agent_act.rs` (`PAGES`, `LINK_ACTIONS`).
+//!   rollback) and `agent_act.rs` (`PAGES`).
 
 use std::path::Path;
 use std::time::UNIX_EPOCH;
@@ -30,7 +29,7 @@ const LIMIT_FILE: &str = "/data/luyaz/core/ops/agent-limit.json";
 /// `ops/agent.rs` `LIMIT_SECS`: one change per scope per this many minutes.
 const LIMIT_MIN: u64 = 30;
 /// Always allowed to read, besides `agent.allow` (`agent_api::source_ok`).
-const BUILT_IN: &str = "127.0.0.1 · 100.64.0.0/10 · fd7a:115c:a1e0::/48";
+const BUILT_IN: &str = "127.0.0.0/8 · ::1";
 
 /// What was read from the device's files; `None` = the file is missing.
 #[derive(Default)]
@@ -107,15 +106,6 @@ pub fn view(f: &Files, l: Lang) -> View {
     let scopes = [
         ("APN", "apn", "/router/apn", NO_UNDO),
         ("CHILL", "chill", "/services/chill", NO_UNDO),
-        (
-            l.pick("Band & cell locks", "锁频 / 锁小区"),
-            "link",
-            "/bandlock",
-            (
-                "only on your instruction · not while roaming or abroad · rolls back unless the device itself sees mobile data and Tailscale working",
-                "只按你的指令 · 漫游或人在国外时不做 · 设备自己测到蜂窝和 Tailscale 都通才保留，否则自动退回",
-            ),
-        ),
     ]
     .into_iter()
     .map(|(label, key, href, sub)| Scope {
@@ -227,9 +217,8 @@ mod tests {
         assert!(!html.contains("0123456789abcdef"), "a token leaked");
         assert!(html.contains("hermes-act") && html.contains("192.168.50.88"));
         assert!(html.contains("不能自动退回") && !html.contains("核对不通过"));
-        // D-g: the link scope says it runs only on the owner's word, and how it rolls back
-        assert!(html.contains("锁频 / 锁小区") && html.contains("只按你的指令"));
-        assert!(html.contains("来源：你的指令（未验证）"));
+        assert!(!html.contains("锁频 / 锁小区"));
+        assert!(html.contains("127.0.0.0/8 · ::1"));
     }
 
     #[test]

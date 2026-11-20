@@ -35,7 +35,6 @@ Both units report the same firmware version string and the same set of writable 
 | APN management | Verified | Unknown (no write test on this unit) | Unknown | Unknown | Unknown |
 | Band / cell lock with rollback | Verified on one CN B31 unit (2026-10-19; the record does not say which) | Unknown | Unknown | Unknown | Unknown |
 | CHILL proxy (mihomo) | Verified | Verified (2026-10-20) | Unknown (not installed) | Unknown | Unknown |
-| Tailscale | Verified | Verified (survives reboot, 2026-10-20) | Unknown | Unknown | Unknown |
 | MCP agent (read and act) | Verified (2026-10-17) | Verified (multi-device read, 2026-10-20) | Unknown | Unknown | Unknown |
 | USB ECM to a computer | Verified (2026-10-24) | Unknown | Unknown (USB RNDIS to this computer was used throughout the install) | Unknown | Unknown |
 | Dual SIM switching | Not applicable (single slot) | Verified (2026-10-20; timeout rollback and smart mode not tested live) | Unknown | Unknown | Unknown |

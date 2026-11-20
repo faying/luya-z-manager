@@ -62,7 +62,7 @@ On `/data`, mode 700: a reboot loop must neither wipe alerts nor reset the SMS q
   - sentinel: `agent-silent`, `wifi-takeover`, `wifi-restore-failed`, `dropbear-down`, `dropbear-restarted`, `ui-crash`, `ui-gave-up`
   - core svcwatch: `core-crash` (the core itself; `core-crash` before rename F4, old rows still read), `web-crash`, `sentinel-crash`
   - core sentinel watch: `sentinel-silent`, `screen-empty` (only if the screen-guard switch is on)
-  - core engines: `home-exit-down`, `home-exit-check-failed`, `sms-forward-stuck`, `sms-forward-queue`
+  - core engines: `sms-forward-stuck`, `sms-forward-queue`
   - touch UI: `ui-theme-paused`
 
 ### SMS
@@ -101,14 +101,14 @@ Served by the core on loopback as `/v2/api/…`; luyaz-web (`alerts_page.rs`) is
 - `luyaz-core doctor` (process name `luyaz-doctor`; `/data/luyaz/scripts/doctor.sh` is a thin shim). Read-only. Output: human text, `--tsv` (`<ok|warn|bad>\t<id>\t<名称>\t<说明>`), `--tsv2` (header `#tsv2`, English); exit 1 if any row is bad. Also `--manifest`, `--tree-fp`, `--ledger-selftest`.
 - `--calibrate-standby` writes the standby baseline (section 8); `--report 24h|7d [--summary]` outputs the longterm scorecard (`scorecard::live::card`, ported in Core 1.3.0 / `7637b1b1e`). `doctor.sh` only runs `/data/luyaz/luyaz-core doctor`; without a core it exits 2 (the shell fallback `doctor-legacy.sh` was removed in Luya-Z rename F4).
 - The core runs the checks itself (first 20 s after start, then periodically) and serves the snapshot at `/api/health`.
-- `touch-ui/scripts/config-backup.sh`: configuration only (list at the top of the script), Tailscale identity only with `--with-tailscale`. Backups live only on the computer (`./install.sh backup`); `restore` plans first, leaves `.pre-restore`, does not reload Wi-Fi.
+- `touch-ui/scripts/config-backup.sh`: configuration only (list at the top of the script); the retired Tailscale identity is no longer backed up, and an older archive's Tailscale files are verified with the rest but never restored. Backups live only on the computer (`./install.sh backup`); `restore` plans first, leaves `.pre-restore`, does not reload Wi-Fi.
 
-- **After a promote**: a build that loops goes back by itself: `luyaz-recover.sh` counts unasked boots while `/data/luyaz/ship/watch/<txn>` files exist and sends the newest back every third, the sentinel judges the boot a build went live in and deletes its file once it proved itself. Quarantine `/data/luyaz/ship/quarantine`, off switch `/data/luyaz/ship/auto-rollback-off`, alert `ship-auto-rollback`. A way in (SSH, LAN, Tailscale) that the ship's baseline had and stays down 10 minutes in that boot sends the newest build back too, unquarantined, once per boot (`ship-conn-rollback`). Rules: `touch-ui/docs/SHIP.md`.
+- **After a promote**: a build that loops goes back by itself: `luyaz-recover.sh` counts unasked boots while `/data/luyaz/ship/watch/<txn>` files exist and sends the newest back every third, the sentinel judges the boot a build went live in and deletes its file once it proved itself. Quarantine `/data/luyaz/ship/quarantine`, off switch `/data/luyaz/ship/auto-rollback-off`, alert `ship-auto-rollback`. A way in (SSH, LAN) that the ship's baseline had and stays down 10 minutes in that boot sends the newest build back too, unquarantined, once per boot (`ship-conn-rollback`). Rules: `touch-ui/docs/SHIP.md`.
 
 ## 8. Standby records
 
-- Writer: core `longterm/standby.rs`, only while `/tmp/luyaz/handover` names `standby`. While the backlight is off, one line per round to `/tmp/standby.stat`: `<uptime> <cellular pkts/min> <Tailscale tunnel pkts/min> <wakeups/s per program>`, last 60 kept; a program whose pid changed is `-`; no line if the previous round is more than 150 s ago.
-- The program columns are fixed by position (doctor reads by position) : `tailscaled mihomo luyaz-ui luyaz-core`.
+- Writer: core `longterm/standby.rs`, only while `/tmp/luyaz/handover` names `standby`. While the backlight is off, one line per round to `/tmp/standby.stat`: `<uptime> <cellular pkts/min> <tunnel pkts/min> <wakeups/s per program>`, last 60 kept; a program whose pid changed is `-`; no line if the previous round is more than 150 s ago. The two Tailscale columns — the tunnel packets and the `tailscaled` slot — are retired: the writer keeps them as `0` and `-` so older records and baselines stay readable at the same positions.
+- The program columns are fixed by position: the retired `tailscaled` slot (always `-`), then `mihomo luyaz-ui luyaz-core`; doctor judges only the columns after the retired slot.
 - Fingerprints `/tmp/luyaz/ledger/fp`, `fp-changed`. Baseline `/data/luyaz/scripts/standby.baseline` (v2 with `fp` lines); written by `luyaz-core doctor --calibrate-standby` (≥ 30 records; per column median and MAD, then the fingerprints; one `calib` event via `POST /v2/longterm/calib`), judged by doctor's 「待机」 row.
 
 ## 9. Clock verdict, crash records, `.migrated`
@@ -151,7 +151,7 @@ Detectors in the core's long-term thread (`crates/luyaz-core/src/longterm/regres
 | `regress-mem-abs` | heap > 32 MiB 15 min or RssAnon > 96 MiB 30 min | `long/memsnap-<id>.txt`, `hours.jsonl` `hour_proc` | a leak → rollback core; a legitimate new level → `<core> regress limit mem <heap> <anon>` |
 | `regress-mem` | 30 min after core start: heap > 1.5× or RssAnon > 2× the 7-day baseline | same | open 3 days, the inbox asks once (`rg-<id>-ask`, never an SMS); the new level is fine → `<core> regress accept regress-mem` (or the MCP tool on the owner's word) |
 | `regress-cellular` (inbox only) | no service, or registered without a data route, 5 min, with SIM ready, data on, data roaming on when roaming | `/v2/device/no-service-history` | the stock firmware recovers or not; nothing to roll back |
-| `regress-egress` | CHILL (process down or forwarding broken) or Tailscale failing 5 min while meant on | CHILL page, `tailscale status` | a CHILL/Tailscale change → roll it back |
+| `regress-egress` | CHILL (process down or forwarding broken) failing 5 min while meant on | CHILL page | a CHILL change → roll it back |
 | `regress-power-abs` | two qualifying standby hours > 600 mW | `hours.jsonl` `hour_power` | find what keeps it awake; a legitimate level → `<core> regress limit power <mW>` |
 | `regress-power` | two qualifying hours > max(1.3× baseline, baseline + 100 mW) | same | as `regress-mem` (`accept regress-power`) |
 | `regress-recorder` (sentinel) | `long/open.json` unchanged 10 min while the core answers | `/tmp/luyaz-core.log` `[longterm]` | restart the core (`/etc/init.d/luyaz-core restart`) |

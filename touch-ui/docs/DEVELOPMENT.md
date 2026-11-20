@@ -26,7 +26,7 @@
 | `data/core_link.rs` | Live state from the core: `/v2/state` and the `/v2/events` stream on `127.0.0.1:9460` |
 | `data/screen_feed.rs`, `net_view.rs`, `op_view.rs` | Parse `GET /v2/screen`, where the core hands over finished conclusions for the home card, status bar and write-in-progress row |
 | `data/core_api.rs` | Requests to the core's loopback API (`/v2/api/...`, no token); every feature module goes through it |
-| `data/esim.rs`, `chill.rs`, `tailscale.rs`, `speedtest.rs`, `netinfo.rs`, `scenario.rs`, `alerts.rs`, … | Feature modules. All writes go through the core, except CHILL's group and node picks, which go straight to mihomo ([CHILL.md](CHILL.md)) |
+| `data/esim.rs`, `chill.rs`, `speedtest.rs`, `netinfo.rs`, `scenario.rs`, `alerts.rs`, … | Feature modules. All writes go through the core, except CHILL's group and node picks, which go straight to mihomo ([CHILL.md](CHILL.md)) |
 
 If the core cannot be reached for a write, the UI falls back to the device script `/data/luyaz/scripts/luyaz-fallback.sh`.
 

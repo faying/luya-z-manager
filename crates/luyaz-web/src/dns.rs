@@ -7,7 +7,7 @@
 //!   agent; so did the old page's "turn DoH off after applying" step (owner, 8d-2).
 //! - A wrong upstream breaks name resolution, so the old checks stay (manual: primary required,
 //!   both IPv4; checked again on the server before the write) and so does the tier: tier 2
-//!   (inline confirm), tier 3 (dialog with the Tailscale warning) when the tab came over Tailscale.
+//!   (inline confirm), tier 3 (dialog with a remote warning) when the tab is remote.
 //! - Readback: the page reads `/api/router/dns` again (up to ~8 s) until mode and servers are what
 //!   was sent; a PUT the agent took but the readback did not show says "accepted, not read back".
 //! - The form is the tab's draft (Datastar signals `_dm`, `_dp`, `_ds`, set once from the device's
@@ -529,7 +529,7 @@ mod tests {
     fn remote_gets_the_dialog_and_the_english_page_is_english() {
         let p = check(&d("manual", "1.1.1.1", ""), Lang::En).unwrap();
         assert_eq!(confirm(&p, Via::Local, Lang::En).tier, write::Tier::Inline);
-        let c = confirm(&p, Via::Tailnet, Lang::En);
+        let c = confirm(&p, Via::Remote, Lang::En);
         assert!(c.tier == write::Tier::Dialog && c.cuts_uplink);
         let cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c) || ('\u{3000}'..='\u{303f}').contains(&c));
         for g in [Got::default(), Got { err: Some(Fail::Unreachable), ..Default::default() }] {

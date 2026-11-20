@@ -695,9 +695,8 @@ async fn screen_alerts(State(m): State<Arc<Mock>>) -> Response {
         )
             .into_response();
     }
-    let mut d = incidents::alerts(m.unread.load(Ordering::SeqCst))
+    let d = incidents::alerts(m.unread.load(Ordering::SeqCst))
         .unwrap_or_else(|| alerts_data(m.unread.load(Ordering::SeqCst)));
-    poller::alerts_extra(&mut d);
     axum::Json(json!({"ok": true, "data": d})).into_response()
 }
 
@@ -738,7 +737,6 @@ async fn screen_status(State(m): State<Arc<Mock>>) -> axum::Json<Value> {
         "services": {"chill": {"state": "running", "reason": null, "on": true}},
     });
     home::public_extra(&mut data);
-    poller::status_extra(&mut data);
     axum::Json(json!({"ok": true, "data": data}))
 }
 
@@ -1157,7 +1155,6 @@ mod router_qos;
 mod home;
 mod incidents;
 mod plugin_settings;
-mod poller;
 mod receipt;
 mod router_vpn;
 mod wifi_guest;
@@ -1174,7 +1171,6 @@ const BATCH4_CONTROL: &[Batch4Control] = &[
     wifi_guest::control,
     wifi_main::control,
     home::control,
-    poller::control,
     plugin_settings::control,
 ];
 
@@ -1187,7 +1183,6 @@ const BATCH4_SEED: &[fn(&Arc<Mock>)] = &[
     wifi_guest::seed,
     wifi_main::seed,
     home::seed,
-    poller::seed,
     plugin_settings::seed,
 ];
 
@@ -1205,7 +1200,6 @@ fn batch4_routes(r: Router<Arc<Mock>>) -> Router<Arc<Mock>> {
     let r = wifi_guest::routes(r);
     let r = wifi_main::routes(r);
     let r = receipt::routes(r);
-    let r = poller::routes(r);
     let r = plugin_settings::routes(r);
     home::routes(r)
 }

@@ -680,6 +680,7 @@ fn newest_sent_copy_to_the_number() {
     assert_eq!(newest_to(&serde_json::json!({}), "+1"), None);
 }
 
+/// The producer is retired; events already in a device's queue must still never text.
 #[test]
 fn tailnet_poller_is_never_an_sms() {
     let f = Facts {

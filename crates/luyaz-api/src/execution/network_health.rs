@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 /// A repair the underlay gate held the last time it asked.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Paused {
-    /// who asked: "home-exit", "manual-first"
+    /// Who asked the gate, e.g. "manual-first".
     pub who: String,
     /// "no_bearer" or "lower"
     pub reason: &'static str,

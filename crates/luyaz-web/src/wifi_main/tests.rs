@@ -149,7 +149,7 @@ fn wifi6_and_us_channel_13_are_refused_before_sending() {
 }
 
 #[test]
-fn tier_two_for_txpower_alone_three_for_a_reload_without_tailscale_warning() {
+fn tier_two_for_txpower_alone_three_for_a_reload_with_remote_warning() {
     let s = seed();
     let mut d = s.clone();
     d.b[0].tx = "50".into();
@@ -164,10 +164,10 @@ fn tier_two_for_txpower_alone_three_for_a_reload_without_tailscale_warning() {
     let c = check(&s, &d, ["", ""], Some(&cur()), Lang::En).unwrap();
     let cf = confirm(&c, Lang::En);
     assert_eq!(cf.tier, write::Tier::Dialog);
-    assert!(!cf.cuts_uplink, "Tailscale is not affected");
+    assert!(cf.cuts_uplink, "a remote path may depend on Wi-Fi");
     assert!(cf.downtime.unwrap().contains("10–60 seconds"));
     let r = cf.recovery.unwrap();
-    assert!(r.contains("reconnects by itself") && r.contains("Tailscale"), "{r}");
+    assert!(r.contains("reconnects by itself"), "{r}");
     // a new name: join again, named
     let mut d = s.clone();
     d.b[0].ssid = "Home".into();
@@ -310,7 +310,7 @@ fn wifi_undo_from_the_change_log_is_tier_three_in_wifi_words() {
     let e = json!({"what_zh": "Wi-Fi 设置", "change_zh": "", "undo_view": {"ok": true, "label_zh": "撤销",
         "request": {"action": "wifi.settings", "undo": true, "params": {"restore": {}}}}});
     let c = crate::changes::confirm(&e, Lang::Zh);
-    assert!(!c.cuts_uplink && c.downtime.unwrap().contains("Wi-Fi 重新加载"));
+    assert!(c.cuts_uplink && c.downtime.unwrap().contains("Wi-Fi 重新加载"));
 }
 
 fn dfs_hub(d: Value) -> Arc<Hub> {

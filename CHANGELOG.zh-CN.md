@@ -16,6 +16,11 @@
 
 英文版是 [CHANGELOG.md](CHANGELOG.md)。
 
+## Unreleased
+
+- core、lweb、touch：移除 Tailscale 及依赖它的 CHILL 家里出口。一起更新 Core、管理网页、触屏、哨兵和设备脚本。已安装 CHILL 的设备还需一起更新其启动脚本和模板。
+- core、MCP：锁频和锁小区由用户在管理网页或触屏上操作。移除依赖 Tailscale 连通性检查的 MCP 工具。
+- scripts、sentinel：移除 Tailscale 部署和看门狗探测。恢复旧配置备份时跳过其中保存的 Tailscale 身份。
 
 ## core 1.94.0 — 2026-11-08
 

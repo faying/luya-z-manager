@@ -381,14 +381,6 @@ pub static ROUTES: &[Route] = &[
         "chill 代理 daili 节点 jiedian 梯子 出口 mihomo proxy node"
     ),
     r!(
-        "/services/tailscale",
-        "Tailscale",
-        "Tailscale",
-        "Cloud",
-        Services,
-        "tailscale 远程 yuancheng ts"
-    ),
-    r!(
         "/router/scenario",
         "Scenarios",
         "情景模式",

@@ -105,8 +105,7 @@ impl Default for Paths {
             ui_gave_up: s("/data/luyaz/screen/gave-up"),
             long_open: s("/data/luyaz/core/long/open.json"),
             disk_open: s("/data/luyaz/screen/disk-open"),
-            // tailscaled writes ~7.5 MB/day and nothing rotates it; start.sh opens it for append.
-            cap_logs: vec![s("/data/tailscaled.log")],
+            cap_logs: vec![],
             cap_bytes: 1_048_576,
             // RAM logs trimmed otherwise only when their writer starts (the .old copy is RAM too).
             cap_tmp_logs: vec![
@@ -186,7 +185,7 @@ pub trait WorkerIo {
     fn verify_prev(&mut self) -> bool;
     /// A process of this name runs; None = cannot tell.
     fn comm_running(&mut self, comm: &str) -> Option<bool>;
-    /// `ssh`, `lan` or `tailscale`, by the same rules as luyaz-ship.sh `conn_probe`.
+    /// `ssh` or `lan`, by the same rules as luyaz-ship.sh `conn_probe`.
     fn conn_ok(&mut self, item: &str) -> Option<bool>;
     /// A directory's file names, sorted; empty when it is not there.
     fn list_dir(&mut self, path: &str) -> Vec<String>;
@@ -716,7 +715,8 @@ impl Worker {
         } else {
             let mut v: Vec<String> = Vec::new();
             for it in watched.iter().flat_map(|e| e.2.split(',')) {
-                if !it.is_empty() && !v.iter().any(|x| x == it) {
+                // Older ship records can contain retired or unknown baseline items.
+                if matches!(it, "ssh" | "lan") && !v.iter().any(|x| x == it) {
                     v.push(it.to_string());
                 }
             }

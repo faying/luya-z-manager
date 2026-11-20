@@ -1265,7 +1265,7 @@ fn verdict(i: &NetIn) -> Story {
         };
         return say(o, State::Nodata, Cause::None, Tone::Bad, off, h);
     }
-    // 拨上了、30 秒里一直在发（≥ 20 包，Tailscale 空闲保活远少于这个数且有回包）却一个包
+    // 拨上了、30 秒里一直在发（≥ 20 包）却一个包
     // 都没收到（slow-diagnosis §4.1，工程复核 D5）。首页不发包，DNS 确认放深查。
     if i.connected
         && i.win

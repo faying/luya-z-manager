@@ -14,7 +14,7 @@
 //! **Trigger.** Inputs are what the round already read: the vendor counters (`zwrt_data
 //! get_wwandst type 1`, IPA-forwarded + device-local traffic), `rmnet_data0` (from
 //! `link_rates`, read every round), the LAN + Wi-Fi client lists (TTL 10 s; a failed read counts
-//! as "has clients"). Device-local traffic (speed tests, tailscaled) does not count (user
+//! as "has clients"). Device-local traffic (such as speed tests) does not count (user
 //! decision 10-26):
 //!
 //! ```text

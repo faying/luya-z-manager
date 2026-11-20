@@ -1,5 +1,5 @@
 //! 首页 under the status card (DESIGN.md §4 Home hierarchy): the scenario card (header, then
-//! CHILL | Tailscale) and the bottom row (Wi-Fi · 今日 · 电池, or a notice over the first two
+//! the CHILL column) and the bottom row (Wi-Fi · 今日 · 电池, or a notice over the first two
 //! cells). Both sit in fixed slots: what changes inside never moves what is below.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
@@ -17,9 +17,8 @@ use ui_model::Model;
 
 /// the header band (scenario, mode pill, why)
 const BAND_H: i32 = 58;
-/// the Tailscale column on the right
-const TS_W: i32 = 100;
-const CH_W: i32 = CARD_W - TS_W;
+/// the CHILL column takes the card's full width
+const CH_W: i32 = CARD_W;
 /// exit lines under the CHILL head
 pub const EX_LINES: usize = 4;
 const LINE_H: i32 = 18;
@@ -42,7 +41,6 @@ pub const LAT_HIDE: i32 = -4;
 const SYM_HOME: &str = "\u{F015}";
 const SYM_GPS: &str = "\u{F124}";
 const SYM_SHUFFLE: &str = "\u{F074}";
-const SYM_LOOP: &str = "\u{F079}";
 
 #[derive(Default, Clone, Copy)]
 struct ExRow {
@@ -69,10 +67,8 @@ struct Cell {
 pub enum NoticeKind {
     /// DD18 自动退回已开 (acked with 知道了)
     Rollback,
-    /// 手动优先 / 家里不通 (to the CHILL area)
+    /// 手动优先 (to the CHILL area)
     Chill,
-    /// Tailscale wants a login or an approval (to the Tailscale page)
-    Ts,
 }
 
 #[derive(Default, Clone)]
@@ -91,14 +87,6 @@ pub struct Scene {
     ch_run: Obj,
     rows: [ExRow; EX_LINES],
     desc: Obj,
-    ts_box: Obj,
-    /// the line between the CHILL and Tailscale columns
-    ts_sep: Obj,
-    /// CHILL is not installed: the Tailscale column takes the whole width (as laid out last)
-    ts_full: bool,
-    ts_state: Obj,
-    ts_l1: Obj,
-    ts_l2: Obj,
     cells: [Cell; 3],
     ntc: Obj,
     ntc_t: Obj,
@@ -257,39 +245,6 @@ pub fn ex_lines(m: &Model, now: i64) -> (Vec<ExLine>, String) {
         }
         (a, w) => v.extend(a.into_iter().chain(w)),
     }
-    // 家里出口 (DD2): through Tailscale to home
-    let home_ms = m.chill_home.as_ref().filter(|h| h.known != 0 && h.stale == 0 && h.ms > 0).map_or(LAT_NONE, |h| h.ms);
-    let left = (sc.home_until - now).max(0);
-    let home_place = |what: &str, timed: bool| -> (String, u32) {
-        if sc.home_fallback != 0 {
-            (tr("不通，暂走直连").into(), th.warn_t)
-        } else if timed && sc.home_until > 0 {
-            (String::from_utf8_lossy(&cf!(tr("剩 %ld:%02ld"), left / 3600, (left % 3600) / 60)).into_owned(), th.t2)
-        } else {
-            (what.into(), th.t2)
-        }
-    };
-    let home_line = |tag: &str, what: &str, timed: bool| {
-        let (p, c) = home_place(what, timed);
-        let mut l = line(tag, th.fill_teal, tr("家里"), p, if sc.home_fallback != 0 { LAT_NONE } else { home_ms });
-        l.place_col = c;
-        l
-    };
-    if sc.home_on & 4 != 0 {
-        // 其余都走家里: the 其余 line goes home
-        let l = home_line(tr("其余"), tr("其余都走家里"), true);
-        match v.iter_mut().find(|x| x.tag == tr("其余")) {
-            Some(x) => *x = l,
-            None => v.push(l),
-        }
-    } else {
-        if sc.home_on & 1 != 0 {
-            v.push(home_line(tr("版权"), tr("国内版权网站"), false));
-        }
-        if sc.home_on & 2 != 0 {
-            v.push(home_line("IP", tr("家里 IP 网站"), false));
-        }
-    }
     // abroad, 其余 is most of the traffic: first
     if sc.abroad != 0
         && let Some(i) = v.iter().position(|x| x.tag == tr("其余"))
@@ -436,7 +391,7 @@ unsafe extern "C" fn ntc_ok_cb(_e: *mut sys::lv_event_t) {
     super::with(|u| u.home_notice_ok());
 }
 
-/// A small coloured disc with a white symbol: the scenario, CHILL and Tailscale marks.
+/// A small coloured disc with a white symbol: the scenario and CHILL marks.
 fn disc(p: Obj, x: i32, y: i32, d: i32, fill: u32, sym: &str, font: lv::Font) -> (Obj, Obj) {
     let o = kit::bx(p, x, y, d, d, fill, d / 2 + 1);
     let l = kit::label(o, font, 0xffffff, 0, 0, sym);
@@ -500,28 +455,6 @@ impl Ui {
         s.desc = kit::label_w(s.ch_box, f.cj12, th.t3, 12, 0, CH_W - 22, false, "");
         kit::tappable(s.ch_box, Some(ch_col_cb), 0);
 
-        // Tailscale column
-        s.ts_box = kit::bx(c, CH_W, BAND_H, TS_W, SCENE_H - BAND_H, th.card, 0);
-        s.ts_box.set_style_bg_opa(lv::OPA_TRANSP, 0);
-        s.ts_sep = kit::bx(s.ts_box, 0, 0, 1, SCENE_H - BAND_H, th.sep, 0);
-        disc(s.ts_box, 12, hy, 22, th.fill_teal, SYM_LOOP, lv::montserrat(12));
-        kit::label(s.ts_box, f.cj12, th.t2, 40, hy + 3, "Tailscale");
-        s.ts_state = kit::label_w(s.ts_box, f.cj15, th.t1, 12, 0, TS_W - 20, false, "");
-        s.ts_l1 = kit::label_w(s.ts_box, f.cj12, th.t2, 12, 0, TS_W - 20, false, "");
-        s.ts_l2 = kit::label_w(s.ts_box, f.cj12, th.t2, 12, 0, TS_W - 20, false, "");
-        // spread evenly under the head
-        {
-            let (top, bot) = (hy + 22, SCENE_H - BAND_H - 8);
-            let hs = [f.cj15.line_height(), f.cj12.line_height(), f.cj12.line_height()];
-            let gap = (bot - top - hs.iter().sum::<i32>()) / 4;
-            let mut y = top + gap;
-            for (o, h) in [s.ts_state, s.ts_l1, s.ts_l2].into_iter().zip(hs) {
-                o.set_y(y);
-                y += h + gap;
-            }
-        }
-        kit::tappable(s.ts_box, Some(super::tile_click_cb), Sub::Ts as usize);
-
         // bottom row: three cells; a notice over the first two
         let cw = (CARD_W - 2 * CELL_GAP) / 3;
         let mut x = MARGIN;
@@ -563,7 +496,7 @@ impl Ui {
         self.home.sn = s;
     }
 
-    /// The scenario card: header, CHILL, Tailscale. Every label is compared before it is
+    /// The scenario card: header, CHILL. Every label is compared before it is
     /// written, so a refresh that changed nothing draws nothing.
     pub(super) fn home_scene_paint(&mut self, changed: bool) {
         if changed {
@@ -673,23 +606,12 @@ impl Ui {
         };
         self.set(s.why, &why);
 
-        // ---- CHILL: not installed, no column; Tailscale takes the width
-        let absent = m.chill_absent != 0;
-        if absent != s.ts_full {
-            self.home.sn.ts_full = absent;
-            kit::show(s.ch_box, !absent);
-            kit::show(s.ts_sep, !absent);
-            let w = if absent { CARD_W } else { TS_W };
-            s.ts_box.set_x(if absent { 0 } else { CH_W });
-            s.ts_box.set_width(w);
-            for o in [s.ts_state, s.ts_l1, s.ts_l2] {
-                o.set_width(w - 20);
-            }
-        }
-        if absent {
-            self.home_ts_col_paint();
+        // ---- CHILL: not installed, no column
+        if m.chill_absent != 0 {
+            kit::show(s.ch_box, false);
             return;
         }
+        kit::show(s.ch_box, true);
         let dead = self.home.cc_tone >= 2;
         let (run, run_col): (&str, u32) = if m.chill_online == 0 {
             if sc.chill_on == 0 { (tr("■ 已关"), th.t3) } else { (tr("▲ 没运行"), th.warn_t) }
@@ -791,59 +713,6 @@ impl Ui {
             self.set(s.desc, &desc);
             s.desc.set_y(LINES_TOP - BAND_H + gap + n * (LINE_H + gap) + 2);
         }
-
-        // ---- Tailscale
-        self.home_ts_col_paint();
-    }
-
-    /// The Tailscale column: state, peers online, how the home exit gets there.
-    fn home_ts_col_paint(&mut self) {
-        let th = t();
-        let m = self.model.clone();
-        let ts = &m.tailscale;
-        let s = self.home.sn.clone();
-        let running = ts.ok != 0 && ts.state == "Running";
-        let (st, col): (&str, u32) = if ts.available == 0 {
-            (tr("没装"), th.t3)
-        } else if ts.ok == 0 {
-            (tr("■ 未运行"), th.t3)
-        } else if running {
-            if ts.self_online != 0 { (tr("已连接"), th.t1) } else { (tr("▲ 离线"), th.bad_t) }
-        } else {
-            match ts.state.as_str() {
-                "Starting" => (tr("连接中"), th.warn_t),
-                "NeedsLogin" => (tr("▲ 要登录"), th.warn_t),
-                "NeedsMachineAuth" => (tr("▲ 等批准"), th.warn_t),
-                "Stopped" => (tr("■ 已关"), th.t3),
-                _ => (tr("连接中"), th.t3),
-            }
-        };
-        self.set(s.ts_state, st);
-        kit::text_color(s.ts_state, col);
-        let l1: Vec<u8> = if running && ts.peers > 0 {
-            cf!(tr("%d/%d 在线"), ts.peers_online, ts.peers)
-        } else if running {
-            tr("只有本机").into()
-        } else if self.home.cc_tone >= 2 && ts.available != 0 {
-            tr("等网络").into()
-        } else {
-            Vec::new()
-        };
-        self.set(s.ts_l1, &l1);
-        // the home exit rides Tailscale: direct / relay / down, from 家里出口's own check
-        let hx = m.chill_home.as_ref().filter(|h| h.known != 0 && h.configured != 0);
-        let (l2, c2): (Vec<u8>, u32) = match hx {
-            Some(_) if !running => (tr("▲ 家里 不通").into(), th.warn_t),
-            Some(h) if h.home_ok == 0 => (tr("▲ 家里 不通").into(), th.warn_t),
-            Some(h) if h.ts == "direct" => (tr("家里 直连").into(), th.t2),
-            Some(h) if h.ts == "relay" => (tr("▲ 家里 中继").into(), th.warn_t),
-            Some(_) => (tr("家里出口").into(), th.t2),
-            None if ts.available == 0 || !running => (tr("无家里出口").into(), th.t3),
-            None if ts.active > 0 => (cf!(tr("直连 %d · 中继 %d"), ts.direct, ts.active - ts.direct), th.t2),
-            None => (Vec::new(), th.t2),
-        };
-        self.set(s.ts_l2, &l2);
-        kit::text_color(s.ts_l2, c2);
     }
 
     /// The bottom row: Wi-Fi · 今日 · 电池; a notice takes the first two cells.
@@ -924,12 +793,6 @@ impl Ui {
             l.extend_from_slice(&mf.line);
             v.push((NoticeKind::Chill, l));
         }
-        let ts = &m.tailscale;
-        if ts.ok != 0 && ts.state == "NeedsLogin" {
-            v.push((NoticeKind::Ts, tr("Tailscale 要登录：在管理网页打开登录链接").as_bytes().to_vec()));
-        } else if ts.ok != 0 && ts.state == "NeedsMachineAuth" {
-            v.push((NoticeKind::Ts, tr("Tailscale 等批准：在 Tailscale 后台批准这台设备").as_bytes().to_vec()));
-        }
         v
     }
 
@@ -985,7 +848,6 @@ impl Ui {
                 self.home_notice_paint(); // answered at once (DESIGN.md §4)
             }
             NoticeKind::Chill => self.exit_row_go(),
-            NoticeKind::Ts => self.sub_open(Sub::Ts),
         }
     }
 }

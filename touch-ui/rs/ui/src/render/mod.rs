@@ -219,9 +219,7 @@ impl Source for Replay {
             scenario: true,
             netinfo: true,
             screen: false,
-            tailscale: true,
             chill: true,
-            chill_home: false,
             esim: true,
             speedtest: true,
             servers: true,
@@ -421,18 +419,6 @@ impl Source for Replay {
         println!("ACTION chill_test_delay");
         self.acted();
         1
-    }
-    fn chill_home_set(&mut self, _item: usize, _on: bool) -> (i32, String) {
-        self.acted();
-        (202, String::new())
-    }
-    /// two hours from now
-    fn chill_home_extend(&mut self, m: &Model) -> Option<i64> {
-        self.acted();
-        Some(m.now + 7200)
-    }
-    fn chill_home_read(&mut self) {
-        self.acted();
     }
     /// the harness stays in this process
     fn exec(&mut self, _l: &Launch) -> i32 {
@@ -1445,10 +1431,6 @@ pub fn run(args: &[String]) -> i32 {
                 }
                 (Some("lang_note_reset_cb(NULL)"), _) => {
                     ui::with(|u| u.lang_note_reset());
-                    true
-                }
-                (Some("ui_arm_clear(&s_hx_arm)"), _) => {
-                    ui::with(|u| u.cp.hx_arm.clear());
                     true
                 }
                 (Some("power_menu_set"), Some(v)) => {

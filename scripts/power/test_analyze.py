@@ -109,7 +109,7 @@ class Integrity(unittest.TestCase):
         rows = [minute(), minute(120_000)]
         rows[1]["procs"] = []
         rows[0]["ifaces"] = [{"name": name, "rx_pkts": 10, "tx_pkts": 0,
-                              "rx_bytes": 100, "tx_bytes": 0} for name in ("rmnet_data0", "tailscale0")]
+                              "rx_bytes": 100, "tx_bytes": 0} for name in ("rmnet_data0", "chill0")]
         result = self.summary(rows)
         self.assertEqual(result["process_rows"][0]["present_ms"], 60_000)
         self.assertEqual(result["interface_deltas"]["rmnet_data0"]["rx_pkts"], 10)

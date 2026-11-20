@@ -269,7 +269,7 @@ fn tiers() {
     let cf = confirm(&off, &c, Via::Local, Lang::Zh);
     assert_eq!(cf.tier, write::Tier::Inline);
     assert!(cf.what.contains("DHCP 关闭") && cf.downtime.is_none());
-    assert_eq!(confirm(&off, &c, Via::Tailnet, Lang::Zh).tier, write::Tier::Dialog);
+    assert_eq!(confirm(&off, &c, Via::Remote, Lang::Zh).tier, write::Tier::Dialog);
 }
 
 #[test]
@@ -311,7 +311,7 @@ fn readback_and_notes() {
         done_note(&write::Outcome::Failed(String::new()), true),
         Note::None
     );
-    // by another address (Tailscale): the tab survives, no "still answers here" inference
+    // by another address: the tab survives, no "still answers here" inference
     assert_eq!(
         done_note(&write::Outcome::Applied(String::new()), false),
         Note::Elsewhere

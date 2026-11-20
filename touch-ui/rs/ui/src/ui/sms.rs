@@ -563,7 +563,6 @@ impl Ui {
             };
             match it.sub.as_str() {
                 "chill" => line2.extend_from_slice(" · CHILL".as_bytes()),
-                "tailscale" => line2.extend_from_slice(" · Tailscale".as_bytes()),
                 _ => {}
             }
             let blind = it.kind == "regress-blind";

@@ -445,76 +445,6 @@ pub struct chill_traffic_item_t {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct chill_home_t {
-    pub known: i32,
-    pub stale: i32,
-    pub configured: i32,
-    pub updating: i32,
-    pub in_china: i32,
-    pub roaming: i32,
-    pub blocked: String,
-    pub on: Vec<i32>,
-    pub sites: i32,
-    pub until: i64,
-    pub can_extend: i32,
-    pub home_ok: i32,
-    pub ms: i32,
-    pub fallback_to: String,
-    pub ts: String,
-    pub busy: i32,
-    pub busy_item: i32,
-    pub busy_on: i32,
-    pub busy_phase: String,
-    pub busy_until: i64,
-    pub nkind: String,
-    pub nitem: i32,
-    pub ntext: String,
-    pub ncode: String,
-    pub nat: i64,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct tailscale_status_t {
-    pub available: i32,
-    pub ok: i32,
-    pub state: String,
-    pub self_online: i32,
-    pub name: String,
-    pub ip: String,
-    pub relay: String,
-    pub routes: String,
-    pub exit_node: String,
-    pub exit_online: i32,
-    pub health: String,
-    pub peers: i32,
-    pub peers_online: i32,
-    pub active: i32,
-    pub direct: i32,
-    pub ip6: String,
-    pub os: String,
-    pub version: String,
-    pub tailnet: String,
-    pub key_expiry: String,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct tailscale_peer_t {
-    pub name: String,
-    pub ip: String,
-    pub online: i32,
-    pub active: i32,
-    pub direct: i32,
-    pub exit_node: i32,
-    pub os: String,
-    pub cur_addr: String,
-    pub relay: String,
-    pub rx: i64,
-    pub tx: i64,
-    pub hs_ago: i64,
-    pub seen_ago: i64,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct esim_profile_t {
     pub name: String,
     pub sub: String,
@@ -610,9 +540,6 @@ pub struct scenario_status_t {
     pub mf_at: i64,
     pub mf_seen: i64,
     pub mf_stale: i32,
-    pub home_on: i32,
-    pub home_until: i64,
-    pub home_fallback: i32,
     /// services.chill.ai_gate: 0 off / AI through 🤖 AI, 1 AI blocked, 2 AI out the other way,
     /// checked to land in ai_region
     #[serde(default, skip_serializing_if = "is_zero")]

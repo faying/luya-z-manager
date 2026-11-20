@@ -1256,7 +1256,6 @@ dependencies = [
  "libc",
  "luyaz-api",
  "luyaz-esim",
- "luyaz-home-exit",
  "luyaz-manual-first",
  "luyaz-netwatch",
  "luyaz-policy",
@@ -1290,17 +1289,6 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "luyaz-home-exit"
-version = "0.1.0"
-dependencies = [
- "luyaz-api",
- "luyaz-policy",
- "serde",
- "serde_json",
- "ureq",
 ]
 
 [[package]]

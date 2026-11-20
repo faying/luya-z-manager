@@ -22,7 +22,6 @@ use super::scenario::Scenario;
 use super::screen_feed::{ScreenFeed, SfCfg};
 use super::ladder::Ladder;
 use super::speedtest::Speedtest;
-use super::tailscale::Tailscale;
 use super::util;
 use crate::logic::Launch;
 use crate::source::{Activity, NiAct, Polled, Source, WifiRead};
@@ -46,7 +45,6 @@ pub struct Live {
     esim: Cached<Esim>,
     speed: Cached<Speedtest>,
     ladder: Cached<Ladder>,
-    ts: Cached<Tailscale>,
     diag: Cached<Diagnose>,
     bat: Cached<BatteryEst>,
     vers: Cached<Versions>,
@@ -74,7 +72,6 @@ impl Live {
             esim: Cached::new(Esim::default()),
             speed: Cached::new(Speedtest::default()),
             ladder: Cached::new(Ladder::default()),
-            ts: Cached::new(Tailscale::default()),
             diag: Cached::new(Diagnose::default()),
             bat: Cached::new(BatteryEst::default()),
             vers: Cached::new(Versions::default()),
@@ -149,11 +146,8 @@ impl Live {
             chill_profile_effective_raw: Some(self.chill.profile_effective_raw().into()),
             chill_thermal_eco: self.chill.thermal_eco() as i32,
             chill_delay_pending: self.chill.delay_pending() as i32,
-            chill_home: Some(self.chill.home().clone()),
             chill_pins: self.chill.pins(),
             chill_main_ms: self.chill.main_ms(),
-            tailscale: self.ts.status(),
-            tailscale_peers: self.ts.peers().to_vec(),
 
             esim_current: Some(self.esim.current().into()),
             esim_state: Some(self.esim.state()),
@@ -272,19 +266,13 @@ impl Source for Live {
         if a.lit && !self.core.silent() {
             p.screen = self.sf.poll(move |s| s.poll(version) as u32) != 0;
         }
-        let active = a.tailscale;
-        p.tailscale = self.ts.poll(move |s| s.poll(active) as u32) != 0;
         // Only this thread owns the delay-test socket; reads are already nonblocking.
         if self.chill.delay_pending() { self.chill.delay_poll(); }
-        let mut ag = self.agent.clone();
-        let fast = self.chill.home().busy != 0 || a.hx_sending;
-        // Home's Tailscale column says how the home exit goes (direct / relay): read there too
-        let (page, active, home) = (a.chill_page || (a.home && a.lit), a.chill, a.home && a.lit);
+        let (active, home) = (a.chill, a.home && a.lit);
         let ch = self.chill.poll(move |s| {
-            s.home_poll(&mut ag, page, fast) as u32 | ((s.poll(active) as u32) << 1) | ((s.pins_poll(home) as u32) << 1)
+            (s.poll(active) as u32) | ((s.pins_poll(home) as u32) << 1)
         });
-        p.chill_home = ch & 1 != 0;
-        p.chill = ch & 2 != 0;
+        p.chill = ch != 0;
         let mut ag = self.agent.clone();
         let (active, prefetch) = (a.esim, a.esim_prefetch);
         let key = self.core.sim_key();
@@ -518,16 +506,6 @@ impl Source for Live {
     }
     fn chill_test_delay(&mut self) -> i32 {
         self.chill.test_delay()
-    }
-    fn chill_home_set(&mut self, item: usize, on: bool) -> (i32, String) {
-        self.chill.home_set(&mut self.agent, item, on)
-    }
-    fn chill_home_extend(&mut self, _m: &Model) -> Option<i64> {
-        self.chill.home_extend(&mut self.agent)
-    }
-    fn chill_home_read(&mut self) {
-        let mut ag = self.agent.clone();
-        self.chill.poll(move |s| s.home_poll(&mut ag, true, true) as u32);
     }
 
     fn exec(&mut self, l: &Launch) -> i32 {

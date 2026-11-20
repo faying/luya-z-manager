@@ -157,7 +157,7 @@ cargo zigbuild --release --target aarch64-unknown-linux-musl -p luyaz-web
 crates/        luyaz-core（核心）、luyaz-web（管理网页）、luyaz-sentinel（屏幕主人 + 看门狗）、luyaz-* 库
 touch-ui/      触屏：rs/（Rust + LVGL）、scripts/（设备脚本）、docs/
 onboard/       装机包：build-kit.sh（编）、install.sh（装）、device/（设备端脚本）、test/（沙盒测试）
-scripts/       esim/（lpac 工具）、tailscale/（Tailscale 开机启动，见其 README）
+scripts/       esim/（lpac 工具）、chill/ 和其他设备辅助脚本
 docs/          GETTING-STARTED、SCREENSHOTS、ARCHITECTURE、DESIGN.md（界面设计规范）、RELIABILITY.md（可靠性约定）
 ```
 

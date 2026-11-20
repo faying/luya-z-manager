@@ -3,7 +3,6 @@
 //! ```text
 //!  agent (tab's own session; u60d first once it has them)        one push stream per tab
 //!   /api/services/chill ........ 4 s   state, exit, regions, groups, vitals, notice ─┐
-//!   /api/services/chill/home .... 1 s while busy, else 5 s (not on an unstarted CHILL)├─▶ leaves
 //!   /api/services/chill/providers 15 s (only while running)                           │   (only
 //!   /api/services/chill/bypass .. 8 s       /api/network/clients 15 s                 │   what
 //!   /api/services/chill/log ..... 4 s, not while this tab paused it                  ─┘   changed)
@@ -84,9 +83,6 @@ pub fn routes() -> Router<Shared> {
         .route("/services/chill/exit/set", post(exit_set))
         .route("/services/chill/pick/set", post(pick_set))
         .route("/services/chill/profile/set", post(profile_set))
-        .route("/services/chill/home/ask", post(home_ask))
-        .route("/services/chill/home/set", post(home_set))
-        .route("/services/chill/home/extend", post(home_extend))
         .route("/services/chill/prov/refresh/ask", post(prov_refresh_ask))
         .route("/services/chill/prov/refresh/set", post(prov_refresh_set))
         .route("/services/chill/prov/edit", post(prov_edit))
@@ -109,7 +105,6 @@ const LOG_EVERY: Duration = Duration::from_secs(4);
 #[derive(Default)]
 struct Due {
     status: Option<Instant>,
-    home: Option<Instant>,
     prov: Option<Instant>,
     bypass: Option<Instant>,
     clients: Option<Instant>,
@@ -174,25 +169,17 @@ impl Polled for Poll {
         }
         let st = self.got.status.v.as_ref().map_or("", |v| data::s(v, "state"));
         let running = st == "running";
-        let known = !st.is_empty() && st != "unknown";
-        let d_home = known && is_due(self.due.home, all, now);
         let d_prov = running && is_due(self.due.prov, all, now);
         let d_byp = is_due(self.due.bypass, all, now);
         let d_cli = is_due(self.due.clients, all, now);
         let d_log = !paused_now && (log_on || is_due(self.due.log, all, now));
-        let (home, prov, byp, cli, log) = tokio::join!(
-            get_if(app, &self.who, d_home, "/api/services/chill/home"),
+        let (prov, byp, cli, log) = tokio::join!(
             get_if(app, &self.who, d_prov, "/api/services/chill/providers"),
             get_if(app, &self.who, d_byp, "/api/services/chill/bypass"),
             get_if(app, &self.who, d_cli, "/api/network/clients"),
             get_if(app, &self.who, d_log, "/api/services/chill/log?lines=200"),
         );
         let after = Instant::now();
-        if let Some(r) = home {
-            self.got.home.set(r);
-            let busy = self.got.home.v.as_ref().is_some_and(|h| h["busy"].is_object());
-            self.due.home = Some(after + if busy { Duration::from_secs(1) } else { Duration::from_secs(5) });
-        }
         if let Some(r) = prov {
             self.got.prov.set(r);
             self.due.prov = Some(after + PROV_EVERY);
@@ -216,7 +203,6 @@ impl Polled for Poll {
                 next = Some(next.map_or(d, |n| n.min(d)));
             }
         };
-        near(self.due.home, known);
         near(self.due.prov, running);
         near(self.due.bypass, true);
         near(self.due.clients, true);
@@ -240,7 +226,7 @@ struct Page {
     shell: crate::shell::Shell,
     l: Lang,
     leaves: Vec<(String, String)>,
-    ops: [String; 8],
+    ops: [String; 7],
 }
 
 impl Page {

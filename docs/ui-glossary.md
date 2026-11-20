@@ -32,7 +32,6 @@
 | 测速 | Speed Test | Speed Test |
 | SIM 与 eSIM | SIM & eSIM | SIM / PIN、eSIM（两页） |
 | 性能测试 | Performance Test | — |
-| Tailscale | Tailscale | Tailscale |
 | 健康与告警 | Health & Alerts | Health、Alerts（两页） |
 | 运营商选择 | Network Operator | Mobile Network |
 | 情景 | Scenarios | Scenarios |
@@ -362,34 +361,7 @@
 | 底部 | 只显示最近 N 条 | Latest N only |
 | 设置页入口 | 上次改动 14:32 · 触屏 › | Last changed 14:32 · Screen › |
 
-## 14. 家里出口（E3，`docs/designs/home-exit.md` §10；触屏 CHILL 页、首页出口行，网页 CHILL 页同一套）
-
-| 中文 | English | 位置 |
-|---|---|---|
-| 家里出口 | Home exit | 节标题 |
-| 国内版权走家里 | CN media via home | 行名（两行高，开关左边约 220px） |
-| 家里 IP 网站 | Home IP sites | 行名 |
-| 其余都走家里 · 2 小时 | Rest via home · 2h | 行名 |
-| 爱奇艺、优酷、B 站等 | iQIYI, Youku, bilibili, … | 版权行常态 |
-| N 个网站 | N site / N sites | 家里 IP 行常态 |
-| 表里还没有网站 · 见 /data/chill/home_ip.list | No sites yet · see /data/chill/home_ip.list | 家里 IP 空表 |
-| AI、VoWiFi、国内直连照旧 | AI, VoWiFi, China direct unchanged | 其余行关着时 |
-| 剩 1:32 | 1:32 left | 其余行开着 |
-| 正在测家里… / 正在打开… / 正在关闭… / 试运行 0:30 | Checking home… / Turning on… / Turning off… / Trial 0:30 | 切换中 |
-| 已走家里 · 重开 App 生效 | Via home now · reopen apps | 成功（核心 notice） |
-| 没开成：家里 Mac 没回应 / Tailscale 没连上家里 / 代理没重启成功 / 直连测试不通 | Didn't turn on: home Mac silent / no Tailscale to home / proxy didn't restart / direct test failed | 失败（核心 notice，行第二行 ≈220px） |
-| 家里不通，暂走直连 / 家里不通，暂走 X | Home down · direct for now / Home down · via X for now | 走退路 |
-| 2 小时到了，已关 / 家里 15 分钟没回应，已关 / 回国了，已关家里出口 / 已过期，已关 | 2 hours up; turned off / Home silent 15 min; turned off / Back in China; home exit off / Expired; turned off | 自动关（核心 notice） |
-| 再点一次确认 | Tap again | 待确认（行右侧） |
-| 会断一下（约 5 秒） / 会断一下，走漫游流量 | Drops for ~5 s / Drops ~5 s · uses roaming data | 待确认的后果（卡下一行） |
-| CHILL 已关 / 全局模式下不生效 · 换成代理或直连 · AI 不动 / 全部直连下不生效 / 过热暂停中，降温后自动恢复 | CHILL off / Not used in Global mode · Switch to Proxy or Direct · AI kept / Not used in All direct / Paused while hot · resumes when cool | 模式冲突（DD4） |
-| 读不到所在国家，版权和其余暂不显示 | Can't tell the country; media and rest hidden | 位置不明 |
-| 经 Tailscale · 直连 38 ms / 经中继，视频可能卡 / 连不上家里 | Via Tailscale · direct 38 ms / Via relay · video may stutter / Can't reach home | Tailscale 路径（DD7） |
-| 10 分钟后关 · 再开 2 小时 › / 已延长到 17:32 | Off in 10 min · Extend 2h › / Extended to 17:32 | 延长（DD8） |
-| · 家里 剩 1:32 / · 家里 版权 / · 家里 IP | · Home 1:32 left / · Home media / · Home IP | 首页出口行末尾（DD2） |
-| 家里不通，暂走原出口（+1） | Home down · usual exit for now (+1) | 首页出口行 ▲（DD11） |
-
-## 15. 设计用词（Phase 8 T19，10-11；不上界面）
+## 14. 设计用词（Phase 8 T19，10-11；不上界面）
 
 DESIGN.zh-CN.md §5 用来描述网页、跟框架无关的词。只在文档和代码里出现，界面上不显示。
 
@@ -399,7 +371,7 @@ DESIGN.zh-CN.md §5 用来描述网页、跟框架无关的词。只在文档和
 | 三档写操作 | write tiers | 写操作按后果分三档：直接发（direct）/ 页内确认（inline）/ 弹窗确认（dialog）；以前写作 `useWriteOp` |
 | 外框 | shell | 每页都有的导航 + 横条那一层 |
 
-## 16. 事故（变差才通知，10-24；core `longterm/regress/mod.rs` `name()`，网页 /alerts、触屏告警子页、MCP 同一套）
+## 15. 事故（变差才通知，10-24；core `longterm/regress/mod.rs` `name()`，网页 /alerts、触屏告警子页、MCP 同一套）
 
 名称由 core 送（`name_zh` / `name_en`），触屏不另放对照。触屏 ≤ 6 个中文字，英文 ≤ 18 字符；详情第二行用 `kind_label` 的长句。
 
@@ -408,7 +380,7 @@ DESIGN.zh-CN.md §5 用来描述网页、跟框架无关的词。只在文档和
 | regress-mem、regress-mem-abs | 内存超标 | High memory |
 | regress-reboot | 意外重启 | Unexpected reboot |
 | regress-cellular | 蜂窝断线 | Cellular down |
-| regress-egress | 出口不通（第二行写 CHILL / Tailscale） | Route down |
+| regress-egress | 出口不通（第二行写 CHILL） | Route down |
 | regress-power、regress-power-abs | 耗电变高 | Higher power draw |
 | regress-core-down | 数据服务停了 | Data service down |
 | regress-recorder | 记录停了 | Recorder stalled |
@@ -426,7 +398,7 @@ DESIGN.zh-CN.md §5 用来描述网页、跟框架无关的词。只在文档和
 
 regress 短信（`sms.rs` `regress_zh`/`regress_en`）：模板 + 告警文字里的细节 + 尾巴「恢复消息见网页「告警」页 / Discord」/「recovery: web Alerts / Discord」，整条 ≤ 134 个 UCS-2 字（两段长短信），超了先截细节。
 
-## 17. 测速 v2（net-performance 第 1 期，10-25；core `crates/luyaz-speedtest` verdict，触屏测速页、网页 /tools/speedtest 同一套）
+## 16. 测速 v2（net-performance 第 1 期，10-25；core `crates/luyaz-speedtest` verdict，触屏测速页、网页 /tools/speedtest 同一套）
 
 层名和结论行的字来自 core（`verdict.layers[].value_*`、`summary_*`），界面不自己拼。触屏放不下时用右列的短写（量宽定，DR8）。
 
@@ -458,7 +430,7 @@ regress 短信（`sms.rs` `regress_zh`/`regress_en`）：模板 + 告警文字�
 
 网页行内确认是整句，照现有写法带句号（「会用掉移动数据：约 30 秒 · 最多 750 MB。」）。
 
-## 18. 首页补数据（core 1.50 / touch 1.16.0，10-26；触屏首页）
+## 17. 首页补数据（core 1.50 / touch 1.16.0，10-26；触屏首页）
 
 | 位置 | 中文 | English | 说明 |
 |---|---|---|---|
@@ -478,7 +450,7 @@ regress 短信（`sms.rs` `regress_zh`/`regress_en`）：模板 + 告警文字�
 | 事件文字 | （core 的 text_zh / text_en 原样） | | core `longterm/today.rs` |
 
 
-## 20. 温控（10-29；core `heat.rs`，触屏横幅和系统页电池行，网页电池卡「温控」行；设计 `docs/designs/thermal-care.md`）
+## 18. 温控（10-29；core `heat.rs`，触屏横幅和系统页电池行，网页电池卡「温控」行；设计 `docs/designs/thermal-care.md`）
 
 | 位置 | 中文 | English | 说明 |
 |---|---|---|---|

@@ -107,9 +107,6 @@ pub struct Scenario {
     mf_at: i64,
     mf_seen: i64,
     mf_stale: bool,
-    home_on: i32,
-    home_until: i64,
-    home_fallback: bool,
     ai_gate: i32,
     ai_region: String,
     /// services.chill as last read (C keeps the buffer: a reply without it reads the old one)
@@ -202,16 +199,6 @@ impl Scenario {
                 self.mf_kind = jstr(ch, "notice_kind", 12);
                 self.mf_at = json::get_int(ch, "notice_at", 0);
             }
-            self.home_on = 0;
-            self.home_fallback = false;
-            self.home_until = 0;
-            if let Some(he) = json::get(&self.ch, "home_exit", 256)
-                && he.first() == Some(&b'{')
-            {
-                self.home_on = jtrue(&he, "media") as i32 | (jtrue(&he, "ip") as i32) << 1 | (jtrue(&he, "rest") as i32) << 2;
-                self.home_until = json::get_int(&he, "rest_until", 0);
-                self.home_fallback = jtrue(&he, "fallback");
-            }
             // the AI gate (luyaz-core engines/chill_ai_gate.rs): null when off
             self.ai_gate = 0;
             self.ai_region.clear();
@@ -288,7 +275,6 @@ impl Scenario {
         h = fnv(h, self.mf_notice.as_bytes());
         h = fnv(h, self.mf_kind.as_bytes());
         h = fnv(h, if self.mf_stale { b"stale" } else { b"live" });
-        h = fnv(h, format!("{}/{}/{}", self.home_on, self.home_until, self.home_fallback as i32).as_bytes());
         h = fnv(h, format!("{}/{}", self.ai_gate, self.ai_region).as_bytes());
         if let Some(d) = &self.detail {
             h = fnv(h, format!("{}/{}/{}/{}/{}/{}/{}", d.current, d.candidate, d.hits, d.enter_hits, d.matched_id, d.matched_ssid, d.matched_since).as_bytes());
@@ -318,9 +304,6 @@ impl Scenario {
             mf_at: self.mf_at,
             mf_seen: self.mf_seen,
             mf_stale: self.mf_stale as i32,
-            home_on: self.home_on,
-            home_until: self.home_until,
-            home_fallback: self.home_fallback as i32,
             ai_gate: self.ai_gate,
             ai_region: self.ai_region.clone(),
             ..self.detail_status()

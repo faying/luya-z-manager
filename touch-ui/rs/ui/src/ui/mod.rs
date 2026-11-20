@@ -61,8 +61,6 @@ pub enum Sub {
     Chill,
     Esim,
     Perf,
-    /// opened by tapping the Home Tailscale card
-    Ts,
     ChillNodes,
     ChillPairs,
     SmsDetail,
@@ -89,7 +87,6 @@ pub const SUBS: &[Sub] = &[
     Sub::Chill,
     Sub::Esim,
     Sub::Perf,
-    Sub::Ts,
     Sub::ChillNodes,
     Sub::ChillPairs,
     Sub::SmsDetail,
@@ -119,7 +116,6 @@ fn sub_title(s: Sub) -> &'static str {
         Sub::ChillPairs => n_("规则 → 节点"),
         Sub::Esim => n_("SIM 与 eSIM"),
         Sub::Perf => n_("性能测试"),
-        Sub::Ts => "Tailscale",
         Sub::SmsDetail => n_("短信详情"),
         Sub::Alerts => n_("健康与告警"),
         Sub::Net => n_("运营商选择"),
@@ -229,7 +225,6 @@ pub struct Ui {
     pub ds: dualsim::DualSim,
     pub st: speed::Speed,
     pub lad: ladder::Ladder,
-    pub ts: exit::TsPage,
     pub sg: exit::SigPage,
     pub cp: exit::ChillPage,
     pub apn: apn::Apn,
@@ -376,7 +371,6 @@ impl Ui {
                     .copied()
                     .unwrap_or_default()
             }
-            "s_hx_note_at" => self.cp.hx_note_at = v as u32,
             _ => return false,
         }
         true
@@ -463,7 +457,6 @@ impl Ui {
         self.update_tabs();
         self.diag_hdr_sync();
         match id {
-            Sub::Chill => self.hx_paint(),
             Sub::Diag => self.diag_on_open(),
             Sub::Place => self.place_on_open(),
             Sub::Op => self.op_on_open(),
@@ -904,7 +897,6 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
         ds: dualsim::DualSim::default(),
         st: speed::Speed::default(),
         lad: ladder::Ladder::default(),
-        ts: exit::TsPage::default(),
         sg: exit::SigPage::default(),
         cp: exit::ChillPage::default(),
         apn: apn::Apn::default(),
@@ -976,14 +968,13 @@ pub fn create(conf: Conf, launch: Launch, model: Rc<Model>, src: Box<dyn Source>
     }
     // the subpages, in C's order
     let pg = |s: Sub| u.sub_page[s as usize];
-    let (p_sms, p_cell, p_lock, p_speed, p_ts) = (pg(Sub::Sms), pg(Sub::Cell), pg(Sub::Lock), pg(Sub::Speed), pg(Sub::Ts));
+    let (p_sms, p_cell, p_lock, p_speed) = (pg(Sub::Sms), pg(Sub::Cell), pg(Sub::Lock), pg(Sub::Speed));
     u.build_sub_sms(p_sms);
     u.build_sub_cell(p_cell);
     u.build_sub_lock(p_lock);
     u.build_sub_speed(p_speed);
     let p_ladder = u.sub_page[Sub::Ladder as usize];
     u.build_sub_ladder(p_ladder);
-    u.build_sub_ts(p_ts);
     let (p_chill, p_nodes, p_pairs) = (u.sub_page[Sub::Chill as usize], u.sub_page[Sub::ChillNodes as usize], u.sub_page[Sub::ChillPairs as usize]);
     u.build_sub_chill(p_chill);
     u.build_sub_chill_nodes(p_nodes);

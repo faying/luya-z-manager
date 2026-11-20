@@ -98,8 +98,6 @@ pub struct Cfg {
     md5_cache: String,
     /// DOC_MD5SUM: hash with that command; unset: in-process (the same hex as busybox md5sum)
     md5sum: Option<Vec<String>>,
-    ts_dir: String,
-    ts_tuning: String,
     /// the touch UI's fonts, beside the program
     ui_fonts: String,
     /// its operator logos (Luya-Z D5: with the program)
@@ -183,8 +181,6 @@ impl Cfg {
             md5sum: get("DOC_MD5SUM")
                 .filter(|v| !v.is_empty())
                 .map(|v| v.split_whitespace().map(str::to_owned).collect()),
-            ts_dir: s("DOC_TS_DIR", "/data/tailscale"),
-            ts_tuning: s("DOC_TS_TUNING", "/data/tailscale/tuning.env"),
             ui_fonts: s("DOC_UI_FONTS", "/data/luyaz/ui/fonts"),
             ui_logos: s("DOC_UI_LOGOS", "/data/luyaz/ui/operator-logos"),
             u60d_plugins: s("DOC_U60D_PLUGINS", &format!("{data_dir}/plugins")),
@@ -210,8 +206,6 @@ impl Cfg {
             calib_url: s("DOC_CALIB_URL", "http://127.0.0.1:9460/v2/longterm/calib"),
             chill: chill::Cfg {
                 env: s("DOC_CHILL_ENV", "/data/chill/chill.env"),
-                state: s("DOC_CHILL_STATE", "/tmp/chill.state"),
-                ip: w("DOC_IP", "ip"),
                 template: s("DOC_CHILL_TEMPLATE", "/data/chill/template.yaml"),
                 dir: s("DOC_CHILL_DIR", "/data/chill"),
             },

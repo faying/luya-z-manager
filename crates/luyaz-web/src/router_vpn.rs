@@ -9,7 +9,7 @@
 //!
 //! Writes (web/docs/controls-inventory.md §/router/vpn): each switch is one `vendor.call`
 //! `zwrt_router.api router_set_alg_switch {<field>_passthrough: "1"|"0"}` (the args the agent's
-//! `router_vpn_set` passed through), tier 2 locally, tier 3 over Tailscale. Read back from
+//! `router_vpn_set` passed through), tier 2 locally, tier 3 remotely. Read back from
 //! `router.alg.<field>` (u60d drops its cache after a write) when the device reports that field;
 //! a field it doesn't report (B31: all three) shows 「状态不明」 with two buttons 「打开」「关掉」
 //! (user, 10-13) and can't be read back: 「设备已接受，读不回来确认」 at once, never success. SIP ALG
@@ -350,7 +350,7 @@ fn action(name: &str, on: bool, l: Lang) -> String {
     }
 }
 
-/// Tier 2 (inline) on the LAN, tier 3 (dialog) over Tailscale: switching passthrough reloads the
+/// Tier 2 (inline) on the LAN, tier 3 (dialog) remotely: switching passthrough reloads the
 /// firewall, which can drop a remote session.
 pub fn confirm(key: &str, on: bool, remote: Via, l: Lang) -> write::Confirm {
     let name = field(key).map_or("", |f| f.2);
@@ -381,8 +381,8 @@ pub fn confirm(key: &str, on: bool, remote: Via, l: Lang) -> write::Confirm {
         ),
         recovery: Some(
             l.pick(
-                "Flip the switch back here. If this page stops loading over Tailscale, someone at the device can change it from a device on its Wi-Fi.",
-                "在这里把开关拨回去。如果经 Tailscale 打不开这页了，要有人在设备旁边用连着它 Wi-Fi 的设备改回来。",
+                "Flip the switch back here. If this page stops loading, someone at the device can change it from a device on its Wi-Fi.",
+                "在这里把开关拨回去。如果打不开这页了，要有人在设备旁边用连着它 Wi-Fi 的设备改回来。",
             )
             .into(),
         ),

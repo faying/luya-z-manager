@@ -969,7 +969,6 @@ impl WorkerIo for RealWorker {
                     .is_some_and(|f| f & 1 == 1)
                     && has_ipv4("br-lan"),
             ),
-            "tailscale" => Some(self.comm_running("tailscaled")? && has_ipv4("tailscale0")),
             _ => None,
         }
     }

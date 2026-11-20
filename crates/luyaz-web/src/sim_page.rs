@@ -16,7 +16,7 @@
 //! mode / change / unlock rows as tier 2; that would weaken the old dialogs, and every one of them
 //! can use up an attempt on the card (a wrong PIN → PUK lock, a wrong PUK → card dead for good,
 //! a wrong NCK → no more tries), so the dialog stays. PUK and NCK are `danger`; switching the PIN
-//! lock on says that a restart will then keep the SIM (and mobile data, and Tailscale) down until
+//! lock on says that a restart will then keep the SIM and mobile data down until
 //! somebody enters the PIN.
 //!
 //! ```text
@@ -518,8 +518,8 @@ pub fn confirm(kind: Kind, c: &Card, l: Lang) -> Confirm {
         Kind::PinOn => (
             l.pick("Turn the PIN lock on?", "开启 PIN 锁？").to_owned(),
             with(l.pick(
-                "From the next start-up the SIM stays locked until someone enters the PIN: no mobile data, and no remote access over Tailscale, until then. A wrong PIN uses up one attempt.",
-                "下次开机起，SIM 一直锁着，直到有人输入 PIN：在此之前没有移动网络，也不能经 Tailscale 远程访问。PIN 输错会用掉一次机会。",
+                "From the next start-up the SIM stays locked until someone enters the PIN: there is no mobile data, and remote access may be lost, until then. A wrong PIN uses up one attempt.",
+                "下次开机起，SIM 一直锁着，直到有人输入 PIN：在此之前没有移动网络，远程访问也可能中断。PIN 输错会用掉一次机会。",
             )),
             Some(l.pick(
                 "After a restart, join the U60's Wi-Fi and enter the PIN on this page, or turn the PIN lock off here first.",

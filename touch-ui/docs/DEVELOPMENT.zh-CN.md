@@ -26,7 +26,7 @@
 | `data/core_link.rs` | 从 core 拿实时状态：`127.0.0.1:9460` 上的 `/v2/state` 和 `/v2/events` 推送 |
 | `data/screen_feed.rs`、`net_view.rs`、`op_view.rs` | 解析 `GET /v2/screen`：首页卡片、状态栏、写入进度行的结论由 core 算好交过来 |
 | `data/core_api.rs` | 请求 core 的本机接口（`/v2/api/...`，不带 token），各功能模块都经过它 |
-| `data/esim.rs`、`chill.rs`、`tailscale.rs`、`speedtest.rs`、`netinfo.rs`、`scenario.rs`、`alerts.rs` 等 | 功能模块。写操作都经 core，只有 CHILL 的选组、选节点直接找 mihomo（[CHILL.md](CHILL.md)） |
+| `data/esim.rs`、`chill.rs`、`speedtest.rs`、`netinfo.rs`、`scenario.rs`、`alerts.rs` 等 | 功能模块。写操作都经 core，只有 CHILL 的选组、选节点直接找 mihomo（[CHILL.md](CHILL.md)） |
 
 写操作找不到 core 时，界面退而调用设备脚本 `/data/luyaz/scripts/luyaz-fallback.sh`。
 

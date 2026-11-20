@@ -1,6 +1,6 @@
 //! how often /configs is read (170 KB on the device, only `mode` used),
 //! the last mode kept when it comes back cut or not at all, a stopped core noticed from the
-//! small per-round request; and 家里出口 (parse, poll, switch). A fake mihomo on a thread
+//! small per-round request. A fake mihomo on a thread
 //! counts each request; time is stepped by editing the timestamps.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
@@ -187,78 +187,6 @@ fn configs_read_sparingly() {
     round(&mut c);
     assert!(c.online() && f.c() == c0 + 1 && c.mode_raw() == "global");
     f.stop();
-}
-
-/// A luyaz-core answering one canned reply per request, in turn.
-fn agent_canned(replies: Vec<(i32, &'static str)>) -> (CoreApi, Arc<std::sync::Mutex<Vec<String>>>) {
-    let (l, port) = listen();
-    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let s2 = seen.clone();
-    std::thread::spawn(move || {
-        for (i, c) in l.incoming().enumerate() {
-            let Ok(mut c) = c else { break };
-            let rq = read_req(&mut c);
-            s2.lock().unwrap().push(rq);
-            let (code, body) = replies[i.min(replies.len() - 1)];
-            if code != 0 {
-                let _ = c.write_all(format!("HTTP/1.0 {code} X\r\n\r\n{body}").as_bytes());
-            }
-        }
-    });
-    let mut a = CoreApi::default();
-    a.config(port);
-    (a, seen)
-}
-
-#[test]
-fn home_exit() {
-    crate::lang::set_en(false);
-    let h = home_parse(br#"{"configured":false}"#);
-    assert!(h.known != 0 && h.configured == 0);
-    let h = home_parse(br#"{"configured":true,"updating":true}"#);
-    assert!(h.configured != 0 && h.updating != 0);
-    let full = r#"{"configured":true,"where":{"serving_mcc":440,"true_roaming":true,"in_china":false},"blocked":null,"items":{"media":{"on":true},"ip":{"on":false,"sites":3},"rest":{"on":true,"until":1790260000,"can_extend":true}},"home":{"ok":false,"ms":null,"checked_at":1790250000},"fallback_to":"🇯🇵 日本","tailscale":"relay","busy":{"item":"ip","on":true,"phase":"trial","until":1790250030},"notice":{"kind":"failed","item":"media","text":"没开成：家里 Mac 没回应","text_en":"Didn't turn on: home Mac silent","at":1790250001,"code":"home_no_answer"}}"#;
-    let h = home_parse(full.as_bytes());
-    assert!(h.in_china == 0 && h.roaming == 1 && h.blocked.is_empty());
-    assert!(h.on[CH_MEDIA] != 0 && h.on[CH_IP] == 0 && h.on[CH_REST] != 0 && h.sites == 3);
-    assert!(h.until == 1790260000 && h.can_extend != 0);
-    assert!(h.home_ok == 0 && h.ms == -1);
-    assert_eq!(h.fallback_to, "JP 日本");
-    assert_eq!(h.ts, "relay");
-    assert!(h.busy != 0 && h.busy_item == CH_IP as i32 && h.busy_on != 0 && h.busy_phase == "trial" && h.busy_until == 1790250030);
-    assert!(h.nkind == "failed" && h.nitem == CH_MEDIA as i32 && h.ncode == "home_no_answer");
-    assert_eq!(h.ntext, "没开成：家里 Mac 没回应");
-    let h = home_parse(
-        br#"{"configured":true,"where":{"in_china":null},"blocked":"mode_global","items":{},"home":{"ok":true,"ms":38},"fallback_to":null,"tailscale":null,"busy":null,"notice":null}"#,
-    );
-    assert!(h.in_china == -1 && h.blocked == "mode_global" && h.home_ok == 1 && h.ms == 38);
-    assert!(h.busy == 0 && h.nkind.is_empty() && h.nitem == -1 && h.fallback_to.is_empty() && h.ts.is_empty());
-
-    // poll: not on the page = no request; a change = redraw; the same = none
-    let ok = r#"{"ok":true,"data":{"configured":true,"items":{"media":{"on":true}}}}"#;
-    let (mut a, seen) = agent_canned(vec![(200, ok), (200, ok), (0, ""), (0, "")]);
-    let mut c = Chill::default();
-    assert!(!c.home_poll(&mut a, false, false) && seen.lock().unwrap().is_empty());
-    assert!(c.home_poll(&mut a, true, false) && c.home().on[CH_MEDIA] != 0);
-    c.home_ms = 0;
-    assert!(!c.home_poll(&mut a, true, false));
-    // the agent gone: stale once, the values kept
-    c.home_ms = 0;
-    assert!(c.home_poll(&mut a, true, false) && c.home().stale != 0 && c.home().on[CH_MEDIA] != 0);
-    c.home_ms = 0;
-    assert!(!c.home_poll(&mut a, true, false));
-
-    let (mut a, seen) = agent_canned(vec![
-        (409, r#"{"ok":false,"error":"list_empty","code":"list_empty"}"#),
-        (202, r#"{"ok":true}"#),
-        (200, r#"{"ok":true,"data":{"until":1790257200}}"#),
-        (409, r#"{}"#),
-    ]);
-    assert_eq!(c.home_set(&mut a, CH_IP, true), (409, "list_empty".to_string()));
-    assert!(seen.lock().unwrap()[0].contains(r#""item":"ip","on":true,"confirm":true"#));
-    assert_eq!(c.home_set(&mut a, CH_REST, false), (202, String::new()));
-    assert_eq!(c.home_extend(&mut a), Some(1790257200));
-    assert_eq!(c.home_extend(&mut a), None);
 }
 
 #[test]

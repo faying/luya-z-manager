@@ -239,7 +239,6 @@ impl Engine {
                 read.chill_ok,
                 crate::engines::chill_probe::now(),
             ),
-            ts: if read.ts_on { read.ts_ok } else { None },
             observed: observed_net(),
             ..Default::default()
         };
@@ -708,8 +707,7 @@ pub fn evidence(i: &super::Incident, long: &Path, now: &At, f: &Facts) -> String
                 if l["k"] == "hour_proc" {
                     json!({"k": "proc", "ft": l["ft"], "heap": l["heap_live"], "anon": l["anon_core"],
                            "rss_core": l["rss_core"], "rss_mihomo": l["rss_mihomo"], "cpu": l["cpu_core"],
-                           "chill": [l["chill_on_s"], l["chill_ok_s"]],
-                           "ts": [l["ts_on_s"], l["ts_chk_s"], l["ts_ok_s"]]})
+                           "chill": [l["chill_on_s"], l["chill_ok_s"]]})
                 } else {
                     json!({"k": "power", "ft": l["ft"], "e": l["e"], "off_home_s": l["off_home_s"],
                            "off_home_e": l["off_home_e"], "chg_s": l["chg_s"], "pkts": l["off_home_wan_pkts"]})
@@ -731,7 +729,7 @@ pub fn evidence(i: &super::Incident, long: &Path, now: &At, f: &Facts) -> String
                 .filter(|_| i.end.as_deref() == Some("recovered"))
                 .and_then(|t| i.from.until(t)),
             "alert_seqs": i.alert_seqs, "alert_more": i.alert_more,
-            "written": now, "hours_note": "exits: chill [on_s, ok_s], ts [on_s, checked_s, ok_s]",
+            "written": now, "hours_note": "exit: chill [on_s, ok_s]",
             "hours": hours,
         });
         let s = v.to_string();

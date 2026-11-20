@@ -19,6 +19,11 @@ of other components.
 
 A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## Unreleased
+
+- core, lweb, touch: retire Tailscale and the CHILL home exit that used it. Update Core, admin web, touch, sentinel and device scripts together. On devices with CHILL installed, update its launcher and template together as well.
+- core, MCP: band and cell locking require a person to act on the management web or touch screen. The MCP tool is retired with its reachability check.
+- scripts, sentinel: retire Tailscale deployment and watchdog probes. Restoring an older configuration backup skips the stored Tailscale identity.
 
 ## core 1.94.0 — 2026-11-08
 

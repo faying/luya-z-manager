@@ -986,9 +986,7 @@ teardown
 # (the core's doctor reads these lines: its manifest tests, crates/luyaz-core doctor/tests.rs)
 setup
 CASE="record"
-mkdir -p "$R/data/tailscale"
 printf '#!/bin/sh\nexit 0\n' >"$R/etc/rc.local"
-echo 'TS_X=1' >"$R/data/tailscale/tuning.env"
 RCM=$(md5 "$R/etc/rc.local")
 sh "$SHIP" record rc.local 1790000000 'edited by hand "on purpose"' >"$T/out" 2>&1
 RC=$?
@@ -1003,7 +1001,7 @@ check "$CASE: bad time refused" '[ $RC = 1 ] && [ "$(mlines)" = 1 ]'
 sh "$SHIP" record all 1790000001 >"$T/out" 2>&1
 RC=$?
 NREC=$(sh "$SHIP" record all 1790000002 2>/dev/null | grep -c 已记录)
-check "$CASE: all = one line per listed file, absent ones as -" "[ \$RC = 0 ] && [ \"\$NREC\" -ge 9 ] && grep -q '\"name\":\"tailscaled\",\"path\":\"$R/data/tailscale/tailscaled\",\"md5\":\"-\"' '$U60S_MANIFEST'"
+check "$CASE: all = one line per listed file, absent ones as -" "[ \$RC = 0 ] && [ \"\$NREC\" -ge 7 ] && grep -q '\"name\":\"luyaz-recover.sh\".*\"md5\":\"-\"' '$U60S_MANIFEST' && ! grep -q '\"name\":\"tailscaled\"' '$U60S_MANIFEST'"
 echo '# changed' >>"$R/etc/rc.local"
 sh "$SHIP" record rc.local 1790000003 accepted >/dev/null 2>&1
 printf 'v=1\ntxn=%s\ncomp=core\nphase=check\nend=1\n' "$TXN" >"$R/data/luyaz/ship/txn"
@@ -1170,7 +1168,7 @@ conn_end
 
 setup
 CASE="conn: bad before the update and still bad"
-conn_setup ssh=ok,tailscale=bad,lan=ok,route=bad ssh=ok,tailscale=bad,lan=ok,route=bad ssh=ok,tailscale=bad,lan=ok,route=bad
+conn_setup ssh=ok,lan=ok,route=bad ssh=ok,lan=ok,route=bad ssh=ok,lan=ok,route=bad
 upload; stage; run
 check "$CASE: not this build, done" '[ "$(phase)" = done ]'
 check "$CASE: only what was ok goes on, never a route" 'grep -qx "conn_ok=ssh,lan" "$R/data/luyaz/ship/txn"'
@@ -1185,9 +1183,9 @@ conn_end
 
 setup
 CASE="conn: lost after the promote"
-conn_setup tailscale=ok,lan=ok tailscale=ok,lan=ok tailscale=bad,lan=ok
+conn_setup ssh=ok,lan=ok ssh=ok,lan=ok ssh=bad,lan=ok
 upload; stage; run
-check "$CASE: rolled back, says what" '[ "$(phase)" = rolledback ] && [ "$(md5 "$LIVE")" = "$OLD" ] && grep -q "^reason=.*现在不通： tailscale" "$R/data/luyaz/ship/txn"'
+check "$CASE: rolled back, says what" '[ "$(phase)" = rolledback ] && [ "$(md5 "$LIVE")" = "$OLD" ] && grep -q "^reason=.*现在不通： ssh" "$R/data/luyaz/ship/txn"'
 conn_end
 
 setup
@@ -1275,8 +1273,8 @@ sh "$SHIP" verify-prev >"$T/out" 2>&1
 check "$CASE: an unreadable entry is dropped" '[ ! -e "$PC/20000101-000000-core" ]'
 teardown
 
-# ── chill, tailscale: settings stay, a bad template never goes live ─────────
-svc_setup() { # svc_setup chill|tailscale <file1> <file2>: live old files, a stage with new ones
+# ── chill: settings stay, a bad template never goes live ─────────
+svc_setup() { # svc_setup chill <file1> <file2>: live old files, a stage with new ones
     setup
     SC=$1
     TXN2=20260930-120000-$SC
@@ -1296,16 +1294,12 @@ svc_setup() { # svc_setup chill|tailscale <file1> <file2>: live old files, a sta
     OLDM=$(md5 "$SD/$2")
     NEWM=$(md5 "$SG/$2")
     echo "secret-sub" >"$SD/chill.env"
-    echo "per-device" >"$SD/tuning.env"
     # the init scripts: start = whatever the case arranged
     cat >"$R/etc/init.d/$SC" <<STUB
 #!/bin/sh
 echo "$SC \$1" >>$T/initd.log
-[ "\$1" = start ] || { rm -f $T/pids/tailscaled; exit 0; }
-case $SC in
-chill) cp $T/ch-state $R/tmp/chill.state ;;
-tailscale) echo 777 >$T/pids/tailscaled ;;
-esac
+[ "\$1" = start ] || exit 0
+cp $T/ch-state $R/tmp/chill.state
 exit 0
 STUB
     chmod +x "$R/etc/init.d/$SC"
@@ -1314,7 +1308,6 @@ svc_go() { sh "$SHIP" stage "$TXN2" >"$T/out" 2>&1 && timeout 60 sh "$SHIP" run 
 ch_state() { printf '{"state":"%s","reason":%s,\n"core_pid":%s,"x":1}\n' "$1" "$2" "$3" >"$T/ch-state"; }
 svc_keep() {
     check "$CASE: subscription untouched" '[ "$(cat "$SD/chill.env")" = secret-sub ]'
-    check "$CASE: per-device tuning untouched" '[ "$(cat "$SD/tuning.env")" = per-device ]'
 }
 
 CASE="chill, running"
@@ -1368,46 +1361,6 @@ rm -f "$R/etc/init.d/chill"
 svc_go
 check "$CASE: refused" 'grep -q "没装 CHILL" "$T/out"'
 teardown
-
-tailscale_probe() {
-    cat >"$T/probe" <<STUB
-n=\$(cat $T/conn.n 2>/dev/null); n=\$((\${n:-0} + 1)); echo \$n >$T/conn.n
-echo "ssh ok"; echo "lan ok"
-if [ \$n = 1 ]; then echo "tailscale $1"; else echo "tailscale $2"; fi
-STUB
-    export U60S_CONN_PROBE=$T/probe U60S_CONN_ROUNDS=2 U60S_CONN_WAIT=0
-}
-CASE="tailscale, comes back"
-svc_setup tailscale start.sh apply.sh
-echo 777 >"$T/pids/tailscaled"
-tailscale_probe ok ok
-svc_go
-check "$CASE: done" 'logged "已转正" && [ "$(md5 "$SD/start.sh")" = "$NEWM" ]'
-svc_keep
-conn_end
-
-CASE="tailscale, does not come back"
-svc_setup tailscale start.sh apply.sh
-echo 777 >"$T/pids/tailscaled"
-tailscale_probe ok bad
-svc_go
-check "$CASE: rolled back" '[ "$(md5 "$SD/start.sh")" = "$OLDM" ]'
-conn_end
-
-CASE="tailscale, was not up before"
-svc_setup tailscale start.sh apply.sh
-tailscale_probe bad bad
-svc_go
-check "$CASE: not this version's fault" 'logged "已转正" && [ "$(md5 "$SD/start.sh")" = "$NEWM" ]'
-conn_end
-
-CASE="tailscale, its own check fails"
-svc_setup tailscale start.sh apply.sh
-: >"$T/pre-bad"
-tailscale_probe ok ok
-svc_go
-check "$CASE: live untouched, not stopped" '[ "$(md5 "$SD/start.sh")" = "$OLDM" ] && ! grep -q tailscale "$T/initd.log"'
-conn_end
 
 echo "u60-ship: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

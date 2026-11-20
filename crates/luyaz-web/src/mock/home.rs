@@ -65,13 +65,12 @@ pub(crate) fn public_extra(d: &mut Value) {
     } else {
         Value::Null
     };
-    // network.health as the core builds it for the same finding (home-exit held under it)
+    // network.health as the core builds it for the same finding.
     d["network"]["health"] = if h.finding {
         json!({"state": "down", "layers": {"bearer": "up", "finding": "data"}, "finding": "data.no_internet",
-               "paused": [{"who": "home-exit", "reason": "lower", "layer": "data", "since": 1_760_000_000_u64, "released": false}],
-               "next": "wait", "say": {"id": "network.data", "label": "数据没连上", "label_en": "No data",
-               "detail": "已注册，但数据连接没建立，已暂停代理重连。",
-               "detail_en": "Registered, but the data connection is down, proxy reconnects paused."}})
+               "paused": [], "next": "wait", "say": {"id": "network.data", "label": "数据没连上", "label_en": "No data",
+               "detail": "已注册，但数据连接没建立。",
+               "detail_en": "Registered, but the data connection is down."}})
     } else {
         json!({"state": "ok", "layers": {"bearer": "up", "finding": null}, "finding": null,
                "paused": [], "next": null, "say": null})
@@ -82,7 +81,6 @@ pub(crate) fn public_extra(d: &mut Value) {
                     "name_en": "Abroad", "pin": if s == "pinned" { json!("abroad") } else { Value::Null },
                     "last_switch": 1_760_000_000_u64 + 3600 * 14 + 60 * 25}),
     };
-    d["services"]["tailscale"] = json!({"installed": true, "running": true});
     match h.notice.as_str() {
         "alldown" => {
             d["services"]["chill"]["notice"] = json!("日本 03 和 备用都不通");

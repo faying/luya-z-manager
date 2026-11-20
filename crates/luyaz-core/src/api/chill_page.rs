@@ -6,6 +6,8 @@
 use axum::{body::Bytes, extract::State, response::Response};
 use luyaz_api::chill as ch;
 use serde_json::{Value, json};
+use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 use std::time::Duration;
 
 use super::{Compat, reply};
@@ -64,7 +66,6 @@ pub async fn status(State(c): State<Compat>) -> Response {
         proxies.as_ref(),
         mode,
         super::status::manual_first_summary(&c),
-        super::status::home_exit_summary(&c),
     );
     reply(200, json!({"ok": true, "data": data}))
 }
@@ -226,15 +227,51 @@ pub async fn bypass_set(State(c): State<Compat>, body: Bytes) -> Response {
 // ---- the page's other reads, and the subscription refresh (8d-1b, batch 5b) ----
 
 const CHILL_LOG: &str = "/tmp/chill.log";
+const LOG_TAIL_BYTES: u64 = 512 * 1024;
 /// A refresh can fetch the subscription.
 const REFRESH_SECS: u64 = 15;
+
+fn log_limit(query: &str) -> usize {
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .filter(|(key, _)| matches!(*key, "lines" | "n"))
+        .find_map(|(_, value)| value.parse::<usize>().ok())
+        .map_or(200, |n| n.clamp(1, 2000))
+}
+
+fn tail_log(path: &Path, limit: usize) -> std::io::Result<Vec<String>> {
+    let mut file = std::fs::File::open(path)?;
+    let start = file.metadata()?.len().saturating_sub(LOG_TAIL_BYTES);
+    if start > 0 {
+        file.seek(SeekFrom::Start(start))?;
+    }
+    let mut buf = Vec::new();
+    file.take(LOG_TAIL_BYTES).read_to_end(&mut buf)?;
+    let text = String::from_utf8_lossy(&buf);
+    let text = if start > 0 {
+        text.split_once('\n').map_or("", |(_, rest)| rest)
+    } else {
+        text.as_ref()
+    };
+    let mut lines: Vec<_> = text.lines().rev().take(limit).map(str::to_owned).collect();
+    lines.reverse();
+    Ok(lines)
+}
 
 /// GET /api/services/chill/log?lines=N
 pub async fn log(
     State(c): State<Compat>,
     axum::extract::RawQuery(q): axum::extract::RawQuery,
 ) -> Response {
-    super::ts_reads::log_reply(&c, CHILL_LOG, q).await
+    let limit = log_limit(q.as_deref().unwrap_or_default());
+    let path = c.path(CHILL_LOG);
+    let read = tokio::task::spawn_blocking(move || tail_log(&path, limit));
+    let lines = match tokio::time::timeout(Duration::from_secs(8), read).await {
+        Ok(Ok(Ok(lines))) => lines,
+        _ => Vec::new(),
+    };
+    reply(200, json!({"ok": true, "data": {"path": CHILL_LOG, "lines": lines, "limit": limit}}))
 }
 
 /// The agent's `providers_list` from mihomo's `/providers/proxies`: the real subscriptions (not

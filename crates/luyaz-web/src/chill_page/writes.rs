@@ -1,8 +1,8 @@
 //! /services/chill: the writes. Tiers are the inventory's (web/docs/controls-inventory.md):
 //!
 //! ```text
-//! tier 1 (post at once): exit proxy / direct_keep_ai / global, region, AI exit, profile, extend 2 h
-//! tier 2 (inline confirm): start, stop, exit direct_all, home-exit switches, subscription refresh,
+//! tier 1 (post at once): exit proxy / direct_keep_ai / global, region, AI exit, profile
+//! tier 2 (inline confirm): start, stop, exit direct_all, subscription refresh,
 //!                          subscription link save, device bypass (switch and the stale ×)
 //! ```
 //! Every write goes to the agent once (never retried) and is read back from the agent. Start, stop,
@@ -40,7 +40,6 @@ const STATUS: &str = "/api/services/chill";
 const JOB: &str = "/api/services/chill/job";
 const JOB_EVERY: Duration = Duration::from_millis(1500);
 const JOB_LIMIT: Duration = Duration::from_secs(180);
-const HOME_LIMIT: Duration = Duration::from_secs(90);
 
 fn who(app: &Shared, req: &Request) -> (Caller, Lang, Via) {
     let ctx = crate::topbar::Ctx::of_request(req, PATH);
@@ -351,123 +350,6 @@ pub async fn profile_set(State(app): State<Shared>, Query(q): Query<ExitQ>, req:
             }
         };
         done("ch-pf", l, o)
-    })
-}
-
-// ---- home exit (tier 2; extend tier 1) ----
-
-#[derive(Deserialize, Default)]
-pub struct HomeQ {
-    #[serde(default)]
-    item: String,
-    #[serde(default)]
-    on: u8,
-}
-
-const HOME: &str = "/api/services/chill/home";
-
-fn home_words(item: &str, on: bool, l: Lang) -> String {
-    let w = if on { l.pick("on", "打开") } else { l.pick("off", "关闭") };
-    format!("{} · {w}", home_label(item, l))
-}
-
-pub async fn home_ask(State(app): State<Shared>, Query(q): Query<HomeQ>, req: Request) -> impl IntoResponse {
-    let (who, l, remote) = who(&app, &req);
-    let on = q.on == 1;
-    if !HOME_ITEMS.contains(&q.item.as_str()) {
-        return one(done("ch-ho", l, Outcome::Failed(l.pick("unknown item", "不认识这一项").into())));
-    }
-    let h = match read(&app, &who, HOME).await {
-        Ok(h) => h,
-        Err(e) => return one(done("ch-ho", l, Outcome::Failed(e.text(l)))),
-    };
-    if on && let Some(b) = h["blocked"].as_str() {
-        return one(done("ch-ho", l, Outcome::NotYet(home_code_text(b, l))));
-    }
-    let roaming = h["where"]["true_roaming"].as_bool() != Some(false);
-    let c = inline(
-        home_words(&q.item, on, l),
-        if roaming { l.pick("Drops ~5 s, uses roaming data", "会断一下，走漫游流量") } else { l.pick("Drops for ~5 s", "会断一下（约 5 秒）") }.into(),
-        match l {
-            Lang::En => format!("Confirm: {}", home_words(&q.item, on, l)),
-            Lang::Zh => format!("确认：{}", home_words(&q.item, on, l)),
-        },
-    );
-    one(ask("ch-ho", l, remote, &format!("{PATH}/home/set?item={}&on={}", q.item, u8::from(on)), c))
-}
-
-pub async fn home_set(State(app): State<Shared>, Query(q): Query<HomeQ>, req: Request) -> impl IntoResponse {
-    let (who, l, _) = who(&app, &req);
-    let on = q.on == 1;
-    write::respond(pending("ch-ho", l, l.pick("Switching, this can take a minute…", "正在切换，可能要一分钟…")), async move {
-        if !HOME_ITEMS.contains(&q.item.as_str()) {
-            return done("ch-ho", l, Outcome::Failed(l.pick("unknown item", "不认识这一项").into()));
-        }
-        let body = json!({"item": q.item, "on": on, "confirm": true});
-        let r = agent::send_json(&app, &who, reqwest::Method::PUT, HOME, &body).await;
-        // a 409 carries a code ("busy", "mode_global", …) in the agent's error
-        let no_reply = match r {
-            Ok(_) => false,
-            Err(Fail::Unreachable) => true,
-            Err(Fail::Refused(409, m, _)) => return done("ch-ho", l, Outcome::Failed(home_code_text(&m, l))),
-            Err(e) => return done("ch-ho", l, Outcome::Failed(e.text(l))),
-        };
-        bump(&app);
-        // The switch runs in the background (checking → trial → applying): wait for it to end.
-        let start = Instant::now();
-        let mut read_any = false;
-        let mut last = Value::Null;
-        while start.elapsed() < HOME_LIMIT {
-            tokio::time::sleep(JOB_EVERY).await;
-            let Ok(h) = read(&app, &who, HOME).await else { continue };
-            read_any = true;
-            let busy = h["busy"].is_object();
-            let is_on = h["items"][&q.item]["on"].as_bool() == Some(true);
-            last = h;
-            if busy {
-                continue;
-            }
-            if is_on == on {
-                bump(&app);
-                return done("ch-ho", l, Outcome::Applied(home_words(&q.item, on, l)));
-            }
-            if start.elapsed() > Duration::from_secs(5) {
-                break;
-            }
-        }
-        let n = &last["notice"];
-        let o = if read_any && s(n, "kind") == "failed" && s(n, "item") == q.item {
-            let d = s(n, "detail");
-            let t = if l == Lang::En && !s(n, "text_en").is_empty() { s(n, "text_en") } else { s(n, "text") };
-            Outcome::Failed(if d.is_empty() { t.to_owned() } else { format!("{t} ({d})") })
-        } else if read_any {
-            Outcome::Accepted
-        } else if no_reply {
-            Outcome::Unknown
-        } else {
-            Outcome::Accepted
-        };
-        bump(&app);
-        done("ch-ho", l, o)
-    })
-}
-
-pub async fn home_extend(State(app): State<Shared>, req: Request) -> impl IntoResponse {
-    let (who, l, _) = who(&app, &req);
-    write::respond(pending("ch-ho", l, l.pick("Extending…", "正在延长…")), async move {
-        let before = read(&app, &who, HOME).await.ok().and_then(|h| h["items"]["rest"]["until"].as_i64());
-        let r = agent::send_json(&app, &who, reqwest::Method::PUT, HOME, &json!({"action": "extend"})).await;
-        let o = match sent(r, l) {
-            Err(Outcome::Failed(m)) => Outcome::Failed(home_code_text(&m, l)),
-            Err(o) => o,
-            Ok((_, no_reply)) => {
-                finish(&app, &who, HOME, no_reply, l.pick("Extended by 2 hours", "已再开 2 小时").into(), move |h| {
-                    h["items"]["rest"]["on"].as_bool() == Some(true) && h["items"]["rest"]["until"].as_i64() > before
-                })
-                .await
-            }
-        };
-        done("ch-ho", l, o)
     })
 }
 

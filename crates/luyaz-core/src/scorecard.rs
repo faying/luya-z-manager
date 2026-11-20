@@ -1,5 +1,5 @@
 //! The device scorecard (touch-ui docs/LEDGER.md §11; u60-sentinel.md §19 T9a): doctor's
-//! `--report 24h|7d [--summary]` moved into the core, line for line.
+//! `--report 24h|7d [--summary]` moved into the core.
 //!
 //! Sans-IO: [`Card::line`] takes ledger lines (touch-ui LEDGER.md §3–§4: `{"v":1,"seq":…,"n":…,
 //! "up":…,"t":…,"k":…,…}`) in order, [`Card::finish`] takes the other inputs doctor gives its awk
@@ -7,10 +7,8 @@
 //! segments as they are ([`guard_lines`]), and the core's long-term layer
 //! (`/data/u60d/long/{hours,events}.jsonl`), which [`core::lines`] turns into ledger lines.
 //!
-//! **Parity first** (§19, the first leg): the same guard ledger gives byte for byte what
-//! `doctor.sh --report` gives (tools/scorecard-parity.sh over the doctor test's fixtures and a
-//! copy of the device's ledger). So this follows the awk, and where the awk was wrong both were
-//! fixed together with a doctor test case (§19): two lookups that created what they looked for
+//! This follows the original doctor's awk except where retired telemetry no longer contributes.
+//! Earlier parity work fixed two lookups that created what they looked for
 //! (the S2b "still being followed" skip never fired; a boot with no `boot` line after a hole
 //! counted as a reboot), and RSS compared as text (a baseline of "00" divided by zero).
 //! - awk walks `for (x in …)` in hash order (the S2b detail line, the S3 abroad list); here they
@@ -36,7 +34,27 @@ const GS: [&str; 7] = [
 /// The four power cells of `hour_power`.
 const CS: [&str; 4] = ["on_home", "on_abroad", "off_home", "off_abroad"];
 /// The programs `hour_proc` keeps the RSS of.
-const RS: [&str; 4] = ["core", "ui", "mihomo", "ts"];
+const RS: [&str; 3] = ["core", "ui", "mihomo"];
+
+#[cfg(test)]
+#[test]
+fn retired_tailnet_fields_do_not_affect_exit_scoring() {
+    let report = |chill_ok: i64, tailnet: &str| {
+        let mut c = Card::new();
+        c.line(r#"{"v":1,"seq":1,"n":1,"up":5,"t":1790000005,"k":"boot","boot":"aaaaaaaa"}"#);
+        c.line(r#"{"v":1,"seq":1,"n":2,"up":3600,"t":1790003600,"k":"hour","id":"h-5","from":5,"to":3600,"ft":1790000005,"tt":1790003600,"awake":3600}"#);
+        c.line(&format!(r#"{{"v":1,"seq":1,"n":3,"up":3600,"t":1790003600,"k":"hour_proc","id":"p-5","chill_on_s":3600,"chill_ok_s":{chill_ok}{tailnet}}}"#));
+        c.finish(&Inputs { w: 86_400.0, label: "24 小时".into(), ..Default::default() }).0
+    };
+    let no_tailnet = report(3600, "");
+    let old_tailnet = report(3600, ",\"ts_on_s\":3600,\"ts_chk_s\":3600,\"ts_ok_s\":0,\"rss_ts\":900000");
+    assert_eq!(no_tailnet, old_tailnet);
+    let healthy = old_tailnet.lines().find(|line| line.contains("S8")).unwrap();
+    assert!(healthy.contains("CHILL 100.0%"), "{healthy}");
+    let bad = report(0, "");
+    let bad_row = bad.lines().find(|line| line.contains("S8")).unwrap();
+    assert!(bad_row.contains("不达标"), "{bad_row}");
+}
 
 /// What doctor passes its awk besides the ledger (`report_ledger`).
 #[derive(Clone, Debug, Default)]
@@ -120,9 +138,6 @@ struct HourProc {
     cpu: String,
     con: String,
     cok: String,
-    ton: String,
-    tck: String,
-    tok: String,
     rss: [String; RS.len()],
 }
 
@@ -453,9 +468,6 @@ impl Card {
                         cpu: f("cpu_core"),
                         con: f("chill_on_s"),
                         cok: f("chill_ok_s"),
-                        ton: f("ts_on_s"),
-                        tck: f("ts_chk_s"),
-                        tok: f("ts_ok_s"),
                         ..Default::default()
                     };
                     for (j, r) in RS.iter().enumerate() {
@@ -1124,11 +1136,9 @@ impl Card {
             "",
             "E1 前靠已知事实",
         );
-        // S8 exits. Tailscale: healthy seconds over the seconds guard could check it;
-        // an hour line without ts_chk_s is from before that check, all of it unchecked.
+        // S8: CHILL healthy seconds while it was intended to be on.
         let ws = wstart(D7, None);
-        let (mut con, mut cok, mut ton, mut tck, mut tok) = (0.0, 0.0, 0.0, 0.0, 0.0);
-        let mut tlong = false;
+        let (mut con, mut cok) = (0.0, 0.0);
         for i in 0..nh {
             if !(gt(hwe[i], ws) && lt(hws[i], wend)) {
                 continue;
@@ -1136,52 +1146,18 @@ impl Card {
             let Some(q) = self.hq.get(&i) else { continue };
             con += num(&q.con);
             cok += num(&q.cok);
-            ton += num(&q.ton);
-            let x = if isn(&q.tck) { num(&q.tck) } else { 0.0 };
-            tck += x;
-            if isn(&q.tck) && isn(&q.tok) {
-                tok += num(&q.tok);
-            }
-            if num(&q.ton) - x > 600.0 {
-                tlong = true;
-            }
         }
-        let mut cv = c.cov(ws, &["guard"]);
-        // the coverage of Tailscale itself (docs/LEDGER.md §8): unchecked on-time <= 5%, and no
-        // hour with over 10 minutes of it
-        if cv == "完整" && ton != 0.0 && (ton - tck > 0.05 * ton || tlong) {
-            cv = format!(
-                "不完整（Tailscale 开着 {}，查到 {}{}）",
-                dur(ton),
-                dur(tck),
-                if tlong {
-                    "，有一小时里超过 10 分钟没查到"
-                } else {
-                    ""
-                }
-            );
-        }
-        let tv = if ton != 0.0 {
-            if tck != 0.0 {
-                format!("{}%", fixed(tok * 100.0 / tck, 1))
-            } else {
-                "没查到过".into()
-            }
-        } else {
-            "没开过".into()
-        };
-        // under 99% even if every unchecked second was healthy
-        let tbad = ton != 0.0 && tok + ton - tck < 0.99 * ton;
+        let cv = c.cov(ws, &["guard"]);
         let cbad = con != 0.0 && cok < 0.99 * con;
         let cvx = if con != 0.0 {
             format!("{}%", fixed(cok * 100.0 / con, 1))
         } else {
             "没开过".into()
         };
-        let val = format!("CHILL {cvx}；Tailscale {tv}");
+        let val = format!("CHILL {cvx}");
         let mut t = tier(
-            cbad || (tck != 0.0 && tok < 0.99 * tck),
-            if con != 0.0 || ton != 0.0 {
+            cbad,
+            if con != 0.0 {
                 &cv
             } else {
                 "没有记录"
@@ -1189,7 +1165,7 @@ impl Card {
             ws,
             D7,
         );
-        if cbad || tbad {
+        if cbad {
             t = "不达标";
         }
         let _ = (con, cok);

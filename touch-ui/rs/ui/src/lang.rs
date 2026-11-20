@@ -130,7 +130,6 @@ mod tests {
         assert_eq!(tr("没有这一行的中文"), "没有这一行的中文");
         assert_eq!(trn("%d 台", 1), "%d device");
         assert_eq!(trn("%d 台", 2), "%d devices");
-        assert_eq!(trc!("tailscale", "本机"), "This device");
         assert_eq!(pick("中", "en"), "en");
         assert_eq!(pick("中", ""), "中");
         set_en(false);

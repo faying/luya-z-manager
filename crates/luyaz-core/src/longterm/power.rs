@@ -6,9 +6,7 @@
 //!   charging time goes to `chg_s`, never into a cell. Cells: screen on/off × home/abroad.
 //! - `zone_tmax` from the application side's thermal zones only (a modem-side zone read is a QMI
 //!   request), `throttle_s` when a cpufreq policy is capped below the highest cap it had this boot.
-//! - The exits (S8): Tailscale meant on while the cellular link has the default route and
-//!   rc.local starts it, checked over its LocalAPI socket (HTTP by hand, no `tailscale` fork);
-//!   CHILL on unless switched off or paused, healthy when its supervisor said "running" within
+//! - The exit (S8): CHILL on unless switched off or paused, healthy when its supervisor said "running" within
 //!   150 s and the mihomo it named is that process.
 //! - `hour_proc`: RSS of our programs and this process's CPU (per mille, only when the same
 //!   process ran the whole hour), from the hour's last check.
@@ -30,9 +28,6 @@ const BAT: &str = "/sys/class/power_supply/battery";
 const BACKLIGHT: &str = "/sys/class/leds/led:lcd/brightness";
 const THERMAL: &str = "/sys/class/thermal";
 const CPUFREQ: &str = "/sys/devices/system/cpu/cpufreq";
-const RC_LOCAL: &str = "/etc/rc.local";
-const TS_START: &str = "/data/tailscale/start.sh";
-const TS_SOCK: &str = "/tmp/tailscaled.sock";
 const CHILL_DIR: &str = "/data/chill";
 const CHILL_STATE: &str = "/tmp/chill.state";
 const THERMAL_ECO: &str = "/tmp/chill.thermal-eco";
@@ -40,11 +35,10 @@ const THERMAL_ECO: &str = "/tmp/chill.thermal-eco";
 pub const CHILL_IDLE: &str = "/tmp/chill.idle.v2";
 const DUMP_DIR: &str = "/data/vendor/ramdump";
 /// Programs whose RSS `hour_proc` keeps, by the card's names.
-pub const RSS: [(&str, &str); 4] = [
+pub const RSS: [(&str, &str); 3] = [
     ("core", crate::paths::CORE),
     ("ui", crate::paths::UI),
     ("mihomo", "mihomo"),
-    ("ts", "tailscaled"),
 ];
 const CELLS: [&str; 4] = ["on_home", "on_abroad", "off_home", "off_abroad"];
 
@@ -64,9 +58,6 @@ pub struct Read {
     pub zt: Option<i64>,
     /// Some(true) = a policy is capped below its boot maximum; None = no cpufreq.
     pub thr: Option<bool>,
-    pub ts_on: bool,
-    /// None = not checked (or not meant on).
-    pub ts_ok: Option<bool>,
     pub chill_on: bool,
     pub chill_ok: bool,
     /// This process: (pid, start time, user+system ticks).
@@ -106,9 +97,6 @@ pub struct Acc {
     throttle_s: i64,
     chill_on_s: i64,
     chill_ok_s: i64,
-    ts_on_s: i64,
-    ts_chk_s: i64,
-    ts_ok_s: i64,
     /// This process at the hour's first check and its last: (pid, start, ticks, boot s).
     cpu_first: Option<(u32, u64, u64, i64)>,
     cpu_last: Option<(u32, u64, u64, i64)>,
@@ -193,15 +181,6 @@ impl Acc {
             self.chill_on_s += awake;
             if r.chill_ok {
                 self.chill_ok_s += awake;
-            }
-        }
-        if r.ts_on {
-            self.ts_on_s += awake;
-            if let Some(ok) = r.ts_ok {
-                self.ts_chk_s += awake;
-                if ok {
-                    self.ts_ok_s += awake;
-                }
             }
         }
         self.note(r, up);
@@ -322,9 +301,6 @@ impl Acc {
         }
         m.insert("chill_on_s".into(), json!(self.chill_on_s));
         m.insert("chill_ok_s".into(), json!(self.chill_ok_s));
-        m.insert("ts_on_s".into(), json!(self.ts_on_s));
-        m.insert("ts_chk_s".into(), json!(self.ts_chk_s));
-        m.insert("ts_ok_s".into(), json!(self.ts_ok_s));
         o
     }
 
@@ -342,8 +318,6 @@ pub struct Paths {
     pub thermal: PathBuf,
     pub cpufreq: PathBuf,
     pub route: PathBuf,
-    pub rc_local: PathBuf,
-    pub ts_sock: PathBuf,
     pub chill_dir: PathBuf,
     pub chill_state: PathBuf,
     pub thermal_eco: PathBuf,
@@ -363,8 +337,6 @@ impl Paths {
             thermal: h(THERMAL),
             cpufreq: h(CPUFREQ),
             route: h("/proc/net/route"),
-            rc_local: h(RC_LOCAL),
-            ts_sock: h(TS_SOCK),
             chill_dir: h(CHILL_DIR),
             chill_state: h(CHILL_STATE),
             thermal_eco: h(THERMAL_ECO),
@@ -404,55 +376,6 @@ pub fn app_zone(t: &str) -> bool {
         || t == "xo-therm"
         || (t.starts_with("pm") && t.ends_with("_tz"))
         || t == "battery"
-}
-
-/// `BackendState` Running and `Self.Online` in a LocalAPI status answer.
-pub fn ts_healthy(v: &Value) -> Option<bool> {
-    let st = v["BackendState"].as_str()?;
-    Some(st == "Running" && v["Self"]["Online"].as_bool() == Some(true))
-}
-
-/// GET `path` from tailscaled's LocalAPI socket, 2 s: `Err` when it can't be reached (no socket,
-/// refused, timed out or dropped), `Ok(None)` for an answer that is not HTTP, else the status
-/// code and the body.
-pub(crate) fn ts_get(sock: &Path, path: &str) -> Result<Option<(u16, String)>, ()> {
-    use std::io::{Read as _, Write as _};
-    if !sock.exists() {
-        return Err(());
-    }
-    let mut s = std::os::unix::net::UnixStream::connect(sock).map_err(|_| ())?;
-    let t = Some(std::time::Duration::from_secs(2));
-    let _ = s.set_read_timeout(t);
-    let _ = s.set_write_timeout(t);
-    let req = format!("GET {path} HTTP/1.0\r\nHost: local-tailscaled.sock\r\n\r\n");
-    s.write_all(req.as_bytes()).map_err(|_| ())?;
-    let mut buf = Vec::new();
-    if s.take(4 << 20).read_to_end(&mut buf).is_err() && buf.is_empty() {
-        return Err(()); // timed out or dropped
-    }
-    let text = String::from_utf8_lossy(&buf);
-    let Some((head, body)) = text.split_once("\r\n\r\n") else {
-        return Ok(None);
-    };
-    Ok(head
-        .split_whitespace()
-        .nth(1)
-        .and_then(|c| c.parse().ok())
-        .map(|c| (c, body.to_string())))
-}
-
-/// GET /localapi/v0/status over tailscaled's socket, 2 s: Some(ok), or None when it answered
-/// something that says nothing (the guard: not checked).
-fn ts_check(sock: &Path) -> Option<bool> {
-    let Ok(answer) = ts_get(sock, "/localapi/v0/status") else {
-        return Some(false);
-    };
-    let (code, body) = answer?;
-    match code {
-        200 => ts_healthy(&serde_json::from_str(&body).ok()?),
-        500..=599 => Some(false),
-        _ => None,
-    }
 }
 
 fn mtime_age(p: &Path, wall: i64) -> Option<i64> {
@@ -587,10 +510,6 @@ impl ReadState {
         }
         let wan = std::fs::read_to_string(&p.route)
             .is_ok_and(|t| crate::crashwatch::io::route_up(&t, "rmnet_data0"));
-        r.ts_on = wan && std::fs::read_to_string(&p.rc_local).is_ok_and(|t| t.contains(TS_START));
-        if r.ts_on {
-            r.ts_ok = ts_check(&p.ts_sock);
-        }
         // paused by hand, or by the core while the screen is off and nobody is connected (6e):
         // off by intent, not unhealthy
         let boot = std::fs::read_to_string(p.proc_.join("sys/kernel/random/boot_id"))

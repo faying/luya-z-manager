@@ -53,10 +53,6 @@ Wi-Fi 看门狗接管中，固定暂时不生效，先按「外出」	Wi-Fi watc
 WiFi 总开关	Wi-Fi
 eSIM 配置	eSIM profiles
 eSIM 配置（现在没在用）	eSIM profiles (not in use)
-tailscale|出口	Exit node
-tailscale|子网	Subnets
-tailscale|本机	This device
-tailscale|节点	Peers
 ■ %d 项异常	■ %d problem|■ %d problems
 ■ 体检：异常	■ Health check: problem
 ▲ %d 项注意	▲ %d warning|▲ %d warnings
@@ -166,7 +162,6 @@ tailscale|节点	Peers
 回到自动选网，可能短暂断网，再点一次确认。	Back to automatic selection, may cut data briefly; tap again to confirm
 回到自动：按 SIM 卡选 APN，会断网几秒	Back to Auto: APN picked by SIM; offline for a few seconds
 固件	Build
-在 Tailscale 后台批准这台设备	Approve this device in the Tailscale admin console
 在用	In use
 在管理网页打开登录链接	Log in from the web admin
 在线	Online
@@ -565,11 +560,6 @@ CHILL 开着，但不经过它	CHILL on, but bypassed
 进出省电断网约 10 秒	Power saving on/off drops the network ~10 s
 连接	Connections
 默认	Default
-# 家里出口（E3，manager docs/designs/home-exit.md §10）
-家里出口	Home exit
-国内版权走家里	CN media via home
-家里 IP 网站	Home IP sites
-其余都走家里 · 2 小时	Rest via home · 2h
 爱奇艺、优酷、B 站等	iQIYI, Youku, bilibili, …
 %d 个网站	%d site|%d sites
 表里还没有网站 · 见 /data/chill/home_ip.list	No sites yet · see /data/chill/home_ip.list
@@ -579,9 +569,6 @@ AI、VoWiFi、国内直连照旧	AI, VoWiFi, China direct unchanged
 正在测家里…	Checking home…
 正在打开…	Turning on…
 正在关闭…	Turning off…
-家里不通，暂走直连	Home down · direct for now
-▲ 家里不通，暂走 %s	▲ Home down · via %s for now
-家里不通，暂走原出口	Home down · usual exit for now
 会断一下（约 5 秒）	Drops for ~5 s
 会断一下，走漫游流量	Drops ~5 s · uses roaming data
 正在切换，稍等	Switching, one moment
@@ -589,13 +576,10 @@ AI、VoWiFi、国内直连照旧	AI, VoWiFi, China direct unchanged
 过热暂停中，降温后自动恢复	Paused while hot · resumes when cool
 全局模式下不生效 · 换成代理或直连 · AI 不动	Not used in Global mode · Switch to Proxy or Direct · AI kept
 全部直连下不生效	Not used in All direct
-家里出口没配置	Home exit not set up
 没成功，稍后再试	Didn't work; try later
 读不到所在国家，版权和其余暂不显示	Can't tell the country; media and rest hidden
 连不上家里	Can't reach home
 经中继，视频可能卡	Via relay · video may stutter
-● 经 Tailscale · 直连 %d ms	● Via Tailscale · direct %d ms
-经 Tailscale · 直连	Via Tailscale · direct
 10 分钟后关 · 再开 2 小时 ›	Off in 10 min · Extend 2h ›
 已延长到 %s	Extended to %s
 没延长成，稍后再试	Couldn't extend; try later
@@ -835,7 +819,6 @@ route|节点	Node
 ▲ 家里 不通	▲ Home down
 家里 直连	Home direct
 ▲ 家里 中继	▲ Home relay
-无家里出口	No home exit
 直连 %d · 中继 %d	Direct %d · relay %d
 关	Off
 情景关的	By scenario
@@ -845,8 +828,6 @@ route|节点	Node
 约 %s	About %s
 尽快充电	Charge soon
 ▲ 偏热 %d°C	▲ Warm %d°C
-Tailscale 要登录：在管理网页打开登录链接	Tailscale needs a login: open the link in the admin web
-Tailscale 等批准：在 Tailscale 后台批准这台设备	Tailscale waits for approval: approve this device in its admin console
 去看	Open
 没连上	Not connected
 

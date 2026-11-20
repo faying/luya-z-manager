@@ -18,7 +18,7 @@
 //!
 //! Tiers (controls-inventory.md §/router/lan, brief): a new LAN address or netmask is tier 3
 //! everywhere (devices get new addresses, this page must be reopened at the new address); DHCP
-//! on/off, range and lease are tier 2, tier 3 over Tailscale. The form opens as a patch; its fields
+//! on/off, range and lease are tier 2, tier 3 remotely. The form opens as a patch; its fields
 //! are page-local signals posted to the ask, which checks them and keeps the result under a random
 //! token for the confirm. After a new address the old one goes dead mid-write over the LAN: the
 //! link to `http://<new ip>:9090` is in the dialog and in the "正在…" patch, worded "if this page
@@ -816,7 +816,7 @@ pub enum Note {
     StillHere,
     /// The reply stream dropped (expected when the address changed).
     Lost,
-    /// Read back, and this tab came by another address (Tailscale): it keeps working.
+    /// Read back, and this tab came by another address: it still works.
     Elsewhere,
 }
 
@@ -1120,7 +1120,7 @@ fn expired(l: Lang) -> write::Outcome {
 
 /// What the note says after the send ended (the reply reached this tab). `here`: the tab came by
 /// the old LAN address, which dies with the change, so a reply without a readback means the U60
-/// still answers there. Otherwise (Tailscale, another name) the tab survives: no inference.
+/// still answers there. Otherwise the tab survives: no inference about the old address.
 pub fn done_note(o: &write::Outcome, here: bool) -> Note {
     match (o, here) {
         (write::Outcome::Applied(_), true) => Note::Moved,

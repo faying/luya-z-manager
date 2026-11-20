@@ -1,6 +1,6 @@
 //! 首页 (DESIGN.md §4 Home hierarchy): four fixed slots. The status card (SIM line, verdict,
 //! speed or the hint, SINR ring, carriers or the action), the scenario card and the bottom row
-//! (ui/home_scene.rs); below the fold 落地 and Tailscale details.
+//! (ui/home_scene.rs); below the fold 落地.
 //! Content changes inside a slot and never moves the slots below it.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
@@ -8,13 +8,12 @@ use super::home_scene::Scene;
 use super::{Sub, Ui, SF_OLD_DATAD, TAB_CELL, VIEW_H};
 use crate::cf;
 use crate::clock;
-use crate::kit::{self, CARD_W, MARGIN, PAD, R_CARD, ROW_H, TAB_PAD};
+use crate::kit::{self, CARD_W, MARGIN, PAD, R_CARD, TAB_PAD};
 use crate::lang::tr;
 use crate::logic::{self, NetHold, NET_BAD, NET_OK, NET_WARN};
 use crate::lv::{self, sys, Obj, Series};
 use crate::net_view as nv;
 use crate::theme::{t, uf};
-use crate::trc;
 use ui_model::net_view_t;
 use ui_model::scenario_status_t;
 
@@ -26,8 +25,6 @@ const WAVE_FLOOR: i32 = 50;
 const FOOT_FULL_MHZ: i32 = 100;
 pub const CA_CARD_TOP: i32 = 34;
 pub const SC_CARD_H: i32 = 72;
-/// Tailscale · 本机 · 节点 · 子网 · 出口/提示
-pub const TS_HOME_ROWS: usize = 5;
 
 // the slots, in the home scroll's coordinates (the screen's minus the 26 px status bar)
 pub const HERO_Y: i32 = 4;
@@ -36,7 +33,7 @@ pub const SCENE_Y: i32 = 156;
 pub const SCENE_H: i32 = 174;
 pub const ROW_Y: i32 = 336;
 pub const CELL_H: i32 = 54;
-/// below the fold: 落地, Tailscale (the speed chart is on 系统)
+/// below the fold: 落地 (the speed chart is on 系统)
 pub const FOLD_Y: i32 = ROW_Y + CELL_H + 2 * MARGIN;
 // inside the status card: SIM line 29 · body 92 · footer 26; dual standby: two SIM lines 39 ·
 // body 82 (a smaller ring; the wave keeps its place at the body's foot)
@@ -179,13 +176,7 @@ pub struct Home {
     pub ca_card: Obj,
     ca_qos: Obj,
     ca: [CaSlot; CA_SLOTS],
-    // Tailscale (below the fold: the details the column has no room for)
-    ts_card: Obj,
-    ts_dot: Obj,
-    ts_val: [Obj; TS_HOME_ROWS],
-    ts_key: [Obj; TS_HOME_ROWS],
-    ts_sep: [Obj; TS_HOME_ROWS],
-    /// 今天 (home_today.rs), after Tailscale
+    /// 今天 (home_today.rs), below 落地
     pub td: super::home_today::TodayCard,
     // refresh state
     ever_valid: bool,
@@ -242,11 +233,6 @@ impl Default for Home {
             ca_card: Obj::NULL,
             ca_qos: Obj::NULL,
             ca: [CaSlot::default(); CA_SLOTS],
-            ts_card: Obj::NULL,
-            ts_dot: Obj::NULL,
-            ts_val: [Obj::NULL; TS_HOME_ROWS],
-            ts_key: [Obj::NULL; TS_HOME_ROWS],
-            ts_sep: [Obj::NULL; TS_HOME_ROWS],
             td: Default::default(),
             ever_valid: false,
             last_valid_wall: 0,
@@ -320,8 +306,6 @@ fn hold_key(v: &net_view_t) -> u32 {
 pub struct MfView {
     pub on: bool,
     pub alldown: bool,
-    /// 家里出口 is on its fallback (shown before 手动优先, DD11)
-    pub home: bool,
     pub mark: &'static str,
     pub col: u32,
     pub mark_col: u32,
@@ -335,21 +319,7 @@ pub struct MfView {
 /// `pin`: the node hand-picked in the auto group 🚀 is on (see `chill_pin`).
 pub fn mf_view(sc: &scenario_status_t, chain: &str, pin: Option<&str>) -> MfView {
     let th = t();
-    let mut m = MfView { on: false, alldown: false, home: false, mark: "", col: 0, mark_col: 0, wash: 0, line: Vec::new() };
-    if sc.home_on != 0 && sc.home_fallback != 0 {
-        m.on = true;
-        m.home = true;
-        m.mark = "▲";
-        m.col = th.warn_t;
-        m.mark_col = th.warn_t;
-        m.wash = th.wash_w;
-        m.line = cf!(
-            "%s%s",
-            if sc.home_on == 1 { tr("家里不通，暂走直连") } else { tr("家里不通，暂走原出口") },
-            if sc.mf_notice.is_empty() { "" } else { " +1" }
-        );
-        return m;
-    }
+    let mut m = MfView { on: false, alldown: false, mark: "", col: 0, mark_col: 0, wash: 0, line: Vec::new() };
     if sc.mf_notice.is_empty() {
         return m;
     }
@@ -481,7 +451,7 @@ impl Ui {
     pub(super) fn build_home(&mut self, tile: Obj) {
         let th = t();
         let f = uf();
-        // the first screen is fixed; below the fold 落地 + Tailscale (home_reflow moves
+        // the first screen is fixed; below the fold 落地 (home_reflow moves
         // the spacer to the real height)
         let sc = kit::scroll(tile, 0, VIEW_H, 1100);
         self.home.scroll = sc;
@@ -528,32 +498,6 @@ impl Ui {
 
         // CHILL: shown on the exit tab (build_exit moves it)
         self.build_chill_card(sc);
-        let h = &mut self.home;
-
-        // Tailscale: hidden entirely without tailscaled; the card opens the peer list
-        let ts = kit::card(sc, MARGIN, 500, CARD_W, ROW_H);
-        // 「节点」「出口」here are Tailscale peers / exit node: own TRC keys
-        let keys = ["Tailscale", trc!("tailscale", "本机"), trc!("tailscale", "节点"), trc!("tailscale", "子网"), trc!("tailscale", "出口")];
-        for (i, key) in keys.iter().enumerate() {
-            let y = i as i32 * ROW_H;
-            if i > 0 {
-                h.ts_sep[i] = kit::sep(ts, y);
-            }
-            h.ts_key[i] = kit::label(ts, f.cj14, if i > 0 { th.t2 } else { th.t1 }, PAD, y + 11, key);
-            h.ts_val[i] = kit::label_r(
-                ts,
-                if i > 0 { f.n15 } else { f.cj14 },
-                th.t1,
-                CARD_W - PAD - if i > 0 { 0 } else { 16 },
-                y + if i > 0 { 10 } else { 11 },
-                "",
-            );
-        }
-        h.ts_dot = kit::dot(ts, 0, 17, 7, th.green);
-        kit::chevron(ts, 0); // the whole card opens the Tailscale page
-        kit::tappable(ts, Some(super::tile_click_cb), Sub::Ts as usize);
-        kit::show(ts, false);
-        h.ts_card = ts;
         self.build_home_today(sc);
         self.home_reflow();
     }
@@ -652,17 +596,13 @@ impl Ui {
         h.act_box = ab;
     }
 
-    /// The first screen is fixed; below it 落地 and Tailscale stack.
+    /// The first screen is fixed; below it 落地 and 今天 stack.
     pub fn home_reflow(&mut self) {
         let h = &self.home;
         let mut y = FOLD_Y;
         if visible_h(h.ld_card) >= 0 {
             h.ld_card.set_y(y);
             y += SC_CARD_H + MARGIN;
-        }
-        if !h.ts_card.hidden() {
-            h.ts_card.set_y(y);
-            y += h.ts_card.style_height(0) + MARGIN;
         }
         if !h.td.card.is_null() && !h.td.card.hidden() {
             h.td.card.set_y(y);
@@ -1372,115 +1312,6 @@ impl Ui {
             changed = true;
         }
         changed
-    }
-
-    /// Tailscale (Home): repainted when tailscale_poll read something new.
-    pub(super) fn home_ts_paint(&mut self) {
-        if !self.polled.tailscale {
-            return;
-        }
-        let m = self.model.clone();
-        let th = t();
-        let ts = &m.tailscale;
-        let h = &self.home;
-        if ts.available == 0 {
-            h.ts_card.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
-            return;
-        }
-        let running = ts.ok != 0 && ts.state == "Running";
-        h.ts_card.remove_flag(lv::LV_OBJ_FLAG_HIDDEN);
-        let (state_txt, state_col, note): (&str, u32, &str) = if ts.ok == 0 {
-            (tr("未运行"), th.t3, "")
-        } else if running {
-            if ts.self_online != 0 { (tr("已连接"), th.t1, "") } else { (tr("离线"), th.bad_t, "") }
-        } else if ts.state == "Starting" {
-            (tr("连接中"), th.warn_t, "")
-        } else if ts.state == "NeedsLogin" {
-            (tr("需要登录"), th.warn_t, tr("在管理网页打开登录链接"))
-        } else if ts.state == "NeedsMachineAuth" {
-            (tr("等待批准"), th.warn_t, tr("在 Tailscale 后台批准这台设备"))
-        } else if ts.state == "Stopped" {
-            (tr("已停止"), th.t3, "")
-        } else {
-            (if ts.state.is_empty() { "-" } else { ts.state.as_str() }, th.t3, "")
-        };
-        let dot_col = if running && ts.self_online != 0 {
-            th.green
-        } else if state_col == th.warn_t {
-            th.orange
-        } else if state_col == th.bad_t {
-            th.red
-        } else {
-            th.t3
-        };
-        h.ts_val[0].set_text(state_txt);
-        kit::text_color(h.ts_val[0], state_col);
-        kit::bg(h.ts_dot, dot_col);
-        h.ts_val[0].update_layout();
-        h.ts_dot.set_x(h.ts_val[0].x() - 12);
-        let mut rows = 1;
-        if running {
-            h.ts_val[1].set_text(cf!(
-                "%s%s%s%s",
-                &ts.ip,
-                if !ts.ip.is_empty() && !ts.relay.is_empty() { " · " } else { "" },
-                if ts.relay.is_empty() { "" } else { "DERP " },
-                &ts.relay
-            ));
-            if ts.peers_online == 0 {
-                h.ts_val[2].set_text(tr("只有本机在线"));
-            } else {
-                h.ts_val[2].set_text(cf!(tr("在线 %d/%d · 直连 %d · 中继 %d"), ts.peers_online, ts.peers, ts.direct, ts.active - ts.direct));
-            }
-            h.ts_val[3].set_text(if ts.routes.is_empty() { "-" } else { ts.routes.as_str() });
-            rows = 4;
-            // health beats the exit node: it is the actionable one
-            if !ts.health.is_empty() {
-                h.ts_key[4].set_text(tr("提示"));
-                h.ts_val[4].set_text(&ts.health);
-                kit::text_color(h.ts_val[4], th.warn_t);
-                rows = 5;
-            } else if !ts.exit_node.is_empty() {
-                h.ts_key[4].set_text(tr("出口节点"));
-                h.ts_val[4].set_text(cf!("%s%s", &ts.exit_node, if ts.exit_online != 0 { "" } else { tr(" · 离线") }));
-                kit::text_color(h.ts_val[4], th.t1);
-                rows = 5;
-            }
-        } else if !note.is_empty() {
-            h.ts_key[1].set_text(tr("下一步"));
-            h.ts_val[1].set_text(note);
-            rows = 2;
-        }
-        if !running {
-            h.ts_key[1].set_text(tr("下一步"));
-        } else {
-            h.ts_key[1].set_text(trc!("tailscale", "本机"));
-        }
-        for i in 1..TS_HOME_ROWS {
-            for o in [h.ts_key[i], h.ts_val[i], h.ts_sep[i]] {
-                kit::show(o, i < rows);
-            }
-        }
-        let mut y = 0;
-        for i in 0..rows {
-            if i > 0 {
-                h.ts_sep[i].set_y(y);
-            }
-            y += kit::pair_reflow(h.ts_key[i], h.ts_val[i], y, CARD_W - PAD - if i == 0 { 16 } else { 0 });
-        }
-        // The status dot follows the state value even if a long state wraps.
-        h.ts_val[0].update_layout();
-        h.ts_dot.set_pos(h.ts_val[0].x() - 12, h.ts_val[0].y() + 6);
-        h.ts_card.set_height(y);
-        // the exit tab's 「Tailscale ›」 small line
-        let tsl = self.tile_sub[Sub::Ts as usize];
-        if running && ts.peers != 0 {
-            self.set(tsl, cf!(tr("%s · 在线 %d/%d"), state_txt, ts.peers_online, ts.peers));
-        } else {
-            self.set(tsl, state_txt);
-        }
-        kit::text_color(tsl, if running && ts.self_online != 0 { th.ok_t } else { th.t2 });
-        self.ts_page_paint();
     }
 
     /// The view the status card and status bar draw (/v2/screen, or a placeholder

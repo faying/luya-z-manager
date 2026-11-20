@@ -924,9 +924,8 @@ impl Engine {
         self.log(&format!("entering scenario {:?} ({})", scen.name, scen.id));
         self.run_restores(Some(scen), false);
 
-        // Hold off suspend *before* tearing the APs down: once they are off,
-        // Tailscale over cellular is the only way back in, and a suspended
-        // device answers nothing.
+        // Hold off suspend before applying the scenario, so any configured
+        // management connection can stay up while the APs switch.
         if scen.inhibit_sleep {
             self.io.set_auto_sleep(false);
             self.arm_wakealarm(cfg.params.scan_interval_home_secs as i64 + 30);

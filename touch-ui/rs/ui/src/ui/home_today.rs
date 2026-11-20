@@ -1,4 +1,4 @@
-//! 首页 below the fold, after 落地 and Tailscale: 「今天」 (DESIGN.md §4 Home hierarchy), from
+//! 首页 below the fold, after 落地: 「今天」 (DESIGN.md §4 Home hierarchy), from
 //! core 1.50's `GET /v2/timeline/today`. One card: the title, the day's signal as 24 hour cells
 //! (coloured by the hour's average SINR in the core's tiers, ≥ 13 dB / ≥ 0 dB / below; empty
 //! where there was no reading; the RAT written where it changes; the hour now underlined), then

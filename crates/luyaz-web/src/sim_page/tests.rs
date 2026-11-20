@@ -91,7 +91,7 @@ fn every_dialog_is_tier_three_and_quotes_the_attempts() {
     assert!(confirm(Kind::VerifyPuk, &c, l).danger && confirm(Kind::Nck, &c, l).danger);
     assert!(!confirm(Kind::VerifyPin, &c, l).danger);
     assert!(confirm(Kind::PinOn, &c, l).cuts_uplink && !confirm(Kind::PinOff, &c, l).cuts_uplink);
-    assert!(confirm(Kind::PinOn, &c, l).what.contains("Tailscale"));
+    assert!(confirm(Kind::PinOn, &c, l).what.contains("remote access"));
     // the card did not say: said so; one left: said so
     let none = card("modem_waitpin", "1", "", "", None);
     assert!(confirm(Kind::VerifyPin, &none, l).what.contains("did not report"));
@@ -128,8 +128,8 @@ fn a_pin_appears_in_no_reply() {
     let mut all = Vec::new();
     for l in [Lang::En, Lang::Zh] {
         for k in [Kind::VerifyPin, Kind::VerifyPuk, Kind::PinOn, Kind::PinOff, Kind::ChangePin, Kind::Nck] {
-            all.push(area(l, Via::Tailnet, Some(k), &Phase::Ask(confirm(k, &c, l))));
-            all.push(area(l, Via::Tailnet, Some(k), &Phase::Pending(l.pick("Sending…", "提交中…").into())));
+            all.push(area(l, Via::Remote, Some(k), &Phase::Ask(confirm(k, &c, l))));
+            all.push(area(l, Via::Remote, Some(k), &Phase::Pending(l.pick("Sending…", "提交中…").into())));
             for o in [
                 Outcome::Applied(applied(k, l).into()),
                 Outcome::AcceptedSaid(said(k, l).into()),
@@ -139,7 +139,7 @@ fn a_pin_appears_in_no_reply() {
                 busy(l),
                 cant_read(&Fail::Unreachable, l),
             ] {
-                all.push(area(l, Via::Tailnet, Some(k), &Phase::Done(o)));
+                all.push(area(l, Via::Remote, Some(k), &Phase::Done(o)));
             }
             let a = check(k, &f(), l).ok().unwrap();
             all.push(request(&a).0.to_owned());
@@ -199,7 +199,7 @@ fn the_english_page_has_no_chinese() {
     p.info_fail = Some(Fail::Unreachable);
     all.extend(p.leaves().into_iter().map(|(_, h)| h));
     for k in [Kind::VerifyPin, Kind::VerifyPuk, Kind::PinOn, Kind::PinOff, Kind::ChangePin, Kind::Nck] {
-        all.push(area(l, Via::Tailnet, Some(k), &Phase::Ask(confirm(k, &c, l))));
+        all.push(area(l, Via::Remote, Some(k), &Phase::Ask(confirm(k, &c, l))));
         all.push(applied(k, l).into());
         all.push(said(k, l).into());
         all.push(wrong(k, l).into());

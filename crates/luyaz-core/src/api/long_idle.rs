@@ -8,7 +8,7 @@
 //!   within [`SLACK_S`] of the span; adjacent = it starts where this boot's hour before it ended; screen on = any
 //!   `on_*_s`; clients and traffic only for screen-off-at-home hours (`off_home_cli_s`, which
 //!   counts unknown as clients; `off_home_wan_pkts` / `quiet_pm`), a roaming hour is unknown.
-//! - Remote management (Tailscale, Hermes, a web session) is not read on its own: it rides the
+//! - Remote management is not read on its own: it rides the
 //!   cellular link, so the traffic bound is its upper bound. Calibrated 10-20 on the device's own
 //!   client-free nights: 600–8 500 packets an hour and 40–57 % quiet with the 30-minute night
 //!   Hermes poll, against 100 k+ and under 30 % with clients.

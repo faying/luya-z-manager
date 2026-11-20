@@ -755,8 +755,8 @@ fn confirm(s: &Save, l: Lang) -> write::Confirm {
         rec.push_str(if l == Lang::En { " " } else { "" });
     }
     rec.push_str(l.pick(
-        "If you are on the U60's Wi-Fi this page drops too: reconnect to the main Wi-Fi and it shows the result. Over a cable, USB or Tailscale it stays connected.",
-        "如果你连的是 U60 的 Wi-Fi，这个页面也会断开：重新连上主 Wi-Fi，页面会接着显示结果。经网线、USB 或 Tailscale 不受影响。",
+        "If you are on the U60's Wi-Fi this page drops too: reconnect to the main Wi-Fi and open the page again.",
+        "如果你连的是 U60 的 Wi-Fi，这个页面也会断开：重新连上主 Wi-Fi，再打开这个页面。",
     ));
     write::Confirm {
         tier: write::Tier::Dialog,
@@ -773,8 +773,7 @@ fn confirm(s: &Save, l: Lang) -> write::Confirm {
         ),
         recovery: Some(rec),
         action: l.pick("Apply", "应用").into(),
-        // Tailscale is not on Wi-Fi: no "someone has to be at the device" warning
-        cuts_uplink: false,
+        cuts_uplink: true,
         word: None,
         danger: false,
         revert: crate::write::Revert::No,

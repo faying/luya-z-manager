@@ -31,9 +31,10 @@ fn sources() {
     let none = [];
     assert!(source_ok(ip("127.0.0.1"), &none));
     assert!(source_ok(ip("::1"), &none));
-    assert!(source_ok(ip("100.100.1.2"), &none));
-    assert!(source_ok(ip("fd7a:115c:a1e0::1"), &none));
-    assert!(source_ok(ip("::ffff:100.64.0.1"), &none), "v4-mapped");
+    assert!(!source_ok(ip("100.100.1.2"), &none));
+    assert!(!source_ok(ip("fd7a:115c:a1e0::1"), &none));
+    assert!(!source_ok(ip("::ffff:100.64.0.1"), &none), "v4-mapped");
+    assert!(source_ok(ip("::ffff:127.0.0.1"), &none), "mapped loopback");
     assert!(!source_ok(ip("100.128.0.1"), &none));
     assert!(!source_ok(ip("198.51.100.88"), &none));
     assert!(!source_ok(ip("192.168.0.20"), &none));
@@ -74,8 +75,7 @@ fn status() -> Value {
         "health": {"checked": true, "bad": 0, "warn": 1},
         "scenario": {"pin": "1234", "current": "home"},
         "network": {"verdict": "ok", "finding": null},
-        "services": {"tailscale": {"installed": true, "running": true},
-                     "chill": {"state": "on", "on": true, "notice": "secret-ish profile name"}},
+        "services": {"chill": {"state": "on", "on": true, "notice": "secret-ish profile name"}},
         "clock": {"utc_offset": 28800},
     })
 }
@@ -354,31 +354,16 @@ async fn through_the_gate() {
     // only the listed actions
     let (st, _) = act("/agent-api/act/apn", T1, json!({"action": "esim.switch", "params": {}})).await;
     assert_eq!(st, 400);
-    // D-g: a link change goes on only with the owner's instruction, rebuilt as mcp + instruction owner
-    let (st, v) = act(
-        "/agent-api/act/link",
-        T1,
-        json!({"action": "band.set_lte", "params": {"bands": "1,3", "source": "web"},
-               "instruction": "owner", "source": "screen", "approved_by": "screen"}),
-    )
-    .await;
-    assert_eq!((st, v["state"].as_str()), (200, Some("trial")), "{v}");
-    assert_eq!(v["authority"]["layer"], "link");
-    let b = seen.lock().unwrap().last().cloned().unwrap();
-    assert_eq!((b["source"].as_str(), b["approved_by"].as_str()), (Some("mcp"), Some("mcp")));
-    assert_eq!((b["action"].as_str(), b["instruction"].as_str()), (Some("band.set_lte"), Some("owner")));
-    assert_eq!(b["params"], json!({"bands": "1,3"}));
+    // Retired link writes must not reach the core, even with an owner instruction.
     let n = seen.lock().unwrap().len();
-    let (st, v) = act("/agent-api/act/link", T1, json!({"action": "band.reset", "params": {}})).await;
-    assert_eq!((st, v["reason"].as_str()), (403, Some("needs_instruction")), "{v}");
     let (st, _) = act(
         "/agent-api/act/link",
         T1,
-        json!({"action": "network.set_mode", "params": {}, "instruction": "owner"}),
+        json!({"action": "band.reset", "params": {}, "instruction": "owner"}),
     )
     .await;
-    assert_eq!(st, 400);
-    assert_eq!(seen.lock().unwrap().len(), n, "refused link changes never reach the core");
+    assert_eq!(st, 404);
+    assert_eq!(seen.lock().unwrap().len(), n, "retired link changes never reach the core");
     let (st, _) = act("/agent-api/act/chill/exit", T2, json!({"state": "proxy"})).await;
     assert_eq!(st, 403, "hermes stays read-only");
     let (_, v) = call("/agent-api/action-url?for=apn", Some(T2)).await;
@@ -409,8 +394,8 @@ async fn through_the_gate() {
     std::fs::write(&tf, format!("hermes {T2}\n")).unwrap();
     let (st, _) = act("/agent-api/act/chill/exit", T1, json!({"state": "direct_keep_ai"})).await;
     assert_eq!(st, 401);
-    let n = seen.lock().unwrap().len();
-    assert_eq!(n, 2, "no refused act reached the core (apn.enable + band.set_lte only)");
+    assert_eq!(seen.lock().unwrap().len(), 1, "only apn.enable reached Core's control route");
+    assert_eq!(apn_seen.lock().unwrap().len(), 1, "only the valid APN use reached Core");
     // revoked: delete the line
     std::fs::write(&tf, format!("hermes {T2}\n")).unwrap();
     assert_eq!(call("/agent-api/health", Some(T1)).await.0, 401);

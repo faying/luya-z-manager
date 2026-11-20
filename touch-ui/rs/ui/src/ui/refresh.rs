@@ -77,12 +77,10 @@ pub fn fmt_rate_top(bps: i64, bits: bool, shortf: bool) -> Vec<u8> {
 impl Ui {
     /// What is on screen, as each poll's `active`.
     fn activity(&self, panel_lit: bool) -> Activity {
-        let hx_sending = self.cp.hx_sending >= 0;
         if self.screen_locked() {
-            return Activity { panel_lit, hx_sending, ..Activity::default() };
+            return Activity { panel_lit, ..Activity::default() };
         }
         use super::{TAB_EXIT as EXIT, TAB_SYS};
-        // only 运营商选择 reads everything (the agent runs AT+COPS?); others what they show
         let ni_mode = if self.sub_visible(Sub::Net) {
             NI_PAGE
         } else if self.sub_visible(Sub::Apn) || self.tab_visible(TAB_CELL) {
@@ -101,9 +99,6 @@ impl Ui {
             lit: self.bl_is_on(),
             home: self.tab_visible(TAB_HOME),
             ni_mode,
-            tailscale: self.tab_visible(TAB_HOME) || self.tab_visible(EXIT) || self.sub_visible(Sub::Ts),
-            chill_page: self.sub_visible(Sub::Chill),
-            hx_sending,
             chill: self.tab_visible(TAB_HOME)
                 || self.tab_visible(EXIT)
                 || self.sub_visible(Sub::Chill)
@@ -338,9 +333,6 @@ impl Ui {
         self.home_today_paint();
         if self.sub_visible(super::Sub::Usage) {
             self.usage_paint();
-        }
-        if self.tab_visible(TAB_HOME) || self.tab_visible(super::TAB_EXIT) || self.sub_visible(super::Sub::Ts) {
-            self.home_ts_paint();
         }
         // CHILL: the card (Home's, on the exit tab) with the notice on its top, and the pages
         self.chill_refresh();
