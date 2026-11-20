@@ -7,6 +7,7 @@ use super::background::{Cached, Task};
 use super::alerts::Alerts;
 use super::battery::BatteryEst;
 use super::landing::Landing;
+use super::lcd::LcdStatus;
 use super::usage::Usage;
 use super::latency::DirectLat;
 use super::today::Today;
@@ -55,13 +56,14 @@ pub struct Live {
     usage: Cached<Usage>,
     chill: Cached<Chill>,
     wifi: Option<Task<WifiRead>>,
+    lcd_status: Option<LcdStatus>,
     pub bl: Backlight,
     pub key: Key,
 }
 
 impl Live {
-    /// The data side and the device's backlight and power key (key: None = offscreen).
-    pub fn new(key: Key) -> Live {
+    /// Offscreen runs may read a simulated backlight but never publish device events.
+    pub fn new(key: Key, physical_panel: bool) -> Live {
         Live {
             agent: CoreApi::default(),
             core: CoreLink::background(Cfg::default()),
@@ -82,6 +84,7 @@ impl Live {
             usage: Cached::new(Usage::default()),
             chill: Cached::new(Chill::default()),
             wifi: None,
+            lcd_status: physical_panel.then(LcdStatus::default),
             bl: Backlight::init(),
             key,
         }
@@ -96,6 +99,11 @@ impl Live {
 
     /// The view model from the getters.
     pub fn build(&mut self) -> Model {
+        let panel = self.bl.observed_lit();
+        if let Some(status) = &mut self.lcd_status {
+            status.observe(panel);
+        }
+        let panel_lit = panel.unwrap_or(false) as i32;
         let (data_ok, data) = self.core.refresh();
         let (live_ok, live) = self.core.refresh_live();
         let notice = self.core.notice(NOTICE_MS);
@@ -205,9 +213,9 @@ impl Live {
             today: self.today.get().cloned(),
             usage_days: self.usage.get().to_vec(),
 
-            bl_panel_lit: self.bl.panel_lit() as i32,
+            bl_panel_lit: panel_lit,
             bl_is_on: self.bl.is_on() as i32,
-            bl_is_lit: self.bl.panel_lit() as i32,
+            bl_is_lit: panel_lit,
             bl_get: self.bl.get(),
             bl_max: self.bl.max(),
             frames: crate::device::frames(),

@@ -14,6 +14,7 @@ pub mod esim;
 pub mod http;
 pub mod landing;
 pub mod latency;
+mod lcd;
 pub mod live;
 pub mod netinfo;
 pub mod scenario;

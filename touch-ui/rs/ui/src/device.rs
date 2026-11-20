@@ -288,7 +288,7 @@ pub fn run(args: &[String]) -> i32 {
     let launch = logic::launch_parse(args);
     let conf = Conf::load(CONF_FILE);
     let key = if offscreen { plat::key::Key::default() } else { plat::key::Key::open() };
-    let mut live = Live::new(key);
+    let mut live = Live::new(key, !offscreen && std::env::var_os("LUYAZ_UI_BACKLIGHT_DIR").is_none());
     let model = std::rc::Rc::new(live.build());
     ui::create(conf, launch, model, Box::new(live), &argv0);
     if !offscreen {
