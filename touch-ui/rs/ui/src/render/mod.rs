@@ -833,9 +833,47 @@ fn wifi_switch_waits_for_readback_and_blocks_touch() {
     assert_eq!(checked(), [false, false, true, true]);
 }
 
-/// The NFC row says only what a live core actually read: without a model, a silent core or
-/// a block that never carried a real value, it shows —, stays disabled and cannot send
-/// nfc.set; the handle keeps its position across the transient unknown.
+#[cfg(test)]
+#[test]
+fn wifi_channel_waits_for_live_readback_after_a_switch() {
+    if isolated_render("render::wifi_channel_waits_for_live_readback_after_a_switch", &["dark"]).is_none() {
+        return;
+    }
+    init_render_test();
+    let read = WifiRead {
+        master: Some(true), module: Some(true), radios: [Some(false), Some(true)],
+        main: [Some(true); 2], power_save: None, up: [false, true],
+    };
+    let wifi = Rc::new(RefCell::new(WifiTest { read, ..WifiTest::default() }));
+    let src = Box::new(Replay {
+        feed: BTreeMap::new(), step: Rc::new(RefCell::new(None)), cur: Rc::new(RefCell::new(String::new())),
+        next: None, wifi_test: Some(wifi.clone()),
+    });
+    let mut model = Model { data_ok: 1, bl_is_on: 1, bl_panel_lit: 1, bl_is_lit: 1, ..Model::default() };
+    model.data.ap_on = 1;
+    model.data.ap5_dfs = 0;
+    ui::create(Conf::parse("appearance=dark\nautooff=0\n"), logic::launch_parse(&["luyaz-ui"]),
+        Rc::new(model.clone()), src, "luyaz-ui");
+    ui::with(|u| u.to_tab(ui::TAB_WIFI));
+    settle(1200);
+    let channel = || ui::with(|u| u.wifi.ch5.text());
+    assert_eq!(channel(), "—".as_bytes());
+
+    model.data.ap5_dfs = 1;
+    model.data.ap5_ch = 36;
+    model.data.ap5_width = 160;
+    ui::set_model(Rc::new(model.clone()));
+    ui::with(|u| u.refresh());
+    assert_eq!(channel(), "36 · 160 MHz · DFS".as_bytes());
+
+    wifi.borrow_mut().read = WifiRead { master: Some(false), module: Some(false), up: [false; 2], ..read };
+    model.data.ap_on = 0;
+    ui::set_model(Rc::new(model));
+    settle(6100);
+    assert_eq!(channel(), "未开".as_bytes(), "the old channel cannot outlive the link");
+}
+
+/// Unavailable NFC data disables writes while the handle keeps its last known position.
 #[cfg(test)]
 #[test]
 fn wifi_nfc_row_shows_only_a_live_known_value() {

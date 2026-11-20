@@ -54,7 +54,7 @@ impl Target {
 }
 
 trait Runtime {
-    fn links(&self, ifnames: [&str; 4], inspect: [bool; 4]) -> [Option<bool>; 4];
+    fn links(&self, ifnames: [&str; 4]) -> [Option<bool>; 4];
     fn serves(&self, ifname: &str, ssid: Option<&str>) -> Option<bool>;
     fn hostapds(&self) -> Option<usize>;
 }
@@ -71,8 +71,8 @@ impl Device {
 }
 
 impl Runtime for Device {
-    fn links(&self, ifnames: [&str; 4], inspect: [bool; 4]) -> [Option<bool>; 4] {
-        links_at(Path::new("/sys/class/net"), ifnames, inspect)
+    fn links(&self, ifnames: [&str; 4]) -> [Option<bool>; 4] {
+        links_at(Path::new("/sys/class/net"), ifnames)
     }
 
     fn serves(&self, ifname: &str, ssid: Option<&str>) -> Option<bool> {
@@ -84,14 +84,11 @@ impl Runtime for Device {
     }
 }
 
-fn links_at(net: &Path, ifnames: [&str; 4], inspect: [bool; 4]) -> [Option<bool>; 4] {
+fn links_at(net: &Path, ifnames: [&str; 4]) -> [Option<bool>; 4] {
     let mut path = PathBuf::with_capacity(net.as_os_str().len() + libc::IFNAMSIZ + "/operstate".len());
     path.push(net);
     let mut missing = [false; 4];
     let mut states = std::array::from_fn(|i| {
-        if !inspect[i] {
-            return None;
-        }
         path.push(ifnames[i]);
         path.push("operstate");
         let file = File::open(&path);
@@ -148,12 +145,10 @@ fn check_with(cfg: &Uci, target: Target, on: [bool; 4], r: &impl Runtime) -> Opt
         }
     }
 
-    // Off is proved by the link state, never by a failed hostapd CLI call. Guests also use
-    // link state for up, while an enabled main must positively report itself and its SSID.
-    let inspect = [!on[0], !on[1], true, true];
-    let links = r.links(names, inspect);
-    for i in 0..4 {
-        if inspect[i] && links[i]? != on[i] {
+    // CN B11 can keep hostapd ENABLED after the vendor lowers the netdev. Require positive
+    // link state in both directions, then check hostapd and SSID for each running main AP.
+    for (actual, expected) in r.links(names).into_iter().zip(on) {
+        if actual? != expected {
             return Some(false);
         }
     }
@@ -238,9 +233,9 @@ mod tests {
     }
 
     impl Runtime for Sample {
-        fn links(&self, names: [&str; 4], inspect: [bool; 4]) -> [Option<bool>; 4] {
+        fn links(&self, names: [&str; 4]) -> [Option<bool>; 4] {
             assert_eq!(names, IFNAMES);
-            std::array::from_fn(|i| if inspect[i] { self.links[i] } else { None })
+            self.links
         }
 
         fn serves(&self, name: &str, ssid: Option<&str>) -> Option<bool> {
@@ -263,7 +258,7 @@ mod tests {
         let mut cfg = five_only();
         cfg.insert(USER.into(), "0".into()); // the module is already working
         let mut r = Sample {
-            links: [Some(false); 4],
+            links: [Some(false), Some(true), Some(false), Some(false)],
             status: Some("state=ENABLED\nssid[0]=home5\n"),
             processes: None,
         };
@@ -271,6 +266,10 @@ mod tests {
         assert_eq!(sample_result(&cfg, both, &r), Some(true));
         assert!(fully_on_with(&cfg, &r));
 
+        r.links[1] = Some(false); // hostapd still answers ENABLED after the netdev is down
+        assert_eq!(sample_result(&cfg, both, &r), Some(false));
+        assert!(!fully_on_with(&cfg, &r));
+        r.links[1] = Some(true);
         r.links[0] = Some(true); // 2.4 GHz has not stopped broadcasting yet
         assert_eq!(sample_result(&cfg, both, &r), Some(false));
         r.links[0] = None;
@@ -282,6 +281,7 @@ mod tests {
         assert_eq!(sample_result(&cfg, both, &r), Some(false));
         cfg.insert(AP_2G.into(), "0".into());
         cfg.insert(VENDOR_ONOFF.into(), "0".into()); // failed vendor-on
+        r.links[1] = Some(false);
         r.processes = Some(0);
         assert_eq!(sample_result(&cfg, Target::Current, &r), Some(true));
         assert_eq!(sample_result(&cfg, both, &r), Some(false));
@@ -306,6 +306,7 @@ mod tests {
         // Module up, but the vendor has not restored raw radio flags yet.
         assert_eq!(sample_result(&cfg, master(true), &r), Some(false));
         cfg.insert(RADIO_5G.into(), "0".into());
+        r.links[1] = Some(true);
         assert_eq!(sample_result(&cfg, master(true), &r), None); // no hostapd response
         r.status = Some("state=ENABLED\nssid[0]=old5\n");
         assert_eq!(sample_result(&cfg, master(true), &r), Some(false));
@@ -343,7 +344,7 @@ mod tests {
         cfg.insert("wireless.guest_2g".into(), "wifi-iface".into());
         cfg.insert("wireless.guest_5g".into(), "wifi-iface".into());
         let mut r = Sample {
-            links: [Some(false); 4],
+            links: [Some(false), Some(true), Some(false), Some(false)],
             status: Some("state=ENABLED\nssid[0]=home5\n"),
             processes: Some(1),
         };
@@ -358,16 +359,16 @@ mod tests {
     #[test]
     fn sysfs_only_proves_down_for_explicit_down_or_verified_absence() {
         let net = std::env::temp_dir().join(format!("luyaz-wifi-net-{}", std::process::id()));
-        assert_eq!(links_at(&net, IFNAMES, [true; 4]), [None; 4]);
+        assert_eq!(links_at(&net, IFNAMES), [None; 4]);
         fs::create_dir_all(net.join("wlan0")).unwrap();
         fs::create_dir_all(net.join("wlan2")).unwrap();
         fs::create_dir_all(net.join("wlan3")).unwrap();
         fs::write(net.join("wlan0/operstate"), "down\n").unwrap();
         fs::write(net.join("wlan2/operstate"), "unknown\n").unwrap();
         // wlan1 is absent; wlan3 exists but its operstate cannot be read.
-        assert_eq!(links_at(&net, IFNAMES, [true; 4]), [Some(false), None, Some(false), None]);
+        assert_eq!(links_at(&net, IFNAMES), [Some(false), None, Some(false), None]);
         fs::write(net.join("wlan3/operstate"), "up\n").unwrap();
-        assert_eq!(links_at(&net, IFNAMES, [true; 4])[3], Some(true));
+        assert_eq!(links_at(&net, IFNAMES)[3], Some(true));
         fs::remove_dir_all(&net).unwrap();
     }
 }

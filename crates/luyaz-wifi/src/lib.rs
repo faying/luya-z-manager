@@ -235,17 +235,8 @@ fn hostapd_count(timeout: Duration) -> Option<usize> {
     })
 }
 
-/// `true` only when this interface's hostapd answers and reports ENABLED.
-///
-/// Use this to prove an AP *is* beaconing, never to prove one is not: when the
-/// interface is down the control socket is simply absent, which is
-/// indistinguishable from a wrong `-p` path or a hostapd that has not come up
-/// yet. Proving presence is safe; proving absence is not.
-fn hostapd_enabled(iface: &str) -> bool {
-    hostapd_serves(iface, None, CMD_TIMEOUT) == Some(true)
-}
-
-/// An existing hostapd can still answer ENABLED with the old SSID during a reload.
+/// Require the expected SSID when known. An existing hostapd can still answer ENABLED
+/// during a reload or with its network interface down.
 fn hostapd_serves(iface: &str, ssid: Option<&str>, timeout: Duration) -> Option<bool> {
     let out = output_within(
         Command::new("hostapd_cli").args(["-i", iface, "-p", HOSTAPD_CTRL, "status"]),
@@ -293,10 +284,14 @@ pub fn observe(h: &dyn Host) -> Value {
 
 fn observation(cfg: Option<&layout::Uci>) -> Value {
     let (cfg_2g, cfg_5g) = configured_aps(cfg);
+    let [up_2g, up_5g] = psm::main_up();
     json!({
         "configured": { "ap_2g": cfg_2g, "ap_5g": cfg_5g },
         "hostapd_processes": hostapd_count(CMD_TIMEOUT).unwrap_or(usize::MAX),
-        "beaconing": { IFACE_2G: hostapd_enabled(IFACE_2G), IFACE_5G: hostapd_enabled(IFACE_5G) },
+        "beaconing": {
+            IFACE_2G: up_2g && hostapd_serves(IFACE_2G, None, CMD_TIMEOUT) == Some(true),
+            IFACE_5G: up_5g && hostapd_serves(IFACE_5G, None, CMD_TIMEOUT) == Some(true),
+        },
     })
 }
 

@@ -405,6 +405,7 @@ impl WifiDev {
                 eprintln!("ops: Wi-Fi change: reload finished {data}");
                 *guard(&verify) = Verify::Done(ok);
                 drop(lk);
+                crate::engines::wifi_dfs::layout_changed();
                 handle.spawn(async move {
                     crate::state::invalidate_cache();
                     exec.mark_immediate(None);

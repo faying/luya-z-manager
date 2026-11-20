@@ -453,13 +453,15 @@ impl Ui {
         kit::text_color(w.state, if broadcasting { th.ok_t } else { th.t3 });
         // 5 GHz and the channel guard: stopped / moved off radar for now / on DFS (radar can stop it)
         let ch = || cf!("%d · %d MHz", d.ap5_ch, d.ap5_width);
-        let (txt, tone) = match d.ap5_dfs {
-            2 => (tr("已停（可能遇到雷达）").as_bytes().to_vec(), th.warn_t),
-            3 => ([ch(), cf!(" · %s", tr("暂避雷达"))].concat(), th.t1),
-            1 => ([ch(), b" \xc2\xb7 DFS".to_vec()].concat(), th.t1),
-            _ if w.up.is_some_and(|up| !up[1]) => (tr("未开").as_bytes().to_vec(), th.t3),
-            _ if d.ap5_ch > 0 => (ch(), th.t1),
-            0 => (tr("未开").as_bytes().to_vec(), th.t3),
+        let up_5g = w.up.map(|up| up[1]);
+        let (txt, tone) = match (up_5g, d.ap5_dfs) {
+            (Some(false) | None, 2) if d.ap_on != 0 =>
+                (tr("已停（可能遇到雷达）").as_bytes().to_vec(), th.warn_t),
+            (Some(false), _) => (tr("未开").as_bytes().to_vec(), th.t3),
+            (_, 3) if d.ap5_ch > 0 => ([ch(), cf!(" · %s", tr("暂避雷达"))].concat(), th.t1),
+            (_, 1) if d.ap5_ch > 0 => ([ch(), b" \xc2\xb7 DFS".to_vec()].concat(), th.t1),
+            (_, _) if d.ap5_ch > 0 => (ch(), th.t1),
+            (None, 0) if d.ap_on == 0 => (tr("未开").as_bytes().to_vec(), th.t3),
             _ => (b"\xe2\x80\x94".to_vec(), th.t3),
         };
         self.set(w.ch5, txt);

@@ -282,9 +282,10 @@ fn status_bands_and_the_last_change() {
     w["on"] = json!(false);
     w["module_on"] = json!(false);
     let h = hub_with(w, json!({}));
-    let v = h.read(|st| view(st, None, None, Lang::Zh));
+    let v = h.read(|st| view(st, Some(&live), None, Lang::Zh));
     assert_eq!(v.state, "Wi-Fi 已关闭");
     assert!(v.meta.iter().all(|s| s.contains("广播状态未读取")));
+    assert!(!v.broadcasting, "the tab must not show the pre-change channel after module-off");
 }
 
 #[test]

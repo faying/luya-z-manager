@@ -21,7 +21,7 @@ A Chinese copy is in [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
 ## Unreleased
 
-- The admin web and touchscreen now share Core Wi-Fi transactions. The master switch preserves the saved bands and main AP settings. Confirmation waits for the vendor readback and the expected broadcast layout.
+- The admin web and touchscreen now share Core Wi-Fi transactions. The master switch preserves the saved bands and main AP settings. Confirmation waits for vendor readback, interface state, and hostapd. The channel display refreshes after the operation.
 - On compatible U60 Pro firmware, Core can finish the stock MAC-filter and transmit-power steps and stop a verified post-Wi-Fi loop when only one radio is enabled.
 - The web and touchscreen show the saved power-save choice. The web distinguishes guest configuration from availability, protects edited guest fields from concurrent changes, and waits for fresh NFC readback.
 

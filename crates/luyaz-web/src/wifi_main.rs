@@ -1093,6 +1093,10 @@ pub fn dfs_line(st: &St, l: Lang) -> Option<String> {
 
 pub fn view(st: &St, live: Option<&Live>, psm: Option<Psm>, l: Lang) -> View {
     let w = wifi(st);
+    // This tab may receive the new module bit before its next live channel poll.
+    let live = live.filter(|v| {
+        w.as_ref().and_then(|w| w.module_on) != Some(false) || v.ch.iter().all(String::is_empty)
+    });
     let rb = block(st);
     let stale = rb.is_some_and(|(_, s)| s);
     let known = matches!(st.link, Link::Live | Link::Down);
@@ -1473,7 +1477,7 @@ impl Polled for Poll {
         (render(app, self.live.as_ref(), self.psm, self.l), AGENT_POLL)
     }
     fn watches(&self, block: &str) -> bool {
-        matches!(block, "wifi" | "clients" | "nfc" | "op" | "exec")
+        matches!(block, "wifi" | "wifi_dfs" | "clients" | "nfc" | "op" | "exec")
     }
     fn render(&mut self, app: &Shared) -> Option<Vec<(String, String)>> {
         Some(render(app, self.live.as_ref(), self.psm, self.l))
